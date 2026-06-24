@@ -1,0 +1,13 @@
+# Compiled binary (V output)
+/blobly_emb
+
+# V build artifacts
+*.tmp.c
+*.o
+*.so
+/v
+vls.log
+
+# Editor / OS
+.DS_Store
+*.swp

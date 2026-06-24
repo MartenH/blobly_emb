@@ -1,0 +1,110 @@
+module main
+
+import os
+import driver.can
+import comm.com
+import app
+import loom
+import osal
+
+// IOC channel indices — the only memory shared between partitions.
+const ioc_speed = 0 // VehicleSpeed : IO(core0) -> App(core1)
+const ioc_lamp = 1  // WarnLamp     : App(core1) -> IO(core0)
+
+// SpeedFrame layout now comes from the DBC (com.powertrain_id / generated
+// accessor). LampFrame stays hand-defined for the demo output.
+const lamp_frame_id = u32(0x101) // LampFrame (tx): on @ byte 0
+
+// ============================================================================
+// Partition: IO  (core 0) — owns the CAN driver. No application logic.
+// This is what the Loom codegen will emit for the IO partition.
+// ============================================================================
+
+struct IoPartition {
+mut:
+	chan can.Channel
+}
+
+fn io_10ms(ctx voidptr) {
+	mut st := unsafe { &IoPartition(ctx) }
+
+	// rx: decode the DBC's Powertrain frame -> publish VehicleSpeed (km/h) to App.
+	mut rx := can.Frame{}
+	if st.chan.recv(mut rx) && rx.id == com.powertrain_id {
+		mut vs := app.VehicleSpeed{
+			kph:   u16(com.powertrain_vehicle_speed_phys(rx.data)) // generated, no-alloc
+			valid: true
+		}
+		osal.ioc_publish2(ioc_speed, &vs, u8(sizeof(vs)))
+	}
+
+	// tx: take the App partition's WarnLamp -> transmit LampFrame.
+	mut lamp := app.WarnLamp{}
+	if osal.ioc_acquire2(ioc_lamp, &lamp, u8(sizeof(lamp))) {
+		mut tx := can.Frame{
+			id:  lamp_frame_id
+			len: 1
+		}
+		tx.data[0] = if lamp.on { u8(1) } else { u8(0) }
+		st.chan.send(tx)
+	}
+}
+
+fn partition_io(ifname string) {
+	osal.pin_to_core(0)
+	mut st := IoPartition{} // partition-private state lives on this core's stack
+	if !st.chan.open(ifname, true) {
+		eprintln('IO partition: failed to open "${ifname}" — is vcan up? (make vcan)')
+		return
+	}
+	mut sched := loom.Scheduler{}
+	sched.every(10_000, io_10ms, &st)
+	for {
+		sched.run(osal.now_us())
+		osal.sleep_us(1000)
+	}
+}
+
+// ============================================================================
+// Partition: App (core 1) — pure application. No driver, no bus, no CAN id.
+// Under an MPU it has no access to the CAN peripheral at all.
+// ============================================================================
+
+struct AppPartition {
+mut:
+	mon app.SpeedMonitor
+}
+
+fn app_10ms(ctx voidptr) {
+	mut st := unsafe { &AppPartition(ctx) }
+	mut speed := app.VehicleSpeed{} // stays invalid until IOC has a value
+	osal.ioc_acquire2(ioc_speed, &speed, u8(sizeof(speed)))
+
+	mut lamp := app.WarnLamp{}
+	st.mon.on_10ms(speed, mut lamp)
+
+	osal.ioc_publish2(ioc_lamp, &lamp, u8(sizeof(lamp)))
+}
+
+fn partition_app() {
+	osal.pin_to_core(1)
+	mut st := AppPartition{}
+	mut sched := loom.Scheduler{}
+	sched.every(10_000, app_10ms, &st)
+	for {
+		sched.run(osal.now_us())
+		osal.sleep_us(1000)
+	}
+}
+
+fn main() {
+	ifname := if os.args.len > 1 { os.args[1] } else { 'vcan0' }
+	println('blobly_emb: AMP — core0=IO partition, core1=App partition, IOC mailboxes')
+	println('  rx Powertrain 0x${com.powertrain_id.hex()} (DBC VehicleSpeed) @core0  ->  IOC  ->  SpeedMonitor @core1')
+	println('  SpeedMonitor @core1  ->  IOC  ->  tx LampFrame 0x${lamp_frame_id.hex()} @core0')
+
+	t_io := spawn partition_io(ifname)
+	t_app := spawn partition_app()
+	t_io.wait()
+	t_app.wait()
+}
