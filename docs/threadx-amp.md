@@ -60,10 +60,31 @@ application behavior — not just raw IOC throughput — runs on ThreadX.
   queue). That needs ThreadX-SMP on real multicore silicon. For an automotive AMP
   stack, per-core instances is the correct model, not a compromise.
 
-## Path to an OSAL backend
+## The real app on the ThreadX backend (done)
 
-The current `osal` uses pthreads in one process (great for the perf sim). A
-`osal_threadx` backend would: place the IOC in the shared region (done), fork a
-process per partition (done: `start_core`), and inside each run `tx_kernel_enter`
-with the Loom dispatch as a ThreadX thread and `now_us`/`sleep_us` mapped to
-ThreadX time services. `app/`, `comm/`, `loom/` stay unchanged.
+The OSAL now has a **build-selectable ThreadX backend** — and the actual V app
+(`loom.Scheduler` + `app.SpeedMonitor`, unchanged) runs on it.
+
+- `osal/osal_threadx.c` (`#ifdef BLOBLY_THREADX`): `blob_tx_start_core` forks a
+  process per core and enters `tx_kernel_enter`; `tx_application_define` runs the
+  partition's V entry as a ThreadX thread; `blob_tx_sleep_us` yields via
+  `tx_thread_sleep`. IOC + shared memory + `waitpid` are reused from
+  `osal_native.c`.
+- `osal/osal.v`: `start_core` and `sleep_us` pick the backend with
+  `$if threadx ? { ...ThreadX... } $else { ...POSIX... }`. `app/`, `comm/`,
+  `loom/` are untouched.
+- `cmd/threadx_demo/demo.v`: the real Loom + SpeedMonitor across two AMP
+  partitions. **Same V source, two backends:**
+
+```sh
+make demo                                  # POSIX backend (fork per core)
+make demo-threadx THREADX=/path/to/threadx # ThreadX backend (-d threadx, links tx.a)
+```
+
+Both print `lamp first ON at kph=130` — the application behaves identically
+whether scheduled by the host sim or by per-core ThreadX kernels. ThreadX stays
+external (not vendored); point `THREADX` at a checkout with `tx.a` built (see
+`tools/threadx_amp/README.md`).
+
+The remaining step toward a target build is swapping the SocketCAN driver port
+for an MCU MCAL and building for real silicon; the OS seam is now in place.

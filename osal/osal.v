@@ -6,6 +6,7 @@ module osal
 
 #flag -I @VMODROOT/osal
 #flag @VMODROOT/osal/osal_native.c
+#flag @VMODROOT/osal/osal_threadx.c
 #flag -pthread
 #include <time.h>
 #include "osal_native.h"
@@ -22,6 +23,8 @@ fn C.blob_ioc_shared_init()
 fn C.blob_shared_scratch() voidptr
 fn C.blob_start_core(int, fn (int, voidptr), voidptr) int
 fn C.blob_wait_core(int) int
+fn C.blob_tx_start_core(int, fn (int, voidptr), voidptr) int // ThreadX backend
+fn C.blob_tx_sleep_us(u64)
 fn C.blob_ioc_write(int, &u8, u8)
 fn C.blob_ioc_read(int, &u8, u8) int
 fn C.blob_ioc_pub(int, &u8, u8)
@@ -39,11 +42,15 @@ pub fn now_us() u64 {
 }
 
 pub fn sleep_us(us u64) {
-	ts := C.timespec{
-		tv_sec:  i64(us / 1_000_000)
-		tv_nsec: i64((us % 1_000_000) * 1000)
+	$if threadx ? {
+		C.blob_tx_sleep_us(us) // yield via the ThreadX scheduler
+	} $else {
+		ts := C.timespec{
+			tv_sec:  i64(us / 1_000_000)
+			tv_nsec: i64((us % 1_000_000) * 1000)
+		}
+		C.nanosleep(&ts, unsafe { nil })
 	}
-	C.nanosleep(&ts, unsafe { nil })
 }
 
 // pin_to_core binds the calling partition's thread to a physical core (AMP).
@@ -62,10 +69,15 @@ pub fn ioc_shared_init() {
 }
 
 // start_core forks a process pinned to `core` and runs `entry` there; returns
-// the child pid to the parent. The host-Linux model of an AMP core (the same
-// technique a multicore AUTOSAR-OS-on-Linux uses: fork + MAP_SHARED).
+// the child pid to the parent. The host-Linux model of an AMP core (fork +
+// MAP_SHARED). Under `-d threadx` the child enters a per-core ThreadX kernel and
+// runs `entry` as a ThreadX thread; otherwise it runs `entry` directly (POSIX).
 pub fn start_core(core int, entry CoreEntry, arg voidptr) int {
-	return C.blob_start_core(core, entry, arg)
+	$if threadx ? {
+		return C.blob_tx_start_core(core, entry, arg)
+	} $else {
+		return C.blob_start_core(core, entry, arg)
+	}
 }
 
 pub fn wait_core(pid int) int {
