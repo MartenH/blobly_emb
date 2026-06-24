@@ -61,11 +61,11 @@ type   = "u16"
 frame  = "SpeedFrame"
 offset = 0          # byte offset, little-endian
 
-[[component]]
+[[fb]]
 name      = "SpeedMonitor"
 partition = "app"
 
-  [[component.handler]]
+  [[fb.handler]]
   name      = "on_10ms"
   period_ms = 10
   reads     = ["VehicleSpeed"]

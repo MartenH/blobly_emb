@@ -44,10 +44,11 @@ pub mut:
 	over_limit bool
 }
 
-pub fn (mut fb SpeedMonitor) on_10ms(in sig.SpeedMonitorIn, mut out sig.SpeedMonitorOut) {
-	fb.over_limit = in.vehicle_speed.valid && in.vehicle_speed.kph > 120
+pub fn (mut fb SpeedMonitor) on_10ms(inp sig.SpeedMonitorIn, mut out sig.SpeedMonitorOut) {
+	fb.over_limit = inp.vehicle_speed.valid && inp.vehicle_speed.kph > 120
 	out.warn_lamp.on = fb.over_limit
 }
+// (parameter is `inp`, not `in` — `in` is a V keyword)
 ```
 
 ```v
@@ -160,9 +161,9 @@ pub struct SpeedFilter {
 pub mut:
 	last u16
 }
-pub fn (mut fb SpeedFilter) on_10ms(in sig.SpeedFilterIn, mut out sig.SpeedFilterOut) {
-	fb.last = (fb.last * 3 + in.vehicle_speed_raw.kph) / 4 // simple IIR
-	out.vehicle_speed = sig.VehicleSpeed{ kph: fb.last, valid: in.vehicle_speed_raw.valid }
+pub fn (mut fb SpeedFilter) on_10ms(inp sig.SpeedFilterIn, mut out sig.SpeedFilterOut) {
+	fb.last = (fb.last * 3 + inp.vehicle_speed_raw.kph) / 4 // simple IIR
+	out.vehicle_speed = sig.VehicleSpeed{ kph: fb.last, valid: inp.vehicle_speed_raw.valid }
 }
 ```
 
@@ -216,10 +217,12 @@ the FB** — only `ecu.toml` changes.
 - **Traceability**: signal name is the key; inline provenance on generated fields +
   a generated `signal-map`.
 
-## Implemented today vs. this design
+## Implemented
 
-- **Implemented**: FBs as state + handler (config `[[component]]`, positional
-  params); Loom glue via `loom2v`; scaling at the COM boundary (`dbc2cfg`).
-- **To converge** (follow-up PRs): rename `component` → `fb`; signal types + `*In`/
-  `*Out` structs in a `sig` module; provenance annotations + `make trace` signal
-  map; FB→FB local routing; declared transforms.
+- **Done**: FBs with grouped `In`/`Out` port structs; config `[[fb]]`; signal types
+  + generated `*In`/`*Out` in the `sig` module; the snapshot glue via `loom2v`;
+  scaling at the COM boundary (`dbc2cfg`); provenance comments on generated port
+  fields + the `make trace` signal map (`docs/signal-map.md`).
+- **Still to come**: FB→FB *same-partition* local routing (today every cross-FB
+  signal uses an IOC channel); declared connection transforms (clamp/unit/E2E);
+  multiple signal-bearing handlers per FB (today one).
