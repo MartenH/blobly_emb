@@ -1,51 +1,63 @@
 # blobly_emb
 
-An embedded **automotive stack written in [V](https://vlang.io)** — multicore-ready,
+An embedded **automotive stack written in [V](https://vlang.io)** — multicore (AMP),
 sim-first, and built to run **without dynamic memory allocation**.
 
-It's a lean alternative to AUTOSAR Classic: you write application **components**
-with typed ports and periodic **handlers**, and the **Loom** wires them to bus
-signals and dispatches them on a schedule. No AUTOSAR vocabulary, no `malloc`.
+A lean, non-AUTOSAR alternative: you write application **Function Blocks (FBs)** —
+private state + periodic handlers that are pure functions of input signals to
+output signals — and the **Loom** (generated from `ecu.toml`) wires them across
+cores and to/from the bus. No AUTOSAR vocabulary, no `malloc`.
 
-## Layers
+## Layout
 
 ```
-app/      Components: typed ports + periodic handlers  <- what developers write
-loom/     The Loom: wiring + dispatch (generated from config)
-comm/     The comms stack you own: com (signals) -> pdur -> cantp -> canif
-driver/   Driver port: can (sim=SocketCAN, target=MCAL)
-osal/     OS Abstraction Layer: time/tasks (sim=POSIX, target=ThreadX SMP)
-config/   ecu.toml — signals, frames, schedule (source for Loom codegen)
+examples/<name>/  self-contained apps (one module main): ecu.toml + FBs + main.v
+                  + generated code (make example NAME=<name>)
+loom/    the Loom scheduler            osal/   OS abstraction: time/cores/IOC
+comm/    comms stack: nm (and more)             (sim=POSIX, target=ThreadX AMP)
+driver/  driver port: can (sim=SocketCAN, target=MCAL)
+tools/   build-time generators: dbc2cfg, cfg2v, loom2v, sigmap (+ candb, benches)
 ```
 
-Only `osal/` and `driver/` have two backends; everything above is portable V.
+The framework (`loom`/`comm`/`driver`/`osal`) is shared; each example owns its
+config, FBs, and generated code. Only `osal`/`driver` have two backends.
 
-## First slice
-
-`SpeedMonitor` reads `SpeedFrame (0x100)` on `vcan0`, and raises `LampFrame
-(0x101)` when speed > 120 km/h — exercising every layer end to end.
+## Quick start
 
 ```sh
-make vcan      # bring up vcan0 (needs sudo)
-make run       # build + run the stack
+make vcan                              # bring up vcan0 (needs sudo)
+make example NAME=overspeed             # generate everything + build the app
+./examples/overspeed/app vcan0 &        # run it
 # in another shell:
-candump vcan0                     # watch
-cansend vcan0 100##0.7B00         # kph=0x007B=123  -> lamp on (101#01)
-cansend vcan0 100##0.0000         # kph=0          -> lamp off (101#00)
+candump vcan0
+cansend vcan0 100##0.0000240500000000   # VehicleSpeed ~131 km/h -> lamp on (101#01)
+cansend vcan0 100##0.204E000000000000   # EngineSpeed 5000 rpm   -> lamp on
+cansend vcan0 100##0.0000000000000000   # all zero               -> lamp off
 ```
 
-## House style: no dynamic allocation
+See [examples/](examples/) — `overspeed` exercises every signal path (FB↔COM,
+same-core FB→FB via a local cell, cross-core FB→FB via IOC); `minimal` is the
+basic one-FB case.
 
-`app/` and `comm/` use only fixed arrays (`[N]u8`), value structs, and static
-tables — never `string`, `map`, or growable `[]T`. Enforced in CI:
+## How it works
 
-```sh
-make lint
-```
+- **Config-driven**: `ecu.toml` (+ a DBC) generates the COM codec, IOC channels,
+  Loom wiring, and FB port structs — all no-alloc V. Routing is derived from each
+  signal's `from`/`to` (local cell vs IOC vs bus). See [docs/configuration.md](docs/configuration.md).
+- **Application model**: [docs/application-model.md](docs/application-model.md).
+- **Multicore**: lock-free IOC with per-channel transport ([docs/multicore-perf.md](docs/multicore-perf.md)),
+  AMP partitions ([docs/memory-protection.md](docs/memory-protection.md)),
+  real ThreadX backend ([docs/threadx-amp.md](docs/threadx-amp.md)).
+- **Trace any signal** to its DBC origin: each example's generated `signal-map.md`.
+
+## No dynamic allocation
+
+Runtime files (FBs, signals, generated, `comm/`, `loom/`) use only fixed arrays,
+value structs, and static tables — never `string`, `map`, or growable `[]T`.
+Enforced in CI: `make lint`.
 
 ## Status
 
-Research / learning stage. Decisions so far: V + C backend, sim-first on host,
-ThreadX (SMP) as the target OS behind the OSAL, CAN/CAN-FD as the first bus.
-Roadmap: Loom codegen from `ecu.toml` → ISO-TP → UDS → multicore (AMP) → ThreadX
-target backend.
+Research / learning stage. Working: FB application model + config codegen, lock-free
+multicore IOC, CAN/CAN-FD + DBC, Network Management, ThreadX AMP backend.
+Roadmap: NvM (memory stack), diagnostics (ISO-TP/UDS), real-silicon bring-up.

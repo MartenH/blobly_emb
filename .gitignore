@@ -13,3 +13,8 @@ vls.log
 # Editor / OS
 .DS_Store
 *.swp
+
+# example binaries
+/blobly_demo
+/blobly_demo_threadx
+examples/*/app

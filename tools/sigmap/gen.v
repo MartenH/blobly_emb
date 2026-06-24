@@ -70,12 +70,13 @@ fn main() {
 	b << '| Signal | Unit | Source | DBC signal | Frame | Layout | Scaling | Path | Producers | Consumers |'
 	b << '|--------|------|--------|------------|-------|--------|---------|------|-----------|-----------|'
 
-	for ch in doc.value('ioc').array() {
+	for ch in doc.value('signal').array() {
 		m := ch.as_map()
 		name := (m['name'] or { toml.Any('') }).string()
 		from := (m['from'] or { toml.Any('') }).string()
 		to := (m['to'] or { toml.Any('') }).string()
 		tr := (m['transport'] or { toml.Any('double') }).string()
+		local := from == to
 		d := dbc_of[name] or { DbcRef{} }
 
 		source := if d.found { 'CAN' } else { from }
@@ -84,14 +85,14 @@ fn main() {
 		layout := if d.found { '${d.start}|${d.length}' } else { '—' }
 		scaling := if d.found && d.factor != 1.0 { 'x${d.factor}' } else { '—' }
 		unit := if d.unit != '' { d.unit } else { '—' }
-		path := '${from}→IOC(${tr})→${to}'
+		path := if local { '${from} (local cell)' } else { '${from}→IOC(${tr})→${to}' }
 		prod := join_or(producers[name] or { []string{} }, '(${from})')
 		cons := join_or(consumers[name] or { []string{} }, '(${to})')
 		b << '| ${name} | ${unit} | ${source} | ${dbc_sig} | ${frame} | ${layout} | ${scaling} | ${path} | ${prod} | ${cons} |'
 	}
 
 	os.write_file(args[2], b.join('\n') + '\n') or { panic('write ${args[2]}: ${err}') }
-	eprintln('sigmap: ${doc.value('ioc').array().len} signals -> ${args[2]}')
+	eprintln('sigmap: ${doc.value('signal').array().len} signals -> ${args[2]}')
 }
 
 fn join_or(items []string, fallback string) string {
