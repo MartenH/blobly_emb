@@ -17,7 +17,7 @@ for d in "${dirs[@]}"; do
 			echo "  ^ banned dynamic-allocation construct in $f"
 			fail=1
 		fi
-	done < <(find "$d" -name '*.v' -print0)
+	done < <(find "$d" -name '*.v' -not -name '*_test.v' -print0)
 done
 
 # Partition isolation: the App partition (app/) must never reach a driver

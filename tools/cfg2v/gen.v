@@ -63,6 +63,22 @@ fn main() {
 	b << 'pub const partition_cores = [${cores.join(', ')}]!'
 	b << 'pub const partition_trusted = [${trusted.join(', ')}]!'
 
+	// --- Network Management timings (per network; ms -> us) ---
+	nm := doc.value('nm').as_map()
+	if nm.len > 0 {
+		b << ''
+		b << '// Network Management timings (per network)'
+		for net, cfg in nm {
+			m := cfg.as_map()
+			b << 'pub const nm_${net}_node_id = u8(${(m['node_id'] or { toml.Any(0) }).int()})'
+			b << 'pub const nm_${net}_tx_id = u32(0x${(m['tx_id'] or { toml.Any(0) }).int().hex()})'
+			b << 'pub const nm_${net}_msg_cycle_us = u64(${int((m['msg_cycle_ms'] or { toml.Any(0) }).int()) * 1000})'
+			b << 'pub const nm_${net}_timeout_us = u64(${int((m['timeout_ms'] or { toml.Any(0) }).int()) * 1000})'
+			b << 'pub const nm_${net}_repeat_us = u64(${int((m['repeat_ms'] or { toml.Any(0) }).int()) * 1000})'
+			b << 'pub const nm_${net}_wait_sleep_us = u64(${int((m['wait_sleep_ms'] or { toml.Any(0) }).int()) * 1000})'
+		}
+	}
+
 	os.write_file(args[2], b.join('\n') + '\n') or { panic('write ${args[2]}: ${err}') }
 	eprintln('cfg2v: ${ioc.len} IOC channels, ${parts.len} partitions -> ${args[2]}')
 }
