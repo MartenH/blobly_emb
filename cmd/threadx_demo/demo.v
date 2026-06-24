@@ -11,11 +11,12 @@ module main
 import app
 import loom
 import osal
+import gen
 
-const ioc_speed = 0  // IO  -> App: VehicleSpeed
-const ioc_lamp = 1   // App -> IO:  WarnLamp
-const ioc_ctrl = 2   // IO  -> App: lifecycle (stop)
-const ioc_result = 3 // IO  -> main: demo result
+const ioc_speed = gen.vehicle_speed_ch // IO  -> App: VehicleSpeed (from ecu.toml)
+const ioc_lamp = gen.warn_lamp_ch      // App -> IO:  WarnLamp     (from ecu.toml)
+const ioc_ctrl = gen.ioc_channel_count // IO  -> App: lifecycle (stop); demo-internal
+const ioc_result = gen.ioc_channel_count + 1 // IO -> main: demo result; demo-internal
 
 struct Ctrl {
 mut:

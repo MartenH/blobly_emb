@@ -5,7 +5,7 @@
 set -euo pipefail
 
 # Strict runtime layers. tools/ is intentionally excluded (build-time heap is OK).
-dirs=("app" "comm" "loom")
+dirs=("app" "comm" "loom" "gen")
 # string keyword | map literal/type | empty-bracket slice type []T
 pattern='(\bstring\b|\bmap\[|\[\][A-Za-z_])'
 fail=0
