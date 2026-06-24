@@ -48,9 +48,10 @@ Enforce these as high-priority (P0/P1); they are the project's hard invariants.
   access — it breaks the memory-protection model.
 - **No AUTOSAR vocabulary** in the developer-facing surface: it's **Loom** (not
   RTE), **handler** (not runnable), **component** (not SWC). Flag regressions.
-- **Generated code.** `comm/com/dbc_gen.v` (from `tools/dbc2cfg`) and
-  `gen/ecu_gen.v` (from `tools/cfg2v`, via `make gen`) are generated from
-  `config/` — never hand-edit them; changes belong in the config or the generator.
+- **Generated code.** `comm/com/dbc_gen.v` (`tools/dbc2cfg`), `gen/ecu_gen.v`
+  (`tools/cfg2v`), and `gen/loom_gen.v` (`tools/loom2v`) are generated from
+  `config/` via `make gen` — never hand-edit them; changes belong in the config
+  or the generator.
 - **Memory safety.** Scrutinize `unsafe` blocks, pointer casts, and that payloads
   fit `IOC_MAX` (64 bytes); `sizeof` must not exceed it.
 
