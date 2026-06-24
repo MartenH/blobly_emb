@@ -24,14 +24,15 @@ extern int   blob_ioc_acq(int, unsigned char *, unsigned char);
 extern void *blob_shared_scratch(void);
 extern void  blob_pin_to_cpu(int);
 
-#define CH_SPEED 0 /* IO  -> App */
-#define CH_LAMP  1 /* App -> IO  */
+#define CH_SPEED 0 /* IO  -> App: VehicleSpeed */
+#define CH_LAMP  1 /* App -> IO: WarnLamp      */
+#define CH_CTRL  2 /* IO  -> App: lifecycle (stop) — via IOC, not shared scratch */
 #define CYCLES   30
-#define STOP_FLAG 7 /* scratch[7]: tell the App partition to exit */
 
 /* Typed ports (mirror app/speed_monitor.v) */
 typedef struct { uint16_t kph; uint8_t valid; } VehicleSpeed;
 typedef struct { uint8_t on; } WarnLamp;
+typedef struct { uint8_t stop; } PartitionCtrl;
 
 static int      g_core;
 static TX_THREAD g_thread;
@@ -42,16 +43,20 @@ static void speed_monitor_on_tick(const VehicleSpeed *speed, WarnLamp *lamp) {
 	lamp->on = (speed->valid && speed->kph > 120) ? 1 : 0;
 }
 
-/* core1: App partition — Loom dispatch as a ThreadX thread, ~10ms period. */
+/* core1: App partition — Loom dispatch as a ThreadX thread, ~10ms period.
+ * All cross-partition data — signals AND the stop control — flows through IOC. */
 static void app_partition(ULONG in) {
 	(void)in;
-	volatile uint64_t *stop = (uint64_t *)blob_shared_scratch();
-	while (!stop[STOP_FLAG]) {
+	for (;;) {
 		VehicleSpeed speed = {0, 0};
 		blob_ioc_acq(CH_SPEED, (unsigned char *)&speed, sizeof(speed));
 		WarnLamp lamp = {0};
 		speed_monitor_on_tick(&speed, &lamp);
 		blob_ioc_pub(CH_LAMP, (unsigned char *)&lamp, sizeof(lamp));
+
+		PartitionCtrl ctrl = {0};
+		if (blob_ioc_acq(CH_CTRL, (unsigned char *)&ctrl, sizeof(ctrl)) && ctrl.stop)
+			break;
 		tx_thread_sleep(1); /* 10 ms at 100 ticks/s */
 	}
 	_exit(0);
@@ -60,7 +65,6 @@ static void app_partition(ULONG in) {
 /* core0: IO partition — sweep speed, read lamp back, trace it. ~30ms period. */
 static void io_partition(ULONG in) {
 	(void)in;
-	uint64_t *scratch = (uint64_t *)blob_shared_scratch();
 	int first_on = -1;
 	printf("SpeedMonitor on ThreadX AMP (core0=IO, core1=App, IOC shared):\n");
 	for (int cycle = 0; cycle < CYCLES; cycle++) {
@@ -74,7 +78,8 @@ static void io_partition(ULONG in) {
 			printf("  kph=%3u -> lamp=%u%s\n", vs.kph, lamp.on,
 			       (lamp.on && first_on == vs.kph) ? "   <- threshold crossed" : "");
 	}
-	scratch[STOP_FLAG] = 1; /* stop the App partition */
+	PartitionCtrl ctrl = {1}; /* stop the App partition — over IOC, not scratch */
+	blob_ioc_pub(CH_CTRL, (unsigned char *)&ctrl, sizeof(ctrl));
 	printf("lamp first turned ON at kph=%d (expected 130, i.e. first >120)\n", first_on);
 	_exit(0);
 }
