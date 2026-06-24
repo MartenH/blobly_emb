@@ -1,6 +1,6 @@
 module nm
 
-// Network Management: coordinated bus sleep/wakeup (a lean CanNm).
+// Network Management: coordinated bus sleep/wakeup (lean CAN network management).
 //
 // Every node periodically transmits an NM message while it needs the bus awake.
 // Hearing ANY NM message keeps the network awake. When no node needs the bus and
@@ -32,7 +32,7 @@ pub mut:
 	requested      bool // local "I need the bus awake" flag
 	tx_armed       bool // a transmission is due as soon as we tick
 	last_tx_us     u64
-	last_rx_us     u64
+	last_activity_us u64 // last NM message tx OR rx — the inactivity timer base
 	state_since_us u64
 }
 
@@ -66,7 +66,7 @@ pub fn (mut n Nm) release() {
 // on_rx: an NM message from another node was received. Keeps the network awake
 // and wakes it from the sleep states (passive wakeup).
 pub fn (mut n Nm) on_rx(now u64) {
-	n.last_rx_us = now
+	n.last_activity_us = now
 	if n.state == .bus_sleep || n.state == .prepare_bus_sleep {
 		n.enter(.repeat_message, now)
 	}
@@ -94,7 +94,7 @@ pub fn (mut n Nm) tick(now u64) bool {
 			// silent: kept awake only by others' NM traffic
 			if n.requested {
 				n.enter(.normal_operation, now)
-			} else if now - n.last_rx_us >= n.cfg.timeout_us {
+			} else if now - n.last_activity_us >= n.cfg.timeout_us {
 				n.enter(.prepare_bus_sleep, now)
 			}
 		}
@@ -110,6 +110,7 @@ pub fn (mut n Nm) tick(now u64) bool {
 	if tx {
 		n.tx_armed = false
 		n.last_tx_us = now
+		n.last_activity_us = now // our own NM tx counts as bus activity
 	}
 	return tx
 }

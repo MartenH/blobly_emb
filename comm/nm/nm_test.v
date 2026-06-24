@@ -82,6 +82,28 @@ fn test_tx_cadence() {
 	assert n.state == .repeat_message // repeat_us (200) not yet elapsed
 }
 
+// A node that transmitted alone (no rx) must still wait `timeout` after its OWN
+// last NM message before heading to sleep — not drop immediately on release.
+fn test_lone_transmitter_waits_timeout() {
+	mut n := Nm{
+		cfg: timings()
+	}
+	n.request(0)
+	mut t := u64(0)
+	for t <= 5000 {
+		n.tick(t) // active alone for a long time; last tx at 5000
+		t += 50
+	}
+	assert n.state == .normal_operation
+	n.release()
+	n.tick(5050)
+	assert n.state == .ready_sleep
+	n.tick(5100) // only 100us since last tx (<300) -> must stay awake
+	assert n.state == .ready_sleep
+	n.tick(5400) // 400us since last tx (>=300) -> now head to sleep
+	assert n.state == .prepare_bus_sleep
+}
+
 fn test_request_during_prepare_sleep_rewakes() {
 	mut n := Nm{
 		cfg: timings()

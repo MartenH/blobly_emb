@@ -1,6 +1,6 @@
 # Network Management (NM)
 
-Coordinated bus sleep/wakeup — a lean `CanNm`. The goal: the bus stays awake as
+Coordinated bus sleep/wakeup — lean CAN network management. The goal: the bus stays awake as
 long as **any** node needs it, and all nodes sleep together once none do. This
 saves power without a central coordinator.
 
