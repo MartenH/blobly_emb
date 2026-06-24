@@ -12,13 +12,20 @@ import app
 import loom
 import osal
 
-const ioc_speed = 0 // IO  -> App: VehicleSpeed
-const ioc_lamp = 1  // App -> IO:  WarnLamp
-const ioc_ctrl = 2  // IO  -> App: lifecycle (stop), over IOC
+const ioc_speed = 0  // IO  -> App: VehicleSpeed
+const ioc_lamp = 1   // App -> IO:  WarnLamp
+const ioc_ctrl = 2   // IO  -> App: lifecycle (stop)
+const ioc_result = 3 // IO  -> main: demo result
 
 struct Ctrl {
 mut:
 	stop u8
+}
+
+struct Result {
+mut:
+	first_on int
+	on_count u32
 }
 
 // ---- App partition (core 1): the real component on the real Loom ----
@@ -69,15 +76,16 @@ fn partition_io(core int, arg voidptr) {
 			}
 		}
 	}
+	// publish the result, then stop the App partition — both over IOC.
+	mut res := Result{
+		first_on: first_on
+		on_count: u32(on_count)
+	}
+	osal.ioc_publish(ioc_result, &res, u8(sizeof(res)))
 	mut c := Ctrl{
 		stop: 1
 	}
-	osal.ioc_publish(ioc_ctrl, &c, u8(sizeof(c))) // stop the App partition, via IOC
-	mut sc := unsafe { &u64(osal.shared_scratch()) }
-	unsafe {
-		sc[0] = u64(first_on)
-		sc[1] = u64(on_count)
-	}
+	osal.ioc_publish(ioc_ctrl, &c, u8(sizeof(c)))
 }
 
 fn main() {
@@ -90,8 +98,9 @@ fn main() {
 	osal.wait_core(pid_io)
 	osal.wait_core(pid_app)
 
-	mut sc := unsafe { &u64(osal.shared_scratch()) }
-	first_on := unsafe { sc[0] }
-	on_count := unsafe { sc[1] }
-	println('  lamp first ON at kph=${first_on} (expect 130 = first >120), on_count=${on_count}')
+	mut res := Result{
+		first_on: -1
+	}
+	osal.ioc_acquire(ioc_result, &res, u8(sizeof(res))) // result over IOC, not scratch
+	println('  lamp first ON at kph=${res.first_on} (expect 130 = first >120), on_count=${res.on_count}')
 }
