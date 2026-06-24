@@ -11,6 +11,7 @@ build:
 gen:
 	$(V) -path "@vlib|@vmodules|tools" run tools/dbc2cfg/gen.v config/cantester.dbc comm/com/dbc_gen.v
 	$(V) run tools/cfg2v/gen.v config/ecu.toml gen/ecu_gen.v
+	$(V) run tools/loom2v/gen.v config/ecu.toml gen/loom_gen.v
 
 run: build
 	./$(BIN) vcan0
