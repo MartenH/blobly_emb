@@ -2,7 +2,7 @@ V      ?= v
 VFLAGS ?=
 BIN    := blobly_emb
 
-.PHONY: build run lint vcan clean demo demo-threadx gen
+.PHONY: build run lint vcan clean demo demo-threadx gen trace
 
 build:
 	$(V) $(VFLAGS) -o $(BIN) .
@@ -11,7 +11,11 @@ build:
 gen:
 	$(V) -path "@vlib|@vmodules|tools" run tools/dbc2cfg/gen.v config/cantester.dbc comm/com/dbc_gen.v
 	$(V) run tools/cfg2v/gen.v config/ecu.toml gen/ecu_gen.v
-	$(V) run tools/loom2v/gen.v config/ecu.toml gen/loom_gen.v
+	$(V) run tools/loom2v/gen.v config/ecu.toml sig/ports_gen.v gen/loom_gen.v
+
+# Generate the signal map (follow any signal end-to-end: SU -> DBC).
+trace:
+	$(V) -path "@vlib|@vmodules|tools" run tools/sigmap/gen.v config/ecu.toml docs/signal-map.md
 
 run: build
 	./$(BIN) vcan0

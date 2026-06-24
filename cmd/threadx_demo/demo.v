@@ -9,6 +9,7 @@
 module main
 
 import app
+import sig
 import loom
 import osal
 import gen
@@ -37,11 +38,11 @@ mut:
 
 fn app_tick(ctx voidptr) {
 	mut st := unsafe { &AppState(ctx) }
-	mut speed := app.VehicleSpeed{}
-	osal.ioc_acquire(ioc_speed, &speed, u8(sizeof(speed)))
-	mut lamp := app.WarnLamp{}
-	st.mon.on_10ms(speed, mut lamp) // the actual SpeedMonitor handler
-	osal.ioc_publish(ioc_lamp, &lamp, u8(sizeof(lamp)))
+	mut inp := sig.SpeedMonitorIn{}
+	osal.ioc_acquire(ioc_speed, &inp.vehicle_speed, u8(sizeof(inp.vehicle_speed)))
+	mut outp := sig.SpeedMonitorOut{}
+	st.mon.on_10ms(inp, mut outp) // the actual SpeedMonitor FB handler
+	osal.ioc_publish(ioc_lamp, &outp.warn_lamp, u8(sizeof(outp.warn_lamp)))
 }
 
 fn partition_app(core int, arg voidptr) {
@@ -63,13 +64,13 @@ fn partition_io(core int, arg voidptr) {
 	mut first_on := -1
 	mut on_count := 0
 	for cycle in 0 .. 30 {
-		mut vs := app.VehicleSpeed{
+		mut vs := sig.VehicleSpeed{
 			kph:   u16(cycle * 10)
 			valid: true
 		}
 		osal.ioc_publish(ioc_speed, &vs, u8(sizeof(vs)))
 		osal.sleep_us(30000) // let the App partition's Loom process this speed
-		mut lamp := app.WarnLamp{}
+		mut lamp := sig.WarnLamp{}
 		if osal.ioc_acquire(ioc_lamp, &lamp, u8(sizeof(lamp))) && lamp.on {
 			on_count++
 			if first_on < 0 {

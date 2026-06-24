@@ -9,13 +9,14 @@ deeper rationale (`no-alloc.md`, `memory-protection.md`, `multicore-perf.md`,
 ## Layout
 
 ```
-app/      components: typed ports + periodic handlers   (what developers write)
+app/      Function Blocks (FBs): private state + periodic handlers (developers write)
+sig/      signal value types + generated *In/*Out port structs — no-alloc
 loom/     the Loom: wiring + dispatch (the de-AUTOSAR'd "RTE")
-comm/     comms stack: com (signals), + generated DBC codec
+comm/     comms stack: com (signals) + generated DBC codec; nm (network mgmt)
 driver/   driver port: can (sim=SocketCAN, target=MCAL)
 osal/     OS abstraction: time, cores, IOC (sim=POSIX, target=ThreadX AMP)
-gen/      generated static config tables (cfg2v from ecu.toml) — no-alloc
-tools/    BUILD-TIME only (heap OK): dbc2cfg, cfg2v, benches, candb, threadx_amp
+gen/      generated config tables + Loom glue (cfg2v/loom2v from ecu.toml) — no-alloc
+tools/    BUILD-TIME only (heap OK): dbc2cfg, cfg2v, loom2v, sigmap, benches, candb
 config/   ecu.toml (single source), *.dbc
 ```
 
@@ -33,9 +34,9 @@ v -gc none run tools/ioc_bench_mp/bench.v  # cross-process IOC
 
 Enforce these as high-priority (P0/P1); they are the project's hard invariants.
 
-- **No runtime heap.** In `app/`, `comm/`, `loom/`, `gen/`: no `string`, no `map`,
-  no growable `[]T`, no closures. Only fixed arrays (`[N]T`), value structs, static
-  tables. `osal/` and `driver/` may allocate **only at init** (before the main
+- **No runtime heap.** In `app/`, `sig/`, `comm/`, `loom/`, `gen/`: no `string`, no
+  `map`, no growable `[]T`, no closures. Only fixed arrays (`[N]T`), value structs,
+  static tables. `osal/` and `driver/` may allocate **only at init** (before the main
   loop), never in steady-state handlers. `tools/` is unrestricted. Flag any heap
   in a runtime layer.
 - **IOC is single-writer-per-channel (SPSC).** Each channel has exactly one
@@ -54,10 +55,10 @@ Enforce these as high-priority (P0/P1); they are the project's hard invariants.
   expected, not a regression. Flag *adopting* an AUTOSAR term as one of our names
   (calling a thing RTE / runnable / SWC); merely *mentioning* such a term to
   explain why it's avoided is fine.
-- **Generated code.** `comm/com/dbc_gen.v` (`tools/dbc2cfg`), `gen/ecu_gen.v`
-  (`tools/cfg2v`), and `gen/loom_gen.v` (`tools/loom2v`) are generated from
-  `config/` via `make gen` — never hand-edit them; changes belong in the config
-  or the generator.
+- **Generated code.** `comm/com/dbc_gen.v` (`dbc2cfg`), `gen/ecu_gen.v` (`cfg2v`),
+  `sig/ports_gen.v` + `gen/loom_gen.v` (`loom2v`) via `make gen`, and
+  `docs/signal-map.md` (`sigmap`) via `make trace` — never hand-edit them; changes
+  belong in the config or the generator.
 - **Memory safety.** Scrutinize `unsafe` blocks, pointer casts, and that payloads
   fit `IOC_MAX` (64 bytes); `sizeof` must not exceed it.
 
