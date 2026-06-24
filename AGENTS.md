@@ -46,8 +46,12 @@ Enforce these as high-priority (P0/P1); they are the project's hard invariants.
 - **Partition isolation.** `app/` must never import a driver; cross-core data
   flows only through the IOC (`osal.ioc_*`). Flag direct cross-partition memory
   access — it breaks the memory-protection model.
-- **No AUTOSAR vocabulary** in the developer-facing surface: it's **Loom** (not
-  RTE), **handler** (not runnable), **component** (not SWC). Flag regressions.
+- **No AUTOSAR vocabulary** in the developer-facing surface: **Loom** (not RTE),
+  **handler** (not runnable), **Function Block / FB** for the application unit
+  (not SWC, and not "component"/"software unit" — both overload the ISO 26262
+  ladder; see docs/application-model.md). NOTE: config/code still use
+  `[[component]]` pending the `component → fb` rename — that transitional state is
+  expected, not a regression. Flag NEW AUTOSAR terms (RTE / runnable / SWC).
 - **Generated code.** `comm/com/dbc_gen.v` (`tools/dbc2cfg`), `gen/ecu_gen.v`
   (`tools/cfg2v`), and `gen/loom_gen.v` (`tools/loom2v`) are generated from
   `config/` via `make gen` — never hand-edit them; changes belong in the config
