@@ -1,0 +1,38 @@
+# minimal example: one FB, FB <-> COM only (bus in -> FB -> bus out).
+[import]
+dbc = "examples/minimal/bus.dbc"
+
+[bus.can0]
+interface = "vcan0"
+fd        = true
+
+[[partition]]
+name    = "io"
+core    = 0
+trusted = true
+
+[[partition]]
+name    = "app"
+core    = 1
+trusted = false
+
+[[signal]]
+name = "VehicleSpeed"
+from = "io"
+to   = "app"
+transport = "double"
+
+[[signal]]
+name = "WarnLamp"
+from = "app"
+to   = "io"
+transport = "double"
+
+[[fb]]
+name      = "SpeedMonitor"
+partition = "app"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["VehicleSpeed"]
+  writes    = ["WarnLamp"]

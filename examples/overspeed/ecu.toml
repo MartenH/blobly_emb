@@ -1,0 +1,122 @@
+# blobly_emb ECU configuration — example app exercising every signal path.
+#
+#   IO partition (core 0) bridges the CAN bus (COM).
+#   SENSE partition (core 0): SpeedFilter -> OverspeedDetector
+#   CTRL  partition (core 1): EngineMonitor -> LampController
+#
+# Paths demonstrated:
+#   FB <-> COM (bus):       VehicleSpeed, EngineSpeed (rx), WarnLamp (tx)
+#   FB -> FB, same core:    FilteredSpeed (SpeedFilter->OverspeedDetector, local cell)
+#                           HighRev       (EngineMonitor->LampController, local cell)
+#   FB -> FB, across cores: Overspeed     (sense@core0 -> ctrl@core1, IOC)
+#
+# The Loom (wiring + dispatch) and the COM codec are GENERATED from this file.
+
+[import]
+dbc = "examples/overspeed/bus.dbc"
+
+[bus.can0]
+interface = "vcan0"
+fd        = true
+
+# --- Partitions (one MPU domain each; pinned to a core) ----------------------
+[[partition]]
+name    = "io"
+core    = 0
+trusted = true        # owns the CAN peripheral / COM
+
+[[partition]]
+name    = "sense"
+core    = 0
+trusted = false
+
+[[partition]]
+name    = "ctrl"
+core    = 1
+trusted = false
+
+# --- Signals -----------------------------------------------------------------
+# Routing is derived from from/to:
+#   from == to  -> LOCAL cell (same-partition FB->FB, no IOC, no sync)
+#   from != to  -> IOC channel (cross-partition; `transport` applies)
+#   io endpoint -> bridged to/from the bus by the COM/driver layer
+[[signal]]
+name = "VehicleSpeed"
+from = "io"
+to   = "sense"
+transport = "double" # bus rx
+
+[[signal]]
+name = "EngineSpeed"
+from = "io"
+to   = "ctrl"
+transport = "double" # bus rx
+
+[[signal]]
+name = "FilteredSpeed"
+from = "sense"
+to   = "sense" # local (same core)
+
+[[signal]]
+name = "Overspeed"
+from = "sense"
+to   = "ctrl"
+transport = "double" # across cores
+
+[[signal]]
+name = "HighRev"
+from = "ctrl"
+to   = "ctrl" # local (same core)
+
+[[signal]]
+name = "WarnLamp"
+from = "ctrl"
+to   = "io"
+transport = "double" # bus tx
+
+# --- Function Blocks ---------------------------------------------------------
+# (within a partition, list producers before consumers for same-cycle local data)
+[[fb]]
+name      = "SpeedFilter"
+partition = "sense"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["VehicleSpeed"]
+  writes    = ["FilteredSpeed"]
+
+[[fb]]
+name      = "OverspeedDetector"
+partition = "sense"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["FilteredSpeed"]
+  writes    = ["Overspeed"]
+
+[[fb]]
+name      = "EngineMonitor"
+partition = "ctrl"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["EngineSpeed"]
+  writes    = ["HighRev"]
+
+[[fb]]
+name      = "LampController"
+partition = "ctrl"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["Overspeed", "HighRev"]
+  writes    = ["WarnLamp"]
+
+# --- Network Management ------------------------------------------------------
+[nm.can0]
+node_id       = 7
+tx_id         = 0x400
+msg_cycle_ms  = 100
+timeout_ms    = 300
+repeat_ms     = 200
+wait_sleep_ms = 150
