@@ -1,34 +1,38 @@
-# Application model — Software Units (SUs)
+# Application model — Function Blocks (FB)
 
-How application developers write code in blobly_emb. This is a **proposal** for
-the developer-facing model; the open choices are flagged at the end.
+How application developers write code in blobly_emb.
+
+> A **Function Block (FB)** is a unit of application logic with typed **input
+> signals**, typed **output signals**, and private state, that runs on a
+> schedule. (Term from IEC 61131-3 control engineering — *not* AUTOSAR. It names
+> exactly this shape and composes natively.)
 
 ## The golden rule
 
-> A **Software Unit (SU)** is a pure function of its **input signals** to its
-> **output signals**, plus private state. It knows nothing about buses, cores,
-> IOC, the other SUs, or where its signals come from. It never allocates.
+> An FB is a **pure function of its input signals to its output signals**, plus
+> private state. It knows nothing about buses, cores, IOC, the other FBs, or where
+> its signals come from. It never allocates.
 
-Everything else — routing a signal between SUs or to/from a bus, choosing a
-transport, scaling raw bus values — happens **around** the SU, in generated glue
-and config. That's what makes an SU trivially testable and portable.
+Everything else — routing a signal between FBs or to/from a bus, choosing a
+transport, scaling raw bus values — happens **around** the FB, in generated glue
+and config. That's what makes an FB trivially testable and portable.
 
-(The config today calls these `[[component]]`; we'll converge the name to **SU**.)
+## Anatomy of an FB
 
-## Anatomy of an SU
-
-- **State**: a value struct, private to the SU (no heap).
+- **State**: a value struct, private to the FB (no heap).
 - **Handlers**: methods the Loom calls. `on_init` once at startup; `on_<period>`
   periodically (e.g. `on_10ms`); later, event handlers (`on_<signal>_received`).
 - **Signals**: typed values it reads (inputs) and writes (outputs). A signal type
-  is an app-defined value struct (e.g. `VehicleSpeed { kph u16; valid bool }`).
+  is a value struct (e.g. `VehicleSpeed { kph u16; valid bool }`).
 
-## Reading & writing signals (proposed)
+FBs compose: a *composite* FB is wired from smaller FBs in config; the developer
+writes only *leaf* FBs (logic) and the wiring (`ecu.toml`).
 
-An SU's handler receives a generated **Inputs** snapshot and a **Outputs** struct;
-it reads/writes them as plain fields. The Loom snapshots all inputs before the
-call and publishes all outputs after — so the handler sees a coherent snapshot
-and stays a pure transform.
+## Reading & writing signals
+
+An FB's handler receives a generated **Inputs** snapshot and an **Outputs**
+struct; it reads/writes them as plain fields. The Loom snapshots all inputs before
+the call and publishes all outputs after — coherent snapshot, pure transform.
 
 ```v
 // app/speed_monitor.v — written by the developer
@@ -40,9 +44,9 @@ pub mut:
 	over_limit bool
 }
 
-pub fn (mut su SpeedMonitor) on_10ms(in sig.SpeedMonitorIn, mut out sig.SpeedMonitorOut) {
-	su.over_limit = in.vehicle_speed.valid && in.vehicle_speed.kph > 120
-	out.warn_lamp.on = su.over_limit
+pub fn (mut fb SpeedMonitor) on_10ms(in sig.SpeedMonitorIn, mut out sig.SpeedMonitorOut) {
+	fb.over_limit = in.vehicle_speed.valid && in.vehicle_speed.kph > 120
+	out.warn_lamp.on = fb.over_limit
 }
 ```
 
@@ -52,10 +56,14 @@ module sig
 
 pub struct SpeedMonitorIn {
 pub mut:
+	// signal "VehicleSpeed" — physical km/h
+	//   from: CAN can0 / DBC Powertrain.VehicleSpeed  frame 0x100  bits 16|12 (x0.1)
+	//   path: COM -> IOC(double) -> app
 	vehicle_speed VehicleSpeed
 }
 pub struct SpeedMonitorOut {
 pub mut:
+	// signal "WarnLamp" -> CAN can0 / LampFrame 0x101 (bit 0)
 	warn_lamp WarnLamp
 }
 ```
@@ -73,77 +81,78 @@ fn handler_app_speed_monitor_on_10ms(ctx voidptr) {
 ```
 
 Why grouped `In`/`Out` structs (not positional params): adding a signal is a
-config change + a new field — **the handler signature never changes**, and an SU
-with many signals stays readable. Field access (`in.vehicle_speed`) is as easy as
-it gets.
+config change + a new (annotated) field — **the handler signature never changes**,
+and an FB with many signals stays readable. Field access is as easy as it gets.
 
 ### Module layering (avoids an import cycle)
 
-- **`sig/`** — signal value types + generated `*In`/`*Out` port structs. Depends
-  on nothing.
-- **`app/`** — the SUs. Imports `sig`.
-- **`gen/`** — the generated Loom glue. Imports `app` + `sig`. Nothing imports
-  `gen` that `gen` imports back.
+- **`sig/`** — signal value types + generated `*In`/`*Out` port structs. No deps.
+- **`app/`** — the FBs. Imports `sig`.
+- **`gen/`** — the generated Loom glue. Imports `app` + `sig`; nothing it imports
+  imports it back.
 
-So the SU references only `sig` (never `gen`), while `gen` calls into `app`. No
+So an FB references only `sig` (never `gen`), while `gen` calls into `app`. No
 cycle, ergonomic API.
 
-## Communication topology — all transparent to the SU
+## Signal traceability — "follow a signal"
 
-The SU always just reads/writes a named signal. **Where** that signal lives is
-config, resolved in the generated glue:
+The signal **name** is the single thread you pull. It is used identically in FB
+code, in `ecu.toml`, and is mapped to its DBC signal:
 
-| Signal connects… | Generated glue uses | SU code |
-|---|---|---|
-| SU → SU, same partition | a local cell (direct memory, no sync) | identical |
-| SU → SU, different cores | IOC channel (transport per `[[ioc]]`) | identical |
-| SU ↔ communication bus | COM codec + driver (CAN/LIN/…) | identical |
+```
+in.vehicle_speed   (FB code)
+  └─ "VehicleSpeed" (ecu.toml signal + [[ioc]] channel)
+       └─ DBC Powertrain.VehicleSpeed  (frame 0x100, bits 16|12, x0.1 km/h)
+```
 
-Because the SU code is identical in all three cases, you can move an SU to
-another core, or re-source a signal from the bus instead of another SU, **without
-touching the SU** — only `ecu.toml` changes.
+You follow it two ways, both **generated** (so always accurate):
 
-## Scaling & transformers — at the boundary, never in the SU
+1. **Inline** — go-to-definition on `in.vehicle_speed` lands on the generated
+   field, whose doc comment states the DBC signal, frame, bit layout, scaling and
+   path (see the `sig` struct above). One hop from FB code to DBC definition.
+2. **A signal map** — `make trace` generates `docs/signal-map.md`:
 
-**Decision: SUs work in physical engineering units; raw↔physical scaling lives at
+   | Signal | Unit | Source | DBC signal | Frame | Layout | Scaling | Path | Consumers |
+   |--------|------|--------|------------|-------|--------|---------|------|-----------|
+   | VehicleSpeed | km/h | CAN can0 | Powertrain.VehicleSpeed | 0x100 | 16\|12 | x0.1 | COM→IOC(double)→app | SpeedMonitor |
+   | WarnLamp | bool | app | LampFrame | 0x101 | 0\|1 | — | app→IOC→COM | (CAN tx) |
+
+## Scaling & transformers — at the boundary, never in the FB
+
+**Decision: FBs work in physical engineering units; raw↔physical scaling lives at
 the communication boundary (COM), and any other transform is a declared,
-generated step on the connection — not hand-written in the SU.**
+generated step on the connection — not hand-written in the FB.**
 
-- **Bus scaling (raw ↔ physical)** is the DBC `factor`/`offset`. It's applied in
-  the generated COM codec (`dbc2cfg` already emits `*_phys()`), so a signal read
-  from CAN arrives at the SU already in km/h, °C, etc. The SU never sees raw bits.
-- **Other transforms** (unit conversion, range clamping, end-to-end protection,
-  rate limiting) are **declared on the signal/connection** in config and emitted
-  into the generated path. They run where the signal crosses a boundary
-  (producer→IOC, or COM↔bus), so every consumer sees the transformed value and
-  the SU stays a pure function.
+- **Bus scaling (raw ↔ physical)** is the DBC `factor`/`offset`, applied in the
+  generated COM codec (`dbc2cfg` emits `*_phys()`), so a signal read from CAN
+  arrives already in km/h, °C, … The FB never sees raw bits.
+- **Other transforms** (unit conversion, range clamp, end-to-end protection, rate
+  limit) are **declared on the signal/connection** in config and emitted into the
+  generated path. They run where the signal crosses a boundary, so every consumer
+  sees the transformed value and the FB stays a pure function.
 
-Rationale: keep SUs free of representation concerns so they're portable across
-ECUs and bus matrices, testable with plain physical values, and unaffected when a
-DBC scaling or a transform changes.
-
-Example (proposed config; transforms optional):
+Rationale: keep FBs free of representation concerns — portable across ECUs and bus
+matrices, testable with plain physical values, unaffected when a DBC scaling or a
+transform changes.
 
 ```toml
 [[ioc]]
 name = "VehicleSpeed"   # physical km/h after COM scaling
-from = "io"             # COM/driver side
+from = "io"
 to   = "app"
-# transform = "clamp:0..350"   # optional, generated; SU still just reads km/h
+# transform = "clamp:0..350"   # optional, generated; FB still just reads km/h
 ```
 
 ## Signal validity
 
-A signal carries validity: an IOC channel never written reads back as
-"no value yet" (the accessor returns the zero value with `valid = false`, by
-convention a `valid` field or a separate freshness flag). SUs must handle
-"not yet received" (as `SpeedMonitor` does with `in.vehicle_speed.valid`).
+A signal carries validity: an IOC channel never written reads back as "no value
+yet" (zero value with `valid = false` by convention). FBs must handle "not yet
+received" — as `SpeedMonitor` does with `in.vehicle_speed.valid`.
 
-## Worked example — SU → SU chaining
+## Worked example — FB → FB chaining
 
-A filter SU sits between the bus and the monitor. Note `SpeedMonitor` is
-**unchanged** — it doesn't know its input now comes from another SU instead of the
-bus.
+A filter FB sits between the bus and the monitor. `SpeedMonitor` is **unchanged** —
+it doesn't know its input now comes from another FB instead of the bus.
 
 ```v
 // app/speed_filter.v
@@ -151,10 +160,9 @@ pub struct SpeedFilter {
 pub mut:
 	last u16
 }
-pub fn (mut su SpeedFilter) on_10ms(in sig.SpeedFilterIn, mut out sig.SpeedFilterOut) {
-	// simple IIR; reads raw bus speed, writes a filtered signal
-	su.last = (su.last * 3 + in.vehicle_speed_raw.kph) / 4
-	out.vehicle_speed = sig.VehicleSpeed{ kph: su.last, valid: in.vehicle_speed_raw.valid }
+pub fn (mut fb SpeedFilter) on_10ms(in sig.SpeedFilterIn, mut out sig.SpeedFilterOut) {
+	fb.last = (fb.last * 3 + in.vehicle_speed_raw.kph) / 4 // simple IIR
+	out.vehicle_speed = sig.VehicleSpeed{ kph: fb.last, valid: in.vehicle_speed_raw.valid }
 }
 ```
 
@@ -163,37 +171,54 @@ pub fn (mut su SpeedFilter) on_10ms(in sig.SpeedFilterIn, mut out sig.SpeedFilte
 [[ioc]]
 name = "VehicleSpeedRaw"; from = "io";  to = "app"; transport = "double"
 [[ioc]]
-name = "VehicleSpeed";    from = "app"; to = "app"; transport = "double"  # SU->SU
+name = "VehicleSpeed";    from = "app"; to = "app"; transport = "double"  # FB->FB
 [[ioc]]
 name = "WarnLamp";        from = "app"; to = "io";  transport = "double"
 
-[[component]]
+[[fb]]
 name = "SpeedFilter"; partition = "app"
-  [[component.handler]]
+  [[fb.handler]]
   name = "on_10ms"; period_ms = 10; reads = ["VehicleSpeedRaw"]; writes = ["VehicleSpeed"]
 
-[[component]]
+[[fb]]
 name = "SpeedMonitor"; partition = "app"
-  [[component.handler]]
+  [[fb.handler]]
   name = "on_10ms"; period_ms = 10; reads = ["VehicleSpeed"]; writes = ["WarnLamp"]
 ```
 
-The Loom generates both SUs' glue and schedules them in dependency order on the
-partition. Re-sourcing `VehicleSpeed` from the bus instead of `SpeedFilter` is a
-one-line config edit; neither SU changes.
+Re-sourcing `VehicleSpeed` from the bus instead of `SpeedFilter` is a one-line
+config edit; neither FB changes.
 
-## Implemented today vs. proposed here
+## Communication topology — all transparent to the FB
 
-- **Implemented**: SUs as state + handler; positional signal params; the Loom glue
-  generated by `loom2v`; scaling at the COM boundary (`dbc2cfg` `*_phys`).
-- **Proposed by this doc**: grouped `In`/`Out` port structs in a `sig` module
-  (stable signatures, field access); SU↔SU local routing; declared transforms;
-  the `SU` name. These are small evolutions of what exists.
+The FB always just reads/writes a named signal. **Where** it lives is config,
+resolved in the generated glue:
 
-## Open choices (please confirm)
+| Signal connects… | Generated glue uses | FB code |
+|---|---|---|
+| FB → FB, same partition | a local cell (direct memory, no sync) | identical |
+| FB → FB, different cores | IOC channel (transport per `[[ioc]]`) | identical |
+| FB ↔ communication bus | COM codec + driver (CAN/LIN/…) | identical |
 
-1. **Read/write API**: grouped `In`/`Out` structs (this doc) vs. the current
-   positional params vs. explicit accessor methods (`p.vehicle_speed()`).
-2. **Scaling/transforms location**: at the COM/connection boundary (this doc) vs.
-   allowing transforms inside SUs.
-3. **Naming**: rename `component` → `SU` across config/docs/code.
+Because the FB code is identical in all three cases, you can move an FB to another
+core, or re-source a signal from the bus instead of another FB, **without touching
+the FB** — only `ecu.toml` changes.
+
+## Decisions (resolved)
+
+- **Name**: **Function Block (FB)** — config `[[fb]]`. Avoids the ISO 26262
+  unit/component overload and the AUTOSAR-SWC connotation; composes natively.
+- **Signal API**: grouped, annotated `In`/`Out` port structs (stable signatures,
+  field access, built-in traceability).
+- **Scaling/transforms**: at the COM/connection boundary, generated — never inside
+  an FB.
+- **Traceability**: signal name is the key; inline provenance on generated fields +
+  a generated `signal-map`.
+
+## Implemented today vs. this design
+
+- **Implemented**: FBs as state + handler (config `[[component]]`, positional
+  params); Loom glue via `loom2v`; scaling at the COM boundary (`dbc2cfg`).
+- **To converge** (follow-up PRs): rename `component` → `fb`; signal types + `*In`/
+  `*Out` structs in a `sig` module; provenance annotations + `make trace` signal
+  map; FB→FB local routing; declared transforms.
