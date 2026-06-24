@@ -20,3 +20,11 @@ pub const ioc_transport = [Transport.double, Transport.double]!
 pub const partition_count = 2
 pub const partition_cores = [0, 1]!
 pub const partition_trusted = [true, false]!
+
+// Network Management timings (per network)
+pub const nm_can0_node_id = u8(7)
+pub const nm_can0_tx_id = u32(0x400)
+pub const nm_can0_msg_cycle_us = u64(100000)
+pub const nm_can0_timeout_us = u64(300000)
+pub const nm_can0_repeat_us = u64(200000)
+pub const nm_can0_wait_sleep_us = u64(150000)
