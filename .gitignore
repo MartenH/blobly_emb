@@ -1,5 +1,7 @@
-# Compiled binary (V output)
+# Compiled binaries (V output)
 /blobly_emb
+/blobly_demo
+/blobly_demo_threadx
 
 # V build artifacts
 *.tmp.c
