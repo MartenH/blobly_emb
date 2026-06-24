@@ -43,6 +43,13 @@ wall-clock: ~1000 ms   (two concurrent 1s workloads => true parallelism)
 the non-ThreadX cross-process bench (`tools/ioc_bench_mp`), so the ThreadX threads
 are doing real work through the same IOC.
 
+`tools/threadx_amp/tx_demo.c` goes further: it runs the **actual SpeedMonitor
+demo** (the `app/speed_monitor.v` decision) on ThreadX AMP — IO partition on
+core 0 sweeping `VehicleSpeed`, App partition on core 1 deciding the lamp, signals
+crossing via the real IOC, Loom dispatch realized as a ThreadX thread +
+`tx_thread_sleep`. The lamp turns on at 130 km/h (first value > 120), proving the
+application behavior — not just raw IOC throughput — runs on ThreadX.
+
 ## What this is and isn't
 
 - **Is:** real parallel multicore ThreadX on the host — AMP (N independent

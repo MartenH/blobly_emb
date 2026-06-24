@@ -33,6 +33,23 @@ ThreadX AMP on Linux: 2 ThreadX kernels, 1 per forked core, shared IOC
   wall-clock: ~1000 ms  (two concurrent 1s workloads => true parallelism)
 ```
 
+## tx_demo — the SpeedMonitor app on ThreadX AMP
+
+`tx_demo.c` runs the actual blobly demo behavior on ThreadX: core0 (IO) sweeps
+`VehicleSpeed` and reads `WarnLamp`; core1 (App) runs the `SpeedMonitor` decision
+(`lamp.on = kph > 120`). Loom-style periodic dispatch = a ThreadX thread +
+`tx_thread_sleep`; signals cross via the real IOC. Build like `tx_amp` above but
+with `tx_demo.c`, then run:
+
+```
+SpeedMonitor on ThreadX AMP (core0=IO, core1=App, IOC shared):
+  kph=  0 -> lamp=0
+  kph=100 -> lamp=0
+  kph=130 -> lamp=1   <- threshold crossed
+  ...
+lamp first turned ON at kph=130 (expected 130, i.e. first >120)
+```
+
 ## Why it works (see docs/threadx-amp.md)
 
 The port's `TX_LINUX_MULTI_CORE` confines each ThreadX process to a single core —
