@@ -207,7 +207,8 @@ the FB** — only `ecu.toml` changes.
 ## Decisions (resolved)
 
 - **Name**: **Function Block (FB)** — config `[[fb]]`. Avoids the ISO 26262
-  unit/component overload and the AUTOSAR-SWC connotation; composes natively.
+  unit/component overload and the AUTOSAR application-component connotation;
+  composes natively.
 - **Signal API**: grouped, annotated `In`/`Out` port structs (stable signatures,
   field access, built-in traceability).
 - **Scaling/transforms**: at the COM/connection boundary, generated — never inside

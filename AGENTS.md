@@ -51,7 +51,9 @@ Enforce these as high-priority (P0/P1); they are the project's hard invariants.
   (not SWC, and not "component"/"software unit" — both overload the ISO 26262
   ladder; see docs/application-model.md). NOTE: config/code still use
   `[[component]]` pending the `component → fb` rename — that transitional state is
-  expected, not a regression. Flag NEW AUTOSAR terms (RTE / runnable / SWC).
+  expected, not a regression. Flag *adopting* an AUTOSAR term as one of our names
+  (calling a thing RTE / runnable / SWC); merely *mentioning* such a term to
+  explain why it's avoided is fine.
 - **Generated code.** `comm/com/dbc_gen.v` (`tools/dbc2cfg`), `gen/ecu_gen.v`
   (`tools/cfg2v`), and `gen/loom_gen.v` (`tools/loom2v`) are generated from
   `config/` via `make gen` — never hand-edit them; changes belong in the config
