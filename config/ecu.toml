@@ -70,3 +70,12 @@ partition = "app"
   period_ms = 10
   reads     = ["VehicleSpeed"]
   writes    = ["WarnLamp"]
+
+# --- Network Management (coordinated bus sleep/wakeup, per network) -----------
+[nm.can0]
+node_id       = 7
+tx_id         = 0x400   # this node's NM message id
+msg_cycle_ms  = 100     # NM transmit period while we hold the bus awake
+timeout_ms    = 300     # no NM heard for this long -> head toward sleep
+repeat_ms     = 200     # time announcing presence after waking
+wait_sleep_ms = 150     # grace period before the bus actually sleeps
