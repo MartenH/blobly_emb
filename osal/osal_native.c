@@ -3,6 +3,9 @@
 #include <string.h>
 #include <sched.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/wait.h>
 
 void blob_pin_to_cpu(int cpu) {
 #ifdef __linux__
@@ -16,39 +19,110 @@ void blob_pin_to_cpu(int cpu) {
 #endif
 }
 
-/* --- IOC: static slot table, seqlock, last-is-best ---
- *
- * Performance model: lock-free. The writer never blocks (bumps a seq counter
- * around the copy); the reader retries only if it samples mid-write. Valid ONLY
- * for single-writer-per-channel (SPSC) — guaranteed by config: each IOC channel
- * has exactly one `from` partition.
- *
- * Each slot is cache-line aligned and padded to whole cache lines, so a writer
- * on slot A and a writer/reader on slot B never share a line — no false sharing,
- * no cross-core cache ping-pong. This is the difference between "lock-free" and
- * "actually fast" on multicore. */
+/* ============================================================================
+ * IOC slot types. Each slot is cache-line aligned + padded so a writer on one
+ * channel never shares a line with another channel (no false sharing).
+ * ==========================================================================*/
 #define IOC_SLOTS 8
 #define IOC_MAX   64
 #define CACHELINE 64
+#define DB_SLOTS  8
+#define DB_DIRTY  0x4u
+#define DB_IDX    0x3u
+#define DB2_SLOTS 8
 
 typedef struct __attribute__((aligned(CACHELINE))) {
-	volatile unsigned seq;       /* even=stable, odd=write in progress, 0=never written */
+	volatile unsigned seq; /* even=stable, odd=write in progress, 0=never written */
 	unsigned char     len;
 	unsigned char     data[IOC_MAX];
-	/* pad to a whole number of cache lines so adjacent slots don't share one */
 	unsigned char     _pad[2 * CACHELINE - sizeof(unsigned) - 1 - IOC_MAX];
 } ioc_slot_t;
 
-static ioc_slot_t g_ioc[IOC_SLOTS] __attribute__((aligned(CACHELINE)));
+typedef struct __attribute__((aligned(CACHELINE))) {
+	unsigned      shared; /* published index | DB_DIRTY (atomic) */
+	unsigned      wb;     /* writer-private back-buffer index */
+	unsigned      rf;     /* reader-private front-buffer index */
+	unsigned char len[3];
+	unsigned char buf[3][IOC_MAX];
+} db_slot_t;
+
+typedef struct __attribute__((aligned(CACHELINE))) {
+	unsigned      active; /* index 0/1 of the readable buffer (atomic) */
+	unsigned char len[2];
+	unsigned char buf[2][IOC_MAX];
+} db2_slot_t;
+
+/* All cross-core IOC state in one block. For AMP this is placed in a shared
+ * region (mmap MAP_SHARED) before fork, so every per-core process shares it —
+ * the host-Linux equivalent of the target's shared SRAM. */
+typedef struct {
+	ioc_slot_t         ioc[IOC_SLOTS];
+	db_slot_t          db[DB_SLOTS];
+	db2_slot_t         db2[DB2_SLOTS];
+	unsigned long long scratch[16]; /* small shared scratch (bench results, etc.) */
+} ioc_shared_t;
+
+static ioc_shared_t  g_static __attribute__((aligned(CACHELINE)));
+static ioc_shared_t *g_shared = &g_static; /* single-process default; AMP swaps to mmap */
+
+/* Access the live region through the pointer, so single-process and AMP share code. */
+#define g_ioc (g_shared->ioc)
+#define g_db  (g_shared->db)
+#define g_db2 (g_shared->db2)
+
+/* Triple-buffer indices must start as a permutation of {0,1,2}, not zero. */
+static void init_db_indices(ioc_shared_t *s) {
+	for (int i = 0; i < DB_SLOTS; i++) {
+		__atomic_store_n(&s->db[i].shared, 1u, __ATOMIC_RELAXED); /* clean, no DIRTY */
+		s->db[i].wb = 0;
+		s->db[i].rf = 2;
+	}
+}
+
+__attribute__((constructor))
+static void ioc_ctor(void) { init_db_indices(&g_static); }
+
+/* blob_ioc_shared_init: move the IOC region into shared memory. MUST be called
+ * before blob_start_core (fork), so all per-core processes see the same slots. */
+void blob_ioc_shared_init(void) {
+	if (g_shared != &g_static) return; /* already shared */
+	void *p = mmap(NULL, sizeof(ioc_shared_t), PROT_READ | PROT_WRITE,
+	               MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+	if (p == MAP_FAILED) return;
+	memset(p, 0, sizeof(ioc_shared_t));
+	g_shared = (ioc_shared_t *)p;
+	init_db_indices(g_shared);
+}
+
+void *blob_shared_scratch(void) { return (void *)g_shared->scratch; }
+
+/* blob_start_core: AMP core bring-up. fork() a process per core, pin it, and run
+ * the entry there. Real OS-level parallelism (one process per physical CPU),
+ * sharing only the mmap'd IOC region. */
+int blob_start_core(int core_id, void (*entry)(int, void *), void *arg) {
+	pid_t pid = fork();
+	if (pid == 0) {
+		blob_pin_to_cpu(core_id);
+		entry(core_id, arg);
+		_exit(0);
+	}
+	return (int)pid;
+}
+
+int blob_wait_core(int pid) {
+	int status = 0;
+	waitpid((pid_t)pid, &status, 0);
+	return status;
+}
 
 /* Volatile byte copy: forces real memory access each iteration so the optimizer
- * cannot cache/reorder the seqlock payload load (a plain memcpy of shared data
- * is a data race and miscompiles under -O2 for multi-field records). */
+ * cannot cache/reorder the seqlock payload load. */
 static inline void vcopy(volatile unsigned char *d, volatile const unsigned char *s,
                          unsigned char n) {
 	for (unsigned char i = 0; i < n; i++) d[i] = s[i];
 }
 
+/* --- IOC variant 1: seqlock (1x, reader may retry) -------------------------*/
 void blob_ioc_write(int idx, const unsigned char *src, unsigned char len) {
 	if (idx < 0 || idx >= IOC_SLOTS || len > IOC_MAX) return;
 	ioc_slot_t *s = &g_ioc[idx];
@@ -74,48 +148,16 @@ int blob_ioc_read(int idx, unsigned char *dst, unsigned char max_len) {
 		__atomic_thread_fence(__ATOMIC_ACQUIRE);
 		unsigned seq1 = __atomic_load_n(&s->seq, __ATOMIC_ACQUIRE);
 		if (seq0 == seq1) return 1; /* stable across the copy -> consistent */
-		/* else the writer ran during the copy; retry */
 	}
 }
 
-/* --- IOC variant 2: lock-free triple buffer (wait-free, non-scalar) ---------
- *
- * Three buffers; the indices {wb (writer-owned), shared (published), rf
- * (reader-owned)} are always a permutation of {0,1,2}, maintained by a single
- * atomic exchange on `shared`. Writer fills its private buffer then swaps it in;
- * reader, if a new value is flagged, swaps its private buffer out for the
- * published one. Neither side ever touches the other's current buffer, so there
- * is no retry and no lock — wait-free both ways, for any payload size. */
-#define DB_SLOTS 8
-#define DB_DIRTY 0x4u
-#define DB_IDX   0x3u
-
-typedef struct __attribute__((aligned(CACHELINE))) {
-	unsigned      shared; /* published index | DB_DIRTY (atomic) */
-	unsigned      wb;     /* writer-private back-buffer index */
-	unsigned      rf;     /* reader-private front-buffer index */
-	unsigned char len[3];
-	unsigned char buf[3][IOC_MAX];
-} db_slot_t;
-
-static db_slot_t g_db[DB_SLOTS];
-
-/* Indices must start as a permutation of {0,1,2}; zero-init would alias them. */
-__attribute__((constructor))
-static void db_init(void) {
-	for (int i = 0; i < DB_SLOTS; i++) {
-		__atomic_store_n(&g_db[i].shared, 1u, __ATOMIC_RELAXED); /* clean, no DIRTY */
-		g_db[i].wb = 0;
-		g_db[i].rf = 2;
-	}
-}
-
+/* --- IOC variant 2: lock-free triple buffer (wait-free, non-scalar) --------*/
 void blob_ioc_pub(int idx, const unsigned char *src, unsigned char len) {
 	if (idx < 0 || idx >= DB_SLOTS || len > IOC_MAX) return;
 	db_slot_t *s = &g_db[idx];
 	unsigned wb = s->wb;
 	s->len[wb] = len;
-	memcpy(s->buf[wb], src, len);
+	vcopy(s->buf[wb], src, len);
 	unsigned old = __atomic_exchange_n(&s->shared, wb | DB_DIRTY, __ATOMIC_ACQ_REL);
 	s->wb = old & DB_IDX;
 }
@@ -132,25 +174,10 @@ int blob_ioc_acq(int idx, unsigned char *dst, unsigned char max_len) {
 	unsigned char len = s->len[rf];
 	if (len > max_len) len = max_len;
 	vcopy(dst, s->buf[rf], len);
-	return len > 0; /* len 0 == never published */
+	return len > 0;
 }
 
-/* --- IOC variant 3: double buffer (2x, wait-free, tear-free if reader keeps up)
- *
- * Writer fills the inactive buffer and atomically flips `active`. Reader copies
- * the active buffer. Wait-free both ways at 2x memory. A torn read is only
- * possible if the writer completes TWO publishes during one read copy (it laps
- * the reader) — i.e. never, when read latency < write interval. */
-#define DB2_SLOTS 8
-
-typedef struct __attribute__((aligned(CACHELINE))) {
-	unsigned      active; /* index 0/1 of the readable buffer (atomic) */
-	unsigned char len[2];
-	unsigned char buf[2][IOC_MAX];
-} db2_slot_t;
-
-static db2_slot_t g_db2[DB2_SLOTS]; /* zero-init: active=0, len=0 => "no value yet" */
-
+/* --- IOC variant 3: double buffer (2x, wait-free if reader keeps up) -------*/
 void blob_ioc_pub2(int idx, const unsigned char *src, unsigned char len) {
 	if (idx < 0 || idx >= DB2_SLOTS || len > IOC_MAX) return;
 	db2_slot_t *s = &g_db2[idx];

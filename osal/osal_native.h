@@ -6,6 +6,14 @@
 
 void blob_pin_to_cpu(int cpu);
 
+/* AMP core bring-up (multi-process). Call blob_ioc_shared_init() BEFORE forking
+ * so all per-core processes share one IOC region (host equivalent of shared
+ * SRAM). blob_start_core forks a process per core, pins it, and runs entry. */
+void blob_ioc_shared_init(void);
+void *blob_shared_scratch(void);
+int  blob_start_core(int core_id, void (*entry)(int, void *), void *arg);
+int  blob_wait_core(int pid);
+
 /* IOC: inter-core communication. Fixed static slots, seqlock, last-is-best.
  * This is the ONLY memory shared between partitions — on target it lives in an
  * MPU region with directional (writer RW / reader RO) permissions per channel. */

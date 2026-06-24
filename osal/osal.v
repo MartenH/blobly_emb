@@ -18,6 +18,10 @@ struct C.timespec {
 fn C.clock_gettime(int, &C.timespec) int
 fn C.nanosleep(&C.timespec, &C.timespec) int
 fn C.blob_pin_to_cpu(int)
+fn C.blob_ioc_shared_init()
+fn C.blob_shared_scratch() voidptr
+fn C.blob_start_core(int, fn (int, voidptr), voidptr) int
+fn C.blob_wait_core(int) int
 fn C.blob_ioc_write(int, &u8, u8)
 fn C.blob_ioc_read(int, &u8, u8) int
 fn C.blob_ioc_pub(int, &u8, u8)
@@ -45,6 +49,33 @@ pub fn sleep_us(us u64) {
 // pin_to_core binds the calling partition's thread to a physical core (AMP).
 pub fn pin_to_core(core int) {
 	C.blob_pin_to_cpu(core)
+}
+
+// --- Multi-process AMP: one process per core, sharing only the IOC region ---
+
+pub type CoreEntry = fn (core int, arg voidptr)
+
+// ioc_shared_init places the IOC region in shared memory. Call ONCE, before any
+// start_core, so every per-core process sees the same channels.
+pub fn ioc_shared_init() {
+	C.blob_ioc_shared_init()
+}
+
+// start_core forks a process pinned to `core` and runs `entry` there; returns
+// the child pid to the parent. The host-Linux model of an AMP core (the same
+// technique a multicore AUTOSAR-OS-on-Linux uses: fork + MAP_SHARED).
+pub fn start_core(core int, entry CoreEntry, arg voidptr) int {
+	return C.blob_start_core(core, entry, arg)
+}
+
+pub fn wait_core(pid int) int {
+	return C.blob_wait_core(pid)
+}
+
+// shared_scratch returns a pointer to a small shared-memory scratch area
+// (16 u64s) usable across the per-core processes.
+pub fn shared_scratch() voidptr {
+	return C.blob_shared_scratch()
 }
 
 // --- IOC: the only memory shared between partitions (last-is-best mailbox) ---
