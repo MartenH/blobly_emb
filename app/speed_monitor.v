@@ -1,32 +1,19 @@
 module app
 
-// An application component. This is the entire world an app developer sees:
-// typed ports in/out and a handler the Loom calls on a schedule. No bus, no CAN
-// id, no allocation. The Loom wires these ports to COM signals (generated later
-// from config/ecu.toml).
+import sig
 
-// --- Typed ports (fixed-size value types) ---
-
-pub struct VehicleSpeed {
-pub mut:
-	kph   u16
-	valid bool
-}
-
-pub struct WarnLamp {
-pub mut:
-	on bool
-}
-
-// --- Component state ---
+// A Function Block (FB): private state + a periodic handler that is a pure
+// function of its input signals to its output signals. It knows nothing about
+// buses, cores or IOC — the Loom snapshots inputs in, publishes outputs out.
+// The In/Out port structs are generated from ecu.toml (sig/ports_gen.v).
 
 pub struct SpeedMonitor {
 pub mut:
 	over_limit bool
 }
 
-// on_10ms runs every 10 ms: read the speed port, drive the lamp port.
-pub fn (mut c SpeedMonitor) on_10ms(speed VehicleSpeed, mut lamp WarnLamp) {
-	c.over_limit = speed.valid && speed.kph > 120
-	lamp.on = c.over_limit
+// on_10ms runs every 10 ms: raise the lamp when speed exceeds the limit.
+pub fn (mut fb SpeedMonitor) on_10ms(inp sig.SpeedMonitorIn, mut out sig.SpeedMonitorOut) {
+	fb.over_limit = inp.vehicle_speed.valid && inp.vehicle_speed.kph > 120
+	out.warn_lamp.on = fb.over_limit
 }

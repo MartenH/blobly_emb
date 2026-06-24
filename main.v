@@ -3,7 +3,7 @@ module main
 import os
 import driver.can
 import comm.com
-import app
+import sig
 import loom
 import osal
 import gen
@@ -32,7 +32,7 @@ fn io_10ms(ctx voidptr) {
 	// rx: decode the DBC's Powertrain frame -> publish VehicleSpeed (km/h) to App.
 	mut rx := can.Frame{}
 	if st.chan.recv(mut rx) && rx.id == com.powertrain_id {
-		mut vs := app.VehicleSpeed{
+		mut vs := sig.VehicleSpeed{
 			kph:   u16(com.powertrain_vehicle_speed_phys(rx.data)) // generated, no-alloc
 			valid: true
 		}
@@ -40,7 +40,7 @@ fn io_10ms(ctx voidptr) {
 	}
 
 	// tx: take the App partition's WarnLamp -> transmit LampFrame.
-	mut lamp := app.WarnLamp{}
+	mut lamp := sig.WarnLamp{}
 	if osal.ioc_acquire2(ioc_lamp, &lamp, u8(sizeof(lamp))) {
 		mut tx := can.Frame{
 			id:  lamp_frame_id
