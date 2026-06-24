@@ -1,51 +1,52 @@
-V      ?= v
-VFLAGS ?=
-BIN    := blobly_emb
+V ?= v
 
-.PHONY: build run lint vcan clean demo demo-threadx gen trace
+.PHONY: example run-example list lint vcan clean demo demo-threadx
 
-build:
-	$(V) $(VFLAGS) -o $(BIN) .
+# ---- Examples ---------------------------------------------------------------
+# Each example is a self-contained app under examples/<NAME>/ with its own
+# ecu.toml (+ optional bus.dbc). `make example NAME=<name>` generates all its
+# code from config and compiles it.
+EX = examples/$(NAME)
 
-# Regenerate all config-derived V from config/ (DBC codec + ecu.toml tables).
-gen:
-	$(V) -path "@vlib|@vmodules|tools" run tools/dbc2cfg/gen.v config/cantester.dbc comm/com/dbc_gen.v
-	$(V) run tools/cfg2v/gen.v config/ecu.toml gen/ecu_gen.v
-	$(V) run tools/loom2v/gen.v config/ecu.toml sig/ports_gen.v gen/loom_gen.v
+example:
+	@test -n "$(NAME)" || { echo "usage: make example NAME=<dir under examples/>"; exit 1; }
+	@test -d "$(EX)" || { echo "no such example: $(EX)"; exit 1; }
+	@if [ -f "$(EX)/bus.dbc" ]; then \
+		$(V) -path "@vlib|@vmodules|tools" run tools/dbc2cfg/gen.v "$(EX)/bus.dbc" "$(EX)/gen_dbc.v"; \
+	fi
+	$(V) run tools/cfg2v/gen.v "$(EX)/ecu.toml" "$(EX)/gen_ecu.v"
+	$(V) run tools/loom2v/gen.v "$(EX)/ecu.toml" "$(EX)/gen_ports.v" "$(EX)/gen_loom.v"
+	$(V) run tools/sigmap/gen.v "$(EX)/ecu.toml" "$(EX)/signal-map.md"
+	$(V) -o "$(EX)/app" "$(EX)"
+	@echo "built $(EX)/app"
 
-# Generate the signal map (follow any signal end-to-end: SU -> DBC).
-trace:
-	$(V) -path "@vlib|@vmodules|tools" run tools/sigmap/gen.v config/ecu.toml docs/signal-map.md
+run-example: example
+	./$(EX)/app vcan0
 
-run: build
-	./$(BIN) vcan0
+list:
+	@ls -1 examples/
 
-# The SpeedMonitor demo (real Loom + app) on the POSIX OSAL backend.
+# ---- Backend harness (POSIX / ThreadX), self-contained ----------------------
 demo:
 	$(V) -gc none -o blobly_demo cmd/threadx_demo
 	./blobly_demo
 
-# Same demo on the ThreadX OSAL backend. Needs a built ThreadX Linux library:
-#   git clone --depth 1 https://github.com/eclipse-threadx/threadx
-#   ( cd threadx/ports/linux/gnu/example_build && make tx.a ARCH64=1 )
-#   make demo-threadx THREADX=$PWD/threadx
 THREADX ?=
-TX_PORT  = $(THREADX)/ports/linux/gnu
+TX_PORT = $(THREADX)/ports/linux/gnu
 demo-threadx:
-	@test -n "$(THREADX)" || { echo "set THREADX=/path/to/threadx (with ports/linux/gnu/example_build/tx.a built)"; exit 1; }
+	@test -n "$(THREADX)" || { echo "set THREADX=/path/to/threadx (ports/linux/gnu/example_build/tx.a built)"; exit 1; }
 	$(V) -d threadx -gc none \
 	  -cflags "-DBLOBLY_THREADX -D_GNU_SOURCE -DTX_LINUX_MULTI_CORE -DTX_ENABLE_EVENT_TRACE -DTX_LINUX_DEBUG_ENABLE -I$(THREADX)/common/inc -I$(TX_PORT)/inc" \
 	  -ldflags "$(TX_PORT)/example_build/tx.a -lrt" \
 	  -o blobly_demo_threadx cmd/threadx_demo
 	./blobly_demo_threadx
 
-# Static no-dynamic-allocation house-style check for app/ and comm/.
+# ---- Misc -------------------------------------------------------------------
 lint:
 	./scripts/lint_noalloc.sh
 
-# Bring up a virtual CAN interface on the host (needs sudo).
 vcan:
 	./scripts/setup_vcan.sh
 
 clean:
-	rm -f $(BIN) blobly_demo blobly_demo_threadx
+	rm -f blobly_demo blobly_demo_threadx examples/*/app
