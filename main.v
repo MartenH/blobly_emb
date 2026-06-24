@@ -66,37 +66,9 @@ fn partition_io(ifname string) {
 	}
 }
 
-// ============================================================================
-// Partition: App (core 1) — pure application. No driver, no bus, no CAN id.
-// Under an MPU it has no access to the CAN peripheral at all.
-// ============================================================================
-
-struct AppPartition {
-mut:
-	mon app.SpeedMonitor
-}
-
-fn app_10ms(ctx voidptr) {
-	mut st := unsafe { &AppPartition(ctx) }
-	mut speed := app.VehicleSpeed{} // stays invalid until IOC has a value
-	osal.ioc_acquire2(ioc_speed, &speed, u8(sizeof(speed)))
-
-	mut lamp := app.WarnLamp{}
-	st.mon.on_10ms(speed, mut lamp)
-
-	osal.ioc_publish2(ioc_lamp, &lamp, u8(sizeof(lamp)))
-}
-
-fn partition_app() {
-	osal.pin_to_core(1)
-	mut st := AppPartition{}
-	mut sched := loom.Scheduler{}
-	sched.every(10_000, app_10ms, &st)
-	for {
-		sched.run(osal.now_us())
-		osal.sleep_us(1000)
-	}
-}
+// Partition: App (core 1) — pure application. Its entry, state, handler glue and
+// scheduling are GENERATED from [[component]] in ecu.toml: see gen.partition_app
+// in gen/loom_gen.v (tools/loom2v). Adding a component is now config-only.
 
 fn main() {
 	ifname := if os.args.len > 1 { os.args[1] } else { 'vcan0' }
@@ -105,7 +77,7 @@ fn main() {
 	println('  SpeedMonitor @core1  ->  IOC  ->  tx LampFrame 0x${lamp_frame_id.hex()} @core0')
 
 	t_io := spawn partition_io(ifname)
-	t_app := spawn partition_app()
+	t_app := spawn gen.partition_app(1, unsafe { nil }) // generated from ecu.toml
 	t_io.wait()
 	t_app.wait()
 }
