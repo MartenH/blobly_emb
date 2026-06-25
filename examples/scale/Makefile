@@ -23,7 +23,7 @@ gen:
 
 build:
 	@mkdir -p bin
-	cd $(REPO) && $(V) -path "@vlib|@vmodules|.|examples/$(NAME)" -o examples/$(NAME)/bin/app examples/$(NAME)
+	cd $(REPO) && $(V) -gc none -path "@vlib|@vmodules|.|examples/$(NAME)" -o examples/$(NAME)/bin/app examples/$(NAME)
 
 run: build
 	./bin/app
@@ -31,7 +31,7 @@ run: build
 # Build, keeping the generated C the compiler actually used (bin/app.c via -keepc).
 cfile:
 	@mkdir -p bin
-	cd $(REPO) && $(V) -keepc -path "@vlib|@vmodules|.|examples/$(NAME)" -o examples/$(NAME)/bin/app examples/$(NAME)
+	cd $(REPO) && $(V) -keepc -gc none -path "@vlib|@vmodules|.|examples/$(NAME)" -o examples/$(NAME)/bin/app examples/$(NAME)
 	@echo "kept C at bin/app.c: $$(wc -l < bin/app.c) lines, $$(du -h bin/app.c | cut -f1)"
 
 clean:

@@ -21,7 +21,7 @@ gen:
 # Build: local modules (sig/app/ports/gen) + the repo framework, via V's -path.
 build:
 	@mkdir -p bin
-	cd $(REPO) && $(V) -path "@vlib|@vmodules|.|examples/$(NAME)" -o examples/$(NAME)/bin/app examples/$(NAME)
+	cd $(REPO) && $(V) -gc none -path "@vlib|@vmodules|.|examples/$(NAME)" -o examples/$(NAME)/bin/app examples/$(NAME)
 
 run: build
 	./bin/app vcan0

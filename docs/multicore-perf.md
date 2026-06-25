@@ -87,19 +87,22 @@ bus-bridge threads); CPU is sampled per-thread from `/proc` and summed by core:
 
 ```
 core  role              load
- 0    8 buses + 50 FBs  ~4.4%   <- 8 real bridge threads (recv + codec) + 50 FBs
- 1    50 FBs            ~1.3%
- 2    50 FBs            ~1.3%
- 3    50 FBs            ~1.3%
-RAM:  ~3.9 MB VmRSS (whole process: V runtime + IOC region + 28 thread stacks)
+ 0    8 buses + 50 FBs  ~3.8%   <- 8 real bridge threads (recv + codec) + 50 FBs
+ 1    50 FBs            ~1.5%
+ 2    50 FBs            ~1.4%
+ 3    50 FBs            ~1.5%
+RAM:  ~2.1 MB VmRSS  (~0.7 MB Pss), 13 threads
 ```
 
-The IO core is ~3× the app cores here (vs ~1.4× in the micro-model) because core0
-runs **eight real bridge threads** polling SocketCAN, not inline codec. Footprint
-is tiny — ~4 MB RSS for 200 FBs across 8 buses.
+The IO core is ~2.5× the app cores here (vs ~1.4× in the micro-model) because core0
+runs **eight real bridge threads** polling SocketCAN, not inline codec.
 
-`make cfile` (in `examples/scale`) keeps the generated C the compiler used
-(`bin/app.c`, ~32k lines / 1.4 MB → a 624 KB binary) for inspection.
+**Footprint** (built `-gc none` — the runtime doesn't allocate, so no collector):
+448 KB binary (`.text` 378 KB, `.bss` 149 KB — most of it the IOC channel pool),
+~2.1 MB RSS / **~0.7 MB Pss** for 200 FBs across 8 buses. (The default Boehm GC
+would add ~180 KB code, ~255 KB `.bss`, ~1.6 MB Pss, and ~15 marker threads — none
+of which a no-alloc runtime needs.) `make cfile` keeps the generated C the compiler
+used (`bin/app.c`, ~32k lines / 1.4 MB) for inspection.
 
 ## Hardware transports (target backends, same API)
 
