@@ -3,9 +3,9 @@
 # generated code, comms stack). Bans V's heap-backed constructs: `string`,
 # `map[...]`, growable `[]T`. Fixed arrays like `[64]u8` are fine and stay.
 #
-# Scanned: comm/, loom/, and each example's runtime files. Excluded: each
-# example's main.v (the entry/bus-bridge — init-time heap like osal/driver is OK)
-# and *_test.v.
+# Scanned: comm/, loom/, and each example's runtime files (incl. the generated
+# bus bridge in gen/, which stays no-alloc). Excluded: each example's main.v (the
+# thin platform entry — init-time socket open / string ifname is OK) and *_test.v.
 set -euo pipefail
 
 dirs=("comm" "loom" "examples")
@@ -23,10 +23,11 @@ for d in "${dirs[@]}"; do
 	done < <(find "$d" -name '*.v' -not -name 'main.v' -not -name '*_test.v' -print0)
 done
 
-# Partition isolation: only an example's main.v (the IO/bus bridge) may touch a
-# driver. FB / signal / generated files must reach the bus only through signals.
-if grep -rnE '^\s*import\s+driver' examples/ --include='*.v' 2>/dev/null | grep -v '/main\.v:'; then
-	echo "  ^ only an example's main.v may import a driver (FBs use signals)"
+# Partition isolation: only the platform entry (main.v) and the generated COM bus
+# bridge (gen/loom_gen.v) may touch a driver — both are the IO boundary. FBs /
+# signals / other generated files must reach the bus only through signals.
+if grep -rnE '^\s*import\s+driver' examples/ --include='*.v' 2>/dev/null | grep -vE '/(main\.v|gen/loom_gen\.v):'; then
+	echo "  ^ only main.v or the generated bus bridge (gen/loom_gen.v) may import a driver"
 	fail=1
 fi
 

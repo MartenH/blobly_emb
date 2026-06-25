@@ -19,9 +19,9 @@ pub const ioc_channel_count = 4
 pub const ioc_transport = [Transport.double, Transport.double, Transport.double, Transport.double]!
 
 // Partitions — index = partition id
-pub const partition_count = 3
-pub const partition_cores = [0, 0, 1]!
-pub const partition_trusted = [true, false, false]!
+pub const partition_count = 2
+pub const partition_cores = [0, 1]!
+pub const partition_trusted = [false, false]!
 
 // Network Management timings (per network)
 pub const nm_can0_node_id = u8(7)

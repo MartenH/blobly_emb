@@ -1,6 +1,6 @@
 # blobly_emb ECU configuration — example app exercising every signal path.
 #
-#   IO partition (core 0) bridges the CAN bus (COM).
+#   can0 bus (core 0): generated COM bridge (rx-decode / tx-encode via the DBC)
 #   SENSE partition (core 0): SpeedFilter -> OverspeedDetector
 #   CTRL  partition (core 1): EngineMonitor -> LampController
 #
@@ -18,13 +18,11 @@ dbc = "bus.dbc"
 [bus.can0]
 interface = "vcan0"
 fd        = false
+core      = 0         # the CAN bridge (COM rx/tx) is generated to run on this core
 
 # --- Partitions (one MPU domain each; pinned to a core) ----------------------
-[[partition]]
-name    = "io"
-core    = 0
-trusted = true        # owns the CAN peripheral / COM
-
+# The bus (can0) is its own endpoint; its COM bridge is generated (no `io`
+# partition to hand-write). App partitions below.
 [[partition]]
 name    = "sense"
 core    = 0
@@ -36,23 +34,25 @@ core    = 1
 trusted = false
 
 # --- Signals -----------------------------------------------------------------
-# Routing is derived from from/to:
-#   from == to  -> LOCAL cell (same-partition FB->FB, no IOC, no sync)
-#   from != to  -> IOC channel (cross-partition; `transport` applies)
-#   io endpoint -> bridged to/from the bus by the COM/driver layer
+# An endpoint is a PARTITION or a BUS (e.g. can0). That makes external vs
+# internal explicit and machine-checkable:
+#   EXTERNAL = an endpoint is a bus  -> COM-encoded via the DBC, on that bus
+#   INTERNAL = both endpoints partitions:
+#       from == to  -> LOCAL cell (same-partition FB->FB, no IOC, no sync)
+#       from != to  -> IOC channel (cross-partition; `transport` applies)
 [[signal]]
 name = "VehicleSpeed"
 fields = { kph = "u16", valid = "bool" }
-from = "io"
+from = "can0"        # EXTERNAL: rx from the bus
 to   = "sense"
-transport = "double" # bus rx
+transport = "double"
 
 [[signal]]
 name = "EngineSpeed"
 fields = { rpm = "u16", valid = "bool" }
-from = "io"
+from = "can0"        # EXTERNAL: rx from the bus
 to   = "ctrl"
-transport = "double" # bus rx
+transport = "double"
 
 [[signal]]
 name = "FilteredSpeed"
@@ -77,8 +77,8 @@ to   = "ctrl" # local (same core)
 name = "WarnLamp"
 fields = { on = "bool" }
 from = "ctrl"
-to   = "io"
-transport = "double" # bus tx
+to   = "can0"        # EXTERNAL: tx to the bus
+transport = "double"
 
 # --- Function Blocks ---------------------------------------------------------
 # (within a partition, list producers before consumers for same-cycle local data)
