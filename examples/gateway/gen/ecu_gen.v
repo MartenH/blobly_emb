@@ -31,6 +31,4 @@ pub const nm_0_wait_sleep_us = u64(0)
 
 // Bus config (per bus)
 pub const can0_fd = false
-pub const can0_iface = 'vcan0'
 pub const can1_fd = false
-pub const can1_iface = 'vcan1'

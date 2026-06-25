@@ -92,8 +92,9 @@ fn main() {
 		for name, cfg in bus {
 			m := cfg.as_map()
 			b << 'pub const ${snake(name)}_fd = ${(m['fd'] or { toml.Any(false) }).bool()}'
-			iface := (m['interface'] or { toml.Any('') }).string()
-			b << "pub const ${snake(name)}_iface = '${iface}'"
+			// NOTE: the bus *interface* name (e.g. "vcan0") is a platform binding and
+			// lives in the hand-written main.v (the no-heap exempt entry), not here —
+			// gen/ is no-`string` runtime config.
 		}
 	}
 
