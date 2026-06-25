@@ -51,6 +51,7 @@ The only thing an example needs from the main repo is the path back to it
 | [`minimal`](minimal/) | one FB, **FB ↔ COM** only (bus in → SpeedMonitor → bus out) |
 | [`overspeed`](overspeed/) | 4 FBs on 2 cores, **every** signal path (FB↔COM, same-core local cell, cross-core IOC) **+ diagnostics** (ISO-TP + UDS: per-PDU TX modes, RX deadline, DIDs incl. a live signal) |
 | [`gateway`](gateway/) | **two CAN channels**: VehicleSpeed in on `can0` → SpeedMonitor (own core) → WarnLamp out on `can1` (one bridge per bus) |
+| [`scale`](scale/) | **load benchmark** through the real stack: 4 cores, 8 CAN buses, **200 FBs** — config + FB handlers are themselves generated (`tools/scale_gen`). `make all`, then `make bench-scale` for per-core CPU + RAM. |
 
 ## Layout — four clean buckets
 

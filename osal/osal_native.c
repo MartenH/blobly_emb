@@ -23,13 +23,17 @@ void blob_pin_to_cpu(int cpu) {
  * IOC slot types. Each slot is cache-line aligned + padded so a writer on one
  * channel never shares a line with another channel (no false sharing).
  * ==========================================================================*/
-#define IOC_SLOTS 8
+/* Channel-pool sizes (host/sim defaults). Sized so larger configs — e.g. the
+ * `scale` benchmark example (4 cores, 8 buses, ~200 FBs) — fit; small examples
+ * use only the low indices. On target the OSAL backend sizes these to the
+ * generated channel count. */
+#define IOC_SLOTS 256
 #define IOC_MAX   64
 #define CACHELINE 64
-#define DB_SLOTS  8
+#define DB_SLOTS  256
 #define DB_DIRTY  0x4u
 #define DB_IDX    0x3u
-#define DB2_SLOTS 8
+#define DB2_SLOTS 256
 
 typedef struct __attribute__((aligned(CACHELINE))) {
 	volatile unsigned seq; /* even=stable, odd=write in progress, 0=never written */

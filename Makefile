@@ -17,7 +17,7 @@ run-example:
 	$(MAKE) -C examples/$(NAME) run
 
 list:
-	@for d in examples/*/; do test -f "$$d/ecu.toml" && basename "$$d"; done
+	@for d in examples/*/; do if [ -f "$$d/Makefile" ]; then basename "$$d"; fi; done
 
 # ---- Backend harness (POSIX / ThreadX), self-contained ----------------------
 demo:
@@ -49,6 +49,15 @@ bench:
 	$(V) -prod run tools/loom_bench/bench.v
 	@echo '== System load: 4 cores, 8 CAN buses on core0, 50 FBs/core =='
 	$(V) -gc none run tools/load_bench/bench.v
+
+# Real-stack scale benchmark: build the generated `scale` example (4 cores, 8 CAN
+# buses, 200 FBs), run it on vcan0..7 with traffic, report per-core CPU + RAM.
+# Needs `sudo make vcan` first.
+bench-scale:
+	cd examples/scale && $(MAKE) all
+	./scripts/scale-bench.sh
+
+.PHONY: bench bench-scale
 
 vcan:
 	./scripts/setup_vcan.sh
