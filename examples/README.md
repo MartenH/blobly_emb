@@ -18,10 +18,14 @@ An example can be driven and asserted on the bus by
 it knows the same DBC, so it encodes/sends stimulus signals and checks responses:
 
 ```sh
-make vcan                                   # bring up vcan0
+make vcan                                   # bring up vcan0 + vcan1
 cd examples/overspeed
 make test CANTESTER=/path/to/cantester_v     # build + run the app + drive/assert
 ```
+
+(Multi-bus examples like `gateway` use both `vcan0` and `vcan1`; `make vcan`
+brings up both. Such an example opens each bus by its `[bus.*] interface` and
+`main.v` calls `gen.run(c0, c1)` — one channel per bus.)
 
 `make test` runs the built app on `vcan0` (the app *is* the ECU — the cantester
 project has no simulation) and runs every `test/*.lua` against it; it exits
@@ -45,7 +49,8 @@ The only thing an example needs from the main repo is the path back to it
 | Example | What it shows |
 |---------|---------------|
 | [`minimal`](minimal/) | one FB, **FB ↔ COM** only (bus in → SpeedMonitor → bus out) |
-| [`overspeed`](overspeed/) | 4 FBs on 2 cores, **every** signal path: FB↔COM, same-core FB→FB (local cell), cross-core FB→FB (IOC) |
+| [`overspeed`](overspeed/) | 4 FBs on 2 cores, **every** signal path (FB↔COM, same-core local cell, cross-core IOC) **+ diagnostics** (ISO-TP + UDS: per-PDU TX modes, RX deadline, DIDs incl. a live signal) |
+| [`gateway`](gateway/) | **two CAN channels**: VehicleSpeed in on `can0` → SpeedMonitor (own core) → WarnLamp out on `can1` (one bridge per bus) |
 
 ## Layout — four clean buckets
 
