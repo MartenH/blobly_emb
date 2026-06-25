@@ -1,6 +1,6 @@
 # minimal example: one FB, FB <-> COM only (bus in -> FB -> bus out).
 [import]
-dbc = "examples/minimal/bus.dbc"
+dbc = "bus.dbc"
 
 [bus.can0]
 interface = "vcan0"
