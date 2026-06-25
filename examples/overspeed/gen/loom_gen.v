@@ -8,6 +8,7 @@ import loom
 import osal
 import driver.can
 import comm.com
+import comm.isotp
 
 struct Partition_sense_state {
 mut:
@@ -89,6 +90,8 @@ mut:
 	chan can.Channel
 	tx_lamp_frame_st com.TxState
 	rx_powertrain_st com.RxState
+	tp_diag isotp.Link
+	tp_diag_buf [isotp.max_payload]u8
 }
 
 fn io_can0_10ms(ctx voidptr) {
@@ -103,12 +106,25 @@ fn io_can0_10ms(ctx voidptr) {
 			osal.ioc_publish2(engine_speed_ch, &engine_speed, u8(sizeof(engine_speed)))
 			st.rx_powertrain_st.on_receive(now)
 		}
+		if rx.id == u32(0x101) {
+			st.tp_diag.on_frame(now, rx)
+		}
 	}
 	if st.rx_powertrain_st.expired(now) {
 		mut vehicle_speed := sig.VehicleSpeed{}
 		osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 		mut engine_speed := sig.EngineSpeed{}
 		osal.ioc_publish2(engine_speed_ch, &engine_speed, u8(sizeof(engine_speed)))
+	}
+	diag_n := st.tp_diag.take(&st.tp_diag_buf[0])
+	if diag_n > 0 {
+		// diag stub: positive-response echo (UDS dispatcher replaces this)
+		st.tp_diag_buf[0] += 0x40
+		st.tp_diag.send(&st.tp_diag_buf[0], diag_n)
+	}
+	mut tpf_diag := can.Frame{}
+	for st.tp_diag.poll(now, mut tpf_diag) {
+		st.chan.send(tpf_diag)
 	}
 	mut tx_lamp_frame := can.Frame{
 		id:  lamp_frame_id
@@ -137,6 +153,12 @@ pub fn partition_can0(ch can.Channel) {
 	}
 	st.rx_powertrain_st = com.RxState{
 		timeout_us: 200000
+	}
+	st.tp_diag = isotp.Link{
+		rx_id: u32(0x101)
+		tx_id: u32(0x102)
+		bs:    8
+		stmin: 0
 	}
 	mut sched := loom.Scheduler{}
 	sched.every(10_000, io_can0_10ms, &st)

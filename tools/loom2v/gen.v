@@ -33,6 +33,16 @@ mut:
 	dbc_msg   string // snake(DBC message name) carrying this signal (if external)
 }
 
+// IsotpConn is one [[isotp]] diagnostic connection on a bus.
+struct IsotpConn {
+	name  string
+	bus   string
+	rx_id int
+	tx_id int
+	bs    int
+	stmin int
+}
+
 fn main() {
 	args := os.args
 	if args.len < 6 {
@@ -146,6 +156,24 @@ fn main() {
 		}
 	}
 
+	// ISO-TP diagnostic connections ([[isotp]]).
+	mut isotp_conns := []IsotpConn{}
+	for c in doc.value('isotp').array() {
+		m := c.as_map()
+		name := (m['name'] or { toml.Any('') }).string()
+		if name == '' {
+			continue // absent [[isotp]] section can yield a phantom empty entry
+		}
+		isotp_conns << IsotpConn{
+			name:  name
+			bus:   (m['bus'] or { toml.Any('') }).string()
+			rx_id: int((m['rx_id'] or { toml.Any(0) }).int())
+			tx_id: int((m['tx_id'] or { toml.Any(0) }).int())
+			bs:    int((m['bs'] or { toml.Any(0) }).int())
+			stmin: int((m['stmin_ms'] or { toml.Any(0) }).int())
+		}
+	}
+
 	mut core_of := map[string]int{}
 	for p in doc.value('partition').array() {
 		m := p.as_map()
@@ -184,9 +212,14 @@ fn main() {
 	glue << 'import app'
 	glue << 'import loom'
 	glue << 'import osal'
+	if has_external || isotp_conns.len > 0 {
+		glue << 'import driver.can' // the generated bus bridge
+	}
 	if has_external {
-		glue << 'import driver.can' // the generated COM bus bridge
 		glue << 'import comm.com' // per-PDU TX modes + RX deadline monitoring
+	}
+	if isotp_conns.len > 0 {
+		glue << 'import comm.isotp' // ISO-TP diagnostic transport
 	}
 
 	for part, clist in by_part {
@@ -297,13 +330,19 @@ fn main() {
 				tx_by_msg[si.dbc_msg] << sname
 			}
 		}
-		if rx_by_msg.len == 0 && tx_by_msg.len == 0 {
+		mut conns := []IsotpConn{}
+		for c in isotp_conns {
+			if c.bus == bname {
+				conns << c
+			}
+		}
+		if rx_by_msg.len == 0 && tx_by_msg.len == 0 && conns.len == 0 {
 			continue
 		}
 		bus_names << bname
 
-		// io fn needs a timestamp if it gates any tx or monitors any rx deadline
-		mut uses_now := tx_by_msg.len > 0
+		// io fn needs a timestamp to gate tx, monitor rx deadlines, or pace ISO-TP
+		mut uses_now := tx_by_msg.len > 0 || conns.len > 0
 		for msg, _ in rx_by_msg {
 			if (rx_timeout_us[msg] or { 0 }) > 0 {
 				uses_now = true
@@ -322,6 +361,10 @@ fn main() {
 				glue << '\trx_${msg}_st com.RxState'
 			}
 		}
+		for c in conns {
+			glue << '\ttp_${snake(c.name)} isotp.Link'
+			glue << '\ttp_${snake(c.name)}_buf [isotp.max_payload]u8'
+		}
 		glue << '}'
 		glue << ''
 		glue << 'fn io_${bb}_10ms(ctx voidptr) {'
@@ -329,7 +372,7 @@ fn main() {
 		if uses_now {
 			glue << '\tnow := osal.now_us()'
 		}
-		if rx_by_msg.len > 0 {
+		if rx_by_msg.len > 0 || conns.len > 0 {
 			glue << '\tmut rx := can.Frame{}'
 			glue << '\tfor st.chan.recv(mut rx) {'
 			for msg, list in rx_by_msg {
@@ -352,6 +395,11 @@ fn main() {
 				}
 				glue << '\t\t}'
 			}
+			for c in conns {
+				glue << '\t\tif rx.id == u32(0x${c.rx_id.hex()}) {'
+				glue << '\t\t\tst.tp_${snake(c.name)}.on_frame(now, rx)'
+				glue << '\t\t}'
+			}
 			glue << '\t}'
 			// rx deadline crossed -> publish invalid (valid=false) signals, once
 			for msg, list in rx_by_msg {
@@ -365,6 +413,20 @@ fn main() {
 					}
 					glue << '\t}'
 				}
+			}
+			// ISO-TP: hand a reassembled request to diag, drain segmented response
+			for c in conns {
+				tp := snake(c.name)
+				glue << '\t${tp}_n := st.tp_${tp}.take(&st.tp_${tp}_buf[0])'
+				glue << '\tif ${tp}_n > 0 {'
+				glue << '\t\t// diag stub: positive-response echo (UDS dispatcher replaces this)'
+				glue << '\t\tst.tp_${tp}_buf[0] += 0x40'
+				glue << '\t\tst.tp_${tp}.send(&st.tp_${tp}_buf[0], ${tp}_n)'
+				glue << '\t}'
+				glue << '\tmut tpf_${tp} := can.Frame{}'
+				glue << '\tfor st.tp_${tp}.poll(now, mut tpf_${tp}) {'
+				glue << '\t\tst.chan.send(tpf_${tp})'
+				glue << '\t}'
 			}
 		}
 		for msg, list in tx_by_msg {
@@ -417,6 +479,14 @@ fn main() {
 				glue << '\t}'
 			}
 		}
+		for c in conns {
+			glue << '\tst.tp_${snake(c.name)} = isotp.Link{'
+			glue << '\t\trx_id: u32(0x${c.rx_id.hex()})'
+			glue << '\t\ttx_id: u32(0x${c.tx_id.hex()})'
+			glue << '\t\tbs:    ${c.bs}'
+			glue << '\t\tstmin: ${c.stmin}'
+			glue << '\t}'
+		}
 		glue << '\tmut sched := loom.Scheduler{}'
 		glue << '\tsched.every(10_000, io_${bb}_10ms, &st)'
 		glue << '\tfor {'
@@ -453,7 +523,7 @@ fn main() {
 	os.write_file(args[3], signals.join('\n') + '\n') or { panic('write ${args[3]}: ${err}') }
 	os.write_file(args[4], ports.join('\n') + '\n') or { panic('write ${args[4]}: ${err}') }
 	os.write_file(args[5], glue.join('\n') + '\n') or { panic('write ${args[5]}: ${err}') }
-	eprintln('loom2v: ${sig_names.len} signals (${bus_names.len} bus bridge), ${by_part.len} partition(s)')
+	eprintln('loom2v: ${sig_names.len} signals (${bus_names.len} bus bridge), ${isotp_conns.len} isotp, ${by_part.len} partition(s)')
 }
 
 // dbc_message_of returns snake(message name) of the DBC message carrying `sig`.

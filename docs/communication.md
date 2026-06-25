@@ -153,10 +153,13 @@ bus-bridge partition; signals still cross to app partitions via the IOC.
    cantester asserts cadence + invalidate-on-silence.
 2. **PDU routing / gateway** — `[[route]]` + a 2-bus example (e.g. `can0`↔`can1`),
    forwarding a frame and proving the dispatch table.
-3. **ISO-TP** — `[[isotp]]` connections + the SF/FF/CF/FC state machine, tested with
-   cantester’s `isotp`.
+3. **ISO-TP** — ✅ **done**. `[[isotp]]` connections; the bridge holds an
+   `isotp.Link` per connection (SF / FF+CF / FC, BlockSize + STmin) in `comm/isotp`
+   (unit-tested both directions). Reassembled requests go to a diag handler — for
+   now a positive-response echo — and responses are re-segmented. cantester's UDS
+   client (`:raw`) asserts single- and multi-frame round-trips on the bus.
 4. **Diagnostics (UDS)** on top of ISO-TP — sessions, services, `Request`/`Response`
-   — its own doc, tested with cantester’s `uds`.
+   — replaces the echo handler; its own doc, tested with cantester's `uds`. *(next)*
 
 ## Testing
 
