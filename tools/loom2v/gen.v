@@ -43,6 +43,14 @@ struct IsotpConn {
 	stmin int
 }
 
+// DidCfg is one [[did]]: constant bytes, a writable RAM cell, and/or a live signal.
+struct DidCfg {
+	id       int
+	bytes    []u8
+	writable bool
+	signal   string
+}
+
 fn main() {
 	args := os.args
 	if args.len < 6 {
@@ -174,6 +182,30 @@ fn main() {
 		}
 	}
 
+	// UDS Data Identifiers ([[did]]): constant (ascii/bytes), writable RAM, or live signal.
+	mut dids := []DidCfg{}
+	for d in doc.value('did').array() {
+		m := d.as_map()
+		id := int((m['id'] or { toml.Any(0) }).int())
+		if id == 0 {
+			continue
+		}
+		mut bytes := []u8{}
+		if 'ascii' in m {
+			for ch in (m['ascii'] or { toml.Any('') }).string() {
+				bytes << u8(ch)
+			}
+		} else if 'bytes' in m {
+			bytes = parse_hex((m['bytes'] or { toml.Any('') }).string())
+		}
+		dids << DidCfg{
+			id:       id
+			bytes:    bytes
+			writable: (m['writable'] or { toml.Any(false) }).bool()
+			signal:   (m['signal'] or { toml.Any('') }).string()
+		}
+	}
+
 	mut core_of := map[string]int{}
 	for p in doc.value('partition').array() {
 		m := p.as_map()
@@ -220,6 +252,7 @@ fn main() {
 	}
 	if isotp_conns.len > 0 {
 		glue << 'import comm.isotp' // ISO-TP diagnostic transport
+		glue << 'import comm.uds' // UDS diagnostic services
 	}
 
 	for part, clist in by_part {
@@ -362,8 +395,11 @@ fn main() {
 			}
 		}
 		for c in conns {
-			glue << '\ttp_${snake(c.name)} isotp.Link'
-			glue << '\ttp_${snake(c.name)}_buf [isotp.max_payload]u8'
+			tp := snake(c.name)
+			glue << '\ttp_${tp} isotp.Link'
+			glue << '\ttp_${tp}_buf [isotp.max_payload]u8'
+			glue << '\tuds_${tp} uds.Server'
+			glue << '\tuds_${tp}_resp [64]u8'
 		}
 		glue << '}'
 		glue << ''
@@ -419,14 +455,27 @@ fn main() {
 					glue << '\t}'
 				}
 			}
-			// ISO-TP: hand a reassembled request to diag, drain segmented response
+			// ISO-TP + UDS: refresh live-signal DIDs, dispatch a reassembled
+			// request, drain the segmented response.
 			for c in conns {
 				tp := snake(c.name)
+				for idx, did in dids {
+					if did.signal == '' {
+						continue
+					}
+					si := sig_of[did.signal] or { continue }
+					f := snake(did.signal)
+					glue << '\tmut ${f}_did := sig.${did.signal}{}'
+					glue << '\tif osal.${acquire_fn(si.transport)}(${f}_ch, &${f}_did, u8(sizeof(${f}_did))) {'
+					glue << did_signal_encode(tp, idx, '${f}_did.${si.val_field}', si.val_type)
+					glue << '\t}'
+				}
 				glue << '\t${tp}_n := st.tp_${tp}.take(&st.tp_${tp}_buf[0])'
 				glue << '\tif ${tp}_n > 0 {'
-				glue << '\t\t// diag stub: positive-response echo (UDS dispatcher replaces this)'
-				glue << '\t\tst.tp_${tp}_buf[0] += 0x40'
-				glue << '\t\tst.tp_${tp}.send(&st.tp_${tp}_buf[0], ${tp}_n)'
+				glue << '\t\t${tp}_rlen := st.uds_${tp}.handle(&st.tp_${tp}_buf[0], ${tp}_n, &st.uds_${tp}_resp[0])'
+				glue << '\t\tif ${tp}_rlen > 0 {'
+				glue << '\t\t\tst.tp_${tp}.send(&st.uds_${tp}_resp[0], ${tp}_rlen)'
+				glue << '\t\t}'
 				glue << '\t}'
 				glue << '\tmut pdu_${tp} := isotp.Pdu{}'
 				glue << '\tfor st.tp_${tp}.poll(now, mut pdu_${tp}) {'
@@ -492,10 +541,27 @@ fn main() {
 			}
 		}
 		for c in conns {
-			glue << '\tst.tp_${snake(c.name)} = isotp.Link{'
+			tp := snake(c.name)
+			glue << '\tst.tp_${tp} = isotp.Link{'
 			glue << '\t\tbs:    ${c.bs}'
 			glue << '\t\tstmin: ${c.stmin}'
 			glue << '\t}'
+			glue << '\tst.uds_${tp} = uds.Server{}'
+			for idx, did in dids {
+				glue << '\tst.uds_${tp}.dids[${idx}] = uds.Did{'
+				glue << '\t\tid: u16(0x${did.id.hex()})'
+				if did.writable {
+					glue << '\t\twritable: true'
+				}
+				glue << '\t}'
+				for bi, b in did.bytes {
+					glue << '\tst.uds_${tp}.dids[${idx}].data[${bi}] = u8(0x${b.hex()})'
+				}
+				if did.bytes.len > 0 {
+					glue << '\tst.uds_${tp}.dids[${idx}].len = ${did.bytes.len}'
+				}
+			}
+			glue << '\tst.uds_${tp}.ndid = ${dids.len}'
 		}
 		glue << '\tmut sched := loom.Scheduler{}'
 		glue << '\tsched.every(10_000, io_${bb}_10ms, &st)'
@@ -534,6 +600,52 @@ fn main() {
 	os.write_file(args[4], ports.join('\n') + '\n') or { panic('write ${args[4]}: ${err}') }
 	os.write_file(args[5], glue.join('\n') + '\n') or { panic('write ${args[5]}: ${err}') }
 	eprintln('loom2v: ${sig_names.len} signals (${bus_names.len} bus bridge), ${isotp_conns.len} isotp, ${by_part.len} partition(s)')
+}
+
+// did_signal_encode emits the big-endian write of a live signal value into a
+// DID's data buffer (per the signal's value-field type).
+fn did_signal_encode(tp string, idx int, expr string, val_type string) string {
+	d := 'st.uds_${tp}.dids[${idx}]'
+	return match val_type {
+		'u16' {
+			'\t\t${d}.data[0] = u8(${expr} >> 8)\n\t\t${d}.data[1] = u8(${expr})\n\t\t${d}.len = 2'
+		}
+		'u32' {
+			'\t\t${d}.data[0] = u8(${expr} >> 24)\n\t\t${d}.data[1] = u8(${expr} >> 16)\n\t\t${d}.data[2] = u8(${expr} >> 8)\n\t\t${d}.data[3] = u8(${expr})\n\t\t${d}.len = 4'
+		}
+		'bool' {
+			'\t\t${d}.data[0] = if ${expr} { u8(1) } else { u8(0) }\n\t\t${d}.len = 1'
+		}
+		else {
+			'\t\t${d}.data[0] = u8(${expr})\n\t\t${d}.len = 1'
+		}
+	}
+}
+
+// parse_hex turns "01 0A FF" into bytes.
+fn parse_hex(s string) []u8 {
+	mut out := []u8{}
+	for part in s.split(' ') {
+		if part != '' {
+			out << hexbyte(part)
+		}
+	}
+	return out
+}
+
+fn hexbyte(s string) u8 {
+	mut v := 0
+	for c in s {
+		v *= 16
+		if c >= `0` && c <= `9` {
+			v += int(c - `0`)
+		} else if c >= `a` && c <= `f` {
+			v += int(c - `a`) + 10
+		} else if c >= `A` && c <= `F` {
+			v += int(c - `A`) + 10
+		}
+	}
+	return u8(v)
 }
 
 // dbc_message_of returns snake(message name) of the DBC message carrying `sig`.

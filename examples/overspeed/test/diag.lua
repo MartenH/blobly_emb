@@ -1,24 +1,35 @@
--- ISO-TP transport (ISO 15765-2): drive the diag connection (Request 0x101 ->
--- Response 0x102) on vcan0. Diag is a positive-response echo for now, so a raw
--- UDS request returns as [sid+0x40, ...rest]. A long request/response exercises
--- multi-frame segmentation (FF/CF/FC) in both directions. (cantester passes/returns
--- UDS payloads as byte strings.)
+-- UDS (ISO 14229) over ISO-TP on vcan0: drive the diag connection (Request 0x101
+-- -> Response 0x102) with cantester's UDS client. Exercises the service dispatch
+-- AND multi-frame segmentation (the 19-byte and 20-byte DIDs span several frames).
 local function diag()
   return uds.open("CAN1", { tx = 0x101, rx = 0x102 })
 end
 
-test("ISO-TP single frame: short request echoes positive", function()
-  local resp = diag():raw(fromhex("22 F1 90"))
-  check.equal(string.byte(resp, 1), 0x62) -- 0x22 + 0x40 (positive response SID)
-  check.equal(string.byte(resp, 2), 0xF1)
-  check.equal(string.byte(resp, 3), 0x90)
+test("UDS: tester present + session control", function()
+  local d = diag()
+  d:tester_present()        -- 0x3E -> 0x7E (raises on anything else)
+  local params = d:session(0x03) -- 0x10 -> 0x50, returns P2/P2* timing
+  check.truthy(#params >= 4, "session returned timing params")
 end)
 
-test("ISO-TP multi-frame: long request reassembled + response segmented", function()
-  local req = string.char(0x2E, 0xF1, 0x90)
-  for i = 1, 40 do req = req .. string.char(i) end -- 43 bytes -> FF + CFs
-  local resp = diag():raw(req)
-  check.equal(string.byte(resp, 1), 0x6E) -- 0x2E + 0x40
-  check.equal(#resp, #req)
-  for i = 2, #req do check.equal(string.byte(resp, i), string.byte(req, i)) end
+test("UDS: read DID 0xF190 constant (multi-frame response)", function()
+  check.equal(diag():read_did(0xF190), "BLOBLY-OVERSPEED-01")
+end)
+
+test("UDS: read DID 0xF1A0 = live VehicleSpeed signal", function()
+  -- hold a speed so the bridge has a fresh value, then read it back via diag
+  for _ = 1, 25 do
+    bus.send_message("CAN1", "Powertrain", { VehicleSpeed = 100 })
+    sleep_ms(10)
+  end
+  local v = diag():read_did(0xF1A0) -- 2 bytes, big-endian km/h
+  local kph = string.byte(v, 1) * 256 + string.byte(v, 2)
+  check.truthy(kph >= 90 and kph <= 110, "diag read VehicleSpeed ~100, got " .. tostring(kph))
+end)
+
+test("UDS: write + read DID 0xF1AA (RAM, multi-frame both ways)", function()
+  local d = diag()
+  local payload = string.rep("Z", 20)
+  d:write_did(0xF1AA, payload) -- 0x2E, 23-byte request -> FF/CF
+  check.equal(d:read_did(0xF1AA), payload) -- 0x22, 23-byte response -> FF/CF
 end)

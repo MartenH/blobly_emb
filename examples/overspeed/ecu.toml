@@ -105,6 +105,23 @@ tx_id    = 0x102   # Response (DBC)
 bs       = 8       # flow-control block size we grant
 stmin_ms = 0
 
+# --- Diagnostics services (UDS DataIdentifiers) ------------------------------
+# ReadDataByIdentifier (0x22) / WriteDataByIdentifier (0x2E) sources. A DID is a
+# constant (ascii/bytes), a live signal (read from the IOC each tick), or a
+# writable RAM cell.
+[[did]]
+id    = 0xF190
+ascii = "BLOBLY-OVERSPEED-01"   # 19 bytes -> read response is multi-frame
+
+[[did]]
+id     = 0xF1A0
+signal = "VehicleSpeed"         # live: current km/h (u16, big-endian)
+
+[[did]]
+id       = 0xF1AA
+writable = true
+bytes    = "00 00"              # RAM cell (write then read back)
+
 # --- Function Blocks ---------------------------------------------------------
 # (within a partition, list producers before consumers for same-cycle local data)
 [[fb]]

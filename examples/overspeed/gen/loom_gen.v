@@ -9,6 +9,7 @@ import osal
 import driver.can
 import comm.com
 import comm.isotp
+import comm.uds
 
 struct Partition_sense_state {
 mut:
@@ -92,6 +93,8 @@ mut:
 	rx_powertrain_st com.RxState
 	tp_diag isotp.Link
 	tp_diag_buf [isotp.max_payload]u8
+	uds_diag uds.Server
+	uds_diag_resp [64]u8
 }
 
 fn io_can0_10ms(ctx voidptr) {
@@ -120,11 +123,18 @@ fn io_can0_10ms(ctx voidptr) {
 		mut engine_speed := sig.EngineSpeed{}
 		osal.ioc_publish2(engine_speed_ch, &engine_speed, u8(sizeof(engine_speed)))
 	}
+	mut vehicle_speed_did := sig.VehicleSpeed{}
+	if osal.ioc_acquire2(vehicle_speed_ch, &vehicle_speed_did, u8(sizeof(vehicle_speed_did))) {
+		st.uds_diag.dids[1].data[0] = u8(vehicle_speed_did.kph >> 8)
+		st.uds_diag.dids[1].data[1] = u8(vehicle_speed_did.kph)
+		st.uds_diag.dids[1].len = 2
+	}
 	diag_n := st.tp_diag.take(&st.tp_diag_buf[0])
 	if diag_n > 0 {
-		// diag stub: positive-response echo (UDS dispatcher replaces this)
-		st.tp_diag_buf[0] += 0x40
-		st.tp_diag.send(&st.tp_diag_buf[0], diag_n)
+		diag_rlen := st.uds_diag.handle(&st.tp_diag_buf[0], diag_n, &st.uds_diag_resp[0])
+		if diag_rlen > 0 {
+			st.tp_diag.send(&st.uds_diag_resp[0], diag_rlen)
+		}
 	}
 	mut pdu_diag := isotp.Pdu{}
 	for st.tp_diag.poll(now, mut pdu_diag) {
@@ -169,6 +179,41 @@ pub fn partition_can0(ch can.Channel) {
 		bs:    8
 		stmin: 0
 	}
+	st.uds_diag = uds.Server{}
+	st.uds_diag.dids[0] = uds.Did{
+		id: u16(0xf190)
+	}
+	st.uds_diag.dids[0].data[0] = u8(0x42)
+	st.uds_diag.dids[0].data[1] = u8(0x4c)
+	st.uds_diag.dids[0].data[2] = u8(0x4f)
+	st.uds_diag.dids[0].data[3] = u8(0x42)
+	st.uds_diag.dids[0].data[4] = u8(0x4c)
+	st.uds_diag.dids[0].data[5] = u8(0x59)
+	st.uds_diag.dids[0].data[6] = u8(0x2d)
+	st.uds_diag.dids[0].data[7] = u8(0x4f)
+	st.uds_diag.dids[0].data[8] = u8(0x56)
+	st.uds_diag.dids[0].data[9] = u8(0x45)
+	st.uds_diag.dids[0].data[10] = u8(0x52)
+	st.uds_diag.dids[0].data[11] = u8(0x53)
+	st.uds_diag.dids[0].data[12] = u8(0x50)
+	st.uds_diag.dids[0].data[13] = u8(0x45)
+	st.uds_diag.dids[0].data[14] = u8(0x45)
+	st.uds_diag.dids[0].data[15] = u8(0x44)
+	st.uds_diag.dids[0].data[16] = u8(0x2d)
+	st.uds_diag.dids[0].data[17] = u8(0x30)
+	st.uds_diag.dids[0].data[18] = u8(0x31)
+	st.uds_diag.dids[0].len = 19
+	st.uds_diag.dids[1] = uds.Did{
+		id: u16(0xf1a0)
+	}
+	st.uds_diag.dids[2] = uds.Did{
+		id: u16(0xf1aa)
+		writable: true
+	}
+	st.uds_diag.dids[2].data[0] = u8(0x00)
+	st.uds_diag.dids[2].data[1] = u8(0x00)
+	st.uds_diag.dids[2].len = 2
+	st.uds_diag.ndid = 3
 	mut sched := loom.Scheduler{}
 	sched.every(10_000, io_can0_10ms, &st)
 	for {

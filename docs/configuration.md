@@ -31,6 +31,7 @@ codegen output) and must not be hand-edited — change `config/` or the generato
 | `[[signal]]` (+`from`/`to`/`fields`/`transport`) | comm/app | signal types (`sig`), ports, `gen.<name>_ch`, routing; bus endpoint → bridge rx/tx via `loom2v` |
 | `[[frame]]` (`tx`/`rx`) | communication | per-PDU COM behaviour: tx mode/timing + rx deadline → `com.TxState`/`RxState` in the bridge |
 | `[[isotp]]` (`rx_id`/`tx_id`/`bs`/`stmin_ms`) | communication | ISO-TP diagnostic connection → an `isotp.Link` in the bridge (reassemble/segment) |
+| `[[did]]` (`ascii`/`bytes`/`signal`/`writable`) | diagnostics | UDS DataIdentifier → entry in the bridge's `uds.Server` (constant / live signal / RAM) |
 | `[[fb]]` / `[[fb.handler]]` | application | `gen.partition_*`: Loom wiring (state, handler glue, schedule) via `loom2v` |
 | `[nm.*]` | network management | timings (placeholder until NM exists) |
 | `[[nvm.block]]` | memory stack | NvM block layout (placeholder until NvM exists) |
