@@ -1,6 +1,6 @@
 V ?= v
 
-.PHONY: example run-example list lint vcan clean demo demo-threadx
+.PHONY: example run-example list lint vcan clean demo demo-threadx bench
 
 # ---- Examples ---------------------------------------------------------------
 # Each example is a self-contained app under examples/<NAME>/ with its own
@@ -37,6 +37,16 @@ demo-threadx:
 # ---- Misc -------------------------------------------------------------------
 lint:
 	./scripts/lint_noalloc.sh
+
+# Performance benchmarks: lock-free IOC transport (cross-thread + cross-process
+# AMP) and the Loom scheduler dispatch overhead.
+bench:
+	@echo '== IOC transport, cross-thread (2 pinned cores) =='
+	$(V) -prod run tools/ioc_bench/bench.v
+	@echo '== IOC transport, cross-process AMP (fork + MAP_SHARED) =='
+	$(V) -gc none run tools/ioc_bench_mp/bench.v
+	@echo '== Loom scheduler dispatch overhead =='
+	$(V) -prod run tools/loom_bench/bench.v
 
 vcan:
 	./scripts/setup_vcan.sh

@@ -43,7 +43,7 @@ fn scratch() &u64 {
 	return unsafe { &u64(osal.shared_scratch()) }
 }
 
-fn writer_entry(core int, arg voidptr) {
+fn writer_entry(_ int, _ voidptr) {
 	mut r := Rec{}
 	deadline := osal.now_us() + run_us
 	mut n := u64(0)
@@ -58,7 +58,7 @@ fn writer_entry(core int, arg voidptr) {
 	}
 }
 
-fn reader_entry(core int, arg voidptr) {
+fn reader_entry(_ int, _ voidptr) {
 	mut r := Rec{}
 	deadline := osal.now_us() + run_us
 	mut n := u64(0)

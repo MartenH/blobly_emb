@@ -38,6 +38,7 @@ make vcan && (cd examples/overspeed && make run)   # run on vcan0
 make example NAME=overspeed                 # same as `cd … && make all`, from root
 make lint                                  # no-alloc + isolation checks (MUST pass)
 make demo                                  # backend harness on POSIX (or demo-threadx)
+make bench                                  # IOC transport + Loom dispatch benchmarks
 (cd examples/overspeed && make test CANTESTER=/path/to/cantester_v)  # on-bus integration test
 ```
 
