@@ -92,7 +92,7 @@ pub fn (s Signal) physical(data []u8) f64 {
 	if s.is_signed && s.length > 0 && s.length < 64 {
 		sign_bit := u64(1) << (s.length - 1)
 		if raw & sign_bit != 0 {
-			v = f64(i64(raw) - (i64(1) << s.length)) // two's-complement negative
+			v = f64(i64(raw) - i64(u64(1) << s.length)) // two's-complement negative
 		}
 	}
 	return v * s.factor + s.offset
@@ -134,7 +134,7 @@ pub fn (s Signal) encode(mut data []u8, phys f64) {
 	// round half away from zero; a bare `+ 0.5` truncates negatives wrongly.
 	mut raw := i64(math.round((phys - s.offset) / s.factor))
 	if raw < 0 {
-		raw += i64(1) << s.length
+		raw += i64(u64(1) << s.length)
 	}
 	mask := if s.length >= 64 { ~u64(0) } else { (u64(1) << s.length) - 1 }
 	s.set_raw(mut data, u64(raw) & mask)

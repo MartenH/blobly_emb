@@ -17,4 +17,4 @@ vls.log
 # example binaries
 /blobly_demo
 /blobly_demo_threadx
-examples/*/app
+bin/

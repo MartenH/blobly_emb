@@ -13,7 +13,7 @@
 # The Loom (wiring + dispatch) and the COM codec are GENERATED from this file.
 
 [import]
-dbc = "examples/overspeed/bus.dbc"
+dbc = "bus.dbc"
 
 [bus.can0]
 interface = "vcan0"

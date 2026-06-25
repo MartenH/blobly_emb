@@ -1,6 +1,8 @@
-module main
+module sig
 
-// Signal value types for this example (no heap).
+// Signal value types for this example (hand-written, no heap).
+
+// Bus signals (physical engineering units after COM scaling)
 pub struct VehicleSpeed {
 pub mut:
 	kph   u16
@@ -18,6 +20,7 @@ pub mut:
 	on bool
 }
 
+// Internal signals (FB -> FB)
 pub struct FilteredSpeed {
 pub mut:
 	kph   u16
