@@ -17,7 +17,7 @@ dbc = "bus.dbc"
 
 [bus.can0]
 interface = "vcan0"
-fd        = true
+fd        = false
 
 # --- Partitions (one MPU domain each; pinned to a core) ----------------------
 [[partition]]

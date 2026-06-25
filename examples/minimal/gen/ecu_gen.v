@@ -28,3 +28,6 @@ pub const nm_0_msg_cycle_us = u64(0)
 pub const nm_0_timeout_us = u64(0)
 pub const nm_0_repeat_us = u64(0)
 pub const nm_0_wait_sleep_us = u64(0)
+
+// Bus config (per bus)
+pub const can0_fd = false
