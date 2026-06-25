@@ -57,6 +57,25 @@ a saturating writer that also need wait-free reads.
 - **`loom_bench`** — the **Loom scheduler**'s dispatch tax: a static-table scan +
   indirect call, ~**0.7–0.95 ns per handler dispatch** (32-handler tick ≈ 22 ns).
   Negligible next to the IOC transfer — scheduling is not the cost, the data hop is.
+- **`load_bench`** — a whole-system load *micro-model*: 4 cores (fork-per-core,
+  shared IOC), **8 CAN buses on core0**, **50 FBs per core**, each FB reading 10 +
+  writing 10 signals (CAN-bridged + cross-core internal) every 10 ms. Fan-out reads
+  use the **seqlock** transport (single-writer / multi-reader — the valid transport
+  when many FBs read one signal). Reports per-core CPU load:
+
+  ```
+  core  role              load    work/cycle
+   0    8 buses + 50 FBs  1.89%   192 us     <- carries the 8 bridges' codec + IOC
+   1    50 FBs            1.32%   134 us
+   2    50 FBs            1.22%   124 us
+   3    50 FBs            1.23%   125 us
+  ```
+
+  **Takeaway:** a busy ECU (8 buses, 200 FBs, ~4k signal ops/cycle) sits at **~2%**
+  per core at the 10 ms rate — the IO core (core0) ~40 % heavier from CAN codec, and
+  ~50× headroom before saturation. This is a hand-written model of the *work*; for
+  the same load through the real generated stack on real vcans, see the scaled
+  example. The constants at the top of the bench are tunable.
 
 ## Hardware transports (target backends, same API)
 
