@@ -23,6 +23,14 @@ jobs:
       - name: Fetch base ref
         run: git fetch origin "${{ github.event.pull_request.base.ref }}" --depth=1 || true
 
+      # Install V so the Codex agent can actually build/test (not just lint).
+      - name: Set up V
+        uses: vlang/setup-v@v1.4
+        with:
+          stable: true
+      - name: Sanity-check V
+        run: v version
+
       - name: Run Codex
         id: codex
         uses: openai/codex-action@v1
@@ -43,6 +51,16 @@ jobs:
 
             Report concise, high-priority findings with file:line. If there are no
             significant issues, say so briefly.
+
+            V IS INSTALLED in this environment — verify your findings by building
+            and testing, do not assume:
+              - make lint
+              - make list
+              - make example NAME=overspeed   (and NAME=minimal)
+              - v test comm/nm
+              - make demo
+            CAN hardware / vcan is NOT available, so skip the on-bus run. Prefer
+            evidence from actually running these over speculation.
 
       - name: Post review comment
         if: ${{ always() }}
