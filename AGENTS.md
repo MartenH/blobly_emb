@@ -11,10 +11,10 @@ deeper rationale (`no-alloc.md`, `memory-protection.md`, `multicore-perf.md`,
 ```
 examples/<name>/   a FREESTANDING app (own Makefile, `make all`):
    ecu.toml bus.dbc   configuration
-   sig/ (module sig)   signal types          ┐ hand-written (app)
-   app/ (module app)   Function Blocks       ┘
+   app/ (module app)   Function Blocks       hand-written (app)
    main.v (module main) IO/bus bridge         platform (hand-written)
-   ports/ (module ports) In/Out structs      ┐ GENERATED
+   sig/ (module sig)   signal types          ┐ GENERATED (from [[signal]].fields)
+   ports/ (module ports) In/Out structs      │
    gen/ (module gen)   codec/tables/glue     ┘
 loom/   the Loom: scheduler (the de-AUTOSAR'd "RTE")
 comm/   comms stack (framework): nm (network management)
@@ -71,9 +71,10 @@ Enforce these as high-priority (P0/P1); they are the project's hard invariants.
   (calling a thing RTE / runnable / SWC); merely *mentioning* such a term to
   explain why it's avoided is fine.
 - **Generated code.** Each example's `gen/dbc_gen.v` (`dbc2cfg`), `gen/ecu_gen.v`
-  (`cfg2v`), `ports/ports_gen.v` + `gen/loom_gen.v` (`loom2v`), and `signal-map.md`
-  (`sigmap`) are produced by `make all` — never hand-edit them; changes belong in
-  the example's `ecu.toml` or the generator.
+  (`cfg2v`), `sig/signals_gen.v` + `ports/ports_gen.v` + `gen/loom_gen.v`
+  (`loom2v`), and `signal-map.md` (`sigmap`) are produced by `make all` — never
+  hand-edit them. Signal value types come from each `[[signal]].fields` in
+  `ecu.toml`; changes belong there or in the generator.
 - **Memory safety.** Scrutinize `unsafe` blocks, pointer casts, and that payloads
   fit `IOC_MAX` (64 bytes); `sizeof` must not exceed it.
 
