@@ -28,6 +28,17 @@ from = "app"
 to   = "can0"        # EXTERNAL: tx to the bus
 transport = "double"
 
+# COM behaviour per frame: rx deadline + tx heartbeat/on-change.
+[[frame]]
+name = "Powertrain"
+bus  = "can0"
+rx   = { timeout_ms = 200 }
+
+[[frame]]
+name = "LampFrame"
+bus  = "can0"
+tx   = { mode = "mixed", cycle_ms = 100, min_delay_ms = 20 }
+
 [[fb]]
 name      = "SpeedMonitor"
 partition = "app"

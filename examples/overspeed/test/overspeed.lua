@@ -36,3 +36,12 @@ end)
 test("engine > 4000 rpm -> lamp ON (local HighRev)", function()
   check.truthy(expect_lamp(0, 5000, 1, 1500), "lamp did not turn ON via engine path")
 end)
+
+-- COM rx-deadline: when the bus goes silent past the 200ms timeout, the bridge
+-- invalidates VehicleSpeed/EngineSpeed, so the lamp must drop OFF. We can still
+-- observe it because LampFrame tx is "mixed" (cyclic heartbeat keeps sending it).
+test("rx deadline: silent bus -> signals invalid -> lamp OFF (cyclic tx)", function()
+  check.truthy(expect_lamp(150, 0, 1, 1500), "precondition: drove speed, lamp ON")
+  sleep_ms(500)  -- stop driving Powertrain entirely (> timeout + propagation)
+  check.equal(latest_lamp(), 0, "lamp OFF after rx deadline")
+end)
