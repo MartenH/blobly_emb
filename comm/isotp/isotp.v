@@ -1,22 +1,30 @@
 module isotp
 
-// ISO-TP (ISO 15765-2) segmentation/reassembly over classic CAN, no-alloc.
+// ISO-TP (ISO 15765-2) segmentation/reassembly, no-alloc and transport-agnostic:
+// a Link works on bare 8-byte PDUs (one CAN frame's worth) and knows nothing about
+// CAN ids or the driver — the bridge filters by rx_id and stamps tx_id, so this
+// module stays above the driver-port boundary like the rest of comm/.
 //
-// One Link is a half-duplex diagnostic connection: it reassembles messages
-// arriving on rx_id and segments messages sent on tx_id (the request/response
-// addressing pair). It is poll-based to fit the bridge tick:
-//   * on_frame(now, frame) — feed a received frame (bridge filters by rx_id)
-//   * poll(now, mut out)    — drain the next frame to send (FC / SF / FF / CF)
-//   * take(dst)             — copy out a fully reassembled message (0 if none)
-//   * send(src, len)        — start transmitting a message
+// One Link is a half-duplex diagnostic connection: it reassembles messages from
+// incoming PDUs and segments an outgoing message. Poll-based to fit the bridge tick:
+//   * on_frame(now, pdu) — feed a received PDU
+//   * poll(now, mut out) — drain the next PDU to send (FC / SF / FF / CF)
+//   * take(dst)          — copy out a fully reassembled message (0 if none)
+//   * send(src, len)     — start transmitting a message
 //
-// Frame types (N_PCI high nibble of byte 0):
+// PDU types (N_PCI high nibble of byte 0):
 //   0x0 SF single   0x1 FF first   0x2 CF consecutive   0x3 FC flow-control
-import driver.can
 
 // max_payload bounds one reassembled message — fixes the per-Link buffer size.
 // (ISO-TP allows 4095; we cap lower for an embedded, no-alloc footprint.)
 pub const max_payload = 512
+
+// Pdu is one CAN frame's worth of ISO-TP bytes (always 8, padded). No id: the
+// bridge owns the rx/tx addressing.
+pub struct Pdu {
+pub mut:
+	data [8]u8
+}
 
 enum RxPhase {
 	idle
@@ -33,8 +41,6 @@ enum TxPhase {
 
 pub struct Link {
 pub mut:
-	rx_id u32
-	tx_id u32
 	bs    u8 // BlockSize we grant in our FC (0 = whole message at once)
 	stmin u8 // STmin we ask of the sender (ms)
 	// reassembly (rx)
@@ -59,8 +65,8 @@ pub mut:
 	next_us    u64 // earliest time to send the next CF
 }
 
-// send starts transmitting `len` bytes from `src` on tx_id. Drops the message if
-// a tx is already in flight or it exceeds max_payload.
+// send starts transmitting `len` bytes from `src`. Drops the message if a tx is
+// already in flight or it exceeds max_payload.
 pub fn (mut l Link) send(src &u8, len int) bool {
 	if l.tx != .idle || len <= 0 || len > max_payload {
 		return false
@@ -92,16 +98,16 @@ pub fn (mut l Link) take(dst &u8) int {
 	return n
 }
 
-// on_frame feeds a received frame (the bridge passes only rx_id frames).
-pub fn (mut l Link) on_frame(now u64, f can.Frame) {
-	pci := f.data[0] & 0xF0
-	low := f.data[0] & 0x0F
+// on_frame feeds a received PDU (the bridge passes only rx_id frames).
+pub fn (mut l Link) on_frame(now u64, p Pdu) {
+	pci := p.data[0] & 0xF0
+	low := p.data[0] & 0x0F
 	match pci {
 		0x00 { // single frame
 			n := int(low)
 			if n > 0 && n <= 7 {
 				for i in 0 .. n {
-					l.rx_buf[i] = f.data[1 + i]
+					l.rx_buf[i] = p.data[1 + i]
 				}
 				l.ready = true
 				l.ready_len = n
@@ -109,10 +115,10 @@ pub fn (mut l Link) on_frame(now u64, f can.Frame) {
 			}
 		}
 		0x10 { // first frame
-			total := int((u32(low) << 8) | u32(f.data[1]))
+			total := int((u32(low) << 8) | u32(p.data[1]))
 			if total > 7 && total <= max_payload {
 				for i in 0 .. 6 {
-					l.rx_buf[i] = f.data[2 + i]
+					l.rx_buf[i] = p.data[2 + i]
 				}
 				l.rx_len = total
 				l.rx_pos = 6
@@ -129,7 +135,7 @@ pub fn (mut l Link) on_frame(now u64, f can.Frame) {
 					n = 7
 				}
 				for i in 0 .. n {
-					l.rx_buf[l.rx_pos + i] = f.data[1 + i]
+					l.rx_buf[l.rx_pos + i] = p.data[1 + i]
 				}
 				l.rx_pos += n
 				l.rx_sn = (l.rx_sn + 1) & 0x0F
@@ -150,8 +156,8 @@ pub fn (mut l Link) on_frame(now u64, f can.Frame) {
 			if l.tx == .wait_fc {
 				fs := low
 				if fs == 0 { // CTS
-					l.peer_bs = f.data[1]
-					l.peer_stmin = decode_stmin(f.data[2])
+					l.peer_bs = p.data[1]
+					l.peer_stmin = decode_stmin(p.data[2])
 					l.block_left = l.peer_bs
 					l.next_us = now
 					l.tx = .send_cf
@@ -164,10 +170,10 @@ pub fn (mut l Link) on_frame(now u64, f can.Frame) {
 	}
 }
 
-// poll produces the next frame to send, if any (FC has priority, then the tx FSM).
-pub fn (mut l Link) poll(now u64, mut out can.Frame) bool {
+// poll produces the next PDU to send, if any (FC has priority, then the tx FSM).
+pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 	if l.fc_send {
-		frame(mut out, l.tx_id)
+		zero(mut out)
 		out.data[0] = 0x30 // FC, CTS
 		out.data[1] = l.bs
 		out.data[2] = l.stmin
@@ -176,7 +182,7 @@ pub fn (mut l Link) poll(now u64, mut out can.Frame) bool {
 	}
 	match l.tx {
 		.send_sf {
-			frame(mut out, l.tx_id)
+			zero(mut out)
 			out.data[0] = 0x00 | u8(l.tx_len)
 			for i in 0 .. l.tx_len {
 				out.data[1 + i] = l.tx_buf[i]
@@ -185,7 +191,7 @@ pub fn (mut l Link) poll(now u64, mut out can.Frame) bool {
 			return true
 		}
 		.send_ff {
-			frame(mut out, l.tx_id)
+			zero(mut out)
 			out.data[0] = 0x10 | u8((u32(l.tx_len) >> 8) & 0x0F)
 			out.data[1] = u8(l.tx_len & 0xFF)
 			for i in 0 .. 6 {
@@ -200,7 +206,7 @@ pub fn (mut l Link) poll(now u64, mut out can.Frame) bool {
 			if now < l.next_us {
 				return false
 			}
-			frame(mut out, l.tx_id)
+			zero(mut out)
 			out.data[0] = 0x20 | (l.tx_sn & 0x0F)
 			mut n := l.tx_len - l.tx_pos
 			if n > 7 {
@@ -228,11 +234,9 @@ pub fn (mut l Link) poll(now u64, mut out can.Frame) bool {
 	}
 }
 
-fn frame(mut f can.Frame, id u32) {
-	f.id = id
-	f.len = 8 // classic ISO-TP frames are DLC 8 (padded)
+fn zero(mut p Pdu) {
 	for i in 0 .. 8 {
-		f.data[i] = 0
+		p.data[i] = 0
 	}
 }
 

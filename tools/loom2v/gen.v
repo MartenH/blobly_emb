@@ -396,8 +396,13 @@ fn main() {
 				glue << '\t\t}'
 			}
 			for c in conns {
+				tp := snake(c.name)
 				glue << '\t\tif rx.id == u32(0x${c.rx_id.hex()}) {'
-				glue << '\t\t\tst.tp_${snake(c.name)}.on_frame(now, rx)'
+				glue << '\t\t\tmut p_${tp} := isotp.Pdu{}'
+				glue << '\t\t\tfor i in 0 .. 8 {'
+				glue << '\t\t\t\tp_${tp}.data[i] = rx.data[i]'
+				glue << '\t\t\t}'
+				glue << '\t\t\tst.tp_${tp}.on_frame(now, p_${tp})'
 				glue << '\t\t}'
 			}
 			glue << '\t}'
@@ -423,9 +428,16 @@ fn main() {
 				glue << '\t\tst.tp_${tp}_buf[0] += 0x40'
 				glue << '\t\tst.tp_${tp}.send(&st.tp_${tp}_buf[0], ${tp}_n)'
 				glue << '\t}'
-				glue << '\tmut tpf_${tp} := can.Frame{}'
-				glue << '\tfor st.tp_${tp}.poll(now, mut tpf_${tp}) {'
-				glue << '\t\tst.chan.send(tpf_${tp})'
+				glue << '\tmut pdu_${tp} := isotp.Pdu{}'
+				glue << '\tfor st.tp_${tp}.poll(now, mut pdu_${tp}) {'
+				glue << '\t\tmut cf_${tp} := can.Frame{'
+				glue << '\t\t\tid:  u32(0x${c.tx_id.hex()})'
+				glue << '\t\t\tlen: 8'
+				glue << '\t\t}'
+				glue << '\t\tfor i in 0 .. 8 {'
+				glue << '\t\t\tcf_${tp}.data[i] = pdu_${tp}.data[i]'
+				glue << '\t\t}'
+				glue << '\t\tst.chan.send(cf_${tp})'
 				glue << '\t}'
 			}
 		}
@@ -481,8 +493,6 @@ fn main() {
 		}
 		for c in conns {
 			glue << '\tst.tp_${snake(c.name)} = isotp.Link{'
-			glue << '\t\trx_id: u32(0x${c.rx_id.hex()})'
-			glue << '\t\ttx_id: u32(0x${c.tx_id.hex()})'
 			glue << '\t\tbs:    ${c.bs}'
 			glue << '\t\tstmin: ${c.stmin}'
 			glue << '\t}'
