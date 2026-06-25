@@ -17,7 +17,7 @@ run-example:
 	$(MAKE) -C examples/$(NAME) run
 
 list:
-	@for d in examples/*/; do test -f "$$d/ecu.toml" && basename "$$d"; done
+	@for d in examples/*/; do if [ -f "$$d/Makefile" ]; then basename "$$d"; fi; done
 
 # ---- Backend harness (POSIX / ThreadX), self-contained ----------------------
 demo:
