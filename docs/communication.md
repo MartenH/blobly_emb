@@ -126,9 +126,33 @@ State machine per connection:
   the transfer.
 
 No-alloc: exactly one fixed `[max_len]u8` reassembly buffer and one TX buffer per
-connection, sized at build time. ISO-TP delivers a reassembled PDU up to **diag
-(UDS)** — a separate layer/PR — and cantester’s `isotp`/`uds` modules drive it in
-the integration tests (the DBC already carries `Request`/`Response`).
+connection, sized at build time. ISO-TP delivers a reassembled PDU up to **UDS**
+(below), and cantester’s `uds` module drives it in the integration tests (the DBC
+already carries `Request`/`Response`).
+
+## 4. UDS — diagnostic services (ISO 14229)
+
+A table-driven, no-alloc `Server` sits above each ISO-TP connection. The bridge
+hands it a reassembled request and ships the response it builds. Services:
+`0x10` DiagnosticSessionControl, `0x22` ReadDataByIdentifier, `0x2E`
+WriteDataByIdentifier, `0x3E` TesterPresent; anything else → negative
+(`0x7F sid nrc`).
+
+DataIdentifiers come from `[[did]]` — a constant, a **live signal** (read from the
+IOC each tick and encoded big-endian), or a writable RAM cell:
+
+```toml
+[[did]]
+id = 0xF190; ascii = "BLOBLY-OVERSPEED-01"   # constant (19 B -> multi-frame read)
+[[did]]
+id = 0xF1A0; signal = "VehicleSpeed"          # live: current km/h via the IOC
+[[did]]
+id = 0xF1AA; writable = true; bytes = "00 00" # RAM (write then read back)
+```
+
+The protocol logic lives in `comm/uds` (unit-tested); the generated bridge fills
+the DID table and refreshes signal-backed DIDs. So a tester can read a live bus
+signal — or any FB output — straight over diagnostics.
 
 ## No-alloc & generation
 
@@ -158,8 +182,10 @@ bus-bridge partition; signals still cross to app partitions via the IOC.
    (unit-tested both directions). Reassembled requests go to a diag handler — for
    now a positive-response echo — and responses are re-segmented. cantester's UDS
    client (`:raw`) asserts single- and multi-frame round-trips on the bus.
-4. **Diagnostics (UDS)** on top of ISO-TP — sessions, services, `Request`/`Response`
-   — replaces the echo handler; its own doc, tested with cantester's `uds`. *(next)*
+4. **Diagnostics (UDS)** — ✅ **done**. `comm/uds` table-driven server (session /
+   read-DID / write-DID / tester-present + negatives) above each ISO-TP connection;
+   `[[did]]` sources (constant / live signal / RAM). cantester's `uds` client
+   asserts service dispatch + multi-frame DIDs, incl. reading a live signal.
 
 ## Testing
 
