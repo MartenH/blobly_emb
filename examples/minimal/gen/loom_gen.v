@@ -7,6 +7,7 @@ import app
 import loom
 import osal
 import driver.can
+import comm.com
 
 struct Partition_app_state {
 mut:
@@ -36,16 +37,24 @@ pub fn partition_app(core int, arg voidptr) {
 struct Bridge_can0_state {
 mut:
 	chan can.Channel
+	tx_lamp_frame_st com.TxState
+	rx_powertrain_st com.RxState
 }
 
 fn io_can0_10ms(ctx voidptr) {
 	mut st := unsafe { &Bridge_can0_state(ctx) }
+	now := osal.now_us()
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
 		if rx.id == powertrain_id {
 			mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), valid: true }
 			osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
+			st.rx_powertrain_st.on_receive(now)
 		}
+	}
+	if st.rx_powertrain_st.expired(now) {
+		mut vehicle_speed := sig.VehicleSpeed{}
+		osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 	}
 	mut tx_lamp_frame := can.Frame{
 		id:  lamp_frame_id
@@ -57,7 +66,7 @@ fn io_can0_10ms(ctx voidptr) {
 		lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, if warn_lamp.on { f64(1) } else { f64(0) })
 		tx_lamp_frame_any = true
 	}
-	if tx_lamp_frame_any {
+	if tx_lamp_frame_any && st.tx_lamp_frame_st.should_send(now, tx_lamp_frame.data, lamp_frame_dlc) {
 		st.chan.send(tx_lamp_frame)
 	}
 }
@@ -66,6 +75,14 @@ pub fn partition_can0(ch can.Channel) {
 	osal.pin_to_core(0)
 	mut st := Bridge_can0_state{
 		chan: ch
+	}
+	st.tx_lamp_frame_st = com.TxState{
+		mode: com.TxMode.mixed
+		cycle_us: 100000
+		min_delay_us: 20000
+	}
+	st.rx_powertrain_st = com.RxState{
+		timeout_us: 200000
 	}
 	mut sched := loom.Scheduler{}
 	sched.every(10_000, io_can0_10ms, &st)

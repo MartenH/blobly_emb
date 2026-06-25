@@ -80,6 +80,19 @@ from = "ctrl"
 to   = "can0"        # EXTERNAL: tx to the bus
 transport = "double"
 
+# --- COM behaviour per frame (PDU) -------------------------------------------
+# How each external frame is driven on the wire. Optional; absent => tx cyclic
+# @100ms, no rx deadline.
+[[frame]]
+name = "Powertrain"             # rx: monitor a deadline
+bus  = "can0"
+rx   = { timeout_ms = 200 }     # no frame in 200ms -> signals' valid=false
+
+[[frame]]
+name = "LampFrame"              # tx: heartbeat + immediate on change
+bus  = "can0"
+tx   = { mode = "mixed", cycle_ms = 100, min_delay_ms = 20 }
+
 # --- Function Blocks ---------------------------------------------------------
 # (within a partition, list producers before consumers for same-cycle local data)
 [[fb]]

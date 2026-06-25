@@ -124,6 +124,28 @@ fn main() {
 			sig_of[sname] = si
 		}
 	}
+
+	// Per-PDU COM behaviour ([[frame]]), keyed by snake(DBC message name):
+	// tx mode/timing, rx deadline. Absent -> defaults (tx cyclic@100ms, no rx t/o).
+	mut tx_mode := map[string]string{}
+	mut tx_cycle_us := map[string]int{}
+	mut tx_min_us := map[string]int{}
+	mut rx_timeout_us := map[string]int{}
+	for f in doc.value('frame').array() {
+		fm := f.as_map()
+		fk := snake((fm['name'] or { toml.Any('') }).string())
+		if 'tx' in fm {
+			txm := (fm['tx'] or { toml.Any('') }).as_map()
+			tx_mode[fk] = (txm['mode'] or { toml.Any('cyclic') }).string()
+			tx_cycle_us[fk] = int((txm['cycle_ms'] or { toml.Any(0) }).int()) * 1000
+			tx_min_us[fk] = int((txm['min_delay_ms'] or { toml.Any(0) }).int()) * 1000
+		}
+		if 'rx' in fm {
+			rxm := (fm['rx'] or { toml.Any('') }).as_map()
+			rx_timeout_us[fk] = int((rxm['timeout_ms'] or { toml.Any(0) }).int()) * 1000
+		}
+	}
+
 	mut core_of := map[string]int{}
 	for p in doc.value('partition').array() {
 		m := p.as_map()
@@ -164,6 +186,7 @@ fn main() {
 	glue << 'import osal'
 	if has_external {
 		glue << 'import driver.can' // the generated COM bus bridge
+		glue << 'import comm.com' // per-PDU TX modes + RX deadline monitoring
 	}
 
 	for part, clist in by_part {
@@ -279,14 +302,33 @@ fn main() {
 		}
 		bus_names << bname
 
+		// io fn needs a timestamp if it gates any tx or monitors any rx deadline
+		mut uses_now := tx_by_msg.len > 0
+		for msg, _ in rx_by_msg {
+			if (rx_timeout_us[msg] or { 0 }) > 0 {
+				uses_now = true
+			}
+		}
+
 		glue << ''
 		glue << 'struct Bridge_${bb}_state {'
 		glue << 'mut:'
 		glue << '\tchan can.Channel'
+		for msg, _ in tx_by_msg {
+			glue << '\ttx_${msg}_st com.TxState'
+		}
+		for msg, _ in rx_by_msg {
+			if (rx_timeout_us[msg] or { 0 }) > 0 {
+				glue << '\trx_${msg}_st com.RxState'
+			}
+		}
 		glue << '}'
 		glue << ''
 		glue << 'fn io_${bb}_10ms(ctx voidptr) {'
 		glue << '\tmut st := unsafe { &Bridge_${bb}_state(ctx) }'
+		if uses_now {
+			glue << '\tnow := osal.now_us()'
+		}
 		if rx_by_msg.len > 0 {
 			glue << '\tmut rx := can.Frame{}'
 			glue << '\tfor st.chan.recv(mut rx) {'
@@ -305,9 +347,25 @@ fn main() {
 					glue << '\t\t\tmut ${fld} := sig.${sname}{ ${valassign}${validassign} }'
 					glue << '\t\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
 				}
+				if (rx_timeout_us[msg] or { 0 }) > 0 {
+					glue << '\t\t\tst.rx_${msg}_st.on_receive(now)'
+				}
 				glue << '\t\t}'
 			}
 			glue << '\t}'
+			// rx deadline crossed -> publish invalid (valid=false) signals, once
+			for msg, list in rx_by_msg {
+				if (rx_timeout_us[msg] or { 0 }) > 0 {
+					glue << '\tif st.rx_${msg}_st.expired(now) {'
+					for sname in list {
+						si := sig_of[sname] or { continue }
+						fld := snake(sname)
+						glue << '\t\tmut ${fld} := sig.${sname}{}'
+						glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+					}
+					glue << '\t}'
+				}
+			}
 		}
 		for msg, list in tx_by_msg {
 			glue << '\tmut tx_${msg} := can.Frame{'
@@ -329,7 +387,7 @@ fn main() {
 				glue << '\t\ttx_${msg}_any = true'
 				glue << '\t}'
 			}
-			glue << '\tif tx_${msg}_any {'
+			glue << '\tif tx_${msg}_any && st.tx_${msg}_st.should_send(now, tx_${msg}.data, ${msg}_dlc) {'
 			glue << '\t\tst.chan.send(tx_${msg})'
 			glue << '\t}'
 		}
@@ -340,6 +398,25 @@ fn main() {
 		glue << '\tmut st := Bridge_${bb}_state{'
 		glue << '\t\tchan: ch'
 		glue << '\t}'
+		for msg, _ in tx_by_msg {
+			mode := tx_mode[msg] or { 'cyclic' }
+			mut cyc := tx_cycle_us[msg] or { 0 }
+			if cyc == 0 {
+				cyc = 100000 // default cyclic period when unspecified
+			}
+			glue << '\tst.tx_${msg}_st = com.TxState{'
+			glue << '\t\tmode: com.TxMode.${mode}'
+			glue << '\t\tcycle_us: ${cyc}'
+			glue << '\t\tmin_delay_us: ${tx_min_us[msg] or { 0 }}'
+			glue << '\t}'
+		}
+		for msg, _ in rx_by_msg {
+			if (rx_timeout_us[msg] or { 0 }) > 0 {
+				glue << '\tst.rx_${msg}_st = com.RxState{'
+				glue << '\t\ttimeout_us: ${rx_timeout_us[msg]}'
+				glue << '\t}'
+			}
+		}
 		glue << '\tmut sched := loom.Scheduler{}'
 		glue << '\tsched.every(10_000, io_${bb}_10ms, &st)'
 		glue << '\tfor {'
