@@ -52,10 +52,10 @@ The only thing an example needs from the main repo is the path back to it
 ```
 examples/<name>/
   ecu.toml  bus.dbc     configuration   (the source of truth)
-  sig/   signal types    app  ┐ hand-written
-  app/   Function Blocks  app  ┘
-  main.v IO/bus bridge    platform (hand-written)
-  ports/ In/Out structs   generated ┐ never edited
+  app/   Function Blocks  hand-written (app)
+  main.v IO/bus bridge    hand-written (platform)
+  sig/   signal types     generated ┐ never edited
+  ports/ In/Out structs   generated │  (sig from each [[signal]].fields)
   gen/   codec/tables/glue generated ┘
   Makefile               make all
 ```
@@ -66,8 +66,9 @@ platform. Imports are short (`import sig`, `import ports`, `import osal`) — V'
 
 ## Adding an example
 
-1. `cp -r examples/minimal examples/<name>` (then `rm -rf <name>/gen <name>/ports <name>/bin`).
-2. Edit `ecu.toml`, `sig/`, `app/`, `main.v`.
+1. `cp -r examples/minimal examples/<name>` (then `rm -rf <name>/gen <name>/ports <name>/sig <name>/bin`).
+2. Edit `ecu.toml` (each `[[signal]]` declares its `fields`, e.g.
+   `fields = { kph = "u16", valid = "bool" }`), then write your `app/` FBs and `main.v`.
 3. `cd examples/<name> && make all`.
 
 Imports are not coupled to the example name, so copying needs no rewrites.

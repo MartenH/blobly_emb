@@ -91,12 +91,16 @@ Each example (`examples/<name>/`) splits into modules so generated never mixes
 with hand-written, and app never mixes with platform:
 
 ```
-sig    (hand)  signal types          ← imported by ports, app
+sig    (gen)   signal value types    ← from each [[signal]].fields
 ports  (gen)   In/Out structs        ← imported by app, gen
 app    (hand)  FBs                    ← imported by gen
 gen    (gen)   glue/tables/codec
 main.v (platform) imports gen + sig
 ```
+
+The only hand-written code in an example is the **FBs** (`app/`) and the **bus
+bridge** (`main.v`); signal types, port structs, codec, tables and glue are all
+generated from `ecu.toml` (+ the DBC).
 
 The dependency chain `sig ← ports ← app ← gen` has no cycle. Imports are short
 (`import sig`, `import ports`) and not coupled to the example name — V's `-path`

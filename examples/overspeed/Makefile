@@ -12,10 +12,10 @@ all: gen build
 
 # Generate code from this example's config (ecu.toml + bus.dbc) using repo tools.
 gen:
-	@mkdir -p gen ports bin
+	@mkdir -p gen ports sig bin
 	@if [ -f bus.dbc ]; then $(V) run $(REPO)/tools/dbc2cfg/gen.v bus.dbc gen/dbc_gen.v; fi
 	$(V) run $(REPO)/tools/cfg2v/gen.v  ecu.toml gen/ecu_gen.v
-	$(V) run $(REPO)/tools/loom2v/gen.v ecu.toml ports/ports_gen.v gen/loom_gen.v
+	$(V) run $(REPO)/tools/loom2v/gen.v ecu.toml sig/signals_gen.v ports/ports_gen.v gen/loom_gen.v
 	$(V) run $(REPO)/tools/sigmap/gen.v ecu.toml signal-map.md
 
 # Build: local modules (sig/app/ports/gen) + the repo framework, via V's -path.

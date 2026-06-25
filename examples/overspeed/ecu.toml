@@ -42,34 +42,40 @@ trusted = false
 #   io endpoint -> bridged to/from the bus by the COM/driver layer
 [[signal]]
 name = "VehicleSpeed"
+fields = { kph = "u16", valid = "bool" }
 from = "io"
 to   = "sense"
 transport = "double" # bus rx
 
 [[signal]]
 name = "EngineSpeed"
+fields = { rpm = "u16", valid = "bool" }
 from = "io"
 to   = "ctrl"
 transport = "double" # bus rx
 
 [[signal]]
 name = "FilteredSpeed"
+fields = { kph = "u16", valid = "bool" }
 from = "sense"
 to   = "sense" # local (same core)
 
 [[signal]]
 name = "Overspeed"
+fields = { active = "bool" }
 from = "sense"
 to   = "ctrl"
 transport = "double" # across cores
 
 [[signal]]
 name = "HighRev"
+fields = { active = "bool" }
 from = "ctrl"
 to   = "ctrl" # local (same core)
 
 [[signal]]
 name = "WarnLamp"
+fields = { on = "bool" }
 from = "ctrl"
 to   = "io"
 transport = "double" # bus tx
