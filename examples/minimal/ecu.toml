@@ -18,12 +18,14 @@ trusted = false
 
 [[signal]]
 name = "VehicleSpeed"
+fields = { kph = "u16", valid = "bool" }
 from = "io"
 to   = "app"
 transport = "double"
 
 [[signal]]
 name = "WarnLamp"
+fields = { on = "bool" }
 from = "app"
 to   = "io"
 transport = "double"
