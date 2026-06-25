@@ -37,7 +37,12 @@ make vcan && (cd examples/overspeed && make run)   # run on vcan0
 make example NAME=overspeed                 # same as `cd … && make all`, from root
 make lint                                  # no-alloc + isolation checks (MUST pass)
 make demo                                  # backend harness on POSIX (or demo-threadx)
+(cd examples/overspeed && make test CANTESTER=/path/to/cantester_v)  # on-bus integration test
 ```
+
+Examples use classic CAN (`[bus] fd = false`) so cantester_v (classic) can drive
+them; the driver picks classic vs CAN-FD from that flag. Integration tests live in
+each example's `test/` (cantester project + Lua), run by `make test`.
 
 ## Review guidelines
 

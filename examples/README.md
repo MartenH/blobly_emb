@@ -11,6 +11,31 @@ make run          # build + run on vcan0
 …or from the repo root: `make example NAME=overspeed` (delegates to the above),
 `make list` to list them.
 
+## Integration testing (cantester_v + Lua)
+
+An example can be driven and asserted on the bus by
+[cantester_v](https://github.com/MartenH/cantester_v)'s **headless Lua runner** —
+it knows the same DBC, so it encodes/sends stimulus signals and checks responses:
+
+```sh
+make vcan                                   # bring up vcan0
+cd examples/overspeed
+make test CANTESTER=/path/to/cantester_v     # build + run the app + drive/assert
+```
+
+`make test` runs the built app on `vcan0` (the app *is* the ECU — the cantester
+project has no simulation) and runs every `test/*.lua` against it; it exits
+non-zero if any assertion fails. Each example provides `test/vcan.yml` (the
+cantester project pointing at `vcan0` + `bus.dbc`) and `test/<name>.lua`, e.g.:
+
+```lua
+bus.send_message("CAN1", "Powertrain", { VehicleSpeed = 150 })  -- DBC-encode + send
+-- ... then assert the lamp frame (0x101) goes ON
+```
+
+Note: cantester is classic-CAN, so these examples use classic CAN
+(`[bus] fd = false`); the driver picks classic vs CAN-FD from that flag.
+
 The only thing an example needs from the main repo is the path back to it
 (`REPO`, default `../..`): the generators in `tools/`, and the shared framework
 (`osal`/`loom`/`driver`) found via V's `-path`.

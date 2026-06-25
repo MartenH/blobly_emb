@@ -50,7 +50,7 @@ fn io_10ms(ctx voidptr) {
 fn partition_io(ifname string) {
 	osal.pin_to_core(0)
 	mut st := IoPartition{}
-	if !st.chan.open(ifname, true) {
+	if !st.chan.open(ifname, gen.can0_fd) {
 		eprintln('IO partition: failed to open "${ifname}" — is vcan up? (make vcan)')
 		return
 	}

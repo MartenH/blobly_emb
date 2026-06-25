@@ -34,19 +34,32 @@ int blob_can_open(const char *ifname, int fd_mode) {
 	return s;
 }
 
-int blob_can_send(int sock, uint32_t id, const uint8_t *data, uint8_t len) {
-	if (len > 64) return -1;
-	struct canfd_frame f;
+int blob_can_send(int sock, uint32_t id, const uint8_t *data, uint8_t len, int fd_mode) {
+	if (fd_mode) {
+		if (len > 64) return -1;
+		struct canfd_frame f;
+		memset(&f, 0, sizeof(f));
+		f.can_id = id;
+		f.len = len;
+		memcpy(f.data, data, len);
+		ssize_t n = write(sock, &f, sizeof(f));
+		return n == (ssize_t)sizeof(f) ? 0 : -1;
+	}
+	/* classic CAN: a struct can_frame (8 data bytes), so it interoperates with
+	 * classic-only tools/peers. */
+	if (len > 8) return -1;
+	struct can_frame f;
 	memset(&f, 0, sizeof(f));
 	f.can_id = id;
-	f.len = len;
+	f.can_dlc = len;
 	memcpy(f.data, data, len);
 	ssize_t n = write(sock, &f, sizeof(f));
 	return n == (ssize_t)sizeof(f) ? 0 : -1;
 }
 
 int blob_can_recv(int sock, uint32_t *id, uint8_t *data, uint8_t *len) {
-	/* canfd_frame buffer also receives classic frames: can_id @0, len @4, data @8. */
+	/* canfd_frame buffer receives BOTH classic (16B) and FD (72B) frames:
+	 * can_id @0, len/can_dlc @4, data @8 in both layouts. */
 	struct canfd_frame f;
 	ssize_t n = read(sock, &f, sizeof(f));
 	if (n <= 0) return -1;

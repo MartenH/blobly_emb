@@ -4,7 +4,7 @@ dbc = "bus.dbc"
 
 [bus.can0]
 interface = "vcan0"
-fd        = true
+fd        = false
 
 [[partition]]
 name    = "io"
