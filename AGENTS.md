@@ -59,6 +59,8 @@ Enforce these as high-priority (P0/P1); they are the project's hard invariants.
   and `main.v` are the only example files that may `import driver`. `osal/` and
   `driver/` may allocate **only at init** (before the main loop), never in
   steady-state handlers. `tools/` is unrestricted. Flag any heap in a runtime layer.
+  Examples build with **`-gc none`** (no collector — the runtime doesn't allocate);
+  this also keeps the footprint small (no Boehm GC code/heap/threads linked).
 - **IOC is single-writer-per-channel (SPSC).** Each channel has exactly one
   producing partition. The lock-free seqlock/double/triple algorithms are only
   valid under SPSC — flag any second writer, any cross-core shared mutable state
@@ -82,6 +84,10 @@ Enforce these as high-priority (P0/P1); they are the project's hard invariants.
   Signal value types come from each `[[signal]].fields`; **external vs internal is
   explicit** — an endpoint that names a `[bus.*]` is external (the bridge
   rx-decodes / tx-encodes it via the DBC), else it's partition-to-partition.
+  *Exception:* `examples/scale` is a **fully generated** benchmark — `tools/scale_gen`
+  emits its `ecu.toml`, `bus.dbc`, `main.v` **and** `app/` FBs (200 of them can't be
+  hand-written). So there, uniquely, `app/` is generated; nothing in `scale/` is
+  committed except the `Makefile` (everything is materialized by `make all`).
 - **Memory safety.** Scrutinize `unsafe` blocks, pointer casts, and that payloads
   fit `IOC_MAX` (64 bytes); `sizeof` must not exceed it.
 

@@ -74,8 +74,35 @@ a saturating writer that also need wait-free reads.
   **Takeaway:** a busy ECU (8 buses, 200 FBs, ~4k signal ops/cycle) sits at **~2%**
   per core at the 10 ms rate — the IO core (core0) ~40 % heavier from CAN codec, and
   ~50× headroom before saturation. This is a hand-written model of the *work*; for
-  the same load through the real generated stack on real vcans, see the scaled
-  example. The constants at the top of the bench are tunable.
+  the same load through the real generated stack on real vcans, see below. The
+  constants at the top of the bench are tunable.
+
+## Real-stack scale benchmark (`examples/scale` + `make bench-scale`)
+
+The same shape, but through the **actual generated stack** on real SocketCAN: a
+4-core / 8-bus / **200-FB** example whose config *and* FB handlers are generated
+(`tools/scale_gen`), built by the normal generators, run on `vcan0..7` with
+`cangen` traffic. Each partition is a core-pinned thread (core0 also hosts the 8
+bus-bridge threads); CPU is sampled per-thread from `/proc` and summed by core:
+
+```
+core  role              load
+ 0    8 buses + 50 FBs  ~3.8%   <- 8 real bridge threads (recv + codec) + 50 FBs
+ 1    50 FBs            ~1.5%
+ 2    50 FBs            ~1.4%
+ 3    50 FBs            ~1.5%
+RAM:  ~2.1 MB VmRSS  (~0.7 MB Pss), 13 threads
+```
+
+The IO core is ~2.5× the app cores here (vs ~1.4× in the micro-model) because core0
+runs **eight real bridge threads** polling SocketCAN, not inline codec.
+
+**Footprint** (built `-gc none` — the runtime doesn't allocate, so no collector):
+448 KB binary (`.text` 378 KB, `.bss` 149 KB — most of it the IOC channel pool),
+~2.1 MB RSS / **~0.7 MB Pss** for 200 FBs across 8 buses. (The default Boehm GC
+would add ~180 KB code, ~255 KB `.bss`, ~1.6 MB Pss, and ~15 marker threads — none
+of which a no-alloc runtime needs.) `make cfile` keeps the generated C the compiler
+used (`bin/app.c`, ~32k lines / 1.4 MB) for inspection.
 
 ## Hardware transports (target backends, same API)
 

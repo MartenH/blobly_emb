@@ -1,0 +1,12 @@
+# The scale example is materialized by `make all` (tools/scale_gen emits the
+# config + FB handlers, then the normal generators run). Nothing here is committed
+# except the Makefile — run `make all PARTS=4 BUSES=8 FBS=50` to generate + build.
+bus.dbc
+ecu.toml
+main.v
+app/
+gen/
+ports/
+sig/
+bin/
+signal-map.md
