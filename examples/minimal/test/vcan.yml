@@ -1,0 +1,12 @@
+# cantester_v project: attach to vcan0 where the blobly `minimal` example runs.
+project:
+  name: blobly minimal (vcan0)
+  version: 1
+channels:
+  - name: CAN1
+    type: can
+    interface: vcan0
+    bitrate: 500000
+    mode: monitor
+    databases:
+      - bus.dbc

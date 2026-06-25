@@ -5,7 +5,9 @@ REPO ?= ../..
 V    ?= v
 NAME := $(notdir $(CURDIR))
 
-.PHONY: all gen build run clean
+CANTESTER ?=
+
+.PHONY: all gen build run test clean
 all: gen build
 
 # Generate code from this example's config (ecu.toml + bus.dbc) using repo tools.
@@ -23,6 +25,11 @@ build:
 
 run: build
 	./bin/app vcan0
+
+# Integration test: run the app on vcan0 and drive/assert it with cantester_v's
+# headless Lua runner (needs CANTESTER=/path/to/cantester_v + vcan0 up).
+test: build
+	CANTESTER=$(CANTESTER) bash $(REPO)/scripts/integration-test.sh .
 
 clean:
 	rm -rf bin

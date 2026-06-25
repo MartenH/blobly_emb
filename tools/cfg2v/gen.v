@@ -84,6 +84,17 @@ fn main() {
 		}
 	}
 
+	// --- Bus config (per bus: CAN-FD flag) ---
+	bus := doc.value('bus').as_map()
+	if bus.len > 0 {
+		b << ''
+		b << '// Bus config (per bus)'
+		for name, cfg in bus {
+			m := cfg.as_map()
+			b << 'pub const ${snake(name)}_fd = ${(m['fd'] or { toml.Any(false) }).bool()}'
+		}
+	}
+
 	os.write_file(args[2], b.join('\n') + '\n') or { panic('write ${args[2]}: ${err}') }
 	eprintln('cfg2v: ${chcount} IOC channels, ${parts.len} partitions -> ${args[2]}')
 }
