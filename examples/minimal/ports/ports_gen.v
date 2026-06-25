@@ -5,11 +5,11 @@ import sig
 
 pub struct SpeedMonitorIn {
 pub mut:
-	// signal "VehicleSpeed" — ch, transport double, io -> app
+	// signal "VehicleSpeed" — ch, transport double, can0 -> app
 	vehicle_speed sig.VehicleSpeed
 }
 pub struct SpeedMonitorOut {
 pub mut:
-	// signal "WarnLamp" — ch, transport double, app -> io
+	// signal "WarnLamp" — ch, transport double, app -> can0
 	warn_lamp sig.WarnLamp
 }

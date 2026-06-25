@@ -5,7 +5,7 @@ import sig
 
 pub struct SpeedFilterIn {
 pub mut:
-	// signal "VehicleSpeed" — ch, transport double, io -> sense
+	// signal "VehicleSpeed" — ch, transport double, can0 -> sense
 	vehicle_speed sig.VehicleSpeed
 }
 pub struct SpeedFilterOut {
@@ -27,7 +27,7 @@ pub mut:
 
 pub struct EngineMonitorIn {
 pub mut:
-	// signal "EngineSpeed" — ch, transport double, io -> ctrl
+	// signal "EngineSpeed" — ch, transport double, can0 -> ctrl
 	engine_speed sig.EngineSpeed
 }
 pub struct EngineMonitorOut {
@@ -45,6 +45,6 @@ pub mut:
 }
 pub struct LampControllerOut {
 pub mut:
-	// signal "WarnLamp" — ch, transport double, ctrl -> io
+	// signal "WarnLamp" — ch, transport double, ctrl -> can0
 	warn_lamp sig.WarnLamp
 }

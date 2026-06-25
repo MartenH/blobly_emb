@@ -1,5 +1,5 @@
 -- Integration test: drive the `minimal` example (SpeedMonitor) on vcan0.
-local CH, LAMP = "CAN1", 0x101
+local CH, LAMP = "CAN1", 0x110
 
 local function latest_lamp()
   local last = nil

@@ -29,6 +29,12 @@ fn main() {
 	}
 	doc := toml.parse_file(args[1]) or { panic('parse ${args[1]}: ${err}') }
 
+	// declared buses — an endpoint that names one is EXTERNAL (on the wire).
+	mut buses := map[string]bool{}
+	for bname, _ in doc.value('bus').as_map() {
+		buses[bname] = true
+	}
+
 	// DBC signal lookup (by name) from the [import] dbc, if any.
 	mut dbc_of := map[string]DbcRef{}
 	dbc_path := (doc.value('import').as_map()['dbc'] or { toml.Any('') }).string()
@@ -76,10 +82,18 @@ fn main() {
 		from := (m['from'] or { toml.Any('') }).string()
 		to := (m['to'] or { toml.Any('') }).string()
 		tr := (m['transport'] or { toml.Any('double') }).string()
-		local := from == to
+		from_bus := from in buses
+		to_bus := to in buses
+		external := from_bus || to_bus
+		local := from == to && !external
 		d := dbc_of[name] or { DbcRef{} }
 
-		source := if d.found { 'CAN' } else { from }
+		// external = a bus endpoint (the explicit model); show that bus as source.
+		source := if external {
+			if from_bus { from } else { to }
+		} else {
+			from
+		}
 		dbc_sig := if d.found { '${d.msg}.${name}' } else { '—' }
 		frame := if d.found { '0x${d.id.hex()}' } else { '—' }
 		layout := if d.found { '${d.start}|${d.length}' } else { '—' }

@@ -21,9 +21,10 @@ it cannot corrupt another partition or the kernel.
 Two deliberate choices, enforced now on host, make the retrofit trivial:
 
 1. **Partition state lives on its core-thread's stack, never in shared globals.**
-   See `IoPartition` / `AppPartition` in [`main.v`](../main.v): each is a local in
-   `partition_io` / `partition_app`. On target, that becomes the partition's
-   private MPU region. There is no ambient global state to leak across domains.
+   The generated `Partition_<name>_state` (app partitions) and `Bridge_<bus>_state`
+   (the COM bus bridge) are each a local in their generated `partition_<name>`
+   entry. On target, that becomes the partition's private MPU region. There is no
+   ambient global state to leak across domains.
 
 2. **Cross-partition data flows ONLY through IOC.** The IOC pool
    ([`osal/osal_native.c`](../osal/osal_native.c)) is the single shared region.

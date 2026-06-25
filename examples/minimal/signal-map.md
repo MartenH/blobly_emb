@@ -5,5 +5,5 @@ DO NOT EDIT — follow a signal here, or via the provenance comments in `sig/por
 
 | Signal | Unit | Source | DBC signal | Frame | Layout | Scaling | Path | Producers | Consumers |
 |--------|------|--------|------------|-------|--------|---------|------|-----------|-----------|
-| VehicleSpeed | km/h | CAN | Powertrain.VehicleSpeed | 0x100 | 16|12 | x0.1 | io→IOC(double)→app | (io) | SpeedMonitor |
-| WarnLamp | — | app | — | — | — | — | app→IOC(double)→io | SpeedMonitor | (io) |
+| VehicleSpeed | km/h | can0 | Powertrain.VehicleSpeed | 0x100 | 16|12 | x0.1 | can0→IOC(double)→app | (can0) | SpeedMonitor |
+| WarnLamp | — | can0 | LampFrame.WarnLamp | 0x110 | 0|1 | — | app→IOC(double)→can0 | SpeedMonitor | (can0) |

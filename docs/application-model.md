@@ -94,13 +94,16 @@ with hand-written, and app never mixes with platform:
 sig    (gen)   signal value types    ← from each [[signal]].fields
 ports  (gen)   In/Out structs        ← imported by app, gen
 app    (hand)  FBs                    ← imported by gen
-gen    (gen)   glue/tables/codec
-main.v (platform) imports gen + sig
+gen    (gen)   glue/tables/codec + COM bus bridge + run()
+main.v (platform) thin entry: open the CAN channel, call gen.run
 ```
 
-The only hand-written code in an example is the **FBs** (`app/`) and the **bus
-bridge** (`main.v`); signal types, port structs, codec, tables and glue are all
-generated from `ecu.toml` (+ the DBC).
+The only hand-written code in an example is the **FBs** (`app/`) and a **thin
+entry** (`main.v`: open the CAN channel, then `gen.run`). Signal types, port
+structs, codec, tables, glue, **and the COM bus bridge** are generated from
+`ecu.toml` (+ the DBC). An endpoint that names a `[bus.*]` is *external* (the
+bridge rx-decodes / tx-encodes it); both-partition signals are *internal* —
+so internal-vs-external is explicit, not inferred.
 
 The dependency chain `sig ← ports ← app ← gen` has no cycle. Imports are short
 (`import sig`, `import ports`) and not coupled to the example name — V's `-path`
@@ -149,9 +152,10 @@ matrices, testable with plain physical values, unaffected when a DBC scaling or 
 transform changes.
 
 ```toml
-[[ioc]]
+[[signal]]
 name = "VehicleSpeed"   # physical km/h after COM scaling
-from = "io"
+fields = { kph = "u16", valid = "bool" }
+from = "can0"           # external: the bus
 to   = "app"
 # transform = "clamp:0..350"   # optional, generated; FB still just reads km/h
 ```
@@ -181,12 +185,15 @@ pub fn (mut fb SpeedFilter) on_10ms(inp sig.SpeedFilterIn, mut out sig.SpeedFilt
 
 ```toml
 # ecu.toml: chain bus -> SpeedFilter -> SpeedMonitor
-[[ioc]]
-name = "VehicleSpeedRaw"; from = "io";  to = "app"; transport = "double"
-[[ioc]]
-name = "VehicleSpeed";    from = "app"; to = "app"; transport = "double"  # FB->FB
-[[ioc]]
-name = "WarnLamp";        from = "app"; to = "io";  transport = "double"
+[[signal]]
+name = "VehicleSpeedRaw"; fields = { kph = "u16", valid = "bool" }
+from = "can0"; to = "app"; transport = "double"     # external (bus rx)
+[[signal]]
+name = "VehicleSpeed";    fields = { kph = "u16", valid = "bool" }
+from = "app";  to = "app"; transport = "double"     # internal FB->FB
+[[signal]]
+name = "WarnLamp";        fields = { on = "bool" }
+from = "app";  to = "can0"; transport = "double"    # external (bus tx)
 
 [[fb]]
 name = "SpeedFilter"; partition = "app"
