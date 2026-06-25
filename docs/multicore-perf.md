@@ -44,8 +44,19 @@ changes. Software shared-memory backends today:
 
 **Takeaway: for interval signals, 1× and 2× are tear-free and just as fast as
 3×.** Don't triple SRAM by default — reserve `triple` for the few channels with
-a saturating writer that also need wait-free reads. Reproduce with
-`v -prod run tools/ioc_bench/bench.v`.
+a saturating writer that also need wait-free reads.
+
+## Running the benchmarks
+
+`make bench` runs all three:
+
+- **`ioc_bench`** — IOC transport cross-**thread** (2 pinned cores): the table above.
+- **`ioc_bench_mp`** — IOC transport cross-**process** (fork-per-core + `MAP_SHARED`):
+  the AMP model a per-core ThreadX instance sits on (see `threadx-amp.md`). Proves
+  the lock-free IOC works across processes, not just threads (~200 ns/op, tear-free).
+- **`loom_bench`** — the **Loom scheduler**'s dispatch tax: a static-table scan +
+  indirect call, ~**0.7–0.95 ns per handler dispatch** (32-handler tick ≈ 22 ns).
+  Negligible next to the IOC transfer — scheduling is not the cost, the data hop is.
 
 ## Hardware transports (target backends, same API)
 
