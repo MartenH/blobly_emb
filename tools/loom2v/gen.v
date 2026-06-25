@@ -572,20 +572,24 @@ fn main() {
 		glue << '}'
 	}
 
-	// --- run(): launch the bus bridge(s) + every app partition, then wait ---
-	if bus_names.len > 1 {
-		panic('multi-bus run() is not generated yet (${bus_names.len} buses carry signals)')
-	}
+	// --- run(): launch every bus bridge + app partition, then wait. One Channel
+	//     param per bus (sorted for a stable signature main.v can rely on). ---
+	bus_names.sort()
 	glue << ''
-	if bus_names.len == 1 {
-		glue << 'pub fn run(ch can.Channel) {'
-		glue << '\tt_${snake(bus_names[0])} := spawn partition_${snake(bus_names[0])}(ch)'
-	} else {
-		glue << 'pub fn run() {'
-	}
 	mut waits := []string{}
-	if bus_names.len == 1 {
-		waits << 't_${snake(bus_names[0])}'
+	if bus_names.len == 0 {
+		glue << 'pub fn run() {'
+	} else {
+		mut params := []string{}
+		for b in bus_names {
+			params << '${snake(b)} can.Channel'
+		}
+		glue << 'pub fn run(${params.join(', ')}) {'
+		for b in bus_names {
+			bb := snake(b)
+			glue << '\tt_${bb} := spawn partition_${bb}(${bb})'
+			waits << 't_${bb}'
+		}
 	}
 	for part, _ in by_part {
 		glue << '\tt_${part} := spawn partition_${part}(${core_of[part] or { 0 }}, unsafe { nil })'

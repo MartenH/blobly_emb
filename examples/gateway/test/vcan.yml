@@ -1,0 +1,19 @@
+# cantester project: CAN1 = vcan0 (drive VehicleSpeed in), CAN2 = vcan1 (read lamp out).
+project:
+  name: blobly gateway (vcan0 + vcan1)
+  version: 1
+channels:
+  - name: CAN1
+    type: can
+    interface: vcan0
+    bitrate: 500000
+    mode: monitor
+    databases:
+      - bus.dbc
+  - name: CAN2
+    type: can
+    interface: vcan1
+    bitrate: 500000
+    mode: monitor
+    databases:
+      - bus.dbc
