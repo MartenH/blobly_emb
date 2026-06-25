@@ -85,13 +85,23 @@ Why grouped `In`/`Out` structs (not positional params): adding a signal is a
 config change + a new (annotated) field — **the handler signature never changes**,
 and an FB with many signals stays readable. Field access is as easy as it gets.
 
-### One example = one module
+### Modules per example (no cycle, clean separation)
 
-Each example (`examples/<name>/`) is a single `module main`: the signal types,
-the FBs, the generated `*In`/`*Out` structs, the generated Loom glue, and `main.v`
-all share that module. So FBs reference signals and `*In`/`*Out` directly — no
-imports, no prefixes, no import cycle. Only the shared framework (`osal`, `loom`,
-`driver.can`) is imported. See `examples/README.md`.
+Each example (`examples/<name>/`) splits into modules so generated never mixes
+with hand-written, and app never mixes with platform:
+
+```
+sig    (hand)  signal types          ← imported by ports, app
+ports  (gen)   In/Out structs        ← imported by app, gen
+app    (hand)  FBs                    ← imported by gen
+gen    (gen)   glue/tables/codec
+main.v (platform) imports gen + sig
+```
+
+The dependency chain `sig ← ports ← app ← gen` has no cycle. Imports are short
+(`import sig`, `import ports`) and not coupled to the example name — V's `-path`
+resolves the example's own modules plus the shared framework. See
+`examples/README.md`.
 
 ## Signal traceability — "follow a signal"
 

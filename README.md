@@ -26,8 +26,8 @@ config, FBs, and generated code. Only `osal`/`driver` have two backends.
 
 ```sh
 make vcan                              # bring up vcan0 (needs sudo)
-make example NAME=overspeed             # generate everything + build the app
-./examples/overspeed/app vcan0 &        # run it
+cd examples/overspeed && make all       # generate everything + build -> bin/app
+./bin/app vcan0 &                       # run it
 # in another shell:
 candump vcan0
 cansend vcan0 100##0.0000240500000000   # VehicleSpeed ~131 km/h -> lamp on (101#01)
@@ -35,7 +35,8 @@ cansend vcan0 100##0.204E000000000000   # EngineSpeed 5000 rpm   -> lamp on
 cansend vcan0 100##0.0000000000000000   # all zero               -> lamp off
 ```
 
-See [examples/](examples/) — `overspeed` exercises every signal path (FB↔COM,
+Each example is freestanding (`cd examples/<name> && make all`). See
+[examples/](examples/) — `overspeed` exercises every signal path (FB↔COM,
 same-core FB→FB via a local cell, cross-core FB→FB via IOC); `minimal` is the
 basic one-FB case.
 

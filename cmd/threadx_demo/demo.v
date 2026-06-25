@@ -59,7 +59,7 @@ fn app_tick(ctx voidptr) {
 	osal.ioc_publish(ch_over, &over, u8(sizeof(over)))
 }
 
-fn partition_app(core int, arg voidptr) {
+fn partition_app(_ int, _ voidptr) {
 	mut st := AppState{}
 	mut sched := loom.Scheduler{}
 	sched.every(10_000, app_tick, &st)
@@ -73,7 +73,7 @@ fn partition_app(core int, arg voidptr) {
 	}
 }
 
-fn partition_io(core int, arg voidptr) {
+fn partition_io(_ int, _ voidptr) {
 	mut first_on := -1
 	mut on_count := 0
 	for cycle in 0 .. 30 {
