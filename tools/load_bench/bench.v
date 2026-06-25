@@ -23,7 +23,13 @@ const reads_per_fb = 10
 const writes_per_fb = 10
 const cycle_us = u64(10_000) // 10 ms task cycle
 const run_s = u64(3)
-const nch = 8 // triple-buffer IOC channels (the wait-free default)
+const nch = 8 // IOC channels (seqlock: single-writer, multi-reader — see below)
+
+// Transport: signals here FAN OUT — many FBs read the same channel — so reads use
+// the seqlock transport (ioc_read), which is single-writer / multi-reader. The
+// triple/double buffers are single-reader (acquire mutates reader state), so they
+// are not valid for a fan-out topology. Writes stay single-writer per channel:
+// each core owns its own write channels and its FBs run sequentially.
 
 // A small signal record (value + a few fields), like a real signal payload.
 struct Sig {
@@ -74,7 +80,7 @@ fn encode16(mut frame [64]u8, bit int, val u32) {
 }
 
 // bridge_work: one CAN bus serviced on core0 — decode sigs_per_bus signals from an
-// rx frame and publish them, then acquire sigs_per_bus and encode a tx frame.
+// rx frame and write them, then read sigs_per_bus and encode a tx frame.
 fn bridge_work(bus int) {
 	mut rx := [64]u8{}
 	for i in 0 .. 64 {
@@ -86,12 +92,12 @@ fn bridge_work(bus int) {
 			v0: v
 			v1: v + 1
 		}
-		osal.ioc_publish(bus % 2, &sig, u8(sizeof(sig))) // core0's channels
+		osal.ioc_write(bus % 2, &sig, u8(sizeof(sig))) // core0's channels
 	}
 	mut tx := [64]u8{}
 	for s in 0 .. sigs_per_bus {
 		mut sig := Sig{}
-		osal.ioc_acquire(2 + (bus + s) % 6, &sig, u8(sizeof(sig))) // other cores' (CAN tx)
+		osal.ioc_read(2 + (bus + s) % 6, &sig, u8(sizeof(sig))) // other cores' (CAN tx)
 		encode16(mut tx, (s * 16) % 48, sig.v0)
 	}
 }
@@ -102,7 +108,7 @@ fn fb_work(core int, fb int) {
 	mut acc := u32(core * 1000 + fb)
 	for r in 0 .. reads_per_fb {
 		mut s := Sig{}
-		osal.ioc_acquire((core * 2 + fb * 3 + r) % nch, &s, u8(sizeof(s)))
+		osal.ioc_read((core * 2 + fb * 3 + r) % nch, &s, u8(sizeof(s)))
 		acc = acc * 1664525 + 1013904223 + s.v0 + s.v1 // representative compute
 	}
 	for w in 0 .. writes_per_fb {
@@ -112,7 +118,7 @@ fn fb_work(core int, fb int) {
 			v1:  acc ^ u32(w)
 			v2:  acc + u32(w)
 		}
-		osal.ioc_publish(core * 2 + (w % 2), &s, u8(sizeof(s)))
+		osal.ioc_write(core * 2 + (w % 2), &s, u8(sizeof(s)))
 	}
 }
 
