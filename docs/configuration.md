@@ -27,10 +27,10 @@ codegen output) and must not be hand-edited — change `config/` or the generato
 | Section | Block | Generates / drives |
 |---------|-------|--------------------|
 | `[[partition]]` | platform | `gen.partition_cores/_trusted/_count`; core pinning + MPU domains |
-| `[bus.*]`, `[import] dbc` | communication | bus params; `dbc2cfg` → signal codec |
-| `[[ioc]]` (+`transport`) | platform/comm | `gen.<name>_ch`, `gen.ioc_transport[]` |
-| `[[component]]` / `[[component.handler]]` | application | `gen.partition_*`: Loom wiring (state, handler glue, schedule) via `loom2v` |
-| `[[signal]]` / `[[frame]]` | communication | hand-authored signals (or via DBC) |
+| `[bus.*]` (+`core`,`fd`), `[import] dbc` | communication | bus params; bridge core; `dbc2cfg` → signal codec (decode+encode) |
+| `[[signal]]` (+`from`/`to`/`fields`/`transport`) | comm/app | signal types (`sig`), ports, `gen.<name>_ch`, routing; bus endpoint → bridge rx/tx via `loom2v` |
+| `[[frame]]` (`tx`/`rx`) | communication | per-PDU COM behaviour: tx mode/timing + rx deadline → `com.TxState`/`RxState` in the bridge |
+| `[[fb]]` / `[[fb.handler]]` | application | `gen.partition_*`: Loom wiring (state, handler glue, schedule) via `loom2v` |
 | `[nm.*]` | network management | timings (placeholder until NM exists) |
 | `[[nvm.block]]` | memory stack | NvM block layout (placeholder until NvM exists) |
 
