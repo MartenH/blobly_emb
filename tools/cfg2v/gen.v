@@ -92,6 +92,8 @@ fn main() {
 		for name, cfg in bus {
 			m := cfg.as_map()
 			b << 'pub const ${snake(name)}_fd = ${(m['fd'] or { toml.Any(false) }).bool()}'
+			iface := (m['interface'] or { toml.Any('') }).string()
+			b << "pub const ${snake(name)}_iface = '${iface}'"
 		}
 	}
 

@@ -1,0 +1,59 @@
+# gateway example: a TWO-CHANNEL ECU. VehicleSpeed arrives on can0, SpeedMonitor
+# (its own core) decides, and WarnLamp goes out on a DIFFERENT bus, can1. Shows the
+# generator's multi-bus support: one bridge per bus, each on its own channel.
+#
+#   can0 (core 0): COM bridge — rx VehicleSpeed (Powertrain)
+#   mon  (core 1): SpeedMonitor FB
+#   can1 (core 0): COM bridge — tx WarnLamp (LampFrame)
+
+[import]
+dbc = "bus.dbc"
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0
+
+[bus.can1]
+interface = "vcan1"
+fd        = false
+core      = 0
+
+# Single app partition on its own core.
+[[partition]]
+name    = "mon"
+core    = 1
+trusted = false
+
+[[signal]]
+name = "VehicleSpeed"
+fields = { kph = "u16", valid = "bool" }
+from = "can0"        # EXTERNAL: in on can0
+to   = "mon"
+transport = "double"
+
+[[signal]]
+name = "WarnLamp"
+fields = { on = "bool" }
+from = "mon"
+to   = "can1"        # EXTERNAL: out on can1
+transport = "double"
+
+[[frame]]
+name = "Powertrain"
+bus  = "can0"
+rx   = { timeout_ms = 200 }
+
+[[frame]]
+name = "LampFrame"
+bus  = "can1"
+tx   = { mode = "mixed", cycle_ms = 100, min_delay_ms = 20 }
+
+[[fb]]
+name      = "SpeedMonitor"
+partition = "mon"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["VehicleSpeed"]
+  writes    = ["WarnLamp"]

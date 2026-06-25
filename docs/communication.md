@@ -175,8 +175,10 @@ bus-bridge partition; signals still cross to app partitions via the IOC.
    bridge holds a `com.TxState` per tx PDU (cyclic/event/mixed/triggered) and a
    `com.RxState` per monitored rx PDU. Runtime in `comm/com/` (unit-tested);
    cantester asserts cadence + invalidate-on-silence.
-2. **PDU routing / gateway** — `[[route]]` + a 2-bus example (e.g. `can0`↔`can1`),
-   forwarding a frame and proving the dispatch table.
+2. **Multi-bus + PDU routing** — multi-bus is **done**: a signal can flow in on one
+   bus and out another (the `gateway` example: `can0` → FB → `can1`), one generated
+   bridge per bus, `gen.run` taking a channel per bus. Still to do: raw-PDU
+   **forwarding** between buses without unpacking (`[[route]]` + a dispatch table).
 3. **ISO-TP** — ✅ **done**. `[[isotp]]` connections; the bridge holds an
    `isotp.Link` per connection (SF / FF+CF / FC, BlockSize + STmin) in `comm/isotp`
    (unit-tested both directions). Reassembled requests go to a diag handler — for

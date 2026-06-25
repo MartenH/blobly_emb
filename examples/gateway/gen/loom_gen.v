@@ -9,13 +9,13 @@ import osal
 import driver.can
 import comm.com
 
-struct Partition_app_state {
+struct Partition_mon_state {
 mut:
 	speed_monitor app.SpeedMonitor
 }
 
-fn handler_app_speed_monitor_on_10ms(ctx voidptr) {
-	mut st := unsafe { &Partition_app_state(ctx) }
+fn handler_mon_speed_monitor_on_10ms(ctx voidptr) {
+	mut st := unsafe { &Partition_mon_state(ctx) }
 	mut inp := ports.SpeedMonitorIn{}
 	osal.ioc_acquire2(vehicle_speed_ch, &inp.vehicle_speed, u8(sizeof(inp.vehicle_speed)))
 	mut outp := ports.SpeedMonitorOut{}
@@ -23,11 +23,11 @@ fn handler_app_speed_monitor_on_10ms(ctx voidptr) {
 	osal.ioc_publish2(warn_lamp_ch, &outp.warn_lamp, u8(sizeof(outp.warn_lamp)))
 }
 
-pub fn partition_app(core int, arg voidptr) {
+pub fn partition_mon(core int, arg voidptr) {
 	osal.pin_to_core(1)
-	mut st := Partition_app_state{}
+	mut st := Partition_mon_state{}
 	mut sched := loom.Scheduler{}
-	sched.every(10000, handler_app_speed_monitor_on_10ms, &st)
+	sched.every(10000, handler_mon_speed_monitor_on_10ms, &st)
 	for {
 		sched.run(osal.now_us())
 		osal.sleep_us(1000)
@@ -37,7 +37,6 @@ pub fn partition_app(core int, arg voidptr) {
 struct Bridge_can0_state {
 mut:
 	chan can.Channel
-	tx_lamp_frame_st com.TxState
 	rx_powertrain_st com.RxState
 }
 
@@ -56,6 +55,33 @@ fn io_can0_10ms(ctx voidptr) {
 		mut vehicle_speed := sig.VehicleSpeed{}
 		osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 	}
+}
+
+pub fn partition_can0(ch can.Channel) {
+	osal.pin_to_core(0)
+	mut st := Bridge_can0_state{
+		chan: ch
+	}
+	st.rx_powertrain_st = com.RxState{
+		timeout_us: 200000
+	}
+	mut sched := loom.Scheduler{}
+	sched.every(10_000, io_can0_10ms, &st)
+	for {
+		sched.run(osal.now_us())
+		osal.sleep_us(1000)
+	}
+}
+
+struct Bridge_can1_state {
+mut:
+	chan can.Channel
+	tx_lamp_frame_st com.TxState
+}
+
+fn io_can1_10ms(ctx voidptr) {
+	mut st := unsafe { &Bridge_can1_state(ctx) }
+	now := osal.now_us()
 	mut tx_lamp_frame := can.Frame{
 		id:  lamp_frame_id
 		len: lamp_frame_dlc
@@ -71,9 +97,9 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 }
 
-pub fn partition_can0(ch can.Channel) {
+pub fn partition_can1(ch can.Channel) {
 	osal.pin_to_core(0)
-	mut st := Bridge_can0_state{
+	mut st := Bridge_can1_state{
 		chan: ch
 	}
 	st.tx_lamp_frame_st = com.TxState{
@@ -81,20 +107,19 @@ pub fn partition_can0(ch can.Channel) {
 		cycle_us: 100000
 		min_delay_us: 20000
 	}
-	st.rx_powertrain_st = com.RxState{
-		timeout_us: 200000
-	}
 	mut sched := loom.Scheduler{}
-	sched.every(10_000, io_can0_10ms, &st)
+	sched.every(10_000, io_can1_10ms, &st)
 	for {
 		sched.run(osal.now_us())
 		osal.sleep_us(1000)
 	}
 }
 
-pub fn run(can0 can.Channel) {
+pub fn run(can0 can.Channel, can1 can.Channel) {
 	t_can0 := spawn partition_can0(can0)
-	t_app := spawn partition_app(1, unsafe { nil })
+	t_can1 := spawn partition_can1(can1)
+	t_mon := spawn partition_mon(1, unsafe { nil })
 	t_can0.wait()
-	t_app.wait()
+	t_can1.wait()
+	t_mon.wait()
 }

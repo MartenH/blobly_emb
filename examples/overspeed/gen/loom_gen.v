@@ -222,8 +222,8 @@ pub fn partition_can0(ch can.Channel) {
 	}
 }
 
-pub fn run(ch can.Channel) {
-	t_can0 := spawn partition_can0(ch)
+pub fn run(can0 can.Channel) {
+	t_can0 := spawn partition_can0(can0)
 	t_sense := spawn partition_sense(0, unsafe { nil })
 	t_ctrl := spawn partition_ctrl(1, unsafe { nil })
 	t_can0.wait()
