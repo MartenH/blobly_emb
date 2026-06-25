@@ -5,21 +5,19 @@ dbc = "bus.dbc"
 [bus.can0]
 interface = "vcan0"
 fd        = false
+core      = 0         # generated COM bridge runs here
 
-[[partition]]
-name    = "io"
-core    = 0
-trusted = true
-
+# The bus (can0) is its own endpoint; its COM bridge is generated.
 [[partition]]
 name    = "app"
 core    = 1
 trusted = false
 
+# EXTERNAL = a bus endpoint (can0); INTERNAL = partition-to-partition.
 [[signal]]
 name = "VehicleSpeed"
 fields = { kph = "u16", valid = "bool" }
-from = "io"
+from = "can0"        # EXTERNAL: rx from the bus
 to   = "app"
 transport = "double"
 
@@ -27,7 +25,7 @@ transport = "double"
 name = "WarnLamp"
 fields = { on = "bool" }
 from = "app"
-to   = "io"
+to   = "can0"        # EXTERNAL: tx to the bus
 transport = "double"
 
 [[fb]]

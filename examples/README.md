@@ -53,10 +53,11 @@ The only thing an example needs from the main repo is the path back to it
 examples/<name>/
   ecu.toml  bus.dbc     configuration   (the source of truth)
   app/   Function Blocks  hand-written (app)
-  main.v IO/bus bridge    hand-written (platform)
+  main.v entry: open CAN + gen.run   hand-written (platform, tiny)
   sig/   signal types     generated ┐ never edited
-  ports/ In/Out structs   generated │  (sig from each [[signal]].fields)
-  gen/   codec/tables/glue generated ┘
+  ports/ In/Out structs   generated │  (sig from each [[signal]].fields;
+  gen/   codec/tables/glue generated │   gen/loom_gen.v has the COM bus bridge)
+         + COM bus bridge + run()    ┘
   Makefile               make all
 ```
 
@@ -72,6 +73,12 @@ platform. Imports are short (`import sig`, `import ports`, `import osal`) — V'
 3. `cd examples/<name> && make all`.
 
 Imports are not coupled to the example name, so copying needs no rewrites.
-Routing is derived from each signal's `from`/`to`: `from == to` → local cell
-(same-partition FB→FB), else an IOC channel; an `io` endpoint is bridged to the
-bus by COM.
+Routing is derived from each signal's `from`/`to`, where an endpoint is a
+**partition** or a **bus**:
+
+- an endpoint names a `[bus.*]` → **external**: the generated COM bridge
+  rx-decodes / tx-encodes it via the DBC (the signal must be in the DBC);
+- both endpoints are partitions → **internal**: `from == to` → local cell
+  (same-partition FB→FB), else an IOC channel.
+
+So "internal vs external" is explicit in config, not inferred.

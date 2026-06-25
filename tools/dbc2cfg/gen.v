@@ -28,6 +28,7 @@ fn main() {
 		base_msg := snake(m.name)
 		b.write_string('\n// ===== ${m.name}  id=0x${m.id.hex()}  dlc=${m.dlc} =====\n')
 		b.write_string('pub const ${base_msg}_id = u32(0x${m.id.hex()})\n')
+		b.write_string('pub const ${base_msg}_dlc = u8(${m.dlc})\n')
 		for s in m.signals {
 			base := '${base_msg}_${snake(s.name)}'
 			be := if s.byte_order == .big_endian { '@0 (Motorola)' } else { '@1 (Intel)' }
@@ -35,6 +36,8 @@ fn main() {
 			b.write_string('\n// ${s.name}: ${s.start_bit}|${s.length} ${be} ${sign} (${s.factor},${s.offset}) "${s.unit}"\n')
 			emit_raw(mut b, base, s)
 			emit_phys(mut b, base, s)
+			emit_set_raw(mut b, base, s)
+			emit_set(mut b, base, s)
 			nsig++
 		}
 	}
@@ -81,6 +84,50 @@ fn emit_phys(mut b strings.Builder, base string, s candb.Signal) {
 	} else {
 		b.write_string('\treturn f64(raw) * ${f64lit(s.factor)} + ${f64lit(s.offset)}\n')
 	}
+	b.write_string('}\n')
+}
+
+// emit_set_raw is the inverse of emit_raw: write `raw` into the frame at the
+// signal's bit position (Intel little-endian / Motorola big-endian sawtooth).
+fn emit_set_raw(mut b strings.Builder, base string, s candb.Signal) {
+	b.write_string('pub fn ${base}_set_raw(mut data [64]u8, raw u64) {\n')
+	if s.byte_order == .big_endian {
+		b.write_string('\tmut pos := ${s.start_bit}\n')
+		b.write_string('\tfor i in 0 .. ${s.length} {\n')
+		b.write_string('\t\tbyte_idx := pos / 8\n')
+		b.write_string('\t\tbit_idx := pos % 8\n')
+		b.write_string('\t\tbit := u8((raw >> (${s.length} - 1 - i)) & 1)\n')
+		b.write_string('\t\tif byte_idx < 64 {\n')
+		b.write_string('\t\t\tmask := u8(1) << bit_idx\n')
+		b.write_string('\t\t\tdata[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)\n')
+		b.write_string('\t\t}\n')
+		b.write_string('\t\tpos = if bit_idx == 0 { pos + 15 } else { pos - 1 }\n')
+		b.write_string('\t}\n')
+	} else {
+		b.write_string('\tfor i in 0 .. ${s.length} {\n')
+		b.write_string('\t\tg := ${s.start_bit} + i\n')
+		b.write_string('\t\tbyte_idx := g / 8\n')
+		b.write_string('\t\tif byte_idx >= 64 {\n\t\t\tcontinue\n\t\t}\n')
+		b.write_string('\t\tbit_idx := g % 8\n')
+		b.write_string('\t\tmask := u8(1) << bit_idx\n')
+		b.write_string('\t\tbit := u8((raw >> i) & 1)\n')
+		b.write_string('\t\tdata[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)\n')
+		b.write_string('\t}\n')
+	}
+	b.write_string('}\n')
+}
+
+// emit_set converts a physical value to raw and writes it (inverse of emit_phys).
+// Rounds half away from zero (a bare +0.5 truncates negatives wrongly).
+fn emit_set(mut b strings.Builder, base string, s candb.Signal) {
+	mask := if s.length >= 64 { '~u64(0)' } else { '((u64(1) << ${s.length}) - 1)' }
+	b.write_string('pub fn ${base}_set(mut data [64]u8, phys f64) {\n')
+	b.write_string('\tx := (phys - ${f64lit(s.offset)}) / ${f64lit(s.factor)}\n')
+	b.write_string('\tmut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })\n')
+	if s.length > 0 && s.length < 64 {
+		b.write_string('\tif raw < 0 {\n\t\traw += i64(u64(1) << ${s.length})\n\t}\n')
+	}
+	b.write_string('\t${base}_set_raw(mut data, u64(raw) & ${mask})\n')
 	b.write_string('}\n')
 }
 

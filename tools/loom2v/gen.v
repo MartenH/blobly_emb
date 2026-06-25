@@ -1,34 +1,55 @@
-// loom2v — BUILD-TIME tool. From [[fb]] in ecu.toml it generates, for one
-// example (module base e.g. `examples.overspeed`):
-//   * ports/ports_gen.v  — `module ports`: per-FB In/Out structs (imports sig)
-//   * gen/loom_gen.v      — `module gen`:   state + snapshot glue + entries
+// loom2v — BUILD-TIME tool. From ecu.toml (+ the DBC) it generates, for one
+// example:
+//   * sig/signals_gen.v   — `module sig`:   signal value types (from .fields)
+//   * ports/ports_gen.v   — `module ports`: per-FB In/Out structs (imports sig)
+//   * gen/loom_gen.v      — `module gen`:   state + snapshot glue + entries,
+//                                           the generated COM bus bridge, run()
 //
-// Routing per signal is derived from from/to:
-//   * from == to  -> LOCAL cell in the partition state (direct memory)
-//   * from != to  -> IOC channel <snake(name)>_ch (transport per signal)
+// An endpoint is a PARTITION or a BUS. That makes external vs internal explicit:
+//   * endpoint is a bus  -> EXTERNAL: COM-encoded via the DBC; the bus bridge
+//                           decodes rx signals -> IOC, encodes tx signals <- IOC
+//   * both partitions    -> INTERNAL: from == to -> local cell, else IOC channel
 //
-//   v run tools/loom2v/gen.v <ecu.toml> <ports_out.v> <glue_out.v>
+//   v run tools/loom2v/gen.v <ecu.toml> <bus.dbc> <signals_out> <ports_out> <glue_out>
 // (run from a freestanding example with its own v.mod, so module names are short)
 module main
 
 import os
 import toml
+import tools.candb
 
 struct SigInfo {
+mut:
 	transport string
 	from      string
 	to        string
 	local     bool
+	external  bool   // an endpoint is a bus
+	bus       string // the bus name (if external)
+	rx        bool   // external && bus is the `from` endpoint (bus -> app)
+	val_field string // the signal's value field (the non-"valid" field)
+	val_type  string // its V type
+	has_valid bool   // a `valid` field is present
+	dbc_msg   string // snake(DBC message name) carrying this signal (if external)
 }
 
 fn main() {
 	args := os.args
-	if args.len < 5 {
-		eprintln('usage: loom2v <ecu.toml> <signals_out.v> <ports_out.v> <glue_out.v>')
+	if args.len < 6 {
+		eprintln('usage: loom2v <ecu.toml> <bus.dbc> <signals_out> <ports_out> <glue_out>')
 		exit(2)
 	}
 	ecu := args[1]
+	dbc := args[2]
 	doc := toml.parse_file(ecu) or { panic('parse ${ecu}: ${err}') }
+
+	// declared buses (endpoint names that mean "external / on the wire")
+	mut buses := map[string]bool{}
+	mut bus_core := map[string]int{}
+	for bname, bcfg in doc.value('bus').as_map() {
+		buses[bname] = true
+		bus_core[bname] = int((bcfg.as_map()['core'] or { toml.Any(0) }).int())
+	}
 
 	// signal value types -> module sig (generated from each [[signal]] `fields`)
 	mut signals := []string{}
@@ -37,30 +58,71 @@ fn main() {
 
 	mut sig_of := map[string]SigInfo{}
 	mut sig_names := []string{}
+	mut has_external := false
 	for s in doc.value('signal').array() {
 		m := s.as_map()
 		name := (m['name'] or { toml.Any('') }).string()
 		from := (m['from'] or { toml.Any('') }).string()
 		to := (m['to'] or { toml.Any('') }).string()
-		sig_of[name] = SigInfo{
-			transport: (m['transport'] or { toml.Any('double') }).string()
-			from:      from
-			to:        to
-			local:     from == to
+
+		from_bus := from in buses
+		to_bus := to in buses
+		external := from_bus || to_bus
+		if external {
+			has_external = true
 		}
-		sig_names << name
 
 		fields := (m['fields'] or { toml.Any(map[string]toml.Any{}) }).as_map()
 		if fields.len == 0 {
 			panic('ecu.toml: signal "${name}" needs `fields` (e.g. fields = { kph = "u16" })')
 		}
+		// value field = the single non-"valid" field; `valid` (if any) is freshness
+		mut val_field := ''
+		mut val_type := ''
+		mut has_valid := false
 		signals << ''
 		signals << 'pub struct ${name} {'
 		signals << 'pub mut:'
 		for fname, ftype in fields {
 			signals << '\t${fname} ${ftype.string()}'
+			if fname == 'valid' {
+				has_valid = true
+			} else if val_field == '' {
+				val_field = fname
+				val_type = ftype.string()
+			}
 		}
 		signals << '}'
+
+		sig_of[name] = SigInfo{
+			transport: (m['transport'] or { toml.Any('double') }).string()
+			from:      from
+			to:        to
+			local:     from == to
+			external:  external
+			bus:       if from_bus { from } else { to }
+			rx:        from_bus
+			val_field: val_field
+			val_type:  val_type
+			has_valid: has_valid
+		}
+		sig_names << name
+	}
+
+	// Map each external signal to its DBC message (so the bridge can name the
+	// generated codec fns / id / dlc). External signals must be in the DBC.
+	if has_external {
+		db := candb.load_dbc_file(dbc) or { panic('external signals need a DBC: load ${dbc}: ${err}') }
+		for sname in sig_names {
+			mut si := sig_of[sname] or { continue }
+			if !si.external {
+				continue
+			}
+			si.dbc_msg = dbc_message_of(db, sname) or {
+				panic('signal "${sname}" has a bus endpoint but is not in ${os.file_name(dbc)}')
+			}
+			sig_of[sname] = si
+		}
 	}
 	mut core_of := map[string]int{}
 	for p in doc.value('partition').array() {
@@ -93,13 +155,16 @@ fn main() {
 	glue << '// Code generated by tools/loom2v from ${os.file_name(ecu)} — DO NOT EDIT.'
 	glue << 'module gen'
 	glue << ''
-	if has_local {
-		glue << 'import sig'
+	if has_local || has_external {
+		glue << 'import sig' // local-cell types and/or bus-bridge signal structs
 	}
 	glue << 'import ports'
 	glue << 'import app'
 	glue << 'import loom'
 	glue << 'import osal'
+	if has_external {
+		glue << 'import driver.can' // the generated COM bus bridge
+	}
 
 	for part, clist in by_part {
 		glue << ''
@@ -192,10 +257,138 @@ fn main() {
 		glue << '}'
 	}
 
-	os.write_file(args[2], signals.join('\n') + '\n') or { panic('write ${args[2]}: ${err}') }
-	os.write_file(args[3], ports.join('\n') + '\n') or { panic('write ${args[3]}: ${err}') }
-	os.write_file(args[4], glue.join('\n') + '\n') or { panic('write ${args[4]}: ${err}') }
-	eprintln('loom2v: ${sig_names.len} signals, ${by_part.len} partition(s) generated')
+	// --- generated COM bus bridge(s): decode rx -> IOC, IOC -> encode tx ---
+	mut bus_names := []string{}
+	for bname, _ in buses {
+		bb := snake(bname)
+		mut rx_by_msg := map[string][]string{}
+		mut tx_by_msg := map[string][]string{}
+		for sname in sig_names {
+			si := sig_of[sname] or { continue }
+			if !si.external || si.bus != bname {
+				continue
+			}
+			if si.rx {
+				rx_by_msg[si.dbc_msg] << sname
+			} else {
+				tx_by_msg[si.dbc_msg] << sname
+			}
+		}
+		if rx_by_msg.len == 0 && tx_by_msg.len == 0 {
+			continue
+		}
+		bus_names << bname
+
+		glue << ''
+		glue << 'struct Bridge_${bb}_state {'
+		glue << 'mut:'
+		glue << '\tchan can.Channel'
+		glue << '}'
+		glue << ''
+		glue << 'fn io_${bb}_10ms(ctx voidptr) {'
+		glue << '\tmut st := unsafe { &Bridge_${bb}_state(ctx) }'
+		if rx_by_msg.len > 0 {
+			glue << '\tmut rx := can.Frame{}'
+			glue << '\tfor st.chan.recv(mut rx) {'
+			for msg, list in rx_by_msg {
+				glue << '\t\tif rx.id == ${msg}_id {'
+				for sname in list {
+					si := sig_of[sname] or { continue }
+					fld := snake(sname)
+					dec := '${si.dbc_msg}_${snake(sname)}_phys(rx.data)'
+					valassign := if si.val_type == 'bool' {
+						'${si.val_field}: ${dec} != 0.0'
+					} else {
+						'${si.val_field}: ${si.val_type}(${dec})'
+					}
+					validassign := if si.has_valid { ', valid: true' } else { '' }
+					glue << '\t\t\tmut ${fld} := sig.${sname}{ ${valassign}${validassign} }'
+					glue << '\t\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+				}
+				glue << '\t\t}'
+			}
+			glue << '\t}'
+		}
+		for msg, list in tx_by_msg {
+			glue << '\tmut tx_${msg} := can.Frame{'
+			glue << '\t\tid:  ${msg}_id'
+			glue << '\t\tlen: ${msg}_dlc'
+			glue << '\t}'
+			glue << '\tmut tx_${msg}_any := false'
+			for sname in list {
+				si := sig_of[sname] or { continue }
+				fld := snake(sname)
+				phys := if si.val_type == 'bool' {
+					'if ${fld}.${si.val_field} { f64(1) } else { f64(0) }'
+				} else {
+					'f64(${fld}.${si.val_field})'
+				}
+				glue << '\tmut ${fld} := sig.${sname}{}'
+				glue << '\tif osal.${acquire_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld}))) {'
+				glue << '\t\t${si.dbc_msg}_${snake(sname)}_set(mut tx_${msg}.data, ${phys})'
+				glue << '\t\ttx_${msg}_any = true'
+				glue << '\t}'
+			}
+			glue << '\tif tx_${msg}_any {'
+			glue << '\t\tst.chan.send(tx_${msg})'
+			glue << '\t}'
+		}
+		glue << '}'
+		glue << ''
+		glue << 'pub fn partition_${bb}(ch can.Channel) {'
+		glue << '\tosal.pin_to_core(${bus_core[bname] or { 0 }})'
+		glue << '\tmut st := Bridge_${bb}_state{'
+		glue << '\t\tchan: ch'
+		glue << '\t}'
+		glue << '\tmut sched := loom.Scheduler{}'
+		glue << '\tsched.every(10_000, io_${bb}_10ms, &st)'
+		glue << '\tfor {'
+		glue << '\t\tsched.run(osal.now_us())'
+		glue << '\t\tosal.sleep_us(1000)'
+		glue << '\t}'
+		glue << '}'
+	}
+
+	// --- run(): launch the bus bridge(s) + every app partition, then wait ---
+	if bus_names.len > 1 {
+		panic('multi-bus run() is not generated yet (${bus_names.len} buses carry signals)')
+	}
+	glue << ''
+	if bus_names.len == 1 {
+		glue << 'pub fn run(ch can.Channel) {'
+		glue << '\tt_${snake(bus_names[0])} := spawn partition_${snake(bus_names[0])}(ch)'
+	} else {
+		glue << 'pub fn run() {'
+	}
+	mut waits := []string{}
+	if bus_names.len == 1 {
+		waits << 't_${snake(bus_names[0])}'
+	}
+	for part, _ in by_part {
+		glue << '\tt_${part} := spawn partition_${part}(${core_of[part] or { 0 }}, unsafe { nil })'
+		waits << 't_${part}'
+	}
+	for w in waits {
+		glue << '\t${w}.wait()'
+	}
+	glue << '}'
+
+	os.write_file(args[3], signals.join('\n') + '\n') or { panic('write ${args[3]}: ${err}') }
+	os.write_file(args[4], ports.join('\n') + '\n') or { panic('write ${args[4]}: ${err}') }
+	os.write_file(args[5], glue.join('\n') + '\n') or { panic('write ${args[5]}: ${err}') }
+	eprintln('loom2v: ${sig_names.len} signals (${bus_names.len} bus bridge), ${by_part.len} partition(s)')
+}
+
+// dbc_message_of returns snake(message name) of the DBC message carrying `sig`.
+fn dbc_message_of(db candb.Database, signame string) ?string {
+	for m in db.messages {
+		for s in m.signals {
+			if s.name == signame {
+				return snake(m.name)
+			}
+		}
+	}
+	return none
 }
 
 fn provenance(name string, sig_of map[string]SigInfo) string {

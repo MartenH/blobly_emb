@@ -6,6 +6,7 @@ import ports
 import app
 import loom
 import osal
+import driver.can
 
 struct Partition_sense_state {
 mut:
@@ -80,4 +81,57 @@ pub fn partition_ctrl(core int, arg voidptr) {
 		sched.run(osal.now_us())
 		osal.sleep_us(1000)
 	}
+}
+
+struct Bridge_can0_state {
+mut:
+	chan can.Channel
+}
+
+fn io_can0_10ms(ctx voidptr) {
+	mut st := unsafe { &Bridge_can0_state(ctx) }
+	mut rx := can.Frame{}
+	for st.chan.recv(mut rx) {
+		if rx.id == powertrain_id {
+			mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), valid: true }
+			osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
+			mut engine_speed := sig.EngineSpeed{ rpm: u16(powertrain_engine_speed_phys(rx.data)), valid: true }
+			osal.ioc_publish2(engine_speed_ch, &engine_speed, u8(sizeof(engine_speed)))
+		}
+	}
+	mut tx_lamp_frame := can.Frame{
+		id:  lamp_frame_id
+		len: lamp_frame_dlc
+	}
+	mut tx_lamp_frame_any := false
+	mut warn_lamp := sig.WarnLamp{}
+	if osal.ioc_acquire2(warn_lamp_ch, &warn_lamp, u8(sizeof(warn_lamp))) {
+		lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, if warn_lamp.on { f64(1) } else { f64(0) })
+		tx_lamp_frame_any = true
+	}
+	if tx_lamp_frame_any {
+		st.chan.send(tx_lamp_frame)
+	}
+}
+
+pub fn partition_can0(ch can.Channel) {
+	osal.pin_to_core(0)
+	mut st := Bridge_can0_state{
+		chan: ch
+	}
+	mut sched := loom.Scheduler{}
+	sched.every(10_000, io_can0_10ms, &st)
+	for {
+		sched.run(osal.now_us())
+		osal.sleep_us(1000)
+	}
+}
+
+pub fn run(ch can.Channel) {
+	t_can0 := spawn partition_can0(ch)
+	t_sense := spawn partition_sense(0, unsafe { nil })
+	t_ctrl := spawn partition_ctrl(1, unsafe { nil })
+	t_can0.wait()
+	t_sense.wait()
+	t_ctrl.wait()
 }

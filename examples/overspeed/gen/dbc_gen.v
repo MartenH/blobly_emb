@@ -4,6 +4,7 @@ module gen
 
 // ===== Powertrain  id=0x100  dlc=8 =====
 pub const powertrain_id = u32(0x100)
+pub const powertrain_dlc = u8(8)
 
 // EngineSpeed: 0|16 @1 (Intel) unsigned (0.25,0.0) "rpm"
 pub fn powertrain_engine_speed_raw(data [64]u8) u64 {
@@ -22,6 +23,27 @@ pub fn powertrain_engine_speed_raw(data [64]u8) u64 {
 pub fn powertrain_engine_speed_phys(data [64]u8) f64 {
 	raw := powertrain_engine_speed_raw(data)
 	return f64(raw) * 0.25 + 0.0
+}
+pub fn powertrain_engine_speed_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 16 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn powertrain_engine_speed_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 0.25
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 16)
+	}
+	powertrain_engine_speed_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
 }
 
 // VehicleSpeed: 16|12 @1 (Intel) unsigned (0.1,0.0) "km/h"
@@ -42,6 +64,27 @@ pub fn powertrain_vehicle_speed_phys(data [64]u8) f64 {
 	raw := powertrain_vehicle_speed_raw(data)
 	return f64(raw) * 0.1 + 0.0
 }
+pub fn powertrain_vehicle_speed_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 12 {
+		g := 16 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn powertrain_vehicle_speed_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 0.1
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 12)
+	}
+	powertrain_vehicle_speed_set_raw(mut data, u64(raw) & ((u64(1) << 12) - 1))
+}
 
 // CoolantTemp: 28|8 @1 (Intel) unsigned (1.0,-40.0) "degC"
 pub fn powertrain_coolant_temp_raw(data [64]u8) u64 {
@@ -60,6 +103,27 @@ pub fn powertrain_coolant_temp_raw(data [64]u8) u64 {
 pub fn powertrain_coolant_temp_phys(data [64]u8) f64 {
 	raw := powertrain_coolant_temp_raw(data)
 	return f64(raw) * 1.0 + -40.0
+}
+pub fn powertrain_coolant_temp_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 8 {
+		g := 28 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn powertrain_coolant_temp_set(mut data [64]u8, phys f64) {
+	x := (phys - -40.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 8)
+	}
+	powertrain_coolant_temp_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
 }
 
 // ThrottlePos: 36|7 @1 (Intel) unsigned (1.0,0.0) "%"
@@ -80,6 +144,27 @@ pub fn powertrain_throttle_pos_phys(data [64]u8) f64 {
 	raw := powertrain_throttle_pos_raw(data)
 	return f64(raw) * 1.0 + 0.0
 }
+pub fn powertrain_throttle_pos_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 7 {
+		g := 36 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn powertrain_throttle_pos_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 7)
+	}
+	powertrain_throttle_pos_set_raw(mut data, u64(raw) & ((u64(1) << 7) - 1))
+}
 
 // Gear: 43|4 @1 (Intel) unsigned (1.0,0.0) ""
 pub fn powertrain_gear_raw(data [64]u8) u64 {
@@ -98,6 +183,27 @@ pub fn powertrain_gear_raw(data [64]u8) u64 {
 pub fn powertrain_gear_phys(data [64]u8) f64 {
 	raw := powertrain_gear_raw(data)
 	return f64(raw) * 1.0 + 0.0
+}
+pub fn powertrain_gear_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 4 {
+		g := 43 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn powertrain_gear_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 4)
+	}
+	powertrain_gear_set_raw(mut data, u64(raw) & ((u64(1) << 4) - 1))
 }
 
 // CruiseOn: 47|1 @1 (Intel) unsigned (1.0,0.0) ""
@@ -118,9 +224,75 @@ pub fn powertrain_cruise_on_phys(data [64]u8) f64 {
 	raw := powertrain_cruise_on_raw(data)
 	return f64(raw) * 1.0 + 0.0
 }
+pub fn powertrain_cruise_on_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 1 {
+		g := 47 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn powertrain_cruise_on_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 1)
+	}
+	powertrain_cruise_on_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
+}
+
+// ===== LampFrame  id=0x110  dlc=1 =====
+pub const lamp_frame_id = u32(0x110)
+pub const lamp_frame_dlc = u8(1)
+
+// WarnLamp: 0|1 @1 (Intel) unsigned (1.0,0.0) ""
+pub fn lamp_frame_warn_lamp_raw(data [64]u8) u64 {
+	mut raw := u64(0)
+	for i in 0 .. 1 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit := (data[byte_idx] >> (g % 8)) & 1
+		raw |= u64(bit) << i
+	}
+	return raw
+}
+pub fn lamp_frame_warn_lamp_phys(data [64]u8) f64 {
+	raw := lamp_frame_warn_lamp_raw(data)
+	return f64(raw) * 1.0 + 0.0
+}
+pub fn lamp_frame_warn_lamp_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 1 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn lamp_frame_warn_lamp_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 1)
+	}
+	lamp_frame_warn_lamp_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
+}
 
 // ===== Heartbeat  id=0x700  dlc=1 =====
 pub const heartbeat_id = u32(0x700)
+pub const heartbeat_dlc = u8(1)
 
 // Counter: 0|8 @1 (Intel) unsigned (1.0,0.0) ""
 pub fn heartbeat_counter_raw(data [64]u8) u64 {
@@ -140,9 +312,31 @@ pub fn heartbeat_counter_phys(data [64]u8) f64 {
 	raw := heartbeat_counter_raw(data)
 	return f64(raw) * 1.0 + 0.0
 }
+pub fn heartbeat_counter_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 8 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn heartbeat_counter_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 8)
+	}
+	heartbeat_counter_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
+}
 
 // ===== Request  id=0x101  dlc=8 =====
 pub const request_id = u32(0x101)
+pub const request_dlc = u8(8)
 
 // ReqCode: 0|8 @1 (Intel) unsigned (1.0,0.0) ""
 pub fn request_req_code_raw(data [64]u8) u64 {
@@ -162,9 +356,31 @@ pub fn request_req_code_phys(data [64]u8) f64 {
 	raw := request_req_code_raw(data)
 	return f64(raw) * 1.0 + 0.0
 }
+pub fn request_req_code_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 8 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn request_req_code_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 8)
+	}
+	request_req_code_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
+}
 
 // ===== Response  id=0x102  dlc=8 =====
 pub const response_id = u32(0x102)
+pub const response_dlc = u8(8)
 
 // RespCode: 0|8 @1 (Intel) unsigned (1.0,0.0) ""
 pub fn response_resp_code_raw(data [64]u8) u64 {
@@ -184,9 +400,31 @@ pub fn response_resp_code_phys(data [64]u8) f64 {
 	raw := response_resp_code_raw(data)
 	return f64(raw) * 1.0 + 0.0
 }
+pub fn response_resp_code_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 8 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn response_resp_code_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 8)
+	}
+	response_resp_code_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
+}
 
 // ===== BodyStatus  id=0x200  dlc=8 =====
 pub const body_status_id = u32(0x200)
+pub const body_status_dlc = u8(8)
 
 // DoorFL: 0|1 @1 (Intel) unsigned (1.0,0.0) ""
 pub fn body_status_door_fl_raw(data [64]u8) u64 {
@@ -205,6 +443,27 @@ pub fn body_status_door_fl_raw(data [64]u8) u64 {
 pub fn body_status_door_fl_phys(data [64]u8) f64 {
 	raw := body_status_door_fl_raw(data)
 	return f64(raw) * 1.0 + 0.0
+}
+pub fn body_status_door_fl_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 1 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn body_status_door_fl_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 1)
+	}
+	body_status_door_fl_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
 }
 
 // DoorFR: 1|1 @1 (Intel) unsigned (1.0,0.0) ""
@@ -225,6 +484,27 @@ pub fn body_status_door_fr_phys(data [64]u8) f64 {
 	raw := body_status_door_fr_raw(data)
 	return f64(raw) * 1.0 + 0.0
 }
+pub fn body_status_door_fr_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 1 {
+		g := 1 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn body_status_door_fr_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 1)
+	}
+	body_status_door_fr_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
+}
 
 // DoorRL: 2|1 @1 (Intel) unsigned (1.0,0.0) ""
 pub fn body_status_door_rl_raw(data [64]u8) u64 {
@@ -243,6 +523,27 @@ pub fn body_status_door_rl_raw(data [64]u8) u64 {
 pub fn body_status_door_rl_phys(data [64]u8) f64 {
 	raw := body_status_door_rl_raw(data)
 	return f64(raw) * 1.0 + 0.0
+}
+pub fn body_status_door_rl_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 1 {
+		g := 2 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn body_status_door_rl_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 1)
+	}
+	body_status_door_rl_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
 }
 
 // DoorRR: 3|1 @1 (Intel) unsigned (1.0,0.0) ""
@@ -263,6 +564,27 @@ pub fn body_status_door_rr_phys(data [64]u8) f64 {
 	raw := body_status_door_rr_raw(data)
 	return f64(raw) * 1.0 + 0.0
 }
+pub fn body_status_door_rr_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 1 {
+		g := 3 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn body_status_door_rr_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 1)
+	}
+	body_status_door_rr_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
+}
 
 // Locked: 4|1 @1 (Intel) unsigned (1.0,0.0) ""
 pub fn body_status_locked_raw(data [64]u8) u64 {
@@ -281,6 +603,27 @@ pub fn body_status_locked_raw(data [64]u8) u64 {
 pub fn body_status_locked_phys(data [64]u8) f64 {
 	raw := body_status_locked_raw(data)
 	return f64(raw) * 1.0 + 0.0
+}
+pub fn body_status_locked_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 1 {
+		g := 4 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn body_status_locked_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 1)
+	}
+	body_status_locked_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
 }
 
 // Headlights: 5|2 @1 (Intel) unsigned (1.0,0.0) ""
@@ -301,6 +644,27 @@ pub fn body_status_headlights_phys(data [64]u8) f64 {
 	raw := body_status_headlights_raw(data)
 	return f64(raw) * 1.0 + 0.0
 }
+pub fn body_status_headlights_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 2 {
+		g := 5 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn body_status_headlights_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 2)
+	}
+	body_status_headlights_set_raw(mut data, u64(raw) & ((u64(1) << 2) - 1))
+}
 
 // Indicators: 7|2 @1 (Intel) unsigned (1.0,0.0) ""
 pub fn body_status_indicators_raw(data [64]u8) u64 {
@@ -319,6 +683,27 @@ pub fn body_status_indicators_raw(data [64]u8) u64 {
 pub fn body_status_indicators_phys(data [64]u8) f64 {
 	raw := body_status_indicators_raw(data)
 	return f64(raw) * 1.0 + 0.0
+}
+pub fn body_status_indicators_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 2 {
+		g := 7 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn body_status_indicators_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 2)
+	}
+	body_status_indicators_set_raw(mut data, u64(raw) & ((u64(1) << 2) - 1))
 }
 
 // InteriorTemp: 16|8 @1 (Intel) unsigned (0.5,-40.0) "degC"
@@ -339,9 +724,31 @@ pub fn body_status_interior_temp_phys(data [64]u8) f64 {
 	raw := body_status_interior_temp_raw(data)
 	return f64(raw) * 0.5 + -40.0
 }
+pub fn body_status_interior_temp_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 8 {
+		g := 16 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn body_status_interior_temp_set(mut data [64]u8, phys f64) {
+	x := (phys - -40.0) / 0.5
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 8)
+	}
+	body_status_interior_temp_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
+}
 
 // ===== WheelSpeeds  id=0x300  dlc=8 =====
 pub const wheel_speeds_id = u32(0x300)
+pub const wheel_speeds_dlc = u8(8)
 
 // WheelFL: 0|16 @1 (Intel) unsigned (0.01,0.0) "km/h"
 pub fn wheel_speeds_wheel_fl_raw(data [64]u8) u64 {
@@ -360,6 +767,27 @@ pub fn wheel_speeds_wheel_fl_raw(data [64]u8) u64 {
 pub fn wheel_speeds_wheel_fl_phys(data [64]u8) f64 {
 	raw := wheel_speeds_wheel_fl_raw(data)
 	return f64(raw) * 0.01 + 0.0
+}
+pub fn wheel_speeds_wheel_fl_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 16 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn wheel_speeds_wheel_fl_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 0.01
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 16)
+	}
+	wheel_speeds_wheel_fl_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
 }
 
 // WheelFR: 16|16 @1 (Intel) unsigned (0.01,0.0) "km/h"
@@ -380,6 +808,27 @@ pub fn wheel_speeds_wheel_fr_phys(data [64]u8) f64 {
 	raw := wheel_speeds_wheel_fr_raw(data)
 	return f64(raw) * 0.01 + 0.0
 }
+pub fn wheel_speeds_wheel_fr_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 16 {
+		g := 16 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn wheel_speeds_wheel_fr_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 0.01
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 16)
+	}
+	wheel_speeds_wheel_fr_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+}
 
 // WheelRL: 32|16 @1 (Intel) unsigned (0.01,0.0) "km/h"
 pub fn wheel_speeds_wheel_rl_raw(data [64]u8) u64 {
@@ -398,6 +847,27 @@ pub fn wheel_speeds_wheel_rl_raw(data [64]u8) u64 {
 pub fn wheel_speeds_wheel_rl_phys(data [64]u8) f64 {
 	raw := wheel_speeds_wheel_rl_raw(data)
 	return f64(raw) * 0.01 + 0.0
+}
+pub fn wheel_speeds_wheel_rl_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 16 {
+		g := 32 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn wheel_speeds_wheel_rl_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 0.01
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 16)
+	}
+	wheel_speeds_wheel_rl_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
 }
 
 // WheelRR: 48|16 @1 (Intel) unsigned (0.01,0.0) "km/h"
@@ -418,9 +888,31 @@ pub fn wheel_speeds_wheel_rr_phys(data [64]u8) f64 {
 	raw := wheel_speeds_wheel_rr_raw(data)
 	return f64(raw) * 0.01 + 0.0
 }
+pub fn wheel_speeds_wheel_rr_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 16 {
+		g := 48 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn wheel_speeds_wheel_rr_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 0.01
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 16)
+	}
+	wheel_speeds_wheel_rr_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+}
 
 // ===== BrakeStatus  id=0x301  dlc=4 =====
 pub const brake_status_id = u32(0x301)
+pub const brake_status_dlc = u8(4)
 
 // BrakePressure: 0|16 @1 (Intel) unsigned (0.1,0.0) "kPa"
 pub fn brake_status_brake_pressure_raw(data [64]u8) u64 {
@@ -439,6 +931,27 @@ pub fn brake_status_brake_pressure_raw(data [64]u8) u64 {
 pub fn brake_status_brake_pressure_phys(data [64]u8) f64 {
 	raw := brake_status_brake_pressure_raw(data)
 	return f64(raw) * 0.1 + 0.0
+}
+pub fn brake_status_brake_pressure_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 16 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn brake_status_brake_pressure_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 0.1
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 16)
+	}
+	brake_status_brake_pressure_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
 }
 
 // ABSActive: 16|1 @1 (Intel) unsigned (1.0,0.0) ""
@@ -459,6 +972,27 @@ pub fn brake_status_absactive_phys(data [64]u8) f64 {
 	raw := brake_status_absactive_raw(data)
 	return f64(raw) * 1.0 + 0.0
 }
+pub fn brake_status_absactive_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 1 {
+		g := 16 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn brake_status_absactive_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 1)
+	}
+	brake_status_absactive_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
+}
 
 // BrakePedal: 17|7 @1 (Intel) unsigned (1.0,0.0) "%"
 pub fn brake_status_brake_pedal_raw(data [64]u8) u64 {
@@ -478,9 +1012,31 @@ pub fn brake_status_brake_pedal_phys(data [64]u8) f64 {
 	raw := brake_status_brake_pedal_raw(data)
 	return f64(raw) * 1.0 + 0.0
 }
+pub fn brake_status_brake_pedal_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 7 {
+		g := 17 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn brake_status_brake_pedal_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 7)
+	}
+	brake_status_brake_pedal_set_raw(mut data, u64(raw) & ((u64(1) << 7) - 1))
+}
 
 // ===== BatteryStatus  id=0x400  dlc=8 =====
 pub const battery_status_id = u32(0x400)
+pub const battery_status_dlc = u8(8)
 
 // PackVoltage: 0|16 @1 (Intel) unsigned (0.01,0.0) "V"
 pub fn battery_status_pack_voltage_raw(data [64]u8) u64 {
@@ -499,6 +1055,27 @@ pub fn battery_status_pack_voltage_raw(data [64]u8) u64 {
 pub fn battery_status_pack_voltage_phys(data [64]u8) f64 {
 	raw := battery_status_pack_voltage_raw(data)
 	return f64(raw) * 0.01 + 0.0
+}
+pub fn battery_status_pack_voltage_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 16 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn battery_status_pack_voltage_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 0.01
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 16)
+	}
+	battery_status_pack_voltage_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
 }
 
 // PackCurrent: 16|16 @1 (Intel) signed (0.1,0.0) "A"
@@ -523,6 +1100,27 @@ pub fn battery_status_pack_current_phys(data [64]u8) f64 {
 	}
 	return v * 0.1 + 0.0
 }
+pub fn battery_status_pack_current_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 16 {
+		g := 16 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn battery_status_pack_current_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 0.1
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 16)
+	}
+	battery_status_pack_current_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+}
 
 // SoC: 32|8 @1 (Intel) unsigned (0.5,0.0) "%"
 pub fn battery_status_so_c_raw(data [64]u8) u64 {
@@ -542,6 +1140,27 @@ pub fn battery_status_so_c_phys(data [64]u8) f64 {
 	raw := battery_status_so_c_raw(data)
 	return f64(raw) * 0.5 + 0.0
 }
+pub fn battery_status_so_c_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 8 {
+		g := 32 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn battery_status_so_c_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 0.5
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 8)
+	}
+	battery_status_so_c_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
+}
 
 // PackTemp: 40|8 @1 (Intel) unsigned (1.0,-40.0) "degC"
 pub fn battery_status_pack_temp_raw(data [64]u8) u64 {
@@ -560,4 +1179,25 @@ pub fn battery_status_pack_temp_raw(data [64]u8) u64 {
 pub fn battery_status_pack_temp_phys(data [64]u8) f64 {
 	raw := battery_status_pack_temp_raw(data)
 	return f64(raw) * 1.0 + -40.0
+}
+pub fn battery_status_pack_temp_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 8 {
+		g := 40 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn battery_status_pack_temp_set(mut data [64]u8, phys f64) {
+	x := (phys - -40.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 8)
+	}
+	battery_status_pack_temp_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
 }
