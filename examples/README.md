@@ -1,46 +1,51 @@
 # Examples
 
-Each example is a **self-contained app** in its own directory, with its own
-`ecu.toml`. `make example NAME=<dir>` generates all of its code from config and
-compiles it.
+Each example is a **freestanding app** in its own folder. Build it from inside:
 
 ```sh
-make list                      # list examples
-make example NAME=overspeed     # generate + build examples/overspeed/app
-make run-example NAME=minimal   # build + run on vcan0
+cd examples/overspeed
+make all          # generate from config + compile -> bin/app
+make run          # build + run on vcan0
 ```
+
+…or from the repo root: `make example NAME=overspeed` (delegates to the above),
+`make list` to list them.
+
+The only thing an example needs from the main repo is the path back to it
+(`REPO`, default `../..`): the generators in `tools/`, and the shared framework
+(`osal`/`loom`/`driver`) found via V's `-path`.
 
 ## Available
 
 | Example | What it shows |
 |---------|---------------|
-| [`minimal`](minimal/) | the basic case: one FB, **FB ↔ COM** only (bus in → SpeedMonitor → bus out) |
-| [`overspeed`](overspeed/) | 4 FBs on 2 cores exercising **every** signal path: FB↔COM, same-core FB→FB (local cell), cross-core FB→FB (IOC) |
+| [`minimal`](minimal/) | one FB, **FB ↔ COM** only (bus in → SpeedMonitor → bus out) |
+| [`overspeed`](overspeed/) | 4 FBs on 2 cores, **every** signal path: FB↔COM, same-core FB→FB (local cell), cross-core FB→FB (IOC) |
 
-## Anatomy of an example
+## Layout — four clean buckets
 
 ```
 examples/<name>/
-  ecu.toml        # the ECU config (partitions, signals, FBs, NM, ...)
-  bus.dbc         # optional: CAN matrix imported by COM
-  signals.v       # signal value types (hand-written)
-  <fb>.v          # Function Blocks (hand-written): state + handlers
-  main.v          # entry: the IO/bus-bridge partition + spawns
-  gen_*.v         # GENERATED (make example): codec, channels, ports, Loom glue
-  signal-map.md   # GENERATED: follow any signal end-to-end -> DBC
+  ecu.toml  bus.dbc     configuration   (the source of truth)
+  sig/   signal types    app  ┐ hand-written
+  app/   Function Blocks  app  ┘
+  main.v IO/bus bridge    platform (hand-written)
+  ports/ In/Out structs   generated ┐ never edited
+  gen/   codec/tables/glue generated ┘
+  Makefile               make all
 ```
 
-Everything in an example is one `module main`, so FBs reference signals and
-generated symbols directly (no imports, no prefixes); only the shared framework
-(`osal`, `loom`, `driver.can`) is imported. The runtime stays no-alloc; `main.v`
-(the bus bridge) is the one place init-time heap/strings are allowed.
+Generated code never sits in a hand-written folder, and app never mixes with
+platform. Imports are short (`import sig`, `import ports`, `import osal`) — V's
+`-path` resolves the example's own modules and the shared framework.
 
 ## Adding an example
 
-1. `mkdir examples/<name>`; write `ecu.toml`, `signals.v`, your `<fb>.v` files,
-   and a `main.v` (copy one as a starting point).
-2. `make example NAME=<name>`.
+1. `cp -r examples/minimal examples/<name>` (then `rm -rf <name>/gen <name>/ports <name>/bin`).
+2. Edit `ecu.toml`, `sig/`, `app/`, `main.v`.
+3. `cd examples/<name> && make all`.
 
-Routing is derived from each signal's `from`/`to`: `from == to` → a local cell
-(same-partition FB→FB), otherwise an IOC channel (with `transport`); an `io`
-endpoint is bridged to the bus by COM.
+Imports are not coupled to the example name, so copying needs no rewrites.
+Routing is derived from each signal's `from`/`to`: `from == to` → local cell
+(same-partition FB→FB), else an IOC channel; an `io` endpoint is bridged to the
+bus by COM.

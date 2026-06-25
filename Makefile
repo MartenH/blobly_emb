@@ -6,25 +6,18 @@ V ?= v
 # Each example is a self-contained app under examples/<NAME>/ with its own
 # ecu.toml (+ optional bus.dbc). `make example NAME=<name>` generates all its
 # code from config and compiles it.
-EX = examples/$(NAME)
-
+# Each example is self-contained (examples/<name>/Makefile). These just delegate,
+# so `make example NAME=overspeed` == `cd examples/overspeed && make all`.
 example:
 	@test -n "$(NAME)" || { echo "usage: make example NAME=<dir under examples/>"; exit 1; }
-	@test -d "$(EX)" || { echo "no such example: $(EX)"; exit 1; }
-	@if [ -f "$(EX)/bus.dbc" ]; then \
-		$(V) -path "@vlib|@vmodules|tools" run tools/dbc2cfg/gen.v "$(EX)/bus.dbc" "$(EX)/gen_dbc.v"; \
-	fi
-	$(V) run tools/cfg2v/gen.v "$(EX)/ecu.toml" "$(EX)/gen_ecu.v"
-	$(V) run tools/loom2v/gen.v "$(EX)/ecu.toml" "$(EX)/gen_ports.v" "$(EX)/gen_loom.v"
-	$(V) run tools/sigmap/gen.v "$(EX)/ecu.toml" "$(EX)/signal-map.md"
-	$(V) -o "$(EX)/app" "$(EX)"
-	@echo "built $(EX)/app"
+	$(MAKE) -C examples/$(NAME) all
 
-run-example: example
-	./$(EX)/app vcan0
+run-example:
+	@test -n "$(NAME)" || { echo "usage: make run-example NAME=<dir under examples/>"; exit 1; }
+	$(MAKE) -C examples/$(NAME) run
 
 list:
-	@ls -1 examples/
+	@for d in examples/*/; do test -f "$$d/ecu.toml" && basename "$$d"; done
 
 # ---- Backend harness (POSIX / ThreadX), self-contained ----------------------
 demo:
@@ -49,4 +42,4 @@ vcan:
 	./scripts/setup_vcan.sh
 
 clean:
-	rm -f blobly_demo blobly_demo_threadx examples/*/app
+	rm -rf bin blobly_demo blobly_demo_threadx examples/*/bin

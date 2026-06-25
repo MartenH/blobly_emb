@@ -1,4 +1,4 @@
-module main
+module sig
 
 pub struct VehicleSpeed {
 pub mut:

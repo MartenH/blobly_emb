@@ -5,8 +5,8 @@ DO NOT EDIT — follow a signal here, or via the provenance comments in `sig/por
 
 | Signal | Unit | Source | DBC signal | Frame | Layout | Scaling | Path | Producers | Consumers |
 |--------|------|--------|------------|-------|--------|---------|------|-----------|-----------|
-| VehicleSpeed | km/h | CAN | Powertrain.VehicleSpeed | 0x100 | 16|12 | x0.1 | io→IOC(double)→sense | (io) | SpeedFilter |
-| EngineSpeed | rpm | CAN | Powertrain.EngineSpeed | 0x100 | 0|16 | x0.25 | io→IOC(double)→ctrl | (io) | EngineMonitor |
+| VehicleSpeed | — | io | — | — | — | — | io→IOC(double)→sense | (io) | SpeedFilter |
+| EngineSpeed | — | io | — | — | — | — | io→IOC(double)→ctrl | (io) | EngineMonitor |
 | FilteredSpeed | — | sense | — | — | — | — | sense (local cell) | SpeedFilter | OverspeedDetector |
 | Overspeed | — | sense | — | — | — | — | sense→IOC(double)→ctrl | OverspeedDetector | LampController |
 | HighRev | — | ctrl | — | — | — | — | ctrl (local cell) | EngineMonitor | LampController |
