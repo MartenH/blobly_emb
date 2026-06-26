@@ -11,33 +11,33 @@ make run          # build + run on vcan0
 …or from the repo root: `make example NAME=overspeed` (delegates to the above),
 `make list` to list them.
 
-## Integration testing (cantester_v + Lua)
+## Integration testing (blobly_net + Lua)
 
 An example can be driven and asserted on the bus by
-[cantester_v](https://github.com/MartenH/cantester_v)'s **headless Lua runner** —
+[blobly_net](https://github.com/MartenH/blobly_net)'s **headless Lua runner** —
 it knows the same DBC, so it encodes/sends stimulus signals and checks responses:
 
 ```sh
 make vcan                                   # bring up vcan0 + vcan1
 cd examples/overspeed
-make test CANTESTER=/path/to/cantester_v     # build + run the app + drive/assert
+make test BLOBLY_NET=/path/to/blobly_net     # build + run the app + drive/assert
 ```
 
 (Multi-bus examples like `gateway` use both `vcan0` and `vcan1`; `make vcan`
 brings up both. Such an example opens each bus by its `[bus.*] interface` and
 `main.v` calls `gen.run(c0, c1)` — one channel per bus.)
 
-`make test` runs the built app on `vcan0` (the app *is* the ECU — the cantester
+`make test` runs the built app on `vcan0` (the app *is* the ECU — the blobly_net
 project has no simulation) and runs every `test/*.lua` against it; it exits
 non-zero if any assertion fails. Each example provides `test/vcan.yml` (the
-cantester project pointing at `vcan0` + `bus.dbc`) and `test/<name>.lua`, e.g.:
+blobly_net project pointing at `vcan0` + `bus.dbc`) and `test/<name>.lua`, e.g.:
 
 ```lua
 bus.send_message("CAN1", "Powertrain", { VehicleSpeed = 150 })  -- DBC-encode + send
 -- ... then assert the lamp frame (0x101) goes ON
 ```
 
-Note: cantester is classic-CAN, so these examples use classic CAN
+Note: blobly_net is classic-CAN, so these examples use classic CAN
 (`[bus] fd = false`); the driver picks classic vs CAN-FD from that flag.
 
 The only thing an example needs from the main repo is the path back to it
@@ -50,7 +50,7 @@ The only thing an example needs from the main repo is the path back to it
 |---------|---------------|
 | [`minimal`](minimal/) | one FB, **FB ↔ COM** only (bus in → SpeedMonitor → bus out) |
 | [`overspeed`](overspeed/) | 4 FBs on 2 cores, **every** signal path (FB↔COM, same-core local cell, cross-core IOC) **+ diagnostics** (ISO-TP + UDS: per-PDU TX modes, RX deadline, DIDs incl. a live signal) |
-| [`gateway`](gateway/) | **two CAN channels**: VehicleSpeed in on `can0` → SpeedMonitor (own core) → WarnLamp out on `can1` (one bridge per bus) |
+| [`gateway`](gateway/) | **two CAN channels**: VehicleSpeed in on `can0` → SpeedMonitor → WarnLamp out on `can1`; plus a **raw-PDU `[[route]]`** forwarding `WheelSpeeds` `can0`→`can1` untouched |
 | [`scale`](scale/) | **load benchmark** through the real stack: 4 cores, 8 CAN buses, **200 FBs** — config + FB handlers are themselves generated (`tools/scale_gen`). `make all`, then `make bench-scale` for per-core CPU + RAM. |
 
 ## Layout — four clean buckets

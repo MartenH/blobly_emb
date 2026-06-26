@@ -38,6 +38,7 @@ struct Bridge_can0_state {
 mut:
 	chan can.Channel
 	rx_powertrain_st com.RxState
+	route_can1 can.Channel // gateway: forward to can1
 }
 
 fn io_can0_10ms(ctx voidptr) {
@@ -45,6 +46,10 @@ fn io_can0_10ms(ctx voidptr) {
 	now := osal.now_us()
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
+		if rx.id == u32(0x300) {
+			mut fwd := rx
+			st.route_can1.send(fwd)
+		}
 		if rx.id == powertrain_id && rx.len == powertrain_dlc {
 			mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), valid: true }
 			osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
@@ -57,11 +62,12 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 }
 
-pub fn partition_can0(ch can.Channel) {
+pub fn partition_can0(ch can.Channel, route_can1 can.Channel) {
 	osal.pin_to_core(0)
 	mut st := Bridge_can0_state{
 		chan: ch
 	}
+	st.route_can1 = route_can1
 	st.rx_powertrain_st = com.RxState{
 		timeout_us: 200000
 	}
@@ -116,7 +122,7 @@ pub fn partition_can1(ch can.Channel) {
 }
 
 pub fn run(can0 can.Channel, can1 can.Channel) {
-	t_can0 := spawn partition_can0(can0)
+	t_can0 := spawn partition_can0(can0, can1)
 	t_can1 := spawn partition_can1(can1)
 	t_mon := spawn partition_mon(1, unsafe { nil })
 	t_can0.wait()
