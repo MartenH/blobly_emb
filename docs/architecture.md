@@ -55,7 +55,7 @@ cores); the **COM bridge** is the only thing that touches the **driver** and the
 
 ## Who talks to what
 
-| Component | Talks to | How / via | Purpose |
+| Part | Talks to | How / via | Purpose |
 |---|---|---|---|
 | **Function Block** | its `ports` In/Out only | typed fields | pure transform; knows nothing of buses, cores, or other FBs |
 | **Loom** | FB handlers; IOC / local cells | snapshot In → call handler → publish Out | dispatch on a period; coherent input snapshot |
