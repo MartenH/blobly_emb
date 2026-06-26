@@ -242,6 +242,8 @@ the FB** — only `ecu.toml` changes.
   + generated `*In`/`*Out` in the `sig` module; the snapshot glue via `loom2v`;
   scaling at the COM boundary (`dbc2cfg`); provenance comments on generated port
   fields + the `make trace` signal map (`docs/signal-map.md`).
-- **Still to come**: FB→FB *same-partition* local routing (today every cross-FB
-  signal uses an IOC channel); declared connection transforms (clamp/unit/E2E);
-  multiple signal-bearing handlers per FB (today one).
+- **Still to come**: queued (event) signals + `on_<signal>_received` triggering;
+  mode management; E2E protection; declared connection transforms (clamp/unit);
+  multiple signal-bearing handlers per FB (today one). See
+  [autosar-comparison.md](autosar-comparison.md) for how these map to the AUTOSAR
+  RTE/COM patterns, what we keep, and what we deliberately skip.
