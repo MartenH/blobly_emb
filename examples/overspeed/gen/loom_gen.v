@@ -9,6 +9,7 @@ import osal
 import driver.can
 import comm.com
 import comm.e2e
+import comm.secoc
 import comm.isotp
 import comm.uds
 
@@ -73,6 +74,7 @@ fn handler_ctrl_lamp_controller_on_10ms(ctx voidptr) {
 	mut outp := ports.LampControllerOut{}
 	st.lamp_controller.on_10ms(inp, mut outp)
 	osal.ioc_publish2(warn_lamp_ch, &outp.warn_lamp, u8(sizeof(outp.warn_lamp)))
+	osal.ioc_publish2(secure_status_ch, &outp.secure_status, u8(sizeof(outp.secure_status)))
 }
 
 pub fn partition_ctrl(core int, arg voidptr) {
@@ -92,6 +94,9 @@ mut:
 	chan can.Channel
 	tx_lamp_frame_st com.TxState
 	e2e_tx_lamp_frame e2e.TxState
+	tx_secure_frame_st com.TxState
+	secoc_key_secure_frame secoc.Key
+	secoc_tx_secure_frame secoc.TxState
 	rx_powertrain_st com.RxState
 	tp_diag isotp.Link
 	tp_diag_buf [isotp.max_payload]u8
@@ -163,6 +168,20 @@ fn io_can0_10ms(ctx voidptr) {
 		st.e2e_tx_lamp_frame.protect(&tx_lamp_frame.data[0], int(lamp_frame_dlc), u16(0x10), 1, 2)
 		st.chan.send(tx_lamp_frame)
 	}
+	mut tx_secure_frame := can.Frame{
+		id:  secure_frame_id
+		len: secure_frame_dlc
+	}
+	mut tx_secure_frame_any := false
+	mut secure_status := sig.SecureStatus{}
+	if osal.ioc_acquire2(secure_status_ch, &secure_status, u8(sizeof(secure_status))) {
+		secure_frame_secure_status_set(mut tx_secure_frame.data, f64(secure_status.level))
+		tx_secure_frame_any = true
+	}
+	if tx_secure_frame_any && st.tx_secure_frame_st.should_send(now, tx_secure_frame.data, secure_frame_dlc) {
+		st.secoc_tx_secure_frame.protect(&st.secoc_key_secure_frame, &tx_secure_frame.data[0], int(secure_frame_dlc), u16(0x20), 1, 2, 4)
+		st.chan.send(tx_secure_frame)
+	}
 }
 
 pub fn partition_can0(ch can.Channel) {
@@ -175,6 +194,12 @@ pub fn partition_can0(ch can.Channel) {
 		cycle_us: 100000
 		min_delay_us: 20000
 	}
+	st.tx_secure_frame_st = com.TxState{
+		mode: com.TxMode.cyclic
+		cycle_us: 50000
+		min_delay_us: 0
+	}
+	st.secoc_key_secure_frame = secoc.new_key([u8(0x10), 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f]!)
 	st.rx_powertrain_st = com.RxState{
 		timeout_us: 200000
 	}

@@ -27,6 +27,7 @@ lock-free, no-alloc — and skips the rest.
 | React on reception, not on a clock | `DataReceivedEvent` | — (handlers are cyclic) | 🔜 planned |
 | Mode management (gate handlers / reconfigure by ECU state) | ModeDeclarationGroup, `ModeSwitchEvent` | — (only NM sleep/wake) | 🔜 planned |
 | End-to-end protection (CRC + alive counter) | E2E library / transformer | `comm/e2e` (CRC-8 J1850 + 4-bit counter + data id), per-frame `[[frame]].e2e` | ✅ have |
+| Authenticated messaging (MAC + freshness, anti-replay) | **SecOC** | `comm/secoc` (AES-128 **CMAC** + freshness), per-frame `[[frame]].secoc` | ✅ have |
 | Synchronous service call between components | Client-Server (`Rte_Call`) | — | 🚫 skip |
 | RTE-managed critical sections | ExclusiveArea | — | 🚫 skip (by design) |
 | Multiple instantiation, connector remap, port-defined arg values | RTE config surface | — | 🚫 skip |
@@ -63,6 +64,15 @@ lock-free, no-alloc — and skips the rest.
   (it works on the raw frame bytes, over last-value *or* queued — it is *not* the
   same thing as the SPSC ring). `examples/overspeed` protects its `LampFrame`; the
   test recomputes the CRC independently and checks the counter advances.
+- **SecOC.** ✅ **done.** E2E's *security* sibling: same wrap-on-tx / check-on-rx
+  shape, but the unkeyed CRC becomes a **keyed AES-128 CMAC** and the counter
+  becomes a **freshness value** (anti-replay). E2E stops *nature* (random faults,
+  ISO 26262); SecOC stops a *person* (spoofing / tampering / replay, ISO-SAE
+  21434) — only a key holder can forge the MAC. `comm/secoc` is unit-tested against
+  the FIPS-197 (AES) and RFC 4493 (CMAC) vectors; `examples/overspeed` authenticates
+  a `SecureFrame`. The real cost over E2E isn't the wiring (identical) — it's the
+  crypto primitive and **key + freshness management** (distribution, sync,
+  monotonicity across resets), which a production deployment must own.
 
 ## Why the skipped ones stay skipped
 
