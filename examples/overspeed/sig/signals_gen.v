@@ -33,3 +33,8 @@ pub struct WarnLamp {
 pub mut:
 	on bool
 }
+
+pub struct SecureStatus {
+pub mut:
+	level u8
+}

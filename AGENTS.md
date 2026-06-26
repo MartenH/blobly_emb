@@ -19,7 +19,7 @@ examples/<name>/   a FREESTANDING app (own Makefile, `make all`):
    gen/ (module gen)   codec/tables/glue +   │  (incl. the COM bus bridge:
                        COM bus bridge + run() ┘   bus endpoints -> rx/tx codec)
 loom/   the Loom: scheduler (the de-AUTOSAR'd "RTE")
-comm/   comms stack: com (TX modes/RX deadline), e2e (CRC+counter), isotp (15765-2), uds (14229), nm
+comm/   comms stack: com, e2e (CRC), secoc (AES-CMAC), isotp (15765-2), uds (14229), nm
 driver/ driver port: can (sim=SocketCAN, target=MCAL)
 osal/   OS abstraction: time, cores, IOC (sim=POSIX, target=ThreadX AMP)
 tools/  BUILD-TIME only (heap OK): dbc2cfg, cfg2v, loom2v, sigmap, benches, candb

@@ -14,4 +14,8 @@ pub fn (mut fb LampController) on_10ms(inp ports.LampControllerIn, mut out ports
 	out.warn_lamp = sig.WarnLamp{
 		on: fb.on
 	}
+	// also publish the lamp state on a SecOC-authenticated frame
+	out.secure_status = sig.SecureStatus{
+		level: if fb.on { u8(1) } else { u8(0) }
+	}
 }

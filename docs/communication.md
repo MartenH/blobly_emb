@@ -176,6 +176,27 @@ doesn't defeat send-on-change), and on rx **decodes only if the check passes** �
 bad frame is ignored, and the rx deadline then invalidates the signals. It's a raw
 wrap/unwrap on the frame bytes, so it is **independent of the signal transport**.
 
+## SecOC — authenticated messaging (security)
+
+E2E's security sibling: same shape, but the unkeyed CRC becomes a **keyed AES-128
+CMAC** and the counter becomes a **freshness value** (anti-replay). E2E stops random
+faults (safety); SecOC stops a malicious sender — spoofing, tampering, replay
+(ISO-SAE 21434) — because only a key holder can forge the MAC.
+
+```toml
+[[frame]]
+name = "SecureFrame"; bus = "can0"
+tx   = { mode = "cyclic", cycle_ms = 50 }
+secoc = { key = "10 11 ... 1f", data_id = 0x20, fresh_pos = 1, mac_pos = 2, mac_len = 4 }
+```
+
+On tx the bridge stamps the freshness + a truncated CMAC over `(data_id ‖ payload ‖
+freshness)`; on rx it recomputes the MAC (constant-time compare) and checks the
+freshness advanced, decoding only an authentic, fresh frame. `comm/secoc` (AES + CMAC)
+is unit-tested against the FIPS-197 / RFC 4493 vectors. The wiring is identical to
+E2E — the real cost is the crypto and **key + freshness management** (distribution,
+sync, monotonicity across resets), which a production system must own.
+
 ## No-alloc & generation
 
 Everything new follows the existing split — build-time generators emit static

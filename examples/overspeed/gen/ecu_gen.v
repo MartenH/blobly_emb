@@ -13,10 +13,11 @@ pub const vehicle_speed_ch = 0
 pub const engine_speed_ch = 1
 pub const overspeed_ch = 2
 pub const warn_lamp_ch = 3
-pub const ioc_channel_count = 4
+pub const secure_status_ch = 4
+pub const ioc_channel_count = 5
 
 // Per-channel transport (index = channel id)
-pub const ioc_transport = [Transport.double, Transport.double, Transport.double, Transport.double]!
+pub const ioc_transport = [Transport.double, Transport.double, Transport.double, Transport.double, Transport.double]!
 
 // Partitions — index = partition id
 pub const partition_count = 2
