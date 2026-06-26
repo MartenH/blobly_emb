@@ -154,6 +154,24 @@ The protocol logic lives in `comm/uds` (unit-tested); the generated bridge fills
 the DID table and refreshes signal-backed DIDs. So a tester can read a live bus
 signal — or any FB output — straight over diagnostics.
 
+## E2E protection (ISO 26262)
+
+A `[[frame]]` can be **end-to-end protected**: `comm/e2e` stamps an alive counter
+and a CRC into the frame on tx and verifies them on rx, so the receiver detects
+corruption, repetition, a stuck sender, and (with the rx deadline) loss.
+
+```toml
+[[frame]]
+name = "LampFrame"; bus = "can0"
+tx   = { mode = "mixed", cycle_ms = 100 }
+e2e  = { data_id = 0x10, crc_pos = 1, counter_pos = 2 }  # CRC-8 J1850 + 4-bit counter
+```
+
+The bridge stamps **after** the on-change decision (so the ever-changing counter
+doesn't defeat send-on-change), and on rx **decodes only if the check passes** — a
+bad frame is ignored, and the rx deadline then invalidates the signals. It's a raw
+wrap/unwrap on the frame bytes, so it is **independent of the signal transport**.
+
 ## No-alloc & generation
 
 Everything new follows the existing split — build-time generators emit static

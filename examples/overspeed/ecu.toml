@@ -89,9 +89,10 @@ bus  = "can0"
 rx   = { timeout_ms = 200 }     # no frame in 200ms -> signals' valid=false
 
 [[frame]]
-name = "LampFrame"              # tx: heartbeat + immediate on change
+name = "LampFrame"              # tx: heartbeat + immediate on change, E2E-protected
 bus  = "can0"
 tx   = { mode = "mixed", cycle_ms = 100, min_delay_ms = 20 }
+e2e  = { data_id = 0x10, crc_pos = 1, counter_pos = 2 }  # CRC byte1, counter byte2
 
 # --- Diagnostics transport (ISO-TP) ------------------------------------------
 # A diag connection on can0: requests arrive on rx_id, responses go on tx_id

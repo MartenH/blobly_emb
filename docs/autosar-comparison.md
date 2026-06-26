@@ -26,7 +26,7 @@ lock-free, no-alloc — and skips the rest.
 | Queued (event) sender-receiver — discrete events, none dropped | `Rte_Send`/`Rte_Receive`, `isQueued` | — (IOC is last-value) | 🔜 planned |
 | React on reception, not on a clock | `DataReceivedEvent` | — (handlers are cyclic) | 🔜 planned |
 | Mode management (gate handlers / reconfigure by ECU state) | ModeDeclarationGroup, `ModeSwitchEvent` | — (only NM sleep/wake) | 🔜 planned |
-| End-to-end protection (CRC + alive counter) | E2E library / transformer | — (validity only) | 🔜 planned |
+| End-to-end protection (CRC + alive counter) | E2E library / transformer | `comm/e2e` (CRC-8 J1850 + 4-bit counter + data id), per-frame `[[frame]].e2e` | ✅ have |
 | Synchronous service call between components | Client-Server (`Rte_Call`) | — | 🚫 skip |
 | RTE-managed critical sections | ExclusiveArea | — | 🚫 skip (by design) |
 | Multiple instantiation, connector remap, port-defined arg values | RTE config surface | — | 🚫 skip |
@@ -54,12 +54,13 @@ lock-free, no-alloc — and skips the rest.
   only). It's lean to add — a *mode* is just a signal the Loom consults before
   dispatch, gating which handlers run and which TX modes apply. Missing because no
   example has needed state-dependent behaviour yet.
-- **E2E protection.** Signals carry validity but no integrity. E2E adds a CRC + alive
-  counter so a receiver detects corruption, loss, repetition, or a stuck sender — a
-  real ISO 26262 need. It's a generated wrap/unwrap on selected `[[signal]]`s at the
-  COM boundary, **independent of the transport** (works over last-value *or* queued —
-  it is *not* the same thing as the SPSC ring). Missing because there's no safety
-  case in the examples yet.
+- **E2E protection.** ✅ **done.** Signals had validity but no integrity; `comm/e2e`
+  adds a CRC + alive counter so a receiver detects corruption, repetition, a stuck
+  sender, and (with the rx deadline) loss — a real ISO 26262 need. It's a generated
+  stamp/check on a `[[frame]]` at the COM boundary, **independent of the transport**
+  (it works on the raw frame bytes, over last-value *or* queued — it is *not* the
+  same thing as the SPSC ring). `examples/overspeed` protects its `LampFrame`; the
+  test recomputes the CRC independently and checks the counter advances.
 
 ## Why the skipped ones stay skipped
 
