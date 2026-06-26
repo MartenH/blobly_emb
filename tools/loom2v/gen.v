@@ -449,7 +449,10 @@ fn main() {
 			glue << '\tmut rx := can.Frame{}'
 			glue << '\tfor st.chan.recv(mut rx) {'
 			for msg, list in rx_by_msg {
-				glue << '\t\tif rx.id == ${msg}_id {'
+				// require the received length to match the PDU DLC — recv copies only
+				// the actual bytes into the reused frame, so a short same-id frame
+				// would otherwise be decoded over stale trailing bytes.
+				glue << '\t\tif rx.id == ${msg}_id && rx.len == ${msg}_dlc {'
 				e2e := e2e_on[msg] or { false }
 				// E2E-protected frames are decoded only if CRC + counter check out;
 				// a bad frame is ignored (the rx deadline then invalidates).
