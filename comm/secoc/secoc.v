@@ -206,12 +206,13 @@ pub mut:
 // protect stamps the freshness (fresh_pos) and a truncated CMAC (mac_pos, mac_len)
 // into `data`, then advances the freshness counter.
 pub fn (mut t TxState) protect(key &Key, data &u8, dlc int, data_id u16, fresh_pos int, mac_pos int, mac_len int) {
+	n := if mac_len > 16 { 16 } else { mac_len } // CMAC output is 16 bytes
 	unsafe {
 		data[fresh_pos] = t.freshness
 	}
 	mut mac := [16]u8{}
-	mac_input(key, data, dlc, data_id, mac_pos, mac_len, mut mac)
-	for i in 0 .. mac_len {
+	mac_input(key, data, dlc, data_id, mac_pos, n, mut mac)
+	for i in 0 .. n {
 		unsafe {
 			data[mac_pos + i] = mac[i]
 		}
@@ -239,10 +240,11 @@ pub mut:
 // verify recomputes the MAC (constant-time compare) and checks the freshness
 // advanced (anti-replay, with a forward window over the 8-bit counter).
 pub fn (mut r RxState) verify(key &Key, data &u8, dlc int, data_id u16, fresh_pos int, mac_pos int, mac_len int) Status {
+	n := if mac_len > 16 { 16 } else { mac_len } // CMAC output is 16 bytes
 	mut mac := [16]u8{}
-	mac_input(key, data, dlc, data_id, mac_pos, mac_len, mut mac)
+	mac_input(key, data, dlc, data_id, mac_pos, n, mut mac)
 	mut diff := u8(0)
-	for i in 0 .. mac_len {
+	for i in 0 .. n {
 		diff |= unsafe { data[mac_pos + i] } ^ mac[i]
 	}
 	if diff != 0 {

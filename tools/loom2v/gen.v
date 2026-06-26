@@ -216,8 +216,9 @@ fn main() {
 			if (secoc_key[fk] or { []u8{} }).len != 16 {
 				panic('secoc ${fk}: key must be 16 bytes (AES-128)')
 			}
-			if ml < 1 || fp < 0 || fp >= dlc || mp < 0 || mp + ml > dlc || (fp >= mp && fp < mp + ml) {
-				panic('secoc ${fk}: fresh_pos=${fp}, mac_pos=${mp}, mac_len=${ml} must fit within dlc=${dlc} and not overlap')
+			if ml < 1 || ml > 16 || fp < 0 || fp >= dlc || mp < 0 || mp + ml > dlc
+				|| (fp >= mp && fp < mp + ml) {
+				panic('secoc ${fk}: fresh_pos=${fp}, mac_pos=${mp}, mac_len=${ml} must be 1..16, fit within dlc=${dlc}, and not overlap')
 			}
 		}
 	}
