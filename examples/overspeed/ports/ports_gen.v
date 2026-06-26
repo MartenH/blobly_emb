@@ -47,4 +47,6 @@ pub struct LampControllerOut {
 pub mut:
 	// signal "WarnLamp" — ch, transport double, ctrl -> can0
 	warn_lamp sig.WarnLamp
+	// signal "SecureStatus" — ch, transport double, ctrl -> can0
+	secure_status sig.SecureStatus
 }

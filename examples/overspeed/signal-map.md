@@ -11,3 +11,4 @@ DO NOT EDIT — follow a signal here, or via the provenance comments in `sig/por
 | Overspeed | — | sense | — | — | — | — | sense→IOC(double)→ctrl | OverspeedDetector | LampController |
 | HighRev | — | ctrl | — | — | — | — | ctrl (local cell) | EngineMonitor | LampController |
 | WarnLamp | — | can0 | LampFrame.WarnLamp | 0x110 | 0|1 | — | ctrl→IOC(double)→can0 | LampController | (can0) |
+| SecureStatus | — | can0 | SecureFrame.SecureStatus | 0x130 | 0|8 | — | ctrl→IOC(double)→can0 | LampController | (can0) |

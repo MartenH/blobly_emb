@@ -290,6 +290,50 @@ pub fn lamp_frame_warn_lamp_set(mut data [64]u8, phys f64) {
 	lamp_frame_warn_lamp_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
 }
 
+// ===== SecureFrame  id=0x130  dlc=8 =====
+pub const secure_frame_id = u32(0x130)
+pub const secure_frame_dlc = u8(8)
+
+// SecureStatus: 0|8 @1 (Intel) unsigned (1.0,0.0) ""
+pub fn secure_frame_secure_status_raw(data [64]u8) u64 {
+	mut raw := u64(0)
+	for i in 0 .. 8 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit := (data[byte_idx] >> (g % 8)) & 1
+		raw |= u64(bit) << i
+	}
+	return raw
+}
+pub fn secure_frame_secure_status_phys(data [64]u8) f64 {
+	raw := secure_frame_secure_status_raw(data)
+	return f64(raw) * 1.0 + 0.0
+}
+pub fn secure_frame_secure_status_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 8 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn secure_frame_secure_status_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 8)
+	}
+	secure_frame_secure_status_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
+}
+
 // ===== Heartbeat  id=0x700  dlc=1 =====
 pub const heartbeat_id = u32(0x700)
 pub const heartbeat_dlc = u8(1)

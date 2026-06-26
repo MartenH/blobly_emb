@@ -80,6 +80,13 @@ from = "ctrl"
 to   = "can0"        # EXTERNAL: tx to the bus
 transport = "double"
 
+[[signal]]
+name = "SecureStatus"
+fields = { level = "u8" }
+from = "ctrl"
+to   = "can0"        # EXTERNAL: tx, SecOC-authenticated
+transport = "double"
+
 # --- COM behaviour per frame (PDU) -------------------------------------------
 # How each external frame is driven on the wire. Optional; absent => tx cyclic
 # @100ms, no rx deadline.
@@ -93,6 +100,13 @@ name = "LampFrame"              # tx: heartbeat + immediate on change, E2E-prote
 bus  = "can0"
 tx   = { mode = "mixed", cycle_ms = 100, min_delay_ms = 20 }
 e2e  = { data_id = 0x10, crc_pos = 1, counter_pos = 2 }  # CRC byte1, counter byte2
+
+[[frame]]
+name = "SecureFrame"            # tx: SecOC-authenticated (AES-CMAC + freshness)
+bus  = "can0"
+tx   = { mode = "cyclic", cycle_ms = 50 }
+# byte0 Status, byte1 freshness, bytes 2-5 truncated MAC (4 of 16 CMAC bytes)
+secoc = { key = "10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f", data_id = 0x20, fresh_pos = 1, mac_pos = 2, mac_len = 4 }
 
 # --- Diagnostics transport (ISO-TP) ------------------------------------------
 # A diag connection on can0: requests arrive on rx_id, responses go on tx_id
@@ -159,7 +173,7 @@ partition = "ctrl"
   name      = "on_10ms"
   period_ms = 10
   reads     = ["Overspeed", "HighRev"]
-  writes    = ["WarnLamp"]
+  writes    = ["WarnLamp", "SecureStatus"]
 
 # --- Network Management ------------------------------------------------------
 [nm.can0]

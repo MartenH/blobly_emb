@@ -153,6 +153,12 @@ fn main() {
 	mut e2e_id := map[string]int{}
 	mut e2e_crc := map[string]int{}
 	mut e2e_ctr := map[string]int{}
+	mut secoc_on := map[string]bool{} // frame has SecOC authentication
+	mut secoc_id := map[string]int{}
+	mut secoc_fresh := map[string]int{}
+	mut secoc_mac := map[string]int{}
+	mut secoc_maclen := map[string]int{}
+	mut secoc_key := map[string][]u8{}
 	for f in doc.value('frame').array() {
 		fm := f.as_map()
 		fk := snake((fm['name'] or { toml.Any('') }).string())
@@ -173,13 +179,23 @@ fn main() {
 			e2e_crc[fk] = int((em['crc_pos'] or { toml.Any(0) }).int())
 			e2e_ctr[fk] = int((em['counter_pos'] or { toml.Any(0) }).int())
 		}
+		if 'secoc' in fm {
+			sm := (fm['secoc'] or { toml.Any('') }).as_map()
+			secoc_on[fk] = true
+			secoc_id[fk] = int((sm['data_id'] or { toml.Any(0) }).int())
+			secoc_fresh[fk] = int((sm['fresh_pos'] or { toml.Any(0) }).int())
+			secoc_mac[fk] = int((sm['mac_pos'] or { toml.Any(0) }).int())
+			secoc_maclen[fk] = int((sm['mac_len'] or { toml.Any(4) }).int())
+			secoc_key[fk] = parse_hex((sm['key'] or { toml.Any('') }).string())
+		}
 	}
 	has_e2e := e2e_on.len > 0
+	has_secoc := secoc_on.len > 0
 
 	// Validate E2E byte positions against each frame's DLC (they index unsafe into
 	// the frame's [64]u8 in the generated bridge).
-	if has_e2e {
-		db := candb.load_dbc_file(dbc) or { panic('e2e frames need a DBC: load ${dbc}: ${err}') }
+	if has_e2e || has_secoc {
+		db := candb.load_dbc_file(dbc) or { panic('protected frames need a DBC: load ${dbc}: ${err}') }
 		for fk, _ in e2e_on {
 			dlc := dbc_dlc_of(db, fk) or {
 				panic('e2e: frame "${fk}" is not a message in ${os.file_name(dbc)}')
@@ -188,6 +204,21 @@ fn main() {
 			np := e2e_ctr[fk] or { 0 }
 			if cp < 0 || cp >= dlc || np < 0 || np >= dlc || cp == np {
 				panic('e2e ${fk}: crc_pos=${cp}, counter_pos=${np} must be distinct and within dlc=${dlc}')
+			}
+		}
+		for fk, _ in secoc_on {
+			dlc := dbc_dlc_of(db, fk) or {
+				panic('secoc: frame "${fk}" is not a message in ${os.file_name(dbc)}')
+			}
+			fp := secoc_fresh[fk] or { 0 }
+			mp := secoc_mac[fk] or { 0 }
+			ml := secoc_maclen[fk] or { 0 }
+			if (secoc_key[fk] or { []u8{} }).len != 16 {
+				panic('secoc ${fk}: key must be 16 bytes (AES-128)')
+			}
+			if ml < 1 || ml > 16 || fp < 0 || fp >= dlc || mp < 0 || mp + ml > dlc
+				|| (fp >= mp && fp < mp + ml) {
+				panic('secoc ${fk}: fresh_pos=${fp}, mac_pos=${mp}, mac_len=${ml} must be 1..16, fit within dlc=${dlc}, and not overlap')
 			}
 		}
 	}
@@ -280,6 +311,9 @@ fn main() {
 	}
 	if has_e2e {
 		glue << 'import comm.e2e' // end-to-end protection (CRC + alive counter)
+	}
+	if has_secoc {
+		glue << 'import comm.secoc' // SecOC authentication (AES-CMAC + freshness)
 	}
 	if isotp_conns.len > 0 {
 		glue << 'import comm.isotp' // ISO-TP diagnostic transport
@@ -422,6 +456,10 @@ fn main() {
 			if e2e_on[msg] or { false } {
 				glue << '\te2e_tx_${msg} e2e.TxState'
 			}
+			if secoc_on[msg] or { false } {
+				glue << '\tsecoc_key_${msg} secoc.Key'
+				glue << '\tsecoc_tx_${msg} secoc.TxState'
+			}
 		}
 		for msg, _ in rx_by_msg {
 			if (rx_timeout_us[msg] or { 0 }) > 0 {
@@ -429,6 +467,10 @@ fn main() {
 			}
 			if e2e_on[msg] or { false } {
 				glue << '\te2e_rx_${msg} e2e.RxState'
+			}
+			if secoc_on[msg] or { false } {
+				glue << '\tsecoc_key_${msg} secoc.Key'
+				glue << '\tsecoc_rx_${msg} secoc.RxState'
 			}
 		}
 		for c in conns {
@@ -454,10 +496,14 @@ fn main() {
 				// would otherwise be decoded over stale trailing bytes.
 				glue << '\t\tif rx.id == ${msg}_id && rx.len == ${msg}_dlc {'
 				e2e := e2e_on[msg] or { false }
-				// E2E-protected frames are decoded only if CRC + counter check out;
-				// a bad frame is ignored (the rx deadline then invalidates).
+				secoc := secoc_on[msg] or { false }
+				// protected frames are decoded only if the check passes; a bad frame
+				// is ignored (the rx deadline then invalidates).
 				mut ind := '\t\t\t'
-				if e2e {
+				if secoc {
+					glue << '\t\t\tif st.secoc_rx_${msg}.verify(&st.secoc_key_${msg}, &rx.data[0], int(${msg}_dlc), u16(0x${(secoc_id[msg] or { 0 }).hex()}), ${secoc_fresh[msg] or { 0 }}, ${secoc_mac[msg] or { 0 }}, ${secoc_maclen[msg] or { 0 }}).usable() {'
+					ind = '\t\t\t\t'
+				} else if e2e {
 					glue << '\t\t\tif st.e2e_rx_${msg}.check(&rx.data[0], int(${msg}_dlc), u16(0x${(e2e_id[msg] or { 0 }).hex()}), ${e2e_crc[msg] or { 0 }}, ${e2e_ctr[msg] or { 0 }}).usable() {'
 					ind = '\t\t\t\t'
 				}
@@ -477,7 +523,7 @@ fn main() {
 				if (rx_timeout_us[msg] or { 0 }) > 0 {
 					glue << '${ind}st.rx_${msg}_st.on_receive(now)'
 				}
-				if e2e {
+				if secoc || e2e {
 					glue << '\t\t\t}'
 				}
 				glue << '\t\t}'
@@ -567,6 +613,10 @@ fn main() {
 				// doesn't make every frame look "changed" to on-change modes)
 				glue << '\t\tst.e2e_tx_${msg}.protect(&tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(e2e_id[msg] or { 0 }).hex()}), ${e2e_crc[msg] or { 0 }}, ${e2e_ctr[msg] or { 0 }})'
 			}
+			if secoc_on[msg] or { false } {
+				// authenticate: stamp freshness + truncated AES-CMAC after the change decision
+				glue << '\t\tst.secoc_tx_${msg}.protect(&st.secoc_key_${msg}, &tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(secoc_id[msg] or { 0 }).hex()}), ${secoc_fresh[msg] or { 0 }}, ${secoc_mac[msg] or { 0 }}, ${secoc_maclen[msg] or { 0 }})'
+			}
 			glue << '\t\tst.chan.send(tx_${msg})'
 			glue << '\t}'
 		}
@@ -588,12 +638,18 @@ fn main() {
 			glue << '\t\tcycle_us: ${cyc}'
 			glue << '\t\tmin_delay_us: ${tx_min_us[msg] or { 0 }}'
 			glue << '\t}'
+			if secoc_on[msg] or { false } {
+				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(secoc_key[msg] or { []u8{} })})'
+			}
 		}
 		for msg, _ in rx_by_msg {
 			if (rx_timeout_us[msg] or { 0 }) > 0 {
 				glue << '\tst.rx_${msg}_st = com.RxState{'
 				glue << '\t\ttimeout_us: ${rx_timeout_us[msg]}'
 				glue << '\t}'
+			}
+			if secoc_on[msg] or { false } {
+				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(secoc_key[msg] or { []u8{} })})'
 			}
 		}
 		for c in conns {
@@ -680,6 +736,17 @@ fn did_signal_encode(tp string, idx int, expr string, val_type string) string {
 			'\t\t${d}.data[0] = u8(${expr})\n\t\t${d}.len = 1'
 		}
 	}
+}
+
+// byte16_lit renders 16 bytes as a V fixed-array literal `[u8(0x..), 0x.., ...]!`
+// (zero-padded), for a generated secoc.new_key(...) call.
+fn byte16_lit(b []u8) string {
+	mut parts := []string{}
+	for i in 0 .. 16 {
+		v := if i < b.len { b[i] } else { u8(0) }
+		parts << if i == 0 { 'u8(0x${v.hex()})' } else { '0x${v.hex()}' }
+	}
+	return '[${parts.join(', ')}]!'
 }
 
 // parse_hex turns "01 0A FF" into bytes.
