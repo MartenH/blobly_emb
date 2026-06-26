@@ -176,6 +176,22 @@ fn main() {
 	}
 	has_e2e := e2e_on.len > 0
 
+	// Validate E2E byte positions against each frame's DLC (they index unsafe into
+	// the frame's [64]u8 in the generated bridge).
+	if has_e2e {
+		db := candb.load_dbc_file(dbc) or { panic('e2e frames need a DBC: load ${dbc}: ${err}') }
+		for fk, _ in e2e_on {
+			dlc := dbc_dlc_of(db, fk) or {
+				panic('e2e: frame "${fk}" is not a message in ${os.file_name(dbc)}')
+			}
+			cp := e2e_crc[fk] or { 0 }
+			np := e2e_ctr[fk] or { 0 }
+			if cp < 0 || cp >= dlc || np < 0 || np >= dlc || cp == np {
+				panic('e2e ${fk}: crc_pos=${cp}, counter_pos=${np} must be distinct and within dlc=${dlc}')
+			}
+		}
+	}
+
 	// ISO-TP diagnostic connections ([[isotp]]).
 	mut isotp_conns := []IsotpConn{}
 	for c in doc.value('isotp').array() {
@@ -439,7 +455,7 @@ fn main() {
 				// a bad frame is ignored (the rx deadline then invalidates).
 				mut ind := '\t\t\t'
 				if e2e {
-					glue << '\t\t\tif st.e2e_rx_${msg}.check(&rx.data[0], int(${msg}_dlc), u16(0x${(e2e_id[msg] or { 0 }).hex()}), ${e2e_crc[msg] or { 0 }}, ${e2e_ctr[msg] or { 0 }}) == e2e.Status.ok {'
+					glue << '\t\t\tif st.e2e_rx_${msg}.check(&rx.data[0], int(${msg}_dlc), u16(0x${(e2e_id[msg] or { 0 }).hex()}), ${e2e_crc[msg] or { 0 }}, ${e2e_ctr[msg] or { 0 }}).usable() {'
 					ind = '\t\t\t\t'
 				}
 				for sname in list {
@@ -687,6 +703,16 @@ fn hexbyte(s string) u8 {
 		}
 	}
 	return u8(v)
+}
+
+// dbc_dlc_of returns the DLC (byte length) of the message whose snake-name is `key`.
+fn dbc_dlc_of(db candb.Database, key string) ?int {
+	for m in db.messages {
+		if snake(m.name) == key {
+			return int(m.dlc)
+		}
+	}
+	return none
 }
 
 // dbc_message_of returns snake(message name) of the DBC message carrying `sig`.

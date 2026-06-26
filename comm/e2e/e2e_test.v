@@ -36,8 +36,23 @@ fn test_repetition_detected() {
 	mut f := [8]u8{}
 	tx.protect(&f[0], 8, id, crc_pos, ctr_pos)
 	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .ok
-	// re-deliver the SAME frame (counter unchanged) -> repeated
-	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .repeated
+	// re-deliver the SAME frame (counter unchanged) -> repeated, and not usable
+	r := rx.check(&f[0], 8, id, crc_pos, ctr_pos)
+	assert r == .repeated
+	assert !r.usable()
+}
+
+fn test_loss_detected() {
+	mut tx := TxState{}
+	mut rx := RxState{}
+	mut f := [8]u8{}
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // counter 0
+	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .ok
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // counter 1 — NOT delivered (lost)
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // counter 2 — arrives
+	s := rx.check(&f[0], 8, id, crc_pos, ctr_pos)
+	assert s == .lost // the skip is detected
+	assert s.usable() // but the frame itself is valid + fresh, so still consumed
 }
 
 fn test_wrong_data_id_fails() {

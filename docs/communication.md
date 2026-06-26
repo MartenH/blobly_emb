@@ -158,7 +158,11 @@ signal — or any FB output — straight over diagnostics.
 
 A `[[frame]]` can be **end-to-end protected**: `comm/e2e` stamps an alive counter
 and a CRC into the frame on tx and verifies them on rx, so the receiver detects
-corruption, repetition, a stuck sender, and (with the rx deadline) loss.
+corruption (CRC), repetition / a stuck sender (counter unchanged), individual lost
+frames (counter skip), and loss-of-communication (the rx deadline). A *lost* frame
+is still consumed (it's valid and fresh — the skip just marks the gap); *repeated*
+and *corrupt* frames are dropped. The generator rejects an `e2e` whose `crc_pos`/
+`counter_pos` fall outside the frame DLC.
 
 ```toml
 [[frame]]

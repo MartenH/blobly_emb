@@ -47,9 +47,16 @@ pub fn (mut t TxState) protect(data &u8, dlc int, data_id u16, crc_pos int, coun
 }
 
 pub enum Status {
-	ok
+	ok        // CRC valid, counter advanced by exactly 1
 	crc_error // corrupted (CRC mismatch)
 	repeated  // counter did not advance — duplicate / stuck sender
+	lost      // CRC valid but the counter skipped — one or more frames were lost
+}
+
+// usable reports whether the frame's data should be consumed: ok and lost are both
+// valid, fresh frames (lost just notes a gap before it); repeated/crc_error are not.
+pub fn (s Status) usable() bool {
+	return s == .ok || s == .lost
 }
 
 pub struct RxState {
@@ -58,15 +65,17 @@ pub mut:
 	started bool
 }
 
-// check verifies the CRC and the counter progression.
+// check verifies the CRC and the counter progression (delta 0 = repeated,
+// 1 = ok, >1 = lost). It resyncs to the received counter except on a CRC error.
 pub fn (mut r RxState) check(data &u8, dlc int, data_id u16, crc_pos int, counter_pos int) Status {
 	if unsafe { data[crc_pos] } != compute(data, dlc, data_id, crc_pos) {
 		return .crc_error
 	}
 	ctr := unsafe { data[counter_pos] } & 0x0F
 	mut st := Status.ok
-	if r.started && ((ctr - r.last) & 0x0F) == 0 {
-		st = .repeated
+	if r.started {
+		delta := (ctr - r.last) & 0x0F
+		st = if delta == 0 { Status.repeated } else if delta > 1 { Status.lost } else { Status.ok }
 	}
 	r.last = ctr
 	r.started = true

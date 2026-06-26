@@ -55,8 +55,10 @@ lock-free, no-alloc — and skips the rest.
   dispatch, gating which handlers run and which TX modes apply. Missing because no
   example has needed state-dependent behaviour yet.
 - **E2E protection.** ✅ **done.** Signals had validity but no integrity; `comm/e2e`
-  adds a CRC + alive counter so a receiver detects corruption, repetition, a stuck
-  sender, and (with the rx deadline) loss — a real ISO 26262 need. It's a generated
+  adds a CRC + alive counter so a receiver detects corruption (CRC), repetition / a
+  stuck sender (counter `delta == 0`), individual lost frames (counter skip,
+  `delta > 1` → `lost`), and loss-of-communication (the rx deadline) — a real ISO
+  26262 need. It's a generated
   stamp/check on a `[[frame]]` at the COM boundary, **independent of the transport**
   (it works on the raw frame bytes, over last-value *or* queued — it is *not* the
   same thing as the SPSC ring). `examples/overspeed` protects its `LampFrame`; the
