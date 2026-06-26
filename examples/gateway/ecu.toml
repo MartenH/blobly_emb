@@ -49,6 +49,12 @@ name = "LampFrame"
 bus  = "can1"
 tx   = { mode = "mixed", cycle_ms = 100, min_delay_ms = 20 }
 
+# Raw-PDU gateway: forward WheelSpeeds (0x300) from can0 to can1 untouched —
+# the frame is never decoded to signals, just re-transmitted on the other bus.
+[[route]]
+from = { bus = "can0", frame = "WheelSpeeds" }
+to   = { bus = "can1" }
+
 [[fb]]
 name      = "SpeedMonitor"
 partition = "mon"

@@ -51,6 +51,17 @@ struct DidCfg {
 	signal   string
 }
 
+// Route is one [[route]]: forward a raw frame from one bus to another (gateway),
+// without decoding it to signals. to_id == 0 means keep the source id.
+struct Route {
+mut:
+	from_bus   string
+	from_frame string
+	from_id    int
+	to_bus     string
+	to_id      int
+}
+
 fn main() {
 	args := os.args
 	if args.len < 6 {
@@ -191,6 +202,37 @@ fn main() {
 	}
 	has_e2e := e2e_on.len > 0
 	has_secoc := secoc_on.len > 0
+
+	// Raw-PDU gateway routes ([[route]]): forward a frame bus->bus, no decode.
+	mut routes := []Route{}
+	for r in doc.value('route').array() {
+		m := r.as_map()
+		fm := (m['from'] or { toml.Any('') }).as_map()
+		tm := (m['to'] or { toml.Any('') }).as_map()
+		fb := (fm['bus'] or { toml.Any('') }).string()
+		if fb == '' {
+			continue
+		}
+		routes << Route{
+			from_bus:   fb
+			from_frame: (fm['frame'] or { toml.Any('') }).string()
+			to_bus:     (tm['bus'] or { toml.Any('') }).string()
+			to_id:      int((tm['id'] or { toml.Any(0) }).int())
+		}
+	}
+	has_routes := routes.len > 0
+	if has_routes {
+		db := candb.load_dbc_file(dbc) or { panic('routes need a DBC: load ${dbc}: ${err}') }
+		for i, r in routes {
+			id := dbc_id_of(db, snake(r.from_frame)) or {
+				panic('route: frame "${r.from_frame}" is not a message in ${os.file_name(dbc)}')
+			}
+			routes[i].from_id = id
+			if routes[i].to_id == 0 {
+				routes[i].to_id = id // keep the source id unless remapped
+			}
+		}
+	}
 
 	// Validate E2E byte positions against each frame's DLC (they index unsafe into
 	// the frame's [64]u8 in the generated bridge).
@@ -413,6 +455,7 @@ fn main() {
 
 	// --- generated COM bus bridge(s): decode rx -> IOC, IOC -> encode tx ---
 	mut bus_names := []string{}
+	mut bus_dests := map[string][]string{} // bus -> its gateway destination buses
 	for bname, _ in buses {
 		bb := snake(bname)
 		mut rx_by_msg := map[string][]string{}
@@ -434,10 +477,23 @@ fn main() {
 				conns << c
 			}
 		}
-		if rx_by_msg.len == 0 && tx_by_msg.len == 0 && conns.len == 0 {
+		// routes that ORIGINATE on this bus, and the distinct destination buses
+		mut my_routes := []Route{}
+		mut dests := []string{}
+		for r in routes {
+			if r.from_bus == bname {
+				my_routes << r
+				if r.to_bus !in dests {
+					dests << r.to_bus
+				}
+			}
+		}
+		dests.sort()
+		if rx_by_msg.len == 0 && tx_by_msg.len == 0 && conns.len == 0 && my_routes.len == 0 {
 			continue
 		}
 		bus_names << bname
+		bus_dests[bname] = dests
 
 		// io fn needs a timestamp to gate tx, monitor rx deadlines, or pace ISO-TP
 		mut uses_now := tx_by_msg.len > 0 || conns.len > 0
@@ -480,6 +536,9 @@ fn main() {
 			glue << '\tuds_${tp} uds.Server'
 			glue << '\tuds_${tp}_resp [64]u8'
 		}
+		for d in dests {
+			glue << '\troute_${snake(d)} can.Channel // gateway: forward to ${d}'
+		}
 		glue << '}'
 		glue << ''
 		glue << 'fn io_${bb}_10ms(ctx voidptr) {'
@@ -487,9 +546,20 @@ fn main() {
 		if uses_now {
 			glue << '\tnow := osal.now_us()'
 		}
-		if rx_by_msg.len > 0 || conns.len > 0 {
+		if rx_by_msg.len > 0 || conns.len > 0 || my_routes.len > 0 {
 			glue << '\tmut rx := can.Frame{}'
 			glue << '\tfor st.chan.recv(mut rx) {'
+			for r in my_routes {
+				// raw-PDU gateway: forward the frame to another bus, unchanged
+				// (optionally remapping the id), without decoding it to signals.
+				glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) {'
+				glue << '\t\t\tmut fwd := rx'
+				if r.to_id != r.from_id {
+					glue << '\t\t\tfwd.id = u32(0x${r.to_id.hex()})'
+				}
+				glue << '\t\t\tst.route_${snake(r.to_bus)}.send(fwd)'
+				glue << '\t\t}'
+			}
 			for msg, list in rx_by_msg {
 				// require the received length to match the PDU DLC — recv copies only
 				// the actual bytes into the reused frame, so a short same-id frame
@@ -622,11 +692,18 @@ fn main() {
 		}
 		glue << '}'
 		glue << ''
-		glue << 'pub fn partition_${bb}(ch can.Channel) {'
+		mut psig := 'ch can.Channel'
+		for d in dests {
+			psig += ', route_${snake(d)} can.Channel'
+		}
+		glue << 'pub fn partition_${bb}(${psig}) {'
 		glue << '\tosal.pin_to_core(${bus_core[bname] or { 0 }})'
 		glue << '\tmut st := Bridge_${bb}_state{'
 		glue << '\t\tchan: ch'
 		glue << '\t}'
+		for d in dests {
+			glue << '\tst.route_${snake(d)} = route_${snake(d)}'
+		}
 		for msg, _ in tx_by_msg {
 			mode := tx_mode[msg] or { 'cyclic' }
 			mut cyc := tx_cycle_us[msg] or { 0 }
@@ -699,7 +776,11 @@ fn main() {
 		glue << 'pub fn run(${params.join(', ')}) {'
 		for b in bus_names {
 			bb := snake(b)
-			glue << '\tt_${bb} := spawn partition_${bb}(${bb})'
+			mut spawn_args := bb
+			for d in bus_dests[b] or { []string{} } {
+				spawn_args += ', ${snake(d)}'
+			}
+			glue << '\tt_${bb} := spawn partition_${bb}(${spawn_args})'
 			waits << 't_${bb}'
 		}
 	}
@@ -780,6 +861,16 @@ fn dbc_dlc_of(db candb.Database, key string) ?int {
 	for m in db.messages {
 		if snake(m.name) == key {
 			return int(m.dlc)
+		}
+	}
+	return none
+}
+
+// dbc_id_of returns the CAN id of the message whose snake-name is `key`.
+fn dbc_id_of(db candb.Database, key string) ?int {
+	for m in db.messages {
+		if snake(m.name) == key {
+			return int(m.id)
 		}
 	}
 	return none

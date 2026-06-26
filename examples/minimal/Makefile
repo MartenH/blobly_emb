@@ -5,7 +5,7 @@ REPO ?= ../..
 V    ?= v
 NAME := $(notdir $(CURDIR))
 
-CANTESTER ?=
+BLOBLY_NET ?=
 
 .PHONY: all gen build run test clean
 all: gen build
@@ -26,10 +26,10 @@ build:
 run: build
 	./bin/app vcan0
 
-# Integration test: run the app on vcan0 and drive/assert it with cantester_v's
-# headless Lua runner (needs CANTESTER=/path/to/cantester_v + vcan0 up).
+# Integration test: run the app on vcan0 and drive/assert it with blobly_net's
+# headless Lua runner (needs BLOBLY_NET=/path/to/blobly_net + vcan0 up).
 test: build
-	CANTESTER=$(CANTESTER) bash $(REPO)/scripts/integration-test.sh .
+	BLOBLY_NET=$(BLOBLY_NET) bash $(REPO)/scripts/integration-test.sh .
 
 clean:
 	rm -rf bin

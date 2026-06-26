@@ -4,8 +4,9 @@ Embedded automotive stack in V: sim-first, multicore (AMP), **no runtime heap**.
 A lean alternative to AUTOSAR Classic — app components with typed ports + periodic
 handlers, wired by the **Loom**, over a comms stack we own. See `docs/` for the
 deeper rationale (`no-alloc.md`, `memory-protection.md`, `multicore-perf.md`,
-`threadx-amp.md`, `communication.md`, and `autosar-comparison.md` — which RTE/COM
-patterns we keep, plan, or skip).
+`threadx-amp.md`, `communication.md`, `autosar-comparison.md` — which RTE/COM
+patterns we keep, plan, or skip — and `ways-of-working.md` — how many teams + a
+weekly DBC stay in sync via the signal-name contract).
 
 ## Layout
 
@@ -40,12 +41,12 @@ make example NAME=overspeed                 # same as `cd … && make all`, from
 make lint                                  # no-alloc + isolation checks (MUST pass)
 make demo                                  # backend harness on POSIX (or demo-threadx)
 make bench                                  # IOC transport + Loom dispatch benchmarks
-(cd examples/overspeed && make test CANTESTER=/path/to/cantester_v)  # on-bus integration test
+(cd examples/overspeed && make test BLOBLY_NET=/path/to/blobly_net)  # on-bus integration test
 ```
 
-Examples use classic CAN (`[bus] fd = false`) so cantester_v (classic) can drive
+Examples use classic CAN (`[bus] fd = false`) so blobly_net (classic) can drive
 them; the driver picks classic vs CAN-FD from that flag. Integration tests live in
-each example's `test/` (cantester project + Lua), run by `make test`.
+each example's `test/` (blobly_net project + Lua), run by `make test`.
 
 ## Review guidelines
 

@@ -32,6 +32,7 @@ codegen output) and must not be hand-edited — change `config/` or the generato
 | `[[frame]]` (`tx`/`rx`/`e2e`/`secoc`) | communication | per-PDU COM behaviour: tx mode/timing + rx deadline → `com.TxState`/`RxState`; `e2e` → `e2e.TxState`/`RxState` (CRC); `secoc` → `secoc.*` (AES-CMAC + freshness) |
 | `[[isotp]]` (`rx_id`/`tx_id`/`bs`/`stmin_ms`) | communication | ISO-TP diagnostic connection → an `isotp.Link` in the bridge (reassemble/segment) |
 | `[[did]]` (`ascii`/`bytes`/`signal`/`writable`) | diagnostics | UDS DataIdentifier → entry in the bridge's `uds.Server` (constant / live signal / RAM) |
+| `[[route]]` (`from`/`to`) | communication | raw-PDU gateway: forward a frame bus→bus untouched (the source bridge sends on the destination channel) |
 | `[[fb]]` / `[[fb.handler]]` | application | `gen.partition_*`: Loom wiring (state, handler glue, schedule) via `loom2v` |
 | `[nm.*]` | network management | timings (placeholder until NM exists) |
 | `[[nvm.block]]` | memory stack | NvM block layout (placeholder until NvM exists) |

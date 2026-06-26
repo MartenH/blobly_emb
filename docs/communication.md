@@ -81,23 +81,23 @@ Between the driver and COM sits a routing table: for each PDU, where it goes.
 ```toml
 [[route]]                              # gateway: forward a PDU bus→bus, unchanged
 from = { bus = "can0", frame = "WheelSpeeds" }
-to   = { bus = "can1", frame = "WheelSpeeds" }
-
-[[route]]                              # fan-out: forward AND deliver locally
-from = { bus = "can0", frame = "BrakeStatus" }
-to   = [ { bus = "can1" }, { local = true } ]
+to   = { bus = "can1" }                # optional `id = 0x...` to remap on the way out
 ```
 
 Three destination kinds:
 
 - **local** → up to COM (unpack to signals). The default for any frame named in a
-  `[[frame]]`/signal; what the bridge does today.
-- **gateway** → re-transmit the raw PDU on another bus (optionally a different id),
-  no unpack — needs a ≥2-bus example.
-- **TP** → hand the PDU to ISO-TP for reassembly (diagnostics addresses).
+  `[[frame]]`/signal; what the bridge does for its own signals.
+- **gateway** → ✅ **done.** re-transmit the raw PDU on another bus (optionally a
+  different id), **never decoded**. The source bus's bridge gets the destination
+  channel, and on rx of the routed id forwards the frame directly (drop-free,
+  immediate). The `gateway` example forwards `WheelSpeeds` `can0`→`can1`; the test
+  injects a raw frame on `can0` and asserts it reappears byte-for-byte on `can1`.
+- **TP** → hand the PDU to ISO-TP for reassembly (diagnostics addresses) — already
+  done as `[[isotp]]`.
 
-Generated as a static dispatch table `{src bus+id → [dest]}`; the bridge’s rx path
-consults it instead of hard-coding "decode locally".
+*(Fan-out — one source to several destinations / also-deliver-locally — is a future
+extension; today a route is one source → one destination.)*
 
 ## 3. ISO-TP — segmented transport (ISO 15765-2)
 
@@ -127,7 +127,7 @@ State machine per connection:
 
 No-alloc: exactly one fixed `[max_len]u8` reassembly buffer and one TX buffer per
 connection, sized at build time. ISO-TP delivers a reassembled PDU up to **UDS**
-(below), and cantester’s `uds` module drives it in the integration tests (the DBC
+(below), and blobly_net’s `uds` module drives it in the integration tests (the DBC
 already carries `Request`/`Response`).
 
 ## 4. UDS — diagnostic services (ISO 14229)
@@ -217,23 +217,23 @@ bus-bridge partition; signals still cross to app partitions via the IOC.
 1. **COM TX modes + RX deadline** — ✅ **done**. `[[frame]]` config; the generated
    bridge holds a `com.TxState` per tx PDU (cyclic/event/mixed/triggered) and a
    `com.RxState` per monitored rx PDU. Runtime in `comm/com/` (unit-tested);
-   cantester asserts cadence + invalidate-on-silence.
-2. **Multi-bus + PDU routing** — multi-bus is **done**: a signal can flow in on one
+   blobly_net asserts cadence + invalidate-on-silence.
+2. **Multi-bus + PDU routing** — ✅ **done**. Multi-bus: a signal flows in on one
    bus and out another (the `gateway` example: `can0` → FB → `can1`), one generated
-   bridge per bus, `gen.run` taking a channel per bus. Still to do: raw-PDU
-   **forwarding** between buses without unpacking (`[[route]]` + a dispatch table).
+   bridge per bus, `gen.run` taking a channel per bus. Raw-PDU **gateway**: `[[route]]`
+   forwards a frame bus→bus untouched (the same example forwards `WheelSpeeds`).
 3. **ISO-TP** — ✅ **done**. `[[isotp]]` connections; the bridge holds an
    `isotp.Link` per connection (SF / FF+CF / FC, BlockSize + STmin) in `comm/isotp`
    (unit-tested both directions). Reassembled requests go to a diag handler — for
-   now a positive-response echo — and responses are re-segmented. cantester's UDS
+   now a positive-response echo — and responses are re-segmented. blobly_net's UDS
    client (`:raw`) asserts single- and multi-frame round-trips on the bus.
 4. **Diagnostics (UDS)** — ✅ **done**. `comm/uds` table-driven server (session /
    read-DID / write-DID / tester-present + negatives) above each ISO-TP connection;
-   `[[did]]` sources (constant / live signal / RAM). cantester's `uds` client
+   `[[did]]` sources (constant / live signal / RAM). blobly_net's `uds` client
    asserts service dispatch + multi-frame DIDs, incl. reading a live signal.
 
 ## Testing
 
-cantester_v already covers all of it headless: periodic/event TX is asserted by
+blobly_net already covers all of it headless: periodic/event TX is asserted by
 watching frame cadence on the bus; routing by checking a frame reappears on the
 second bus; ISO-TP/UDS via its `isotp`/`uds` modules against `Request`/`Response`.
