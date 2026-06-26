@@ -21,7 +21,7 @@ BO_ 256 Powertrain: 8 SUT
  SG_ Gear : 43|4@1+ (1,0) [0|15] "" Tester
  SG_ CruiseOn : 47|1@1+ (1,0) [0|1] "" Tester
 
-BO_ 272 LampFrame: 1 SUT
+BO_ 272 LampFrame: 3 SUT
  SG_ WarnLamp : 0|1@1+ (1,0) [0|1] "" Tester
 
 BO_ 1792 Heartbeat: 1 SUT

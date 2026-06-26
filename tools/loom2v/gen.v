@@ -149,6 +149,10 @@ fn main() {
 	mut tx_cycle_us := map[string]int{}
 	mut tx_min_us := map[string]int{}
 	mut rx_timeout_us := map[string]int{}
+	mut e2e_on := map[string]bool{} // frame has end-to-end protection
+	mut e2e_id := map[string]int{}
+	mut e2e_crc := map[string]int{}
+	mut e2e_ctr := map[string]int{}
 	for f in doc.value('frame').array() {
 		fm := f.as_map()
 		fk := snake((fm['name'] or { toml.Any('') }).string())
@@ -161,6 +165,30 @@ fn main() {
 		if 'rx' in fm {
 			rxm := (fm['rx'] or { toml.Any('') }).as_map()
 			rx_timeout_us[fk] = int((rxm['timeout_ms'] or { toml.Any(0) }).int()) * 1000
+		}
+		if 'e2e' in fm {
+			em := (fm['e2e'] or { toml.Any('') }).as_map()
+			e2e_on[fk] = true
+			e2e_id[fk] = int((em['data_id'] or { toml.Any(0) }).int())
+			e2e_crc[fk] = int((em['crc_pos'] or { toml.Any(0) }).int())
+			e2e_ctr[fk] = int((em['counter_pos'] or { toml.Any(0) }).int())
+		}
+	}
+	has_e2e := e2e_on.len > 0
+
+	// Validate E2E byte positions against each frame's DLC (they index unsafe into
+	// the frame's [64]u8 in the generated bridge).
+	if has_e2e {
+		db := candb.load_dbc_file(dbc) or { panic('e2e frames need a DBC: load ${dbc}: ${err}') }
+		for fk, _ in e2e_on {
+			dlc := dbc_dlc_of(db, fk) or {
+				panic('e2e: frame "${fk}" is not a message in ${os.file_name(dbc)}')
+			}
+			cp := e2e_crc[fk] or { 0 }
+			np := e2e_ctr[fk] or { 0 }
+			if cp < 0 || cp >= dlc || np < 0 || np >= dlc || cp == np {
+				panic('e2e ${fk}: crc_pos=${cp}, counter_pos=${np} must be distinct and within dlc=${dlc}')
+			}
 		}
 	}
 
@@ -249,6 +277,9 @@ fn main() {
 	}
 	if has_external {
 		glue << 'import comm.com' // per-PDU TX modes + RX deadline monitoring
+	}
+	if has_e2e {
+		glue << 'import comm.e2e' // end-to-end protection (CRC + alive counter)
 	}
 	if isotp_conns.len > 0 {
 		glue << 'import comm.isotp' // ISO-TP diagnostic transport
@@ -388,10 +419,16 @@ fn main() {
 		glue << '\tchan can.Channel'
 		for msg, _ in tx_by_msg {
 			glue << '\ttx_${msg}_st com.TxState'
+			if e2e_on[msg] or { false } {
+				glue << '\te2e_tx_${msg} e2e.TxState'
+			}
 		}
 		for msg, _ in rx_by_msg {
 			if (rx_timeout_us[msg] or { 0 }) > 0 {
 				glue << '\trx_${msg}_st com.RxState'
+			}
+			if e2e_on[msg] or { false } {
+				glue << '\te2e_rx_${msg} e2e.RxState'
 			}
 		}
 		for c in conns {
@@ -412,7 +449,18 @@ fn main() {
 			glue << '\tmut rx := can.Frame{}'
 			glue << '\tfor st.chan.recv(mut rx) {'
 			for msg, list in rx_by_msg {
-				glue << '\t\tif rx.id == ${msg}_id {'
+				// require the received length to match the PDU DLC — recv copies only
+				// the actual bytes into the reused frame, so a short same-id frame
+				// would otherwise be decoded over stale trailing bytes.
+				glue << '\t\tif rx.id == ${msg}_id && rx.len == ${msg}_dlc {'
+				e2e := e2e_on[msg] or { false }
+				// E2E-protected frames are decoded only if CRC + counter check out;
+				// a bad frame is ignored (the rx deadline then invalidates).
+				mut ind := '\t\t\t'
+				if e2e {
+					glue << '\t\t\tif st.e2e_rx_${msg}.check(&rx.data[0], int(${msg}_dlc), u16(0x${(e2e_id[msg] or { 0 }).hex()}), ${e2e_crc[msg] or { 0 }}, ${e2e_ctr[msg] or { 0 }}).usable() {'
+					ind = '\t\t\t\t'
+				}
 				for sname in list {
 					si := sig_of[sname] or { continue }
 					fld := snake(sname)
@@ -423,11 +471,14 @@ fn main() {
 						'${si.val_field}: ${si.val_type}(${dec})'
 					}
 					validassign := if si.has_valid { ', valid: true' } else { '' }
-					glue << '\t\t\tmut ${fld} := sig.${sname}{ ${valassign}${validassign} }'
-					glue << '\t\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+					glue << '${ind}mut ${fld} := sig.${sname}{ ${valassign}${validassign} }'
+					glue << '${ind}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
 				}
 				if (rx_timeout_us[msg] or { 0 }) > 0 {
-					glue << '\t\t\tst.rx_${msg}_st.on_receive(now)'
+					glue << '${ind}st.rx_${msg}_st.on_receive(now)'
+				}
+				if e2e {
+					glue << '\t\t\t}'
 				}
 				glue << '\t\t}'
 			}
@@ -511,6 +562,11 @@ fn main() {
 				glue << '\t}'
 			}
 			glue << '\tif tx_${msg}_any && st.tx_${msg}_st.should_send(now, tx_${msg}.data, ${msg}_dlc) {'
+			if e2e_on[msg] or { false } {
+				// stamp CRC + counter after the change decision (so the counter
+				// doesn't make every frame look "changed" to on-change modes)
+				glue << '\t\tst.e2e_tx_${msg}.protect(&tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(e2e_id[msg] or { 0 }).hex()}), ${e2e_crc[msg] or { 0 }}, ${e2e_ctr[msg] or { 0 }})'
+			}
 			glue << '\t\tst.chan.send(tx_${msg})'
 			glue << '\t}'
 		}
@@ -650,6 +706,16 @@ fn hexbyte(s string) u8 {
 		}
 	}
 	return u8(v)
+}
+
+// dbc_dlc_of returns the DLC (byte length) of the message whose snake-name is `key`.
+fn dbc_dlc_of(db candb.Database, key string) ?int {
+	for m in db.messages {
+		if snake(m.name) == key {
+			return int(m.dlc)
+		}
+	}
+	return none
 }
 
 // dbc_message_of returns snake(message name) of the DBC message carrying `sig`.
