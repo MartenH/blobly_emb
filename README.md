@@ -42,6 +42,8 @@ basic one-FB case.
 
 ## How it works
 
+- **Architecture overview** (start here): how FBs, the Loom, COM, the IOC and
+  diagnostics fit — [docs/architecture.md](docs/architecture.md).
 - **Config-driven**: `ecu.toml` (+ a DBC) generates the COM codec, IOC channels,
   Loom wiring, and FB port structs — all no-alloc V. Routing is derived from each
   signal's `from`/`to` (local cell vs IOC vs bus). See [docs/configuration.md](docs/configuration.md).
