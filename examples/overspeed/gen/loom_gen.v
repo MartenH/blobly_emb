@@ -8,6 +8,7 @@ import loom
 import osal
 import driver.can
 import comm.com
+import comm.e2e
 import comm.isotp
 import comm.uds
 
@@ -90,6 +91,7 @@ struct Bridge_can0_state {
 mut:
 	chan can.Channel
 	tx_lamp_frame_st com.TxState
+	e2e_tx_lamp_frame e2e.TxState
 	rx_powertrain_st com.RxState
 	tp_diag isotp.Link
 	tp_diag_buf [isotp.max_payload]u8
@@ -102,7 +104,7 @@ fn io_can0_10ms(ctx voidptr) {
 	now := osal.now_us()
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
-		if rx.id == powertrain_id {
+		if rx.id == powertrain_id && rx.len == powertrain_dlc {
 			mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), valid: true }
 			osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 			mut engine_speed := sig.EngineSpeed{ rpm: u16(powertrain_engine_speed_phys(rx.data)), valid: true }
@@ -158,6 +160,7 @@ fn io_can0_10ms(ctx voidptr) {
 		tx_lamp_frame_any = true
 	}
 	if tx_lamp_frame_any && st.tx_lamp_frame_st.should_send(now, tx_lamp_frame.data, lamp_frame_dlc) {
+		st.e2e_tx_lamp_frame.protect(&tx_lamp_frame.data[0], int(lamp_frame_dlc), u16(0x10), 1, 2)
 		st.chan.send(tx_lamp_frame)
 	}
 }

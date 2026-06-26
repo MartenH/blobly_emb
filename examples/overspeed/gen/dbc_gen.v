@@ -246,9 +246,9 @@ pub fn powertrain_cruise_on_set(mut data [64]u8, phys f64) {
 	powertrain_cruise_on_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
 }
 
-// ===== LampFrame  id=0x110  dlc=1 =====
+// ===== LampFrame  id=0x110  dlc=3 =====
 pub const lamp_frame_id = u32(0x110)
-pub const lamp_frame_dlc = u8(1)
+pub const lamp_frame_dlc = u8(3)
 
 // WarnLamp: 0|1 @1 (Intel) unsigned (1.0,0.0) ""
 pub fn lamp_frame_warn_lamp_raw(data [64]u8) u64 {
