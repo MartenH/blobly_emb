@@ -35,12 +35,17 @@ lock-free, no-alloc — and skips the rest.
 
 ## Why the planned ones are missing (and what they'd take)
 
-- **Queued (event) S/R.** The IOC overwrites — fine for "the latest speed", wrong for
-  a discrete event (a button press, a one-shot command, a fault *occurrence*) that
-  must not be lost. It's absent because the no-alloc default favoured a fixed
-  last-value cell. Adding it is a fixed-size **SPSC ring**[^spsc] per event channel —
-  still single-writer, still lock-free, still no-alloc, just FIFO-retaining instead
-  of overwriting.
+- **Queued (event) S/R.** The IOC overwrites, so if the producer writes faster than
+  the consumer reads, **intermediate writes are dropped** (you never lose the
+  *latest* value — only the ones in between, and only when the writer outpaces the
+  reader). That's exactly right for *state* (the newest speed wins) but lossy for
+  *events* where each occurrence matters — a button edge, a one-shot command, a fault
+  *occurrence*, a tick counter. It's absent because the no-alloc default favoured a
+  fixed last-value cell. Adding event retention is a fixed-size **SPSC ring**[^spsc]
+  per event channel — still single-writer, still lock-free, still no-alloc, just
+  FIFO-retaining instead of overwriting. A ring is still *bounded*: if the consumer
+  falls behind, it fills and must drop (oldest/newest) and **raise an overflow flag**
+  — designed, detectable loss instead of silent per-cycle drops.
 - **Data-received triggering.** Everything is cyclic today (`on_10ms` reads the
   latest), so a handler reacts within one period rather than on arrival. A
   `on_<signal>_received` handler (the natural partner to queued events) closes that
