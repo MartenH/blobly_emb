@@ -8,6 +8,9 @@ and no-alloc — the same recipe as the rest of blobly.
 > Naming: we keep the generic/ISO terms (**COM**, **PDU**, **ISO-TP** = ISO
 > 15765-2) and avoid the AUTOSAR module names. The PDU router is the **router**
 > (not "PduR"); ISO-TP is **ISO-TP** (not "CanTp"); the scheduler is the **Loom**.
+>
+> For how COM fits with the FBs, the Loom, the IOC and diagnostics, see
+> [architecture.md](architecture.md).
 
 ## The layers
 

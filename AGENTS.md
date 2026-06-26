@@ -2,8 +2,9 @@
 
 Embedded automotive stack in V: sim-first, multicore (AMP), **no runtime heap**.
 A lean alternative to AUTOSAR Classic — app components with typed ports + periodic
-handlers, wired by the **Loom**, over a comms stack we own. See `docs/` for the
-deeper rationale (`no-alloc.md`, `memory-protection.md`, `multicore-perf.md`,
+handlers, wired by the **Loom**, over a comms stack we own. **Start with
+`docs/architecture.md`** for how the pieces fit. See `docs/` for the deeper
+rationale (`no-alloc.md`, `memory-protection.md`, `multicore-perf.md`,
 `threadx-amp.md`, `communication.md`, `autosar-comparison.md` — which RTE/COM
 patterns we keep, plan, or skip — and `ways-of-working.md` — how many teams + a
 weekly DBC stay in sync via the signal-name contract).
