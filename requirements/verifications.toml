@@ -1,0 +1,25 @@
+# Non-test verifications. Tests declare their own coverage inline via
+# `-- @verifies REQ-...` (lua) / `// @verifies REQ-...` (V); this file covers the
+# analysis (a command that must exit 0) and review (a sign-off) methods.
+
+[[check]]
+id = "noalloc-isolation-lint"
+method = "analysis"
+context = "static"
+command = "make lint"
+verifies = [
+	"SYS-REQ-RES-001",
+	"SYS-REQ-SAFE-003",
+	"REQ-INV-001",
+	"REQ-INV-002",
+	"REQ-INV-003",
+	"REQ-INV-004",
+]
+
+[[review]]
+id = "naming-review"
+method = "review"
+context = "review"
+verifies = ["REQ-INV-005"]
+approved_by = "" # set to the reviewer's name to mark REQ-INV-005 verified
+date = ""
