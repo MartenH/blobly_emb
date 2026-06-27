@@ -1,5 +1,6 @@
 module nm
 
+// @verifies REQ-NM-001, REQ-NM-002, REQ-NM-003, REQ-NM-004, REQ-NM-006, REQ-NM-007, REQ-NM-008
 // Deterministic NM state-machine tests: drive `now` (microseconds) by hand.
 
 fn timings() Timings {

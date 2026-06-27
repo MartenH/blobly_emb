@@ -1,5 +1,6 @@
 -- E2E: the bridge stamps an alive counter + CRC into LampFrame (0x110, 3 bytes:
 -- byte0 WarnLamp, byte1 CRC, byte2 counter). Independently recompute the CRC here
+-- @verifies SYS-REQ-SAFE-001
 -- (SAE J1850 CRC-8, the AUTOSAR-E2E poly) and check the counter advances.
 local function crc8(bytes)
   local crc = 0xFF

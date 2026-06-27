@@ -1,0 +1,120 @@
+# Network management (NM): coordinated wake/sleep per network.
+
+[[req]]
+id = "REQ-NM-001"
+title = "Keep awake on request"
+text = "Network management shall keep a network awake while any function requests it."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NM-001"
+
+[[req]]
+id = "REQ-NM-002"
+title = "Sleep when released"
+text = "Network management shall request network sleep only when all functions have released the network."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NM-001"
+
+[[req]]
+id = "REQ-NM-003"
+title = "Stay awake on bus traffic"
+text = "Network management shall keep a network awake while NM messages from other nodes are being received."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NM-001"
+
+[[req]]
+id = "REQ-NM-004"
+title = "Wake and announce"
+text = "Network management shall wake a network on local request and announce readiness to the other nodes via NM messages."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NM-001"
+
+[[req]]
+id = "REQ-NM-005"
+title = "Report network state"
+text = "Network management shall report each network's state (awake, ready-to-sleep, asleep) to the ECU manager."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-LIFE-002"
+
+# --- timing / protocol behaviors (values are config; see docs/nm.md) ----------
+
+[[req]]
+id = "REQ-NM-006"
+title = "Timeout before sleep"
+text = "Network management shall request network sleep only after the configured network-timeout has elapsed with no active network request."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NM-001"
+
+[[req]]
+id = "REQ-NM-007"
+title = "Repeat-message phase"
+text = "After a network is woken, network management shall transmit NM messages for at least the configured repeat-message duration before it may report ready-to-sleep."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NM-001"
+
+[[req]]
+id = "REQ-NM-008"
+title = "Periodic announcement"
+text = "While a network is awake, network management shall transmit its NM message at the configured cycle time."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NM-001"
+
+[[req]]
+id = "REQ-NM-009"
+title = "Cluster re-synchronisation"
+text = "On receiving an NM message with the repeat-message-request indication set, network management shall re-enter the repeat-message phase."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NM-001"
+
+[[req]]
+id = "REQ-NM-010"
+title = "Partial network demand"
+text = "Network management shall keep a partial network awake while any node (local or remote) requests it, and request its sleep only when no node requests it."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NM-001"
+
+[[req]]
+id = "REQ-NM-011"
+title = "Source identification"
+text = "Each transmitted NM message shall carry the source node identifier of the local ECU."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NM-001"
+
+[[req]]
+id = "REQ-NM-012"
+title = "Ready-to-sleep indication"
+text = "Network management shall indicate ready-to-sleep in its NM message when the local ECU has released the network."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NM-001"
+
+[[req]]
+id = "REQ-NM-013"
+title = "Active-wakeup indication"
+text = "Network management shall indicate in its NM message whether the local ECU actively woke the network."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NM-001"
