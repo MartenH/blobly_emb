@@ -8,11 +8,14 @@
  * path), so they never break the host build.
  *
  *   v ... run examples/<x>                       -> SocketCAN (vcan)
- *   v -cflags '-DBLOB_CAN_STHAL -I<ST HAL inc>'   -> STM32 FDCAN (ST HAL)
+ *   v -cflags '-DBLOB_CAN_FDCAN -I<CMSIS inc>'    -> STM32 H7 FDCAN, register-level (no HAL)
+ *   v -cflags '-DBLOB_CAN_STHAL -I<ST HAL inc>'   -> STM32 H7 FDCAN over the ST HAL
  *   v -cflags '-DBLOB_CAN_CANIF -I<BSW inc>'      -> AUTOSAR CanIf (CDD)
  */
-#if defined(BLOB_CAN_STHAL)
-#  include "can_sthal.c"   /* STM32 H7 FDCAN over ST HAL — bare-metal / no AUTOSAR */
+#if defined(BLOB_CAN_FDCAN)
+#  include "can_fdcan.c"   /* STM32 H7 FDCAN — bare-metal M_CAN registers (CMSIS, no HAL) */
+#elif defined(BLOB_CAN_STHAL)
+#  include "can_sthal.c"   /* STM32 H7 FDCAN over the ST HAL (only if you're already on Cube) */
 #elif defined(BLOB_CAN_CANIF)
 #  include "can_canif.c"   /* AUTOSAR: plug in above CanIf as a CDD / CanIf user */
 #else
