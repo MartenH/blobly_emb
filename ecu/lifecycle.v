@@ -62,7 +62,9 @@ pub fn (mut l Lifecycle) step(d Demand) Mode {
 			}
 		}
 		.sleep {
-			if d.wakeup || d.any_demand() {
+			if d.shutdown_req {
+				l.mode = .shutdown // a power-down request is honoured even from Sleep
+			} else if d.wakeup || d.any_demand() {
 				l.mode = .run
 			}
 		}
