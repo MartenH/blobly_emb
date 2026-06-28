@@ -18,6 +18,7 @@ pub struct Supervisor {
 pub mut:
 	cfg           [max_entities]Entity // per-entity config (set at init)
 	n             int
+	seen          [max_entities]bool // has this entity ever checkpointed?
 	last_alive_us [max_entities]u64
 	start_us      [max_entities]u64
 	active        [max_entities]bool
@@ -29,9 +30,12 @@ pub mut:
 // service() polls can't mask it. REQ-WDG-002.
 pub fn (mut s Supervisor) checkpoint(id int, now u64) {
 	if id >= 0 && id < s.n {
-		if now - s.last_alive_us[id] > s.cfg[id].period_us {
+		// only a SUBSEQUENT checkpoint can be "late" — the first one establishes the
+		// baseline (last_alive_us starts at 0, which is not a real report).
+		if s.seen[id] && now - s.last_alive_us[id] > s.cfg[id].period_us {
 			s.tripped = true
 		}
+		s.seen[id] = true
 		s.last_alive_us[id] = now
 	}
 }
@@ -58,6 +62,9 @@ pub fn (mut s Supervisor) finish(id int, now u64) {
 // their deadline (REQ-WDG-003) at `now`? Latches `tripped` on the first failure.
 pub fn (mut s Supervisor) healthy(now u64) bool {
 	for i := 0; i < s.n; i++ {
+		if !s.seen[i] {
+			return false // never reported alive yet — withhold service (REQ-WDG-001)
+		}
 		if now - s.last_alive_us[i] > s.cfg[i].period_us {
 			s.tripped = true
 			return false // missed alive checkpoint
