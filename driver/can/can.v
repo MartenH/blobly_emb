@@ -1,12 +1,15 @@
 module can
 
-// CAN / CAN-FD driver port.
-// Host/sim backend: SocketCAN (see can_socket.c). Target backend: vendor MCAL.
+// CAN / CAN-FD driver port. One narrow contract (can_port.h), three backends
+// selected at build time in can_backend.c:
+//   (default)          SocketCAN over vcan   — host / sim
+//   -DBLOB_CAN_STHAL   STM32 H7 FDCAN (HAL)  — bare-metal / no AUTOSAR
+//   -DBLOB_CAN_CANIF   above AUTOSAR CanIf    — vendor BSW (CDD)
 // No heap: frames are fixed-size value types, all buffers static.
 
 #flag -I @VMODROOT/driver/can
-#flag @VMODROOT/driver/can/can_socket.c
-#include "can_socket.h"
+#flag @VMODROOT/driver/can/can_backend.c
+#include "can_port.h"
 
 fn C.blob_can_open(&char, int) int
 fn C.blob_can_send(int, u32, &u8, u8, int) int

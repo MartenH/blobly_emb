@@ -26,7 +26,7 @@ graph TB
     DIAG["Diagnostics<br/>ISO-TP (comm/isotp) + UDS (comm/uds)"]
   end
 
-  DRV["driver: CAN (driver/can)<br/>SocketCAN host / MCAL target"]
+  DRV["driver: CAN (driver/can)<br/>SocketCAN (host) · ST FDCAN HAL · AUTOSAR CanIf"]
   BUS["CAN bus(es)"]
   OSAL["OSAL (osal/): cores · time · IOC pool · pinning<br/>POSIX fork-per-core  /  ThreadX AMP"]
 
@@ -154,7 +154,7 @@ sequenceDiagram
 | Codec / bridge / glue / tables | `gen/` | generated (`dbc2cfg`, `cfg2v`, `loom2v`) |
 | Scheduler | `loom/` | framework |
 | Comms | `comm/com`, `comm/e2e`, `comm/secoc`, `comm/isotp`, `comm/uds`, `comm/nm` | framework |
-| Platform line | `osal/` (cores/time/IOC), `driver/` (CAN) | framework + C shims |
+| Platform line | `osal/` (cores/time/IOC), `driver/` (CAN) | framework + C shims (see `porting.md`) |
 | Entry | `main.v` | hand (tiny: open channels, `gen.run`) |
 
 The build-time generators in `tools/` (`dbc2cfg`, `cfg2v`, `loom2v`, `sigmap`) turn

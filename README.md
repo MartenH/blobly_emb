@@ -15,7 +15,7 @@ examples/<name>/  self-contained apps (one module main): ecu.toml + FBs + main.v
                   + generated code (make example NAME=<name>)
 loom/    the Loom scheduler            osal/   OS abstraction: time/cores/IOC
 comm/    comms stack: nm (and more)             (sim=POSIX, target=ThreadX AMP)
-driver/  driver port: can (sim=SocketCAN, target=MCAL)
+driver/  driver port: can — SocketCAN (host) / ST FDCAN HAL / AUTOSAR CanIf (docs/porting.md)
 tools/   build-time generators: dbc2cfg, cfg2v, loom2v, sigmap (+ candb, benches)
 ```
 
