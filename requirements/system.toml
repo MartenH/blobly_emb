@@ -46,7 +46,7 @@ asil = "B"
 id = "SYS-REQ-SAFE-003"
 title = "Partition isolation"
 text = "A fault in one partition shall not corrupt the memory of another partition."
-status = "agreed"
+status = "draft"
 method = "analysis"
 asil = "B"
 

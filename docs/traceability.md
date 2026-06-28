@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 52 | 42 | 5 | 5 | 0 |
+| 52 | 39 | 5 | 8 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -32,10 +32,10 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-MODE-001 | QM | test | verified | ecu_test.v (pass) |
 | REQ-MODE-002 | QM | test | verified | ecu_test.v (pass) |
 | REQ-MODE-003 | QM | test | verified | ecu_test.v (pass) |
-| REQ-INV-001 | QM | analysis | verified | noalloc-isolation-lint (pass) |
-| REQ-INV-002 | B | analysis | verified | noalloc-isolation-lint (pass) |
-| REQ-INV-003 | B | analysis | verified | noalloc-isolation-lint (pass) |
-| REQ-INV-004 | QM | analysis | verified | noalloc-isolation-lint (pass) |
+| REQ-INV-001 | QM | analysis | verified | noalloc-driver-lint (pass) |
+| REQ-INV-002 | B | analysis | uncovered | — |
+| REQ-INV-003 | B | analysis | uncovered | — |
+| REQ-INV-004 | QM | analysis | verified | noalloc-driver-lint (pass) |
 | REQ-INV-005 | QM | review | covered | naming-review (pending) |
 | REQ-NM-001 | QM | test | verified | nm_test.v (pass) |
 | REQ-NM-002 | QM | test | verified | nm_test.v (pass) |
@@ -55,13 +55,13 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-COMMS-003 | QM | test | verified | overspeed.lua (pending), com_test.v (pass) |
 | SYS-REQ-SAFE-001 | B | test | verified | e2e.lua (pending), e2e_test.v (pass) |
 | SYS-REQ-SAFE-002 | B | test | verified | ↳ derived (all children verified) |
-| SYS-REQ-SAFE-003 | B | analysis | verified | noalloc-isolation-lint (pass) |
+| SYS-REQ-SAFE-003 | B | analysis | uncovered | — |
 | SYS-REQ-SEC-001 | QM | test | verified | secoc.lua (pending), secoc_test.v (pass) |
 | SYS-REQ-DIAG-001 | QM | test | verified | diag.lua (pending), uds_test.v (pass) |
 | SYS-REQ-NM-001 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-LIFE-001 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-LIFE-002 | QM | test | verified | ↳ derived (all children verified) |
-| SYS-REQ-RES-001 | QM | analysis | verified | noalloc-isolation-lint (pass) |
+| SYS-REQ-RES-001 | QM | analysis | verified | noalloc-driver-lint (pass) |
 | SYS-REQ-MC-001 | QM | test | uncovered | — |
 | REQ-WDG-001 | B | test | verified | wdg_test.v (pass) |
 | REQ-WDG-002 | B | test | verified | wdg_test.v (pass) |
@@ -90,8 +90,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-MODE-002 | | ✓ | | |
 | REQ-MODE-003 | | ✓ | | |
 | REQ-INV-001 | | | | ✓ |
-| REQ-INV-002 | | | | ✓ |
-| REQ-INV-003 | | | | ✓ |
+| REQ-INV-002 | | | | |
+| REQ-INV-003 | | | | |
 | REQ-INV-004 | | | | ✓ |
 | REQ-INV-005 | | | · | |
 | REQ-NM-001 | | ✓ | | |
@@ -112,7 +112,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-COMMS-003 | · | ✓ | | |
 | SYS-REQ-SAFE-001 | · | ✓ | | |
 | SYS-REQ-SAFE-002 | | | | |
-| SYS-REQ-SAFE-003 | | | | ✓ |
+| SYS-REQ-SAFE-003 | | | | |
 | SYS-REQ-SEC-001 | · | ✓ | | |
 | SYS-REQ-DIAG-001 | · | ✓ | | |
 | SYS-REQ-NM-001 | | | | |

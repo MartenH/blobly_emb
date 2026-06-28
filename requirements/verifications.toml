@@ -3,16 +3,17 @@
 # analysis (a command that must exit 0) and review (a sign-off) methods.
 
 [[check]]
-id = "noalloc-isolation-lint"
+id = "noalloc-driver-lint"
 method = "analysis"
 context = "static"
 command = "make lint"
+# Only what lint actually enforces: heap-backed constructs (no-alloc) and the
+# `import driver` ban in FBs. It does NOT count IOC writers (INV-002) or detect
+# cross-partition shared state (INV-003 / the derived SAFE-003) — those stay draft
+# until a real static checker exists.
 verifies = [
 	"SYS-REQ-RES-001",
-	"SYS-REQ-SAFE-003",
 	"REQ-INV-001",
-	"REQ-INV-002",
-	"REQ-INV-003",
 	"REQ-INV-004",
 ]
 
