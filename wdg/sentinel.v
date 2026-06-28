@@ -63,8 +63,12 @@ pub fn (mut s Supervisor) healthy(now u64) bool {
 }
 
 // service: returns true iff the hardware watchdog should be kicked now — only when
-// every entity is healthy. REQ-WDG-001; on a failure it returns false so the HW
-// watchdog times out and resets the ECU. REQ-WDG-004.
+// every entity is healthy (REQ-WDG-001). A failure latches `tripped`, and the
+// service stays withheld from then on even if the entity recovers, so the HW
+// watchdog always times out and resets the ECU. REQ-WDG-004.
 pub fn (mut s Supervisor) service(now u64) bool {
+	if s.tripped {
+		return false // latched: a prior supervision failure keeps the dog hungry
+	}
 	return s.healthy(now)
 }

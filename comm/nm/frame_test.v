@@ -71,24 +71,40 @@ fn test_rmr_resync() {
 	assert n.state == .repeat_message // re-synchronised
 }
 
-// REQ-NM-010: a partial network is demanded while any node requests it.
+// REQ-NM-010: a partial network is demanded while any node requests it, and stops
+// being demanded once the requesting node clears it OR goes silent.
 fn test_partial_network_demand() {
 	mut n := Nm{
 		cfg: tcfg
 	}
 	// local request for PN 2
-	assert n.pn_demanded(2, u64(1) << 2)
-	assert !n.pn_demanded(5, u64(1) << 2)
-	// a remote node requests PN 5
+	assert n.pn_demanded(0, 2, u64(1) << 2)
+	assert !n.pn_demanded(0, 5, u64(1) << 2)
+	// a remote node (9) requests PN 5
 	n.on_frame(0, Frame{
 		nid: 9
 		cbv: cbv_pn_info
 		pn:  u64(1) << 5
 	})
-	assert n.pn_demanded(5, 0) // demanded by the remote node
-	// once asleep, remote demand clears
+	assert n.pn_demanded(0, 5, 0)
+	// node 9 later sends a frame with PN 5 cleared -> no longer demanded (replace, not OR)
+	n.on_frame(10, Frame{
+		nid: 9
+		cbv: cbv_pn_info
+		pn:  0
+	})
+	assert !n.pn_demanded(10, 5, 0)
+	// it requests PN 5 again, then goes silent past the timeout -> demand expires
+	n.on_frame(20, Frame{
+		nid: 9
+		cbv: cbv_pn_info
+		pn:  u64(1) << 5
+	})
+	assert n.pn_demanded(20, 5, 0)
+	assert !n.pn_demanded(20 + tcfg.timeout_us + 1, 5, 0) // silent too long
+	// and once asleep everything clears
 	n.enter(.bus_sleep, 0)
-	assert !n.pn_demanded(5, 0)
+	assert !n.pn_demanded(0, 5, 0)
 }
 
 // REQ-NM-005: NM reports its current network state.

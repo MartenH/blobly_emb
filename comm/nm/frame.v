@@ -5,6 +5,9 @@ module nm
 // to received control bits. Byte offsets here are the default layout; a partition
 // can place NID/CBV elsewhere per config (see docs/nm.md). No-alloc: a value type.
 
+// Most remote nodes whose partial-network demand we track per network.
+pub const max_nm_nodes = 32
+
 // Control Bit Vector (byte 1) bits.
 pub const cbv_repeat_msg_request = u8(0x01) // bit 0 — ask the cluster to re-announce
 pub const cbv_ready_to_sleep     = u8(0x08) // bit 3 — sender has released the network
@@ -66,24 +69,59 @@ pub fn (n Nm) build_frame(node_id u8, pn_local u64) Frame {
 }
 
 // on_frame feeds a received NM frame into the state machine: it keeps the network
-// awake (on_rx), absorbs the remote PN demand, and re-syncs on a repeat-message
-// request. The partition glue calls this on reception of an NM-range frame.
+// awake (on_rx), records this node's partial-network request (replacing its
+// previous one), and re-syncs on a repeat-message request. The partition glue
+// calls this on reception of an NM-range frame.
 pub fn (mut n Nm) on_frame(now u64, f Frame) {
 	n.on_rx(now)
-	n.pn_remote |= f.pn
+	// only bytes 2..7 of a PN-info frame are a PN mask; otherwise this node
+	// requests nothing — record an empty mask so its old request decays.
+	mask := if f.cbv & cbv_pn_info != 0 { f.pn } else { u64(0) }
+	n.set_pn(f.nid, mask, now)
 	if f.cbv & cbv_repeat_msg_request != 0 && n.state != .repeat_message {
 		n.enter(.repeat_message, now)
 	}
 }
 
-// pn_demanded reports whether partial network `idx` (0..47) is requested by any
-// node — locally (`pn_local`) or by a node we have heard from.
-pub fn (n Nm) pn_demanded(idx int, pn_local u64) bool {
+// set_pn records node `nid`'s latest PN request, REPLACING any previous one from
+// the same node (so a cleared request actually clears) and stamping the time.
+fn (mut n Nm) set_pn(nid u8, mask u64, now u64) {
+	if nid == 0 {
+		return
+	}
+	mut free := -1
+	for i in 0 .. max_nm_nodes {
+		if n.pn_nid[i] == nid {
+			n.pn_mask[i] = mask
+			n.pn_seen[i] = now
+			return
+		}
+		if free < 0 && n.pn_nid[i] == 0 {
+			free = i
+		}
+	}
+	if free >= 0 {
+		n.pn_nid[free] = nid
+		n.pn_mask[free] = mask
+		n.pn_seen[free] = now
+	}
+}
+
+// pn_demanded reports whether partial network `idx` (0..47) is requested at `now`
+// by any node — locally (`pn_local`) or by a remote node heard from within the NM
+// timeout. A node that clears its request or goes silent stops counting, so a PN
+// can sleep once no node needs it. REQ-NM-010.
+pub fn (n Nm) pn_demanded(now u64, idx int, pn_local u64) bool {
 	if idx < 0 || idx > 47 {
 		return false
 	}
-	bit := u64(1) << u64(idx)
-	return (pn_local | n.pn_remote) & bit != 0
+	mut agg := pn_local
+	for i in 0 .. max_nm_nodes {
+		if n.pn_nid[i] != 0 && now - n.pn_seen[i] <= n.cfg.timeout_us {
+			agg |= n.pn_mask[i]
+		}
+	}
+	return agg & (u64(1) << u64(idx)) != 0
 }
 
 // report returns the current network state for the ECU manager (Conductor).
