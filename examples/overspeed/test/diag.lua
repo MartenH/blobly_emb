@@ -1,6 +1,5 @@
 -- UDS (ISO 14229) over ISO-TP on vcan0: drive the diag connection (Request 0x101
 -- -> Response 0x102) with cantester's UDS client. Exercises the service dispatch
--- @verifies SYS-REQ-DIAG-001
 -- AND multi-frame segmentation (the 19-byte and 20-byte DIDs span several frames).
 local function diag()
   return uds.open("CAN1", { tx = 0x101, rx = 0x102 })

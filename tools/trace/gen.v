@@ -156,20 +156,23 @@ fn main() {
 	contexts.sort()
 
 	// 3) direct coverage status per requirement
+	// A requirement is verified only when EVERY linked verification has passed; a
+	// single pending (unrun lua / unapproved review) one keeps it covered, and any
+	// failure makes it failed. (Per-context coverage still shows in the matrix.)
 	direct := fn (vs []Verif) string {
 		if vs.len == 0 {
 			return 'uncovered'
 		}
-		mut pass := false
+		mut all_pass := true
 		for v in vs {
 			if v.result == 'fail' {
 				return 'failed'
 			}
-			if v.result == 'pass' || v.result == 'approved' {
-				pass = true
+			if v.result != 'pass' && v.result != 'approved' {
+				all_pass = false
 			}
 		}
-		return if pass { 'verified' } else { 'covered' }
+		return if all_pass { 'verified' } else { 'covered' }
 	}
 	mut st := map[string]string{}
 	for r in reqs {

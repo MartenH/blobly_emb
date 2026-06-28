@@ -1,6 +1,6 @@
 -- Integration test: drive the blobly `overspeed` example on vcan0 and assert the
 -- WarnLamp (raw frame 0x101, byte0). Run headless by cantester_v.
--- @verifies SYS-REQ-COMMS-001, SYS-REQ-COMMS-002, SYS-REQ-COMMS-003
+-- @verifies SYS-REQ-COMMS-001, SYS-REQ-COMMS-002
 local CH, LAMP = "CAN1", 0x110
 
 -- drain all buffered frames, return the LATEST lamp byte seen (or nil)
