@@ -44,8 +44,24 @@ static blob_can_ring rx_ring[BLOB_CAN_BUSES];
 
 int blob_can_open(const char *name, int fd_mode) {
 	(void)fd_mode; /* classic/FD is fixed by the L-PDU's CanIf config */
-	int idx = (name && name[0]) ? atoi(name) : 0;
-	if (idx < 0 || idx >= BLOB_CAN_BUSES) return -1;
+	if (!name || !name[0])
+		return -1;
+	/* Take the trailing decimal suffix as the bus index ("vcan1" -> 1, "can0" -> 0,
+	 * "2" -> 2). Reject a name with no numeric suffix rather than parsing it as 0:
+	 * atoi("vcan1") == 0 would have aliased both logical channels onto bus 0. */
+	int len = 0;
+	while (name[len])
+		len++;
+	int start = len;
+	while (start > 0 && name[start - 1] >= '0' && name[start - 1] <= '9')
+		start--;
+	if (start == len)
+		return -1; /* no numeric suffix */
+	int idx = 0;
+	for (int i = start; i < len; i++)
+		idx = idx * 10 + (name[i] - '0');
+	if (idx < 0 || idx >= BLOB_CAN_BUSES)
+		return -1;
 	CanIf_SetControllerMode(bus_controller[idx], CANIF_CS_STARTED);
 	return idx;
 }
