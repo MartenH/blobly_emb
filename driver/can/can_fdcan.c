@@ -58,7 +58,10 @@ int blob_can_open(const char *name, int fd_mode) {
 	FDCAN_GlobalTypeDef *c = inst(idx);
 	if (!c)
 		return -1;
-	(void)fd_mode; /* classic CAN; FD is a future extension (bigger elements + DBTP) */
+	/* Classic CAN only for now (FD = bigger elements + DBTP, a future extension).
+	 * Reject an FD bus at open rather than silently downgrade it to classic. */
+	if (fd_mode)
+		return -1;
 
 	uint32_t off = region_off(idx);
 
