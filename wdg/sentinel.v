@@ -24,9 +24,14 @@ pub mut:
 	tripped       bool // latched once a supervision failure is seen
 }
 
-// checkpoint: entity `id` reports alive at `now`.
+// checkpoint: entity `id` reports alive at `now`. A checkpoint that arrives after
+// its period has already elapsed latches the miss, so a late recovery between
+// service() polls can't mask it. REQ-WDG-002.
 pub fn (mut s Supervisor) checkpoint(id int, now u64) {
 	if id >= 0 && id < s.n {
+		if now - s.last_alive_us[id] > s.cfg[id].period_us {
+			s.tripped = true
+		}
 		s.last_alive_us[id] = now
 	}
 }
@@ -39,8 +44,12 @@ pub fn (mut s Supervisor) start(id int, now u64) {
 	}
 }
 
-pub fn (mut s Supervisor) finish(id int) {
+pub fn (mut s Supervisor) finish(id int, now u64) {
 	if id >= 0 && id < s.n {
+		if s.active[id] && s.cfg[id].deadline_us > 0
+			&& now - s.start_us[id] > s.cfg[id].deadline_us {
+			s.tripped = true // completed past its deadline — latch the overrun
+		}
 		s.active[id] = false
 	}
 }

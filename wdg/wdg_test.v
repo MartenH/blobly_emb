@@ -65,8 +65,29 @@ fn test_activity_finishes_in_time() {
 	s.checkpoint(0, 90)
 	s.checkpoint(1, 90)
 	s.start(1, 90)
-	s.finish(1) // done well within the deadline
+	s.finish(1, 100) // done well within the 50us deadline
 	s.checkpoint(0, 120)
 	s.checkpoint(1, 120)
 	assert s.service(130)
+}
+
+// REQ-WDG-002: a late alive checkpoint (arriving after the window) latches the
+// miss even though the entity recovered before the next service() poll.
+fn test_late_checkpoint_latches() {
+	mut s := two_entities()
+	s.checkpoint(1, 250) // 250 - 0 > 100us period -> miss latched at checkpoint time
+	assert s.tripped
+	assert !s.service(260)
+}
+
+// REQ-WDG-003: finishing an activity past its deadline latches the overrun even
+// if it completes before the next poll.
+fn test_finish_past_deadline_latches() {
+	mut s := two_entities()
+	s.checkpoint(0, 90)
+	s.checkpoint(1, 90)
+	s.start(1, 90)
+	s.finish(1, 200) // 110us later, past the 50us deadline -> latched
+	assert s.tripped
+	assert !s.service(210)
 }
