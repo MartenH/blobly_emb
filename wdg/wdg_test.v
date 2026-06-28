@@ -47,6 +47,18 @@ fn test_deadline_exceeded_withholds_service() {
 	assert s.tripped
 }
 
+// REQ-WDG-004: a trip latches — the service stays withheld even after the entity
+// recovers, so the hardware watchdog reset is not averted by a transient miss.
+fn test_trip_latches() {
+	mut s := two_entities()
+	s.checkpoint(0, 80) // entity 1 misses its window
+	assert !s.service(200)
+	assert s.tripped
+	s.checkpoint(0, 210) // both recover...
+	s.checkpoint(1, 210)
+	assert !s.service(220) // ...but the latch holds -> HW watchdog still resets
+}
+
 // REQ-WDG-003: finishing the activity before the deadline keeps it healthy.
 fn test_activity_finishes_in_time() {
 	mut s := two_entities()
