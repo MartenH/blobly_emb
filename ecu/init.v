@@ -26,7 +26,8 @@ pub mut:
 //   REQ-INIT-002 — a phase is not started before its declared deps are done.
 //   REQ-INIT-003 — on a failure, stop and record the failing phase index.
 pub fn (mut s InitSeq) run(phases [max_phases]Phase, n int) bool {
-	for i := 0; i < n; i++ {
+	count := if n > max_phases { max_phases } else { n } // never index past the table
+	for i := 0; i < count; i++ {
 		p := phases[i]
 		if p.deps & s.done != p.deps {
 			s.failed = i // a dependency was not initialised before this phase
@@ -44,7 +45,8 @@ pub fn (mut s InitSeq) run(phases [max_phases]Phase, n int) bool {
 // stop tears down the completed phases in the REVERSE of init order.
 //   REQ-ECU-005 — shut down in the reverse of the init order.
 pub fn (mut s InitSeq) stop(phases [max_phases]Phase, n int) {
-	for i := n - 1; i >= 0; i-- {
+	count := if n > max_phases { max_phases } else { n }
+	for i := count - 1; i >= 0; i-- {
 		if s.done & (u32(1) << u32(i)) != 0 {
 			phases[i].stop()
 			s.done &= ~(u32(1) << u32(i))

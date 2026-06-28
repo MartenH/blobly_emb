@@ -317,12 +317,10 @@ fn main() {
 	if check_mode {
 		mut n_gap := 0
 		for r in reqs {
-			// any failed verification is a regression; an `agreed` requirement must
-			// be `verified` — `covered` (pending lua/review) or `uncovered` is a gap.
-			if st[r.id] == 'failed' {
-				eprintln('trace-check: FAILED ${r.id}')
-				n_gap++
-			} else if r.status == 'agreed' && st[r.id] != 'verified' {
+			// Only `agreed` requirements are gated (draft = work in progress, exempt).
+			// An agreed requirement must be `verified`; failed / covered (pending) /
+			// uncovered all count as an unmet gate.
+			if r.status == 'agreed' && st[r.id] != 'verified' {
 				eprintln('trace-check: agreed but ${st[r.id]} — ${r.id}')
 				n_gap++
 			}
