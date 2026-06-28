@@ -155,8 +155,8 @@ fn main() {
 	mut contexts := ctxset.keys()
 	contexts.sort()
 
-	// 3) compute coverage status
-	status := fn (vs []Verif) string {
+	// 3) direct coverage status per requirement
+	direct := fn (vs []Verif) string {
 		if vs.len == 0 {
 			return 'uncovered'
 		}
@@ -171,13 +171,55 @@ fn main() {
 		}
 		return if pass { 'verified' } else { 'covered' }
 	}
+	mut st := map[string]string{}
+	for r in reqs {
+		st[r.id] = direct(vmap[r.id] or { []Verif{} })
+	}
+
+	// derivation rollup (the ISO 26262 chain): a requirement with no direct pass is
+	// 'verified' once every requirement that derives from it is verified. Track those
+	// as `derived` so the report shows how they were met.
+	mut children := map[string][]string{}
+	for r in reqs {
+		if r.derives != '' {
+			children[r.derives] << r.id
+		}
+	}
+	mut derived := map[string]bool{}
+	for {
+		mut changed := false
+		for r in reqs {
+			if st[r.id] == 'verified' || st[r.id] == 'failed' {
+				continue
+			}
+			ch := children[r.id] or { []string{} }
+			if ch.len == 0 {
+				continue
+			}
+			mut all := true
+			for c in ch {
+				if st[c] != 'verified' {
+					all = false
+					break
+				}
+			}
+			if all {
+				st[r.id] = 'verified'
+				derived[r.id] = true
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
 
 	mut n_verified := 0
 	mut n_covered := 0
 	mut n_uncovered := 0
 	mut n_failed := 0
 	for r in reqs {
-		match status(vmap[r.id] or { []Verif{} }) {
+		match st[r.id] {
 			'verified' { n_verified++ }
 			'covered' { n_covered++ }
 			'failed' { n_failed++ }
@@ -206,13 +248,15 @@ fn main() {
 	b << '|---|---|---|---|---|'
 	for r in reqs {
 		vs := vmap[r.id] or { []Verif{} }
-		st := status(vs)
 		mut srcs := []string{}
 		for v in vs {
 			srcs << '${v.source} (${v.result})'
 		}
-		joined := if srcs.len > 0 { srcs.join(', ') } else { '—' }
-		b << '| ${r.id} | ${r.asil} | ${r.method} | ${st} | ${joined} |'
+		mut joined := if srcs.len > 0 { srcs.join(', ') } else { '—' }
+		if derived[r.id] {
+			joined = '↳ derived (all children verified)'
+		}
+		b << '| ${r.id} | ${r.asil} | ${r.method} | ${st[r.id]} | ${joined} |'
 	}
 	b << ''
 	b << '## Matrix — requirement × execution context'
@@ -261,8 +305,20 @@ fn main() {
 	os.write_file('docs/traceability.md', b.join('\n')) or { panic(err) }
 	println('trace: ${reqs.len} reqs — ${n_verified} verified, ${n_covered} covered, ${n_uncovered} uncovered, ${n_failed} failed -> docs/traceability.md')
 
-	if check_mode && n_failed > 0 {
-		eprintln('trace-check: ${n_failed} requirement(s) FAILED verification')
-		exit(1)
+	if check_mode {
+		mut n_gap := 0
+		for r in reqs {
+			if st[r.id] == 'failed' {
+				eprintln('trace-check: FAILED ${r.id}')
+				n_gap++
+			} else if st[r.id] == 'uncovered' && r.status == 'agreed' {
+				eprintln('trace-check: UNCOVERED but agreed — ${r.id}')
+				n_gap++
+			}
+		}
+		if n_gap > 0 {
+			eprintln('trace-check: ${n_gap} requirement(s) failed or uncovered-while-agreed')
+			exit(1)
+		}
 	}
 }

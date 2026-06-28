@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 52 | 34 | 9 | 9 | 0 |
+| 52 | 38 | 9 | 5 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -54,13 +54,13 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-COMMS-002 | QM | test | covered | overspeed.lua (pending) |
 | SYS-REQ-COMMS-003 | QM | test | covered | overspeed.lua (pending) |
 | SYS-REQ-SAFE-001 | B | test | covered | e2e.lua (pending) |
-| SYS-REQ-SAFE-002 | B | test | uncovered | — |
+| SYS-REQ-SAFE-002 | B | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-SAFE-003 | B | analysis | verified | noalloc-isolation-lint (pass) |
 | SYS-REQ-SEC-001 | QM | test | covered | secoc.lua (pending) |
 | SYS-REQ-DIAG-001 | QM | test | covered | diag.lua (pending) |
-| SYS-REQ-NM-001 | QM | test | uncovered | — |
-| SYS-REQ-LIFE-001 | QM | test | uncovered | — |
-| SYS-REQ-LIFE-002 | QM | test | uncovered | — |
+| SYS-REQ-NM-001 | QM | test | verified | ↳ derived (all children verified) |
+| SYS-REQ-LIFE-001 | QM | test | verified | ↳ derived (all children verified) |
+| SYS-REQ-LIFE-002 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-RES-001 | QM | analysis | verified | noalloc-isolation-lint (pass) |
 | SYS-REQ-MC-001 | QM | test | uncovered | — |
 | REQ-WDG-001 | B | test | verified | wdg_test.v (pass) |

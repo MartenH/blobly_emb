@@ -111,9 +111,13 @@ proven on real silicon.*
 
 For each requirement, gather its linked verifications and their **latest result**:
 
-- **verified** — ≥1 verification exists and all passed (in the relevant context).
+- **verified** — ≥1 verification exists and all passed (in the relevant context),
+  **or** every requirement that `derives` from it is verified (the ISO 26262
+  chain: a `SYS-REQ` is met when its derived module requirements are met —
+  shown as "↳ derived").
 - **failed** — a linked verification ran and failed (regression / not met).
-- **uncovered** — `agreed` but no verification linked yet (a gap, i.e. test debt).
+- **uncovered** — no verification linked yet. A gap (test debt) when the
+  requirement is `agreed`; expected while it is still `draft` (planned).
 
 `make trace` runs (or ingests the results of) the verifications and emits
 `docs/traceability.md`:
