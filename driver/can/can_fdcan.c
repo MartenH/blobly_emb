@@ -69,9 +69,13 @@ int blob_can_open(const char *name, int fd_mode) {
 	for (uint32_t i = 0; i < REGION_WORDS; i++)
 		ram_at(off)[i] = 0;
 
-	/* enter init + enable config change */
+	/* enter init + enable config change. Bounded: if the core never acknowledges
+	 * INIT (e.g. the FDCAN kernel clock is misconfigured), fail open() rather than
+	 * hang the ECU at startup. */
 	c->CCCR |= FDCAN_CCCR_INIT;
-	while ((c->CCCR & FDCAN_CCCR_INIT) == 0u) {
+	for (uint32_t t = 0; (c->CCCR & FDCAN_CCCR_INIT) == 0u; t++) {
+		if (t >= 1000000u)
+			return -1;
 	}
 	c->CCCR |= FDCAN_CCCR_CCE;
 	c->CCCR &= ~(FDCAN_CCCR_FDOE | FDCAN_CCCR_BRSE); /* classic */
@@ -94,9 +98,11 @@ int blob_can_open(const char *name, int fd_mode) {
 	c->TXBC = (tx_off << FDCAN_TXBC_TBSA_Pos) | (TX_ELMTS << FDCAN_TXBC_TFQS_Pos);
 	c->TXESC = 0; /* TBDS = 0 -> 8-byte data */
 
-	/* leave init -> CAN core synchronizes to the bus */
+	/* leave init -> CAN core synchronizes to the bus (bounded, same as above). */
 	c->CCCR &= ~FDCAN_CCCR_INIT;
-	while ((c->CCCR & FDCAN_CCCR_INIT) != 0u) {
+	for (uint32_t t = 0; (c->CCCR & FDCAN_CCCR_INIT) != 0u; t++) {
+		if (t >= 1000000u)
+			return -1;
 	}
 	return idx;
 }
