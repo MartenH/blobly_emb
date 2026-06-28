@@ -100,9 +100,15 @@ fn main() {
 		result := if is_lua {
 			'pending'
 		} else {
+			// Reuse the SAME V binary that is running this generator (@VEXE), not a
+			// plain `v` on PATH, so `make V=/path/to/v trace` stays consistent.
 			// -enable-globals: some deterministic unit tests record call order in a
 			// test-only global (fn-pointer tables can't capture state).
-			if os.execute('v -enable-globals test ${f}').exit_code == 0 { 'pass' } else { 'fail' }
+			if os.execute('${@VEXE} -enable-globals test ${f}').exit_code == 0 {
+				'pass'
+			} else {
+				'fail'
+			}
 		}
 		ctxset[ctx] = true
 		for id in ids {
