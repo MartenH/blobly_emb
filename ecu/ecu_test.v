@@ -151,6 +151,15 @@ fn test_lifecycle_shutdown_from_startup() {
 	assert l.step(Demand{ init_done: true, shutdown_req: true }) == .shutdown
 }
 
+// REQ-MODE-002: a bare ModeGroup literal (no new_group) is a safe empty group —
+// no phantom requests; it resolves to its default.
+fn test_mode_empty_literal_safe() {
+	mut g := ModeGroup{
+		deflt: 3
+	}
+	assert g.resolve() == 3 // no requests -> default, not slot-0 mode 0
+}
+
 // REQ-MODE-001/002: highest priority request is resolved and published.
 fn test_mode_priority() {
 	mut g := new_group(0)
