@@ -132,11 +132,12 @@ REQ-CAN-DRV-002 test           ✓               ·
 REQ-INV-001     analysis      ✓ (make lint)    n/a        (verified)
 ```
 
-`make trace-check` is the CI gate: **fail** if any requirement is `failed`, or if
-any `agreed` requirement is not `verified` — `covered` (linked but its lua/review
-evidence has not run+passed) counts as a gap too, because only a *passed*
+`make trace-check` is the CI gate: **fail** if any **`agreed`** requirement is not
+`verified` — `failed`, `covered` (linked but its lua/review evidence has not
+run+passed), and `uncovered` all count as gaps, because only a *passed*
 verification fulfils a requirement. Requirements still being worked sit at `draft`
-(not gated) until their verification runs green, then move to `agreed`.
+and are **not gated at all** (their failing/pending evidence won't block CI) until
+they go green, at which point you promote them to `agreed`.
 
 ## Status lifecycle
 

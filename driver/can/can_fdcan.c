@@ -116,6 +116,8 @@ int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int fd_m
 		return -1; /* Tx FIFO full */
 
 	uint32_t pi = (c->TXFQS & FDCAN_TXFQS_TFQPI) >> FDCAN_TXFQS_TFQPI_Pos;
+	if (pi >= TX_ELMTS)
+		return -1; /* out-of-range index from a misbehaving peripheral: never write past our slice */
 	uint32_t tx_off = region_off(h) + RX0_ELMTS * ELMT_WORDS;
 	volatile uint32_t *e = ram_at(tx_off + pi * ELMT_WORDS);
 
@@ -145,6 +147,8 @@ int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
 		return -1; /* FIFO0 empty */
 
 	uint32_t gi = (s & FDCAN_RXF0S_F0GI) >> FDCAN_RXF0S_F0GI_Pos;
+	if (gi >= RX0_ELMTS)
+		return -1; /* out-of-range index from a misbehaving peripheral: don't read past our slice */
 	volatile uint32_t *e = ram_at(region_off(h) + gi * ELMT_WORDS);
 
 	uint32_t r0 = e[0], r1 = e[1];
