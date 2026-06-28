@@ -27,6 +27,27 @@ static FDCAN_HandleTypeDef *bus_handle(int idx) {
 	}
 }
 
+/* A length is representable only as an exact CAN/CAN-FD DLC: 0..8, or
+ * 12,16,20,24,32,48,64. A length like 9..11 would be padded up to the next DLC
+ * here, but the generated bridge matches the literal DBC length on rx, so the
+ * frame would be discarded. Reject it instead of silently changing the length. */
+static int dlc_exact(uint8_t len) {
+	if (len <= 8)
+		return 1;
+	switch (len) {
+	case 12:
+	case 16:
+	case 20:
+	case 24:
+	case 32:
+	case 48:
+	case 64:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
 /* byte count <-> HAL DLC code (the code lives in bits [19:16] of DataLength). */
 static uint32_t len_to_dlc(uint8_t len) {
 	if (len <= 8)  return (uint32_t)len << 16;   /* FDCAN_DLC_BYTES_0..8 */
@@ -66,6 +87,7 @@ int blob_can_open(const char *name, int fd_mode) {
 int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int fd_mode) {
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
 	if (!hf) return -1;
+	if (!dlc_exact(len)) return -1; /* don't pad to a different on-wire length */
 	FDCAN_TxHeaderTypeDef tx;
 	tx.Identifier          = id & 0x1FFFFFFFu;
 	tx.IdType              = (id > 0x7FFu) ? FDCAN_EXTENDED_ID : FDCAN_STANDARD_ID;
