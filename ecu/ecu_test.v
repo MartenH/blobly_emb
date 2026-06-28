@@ -135,6 +135,15 @@ fn test_lifecycle_wake() {
 	assert l.step(Demand{ wakeup: true }) == .run
 }
 
+// REQ-ECU-005: a shutdown request reaches Shutdown from Sleep (not only from Run),
+// so the ordered teardown is never skipped.
+fn test_lifecycle_shutdown_from_sleep() {
+	mut l := Lifecycle{
+		mode: .sleep
+	}
+	assert l.step(Demand{ wakeup: true, shutdown_req: true }) == .shutdown
+}
+
 // REQ-MODE-001/002: highest priority request is resolved and published.
 fn test_mode_priority() {
 	mut g := new_group(0)
