@@ -1,0 +1,37 @@
+# Supervision / watchdog (Sentinel): alive + deadline supervision -> HW watchdog.
+
+[[req]]
+id = "REQ-WDG-001"
+title = "Service only when all alive"
+text = "The supervisor shall service the hardware watchdog only when every supervised entity has reported alive within its configured period."
+status = "agreed"
+method = "test"
+asil = "B"
+derives = "SYS-REQ-SAFE-002"
+
+[[req]]
+id = "REQ-WDG-002"
+title = "Alive supervision"
+text = "The supervisor shall detect a supervised entity that misses its alive checkpoint."
+status = "agreed"
+method = "test"
+asil = "B"
+derives = "SYS-REQ-SAFE-002"
+
+[[req]]
+id = "REQ-WDG-003"
+title = "Deadline supervision"
+text = "The supervisor shall detect a supervised entity whose execution exceeds its configured deadline."
+status = "agreed"
+method = "test"
+asil = "B"
+derives = "SYS-REQ-SAFE-002"
+
+[[req]]
+id = "REQ-WDG-004"
+title = "Withhold service on failure"
+text = "On a supervision failure the supervisor shall withhold the watchdog service so the hardware watchdog resets the ECU."
+status = "agreed"
+method = "test"
+asil = "B"
+derives = "SYS-REQ-SAFE-002"

@@ -1,0 +1,46 @@
+# Runtime invariants (INV): properties of the whole runtime, mostly verified by
+# static analysis (`make lint`) or review rather than a functional test.
+
+[[req]]
+id = "REQ-INV-001"
+title = "No dynamic allocation"
+text = "Runtime code (comm, loom, generated code, and Function Blocks) shall perform no dynamic memory allocation."
+status = "agreed"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-RES-001"
+
+[[req]]
+id = "REQ-INV-002"
+title = "Single-writer IOC"
+text = "Each IOC channel shall have exactly one producing partition."
+status = "draft"
+method = "analysis"
+asil = "B"
+derives = "SYS-REQ-SAFE-003"
+
+[[req]]
+id = "REQ-INV-003"
+title = "Cross-partition via IOC only"
+text = "A Function Block shall access another partition's data only through the IOC."
+status = "draft"
+method = "analysis"
+asil = "B"
+derives = "SYS-REQ-SAFE-003"
+
+[[req]]
+id = "REQ-INV-004"
+title = "FBs free of drivers"
+text = "A Function Block shall not import a driver."
+status = "agreed"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-SAFE-003"
+
+[[req]]
+id = "REQ-INV-005"
+title = "No AUTOSAR vocabulary"
+text = "Developer-facing names shall not adopt AUTOSAR module vocabulary."
+status = "draft"
+method = "review"
+asil = "QM"

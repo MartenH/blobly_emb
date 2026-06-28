@@ -1,0 +1,104 @@
+# ECU lifecycle (Conductor): state management (ECU), deterministic init (INIT),
+# and mode arbitration (MODE). One module, three capability areas.
+
+# --- ECU lifecycle states -----------------------------------------------------
+
+[[req]]
+id = "REQ-ECU-001"
+title = "Lifecycle states"
+text = "The ECU manager shall sequence the ECU through the states Startup, Run, Sleep, and Shutdown."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-LIFE-001"
+
+[[req]]
+id = "REQ-ECU-002"
+title = "Run after init"
+text = "The ECU manager shall enter Run only after all configured init phases have completed successfully."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-LIFE-001"
+
+[[req]]
+id = "REQ-ECU-003"
+title = "Run to Sleep gating"
+text = "The ECU manager shall transition from Run toward Sleep only when no function requires any network and no diagnostic session is active."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-LIFE-002"
+
+[[req]]
+id = "REQ-ECU-004"
+title = "Wake to Run"
+text = "The ECU manager shall transition from Sleep to Run on a configured wake-up source."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-LIFE-002"
+
+[[req]]
+id = "REQ-ECU-005"
+title = "Ordered shutdown"
+text = "On a shut-down request the ECU manager shall stop communication and supervision in the reverse of the init order."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-LIFE-001"
+
+# --- Deterministic init order -------------------------------------------------
+
+[[req]]
+id = "REQ-INIT-001"
+title = "Deterministic order"
+text = "The init sequence shall initialise modules in a configured, deterministic order."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-LIFE-001"
+
+[[req]]
+id = "REQ-INIT-002"
+title = "Dependencies first"
+text = "The init sequence shall not start a module before all of its declared dependencies are initialised."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-LIFE-001"
+
+[[req]]
+id = "REQ-INIT-003"
+title = "Halt on init failure"
+text = "If a module's initialisation fails, the init sequence shall stop and report the failing module rather than continue."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-LIFE-001"
+
+# --- Mode arbitration ---------------------------------------------------------
+
+[[req]]
+id = "REQ-MODE-001"
+title = "Resolve requests"
+text = "The mode arbiter shall resolve concurrent requests within a mode group into a single active mode using configured priority."
+status = "agreed"
+method = "test"
+asil = "QM"
+
+[[req]]
+id = "REQ-MODE-002"
+title = "Publish active modes"
+text = "The mode arbiter shall publish the active modes so communication and network management are gated accordingly."
+status = "agreed"
+method = "test"
+asil = "QM"
+
+[[req]]
+id = "REQ-MODE-003"
+title = "Request and release"
+text = "A function shall be able to request and release a mode (for example a required network or diagnostic mode) through the arbiter."
+status = "agreed"
+method = "test"
+asil = "QM"
