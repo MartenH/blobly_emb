@@ -41,7 +41,9 @@ fn (d Demand) any_demand() bool {
 pub fn (mut l Lifecycle) step(d Demand) Mode {
 	match l.mode {
 		.startup {
-			if d.init_done {
+			if d.shutdown_req {
+				l.mode = .shutdown // abort bring-up on a power-down request
+			} else if d.init_done {
 				l.mode = .run
 			}
 		}
