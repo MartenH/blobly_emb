@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 52 | 38 | 9 | 5 | 0 |
+| 52 | 42 | 5 | 5 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -52,12 +52,12 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NM-013 | QM | test | verified | frame_test.v (pass) |
 | SYS-REQ-COMMS-001 | QM | test | covered | overspeed.lua (pending) |
 | SYS-REQ-COMMS-002 | QM | test | covered | overspeed.lua (pending) |
-| SYS-REQ-COMMS-003 | QM | test | covered | overspeed.lua (pending) |
-| SYS-REQ-SAFE-001 | B | test | covered | e2e.lua (pending) |
+| SYS-REQ-COMMS-003 | QM | test | verified | overspeed.lua (pending), com_test.v (pass) |
+| SYS-REQ-SAFE-001 | B | test | verified | e2e.lua (pending), e2e_test.v (pass) |
 | SYS-REQ-SAFE-002 | B | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-SAFE-003 | B | analysis | verified | noalloc-isolation-lint (pass) |
-| SYS-REQ-SEC-001 | QM | test | covered | secoc.lua (pending) |
-| SYS-REQ-DIAG-001 | QM | test | covered | diag.lua (pending) |
+| SYS-REQ-SEC-001 | QM | test | verified | secoc.lua (pending), secoc_test.v (pass) |
+| SYS-REQ-DIAG-001 | QM | test | verified | diag.lua (pending), uds_test.v (pass) |
 | SYS-REQ-NM-001 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-LIFE-001 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-LIFE-002 | QM | test | verified | ↳ derived (all children verified) |
@@ -109,12 +109,12 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NM-013 | | ✓ | | |
 | SYS-REQ-COMMS-001 | · | | | |
 | SYS-REQ-COMMS-002 | · | | | |
-| SYS-REQ-COMMS-003 | · | | | |
-| SYS-REQ-SAFE-001 | · | | | |
+| SYS-REQ-COMMS-003 | · | ✓ | | |
+| SYS-REQ-SAFE-001 | · | ✓ | | |
 | SYS-REQ-SAFE-002 | | | | |
 | SYS-REQ-SAFE-003 | | | | ✓ |
-| SYS-REQ-SEC-001 | · | | | |
-| SYS-REQ-DIAG-001 | · | | | |
+| SYS-REQ-SEC-001 | · | ✓ | | |
+| SYS-REQ-DIAG-001 | · | ✓ | | |
 | SYS-REQ-NM-001 | | | | |
 | SYS-REQ-LIFE-001 | | | | |
 | SYS-REQ-LIFE-002 | | | | |

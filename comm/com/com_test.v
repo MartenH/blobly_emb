@@ -1,5 +1,7 @@
 module com
 
+// @verifies SYS-REQ-COMMS-003
+
 fn payload(b u8) [max_pdu]u8 {
 	mut d := [max_pdu]u8{}
 	d[0] = b

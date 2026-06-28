@@ -133,7 +133,10 @@ REQ-INV-001     analysis      ✓ (make lint)    n/a        (verified)
 ```
 
 `make trace-check` is the CI gate: **fail** if any requirement is `failed`, or if
-any `agreed` requirement is `uncovered`.
+any `agreed` requirement is not `verified` — `covered` (linked but its lua/review
+evidence has not run+passed) counts as a gap too, because only a *passed*
+verification fulfils a requirement. Requirements still being worked sit at `draft`
+(not gated) until their verification runs green, then move to `agreed`.
 
 ## Status lifecycle
 

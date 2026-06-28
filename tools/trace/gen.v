@@ -308,16 +308,18 @@ fn main() {
 	if check_mode {
 		mut n_gap := 0
 		for r in reqs {
+			// any failed verification is a regression; an `agreed` requirement must
+			// be `verified` — `covered` (pending lua/review) or `uncovered` is a gap.
 			if st[r.id] == 'failed' {
 				eprintln('trace-check: FAILED ${r.id}')
 				n_gap++
-			} else if st[r.id] == 'uncovered' && r.status == 'agreed' {
-				eprintln('trace-check: UNCOVERED but agreed — ${r.id}')
+			} else if r.status == 'agreed' && st[r.id] != 'verified' {
+				eprintln('trace-check: agreed but ${st[r.id]} — ${r.id}')
 				n_gap++
 			}
 		}
 		if n_gap > 0 {
-			eprintln('trace-check: ${n_gap} requirement(s) failed or uncovered-while-agreed')
+			eprintln('trace-check: ${n_gap} agreed requirement(s) not verified')
 			exit(1)
 		}
 	}
