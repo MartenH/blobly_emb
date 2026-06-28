@@ -1,6 +1,5 @@
 -- SecOC: the bridge authenticates SecureFrame (0x130) — byte0 Status, byte1
 -- freshness, bytes2-5 a truncated AES-CMAC. The MAC's correctness is proven
--- @verifies SYS-REQ-SEC-001
 -- against FIPS-197 / RFC 4493 vectors in comm/secoc's unit tests; here we confirm
 -- on the wire that authenticated frames flow with an advancing freshness counter
 -- and a freshness-dependent MAC (not a constant), and that Status tracks the lamp.
