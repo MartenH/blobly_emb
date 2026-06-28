@@ -27,6 +27,13 @@ The V `_start` that V normally emits for freestanding Linux is amd64-only and
 [now correctly compiles out on non-x86](https://github.com/vlang/v/pull/27564), so
 **our** `Reset_Handler` is the entry point — that fix is what makes this build.
 
+`Reset_Handler` calls **`main__main()`** (V's `fn main` body) directly, *not* V's
+`int main(int,char**)` wrapper — that wrapper runs `_vinit` (arg/global setup for
+a hosted OS), which faults bare-metal. Since `main.v` only calls C shims it needs
+none of that, and skipping it lets the linker dead-strip the whole hosted runtime
+(the image is ~**284 bytes**, not ~27 KB). This is the right pattern for any
+bare-metal V whose `main` only touches C/registers.
+
 ## Prerequisites
 
 ```sh
@@ -47,7 +54,8 @@ The onboard **ST-LINK-V3E** needs no external probe. On **WSL2**, USB doesn't re
 Linux by default: either attach the ST-LINK with `usbipd-win`, or just run `make`
 in WSL and flash `build/blinky.bin` from Windows (st-flash / probe-rs / CubeProgrammer CLI).
 
-Expected: **LD1 (green) and LD2 (red) blink together at ~1 Hz**.
+Expected: **LD1 (green) and LD2 (red) blink together at ~1 Hz**. ✅ Confirmed on
+hardware (STM32H735G-DK).
 
 ## Debugging
 
@@ -91,6 +99,5 @@ Windows and point Cortex-Debug at it — the same USB caveat as flashing.
   Tune the multiplier in `board.c` if the blink rate looks off.
 - **Warnings**: V's freestanding C emits a few benign warnings (unused builtin
   functions, 64-bit pointer-cast notes). The link is clean — no undefined symbols.
-- Verified locally to produce a valid image: initial SP `0x20020000`, reset
-  vector into flash with the thumb bit set, fully linked. Flashing/running on
-  the board is the user's confirmation step.
+- Verified on hardware: built (initial SP `0x20020000`, reset vector into flash,
+  fully linked), flashed over the onboard ST-LINK-V3E, and both LEDs blink.
