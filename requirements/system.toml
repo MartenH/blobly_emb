@@ -6,7 +6,7 @@
 id = "SYS-REQ-COMMS-001"
 title = "CAN frame exchange"
 text = "The ECU shall exchange CAN frames on each configured CAN bus."
-status = "agreed"
+status = "draft"
 method = "test"
 asil = "QM"
 
@@ -14,7 +14,7 @@ asil = "QM"
 id = "SYS-REQ-COMMS-002"
 title = "Signals in physical units"
 text = "The ECU shall present received bus signals to the application in physical units."
-status = "agreed"
+status = "draft"
 method = "test"
 asil = "QM"
 

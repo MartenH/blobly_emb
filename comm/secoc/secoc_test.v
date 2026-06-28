@@ -1,5 +1,7 @@
 module secoc
 
+// @verifies SYS-REQ-SEC-001
+
 fn eq16(a [16]u8, b [16]u8) bool {
 	for i in 0 .. 16 {
 		if a[i] != b[i] {
