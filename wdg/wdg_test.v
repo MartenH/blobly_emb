@@ -20,6 +20,24 @@ fn two_entities() Supervisor {
 	return s
 }
 
+// REQ-WDG-001: the watchdog is not serviced until EVERY entity has reported alive
+// at least once — a partition hung before its first checkpoint must not be masked.
+fn test_unseen_entity_withholds_service() {
+	mut s := Supervisor{
+		n: 2
+	}
+	s.cfg[0] = Entity{
+		period_us: 100
+	}
+	s.cfg[1] = Entity{
+		period_us: 100
+	}
+	s.checkpoint(0, 10) // only entity 0 reports; entity 1 never has
+	assert !s.service(20) // within entity 1's period, but it was never seen -> withhold
+	s.checkpoint(1, 20) // now both have reported
+	assert s.service(30)
+}
+
 // REQ-WDG-001: the watchdog is serviced only while every entity is alive.
 fn test_service_when_all_alive() {
 	mut s := two_entities()
