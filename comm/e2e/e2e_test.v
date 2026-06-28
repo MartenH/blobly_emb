@@ -1,5 +1,7 @@
 module e2e
 
+// @verifies SYS-REQ-SAFE-001
+
 const id = u16(0x0123)
 const crc_pos = 1
 const ctr_pos = 2

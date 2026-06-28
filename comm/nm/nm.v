@@ -30,6 +30,12 @@ pub:
 pub mut:
 	state          State = .bus_sleep
 	requested      bool // local "I need the bus awake" flag
+	active_woke    bool // did WE wake the network (local request) vs passively (rx)?
+	// per remote node, its latest partial-network request (replaced, not OR-ed,
+	// and expired when the node goes silent) — see frame.v.
+	pn_nid  [max_nm_nodes]u8
+	pn_mask [max_nm_nodes]u64
+	pn_seen [max_nm_nodes]u64
 	tx_armed       bool // a transmission is due as soon as we tick
 	last_tx_us     u64
 	last_activity_us u64 // last NM message tx OR rx — the inactivity timer base
@@ -46,13 +52,24 @@ fn (mut n Nm) enter(s State, now u64) {
 	n.state_since_us = now
 	// transmitting states announce presence immediately on entry
 	n.tx_armed = s == .repeat_message || s == .normal_operation
+	if s == .bus_sleep {
+		n.active_woke = false // clear wake cause + remote PN demand once asleep
+		for i in 0 .. max_nm_nodes {
+			n.pn_nid[i] = 0
+			n.pn_mask[i] = 0
+			n.pn_seen[i] = 0
+		}
+	}
 }
 
 // request: the application needs the bus awake.
 pub fn (mut n Nm) request(now u64) {
 	n.requested = true
 	match n.state {
-		.bus_sleep, .prepare_bus_sleep { n.enter(.repeat_message, now) }
+		.bus_sleep, .prepare_bus_sleep {
+			n.active_woke = true // we are the active waker
+			n.enter(.repeat_message, now)
+		}
 		.ready_sleep { n.enter(.normal_operation, now) }
 		else {}
 	}
@@ -68,6 +85,7 @@ pub fn (mut n Nm) release() {
 pub fn (mut n Nm) on_rx(now u64) {
 	n.last_activity_us = now
 	if n.state == .bus_sleep || n.state == .prepare_bus_sleep {
+		n.active_woke = false // woken by someone else's traffic (passive)
 		n.enter(.repeat_message, now)
 	}
 }

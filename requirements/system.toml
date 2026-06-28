@@ -1,0 +1,107 @@
+# System / safety / non-functional requirements (top tier).
+# Module requirements (REQ-*) `derives` from these. See README.md for the method.
+# Schema per entry: id, title, text, status, method, asil[, derives].
+
+[[req]]
+id = "SYS-REQ-COMMS-001"
+title = "CAN frame exchange"
+text = "The ECU shall exchange CAN frames on each configured CAN bus."
+status = "draft"
+method = "test"
+asil = "QM"
+
+[[req]]
+id = "SYS-REQ-COMMS-002"
+title = "Signals in physical units"
+text = "The ECU shall present received bus signals to the application in physical units."
+status = "draft"
+method = "test"
+asil = "QM"
+
+[[req]]
+id = "SYS-REQ-COMMS-003"
+title = "Loss of reception detected"
+text = "The ECU shall detect loss of a periodically received message within a configured timeout."
+status = "agreed"
+method = "test"
+asil = "QM"
+
+[[req]]
+id = "SYS-REQ-SAFE-001"
+title = "Safety message integrity"
+text = "The ECU shall detect corruption, repetition, and loss of a safety-relevant message."
+status = "agreed"
+method = "test"
+asil = "B"
+
+[[req]]
+id = "SYS-REQ-SAFE-002"
+title = "Reset on hung partition"
+text = "A non-responsive partition shall not prevent a watchdog-triggered reset of the ECU."
+status = "agreed"
+method = "test"
+asil = "B"
+
+[[req]]
+id = "SYS-REQ-SAFE-003"
+title = "Partition isolation"
+text = "A fault in one partition shall not corrupt the memory of another partition."
+status = "draft"
+method = "analysis"
+asil = "B"
+
+[[req]]
+id = "SYS-REQ-SEC-001"
+title = "Reject spoof / replay"
+text = "The ECU shall reject spoofed or replayed messages on security-protected frames."
+status = "agreed"
+method = "test"
+asil = "QM"
+
+[[req]]
+id = "SYS-REQ-DIAG-001"
+title = "Diagnostic services"
+text = "The ECU shall respond to standardized UDS diagnostic requests carried over ISO-TP."
+status = "agreed"
+method = "test"
+asil = "QM"
+
+[[req]]
+id = "SYS-REQ-NM-001"
+title = "Coordinated network sleep"
+text = "The ECU shall coordinate network wake-up and sleep with the other nodes on each network."
+status = "agreed"
+method = "test"
+asil = "QM"
+
+[[req]]
+id = "SYS-REQ-LIFE-001"
+title = "Deterministic start-up"
+text = "The ECU shall complete a deterministic, ordered start-up before participating on any network."
+status = "agreed"
+method = "test"
+asil = "QM"
+
+[[req]]
+id = "SYS-REQ-LIFE-002"
+title = "Sleep and wake"
+text = "The ECU shall enter low-power sleep when no function requires the networks, and wake on a configured source."
+status = "agreed"
+method = "test"
+asil = "QM"
+
+[[req]]
+id = "SYS-REQ-RES-001"
+title = "No dynamic allocation"
+text = "The runtime shall not perform dynamic memory allocation."
+status = "agreed"
+method = "analysis"
+asil = "QM"
+
+[[req]]
+id = "SYS-REQ-MC-001"
+title = "Multicore partitioning"
+text = "The application shall run partitioned across multiple cores."
+status = "draft"
+method = "test"
+asil = "QM"

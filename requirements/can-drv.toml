@@ -1,0 +1,57 @@
+# CAN driver port (CAN-DRV): the contract every CAN backend must satisfy
+# (SocketCAN, FDCAN, ST-HAL, CanIf). Instance- and implementation-agnostic;
+# verified per execution context (host/SocketCAN, h735/FDCAN, ...).
+
+[[req]]
+id = "REQ-CAN-DRV-001"
+title = "Transmit classic frame"
+text = "The CAN driver shall transmit a classic CAN frame with an 11-bit identifier and 0 to 8 payload bytes."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"
+
+[[req]]
+id = "REQ-CAN-DRV-002"
+title = "Receive without loss"
+text = "The CAN driver shall deliver every accepted received frame to the upper layer without loss up to the configured bus load."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"
+
+[[req]]
+id = "REQ-CAN-DRV-003"
+title = "Non-blocking receive"
+text = "The CAN driver's receive operation shall be non-blocking, returning 'no frame' when none is available."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"
+
+[[req]]
+id = "REQ-CAN-DRV-004"
+title = "CAN-FD frames"
+text = "When configured for CAN-FD, the CAN driver shall transmit and receive frames with up to 64 payload bytes."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"
+
+[[req]]
+id = "REQ-CAN-DRV-005"
+title = "Open reports failure"
+text = "The CAN driver shall report an error from open when the bus cannot be initialised, rather than appearing to succeed."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"
+
+[[req]]
+id = "REQ-CAN-DRV-006"
+title = "Uniform backend contract"
+text = "Every CAN driver backend shall present the same open/send/recv/close contract to the upper layer."
+status = "draft"
+method = "review"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"

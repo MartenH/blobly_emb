@@ -1,6 +1,6 @@
 V ?= v
 
-.PHONY: example run-example list lint vcan clean demo demo-threadx bench
+.PHONY: example run-example list deps trace trace-check lint vcan clean demo demo-threadx bench
 
 # ---- Examples ---------------------------------------------------------------
 # Each example is a self-contained app under examples/<NAME>/ with its own
@@ -19,6 +19,17 @@ run-example:
 list:
 	@for d in examples/*/; do if [ -f "$$d/Makefile" ]; then basename "$$d"; fi; done
 
+# ---- Device (cross-compile) deps --------------------------------------------
+# CMSIS register-map headers for the bare-metal STM32H7 examples (no HAL, no Cube).
+# Header-only, gitignored under third_party/; needed ONLY by examples/h735_* cross
+# builds — the host/sim build never touches them. Include paths for an example:
+#   -Ithird_party/cmsis_device_h7/Include -Ithird_party/cmsis_core/CMSIS/Core/Include -DSTM32H735xx
+deps:
+	@mkdir -p third_party
+	@[ -d third_party/cmsis_device_h7 ] || git clone --depth 1 https://github.com/STMicroelectronics/cmsis_device_h7 third_party/cmsis_device_h7
+	@[ -d third_party/cmsis_core ]       || git clone --depth 1 https://github.com/STMicroelectronics/cmsis_core       third_party/cmsis_core
+	@echo "CMSIS headers ready under third_party/ (device cross-builds only)"
+
 # ---- Backend harness (POSIX / ThreadX), self-contained ----------------------
 demo:
 	$(V) -gc none -o blobly_demo cmd/threadx_demo
@@ -33,6 +44,16 @@ demo-threadx:
 	  -ldflags "$(TX_PORT)/example_build/tx.a -lrt" \
 	  -o blobly_demo_threadx cmd/threadx_demo
 	./blobly_demo_threadx
+
+# ---- Requirement traceability ----------------------------------------------
+# Generate docs/traceability.md from requirements/*.toml + verification links
+# (`@verifies` tags in tests; requirements/verifications.toml for analysis/review).
+trace:
+	$(V) run tools/trace/gen.v
+
+# CI gate: nonzero exit if any requirement's linked verification FAILED.
+trace-check:
+	$(V) run tools/trace/gen.v --check
 
 # ---- Misc -------------------------------------------------------------------
 lint:

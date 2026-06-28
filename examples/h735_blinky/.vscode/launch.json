@@ -1,0 +1,23 @@
+{
+	// Cortex-Debug (marus25.cortex-debug) over the onboard ST-LINK-V3E.
+	// Open examples/h735_blinky as the VS Code folder (or adjust the paths if you
+	// open the repo root), then press F5. It builds debug, flashes, and stops at main.
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Debug H735 blinky (OpenOCD)",
+			"type": "cortex-debug",
+			"request": "launch",
+			"servertype": "openocd",
+			"cwd": "${workspaceFolder}",
+			"executable": "${workspaceFolder}/build/blinky.elf",
+			"device": "STM32H735IGKx",
+			"configFiles": ["interface/stlink.cfg", "target/stm32h7x.cfg"],
+			"runToEntryPoint": "main",
+			"preLaunchTask": "build-debug",
+			"showDevDebugOutput": "none"
+			// Peripheral register view: drop the STM32H735.svd (ST CMSIS pack) next
+			// to this and add:  "svdFile": "${workspaceFolder}/STM32H735.svd"
+		}
+	]
+}

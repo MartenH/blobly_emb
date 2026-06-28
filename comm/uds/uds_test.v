@@ -1,5 +1,7 @@
 module uds
 
+// @verifies SYS-REQ-DIAG-001
+
 fn call(mut s Server, req []u8) []u8 {
 	mut resp := [256]u8{}
 	n := s.handle(&req[0], req.len, &resp[0])

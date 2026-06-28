@@ -1,5 +1,6 @@
 -- Raw-PDU gateway: a frame the ECU doesn't decode (WheelSpeeds, 0x300) sent on
 -- can0 (CAN1=vcan0) must reappear, byte-for-byte, on can1 (CAN2=vcan1).
+-- @verifies REQ-CAN-DRV-001, REQ-CAN-DRV-002
 test("raw-PDU gateway: WheelSpeeds forwarded can0 -> can1 untouched", function()
   local payload = fromhex("DE AD BE EF 11 22 33 44")
   local got = nil
