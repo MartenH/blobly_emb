@@ -133,8 +133,13 @@ type vcan && sudo ip link set vcan0 up`).
 
 ## Not yet
 
-The **NM↔CAN glue** is in place: `comm/nm_can` (the binding) + `cmd/nm_demo` (two
-nodes over real frames), verified by `comm/nm_can/nm_can_test.v`. Remaining:
-wiring NM `request`/`release`/state into the **Conductor** (`ecu/`) so the
-lifecycle owns wake/sleep, and generating the `comm/nm_can` `Config` (ids, timings)
-from `ecu.toml` via `cfg2v` instead of by hand.
+The **NM↔CAN glue** (`comm/nm_can` + `cmd/nm_demo`) and the **Conductor hand-off**
+are in place. The lifecycle's sleep/wake is driven by live NM state — the mapping
+is one field, `Demand.network_busy = nm.awake()`: while any node needs the bus NM
+stays awake and the ECU holds Run; once the cluster times out NM sleeps and the ECU
+sleeps; an incoming NM frame wakes NM, which wakes the ECU. Verified across
+init→run→sleep→wake in `ecu/handoff_test.v` (REQ-ECU-003/004).
+
+Remaining: generating the `comm/nm_can` `Config` (ids, timings) from `ecu.toml` via
+`cfg2v` instead of by hand, and a full ECU app example running the Conductor, NM,
+and partitions together.

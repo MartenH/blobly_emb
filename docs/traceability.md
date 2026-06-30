@@ -23,8 +23,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-DRV-006 | QM | review | uncovered | — |
 | REQ-ECU-001 | QM | test | verified | ecu_test.v (pass) |
 | REQ-ECU-002 | QM | test | verified | ecu_test.v (pass) |
-| REQ-ECU-003 | QM | test | verified | ecu_test.v (pass) |
-| REQ-ECU-004 | QM | test | verified | ecu_test.v (pass) |
+| REQ-ECU-003 | QM | test | verified | ecu_test.v (pass), handoff_test.v (pass) |
+| REQ-ECU-004 | QM | test | verified | ecu_test.v (pass), handoff_test.v (pass) |
 | REQ-ECU-005 | QM | test | verified | ecu_test.v (pass) |
 | REQ-INIT-001 | QM | test | verified | ecu_test.v (pass) |
 | REQ-INIT-002 | QM | test | verified | ecu_test.v (pass) |
