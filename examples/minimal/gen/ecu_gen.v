@@ -21,13 +21,5 @@ pub const partition_count = 1
 pub const partition_cores = [1]!
 pub const partition_trusted = [false]!
 
-// Network Management timings (per network)
-pub const nm_0_node_id = u8(0)
-pub const nm_0_tx_id = u32(0x0)
-pub const nm_0_msg_cycle_us = u64(0)
-pub const nm_0_timeout_us = u64(0)
-pub const nm_0_repeat_us = u64(0)
-pub const nm_0_wait_sleep_us = u64(0)
-
 // Bus config (per bus)
 pub const can0_fd = false
