@@ -5,7 +5,11 @@ set -euo pipefail
 
 N="${VCAN_COUNT:-8}"
 
-sudo modprobe vcan
+# vcan may be a loadable module OR built into the kernel (e.g. the WSL2 kernel ships
+# CONFIG_CAN_VCAN=y). In the built-in case there is no .ko and modprobe fails even
+# though vcan is fully available — so don't let that abort the setup. If vcan is
+# genuinely absent, the `ip link add` below fails with a clear error.
+sudo modprobe vcan 2>/dev/null || true
 for b in $(seq 0 $((N - 1))); do
 	sudo ip link add dev "vcan$b" type vcan 2>/dev/null || true
 	sudo ip link set up "vcan$b"
