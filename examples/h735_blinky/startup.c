@@ -3,7 +3,10 @@
 #include <stdint.h>
 
 extern uint32_t _sidata, _sdata, _edata, _sbss, _ebss, _estack;
-extern int main(int argc, char **argv); /* V's generated entry */
+/* Call V's `fn main` body directly (main__main), NOT V's `int main(int,char**)`
+ * wrapper — that wrapper runs _vinit (arg/global setup for a hosted OS) which can
+ * fault bare-metal. main.v only calls C shims, so it needs none of that. */
+extern void main__main(void);
 
 void Default_Handler(void) {
 	for (;;) {
@@ -26,7 +29,7 @@ void Reset_Handler(void) {
 		*dst++ = 0;
 	}
 
-	main(0, 0);
+	main__main();
 	for (;;) {
 	}
 }
