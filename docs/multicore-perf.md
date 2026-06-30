@@ -27,7 +27,11 @@ changes. Software shared-memory backends today:
 |-----------|--------|--------|--------------------|--------|--------------|
 | `seqlock` (1×) | wait-free | may retry | yes | 1× | reader starves if writer saturates |
 | `double` (2×) | wait-free | wait-free | yes *if reader keeps up* | 2× | torn if writer laps reader |
-| `triple` (3×) | wait-free | wait-free | always | 3× | none (bounded, constant) |
+| `triple` (3×) | wait-free | wait-free | always | 3× | none† (bounded, constant) |
+
+† triple's wait-free `exchange` needs a **cross-core exclusive monitor** for the
+IOC region — see *What the atomics require of the memory* below. seqlock and double
+do not.
 
 ## How each transport is implemented
 
@@ -117,6 +121,53 @@ reads. Indices start at the permutation `{wb=0, shared=1, rf=2}` (`init_db_indic
 The `ACQ_REL` on each exchange is the publish/observe barrier: **release** so the
 payload write is visible before the index that publishes it, **acquire** so the
 peer sees the payload of the buffer it just took.
+
+### What the atomics require of the memory (local vs global monitor)
+
+The three schemes don't make the same hardware demand. On Cortex-M7 the atomics
+compile to:
+
+```
+load  (relaxed/acquire)  ->  LDR        (+ DMB ish on acquire)      // seqlock, double
+store (release)          ->  DMB ish + STR                          // seqlock, double
+exchange (acq_rel)       ->  DMB + LDREX/STREX retry loop + DMB      // triple
+```
+
+**seqlock and double use only plain load/store.** The memory just has to give
+single-copy atomicity for an aligned 32-bit access — architectural on any Normal
+memory — and honour the `DMB` barrier. No exclusive-access signalling at all. On a
+**cache-coherent** multicore that is everything you need; on a **non-coherent** one
+the region must additionally be **non-cacheable or explicitly cache-maintained** so
+the barrier's *ordering* turns into cross-core *visibility* (the coherency axis —
+see *Cache coherency & placement* below). That is a separate concern from the
+monitor.
+
+**triple uses `LDREX`/`STREX`**, the load-/store-exclusive pair, which depend on the
+ARM **exclusive monitor**:
+
+- the **local monitor** is per-CPU — it tags an address range on a `LDREX` and
+  clears it on any intervening write, so `STREX` can tell whether the read-modify-
+  write stayed exclusive. This alone is enough on a **single-core** part (the H735):
+  the one core both sets and checks the tag.
+- **cross-core** exclusivity needs a **global monitor** implemented in the
+  interconnect/memory for that region — the bus-level exclusive-access channel (AXI
+  `*LOCK`/exclusive transactions) that lets one core's `STREX` fail when another core
+  wrote the line in between. Without it — non-cacheable SRAM on many parts, Device
+  memory, or an interconnect with no exclusive support — `STREX` is *unpredictable*:
+  it typically livelocks (always fails) or silently isn't atomic.
+
+So the requirement ladder:
+
+| scheme | what the IOC memory must provide |
+|---|---|
+| seqlock, double | aligned word + `DMB`; on non-coherent multicore, non-cacheable / cache-maintained for visibility |
+| triple | the above **+ a cross-core global exclusive monitor** for the region |
+
+**Rule of thumb:** on a multicore target whose shared SRAM has no global monitor,
+keep saturating-writer channels on a **HW transport** (HW semaphore / mailbox — the
+interconnect *is* the arbiter; see below) rather than the triple buffer. seqlock and
+double stay valid because they never take an exclusive lock. This is one more reason
+the transport is per-channel config resolved by the OSAL, not baked into app code.
 
 ## Measured (host, 2 pinned cores, 64-byte non-scalar record, 1 s/side)
 
