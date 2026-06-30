@@ -45,8 +45,8 @@ sent; `request`/`release`/`on_rx` are the inputs.
 ## The NM frame
 
 Each ECU transmits one small NM message per network, on its own NM CAN-id, to
-announce *"I'm here / here's what I need."* (This is the **NM↔CAN glue** — the
-state machine is done; the wire format below is the next step.)
+announce *"I'm here / here's what I need."* (The **NM↔CAN glue** — `comm/nm_can` —
+encodes/decodes this frame and drives it on a CAN channel; wire format below.)
 
 ```
  byte:  0      1        2   3   4   5   6   7
@@ -111,12 +111,16 @@ pn_enabled    = false    # partial networking (bytes 2–7)      (REQ-NM-010)
 ## Verify
 
 ```sh
-v test comm/nm          # state-machine unit tests (deterministic)
-v run cmd/nm_demo        # two nodes A/B: hand-off then coordinated sleep
+v test comm/nm comm/nm_can   # state machine + the NM↔CAN binding (deterministic)
+v run cmd/nm_demo            # two nodes on vcan0: real NM frames, hand-off, sleep
 ```
 
-The unit tests cover the state machine + timers (`REQ-NM-001..004, 006..008`);
-`make trace` links them via `@verifies` tags in `comm/nm/nm_test.v`.
+The unit tests cover the state machine + timers (`comm/nm/nm_test.v`,
+`REQ-NM-001..004, 006..008`), and the frame codec + on-wire binding
+(`comm/nm/frame_test.v`, `comm/nm_can/nm_can_test.v`, `REQ-NM-005, 009..013`);
+`make trace` links them via `@verifies` tags. The demo drives the **real**
+binding over `vcan0` (needs it up: `sudo modprobe vcan && sudo ip link add vcan0
+type vcan && sudo ip link set vcan0 up`).
 
 ## Traceability
 
@@ -125,11 +129,12 @@ The unit tests cover the state machine + timers (`REQ-NM-001..004, 006..008`);
 | requirements | `requirements/nm.toml` (`REQ-NM-001..013` → `SYS-REQ-NM-001` / `LIFE-002`) |
 | design | this document (state machine + frame) |
 | config | `ecu.toml` `[nm.<bus>]` (timer values, ids, byte offsets) |
-| verification | `comm/nm/nm_test.v` (state machine, done); the NM↔CAN glue test (frame: `REQ-NM-005, 009..013`) is the **uncovered** backlog |
+| verification | `comm/nm/nm_test.v` (state machine) + `comm/nm/frame_test.v` (frame codec) + `comm/nm_can/nm_can_test.v` (on-wire binding) — all `@verifies`-linked |
 
 ## Not yet
 
-The **NM↔CAN glue** — encode/decode the frame above (NID/CBV/PN), map the NM id
-range on rx, and report network state to the ECU manager (`REQ-NM-005`) — plus
-partial networking (`REQ-NM-010`). The state machine, config, codegen, and tests
-are in place; the frame and the Conductor hand-off are the follow-ups.
+The **NM↔CAN glue** is in place: `comm/nm_can` (the binding) + `cmd/nm_demo` (two
+nodes over real frames), verified by `comm/nm_can/nm_can_test.v`. Remaining:
+wiring NM `request`/`release`/state into the **Conductor** (`ecu/`) so the
+lifecycle owns wake/sleep, and generating the `comm/nm_can` `Config` (ids, timings)
+from `ecu.toml` via `cfg2v` instead of by hand.
