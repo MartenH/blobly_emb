@@ -153,7 +153,7 @@ sequenceDiagram
 | Signal types / ports | `sig/`, `ports/` | generated (`loom2v`) |
 | Codec / bridge / glue / tables | `gen/` | generated (`dbc2cfg`, `cfg2v`, `loom2v`) |
 | Scheduler | `loom/` | framework |
-| Comms | `comm/com`, `comm/e2e`, `comm/secoc`, `comm/isotp`, `comm/uds`, `comm/nm` | framework |
+| Comms | `comm/com`, `comm/e2e`, `comm/secoc`, `comm/isotp`, `comm/uds`, `comm/nm` (+ `comm/nm_can` binding) | framework |
 | Platform line | `osal/` (cores/time/IOC), `driver/` (CAN) | framework + C shims (see `porting.md`) |
 | Entry | `main.v` | hand (tiny: open channels, `gen.run`) |
 
@@ -161,3 +161,32 @@ The build-time generators in `tools/` (`dbc2cfg`, `cfg2v`, `loom2v`, `sigmap`) t
 the config + DBC into the `sig/ports/gen` code; see `ways-of-working.md` for how
 teams operate around that, and `configuration.md` for what each config section
 generates.
+
+## Transport scope — CAN today, Ethernet later
+
+blobly is **CAN / CAN-FD first**, but most of the stack is transport-agnostic by
+construction — only a few layers actually know about CAN:
+
+| layer | CAN-coupled? |
+|---|---|
+| FBs, signals, ports | no — pure transforms |
+| Loom, IOC, local cells | no — dispatch + cross-core signal transport |
+| COM (signal⇄PDU, TX modes, RX deadline) | no above the PDU — a PDU is just bytes |
+| **driver port** (`driver/can`, `can_port.h`) | **yes** — id + dlc + data framing |
+| **codec** (`gen/`, from DBC) | **yes** — DBC is a CAN/LIN description |
+| **diagnostics** (`comm/isotp` + `comm/uds`) | **yes** — ISO-TP is CAN transport |
+| **NM** (`comm/nm` + `comm/nm_can`) | the state machine is **not**; the binding is |
+
+Adding **automotive Ethernet** later is therefore not a rewrite — it slots in
+**below the COM/PDU line** as a second transport:
+
+- a generic **PDU transport** port beside `can_port.h` (CAN one backend, UDP another) —
+  the role AUTOSAR splits into PduR/SoAd;
+- **SOME/IP** or signal-over-UDP for data (config from ARXML/FIBEX, not DBC);
+- **DoIP** for diagnostics (the Ethernet counterpart to ISO-TP/UDS);
+- a sibling **`comm/nm_udp`** (UDP-NM) over the same NM state machine, if NM applies
+  on that link at all.
+
+None of the Ethernet side is built — this section marks the **seam** so new code
+doesn't deepen the CAN assumptions needlessly. The module naming already reflects it:
+`comm/nm` (transport-agnostic state machine) vs `comm/nm_can` (the CAN binding).
