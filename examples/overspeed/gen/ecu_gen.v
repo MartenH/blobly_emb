@@ -24,9 +24,12 @@ pub const partition_count = 2
 pub const partition_cores = [0, 1]!
 pub const partition_trusted = [false, false]!
 
-// Network Management timings (per network)
+// Network Management (per network)
 pub const nm_can0_node_id = u8(7)
 pub const nm_can0_tx_id = u32(0x400)
+pub const nm_can0_rx_lo = u32(0x400)
+pub const nm_can0_rx_hi = u32(0x4ff)
+pub const nm_can0_pn_local = u64(0)
 pub const nm_can0_msg_cycle_us = u64(100000)
 pub const nm_can0_timeout_us = u64(300000)
 pub const nm_can0_repeat_us = u64(200000)
