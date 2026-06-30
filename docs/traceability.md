@@ -39,17 +39,17 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-INV-005 | QM | review | covered | naming-review (pending) |
 | REQ-NM-001 | QM | test | verified | nm_test.v (pass) |
 | REQ-NM-002 | QM | test | verified | nm_test.v (pass) |
-| REQ-NM-003 | QM | test | verified | nm_test.v (pass) |
-| REQ-NM-004 | QM | test | verified | nm_test.v (pass) |
+| REQ-NM-003 | QM | test | verified | nm_can_test.v (pass), nm_test.v (pass) |
+| REQ-NM-004 | QM | test | verified | nm_can_test.v (pass), nm_test.v (pass) |
 | REQ-NM-005 | QM | test | verified | frame_test.v (pass) |
 | REQ-NM-006 | QM | test | verified | nm_test.v (pass) |
 | REQ-NM-007 | QM | test | verified | nm_test.v (pass) |
 | REQ-NM-008 | QM | test | verified | nm_test.v (pass) |
 | REQ-NM-009 | QM | test | verified | frame_test.v (pass) |
 | REQ-NM-010 | QM | test | verified | frame_test.v (pass) |
-| REQ-NM-011 | QM | test | verified | frame_test.v (pass) |
-| REQ-NM-012 | QM | test | verified | frame_test.v (pass) |
-| REQ-NM-013 | QM | test | verified | frame_test.v (pass) |
+| REQ-NM-011 | QM | test | verified | nm_can_test.v (pass), frame_test.v (pass) |
+| REQ-NM-012 | QM | test | verified | nm_can_test.v (pass), nm_can_test.v (pass), frame_test.v (pass) |
+| REQ-NM-013 | QM | test | verified | nm_can_test.v (pass), nm_can_test.v (pass), frame_test.v (pass) |
 | SYS-REQ-COMMS-001 | QM | test | covered | overspeed.lua (pending) |
 | SYS-REQ-COMMS-002 | QM | test | covered | overspeed.lua (pending) |
 | SYS-REQ-COMMS-003 | QM | test | verified | com_test.v (pass) |
