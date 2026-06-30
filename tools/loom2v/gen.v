@@ -447,7 +447,10 @@ fn main() {
 			glue << r
 		}
 		glue << '\tfor {'
-		glue << '\t\tsched.run(osal.now_us())'
+		glue << '\t\tloom_t0 := osal.now_us()'
+		glue << '\t\tsched.run(loom_t0)'
+		glue << '\t\tloom_t1 := osal.now_us()'
+		glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
 		glue << '\t\tosal.sleep_us(1000)'
 		glue << '\t}'
 		glue << '}'
@@ -755,7 +758,10 @@ fn main() {
 		glue << '\tmut sched := loom.Scheduler{}'
 		glue << '\tsched.every(10_000, io_${bb}_10ms, &st)'
 		glue << '\tfor {'
-		glue << '\t\tsched.run(osal.now_us())'
+		glue << '\t\tloom_t0 := osal.now_us()'
+		glue << '\t\tsched.run(loom_t0)'
+		glue << '\t\tloom_t1 := osal.now_us()'
+		glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
 		glue << '\t\tosal.sleep_us(1000)'
 		glue << '\t}'
 		glue << '}'
