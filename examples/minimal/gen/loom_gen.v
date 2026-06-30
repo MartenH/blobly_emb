@@ -29,7 +29,10 @@ pub fn partition_app(core int, arg voidptr) {
 	mut sched := loom.Scheduler{}
 	sched.every(10000, handler_app_speed_monitor_on_10ms, &st)
 	for {
-		sched.run(osal.now_us())
+		loom_t0 := osal.now_us()
+		sched.run(loom_t0)
+		loom_t1 := osal.now_us()
+		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
 		osal.sleep_us(1000)
 	}
 }
@@ -87,7 +90,10 @@ pub fn partition_can0(ch can.Channel) {
 	mut sched := loom.Scheduler{}
 	sched.every(10_000, io_can0_10ms, &st)
 	for {
-		sched.run(osal.now_us())
+		loom_t0 := osal.now_us()
+		sched.run(loom_t0)
+		loom_t1 := osal.now_us()
+		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
 		osal.sleep_us(1000)
 	}
 }
