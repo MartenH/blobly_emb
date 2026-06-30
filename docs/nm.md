@@ -98,8 +98,8 @@ configured timeout"*, this is where the value lives.
 [nm.can0]
 node_id       = 7        # source node id (NID byte)
 tx_id         = 0x400    # this ECU's NM message id
-rx_lo         = 0x400    # NM id range treated as NM traffic on rx (cluster's NM ids)
-rx_hi         = 0x4ff    #   (defaults to tx_id if omitted)
+rx_lo         = 0x400    # NM id range treated as NM traffic on rx (cluster's NM ids);
+rx_hi         = 0x4ff    #   REQUIRED — must span the cluster's NM ids, not just tx_id
 pn_local      = 0        # partial networks this node requests (bitmask)  (REQ-NM-010)
 msg_cycle_ms  = 100      # periodic NM message while awake     (REQ-NM-008)
 timeout_ms    = 300      # no-demand time before sleeping      (REQ-NM-006)
