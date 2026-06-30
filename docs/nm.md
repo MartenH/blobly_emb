@@ -144,8 +144,8 @@ The unit tests cover the state machine + timers (`comm/nm/nm_test.v`,
 `REQ-NM-001..004, 006..008`), and the frame codec + on-wire binding
 (`comm/nm/frame_test.v`, `comm/nm_can/nm_can_test.v`, `REQ-NM-005, 009..013`);
 `make trace` links them via `@verifies` tags. The demo drives the **real**
-binding over `vcan0` (needs it up: `sudo modprobe vcan && sudo ip link add vcan0
-type vcan && sudo ip link set vcan0 up`).
+binding over `vcan0` — bring the interface up first with `sudo make vcan` (works
+whether vcan is a module or built into the kernel, e.g. WSL2).
 
 ## Traceability
 
