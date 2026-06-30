@@ -4,7 +4,7 @@
 // into the state machine. Shows the bus staying awake while EITHER node needs it,
 // the hand-off between them, and both timing out to sleep once neither does.
 //
-// Needs vcan0 up:  sudo modprobe vcan && sudo ip link add vcan0 type vcan && sudo ip link set vcan0 up
+// Needs vcan0 up:  sudo make vcan   (brings up vcan0..7; works on a built-in-vcan kernel too)
 module main
 
 import comm.nm
@@ -27,7 +27,7 @@ fn main() {
 	mut ca := can.Channel{}
 	mut cb := can.Channel{}
 	if !ca.open('vcan0', false) || !cb.open('vcan0', false) {
-		eprintln('need vcan0 up: sudo modprobe vcan && sudo ip link add vcan0 type vcan && sudo ip link set vcan0 up')
+		eprintln('need vcan0 up: run `sudo make vcan` (brings up vcan0..7)')
 		return
 	}
 
