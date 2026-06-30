@@ -68,6 +68,28 @@ copy — under a saturating writer that retry loop is the 4.6 µs worst case abo
 Cheapest memory (1×) and the only valid scheme for **single-writer / many-readers**
 fan-out (the `load_bench` fan-out reads use it).
 
+**It's optimistic retry, not a spinlock.** No one takes a lock and no one owns
+anything. The writer is **wait-free and oblivious to readers** — it bumps the
+counter, copies, bumps again, never testing reader state (five readers or zero, it
+does identical work). The reader doesn't *lock* either; it reads, then checks
+whether the writer moved underneath it (`seq0 != seq1`, or `seq0` odd) and redoes
+the copy if so. Consistency is **reader-detected, not writer-enforced**: the writer
+may stomp the buffer mid-copy and the reader simply notices and copies again, so it
+never returns torn data (the only undetectable tear would need 2³² writes during one
+copy — never). One reader retrying never affects the writer or the other readers.
+
+That is what makes seqlock the **fan-out** transport (one writer, *N* readers): all
+readers share the one buffer (1× memory), and because they only *read* the shared
+counter and payload they coexist freely and cannot starve the writer. Triple can't
+do this — its reader *writes* the index via `exchange`, so it is strictly
+single-reader; seqlock's read-only readers scale to any number. Example: a CAN
+**Speed** signal written by the bus bridge and read by 5 FBs on 5 cores → one
+seqlock slot, each reader independent. At an interval rate (Speed every 10–20 ms)
+the writer is idle almost always, so the retry path is essentially never taken — the
+4.6 µs cost only appears under a saturating writer. Across the *N* cores the readers
+share one cache line, so each write invalidates it in every reader's cache and they
+re-fetch: inherent to fan-out, and cheap.
+
 ### double buffer (2×) — two buffers + an active index
 
 Two buffers, one atomic `active` index. The writer always fills the *inactive*
