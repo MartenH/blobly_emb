@@ -179,6 +179,9 @@ partition = "ctrl"
 [nm.can0]
 node_id       = 7
 tx_id         = 0x400
+rx_lo         = 0x400    # NM id range treated as NM traffic on rx (cluster's NM ids)
+rx_hi         = 0x4ff
+pn_local      = 0        # partial networks this node requests (bitmask, 0 = none)
 msg_cycle_ms  = 100
 timeout_ms    = 300
 repeat_ms     = 200

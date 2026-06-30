@@ -98,6 +98,9 @@ configured timeout"*, this is where the value lives.
 [nm.can0]
 node_id       = 7        # source node id (NID byte)
 tx_id         = 0x400    # this ECU's NM message id
+rx_lo         = 0x400    # NM id range treated as NM traffic on rx (cluster's NM ids);
+rx_hi         = 0x4ff    #   REQUIRED — must span the cluster's NM ids, not just tx_id
+pn_local      = 0        # partial networks this node requests (bitmask)  (REQ-NM-010)
 msg_cycle_ms  = 100      # periodic NM message while awake     (REQ-NM-008)
 timeout_ms    = 300      # no-demand time before sleeping      (REQ-NM-006)
 repeat_ms     = 200      # repeat-message phase after wake     (REQ-NM-007)
@@ -106,6 +109,28 @@ wait_sleep_ms = 150      # prepare_bus_sleep grace period
 nid_pos       = 0        # byte offset of NID in the PDU
 cbv_pos       = 1        # byte offset of the control bit vector
 pn_enabled    = false    # partial networking (bytes 2–7)      (REQ-NM-010)
+```
+
+`cfg2v` turns this into `gen.nm_can0_*` constants, so an app builds the binding's
+`Config` and the state machine's `Timings` straight from generated values — no
+hand-written ids or timers:
+
+```v
+mut link := nm_can.Link{
+    cfg: nm_can.Config{
+        node_id:  gen.nm_can0_node_id
+        tx_id:    gen.nm_can0_tx_id
+        rx_lo:    gen.nm_can0_rx_lo
+        rx_hi:    gen.nm_can0_rx_hi
+        pn_local: gen.nm_can0_pn_local
+    }
+    sm: nm.Nm{ cfg: nm.Timings{
+        msg_cycle_us:  gen.nm_can0_msg_cycle_us
+        timeout_us:    gen.nm_can0_timeout_us
+        repeat_us:     gen.nm_can0_repeat_us
+        wait_sleep_us: gen.nm_can0_wait_sleep_us
+    } }
+}
 ```
 
 ## Verify
@@ -140,6 +165,6 @@ stays awake and the ECU holds Run; once the cluster times out NM sleeps and the 
 sleeps; an incoming NM frame wakes NM, which wakes the ECU. Verified across
 init→run→sleep→wake in `ecu/handoff_test.v` (REQ-ECU-003/004).
 
-Remaining: generating the `comm/nm_can` `Config` (ids, timings) from `ecu.toml` via
-`cfg2v` instead of by hand, and a full ECU app example running the Conductor, NM,
-and partitions together.
+The `comm/nm_can` `Config` + `nm.Timings` are now generated from `ecu.toml` by
+`cfg2v` (`gen.nm_<bus>_*`, see Configuration above). Remaining: a full ECU app
+example running the Conductor, NM, and partitions together end-to-end.
