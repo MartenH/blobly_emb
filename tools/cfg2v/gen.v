@@ -75,8 +75,14 @@ fn main() {
 		b << '// Network Management timings (per network)'
 		for net, cfg in nm {
 			m := cfg.as_map()
+			tx_id := (m['tx_id'] or { toml.Any(0) }).int()
 			b << 'pub const nm_${net}_node_id = u8(${(m['node_id'] or { toml.Any(0) }).int()})'
-			b << 'pub const nm_${net}_tx_id = u32(0x${(m['tx_id'] or { toml.Any(0) }).int().hex()})'
+			b << 'pub const nm_${net}_tx_id = u32(0x${tx_id.hex()})'
+			// NM id range treated as NM traffic on rx (defaults to just our tx_id).
+			b << 'pub const nm_${net}_rx_lo = u32(0x${(m['rx_lo'] or { toml.Any(tx_id) }).int().hex()})'
+			b << 'pub const nm_${net}_rx_hi = u32(0x${(m['rx_hi'] or { toml.Any(tx_id) }).int().hex()})'
+			// partial networks this node statically requests (bitmask, 0 = none).
+			b << 'pub const nm_${net}_pn_local = u64(${u64((m['pn_local'] or { toml.Any(0) }).int())})'
 			b << 'pub const nm_${net}_msg_cycle_us = u64(${int((m['msg_cycle_ms'] or { toml.Any(0) }).int()) * 1000})'
 			b << 'pub const nm_${net}_timeout_us = u64(${int((m['timeout_ms'] or { toml.Any(0) }).int()) * 1000})'
 			b << 'pub const nm_${net}_repeat_us = u64(${int((m['repeat_ms'] or { toml.Any(0) }).int()) * 1000})'
