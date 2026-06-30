@@ -10,5 +10,11 @@ method = "test"
 asil = "QM"
 derives = "SYS-REQ-OBS-001"
 
-# REQ-TELEM-002 (report the load over the bus) is the next increment — the COM
-# bridge encoding the measured load into a CAN message for an external tool.
+[[req]]
+id = "REQ-TELEM-002"
+title = "Report load over the bus"
+text = "The ECU shall transmit each core's processor load as a CAN message so an external tool can observe it."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-001"
