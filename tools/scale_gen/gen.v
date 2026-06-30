@@ -112,6 +112,14 @@ fn gen_toml(parts int, buses int, fbs int) string {
 	b << '[import]'
 	b << 'dbc = "bus.dbc"'
 	b << ''
+	// Telemetry: ship each core's processor load as a CpuLoad frame on can0, so a
+	// host tool (candump / blobly_net GUI) can watch this 4-core load live.
+	b << '[telemetry]'
+	b << 'enabled   = true'
+	b << 'bus       = "can0"'
+	b << 'id        = 0x7E0'
+	b << 'period_ms = 500'
+	b << ''
 	for bus in 0 .. buses {
 		b << '[bus.can${bus}]'
 		b << 'interface = "vcan${bus}"'
