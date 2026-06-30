@@ -27,7 +27,169 @@ changes. Software shared-memory backends today:
 |-----------|--------|--------|--------------------|--------|--------------|
 | `seqlock` (1×) | wait-free | may retry | yes | 1× | reader starves if writer saturates |
 | `double` (2×) | wait-free | wait-free | yes *if reader keeps up* | 2× | torn if writer laps reader |
-| `triple` (3×) | wait-free | wait-free | always | 3× | none (bounded, constant) |
+| `triple` (3×) | wait-free | wait-free | always | 3× | none† (bounded, constant) |
+
+† triple's wait-free `exchange` needs a **cross-core exclusive monitor** for the
+IOC region — see *What the atomics require of the memory* below. seqlock and double
+do not.
+
+## How each transport is implemented
+
+All three live in [`osal/osal_native.c`](../osal/osal_native.c) and share one shape:
+a **cache-line-aligned, cache-line-padded** slot holding the payload (`[64]u8` +
+length) plus a small atomic index/counter. All three assume **one writer per
+channel** (SPSC) — that invariant is what makes them correct without locks. The
+payload copy is a `volatile` byte loop (`vcopy`) so the compiler can't hoist or
+reorder the data access across the atomic that guards it.
+
+### seqlock (1×) — one buffer + a version counter
+
+One buffer guarded by a sequence counter: **even = stable, odd = write in
+progress, 0 = never written.**
+
+```c
+// writer (blob_ioc_write)
+seq++  (-> odd, "in progress");  release-fence
+write len; write data
+store seq+1 (RELEASE)            // -> even, "published"
+
+// reader (blob_ioc_read), retry loop
+seq0 = load(ACQUIRE)
+if seq0 == 0:   return empty     // never written
+if seq0 is odd: retry            // writer mid-update
+copy len, data;  acquire-fence
+seq1 = load(ACQUIRE)
+if seq0 == seq1: done            // counter unchanged across the copy -> consistent
+else:            retry           // a write landed mid-copy -> torn, try again
+```
+
+The reader never blocks the writer but **may retry** if a write lands during its
+copy — under a saturating writer that retry loop is the 4.6 µs worst case above.
+Cheapest memory (1×) and the only valid scheme for **single-writer / many-readers**
+fan-out (the `load_bench` fan-out reads use it).
+
+**It's optimistic retry, not a spinlock.** No one takes a lock and no one owns
+anything. The writer is **wait-free and oblivious to readers** — it bumps the
+counter, copies, bumps again, never testing reader state (five readers or zero, it
+does identical work). The reader doesn't *lock* either; it reads, then checks
+whether the writer moved underneath it (`seq0 != seq1`, or `seq0` odd) and redoes
+the copy if so. Consistency is **reader-detected, not writer-enforced**: the writer
+may stomp the buffer mid-copy and the reader simply notices and copies again, so it
+never returns torn data (the only undetectable tear would need 2³² writes during one
+copy — never). One reader retrying never affects the writer or the other readers.
+
+That is what makes seqlock the **fan-out** transport (one writer, *N* readers): all
+readers share the one buffer (1× memory), and because they only *read* the shared
+counter and payload they coexist freely and cannot starve the writer. Triple can't
+do this — its reader *writes* the index via `exchange`, so it is strictly
+single-reader; seqlock's read-only readers scale to any number. Example: a CAN
+**Speed** signal written by the bus bridge and read by 5 FBs on 5 cores → one
+seqlock slot, each reader independent. At an interval rate (Speed every 10–20 ms)
+the writer is idle almost always, so the retry path is essentially never taken — the
+4.6 µs cost only appears under a saturating writer. Across the *N* cores the readers
+share one cache line, so each write invalidates it in every reader's cache and they
+re-fetch: inherent to fan-out, and cheap.
+
+### double buffer (2×) — two buffers + an active index
+
+Two buffers, one atomic `active` index. The writer always fills the *inactive*
+buffer, then flips:
+
+```c
+// writer (blob_ioc_pub2)
+w = active ^ 1                   // the buffer the reader isn't on
+write buf[w]
+store active = w (RELEASE)       // publish the flip
+
+// reader (blob_ioc_acq2)
+a = load active (ACQUIRE);  copy buf[a]
+```
+
+Both sides are **wait-free** — a load and a store, no retry, no exchange. The
+catch: if the writer **laps** the reader (flips twice during one copy), `buf[a]`
+is being overwritten → a torn read (the `torn=612686` under saturation). Tear-free
+whenever the reader keeps up — i.e. interval signals, the common case.
+
+### triple buffer (3×) — three buffers, ownership rotated by one exchange
+
+Three buffers and three indices — `{wb writer-back, shared published|DIRTY,
+rf reader-front}` — that are **always a permutation of {0,1,2}**. Each side owns a
+private buffer the other never touches; a single atomic exchange rotates ownership.
+The low 2 bits of `shared` are the index; bit 2 is a **DIRTY** flag ("published
+since the reader last took it").
+
+```c
+// writer (blob_ioc_pub)
+write buf[wb]                              // fill our private back-buffer
+old = exchange(shared, wb | DIRTY) (ACQ_REL)
+wb  = old & IDX                            // old published buffer becomes our back-buffer
+
+// reader (blob_ioc_acq)
+cur = load shared (ACQUIRE)
+if cur & DIRTY:                            // new data since last time
+    old = exchange(shared, rf) (ACQ_REL)   // swap our front in, take the published one
+    rf  = old & IDX
+copy buf[rf]                               // always a private buffer -> never torn
+```
+
+Writer and reader each keep their own buffer and only ever swap the *third* one
+through `shared`, so neither waits and there is no shared payload to tear on —
+**wait-free for a payload of any size or shape.** The DIRTY bit lets a reader
+polling faster than the writer skip the exchange and just re-read its current
+front, so a fast poller costs a single atomic load. Costs 3× memory; reserve it
+for the few channels with a saturating writer that still need wait-free, tear-free
+reads. Indices start at the permutation `{wb=0, shared=1, rf=2}` (`init_db_indices`).
+
+The `ACQ_REL` on each exchange is the publish/observe barrier: **release** so the
+payload write is visible before the index that publishes it, **acquire** so the
+peer sees the payload of the buffer it just took.
+
+### What the atomics require of the memory (local vs global monitor)
+
+The three schemes don't make the same hardware demand. On Cortex-M7 the atomics
+compile to:
+
+```
+load  (relaxed/acquire)  ->  LDR        (+ DMB ish on acquire)      // seqlock, double
+store (release)          ->  DMB ish + STR                          // seqlock, double
+exchange (acq_rel)       ->  DMB + LDREX/STREX retry loop + DMB      // triple
+```
+
+**seqlock and double use only plain load/store.** The memory just has to give
+single-copy atomicity for an aligned 32-bit access — architectural on any Normal
+memory — and honour the `DMB` barrier. No exclusive-access signalling at all. On a
+**cache-coherent** multicore that is everything you need; on a **non-coherent** one
+the region must additionally be **non-cacheable or explicitly cache-maintained** so
+the barrier's *ordering* turns into cross-core *visibility* (the coherency axis —
+see *Cache coherency & placement* below). That is a separate concern from the
+monitor.
+
+**triple uses `LDREX`/`STREX`**, the load-/store-exclusive pair, which depend on the
+ARM **exclusive monitor**:
+
+- the **local monitor** is per-CPU — it tags an address range on a `LDREX` and
+  clears it on any intervening write, so `STREX` can tell whether the read-modify-
+  write stayed exclusive. This alone is enough on a **single-core** part (the H735):
+  the one core both sets and checks the tag.
+- **cross-core** exclusivity needs a **global monitor** implemented in the
+  interconnect/memory for that region — the bus-level exclusive-access channel (AXI
+  `*LOCK`/exclusive transactions) that lets one core's `STREX` fail when another core
+  wrote the line in between. Without it — non-cacheable SRAM on many parts, Device
+  memory, or an interconnect with no exclusive support — `STREX` is *unpredictable*:
+  it typically livelocks (always fails) or silently isn't atomic.
+
+So the requirement ladder:
+
+| scheme | what the IOC memory must provide |
+|---|---|
+| seqlock, double | aligned word + `DMB`; on non-coherent multicore, non-cacheable / cache-maintained for visibility |
+| triple | the above **+ a cross-core global exclusive monitor** for the region |
+
+**Rule of thumb:** on a multicore target whose shared SRAM has no global monitor,
+keep saturating-writer channels on a **HW transport** (HW semaphore / mailbox — the
+interconnect *is* the arbiter; see below) rather than the triple buffer. seqlock and
+double stay valid because they never take an exclusive lock. This is one more reason
+the transport is per-channel config resolved by the OSAL, not baked into app code.
 
 ## Measured (host, 2 pinned cores, 64-byte non-scalar record, 1 s/side)
 
@@ -129,11 +291,11 @@ explicitly cache-maintained). HW mailbox/DMA transports sidestep this because th
 peripheral, not a shared cache line, carries the data. The OSAL backend owns this
 placement; app/comm code is unaffected.
 
-## Why the triple buffer is wait-free for non-scalars
+## Notes
 
-Three buffers; the indices `{writer, published, reader}` are always a permutation
-of `{0,1,2}`, rotated by a single atomic exchange. The writer fills its private
-buffer and swaps it in; the reader swaps the published buffer out for its own.
-Neither side ever touches the buffer the other is using, so there is no shared
-payload to race on and no reason to retry — for a payload of any size or shape.
-See `blob_ioc_pub` / `blob_ioc_acq` in [`osal/osal_native.c`](../osal/osal_native.c).
+The seqlock/double/triple algorithms above are the **host/sim** backends and the
+fallback on parts without IPC hardware; the per-channel transport choice is config
+(`[[ioc]] transport = …` in `config/ecu.toml`) and is resolved by the OSAL backend,
+so app/comm code never sees which scheme a channel uses. On a non-cache-coherent
+target the shared slots must live in non-cached shared SRAM (see *Cache coherency*
+above); the math (permutation of buffers, single atomic index) is unchanged.
