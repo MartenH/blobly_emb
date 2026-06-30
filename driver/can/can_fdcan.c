@@ -22,12 +22,27 @@
 #define BLOB_FDCAN_BITRATE 500000u
 #endif
 
-/* Nominal bit timing: 16 tq/bit, sample point 87.5% (sync 1 + tseg1 13 + tseg2 2). */
-#define TQ_PER_BIT 16u
-#define NBRP   (BLOB_FDCAN_KCLK_HZ / (BLOB_FDCAN_BITRATE * TQ_PER_BIT))
-#define NTSEG1 13u
-#define NTSEG2 2u
-#define NSJW   1u
+/* Nominal bit timing. Defaults give 16 tq/bit at an 87.5% sample point
+ * (sync 1 + tseg1 13 + tseg2 2), valid when the kernel clock is a multiple of
+ * bitrate*16. A board whose kernel clock isn't (e.g. the H735-DK's 25 MHz HSE)
+ * overrides these so the prescaler stays integer — e.g. 25 MHz / 500 kbit needs
+ * 10 tq (tseg1 7 + tseg2 2, NBRP 5, 80% sample). */
+#ifndef BLOB_FDCAN_TQ
+#define BLOB_FDCAN_TQ 16u
+#endif
+#ifndef BLOB_FDCAN_NTSEG1
+#define BLOB_FDCAN_NTSEG1 13u
+#endif
+#ifndef BLOB_FDCAN_NTSEG2
+#define BLOB_FDCAN_NTSEG2 2u
+#endif
+#ifndef BLOB_FDCAN_NSJW
+#define BLOB_FDCAN_NSJW 1u
+#endif
+#define NBRP   (BLOB_FDCAN_KCLK_HZ / (BLOB_FDCAN_BITRATE * BLOB_FDCAN_TQ))
+#define NTSEG1 BLOB_FDCAN_NTSEG1
+#define NTSEG2 BLOB_FDCAN_NTSEG2
+#define NSJW   BLOB_FDCAN_NSJW
 
 /* Message-RAM slice per instance (in 32-bit words): 8-byte classic element =
  * 2 header words + 2 data words. */

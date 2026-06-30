@@ -21,3 +21,6 @@ bin/
 
 # vendored CMSIS headers for the bare-metal STM32 examples (fetch via `make deps`)
 third_party/
+
+# bare-metal example build output
+examples/**/build/
