@@ -1,5 +1,5 @@
 #include "can_port.h"
-#include <stm32h735xx.h> /* CMSIS register map only — no HAL */
+#include <stm32h7xx.h> /* CMSIS family dispatcher (build sets -DSTM32H735xx / -DSTM32H755xx); no HAL */
 #include <string.h>
 
 /* Bare-metal FDCAN (Bosch M_CAN) backend for STM32 H7 — register-level, no HAL.
@@ -55,7 +55,9 @@ static FDCAN_GlobalTypeDef *inst(int idx) {
 	switch (idx) {
 	case 0:  return FDCAN1;
 	case 1:  return FDCAN2;
-	case 2:  return FDCAN3;
+#ifdef FDCAN3
+	case 2:  return FDCAN3; /* only on 3-FDCAN parts (H72x/H73x); absent on H74x/H75x */
+#endif
 	default: return 0;
 	}
 }
