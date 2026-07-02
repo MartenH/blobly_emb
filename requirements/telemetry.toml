@@ -28,15 +28,16 @@ method = "test"
 asil = "QM"
 derives = "SYS-REQ-OBS-001"
 
-# Scoped to what the loom unit test proves: the scheduler owns an observable, monotonic
-# overrun count that the run loop increments. The DETECTION policy (a pass exceeding its
-# tick, or in P1 a handler exceeding its period) lives in the run loop / per-handler
-# timing and is verified there / on target (the h735 LoadDetail overrun pulse), not by
-# this counter test.
+# Scoped to exactly what test_overrun_counter proves: the counter API. A signalled
+# overrun increments an observable, monotonic count. The DETECTION that decides an
+# overrun happened (the run loop's tick check, or in P1 a handler exceeding its period)
+# is a SEPARATE, not-yet-tracked concern — verified on target (the h735 LoadDetail
+# overrun pulse) and moving into loom per-handler in P1 — so this counter test cannot
+# make detection look verified.
 [[req]]
 id = "REQ-TELEM-004"
-title = "Observable overrun count"
-text = "The scheduler shall maintain an observable, monotonic count of scheduling overruns that the run loop increments when handler work exceeds a period's available time."
+title = "Observable overrun counter"
+text = "The scheduler shall expose an observable, monotonic overrun counter: a signalled overrun increments it, and the accumulated count is readable."
 status = "agreed"
 method = "test"
 asil = "QM"

@@ -80,8 +80,10 @@ fn test_multi_window_latches_independently() {
 }
 
 // @verifies REQ-TELEM-004
-// Overruns are counted, not measured: the caller marks a pass that blew its tick, and
-// the count accumulates (the reporter turns it into a per-period rate).
+// Covers ONLY the counter API (REQ-TELEM-004): a signalled overrun increments an
+// observable, monotonic count. It deliberately does NOT test detection — that a pass
+// actually exceeded its tick — which lives in the run loop / per-handler timing and is
+// verified there, not here.
 fn test_overrun_counter() {
 	mut s := Scheduler{}
 	assert s.overruns() == 0

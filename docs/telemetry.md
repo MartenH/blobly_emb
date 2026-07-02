@@ -167,9 +167,12 @@ Two report styles, both fed by the per-handler stats:
 Each `Scheduler` owns its **own** trace buffer, written **only** by that core's loop —
 **one writer per buffer**, so it never violates the SPSC/IOC isolation invariant. There
 is **no** single shared buffer that multiple cores write (that would need locks and could
-corrupt record order). A collector on the bus core reads each per-core buffer (over an
-IOC channel, or directly since a stopped buffer is immutable) and streams it out; records
-carry the global `handler_id`, so cores never need a shared index.
+corrupt record order). Read-out is **IOC-mediated, never a direct cross-core read**: the
+producing partition hands its stopped buffer (or successive chunks of it) to the bus core
+over an `osal.ioc_*` channel, and the bus core streams from that. This holds the "cross-
+core data flows only through IOC" invariant — on an MPU/ThreadX target the bus core has
+no mapping to another partition's RAM, and immutability-after-stop doesn't grant one.
+Records carry the global `handler_id`, so cores never need a shared index.
 
 **Capture modes**: *one-shot* (fill then stop — "trigger, let it fill, read it out") or
 *ring* (keep the last N, freeze on a trigger — "capture the moment it overran").
@@ -178,8 +181,9 @@ a reserved RAM region, no alloc.
 
 ## Wire formats
 
-Fixed 8-byte frames on classic CAN; on CAN-FD one 64-byte frame packs up to 8 of the
-per-handler records/stats. All little-endian.
+Fixed 8-byte frames on classic CAN; on CAN-FD one 64-byte frame packs several of the
+8-byte HandlerStats / bare-metal Records (up to 8, fewer with any header). The 12-byte
+preemptive Record packs at most 5 per FD frame. All little-endian.
 
 **HandlerStat** — the unsolicited live-stats push (one handler per classic frame):
 
@@ -197,8 +201,9 @@ b6-7  count_delta (u16)          invocations since the previous stat frame
 b0    opcode          1 arm | 2 start | 3 stop | 4 reset | 5 set_push | 6 dump | 7 status
 b1    arg0            set_push kind (0 stats | 1 records) / capture mode
 b2-3  period_ms       (u16) for set_push
-b4    handler_filter  0xFF = all, else a handler_id
-b5-7  reserved
+b4-5  handler_filter  (u16) 0xFFFF = all, else a handler_id — wider than the u8 id so
+                      the "all" sentinel can't collide with a valid handler
+b6-7  reserved
 ```
 
 **TraceRsp** — target → host (`rsp_id`), one per cmd:
