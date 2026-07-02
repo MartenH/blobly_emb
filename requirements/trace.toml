@@ -1,0 +1,27 @@
+# Handler runtime tracing requirements (module tier). Derives from SYS-REQ-OBS-002.
+# The design is docs/telemetry.md Part 2; these are promoted from draft as each phase
+# lands. See README.md for the method.
+
+[[req]]
+id = "REQ-TRACE-001"
+title = "Per-handler execution timing"
+text = "The scheduler shall measure each handler's execution time (last, max, and mean) and its invocation count."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-002"
+
+# Draft: the identity half of SYS-REQ-OBS-002. Measurement (REQ-TRACE-001) is verified;
+# identity is proven hand-wired in examples/trace_demo (a global handler_id on each
+# HandlerStat frame) but not config-generated/verified, so SYS-REQ-OBS-002 does not roll
+# up on timing alone. The external reporting half is the design's REQ-TRACE-004 (the
+# unsolicited push, P2 — see docs/telemetry.md), not a new ID. IDs match the design doc:
+# REQ-TRACE-003 there is the P2 captured trace buffer, deliberately left for that phase.
+[[req]]
+id = "REQ-TRACE-002"
+title = "Stable handler identity"
+text = "Each handler shall have a build-stable, globally-unique identity resolvable to its configured name without runtime string exchange."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-002"

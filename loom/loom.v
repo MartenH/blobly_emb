@@ -19,6 +19,17 @@ const max_tasks = 32
 pub const load_windows = 3
 const win_us = [u64(100_000), u64(1_000_000), u64(10_000_000)]!
 
+// HandlerStat is one handler's per-invocation timing, updated by run_profiled. The
+// duration is the handler's RESPONSE time (wall clock across the call); on a core with
+// no interrupts/preemption that equals its CPU time. mean = total_us / count.
+pub struct HandlerStat {
+pub mut:
+	last_us  u32 // duration of the most recent invocation
+	max_us   u32 // longest invocation since the last reset
+	count    u32 // invocations
+	total_us u64 // cumulative time
+}
+
 pub struct Scheduler {
 mut:
 	handlers [max_tasks]Handler
@@ -32,6 +43,7 @@ mut:
 	win_base [load_windows]u64 // window start (monotonic µs); 0 = not started
 	load_pm  [load_windows]u16 // last load, per-mille of wall clock (0..1000)
 	overruns u32               // times a scheduling pass exceeded its tick budget
+	stats    [max_tasks]HandlerStat // per-handler timing (run_profiled)
 }
 
 // every registers a handler + its partition-state context to run on a fixed
@@ -55,6 +67,54 @@ pub fn (mut s Scheduler) run(now_us u64) {
 			s.handlers[i](s.ctx[i])
 			s.due[i] = now_us + s.period[i]
 		}
+	}
+}
+
+// run_profiled is run() with per-handler timing: it dispatches every due handler,
+// brackets each with `clock` (a monotonic µs source), records the duration into that
+// handler's HandlerStat, and folds the summed handler time into the load windows — so it
+// replaces run() + account() when per-handler stats are wanted. The clock is supplied so
+// loom stays clock-free and unit-testable: pass osal.now_us on host, the DWT clock on
+// target. Cost is two clock reads per dispatched handler.
+pub fn (mut s Scheduler) run_profiled(clock fn () u64) {
+	now := clock()
+	mut busy := u64(0)
+	for i in 0 .. s.count {
+		if now >= s.due[i] {
+			t0 := clock()
+			s.handlers[i](s.ctx[i])
+			dt := clock() - t0
+			busy += dt
+			mut st := &s.stats[i]
+			st.last_us = u32(dt)
+			if u32(dt) > st.max_us {
+				st.max_us = u32(dt)
+			}
+			st.count++
+			st.total_us += dt
+			s.due[i] = now + s.period[i]
+		}
+	}
+	s.account(busy, clock())
+}
+
+// handler_count is the number of registered handlers.
+pub fn (s Scheduler) handler_count() int {
+	return s.count
+}
+
+// handler_stat returns handler i's timing snapshot (zero for an out-of-range index).
+pub fn (s Scheduler) handler_stat(i int) HandlerStat {
+	if i < 0 || i >= s.count {
+		return HandlerStat{}
+	}
+	return s.stats[i]
+}
+
+// reset_handler_max clears handler i's max (e.g. after reporting the peak-since-last).
+pub fn (mut s Scheduler) reset_handler_max(i int) {
+	if i >= 0 && i < s.count {
+		s.stats[i].max_us = 0
 	}
 }
 
