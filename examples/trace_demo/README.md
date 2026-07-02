@@ -46,6 +46,29 @@ handler | last_us | max_us | count/s
 `count/s` tracks the periods; `last`/`max` scale with each handler's work — the Loom's
 per-handler timing, live on the bus.
 
+## Captured trace (P2)
+
+Besides the live stats, the demo also **captures every invocation**: a loom trace hook
+(`set_trace_hook`) feeds one `trace.Record` per dispatched handler into a 64-record
+one-shot `TraceBuffer`; when it fills, the records are dumped on `0x7E5` (one
+`encode_record` frame each) and capture re-arms.
+
+```sh
+candump vcan0,7E5:7FF      # b0 handler_id, b2-5 start_us, b6-7 cpu_us
+```
+
+Decoded, it's the per-invocation timeline — who ran when and for how long:
+
+```
+handler  start_us  cpu_us
+  h2       1098      190     # slow (20 ms), heavy
+  h1       3545       68     # med  (10 ms)
+  h0       5813        4     # fast (5 ms), light
+  h0      11435        6
+  h1      13715       44
+  ...
+```
+
 ## Notes
 
 - **Hand-wired.** This mirrors what the loom2v HandlerStat emitter will generate; it is

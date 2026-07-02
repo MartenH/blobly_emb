@@ -30,6 +30,12 @@ pub mut:
 	total_us u64 // cumulative time
 }
 
+// RunHook is an optional per-invocation callback for the captured trace: run_profiled
+// calls it after each dispatched handler with the handler's scheduler index, its start
+// time, and its duration. C-style (ctx pointer, no closure) so loom stays decoupled —
+// the caller's hook builds the trace record; loom never depends on the trace module.
+pub type RunHook = fn (ctx voidptr, idx int, start_us u64, dt_us u64)
+
 pub struct Scheduler {
 mut:
 	handlers [max_tasks]Handler
@@ -39,11 +45,13 @@ mut:
 	count    int
 	// Per-core load accounting, per window. The run loop feeds time spent in run() to
 	// account(); once per window the busy/elapsed ratio latches into load_pm[win].
-	busy_us  [load_windows]u64 // handler time accumulated this window
-	win_base [load_windows]u64 // window start (monotonic µs); 0 = not started
-	load_pm  [load_windows]u16 // last load, per-mille of wall clock (0..1000)
-	overruns u32               // times a scheduling pass exceeded its tick budget
-	stats    [max_tasks]HandlerStat // per-handler timing (run_profiled)
+	busy_us    [load_windows]u64 // handler time accumulated this window
+	win_base   [load_windows]u64 // window start (monotonic µs); 0 = not started
+	load_pm    [load_windows]u16 // last load, per-mille of wall clock (0..1000)
+	overruns   u32               // times a scheduling pass exceeded its tick budget
+	stats      [max_tasks]HandlerStat // per-handler timing (run_profiled)
+	trace_hook RunHook = unsafe { nil } // optional per-invocation trace sink
+	trace_ctx  voidptr
 }
 
 // every registers a handler + its partition-state context to run on a fixed
@@ -92,10 +100,20 @@ pub fn (mut s Scheduler) run_profiled(clock fn () u64) {
 			}
 			st.count++
 			st.total_us += dt
+			if !isnil(s.trace_hook) {
+				s.trace_hook(s.trace_ctx, i, t0, dt)
+			}
 			s.due[i] = now + s.period[i]
 		}
 	}
 	s.account(busy, clock())
+}
+
+// set_trace_hook installs (or clears, with a nil hook) the per-invocation trace sink that
+// run_profiled calls after each dispatched handler. ctx is passed back to the hook.
+pub fn (mut s Scheduler) set_trace_hook(hook RunHook, ctx voidptr) {
+	s.trace_hook = hook
+	s.trace_ctx = ctx
 }
 
 // handler_count is the number of registered handlers.
