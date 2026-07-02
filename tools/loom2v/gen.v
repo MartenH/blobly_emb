@@ -323,6 +323,7 @@ fn main() {
 	mut telem_on := false
 	mut telem_bus := ''
 	mut telem_id := u32(0)
+	mut telem_detail_id := u32(0) // optional LoadDetail frame (multi-window + overruns)
 	mut telem_period_us := u64(1_000_000)
 	mut telem_iface := ''
 	mut telem_slot := map[string]int{}
@@ -332,10 +333,30 @@ fn main() {
 		telem_on = (tm['enabled'] or { toml.Any(false) }).bool()
 		telem_bus = (tm['bus'] or { toml.Any('') }).string()
 		telem_id = u32((tm['id'] or { toml.Any(0) }).int())
+		telem_detail_id = u32((tm['detail_id'] or { toml.Any(0) }).int())
 		if pms := tm['period_ms'] {
 			telem_period_us = u64(pms.int()) * 1000
 		}
 	}
+
+	// [target] baremetal: emit a single-core inline superloop instead of the host's
+	// spawned partitions + osal. No threads, no osal (POSIX now_us/sleep_us don't
+	// exist bare-metal); the timebase is board_now_us() and the loop paces to a fixed
+	// tick. Requires all signals partition-local (no COM bus bridge).
+	mut target_on := false
+	mut target_tick_us := u64(1000)
+	if tgt := doc.value_opt('target') {
+		tm := tgt.as_map()
+		target_on = (tm['kind'] or { toml.Any('') }).string() == 'baremetal'
+		if tms := tm['tick_ms'] {
+			target_tick_us = u64(tms.int()) * 1000
+		}
+	}
+	if target_on && has_external {
+		panic('loom2v: [target] baremetal does not support external/bus signals yet ' +
+			'(every [[signal]] must be partition-local: from == to)')
+	}
+
 	if telem_on {
 		if bc := doc.value('bus').as_map()[telem_bus] {
 			telem_iface = (bc.as_map()['interface'] or { toml.Any('') }).string()
@@ -385,7 +406,9 @@ fn main() {
 	glue << 'import ports'
 	glue << 'import app'
 	glue << 'import loom'
-	glue << 'import osal'
+	if !target_on {
+		glue << 'import osal' // host: IOC + now_us/sleep_us. Target has none of these.
+	}
 	if telem_on {
 		glue << 'import comm.telem' // CpuLoad packing for the load-telemetry tx
 	}
@@ -406,6 +429,7 @@ fn main() {
 		glue << 'import comm.uds' // UDS diagnostic services
 	}
 
+	mut all_regs := map[string][]string{} // per-partition sched.every(...) lines, reused by target run()
 	for part, clist in by_part {
 		glue << ''
 		glue << 'struct Partition_${part}_state {'
@@ -481,26 +505,31 @@ fn main() {
 				regs << '\tsched.every(${period_us}, ${gname}, &st)'
 			}
 		}
+		all_regs[part] = regs.clone()
 
-		glue << ''
-		glue << 'pub fn partition_${part}(core int, arg voidptr) {'
-		glue << '\tosal.pin_to_core(${core_of[part] or { 0 }})'
-		glue << '\tmut st := Partition_${part}_state{}'
-		glue << '\tmut sched := loom.Scheduler{}'
-		for r in regs {
-			glue << r
+		// Host: one spawned superloop per partition, paced by osal.sleep_us. Target
+		// mode emits a single inline superloop in run() instead (see below).
+		if !target_on {
+			glue << ''
+			glue << 'pub fn partition_${part}(core int, arg voidptr) {'
+			glue << '\tosal.pin_to_core(${core_of[part] or { 0 }})'
+			glue << '\tmut st := Partition_${part}_state{}'
+			glue << '\tmut sched := loom.Scheduler{}'
+			for r in regs {
+				glue << r
+			}
+			glue << '\tfor {'
+			glue << '\t\tloom_t0 := osal.now_us()'
+			glue << '\t\tsched.run(loom_t0)'
+			glue << '\t\tloom_t1 := osal.now_us()'
+			glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
+			if telem_on && 'p:${part}' in telem_slot {
+				glue << '\t\tosal.scratch_set(${telem_slot['p:${part}']}, u64(sched.load_permille()))'
+			}
+			glue << '\t\tosal.sleep_us(1000)'
+			glue << '\t}'
+			glue << '}'
 		}
-		glue << '\tfor {'
-		glue << '\t\tloom_t0 := osal.now_us()'
-		glue << '\t\tsched.run(loom_t0)'
-		glue << '\t\tloom_t1 := osal.now_us()'
-		glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
-		if telem_on && 'p:${part}' in telem_slot {
-			glue << '\t\tosal.scratch_set(${telem_slot['p:${part}']}, u64(sched.load_permille()))'
-		}
-		glue << '\t\tosal.sleep_us(1000)'
-		glue << '\t}'
-		glue << '}'
 	}
 
 	// --- generated COM bus bridge(s): decode rx -> IOC, IOC -> encode tx ---
@@ -818,7 +847,9 @@ fn main() {
 	}
 
 	// --- telemetry tx: sum per-partition load by core -> CpuLoad frame on the bus ---
-	if telem_on && telem_iface != '' {
+	// (host only: a spawned tx thread reading the per-core scratch slots. Target mode
+	// sends the CpuLoad frame inline from run(), reading load_permille() directly.)
+	if telem_on && telem_iface != '' && !target_on {
 		mut ncores := 0
 		for sc in slot_core {
 			if sc + 1 > ncores {
@@ -859,41 +890,120 @@ fn main() {
 		glue << '}'
 	}
 
-	// --- run(): launch every bus bridge + app partition, then wait. One Channel
-	//     param per bus (sorted for a stable signature main.v can rely on). ---
 	bus_names.sort()
-	glue << ''
-	mut waits := []string{}
-	if bus_names.len == 0 {
-		glue << 'pub fn run() {'
-	} else {
-		mut params := []string{}
-		for b in bus_names {
-			params << '${snake(b)} can.Channel'
+	if target_on {
+		// --- target run(): one inline single-core superloop. No spawn, no osal. The
+		//     timebase is the board's DWT clock (board_now_us); the loop paces to a
+		//     fixed tick so idle time between passes is real idle (the Loom measures
+		//     load as run-time / wall-clock, so unpaced spinning would read ~50%). The
+		//     CpuLoad frame is sent inline from load_permille() — no scratch, no tx
+		//     thread. Takes the telemetry bus channel (main.v opens it after board init).
+		if by_part.keys().len != 1 {
+			panic('loom2v: [target] baremetal supports exactly one partition (got ${by_part.keys().len})')
 		}
-		glue << 'pub fn run(${params.join(', ')}) {'
-		for b in bus_names {
-			bb := snake(b)
-			mut spawn_args := bb
-			for d in bus_dests[b] or { []string{} } {
-				spawn_args += ', ${snake(d)}'
+		part := by_part.keys()[0]
+		chp := snake(telem_bus)
+		glue << ''
+		glue << 'fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)'
+		glue << ''
+		glue << 'pub fn run(${chp} can.Channel) {'
+		glue << '\tmut ch := ${chp}'
+		glue << '\tmut st := Partition_${part}_state{}'
+		glue << '\tmut sched := loom.Scheduler{}'
+		for r in all_regs[part] or { []string{} } {
+			glue << r
+		}
+		if telem_on && telem_iface != '' {
+			glue << '\tmut load := [8]u16{}'
+			glue << '\ttelem_period_us := u64(${telem_period_us})'
+			glue << '\tmut last_telem := u64(0)'
+			if telem_detail_id != 0 {
+				glue << '\tmut last_overruns := u32(0) // for the per-period overrun count'
 			}
-			glue << '\tt_${bb} := spawn partition_${bb}(${spawn_args})'
-			waits << 't_${bb}'
 		}
+		glue << '\ttick_us := u64(${target_tick_us})'
+		glue << '\tmut next_tick := C.board_now_us() + tick_us'
+		glue << '\tfor {'
+		glue << '\t\tt0 := C.board_now_us()'
+		glue << '\t\tsched.run(t0)'
+		glue << '\t\tt1 := C.board_now_us()'
+		glue << '\t\tsched.account(t1 - t0, t1) // handler time -> this core\'s load'
+		glue << '\t\tif t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun'
+		glue << '\t\t\tsched.mark_overrun()'
+		glue << '\t\t}'
+		if telem_on && telem_iface != '' {
+			glue << '\t\tif t1 - last_telem >= telem_period_us {'
+			glue << '\t\t\tlast_telem = t1'
+			glue << '\t\t\tload[0] = sched.load_permille() // single M7 -> core 0 only'
+			glue << '\t\t\tframe := telem.encode_cpuload(load, 1)'
+			glue << '\t\t\tmut f := can.Frame{'
+			glue << '\t\t\t\tid:  u32(0x${telem_id.hex()})'
+			glue << '\t\t\t\tlen: 8'
+			glue << '\t\t\t}'
+			glue << '\t\t\tfor i in 0 .. 8 {'
+			glue << '\t\t\t\tf.data[i] = frame[i]'
+			glue << '\t\t\t}'
+			glue << '\t\t\tch.send(f)'
+			if telem_detail_id != 0 {
+				glue << '\t\t\tovr := sched.overruns()'
+				glue << '\t\t\tdetail := telem.encode_loaddetail(sched.load_permille_100ms(),'
+				glue << '\t\t\t\tsched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)'
+				glue << '\t\t\tlast_overruns = ovr'
+				glue << '\t\t\tmut d := can.Frame{'
+				glue << '\t\t\t\tid:  u32(0x${telem_detail_id.hex()})'
+				glue << '\t\t\t\tlen: 8'
+				glue << '\t\t\t}'
+				glue << '\t\t\tfor i in 0 .. 8 {'
+				glue << '\t\t\t\td.data[i] = detail[i]'
+				glue << '\t\t\t}'
+				glue << '\t\t\tch.send(d)'
+			}
+			glue << '\t\t}'
+		}
+		glue << '\t\tfor C.board_now_us() < next_tick {} // idle to the tick (real idle)'
+		glue << '\t\tnext_tick += tick_us'
+		glue << '\t\tnow := C.board_now_us()'
+		glue << '\t\tif now > next_tick { // a pass overran the tick — resync'
+		glue << '\t\t\tnext_tick = now + tick_us'
+		glue << '\t\t}'
+		glue << '\t}'
+		glue << '}'
+	} else {
+		// --- host run(): launch every bus bridge + app partition, then wait. One
+		//     Channel param per bus (sorted for a stable signature main.v can rely on). ---
+		glue << ''
+		mut waits := []string{}
+		if bus_names.len == 0 {
+			glue << 'pub fn run() {'
+		} else {
+			mut params := []string{}
+			for b in bus_names {
+				params << '${snake(b)} can.Channel'
+			}
+			glue << 'pub fn run(${params.join(', ')}) {'
+			for b in bus_names {
+				bb := snake(b)
+				mut spawn_args := bb
+				for d in bus_dests[b] or { []string{} } {
+					spawn_args += ', ${snake(d)}'
+				}
+				glue << '\tt_${bb} := spawn partition_${bb}(${spawn_args})'
+				waits << 't_${bb}'
+			}
+		}
+		for part, _ in by_part {
+			glue << '\tt_${part} := spawn partition_${part}(${core_of[part] or { 0 }}, unsafe { nil })'
+			waits << 't_${part}'
+		}
+		if telem_on && telem_iface != '' {
+			glue << '\tt_telem := spawn partition_telem()'
+			waits << 't_telem'
+		}
+		for w in waits {
+			glue << '\t${w}.wait()'
+		}
+		glue << '}'
 	}
-	for part, _ in by_part {
-		glue << '\tt_${part} := spawn partition_${part}(${core_of[part] or { 0 }}, unsafe { nil })'
-		waits << 't_${part}'
-	}
-	if telem_on && telem_iface != '' {
-		glue << '\tt_telem := spawn partition_telem()'
-		waits << 't_telem'
-	}
-	for w in waits {
-		glue << '\t${w}.wait()'
-	}
-	glue << '}'
 
 	os.write_file(args[3], signals.join('\n') + '\n') or { panic('write ${args[3]}: ${err}') }
 	os.write_file(args[4], ports.join('\n') + '\n') or { panic('write ${args[4]}: ${err}') }

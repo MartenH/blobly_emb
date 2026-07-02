@@ -33,3 +33,26 @@ pub fn decode_cpuload(payload [8]u8, core int) u8 {
 	}
 	return payload[core]
 }
+
+// pm_to_pct converts a per-mille load (0..1000) to a clamped percent (0..100).
+fn pm_to_pct(load_pm u16) u8 {
+	mut pct := u32(load_pm) / 10
+	if pct > 100 {
+		pct = 100
+	}
+	return u8(pct)
+}
+
+// encode_loaddetail packs one core's load over three windows plus its overrun count
+// into an 8-byte payload: byte0 = load over the fast (100 ms) window, byte1 = 1 s,
+// byte2 = 10 s (each a percent 0..100), byte3 = overrun count (saturating at 255).
+// The fast window surfaces bursts the 1 s figure averages away; a non-zero, climbing
+// overrun byte means the commanded work is exceeding the core's capacity.
+pub fn encode_loaddetail(load_100ms u16, load_1s u16, load_10s u16, overruns u32) [8]u8 {
+	mut b := [8]u8{}
+	b[0] = pm_to_pct(load_100ms)
+	b[1] = pm_to_pct(load_1s)
+	b[2] = pm_to_pct(load_10s)
+	b[3] = if overruns > 255 { u8(255) } else { u8(overruns) }
+	return b
+}

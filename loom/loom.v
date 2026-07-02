@@ -12,6 +12,13 @@ pub type Handler = fn (ctx voidptr)
 
 const max_tasks = 32
 
+// Load is measured over three averaging windows at once: a fast 100 ms window that
+// exposes bursts and overruns as they happen, a 1 s window for the steady figure, and
+// a 10 s window for the slow trend. A single window hides an overrun spike by averaging
+// it away; the fast one does not.
+pub const load_windows = 3
+const win_us = [u64(100_000), u64(1_000_000), u64(10_000_000)]!
+
 pub struct Scheduler {
 mut:
 	handlers [max_tasks]Handler
@@ -19,12 +26,12 @@ mut:
 	period   [max_tasks]u64 // microseconds
 	due      [max_tasks]u64 // next due time, microseconds
 	count    int
-	// Per-core load accounting. The run loop feeds time spent in run() to
-	// account(); once per window the busy/elapsed ratio latches into load_pm.
-	win_us   u64 = 1_000_000 // load-averaging window (default 1 s)
-	busy_us  u64             // handler time accumulated this window
-	win_base u64             // window start (monotonic µs); 0 = not started
-	load_pm  u16             // last load, per-mille of wall clock (0..1000)
+	// Per-core load accounting, per window. The run loop feeds time spent in run() to
+	// account(); once per window the busy/elapsed ratio latches into load_pm[win].
+	busy_us  [load_windows]u64 // handler time accumulated this window
+	win_base [load_windows]u64 // window start (monotonic µs); 0 = not started
+	load_pm  [load_windows]u16 // last load, per-mille of wall clock (0..1000)
+	overruns u32               // times a scheduling pass exceeded its tick budget
 }
 
 // every registers a handler + its partition-state context to run on a fixed
@@ -57,24 +64,53 @@ pub fn (mut s Scheduler) run(now_us u64) {
 // into load_pm. Kept clock-free (the caller supplies the time) so it stays
 // deterministic and unit-testable.
 pub fn (mut s Scheduler) account(busy_us u64, now_us u64) {
-	if s.win_base == 0 {
-		s.win_base = now_us
-	}
-	s.busy_us += busy_us
-	elapsed := now_us - s.win_base
-	if elapsed >= s.win_us {
-		mut pm := s.busy_us * 1000 / elapsed
-		if pm > 1000 {
-			pm = 1000 // clamp measurement noise (busy can't exceed wall time)
+	for i in 0 .. load_windows {
+		if s.win_base[i] == 0 {
+			s.win_base[i] = now_us
 		}
-		s.load_pm = u16(pm)
-		s.busy_us = 0
-		s.win_base = now_us
+		s.busy_us[i] += busy_us
+		elapsed := now_us - s.win_base[i]
+		if elapsed >= win_us[i] {
+			mut pm := s.busy_us[i] * 1000 / elapsed
+			if pm > 1000 {
+				pm = 1000 // clamp measurement noise (busy can't exceed wall time)
+			}
+			s.load_pm[i] = u16(pm)
+			s.busy_us[i] = 0
+			s.win_base[i] = now_us
+		}
 	}
 }
 
-// load_permille reports this core's most recent processor load: the fraction of
-// wall-clock time spent running handlers over the last window, 0..1000 (= 0..100.0%).
+// mark_overrun records that a scheduling pass ran longer than its tick budget — the
+// core could not finish its due handlers within the period, so it is momentarily
+// saturated. The caller (the super-loop) detects this: pass time > tick.
+pub fn (mut s Scheduler) mark_overrun() {
+	s.overruns++
+}
+
+// overruns is the running count of tick overruns since start (saturating handled by
+// the reporter). A climbing count means the commanded work exceeds core capacity.
+pub fn (s Scheduler) overruns() u32 {
+	return s.overruns
+}
+
+// load_permille reports this core's most recent processor load over the 1 s window:
+// the fraction of wall-clock time spent running handlers, 0..1000 (= 0..100.0%).
 pub fn (s Scheduler) load_permille() u16 {
-	return s.load_pm
+	return s.load_pm[1]
+}
+
+// load_permille_100ms / _1s / _10s report the same load over the fast / steady / trend
+// windows. The 100 ms window surfaces bursts and overruns the 1 s window averages out.
+pub fn (s Scheduler) load_permille_100ms() u16 {
+	return s.load_pm[0]
+}
+
+pub fn (s Scheduler) load_permille_1s() u16 {
+	return s.load_pm[1]
+}
+
+pub fn (s Scheduler) load_permille_10s() u16 {
+	return s.load_pm[2]
 }
