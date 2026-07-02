@@ -222,9 +222,11 @@ when   = "== 1"      # ==, !=, >, <, changed, & mask
 pre    = 75          # % of the ring kept before the trigger (rest is post-trigger)
 ```
 
-`source = "hw"` is parsed + documented but *not implemented* today — the seam and the key
-exist, so adding it is a backend, not a redesign. That's how we "prepare for" the
-hardware route without pulling debug HW into the build now.
+`source = "hw"` is a **reserved** key in this design — nothing parses `[trace]` config
+yet (no trace codegen exists today); when the config is implemented, `hw` is accepted and
+routed to the DWT backend. The point is that the *seam and the config shape* are designed
+now, so adding it later is a backend, not a redesign — "preparing for" the hardware route
+without pulling debug HW into the build.
 
 **Prior art** (this is a well-trodden pattern): ARM CoreSight **ETB + trigger** and the
 Cortex-M **DWT watchpoint** (the hardware route we're deliberately *not* taking yet);
@@ -312,7 +314,8 @@ bus            = "can0"
 cmd_id         = 0x7E2   # host -> target: control
 rsp_id         = 0x7E3   # target -> host: ack + status
 push_ms        = 1000    # optional: push HandlerStat every 1 s with no request (0 = off)
-buffer_records = 4096    # per-core capture depth (see Recording) — RAM vs trace depth
+buffer_records = 4096    # per-core capture depth, 1..65535 (see Recording) — RAM vs depth
+                         # capped at 65535: records_used/capacity are u16 in TraceRsp
 ```
 
 Push is enabled by a `set_push` cmd *or* from config at boot (so a target streams stats
@@ -357,17 +360,20 @@ captured trace drives the timeline and histograms.
 
 ## Requirements
 
-Under `SYS-REQ-OBS-002` "handler-level runtime observability" (ASIL QM). **REQ-TRACE-001**
-(measurement) is agreed + verified and **REQ-TRACE-002** (identity) is draft — both now
-in `requirements/trace.toml`. The ones below are still **proposed (draft in this doc)**
-until their phase lands, so nothing is marked covered prematurely:
+The `REQ-TRACE-*` here derive `SYS-REQ-OBS-002` "handler-level runtime observability";
+`REQ-TELEM-005` below derives `SYS-REQ-OBS-001` (processor **load** observability — it's a
+load frame, not handler runtime). All ASIL QM. **REQ-TRACE-001** (measurement) is agreed +
+verified and **REQ-TRACE-002** (identity) is draft — both now in
+`requirements/trace.toml`. The ones below are still **proposed (draft in this doc)** until
+their phase lands, so nothing is marked covered prematurely:
 
-- **REQ-TELEM-005** — the ECU shall transmit the multi-window load + overrun count as a
-  CAN message (the LoadDetail frame). *(implemented target-only; pending host support /
-  sign-off, so not yet in `requirements/telemetry.toml`.)*
+- **REQ-TELEM-005** *(→ SYS-REQ-OBS-001, load)* — the ECU shall transmit the multi-window
+  load + overrun count as a CAN message (the LoadDetail frame). *(implemented target-only;
+  pending host support / sign-off, so not yet in `requirements/telemetry.toml`.)*
 - **REQ-TRACE-003** — the ECU shall capture a time-ordered trace of handler invocations
-  into a per-core buffer whose depth is **configured** (`buffer_records`, a static array,
-  no runtime alloc), single-writer, and stop when the buffer is full.
+  into a per-core buffer whose depth is **configured** (`buffer_records`, 1..65535 to fit
+  the u16 status fields, a static array, no runtime alloc), single-writer, and stop when
+  the buffer is full.
 - **REQ-TRACE-004** — capture shall be controllable via a configurable command/response
   protocol; trace data shall be readable over the bus (bulk via ISO-TP) and the target
   shall optionally push trace data unsolicited at a configured rate. *(cmd/rsp + push +
