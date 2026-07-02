@@ -58,8 +58,9 @@ void board_clock_init(void) {
 	RCC->D3CFGR = RCC_D3CFGR_D3PPRE_DIV2;
 
 	/* 6. PLL1 from HSE: /5 = 5 MHz ref, x220 = 1100 MHz VCO (wide), /2 = 550 MHz.
-	 *    Divider fields are written value-1. */
-	RCC->PLLCKSELR = (5u << RCC_PLLCKSELR_DIVM1_Pos) | (2u << RCC_PLLCKSELR_PLLSRC_Pos);
+	 *    Divider fields are written value-1. PLLSRC = HSE is 0b10 (=2); the symbolic
+	 *    constant makes that explicit (0=HSI, 1=CSI, 2=HSE, 3=none). */
+	RCC->PLLCKSELR = (5u << RCC_PLLCKSELR_DIVM1_Pos) | RCC_PLLCKSELR_PLLSRC_HSE;
 	RCC->PLLCFGR = RCC_PLLCFGR_PLL1RGE_1 | RCC_PLLCFGR_DIVP1EN;
 	RCC->PLL1DIVR = ((220u - 1u) << RCC_PLL1DIVR_N1_Pos) | ((2u - 1u) << RCC_PLL1DIVR_P1_Pos)
 	              | ((2u - 1u) << RCC_PLL1DIVR_Q1_Pos) | ((2u - 1u) << RCC_PLL1DIVR_R1_Pos);
