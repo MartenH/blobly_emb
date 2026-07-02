@@ -17,6 +17,8 @@ pub const op_status = u8(7) // just report state
 // Response result codes.
 pub const result_ok = u8(0)
 pub const result_bad_opcode = u8(1)
+pub const result_unsupported = u8(2) // a known opcode that isn't implemented yet
+pub const result_not_ready = u8(3) // e.g. dump requested while still capturing
 
 // Cmd is the decoded 8-byte TraceCmd.
 pub struct Cmd {
@@ -104,12 +106,20 @@ pub fn handle_cmd(mut tb TraceBuffer, c Cmd, core u8) ([8]u8, bool) {
 			tb.start()
 		}
 		op_stop {
-			tb.trigger() // stop now = freeze/full at the current fill
+			tb.stop() // freeze now at the current fill (not the pre/post trigger)
 		}
 		op_dump {
-			do_dump = true
+			// only a stopped buffer is safe to stream — capturing is still being written
+			if tb.state() == .full || tb.state() == .frozen {
+				do_dump = true
+			} else {
+				result = result_not_ready
+			}
 		}
-		op_set_push, op_status {} // set_push reserved (push is config-driven today)
+		op_set_push {
+			result = result_unsupported // push is config-driven today; runtime config TBD
+		}
+		op_status {}
 		else {
 			result = result_bad_opcode
 		}

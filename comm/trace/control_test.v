@@ -36,6 +36,15 @@ fn test_handle_cmd_lifecycle() {
 	assert decode_rsp(b1).state == 1 // capturing
 	assert tb.state() == .capturing
 
+	// dump while still capturing is rejected (buffer is being written)
+	bnr, dnr := handle_cmd(mut tb, Cmd{ opcode: op_dump }, 0)
+	assert !dnr
+	assert decode_rsp(bnr).result == result_not_ready
+
+	// set_push is a known opcode that isn't implemented -> unsupported
+	bsp, _ := handle_cmd(mut tb, Cmd{ opcode: op_set_push }, 0)
+	assert decode_rsp(bsp).result == result_unsupported
+
 	// fill it, then status shows full
 	for i in 0 .. 4 {
 		tb.push(Record{ handler_id: u8(i) })
@@ -52,4 +61,16 @@ fn test_handle_cmd_lifecycle() {
 	// an unknown opcode is rejected
 	b4, _ := handle_cmd(mut tb, Cmd{ opcode: 99 }, 0)
 	assert decode_rsp(b4).result == result_bad_opcode
+}
+
+// op_stop freezes a ring immediately at the current fill (not a delayed pre/post freeze).
+fn test_stop_freezes_ring_now() {
+	mut backing := [8]Record{}
+	mut tb := new_buffer(&backing[0], 8, .ring, 50)
+	tb.start()
+	tb.push(Record{ handler_id: 1 })
+	tb.push(Record{ handler_id: 2 })
+	handle_cmd(mut tb, Cmd{ opcode: op_stop }, 0)
+	assert tb.state() == .frozen
+	assert tb.used() == 2 // frozen right here, no extra post-trigger records
 }
