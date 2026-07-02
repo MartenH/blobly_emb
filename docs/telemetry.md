@@ -163,27 +163,49 @@ Two report styles, both fed by the same per-task stats:
    fill, read it out") or *ring* (keep the last N, freeze on a trigger — good for
    "capture the moment it overran"). One-shot is the first cut.
 
-## Trigger & read-out over CAN
+## Control & read-out over CAN
 
-Reuse the diagnostic stack already in the tree (`comm/isotp`, `comm/uds`) rather than
-inventing a control protocol:
+Tracing has its **own lightweight command/response** protocol for control — **not** UDS.
+The bulk buffer transfer rides **ISO-TP** (which is a given in the stack) for
+segmentation, but as the raw transport only: no UDS service layer, no DIDs, no
+RoutineControl. And the target can **push unsolicited** so it streams without being
+polled ("send me the task times every 1 s").
 
-- **Control** — a UDS **RoutineControl** (start / stop / reset capture, pick mode +
-  filter by task_id). One diagnostic request over ISO-TP; no new PDU design.
-- **Read-out** — the buffer is bulk data, so stream it over **ISO-TP** (multi-frame),
-  either as a UDS **ReadMemoryByAddress**/**ReadDataByIdentifier** of a "trace buffer"
-  DID, or a dedicated upload routine. Host pulls when capture is `full`/`stopped`.
-- **Status** — a small periodic frame (or a DID): `state (idle/armed/capturing/full)`,
-  `records_used / capacity`, `dropped`. So the host knows when to read.
+**Control (cmd → rsp), config-declared frames.** A `[trace]` block names the ids/bus,
+like any other frame — nothing hard-coded:
 
-This keeps one identity model and one transport, and it composes with the E2E/SecOC
-protection the diagnostic path already supports.
+```toml
+[trace]
+bus     = "can0"
+cmd_id  = 0x7E2   # host -> target: control
+rsp_id  = 0x7E3   # target -> host: ack + status
+push_ms = 1000    # optional: stream live stats every 1 s with no request (0 = off)
+```
+
+Opcodes (1-byte + args in the frame): `arm` / `start` / `stop` / `reset`,
+`set_push {stats|records, period_ms, task_filter}`, `dump`. Each cmd gets a `rsp`:
+opcode echo + result + `state (idle/armed/capturing/full)` + `records_used/capacity`.
+Fixed 8-byte (or FD) frames; no segmentation, no service ids.
+
+**Unsolicited push (no request).** Enabled by a `set_push` cmd *or* from config at boot
+(so a target streams with no host present — handy on a bench):
+- **live stats** — a periodic per-task frame (`task_id | last_us | max_us | flags`), the
+  runtime sibling of LoadDetail. The common case; needs no buffer.
+
+**Bulk dump over ISO-TP.** On `dump` (or auto when the buffer is full) the fixed-record
+buffer is sent as **one ISO-TP segmented block** — the transport handles multi-frame +
+flow control, so there's no bespoke sequence-number scheme. blobly_net reassembles and
+decodes the records via the manifest.
+
+E2E/SecOC can wrap any of these frames exactly as COM does, if the data must be
+protected.
 
 ## Phasing
 
-1. **P1 — loom per-FB timing + live stats frame** (bare-metal, exact; no preemption).
-   Build + verify on the H735 like the load telemetry. `REQ-TRACE-001/002`.
-2. **P2 — captured trace buffer + UDS trigger/read-out** (one-shot, ISO-TP upload).
+1. **P1 — loom per-FB timing + unsolicited live-stats push** (bare-metal, exact; no
+   preemption). Config-enabled periodic per-task frame, verified on the H735 like the
+   load telemetry — no control protocol needed yet. `REQ-TRACE-001/002`.
+2. **P2 — captured trace buffer + cmd/rsp control + ISO-TP dump** (one-shot).
    `REQ-TRACE-003/004`.
 3. **P3 — ThreadX preemption** (execution-profile kit + state-change hook → CPU time,
    preemption count/latency). `REQ-TRACE-005`.
@@ -201,16 +223,19 @@ observability"), ASIL QM, method test/review:
   configured name without runtime string exchange. *(manifest)*
 - **REQ-TRACE-003** — the ECU shall capture a time-ordered trace of task invocations
   into a fixed buffer, and stop capture when the buffer is full. *(one-shot)*
-- **REQ-TRACE-004** — capture shall be start/stoppable, and the trace readable, over
-  the bus. *(UDS RoutineControl + ISO-TP)*
+- **REQ-TRACE-004** — capture shall be controllable via a configurable command/response
+  protocol; trace data shall be readable over the bus (bulk via ISO-TP) and the target
+  shall optionally push trace data unsolicited at a configured rate. *(cmd/rsp + push +
+  ISO-TP; not UDS)*
 - **REQ-TRACE-005** — where the kernel is preemptive, reported task CPU time shall
   exclude time the task was preempted. *(ThreadX profile kit)*
 
-## Open decisions (please confirm)
+## Open decisions
 
 1. **Identity**: shared generated manifest (recommended) vs runtime announce.
-2. **First readout path**: UDS/ISO-TP (reuses the diag stack) vs a bespoke lightweight
-   multi-frame upload. Recommendation: UDS/ISO-TP.
+2. **Control/transport**: **decided** — lightweight config-declared cmd/rsp for control
+   (not UDS), unsolicited push for the live case, ISO-TP for the bulk buffer dump.
 3. **Capture mode first**: one-shot fill-and-stop (recommended) vs freeze-the-ring.
-4. **Live stats frame** in P1 alongside the buffer, or buffer-only from the start?
-5. **Record width**: 8 B/record (above) balances fidelity vs buffer depth — good?
+4. **Record width**: 8 B/record (above) balances fidelity vs buffer depth — good?
+5. **Bulk dump on classic CAN vs CAN-FD**: ISO-TP works on both; FD just needs far fewer
+   frames. Follow the bus's configured `fd` flag.
