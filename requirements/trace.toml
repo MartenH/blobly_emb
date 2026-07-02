@@ -1,0 +1,12 @@
+# Handler runtime tracing requirements (module tier). Derives from SYS-REQ-OBS-002.
+# The design is docs/telemetry.md Part 2; these are promoted from draft as each phase
+# lands. See README.md for the method.
+
+[[req]]
+id = "REQ-TRACE-001"
+title = "Per-handler execution timing"
+text = "The scheduler shall measure each handler's execution time (last, max, and mean) and its invocation count."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-002"

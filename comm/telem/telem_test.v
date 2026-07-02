@@ -35,3 +35,24 @@ fn test_ncores_bounded() {
 	assert b[0] == 10
 	assert b[7] == 80
 }
+
+// HandlerStat round-trips through encode/decode, and durations past the u16 range
+// saturate with the saturated flag set.
+fn test_handlerstat_roundtrip() {
+	b := encode_handlerstat(5, trace_flag_overran, 1234, 5678, 42)
+	d := decode_handlerstat(b)
+	assert d.handler_id == 5
+	assert d.flags == trace_flag_overran
+	assert d.last_us == 1234
+	assert d.max_us == 5678
+	assert d.count_delta == 42
+}
+
+fn test_handlerstat_saturates() {
+	b := encode_handlerstat(0, 0, 70000, 100, 99999) // last_us + count past u16
+	d := decode_handlerstat(b)
+	assert d.last_us == 0xFFFF, 'last should clamp'
+	assert d.flags & trace_flag_saturated != 0, 'saturated flag set'
+	assert d.count_delta == 0xFFFF, 'count should clamp'
+	assert d.max_us == 100
+}

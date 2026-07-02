@@ -56,3 +56,58 @@ pub fn encode_loaddetail(load_100ms u16, load_1s u16, load_10s u16, overruns u32
 	b[3] = if overruns > 255 { u8(255) } else { u8(overruns) }
 	return b
 }
+
+// HandlerStat frame flags.
+pub const trace_flag_overran = u8(0x01) // the last invocation exceeded its period
+pub const trace_flag_preempted = u8(0x02) // the handler/thread was preempted (RTOS)
+pub const trace_flag_saturated = u8(0x04) // a µs field was clamped to the u16 range
+
+// HandlerStatFrame is the decoded HandlerStat payload (for tests / host tooling).
+pub struct HandlerStatFrame {
+pub:
+	handler_id  u8
+	flags       u8
+	last_us     u16
+	max_us      u16
+	count_delta u16
+}
+
+// encode_handlerstat packs one handler's live timing into an 8-byte HandlerStat frame:
+// the global handler_id, flags, the last and max response time in microseconds (u16,
+// saturating — a duration past the range is clamped and the saturated flag is set), and
+// the invocations since the previous frame. All little-endian.
+pub fn encode_handlerstat(handler_id u8, flags u8, last_us u32, max_us u32, count_delta u32) [8]u8 {
+	mut f := flags
+	mut last16 := u16(last_us)
+	if last_us > 0xFFFF {
+		last16 = 0xFFFF
+		f |= trace_flag_saturated
+	}
+	mut max16 := u16(max_us)
+	if max_us > 0xFFFF {
+		max16 = 0xFFFF
+		f |= trace_flag_saturated
+	}
+	cnt16 := if count_delta > 0xFFFF { u16(0xFFFF) } else { u16(count_delta) }
+	mut b := [8]u8{}
+	b[0] = handler_id
+	b[1] = f
+	b[2] = u8(last16)
+	b[3] = u8(last16 >> 8)
+	b[4] = u8(max16)
+	b[5] = u8(max16 >> 8)
+	b[6] = u8(cnt16)
+	b[7] = u8(cnt16 >> 8)
+	return b
+}
+
+// decode_handlerstat is the inverse (tests / host tooling).
+pub fn decode_handlerstat(p [8]u8) HandlerStatFrame {
+	return HandlerStatFrame{
+		handler_id:  p[0]
+		flags:       p[1]
+		last_us:     u16(p[2]) | (u16(p[3]) << 8)
+		max_us:      u16(p[4]) | (u16(p[5]) << 8)
+		count_delta: u16(p[6]) | (u16(p[7]) << 8)
+	}
+}

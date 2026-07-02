@@ -113,3 +113,11 @@ text = "The ECU shall make each core's processor load observable at runtime."
 status = "agreed"
 method = "test"
 asil = "QM"
+
+[[req]]
+id = "SYS-REQ-OBS-002"
+title = "Handler-level runtime observability"
+text = "The ECU shall make each handler's runtime (execution time and invocation rate) observable at runtime."
+status = "agreed"
+method = "test"
+asil = "QM"

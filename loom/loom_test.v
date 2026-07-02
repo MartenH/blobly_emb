@@ -92,3 +92,41 @@ fn test_overrun_counter() {
 	s.mark_overrun()
 	assert s.overruns() == 3, 'overruns should accumulate'
 }
+
+// FakeClock is a deterministic µs source for run_profiled tests: a work_handler advances
+// it by `step`, simulating a handler that runs for `step` µs, and the `clock` closure
+// reads the same instance so bracket durations come out exact.
+struct FakeClock {
+mut:
+	t    u64
+	step u64
+}
+
+fn work_handler(ctx voidptr) {
+	mut fc := unsafe { &FakeClock(ctx) }
+	fc.t += fc.step
+}
+
+// @verifies REQ-TRACE-001
+// run_profiled brackets each dispatched handler with the supplied clock and records its
+// duration (last/max/count/total), and only fires a handler when its period has elapsed.
+fn test_run_profiled_records_handler_time() {
+	fc := &FakeClock{
+		t:    0
+		step: 50
+	}
+	clock := fn [fc] () u64 {
+		return fc.t
+	}
+	mut s := Scheduler{}
+	s.every(1000, work_handler, fc) // handler "runs" for 50 µs
+	s.run_profiled(clock) // due at 0 -> fires; clock advances 0 -> 50
+	st := s.handler_stat(0)
+	assert st.count == 1, 'count=${st.count}'
+	assert st.last_us == 50, 'last=${st.last_us}'
+	assert st.max_us == 50, 'max=${st.max_us}'
+	assert st.total_us == 50, 'total=${st.total_us}'
+	// 50 µs elapsed < 1000 µs period -> not due, no second invocation
+	s.run_profiled(clock)
+	assert s.handler_stat(0).count == 1, 'must not re-fire before its period'
+}
