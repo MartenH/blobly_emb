@@ -69,6 +69,23 @@ handler  start_us  cpu_us
   ...
 ```
 
+## Control it (P2, step 3)
+
+The capture is **host-driven** over a cmd/rsp protocol (not UDS). Send an 8-byte
+`TraceCmd` on `0x7E2`; the target replies with a `TraceRsp` on `0x7E3` (opcode, result,
+state, records_used, capacity), and on `dump` streams the records on `0x7E5`.
+
+```sh
+candump vcan0,7E3:7FF,7E5:7FF &      # watch responses + the dump
+cansend vcan0 7E2#0700000000000000   # opcode 7 = status  -> rsp: state 2 (full), used 64
+cansend vcan0 7E2#0600000000000000   # opcode 6 = dump    -> rsp + 64 record frames
+cansend vcan0 7E2#0400000000000000   # opcode 4 = reset   -> rsp: state 1 (capturing)
+```
+
+`dump` is refused (`result_not_ready`) unless the buffer is full/frozen — you never
+stream a buffer that's still being written. The bulk dump is one frame per record here;
+it becomes a single **ISO-TP** block next.
+
 ## Notes
 
 - **Hand-wired.** This mirrors what the loom2v HandlerStat emitter will generate; it is

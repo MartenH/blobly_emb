@@ -23,6 +23,8 @@ import driver.can
 
 const trace_id = u32(0x7E4) // HandlerStat live stats
 const record_id = u32(0x7E5) // captured-trace record dump
+const cmd_id = u32(0x7E2) // TraceCmd  (host -> target)
+const rsp_id = u32(0x7E3) // TraceRsp  (target -> host)
 
 // Capture holds the one-shot record buffer + the capture start time; passed to the loom
 // trace hook as ctx so the hook builds one Record per handler invocation.
@@ -123,20 +125,41 @@ fn main() {
 	mut last_count := [3]u32{}
 	for {
 		sched.run_profiled(osal.now_us)
-		if cap.buf.state() == .full { // one-shot filled -> dump + re-arm
-			for i in u32(0) .. cap.buf.used() {
-				b := trace.encode_record(cap.buf.record_at(i))
-				mut rf := can.Frame{
-					id:  record_id
-					len: 8
-				}
-				for j in 0 .. 8 {
-					rf.data[j] = b[j]
-				}
-				ch.send(rf)
+
+		// handle a TraceCmd if one arrived (host-driven control): arm/stop/dump/reset/
+		// status -> apply + reply with a TraceRsp; on dump, stream the records.
+		mut rx := can.Frame{}
+		if ch.recv(mut rx) && rx.id == cmd_id && rx.len >= 8 {
+			mut cb := [8]u8{}
+			for j in 0 .. 8 {
+				cb[j] = rx.data[j]
 			}
-			cap.start = osal.now_us()
-			cap.buf.start()
+			c := trace.decode_cmd(cb)
+			rspb, do_dump := trace.handle_cmd(mut cap.buf, c, 0)
+			if c.opcode == trace.op_arm || c.opcode == trace.op_start || c.opcode == trace.op_reset {
+				cap.start = osal.now_us() // relative start_us baseline for the new capture
+			}
+			mut rf := can.Frame{
+				id:  rsp_id
+				len: 8
+			}
+			for j in 0 .. 8 {
+				rf.data[j] = rspb[j]
+			}
+			ch.send(rf)
+			if do_dump {
+				for i in u32(0) .. cap.buf.used() {
+					b := trace.encode_record(cap.buf.record_at(i))
+					mut df := can.Frame{
+						id:  record_id
+						len: 8
+					}
+					for j in 0 .. 8 {
+						df.data[j] = b[j]
+					}
+					ch.send(df)
+				}
+			}
 		}
 		now := osal.now_us()
 		if now - last_push >= 1_000_000 { // push HandlerStat once a second
