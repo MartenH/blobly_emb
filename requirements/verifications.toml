@@ -24,3 +24,15 @@ context = "review"
 verifies = ["REQ-INV-005"]
 approved_by = "" # set to the reviewer's name to mark REQ-INV-005 verified
 date = ""
+
+# On-target hardware bring-up (a manual test, signed off here). examples/h735_canecho
+# flashed to an STM32H735G-DK; FDCAN1 echoed classic frames back with id+1 against a
+# PCAN-USB Pro FD at 500 kbit/s — tx (124<-123, 457<-456, 002<-001), rx (every frame
+# delivered), non-blocking recv, bus stayed ACKed. Root-caused a swapped CANH/CANL.
+[[review]]
+id = "h735-fdcan-hardware"
+method = "review"
+context = "h735/FDCAN" # specific board/backend, not a generic "target"
+verifies = ["REQ-CAN-DRV-001", "REQ-CAN-DRV-002", "REQ-CAN-DRV-003"]
+approved_by = "Marten Hildell — STM32H735G-DK FDCAN1 echo vs PCAN-USB Pro FD"
+date = "2026-07-02"
