@@ -32,6 +32,14 @@ needing: a kernel clock, the APB clock, and the pin mux.
 
 ## Board specifics (STM32H735G-DK)
 
+- **CPU clock**: `board_clock_init()` brings the M7 to its full **550 MHz** (PLL1
+  from HSE, 25÷5×220÷2). This needs VOS0, and VOS0 needs the core-supply mode set
+  first — the DK is **Direct SMPS** (`PWR_CR3` `SMPSEN`, LDO off), so that's set
+  before the VOS0 request or `VOSRDY` never asserts. ⚠️ The supply write must match
+  the board's solder bridges (SB2/13/20/21 = SMPS); a mismatch **browns out VCORE
+  and locks the debugger** — recover with `st-flash --connect-under-reset`. All the
+  clock waits are bounded, so a rail that won't ready falls back to HSI 64 MHz
+  rather than hang. FDCAN is untouched by this — its kernel clock stays HSE 25 MHz.
 - **FDCAN1**: `PH13` = TX, `PH14` = RX, **AF9**, to the onboard 3.3 V CAN-FD
   transceiver. FDCAN1/2 are *not* behind the CAN solder bridges (only FDCAN3 is),
   so no board rework is needed.
@@ -67,21 +75,28 @@ cansend can0 123#DEADBEEF      # send id 0x123, 4 bytes
 ```
 
 Every frame you send (id ≤ 0x7FF, ≤ 8 data bytes) comes back with its id
-incremented. That round-trip is the on-hardware proof of the FDCAN driver —
-it verifies **`REQ-CAN-DRV-001`** on real silicon.
+incremented. **✅ Confirmed on hardware** (STM32H735G-DK ↔ PCAN-USB Pro FD,
+500 kbit/s): `123`→`124`, `456`→`457`, `001`→`002`, ~0.7 ms round-trip, bus ACKed.
+That's the on-silicon proof of the FDCAN driver — **`REQ-CAN-DRV-001/002/003`** (the
+`h735-fdcan-hardware` sign-off in `requirements/verifications.toml`).
 
 ## If it's quiet
 
-Flashed clean but no echoes? In likely order:
+Flashed clean but no echoes? In likely order (this is the order that cracked it):
 
-1. **No bus traffic at all** → termination (both ends 120 Ω?) or CANH/CANL swapped.
-2. **`open()` halted** (firmware stuck in `main.v`'s `for {}`) → clock: confirm HSE
-   bypass started (`HSERDY`). `make gdbserver` + `make gdb` stops at `main__main`;
-   step to `blob_can_open` and check its return, or `openocd` halt and read
-   `FDCAN1->PSR`/`ECR` (bus-off / error counters) and `CCCR` (still in INIT?).
-3. **TX but no echo** → the adapter's bitrate isn't 500 k, or it's not ACKing
-   (a single node with no other ACKing device goes error-passive; the adapter
-   counts as the second node, so keep it on the bus).
+1. **CANH/CANL swapped** — the #1 culprit, and the one *this* board hit. A reversed
+   pair still shows **both** lines swinging on a scope; only the polarity tells
+   (correct: dominant = CANH↑ / CANL↓). Tell-tale: the board is out of INIT but its
+   Rx FIFO stays empty (`RXF0S`=0, `PSR` `LEC`=7) and the adapter climbs to
+   error-passive (nothing ACKs it). Swap them.
+2. **Termination** — 120 Ω at **both** ends (the adapter, and the DK's CAN term
+   jumper). No termination → no valid frames form.
+3. **`open()` halted** (stuck in `main.v`'s `for {}`) → clock: confirm HSE bypass
+   started (`HSERDY`). `make gdbserver` + `make gdb` stops at `main__main`; or
+   `openocd` halt and read `FDCAN1->CCCR` (INIT still set?), `PSR`, `ECR`.
+4. **Bitrate + a second ACKing node** — adapter at 500 k, **not** listen-only (a lone
+   transmitter with no ACK goes error-passive). Watch for a *second* CAN channel
+   silently ACKing and masking the real state — that faked us out for a while.
 
 ## Notes
 
@@ -90,4 +105,5 @@ Flashed clean but no echoes? In likely order:
 - **Warnings.** V's freestanding C emits benign 32-bit pointer-cast warnings from
   unused builtin paths; the link is clean and the CAN/board code compiles quietly.
 - Verified to build a valid ~1 KB image (SP `0x20020000`, reset vector into flash,
-  no heap). On-bus round-trip is the hardware confirmation step.
+  no heap). **✅ Confirmed on real hardware** — the id+1 round-trip above ran on an
+  STM32H735G-DK against a PCAN-USB Pro FD.
