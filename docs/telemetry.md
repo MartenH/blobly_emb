@@ -199,9 +199,13 @@ not a raw address:
 - **signal** (recommended) — loom2v generates every signal write, so it emits the trigger
   check **at the write site**: event-driven, catches *every* change, zero polling cost,
   portable host↔target.
-- **address** (advanced) — a `volatile` pointer the trace loop **polls** each cycle
-  against the condition. Works anywhere, but costs a poll and can miss a value set and
-  cleared between checks.
+- **address** (advanced) — poll a **partition-local** address (a `volatile` variable in
+  the triggering partition's *own* memory) each cycle against the condition. Strictly
+  bounded to local/owned memory — **never** an arbitrary or cross-partition address,
+  which would break the IOC-only / memory-protection invariants (a partition can't read
+  another's RAM). Costs a poll and can miss a value set-and-cleared between checks.
+  Watching arbitrary or another partition's memory is *only* the reserved `hw` (DWT)
+  source, itself bounded by the target's memory protection.
 
 **One seam, pluggable sources.** The ring exposes a single entry point —
 `trace_trigger()` (freeze after the post-trigger count). Whatever detects the condition
@@ -373,10 +377,11 @@ until their phase lands, so nothing is marked covered prematurely:
 - **REQ-TRACE-006** — the ECU shall support a ring/FIFO capture mode that records
   continuously and, on a trigger, freezes with a configurable pre/post-trigger split.
   *(flight recorder)*
-- **REQ-TRACE-007** — capture shall be freezable by a configurable software trigger
-  (a signal or address condition), delivered through a single trigger seam that admits
-  additional sources (incl. a future hardware watchpoint) without redesign. *(no debug
-  HW required)*
+- **REQ-TRACE-007** — capture shall be freezable by a configurable software trigger — a
+  signal condition, or an address condition on **partition-local memory only** — through
+  a single trigger seam that admits additional sources (incl. a future hardware
+  watchpoint for arbitrary memory) without redesign. *(no debug HW; no cross-partition
+  reads)*
 
 ## Open decisions
 
