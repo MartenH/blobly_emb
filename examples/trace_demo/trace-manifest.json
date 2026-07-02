@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "time_unit_us": 1,
+  "frames": {
+    "loaddetail_id": 2017,
+    "cmd_id": 2018,
+    "rsp_id": 2019,
+    "handlerstat_id": 2020,
+    "record_id": 2021
+  },
+  "handlers": [
+    { "id": 0, "partition": "app", "core": 0, "fb": "fast", "handler": "on_5ms",  "period_us": 5000  },
+    { "id": 1, "partition": "app", "core": 0, "fb": "med",  "handler": "on_10ms", "period_us": 10000 },
+    { "id": 2, "partition": "app", "core": 0, "fb": "slow", "handler": "on_20ms", "period_us": 20000 }
+  ]
+}
