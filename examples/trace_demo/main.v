@@ -18,9 +18,32 @@ import os
 import osal
 import loom
 import comm.telem
+import comm.trace
 import driver.can
 
-const trace_id = u32(0x7E4)
+const trace_id = u32(0x7E4) // HandlerStat live stats
+const record_id = u32(0x7E5) // captured-trace record dump
+
+// Capture holds the one-shot record buffer + the capture start time; passed to the loom
+// trace hook as ctx so the hook builds one Record per handler invocation.
+struct Capture {
+mut:
+	buf   trace.TraceBuffer
+	start u64
+}
+
+fn capture_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
+	mut c := unsafe { &Capture(ctx) }
+	mut dt := dt_us
+	if dt > 0xFFFF {
+		dt = 0xFFFF
+	}
+	c.buf.push(trace.Record{
+		handler_id: u8(idx) // single partition: global id == scheduler index
+		start_us:   u32(start_us - c.start)
+		cpu_us:     u16(dt)
+	})
+}
 
 struct Fb {
 mut:
@@ -85,10 +108,36 @@ fn main() {
 	sched.every(10_000, h_med, &app) // 10 ms
 	sched.every(20_000, h_slow, &app) // 20 ms
 
+	// one-shot capture: record every invocation into a 64-record buffer; when it fills,
+	// dump the records (0x7E5, one encode_record frame each) and re-arm.
+	mut backing := [64]trace.Record{}
+	mut cap := Capture{
+		buf: trace.new_buffer(&backing[0], 64, .oneshot, 0)
+	}
+	cap.start = osal.now_us()
+	cap.buf.start()
+	sched.set_trace_hook(capture_hook, &cap)
+	println('trace_demo: capturing 64 records -> dump on 0x${record_id.hex()} when full')
+
 	mut last_push := u64(0)
 	mut last_count := [3]u32{}
 	for {
 		sched.run_profiled(osal.now_us)
+		if cap.buf.state() == .full { // one-shot filled -> dump + re-arm
+			for i in u32(0) .. cap.buf.used() {
+				b := trace.encode_record(cap.buf.record_at(i))
+				mut rf := can.Frame{
+					id:  record_id
+					len: 8
+				}
+				for j in 0 .. 8 {
+					rf.data[j] = b[j]
+				}
+				ch.send(rf)
+			}
+			cap.start = osal.now_us()
+			cap.buf.start()
+		}
 		now := osal.now_us()
 		if now - last_push >= 1_000_000 { // push HandlerStat once a second
 			last_push = now
