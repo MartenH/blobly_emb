@@ -113,3 +113,15 @@ text = "The ECU shall make each core's processor load observable at runtime."
 status = "agreed"
 method = "test"
 asil = "QM"
+
+# draft: only the measurement child (REQ-TRACE-001) is verified so far. Observability
+# also needs stable handler identity (draft REQ-TRACE-002) and the external HandlerStat
+# report (the design's REQ-TRACE-004 push, P2), so this stays draft — and does not roll
+# up as verified — rather than looking green off the in-process timing test alone.
+[[req]]
+id = "SYS-REQ-OBS-002"
+title = "Handler-level runtime observability"
+text = "The ECU shall make each handler's runtime (execution time and invocation rate) observable at runtime, over the bus, with stable per-handler identity."
+status = "draft"
+method = "test"
+asil = "QM"
