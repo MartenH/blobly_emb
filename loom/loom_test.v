@@ -130,3 +130,40 @@ fn test_run_profiled_records_handler_time() {
 	s.run_profiled(clock)
 	assert s.handler_stat(0).count == 1, 'must not re-fire before its period'
 }
+
+struct HookCapture {
+mut:
+	calls      int
+	last_idx   int
+	last_start u64
+	last_dt    u64
+}
+
+fn capture_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
+	mut c := unsafe { &HookCapture(ctx) }
+	c.calls++
+	c.last_idx = idx
+	c.last_start = start_us
+	c.last_dt = dt_us
+}
+
+// run_profiled calls the installed trace hook once per dispatched handler, with the
+// handler's index, start time, and duration (the per-invocation record source).
+fn test_run_profiled_trace_hook() {
+	fc := &FakeClock{
+		t:    0
+		step: 50
+	}
+	clock := fn [fc] () u64 {
+		return fc.t
+	}
+	mut cap := HookCapture{}
+	mut s := Scheduler{}
+	s.every(1000, work_handler, fc)
+	s.set_trace_hook(capture_hook, &cap)
+	s.run_profiled(clock)
+	assert cap.calls == 1, 'hook calls=${cap.calls}'
+	assert cap.last_idx == 0
+	assert cap.last_start == 0, 'start=${cap.last_start}'
+	assert cap.last_dt == 50, 'dt=${cap.last_dt}'
+}
