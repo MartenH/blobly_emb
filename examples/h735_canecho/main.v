@@ -10,9 +10,11 @@ module main
 
 import driver.can
 
+fn C.board_clock_init()
 fn C.board_can_clock_pins_init()
 
 fn main() {
+	C.board_clock_init() // M7 -> 550 MHz (Direct SMPS + VOS0); FDCAN clock stays HSE
 	C.board_can_clock_pins_init()
 
 	mut ch := can.Channel{}
