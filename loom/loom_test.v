@@ -54,3 +54,38 @@ fn test_no_update_before_window() {
 	}
 	assert s.load_permille() == 0, 'load only latches after a full window'
 }
+
+// @verifies REQ-TELEM-001
+// The fast (100 ms) window latches ten times sooner than the 1 s window. Feed a
+// half-duty load for 100 ms: the 100 ms window reports ~50 % while the 1 s window
+// (not yet closed) is still 0. All three windows track the same duty over their spans.
+fn test_multi_window_latches_independently() {
+	mut s := Scheduler{}
+	mut now := u64(0)
+	// ~110 ms of polling at 1 ms, half of each poll spent in handlers -> the 100 ms
+	// window closes and latches; the 1 s / 10 s windows have not.
+	for _ in 0 .. 110 {
+		now += 1000
+		s.account(500, now) // 500 µs busy of a 1 ms poll = 50 %
+	}
+	assert s.load_permille_100ms() >= 490 && s.load_permille_100ms() <= 510, '100 ms window ${s.load_permille_100ms()} should be ~500 per-mille'
+	assert s.load_permille_1s() == 0, '1 s window has not closed yet'
+	assert s.load_permille_10s() == 0, '10 s window has not closed yet'
+	// carry on past 1 s: the 1 s window now latches to the same ~50 %.
+	for _ in 0 .. 950 {
+		now += 1000
+		s.account(500, now)
+	}
+	assert s.load_permille_1s() >= 490 && s.load_permille_1s() <= 510, '1 s window ${s.load_permille_1s()} should be ~500 per-mille'
+}
+
+// Overruns are counted, not measured: the caller marks a pass that blew its tick, and
+// the count accumulates (the reporter turns it into a per-period rate).
+fn test_overrun_counter() {
+	mut s := Scheduler{}
+	assert s.overruns() == 0
+	s.mark_overrun()
+	s.mark_overrun()
+	s.mark_overrun()
+	assert s.overruns() == 3, 'overruns should accumulate'
+}

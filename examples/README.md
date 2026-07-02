@@ -53,6 +53,19 @@ The only thing an example needs from the main repo is the path back to it
 | [`gateway`](gateway/) | **two CAN channels**: VehicleSpeed in on `can0` → SpeedMonitor → WarnLamp out on `can1`; plus a **raw-PDU `[[route]]`** forwarding `WheelSpeeds` `can0`→`can1` untouched |
 | [`scale`](scale/) | **load benchmark** through the real stack: 4 cores, 8 CAN buses, **200 FBs** — config + FB handlers are themselves generated (`tools/scale_gen`). `make all`, then `make bench-scale` for per-core CPU + RAM. |
 
+### On hardware (bare-metal targets)
+
+These build with `arm-none-eabi-gcc` (`make -C ../.. deps` for CMSIS) and flash to a
+real board — register-level drivers, no HAL, no RTOS. They transpile V `-freestanding`
+and enter `main__main()` from a minimal `startup.c`.
+
+| Example | Board | What it shows |
+|---------|-------|---------------|
+| [`h735_blinky`](h735_blinky/) | STM32H735G-DK | smallest bring-up: LED blink, ~1 KB, no heap |
+| [`h735_canecho`](h735_canecho/) | STM32H735G-DK | **register-level FDCAN driver** on silicon: echo each frame with id+1 (M7 @ 550 MHz) |
+| [`h735_app`](h735_app/) | STM32H735G-DK | **FBs + Loom + telemetry** on silicon: scheduled function blocks + per-core CPU load streamed as a CpuLoad frame (`0x7E0`), watchable live in blobly_net |
+| [`h755_canfd`](h755_canfd/) | STM32H755 Nucleo | two-bus FDCAN echo (the driver made multi-device) |
+
 ## Layout — four clean buckets
 
 ```
