@@ -32,7 +32,7 @@ date = ""
 [[review]]
 id = "h735-fdcan-hardware"
 method = "review"
-context = "target"
+context = "h735/FDCAN" # specific board/backend, not a generic "target"
 verifies = ["REQ-CAN-DRV-001", "REQ-CAN-DRV-002", "REQ-CAN-DRV-003"]
 approved_by = "Marten Hildell — STM32H735G-DK FDCAN1 echo vs PCAN-USB Pro FD"
 date = "2026-07-02"
