@@ -32,6 +32,14 @@ needing: a kernel clock, the APB clock, and the pin mux.
 
 ## Board specifics (STM32H735G-DK)
 
+- **CPU clock**: `board_clock_init()` brings the M7 to its full **550 MHz** (PLL1
+  from HSE, 25÷5×220÷2). This needs VOS0, and VOS0 needs the core-supply mode set
+  first — the DK is **Direct SMPS** (`PWR_CR3` `SMPSEN`, LDO off), so that's set
+  before the VOS0 request or `VOSRDY` never asserts. ⚠️ The supply write must match
+  the board's solder bridges (SB2/13/20/21 = SMPS); a mismatch **browns out VCORE
+  and locks the debugger** — recover with `st-flash --connect-under-reset`. All the
+  clock waits are bounded, so a rail that won't ready falls back to HSI 64 MHz
+  rather than hang. FDCAN is untouched by this — its kernel clock stays HSE 25 MHz.
 - **FDCAN1**: `PH13` = TX, `PH14` = RX, **AF9**, to the onboard 3.3 V CAN-FD
   transceiver. FDCAN1/2 are *not* behind the CAN solder bridges (only FDCAN3 is),
   so no board rework is needed.
