@@ -32,8 +32,10 @@ The generated telemetry tx reports it on the bus:
 - **`LoadDetail` (0x7E1)** — one core's load over the 100 ms / 1 s / 10 s windows plus
   its per-period **overrun** count (`encode_loaddetail`). The 100 ms window surfaces
   bursts the 1 s figure averages away; a non-zero overrun byte means commanded work
-  exceeded the core's capacity. Overrun detection is `REQ-TELEM-004`; reporting the
-  detail frame is proposed `REQ-TELEM-005` (see Part 2 — not yet tracked because it is
+  exceeded the core's capacity. The observable overrun **count** is `REQ-TELEM-004`; the
+  run loop *detects* an overrun (a pass over its tick) and increments it — that detection
+  is verified on target (the h735 LoadDetail pulse) and moves into loom per-handler in
+  P1. Reporting the detail frame is proposed `REQ-TELEM-005` (Part 2 — not yet tracked,
   target-only today).
 
 ```toml
