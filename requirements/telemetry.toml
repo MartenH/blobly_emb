@@ -18,3 +18,27 @@ status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-OBS-001"
+
+[[req]]
+id = "REQ-TELEM-003"
+title = "Multi-window load measurement"
+text = "The scheduler shall measure each core's processor load over multiple concurrent averaging windows (at least a short window and a long window), all available simultaneously, so short bursts are visible separately from the steady figure."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-001"
+
+[[req]]
+id = "REQ-TELEM-004"
+title = "Overrun detection"
+text = "The scheduler shall detect and count each scheduling period whose handler work exceeds the time available in that period, and shall make the count observable."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-001"
+
+# REQ-TELEM-005 ("report load detail over the bus", the LoadDetail 0x7E1 frame) is not
+# tracked here yet: it was verified on H735 hardware but is target-only (host telemetry
+# emits CpuLoad only) and not signed off. It lives as a proposed requirement in
+# docs/telemetry.md until host generation lands or it gets a [[review]] sign-off, so it
+# doesn't leave SYS-REQ-OBS-001 with an unverified child.

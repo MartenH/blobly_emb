@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 55 | 43 | 5 | 7 | 0 |
+| 57 | 45 | 5 | 7 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -66,6 +66,8 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-OBS-001 | QM | test | verified | ↳ derived (all children verified) |
 | REQ-TELEM-001 | QM | test | verified | loom_test.v (pass) |
 | REQ-TELEM-002 | QM | test | verified | telem_test.v (pass) |
+| REQ-TELEM-003 | QM | test | verified | loom_test.v (pass) |
+| REQ-TELEM-004 | QM | test | verified | loom_test.v (pass) |
 | REQ-WDG-001 | B | test | verified | wdg_test.v (pass) |
 | REQ-WDG-002 | B | test | verified | wdg_test.v (pass) |
 | REQ-WDG-003 | B | test | verified | wdg_test.v (pass) |
@@ -126,6 +128,8 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-OBS-001 | | | | | |
 | REQ-TELEM-001 | | | ✓ | | |
 | REQ-TELEM-002 | | | ✓ | | |
+| REQ-TELEM-003 | | | ✓ | | |
+| REQ-TELEM-004 | | | ✓ | | |
 | REQ-WDG-001 | | | ✓ | | |
 | REQ-WDG-002 | | | ✓ | | |
 | REQ-WDG-003 | | | ✓ | | |

@@ -55,7 +55,7 @@ fn test_no_update_before_window() {
 	assert s.load_permille() == 0, 'load only latches after a full window'
 }
 
-// @verifies REQ-TELEM-001
+// @verifies REQ-TELEM-003
 // The fast (100 ms) window latches ten times sooner than the 1 s window. Feed a
 // half-duty load for 100 ms: the 100 ms window reports ~50 % while the 1 s window
 // (not yet closed) is still 0. All three windows track the same duty over their spans.
@@ -79,6 +79,7 @@ fn test_multi_window_latches_independently() {
 	assert s.load_permille_1s() >= 490 && s.load_permille_1s() <= 510, '1 s window ${s.load_permille_1s()} should be ~500 per-mille'
 }
 
+// @verifies REQ-TELEM-004
 // Overruns are counted, not measured: the caller marks a pass that blew its tick, and
 // the count accumulates (the reporter turns it into a per-period rate).
 fn test_overrun_counter() {
