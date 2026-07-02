@@ -10,3 +10,26 @@ status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-OBS-002"
+
+# Draft: the observability half of SYS-REQ-OBS-002. Measurement (REQ-TRACE-001) is
+# verified; these are not yet — so SYS-REQ-OBS-002 does not roll up on timing alone.
+# REQ-TRACE-002 identity is proven hand-wired in examples/trace_demo (a global
+# handler_id on each HandlerStat frame) but not config-generated/verified; REQ-TRACE-003
+# reporting likewise. Promote as the loom2v HandlerStat emitter + manifest land.
+[[req]]
+id = "REQ-TRACE-002"
+title = "Stable handler identity"
+text = "Each handler shall have a build-stable, globally-unique identity resolvable to its configured name without runtime string exchange."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-002"
+
+[[req]]
+id = "REQ-TRACE-003"
+title = "Report handler runtime over the bus"
+text = "The ECU shall transmit each handler's runtime (execution time and invocation rate) over the bus so an external tool can observe it."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-002"

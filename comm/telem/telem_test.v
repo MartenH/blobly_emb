@@ -55,4 +55,11 @@ fn test_handlerstat_saturates() {
 	assert d.flags & trace_flag_saturated != 0, 'saturated flag set'
 	assert d.count_delta == 0xFFFF, 'count should clamp'
 	assert d.max_us == 100
+	// a clamped count alone (durations in range) must still flag saturation, so a host
+	// tool never mistakes the clamp for an exact 65535 invocations.
+	b2 := encode_handlerstat(0, 0, 100, 200, 70000)
+	d2 := decode_handlerstat(b2)
+	assert d2.count_delta == 0xFFFF
+	assert d2.flags & trace_flag_saturated != 0, 'count clamp must set saturated'
+	assert d2.last_us == 100
 }

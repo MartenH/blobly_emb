@@ -88,7 +88,11 @@ pub fn encode_handlerstat(handler_id u8, flags u8, last_us u32, max_us u32, coun
 		max16 = 0xFFFF
 		f |= trace_flag_saturated
 	}
-	cnt16 := if count_delta > 0xFFFF { u16(0xFFFF) } else { u16(count_delta) }
+	mut cnt16 := u16(count_delta)
+	if count_delta > 0xFFFF {
+		cnt16 = 0xFFFF
+		f |= trace_flag_saturated
+	}
 	mut b := [8]u8{}
 	b[0] = handler_id
 	b[1] = f
