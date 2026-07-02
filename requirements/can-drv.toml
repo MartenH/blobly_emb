@@ -6,6 +6,8 @@
 id = "REQ-CAN-DRV-001"
 title = "Transmit classic frame"
 text = "The CAN driver shall transmit a classic CAN frame with an 11-bit identifier and 0 to 8 payload bytes."
+# target-verified (h735-fdcan-hardware sign-off); still draft until the host test
+# (gateway route.lua) also runs under the vcan/cantester harness.
 status = "draft"
 method = "test"
 asil = "QM"
@@ -15,6 +17,8 @@ derives = "SYS-REQ-COMMS-001"
 id = "REQ-CAN-DRV-002"
 title = "Receive without loss"
 text = "The CAN driver shall deliver every accepted received frame to the upper layer without loss up to the configured bus load."
+# target-verified (h735-fdcan-hardware sign-off); still draft until the host test
+# (gateway route.lua) also runs under the vcan/cantester harness.
 status = "draft"
 method = "test"
 asil = "QM"
@@ -24,7 +28,7 @@ derives = "SYS-REQ-COMMS-001"
 id = "REQ-CAN-DRV-003"
 title = "Non-blocking receive"
 text = "The CAN driver's receive operation shall be non-blocking, returning 'no frame' when none is available."
-status = "draft"
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-COMMS-001"
