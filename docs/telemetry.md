@@ -174,10 +174,61 @@ core data flows only through IOC" invariant — on an MPU/ThreadX target the bus
 no mapping to another partition's RAM, and immutability-after-stop doesn't grant one.
 Records carry the global `handler_id`, so cores never need a shared index.
 
-**Capture modes**: *one-shot* (fill then stop — "trigger, let it fill, read it out") or
-*ring* (keep the last N, freeze on a trigger — "capture the moment it overran").
-One-shot is the first cut. A build-time-sized buffer (e.g. 4096 records = 32 KB/core) in
-a reserved RAM region, no alloc.
+**Capture modes** — the per-core buffer depth is **configured** (`[trace] buffer_records`),
+emitted as a static array at build (no runtime alloc); the value trades RAM for trace
+depth (e.g. 4096 records × 8 B = 32 KB/core):
+
+- **one-shot** — fill then stop; "trigger, let it fill, read it out." The first cut.
+- **ring / FIFO** — record continuously, overwriting the oldest; on a **trigger** freeze
+  with a **pre/post split** (keep `pre` % of the ring from *before* the trigger plus the
+  rest from after, then stop). This is the flight recorder — see Triggers.
+
+## Triggers — freeze the ring (software, HW-ready)
+
+The ring's value is the **trigger**: record continuously, and when a configured condition
+fires, freeze with the history *around* it. Point it at a fault/DTC flag and you keep the
+last N handler invocations that led up to it — a black-box recorder read out over CAN
+with **no debug probe attached**.
+
+**Software trigger, no debug HW.** The trigger is a software condition, *not* a DWT /
+CoreSight watchpoint. That keeps it portable (identical in sim and on any target), keeps
+the "no probe" property, and doesn't burn a scarce hardware comparator a live debugger
+wants. Because the stack is config-driven, the natural thing to watch is a **signal**,
+not a raw address:
+
+- **signal** (recommended) — loom2v generates every signal write, so it emits the trigger
+  check **at the write site**: event-driven, catches *every* change, zero polling cost,
+  portable host↔target.
+- **address** (advanced) — a `volatile` pointer the trace loop **polls** each cycle
+  against the condition. Works anywhere, but costs a poll and can miss a value set and
+  cleared between checks.
+
+**One seam, pluggable sources.** The ring exposes a single entry point —
+`trace_trigger()` (freeze after the post-trigger count). Whatever detects the condition
+just calls it, so a future **hardware watchpoint** source (target-only DWT comparator,
+zero-overhead, catches the exact access) drops in behind the same seam with **no change**
+to the ring, the capture state machine, or the CAN protocol. The config is forward-
+compatible for it:
+
+```toml
+[trace.trigger]
+source = "signal"    # signal | address | hw   (hw reserved -> DWT watchpoint, later)
+signal = "FaultFlag"
+when   = "== 1"      # ==, !=, >, <, changed, & mask
+pre    = 75          # % of the ring kept before the trigger (rest is post-trigger)
+```
+
+`source = "hw"` is parsed + documented but *not implemented* today — the seam and the key
+exist, so adding it is a backend, not a redesign. That's how we "prepare for" the
+hardware route without pulling debug HW into the build now.
+
+**Prior art** (this is a well-trodden pattern): ARM CoreSight **ETB + trigger** and the
+Cortex-M **DWT watchpoint** (the hardware route we're deliberately *not* taking yet);
+**Percepio Tracealyzer** snapshot mode and **SEGGER SystemView** (software RTOS-trace
+rings, freeze + dump); a **logic analyzer / DSO** pre/post-trigger buffer (the mental
+model); and — most domain-relevant — automotive **XCP (ASAM MCD-1)** event-triggered DAQ,
+which measures ECU memory over the bus on a condition. We're building the software,
+config-driven version of that, on the CAN the ECU already has.
 
 ## Wire formats
 
@@ -253,10 +304,11 @@ UDS service layer, DIDs, or RoutineControl).
 
 ```toml
 [trace]
-bus     = "can0"
-cmd_id  = 0x7E2   # host -> target: control
-rsp_id  = 0x7E3   # target -> host: ack + status
-push_ms = 1000    # optional: push HandlerStat every 1 s with no request (0 = off)
+bus            = "can0"
+cmd_id         = 0x7E2   # host -> target: control
+rsp_id         = 0x7E3   # target -> host: ack + status
+push_ms        = 1000    # optional: push HandlerStat every 1 s with no request (0 = off)
+buffer_records = 4096    # per-core capture depth (see Recording) — RAM vs trace depth
 ```
 
 Push is enabled by a `set_push` cmd *or* from config at boot (so a target streams stats
@@ -291,38 +343,51 @@ captured trace drives the timeline and histograms.
    FBs, host codegen), then cross-check on the H735. `REQ-TRACE-001/002`.
 2. **P2 — captured per-core buffer + cmd/rsp control + ISO-TP dump** (one-shot).
    `REQ-TRACE-003/004`.
-3. **P3 — ThreadX preemption** (execution-profile kit + state-change hook → CPU time,
+3. **P3 — ring/FIFO capture + software trigger** (freeze-the-ring, pre/post split; signal
+   trigger event-driven at the write site, address poll optional; the pluggable
+   `trace_trigger()` seam with `source = "hw"` reserved). `REQ-TRACE-006/007`.
+4. **P4 — ThreadX preemption** (execution-profile kit + state-change hook → CPU time,
    preemption interval). `REQ-TRACE-005`.
-4. **P4 — blobly_net**: load the manifest, decode records, render the timeline / jitter /
+5. **P5 — blobly_net**: load the manifest, decode records, render the timeline / jitter /
    preemption views above.
 
-## Proposed requirements (draft)
+## Requirements
 
-Derive `SYS-REQ-OBS-001` (or a new `SYS-REQ-OBS-002` "handler-level runtime
-observability"), ASIL QM. Draft until agreed + a verification is linked, so they don't
-mark anything covered prematurely:
+Under `SYS-REQ-OBS-002` "handler-level runtime observability" (ASIL QM). **REQ-TRACE-001**
+(measurement) is agreed + verified and **REQ-TRACE-002** (identity) is draft — both now
+in `requirements/trace.toml`. The ones below are still **proposed (draft in this doc)**
+until their phase lands, so nothing is marked covered prematurely:
 
 - **REQ-TELEM-005** — the ECU shall transmit the multi-window load + overrun count as a
   CAN message (the LoadDetail frame). *(implemented target-only; pending host support /
   sign-off, so not yet in `requirements/telemetry.toml`.)*
-- **REQ-TRACE-001** — the scheduler shall measure each handler's execution time
-  (last/max/mean) and invocation count. *(loom bracket; unit-testable)*
-- **REQ-TRACE-002** — each handler shall have a build-stable, globally-unique identity
-  resolvable to its configured name without runtime string exchange. *(manifest)*
 - **REQ-TRACE-003** — the ECU shall capture a time-ordered trace of handler invocations
-  into a fixed per-core buffer, single-writer, and stop when the buffer is full.
+  into a per-core buffer whose depth is **configured** (`buffer_records`, a static array,
+  no runtime alloc), single-writer, and stop when the buffer is full.
 - **REQ-TRACE-004** — capture shall be controllable via a configurable command/response
   protocol; trace data shall be readable over the bus (bulk via ISO-TP) and the target
   shall optionally push trace data unsolicited at a configured rate. *(cmd/rsp + push +
   ISO-TP; not UDS)*
 - **REQ-TRACE-005** — where the kernel is preemptive, reported handler CPU time shall
   exclude time the thread was preempted. *(ThreadX profile kit)*
+- **REQ-TRACE-006** — the ECU shall support a ring/FIFO capture mode that records
+  continuously and, on a trigger, freezes with a configurable pre/post-trigger split.
+  *(flight recorder)*
+- **REQ-TRACE-007** — capture shall be freezable by a configurable software trigger
+  (a signal or address condition), delivered through a single trigger seam that admits
+  additional sources (incl. a future hardware watchpoint) without redesign. *(no debug
+  HW required)*
 
 ## Open decisions
 
 1. **Identity**: shared generated manifest (recommended) vs runtime announce.
 2. **Control/transport**: **decided** — config cmd/rsp (not UDS), unsolicited push, ISO-TP
    for the bulk dump.
-3. **Capture mode first**: one-shot fill-and-stop (recommended) vs freeze-the-ring.
-4. **Record width**: 8 B (bare-metal) / 12 B (preemptive, carries `response_us`) — good?
-5. **Where P1 runs first**: host/vcan (recommended, faster loop) then H735.
+3. **Capture modes**: **decided** — one-shot (P2) then ring/FIFO + trigger (P3), same
+   records feed both.
+4. **Buffer depth**: **decided** — configured per core (`[trace] buffer_records`), a
+   static array at build; the value trades RAM for trace depth.
+5. **Trigger**: **decided** — software, no debug HW: a signal condition checked at the
+   generated write site (recommended), or an address poll (advanced); one `trace_trigger()`
+   seam with `source = "hw"` (DWT) reserved for later.
+6. **Record width**: 8 B (bare-metal) / 12 B (preemptive, carries `response_us`) — good?
