@@ -1,0 +1,71 @@
+# h735_app: FBs + Loom + CpuLoad telemetry, single-core bare-metal (STM32H735).
+#
+# Three FBs on one partition/core. All signals are partition-local (FB -> FB on the
+# same core), so there is no COM bus bridge — the only bus traffic is the generated
+# CpuLoad telemetry frame. The [target] block selects loom2v's bare-metal single-core
+# emitter: one inline superloop (no spawn, no osal), a DWT timebase, a fixed 1 ms tick,
+# and inline CpuLoad tx — the generated form of examples/h735_app's hand-wired main.v.
+
+[import]
+dbc = "bus.dbc" # only the CpuLoad frame; no external signals reference it
+
+[bus.can0]
+interface = "vcan0" # host/sim name; on target the FDCAN backend opens index "0"
+fd        = false
+core      = 0
+
+[[partition]]
+name    = "app"
+core    = 0 # single M7
+trusted = true
+
+# Partition-local signals (from == to == "app"): FB -> FB on the same core, carried as
+# a direct struct cell, no IOC/bus.
+[[signal]]
+name = "LoadCmd" # Governor -> Load: how much work to burn this slot
+fields = { iters = "u32" }
+from = "app"
+to   = "app"
+transport = "double"
+
+[[signal]]
+name = "Workload" # Load -> (observed): the compute result, so the work isn't elided
+fields = { v = "u32" }
+from = "app"
+to   = "app"
+transport = "double"
+
+[[fb]]
+name      = "Governor"
+partition = "app"
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  writes    = ["LoadCmd"] # reads omitted = none (empty inline arrays trip V's TOML parser)
+
+[[fb]]
+name      = "Load"
+partition = "app"
+  [[fb.handler]]
+  name      = "on_1ms"
+  period_ms = 1
+  reads     = ["LoadCmd"]
+  writes    = ["Workload"]
+
+[[fb]]
+name      = "Heartbeat"
+partition = "app"
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100 # no reads/writes: a cheap timer-only handler
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E0   # CpuLoad: per-core load @ 1 s window
+detail_id = 0x7E1   # LoadDetail: core-0 load @ 100 ms / 1 s / 10 s + overrun count
+period_ms = 500
+
+[target]
+kind    = "baremetal" # single-core: inline superloop, no spawn/osal, DWT timebase
+tick_ms = 1           # super-loop cadence + the load-accounting idle boundary
