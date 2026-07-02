@@ -105,3 +105,11 @@ text = "The application shall run partitioned across multiple cores."
 status = "draft"
 method = "test"
 asil = "QM"
+
+[[req]]
+id = "SYS-REQ-OBS-001"
+title = "Runtime processor-load observability"
+text = "The ECU shall make each core's processor load observable at runtime."
+status = "agreed"
+method = "test"
+asil = "QM"
