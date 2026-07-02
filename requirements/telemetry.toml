@@ -1,0 +1,20 @@
+# Telemetry / runtime observability requirements (module tier).
+# Derives from SYS-REQ-OBS-001. See README.md for the method.
+
+[[req]]
+id = "REQ-TELEM-001"
+title = "Per-core load measurement"
+text = "The scheduler shall measure each core's processor load as the fraction of wall-clock time spent executing handlers over a configured window."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-001"
+
+[[req]]
+id = "REQ-TELEM-002"
+title = "Report load over the bus"
+text = "The ECU shall transmit each core's processor load as a CAN message so an external tool can observe it."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-001"

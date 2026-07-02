@@ -90,6 +90,31 @@ pub fn shared_scratch() voidptr {
 	return C.blob_shared_scratch()
 }
 
+// scratch_slots is the number of u64 cells in the shared scratch area.
+pub const scratch_slots = 16
+
+// scratch_set / scratch_get: store/load a u64 in the shared scratch (slot 0..15).
+// An aligned 64-bit access is single-copy atomic, so these are safe for low-rate
+// cross-core telemetry (one writer per slot) — e.g. per-partition processor load —
+// without a full IOC channel. Out-of-band from the signal channels.
+pub fn scratch_set(slot int, v u64) {
+	if slot < 0 || slot >= scratch_slots {
+		return
+	}
+	unsafe {
+		p := &u64(C.blob_shared_scratch())
+		p[slot] = v
+	}
+}
+
+pub fn scratch_get(slot int) u64 {
+	if slot < 0 || slot >= scratch_slots {
+		return 0
+	}
+	p := &u64(C.blob_shared_scratch())
+	return unsafe { p[slot] }
+}
+
 // --- IOC: the only memory shared between partitions (last-is-best mailbox) ---
 
 // ioc_write publishes a value to a channel. On target this region is MPU-guarded
