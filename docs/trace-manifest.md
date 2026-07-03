@@ -30,9 +30,22 @@ grouped, deadline-aware timeline lanes. It is the interface a visualization tool
       "fb": "fast",           // fb + handler = the lane label, e.g. "fast.on_5ms"
       "handler": "on_5ms",
       "period_us": 5000 }     // the deadline line + the jitter reference
+  ],
+  "threads": [                // one per partition (= ThreadX thread) — labels the swimlane
+    { "id": 0,                // thread id: the from_thread/to_thread in a switch record
+      "name": "app",          // lane label for the context-switch timeline
+      "core": 0 }             // which core's swimlane the thread lives on
   ]
 }
 ```
+
+**Record kinds.** A dumped Record stream is not homogeneous — two `flags` bits mark the
+kind (see `telemetry.md`): `bit7` = a **thread-switch** event (`b0` = to_thread, `b6` =
+from_thread, `b7` = reason; `b2-5` = start_us), `bit6` = a **block-header** (`b0` = core,
+`b2-5` = record count that follows). Both clear = a normal handler-run record. A decoder
+checks the kind per record: run records → the handler timeline via `handlers[]`,
+switch records → the context-switch timeline via `threads[]`, header records → split a
+multi-core stream by core.
 
 ## How a tool uses it
 
@@ -44,6 +57,11 @@ grouped, deadline-aware timeline lanes. It is the interface a visualization tool
 | `time_unit_us` | unit for all `*_us` fields (last/max/start/cpu) |
 | `frames.*` | which CAN ids to subscribe/decode (so ids aren't hard-coded) |
 | `frames.record_id` + `frames.dump_fc_id` | the ISO-TP address pair for the Record dump: reassemble on `record_id`, send flow-control on `dump_fc_id` |
+| `threads[].id → name/core` | lane label + core for the context-switch (swimlane) timeline; the key for a switch record's from/to thread |
+
+A **multi-core dump** (one `dump` with several `core_mask` bits) arrives as one ISO-TP
+block per core, each led by a block-header record naming its core and count — so the tool
+splits by core without correlating to the TraceRsp timing.
 
 Recipe: load the manifest → decode LoadDetail / HandlerStat / Record (layouts in
 `telemetry.md`; the `encode_*` fns in `comm/telem` and `comm/trace` are ground truth) →
