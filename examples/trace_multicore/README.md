@@ -18,15 +18,19 @@ Two simulated cores run on one bus loop, each a `loom.Scheduler` with its own ri
 
 A single `TraceCmd` addresses several cores through **`core_mask`** (b6-7, bit *i* = core
 *i*; a zero mask = the receiving core, so single-core commands are unchanged). The bus core
-fans out: for each selected core it applies the command, sends that core's `TraceRsp`, and
-— on `dump` — streams that core's buffer as **its own ISO-TP block** on `0x7E5`. Each block
-is **self-describing**: a leading block-header record names the core and record count, so a
-tool splits the stream by core with no timing correlation. Blocks stream one at a time
-(serialised on `0x7E5`), ascending core order.
+fans out over **IOC**: it forwards the command to each selected core, which applies it to
+**its own** buffer and replies a `TraceRsp`; on `dump` the owning core streams its frozen
+buffer to the bus core in 64-byte IOC chunks (stop-and-wait), and the bus core reassembles
+it and sends it as **one ISO-TP block** on `0x7E5`. Each block is **self-describing**: a
+leading block-header record names the core and record count, so a tool splits the stream by
+core with no timing correlation. Blocks stream one at a time (serialised on `0x7E5`),
+ascending core order; a second `dump` while one is in flight is rejected `result_busy`.
 
-On a real AMP target the bus core pulls each core's frozen buffer over **IOC** (never a
-direct cross-core read); here the two buffers are in one process, but the control + framing
-path is identical.
+**No remote buffer access.** Each core touches only its own `TraceBuffer` (single-writer);
+the bus core reaches a core solely through `osal.ioc_*` — never a direct cross-core read.
+The cores are cooperative loops in one host process here (osal keeps the IOC region in a
+static block — the host-Linux stand-in for the target's shared SRAM), but the control and
+read-out paths are the real AMP ones. On silicon the same `osal.ioc_*` calls cross cores.
 
 ## Thread-switch swimlane
 
@@ -52,15 +56,21 @@ isotprecv -s 0x7E6 -d 0x7E5 vcan0 &       # reassemble a block (-d rx = data 0x7
 # status both cores in one command (core_mask = 0x0003): two TraceRsp replies
 cansend vcan0 7E2#0700000000000300
 
-# dump both cores in one command: two self-describing ISO-TP blocks on 0x7E5
-cansend vcan0 7E2#0600000000000300
+# freeze both rings, then dump both cores in one command -> two ISO-TP blocks on 0x7E5
+cansend vcan0 7E2#0300000000000300        # opcode 3 = stop  -> rsp state 3 (frozen) x2
+cansend vcan0 7E2#0600000000000300        # opcode 6 = dump  -> two self-describing blocks
 ```
 
-`isotprecv` needs the `can-isotp` kernel module. Without it, the command fan-out and the
-per-core TraceRsp are still observable on `candump` (as `07 .. 00` for core 0 and
-`07 .. 01` for core 1), and the ISO-TP block reassembly is covered deterministically by
-`comm/trace/multicore_dump_test.v` (two cores, two blocks, through an in-process ISO-TP
-Link pair).
+`dump` needs each ring **frozen** first — send `stop` (or let the heavy handler's periodic
+glitch fire the trigger), else a core replies `result_not_ready` and sends no block. On this
+kernel without `can-isotp` you can still see it work: two `TraceRsp` per command
+(`06 00 03 .. 00` core 0, `.. 01` core 1) and two ISO-TP first-frames on `0x7E5` whose
+headers read `00 40 20 00` (core 0, 32 records) and `01 40 20 00` (core 1) — the whole block
+crossed IOC to the bus core.
+
+`isotprecv` needs the `can-isotp` kernel module for the full reassembly; the block framing
+is also covered deterministically by `comm/trace/multicore_dump_test.v` (two cores, two
+blocks, through an in-process ISO-TP Link pair).
 
 ## Notes
 
