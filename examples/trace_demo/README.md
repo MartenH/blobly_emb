@@ -84,7 +84,7 @@ timeout then aborts it after ~1 s). Start `isotprecv` first, then dump:
 
 ```sh
 candump vcan0,7E3:7FF &               # watch the TraceRsp replies
-isotprecv -s 0x7E5 -d 0x7E6 vcan0 &   # reassemble the dump (src = data 0x7E5, dst = FC 0x7E6)
+isotprecv -s 0x7E6 -d 0x7E5 vcan0 &   # reassemble the dump: -d (rx) = data 0x7E5, -s (tx, FC) = 0x7E6
                                       # needs the can-isotp kernel module
 cansend vcan0 7E2#0700000000000000    # opcode 7 = status -> rsp: state 3 (frozen) once the
                                       #   trigger has fired (state 1 = still capturing if early)
