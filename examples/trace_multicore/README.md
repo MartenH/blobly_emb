@@ -26,6 +26,11 @@ leading block-header record names the core and record count, so a tool splits th
 core with no timing correlation. Blocks stream one at a time (serialised on `0x7E5`),
 ascending core order; a second `dump` while one is in flight is rejected `result_busy`.
 
+A dump that selects a **single** core (a one-bit `core_mask`, or the zero-mask core-0 path)
+streams **raw records** with no block header — the `TraceRsp` already names the core, so
+the header would only mislead single-core tooling. The per-core header appears only when
+`core_mask` selects more than one core.
+
 **No remote buffer access.** Each core touches only its own `TraceBuffer` (single-writer);
 the bus core reaches a core solely through `osal.ioc_*` — never a direct cross-core read.
 The cores are cooperative loops in one host process here (osal keeps the IOC region in a

@@ -193,7 +193,14 @@ fn core_step(mut c Core, i int) {
 			c.dumping = false
 		}
 		if do_dump && !c.dumping {
-			c.total = c.buf.pack_block(&c.stage[0], dump_cap, u8(i))
+			// Only a multi-core dump needs the per-core block header (to split the shared
+			// record_id stream). A single-core dump is raw records — the TraceRsp names the
+			// core — matching the wire contract, so single-core tooling isn't misled.
+			c.total = if multi_core(cmd) {
+				c.buf.pack_block(&c.stage[0], dump_cap, u8(i))
+			} else {
+				c.buf.pack(&c.stage[0], dump_cap)
+			}
 			c.gen++
 			c.off = 0
 			c.sent_seq = 0
@@ -454,6 +461,14 @@ fn main() {
 
 		osal.sleep_us(1_000)
 	}
+}
+
+// multi_core reports whether a command's core_mask selects more than one core (so its dump
+// blocks need per-core headers). A zero mask is the single receiving core; otherwise it's
+// multi-core iff more than one bit is set.
+fn multi_core(c trace.Cmd) bool {
+	m := c.core_mask
+	return m != 0 && (m & (m - 1)) != 0
 }
 
 // chunk_expected reports whether a dump chunk is the next one for the block being assembled.
