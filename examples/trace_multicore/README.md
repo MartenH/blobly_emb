@@ -44,10 +44,9 @@ and shades the interval a thread is switched out.
 ## Run it
 
 ```sh
-make vcan                                # bring up vcan0
-v -gc none -path "@vlib|@vmodules|." -o /tmp/trace_multicore examples/trace_multicore/main.v
-/tmp/trace_multicore vcan0 &
-candump vcan0,7E3:7FF &                   # TraceRsp — one per selected core (b7 = core)
+make vcan                                 # bring up vcan0
+make run &                                # build + run on vcan0
+make watch &                              # candump vcan0,7E3:7FF — TraceRsp, one per core (b7)
 isotprecv -s 0x7E6 -d 0x7E5 vcan0 &       # reassemble a block (-d rx = data 0x7E5, -s tx = FC 0x7E6)
 
 # status both cores in one command (core_mask = 0x0003): two TraceRsp replies
