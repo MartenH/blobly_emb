@@ -160,8 +160,10 @@ fn main() {
 				}
 				if do_dump { // pack the records and start the ISO-TP transfer, if the link is free
 					n := cap.buf.pack(&dumpbuf[0], 512)
-					if !link.send(&dumpbuf[0], n) {
-						rspb[1] = trace.result_busy // a previous dump is still in flight; ack busy, not OK
+					// n == 0 is a valid empty capture (records_used already says 0); only a
+					// non-empty send that the link refuses means a previous dump is in flight.
+					if n > 0 && !link.send(&dumpbuf[0], n) {
+						rspb[1] = trace.result_busy
 					}
 				}
 				mut rf := can.Frame{
