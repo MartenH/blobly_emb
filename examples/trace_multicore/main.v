@@ -246,7 +246,7 @@ fn core_step(mut c Core, i int) {
 // ISO-TP link that carries a completed block to the host.
 struct Bus {
 mut:
-	cmd_seq      u8
+	cmd_seq      [ncores]u8 // per-core: a single global counter could wrap to a core's last
 	last_rsp_seq [ncores]u8
 	rsp_primed   [ncores]bool
 	awaiting     [ncores]bool // dump forwarded, TraceRsp not yet seen
@@ -339,13 +339,13 @@ fn main() {
 						}
 					}
 				} else {
-					bus.cmd_seq++
 					for i in 0 .. ncores {
 						if !c.targets(u8(i)) {
 							continue
 						}
+						bus.cmd_seq[i]++ // per core, so it always differs from that core's last
 						mut m := CmdMsg{
-							seq: bus.cmd_seq
+							seq: bus.cmd_seq[i]
 						}
 						m.data = cb
 						osal.ioc_write(ch_cmd(i), &m, u8(sizeof(m)))
