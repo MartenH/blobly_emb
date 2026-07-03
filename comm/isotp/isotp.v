@@ -182,10 +182,12 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 					l.wft_count = 0
 					l.tx = .send_cf
 				} else if fs == 1 { // WAIT: peer not ready — restart N_Bs, but bound the WAITs
-					l.wft_count++
-					if l.wft_max != 0 && l.wft_count > l.wft_max {
+					// check before incrementing so wft_count never exceeds wft_max (<=255) and
+					// can't wrap back to 0 (which would let an endless-WAIT peer wedge the link).
+					if l.wft_max != 0 && l.wft_count >= l.wft_max {
 						l.tx = .idle // too many WAITs -> give up rather than wait forever
 					} else {
+						l.wft_count++
 						l.fc_deadline = now + l.n_bs_us
 					}
 				} else if fs == 2 { // OVFLW / reserved -> abort

@@ -125,6 +125,28 @@ fn test_fc_wait_refreshes_n_bs() {
 	assert (p.data[0] & 0xF0) == 0x20
 }
 
+fn test_wftmax_255_does_not_wrap() {
+	// Regression: wft_max at the u8 max must still abort — the counter must not wrap past
+	// 255 back to 0 and tolerate WAITs forever.
+	mut l := Link{
+		n_bs_us: 1000
+		wft_max: 255
+	}
+	mut buf := [max_payload]u8{}
+	assert l.send(&buf[0], 20)
+	mut p := Pdu{}
+	assert l.poll(0, mut p) // FF -> wait_fc
+
+	mut wait := Pdu{}
+	wait.data[0] = 0x31
+	for _ in 0 .. 255 {
+		l.on_frame(1, wait) // 255 WAITs tolerated
+	}
+	assert !l.send(&buf[0], 5) // still busy at the max
+	l.on_frame(1, wait) // the 256th exceeds wft_max -> abort (no wrap)
+	assert l.send(&buf[0], 5) // link freed
+}
+
 fn test_late_fc_after_deadline_aborts() {
 	// A FC arriving after N_Bs has elapsed (but before poll runs the timeout) must not
 	// revive the transfer — it aborts, matching the deadline poll() would enforce.
