@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 60 | 46 | 5 | 9 | 0 |
+| 62 | 46 | 5 | 11 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -71,6 +71,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TELEM-004 | QM | test | verified | loom_test.v (pass) |
 | REQ-TRACE-001 | QM | test | verified | loom_test.v (pass) |
 | REQ-TRACE-002 | QM | test | uncovered | — |
+| REQ-TRACE-008 | QM | test | uncovered | — |
+| REQ-TRACE-009 | QM | test | uncovered | — |
 | REQ-WDG-001 | B | test | verified | wdg_test.v (pass) |
 | REQ-WDG-002 | B | test | verified | wdg_test.v (pass) |
 | REQ-WDG-003 | B | test | verified | wdg_test.v (pass) |
@@ -136,6 +138,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TELEM-004 | | | ✓ | | |
 | REQ-TRACE-001 | | | ✓ | | |
 | REQ-TRACE-002 | | | | | |
+| REQ-TRACE-008 | | | | | |
+| REQ-TRACE-009 | | | | | |
 | REQ-WDG-001 | | | ✓ | | |
 | REQ-WDG-002 | | | ✓ | | |
 | REQ-WDG-003 | | | ✓ | | |

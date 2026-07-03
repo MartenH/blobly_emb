@@ -25,3 +25,29 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-OBS-002"
+
+# Draft: the swimlane half — capturing kernel context switches alongside handler runs so a
+# dump is a full timeline. The record kind + codec + buffer path are implemented and tested
+# on host; the ThreadX TX_THREAD_STATE_CHANGE source is target-only (no-op on the
+# cooperative host, which injects synthetic switches to exercise the codec), so this stays
+# draft until it is wired and verified on silicon.
+[[req]]
+id = "REQ-TRACE-008"
+title = "Thread-switch (swimlane) capture"
+text = "Where the kernel is preemptive, the ECU shall capture thread (partition) context switches into the same per-core trace buffer as handler invocations, each recording from/to thread, timestamp, and reason, so a dump yields the context-switch timeline."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-002"
+
+# Draft: multi-core read-out. The core-bitmask control + per-core self-describing dump
+# framing are implemented and tested on host (several loom schedulers, one bus loop); the
+# IOC-gathered cross-core read is exercised on the real AMP target later, so it stays draft.
+[[req]]
+id = "REQ-TRACE-009"
+title = "Multi-core dump in one command"
+text = "A single control command shall address several cores via a core bitmask; a multi-core dump shall stream one self-describing block per selected core, each gathered from its owning core over IOC without a direct cross-core buffer read."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-002"
