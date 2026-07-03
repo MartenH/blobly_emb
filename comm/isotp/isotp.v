@@ -165,6 +165,14 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 		}
 		0x30 { // flow control (for our tx)
 			if l.tx == .wait_fc {
+				// A FC that arrives after N_Bs has already elapsed is too late: the transfer
+				// has timed out. Abort rather than resurrect it — a caller that processes rx
+				// before polling could otherwise let a late WAIT/CTS extend a dead transfer
+				// past the deadline poll() would have aborted at.
+				if l.n_bs_us != 0 && now >= l.fc_deadline {
+					l.tx = .idle
+					return
+				}
 				fs := low
 				if fs == 0 { // CTS
 					l.peer_bs = p.data[1]

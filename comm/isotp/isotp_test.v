@@ -125,6 +125,23 @@ fn test_fc_wait_refreshes_n_bs() {
 	assert (p.data[0] & 0xF0) == 0x20
 }
 
+fn test_late_fc_after_deadline_aborts() {
+	// A FC arriving after N_Bs has elapsed (but before poll runs the timeout) must not
+	// revive the transfer — it aborts, matching the deadline poll() would enforce.
+	mut l := Link{
+		n_bs_us: 1000
+	}
+	mut buf := [max_payload]u8{}
+	assert l.send(&buf[0], 20)
+	mut p := Pdu{}
+	assert l.poll(0, mut p) // FF -> wait_fc (deadline 1000)
+
+	mut wait := Pdu{}
+	wait.data[0] = 0x31 // FC.WAIT, but arriving at/after the deadline
+	l.on_frame(1000, wait) // now >= deadline -> abort, do not extend
+	assert l.send(&buf[0], 5) // link is free, not resurrected
+}
+
 fn test_fc_wait_bounded_by_wftmax() {
 	// An endless-WAIT peer must not re-wedge the link: after wft_max WAITs the tx aborts.
 	mut l := Link{
