@@ -19,12 +19,14 @@ import osal
 import loom
 import comm.telem
 import comm.trace
+import comm.isotp
 import driver.can
 
 const trace_id = u32(0x7E4) // HandlerStat live stats
-const record_id = u32(0x7E5) // captured-trace record dump
+const record_id = u32(0x7E5) // captured-trace record dump (ISO-TP data: target -> host)
 const cmd_id = u32(0x7E2) // TraceCmd  (host -> target)
 const rsp_id = u32(0x7E3) // TraceRsp  (target -> host)
+const dump_fc_id = u32(0x7E6) // ISO-TP flow control for the dump (host -> target)
 
 // Capture holds the one-shot record buffer + the capture start time; passed to the loom
 // trace hook as ctx so the hook builds one Record per handler invocation.
@@ -110,8 +112,8 @@ fn main() {
 	sched.every(10_000, h_med, &app) // 10 ms
 	sched.every(20_000, h_slow, &app) // 20 ms
 
-	// one-shot capture: record every invocation into a 64-record buffer; when it fills,
-	// dump the records (0x7E5, one encode_record frame each) and re-arm.
+	// one-shot capture: record every invocation into a 64-record buffer; the host
+	// retrieves it with a `dump` command, streamed as one ISO-TP block on 0x7E5.
 	mut backing := [64]trace.Record{}
 	mut cap := Capture{
 		buf: trace.new_buffer(&backing[0], 64, .oneshot, 0)
@@ -119,48 +121,63 @@ fn main() {
 	cap.start = osal.now_us()
 	cap.buf.start()
 	sched.set_trace_hook(capture_hook, &cap)
-	println('trace_demo: capturing 64 records -> dump on 0x${record_id.hex()} when full')
+	mut link := isotp.Link{} // ISO-TP tx for the bulk dump (records on 0x7E5, FC on 0x7E6)
+	mut dumpbuf := [512]u8{} // 64 records x 8 = the ISO-TP payload
+	println('trace_demo: capture 64 records -> `dump` cmd streams them over ISO-TP on 0x${record_id.hex()}')
 
 	mut last_push := u64(0)
 	mut last_count := [3]u32{}
 	for {
 		sched.run_profiled(osal.now_us)
 
-		// handle a TraceCmd if one arrived (host-driven control): arm/stop/dump/reset/
-		// status -> apply + reply with a TraceRsp; on dump, stream the records.
+		// handle an incoming frame: a TraceCmd (control) or an ISO-TP flow-control PDU
+		// for an in-flight dump.
 		mut rx := can.Frame{}
-		if ch.recv(mut rx) && rx.id == cmd_id && rx.len >= 8 {
-			mut cb := [8]u8{}
-			for j in 0 .. 8 {
-				cb[j] = rx.data[j]
+		if ch.recv(mut rx) {
+			if rx.id == cmd_id && rx.len >= 8 {
+				mut cb := [8]u8{}
+				for j in 0 .. 8 {
+					cb[j] = rx.data[j]
+				}
+				c := trace.decode_cmd(cb)
+				rspb, do_dump := trace.handle_cmd(mut cap.buf, c, 0)
+				if c.opcode == trace.op_arm || c.opcode == trace.op_start || c.opcode == trace.op_reset {
+					cap.start = osal.now_us() // relative start_us baseline for the new capture
+				}
+				mut rf := can.Frame{
+					id:  rsp_id
+					len: 8
+				}
+				for j in 0 .. 8 {
+					rf.data[j] = rspb[j]
+				}
+				ch.send(rf)
+				if do_dump { // pack the records and start the ISO-TP transfer
+					n := cap.buf.pack(&dumpbuf[0], 512)
+					link.send(&dumpbuf[0], n)
+				}
+			} else if rx.id == dump_fc_id { // ISO-TP flow control from the host
+				mut p := isotp.Pdu{}
+				for j in 0 .. 8 {
+					p.data[j] = rx.data[j]
+				}
+				link.on_frame(osal.now_us(), p)
 			}
-			c := trace.decode_cmd(cb)
-			rspb, do_dump := trace.handle_cmd(mut cap.buf, c, 0)
-			if c.opcode == trace.op_arm || c.opcode == trace.op_start || c.opcode == trace.op_reset {
-				cap.start = osal.now_us() // relative start_us baseline for the new capture
-			}
-			mut rf := can.Frame{
-				id:  rsp_id
+		}
+
+		// drive the ISO-TP dump tx: drain the next PDU(s) to send on record_id
+		mut tp := isotp.Pdu{}
+		for link.poll(osal.now_us(), mut tp) {
+			mut pf := can.Frame{
+				id:  record_id
 				len: 8
 			}
 			for j in 0 .. 8 {
-				rf.data[j] = rspb[j]
+				pf.data[j] = tp.data[j]
 			}
-			ch.send(rf)
-			if do_dump {
-				for i in u32(0) .. cap.buf.used() {
-					b := trace.encode_record(cap.buf.record_at(i))
-					mut df := can.Frame{
-						id:  record_id
-						len: 8
-					}
-					for j in 0 .. 8 {
-						df.data[j] = b[j]
-					}
-					ch.send(df)
-				}
-			}
+			ch.send(pf)
 		}
+
 		now := osal.now_us()
 		if now - last_push >= 1_000_000 { // push HandlerStat once a second
 			last_push = now

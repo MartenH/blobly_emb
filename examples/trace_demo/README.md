@@ -80,8 +80,9 @@ cansend vcan0 7E2#0400000000000000   # opcode 4 = reset   -> rsp: state 1 (captu
 ```
 
 `dump` is refused (`result_not_ready`) unless the buffer is full/frozen — you never
-stream a buffer that's still being written. The bulk dump is one frame per record here;
-it becomes a single **ISO-TP** block next.
+stream a buffer that's still being written. The dump is one **ISO-TP** block on `0x7E5`
+(flow control from the host on `0x7E6`) — the 64 records pack to 512 bytes. Reassemble it
+with `isotprecv -s 0x7E6 -d 0x7E5 vcan0` (needs the `can-isotp` kernel module).
 
 ## Notes
 
