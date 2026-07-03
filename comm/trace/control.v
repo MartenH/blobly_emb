@@ -19,6 +19,7 @@ pub const result_ok = u8(0)
 pub const result_bad_opcode = u8(1)
 pub const result_unsupported = u8(2) // a known opcode that isn't implemented yet
 pub const result_not_ready = u8(3) // e.g. dump requested while still capturing
+pub const result_busy = u8(4) // e.g. dump requested while a previous dump is still in flight
 
 // Cmd is the decoded 8-byte TraceCmd.
 pub struct Cmd {

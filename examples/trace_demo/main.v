@@ -153,9 +153,15 @@ fn main() {
 					cb[j] = rx.data[j]
 				}
 				c := trace.decode_cmd(cb)
-				rspb, do_dump := trace.handle_cmd(mut cap.buf, c, 0)
+				mut rspb, do_dump := trace.handle_cmd(mut cap.buf, c, 0)
 				if c.opcode == trace.op_arm || c.opcode == trace.op_start || c.opcode == trace.op_reset {
 					cap.start = osal.now_us() // relative start_us baseline for the new capture
+				}
+				if do_dump { // pack the records and start the ISO-TP transfer, if the link is free
+					n := cap.buf.pack(&dumpbuf[0], 512)
+					if !link.send(&dumpbuf[0], n) {
+						rspb[1] = trace.result_busy // a previous dump is still in flight; ack busy, not OK
+					}
 				}
 				mut rf := can.Frame{
 					id:  rsp_id
@@ -165,10 +171,6 @@ fn main() {
 					rf.data[j] = rspb[j]
 				}
 				ch.send(rf)
-				if do_dump { // pack the records and start the ISO-TP transfer
-					n := cap.buf.pack(&dumpbuf[0], 512)
-					link.send(&dumpbuf[0], n)
-				}
 			} else if rx.id == dump_fc_id { // ISO-TP flow control from the host
 				mut p := isotp.Pdu{}
 				for j in 0 .. 8 {
