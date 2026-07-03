@@ -156,6 +156,7 @@ fn main() {
 				mut rspb, do_dump := trace.handle_cmd(mut cap.buf, c, 0)
 				if c.opcode == trace.op_arm || c.opcode == trace.op_start || c.opcode == trace.op_reset {
 					cap.start = osal.now_us() // relative start_us baseline for the new capture
+					link = isotp.Link{} // abort a stalled in-flight dump so the link never stays stuck busy
 				}
 				if do_dump { // pack the records and start the ISO-TP transfer, if the link is free
 					n := cap.buf.pack(&dumpbuf[0], 512)
