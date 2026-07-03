@@ -249,10 +249,12 @@ mut:
 	cmd_seq      u8
 	last_rsp_seq [ncores]u8
 	rsp_primed   [ncores]bool
-	expect       [ncores]bool // cores still owing a block for the active dump command
+	awaiting     [ncores]bool // dump forwarded, TraceRsp not yet seen
+	ready        [ncores]bool // core replied OK to a dump: a block is coming, not yet assembled
 	assembling   bool
 	active       int = -1
 	recv_seq     u8
+	recv_gen     u8
 	asm          [dump_cap]u8
 	asm_len      int
 }
@@ -262,7 +264,7 @@ fn (b Bus) dump_in_flight(link isotp.Link) bool {
 		return true
 	}
 	for c in 0 .. ncores {
-		if b.expect[c] {
+		if b.awaiting[c] || b.ready[c] {
 			return true
 		}
 	}
@@ -348,7 +350,7 @@ fn main() {
 						m.data = cb
 						osal.ioc_write(ch_cmd(i), &m, u8(sizeof(m)))
 						if c.opcode == trace.op_dump {
-							bus.expect[i] = true // may be cleared if the core replies not-ready
+							bus.awaiting[i] = true // awaiting the rsp; ready only on an OK reply
 						}
 					}
 					if c.opcode == trace.op_arm || c.opcode == trace.op_start
@@ -357,7 +359,8 @@ fn main() {
 						bus.assembling = false
 						bus.active = -1
 						for i in 0 .. ncores {
-							bus.expect[i] = false
+							bus.awaiting[i] = false
+							bus.ready[i] = false
 						}
 					}
 				}
@@ -385,17 +388,24 @@ fn main() {
 					rf.data[j] = rm.data[j]
 				}
 				ch.send(rf)
-				if rm.data[0] == trace.op_dump && rm.data[1] != trace.result_ok {
-					bus.expect[i] = false
+				if rm.data[0] == trace.op_dump {
+					// the block is coming only if the core accepted the dump (frozen/full);
+					// a not-ready reply means no chunks, so never start assembling that core.
+					bus.awaiting[i] = false
+					if rm.data[1] == trace.result_ok {
+						bus.ready[i] = true
+					}
 				}
 			}
 		}
 
-		// assemble one core's block from IOC chunks (ascending core order, link idle to start).
+		// assemble one core's block from IOC chunks (ascending core order, link idle to
+		// start) — only cores that replied OK, so a not-ready core can't wedge assembly.
 		if !bus.assembling && !link.busy() {
 			for i in 0 .. ncores {
-				if bus.expect[i] {
+				if bus.ready[i] {
 					bus.active = i
+					bus.ready[i] = false
 					bus.assembling = true
 					bus.asm_len = 0
 					bus.recv_seq = 0
@@ -405,8 +415,10 @@ fn main() {
 		}
 		if bus.assembling {
 			mut chk := DumpChunk{}
-			if osal.ioc_read(ch_dump(bus.active), &chk, u8(sizeof(chk)))
-				&& chk.seq == bus.recv_seq + 1 {
+			if osal.ioc_read(ch_dump(bus.active), &chk, u8(sizeof(chk))) && chunk_expected(bus, chk) {
+				if bus.recv_seq == 0 {
+					bus.recv_gen = chk.gen
+				}
 				for j in 0 .. int(chk.len) {
 					bus.asm[bus.asm_len + j] = chk.data[j]
 				}
@@ -419,7 +431,6 @@ fn main() {
 				osal.ioc_write(ch_ack(bus.active), &ak, u8(sizeof(ak)))
 				if chk.more == 0 {
 					link.send(&bus.asm[0], bus.asm_len) // ISO-TP the completed block to the host
-					bus.expect[bus.active] = false
 					bus.assembling = false
 					bus.active = -1
 				}
@@ -441,6 +452,16 @@ fn main() {
 
 		osal.sleep_us(1_000)
 	}
+}
+
+// chunk_expected reports whether a dump chunk is the next one for the block being assembled:
+// the first chunk latches the generation (seq 1); later chunks must match that generation and
+// be in sequence, so a stale chunk from a prior dump can't be spliced into the block.
+fn chunk_expected(b Bus, chk DumpChunk) bool {
+	if b.recv_seq == 0 {
+		return chk.seq == 1
+	}
+	return chk.gen == b.recv_gen && chk.seq == b.recv_seq + 1
 }
 
 // busy_rsp builds a TraceRsp that rejects a dump because one is already in flight.
