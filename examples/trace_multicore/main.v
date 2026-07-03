@@ -206,7 +206,9 @@ fn core_step(mut c Core, i int) {
 			c.sent_seq = 0
 			c.acked_seq = 0
 			c.seq_primed = false
-			c.dumping = c.total > 0
+			// always stream, even for an empty single-core dump (total 0 -> one terminal
+			// len-0 chunk), so the bus gets a completion signal instead of waiting forever.
+			c.dumping = true
 		}
 		mut rm := RspMsg{
 			seq: cm.seq
@@ -365,12 +367,20 @@ fn main() {
 					}
 					if c.opcode == trace.op_arm || c.opcode == trace.op_start
 						|| c.opcode == trace.op_reset {
-						link = isotp.Link{} // abort any in-flight dump
-						bus.assembling = false
-						bus.active = -1
+						// re-arm aborts a dump only for the cores it targets (each also gets the
+						// reset over IOC, clearing its own producer); a non-targeted core mid-dump
+						// keeps streaming, so its state stays in sync with the bus.
 						for i in 0 .. ncores {
+							if !c.targets(u8(i)) {
+								continue
+							}
 							bus.awaiting[i] = false
 							bus.ready[i] = false
+							if bus.active == i { // this core's block was mid-assembly -> drop it
+								link = isotp.Link{}
+								bus.assembling = false
+								bus.active = -1
+							}
 						}
 					}
 				}
@@ -439,7 +449,11 @@ fn main() {
 				}
 				osal.ioc_write(ch_ack(bus.active), &ak, u8(sizeof(ak)))
 				if chk.more == 0 {
-					link.send(&bus.asm[0], bus.asm_len) // ISO-TP the completed block to the host
+					// an empty block (0 bytes) has nothing to transmit — the TraceRsp already
+					// reported records_used 0; only ISO-TP a non-empty block.
+					if bus.asm_len > 0 {
+						link.send(&bus.asm[0], bus.asm_len)
+					}
 					bus.assembling = false
 					bus.active = -1
 				}
