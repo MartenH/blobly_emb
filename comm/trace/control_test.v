@@ -74,3 +74,18 @@ fn test_stop_freezes_ring_now() {
 	assert tb.state() == .frozen
 	assert tb.used() == 2 // frozen right here, no extra post-trigger records
 }
+
+// core_mask round-trips through b6-7 and targets() selects the right cores; a zero mask
+// means the single receiving core (core 0) for back-compat with pre-multicore commands.
+fn test_core_mask() {
+	c := decode_cmd(encode_cmd(Cmd{ opcode: op_dump, core_mask: 0b0101 }))
+	assert c.core_mask == 0b0101
+	assert c.targets(0)
+	assert !c.targets(1)
+	assert c.targets(2)
+	assert !c.targets(3)
+	// zero mask -> only core 0 (existing single-core commands left b6-7 zero)
+	z := Cmd{ opcode: op_status }
+	assert z.targets(0)
+	assert !z.targets(1)
+}

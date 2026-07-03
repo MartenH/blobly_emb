@@ -28,6 +28,15 @@ pub:
 	arg0           u8  // per-opcode arg (e.g. capture mode)
 	period_ms      u16 // push period, for future set_push
 	handler_filter u16 // 0xFFFF = all, else a handler_id
+	core_mask      u16 // bit i = core i; 0 = the receiving/default core (core 0)
+}
+
+// targets reports whether this command addresses `core`. A zero mask means the single
+// receiving core (core 0) so existing single-core commands, which left b6-7 zero, still
+// apply to their one core.
+pub fn (c Cmd) targets(core u8) bool {
+	m := if c.core_mask == 0 { u16(1) } else { c.core_mask }
+	return core < 16 && (m & (u16(1) << core)) != 0
 }
 
 // Rsp is the decoded 8-byte TraceRsp. `state` is the TraceBuffer.State ordinal
@@ -48,6 +57,7 @@ pub fn decode_cmd(b [8]u8) Cmd {
 		arg0:           b[1]
 		period_ms:      u16(b[2]) | (u16(b[3]) << 8)
 		handler_filter: u16(b[4]) | (u16(b[5]) << 8)
+		core_mask:      u16(b[6]) | (u16(b[7]) << 8)
 	}
 }
 
@@ -59,6 +69,8 @@ pub fn encode_cmd(c Cmd) [8]u8 {
 	b[3] = u8(c.period_ms >> 8)
 	b[4] = u8(c.handler_filter)
 	b[5] = u8(c.handler_filter >> 8)
+	b[6] = u8(c.core_mask)
+	b[7] = u8(c.core_mask >> 8)
 	return b
 }
 
