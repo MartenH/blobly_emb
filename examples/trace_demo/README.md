@@ -50,14 +50,11 @@ per-handler timing, live on the bus.
 
 Besides the live stats, the demo also **captures every invocation**: a loom trace hook
 (`set_trace_hook`) feeds one `trace.Record` per dispatched handler into a 64-record
-one-shot `TraceBuffer`; when it fills, the records are dumped on `0x7E5` (one
-`encode_record` frame each) and capture re-arms.
+one-shot `TraceBuffer`. It auto-arms at start, fills, and **stops at full** — the records
+are then retrieved on demand with a `dump` command (see *Control it* below); they are not
+sent automatically. Each record is `b0 handler_id, b2-5 start_us, b6-7 cpu_us`.
 
-```sh
-candump vcan0,7E5:7FF      # b0 handler_id, b2-5 start_us, b6-7 cpu_us
-```
-
-Decoded, it's the per-invocation timeline — who ran when and for how long:
+Decoded, a dump is the per-invocation timeline — who ran when and for how long:
 
 ```
 handler  start_us  cpu_us
@@ -68,6 +65,23 @@ handler  start_us  cpu_us
   h1      13715       44
   ...
 ```
+
+## Control it (P2, step 3)
+
+The capture is **host-driven** over a cmd/rsp protocol (not UDS). Send an 8-byte
+`TraceCmd` on `0x7E2`; the target replies with a `TraceRsp` on `0x7E3` (opcode, result,
+state, records_used, capacity), and on `dump` streams the records on `0x7E5`.
+
+```sh
+candump vcan0,7E3:7FF,7E5:7FF &      # watch responses + the dump
+cansend vcan0 7E2#0700000000000000   # opcode 7 = status  -> rsp: state 2 (full), used 64
+cansend vcan0 7E2#0600000000000000   # opcode 6 = dump    -> rsp + 64 record frames
+cansend vcan0 7E2#0400000000000000   # opcode 4 = reset   -> rsp: state 1 (capturing)
+```
+
+`dump` is refused (`result_not_ready`) unless the buffer is full/frozen — you never
+stream a buffer that's still being written. The bulk dump is one frame per record here;
+it becomes a single **ISO-TP** block next.
 
 ## Notes
 

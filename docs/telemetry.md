@@ -268,7 +268,7 @@ b6-7  reserved
 ```
 b0    opcode_echo
 b1    result          0 ok, else error code
-b2    state           0 idle | 1 armed | 2 capturing | 3 full
+b2    state           0 idle | 1 capturing | 2 full | 3 frozen
 b3-4  records_used    (u16)
 b5-6  capacity        (u16)
 b7    core
