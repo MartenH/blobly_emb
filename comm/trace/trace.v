@@ -146,6 +146,16 @@ pub fn (mut t TraceBuffer) push(r Record) {
 	}
 }
 
+// stop freezes capture immediately at the current fill, in any mode — distinct from a
+// pre/post trigger. A ring goes to `frozen`, a one-shot to `full`.
+pub fn (mut t TraceBuffer) stop() {
+	if t.state == .capturing {
+		t.state = if t.mode == .ring { State.frozen } else { State.full }
+		t.pending = false
+		t.post_rem = 0
+	}
+}
+
 // trigger freezes the capture. Ring: keep pre_pct % from before the trigger, capture the
 // remaining capacity after, then freeze. One-shot: stop now at the current fill.
 pub fn (mut t TraceBuffer) trigger() {
