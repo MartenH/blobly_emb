@@ -186,7 +186,7 @@ fn core_step(mut c Core, i int) {
 	if osal.ioc_read(ch_cmd(i), &cm, u8(sizeof(cm))) && cm.seq != c.last_cmd_seq {
 		c.last_cmd_seq = cm.seq
 		cmd := trace.decode_cmd(cm.data)
-		mut rspb, do_dump := trace.handle_cmd(mut c.buf, cmd, u8(i))
+		mut rspb, do_dump, _ := trace.handle_cmd(mut c.buf, cmd, u8(i)) // bus pre-filters by core_mask
 		if cmd.opcode == trace.op_arm || cmd.opcode == trace.op_start
 			|| cmd.opcode == trace.op_reset {
 			c.start = osal.now_us()

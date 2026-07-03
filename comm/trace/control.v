@@ -109,9 +109,15 @@ fn state_code(s State) u8 {
 }
 
 // handle_cmd applies a command to the buffer and returns (the response frame bytes, a
-// dump-requested flag). On `dump` the caller streams tb's records over ISO-TP; handle_cmd
-// itself never touches the bus, so it stays unit-testable and transport-agnostic.
-pub fn handle_cmd(mut tb TraceBuffer, c Cmd, core u8) ([8]u8, bool) {
+// dump-requested flag, an addressed flag). It enforces `core_mask` here — a command that
+// doesn't select `core` is ignored (no mutation, addressed = false) so targeting is
+// guaranteed by the helper, not left to each caller to filter. On `dump` the caller streams
+// tb's records over ISO-TP; handle_cmd itself never touches the bus, so it stays
+// unit-testable and transport-agnostic.
+pub fn handle_cmd(mut tb TraceBuffer, c Cmd, core u8) ([8]u8, bool, bool) {
+	if !c.targets(core) {
+		return [8]u8{}, false, false // not for this core: no mutation, no response
+	}
 	mut result := result_ok
 	mut do_dump := false
 	match c.opcode {
@@ -145,5 +151,5 @@ pub fn handle_cmd(mut tb TraceBuffer, c Cmd, core u8) ([8]u8, bool) {
 		capacity:     u16(tb.capacity())
 		core:         core
 	}
-	return encode_rsp(rsp), do_dump
+	return encode_rsp(rsp), do_dump, true
 }

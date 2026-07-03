@@ -156,27 +156,32 @@ fn main() {
 					cb[j] = rx.data[j]
 				}
 				c := trace.decode_cmd(cb)
-				mut rspb, do_dump := trace.handle_cmd(mut cap.buf, c, 0)
-				if c.opcode == trace.op_arm || c.opcode == trace.op_start || c.opcode == trace.op_reset {
-					cap.start = osal.now_us() // relative start_us baseline for the new capture
-					link = isotp.Link{} // abort a stalled in-flight dump so the link never stays stuck busy
-				}
-				if do_dump { // pack the records and start the ISO-TP transfer, if the link is free
-					n := cap.buf.pack(&dumpbuf[0], 512)
-					// n == 0 is a valid empty capture (records_used already says 0); only a
-					// non-empty send that the link refuses means a previous dump is in flight.
-					if n > 0 && !link.send(&dumpbuf[0], n) {
-						rspb[1] = trace.result_busy
+				// handle_cmd enforces core_mask: a command not addressed to this core (0) is
+				// ignored with no mutation and no response.
+				mut rspb, do_dump, addressed := trace.handle_cmd(mut cap.buf, c, 0)
+				if addressed {
+					if c.opcode == trace.op_arm || c.opcode == trace.op_start
+						|| c.opcode == trace.op_reset {
+						cap.start = osal.now_us() // relative start_us baseline for the new capture
+						link = isotp.Link{} // abort a stalled in-flight dump so the link never stays stuck busy
 					}
+					if do_dump { // pack the records and start the ISO-TP transfer, if the link is free
+						n := cap.buf.pack(&dumpbuf[0], 512)
+						// n == 0 is a valid empty capture (records_used already says 0); only a
+						// non-empty send that the link refuses means a previous dump is in flight.
+						if n > 0 && !link.send(&dumpbuf[0], n) {
+							rspb[1] = trace.result_busy
+						}
+					}
+					mut rf := can.Frame{
+						id:  rsp_id
+						len: 8
+					}
+					for j in 0 .. 8 {
+						rf.data[j] = rspb[j]
+					}
+					ch.send(rf)
 				}
-				mut rf := can.Frame{
-					id:  rsp_id
-					len: 8
-				}
-				for j in 0 .. 8 {
-					rf.data[j] = rspb[j]
-				}
-				ch.send(rf)
 			} else if rx.id == dump_fc_id { // ISO-TP flow control from the host
 				mut p := isotp.Pdu{}
 				for j in 0 .. 8 {
