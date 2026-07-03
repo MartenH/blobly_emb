@@ -99,6 +99,53 @@ fn test_wait_fc_times_out() {
 	assert l.send(&buf[0], 5) // link is free again
 }
 
+fn test_fc_wait_refreshes_n_bs() {
+	// FC.WAIT means "not ready yet" — it must restart N_Bs so a peer that WAITs within
+	// the window and later sends CTS still completes, instead of aborting at the old deadline.
+	mut l := Link{
+		n_bs_us: 1000
+	}
+	mut buf := [max_payload]u8{}
+	for i in 0 .. 20 {
+		buf[i] = u8(i + 1)
+	}
+	assert l.send(&buf[0], 20)
+	mut p := Pdu{}
+	assert l.poll(0, mut p) // FF -> wait_fc (deadline 1000)
+
+	mut wait := Pdu{}
+	wait.data[0] = 0x31 // FC.WAIT
+	l.on_frame(900, wait) // WAIT just before the old deadline -> refresh to 900+1000
+	assert !l.poll(1500, mut p) // past old deadline but within refreshed one: still waiting
+
+	mut cts := Pdu{}
+	cts.data[0] = 0x30 // FC.CTS, bs=0, stmin=0
+	l.on_frame(1500, cts)
+	assert l.poll(1500, mut p) // now sends the first CF
+	assert (p.data[0] & 0xF0) == 0x20
+}
+
+fn test_fc_wait_bounded_by_wftmax() {
+	// An endless-WAIT peer must not re-wedge the link: after wft_max WAITs the tx aborts.
+	mut l := Link{
+		n_bs_us: 1000
+		wft_max: 3
+	}
+	mut buf := [max_payload]u8{}
+	assert l.send(&buf[0], 20)
+	mut p := Pdu{}
+	assert l.poll(0, mut p) // FF -> wait_fc
+
+	mut wait := Pdu{}
+	wait.data[0] = 0x31
+	for _ in 0 .. 3 {
+		l.on_frame(10, wait) // 3 WAITs tolerated
+	}
+	assert !l.send(&buf[0], 5) // still busy after the 3rd
+	l.on_frame(10, wait) // 4th WAIT exceeds wft_max -> abort
+	assert l.send(&buf[0], 5) // link freed
+}
+
 fn test_send_rejects_when_busy_or_too_long() {
 	mut l := Link{}
 	mut buf := [max_payload]u8{}
