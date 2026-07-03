@@ -20,7 +20,8 @@ grouped, deadline-aware timeline lanes. It is the interface a visualization tool
     "cmd_id":         2018,   // 0x7E2  TraceCmd    (host -> target)
     "rsp_id":         2019,   // 0x7E3  TraceRsp
     "handlerstat_id": 2020,   // 0x7E4  HandlerStat (live per-handler stats)
-    "record_id":      2021    // 0x7E5  captured-trace Record dump
+    "record_id":      2021,   // 0x7E5  captured-trace Record dump (ISO-TP data: target -> host)
+    "dump_fc_id":     2022    // 0x7E6  ISO-TP flow control the host sends for the Record dump
   },
   "handlers": [               // one entry per schedulable unit (an [[fb.handler]])
     { "id": 0,                // global handler_id — the b0 in every HandlerStat/Record
@@ -42,6 +43,7 @@ grouped, deadline-aware timeline lanes. It is the interface a visualization tool
 | `handlers[].period_us` | deadline marker; jitter = actual period (Δ`start_us`) − this |
 | `time_unit_us` | unit for all `*_us` fields (last/max/start/cpu) |
 | `frames.*` | which CAN ids to subscribe/decode (so ids aren't hard-coded) |
+| `frames.record_id` + `frames.dump_fc_id` | the ISO-TP address pair for the Record dump: reassemble on `record_id`, send flow-control on `dump_fc_id` |
 
 Recipe: load the manifest → decode LoadDetail / HandlerStat / Record (layouts in
 `telemetry.md`; the `encode_*` fns in `comm/telem` and `comm/trace` are ground truth) →

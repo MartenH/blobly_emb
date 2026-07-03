@@ -43,6 +43,10 @@ pub struct Link {
 pub mut:
 	bs    u8 // BlockSize we grant in our FC (0 = whole message at once)
 	stmin u8 // STmin we ask of the sender (ms)
+	// N_Bs: max time to wait for a flow-control frame before aborting the tx. A lost
+	// or never-sent FC must not wedge the link busy forever (ISO 15765-2 N_Bs;
+	// default 1 s). 0 disables the timeout (wait indefinitely).
+	n_bs_us u64 = 1_000_000
 	// reassembly (rx)
 	rx        RxPhase
 	rx_buf    [max_payload]u8
@@ -61,8 +65,9 @@ pub mut:
 	tx_sn      u8
 	peer_bs    u8  // BlockSize the receiver granted (0 = unlimited)
 	peer_stmin u64 // STmin the receiver asked (us)
-	block_left u8
-	next_us    u64 // earliest time to send the next CF
+	block_left  u8
+	next_us     u64 // earliest time to send the next CF
+	fc_deadline u64 // abort the tx if still in wait_fc past this (N_Bs); set on entry
 }
 
 // send starts transmitting `len` bytes from `src`. Drops the message if a tx is
@@ -200,7 +205,16 @@ pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 			l.tx_pos = 6
 			l.tx_sn = 1
 			l.tx = .wait_fc
+			l.fc_deadline = now + l.n_bs_us
 			return true
+		}
+		.wait_fc {
+			// N_Bs: a missed or never-sent FC (e.g. a dump issued before a receiver is
+			// bound) must not leave the link busy forever — abort so the next dump is free.
+			if l.n_bs_us != 0 && now >= l.fc_deadline {
+				l.tx = .idle
+			}
+			return false
 		}
 		.send_cf {
 			if now < l.next_us {
@@ -224,6 +238,7 @@ pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 				l.block_left--
 				if l.block_left == 0 {
 					l.tx = .wait_fc
+					l.fc_deadline = now + l.n_bs_us
 				}
 			}
 			return true

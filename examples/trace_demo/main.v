@@ -134,7 +134,10 @@ fn main() {
 	cap.start = osal.now_us()
 	cap.buf.start()
 	sched.set_trace_hook(capture_hook, &cap)
-	mut link := isotp.Link{} // ISO-TP tx for the bulk dump (records on 0x7E5, FC on 0x7E6)
+	// ISO-TP tx for the bulk dump (records on 0x7E5, FC on 0x7E6). A dump issued before an
+	// ISO-TP receiver is bound gets no FC; the Link's N_Bs timeout aborts it after ~1 s so
+	// the link frees itself (the arm/start/reset reset below is the explicit belt-and-braces).
+	mut link := isotp.Link{}
 	mut dumpbuf := [512]u8{} // up to 64 records x 8 = the ISO-TP payload
 	println('trace_demo: ring capture; trigger on a >${trigger_us}us handler -> freeze; `dump` streams the window (ISO-TP 0x${record_id.hex()})')
 

@@ -77,18 +77,23 @@ The capture is **host-driven** over a cmd/rsp protocol (not UDS). Send an 8-byte
 `TraceCmd` on `0x7E2`; the target replies with a `TraceRsp` on `0x7E3` (opcode, result,
 state, records_used, capacity), and on `dump` streams the records on `0x7E5`.
 
+The `dump` is one **ISO-TP** block on `0x7E5` (flow control from the host on `0x7E6`) — the
+64 records pack to 512 bytes — so the ISO-TP receiver must already be running when you send
+opcode 6, otherwise it sends no flow control and the transfer stalls (the target's N_Bs
+timeout then aborts it after ~1 s). Start `isotprecv` first, then dump:
+
 ```sh
-candump vcan0,7E3:7FF,7E5:7FF &      # watch responses + the dump
-cansend vcan0 7E2#0700000000000000   # opcode 7 = status  -> rsp: state 2 (full), used 64
-cansend vcan0 7E2#0600000000000000   # opcode 6 = dump    -> rsp + 64 record frames
-cansend vcan0 7E2#0400000000000000   # opcode 4 = reset   -> rsp: state 1 (capturing)
+candump vcan0,7E3:7FF &               # watch the TraceRsp replies
+isotprecv -s 0x7E5 -d 0x7E6 vcan0 &   # reassemble the dump (src = data 0x7E5, dst = FC 0x7E6)
+                                      # needs the can-isotp kernel module
+cansend vcan0 7E2#0700000000000000    # opcode 7 = status -> rsp: state 2 (full), used 64
+cansend vcan0 7E2#0600000000000000    # opcode 6 = dump   -> rsp, then isotprecv prints 512 bytes
+cansend vcan0 7E2#0400000000000000    # opcode 4 = reset  -> rsp: state 1 (capturing)
 ```
 
-`dump` is refused (`result_not_ready`) unless the buffer is full/frozen — you never
-stream a buffer that's still being written. The dump is one **ISO-TP** block on `0x7E5`
-(flow control from the host on `0x7E6`) — the 64 records pack to 512 bytes. Reassemble it
-with `isotprecv -s 0x7E5 -d 0x7E6 vcan0` (source = the target's data id `0x7E5`,
-destination = the FC id `0x7E6`; needs the `can-isotp` kernel module).
+`isotprecv` prints the reassembled 512-byte block (64 × 8-byte records); split it into
+8-byte records to decode. `dump` is refused (`result_not_ready`) unless the buffer is
+full/frozen — you never stream a buffer that's still being written.
 
 ## Notes
 

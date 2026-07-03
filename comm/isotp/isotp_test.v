@@ -82,6 +82,23 @@ fn test_response_direction() {
 	}
 }
 
+fn test_wait_fc_times_out() {
+	// A multi-frame tx that never gets a FC (no receiver bound) must abort after N_Bs
+	// so the link frees up instead of wedging busy forever.
+	mut l := Link{
+		n_bs_us: 1000
+	}
+	mut buf := [max_payload]u8{}
+	assert l.send(&buf[0], 20) // > 7 bytes -> FF then wait_fc
+
+	mut p := Pdu{}
+	assert l.poll(0, mut p) // emits the FF, enters wait_fc (deadline = 0 + 1000)
+	assert !l.poll(500, mut p) // still waiting, before the deadline
+	assert !l.send(&buf[0], 5) // busy: no FC yet
+	assert !l.poll(1000, mut p) // deadline reached -> abort to idle
+	assert l.send(&buf[0], 5) // link is free again
+}
+
 fn test_send_rejects_when_busy_or_too_long() {
 	mut l := Link{}
 	mut buf := [max_payload]u8{}
