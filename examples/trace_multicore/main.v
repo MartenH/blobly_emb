@@ -69,6 +69,7 @@ mut:
 struct RspMsg {
 mut:
 	seq  u8
+	gen  u8 // the dump generation this core will stream (so the bus rejects stale chunks)
 	data [8]u8
 }
 
@@ -202,6 +203,7 @@ fn core_step(mut c Core, i int) {
 		}
 		mut rm := RspMsg{
 			seq: cm.seq
+			gen: c.gen // the generation of the block this core is about to stream (if any)
 		}
 		for j in 0 .. 8 {
 			rm.data[j] = rspb[j]
@@ -251,6 +253,7 @@ mut:
 	rsp_primed   [ncores]bool
 	awaiting     [ncores]bool // dump forwarded, TraceRsp not yet seen
 	ready        [ncores]bool // core replied OK to a dump: a block is coming, not yet assembled
+	ready_gen    [ncores]u8   // the generation that core will stream (from its OK reply)
 	assembling   bool
 	active       int = -1
 	recv_seq     u8
@@ -394,6 +397,7 @@ fn main() {
 					bus.awaiting[i] = false
 					if rm.data[1] == trace.result_ok {
 						bus.ready[i] = true
+						bus.ready_gen[i] = rm.gen // require chunks of this exact generation
 					}
 				}
 			}
@@ -409,6 +413,7 @@ fn main() {
 					bus.assembling = true
 					bus.asm_len = 0
 					bus.recv_seq = 0
+					bus.recv_gen = bus.ready_gen[i] // fixed up-front so a stale first chunk is rejected
 					break
 				}
 			}
@@ -416,9 +421,6 @@ fn main() {
 		if bus.assembling {
 			mut chk := DumpChunk{}
 			if osal.ioc_read(ch_dump(bus.active), &chk, u8(sizeof(chk))) && chunk_expected(bus, chk) {
-				if bus.recv_seq == 0 {
-					bus.recv_gen = chk.gen
-				}
 				for j in 0 .. int(chk.len) {
 					bus.asm[bus.asm_len + j] = chk.data[j]
 				}
@@ -454,13 +456,11 @@ fn main() {
 	}
 }
 
-// chunk_expected reports whether a dump chunk is the next one for the block being assembled:
-// the first chunk latches the generation (seq 1); later chunks must match that generation and
-// be in sequence, so a stale chunk from a prior dump can't be spliced into the block.
+// chunk_expected reports whether a dump chunk is the next one for the block being assembled.
+// recv_gen is fixed from the core's OK reply before any chunk is read, so EVERY chunk — the
+// first included — must carry that generation and be in sequence; a stale chunk left in the
+// last-is-best mailbox from a prior dump (even one with seq 1) is rejected.
 fn chunk_expected(b Bus, chk DumpChunk) bool {
-	if b.recv_seq == 0 {
-		return chk.seq == 1
-	}
 	return chk.gen == b.recv_gen && chk.seq == b.recv_seq + 1
 }
 

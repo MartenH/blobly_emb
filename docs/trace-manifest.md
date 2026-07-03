@@ -42,10 +42,11 @@ grouped, deadline-aware timeline lanes. It is the interface a visualization tool
 **Record kinds.** A dumped Record stream is not homogeneous — two `flags` bits mark the
 kind (see `telemetry.md`): `bit7` = a **thread-switch** event (`b0` = to_thread, `b6` =
 from_thread, `b7` = reason; `b2-5` = start_us), `bit6` = a **block-header** (`b0` = core,
-`b2-5` = record count that follows). Both clear = a normal handler-run record. A decoder
-checks the kind per record: run records → the handler timeline via `handlers[]`,
-switch records → the context-switch timeline via `threads[]`, header records → split a
-multi-core stream by core.
+`b2-5` = record count that follows) — present **only in a multi-core dump**, one per core,
+to split the shared stream (a single-core dump has no header and is just records). Both
+bits clear = a normal handler-run record. A decoder checks the kind per record: run
+records → the handler timeline via `handlers[]`, switch records → the context-switch
+timeline via `threads[]`, header records → start a new core's block.
 
 ## How a tool uses it
 

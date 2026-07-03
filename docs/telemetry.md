@@ -321,9 +321,13 @@ b2-5  count       (u32)   handler-run + thread-switch records that follow in thi
 b6-7  reserved
 ```
 
-A bulk **dump** is, per core, one block-header record followed by that core's `count`
-records, sent as one **ISO-TP** block; a multi-core dump is one such block per selected
-core (see TraceCmd `core_mask`).
+A **single-core dump** is just that core's `count` records as one **ISO-TP** block — the
+TraceRsp already names the core, so no header is needed (this is what the single-core
+`trace_demo` sends). The **block-header** record is added only in a **multi-core dump**
+(several `core_mask` bits): there the blocks share one `record_id` stream, so each is
+prefixed with a header naming its core + count to keep it self-describing. So a decoder
+that may receive multi-core dumps checks `flags` bit6 and, when set, starts a new core
+block; a single-core stream has no header and decodes straight as records.
 
 ## Time representation
 
