@@ -48,13 +48,18 @@ per-handler timing, live on the bus.
 
 ## Captured trace (P2)
 
-Besides the live stats, the demo also **captures every invocation**: a loom trace hook
+Besides the live stats, the demo runs a **flight recorder**: a loom trace hook
 (`set_trace_hook`) feeds one `trace.Record` per dispatched handler into a 64-record
-one-shot `TraceBuffer`. It auto-arms at start, fills, and **stops at full** — the records
-are then retrieved on demand with a `dump` command (see *Control it* below); they are not
-sent automatically. Each record is `b0 handler_id, b2-5 start_us, b6-7 cpu_us`.
+**ring** `TraceBuffer` (overwriting oldest). The same hook is the **software trigger** —
+when a handler runs longer than its budget (`h_slow` glitches to ~5× work every 40th
+run, ~730 µs), it calls `buf.trigger()`, which freezes the ring with **50 % of records
+from before the glitch + 50 % after** (the pre/post split). The host polls `status`
+(→ `frozen`) and `dump`s the window. Each record is `b0 handler_id, b2-5 start_us,
+b6-7 cpu_us`.
 
-Decoded, a dump is the per-invocation timeline — who ran when and for how long:
+Verified on vcan0: the ring froze with the 732 µs glitch at record **31/64** (31 before,
+32 after) and the window dumped over ISO-TP. Decoded, a dump is the per-invocation
+timeline — who ran when and for how long, around the anomaly:
 
 ```
 handler  start_us  cpu_us

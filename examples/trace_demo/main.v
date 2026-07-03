@@ -27,9 +27,11 @@ const record_id = u32(0x7E5) // captured-trace record dump (ISO-TP data: target 
 const cmd_id = u32(0x7E2) // TraceCmd  (host -> target)
 const rsp_id = u32(0x7E3) // TraceRsp  (target -> host)
 const dump_fc_id = u32(0x7E6) // ISO-TP flow control for the dump (host -> target)
+const trigger_us = u64(500) // freeze the ring when a handler runs longer than this
 
-// Capture holds the one-shot record buffer + the capture start time; passed to the loom
-// trace hook as ctx so the hook builds one Record per handler invocation.
+// Capture holds the ring record buffer + the capture start time; passed to the loom trace
+// hook as ctx so the hook builds one Record per handler invocation and applies the
+// software trigger (an over-budget handler -> freeze the ring around it).
 struct Capture {
 mut:
 	buf   trace.TraceBuffer
@@ -47,19 +49,25 @@ fn capture_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 		start_us:   u32(start_us - c.start)
 		cpu_us:     u16(dt)
 	})
+	// software trigger: a handler exceeding its budget freezes the ring with the pre/post
+	// window around it — the flight recorder catches the moment of the anomaly.
+	if dt_us > trigger_us {
+		c.buf.trigger()
+	}
 }
 
 struct Fb {
 mut:
 	acc   u32 = 1
 	iters u32
+	n     u32 // invocation counter (for the periodic glitch)
 }
 
-// step burns `iters` LCG rounds — a controllable, observed amount of work (acc is kept
-// in the escaping App, so it isn't optimised away).
-fn (mut f Fb) step() {
+// step burns `mul * iters` LCG rounds — a controllable, observed amount of work (acc is
+// kept in the escaping App, so it isn't optimised away).
+fn (mut f Fb) step(mul u32) {
 	mut a := f.acc
-	for _ in 0 .. f.iters {
+	for _ in 0 .. f.iters * mul {
 		a = a * 1664525 + 1013904223
 	}
 	f.acc = a
@@ -74,17 +82,20 @@ mut:
 
 fn h_fast(ctx voidptr) {
 	mut a := unsafe { &App(ctx) }
-	a.fast.step()
+	a.fast.step(1)
 }
 
 fn h_med(ctx voidptr) {
 	mut a := unsafe { &App(ctx) }
-	a.med.step()
+	a.med.step(1)
 }
 
 fn h_slow(ctx voidptr) {
 	mut a := unsafe { &App(ctx) }
-	a.slow.step()
+	a.slow.n++
+	// every 40th run is a glitch: ~5x the work -> over the trigger budget, firing the
+	// ring freeze so the dump shows the window around the anomaly.
+	a.slow.step(if a.slow.n % 40 == 0 { u32(5) } else { u32(1) })
 }
 
 fn main() {
@@ -112,18 +123,20 @@ fn main() {
 	sched.every(10_000, h_med, &app) // 10 ms
 	sched.every(20_000, h_slow, &app) // 20 ms
 
-	// one-shot capture: record every invocation into a 64-record buffer; the host
-	// retrieves it with a `dump` command, streamed as one ISO-TP block on 0x7E5.
+	// ring capture (flight recorder): record every invocation continuously, overwriting
+	// oldest; a handler over its budget (the periodic h_slow glitch) fires the software
+	// trigger, freezing with 50% of the ring from before the glitch + 50% after. The host
+	// polls status (-> frozen) and dumps the window as one ISO-TP block on 0x7E5.
 	mut backing := [64]trace.Record{}
 	mut cap := Capture{
-		buf: trace.new_buffer(&backing[0], 64, .oneshot, 0)
+		buf: trace.new_buffer(&backing[0], 64, .ring, 50)
 	}
 	cap.start = osal.now_us()
 	cap.buf.start()
 	sched.set_trace_hook(capture_hook, &cap)
 	mut link := isotp.Link{} // ISO-TP tx for the bulk dump (records on 0x7E5, FC on 0x7E6)
-	mut dumpbuf := [512]u8{} // 64 records x 8 = the ISO-TP payload
-	println('trace_demo: capture 64 records -> `dump` cmd streams them over ISO-TP on 0x${record_id.hex()}')
+	mut dumpbuf := [512]u8{} // up to 64 records x 8 = the ISO-TP payload
+	println('trace_demo: ring capture; trigger on a >${trigger_us}us handler -> freeze; `dump` streams the window (ISO-TP 0x${record_id.hex()})')
 
 	mut last_push := u64(0)
 	mut last_count := [3]u32{}
