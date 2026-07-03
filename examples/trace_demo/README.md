@@ -50,14 +50,11 @@ per-handler timing, live on the bus.
 
 Besides the live stats, the demo also **captures every invocation**: a loom trace hook
 (`set_trace_hook`) feeds one `trace.Record` per dispatched handler into a 64-record
-one-shot `TraceBuffer`; when it fills, the records are dumped on `0x7E5` (one
-`encode_record` frame each) and capture re-arms.
+one-shot `TraceBuffer`. It auto-arms at start, fills, and **stops at full** — the records
+are then retrieved on demand with a `dump` command (see *Control it* below); they are not
+sent automatically. Each record is `b0 handler_id, b2-5 start_us, b6-7 cpu_us`.
 
-```sh
-candump vcan0,7E5:7FF      # b0 handler_id, b2-5 start_us, b6-7 cpu_us
-```
-
-Decoded, it's the per-invocation timeline — who ran when and for how long:
+Decoded, a dump is the per-invocation timeline — who ran when and for how long:
 
 ```
 handler  start_us  cpu_us

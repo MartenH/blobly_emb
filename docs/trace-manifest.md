@@ -14,8 +14,9 @@ grouped, deadline-aware timeline lanes. It is the interface a visualization tool
 {
   "version": 1,               // manifest schema version
   "time_unit_us": 1,          // unit of every *_us field on the wire and here (µs today)
-  "frames": {                 // the CAN ids in use (config, not fixed) — decimal
-    "loaddetail_id":  2017,   // 0x7E1  LoadDetail  (comm/telem.encode_loaddetail)
+  "frames": {                 // only the ids this ECU actually emits (config, not fixed)
+    "loaddetail_id":  2017,   // 0x7E1  LoadDetail  (present iff LoadDetail is sent; the
+                              //        trace_demo fixture omits it — it sends no load)
     "cmd_id":         2018,   // 0x7E2  TraceCmd    (host -> target)
     "rsp_id":         2019,   // 0x7E3  TraceRsp
     "handlerstat_id": 2020,   // 0x7E4  HandlerStat (live per-handler stats)
