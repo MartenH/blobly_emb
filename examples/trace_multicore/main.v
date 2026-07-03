@@ -269,6 +269,7 @@ mut:
 	recv_gen     u8
 	asm          [dump_cap]u8
 	asm_len      int
+	tx_core      int = -1 // core whose block the ISO-TP link is currently transmitting (-1 = none)
 }
 
 fn (b Bus) dump_in_flight(link isotp.Link) bool {
@@ -381,6 +382,10 @@ fn main() {
 								bus.assembling = false
 								bus.active = -1
 							}
+							if bus.tx_core == i { // this core's block was mid ISO-TP -> abort it
+								link = isotp.Link{}
+								bus.tx_core = -1
+							}
 						}
 					}
 				}
@@ -412,7 +417,10 @@ fn main() {
 					// the block is coming only if the core accepted the dump (frozen/full);
 					// a not-ready reply means no chunks, so never start assembling that core.
 					bus.awaiting[i] = false
-					if rm.data[1] == trace.result_ok {
+					// only honour a dump reply for the latest command sent to this core; a
+					// reset (which bumps cmd_seq[i]) supersedes an earlier dump, so its stale
+					// OK reply must not re-arm assembly for a core that was reset.
+					if rm.data[1] == trace.result_ok && rm.seq == bus.cmd_seq[i] {
 						bus.ready[i] = true
 						bus.ready_gen[i] = rm.gen // require chunks of this exact generation
 					}
@@ -453,6 +461,7 @@ fn main() {
 					// reported records_used 0; only ISO-TP a non-empty block.
 					if bus.asm_len > 0 {
 						link.send(&bus.asm[0], bus.asm_len)
+						bus.tx_core = bus.active // track whose block is now on the link
 					}
 					bus.assembling = false
 					bus.active = -1
@@ -471,6 +480,9 @@ fn main() {
 				pf.data[j] = tp.data[j]
 			}
 			ch.send(pf)
+		}
+		if bus.tx_core >= 0 && !link.busy() { // the in-flight ISO-TP block finished (or aborted)
+			bus.tx_core = -1
 		}
 
 		osal.sleep_us(1_000)
