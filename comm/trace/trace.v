@@ -180,6 +180,26 @@ pub fn (mut t TraceBuffer) trigger() {
 	}
 }
 
+// pack writes the captured records, encoded (8 bytes each) and in chronological order,
+// into `out` — up to `out_cap` bytes — and returns the byte count. This is the payload
+// for an ISO-TP dump; `out` is a caller-owned fixed buffer (no alloc).
+pub fn (t TraceBuffer) pack(out &u8, out_cap int) int {
+	mut n := 0
+	for i in u32(0) .. t.used {
+		if n + 8 > out_cap {
+			break
+		}
+		b := encode_record(t.record_at(i))
+		unsafe {
+			for j in 0 .. 8 {
+				out[n + j] = b[j]
+			}
+		}
+		n += 8
+	}
+	return n
+}
+
 // record_at returns the i-th record in chronological (oldest-first) order — the read-out
 // order for a dump. For a wrapped ring the oldest sits at `head`.
 pub fn (t TraceBuffer) record_at(i u32) Record {

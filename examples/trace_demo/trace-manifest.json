@@ -5,7 +5,8 @@
     "cmd_id": 2018,
     "rsp_id": 2019,
     "handlerstat_id": 2020,
-    "record_id": 2021
+    "record_id": 2021,
+    "dump_fc_id": 2022
   },
   "handlers": [
     { "id": 0, "partition": "app", "core": 0, "fb": "fast", "handler": "on_5ms",  "period_us": 5000  },

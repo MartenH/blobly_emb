@@ -43,6 +43,14 @@ pub struct Link {
 pub mut:
 	bs    u8 // BlockSize we grant in our FC (0 = whole message at once)
 	stmin u8 // STmin we ask of the sender (ms)
+	// N_Bs: max time to wait for a flow-control frame before aborting the tx. A lost
+	// or never-sent FC must not wedge the link busy forever (ISO 15765-2 N_Bs;
+	// default 1 s). 0 disables the timeout (wait indefinitely).
+	n_bs_us u64 = 1_000_000
+	// WFTmax: how many consecutive FC.WAIT frames to tolerate before aborting. Each WAIT
+	// legitimately restarts N_Bs, so without a bound an endless-WAIT peer would re-wedge
+	// the link the N_Bs timeout exists to protect. 0 disables the WAIT bound.
+	wft_max u8 = 16
 	// reassembly (rx)
 	rx        RxPhase
 	rx_buf    [max_payload]u8
@@ -61,8 +69,10 @@ pub mut:
 	tx_sn      u8
 	peer_bs    u8  // BlockSize the receiver granted (0 = unlimited)
 	peer_stmin u64 // STmin the receiver asked (us)
-	block_left u8
-	next_us    u64 // earliest time to send the next CF
+	block_left  u8
+	next_us     u64 // earliest time to send the next CF
+	fc_deadline u64 // abort the tx if still in wait_fc past this (N_Bs); set on entry
+	wft_count   u8  // consecutive FC.WAIT frames seen for the current block (vs wft_max)
 }
 
 // send starts transmitting `len` bytes from `src`. Drops the message if a tx is
@@ -79,6 +89,7 @@ pub fn (mut l Link) send(src &u8, len int) bool {
 	l.tx_len = len
 	l.tx_pos = 0
 	l.tx_sn = 1
+	l.wft_count = 0
 	l.tx = if len <= 7 { TxPhase.send_sf } else { TxPhase.send_ff }
 	return true
 }
@@ -154,14 +165,32 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 		}
 		0x30 { // flow control (for our tx)
 			if l.tx == .wait_fc {
+				// A FC that arrives after N_Bs has already elapsed is too late: the transfer
+				// has timed out. Abort rather than resurrect it — a caller that processes rx
+				// before polling could otherwise let a late WAIT/CTS extend a dead transfer
+				// past the deadline poll() would have aborted at.
+				if l.n_bs_us != 0 && now >= l.fc_deadline {
+					l.tx = .idle
+					return
+				}
 				fs := low
 				if fs == 0 { // CTS
 					l.peer_bs = p.data[1]
 					l.peer_stmin = decode_stmin(p.data[2])
 					l.block_left = l.peer_bs
 					l.next_us = now
+					l.wft_count = 0
 					l.tx = .send_cf
-				} else if fs == 2 { // OVFLW / reserved -> abort (fs == 1 WAIT: keep waiting)
+				} else if fs == 1 { // WAIT: peer not ready — restart N_Bs, but bound the WAITs
+					// check before incrementing so wft_count never exceeds wft_max (<=255) and
+					// can't wrap back to 0 (which would let an endless-WAIT peer wedge the link).
+					if l.wft_max != 0 && l.wft_count >= l.wft_max {
+						l.tx = .idle // too many WAITs -> give up rather than wait forever
+					} else {
+						l.wft_count++
+						l.fc_deadline = now + l.n_bs_us
+					}
+				} else if fs == 2 { // OVFLW / reserved -> abort
 					l.tx = .idle
 				}
 			}
@@ -200,7 +229,16 @@ pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 			l.tx_pos = 6
 			l.tx_sn = 1
 			l.tx = .wait_fc
+			l.fc_deadline = now + l.n_bs_us
 			return true
+		}
+		.wait_fc {
+			// N_Bs: a missed or never-sent FC (e.g. a dump issued before a receiver is
+			// bound) must not leave the link busy forever — abort so the next dump is free.
+			if l.n_bs_us != 0 && now >= l.fc_deadline {
+				l.tx = .idle
+			}
+			return false
 		}
 		.send_cf {
 			if now < l.next_us {
@@ -224,6 +262,7 @@ pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 				l.block_left--
 				if l.block_left == 0 {
 					l.tx = .wait_fc
+					l.fc_deadline = now + l.n_bs_us
 				}
 			}
 			return true

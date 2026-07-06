@@ -6,6 +6,37 @@ fn rec(id u8) Record {
 	}
 }
 
+// pack encodes the used records, chronological, 8 bytes each, bounded by out_cap.
+fn test_pack_records() {
+	mut backing := [4]Record{}
+	mut t := new_buffer(&backing[0], 4, .oneshot, 0)
+	t.start()
+	for i in 0 .. 3 {
+		t.push(Record{
+			handler_id: u8(i)
+			start_us:   u32(i * 100)
+			cpu_us:     u16(i)
+		})
+	}
+	mut out := [64]u8{}
+	n := t.pack(&out[0], 64)
+	assert n == 24 // 3 records x 8
+	// each 8-byte chunk decodes back to its record, in order
+	for i in 0 .. 3 {
+		mut chunk := [8]u8{}
+		for j in 0 .. 8 {
+			chunk[j] = out[i * 8 + j]
+		}
+		r := decode_record(chunk)
+		assert r.handler_id == u8(i)
+		assert r.start_us == u32(i * 100)
+		assert r.cpu_us == u16(i)
+	}
+	// out_cap bounds the write: room for only 2 records
+	m := t.pack(&out[0], 20)
+	assert m == 16
+}
+
 // Record must be a natural 8 bytes (the RAM budget + wire width), and encode/decode must
 // round-trip in the documented byte order.
 fn test_record_is_8_bytes_and_roundtrips() {
