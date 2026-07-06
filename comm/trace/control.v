@@ -28,6 +28,15 @@ pub:
 	arg0           u8  // per-opcode arg (e.g. capture mode)
 	period_ms      u16 // push period, for future set_push
 	handler_filter u16 // 0xFFFF = all, else a handler_id
+	core_mask      u16 // bit i = core i; 0 = the receiving/default core (core 0)
+}
+
+// targets reports whether this command addresses `core`. A zero mask means the single
+// receiving core (core 0) so existing single-core commands, which left b6-7 zero, still
+// apply to their one core.
+pub fn (c Cmd) targets(core u8) bool {
+	m := if c.core_mask == 0 { u16(1) } else { c.core_mask }
+	return core < 16 && (m & (u16(1) << core)) != 0
 }
 
 // Rsp is the decoded 8-byte TraceRsp. `state` is the TraceBuffer.State ordinal
@@ -48,6 +57,7 @@ pub fn decode_cmd(b [8]u8) Cmd {
 		arg0:           b[1]
 		period_ms:      u16(b[2]) | (u16(b[3]) << 8)
 		handler_filter: u16(b[4]) | (u16(b[5]) << 8)
+		core_mask:      u16(b[6]) | (u16(b[7]) << 8)
 	}
 }
 
@@ -59,6 +69,8 @@ pub fn encode_cmd(c Cmd) [8]u8 {
 	b[3] = u8(c.period_ms >> 8)
 	b[4] = u8(c.handler_filter)
 	b[5] = u8(c.handler_filter >> 8)
+	b[6] = u8(c.core_mask)
+	b[7] = u8(c.core_mask >> 8)
 	return b
 }
 
@@ -97,9 +109,15 @@ fn state_code(s State) u8 {
 }
 
 // handle_cmd applies a command to the buffer and returns (the response frame bytes, a
-// dump-requested flag). On `dump` the caller streams tb's records over ISO-TP; handle_cmd
-// itself never touches the bus, so it stays unit-testable and transport-agnostic.
-pub fn handle_cmd(mut tb TraceBuffer, c Cmd, core u8) ([8]u8, bool) {
+// dump-requested flag, an addressed flag). It enforces `core_mask` here — a command that
+// doesn't select `core` is ignored (no mutation, addressed = false) so targeting is
+// guaranteed by the helper, not left to each caller to filter. On `dump` the caller streams
+// tb's records over ISO-TP; handle_cmd itself never touches the bus, so it stays
+// unit-testable and transport-agnostic.
+pub fn handle_cmd(mut tb TraceBuffer, c Cmd, core u8) ([8]u8, bool, bool) {
+	if !c.targets(core) {
+		return [8]u8{}, false, false // not for this core: no mutation, no response
+	}
 	mut result := result_ok
 	mut do_dump := false
 	match c.opcode {
@@ -133,5 +151,5 @@ pub fn handle_cmd(mut tb TraceBuffer, c Cmd, core u8) ([8]u8, bool) {
 		capacity:     u16(tb.capacity())
 		core:         core
 	}
-	return encode_rsp(rsp), do_dump
+	return encode_rsp(rsp), do_dump, true
 }

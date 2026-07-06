@@ -260,8 +260,16 @@ b1    arg0            set_push kind (0 stats | 1 records) / capture mode
 b2-3  period_ms       (u16) for set_push
 b4-5  handler_filter  (u16) 0xFFFF = all, else a handler_id — wider than the u8 id so
                       the "all" sentinel can't collide with a valid handler
-b6-7  reserved
+b6-7  core_mask       (u16) bit i = core i; one cmd addresses several cores at once
+                      (arm/stop/dump/… fan out). 0 = the receiving/default core (core 0),
+                      so existing single-core commands keep working unchanged.
 ```
+
+A **multi-core dump** is one `dump` with several `core_mask` bits set. The bus core owns
+the fan-out: for each selected core it pulls that core's frozen buffer **over IOC** (never
+a direct cross-core read — the recording invariant), sends that core's TraceRsp, then
+streams its self-describing ISO-TP block (block-header record + records). One command,
+N per-core blocks, in ascending core order.
 
 **TraceRsp** — target → host (`rsp_id`), one per cmd:
 
@@ -274,7 +282,12 @@ b5-6  capacity        (u16)
 b7    core
 ```
 
-**Record** — one handler invocation in the buffer (8 B):
+**Record** — a fixed 8-byte buffer entry. All three kinds share the 8-byte cell (so the
+ring is one homogeneous array, no alloc) and are told apart by two **kind** bits in
+`flags` (`bit7 = thread-switch`, `bit6 = block-header`; both clear = a handler run). The
+low nibble stays the per-run semantic flags:
+
+*Handler-run record* (kind = 0 — one handler invocation):
 
 ```
 b0    handler_id  (u8, global)
@@ -283,11 +296,38 @@ b2-5  start_us    (u32)   relative to capture start
 b6-7  cpu_us      (u16)   saturating; = response time on a no-IRQ bare-metal core
 ```
 
-On a **preemptive** target, drawing the preempted gap needs both response and CPU time,
-so a preemptive build widens the record to carry `response_us` too (12 B) or emits a
-separate preemption event; the base bare-metal record stays 8 B. A bulk **dump** is a
-small header (manifest hash, capture-start epoch, `records_used`, core) followed by
-`records_used` records, sent as one **ISO-TP** block.
+*Thread-switch record* (kind = `bit7`, the **swimlane** event) — captured **into the same
+ring**, interleaved with the run records, so one dump is a single timeline of *who ran*
+and *the context switches between them*. On a preemptive target these come from the kernel
+(below); the preempted gap is then the interval a thread is switched out, drawn directly
+instead of inferred from a response/CPU split:
+
+```
+b0    to_thread   (u8)    the thread (= partition) switched TO
+b1    flags       (bit7 set)
+b2-5  start_us    (u32)   relative to capture start — when the switch happened
+b6    from_thread (u8)    the thread switched FROM
+b7    reason      0 preempt | 1 block/yield | 2 resume | 3 isr-enter | 4 isr-exit
+```
+
+*Block-header record* (kind = `bit6`) — one leading entry per core in a multi-core dump so
+each ISO-TP block is **self-describing** (a tool splits the stream by core without timing
+correlation to the rsp):
+
+```
+b0    core        (u8)
+b1    flags       (bit6 set)
+b2-5  count       (u32)   handler-run + thread-switch records that follow in this block
+b6-7  reserved
+```
+
+A **single-core dump** is just that core's `count` records as one **ISO-TP** block — the
+TraceRsp already names the core, so no header is needed (this is what the single-core
+`trace_demo` sends). The **block-header** record is added only in a **multi-core dump**
+(several `core_mask` bits): there the blocks share one `record_id` stream, so each is
+prefixed with a header naming its core + count to keep it self-describing. So a decoder
+that may receive multi-core dumps checks `flags` bit6 and, when set, starts a new core
+block; a single-core stream has no header and decodes straight as records.
 
 ## Time representation
 
@@ -336,9 +376,11 @@ The record + manifest are shaped to feed these views (blobly_net, phase P4):
   typical vs worst-case execution time.
 - **Overrun / deadline markers** — Records with `cpu_us > period_us` or the `overran`
   flag get red marks; ties the timeline back to LoadDetail's overrun count.
-- **Preemption view (ThreadX)** — where `response_us > cpu_us`, draw the preempted
-  interval (thread ready but not running). Needs the response/CPU split, i.e. the wider
-  preemptive record.
+- **Preemption / swimlane view (ThreadX)** — the thread-switch records give the actual
+  context-switch timeline: each is a `from_thread → to_thread` edge at `start_us`, so a
+  tool draws one lane per thread (= partition) and shades the interval a thread is switched
+  out. This is exact (drawn from the switch edges), not inferred from a response/CPU split.
+  `reason` colours the edge (preempt vs voluntary block vs ISR).
 
 Live HandlerStat frames drive gauges/sparklines (last/max/count per handler); the
 captured trace drives the timeline and histograms.
@@ -353,10 +395,20 @@ captured trace drives the timeline and histograms.
 3. **P3 — ring/FIFO capture + software trigger** (freeze-the-ring, pre/post split; signal
    trigger event-driven at the write site, address poll optional; the pluggable
    `trace_trigger()` seam with `source = "hw"` reserved). `REQ-TRACE-006/007`.
-4. **P4 — ThreadX preemption** (execution-profile kit + state-change hook → CPU time,
-   preemption interval). `REQ-TRACE-005`.
-5. **P5 — blobly_net**: load the manifest, decode records, render the timeline / jitter /
-   preemption views above.
+4. **P4 — ThreadX preemption + thread-switch (swimlane) capture** (execution-profile kit
+   for CPU time; the `TX_THREAD_STATE_CHANGE` hook feeds thread-switch records into the
+   same ring, so a dump carries the context-switch timeline). `REQ-TRACE-005/008`.
+5. **P4b — multi-core dump-in-one-command** (`core_mask` fan-out; per-core self-describing
+   ISO-TP blocks, gathered over IOC). `REQ-TRACE-009`.
+6. **P5 — blobly_net**: load the manifest, decode records, render the timeline / jitter /
+   preemption / swimlane views above.
+
+> **Host vs target.** The record kinds, codecs, `core_mask` control, and multi-core dump
+> fan-out are portable and verified on host/vcan (multi-core = several loom schedulers in
+> one process, one bus loop). The **source** of thread-switch records is the ThreadX
+> `TX_THREAD_STATE_CHANGE` hook, which has no equivalent on the cooperative host — so the
+> host harness injects synthetic switch records to exercise the codec/dump end-to-end,
+> exactly as the DWT `hw` trigger is seam-only until silicon.
 
 ## Requirements
 
@@ -388,6 +440,14 @@ their phase lands, so nothing is marked covered prematurely:
   a single trigger seam that admits additional sources (incl. a future hardware
   watchpoint for arbitrary memory) without redesign. *(no debug HW; no cross-partition
   reads)*
+- **REQ-TRACE-008** — where the kernel is preemptive, the ECU shall capture thread
+  (partition) context switches into the same per-core trace buffer as handler
+  invocations, each recording the from/to thread, timestamp, and reason, so a dump yields
+  the context-switch (swimlane) timeline. *(thread-switch record kind; ThreadX
+  state-change hook the source, no-op on a cooperative core)*
+- **REQ-TRACE-009** — a single control command shall address several cores at once (a core
+  bitmask); a multi-core dump shall stream one self-describing block per selected core,
+  each gathered from its owning core over IOC (no direct cross-core buffer read).
 
 ## Open decisions
 
@@ -401,4 +461,10 @@ their phase lands, so nothing is marked covered prematurely:
 5. **Trigger**: **decided** — software, no debug HW: a signal condition checked at the
    generated write site (recommended), or an address poll (advanced); one `trace_trigger()`
    seam with `source = "hw"` (DWT) reserved for later.
-6. **Record width**: 8 B (bare-metal) / 12 B (preemptive, carries `response_us`) — good?
+6. **Record width**: **decided** — one homogeneous **8 B** cell for every kind; a
+   preemptive build does *not* widen the record but adds a **thread-switch record kind**
+   (kind bits in `flags`) whose switch edges give the preemption timeline directly. Keeps
+   the ring a single no-alloc array and one dump format.
+7. **Multi-core dump framing**: **decided** — `core_mask` in TraceCmd fans out; per-core
+   self-describing ISO-TP blocks (block-header record + records), in ascending core order,
+   each pulled over IOC by the bus core.
