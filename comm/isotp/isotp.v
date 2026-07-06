@@ -94,6 +94,12 @@ pub fn (mut l Link) send(src &u8, len int) bool {
 	return true
 }
 
+// busy reports whether a tx is in flight (segmenting or awaiting flow control), so a
+// caller serialising several messages on one Link starts the next only when it's free.
+pub fn (l Link) busy() bool {
+	return l.tx != .idle
+}
+
 // take copies a completed message to `dst` and returns its length (0 if none).
 pub fn (mut l Link) take(dst &u8) int {
 	if !l.ready {

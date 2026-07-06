@@ -108,3 +108,69 @@ fn test_ring_trigger_pre_post_split() {
 	t.push(rec(9))
 	assert t.record_at(3).handler_id == 4
 }
+
+// A thread-switch record round-trips through the same 8-byte cell as a run record and is
+// distinguishable by is_switch(); the from/to/reason fields decode back.
+fn test_switch_record_roundtrip() {
+	s := new_switch(12345, 3, 7, switch_preempt)
+	assert s.is_switch()
+	assert !s.is_header()
+	assert s.to_thread() == 7
+	assert s.from_thread() == 3
+	assert s.reason() == switch_preempt
+	assert s.start_us == 12345
+	// survives the wire encode/decode used by pack/dump
+	d := decode_record(encode_record(s))
+	assert d.is_switch()
+	assert d.from_thread() == 3 && d.to_thread() == 7 && d.reason() == switch_preempt
+	assert d.start_us == 12345
+	// a plain run record is neither switch nor header
+	assert !rec(5).is_switch() && !rec(5).is_header()
+}
+
+// pack_block prepends a self-describing header (core + count) then the records; the count
+// reflects what was actually written.
+fn test_pack_block_header() {
+	mut backing := [4]Record{}
+	mut t := new_buffer(&backing[0], 4, .oneshot, 0)
+	t.start()
+	t.push(rec(10))
+	t.push(rec(11))
+	t.push(new_switch(500, 0, 1, switch_resume))
+	mut out := [64]u8{}
+	n := t.pack_block(&out[0], 64, 2)
+	assert n == 8 * 4 // header + 3 records
+	// first 8 bytes are the block header for core 2, count 3
+	mut hb := [8]u8{}
+	for i in 0 .. 8 {
+		hb[i] = out[i]
+	}
+	h := decode_record(hb)
+	assert h.is_header()
+	assert h.header_core() == 2
+	assert h.header_count() == 3
+	// second record cell is the first run record
+	mut rb := [8]u8{}
+	for i in 0 .. 8 {
+		rb[i] = out[8 + i]
+	}
+	assert decode_record(rb).handler_id == 10
+}
+
+// pack_block truncates to out_cap and keeps the header count consistent with what fits.
+fn test_pack_block_truncates_consistently() {
+	mut backing := [4]Record{}
+	mut t := new_buffer(&backing[0], 4, .oneshot, 0)
+	t.start()
+	for i in 0 .. 4 {
+		t.push(rec(u8(i)))
+	}
+	mut out := [24]u8{} // header + only 2 records fit
+	n := t.pack_block(&out[0], 24, 0)
+	assert n == 24
+	mut hb := [8]u8{}
+	for i in 0 .. 8 {
+		hb[i] = out[i]
+	}
+	assert decode_record(hb).header_count() == 2 // count == records actually written
+}

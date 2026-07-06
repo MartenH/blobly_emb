@@ -20,6 +20,72 @@ pub mut:
 	flags      u8
 }
 
+// Record kinds share the one 8-byte cell (so the ring stays a single no-alloc array); two
+// high flag bits discriminate them, the low nibble keeps the per-run semantic flags. Both
+// bits clear = a handler-run record.
+pub const flag_switch = u8(0x80) // bit7: a thread-switch (swimlane) event, not a handler run
+pub const flag_header = u8(0x40) // bit6: a per-core block header leading a multi-core dump
+
+// Thread-switch reasons (the `reason` byte of a switch record).
+pub const switch_preempt = u8(0) // a higher-priority thread took the core
+pub const switch_block = u8(1) // the thread voluntarily blocked/yielded
+pub const switch_resume = u8(2) // the thread was scheduled back to running
+pub const switch_isr_enter = u8(3) // an ISR started running
+pub const switch_isr_exit = u8(4) // an ISR returned
+
+// new_switch builds a thread-switch record: a context change from `from_thread` to
+// `to_thread` at `ts` µs (capture-relative). It rides in the same 8-byte cell as a run
+// record; flag_switch tells them apart. Wire (via encode_record): b0 to_thread,
+// b6 from_thread, b7 reason.
+pub fn new_switch(ts u32, from_thread u8, to_thread u8, reason u8) Record {
+	return Record{
+		start_us:   ts
+		cpu_us:     u16(from_thread) | (u16(reason) << 8)
+		handler_id: to_thread
+		flags:      flag_switch
+	}
+}
+
+// new_header builds the leading block-header record for one core's dump block: it names the
+// core and how many records follow, making a multi-core dump stream self-describing.
+pub fn new_header(core u8, count u32) Record {
+	return Record{
+		start_us:   count
+		handler_id: core
+		flags:      flag_header
+	}
+}
+
+pub fn (r Record) is_switch() bool {
+	return r.flags & flag_switch != 0
+}
+
+pub fn (r Record) is_header() bool {
+	return r.flags & flag_header != 0
+}
+
+// switch-record accessors (valid when is_switch()).
+pub fn (r Record) to_thread() u8 {
+	return r.handler_id
+}
+
+pub fn (r Record) from_thread() u8 {
+	return u8(r.cpu_us)
+}
+
+pub fn (r Record) reason() u8 {
+	return u8(r.cpu_us >> 8)
+}
+
+// block-header accessors (valid when is_header()).
+pub fn (r Record) header_core() u8 {
+	return r.handler_id
+}
+
+pub fn (r Record) header_count() u32 {
+	return r.start_us
+}
+
 // encode_record packs a Record into its 8-byte wire form (little-endian):
 // b0 handler_id | b1 flags | b2-5 start_us | b6-7 cpu_us.
 pub fn encode_record(r Record) [8]u8 {
@@ -196,6 +262,39 @@ pub fn (t TraceBuffer) pack(out &u8, out_cap int) int {
 			}
 		}
 		n += 8
+	}
+	return n
+}
+
+// pack_block writes one core's dump block — a leading block-header record (core + the count
+// of records that follow) then the encoded records — into `out`, up to `out_cap` bytes, and
+// returns the byte count. Self-describing, so a multi-core dump stream splits by core with
+// no external framing. The header count reflects records actually written, so a block
+// truncated by `out_cap` stays internally consistent.
+pub fn (t TraceBuffer) pack_block(out &u8, out_cap int, core u8) int {
+	if out_cap < 8 {
+		return 0
+	}
+	mut n := 8 // reserve the header slot; backfill it once the count is known
+	mut count := u32(0)
+	for i in u32(0) .. t.used {
+		if n + 8 > out_cap {
+			break
+		}
+		b := encode_record(t.record_at(i))
+		unsafe {
+			for j in 0 .. 8 {
+				out[n + j] = b[j]
+			}
+		}
+		n += 8
+		count++
+	}
+	hdr := encode_record(new_header(core, count))
+	unsafe {
+		for j in 0 .. 8 {
+			out[j] = hdr[j]
+		}
 	}
 	return n
 }
