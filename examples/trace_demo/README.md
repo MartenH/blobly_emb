@@ -48,13 +48,18 @@ per-handler timing, live on the bus.
 
 ## Captured trace (P2)
 
-Besides the live stats, the demo also **captures every invocation**: a loom trace hook
+Besides the live stats, the demo runs a **flight recorder**: a loom trace hook
 (`set_trace_hook`) feeds one `trace.Record` per dispatched handler into a 64-record
-one-shot `TraceBuffer`. It auto-arms at start, fills, and **stops at full** — the records
-are then retrieved on demand with a `dump` command (see *Control it* below); they are not
-sent automatically. Each record is `b0 handler_id, b2-5 start_us, b6-7 cpu_us`.
+**ring** `TraceBuffer` (overwriting oldest). The same hook is the **software trigger** —
+when a handler runs longer than its budget (`h_slow` glitches to ~5× work every 40th
+run, ~730 µs), it calls `buf.trigger()`, which freezes the ring with **50 % of records
+from before the glitch + 50 % after** (the pre/post split). The host polls `status`
+(→ `frozen`) and `dump`s the window. Each record is `b0 handler_id, b2-5 start_us,
+b6-7 cpu_us`.
 
-Decoded, a dump is the per-invocation timeline — who ran when and for how long:
+Verified on vcan0: the ring froze with the 732 µs glitch at record **31/64** (31 before,
+32 after) and the window dumped over ISO-TP. Decoded, a dump is the per-invocation
+timeline — who ran when and for how long, around the anomaly:
 
 ```
 handler  start_us  cpu_us
@@ -72,16 +77,24 @@ The capture is **host-driven** over a cmd/rsp protocol (not UDS). Send an 8-byte
 `TraceCmd` on `0x7E2`; the target replies with a `TraceRsp` on `0x7E3` (opcode, result,
 state, records_used, capacity), and on `dump` streams the records on `0x7E5`.
 
+The `dump` is one **ISO-TP** block on `0x7E5` (flow control from the host on `0x7E6`) — the
+64 records pack to 512 bytes — so the ISO-TP receiver must already be running when you send
+opcode 6, otherwise it sends no flow control and the transfer stalls (the target's N_Bs
+timeout then aborts it after ~1 s). Start `isotprecv` first, then dump:
+
 ```sh
-candump vcan0,7E3:7FF,7E5:7FF &      # watch responses + the dump
-cansend vcan0 7E2#0700000000000000   # opcode 7 = status  -> rsp: state 2 (full), used 64
-cansend vcan0 7E2#0600000000000000   # opcode 6 = dump    -> rsp + 64 record frames
-cansend vcan0 7E2#0400000000000000   # opcode 4 = reset   -> rsp: state 1 (capturing)
+candump vcan0,7E3:7FF &               # watch the TraceRsp replies
+isotprecv -s 0x7E6 -d 0x7E5 vcan0 &   # reassemble the dump: -d (rx) = data 0x7E5, -s (tx, FC) = 0x7E6
+                                      # needs the can-isotp kernel module
+cansend vcan0 7E2#0700000000000000    # opcode 7 = status -> rsp: state 3 (frozen) once the
+                                      #   trigger has fired (state 1 = still capturing if early)
+cansend vcan0 7E2#0600000000000000    # opcode 6 = dump   -> rsp, then isotprecv prints 512 bytes
+cansend vcan0 7E2#0400000000000000    # opcode 4 = reset  -> rsp: state 1 (capturing)
 ```
 
-`dump` is refused (`result_not_ready`) unless the buffer is full/frozen — you never
-stream a buffer that's still being written. The bulk dump is one frame per record here;
-it becomes a single **ISO-TP** block next.
+`isotprecv` prints the reassembled 512-byte block (64 × 8-byte records); split it into
+8-byte records to decode. `dump` is refused (`result_not_ready`) unless the buffer is
+full/frozen — you never stream a buffer that's still being written.
 
 ## Notes
 
