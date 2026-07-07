@@ -351,10 +351,9 @@ frequent, so a `u16` µs delta covers the gap while the *window is unbounded* (t
 accumulates deltas):
 
 ```
-b0    to_thread  (u8)         the thread now running (switched TO)
-b1    reason     (u8)         why the previous thread stopped / this switch happened:
-                              0 preempted | 1 blocked | 2 yielded | 3 exited |
-                              4 isr-enter | 5 isr-exit | 255 time-extend
+b0    to_thread  (u8)         the thread now running
+b1    reason     (u8)         what happened to the OUTGOING thread (its fate):
+                              0 preempted | 1 blocked | 2 yielded | 3 exited | 255 time-extend
 b2-3  delta_us   (u16, LE)    time since the previous record (`time_unit`-scaled)
 ```
 
@@ -393,11 +392,19 @@ last fb.handler-run record):
 
 ```
 b0    flags       (bit7 set)
-b1    to_thread   (u8)    the thread switched TO
-b2    reason      0 preempt | 1 block/yield | 2 resume | 3 isr-enter | 4 isr-exit
+b1    to_thread   (u8)    the thread now running
+b2    reason      why the OUTGOING thread stopped (its fate — the preemption signal):
+                  0 preempted (still ready → resumes later) | 1 blocked | 2 yielded | 3 exited
 b3-5  start_us    (u24, LE)   relative to capture start — when the switch happened
 b6-7  reserved
 ```
+
+`reason` always describes the **outgoing** thread (`to_thread` runs *because* the previous
+thread `preempted`/`blocked`/`yielded`/`exited`). There's no `resume` reason — a preempted
+thread resuming is just its `thread_id` reappearing as `to_thread`. ISRs are modelled as a
+reserved ISR `thread_id`: an ISR taking the core is `{to = isr, reason = preempted}`, and its
+return is `{to = <resumed thread>, reason = exited}` (the ISR "exited") — same vocabulary, no
+special isr reasons.
 
 *Block-header record* (kind = `bit6`) — one leading entry per core in a multi-core dump so
 each ISO-TP block is **self-describing** (split the stream by core without correlating to
