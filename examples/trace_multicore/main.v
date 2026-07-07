@@ -126,7 +126,8 @@ mut:
 	id_base u8
 	sched   loom.Scheduler
 	buf     trace.TraceBuffer
-	start   u64
+	start   u64 // wall-clock µs of the capture origin
+	base    u64 // elapsed µs at the last epoch re-anchor
 	light   Fb
 	heavy   Fb
 	sw_out  bool // synthetic swimlane phase
@@ -156,13 +157,25 @@ fn (c Core) isr_vector() u16 {
 	return u16(c.id_base) + 16 // a synthetic RAW interrupt vector (its own ISR record kind)
 }
 
+// stamp converts a wall-clock µs into this core's capture-relative start_us, re-anchoring the
+// u24 origin with an epoch record before it wraps (~16.777 s) so long captures stay ordered.
+// Every record producer on the core goes through it so they share one timeline.
+fn (mut c Core) stamp(now_us u64) u32 {
+	elapsed := now_us - c.start
+	if elapsed - c.base > 0x00ff_ffff {
+		c.base = elapsed
+		c.buf.push(trace.new_epoch(u32(elapsed)))
+	}
+	return u32(elapsed - c.base)
+}
+
 fn capture_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	mut c := unsafe { &Core(ctx) }
 	mut dt := dt_us
 	if dt > 0xFFFF {
 		dt = 0xFFFF
 	}
-	c.buf.push(trace.new_fb(u16(c.id_base) + u16(idx), 0, u32(start_us - c.start), u16(dt)))
+	c.buf.push(trace.new_fb(u16(c.id_base) + u16(idx), 0, c.stamp(start_us), u16(dt)))
 	if dt_us > trigger_us {
 		c.buf.trigger()
 	}
@@ -188,7 +201,7 @@ fn core_step(mut c Core, i int) {
 	// buffer (the cooperative host has no preemption, so we inject them to exercise the codec).
 	c.sw_pass++
 	if c.sw_pass % switch_every == 0 {
-		now := u32(osal.now_us() - c.start)
+		now := c.stamp(osal.now_us())
 		if c.sw_out {
 			// a synthetic interrupt ran — its own ISR record (raw vector, not a thread)
 			c.buf.push(trace.new_isr(c.isr_vector(), now, 5))
@@ -209,6 +222,7 @@ fn core_step(mut c Core, i int) {
 		if cmd.opcode == trace.op_arm || cmd.opcode == trace.op_start
 			|| cmd.opcode == trace.op_reset {
 			c.start = osal.now_us()
+			c.base = 0
 			c.dumping = false
 		}
 		if do_dump && !c.dumping {
