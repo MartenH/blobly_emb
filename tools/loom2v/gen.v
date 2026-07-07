@@ -1108,11 +1108,18 @@ fn main() {
 		os.write_file(args[6], man.join('\n') + '\n') or { panic('write ${args[6]}: ${err}') }
 	}
 
-	// --- trace DBC (optional arg 8): the symbolic decode for the observability frames, so
-	//     blobly_net shows opcode/result/state by name and can send commands by name. Ids
-	//     come from [trace]; LoadDetail is included only when [telemetry].detail_id is set. ---
-	if args.len >= 8 && trace_on {
-		dbc_txt := trace_dbc(trace_cmd_id, trace_rsp_id, trace_stat_id, telem_detail_id)
+	// --- trace DBC (arg 8, required when [trace] is present): the symbolic decode for the
+	//     observability frames, so blobly_net shows opcode/result/state by name and can send
+	//     commands by name. Ids come from [trace]. LoadDetail is emitted only when telemetry is
+	//     ENABLED with a detail_id — so the DBC mirrors the generated runtime (which gates the
+	//     LoadDetail tx on telem_on) and a disabled/invalid detail_id can't leak into it. ---
+	if trace_on {
+		if args.len < 8 {
+			panic('loom2v: [trace] is present but no trace_dbc output path was given (arg 8) — ' +
+				'pass it so the observability DBC is generated (it is skipped silently otherwise)')
+		}
+		detail := if telem_on { telem_detail_id } else { u32(0) }
+		dbc_txt := trace_dbc(trace_cmd_id, trace_rsp_id, trace_stat_id, detail)
 		os.write_file(args[7], dbc_txt) or { panic('write ${args[7]}: ${err}') }
 	}
 

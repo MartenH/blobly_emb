@@ -201,7 +201,7 @@ bus = "can0"
 	assert e.any(it.contains('telemetry.detail_id') && it.contains('out of CAN id range'))
 }
 
-// a trace id colliding with an enabled telemetry frame is a bus collision too.
+// a trace id colliding with an enabled telemetry frame on the SAME bus is a wire collision.
 fn test_trace_id_collides_with_telemetry_flagged() {
 	e := errs_of('
 [bus.can0]
@@ -216,6 +216,26 @@ id = 0x7E2
 bus = "can0"
 ' + app)
 	assert e.any(it.contains('used by both') && it.contains('telemetry.id'))
+}
+
+// the same id reused by telemetry on a DIFFERENT bus can't collide on the wire — don't flag it.
+fn test_trace_id_reused_by_telemetry_on_other_bus_ok() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[bus.can1]
+interface = "vcan1"
+
+[telemetry]
+enabled = true
+bus = "can0"
+id = 0x7E2
+
+[trace]
+bus = "can1"
+' + app)
+	assert e.filter(it.contains('used by both')).len == 0
 }
 
 // absent [trace] must not synthesize errors (it's optional).

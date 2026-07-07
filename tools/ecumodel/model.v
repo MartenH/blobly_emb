@@ -202,9 +202,10 @@ pub fn validate(doc toml.Doc) []string {
 				errs << '[trace] buffer_records ${n} out of range (1..65535 — TraceRsp reports it as u16)'
 			}
 		}
-		// Frame ids: each in CAN range and all mutually distinct (incl. the enabled telemetry
-		// ids sharing the bus), so the generated DBC has no wrapped/duplicate BO_ id and no two
-		// frames collide on the wire. Defaults per docs/telemetry.md.
+		// Frame ids: each in CAN range and all mutually distinct, so the generated DBC has no
+		// wrapped/duplicate BO_ id and no two frames collide on the wire. Enabled telemetry ids
+		// join the set ONLY when telemetry shares the trace bus — on a separate CAN channel they
+		// can't collide. Defaults per docs/telemetry.md.
 		mut ids := map[string]int{}
 		defaults := {
 			'cmd_id':     0x7E2
@@ -222,7 +223,7 @@ pub fn validate(doc toml.Doc) []string {
 		}
 		if telem := doc.value_opt('telemetry') {
 			tm := telem.as_map()
-			if (tm['enabled'] or { toml.Any(false) }).bool() {
+			if (tm['enabled'] or { toml.Any(false) }).bool() && str_of(tm, 'bus') == tbus {
 				if v := tm['id'] {
 					ids['telemetry.id'] = v.int()
 				}
