@@ -1,4 +1,4 @@
-# Runtime observability: processor load + handler runtime tracing
+# Runtime observability: processor load + thread tracing
 
 The stack observes its **own** runtime and ships it over CAN, so a running ECU can be
 watched live in any CAN tool (candump, or the blobly_net GUI decoding it via DBC) — no
@@ -7,13 +7,25 @@ watched live in any CAN tool (candump, or the blobly_net GUI decoding it via DBC
 Two layers, from cheap-and-always-on to detailed-and-on-demand:
 
 1. **Processor load** — a small, continuous per-core load percentage (implemented).
-2. **Handler runtime tracing** — per-handler (per-FB) execution timing, optionally
-   preemption-aware, captured into a buffer and read out on command (design below).
+2. **Thread tracing** — *which thread ran when* on each core, captured into a buffer and
+   read out on command, **optionally** with per-`fb.handler` detail *inside* each thread.
 
-A **handler** is one `[[fb.handler]]` — the schedulable unit loom registers with
-`sched.every(...)`. We say *handler* (the stack de-AUTOSAR's names: runnable→handler),
-never "task"; at the RTOS level the OS unit is a ThreadX **thread** (a partition runs as
-one thread), which is where preemption lives.
+## Threads and fb.handlers — the two trace levels
+
+A **thread** is the OS scheduling unit: on ThreadX a partition runs as one thread, and it
+is where the core's time is actually spent and where preemption happens. A thread runs many
+**fb.handlers** — each an `[[fb.handler]]`, the functions loom dispatches via
+`sched.every(...)` — which are the fine-grained work *inside* a thread. The trace therefore
+has two levels, and RAM is finite, so the level is a configured (or read-out-time) trade:
+
+- **Thread trace (coarse)** — one small event per thread run / context switch. Few bytes
+  per event, so a fixed buffer spans a **long** window: the big picture of who had the core.
+- **Thread + fb.handler trace (fine)** — adds each fb.handler run within the thread. Many
+  more events, so the same RAM spans a **shorter** window: zoom in on what a thread did.
+
+(On a fully-cooperative core a partition = one thread that runs its fb.handlers back-to-back,
+so the coarse level is nearly flat there; it earns its keep on a **preemptive** target with
+several threads per core, where it shows who actually held the core.)
 
 ---
 
@@ -63,32 +75,70 @@ free-running loop would read a bogus ~50 % floor.
 
 ---
 
-# Part 2 — Handler runtime tracing (design)
+# Part 2 — Thread tracing (design)
 
 Processor load answers *"how busy is the core?"*. This layer answers *"where does the
-time go?"* — the runtime of each individual handler, so you can find the one that blew
-its budget, see scheduling jitter, and catch preemption. Nothing here is built yet; this
+time go?"* — first at the **thread** level (who held the core, and the switches between),
+then, when you need it, drilling into the **fb.handlers** inside a thread (which one blew
+its budget, scheduling jitter, preemption). Nothing here is built config-driven yet; this
 is the shape before the requirements and code.
 
-## Identity: a generated manifest with globally-unique handler IDs
+## Threads are declared in `ecu.toml`
 
-Because everything is generated from `ecu.toml`, the handler set is known at build time
-on **both** ends. loom2v emits a **handler manifest** — a flat table with a **globally
-unique** `handler_id` assigned across *all* partitions (not a per-scheduler index, which
-would collide: in a 2-partition app every scheduler's first handler is 0). Example for a
-multi-partition config (`overspeed`, partitions `sense` + `ctrl`):
+The trace needs threads to be first-class, so `ecu.toml` gains a thread level (today a
+partition is an *implicit* single thread). A **partition** (one MPU domain, pinned to a
+core) declares one or more **threads** (each a ThreadX thread with a priority), and each
+**fb.handler** names the thread it runs on:
+
+```toml
+[[partition]]
+name = "ctrl"
+core = 1
+  [[partition.thread]]
+  name     = "fast"
+  priority = 10          # ThreadX priority (lower = higher); preemption between threads
+  [[partition.thread]]
+  name     = "slow"
+  priority = 20
+
+[[fb]]
+name      = "SpeedMonitor"
+partition = "ctrl"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  thread    = "fast"     # runs on ctrl's "fast" thread
+```
+
+Defaults keep simple ECUs simple: a partition that declares no threads has one implicit
+default thread, and an fb.handler with no `thread` runs on it — so every current example
+still means "partition = one thread". Multiple threads per core is what makes the coarse
+thread trace earn its keep (preemption by priority → who actually held the core).
+
+## Identity: a generated manifest (threads + fb.handlers)
+
+loom2v emits a **manifest** with two tables — one for threads, one for fb.handlers — each
+with a **globally unique** id across all partitions (not a per-scheduler index, which would
+collide). For `overspeed` (partitions `sense` + `ctrl`, one thread each):
 
 ```
-handler_id | partition | core | fb            | handler   | period_us
-0          | sense     | 1    | SpeedFilter   | on_10ms   | 10000
-1          | sense     | 1    | WheelWatch    | on_10ms   | 10000
-2          | ctrl      | 2    | SpeedMonitor  | on_10ms   | 10000
-3          | ctrl      | 2    | LampDriver    | on_20ms   | 20000
+# threads: thread_id = the b0 in every thread-trace record
+thread_id | name  | core
+0         | sense | 0
+1         | ctrl  | 1
+
+# fb.handlers: handler_id = the b0 in every fb.handler-detail record
+handler_id | thread | core | fb          | handler | period_us
+0          | sense  | 0    | SpeedFilter | on_10ms | 10000
+1          | sense  | 0    | WheelWatch  | on_10ms | 10000
+2          | ctrl   | 1    | SpeedMonitor| on_10ms | 10000
+3          | ctrl   | 1    | LampDriver  | on_20ms | 20000
 ```
 
-The target tags every record/stat with the 1-byte global `handler_id`; blobly_net
-resolves `handler_id → name / core / period` from the **same manifest** it loads next to
-the DBC. So the target never sends strings and the map can't drift — one source of truth.
+The target tags each record with a 1-byte id (thread_id for the coarse level, handler_id
+for the fine level); blobly_net resolves it to a name / core / period from the **same
+manifest** it loads next to the DBC. So the target never sends strings and the map can't
+drift — one source of truth.
 
 > **Decision — shared manifest over runtime announce.** A self-describing target (send a
 > handler-table frame at startup) is more robust to a host/target manifest mismatch and
@@ -282,12 +332,31 @@ b5-6  capacity        (u16)
 b7    core
 ```
 
-**Record** — a fixed 8-byte buffer entry. All three kinds share the 8-byte cell (so the
-ring is one homogeneous array, no alloc) and are told apart by two **kind** bits in
-`flags` (`bit7 = thread-switch`, `bit6 = block-header`; both clear = a handler run). The
-low nibble stays the per-run semantic flags:
+Records come in **two levels**. A buffer holds one level, so its cell size is uniform (one
+no-alloc array). The level is configured (or chosen at read-out).
 
-*Handler-run record* (kind = 0 — one handler invocation):
+### Coarse — thread trace (4-byte record)
+
+The primary "who held the core" level, made **as small as possible** so a fixed buffer
+spans a long window. One record per thread run (the thread that starts running):
+
+```
+b0    thread_id (u8)
+b1-3  start_us  (u24, LE)   relative to capture start
+```
+
+The host reads it as *"thread `b0` ran from `start_us` until the next record"* — so
+preemption is implicit (the next record is whoever took the core). At 1 µs resolution a
+u24 spans ~16.7 s; the manifest's `time_unit` can coarsen it (e.g. 64 µs → ~18 min) for a
+longer window without growing the record. No reason/flags byte at this level — keep it 4 B.
+
+### Fine — thread + fb.handler trace (8-byte records)
+
+Adds the fb.handler runs *inside* each thread (and, on a preemptive target, explicit
+switch events). A fixed 8-byte cell, three kinds told apart by two `flags` bits
+(`bit7 = thread-switch`, `bit6 = block-header`; both clear = an fb.handler run):
+
+*fb.handler-run record* (kind = 0 — one invocation):
 
 ```
 b0    handler_id  (u8, global)
@@ -296,14 +365,11 @@ b2-5  start_us    (u32)   relative to capture start
 b6-7  cpu_us      (u16)   saturating; = response time on a no-IRQ bare-metal core
 ```
 
-*Thread-switch record* (kind = `bit7`, the **swimlane** event) — captured **into the same
-ring**, interleaved with the run records, so one dump is a single timeline of *who ran*
-and *the context switches between them*. On a preemptive target these come from the kernel
-(below); the preempted gap is then the interval a thread is switched out, drawn directly
-instead of inferred from a response/CPU split:
+*Thread-switch record* (kind = `bit7`) — the explicit context switch, interleaved so a fine
+dump is one timeline of *which fb.handler ran* and *the thread switches between them*:
 
 ```
-b0    to_thread   (u8)    the thread (= partition) switched TO
+b0    to_thread   (u8)    the thread switched TO
 b1    flags       (bit7 set)
 b2-5  start_us    (u32)   relative to capture start — when the switch happened
 b6    from_thread (u8)    the thread switched FROM
@@ -311,13 +377,14 @@ b7    reason      0 preempt | 1 block/yield | 2 resume | 3 isr-enter | 4 isr-exi
 ```
 
 *Block-header record* (kind = `bit6`) — one leading entry per core in a multi-core dump so
-each ISO-TP block is **self-describing** (a tool splits the stream by core without timing
-correlation to the rsp):
+each ISO-TP block is **self-describing** (split the stream by core without correlating to
+the rsp). The coarse level uses the same idea with a 4-byte header (`b0 = core`, then the
+count); the fine level's is 8 B:
 
 ```
 b0    core        (u8)
 b1    flags       (bit6 set)
-b2-5  count       (u32)   handler-run + thread-switch records that follow in this block
+b2-5  count       (u32)   records that follow in this block
 b6-7  reserved
 ```
 
