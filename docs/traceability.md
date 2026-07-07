@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 62 | 46 | 5 | 11 | 0 |
+| 63 | 46 | 5 | 12 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -69,6 +69,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TELEM-002 | QM | test | verified | telem_test.v (pass) |
 | REQ-TELEM-003 | QM | test | verified | loom_test.v (pass) |
 | REQ-TELEM-004 | QM | test | verified | loom_test.v (pass) |
+| REQ-TRACE-010 | QM | test | uncovered | — |
 | REQ-TRACE-001 | QM | test | verified | loom_test.v (pass) |
 | REQ-TRACE-002 | QM | test | uncovered | — |
 | REQ-TRACE-008 | QM | test | uncovered | — |
@@ -136,6 +137,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TELEM-002 | | | ✓ | | |
 | REQ-TELEM-003 | | | ✓ | | |
 | REQ-TELEM-004 | | | ✓ | | |
+| REQ-TRACE-010 | | | | | |
 | REQ-TRACE-001 | | | ✓ | | |
 | REQ-TRACE-002 | | | | | |
 | REQ-TRACE-008 | | | | | |

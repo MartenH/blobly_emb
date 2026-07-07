@@ -48,3 +48,59 @@ derives = "SYS-REQ-OBS-001"
 # emits CpuLoad only) and not signed off. It lives as a proposed requirement in
 # docs/telemetry.md until host generation lands or it gets a [[review]] sign-off, so it
 # doesn't leave SYS-REQ-OBS-001 with an unverified child.
+
+# ============================================================================
+# Thread tracing (Part 2). Consolidated here from the old requirements/trace.toml
+# — processor load and thread tracing are one telemetry story, not two. These
+# derive from SYS-REQ-OBS-002 (thread/fb.handler runtime observability). Ids keep
+# the REQ-TRACE-* prefix so existing @verifies test tags stay valid.
+# ============================================================================
+
+# The COARSE, primary level: which thread held each core over time. Few bytes per
+# event, so a fixed buffer spans a long window.
+[[req]]
+id = "REQ-TRACE-010"
+title = "Thread-level runtime trace (coarse)"
+text = "The ECU shall capture, per core, a time-ordered trace of which thread ran (thread runs / context switches), so a host can reconstruct who held each core over time; this coarse trace uses few bytes per event so a fixed buffer spans a long window."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-002"
+
+# The FINE, optional level: per-fb.handler timing WITHIN a thread — more events, so
+# the same RAM spans a shorter window. (Was "per-handler execution timing".)
+[[req]]
+id = "REQ-TRACE-001"
+title = "fb.handler execution timing (fine detail)"
+text = "Within a thread, the scheduler shall optionally measure each fb.handler's execution time (last, max, mean) and invocation count, as a finer trace level than the thread trace."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-002"
+
+[[req]]
+id = "REQ-TRACE-002"
+title = "Stable thread + fb.handler identity"
+text = "Each thread and each fb.handler shall have a build-stable, globally-unique identity resolvable to its configured name without runtime string exchange."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-002"
+
+[[req]]
+id = "REQ-TRACE-008"
+title = "Thread-switch capture"
+text = "Where the kernel is preemptive, the ECU shall capture thread (partition) context switches into the per-core trace buffer, each recording from/to thread, timestamp, and reason, so a dump yields the context-switch timeline."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-002"
+
+[[req]]
+id = "REQ-TRACE-009"
+title = "Multi-core dump in one command"
+text = "A single control command shall address several cores via a core bitmask; a multi-core dump shall stream one self-describing block per selected core, each gathered from its owning core over IOC without a direct cross-core buffer read."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-002"
