@@ -150,22 +150,31 @@ pub fn validate(doc toml.Doc) []string {
 	}
 
 	// [trace] — the runtime-observability block loom2v generates a DBC + wiring from. Validate
-	// the enums loom2v switches on (level, mode) + numeric ranges, and that a named bus is
-	// declared. Ids are plain ints (their frame layout is fixed, so ecucheck's type check is
-	// enough); when `bus` is omitted loom2v defaults it to [telemetry].bus.
+	// the enums loom2v switches on (level, mode), numeric ranges, the CAN channel the traffic
+	// binds to, and the frame ids — so a config that would emit a wrapped/colliding id or an
+	// oversized ring fails at ecucheck instead of producing a bad DBC/buffer.
 	if tr := doc.value_opt('trace') {
 		trm := tr.as_map()
-		if 'bus' in trm {
-			tbus := str_of(trm, 'bus')
-			mut buses := map[string]bool{}
-			if bv := doc.value_opt('bus') {
-				for bname, _ in bv.as_map() {
-					buses[bname] = true
-				}
+		mut buses := map[string]bool{}
+		if bv := doc.value_opt('bus') {
+			for bname, _ in bv.as_map() {
+				buses[bname] = true
 			}
-			if tbus !in buses {
-				errs << '[trace] names unknown bus "${tbus}" (no [bus.${tbus}])'
+		}
+		// The cmd/rsp + dump ride a CAN channel: `trace.bus`, or `[telemetry].bus` by default.
+		// Whichever applies must resolve to a declared [bus.X], else the traffic has no bus.
+		mut tbus := str_of(trm, 'bus')
+		mut bus_src := 'trace.bus'
+		if 'bus' !in trm {
+			bus_src = '[telemetry].bus (default)'
+			if telem := doc.value_opt('telemetry') {
+				tbus = str_of(telem.as_map(), 'bus')
 			}
+		}
+		if tbus == '' {
+			errs << '[trace] has no bus — set trace.bus (or [telemetry].bus) to a declared [bus.X]'
+		} else if tbus !in buses {
+			errs << '[trace] bus "${tbus}" from ${bus_src} is not a declared [bus.${tbus}]'
 		}
 		if 'level' in trm {
 			lvl := str_of(trm, 'level')
@@ -186,9 +195,54 @@ pub fn validate(doc toml.Doc) []string {
 			}
 		}
 		if v := trm['buffer_records'] {
+			// TraceRsp reports records_used/capacity as u16 (comm/trace.handle_cmd), so a ring
+			// above 65535 would wrap the reported size — cap it here.
 			n := v.int()
-			if n <= 0 {
-				errs << '[trace] buffer_records ${n} must be > 0'
+			if n < 1 || n > 65535 {
+				errs << '[trace] buffer_records ${n} out of range (1..65535 — TraceRsp reports it as u16)'
+			}
+		}
+		// Frame ids: each in CAN range and all mutually distinct (incl. the enabled telemetry
+		// ids sharing the bus), so the generated DBC has no wrapped/duplicate BO_ id and no two
+		// frames collide on the wire. Defaults per docs/telemetry.md.
+		mut ids := map[string]int{}
+		defaults := {
+			'cmd_id':     0x7E2
+			'rsp_id':     0x7E3
+			'stat_id':    0x7E4
+			'record_id':  0x7E5
+			'dump_fc_id': 0x7E6
+		}
+		for field, def in defaults {
+			mut id := def
+			if v := trm[field] {
+				id = v.int()
+			}
+			if id < 0 || id > 0x1fff_ffff {
+				errs << '[trace] ${field} ${id} out of CAN id range (0..0x1FFFFFFF)'
+			}
+			ids[field] = id
+		}
+		if telem := doc.value_opt('telemetry') {
+			tm := telem.as_map()
+			if (tm['enabled'] or { toml.Any(false) }).bool() {
+				if v := tm['id'] {
+					ids['telemetry.id'] = v.int()
+				}
+				if v := tm['detail_id'] {
+					ids['telemetry.detail_id'] = v.int()
+				}
+			}
+		}
+		mut seen := map[int]string{}
+		for label, id in ids {
+			if id < 0 || id > 0x1fff_ffff {
+				continue // already flagged as out of range
+			}
+			if prev := seen[id] {
+				errs << '[trace] frame id ${id} used by both ${prev} and ${label} — ids must be distinct'
+			} else {
+				seen[id] = label
 			}
 		}
 	}

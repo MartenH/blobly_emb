@@ -111,12 +111,41 @@ interface = "vcan0"
 [trace]
 bus = "can9"
 ' + app)
-	assert e.any(it.contains('[trace] names unknown bus "can9"'))
+	assert e.any(it.contains('[trace] bus "can9"') && it.contains('not a declared'))
+}
+
+// when trace omits `bus`, the default [telemetry].bus is validated too (must be declared).
+fn test_trace_default_telemetry_bus_flagged() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[telemetry]
+enabled = true
+bus = "can9"
+
+[trace]
+level = "thread"
+' + app)
+	assert e.any(it.contains('[trace] bus "can9"') && it.contains('[telemetry].bus'))
+}
+
+// with neither trace.bus nor a telemetry bus there is no channel to bind to.
+fn test_trace_no_bus_at_all_flagged() {
+	e := errs_of('
+[trace]
+level = "thread"
+' + app)
+	assert e.any(it.contains('[trace] has no bus'))
 }
 
 fn test_trace_bad_level_and_mode_flagged() {
 	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
 [trace]
+bus = "can0"
 level = "everything"
 mode = "circular"
 ' + app)
@@ -126,12 +155,49 @@ mode = "circular"
 
 fn test_trace_pre_pct_and_buffer_range_flagged() {
 	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
 [trace]
+bus = "can0"
 pre_pct = 150
-buffer_records = 0
+buffer_records = 70000
 ' + app)
 	assert e.any(it.contains('pre_pct 150 out of range'))
-	assert e.any(it.contains('buffer_records 0 must be > 0'))
+	assert e.any(it.contains('buffer_records 70000 out of range'))
+}
+
+// a frame id reused across trace frames (or out of CAN range) must be rejected.
+fn test_trace_duplicate_and_out_of_range_ids_flagged() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+rsp_id = 0x7E2
+cmd_id = 0x7E2
+stat_id = -1
+' + app)
+	assert e.any(it.contains('used by both') && it.contains('cmd_id'))
+	assert e.any(it.contains('stat_id') && it.contains('out of CAN id range'))
+}
+
+// a trace id colliding with an enabled telemetry frame is a bus collision too.
+fn test_trace_id_collides_with_telemetry_flagged() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[telemetry]
+enabled = true
+bus = "can0"
+id = 0x7E2
+
+[trace]
+bus = "can0"
+' + app)
+	assert e.any(it.contains('used by both') && it.contains('telemetry.id'))
 }
 
 // absent [trace] must not synthesize errors (it's optional).
