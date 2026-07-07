@@ -362,3 +362,50 @@ tx_id = 0x708
 ' + app)
 	assert e.filter(it.contains('collides with')).len == 0
 }
+
+// buffer_records above 2^32 must be rejected — .int() would truncate 0x100000001 back to 1.
+fn test_trace_buffer_records_above_u32_flagged() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+buffer_records = 0x100000001
+' + app)
+	assert e.any(it.contains('buffer_records') && it.contains('out of range'))
+}
+
+// telemetry enabled on the trace bus with `id` omitted still transmits CpuLoad on id 0, so a
+// trace frame set to 0 collides with it.
+fn test_trace_id_collides_with_default_telemetry_id() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[telemetry]
+enabled = true
+bus = "can0"
+
+[trace]
+bus = "can0"
+cmd_id = 0
+' + app)
+	assert e.any(it.contains('used by both') && it.contains('telemetry.id'))
+}
+
+// but enabled telemetry with default ids and normal trace ids must NOT spuriously collide.
+fn test_trace_default_telemetry_id_no_false_collision() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[telemetry]
+enabled = true
+bus = "can0"
+
+[trace]
+bus = "can0"
+' + app)
+	assert e.filter(it.contains('used by both')).len == 0
+}

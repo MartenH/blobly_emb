@@ -148,6 +148,11 @@ fn main() {
 		sig_names << name
 	}
 
+	// bus_frame_ids: CAN ids already carrying OTHER traffic, keyed "bus:id" -> a label. Used to
+	// reject a trace id that would reuse an application/route frame id on the trace bus (the
+	// ISO-TP/NM/telemetry overlaps are gated in ecumodel, which can't see the DBC; these need it).
+	mut bus_frame_ids := map[string]string{}
+
 	// Map each external signal to its DBC message (so the bridge can name the
 	// generated codec fns / id / dlc). External signals must be in the DBC.
 	if has_external {
@@ -163,6 +168,9 @@ fn main() {
 				panic('signal "${sname}" has a bus endpoint but is not in ${os.file_name(dbc)}')
 			}
 			sig_of[sname] = si
+			if id := dbc_id_of(db, si.dbc_msg) {
+				bus_frame_ids['${si.bus}:${id}'] = 'app frame "${si.dbc_msg}"'
+			}
 		}
 	}
 
@@ -230,6 +238,13 @@ fn main() {
 			from_frame: (fm['frame'] or { toml.Any('') }).string()
 			to_bus:     (tm['bus'] or { toml.Any('') }).string()
 			to_id:      int((tm['id'] or { toml.Any(0) }).int())
+		}
+	}
+	// an explicit route destination id also occupies its bus (to_id == 0 keeps the source id,
+	// which we can't resolve without the DBC, so it's not reserved here).
+	for r in routes {
+		if r.to_bus != '' && r.to_id != 0 {
+			bus_frame_ids['${r.to_bus}:${r.to_id}'] = 'route destination on ${r.to_bus}'
 		}
 	}
 	has_routes := routes.len > 0
@@ -378,6 +393,8 @@ fn main() {
 	mut trace_cmd_id := u32(0x7E2)
 	mut trace_rsp_id := u32(0x7E3)
 	mut trace_stat_id := u32(0x7E4)
+	mut trace_record_id := u32(0x7E5)
+	mut trace_dump_fc_id := u32(0x7E6)
 	if trcfg := doc.value_opt('trace') {
 		trm := trcfg.as_map()
 		// a [trace] block is active unless explicitly disabled (enabled = false) — so tracing
@@ -387,6 +404,8 @@ fn main() {
 		trace_cmd_id = u32((trm['cmd_id'] or { toml.Any(int(trace_cmd_id)) }).int())
 		trace_rsp_id = u32((trm['rsp_id'] or { toml.Any(int(trace_rsp_id)) }).int())
 		trace_stat_id = u32((trm['stat_id'] or { toml.Any(int(trace_stat_id)) }).int())
+		trace_record_id = u32((trm['record_id'] or { toml.Any(int(trace_record_id)) }).int())
+		trace_dump_fc_id = u32((trm['dump_fc_id'] or { toml.Any(int(trace_dump_fc_id)) }).int())
 	}
 	// Fail BEFORE writing any output when [trace] is active but the DBC path (arg 8) is missing —
 	// otherwise the earlier generators (sig/ports/glue/manifest) would already be on disk when we
@@ -1127,9 +1146,20 @@ fn main() {
 	if trace_on {
 		// the missing-arg-8 case already failed fast above, before any output was written.
 		eff_trace_bus := if trace_bus != '' { trace_bus } else { telem_bus }
+		// A trace id must not reuse an application/route frame id already on the trace bus (the
+		// DBC frames ecumodel couldn't see). Check before emitting the DBC.
+		for tid in [trace_cmd_id, trace_rsp_id, trace_stat_id, trace_record_id, trace_dump_fc_id] {
+			if lbl := bus_frame_ids['${eff_trace_bus}:${int(tid)}'] {
+				panic('loom2v: trace id 0x${tid.hex()} collides with ${lbl} on bus "${eff_trace_bus}"')
+			}
+		}
 		detail := if telem_on && telem_bus == eff_trace_bus { telem_detail_id } else { u32(0) }
 		dbc_txt := trace_dbc(trace_cmd_id, trace_rsp_id, trace_stat_id, detail)
 		os.write_file(args[7], dbc_txt) or { panic('write ${args[7]}: ${err}') }
+	} else if args.len >= 8 && os.exists(args[7]) {
+		// tracing is off but the make rule still passes the DBC path: remove any trace.dbc left
+		// from a previous enabled run so stale command/frame ids can't be picked up downstream.
+		os.rm(args[7]) or {}
 	}
 
 	eprintln('loom2v: ${sig_names.len} signals (${bus_names.len} bus bridge), ${isotp_conns.len} isotp, ${by_part.len} partition(s)')

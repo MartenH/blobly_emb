@@ -195,15 +195,16 @@ pub fn validate(doc toml.Doc) []string {
 			}
 		}
 		if v := trm['pre_pct'] {
-			p := v.int()
+			p := v.i64() // i64, not .int() — a >32-bit value must not wrap into range
 			if p < 0 || p > 100 {
 				errs << '[trace] pre_pct ${p} out of range (0..100)'
 			}
 		}
 		if v := trm['buffer_records'] {
 			// TraceRsp reports records_used/capacity as u16 (comm/trace.handle_cmd), so a ring
-			// above 65535 would wrap the reported size — cap it here.
-			n := v.int()
+			// above 65535 would wrap the reported size — cap it here. i64 so a >32-bit value
+			// can't truncate back into range.
+			n := v.i64()
 			if n < 1 || n > 65535 {
 				errs << '[trace] buffer_records ${n} out of range (1..65535 — TraceRsp reports it as u16)'
 			}
@@ -234,11 +235,15 @@ pub fn validate(doc toml.Doc) []string {
 			// only a telemetry frame on the SAME declared bus can collide (tbus != '' guards the
 			// both-empty case, which is already reported as "[trace] has no bus").
 			if (tm['enabled'] or { toml.Any(false) }).bool() && tbus != '' && str_of(tm, 'bus') == tbus {
-				if v := tm['id'] {
-					ids['telemetry.id'] = v.i64()
-				}
+				// loom2v sends CpuLoad on telem_id even when `id` is omitted (defaulting to 0), so
+				// reserve that default too. detail_id only names a real frame when non-zero (0 =
+				// no LoadDetail), so it's reserved only when set.
+				ids['telemetry.id'] = (tm['id'] or { toml.Any(0) }).i64()
 				if v := tm['detail_id'] {
-					ids['telemetry.detail_id'] = v.i64()
+					d := v.i64()
+					if d != 0 {
+						ids['telemetry.detail_id'] = d
+					}
 				}
 			}
 		}
