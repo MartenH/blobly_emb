@@ -389,11 +389,15 @@ fn main() {
 		// can be turned off without deleting the whole block.
 		trace_on = (trm['enabled'] or { toml.Any(true) }).bool()
 		trace_bus = (trm['bus'] or { toml.Any('') }).string()
-		trace_cmd_id = trace_frame_id(trm, 'cmd_id', trace_cmd_id, dbc)
-		trace_rsp_id = trace_frame_id(trm, 'rsp_id', trace_rsp_id, dbc)
-		trace_stat_id = trace_frame_id(trm, 'stat_id', trace_stat_id, dbc)
-		trace_record_id = trace_frame_id(trm, 'record_id', trace_record_id, dbc)
-		trace_dump_fc_id = trace_frame_id(trm, 'dump_fc_id', trace_dump_fc_id, dbc)
+		// Only resolve ids when tracing is active — a disabled block generates nothing, so a
+		// stale `cmd_id = "SomeName"` must not load bus.dbc or panic on a missing message.
+		if trace_on {
+			trace_cmd_id = trace_frame_id(trm, 'cmd_id', trace_cmd_id, dbc)
+			trace_rsp_id = trace_frame_id(trm, 'rsp_id', trace_rsp_id, dbc)
+			trace_stat_id = trace_frame_id(trm, 'stat_id', trace_stat_id, dbc)
+			trace_record_id = trace_frame_id(trm, 'record_id', trace_record_id, dbc)
+			trace_dump_fc_id = trace_frame_id(trm, 'dump_fc_id', trace_dump_fc_id, dbc)
+		}
 	}
 
 	// [target] baremetal: emit a single-core inline superloop instead of the host's
@@ -1148,7 +1152,13 @@ fn trace_frame_id(trm map[string]toml.Any, field string, def u32, dbc string) u3
 		}
 		return u32(id)
 	}
-	return u32(v.int())
+	// A literal id must be a legal CAN identifier — read as i64 (so a >32-bit value doesn't
+	// wrap) and reject out-of-range before it becomes a bogus manifest frame.
+	n := v.i64()
+	if n < 0 || n > 0x1fff_ffff {
+		panic('loom2v: [trace] ${field} ${n} is not a valid CAN id (0..0x1FFFFFFF)')
+	}
+	return u32(n)
 }
 
 // did_signal_encode emits the big-endian write of a live signal value into a

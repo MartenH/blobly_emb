@@ -193,19 +193,27 @@ pub fn validate(doc toml.Doc) []string {
 				errs << '[trace] mode "${md}" is invalid (ring | oneshot)'
 			}
 		}
+		// pre_pct/buffer_records: only range-check actual integers. .i64() returns 0 for a
+		// non-numeric value, so a string like "150" would slip through when loom2v calls
+		// validate() without ecucheck's type pass first — check the type here too.
 		if v := trm['pre_pct'] {
-			p := v.i64() // i64, not .int() — a >32-bit value must not wrap into range
-			if p < 0 || p > 100 {
-				errs << '[trace] pre_pct ${p} out of range (0..100)'
+			if v is i64 {
+				if v < 0 || v > 100 {
+					errs << '[trace] pre_pct ${v} out of range (0..100)'
+				}
+			} else {
+				errs << '[trace] pre_pct must be an integer (0..100)'
 			}
 		}
 		if v := trm['buffer_records'] {
 			// TraceRsp reports records_used/capacity as u16 (comm/trace.handle_cmd), so a ring
-			// above 65535 would wrap the reported size — cap it here. i64 so a >32-bit value
-			// can't truncate back into range.
-			n := v.i64()
-			if n < 1 || n > 65535 {
-				errs << '[trace] buffer_records ${n} out of range (1..65535 — TraceRsp reports it as u16)'
+			// above 65535 would wrap the reported size — cap it here.
+			if v is i64 {
+				if v < 1 || v > 65535 {
+					errs << '[trace] buffer_records ${v} out of range (1..65535 — TraceRsp reports it as u16)'
+				}
+			} else {
+				errs << '[trace] buffer_records must be an integer (1..65535)'
 			}
 		}
 		// Frame ids (cmd_id/rsp_id/stat_id/record_id/dump_fc_id) are each either a literal CAN id
