@@ -26,11 +26,13 @@ import os
 import osal
 import loom
 import comm.trace
+import comm.telem
 import comm.isotp
 import driver.can
 
 const cmd_id = u32(0x7E2)
 const rsp_id = u32(0x7E3)
+const stat_id = u32(0x7E4) // live HandlerStat heartbeat (per handler, ~1 Hz)
 const record_id = u32(0x7E5) // ISO-TP data: target -> host
 const dump_fc_id = u32(0x7E6) // ISO-TP flow control: host -> target
 const ncores = 2
@@ -56,6 +58,11 @@ fn ch_dump(c int) int {
 
 fn ch_ack(c int) int {
 	return c * 4 + 3
+}
+
+// ch_stat is a core's HandlerStat heartbeat channel (core -> bus), out of the c*4 dump range.
+fn ch_stat(c int) int {
+	return 100 + c
 }
 
 // IOC message payloads (all <= IOC_MAX = 64 bytes). seq/gen sequence numbers let the reader
@@ -86,6 +93,15 @@ struct DumpAck {
 mut:
 	gen u8
 	seq u8
+}
+
+// StatSnap is one core's HandlerStat heartbeat: its handlers' ready-to-send 8-byte frames,
+// built by the owning core and relayed to the bus (so the bus never reads a remote sched).
+struct StatSnap {
+mut:
+	gen    u8
+	n      u8
+	frames [4][8]u8
 }
 
 struct Fb {
@@ -127,6 +143,10 @@ mut:
 	sent_seq   u8
 	acked_seq  u8
 	seq_primed bool
+	// heartbeat producer: this core's own HandlerStat, published over IOC ~1 Hz
+	last_stat  u64
+	stat_gen   u8
+	stat_count [4]u32
 }
 
 fn (c Core) app_thread() u8 {
@@ -250,6 +270,33 @@ fn core_step(mut c Core, i int) {
 			}
 		}
 	}
+
+	// publish this core's HandlerStat heartbeat over IOC ~1 Hz: the core builds its own
+	// handlers' 8-byte frames (it owns its scheduler) and the bus core relays them — no
+	// cross-core read of a remote scheduler.
+	now := osal.now_us()
+	if now - c.last_stat >= 1_000_000 {
+		c.last_stat = now
+		mut snap := StatSnap{
+			gen: c.stat_gen + 1
+		}
+		c.stat_gen = snap.gen
+		mut n := 0
+		for h in 0 .. c.sched.handler_count() {
+			if n >= snap.frames.len {
+				break
+			}
+			st := c.sched.handler_stat(h)
+			delta := st.count - c.stat_count[h]
+			c.stat_count[h] = st.count
+			snap.frames[n] = telem.encode_handlerstat(c.id_base + u8(h), 0, st.last_us, st.max_us,
+				delta)
+			c.sched.reset_handler_max(h)
+			n++
+		}
+		snap.n = u8(n)
+		osal.ioc_write(ch_stat(i), &snap, u8(sizeof(snap)))
+	}
 }
 
 // Bus holds the read-out state on the bus core: which cores still owe a block for the
@@ -323,10 +370,11 @@ fn main() {
 		cores[i].buf.start()
 		cores[i].sched.set_trace_hook(capture_hook, &cores[i])
 	}
-	println('trace_multicore: ${ncores} cores on ${ifname}; dump with core_mask (cmd 0x${cmd_id.hex()}); per-core blocks reassembled from IOC, streamed on 0x${record_id.hex()}')
+	println('trace_multicore: ${ncores} cores on ${ifname}; live HandlerStat heartbeat on 0x${stat_id.hex()} @1Hz; dump with core_mask (cmd 0x${cmd_id.hex()}) -> per-core blocks on 0x${record_id.hex()}')
 
 	mut bus := Bus{}
 	mut link := isotp.Link{}
+	mut last_stat_gen := [ncores]u8{} // last HandlerStat snapshot relayed per core
 
 	for {
 		// each core runs first and owns its buffer entirely.
@@ -483,6 +531,26 @@ fn main() {
 		}
 		if bus.tx_core >= 0 && !link.busy() { // the in-flight ISO-TP block finished (or aborted)
 			bus.tx_core = -1
+		}
+
+		// live heartbeat: relay each core's HandlerStat snapshot (built and published by the
+		// core over IOC in core_step) onto 0x7E4, so a monitor sees continuous traffic without
+		// commanding a dump — the bus core never reads a remote core's scheduler directly.
+		for c in 0 .. ncores {
+			mut snap := StatSnap{}
+			if osal.ioc_read(ch_stat(c), &snap, u8(sizeof(snap))) && snap.gen != last_stat_gen[c] {
+				last_stat_gen[c] = snap.gen
+				for j in 0 .. int(snap.n) {
+					mut sf := can.Frame{
+						id:  stat_id
+						len: 8
+					}
+					for k in 0 .. 8 {
+						sf.data[k] = snap.frames[j][k]
+					}
+					ch.send(sf)
+				}
+			}
 		}
 
 		osal.sleep_us(1_000)
