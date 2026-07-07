@@ -183,6 +183,24 @@ stat_id = -1
 	assert e.any(it.contains('stat_id') && it.contains('out of CAN id range'))
 }
 
+// an out-of-range telemetry detail_id must be caught before it reaches the generated trace DBC.
+fn test_trace_telemetry_detail_id_out_of_range_flagged() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[telemetry]
+enabled = true
+bus = "can0"
+id = 0x7E0
+detail_id = -1
+
+[trace]
+bus = "can0"
+' + app)
+	assert e.any(it.contains('telemetry.detail_id') && it.contains('out of CAN id range'))
+}
+
 // a trace id colliding with an enabled telemetry frame is a bus collision too.
 fn test_trace_id_collides_with_telemetry_flagged() {
 	e := errs_of('

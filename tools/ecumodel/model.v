@@ -218,9 +218,6 @@ pub fn validate(doc toml.Doc) []string {
 			if v := trm[field] {
 				id = v.int()
 			}
-			if id < 0 || id > 0x1fff_ffff {
-				errs << '[trace] ${field} ${id} out of CAN id range (0..0x1FFFFFFF)'
-			}
 			ids[field] = id
 		}
 		if telem := doc.value_opt('telemetry') {
@@ -234,10 +231,13 @@ pub fn validate(doc toml.Doc) []string {
 				}
 			}
 		}
+		// Range-check EVERY id (trace + the shared telemetry ids) then check uniqueness among the
+		// in-range ones — so a wrapped/negative telemetry id can't slip into the generated DBC.
 		mut seen := map[int]string{}
 		for label, id in ids {
 			if id < 0 || id > 0x1fff_ffff {
-				continue // already flagged as out of range
+				errs << '[trace] ${label} ${id} out of CAN id range (0..0x1FFFFFFF)'
+				continue
 			}
 			if prev := seen[id] {
 				errs << '[trace] frame id ${id} used by both ${prev} and ${label} — ids must be distinct'
