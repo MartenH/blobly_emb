@@ -138,10 +138,11 @@ handler_id | thread | core | fb          | handler | period_us
 3          | ctrl   | 1    | LampDriver  | on_20ms | 20000
 ```
 
-The target tags each record with a 1-byte id (thread_id for the coarse level, handler_id
-for the fine level); blobly_net resolves it to a name / core / period from the **same
-manifest** it loads next to the DBC. So the target never sends strings and the map can't
-drift — one source of truth.
+The target tags each record with its id — a `u8` **thread_id** at the coarse level, a `u16`
+**handler_id** at the fine level (a `u16` because a real ECU can have far more than 256
+fb.handlers); blobly_net resolves it to a name / core / period from the **same manifest** it
+loads next to the DBC. So the target never sends strings and the map can't drift — one
+source of truth.
 
 > **Decision — shared manifest over runtime announce.** A self-describing target (send a
 > handler-table frame at startup) is more robust to a host/target manifest mismatch and
@@ -295,14 +296,16 @@ Fixed 8-byte frames on classic CAN; on CAN-FD one 64-byte frame packs several of
 8-byte HandlerStats / bare-metal Records (up to 8, fewer with any header). The 12-byte
 preemptive Record packs at most 5 per FD frame. All little-endian.
 
-**HandlerStat** — the unsolicited live-stats push (one handler per classic frame):
+**HandlerStat** — the unsolicited live-stats push (one fb.handler per classic frame). The
+`handler_id` is a `u16` here too; to keep the frame 8 bytes the live `count_delta` shrinks
+to a saturating `u8` (a rough live rate — the dump carries exact counts):
 
 ```
-b0    handler_id  (u8, global)
-b1    flags       (bit0 overran | bit1 preempted | bit2 saturated)
-b2-3  last_us     (u16)          response time of the last invocation
-b4-5  max_us      (u16)          max since last reset
-b6-7  count_delta (u16)          invocations since the previous stat frame
+b0-1  handler_id  (u16, LE, global)
+b2    flags       (bit0 overran | bit1 preempted | bit2 saturated)
+b3-4  last_us     (u16)          response time of the last invocation
+b5-6  max_us      (u16)          max since last reset
+b7    count_delta (u8, saturating)   invocations since the previous stat frame
 ```
 
 **TraceCmd** — host → target (`cmd_id`):
@@ -357,26 +360,32 @@ longer window without growing the record. No reason/flags byte at this level —
 
 Adds the fb.handler runs *inside* each thread (and, on a preemptive target, explicit
 switch events). A fixed 8-byte cell, three kinds told apart by two `flags` bits
-(`bit7 = thread-switch`, `bit6 = block-header`; both clear = an fb.handler run):
+(`bit7 = thread-switch`, `bit6 = block-header`; both clear = an fb.handler run). The
+**`handler_id` is a `u16`** — a real ECU can easily have >256 fb.handlers (e.g. `scale`) —
+so it takes two bytes; the timestamp is a `u24` (16.7 s at 1 µs, or longer via `time_unit`),
+which is generous for the fine level's short window and keeps every kind at 8 bytes with a
+single timestamp width:
 
 *fb.handler-run record* (kind = 0 — one invocation):
 
 ```
-b0    handler_id  (u8, global)
-b1    flags       (bit0 overran | bit1 preempted | bit2 first-run | bit3 saturated)
-b2-5  start_us    (u32)   relative to capture start
-b6-7  cpu_us      (u16)   saturating; = response time on a no-IRQ bare-metal core
+b0-1  handler_id  (u16, LE, global)   >256 fb.handlers OK
+b2    flags       (bit0 overran | bit1 preempted | bit2 first-run | bit3 saturated)
+b3-5  start_us    (u24, LE)   relative to capture start
+b6-7  cpu_us      (u16)       saturating; = response time on a no-IRQ bare-metal core
 ```
 
 *Thread-switch record* (kind = `bit7`) — the explicit context switch, interleaved so a fine
-dump is one timeline of *which fb.handler ran* and *the thread switches between them*:
+dump is one timeline of *which fb.handler ran* and *the thread switches between them*
+(`thread_id` stays `u8` — threads are few):
 
 ```
 b0    to_thread   (u8)    the thread switched TO
 b1    flags       (bit7 set)
-b2-5  start_us    (u32)   relative to capture start — when the switch happened
-b6    from_thread (u8)    the thread switched FROM
-b7    reason      0 preempt | 1 block/yield | 2 resume | 3 isr-enter | 4 isr-exit
+b2    from_thread (u8)    the thread switched FROM
+b3-5  start_us    (u24, LE)   relative to capture start — when the switch happened
+b6    reason      0 preempt | 1 block/yield | 2 resume | 3 isr-enter | 4 isr-exit
+b7    reserved
 ```
 
 *Block-header record* (kind = `bit6`) — one leading entry per core in a multi-core dump so
