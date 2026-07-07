@@ -14,9 +14,7 @@
     { "id": 3, "partition": "app1", "core": 1, "fb": "heavy", "handler": "on_20ms", "period_us": 20000 }
   ],
   "threads": [
-    { "id": 0, "name": "app0", "core": 0 },
-    { "id": 1, "name": "isr0", "core": 0 },
-    { "id": 2, "name": "app1", "core": 1 },
-    { "id": 3, "name": "isr1", "core": 1 }
+    { "id": 1, "name": "app0_main", "core": 0 },
+    { "id": 3, "name": "app1_main", "core": 1 }
   ]
 }

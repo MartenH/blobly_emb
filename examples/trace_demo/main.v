@@ -13,7 +13,6 @@ module main
 // exists to develop and verify the loom.run_profiled + telem.encode_handlerstat path on
 // WSL before it is generated. The FBs are pure compute so their timings are distinct and
 // stable (fast < med < slow).
-
 import os
 import osal
 import loom
@@ -35,20 +34,26 @@ const trigger_us = u64(500) // freeze the ring when a handler runs longer than t
 struct Capture {
 mut:
 	buf   trace.TraceBuffer
-	start u64
+	start u64 // wall-clock µs of the capture origin (records are relative to it)
+	base  u64 // elapsed µs at the last epoch re-anchor (0 = capture start)
 }
 
 fn capture_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	mut c := unsafe { &Capture(ctx) }
+	// A record's start_us is only 24 bits (~16.777 s). Before elapsed time crosses the next
+	// u24 boundary, emit an epoch carrying the elapsed base so the host re-anchors and the
+	// frozen window stays correctly ordered (see comm/trace.new_epoch).
+	elapsed := start_us - c.start
+	if elapsed - c.base > 0x00ff_ffff {
+		c.base = elapsed
+		c.buf.push(trace.new_epoch(u32(elapsed)))
+	}
 	mut dt := dt_us
 	if dt > 0xFFFF {
 		dt = 0xFFFF
 	}
-	c.buf.push(trace.Record{
-		handler_id: u8(idx) // single partition: global id == scheduler index
-		start_us:   u32(start_us - c.start)
-		cpu_us:     u16(dt)
-	})
+	// single partition: global fb id == scheduler index
+	c.buf.push(trace.new_fb(u16(idx), 0, u32(elapsed - c.base), u16(dt)))
 	// software trigger: a handler exceeding its budget freezes the ring with the pre/post
 	// window around it — the flight recorder catches the moment of the anomaly.
 	if dt_us > trigger_us {
@@ -163,6 +168,7 @@ fn main() {
 					if c.opcode == trace.op_arm || c.opcode == trace.op_start
 						|| c.opcode == trace.op_reset {
 						cap.start = osal.now_us() // relative start_us baseline for the new capture
+						cap.base = 0 // and its epoch origin
 						link = isotp.Link{} // abort a stalled in-flight dump so the link never stays stuck busy
 					}
 					if do_dump { // pack the records and start the ISO-TP transfer, if the link is free

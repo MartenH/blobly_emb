@@ -6,8 +6,9 @@
 1,app0,0,heavy,on_20ms,20000
 2,app1,1,light,on_5ms,5000
 3,app1,1,heavy,on_20ms,20000
-# thread lanes for the swimlane (thread-switch from/to ids): thread,id,name,core
-thread,0,app0,0
-thread,1,isr0,0
-thread,2,app1,1
-thread,3,isr1,1
+# Thread lanes for the swimlane (THREAD-kind ids). id 0 is reserved for idle; the harness
+# emits its app thread as id_base+1, so core 0 = 1 and core 1 = 3. ISRs are a separate kind
+# carrying a raw vector (16, 18 here), not threads, so they get no lane rows.
+# thread,id,name,core
+thread,1,app0_main,0
+thread,3,app1_main,1

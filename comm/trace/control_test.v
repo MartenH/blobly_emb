@@ -47,7 +47,7 @@ fn test_handle_cmd_lifecycle() {
 
 	// fill it, then status shows full
 	for i in 0 .. 4 {
-		tb.push(Record{ handler_id: u8(i) })
+		tb.push(new_fb(u16(i), 0, 0, 0))
 	}
 	b2, _, _ := handle_cmd(mut tb, Cmd{ opcode: op_status }, 0)
 	assert decode_rsp(b2).state == 2 // full
@@ -68,8 +68,8 @@ fn test_stop_freezes_ring_now() {
 	mut backing := [8]Record{}
 	mut tb := new_buffer(&backing[0], 8, .ring, 50)
 	tb.start()
-	tb.push(Record{ handler_id: 1 })
-	tb.push(Record{ handler_id: 2 })
+	tb.push(new_fb(1, 0, 0, 0))
+	tb.push(new_fb(2, 0, 0, 0))
 	handle_cmd(mut tb, Cmd{ opcode: op_stop }, 0)
 	assert tb.state() == .frozen
 	assert tb.used() == 2 // frozen right here, no extra post-trigger records
@@ -85,7 +85,9 @@ fn test_core_mask() {
 	assert c.targets(2)
 	assert !c.targets(3)
 	// zero mask -> only core 0 (existing single-core commands left b6-7 zero)
-	z := Cmd{ opcode: op_status }
+	z := Cmd{
+		opcode: op_status
+	}
 	assert z.targets(0)
 	assert !z.targets(1)
 }
