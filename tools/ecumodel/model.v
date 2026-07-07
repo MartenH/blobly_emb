@@ -79,6 +79,11 @@ pub fn validate(doc toml.Doc) []string {
 		} else {
 			part_names[pname] = true
 		}
+		// core is required — omitting it would silently pin the partition to core 0 (loom2v
+		// and cfg2v default to 0), emitting the wrong partition table / manifest.
+		if 'core' !in pm {
+			errs << 'partition "${pname}" is missing `core` (the core index it is pinned to)'
+		}
 		mut nthreads := 0
 		for t in arr_of(pm, 'thread') {
 			nthreads++
@@ -119,7 +124,9 @@ pub fn validate(doc toml.Doc) []string {
 		} else if thr !in thread_part {
 			errs << 'fb "${fbname}" names unknown thread "${thr}" (no [[partition.thread]] with that name)'
 		}
+		mut nhandlers := 0
 		for h in arr_of(cm, 'handler') {
+			nhandlers++
 			hm := h.as_map()
 			hname := str_of(hm, 'name')
 			if 'name' !in hm {
@@ -134,6 +141,11 @@ pub fn validate(doc toml.Doc) []string {
 			} else if !has_period {
 				errs << 'fb "${fbname}" handler "${hname}" needs a trigger — period_ms'
 			}
+		}
+		// an fb with no handler is never scheduled (no sched.every, no manifest row) — reject
+		// it rather than silently emit a dead fb.
+		if nhandlers == 0 {
+			errs << 'fb "${fbname}" has no [[fb.handler]] — an fb needs at least one handler'
 		}
 	}
 	return errs
