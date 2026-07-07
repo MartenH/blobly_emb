@@ -376,117 +376,138 @@ b7    core
 Records come in **two levels**. A buffer holds one level, so its cell size is uniform (one
 no-alloc array). The level is configured (or chosen at read-out).
 
-### Coarse — thread trace (4-byte record)
+### Coarse — the who-had-the-core timeline (4-byte, type-tagged records)
 
-The primary "who held the core" level. One record per context switch: the thread now
-running, **why** the switch happened (so preemption is explicit, not guessed), and the time
-since the previous record. Kept to 4 bytes by **delta**-encoding the time — switches are
-frequent, so a `u16` µs delta covers the gap while the *window is unbounded* (the host
-accumulates deltas):
-
-```
-b0    to_thread  (u8)         the thread now running
-b1    reason     (u8)         what happened to the OUTGOING thread (its fate):
-                              0 preempted | 1 blocked | 2 yielded | 3 exited | 255 time-extend
-b2-3  delta_us   (u16, LE)    time since the previous record (`time_unit`-scaled)
-```
-
-The host reconstructs the timeline by accumulating `delta_us`, and reads each record as
-*"`to_thread` ran until the next switch"*. **`reason` is the preemption signal**: `preempted`
-means the outgoing thread is still ready and will resume (a higher-priority thread took the
-core); `blocked`/`yielded`/`exited` mean it gave up voluntarily. If a thread runs longer than
-one `u16` delta (~65 ms at 1 µs, longer with a coarser `time_unit`) with no switch, the target
-emits a `255 time-extend` record (a `+65535`-unit tick, `to_thread` unchanged) so the delta
-never overflows. `from_thread` is implicit — the previous record's `to_thread`.
-
-### Fine — thread + fb.handler trace (8-byte records)
-
-Adds the fb.handler runs *inside* each thread (and, on a preemptive target, explicit
-switch events). A fixed 8-byte cell, **four** kinds told apart by **kind** bits in the
-`flags` byte — which is **`b0` in every kind** so a decoder always finds it at a fixed
-offset (`bit7 = thread-switch`, `bit6 = block-header`, `bit5 = ISR`; all clear = an
-fb.handler run). A decoder tests them in that order.
-`handler_id` is a `u16` (a real ECU can have >256 fb.handlers, e.g. `scale`); the timestamp
-is a `u24` (16.7 s at 1 µs, longer via `time_unit`) — generous for the fine level's short
-window and one width across kinds.
-
-*fb.handler-run record* (kind = 0 — one invocation):
+The compact long-history level: **one time-ordered stream of threads, interrupts, and idle** —
+not just thread switches. Every record is **exactly 4 bytes** and **self-describing** — `b0`'s
+top 3 bits are a **type**, the low 5 bits an aux field. Time is **delta**-encoded (µs since the
+previous record), so the window is unbounded (the host accumulates deltas). One fixed stride →
+the ring is trivial and the dump ships the bytes verbatim.
 
 ```
-b0    flags       (bit0 overran | bit1 preempted | bit2 first-run | bit3 saturated; kind = 0)
-b1-2  handler_id  (u16, LE, global)   >256 fb.handlers OK
-b3-5  start_us    (u24, LE)   relative to capture start
-b6-7  cpu_us      (u16)       saturating; = response time on a no-IRQ bare-metal core
+b0 = (type << 5) | aux5
+ type 0  SWITCH   aux5=reason  b1=to_thread(u8)   b2-3=delta_us(u16 LE)   a thread starts running
+ type 1  ISR      aux5=0       b1=isr_id(u8)      b2-3=delta_us(u16 LE)   an interrupt starts running
+ type 2  ISR_END  aux5=0       b1=0               b2-3=delta_us(u16 LE)   the innermost ISR returns
+ type 3  IDLE     aux5=reason  b1=0               b2-3=delta_us(u16 LE)   no thread ready — core idle
+ type 4  TICK     aux5=0       b1-3=delta_us(u24 LE)                      pure time advance (bridges >65 ms)
 ```
 
-*Thread-switch record* (kind = `bit7`) — the explicit context switch, interleaved so a fine
-dump is one timeline of *which fb.handler ran* and *the thread switches between them*
-(`thread_id` stays `u8` — threads are few). No `from_thread`: it's the currently-running
-thread the decoder already tracks (the previous switch's `to_thread`, or the thread of the
-last fb.handler-run record):
+- **`delta_us` names the PREVIOUS state's duration.** A record marks an event at time `T`; its
+  delta is `T − T_prev`, and the state active during `[T_prev, T)` is whatever the *previous*
+  record established. "task ran 300 µs then an ISR fired" is the **ISR** record carrying Δ=300.
+- `reason` (SWITCH/IDLE): what happened to the thread that just stopped —
+  `0 preempted | 1 blocked | 2 yielded | 3 exited`. `preempted` = still ready, resumes later;
+  the rest = voluntary. `from_thread` is always implicit (the decoder tracks the current thread).
+- **ISRs are a `u8 isr_id`** here — a manifest-assigned id (like `thread_id`), not the raw
+  vector, to stay 4 bytes. The manifest maps `isr_id → vector + name`; an unmapped interrupt
+  records as `0xFF` ("other"). Full raw **`u16` vectors** live at the **fine** level.
+- **`TICK`** bridges gaps longer than one `u16` delta (~65 ms at 1 µs) — e.g. a long idle — so
+  a delta never overflows and the current state is preserved.
+- A decoder walks the stream keeping *current thread* + an *ISR-nesting stack*: SWITCH sets the
+  thread, ISR pushes, ISR_END pops back, IDLE clears.
+
+#### Same bytes in RAM and on the wire
+
+The ring stores these records; the dump ships them **verbatim** — memory format **==** link
+format. The only wire-only addition is a per-core **block header** prepended when one dump
+carries several cores (so the host splits the stream by core); it wraps the records, never
+rewrites them. A single-core dump on the wire is byte-identical to the ring.
+
+#### Buffer depth vs ISO-TP
+
+Classic ISO-TP caps one transfer at **4095 bytes** (12-bit FF length). An 8 KB ring
+(2048 × 4 B) is bigger, so:
+
+1. **Default the ring to ≤ 4095 B** (~1000 coarse / ~500 fine records) → a dump is one ISO-TP
+   transfer. Deeper *flat* history rarely helps; the **trigger / flight-recorder** keeps the
+   *relevant* window instead.
+2. **ISO-TP 32-bit escape** — an FF with the 12-bit length = 0 carries a following 4-byte length
+   (up to 4 GB in one transfer). Use it for larger blocks *if* our isotp stack **and** the host
+   tool both support the escape (to verify).
+3. **App-layer paging** — dump a page at a time (`records [offset, offset+N)`), one message each,
+   until the host has all `records_used` from the rsp. Universal (works over plain CAN), chattier.
+
+Default is #1; #3 is the mechanism when a config asks for a ring larger than one transfer.
+
+#### Worked example
+
+`task_1` runs, `isr_512` preempts it, it resumes then blocks; the core idles until the timer
+`isr_128` fires and readies `task_2`. Manifest: `task_1`→thread 1, `task_2`→thread 2,
+`isr_512`→isr_id 5, `isr_128`→isr_id 3.
+
+| # | event | bytes | decode |
+|---|---|---|---|
+| 1 | task_1 scheduled | `00 01 64 00` | SWITCH → thread 1, Δ100 |
+| 2 | isr_512 preempts | `20 05 2C 01` | ISR 5, Δ300 → task_1 ran 300 µs |
+| 3 | isr_512 returns  | `40 00 14 00` | ISR_END, Δ20 → isr_512 ran 20 µs, task_1 resumes |
+| 4 | task_1 blocks    | `61 00 90 01` | IDLE reason=block, Δ400 → task_1 ran 400 µs more |
+| 5 | isr_128 fires    | `20 03 E8 03` | ISR 3, Δ1000 → idle lasted 1000 µs |
+| 6 | isr_128 returns  | `40 00 18 00` | ISR_END, Δ24 → isr_128 ran 24 µs (readied task_2) |
+| 7 | task_2 scheduled | `00 02 02 00` | SWITCH → thread 2, Δ2 |
+
+**28 bytes** for the whole scenario. Accumulating deltas rebuilds the timeline:
 
 ```
-b0    flags       (bit7 set)
-b1    to_thread   (u8)    the thread now running
-b2    reason      why the OUTGOING thread stopped (its fate — the preemption signal):
-                  0 preempted (still ready → resumes later) | 1 blocked | 2 yielded | 3 exited
-b3-5  start_us    (u24, LE)   relative to capture start — when the switch happened
-b6-7  reserved
+[  100,  400)  task_1    300 µs
+[  400,  420)  isr_512    20 µs   (preempts task_1)
+[  420,  820)  task_1    400 µs   (resumed)
+[  820, 1820)  idle     1000 µs   (task_1 blocked)
+[ 1820, 1844)  isr_128    24 µs   (timer)
+[ 1844, 1846)  (schedule gap)
+[ 1846,    …)  task_2
 ```
 
-`reason` always describes the **outgoing** thread (`to_thread` runs *because* the previous
-thread `preempted`/`blocked`/`yielded`/`exited`). There's no `resume` reason — a preempted
-thread resuming is just its `thread_id` reappearing as `to_thread`.
+### Fine — add fb.handler runs (8-byte records)
 
-**Interrupts are not threads.** An ISR firing is *not* a thread switch — the same thread
-resumes after it; the ISR only steals CPU time (the response-vs-CPU-time split above). So
-`thread_id` stays `u8` (threads really are few — a partition has a handful), and ISRs are
-kept out of that id space entirely: they can't fit anyway (a big MCU has **thousands** of
-interrupt vectors, way past 256). Interrupts are handled two ways, neither touching
-`thread_id`: (1) **as time** — the running thread's CPU time excludes ISR time, via the
-`_tx_execution_isr_enter`/`_isr_exit` bucket (the hooks verified in the spike above); (2)
-optionally, an explicit **ISR record** — its own fine-level kind (`bit5`) carrying a wide
-**`u16` irq_id**, so a fine dump interleaves *which interrupt fired, when, and for how long*
-with the fb.handler runs it stole time from:
+The detailed short-window level is the **same event stream** as coarse — same `type` in `b0`'s
+top 3 bits, same decoder state machine — with **one extra type, HANDLER** (an fb.handler
+invocation) and full precision. 8 bytes buys a `u16` handler_id, a `u16` **raw** interrupt vector
+(no manifest mapping needed), and per-event `cpu_us`, with **absolute** `u24` timestamps instead
+of deltas (16.7 s window; no TICK bridging):
 
 ```
-b0    flags       (bit5 set = ISR)
-b1-2  irq_id      (u16, LE)   vector number — covers a >2000-vector MCU
-b3-5  start_us    (u24, LE)   relative to capture start
-b6-7  cpu_us      (u16)       ISR duration (saturating)
+b0 = (type << 5) | aux5
+ type 0  SWITCH   aux5=reason  b1=to_thread(u8)          b3-5=start_us(u24)
+ type 1  ISR      aux5=0       b1-2=irq(u16 raw vector)  b3-5=start_us(u24)  b6-7=cpu_us(u16)
+ type 2  ISR_END  aux5=0                                 b3-5=start_us(u24)
+ type 3  IDLE     aux5=reason                            b3-5=start_us(u24)
+ type 5  HANDLER  aux5=flags   b1-2=handler_id(u16)      b3-5=start_us(u24)  b6-7=cpu_us(u16)
 ```
 
-`irq_id`/`start_us`/`cpu_us` come straight from the two ISR hooks (the active vector is read
-from the core — on Cortex-M, `ICSR.VECTACTIVE`). This level is **opt-in** and exists **only
-at the fine level**: the coarse thread record is 4 bytes with no flags byte, so it is
-thread-only and never carries an ISR. At high interrupt rates the ISR records may be routed
-to a **separate buffer** so they don't evict handler/switch records — the layout is identical
-either way. The thread trace itself never carries interrupt ids.
+- **HANDLER** `flags` (aux5): `bit0 overran | bit1 preempted | bit2 first-run | bit3 saturated`.
+  `cpu_us` is the measured run time — the response time on a no-IRQ bare-metal core; on an RTOS
+  it excludes ISR time, which appears as the ISR events themselves.
+- **ISR carries the raw `u16` vector** here (a >2000-vector MCU is fine); the fine level doesn't
+  need coarse's `u8 isr_id`. Absolute starts + `cpu_us` give each event's duration directly
+  (coarse infers it from the next record's delta).
+- Same decoder as coarse — *current thread* + *ISR-nesting stack* — with HANDLER runs slotted
+  inside the owning thread's interval.
 
-*Block-header record* (kind = `bit6`) — one leading entry per core in a multi-core dump so
-each ISO-TP block is **self-describing** (split the stream by core without correlating to
-the rsp). `flags` at `b0` here too:
+**Interrupts are events, never threads.** At either level an interrupt is its own **ISR /
+ISR_END** event (coarse `u8 isr_id`, fine `u16` vector) — *never* folded into the `thread_id`
+space, which stays `u8` (threads are genuinely few; 2000+ vectors would never fit). An ISR
+preempts the running context and returns to it; only if it wakes a higher-priority thread does a
+SWITCH follow. Fields come from the `_tx_execution_isr_enter`/`_isr_exit` hooks (active vector
+from Cortex-M `ICSR.VECTACTIVE`). At high interrupt rates ISR events may be routed to a **separate
+buffer** so they don't evict thread/handler events — same layout either way.
+
+#### Wire framing: the per-core block header (type 7)
+
+Both levels store **only records** in RAM. A **multi-core** dump prepends one **block header**
+per core on the wire (wire-only — never in the ring) so the host splits a single `record_id`
+stream by core without correlating to the rsp. It's a `type 7` record, the same width as the
+buffer:
 
 ```
-b0    flags       (bit6 set)
-b1    core        (u8)
-b2-5  count       (u32, LE)   records that follow in this block
-b6-7  reserved
+coarse (4 B):  b0=(7<<5)  b1=core(u8)  b2-3=count(u16 LE)
+fine   (8 B):  b0=(7<<5)  b1=core(u8)  b2-5=count(u32 LE)
 ```
 
-The **coarse** level has no kind byte (its 4 bytes are all thread_id + reason + delta), so
-it frames a multi-core dump **positionally**: each per-core block is a 4-byte header
-(`b0 = core`, `b1-3 = count` u24) followed by exactly `count` thread records, then the next
-header. A single-core coarse dump has no header — the TraceRsp's `records_used` is the count.
-(One level per buffer, so coarse and fine records never mix.)
-
-A **single-core dump** is just that core's `count` records as one **ISO-TP** block — the
-TraceRsp already names the core, so no header is needed (this is what the single-core
-`trace_demo` sends). The **block-header** record is added only in a **multi-core dump**
-(several `core_mask` bits): there the blocks share one `record_id` stream, so each is
-prefixed with a header naming its core + count to keep it self-describing. So a decoder
-that may receive multi-core dumps checks `flags` bit6 and, when set, starts a new core
-block; a single-core stream has no header and decodes straight as records.
+A decoder that may receive multi-core dumps starts a new core block on `type 7`. A **single-core**
+dump has **no** header — the TraceRsp already names the core, so the wire is byte-identical to the
+ring (what the single-core `trace_demo` sends). One level per buffer, so coarse and fine records
+never mix.
 
 ## Time representation
 
@@ -622,10 +643,11 @@ their phase lands, so nothing is marked covered prematurely:
 5. **Trigger**: **decided** — software, no debug HW: a signal condition checked at the
    generated write site (recommended), or an address poll (advanced); one `trace_trigger()`
    seam with `source = "hw"` (DWT) reserved for later.
-6. **Record width**: **decided** — one homogeneous **8 B** cell for every kind; a
-   preemptive build does *not* widen the record but adds a **thread-switch record kind**
-   (kind bits in `flags`) whose switch edges give the preemption timeline directly. Keeps
-   the ring a single no-alloc array and one dump format.
+6. **Record width**: **decided** — **two** fixed widths, one per level, both **type-tagged**
+   in `b0` (top-3-bit `type`): **coarse 4 B** (delta-encoded threads / ISRs / idle — the
+   long-history who-had-the-core timeline) and **fine 8 B** (absolute-time, adds fb.handler
+   runs + raw `u16` ISR vectors + `cpu_us`). One width per buffer, so the ring stays a single
+   no-alloc fixed-stride array and there's one dump format per level.
 7. **Multi-core dump framing**: **decided** — `core_mask` in TraceCmd fans out; per-core
    self-describing ISO-TP blocks (block-header record + records), in ascending core order,
    each pulled over IOC by the bus core.
