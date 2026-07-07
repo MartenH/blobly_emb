@@ -1,0 +1,61 @@
+# trace_demo — single-core handler-tracing demo. Everything (loom wiring, the trace
+# capture + cmd/rsp + ISO-TP dump, and the generated trace.dbc + manifest) comes from this
+# file — no hand-wired main.v. Three pure-compute FBs at 5/10/20 ms; the trace rings their
+# per-handler timing and a dump reads out the flight-recorder window.
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0         # the trace cmd/rsp + dump ride this channel
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E0     # CpuLoad
+period_ms = 500
+
+[trace]
+bus            = "can0"
+level          = "thread+fb"  # thread | thread+isr | thread+fb | all
+buffer_records = 64           # per-core ring depth (static array)
+mode           = "ring"       # ring (flight recorder) | oneshot
+pre_pct        = 50           # ring pre/post-trigger split
+push_ms        = 1000         # live HandlerStat heartbeat (0 = off)
+cmd_id         = 0x7E2
+rsp_id         = 0x7E3
+stat_id        = 0x7E4
+record_id      = 0x7E5        # ISO-TP dump data (target -> host)
+dump_fc_id     = 0x7E6        # ISO-TP flow control (host -> target)
+trigger        = { source = "overrun", budget_us = 500 }  # freeze the ring on a >500us handler
+
+# One partition, one thread. The thread name is globally unique so an fb names it directly
+# (see [[fb]] below) and its partition is derived. (No comments inside the nested
+# [[partition.thread]] block — a V TOML parser bug drops the key after a comment there.)
+[[partition]]
+name    = "app"
+core    = 0
+trusted = true
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+[[fb]]
+name   = "FastWork"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_5ms"
+  period_ms = 5
+
+[[fb]]
+name   = "MedWork"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+
+[[fb]]
+name   = "SlowWork"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_20ms"
+  period_ms = 20

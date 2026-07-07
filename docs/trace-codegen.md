@@ -1,15 +1,22 @@
 # Trace subsystem from `ecu.toml` (loom2v codegen) — design
 
-**Status: in progress.** Landed so far (P1 tooling): loom2v reads `[trace]` and writes the five
-observability frame ids into the **manifest** (arg 6); `ecumodel` validates the block (bus
-resolves, `level`/`mode` enums, `pre_pct`/`buffer_records` ranges). **No `trace.dbc` is
-generated** — the observability protocol (`TraceCmd`/`TraceRsp`/`HandlerStat` + the ISO-TP record
-dump) is fixed and first-party, so blobly_net decodes it natively from the ids in the manifest;
-re-encoding a fixed protocol as a per-ECU DBC (and then policing its ids against every other
-frame on the bus) was churn without payoff. Each id is either a literal CAN id (yours to
-allocate — no collision policing) or the **name of a message in `bus.dbc`** (resolved to its id,
-required to exist). The example conversion (generated `main.v` + loom, retiring the hand-wired
-harness) lands next, on top of the `entity_id`/interval `comm/trace` record rework — see §5.
+**Status: in progress.** Landed:
+- **P1 tooling** — loom2v reads `[trace]` and writes the five observability frame ids into the
+  **manifest** (arg 6); `ecumodel` validates the block (bus resolves, `level`/`mode` enums,
+  `pre_pct`/`buffer_records` ranges). **No `trace.dbc` is generated** — the observability protocol
+  (`TraceCmd`/`TraceRsp`/`HandlerStat` + the ISO-TP record dump) is fixed and first-party, so
+  blobly_net decodes it natively from the manifest ids; re-encoding a fixed protocol as a per-ECU
+  DBC (and policing its ids against every other frame on the bus) was churn without payoff. Each
+  id is either a literal CAN id (yours to allocate — no collision policing) or the **name of a
+  message in `bus.dbc`** (resolved to its id, required to exist).
+- **P2 (single-core)** — `trace_demo` is now fully generated: loom2v folds the one app partition
+  into an inline `run(ch)` superloop (profiled dispatch + capture hook, `TraceCmd`/`TraceRsp` +
+  ISO-TP dump, the `HandlerStat` heartbeat, and `CpuLoad`), retiring the hand-wired harness. The
+  overrun trigger takes `trigger = { source = "overrun", budget_us = N }`. Verified on vcan0
+  (HandlerStat + CpuLoad + status→frozen→dump).
+
+Next: **multi-core** trace (the IOC HandlerStat fan-out + the per-bus comm thread visible in the
+manifest) — the `trace_multicore` example becomes config-driven. See the phasing in §5.
 
 Today the runtime-tracing subsystem is *hand-wired* in
 `examples/trace_multicore` (and `trace_demo`), and its manifest + DBC are hand-written. This
