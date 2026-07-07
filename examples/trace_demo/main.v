@@ -13,7 +13,6 @@ module main
 // exists to develop and verify the loom.run_profiled + telem.encode_handlerstat path on
 // WSL before it is generated. The FBs are pure compute so their timings are distinct and
 // stable (fast < med < slow).
-
 import os
 import osal
 import loom
@@ -44,11 +43,8 @@ fn capture_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	if dt > 0xFFFF {
 		dt = 0xFFFF
 	}
-	c.buf.push(trace.Record{
-		handler_id: u8(idx) // single partition: global id == scheduler index
-		start_us:   u32(start_us - c.start)
-		cpu_us:     u16(dt)
-	})
+	// single partition: global fb id == scheduler index
+	c.buf.push(trace.new_fb(u16(idx), 0, u32(start_us - c.start), u16(dt)))
 	// software trigger: a handler exceeding its budget freezes the ring with the pre/post
 	// window around it — the flight recorder catches the moment of the anomaly.
 	if dt_us > trigger_us {

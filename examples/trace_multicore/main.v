@@ -21,7 +21,6 @@ module main
 // same read-out the AMP target does; here the cores are cooperative loops, but the control
 // and transport paths are the real ones. Synthetic app<->isr switches are injected per core
 // to exercise the swimlane codec (real switches are the ThreadX state-change hook).
-
 import os
 import osal
 import loom
@@ -149,12 +148,12 @@ mut:
 	stat_count [4]u32
 }
 
-fn (c Core) app_thread() u8 {
-	return c.id_base
+fn (c Core) app_thread() u16 {
+	return u16(c.id_base) + 1 // THREAD id (id 0 is reserved for idle)
 }
 
-fn (c Core) isr_thread() u8 {
-	return c.id_base + 1
+fn (c Core) isr_vector() u16 {
+	return u16(c.id_base) + 16 // a synthetic RAW interrupt vector (its own ISR record kind)
 }
 
 fn capture_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
@@ -163,11 +162,7 @@ fn capture_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	if dt > 0xFFFF {
 		dt = 0xFFFF
 	}
-	c.buf.push(trace.Record{
-		start_us:   u32(start_us - c.start)
-		cpu_us:     u16(dt)
-		handler_id: c.id_base + u8(idx)
-	})
+	c.buf.push(trace.new_fb(u16(c.id_base) + u16(idx), 0, u32(start_us - c.start), u16(dt)))
 	if dt_us > trigger_us {
 		c.buf.trigger()
 	}
@@ -189,14 +184,17 @@ fn h_heavy(ctx voidptr) {
 fn core_step(mut c Core, i int) {
 	c.sched.run_profiled(osal.now_us)
 
-	// synthetic swimlane: inject an app<->isr switch into this core's own buffer.
+	// synthetic swimlane: alternate a THREAD event and a real ISR event into this core's own
+	// buffer (the cooperative host has no preemption, so we inject them to exercise the codec).
 	c.sw_pass++
 	if c.sw_pass % switch_every == 0 {
 		now := u32(osal.now_us() - c.start)
 		if c.sw_out {
-			c.buf.push(trace.new_switch(now, c.isr_thread(), c.app_thread(), trace.switch_resume))
+			// a synthetic interrupt ran — its own ISR record (raw vector, not a thread)
+			c.buf.push(trace.new_isr(c.isr_vector(), now, 5))
 		} else {
-			c.buf.push(trace.new_switch(now, c.app_thread(), c.isr_thread(), trace.switch_preempt))
+			// the app thread scheduled — a THREAD record (reason = preempted by the ISR)
+			c.buf.push(trace.new_thread(c.app_thread(), trace.reason_preempt, now, 20))
 		}
 		c.sw_out = !c.sw_out
 	}
@@ -206,7 +204,8 @@ fn core_step(mut c Core, i int) {
 	if osal.ioc_read(ch_cmd(i), &cm, u8(sizeof(cm))) && cm.seq != c.last_cmd_seq {
 		c.last_cmd_seq = cm.seq
 		cmd := trace.decode_cmd(cm.data)
-		mut rspb, do_dump, _ := trace.handle_cmd(mut c.buf, cmd, u8(i)) // bus pre-filters by core_mask
+		mut rspb, do_dump, _ :=
+			trace.handle_cmd(mut c.buf, cmd, u8(i)) // bus pre-filters by core_mask
 		if cmd.opcode == trace.op_arm || cmd.opcode == trace.op_start
 			|| cmd.opcode == trace.op_reset {
 			c.start = osal.now_us()
@@ -348,7 +347,7 @@ fn main() {
 		light:   Fb{
 			iters: 3_000
 		}
-		heavy: Fb{
+		heavy:   Fb{
 			iters: 90_000
 		}
 	}
@@ -358,7 +357,7 @@ fn main() {
 		light:   Fb{
 			iters: 5_000
 		}
-		heavy: Fb{
+		heavy:   Fb{
 			iters: 120_000
 		}
 	}
@@ -449,8 +448,8 @@ fn main() {
 		// forward each core's TraceRsp to the host; a not-ready dump means no block coming.
 		for i in 0 .. ncores {
 			mut rm := RspMsg{}
-			if osal.ioc_read(ch_rsp(i), &rm, u8(sizeof(rm))) && (!bus.rsp_primed[i]
-				|| rm.seq != bus.last_rsp_seq[i]) {
+			if osal.ioc_read(ch_rsp(i), &rm, u8(sizeof(rm)))
+				&& (!bus.rsp_primed[i] || rm.seq != bus.last_rsp_seq[i]) {
 				bus.rsp_primed[i] = true
 				bus.last_rsp_seq[i] = rm.seq
 				mut rf := can.Frame{
