@@ -401,10 +401,18 @@ b6-7  reserved
 
 `reason` always describes the **outgoing** thread (`to_thread` runs *because* the previous
 thread `preempted`/`blocked`/`yielded`/`exited`). There's no `resume` reason — a preempted
-thread resuming is just its `thread_id` reappearing as `to_thread`. ISRs are modelled as a
-reserved ISR `thread_id`: an ISR taking the core is `{to = isr, reason = preempted}`, and its
-return is `{to = <resumed thread>, reason = exited}` (the ISR "exited") — same vocabulary, no
-special isr reasons.
+thread resuming is just its `thread_id` reappearing as `to_thread`.
+
+**Interrupts are not threads.** An ISR firing is *not* a thread switch — the same thread
+resumes after it; the ISR only steals CPU time (the response-vs-CPU-time split above). So
+`thread_id` stays `u8` (threads really are few — a partition has a handful), and ISRs are
+kept out of that id space entirely: they can't fit anyway (a big MCU has **thousands** of
+interrupt vectors, way past 256). Interrupts are handled two ways, neither touching
+`thread_id`: (1) **as time** — the running thread's CPU time excludes ISR time, via the
+ThreadX profile kit's separate ISR bucket; (2) optionally, a **per-vector ISR trace** with a
+wide **`u16` irq_id** (its own record kind / buffer), for when you need to see which
+interrupt fired and for how long. That's a separate, opt-in level — the thread trace itself
+never carries interrupt ids.
 
 *Block-header record* (kind = `bit6`) — one leading entry per core in a multi-core dump so
 each ISO-TP block is **self-describing** (split the stream by core without correlating to
