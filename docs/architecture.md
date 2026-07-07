@@ -103,12 +103,14 @@ one partition); a handler's trigger is a **period** (dispatched on its thread) o
 **interrupt** (`irq`, ISR context). *(Today loom2v generates one thread per partition;
 multiple threads per partition and `irq` handlers are the target, not yet generated.)*
 
-The **bus bridge** is a first-class thread too — an implicit **comm thread** per bus on
-the IO core, running COM tx / NM periodically with the CAN **Rx interrupt** feeding
-decode. Every thread — app **and** platform — appears in the runtime trace **by name**;
-the platform is never hidden, since COM/NM/ISO-TP overhead is often where the time goes
-(see `telemetry.md`). The only shared memory is the **IOC region**; cross-core signals
-cross there and nowhere else (the basis for MPU isolation — see `memory-protection.md`).
+Today the **bus bridge** runs as a spawned per-bus loop on the IO core (COM tx / NM
+periodic + rx decode). The **target** model makes it a first-class **comm thread** per
+bus — so that *every* thread, app **and** platform, appears in the runtime trace **by
+name** and the platform is never hidden (COM/NM/ISO-TP overhead is often where the time
+goes; see `telemetry.md`). *(That per-bus comm thread + its trace manifest entry are the
+target — the current manifest names app threads only.)* The only shared memory is the
+**IOC region**; cross-core signals cross there and nowhere else (the basis for MPU
+isolation — see `memory-protection.md`).
 
 ## Data-flow paths
 
