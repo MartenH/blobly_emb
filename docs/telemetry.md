@@ -314,8 +314,9 @@ b7    count_delta (u8, saturating)   invocations since the previous stat frame
 b0    opcode          1 arm | 2 start | 3 stop | 4 reset | 5 set_push | 6 dump | 7 status
 b1    arg0            set_push kind (0 stats | 1 records) / capture mode
 b2-3  period_ms       (u16) for set_push
-b4-5  handler_filter  (u16) 0xFFFF = all, else a handler_id — wider than the u8 id so
-                      the "all" sentinel can't collide with a valid handler
+b4-5  handler_filter  (u16) 0xFFFF = all, else a handler_id. handler_id now being a u16,
+                      0xFFFF is reserved as the "all" sentinel — ids run 0..0xFFFE (65535
+                      fb.handlers, still far more than any real ECU)
 b6-7  core_mask       (u16) bit i = core i; one cmd addresses several cores at once
                       (arm/stop/dump/… fan out). 0 = the receiving/default core (core 0),
                       so existing single-core commands keep working unchanged.
