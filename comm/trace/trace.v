@@ -38,6 +38,7 @@ pub const reason_exit = u8(3) // completed / terminated
 
 // CONTROL `id` subtypes.
 pub const ctl_block = u16(0) // per-core block header leading a multi-core dump
+pub const ctl_epoch = u16(1) // timeline origin: resets the u24 start_us base (long captures)
 
 const id_mask = u16(0x3fff) // 14-bit id
 
@@ -94,6 +95,19 @@ pub fn new_block_header(core u8, count u32) Record {
 	}
 }
 
+// new_epoch — a CONTROL record that resets the timeline origin. A Record's `start_us` is only
+// 24 bits (~16.777 s at 1 µs), so a capture that stays armed longer would wrap and its records
+// would sort near 0 ahead of older ones. The capture layer emits one epoch whenever the running
+// `start_us` would exceed 0xff_ffff, carrying the full 32-bit `base_us` of the new origin; the
+// decoder adds `base_us` to every following record's `start_us` until the next epoch. CONTROL
+// kind / ctl_epoch subtype; the full u32 base lives in the tsinfo field (info=b31-24, start=b23-0).
+pub fn new_epoch(base_us u32) Record {
+	return Record{
+		entity_id: entity(kind_control, ctl_epoch)
+		tsinfo:    base_us // start_us()=low 24, info()=high 8 → reassembled = base_us
+	}
+}
+
 // --- accessors ---
 pub fn (r Record) kind() u8 {
 	return u8(r.entity_id >> 14)
@@ -123,6 +137,15 @@ pub fn (r Record) header_core() u8 {
 
 pub fn (r Record) header_count() u32 {
 	return r.start_us() | (u32(r.cpu_us) << 24)
+}
+
+// is_epoch reports a timeline-origin reset (CONTROL / ctl_epoch); epoch_base is its new base.
+pub fn (r Record) is_epoch() bool {
+	return r.kind() == kind_control && r.id() == ctl_epoch
+}
+
+pub fn (r Record) epoch_base() u32 {
+	return r.start_us() | (u32(r.info()) << 24)
 }
 
 // encode_record packs a Record into its 8-byte wire form (little-endian):

@@ -187,3 +187,14 @@ fn test_block_header_count_is_u32() {
 	assert h.header_core() == 7
 	assert h.header_count() == 100000 // > 65535
 }
+
+fn test_epoch_carries_full_u32_base() {
+	// A base past the 24-bit start_us range must survive the wire round-trip so long
+	// captures re-anchor cleanly (the record itself only holds 24-bit start_us).
+	base := u32(0x1234_5678) // > 0xff_ffff
+	e := decode_record(encode_record(new_epoch(base)))
+	assert e.is_epoch()
+	assert !e.is_block_header()
+	assert e.epoch_base() == base
+	assert e.kind() == kind_control
+}
