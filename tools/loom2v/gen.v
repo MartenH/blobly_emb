@@ -312,11 +312,21 @@ fn main() {
 	for p in doc.value('partition').array() {
 		m := p.as_map()
 		pname := (m['name'] or { toml.Any('') }).string()
+		if !ident_ok(pname) {
+			panic('loom2v: partition name "${pname}" is not a valid identifier ' +
+				'([A-Za-z_][A-Za-z0-9_]*) — required for codegen + the manifest CSV')
+		}
+		// Duplicate names would collide in core_of / threads_of (and trip the >1-thread
+		// check below with a misleading message); reject them explicitly.
+		if pname in core_of {
+			panic('loom2v: duplicate partition name "${pname}" — partition names must be unique')
+		}
 		core_of[pname] = int((m['core'] or { toml.Any(0) }).int())
 		for t in (m['thread'] or { toml.Any([]toml.Any{}) }).array() {
 			tname := (t.as_map()['name'] or { toml.Any('') }).string()
-			if tname == '' {
-				panic('loom2v: partition "${pname}" has a [[partition.thread]] with no name')
+			if !ident_ok(tname) {
+				panic('loom2v: partition "${pname}" has a [[partition.thread]] whose name ' +
+					'"${tname}" is not a valid identifier')
 			}
 			threads_of[pname] << tname
 		}
@@ -343,15 +353,21 @@ fn main() {
 		cm := c.as_map()
 		part := (cm['partition'] or { toml.Any('') }).string()
 		by_part[part] << c
+		fbname := (cm['name'] or { toml.Any('') }).string()
+		if !ident_ok(fbname) {
+			panic('loom2v: fb name "${fbname}" is not a valid identifier')
+		}
 		if part !in threads_of {
-			panic('loom2v: fb "${(cm['name'] or { toml.Any('') }).string()}" names unknown partition "${part}"')
+			panic('loom2v: fb "${fbname}" names unknown partition "${part}"')
 		}
 		ths := threads_of[part]
 		for h in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
 			hm := h.as_map()
 			hthread := (hm['thread'] or { toml.Any('') }).string()
-			fbname := (cm['name'] or { toml.Any('') }).string()
 			hname := (hm['name'] or { toml.Any('') }).string()
+			if !ident_ok(hname) {
+				panic('loom2v: fb "${fbname}" handler name "${hname}" is not a valid identifier')
+			}
 			if hthread == '' {
 				if ths.len != 1 {
 					panic('loom2v: fb "${fbname}" handler "${hname}" must name a `thread` ' +
@@ -1209,6 +1225,26 @@ fn publish_fn(tr string) string {
 		'triple' { 'ioc_publish' }
 		else { 'ioc_publish2' }
 	}
+}
+
+// ident_ok reports whether s is a safe name — [A-Za-z_][A-Za-z0-9_]* — for both V codegen
+// (names become struct/field identifiers) and the manifest CSV (a comma/space would corrupt
+// a row). Rejects the empty string too.
+fn ident_ok(s string) bool {
+	if s == '' {
+		return false
+	}
+	for i, c in s {
+		alpha := (c >= `a` && c <= `z`) || (c >= `A` && c <= `Z`) || c == `_`
+		if i == 0 {
+			if !alpha {
+				return false
+			}
+		} else if !(alpha || (c >= `0` && c <= `9`)) {
+			return false
+		}
+	}
+	return true
 }
 
 fn snake(name string) string {
