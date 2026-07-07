@@ -57,7 +57,7 @@ fn sub(typ Typ, required bool, ctx string) Key {
 // specs: context name -> its allowed keys. `top` is the document root.
 fn specs() map[string]map[string]Key {
 	return {
-		'top':       {
+		'top':        {
 			'import':    sub(.tbl, false, 'import')
 			'telemetry': sub(.tbl, false, 'telemetry')
 			'trace':     sub(.tbl, false, 'trace')
@@ -72,17 +72,17 @@ fn specs() map[string]map[string]Key {
 			'did':       sub(.arr, false, 'did')
 			'route':     sub(.arr, false, 'route')
 		}
-		'import':    {
+		'import':     {
 			'dbc': k(.str)
 		}
-		'telemetry': {
+		'telemetry':  {
 			'enabled':   k(.boolean)
 			'bus':       k(.str)
 			'id':        k(.int)
 			'detail_id': k(.int)
 			'period_ms': k(.int)
 		}
-		'trace':     {
+		'trace':      {
 			'bus':            k(.str)
 			'level':          k(.str)
 			'buffer_records': k(.int)
@@ -96,23 +96,23 @@ fn specs() map[string]map[string]Key {
 			'dump_fc_id':     k(.int)
 			'trigger':        sub(.tbl, false, 'trigger')
 		}
-		'trigger':   {
+		'trigger':    {
 			'source':  k(.str)
 			'signal':  k(.str)
 			'address': k(.str)
 			'when':    k(.str)
 			'pre':     k(.int)
 		}
-		'target':    {
+		'target':     {
 			'kind':    k(.str)
 			'tick_ms': k(.int)
 		}
-		'bus':       {
+		'bus':        {
 			'interface': req(.str)
 			'fd':        k(.boolean)
 			'core':      k(.int)
 		}
-		'nm':        {
+		'nm':         {
 			'node_id':       k(.int)
 			'tx_id':         k(.int)
 			'rx_lo':         k(.int)
@@ -123,36 +123,36 @@ fn specs() map[string]map[string]Key {
 			'repeat_ms':     k(.int)
 			'wait_sleep_ms': k(.int)
 		}
-		'partition': {
+		'partition':  {
 			'name':    req(.str)
 			'core':    req(.int)
 			'trusted': k(.boolean)
 			'thread':  sub(.arr, true, 'thread')
 		}
-		'thread':    {
+		'thread':     {
 			'name':     req(.str)
 			'priority': k(.int)
 		}
-		'fb':        {
+		'fb':         {
 			'name':    req(.str)
 			'thread':  req(.str)
 			'handler': sub(.arr, true, 'handler')
 		}
-		'handler':   {
+		'handler':    {
 			'name':      req(.str)
 			'period_ms': k(.int)
 			'irq':       k(.str)
 			'reads':     k(.str_arr)
 			'writes':    k(.str_arr)
 		}
-		'signal':    {
+		'signal':     {
 			'name':      req(.str)
 			'fields':    sub(.str_map, true, '')
 			'from':      req(.str)
 			'to':        req(.str)
 			'transport': k(.str)
 		}
-		'frame':     {
+		'frame':      {
 			'name':  req(.str)
 			'bus':   req(.str)
 			'tx':    sub(.tbl, false, 'tx')
@@ -160,27 +160,27 @@ fn specs() map[string]map[string]Key {
 			'e2e':   sub(.tbl, false, 'e2e')
 			'secoc': sub(.tbl, false, 'secoc')
 		}
-		'tx':        {
+		'tx':         {
 			'mode':         k(.str)
 			'cycle_ms':     k(.int)
 			'min_delay_ms': k(.int)
 		}
-		'rx':        {
+		'rx':         {
 			'timeout_ms': k(.int)
 		}
-		'e2e':       {
+		'e2e':        {
 			'data_id':     k(.int)
 			'crc_pos':     k(.int)
 			'counter_pos': k(.int)
 		}
-		'secoc':     {
+		'secoc':      {
 			'key':       k(.str)
 			'data_id':   k(.int)
 			'fresh_pos': k(.int)
 			'mac_pos':   k(.int)
 			'mac_len':   k(.int)
 		}
-		'isotp':     {
+		'isotp':      {
 			'name':     req(.str)
 			'bus':      req(.str)
 			'rx_id':    req(.int)
@@ -188,21 +188,24 @@ fn specs() map[string]map[string]Key {
 			'bs':       k(.int)
 			'stmin_ms': k(.int)
 		}
-		'did':       {
+		'did':        {
 			'id':       req(.int)
 			'ascii':    k(.str)
 			'bytes':    k(.str)
 			'writable': k(.boolean)
 			'signal':   k(.str)
 		}
-		'route':     {
-			'from': sub(.tbl, true, 'routeep')
-			'to':   sub(.tbl, true, 'routeep')
+		'route':      {
+			'from': sub(.tbl, true, 'route_from')
+			'to':   sub(.tbl, true, 'route_to')
 		}
-		'routeep':   {
-			'bus':   k(.str)
-			'frame': k(.str)
-			'id':    k(.int)
+		'route_from': {
+			'bus':   req(.str) // the source bus
+			'frame': req(.str) // the DBC frame to forward (loom2v looks it up)
+		}
+		'route_to':   {
+			'bus': req(.str) // the destination bus
+			'id':  k(.int) // optional; 0/absent keeps the source id
 		}
 	}
 }
@@ -217,7 +220,8 @@ fn label(ctx string) string {
 		'bus' { '[bus.*]' }
 		'nm' { '[nm.*]' }
 		'tx', 'rx', 'e2e', 'secoc' { 'inline ${ctx}' }
-		'routeep' { '[[route]] endpoint' }
+		'route_from' { '[[route]] from' }
+		'route_to' { '[[route]] to' }
 		'import', 'telemetry', 'trace', 'target' { '[${ctx}]' }
 		else { '[[${ctx}]]' }
 	}
@@ -389,6 +393,11 @@ fn check_cross(doc toml.Doc, mut errs []string) {
 		if nthreads == 0 && pname != '' {
 			errs << 'partition "${pname}" declares no [[partition.thread]] — every partition needs at least one thread'
 		}
+		// Mirror loom2v: multiple threads per partition need per-thread schedulers, not
+		// generated yet. Reject here so `make check` doesn't pass a config `make gen` rejects.
+		if nthreads > 1 {
+			errs << 'partition "${pname}" declares ${nthreads} threads — multiple threads per partition is not generated yet (one scheduler per partition today); declare a single [[partition.thread]]'
+		}
 	}
 	for c in arr(doc, 'fb') {
 		cm := c.as_map()
@@ -406,12 +415,15 @@ fn check_cross(doc toml.Doc, mut errs []string) {
 			if hname != '' && !ident_ok(hname) {
 				errs << 'fb "${fbname}" handler name "${hname}" is not a valid identifier'
 			}
+			// Mirror loom2v exactly: irq is a RESERVED trigger (ISR-context) not generated
+			// yet, so reject it here rather than let `make check` pass then `make gen` fail.
+			// The only supported trigger today is period_ms.
 			has_period := 'period_ms' in hm
 			has_irq := 'irq' in hm
-			if has_period && has_irq {
-				errs << 'fb "${fbname}" handler "${hname}" has both period_ms and irq — a handler has exactly one trigger'
-			} else if !has_period && !has_irq {
-				errs << 'fb "${fbname}" handler "${hname}" needs a trigger (period_ms or irq)'
+			if has_irq {
+				errs << 'fb "${fbname}" handler "${hname}": irq-triggered handlers are not generated yet (reserved trigger); use period_ms'
+			} else if !has_period {
+				errs << 'fb "${fbname}" handler "${hname}" needs a trigger — period_ms'
 			}
 		}
 	}
