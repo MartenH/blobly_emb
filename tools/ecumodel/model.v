@@ -148,5 +148,49 @@ pub fn validate(doc toml.Doc) []string {
 			errs << 'fb "${fbname}" has no [[fb.handler]] — an fb needs at least one handler'
 		}
 	}
+
+	// [trace] — the runtime-observability block loom2v generates a DBC + wiring from. Validate
+	// the enums loom2v switches on (level, mode) + numeric ranges, and that a named bus is
+	// declared. Ids are plain ints (their frame layout is fixed, so ecucheck's type check is
+	// enough); when `bus` is omitted loom2v defaults it to [telemetry].bus.
+	if tr := doc.value_opt('trace') {
+		trm := tr.as_map()
+		if 'bus' in trm {
+			tbus := str_of(trm, 'bus')
+			mut buses := map[string]bool{}
+			if bv := doc.value_opt('bus') {
+				for bname, _ in bv.as_map() {
+					buses[bname] = true
+				}
+			}
+			if tbus !in buses {
+				errs << '[trace] names unknown bus "${tbus}" (no [bus.${tbus}])'
+			}
+		}
+		if 'level' in trm {
+			lvl := str_of(trm, 'level')
+			if lvl !in ['thread', 'thread+isr', 'thread+fb', 'all'] {
+				errs << '[trace] level "${lvl}" is invalid (thread | thread+isr | thread+fb | all)'
+			}
+		}
+		if 'mode' in trm {
+			md := str_of(trm, 'mode')
+			if md !in ['ring', 'oneshot'] {
+				errs << '[trace] mode "${md}" is invalid (ring | oneshot)'
+			}
+		}
+		if v := trm['pre_pct'] {
+			p := v.int()
+			if p < 0 || p > 100 {
+				errs << '[trace] pre_pct ${p} out of range (0..100)'
+			}
+		}
+		if v := trm['buffer_records'] {
+			n := v.int()
+			if n <= 0 {
+				errs << '[trace] buffer_records ${n} must be > 0'
+			}
+		}
+	}
 	return errs
 }

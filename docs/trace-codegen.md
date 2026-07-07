@@ -1,6 +1,13 @@
 # Trace subsystem from `ecu.toml` (loom2v codegen) — design
 
-**Status: proposed (for review).** Today the runtime-tracing subsystem is *hand-wired* in
+**Status: in progress.** Landed so far (P1 tooling): loom2v reads `[trace]` and generates the
+symbolic `trace.dbc` (`trace_dbc()`, arg 8) alongside the manifest (arg 6), and `ecumodel`
+validates the `[trace]` block (bus resolves, `level`/`mode` enums, `pre_pct`/`buffer_records`
+ranges) so a bad config fails before codegen. The example conversion (generated `main.v` + loom
++ committed artifacts, retiring the hand-wired harness) lands next, on top of the record rework
+(the `entity_id`/interval `comm/trace` change) — see the phasing in §5.
+
+Today the runtime-tracing subsystem is *hand-wired* in
 `examples/trace_multicore` (and `trace_demo`), and its manifest + DBC are hand-written. This
 doc proposes generating **all of it from `ecu.toml`** via loom2v, so nothing is hand-kept and
 nothing can drift — the same way the Loom wiring and COM codec already are.
