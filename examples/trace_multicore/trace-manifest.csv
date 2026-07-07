@@ -1,0 +1,8 @@
+# trace_multicore handler manifest — the CSV form blobly_net loads (it parses CSV, not the
+# trace-manifest.json fixture, which documents the wire schema). Two cores; ids are global
+# across cores; core is the 0-based protocol index (bit i of a dump core_mask).
+# id,partition,core,fb,handler,period_us
+0,app0,0,light,on_5ms,5000
+1,app0,0,heavy,on_20ms,20000
+2,app1,1,light,on_5ms,5000
+3,app1,1,heavy,on_20ms,20000

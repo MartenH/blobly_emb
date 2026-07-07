@@ -50,7 +50,16 @@ and shades the interval a thread is switched out.
 > switches to exercise the codec and dump end-to-end — the same seam-only stand-in as the
 > DWT `hw` trigger. On silicon the hook replaces the injection; nothing else changes.
 
-## Run it
+## Watch it in blobly_net
+
+`trace-multicore.blobnet` (+ `trace-manifest.csv`) is a ready-made blobly_net project: open
+it, Start the channel, and press **Dump** in the Trace Chart — blobly_net freezes both cores,
+dumps them in one command, reassembles the per-core ISO-TP blocks, and draws the multi-core
+swimlane (handler bars + thread-switch marks). A copy also ships at
+`blobly_net/projects/trace-multicore.blobnet` (blobly_net resolves the manifest from its own
+working dir). Run this demo first (`make vcan && make run`).
+
+## Run it (raw CAN)
 
 ```sh
 make vcan                                 # bring up vcan0

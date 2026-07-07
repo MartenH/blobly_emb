@@ -1,0 +1,22 @@
+# blobly_net project for this demo — open it to watch the multi-core capture as a swimlane.
+#
+# In blobly_net: open this project, Start the channel, then press "Dump" in the Trace Chart
+# (≣). blobly_net freezes both cores and dumps them in one command (core_mask), reassembles
+# each per-core ISO-TP block on 0x7E5 (flow control on 0x7E6), and draws the handler bars +
+# thread-switch marks. Run this demo first:  make vcan && make run
+#
+# Note: blobly_net resolves the manifest path from ITS working directory, so a ready-to-open
+# copy also ships at blobly_net/projects/trace-multicore.blobnet -> manifests/trace-multicore.csv.
+# This copy is versioned with the demo; open it from this directory (or copy both files into
+# blobly_net) — the swimlane renders either way (handler names resolve when the manifest is
+# found, otherwise lanes read "handler N" / "thread N").
+project:
+  name: trace-multicore
+  version: 1
+
+channels:
+  - name: CAN1
+    type: can
+    interface: vcan0
+    mode: monitor
+    manifest: trace-manifest.csv
