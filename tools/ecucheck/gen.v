@@ -24,6 +24,7 @@ enum Typ {
 	str_arr  // an array of strings (reads/writes)
 	namedmap // a table of arbitrary-named sub-tables (e.g. [bus.<name>])
 	str_map  // a table of arbitrary string->string (e.g. signal fields)
+	id       // a CAN id: an integer literal OR a bus.dbc message name (string)
 }
 
 // Key is one allowed key in a section: its type, whether it's required, and (for tbl/arr/
@@ -84,17 +85,18 @@ fn specs() map[string]map[string]Key {
 			'period_ms': k(.int)
 		}
 		'trace':      {
+			'enabled':        k(.boolean)
 			'bus':            k(.str)
 			'level':          k(.str)
 			'buffer_records': k(.int)
 			'mode':           k(.str)
 			'pre_pct':        k(.int)
 			'push_ms':        k(.int)
-			'cmd_id':         k(.int)
-			'rsp_id':         k(.int)
-			'stat_id':        k(.int)
-			'record_id':      k(.int)
-			'dump_fc_id':     k(.int)
+			'cmd_id':         k(.id)
+			'rsp_id':         k(.id)
+			'stat_id':        k(.id)
+			'record_id':      k(.id)
+			'dump_fc_id':     k(.id)
 			'trigger':        sub(.tbl, false, 'trigger')
 		}
 		'trigger':    {
@@ -314,6 +316,9 @@ fn type_ok(v toml.Any, typ Typ) bool {
 		.int {
 			v is i64
 		}
+		.id {
+			v is i64 || v is string
+		}
 		.boolean {
 			v is bool
 		}
@@ -343,6 +348,7 @@ fn type_name(typ Typ) string {
 	return match typ {
 		.str { 'a string' }
 		.int { 'an integer' }
+		.id { 'a CAN id (integer) or a bus.dbc message name (string)' }
 		.boolean { 'a boolean' }
 		.arr { 'an array of tables' }
 		.tbl, .namedmap { 'a table' }
