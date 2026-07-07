@@ -402,9 +402,10 @@ never overflows. `from_thread` is implicit — the previous record's `to_thread`
 ### Fine — thread + fb.handler trace (8-byte records)
 
 Adds the fb.handler runs *inside* each thread (and, on a preemptive target, explicit
-switch events). A fixed 8-byte cell, three kinds told apart by two **kind** bits in the
+switch events). A fixed 8-byte cell, **four** kinds told apart by **kind** bits in the
 `flags` byte — which is **`b0` in every kind** so a decoder always finds it at a fixed
-offset (`bit7 = thread-switch`, `bit6 = block-header`; both clear = an fb.handler run).
+offset (`bit7 = thread-switch`, `bit6 = block-header`, `bit5 = ISR`; all clear = an
+fb.handler run). A decoder tests them in that order.
 `handler_id` is a `u16` (a real ECU can have >256 fb.handlers, e.g. `scale`); the timestamp
 is a `u24` (16.7 s at 1 µs, longer via `time_unit`) — generous for the fine level's short
 window and one width across kinds.
@@ -443,10 +444,24 @@ resumes after it; the ISR only steals CPU time (the response-vs-CPU-time split a
 kept out of that id space entirely: they can't fit anyway (a big MCU has **thousands** of
 interrupt vectors, way past 256). Interrupts are handled two ways, neither touching
 `thread_id`: (1) **as time** — the running thread's CPU time excludes ISR time, via the
-ThreadX profile kit's separate ISR bucket; (2) optionally, a **per-vector ISR trace** with a
-wide **`u16` irq_id** (its own record kind / buffer), for when you need to see which
-interrupt fired and for how long. That's a separate, opt-in level — the thread trace itself
-never carries interrupt ids.
+`_tx_execution_isr_enter`/`_isr_exit` bucket (the hooks verified in the spike above); (2)
+optionally, an explicit **ISR record** — its own fine-level kind (`bit5`) carrying a wide
+**`u16` irq_id**, so a fine dump interleaves *which interrupt fired, when, and for how long*
+with the fb.handler runs it stole time from:
+
+```
+b0    flags       (bit5 set = ISR)
+b1-2  irq_id      (u16, LE)   vector number — covers a >2000-vector MCU
+b3-5  start_us    (u24, LE)   relative to capture start
+b6-7  cpu_us      (u16)       ISR duration (saturating)
+```
+
+`irq_id`/`start_us`/`cpu_us` come straight from the two ISR hooks (the active vector is read
+from the core — on Cortex-M, `ICSR.VECTACTIVE`). This level is **opt-in** and exists **only
+at the fine level**: the coarse thread record is 4 bytes with no flags byte, so it is
+thread-only and never carries an ISR. At high interrupt rates the ISR records may be routed
+to a **separate buffer** so they don't evict handler/switch records — the layout is identical
+either way. The thread trace itself never carries interrupt ids.
 
 *Block-header record* (kind = `bit6`) — one leading entry per core in a multi-core dump so
 each ISO-TP block is **self-describing** (split the stream by core without correlating to
