@@ -128,17 +128,16 @@ with a **globally unique** id across all partitions (not a per-scheduler index, 
 collide). For `overspeed` (partitions `sense` + `ctrl`, one thread each):
 
 ```
-# threads: id = the 14-bit id in a kind=THREAD entity_id (id 0 reserved = idle)
-thread_id | name  | core
-1         | sense | 0
-2         | ctrl  | 1
-
-# fb.handlers: id = the 14-bit id in a kind=FB entity_id
-handler_id | thread | core | fb          | handler | period_us
-0          | sense  | 0    | SpeedFilter | on_10ms | 10000
-1          | sense  | 0    | WheelWatch  | on_10ms | 10000
-2          | ctrl   | 1    | SpeedMonitor| on_10ms | 10000
-3          | ctrl   | 1    | LampDriver  | on_20ms | 20000
+# fb.handlers: id,partition,core,fb,handler,period_us,thread
+#   id = the 14-bit id in a kind=FB entity_id; `thread` names the thread it runs on
+0,sense,0,SpeedFilter,on_10ms,10000,main
+1,sense,0,OverspeedDetector,on_10ms,10000,main
+2,ctrl,1,EngineMonitor,on_10ms,10000,main
+3,ctrl,1,LampController,on_10ms,10000,main
+# threads: thread,id,name,core   (id 0 reserved = idle)
+#   id = the 14-bit id in a kind=THREAD entity_id
+thread,1,sense.main,0
+thread,2,ctrl.main,1
 ```
 
 Every record names its entity with one `entity_id` (`kind<<14 | id`); the manifest resolves the
