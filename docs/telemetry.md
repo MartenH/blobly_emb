@@ -90,36 +90,39 @@ is the shape before the requirements and code.
 
 The trace needs threads to be first-class, so `ecu.toml` gains a thread level (today a
 partition is an *implicit* single thread). A **partition** (one MPU domain, pinned to a
-core) declares one or more **threads** (each a ThreadX thread with a priority), and each
-**fb.handler** names the thread it runs on:
+core) declares one or more **threads** (each a ThreadX thread with a priority). Thread names
+are **globally unique**, so an **fb** names the thread it runs on directly and its partition
+is **derived** — a thread belongs to exactly one partition, so naming the partition too would
+be redundant:
 
 ```toml
+# priority is the ThreadX priority (lower = higher). Keep [[partition.thread]] / [[fb.handler]]
+# blocks comment-free — a V TOML parser bug (vlang/v#27684) drops the key after a comment there.
 [[partition]]
 name = "ctrl"
 core = 1
   [[partition.thread]]
-  name     = "fast"
-  priority = 10          # ThreadX priority (lower = higher); preemption between threads
-  [[partition.thread]]
-  name     = "slow"
-  priority = 20
+  name     = "ctrl_main"
+  priority = 10
 
+# an fb names a globally-unique thread; its partition (ctrl) is derived
 [[fb]]
-name      = "SpeedMonitor"
-partition = "ctrl"
+name   = "SpeedMonitor"
+thread = "ctrl_main"
   [[fb.handler]]
   name      = "on_10ms"
   period_ms = 10
-  thread    = "fast"     # runs on ctrl's "fast" thread
 ```
 
-Every **partition MUST declare at least one thread** — there is no implicit default; a
-partition always has an explicit thread set. An **fb.handler runs on a thread of its
-partition**: `thread` is optional when the partition has exactly one thread (it defaults to
-that one) and **required** when the partition declares several. Multiple threads per core is
-what makes the `thread` level earn its keep (preemption by priority → who actually held
-the core). loom2v rejects a partition with no thread, or an fb.handler whose `thread` isn't
-one of its partition's threads.
+Every **partition MUST declare at least one thread** — there is no implicit default. An **fb
+maps to a thread** (thread names are globally unique, so the partition is derived), and a
+**handler's trigger** is either `period_ms` (periodic — the scheduler dispatches it on the fb's
+thread, producing an **FB** trace record) or `irq = "<vector>"` (interrupt-triggered — it runs
+in ISR context, producing an **ISR** record). loom2v rejects a partition with no thread, a
+duplicate thread/fb name, an fb whose `thread` doesn't resolve, or a handler with no trigger.
+Multiple threads per partition (preemption by priority → who actually held the core) is the
+**target**; today loom2v generates one thread per partition, and both `irq` handlers and >1
+thread/partition are rejected until that codegen lands.
 
 ## Identity: a generated manifest (threads + fb.handlers)
 

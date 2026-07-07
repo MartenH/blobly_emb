@@ -18,6 +18,7 @@ config:
 gen:
 	@mkdir -p gen ports sig bin
 	$(V) run $(REPO)/tools/dbc2cfg/gen.v bus.dbc gen/dbc_gen.v
+	$(V) run $(REPO)/tools/ecucheck/gen.v ecu.toml
 	$(V) run $(REPO)/tools/cfg2v/gen.v  ecu.toml gen/ecu_gen.v
 	$(V) run $(REPO)/tools/loom2v/gen.v ecu.toml bus.dbc sig/signals_gen.v ports/ports_gen.v gen/loom_gen.v gen/trace-manifest.csv
 
