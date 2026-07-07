@@ -78,13 +78,13 @@ else is platform-independent V above the OSAL/driver line.
 ```mermaid
 graph LR
   subgraph c0["core 0 — IO"]
-    BR["bus bridge(s)<br/>COM · codec · E2E/SecOC · router · ISO-TP/UDS"]
+    BR["bus bridge — polled loop, one per bus<br/>COM · codec · E2E/SecOC · router · ISO-TP/UDS<br/><i>(target: a first-class comm thread)</i>"]
   end
   subgraph c1["core 1 — app"]
-    PA["partition: Loom + its FBs"]
+    PA["partition → thread: Loom + its FBs"]
   end
   subgraph cn["core N — app"]
-    PB["partition: Loom + its FBs"]
+    PB["partition → thread: Loom + its FBs"]
   end
   SHM[("shared IOC region<br/>mmap MAP_SHARED  /  shared SRAM")]
   CAN["CAN driver ↔ bus(es)"]
@@ -95,11 +95,24 @@ graph LR
   BR <--> CAN
 ```
 
-Each **partition** is one OS task pinned to a core (a forked process on host, a
-ThreadX task on target) running a **Loom** that dispatches that partition's FBs. The
-**bus bridges** run on the IO core (one per bus). The only shared memory is the
-**IOC region**; cross-core signals cross there and nowhere else (the basis for MPU
-isolation — see `memory-protection.md`).
+Each **partition** is the unit of **MPU isolation**, pinned to a core; inside it runs one
+or more **threads** — the OS scheduling unit (a spawned loop on host, a ThreadX thread on
+target) — each a **Loom** dispatching the FBs mapped to it. An **fb names a thread** (thread
+names are globally unique, so the partition is *derived* — a thread belongs to one
+partition); a handler's trigger is a **period** (dispatched on its thread) or an **interrupt**
+(`irq`, ISR context). *(Today loom2v generates one thread per partition; multiple threads and
+`irq` handlers are the target, not yet generated. The MPU boundary is enforced on the ThreadX
+target and modeled by codegen convention on the host — see `memory-protection.md`.)*
+
+Today the **bus bridge** runs as a **polled** per-bus loop on the IO core — it drains
+`recv`, DBC-decodes rx into IOC, encodes tx from IOC, and serves ISO-TP/UDS + routing. The
+**target** model makes it a first-class **comm thread** per bus (rx driven by the CAN **Rx
+interrupt**, tx periodic) so that *every* thread — app **and** platform — appears in the
+runtime trace **by name** and the platform is never hidden (bridge / ISO-TP overhead is often
+where the time goes; see `telemetry.md`). *(The comm thread, its Rx-interrupt path, and its
+manifest entry are all target — today the bridge polls and the manifest names app threads
+only; NM is configured but not yet generated into the bridge.)* The only shared memory is the
+**IOC region**; cross-core signals cross there and nowhere else (the basis for MPU isolation).
 
 ## Data-flow paths
 
@@ -154,13 +167,18 @@ sequenceDiagram
 | Codec / bridge / glue / tables | `gen/` | generated (`dbc2cfg`, `cfg2v`, `loom2v`) |
 | Scheduler | `loom/` | framework |
 | Comms | `comm/com`, `comm/e2e`, `comm/secoc`, `comm/isotp`, `comm/uds`, `comm/nm` (+ `comm/nm_can` binding) | framework |
+| Observability | `comm/telem` (processor load), `comm/trace` (thread/handler trace) | framework |
 | Platform line | `osal/` (cores/time/IOC), `driver/` (CAN) | framework + C shims (see `porting.md`) |
 | Entry | `main.v` | hand (tiny: open channels, `gen.run`) |
 
-The build-time generators in `tools/` (`dbc2cfg`, `cfg2v`, `loom2v`, `sigmap`) turn
-the config + DBC into the `sig/ports/gen` code; see `ways-of-working.md` for how
-teams operate around that, and `configuration.md` for what each config section
-generates.
+The build-time tools in `tools/` turn the config + DBC into the `sig/ports/gen` code.
+**`ecucheck`** validates `ecu.toml` — unknown keys with "did you mean", types, and the
+cross-field rules (via the shared **`ecumodel`**, the one place those rules live so the
+validator and the generator can't drift) — **before the generators that consume the config**
+(`cfg2v`, `loom2v`, `sigmap`), so no config error reaches codegen. (`dbc2cfg` reads the *DBC*,
+not `ecu.toml`, and runs independently.) `loom2v` also emits the trace **manifest** mapping
+thread/handler ids → names. See `ways-of-working.md` for how teams operate around that, and
+`configuration.md` for what each config section generates.
 
 ## Transport scope — CAN today, Ethernet later
 
