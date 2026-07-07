@@ -188,27 +188,42 @@ response time and invocation count per handler. Cost: two `now()` reads per disp
 negligible with the DWT cycle counter. On a no-IRQ polled core this is also exact CPU
 time; where ISRs run, subtract the ISR time (an ISR-duration counter the OSAL exposes).
 
-### ThreadX (preemptive) — profile kit + state-change hook → CPU time
+### ThreadX (preemptive) — the execution-change-notify hooks
 
-When partitions run as ThreadX threads, the thread can be preempted (ISRs,
-higher-priority threads). To get true CPU time and see preemption:
+Thread switches and ISRs are captured through ThreadX's **execution-change-notify** hooks —
+**not** `TX_THREAD_STATE_CHANGE`. That macro fires on block/unblock/sleep/terminate, *not* on
+the running↔preempted transition: a preempted thread stays `TX_READY` (the running thread is
+just the `TX_READY` one `_tx_thread_current_ptr` points at), so preemption changes no state
+field. The real swap point is `_tx_thread_schedule`. Build the kernel with
+**`TX_ENABLE_EXECUTION_CHANGE_NOTIFY`** and the port assembly calls four functions at exactly
+the points we need — **we supply them** (verified in `utility/execution_profile_kit/` and the
+Cortex port `tx_thread_context_save`, where each call is `#ifdef TX_ENABLE_EXECUTION_CHANGE_NOTIFY`):
 
-- Enable ThreadX's **execution-profile kit** (`TX_EXECUTION_PROFILE_ENABLE`) for
-  per-thread accumulated CPU time — read via `tx_thread_execution_time_get()` at the
-  bracket boundaries; the delta is CPU time excluding preemption.
-- Override the **`TX_THREAD_STATE_CHANGE`** macro (the direction the closed
-  [ThreadX PR #429](https://github.com/eclipse-threadx/threadx/pull/429) was steered
-  toward) to timestamp ready→running latency and preempted intervals per thread.
+| we implement | kernel calls it from | we do |
+|---|---|---|
+| `_tx_execution_thread_enter(thread_ptr)` | `_tx_thread_schedule` (a thread starts running) | emit a thread-switch record (`to_thread` = its id, time) |
+| `_tx_execution_thread_exit()`            | `_tx_thread_system_return` (a thread stops)      | close the outgoing slot |
+| `_tx_execution_isr_enter()`              | `_tx_thread_context_save` (ISR begins)           | pause thread accounting; opt. per-vector `u16 irq` record |
+| `_tx_execution_isr_exit()`               | `_tx_thread_context_restore` (ISR ends)          | resume thread accounting |
 
-The OSAL exposes these behind a stable seam (e.g. `osal.thread_cpu_time_us()`,
-`osal.preempt_us()`), so loom's bracket recovers CPU time on ThreadX while staying a
-no-op (response == CPU) on a polled bare-metal core.
+- **`reason`** comes from the **outgoing** thread's `tx_thread_state` at the switch:
+  `TX_READY` → *preempted*; a suspend state → *blocked/yielded* (the suspend kind
+  distinguishes); `TX_COMPLETED`/`TX_TERMINATED` → *exited*. No guessing.
+- **ISRs** are captured with no per-ISR instrumentation — *provided* the ISR routes through
+  `_tx_thread_context_save`/`_tx_thread_context_restore` (a per-Cortex requirement; the port's
+  ISR wrappers must be wired). CPU-vs-response time is then the thread's run time minus the
+  ISR bucket, computed in these same hooks.
+- This needs **only** `TX_ENABLE_EXECUTION_CHANGE_NOTIFY` + our four functions — not the full
+  execution-profile kit. That kit is just an alternative *consumer* of the same hooks (it
+  `#define`s the notify flag and supplies its own versions); we supply ours instead.
 
-> Granularity: FBs within a partition are cooperatively scheduled inside **one** thread,
-> so the kernel sees the *partition/thread*, not each handler. Per-handler timing comes
-> from the loom bracket; the kernel profile corrects for preemption **of the thread**
-> during that bracket. loom owns intra-partition timing; the kernel owns
-> inter-thread/ISR preemption.
+The OSAL exposes this behind a stable seam so the same loom/trace code is a no-op
+(response == CPU, no switches) on a polled bare-metal core.
+
+> Granularity: with the thread model above a partition can run **several** threads, so the
+> kernel's switch hook *is* the coarse thread trace directly. fb.handler timing *within* a
+> thread comes from the loom bracket (`run_profiled`); the kernel owns inter-thread + ISR,
+> loom owns intra-thread fb.handler timing.
 
 ## Recording: per-core SPSC buffers
 
@@ -505,9 +520,10 @@ captured trace drives the timeline and histograms.
 3. **P3 — ring/FIFO capture + software trigger** (freeze-the-ring, pre/post split; signal
    trigger event-driven at the write site, address poll optional; the pluggable
    `trace_trigger()` seam with `source = "hw"` reserved). `REQ-TRACE-006/007`.
-4. **P4 — ThreadX preemption + thread-switch (swimlane) capture** (execution-profile kit
-   for CPU time; the `TX_THREAD_STATE_CHANGE` hook feeds thread-switch records into the
-   same ring, so a dump carries the context-switch timeline). `REQ-TRACE-005/008`.
+4. **P4 — ThreadX preemption + thread-switch capture** (`TX_ENABLE_EXECUTION_CHANGE_NOTIFY`;
+   our `_tx_execution_thread_enter/exit` emit thread-switch records at `_tx_thread_schedule`,
+   `reason` from the outgoing thread's state; ISR enter/exit for the ISR bucket).
+   `REQ-TRACE-005/008`.
 5. **P4b — multi-core dump-in-one-command** (`core_mask` fan-out; per-core self-describing
    ISO-TP blocks, gathered over IOC). `REQ-TRACE-009`.
 6. **P5 — blobly_net**: load the manifest, decode records, render the timeline / jitter /
@@ -516,9 +532,10 @@ captured trace drives the timeline and histograms.
 > **Host vs target.** The record kinds, codecs, `core_mask` control, and multi-core dump
 > fan-out are portable and verified on host/vcan (multi-core = several loom schedulers in
 > one process, one bus loop). The **source** of thread-switch records is the ThreadX
-> `TX_THREAD_STATE_CHANGE` hook, which has no equivalent on the cooperative host — so the
-> host harness injects synthetic switch records to exercise the codec/dump end-to-end,
-> exactly as the DWT `hw` trigger is seam-only until silicon.
+> execution-change-notify hooks (`_tx_execution_thread_enter/exit` at `_tx_thread_schedule`),
+> which have no equivalent on the cooperative host — so the host harness injects synthetic
+> switch records to exercise the codec/dump end-to-end, as the DWT `hw` trigger is seam-only
+> until silicon.
 
 ## Requirements
 
@@ -550,11 +567,11 @@ their phase lands, so nothing is marked covered prematurely:
   a single trigger seam that admits additional sources (incl. a future hardware
   watchpoint for arbitrary memory) without redesign. *(no debug HW; no cross-partition
   reads)*
-- **REQ-TRACE-008** — where the kernel is preemptive, the ECU shall capture thread
-  (partition) context switches into the same per-core trace buffer as handler
-  invocations, each recording the from/to thread, timestamp, and reason, so a dump yields
-  the context-switch (swimlane) timeline. *(thread-switch record kind; ThreadX
-  state-change hook the source, no-op on a cooperative core)*
+- **REQ-TRACE-008** — where the kernel is preemptive, the ECU shall capture thread context
+  switches, each recording the thread now running, timestamp, and reason (the outgoing
+  thread's fate), so a dump yields the context-switch timeline. *(ThreadX
+  execution-change-notify hooks the source: `_tx_execution_thread_enter/exit`; no-op on a
+  cooperative core)*
 - **REQ-TRACE-009** — a single control command shall address several cores at once (a core
   bitmask); a multi-core dump shall stream one self-describing block per selected core,
   each gathered from its owning core over IOC (no direct cross-core buffer read).
