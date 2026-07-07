@@ -6,7 +6,9 @@ grouped, deadline-aware timeline lanes. It is the interface a visualization tool
 (blobly_net) loads alongside the frame decoders; `loom2v` will generate it from
 `ecu.toml`. See [telemetry.md](telemetry.md) for the wire formats it complements.
 
-`examples/trace_demo/trace-manifest.json` is a working fixture (the 3-handler demo).
+`examples/trace_multicore/trace-manifest.json` is a working fixture (2 cores, 4 handlers).
+(`trace_demo` is now generated from `ecu.toml` — see its `gen/trace-manifest.csv`, the CSV form
+`loom2v` emits, which additionally carries the trace frame ids under `# trace frames`.)
 
 ## Schema (v1, JSON)
 
@@ -15,8 +17,7 @@ grouped, deadline-aware timeline lanes. It is the interface a visualization tool
   "version": 1,               // manifest schema version
   "time_unit_us": 1,          // unit of every *_us field on the wire and here (µs today)
   "frames": {                 // only the ids this ECU actually emits (config, not fixed)
-    "loaddetail_id":  2017,   // 0x7E1  LoadDetail  (present iff LoadDetail is sent; the
-                              //        trace_demo fixture omits it — it sends no load)
+    "loaddetail_id":  2017,   // 0x7E1  LoadDetail  (present iff LoadDetail is sent)
     "cmd_id":         2018,   // 0x7E2  TraceCmd    (host -> target)
     "rsp_id":         2019,   // 0x7E3  TraceRsp
     "handlerstat_id": 2020,   // 0x7E4  HandlerStat (live per-handler stats)

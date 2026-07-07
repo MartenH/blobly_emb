@@ -220,6 +220,18 @@ pub fn validate(doc toml.Doc) []string {
 		// (used as-is — allocating a non-colliding id is the author's responsibility) or the name
 		// of a message in bus.dbc. The name case is resolved + checked-to-exist by loom2v, which
 		// loads the DBC; this validator doesn't, so it does not police the ids here.
+
+		// trigger: an "overrun" source needs a positive budget_us, else the ring never freezes and
+		// a dump has nothing to read — a silently useless capture.
+		if tg := trm['trigger'] {
+			tgm := tg.as_map()
+			if str_of(tgm, 'source') == 'overrun' {
+				b := tgm['budget_us'] or { toml.Any(0) }
+				if !(b is i64) || b.i64() <= 0 {
+					errs << '[trace] trigger source "overrun" needs a positive budget_us (µs a handler may run before the ring freezes)'
+				}
+			}
+		}
 	}
 	return errs
 }

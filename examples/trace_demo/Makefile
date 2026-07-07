@@ -33,7 +33,9 @@ run: all
 watch:
 	candump vcan0,7E4:7FF
 
+# only build outputs — gen/ports/sig are generated but committed (like the other examples), so
+# `make clean` must not delete tracked sources and leave the checkout dirty / un-buildable.
 clean:
-	rm -rf bin gen ports sig
+	rm -rf bin
 
 .PHONY: all gen build run vcan watch clean

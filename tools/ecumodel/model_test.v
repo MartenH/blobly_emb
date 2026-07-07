@@ -206,3 +206,36 @@ buffer_records = 0x100000001
 ' + app)
 	assert e.any(it.contains('buffer_records') && it.contains('out of range'))
 }
+
+// an "overrun" trigger with no positive budget_us never freezes the ring -> reject it.
+fn test_trace_overrun_trigger_needs_budget() {
+	no_budget := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+trigger = { source = "overrun" }
+' + app)
+	assert no_budget.any(it.contains('positive budget_us'))
+
+	zero_budget := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+trigger = { source = "overrun", budget_us = 0 }
+' + app)
+	assert zero_budget.any(it.contains('positive budget_us'))
+
+	ok := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+trigger = { source = "overrun", budget_us = 500 }
+' + app)
+	assert ok.filter(it.contains('budget_us')).len == 0
+}

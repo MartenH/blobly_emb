@@ -77,7 +77,7 @@ pub fn run(can0 can.Channel) {
 	ts.buf.start()
 	sched.set_trace_hook(trace_capture, &ts)
 	mut link := isotp.Link{}
-	mut dumpbuf := [512]u8{}
+	mut dumpbuf := [512]u8{} // buffer_records x 8, one ISO-TP payload
 	mut last_push := u64(0)
 	mut last_count := [3]u32{}
 	mut last_telem := u64(0)

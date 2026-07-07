@@ -448,13 +448,20 @@ fn main() {
 		}
 	}
 	// Single-core inline trace: exactly one (fb-bearing) partition, host, pinned to the trace
-	// bus's core — so one superloop owns the channel and drives capture + cmd/rsp + dump + the
-	// HandlerStat heartbeat directly (no IOC). Multi-core trace (IOC fan-out + a comm thread)
-	// is not generated yet.
+	// bus's core, and NO COM bus bridge — so one superloop owns the channel and drives capture +
+	// cmd/rsp + dump + the HandlerStat heartbeat directly (no IOC, nothing else to schedule). A
+	// bridge (external signals / ISO-TP / routes) or multiple cores need the comm-thread model,
+	// not generated yet.
 	single_part := if by_part.keys().len == 1 { by_part.keys()[0] } else { '' }
-	trace_inline := trace_on && !target_on && single_part != ''
+	has_bridge := has_external || isotp_conns.len > 0 || has_routes
+	trace_inline := trace_on && !target_on && single_part != '' && !has_bridge
 		&& (core_of[single_part] or { 0 }) == trace_core
 	if trace_on && !target_on && !trace_inline {
+		if has_bridge {
+			panic('loom2v: [trace] on an app with a COM bus bridge (external signals / ISO-TP / ' +
+				'routes) is not generated yet — the bridge must run on its comm thread alongside ' +
+				'trace (the multi-core / comm-thread phase)')
+		}
 		panic('loom2v: trace codegen currently supports a single partition on the trace bus ' +
 			'core only (multi-core trace is not generated yet)')
 	}
@@ -1102,6 +1109,28 @@ fn main() {
 		//     core, so no IOC fan-out (that's the multi-core path, not generated yet). ---
 		part := single_part
 		chp := snake(eff_trace_bus)
+		pcore := core_of[part] or { 0 } // the core the partition (and this loop) is pinned to
+		// The single-core host capture only produces fb records (no thread switches / ISRs on a
+		// polled loop), so a thread-only level would capture nothing.
+		if trace_level !in ['thread+fb', 'all'] {
+			panic('loom2v: [trace] level "${trace_level}" needs thread/ISR events, which the ' +
+				'single-core host capture does not have — use "thread+fb" or "all" (thread/ISR ' +
+				'capture is the ThreadX target)')
+		}
+		// The inline runner owns only the trace bus channel, so it can only fold CpuLoad onto that
+		// bus. A telemetry bus that differs from the trace bus needs its own channel/thread.
+		if telem_on && telem_bus != eff_trace_bus {
+			panic('loom2v: [trace] inline runner sends CpuLoad on the trace bus "${eff_trace_bus}", ' +
+				'but [telemetry].bus is "${telem_bus}" — cross-bus telemetry with inline trace is ' +
+				'not generated yet')
+		}
+		// The dump is one ISO-TP payload (<= comm/isotp.max_payload = 512 bytes = 64 records), so a
+		// deeper ring can't be streamed in a single block yet.
+		if trace_buffer_records > 64 {
+			panic('loom2v: [trace] buffer_records ${trace_buffer_records} exceeds the single ISO-TP ' +
+				'dump (64 records / 512 bytes); a larger ring needs a multi-block dump — not ' +
+				'generated yet')
+		}
 		mut pre := trace_pre_pct
 		if pre > 100 {
 			pre = 100
@@ -1152,7 +1181,7 @@ fn main() {
 		glue << '\tts.buf.start()'
 		glue << '\tsched.set_trace_hook(trace_capture, &ts)'
 		glue << '\tmut link := isotp.Link{}'
-		glue << '\tmut dumpbuf := [512]u8{}'
+		glue << '\tmut dumpbuf := [${trace_buffer_records * 8}]u8{} // buffer_records x 8, one ISO-TP payload'
 		glue << '\tmut last_push := u64(0)'
 		nhandlers := (all_regs[part] or { []string{} }).len // one sched.every() line per handler
 		glue << '\tmut last_count := [${nhandlers}]u32{}'
@@ -1169,7 +1198,7 @@ fn main() {
 		glue << '\t\t\t\t\tcb[j] = rx.data[j]'
 		glue << '\t\t\t\t}'
 		glue << '\t\t\t\tc := trace.decode_cmd(cb)'
-		glue << '\t\t\t\tmut rspb, do_dump, addressed := trace.handle_cmd(mut ts.buf, c, 0)'
+		glue << '\t\t\t\tmut rspb, do_dump, addressed := trace.handle_cmd(mut ts.buf, c, ${pcore})'
 		glue << '\t\t\t\tif addressed {'
 		glue << '\t\t\t\t\tif c.opcode == trace.op_arm || c.opcode == trace.op_start'
 		glue << '\t\t\t\t\t\t|| c.opcode == trace.op_reset {'
@@ -1178,7 +1207,7 @@ fn main() {
 		glue << '\t\t\t\t\t\tlink = isotp.Link{}'
 		glue << '\t\t\t\t\t}'
 		glue << '\t\t\t\t\tif do_dump {'
-		glue << '\t\t\t\t\t\tn := ts.buf.pack(&dumpbuf[0], 512)'
+		glue << '\t\t\t\t\t\tn := ts.buf.pack(&dumpbuf[0], ${trace_buffer_records * 8})'
 		glue << '\t\t\t\t\t\tif n > 0 && !link.send(&dumpbuf[0], n) {'
 		glue << '\t\t\t\t\t\t\trspb[1] = trace.result_busy'
 		glue << '\t\t\t\t\t\t}'
