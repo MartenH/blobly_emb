@@ -325,6 +325,16 @@ fn main() {
 			panic('loom2v: partition "${pname}" declares no [[partition.thread]] — ' +
 				'every partition needs at least one thread')
 		}
+		// Multiple OS threads per partition need per-thread schedulers, which this generator
+		// does not emit yet — every handler still runs in one `partition_<name>` scheduler.
+		// Reject >1 rather than accept a config the runtime silently flattens into one thread
+		// while the manifest reports several (that would corrupt thread-trace results). Lifted
+		// when per-thread scheduler generation lands.
+		if threads_of[pname].len > 1 {
+			panic('loom2v: partition "${pname}" declares ${threads_of[pname].len} threads — ' +
+				'multiple threads per partition is not generated yet (one scheduler per ' +
+				'partition today); declare a single [[partition.thread]] for now')
+		}
 	}
 	// An fb.handler runs on a thread of ITS partition: `thread` is optional when the
 	// partition has exactly one thread (defaults to it), required when it has several.

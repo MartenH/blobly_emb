@@ -59,19 +59,21 @@ Generated into the per-core loop loom2v already builds (`gen/loom_gen.v`), or a 
   per-core blocks + IOC read-out that `trace_multicore` does by hand).
 
 ### b) `gen/trace-manifest.csv` — the `_net` label interface
-One row per handler + one per thread, from the partitions/FBs:
+One row per handler + one per thread, from the partitions/FBs (matches what loom2v emits):
 ```
-# id,partition,core,fb,handler,period_us
-0,sense,0,SpeedFilter,on_10ms,10000
+# id,partition,core,fb,handler,period_us,thread
+0,sense,0,SpeedFilter,on_10ms,10000,main
 ...
-# thread,id,name,core
-thread,0,sense,0
-thread,1,ctrl,1
+# thread,id,name,core   (id 0 reserved = idle)
+thread,1,sense.main,0
+thread,2,ctrl.main,1
 ```
 - **`handler_id`**: assigned **globally, stably** across all partitions in declaration order
-  (partition, then fb, then handler) — the existing manifest contract.
-- **threads**: one per partition (= one ThreadX thread), 0-based `core` = the protocol core
-  index. (A future preemptive target adds ISR threads here.)
+  (partition, then fb, then handler) — the existing manifest contract. The trailing `thread`
+  column names the thread the handler runs on.
+- **threads**: one row per `[[partition.thread]]`, `id` assigned globally from **1** (id 0 is
+  reserved for idle, the THREAD-kind sentinel), `name` = `partition.thread`, 0-based `core`.
+  (ISRs get no row — an ISR's id *is* its raw vector.)
 
 ### c) `gen/trace.dbc` — symbolic decode + generator sending
 The observability frames with value tables (so `_net` shows `opcode 6 → "dump"` and can send
