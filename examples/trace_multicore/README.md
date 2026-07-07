@@ -52,12 +52,16 @@ and shades the interval a thread is switched out.
 
 ## Watch it in blobly_net
 
-`trace-multicore.blobnet` (+ `trace-manifest.csv`) is a ready-made blobly_net project: open
-it, Start the channel, and press **Dump** in the Trace Chart — blobly_net freezes both cores,
-dumps them in one command, reassembles the per-core ISO-TP blocks, and draws the multi-core
-swimlane (handler bars + thread-switch marks). A copy also ships at
-`blobly_net/projects/trace-multicore.blobnet` (blobly_net resolves the manifest from its own
-working dir). Run this demo first (`make vcan && make run`).
+`trace-multicore.blobnet` (+ `trace-manifest.csv` labels, `trace.dbc` frame names) is a
+ready-made blobly_net project. Open it, Start the channel, and use the Trace Chart:
+**Record** arms capture, **Stop** freezes it, **Dump** reads both cores out in one command —
+blobly_net reassembles the per-core ISO-TP blocks and draws the multi-core swimlane (handler
+bars + thread-switch marks). Record/Stop/Dump pause *recording*, not the cores.
+
+The demo also pushes a live **HandlerStat heartbeat** on `0x7E4` (~1 Hz), so you see traffic
+immediately without commanding a dump. A copy of the project also ships at
+`blobly_net/projects/trace-multicore.blobnet` (blobly_net resolves paths from its own working
+dir). Run this demo first (`make vcan && make run`).
 
 ## Run it (raw CAN)
 

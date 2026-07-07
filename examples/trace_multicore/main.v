@@ -26,11 +26,13 @@ import os
 import osal
 import loom
 import comm.trace
+import comm.telem
 import comm.isotp
 import driver.can
 
 const cmd_id = u32(0x7E2)
 const rsp_id = u32(0x7E3)
+const stat_id = u32(0x7E4) // live HandlerStat heartbeat (per handler, ~1 Hz)
 const record_id = u32(0x7E5) // ISO-TP data: target -> host
 const dump_fc_id = u32(0x7E6) // ISO-TP flow control: host -> target
 const ncores = 2
@@ -323,10 +325,12 @@ fn main() {
 		cores[i].buf.start()
 		cores[i].sched.set_trace_hook(capture_hook, &cores[i])
 	}
-	println('trace_multicore: ${ncores} cores on ${ifname}; dump with core_mask (cmd 0x${cmd_id.hex()}); per-core blocks reassembled from IOC, streamed on 0x${record_id.hex()}')
+	println('trace_multicore: ${ncores} cores on ${ifname}; live HandlerStat heartbeat on 0x${stat_id.hex()} @1Hz; dump with core_mask (cmd 0x${cmd_id.hex()}) -> per-core blocks on 0x${record_id.hex()}')
 
 	mut bus := Bus{}
 	mut link := isotp.Link{}
+	mut last_stat := u64(0)
+	mut last_count := [16]u32{} // per global handler_id, for the count-delta
 
 	for {
 		// each core runs first and owns its buffer entirely.
@@ -483,6 +487,31 @@ fn main() {
 		}
 		if bus.tx_core >= 0 && !link.busy() { // the in-flight ISO-TP block finished (or aborted)
 			bus.tx_core = -1
+		}
+
+		// live heartbeat: push one HandlerStat per handler per core ~1 Hz on 0x7E4, so a
+		// monitor sees continuous traffic without commanding a dump (like trace_demo).
+		now := osal.now_us()
+		if now - last_stat >= 1_000_000 {
+			last_stat = now
+			for c in 0 .. ncores {
+				for i in 0 .. cores[c].sched.handler_count() {
+					gid := cores[c].id_base + u8(i)
+					st := cores[c].sched.handler_stat(i)
+					delta := st.count - last_count[gid]
+					last_count[gid] = st.count
+					payload := telem.encode_handlerstat(gid, 0, st.last_us, st.max_us, delta)
+					mut sf := can.Frame{
+						id:  stat_id
+						len: 8
+					}
+					for j in 0 .. 8 {
+						sf.data[j] = payload[j]
+					}
+					ch.send(sf)
+					cores[c].sched.reset_handler_max(i)
+				}
+			}
 		}
 
 		osal.sleep_us(1_000)

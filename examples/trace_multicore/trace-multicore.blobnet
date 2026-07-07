@@ -1,22 +1,28 @@
 # blobly_net project for this demo — open it to watch the multi-core capture as a swimlane.
 #
-# In blobly_net: open this project, Start the channel, then press "Dump" in the Trace Chart
-# (≣). blobly_net freezes both cores and dumps them in one command (core_mask), reassembles
-# each per-core ISO-TP block on 0x7E5 (flow control on 0x7E6), and draws the handler bars +
-# thread-switch marks. Run this demo first:  make vcan && make run
+# In blobly_net: open this project, Start the channel, then in the Trace Chart (≣) press
+# Record to arm capture, Stop to freeze, and Dump to read both cores out in one command
+# (core_mask). blobly_net reassembles each per-core ISO-TP block on 0x7E5 (flow control on
+# 0x7E6) and draws handler bars + thread-switch marks. Record/Stop/Dump pause RECORDING, not
+# the cores — handlers keep running. trace.dbc names the command + status frames (and the
+# generator can send them by name). Run this demo first:  make vcan && make run
 #
-# Note: blobly_net resolves the manifest path from ITS working directory, so a ready-to-open
-# copy also ships at blobly_net/projects/trace-multicore.blobnet -> manifests/trace-multicore.csv.
-# This copy is versioned with the demo; open it from this directory (or copy both files into
-# blobly_net) — the swimlane renders either way (handler names resolve when the manifest is
-# found, otherwise lanes read "handler N" / "thread N").
+# Paths are relative to blobly_net's working dir (it resolves manifest/DBC from where it is
+# launched, not from this file). Launch blobly_net from this directory, or use the
+# ready-to-open copy at blobly_net/projects/trace-multicore.blobnet. The swimlane renders
+# either way — handler names resolve when the manifest is found, else lanes read "handler N".
 project:
   name: trace-multicore
-  version: 1
+  version: 2
 
-channels:
+buses:
   - name: CAN1
-    type: can
-    interface: vcan0
+    adapter: vcan
+    address: vcan0
+    protocol: can
+    bitrate: 500000
     mode: monitor
+    enabled: true
     manifest: trace-manifest.csv
+    databases:
+      - trace.dbc
