@@ -78,7 +78,7 @@ else is platform-independent V above the OSAL/driver line.
 ```mermaid
 graph LR
   subgraph c0["core 0 — IO"]
-    BR["comm thread(s) — one per bus<br/>COM · codec · E2E/SecOC · router · ISO-TP/UDS"]
+    BR["bus bridge — polled loop, one per bus<br/>COM · codec · E2E/SecOC · router · ISO-TP/UDS<br/><i>(target: a first-class comm thread)</i>"]
   end
   subgraph c1["core 1 — app"]
     PA["partition → thread: Loom + its FBs"]
