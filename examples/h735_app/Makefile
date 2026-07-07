@@ -52,7 +52,8 @@ gen: gen/.stamp
 gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(REPO)/tools/loom2v/gen.v
 	@mkdir -p gen ports sig
 	cd $(REPO) && $(V) run tools/loom2v/gen.v examples/$(NAME)/ecu.toml examples/$(NAME)/bus.dbc \
-	  examples/$(NAME)/sig/signals_gen.v examples/$(NAME)/ports/ports_gen.v examples/$(NAME)/gen/loom_gen.v
+	  examples/$(NAME)/sig/signals_gen.v examples/$(NAME)/ports/ports_gen.v examples/$(NAME)/gen/loom_gen.v \
+	  examples/$(NAME)/gen/trace-manifest.csv
 	@touch gen/.stamp
 
 # 1) transpile the V stack (main + generated gen/ports/sig + app + loom/telem/can) to
