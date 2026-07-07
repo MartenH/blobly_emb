@@ -195,6 +195,12 @@ mut:
 	used     u32  // valid records (0..capacity)
 	post_rem u32  // ring: records still to capture after a trigger
 	pending  bool // ring: a trigger is armed
+	// ring: an epoch record is an ordinary ring entry, so it can age out while records that
+	// still reference its base survive. When the oldest evicted record is an epoch we remember
+	// its base here (the base of every surviving record older than the first in-buffer epoch)
+	// and prepend it on dump, so a wrapped window is never decoded against a lost base.
+	prefix_base u32
+	has_prefix  bool
 }
 
 // new_buffer wraps a caller-owned fixed backing array of `capacity` records (no alloc:
@@ -223,6 +229,8 @@ pub fn (mut t TraceBuffer) start() {
 	t.used = 0
 	t.post_rem = 0
 	t.pending = false
+	t.prefix_base = 0
+	t.has_prefix = false
 }
 
 pub fn (t TraceBuffer) capacity() u32 {
@@ -254,6 +262,15 @@ pub fn (mut t TraceBuffer) push(r Record) {
 			}
 		}
 		.ring {
+			// full ring: t.head is the oldest slot, about to be evicted. If it's an epoch,
+			// remember its base — the surviving records after it still decode against it.
+			if t.used == t.cap {
+				old := unsafe { t.buf[t.head] }
+				if old.is_epoch() {
+					t.prefix_base = old.epoch_base()
+					t.has_prefix = true
+				}
+			}
 			unsafe {
 				t.buf[t.head] = r
 			}
@@ -312,6 +329,19 @@ pub fn (mut t TraceBuffer) trigger() {
 // for an ISO-TP dump; `out` is a caller-owned fixed buffer (no alloc).
 pub fn (t TraceBuffer) pack(out &u8, out_cap int) int {
 	mut n := 0
+	// If an epoch aged out of the ring, lead with it so the oldest records keep their base.
+	if t.has_prefix {
+		if n + 8 > out_cap {
+			return n
+		}
+		p := encode_record(new_epoch(t.prefix_base))
+		unsafe {
+			for j in 0 .. 8 {
+				out[n + j] = p[j]
+			}
+		}
+		n += 8
+	}
 	for i in u32(0) .. t.used {
 		if n + 8 > out_cap {
 			break
@@ -338,6 +368,17 @@ pub fn (t TraceBuffer) pack_block(out &u8, out_cap int, core u8) int {
 	}
 	mut n := 8 // reserve the header slot; backfill it once the count is known
 	mut count := u32(0)
+	// A preserved epoch (aged out of the ring) leads the block's records so the count covers it.
+	if t.has_prefix && n + 8 <= out_cap {
+		p := encode_record(new_epoch(t.prefix_base))
+		unsafe {
+			for j in 0 .. 8 {
+				out[n + j] = p[j]
+			}
+		}
+		n += 8
+		count++
+	}
 	for i in u32(0) .. t.used {
 		if n + 8 > out_cap {
 			break

@@ -198,3 +198,34 @@ fn test_epoch_carries_full_u32_base() {
 	assert e.epoch_base() == base
 	assert e.kind() == kind_control
 }
+
+// When an epoch record ages out of a ring while records that depend on it survive, the dump
+// must still carry that base — pack() re-emits it as a leading epoch.
+fn test_ring_preserves_evicted_epoch_base() {
+	base := u32(0x0200_0000) // past one u24 wrap
+	mut backing := [4]Record{}
+	mut t := new_buffer(&backing[0], 4, .ring, 0)
+	t.start()
+	t.push(new_epoch(base)) // origin for what follows
+	t.push(new_fb(1, 0, 10, 5))
+	t.push(new_fb(2, 0, 20, 5))
+	t.push(new_fb(3, 0, 30, 5)) // ring full: [epoch, fb1, fb2, fb3]
+	t.push(new_fb(4, 0, 40, 5)) // evicts the epoch; ring = [fb1, fb2, fb3, fb4]
+	mut out := [64]u8{}
+	n := t.pack(&out[0], 64)
+	assert n == 8 * 5 // a leading epoch + the 4 surviving records
+	mut hb := [8]u8{}
+	for j in 0 .. 8 {
+		hb[j] = out[j]
+	}
+	lead := decode_record(hb)
+	assert lead.is_epoch()
+	assert lead.epoch_base() == base // the aged-out base is preserved
+	// and the first real record after it is fb1 (the oldest survivor)
+	mut rb := [8]u8{}
+	for j in 0 .. 8 {
+		rb[j] = out[8 + j]
+	}
+	first := decode_record(rb)
+	assert first.kind() == kind_fb && first.id() == 1
+}
