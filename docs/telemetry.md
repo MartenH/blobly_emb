@@ -369,46 +369,52 @@ never overflows. `from_thread` is implicit — the previous record's `to_thread`
 ### Fine — thread + fb.handler trace (8-byte records)
 
 Adds the fb.handler runs *inside* each thread (and, on a preemptive target, explicit
-switch events). A fixed 8-byte cell, three kinds told apart by two `flags` bits
-(`bit7 = thread-switch`, `bit6 = block-header`; both clear = an fb.handler run). The
-**`handler_id` is a `u16`** — a real ECU can easily have >256 fb.handlers (e.g. `scale`) —
-so it takes two bytes; the timestamp is a `u24` (16.7 s at 1 µs, or longer via `time_unit`),
-which is generous for the fine level's short window and keeps every kind at 8 bytes with a
-single timestamp width:
+switch events). A fixed 8-byte cell, three kinds told apart by two **kind** bits in the
+`flags` byte — which is **`b0` in every kind** so a decoder always finds it at a fixed
+offset (`bit7 = thread-switch`, `bit6 = block-header`; both clear = an fb.handler run).
+`handler_id` is a `u16` (a real ECU can have >256 fb.handlers, e.g. `scale`); the timestamp
+is a `u24` (16.7 s at 1 µs, longer via `time_unit`) — generous for the fine level's short
+window and one width across kinds.
 
 *fb.handler-run record* (kind = 0 — one invocation):
 
 ```
-b0-1  handler_id  (u16, LE, global)   >256 fb.handlers OK
-b2    flags       (bit0 overran | bit1 preempted | bit2 first-run | bit3 saturated)
+b0    flags       (bit0 overran | bit1 preempted | bit2 first-run | bit3 saturated; kind = 0)
+b1-2  handler_id  (u16, LE, global)   >256 fb.handlers OK
 b3-5  start_us    (u24, LE)   relative to capture start
 b6-7  cpu_us      (u16)       saturating; = response time on a no-IRQ bare-metal core
 ```
 
 *Thread-switch record* (kind = `bit7`) — the explicit context switch, interleaved so a fine
 dump is one timeline of *which fb.handler ran* and *the thread switches between them*
-(`thread_id` stays `u8` — threads are few):
+(`thread_id` stays `u8` — threads are few). No `from_thread`: it's the currently-running
+thread the decoder already tracks (the previous switch's `to_thread`, or the thread of the
+last fb.handler-run record):
 
 ```
-b0    to_thread   (u8)    the thread switched TO
-b1    flags       (bit7 set)
-b2    from_thread (u8)    the thread switched FROM
+b0    flags       (bit7 set)
+b1    to_thread   (u8)    the thread switched TO
+b2    reason      0 preempt | 1 block/yield | 2 resume | 3 isr-enter | 4 isr-exit
 b3-5  start_us    (u24, LE)   relative to capture start — when the switch happened
-b6    reason      0 preempt | 1 block/yield | 2 resume | 3 isr-enter | 4 isr-exit
-b7    reserved
+b6-7  reserved
 ```
 
 *Block-header record* (kind = `bit6`) — one leading entry per core in a multi-core dump so
 each ISO-TP block is **self-describing** (split the stream by core without correlating to
-the rsp). The coarse level uses the same idea with a 4-byte header (`b0 = core`, then the
-count); the fine level's is 8 B:
+the rsp). `flags` at `b0` here too:
 
 ```
-b0    core        (u8)
-b1    flags       (bit6 set)
-b2-5  count       (u32)   records that follow in this block
+b0    flags       (bit6 set)
+b1    core        (u8)
+b2-5  count       (u32, LE)   records that follow in this block
 b6-7  reserved
 ```
+
+The **coarse** level has no kind byte (its 4 bytes are all thread_id + reason + delta), so
+it frames a multi-core dump **positionally**: each per-core block is a 4-byte header
+(`b0 = core`, `b1-3 = count` u24) followed by exactly `count` thread records, then the next
+header. A single-core coarse dump has no header — the TraceRsp's `records_used` is the count.
+(One level per buffer, so coarse and fine records never mix.)
 
 A **single-core dump** is just that core's `count` records as one **ISO-TP** block — the
 TraceRsp already names the core, so no header is needed (this is what the single-core
