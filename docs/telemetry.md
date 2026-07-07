@@ -194,21 +194,40 @@ Thread switches and ISRs are captured through ThreadX's **execution-change-notif
 **not** `TX_THREAD_STATE_CHANGE`. That macro fires on block/unblock/sleep/terminate, *not* on
 the running↔preempted transition: a preempted thread stays `TX_READY` (the running thread is
 just the `TX_READY` one `_tx_thread_current_ptr` points at), so preemption changes no state
-field. The real swap point is `_tx_thread_schedule`. Build the kernel with
-**`TX_ENABLE_EXECUTION_CHANGE_NOTIFY`** and the port assembly calls four functions at exactly
-the points we need — **we supply them** (verified in `utility/execution_profile_kit/` and the
-Cortex port `tx_thread_context_save`, where each call is `#ifdef TX_ENABLE_EXECUTION_CHANGE_NOTIFY`):
+field. The real swap point is the context-switch handler (`_tx_thread_schedule` / the port's
+PendSV `__tx_ts_handler`). Build the kernel with **`TX_ENABLE_EXECUTION_CHANGE_NOTIFY`** and
+the port assembly calls four functions at exactly the points we need — **we supply them**:
 
 | we implement | kernel calls it from | we do |
 |---|---|---|
-| `_tx_execution_thread_enter(thread_ptr)` | `_tx_thread_schedule` (a thread starts running) | emit a thread-switch record (`to_thread` = its id, time) |
-| `_tx_execution_thread_exit()`            | `_tx_thread_system_return` (a thread stops)      | close the outgoing slot |
-| `_tx_execution_isr_enter()`              | `_tx_thread_context_save` (ISR begins)           | pause thread accounting; opt. per-vector `u16 irq` record |
-| `_tx_execution_isr_exit()`               | `_tx_thread_context_restore` (ISR ends)          | resume thread accounting |
+| `_tx_execution_thread_enter()` | context switch, **after** `_tx_thread_current_ptr` is repointed to the new thread | emit a thread record (`to_thread` = `current_ptr` id, time) |
+| `_tx_execution_thread_exit()`  | context switch, **before** `current_ptr` is repointed (still the outgoing thread) | read `reason` off the outgoing thread; close its slot |
+| `_tx_execution_isr_enter()`    | `_tx_thread_context_save` (ISR begins)           | pause thread accounting; opt. per-vector `u16 irq` record |
+| `_tx_execution_isr_exit()`     | `_tx_thread_context_restore` (ISR ends)          | resume thread accounting |
+
+Both switch hooks take **no arguments** — they read `_tx_thread_current_ptr` (the enter hook
+after it points at the incoming thread, the exit hook while it still points at the outgoing
+one), so no `from_thread` need be passed.
+
+> **Verified at runtime (not just in source).** Built the stock Cortex-M7 port
+> (`ports/cortex_m7/gnu`) with `TX_ENABLE_EXECUTION_CHANGE_NOTIFY` + our four stub hooks and
+> ran it under QEMU (`mps2-an500`, 3 threads + 100 Hz SysTick). `thread_enter`/`thread_exit`
+> climbed **balanced** (276/276), `isr_enter`/`isr_exit` tracked the tick (90 over ~300 ms =
+> 100 Hz), and the enter hook read the correct incoming thread name each time. The exit hook
+> firing *before* `current_ptr` is repointed (confirmed in `tx_thread_schedule.S`: the
+> `BL _tx_execution_thread_exit` precedes the `_tx_thread_current_ptr` store) is what lets
+> `reason` be read from the outgoing thread with no argument passing. The **Linux/POSIX sim
+> port does *not* call these hooks** (pthread scheduler, hooks never wired in) — so this
+> capture path is Cortex-target-only and must be seam-stubbed on the host.
 
 - **`reason`** comes from the **outgoing** thread's `tx_thread_state` at the switch:
   `TX_READY` → *preempted*; a suspend state → *blocked/yielded* (the suspend kind
   distinguishes); `TX_COMPLETED`/`TX_TERMINATED` → *exited*. No guessing.
+- **System Timer Thread.** With the default (non-`TX_TIMER_PROCESS_IN_ISR`) build, ThreadX
+  runs a hidden **System Timer Thread** that wakes to expire `tx_thread_sleep`/timers — it
+  showed up in the spike as a real scheduled thread. The generated thread manifest must
+  reserve an id for it (or the build must set `TX_TIMER_PROCESS_IN_ISR`), else swap records
+  reference an unlabelled thread.
 - **ISRs** are captured with no per-ISR instrumentation — *provided* the ISR routes through
   `_tx_thread_context_save`/`_tx_thread_context_restore` (a per-Cortex requirement; the port's
   ISR wrappers must be wired). CPU-vs-response time is then the thread's run time minus the
