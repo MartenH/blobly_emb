@@ -12,6 +12,7 @@ module main
 
 import os
 import toml
+import tools.ecumodel
 
 // Typ is the expected shape of a key's value.
 enum Typ {
@@ -123,23 +124,25 @@ fn specs() map[string]map[string]Key {
 			'repeat_ms':     k(.int)
 			'wait_sleep_ms': k(.int)
 		}
+		// partition/thread/fb/handler required-ness + names + one-trigger live in ecumodel.validate
+		// (shared with loom2v); here the schema only checks unknown keys + types for them.
 		'partition':  {
-			'name':    req(.str)
-			'core':    req(.int)
+			'name':    k(.str)
+			'core':    k(.int)
 			'trusted': k(.boolean)
-			'thread':  sub(.arr, true, 'thread')
+			'thread':  sub(.arr, false, 'thread')
 		}
 		'thread':     {
-			'name':     req(.str)
+			'name':     k(.str)
 			'priority': k(.int)
 		}
 		'fb':         {
-			'name':    req(.str)
-			'thread':  req(.str)
-			'handler': sub(.arr, true, 'handler')
+			'name':    k(.str)
+			'thread':  k(.str)
+			'handler': sub(.arr, false, 'handler')
 		}
 		'handler':    {
-			'name':      req(.str)
+			'name':      k(.str)
 			'period_ms': k(.int)
 			'irq':       k(.str)
 			'reads':     k(.str_arr)
@@ -241,7 +244,9 @@ fn main() {
 	mut errs := []string{}
 	check_raw(os.read_file(path) or { '' }, mut errs)
 	check_table(doc.to_any().as_map(), 'top', sp, mut errs)
-	check_cross(doc, mut errs)
+	// the partition/thread/fb structural rules live in ecumodel, shared with loom2v so the
+	// gate and the generator can't drift.
+	errs << ecumodel.validate(doc)
 	fname := os.file_name(path)
 	if errs.len > 0 {
 		for e in errs {
@@ -359,90 +364,6 @@ fn actual(v toml.Any) string {
 	}
 }
 
-// --- cross-field rules (the ones a per-key schema can't express) ---
-fn check_cross(doc toml.Doc, mut errs []string) {
-	mut part_names := map[string]bool{}
-	mut thread_part := map[string]string{} // thread -> partition (globally unique)
-	mut fb_names := map[string]bool{}
-	for p in arr(doc, 'partition') {
-		m := p.as_map()
-		pname := str_of(m, 'name')
-		// A present-but-empty/invalid name passes the schema (it IS a string) but crashes
-		// loom2v (its ident_ok is unconditional) — check it here so `make check` == `make gen`.
-		// (A truly-missing name is already reported by the schema's required-key check.)
-		if 'name' in m {
-			if !ident_ok(pname) {
-				errs << 'partition name "${pname}" is not a valid identifier ([A-Za-z_][A-Za-z0-9_]*)'
-			} else if pname in part_names {
-				errs << 'duplicate partition name "${pname}" — partition names must be unique'
-			} else {
-				part_names[pname] = true
-			}
-		}
-		mut nthreads := 0
-		for t in arr_of(m, 'thread') {
-			nthreads++
-			tm := t.as_map()
-			tname := str_of(tm, 'name')
-			if 'name' in tm {
-				if !ident_ok(tname) {
-					errs << 'thread name "${tname}" (partition "${pname}") is not a valid identifier'
-				} else if tname in thread_part {
-					errs << 'duplicate thread name "${tname}" — thread names must be globally unique (already in partition "${thread_part[tname]}")'
-				} else {
-					thread_part[tname] = pname
-				}
-			}
-		}
-		if nthreads == 0 {
-			errs << 'partition "${pname}" declares no [[partition.thread]] — every partition needs at least one thread'
-		}
-		// Mirror loom2v: multiple threads per partition need per-thread schedulers, not
-		// generated yet. Reject here so `make check` doesn't pass a config `make gen` rejects.
-		if nthreads > 1 {
-			errs << 'partition "${pname}" declares ${nthreads} threads — multiple threads per partition is not generated yet (one scheduler per partition today); declare a single [[partition.thread]]'
-		}
-	}
-	for c in arr(doc, 'fb') {
-		cm := c.as_map()
-		fbname := str_of(cm, 'name')
-		// fb names key loom2v's fb_thread map + the generated struct fields, so they must be
-		// globally unique (a duplicate silently mislabels the manifest).
-		if 'name' in cm {
-			if !ident_ok(fbname) {
-				errs << 'fb name "${fbname}" is not a valid identifier'
-			} else if fbname in fb_names {
-				errs << 'duplicate fb name "${fbname}" — fb names must be unique'
-			} else {
-				fb_names[fbname] = true
-			}
-		}
-		thr := str_of(cm, 'thread')
-		// A present thread must resolve; present-but-empty is rejected by loom2v too.
-		// (A missing `thread` is caught by the schema's required-key check.)
-		if 'thread' in cm && thr !in thread_part {
-			errs << 'fb "${fbname}" names unknown thread "${thr}" (no [[partition.thread]] with that name)'
-		}
-		for h in arr_of(cm, 'handler') {
-			hm := h.as_map()
-			hname := str_of(hm, 'name')
-			if 'name' in hm && !ident_ok(hname) {
-				errs << 'fb "${fbname}" handler name "${hname}" is not a valid identifier'
-			}
-			// Mirror loom2v exactly: irq is a RESERVED trigger (ISR-context) not generated
-			// yet, so reject it here rather than let `make check` pass then `make gen` fail.
-			// The only supported trigger today is period_ms.
-			has_period := 'period_ms' in hm
-			has_irq := 'irq' in hm
-			if has_irq {
-				errs << 'fb "${fbname}" handler "${hname}": irq-triggered handlers are not generated yet (reserved trigger); use period_ms'
-			} else if !has_period {
-				errs << 'fb "${fbname}" handler "${hname}" needs a trigger — period_ms'
-			}
-		}
-	}
-}
-
 // check_raw is a LEXICAL pass (independent of the buggy parser): V's TOML parser silently
 // drops the key following a comment inside a nested `[[a.b]]` array-of-tables block
 // (verified on `[[partition.thread]]` / `[[fb.handler]]`). The dropped key is invisible to
@@ -549,48 +470,6 @@ fn has_comment(line string) bool {
 		i++
 	}
 	return false
-}
-
-fn arr(doc toml.Doc, key string) []toml.Any {
-	if v := doc.value_opt(key) {
-		return v.array()
-	}
-	return []toml.Any{}
-}
-
-fn arr_of(m map[string]toml.Any, key string) []toml.Any {
-	if v := m[key] {
-		if v is []toml.Any {
-			return v
-		}
-	}
-	return []toml.Any{}
-}
-
-fn str_of(m map[string]toml.Any, key string) string {
-	if v := m[key] {
-		if v is string {
-			return v
-		}
-	}
-	return ''
-}
-
-fn ident_ok(s string) bool {
-	if s == '' {
-		return false
-	}
-	for i, c in s {
-		alpha := (c >= `a` && c <= `z`) || (c >= `A` && c <= `Z`) || c == `_`
-		if i == 0 {
-			if !alpha {
-				return false
-			}
-		} else if !(alpha || (c >= `0` && c <= `9`)) {
-			return false
-		}
-	}
-	return true
 }
 
 // suggest finds the closest allowed key (edit distance <= 2) for an "did you mean" hint.

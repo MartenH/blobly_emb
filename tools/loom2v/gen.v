@@ -17,6 +17,7 @@ module main
 import os
 import toml
 import tools.candb
+import tools.ecumodel
 
 struct SigInfo {
 mut:
@@ -72,6 +73,15 @@ fn main() {
 	dbc := args[2]
 	doc := toml.parse_file(ecu) or { panic('parse ${ecu}: ${err}') }
 
+	// Validate the partition/thread/fb structure FIRST — the rules live in ecumodel, shared with
+	// ecucheck so the gate and generator can't drift — BEFORE any DBC/signal parsing below, which
+	// would otherwise panic on a DBC issue for a config that is structurally invalid anyway.
+	// Everything after this assumes a valid structure (no re-validation).
+	verrs := ecumodel.validate(doc)
+	if verrs.len > 0 {
+		panic('loom2v: invalid ecu.toml:\n  ' + verrs.join('\n  '))
+	}
+
 	// declared buses (endpoint names that mean "external / on the wire")
 	mut buses := map[string]bool{}
 	mut bus_core := map[string]int{}
@@ -88,7 +98,7 @@ fn main() {
 	mut sig_of := map[string]SigInfo{}
 	mut sig_names := []string{}
 	mut has_external := false
-	for s in toml_arr(doc, 'signal') {
+	for s in ecumodel.toml_arr(doc, 'signal') {
 		m := s.as_map()
 		name := (m['name'] or { toml.Any('') }).string()
 		from := (m['from'] or { toml.Any('') }).string()
@@ -172,7 +182,7 @@ fn main() {
 	mut secoc_mac := map[string]int{}
 	mut secoc_maclen := map[string]int{}
 	mut secoc_key := map[string][]u8{}
-	for f in toml_arr(doc, 'frame') {
+	for f in ecumodel.toml_arr(doc, 'frame') {
 		fm := f.as_map()
 		fk := snake((fm['name'] or { toml.Any('') }).string())
 		if 'tx' in fm {
@@ -207,7 +217,7 @@ fn main() {
 
 	// Raw-PDU gateway routes ([[route]]): forward a frame bus->bus, no decode.
 	mut routes := []Route{}
-	for r in toml_arr(doc, 'route') {
+	for r in ecumodel.toml_arr(doc, 'route') {
 		m := r.as_map()
 		fm := (m['from'] or { toml.Any('') }).as_map()
 		tm := (m['to'] or { toml.Any('') }).as_map()
@@ -271,7 +281,7 @@ fn main() {
 
 	// ISO-TP diagnostic connections ([[isotp]]).
 	mut isotp_conns := []IsotpConn{}
-	for c in toml_arr(doc, 'isotp') {
+	for c in ecumodel.toml_arr(doc, 'isotp') {
 		m := c.as_map()
 		name := (m['name'] or { toml.Any('') }).string()
 		if name == '' {
@@ -289,7 +299,7 @@ fn main() {
 
 	// UDS Data Identifiers ([[did]]): constant (ascii/bytes), writable RAM, or live signal.
 	mut dids := []DidCfg{}
-	for d in toml_arr(doc, 'did') {
+	for d in ecumodel.toml_arr(doc, 'did') {
 		m := d.as_map()
 		id := int((m['id'] or { toml.Any(0) }).int())
 		if id == 0 {
@@ -311,94 +321,30 @@ fn main() {
 		}
 	}
 
+	// Build the partition/thread maps (already validated up front, right after parse).
 	mut core_of := map[string]int{}
 	mut threads_of := map[string][]string{} // partition -> its thread names, declaration order
 	mut thread_part := map[string]string{} // thread -> partition (thread names are GLOBALLY unique)
-	for p in toml_arr(doc, 'partition') {
+	for p in ecumodel.toml_arr(doc, 'partition') {
 		m := p.as_map()
 		pname := (m['name'] or { toml.Any('') }).string()
-		if !ident_ok(pname) {
-			panic('loom2v: partition name "${pname}" is not a valid identifier ' +
-				'([A-Za-z_][A-Za-z0-9_]*) — required for codegen + the manifest CSV')
-		}
-		// Duplicate names would collide in core_of / threads_of (and trip the >1-thread
-		// check below with a misleading message); reject them explicitly.
-		if pname in core_of {
-			panic('loom2v: duplicate partition name "${pname}" — partition names must be unique')
-		}
 		core_of[pname] = int((m['core'] or { toml.Any(0) }).int())
 		for t in (m['thread'] or { toml.Any([]toml.Any{}) }).array() {
 			tname := (t.as_map()['name'] or { toml.Any('') }).string()
-			if !ident_ok(tname) {
-				panic('loom2v: partition "${pname}" has a [[partition.thread]] whose name ' +
-					'"${tname}" is not a valid identifier')
-			}
-			// Thread names are GLOBALLY unique, so an fb can name a thread and its partition
-			// is derived — no need to also name (redundantly) the partition.
-			if tname in thread_part {
-				panic(
-					'loom2v: duplicate thread name "${tname}" — thread names must be globally ' +
-					'unique (already declared in partition "${thread_part[tname]}")')
-			}
 			thread_part[tname] = pname
 			threads_of[pname] << tname
 		}
-		// Every partition is at least one OS thread — there is no implicit default.
-		if threads_of[pname].len == 0 {
-			panic('loom2v: partition "${pname}" declares no [[partition.thread]] — ' +
-				'every partition needs at least one thread')
-		}
-		// Multiple OS threads per partition need per-thread schedulers, which this generator
-		// does not emit yet — every handler still runs in one `partition_<name>` scheduler.
-		// Reject >1 rather than accept a config the runtime silently flattens into one thread
-		// while the manifest reports several (that would corrupt thread-trace results). Lifted
-		// when per-thread scheduler generation lands.
-		if threads_of[pname].len > 1 {
-			panic('loom2v: partition "${pname}" declares ${threads_of[pname].len} threads — ' +
-				'multiple threads per partition is not generated yet (one scheduler per ' + 'partition today); declare a single [[partition.thread]] for now')
-		}
 	}
-	// An fb maps to a THREAD (globally unique); its partition is DERIVED from that thread — a
-	// thread belongs to one partition, so naming the partition too would be redundant. A
-	// handler's trigger is `period_ms` (periodic, dispatched on the fb's thread); `irq`
-	// (interrupt-triggered, ISR context) is a reserved trigger not generated yet.
+	// An fb maps to a THREAD (globally unique); its partition is DERIVED from that thread, so
+	// by_part groups fbs by that derived partition. fb_thread records each fb's thread.
 	mut by_part := map[string][]toml.Any{}
-	mut fb_thread := map[string]string{} // fb name -> its thread (fb names are globally unique)
-	for c in toml_arr(doc, 'fb') {
+	mut fb_thread := map[string]string{}
+	for c in ecumodel.toml_arr(doc, 'fb') {
 		cm := c.as_map()
 		fbname := (cm['name'] or { toml.Any('') }).string()
-		if !ident_ok(fbname) {
-			panic('loom2v: fb name "${fbname}" is not a valid identifier')
-		}
-		// fb names key fb_thread + the generated struct fields, so they must be unique.
-		if fbname in fb_thread {
-			panic('loom2v: duplicate fb name "${fbname}" — fb names must be unique')
-		}
 		thr := (cm['thread'] or { toml.Any('') }).string()
-		if thr == '' {
-			panic('loom2v: fb "${fbname}" must name a `thread` ' +
-				'(thread = "<a globally-unique [[partition.thread]] name>")')
-		}
-		if thr !in thread_part {
-			panic('loom2v: fb "${fbname}" names unknown thread "${thr}"')
-		}
-		part := thread_part[thr] // derive the partition from the thread
-		by_part[part] << c
+		by_part[thread_part[thr]] << c
 		fb_thread[fbname] = thr
-		for h in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
-			hm := h.as_map()
-			hname := (hm['name'] or { toml.Any('') }).string()
-			if !ident_ok(hname) {
-				panic('loom2v: fb "${fbname}" handler name "${hname}" is not a valid identifier')
-			}
-			if 'irq' in hm {
-				panic('loom2v: fb "${fbname}" handler "${hname}": irq-triggered handlers are ' +
-					'not generated yet (reserved trigger); use period_ms')
-			}
-			if 'period_ms' !in hm {
-				panic('loom2v: fb "${fbname}" handler "${hname}" needs a trigger — period_ms')
-			}
-		}
 	}
 
 	// --- telemetry: give every app partition + every bus(bridge) a scratch slot,
@@ -1119,7 +1065,7 @@ fn main() {
 		man << '# generated by loom2v from ${os.base(ecu)} — do not edit'
 		man << '# fb.handlers: id,partition,core,fb,handler,period_us,thread'
 		mut hid := 0
-		for p in toml_arr(doc, 'partition') {
+		for p in ecumodel.toml_arr(doc, 'partition') {
 			pname := (p.as_map()['name'] or { toml.Any('') }).string()
 			for c in by_part[pname] {
 				cm := c.as_map()
@@ -1136,7 +1082,7 @@ fn main() {
 		}
 		man << '# threads: thread,id,name,core  (id 0 reserved = idle)'
 		mut tid := 1
-		for p in toml_arr(doc, 'partition') {
+		for p in ecumodel.toml_arr(doc, 'partition') {
 			pname := (p.as_map()['name'] or { toml.Any('') }).string()
 			for tname in threads_of[pname] {
 				man << 'thread,${tid},${tname},${core_of[pname]}' // name = the globally-unique thread name
@@ -1260,36 +1206,6 @@ fn publish_fn(tr string) string {
 		'triple' { 'ioc_publish' }
 		else { 'ioc_publish2' }
 	}
-}
-
-// toml_arr returns the array of tables under `key`, or empty when the key is absent — so an
-// ecu.toml that omits an optional section (e.g. a compute-only app with no [[signal]]) doesn't
-// phantom-iterate a single empty entry and crash.
-fn toml_arr(doc toml.Doc, key string) []toml.Any {
-	if v := doc.value_opt(key) {
-		return v.array()
-	}
-	return []toml.Any{}
-}
-
-// ident_ok reports whether s is a safe name — [A-Za-z_][A-Za-z0-9_]* — for both V codegen
-// (names become struct/field identifiers) and the manifest CSV (a comma/space would corrupt
-// a row). Rejects the empty string too.
-fn ident_ok(s string) bool {
-	if s == '' {
-		return false
-	}
-	for i, c in s {
-		alpha := (c >= `a` && c <= `z`) || (c >= `A` && c <= `Z`) || c == `_`
-		if i == 0 {
-			if !alpha {
-				return false
-			}
-		} else if !(alpha || (c >= `0` && c <= `9`)) {
-			return false
-		}
-	}
-	return true
 }
 
 fn snake(name string) string {
