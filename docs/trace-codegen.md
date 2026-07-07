@@ -1,11 +1,15 @@
 # Trace subsystem from `ecu.toml` (loom2v codegen) — design
 
-**Status: in progress.** Landed so far (P1 tooling): loom2v reads `[trace]` and generates the
-symbolic `trace.dbc` (`trace_dbc()`, arg 8) alongside the manifest (arg 6), and `ecumodel`
-validates the `[trace]` block (bus resolves, `level`/`mode` enums, `pre_pct`/`buffer_records`
-ranges) so a bad config fails before codegen. The example conversion (generated `main.v` + loom
-+ committed artifacts, retiring the hand-wired harness) lands next, on top of the record rework
-(the `entity_id`/interval `comm/trace` change) — see the phasing in §5.
+**Status: in progress.** Landed so far (P1 tooling): loom2v reads `[trace]` and writes the five
+observability frame ids into the **manifest** (arg 6); `ecumodel` validates the block (bus
+resolves, `level`/`mode` enums, `pre_pct`/`buffer_records` ranges). **No `trace.dbc` is
+generated** — the observability protocol (`TraceCmd`/`TraceRsp`/`HandlerStat` + the ISO-TP record
+dump) is fixed and first-party, so blobly_net decodes it natively from the ids in the manifest;
+re-encoding a fixed protocol as a per-ECU DBC (and then policing its ids against every other
+frame on the bus) was churn without payoff. Each id is either a literal CAN id (yours to
+allocate — no collision policing) or the **name of a message in `bus.dbc`** (resolved to its id,
+required to exist). The example conversion (generated `main.v` + loom, retiring the hand-wired
+harness) lands next, on top of the `entity_id`/interval `comm/trace` record rework — see §5.
 
 Today the runtime-tracing subsystem is *hand-wired* in
 `examples/trace_multicore` (and `trace_demo`), and its manifest + DBC are hand-written. This
@@ -40,7 +44,7 @@ buffer_records = 64         # per-core ring depth (static array; RAM vs depth)
 mode           = "ring"     # "ring" (flight recorder) | "oneshot"
 pre_pct        = 50         # ring pre/post-trigger split
 push_ms        = 1000       # live HandlerStat heartbeat period (0 = off)
-# frame ids (defaults shown; must match the generated DBC + manifest)
+# frame ids: a literal CAN id (yours to allocate) OR a bus.dbc message name (defaults shown)
 cmd_id         = 0x7E2
 rsp_id         = 0x7E3
 stat_id        = 0x7E4      # HandlerStat heartbeat
@@ -51,9 +55,16 @@ dump_fc_id     = 0x7E6      # ISO-TP flow control (host -> target)
 No handler/core/thread lists here — those are **derived** from the partitions + FBs already
 declared, so the trace config can't disagree with the app it traces.
 
+**Frame ids — number or name.** Each id above is either a **literal CAN id** (used as-is;
+allocating a non-colliding id is the author's job — loom2v does *not* police it against other
+traffic) or the **name of a message in `bus.dbc`**, e.g. `cmd_id = "TraceCmd"`, which loom2v
+resolves to that message's id (and errors if it isn't in the DBC). So you either hand it an id,
+or point it at a frame you've already defined — nothing in between to validate.
+
 ## 2. Generated artifacts
 
-From one `ecu.toml`, loom2v emits three things:
+From one `ecu.toml`, loom2v emits the wiring + the manifest (there is **no** generated DBC —
+see §c):
 
 ### a) `gen/trace_gen.v` — the target wiring
 Generated into the per-core loop loom2v already builds (`gen/loom_gen.v`), or a sibling file:
@@ -82,11 +93,29 @@ thread,2,ctrl.main,1
   reserved for idle, the THREAD-kind sentinel), `name` = `partition.thread`, 0-based `core`.
   (ISRs get no row — an ISR's id *is* its raw vector.)
 
-### c) `gen/trace.dbc` — symbolic decode + generator sending
-The observability frames with value tables (so `_net` shows `opcode 6 → "dump"` and can send
-commands by name), ids taken from the `[trace]` block: `TraceCmd`, `TraceRsp`, `HandlerStat`,
-plus `LoadDetail` if `[telemetry].detail_id` is set. (The dump on `record_id` is ISO-TP, not
-a single decodable frame, so it's not a DBC message.)
+The manifest also carries the five observability frame ids (resolved from `[trace]`) so
+blobly_net knows where the traffic is:
+```
+# trace frames: frame,id,bus
+cmd,0x7E2,can0
+rsp,0x7E3,can0
+stat,0x7E4,can0
+record,0x7E5,can0
+dump_fc,0x7E6,can0
+```
+
+### c) No generated `gen/trace.dbc`
+The observability protocol (`TraceCmd`/`TraceRsp`/`HandlerStat` + the ISO-TP record dump) is
+**fixed and first-party** — its layouts and value tables (`opcode 6 → "dump"`, `state → frozen`,
+…) live once in `comm/trace` + `comm/telem` and never vary per ECU; only the five ids do. So we
+do **not** generate a DBC that re-encodes that fixed format per ECU (and then has to have its
+ids policed against every app/isotp/nm/route frame on the bus — churn with no payoff).
+**blobly_net decodes the protocol natively** from the ids in the manifest. If you *want* a trace
+frame to be a named DBC message (for generic DBC-tool interop), give the id as a `bus.dbc`
+message name (§1) — then it's already in your DBC and there's nothing to generate.
+
+_net change: blobly_net reads the five ids from the manifest's `# trace frames` rows and applies
+its built-in decoders. (Named ids also appear in `bus.dbc`, which it already loads.)
 
 ## 3. Resolve the two manifest formats
 

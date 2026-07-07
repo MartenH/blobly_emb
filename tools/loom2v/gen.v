@@ -66,7 +66,7 @@ mut:
 fn main() {
 	args := os.args
 	if args.len < 6 {
-		eprintln('usage: loom2v <ecu.toml> <bus.dbc> <signals_out> <ports_out> <glue_out> [manifest_out] [trace_dbc_out]')
+		eprintln('usage: loom2v <ecu.toml> <bus.dbc> <signals_out> <ports_out> <glue_out> [manifest_out]')
 		exit(2)
 	}
 	ecu := args[1]
@@ -148,11 +148,6 @@ fn main() {
 		sig_names << name
 	}
 
-	// bus_frame_ids: CAN ids already carrying OTHER traffic, keyed "bus:id" -> a label. Used to
-	// reject a trace id that would reuse an application/route frame id on the trace bus (the
-	// ISO-TP/NM/telemetry overlaps are gated in ecumodel, which can't see the DBC; these need it).
-	mut bus_frame_ids := map[string]string{}
-
 	// Map each external signal to its DBC message (so the bridge can name the
 	// generated codec fns / id / dlc). External signals must be in the DBC.
 	if has_external {
@@ -168,9 +163,6 @@ fn main() {
 				panic('signal "${sname}" has a bus endpoint but is not in ${os.file_name(dbc)}')
 			}
 			sig_of[sname] = si
-			if id := dbc_id_of(db, si.dbc_msg) {
-				bus_frame_ids['${si.bus}:${id}'] = 'app frame "${si.dbc_msg}"'
-			}
 		}
 	}
 
@@ -238,13 +230,6 @@ fn main() {
 			from_frame: (fm['frame'] or { toml.Any('') }).string()
 			to_bus:     (tm['bus'] or { toml.Any('') }).string()
 			to_id:      int((tm['id'] or { toml.Any(0) }).int())
-		}
-	}
-	// an explicit route destination id also occupies its bus (to_id == 0 keeps the source id,
-	// which we can't resolve without the DBC, so it's not reserved here).
-	for r in routes {
-		if r.to_bus != '' && r.to_id != 0 {
-			bus_frame_ids['${r.to_bus}:${r.to_id}'] = 'route destination on ${r.to_bus}'
 		}
 	}
 	has_routes := routes.len > 0
@@ -388,6 +373,9 @@ fn main() {
 	//     block; loom2v emits their symbolic DBC (arg 8) so blobly_net can decode/send them
 	//     by name. Ids default to the docs/telemetry.md convention. The dump rides ISO-TP on
 	//     record_id/dump_fc_id (not a decodable frame), so those are not DBC messages. ---
+	// Each observability frame id is either a literal CAN id (used as-is — collision-free
+	// allocation is the author's responsibility) or the NAME of a message in bus.dbc, resolved
+	// to that message's id (and required to exist). Defaults are the docs/telemetry.md ids.
 	mut trace_on := false
 	mut trace_bus := ''
 	mut trace_cmd_id := u32(0x7E2)
@@ -401,18 +389,11 @@ fn main() {
 		// can be turned off without deleting the whole block.
 		trace_on = (trm['enabled'] or { toml.Any(true) }).bool()
 		trace_bus = (trm['bus'] or { toml.Any('') }).string()
-		trace_cmd_id = u32((trm['cmd_id'] or { toml.Any(int(trace_cmd_id)) }).int())
-		trace_rsp_id = u32((trm['rsp_id'] or { toml.Any(int(trace_rsp_id)) }).int())
-		trace_stat_id = u32((trm['stat_id'] or { toml.Any(int(trace_stat_id)) }).int())
-		trace_record_id = u32((trm['record_id'] or { toml.Any(int(trace_record_id)) }).int())
-		trace_dump_fc_id = u32((trm['dump_fc_id'] or { toml.Any(int(trace_dump_fc_id)) }).int())
-	}
-	// Fail BEFORE writing any output when [trace] is active but the DBC path (arg 8) is missing —
-	// otherwise the earlier generators (sig/ports/glue/manifest) would already be on disk when we
-	// panic, leaving a half-generated tree.
-	if trace_on && args.len < 8 {
-		panic('loom2v: [trace] is active but no trace_dbc output path was given (arg 8) — ' +
-			'pass it so the observability DBC is generated (it would be skipped silently otherwise)')
+		trace_cmd_id = trace_frame_id(trm, 'cmd_id', trace_cmd_id, dbc)
+		trace_rsp_id = trace_frame_id(trm, 'rsp_id', trace_rsp_id, dbc)
+		trace_stat_id = trace_frame_id(trm, 'stat_id', trace_stat_id, dbc)
+		trace_record_id = trace_frame_id(trm, 'record_id', trace_record_id, dbc)
+		trace_dump_fc_id = trace_frame_id(trm, 'dump_fc_id', trace_dump_fc_id, dbc)
 	}
 
 	// [target] baremetal: emit a single-core inline superloop instead of the host's
@@ -1135,108 +1116,39 @@ fn main() {
 				tid++
 			}
 		}
-		os.write_file(args[6], man.join('\n') + '\n') or { panic('write ${args[6]}: ${err}') }
-	}
-
-	// --- trace DBC (arg 8, required when [trace] is active): the symbolic decode for the
-	//     observability frames, so blobly_net shows opcode/result/state by name and can send
-	//     commands by name. Ids come from [trace]. LoadDetail is included only when telemetry is
-	//     ENABLED AND shares the trace bus — the DBC is per-bus, so a telemetry frame on another
-	//     channel must not appear here (and a disabled/off-bus detail_id can't leak in). ---
-	if trace_on {
-		// the missing-arg-8 case already failed fast above, before any output was written.
-		eff_trace_bus := if trace_bus != '' { trace_bus } else { telem_bus }
-		// A trace id must not reuse an application/route frame id already on the trace bus (the
-		// DBC frames ecumodel couldn't see). Check before emitting the DBC.
-		for tid in [trace_cmd_id, trace_rsp_id, trace_stat_id, trace_record_id, trace_dump_fc_id] {
-			if lbl := bus_frame_ids['${eff_trace_bus}:${int(tid)}'] {
-				panic('loom2v: trace id 0x${tid.hex()} collides with ${lbl} on bus "${eff_trace_bus}"')
-			}
+		// The observability frame ids on the trace bus. The protocol (TraceCmd/Rsp/HandlerStat +
+		// the ISO-TP record dump) is fixed and first-party, so blobly_net decodes it natively from
+		// these ids — no generated DBC. Names given in [trace] were already resolved to ids above.
+		if trace_on {
+			tbus := if trace_bus != '' { trace_bus } else { telem_bus }
+			man << '# trace frames: frame,id,bus'
+			man << 'cmd,0x${trace_cmd_id.hex()},${tbus}'
+			man << 'rsp,0x${trace_rsp_id.hex()},${tbus}'
+			man << 'stat,0x${trace_stat_id.hex()},${tbus}'
+			man << 'record,0x${trace_record_id.hex()},${tbus}'
+			man << 'dump_fc,0x${trace_dump_fc_id.hex()},${tbus}'
 		}
-		detail := if telem_on && telem_bus == eff_trace_bus { telem_detail_id } else { u32(0) }
-		dbc_txt := trace_dbc(trace_cmd_id, trace_rsp_id, trace_stat_id, detail)
-		os.write_file(args[7], dbc_txt) or { panic('write ${args[7]}: ${err}') }
-	} else if args.len >= 8 && os.exists(args[7]) {
-		// tracing is off but the make rule still passes the DBC path: remove any trace.dbc left
-		// from a previous enabled run so stale command/frame ids can't be picked up downstream.
-		os.rm(args[7]) or {}
+		os.write_file(args[6], man.join('\n') + '\n') or { panic('write ${args[6]}: ${err}') }
 	}
 
 	eprintln('loom2v: ${sig_names.len} signals (${bus_names.len} bus bridge), ${isotp_conns.len} isotp, ${by_part.len} partition(s)')
 }
 
-// trace_dbc builds the runtime-observability DBC (docs/telemetry.md): TraceCmd/TraceRsp on
-// cmd_id/rsp_id (config cmd/rsp, not UDS), HandlerStat on stat_id, and — only when
-// [telemetry].detail_id is set — LoadDetail. Layouts mirror comm/trace.{decode_cmd,encode_rsp}
-// and comm/telem.{encode_handlerstat,encode_loaddetail}; value tables let blobly_net show
-// opcode/result/state by name and send commands by name. The ISO-TP dump (record_id) is not a
-// decodable frame, so it has no message here.
-// dbc_id encodes a CAN id for a DBC BO_ line: an extended (29-bit) id sets the high EFF bit
-// (0x80000000), which is how the repo's candb marks a message extended; a standard 11-bit id
-// is emitted as-is. Without the flag an extended trace id would decode as a standard id.
-fn dbc_id(id u32) u32 {
-	return if id > 0x7ff { u32(0x8000_0000) | id } else { id }
-}
-
-fn trace_dbc(cmd_id u32, rsp_id u32, stat_id u32, detail_id u32) string {
-	dcmd := dbc_id(cmd_id)
-	drsp := dbc_id(rsp_id)
-	dstat := dbc_id(stat_id)
-	ddetail := dbc_id(detail_id)
-	mut l := []string{}
-	l << 'VERSION "blobly_emb runtime-observability control + telemetry (docs/telemetry.md) — generated by loom2v, DO NOT EDIT"'
-	l << ''
-	l << 'NS_ :'
-	l << ''
-	l << 'BS_:'
-	l << ''
-	l << 'BU_: SUT Tester'
-	l << ''
-	if detail_id != 0 {
-		l << 'BO_ ${ddetail} LoadDetail: 8 SUT'
-		l << ' SG_ load_100ms : 0|8@1+ (1,0) [0|100] "%" Tester'
-		l << ' SG_ load_1s : 8|8@1+ (1,0) [0|100] "%" Tester'
-		l << ' SG_ load_10s : 16|8@1+ (1,0) [0|100] "%" Tester'
-		l << ' SG_ overruns : 24|8@1+ (1,0) [0|255] "" Tester'
-		l << ''
+// trace_frame_id resolves a [trace] observability id: a literal number is the CAN id (used
+// as-is — a colliding id is the author's problem); a string is a bus.dbc message name that must
+// exist, and its id is used (so trace frames can piggyback on ids already defined in the DBC).
+fn trace_frame_id(trm map[string]toml.Any, field string, def u32, dbc string) u32 {
+	v := trm[field] or { return def }
+	if v is string {
+		db := candb.load_dbc_file(dbc) or {
+			panic('loom2v: [trace] ${field} = "${v}" is a bus.dbc message name but ${os.file_name(dbc)} did not load: ${err}')
+		}
+		id := dbc_id_of(db, snake(v)) or {
+			panic('loom2v: [trace] ${field} = "${v}" is not a message in ${os.file_name(dbc)}')
+		}
+		return u32(id)
 	}
-	l << 'BO_ ${dcmd} TraceCmd: 8 Tester'
-	l << ' SG_ opcode : 0|8@1+ (1,0) [0|255] "" SUT'
-	l << ' SG_ arg0 : 8|8@1+ (1,0) [0|255] "" SUT'
-	l << ' SG_ period_ms : 16|16@1+ (1,0) [0|65535] "ms" SUT'
-	l << ' SG_ handler_filter : 32|16@1+ (1,0) [0|65535] "" SUT'
-	l << ' SG_ core_mask : 48|16@1+ (1,0) [0|65535] "" SUT'
-	l << ''
-	l << 'BO_ ${drsp} TraceRsp: 8 SUT'
-	l << ' SG_ opcode_echo : 0|8@1+ (1,0) [0|255] "" Tester'
-	l << ' SG_ result : 8|8@1+ (1,0) [0|255] "" Tester'
-	l << ' SG_ state : 16|8@1+ (1,0) [0|255] "" Tester'
-	l << ' SG_ records_used : 24|16@1+ (1,0) [0|65535] "" Tester'
-	l << ' SG_ capacity : 40|16@1+ (1,0) [0|65535] "" Tester'
-	l << ' SG_ core : 56|8@1+ (1,0) [0|255] "" Tester'
-	l << ''
-	l << 'BO_ ${dstat} HandlerStat: 8 SUT'
-	l << ' SG_ handler_id : 0|8@1+ (1,0) [0|255] "" Tester'
-	l << ' SG_ flags : 8|8@1+ (1,0) [0|255] "" Tester'
-	l << ' SG_ last_us : 16|16@1+ (1,0) [0|65535] "us" Tester'
-	l << ' SG_ max_us : 32|16@1+ (1,0) [0|65535] "us" Tester'
-	l << ' SG_ count_delta : 48|16@1+ (1,0) [0|65535] "" Tester'
-	l << ''
-	if detail_id != 0 {
-		l << 'CM_ BO_ ${ddetail} "One core\'s processor load over 100ms/1s/10s windows + per-period overrun count.";'
-	}
-	l << 'CM_ BO_ ${dcmd} "Trace capture control, host -> target. Config cmd/rsp, NOT UDS.";'
-	l << 'CM_ BO_ ${drsp} "Trace capture ack + status, target -> host.";'
-	l << 'CM_ BO_ ${dstat} "Live per-handler stats push: response time (= CPU on a polled core), us.";'
-	l << 'CM_ SG_ ${dcmd} opcode "1 arm | 2 start | 3 stop | 4 reset | 5 set_push | 6 dump | 7 status";'
-	l << 'CM_ SG_ ${dcmd} core_mask "bit i selects core i; 0 = the receiving/default core (single-core target)";'
-	l << 'CM_ SG_ ${dcmd} handler_filter "0xFFFF = all handlers, else a single handler_id";'
-	l << ''
-	l << 'VAL_ ${dcmd} opcode 1 "arm" 2 "start" 3 "stop" 4 "reset" 5 "set_push" 6 "dump" 7 "status" ;'
-	l << 'VAL_ ${drsp} opcode_echo 1 "arm" 2 "start" 3 "stop" 4 "reset" 5 "set_push" 6 "dump" 7 "status" ;'
-	l << 'VAL_ ${drsp} result 0 "ok" 1 "bad_opcode" 2 "unsupported" 3 "not_ready" 4 "busy" ;'
-	l << 'VAL_ ${drsp} state 0 "idle" 1 "capturing" 2 "full" 3 "frozen" ;'
-	return l.join('\n') + '\n'
+	return u32(v.int())
 }
 
 // did_signal_encode emits the big-endian write of a live signal value into a

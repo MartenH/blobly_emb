@@ -167,77 +167,6 @@ buffer_records = 70000
 	assert e.any(it.contains('buffer_records 70000 out of range'))
 }
 
-// a frame id reused across trace frames (or out of CAN range) must be rejected.
-fn test_trace_duplicate_and_out_of_range_ids_flagged() {
-	e := errs_of('
-[bus.can0]
-interface = "vcan0"
-
-[trace]
-bus = "can0"
-rsp_id = 0x7E2
-cmd_id = 0x7E2
-stat_id = -1
-' + app)
-	assert e.any(it.contains('used by both') && it.contains('cmd_id'))
-	assert e.any(it.contains('stat_id') && it.contains('out of CAN id range'))
-}
-
-// an out-of-range telemetry detail_id must be caught before it reaches the generated trace DBC.
-fn test_trace_telemetry_detail_id_out_of_range_flagged() {
-	e := errs_of('
-[bus.can0]
-interface = "vcan0"
-
-[telemetry]
-enabled = true
-bus = "can0"
-id = 0x7E0
-detail_id = -1
-
-[trace]
-bus = "can0"
-' + app)
-	assert e.any(it.contains('telemetry.detail_id') && it.contains('out of CAN id range'))
-}
-
-// a trace id colliding with an enabled telemetry frame on the SAME bus is a wire collision.
-fn test_trace_id_collides_with_telemetry_flagged() {
-	e := errs_of('
-[bus.can0]
-interface = "vcan0"
-
-[telemetry]
-enabled = true
-bus = "can0"
-id = 0x7E2
-
-[trace]
-bus = "can0"
-' + app)
-	assert e.any(it.contains('used by both') && it.contains('telemetry.id'))
-}
-
-// the same id reused by telemetry on a DIFFERENT bus can't collide on the wire — don't flag it.
-fn test_trace_id_reused_by_telemetry_on_other_bus_ok() {
-	e := errs_of('
-[bus.can0]
-interface = "vcan0"
-
-[bus.can1]
-interface = "vcan1"
-
-[telemetry]
-enabled = true
-bus = "can0"
-id = 0x7E2
-
-[trace]
-bus = "can1"
-' + app)
-	assert e.filter(it.contains('used by both')).len == 0
-}
-
 // absent [trace] must not synthesize errors (it's optional).
 fn test_no_trace_block_is_fine() {
 	assert errs_of(app) == []
@@ -250,32 +179,6 @@ fn test_trace_disabled_skips_validation() {
 enabled = false
 level = "bogus"
 ' + app) == []
-}
-
-// an id at/above 2^32 must still be caught — toml .int() would truncate it back into range.
-fn test_trace_id_above_u32_flagged() {
-	e := errs_of('
-[bus.can0]
-interface = "vcan0"
-
-[trace]
-bus = "can0"
-cmd_id = 0x100000000
-' + app)
-	assert e.any(it.contains('cmd_id') && it.contains('out of CAN id range'))
-}
-
-// an id above the 29-bit CAN max (but under 2^32) is flagged.
-fn test_trace_id_over_29bit_flagged() {
-	e := errs_of('
-[bus.can0]
-interface = "vcan0"
-
-[trace]
-bus = "can0"
-rsp_id = 0x20000000
-' + app)
-	assert e.any(it.contains('rsp_id') && it.contains('out of CAN id range'))
 }
 
 // buffer_records lower bound.
@@ -291,78 +194,6 @@ buffer_records = 0
 	assert e.any(it.contains('buffer_records 0 out of range'))
 }
 
-// a trace id colliding with the record_id default (0x7E5) is caught.
-fn test_trace_id_collides_with_default_record_id() {
-	e := errs_of('
-[bus.can0]
-interface = "vcan0"
-
-[trace]
-bus = "can0"
-cmd_id = 0x7E5
-' + app)
-	assert e.any(it.contains('used by both') && it.contains('record_id'))
-}
-
-// a trace id reusing an ISO-TP id on the same bus is a wire collision.
-fn test_trace_id_collides_with_isotp() {
-	e := errs_of('
-[bus.can0]
-interface = "vcan0"
-
-[trace]
-bus = "can0"
-cmd_id = 0x700
-
-[[isotp]]
-name = "diag"
-bus = "can0"
-rx_id = 0x700
-tx_id = 0x708
-' + app)
-	assert e.any(it.contains('collides with isotp "diag" rx_id'))
-}
-
-// a trace id inside the NM rx range on the same bus is flagged.
-fn test_trace_id_in_nm_rx_range() {
-	e := errs_of('
-[bus.can0]
-interface = "vcan0"
-
-[nm.can0]
-tx_id = 0x500
-rx_lo = 0x500
-rx_hi = 0x5FF
-
-[trace]
-bus = "can0"
-cmd_id = 0x510
-' + app)
-	assert e.any(it.contains('nm.can0 rx range'))
-}
-
-// an ISO-TP frame on a DIFFERENT bus than trace can't collide — don't flag it.
-fn test_trace_id_isotp_other_bus_ok() {
-	e := errs_of('
-[bus.can0]
-interface = "vcan0"
-
-[bus.can1]
-interface = "vcan1"
-
-[trace]
-bus = "can1"
-cmd_id = 0x700
-
-[[isotp]]
-name = "diag"
-bus = "can0"
-rx_id = 0x700
-tx_id = 0x708
-' + app)
-	assert e.filter(it.contains('collides with')).len == 0
-}
-
 // buffer_records above 2^32 must be rejected — .int() would truncate 0x100000001 back to 1.
 fn test_trace_buffer_records_above_u32_flagged() {
 	e := errs_of('
@@ -374,38 +205,4 @@ bus = "can0"
 buffer_records = 0x100000001
 ' + app)
 	assert e.any(it.contains('buffer_records') && it.contains('out of range'))
-}
-
-// telemetry enabled on the trace bus with `id` omitted still transmits CpuLoad on id 0, so a
-// trace frame set to 0 collides with it.
-fn test_trace_id_collides_with_default_telemetry_id() {
-	e := errs_of('
-[bus.can0]
-interface = "vcan0"
-
-[telemetry]
-enabled = true
-bus = "can0"
-
-[trace]
-bus = "can0"
-cmd_id = 0
-' + app)
-	assert e.any(it.contains('used by both') && it.contains('telemetry.id'))
-}
-
-// but enabled telemetry with default ids and normal trace ids must NOT spuriously collide.
-fn test_trace_default_telemetry_id_no_false_collision() {
-	e := errs_of('
-[bus.can0]
-interface = "vcan0"
-
-[telemetry]
-enabled = true
-bus = "can0"
-
-[trace]
-bus = "can0"
-' + app)
-	assert e.filter(it.contains('used by both')).len == 0
 }

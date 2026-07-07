@@ -149,10 +149,9 @@ pub fn validate(doc toml.Doc) []string {
 		}
 	}
 
-	// [trace] — the runtime-observability block loom2v generates a DBC + wiring from. Validate
-	// the enums loom2v switches on (level, mode), numeric ranges, the CAN channel the traffic
-	// binds to, and the frame ids — so a config that would emit a wrapped/colliding id or an
-	// oversized ring fails at ecucheck instead of producing a bad DBC/buffer.
+	// [trace] — the runtime-observability block loom2v generates the trace wiring from. Validate
+	// the enums loom2v switches on (level, mode), the numeric ranges (pre_pct, buffer_records),
+	// and the CAN channel the traffic binds to. Frame ids are handled by loom2v (see below).
 	if tr := doc.value_opt('trace') {
 		trm := tr.as_map()
 		// A [trace] block is active unless explicitly disabled — so it can be turned off (no bus
@@ -209,99 +208,10 @@ pub fn validate(doc toml.Doc) []string {
 				errs << '[trace] buffer_records ${n} out of range (1..65535 — TraceRsp reports it as u16)'
 			}
 		}
-		// Frame ids: each in CAN range and all mutually distinct, so the generated DBC has no
-		// wrapped/duplicate BO_ id and no two frames collide on the wire. Enabled telemetry ids
-		// join the set ONLY when telemetry shares the trace bus — on a separate CAN channel they
-		// can't collide. Defaults per docs/telemetry.md.
-		// Read ids as i64 (not int): toml's .int() truncates to 32 bits, so a value >= 2^32 could
-		// wrap into range and defeat the check below.
-		mut ids := map[string]i64{}
-		defaults := {
-			'cmd_id':     i64(0x7E2)
-			'rsp_id':     i64(0x7E3)
-			'stat_id':    i64(0x7E4)
-			'record_id':  i64(0x7E5)
-			'dump_fc_id': i64(0x7E6)
-		}
-		for field, def in defaults {
-			mut id := def
-			if v := trm[field] {
-				id = v.i64()
-			}
-			ids[field] = id
-		}
-		if telem := doc.value_opt('telemetry') {
-			tm := telem.as_map()
-			// only a telemetry frame on the SAME declared bus can collide (tbus != '' guards the
-			// both-empty case, which is already reported as "[trace] has no bus").
-			if (tm['enabled'] or { toml.Any(false) }).bool() && tbus != '' && str_of(tm, 'bus') == tbus {
-				// loom2v sends CpuLoad on telem_id even when `id` is omitted (defaulting to 0), so
-				// reserve that default too. detail_id only names a real frame when non-zero (0 =
-				// no LoadDetail), so it's reserved only when set.
-				ids['telemetry.id'] = (tm['id'] or { toml.Any(0) }).i64()
-				if v := tm['detail_id'] {
-					d := v.i64()
-					if d != 0 {
-						ids['telemetry.detail_id'] = d
-					}
-				}
-			}
-		}
-		// Ids already claimed by OTHER traffic on the trace bus: ISO-TP rx/tx and NM tx + its rx
-		// range. A trace id reusing one is a wire collision on that bus. (Application DBC frame
-		// ids live in the .dbc, which this validator doesn't parse — that overlap isn't caught
-		// here.)
-		mut reserved := map[i64]string{}
-		mut nm_rx_lo := i64(-1)
-		mut nm_rx_hi := i64(-1)
-		if tbus != '' {
-			for it in toml_arr(doc, 'isotp') {
-				im := it.as_map()
-				if str_of(im, 'bus') == tbus {
-					iname := str_of(im, 'name')
-					if v := im['rx_id'] {
-						reserved[v.i64()] = 'isotp "${iname}" rx_id'
-					}
-					if v := im['tx_id'] {
-						reserved[v.i64()] = 'isotp "${iname}" tx_id'
-					}
-				}
-			}
-			if nmv := doc.value_opt('nm') {
-				if nmbus := nmv.as_map()[tbus] {
-					nmm := nmbus.as_map()
-					if v := nmm['tx_id'] {
-						reserved[v.i64()] = 'nm.${tbus} tx_id'
-					}
-					if v := nmm['rx_lo'] {
-						nm_rx_lo = v.i64()
-					}
-					if v := nmm['rx_hi'] {
-						nm_rx_hi = v.i64()
-					}
-				}
-			}
-		}
-		// Range-check EVERY id (trace + the shared telemetry ids), then check uniqueness among the
-		// in-range ones and against the other traffic already on the bus.
-		mut seen := map[i64]string{}
-		for label, id in ids {
-			if id < 0 || id > 0x1fff_ffff {
-				errs << '[trace] ${label} ${id} out of CAN id range (0..0x1FFFFFFF)'
-				continue
-			}
-			if prev := seen[id] {
-				errs << '[trace] frame id ${id} used by both ${prev} and ${label} — ids must be distinct'
-			} else {
-				seen[id] = label
-			}
-			if res := reserved[id] {
-				errs << '[trace] ${label} ${id} collides with ${res} already on bus "${tbus}"'
-			}
-			if nm_rx_lo >= 0 && nm_rx_hi >= nm_rx_lo && id >= nm_rx_lo && id <= nm_rx_hi {
-				errs << '[trace] ${label} ${id} falls in the nm.${tbus} rx range [${nm_rx_lo}..${nm_rx_hi}]'
-			}
-		}
+		// Frame ids (cmd_id/rsp_id/stat_id/record_id/dump_fc_id) are each either a literal CAN id
+		// (used as-is — allocating a non-colliding id is the author's responsibility) or the name
+		// of a message in bus.dbc. The name case is resolved + checked-to-exist by loom2v, which
+		// loads the DBC; this validator doesn't, so it does not police the ids here.
 	}
 	return errs
 }
