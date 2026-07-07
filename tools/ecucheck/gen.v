@@ -84,6 +84,7 @@ fn specs() map[string]map[string]Key {
 			'period_ms': k(.int)
 		}
 		'trace':      {
+			'enabled':        k(.boolean)
 			'bus':            k(.str)
 			'level':          k(.str)
 			'buffer_records': k(.int)

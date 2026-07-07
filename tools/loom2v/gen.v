@@ -374,15 +374,26 @@ fn main() {
 	//     by name. Ids default to the docs/telemetry.md convention. The dump rides ISO-TP on
 	//     record_id/dump_fc_id (not a decodable frame), so those are not DBC messages. ---
 	mut trace_on := false
+	mut trace_bus := ''
 	mut trace_cmd_id := u32(0x7E2)
 	mut trace_rsp_id := u32(0x7E3)
 	mut trace_stat_id := u32(0x7E4)
 	if trcfg := doc.value_opt('trace') {
-		trace_on = true
 		trm := trcfg.as_map()
+		// a [trace] block is active unless explicitly disabled (enabled = false) — so tracing
+		// can be turned off without deleting the whole block.
+		trace_on = (trm['enabled'] or { toml.Any(true) }).bool()
+		trace_bus = (trm['bus'] or { toml.Any('') }).string()
 		trace_cmd_id = u32((trm['cmd_id'] or { toml.Any(int(trace_cmd_id)) }).int())
 		trace_rsp_id = u32((trm['rsp_id'] or { toml.Any(int(trace_rsp_id)) }).int())
 		trace_stat_id = u32((trm['stat_id'] or { toml.Any(int(trace_stat_id)) }).int())
+	}
+	// Fail BEFORE writing any output when [trace] is active but the DBC path (arg 8) is missing —
+	// otherwise the earlier generators (sig/ports/glue/manifest) would already be on disk when we
+	// panic, leaving a half-generated tree.
+	if trace_on && args.len < 8 {
+		panic('loom2v: [trace] is active but no trace_dbc output path was given (arg 8) — ' +
+			'pass it so the observability DBC is generated (it would be skipped silently otherwise)')
 	}
 
 	// [target] baremetal: emit a single-core inline superloop instead of the host's
@@ -1108,17 +1119,15 @@ fn main() {
 		os.write_file(args[6], man.join('\n') + '\n') or { panic('write ${args[6]}: ${err}') }
 	}
 
-	// --- trace DBC (arg 8, required when [trace] is present): the symbolic decode for the
+	// --- trace DBC (arg 8, required when [trace] is active): the symbolic decode for the
 	//     observability frames, so blobly_net shows opcode/result/state by name and can send
-	//     commands by name. Ids come from [trace]. LoadDetail is emitted only when telemetry is
-	//     ENABLED with a detail_id — so the DBC mirrors the generated runtime (which gates the
-	//     LoadDetail tx on telem_on) and a disabled/invalid detail_id can't leak into it. ---
+	//     commands by name. Ids come from [trace]. LoadDetail is included only when telemetry is
+	//     ENABLED AND shares the trace bus — the DBC is per-bus, so a telemetry frame on another
+	//     channel must not appear here (and a disabled/off-bus detail_id can't leak in). ---
 	if trace_on {
-		if args.len < 8 {
-			panic('loom2v: [trace] is present but no trace_dbc output path was given (arg 8) — ' +
-				'pass it so the observability DBC is generated (it is skipped silently otherwise)')
-		}
-		detail := if telem_on { telem_detail_id } else { u32(0) }
+		// the missing-arg-8 case already failed fast above, before any output was written.
+		eff_trace_bus := if trace_bus != '' { trace_bus } else { telem_bus }
+		detail := if telem_on && telem_bus == eff_trace_bus { telem_detail_id } else { u32(0) }
 		dbc_txt := trace_dbc(trace_cmd_id, trace_rsp_id, trace_stat_id, detail)
 		os.write_file(args[7], dbc_txt) or { panic('write ${args[7]}: ${err}') }
 	}

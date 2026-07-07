@@ -155,6 +155,12 @@ pub fn validate(doc toml.Doc) []string {
 	// oversized ring fails at ecucheck instead of producing a bad DBC/buffer.
 	if tr := doc.value_opt('trace') {
 		trm := tr.as_map()
+		// A [trace] block is active unless explicitly disabled — so it can be turned off (no bus
+		// needed) without deleting the block. Disabled: nothing to validate (this is the last
+		// section, so returning here skips only [trace]'s rules).
+		if !(trm['enabled'] or { toml.Any(true) }).bool() {
+			return errs
+		}
 		mut buses := map[string]bool{}
 		if bv := doc.value_opt('bus') {
 			for bname, _ in bv.as_map() {
@@ -206,35 +212,74 @@ pub fn validate(doc toml.Doc) []string {
 		// wrapped/duplicate BO_ id and no two frames collide on the wire. Enabled telemetry ids
 		// join the set ONLY when telemetry shares the trace bus — on a separate CAN channel they
 		// can't collide. Defaults per docs/telemetry.md.
-		mut ids := map[string]int{}
+		// Read ids as i64 (not int): toml's .int() truncates to 32 bits, so a value >= 2^32 could
+		// wrap into range and defeat the check below.
+		mut ids := map[string]i64{}
 		defaults := {
-			'cmd_id':     0x7E2
-			'rsp_id':     0x7E3
-			'stat_id':    0x7E4
-			'record_id':  0x7E5
-			'dump_fc_id': 0x7E6
+			'cmd_id':     i64(0x7E2)
+			'rsp_id':     i64(0x7E3)
+			'stat_id':    i64(0x7E4)
+			'record_id':  i64(0x7E5)
+			'dump_fc_id': i64(0x7E6)
 		}
 		for field, def in defaults {
 			mut id := def
 			if v := trm[field] {
-				id = v.int()
+				id = v.i64()
 			}
 			ids[field] = id
 		}
 		if telem := doc.value_opt('telemetry') {
 			tm := telem.as_map()
-			if (tm['enabled'] or { toml.Any(false) }).bool() && str_of(tm, 'bus') == tbus {
+			// only a telemetry frame on the SAME declared bus can collide (tbus != '' guards the
+			// both-empty case, which is already reported as "[trace] has no bus").
+			if (tm['enabled'] or { toml.Any(false) }).bool() && tbus != '' && str_of(tm, 'bus') == tbus {
 				if v := tm['id'] {
-					ids['telemetry.id'] = v.int()
+					ids['telemetry.id'] = v.i64()
 				}
 				if v := tm['detail_id'] {
-					ids['telemetry.detail_id'] = v.int()
+					ids['telemetry.detail_id'] = v.i64()
 				}
 			}
 		}
-		// Range-check EVERY id (trace + the shared telemetry ids) then check uniqueness among the
-		// in-range ones — so a wrapped/negative telemetry id can't slip into the generated DBC.
-		mut seen := map[int]string{}
+		// Ids already claimed by OTHER traffic on the trace bus: ISO-TP rx/tx and NM tx + its rx
+		// range. A trace id reusing one is a wire collision on that bus. (Application DBC frame
+		// ids live in the .dbc, which this validator doesn't parse — that overlap isn't caught
+		// here.)
+		mut reserved := map[i64]string{}
+		mut nm_rx_lo := i64(-1)
+		mut nm_rx_hi := i64(-1)
+		if tbus != '' {
+			for it in toml_arr(doc, 'isotp') {
+				im := it.as_map()
+				if str_of(im, 'bus') == tbus {
+					iname := str_of(im, 'name')
+					if v := im['rx_id'] {
+						reserved[v.i64()] = 'isotp "${iname}" rx_id'
+					}
+					if v := im['tx_id'] {
+						reserved[v.i64()] = 'isotp "${iname}" tx_id'
+					}
+				}
+			}
+			if nmv := doc.value_opt('nm') {
+				if nmbus := nmv.as_map()[tbus] {
+					nmm := nmbus.as_map()
+					if v := nmm['tx_id'] {
+						reserved[v.i64()] = 'nm.${tbus} tx_id'
+					}
+					if v := nmm['rx_lo'] {
+						nm_rx_lo = v.i64()
+					}
+					if v := nmm['rx_hi'] {
+						nm_rx_hi = v.i64()
+					}
+				}
+			}
+		}
+		// Range-check EVERY id (trace + the shared telemetry ids), then check uniqueness among the
+		// in-range ones and against the other traffic already on the bus.
+		mut seen := map[i64]string{}
 		for label, id in ids {
 			if id < 0 || id > 0x1fff_ffff {
 				errs << '[trace] ${label} ${id} out of CAN id range (0..0x1FFFFFFF)'
@@ -244,6 +289,12 @@ pub fn validate(doc toml.Doc) []string {
 				errs << '[trace] frame id ${id} used by both ${prev} and ${label} — ids must be distinct'
 			} else {
 				seen[id] = label
+			}
+			if res := reserved[id] {
+				errs << '[trace] ${label} ${id} collides with ${res} already on bus "${tbus}"'
+			}
+			if nm_rx_lo >= 0 && nm_rx_hi >= nm_rx_lo && id >= nm_rx_lo && id <= nm_rx_hi {
+				errs << '[trace] ${label} ${id} falls in the nm.${tbus} rx range [${nm_rx_lo}..${nm_rx_hi}]'
 			}
 		}
 	}

@@ -242,3 +242,123 @@ bus = "can1"
 fn test_no_trace_block_is_fine() {
 	assert errs_of(app) == []
 }
+
+// enabled = false turns tracing off without deleting the block — no bus/ids validated.
+fn test_trace_disabled_skips_validation() {
+	assert errs_of('
+[trace]
+enabled = false
+level = "bogus"
+' + app) == []
+}
+
+// an id at/above 2^32 must still be caught — toml .int() would truncate it back into range.
+fn test_trace_id_above_u32_flagged() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+cmd_id = 0x100000000
+' + app)
+	assert e.any(it.contains('cmd_id') && it.contains('out of CAN id range'))
+}
+
+// an id above the 29-bit CAN max (but under 2^32) is flagged.
+fn test_trace_id_over_29bit_flagged() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+rsp_id = 0x20000000
+' + app)
+	assert e.any(it.contains('rsp_id') && it.contains('out of CAN id range'))
+}
+
+// buffer_records lower bound.
+fn test_trace_buffer_records_zero_flagged() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+buffer_records = 0
+' + app)
+	assert e.any(it.contains('buffer_records 0 out of range'))
+}
+
+// a trace id colliding with the record_id default (0x7E5) is caught.
+fn test_trace_id_collides_with_default_record_id() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+cmd_id = 0x7E5
+' + app)
+	assert e.any(it.contains('used by both') && it.contains('record_id'))
+}
+
+// a trace id reusing an ISO-TP id on the same bus is a wire collision.
+fn test_trace_id_collides_with_isotp() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+cmd_id = 0x700
+
+[[isotp]]
+name = "diag"
+bus = "can0"
+rx_id = 0x700
+tx_id = 0x708
+' + app)
+	assert e.any(it.contains('collides with isotp "diag" rx_id'))
+}
+
+// a trace id inside the NM rx range on the same bus is flagged.
+fn test_trace_id_in_nm_rx_range() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[nm.can0]
+tx_id = 0x500
+rx_lo = 0x500
+rx_hi = 0x5FF
+
+[trace]
+bus = "can0"
+cmd_id = 0x510
+' + app)
+	assert e.any(it.contains('nm.can0 rx range'))
+}
+
+// an ISO-TP frame on a DIFFERENT bus than trace can't collide — don't flag it.
+fn test_trace_id_isotp_other_bus_ok() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[bus.can1]
+interface = "vcan1"
+
+[trace]
+bus = "can1"
+cmd_id = 0x700
+
+[[isotp]]
+name = "diag"
+bus = "can0"
+rx_id = 0x700
+tx_id = 0x708
+' + app)
+	assert e.filter(it.contains('collides with')).len == 0
+}
