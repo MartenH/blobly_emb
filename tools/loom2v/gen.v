@@ -73,6 +73,15 @@ fn main() {
 	dbc := args[2]
 	doc := toml.parse_file(ecu) or { panic('parse ${ecu}: ${err}') }
 
+	// Validate the partition/thread/fb structure FIRST — the rules live in ecumodel, shared with
+	// ecucheck so the gate and generator can't drift — BEFORE any DBC/signal parsing below, which
+	// would otherwise panic on a DBC issue for a config that is structurally invalid anyway.
+	// Everything after this assumes a valid structure (no re-validation).
+	verrs := ecumodel.validate(doc)
+	if verrs.len > 0 {
+		panic('loom2v: invalid ecu.toml:\n  ' + verrs.join('\n  '))
+	}
+
 	// declared buses (endpoint names that mean "external / on the wire")
 	mut buses := map[string]bool{}
 	mut bus_core := map[string]int{}
@@ -312,16 +321,10 @@ fn main() {
 		}
 	}
 
+	// Build the partition/thread maps (already validated up front, right after parse).
 	mut core_of := map[string]int{}
 	mut threads_of := map[string][]string{} // partition -> its thread names, declaration order
 	mut thread_part := map[string]string{} // thread -> partition (thread names are GLOBALLY unique)
-	// Validate the partition/thread/fb structure up front — the rules live in ecumodel, shared
-	// with ecucheck, so the gate and the generator can't drift. Then build the maps below
-	// assuming valid input (no re-validation).
-	verrs := ecumodel.validate(doc)
-	if verrs.len > 0 {
-		panic('loom2v: invalid ecu.toml:\n  ' + verrs.join('\n  '))
-	}
 	for p in ecumodel.toml_arr(doc, 'partition') {
 		m := p.as_map()
 		pname := (m['name'] or { toml.Any('') }).string()
