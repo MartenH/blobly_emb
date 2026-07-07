@@ -27,6 +27,9 @@ core      = 0         # the CAN bridge (COM rx/tx) is generated to run on this c
 name    = "sense"
 core    = 0
 trusted = false
+  [[partition.thread]]
+  name     = "main"
+  priority = 10
 
 [[partition]]
 name    = "ctrl"
@@ -40,6 +43,9 @@ trusted = false
 #   INTERNAL = both endpoints partitions:
 #       from == to  -> LOCAL cell (same-partition FB->FB, no IOC, no sync)
 #       from != to  -> IOC channel (cross-partition; `transport` applies)
+  [[partition.thread]]
+  name     = "main"
+  priority = 10
 [[signal]]
 name = "VehicleSpeed"
 fields = { kph = "u16", valid = "bool" }

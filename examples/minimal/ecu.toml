@@ -11,6 +11,9 @@ core      = 0         # generated COM bridge runs here
 [[partition]]
 name    = "app"
 core    = 1
+  [[partition.thread]]
+  name     = "main"
+  priority = 10
 trusted = false
 
 # EXTERNAL = a bus endpoint (can0); INTERNAL = partition-to-partition.

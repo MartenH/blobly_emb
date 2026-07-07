@@ -110,10 +110,13 @@ partition = "ctrl"
   thread    = "fast"     # runs on ctrl's "fast" thread
 ```
 
-Defaults keep simple ECUs simple: a partition that declares no threads has one implicit
-default thread, and an fb.handler with no `thread` runs on it — so every current example
-still means "partition = one thread". Multiple threads per core is what makes the coarse
-thread trace earn its keep (preemption by priority → who actually held the core).
+Every **partition MUST declare at least one thread** — there is no implicit default; a
+partition always has an explicit thread set. An **fb.handler runs on a thread of its
+partition**: `thread` is optional when the partition has exactly one thread (it defaults to
+that one) and **required** when the partition declares several. Multiple threads per core is
+what makes the coarse thread trace earn its keep (preemption by priority → who actually held
+the core). loom2v rejects a partition with no thread, or an fb.handler whose `thread` isn't
+one of its partition's threads.
 
 ## Identity: a generated manifest (threads + fb.handlers)
 

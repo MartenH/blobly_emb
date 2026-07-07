@@ -24,6 +24,9 @@ core      = 0
 name    = "mon"
 core    = 1
 trusted = false
+  [[partition.thread]]
+  name     = "main"
+  priority = 10
 
 [[signal]]
 name = "VehicleSpeed"
