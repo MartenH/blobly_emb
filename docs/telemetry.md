@@ -344,18 +344,27 @@ no-alloc array). The level is configured (or chosen at read-out).
 
 ### Coarse — thread trace (4-byte record)
 
-The primary "who held the core" level, made **as small as possible** so a fixed buffer
-spans a long window. One record per thread run (the thread that starts running):
+The primary "who held the core" level. One record per context switch: the thread now
+running, **why** the switch happened (so preemption is explicit, not guessed), and the time
+since the previous record. Kept to 4 bytes by **delta**-encoding the time — switches are
+frequent, so a `u16` µs delta covers the gap while the *window is unbounded* (the host
+accumulates deltas):
 
 ```
-b0    thread_id (u8)
-b1-3  start_us  (u24, LE)   relative to capture start
+b0    to_thread  (u8)         the thread now running (switched TO)
+b1    reason     (u8)         why the previous thread stopped / this switch happened:
+                              0 preempted | 1 blocked | 2 yielded | 3 exited |
+                              4 isr-enter | 5 isr-exit | 255 time-extend
+b2-3  delta_us   (u16, LE)    time since the previous record (`time_unit`-scaled)
 ```
 
-The host reads it as *"thread `b0` ran from `start_us` until the next record"* — so
-preemption is implicit (the next record is whoever took the core). At 1 µs resolution a
-u24 spans ~16.7 s; the manifest's `time_unit` can coarsen it (e.g. 64 µs → ~18 min) for a
-longer window without growing the record. No reason/flags byte at this level — keep it 4 B.
+The host reconstructs the timeline by accumulating `delta_us`, and reads each record as
+*"`to_thread` ran until the next switch"*. **`reason` is the preemption signal**: `preempted`
+means the outgoing thread is still ready and will resume (a higher-priority thread took the
+core); `blocked`/`yielded`/`exited` mean it gave up voluntarily. If a thread runs longer than
+one `u16` delta (~65 ms at 1 µs, longer with a coarser `time_unit`) with no switch, the target
+emits a `255 time-extend` record (a `+65535`-unit tick, `to_thread` unchanged) so the delta
+never overflows. `from_thread` is implicit — the previous record's `to_thread`.
 
 ### Fine — thread + fb.handler trace (8-byte records)
 
