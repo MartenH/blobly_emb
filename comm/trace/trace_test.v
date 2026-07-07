@@ -200,7 +200,8 @@ fn test_epoch_carries_full_u32_base() {
 }
 
 // When an epoch record ages out of a ring while records that depend on it survive, the dump
-// must still carry that base — pack() re-emits it as a leading epoch.
+// must still carry that base — pack() leads with a synthetic epoch that REPLACES the oldest
+// slot, so the record count stays == used (matching TraceRsp.records_used).
 fn test_ring_preserves_evicted_epoch_base() {
 	base := u32(0x0200_0000) // past one u24 wrap
 	mut backing := [4]Record{}
@@ -213,7 +214,7 @@ fn test_ring_preserves_evicted_epoch_base() {
 	t.push(new_fb(4, 0, 40, 5)) // evicts the epoch; ring = [fb1, fb2, fb3, fb4]
 	mut out := [64]u8{}
 	n := t.pack(&out[0], 64)
-	assert n == 8 * 5 // a leading epoch + the 4 surviving records
+	assert n == 8 * 4 // epoch replaces the oldest (fb1): epoch + fb2,fb3,fb4 == used records
 	mut hb := [8]u8{}
 	for j in 0 .. 8 {
 		hb[j] = out[j]
@@ -221,13 +222,44 @@ fn test_ring_preserves_evicted_epoch_base() {
 	lead := decode_record(hb)
 	assert lead.is_epoch()
 	assert lead.epoch_base() == base // the aged-out base is preserved
-	// and the first real record after it is fb1 (the oldest survivor)
+	// the first real record after it is fb2 (fb1 was replaced by the base epoch)
 	mut rb := [8]u8{}
 	for j in 0 .. 8 {
 		rb[j] = out[8 + j]
 	}
 	first := decode_record(rb)
-	assert first.kind() == kind_fb && first.id() == 1
+	assert first.kind() == kind_fb && first.id() == 2
+}
+
+// A prefix must not clobber a NEWER epoch still in the ring: pack() replaces only the oldest
+// slot, so an in-buffer epoch is retained and re-anchors the records after it.
+fn test_prefixed_pack_retains_inner_epoch() {
+	b1 := u32(0x0100_0000)
+	b2 := u32(0x0200_0000)
+	mut backing := [4]Record{}
+	mut t := new_buffer(&backing[0], 4, .ring, 0)
+	t.start()
+	t.push(new_epoch(b1)) // B1
+	t.push(new_fb(1, 0, 10, 5)) // base B1
+	t.push(new_epoch(b2)) // B2, in-buffer
+	t.push(new_fb(2, 0, 20, 5)) // base B2; ring full: [epochB1, fb1, epochB2, fb2]
+	t.push(new_fb(3, 0, 30, 5)) // evicts epochB1 -> prefix=B1; ring=[fb1, epochB2, fb2, fb3]
+	mut out := [64]u8{}
+	n := t.pack(&out[0], 64)
+	assert n == 8 * 4 // epoch(B1) replaces fb1; then in-buffer epochB2, fb2, fb3 retained
+	// decode the stream: B1 prefix, then the in-buffer B2 epoch must survive
+	mut recs := []Record{}
+	for k in 0 .. 4 {
+		mut cb := [8]u8{}
+		for j in 0 .. 8 {
+			cb[j] = out[k * 8 + j]
+		}
+		recs << decode_record(cb)
+	}
+	assert recs[0].is_epoch() && recs[0].epoch_base() == b1
+	assert recs[1].is_epoch() && recs[1].epoch_base() == b2 // NOT dropped
+	assert recs[2].kind() == kind_fb && recs[2].id() == 2
+	assert recs[3].kind() == kind_fb && recs[3].id() == 3
 }
 
 // Once a newer epoch becomes the oldest in-buffer record, the carried prefix is stale and must
@@ -256,9 +288,9 @@ fn test_ring_clears_stale_prefix_when_newer_epoch_anchors() {
 	assert e.epoch_base() == 0x0200_0000 // the live in-buffer epoch, not the stale B1
 }
 
-// When a prefix epoch won't fit alongside the whole window, pack drops the OLDEST data record
-// (keeping the base + the most recent records), not the newest.
-fn test_prefixed_pack_drops_oldest_not_newest() {
+// The base epoch replaces the OLDEST slot (never the newest), so the most recent window is
+// kept and the total stays == used records.
+fn test_prefixed_pack_replaces_oldest_slot() {
 	mut backing := [4]Record{}
 	mut t := new_buffer(&backing[0], 4, .ring, 0)
 	t.start()
@@ -267,9 +299,9 @@ fn test_prefixed_pack_drops_oldest_not_newest() {
 	t.push(new_fb(2, 0, 20, 5))
 	t.push(new_fb(3, 0, 30, 5))
 	t.push(new_fb(4, 0, 40, 5)) // evict epoch -> prefix; ring = [fb1, fb2, fb3, fb4]
-	mut out := [32]u8{} // room for 4 records; prefix + 4 = 5 -> one oldest dropped
-	n := t.pack(&out[0], 32)
-	assert n == 32
+	mut out := [64]u8{} // ample room — the epoch still replaces fb1, not adds to it
+	n := t.pack(&out[0], 64)
+	assert n == 32 // epoch + fb2,fb3,fb4 == 4 records (== used)
 	mut hb := [8]u8{}
 	for j in 0 .. 8 {
 		hb[j] = out[j]
