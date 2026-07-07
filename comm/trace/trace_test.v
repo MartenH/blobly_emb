@@ -229,3 +229,60 @@ fn test_ring_preserves_evicted_epoch_base() {
 	first := decode_record(rb)
 	assert first.kind() == kind_fb && first.id() == 1
 }
+
+// Once a newer epoch becomes the oldest in-buffer record, the carried prefix is stale and must
+// be dropped — otherwise pack() prepends a redundant epoch and steals a record slot.
+fn test_ring_clears_stale_prefix_when_newer_epoch_anchors() {
+	mut backing := [4]Record{}
+	mut t := new_buffer(&backing[0], 4, .ring, 0)
+	t.start()
+	t.push(new_epoch(0x0100_0000)) // B1
+	t.push(new_fb(1, 0, 10, 5))
+	t.push(new_fb(2, 0, 20, 5))
+	t.push(new_fb(3, 0, 30, 5)) // full
+	t.push(new_epoch(0x0200_0000)) // B2 evicts the B1 epoch -> prefix = B1
+	t.push(new_fb(4, 0, 40, 5))
+	t.push(new_fb(5, 0, 50, 5))
+	t.push(new_fb(6, 0, 60, 5)) // B2 epoch is now the oldest -> stale prefix cleared
+	mut out := [64]u8{}
+	n := t.pack(&out[0], 64)
+	assert n == 8 * 4 // in-buffer epoch(B2) + fb4,fb5,fb6 — no synthetic prefix
+	mut hb := [8]u8{}
+	for j in 0 .. 8 {
+		hb[j] = out[j]
+	}
+	e := decode_record(hb)
+	assert e.is_epoch()
+	assert e.epoch_base() == 0x0200_0000 // the live in-buffer epoch, not the stale B1
+}
+
+// When a prefix epoch won't fit alongside the whole window, pack drops the OLDEST data record
+// (keeping the base + the most recent records), not the newest.
+fn test_prefixed_pack_drops_oldest_not_newest() {
+	mut backing := [4]Record{}
+	mut t := new_buffer(&backing[0], 4, .ring, 0)
+	t.start()
+	t.push(new_epoch(0x0200_0000))
+	t.push(new_fb(1, 0, 10, 5))
+	t.push(new_fb(2, 0, 20, 5))
+	t.push(new_fb(3, 0, 30, 5))
+	t.push(new_fb(4, 0, 40, 5)) // evict epoch -> prefix; ring = [fb1, fb2, fb3, fb4]
+	mut out := [32]u8{} // room for 4 records; prefix + 4 = 5 -> one oldest dropped
+	n := t.pack(&out[0], 32)
+	assert n == 32
+	mut hb := [8]u8{}
+	for j in 0 .. 8 {
+		hb[j] = out[j]
+	}
+	assert decode_record(hb).is_epoch() // base still leads
+	mut r1 := [8]u8{}
+	for j in 0 .. 8 {
+		r1[j] = out[8 + j]
+	}
+	assert decode_record(r1).id() == 2 // fb1 (oldest) dropped, fb2 first
+	mut rlast := [8]u8{}
+	for j in 0 .. 8 {
+		rlast[j] = out[24 + j]
+	}
+	assert decode_record(rlast).id() == 4 // newest preserved
+}

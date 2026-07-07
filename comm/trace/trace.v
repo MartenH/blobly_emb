@@ -278,6 +278,14 @@ pub fn (mut t TraceBuffer) push(r Record) {
 			if t.used < t.cap {
 				t.used++
 			}
+			// Once a full ring's oldest record is itself an epoch, an in-buffer epoch anchors
+			// everything and the carried prefix is stale — drop it so it stops stealing a slot.
+			if t.has_prefix && t.used == t.cap {
+				oldest := unsafe { t.buf[t.head] } // full: head is the oldest slot
+				if oldest.is_epoch() {
+					t.has_prefix = false
+				}
+			}
 			if t.pending {
 				if t.post_rem > 0 {
 					t.post_rem--
@@ -329,10 +337,17 @@ pub fn (mut t TraceBuffer) trigger() {
 // for an ISO-TP dump; `out` is a caller-owned fixed buffer (no alloc).
 pub fn (t TraceBuffer) pack(out &u8, out_cap int) int {
 	mut n := 0
-	// If an epoch aged out of the ring, lead with it so the oldest records keep their base.
+	mut i0 := u32(0)
+	// If an epoch aged out of the ring, lead with it so the oldest records keep their base. The
+	// base epoch takes one slot; if the whole window won't then fit, drop the OLDEST data
+	// records (keep the base + the most recent window) rather than silently dropping the newest.
 	if t.has_prefix {
-		if n + 8 > out_cap {
-			return n
+		if out_cap < 8 {
+			return 0
+		}
+		slots := u32(out_cap / 8)
+		if t.used + 1 > slots {
+			i0 = t.used + 1 - slots
 		}
 		p := encode_record(new_epoch(t.prefix_base))
 		unsafe {
@@ -342,7 +357,7 @@ pub fn (t TraceBuffer) pack(out &u8, out_cap int) int {
 		}
 		n += 8
 	}
-	for i in u32(0) .. t.used {
+	for i in i0 .. t.used {
 		if n + 8 > out_cap {
 			break
 		}
@@ -368,8 +383,14 @@ pub fn (t TraceBuffer) pack_block(out &u8, out_cap int, core u8) int {
 	}
 	mut n := 8 // reserve the header slot; backfill it once the count is known
 	mut count := u32(0)
-	// A preserved epoch (aged out of the ring) leads the block's records so the count covers it.
+	mut i0 := u32(0)
+	// A preserved epoch (aged out of the ring) leads the block's records so the count covers it;
+	// like pack(), if the header + epoch + records won't all fit, drop the OLDEST data records.
 	if t.has_prefix && n + 8 <= out_cap {
+		data_slots := u32(out_cap / 8) - 1 // minus the header slot
+		if t.used + 1 > data_slots {
+			i0 = t.used + 1 - data_slots
+		}
 		p := encode_record(new_epoch(t.prefix_base))
 		unsafe {
 			for j in 0 .. 8 {
@@ -379,7 +400,7 @@ pub fn (t TraceBuffer) pack_block(out &u8, out_cap int, core u8) int {
 		n += 8
 		count++
 	}
-	for i in u32(0) .. t.used {
+	for i in i0 .. t.used {
 		if n + 8 > out_cap {
 			break
 		}
