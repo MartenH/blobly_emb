@@ -148,5 +148,78 @@ pub fn validate(doc toml.Doc) []string {
 			errs << 'fb "${fbname}" has no [[fb.handler]] — an fb needs at least one handler'
 		}
 	}
+
+	// [trace] — the runtime-observability block loom2v generates the trace wiring from. Validate
+	// the enums loom2v switches on (level, mode), the numeric ranges (pre_pct, buffer_records),
+	// and the CAN channel the traffic binds to. Frame ids are handled by loom2v (see below).
+	if tr := doc.value_opt('trace') {
+		trm := tr.as_map()
+		// A [trace] block is active unless explicitly disabled — so it can be turned off (no bus
+		// needed) without deleting the block. Disabled: nothing to validate (this is the last
+		// section, so returning here skips only [trace]'s rules).
+		if !(trm['enabled'] or { toml.Any(true) }).bool() {
+			return errs
+		}
+		mut buses := map[string]bool{}
+		if bv := doc.value_opt('bus') {
+			for bname, _ in bv.as_map() {
+				buses[bname] = true
+			}
+		}
+		// The cmd/rsp + dump ride a CAN channel: `trace.bus`, or `[telemetry].bus` by default.
+		// Whichever applies must resolve to a declared [bus.X], else the traffic has no bus.
+		mut tbus := str_of(trm, 'bus')
+		mut bus_src := 'trace.bus'
+		if 'bus' !in trm {
+			bus_src = '[telemetry].bus (default)'
+			if telem := doc.value_opt('telemetry') {
+				tbus = str_of(telem.as_map(), 'bus')
+			}
+		}
+		if tbus == '' {
+			errs << '[trace] has no bus — set trace.bus (or [telemetry].bus) to a declared [bus.X]'
+		} else if tbus !in buses {
+			errs << '[trace] bus "${tbus}" from ${bus_src} is not a declared [bus.${tbus}]'
+		}
+		if 'level' in trm {
+			lvl := str_of(trm, 'level')
+			if lvl !in ['thread', 'thread+isr', 'thread+fb', 'all'] {
+				errs << '[trace] level "${lvl}" is invalid (thread | thread+isr | thread+fb | all)'
+			}
+		}
+		if 'mode' in trm {
+			md := str_of(trm, 'mode')
+			if md !in ['ring', 'oneshot'] {
+				errs << '[trace] mode "${md}" is invalid (ring | oneshot)'
+			}
+		}
+		// pre_pct/buffer_records: only range-check actual integers. .i64() returns 0 for a
+		// non-numeric value, so a string like "150" would slip through when loom2v calls
+		// validate() without ecucheck's type pass first — check the type here too.
+		if v := trm['pre_pct'] {
+			if v is i64 {
+				if v < 0 || v > 100 {
+					errs << '[trace] pre_pct ${v} out of range (0..100)'
+				}
+			} else {
+				errs << '[trace] pre_pct must be an integer (0..100)'
+			}
+		}
+		if v := trm['buffer_records'] {
+			// TraceRsp reports records_used/capacity as u16 (comm/trace.handle_cmd), so a ring
+			// above 65535 would wrap the reported size — cap it here.
+			if v is i64 {
+				if v < 1 || v > 65535 {
+					errs << '[trace] buffer_records ${v} out of range (1..65535 — TraceRsp reports it as u16)'
+				}
+			} else {
+				errs << '[trace] buffer_records must be an integer (1..65535)'
+			}
+		}
+		// Frame ids (cmd_id/rsp_id/stat_id/record_id/dump_fc_id) are each either a literal CAN id
+		// (used as-is — allocating a non-colliding id is the author's responsibility) or the name
+		// of a message in bus.dbc. The name case is resolved + checked-to-exist by loom2v, which
+		// loads the DBC; this validator doesn't, so it does not police the ids here.
+	}
 	return errs
 }

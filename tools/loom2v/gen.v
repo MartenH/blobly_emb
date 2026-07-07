@@ -369,6 +369,37 @@ fn main() {
 		}
 	}
 
+	// --- trace: the runtime-observability control/telemetry frames. Gated by a [trace]
+	//     block; loom2v emits their symbolic DBC (arg 8) so blobly_net can decode/send them
+	//     by name. Ids default to the docs/telemetry.md convention. The dump rides ISO-TP on
+	//     record_id/dump_fc_id (not a decodable frame), so those are not DBC messages. ---
+	// Each observability frame id is either a literal CAN id (used as-is — collision-free
+	// allocation is the author's responsibility) or the NAME of a message in bus.dbc, resolved
+	// to that message's id (and required to exist). Defaults are the docs/telemetry.md ids.
+	mut trace_on := false
+	mut trace_bus := ''
+	mut trace_cmd_id := u32(0x7E2)
+	mut trace_rsp_id := u32(0x7E3)
+	mut trace_stat_id := u32(0x7E4)
+	mut trace_record_id := u32(0x7E5)
+	mut trace_dump_fc_id := u32(0x7E6)
+	if trcfg := doc.value_opt('trace') {
+		trm := trcfg.as_map()
+		// a [trace] block is active unless explicitly disabled (enabled = false) — so tracing
+		// can be turned off without deleting the whole block.
+		trace_on = (trm['enabled'] or { toml.Any(true) }).bool()
+		trace_bus = (trm['bus'] or { toml.Any('') }).string()
+		// Only resolve ids when tracing is active — a disabled block generates nothing, so a
+		// stale `cmd_id = "SomeName"` must not load bus.dbc or panic on a missing message.
+		if trace_on {
+			trace_cmd_id = trace_frame_id(trm, 'cmd_id', trace_cmd_id, dbc)
+			trace_rsp_id = trace_frame_id(trm, 'rsp_id', trace_rsp_id, dbc)
+			trace_stat_id = trace_frame_id(trm, 'stat_id', trace_stat_id, dbc)
+			trace_record_id = trace_frame_id(trm, 'record_id', trace_record_id, dbc)
+			trace_dump_fc_id = trace_frame_id(trm, 'dump_fc_id', trace_dump_fc_id, dbc)
+		}
+	}
+
 	// [target] baremetal: emit a single-core inline superloop instead of the host's
 	// spawned partitions + osal. No threads, no osal (POSIX now_us/sleep_us don't
 	// exist bare-metal); the timebase is board_now_us() and the loop paces to a fixed
@@ -1089,10 +1120,45 @@ fn main() {
 				tid++
 			}
 		}
+		// The observability frame ids on the trace bus. The protocol (TraceCmd/Rsp/HandlerStat +
+		// the ISO-TP record dump) is fixed and first-party, so blobly_net decodes it natively from
+		// these ids — no generated DBC. Names given in [trace] were already resolved to ids above.
+		if trace_on {
+			tbus := if trace_bus != '' { trace_bus } else { telem_bus }
+			man << '# trace frames: frame,id,bus'
+			man << 'cmd,0x${trace_cmd_id.hex()},${tbus}'
+			man << 'rsp,0x${trace_rsp_id.hex()},${tbus}'
+			man << 'stat,0x${trace_stat_id.hex()},${tbus}'
+			man << 'record,0x${trace_record_id.hex()},${tbus}'
+			man << 'dump_fc,0x${trace_dump_fc_id.hex()},${tbus}'
+		}
 		os.write_file(args[6], man.join('\n') + '\n') or { panic('write ${args[6]}: ${err}') }
 	}
 
 	eprintln('loom2v: ${sig_names.len} signals (${bus_names.len} bus bridge), ${isotp_conns.len} isotp, ${by_part.len} partition(s)')
+}
+
+// trace_frame_id resolves a [trace] observability id: a literal number is the CAN id (used
+// as-is — a colliding id is the author's problem); a string is a bus.dbc message name that must
+// exist, and its id is used (so trace frames can piggyback on ids already defined in the DBC).
+fn trace_frame_id(trm map[string]toml.Any, field string, def u32, dbc string) u32 {
+	v := trm[field] or { return def }
+	if v is string {
+		db := candb.load_dbc_file(dbc) or {
+			panic('loom2v: [trace] ${field} = "${v}" is a bus.dbc message name but ${os.file_name(dbc)} did not load: ${err}')
+		}
+		id := dbc_id_of(db, snake(v)) or {
+			panic('loom2v: [trace] ${field} = "${v}" is not a message in ${os.file_name(dbc)}')
+		}
+		return u32(id)
+	}
+	// A literal id must be a legal CAN identifier — read as i64 (so a >32-bit value doesn't
+	// wrap) and reject out-of-range before it becomes a bogus manifest frame.
+	n := v.i64()
+	if n < 0 || n > 0x1fff_ffff {
+		panic('loom2v: [trace] ${field} ${n} is not a valid CAN id (0..0x1FFFFFFF)')
+	}
+	return u32(n)
 }
 
 // did_signal_encode emits the big-endian write of a live signal value into a
