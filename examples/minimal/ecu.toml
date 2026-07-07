@@ -11,10 +11,10 @@ core      = 0         # generated COM bridge runs here
 [[partition]]
 name    = "app"
 core    = 1
-  [[partition.thread]]
-  name     = "main"
-  priority = 10
 trusted = false
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
 
 # EXTERNAL = a bus endpoint (can0); INTERNAL = partition-to-partition.
 [[signal]]
@@ -44,7 +44,7 @@ tx   = { mode = "mixed", cycle_ms = 100, min_delay_ms = 20 }
 
 [[fb]]
 name      = "SpeedMonitor"
-partition = "app"
+thread    = "app_main"
   [[fb.handler]]
   name      = "on_10ms"
   period_ms = 10

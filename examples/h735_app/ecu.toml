@@ -22,7 +22,7 @@ trusted = true
 # Partition-local signals (from == to == "app"): FB -> FB on the same core, carried as
 # a direct struct cell, no IOC/bus.
   [[partition.thread]]
-  name     = "main"
+  name     = "app_main"
   priority = 10
 [[signal]]
 name = "LoadCmd" # Governor -> Load: how much work to burn this slot
@@ -40,7 +40,7 @@ transport = "double"
 
 [[fb]]
 name      = "Governor"
-partition = "app"
+thread    = "app_main"
   [[fb.handler]]
   name      = "on_100ms"
   period_ms = 100
@@ -48,7 +48,7 @@ partition = "app"
 
 [[fb]]
 name      = "Load"
-partition = "app"
+thread    = "app_main"
   [[fb.handler]]
   name      = "on_1ms"
   period_ms = 1
@@ -57,7 +57,7 @@ partition = "app"
 
 [[fb]]
 name      = "Heartbeat"
-partition = "app"
+thread    = "app_main"
   [[fb.handler]]
   name      = "on_100ms"
   period_ms = 100 # no reads/writes: a cheap timer-only handler

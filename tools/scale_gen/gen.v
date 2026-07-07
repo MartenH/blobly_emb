@@ -17,7 +17,7 @@ module main
 import os
 
 const sig_per_msg = 8 // signals per CAN message (8x 8-bit = one 8-byte frame)
-const pool = 64       // internal cells per partition (shared, single-writer = the core)
+const pool = 64 // internal cells per partition (shared, single-writer = the core)
 const reads_per_fb = 10
 const writes_per_fb = 10
 
@@ -133,7 +133,7 @@ fn gen_toml(parts int, buses int, fbs int) string {
 		b << 'core    = ${p}'
 		b << 'trusted = ${p == 0}'
 		b << '  [[partition.thread]]'
-		b << '  name     = "main"'
+		b << '  name     = "p${p}_main"' // globally-unique thread name
 		b << '  priority = 10'
 		b << ''
 	}
@@ -206,7 +206,7 @@ fn gen_toml(parts int, buses int, fbs int) string {
 			writes := fb_writes(p, j, parts, buses, fbs)
 			b << '[[fb]]'
 			b << 'name      = "Fb_${p}_${j}"'
-			b << 'partition = "p${p}"'
+			b << 'thread    = "p${p}_main"' // fb -> thread (partition p${p} derived)
 			b << '  [[fb.handler]]'
 			b << '  name      = "on_10ms"'
 			b << '  period_ms = 10'

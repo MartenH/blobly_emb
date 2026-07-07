@@ -1,6 +1,6 @@
 V ?= v
 
-.PHONY: example run-example list deps trace trace-check lint vcan clean demo demo-threadx bench
+.PHONY: example run-example list check deps trace trace-check lint vcan clean demo demo-threadx bench
 
 # ---- Examples ---------------------------------------------------------------
 # Each example is a self-contained app under examples/<NAME>/ with its own
@@ -18,6 +18,14 @@ run-example:
 
 list:
 	@for d in examples/*/; do if [ -f "$$d/Makefile" ]; then basename "$$d"; fi; done
+
+# Validate every example's ecu.toml against the schema (allowed/required/typed keys, the
+# cross-field rules, and the nested-comment TOML-parser trap). Each example's `make gen` also
+# runs this first, so a bad config fails before codegen; this checks them all at once.
+check:
+	@rc=0; for d in examples/*/; do \
+	  if [ -f "$$d/ecu.toml" ]; then $(V) run tools/ecucheck/gen.v "$$d/ecu.toml" || rc=1; fi; \
+	done; exit $$rc
 
 # ---- Device (cross-compile) deps --------------------------------------------
 # CMSIS register-map headers for the bare-metal STM32H7 examples (no HAL, no Cube).
