@@ -25,7 +25,7 @@ name    = "mon"
 core    = 1
 trusted = false
   [[partition.thread]]
-  name     = "main"
+  name     = "mon_main"
   priority = 10
 
 [[signal]]
@@ -60,7 +60,7 @@ to   = { bus = "can1" }
 
 [[fb]]
 name      = "SpeedMonitor"
-partition = "mon"
+thread    = "mon_main"
   [[fb.handler]]
   name      = "on_10ms"
   period_ms = 10

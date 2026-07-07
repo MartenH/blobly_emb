@@ -88,7 +88,7 @@ fn main() {
 	mut sig_of := map[string]SigInfo{}
 	mut sig_names := []string{}
 	mut has_external := false
-	for s in doc.value('signal').array() {
+	for s in toml_arr(doc, 'signal') {
 		m := s.as_map()
 		name := (m['name'] or { toml.Any('') }).string()
 		from := (m['from'] or { toml.Any('') }).string()
@@ -141,7 +141,9 @@ fn main() {
 	// Map each external signal to its DBC message (so the bridge can name the
 	// generated codec fns / id / dlc). External signals must be in the DBC.
 	if has_external {
-		db := candb.load_dbc_file(dbc) or { panic('external signals need a DBC: load ${dbc}: ${err}') }
+		db := candb.load_dbc_file(dbc) or {
+			panic('external signals need a DBC: load ${dbc}: ${err}')
+		}
 		for sname in sig_names {
 			mut si := sig_of[sname] or { continue }
 			if !si.external {
@@ -170,7 +172,7 @@ fn main() {
 	mut secoc_mac := map[string]int{}
 	mut secoc_maclen := map[string]int{}
 	mut secoc_key := map[string][]u8{}
-	for f in doc.value('frame').array() {
+	for f in toml_arr(doc, 'frame') {
 		fm := f.as_map()
 		fk := snake((fm['name'] or { toml.Any('') }).string())
 		if 'tx' in fm {
@@ -205,7 +207,7 @@ fn main() {
 
 	// Raw-PDU gateway routes ([[route]]): forward a frame bus->bus, no decode.
 	mut routes := []Route{}
-	for r in doc.value('route').array() {
+	for r in toml_arr(doc, 'route') {
 		m := r.as_map()
 		fm := (m['from'] or { toml.Any('') }).as_map()
 		tm := (m['to'] or { toml.Any('') }).as_map()
@@ -237,7 +239,9 @@ fn main() {
 	// Validate E2E byte positions against each frame's DLC (they index unsafe into
 	// the frame's [64]u8 in the generated bridge).
 	if has_e2e || has_secoc {
-		db := candb.load_dbc_file(dbc) or { panic('protected frames need a DBC: load ${dbc}: ${err}') }
+		db := candb.load_dbc_file(dbc) or {
+			panic('protected frames need a DBC: load ${dbc}: ${err}')
+		}
 		for fk, _ in e2e_on {
 			dlc := dbc_dlc_of(db, fk) or {
 				panic('e2e: frame "${fk}" is not a message in ${os.file_name(dbc)}')
@@ -267,7 +271,7 @@ fn main() {
 
 	// ISO-TP diagnostic connections ([[isotp]]).
 	mut isotp_conns := []IsotpConn{}
-	for c in doc.value('isotp').array() {
+	for c in toml_arr(doc, 'isotp') {
 		m := c.as_map()
 		name := (m['name'] or { toml.Any('') }).string()
 		if name == '' {
@@ -285,7 +289,7 @@ fn main() {
 
 	// UDS Data Identifiers ([[did]]): constant (ascii/bytes), writable RAM, or live signal.
 	mut dids := []DidCfg{}
-	for d in doc.value('did').array() {
+	for d in toml_arr(doc, 'did') {
 		m := d.as_map()
 		id := int((m['id'] or { toml.Any(0) }).int())
 		if id == 0 {
@@ -308,7 +312,8 @@ fn main() {
 	}
 
 	mut core_of := map[string]int{}
-	mut threads_of := map[string][]string{} // partition -> thread names, declaration order
+	mut threads_of := map[string][]string{} // partition -> its thread names, declaration order
+	mut thread_part := map[string]string{} // thread -> partition (thread names are GLOBALLY unique)
 	for p in doc.value('partition').array() {
 		m := p.as_map()
 		pname := (m['name'] or { toml.Any('') }).string()
@@ -328,6 +333,14 @@ fn main() {
 				panic('loom2v: partition "${pname}" has a [[partition.thread]] whose name ' +
 					'"${tname}" is not a valid identifier')
 			}
+			// Thread names are GLOBALLY unique, so an fb can name a thread and its partition
+			// is derived — no need to also name (redundantly) the partition.
+			if tname in thread_part {
+				panic(
+					'loom2v: duplicate thread name "${tname}" — thread names must be globally ' +
+					'unique (already declared in partition "${thread_part[tname]}")')
+			}
+			thread_part[tname] = pname
 			threads_of[pname] << tname
 		}
 		// Every partition is at least one OS thread — there is no implicit default.
@@ -342,40 +355,44 @@ fn main() {
 		// when per-thread scheduler generation lands.
 		if threads_of[pname].len > 1 {
 			panic('loom2v: partition "${pname}" declares ${threads_of[pname].len} threads — ' +
-				'multiple threads per partition is not generated yet (one scheduler per ' +
-				'partition today); declare a single [[partition.thread]] for now')
+				'multiple threads per partition is not generated yet (one scheduler per ' + 'partition today); declare a single [[partition.thread]] for now')
 		}
 	}
-	// An fb.handler runs on a thread of ITS partition: `thread` is optional when the
-	// partition has exactly one thread (defaults to it), required when it has several.
+	// An fb maps to a THREAD (globally unique); its partition is DERIVED from that thread — a
+	// thread belongs to one partition, so naming the partition too would be redundant. A
+	// handler's trigger is `period_ms` (periodic, dispatched on the fb's thread); `irq`
+	// (interrupt-triggered, ISR context) is a reserved trigger not generated yet.
 	mut by_part := map[string][]toml.Any{}
+	mut fb_thread := map[string]string{} // fb name -> its thread
 	for c in doc.value('fb').array() {
 		cm := c.as_map()
-		part := (cm['partition'] or { toml.Any('') }).string()
-		by_part[part] << c
 		fbname := (cm['name'] or { toml.Any('') }).string()
 		if !ident_ok(fbname) {
 			panic('loom2v: fb name "${fbname}" is not a valid identifier')
 		}
-		if part !in threads_of {
-			panic('loom2v: fb "${fbname}" names unknown partition "${part}"')
+		thr := (cm['thread'] or { toml.Any('') }).string()
+		if thr == '' {
+			panic('loom2v: fb "${fbname}" must name a `thread` ' +
+				'(thread = "<a globally-unique [[partition.thread]] name>")')
 		}
-		ths := threads_of[part]
+		if thr !in thread_part {
+			panic('loom2v: fb "${fbname}" names unknown thread "${thr}"')
+		}
+		part := thread_part[thr] // derive the partition from the thread
+		by_part[part] << c
+		fb_thread[fbname] = thr
 		for h in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
 			hm := h.as_map()
-			hthread := (hm['thread'] or { toml.Any('') }).string()
 			hname := (hm['name'] or { toml.Any('') }).string()
 			if !ident_ok(hname) {
 				panic('loom2v: fb "${fbname}" handler name "${hname}" is not a valid identifier')
 			}
-			if hthread == '' {
-				if ths.len != 1 {
-					panic('loom2v: fb "${fbname}" handler "${hname}" must name a `thread` ' +
-						'(partition "${part}" declares ${ths.len} threads: ${ths})')
-				}
-			} else if hthread !in ths {
-				panic('loom2v: fb "${fbname}" handler "${hname}" names thread "${hthread}" ' +
-					'not declared by partition "${part}" (threads: ${ths})')
+			if 'irq' in hm {
+				panic('loom2v: fb "${fbname}" handler "${hname}": irq-triggered handlers are ' +
+					'not generated yet (reserved trigger); use period_ms')
+			}
+			if 'period_ms' !in hm {
+				panic('loom2v: fb "${fbname}" handler "${hname}" needs a trigger — period_ms')
 			}
 		}
 	}
@@ -713,10 +730,16 @@ fn main() {
 				// is ignored (the rx deadline then invalidates).
 				mut ind := '\t\t\t'
 				if secoc {
-					glue << '\t\t\tif st.secoc_rx_${msg}.verify(&st.secoc_key_${msg}, &rx.data[0], int(${msg}_dlc), u16(0x${(secoc_id[msg] or { 0 }).hex()}), ${secoc_fresh[msg] or { 0 }}, ${secoc_mac[msg] or { 0 }}, ${secoc_maclen[msg] or { 0 }}).usable() {'
+					glue << '\t\t\tif st.secoc_rx_${msg}.verify(&st.secoc_key_${msg}, &rx.data[0], int(${msg}_dlc), u16(0x${(secoc_id[msg] or {
+						0
+					}).hex()}), ${secoc_fresh[msg] or { 0 }}, ${secoc_mac[msg] or { 0 }}, ${secoc_maclen[msg] or {
+						0
+					}}).usable() {'
 					ind = '\t\t\t\t'
 				} else if e2e {
-					glue << '\t\t\tif st.e2e_rx_${msg}.check(&rx.data[0], int(${msg}_dlc), u16(0x${(e2e_id[msg] or { 0 }).hex()}), ${e2e_crc[msg] or { 0 }}, ${e2e_ctr[msg] or { 0 }}).usable() {'
+					glue << '\t\t\tif st.e2e_rx_${msg}.check(&rx.data[0], int(${msg}_dlc), u16(0x${(e2e_id[msg] or {
+						0
+					}).hex()}), ${e2e_crc[msg] or { 0 }}, ${e2e_ctr[msg] or { 0 }}).usable() {'
 					ind = '\t\t\t\t'
 				}
 				for sname in list {
@@ -823,11 +846,17 @@ fn main() {
 			if e2e_on[msg] or { false } {
 				// stamp CRC + counter after the change decision (so the counter
 				// doesn't make every frame look "changed" to on-change modes)
-				glue << '\t\tst.e2e_tx_${msg}.protect(&tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(e2e_id[msg] or { 0 }).hex()}), ${e2e_crc[msg] or { 0 }}, ${e2e_ctr[msg] or { 0 }})'
+				glue << '\t\tst.e2e_tx_${msg}.protect(&tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(e2e_id[msg] or {
+					0
+				}).hex()}), ${e2e_crc[msg] or { 0 }}, ${e2e_ctr[msg] or { 0 }})'
 			}
 			if secoc_on[msg] or { false } {
 				// authenticate: stamp freshness + truncated AES-CMAC after the change decision
-				glue << '\t\tst.secoc_tx_${msg}.protect(&st.secoc_key_${msg}, &tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(secoc_id[msg] or { 0 }).hex()}), ${secoc_fresh[msg] or { 0 }}, ${secoc_mac[msg] or { 0 }}, ${secoc_maclen[msg] or { 0 }})'
+				glue << '\t\tst.secoc_tx_${msg}.protect(&st.secoc_key_${msg}, &tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(secoc_id[msg] or {
+					0
+				}).hex()}), ${secoc_fresh[msg] or { 0 }}, ${secoc_mac[msg] or { 0 }}, ${secoc_maclen[msg] or {
+					0
+				}})'
 			}
 			glue << '\t\tst.chan.send(tx_${msg})'
 			glue << '\t}'
@@ -858,7 +887,9 @@ fn main() {
 			glue << '\t\tmin_delay_us: ${tx_min_us[msg] or { 0 }}'
 			glue << '\t}'
 			if secoc_on[msg] or { false } {
-				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(secoc_key[msg] or { []u8{} })})'
+				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(secoc_key[msg] or {
+					[]u8{}
+				})})'
 			}
 		}
 		for msg, _ in rx_by_msg {
@@ -868,7 +899,9 @@ fn main() {
 				glue << '\t}'
 			}
 			if secoc_on[msg] or { false } {
-				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(secoc_key[msg] or { []u8{} })})'
+				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(secoc_key[msg] or {
+					[]u8{}
+				})})'
 			}
 		}
 		for c in conns {
@@ -990,7 +1023,7 @@ fn main() {
 		glue << '\t\tt0 := C.board_now_us()'
 		glue << '\t\tsched.run(t0)'
 		glue << '\t\tt1 := C.board_now_us()'
-		glue << '\t\tsched.account(t1 - t0, t1) // handler time -> this core\'s load'
+		glue << "\t\tsched.account(t1 - t0, t1) // handler time -> this core's load"
 		glue << '\t\tif t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun'
 		glue << '\t\t\tsched.mark_overrun()'
 		glue << '\t\t}'
@@ -1087,13 +1120,11 @@ fn main() {
 			for c in by_part[pname] {
 				cm := c.as_map()
 				fbname := (cm['name'] or { toml.Any('') }).string()
+				thr := fb_thread[fbname] // the fb's (globally-unique) thread
 				for h in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
 					hm := h.as_map()
 					hname := (hm['name'] or { toml.Any('') }).string()
 					period_us := int((hm['period_ms'] or { toml.Any(0) }).int()) * 1000
-					// effective thread: declared, else the partition's sole thread
-					hthread := (hm['thread'] or { toml.Any('') }).string()
-					thr := if hthread != '' { hthread } else { threads_of[pname][0] }
 					man << '${hid},${pname},${core_of[pname]},${fbname},${hname},${period_us},${thr}'
 					hid++
 				}
@@ -1104,7 +1135,7 @@ fn main() {
 		for p in doc.value('partition').array() {
 			pname := (p.as_map()['name'] or { toml.Any('') }).string()
 			for tname in threads_of[pname] {
-				man << 'thread,${tid},${pname}.${tname},${core_of[pname]}'
+				man << 'thread,${tid},${tname},${core_of[pname]}' // name = the globally-unique thread name
 				tid++
 			}
 		}
@@ -1225,6 +1256,16 @@ fn publish_fn(tr string) string {
 		'triple' { 'ioc_publish' }
 		else { 'ioc_publish2' }
 	}
+}
+
+// toml_arr returns the array of tables under `key`, or empty when the key is absent — so an
+// ecu.toml that omits an optional section (e.g. a compute-only app with no [[signal]]) doesn't
+// phantom-iterate a single empty entry and crash.
+fn toml_arr(doc toml.Doc, key string) []toml.Any {
+	if v := doc.value_opt(key) {
+		return v.array()
+	}
+	return []toml.Any{}
 }
 
 // ident_ok reports whether s is a safe name — [A-Za-z_][A-Za-z0-9_]* — for both V codegen

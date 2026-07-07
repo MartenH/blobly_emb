@@ -28,7 +28,7 @@ name    = "sense"
 core    = 0
 trusted = false
   [[partition.thread]]
-  name     = "main"
+  name     = "sense_main"
   priority = 10
 
 [[partition]]
@@ -36,7 +36,7 @@ name    = "ctrl"
 core    = 1
 trusted = false
   [[partition.thread]]
-  name     = "main"
+  name     = "ctrl_main"
   priority = 10
 
 # --- Signals -----------------------------------------------------------------
@@ -147,7 +147,7 @@ bytes    = "00 00"              # RAM cell (write then read back)
 # (within a partition, list producers before consumers for same-cycle local data)
 [[fb]]
 name      = "SpeedFilter"
-partition = "sense"
+thread    = "sense_main"
   [[fb.handler]]
   name      = "on_10ms"
   period_ms = 10
@@ -156,7 +156,7 @@ partition = "sense"
 
 [[fb]]
 name      = "OverspeedDetector"
-partition = "sense"
+thread    = "sense_main"
   [[fb.handler]]
   name      = "on_10ms"
   period_ms = 10
@@ -165,7 +165,7 @@ partition = "sense"
 
 [[fb]]
 name      = "EngineMonitor"
-partition = "ctrl"
+thread    = "ctrl_main"
   [[fb.handler]]
   name      = "on_10ms"
   period_ms = 10
@@ -174,7 +174,7 @@ partition = "ctrl"
 
 [[fb]]
 name      = "LampController"
-partition = "ctrl"
+thread    = "ctrl_main"
   [[fb.handler]]
   name      = "on_10ms"
   period_ms = 10

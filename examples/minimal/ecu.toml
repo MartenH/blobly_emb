@@ -12,7 +12,7 @@ core      = 0         # generated COM bridge runs here
 name    = "app"
 core    = 1
   [[partition.thread]]
-  name     = "main"
+  name     = "app_main"
   priority = 10
 trusted = false
 
@@ -44,7 +44,7 @@ tx   = { mode = "mixed", cycle_ms = 100, min_delay_ms = 20 }
 
 [[fb]]
 name      = "SpeedMonitor"
-partition = "app"
+thread    = "app_main"
   [[fb.handler]]
   name      = "on_10ms"
   period_ms = 10
