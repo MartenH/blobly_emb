@@ -96,31 +96,33 @@ is **derived** — a thread belongs to exactly one partition, so naming the part
 be redundant:
 
 ```toml
+# priority is the ThreadX priority (lower = higher). Keep [[partition.thread]] / [[fb.handler]]
+# blocks comment-free — a V TOML parser bug (vlang/v#27684) drops the key after a comment there.
 [[partition]]
 name = "ctrl"
 core = 1
   [[partition.thread]]
-  name     = "ctrl_fast"    # globally unique
-  priority = 10             # ThreadX priority (lower = higher); preemption between threads
-  [[partition.thread]]
-  name     = "ctrl_slow"
-  priority = 20
+  name     = "ctrl_main"
+  priority = 10
 
+# an fb names a globally-unique thread; its partition (ctrl) is derived
 [[fb]]
 name   = "SpeedMonitor"
-thread = "ctrl_fast"        # runs on ctrl_fast; partition (ctrl) derived
+thread = "ctrl_main"
   [[fb.handler]]
   name      = "on_10ms"
-  period_ms = 10            # a PERIODIC trigger — dispatched on the fb's thread
+  period_ms = 10
 ```
 
 Every **partition MUST declare at least one thread** — there is no implicit default. An **fb
-maps to a thread**, and a **handler's trigger** is either `period_ms` (periodic — the scheduler
-dispatches it on the fb's thread, producing an **FB** trace record) or `irq = "<vector>"`
-(interrupt-triggered — it runs in ISR context, producing an **ISR** record; reserved, not
-generated yet). loom2v rejects a partition with no thread, a duplicate thread name, an fb whose
-`thread` doesn't resolve, or a handler with no trigger. Multiple threads per core is what makes
-the `thread` level earn its keep (preemption by priority → who actually held the core).
+maps to a thread** (thread names are globally unique, so the partition is derived), and a
+**handler's trigger** is either `period_ms` (periodic — the scheduler dispatches it on the fb's
+thread, producing an **FB** trace record) or `irq = "<vector>"` (interrupt-triggered — it runs
+in ISR context, producing an **ISR** record). loom2v rejects a partition with no thread, a
+duplicate thread/fb name, an fb whose `thread` doesn't resolve, or a handler with no trigger.
+Multiple threads per partition (preemption by priority → who actually held the core) is the
+**target**; today loom2v generates one thread per partition, and both `irq` handlers and >1
+thread/partition are rejected until that codegen lands.
 
 ## Identity: a generated manifest (threads + fb.handlers)
 

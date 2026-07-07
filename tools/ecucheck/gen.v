@@ -363,34 +363,38 @@ fn actual(v toml.Any) string {
 fn check_cross(doc toml.Doc, mut errs []string) {
 	mut part_names := map[string]bool{}
 	mut thread_part := map[string]string{} // thread -> partition (globally unique)
+	mut fb_names := map[string]bool{}
 	for p in arr(doc, 'partition') {
 		m := p.as_map()
 		pname := str_of(m, 'name')
-		if pname != '' {
-			if pname in part_names {
-				errs << 'duplicate partition name "${pname}" — partition names must be unique'
-			}
-			part_names[pname] = true
+		// A present-but-empty/invalid name passes the schema (it IS a string) but crashes
+		// loom2v (its ident_ok is unconditional) — check it here so `make check` == `make gen`.
+		// (A truly-missing name is already reported by the schema's required-key check.)
+		if 'name' in m {
 			if !ident_ok(pname) {
 				errs << 'partition name "${pname}" is not a valid identifier ([A-Za-z_][A-Za-z0-9_]*)'
+			} else if pname in part_names {
+				errs << 'duplicate partition name "${pname}" — partition names must be unique'
+			} else {
+				part_names[pname] = true
 			}
 		}
 		mut nthreads := 0
 		for t in arr_of(m, 'thread') {
 			nthreads++
-			tname := str_of(t.as_map(), 'name')
-			if tname == '' {
-				continue
+			tm := t.as_map()
+			tname := str_of(tm, 'name')
+			if 'name' in tm {
+				if !ident_ok(tname) {
+					errs << 'thread name "${tname}" (partition "${pname}") is not a valid identifier'
+				} else if tname in thread_part {
+					errs << 'duplicate thread name "${tname}" — thread names must be globally unique (already in partition "${thread_part[tname]}")'
+				} else {
+					thread_part[tname] = pname
+				}
 			}
-			if !ident_ok(tname) {
-				errs << 'thread name "${tname}" (partition "${pname}") is not a valid identifier'
-			}
-			if tname in thread_part {
-				errs << 'duplicate thread name "${tname}" — thread names must be globally unique (already in partition "${thread_part[tname]}")'
-			}
-			thread_part[tname] = pname
 		}
-		if nthreads == 0 && pname != '' {
+		if nthreads == 0 {
 			errs << 'partition "${pname}" declares no [[partition.thread]] — every partition needs at least one thread'
 		}
 		// Mirror loom2v: multiple threads per partition need per-thread schedulers, not
@@ -402,17 +406,27 @@ fn check_cross(doc toml.Doc, mut errs []string) {
 	for c in arr(doc, 'fb') {
 		cm := c.as_map()
 		fbname := str_of(cm, 'name')
-		if fbname != '' && !ident_ok(fbname) {
-			errs << 'fb name "${fbname}" is not a valid identifier'
+		// fb names key loom2v's fb_thread map + the generated struct fields, so they must be
+		// globally unique (a duplicate silently mislabels the manifest).
+		if 'name' in cm {
+			if !ident_ok(fbname) {
+				errs << 'fb name "${fbname}" is not a valid identifier'
+			} else if fbname in fb_names {
+				errs << 'duplicate fb name "${fbname}" — fb names must be unique'
+			} else {
+				fb_names[fbname] = true
+			}
 		}
 		thr := str_of(cm, 'thread')
-		if thr != '' && thr !in thread_part {
+		// A present thread must resolve; present-but-empty is rejected by loom2v too.
+		// (A missing `thread` is caught by the schema's required-key check.)
+		if 'thread' in cm && thr !in thread_part {
 			errs << 'fb "${fbname}" names unknown thread "${thr}" (no [[partition.thread]] with that name)'
 		}
 		for h in arr_of(cm, 'handler') {
 			hm := h.as_map()
 			hname := str_of(hm, 'name')
-			if hname != '' && !ident_ok(hname) {
+			if 'name' in hm && !ident_ok(hname) {
 				errs << 'fb "${fbname}" handler name "${hname}" is not a valid identifier'
 			}
 			// Mirror loom2v exactly: irq is a RESERVED trigger (ISR-context) not generated
@@ -446,18 +460,23 @@ fn check_raw(text string, mut errs []string) {
 			mut j := i + 1
 			mut comment_at := -1
 			mut last_key := -1
+			mut depth := 0 // open '[' of a multi-line array value; its continuation lines aren't keys
 			for j < lines.len {
 				l := lines[j].trim_space()
-				if l.starts_with('[') {
-					break
+				if depth == 0 && l.starts_with('[') {
+					break // the next table header
 				}
-				if l != '' {
+				if l != '' && depth == 0 {
 					if has_comment(l) && comment_at < 0 {
 						comment_at = j
 					}
 					if !l.starts_with('#') {
 						last_key = j
 					}
+				}
+				depth += bracket_delta(l) // enter/leave a multi-line reads/writes array
+				if depth < 0 {
+					depth = 0
 				}
 				j++
 			}
@@ -472,15 +491,62 @@ fn check_raw(text string, mut errs []string) {
 	}
 }
 
-// has_comment reports whether the line has a `#` comment outside of a quoted string.
-fn has_comment(line string) bool {
-	mut in_q := false
-	for c in line {
+// bracket_delta counts '[' minus ']' outside strings and comments — to track multi-line arrays
+// (a `reads = [` that closes on a later line) so their element lines aren't mistaken for keys.
+fn bracket_delta(line string) int {
+	mut d := 0
+	mut i := 0
+	for i < line.len {
+		c := line[i]
 		if c == `"` {
-			in_q = !in_q
-		} else if c == `#` && !in_q {
+			i++
+			for i < line.len && line[i] != `"` {
+				if line[i] == `\\` {
+					i++
+				}
+				i++
+			}
+		} else if c == `'` {
+			i++
+			for i < line.len && line[i] != `'` {
+				i++
+			}
+		} else if c == `#` {
+			break // comment: ignore the rest of the line
+		} else if c == `[` {
+			d++
+		} else if c == `]` {
+			d--
+		}
+		i++
+	}
+	return d
+}
+
+// has_comment reports whether the line has a `#` comment outside a quoted string. Honors both
+// basic (`"`, with `\"` escapes) and literal (`'`) TOML strings so a `#` inside a value isn't
+// mistaken for a comment (and an escaped quote doesn't leak the "in string" state).
+fn has_comment(line string) bool {
+	mut i := 0
+	for i < line.len {
+		c := line[i]
+		if c == `"` {
+			i++
+			for i < line.len && line[i] != `"` {
+				if line[i] == `\\` {
+					i++
+				}
+				i++
+			}
+		} else if c == `'` {
+			i++
+			for i < line.len && line[i] != `'` {
+				i++
+			}
+		} else if c == `#` {
 			return true
 		}
+		i++
 	}
 	return false
 }
