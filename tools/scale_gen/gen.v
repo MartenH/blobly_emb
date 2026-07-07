@@ -132,6 +132,9 @@ fn gen_toml(parts int, buses int, fbs int) string {
 		b << 'name    = "p${p}"'
 		b << 'core    = ${p}'
 		b << 'trusted = ${p == 0}'
+		b << '  [[partition.thread]]'
+		b << '  name     = "main"'
+		b << '  priority = 10'
 		b << ''
 	}
 
