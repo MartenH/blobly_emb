@@ -35,6 +35,9 @@ trusted = false
 name    = "ctrl"
 core    = 1
 trusted = false
+  [[partition.thread]]
+  name     = "main"
+  priority = 10
 
 # --- Signals -----------------------------------------------------------------
 # An endpoint is a PARTITION or a BUS (e.g. can0). That makes external vs
@@ -43,9 +46,6 @@ trusted = false
 #   INTERNAL = both endpoints partitions:
 #       from == to  -> LOCAL cell (same-partition FB->FB, no IOC, no sync)
 #       from != to  -> IOC channel (cross-partition; `transport` applies)
-  [[partition.thread]]
-  name     = "main"
-  priority = 10
 [[signal]]
 name = "VehicleSpeed"
 fields = { kph = "u16", valid = "bool" }

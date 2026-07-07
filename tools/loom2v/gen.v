@@ -308,13 +308,50 @@ fn main() {
 	}
 
 	mut core_of := map[string]int{}
+	mut threads_of := map[string][]string{} // partition -> thread names, declaration order
 	for p in doc.value('partition').array() {
 		m := p.as_map()
-		core_of[(m['name'] or { toml.Any('') }).string()] = int((m['core'] or { toml.Any(0) }).int())
+		pname := (m['name'] or { toml.Any('') }).string()
+		core_of[pname] = int((m['core'] or { toml.Any(0) }).int())
+		for t in (m['thread'] or { toml.Any([]toml.Any{}) }).array() {
+			tname := (t.as_map()['name'] or { toml.Any('') }).string()
+			if tname == '' {
+				panic('loom2v: partition "${pname}" has a [[partition.thread]] with no name')
+			}
+			threads_of[pname] << tname
+		}
+		// Every partition is at least one OS thread — there is no implicit default.
+		if threads_of[pname].len == 0 {
+			panic('loom2v: partition "${pname}" declares no [[partition.thread]] — ' +
+				'every partition needs at least one thread')
+		}
 	}
+	// An fb.handler runs on a thread of ITS partition: `thread` is optional when the
+	// partition has exactly one thread (defaults to it), required when it has several.
 	mut by_part := map[string][]toml.Any{}
 	for c in doc.value('fb').array() {
-		by_part[(c.as_map()['partition'] or { toml.Any('') }).string()] << c
+		cm := c.as_map()
+		part := (cm['partition'] or { toml.Any('') }).string()
+		by_part[part] << c
+		if part !in threads_of {
+			panic('loom2v: fb "${(cm['name'] or { toml.Any('') }).string()}" names unknown partition "${part}"')
+		}
+		ths := threads_of[part]
+		for h in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
+			hm := h.as_map()
+			hthread := (hm['thread'] or { toml.Any('') }).string()
+			fbname := (cm['name'] or { toml.Any('') }).string()
+			hname := (hm['name'] or { toml.Any('') }).string()
+			if hthread == '' {
+				if ths.len != 1 {
+					panic('loom2v: fb "${fbname}" handler "${hname}" must name a `thread` ' +
+						'(partition "${part}" declares ${ths.len} threads: ${ths})')
+				}
+			} else if hthread !in ths {
+				panic('loom2v: fb "${fbname}" handler "${hname}" names thread "${hthread}" ' +
+					'not declared by partition "${part}" (threads: ${ths})')
+			}
+		}
 	}
 
 	// --- telemetry: give every app partition + every bus(bridge) a scratch slot,
