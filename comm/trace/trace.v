@@ -40,6 +40,12 @@ pub const reason_exit = u8(3) // completed / terminated
 pub const ctl_block = u16(0) // per-core block header leading a multi-core dump
 pub const ctl_epoch = u16(1) // timeline origin: resets the u24 start_us base (long captures)
 
+// FB record flags (the `info` byte of a kind_fb record) — mirror comm.telem.trace_flag_* and
+// blobly_net's telem.flag_*. flag_overran marks the invocation that exceeded its budget, i.e. the
+// handler that tripped the ring trigger — the decoder highlights it so the culprit is visible.
+pub const flag_overran = u8(0x01)
+pub const flag_saturated = u8(0x04)
+
 const id_mask = u16(0x3fff) // 14-bit id
 
 // entity packs a kind + 14-bit id into an entity_id.
@@ -201,6 +207,7 @@ mut:
 	// and prepend it on dump, so a wrapped window is never decoded against a lost base.
 	prefix_base u32
 	has_prefix  bool
+	froze       u8 // why capture stopped: freeze_none/_stop/_trigger — reported in the TraceRsp
 }
 
 // new_buffer wraps a caller-owned fixed backing array of `capacity` records (no alloc:
@@ -231,6 +238,14 @@ pub fn (mut t TraceBuffer) start() {
 	t.pending = false
 	t.prefix_base = 0
 	t.has_prefix = false
+	t.froze = freeze_none
+}
+
+// froze_cause reports why capture stopped (freeze_none while still capturing, freeze_stop for an
+// explicit stop, freeze_trigger for the overrun trigger) — surfaced in the TraceRsp so a host can
+// tell a trigger-frozen dump from a manually-stopped one.
+pub fn (t TraceBuffer) froze_cause() u8 {
+	return t.froze
 }
 
 pub fn (t TraceBuffer) capacity() u32 {
@@ -305,6 +320,9 @@ pub fn (mut t TraceBuffer) stop() {
 		t.state = if t.mode == .ring { State.frozen } else { State.full }
 		t.pending = false
 		t.post_rem = 0
+		if t.froze == freeze_none { // an armed trigger already recorded its cause; don't override it
+			t.froze = freeze_stop
+		}
 	}
 }
 
@@ -314,6 +332,7 @@ pub fn (mut t TraceBuffer) trigger() {
 	if t.state != .capturing {
 		return
 	}
+	t.froze = freeze_trigger // the trigger is the freeze cause, even while the post-window fills
 	match t.mode {
 		.oneshot {
 			t.state = .full

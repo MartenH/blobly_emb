@@ -637,7 +637,14 @@ fn main() {
 		glue << '\tif dt > 0xFFFF {'
 		glue << '\t\tdt = 0xFFFF'
 		glue << '\t}'
-		glue << '\tt.buf.push(trace.new_fb(u16(t.id_base + u32(idx)), 0, u32(elapsed - t.base), u16(dt)))'
+		if trace_budget_us > 0 {
+			// flag the record that exceeded the budget — it's the handler that trips the ring
+			// trigger, and the decoder outlines it so the freeze culprit is visible in the dump.
+			glue << '\tflags := if dt_us > ${trace_budget_us} { trace.flag_overran } else { u8(0) }'
+			glue << '\tt.buf.push(trace.new_fb(u16(t.id_base + u32(idx)), flags, u32(elapsed - t.base), u16(dt)))'
+		} else {
+			glue << '\tt.buf.push(trace.new_fb(u16(t.id_base + u32(idx)), 0, u32(elapsed - t.base), u16(dt)))'
+		}
 		if trace_budget_us > 0 {
 			// System-wide freeze: an overrun on ANY core sets the shared flag; EVERY core (incl.
 			// this one) then triggers its own ring, so all cores freeze around the same instant —

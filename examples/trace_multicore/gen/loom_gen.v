@@ -33,7 +33,8 @@ fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	if dt > 0xFFFF {
 		dt = 0xFFFF
 	}
-	t.buf.push(trace.new_fb(u16(t.id_base + u32(idx)), 0, u32(elapsed - t.base), u16(dt)))
+	flags := if dt_us > 500 { trace.flag_overran } else { u8(0) }
+	t.buf.push(trace.new_fb(u16(t.id_base + u32(idx)), flags, u32(elapsed - t.base), u16(dt)))
 	if dt_us > 500 {
 		osal.scratch_set(3, 1) // ask every core to freeze
 	}

@@ -23,7 +23,9 @@ bus            = "can0"
 level          = "thread+fb"  # P3a captures FB records; thread/ISR are the target (P3c)
 buffer_records = 64           # per-core ring depth (static array, one per core)
 mode           = "ring"       # ring (flight recorder) | oneshot
-pre_pct        = 50
+pre_pct        = 50           # ring pre/post split: 50 = centre the event (keep half before the
+                              # trigger, capture half after). 100 = classic flight-recorder (freeze
+                              # AT the event, window ends there). 0 = post-event only.
 push_ms        = 0            # HandlerStat heartbeat fan-out across cores is a P3a follow-up
 cmd_id         = 0x7E2
 rsp_id         = 0x7E3
