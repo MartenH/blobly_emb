@@ -50,12 +50,14 @@ fn main() {
 	}
 	b << 'pub const ioc_channel_count = ${chcount}'
 	b << ''
-	b << '// Per-channel transport (index = channel id)'
-	// An empty fixed-array literal ([]!) doesn't compile in V; a config with no cross-partition
-	// IOC channels (e.g. a pure-compute trace demo) gets a typed empty array instead.
+	// Per-channel transport (index = channel id). With no cross-partition IOC channels there is
+	// nothing to index — and neither an empty fixed literal ([]!) compiles nor a growable []T is
+	// allowed in -gc none runtime code — so omit the const entirely (ioc_channel_count = 0 already
+	// says there are none, and nothing reads the table when it's empty).
 	if transports.len == 0 {
-		b << 'pub const ioc_transport = []Transport{}'
+		b << '// (no cross-partition IOC channels — no transport table)'
 	} else {
+		b << '// Per-channel transport (index = channel id)'
 		b << 'pub const ioc_transport = [${transports.join(', ')}]!'
 	}
 

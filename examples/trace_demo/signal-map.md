@@ -5,4 +5,3 @@ DO NOT EDIT — follow a signal here, or via the provenance comments in `sig/por
 
 | Signal | Unit | Source | DBC signal | Frame | Layout | Scaling | Path | Producers | Consumers |
 |--------|------|--------|------------|-------|--------|---------|------|-----------|-----------|
-|  | — |  | — | — | — | — |  (local cell) | () | () |

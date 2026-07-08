@@ -29,7 +29,8 @@ build:
 	@mkdir -p bin
 	cd $(REPO) && $(V) -gc none -path "@vlib|@vmodules|.|examples/$(NAME)" -o examples/$(NAME)/bin/app examples/$(NAME)
 
-run: build
+# depend on `all` (gen + build), not just build, so a config edit is regenerated before running.
+run: all
 	./bin/app vcan0
 
 # Integration test: run on vcan0 and drive/assert with blobly_net's headless Lua runner
