@@ -51,7 +51,13 @@ fn main() {
 	b << 'pub const ioc_channel_count = ${chcount}'
 	b << ''
 	b << '// Per-channel transport (index = channel id)'
-	b << 'pub const ioc_transport = [${transports.join(', ')}]!'
+	// An empty fixed-array literal ([]!) doesn't compile in V; a config with no cross-partition
+	// IOC channels (e.g. a pure-compute trace demo) gets a typed empty array instead.
+	if transports.len == 0 {
+		b << 'pub const ioc_transport = []Transport{}'
+	} else {
+		b << 'pub const ioc_transport = [${transports.join(', ')}]!'
+	}
 
 	// --- Partitions (declaration order = partition id) ---
 	parts := doc.value('partition').array()

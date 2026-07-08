@@ -252,3 +252,16 @@ trigger = { source = "signal" }
 ' + app)
 	assert e.any(it.contains('trigger source "signal" is not supported'))
 }
+
+// a trigger table present but with no source is rejected (omit it entirely for no trigger).
+fn test_trace_trigger_without_source() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+trigger = { budget_us = 500 }
+' + app)
+	assert e.any(it.contains('trigger table has no source'))
+}

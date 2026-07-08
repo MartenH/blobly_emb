@@ -531,7 +531,9 @@ fn main() {
 	if !target_on {
 		glue << 'import osal' // host: IOC + now_us/sleep_us. Target has none of these.
 	}
-	if telem_on || trace_inline {
+	// telem.* is used for CpuLoad (telemetry) and the inline HandlerStat heartbeat — import it
+	// only when one is actually emitted (a push_ms = 0 trace with no telemetry uses neither).
+	if telem_on || (trace_inline && trace_push_us > 0) {
 		glue << 'import comm.telem' // CpuLoad / HandlerStat packing
 	}
 	if trace_inline {

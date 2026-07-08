@@ -227,9 +227,11 @@ pub fn validate(doc toml.Doc) []string {
 		if tg := trm['trigger'] {
 			tgm := tg.as_map()
 			src := str_of(tgm, 'source')
-			if src !in ['', 'overrun'] {
+			if src == '' {
+				errs << '[trace] trigger table has no source — set source = "overrun", or omit the whole [trace.trigger] table for no trigger'
+			} else if src != 'overrun' {
 				errs << '[trace] trigger source "${src}" is not supported (only "overrun" is generated today)'
-			} else if src == 'overrun' {
+			} else {
 				b := tgm['budget_us'] or { toml.Any(0) }
 				if !(b is i64) || b.i64() <= 0 {
 					errs << '[trace] trigger source "overrun" needs a positive budget_us (µs a handler may run before the ring freezes)'
