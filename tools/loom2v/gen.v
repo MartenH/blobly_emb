@@ -452,6 +452,12 @@ fn main() {
 	// cmd/rsp + dump + the HandlerStat heartbeat directly (no IOC, nothing else to schedule). A
 	// bridge (external signals / ISO-TP / routes) or multiple cores need the comm-thread model,
 	// not generated yet.
+	// Bare-metal target trace is not generated — the target run() emits the plain sched.run() loop
+	// with no capture/cmd/rsp, so an active [trace] block would silently produce nothing.
+	if trace_on && target_on {
+		panic('loom2v: [trace] on a bare-metal [target] is not generated yet — the target loop has ' +
+			'no trace capture / cmd-rsp / dump; remove [trace] or set enabled = false for target builds')
+	}
 	single_part := if by_part.keys().len == 1 { by_part.keys()[0] } else { '' }
 	has_bridge := has_external || isotp_conns.len > 0 || has_routes
 	// Core 0 only: the single-core inline path assumes core 0 throughout (pin, CpuLoad byte 0,
@@ -1186,10 +1192,16 @@ fn main() {
 		glue << '\tsched.set_trace_hook(trace_capture, &ts)'
 		glue << '\tmut link := isotp.Link{}'
 		glue << '\tmut dumpbuf := [${trace_buffer_records * 8}]u8{} // buffer_records x 8, one ISO-TP payload'
-		glue << '\tmut last_push := u64(0)'
+		heartbeat_on := trace_push_us > 0 // the HandlerStat push (push_ms = 0 disables it)
+		cpuload_on := telem_on && telem_iface != ''
 		nhandlers := (all_regs[part] or { []string{} }).len // one sched.every() line per handler
-		glue << '\tmut last_count := [${nhandlers}]u32{}'
-		if telem_on && telem_iface != '' {
+		// Only emit the state each optional block uses — V rejects unused locals, so a config that
+		// disables the heartbeat (push_ms = 0) and/or telemetry must not declare their counters.
+		if heartbeat_on {
+			glue << '\tmut last_push := u64(0)'
+			glue << '\tmut last_count := [${nhandlers}]u32{}'
+		}
+		if cpuload_on {
 			glue << '\tmut last_telem := u64(0)'
 		}
 		glue << '\tfor {'
@@ -1244,8 +1256,10 @@ fn main() {
 		glue << '\t\t\t}'
 		glue << '\t\t\tch.send(pf)'
 		glue << '\t\t}'
-		glue << '\t\tnow := osal.now_us()'
-		if trace_push_us > 0 {
+		if heartbeat_on || cpuload_on {
+			glue << '\t\tnow := osal.now_us()'
+		}
+		if heartbeat_on {
 			glue << '\t\tif now - last_push >= ${trace_push_us} {'
 			glue << '\t\t\tlast_push = now'
 			glue << '\t\t\tfor i in 0 .. sched.handler_count() {'
@@ -1265,7 +1279,7 @@ fn main() {
 			glue << '\t\t\t}'
 			glue << '\t\t}'
 		}
-		if telem_on && telem_iface != '' {
+		if cpuload_on {
 			glue << '\t\tif now - last_telem >= ${telem_period_us} {'
 			glue << '\t\t\tlast_telem = now'
 			glue << '\t\t\tmut load := [8]u16{}'

@@ -239,3 +239,16 @@ trigger = { source = "overrun", budget_us = 500 }
 ' + app)
 	assert ok.filter(it.contains('budget_us')).len == 0
 }
+
+// an unsupported/misspelled trigger source is rejected (only "overrun" is generated).
+fn test_trace_unsupported_trigger_source() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+trigger = { source = "signal" }
+' + app)
+	assert e.any(it.contains('trigger source "signal" is not supported'))
+}
