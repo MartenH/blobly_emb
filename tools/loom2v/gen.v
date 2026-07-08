@@ -502,8 +502,13 @@ fn main() {
 		mut tid := 0
 		for p in ecumodel.toml_arr(doc, 'partition') {
 			pname := (p.as_map()['name'] or { toml.Any('') }).string()
+			// Thread id tracks the manifest's numbering: one per partition, EVERY partition in TOML
+			// order (the manifest emits a thread row for each, FBs or not), so a traced partition's
+			// THREAD records land on the right lane even after an FB-less partition (F506).
+			tid++
+			thread_id_of[pname] = tid
 			if pname !in by_part {
-				continue
+				continue // no FBs -> not traced; its thread id was still consumed above
 			}
 			pc := core_of[pname] or { 0 }
 			// The TraceCmd core_mask is 16 bits and Cmd.targets() ignores core >= 16, so a ring on
@@ -528,8 +533,15 @@ fn main() {
 			for c in by_part[pname] {
 				acc += (c.as_map()['handler'] or { toml.Any([]toml.Any{}) }).array().len
 			}
-			tid++
-			thread_id_of[pname] = tid
+		}
+		// Cores must be numbered densely from 0: trace_ncores = max_core + 1 sizes the ring array +
+		// the per-core scratch cells, so a hole (a high core with no traced partition below it) would
+		// reserve cells for a producer that doesn't exist and can overflow the scratch budget (F523).
+		for cc in 0 .. trace_ncores {
+			if cc !in seen_core {
+				panic('loom2v: multi-core trace needs cores numbered densely from 0 — core ${cc} has ' +
+					'no traced partition but a higher core does; renumber the partition cores 0..N-1')
+			}
 		}
 	}
 
@@ -701,11 +713,12 @@ fn main() {
 		glue << '\t\t}'
 		glue << '\t\tt.buf.push(trace.new_idle(trace.reason_yield, u32(gap_from - t.base), u16(gap)))'
 		glue << '\t}'
-		glue << '\tmut busy := e_end - e_start'
+		glue << '\ts_from := if e_start > t.base { e_start } else { t.base } // clamp across an epoch re-anchor (F708)'
+		glue << '\tmut busy := if e_end > s_from { e_end - s_from } else { u64(0) }'
 		glue << '\tif busy > 0xFFFF {'
 		glue << '\t\tbusy = 0xFFFF'
 		glue << '\t}'
-		glue << '\tt.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(e_start - t.base), u16(busy)))'
+		glue << '\tt.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(s_from - t.base), u16(busy)))'
 		glue << '\tt.busy_end = e_end'
 		glue << '}'
 	}
@@ -1278,6 +1291,8 @@ fn main() {
 		glue << '\t\t\t\t\tfor cc in 0 .. ncores {'
 		glue << '\t\t\t\t\t\tlast_trig[cc] = osal.scratch_get(${trace_trig_base} + cc)'
 		glue << '\t\t\t\t\t}'
+		glue << '\t\t\t\t\tpending = 0        // cancel any in-flight dump so a fresh capture isn\'t'
+		glue << '\t\t\t\t\tlink = isotp.Link{} // mixed with the previous session\'s blocks (F1281)'
 		glue << '\t\t\t\t}'
 		// A dump while a previous one is still streaming (pending cores queued, or the ISO-TP link
 		// mid-block) would interleave blocks the host expects one-per-OK — reject it result_busy.
@@ -1302,6 +1317,10 @@ fn main() {
 		glue << '\t\t\t\t\t\t} else {'
 		glue << '\t\t\t\t\t\t\tpending |= u16(1) << cc'
 		glue << '\t\t\t\t\t\t}'
+		glue << '\t\t\t\t\t} else if c.opcode == trace.op_set_push {'
+		glue << '\t\t\t\t\t\tresult = trace.result_unsupported // push is config-driven, not runtime (F1297)'
+		glue << '\t\t\t\t\t} else if !arm && c.opcode != trace.op_stop && c.opcode != trace.op_status {'
+		glue << '\t\t\t\t\t\tresult = trace.result_bad_opcode'
 		glue << '\t\t\t\t\t}'
 		glue << '\t\t\t\t\trspb := trace.status_rsp(tbv, c.opcode, result, u8(cc))'
 		glue << '\t\t\t\t\tmut rf := can.Frame{'

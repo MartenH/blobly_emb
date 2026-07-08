@@ -57,11 +57,12 @@ fn trace_thread_span(mut t TraceCapture, t0_us u64, t1_us u64) {
 		}
 		t.buf.push(trace.new_idle(trace.reason_yield, u32(gap_from - t.base), u16(gap)))
 	}
-	mut busy := e_end - e_start
+	s_from := if e_start > t.base { e_start } else { t.base } // clamp across an epoch re-anchor (F708)
+	mut busy := if e_end > s_from { e_end - s_from } else { u64(0) }
 	if busy > 0xFFFF {
 		busy = 0xFFFF
 	}
-	t.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(e_start - t.base), u16(busy)))
+	t.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(s_from - t.base), u16(busy)))
 	t.busy_end = e_end
 }
 
@@ -237,6 +238,8 @@ fn partition_trace(chp can.Channel, base voidptr, ncores int) {
 					for cc in 0 .. ncores {
 						last_trig[cc] = osal.scratch_get(5 + cc)
 					}
+					pending = 0        // cancel any in-flight dump so a fresh capture isn't
+					link = isotp.Link{} // mixed with the previous session's blocks (F1281)
 				}
 				dump_busy := pending != 0 || link.busy()
 				for cc in 0 .. ncores {
@@ -259,6 +262,10 @@ fn partition_trace(chp can.Channel, base voidptr, ncores int) {
 						} else {
 							pending |= u16(1) << cc
 						}
+					} else if c.opcode == trace.op_set_push {
+						result = trace.result_unsupported // push is config-driven, not runtime (F1297)
+					} else if !arm && c.opcode != trace.op_stop && c.opcode != trace.op_status {
+						result = trace.result_bad_opcode
 					}
 					rspb := trace.status_rsp(tbv, c.opcode, result, u8(cc))
 					mut rf := can.Frame{
