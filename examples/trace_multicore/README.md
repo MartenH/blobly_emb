@@ -44,9 +44,14 @@ Or raw with can-utils:
 
 ```sh
 candump vcan0,7E3:7FF &                    # TraceRsp — one per selected core (b7 = core)
+isotprecv -s 0x7E6 -d 0x7E5 vcan0 &        # ISO-TP receiver: answers each block's FF with flow
+                                           # control on 0x7E6 and reassembles 0x7E5 (needs can-isotp)
 cansend vcan0 7E2#03000000FFFF0300         # stop cores 0+1 (freeze the rings)
 cansend vcan0 7E2#06000000FFFF0300         # dump cores 0+1 -> two ISO-TP blocks on 0x7E5
 ```
+
+(Without an ISO-TP receiver on `0x7E5`/`0x7E6`, `partition_trace` sends only each block's First
+Frame and waits for flow control — nothing reassembles. `cmd/trace_dump` or the GUI do this for you.)
 
 ## Scope (P3a)
 

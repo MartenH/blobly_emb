@@ -94,7 +94,13 @@ pub fn partition_sense(core int, arg voidptr) {
 		thread_id: 1
 	}
 	sched.set_trace_hook(trace_capture, &cap)
+	mut last_arm := osal.scratch_get(4)
 	for {
+		if osal.scratch_get(4) != last_arm {
+			last_arm = osal.scratch_get(4)
+			cap.start = osal.now_us()
+			cap.base = 0
+		}
 		t0 := osal.now_us()
 		before := cap.fb_count
 		sched.run_profiled(osal.now_us)
@@ -139,7 +145,13 @@ pub fn partition_ctrl(core int, arg voidptr) {
 		thread_id: 2
 	}
 	sched.set_trace_hook(trace_capture, &cap)
+	mut last_arm := osal.scratch_get(4)
 	for {
+		if osal.scratch_get(4) != last_arm {
+			last_arm = osal.scratch_get(4)
+			cap.start = osal.now_us()
+			cap.base = 0
+		}
 		t0 := osal.now_us()
 		before := cap.fb_count
 		sched.run_profiled(osal.now_us)
@@ -193,14 +205,17 @@ fn partition_trace(chp can.Channel, base voidptr, ncores int) {
 				if c.opcode == trace.op_arm || c.opcode == trace.op_start
 					|| c.opcode == trace.op_reset {
 					osal.scratch_set(3, 0) // new session: clear the system freeze
+					// bump the arm generation so each partition reseats its own capture origin
+					osal.scratch_set(4, osal.scratch_get(4) + 1)
 				}
+				dump_busy := pending != 0 || link.busy()
 				for cc in 0 .. ncores {
 					mut tb := unsafe { &rings[cc] }
 					rspb, do_dump, addressed := trace.handle_cmd(mut tb, c, u8(cc))
 					if !addressed {
 						continue
 					}
-					if do_dump {
+					if do_dump && !dump_busy {
 						pending |= u16(1) << cc
 					}
 					mut rf := can.Frame{
@@ -209,6 +224,9 @@ fn partition_trace(chp can.Channel, base voidptr, ncores int) {
 					}
 					for j in 0 .. 8 {
 						rf.data[j] = rspb[j]
+					}
+					if do_dump && dump_busy { // a dump is already in flight
+						rf.data[1] = trace.result_busy
 					}
 					ch.send(rf)
 				}
