@@ -460,19 +460,89 @@ fn main() {
 	}
 	single_part := if by_part.keys().len == 1 { by_part.keys()[0] } else { '' }
 	has_bridge := has_external || isotp_conns.len > 0 || has_routes
-	// Core 0 only: the single-core inline path assumes core 0 throughout (pin, CpuLoad byte 0,
-	// TraceCmd core_mask == 0 default). A traced partition on another core needs the per-core
-	// model, so defer it rather than half-support it.
+	// Core 0 only: the single-core INLINE path folds everything into one run(ch) superloop and
+	// assumes core 0 throughout (pin, CpuLoad byte 0, TraceCmd core_mask == 0 default). A traced
+	// app on other/multiple cores uses the MULTICORE path (P3a, docs/trace-multicore.md): per-core
+	// rings owned by run(), each partition captures into its own, and one partition_trace() owns
+	// the channel + streams each frozen ring as a self-describing block.
 	trace_inline := trace_on && !target_on && single_part != '' && !has_bridge
 		&& (core_of[single_part] or { 0 }) == trace_core && trace_core == 0
-	if trace_on && !target_on && !trace_inline {
-		if has_bridge {
-			panic('loom2v: [trace] on an app with a COM bus bridge (external signals / ISO-TP / ' +
-				'routes) is not generated yet — the bridge must run on its comm thread alongside ' +
-				'trace (the multi-core / comm-thread phase)')
+	trace_multicore := trace_on && !target_on && !trace_inline && !has_bridge
+	// The COM bus bridge + trace coexistence (the bridge as a first-class comm thread) is P3b, not
+	// generated yet — a bridge forces neither inline nor multicore, so reject it explicitly.
+	if trace_on && !target_on && has_bridge {
+		panic('loom2v: [trace] on an app with a COM bus bridge (external signals / ISO-TP / ' +
+			'routes) is not generated yet — the bridge must run on its comm thread alongside ' +
+			'trace (the comm-thread phase, P3b in docs/trace-multicore.md)')
+	}
+	// P3a: each core's polled superloop is one cooperative thread — no preemptive context switches
+	// or ISRs, so we synthesise the schedule the loop actually runs: an fb record per handler, a
+	// THREAD record bracketing each busy iteration (the thread ran these handlers), and an IDLE
+	// record for the gap between busy spans. So thread+fb shows the thread + idle lanes honestly;
+	// real preemptive thread/ISR interleaving is the ThreadX target (P3c). The trace owner +
+	// partitions share memory, so require one partition per core (unambiguous per-core rings/mask).
+	mut trace_ncores := 0
+	mut fb_id_base := map[string]int{} // partition -> its first handler's GLOBAL fb id (manifest order)
+	mut thread_id_of := map[string]int{} // partition -> its thread id (manifest order, 1-based; 0 = idle)
+	if trace_multicore {
+		if trace_level !in ['thread+fb', 'all'] {
+			panic('loom2v: [trace] level "${trace_level}" is not generated for multi-core host — use ' +
+				'"thread+fb" or "all" (the host emits fb + derived thread/idle; ISR capture is the ' +
+				'ThreadX target, P3c)')
 		}
-		panic('loom2v: trace codegen currently supports a single partition on core 0 only ' +
-			'(multi-core and non-core-0 trace are the comm-thread phase, not generated yet)')
+		// The live HandlerStat heartbeat is emitted only by the single-core inline path; the
+		// cross-core fan-out isn't generated yet. A positive push_ms would advertise stat_id in the
+		// manifest but send nothing — reject it rather than silently drop the heartbeat.
+		if trace_push_us > 0 {
+			panic('loom2v: [trace] push_ms > 0 is not generated for multi-core yet (the HandlerStat ' +
+				'heartbeat fan-out across cores is a P3a follow-up) — set push_ms = 0')
+		}
+		mut seen_core := map[int]string{}
+		mut acc := 0
+		mut tid := 0
+		for p in ecumodel.toml_arr(doc, 'partition') {
+			pname := (p.as_map()['name'] or { toml.Any('') }).string()
+			// Thread id tracks the manifest's numbering: one per partition, EVERY partition in TOML
+			// order (the manifest emits a thread row for each, FBs or not), so a traced partition's
+			// THREAD records land on the right lane even after an FB-less partition (F506).
+			tid++
+			thread_id_of[pname] = tid
+			if pname !in by_part {
+				continue // no FBs -> not traced; its thread id was still consumed above
+			}
+			pc := core_of[pname] or { 0 }
+			// The TraceCmd core_mask is 16 bits and Cmd.targets() ignores core >= 16, so a ring on
+			// core 16+ could never be armed/stopped/dumped — reject it rather than generate a
+			// partition + ring the trace protocol can't address.
+			if pc >= 16 {
+				panic('loom2v: [trace] partition "${pname}" is on core ${pc}, but the TraceCmd core ' +
+					'mask only addresses cores 0..15 — a traced partition must be on core 0..15')
+			}
+			if pc in seen_core {
+				panic('loom2v: multi-core trace needs one partition per core today — partitions ' +
+					'"${seen_core[pc]}" and "${pname}" are both on core ${pc} (P3a limitation, ' +
+					'docs/trace-multicore.md)')
+			}
+			seen_core[pc] = pname
+			if pc + 1 > trace_ncores {
+				trace_ncores = pc + 1
+			}
+			// GLOBAL fb id base + thread id — must match the manifest's partition->fb->handler and
+			// partition->thread numbering below (threads are 1-based; id 0 is reserved for idle).
+			fb_id_base[pname] = acc
+			for c in by_part[pname] {
+				acc += (c.as_map()['handler'] or { toml.Any([]toml.Any{}) }).array().len
+			}
+		}
+		// Cores must be numbered densely from 0: trace_ncores = max_core + 1 sizes the ring array +
+		// the per-core scratch cells, so a hole (a high core with no traced partition below it) would
+		// reserve cells for a producer that doesn't exist and can overflow the scratch budget (F523).
+		for cc in 0 .. trace_ncores {
+			if cc !in seen_core {
+				panic('loom2v: multi-core trace needs cores numbered densely from 0 — core ${cc} has ' +
+					'no traced partition but a higher core does; renumber the partition cores 0..N-1')
+			}
+		}
 	}
 
 	if telem_on {
@@ -495,6 +565,20 @@ fn main() {
 				slot_core << (bus_core[tb] or { 0 })
 			}
 		}
+	}
+
+	// Multi-core (P3a): per-core scratch cells for SINGLE-WRITER trace coordination (the owner
+	// never mutates a partition's ring). cmd_base+cc is written ONLY by the owner — a command
+	// (generation << 8 | opcode) for core cc, which that partition applies to its OWN ring (arm/
+	// stop/reset/freeze) + reseats its own capture origin. trig_base+cc is written ONLY by core cc's
+	// capture hook — an overrun freeze request the owner fans out to every core as a freeze command,
+	// so the snapshot is coherent. Reserved after telem's cells; rejected if they'd overflow the 16.
+	trace_cmd_base := slot_core.len
+	trace_trig_base := slot_core.len + trace_ncores
+	if trace_multicore && slot_core.len + 2 * trace_ncores > 16 {
+		panic('loom2v: multi-core trace needs 2 scratch cells per core (command + trigger request), ' +
+			'but ${slot_core.len} telemetry cell(s) + ${2 * trace_ncores} for ${trace_ncores} core(s) ' +
+			'exceed osal.scratch (16 cells) — reduce telemetry')
 	}
 
 	mut ports := []string{}
@@ -536,11 +620,11 @@ fn main() {
 	if telem_on || (trace_inline && trace_push_us > 0) {
 		glue << 'import comm.telem' // CpuLoad / HandlerStat packing
 	}
-	if trace_inline {
-		glue << 'import comm.trace' // capture ring + cmd/rsp control
+	if trace_inline || trace_multicore {
+		glue << 'import comm.trace' // capture ring(s) + cmd/rsp control
 		glue << 'import comm.isotp' // bulk record dump transport
 	}
-	if has_external || isotp_conns.len > 0 || telem_on || trace_inline {
+	if has_external || isotp_conns.len > 0 || telem_on || trace_inline || trace_multicore {
 		glue << 'import driver.can' // the generated bus bridge / trace channel
 	}
 	if has_external {
@@ -555,6 +639,88 @@ fn main() {
 	if isotp_conns.len > 0 {
 		glue << 'import comm.isotp' // ISO-TP diagnostic transport
 		glue << 'import comm.uds' // UDS diagnostic services
+	}
+
+	// Multi-core (P3a): one shared capture hook. Each traced partition installs it with its own
+	// TraceCapture ctx (its per-core ring + the elapsed-time origin + its GLOBAL fb-id base), so
+	// one function serves every core. It re-anchors the u24 start_us with an epoch before it wraps
+	// and fires the overrun trigger when a budget is configured — the same shape as the inline hook,
+	// but pushing into the ring by pointer (the ring is owned by run(), read by partition_trace).
+	if trace_multicore {
+		glue << ''
+		glue << 'struct TraceCapture {'
+		glue << 'mut:'
+		glue << '\tbuf       &trace.TraceBuffer = unsafe { nil } // this core\'s ring (owned by run())'
+		glue << '\tstart     u64 // wall-clock µs of the capture origin'
+		glue << '\tbase      u64 // elapsed µs at the last epoch re-anchor'
+		glue << '\tid_base   u32 // GLOBAL fb id of this partition\'s first handler (+ local idx)'
+		glue << '\tthread_id u16 // this partition\'s thread id (for the THREAD records)'
+		glue << '\tbusy_end  u64 // elapsed µs at the end of the last busy span (idle-gap start)'
+		glue << '\tfb_count  u32 // handlers dispatched (the loop reads this to bracket a busy span)'
+		glue << '\ttrig_slot int // THIS core\'s freeze-request scratch cell (single-writer: only here)'
+		glue << '}'
+		glue << ''
+		glue << 'fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {'
+		glue << '\tmut t := unsafe { &TraceCapture(ctx) }'
+		glue << '\tt.fb_count++'
+		glue << '\telapsed := start_us - t.start'
+		glue << '\tif elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor'
+		glue << '\t\tt.base = elapsed'
+		glue << '\t\tt.buf.push(trace.new_epoch(u32(elapsed)))'
+		glue << '\t}'
+		glue << '\tmut dt := dt_us'
+		glue << '\tmut flags := u8(0)'
+		glue << '\tif dt > 0xFFFF { // clamp to the u16 field, and mark it as saturated (F648)'
+		glue << '\t\tdt = 0xFFFF'
+		glue << '\t\tflags |= trace.flag_saturated'
+		glue << '\t}'
+		if trace_budget_us > 0 {
+			// flag the record that exceeded the budget — the handler that trips the ring trigger;
+			// the decoder outlines it so the freeze culprit is visible in the dump.
+			glue << '\tif dt_us > ${trace_budget_us} {'
+			glue << '\t\tflags |= trace.flag_overran'
+			glue << '\t}'
+		}
+		glue << '\tt.buf.push(trace.new_fb(u16(t.id_base + u32(idx)), flags, u32(elapsed - t.base), u16(dt)))'
+		if trace_budget_us > 0 {
+			// This core overran: freeze its OWN ring now (single-writer), and raise its freeze
+			// request — the trace owner fans that out as a freeze command to every core, so the
+			// per-core snapshots are coherent without any core mutating another core's ring. Only
+			// when actually capturing: a handler still runs (and can overrun) while the ring is
+			// frozen, and a stale request would re-freeze the next capture the instant it re-arms.
+			glue << '\tif dt_us > ${trace_budget_us} && t.buf.state() == .capturing {'
+			glue << '\t\tt.buf.trigger()'
+			glue << '\t\tosal.scratch_set(t.trig_slot, osal.scratch_get(t.trig_slot) + 1) // bump the request counter (edge, not level)'
+			glue << '\t}'
+		}
+		glue << '}'
+		glue << ''
+		// trace_thread_span brackets one busy superloop iteration: an IDLE record for the gap since
+		// the previous busy span, then a THREAD record for [t0, t1] (the thread ran its handlers).
+		// The partition loop calls it only when a handler actually ran, so idle records are bounded
+		// by the handler rate (not the 1 ms tick). start_us are relative to the current epoch base.
+		glue << 'fn trace_thread_span(mut t TraceCapture, t0_us u64, t1_us u64) {'
+		glue << '\te_start := t0_us - t.start // elapsed at the busy span start'
+		glue << '\te_end := t1_us - t.start   // elapsed at the busy span end'
+		// The idle-gap start is relative to the current epoch base. If an epoch re-anchor moved the
+		// base past the previous busy_end (a capture spanning the u24 window), clamp the gap to the
+		// new base so u32(start - base) can\'t underflow and land the idle ~16 s in the future (F684).
+		glue << '\tgap_from := if t.busy_end > t.base { t.busy_end } else { t.base }'
+		glue << '\tif e_start > gap_from { // idle gap since the last busy span (within this epoch)'
+		glue << '\t\tmut gap := e_start - gap_from'
+		glue << '\t\tif gap > 0xFFFF {'
+		glue << '\t\t\tgap = 0xFFFF'
+		glue << '\t\t}'
+		glue << '\t\tt.buf.push(trace.new_idle(trace.reason_yield, u32(gap_from - t.base), u16(gap)))'
+		glue << '\t}'
+		glue << '\ts_from := if e_start > t.base { e_start } else { t.base } // clamp across an epoch re-anchor (F708)'
+		glue << '\tmut busy := if e_end > s_from { e_end - s_from } else { u64(0) }'
+		glue << '\tif busy > 0xFFFF {'
+		glue << '\t\tbusy = 0xFFFF'
+		glue << '\t}'
+		glue << '\tt.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(s_from - t.base), u16(busy)))'
+		glue << '\tt.busy_end = e_end'
+		glue << '}'
 	}
 
 	mut all_regs := map[string][]string{} // per-partition sched.every(...) lines, reused by target run()
@@ -638,7 +804,7 @@ fn main() {
 		// Host: one spawned superloop per partition, paced by osal.sleep_us. Target
 		// mode emits a single inline superloop in run() instead; inline-trace mode folds
 		// the (single) partition into the trace run(ch) below (see both).
-		if !target_on && !trace_inline {
+		if !target_on && !trace_inline && !trace_multicore {
 			glue << ''
 			glue << 'pub fn partition_${part}(core int, arg voidptr) {'
 			glue << '\tosal.pin_to_core(${core_of[part] or { 0 }})'
@@ -652,6 +818,62 @@ fn main() {
 			glue << '\t\tsched.run(loom_t0)'
 			glue << '\t\tloom_t1 := osal.now_us()'
 			glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
+			if telem_on && 'p:${part}' in telem_slot {
+				glue << '\t\tosal.scratch_set(${telem_slot['p:${part}']}, u64(sched.load_permille()))'
+			}
+			glue << '\t\tosal.sleep_us(1000)'
+			glue << '\t}'
+			glue << '}'
+		} else if trace_multicore {
+			// Traced partition (P3a): profiled dispatch into this core's ring (passed as `arg` by
+			// run()). run_profiled fires trace_capture per handler and accounts load internally;
+			// the load is published to scratch for CpuLoad (partition_telem reads it).
+			pcore := core_of[part] or { 0 }
+			glue << ''
+			glue << 'pub fn partition_${part}(core int, arg voidptr) {'
+			glue << '\tosal.pin_to_core(${pcore})'
+			glue << '\tmut st := Partition_${part}_state{}'
+			glue << '\tmut sched := loom.Scheduler{}'
+			for r in regs {
+				glue << r
+			}
+			glue << '\tmut cap := TraceCapture{'
+			glue << '\t\tbuf:       unsafe { &trace.TraceBuffer(arg) }'
+			glue << '\t\tstart:     osal.now_us()'
+			glue << '\t\tid_base:   ${fb_id_base[part] or { 0 }}'
+			glue << '\t\tthread_id: ${thread_id_of[part] or { 0 }}'
+			glue << '\t\ttrig_slot: ${trace_trig_base + pcore}'
+			glue << '\t}'
+			glue << '\tsched.set_trace_hook(trace_capture, &cap)'
+			glue << '\tmut last_cmd := osal.scratch_get(${trace_cmd_base + pcore})'
+			glue << '\tfor {'
+			// Apply any command the owner routed to THIS core (arm/stop/reset/freeze). Only this
+			// partition ever mutates its own ring (single-writer isolation — the owner just posts
+			// commands + reads). Checked BEFORE dispatch so a freeze lands before the next handler
+			// is recorded (F668); arm reseats this core's own origin (F5) only when targeted (F1244).
+			glue << '\t\tcmdv := osal.scratch_get(${trace_cmd_base + pcore})'
+			glue << '\t\tif cmdv != last_cmd {'
+			glue << '\t\t\tlast_cmd = cmdv'
+			glue << '\t\t\top := u8(cmdv & 0xff)'
+			glue << '\t\t\tif op == trace.op_arm || op == trace.op_start || op == trace.op_reset {'
+			glue << '\t\t\t\tcap.buf.start()'
+			glue << '\t\t\t\tcap.start = osal.now_us()'
+			glue << '\t\t\t\tcap.base = 0'
+			glue << '\t\t\t\tcap.busy_end = 0'
+			glue << '\t\t\t} else if op == trace.op_stop {'
+			glue << '\t\t\t\tcap.buf.stop()'
+			glue << '\t\t\t} else if op == 0xf1 { // freeze: the owner fanned out another core\'s overrun'
+			glue << '\t\t\t\tcap.buf.trigger()'
+			glue << '\t\t\t}'
+			glue << '\t\t}'
+			// Bracket the dispatch: run_profiled fires trace_capture (fb records) for each due
+			// handler; if any ran, emit the THREAD span + idle gap for this iteration.
+			glue << '\t\tt0 := osal.now_us()'
+			glue << '\t\tbefore := cap.fb_count'
+			glue << '\t\tsched.run_profiled(osal.now_us)'
+			glue << '\t\tif cap.fb_count != before {'
+			glue << '\t\t\ttrace_thread_span(mut cap, t0, osal.now_us())'
+			glue << '\t\t}'
 			if telem_on && 'p:${part}' in telem_slot {
 				glue << '\t\tosal.scratch_set(${telem_slot['p:${part}']}, u64(sched.load_permille()))'
 			}
@@ -1035,6 +1257,138 @@ fn main() {
 		glue << '}'
 	}
 
+	// --- partition_trace (P3a): the single trace-bus owner. It NEVER mutates a partition's ring
+	//     (single-writer isolation): arm/stop/reset are ROUTED to the owning partition via a per-core
+	//     command cell (which that partition applies to its own ring), the reply is a read-only
+	//     status_rsp, and an overrun freeze is fanned in (per-core trigger counter) then out as a
+	//     freeze command. Only `dump` reads the (frozen) rings, streaming each as one self-describing
+	//     ISO-TP block (pack_block) sequentially — isotp.Link's busy() gates the next block. The
+	//     rings are owned by run(); CpuLoad is handled by partition_telem. ---
+	if trace_multicore {
+		glue << ''
+		glue << 'fn partition_trace(chp can.Channel, base voidptr, ncores int) {'
+		glue << '\tosal.pin_to_core(${trace_core})'
+		glue << '\tmut ch := chp'
+		glue << '\tmut rings := unsafe { &trace.TraceBuffer(base) } // rings[0 .. ncores]'
+		glue << '\tmut link := isotp.Link{}'
+		glue << '\tmut dumpbuf := [${trace_buffer_records * 8 + 8}]u8{} // one block: header + records'
+		glue << '\tmut pending := u16(0) // cores whose frozen ring still needs streaming'
+		glue << '\tmut seq := u64(0)     // command generation — the owner is the SOLE writer of cmd cells'
+		glue << '\tmut froze := false    // whether the current session\'s freeze has been fanned out'
+		glue << '\tmut last_trig := [16]u64{} // last freeze-request counter seen per core (edge detect)'
+		glue << '\tfor {'
+		glue << '\t\tmut rx := can.Frame{}'
+		glue << '\t\tif ch.recv(mut rx) {'
+		glue << '\t\t\tif rx.id == u32(0x${trace_cmd_id.hex()}) && rx.len >= 8 {'
+		glue << '\t\t\t\tmut cb := [8]u8{}'
+		glue << '\t\t\t\tfor j in 0 .. 8 {'
+		glue << '\t\t\t\t\tcb[j] = rx.data[j]'
+		glue << '\t\t\t\t}'
+		glue << '\t\t\t\tc := trace.decode_cmd(cb)'
+		glue << '\t\t\t\tarm := c.opcode == trace.op_arm || c.opcode == trace.op_start || c.opcode == trace.op_reset'
+		glue << '\t\t\t\tif arm { // new session: forget prior overruns, re-enable the freeze fan-out'
+		glue << '\t\t\t\t\tfroze = false'
+		glue << '\t\t\t\t\tfor cc in 0 .. ncores {'
+		glue << '\t\t\t\t\t\tlast_trig[cc] = osal.scratch_get(${trace_trig_base} + cc)'
+		glue << '\t\t\t\t\t}'
+		glue << '\t\t\t\t\tpending = 0        // cancel any in-flight dump so a fresh capture isn\'t'
+		glue << '\t\t\t\t\tlink = isotp.Link{} // mixed with the previous session\'s blocks (F1281)'
+		glue << '\t\t\t\t}'
+		// A dump while a previous one is still streaming (pending cores queued, or the ISO-TP link
+		// mid-block) would interleave blocks the host expects one-per-OK — reject it result_busy.
+		glue << '\t\t\t\tdump_busy := pending != 0 || link.busy()'
+		glue << '\t\t\t\tfor cc in 0 .. ncores {'
+		glue << '\t\t\t\t\tif !c.targets(u8(cc)) {'
+		glue << '\t\t\t\t\t\tcontinue'
+		glue << '\t\t\t\t\t}'
+		glue << '\t\t\t\t\t// Route the mutating ops to the OWNING partition (single-writer): the owner'
+		glue << '\t\t\t\t\t// only posts a (generation | opcode) command + reads the ring for the ack.'
+		glue << '\t\t\t\t\tif arm || c.opcode == trace.op_stop {'
+		glue << '\t\t\t\t\t\tseq++'
+		glue << '\t\t\t\t\t\tosal.scratch_set(${trace_cmd_base} + cc, (seq << 8) | u64(c.opcode))'
+		glue << '\t\t\t\t\t}'
+		glue << '\t\t\t\t\ttbv := unsafe { rings[cc] } // read-only snapshot for the status reply'
+		glue << '\t\t\t\t\tmut result := trace.result_ok'
+		glue << '\t\t\t\t\tif c.opcode == trace.op_dump {'
+		glue << '\t\t\t\t\t\tif tbv.state() != .full && tbv.state() != .frozen {'
+		glue << '\t\t\t\t\t\t\tresult = trace.result_not_ready'
+		glue << '\t\t\t\t\t\t} else if dump_busy {'
+		glue << '\t\t\t\t\t\t\tresult = trace.result_busy'
+		glue << '\t\t\t\t\t\t} else {'
+		glue << '\t\t\t\t\t\t\tpending |= u16(1) << cc'
+		glue << '\t\t\t\t\t\t}'
+		glue << '\t\t\t\t\t} else if c.opcode == trace.op_set_push {'
+		glue << '\t\t\t\t\t\tresult = trace.result_unsupported // push is config-driven, not runtime (F1297)'
+		glue << '\t\t\t\t\t} else if !arm && c.opcode != trace.op_stop && c.opcode != trace.op_status {'
+		glue << '\t\t\t\t\t\tresult = trace.result_bad_opcode'
+		glue << '\t\t\t\t\t}'
+		glue << '\t\t\t\t\trspb := trace.status_rsp(tbv, c.opcode, result, u8(cc))'
+		glue << '\t\t\t\t\tmut rf := can.Frame{'
+		glue << '\t\t\t\t\t\tid:  u32(0x${trace_rsp_id.hex()})'
+		glue << '\t\t\t\t\t\tlen: 8'
+		glue << '\t\t\t\t\t}'
+		glue << '\t\t\t\t\tfor j in 0 .. 8 {'
+		glue << '\t\t\t\t\t\trf.data[j] = rspb[j]'
+		glue << '\t\t\t\t\t}'
+		glue << '\t\t\t\t\tch.send(rf)'
+		glue << '\t\t\t\t}'
+		glue << '\t\t\t} else if rx.id == u32(0x${trace_dump_fc_id.hex()}) {'
+		glue << '\t\t\t\tmut p := isotp.Pdu{}'
+		glue << '\t\t\t\tfor j in 0 .. 8 {'
+		glue << '\t\t\t\t\tp.data[j] = rx.data[j]'
+		glue << '\t\t\t\t}'
+		glue << '\t\t\t\tlink.on_frame(osal.now_us(), p)'
+		glue << '\t\t\t}'
+		glue << '\t\t}'
+		glue << '\t\tmut tp := isotp.Pdu{}'
+		glue << '\t\tfor link.poll(osal.now_us(), mut tp) {'
+		glue << '\t\t\tmut pf := can.Frame{'
+		glue << '\t\t\t\tid:  u32(0x${trace_record_id.hex()})'
+		glue << '\t\t\t\tlen: 8'
+		glue << '\t\t\t}'
+		glue << '\t\t\tfor j in 0 .. 8 {'
+		glue << '\t\t\t\tpf.data[j] = tp.data[j]'
+		glue << '\t\t\t}'
+		glue << '\t\t\tch.send(pf)'
+		glue << '\t\t}'
+		// Freeze fan-in: a core that overran BUMPED its trigger counter; on any NEW bump (edge, not
+		// level — so a stale request from a prior session can't re-freeze a fresh capture) the owner
+		// (sole writer of the command cells) fans a freeze command out to every core, so the per-core
+		// snapshots freeze around the same instant without any core touching another core's ring.
+		glue << '\t\tmut newtrig := false'
+		glue << '\t\tfor cc in 0 .. ncores {'
+		glue << '\t\t\tv := osal.scratch_get(${trace_trig_base} + cc)'
+		glue << '\t\t\tif v != last_trig[cc] {'
+		glue << '\t\t\t\tlast_trig[cc] = v'
+		glue << '\t\t\t\tnewtrig = true'
+		glue << '\t\t\t}'
+		glue << '\t\t}'
+		glue << '\t\tif newtrig && !froze {'
+		glue << '\t\t\tfroze = true'
+		glue << '\t\t\tfor cc in 0 .. ncores {'
+		glue << '\t\t\t\tseq++'
+		glue << '\t\t\t\tosal.scratch_set(${trace_cmd_base} + cc, (seq << 8) | u64(0xf1)) // 0xf1 = freeze'
+		glue << '\t\t\t}'
+		glue << '\t\t}'
+		glue << '\t\tif !link.busy() && pending != 0 { // previous block drained -> start the next core'
+		glue << '\t\t\tmut cc := 0'
+		glue << '\t\t\tfor cc < ncores && (pending & (u16(1) << cc)) == 0 {'
+		glue << '\t\t\t\tcc++'
+		glue << '\t\t\t}'
+		glue << '\t\t\tif cc < ncores {'
+		glue << '\t\t\t\tpending &= ~(u16(1) << cc)'
+		glue << '\t\t\t\tmut tb := unsafe { &rings[cc] }'
+		glue << '\t\t\t\tn := tb.pack_block(&dumpbuf[0], ${trace_buffer_records * 8 + 8}, u8(cc))'
+		glue << '\t\t\t\tif n > 0 {'
+		glue << '\t\t\t\t\tlink.send(&dumpbuf[0], n)'
+		glue << '\t\t\t\t}'
+		glue << '\t\t\t}'
+		glue << '\t\t}'
+		glue << '\t\tosal.sleep_us(1000)'
+		glue << '\t}'
+		glue << '}'
+	}
+
 	bus_names.sort()
 	if target_on {
 		// --- target run(): one inline single-core superloop. No spawn, no osal. The
@@ -1294,6 +1648,53 @@ fn main() {
 		}
 		glue << '\t\tosal.sleep_us(1000)'
 		glue << '\t}'
+		glue << '}'
+	} else if trace_multicore {
+		// --- multi-core trace run() (P3a): own the per-core rings (fixed arrays on this frame,
+		//     which outlives the joined partitions), spawn each traced partition with a pointer to
+		//     its ring, spawn the single partition_trace owner + partition_telem (CpuLoad), wait. ---
+		chp := snake(eff_trace_bus)
+		mut mpre := trace_pre_pct
+		if mpre > 100 {
+			mpre = 100
+		}
+		mmode := if trace_mode == 'oneshot' { '.oneshot' } else { '.ring' }
+		glue << ''
+		glue << 'pub fn run(${chp} can.Channel) {'
+		glue << '\tmut backings := [${trace_ncores}][${trace_buffer_records}]trace.Record{}'
+		glue << '\tmut rings := [${trace_ncores}]trace.TraceBuffer{}'
+		mut mwaits := []string{}
+		for p in ecumodel.toml_arr(doc, 'partition') {
+			pname := (p.as_map()['name'] or { toml.Any('') }).string()
+			if pname !in by_part {
+				continue
+			}
+			pc := core_of[pname] or { 0 }
+			glue << '\trings[${pc}] = trace.new_buffer(&backings[${pc}][0], ${trace_buffer_records}, ${mmode}, ${mpre})'
+			glue << '\trings[${pc}].start()'
+		}
+		for p in ecumodel.toml_arr(doc, 'partition') {
+			pname := (p.as_map()['name'] or { toml.Any('') }).string()
+			if pname !in by_part {
+				continue
+			}
+			pc := core_of[pname] or { 0 }
+			// Pass each ring as a voidptr (matching the partition's arg type) — a typed &T arg
+			// into a voidptr param makes V's spawn wrapper mis-forward it. &rings[i] escapes the
+			// fixed array, but run() joins below so the frame outlives every partition (they loop
+			// forever), keeping the pointer valid.
+			glue << '\tt_${pname} := spawn partition_${pname}(${pc}, unsafe { voidptr(&rings[${pc}]) })'
+			mwaits << 't_${pname}'
+		}
+		if telem_on && telem_iface != '' {
+			glue << '\tt_telem := spawn partition_telem()'
+			mwaits << 't_telem'
+		}
+		glue << '\tt_trace := spawn partition_trace(${chp}, unsafe { voidptr(&rings[0]) }, ${trace_ncores})'
+		mwaits << 't_trace'
+		for w in mwaits {
+			glue << '\t${w}.wait()'
+		}
 		glue << '}'
 	} else {
 		// --- host run(): launch every bus bridge + app partition, then wait. One

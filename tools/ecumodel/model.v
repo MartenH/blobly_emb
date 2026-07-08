@@ -215,11 +215,12 @@ pub fn validate(doc toml.Doc) []string {
 			}
 		}
 		if v := trm['buffer_records'] {
-			// The dump is one ISO-TP payload (comm/isotp.max_payload = 512 bytes = 64 records), so
-			// the ring can't exceed 64 records today — reject it at the gate, before codegen.
+			// A dump block is one ISO-TP payload — an 8-byte block header + the records — and
+			// comm/isotp.max_payload (520) is sized to hold a header + 64 records, so the ring
+			// can't exceed 64 records today. Reject it at the gate, before codegen.
 			if v is i64 {
 				if v < 1 || v > 64 {
-					errs << '[trace] buffer_records ${v} out of range (1..64 — a dump is one 512-byte ISO-TP payload = 64 records)'
+					errs << '[trace] buffer_records ${v} out of range (1..64 — a dump block is one ISO-TP payload: an 8-byte header + up to 64 records)'
 				}
 			} else {
 				errs << '[trace] buffer_records must be an integer (1..64)'

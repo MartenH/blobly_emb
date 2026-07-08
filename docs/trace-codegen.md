@@ -15,13 +15,16 @@
   overrun trigger takes `trigger = { source = "overrun", budget_us = N }`. Verified on vcan0
   (HandlerStat + CpuLoad + status→frozen→dump).
 
-Next: **multi-core** trace (the IOC HandlerStat fan-out + the per-bus comm thread visible in the
-manifest) — the `trace_multicore` example becomes config-driven. See the phasing in §5.
+Next (**P3a — done**): **multi-core** trace — the `trace_multicore` example is now config-driven
+(two partitions on cores 0+1, per-core rings, one `partition_trace` owner streaming a
+self-describing ISO-TP block per core), retiring its hand-wired P4 harness. Remaining: the live
+HandlerStat fan-out across cores (P3a follow-up), the per-bus **comm thread** visible in the trace
+(P3b), and real thread/ISR capture on the ThreadX target (P3c). See [trace-multicore.md](trace-multicore.md).
 
-Today the runtime-tracing subsystem is *hand-wired* in
-`examples/trace_multicore` (and `trace_demo`), and its manifest + DBC are hand-written. This
-doc proposes generating **all of it from `ecu.toml`** via loom2v, so nothing is hand-kept and
-nothing can drift — the same way the Loom wiring and COM codec already are.
+The runtime-tracing subsystem is now generated **all from `ecu.toml`** via loom2v for both the
+single-core (`trace_demo`) and multi-core (`trace_multicore`) examples — nothing is hand-kept and
+nothing can drift, the same way the Loom wiring and COM codec already are. (This doc originally
+proposed that generation; it is now realised through P2 + P3a.)
 
 Complements [telemetry.md](telemetry.md) (the wire protocol, unchanged) and
 [trace-manifest.md](trace-manifest.md) (the `_net` interface).
