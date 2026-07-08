@@ -12,14 +12,18 @@ import driver.can
 
 struct TraceCapture {
 mut:
-	buf     &trace.TraceBuffer = unsafe { nil } // this core's ring (owned by run())
-	start   u64 // wall-clock µs of the capture origin
-	base    u64 // elapsed µs at the last epoch re-anchor
-	id_base u32 // GLOBAL fb id of this partition's first handler (+ local idx)
+	buf       &trace.TraceBuffer = unsafe { nil } // this core's ring (owned by run())
+	start     u64 // wall-clock µs of the capture origin
+	base      u64 // elapsed µs at the last epoch re-anchor
+	id_base   u32 // GLOBAL fb id of this partition's first handler (+ local idx)
+	thread_id u16 // this partition's thread id (for the THREAD records)
+	busy_end  u64 // elapsed µs at the end of the last busy span (idle-gap start)
+	fb_count  u32 // handlers dispatched (the loop reads this to bracket a busy span)
 }
 
 fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	mut t := unsafe { &TraceCapture(ctx) }
+	t.fb_count++
 	elapsed := start_us - t.start
 	if elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor
 		t.base = elapsed
@@ -30,9 +34,30 @@ fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {
 		dt = 0xFFFF
 	}
 	t.buf.push(trace.new_fb(u16(t.id_base + u32(idx)), 0, u32(elapsed - t.base), u16(dt)))
-	if dt_us > 500 { // overrun: freeze the ring around the anomaly
+	if dt_us > 500 {
+		osal.scratch_set(3, 1) // ask every core to freeze
+	}
+	if osal.scratch_get(3) != 0 {
 		t.buf.trigger()
 	}
+}
+
+fn trace_thread_span(mut t TraceCapture, t0_us u64, t1_us u64) {
+	e_start := t0_us - t.start // elapsed at the busy span start
+	e_end := t1_us - t.start   // elapsed at the busy span end
+	if e_start > t.busy_end { // idle gap since the last busy span
+		mut gap := e_start - t.busy_end
+		if gap > 0xFFFF {
+			gap = 0xFFFF
+		}
+		t.buf.push(trace.new_idle(trace.reason_yield, u32(t.busy_end - t.base), u16(gap)))
+	}
+	mut busy := e_end - e_start
+	if busy > 0xFFFF {
+		busy = 0xFFFF
+	}
+	t.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(e_start - t.base), u16(busy)))
+	t.busy_end = e_end
 }
 
 struct Partition_sense_state {
@@ -62,13 +87,19 @@ pub fn partition_sense(core int, arg voidptr) {
 	sched.every(5000, handler_sense_fast_sense_on_5ms, &st)
 	sched.every(10000, handler_sense_med_sense_on_10ms, &st)
 	mut cap := TraceCapture{
-		buf:     unsafe { &trace.TraceBuffer(arg) }
-		start:   osal.now_us()
-		id_base: 0
+		buf:       unsafe { &trace.TraceBuffer(arg) }
+		start:     osal.now_us()
+		id_base:   0
+		thread_id: 1
 	}
 	sched.set_trace_hook(trace_capture, &cap)
 	for {
+		t0 := osal.now_us()
+		before := cap.fb_count
 		sched.run_profiled(osal.now_us)
+		if cap.fb_count != before {
+			trace_thread_span(mut cap, t0, osal.now_us())
+		}
 		osal.scratch_set(1, u64(sched.load_permille()))
 		osal.sleep_us(1000)
 	}
@@ -101,13 +132,19 @@ pub fn partition_ctrl(core int, arg voidptr) {
 	sched.every(10000, handler_ctrl_ctrl_work_on_10ms, &st)
 	sched.every(20000, handler_ctrl_slow_ctrl_on_20ms, &st)
 	mut cap := TraceCapture{
-		buf:     unsafe { &trace.TraceBuffer(arg) }
-		start:   osal.now_us()
-		id_base: 2
+		buf:       unsafe { &trace.TraceBuffer(arg) }
+		start:     osal.now_us()
+		id_base:   2
+		thread_id: 2
 	}
 	sched.set_trace_hook(trace_capture, &cap)
 	for {
+		t0 := osal.now_us()
+		before := cap.fb_count
 		sched.run_profiled(osal.now_us)
+		if cap.fb_count != before {
+			trace_thread_span(mut cap, t0, osal.now_us())
+		}
 		osal.scratch_set(0, u64(sched.load_permille()))
 		osal.sleep_us(1000)
 	}
@@ -152,6 +189,10 @@ fn partition_trace(chp can.Channel, base voidptr, ncores int) {
 					cb[j] = rx.data[j]
 				}
 				c := trace.decode_cmd(cb)
+				if c.opcode == trace.op_arm || c.opcode == trace.op_start
+					|| c.opcode == trace.op_reset {
+					osal.scratch_set(3, 0) // new session: clear the system freeze
+				}
 				for cc in 0 .. ncores {
 					mut tb := unsafe { &rings[cc] }
 					rspb, do_dump, addressed := trace.handle_cmd(mut tb, c, u8(cc))

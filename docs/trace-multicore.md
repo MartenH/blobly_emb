@@ -53,10 +53,25 @@ Concretely, "visible" = the bridge gets **(a)** a manifest `thread` row (name = 
 **(b)** it pushes `THREAD`-kind trace records for its own run intervals, so the swimlane shows a
 `comm_can0` lane interleaved with the app lanes.
 
-## 3. Host multi-core, fb-only — **P3a**
+## 3. Host multi-core — **P3a**
 
-The first mergeable slice: N partitions on M cores, still **fb-only** records, still no bridge. This
-is the "single partition on core 0 only" panic, lifted.
+The first mergeable slice: N partitions on M cores, no bridge. This is the "single partition on core
+0 only" panic, lifted. Two properties make the multi-core view coherent and honest:
+
+**System-wide freeze (coherent snapshot).** Each core's ring is a flight recorder, but a trigger
+must freeze *every* core around the same instant — otherwise core A freezes at its anomaly while core
+B keeps recording until `Stop`, and their dump windows don't overlap (the first thing that looks
+wrong). So an overrun on any core sets a shared `osal.scratch` freeze flag, and every core's capture
+hook then `trigger()`s its own ring (idempotent via its pending/state guards). `partition_trace`
+clears the flag on re-arm. Result: all cores' windows cover the same moment.
+
+**Derived thread + idle (honest `thread+fb`).** A polled host superloop is one *cooperative* thread —
+no preemptive switches or ISRs — so we synthesise the schedule it actually runs: an fb record per
+handler, a `THREAD` record bracketing each busy iteration (the thread ran these handlers, `reason =
+yield`), and an `IDLE` record (thread id 0) for the gap since the last busy span (emitted lazily, so
+idle records are bounded by the handler rate, not the 1 ms tick). So `thread+fb` shows a thread lane
+per core plus idle — not just handler bars. Real *preemptive* thread/ISR interleaving is the ThreadX
+target (P3c); the comm/platform thread becoming visible is P3b.
 
 **Per-core rings in a shared trace region.** Each partition already runs its own spawned superloop
 (`partition_<name>`, [gen.v:643](../tools/loom2v/gen.v)) pinned to its core. Give each its **own**
