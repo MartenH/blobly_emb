@@ -76,7 +76,10 @@ fn main() {
 	b << '| Signal | Unit | Source | DBC signal | Frame | Layout | Scaling | Path | Producers | Consumers |'
 	b << '|--------|------|--------|------------|-------|--------|---------|------|-----------|-----------|'
 
-	for ch in doc.value('signal').array() {
+	// value_opt so a config with no [[signal]] blocks yields an empty table (not one phantom
+	// row) — doc.value('signal') on a missing key returns a single empty element.
+	signals := if s := doc.value_opt('signal') { s.array() } else { []toml.Any{} }
+	for ch in signals {
 		m := ch.as_map()
 		name := (m['name'] or { toml.Any('') }).string()
 		from := (m['from'] or { toml.Any('') }).string()

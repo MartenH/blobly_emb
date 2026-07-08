@@ -100,11 +100,12 @@ fn specs() map[string]map[string]Key {
 			'trigger':        sub(.tbl, false, 'trigger')
 		}
 		'trigger':    {
-			'source':  k(.str)
-			'signal':  k(.str)
-			'address': k(.str)
-			'when':    k(.str)
-			'pre':     k(.int)
+			'source':    k(.str)
+			'signal':    k(.str)
+			'address':   k(.str)
+			'when':      k(.str)
+			'pre':       k(.int)
+			'budget_us': k(.int) // source = "overrun": freeze when a handler runs longer than this
 		}
 		'target':     {
 			'kind':    k(.str)

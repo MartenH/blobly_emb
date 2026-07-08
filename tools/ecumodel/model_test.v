@@ -206,3 +206,75 @@ buffer_records = 0x100000001
 ' + app)
 	assert e.any(it.contains('buffer_records') && it.contains('out of range'))
 }
+
+// an "overrun" trigger with no positive budget_us never freezes the ring -> reject it.
+fn test_trace_overrun_trigger_needs_budget() {
+	no_budget := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+trigger = { source = "overrun" }
+' + app)
+	assert no_budget.any(it.contains('positive budget_us'))
+
+	zero_budget := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+trigger = { source = "overrun", budget_us = 0 }
+' + app)
+	assert zero_budget.any(it.contains('positive budget_us'))
+
+	ok := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+trigger = { source = "overrun", budget_us = 500 }
+' + app)
+	assert ok.filter(it.contains('budget_us')).len == 0
+}
+
+// an unsupported/misspelled trigger source is rejected (only "overrun" is generated).
+fn test_trace_unsupported_trigger_source() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+trigger = { source = "signal" }
+' + app)
+	assert e.any(it.contains('trigger source "signal" is not supported'))
+}
+
+// a trigger table present but with no source is rejected (omit it entirely for no trigger).
+fn test_trace_trigger_without_source() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+trigger = { budget_us = 500 }
+' + app)
+	assert e.any(it.contains('trigger table has no source'))
+}
+
+// negative push_ms would wrap to a huge u64 interval -> reject it.
+fn test_trace_negative_push_ms() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+push_ms = -1
+' + app)
+	assert e.any(it.contains('push_ms') && it.contains('must be >= 0'))
+}
