@@ -31,6 +31,36 @@ fn test_single_frame() {
 	assert server.take(&buf[0]) == 0 // consumed once
 }
 
+// A Consecutive Frame with the wrong sequence number (a dropped/reordered frame) aborts the
+// reassembly instead of misassembling it — nothing becomes ready — and a fresh First Frame on the
+// same link resyncs cleanly. (The host-side receiver in blobly_net enforces the same invariant;
+// this is the target end of that contract.)
+fn test_cf_sequence_mismatch_aborts_then_resyncs() {
+	mut l := Link{}
+	mut buf := [max_payload]u8{}
+
+	// First Frame (total 14, first 6 bytes) -> receiving, expecting CF SN 1.
+	l.on_frame(0, Pdu{
+		data: [u8(0x10), 14, 1, 2, 3, 4, 5, 6]!
+	})
+	// A CF with SN 2 (expected 1) -> sequence error -> abort.
+	l.on_frame(0, Pdu{
+		data: [u8(0x22), 7, 8, 9, 10, 11, 12, 13]!
+	})
+	assert l.take(&buf[0]) == 0 // aborted, not misassembled — nothing ready
+
+	// The same link resyncs on a fresh First Frame (total 9) + a correctly-numbered CF (SN 1).
+	l.on_frame(0, Pdu{
+		data: [u8(0x10), 9, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0]!
+	})
+	l.on_frame(0, Pdu{
+		data: [u8(0x21), 0x11, 0x22, 0x33, 0, 0, 0, 0]!
+	})
+	got := l.take(&buf[0])
+	assert got == 9
+	assert buf[0] == 0xA0 && buf[5] == 0xF0 && buf[6] == 0x11 && buf[8] == 0x33
+}
+
 fn test_multi_frame_with_blocksize() {
 	mut server := Link{
 		bs: 4 // force multiple flow-control rounds
