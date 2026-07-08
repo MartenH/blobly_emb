@@ -1,10 +1,12 @@
 # Multi-core + comm-thread trace — design draft
 
-> **Status: approved design, P3a in progress.** This is the design writeup for the next
-> trace-codegen phase (the "Next: multi-core" pointer in [trace-codegen.md](trace-codegen.md)).
-> It extends the inline single-core path that shipped in #54/#55/#56. The four decisions in
-> [§6](#6-confirmed-decisions) are settled; the loom2v panics listed in [§1](#1-where-we-are)
-> are the exact gaps this phase closes, in the P3a → P3b → P3c order below.
+> **Status: P3a DONE + vcan-verified; P3b/P3c next.** This is the design writeup for the
+> multi-core trace-codegen phase (the "Next: multi-core" pointer in [trace-codegen.md](trace-codegen.md)),
+> extending the inline single-core path from #54/#55/#56. The four decisions in
+> [§6](#6-confirmed-decisions) are settled. **P3a is implemented and proven** by the
+> `examples/trace_multicore` demo (two partitions, cores 0+1): a single dump command streams one
+> self-describing ISO-TP block per core, and blobly_net decodes both natively with correct
+> per-core handler mapping. P3b (comm thread visible) and P3c (ThreadX target) are next.
 
 ## 1. Where we are
 
