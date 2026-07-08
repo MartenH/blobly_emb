@@ -63,6 +63,7 @@ fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {
 }
 
 pub fn run(can0 can.Channel) {
+	osal.pin_to_core(0) // so the manifest/TraceRsp core label matches reality
 	mut ch := can0
 	mut st := Partition_app_state{}
 	mut sched := loom.Scheduler{}

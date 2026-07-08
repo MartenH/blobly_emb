@@ -454,16 +454,19 @@ fn main() {
 	// not generated yet.
 	single_part := if by_part.keys().len == 1 { by_part.keys()[0] } else { '' }
 	has_bridge := has_external || isotp_conns.len > 0 || has_routes
+	// Core 0 only: the single-core inline path assumes core 0 throughout (pin, CpuLoad byte 0,
+	// TraceCmd core_mask == 0 default). A traced partition on another core needs the per-core
+	// model, so defer it rather than half-support it.
 	trace_inline := trace_on && !target_on && single_part != '' && !has_bridge
-		&& (core_of[single_part] or { 0 }) == trace_core
+		&& (core_of[single_part] or { 0 }) == trace_core && trace_core == 0
 	if trace_on && !target_on && !trace_inline {
 		if has_bridge {
 			panic('loom2v: [trace] on an app with a COM bus bridge (external signals / ISO-TP / ' +
 				'routes) is not generated yet — the bridge must run on its comm thread alongside ' +
 				'trace (the multi-core / comm-thread phase)')
 		}
-		panic('loom2v: trace codegen currently supports a single partition on the trace bus ' +
-			'core only (multi-core trace is not generated yet)')
+		panic('loom2v: trace codegen currently supports a single partition on core 0 only ' +
+			'(multi-core and non-core-0 trace are the comm-thread phase, not generated yet)')
 	}
 
 	if telem_on {
@@ -1167,6 +1170,7 @@ fn main() {
 		glue << '}'
 		glue << ''
 		glue << 'pub fn run(${chp} can.Channel) {'
+		glue << '\tosal.pin_to_core(${pcore}) // so the manifest/TraceRsp core label matches reality'
 		glue << '\tmut ch := ${chp}'
 		glue << '\tmut st := Partition_${part}_state{}'
 		glue << '\tmut sched := loom.Scheduler{}'
