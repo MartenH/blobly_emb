@@ -51,6 +51,10 @@ fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {
 fn trace_thread_span(mut t TraceCapture, t0_us u64, t1_us u64) {
 	e_start := t0_us - t.start // elapsed at the busy span start
 	e_end := t1_us - t.start   // elapsed at the busy span end
+	if e_start > t.base && e_start - t.base > 0x00ff_ffff {
+		t.base = e_start
+		t.buf.push(trace.new_epoch(u32(e_start)))
+	}
 	gap_from := if t.busy_end > t.base { t.busy_end } else { t.base }
 	if e_start > gap_from { // idle gap since the last busy span (within this epoch)
 		mut gap := e_start - gap_from
@@ -181,8 +185,13 @@ pub fn partition_can0(ch can.Channel, commring voidptr) {
 		loom_t0 := osal.now_us()
 		before := sched.handler_stat(0).count
 		sched.run_profiled(osal.now_us)
+		loom_t1 := osal.now_us()
 		if sched.handler_stat(0).count != before { // the COM drain ran -> a comm busy span
-			trace_thread_span(mut cap, loom_t0, osal.now_us())
+			trace_thread_span(mut cap, loom_t0, loom_t1)
+			if loom_t1 - loom_t0 > 500 && cap.buf.state() == .capturing {
+				cap.buf.trigger()
+				osal.scratch_set(cap.trig_slot, osal.scratch_get(cap.trig_slot) + 1)
+			}
 		}
 		osal.scratch_set(1, u64(sched.load_permille()))
 		osal.sleep_us(1000)

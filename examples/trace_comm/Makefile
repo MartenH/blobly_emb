@@ -5,6 +5,11 @@
 REPO ?= ../..
 include $(REPO)/examples/common.mk
 
+# main.v reads arg1 as the TRACE bus, arg2 as the COM bus; the documented split is trace on vcan1,
+# COM on vcan0. Set the shared RUN_IFACE knob (common.mk's `run` passes it to ./bin/app) rather than
+# overriding the recipe — otherwise the default single vcan0 opens trace + COM on the same bus.
+RUN_IFACE = vcan1 vcan0
+
 # app bus (vcan0) + dedicated trace bus (vcan1)
 vcan:
 	sudo ip link add dev vcan0 type vcan 2>/dev/null || true

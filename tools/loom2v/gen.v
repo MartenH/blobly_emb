@@ -754,6 +754,14 @@ fn main() {
 		glue << 'fn trace_thread_span(mut t TraceCapture, t0_us u64, t1_us u64) {'
 		glue << '\te_start := t0_us - t.start // elapsed at the busy span start'
 		glue << '\te_end := t1_us - t.start   // elapsed at the busy span end'
+		// A comm thread has no per-FB trace_capture to advance the epoch, so re-anchor here when the
+		// u24 start_us would wrap — otherwise long comm captures drift out of alignment with the app
+		// cores. Idempotent for the app path: trace_capture already re-anchored, so t.base stays within
+		// the window and (e_start > t.base) fails (base can even lead e_start after a mid-span wrap).
+		glue << '\tif e_start > t.base && e_start - t.base > 0x00ff_ffff {'
+		glue << '\t\tt.base = e_start'
+		glue << '\t\tt.buf.push(trace.new_epoch(u32(e_start)))'
+		glue << '\t}'
 		// The idle-gap start is relative to the current epoch base. If an epoch re-anchor moved the
 		// base past the previous busy_end (a capture spanning the u24 window), clamp the gap to the
 		// new base so u32(start - base) can\'t underflow and land the idle ~16 s in the future (F684).
@@ -1289,8 +1297,17 @@ fn main() {
 			glue << '\t\tloom_t0 := osal.now_us()'
 			glue << '\t\tbefore := sched.handler_stat(0).count'
 			glue << '\t\tsched.run_profiled(osal.now_us)'
+			glue << '\t\tloom_t1 := osal.now_us()'
 			glue << '\t\tif sched.handler_stat(0).count != before { // the COM drain ran -> a comm busy span'
-			glue << '\t\t\ttrace_thread_span(mut cap, loom_t0, osal.now_us())'
+			glue << '\t\t\ttrace_thread_span(mut cap, loom_t0, loom_t1)'
+			if trace_budget_us > 0 {
+				// A COM drain that overran the budget is a freeze culprit too — mirror the app hook:
+				// freeze this comm ring and raise its request so the owner fans a coherent freeze out.
+				glue << '\t\t\tif loom_t1 - loom_t0 > ${trace_budget_us} && cap.buf.state() == .capturing {'
+				glue << '\t\t\t\tcap.buf.trigger()'
+				glue << '\t\t\t\tosal.scratch_set(cap.trig_slot, osal.scratch_get(cap.trig_slot) + 1)'
+				glue << '\t\t\t}'
+			}
 			glue << '\t\t}'
 			if telem_on && 'b:${bname}' in telem_slot {
 				glue << '\t\tosal.scratch_set(${telem_slot['b:${bname}']}, u64(sched.load_permille()))'
