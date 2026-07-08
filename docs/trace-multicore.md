@@ -1,12 +1,12 @@
 # Multi-core + comm-thread trace — design draft
 
-> **Status: P3a DONE + vcan-verified; P3b/P3c next.** This is the design writeup for the
-> multi-core trace-codegen phase (the "Next: multi-core" pointer in [trace-codegen.md](trace-codegen.md)),
-> extending the inline single-core path from #54/#55/#56. The four decisions in
-> [§6](#6-confirmed-decisions) are settled. **P3a is implemented and proven** by the
-> `examples/trace_multicore` demo (two partitions, cores 0+1): a single dump command streams one
-> self-describing ISO-TP block per core, and blobly_net decodes both natively with correct
-> per-core handler mapping. P3b (comm thread visible) and P3c (ThreadX target) are next.
+> **Status: P3a DONE + merged (single-writer, #57); P3b DESIGNED ([§4](#4-comm-thread-visible--p3b-designed-not-built)); P3c next.**
+> The design writeup for the multi-core trace-codegen phase, extending the inline single-core path
+> from #54/#55/#56. **P3a is shipped** — `examples/trace_multicore` (two partitions, cores 0+1): a
+> single dump command streams one self-describing ISO-TP block per core, coherent single-writer
+> cross-core freeze, decoded natively by blobly_net. **P3b (comm thread visible) is fully designed in
+> §4** and ready to build next session — different-bus first (reuses P3a), same-bus (piggyback) as a
+> follow-up. P3c (ThreadX target) is §5. The P3 phases carry **no backward-compat burden** (§4.4).
 
 ## 1. Where we are
 
@@ -100,21 +100,72 @@ while trace rides `trace.bus`.
 Deliverable: a `trace_multicore` example (2 partitions, cores 0+1, fb-only) that dumps two blocks;
 `cmd/trace_dump` already prints multi-block, and the swimlane already lanes-by-core.
 
-## 4. Comm thread visible — **P3b**
+## 4. Comm thread visible — **P3b** (designed, not built)
 
-Lift the **bridge coexistence** panic and add THREAD records.
+Lift the `has_bridge` trace panic ([gen.v:473](../tools/loom2v/gen.v)) and make each per-bus bridge a
+**first-class traced comm thread**, so COM/codec/ISO-TP/routing overhead shows as its own lane — the
+"platform never hidden" goal from [architecture.md](architecture.md).
 
-- The bridge loop (`partition_<bus>`) gets a **thread id + manifest row** (`comm_<bus>`, its core)
-  and a capture hook that pushes a `THREAD` record per drain cycle: `new_thread(tid, reason,
-  start_us, dt)` where `dt` is the time that cycle spent in COM/codec/ISO-TP. This is the first
-  `THREAD`-kind producer on the host — it's an **interval** (a loop's work slice), not a real RTOS
-  switch, which is exactly how blobly_net#21 now renders threads (duration bars, not switch marks).
-- `thread+fb` level now has real thread records to emit; `thread` (no fb) becomes valid too.
-- Trace + bridge on the **same** bus: one loop owns the channel and does both COM and the trace
-  handshake. On **different** buses: the trace-bus owner runs the handshake; the bridge loop only
-  produces records. Both cases share the per-core ring model from P3a.
+### 4.1 The bridge as a traced entity (both bus cases share this)
 
-Open question below on THREAD granularity (per-cycle vs per-rx-batch).
+The bridge loop today is `partition_<bb>()` ([gen.v:1141](../tools/loom2v/gen.v)) — a `loom.Scheduler`
+running `io_<bb>_10ms` (the COM drain) every 10 ms, structurally the same shape as a traced app
+partition. So instrument it with the **exact P3a machinery**:
+
+- Give it a per-core ring in the `run()`-owned registry (its core = `bus_core[bb]`), a `TraceCapture`
+  (with its own `trig_slot`, `thread_id`, `id_base`), and the `trace_capture` hook.
+- Bracket the drain like a traced app partition: a **THREAD record per busy iteration**
+  (`new_thread(comm_tid, reason_yield, start, dt)`, `dt` = time in COM/codec/ISO-TP this cycle) +
+  an IDLE record for the gap. Granularity = **per drain cycle** (decision §6.3); refine on the target.
+- It gets a `thread_id` and a manifest row `thread,<tid>,comm_<bb>,<core>`, numbered **after** the app
+  threads (extend the `# threads` emission at [gen.v](../tools/loom2v/gen.v) to also walk the bridges).
+- No FBs, so it emits only THREAD/idle — which is why `thread` (no fb) becomes a valid level here.
+
+The bridge participates in the P3a single-writer coordination unchanged: its capture hook bumps its
+own trigger counter on an overrun (a comm cycle over budget), and it applies routed arm/stop/reset/
+freeze commands to its OWN ring in its loop.
+
+### 4.2 Core + ring model
+
+The per-core registry (`rings[ncores]`) now indexes **app partitions AND comm threads** by core.
+Keep the P3a invariant: **one traced entity per core, dense 0..N-1**. Typical layout — the comm
+thread(s) on the IO core(s), the app partition(s) on their cores. `trace_ncores`, `fb_id_base`,
+`thread_id_of`, and the dense-core / core≥16 / scratch-cell guards all extend to count comm threads.
+`run()` creates + starts a ring per comm thread and spawns each `partition_<bb>` with its ring
+pointer, exactly like a traced app partition.
+
+### 4.3 Channel ownership — the one real fork
+
+- **Different-bus (do first — reuses P3a cleanly).** Trace rides a bus with **no** bridge, so
+  `partition_trace` owns that channel and runs the handshake + dump exactly as in P3a; the bridge on
+  its own bus is just another producer whose ring `partition_trace` reads. **Zero new handshake
+  code** — only §4.1/§4.2. First example: `trace_comm` — one app partition + one external signal
+  (→ a bridge on the IO core) + a dedicated trace bus; the dump shows a `comm_<bus>` lane beside the
+  app lanes.
+- **Same-bus (follow-up — the realistic piggyback case).** Trace shares the app bus, so the **bridge
+  loop must be the trace owner**: its single `recv` on that channel dispatches by id —
+  `id == cmd_id` → the TraceCmd handshake (route commands, status_rsp, freeze fan-in); `id == dump_fc`
+  → feed `isotp.Link`; else → the existing COM path. It also drives the per-core dump (`pack_block` +
+  ISO-TP), interleaved with COM. This merges `partition_trace`'s body into `partition_<bb>` for the
+  trace bus, and drops the separate `partition_trace`/`run()`-owner spawn when the trace bus has a
+  bridge. Invasive (touches the generated COM recv), so it's its own PR after different-bus proves the
+  comm-thread instrumentation.
+
+### 4.4 No backward-compat burden (P3 stance)
+
+blobly_emb (the target) and blobly_net (the host) move together — there are no third-party consumers
+of the trace wire, manifest, or codegen. So **break freely**: the wire format (record kinds, TraceRsp
+layout, the b2 state/cause nibble), the manifest columns, and the generated shape can all change in
+lockstep across the two repos without preserving old behavior. Don't spend code on compatibility
+shims or zero-mask legacy paths — update both ends and the docs. (This is why codex's compat-flavored
+findings — e.g. the TraceRsp nibble vs. an "older decoder" — are non-issues: there is no older
+decoder we don't also own.)
+
+### 4.5 Not in P3b
+
+Real preemptive thread/ISR interleaving, the Rx-interrupt-driven comm thread, and `irq` handlers stay
+in **P3c** (the ThreadX target). P3b keeps the cooperative-loop model — the comm thread is a *work
+slice per drain cycle*, an interval, not a real context switch.
 
 ## 5. ThreadX target — **P3c**
 
@@ -142,8 +193,16 @@ This depends on the ThreadX port work and is the natural place to stop for now �
 
 2. **Shared trace region: reuse on host, revisit for target.** The per-core rings are owned by
    `run()` (fixed arrays on its frame, which outlives the joined partitions) and passed by pointer —
-   no globals, no heap. The dump owner reads every ring through that registry. CpuLoad fan-out keeps
-   using `osal.scratch`. A dedicated MPU-isolated trace region is a target concern (P3c).
+   no globals, no heap. A dedicated MPU-isolated trace region is a target concern (P3c).
+
+   *Update (as shipped in #57): the coordination is fully **single-writer** on the host — the owner
+   never mutates a remote ring. arm/stop/reset are ROUTED to the owning partition via a per-core
+   `osal.scratch` command cell (which that partition applies to its own ring), the reply is a
+   read-only `status_rsp`, and an overrun freeze is fanned in via a per-core trigger counter (edge-
+   detected, snapshotted on arm) then out as a freeze command. The one remaining direct access is the
+   owner **reading** each frozen ring for the `pack_block` dump — safe on the host (shared memory,
+   producer quiesced), and the IOC-chunked read-out that replaces it is deferred to **P3c** (on the
+   target's MPU a direct remote read is impossible).*
 
 3. **THREAD-record granularity (P3b): per bridge drain cycle** first; refine on the target where the
    real switch hooks give true boundaries.
