@@ -274,6 +274,9 @@ pub fn (mut t TraceBuffer) push(r Record) {
 			t.used++
 			if t.used >= t.cap {
 				t.state = .full
+				if t.froze == freeze_none { // completed on its own — report a cause, not freeze_none
+					t.froze = freeze_stop
+				}
 			}
 		}
 		.ring {

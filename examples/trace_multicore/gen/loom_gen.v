@@ -19,6 +19,7 @@ mut:
 	thread_id u16 // this partition's thread id (for the THREAD records)
 	busy_end  u64 // elapsed µs at the end of the last busy span (idle-gap start)
 	fb_count  u32 // handlers dispatched (the loop reads this to bracket a busy span)
+	trig_slot int // THIS core's freeze-request scratch cell (single-writer: only here)
 }
 
 fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {
@@ -30,28 +31,31 @@ fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {
 		t.buf.push(trace.new_epoch(u32(elapsed)))
 	}
 	mut dt := dt_us
-	if dt > 0xFFFF {
+	mut flags := u8(0)
+	if dt > 0xFFFF { // clamp to the u16 field, and mark it as saturated (F648)
 		dt = 0xFFFF
+		flags |= trace.flag_saturated
 	}
-	flags := if dt_us > 500 { trace.flag_overran } else { u8(0) }
-	t.buf.push(trace.new_fb(u16(t.id_base + u32(idx)), flags, u32(elapsed - t.base), u16(dt)))
 	if dt_us > 500 {
-		osal.scratch_set(3, 1) // ask every core to freeze
+		flags |= trace.flag_overran
 	}
-	if osal.scratch_get(3) != 0 {
+	t.buf.push(trace.new_fb(u16(t.id_base + u32(idx)), flags, u32(elapsed - t.base), u16(dt)))
+	if dt_us > 500 && t.buf.state() == .capturing {
 		t.buf.trigger()
+		osal.scratch_set(t.trig_slot, osal.scratch_get(t.trig_slot) + 1) // bump the request counter (edge, not level)
 	}
 }
 
 fn trace_thread_span(mut t TraceCapture, t0_us u64, t1_us u64) {
 	e_start := t0_us - t.start // elapsed at the busy span start
 	e_end := t1_us - t.start   // elapsed at the busy span end
-	if e_start > t.busy_end { // idle gap since the last busy span
-		mut gap := e_start - t.busy_end
+	gap_from := if t.busy_end > t.base { t.busy_end } else { t.base }
+	if e_start > gap_from { // idle gap since the last busy span (within this epoch)
+		mut gap := e_start - gap_from
 		if gap > 0xFFFF {
 			gap = 0xFFFF
 		}
-		t.buf.push(trace.new_idle(trace.reason_yield, u32(t.busy_end - t.base), u16(gap)))
+		t.buf.push(trace.new_idle(trace.reason_yield, u32(gap_from - t.base), u16(gap)))
 	}
 	mut busy := e_end - e_start
 	if busy > 0xFFFF {
@@ -92,14 +96,25 @@ pub fn partition_sense(core int, arg voidptr) {
 		start:     osal.now_us()
 		id_base:   0
 		thread_id: 1
+		trig_slot: 5
 	}
 	sched.set_trace_hook(trace_capture, &cap)
-	mut last_arm := osal.scratch_get(4)
+	mut last_cmd := osal.scratch_get(3)
 	for {
-		if osal.scratch_get(4) != last_arm {
-			last_arm = osal.scratch_get(4)
-			cap.start = osal.now_us()
-			cap.base = 0
+		cmdv := osal.scratch_get(3)
+		if cmdv != last_cmd {
+			last_cmd = cmdv
+			op := u8(cmdv & 0xff)
+			if op == trace.op_arm || op == trace.op_start || op == trace.op_reset {
+				cap.buf.start()
+				cap.start = osal.now_us()
+				cap.base = 0
+				cap.busy_end = 0
+			} else if op == trace.op_stop {
+				cap.buf.stop()
+			} else if op == 0xf1 { // freeze: the owner fanned out another core's overrun
+				cap.buf.trigger()
+			}
 		}
 		t0 := osal.now_us()
 		before := cap.fb_count
@@ -143,14 +158,25 @@ pub fn partition_ctrl(core int, arg voidptr) {
 		start:     osal.now_us()
 		id_base:   2
 		thread_id: 2
+		trig_slot: 6
 	}
 	sched.set_trace_hook(trace_capture, &cap)
-	mut last_arm := osal.scratch_get(4)
+	mut last_cmd := osal.scratch_get(4)
 	for {
-		if osal.scratch_get(4) != last_arm {
-			last_arm = osal.scratch_get(4)
-			cap.start = osal.now_us()
-			cap.base = 0
+		cmdv := osal.scratch_get(4)
+		if cmdv != last_cmd {
+			last_cmd = cmdv
+			op := u8(cmdv & 0xff)
+			if op == trace.op_arm || op == trace.op_start || op == trace.op_reset {
+				cap.buf.start()
+				cap.start = osal.now_us()
+				cap.base = 0
+				cap.busy_end = 0
+			} else if op == trace.op_stop {
+				cap.buf.stop()
+			} else if op == 0xf1 { // freeze: the owner fanned out another core's overrun
+				cap.buf.trigger()
+			}
 		}
 		t0 := osal.now_us()
 		before := cap.fb_count
@@ -193,6 +219,9 @@ fn partition_trace(chp can.Channel, base voidptr, ncores int) {
 	mut link := isotp.Link{}
 	mut dumpbuf := [520]u8{} // one block: header + records
 	mut pending := u16(0) // cores whose frozen ring still needs streaming
+	mut seq := u64(0)     // command generation — the owner is the SOLE writer of cmd cells
+	mut froze := false    // whether the current session's freeze has been fanned out
+	mut last_trig := [16]u64{} // last freeze-request counter seen per core (edge detect)
 	for {
 		mut rx := can.Frame{}
 		if ch.recv(mut rx) {
@@ -202,31 +231,42 @@ fn partition_trace(chp can.Channel, base voidptr, ncores int) {
 					cb[j] = rx.data[j]
 				}
 				c := trace.decode_cmd(cb)
-				if c.opcode == trace.op_arm || c.opcode == trace.op_start
-					|| c.opcode == trace.op_reset {
-					osal.scratch_set(3, 0) // new session: clear the system freeze
-					// bump the arm generation so each partition reseats its own capture origin
-					osal.scratch_set(4, osal.scratch_get(4) + 1)
+				arm := c.opcode == trace.op_arm || c.opcode == trace.op_start || c.opcode == trace.op_reset
+				if arm { // new session: forget prior overruns, re-enable the freeze fan-out
+					froze = false
+					for cc in 0 .. ncores {
+						last_trig[cc] = osal.scratch_get(5 + cc)
+					}
 				}
 				dump_busy := pending != 0 || link.busy()
 				for cc in 0 .. ncores {
-					mut tb := unsafe { &rings[cc] }
-					rspb, do_dump, addressed := trace.handle_cmd(mut tb, c, u8(cc))
-					if !addressed {
+					if !c.targets(u8(cc)) {
 						continue
 					}
-					if do_dump && !dump_busy {
-						pending |= u16(1) << cc
+					// Route the mutating ops to the OWNING partition (single-writer): the owner
+					// only posts a (generation | opcode) command + reads the ring for the ack.
+					if arm || c.opcode == trace.op_stop {
+						seq++
+						osal.scratch_set(3 + cc, (seq << 8) | u64(c.opcode))
 					}
+					tbv := unsafe { rings[cc] } // read-only snapshot for the status reply
+					mut result := trace.result_ok
+					if c.opcode == trace.op_dump {
+						if tbv.state() != .full && tbv.state() != .frozen {
+							result = trace.result_not_ready
+						} else if dump_busy {
+							result = trace.result_busy
+						} else {
+							pending |= u16(1) << cc
+						}
+					}
+					rspb := trace.status_rsp(tbv, c.opcode, result, u8(cc))
 					mut rf := can.Frame{
 						id:  u32(0x7e3)
 						len: 8
 					}
 					for j in 0 .. 8 {
 						rf.data[j] = rspb[j]
-					}
-					if do_dump && dump_busy { // a dump is already in flight
-						rf.data[1] = trace.result_busy
 					}
 					ch.send(rf)
 				}
@@ -248,6 +288,21 @@ fn partition_trace(chp can.Channel, base voidptr, ncores int) {
 				pf.data[j] = tp.data[j]
 			}
 			ch.send(pf)
+		}
+		mut newtrig := false
+		for cc in 0 .. ncores {
+			v := osal.scratch_get(5 + cc)
+			if v != last_trig[cc] {
+				last_trig[cc] = v
+				newtrig = true
+			}
+		}
+		if newtrig && !froze {
+			froze = true
+			for cc in 0 .. ncores {
+				seq++
+				osal.scratch_set(3 + cc, (seq << 8) | u64(0xf1)) // 0xf1 = freeze
+			}
 		}
 		if !link.busy() && pending != 0 { // previous block drained -> start the next core
 			mut cc := 0

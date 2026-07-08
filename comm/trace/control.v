@@ -118,6 +118,22 @@ fn state_code(s State) u8 {
 	}
 }
 
+// status_rsp builds an encoded TraceRsp reporting a buffer's current state WITHOUT mutating it.
+// The multi-core trace owner replies for rings owned by OTHER partition threads, so it must only
+// read them (single-writer isolation) — it routes the actual arm/stop/reset to the owning
+// partition and uses this for the ack. `result` lets the caller flag not_ready / busy.
+pub fn status_rsp(tb TraceBuffer, opcode u8, result u8, core u8) [8]u8 {
+	return encode_rsp(Rsp{
+		opcode_echo:  opcode
+		result:       result
+		state:        state_code(tb.state())
+		cause:        tb.froze_cause()
+		records_used: u16(tb.used())
+		capacity:     u16(tb.capacity())
+		core:         core
+	})
+}
+
 // handle_cmd applies a command to the buffer and returns (the response frame bytes, a
 // dump-requested flag, an addressed flag). It enforces `core_mask` here — a command that
 // doesn't select `core` is ignored (no mutation, addressed = false) so targeting is
