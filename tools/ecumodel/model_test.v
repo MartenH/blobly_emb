@@ -265,3 +265,16 @@ trigger = { budget_us = 500 }
 ' + app)
 	assert e.any(it.contains('trigger table has no source'))
 }
+
+// negative push_ms would wrap to a huge u64 interval -> reject it.
+fn test_trace_negative_push_ms() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[trace]
+bus = "can0"
+push_ms = -1
+' + app)
+	assert e.any(it.contains('push_ms') && it.contains('must be >= 0'))
+}

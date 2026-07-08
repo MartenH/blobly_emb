@@ -205,15 +205,24 @@ pub fn validate(doc toml.Doc) []string {
 				errs << '[trace] pre_pct must be an integer (0..100)'
 			}
 		}
-		if v := trm['buffer_records'] {
-			// TraceRsp reports records_used/capacity as u16 (comm/trace.handle_cmd), so a ring
-			// above 65535 would wrap the reported size — cap it here.
+		if v := trm['push_ms'] {
 			if v is i64 {
-				if v < 1 || v > 65535 {
-					errs << '[trace] buffer_records ${v} out of range (1..65535 — TraceRsp reports it as u16)'
+				if v < 0 {
+					errs << '[trace] push_ms ${v} must be >= 0 (0 disables the HandlerStat heartbeat)'
 				}
 			} else {
-				errs << '[trace] buffer_records must be an integer (1..65535)'
+				errs << '[trace] push_ms must be an integer (0 = off)'
+			}
+		}
+		if v := trm['buffer_records'] {
+			// The dump is one ISO-TP payload (comm/isotp.max_payload = 512 bytes = 64 records), so
+			// the ring can't exceed 64 records today — reject it at the gate, before codegen.
+			if v is i64 {
+				if v < 1 || v > 64 {
+					errs << '[trace] buffer_records ${v} out of range (1..64 — a dump is one 512-byte ISO-TP payload = 64 records)'
+				}
+			} else {
+				errs << '[trace] buffer_records must be an integer (1..64)'
 			}
 		}
 		// Frame ids (cmd_id/rsp_id/stat_id/record_id/dump_fc_id) are each either a literal CAN id

@@ -1135,13 +1135,8 @@ fn main() {
 				'but [telemetry].bus is "${telem_bus}" — cross-bus telemetry with inline trace is ' +
 				'not generated yet')
 		}
-		// The dump is one ISO-TP payload (<= comm/isotp.max_payload = 512 bytes = 64 records), so a
-		// deeper ring can't be streamed in a single block yet.
-		if trace_buffer_records > 64 {
-			panic('loom2v: [trace] buffer_records ${trace_buffer_records} exceeds the single ISO-TP ' +
-				'dump (64 records / 512 bytes); a larger ring needs a multi-block dump — not ' +
-				'generated yet')
-		}
+		// buffer_records is bounded to 1..64 by ecumodel.validate (the ISO-TP single-payload dump
+		// limit), which ran at the top of main() — so the dump buffer sizing below always fits.
 		mut pre := trace_pre_pct
 		if pre > 100 {
 			pre = 100

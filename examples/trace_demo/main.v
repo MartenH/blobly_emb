@@ -19,7 +19,7 @@ import driver.can
 fn main() {
 	ifname := if os.args.len > 1 { os.args[1] } else { 'vcan0' }
 	mut ch := can.Channel{}
-	if !ch.open(ifname, false) {
+	if !ch.open(ifname, gen.can0_fd) { // the trace bus's fd setting from ecu.toml
 		eprintln('trace_demo: open "${ifname}" failed — is vcan up? (sudo make vcan)')
 		return
 	}
