@@ -1506,6 +1506,19 @@ fn main() {
 	}
 
 	bus_names.sort()
+	// A raw [[route]] to an otherwise-unused bus makes that bus a channel arg (it's forwarded to the
+	// origin bridge's spawn) but NOT a bridge of its own, so it never entered bus_names. run() still
+	// needs a Channel param for it, appended after bus_names (sorted) so the signature stays stable —
+	// existing configs, whose route dests also tx (already in bus_names), are unaffected.
+	mut extra_dest_buses := []string{}
+	for b in bus_names {
+		for d in bus_dests[b] or { []string{} } {
+			if d !in bus_names && d !in extra_dest_buses {
+				extra_dest_buses << d
+			}
+		}
+	}
+	extra_dest_buses.sort()
 	if target_on {
 		// --- target run(): one inline single-core superloop. No spawn, no osal. The
 		//     timebase is the board's DWT clock (board_now_us); the loop paces to a
@@ -1782,6 +1795,9 @@ fn main() {
 		for b in bus_names {
 			params << '${snake(b)} can.Channel'
 		}
+		for b in extra_dest_buses {
+			params << '${snake(b)} can.Channel' // route-dest-only bus: channel arg, no bridge/ring
+		}
 		glue << 'pub fn run(${params.join(', ')}) {'
 		glue << '\tmut backings := [${trace_ncores}][${trace_buffer_records}]trace.Record{}'
 		glue << '\tmut rings := [${trace_ncores}]trace.TraceBuffer{}'
@@ -1845,6 +1861,9 @@ fn main() {
 			mut params := []string{}
 			for b in bus_names {
 				params << '${snake(b)} can.Channel'
+			}
+			for b in extra_dest_buses {
+				params << '${snake(b)} can.Channel' // route-dest-only bus: channel arg, no bridge
 			}
 			glue << 'pub fn run(${params.join(', ')}) {'
 			for b in bus_names {

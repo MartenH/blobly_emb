@@ -49,6 +49,10 @@ fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {
 fn trace_thread_span(mut t TraceCapture, t0_us u64, t1_us u64) {
 	e_start := t0_us - t.start // elapsed at the busy span start
 	e_end := t1_us - t.start   // elapsed at the busy span end
+	if e_start > t.base && e_start - t.base > 0x00ff_ffff {
+		t.base = e_start
+		t.buf.push(trace.new_epoch(u32(e_start)))
+	}
 	gap_from := if t.busy_end > t.base { t.busy_end } else { t.base }
 	if e_start > gap_from { // idle gap since the last busy span (within this epoch)
 		mut gap := e_start - gap_from
