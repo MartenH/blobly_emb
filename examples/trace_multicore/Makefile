@@ -1,29 +1,17 @@
-# P4 dev harness (host / vcan): multi-core dump-in-one-command + the thread-switch
-# swimlane. Hand-wired pending the loom2v core_mask fan-out — it exists to develop +
-# verify the core_mask control, per-core self-describing ISO-TP blocks, and the
-# thread-switch record kind on WSL before that path is generated.
+# Two-core handler-tracing demo — fully generated from ecu.toml (loom2v P3a). The generation +
+# build + clean rules are shared in examples/common.mk (identical pipeline to the other
+# examples); only the trace-specific vcan bring-up + watch helpers are here. Sim-first: `make
+# vcan` once, then `make run` on vcan0. blobly_net decodes the fixed observability protocol
+# natively from gen/trace-manifest.csv (its `# trace frames` + both cores' handler rows).
 REPO ?= ../..
-V    ?= v
-BIN   = bin/trace_multicore
+include $(REPO)/examples/common.mk
 
-all: $(BIN)
-
-$(BIN): main.v
-	@mkdir -p bin
-	cd $(REPO) && $(V) -gc none -path "@vlib|@vmodules|." -o examples/trace_multicore/$(BIN) examples/trace_multicore/main.v
-
-# bring up the virtual bus, then run + watch the per-core TraceRsp replies
+# bring up the virtual bus, then run + watch the per-core TraceRsp replies (b7 = core)
 vcan:
 	sudo ip link add dev vcan0 type vcan 2>/dev/null || true
 	sudo ip link set up vcan0
 
-run: all
-	./$(BIN) vcan0
-
 watch:
 	candump vcan0,7E3:7FF
 
-clean:
-	rm -rf bin
-
-.PHONY: all vcan run watch clean
+.PHONY: vcan watch

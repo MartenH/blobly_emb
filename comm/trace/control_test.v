@@ -75,6 +75,45 @@ fn test_stop_freezes_ring_now() {
 	assert tb.used() == 2 // frozen right here, no extra post-trigger records
 }
 
+// The TraceRsp reports WHY capture stopped so a host can tell a trigger-frozen dump from a
+// manually-stopped one. The cause rides b2's high nibble alongside the state ordinal.
+fn test_freeze_cause() {
+	// an explicit stop -> freeze_stop
+	mut b0 := [8]Record{}
+	mut a := new_buffer(&b0[0], 8, .ring, 50)
+	a.start()
+	a.push(new_fb(1, 0, 0, 0))
+	sb, _, _ := handle_cmd(mut a, Cmd{ opcode: op_stop }, 0)
+	assert decode_rsp(sb).state == 3 // frozen
+	assert decode_rsp(sb).cause == freeze_stop
+
+	// the overrun trigger -> freeze_trigger (pre_pct 100 freezes immediately)
+	mut b1 := [8]Record{}
+	mut t := new_buffer(&b1[0], 8, .ring, 100)
+	t.start()
+	t.push(new_fb(1, 0, 0, 0))
+	t.trigger()
+	tb, _, _ := handle_cmd(mut t, Cmd{ opcode: op_status }, 0)
+	assert decode_rsp(tb).state == 3
+	assert decode_rsp(tb).cause == freeze_trigger
+
+	// a stop after a trigger armed keeps the trigger as the cause (the trigger came first)
+	mut b2 := [8]Record{}
+	mut p := new_buffer(&b2[0], 8, .ring, 50) // pre_pct 50 -> trigger leaves a post-window (pending)
+	p.start()
+	p.push(new_fb(1, 0, 0, 0))
+	p.trigger() // armed, still capturing the post-window
+	handle_cmd(mut p, Cmd{ opcode: op_stop }, 0)
+	assert p.froze_cause() == freeze_trigger
+
+	// still capturing -> no cause
+	mut b3 := [8]Record{}
+	mut c := new_buffer(&b3[0], 8, .ring, 50)
+	c.start()
+	cb, _, _ := handle_cmd(mut c, Cmd{ opcode: op_status }, 0)
+	assert decode_rsp(cb).cause == freeze_none
+}
+
 // core_mask round-trips through b6-7 and targets() selects the right cores; a zero mask
 // means the single receiving core (core 0) for back-compat with pre-multicore commands.
 fn test_core_mask() {

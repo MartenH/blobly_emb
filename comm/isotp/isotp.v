@@ -16,8 +16,11 @@ module isotp
 //   0x0 SF single   0x1 FF first   0x2 CF consecutive   0x3 FC flow-control
 
 // max_payload bounds one reassembled message — fixes the per-Link buffer size.
-// (ISO-TP allows 4095; we cap lower for an embedded, no-alloc footprint.)
-pub const max_payload = 512
+// (ISO-TP allows 4095; we cap lower for an embedded, no-alloc footprint.) Sized to hold the
+// largest message the system sends: one trace dump block = an 8-byte self-describing block
+// header + a full 64-record ring (64 x 8) = 520 bytes (see comm/trace.pack_block + the
+// multi-core dump owner). buffer_records is bounded to 64 so a block always fits one payload.
+pub const max_payload = 520
 
 // Pdu is one CAN frame's worth of ISO-TP bytes (always 8, padded). No id: the
 // bridge owns the rx/tx addressing.

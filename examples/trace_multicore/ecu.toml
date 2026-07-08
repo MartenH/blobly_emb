@@ -1,0 +1,82 @@
+# trace_multicore — two partitions on two cores (0 + 1), each a pure-compute Loom, both traced.
+# Everything (per-core capture rings, the single trace owner + TraceCmd/Rsp + ISO-TP dump, the
+# manifest) is generated from this file by loom2v (P3a, docs/trace-multicore.md). A dump streams
+# one self-describing block per selected core; blobly_net lays them out per core in the swimlane.
+#
+#   sudo make vcan     # once
+#   make run           # generate + build + run on vcan0
+# Drive from blobly_net (projects/trace-multicore.blobnet) or cmd/trace_dump vcan0 0x0003 <manifest>.
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0         # the trace cmd/rsp + dump ride this channel; partition_trace pins here
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E0     # CpuLoad (both cores' load, one frame)
+period_ms = 500
+
+[trace]
+bus            = "can0"
+level          = "thread+fb"  # P3a captures FB records; thread/ISR are the target (P3c)
+buffer_records = 64           # per-core ring depth (static array, one per core)
+mode           = "ring"       # ring (flight recorder) | oneshot
+pre_pct        = 50           # ring pre/post split: 50 = centre the event (keep half before the
+                              # trigger, capture half after). 100 = classic flight-recorder (freeze
+                              # AT the event, window ends there). 0 = post-event only.
+push_ms        = 0            # HandlerStat heartbeat fan-out across cores is a P3a follow-up
+cmd_id         = 0x7E2
+rsp_id         = 0x7E3
+stat_id        = 0x7E4
+record_id      = 0x7E5        # ISO-TP dump data (target -> host), one block per core
+dump_fc_id     = 0x7E6        # ISO-TP flow control (host -> target)
+trigger        = { source = "overrun", budget_us = 500 }  # freeze both rings on a >500us handler
+
+# Core 0: the "sense" partition — fast periodic work. (No comments inside [[partition.thread]] —
+# a V TOML parser bug drops the key after a comment there.)
+[[partition]]
+name    = "sense"
+core    = 0
+trusted = true
+  [[partition.thread]]
+  name     = "sense_main"
+  priority = 10
+
+# Core 1: the "ctrl" partition — heavier work, with a periodic glitch that fires the trigger.
+[[partition]]
+name    = "ctrl"
+core    = 1
+trusted = true
+  [[partition.thread]]
+  name     = "ctrl_main"
+  priority = 10
+
+[[fb]]
+name   = "FastSense"
+thread = "sense_main"
+  [[fb.handler]]
+  name      = "on_5ms"
+  period_ms = 5
+
+[[fb]]
+name   = "MedSense"
+thread = "sense_main"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+
+[[fb]]
+name   = "CtrlWork"
+thread = "ctrl_main"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+
+[[fb]]
+name   = "SlowCtrl"
+thread = "ctrl_main"
+  [[fb.handler]]
+  name      = "on_20ms"
+  period_ms = 20

@@ -21,6 +21,13 @@ pub const result_unsupported = u8(2) // a known opcode that isn't implemented ye
 pub const result_not_ready = u8(3) // e.g. dump requested while still capturing
 pub const result_busy = u8(4) // e.g. dump requested while a previous dump is still in flight
 
+// Freeze cause — why capture stopped (reported in TraceRsp so a host can distinguish a
+// trigger-frozen dump from a manually-stopped one; a propagated cross-core freeze reads as a
+// trigger too, since every core calls trigger() on the shared freeze).
+pub const freeze_none = u8(0) // still capturing / not frozen
+pub const freeze_stop = u8(1) // an explicit stop (or oneshot fill)
+pub const freeze_trigger = u8(2) // the overrun trigger
+
 // Cmd is the decoded 8-byte TraceCmd.
 pub struct Cmd {
 pub:
@@ -39,13 +46,15 @@ pub fn (c Cmd) targets(core u8) bool {
 	return core < 16 && (m & (u16(1) << core)) != 0
 }
 
-// Rsp is the decoded 8-byte TraceRsp. `state` is the TraceBuffer.State ordinal
-// (0 idle, 1 capturing, 2 full, 3 frozen).
+// Rsp is the decoded 8-byte TraceRsp. `state` is the TraceBuffer.State ordinal (0 idle, 1
+// capturing, 2 full, 3 frozen) in b2's low nibble; `cause` (freeze_none/_stop/_trigger) rides
+// b2's high nibble — so a host reads both from the one byte without growing the frame.
 pub struct Rsp {
 pub:
 	opcode_echo  u8
 	result       u8
 	state        u8
+	cause        u8 // freeze cause (packed into b2's high nibble on the wire)
 	records_used u16
 	capacity     u16
 	core         u8
@@ -78,7 +87,7 @@ pub fn encode_rsp(r Rsp) [8]u8 {
 	mut b := [8]u8{}
 	b[0] = r.opcode_echo
 	b[1] = r.result
-	b[2] = r.state
+	b[2] = (r.state & 0x0f) | (r.cause << 4) // state low nibble, freeze cause high nibble
 	b[3] = u8(r.records_used)
 	b[4] = u8(r.records_used >> 8)
 	b[5] = u8(r.capacity)
@@ -91,7 +100,8 @@ pub fn decode_rsp(b [8]u8) Rsp {
 	return Rsp{
 		opcode_echo:  b[0]
 		result:       b[1]
-		state:        b[2]
+		state:        b[2] & 0x0f
+		cause:        b[2] >> 4
 		records_used: u16(b[3]) | (u16(b[4]) << 8)
 		capacity:     u16(b[5]) | (u16(b[6]) << 8)
 		core:         b[7]
@@ -106,6 +116,22 @@ fn state_code(s State) u8 {
 		.full { u8(2) }
 		.frozen { u8(3) }
 	}
+}
+
+// status_rsp builds an encoded TraceRsp reporting a buffer's current state WITHOUT mutating it.
+// The multi-core trace owner replies for rings owned by OTHER partition threads, so it must only
+// read them (single-writer isolation) — it routes the actual arm/stop/reset to the owning
+// partition and uses this for the ack. `result` lets the caller flag not_ready / busy.
+pub fn status_rsp(tb TraceBuffer, opcode u8, result u8, core u8) [8]u8 {
+	return encode_rsp(Rsp{
+		opcode_echo:  opcode
+		result:       result
+		state:        state_code(tb.state())
+		cause:        tb.froze_cause()
+		records_used: u16(tb.used())
+		capacity:     u16(tb.capacity())
+		core:         core
+	})
 }
 
 // handle_cmd applies a command to the buffer and returns (the response frame bytes, a
@@ -147,6 +173,7 @@ pub fn handle_cmd(mut tb TraceBuffer, c Cmd, core u8) ([8]u8, bool, bool) {
 		opcode_echo:  c.opcode
 		result:       result
 		state:        state_code(tb.state())
+		cause:        tb.froze_cause()
 		records_used: u16(tb.used())
 		capacity:     u16(tb.capacity())
 		core:         core

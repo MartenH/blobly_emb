@@ -73,9 +73,18 @@ pub fn (mut s Scheduler) run(now_us u64) {
 	for i in 0 .. s.count {
 		if now_us >= s.due[i] {
 			s.handlers[i](s.ctx[i])
-			s.due[i] = now_us + s.period[i]
+			s.due[i] = next_due(s.due[i], s.period[i], now_us)
 		}
 	}
+}
+
+// next_due advances a handler's deadline by exactly one period (fixed cadence — the next fire
+// is on the ideal grid, so poll jitter does NOT accumulate into drift). If the handler fell a
+// full period behind (an overrun, or the first fire from due = 0), resync to now + period rather
+// than fire a catch-up burst — one phase step, no drift afterward.
+fn next_due(due u64, period u64, now u64) u64 {
+	nd := due + period
+	return if nd <= now { now + period } else { nd }
 }
 
 // run_profiled is run() with per-handler timing: it dispatches every due handler,
@@ -103,7 +112,7 @@ pub fn (mut s Scheduler) run_profiled(clock fn () u64) {
 			if !isnil(s.trace_hook) {
 				s.trace_hook(s.trace_ctx, i, t0, dt)
 			}
-			s.due[i] = now + s.period[i]
+			s.due[i] = next_due(s.due[i], s.period[i], now)
 		}
 	}
 	s.account(busy, clock())
