@@ -1,28 +1,17 @@
-# P1 handler-tracing dev harness (host / vcan). Hand-wired pending the loom2v
-# HandlerStat emitter — it exists to develop + verify loom.run_profiled +
-# telem.encode_handlerstat on WSL before that path is generated.
+# Single-core handler-tracing demo — fully generated from ecu.toml (loom2v). The generation +
+# build + clean rules are shared in examples/common.mk (so this example runs the identical
+# pipeline as the others); only the trace-specific vcan bring-up + watch helpers are here.
+# Sim-first: `make vcan` once, then `make run` on vcan0. blobly_net decodes the fixed
+# observability protocol natively from gen/trace-manifest.csv (its `# trace frames` rows).
 REPO ?= ../..
-V    ?= v
-BIN   = bin/trace_demo
-
-all: $(BIN)
-
-$(BIN): main.v
-	@mkdir -p bin
-	cd $(REPO) && $(V) -gc none -path "@vlib|@vmodules|." -o examples/trace_demo/$(BIN) examples/trace_demo/main.v
+include $(REPO)/examples/common.mk
 
 # bring up the virtual bus, then run + watch the HandlerStat frames
 vcan:
 	sudo ip link add dev vcan0 type vcan 2>/dev/null || true
 	sudo ip link set up vcan0
 
-run: all
-	./$(BIN) vcan0
-
 watch:
 	candump vcan0,7E4:7FF
 
-clean:
-	rm -rf bin
-
-.PHONY: all vcan run watch clean
+.PHONY: vcan watch

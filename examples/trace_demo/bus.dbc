@@ -1,0 +1,7 @@
+VERSION "trace_demo has no bus signals — this satisfies loom2v's DBC argument"
+
+NS_ :
+
+BS_:
+
+BU_:

@@ -1,108 +1,62 @@
-# trace_demo — handler runtime tracing, P1 (host / vcan)
+# trace_demo — handler runtime tracing, generated from `ecu.toml`
 
-The first slice of the [runtime-tracing design](../../docs/telemetry.md) (Part 2, P1):
-**per-handler execution timing** measured by the Loom and pushed over CAN as a
-**HandlerStat** frame, watchable live with `candump`. Develops and verifies the
-`loom.run_profiled` + `comm/telem.encode_handlerstat` path on WSL before it becomes
-config-driven codegen.
+A single-core handler-tracing demo (host / vcan) that is **fully generated** from
+[`ecu.toml`](ecu.toml) by `loom2v` — the config-driven counterpart of the
+[runtime-tracing design](../../docs/telemetry.md). The only hand-written source is
+[`main.v`](main.v) (open the channel → `gen.run(ch)`) and the three pure-compute FBs in
+[`app/work.v`](app/work.v); everything else — the loom wiring, the trace capture ring +
+`TraceCmd`/`TraceRsp` + ISO-TP dump, the `HandlerStat` heartbeat, and `CpuLoad` — is emitted
+into `gen/loom_gen.v`, plus `gen/trace-manifest.csv` (handler/thread names + the trace frame
+ids) for blobly_net, which decodes the fixed observability protocol natively.
 
-Three handlers run on one `loom.Scheduler` with different periods and workloads:
+Three handlers run on one Loom at different periods (all mapped to the `app_main` thread):
 
-| handler_id | period | work |
-|---|---|---|
-| 0 | 5 ms | light |
-| 1 | 10 ms | medium |
-| 2 | 20 ms | heavy |
+| fb id | fb | handler | period | work |
+|---|---|---|---|---|
+| 0 | FastWork | on_5ms | 5 ms | light |
+| 1 | MedWork | on_10ms | 10 ms | medium |
+| 2 | SlowWork | on_20ms | 20 ms | heavy (glitches every 40th run) |
 
-`Scheduler.run_profiled(clock)` brackets **each** dispatched handler with the clock and
-records its response time (last / max / count). Once a second the loop pushes one
-**HandlerStat** frame per handler on `0x7E4`:
-
-```
-b0    handler_id
-b1    flags
-b2-3  last_us      (u16 LE)  response time of the last invocation
-b4-5  max_us       (u16 LE)  peak since the previous report
-b6-7  count_delta  (u16 LE)  invocations in the last second
-```
+`run_profiled` brackets **each** dispatched handler and records its response time; every
+`push_ms` the loop emits one **HandlerStat** on `0x7E4` (per docs/telemetry.md), and it feeds
+one trace `Record` per invocation into a `buffer_records`-deep **ring** (flight recorder). The
+`[trace].trigger` (`source = "overrun", budget_us = 500`) freezes the ring around any handler
+that runs longer than the budget — SlowWork's periodic glitch — keeping `pre_pct` % of the
+window from before it.
 
 ## Run it
 
 ```sh
-make vcan          # bring up vcan0
-make run &         # build + run on vcan0
-make watch         # candump vcan0,7E4:7FF
+make vcan          # bring up vcan0 (once)
+make run &         # generate + build + run on vcan0
+make watch         # candump vcan0,7E4:7FF — the HandlerStat frames
 ```
 
-You should see three frames a second, e.g. (decoded):
+## Control + dump
 
-```
-handler | last_us | max_us | count/s
-   0     |    3    |   15   |  178      # ~5 ms period, light work
-   1     |   25    |  147   |   96      # ~10 ms, medium
-   2     |   98    |  401   |   49      # ~20 ms, heavy
-```
-
-`count/s` tracks the periods; `last`/`max` scale with each handler's work — the Loom's
-per-handler timing, live on the bus.
-
-## Captured trace (P2)
-
-Besides the live stats, the demo runs a **flight recorder**: a loom trace hook
-(`set_trace_hook`) feeds one `trace.Record` per dispatched handler into a 64-record
-**ring** `TraceBuffer` (overwriting oldest). The same hook is the **software trigger** —
-when a handler runs longer than its budget (`h_slow` glitches to ~5× work every 40th
-run, ~730 µs), it calls `buf.trigger()`, which freezes the ring with **50 % of records
-from before the glitch + 50 % after** (the pre/post split). The host polls `status`
-(→ `frozen`) and `dump`s the window. Each record is `b0 handler_id, b2-5 start_us,
-b6-7 cpu_us`.
-
-Verified on vcan0: the ring froze with the 732 µs glitch at record **31/64** (31 before,
-32 after) and the window dumped over ISO-TP. Decoded, a dump is the per-invocation
-timeline — who ran when and for how long, around the anomaly:
-
-```
-handler  start_us  cpu_us
-  h2       1098      190     # slow (20 ms), heavy
-  h1       3545       68     # med  (10 ms)
-  h0       5813        4     # fast (5 ms), light
-  h0      11435        6
-  h1      13715       44
-  ...
-```
-
-## Control it (P2, step 3)
-
-The capture is **host-driven** over a cmd/rsp protocol (not UDS). Send an 8-byte
-`TraceCmd` on `0x7E2`; the target replies with a `TraceRsp` on `0x7E3` (opcode, result,
-state, records_used, capacity), and on `dump` streams the records on `0x7E5`.
-
-The `dump` is one **ISO-TP** block on `0x7E5` (flow control from the host on `0x7E6`) — the
-64 records pack to 512 bytes — so the ISO-TP receiver must already be running when you send
-opcode 6, otherwise it sends no flow control and the transfer stalls (the target's N_Bs
-timeout then aborts it after ~1 s). Start `isotprecv` first, then dump:
+The capture is host-driven over a cmd/rsp protocol (not UDS): an 8-byte `TraceCmd` on `0x7E2`,
+reply `TraceRsp` on `0x7E3` (opcode, result, state, records_used, capacity). `dump` streams the
+frozen ring as one **ISO-TP** block on `0x7E5` (flow control from the host on `0x7E6`). Start
+the ISO-TP receiver first, then dump:
 
 ```sh
-candump vcan0,7E3:7FF &               # watch the TraceRsp replies
-isotprecv -s 0x7E6 -d 0x7E5 vcan0 &   # reassemble the dump: -d (rx) = data 0x7E5, -s (tx, FC) = 0x7E6
-                                      # needs the can-isotp kernel module
-cansend vcan0 7E2#0700000000000000    # opcode 7 = status -> rsp: state 3 (frozen) once the
-                                      #   trigger has fired (state 1 = still capturing if early)
-cansend vcan0 7E2#0600000000000000    # opcode 6 = dump   -> rsp, then isotprecv prints 512 bytes
-cansend vcan0 7E2#0400000000000000    # opcode 4 = reset  -> rsp: state 1 (capturing)
+candump vcan0,7E3:7FF &                # the TraceRsp replies
+isotprecv -s 0x7E6 -d 0x7E5 vcan0 &    # reassemble the dump (needs the can-isotp kernel module)
+cansend vcan0 7E2#0700000000000000     # status -> state 3 (frozen) once the glitch has fired
+cansend vcan0 7E2#0600000000000000     # dump   -> rsp, then the 512-byte block (64 × 8-byte records)
+cansend vcan0 7E2#0400000000000000     # reset  -> state 1 (capturing again)
 ```
 
-`isotprecv` prints the reassembled 512-byte block (64 × 8-byte records); split it into
-8-byte records to decode. `dump` is refused (`result_not_ready`) unless the buffer is
-full/frozen — you never stream a buffer that's still being written.
+`dump` is refused (`result_not_ready`) unless the ring is frozen/full — you never stream a
+buffer that's still being written. Or just open the generated `gen/trace-manifest.csv` in
+blobly_net and drive it by name.
 
 ## Notes
 
-- **Hand-wired.** This mirrors what the loom2v HandlerStat emitter will generate; it is
-  a dev harness, not a config-driven example (no `ecu.toml`). It proves the mechanism on
-  the host so the target and codegen build on something verified.
-- **Response vs CPU time.** On this polled host loop with no interrupts, the bracketed
-  duration is the handler's CPU time. Under ISRs/preemption it is response time; CPU time
-  then needs the ISR/ThreadX accounting described in the design doc.
-- **Next**: fold this into loom2v (emit the HandlerStat push + a handler manifest from
-  `ecu.toml`), then the captured trace buffer + cmd/rsp control (P2).
+- **Config-driven.** Change a period, the buffer depth, the trigger budget, or a frame id in
+  `ecu.toml`, `make`, and the wiring + DBC + manifest regenerate together — nothing is
+  hand-kept, so the trace can't drift from the app it traces.
+- **Response vs CPU time.** On this polled host loop with no interrupts the bracketed duration
+  is the handler's CPU time; under ISRs/preemption it is response time (see the design doc).
+- **Single-core.** loom2v folds the trace into one `run(ch)` superloop that owns the channel;
+  multi-core trace (IOC fan-out + a comm thread) is the next phase.

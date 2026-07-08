@@ -50,8 +50,16 @@ fn main() {
 	}
 	b << 'pub const ioc_channel_count = ${chcount}'
 	b << ''
-	b << '// Per-channel transport (index = channel id)'
-	b << 'pub const ioc_transport = [${transports.join(', ')}]!'
+	// Per-channel transport (index = channel id). With no cross-partition IOC channels there is
+	// nothing to index — and neither an empty fixed literal ([]!) compiles nor a growable []T is
+	// allowed in -gc none runtime code — so omit the const entirely (ioc_channel_count = 0 already
+	// says there are none, and nothing reads the table when it's empty).
+	if transports.len == 0 {
+		b << '// (no cross-partition IOC channels — no transport table)'
+	} else {
+		b << '// Per-channel transport (index = channel id)'
+		b << 'pub const ioc_transport = [${transports.join(', ')}]!'
+	}
 
 	// --- Partitions (declaration order = partition id) ---
 	parts := doc.value('partition').array()
