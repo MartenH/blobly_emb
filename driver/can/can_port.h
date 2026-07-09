@@ -23,6 +23,7 @@
 
 int  blob_can_open(const char *name, int fd_mode);                    /* >=0 handle, -1 fail */
 int  blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int fd_mode);
+int  blob_can_tx_ready(int h);                                        /* 1=Tx can accept now, 0=full */
 int  blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len); /* 0=frame, -1=none */
 void blob_can_close(int h);
 

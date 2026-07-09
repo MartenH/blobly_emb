@@ -190,6 +190,7 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 					l.next_us = now
 					l.wft_count = 0
 					l.tx = .send_cf
+					l.fc_deadline = now + l.n_bs_us // stall bound for the CF burst (refreshed per CF)
 				} else if fs == 1 { // WAIT: peer not ready — restart N_Bs, but bound the WAITs
 					// check before incrementing so wft_count never exceeds wft_max (<=255) and
 					// can't wrap back to 0 (which would let an endless-WAIT peer wedge the link).
@@ -209,6 +210,19 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 }
 
 // poll produces the next PDU to send, if any (FC has priority, then the tx FSM).
+// tick advances the link's time-based state (the N_Bs flow-control timeout) independently
+// of poll(). A caller that gates poll() on Tx-FIFO space (`for tx_ready() && poll(...)`) must
+// call tick() every cycle so a full FIFO can't wedge the link in wait_fc forever — otherwise a
+// dump on a down/quiet bus (FF sent, no FC, FIFO stays full) never reaches its abort deadline.
+pub fn (mut l Link) tick(now u64) {
+	// Abort a tx that made no progress within its deadline — in wait_fc (no flow control) OR in
+	// send_cf (CTS received, but backpressure kept the FIFO full so no CF went out). fc_deadline
+	// is set on entering either state and refreshed on each CF sent.
+	if l.n_bs_us != 0 && (l.tx == .wait_fc || l.tx == .send_cf) && now >= l.fc_deadline {
+		l.tx = .idle
+	}
+}
+
 pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 	if l.fc_send {
 		zero(mut out)
@@ -265,6 +279,7 @@ pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 			l.tx_pos += n
 			l.tx_sn = (l.tx_sn + 1) & 0x0F
 			l.next_us = now + l.peer_stmin
+			l.fc_deadline = now + l.n_bs_us // progress made -> refresh the send_cf stall bound
 			if l.tx_pos >= l.tx_len {
 				l.tx = .idle
 			} else if l.peer_bs != 0 {

@@ -129,6 +129,46 @@ fn test_wait_fc_times_out() {
 	assert l.send(&buf[0], 5) // link is free again
 }
 
+fn test_tick_times_out_stalled_send_cf() {
+	// In send_cf (CTS received) a full Tx FIFO gates poll() out mid-burst; tick() must still
+	// abort if no CF goes out within N_Bs, so a bus drop mid-transfer can't wedge the link.
+	mut l := Link{
+		n_bs_us: 1000
+	}
+	mut buf := [max_payload]u8{}
+	for i in 0 .. 20 {
+		buf[i] = u8(i + 1)
+	}
+	assert l.send(&buf[0], 20)
+	mut p := Pdu{}
+	assert l.poll(0, mut p) // FF -> wait_fc
+	mut cts := Pdu{}
+	cts.data[0] = 0x30 // FC.CTS, bs=0, stmin=0 -> send_cf (deadline 0+1000)
+	l.on_frame(0, cts)
+	assert l.poll(0, mut p) // one CF out; 7 bytes left -> stays send_cf, deadline refreshed
+	assert (p.data[0] & 0xF0) == 0x20
+	l.tick(500) // FIFO "full": poll gated out; before the deadline -> still busy
+	assert !l.send(&buf[0], 5)
+	l.tick(1000) // deadline reached in send_cf via tick -> abort
+	assert l.send(&buf[0], 5) // free again
+}
+
+fn test_tick_times_out_wait_fc_without_poll() {
+	// Under Tx back-pressure the sender gates poll() on FIFO space, so the N_Bs timeout must
+	// also advance via tick() alone — otherwise a full FIFO (down bus) wedges the link forever.
+	mut l := Link{
+		n_bs_us: 1000
+	}
+	mut buf := [max_payload]u8{}
+	assert l.send(&buf[0], 20)
+	mut p := Pdu{}
+	assert l.poll(0, mut p) // FF out, enter wait_fc (deadline 1000)
+	l.tick(500) // before the deadline: still busy
+	assert !l.send(&buf[0], 5)
+	l.tick(1000) // deadline reached via tick (poll never called) -> abort
+	assert l.send(&buf[0], 5) // free again
+}
+
 fn test_fc_wait_refreshes_n_bs() {
 	// FC.WAIT means "not ready yet" — it must restart N_Bs so a peer that WAITs within
 	// the window and later sends CTS still completes, instead of aborting at the old deadline.

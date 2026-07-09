@@ -2,6 +2,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -55,6 +56,17 @@ int blob_can_send(int sock, uint32_t id, const uint8_t *data, uint8_t len, int f
 	memcpy(f.data, data, len);
 	ssize_t n = write(sock, &f, sizeof(f));
 	return n == (ssize_t)sizeof(f) ? 0 : -1;
+}
+
+/* The socket is non-blocking (O_NONBLOCK), so write() can fail with EAGAIN when the
+ * SocketCAN Tx queue/interface isn't writable. Report real writability via a zero-timeout
+ * POLLOUT poll so the burst sender (ISO-TP dump) gates correctly instead of dropping. */
+int blob_can_tx_ready(int sock) {
+	if (sock < 0)
+		return 0;
+	struct pollfd pfd = { .fd = sock, .events = POLLOUT, .revents = 0 };
+	int r = poll(&pfd, 1, 0);
+	return (r > 0 && (pfd.revents & POLLOUT)) ? 1 : 0;
 }
 
 int blob_can_recv(int sock, uint32_t *id, uint8_t *data, uint8_t *len) {
