@@ -1,6 +1,8 @@
 MEMORY
 {
-  RAM (wx) : ORIGIN = 0x20000000, LENGTH = 0x00800000
+  /* QEMU mps2-an500 maps only 0x20000000..0x203fffff as real SSRAM; 0x20400000.. is a
+     mirror, so cap RAM at 4 MiB to keep a large allocation from aliasing low RAM. */
+  RAM (wx) : ORIGIN = 0x20000000, LENGTH = 0x00400000
   FLASH (rx) : ORIGIN = 0x00000000, LENGTH = 0x00400000
 }
 
