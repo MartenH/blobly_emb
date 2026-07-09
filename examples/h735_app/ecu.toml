@@ -69,6 +69,25 @@ id        = 0x7E0   # CpuLoad: per-core load @ 1 s window
 detail_id = 0x7E1   # LoadDetail: core-0 load @ 100 ms / 1 s / 10 s + overrun count
 period_ms = 500
 
+# P3c-0: trace on the bare-metal target. Reuses the single-core inline machinery (the same
+# capture hook + TraceCmd/Rsp handshake + ISO-TP dump of the frozen ring as the host
+# trace_demo), emitted on the board's DWT µs clock with no osal. It rides the one FDCAN bus
+# (can0), so the dump + CpuLoad share it. Real preemptive thread/ISR capture is the larger
+# P3c slice (the TX execution-change hooks); this is the flight recorder on the target.
+[trace]
+bus            = "can0"
+level          = "thread+fb"
+buffer_records = 64
+mode           = "ring"
+pre_pct        = 50
+push_ms        = 1000        # live HandlerStat heartbeat
+cmd_id         = 0x7E2
+rsp_id         = 0x7E3
+stat_id        = 0x7E4
+record_id      = 0x7E5       # ISO-TP dump data (target -> host)
+dump_fc_id     = 0x7E6       # ISO-TP flow control (host -> target)
+trigger        = { source = "overrun", budget_us = 500 }
+
 [target]
 kind    = "baremetal" # single-core: inline superloop, no spawn/osal, DWT timebase
 tick_ms = 1           # super-loop cadence + the load-accounting idle boundary

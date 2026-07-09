@@ -6,6 +6,8 @@ import ports
 import app
 import loom
 import comm.telem
+import comm.trace
+import comm.isotp
 import driver.can
 
 struct Partition_app_state {
@@ -41,7 +43,68 @@ fn handler_app_heartbeat_on_100ms(ctx voidptr) {
 	st.heartbeat.on_100ms(inp, mut outp)
 }
 
+struct TraceState {
+mut:
+	buf       trace.TraceBuffer
+	start     u64 // wall-clock µs of the capture origin
+	base      u64 // elapsed µs at the last epoch re-anchor
+	thread_id u16 // this partition's thread id (for the derived THREAD records)
+	busy_end  u64 // elapsed µs at the end of the last busy span (idle-gap start)
+	fb_count  u32 // handlers dispatched (the loop reads this to bracket a busy span)
+}
+
+fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {
+	mut t := unsafe { &TraceState(ctx) }
+	t.fb_count++
+	elapsed := start_us - t.start
+	if elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor
+		t.base = elapsed
+		t.buf.push(trace.new_epoch(u32(elapsed)))
+	}
+	mut dt := dt_us
+	mut flags := u8(0)
+	if dt > 0xFFFF { // clamp to the u16 field, and mark it saturated
+		dt = 0xFFFF
+		flags |= trace.flag_saturated
+	}
+	if dt_us > 500 {
+		flags |= trace.flag_overran
+	}
+	t.buf.push(trace.new_fb(u16(idx), flags, u32(elapsed - t.base), u16(dt)))
+	if dt_us > 500 { // overrun: freeze the ring around the anomaly
+		t.buf.trigger()
+	}
+}
+
+fn trace_thread_span(mut t TraceState, t0_us u64, t1_us u64) {
+	e_start := t0_us - t.start // elapsed at the busy span start
+	e_end := t1_us - t.start   // elapsed at the busy span end
+	if e_start > t.base && e_start - t.base > 0x00ff_ffff { // re-anchor before the u24 wraps
+		t.base = e_start
+		t.buf.push(trace.new_epoch(u32(e_start)))
+	}
+	gap_from := if t.busy_end > t.base { t.busy_end } else { t.base }
+	if e_start > gap_from { // idle gap since the last busy span (within this epoch)
+		mut gap := e_start - gap_from
+		if gap > 0xFFFF {
+			gap = 0xFFFF
+		}
+		t.buf.push(trace.new_idle(trace.reason_yield, u32(gap_from - t.base), u16(gap)))
+	}
+	s_from := if e_start > t.base { e_start } else { t.base } // clamp across an epoch re-anchor
+	mut busy := if e_end > s_from { e_end - s_from } else { u64(0) }
+	if busy > 0xFFFF {
+		busy = 0xFFFF
+	}
+	t.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(s_from - t.base), u16(busy)))
+	t.busy_end = e_end
+}
+
 fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)
+
+fn board_clock() u64 {
+	return C.board_now_us()
+}
 
 pub fn run(can0 can.Channel) {
 	mut ch := can0
@@ -50,50 +113,133 @@ pub fn run(can0 can.Channel) {
 	sched.every(100000, handler_app_governor_on_100ms, &st)
 	sched.every(1000, handler_app_load_on_1ms, &st)
 	sched.every(100000, handler_app_heartbeat_on_100ms, &st)
-	mut load := [8]u16{}
-	telem_period_us := u64(500000)
+	mut backing := [64]trace.Record{}
+	mut ts := TraceState{
+		buf: trace.new_buffer(&backing[0], 64, .ring, 50)
+	}
+	ts.start = C.board_now_us()
+	ts.thread_id = 1 // manifest thread id of app's thread
+	ts.buf.start()
+	sched.set_trace_hook(trace_capture, &ts)
+	mut link := isotp.Link{}
+	mut dumpbuf := [512]u8{} // buffer_records x 8, one ISO-TP payload
+	mut last_push := u64(0)
+	mut last_count := [3]u32{}
 	mut last_telem := u64(0)
-	mut last_overruns := u32(0) // for the per-period overrun count
+	mut last_overruns := u32(0) // for the LoadDetail per-period overrun delta
 	tick_us := u64(1000)
 	mut next_tick := C.board_now_us() + tick_us
 	for {
-		t0 := C.board_now_us()
-		sched.run(t0)
-		t1 := C.board_now_us()
-		sched.account(t1 - t0, t1) // handler time -> this core's load
-		if t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun
+		loom_t0 := C.board_now_us()
+		before := ts.fb_count
+		sched.run_profiled(board_clock)
+		if ts.fb_count != before { // a handler ran -> bracket this busy iteration as a thread span
+			trace_thread_span(mut ts, loom_t0, C.board_now_us())
+		}
+		if C.board_now_us() - loom_t0 > tick_us {
 			sched.mark_overrun()
 		}
-		if t1 - last_telem >= telem_period_us {
-			last_telem = t1
-			load[0] = sched.load_permille() // single M7 -> core 0 only
+		mut rx := can.Frame{}
+		if ch.recv(mut rx) {
+			if rx.id == u32(0x7e2) && rx.len >= 8 {
+				mut cb := [8]u8{}
+				for j in 0 .. 8 {
+					cb[j] = rx.data[j]
+				}
+				c := trace.decode_cmd(cb)
+				mut rspb, do_dump, addressed := trace.handle_cmd(mut ts.buf, c, 0)
+				if addressed {
+					if c.opcode == trace.op_arm || c.opcode == trace.op_start
+						|| c.opcode == trace.op_reset {
+						ts.start = C.board_now_us()
+						ts.base = 0
+						ts.busy_end = 0 // fresh origin: don't treat the old capture's span end as the idle-gap start
+						link = isotp.Link{}
+					}
+					if do_dump {
+						n := ts.buf.pack(&dumpbuf[0], 512)
+						if n > 0 && !link.send(&dumpbuf[0], n) {
+							rspb[1] = trace.result_busy
+						}
+					}
+					mut rf := can.Frame{
+						id:  u32(0x7e3)
+						len: 8
+					}
+					for j in 0 .. 8 {
+						rf.data[j] = rspb[j]
+					}
+					ch.send(rf)
+				}
+			} else if rx.id == u32(0x7e6) {
+				mut p := isotp.Pdu{}
+				for j in 0 .. 8 {
+					p.data[j] = rx.data[j]
+				}
+				link.on_frame(C.board_now_us(), p)
+			}
+		}
+		mut tp := isotp.Pdu{}
+		for link.poll(C.board_now_us(), mut tp) {
+			mut pf := can.Frame{
+				id:  u32(0x7e5)
+				len: 8
+			}
+			for j in 0 .. 8 {
+				pf.data[j] = tp.data[j]
+			}
+			ch.send(pf)
+		}
+		now := C.board_now_us()
+		if now - last_push >= 1000000 {
+			last_push = now
+			for i in 0 .. sched.handler_count() {
+				hs := sched.handler_stat(i)
+				delta := hs.count - last_count[i]
+				last_count[i] = hs.count
+				payload := telem.encode_handlerstat(u8(i), 0, hs.last_us, hs.max_us, delta)
+				mut f := can.Frame{
+					id:  u32(0x7e4)
+					len: 8
+				}
+				for j in 0 .. 8 {
+					f.data[j] = payload[j]
+				}
+				ch.send(f)
+				sched.reset_handler_max(i)
+			}
+		}
+		if now - last_telem >= 500000 {
+			last_telem = now
+			mut load := [8]u16{}
+			load[0] = u16(sched.load_permille())
 			frame := telem.encode_cpuload(load, 1)
-			mut f := can.Frame{
+			mut cf := can.Frame{
 				id:  u32(0x7e0)
 				len: 8
 			}
-			for i in 0 .. 8 {
-				f.data[i] = frame[i]
+			for j in 0 .. 8 {
+				cf.data[j] = frame[j]
 			}
-			ch.send(f)
+			ch.send(cf)
 			ovr := sched.overruns()
 			detail := telem.encode_loaddetail(sched.load_permille_100ms(),
 				sched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)
 			last_overruns = ovr
-			mut d := can.Frame{
+			mut df := can.Frame{
 				id:  u32(0x7e1)
 				len: 8
 			}
-			for i in 0 .. 8 {
-				d.data[i] = detail[i]
+			for j in 0 .. 8 {
+				df.data[j] = detail[j]
 			}
-			ch.send(d)
+			ch.send(df)
 		}
 		for C.board_now_us() < next_tick {} // idle to the tick (real idle)
 		next_tick += tick_us
-		now := C.board_now_us()
-		if now > next_tick { // a pass overran the tick — resync
-			next_tick = now + tick_us
+		tnow := C.board_now_us()
+		if tnow > next_tick { // a pass overran the tick — resync
+			next_tick = tnow + tick_us
 		}
 	}
 }

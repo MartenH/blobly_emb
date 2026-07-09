@@ -452,13 +452,16 @@ fn main() {
 	// cmd/rsp + dump + the HandlerStat heartbeat directly (no IOC, nothing else to schedule). A
 	// bridge (external signals / ISO-TP / routes) or multiple cores need the comm-thread model,
 	// not generated yet.
-	// Bare-metal target trace is not generated — the target run() emits the plain sched.run() loop
-	// with no capture/cmd/rsp, so an active [trace] block would silently produce nothing.
-	if trace_on && target_on {
-		panic('loom2v: [trace] on a bare-metal [target] is not generated yet — the target loop has ' +
-			'no trace capture / cmd-rsp / dump; remove [trace] or set enabled = false for target builds')
-	}
 	single_part := if by_part.keys().len == 1 { by_part.keys()[0] } else { '' }
+	// P3c-0: a bare-metal [target] with [trace] reuses the single-core inline-trace machinery on the
+	// board (DWT) timebase — same capture hook + cmd/rsp + ISO-TP dump as the host inline path, no
+	// osal. It's single-core only; real preemptive thread/ISR capture (the TX execution-change hooks)
+	// is the larger P3c slice. A multi-partition target isn't generated at all yet (see the target
+	// run() one-partition guard), so trace on it has nothing coherent to capture.
+	if trace_on && target_on && single_part == '' {
+		panic('loom2v: [trace] on a bare-metal [target] supports exactly one partition (single-core ' +
+			'host-style capture on the board timebase); multi-thread / ISR capture is the larger P3c slice')
+	}
 	has_bridge := has_external || isotp_conns.len > 0 || has_routes
 	// Which buses run a COM bridge (an external signal, an ISO-TP conn, or a route touches them).
 	// P3b traces each bridge as a `comm_<bus>` thread; the DIFFERENT-bus case (trace rides a bus with
@@ -494,6 +497,18 @@ fn main() {
 	// captures into its own, and one partition_trace() owns the trace channel + streams the blocks.
 	trace_inline := trace_on && !target_on && single_part != '' && !has_bridge
 		&& (core_of[single_part] or { 0 }) == trace_core && trace_core == 0
+	// P3c-0: bare-metal single-core trace — the same inline machinery, emitted with the board timebase
+	// (C.board_now_us) and no osal. Guaranteed single-core (target rejects external signals, so no
+	// bridge, and the target run() is one-partition).
+	trace_target := trace_on && target_on
+	// The bare-metal target trace runner services only trace + CpuLoad on one channel — it never runs
+	// a COM bridge. has_external is already rejected for target above; ISO-TP / routes make has_bridge
+	// true without has_external, so reject those too rather than silently drop the configured bus work.
+	if trace_target && has_bridge {
+		panic('loom2v: [trace] on a bare-metal [target] with a COM bridge (ISO-TP / routes / external ' +
+			'signals) is not generated — the target trace runner has no bridge/UDS/route loop; drop the ' +
+			'bridge config or set [trace].enabled = false for target builds')
+	}
 	trace_multicore := trace_on && !target_on && !trace_inline && !trace_bus_has_bridge
 	// SAME-bus (the trace bus itself carries a bridge) is P3b's follow-up: the bridge loop would have
 	// to own the trace channel and dispatch TraceCmd vs COM. Not generated yet — reject it.
@@ -669,14 +684,14 @@ fn main() {
 	}
 	// telem.* is used for CpuLoad (telemetry) and the inline HandlerStat heartbeat — import it
 	// only when one is actually emitted (a push_ms = 0 trace with no telemetry uses neither).
-	if telem_on || (trace_inline && trace_push_us > 0) {
+	if telem_on || ((trace_inline || trace_target) && trace_push_us > 0) {
 		glue << 'import comm.telem' // CpuLoad / HandlerStat packing
 	}
-	if trace_inline || trace_multicore {
+	if trace_inline || trace_multicore || trace_target {
 		glue << 'import comm.trace' // capture ring(s) + cmd/rsp control
 		glue << 'import comm.isotp' // bulk record dump transport
 	}
-	if has_external || isotp_conns.len > 0 || telem_on || trace_inline || trace_multicore {
+	if has_external || isotp_conns.len > 0 || telem_on || trace_inline || trace_multicore || trace_target {
 		glue << 'import driver.can' // the generated bus bridge / trace channel
 	}
 	if has_external {
@@ -1519,7 +1534,7 @@ fn main() {
 		}
 	}
 	extra_dest_buses.sort()
-	if target_on {
+	if target_on && !trace_on {
 		// --- target run(): one inline single-core superloop. No spawn, no osal. The
 		//     timebase is the board's DWT clock (board_now_us); the loop paces to a
 		//     fixed tick so idle time between passes is real idle (the Loom measures
@@ -1596,14 +1611,21 @@ fn main() {
 		glue << '\t\t}'
 		glue << '\t}'
 		glue << '}'
-	} else if trace_inline {
+	} else if trace_inline || trace_target {
 		// --- inline-trace run(): the single app core owns the trace bus channel and runs one
 		//     superloop — profiled dispatch + capture hook, the TraceCmd/TraceRsp handshake +
 		//     ISO-TP dump of the frozen ring, the HandlerStat heartbeat, and CpuLoad. Single
-		//     core, so no IOC fan-out (that's the multi-core path, not generated yet). ---
+		//     core, so no IOC fan-out (that's the multi-core path, not generated yet). On a
+		//     bare-metal [target] (trace_target, P3c-0) the same body is emitted with the board
+		//     DWT clock instead of osal and a busy-wait idle to the tick — no osal at all. ---
 		part := single_part
 		chp := snake(eff_trace_bus)
 		pcore := core_of[part] or { 0 } // the core the partition (and this loop) is pinned to
+		// Clock seam: host uses osal.now_us; the bare-metal target uses the board's DWT µs counter
+		// (declared as a C fn below). nowcall is the call expression; nowref is the bare fn value
+		// passed to run_profiled/account.
+		nowcall := if trace_target { 'C.board_now_us()' } else { 'osal.now_us()' }
+		nowref := if trace_target { 'board_clock' } else { 'osal.now_us' }
 		// The single-core host capture only produces fb records (no thread switches / ISRs on a
 		// polled loop), so a thread-only level would capture nothing.
 		if trace_level !in ['thread+fb', 'all'] {
@@ -1631,23 +1653,35 @@ fn main() {
 		glue << ''
 		glue << 'struct TraceState {'
 		glue << 'mut:'
-		glue << '\tbuf   trace.TraceBuffer'
-		glue << '\tstart u64 // wall-clock µs of the capture origin'
-		glue << '\tbase  u64 // elapsed µs at the last epoch re-anchor'
+		glue << '\tbuf       trace.TraceBuffer'
+		glue << '\tstart     u64 // wall-clock µs of the capture origin'
+		glue << '\tbase      u64 // elapsed µs at the last epoch re-anchor'
+		glue << '\tthread_id u16 // this partition\'s thread id (for the derived THREAD records)'
+		glue << '\tbusy_end  u64 // elapsed µs at the end of the last busy span (idle-gap start)'
+		glue << '\tfb_count  u32 // handlers dispatched (the loop reads this to bracket a busy span)'
 		glue << '}'
 		glue << ''
 		glue << 'fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {'
 		glue << '\tmut t := unsafe { &TraceState(ctx) }'
+		glue << '\tt.fb_count++'
 		glue << '\telapsed := start_us - t.start'
 		glue << '\tif elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor'
 		glue << '\t\tt.base = elapsed'
 		glue << '\t\tt.buf.push(trace.new_epoch(u32(elapsed)))'
 		glue << '\t}'
 		glue << '\tmut dt := dt_us'
-		glue << '\tif dt > 0xFFFF {'
+		glue << '\tmut flags := u8(0)'
+		glue << '\tif dt > 0xFFFF { // clamp to the u16 field, and mark it saturated'
 		glue << '\t\tdt = 0xFFFF'
+		glue << '\t\tflags |= trace.flag_saturated'
 		glue << '\t}'
-		glue << '\tt.buf.push(trace.new_fb(u16(idx), 0, u32(elapsed - t.base), u16(dt)))'
+		if trace_budget_us > 0 {
+			// flag the record that exceeded the budget so blobly_net outlines the freeze culprit.
+			glue << '\tif dt_us > ${trace_budget_us} {'
+			glue << '\t\tflags |= trace.flag_overran'
+			glue << '\t}'
+		}
+		glue << '\tt.buf.push(trace.new_fb(u16(idx), flags, u32(elapsed - t.base), u16(dt)))'
 		if trace_budget_us > 0 {
 			glue << '\tif dt_us > ${trace_budget_us} { // overrun: freeze the ring around the anomaly'
 			glue << '\t\tt.buf.trigger()'
@@ -1655,8 +1689,49 @@ fn main() {
 		}
 		glue << '}'
 		glue << ''
+		// The polled superloop has no preemptive context switches, so synthesise the schedule it
+		// actually runs: a THREAD record bracketing each busy iteration (the app_main thread ran these
+		// handlers) + an IDLE record for the gap since the previous busy span. Same derivation as the
+		// multi-core path — so thread+fb shows the thread + idle lanes, not just fb bars. Real
+		// preemptive thread/ISR boundaries are the ThreadX target (P3c-1).
+		glue << 'fn trace_thread_span(mut t TraceState, t0_us u64, t1_us u64) {'
+		glue << '\te_start := t0_us - t.start // elapsed at the busy span start'
+		glue << '\te_end := t1_us - t.start   // elapsed at the busy span end'
+		glue << '\tif e_start > t.base && e_start - t.base > 0x00ff_ffff { // re-anchor before the u24 wraps'
+		glue << '\t\tt.base = e_start'
+		glue << '\t\tt.buf.push(trace.new_epoch(u32(e_start)))'
+		glue << '\t}'
+		glue << '\tgap_from := if t.busy_end > t.base { t.busy_end } else { t.base }'
+		glue << '\tif e_start > gap_from { // idle gap since the last busy span (within this epoch)'
+		glue << '\t\tmut gap := e_start - gap_from'
+		glue << '\t\tif gap > 0xFFFF {'
+		glue << '\t\t\tgap = 0xFFFF'
+		glue << '\t\t}'
+		glue << '\t\tt.buf.push(trace.new_idle(trace.reason_yield, u32(gap_from - t.base), u16(gap)))'
+		glue << '\t}'
+		glue << '\ts_from := if e_start > t.base { e_start } else { t.base } // clamp across an epoch re-anchor'
+		glue << '\tmut busy := if e_end > s_from { e_end - s_from } else { u64(0) }'
+		glue << '\tif busy > 0xFFFF {'
+		glue << '\t\tbusy = 0xFFFF'
+		glue << '\t}'
+		glue << '\tt.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(s_from - t.base), u16(busy)))'
+		glue << '\tt.busy_end = e_end'
+		glue << '}'
+		glue << ''
+		if trace_target {
+			glue << 'fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)'
+			glue << ''
+			// A V wrapper so the clock can be passed by value to run_profiled/account (a bare C.fn
+			// reference isn\'t a first-class fn value in V).
+			glue << 'fn board_clock() u64 {'
+			glue << '\treturn C.board_now_us()'
+			glue << '}'
+			glue << ''
+		}
 		glue << 'pub fn run(${chp} can.Channel) {'
-		glue << '\tosal.pin_to_core(${pcore}) // so the manifest/TraceRsp core label matches reality'
+		if !trace_target {
+			glue << '\tosal.pin_to_core(${pcore}) // so the manifest/TraceRsp core label matches reality'
+		}
 		glue << '\tmut ch := ${chp}'
 		glue << '\tmut st := Partition_${part}_state{}'
 		glue << '\tmut sched := loom.Scheduler{}'
@@ -1667,7 +1742,19 @@ fn main() {
 		glue << '\tmut ts := TraceState{'
 		glue << '\t\tbuf: trace.new_buffer(&backing[0], ${trace_buffer_records}, ${modelit}, ${pre})'
 		glue << '\t}'
-		glue << '\tts.start = osal.now_us()'
+		glue << '\tts.start = ${nowcall}'
+		// The THREAD records must carry the SAME thread id the manifest assigns — it numbers threads
+		// 1-based across every partition in TOML order (including FB-less ones before this partition),
+		// so it isn't always 1. Recompute it the manifest's way for this partition's (only) thread.
+		mut inline_tid := 1
+		for p in ecumodel.toml_arr(doc, 'partition') {
+			pn := (p.as_map()['name'] or { toml.Any('') }).string()
+			if pn == part {
+				break
+			}
+			inline_tid += (threads_of[pn] or { []string{} }).len
+		}
+		glue << '\tts.thread_id = ${inline_tid} // manifest thread id of ${part}\'s thread'
 		glue << '\tts.buf.start()'
 		glue << '\tsched.set_trace_hook(trace_capture, &ts)'
 		glue << '\tmut link := isotp.Link{}'
@@ -1683,9 +1770,30 @@ fn main() {
 		}
 		if cpuload_on {
 			glue << '\tmut last_telem := u64(0)'
+			if telem_detail_id != 0 {
+				glue << '\tmut last_overruns := u32(0) // for the LoadDetail per-period overrun delta'
+			}
+		}
+		if trace_target {
+			// Pace the superloop to a fixed tick with a busy-wait so idle is real idle — the Loom
+			// measures load as run-time / wall-clock, so an unpaced spin would read ~100%.
+			glue << '\ttick_us := u64(${target_tick_us})'
+			glue << '\tmut next_tick := C.board_now_us() + tick_us'
 		}
 		glue << '\tfor {'
-		glue << '\t\tsched.run_profiled(osal.now_us)'
+		glue << '\t\tloom_t0 := ${nowcall}'
+		glue << '\t\tbefore := ts.fb_count'
+		glue << '\t\tsched.run_profiled(${nowref})'
+		glue << '\t\tif ts.fb_count != before { // a handler ran -> bracket this busy iteration as a thread span'
+		glue << '\t\t\ttrace_thread_span(mut ts, loom_t0, ${nowcall})'
+		glue << '\t\t}'
+		if trace_target {
+			// Account tick overruns like the plain target, so the LoadDetail overrun count is real
+			// (run_profiled doesn't mark them). A pass whose handler time exceeds the tick budget overran.
+			glue << '\t\tif ${nowcall} - loom_t0 > tick_us {'
+			glue << '\t\t\tsched.mark_overrun()'
+			glue << '\t\t}'
+		}
 		glue << '\t\tmut rx := can.Frame{}'
 		glue << '\t\tif ch.recv(mut rx) {'
 		glue << '\t\t\tif rx.id == u32(0x${trace_cmd_id.hex()}) && rx.len >= 8 {'
@@ -1698,8 +1806,9 @@ fn main() {
 		glue << '\t\t\t\tif addressed {'
 		glue << '\t\t\t\t\tif c.opcode == trace.op_arm || c.opcode == trace.op_start'
 		glue << '\t\t\t\t\t\t|| c.opcode == trace.op_reset {'
-		glue << '\t\t\t\t\t\tts.start = osal.now_us()'
+		glue << '\t\t\t\t\t\tts.start = ${nowcall}'
 		glue << '\t\t\t\t\t\tts.base = 0'
+		glue << '\t\t\t\t\t\tts.busy_end = 0 // fresh origin: don\'t treat the old capture\'s span end as the idle-gap start'
 		glue << '\t\t\t\t\t\tlink = isotp.Link{}'
 		glue << '\t\t\t\t\t}'
 		glue << '\t\t\t\t\tif do_dump {'
@@ -1722,11 +1831,11 @@ fn main() {
 		glue << '\t\t\t\tfor j in 0 .. 8 {'
 		glue << '\t\t\t\t\tp.data[j] = rx.data[j]'
 		glue << '\t\t\t\t}'
-		glue << '\t\t\t\tlink.on_frame(osal.now_us(), p)'
+		glue << '\t\t\t\tlink.on_frame(${nowcall}, p)'
 		glue << '\t\t\t}'
 		glue << '\t\t}'
 		glue << '\t\tmut tp := isotp.Pdu{}'
-		glue << '\t\tfor link.poll(osal.now_us(), mut tp) {'
+		glue << '\t\tfor link.poll(${nowcall}, mut tp) {'
 		glue << '\t\t\tmut pf := can.Frame{'
 		glue << '\t\t\t\tid:  u32(0x${trace_record_id.hex()})'
 		glue << '\t\t\t\tlen: 8'
@@ -1737,7 +1846,7 @@ fn main() {
 		glue << '\t\t\tch.send(pf)'
 		glue << '\t\t}'
 		if heartbeat_on || cpuload_on {
-			glue << '\t\tnow := osal.now_us()'
+			glue << '\t\tnow := ${nowcall}'
 		}
 		if heartbeat_on {
 			glue << '\t\tif now - last_push >= ${trace_push_us} {'
@@ -1773,9 +1882,34 @@ fn main() {
 			glue << '\t\t\t\tcf.data[j] = frame[j]'
 			glue << '\t\t\t}'
 			glue << '\t\t\tch.send(cf)'
+			if telem_detail_id != 0 {
+				// LoadDetail (multi-window load + per-period overruns) — same frame the plain target
+				// emits; keep it under trace so a bare-metal config's detail_id isn't silently dropped.
+				glue << '\t\t\tovr := sched.overruns()'
+				glue << '\t\t\tdetail := telem.encode_loaddetail(sched.load_permille_100ms(),'
+				glue << '\t\t\t\tsched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)'
+				glue << '\t\t\tlast_overruns = ovr'
+				glue << '\t\t\tmut df := can.Frame{'
+				glue << '\t\t\t\tid:  u32(0x${telem_detail_id.hex()})'
+				glue << '\t\t\t\tlen: 8'
+				glue << '\t\t\t}'
+				glue << '\t\t\tfor j in 0 .. 8 {'
+				glue << '\t\t\t\tdf.data[j] = detail[j]'
+				glue << '\t\t\t}'
+				glue << '\t\t\tch.send(df)'
+			}
 			glue << '\t\t}'
 		}
-		glue << '\t\tosal.sleep_us(1000)'
+		if trace_target {
+			glue << '\t\tfor C.board_now_us() < next_tick {} // idle to the tick (real idle)'
+			glue << '\t\tnext_tick += tick_us'
+			glue << '\t\ttnow := C.board_now_us()'
+			glue << '\t\tif tnow > next_tick { // a pass overran the tick — resync'
+			glue << '\t\t\tnext_tick = tnow + tick_us'
+			glue << '\t\t}'
+		} else {
+			glue << '\t\tosal.sleep_us(1000)'
+		}
 		glue << '\t}'
 		glue << '}'
 	} else if trace_multicore {

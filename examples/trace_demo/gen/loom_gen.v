@@ -40,26 +40,59 @@ fn handler_app_slow_work_on_20ms(ctx voidptr) {
 
 struct TraceState {
 mut:
-	buf   trace.TraceBuffer
-	start u64 // wall-clock µs of the capture origin
-	base  u64 // elapsed µs at the last epoch re-anchor
+	buf       trace.TraceBuffer
+	start     u64 // wall-clock µs of the capture origin
+	base      u64 // elapsed µs at the last epoch re-anchor
+	thread_id u16 // this partition's thread id (for the derived THREAD records)
+	busy_end  u64 // elapsed µs at the end of the last busy span (idle-gap start)
+	fb_count  u32 // handlers dispatched (the loop reads this to bracket a busy span)
 }
 
 fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	mut t := unsafe { &TraceState(ctx) }
+	t.fb_count++
 	elapsed := start_us - t.start
 	if elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor
 		t.base = elapsed
 		t.buf.push(trace.new_epoch(u32(elapsed)))
 	}
 	mut dt := dt_us
-	if dt > 0xFFFF {
+	mut flags := u8(0)
+	if dt > 0xFFFF { // clamp to the u16 field, and mark it saturated
 		dt = 0xFFFF
+		flags |= trace.flag_saturated
 	}
-	t.buf.push(trace.new_fb(u16(idx), 0, u32(elapsed - t.base), u16(dt)))
+	if dt_us > 500 {
+		flags |= trace.flag_overran
+	}
+	t.buf.push(trace.new_fb(u16(idx), flags, u32(elapsed - t.base), u16(dt)))
 	if dt_us > 500 { // overrun: freeze the ring around the anomaly
 		t.buf.trigger()
 	}
+}
+
+fn trace_thread_span(mut t TraceState, t0_us u64, t1_us u64) {
+	e_start := t0_us - t.start // elapsed at the busy span start
+	e_end := t1_us - t.start   // elapsed at the busy span end
+	if e_start > t.base && e_start - t.base > 0x00ff_ffff { // re-anchor before the u24 wraps
+		t.base = e_start
+		t.buf.push(trace.new_epoch(u32(e_start)))
+	}
+	gap_from := if t.busy_end > t.base { t.busy_end } else { t.base }
+	if e_start > gap_from { // idle gap since the last busy span (within this epoch)
+		mut gap := e_start - gap_from
+		if gap > 0xFFFF {
+			gap = 0xFFFF
+		}
+		t.buf.push(trace.new_idle(trace.reason_yield, u32(gap_from - t.base), u16(gap)))
+	}
+	s_from := if e_start > t.base { e_start } else { t.base } // clamp across an epoch re-anchor
+	mut busy := if e_end > s_from { e_end - s_from } else { u64(0) }
+	if busy > 0xFFFF {
+		busy = 0xFFFF
+	}
+	t.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(s_from - t.base), u16(busy)))
+	t.busy_end = e_end
 }
 
 pub fn run(can0 can.Channel) {
@@ -75,6 +108,7 @@ pub fn run(can0 can.Channel) {
 		buf: trace.new_buffer(&backing[0], 64, .ring, 50)
 	}
 	ts.start = osal.now_us()
+	ts.thread_id = 1 // manifest thread id of app's thread
 	ts.buf.start()
 	sched.set_trace_hook(trace_capture, &ts)
 	mut link := isotp.Link{}
@@ -83,7 +117,12 @@ pub fn run(can0 can.Channel) {
 	mut last_count := [3]u32{}
 	mut last_telem := u64(0)
 	for {
+		loom_t0 := osal.now_us()
+		before := ts.fb_count
 		sched.run_profiled(osal.now_us)
+		if ts.fb_count != before { // a handler ran -> bracket this busy iteration as a thread span
+			trace_thread_span(mut ts, loom_t0, osal.now_us())
+		}
 		mut rx := can.Frame{}
 		if ch.recv(mut rx) {
 			if rx.id == u32(0x7e2) && rx.len >= 8 {
@@ -98,6 +137,7 @@ pub fn run(can0 can.Channel) {
 						|| c.opcode == trace.op_reset {
 						ts.start = osal.now_us()
 						ts.base = 0
+						ts.busy_end = 0 // fresh origin: don't treat the old capture's span end as the idle-gap start
 						link = isotp.Link{}
 					}
 					if do_dump {
