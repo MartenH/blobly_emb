@@ -1,0 +1,64 @@
+# COM — signal-based communication (the layer between the CAN driver and the FBs):
+# pack/unpack signals to/from PDUs, drive transmission per a PDU's TX mode, and
+# monitor reception deadlines. Implementation- and instance-agnostic (one CAN bus or
+# fifteen, host or target). The CAN frame transport itself is CAN-DRV; diagnostics is
+# DIAG; integrity/authenticity are E2E/SEC.
+
+[[req]]
+id = "REQ-COM-001"
+title = "Decode received signals to physical units"
+text = "COM shall decode the signals of a received frame into physical-unit values per the bus database (bit position, length, byte order, factor, offset, signedness), and present them to the application."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-002"
+
+[[req]]
+id = "REQ-COM-002"
+title = "Encode transmitted signals from physical units"
+text = "COM shall encode application signal values in physical units into the bytes of their transmit frame per the bus database, setting bits not covered by a mapped signal to the initial value defined for the frame in the bus database (default 0)."
+# The tx path derives from frame exchange (COMMS-001); COMMS-002 is the rx-side
+# "present received signals in physical units" only, so it is not a parent of tx encode.
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"
+
+[[req]]
+id = "REQ-COM-003"
+title = "Cyclic transmission"
+text = "COM shall transmit a PDU configured for cyclic (or mixed) transmission at its configured period."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"
+
+[[req]]
+id = "REQ-COM-004"
+title = "Event-driven transmission"
+text = "COM shall transmit a PDU configured for event or mixed transmission when its mapped signal content changes, and a PDU configured for triggered transmission when the application explicitly requests one (a send trigger), in both cases no sooner than its configured minimum delay after the previous transmission."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"
+
+[[req]]
+id = "REQ-COM-005"
+title = "Reception deadline monitoring"
+text = "COM shall detect loss of a PDU configured for periodic reception when it is not received within its configured timeout, and signal that loss to the application."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-003"
+
+[[req]]
+id = "REQ-COM-006"
+title = "Transmit back-pressure policy"
+text = "When the transmit path cannot accept a frame, COM shall not block or drop data silently: a cyclic PDU shall re-send its current value at the next cycle (no queue of stale frames), and an event or triggered PDU shall retain its request and retry until the frame is accepted."
+# The retry-until-accepted part of the event/triggered policy is not yet met (the
+# current code clears the trigger before confirming the send) — captured here to drive
+# the fix; see the comm-thread work. The cyclic part holds today.
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"

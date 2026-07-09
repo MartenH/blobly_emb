@@ -27,7 +27,7 @@ declares is, in that run's context, fulfilled.**
 - **Name the *what*, never the *how* or *which instance*.**
   ✗ `REQ-DRV-FDCAN`, ✗ `REQ-CAN0-…`  →  ✓ `REQ-CAN-DRV-001` (every CAN backend,
   every bus instance must satisfy it).
-- Areas (capability-level): `SYS, ECU, MODE, NM, WDG, INIT, COM, CAN-DRV, DIAG,
+- Areas (capability-level): `SYS, ECU, MODE, NM, WDG, INIT, COM, CAN-DRV, TP, DIAG,
   E2E, SEC, IOC, SCHED, MEM, INV`.
 
 Two tiers, linked by `derives` — the 26262 derivation chain:

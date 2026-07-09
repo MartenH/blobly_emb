@@ -1,0 +1,21 @@
+# DIAG — UDS (ISO 14229) diagnostic services. Runs over the ISO-TP transport (area TP)
+# and reads live values from the same COM/IOC source the FBs use. Implementation- and
+# instance-agnostic.
+
+[[req]]
+id = "REQ-DIAG-001"
+title = "UDS request/response"
+text = "The ECU shall dispatch a received UDS service request and return the corresponding positive or negative response, except that it shall suppress the positive response when the request sets the suppress-positive-response indication (a negative response is still returned on error)."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-002"
+title = "Read live signal by identifier"
+text = "A UDS ReadDataByIdentifier mapped to a live signal shall return that signal's current value, read from the same source the application sees."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
