@@ -36,7 +36,8 @@ deps:
 	@mkdir -p third_party
 	@[ -d third_party/cmsis_device_h7 ] || git clone --depth 1 https://github.com/STMicroelectronics/cmsis_device_h7 third_party/cmsis_device_h7
 	@[ -d third_party/cmsis_core ]       || git clone --depth 1 https://github.com/STMicroelectronics/cmsis_core       third_party/cmsis_core
-	@[ -d third_party/threadx ]          || (git clone https://github.com/eclipse-threadx/threadx third_party/threadx && cd third_party/threadx && git checkout -q $(THREADX_PIN))
+	@[ -d third_party/threadx/.git ]     || git clone https://github.com/eclipse-threadx/threadx third_party/threadx
+	@cd third_party/threadx && git checkout -q $(THREADX_PIN) 2>/dev/null || (git fetch --quiet origin && git checkout -q $(THREADX_PIN))
 	@echo "CMSIS headers + ThreadX ($(THREADX_PIN)) ready under third_party/ (device cross-builds only)"
 
 # ThreadX is pinned so the M7 kernel + execution-change hooks are reproducible across machines.

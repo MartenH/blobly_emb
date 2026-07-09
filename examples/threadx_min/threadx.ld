@@ -6,7 +6,7 @@ MEMORY
 
 __STACKSIZE__ = 1024;
 __STACKSIZE_PROCESS__ = 0;
-__HEAPSIZE__ = 128;
+__HEAPSIZE__ = 0;   /* no runtime heap (AGENTS.md hard invariant) — ThreadX uses static memory */
 
 SECTIONS
 {

@@ -10,6 +10,15 @@ _start:
   ldr r1, =__stack_end__
   mov sp, r1
 
+  /* Enable the FPU (CP10/CP11 full access) before any C runs. The hard-float ABI and
+     the generated COM/DBC f64 path emit VFP instructions that UsageFault otherwise. */
+  ldr r0, =0xE000ED88
+  ldr r1, [r0]
+  orr r1, r1, #(0xF << 20)
+  str r1, [r0]
+  dsb
+  isb
+
   /* Copy initialised sections into RAM if required. */
   ldr r0, =__data_load_start__
   ldr r1, =__data_start__
@@ -22,14 +31,7 @@ _start:
   mov r2, #0
   bl crt0_memory_set
 
-  /* Setup heap - not recommended for Threadx but here for compatibility reasons */
-  ldr r0, = __heap_start__
-  ldr r1, = __heap_end__
-  sub r1, r1, r0
-  mov r2, #0
-  str r2, [r0]
-  add r0, r0, #4
-  str r1, [r0]
+  /* No heap setup: __HEAPSIZE__ = 0 (no runtime heap; ThreadX uses static memory). */
 
   /* constructors in case of using C++ */
   ldr r0, =__ctors_start__
@@ -63,8 +65,10 @@ crt0_exit_loop:
   /* Startup helper functions. */
 
 crt0_memory_copy:
+  cmp r1, r2
+  beq memory_copy_done   /* dest range empty (no initialised .data) -> nothing to copy */
   cmp r0, r1
-  beq memory_copy_done
+  beq memory_copy_done   /* load addr == dest -> already in place */
 memory_copy_loop:
   ldrb r3, [r0]
   add r0, r0, #1

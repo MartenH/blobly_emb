@@ -100,8 +100,16 @@ _tx_initialize_low_level:
     LDR     r1, [r1]                                // Pickup reset stack pointer
     STR     r1, [r0]                                // Save system stack pointer
 
-    /* Enable the cycle count register.  */
-    LDR     r0, =0xE0001000                         // Build address of DWT register
+    /* Enable the cycle count register. On real M7 (H735) DWT->CYCCNT stays frozen unless
+       CoreDebug->DEMCR.TRCENA (bit 24) is set first — Phase 2+ timestamps trace from it. */
+    LDR     r0, =0xE000EDFC                         // CoreDebug->DEMCR
+    LDR     r1, [r0]
+    ORR     r1, r1, #0x01000000                     // TRCENA
+    STR     r1, [r0]
+    LDR     r0, =0xE0001004                         // DWT->CYCCNT
+    MOV     r1, #0
+    STR     r1, [r0]                                // clear the counter
+    LDR     r0, =0xE0001000                         // DWT->CTRL
     LDR     r1, [r0]                                // Pickup the current value
     ORR     r1, r1, #1                              // Set the CYCCNTENA bit
     STR     r1, [r0]                                // Enable the cycle count register
