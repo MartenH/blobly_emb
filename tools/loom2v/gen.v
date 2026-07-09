@@ -456,6 +456,12 @@ fn main() {
 		panic('loom2v: [target] kind="threadx" with [trace] is not generated yet (phase 6b — the ' +
 			'ThreadX comm thread + trace dump); set [trace].enabled = false for threadx builds')
 	}
+	// The threadx app thread opens the telemetry bus for its CAN channel, so the target needs
+	// [telemetry] with a bus (the schema makes [telemetry] optional in general).
+	if target_threadx && telem_bus == '' {
+		panic('loom2v: [target] kind="threadx" needs a [telemetry] block with a bus — the app ' +
+			'thread opens it for the CAN channel')
+	}
 
 	// The trace cmd/rsp + dump ride a CAN channel: trace.bus, or [telemetry].bus by default.
 	eff_trace_bus := if trace_bus != '' { trace_bus } else { telem_bus }
@@ -1608,6 +1614,12 @@ fn main() {
 		// SysTick for the threadx target), all from ecu.toml rather than hardcoded.
 		app_thread := (threads_of[part] or { [''] })[0]
 		tx_prio := thread_prio[app_thread] or { 10 }
+		// ThreadX priorities are 0..TX_MAX_PRIORITIES-1 (default 32); a value the schema type-checks
+		// but the kernel rejects would make tx_thread_create fail and start no thread. Catch it here.
+		if target_threadx && (tx_prio < 0 || tx_prio > 31) {
+			panic('loom2v: [target] kind="threadx" thread "${app_thread}" priority ${tx_prio} is out ' +
+				'of the ThreadX range 0..31')
+		}
 		mut tx_bus_fd := false
 		mut tx_bus_idx := '0'
 		if target_threadx {
@@ -1726,7 +1738,9 @@ fn main() {
 			glue << ''
 			glue << 'fn ${part}_thread_entry(input u32) {'
 			glue << '\tmut ch := can.Channel{}'
-			glue << "\tch.open('${tx_bus_idx}', ${tx_bus_fd}) // ${telem_bus}; board clocks/pins set by main.v"
+			glue << "\tif !ch.open('${tx_bus_idx}', ${tx_bus_fd}) { // ${telem_bus}; board clocks/pins set by main.v"
+			glue << '\t\treturn // CAN open failed (bad bus index / FD unsupported) — don\'t run with a dead channel'
+			glue << '\t}'
 			glue << '\trun(ch)'
 			glue << '}'
 			glue << ''

@@ -102,7 +102,9 @@ pub fn run(can0 can.Channel) {
 
 fn app_thread_entry(input u32) {
 	mut ch := can.Channel{}
-	ch.open('0', false) // can0; board clocks/pins set by main.v
+	if !ch.open('0', false) { // can0; board clocks/pins set by main.v
+		return // CAN open failed (bad bus index / FD unsupported) — don't run with a dead channel
+	}
 	run(ch)
 }
 
