@@ -50,7 +50,7 @@ _vectors:
   .word __tx_BadHandler
   .word __tx_BadHandler
   .word __tx_BadHandler
-  .word __tx_BadHandler
+  .word FDCAN1_IT0_IRQHandler   // IRQ19 = FDCAN1 interrupt line 0 (Rx FIFO0 new msg)
   .word __tx_BadHandler
   .word __tx_BadHandler
   .word __tx_BadHandler
