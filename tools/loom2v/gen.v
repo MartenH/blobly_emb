@@ -325,14 +325,17 @@ fn main() {
 	mut core_of := map[string]int{}
 	mut threads_of := map[string][]string{} // partition -> its thread names, declaration order
 	mut thread_part := map[string]string{} // thread -> partition (thread names are GLOBALLY unique)
+	mut thread_prio := map[string]int{} // thread -> [[partition.thread]].priority (default 10)
 	for p in ecumodel.toml_arr(doc, 'partition') {
 		m := p.as_map()
 		pname := (m['name'] or { toml.Any('') }).string()
 		core_of[pname] = int((m['core'] or { toml.Any(0) }).int())
 		for t in (m['thread'] or { toml.Any([]toml.Any{}) }).array() {
-			tname := (t.as_map()['name'] or { toml.Any('') }).string()
+			tm := t.as_map()
+			tname := (tm['name'] or { toml.Any('') }).string()
 			thread_part[tname] = pname
 			threads_of[pname] << tname
+			thread_prio[tname] = int((tm['priority'] or { toml.Any(10) }).int())
 		}
 	}
 	// An fb maps to a THREAD (globally unique); its partition is DERIVED from that thread, so
@@ -425,11 +428,18 @@ fn main() {
 	// spawned partitions + osal. No threads, no osal (POSIX now_us/sleep_us don't
 	// exist bare-metal); the timebase is board_now_us() and the loop paces to a fixed
 	// tick. Requires all signals partition-local (no COM bus bridge).
+	// [target] kind selects the on-target emitter: 'baremetal' is the single-core inline
+	// superloop (P3c-0); 'threadx' (P3c-1) wraps the same FB/telemetry work in a real
+	// ThreadX thread paced by tx_thread_sleep (the preemptive-RTOS target — see
+	// examples/threadx_h735, the hand-written golden reference this generates).
 	mut target_on := false
+	mut target_threadx := false
 	mut target_tick_us := u64(1000)
 	if tgt := doc.value_opt('target') {
 		tm := tgt.as_map()
-		target_on = (tm['kind'] or { toml.Any('') }).string() == 'baremetal'
+		kind := (tm['kind'] or { toml.Any('') }).string()
+		target_threadx = kind == 'threadx'
+		target_on = kind == 'baremetal' || target_threadx
 		if tms := tm['tick_ms'] {
 			target_tick_us = u64(tms.int()) * 1000
 		}
@@ -437,6 +447,31 @@ fn main() {
 	if target_on && has_external {
 		panic('loom2v: [target] baremetal does not support external/bus signals yet ' +
 			'(every [[signal]] must be partition-local: from == to)')
+	}
+	// Phase 6a emits the ThreadX target WITHOUT trace: a traced config would otherwise fall
+	// into the bare-metal inline-trace emitter below (trace_target = trace_on && target_on),
+	// which emits run() but NOT tx_application_define/boot() — a broken image. Reject it until
+	// the ThreadX comm-thread + trace emitter lands (phase 6b).
+	if target_threadx && trace_on {
+		panic('loom2v: [target] kind="threadx" with [trace] is not generated yet (phase 6b — the ' +
+			'ThreadX comm thread + trace dump); set [trace].enabled = false for threadx builds')
+	}
+	// The threadx app thread opens the telemetry bus for its CAN channel, so the target needs
+	// [telemetry] ENABLED, with a bus that actually exists (the schema makes all of that
+	// optional in general, and only `driver.can` gets imported when telem_on).
+	if target_threadx {
+		mut bus_exists := false
+		if busv := doc.value_opt('bus') {
+			bus_exists = telem_bus in busv.as_map()
+		}
+		if !telem_on || telem_bus == '' {
+			panic('loom2v: [target] kind="threadx" needs [telemetry] enabled with a bus — the app ' +
+				'thread opens it for the CAN channel')
+		}
+		if !bus_exists {
+			panic('loom2v: [target] kind="threadx": [telemetry].bus = "${telem_bus}" has no matching ' +
+				'[bus.${telem_bus}]')
+		}
 	}
 
 	// The trace cmd/rsp + dump ride a CAN channel: trace.bus, or [telemetry].bus by default.
@@ -463,6 +498,15 @@ fn main() {
 			'host-style capture on the board timebase); multi-thread / ISR capture is the larger P3c slice')
 	}
 	has_bridge := has_external || isotp_conns.len > 0 || has_routes
+	// The threadx target has no COM bridge / comm thread yet (phase 6b). has_external is
+	// already rejected for any target above, but ISO-TP conns and routes make has_bridge true
+	// without has_external — reject those too rather than emit a partition_* bridge loop with no
+	// ThreadX comm thread / FDCAN Rx ISR to drive it.
+	if target_threadx && has_bridge {
+		panic('loom2v: [target] kind="threadx" with a COM bridge (external signals / routes / ' +
+			'ISO-TP) is not generated yet (phase 6b — the ThreadX comm thread + FDCAN Rx ISR); ' +
+			'drop the bridge config for threadx builds')
+	}
 	// Which buses run a COM bridge (an external signal, an ISO-TP conn, or a route touches them).
 	// P3b traces each bridge as a `comm_<bus>` thread; the DIFFERENT-bus case (trace rides a bus with
 	// no bridge) reuses the P3a owner cleanly, the SAME-bus case (the bridge owns the trace channel)
@@ -1585,8 +1629,73 @@ fn main() {
 		}
 		part := by_part.keys()[0]
 		chp := snake(telem_bus)
+		// ThreadX target config: the app thread's priority, the telem bus fd-mode + index, and
+		// the sleep-per-pass in ThreadX ticks (1 tick = 1 ms; tx_initialize_low_level runs a 1 kHz
+		// SysTick for the threadx target), all from ecu.toml rather than hardcoded.
+		app_thread := (threads_of[part] or { [''] })[0]
+		tx_prio := thread_prio[app_thread] or { 10 }
+		// ThreadX priorities are 0..TX_MAX_PRIORITIES-1 (default 32); a value the schema type-checks
+		// but the kernel rejects would make tx_thread_create fail and start no thread. Catch it here.
+		if target_threadx && (tx_prio < 0 || tx_prio > 31) {
+			panic('loom2v: [target] kind="threadx" thread "${app_thread}" priority ${tx_prio} is out ' +
+				'of the ThreadX range 0..31')
+		}
+		mut tx_bus_fd := false
+		mut tx_bus_idx := '0'
+		if target_threadx {
+			if bc := doc.value('bus').as_map()[telem_bus] {
+				tx_bus_fd = (bc.as_map()['fd'] or { toml.Any(false) }).bool()
+			}
+			// The register-level FDCAN backend is classic-only (blob_can_open rejects fd_mode), so
+			// a CAN-FD telemetry bus would open -1 and the thread would exit. Reject it at gen time.
+			if tx_bus_fd {
+				panic('loom2v: [target] kind="threadx": bus "${telem_bus}" has fd = true, but the ' +
+					'FDCAN backend used here is classic-only — set [bus.${telem_bus}].fd = false')
+			}
+			// The driver opens the bus by a SINGLE-digit index "0".."2" (blob_can_open reads
+			// name[0]-'0'); derive it from the bus name (e.g. "can0" -> "0"). Require exactly one
+			// digit in 0..2 — reject a name with no digit ("powertrain" -> bus 0 silently) OR an
+			// ambiguous multi-digit one ("can10"/"can01", where the driver would read only '1'/'0').
+			mut digits := ''
+			for cc in telem_bus {
+				if cc >= `0` && cc <= `9` {
+					digits += cc.ascii_str()
+				}
+			}
+			if digits.len != 1 || digits[0] < `0` || digits[0] > `2` {
+				panic('loom2v: [target] kind="threadx": telemetry bus "${telem_bus}" must name a single ' +
+					'FDCAN index 0..2 (e.g. "can0") — the driver opens buses by a one-digit index')
+			}
+			tx_bus_idx = digits
+		}
+		tx_sleep_ticks := if target_tick_us / 1000 > 1 { target_tick_us / 1000 } else { u64(1) }
 		glue << ''
 		glue << 'fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)'
+		if target_threadx {
+			// ThreadX target: the FB superloop runs inside a real ThreadX thread (paced by
+			// tx_thread_sleep) that tx_application_define creates on tx_kernel_enter. TCB + stack
+			// are static (globals). This partition has one thread; a multi-thread config would
+			// emit one thread per partition.thread (+ a triple-buffer IOC for cross-thread signals).
+			// The ThreadX API by FFI decl only (NOT #include "tx_api.h" — that pulls <string.h>,
+			// whose strlen conflicts with V's own). The TCB is an opaque byte buffer (>= the
+			// port's sizeof(TX_THREAD) = 200 B on cortex_m7); tx_thread_create just needs the
+			// storage, and a void* is ABI-compatible with the TX_THREAD* the kernel expects.
+			// The public tx_* names are macros in tx_api.h; without the header we bind the
+			// real symbols the kernel exports (_tx_initialize_kernel_enter, _tx_thread_create,
+			// _tx_thread_sleep).
+			glue << 'fn C._tx_thread_sleep(u32) u32'
+			glue << 'fn C._tx_initialize_kernel_enter()'
+			glue << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
+			glue << ''
+			// TCB as [32]u64 (256 B >= sizeof(TX_THREAD) = 200 B) so it is 8-byte aligned — the
+			// kernel reads/writes word fields through this pointer as a TX_THREAD*, so a byte-
+			// aligned [256]u8 could fault. The stack stays a byte buffer (ThreadX aligns the SP
+			// internally in tx_thread_stack_build).
+			glue << '__global ('
+			glue << '\tg_${part}_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned'
+			glue << '\tg_${part}_stack [4096]u8'
+			glue << ')'
+		}
 		glue << ''
 		glue << 'pub fn run(${chp} can.Channel) {'
 		glue << '\tmut ch := ${chp}'
@@ -1604,7 +1713,9 @@ fn main() {
 			}
 		}
 		glue << '\ttick_us := u64(${target_tick_us})'
-		glue << '\tmut next_tick := C.board_now_us() + tick_us'
+		if !target_threadx {
+			glue << '\tmut next_tick := C.board_now_us() + tick_us'
+		}
 		glue << '\tfor {'
 		glue << '\t\tt0 := C.board_now_us()'
 		glue << '\t\tsched.run(t0)'
@@ -1642,14 +1753,46 @@ fn main() {
 			}
 			glue << '\t\t}'
 		}
-		glue << '\t\tfor C.board_now_us() < next_tick {} // idle to the tick (real idle)'
-		glue << '\t\tnext_tick += tick_us'
-		glue << '\t\tnow := C.board_now_us()'
-		glue << '\t\tif now > next_tick { // a pass overran the tick — resync'
-		glue << '\t\t\tnext_tick = now + tick_us'
-		glue << '\t\t}'
+		if target_threadx {
+			// Yield to the RTOS between passes: sleep the configured tick (in 1 ms ThreadX
+			// ticks), so lower-priority threads run and the Loom's load = run-time / wall-clock
+			// stays honest (no busy-wait). ThreadX runs a 1 kHz SysTick for the threadx target.
+			glue << '\t\tC._tx_thread_sleep(u32(${tx_sleep_ticks}))'
+		} else {
+			glue << '\t\tfor C.board_now_us() < next_tick {} // idle to the tick (real idle)'
+			glue << '\t\tnext_tick += tick_us'
+			glue << '\t\tnow := C.board_now_us()'
+			glue << '\t\tif now > next_tick { // a pass overran the tick — resync'
+			glue << '\t\t\tnext_tick = now + tick_us'
+			glue << '\t\t}'
+		}
 		glue << '\t}'
 		glue << '}'
+		if target_threadx {
+			// The ThreadX app thread + the kernel's application-define entry. main.v does the board
+			// clock/CAN init then C.tx_kernel_enter(), which calls tx_application_define below.
+			glue << ''
+			glue << 'fn ${part}_thread_entry(input u32) {'
+			glue << '\tmut ch := can.Channel{}'
+			glue << "\tif !ch.open('${tx_bus_idx}', ${tx_bus_fd}) { // ${telem_bus}; board clocks/pins set by main.v"
+			glue << '\t\treturn // CAN open failed (bad bus index / FD unsupported) — don\'t run with a dead channel'
+			glue << '\t}'
+			glue << '\trun(ch)'
+			glue << '}'
+			glue << ''
+			glue << "@[export: 'tx_application_define']"
+			glue << 'fn tx_application_define(first_unused voidptr) {'
+			glue << '\tC._tx_thread_create(&g_${part}_tcb[0], c\'${part}\', ${part}_thread_entry, u32(0),'
+			glue << '\t\t&g_${part}_stack[0], u32(g_${part}_stack.len), u32(${tx_prio}), u32(${tx_prio}), u32(0), u32(1))'
+			glue << '}'
+			glue << ''
+			glue << '// boot: hand control to the ThreadX kernel (never returns; calls'
+			glue << '// tx_application_define above). main.v does the board bring-up then calls this —'
+			glue << '// referencing it also forces this module (incl. tx_application_define) to link.'
+			glue << 'pub fn boot() {'
+			glue << '\tC._tx_initialize_kernel_enter()'
+			glue << '}'
+		}
 	} else if trace_inline || trace_target {
 		// --- inline-trace run(): the single app core owns the trace bus channel and runs one
 		//     superloop — profiled dispatch + capture hook, the TraceCmd/TraceRsp handshake +

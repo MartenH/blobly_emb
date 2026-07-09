@@ -1,0 +1,74 @@
+# h735_threadx: the SAME FBs + Loom + CpuLoad telemetry as examples/h735_app, but the
+# [target] kind is "threadx" — loom2v wraps the FB superloop in a real ThreadX thread
+# (created by tx_application_define, paced by tx_thread_sleep) instead of the bare-metal
+# inline superloop. This is P3c-1 phase 6a: the generated counterpart of the hand-written
+# examples/threadx_h735 (the golden reference). Trace + the comm thread come in 6b.
+#
+# NOTE: no inline comments inside [[...]] tables — a comment in a nested table trips V's
+# TOML parser (drops the next key). See vlang/v#27684.
+
+[import]
+dbc = "bus.dbc"
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0
+
+[[partition]]
+name    = "app"
+core    = 0
+trusted = true
+
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+[[signal]]
+name = "LoadCmd"
+fields = { iters = "u32" }
+from = "app"
+to   = "app"
+transport = "double"
+
+[[signal]]
+name = "Workload"
+fields = { v = "u32" }
+from = "app"
+to   = "app"
+transport = "double"
+
+[[fb]]
+name      = "Governor"
+thread    = "app_main"
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  writes    = ["LoadCmd"]
+
+[[fb]]
+name      = "Load"
+thread    = "app_main"
+  [[fb.handler]]
+  name      = "on_1ms"
+  period_ms = 1
+  reads     = ["LoadCmd"]
+  writes    = ["Workload"]
+
+[[fb]]
+name      = "Heartbeat"
+thread    = "app_main"
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100 # timer-only handler (this trailing comment terminates the [[fb.handler]] array parse)
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E0
+detail_id = 0x7E1
+period_ms = 500
+
+[target]
+kind    = "threadx"
+tick_ms = 1
