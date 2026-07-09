@@ -1471,6 +1471,7 @@ fn main() {
 		glue << '\t\t\t\tlink.on_frame(osal.now_us(), p)'
 		glue << '\t\t\t}'
 		glue << '\t\t}'
+		glue << '\t\tlink.tick(osal.now_us()) // advance the N_Bs timeout even when tx_ready gates poll out'
 		glue << '\t\tmut tp := isotp.Pdu{}'
 		// Gate on tx_ready so a dump never overruns the Tx FIFO or blocks in the driver — send at most
 		// a FIFO\'s worth per pass, resume next pass. poll() advances tx state, so only poll when
@@ -1837,6 +1838,7 @@ fn main() {
 		glue << '\t\t\t\tlink.on_frame(${nowcall}, p)'
 		glue << '\t\t\t}'
 		glue << '\t\t}'
+		glue << '\t\tlink.tick(${nowcall}) // advance the N_Bs timeout even when tx_ready gates poll out'
 		glue << '\t\tmut tp := isotp.Pdu{}'
 		// Gate on tx_ready so the dump never overruns the Tx FIFO or blocks in the driver — send at
 		// most a FIFO\'s worth per pass and resume next pass (poll advances tx state, so only poll when

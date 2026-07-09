@@ -293,6 +293,7 @@ fn partition_trace(chp can.Channel, base voidptr, ncores int) {
 				link.on_frame(osal.now_us(), p)
 			}
 		}
+		link.tick(osal.now_us()) // advance the N_Bs timeout even when tx_ready gates poll out
 		mut tp := isotp.Pdu{}
 		for ch.tx_ready() && link.poll(osal.now_us(), mut tp) {
 			mut pf := can.Frame{

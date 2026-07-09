@@ -179,6 +179,7 @@ pub fn run(can0 can.Channel) {
 				link.on_frame(C.board_now_us(), p)
 			}
 		}
+		link.tick(C.board_now_us()) // advance the N_Bs timeout even when tx_ready gates poll out
 		mut tp := isotp.Pdu{}
 		for ch.tx_ready() && link.poll(C.board_now_us(), mut tp) {
 			mut pf := can.Frame{

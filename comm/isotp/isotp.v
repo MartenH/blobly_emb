@@ -209,6 +209,16 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 }
 
 // poll produces the next PDU to send, if any (FC has priority, then the tx FSM).
+// tick advances the link's time-based state (the N_Bs flow-control timeout) independently
+// of poll(). A caller that gates poll() on Tx-FIFO space (`for tx_ready() && poll(...)`) must
+// call tick() every cycle so a full FIFO can't wedge the link in wait_fc forever — otherwise a
+// dump on a down/quiet bus (FF sent, no FC, FIFO stays full) never reaches its abort deadline.
+pub fn (mut l Link) tick(now u64) {
+	if l.tx == .wait_fc && l.n_bs_us != 0 && now >= l.fc_deadline {
+		l.tx = .idle // N_Bs elapsed with no flow control -> abort so the next tx is free
+	}
+}
+
 pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 	if l.fc_send {
 		zero(mut out)
