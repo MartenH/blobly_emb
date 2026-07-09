@@ -15,7 +15,7 @@ derives = "SYS-REQ-DIAG-001"
 [[req]]
 id = "REQ-TP-002"
 title = "Flow control and timeout"
-text = "The transport shall honour and emit flow control (block size, separation time) and shall abort a transmit that makes no progress within its N_Bs timeout (a flow-control frame not received, or the Tx path unable to accept the next frame, in time), so a lost or stalled peer cannot leave the sender wedged."
+text = "The transport shall honour and emit flow control (block size, separation time) and shall bound both directions with a timeout: abort a transmit whose flow control (or Tx-path readiness) makes no progress within N_Bs, and abort a reassembly whose next consecutive frame does not arrive within N_Cr (discarding the partial message). So neither a stalled sender nor a stalled receiver can wedge the connection or leak a half-assembled message."
 status = "draft"
 method = "test"
 asil = "QM"
