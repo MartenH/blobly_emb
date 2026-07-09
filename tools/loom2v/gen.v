@@ -1191,7 +1191,15 @@ fn main() {
 				glue << '\t\ttx_${msg}_any = true'
 				glue << '\t}'
 			}
-			glue << '\tif tx_${msg}_any && st.tx_${msg}_st.should_send(now, tx_${msg}.data, ${msg}_dlc) {'
+			// Gate on tx_ready() BEFORE the change decision so a full Tx FIFO neither
+			// advances the E2E/SecOC counter nor consumes the change/trigger — the PDU
+			// just retries next tick (REQ-COM-006). mark_sent() commits the send only
+			// once the channel accepts the frame.
+			needs_pre := (e2e_on[msg] or { false }) || (secoc_on[msg] or { false })
+			glue << '\tif tx_${msg}_any && st.chan.tx_ready() && st.tx_${msg}_st.should_send(now, tx_${msg}.data, ${msg}_dlc) {'
+			if needs_pre {
+				glue << '\t\ttx_${msg}_pre := tx_${msg}.data // pre-E2E/SecOC payload, for change detection'
+			}
 			if e2e_on[msg] or { false } {
 				// stamp CRC + counter after the change decision (so the counter
 				// doesn't make every frame look "changed" to on-change modes)
@@ -1207,7 +1215,10 @@ fn main() {
 					0
 				}})'
 			}
-			glue << '\t\tst.chan.send(tx_${msg})'
+			mark_arg := if needs_pre { 'tx_${msg}_pre' } else { 'tx_${msg}.data' }
+			glue << '\t\tif st.chan.send(tx_${msg}) {'
+			glue << '\t\t\tst.tx_${msg}_st.mark_sent(now, ${mark_arg}, ${msg}_dlc)'
+			glue << '\t\t}'
 			glue << '\t}'
 		}
 		glue << '}'
