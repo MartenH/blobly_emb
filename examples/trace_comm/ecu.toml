@@ -1,0 +1,74 @@
+# trace_comm — the COMM THREAD visible in the trace (P3b, different-bus slice).
+#
+# VehicleSpeed arrives on can0; the generated COM bridge decodes it into the IOC region, and the
+# app FB (SpeedWork, its own core) reads it. Trace rides a DEDICATED bus, can1, so partition_trace
+# owns that channel and the can0 bridge is just another traced producer — its per-drain-cycle work
+# shows up as a `comm_can0` lane beside the app lanes in the dump. (Same-bus piggyback is a
+# follow-up; see docs/trace-multicore.md §4.3.)
+#
+#   sudo make vcan      # brings up vcan0 + vcan1
+#   make run            # generate + build + run
+
+[import]
+dbc = "bus.dbc"
+
+# can0: the app signal bus — an external rx signal makes this a COM bridge (the comm thread).
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0
+
+# can1: a dedicated trace/diagnostic bus — no signals, so no bridge; partition_trace owns it.
+[bus.can1]
+interface = "vcan1"
+fd        = false
+core      = 0
+
+[telemetry]
+enabled   = true
+bus       = "can1"
+id        = 0x7E0
+period_ms = 500
+
+[trace]
+bus            = "can1"        # the dedicated trace bus (no bridge) — different-bus P3b
+level          = "thread+fb"
+buffer_records = 64
+mode           = "ring"
+pre_pct        = 50
+push_ms        = 0
+cmd_id         = 0x7E2
+rsp_id         = 0x7E3
+stat_id        = 0x7E4
+record_id      = 0x7E5
+dump_fc_id     = 0x7E6
+trigger        = { source = "overrun", budget_us = 500 }
+
+# One app partition on its own core (core 1); the comm thread (can0 bridge) sits on core 0.
+[[partition]]
+name    = "app"
+core    = 1
+trusted = false
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+[[signal]]
+name = "VehicleSpeed"
+fields = { kph = "u16", valid = "bool" }
+from = "can0"        # EXTERNAL: in on can0 -> the comm bridge decodes it
+to   = "app"
+transport = "double"
+
+[[frame]]
+name = "Powertrain"
+bus  = "can0"
+rx   = { timeout_ms = 200 }
+
+[[fb]]
+name   = "SpeedWork"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["VehicleSpeed"]

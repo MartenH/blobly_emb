@@ -100,7 +100,14 @@ while trace rides `trace.bus`.
 Deliverable: a `trace_multicore` example (2 partitions, cores 0+1, fb-only) that dumps two blocks;
 `cmd/trace_dump` already prints multi-block, and the swimlane already lanes-by-core.
 
-## 4. Comm thread visible — **P3b** (designed, not built)
+## 4. Comm thread visible — **P3b** (different-bus BUILT; same-bus next)
+
+> **Shipped:** the different-bus slice (§4.3) — `examples/trace_comm` (an app FB on core 1 + a
+> `VehicleSpeed` external signal → a `comm_can0` bridge on core 0 + a dedicated trace bus `can1`).
+> The bridge loop is instrumented as a traced comm thread (ring + THREAD/idle spans per drain cycle
+> + a `comm_can0` manifest row + the P3a single-writer coordination), and `partition_trace` on `can1`
+> reads its ring — verified on vcan: the dump shows a `comm_can0` lane beside the app lanes. The
+> **same-bus** piggyback case (§4.3) is the remaining follow-up.
 
 Lift the `has_bridge` trace panic ([gen.v:473](../tools/loom2v/gen.v)) and make each per-bus bridge a
 **first-class traced comm thread**, so COM/codec/ISO-TP/routing overhead shows as its own lane — the
