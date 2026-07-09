@@ -33,23 +33,20 @@ extern int g_can; /* FDCAN1 handle (main.c opened bus index "0") */
 /* Comm-thread wake semaphore: the Rx ISR posts it, the comm thread waits on it. */
 static TX_SEMAPHORE g_comm_sem;
 
-/* FDCAN Tx mutex. blob_can_send is not reentrant (it reads TXFQS.TFQPI, writes the
- * message-RAM slot, then sets TXBAR — no lock), and there are now TWO ThreadX senders:
- * this comm thread (periodic tx) and the dumper (streaming the trace ring). Serialise
- * every send through comm_can_send() so a preemption between slot-select and TXBAR can't
- * make both callers grab the same FIFO slot. (Phase 6 makes the comm thread the single
- * bus owner and this goes away.) */
-static TX_MUTEX g_can_tx_mtx;
-
-/* The one guarded Tx path — both the comm periodic tx and the trace-ring dump call this.
- * Returns 0 on send, -1 if the Tx FIFO is full (caller paces/drops, never blocks). */
-int comm_can_send(uint32_t id, const unsigned char *data, unsigned char len)
-{
-    tx_mutex_get(&g_can_tx_mtx, TX_WAIT_FOREVER);
-    int r = blob_can_tx_ready(g_can) ? blob_can_send(g_can, id, data, len, 0) : -1;
-    tx_mutex_put(&g_can_tx_mtx);
-    return r;
-}
+/* No Tx lock. The system is lock-free by SINGLE-OWNER-PER-CORE: THIS comm thread is the
+ * sole caller of blob_can_send for its core's bus(es) — the periodic tx and the trace-ring
+ * stream both run here, on one thread, so they can never race the non-reentrant driver, and
+ * no mutex is needed. FB threads never touch CAN; they publish signals lock-free via the
+ * triple-buffer IOC and the comm thread reads them. */
+/* trace_hooks.c is a driver-independent recorder — trace_snapshot() copies the ring into
+ * our buffer under a brief freeze, then re-arms; WE (the bus owner) stream that stable copy
+ * over CAN, interleaved with rx-drain. Streaming from a copy means the recorder is live
+ * throughout the stream (no lost capture window) and records can't be torn by new pushes. */
+extern unsigned trace_snapshot(unsigned char out[][8], unsigned max);
+#define TRACE_RECORD_ID 0x7E5u
+#define TRACE_RING 256u /* == trace_hooks RING_CAP */
+#define TRACE_CHUNK 16u /* records streamed per comm-thread iteration (bounds the rx gap) */
+static unsigned char g_trace_snap[TRACE_RING][8]; /* stable copy the owner streams from */
 
 /* IOC cell: last received frame + a receive counter, written by the comm thread and
  * read by any consumer thread (Phase 5 makes this a real triple-buffer). volatile so a
@@ -78,21 +75,25 @@ void FDCAN1_IT0_IRQHandler(void)
 void comm_rx_irq_enable(void)
 {
     tx_semaphore_create(&g_comm_sem, "comm_sem", 0);
-    tx_mutex_create(&g_can_tx_mtx, "can_tx", TX_NO_INHERIT);
     FDCAN1->IE  |= FDCAN_IE_RF0NE;   /* Rx FIFO0 new message -> interrupt */
     FDCAN1->ILE |= FDCAN_ILE_EINT0;  /* route the group to interrupt line 0 */
     NVIC_SetPriority(FDCAN1_IT0_IRQn, 4u); /* 4<<4 = 0x40 == SysTick: no nesting */
     NVIC_EnableIRQ(FDCAN1_IT0_IRQn);
 }
 
-/* The comm thread: rx-driven decode into the IOC cell + periodic (~100 ms) tx. Waits on
- * the semaphore with a 100 ms cap so it also runs when the bus is quiet (for the tx). */
+/* The comm thread — the sole owner of this core's bus (single-writer => lock-free). It
+ * drains rx into the IOC cell, does the periodic (~100 ms) tx, and streams the trace ring
+ * (~1 s). All CAN tx happens HERE, on one thread, so nothing races. Waits on the semaphore
+ * with a 100 ms cap so it still runs its timers when the bus is quiet. */
 void comm_thread(ULONG unused)
 {
     (void)unused;
     ULONG last_tx = tx_time_get();
+    ULONG last_trace = tx_time_get();
+    unsigned tr_pos = 0, tr_n = 0;
+    int tr_active = 0; /* mid-stream of a trace snapshot */
     for (;;) {
-        tx_semaphore_get(&g_comm_sem, 10); /* wake on rx, or every ~100 ms for the tx */
+        tx_semaphore_get(&g_comm_sem, 10); /* wake on rx, or every ~100 ms for the timers */
 
         /* Drain every queued frame (blob_can_recv returns 0 per frame, -1 when empty) —
          * so a burst that posted the semaphore once is fully consumed (no loss). */
@@ -105,12 +106,12 @@ void comm_thread(ULONG unused)
             g_comm_rx.count++;
         }
 
+        ULONG now = tx_time_get();
+
         /* Periodic tx ~100 ms: publish the Workload signal that flowed Governor -> LoadCmd
          * IOC -> Load -> Workload IOC -> here, so the whole cross-thread FB chain is
-         * observable on the bus. bytes 0-3 = iters (Governor's command Load acted on),
-         * bytes 4-7 = acc (Load's result). Through the guarded comm_can_send — dropped, not
-         * blocked, if the Tx FIFO is momentarily full (REQ-CAN-DRV-007). */
-        ULONG now = tx_time_get();
+         * observable on the bus. bytes 0-3 = iters, bytes 4-7 = acc. Direct blob_can_send
+         * (single owner) — dropped, not blocked, if the Tx FIFO is momentarily full. */
         if ((now - last_tx) >= 10u) {
             sig_t w = ioc_read(&g_workload);
             unsigned char p[8] = {
@@ -119,8 +120,37 @@ void comm_thread(ULONG unused)
                 (unsigned char)w.b, (unsigned char)(w.b >> 8),
                 (unsigned char)(w.b >> 16), (unsigned char)(w.b >> 24)
             };
-            comm_can_send(COMM_TX_ID, p, 8);
+            if (blob_can_tx_ready(g_can))
+                blob_can_send(g_can, COMM_TX_ID, p, 8, 0);
             last_tx = now;
+        }
+
+        /* Stream the trace ring ~1 s, INCREMENTALLY. Folding the old dumper thread into the
+         * bus owner made the tx path single-writer => lock-free (no Tx mutex), but a
+         * synchronous 256-record dump would stop this (highest-prio) thread from draining rx
+         * for its whole duration -> FIFO overflow. So stream only TRACE_CHUNK records per
+         * iteration and let the loop come back around (draining rx + re-checking the sem)
+         * between chunks. Records go only while the Tx FIFO has room — no wait/spin — so a
+         * stuck bus (no-ACK/bus-off) can never wedge the owner; the stream just doesn't
+         * finish (fine, nothing's listening on a dead bus). */
+        if (!tr_active && (now - last_trace) >= 100u) {
+            /* Copy the ring NOW (brief freeze inside trace_snapshot), then stream the stable
+             * copy across the next iterations — the recorder runs live meanwhile. */
+            tr_n = trace_snapshot(g_trace_snap, TRACE_RING);
+            tr_pos = 0;
+            tr_active = 1;
+        }
+        if (tr_active) {
+            unsigned sent = 0;
+            while (tr_pos < tr_n && sent < TRACE_CHUNK && blob_can_tx_ready(g_can)) {
+                blob_can_send(g_can, TRACE_RECORD_ID, g_trace_snap[tr_pos], 8, 0);
+                tr_pos++;
+                sent++;
+            }
+            if (tr_pos >= tr_n) {
+                tr_active = 0;
+                last_trace = tx_time_get(); /* measure the next gap from stream-END */
+            }
         }
     }
 }
