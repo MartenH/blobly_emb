@@ -119,10 +119,13 @@ void comm_thread(ULONG unused)
         /* Stream the trace ring ~1 s. This used to be a separate dumper thread + a Tx mutex;
          * folding it into the bus owner makes the whole tx path single-writer => lock-free.
          * (Rx is FDCAN-FIFO-buffered during the ~stream; heavy-rx buses would split onto
-         * their own core's owner thread — see the per-core ownership model.) */
+         * their own core's owner thread — see the per-core ownership model.) Re-read the
+         * clock AFTER the dump: a back-pressure-paced stream can itself run ~a period, so
+         * measuring the next interval from dump-END (not dump-start) keeps the ~1 s gap
+         * instead of dumping back-to-back. */
         if ((now - last_trace) >= 100u) {
             trace_dump_can(g_can, TRACE_RECORD_ID);
-            last_trace = now;
+            last_trace = tx_time_get();
         }
     }
 }

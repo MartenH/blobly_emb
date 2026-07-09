@@ -194,10 +194,19 @@ void trace_dump_can(int h, unsigned long rec_id)
     unsigned start = total > RING_CAP ? total - RING_CAP : 0;
     for (unsigned i = 0; i < n; i++) {
         unsigned char *r = g_ring[(start + i) & (RING_CAP - 1u)];
-        /* Non-blocking + back-pressure aware (REQ-CAN-DRV-007): yield the CPU while the
-         * Tx FIFO is full instead of spinning, so a slow drain never wedges the core. */
-        while (!blob_can_tx_ready(h))
+        /* Non-blocking + back-pressure aware (REQ-CAN-DRV-007): yield the CPU while the Tx
+         * FIFO is full instead of spinning. BOUNDED — since this runs on the sole bus owner,
+         * a persistently-full FIFO (no-ACK / bus-off / bad handle) must not wedge it: after a
+         * short wait, abort the dump (drop the rest) so the owner returns to draining rx/tx.
+         * Normal back-pressure drains in << this bound (8 frames ~ 1 ms at 500 kbit). */
+        unsigned waited = 0;
+        while (!blob_can_tx_ready(h)) {
+            if (++waited > 20u) { /* ~20 ms: the bus is stuck, not just back-pressured */
+                g_capturing = 1; /* re-arm before bailing so capture continues */
+                return;
+            }
             tx_thread_sleep(1);
+        }
         blob_can_send(h, (uint32_t)rec_id, r, 8, 0);
     }
     g_capturing = 1; /* re-arm: keep recording between dumps so late activity is captured */
