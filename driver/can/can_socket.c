@@ -57,6 +57,13 @@ int blob_can_send(int sock, uint32_t id, const uint8_t *data, uint8_t len, int f
 	return n == (ssize_t)sizeof(f) ? 0 : -1;
 }
 
+/* Host SocketCAN queues in a large kernel buffer, so it's effectively always ready —
+ * a burst sender (the ISO-TP dump) never fills it. Mirrors the target's tx_ready gate. */
+int blob_can_tx_ready(int sock) {
+	(void)sock;
+	return 1;
+}
+
 int blob_can_recv(int sock, uint32_t *id, uint8_t *data, uint8_t *len) {
 	/* canfd_frame buffer receives BOTH classic (16B) and FD (72B) frames:
 	 * can_id @0, len/can_dlc @4, data @8 in both layouts. */

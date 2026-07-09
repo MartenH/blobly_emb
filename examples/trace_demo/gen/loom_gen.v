@@ -164,7 +164,7 @@ pub fn run(can0 can.Channel) {
 			}
 		}
 		mut tp := isotp.Pdu{}
-		for link.poll(osal.now_us(), mut tp) {
+		for ch.tx_ready() && link.poll(osal.now_us(), mut tp) {
 			mut pf := can.Frame{
 				id:  u32(0x7e5)
 				len: 8

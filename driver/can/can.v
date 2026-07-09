@@ -14,6 +14,7 @@ module can
 fn C.blob_can_open(&char, int) int
 fn C.blob_can_send(int, u32, &u8, u8, int) int
 fn C.blob_can_recv(int, &u32, &u8, &u8) int
+fn C.blob_can_tx_ready(int) int
 fn C.blob_can_close(int)
 
 pub const max_dlc = u8(64)
@@ -41,6 +42,14 @@ pub fn (mut c Channel) open(ifname string, fd_mode bool) bool {
 
 pub fn (mut c Channel) send(f Frame) bool {
 	return C.blob_can_send(c.sock, f.id, &f.data[0], f.len, if c.fd { 1 } else { 0 }) == 0
+}
+
+// tx_ready reports whether the Tx path can accept a frame now. A burst sender (the
+// ISO-TP dump) gates on this — `for c.tx_ready() && link.poll(...) { c.send(...) }` — so
+// it sends at most a FIFO's worth per pass and never blocks the loop/thread. Host
+// SocketCAN is always ready (large kernel queue).
+pub fn (c Channel) tx_ready() bool {
+	return C.blob_can_tx_ready(c.sock) != 0
 }
 
 // recv returns true and fills `f` when a frame is available; false if none.

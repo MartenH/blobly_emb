@@ -102,6 +102,13 @@ int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int fd_m
 	return 0;
 }
 
+/* 1 if the Tx FIFO queue has a free slot — the burst sender gates on this so it never
+ * overruns the FIFO or blocks. */
+int blob_can_tx_ready(int h) {
+	FDCAN_HandleTypeDef *hf = bus_handle(h);
+	return (hf && HAL_FDCAN_GetTxFifoFreeLevel(hf) > 0) ? 1 : 0;
+}
+
 int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
 	if (!hf) return -1;

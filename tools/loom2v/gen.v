@@ -1472,7 +1472,10 @@ fn main() {
 		glue << '\t\t\t}'
 		glue << '\t\t}'
 		glue << '\t\tmut tp := isotp.Pdu{}'
-		glue << '\t\tfor link.poll(osal.now_us(), mut tp) {'
+		// Gate on tx_ready so a dump never overruns the Tx FIFO or blocks in the driver — send at most
+		// a FIFO\'s worth per pass, resume next pass. poll() advances tx state, so only poll when
+		// there\'s room to send the frame it yields.
+		glue << '\t\tfor ch.tx_ready() && link.poll(osal.now_us(), mut tp) {'
 		glue << '\t\t\tmut pf := can.Frame{'
 		glue << '\t\t\t\tid:  u32(0x${trace_record_id.hex()})'
 		glue << '\t\t\t\tlen: 8'
@@ -1835,7 +1838,10 @@ fn main() {
 		glue << '\t\t\t}'
 		glue << '\t\t}'
 		glue << '\t\tmut tp := isotp.Pdu{}'
-		glue << '\t\tfor link.poll(${nowcall}, mut tp) {'
+		// Gate on tx_ready so the dump never overruns the Tx FIFO or blocks in the driver — send at
+		// most a FIFO\'s worth per pass and resume next pass (poll advances tx state, so only poll when
+		// there\'s room to send).
+		glue << '\t\tfor ch.tx_ready() && link.poll(${nowcall}, mut tp) {'
 		glue << '\t\t\tmut pf := can.Frame{'
 		glue << '\t\t\t\tid:  u32(0x${trace_record_id.hex()})'
 		glue << '\t\t\t\tlen: 8'
