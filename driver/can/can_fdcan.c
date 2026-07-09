@@ -129,8 +129,16 @@ int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int fd_m
 	if (!c || len > 8)
 		return -1; /* classic frame */
 	(void)fd_mode;
-	if (c->TXFQS & FDCAN_TXFQS_TFQF)
-		return -1; /* Tx FIFO full */
+	/* Wait (bounded) for a free Tx FIFO slot. A burst larger than the 8-deep FIFO —
+	 * the ISO-TP trace dump segments ~37 consecutive frames back-to-back — would
+	 * otherwise silently drop every frame past the 8th (the ISO-TP link advances its
+	 * tx_pos regardless), truncating the transfer. The bound stops a disconnected bus
+	 * (no ACK -> FIFO never drains) from hanging the super-loop; one frame drains in
+	 * ~230 us at 500 kbit, far inside the spin budget. */
+	for (uint32_t t = 0; (c->TXFQS & FDCAN_TXFQS_TFQF) != 0u; t++) {
+		if (t >= 1000000u)
+			return -1; /* FIFO stuck full (bus down?) -> drop rather than hang */
+	}
 
 	uint32_t pi = (c->TXFQS & FDCAN_TXFQS_TFQPI) >> FDCAN_TXFQS_TFQPI_Pos;
 	if (pi >= TX_ELMTS)
