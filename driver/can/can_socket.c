@@ -80,22 +80,25 @@ int blob_can_tx_ready(int sock) {
 }
 
 /* Per-socket cumulative kernel Rx-queue drop count, kept from the SO_RXQ_OVFL ancillary
- * data recvmsg() delivers. Small fixed table keyed by fd (a CAN socket is never fd 0, so
- * fd==0 marks an empty slot). open() claims/clears a slot, close() releases it. */
+ * data recvmsg() delivers. Small fixed table; a slot is free when !in_use (an explicit
+ * flag, not an fd sentinel — socket() can legitimately return fd 0 with stdin closed).
+ * open() claims/clears a slot, close() releases it. */
 #ifdef SO_RXQ_OVFL
 static struct {
 	int fd;
 	uint32_t ovfl;
+	int in_use;
 } g_ovfl[16];
 
 static void ovfl_store(int fd, uint32_t v) {
 	for (int i = 0; i < 16; i++)
-		if (g_ovfl[i].fd == fd) {
+		if (g_ovfl[i].in_use && g_ovfl[i].fd == fd) {
 			g_ovfl[i].ovfl = v;
 			return;
 		}
 	for (int i = 0; i < 16; i++)
-		if (g_ovfl[i].fd == 0) {
+		if (!g_ovfl[i].in_use) {
+			g_ovfl[i].in_use = 1;
 			g_ovfl[i].fd = fd;
 			g_ovfl[i].ovfl = v;
 			return;
@@ -107,7 +110,8 @@ static void ovfl_store(int fd, uint32_t v) {
 static void ovfl_reset(int fd) {
 #ifdef SO_RXQ_OVFL
 	for (int i = 0; i < 16; i++)
-		if (g_ovfl[i].fd == fd) {
+		if (g_ovfl[i].in_use && g_ovfl[i].fd == fd) {
+			g_ovfl[i].in_use = 0;
 			g_ovfl[i].fd = 0;
 			g_ovfl[i].ovfl = 0;
 		}
@@ -157,7 +161,7 @@ int blob_can_recv(int sock, uint32_t *id, uint8_t *data, uint8_t *len) {
 uint32_t blob_can_rx_overruns(int sock) {
 #ifdef SO_RXQ_OVFL
 	for (int i = 0; i < 16; i++)
-		if (g_ovfl[i].fd == sock)
+		if (g_ovfl[i].in_use && g_ovfl[i].fd == sock)
 			return g_ovfl[i].ovfl;
 #endif
 	(void)sock;

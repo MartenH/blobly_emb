@@ -78,10 +78,11 @@ id = "REQ-CAN-DRV-008"
 title = "Detect and report receive overrun"
 text = "When received frames arrive faster than they are drained and exceed the driver's receive buffering capacity, the CAN driver shall detect the resulting frame loss and report it to the upper layer as a count, rather than dropping frames silently."
 # The complement to REQ-CAN-DRV-002 (receive without loss UP TO the configured load):
-# beyond capacity loss can happen, and it must be OBSERVABLE, not hidden. The register-
-# level FDCAN backend counts IR.RF0L (Rx-FIFO0 message lost) and exposes it via
-# blob_can_rx_overruns(); host/SocketCAN reports 0 (kernel-buffered, SO_RXQ_OVFL is the
-# future host source). Target (h735/FDCAN) hardware sign-off pending.
+# beyond capacity loss can happen, and it must be OBSERVABLE, not hidden. Every backend
+# reports Rx-overrun events via blob_can_rx_overruns() from its own overflow source: the
+# register-level FDCAN counts IR.RF0L, the ST HAL FDCAN_FLAG_RX_FIFO0_MESSAGE_LOST, the
+# CanIf CDD its SPSC-ring push failures, and host/SocketCAN the SO_RXQ_OVFL per-socket
+# drop count. Target (h735/FDCAN) hardware sign-off pending.
 status = "draft"
 method = "test"
 asil = "QM"

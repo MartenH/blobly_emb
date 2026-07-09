@@ -41,7 +41,11 @@ static const int tx_map_n = (int)(sizeof(tx_map) / sizeof(tx_map[0]));
 static const int rx_map_n = (int)(sizeof(rx_map) / sizeof(rx_map[0]));
 
 static blob_can_ring rx_ring[BLOB_CAN_BUSES];
-static uint32_t rx_lost[BLOB_CAN_BUSES]; /* frames dropped because the Rx SPSC ring was full */
+/* Frames dropped because the Rx SPSC ring was full. Written in Blobly_RxIndication (CanIf/
+ * ISR context), read by the bridge/telemetry task via blob_can_rx_overruns — volatile so
+ * the single-writer count isn't cached/reordered across that boundary (an aligned u32
+ * load/store is atomic on the M-profile targets, and the ISR is the only writer). */
+static volatile uint32_t rx_lost[BLOB_CAN_BUSES];
 
 int blob_can_open(const char *name, int fd_mode) {
 	(void)fd_mode; /* classic/FD is fixed by the L-PDU's CanIf config */
@@ -63,6 +67,7 @@ int blob_can_open(const char *name, int fd_mode) {
 		idx = idx * 10 + (name[i] - '0');
 	if (idx < 0 || idx >= BLOB_CAN_BUSES)
 		return -1;
+	rx_lost[idx] = 0; /* fresh session: clear a prior controller run's ring-drop tally */
 	CanIf_SetControllerMode(bus_controller[idx], CANIF_CS_STARTED);
 	return idx;
 }
