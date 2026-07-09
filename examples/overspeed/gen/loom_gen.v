@@ -149,8 +149,9 @@ fn io_can0_10ms(ctx voidptr) {
 			st.tp_diag.send(&st.uds_diag_resp[0], diag_rlen)
 		}
 	}
+	st.tp_diag.tick(now) // advance the ISO-TP timeout even when tx_ready gates poll out
 	mut pdu_diag := isotp.Pdu{}
-	for st.tp_diag.poll(now, mut pdu_diag) {
+	for st.chan.tx_ready() && st.tp_diag.poll(now, mut pdu_diag) {
 		mut cf_diag := can.Frame{
 			id:  u32(0x102)
 			len: 8

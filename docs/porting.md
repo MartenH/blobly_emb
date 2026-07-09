@@ -7,15 +7,25 @@ seam, how to pick a backend, and what each one has to provide.
 
 ## The CAN driver port
 
-The whole contract the COM bridge depends on is four C functions
+The whole contract the COM bridge depends on is five C functions
 ([driver/can/can_port.h](../driver/can/can_port.h)):
 
 ```c
 int  blob_can_open (const char *name, int fd_mode);                 /* >=0 handle, -1 fail */
 int  blob_can_send (int h, uint32_t id, const uint8_t *d, uint8_t len, int fd);
+int  blob_can_tx_ready(int h);                                      /* 1=Tx can accept now, 0=full */
 int  blob_can_recv (int h, uint32_t *id, uint8_t *d, uint8_t *len);  /* 0=frame, -1=none */
 void blob_can_close(int h);
 ```
+
+`blob_can_tx_ready` is the non-blocking back-pressure query: return 1 only when `send`
+can accept a frame right now (e.g. the Tx FIFO has a free slot). A burst sender (the
+ISO-TP dump / UDS response) gates on it — `for tx_ready() && link.poll(...) { send() }` —
+so it never overruns the FIFO and never blocks; `send` itself must stay non-blocking
+(report full, don't spin). Report it as accurately as the backend allows: FDCAN checks
+`TXFQS.TFQF`, host SocketCAN polls `POLLOUT`; a backend that can't pre-query (e.g. CanIf,
+which owns its own Tx buffering) returns 1 and relies on that buffering being sized for
+the worst case.
 
 It is **polled** on purpose: the bridge is tick-driven, so `recv()` returns the next
 queued frame or "none". `can.v` calls exactly these and is backend-agnostic; the

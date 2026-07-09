@@ -1155,8 +1155,11 @@ fn main() {
 				glue << '\t\t\tst.tp_${tp}.send(&st.uds_${tp}_resp[0], ${tp}_rlen)'
 				glue << '\t\t}'
 				glue << '\t}'
+				glue << '\tst.tp_${tp}.tick(now) // advance the ISO-TP timeout even when tx_ready gates poll out'
 				glue << '\tmut pdu_${tp} := isotp.Pdu{}'
-				glue << '\tfor st.tp_${tp}.poll(now, mut pdu_${tp}) {'
+				// Gate on tx_ready so a UDS response burst never overruns the Tx FIFO or blocks — send at
+				// most a FIFO\'s worth per pass, resume next pass (poll advances tx state).
+				glue << '\tfor st.chan.tx_ready() && st.tp_${tp}.poll(now, mut pdu_${tp}) {'
 				glue << '\t\tmut cf_${tp} := can.Frame{'
 				glue << '\t\t\tid:  u32(0x${c.tx_id.hex()})'
 				glue << '\t\t\tlen: 8'
