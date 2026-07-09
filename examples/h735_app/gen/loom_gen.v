@@ -136,6 +136,9 @@ pub fn run(can0 can.Channel) {
 		if ts.fb_count != before { // a handler ran -> bracket this busy iteration as a thread span
 			trace_thread_span(mut ts, loom_t0, C.board_now_us())
 		}
+		if C.board_now_us() - loom_t0 > tick_us {
+			sched.mark_overrun()
+		}
 		mut rx := can.Frame{}
 		if ch.recv(mut rx) {
 			if rx.id == u32(0x7e2) && rx.len >= 8 {

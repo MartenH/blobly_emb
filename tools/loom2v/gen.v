@@ -1787,6 +1787,13 @@ fn main() {
 		glue << '\t\tif ts.fb_count != before { // a handler ran -> bracket this busy iteration as a thread span'
 		glue << '\t\t\ttrace_thread_span(mut ts, loom_t0, ${nowcall})'
 		glue << '\t\t}'
+		if trace_target {
+			// Account tick overruns like the plain target, so the LoadDetail overrun count is real
+			// (run_profiled doesn't mark them). A pass whose handler time exceeds the tick budget overran.
+			glue << '\t\tif ${nowcall} - loom_t0 > tick_us {'
+			glue << '\t\t\tsched.mark_overrun()'
+			glue << '\t\t}'
+		}
 		glue << '\t\tmut rx := can.Frame{}'
 		glue << '\t\tif ch.recv(mut rx) {'
 		glue << '\t\t\tif rx.id == u32(0x${trace_cmd_id.hex()}) && rx.len >= 8 {'
