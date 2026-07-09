@@ -1646,15 +1646,26 @@ fn main() {
 			if bc := doc.value('bus').as_map()[telem_bus] {
 				tx_bus_fd = (bc.as_map()['fd'] or { toml.Any(false) }).bool()
 			}
+			// The register-level FDCAN backend is classic-only (blob_can_open rejects fd_mode), so
+			// a CAN-FD telemetry bus would open -1 and the thread would exit. Reject it at gen time.
+			if tx_bus_fd {
+				panic('loom2v: [target] kind="threadx": bus "${telem_bus}" has fd = true, but the ' +
+					'FDCAN backend used here is classic-only — set [bus.${telem_bus}].fd = false')
+			}
+			// The driver opens the bus by numeric index ("0".."2"); derive it from the bus name
+			// (e.g. "can0" -> "0"). A name with no digit can't be mapped — reject rather than
+			// silently open bus 0.
 			mut digits := ''
 			for cc in telem_bus {
 				if cc >= `0` && cc <= `9` {
 					digits += cc.ascii_str()
 				}
 			}
-			if digits != '' {
-				tx_bus_idx = digits
+			if digits == '' {
+				panic('loom2v: [target] kind="threadx": telemetry bus "${telem_bus}" has no numeric ' +
+					'FDCAN index in its name (e.g. "can0") — the driver opens buses by index')
 			}
+			tx_bus_idx = digits
 		}
 		tx_sleep_ticks := if target_tick_us / 1000 > 1 { target_tick_us / 1000 } else { u64(1) }
 		glue << ''

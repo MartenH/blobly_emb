@@ -32,14 +32,17 @@ load (= run-time / wall-clock) stays honest.
 ## Config → thread mapping
 
 `h735_app`'s `ecu.toml` places all three FBs (Governor/Load/Heartbeat) on the **one** thread
-`app_main`, so this generates **one** FB-scheduler thread. A config that spreads FBs across
-several `partition.thread`s generates one ThreadX thread each, with the wait-free
-triple-buffer IOC (`threadx_h735/ioc.h`) carrying the cross-thread signals — that
-multi-thread codegen + the FDCAN-Rx-ISR comm thread + the trace dump are phases 6b/6c.
+`app_main`, so this generates **one** FB-scheduler thread — which is all phase 6a emits (the
+ECU model still rejects a partition with more than one `[[partition.thread]]`, and this
+emitter uses only that thread). Spreading FBs across several `partition.thread`s — one
+ThreadX thread each, with the wait-free triple-buffer IOC (`threadx_h735/ioc.h`) carrying the
+cross-thread signals — plus the FDCAN-Rx-ISR comm thread and the trace dump are **future
+work (phases 6b/6c)**.
 
 ## Verified on the board
 
-`make flash`, `candump can0`: the CpuLoad `0x7E0` (byte 0 = core-0 load permille) and
+`make flash`, `candump can0`: the CpuLoad `0x7E0` (byte 0 = core-0 load in **percent** —
+`encode_cpuload` divides the Loom per-mille value by 10, and the DBC labels the byte `%`) and
 LoadDetail `0x7E1` frames stream, load tracking the FB work — the generated ThreadX target
 boots, `tx_kernel_enter` creates the app thread, and the FBs run under ThreadX. Structurally
 the generated counterpart of the hand-written `threadx_h735` (the golden reference).
