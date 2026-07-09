@@ -1,32 +1,29 @@
-/* P3c-1 Phase 3 — real preemptive thread/ISR trace from ThreadX on the STM32H735.
+/* P3c-1 Phase 4a — ThreadX exec-hook trace on the STM32H735, dumped over FDCAN.
  *
- * Same workload as the QEMU foundation (threadx_min), now on silicon: two equal-priority
- * workers (A, B) at different sleep periods, a higher-priority preemptor (C), plus
- * ThreadX's hidden System Timer Thread and the SysTick ISR. The four TX execution-change
- * hooks (trace_hooks.c) turn every real context switch and ISR into a blobly 8-byte trace
- * record — timestamped from the DWT cycle counter (real µs at 550 MHz, unlike QEMU which
- * doesn't model DWT and fell back to the 100 Hz SysTick). A dumper thread waits for the
- * ring to fill, then dumps it over semihosting (openocd services the bkpt) for the host
- * to decode. board_clock_init() brings the M7 to 550 MHz BEFORE tx_kernel_enter, so the
- * SysTick reload in tx_initialize_low_level.S (SYSTEM_CLOCK = 550 MHz) yields a true tick.
+ * Phase 3 proved the four TX execution-change hooks (trace_hooks.c) turn every real
+ * context switch and ISR into a blobly 8-byte trace record, timestamped from DWT
+ * (real µs at 550 MHz). Phase 4a makes the board run STANDALONE — no debugger: the
+ * frozen ring is streamed over FDCAN1 (raw per-record frames on the trace record id)
+ * instead of semihosting (which the user rightly keeps for emergencies only, never a
+ * data path). The host decodes the stream with candump + decode_trace.py.
+ *
+ * Workload (A/B/C/dumper + ThreadX's system timer thread + SysTick ISR) is the Phase-3
+ * demo still; Phase 4b turns the dumper into a real FDCAN-Rx-ISR-driven comm thread and
+ * Phase 5 morphs the workers into the h735_app FBs (Governor/Load/Heartbeat).
  */
 #include "tx_api.h"
 #include "board.h"
+#include "can_port.h"
 
-void trace_dump(void);            /* trace_hooks.c */
-extern volatile unsigned g_head;  /* records pushed so far (trace_hooks.c) */
+extern volatile unsigned g_head;                    /* records pushed so far (trace_hooks.c) */
+void trace_dump_can(int h, unsigned long rec_id);   /* trace_hooks.c: ring -> raw CAN frames */
 
-static long sh(long op, void *arg)
-{
-    register long r0 __asm__("r0") = op;
-    register void *r1 __asm__("r1") = arg;
-    __asm__ volatile("bkpt 0xAB" : "+r"(r0) : "r"(r1) : "memory");
-    return r0;
-}
-static void sh_puts(const char *s) { sh(0x04, (void *)s); }
+/* Trace record id — the [trace].record_id of examples/h735_app (blobly_net's manifest). */
+#define TRACE_RECORD_ID 0x7E5u
 
 static TX_THREAD t_a, t_b, t_c, t_dump;
 static UCHAR s_a[1024], s_b[1024], s_c[1024], s_dump[1024];
+static int g_can = -1; /* FDCAN1 handle (bus index "0") */
 
 static void worker(ULONG which)
 {
@@ -48,10 +45,15 @@ static void dumper(ULONG unused)
     (void)unused;
     while (g_head < 120u) /* let the scheduler run + the ring fill */
         tx_thread_sleep(5);
-    sh_puts("threadx trace: dumping\n");
-    trace_dump();
-    while (1)
+    /* Re-stream the frozen flight recorder every ~1 s so a host candump started at any
+     * time catches a full snapshot. The ring is frozen (g_capturing=0) on the first dump,
+     * so every pass sends the same records. Phase 6 replaces this with the TraceCmd/ISO-TP
+     * handshake blobly_net drives. */
+    while (1) {
+        if (g_can >= 0)
+            trace_dump_can(g_can, TRACE_RECORD_ID);
         tx_thread_sleep(100);
+    }
 }
 
 void tx_application_define(void *first_unused_memory)
@@ -70,7 +72,10 @@ int main(void)
      * trace-hook timestamps divide DWT cycles by 550. If PLL bring-up falls back to HSI
      * the tick/timestamps skew, but P3c-0 verified the lock on this board. */
     board_clock_init();
-    sh_puts("threadx_h735: M7 ThreadX up @ 550 MHz\n");
+    /* FDCAN1 kernel clock (HSE 25 MHz) + PH13/PH14 AF9, then open bus index "0" (classic
+     * 500 kbit; the Makefile's BLOB_FDCAN_* set the bit timing). */
+    board_can_clock_pins_init();
+    g_can = blob_can_open("0", 0);
     tx_kernel_enter(); /* never returns */
     return 0;
 }
