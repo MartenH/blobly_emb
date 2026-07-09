@@ -173,9 +173,12 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 	if tx_lamp_frame_any && st.chan.tx_ready() && st.tx_lamp_frame_st.should_send(now, tx_lamp_frame.data, lamp_frame_dlc) {
 		tx_lamp_frame_pre := tx_lamp_frame.data // pre-E2E/SecOC payload, for change detection
+		e2e_save_lamp_frame := st.e2e_tx_lamp_frame
 		st.e2e_tx_lamp_frame.protect(&tx_lamp_frame.data[0], int(lamp_frame_dlc), u16(0x10), 1, 2)
 		if st.chan.send(tx_lamp_frame) {
 			st.tx_lamp_frame_st.mark_sent(now, tx_lamp_frame_pre, lamp_frame_dlc)
+		} else {
+			st.e2e_tx_lamp_frame = e2e_save_lamp_frame
 		}
 	}
 	mut tx_secure_frame := can.Frame{
@@ -190,9 +193,12 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 	if tx_secure_frame_any && st.chan.tx_ready() && st.tx_secure_frame_st.should_send(now, tx_secure_frame.data, secure_frame_dlc) {
 		tx_secure_frame_pre := tx_secure_frame.data // pre-E2E/SecOC payload, for change detection
+		secoc_save_secure_frame := st.secoc_tx_secure_frame
 		st.secoc_tx_secure_frame.protect(&st.secoc_key_secure_frame, &tx_secure_frame.data[0], int(secure_frame_dlc), u16(0x20), 1, 2, 4)
 		if st.chan.send(tx_secure_frame) {
 			st.tx_secure_frame_st.mark_sent(now, tx_secure_frame_pre, secure_frame_dlc)
+		} else {
+			st.secoc_tx_secure_frame = secoc_save_secure_frame
 		}
 	}
 }
