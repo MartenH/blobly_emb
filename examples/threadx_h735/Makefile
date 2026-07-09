@@ -43,7 +43,7 @@ TX_C   = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
          $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 
-APP = crt0.S vectors.S tx_initialize_low_level.S main.c comm.c trace_hooks.c board.c \
+APP = crt0.S vectors.S tx_initialize_low_level.S main.c comm.c fbs.c trace_hooks.c board.c \
       $(REPO)/driver/can/can_backend.c
 
 all: $(BUILD)/threadx_h735.bin
