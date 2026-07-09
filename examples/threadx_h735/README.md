@@ -1,4 +1,4 @@
-# threadx_h735 — ThreadX trace on the STM32H735 (P3c-1, Phases 3–4)
+# threadx_h735 — ThreadX trace on the STM32H735 (P3c-1, Phases 3–4b)
 
 Phase 3 takes the QEMU foundation ([`threadx_min`](../threadx_min), Phases 1–2) onto
 silicon. Same vendored ThreadX kernel, same four TX execution-change hooks
@@ -47,10 +47,31 @@ slow bus never wedges the core. blobly_net's live swimlane wants an **ISO-TP** b
 `0x7E5` (`manifests/h735-app.csv`); that arrives in Phase 6 when loom2v generates the V
 trace stack onto ThreadX — Phases 4–5 use the raw stream + the host decoder above.
 
+**Phase 4b — FDCAN Rx ISR + comm thread (`comm.c`).** rx is interrupt-driven: the FDCAN1
+Rx-FIFO0 "new message" interrupt (vector 35 = 16 + `FDCAN1_IT0_IRQn` 19, routed in
+`vectors.S`) wakes a dedicated **comm thread** via a semaphore. The ISR is tiny — it only
+clears the flag and posts; the comm thread drains `blob_can_recv` (the driver stays
+polled + non-blocking), decodes into an IOC cell (`g_comm_rx`), and does the periodic tx.
+Application code never runs in ISR context (the pattern `can_port.h` documents). Both show
+up in the trace: the **comm thread by name**, the **Rx ISR as id 35**. The comm thread runs
+at the **highest priority** (1) so it preempts the workload/dump and drains the 8-deep Rx
+FIFO promptly (the receive-without-loss path). The Rx IRQ shares SysTick's priority (0x40)
+so the two never nest — keeping `trace_hooks` single-level (proper nesting is a later
+refinement). The dump freezes the ring only while reading it out, then **re-arms**, so it's
+a rolling snapshot: CAN activity that arrives after the first dump still appears in the
+next one. Verify live:
+
+```
+candump can0 &                       # watch 0x7E5 (trace) + 0x7E1 (comm periodic tx)
+cansend can0 123#0011223344556677    # -> Rx ISR (id 35) + comm wake appear in the next 0x7E5 snapshot
+# 0x7E1 payload = rx_count(u32 LE) | last_rx_id(u16 LE): the count climbs per frame sent.
+```
+
 ## Layout
 
-- `main.c` — A/B workers + a C preemptor + a dumper thread; `board_clock_init()` +
-  `board_can_clock_pins_init()` + `blob_can_open` first.
+- `main.c` — A/B workers + a C preemptor + the comm thread + a dumper; `board_clock_init()`
+  + `board_can_clock_pins_init()` + `blob_can_open` first.
+- `comm.c` — FDCAN1 Rx-FIFO0 ISR + the comm thread (rx-drain → IOC cell + periodic tx).
 - `trace_hooks.c` — the four `_tx_execution_*` hooks → blobly 8-byte records + the FDCAN
   ring dump (`trace_dump_can`, copied from `threadx_min` then retargeted off semihosting).
 - `board.c` / `board.h` — 550 MHz clock + FDCAN1 clock/pins (copied from `h735_app`).
@@ -58,6 +79,7 @@ trace stack onto ThreadX — Phases 4–5 use the raw stream + the host decoder 
 - `Makefile` — builds `third_party/threadx` + `driver/can` (FDCAN backend) + the demo,
   flashes, runs standalone.
 
-Next (Phase 4b): the FDCAN **Rx ISR** drives a real **comm thread** (rx-decode → IOC,
-periodic tx), traced by name; then Phase 5 morphs the A/B/C workers into the `h735_app`
-FBs (Governor/Load/Heartbeat), and Phase 6 has loom2v generate it all from `ecu.toml`.
+Next (Phase 4c): back-pressure fixes (event-tx clear-on-send-success, surface the FDCAN
+`RXF0S` message-lost flag). Phase 5 morphs A/B/C into the `h735_app` FBs
+(Governor/Load/Heartbeat) with a wait-free SRAM IOC; Phase 6 has loom2v generate it all
+from `ecu.toml`.

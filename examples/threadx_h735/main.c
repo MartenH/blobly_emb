@@ -1,15 +1,16 @@
-/* P3c-1 Phase 4a — ThreadX exec-hook trace on the STM32H735, dumped over FDCAN.
+/* P3c-1 Phase 4b — ThreadX on the STM32H735 with an FDCAN-Rx-ISR-driven comm thread.
  *
- * Phase 3 proved the four TX execution-change hooks (trace_hooks.c) turn every real
- * context switch and ISR into a blobly 8-byte trace record, timestamped from DWT
- * (real µs at 550 MHz). Phase 4a makes the board run STANDALONE — no debugger: the
- * frozen ring is streamed over FDCAN1 (raw per-record frames on the trace record id)
- * instead of semihosting (which the user rightly keeps for emergencies only, never a
- * data path). The host decodes the stream with candump + decode_trace.py.
+ * Phase 3 proved the exec-hook trace on silicon; Phase 4a dumped the ring over FDCAN so
+ * the board runs standalone. Phase 4b adds the real comm architecture: the FDCAN1 Rx
+ * interrupt (comm.c) wakes a dedicated comm thread that drains + decodes rx into an IOC
+ * cell and does periodic tx — application code never runs in ISR context. Both the comm
+ * thread (by name) and the Rx ISR (vector id 35) show up in the trace stream on 0x7E5.
  *
- * Workload (A/B/C/dumper + ThreadX's system timer thread + SysTick ISR) is the Phase-3
- * demo still; Phase 4b turns the dumper into a real FDCAN-Rx-ISR-driven comm thread and
- * Phase 5 morphs the workers into the h735_app FBs (Governor/Load/Heartbeat).
+ * Workload: A/B workers + a C preemptor + the comm thread + a dumper, over ThreadX's
+ * system timer thread + SysTick/FDCAN ISRs. Phase 5 morphs A/B/C into the h735_app FBs
+ * (Governor/Load/Heartbeat) with a wait-free SRAM IOC; Phase 6 generates it all from
+ * ecu.toml. The trace ring streams over FDCAN1 as raw per-record frames on 0x7E5 (host
+ * decodes with candump + decode_trace.py; blobly_net's ISO-TP swimlane lands in Phase 6).
  */
 #include "tx_api.h"
 #include "board.h"
@@ -17,13 +18,15 @@
 
 extern volatile unsigned g_head;                    /* records pushed so far (trace_hooks.c) */
 void trace_dump_can(int h, unsigned long rec_id);   /* trace_hooks.c: ring -> raw CAN frames */
+void comm_thread(ULONG unused);                     /* comm.c: FDCAN-Rx-ISR-driven comm thread */
+void comm_rx_irq_enable(void);                      /* comm.c: enable + route the Rx FIFO0 IRQ */
 
 /* Trace record id — the [trace].record_id of examples/h735_app (blobly_net's manifest). */
 #define TRACE_RECORD_ID 0x7E5u
 
-static TX_THREAD t_a, t_b, t_c, t_dump;
-static UCHAR s_a[1024], s_b[1024], s_c[1024], s_dump[1024];
-static int g_can = -1; /* FDCAN1 handle (bus index "0") */
+static TX_THREAD t_a, t_b, t_c, t_dump, t_comm;
+static UCHAR s_a[1024], s_b[1024], s_c[1024], s_dump[1024], s_comm[1024];
+int g_can = -1; /* FDCAN1 handle (bus index "0"); comm.c shares it */
 
 static void worker(ULONG which)
 {
@@ -63,6 +66,13 @@ void tx_application_define(void *first_unused_memory)
     tx_thread_create(&t_b, "B", worker, 1, s_b, sizeof(s_b), 5, 5, 1, TX_AUTO_START);
     tx_thread_create(&t_c, "C", preemptor, 0, s_c, sizeof(s_c), 3, 3, 1, TX_AUTO_START);
     tx_thread_create(&t_dump, "D", dumper, 0, s_dump, sizeof(s_dump), 2, 2, 1, TX_AUTO_START);
+    /* The comm thread — HIGHEST priority (1, above the dumper/preemptor/workers; ThreadX
+     * treats lower numbers as higher priority). The Rx ISR only posts the semaphore and
+     * the 8-deep FDCAN FIFO is drained here, so comm must preempt the workload/dump to
+     * drain rx before the FIFO overflows — the receive-without-loss path (REQ-CAN-DRV-002).
+     * Enable the FDCAN Rx IRQ once its wake semaphore + tx mutex exist. */
+    tx_thread_create(&t_comm, "comm", comm_thread, 0, s_comm, sizeof(s_comm), 1, 1, 1, TX_AUTO_START);
+    comm_rx_irq_enable();
 }
 
 int main(void)
