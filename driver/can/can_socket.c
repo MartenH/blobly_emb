@@ -81,4 +81,14 @@ int blob_can_recv(int sock, uint32_t *id, uint8_t *data, uint8_t *len) {
 	return 0;
 }
 
+/* SocketCAN buffers received frames deeply in the kernel and, on vcan, does not drop
+ * under the loads the host/sim exercises. Per-socket overrun IS observable via
+ * SO_RXQ_OVFL (a cumulative drop count delivered as an SCM_RXQ_OVFL cmsg on recvmsg);
+ * wiring that in would mean switching recv() off read(). Until then report 0 — the
+ * receive-with-loss surfacing (REQ-CAN-DRV-008) is exercised on the FDCAN target. */
+uint32_t blob_can_rx_overruns(int sock) {
+	(void)sock;
+	return 0u;
+}
+
 void blob_can_close(int sock) { close(sock); }

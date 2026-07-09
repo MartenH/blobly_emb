@@ -92,6 +92,14 @@ int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
 	return blob_ring_pop(&rx_ring[h], id, data, len);
 }
 
+/* Under AUTOSAR the CAN driver + CanIf report Rx overrun through the BSW's own
+ * error/diagnostic path (Det/Dem, CanIf RxIndication overflow), not this shim, so it
+ * reports 0 here (REQ-CAN-DRV-008 is verified on the register-level FDCAN backend). */
+uint32_t blob_can_rx_overruns(int h) {
+	(void)h;
+	return 0u;
+}
+
 void blob_can_close(int h) {
 	if (h >= 0 && h < BLOB_CAN_BUSES)
 		CanIf_SetControllerMode(bus_controller[h], CANIF_CS_STOPPED);

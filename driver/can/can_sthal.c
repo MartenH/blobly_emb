@@ -120,6 +120,15 @@ int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
 	return 0;
 }
 
+/* Rx-FIFO0 overrun. The HAL exposes it via __HAL_FDCAN_GET_FLAG(hf,
+ * FDCAN_FLAG_RX_FIFO0_MESSAGE_LOST); an integrator on Cube can accumulate that the same
+ * way can_fdcan.c counts IR.RF0L. This HAL shim reports 0 until wired to a project's
+ * error handling (REQ-CAN-DRV-008 is verified on the register-level FDCAN backend). */
+uint32_t blob_can_rx_overruns(int h) {
+	(void)h;
+	return 0u;
+}
+
 void blob_can_close(int h) {
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
 	if (hf) HAL_FDCAN_Stop(hf);
