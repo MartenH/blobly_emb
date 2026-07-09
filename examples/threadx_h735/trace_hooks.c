@@ -10,6 +10,7 @@
  * kinds: ISR=0, THREAD=1. reasons: preempt=0, block=1, yield=2, exit=3.
  */
 #include "tx_api.h"
+#include "can_port.h" /* blob_can_send / blob_can_tx_ready — the sole owner streams here */
 
 #define KIND_ISR       0u
 #define KIND_THREAD    1u
@@ -179,13 +180,14 @@ void _tx_execution_isr_exit(void)
  *
  * Capture is frozen only for the duration of the read-out, then RE-ARMED — so this is a
  * rolling snapshot, and CAN activity (Rx ISR + comm wakeups) that arrives after the first
- * dump still shows up in the next one (a permanent freeze would drop it). Tx goes through
- * comm.c's mutex-guarded comm_can_send so it can't race the comm thread's periodic tx. */
-extern int comm_can_send(unsigned long id, const unsigned char *data, unsigned char len);
-
+ * dump still shows up in the next one (a permanent freeze would drop it).
+ *
+ * Sends via blob_can_send DIRECTLY — no lock. The whole system is lock-free by
+ * SINGLE-OWNER-PER-CORE: the per-core I/O (comm) thread is the sole caller of blob_can_send
+ * for its buses, so telemetry + this trace stream can never race (same thread), and no
+ * mutex is needed. Only the comm thread calls this. */
 void trace_dump_can(int h, unsigned long rec_id)
 {
-    (void)h;
     g_capturing = 0; /* freeze the ring while we read it out (no torn records) */
     unsigned total = g_head;
     unsigned n = total > RING_CAP ? RING_CAP : total;
@@ -194,8 +196,9 @@ void trace_dump_can(int h, unsigned long rec_id)
         unsigned char *r = g_ring[(start + i) & (RING_CAP - 1u)];
         /* Non-blocking + back-pressure aware (REQ-CAN-DRV-007): yield the CPU while the
          * Tx FIFO is full instead of spinning, so a slow drain never wedges the core. */
-        while (comm_can_send(rec_id, r, 8) != 0)
+        while (!blob_can_tx_ready(h))
             tx_thread_sleep(1);
+        blob_can_send(h, (uint32_t)rec_id, r, 8, 0);
     }
     g_capturing = 1; /* re-arm: keep recording between dumps so late activity is captured */
 }

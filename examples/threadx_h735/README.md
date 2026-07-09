@@ -43,12 +43,12 @@ make flash              # st-flash the .bin to 0x08000000; the board then runs S
 candump can0            # watch the trace ring stream out over FDCAN1 on 0x7E5
 ```
 
-**Phase 4a — dump over FDCAN, no debugger.** The board runs standalone: once the ring
-fills, a dumper thread streams it as raw per-record CAN frames (one 8-byte trace record
-per classic frame) on `0x7E5`, re-sending the frozen snapshot every ~1 s so a host
-`candump` started at any time catches a full copy. Semihosting is gone from the data
-path (it needs a debugger to service the `bkpt` and is slow — Phase-3 bring-up only).
-Decode the stream on the host:
+**Phase 4a — dump over FDCAN, no debugger.** The board runs standalone: the ring is
+streamed as raw per-record CAN frames (one 8-byte trace record per classic frame) on
+`0x7E5`, re-sending the frozen snapshot every ~1 s so a host `candump` started at any time
+catches a full copy. The **comm thread** (the sole bus owner — see below) does the
+streaming. Semihosting is gone from the data path (it needs a debugger to service the
+`bkpt` and is slow — Phase-3 bring-up only). Decode the stream on the host:
 
 ```
 candump -L can0 | grep -oE '7E5#[0-9A-Fa-f]{16}' | sed 's/7E5#//'   # -> hex records
@@ -57,8 +57,16 @@ candump -L can0 | grep -oE '7E5#[0-9A-Fa-f]{16}' | sed 's/7E5#//'   # -> hex rec
 ```
 
 The dump is paced by the non-blocking `blob_can_tx_ready` back-pressure (REQ-CAN-DRV-007):
-the dumper yields (`tx_thread_sleep`) while the Tx FIFO is full instead of spinning, so a
-slow bus never wedges the core. blobly_net's live swimlane wants an **ISO-TP** block on
+the comm thread yields (`tx_thread_sleep`) while the Tx FIFO is full instead of spinning, so
+a slow bus never wedges the core.
+
+**Lock-free by single-owner.** The **comm thread is the sole caller of `blob_can_send`** for
+the bus — it drains rx, does the periodic tx, *and* streams the trace ring. One CAN writer
+means the non-reentrant driver can never be raced, so there is **no Tx mutex** (an earlier
+version had a separate dumper thread + a `TX_MUTEX`; folding the dump into the bus owner made
+it lock-free). FB threads never touch CAN — they publish signals lock-free through the
+triple-buffer IOC, and the comm thread reads them. Multi-bus targets split by core: one owner
+thread per core, owning that core's buses. blobly_net's live swimlane wants an **ISO-TP** block on
 `0x7E5` (`manifests/h735-app.csv`); that arrives in Phase 6 when loom2v generates the V
 trace stack onto ThreadX — Phases 4–5 use the raw stream + the host decoder above.
 
@@ -85,7 +93,7 @@ cansend can0 123#0011223344556677    # -> Rx ISR (id 35) + comm wake appear in t
 
 ## Layout
 
-- `main.c` — creates the FB threads (Governor/Load/Heartbeat) + comm + dumper, inits the
+- `main.c` — creates the FB threads (Governor/Load/Heartbeat) + the comm thread, inits the
   IOCs; `board_clock_init()` + `board_can_clock_pins_init()` + `blob_can_open` first.
 - `fbs.c` — the h735_app FBs as ThreadX threads (Governor → LoadCmd, Load → Workload, Heartbeat).
 - `ioc.h` — the wait-free triple-buffer IOC (SPSC, latest-value-wins, `__atomic` handoff).
