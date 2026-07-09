@@ -21,15 +21,18 @@
 #define RING_CAP 256u /* power of two; overwrites oldest (flight recorder) */
 static unsigned char g_ring[RING_CAP][8];
 volatile unsigned g_head; /* total records pushed (main.c waits on it) */
+static volatile int g_capturing = 1; /* trace_dump() clears this to freeze the ring */
 
 static void push_rec(unsigned kind, unsigned id, unsigned char info,
                      unsigned long start_us, unsigned dur_us)
 {
+    if (!g_capturing)
+        return; /* frozen for a dump — don't overwrite records being read out */
     /* The thread-switch (PendSV) path re-enables interrupts before the enter hook, so an
      * ISR push can race a thread push. Serialise slot-claim + write with a brief PRIMASK
      * critical section — records are 8 bytes, so it's tiny. */
     unsigned prim;
-    __asm__ volatile("mrs %0, primask; cpsid i" : "=r"(prim));
+    __asm__ volatile("mrs %0, primask; cpsid i" : "=r"(prim) : : "memory");
     unsigned eid = ((kind & 0x3u) << 14) | (id & 0x3FFFu);
     unsigned char *r = g_ring[g_head & (RING_CAP - 1u)];
     r[0] = (unsigned char)(eid & 0xFF);
@@ -62,7 +65,7 @@ static unsigned long now_us(void)
     static unsigned long last_cyc;
     static unsigned long long acc;
     unsigned prim;
-    __asm__ volatile("mrs %0, primask; cpsid i" : "=r"(prim));
+    __asm__ volatile("mrs %0, primask; cpsid i" : "=r"(prim) : : "memory");
     unsigned long cyc = *(volatile unsigned long *)0xE0001004u; /* DWT->CYCCNT */
     unsigned long r;
     if (cyc == 0u && acc == 0ull) {
@@ -108,7 +111,8 @@ static unsigned char state_reason(unsigned st)
     }
 }
 
-static unsigned long g_slice_start; /* when the currently-running thread started */
+static unsigned long g_slice_start;  /* when the currently-running thread started */
+static unsigned long g_slice_isr_us; /* ISR time that interrupted the current slice */
 static unsigned long g_isr_start;
 static unsigned g_isr_vec; /* active exception number of the ISR in progress */
 
@@ -129,7 +133,9 @@ void _tx_execution_thread_exit(void)
     unsigned long t = now_us();
     unsigned id = thread_id(_tx_thread_current_ptr);
     if (id != 0) {
-        unsigned long dur = t - g_slice_start;
+        /* the thread's CPU is its wall slice minus the ISR time that preempted it */
+        unsigned long wall = t - g_slice_start;
+        unsigned long dur = wall > g_slice_isr_us ? wall - g_slice_isr_us : 0u;
         unsigned char reason = _tx_thread_current_ptr
                                    ? state_reason((unsigned)_tx_thread_current_ptr->tx_thread_state)
                                    : REASON_BLOCK;
@@ -139,7 +145,11 @@ void _tx_execution_thread_exit(void)
 }
 
 /* thread_enter runs after the switch — the incoming thread's slice starts now. */
-void _tx_execution_thread_enter(void) { g_slice_start = now_us(); }
+void _tx_execution_thread_enter(void)
+{
+    g_slice_start = now_us();
+    g_slice_isr_us = 0u; /* fresh slice: no ISR time charged yet */
+}
 
 /* ISR enter/exit bracket the active interrupt. Single-level: nested ISRs (a higher
  * priority preempting one already hooked) would need a small vec/start stack — the
@@ -155,6 +165,7 @@ void _tx_execution_isr_enter(void)
 void _tx_execution_isr_exit(void)
 {
     unsigned long dur = now_us() - g_isr_start;
+    g_slice_isr_us += dur; /* charge this ISR against the interrupted thread's slice */
     push_rec(KIND_ISR, g_isr_vec, 0u, g_isr_start,
              (unsigned)(dur > 0xFFFFu ? 0xFFFFu : dur));
 }
@@ -176,6 +187,7 @@ static void hexb(unsigned char b)
 }
 void trace_dump(void)
 {
+    g_capturing = 0; /* freeze: the scheduler/ISR hooks stop pushing while we read out */
     unsigned total = g_head;
     unsigned n = total > RING_CAP ? RING_CAP : total;
     unsigned start = total > RING_CAP ? total - RING_CAP : 0;
