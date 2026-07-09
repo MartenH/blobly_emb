@@ -501,6 +501,14 @@ fn main() {
 	// (C.board_now_us) and no osal. Guaranteed single-core (target rejects external signals, so no
 	// bridge, and the target run() is one-partition).
 	trace_target := trace_on && target_on
+	// The bare-metal target trace runner services only trace + CpuLoad on one channel — it never runs
+	// a COM bridge. has_external is already rejected for target above; ISO-TP / routes make has_bridge
+	// true without has_external, so reject those too rather than silently drop the configured bus work.
+	if trace_target && has_bridge {
+		panic('loom2v: [trace] on a bare-metal [target] with a COM bridge (ISO-TP / routes / external ' +
+			'signals) is not generated — the target trace runner has no bridge/UDS/route loop; drop the ' +
+			'bridge config or set [trace].enabled = false for target builds')
+	}
 	trace_multicore := trace_on && !target_on && !trace_inline && !trace_bus_has_bridge
 	// SAME-bus (the trace bus itself carries a bridge) is P3b's follow-up: the bridge loop would have
 	// to own the trace channel and dispatch TraceCmd vs COM. Not generated yet — reject it.
@@ -1662,10 +1670,18 @@ fn main() {
 		glue << '\t\tt.buf.push(trace.new_epoch(u32(elapsed)))'
 		glue << '\t}'
 		glue << '\tmut dt := dt_us'
-		glue << '\tif dt > 0xFFFF {'
+		glue << '\tmut flags := u8(0)'
+		glue << '\tif dt > 0xFFFF { // clamp to the u16 field, and mark it saturated'
 		glue << '\t\tdt = 0xFFFF'
+		glue << '\t\tflags |= trace.flag_saturated'
 		glue << '\t}'
-		glue << '\tt.buf.push(trace.new_fb(u16(idx), 0, u32(elapsed - t.base), u16(dt)))'
+		if trace_budget_us > 0 {
+			// flag the record that exceeded the budget so blobly_net outlines the freeze culprit.
+			glue << '\tif dt_us > ${trace_budget_us} {'
+			glue << '\t\tflags |= trace.flag_overran'
+			glue << '\t}'
+		}
+		glue << '\tt.buf.push(trace.new_fb(u16(idx), flags, u32(elapsed - t.base), u16(dt)))'
 		if trace_budget_us > 0 {
 			glue << '\tif dt_us > ${trace_budget_us} { // overrun: freeze the ring around the anomaly'
 			glue << '\t\tt.buf.trigger()'
@@ -1727,7 +1743,18 @@ fn main() {
 		glue << '\t\tbuf: trace.new_buffer(&backing[0], ${trace_buffer_records}, ${modelit}, ${pre})'
 		glue << '\t}'
 		glue << '\tts.start = ${nowcall}'
-		glue << '\tts.thread_id = 1 // single partition, first thread = manifest thread id 1'
+		// The THREAD records must carry the SAME thread id the manifest assigns — it numbers threads
+		// 1-based across every partition in TOML order (including FB-less ones before this partition),
+		// so it isn't always 1. Recompute it the manifest's way for this partition's (only) thread.
+		mut inline_tid := 1
+		for p in ecumodel.toml_arr(doc, 'partition') {
+			pn := (p.as_map()['name'] or { toml.Any('') }).string()
+			if pn == part {
+				break
+			}
+			inline_tid += (threads_of[pn] or { []string{} }).len
+		}
+		glue << '\tts.thread_id = ${inline_tid} // manifest thread id of ${part}\'s thread'
 		glue << '\tts.buf.start()'
 		glue << '\tsched.set_trace_hook(trace_capture, &ts)'
 		glue << '\tmut link := isotp.Link{}'
@@ -1771,6 +1798,7 @@ fn main() {
 		glue << '\t\t\t\t\t\t|| c.opcode == trace.op_reset {'
 		glue << '\t\t\t\t\t\tts.start = ${nowcall}'
 		glue << '\t\t\t\t\t\tts.base = 0'
+		glue << '\t\t\t\t\t\tts.busy_end = 0 // fresh origin: don\'t treat the old capture\'s span end as the idle-gap start'
 		glue << '\t\t\t\t\t\tlink = isotp.Link{}'
 		glue << '\t\t\t\t\t}'
 		glue << '\t\t\t\t\tif do_dump {'

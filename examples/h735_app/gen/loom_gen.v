@@ -62,10 +62,15 @@ fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {
 		t.buf.push(trace.new_epoch(u32(elapsed)))
 	}
 	mut dt := dt_us
-	if dt > 0xFFFF {
+	mut flags := u8(0)
+	if dt > 0xFFFF { // clamp to the u16 field, and mark it saturated
 		dt = 0xFFFF
+		flags |= trace.flag_saturated
 	}
-	t.buf.push(trace.new_fb(u16(idx), 0, u32(elapsed - t.base), u16(dt)))
+	if dt_us > 500 {
+		flags |= trace.flag_overran
+	}
+	t.buf.push(trace.new_fb(u16(idx), flags, u32(elapsed - t.base), u16(dt)))
 	if dt_us > 500 { // overrun: freeze the ring around the anomaly
 		t.buf.trigger()
 	}
@@ -113,7 +118,7 @@ pub fn run(can0 can.Channel) {
 		buf: trace.new_buffer(&backing[0], 64, .ring, 50)
 	}
 	ts.start = C.board_now_us()
-	ts.thread_id = 1 // single partition, first thread = manifest thread id 1
+	ts.thread_id = 1 // manifest thread id of app's thread
 	ts.buf.start()
 	sched.set_trace_hook(trace_capture, &ts)
 	mut link := isotp.Link{}
@@ -144,6 +149,7 @@ pub fn run(can0 can.Channel) {
 						|| c.opcode == trace.op_reset {
 						ts.start = C.board_now_us()
 						ts.base = 0
+						ts.busy_end = 0 // fresh origin: don't treat the old capture's span end as the idle-gap start
 						link = isotp.Link{}
 					}
 					if do_dump {
