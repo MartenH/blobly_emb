@@ -126,6 +126,7 @@ pub fn run(can0 can.Channel) {
 	mut last_push := u64(0)
 	mut last_count := [3]u32{}
 	mut last_telem := u64(0)
+	mut last_overruns := u32(0) // for the LoadDetail per-period overrun delta
 	tick_us := u64(1000)
 	mut next_tick := C.board_now_us() + tick_us
 	for {
@@ -218,6 +219,18 @@ pub fn run(can0 can.Channel) {
 				cf.data[j] = frame[j]
 			}
 			ch.send(cf)
+			ovr := sched.overruns()
+			detail := telem.encode_loaddetail(sched.load_permille_100ms(),
+				sched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)
+			last_overruns = ovr
+			mut df := can.Frame{
+				id:  u32(0x7e1)
+				len: 8
+			}
+			for j in 0 .. 8 {
+				df.data[j] = detail[j]
+			}
+			ch.send(df)
 		}
 		for C.board_now_us() < next_tick {} // idle to the tick (real idle)
 		next_tick += tick_us

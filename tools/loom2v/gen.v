@@ -1770,6 +1770,9 @@ fn main() {
 		}
 		if cpuload_on {
 			glue << '\tmut last_telem := u64(0)'
+			if telem_detail_id != 0 {
+				glue << '\tmut last_overruns := u32(0) // for the LoadDetail per-period overrun delta'
+			}
 		}
 		if trace_target {
 			// Pace the superloop to a fixed tick with a busy-wait so idle is real idle — the Loom
@@ -1872,6 +1875,22 @@ fn main() {
 			glue << '\t\t\t\tcf.data[j] = frame[j]'
 			glue << '\t\t\t}'
 			glue << '\t\t\tch.send(cf)'
+			if telem_detail_id != 0 {
+				// LoadDetail (multi-window load + per-period overruns) — same frame the plain target
+				// emits; keep it under trace so a bare-metal config's detail_id isn't silently dropped.
+				glue << '\t\t\tovr := sched.overruns()'
+				glue << '\t\t\tdetail := telem.encode_loaddetail(sched.load_permille_100ms(),'
+				glue << '\t\t\t\tsched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)'
+				glue << '\t\t\tlast_overruns = ovr'
+				glue << '\t\t\tmut df := can.Frame{'
+				glue << '\t\t\t\tid:  u32(0x${telem_detail_id.hex()})'
+				glue << '\t\t\t\tlen: 8'
+				glue << '\t\t\t}'
+				glue << '\t\t\tfor j in 0 .. 8 {'
+				glue << '\t\t\t\tdf.data[j] = detail[j]'
+				glue << '\t\t\t}'
+				glue << '\t\t\tch.send(df)'
+			}
 			glue << '\t\t}'
 		}
 		if trace_target {
