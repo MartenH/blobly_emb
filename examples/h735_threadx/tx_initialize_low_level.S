@@ -34,7 +34,8 @@
     .global     __tx_IntHandler                     // Int 0
 
 SYSTEM_CLOCK      =   550000000                      // STM32H735 CM7 at 550 MHz (board_clock_init, PLL1)
-SYSTICK_CYCLES    =   ((SYSTEM_CLOCK / 100) -1)      // -> a true 100 Hz ThreadX tick (5499999 < 24-bit LOAD max)
+SYSTICK_CYCLES    =   ((SYSTEM_CLOCK / 1000) -1)     // -> a 1 kHz ThreadX tick = 1 ms, matching the generated
+                                                    // target's [target].tick_ms=1 (loom2v sleeps N ms-ticks)
 
     .text 32
     .align 4

@@ -96,13 +96,13 @@ pub fn run(can0 can.Channel) {
 			}
 			ch.send(d)
 		}
-		C._tx_thread_sleep(1)
+		C._tx_thread_sleep(u32(1))
 	}
 }
 
 fn app_thread_entry(input u32) {
 	mut ch := can.Channel{}
-	ch.open('0', false) // FDCAN bus 0 (classic); board clocks/pins set by main.v
+	ch.open('0', false) // can0; board clocks/pins set by main.v
 	run(ch)
 }
 

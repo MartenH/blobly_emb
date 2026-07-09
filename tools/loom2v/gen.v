@@ -325,14 +325,17 @@ fn main() {
 	mut core_of := map[string]int{}
 	mut threads_of := map[string][]string{} // partition -> its thread names, declaration order
 	mut thread_part := map[string]string{} // thread -> partition (thread names are GLOBALLY unique)
+	mut thread_prio := map[string]int{} // thread -> [[partition.thread]].priority (default 10)
 	for p in ecumodel.toml_arr(doc, 'partition') {
 		m := p.as_map()
 		pname := (m['name'] or { toml.Any('') }).string()
 		core_of[pname] = int((m['core'] or { toml.Any(0) }).int())
 		for t in (m['thread'] or { toml.Any([]toml.Any{}) }).array() {
-			tname := (t.as_map()['name'] or { toml.Any('') }).string()
+			tm := t.as_map()
+			tname := (tm['name'] or { toml.Any('') }).string()
 			thread_part[tname] = pname
 			threads_of[pname] << tname
+			thread_prio[tname] = int((tm['priority'] or { toml.Any(10) }).int())
 		}
 	}
 	// An fb maps to a THREAD (globally unique); its partition is DERIVED from that thread, so
@@ -444,6 +447,14 @@ fn main() {
 	if target_on && has_external {
 		panic('loom2v: [target] baremetal does not support external/bus signals yet ' +
 			'(every [[signal]] must be partition-local: from == to)')
+	}
+	// Phase 6a emits the ThreadX target WITHOUT trace: a traced config would otherwise fall
+	// into the bare-metal inline-trace emitter below (trace_target = trace_on && target_on),
+	// which emits run() but NOT tx_application_define/boot() — a broken image. Reject it until
+	// the ThreadX comm-thread + trace emitter lands (phase 6b).
+	if target_threadx && trace_on {
+		panic('loom2v: [target] kind="threadx" with [trace] is not generated yet (phase 6b — the ' +
+			'ThreadX comm thread + trace dump); set [trace].enabled = false for threadx builds')
 	}
 
 	// The trace cmd/rsp + dump ride a CAN channel: trace.bus, or [telemetry].bus by default.
@@ -1592,6 +1603,28 @@ fn main() {
 		}
 		part := by_part.keys()[0]
 		chp := snake(telem_bus)
+		// ThreadX target config: the app thread's priority, the telem bus fd-mode + index, and
+		// the sleep-per-pass in ThreadX ticks (1 tick = 1 ms; tx_initialize_low_level runs a 1 kHz
+		// SysTick for the threadx target), all from ecu.toml rather than hardcoded.
+		app_thread := (threads_of[part] or { [''] })[0]
+		tx_prio := thread_prio[app_thread] or { 10 }
+		mut tx_bus_fd := false
+		mut tx_bus_idx := '0'
+		if target_threadx {
+			if bc := doc.value('bus').as_map()[telem_bus] {
+				tx_bus_fd = (bc.as_map()['fd'] or { toml.Any(false) }).bool()
+			}
+			mut digits := ''
+			for cc in telem_bus {
+				if cc >= `0` && cc <= `9` {
+					digits += cc.ascii_str()
+				}
+			}
+			if digits != '' {
+				tx_bus_idx = digits
+			}
+		}
+		tx_sleep_ticks := if target_tick_us / 1000 > 1 { target_tick_us / 1000 } else { u64(1) }
 		glue << ''
 		glue << 'fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)'
 		if target_threadx {
@@ -1673,9 +1706,10 @@ fn main() {
 			glue << '\t\t}'
 		}
 		if target_threadx {
-			// Yield to the RTOS between passes: one ThreadX tick of sleep, so lower-priority
-			// threads run and the Loom's load = run-time / wall-clock stays honest (no busy-wait).
-			glue << '\t\tC._tx_thread_sleep(1)'
+			// Yield to the RTOS between passes: sleep the configured tick (in 1 ms ThreadX
+			// ticks), so lower-priority threads run and the Loom's load = run-time / wall-clock
+			// stays honest (no busy-wait). ThreadX runs a 1 kHz SysTick for the threadx target.
+			glue << '\t\tC._tx_thread_sleep(u32(${tx_sleep_ticks}))'
 		} else {
 			glue << '\t\tfor C.board_now_us() < next_tick {} // idle to the tick (real idle)'
 			glue << '\t\tnext_tick += tick_us'
@@ -1692,14 +1726,14 @@ fn main() {
 			glue << ''
 			glue << 'fn ${part}_thread_entry(input u32) {'
 			glue << '\tmut ch := can.Channel{}'
-			glue << "\tch.open('0', false) // FDCAN bus 0 (classic); board clocks/pins set by main.v"
+			glue << "\tch.open('${tx_bus_idx}', ${tx_bus_fd}) // ${telem_bus}; board clocks/pins set by main.v"
 			glue << '\trun(ch)'
 			glue << '}'
 			glue << ''
 			glue << "@[export: 'tx_application_define']"
 			glue << 'fn tx_application_define(first_unused voidptr) {'
 			glue << '\tC._tx_thread_create(&g_${part}_tcb[0], c\'${part}\', ${part}_thread_entry, u32(0),'
-			glue << '\t\t&g_${part}_stack[0], u32(g_${part}_stack.len), u32(10), u32(10), u32(0), u32(1))'
+			glue << '\t\t&g_${part}_stack[0], u32(g_${part}_stack.len), u32(${tx_prio}), u32(${tx_prio}), u32(0), u32(1))'
 			glue << '}'
 			glue << ''
 			glue << '// boot: hand control to the ThreadX kernel (never returns; calls'
