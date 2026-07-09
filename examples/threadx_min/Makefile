@@ -14,7 +14,10 @@ TX      = $(REPO)/third_party/threadx
 PORT    = $(TX)/ports/cortex_m7/gnu
 
 MCU     = -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb
+# TX_ENABLE_EXECUTION_CHANGE_NOTIFY makes the port's context-switch + ISR-entry asm call
+# the four _tx_execution_* hooks (trace_hooks.c) — the source of the real trace records.
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
+          -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY \
           -I$(PORT)/inc -I$(TX)/common/inc
 LDFLAGS = $(MCU) -T threadx.ld -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs
@@ -29,14 +32,16 @@ TX_C   = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
          $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 
-APP = crt0.S vectors.S tx_initialize_low_level.S main.c
+APP = crt0.S vectors.S tx_initialize_low_level.S main.c trace_hooks.c
 
 all: $(BUILD)/threadx_min.elf
 
-$(BUILD)/tx/%.o: $(PORT)/src/%.S
+# Depend on the Makefile so a CFLAGS change (e.g. enabling the execution-change hooks)
+# rebuilds the ThreadX objects — otherwise a stale phase-1 tx.a (no hooks) would linger.
+$(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
 	@mkdir -p $(BUILD)/tx
 	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/tx/%.o: $(TX)/common/src/%.c
+$(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile
 	@mkdir -p $(BUILD)/tx
 	$(CC) $(CFLAGS) -c $< -o $@
 $(TX_A): $(TX_OBJ)
