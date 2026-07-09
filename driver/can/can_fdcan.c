@@ -129,16 +129,11 @@ int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int fd_m
 	if (!c || len > 8)
 		return -1; /* classic frame */
 	(void)fd_mode;
-	/* Wait (bounded) for a free Tx FIFO slot. A burst larger than the 8-deep FIFO —
-	 * the ISO-TP trace dump segments ~37 consecutive frames back-to-back — would
-	 * otherwise silently drop every frame past the 8th (the ISO-TP link advances its
-	 * tx_pos regardless), truncating the transfer. The bound stops a disconnected bus
-	 * (no ACK -> FIFO never drains) from hanging the super-loop; one frame drains in
-	 * ~230 us at 500 kbit, far inside the spin budget. */
-	for (uint32_t t = 0; (c->TXFQS & FDCAN_TXFQS_TFQF) != 0u; t++) {
-		if (t >= 1000000u)
-			return -1; /* FIFO stuck full (bus down?) -> drop rather than hang */
-	}
+	/* Non-blocking: report FIFO-full to the caller instead of spinning here. A caller
+	 * that bursts more than the 8-deep Tx FIFO (e.g. the ISO-TP trace dump) gates on
+	 * blob_can_tx_ready() and paces itself, so the driver never blocks the loop/thread. */
+	if (c->TXFQS & FDCAN_TXFQS_TFQF)
+		return -1; /* Tx FIFO full */
 
 	uint32_t pi = (c->TXFQS & FDCAN_TXFQS_TFQPI) >> FDCAN_TXFQS_TFQPI_Pos;
 	if (pi >= TX_ELMTS)
@@ -161,6 +156,16 @@ int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int fd_m
 
 	c->TXBAR = (1u << pi); /* request transmission */
 	return 0;
+}
+
+/* Non-blocking backpressure query: 1 if the Tx FIFO can accept a frame now, else 0.
+ * A burst sender (the ISO-TP dump) gates on this so it never overruns the FIFO or
+ * blocks — it sends up to a FIFO's worth per pass and resumes on the next. */
+int blob_can_tx_ready(int h) {
+	FDCAN_GlobalTypeDef *c = inst(h);
+	if (!c)
+		return 0;
+	return (c->TXFQS & FDCAN_TXFQS_TFQF) ? 0 : 1;
 }
 
 int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {

@@ -80,6 +80,13 @@ int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int fd_m
 	return -1; /* (bus,id) not in the CanIf Tx config */
 }
 
+/* CanIf owns its own Tx buffering/queueing, so report ready and let CanIf_Transmit
+ * absorb bursts (size the CanIf Tx buffers for the integrator's worst case). */
+int blob_can_tx_ready(int h) {
+	(void)h;
+	return 1;
+}
+
 int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
 	if (h < 0 || h >= BLOB_CAN_BUSES) return -1;
 	return blob_ring_pop(&rx_ring[h], id, data, len);

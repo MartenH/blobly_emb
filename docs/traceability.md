@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 63 | 46 | 5 | 12 | 0 |
+| 64 | 46 | 5 | 13 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -21,6 +21,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-DRV-004 | QM | test | uncovered | — |
 | REQ-CAN-DRV-005 | QM | test | uncovered | — |
 | REQ-CAN-DRV-006 | QM | review | uncovered | — |
+| REQ-CAN-DRV-007 | QM | test | uncovered | — |
 | REQ-ECU-001 | QM | test | verified | ecu_test.v (pass) |
 | REQ-ECU-002 | QM | test | verified | ecu_test.v (pass) |
 | REQ-ECU-003 | QM | test | verified | ecu_test.v (pass), handoff_test.v (pass) |
@@ -89,6 +90,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-DRV-004 | | | | | |
 | REQ-CAN-DRV-005 | | | | | |
 | REQ-CAN-DRV-006 | | | | | |
+| REQ-CAN-DRV-007 | | | | | |
 | REQ-ECU-001 | | | ✓ | | |
 | REQ-ECU-002 | | | ✓ | | |
 | REQ-ECU-003 | | | ✓ | | |

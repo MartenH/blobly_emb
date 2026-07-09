@@ -1155,8 +1155,11 @@ fn main() {
 				glue << '\t\t\tst.tp_${tp}.send(&st.uds_${tp}_resp[0], ${tp}_rlen)'
 				glue << '\t\t}'
 				glue << '\t}'
+				glue << '\tst.tp_${tp}.tick(now) // advance the ISO-TP timeout even when tx_ready gates poll out'
 				glue << '\tmut pdu_${tp} := isotp.Pdu{}'
-				glue << '\tfor st.tp_${tp}.poll(now, mut pdu_${tp}) {'
+				// Gate on tx_ready so a UDS response burst never overruns the Tx FIFO or blocks — send at
+				// most a FIFO\'s worth per pass, resume next pass (poll advances tx state).
+				glue << '\tfor st.chan.tx_ready() && st.tp_${tp}.poll(now, mut pdu_${tp}) {'
 				glue << '\t\tmut cf_${tp} := can.Frame{'
 				glue << '\t\t\tid:  u32(0x${c.tx_id.hex()})'
 				glue << '\t\t\tlen: 8'
@@ -1471,8 +1474,12 @@ fn main() {
 		glue << '\t\t\t\tlink.on_frame(osal.now_us(), p)'
 		glue << '\t\t\t}'
 		glue << '\t\t}'
+		glue << '\t\tlink.tick(osal.now_us()) // advance the N_Bs timeout even when tx_ready gates poll out'
 		glue << '\t\tmut tp := isotp.Pdu{}'
-		glue << '\t\tfor link.poll(osal.now_us(), mut tp) {'
+		// Gate on tx_ready so a dump never overruns the Tx FIFO or blocks in the driver — send at most
+		// a FIFO\'s worth per pass, resume next pass. poll() advances tx state, so only poll when
+		// there\'s room to send the frame it yields.
+		glue << '\t\tfor ch.tx_ready() && link.poll(osal.now_us(), mut tp) {'
 		glue << '\t\t\tmut pf := can.Frame{'
 		glue << '\t\t\t\tid:  u32(0x${trace_record_id.hex()})'
 		glue << '\t\t\t\tlen: 8'
@@ -1834,8 +1841,12 @@ fn main() {
 		glue << '\t\t\t\tlink.on_frame(${nowcall}, p)'
 		glue << '\t\t\t}'
 		glue << '\t\t}'
+		glue << '\t\tlink.tick(${nowcall}) // advance the N_Bs timeout even when tx_ready gates poll out'
 		glue << '\t\tmut tp := isotp.Pdu{}'
-		glue << '\t\tfor link.poll(${nowcall}, mut tp) {'
+		// Gate on tx_ready so the dump never overruns the Tx FIFO or blocks in the driver — send at
+		// most a FIFO\'s worth per pass and resume next pass (poll advances tx state, so only poll when
+		// there\'s room to send).
+		glue << '\t\tfor ch.tx_ready() && link.poll(${nowcall}, mut tp) {'
 		glue << '\t\t\tmut pf := can.Frame{'
 		glue << '\t\t\t\tid:  u32(0x${trace_record_id.hex()})'
 		glue << '\t\t\t\tlen: 8'
