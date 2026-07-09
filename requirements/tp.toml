@@ -1,0 +1,22 @@
+# TP — ISO-TP (ISO 15765-2) segmented transport: reassemble/segment a message larger
+# than one CAN frame, with flow control and timeouts. The transport UDS (DIAG) runs
+# over; kept a separate area per requirements/modules.md (tp vs diag). Implementation-
+# and instance-agnostic.
+
+[[req]]
+id = "REQ-TP-001"
+title = "Segmented transport"
+text = "The transport shall reassemble a multi-frame request and segment a multi-frame response per ISO 15765-2 (single/first/consecutive frames), so a message larger than one CAN frame is exchanged intact."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-TP-002"
+title = "Flow control and timeout"
+text = "The transport shall honour and emit flow control (block size, separation time) and shall bound both directions with a timeout: abort a transmit whose flow control (or Tx-path readiness) makes no progress within N_Bs, and abort a reassembly whose next consecutive frame does not arrive within N_Cr (discarding the partial message). So neither a stalled sender nor a stalled receiver can wedge the connection or leak a half-assembled message."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"

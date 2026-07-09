@@ -1,0 +1,42 @@
+# E2E — end-to-end protection for safety-relevant messages: a CRC over the protected
+# data plus an alive/sequence counter, checked on receive and stamped on transmit.
+# Detects the three E2E fault classes (corruption, repetition, loss). Implementation-
+# and instance-agnostic (the profile/CRC width is configuration).
+
+[[req]]
+id = "REQ-E2E-001"
+title = "Detect corruption"
+text = "For an E2E-protected message, the receiver shall detect a corrupted payload (a CRC mismatch) and shall not deliver the corrupted data as valid to the application."
+status = "draft"
+method = "test"
+asil = "B" # inherits the ASIL B of the parent SYS-REQ-SAFE-001 (no decomposition)
+derives = "SYS-REQ-SAFE-001"
+
+[[req]]
+id = "REQ-E2E-002"
+title = "Detect repetition and loss"
+text = "For an E2E-protected message, the receiver shall detect a repeated message and a skipped-sequence (dropped-in-between) message via its sequence counter, and shall detect total loss of the sender via its own reception timeout (no valid message within the configured period) — so the loss check stays within the ASIL B E2E mechanism and does not depend on a QM monitor. It shall report the fault to the application. (The COM reception deadline, REQ-COM-005, is a complementary QM monitor.)"
+status = "draft"
+method = "test"
+asil = "B" # inherits the ASIL B of the parent SYS-REQ-SAFE-001 (no decomposition)
+derives = "SYS-REQ-SAFE-001"
+
+[[req]]
+id = "REQ-E2E-003"
+title = "Protect on transmit"
+text = "For an E2E-protected message, the transmitter shall compute and stamp the CRC and advance the sequence counter on every transmission, so a conforming receiver can perform the checks above."
+status = "draft"
+method = "test"
+asil = "B" # inherits the ASIL B of the parent SYS-REQ-SAFE-001 (no decomposition)
+derives = "SYS-REQ-SAFE-001"
+
+[[req]]
+id = "REQ-E2E-004"
+title = "Composition with SecOC"
+text = "For a message configured with both E2E and SecOC, the protection order shall be defined and symmetric, and the two protections shall occupy disjoint byte ranges so stamping one does not invalidate the other: E2E covers only the application payload, never the SecOC MAC/freshness bytes. On transmit the E2E CRC/counter are applied to the payload first and the SecOC authentication code is then computed over the E2E-protected payload and appended; on receive the SecOC check runs first and only an authentic message is passed to the E2E check. Neither shall mask a fault the other would detect."
+# method = test: an ASIL B property is demonstrated by an executed check (corrupt ->
+# E2E fault; forge/replay -> SecOC reject; neither masks the other), not a review sign-off.
+status = "draft"
+method = "test"
+asil = "B" # inherits the ASIL B of the parent SYS-REQ-SAFE-001 (no decomposition)
+derives = "SYS-REQ-SAFE-001"
