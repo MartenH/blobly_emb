@@ -392,6 +392,12 @@ fn main() {
 	mut trace_pre_pct := 50
 	mut trace_push_us := u64(1_000_000)
 	mut trace_budget_us := u64(0) // overrun trigger budget (0 = no software trigger)
+	// [trace] keys that only the software-packer protocol implements — the request/response path
+	// (cmd_id/rsp_id), the HandlerStat heartbeat (stat_id/push_ms), the ISO-TP dump flow control
+	// (dump_fc_id), and the pre-trigger split (pre_pct, meaningless without a trigger/oneshot).
+	// All have non-zero defaults, so we track EXPLICIT presence to reject them for the ThreadX
+	// exec-hook stream (which implements none) without rejecting a bare config.
+	mut trace_sw_keys := []string{}
 	if trcfg := doc.value_opt('trace') {
 		trm := trcfg.as_map()
 		// a [trace] block is active unless explicitly disabled (enabled = false) — so tracing
@@ -413,6 +419,11 @@ fn main() {
 		trace_pre_pct = int((trm['pre_pct'] or { toml.Any(trace_pre_pct) }).int())
 		if pms := trm['push_ms'] {
 			trace_push_us = u64(pms.int()) * 1000
+		}
+		for k in ['cmd_id', 'rsp_id', 'stat_id', 'dump_fc_id', 'push_ms', 'pre_pct'] {
+			if k in trm {
+				trace_sw_keys << k
+			}
 		}
 		// trigger = { source = "overrun", budget_us = N }: freeze the ring when a handler runs
 		// longer than N µs. Only "overrun" is generated today; other sources are reserved.
@@ -448,14 +459,12 @@ fn main() {
 		panic('loom2v: [target] baremetal does not support external/bus signals yet ' +
 			'(every [[signal]] must be partition-local: from == to)')
 	}
-	// Phase 6a emits the ThreadX target WITHOUT trace: a traced config would otherwise fall
-	// into the bare-metal inline-trace emitter below (trace_target = trace_on && target_on),
-	// which emits run() but NOT tx_application_define/boot() — a broken image. Reject it until
-	// the ThreadX comm-thread + trace emitter lands (phase 6b).
-	if target_threadx && trace_on {
-		panic('loom2v: [target] kind="threadx" with [trace] is not generated yet (phase 6b — the ' +
-			'ThreadX comm thread + trace dump); set [trace].enabled = false for threadx builds')
-	}
+	// The ThreadX target's trace is the EXEC-CHANGE-HOOK model (trace_hooks.c captures every
+	// real context switch + ISR into a ring), NOT the loom2v polled V-stack capture. So a
+	// [trace] block on a threadx target does not engage the inline/multicore trace machinery
+	// (trace_target excludes threadx below); it only tells the generated bus owner which
+	// record_id to stream the ring on. The FB loop being a real ThreadX thread means the hooks
+	// capture it for free — see the threadx run() below (phase 6b-1).
 	// The threadx app thread opens the telemetry bus for its CAN channel, so the target needs
 	// [telemetry] ENABLED, with a bus that actually exists (the schema makes all of that
 	// optional in general, and only `driver.can` gets imported when telem_on).
@@ -476,6 +485,54 @@ fn main() {
 
 	// The trace cmd/rsp + dump ride a CAN channel: trace.bus, or [telemetry].bus by default.
 	eff_trace_bus := if trace_bus != '' { trace_bus } else { telem_bus }
+	// ThreadX target trace is the RAW exec-hook stream: THREAD/ISR records only, one classic
+	// 11-bit frame per record, streamed by the single bus owner on the telemetry channel. No
+	// TraceCmd/Rsp/HandlerStat/ISO-TP. Reject configs it can't honour rather than emit code
+	// that silently ignores them.
+	if target_threadx && trace_on {
+		// The exec-change hooks fire on BOTH context switches and ISR enter/exit unconditionally,
+		// so the stream is always exactly "thread+isr" — a "thread"-only or FB-inclusive level
+		// can't be honoured. Reject anything but the one level the hooks actually produce.
+		if trace_level != 'thread+isr' {
+			panic('loom2v: [target] kind="threadx" [trace].level "${trace_level}" is not producible — ' +
+				'the exec-change hooks always capture context switches AND ISRs (no thread-only, no ' +
+				'handler-level FB records) — use level = "thread+isr"')
+		}
+		// Only the overwrite ring is implemented (trace_hooks.c has no oneshot/stop-when-full ring),
+		// and the generated stream re-snapshots every ~1 s. A "oneshot" request would silently get
+		// continuous ring behaviour.
+		if trace_mode != 'ring' {
+			panic('loom2v: [target] kind="threadx" [trace].mode "${trace_mode}" is not implemented — ' +
+				'the exec-hook recorder is an overwrite ring streamed continuously — use mode = "ring"')
+		}
+		if trace_record_id > 0x7ff {
+			panic('loom2v: [target] kind="threadx" [trace].record_id 0x${trace_record_id.hex()} is an ' +
+				'extended (29-bit) id, but the classic FDCAN backend sends 11-bit frames — use a ' +
+				'standard id (<= 0x7FF)')
+		}
+		// The exec-hook path snapshots and streams the ring on a fixed ~1 s cadence; it has no
+		// overrun-triggered freeze (trace_budget_us is only wired into the software packer's inline
+		// hook). A [trace].trigger config would build but silently produce a continuous ring.
+		if trace_budget_us > 0 {
+			panic('loom2v: [target] kind="threadx" [trace].trigger (budget_us) is not implemented — ' +
+				'the exec-hook recorder streams the ring on a fixed cadence with no overrun freeze — ' +
+				'drop the trigger for threadx builds')
+		}
+		// The exec-hook stream is raw records only: no TraceCmd/Rsp request path, no HandlerStat
+		// heartbeat, no ISO-TP dump flow control. These keys have non-zero defaults but are inert
+		// here, so an explicitly-set one (copied from a bare-metal trace block) would build while
+		// silently doing nothing. Reject the explicit ones rather than ignore them.
+		if trace_sw_keys.len > 0 {
+			panic('loom2v: [target] kind="threadx" [trace] key(s) ${trace_sw_keys} are not implemented — ' +
+				'the exec-hook stream has no TraceCmd/Rsp request path, HandlerStat heartbeat ' +
+				'(push_ms/stat_id), ISO-TP dump flow control (dump_fc_id), or pre-trigger split ' +
+				'(pre_pct); it streams only raw records on record_id — remove these keys for threadx builds')
+		}
+		if trace_bus != '' && trace_bus != telem_bus {
+			panic('loom2v: [target] kind="threadx" [trace].bus "${trace_bus}" must equal ' +
+				'[telemetry].bus "${telem_bus}" — the single bus owner streams both on one channel')
+		}
+	}
 	mut trace_core := 0
 	if eff_trace_bus != '' {
 		if bc := doc.value('bus').as_map()[eff_trace_bus] {
@@ -544,7 +601,10 @@ fn main() {
 	// P3c-0: bare-metal single-core trace — the same inline machinery, emitted with the board timebase
 	// (C.board_now_us) and no osal. Guaranteed single-core (target rejects external signals, so no
 	// bridge, and the target run() is one-partition).
-	trace_target := trace_on && target_on
+	// trace_target is the BARE-METAL target's polled inline trace. The ThreadX target is
+	// excluded — its trace is the exec-change-hook stream emitted in the threadx run(), not
+	// this V-stack capture machinery.
+	trace_target := trace_on && target_on && !target_threadx
 	// The bare-metal target trace runner services only trace + CpuLoad on one channel — it never runs
 	// a COM bridge. has_external is already rejected for target above; ISO-TP / routes make has_bridge
 	// true without has_external, so reject those too rather than silently drop the configured bus work.
@@ -1617,15 +1677,25 @@ fn main() {
 		}
 	}
 	extra_dest_buses.sort()
-	if target_on && !trace_on {
+	if target_on && (target_threadx || !trace_on) {
 		// --- target run(): one inline single-core superloop. No spawn, no osal. The
 		//     timebase is the board's DWT clock (board_now_us); the loop paces to a
+		//     (ThreadX comes here whether or not [trace] — its trace is the exec-hook stream
+		//     added to this run() below, not the bare-metal polled trace path.)
 		//     fixed tick so idle time between passes is real idle (the Loom measures
 		//     load as run-time / wall-clock, so unpaced spinning would read ~50%). The
 		//     CpuLoad frame is sent inline from load_permille() — no scratch, no tx
 		//     thread. Takes the telemetry bus channel (main.v opens it after board init).
-		if by_part.keys().len != 1 {
-			panic('loom2v: [target] baremetal supports exactly one partition (got ${by_part.keys().len})')
+		// The target emits ONE app thread from the single FB-bearing partition. by_part is keyed
+		// only by partitions that own fbs, so an extra FB-LESS partition would slip past a
+		// by_part-only check yet still be created as a labelled thread by the manifest loop (which
+		// walks every declared partition) — shifting the hook ids (e.g. the ThreadX System Timer
+		// Thread id). Require exactly one DECLARED partition so declared == generated.
+		np_declared := ecumodel.toml_arr(doc, 'partition').len
+		if by_part.keys().len != 1 || np_declared != 1 {
+			panic('loom2v: [target] supports exactly one partition (got ${np_declared} declared, ' +
+				'${by_part.keys().len} with fbs) — a second or FB-less partition is never generated ' +
+				'yet would still be labelled in the trace manifest; multi-partition/multi-core is not generated yet')
 		}
 		part := by_part.keys()[0]
 		chp := snake(telem_bus)
@@ -1686,6 +1756,12 @@ fn main() {
 			glue << 'fn C._tx_thread_sleep(u32) u32'
 			glue << 'fn C._tx_initialize_kernel_enter()'
 			glue << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
+			if trace_on {
+				// The exec-change-hook trace recorder (trace_hooks.c, driver-independent): it copies
+				// the ring into our scratch buffer under a brief freeze, and THIS thread (the sole
+				// bus owner) streams the stable copy. RING_CAP = 256 records * 8 bytes.
+				glue << 'fn C.trace_snapshot(voidptr, u32) u32'
+			}
 			glue << ''
 			// TCB as [32]u64 (256 B >= sizeof(TX_THREAD) = 200 B) so it is 8-byte aligned — the
 			// kernel reads/writes word fields through this pointer as a TX_THREAD*, so a byte-
@@ -1694,6 +1770,9 @@ fn main() {
 			glue << '__global ('
 			glue << '\tg_${part}_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned'
 			glue << '\tg_${part}_stack [4096]u8'
+			if trace_on {
+				glue << '\tg_${part}_trace [${trace_buffer_records}][8]u8 // scratch snapshot of the trace ring (owner streams it)'
+			}
 			glue << ')'
 		}
 		glue << ''
@@ -1715,6 +1794,14 @@ fn main() {
 		glue << '\ttick_us := u64(${target_tick_us})'
 		if !target_threadx {
 			glue << '\tmut next_tick := C.board_now_us() + tick_us'
+		}
+		if target_threadx && trace_on {
+			// Exec-hook trace stream state: snapshot the ring ~1 s, then stream the stable copy
+			// in chunks across iterations (this thread is the sole bus owner => lock-free).
+			glue << '\tmut last_trace := u64(0)'
+			glue << '\tmut tr_pos := u32(0)'
+			glue << '\tmut tr_n := u32(0)'
+			glue << '\tmut tr_active := false'
 		}
 		glue << '\tfor {'
 		glue << '\t\tt0 := C.board_now_us()'
@@ -1751,6 +1838,46 @@ fn main() {
 				glue << '\t\t\t}'
 				glue << '\t\t\tch.send(d)'
 			}
+			glue << '\t\t}'
+		}
+		if target_threadx && trace_on {
+			// Stream the exec-hook trace ring ~1 s, single-owner + incremental. trace_snapshot
+			// copies the ring into g_${part}_trace under a brief freeze; we then send 16 records
+			// per pass, only while the Tx FIFO has room (no spin) — so a stuck bus can't wedge
+			// the owner and the FB scheduling above still runs between chunks. Records go out raw
+			// (one 8-byte record per classic frame on the trace record id); the host decodes with
+			// candump + decode_trace.py.
+			//
+			// NOTE (raw-stream limitation): these are the trace_hooks.c records verbatim, whose
+			// start_us is absolute DWT µs truncated to u24 — it wraps every ~16.7 s with no epoch
+			// re-anchor, so decode_trace.py orders a window, not an unbounded absolute timeline.
+			// This matches the hand-written threadx_h735 bring-up stream. blobly_net's swimlane
+			// consumes the ISO-TP *block* dump (relative records + per-block epoch anchor, which
+			// handles the wrap) — emitting that block/epoch protocol on the ThreadX target is a
+			// later phase; until then the manifest advertises only the raw `record` frame.
+			glue << '\t\tif !tr_active && t1 - last_trace >= u64(1000000) {'
+			glue << '\t\t\ttr_n = C.trace_snapshot(&g_${part}_trace[0], ${trace_buffer_records})'
+			glue << '\t\t\ttr_pos = 0'
+			glue << '\t\t\ttr_active = true'
+			glue << '\t\t}'
+			glue << '\t\tif tr_active {'
+			glue << '\t\t\tmut sent := 0'
+			glue << '\t\t\tfor tr_pos < tr_n && sent < 16 && ch.tx_ready() {'
+			glue << '\t\t\t\tmut tf := can.Frame{'
+			glue << '\t\t\t\t\tid:  u32(0x${trace_record_id.hex()})'
+			glue << '\t\t\t\t\tlen: 8'
+			glue << '\t\t\t\t}'
+			glue << '\t\t\t\tfor j in 0 .. 8 {'
+			glue << '\t\t\t\t\ttf.data[j] = g_${part}_trace[tr_pos][j]'
+			glue << '\t\t\t\t}'
+			glue << '\t\t\t\tch.send(tf)'
+			glue << '\t\t\t\ttr_pos++'
+			glue << '\t\t\t\tsent++'
+			glue << '\t\t\t}'
+			glue << '\t\t\tif tr_pos >= tr_n {'
+			glue << '\t\t\t\ttr_active = false'
+			glue << '\t\t\t\tlast_trace = C.board_now_us()'
+			glue << '\t\t\t}'
 			glue << '\t\t}'
 		}
 		if target_threadx {
@@ -2248,6 +2375,16 @@ fn main() {
 				tid++
 			}
 		}
+		// ThreadX System Timer Thread: the default (non-TX_TIMER_PROCESS_IN_ISR) build runs a hidden
+		// timer thread to expire tx_thread_sleep/timers, and trace_hooks.c assigns it an id like any
+		// other _tx_thread_current_ptr. It first appears AFTER the AUTO_START app thread(s) (which run
+		// at kernel entry, before the first tick wakes the timer thread), so it takes the next id here.
+		// Without this row blobly_net sees an unlabelled THREAD lane (docs/telemetry.md "System Timer
+		// Thread"). Reserve it on the primary core.
+		if target_threadx && trace_on {
+			man << 'thread,${tid},tx_system_timer,0'
+			tid++
+		}
 		// Comm threads (P3b): one per bridge bus, AFTER the app threads (matches the gate's comm_tid
 		// numbering). bridge_bus_list is empty unless the trace path traces the bridges.
 		for bb in bridge_bus_list {
@@ -2260,11 +2397,19 @@ fn main() {
 		if trace_on {
 			tbus := if trace_bus != '' { trace_bus } else { telem_bus }
 			man << '# trace frames: frame,id,bus'
-			man << 'cmd,0x${trace_cmd_id.hex()},${tbus}'
-			man << 'rsp,0x${trace_rsp_id.hex()},${tbus}'
-			man << 'stat,0x${trace_stat_id.hex()},${tbus}'
+			// The ThreadX target streams ONLY the raw record frames (exec-hook stream on the bus
+			// owner's single channel) — it implements no TraceCmd/Rsp/HandlerStat request path and
+			// no ISO-TP flow control. Advertise only what it actually sends, so blobly_net doesn't
+			// wait on cmd/rsp/stat/dump_fc ids that never appear.
+			if !target_threadx {
+				man << 'cmd,0x${trace_cmd_id.hex()},${tbus}'
+				man << 'rsp,0x${trace_rsp_id.hex()},${tbus}'
+				man << 'stat,0x${trace_stat_id.hex()},${tbus}'
+			}
 			man << 'record,0x${trace_record_id.hex()},${tbus}'
-			man << 'dump_fc,0x${trace_dump_fc_id.hex()},${tbus}'
+			if !target_threadx {
+				man << 'dump_fc,0x${trace_dump_fc_id.hex()},${tbus}'
+			}
 		}
 		os.write_file(args[6], man.join('\n') + '\n') or { panic('write ${args[6]}: ${err}') }
 	}
