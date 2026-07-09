@@ -33,6 +33,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-E2E-001 | B | test | uncovered | — |
 | REQ-E2E-002 | B | test | uncovered | — |
 | REQ-E2E-003 | B | test | uncovered | — |
+| REQ-E2E-004 | B | review | uncovered | — |
 | REQ-ECU-001 | QM | test | verified | ecu_test.v (pass) |
 | REQ-ECU-002 | QM | test | verified | ecu_test.v (pass) |
 | REQ-ECU-003 | QM | test | verified | ecu_test.v (pass), handoff_test.v (pass) |
@@ -118,6 +119,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-E2E-001 | | | | | |
 | REQ-E2E-002 | | | | | |
 | REQ-E2E-003 | | | | | |
+| REQ-E2E-004 | | | | | |
 | REQ-ECU-001 | | | ✓ | | |
 | REQ-ECU-002 | | | ✓ | | |
 | REQ-ECU-003 | | | ✓ | | |

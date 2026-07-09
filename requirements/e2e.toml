@@ -14,8 +14,8 @@ derives = "SYS-REQ-SAFE-001"
 
 [[req]]
 id = "REQ-E2E-002"
-title = "Detect repetition and sequence gaps"
-text = "For an E2E-protected message, the receiver shall detect a repeated message and a skipped-sequence (dropped-in-between) message via its sequence counter, and report the fault to the application. Total loss of the sender (no further messages, so no counter transition) is detected by reception-deadline monitoring (REQ-COM-005), not the counter."
+title = "Detect repetition and loss"
+text = "For an E2E-protected message, the receiver shall detect a repeated message and a skipped-sequence (dropped-in-between) message via its sequence counter, and shall detect total loss of the sender via its own reception timeout (no valid message within the configured period) — so the loss check stays within the ASIL B E2E mechanism and does not depend on a QM monitor. It shall report the fault to the application. (The COM reception deadline, REQ-COM-005, is a complementary QM monitor.)"
 status = "draft"
 method = "test"
 asil = "B" # inherits the ASIL B of the parent SYS-REQ-SAFE-001 (no decomposition)
@@ -27,5 +27,14 @@ title = "Protect on transmit"
 text = "For an E2E-protected message, the transmitter shall compute and stamp the CRC and advance the sequence counter on every transmission, so a conforming receiver can perform the checks above."
 status = "draft"
 method = "test"
+asil = "B" # inherits the ASIL B of the parent SYS-REQ-SAFE-001 (no decomposition)
+derives = "SYS-REQ-SAFE-001"
+
+[[req]]
+id = "REQ-E2E-004"
+title = "Composition with SecOC"
+text = "For a message configured with both E2E and SecOC, the protection order shall be defined and symmetric: on transmit the E2E CRC/counter are applied to the payload first and the SecOC authentication code is then computed over the E2E-protected bytes; on receive the SecOC check runs first and only an authentic message is passed to the E2E check. Neither shall mask a fault the other would detect."
+status = "draft"
+method = "review"
 asil = "B" # inherits the ASIL B of the parent SYS-REQ-SAFE-001 (no decomposition)
 derives = "SYS-REQ-SAFE-001"

@@ -5,7 +5,7 @@
 [[req]]
 id = "REQ-DIAG-001"
 title = "UDS request/response"
-text = "The ECU shall dispatch a received UDS service request and return the corresponding positive or negative response."
+text = "The ECU shall dispatch a received UDS service request and return the corresponding positive or negative response, except that it shall suppress the positive response when the request sets the suppress-positive-response indication (a negative response is still returned on error)."
 status = "draft"
 method = "test"
 asil = "QM"

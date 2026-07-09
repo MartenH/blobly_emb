@@ -16,7 +16,7 @@ derives = "SYS-REQ-COMMS-002"
 [[req]]
 id = "REQ-COM-002"
 title = "Encode transmitted signals from physical units"
-text = "COM shall encode application signal values in physical units into the bytes of their transmit frame per the bus database, leaving unmapped bits at their configured value."
+text = "COM shall encode application signal values in physical units into the bytes of their transmit frame per the bus database, setting bits not covered by a mapped signal to the initial value defined for the frame in the bus database (default 0)."
 # The tx path derives from frame exchange (COMMS-001); COMMS-002 is the rx-side
 # "present received signals in physical units" only, so it is not a parent of tx encode.
 status = "draft"
@@ -36,7 +36,7 @@ derives = "SYS-REQ-COMMS-001"
 [[req]]
 id = "REQ-COM-004"
 title = "Event-driven transmission"
-text = "COM shall transmit a PDU configured for event (or mixed, or triggered) transmission when its signal content changes or a transmission is requested, no sooner than its configured minimum delay after the previous transmission."
+text = "COM shall transmit a PDU configured for event or mixed transmission when its mapped signal content changes, and a PDU configured for triggered transmission when the application explicitly requests one (a send trigger), in both cases no sooner than its configured minimum delay after the previous transmission."
 status = "draft"
 method = "test"
 asil = "QM"
