@@ -1652,18 +1652,19 @@ fn main() {
 				panic('loom2v: [target] kind="threadx": bus "${telem_bus}" has fd = true, but the ' +
 					'FDCAN backend used here is classic-only — set [bus.${telem_bus}].fd = false')
 			}
-			// The driver opens the bus by numeric index ("0".."2"); derive it from the bus name
-			// (e.g. "can0" -> "0"). A name with no digit can't be mapped — reject rather than
-			// silently open bus 0.
+			// The driver opens the bus by a SINGLE-digit index "0".."2" (blob_can_open reads
+			// name[0]-'0'); derive it from the bus name (e.g. "can0" -> "0"). Require exactly one
+			// digit in 0..2 — reject a name with no digit ("powertrain" -> bus 0 silently) OR an
+			// ambiguous multi-digit one ("can10"/"can01", where the driver would read only '1'/'0').
 			mut digits := ''
 			for cc in telem_bus {
 				if cc >= `0` && cc <= `9` {
 					digits += cc.ascii_str()
 				}
 			}
-			if digits == '' {
-				panic('loom2v: [target] kind="threadx": telemetry bus "${telem_bus}" has no numeric ' +
-					'FDCAN index in its name (e.g. "can0") — the driver opens buses by index')
+			if digits.len != 1 || digits[0] < `0` || digits[0] > `2` {
+				panic('loom2v: [target] kind="threadx": telemetry bus "${telem_bus}" must name a single ' +
+					'FDCAN index 0..2 (e.g. "can0") — the driver opens buses by a one-digit index')
 			}
 			tx_bus_idx = digits
 		}
