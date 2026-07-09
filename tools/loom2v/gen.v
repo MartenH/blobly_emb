@@ -499,6 +499,14 @@ fn main() {
 				'extended (29-bit) id, but the classic FDCAN backend sends 11-bit frames — use a ' +
 				'standard id (<= 0x7FF)')
 		}
+		// The exec-hook path snapshots and streams the ring on a fixed ~1 s cadence; it has no
+		// overrun-triggered freeze (trace_budget_us is only wired into the software packer's inline
+		// hook). A [trace].trigger config would build but silently produce a continuous ring.
+		if trace_budget_us > 0 {
+			panic('loom2v: [target] kind="threadx" [trace].trigger (budget_us) is not implemented — ' +
+				'the exec-hook recorder streams the ring on a fixed cadence with no overrun freeze — ' +
+				'drop the trigger for threadx builds')
+		}
 		if trace_bus != '' && trace_bus != telem_bus {
 			panic('loom2v: [target] kind="threadx" [trace].bus "${trace_bus}" must equal ' +
 				'[telemetry].bus "${telem_bus}" — the single bus owner streams both on one channel')
@@ -1810,6 +1818,14 @@ fn main() {
 			// the owner and the FB scheduling above still runs between chunks. Records go out raw
 			// (one 8-byte record per classic frame on the trace record id); the host decodes with
 			// candump + decode_trace.py.
+			//
+			// NOTE (raw-stream limitation): these are the trace_hooks.c records verbatim, whose
+			// start_us is absolute DWT µs truncated to u24 — it wraps every ~16.7 s with no epoch
+			// re-anchor, so decode_trace.py orders a window, not an unbounded absolute timeline.
+			// This matches the hand-written threadx_h735 bring-up stream. blobly_net's swimlane
+			// consumes the ISO-TP *block* dump (relative records + per-block epoch anchor, which
+			// handles the wrap) — emitting that block/epoch protocol on the ThreadX target is a
+			// later phase; until then the manifest advertises only the raw `record` frame.
 			glue << '\t\tif !tr_active && t1 - last_trace >= u64(1000000) {'
 			glue << '\t\t\ttr_n = C.trace_snapshot(&g_${part}_trace[0], ${trace_buffer_records})'
 			glue << '\t\t\ttr_pos = 0'
