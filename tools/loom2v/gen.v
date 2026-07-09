@@ -392,6 +392,11 @@ fn main() {
 	mut trace_pre_pct := 50
 	mut trace_push_us := u64(1_000_000)
 	mut trace_budget_us := u64(0) // overrun trigger budget (0 = no software trigger)
+	// [trace] keys that only the software-packer protocol implements — the request/response path
+	// (cmd_id/rsp_id), the HandlerStat heartbeat (stat_id/push_ms), and the ISO-TP dump flow
+	// control (dump_fc_id). All have non-zero defaults, so we track EXPLICIT presence to reject
+	// them for the ThreadX exec-hook stream (which implements none) without rejecting a bare config.
+	mut trace_sw_keys := []string{}
 	if trcfg := doc.value_opt('trace') {
 		trm := trcfg.as_map()
 		// a [trace] block is active unless explicitly disabled (enabled = false) — so tracing
@@ -413,6 +418,11 @@ fn main() {
 		trace_pre_pct = int((trm['pre_pct'] or { toml.Any(trace_pre_pct) }).int())
 		if pms := trm['push_ms'] {
 			trace_push_us = u64(pms.int()) * 1000
+		}
+		for k in ['cmd_id', 'rsp_id', 'stat_id', 'dump_fc_id', 'push_ms'] {
+			if k in trm {
+				trace_sw_keys << k
+			}
 		}
 		// trigger = { source = "overrun", budget_us = N }: freeze the ring when a handler runs
 		// longer than N µs. Only "overrun" is generated today; other sources are reserved.
@@ -506,6 +516,16 @@ fn main() {
 			panic('loom2v: [target] kind="threadx" [trace].trigger (budget_us) is not implemented — ' +
 				'the exec-hook recorder streams the ring on a fixed cadence with no overrun freeze — ' +
 				'drop the trigger for threadx builds')
+		}
+		// The exec-hook stream is raw records only: no TraceCmd/Rsp request path, no HandlerStat
+		// heartbeat, no ISO-TP dump flow control. These keys have non-zero defaults but are inert
+		// here, so an explicitly-set one (copied from a bare-metal trace block) would build while
+		// silently doing nothing. Reject the explicit ones rather than ignore them.
+		if trace_sw_keys.len > 0 {
+			panic('loom2v: [target] kind="threadx" [trace] key(s) ${trace_sw_keys} are not implemented — ' +
+				'the exec-hook stream has no TraceCmd/Rsp request path, HandlerStat heartbeat ' +
+				'(push_ms/stat_id), or ISO-TP dump flow control (dump_fc_id); it streams only raw ' +
+				'records on record_id — remove these keys for threadx builds')
 		}
 		if trace_bus != '' && trace_bus != telem_bus {
 			panic('loom2v: [target] kind="threadx" [trace].bus "${trace_bus}" must equal ' +
@@ -1665,8 +1685,16 @@ fn main() {
 		//     load as run-time / wall-clock, so unpaced spinning would read ~50%). The
 		//     CpuLoad frame is sent inline from load_permille() — no scratch, no tx
 		//     thread. Takes the telemetry bus channel (main.v opens it after board init).
-		if by_part.keys().len != 1 {
-			panic('loom2v: [target] baremetal supports exactly one partition (got ${by_part.keys().len})')
+		// The target emits ONE app thread from the single FB-bearing partition. by_part is keyed
+		// only by partitions that own fbs, so an extra FB-LESS partition would slip past a
+		// by_part-only check yet still be created as a labelled thread by the manifest loop (which
+		// walks every declared partition) — shifting the hook ids (e.g. the ThreadX System Timer
+		// Thread id). Require exactly one DECLARED partition so declared == generated.
+		np_declared := ecumodel.toml_arr(doc, 'partition').len
+		if by_part.keys().len != 1 || np_declared != 1 {
+			panic('loom2v: [target] supports exactly one partition (got ${np_declared} declared, ' +
+				'${by_part.keys().len} with fbs) — a second or FB-less partition is never generated ' +
+				'yet would still be labelled in the trace manifest; multi-partition/multi-core is not generated yet')
 		}
 		part := by_part.keys()[0]
 		chp := snake(telem_bus)
