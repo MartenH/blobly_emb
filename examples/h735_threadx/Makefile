@@ -22,8 +22,10 @@ MCU     = -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb
 CMSIS   = -I$(REPO)/third_party/cmsis_device_h7/Include -I$(REPO)/third_party/cmsis_core/CMSIS/Core/Include
 CAN_DEFS = -DBLOB_CAN_FDCAN -DBLOB_FDCAN_KCLK_HZ=25000000 -DBLOB_FDCAN_TQ=10 \
            -DBLOB_FDCAN_NTSEG1=7 -DBLOB_FDCAN_NTSEG2=2
+# TX_ENABLE_EXECUTION_CHANGE_NOTIFY makes the ThreadX port's context-switch + SysTick asm call
+# the four _tx_execution_* hooks (trace_hooks.c) — the source of the real thread/ISR trace.
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
-          -DSTM32H735xx $(CAN_DEFS) \
+          -DSTM32H735xx -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY $(CAN_DEFS) \
           -I. -I$(REPO)/driver/can -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU) -T threadx_h735.ld -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
@@ -35,8 +37,9 @@ TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 
-# board bring-up (asm + board.c) reused from examples/threadx_h735
-BSP = crt0.S vectors.S tx_initialize_low_level.S board.c
+# board bring-up (asm + board.c) + the exec-change trace recorder, reused from
+# examples/threadx_h735 (trace_hooks.c is driver-independent — pure recorder).
+BSP = crt0.S vectors.S tx_initialize_low_level.S board.c $(REPO)/examples/threadx_h735/trace_hooks.c
 
 all: $(BUILD)/$(NAME).bin
 

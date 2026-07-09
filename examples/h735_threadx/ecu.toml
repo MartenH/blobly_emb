@@ -69,6 +69,18 @@ id        = 0x7E0
 detail_id = 0x7E1
 period_ms = 500
 
+# On the ThreadX target, [trace] engages the exec-change-hook recorder (trace_hooks.c) — the
+# generated bus owner streams the ring on record_id. This is the REAL preemptive thread/ISR
+# capture (not the bare-metal polled trace), and the FB thread being a real ThreadX thread
+# means the hooks capture it for free.
+[trace]
+enabled        = true
+bus            = "can0"
+level          = "thread+isr"
+buffer_records = 64
+mode           = "ring"
+record_id      = 0x7E5
+
 [target]
 kind    = "threadx"
 tick_ms = 1
