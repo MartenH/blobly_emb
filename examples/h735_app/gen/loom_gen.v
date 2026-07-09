@@ -45,13 +45,17 @@ fn handler_app_heartbeat_on_100ms(ctx voidptr) {
 
 struct TraceState {
 mut:
-	buf   trace.TraceBuffer
-	start u64 // wall-clock µs of the capture origin
-	base  u64 // elapsed µs at the last epoch re-anchor
+	buf       trace.TraceBuffer
+	start     u64 // wall-clock µs of the capture origin
+	base      u64 // elapsed µs at the last epoch re-anchor
+	thread_id u16 // this partition's thread id (for the derived THREAD records)
+	busy_end  u64 // elapsed µs at the end of the last busy span (idle-gap start)
+	fb_count  u32 // handlers dispatched (the loop reads this to bracket a busy span)
 }
 
 fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	mut t := unsafe { &TraceState(ctx) }
+	t.fb_count++
 	elapsed := start_us - t.start
 	if elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor
 		t.base = elapsed
@@ -65,6 +69,30 @@ fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	if dt_us > 500 { // overrun: freeze the ring around the anomaly
 		t.buf.trigger()
 	}
+}
+
+fn trace_thread_span(mut t TraceState, t0_us u64, t1_us u64) {
+	e_start := t0_us - t.start // elapsed at the busy span start
+	e_end := t1_us - t.start   // elapsed at the busy span end
+	if e_start > t.base && e_start - t.base > 0x00ff_ffff { // re-anchor before the u24 wraps
+		t.base = e_start
+		t.buf.push(trace.new_epoch(u32(e_start)))
+	}
+	gap_from := if t.busy_end > t.base { t.busy_end } else { t.base }
+	if e_start > gap_from { // idle gap since the last busy span (within this epoch)
+		mut gap := e_start - gap_from
+		if gap > 0xFFFF {
+			gap = 0xFFFF
+		}
+		t.buf.push(trace.new_idle(trace.reason_yield, u32(gap_from - t.base), u16(gap)))
+	}
+	s_from := if e_start > t.base { e_start } else { t.base } // clamp across an epoch re-anchor
+	mut busy := if e_end > s_from { e_end - s_from } else { u64(0) }
+	if busy > 0xFFFF {
+		busy = 0xFFFF
+	}
+	t.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(s_from - t.base), u16(busy)))
+	t.busy_end = e_end
 }
 
 fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)
@@ -85,6 +113,7 @@ pub fn run(can0 can.Channel) {
 		buf: trace.new_buffer(&backing[0], 64, .ring, 50)
 	}
 	ts.start = C.board_now_us()
+	ts.thread_id = 1 // single partition, first thread = manifest thread id 1
 	ts.buf.start()
 	sched.set_trace_hook(trace_capture, &ts)
 	mut link := isotp.Link{}
@@ -95,7 +124,12 @@ pub fn run(can0 can.Channel) {
 	tick_us := u64(1000)
 	mut next_tick := C.board_now_us() + tick_us
 	for {
+		loom_t0 := C.board_now_us()
+		before := ts.fb_count
 		sched.run_profiled(board_clock)
+		if ts.fb_count != before { // a handler ran -> bracket this busy iteration as a thread span
+			trace_thread_span(mut ts, loom_t0, C.board_now_us())
+		}
 		mut rx := can.Frame{}
 		if ch.recv(mut rx) {
 			if rx.id == u32(0x7e2) && rx.len >= 8 {
