@@ -457,10 +457,21 @@ fn main() {
 			'ThreadX comm thread + trace dump); set [trace].enabled = false for threadx builds')
 	}
 	// The threadx app thread opens the telemetry bus for its CAN channel, so the target needs
-	// [telemetry] with a bus (the schema makes [telemetry] optional in general).
-	if target_threadx && telem_bus == '' {
-		panic('loom2v: [target] kind="threadx" needs a [telemetry] block with a bus — the app ' +
-			'thread opens it for the CAN channel')
+	// [telemetry] ENABLED, with a bus that actually exists (the schema makes all of that
+	// optional in general, and only `driver.can` gets imported when telem_on).
+	if target_threadx {
+		mut bus_exists := false
+		if busv := doc.value_opt('bus') {
+			bus_exists = telem_bus in busv.as_map()
+		}
+		if !telem_on || telem_bus == '' {
+			panic('loom2v: [target] kind="threadx" needs [telemetry] enabled with a bus — the app ' +
+				'thread opens it for the CAN channel')
+		}
+		if !bus_exists {
+			panic('loom2v: [target] kind="threadx": [telemetry].bus = "${telem_bus}" has no matching ' +
+				'[bus.${telem_bus}]')
+		}
 	}
 
 	// The trace cmd/rsp + dump ride a CAN channel: trace.bus, or [telemetry].bus by default.
@@ -487,6 +498,15 @@ fn main() {
 			'host-style capture on the board timebase); multi-thread / ISR capture is the larger P3c slice')
 	}
 	has_bridge := has_external || isotp_conns.len > 0 || has_routes
+	// The threadx target has no COM bridge / comm thread yet (phase 6b). has_external is
+	// already rejected for any target above, but ISO-TP conns and routes make has_bridge true
+	// without has_external — reject those too rather than emit a partition_* bridge loop with no
+	// ThreadX comm thread / FDCAN Rx ISR to drive it.
+	if target_threadx && has_bridge {
+		panic('loom2v: [target] kind="threadx" with a COM bridge (external signals / routes / ' +
+			'ISO-TP) is not generated yet (phase 6b — the ThreadX comm thread + FDCAN Rx ISR); ' +
+			'drop the bridge config for threadx builds')
+	}
 	// Which buses run a COM bridge (an external signal, an ISO-TP conn, or a route touches them).
 	// P3b traces each bridge as a `comm_<bus>` thread; the DIFFERENT-bus case (trace rides a bus with
 	// no bridge) reuses the P3a owner cleanly, the SAME-bus case (the bridge owns the trace channel)
@@ -1655,8 +1675,12 @@ fn main() {
 			glue << 'fn C._tx_initialize_kernel_enter()'
 			glue << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
 			glue << ''
+			// TCB as [32]u64 (256 B >= sizeof(TX_THREAD) = 200 B) so it is 8-byte aligned — the
+			// kernel reads/writes word fields through this pointer as a TX_THREAD*, so a byte-
+			// aligned [256]u8 could fault. The stack stays a byte buffer (ThreadX aligns the SP
+			// internally in tx_thread_stack_build).
 			glue << '__global ('
-			glue << '\tg_${part}_tcb   [256]u8  // >= sizeof(TX_THREAD) (200 B, cortex_m7 port)'
+			glue << '\tg_${part}_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned'
 			glue << '\tg_${part}_stack [4096]u8'
 			glue << ')'
 		}

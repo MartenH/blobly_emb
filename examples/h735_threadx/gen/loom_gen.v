@@ -47,7 +47,7 @@ fn C._tx_initialize_kernel_enter()
 fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32
 
 __global (
-	g_app_tcb   [256]u8  // >= sizeof(TX_THREAD) (200 B, cortex_m7 port)
+	g_app_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
 	g_app_stack [4096]u8
 )
 
