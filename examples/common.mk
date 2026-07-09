@@ -30,8 +30,11 @@ build:
 	cd $(REPO) && $(V) -gc none -path "@vlib|@vmodules|.|examples/$(NAME)" -o examples/$(NAME)/bin/app examples/$(NAME)
 
 # depend on `all` (gen + build), not just build, so a config edit is regenerated before running.
+# RUN_IFACE is the interface arg(s); a multi-bus example (e.g. trace_comm) overrides it with its
+# own split (trace bus first) instead of overriding the whole recipe.
+RUN_IFACE ?= vcan0
 run: all
-	./bin/app vcan0
+	./bin/app $(RUN_IFACE)
 
 # Integration test: run on vcan0 and drive/assert with blobly_net's headless Lua runner
 # (needs BLOBLY_NET=/path/to/blobly_net + vcan0 up).

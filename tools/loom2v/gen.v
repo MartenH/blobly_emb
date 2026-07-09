@@ -460,20 +460,47 @@ fn main() {
 	}
 	single_part := if by_part.keys().len == 1 { by_part.keys()[0] } else { '' }
 	has_bridge := has_external || isotp_conns.len > 0 || has_routes
+	// Which buses run a COM bridge (an external signal, an ISO-TP conn, or a route touches them).
+	// P3b traces each bridge as a `comm_<bus>` thread; the DIFFERENT-bus case (trace rides a bus with
+	// no bridge) reuses the P3a owner cleanly, the SAME-bus case (the bridge owns the trace channel)
+	// is the follow-up — docs/trace-multicore.md §4.3.
+	// A bus runs a bridge LOOP (a comm thread) if it originates COM work — external rx/tx signals,
+	// an ISO-TP conn, or a route it forwards FROM. (A route's dest bus only receives forwarded
+	// frames on its channel; it gets no loop of its own — matches the bus_names set below.)
+	mut bridge_buses := map[string]bool{}
+	for _, si in sig_of {
+		if si.external {
+			bridge_buses[si.bus] = true
+		}
+	}
+	for c in isotp_conns {
+		bridge_buses[c.bus] = true
+	}
+	for r in routes {
+		bridge_buses[r.from_bus] = true
+	}
+	// The trace bus must carry NO COM at all for the different-bus path — not even route-forwarded
+	// tx (which would share its channel with the trace handshake). Flag a route dest too.
+	mut trace_bus_has_bridge := eff_trace_bus in bridge_buses
+	for r in routes {
+		if r.to_bus == eff_trace_bus {
+			trace_bus_has_bridge = true
+		}
+	}
 	// Core 0 only: the single-core INLINE path folds everything into one run(ch) superloop and
 	// assumes core 0 throughout (pin, CpuLoad byte 0, TraceCmd core_mask == 0 default). A traced
-	// app on other/multiple cores uses the MULTICORE path (P3a, docs/trace-multicore.md): per-core
-	// rings owned by run(), each partition captures into its own, and one partition_trace() owns
-	// the channel + streams each frozen ring as a self-describing block.
+	// app on other/multiple cores (or with a comm bridge on another bus) uses the MULTICORE path
+	// (P3a/P3b, docs/trace-multicore.md): per-core rings owned by run(), each partition + comm thread
+	// captures into its own, and one partition_trace() owns the trace channel + streams the blocks.
 	trace_inline := trace_on && !target_on && single_part != '' && !has_bridge
 		&& (core_of[single_part] or { 0 }) == trace_core && trace_core == 0
-	trace_multicore := trace_on && !target_on && !trace_inline && !has_bridge
-	// The COM bus bridge + trace coexistence (the bridge as a first-class comm thread) is P3b, not
-	// generated yet — a bridge forces neither inline nor multicore, so reject it explicitly.
-	if trace_on && !target_on && has_bridge {
-		panic('loom2v: [trace] on an app with a COM bus bridge (external signals / ISO-TP / ' +
-			'routes) is not generated yet — the bridge must run on its comm thread alongside ' +
-			'trace (the comm-thread phase, P3b in docs/trace-multicore.md)')
+	trace_multicore := trace_on && !target_on && !trace_inline && !trace_bus_has_bridge
+	// SAME-bus (the trace bus itself carries a bridge) is P3b's follow-up: the bridge loop would have
+	// to own the trace channel and dispatch TraceCmd vs COM. Not generated yet — reject it.
+	if trace_on && !target_on && trace_bus_has_bridge {
+		panic('loom2v: [trace] bus "${eff_trace_bus}" also runs a COM bridge (external signals / ' +
+			'ISO-TP / routes on it) — trace piggybacked on a bridge bus (same-bus P3b) is not ' +
+			'generated yet; put [trace].bus on a dedicated bus (docs/trace-multicore.md §4.3)')
 	}
 	// P3a: each core's polled superloop is one cooperative thread — no preemptive context switches
 	// or ISRs, so we synthesise the schedule the loop actually runs: an fb record per handler, a
@@ -484,6 +511,8 @@ fn main() {
 	mut trace_ncores := 0
 	mut fb_id_base := map[string]int{} // partition -> its first handler's GLOBAL fb id (manifest order)
 	mut thread_id_of := map[string]int{} // partition -> its thread id (manifest order, 1-based; 0 = idle)
+	mut comm_tid := map[string]int{} // bridge bus -> its comm thread id (P3b; after the app threads)
+	mut bridge_bus_list := []string{} // sorted bridge buses — stable comm-thread numbering + ring order
 	if trace_multicore {
 		if trace_level !in ['thread+fb', 'all'] {
 			panic('loom2v: [trace] level "${trace_level}" is not generated for multi-core host — use ' +
@@ -532,6 +561,29 @@ fn main() {
 			fb_id_base[pname] = acc
 			for c in by_part[pname] {
 				acc += (c.as_map()['handler'] or { toml.Any([]toml.Any{}) }).array().len
+			}
+		}
+		// Comm threads (P3b): each bridge bus is a traced `comm_<bus>` thread on its bus core — same
+		// "one traced entity per core, dense" invariant as an app partition. It gets a thread id
+		// continuing the app numbering (matching the manifest's app-then-comm order) and a ring in the
+		// registry; no FBs, so no fb_id_base. Sorted for a stable id assignment.
+		bridge_bus_list = bridge_buses.keys()
+		bridge_bus_list.sort()
+		for bb in bridge_bus_list {
+			tid++
+			comm_tid[bb] = tid
+			bc := bus_core[bb] or { 0 }
+			if bc >= 16 {
+				panic('loom2v: [trace] comm bridge on bus "${bb}" is on core ${bc}; the TraceCmd mask ' +
+					'only addresses cores 0..15')
+			}
+			if bc in seen_core {
+				panic('loom2v: multi-core trace needs one traced entity per core — the comm bridge on ' +
+					'bus "${bb}" (core ${bc}) collides with "${seen_core[bc]}"; use distinct cores')
+			}
+			seen_core[bc] = 'comm_${bb}'
+			if bc + 1 > trace_ncores {
+				trace_ncores = bc + 1
 			}
 		}
 		// Cores must be numbered densely from 0: trace_ncores = max_core + 1 sizes the ring array +
@@ -702,6 +754,14 @@ fn main() {
 		glue << 'fn trace_thread_span(mut t TraceCapture, t0_us u64, t1_us u64) {'
 		glue << '\te_start := t0_us - t.start // elapsed at the busy span start'
 		glue << '\te_end := t1_us - t.start   // elapsed at the busy span end'
+		// A comm thread has no per-FB trace_capture to advance the epoch, so re-anchor here when the
+		// u24 start_us would wrap — otherwise long comm captures drift out of alignment with the app
+		// cores. Idempotent for the app path: trace_capture already re-anchored, so t.base stays within
+		// the window and (e_start > t.base) fails (base can even lead e_start after a mid-span wrap).
+		glue << '\tif e_start > t.base && e_start - t.base > 0x00ff_ffff {'
+		glue << '\t\tt.base = e_start'
+		glue << '\t\tt.buf.push(trace.new_epoch(u32(e_start)))'
+		glue << '\t}'
 		// The idle-gap start is relative to the current epoch base. If an epoch re-anchor moved the
 		// base past the previous busy_end (a capture spanning the u24 window), clamp the gap to the
 		// new base so u32(start - base) can\'t underflow and land the idle ~16 s in the future (F684).
@@ -1138,6 +1198,11 @@ fn main() {
 		for d in dests {
 			psig += ', route_${snake(d)} can.Channel'
 		}
+		// P3b: when tracing, the bridge is a traced comm thread — it takes a ring pointer (its own,
+		// owned by run()) as a trailing voidptr, exactly like a traced app partition.
+		if trace_multicore {
+			psig += ', commring voidptr'
+		}
 		glue << 'pub fn partition_${bb}(${psig}) {'
 		glue << '\tosal.pin_to_core(${bus_core[bname] or { 0 }})'
 		glue << '\tmut st := Bridge_${bb}_state{'
@@ -1200,16 +1265,67 @@ fn main() {
 		}
 		glue << '\tmut sched := loom.Scheduler{}'
 		glue << '\tsched.every(10_000, io_${bb}_10ms, &st)'
-		glue << '\tfor {'
-		glue << '\t\tloom_t0 := osal.now_us()'
-		glue << '\t\tsched.run(loom_t0)'
-		glue << '\t\tloom_t1 := osal.now_us()'
-		glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
-		if telem_on && 'b:${bname}' in telem_slot {
-			glue << '\t\tosal.scratch_set(${telem_slot['b:${bname}']}, u64(sched.load_permille()))'
+		bc := bus_core[bname] or { 0 }
+		if trace_multicore {
+			// P3b: the bridge is a traced comm thread. Emit a THREAD span for each drain cycle that
+			// actually ran the COM handler (no FBs, so no fb records), apply routed arm/stop/freeze
+			// commands to its OWN ring (single-writer, exactly like an app partition), and share the
+			// P3a coordination. run_profiled accounts load internally.
+			glue << '\tmut cap := TraceCapture{'
+			glue << '\t\tbuf:       unsafe { &trace.TraceBuffer(commring) }'
+			glue << '\t\tstart:     osal.now_us()'
+			glue << '\t\tthread_id: ${comm_tid[bname] or { 0 }}'
+			glue << '\t\ttrig_slot: ${trace_trig_base + bc}'
+			glue << '\t}'
+			glue << '\tmut last_cmd := osal.scratch_get(${trace_cmd_base + bc})'
+			glue << '\tfor {'
+			glue << '\t\tcmdv := osal.scratch_get(${trace_cmd_base + bc})'
+			glue << '\t\tif cmdv != last_cmd {'
+			glue << '\t\t\tlast_cmd = cmdv'
+			glue << '\t\t\top := u8(cmdv & 0xff)'
+			glue << '\t\t\tif op == trace.op_arm || op == trace.op_start || op == trace.op_reset {'
+			glue << '\t\t\t\tcap.buf.start()'
+			glue << '\t\t\t\tcap.start = osal.now_us()'
+			glue << '\t\t\t\tcap.base = 0'
+			glue << '\t\t\t\tcap.busy_end = 0'
+			glue << '\t\t\t} else if op == trace.op_stop {'
+			glue << '\t\t\t\tcap.buf.stop()'
+			glue << '\t\t\t} else if op == 0xf1 {'
+			glue << '\t\t\t\tcap.buf.trigger()'
+			glue << '\t\t\t}'
+			glue << '\t\t}'
+			glue << '\t\tloom_t0 := osal.now_us()'
+			glue << '\t\tbefore := sched.handler_stat(0).count'
+			glue << '\t\tsched.run_profiled(osal.now_us)'
+			glue << '\t\tloom_t1 := osal.now_us()'
+			glue << '\t\tif sched.handler_stat(0).count != before { // the COM drain ran -> a comm busy span'
+			glue << '\t\t\ttrace_thread_span(mut cap, loom_t0, loom_t1)'
+			if trace_budget_us > 0 {
+				// A COM drain that overran the budget is a freeze culprit too — mirror the app hook:
+				// freeze this comm ring and raise its request so the owner fans a coherent freeze out.
+				glue << '\t\t\tif loom_t1 - loom_t0 > ${trace_budget_us} && cap.buf.state() == .capturing {'
+				glue << '\t\t\t\tcap.buf.trigger()'
+				glue << '\t\t\t\tosal.scratch_set(cap.trig_slot, osal.scratch_get(cap.trig_slot) + 1)'
+				glue << '\t\t\t}'
+			}
+			glue << '\t\t}'
+			if telem_on && 'b:${bname}' in telem_slot {
+				glue << '\t\tosal.scratch_set(${telem_slot['b:${bname}']}, u64(sched.load_permille()))'
+			}
+			glue << '\t\tosal.sleep_us(1000)'
+			glue << '\t}'
+		} else {
+			glue << '\tfor {'
+			glue << '\t\tloom_t0 := osal.now_us()'
+			glue << '\t\tsched.run(loom_t0)'
+			glue << '\t\tloom_t1 := osal.now_us()'
+			glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
+			if telem_on && 'b:${bname}' in telem_slot {
+				glue << '\t\tosal.scratch_set(${telem_slot['b:${bname}']}, u64(sched.load_permille()))'
+			}
+			glue << '\t\tosal.sleep_us(1000)'
+			glue << '\t}'
 		}
-		glue << '\t\tosal.sleep_us(1000)'
-		glue << '\t}'
 		glue << '}'
 	}
 
@@ -1390,6 +1506,19 @@ fn main() {
 	}
 
 	bus_names.sort()
+	// A raw [[route]] to an otherwise-unused bus makes that bus a channel arg (it's forwarded to the
+	// origin bridge's spawn) but NOT a bridge of its own, so it never entered bus_names. run() still
+	// needs a Channel param for it, appended after bus_names (sorted) so the signature stays stable —
+	// existing configs, whose route dests also tx (already in bus_names), are unaffected.
+	mut extra_dest_buses := []string{}
+	for b in bus_names {
+		for d in bus_dests[b] or { []string{} } {
+			if d !in bus_names && d !in extra_dest_buses {
+				extra_dest_buses << d
+			}
+		}
+	}
+	extra_dest_buses.sort()
 	if target_on {
 		// --- target run(): one inline single-core superloop. No spawn, no osal. The
 		//     timebase is the board's DWT clock (board_now_us); the loop paces to a
@@ -1650,9 +1779,11 @@ fn main() {
 		glue << '\t}'
 		glue << '}'
 	} else if trace_multicore {
-		// --- multi-core trace run() (P3a): own the per-core rings (fixed arrays on this frame,
-		//     which outlives the joined partitions), spawn each traced partition with a pointer to
-		//     its ring, spawn the single partition_trace owner + partition_telem (CpuLoad), wait. ---
+		// --- multi-core trace run() (P3a + P3b): own the per-core rings (fixed arrays on this frame,
+		//     which outlives the joined partitions), spawn each traced app partition AND each traced
+		//     comm-thread bridge with a pointer to its ring, plus the single partition_trace owner +
+		//     partition_telem, then wait. One channel param per bus: the trace bus first, then each
+		//     bridge bus (bus_names is empty in the pure-P3a case). ---
 		chp := snake(eff_trace_bus)
 		mut mpre := trace_pre_pct
 		if mpre > 100 {
@@ -1660,10 +1791,17 @@ fn main() {
 		}
 		mmode := if trace_mode == 'oneshot' { '.oneshot' } else { '.ring' }
 		glue << ''
-		glue << 'pub fn run(${chp} can.Channel) {'
+		mut params := ['${chp} can.Channel']
+		for b in bus_names {
+			params << '${snake(b)} can.Channel'
+		}
+		for b in extra_dest_buses {
+			params << '${snake(b)} can.Channel' // route-dest-only bus: channel arg, no bridge/ring
+		}
+		glue << 'pub fn run(${params.join(', ')}) {'
 		glue << '\tmut backings := [${trace_ncores}][${trace_buffer_records}]trace.Record{}'
 		glue << '\tmut rings := [${trace_ncores}]trace.TraceBuffer{}'
-		mut mwaits := []string{}
+		// rings: one per app partition (by core) + one per comm-thread bridge (by bus core).
 		for p in ecumodel.toml_arr(doc, 'partition') {
 			pname := (p.as_map()['name'] or { toml.Any('') }).string()
 			if pname !in by_part {
@@ -1673,18 +1811,34 @@ fn main() {
 			glue << '\trings[${pc}] = trace.new_buffer(&backings[${pc}][0], ${trace_buffer_records}, ${mmode}, ${mpre})'
 			glue << '\trings[${pc}].start()'
 		}
+		for b in bus_names {
+			bc := bus_core[b] or { 0 }
+			glue << '\trings[${bc}] = trace.new_buffer(&backings[${bc}][0], ${trace_buffer_records}, ${mmode}, ${mpre}) // comm_${b}'
+			glue << '\trings[${bc}].start()'
+		}
+		mut mwaits := []string{}
+		// Pass each ring as a voidptr (a typed &T arg into a voidptr param makes V's spawn wrapper
+		// mis-forward it). &rings[i] escapes the fixed array, but run() joins below so the frame
+		// outlives every spawned loop, keeping the pointer valid.
 		for p in ecumodel.toml_arr(doc, 'partition') {
 			pname := (p.as_map()['name'] or { toml.Any('') }).string()
 			if pname !in by_part {
 				continue
 			}
 			pc := core_of[pname] or { 0 }
-			// Pass each ring as a voidptr (matching the partition's arg type) — a typed &T arg
-			// into a voidptr param makes V's spawn wrapper mis-forward it. &rings[i] escapes the
-			// fixed array, but run() joins below so the frame outlives every partition (they loop
-			// forever), keeping the pointer valid.
 			glue << '\tt_${pname} := spawn partition_${pname}(${pc}, unsafe { voidptr(&rings[${pc}]) })'
 			mwaits << 't_${pname}'
+		}
+		for b in bus_names {
+			bb := snake(b)
+			bc := bus_core[b] or { 0 }
+			mut sargs := bb // the bridge's own bus channel
+			for d in bus_dests[b] or { []string{} } {
+				sargs += ', ${snake(d)}' // route-dest channels
+			}
+			sargs += ', unsafe { voidptr(&rings[${bc}]) }' // the comm thread's ring (P3b)
+			glue << '\tt_${bb} := spawn partition_${bb}(${sargs})'
+			mwaits << 't_${bb}'
 		}
 		if telem_on && telem_iface != '' {
 			glue << '\tt_telem := spawn partition_telem()'
@@ -1707,6 +1861,9 @@ fn main() {
 			mut params := []string{}
 			for b in bus_names {
 				params << '${snake(b)} can.Channel'
+			}
+			for b in extra_dest_buses {
+				params << '${snake(b)} can.Channel' // route-dest-only bus: channel arg, no bridge
 			}
 			glue << 'pub fn run(${params.join(', ')}) {'
 			for b in bus_names {
@@ -1770,6 +1927,12 @@ fn main() {
 				man << 'thread,${tid},${tname},${core_of[pname]}' // name = the globally-unique thread name
 				tid++
 			}
+		}
+		// Comm threads (P3b): one per bridge bus, AFTER the app threads (matches the gate's comm_tid
+		// numbering). bridge_bus_list is empty unless the trace path traces the bridges.
+		for bb in bridge_bus_list {
+			man << 'thread,${tid},comm_${bb},${bus_core[bb] or { 0 }}'
+			tid++
 		}
 		// The observability frame ids on the trace bus. The protocol (TraceCmd/Rsp/HandlerStat +
 		// the ISO-TP record dump) is fixed and first-party, so blobly_net decodes it natively from
