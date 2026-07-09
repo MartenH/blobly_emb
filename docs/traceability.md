@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 80 | 46 | 5 | 29 | 0 |
+| 81 | 47 | 5 | 29 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -27,7 +27,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-003 | QM | test | uncovered | — |
 | REQ-COM-004 | QM | test | uncovered | — |
 | REQ-COM-005 | QM | test | uncovered | — |
-| REQ-COM-006 | QM | test | uncovered | — |
+| REQ-COM-006 | QM | test | verified | com_test.v (pass) |
 | REQ-DIAG-001 | QM | test | uncovered | — |
 | REQ-DIAG-002 | QM | test | uncovered | — |
 | REQ-E2E-001 | B | test | uncovered | — |
@@ -113,7 +113,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-003 | | | | | |
 | REQ-COM-004 | | | | | |
 | REQ-COM-005 | | | | | |
-| REQ-COM-006 | | | | | |
+| REQ-COM-006 | | | ✓ | | |
 | REQ-DIAG-001 | | | | | |
 | REQ-DIAG-002 | | | | | |
 | REQ-E2E-001 | | | | | |

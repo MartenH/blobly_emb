@@ -1191,23 +1191,55 @@ fn main() {
 				glue << '\t\ttx_${msg}_any = true'
 				glue << '\t}'
 			}
-			glue << '\tif tx_${msg}_any && st.tx_${msg}_st.should_send(now, tx_${msg}.data, ${msg}_dlc) {'
-			if e2e_on[msg] or { false } {
-				// stamp CRC + counter after the change decision (so the counter
-				// doesn't make every frame look "changed" to on-change modes)
+			// Gate on tx_ready() BEFORE the change decision so a full Tx FIFO neither
+			// advances the E2E/SecOC counter nor consumes the change/trigger — the PDU
+			// just retries next tick (REQ-COM-006). mark_sent() commits the send only
+			// once the channel accepts the frame.
+			e2e_here := e2e_on[msg] or { false }
+			secoc_here := secoc_on[msg] or { false }
+			needs_pre := e2e_here || secoc_here
+			glue << '\tif tx_${msg}_any && st.chan.tx_ready() && st.tx_${msg}_st.should_send(now, tx_${msg}.data, ${msg}_dlc) {'
+			if needs_pre {
+				glue << '\t\ttx_${msg}_pre := tx_${msg}.data // pre-E2E/SecOC payload, for change detection'
+			}
+			if e2e_here {
+				// snapshot the alive counter so a rejected send can rewind it (protect()
+				// advances the counter as a side effect); then stamp CRC + counter after the
+				// change decision (so the counter doesn't make every frame look "changed").
+				glue << '\t\te2e_save_${msg} := st.e2e_tx_${msg}'
 				glue << '\t\tst.e2e_tx_${msg}.protect(&tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(e2e_id[msg] or {
 					0
 				}).hex()}), ${e2e_crc[msg] or { 0 }}, ${e2e_ctr[msg] or { 0 }})'
 			}
-			if secoc_on[msg] or { false } {
-				// authenticate: stamp freshness + truncated AES-CMAC after the change decision
+			if secoc_here {
+				// snapshot freshness for the same rewind; then authenticate (stamp freshness
+				// + truncated AES-CMAC) after the change decision.
+				glue << '\t\tsecoc_save_${msg} := st.secoc_tx_${msg}'
 				glue << '\t\tst.secoc_tx_${msg}.protect(&st.secoc_key_${msg}, &tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(secoc_id[msg] or {
 					0
 				}).hex()}), ${secoc_fresh[msg] or { 0 }}, ${secoc_mac[msg] or { 0 }}, ${secoc_maclen[msg] or {
 					0
 				}})'
 			}
-			glue << '\t\tst.chan.send(tx_${msg})'
+			mark_arg := if needs_pre { 'tx_${msg}_pre' } else { 'tx_${msg}.data' }
+			glue << '\t\tif st.chan.send(tx_${msg}) {'
+			glue << '\t\t\tst.tx_${msg}_st.mark_sent(now, ${mark_arg}, ${msg}_dlc)'
+			if e2e_here || secoc_here {
+				// send rejected after tx_ready() (e.g. a multi-writer bus race, or a
+				// nonblocking write losing queue space): rewind the protection counter so the
+				// retry re-stamps the SAME value — otherwise the receiver sees a counter skip
+				// and false-alarms a lost frame (E2E is ASIL B).
+				glue << '\t\t} else {'
+				if e2e_here {
+					glue << '\t\t\tst.e2e_tx_${msg} = e2e_save_${msg}'
+				}
+				if secoc_here {
+					glue << '\t\t\tst.secoc_tx_${msg} = secoc_save_${msg}'
+				}
+				glue << '\t\t}'
+			} else {
+				glue << '\t\t}'
+			}
 			glue << '\t}'
 		}
 		glue << '}'

@@ -28,23 +28,33 @@ pub mut:
 	last         [max_pdu]u8 // last payload sent (change detection)
 }
 
-// should_send decides whether the freshly packed payload `data` (len bytes) goes
-// out now, and records it if so. Called once per bridge tick per tx PDU.
-pub fn (mut t TxState) should_send(now u64, data [max_pdu]u8, len u8) bool {
+// should_send decides whether the freshly packed payload `data` (len bytes) should go
+// out now. It is a PURE decision — it does NOT mutate state. The caller commits the
+// send by calling mark_sent() only after the frame is actually accepted by the channel;
+// if the transmit path is full the caller skips mark_sent(), leaving the change/trigger
+// state intact so this PDU retries next tick (REQ-COM-006: an event/triggered PDU
+// retains its request and retries until accepted, and a cyclic PDU re-sends its current
+// value at the next opportunity — never a silent drop). Called once per bridge tick.
+pub fn (t &TxState) should_send(now u64, data [max_pdu]u8, len u8) bool {
 	changed := !t.sent || !same(t.last, data, len)
 	cyclic_due := (t.mode == .cyclic || t.mode == .mixed) && (!t.sent || now - t.last_us >= t.cycle_us)
 	event_due := (t.mode == .event || t.mode == .mixed) && changed && (!t.sent || now - t.last_us >= t.min_delay_us)
 	trig_due := t.mode == .triggered && t.pending
-	send := cyclic_due || event_due || trig_due
-	if send {
-		for i in 0 .. int(len) {
-			t.last[i] = data[i]
-		}
-		t.last_us = now
-		t.sent = true
-		t.pending = false
+	return cyclic_due || event_due || trig_due
+}
+
+// mark_sent commits a successful transmission: it records the payload (for change
+// detection) and timestamp, and clears a pending trigger. The caller invokes it ONLY
+// after the channel accepted the frame — pass the same pre-protection payload that was
+// given to should_send (not the E2E/SecOC-stamped bytes), so change detection compares
+// application data, not the ever-incrementing counter.
+pub fn (mut t TxState) mark_sent(now u64, data [max_pdu]u8, len u8) {
+	for i in 0 .. int(len) {
+		t.last[i] = data[i]
 	}
-	return send
+	t.last_us = now
+	t.sent = true
+	t.pending = false
 }
 
 // trigger requests one transmission (TxMode.triggered).

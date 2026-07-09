@@ -69,8 +69,10 @@ fn io_can0_10ms(ctx voidptr) {
 		lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, if warn_lamp.on { f64(1) } else { f64(0) })
 		tx_lamp_frame_any = true
 	}
-	if tx_lamp_frame_any && st.tx_lamp_frame_st.should_send(now, tx_lamp_frame.data, lamp_frame_dlc) {
-		st.chan.send(tx_lamp_frame)
+	if tx_lamp_frame_any && st.chan.tx_ready() && st.tx_lamp_frame_st.should_send(now, tx_lamp_frame.data, lamp_frame_dlc) {
+		if st.chan.send(tx_lamp_frame) {
+			st.tx_lamp_frame_st.mark_sent(now, tx_lamp_frame.data, lamp_frame_dlc)
+		}
 	}
 }
 
