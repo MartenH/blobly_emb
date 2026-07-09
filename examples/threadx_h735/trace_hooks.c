@@ -10,7 +10,6 @@
  * kinds: ISR=0, THREAD=1. reasons: preempt=0, block=1, yield=2, exit=3.
  */
 #include "tx_api.h"
-#include "can_port.h" /* blob_can_send / blob_can_tx_ready — the sole owner streams here */
 
 #define KIND_ISR       0u
 #define KIND_THREAD    1u
@@ -171,43 +170,32 @@ void _tx_execution_isr_exit(void)
              (unsigned)(dur > 0xFFFFu ? 0xFFFFu : dur));
 }
 
-/* ---- FDCAN dump: a ring snapshot streamed as raw per-record CAN frames ----
- * One 8-byte trace record == one classic CAN frame on rec_id (no ISO-TP framing yet).
- * The board runs STANDALONE (no debugger) — semihosting was a Phase-3 bring-up smoke
- * test only, never a data path. blobly_net's full swimlane wants an ISO-TP block on
- * 0x7E5; that arrives in Phase 6 when loom2v generates the V trace stack onto ThreadX.
- * For now the host decodes the raw stream (candump can0 | decode_trace.py).
+/* ---- Trace ring read-out: PURE RECORDER, no CAN driver dependency ----
+ * trace_hooks.c only records exec-change events into the ring; it must NOT touch the CAN
+ * driver seam (the example-layer invariant: only the generated bridge / thin entry import
+ * driver/can). So instead of sending here, we expose a frozen snapshot the bus owner (the
+ * comm thread) reads and streams itself — the owner interleaves rx-drain between chunks and
+ * owns all back-pressure / liveness decisions.
  *
- * Capture is frozen only for the duration of the read-out, then RE-ARMED — so this is a
- * rolling snapshot, and CAN activity (Rx ISR + comm wakeups) that arrives after the first
- * dump still shows up in the next one (a permanent freeze would drop it).
- *
- * Sends via blob_can_send DIRECTLY — no lock. The whole system is lock-free by
- * SINGLE-OWNER-PER-CORE: the per-core I/O (comm) thread is the sole caller of blob_can_send
- * for its buses, so telemetry + this trace stream can never race (same thread), and no
- * mutex is needed. Only the comm thread calls this. */
-void trace_dump_can(int h, unsigned long rec_id)
+ * Freeze -> read records [0..n) via trace_record_at(start + i) -> re-arm. Capture is frozen
+ * only for the read-out, then re-armed, so it stays a rolling snapshot (late activity shows
+ * in the next pass). Each 8-byte record is one classic CAN frame on the host side
+ * (candump | decode_trace.py); blobly_net's ISO-TP swimlane is a later concern. */
+unsigned trace_freeze(unsigned *start_out)
 {
-    g_capturing = 0; /* freeze the ring while we read it out (no torn records) */
+    g_capturing = 0; /* stop pushing while the owner reads out (no torn records) */
     unsigned total = g_head;
     unsigned n = total > RING_CAP ? RING_CAP : total;
-    unsigned start = total > RING_CAP ? total - RING_CAP : 0;
-    for (unsigned i = 0; i < n; i++) {
-        unsigned char *r = g_ring[(start + i) & (RING_CAP - 1u)];
-        /* Non-blocking + back-pressure aware (REQ-CAN-DRV-007): yield the CPU while the Tx
-         * FIFO is full instead of spinning. BOUNDED — since this runs on the sole bus owner,
-         * a persistently-full FIFO (no-ACK / bus-off / bad handle) must not wedge it: after a
-         * short wait, abort the dump (drop the rest) so the owner returns to draining rx/tx.
-         * Normal back-pressure drains in << this bound (8 frames ~ 1 ms at 500 kbit). */
-        unsigned waited = 0;
-        while (!blob_can_tx_ready(h)) {
-            if (++waited > 20u) { /* ~20 ms: the bus is stuck, not just back-pressured */
-                g_capturing = 1; /* re-arm before bailing so capture continues */
-                return;
-            }
-            tx_thread_sleep(1);
-        }
-        blob_can_send(h, (uint32_t)rec_id, r, 8, 0);
-    }
-    g_capturing = 1; /* re-arm: keep recording between dumps so late activity is captured */
+    *start_out = total > RING_CAP ? total - RING_CAP : 0;
+    return n;
+}
+
+const unsigned char *trace_record_at(unsigned pos)
+{
+    return g_ring[pos & (RING_CAP - 1u)];
+}
+
+void trace_rearm(void)
+{
+    g_capturing = 1; /* resume recording between dumps so late activity is captured */
 }

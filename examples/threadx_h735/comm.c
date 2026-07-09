@@ -38,8 +38,13 @@ static TX_SEMAPHORE g_comm_sem;
  * stream both run here, on one thread, so they can never race the non-reentrant driver, and
  * no mutex is needed. FB threads never touch CAN; they publish signals lock-free via the
  * triple-buffer IOC and the comm thread reads them. */
-extern void trace_dump_can(int h, unsigned long rec_id); /* trace_hooks.c */
+/* trace_hooks.c is a driver-independent recorder — it exposes the ring, and WE (the bus
+ * owner) stream it over CAN, interleaved with rx-drain. */
+extern unsigned trace_freeze(unsigned *start_out); /* freeze ring, return count + start idx */
+extern const unsigned char *trace_record_at(unsigned pos); /* the 8-byte record at pos */
+extern void trace_rearm(void);                     /* resume recording after the read-out */
 #define TRACE_RECORD_ID 0x7E5u
+#define TRACE_CHUNK 16u /* records streamed per comm-thread iteration (bounds the rx gap) */
 
 /* IOC cell: last received frame + a receive counter, written by the comm thread and
  * read by any consumer thread (Phase 5 makes this a real triple-buffer). volatile so a
@@ -83,6 +88,8 @@ void comm_thread(ULONG unused)
     (void)unused;
     ULONG last_tx = tx_time_get();
     ULONG last_trace = tx_time_get();
+    unsigned tr_pos = 0, tr_n = 0, tr_start = 0;
+    int tr_active = 0; /* mid-stream of a frozen trace snapshot */
     for (;;) {
         tx_semaphore_get(&g_comm_sem, 10); /* wake on rx, or every ~100 ms for the timers */
 
@@ -116,16 +123,31 @@ void comm_thread(ULONG unused)
             last_tx = now;
         }
 
-        /* Stream the trace ring ~1 s. This used to be a separate dumper thread + a Tx mutex;
-         * folding it into the bus owner makes the whole tx path single-writer => lock-free.
-         * (Rx is FDCAN-FIFO-buffered during the ~stream; heavy-rx buses would split onto
-         * their own core's owner thread — see the per-core ownership model.) Re-read the
-         * clock AFTER the dump: a back-pressure-paced stream can itself run ~a period, so
-         * measuring the next interval from dump-END (not dump-start) keeps the ~1 s gap
-         * instead of dumping back-to-back. */
-        if ((now - last_trace) >= 100u) {
-            trace_dump_can(g_can, TRACE_RECORD_ID);
-            last_trace = tx_time_get();
+        /* Stream the trace ring ~1 s, INCREMENTALLY. Folding the old dumper thread into the
+         * bus owner made the tx path single-writer => lock-free (no Tx mutex), but a
+         * synchronous 256-record dump would stop this (highest-prio) thread from draining rx
+         * for its whole duration -> FIFO overflow. So stream only TRACE_CHUNK records per
+         * iteration and let the loop come back around (draining rx + re-checking the sem)
+         * between chunks. Records go only while the Tx FIFO has room — no wait/spin — so a
+         * stuck bus (no-ACK/bus-off) can never wedge the owner; the stream just doesn't
+         * finish (fine, nothing's listening on a dead bus). */
+        if (!tr_active && (now - last_trace) >= 100u) {
+            tr_n = trace_freeze(&tr_start); /* freeze once; read out across iterations */
+            tr_pos = 0;
+            tr_active = 1;
+        }
+        if (tr_active) {
+            unsigned sent = 0;
+            while (tr_pos < tr_n && sent < TRACE_CHUNK && blob_can_tx_ready(g_can)) {
+                blob_can_send(g_can, TRACE_RECORD_ID, trace_record_at(tr_start + tr_pos), 8, 0);
+                tr_pos++;
+                sent++;
+            }
+            if (tr_pos >= tr_n) {
+                trace_rearm();
+                tr_active = 0;
+                last_trace = tx_time_get(); /* measure the next gap from stream-END */
+            }
         }
     }
 }
