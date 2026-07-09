@@ -1,4 +1,17 @@
-# threadx_h735 — ThreadX trace on the STM32H735 (P3c-1, Phases 3–4b)
+# threadx_h735 — ThreadX trace on the STM32H735 (P3c-1, Phases 3–5)
+
+**Phase 5 — the h735_app FBs as ThreadX threads + a wait-free IOC.** The A/B/C demo
+workers are replaced by the real `h735_app` function blocks — **Governor**, **Load**,
+**Heartbeat** (`fbs.c`) — each on its own preemptive thread, with the cross-thread signals
+carried by a **wait-free triple-buffer IOC** (`ioc.h`): `Governor → [LoadCmd] → Load →
+[Workload] → comm → CAN`. No locks, no spinning, no torn values (the blobly IOC invariant);
+on this single-core H735 the buffers live in DTCM, and the identical code carries a signal
+across cores from shared SRAM (Phase 6). Verified on the board: `candump can0` shows the
+`0x7E1` telemetry `iters` triangle-waving 48k↔96k in 2k steps — the Governor's command
+flowing through the IOCs to Load's result — and the `0x7E5` trace carries Governor/Load/
+Heartbeat/comm as named preemptive threads. `acc` (Load's LCG accumulator) varies every
+frame, so the work is real, not elided.
+
 
 Phase 3 takes the QEMU foundation ([`threadx_min`](../threadx_min), Phases 1–2) onto
 silicon. Same vendored ThreadX kernel, same four TX execution-change hooks
@@ -69,9 +82,11 @@ cansend can0 123#0011223344556677    # -> Rx ISR (id 35) + comm wake appear in t
 
 ## Layout
 
-- `main.c` — A/B workers + a C preemptor + the comm thread + a dumper; `board_clock_init()`
-  + `board_can_clock_pins_init()` + `blob_can_open` first.
-- `comm.c` — FDCAN1 Rx-FIFO0 ISR + the comm thread (rx-drain → IOC cell + periodic tx).
+- `main.c` — creates the FB threads (Governor/Load/Heartbeat) + comm + dumper, inits the
+  IOCs; `board_clock_init()` + `board_can_clock_pins_init()` + `blob_can_open` first.
+- `fbs.c` — the h735_app FBs as ThreadX threads (Governor → LoadCmd, Load → Workload, Heartbeat).
+- `ioc.h` — the wait-free triple-buffer IOC (SPSC, latest-value-wins, `__atomic` handoff).
+- `comm.c` — FDCAN1 Rx-FIFO0 ISR + the comm thread (rx-drain + periodic tx of the Workload signal).
 - `trace_hooks.c` — the four `_tx_execution_*` hooks → blobly 8-byte records + the FDCAN
   ring dump (`trace_dump_can`, copied from `threadx_min` then retargeted off semihosting).
 - `board.c` / `board.h` — 550 MHz clock + FDCAN1 clock/pins (copied from `h735_app`).
@@ -79,7 +94,6 @@ cansend can0 123#0011223344556677    # -> Rx ISR (id 35) + comm wake appear in t
 - `Makefile` — builds `third_party/threadx` + `driver/can` (FDCAN backend) + the demo,
   flashes, runs standalone.
 
-Next (Phase 4c): back-pressure fixes (event-tx clear-on-send-success, surface the FDCAN
-`RXF0S` message-lost flag). Phase 5 morphs A/B/C into the `h735_app` FBs
-(Governor/Load/Heartbeat) with a wait-free SRAM IOC; Phase 6 has loom2v generate it all
-from `ecu.toml`.
+Next (Phase 6): loom2v generates all of this — the ThreadX threads, the IOC wiring, the
+FDCAN Rx ISR + comm thread, the trace dump — directly from `h735_app`'s `ecu.toml`, so this
+hand-written example becomes the golden reference the generated target is checked against.
