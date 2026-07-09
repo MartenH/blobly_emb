@@ -177,25 +177,23 @@ void _tx_execution_isr_exit(void)
  * comm thread) reads and streams itself — the owner interleaves rx-drain between chunks and
  * owns all back-pressure / liveness decisions.
  *
- * Freeze -> read records [0..n) via trace_record_at(start + i) -> re-arm. Capture is frozen
- * only for the read-out, then re-armed, so it stays a rolling snapshot (late activity shows
- * in the next pass). Each 8-byte record is one classic CAN frame on the host side
+ * trace_snapshot() copies up to `max` of the most recent records into the owner's buffer
+ * under a BRIEF freeze (just the copy), then re-arms — so the recorder is disabled only for
+ * the memcpy, not for the whole (incremental, back-pressure-paced) stream that follows. The
+ * owner then streams from its stable copy, so records can't be torn by new pushes and no
+ * capture window is lost. Each 8-byte record is one classic CAN frame on the host side
  * (candump | decode_trace.py); blobly_net's ISO-TP swimlane is a later concern. */
-unsigned trace_freeze(unsigned *start_out)
+unsigned trace_snapshot(unsigned char out[][8], unsigned max)
 {
-    g_capturing = 0; /* stop pushing while the owner reads out (no torn records) */
+    g_capturing = 0; /* freeze only for the copy below */
     unsigned total = g_head;
     unsigned n = total > RING_CAP ? RING_CAP : total;
-    *start_out = total > RING_CAP ? total - RING_CAP : 0;
+    if (n > max)
+        n = max;
+    unsigned start = total > RING_CAP ? total - RING_CAP : 0;
+    for (unsigned i = 0; i < n; i++)
+        for (int j = 0; j < 8; j++)
+            out[i][j] = g_ring[(start + i) & (RING_CAP - 1u)][j];
+    g_capturing = 1; /* re-arm immediately — recording resumes for the whole stream */
     return n;
-}
-
-const unsigned char *trace_record_at(unsigned pos)
-{
-    return g_ring[pos & (RING_CAP - 1u)];
-}
-
-void trace_rearm(void)
-{
-    g_capturing = 1; /* resume recording between dumps so late activity is captured */
 }
