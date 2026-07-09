@@ -16,7 +16,10 @@
  */
 #include "tx_api.h"
 #include "can_port.h"
+#include "ioc.h"
 #include <stm32h7xx.h>
+
+extern ioc_t g_workload; /* Load -> comm : {a = iters_seen, b = acc} (fbs.c) */
 
 /* The exec-change trace hooks (trace_hooks.c). A C ISR isn't wrapped by the port's
  * __tx_IntHandler, so we bracket the handler with these ourselves to get it traced —
@@ -102,17 +105,19 @@ void comm_thread(ULONG unused)
             g_comm_rx.count++;
         }
 
-        /* Periodic tx ~100 ms: a liveness frame carrying the rx count, through the guarded
-         * comm_can_send — dropped (not blocked) if the Tx FIFO is momentarily full
-         * (REQ-CAN-DRV-007). */
+        /* Periodic tx ~100 ms: publish the Workload signal that flowed Governor -> LoadCmd
+         * IOC -> Load -> Workload IOC -> here, so the whole cross-thread FB chain is
+         * observable on the bus. bytes 0-3 = iters (Governor's command Load acted on),
+         * bytes 4-7 = acc (Load's result). Through the guarded comm_can_send — dropped, not
+         * blocked, if the Tx FIFO is momentarily full (REQ-CAN-DRV-007). */
         ULONG now = tx_time_get();
         if ((now - last_tx) >= 10u) {
-            unsigned long c = g_comm_rx.count;
+            sig_t w = ioc_read(&g_workload);
             unsigned char p[8] = {
-                (unsigned char)c, (unsigned char)(c >> 8),
-                (unsigned char)(c >> 16), (unsigned char)(c >> 24),
-                (unsigned char)g_comm_rx.last_id, (unsigned char)(g_comm_rx.last_id >> 8),
-                0u, 0u
+                (unsigned char)w.a, (unsigned char)(w.a >> 8),
+                (unsigned char)(w.a >> 16), (unsigned char)(w.a >> 24),
+                (unsigned char)w.b, (unsigned char)(w.b >> 8),
+                (unsigned char)(w.b >> 16), (unsigned char)(w.b >> 24)
             };
             comm_can_send(COMM_TX_ID, p, 8);
             last_tx = now;
