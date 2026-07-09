@@ -15,16 +15,17 @@ int      blob_can_open (const char *name, int fd_mode);                 /* >=0 h
 int      blob_can_send (int h, uint32_t id, const uint8_t *d, uint8_t len, int fd);
 int      blob_can_tx_ready(int h);                                      /* 1=Tx can accept now, 0=full */
 int      blob_can_recv (int h, uint32_t *id, uint8_t *d, uint8_t *len);  /* 0=frame, -1=none */
-uint32_t blob_can_rx_overruns(int h);   /* cumulative Rx frames lost to overrun since open */
+uint32_t blob_can_rx_overruns(int h);   /* count of Rx-overrun events since open, each >=1 frame lost */
 void     blob_can_close(int h);
 ```
 
 `blob_can_rx_overruns` surfaces receive-with-loss (REQ-CAN-DRV-008): when frames arrive
-faster than `recv` drains them and overflow the Rx buffer, the backend counts the loss and
-reports a cumulative total rather than dropping silently. FDCAN counts `IR.RF0L`
-(Rx-FIFO0 message lost); host SocketCAN buffers in the kernel and reports 0 (its
-`SO_RXQ_OVFL` count is a future source); CanIf/BSW report overrun through their own
-diagnostics and return 0 here.
+faster than `recv` drains them and overflow the Rx buffer, the backend counts the overrun
+**events** (a monotonic loss indicator — one hardware overrun flag can cover several
+dropped frames, so it's a lower bound, not an exact frame total) rather than dropping
+silently. Each backend reports it from its own overflow source: FDCAN counts `IR.RF0L`
+(Rx-FIFO0 message lost), the ST HAL `FDCAN_FLAG_RX_FIFO0_MESSAGE_LOST`, the CanIf CDD its
+SPSC-ring push failures, and host SocketCAN the `SO_RXQ_OVFL` per-socket drop count.
 
 `blob_can_tx_ready` is the non-blocking back-pressure query: return 1 only when `send`
 can accept a frame right now (e.g. the Tx FIFO has a free slot). A burst sender (the

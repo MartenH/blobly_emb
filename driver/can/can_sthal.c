@@ -109,9 +109,18 @@ int blob_can_tx_ready(int h) {
 	return (hf && HAL_FDCAN_GetTxFifoFreeLevel(hf) > 0) ? 1 : 0;
 }
 
+/* Rx-FIFO0 overrun events per instance (idx 0..2): each is >=1 frame lost. */
+static uint32_t rx_lost[3];
+
 int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
 	if (!hf) return -1;
+	/* Note + clear a FIFO0 message-lost since the last drain, before the empty-check, so a
+	 * loss that left the FIFO drained is still counted (REQ-CAN-DRV-008). */
+	if (__HAL_FDCAN_GET_FLAG(hf, FDCAN_FLAG_RX_FIFO0_MESSAGE_LOST) && h >= 0 && h < 3) {
+		rx_lost[h]++;
+		__HAL_FDCAN_CLEAR_FLAG(hf, FDCAN_FLAG_RX_FIFO0_MESSAGE_LOST);
+	}
 	if (HAL_FDCAN_GetRxFifoFillLevel(hf, FDCAN_RX_FIFO0) == 0) return -1;
 	FDCAN_RxHeaderTypeDef rx;
 	if (HAL_FDCAN_GetRxMessage(hf, FDCAN_RX_FIFO0, &rx, data) != HAL_OK) return -1;
@@ -120,13 +129,10 @@ int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
 	return 0;
 }
 
-/* Rx-FIFO0 overrun. The HAL exposes it via __HAL_FDCAN_GET_FLAG(hf,
- * FDCAN_FLAG_RX_FIFO0_MESSAGE_LOST); an integrator on Cube can accumulate that the same
- * way can_fdcan.c counts IR.RF0L. This HAL shim reports 0 until wired to a project's
- * error handling (REQ-CAN-DRV-008 is verified on the register-level FDCAN backend). */
+/* Rx-FIFO0 overrun events since open — recv() samples FDCAN_FLAG_RX_FIFO0_MESSAGE_LOST
+ * and accumulates it here (REQ-CAN-DRV-008). */
 uint32_t blob_can_rx_overruns(int h) {
-	(void)h;
-	return 0u;
+	return (h >= 0 && h < 3) ? rx_lost[h] : 0u;
 }
 
 void blob_can_close(int h) {

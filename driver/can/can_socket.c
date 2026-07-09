@@ -9,6 +9,8 @@
 #include <linux/can.h>
 #include <linux/can/raw.h>
 
+static void ovfl_reset(int fd); /* defined below (per-fd SO_RXQ_OVFL drop-count table) */
+
 int blob_can_open(const char *ifname, int fd_mode) {
 	int s = socket(PF_CAN, SOCK_RAW, CAN_RAW);
 	if (s < 0) return -1;
@@ -28,6 +30,14 @@ int blob_can_open(const char *ifname, int fd_mode) {
 	addr.can_family = AF_CAN;
 	addr.can_ifindex = ifr.ifr_ifindex;
 	if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(s); return -1; }
+
+	/* Ask the kernel to report per-socket Rx-queue drops as SO_RXQ_OVFL ancillary data on
+	 * recvmsg, so blob_can_rx_overruns() can surface receive-with-loss (REQ-CAN-DRV-008). */
+#ifdef SO_RXQ_OVFL
+	int ovfl_on = 1;
+	setsockopt(s, SOL_SOCKET, SO_RXQ_OVFL, &ovfl_on, sizeof(ovfl_on));
+#endif
+	ovfl_reset(s); /* fresh session: drop any stale tally for a reused fd */
 
 	/* Non-blocking so the Loom scheduler is never stalled waiting on a frame. */
 	int fl = fcntl(s, F_GETFL, 0);
@@ -69,26 +79,92 @@ int blob_can_tx_ready(int sock) {
 	return (r > 0 && (pfd.revents & POLLOUT)) ? 1 : 0;
 }
 
+/* Per-socket cumulative kernel Rx-queue drop count, kept from the SO_RXQ_OVFL ancillary
+ * data recvmsg() delivers. Small fixed table keyed by fd (a CAN socket is never fd 0, so
+ * fd==0 marks an empty slot). open() claims/clears a slot, close() releases it. */
+#ifdef SO_RXQ_OVFL
+static struct {
+	int fd;
+	uint32_t ovfl;
+} g_ovfl[16];
+
+static void ovfl_store(int fd, uint32_t v) {
+	for (int i = 0; i < 16; i++)
+		if (g_ovfl[i].fd == fd) {
+			g_ovfl[i].ovfl = v;
+			return;
+		}
+	for (int i = 0; i < 16; i++)
+		if (g_ovfl[i].fd == 0) {
+			g_ovfl[i].fd = fd;
+			g_ovfl[i].ovfl = v;
+			return;
+		}
+}
+#endif
+
+/* Reset any slot for this fd (open reuse / close). */
+static void ovfl_reset(int fd) {
+#ifdef SO_RXQ_OVFL
+	for (int i = 0; i < 16; i++)
+		if (g_ovfl[i].fd == fd) {
+			g_ovfl[i].fd = 0;
+			g_ovfl[i].ovfl = 0;
+		}
+#else
+	(void)fd;
+#endif
+}
+
 int blob_can_recv(int sock, uint32_t *id, uint8_t *data, uint8_t *len) {
 	/* canfd_frame buffer receives BOTH classic (16B) and FD (72B) frames:
-	 * can_id @0, len/can_dlc @4, data @8 in both layouts. */
+	 * can_id @0, len/can_dlc @4, data @8 in both layouts. recvmsg (not read) so the
+	 * SO_RXQ_OVFL ancillary data — the kernel's cumulative Rx-queue drop count — rides
+	 * along and we can surface receive-with-loss (REQ-CAN-DRV-008). */
 	struct canfd_frame f;
-	ssize_t n = read(sock, &f, sizeof(f));
+	struct iovec iov = { .iov_base = &f, .iov_len = sizeof(f) };
+#ifdef SO_RXQ_OVFL
+	union {
+		char buf[CMSG_SPACE(sizeof(uint32_t))];
+		struct cmsghdr align;
+	} ctrl;
+	struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1, .msg_control = ctrl.buf,
+		              .msg_controllen = sizeof(ctrl.buf) };
+#else
+	struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1 };
+#endif
+	ssize_t n = recvmsg(sock, &msg, 0);
 	if (n <= 0) return -1;
+#ifdef SO_RXQ_OVFL
+	for (struct cmsghdr *c = CMSG_FIRSTHDR(&msg); c; c = CMSG_NXTHDR(&msg, c)) {
+		if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SO_RXQ_OVFL) {
+			uint32_t ovfl;
+			memcpy(&ovfl, CMSG_DATA(c), sizeof(ovfl));
+			ovfl_store(sock, ovfl);
+		}
+	}
+#endif
 	*id = f.can_id & CAN_EFF_MASK;
 	*len = f.len;
 	memcpy(data, f.data, f.len);
 	return 0;
 }
 
-/* SocketCAN buffers received frames deeply in the kernel and, on vcan, does not drop
- * under the loads the host/sim exercises. Per-socket overrun IS observable via
- * SO_RXQ_OVFL (a cumulative drop count delivered as an SCM_RXQ_OVFL cmsg on recvmsg);
- * wiring that in would mean switching recv() off read(). Until then report 0 — the
- * receive-with-loss surfacing (REQ-CAN-DRV-008) is exercised on the FDCAN target. */
+/* Rx-overrun events: the kernel's per-socket Rx-queue drop count (SO_RXQ_OVFL). Under
+ * back-pressure — the bridge draining slower than frames arrive — the kernel drops from
+ * this socket's receive queue and reports the running total, which we surface here rather
+ * than losing silently (REQ-CAN-DRV-008). 0 where the platform lacks SO_RXQ_OVFL. */
 uint32_t blob_can_rx_overruns(int sock) {
+#ifdef SO_RXQ_OVFL
+	for (int i = 0; i < 16; i++)
+		if (g_ovfl[i].fd == sock)
+			return g_ovfl[i].ovfl;
+#endif
 	(void)sock;
 	return 0u;
 }
 
-void blob_can_close(int sock) { close(sock); }
+void blob_can_close(int sock) {
+	ovfl_reset(sock);
+	close(sock);
+}
