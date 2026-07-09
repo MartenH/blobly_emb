@@ -448,14 +448,12 @@ fn main() {
 		panic('loom2v: [target] baremetal does not support external/bus signals yet ' +
 			'(every [[signal]] must be partition-local: from == to)')
 	}
-	// Phase 6a emits the ThreadX target WITHOUT trace: a traced config would otherwise fall
-	// into the bare-metal inline-trace emitter below (trace_target = trace_on && target_on),
-	// which emits run() but NOT tx_application_define/boot() — a broken image. Reject it until
-	// the ThreadX comm-thread + trace emitter lands (phase 6b).
-	if target_threadx && trace_on {
-		panic('loom2v: [target] kind="threadx" with [trace] is not generated yet (phase 6b — the ' +
-			'ThreadX comm thread + trace dump); set [trace].enabled = false for threadx builds')
-	}
+	// The ThreadX target's trace is the EXEC-CHANGE-HOOK model (trace_hooks.c captures every
+	// real context switch + ISR into a ring), NOT the loom2v polled V-stack capture. So a
+	// [trace] block on a threadx target does not engage the inline/multicore trace machinery
+	// (trace_target excludes threadx below); it only tells the generated bus owner which
+	// record_id to stream the ring on. The FB loop being a real ThreadX thread means the hooks
+	// capture it for free — see the threadx run() below (phase 6b-1).
 	// The threadx app thread opens the telemetry bus for its CAN channel, so the target needs
 	// [telemetry] ENABLED, with a bus that actually exists (the schema makes all of that
 	// optional in general, and only `driver.can` gets imported when telem_on).
@@ -544,7 +542,10 @@ fn main() {
 	// P3c-0: bare-metal single-core trace — the same inline machinery, emitted with the board timebase
 	// (C.board_now_us) and no osal. Guaranteed single-core (target rejects external signals, so no
 	// bridge, and the target run() is one-partition).
-	trace_target := trace_on && target_on
+	// trace_target is the BARE-METAL target's polled inline trace. The ThreadX target is
+	// excluded — its trace is the exec-change-hook stream emitted in the threadx run(), not
+	// this V-stack capture machinery.
+	trace_target := trace_on && target_on && !target_threadx
 	// The bare-metal target trace runner services only trace + CpuLoad on one channel — it never runs
 	// a COM bridge. has_external is already rejected for target above; ISO-TP / routes make has_bridge
 	// true without has_external, so reject those too rather than silently drop the configured bus work.
@@ -1617,9 +1618,11 @@ fn main() {
 		}
 	}
 	extra_dest_buses.sort()
-	if target_on && !trace_on {
+	if target_on && (target_threadx || !trace_on) {
 		// --- target run(): one inline single-core superloop. No spawn, no osal. The
 		//     timebase is the board's DWT clock (board_now_us); the loop paces to a
+		//     (ThreadX comes here whether or not [trace] — its trace is the exec-hook stream
+		//     added to this run() below, not the bare-metal polled trace path.)
 		//     fixed tick so idle time between passes is real idle (the Loom measures
 		//     load as run-time / wall-clock, so unpaced spinning would read ~50%). The
 		//     CpuLoad frame is sent inline from load_permille() — no scratch, no tx
@@ -1686,6 +1689,12 @@ fn main() {
 			glue << 'fn C._tx_thread_sleep(u32) u32'
 			glue << 'fn C._tx_initialize_kernel_enter()'
 			glue << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
+			if trace_on {
+				// The exec-change-hook trace recorder (trace_hooks.c, driver-independent): it copies
+				// the ring into our scratch buffer under a brief freeze, and THIS thread (the sole
+				// bus owner) streams the stable copy. RING_CAP = 256 records * 8 bytes.
+				glue << 'fn C.trace_snapshot(voidptr, u32) u32'
+			}
 			glue << ''
 			// TCB as [32]u64 (256 B >= sizeof(TX_THREAD) = 200 B) so it is 8-byte aligned — the
 			// kernel reads/writes word fields through this pointer as a TX_THREAD*, so a byte-
@@ -1694,6 +1703,9 @@ fn main() {
 			glue << '__global ('
 			glue << '\tg_${part}_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned'
 			glue << '\tg_${part}_stack [4096]u8'
+			if trace_on {
+				glue << '\tg_${part}_trace [${trace_buffer_records}][8]u8 // scratch snapshot of the trace ring (owner streams it)'
+			}
 			glue << ')'
 		}
 		glue << ''
@@ -1715,6 +1727,14 @@ fn main() {
 		glue << '\ttick_us := u64(${target_tick_us})'
 		if !target_threadx {
 			glue << '\tmut next_tick := C.board_now_us() + tick_us'
+		}
+		if target_threadx && trace_on {
+			// Exec-hook trace stream state: snapshot the ring ~1 s, then stream the stable copy
+			// in chunks across iterations (this thread is the sole bus owner => lock-free).
+			glue << '\tmut last_trace := u64(0)'
+			glue << '\tmut tr_pos := u32(0)'
+			glue << '\tmut tr_n := u32(0)'
+			glue << '\tmut tr_active := false'
 		}
 		glue << '\tfor {'
 		glue << '\t\tt0 := C.board_now_us()'
@@ -1751,6 +1771,38 @@ fn main() {
 				glue << '\t\t\t}'
 				glue << '\t\t\tch.send(d)'
 			}
+			glue << '\t\t}'
+		}
+		if target_threadx && trace_on {
+			// Stream the exec-hook trace ring ~1 s, single-owner + incremental. trace_snapshot
+			// copies the ring into g_${part}_trace under a brief freeze; we then send 16 records
+			// per pass, only while the Tx FIFO has room (no spin) — so a stuck bus can't wedge
+			// the owner and the FB scheduling above still runs between chunks. Records go out raw
+			// (one 8-byte record per classic frame on the trace record id); the host decodes with
+			// candump + decode_trace.py.
+			glue << '\t\tif !tr_active && t1 - last_trace >= u64(1000000) {'
+			glue << '\t\t\ttr_n = C.trace_snapshot(&g_${part}_trace[0], ${trace_buffer_records})'
+			glue << '\t\t\ttr_pos = 0'
+			glue << '\t\t\ttr_active = true'
+			glue << '\t\t}'
+			glue << '\t\tif tr_active {'
+			glue << '\t\t\tmut sent := 0'
+			glue << '\t\t\tfor tr_pos < tr_n && sent < 16 && ch.tx_ready() {'
+			glue << '\t\t\t\tmut tf := can.Frame{'
+			glue << '\t\t\t\t\tid:  u32(0x${trace_record_id.hex()})'
+			glue << '\t\t\t\t\tlen: 8'
+			glue << '\t\t\t\t}'
+			glue << '\t\t\t\tfor j in 0 .. 8 {'
+			glue << '\t\t\t\t\ttf.data[j] = g_${part}_trace[tr_pos][j]'
+			glue << '\t\t\t\t}'
+			glue << '\t\t\t\tch.send(tf)'
+			glue << '\t\t\t\ttr_pos++'
+			glue << '\t\t\t\tsent++'
+			glue << '\t\t\t}'
+			glue << '\t\t\tif tr_pos >= tr_n {'
+			glue << '\t\t\t\ttr_active = false'
+			glue << '\t\t\t\tlast_trace = C.board_now_us()'
+			glue << '\t\t\t}'
 			glue << '\t\t}'
 		}
 		if target_threadx {
