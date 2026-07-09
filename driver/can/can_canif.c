@@ -41,6 +41,11 @@ static const int tx_map_n = (int)(sizeof(tx_map) / sizeof(tx_map[0]));
 static const int rx_map_n = (int)(sizeof(rx_map) / sizeof(rx_map[0]));
 
 static blob_can_ring rx_ring[BLOB_CAN_BUSES];
+/* Frames dropped because the Rx SPSC ring was full. Written in Blobly_RxIndication (CanIf/
+ * ISR context), read by the bridge/telemetry task via blob_can_rx_overruns — volatile so
+ * the single-writer count isn't cached/reordered across that boundary (an aligned u32
+ * load/store is atomic on the M-profile targets, and the ISR is the only writer). */
+static volatile uint32_t rx_lost[BLOB_CAN_BUSES];
 
 int blob_can_open(const char *name, int fd_mode) {
 	(void)fd_mode; /* classic/FD is fixed by the L-PDU's CanIf config */
@@ -62,6 +67,7 @@ int blob_can_open(const char *name, int fd_mode) {
 		idx = idx * 10 + (name[i] - '0');
 	if (idx < 0 || idx >= BLOB_CAN_BUSES)
 		return -1;
+	rx_lost[idx] = 0; /* fresh session: clear a prior controller run's ring-drop tally */
 	CanIf_SetControllerMode(bus_controller[idx], CANIF_CS_STARTED);
 	return idx;
 }
@@ -92,6 +98,13 @@ int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
 	return blob_ring_pop(&rx_ring[h], id, data, len);
 }
 
+/* Rx-overrun events for this bus: frames CanIf delivered that the CDD had to drop because
+ * the Rx SPSC ring was full (the loss that happens in this shim, below the BSW's own Det/
+ * Dem diagnostics). REQ-CAN-DRV-008. */
+uint32_t blob_can_rx_overruns(int h) {
+	return (h >= 0 && h < BLOB_CAN_BUSES) ? rx_lost[h] : 0u;
+}
+
 void blob_can_close(int h) {
 	if (h >= 0 && h < BLOB_CAN_BUSES)
 		CanIf_SetControllerMode(bus_controller[h], CANIF_CS_STOPPED);
@@ -102,8 +115,12 @@ void blob_can_close(int h) {
 void Blobly_RxIndication(PduIdType RxPduId, const PduInfoType *PduInfoPtr) {
 	for (int i = 0; i < rx_map_n; i++) {
 		if (rx_map[i].pdu == RxPduId) {
-			blob_ring_push(&rx_ring[rx_map[i].bus], rx_map[i].id,
-			               PduInfoPtr->SduDataPtr, (uint8_t)PduInfoPtr->SduLength);
+			/* The SPSC ring is the ISR->task boundary; if the bridge hasn't drained it and
+			 * it is full, the frame is lost HERE (below CanIf's own diagnostics), so count
+			 * it — receive-with-loss must be observable, not silent (REQ-CAN-DRV-008). */
+			if (blob_ring_push(&rx_ring[rx_map[i].bus], rx_map[i].id, PduInfoPtr->SduDataPtr,
+			                   (uint8_t)PduInfoPtr->SduLength) != 0)
+				rx_lost[rx_map[i].bus]++;
 			return;
 		}
 	}

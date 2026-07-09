@@ -15,6 +15,7 @@ fn C.blob_can_open(&char, int) int
 fn C.blob_can_send(int, u32, &u8, u8, int) int
 fn C.blob_can_recv(int, &u32, &u8, &u8) int
 fn C.blob_can_tx_ready(int) int
+fn C.blob_can_rx_overruns(int) u32
 fn C.blob_can_close(int)
 
 pub const max_dlc = u8(64)
@@ -55,6 +56,15 @@ pub fn (c Channel) tx_ready() bool {
 // recv returns true and fills `f` when a frame is available; false if none.
 pub fn (mut c Channel) recv(mut f Frame) bool {
 	return C.blob_can_recv(c.sock, &f.id, &f.data[0], &f.len) == 0
+}
+
+// rx_overruns is the number of Rx-overrun EVENTS the driver has seen since open — each
+// event is one or more received frames LOST to Rx-buffer overflow (receive-with-loss
+// beyond the configured capacity). A monotonic loss indicator (not an exact frame count —
+// one hardware overrun flag can cover several dropped frames), surfaced so the upper layer
+// can observe it (telemetry/trace) instead of it being silent (REQ-CAN-DRV-008). 0 = none.
+pub fn (c Channel) rx_overruns() u32 {
+	return C.blob_can_rx_overruns(c.sock)
 }
 
 pub fn (mut c Channel) close() {
