@@ -1,12 +1,17 @@
 # Multi-core + comm-thread trace — design draft
 
-> **Status: P3a DONE + merged (single-writer, #57); P3b DESIGNED ([§4](#4-comm-thread-visible--p3b-designed-not-built)); P3c next.**
+> **Status: P3a DONE + merged (single-writer, #57); P3b DONE + merged (different-bus, #60); P3c-0
+> DONE (bare-metal single-core trace); P3c-1 (real thread/ISR capture) next.**
 > The design writeup for the multi-core trace-codegen phase, extending the inline single-core path
 > from #54/#55/#56. **P3a is shipped** — `examples/trace_multicore` (two partitions, cores 0+1): a
 > single dump command streams one self-describing ISO-TP block per core, coherent single-writer
-> cross-core freeze, decoded natively by blobly_net. **P3b (comm thread visible) is fully designed in
-> §4** and ready to build next session — different-bus first (reuses P3a), same-bus (piggyback) as a
-> follow-up. P3c (ThreadX target) is §5. The P3 phases carry **no backward-compat burden** (§4.4).
+> cross-core freeze, decoded natively by blobly_net. **P3b (comm thread visible) is shipped** — the
+> per-bus COM bridge is a traced `comm_<bus>` thread (`examples/trace_comm`), different-bus reusing
+> the P3a owner; same-bus (piggyback) is the remaining follow-up. **P3c-0 (bare-metal single-core
+> trace) is shipped** — `examples/h735_app` now enables `[trace]` and the target reuses the inline
+> machinery on the board's DWT clock (§5). P3c-1 (real preemptive thread/ISR capture via the TX
+> execution-change hooks) is the larger remaining slice. The P3 phases carry **no backward-compat
+> burden** (§4.4).
 
 ## 1. Where we are
 
@@ -38,7 +43,7 @@ The panics that mark the boundary (all in `gen.v` around 458–475, 1126, 1133):
 | `trace codegen currently supports a single partition on core 0 only` | [§3 (P3a)](#p3a--host-multi-core-fb-only) |
 | `level "…" needs thread/ISR events … single-core host capture does not have` | [§4 (P3b)](#p3b--comm-thread-visible) / [§5 (P3c)](#p3c--threadx-target) |
 | `cross-bus telemetry with inline trace is not generated yet` | [§3 (P3a)](#p3a--host-multi-core-fb-only) |
-| `[trace] on a bare-metal [target] is not generated yet` | [§5 (P3c)](#p3c--threadx-target) |
+| `[trace] on a bare-metal [target] supports exactly one partition` (single-core is BUILT; multi-partition target) | [§5.1 (P3c-1)](#51-real-threads--isrs--p3c-1) |
 
 ## 2. What "the comm thread visible in the trace" means
 
@@ -175,6 +180,26 @@ in **P3c** (the ThreadX target). P3b keeps the cooperative-loop model — the co
 slice per drain cycle*, an interval, not a real context switch.
 
 ## 5. ThreadX target — **P3c**
+
+### 5.0 Bare-metal single-core trace — **P3c-0 (BUILT)**
+
+The smallest, provable-now slice: `[trace]` on a single-core `[target]` reuses the **inline** trace
+machinery verbatim — the same `trace_capture` hook, `TraceCmd`/`TraceRsp` handshake, ISO-TP dump of
+the frozen ring, HandlerStat heartbeat, and CpuLoad as the host `trace_demo`. The only substitutions
+the emitter makes for the target (`trace_target := trace_on && target_on`, [gen.v](../tools/loom2v/gen.v)):
+
+- **clock**: `C.board_now_us()` (the board's DWT µs counter) instead of `osal.now_us()`, via a small
+  `board_clock()` V wrapper passed to `run_profiled`/`account`. No osal is imported or referenced.
+- **idle**: a busy-wait to a fixed `tick_us` boundary (real idle for load accounting — [[loom-load-baremetal-pacing]]), instead of `osal.sleep_us`.
+- **no `pin_to_core`** (single core).
+
+Shipped in `examples/h735_app` (add `[trace]` to its `ecu.toml`, regenerate, cross-compile): the
+generated `gen/loom_gen.v` builds V→C→`arm-none-eabi-gcc`→`app.bin` and links against the FDCAN
+backend (`blob_can_recv`) + board bring-up. It's the host-proven flight recorder, now on silicon,
+over the one FDCAN bus. It captures **fb + derived thread/idle** records only — there are still no
+real preemptive switches or ISRs on a polled superloop, so `level` stays `thread+fb`/`all`.
+
+### 5.1 Real threads + ISRs — **P3c-1**
 
 Real threads + ISRs, bare-metal. This is the largest slice and genuinely different from host:
 
