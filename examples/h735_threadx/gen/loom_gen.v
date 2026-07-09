@@ -45,10 +45,12 @@ fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)
 fn C._tx_thread_sleep(u32) u32
 fn C._tx_initialize_kernel_enter()
 fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32
+fn C.trace_snapshot(voidptr, u32) u32
 
 __global (
 	g_app_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
 	g_app_stack [4096]u8
+	g_app_trace [64][8]u8 // scratch snapshot of the trace ring (owner streams it)
 )
 
 pub fn run(can0 can.Channel) {
@@ -63,6 +65,10 @@ pub fn run(can0 can.Channel) {
 	mut last_telem := u64(0)
 	mut last_overruns := u32(0) // for the per-period overrun count
 	tick_us := u64(1000)
+	mut last_trace := u64(0)
+	mut tr_pos := u32(0)
+	mut tr_n := u32(0)
+	mut tr_active := false
 	for {
 		t0 := C.board_now_us()
 		sched.run(t0)
@@ -95,6 +101,30 @@ pub fn run(can0 can.Channel) {
 				d.data[i] = detail[i]
 			}
 			ch.send(d)
+		}
+		if !tr_active && t1 - last_trace >= u64(1000000) {
+			tr_n = C.trace_snapshot(&g_app_trace[0], 64)
+			tr_pos = 0
+			tr_active = true
+		}
+		if tr_active {
+			mut sent := 0
+			for tr_pos < tr_n && sent < 16 && ch.tx_ready() {
+				mut tf := can.Frame{
+					id:  u32(0x7e5)
+					len: 8
+				}
+				for j in 0 .. 8 {
+					tf.data[j] = g_app_trace[tr_pos][j]
+				}
+				ch.send(tf)
+				tr_pos++
+				sent++
+			}
+			if tr_pos >= tr_n {
+				tr_active = false
+				last_trace = C.board_now_us()
+			}
 		}
 		C._tx_thread_sleep(u32(1))
 	}
