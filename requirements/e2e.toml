@@ -34,7 +34,9 @@ derives = "SYS-REQ-SAFE-001"
 id = "REQ-E2E-004"
 title = "Composition with SecOC"
 text = "For a message configured with both E2E and SecOC, the protection order shall be defined and symmetric: on transmit the E2E CRC/counter are applied to the payload first and the SecOC authentication code is then computed over the E2E-protected bytes; on receive the SecOC check runs first and only an authentic message is passed to the E2E check. Neither shall mask a fault the other would detect."
+# method = test: an ASIL B property is demonstrated by an executed check (corrupt ->
+# E2E fault; forge/replay -> SecOC reject; neither masks the other), not a review sign-off.
 status = "draft"
-method = "review"
+method = "test"
 asil = "B" # inherits the ASIL B of the parent SYS-REQ-SAFE-001 (no decomposition)
 derives = "SYS-REQ-SAFE-001"
