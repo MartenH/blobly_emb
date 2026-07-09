@@ -8,9 +8,11 @@ carried by a **wait-free triple-buffer IOC** (`ioc.h`): `Governor → [LoadCmd] 
 on this single-core H735 the buffers live in DTCM, and the identical code carries a signal
 across cores from shared SRAM (Phase 6). Verified on the board: `candump can0` shows the
 `0x7E1` telemetry `iters` triangle-waving 48k↔96k in 2k steps — the Governor's command
-flowing through the IOCs to Load's result — and the `0x7E5` trace carries Governor/Load/
-Heartbeat/comm as named preemptive threads. `acc` (Load's LCG accumulator) varies every
-frame, so the work is real, not elided.
+flowing through the IOCs to Load's result — and the `0x7E5` trace carries the FB threads as
+distinct preemptive threads. `acc` (Load's LCG accumulator) varies every frame, so the work
+is real, not elided. (In the raw `0x7E5` stream each thread is a numeric entity id + timing
+bytes; the Governor/Load/Heartbeat/comm *names* come from `tx_thread_create` and are mapped
+to the ids by blobly_net's manifest — the Phase-6 swimlane.)
 
 
 Phase 3 takes the QEMU foundation ([`threadx_min`](../threadx_min), Phases 1–2) onto
@@ -77,7 +79,8 @@ next one. Verify live:
 ```
 candump can0 &                       # watch 0x7E5 (trace) + 0x7E1 (comm periodic tx)
 cansend can0 123#0011223344556677    # -> Rx ISR (id 35) + comm wake appear in the next 0x7E5 snapshot
-# 0x7E1 payload = rx_count(u32 LE) | last_rx_id(u16 LE): the count climbs per frame sent.
+# The Rx ISR (id 35) + comm thread waking are the proof the frame was received. (Since
+# Phase 5, 0x7E1 carries the Workload signal {iters,acc}, not the Rx accounting.)
 ```
 
 ## Layout
