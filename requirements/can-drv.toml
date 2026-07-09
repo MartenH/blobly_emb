@@ -54,8 +54,21 @@ derives = "SYS-REQ-COMMS-001"
 [[req]]
 id = "REQ-CAN-DRV-006"
 title = "Uniform backend contract"
-text = "Every CAN driver backend shall present the same open/send/recv/close contract to the upper layer."
+text = "Every CAN driver backend shall present the same open/send/tx_ready/recv/close contract to the upper layer."
 status = "draft"
 method = "review"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"
+
+[[req]]
+id = "REQ-CAN-DRV-007"
+title = "Non-blocking transmit with back-pressure"
+text = "The CAN driver's transmit operation shall be non-blocking: when the transmit path cannot accept a frame it shall report that (send returns failure) rather than block, and it shall expose a readiness query so the caller can pace a burst without overrunning the transmit queue or busy-waiting."
+# Introduced with the ISO-TP dump / UDS response burst work: the driver must never
+# spin or block on a full Tx FIFO (a quiet/down bus otherwise stalls the whole loop).
+# Host/SocketCAN + h735/FDCAN verified non-blocking (dump completes, down bus degrades
+# gracefully); pending a formal per-context verification sign-off.
+status = "draft"
+method = "test"
 asil = "QM"
 derives = "SYS-REQ-COMMS-001"
