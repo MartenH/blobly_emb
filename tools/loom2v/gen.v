@@ -452,13 +452,16 @@ fn main() {
 	// cmd/rsp + dump + the HandlerStat heartbeat directly (no IOC, nothing else to schedule). A
 	// bridge (external signals / ISO-TP / routes) or multiple cores need the comm-thread model,
 	// not generated yet.
-	// Bare-metal target trace is not generated — the target run() emits the plain sched.run() loop
-	// with no capture/cmd/rsp, so an active [trace] block would silently produce nothing.
-	if trace_on && target_on {
-		panic('loom2v: [trace] on a bare-metal [target] is not generated yet — the target loop has ' +
-			'no trace capture / cmd-rsp / dump; remove [trace] or set enabled = false for target builds')
-	}
 	single_part := if by_part.keys().len == 1 { by_part.keys()[0] } else { '' }
+	// P3c-0: a bare-metal [target] with [trace] reuses the single-core inline-trace machinery on the
+	// board (DWT) timebase — same capture hook + cmd/rsp + ISO-TP dump as the host inline path, no
+	// osal. It's single-core only; real preemptive thread/ISR capture (the TX execution-change hooks)
+	// is the larger P3c slice. A multi-partition target isn't generated at all yet (see the target
+	// run() one-partition guard), so trace on it has nothing coherent to capture.
+	if trace_on && target_on && single_part == '' {
+		panic('loom2v: [trace] on a bare-metal [target] supports exactly one partition (single-core ' +
+			'host-style capture on the board timebase); multi-thread / ISR capture is the larger P3c slice')
+	}
 	has_bridge := has_external || isotp_conns.len > 0 || has_routes
 	// Which buses run a COM bridge (an external signal, an ISO-TP conn, or a route touches them).
 	// P3b traces each bridge as a `comm_<bus>` thread; the DIFFERENT-bus case (trace rides a bus with
@@ -494,6 +497,10 @@ fn main() {
 	// captures into its own, and one partition_trace() owns the trace channel + streams the blocks.
 	trace_inline := trace_on && !target_on && single_part != '' && !has_bridge
 		&& (core_of[single_part] or { 0 }) == trace_core && trace_core == 0
+	// P3c-0: bare-metal single-core trace — the same inline machinery, emitted with the board timebase
+	// (C.board_now_us) and no osal. Guaranteed single-core (target rejects external signals, so no
+	// bridge, and the target run() is one-partition).
+	trace_target := trace_on && target_on
 	trace_multicore := trace_on && !target_on && !trace_inline && !trace_bus_has_bridge
 	// SAME-bus (the trace bus itself carries a bridge) is P3b's follow-up: the bridge loop would have
 	// to own the trace channel and dispatch TraceCmd vs COM. Not generated yet — reject it.
@@ -669,14 +676,14 @@ fn main() {
 	}
 	// telem.* is used for CpuLoad (telemetry) and the inline HandlerStat heartbeat — import it
 	// only when one is actually emitted (a push_ms = 0 trace with no telemetry uses neither).
-	if telem_on || (trace_inline && trace_push_us > 0) {
+	if telem_on || ((trace_inline || trace_target) && trace_push_us > 0) {
 		glue << 'import comm.telem' // CpuLoad / HandlerStat packing
 	}
-	if trace_inline || trace_multicore {
+	if trace_inline || trace_multicore || trace_target {
 		glue << 'import comm.trace' // capture ring(s) + cmd/rsp control
 		glue << 'import comm.isotp' // bulk record dump transport
 	}
-	if has_external || isotp_conns.len > 0 || telem_on || trace_inline || trace_multicore {
+	if has_external || isotp_conns.len > 0 || telem_on || trace_inline || trace_multicore || trace_target {
 		glue << 'import driver.can' // the generated bus bridge / trace channel
 	}
 	if has_external {
@@ -1519,7 +1526,7 @@ fn main() {
 		}
 	}
 	extra_dest_buses.sort()
-	if target_on {
+	if target_on && !trace_on {
 		// --- target run(): one inline single-core superloop. No spawn, no osal. The
 		//     timebase is the board's DWT clock (board_now_us); the loop paces to a
 		//     fixed tick so idle time between passes is real idle (the Loom measures
@@ -1596,14 +1603,21 @@ fn main() {
 		glue << '\t\t}'
 		glue << '\t}'
 		glue << '}'
-	} else if trace_inline {
+	} else if trace_inline || trace_target {
 		// --- inline-trace run(): the single app core owns the trace bus channel and runs one
 		//     superloop — profiled dispatch + capture hook, the TraceCmd/TraceRsp handshake +
 		//     ISO-TP dump of the frozen ring, the HandlerStat heartbeat, and CpuLoad. Single
-		//     core, so no IOC fan-out (that's the multi-core path, not generated yet). ---
+		//     core, so no IOC fan-out (that's the multi-core path, not generated yet). On a
+		//     bare-metal [target] (trace_target, P3c-0) the same body is emitted with the board
+		//     DWT clock instead of osal and a busy-wait idle to the tick — no osal at all. ---
 		part := single_part
 		chp := snake(eff_trace_bus)
 		pcore := core_of[part] or { 0 } // the core the partition (and this loop) is pinned to
+		// Clock seam: host uses osal.now_us; the bare-metal target uses the board's DWT µs counter
+		// (declared as a C fn below). nowcall is the call expression; nowref is the bare fn value
+		// passed to run_profiled/account.
+		nowcall := if trace_target { 'C.board_now_us()' } else { 'osal.now_us()' }
+		nowref := if trace_target { 'board_clock' } else { 'osal.now_us' }
 		// The single-core host capture only produces fb records (no thread switches / ISRs on a
 		// polled loop), so a thread-only level would capture nothing.
 		if trace_level !in ['thread+fb', 'all'] {
@@ -1655,8 +1669,20 @@ fn main() {
 		}
 		glue << '}'
 		glue << ''
+		if trace_target {
+			glue << 'fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)'
+			glue << ''
+			// A V wrapper so the clock can be passed by value to run_profiled/account (a bare C.fn
+			// reference isn\'t a first-class fn value in V).
+			glue << 'fn board_clock() u64 {'
+			glue << '\treturn C.board_now_us()'
+			glue << '}'
+			glue << ''
+		}
 		glue << 'pub fn run(${chp} can.Channel) {'
-		glue << '\tosal.pin_to_core(${pcore}) // so the manifest/TraceRsp core label matches reality'
+		if !trace_target {
+			glue << '\tosal.pin_to_core(${pcore}) // so the manifest/TraceRsp core label matches reality'
+		}
 		glue << '\tmut ch := ${chp}'
 		glue << '\tmut st := Partition_${part}_state{}'
 		glue << '\tmut sched := loom.Scheduler{}'
@@ -1667,7 +1693,7 @@ fn main() {
 		glue << '\tmut ts := TraceState{'
 		glue << '\t\tbuf: trace.new_buffer(&backing[0], ${trace_buffer_records}, ${modelit}, ${pre})'
 		glue << '\t}'
-		glue << '\tts.start = osal.now_us()'
+		glue << '\tts.start = ${nowcall}'
 		glue << '\tts.buf.start()'
 		glue << '\tsched.set_trace_hook(trace_capture, &ts)'
 		glue << '\tmut link := isotp.Link{}'
@@ -1684,8 +1710,14 @@ fn main() {
 		if cpuload_on {
 			glue << '\tmut last_telem := u64(0)'
 		}
+		if trace_target {
+			// Pace the superloop to a fixed tick with a busy-wait so idle is real idle — the Loom
+			// measures load as run-time / wall-clock, so an unpaced spin would read ~100%.
+			glue << '\ttick_us := u64(${target_tick_us})'
+			glue << '\tmut next_tick := C.board_now_us() + tick_us'
+		}
 		glue << '\tfor {'
-		glue << '\t\tsched.run_profiled(osal.now_us)'
+		glue << '\t\tsched.run_profiled(${nowref})'
 		glue << '\t\tmut rx := can.Frame{}'
 		glue << '\t\tif ch.recv(mut rx) {'
 		glue << '\t\t\tif rx.id == u32(0x${trace_cmd_id.hex()}) && rx.len >= 8 {'
@@ -1698,7 +1730,7 @@ fn main() {
 		glue << '\t\t\t\tif addressed {'
 		glue << '\t\t\t\t\tif c.opcode == trace.op_arm || c.opcode == trace.op_start'
 		glue << '\t\t\t\t\t\t|| c.opcode == trace.op_reset {'
-		glue << '\t\t\t\t\t\tts.start = osal.now_us()'
+		glue << '\t\t\t\t\t\tts.start = ${nowcall}'
 		glue << '\t\t\t\t\t\tts.base = 0'
 		glue << '\t\t\t\t\t\tlink = isotp.Link{}'
 		glue << '\t\t\t\t\t}'
@@ -1722,11 +1754,11 @@ fn main() {
 		glue << '\t\t\t\tfor j in 0 .. 8 {'
 		glue << '\t\t\t\t\tp.data[j] = rx.data[j]'
 		glue << '\t\t\t\t}'
-		glue << '\t\t\t\tlink.on_frame(osal.now_us(), p)'
+		glue << '\t\t\t\tlink.on_frame(${nowcall}, p)'
 		glue << '\t\t\t}'
 		glue << '\t\t}'
 		glue << '\t\tmut tp := isotp.Pdu{}'
-		glue << '\t\tfor link.poll(osal.now_us(), mut tp) {'
+		glue << '\t\tfor link.poll(${nowcall}, mut tp) {'
 		glue << '\t\t\tmut pf := can.Frame{'
 		glue << '\t\t\t\tid:  u32(0x${trace_record_id.hex()})'
 		glue << '\t\t\t\tlen: 8'
@@ -1737,7 +1769,7 @@ fn main() {
 		glue << '\t\t\tch.send(pf)'
 		glue << '\t\t}'
 		if heartbeat_on || cpuload_on {
-			glue << '\t\tnow := osal.now_us()'
+			glue << '\t\tnow := ${nowcall}'
 		}
 		if heartbeat_on {
 			glue << '\t\tif now - last_push >= ${trace_push_us} {'
@@ -1775,7 +1807,16 @@ fn main() {
 			glue << '\t\t\tch.send(cf)'
 			glue << '\t\t}'
 		}
-		glue << '\t\tosal.sleep_us(1000)'
+		if trace_target {
+			glue << '\t\tfor C.board_now_us() < next_tick {} // idle to the tick (real idle)'
+			glue << '\t\tnext_tick += tick_us'
+			glue << '\t\ttnow := C.board_now_us()'
+			glue << '\t\tif tnow > next_tick { // a pass overran the tick — resync'
+			glue << '\t\t\tnext_tick = tnow + tick_us'
+			glue << '\t\t}'
+		} else {
+			glue << '\t\tosal.sleep_us(1000)'
+		}
 		glue << '\t}'
 		glue << '}'
 	} else if trace_multicore {
