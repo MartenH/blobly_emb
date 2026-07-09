@@ -474,6 +474,26 @@ fn main() {
 
 	// The trace cmd/rsp + dump ride a CAN channel: trace.bus, or [telemetry].bus by default.
 	eff_trace_bus := if trace_bus != '' { trace_bus } else { telem_bus }
+	// ThreadX target trace is the RAW exec-hook stream: THREAD/ISR records only, one classic
+	// 11-bit frame per record, streamed by the single bus owner on the telemetry channel. No
+	// TraceCmd/Rsp/HandlerStat/ISO-TP. Reject configs it can't honour rather than emit code
+	// that silently ignores them.
+	if target_threadx && trace_on {
+		if trace_level == 'thread+fb' || trace_level == 'all' {
+			panic('loom2v: [target] kind="threadx" [trace].level "${trace_level}" needs handler-level ' +
+				'FB records, but the exec-change-hook recorder captures only THREAD/ISR — use ' +
+				'level = "thread" or "thread+isr"')
+		}
+		if trace_record_id > 0x7ff {
+			panic('loom2v: [target] kind="threadx" [trace].record_id 0x${trace_record_id.hex()} is an ' +
+				'extended (29-bit) id, but the classic FDCAN backend sends 11-bit frames — use a ' +
+				'standard id (<= 0x7FF)')
+		}
+		if trace_bus != '' && trace_bus != telem_bus {
+			panic('loom2v: [target] kind="threadx" [trace].bus "${trace_bus}" must equal ' +
+				'[telemetry].bus "${telem_bus}" — the single bus owner streams both on one channel')
+		}
+	}
 	mut trace_core := 0
 	if eff_trace_bus != '' {
 		if bc := doc.value('bus').as_map()[eff_trace_bus] {
@@ -2312,11 +2332,19 @@ fn main() {
 		if trace_on {
 			tbus := if trace_bus != '' { trace_bus } else { telem_bus }
 			man << '# trace frames: frame,id,bus'
-			man << 'cmd,0x${trace_cmd_id.hex()},${tbus}'
-			man << 'rsp,0x${trace_rsp_id.hex()},${tbus}'
-			man << 'stat,0x${trace_stat_id.hex()},${tbus}'
+			// The ThreadX target streams ONLY the raw record frames (exec-hook stream on the bus
+			// owner's single channel) — it implements no TraceCmd/Rsp/HandlerStat request path and
+			// no ISO-TP flow control. Advertise only what it actually sends, so blobly_net doesn't
+			// wait on cmd/rsp/stat/dump_fc ids that never appear.
+			if !target_threadx {
+				man << 'cmd,0x${trace_cmd_id.hex()},${tbus}'
+				man << 'rsp,0x${trace_rsp_id.hex()},${tbus}'
+				man << 'stat,0x${trace_stat_id.hex()},${tbus}'
+			}
 			man << 'record,0x${trace_record_id.hex()},${tbus}'
-			man << 'dump_fc,0x${trace_dump_fc_id.hex()},${tbus}'
+			if !target_threadx {
+				man << 'dump_fc,0x${trace_dump_fc_id.hex()},${tbus}'
+			}
 		}
 		os.write_file(args[6], man.join('\n') + '\n') or { panic('write ${args[6]}: ${err}') }
 	}

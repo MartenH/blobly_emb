@@ -25,7 +25,7 @@ CAN_DEFS = -DBLOB_CAN_FDCAN -DBLOB_FDCAN_KCLK_HZ=25000000 -DBLOB_FDCAN_TQ=10 \
 # TX_ENABLE_EXECUTION_CHANGE_NOTIFY makes the ThreadX port's context-switch + SysTick asm call
 # the four _tx_execution_* hooks (trace_hooks.c) — the source of the real thread/ISR trace.
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
-          -DSTM32H735xx -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY $(CAN_DEFS) \
+          -DSTM32H735xx -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY -DTRACE_CPU_MHZ=550 $(CAN_DEFS) \
           -I. -I$(REPO)/driver/can -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU) -T threadx_h735.ld -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
