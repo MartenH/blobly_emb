@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 64 | 46 | 5 | 13 | 0 |
+| 80 | 46 | 5 | 29 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -22,6 +22,19 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-DRV-005 | QM | test | uncovered | — |
 | REQ-CAN-DRV-006 | QM | review | uncovered | — |
 | REQ-CAN-DRV-007 | QM | test | uncovered | — |
+| REQ-COM-001 | QM | test | uncovered | — |
+| REQ-COM-002 | QM | test | uncovered | — |
+| REQ-COM-003 | QM | test | uncovered | — |
+| REQ-COM-004 | QM | test | uncovered | — |
+| REQ-COM-005 | QM | test | uncovered | — |
+| REQ-COM-006 | QM | test | uncovered | — |
+| REQ-DIAG-001 | QM | test | uncovered | — |
+| REQ-DIAG-002 | QM | test | uncovered | — |
+| REQ-DIAG-003 | QM | test | uncovered | — |
+| REQ-DIAG-004 | QM | test | uncovered | — |
+| REQ-E2E-001 | QM | test | uncovered | — |
+| REQ-E2E-002 | QM | test | uncovered | — |
+| REQ-E2E-003 | QM | test | uncovered | — |
 | REQ-ECU-001 | QM | test | verified | ecu_test.v (pass) |
 | REQ-ECU-002 | QM | test | verified | ecu_test.v (pass) |
 | REQ-ECU-003 | QM | test | verified | ecu_test.v (pass), handoff_test.v (pass) |
@@ -51,6 +64,9 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NM-011 | QM | test | verified | nm_can_test.v (pass), frame_test.v (pass) |
 | REQ-NM-012 | QM | test | verified | nm_can_test.v (pass), nm_can_test.v (pass), frame_test.v (pass) |
 | REQ-NM-013 | QM | test | verified | nm_can_test.v (pass), nm_can_test.v (pass), frame_test.v (pass) |
+| REQ-SEC-001 | QM | test | uncovered | — |
+| REQ-SEC-002 | QM | test | uncovered | — |
+| REQ-SEC-003 | QM | test | uncovered | — |
 | SYS-REQ-COMMS-001 | QM | test | covered | overspeed.lua (pending) |
 | SYS-REQ-COMMS-002 | QM | test | covered | overspeed.lua (pending) |
 | SYS-REQ-COMMS-003 | QM | test | verified | com_test.v (pass) |
@@ -91,6 +107,19 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-DRV-005 | | | | | |
 | REQ-CAN-DRV-006 | | | | | |
 | REQ-CAN-DRV-007 | | | | | |
+| REQ-COM-001 | | | | | |
+| REQ-COM-002 | | | | | |
+| REQ-COM-003 | | | | | |
+| REQ-COM-004 | | | | | |
+| REQ-COM-005 | | | | | |
+| REQ-COM-006 | | | | | |
+| REQ-DIAG-001 | | | | | |
+| REQ-DIAG-002 | | | | | |
+| REQ-DIAG-003 | | | | | |
+| REQ-DIAG-004 | | | | | |
+| REQ-E2E-001 | | | | | |
+| REQ-E2E-002 | | | | | |
+| REQ-E2E-003 | | | | | |
 | REQ-ECU-001 | | | ✓ | | |
 | REQ-ECU-002 | | | ✓ | | |
 | REQ-ECU-003 | | | ✓ | | |
@@ -120,6 +149,9 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NM-011 | | | ✓ | | |
 | REQ-NM-012 | | | ✓ | | |
 | REQ-NM-013 | | | ✓ | | |
+| REQ-SEC-001 | | | | | |
+| REQ-SEC-002 | | | | | |
+| REQ-SEC-003 | | | | | |
 | SYS-REQ-COMMS-001 | | · | | | |
 | SYS-REQ-COMMS-002 | | · | | | |
 | SYS-REQ-COMMS-003 | | | ✓ | | |

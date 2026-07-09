@@ -1,0 +1,31 @@
+# SEC — SecOC-style authentication for security-protected messages: a message
+# authentication code (CMAC) over the payload plus a freshness value, verified on
+# receive and stamped on transmit. Rejects spoofed and replayed frames. Implementation-
+# and instance-agnostic (the MAC algorithm/truncation and freshness scheme are config).
+
+[[req]]
+id = "REQ-SEC-001"
+title = "Authenticate protected messages"
+text = "For a security-protected message, the receiver shall verify its authentication code and reject the message (not deliver it as valid) when the code does not match, so a spoofed frame is not accepted."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-SEC-001"
+
+[[req]]
+id = "REQ-SEC-002"
+title = "Reject replay"
+text = "For a security-protected message, the receiver shall reject a replayed message using a freshness value (counter or timestamp), so a previously valid frame captured and re-sent is not accepted."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-SEC-001"
+
+[[req]]
+id = "REQ-SEC-003"
+title = "Protect on transmit"
+text = "For a security-protected message, the transmitter shall compute the authentication code over the payload and current freshness value and stamp it on every transmission, so a conforming receiver can perform the checks above."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-SEC-001"

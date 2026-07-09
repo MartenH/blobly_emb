@@ -1,0 +1,39 @@
+# DIAG — diagnostics: ISO-TP (ISO 15765-2) segmented transport + UDS (ISO 14229)
+# services carried over it. Implementation- and instance-agnostic. The CAN transport
+# is CAN-DRV; live signal values come from the same COM/IOC source the FBs use.
+
+[[req]]
+id = "REQ-DIAG-001"
+title = "Segmented transport"
+text = "The diagnostic transport shall reassemble a multi-frame request and segment a multi-frame response per ISO 15765-2 (single/first/consecutive frames), so a message larger than one CAN frame is exchanged intact."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-002"
+title = "Flow control and timeout"
+text = "The diagnostic transport shall honour and emit flow control (block size, separation time) and shall abort a transfer that makes no progress within its configured timeout, so a lost or stalled peer cannot wedge the connection."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-003"
+title = "UDS request/response"
+text = "The ECU shall dispatch a received UDS service request and return the corresponding positive or negative response."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-004"
+title = "Read live signal by identifier"
+text = "A UDS ReadDataByIdentifier mapped to a live signal shall return that signal's current value, read from the same source the application sees."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"

@@ -1,0 +1,31 @@
+# E2E — end-to-end protection for safety-relevant messages: a CRC over the protected
+# data plus an alive/sequence counter, checked on receive and stamped on transmit.
+# Detects the three E2E fault classes (corruption, repetition, loss). Implementation-
+# and instance-agnostic (the profile/CRC width is configuration).
+
+[[req]]
+id = "REQ-E2E-001"
+title = "Detect corruption"
+text = "For an E2E-protected message, the receiver shall detect a corrupted payload (a CRC mismatch) and shall not deliver the corrupted data as valid to the application."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-SAFE-001"
+
+[[req]]
+id = "REQ-E2E-002"
+title = "Detect repetition and loss"
+text = "For an E2E-protected message, the receiver shall detect a repeated message and a lost message (a stalled or skipped sequence counter) and report the fault to the application."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-SAFE-001"
+
+[[req]]
+id = "REQ-E2E-003"
+title = "Protect on transmit"
+text = "For an E2E-protected message, the transmitter shall compute and stamp the CRC and advance the sequence counter on every transmission, so a conforming receiver can perform the checks above."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-SAFE-001"
