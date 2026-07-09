@@ -115,12 +115,14 @@ SECTIONS
     __heap_end__ = ALIGN(4);
 	} > RAM
 
-  .stack ALIGN(4) (NOLOAD) :
+  /* 8-byte aligned so the initial MSP (= __stack_end__, loaded by _start) meets the
+     AAPCS 8-byte stack alignment the hard-float ABI requires. */
+  .stack ALIGN(8) (NOLOAD) :
   {
-    __stack_start__ = ALIGN(4);
+    __stack_start__ = ALIGN(8);
     *(.stack)
-    . = ALIGN(. + __STACKSIZE__, 4);
-    __stack_end__ = ALIGN(4);
+    . = ALIGN(. + __STACKSIZE__, 8);
+    __stack_end__ = ALIGN(8);
   } > RAM
 
   __RAM_segment_used_end__ = .;

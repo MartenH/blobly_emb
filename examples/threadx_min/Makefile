@@ -42,7 +42,7 @@ $(BUILD)/tx/%.o: $(TX)/common/src/%.c
 $(TX_A): $(TX_OBJ)
 	$(AR) -rc $@ $^
 
-$(BUILD)/threadx_min.elf: $(APP) $(TX_A)
+$(BUILD)/threadx_min.elf: $(APP) $(TX_A) threadx.ld
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(APP) $(TX_A) -o $@
 

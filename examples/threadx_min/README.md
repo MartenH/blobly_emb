@@ -19,7 +19,7 @@ kernel schedules them at their different sleep periods.
   + `common/src` into `build/tx.a`, links the demo, runs it under QEMU.
 - `crt0.S`, `vectors.S`, `tx_initialize_low_level.S`, `threadx.ld` — board bring-up,
   **copied from** `threadx/ports/cortex_m7/gnu/example_build/` (MIT-licensed ThreadX
-  sample). They target QEMU `mps2-an500` (6 MHz core, 100 Hz SysTick); adapting them to
+  sample). They target QEMU `mps2-an500` (25 MHz core, 100 Hz SysTick); adapting them to
   the H735 (550 MHz, its SysTick + vector table + flash/RAM map) is the next step.
 
 ThreadX itself is not vendored into the repo — `make deps` clones it (pinned) into the
