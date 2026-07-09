@@ -393,9 +393,10 @@ fn main() {
 	mut trace_push_us := u64(1_000_000)
 	mut trace_budget_us := u64(0) // overrun trigger budget (0 = no software trigger)
 	// [trace] keys that only the software-packer protocol implements — the request/response path
-	// (cmd_id/rsp_id), the HandlerStat heartbeat (stat_id/push_ms), and the ISO-TP dump flow
-	// control (dump_fc_id). All have non-zero defaults, so we track EXPLICIT presence to reject
-	// them for the ThreadX exec-hook stream (which implements none) without rejecting a bare config.
+	// (cmd_id/rsp_id), the HandlerStat heartbeat (stat_id/push_ms), the ISO-TP dump flow control
+	// (dump_fc_id), and the pre-trigger split (pre_pct, meaningless without a trigger/oneshot).
+	// All have non-zero defaults, so we track EXPLICIT presence to reject them for the ThreadX
+	// exec-hook stream (which implements none) without rejecting a bare config.
 	mut trace_sw_keys := []string{}
 	if trcfg := doc.value_opt('trace') {
 		trm := trcfg.as_map()
@@ -419,7 +420,7 @@ fn main() {
 		if pms := trm['push_ms'] {
 			trace_push_us = u64(pms.int()) * 1000
 		}
-		for k in ['cmd_id', 'rsp_id', 'stat_id', 'dump_fc_id', 'push_ms'] {
+		for k in ['cmd_id', 'rsp_id', 'stat_id', 'dump_fc_id', 'push_ms', 'pre_pct'] {
 			if k in trm {
 				trace_sw_keys << k
 			}
@@ -524,8 +525,8 @@ fn main() {
 		if trace_sw_keys.len > 0 {
 			panic('loom2v: [target] kind="threadx" [trace] key(s) ${trace_sw_keys} are not implemented — ' +
 				'the exec-hook stream has no TraceCmd/Rsp request path, HandlerStat heartbeat ' +
-				'(push_ms/stat_id), or ISO-TP dump flow control (dump_fc_id); it streams only raw ' +
-				'records on record_id — remove these keys for threadx builds')
+				'(push_ms/stat_id), ISO-TP dump flow control (dump_fc_id), or pre-trigger split ' +
+				'(pre_pct); it streams only raw records on record_id — remove these keys for threadx builds')
 		}
 		if trace_bus != '' && trace_bus != telem_bus {
 			panic('loom2v: [target] kind="threadx" [trace].bus "${trace_bus}" must equal ' +
