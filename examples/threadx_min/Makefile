@@ -36,10 +36,12 @@ APP = crt0.S vectors.S tx_initialize_low_level.S main.c trace_hooks.c
 
 all: $(BUILD)/threadx_min.elf
 
-$(BUILD)/tx/%.o: $(PORT)/src/%.S
+# Depend on the Makefile so a CFLAGS change (e.g. enabling the execution-change hooks)
+# rebuilds the ThreadX objects — otherwise a stale phase-1 tx.a (no hooks) would linger.
+$(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
 	@mkdir -p $(BUILD)/tx
 	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/tx/%.o: $(TX)/common/src/%.c
+$(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile
 	@mkdir -p $(BUILD)/tx
 	$(CC) $(CFLAGS) -c $< -o $@
 $(TX_A): $(TX_OBJ)

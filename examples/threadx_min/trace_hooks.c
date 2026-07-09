@@ -25,6 +25,11 @@ volatile unsigned g_head; /* total records pushed (main.c waits on it) */
 static void push_rec(unsigned kind, unsigned id, unsigned char info,
                      unsigned long start_us, unsigned dur_us)
 {
+    /* The thread-switch (PendSV) path re-enables interrupts before the enter hook, so an
+     * ISR push can race a thread push. Serialise slot-claim + write with a brief PRIMASK
+     * critical section — records are 8 bytes, so it's tiny. */
+    unsigned prim;
+    __asm__ volatile("mrs %0, primask; cpsid i" : "=r"(prim));
     unsigned eid = ((kind & 0x3u) << 14) | (id & 0x3FFFu);
     unsigned char *r = g_ring[g_head & (RING_CAP - 1u)];
     r[0] = (unsigned char)(eid & 0xFF);
@@ -36,6 +41,7 @@ static void push_rec(unsigned kind, unsigned id, unsigned char info,
     r[6] = (unsigned char)(dur_us & 0xFF);
     r[7] = (unsigned char)((dur_us >> 8) & 0xFF);
     g_head++;
+    __asm__ volatile("msr primask, %0" : : "r"(prim) : "memory");
 }
 
 /* Microsecond clock: the DWT cycle counter (enabled in tx_initialize_low_level.S) on
@@ -48,8 +54,26 @@ static void push_rec(unsigned kind, unsigned id, unsigned char info,
 static volatile unsigned long g_ticks; /* SysTicks seen (isr_enter), the QEMU timebase */
 static unsigned long now_us(void)
 {
+    /* Accumulate 32-bit CYCCNT deltas into a 64-bit tally so the µs value doesn't wrap
+     * every ~7.8 s (32 bits at 550 MHz) — the hooks fire far more often than that. A
+     * PRIMASK critical section serialises the statics (an ISR can preempt a thread hook
+     * mid-read). If DWT reads 0 (QEMU doesn't model CYCCNT) fall back to the SysTick
+     * count (10 ms granularity); the H735 gives true µs. */
+    static unsigned long last_cyc;
+    static unsigned long long acc;
+    unsigned prim;
+    __asm__ volatile("mrs %0, primask; cpsid i" : "=r"(prim));
     unsigned long cyc = *(volatile unsigned long *)0xE0001004u; /* DWT->CYCCNT */
-    return cyc ? cyc / TRACE_CPU_MHZ : g_ticks * 10000u;
+    unsigned long r;
+    if (cyc == 0u && acc == 0ull) {
+        r = g_ticks * 10000u;
+    } else {
+        acc += (unsigned long long)(unsigned long)(cyc - last_cyc); /* modular 32-bit delta */
+        last_cyc = cyc;
+        r = (unsigned long)(acc / TRACE_CPU_MHZ);
+    }
+    __asm__ volatile("msr primask, %0" : : "r"(prim) : "memory");
+    return r;
 }
 
 /* Map each tx_thread pointer to a small 1-based id (0 = none/idle), assigned on first
@@ -84,47 +108,54 @@ static unsigned char state_reason(unsigned st)
     }
 }
 
-/* Carried across a switch: the outgoing thread + when it started running + its reason. */
-static void *g_prev_ptr;
-static unsigned long g_prev_start;
-static unsigned char g_prev_reason = REASON_PREEMPT;
+static unsigned long g_slice_start; /* when the currently-running thread started */
 static unsigned long g_isr_start;
+static unsigned g_isr_vec; /* active exception number of the ISR in progress */
 
 void _tx_execution_initialize(void) {}
 
-/* thread_exit runs while current_ptr is still the OUTGOING thread — capture its fate. */
+/* active exception (ISR) number from IPSR: SysTick = 15, IRQn = 16 + n. */
+static unsigned active_vector(void)
+{
+    unsigned v;
+    __asm__ volatile("mrs %0, ipsr" : "=r"(v));
+    return v & 0x1FFu;
+}
+
+/* thread_exit runs while current_ptr is still the OUTGOING thread — close its slice
+ * NOW (at the real stop time), not at the next enter, which idle time could delay. */
 void _tx_execution_thread_exit(void)
 {
-    g_prev_reason = _tx_thread_current_ptr
-                        ? state_reason((unsigned)_tx_thread_current_ptr->tx_thread_state)
-                        : REASON_BLOCK;
-}
-
-/* thread_enter runs after the switch: emit a THREAD record for the thread that just
- * ran [g_prev_start, now], then arm the incoming thread's start. */
-void _tx_execution_thread_enter(void)
-{
     unsigned long t = now_us();
-    unsigned pid = thread_id(g_prev_ptr);
-    if (pid != 0) {
-        unsigned long dur = t - g_prev_start;
-        push_rec(KIND_THREAD, pid, g_prev_reason, g_prev_start,
+    unsigned id = thread_id(_tx_thread_current_ptr);
+    if (id != 0) {
+        unsigned long dur = t - g_slice_start;
+        unsigned char reason = _tx_thread_current_ptr
+                                   ? state_reason((unsigned)_tx_thread_current_ptr->tx_thread_state)
+                                   : REASON_BLOCK;
+        push_rec(KIND_THREAD, id, reason, g_slice_start,
                  (unsigned)(dur > 0xFFFFu ? 0xFFFFu : dur));
     }
-    g_prev_ptr = _tx_thread_current_ptr;
-    g_prev_start = t;
 }
 
+/* thread_enter runs after the switch — the incoming thread's slice starts now. */
+void _tx_execution_thread_enter(void) { g_slice_start = now_us(); }
+
+/* ISR enter/exit bracket the active interrupt. Single-level: nested ISRs (a higher
+ * priority preempting one already hooked) would need a small vec/start stack — the
+ * demo only runs SysTick, so one level suffices for now. */
 void _tx_execution_isr_enter(void)
 {
-    g_ticks++; /* SysTick is the periodic ISR here -> the QEMU fallback timebase */
+    g_isr_vec = active_vector();
+    if (g_isr_vec == 15u)
+        g_ticks++; /* SysTick -> the QEMU fallback timebase */
     g_isr_start = now_us();
 }
 
 void _tx_execution_isr_exit(void)
 {
     unsigned long dur = now_us() - g_isr_start;
-    push_rec(KIND_ISR, 0u /* SysTick vector */, 0u, g_isr_start,
+    push_rec(KIND_ISR, g_isr_vec, 0u, g_isr_start,
              (unsigned)(dur > 0xFFFFu ? 0xFFFFu : dur));
 }
 
