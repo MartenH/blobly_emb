@@ -53,13 +53,17 @@ Rx-FIFO0 "new message" interrupt (vector 35 = 16 + `FDCAN1_IT0_IRQn` 19, routed 
 clears the flag and posts; the comm thread drains `blob_can_recv` (the driver stays
 polled + non-blocking), decodes into an IOC cell (`g_comm_rx`), and does the periodic tx.
 Application code never runs in ISR context (the pattern `can_port.h` documents). Both show
-up in the trace: the **comm thread by name**, the **Rx ISR as id 35**. The Rx IRQ shares
-SysTick's priority (0x40) so the two never nest — keeping `trace_hooks` single-level
-(proper nesting is a later refinement). Verify live:
+up in the trace: the **comm thread by name**, the **Rx ISR as id 35**. The comm thread runs
+at the **highest priority** (1) so it preempts the workload/dump and drains the 8-deep Rx
+FIFO promptly (the receive-without-loss path). The Rx IRQ shares SysTick's priority (0x40)
+so the two never nest — keeping `trace_hooks` single-level (proper nesting is a later
+refinement). The dump freezes the ring only while reading it out, then **re-arms**, so it's
+a rolling snapshot: CAN activity that arrives after the first dump still appears in the
+next one. Verify live:
 
 ```
 candump can0 &                       # watch 0x7E5 (trace) + 0x7E1 (comm periodic tx)
-cansend can0 123#0011223344556677    # -> Rx ISR (id 35) + comm thread wake appear on 0x7E5
+cansend can0 123#0011223344556677    # -> Rx ISR (id 35) + comm wake appear in the next 0x7E5 snapshot
 # 0x7E1 payload = rx_count(u32 LE) | last_rx_id(u16 LE): the count climbs per frame sent.
 ```
 

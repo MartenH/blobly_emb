@@ -170,17 +170,23 @@ void _tx_execution_isr_exit(void)
              (unsigned)(dur > 0xFFFFu ? 0xFFFFu : dur));
 }
 
-/* ---- FDCAN dump: the frozen ring streamed as raw per-record CAN frames ----
+/* ---- FDCAN dump: a ring snapshot streamed as raw per-record CAN frames ----
  * One 8-byte trace record == one classic CAN frame on rec_id (no ISO-TP framing yet).
  * The board runs STANDALONE (no debugger) — semihosting was a Phase-3 bring-up smoke
  * test only, never a data path. blobly_net's full swimlane wants an ISO-TP block on
  * 0x7E5; that arrives in Phase 6 when loom2v generates the V trace stack onto ThreadX.
- * For now the host decodes the raw stream (candump can0 | decode_trace.py). */
-#include "can_port.h" /* blob_can_send / blob_can_tx_ready */
+ * For now the host decodes the raw stream (candump can0 | decode_trace.py).
+ *
+ * Capture is frozen only for the duration of the read-out, then RE-ARMED — so this is a
+ * rolling snapshot, and CAN activity (Rx ISR + comm wakeups) that arrives after the first
+ * dump still shows up in the next one (a permanent freeze would drop it). Tx goes through
+ * comm.c's mutex-guarded comm_can_send so it can't race the comm thread's periodic tx. */
+extern int comm_can_send(unsigned long id, const unsigned char *data, unsigned char len);
 
 void trace_dump_can(int h, unsigned long rec_id)
 {
-    g_capturing = 0; /* freeze: the scheduler/ISR hooks stop pushing while we read out */
+    (void)h;
+    g_capturing = 0; /* freeze the ring while we read it out (no torn records) */
     unsigned total = g_head;
     unsigned n = total > RING_CAP ? RING_CAP : total;
     unsigned start = total > RING_CAP ? total - RING_CAP : 0;
@@ -188,8 +194,8 @@ void trace_dump_can(int h, unsigned long rec_id)
         unsigned char *r = g_ring[(start + i) & (RING_CAP - 1u)];
         /* Non-blocking + back-pressure aware (REQ-CAN-DRV-007): yield the CPU while the
          * Tx FIFO is full instead of spinning, so a slow drain never wedges the core. */
-        while (!blob_can_tx_ready(h))
+        while (comm_can_send(rec_id, r, 8) != 0)
             tx_thread_sleep(1);
-        blob_can_send(h, (uint32_t)rec_id, r, 8, 0);
     }
+    g_capturing = 1; /* re-arm: keep recording between dumps so late activity is captured */
 }

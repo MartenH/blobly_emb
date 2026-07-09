@@ -66,9 +66,12 @@ void tx_application_define(void *first_unused_memory)
     tx_thread_create(&t_b, "B", worker, 1, s_b, sizeof(s_b), 5, 5, 1, TX_AUTO_START);
     tx_thread_create(&t_c, "C", preemptor, 0, s_c, sizeof(s_c), 3, 3, 1, TX_AUTO_START);
     tx_thread_create(&t_dump, "D", dumper, 0, s_dump, sizeof(s_dump), 2, 2, 1, TX_AUTO_START);
-    /* The comm thread — priority 4 (above the A/B/C workload, below the dumper) so rx is
-     * serviced promptly. Enable the FDCAN Rx IRQ once its wake semaphore exists. */
-    tx_thread_create(&t_comm, "comm", comm_thread, 0, s_comm, sizeof(s_comm), 4, 4, 1, TX_AUTO_START);
+    /* The comm thread — HIGHEST priority (1, above the dumper/preemptor/workers; ThreadX
+     * treats lower numbers as higher priority). The Rx ISR only posts the semaphore and
+     * the 8-deep FDCAN FIFO is drained here, so comm must preempt the workload/dump to
+     * drain rx before the FIFO overflows — the receive-without-loss path (REQ-CAN-DRV-002).
+     * Enable the FDCAN Rx IRQ once its wake semaphore + tx mutex exist. */
+    tx_thread_create(&t_comm, "comm", comm_thread, 0, s_comm, sizeof(s_comm), 1, 1, 1, TX_AUTO_START);
     comm_rx_irq_enable();
 }
 

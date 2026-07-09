@@ -30,6 +30,24 @@ extern int g_can; /* FDCAN1 handle (main.c opened bus index "0") */
 /* Comm-thread wake semaphore: the Rx ISR posts it, the comm thread waits on it. */
 static TX_SEMAPHORE g_comm_sem;
 
+/* FDCAN Tx mutex. blob_can_send is not reentrant (it reads TXFQS.TFQPI, writes the
+ * message-RAM slot, then sets TXBAR — no lock), and there are now TWO ThreadX senders:
+ * this comm thread (periodic tx) and the dumper (streaming the trace ring). Serialise
+ * every send through comm_can_send() so a preemption between slot-select and TXBAR can't
+ * make both callers grab the same FIFO slot. (Phase 6 makes the comm thread the single
+ * bus owner and this goes away.) */
+static TX_MUTEX g_can_tx_mtx;
+
+/* The one guarded Tx path — both the comm periodic tx and the trace-ring dump call this.
+ * Returns 0 on send, -1 if the Tx FIFO is full (caller paces/drops, never blocks). */
+int comm_can_send(uint32_t id, const unsigned char *data, unsigned char len)
+{
+    tx_mutex_get(&g_can_tx_mtx, TX_WAIT_FOREVER);
+    int r = blob_can_tx_ready(g_can) ? blob_can_send(g_can, id, data, len, 0) : -1;
+    tx_mutex_put(&g_can_tx_mtx);
+    return r;
+}
+
 /* IOC cell: last received frame + a receive counter, written by the comm thread and
  * read by any consumer thread (Phase 5 makes this a real triple-buffer). volatile so a
  * reader on another thread sees fresh values without a lock (single writer). */
@@ -57,6 +75,7 @@ void FDCAN1_IT0_IRQHandler(void)
 void comm_rx_irq_enable(void)
 {
     tx_semaphore_create(&g_comm_sem, "comm_sem", 0);
+    tx_mutex_create(&g_can_tx_mtx, "can_tx", TX_NO_INHERIT);
     FDCAN1->IE  |= FDCAN_IE_RF0NE;   /* Rx FIFO0 new message -> interrupt */
     FDCAN1->ILE |= FDCAN_ILE_EINT0;  /* route the group to interrupt line 0 */
     NVIC_SetPriority(FDCAN1_IT0_IRQn, 4u); /* 4<<4 = 0x40 == SysTick: no nesting */
@@ -83,11 +102,11 @@ void comm_thread(ULONG unused)
             g_comm_rx.count++;
         }
 
-        /* Periodic tx ~100 ms: a liveness frame carrying the rx count, paced by the
-         * non-blocking tx_ready back-pressure (REQ-CAN-DRV-007) — dropped, not blocked,
-         * if the Tx FIFO is momentarily full. */
+        /* Periodic tx ~100 ms: a liveness frame carrying the rx count, through the guarded
+         * comm_can_send — dropped (not blocked) if the Tx FIFO is momentarily full
+         * (REQ-CAN-DRV-007). */
         ULONG now = tx_time_get();
-        if ((now - last_tx) >= 10u && blob_can_tx_ready(g_can)) {
+        if ((now - last_tx) >= 10u) {
             unsigned long c = g_comm_rx.count;
             unsigned char p[8] = {
                 (unsigned char)c, (unsigned char)(c >> 8),
@@ -95,7 +114,7 @@ void comm_thread(ULONG unused)
                 (unsigned char)g_comm_rx.last_id, (unsigned char)(g_comm_rx.last_id >> 8),
                 0u, 0u
             };
-            blob_can_send(g_can, COMM_TX_ID, p, 8, 0);
+            comm_can_send(COMM_TX_ID, p, 8);
             last_tx = now;
         }
     }
