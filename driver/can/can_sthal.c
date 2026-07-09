@@ -72,6 +72,9 @@ static uint8_t dlc_to_len(uint32_t dlc) {
 	}
 }
 
+/* Rx-FIFO0 overrun events per instance (idx 0..2): each is >=1 frame lost (REQ-CAN-DRV-008). */
+static uint32_t rx_lost[3];
+
 int blob_can_open(const char *name, int fd_mode) {
 	int idx = (name && name[0]) ? (name[0] - '0') : 0;
 	FDCAN_HandleTypeDef *hf = bus_handle(idx);
@@ -81,6 +84,11 @@ int blob_can_open(const char *name, int fd_mode) {
 	HAL_FDCAN_ConfigGlobalFilter(hf, FDCAN_ACCEPT_IN_RX_FIFO0, FDCAN_ACCEPT_IN_RX_FIFO0,
 	                             FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);
 	if (HAL_FDCAN_Start(hf) != HAL_OK) return -1;
+	/* Fresh session: clear a stale message-lost flag + the tally so a close/reopen of this
+	 * bus doesn't report the previous session's overruns ("since open"). */
+	__HAL_FDCAN_CLEAR_FLAG(hf, FDCAN_FLAG_RX_FIFO0_MESSAGE_LOST);
+	if (idx >= 0 && idx < 3)
+		rx_lost[idx] = 0;
 	return idx;
 }
 
@@ -112,12 +120,24 @@ int blob_can_tx_ready(int h) {
 int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
 	if (!hf) return -1;
+	/* Note + clear a FIFO0 message-lost since the last drain, before the empty-check, so a
+	 * loss that left the FIFO drained is still counted (REQ-CAN-DRV-008). */
+	if (__HAL_FDCAN_GET_FLAG(hf, FDCAN_FLAG_RX_FIFO0_MESSAGE_LOST) && h >= 0 && h < 3) {
+		rx_lost[h]++;
+		__HAL_FDCAN_CLEAR_FLAG(hf, FDCAN_FLAG_RX_FIFO0_MESSAGE_LOST);
+	}
 	if (HAL_FDCAN_GetRxFifoFillLevel(hf, FDCAN_RX_FIFO0) == 0) return -1;
 	FDCAN_RxHeaderTypeDef rx;
 	if (HAL_FDCAN_GetRxMessage(hf, FDCAN_RX_FIFO0, &rx, data) != HAL_OK) return -1;
 	*id  = rx.Identifier;
 	*len = dlc_to_len(rx.DataLength);
 	return 0;
+}
+
+/* Rx-FIFO0 overrun events since open — recv() samples FDCAN_FLAG_RX_FIFO0_MESSAGE_LOST
+ * and accumulates it here (REQ-CAN-DRV-008). */
+uint32_t blob_can_rx_overruns(int h) {
+	return (h >= 0 && h < 3) ? rx_lost[h] : 0u;
 }
 
 void blob_can_close(int h) {

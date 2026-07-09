@@ -70,6 +70,13 @@ static volatile uint32_t *ram_at(uint32_t word_off) {
 	return (volatile uint32_t *)(SRAMCAN_BASE + word_off * 4u);
 }
 
+/* Rx-FIFO0 overrun EVENTS per FDCAN instance (idx 0..2). The M_CAN sets IR.RF0L when a
+ * frame arrives with FIFO0 full and is DROPPED — receive-with-loss beyond capacity. RF0L
+ * is a single sticky flag, not a lost-frame count, so this counts OCCURRENCES (each is
+ * >=1 frame lost): a monotonic loss indicator, not an exact frame total. Surfaced via
+ * blob_can_rx_overruns() so the loss is observable, not silent (REQ-CAN-DRV-008). */
+static uint32_t g_rx_lost[3];
+
 int blob_can_open(const char *name, int fd_mode) {
 	int idx = (name && name[0]) ? (name[0] - '0') : 0;
 	FDCAN_GlobalTypeDef *c = inst(idx);
@@ -114,6 +121,12 @@ int blob_can_open(const char *name, int fd_mode) {
 	c->RXESC = 0; /* F0DS = 0 -> 8-byte data */
 	c->TXBC = (tx_off << FDCAN_TXBC_TBSA_Pos) | (TX_ELMTS << FDCAN_TXBC_TFQS_Pos);
 	c->TXESC = 0; /* TBDS = 0 -> 8-byte data */
+
+	/* Fresh session: clear any stale message-lost flag + the overrun tally so a
+	 * close/reopen of this bus doesn't report the previous session's losses. */
+	c->IR = FDCAN_IR_RF0L;
+	if (idx >= 0 && idx < 3)
+		g_rx_lost[idx] = 0;
 
 	/* leave init -> CAN core synchronizes to the bus (bounded, same as above). */
 	c->CCCR &= ~FDCAN_CCCR_INIT;
@@ -172,6 +185,12 @@ int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
 	FDCAN_GlobalTypeDef *c = inst(h);
 	if (!c)
 		return -1;
+	/* Note any FIFO0 overrun since the last drain, then acknowledge it (write-1-clear),
+	 * before the empty-check below so a loss that left the FIFO drained is still counted. */
+	if ((c->IR & FDCAN_IR_RF0L) && h >= 0 && h < 3) {
+		g_rx_lost[h]++;
+		c->IR = FDCAN_IR_RF0L;
+	}
 	uint32_t s = c->RXF0S;
 	if ((s & FDCAN_RXF0S_F0FL) == 0u)
 		return -1; /* FIFO0 empty */
@@ -201,6 +220,13 @@ int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
 
 	c->RXF0A = gi; /* acknowledge -> advance the FIFO */
 	return 0;
+}
+
+/* Count of Rx-FIFO0 overrun events since open (see g_rx_lost) — each event is >=1 frame
+ * lost; the upper layer polls this to observe receive-with-loss instead of it being
+ * silent. Monotonic within a session; reset by open(). */
+uint32_t blob_can_rx_overruns(int h) {
+	return (h >= 0 && h < 3) ? g_rx_lost[h] : 0u;
 }
 
 void blob_can_close(int h) {
