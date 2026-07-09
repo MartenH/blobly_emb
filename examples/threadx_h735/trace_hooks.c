@@ -190,7 +190,9 @@ unsigned trace_snapshot(unsigned char out[][8], unsigned max)
     unsigned n = total > RING_CAP ? RING_CAP : total;
     if (n > max)
         n = max;
-    unsigned start = total > RING_CAP ? total - RING_CAP : 0;
+    /* Copy the LATEST n records (start = total - n), not the oldest of the ring window — so
+     * a caller passing max < RING_CAP (e.g. buffer_records=64) gets the most recent 64. */
+    unsigned start = total - n;
     for (unsigned i = 0; i < n; i++)
         for (int j = 0; j < 8; j++)
             out[i][j] = g_ring[(start + i) & (RING_CAP - 1u)][j];
