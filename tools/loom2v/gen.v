@@ -479,10 +479,20 @@ fn main() {
 	// TraceCmd/Rsp/HandlerStat/ISO-TP. Reject configs it can't honour rather than emit code
 	// that silently ignores them.
 	if target_threadx && trace_on {
-		if trace_level == 'thread+fb' || trace_level == 'all' {
-			panic('loom2v: [target] kind="threadx" [trace].level "${trace_level}" needs handler-level ' +
-				'FB records, but the exec-change-hook recorder captures only THREAD/ISR — use ' +
-				'level = "thread" or "thread+isr"')
+		// The exec-change hooks fire on BOTH context switches and ISR enter/exit unconditionally,
+		// so the stream is always exactly "thread+isr" — a "thread"-only or FB-inclusive level
+		// can't be honoured. Reject anything but the one level the hooks actually produce.
+		if trace_level != 'thread+isr' {
+			panic('loom2v: [target] kind="threadx" [trace].level "${trace_level}" is not producible — ' +
+				'the exec-change hooks always capture context switches AND ISRs (no thread-only, no ' +
+				'handler-level FB records) — use level = "thread+isr"')
+		}
+		// Only the overwrite ring is implemented (trace_hooks.c has no oneshot/stop-when-full ring),
+		// and the generated stream re-snapshots every ~1 s. A "oneshot" request would silently get
+		// continuous ring behaviour.
+		if trace_mode != 'ring' {
+			panic('loom2v: [target] kind="threadx" [trace].mode "${trace_mode}" is not implemented — ' +
+				'the exec-hook recorder is an overwrite ring streamed continuously — use mode = "ring"')
 		}
 		if trace_record_id > 0x7ff {
 			panic('loom2v: [target] kind="threadx" [trace].record_id 0x${trace_record_id.hex()} is an ' +
@@ -2319,6 +2329,16 @@ fn main() {
 				man << 'thread,${tid},${tname},${core_of[pname]}' // name = the globally-unique thread name
 				tid++
 			}
+		}
+		// ThreadX System Timer Thread: the default (non-TX_TIMER_PROCESS_IN_ISR) build runs a hidden
+		// timer thread to expire tx_thread_sleep/timers, and trace_hooks.c assigns it an id like any
+		// other _tx_thread_current_ptr. It first appears AFTER the AUTO_START app thread(s) (which run
+		// at kernel entry, before the first tick wakes the timer thread), so it takes the next id here.
+		// Without this row blobly_net sees an unlabelled THREAD lane (docs/telemetry.md "System Timer
+		// Thread"). Reserve it on the primary core.
+		if target_threadx && trace_on {
+			man << 'thread,${tid},tx_system_timer,0'
+			tid++
 		}
 		// Comm threads (P3b): one per bridge bus, AFTER the app threads (matches the gate's comm_tid
 		// numbering). bridge_bus_list is empty unless the trace path traces the bridges.
