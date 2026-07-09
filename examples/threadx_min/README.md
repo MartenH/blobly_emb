@@ -1,20 +1,28 @@
-# threadx_min — ThreadX Cortex-M7 foundation (P3c-1, Phase 1)
+# threadx_min — ThreadX Cortex-M7 trace (P3c-1, Phases 1-2)
 
-The first slice of the real ThreadX target (P3c-1): prove the vendored ThreadX kernel
-builds for Cortex-M7 and schedules preemptively, before wiring the execution-change
-trace hooks (Phase 2) and moving to the STM32H735.
+Phase 1 proved the vendored ThreadX kernel builds for Cortex-M7 and schedules
+preemptively. Phase 2 wires the four TX execution-change hooks (`trace_hooks.c`, built
+with `TX_ENABLE_EXECUTION_CHANGE_NOTIFY`) so every *real* context switch and ISR becomes
+a blobly 8-byte trace record in a static ring — the true scheduler boundaries, not a
+polled synthesis. The dumper thread emits the ring over semihosting (`TRACE_DUMP` ...
+`TRACE_END`) for the host to decode. Next: the STM32H735 (real DWT µs timing) and
+loom2v codegen.
 
 ```
 make -C ../.. deps      # once: fetch third_party/threadx (pinned, gitignored)
 make run                # build + run under QEMU mps2-an500
 ```
 
-Expected: a banner, then threads `A` and `B` interleaving (`A B A B A A B A …`) as the
-kernel schedules them at their different sleep periods.
+Expected: a banner, then `TRACE_DUMP` followed by hex records. Decode them (kind<<14|id |
+info | start_us(u24) | cpu_us(u16); kind THREAD=1/ISR=0; reason preempt/block/yield/exit)
+to see A/B/C, the dumper, and ThreadX's system timer thread interleaving, preempted by C,
+with SysTick ISRs. Timestamps are 10 ms-granular under QEMU (it doesn't model DWT->CYCCNT);
+the H735 gives true microsecond timing.
 
 ## Layout
 
-- `main.c` — 2-thread demo (ours).
+- `main.c` — A/B workers + a C preemptor + a dumper thread (ours).
+- `trace_hooks.c` — the four `_tx_execution_*` hooks -> blobly 8-byte records + semihosting dump (ours).
 - `Makefile` — builds the ThreadX kernel from `third_party/threadx/ports/cortex_m7/gnu`
   + `common/src` into `build/tx.a`, links the demo, runs it under QEMU.
 - `crt0.S`, `vectors.S`, `tx_initialize_low_level.S`, `threadx.ld` — board bring-up,
