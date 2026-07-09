@@ -170,33 +170,26 @@ void _tx_execution_isr_exit(void)
              (unsigned)(dur > 0xFFFFu ? 0xFFFFu : dur));
 }
 
-/* ---- semihosting dump: TRACE_DUMP, one hex record per line, TRACE_END ---- */
-static long sh(long op, void *arg)
-{
-    register long r0 __asm__("r0") = op;
-    register void *r1 __asm__("r1") = arg;
-    __asm__ volatile("bkpt 0xAB" : "+r"(r0) : "r"(r1) : "memory");
-    return r0;
-}
-static void sh_writec(unsigned char c) { char b = (char)c; sh(0x03, &b); }
-static void hexb(unsigned char b)
-{
-    static const char *h = "0123456789abcdef";
-    sh_writec((unsigned char)h[b >> 4]);
-    sh_writec((unsigned char)h[b & 0xF]);
-}
-void trace_dump(void)
+/* ---- FDCAN dump: the frozen ring streamed as raw per-record CAN frames ----
+ * One 8-byte trace record == one classic CAN frame on rec_id (no ISO-TP framing yet).
+ * The board runs STANDALONE (no debugger) — semihosting was a Phase-3 bring-up smoke
+ * test only, never a data path. blobly_net's full swimlane wants an ISO-TP block on
+ * 0x7E5; that arrives in Phase 6 when loom2v generates the V trace stack onto ThreadX.
+ * For now the host decodes the raw stream (candump can0 | decode_trace.py). */
+#include "can_port.h" /* blob_can_send / blob_can_tx_ready */
+
+void trace_dump_can(int h, unsigned long rec_id)
 {
     g_capturing = 0; /* freeze: the scheduler/ISR hooks stop pushing while we read out */
     unsigned total = g_head;
     unsigned n = total > RING_CAP ? RING_CAP : total;
     unsigned start = total > RING_CAP ? total - RING_CAP : 0;
-    sh(0x04, (void *)"TRACE_DUMP\n"); /* SYS_WRITE0 */
     for (unsigned i = 0; i < n; i++) {
         unsigned char *r = g_ring[(start + i) & (RING_CAP - 1u)];
-        for (int j = 0; j < 8; j++)
-            hexb(r[j]);
-        sh_writec('\n');
+        /* Non-blocking + back-pressure aware (REQ-CAN-DRV-007): yield the CPU while the
+         * Tx FIFO is full instead of spinning, so a slow drain never wedges the core. */
+        while (!blob_can_tx_ready(h))
+            tx_thread_sleep(1);
+        blob_can_send(h, (uint32_t)rec_id, r, 8, 0);
     }
-    sh(0x04, (void *)"TRACE_END\n");
 }
