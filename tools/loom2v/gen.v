@@ -1594,6 +1594,27 @@ fn main() {
 		chp := snake(telem_bus)
 		glue << ''
 		glue << 'fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)'
+		if target_threadx {
+			// ThreadX target: the FB superloop runs inside a real ThreadX thread (paced by
+			// tx_thread_sleep) that tx_application_define creates on tx_kernel_enter. TCB + stack
+			// are static (globals). This partition has one thread; a multi-thread config would
+			// emit one thread per partition.thread (+ a triple-buffer IOC for cross-thread signals).
+			// The ThreadX API by FFI decl only (NOT #include "tx_api.h" — that pulls <string.h>,
+			// whose strlen conflicts with V's own). The TCB is an opaque byte buffer (>= the
+			// port's sizeof(TX_THREAD) = 200 B on cortex_m7); tx_thread_create just needs the
+			// storage, and a void* is ABI-compatible with the TX_THREAD* the kernel expects.
+			// The public tx_* names are macros in tx_api.h; without the header we bind the
+			// real symbols the kernel exports (_tx_initialize_kernel_enter, _tx_thread_create,
+			// _tx_thread_sleep).
+			glue << 'fn C._tx_thread_sleep(u32) u32'
+			glue << 'fn C._tx_initialize_kernel_enter()'
+			glue << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
+			glue << ''
+			glue << '__global ('
+			glue << '\tg_${part}_tcb   [256]u8  // >= sizeof(TX_THREAD) (200 B, cortex_m7 port)'
+			glue << '\tg_${part}_stack [4096]u8'
+			glue << ')'
+		}
 		glue << ''
 		glue << 'pub fn run(${chp} can.Channel) {'
 		glue << '\tmut ch := ${chp}'
@@ -1611,7 +1632,9 @@ fn main() {
 			}
 		}
 		glue << '\ttick_us := u64(${target_tick_us})'
-		glue << '\tmut next_tick := C.board_now_us() + tick_us'
+		if !target_threadx {
+			glue << '\tmut next_tick := C.board_now_us() + tick_us'
+		}
 		glue << '\tfor {'
 		glue << '\t\tt0 := C.board_now_us()'
 		glue << '\t\tsched.run(t0)'
@@ -1649,14 +1672,43 @@ fn main() {
 			}
 			glue << '\t\t}'
 		}
-		glue << '\t\tfor C.board_now_us() < next_tick {} // idle to the tick (real idle)'
-		glue << '\t\tnext_tick += tick_us'
-		glue << '\t\tnow := C.board_now_us()'
-		glue << '\t\tif now > next_tick { // a pass overran the tick — resync'
-		glue << '\t\t\tnext_tick = now + tick_us'
-		glue << '\t\t}'
+		if target_threadx {
+			// Yield to the RTOS between passes: one ThreadX tick of sleep, so lower-priority
+			// threads run and the Loom's load = run-time / wall-clock stays honest (no busy-wait).
+			glue << '\t\tC._tx_thread_sleep(1)'
+		} else {
+			glue << '\t\tfor C.board_now_us() < next_tick {} // idle to the tick (real idle)'
+			glue << '\t\tnext_tick += tick_us'
+			glue << '\t\tnow := C.board_now_us()'
+			glue << '\t\tif now > next_tick { // a pass overran the tick — resync'
+			glue << '\t\t\tnext_tick = now + tick_us'
+			glue << '\t\t}'
+		}
 		glue << '\t}'
 		glue << '}'
+		if target_threadx {
+			// The ThreadX app thread + the kernel's application-define entry. main.v does the board
+			// clock/CAN init then C.tx_kernel_enter(), which calls tx_application_define below.
+			glue << ''
+			glue << 'fn ${part}_thread_entry(input u32) {'
+			glue << '\tmut ch := can.Channel{}'
+			glue << "\tch.open('0', false) // FDCAN bus 0 (classic); board clocks/pins set by main.v"
+			glue << '\trun(ch)'
+			glue << '}'
+			glue << ''
+			glue << "@[export: 'tx_application_define']"
+			glue << 'fn tx_application_define(first_unused voidptr) {'
+			glue << '\tC._tx_thread_create(&g_${part}_tcb[0], c\'${part}\', ${part}_thread_entry, u32(0),'
+			glue << '\t\t&g_${part}_stack[0], u32(g_${part}_stack.len), u32(10), u32(10), u32(0), u32(1))'
+			glue << '}'
+			glue << ''
+			glue << '// boot: hand control to the ThreadX kernel (never returns; calls'
+			glue << '// tx_application_define above). main.v does the board bring-up then calls this —'
+			glue << '// referencing it also forces this module (incl. tx_application_define) to link.'
+			glue << 'pub fn boot() {'
+			glue << '\tC._tx_initialize_kernel_enter()'
+			glue << '}'
+		}
 	} else if trace_inline || trace_target {
 		// --- inline-trace run(): the single app core owns the trace bus channel and runs one
 		//     superloop — profiled dispatch + capture hook, the TraceCmd/TraceRsp handshake +
