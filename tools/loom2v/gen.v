@@ -425,11 +425,18 @@ fn main() {
 	// spawned partitions + osal. No threads, no osal (POSIX now_us/sleep_us don't
 	// exist bare-metal); the timebase is board_now_us() and the loop paces to a fixed
 	// tick. Requires all signals partition-local (no COM bus bridge).
+	// [target] kind selects the on-target emitter: 'baremetal' is the single-core inline
+	// superloop (P3c-0); 'threadx' (P3c-1) wraps the same FB/telemetry work in a real
+	// ThreadX thread paced by tx_thread_sleep (the preemptive-RTOS target — see
+	// examples/threadx_h735, the hand-written golden reference this generates).
 	mut target_on := false
+	mut target_threadx := false
 	mut target_tick_us := u64(1000)
 	if tgt := doc.value_opt('target') {
 		tm := tgt.as_map()
-		target_on = (tm['kind'] or { toml.Any('') }).string() == 'baremetal'
+		kind := (tm['kind'] or { toml.Any('') }).string()
+		target_threadx = kind == 'threadx'
+		target_on = kind == 'baremetal' || target_threadx
 		if tms := tm['tick_ms'] {
 			target_tick_us = u64(tms.int()) * 1000
 		}
