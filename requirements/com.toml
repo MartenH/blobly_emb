@@ -55,10 +55,11 @@ derives = "SYS-REQ-COMMS-003"
 id = "REQ-COM-006"
 title = "Transmit back-pressure policy"
 text = "When the transmit path cannot accept a frame, COM shall not block or drop data silently: a cyclic PDU shall re-send its current value at the next cycle (no queue of stale frames), and an event or triggered PDU shall retain its request and retry until the frame is accepted."
-# The retry-until-accepted part of the event/triggered policy is not yet met (the
-# current code clears the trigger before confirming the send) — captured here to drive
-# the fix; see the comm-thread work. The cyclic part holds today.
-status = "draft"
+# Met: should_send() is now a pure decision, and the generated bridge gates it on
+# chan.tx_ready() and commits via mark_sent() only after chan.send() succeeds — so a full
+# Tx FIFO neither advances the E2E/SecOC counter nor consumes the change/trigger; the PDU
+# retries next tick. Verified by comm/com/com_test.v (test_backpressure_retries_until_accepted).
+status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-COMMS-001"
