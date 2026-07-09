@@ -30,11 +30,9 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-006 | QM | test | uncovered | — |
 | REQ-DIAG-001 | QM | test | uncovered | — |
 | REQ-DIAG-002 | QM | test | uncovered | — |
-| REQ-DIAG-003 | QM | test | uncovered | — |
-| REQ-DIAG-004 | QM | test | uncovered | — |
-| REQ-E2E-001 | QM | test | uncovered | — |
-| REQ-E2E-002 | QM | test | uncovered | — |
-| REQ-E2E-003 | QM | test | uncovered | — |
+| REQ-E2E-001 | B | test | uncovered | — |
+| REQ-E2E-002 | B | test | uncovered | — |
+| REQ-E2E-003 | B | test | uncovered | — |
 | REQ-ECU-001 | QM | test | verified | ecu_test.v (pass) |
 | REQ-ECU-002 | QM | test | verified | ecu_test.v (pass) |
 | REQ-ECU-003 | QM | test | verified | ecu_test.v (pass), handoff_test.v (pass) |
@@ -91,6 +89,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TRACE-002 | QM | test | uncovered | — |
 | REQ-TRACE-008 | QM | test | uncovered | — |
 | REQ-TRACE-009 | QM | test | uncovered | — |
+| REQ-TP-001 | QM | test | uncovered | — |
+| REQ-TP-002 | QM | test | uncovered | — |
 | REQ-WDG-001 | B | test | verified | wdg_test.v (pass) |
 | REQ-WDG-002 | B | test | verified | wdg_test.v (pass) |
 | REQ-WDG-003 | B | test | verified | wdg_test.v (pass) |
@@ -115,8 +115,6 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-006 | | | | | |
 | REQ-DIAG-001 | | | | | |
 | REQ-DIAG-002 | | | | | |
-| REQ-DIAG-003 | | | | | |
-| REQ-DIAG-004 | | | | | |
 | REQ-E2E-001 | | | | | |
 | REQ-E2E-002 | | | | | |
 | REQ-E2E-003 | | | | | |
@@ -176,6 +174,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TRACE-002 | | | | | |
 | REQ-TRACE-008 | | | | | |
 | REQ-TRACE-009 | | | | | |
+| REQ-TP-001 | | | | | |
+| REQ-TP-002 | | | | | |
 | REQ-WDG-001 | | | ✓ | | |
 | REQ-WDG-002 | | | ✓ | | |
 | REQ-WDG-003 | | | ✓ | | |

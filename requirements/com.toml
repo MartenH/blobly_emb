@@ -17,10 +17,12 @@ derives = "SYS-REQ-COMMS-002"
 id = "REQ-COM-002"
 title = "Encode transmitted signals from physical units"
 text = "COM shall encode application signal values in physical units into the bytes of their transmit frame per the bus database, leaving unmapped bits at their configured value."
+# The tx path derives from frame exchange (COMMS-001); COMMS-002 is the rx-side
+# "present received signals in physical units" only, so it is not a parent of tx encode.
 status = "draft"
 method = "test"
 asil = "QM"
-derives = "SYS-REQ-COMMS-002"
+derives = "SYS-REQ-COMMS-001"
 
 [[req]]
 id = "REQ-COM-003"

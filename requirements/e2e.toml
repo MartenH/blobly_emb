@@ -9,16 +9,16 @@ title = "Detect corruption"
 text = "For an E2E-protected message, the receiver shall detect a corrupted payload (a CRC mismatch) and shall not deliver the corrupted data as valid to the application."
 status = "draft"
 method = "test"
-asil = "QM"
+asil = "B" # inherits the ASIL B of the parent SYS-REQ-SAFE-001 (no decomposition)
 derives = "SYS-REQ-SAFE-001"
 
 [[req]]
 id = "REQ-E2E-002"
-title = "Detect repetition and loss"
-text = "For an E2E-protected message, the receiver shall detect a repeated message and a lost message (a stalled or skipped sequence counter) and report the fault to the application."
+title = "Detect repetition and sequence gaps"
+text = "For an E2E-protected message, the receiver shall detect a repeated message and a skipped-sequence (dropped-in-between) message via its sequence counter, and report the fault to the application. Total loss of the sender (no further messages, so no counter transition) is detected by reception-deadline monitoring (REQ-COM-005), not the counter."
 status = "draft"
 method = "test"
-asil = "QM"
+asil = "B" # inherits the ASIL B of the parent SYS-REQ-SAFE-001 (no decomposition)
 derives = "SYS-REQ-SAFE-001"
 
 [[req]]
@@ -27,5 +27,5 @@ title = "Protect on transmit"
 text = "For an E2E-protected message, the transmitter shall compute and stamp the CRC and advance the sequence counter on every transmission, so a conforming receiver can perform the checks above."
 status = "draft"
 method = "test"
-asil = "QM"
+asil = "B" # inherits the ASIL B of the parent SYS-REQ-SAFE-001 (no decomposition)
 derives = "SYS-REQ-SAFE-001"
