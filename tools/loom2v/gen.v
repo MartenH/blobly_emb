@@ -724,7 +724,7 @@ fn emit_partition_telem(m Model, telem_iface string, slot_core []int) []string {
 // comm-thread target (comm_thread_on), which owns rx in its own comm_thread_entry. Returns the
 // glue lines plus the bus_names / bus_dests the run() emitters need; reads the Model, with the
 // derived scratch/thread layout (telem_slot, comm_tid, trace bases) from main's emit-time state.
-fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []Producer, comm_tid map[string]int, trace_cmd_base int, trace_trig_base int) ([]string, []string, map[string][]string) {
+fn emit_bridges(m Model, comm_thread_on bool, producers []Producer, comm_tid map[string]int) ([]string, []string, map[string][]string) {
 	mut glue := []string{}
 	mut bus_names := []string{}
 	mut bus_dests := map[string][]string{}
@@ -1018,11 +1018,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 		for d in dests {
 			psig += ', route_${snake(d)} can.Channel'
 		}
-		// P3b: when tracing, the bridge is a traced comm thread — it takes a ring pointer (its own,
-		// owned by run()) as a trailing voidptr, exactly like a traced app partition.
-		if trace_multicore {
-			psig += ', commring voidptr'
-		}
 		glue << 'pub fn partition_${bb}(${psig}) {'
 		glue << '\tosal.pin_to_core(${m.bus_core[bname] or { 0 }})'
 		glue << '\tmut st := Bridge_${bb}_state{'
@@ -1086,55 +1081,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 		glue << '\tmut sched := loom.Scheduler{}'
 		glue << '\tsched.every(10_000, io_${bb}_10ms, &st)'
 		bc := m.bus_core[bname] or { 0 }
-		if trace_multicore {
-			// P3b: the bridge is a traced comm thread. Emit a THREAD span for each drain cycle that
-			// actually ran the COM handler (no FBs, so no fb records), apply routed arm/stop/freeze
-			// commands to its OWN ring (single-writer, exactly like an app partition), and share the
-			// P3a coordination. run_profiled accounts load internally.
-			glue << '\tmut cap := TraceCapture{'
-			glue << '\t\tbuf:       unsafe { &trace.TraceBuffer(commring) }'
-			glue << '\t\tstart:     osal.now_us()'
-			glue << '\t\tthread_id: ${comm_tid[bname] or { 0 }}'
-			glue << '\t\ttrig_slot: ${trace_trig_base + bc}'
-			glue << '\t}'
-			glue << '\tmut last_cmd := osal.scratch_get(${trace_cmd_base + bc})'
-			glue << '\tfor {'
-			glue << '\t\tcmdv := osal.scratch_get(${trace_cmd_base + bc})'
-			glue << '\t\tif cmdv != last_cmd {'
-			glue << '\t\t\tlast_cmd = cmdv'
-			glue << '\t\t\top := u8(cmdv & 0xff)'
-			glue << '\t\t\tif op == trace.op_arm || op == trace.op_start || op == trace.op_reset {'
-			glue << '\t\t\t\tcap.buf.start()'
-			glue << '\t\t\t\tcap.start = osal.now_us()'
-			glue << '\t\t\t\tcap.base = 0'
-			glue << '\t\t\t\tcap.busy_end = 0'
-			glue << '\t\t\t} else if op == trace.op_stop {'
-			glue << '\t\t\t\tcap.buf.stop()'
-			glue << '\t\t\t} else if op == 0xf1 {'
-			glue << '\t\t\t\tcap.buf.trigger()'
-			glue << '\t\t\t}'
-			glue << '\t\t}'
-			glue << '\t\tloom_t0 := osal.now_us()'
-			glue << '\t\tbefore := sched.handler_stat(0).count'
-			glue << '\t\tsched.run_profiled(osal.now_us)'
-			glue << '\t\tloom_t1 := osal.now_us()'
-			glue << '\t\tif sched.handler_stat(0).count != before { // the COM drain ran -> a comm busy span'
-			glue << '\t\t\ttrace_thread_span(mut cap, loom_t0, loom_t1)'
-			if m.trace.budget_us > 0 {
-				// A COM drain that overran the budget is a freeze culprit too — mirror the app hook:
-				// freeze this comm ring and raise its request so the owner fans a coherent freeze out.
-				glue << '\t\t\tif loom_t1 - loom_t0 > ${m.trace.budget_us} && cap.buf.state() == .capturing {'
-				glue << '\t\t\t\tcap.buf.trigger()'
-				glue << '\t\t\t\tosal.scratch_set(cap.trig_slot, osal.scratch_get(cap.trig_slot) + 1)'
-				glue << '\t\t\t}'
-			}
-			glue << '\t\t}'
-			for p in producers {
-				glue << p.partition_loop_body('b:${bname}')
-			}
-			glue << '\t\tosal.sleep_us(1000)'
-			glue << '\t}'
-		} else {
 			glue << '\tfor {'
 			glue << '\t\tloom_t0 := osal.now_us()'
 			glue << '\t\tsched.run(loom_t0)'
@@ -1145,7 +1091,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 			}
 			glue << '\t\tosal.sleep_us(1000)'
 			glue << '\t}'
-		}
 		glue << '}'
 	}
 	return glue, bus_names, bus_dests
@@ -2311,7 +2256,7 @@ fn main() {
 	glue << fb_glue
 
 	// --- generated COM bus bridge(s) — emitted by emit_bridges ---
-	bridge_glue, bnames, bus_dests := emit_bridges(m, comm_thread_on, trace_multicore, producers, comm_tid, trace_cmd_base, trace_trig_base)
+	bridge_glue, bnames, bus_dests := emit_bridges(m, comm_thread_on, producers, comm_tid)
 	glue << bridge_glue
 	mut bus_names := bnames.clone()
 
