@@ -2381,6 +2381,97 @@ fn emit_handlers(m Model, telem_slot map[string]int, ioc_idx map[string]int, tra
 	return ports, glue, all_regs
 }
 
+// emit_trace_capture emits the multi-core (P3a) shared capture hook: the TraceCapture ctx struct
+// plus trace_capture (per-handler push) and trace_thread_span (thread busy/idle spans). Each traced
+// partition installs it with its own ctx (ring + fb-id base + thread id). Reads the Model.
+fn emit_trace_capture(m Model) []string {
+	trace_budget_us := m.trace.budget_us
+	mut glue := []string{}
+		glue << ''
+		glue << 'struct TraceCapture {'
+		glue << 'mut:'
+		glue << '\tbuf       &trace.TraceBuffer = unsafe { nil } // this core\'s ring (owned by run())'
+		glue << '\tstart     u64 // wall-clock µs of the capture origin'
+		glue << '\tbase      u64 // elapsed µs at the last epoch re-anchor'
+		glue << '\tid_base   u32 // GLOBAL fb id of this partition\'s first handler (+ local idx)'
+		glue << '\tthread_id u16 // this partition\'s thread id (for the THREAD records)'
+		glue << '\tbusy_end  u64 // elapsed µs at the end of the last busy span (idle-gap start)'
+		glue << '\tfb_count  u32 // handlers dispatched (the loop reads this to bracket a busy span)'
+		glue << '\ttrig_slot int // THIS core\'s freeze-request scratch cell (single-writer: only here)'
+		glue << '}'
+		glue << ''
+		glue << 'fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {'
+		glue << '\tmut t := unsafe { &TraceCapture(ctx) }'
+		glue << '\tt.fb_count++'
+		glue << '\telapsed := start_us - t.start'
+		glue << '\tif elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor'
+		glue << '\t\tt.base = elapsed'
+		glue << '\t\tt.buf.push(trace.new_epoch(u32(elapsed)))'
+		glue << '\t}'
+		glue << '\tmut dt := dt_us'
+		glue << '\tmut flags := u8(0)'
+		glue << '\tif dt > 0xFFFF { // clamp to the u16 field, and mark it as saturated (F648)'
+		glue << '\t\tdt = 0xFFFF'
+		glue << '\t\tflags |= trace.flag_saturated'
+		glue << '\t}'
+		if trace_budget_us > 0 {
+			// flag the record that exceeded the budget — the handler that trips the ring trigger;
+			// the decoder outlines it so the freeze culprit is visible in the dump.
+			glue << '\tif dt_us > ${trace_budget_us} {'
+			glue << '\t\tflags |= trace.flag_overran'
+			glue << '\t}'
+		}
+		glue << '\tt.buf.push(trace.new_fb(u16(t.id_base + u32(idx)), flags, u32(elapsed - t.base), u16(dt)))'
+		if trace_budget_us > 0 {
+			// This core overran: freeze its OWN ring now (single-writer), and raise its freeze
+			// request — the trace owner fans that out as a freeze command to every core, so the
+			// per-core snapshots are coherent without any core mutating another core's ring. Only
+			// when actually capturing: a handler still runs (and can overrun) while the ring is
+			// frozen, and a stale request would re-freeze the next capture the instant it re-arms.
+			glue << '\tif dt_us > ${trace_budget_us} && t.buf.state() == .capturing {'
+			glue << '\t\tt.buf.trigger()'
+			glue << '\t\tosal.scratch_set(t.trig_slot, osal.scratch_get(t.trig_slot) + 1) // bump the request counter (edge, not level)'
+			glue << '\t}'
+		}
+		glue << '}'
+		glue << ''
+		// trace_thread_span brackets one busy superloop iteration: an IDLE record for the gap since
+		// the previous busy span, then a THREAD record for [t0, t1] (the thread ran its handlers).
+		// The partition loop calls it only when a handler actually ran, so idle records are bounded
+		// by the handler rate (not the 1 ms tick). start_us are relative to the current epoch base.
+		glue << 'fn trace_thread_span(mut t TraceCapture, t0_us u64, t1_us u64) {'
+		glue << '\te_start := t0_us - t.start // elapsed at the busy span start'
+		glue << '\te_end := t1_us - t.start   // elapsed at the busy span end'
+		// A comm thread has no per-FB trace_capture to advance the epoch, so re-anchor here when the
+		// u24 start_us would wrap — otherwise long comm captures drift out of alignment with the app
+		// cores. Idempotent for the app path: trace_capture already re-anchored, so t.base stays within
+		// the window and (e_start > t.base) fails (base can even lead e_start after a mid-span wrap).
+		glue << '\tif e_start > t.base && e_start - t.base > 0x00ff_ffff {'
+		glue << '\t\tt.base = e_start'
+		glue << '\t\tt.buf.push(trace.new_epoch(u32(e_start)))'
+		glue << '\t}'
+		// The idle-gap start is relative to the current epoch base. If an epoch re-anchor moved the
+		// base past the previous busy_end (a capture spanning the u24 window), clamp the gap to the
+		// new base so u32(start - base) can\'t underflow and land the idle ~16 s in the future (F684).
+		glue << '\tgap_from := if t.busy_end > t.base { t.busy_end } else { t.base }'
+		glue << '\tif e_start > gap_from { // idle gap since the last busy span (within this epoch)'
+		glue << '\t\tmut gap := e_start - gap_from'
+		glue << '\t\tif gap > 0xFFFF {'
+		glue << '\t\t\tgap = 0xFFFF'
+		glue << '\t\t}'
+		glue << '\t\tt.buf.push(trace.new_idle(trace.reason_yield, u32(gap_from - t.base), u16(gap)))'
+		glue << '\t}'
+		glue << '\ts_from := if e_start > t.base { e_start } else { t.base } // clamp across an epoch re-anchor (F708)'
+		glue << '\tmut busy := if e_end > s_from { e_end - s_from } else { u64(0) }'
+		glue << '\tif busy > 0xFFFF {'
+		glue << '\t\tbusy = 0xFFFF'
+		glue << '\t}'
+		glue << '\tt.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(s_from - t.base), u16(busy)))'
+		glue << '\tt.busy_end = e_end'
+		glue << '}'
+	return glue
+}
+
 fn main() {
 	args := os.args
 	if args.len < 6 {
@@ -3002,94 +3093,10 @@ fn main() {
 		glue << 'import comm.uds' // UDS diagnostic services
 	}
 
-	// Multi-core (P3a): one shared capture hook. Each traced partition installs it with its own
-	// TraceCapture ctx (its per-core ring + the elapsed-time origin + its GLOBAL fb-id base), so
-	// one function serves every core. It re-anchors the u24 start_us with an epoch before it wraps
-	// and fires the overrun trigger when a budget is configured — the same shape as the inline hook,
-	// but pushing into the ring by pointer (the ring is owned by run(), read by partition_trace).
+	// Multi-core (P3a): the shared capture hook (TraceCapture + trace_capture/trace_thread_span),
+	// installed per traced partition — emitted by emit_trace_capture.
 	if trace_multicore {
-		glue << ''
-		glue << 'struct TraceCapture {'
-		glue << 'mut:'
-		glue << '\tbuf       &trace.TraceBuffer = unsafe { nil } // this core\'s ring (owned by run())'
-		glue << '\tstart     u64 // wall-clock µs of the capture origin'
-		glue << '\tbase      u64 // elapsed µs at the last epoch re-anchor'
-		glue << '\tid_base   u32 // GLOBAL fb id of this partition\'s first handler (+ local idx)'
-		glue << '\tthread_id u16 // this partition\'s thread id (for the THREAD records)'
-		glue << '\tbusy_end  u64 // elapsed µs at the end of the last busy span (idle-gap start)'
-		glue << '\tfb_count  u32 // handlers dispatched (the loop reads this to bracket a busy span)'
-		glue << '\ttrig_slot int // THIS core\'s freeze-request scratch cell (single-writer: only here)'
-		glue << '}'
-		glue << ''
-		glue << 'fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {'
-		glue << '\tmut t := unsafe { &TraceCapture(ctx) }'
-		glue << '\tt.fb_count++'
-		glue << '\telapsed := start_us - t.start'
-		glue << '\tif elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor'
-		glue << '\t\tt.base = elapsed'
-		glue << '\t\tt.buf.push(trace.new_epoch(u32(elapsed)))'
-		glue << '\t}'
-		glue << '\tmut dt := dt_us'
-		glue << '\tmut flags := u8(0)'
-		glue << '\tif dt > 0xFFFF { // clamp to the u16 field, and mark it as saturated (F648)'
-		glue << '\t\tdt = 0xFFFF'
-		glue << '\t\tflags |= trace.flag_saturated'
-		glue << '\t}'
-		if trace_budget_us > 0 {
-			// flag the record that exceeded the budget — the handler that trips the ring trigger;
-			// the decoder outlines it so the freeze culprit is visible in the dump.
-			glue << '\tif dt_us > ${trace_budget_us} {'
-			glue << '\t\tflags |= trace.flag_overran'
-			glue << '\t}'
-		}
-		glue << '\tt.buf.push(trace.new_fb(u16(t.id_base + u32(idx)), flags, u32(elapsed - t.base), u16(dt)))'
-		if trace_budget_us > 0 {
-			// This core overran: freeze its OWN ring now (single-writer), and raise its freeze
-			// request — the trace owner fans that out as a freeze command to every core, so the
-			// per-core snapshots are coherent without any core mutating another core's ring. Only
-			// when actually capturing: a handler still runs (and can overrun) while the ring is
-			// frozen, and a stale request would re-freeze the next capture the instant it re-arms.
-			glue << '\tif dt_us > ${trace_budget_us} && t.buf.state() == .capturing {'
-			glue << '\t\tt.buf.trigger()'
-			glue << '\t\tosal.scratch_set(t.trig_slot, osal.scratch_get(t.trig_slot) + 1) // bump the request counter (edge, not level)'
-			glue << '\t}'
-		}
-		glue << '}'
-		glue << ''
-		// trace_thread_span brackets one busy superloop iteration: an IDLE record for the gap since
-		// the previous busy span, then a THREAD record for [t0, t1] (the thread ran its handlers).
-		// The partition loop calls it only when a handler actually ran, so idle records are bounded
-		// by the handler rate (not the 1 ms tick). start_us are relative to the current epoch base.
-		glue << 'fn trace_thread_span(mut t TraceCapture, t0_us u64, t1_us u64) {'
-		glue << '\te_start := t0_us - t.start // elapsed at the busy span start'
-		glue << '\te_end := t1_us - t.start   // elapsed at the busy span end'
-		// A comm thread has no per-FB trace_capture to advance the epoch, so re-anchor here when the
-		// u24 start_us would wrap — otherwise long comm captures drift out of alignment with the app
-		// cores. Idempotent for the app path: trace_capture already re-anchored, so t.base stays within
-		// the window and (e_start > t.base) fails (base can even lead e_start after a mid-span wrap).
-		glue << '\tif e_start > t.base && e_start - t.base > 0x00ff_ffff {'
-		glue << '\t\tt.base = e_start'
-		glue << '\t\tt.buf.push(trace.new_epoch(u32(e_start)))'
-		glue << '\t}'
-		// The idle-gap start is relative to the current epoch base. If an epoch re-anchor moved the
-		// base past the previous busy_end (a capture spanning the u24 window), clamp the gap to the
-		// new base so u32(start - base) can\'t underflow and land the idle ~16 s in the future (F684).
-		glue << '\tgap_from := if t.busy_end > t.base { t.busy_end } else { t.base }'
-		glue << '\tif e_start > gap_from { // idle gap since the last busy span (within this epoch)'
-		glue << '\t\tmut gap := e_start - gap_from'
-		glue << '\t\tif gap > 0xFFFF {'
-		glue << '\t\t\tgap = 0xFFFF'
-		glue << '\t\t}'
-		glue << '\t\tt.buf.push(trace.new_idle(trace.reason_yield, u32(gap_from - t.base), u16(gap)))'
-		glue << '\t}'
-		glue << '\ts_from := if e_start > t.base { e_start } else { t.base } // clamp across an epoch re-anchor (F708)'
-		glue << '\tmut busy := if e_end > s_from { e_end - s_from } else { u64(0) }'
-		glue << '\tif busy > 0xFFFF {'
-		glue << '\t\tbusy = 0xFFFF'
-		glue << '\t}'
-		glue << '\tt.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(s_from - t.base), u16(busy)))'
-		glue << '\tt.busy_end = e_end'
-		glue << '}'
+		glue << emit_trace_capture(m)
 	}
 
 	fb_ports, fb_glue, all_regs := emit_handlers(m, telem_slot, ioc_idx, trace_cmd_base, trace_trig_base, trace_inline, trace_multicore, fb_id_base, thread_id_of)
