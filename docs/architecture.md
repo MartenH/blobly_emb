@@ -158,6 +158,90 @@ sequenceDiagram
   Drv->>Bus: frame
 ```
 
+## The management plane — platform services & scheduling
+
+Everything above is the **data plane**: the high-rate signal path, FB → IOC → COM → bus,
+cyclic and latest-value. Beside it runs the **management plane** — the services that decide
+**mode** (NM, ECU state), guard **health** (Watchdog), and hold **state across power cycles**
+(NvM). They run slower, are **event- and mode-driven**, and coordinate through **mode events
+and requests, not signals**. The data plane asks "what is the value now?"; the management
+plane asks "what should the ECU be *doing* now, and is it still healthy?".
+
+| Service | Owns | Scheduled | Talks to |
+|---|---|---|---|
+| **COM / codec** | signal⇄PDU packing | in the comm thread (rx decode, tx encode) | IOC (signals), driver (PDUs) |
+| **Router** | PDU destination (the rx demux) | in the comm thread, per received PDU | COM, other buses' comm threads, diag, NM |
+| **NM** (`comm/nm` + `nm_can`) | per-network sleep/wake coordination | frames in the comm thread; **state machine on the mode tick** | NM frames (comm), keep-awake requests, ECU state |
+| **ECU state** (mode manager) | ECU lifecycle: start → run → prep-sleep → sleep → shutdown | the mode tick + events | NM (sleep ind.), NvM (write-all), comm (quiesce), Watchdog |
+| **Watchdog** (supervisor + HW) | liveness: checkpoint supervision → HW pet | supervision on the mode tick; **HW pet at highest priority** | every thread's checkpoints; the HW watchdog |
+| **NvM** (persistent store) | blocks of persistent data + the async job queue | a **low-priority background task** | the memory driver (flash/EEPROM), ECU state |
+
+### Where each runs — the recommended thread model
+
+Extending "one I/O thread per core owns the buses", the recommendation is a **dedicated mode
+thread**, so each concern has a single owner and appears in the trace by name:
+
+```mermaid
+graph TB
+  subgraph core["a core"]
+    FBT["app FB thread(s)<br/>compute · IOC signals · never touch CAN"]
+    COMMT["comm / IO thread<br/>owns the bus: COM · router · NM frames · diag<br/>Rx-ISR driven + cyclic tx"]
+  end
+  MODET["mode thread (per ECU)<br/>NM state machines · ECU state · Watchdog supervision<br/>~10 ms mode tick + events"]
+  BGT["background task (low prio)<br/>NvM job queue → memory driver"]
+  WDG["Watchdog HW pet<br/>highest-priority tick, GATED by supervision"]
+
+  FBT -- "IOC (latest-value)" --> COMMT
+  COMMT -- "NM frame ind / keep-awake" --> MODET
+  MODET -- "quiesce / wake" --> COMMT
+  MODET -- "write-all / read job" --> BGT
+  MODET -- "supervision verdict" --> WDG
+  MODET -- "checkpoints" --> WDG
+```
+
+- **app FB thread(s)** — data plane, per partition/core (as today).
+- **comm / IO thread** — per core, owns the bus. Runs the *data-plane* comm work **and the
+  NM frame tx/rx** (NM frames are just special PDUs). Rx-ISR driven + cyclic tx.
+- **mode thread** — one per ECU. The *state machines*: NM (per network), ECU state, and
+  Watchdog supervision, on a ~10 ms mode tick plus events.
+- **background task** — low priority, drains the NvM job queue to the memory driver so flash
+  latency never perturbs the data plane.
+- **Watchdog HW pet** — highest-priority tick (or the timer ISR), **gated by** the supervisor's
+  verdict: it only pets while every supervised thread is hitting its checkpoints.
+
+**Why a dedicated mode thread** (over folding it into the comm thread): each plane keeps a
+single owner — the comm thread owns the *bus*, the mode thread owns the *ECU state* — matching
+the lock-free single-owner-per-core rule; the management plane stays **visible by name in the
+trace** (the "platform is never hidden" principle); and it generalises to multi-core /
+multi-network without entangling I/O with mode logic. The cost is one more thread and a second
+IPC primitive (below). Folding the mode tick into the primary core's comm thread is the valid
+smaller-footprint alternative for a single-core ECU, at the price of that separation.
+
+### Two primitives, two planes
+
+- **IOC** (`osal/`) — the **data-plane** primitive: lock-free, **latest-value** (seqlock /
+  double / triple buffer). "What is signal X now?"
+- **mode event / request channel** — the **management-plane** primitive: lock-free, but
+  **edge-triggered / queued** ("sleep requested", "NvM write done", "wakeup on bus A"), because
+  a mode transition is an event, not a value to sample. Single-writer flags or a small SPSC
+  mailbox — *not* the IOC. This is the one new mechanism the management plane needs.
+
+### The canonical interaction — going to sleep
+
+The services are loosely coupled, but the **shutdown/sleep** path shows how they chain:
+
+1. All app keep-awake requests drop → **NM** reaches *ready-sleep* on every network → emits a
+   **sleep indication**.
+2. **ECU state** takes it, transitions *run → prep-sleep*, and orchestrates: ask **NvM** to
+   **write-all**, tell the **comm threads** to quiesce (stop cyclic tx), **arm the wakeup
+   sources** (CAN wake, pin), then *prep-sleep → sleep* and halt the core.
+3. **Watchdog** supervises the whole sequence — if any thread misses its checkpoints (a stuck
+   NvM write, a comm thread that won't quiesce), the supervisor stops petting and the HW
+   watchdog resets the ECU rather than hanging half-asleep.
+
+Wake is the reverse: a wakeup source fires → ECU state *sleep → run* → comm threads resume →
+NM *repeat-message → normal*.
+
 ## Where each piece lives
 
 | Layer | Directory | Hand / generated |
@@ -180,7 +264,7 @@ not `ecu.toml`, and runs independently.) `loom2v` also emits the trace **manifes
 thread/handler ids → names. See `ways-of-working.md` for how teams operate around that, and
 `configuration.md` for what each config section generates.
 
-## Transport scope — CAN today, Ethernet later
+## Transport scope — CAN today, LIN / Ethernet later
 
 blobly is **CAN / CAN-FD first**, but most of the stack is transport-agnostic by
 construction — only a few layers actually know about CAN:
@@ -208,3 +292,24 @@ Adding **automotive Ethernet** later is therefore not a rewrite — it slots in
 None of the Ethernet side is built — this section marks the **seam** so new code
 doesn't deepen the CAN assumptions needlessly. The module naming already reflects it:
 `comm/nm` (transport-agnostic state machine) vs `comm/nm_can` (the CAN binding).
+
+### One COM, one router, a bus owner per transport
+
+A second transport is **not a second COM**. COM (signal⇄PDU packing) and the router (PDU
+destination) are transport-agnostic — a PDU is just bytes — so they are shared across CAN,
+LIN, and Ethernet. What each transport brings is its own **bus-owner (comm) thread + driver**,
+because their *timing models* differ:
+
+| transport | bus owner (comm thread) | driven by |
+|---|---|---|
+| **CAN / CAN-FD** | FDCAN owner | **Rx interrupt** + cyclic tx (what we have) |
+| **LIN** | LIN master | a **schedule table** — the master clocks frame slots; not Rx-ISR |
+| **Ethernet** | socket / SoAd adapter | **packet/stream** events, higher throughput |
+
+So the picture generalises cleanly: **COM + router + the NM state machine sit once, above the
+PDU line**; below it there is **one bus-owner thread per network**, each with a transport-shaped
+driver, and NM gets a per-network binding (`nm_can`, `nm_udp`, …). Buses group by core (one I/O
+thread per core owns that core's buses); a mixed-transport ECU is just several bus owners —
+some CAN, one LIN master, maybe an Ethernet adapter — fed by the same COM and router. LIN's
+schedule-table master and Ethernet's SoAd are the two new driver shapes to add; everything
+above the PDU line is reused, not duplicated.
