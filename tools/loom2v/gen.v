@@ -637,8 +637,11 @@ fn main() {
 					'those COM checks are not generated yet (phase 6b-2b)')
 			}
 			// rx signal an FB reads -> flows through a target IOC pool cell. The lean decode is a
-			// whole-frame u32 into sig_t.a, and the pool is single-reader (SPSC) and one-value-per-
-			// frame, so reject the layouts/topologies it can't reproduce rather than mis-decode.
+			// whole-frame u32 into sig_t.a, and the pool is one-value-per-frame, so reject the
+			// layouts/topologies it can't reproduce rather than mis-decode. (Multiple FB *readers*
+			// are fine: the comm thread is the single writer, and every FB runs on the ONE generated
+			// app thread — a single reader CONTEXT — so the reads are sequential, never a concurrent
+			// race on the SPSC reader slot. A cross-thread fan-out guard is for the multi-thread phase.)
 			if read_count[sname] > 0 {
 				if !si.dbc_trivial {
 					panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" read by an FB ' +
@@ -649,11 +652,6 @@ fn main() {
 					panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" has a `valid` ' +
 						'field, but the lean IOC read only sets the value — an FB would see valid=false ' +
 						'forever; a freshness-carrying transport is not generated yet')
-				}
-				if read_count[sname] > 1 {
-					panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" is read by ' +
-						'${read_count[sname]} FB handlers, but the IOC cell is single-reader (SPSC) — a ' +
-						'second reader would steal published values; fan-out is not generated yet')
 				}
 				if (msg_read_sigs[si.dbc_msg] or { 0 }) > 1 {
 					panic('loom2v: [target] kind="threadx" comm thread: DBC message "${si.dbc_msg}" carries ' +
