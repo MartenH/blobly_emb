@@ -175,6 +175,87 @@ mut:
 	secoc_key     map[string][]u8
 }
 
+// parse_signals parses [[signal]] into the model: sig_of (with each signal's fields in
+// declaration order), sig_names, and has_external. External signals are then resolved against
+// bus.dbc (message id/dlc/ext/trivial). Value field = the single non-"valid" field.
+fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool) (map[string]SigInfo, []string, bool) {
+	mut sig_of := map[string]SigInfo{}
+	mut sig_names := []string{}
+	mut has_external := false
+	for s in ecumodel.toml_arr(doc, 'signal') {
+		m := s.as_map()
+		name := (m['name'] or { toml.Any('') }).string()
+		from := (m['from'] or { toml.Any('') }).string()
+		to := (m['to'] or { toml.Any('') }).string()
+
+		from_bus := from in buses
+		to_bus := to in buses
+		external := from_bus || to_bus
+		if external {
+			has_external = true
+		}
+
+		fields := (m['fields'] or { toml.Any(map[string]toml.Any{}) }).as_map()
+		if fields.len == 0 {
+			panic('ecu.toml: signal "${name}" needs `fields` (e.g. fields = { kph = "u16" })')
+		}
+		mut val_field := ''
+		mut val_type := ''
+		mut has_valid := false
+		mut sfields := []SigField{}
+		for fname, ftype in fields {
+			sfields << SigField{
+				name: fname
+				typ:  ftype.string()
+			}
+			if fname == 'valid' {
+				has_valid = true
+			} else if val_field == '' {
+				val_field = fname
+				val_type = ftype.string()
+			}
+		}
+
+		sig_of[name] = SigInfo{
+			name:      name
+			transport: (m['transport'] or { toml.Any('double') }).string()
+			from:      from
+			to:        to
+			local:     from == to
+			external:  external
+			bus:       if from_bus { from } else { to }
+			rx:        from_bus
+			val_field: val_field
+			val_type:  val_type
+			has_valid: has_valid
+			fields:    sfields
+		}
+		sig_names << name
+	}
+	// Map each external signal to its DBC message (so the bridge can name the generated codec
+	// fns / id / dlc). External signals must be in the DBC.
+	if has_external {
+		db := candb.load_dbc_file(dbc) or {
+			panic('external signals need a DBC: load ${dbc}: ${err}')
+		}
+		for sname in sig_names {
+			mut si := sig_of[sname] or { continue }
+			if !si.external {
+				continue
+			}
+			si.dbc_msg = dbc_message_of(db, sname) or {
+				panic('signal "${sname}" has a bus endpoint but is not in ${os.file_name(dbc)}')
+			}
+			si.dbc_id = dbc_id_of(db, si.dbc_msg) or { 0 }
+			si.dbc_dlc = dbc_dlc_of(db, si.dbc_msg) or { 8 }
+			si.dbc_ext = dbc_ext_of(db, si.dbc_msg) or { false }
+			si.dbc_trivial = dbc_signal_trivial(db, sname) or { false }
+			sig_of[sname] = si
+		}
+	}
+	return sig_of, sig_names, has_external
+}
+
 // emit_signals generates the `sig` module — one struct per signal, fields in declaration order —
 // from the model. (Emit is now separate from the parse that built sig_of.)
 fn emit_signals(sig_of map[string]SigInfo, sig_names []string, ecu string) []string {
@@ -409,85 +490,9 @@ fn main() {
 
 	buses, bus_core := parse_buses(doc)
 
-	// [[signal]] -> the model (sig_of): parse only, no emit. value field = the single non-"valid"
-	// field; `valid` (if any) is freshness. Fields captured in declaration order for emit_signals.
-	mut sig_of := map[string]SigInfo{}
-	mut sig_names := []string{}
-	mut has_external := false
-	for s in ecumodel.toml_arr(doc, 'signal') {
-		m := s.as_map()
-		name := (m['name'] or { toml.Any('') }).string()
-		from := (m['from'] or { toml.Any('') }).string()
-		to := (m['to'] or { toml.Any('') }).string()
-
-		from_bus := from in buses
-		to_bus := to in buses
-		external := from_bus || to_bus
-		if external {
-			has_external = true
-		}
-
-		fields := (m['fields'] or { toml.Any(map[string]toml.Any{}) }).as_map()
-		if fields.len == 0 {
-			panic('ecu.toml: signal "${name}" needs `fields` (e.g. fields = { kph = "u16" })')
-		}
-		mut val_field := ''
-		mut val_type := ''
-		mut has_valid := false
-		mut sfields := []SigField{}
-		for fname, ftype in fields {
-			sfields << SigField{
-				name: fname
-				typ:  ftype.string()
-			}
-			if fname == 'valid' {
-				has_valid = true
-			} else if val_field == '' {
-				val_field = fname
-				val_type = ftype.string()
-			}
-		}
-
-		sig_of[name] = SigInfo{
-			name:      name
-			transport: (m['transport'] or { toml.Any('double') }).string()
-			from:      from
-			to:        to
-			local:     from == to
-			external:  external
-			bus:       if from_bus { from } else { to }
-			rx:        from_bus
-			val_field: val_field
-			val_type:  val_type
-			has_valid: has_valid
-			fields:    sfields
-		}
-		sig_names << name
-	}
-	// module sig — emitted from the model now that parsing is done.
+	// [[signal]] -> the model (parse_signals: sig_of + DBC resolution), then emit the `sig` module.
+	sig_of, sig_names, has_external := parse_signals(doc, dbc, buses)
 	signals := emit_signals(sig_of, sig_names, ecu)
-
-	// Map each external signal to its DBC message (so the bridge can name the
-	// generated codec fns / id / dlc). External signals must be in the DBC.
-	if has_external {
-		db := candb.load_dbc_file(dbc) or {
-			panic('external signals need a DBC: load ${dbc}: ${err}')
-		}
-		for sname in sig_names {
-			mut si := sig_of[sname] or { continue }
-			if !si.external {
-				continue
-			}
-			si.dbc_msg = dbc_message_of(db, sname) or {
-				panic('signal "${sname}" has a bus endpoint but is not in ${os.file_name(dbc)}')
-			}
-			si.dbc_id = dbc_id_of(db, si.dbc_msg) or { 0 }
-			si.dbc_dlc = dbc_dlc_of(db, si.dbc_msg) or { 8 }
-			si.dbc_ext = dbc_ext_of(db, si.dbc_msg) or { false }
-			si.dbc_trivial = dbc_signal_trivial(db, sname) or { false }
-			sig_of[sname] = si
-		}
-	}
 
 	// Per-PDU COM behaviour ([[frame]]) -> the model (parse_frames), rebound to the existing locals.
 	fcfg := parse_frames(doc)
