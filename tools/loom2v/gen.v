@@ -68,6 +68,115 @@ mut:
 	to_id      int
 }
 
+// TraceCfg is the parsed [trace] block. Ids default to the docs/telemetry.md convention; sw_keys
+// records which software-packer-only keys were set EXPLICITLY (so the ThreadX exec-hook path can
+// reject them without rejecting a bare config).
+struct TraceCfg {
+mut:
+	on             bool
+	bus            string
+	cmd_id         u32 = 0x7E2
+	rsp_id         u32 = 0x7E3
+	stat_id        u32 = 0x7E4
+	record_id      u32 = 0x7E5
+	dump_fc_id     u32 = 0x7E6
+	level          string = 'thread+fb'
+	mode           string = 'ring'
+	buffer_records int = 64
+	pre_pct        int = 50
+	push_us        u64 = 1_000_000
+	budget_us      u64 // overrun trigger budget (0 = no software trigger)
+	sw_keys        []string
+}
+
+// parse_trace parses the [trace] block into a TraceCfg (part of the model). A block is active
+// unless enabled = false; ids resolve to bus.dbc only when active (a disabled block generates
+// nothing, so a stale `cmd_id = "SomeName"` must not load the DBC or panic on a missing message).
+fn parse_trace(doc toml.Doc, dbc string) TraceCfg {
+	mut t := TraceCfg{}
+	if trcfg := doc.value_opt('trace') {
+		trm := trcfg.as_map()
+		t.on = (trm['enabled'] or { toml.Any(true) }).bool()
+		t.bus = (trm['bus'] or { toml.Any('') }).string()
+		if t.on {
+			t.cmd_id = trace_frame_id(trm, 'cmd_id', t.cmd_id, dbc)
+			t.rsp_id = trace_frame_id(trm, 'rsp_id', t.rsp_id, dbc)
+			t.stat_id = trace_frame_id(trm, 'stat_id', t.stat_id, dbc)
+			t.record_id = trace_frame_id(trm, 'record_id', t.record_id, dbc)
+			t.dump_fc_id = trace_frame_id(trm, 'dump_fc_id', t.dump_fc_id, dbc)
+		}
+		t.level = (trm['level'] or { toml.Any(t.level) }).string()
+		t.mode = (trm['mode'] or { toml.Any(t.mode) }).string()
+		t.buffer_records = int((trm['buffer_records'] or { toml.Any(t.buffer_records) }).int())
+		t.pre_pct = int((trm['pre_pct'] or { toml.Any(t.pre_pct) }).int())
+		if pms := trm['push_ms'] {
+			t.push_us = u64(pms.int()) * 1000
+		}
+		for k in ['cmd_id', 'rsp_id', 'stat_id', 'dump_fc_id', 'push_ms', 'pre_pct'] {
+			if k in trm {
+				t.sw_keys << k
+			}
+		}
+		// trigger = { source = "overrun", budget_us = N }: freeze the ring when a handler runs
+		// longer than N µs. Only "overrun" is generated today; other sources are reserved.
+		if tg := trm['trigger'] {
+			tgm := tg.as_map()
+			if (tgm['source'] or { toml.Any('') }).string() == 'overrun' {
+				t.budget_us = u64((tgm['budget_us'] or { toml.Any(0) }).int())
+			}
+		}
+	}
+	return t
+}
+
+// TargetCfg is the parsed [target] block. kind selects the on-target emitter: 'baremetal' =
+// single-core inline superloop (P3c-0); 'threadx' = the preemptive-RTOS target (P3c-1).
+struct TargetCfg {
+mut:
+	on      bool
+	threadx bool
+	tick_us u64 = 1000
+}
+
+// TelemetryCfg is the parsed [telemetry] block (the scratch slots + iface are derived later).
+struct TelemetryCfg {
+mut:
+	on        bool
+	bus       string
+	id        u32
+	detail_id u32 // optional LoadDetail frame (multi-window + overruns)
+	period_us u64 = 1_000_000
+}
+
+fn parse_telemetry(doc toml.Doc) TelemetryCfg {
+	mut t := TelemetryCfg{}
+	if tcfg := doc.value_opt('telemetry') {
+		tm := tcfg.as_map()
+		t.on = (tm['enabled'] or { toml.Any(false) }).bool()
+		t.bus = (tm['bus'] or { toml.Any('') }).string()
+		t.id = u32((tm['id'] or { toml.Any(0) }).int())
+		t.detail_id = u32((tm['detail_id'] or { toml.Any(0) }).int())
+		if pms := tm['period_ms'] {
+			t.period_us = u64(pms.int()) * 1000
+		}
+	}
+	return t
+}
+
+fn parse_target(doc toml.Doc) TargetCfg {
+	mut t := TargetCfg{}
+	if tgt := doc.value_opt('target') {
+		tm := tgt.as_map()
+		kind := (tm['kind'] or { toml.Any('') }).string()
+		t.threadx = kind == 'threadx'
+		t.on = kind == 'baremetal' || t.threadx
+		if tms := tm['tick_ms'] {
+			t.tick_us = u64(tms.int()) * 1000
+		}
+	}
+	return t
+}
+
 fn main() {
 	args := os.args
 	if args.len < 6 {
@@ -363,24 +472,15 @@ fn main() {
 	// --- telemetry: give every app partition + every bus(bridge) a scratch slot,
 	//     remembering its core, so a generated tx can sum processor load by core
 	//     and ship it as a CpuLoad CAN frame. Gated by an [telemetry] config block. ---
-	mut telem_on := false
-	mut telem_bus := ''
-	mut telem_id := u32(0)
-	mut telem_detail_id := u32(0) // optional LoadDetail frame (multi-window + overruns)
-	mut telem_period_us := u64(1_000_000)
-	mut telem_iface := ''
+	tmc := parse_telemetry(doc)
+	telem_on := tmc.on
+	telem_bus := tmc.bus
+	telem_id := tmc.id
+	telem_detail_id := tmc.detail_id
+	telem_period_us := tmc.period_us
+	mut telem_iface := '' // derived from the bus interface below
 	mut telem_slot := map[string]int{}
 	mut slot_core := []int{}
-	if tcfg := doc.value_opt('telemetry') {
-		tm := tcfg.as_map()
-		telem_on = (tm['enabled'] or { toml.Any(false) }).bool()
-		telem_bus = (tm['bus'] or { toml.Any('') }).string()
-		telem_id = u32((tm['id'] or { toml.Any(0) }).int())
-		telem_detail_id = u32((tm['detail_id'] or { toml.Any(0) }).int())
-		if pms := tm['period_ms'] {
-			telem_period_us = u64(pms.int()) * 1000
-		}
-	}
 
 	// --- trace: the runtime-observability control/telemetry frames. Gated by a [trace]
 	//     block; loom2v emits their symbolic DBC (arg 8) so blobly_net can decode/send them
@@ -389,61 +489,23 @@ fn main() {
 	// Each observability frame id is either a literal CAN id (used as-is — collision-free
 	// allocation is the author's responsibility) or the NAME of a message in bus.dbc, resolved
 	// to that message's id (and required to exist). Defaults are the docs/telemetry.md ids.
-	mut trace_on := false
-	mut trace_bus := ''
-	mut trace_cmd_id := u32(0x7E2)
-	mut trace_rsp_id := u32(0x7E3)
-	mut trace_stat_id := u32(0x7E4)
-	mut trace_record_id := u32(0x7E5)
-	mut trace_dump_fc_id := u32(0x7E6)
-	mut trace_level := 'thread+fb'
-	mut trace_mode := 'ring'
-	mut trace_buffer_records := 64
-	mut trace_pre_pct := 50
-	mut trace_push_us := u64(1_000_000)
-	mut trace_budget_us := u64(0) // overrun trigger budget (0 = no software trigger)
-	// [trace] keys that only the software-packer protocol implements — the request/response path
-	// (cmd_id/rsp_id), the HandlerStat heartbeat (stat_id/push_ms), the ISO-TP dump flow control
-	// (dump_fc_id), and the pre-trigger split (pre_pct, meaningless without a trigger/oneshot).
-	// All have non-zero defaults, so we track EXPLICIT presence to reject them for the ThreadX
-	// exec-hook stream (which implements none) without rejecting a bare config.
-	mut trace_sw_keys := []string{}
-	if trcfg := doc.value_opt('trace') {
-		trm := trcfg.as_map()
-		// a [trace] block is active unless explicitly disabled (enabled = false) — so tracing
-		// can be turned off without deleting the whole block.
-		trace_on = (trm['enabled'] or { toml.Any(true) }).bool()
-		trace_bus = (trm['bus'] or { toml.Any('') }).string()
-		// Only resolve ids when tracing is active — a disabled block generates nothing, so a
-		// stale `cmd_id = "SomeName"` must not load bus.dbc or panic on a missing message.
-		if trace_on {
-			trace_cmd_id = trace_frame_id(trm, 'cmd_id', trace_cmd_id, dbc)
-			trace_rsp_id = trace_frame_id(trm, 'rsp_id', trace_rsp_id, dbc)
-			trace_stat_id = trace_frame_id(trm, 'stat_id', trace_stat_id, dbc)
-			trace_record_id = trace_frame_id(trm, 'record_id', trace_record_id, dbc)
-			trace_dump_fc_id = trace_frame_id(trm, 'dump_fc_id', trace_dump_fc_id, dbc)
-		}
-		trace_level = (trm['level'] or { toml.Any(trace_level) }).string()
-		trace_mode = (trm['mode'] or { toml.Any(trace_mode) }).string()
-		trace_buffer_records = int((trm['buffer_records'] or { toml.Any(trace_buffer_records) }).int())
-		trace_pre_pct = int((trm['pre_pct'] or { toml.Any(trace_pre_pct) }).int())
-		if pms := trm['push_ms'] {
-			trace_push_us = u64(pms.int()) * 1000
-		}
-		for k in ['cmd_id', 'rsp_id', 'stat_id', 'dump_fc_id', 'push_ms', 'pre_pct'] {
-			if k in trm {
-				trace_sw_keys << k
-			}
-		}
-		// trigger = { source = "overrun", budget_us = N }: freeze the ring when a handler runs
-		// longer than N µs. Only "overrun" is generated today; other sources are reserved.
-		if tg := trm['trigger'] {
-			tgm := tg.as_map()
-			if (tgm['source'] or { toml.Any('') }).string() == 'overrun' {
-				trace_budget_us = u64((tgm['budget_us'] or { toml.Any(0) }).int())
-			}
-		}
-	}
+	// [trace] block -> the model (parse_trace). Rebound to the existing locals so the emit code
+	// below is unchanged. (Step (a) of the parse->model->emit refactor.)
+	tc := parse_trace(doc, dbc)
+	trace_on := tc.on
+	trace_bus := tc.bus
+	trace_cmd_id := tc.cmd_id
+	trace_rsp_id := tc.rsp_id
+	trace_stat_id := tc.stat_id
+	trace_record_id := tc.record_id
+	trace_dump_fc_id := tc.dump_fc_id
+	trace_level := tc.level
+	trace_mode := tc.mode
+	trace_buffer_records := tc.buffer_records
+	trace_pre_pct := tc.pre_pct
+	trace_push_us := tc.push_us
+	trace_budget_us := tc.budget_us
+	trace_sw_keys := tc.sw_keys
 
 	// [target] baremetal: emit a single-core inline superloop instead of the host's
 	// spawned partitions + osal. No threads, no osal (POSIX now_us/sleep_us don't
@@ -453,18 +515,10 @@ fn main() {
 	// superloop (P3c-0); 'threadx' (P3c-1) wraps the same FB/telemetry work in a real
 	// ThreadX thread paced by tx_thread_sleep (the preemptive-RTOS target — see
 	// examples/threadx_h735, the hand-written golden reference this generates).
-	mut target_on := false
-	mut target_threadx := false
-	mut target_tick_us := u64(1000)
-	if tgt := doc.value_opt('target') {
-		tm := tgt.as_map()
-		kind := (tm['kind'] or { toml.Any('') }).string()
-		target_threadx = kind == 'threadx'
-		target_on = kind == 'baremetal' || target_threadx
-		if tms := tm['tick_ms'] {
-			target_tick_us = u64(tms.int()) * 1000
-		}
-	}
+	tgc := parse_target(doc)
+	target_on := tgc.on
+	target_threadx := tgc.threadx
+	target_tick_us := tgc.tick_us
 	if target_on && has_external && !target_threadx {
 		panic('loom2v: [target] baremetal does not support external/bus signals yet ' +
 			'(every [[signal]] must be partition-local: from == to). The ThreadX target does — ' +
