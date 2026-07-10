@@ -576,6 +576,7 @@ fn main() {
 	// rx signals an FB reads flow bus -> comm(decode) -> target IOC pool cell -> FB input (6b-2b).
 	// ioc_idx maps each such signal to its pool cell; visible to the comm emitter + handler glue.
 	mut ioc_idx := map[string]int{}
+	mut msg_ioc_idx := map[int]int{} // DBC id -> its (single) rx-read signal's IOC cell
 	if comm_thread_on {
 		if has_routes || isotp_conns.len > 0 {
 			panic('loom2v: [target] kind="threadx" comm thread: routes / ISO-TP are not generated ' +
@@ -660,6 +661,9 @@ fn main() {
 						'publishes one per frame — per-signal decode needs the codec (phase 6b-2b+)')
 				}
 				ioc_idx[sname] = ioc_idx.len
+				// Key the publish off the READ signal's DBC id, not the de-duped rx_sigs
+				// representative (which may be an un-read signal that happens to sort first).
+				msg_ioc_idx[si.dbc_id] = ioc_idx[sname]
 			}
 		}
 		if ioc_idx.len > 4 {
@@ -2133,10 +2137,10 @@ fn main() {
 					glue << '\t\t\tif rx.id == u32(0x${si.dbc_id.hex()}) && rx.len == ${si.dbc_dlc} { // ${si.dbc_msg}'
 					glue << '\t\t\t\tg_rx_count++'
 					glue << '\t\t\t\tg_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)'
-					if idx := ioc_idx[si.name] {
-						// FB reads this signal: publish the decoded value (byte-0 scalar) into its IOC
-						// cell so the app thread picks up the latest command wait-free. (Lean decode:
-						// a single whole-frame scalar; per-bit/multi-signal decode needs the codec.)
+					if idx := msg_ioc_idx[si.dbc_id] {
+						// This message carries an FB-read signal (keyed by DBC id, so it fires even when
+						// the de-duped representative is a different, un-read signal): publish the decoded
+						// value (byte-0 scalar) into its IOC cell so the app thread picks it up wait-free.
 						glue << '\t\t\t\tC.ioc_pub(${idx}, g_rx_last, u32(0))'
 					}
 					glue << '\t\t\t}'
