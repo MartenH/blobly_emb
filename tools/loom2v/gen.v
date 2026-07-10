@@ -469,6 +469,44 @@ fn parse_target(doc toml.Doc) TargetCfg {
 	return t
 }
 
+// Model is the parsed ecu.toml + bus.dbc — everything the emitters need, with no toml.Any left.
+// build_model is the single parse pass; the emit code (still in main for now) reads from it.
+struct Model {
+	buses        map[string]bool
+	bus_core     map[string]int
+	sig_of       map[string]SigInfo
+	sig_names    []string
+	has_external bool
+	frames       FrameCfg
+	routes       []Route
+	isotp_conns  []IsotpConn
+	dids         []DidCfg
+	part         PartMap
+	telem        TelemetryCfg
+	trace        TraceCfg
+	target       TargetCfg
+}
+
+fn build_model(doc toml.Doc, dbc string) Model {
+	buses, bus_core := parse_buses(doc)
+	sig_of, sig_names, has_external := parse_signals(doc, dbc, buses)
+	return Model{
+		buses:        buses
+		bus_core:     bus_core
+		sig_of:       sig_of
+		sig_names:    sig_names
+		has_external: has_external
+		frames:       parse_frames(doc)
+		routes:       parse_routes(doc, dbc)
+		isotp_conns:  parse_isotp(doc)
+		dids:         parse_dids(doc)
+		part:         parse_partitions(doc)
+		telem:        parse_telemetry(doc)
+		trace:        parse_trace(doc, dbc)
+		target:       parse_target(doc)
+	}
+}
+
 fn main() {
 	args := os.args
 	if args.len < 6 {
@@ -488,14 +526,20 @@ fn main() {
 		panic('loom2v: invalid ecu.toml:\n  ' + verrs.join('\n  '))
 	}
 
-	buses, bus_core := parse_buses(doc)
+	// Single parse pass: ecu.toml + bus.dbc -> the Model. The emit code below reads from `m`
+	// (rebound to the existing locals so it stays unchanged). (Step (a): parse -> model.)
+	m := build_model(doc, dbc)
+	buses := m.buses.clone()
+	bus_core := m.bus_core.clone()
 
-	// [[signal]] -> the model (parse_signals: sig_of + DBC resolution), then emit the `sig` module.
-	sig_of, sig_names, has_external := parse_signals(doc, dbc, buses)
+	// [[signal]] -> the model, then emit the `sig` module.
+	sig_of := m.sig_of.clone()
+	sig_names := m.sig_names.clone()
+	has_external := m.has_external
 	signals := emit_signals(sig_of, sig_names, ecu)
 
-	// Per-PDU COM behaviour ([[frame]]) -> the model (parse_frames), rebound to the existing locals.
-	fcfg := parse_frames(doc)
+	// Per-PDU COM behaviour ([[frame]]), rebound to the existing locals.
+	fcfg := m.frames
 	tx_mode := fcfg.tx_mode.clone()
 	tx_cycle_us := fcfg.tx_cycle_us.clone()
 	tx_min_us := fcfg.tx_min_us.clone()
@@ -513,7 +557,7 @@ fn main() {
 	has_e2e := e2e_on.len > 0
 	has_secoc := secoc_on.len > 0
 
-	routes := parse_routes(doc, dbc)
+	routes := m.routes.clone()
 	has_routes := routes.len > 0
 
 	// Validate E2E byte positions against each frame's DLC (they index unsafe into
@@ -549,12 +593,11 @@ fn main() {
 		}
 	}
 
-	isotp_conns := parse_isotp(doc)
-	dids := parse_dids(doc)
+	isotp_conns := m.isotp_conns.clone()
+	dids := m.dids.clone()
 
-	// Build the partition/thread maps (already validated up front, right after parse).
-	// partition/thread/fb topology -> the model (parse_partitions), rebound to the existing locals.
-	pmap := parse_partitions(doc)
+	// partition/thread/fb topology, rebound to the existing locals.
+	pmap := m.part
 	core_of := pmap.core_of.clone()
 	threads_of := pmap.threads_of.clone()
 	thread_prio := pmap.thread_prio.clone()
@@ -564,7 +607,7 @@ fn main() {
 	// --- telemetry: give every app partition + every bus(bridge) a scratch slot,
 	//     remembering its core, so a generated tx can sum processor load by core
 	//     and ship it as a CpuLoad CAN frame. Gated by an [telemetry] config block. ---
-	tmc := parse_telemetry(doc)
+	tmc := m.telem
 	telem_on := tmc.on
 	telem_bus := tmc.bus
 	telem_id := tmc.id
@@ -583,7 +626,7 @@ fn main() {
 	// to that message's id (and required to exist). Defaults are the docs/telemetry.md ids.
 	// [trace] block -> the model (parse_trace). Rebound to the existing locals so the emit code
 	// below is unchanged. (Step (a) of the parse->model->emit refactor.)
-	tc := parse_trace(doc, dbc)
+	tc := m.trace
 	trace_on := tc.on
 	trace_bus := tc.bus
 	trace_cmd_id := tc.cmd_id
@@ -607,7 +650,7 @@ fn main() {
 	// superloop (P3c-0); 'threadx' (P3c-1) wraps the same FB/telemetry work in a real
 	// ThreadX thread paced by tx_thread_sleep (the preemptive-RTOS target — see
 	// examples/threadx_h735, the hand-written golden reference this generates).
-	tgc := parse_target(doc)
+	tgc := m.target
 	target_on := tgc.on
 	target_threadx := tgc.threadx
 	target_tick_us := tgc.tick_us
