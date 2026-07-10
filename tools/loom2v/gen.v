@@ -21,6 +21,7 @@ import tools.ecumodel
 
 struct SigInfo {
 mut:
+	name      string // the signal name (so a bare SigInfo still knows its own name)
 	transport string
 	from      string
 	to        string
@@ -35,6 +36,7 @@ mut:
 	dbc_id    int    // the DBC message's CAN id (if external) — resolved once at parse time
 	dbc_dlc   int    // the DBC message's DLC (if external)
 	dbc_ext   bool   // the DBC message is an extended (29-bit) frame (EFF flag) — id may be stripped
+	dbc_trivial bool // the DBC signal is a plain unsigned LE 32-bit value at bit 0 (factor 1, offset 0)
 }
 
 // IsotpConn is one [[isotp]] diagnostic connection on a bus.
@@ -137,6 +139,7 @@ fn main() {
 		signals << '}'
 
 		sig_of[name] = SigInfo{
+			name:      name
 			transport: (m['transport'] or { toml.Any('double') }).string()
 			from:      from
 			to:        to
@@ -168,6 +171,7 @@ fn main() {
 			si.dbc_id = dbc_id_of(db, si.dbc_msg) or { 0 }
 			si.dbc_dlc = dbc_dlc_of(db, si.dbc_msg) or { 8 }
 			si.dbc_ext = dbc_ext_of(db, si.dbc_msg) or { false }
+			si.dbc_trivial = dbc_signal_trivial(db, sname) or { false }
 			sig_of[sname] = si
 		}
 	}
@@ -569,28 +573,42 @@ fn main() {
 	// the same. The lean first cut supports external RX signals (bus -> app), drained + counted
 	// by the comm thread; external TX signals, ISO-TP, and routes are not generated yet.
 	comm_thread_on := target_threadx && has_bridge
+	// rx signals an FB reads flow bus -> comm(decode) -> target IOC pool cell -> FB input (6b-2b).
+	// ioc_idx maps each such signal to its pool cell; visible to the comm emitter + handler glue.
+	mut ioc_idx := map[string]int{}
+	mut msg_ioc_idx := map[int]int{} // DBC id -> its (single) rx-read signal's IOC cell
 	if comm_thread_on {
 		if has_routes || isotp_conns.len > 0 {
 			panic('loom2v: [target] kind="threadx" comm thread: routes / ISO-TP are not generated ' +
 				'yet (phase 6b-2 lean cut = external rx signals only)')
 		}
-		// Signals any FB handler touches (reads OR writes) — the lean cut counts rx frames comm-
-		// locally and emits NO FB<->comm IOC, so an rx signal a handler reads/writes would generate
-		// osal.acquire/publish(...), which the freestanding image doesn't link (no osal). Reject
-		// those until the IOC layer (6b-2b). (A `writes` on an rx signal takes the same osal path.)
-		mut touched_by_fb := map[string]bool{}
+		// Which signals FB handlers read vs write. An rx signal READ by an FB flows through the
+		// target IOC pool (6b-2b); an rx signal WRITTEN by an FB is a config error (an input isn't
+		// written). Everything else external is still deferred (rejected below).
+		mut read_count := map[string]int{} // how many FB handlers read each signal
+		mut written_by_fb := map[string]bool{}
 		for fb in ecumodel.toml_arr(doc, 'fb') {
 			for h in (fb.as_map()['handler'] or { toml.Any([]toml.Any{}) }).array() {
 				hm := h.as_map()
 				for r in (hm['reads'] or { toml.Any([]toml.Any{}) }).array() {
-					touched_by_fb[r.string()] = true
+					read_count[r.string()]++
 				}
 				for w in (hm['writes'] or { toml.Any([]toml.Any{}) }).array() {
-					touched_by_fb[w.string()] = true
+					written_by_fb[w.string()] = true
 				}
 			}
 		}
-		for sname, si in sig_of {
+		// How many rx signals READ by FBs each DBC message carries (the lean whole-frame decode
+		// serves one per message; more need the per-signal codec).
+		mut msg_read_sigs := map[string]int{}
+		for sn in sig_names {
+			s := sig_of[sn] or { continue }
+			if s.rx && read_count[sn] > 0 {
+				msg_read_sigs[s.dbc_msg]++
+			}
+		}
+		for sname in sig_names {
+			si := sig_of[sname] or { continue }
 			if si.external && !si.rx {
 				panic('loom2v: [target] kind="threadx" comm thread: external TX signal "${sname}" ' +
 					'(app -> bus) is not generated yet (phase 6b-2 lean cut = rx only)')
@@ -598,10 +616,9 @@ fn main() {
 			if !si.rx {
 				continue
 			}
-			if touched_by_fb[sname] {
-				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" is read/written ' +
-					'by an FB handler, but the lean cut has no FB<->comm IOC yet — it only counts rx ' +
-					'frames comm-locally; drop the handler read/write or wait for the IOC layer (6b-2b)')
+			if written_by_fb[sname] {
+				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" is WRITTEN by an ' +
+					'FB handler — an rx (bus -> app) signal is an input; drop the handler write')
 			}
 			if si.bus != telem_bus {
 				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" is on bus ' +
@@ -619,6 +636,37 @@ fn main() {
 					'deadline / E2E / SecOC, but the lean comm thread only counts raw rx.id matches — ' +
 					'those COM checks are not generated yet (phase 6b-2b)')
 			}
+			// rx signal an FB reads -> flows through a target IOC pool cell. The lean decode is a
+			// whole-frame u32 into sig_t.a, and the pool is one-value-per-frame, so reject the
+			// layouts/topologies it can't reproduce rather than mis-decode. (Multiple FB *readers*
+			// are fine: the comm thread is the single writer, and every FB runs on the ONE generated
+			// app thread — a single reader CONTEXT — so the reads are sequential, never a concurrent
+			// race on the SPSC reader slot. A cross-thread fan-out guard is for the multi-thread phase.)
+			if read_count[sname] > 0 {
+				if !si.dbc_trivial {
+					panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" read by an FB ' +
+						'is not a plain unsigned little-endian 32-bit value at bit 0 (factor 1, offset 0); ' +
+						'other layouts need the DBC codec on target (phase 6b-2b+) — not generated yet')
+				}
+				if si.has_valid {
+					panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" has a `valid` ' +
+						'field, but the lean IOC read only sets the value — an FB would see valid=false ' +
+						'forever; a freshness-carrying transport is not generated yet')
+				}
+				if (msg_read_sigs[si.dbc_msg] or { 0 }) > 1 {
+					panic('loom2v: [target] kind="threadx" comm thread: DBC message "${si.dbc_msg}" carries ' +
+						'${msg_read_sigs[si.dbc_msg]} rx signals read by FBs, but the lean whole-frame decode ' +
+						'publishes one per frame — per-signal decode needs the codec (phase 6b-2b+)')
+				}
+				ioc_idx[sname] = ioc_idx.len
+				// Key the publish off the READ signal's DBC id, not the de-duped rx_sigs
+				// representative (which may be an un-read signal that happens to sort first).
+				msg_ioc_idx[si.dbc_id] = ioc_idx[sname]
+			}
+		}
+		if ioc_idx.len > 4 {
+			panic('loom2v: [target] kind="threadx" comm thread: ${ioc_idx.len} rx-to-FB signals need IOC ' +
+				'cells, but the pool (comm_glue.c IOC_POOL_N) has 4 — raise IOC_POOL_N or reduce signals')
 		}
 	}
 	// Which buses run a COM bridge (an external signal, an ISO-TP conn, or a route touches them).
@@ -1016,6 +1064,13 @@ fn main() {
 					si := sig_of[rn] or { SigInfo{} }
 					if si.local {
 						glue << '\tinp.${snake(rn)} = st.cell_${snake(rn)} // local'
+					} else if idx := ioc_idx[rn] {
+						// bus -> comm(decode) -> target IOC cell ${idx} -> this FB input (6b-2b). One
+						// ioc_get per read (it advances the reader slot); the value field is `a`.
+						glue << '\tmut ${snake(rn)}_a := u32(0)'
+						glue << '\tmut ${snake(rn)}_b := u32(0)'
+						glue << '\tC.ioc_get(${idx}, &${snake(rn)}_a, &${snake(rn)}_b)'
+						glue << '\tinp.${snake(rn)}.${snake(si.val_field)} = ${si.val_type}(${snake(rn)}_a)'
 					} else {
 						glue << '\tosal.${acquire_fn(si.transport)}(${snake(rn)}_ch, &inp.${snake(rn)}, u8(sizeof(inp.${snake(rn)})))'
 					}
@@ -1842,6 +1897,14 @@ fn main() {
 				glue << 'fn C.load_1s() u32'
 				glue << 'fn C.load_10s() u32'
 				glue << 'fn C.load_overruns() u32'
+				if ioc_idx.len > 0 {
+					// Target IOC pool (comm_glue.c, wait-free triple-buffer ioc.h): the comm thread
+					// publishes a decoded rx signal into a cell (ioc_pub), an FB reads it (ioc_get);
+					// ioc_pool_init runs once before the kernel starts.
+					glue << 'fn C.ioc_pool_init()'
+					glue << 'fn C.ioc_pub(int, u32, u32)'
+					glue << 'fn C.ioc_get(int, &u32, &u32)'
+				}
 			}
 			glue << ''
 			// TCB as [32]u64 (256 B >= sizeof(TX_THREAD) = 200 B) so it is 8-byte aligned — the
@@ -2067,9 +2130,17 @@ fn main() {
 				glue << '\t\t// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame'
 				glue << '\t\tfor ch.recv(mut rx) {'
 				for si in rx_sigs {
-					glue << '\t\t\tif rx.id == u32(0x${si.dbc_id.hex()}) { // ${si.dbc_msg}'
+					// Gate on the DBC DLC too: recv reuses the frame and copies only the bytes that
+					// arrived, so a short same-id frame would leave stale high bytes in the decode.
+					glue << '\t\t\tif rx.id == u32(0x${si.dbc_id.hex()}) && rx.len == ${si.dbc_dlc} { // ${si.dbc_msg}'
 					glue << '\t\t\t\tg_rx_count++'
 					glue << '\t\t\t\tg_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)'
+					if idx := msg_ioc_idx[si.dbc_id] {
+						// This message carries an FB-read signal (keyed by DBC id, so it fires even when
+						// the de-duped representative is a different, un-read signal): publish the decoded
+						// value (byte-0 scalar) into its IOC cell so the app thread picks it up wait-free.
+						glue << '\t\t\t\tC.ioc_pub(${idx}, g_rx_last, u32(0))'
+					}
 					glue << '\t\t\t}'
 				}
 				glue << '\t\t}'
@@ -2161,6 +2232,9 @@ fn main() {
 			glue << '// tx_application_define above). main.v does the board bring-up then calls this —'
 			glue << '// referencing it also forces this module (incl. tx_application_define) to link.'
 			glue << 'pub fn boot() {'
+			if ioc_idx.len > 0 {
+				glue << '\tC.ioc_pool_init() // init the cross-thread signal IOC cells before any thread runs'
+			}
 			glue << '\tC._tx_initialize_kernel_enter()'
 			glue << '}'
 		}
@@ -2777,6 +2851,23 @@ fn dbc_ext_of(db candb.Database, key string) ?bool {
 	for m in db.messages {
 		if snake(m.name) == key {
 			return m.ext
+		}
+	}
+	return none
+}
+
+// dbc_signal_trivial reports whether the DBC signal named `signame` is a plain unsigned
+// little-endian (Intel) 32-bit value starting at bit 0 with factor 1 / offset 0 — the ONLY
+// layout the lean ThreadX comm-thread decode (a whole-frame u32) reproduces exactly. Any
+// other layout (8/16-bit, a non-zero start bit, scaling, signed, Motorola) needs the DBC
+// codec and is rejected on that path rather than silently mis-decoded.
+fn dbc_signal_trivial(db candb.Database, signame string) ?bool {
+	for m in db.messages {
+		for s in m.signals {
+			if s.name == signame {
+				return s.start_bit == 0 && s.length == 32 && !s.is_signed && s.factor == 1.0
+					&& s.offset == 0.0 && s.byte_order == candb.ByteOrder.little_endian
+			}
 		}
 	}
 	return none

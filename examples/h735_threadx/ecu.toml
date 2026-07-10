@@ -51,6 +51,7 @@ thread    = "app_main"
   [[fb.handler]]
   name      = "on_100ms"
   period_ms = 100
+  reads     = ["Command"]
   writes    = ["LoadCmd"]
 
 [[fb]]

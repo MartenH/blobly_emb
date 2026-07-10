@@ -36,7 +36,19 @@ pub mut:
 }
 
 pub fn (mut g Governor) on_100ms(inp ports.GovernorIn, mut out ports.GovernorOut) {
-	if g.rising {
+	// A host command (bus -> comm thread -> rx IOC -> here) overrides the breathing sweep: hold
+	// the commanded iteration count, clamped to a safe range, so `cansend` visibly drives the core
+	// load on CpuLoad. code == 0 (the IOC's initial/idle value) means "no command" -> sweep.
+	if inp.command.code != 0 {
+		mut c := inp.command.code
+		if c < iters_min {
+			c = iters_min
+		}
+		if c > iters_spike {
+			c = iters_spike
+		}
+		g.iters = c
+	} else if g.rising {
 		g.iters += iters_step
 		if g.iters >= iters_max {
 			g.iters = iters_max
