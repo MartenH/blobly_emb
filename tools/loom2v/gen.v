@@ -2146,6 +2146,54 @@ fn emit_run_multicore(m Model, doc toml.Doc, telem_iface string, bus_names []str
 	return glue
 }
 
+// emit_run_host emits the plain multi-core host run(): launch every bus bridge + app partition,
+// then wait. One Channel param per bus (sorted for a stable signature). Reads the Model; telem_iface
+// / bus_names / bus_dests / extra_dest_buses are main's emit-time state.
+fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[string][]string, extra_dest_buses []string) []string {
+	by_part := m.part.by_part.clone()
+	core_of := m.part.core_of.clone()
+	telem_on := m.telem.on
+	mut glue := []string{}
+		// --- host run(): launch every bus bridge + app partition, then wait. One
+		//     Channel param per bus (sorted for a stable signature main.v can rely on). ---
+		glue << ''
+		mut waits := []string{}
+		if bus_names.len == 0 {
+			glue << 'pub fn run() {'
+		} else {
+			mut params := []string{}
+			for b in bus_names {
+				params << '${snake(b)} can.Channel'
+			}
+			for b in extra_dest_buses {
+				params << '${snake(b)} can.Channel' // route-dest-only bus: channel arg, no bridge
+			}
+			glue << 'pub fn run(${params.join(', ')}) {'
+			for b in bus_names {
+				bb := snake(b)
+				mut spawn_args := bb
+				for d in bus_dests[b] or { []string{} } {
+					spawn_args += ', ${snake(d)}'
+				}
+				glue << '\tt_${bb} := spawn partition_${bb}(${spawn_args})'
+				waits << 't_${bb}'
+			}
+		}
+		for part, _ in by_part {
+			glue << '\tt_${part} := spawn partition_${part}(${core_of[part] or { 0 }}, unsafe { nil })'
+			waits << 't_${part}'
+		}
+		if telem_on && telem_iface != '' {
+			glue << '\tt_telem := spawn partition_telem()'
+			waits << 't_telem'
+		}
+		for w in waits {
+			glue << '\t${w}.wait()'
+		}
+		glue << '}'
+	return glue
+}
+
 fn main() {
 	args := os.args
 	if args.len < 6 {
@@ -3062,43 +3110,7 @@ fn main() {
 	} else if trace_multicore {
 		glue << emit_run_multicore(m, doc, telem_iface, bus_names, bus_dests, extra_dest_buses, trace_ncores)
 	} else {
-		// --- host run(): launch every bus bridge + app partition, then wait. One
-		//     Channel param per bus (sorted for a stable signature main.v can rely on). ---
-		glue << ''
-		mut waits := []string{}
-		if bus_names.len == 0 {
-			glue << 'pub fn run() {'
-		} else {
-			mut params := []string{}
-			for b in bus_names {
-				params << '${snake(b)} can.Channel'
-			}
-			for b in extra_dest_buses {
-				params << '${snake(b)} can.Channel' // route-dest-only bus: channel arg, no bridge
-			}
-			glue << 'pub fn run(${params.join(', ')}) {'
-			for b in bus_names {
-				bb := snake(b)
-				mut spawn_args := bb
-				for d in bus_dests[b] or { []string{} } {
-					spawn_args += ', ${snake(d)}'
-				}
-				glue << '\tt_${bb} := spawn partition_${bb}(${spawn_args})'
-				waits << 't_${bb}'
-			}
-		}
-		for part, _ in by_part {
-			glue << '\tt_${part} := spawn partition_${part}(${core_of[part] or { 0 }}, unsafe { nil })'
-			waits << 't_${part}'
-		}
-		if telem_on && telem_iface != '' {
-			glue << '\tt_telem := spawn partition_telem()'
-			waits << 't_telem'
-		}
-		for w in waits {
-			glue << '\t${w}.wait()'
-		}
-		glue << '}'
+		glue << emit_run_host(m, telem_iface, bus_names, bus_dests, extra_dest_buses)
 	}
 
 	os.write_file(args[3], signals.join('\n') + '\n') or { panic('write ${args[3]}: ${err}') }
