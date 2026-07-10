@@ -533,6 +533,9 @@ struct BusCtx {
 	frame        string
 	detframe     string
 	idx          string
+	// bus_stream (trace exec-hook ring) contract:
+	stream_active bool
+	part          string
 }
 
 interface Producer {
@@ -547,6 +550,9 @@ interface Producer {
 	// bus_tick is this producer's periodic emission inside a bus-owning run loop (send a frame when
 	// due), rendered for the given run-model contract. Empty when the producer isn't active there.
 	bus_tick(ctx BusCtx) []string
+	// bus_stream: a second, separately-gated bus-loop injection (a burst stream). Trace uses it for
+	// the exec-hook ring; other producers return empty.
+	bus_stream(ctx BusCtx) []string
 }
 
 // TelemProducer publishes each partition's Loom load to a scratch cell so the bus owner can ship it
@@ -596,6 +602,10 @@ fn (t TelemProducer) bus_tick(ctx BusCtx) []string {
 	return g
 }
 
+fn (t TelemProducer) bus_stream(_ BusCtx) []string {
+	return []string{}
+}
+
 fn (t TelemProducer) partition_preamble(_ string) []string {
 	return []string{}
 }
@@ -626,6 +636,8 @@ struct TraceProducer {
 	core_of      map[string]int
 	fb_id_base   map[string]int
 	thread_id_of map[string]int
+	record_id      u32
+	buffer_records int
 }
 
 fn (t TraceProducer) part_core(part_key string) int {
@@ -697,6 +709,39 @@ fn (t TraceProducer) partition_loop_body(_ string) []string {
 // stubbed here so TraceProducer satisfies the interface without changing output.
 fn (t TraceProducer) bus_tick(_ BusCtx) []string {
 	return []string{}
+}
+
+fn (t TraceProducer) bus_stream(ctx BusCtx) []string {
+	if !ctx.stream_active {
+		return []string{}
+	}
+	mut g := []string{}
+	g << ctx.lead
+	g << '\t\tif !tr_active && t1 - last_trace >= u64(1000000) {'
+	g << '\t\t\ttr_n = C.trace_snapshot(&g_${ctx.part}_trace[0], ${t.buffer_records})'
+	g << '\t\t\ttr_pos = 0'
+	g << '\t\t\ttr_active = true'
+	g << '\t\t}'
+	g << '\t\tif tr_active {'
+	g << '\t\t\tmut sent := 0'
+	g << '\t\t\tfor tr_pos < tr_n && sent < 16 && ch.tx_ready() {'
+	g << '\t\t\t\tmut tf := can.Frame{'
+	g << '\t\t\t\t\tid:  u32(0x${t.record_id.hex()})'
+	g << '\t\t\t\t\tlen: 8'
+	g << '\t\t\t\t}'
+	g << '\t\t\t\tfor j in 0 .. 8 {'
+	g << '\t\t\t\t\ttf.data[j] = g_${ctx.part}_trace[tr_pos][j]'
+	g << '\t\t\t\t}'
+	g << '\t\t\t\tch.send(tf)'
+	g << '\t\t\t\ttr_pos++'
+	g << '\t\t\t\tsent++'
+	g << '\t\t\t}'
+	g << '\t\t\tif tr_pos >= tr_n {'
+	g << '\t\t\t\ttr_active = false'
+	g << '\t\t\t\tlast_trace = C.board_now_us()'
+	g << '\t\t\t}'
+	g << '\t\t}'
+	return g
 }
 
 // emit_manifest builds the trace-identity CSV (optional arg 6): the tables blobly_net loads to
@@ -1591,45 +1636,11 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				idx:          'i'
 			})
 		}
-		if m.target.threadx && m.trace.on && !comm_thread_on {
-			// Stream the exec-hook trace ring ~1 s, single-owner + incremental. trace_snapshot
-			// copies the ring into g_${part}_trace under a brief freeze; we then send 16 records
-			// per pass, only while the Tx FIFO has room (no spin) — so a stuck bus can't wedge
-			// the owner and the FB scheduling above still runs between chunks. Records go out raw
-			// (one 8-byte record per classic frame on the trace record id); the host decodes with
-			// candump + decode_trace.py.
-			//
-			// NOTE (raw-stream limitation): these are the trace_hooks.c records verbatim, whose
-			// start_us is absolute DWT µs truncated to u24 — it wraps every ~16.7 s with no epoch
-			// re-anchor, so decode_trace.py orders a window, not an unbounded absolute timeline.
-			// This matches the hand-written threadx_h735 bring-up stream. blobly_net's swimlane
-			// consumes the ISO-TP *block* dump (relative records + per-block epoch anchor, which
-			// handles the wrap) — emitting that block/epoch protocol on the ThreadX target is a
-			// later phase; until then the manifest advertises only the raw `record` frame.
-			glue << '\t\tif !tr_active && t1 - last_trace >= u64(1000000) {'
-			glue << '\t\t\ttr_n = C.trace_snapshot(&g_${part}_trace[0], ${m.trace.buffer_records})'
-			glue << '\t\t\ttr_pos = 0'
-			glue << '\t\t\ttr_active = true'
-			glue << '\t\t}'
-			glue << '\t\tif tr_active {'
-			glue << '\t\t\tmut sent := 0'
-			glue << '\t\t\tfor tr_pos < tr_n && sent < 16 && ch.tx_ready() {'
-			glue << '\t\t\t\tmut tf := can.Frame{'
-			glue << '\t\t\t\t\tid:  u32(0x${m.trace.record_id.hex()})'
-			glue << '\t\t\t\t\tlen: 8'
-			glue << '\t\t\t\t}'
-			glue << '\t\t\t\tfor j in 0 .. 8 {'
-			glue << '\t\t\t\t\ttf.data[j] = g_${part}_trace[tr_pos][j]'
-			glue << '\t\t\t\t}'
-			glue << '\t\t\t\tch.send(tf)'
-			glue << '\t\t\t\ttr_pos++'
-			glue << '\t\t\t\tsent++'
-			glue << '\t\t\t}'
-			glue << '\t\t\tif tr_pos >= tr_n {'
-			glue << '\t\t\t\ttr_active = false'
-			glue << '\t\t\t\tlast_trace = C.board_now_us()'
-			glue << '\t\t\t}'
-			glue << '\t\t}'
+		for p in producers {
+			glue << p.bus_stream(BusCtx{
+				stream_active: m.target.threadx && m.trace.on && !comm_thread_on
+				part:          '${part}'
+			})
 		}
 		if m.target.threadx {
 			// Yield to the RTOS between passes: sleep the configured tick (in 1 ms ThreadX
@@ -1780,32 +1791,12 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t\tch.send(tf)'
 					glue << '\t\t}'
 				}
-				if m.trace.on {
-					glue << '\t\t// PRODUCER: exec-hook trace ring (a burst -> tx_ready-gated 16-record chunks)'
-					glue << '\t\tif !tr_active && t1 - last_trace >= u64(1000000) {'
-					glue << '\t\t\ttr_n = C.trace_snapshot(&g_${part}_trace[0], ${m.trace.buffer_records})'
-					glue << '\t\t\ttr_pos = 0'
-					glue << '\t\t\ttr_active = true'
-					glue << '\t\t}'
-					glue << '\t\tif tr_active {'
-					glue << '\t\t\tmut sent := 0'
-					glue << '\t\t\tfor tr_pos < tr_n && sent < 16 && ch.tx_ready() {'
-					glue << '\t\t\t\tmut tf := can.Frame{'
-					glue << '\t\t\t\t\tid:  u32(0x${m.trace.record_id.hex()})'
-					glue << '\t\t\t\t\tlen: 8'
-					glue << '\t\t\t\t}'
-					glue << '\t\t\t\tfor j in 0 .. 8 {'
-					glue << '\t\t\t\t\ttf.data[j] = g_${part}_trace[tr_pos][j]'
-					glue << '\t\t\t\t}'
-					glue << '\t\t\t\tch.send(tf)'
-					glue << '\t\t\t\ttr_pos++'
-					glue << '\t\t\t\tsent++'
-					glue << '\t\t\t}'
-					glue << '\t\t\tif tr_pos >= tr_n {'
-					glue << '\t\t\t\ttr_active = false'
-					glue << '\t\t\t\tlast_trace = C.board_now_us()'
-					glue << '\t\t\t}'
-					glue << '\t\t}'
+				for p in producers {
+					glue << p.bus_stream(BusCtx{
+						stream_active: m.trace.on
+						lead:          ['\t\t// PRODUCER: exec-hook trace ring (a burst -> tx_ready-gated 16-record chunks)']
+						part:          '${part}'
+					})
 				}
 				glue << '\t}'
 				glue << '}'
@@ -3120,6 +3111,8 @@ fn main() {
 		core_of:      m.part.core_of.clone()
 		fb_id_base:   fb_id_base.clone()
 		thread_id_of: thread_id_of.clone()
+		record_id:      m.trace.record_id
+		buffer_records: m.trace.buffer_records
 	})]
 
 	fb_ports, fb_glue, all_regs := emit_handlers(m, producers, ioc_idx, trace_inline)
