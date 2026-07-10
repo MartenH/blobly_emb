@@ -17,6 +17,24 @@
  * comm thread) blocks on it, so the thread wakes on rx instead of polling. */
 static TX_SEMAPHORE g_comm_sem;
 
+/* Load scratch: the FB thread publishes the Loom load here (single writer, load_pub); the comm
+ * thread reads it for CpuLoad/LoadDetail (single reader, load_*). VOLATILE — the two run on
+ * different ThreadX threads, and a plain global could be cached by the -Os compiler so the comm
+ * thread keeps sending a stale value. Single-writer/single-reader scalars need no lock; volatile
+ * is enough. The wait-free triple-buffer IOC replaces this when the target IOC layer lands
+ * (6b-2b); V can't emit volatile globals, so it lives here as thin target glue for now. */
+static volatile unsigned short g_ld_pm, g_ld_100, g_ld_1s, g_ld_10s;
+static volatile unsigned g_ld_ovr;
+void load_pub(unsigned pm, unsigned p100, unsigned p1s, unsigned p10s, unsigned ovr) {
+    g_ld_pm = (unsigned short)pm; g_ld_100 = (unsigned short)p100;
+    g_ld_1s = (unsigned short)p1s; g_ld_10s = (unsigned short)p10s; g_ld_ovr = ovr;
+}
+unsigned load_permille(void) { return g_ld_pm; }
+unsigned load_100ms(void)    { return g_ld_100; }
+unsigned load_1s(void)       { return g_ld_1s; }
+unsigned load_10s(void)      { return g_ld_10s; }
+unsigned load_overruns(void) { return g_ld_ovr; }
+
 /* The exec-change trace hooks (trace_hooks.c). A C ISR isn't wrapped by the port's asm
  * __tx_IntHandler, so we bracket the handler with these to get it traced — the same calls the
  * asm SysTick handler makes. Single-level: the Rx IRQ shares SysTick's priority (0x40) so the

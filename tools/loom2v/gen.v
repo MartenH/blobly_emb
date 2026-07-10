@@ -34,6 +34,7 @@ mut:
 	dbc_msg   string // snake(DBC message name) carrying this signal (if external)
 	dbc_id    int    // the DBC message's CAN id (if external) — resolved once at parse time
 	dbc_dlc   int    // the DBC message's DLC (if external)
+	dbc_ext   bool   // the DBC message is an extended (29-bit) frame (EFF flag) — id may be stripped
 }
 
 // IsotpConn is one [[isotp]] diagnostic connection on a bus.
@@ -166,6 +167,7 @@ fn main() {
 			}
 			si.dbc_id = dbc_id_of(db, si.dbc_msg) or { 0 }
 			si.dbc_dlc = dbc_dlc_of(db, si.dbc_msg) or { 8 }
+			si.dbc_ext = dbc_ext_of(db, si.dbc_msg) or { false }
 			sig_of[sname] = si
 		}
 	}
@@ -572,14 +574,19 @@ fn main() {
 			panic('loom2v: [target] kind="threadx" comm thread: routes / ISO-TP are not generated ' +
 				'yet (phase 6b-2 lean cut = external rx signals only)')
 		}
-		// Signals any FB handler reads — the lean cut counts rx frames comm-locally and emits NO
-		// FB<->comm IOC, so an rx signal a handler reads would generate osal.acquire(...), which the
-		// freestanding image doesn't link (no osal). Reject those until the IOC layer (6b-2b).
-		mut read_by_fb := map[string]bool{}
+		// Signals any FB handler touches (reads OR writes) — the lean cut counts rx frames comm-
+		// locally and emits NO FB<->comm IOC, so an rx signal a handler reads/writes would generate
+		// osal.acquire/publish(...), which the freestanding image doesn't link (no osal). Reject
+		// those until the IOC layer (6b-2b). (A `writes` on an rx signal takes the same osal path.)
+		mut touched_by_fb := map[string]bool{}
 		for fb in ecumodel.toml_arr(doc, 'fb') {
 			for h in (fb.as_map()['handler'] or { toml.Any([]toml.Any{}) }).array() {
-				for r in (h.as_map()['reads'] or { toml.Any([]toml.Any{}) }).array() {
-					read_by_fb[r.string()] = true
+				hm := h.as_map()
+				for r in (hm['reads'] or { toml.Any([]toml.Any{}) }).array() {
+					touched_by_fb[r.string()] = true
+				}
+				for w in (hm['writes'] or { toml.Any([]toml.Any{}) }).array() {
+					touched_by_fb[w.string()] = true
 				}
 			}
 		}
@@ -591,20 +598,20 @@ fn main() {
 			if !si.rx {
 				continue
 			}
-			if read_by_fb[sname] {
-				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" is read by an ' +
-					'FB handler, but the lean cut has no FB<->comm IOC yet — it only counts rx frames ' +
-					'comm-locally; drop the handler read or wait for the IOC layer (phase 6b-2b)')
+			if touched_by_fb[sname] {
+				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" is read/written ' +
+					'by an FB handler, but the lean cut has no FB<->comm IOC yet — it only counts rx ' +
+					'frames comm-locally; drop the handler read/write or wait for the IOC layer (6b-2b)')
 			}
 			if si.bus != telem_bus {
 				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" is on bus ' +
 					'"${si.bus}", but the comm thread owns only [telemetry].bus "${telem_bus}" — a per-bus ' +
 					'comm owner is not generated yet (phase 6b-2 lean cut = one bus)')
 			}
-			if si.dbc_id > 0x7ff {
-				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" DBC id ' +
-					'0x${si.dbc_id.hex()} is extended (29-bit), but the classic FDCAN backend delivers ' +
-					'only 11-bit standard frames — use a standard id (<= 0x7FF)')
+			if si.dbc_ext || si.dbc_id > 0x7ff {
+				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" DBC message is ' +
+					'extended (29-bit${if si.dbc_ext { ' — the EFF flag is set' } else { '' }}), but the ' +
+					'classic FDCAN backend delivers only 11-bit standard frames — use a standard id')
 			}
 			if (rx_timeout_us[si.dbc_msg] or { 0 }) > 0 || (e2e_on[si.dbc_msg] or { false })
 				|| (secoc_on[si.dbc_msg] or { false }) {
@@ -1825,6 +1832,16 @@ fn main() {
 				// comm_rx_irq_enable arms the Rx interrupt (called once, after the channel opens).
 				glue << 'fn C.comm_rx_irq_enable()'
 				glue << 'fn C.comm_rx_wait(u32) u32 // block up to N ticks; returns 0 if woken by rx'
+				// Load scratch: the FB thread and the comm thread run on different ThreadX threads,
+				// so the load cell is published/read through VOLATILE C accessors (comm_glue.c) — V
+				// can't emit a volatile global, and a plain one could be cached at -Os so the comm
+				// thread ships a stale CpuLoad. Single-writer/single-reader scalars, so no lock.
+				glue << 'fn C.load_pub(u32, u32, u32, u32, u32)'
+				glue << 'fn C.load_permille() u32'
+				glue << 'fn C.load_100ms() u32'
+				glue << 'fn C.load_1s() u32'
+				glue << 'fn C.load_10s() u32'
+				glue << 'fn C.load_overruns() u32'
 			}
 			glue << ''
 			// TCB as [32]u64 (256 B >= sizeof(TX_THREAD) = 200 B) so it is 8-byte aligned — the
@@ -1840,16 +1857,9 @@ fn main() {
 			if comm_thread_on {
 				glue << '\tg_comm_tcb   [32]u64  // the bus-owning comm thread'
 				glue << '\tg_comm_stack [4096]u8'
-				// Load scratch: the FB thread (single writer) publishes the Loom load here each pass;
-				// the comm thread (single reader) reads it for CpuLoad. Aligned u16/u32 words are
-				// atomic on the M7, and load is slowly-changing telemetry, so no triple-buffer needed.
-				glue << '\tg_load_permille u16'
-				glue << '\tg_load_100ms    u16'
-				glue << '\tg_load_1s       u16'
-				glue << '\tg_load_10s      u16'
-				glue << '\tg_overruns_pub  u32'
+				// (The load cell is the volatile C scratch in comm_glue.c, via load_pub/load_*.)
 				// Rx accounting: the comm thread counts received frames + keeps the last value, so a
-				// host cansend is observable (surfaced in LoadDetail). The rx CONSUMER of the lean cut.
+				// host cansend is observable. The rx CONSUMER of the lean cut (comm-thread-local).
 				glue << '\tg_rx_count u32'
 				glue << '\tg_rx_last  u32'
 			}
@@ -1898,15 +1908,11 @@ fn main() {
 		glue << '\t\t\tsched.mark_overrun()'
 		glue << '\t\t}'
 		if comm_thread_on {
-			// Publish this core's load to the scratch (single writer) for the comm thread's CpuLoad
-			// producer. Single M7 -> core 0 only; the comm thread reads these each telemetry period.
-			glue << '\t\tg_load_permille = u16(sched.load_permille())'
-			if telem_detail_id != 0 {
-				glue << '\t\tg_load_100ms = u16(sched.load_permille_100ms())'
-				glue << '\t\tg_load_1s = u16(sched.load_permille_1s())'
-				glue << '\t\tg_load_10s = u16(sched.load_permille_10s())'
-				glue << '\t\tg_overruns_pub = sched.overruns()'
-			}
+			// Publish this core's load to the volatile scratch (single writer) for the comm thread's
+			// CpuLoad producer. Single M7 -> core 0 only; the comm thread reads it each telemetry
+			// period. load_pub takes all fields (detail ones are 0 if unused — cheap, keeps it one call).
+			glue << '\t\tC.load_pub(u32(sched.load_permille()), u32(sched.load_permille_100ms()),'
+			glue << '\t\t\tu32(sched.load_permille_1s()), u32(sched.load_permille_10s()), sched.overruns())'
 		}
 		if telem_on && telem_iface != '' && !comm_thread_on {
 			glue << '\t\tif t1 - last_telem >= telem_period_us {'
@@ -2006,6 +2012,16 @@ fn main() {
 						'priority >= 2 so the comm owner (priority 1) preempts it to drain rx promptly')
 				}
 				comm_prio := 1
+				// The Rx-ISR board glue (comm_glue.c) enables FDCAN1's FIFO0 interrupt + NVIC line
+				// specifically. A telemetry/rx bus that opens FDCAN2/3 (index 1/2) would drain only on
+				// the 10-tick timeout (no ISR wake -> FIFO loss under bursts). The per-instance IRQ glue
+				// is target work (see docs/architecture.md "Interrupts and the generic <-> target
+				// boundary") — until then the lean cut owns FDCAN1 only.
+				if tx_bus_idx != '0' {
+					panic('loom2v: [target] kind="threadx" comm thread: the Rx-ISR glue serves FDCAN1 ' +
+						'(bus index 0) only, but bus "${telem_bus}" opens index ${tx_bus_idx}; use a ' +
+						'can0/index-0 bus, or add per-instance IRQ glue (phase 6b-2b)')
+				}
 				// One rx branch per DBC MESSAGE (id), not per signal — several signals can share a
 				// message, and the lean cut counts received frames, so a frame must increment once.
 				mut rx_sigs := []SigInfo{}
@@ -2063,7 +2079,7 @@ fn main() {
 					glue << '\t\tif t1 - last_telem >= telem_period_us && ch.tx_ready() {'
 					glue << '\t\t\tlast_telem = t1'
 					glue << '\t\t\tmut load := [8]u16{}'
-					glue << '\t\t\tload[0] = g_load_permille'
+					glue << '\t\t\tload[0] = u16(C.load_permille())'
 					glue << '\t\t\tframe := telem.encode_cpuload(load, 1)'
 					glue << '\t\t\tmut f := can.Frame{'
 					glue << '\t\t\t\tid:  u32(0x${telem_id.hex()})'
@@ -2074,8 +2090,9 @@ fn main() {
 					glue << '\t\t\t}'
 					glue << '\t\t\tch.send(f)'
 					if telem_detail_id != 0 {
-						glue << '\t\t\tdetail := telem.encode_loaddetail(g_load_100ms, g_load_1s, g_load_10s, g_overruns_pub - last_overruns)'
-						glue << '\t\t\tlast_overruns = g_overruns_pub'
+						glue << '\t\t\tovr := C.load_overruns()'
+						glue << '\t\t\tdetail := telem.encode_loaddetail(u16(C.load_100ms()), u16(C.load_1s()), u16(C.load_10s()), ovr - last_overruns)'
+						glue << '\t\t\tlast_overruns = ovr'
 						glue << '\t\t\tmut d := can.Frame{'
 						glue << '\t\t\t\tid:  u32(0x${telem_detail_id.hex()})'
 						glue << '\t\t\t\tlen: 8'
@@ -2748,6 +2765,18 @@ fn dbc_id_of(db candb.Database, key string) ?int {
 	for m in db.messages {
 		if snake(m.name) == key {
 			return int(m.id)
+		}
+	}
+	return none
+}
+
+// dbc_ext_of returns whether the message whose snake-name is `key` is an extended (29-bit)
+// frame. candb strips the EFF marker into Message.ext and leaves a stripped id, so an
+// extended frame can have id <= 0x7FF — callers must test this flag, not just the id.
+fn dbc_ext_of(db candb.Database, key string) ?bool {
+	for m in db.messages {
+		if snake(m.name) == key {
+			return m.ext
 		}
 	}
 	return none
