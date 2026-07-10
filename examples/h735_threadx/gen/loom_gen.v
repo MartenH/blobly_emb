@@ -48,6 +48,12 @@ fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u3
 fn C.trace_snapshot(voidptr, u32) u32
 fn C.comm_rx_irq_enable()
 fn C.comm_rx_wait(u32) u32 // block up to N ticks; returns 0 if woken by rx
+fn C.load_pub(u32, u32, u32, u32, u32)
+fn C.load_permille() u32
+fn C.load_100ms() u32
+fn C.load_1s() u32
+fn C.load_10s() u32
+fn C.load_overruns() u32
 
 __global (
 	g_app_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
@@ -55,11 +61,6 @@ __global (
 	g_app_trace [64][8]u8 // scratch snapshot of the trace ring (owner streams it)
 	g_comm_tcb   [32]u64  // the bus-owning comm thread
 	g_comm_stack [4096]u8
-	g_load_permille u16
-	g_load_100ms    u16
-	g_load_1s       u16
-	g_load_10s      u16
-	g_overruns_pub  u32
 	g_rx_count u32
 	g_rx_last  u32
 )
@@ -79,11 +80,8 @@ pub fn run() {
 		if t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun
 			sched.mark_overrun()
 		}
-		g_load_permille = u16(sched.load_permille())
-		g_load_100ms = u16(sched.load_permille_100ms())
-		g_load_1s = u16(sched.load_permille_1s())
-		g_load_10s = u16(sched.load_permille_10s())
-		g_overruns_pub = sched.overruns()
+		C.load_pub(u32(sched.load_permille()), u32(sched.load_permille_100ms()),
+			u32(sched.load_permille_1s()), u32(sched.load_permille_10s()), sched.overruns())
 		C._tx_thread_sleep(u32(1))
 	}
 }
@@ -120,7 +118,7 @@ fn comm_thread_entry(input u32) {
 		if t1 - last_telem >= telem_period_us && ch.tx_ready() {
 			last_telem = t1
 			mut load := [8]u16{}
-			load[0] = g_load_permille
+			load[0] = u16(C.load_permille())
 			frame := telem.encode_cpuload(load, 1)
 			mut f := can.Frame{
 				id:  u32(0x7e0)
@@ -130,8 +128,9 @@ fn comm_thread_entry(input u32) {
 				f.data[i] = frame[i]
 			}
 			ch.send(f)
-			detail := telem.encode_loaddetail(g_load_100ms, g_load_1s, g_load_10s, g_overruns_pub - last_overruns)
-			last_overruns = g_overruns_pub
+			ovr := C.load_overruns()
+			detail := telem.encode_loaddetail(u16(C.load_100ms()), u16(C.load_1s()), u16(C.load_10s()), ovr - last_overruns)
+			last_overruns = ovr
 			mut d := can.Frame{
 				id:  u32(0x7e1)
 				len: 8
