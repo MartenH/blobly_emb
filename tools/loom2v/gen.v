@@ -514,8 +514,13 @@ fn build_model(doc toml.Doc, dbc string) Model {
 // in phase by phase as the producer redesign lands; each returns the emit fragment for one injection
 // point, or an empty slice when that producer contributes nothing there.
 interface Producer {
-	// partition_loop_body returns the lines injected into a partition's per-iteration loop body
-	// (after dispatch + load accounting). part_key is 'p:<partition>' or 'b:<bus>' (a bridge).
+	// The partition superloop is one skeleton; each producer injects at four points, keyed by
+	// 'p:<partition>' (or 'b:<bus>' for a bridge). preamble runs once before the loop; loop_top and
+	// loop_body run each iteration (top = before dispatch, body = after); dispatch OVERRIDES the
+	// default plain dispatch when non-empty (only one producer may — the profiling one).
+	partition_preamble(part_key string) []string
+	partition_loop_top(part_key string) []string
+	partition_dispatch(part_key string) []string
 	partition_loop_body(part_key string) []string
 }
 
@@ -526,6 +531,18 @@ struct TelemProducer {
 	slot map[string]int
 }
 
+fn (t TelemProducer) partition_preamble(_ string) []string {
+	return []string{}
+}
+
+fn (t TelemProducer) partition_loop_top(_ string) []string {
+	return []string{}
+}
+
+fn (t TelemProducer) partition_dispatch(_ string) []string {
+	return []string{}
+}
+
 fn (t TelemProducer) partition_loop_body(part_key string) []string {
 	if t.on && part_key in t.slot {
 		return ['\t\tosal.scratch_set(${t.slot[part_key]}, u64(sched.load_permille()))']
@@ -533,9 +550,79 @@ fn (t TelemProducer) partition_loop_body(part_key string) []string {
 	return []string{}
 }
 
-// TraceProducer captures the execution timeline. Its partition injections are a preamble (install
-// the capture ctx) and a loop-TOP command poll, not the loop body — so this hook is empty for it.
-struct TraceProducer {}
+// TraceProducer captures the execution timeline. On the multi-core path it OWNS the traced partition
+// runner's trace parts: it installs the per-core capture ctx (preamble), applies the owner's routed
+// commands from its scratch cell (loop_top, single-writer), and swaps plain dispatch for profiled
+// dispatch (dispatch). It holds the trace scratch layout so no shared emitter carries trace_cmd_base.
+struct TraceProducer {
+	multicore    bool
+	cmd_base     int
+	trig_base    int
+	core_of      map[string]int
+	fb_id_base   map[string]int
+	thread_id_of map[string]int
+}
+
+fn (t TraceProducer) part_core(part_key string) int {
+	return t.core_of[part_key#[2..]] or { 0 }
+}
+
+fn (t TraceProducer) partition_preamble(part_key string) []string {
+	if !t.multicore {
+		return []string{}
+	}
+	part := part_key#[2..]
+	pcore := t.core_of[part] or { 0 }
+	return [
+		'\tmut cap := TraceCapture{',
+		'\t\tbuf:       unsafe { &trace.TraceBuffer(arg) }',
+		'\t\tstart:     osal.now_us()',
+		'\t\tid_base:   ${t.fb_id_base[part] or { 0 }}',
+		'\t\tthread_id: ${t.thread_id_of[part] or { 0 }}',
+		'\t\ttrig_slot: ${t.trig_base + pcore}',
+		'\t}',
+		'\tsched.set_trace_hook(trace_capture, &cap)',
+		'\tmut last_cmd := osal.scratch_get(${t.cmd_base + pcore})',
+	]
+}
+
+fn (t TraceProducer) partition_loop_top(part_key string) []string {
+	if !t.multicore {
+		return []string{}
+	}
+	pcore := t.part_core(part_key)
+	return [
+		'\t\tcmdv := osal.scratch_get(${t.cmd_base + pcore})',
+		'\t\tif cmdv != last_cmd {',
+		'\t\t\tlast_cmd = cmdv',
+		'\t\t\top := u8(cmdv & 0xff)',
+		'\t\t\tif op == trace.op_arm || op == trace.op_start || op == trace.op_reset {',
+		'\t\t\t\tcap.buf.start()',
+		'\t\t\t\tcap.start = osal.now_us()',
+		'\t\t\t\tcap.base = 0',
+		'\t\t\t\tcap.busy_end = 0',
+		'\t\t\t} else if op == trace.op_stop {',
+		'\t\t\t\tcap.buf.stop()',
+		'\t\t\t} else if op == 0xf1 { // freeze: the owner fanned out another core\'s overrun',
+		'\t\t\t\tcap.buf.trigger()',
+		'\t\t\t}',
+		'\t\t}',
+	]
+}
+
+fn (t TraceProducer) partition_dispatch(_ string) []string {
+	if !t.multicore {
+		return []string{}
+	}
+	return [
+		'\t\tt0 := osal.now_us()',
+		'\t\tbefore := cap.fb_count',
+		'\t\tsched.run_profiled(osal.now_us)',
+		'\t\tif cap.fb_count != before {',
+		'\t\t\ttrace_thread_span(mut cap, t0, osal.now_us())',
+		'\t\t}',
+	]
+}
 
 fn (t TraceProducer) partition_loop_body(_ string) []string {
 	return []string{}
@@ -2232,7 +2319,7 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 // sched.every() lines the run() emitters reuse). Returns (ports, glue, all_regs); reads the Model,
 // with the derived scratch/id layout (telem_slot, ioc_idx, trace bases, fb_id_base, thread_id_of)
 // and the trace-mode flags from main's emit-time state.
-fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_cmd_base int, trace_trig_base int, trace_inline bool, trace_multicore bool, fb_id_base map[string]int, thread_id_of map[string]int) ([]string, []string, map[string][]string) {
+fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_inline bool) ([]string, []string, map[string][]string) {
 	sig_of := m.sig_of.clone()
 	sig_names := m.sig_names
 	by_part := m.part.by_part.clone()
@@ -2329,10 +2416,12 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_cm
 		}
 		all_regs[part] = regs.clone()
 
-		// Host: one spawned superloop per partition, paced by osal.sleep_us. Target
-		// mode emits a single inline superloop in run() instead; inline-trace mode folds
-		// the (single) partition into the trace run(ch) below (see both).
-		if !target_on && !trace_inline && !trace_multicore {
+		// One spawned superloop per partition (host mode + the multi-core traced path). Target mode
+		// emits a single inline superloop in run() instead; inline-trace folds the (single) partition
+		// into run(ch). The skeleton is one shape; producers inject preamble / loop-top / dispatch /
+		// loop-body (trace: capture ctx + command poll + profiled dispatch; telem: the load publish),
+		// so this emitter names no capability.
+		if !target_on && !trace_inline {
 			glue << ''
 			glue << 'pub fn partition_${part}(core int, arg voidptr) {'
 			glue << '\tosal.pin_to_core(${core_of[part] or { 0 }})'
@@ -2341,67 +2430,28 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_cm
 			for r in regs {
 				glue << r
 			}
-			glue << '\tfor {'
-			glue << '\t\tloom_t0 := osal.now_us()'
-			glue << '\t\tsched.run(loom_t0)'
-			glue << '\t\tloom_t1 := osal.now_us()'
-			glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
 			for p in producers {
-				glue << p.partition_loop_body('p:${part}')
+				glue << p.partition_preamble('p:${part}')
 			}
-			glue << '\t\tosal.sleep_us(1000)'
-			glue << '\t}'
-			glue << '}'
-		} else if trace_multicore {
-			// Traced partition (P3a): profiled dispatch into this core's ring (passed as `arg` by
-			// run()). run_profiled fires trace_capture per handler and accounts load internally;
-			// the load is published to scratch for CpuLoad (partition_telem reads it).
-			pcore := core_of[part] or { 0 }
-			glue << ''
-			glue << 'pub fn partition_${part}(core int, arg voidptr) {'
-			glue << '\tosal.pin_to_core(${pcore})'
-			glue << '\tmut st := Partition_${part}_state{}'
-			glue << '\tmut sched := loom.Scheduler{}'
-			for r in regs {
-				glue << r
-			}
-			glue << '\tmut cap := TraceCapture{'
-			glue << '\t\tbuf:       unsafe { &trace.TraceBuffer(arg) }'
-			glue << '\t\tstart:     osal.now_us()'
-			glue << '\t\tid_base:   ${fb_id_base[part] or { 0 }}'
-			glue << '\t\tthread_id: ${thread_id_of[part] or { 0 }}'
-			glue << '\t\ttrig_slot: ${trace_trig_base + pcore}'
-			glue << '\t}'
-			glue << '\tsched.set_trace_hook(trace_capture, &cap)'
-			glue << '\tmut last_cmd := osal.scratch_get(${trace_cmd_base + pcore})'
 			glue << '\tfor {'
-			// Apply any command the owner routed to THIS core (arm/stop/reset/freeze). Only this
-			// partition ever mutates its own ring (single-writer isolation — the owner just posts
-			// commands + reads). Checked BEFORE dispatch so a freeze lands before the next handler
-			// is recorded (F668); arm reseats this core's own origin (F5) only when targeted (F1244).
-			glue << '\t\tcmdv := osal.scratch_get(${trace_cmd_base + pcore})'
-			glue << '\t\tif cmdv != last_cmd {'
-			glue << '\t\t\tlast_cmd = cmdv'
-			glue << '\t\t\top := u8(cmdv & 0xff)'
-			glue << '\t\t\tif op == trace.op_arm || op == trace.op_start || op == trace.op_reset {'
-			glue << '\t\t\t\tcap.buf.start()'
-			glue << '\t\t\t\tcap.start = osal.now_us()'
-			glue << '\t\t\t\tcap.base = 0'
-			glue << '\t\t\t\tcap.busy_end = 0'
-			glue << '\t\t\t} else if op == trace.op_stop {'
-			glue << '\t\t\t\tcap.buf.stop()'
-			glue << '\t\t\t} else if op == 0xf1 { // freeze: the owner fanned out another core\'s overrun'
-			glue << '\t\t\t\tcap.buf.trigger()'
-			glue << '\t\t\t}'
-			glue << '\t\t}'
-			// Bracket the dispatch: run_profiled fires trace_capture (fb records) for each due
-			// handler; if any ran, emit the THREAD span + idle gap for this iteration.
-			glue << '\t\tt0 := osal.now_us()'
-			glue << '\t\tbefore := cap.fb_count'
-			glue << '\t\tsched.run_profiled(osal.now_us)'
-			glue << '\t\tif cap.fb_count != before {'
-			glue << '\t\t\ttrace_thread_span(mut cap, t0, osal.now_us())'
-			glue << '\t\t}'
+			for p in producers {
+				glue << p.partition_loop_top('p:${part}')
+			}
+			mut disp := [
+				'\t\tloom_t0 := osal.now_us()',
+				'\t\tsched.run(loom_t0)',
+				'\t\tloom_t1 := osal.now_us()',
+				'\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load',
+			]
+			for p in producers {
+				d := p.partition_dispatch('p:${part}')
+				if d.len > 0 {
+					disp = d.clone()
+				}
+			}
+			for l in disp {
+				glue << l
+			}
 			for p in producers {
 				glue << p.partition_loop_body('p:${part}')
 			}
@@ -3156,9 +3206,16 @@ fn main() {
 	producers := [Producer(TelemProducer{
 		on:   telem_on
 		slot: telem_slot.clone()
-	}), Producer(TraceProducer{})]
+	}), Producer(TraceProducer{
+		multicore:    trace_multicore
+		cmd_base:     trace_cmd_base
+		trig_base:    trace_trig_base
+		core_of:      core_of.clone()
+		fb_id_base:   fb_id_base.clone()
+		thread_id_of: thread_id_of.clone()
+	})]
 
-	fb_ports, fb_glue, all_regs := emit_handlers(m, producers, ioc_idx, trace_cmd_base, trace_trig_base, trace_inline, trace_multicore, fb_id_base, thread_id_of)
+	fb_ports, fb_glue, all_regs := emit_handlers(m, producers, ioc_idx, trace_inline)
 	ports << fb_ports
 	glue << fb_glue
 
