@@ -194,6 +194,42 @@ fn emit_signals(sig_of map[string]SigInfo, sig_names []string, ecu string) []str
 	return signals
 }
 
+// PartMap is the partition/thread/fb topology (the model). An fb maps to a globally-unique
+// THREAD; its partition is derived from that thread, so by_part groups fbs by derived partition.
+struct PartMap {
+mut:
+	core_of     map[string]int         // partition -> core
+	threads_of  map[string][]string    // partition -> its thread names, declaration order
+	thread_part map[string]string      // thread -> partition
+	thread_prio map[string]int         // thread -> [[partition.thread]].priority (default 10)
+	by_part     map[string][]toml.Any  // partition -> its fb config objects
+	fb_thread   map[string]string      // fb -> its thread
+}
+
+fn parse_partitions(doc toml.Doc) PartMap {
+	mut p := PartMap{}
+	for pt in ecumodel.toml_arr(doc, 'partition') {
+		m := pt.as_map()
+		pname := (m['name'] or { toml.Any('') }).string()
+		p.core_of[pname] = int((m['core'] or { toml.Any(0) }).int())
+		for t in (m['thread'] or { toml.Any([]toml.Any{}) }).array() {
+			tm := t.as_map()
+			tname := (tm['name'] or { toml.Any('') }).string()
+			p.thread_part[tname] = pname
+			p.threads_of[pname] << tname
+			p.thread_prio[tname] = int((tm['priority'] or { toml.Any(10) }).int())
+		}
+	}
+	for c in ecumodel.toml_arr(doc, 'fb') {
+		cm := c.as_map()
+		fbname := (cm['name'] or { toml.Any('') }).string()
+		thr := (cm['thread'] or { toml.Any('') }).string()
+		p.by_part[p.thread_part[thr]] << c
+		p.fb_thread[fbname] = thr
+	}
+	return p
+}
+
 fn parse_frames(doc toml.Doc) FrameCfg {
 	mut f := FrameCfg{}
 	for fr in ecumodel.toml_arr(doc, 'frame') {
@@ -491,33 +527,13 @@ fn main() {
 	}
 
 	// Build the partition/thread maps (already validated up front, right after parse).
-	mut core_of := map[string]int{}
-	mut threads_of := map[string][]string{} // partition -> its thread names, declaration order
-	mut thread_part := map[string]string{} // thread -> partition (thread names are GLOBALLY unique)
-	mut thread_prio := map[string]int{} // thread -> [[partition.thread]].priority (default 10)
-	for p in ecumodel.toml_arr(doc, 'partition') {
-		m := p.as_map()
-		pname := (m['name'] or { toml.Any('') }).string()
-		core_of[pname] = int((m['core'] or { toml.Any(0) }).int())
-		for t in (m['thread'] or { toml.Any([]toml.Any{}) }).array() {
-			tm := t.as_map()
-			tname := (tm['name'] or { toml.Any('') }).string()
-			thread_part[tname] = pname
-			threads_of[pname] << tname
-			thread_prio[tname] = int((tm['priority'] or { toml.Any(10) }).int())
-		}
-	}
-	// An fb maps to a THREAD (globally unique); its partition is DERIVED from that thread, so
-	// by_part groups fbs by that derived partition. fb_thread records each fb's thread.
-	mut by_part := map[string][]toml.Any{}
-	mut fb_thread := map[string]string{}
-	for c in ecumodel.toml_arr(doc, 'fb') {
-		cm := c.as_map()
-		fbname := (cm['name'] or { toml.Any('') }).string()
-		thr := (cm['thread'] or { toml.Any('') }).string()
-		by_part[thread_part[thr]] << c
-		fb_thread[fbname] = thr
-	}
+	// partition/thread/fb topology -> the model (parse_partitions), rebound to the existing locals.
+	pmap := parse_partitions(doc)
+	core_of := pmap.core_of.clone()
+	threads_of := pmap.threads_of.clone()
+	thread_prio := pmap.thread_prio.clone()
+	by_part := pmap.by_part.clone()
+	fb_thread := pmap.fb_thread.clone()
 
 	// --- telemetry: give every app partition + every bus(bridge) a scratch slot,
 	//     remembering its core, so a generated tx can sum processor load by core
