@@ -896,40 +896,18 @@ fn emit_partition_trace(m Model, trace_core int, trace_cmd_base int, trace_trig_
 // glue lines plus the bus_names / bus_dests the run() emitters need; reads the Model, with the
 // derived scratch/thread layout (telem_slot, comm_tid, trace bases) from main's emit-time state.
 fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []Producer, comm_tid map[string]int, trace_cmd_base int, trace_trig_base int) ([]string, []string, map[string][]string) {
-	buses := m.buses.clone()
-	bus_core := m.bus_core.clone()
-	sig_names := m.sig_names
-	sig_of := m.sig_of.clone()
-	isotp_conns := m.isotp_conns
-	routes := m.routes
-	dids := m.dids
-	trace_budget_us := m.trace.budget_us
-	tx_mode := m.frames.tx_mode.clone()
-	tx_cycle_us := m.frames.tx_cycle_us.clone()
-	tx_min_us := m.frames.tx_min_us.clone()
-	rx_timeout_us := m.frames.rx_timeout_us.clone()
-	e2e_on := m.frames.e2e_on.clone()
-	e2e_id := m.frames.e2e_id.clone()
-	e2e_crc := m.frames.e2e_crc.clone()
-	e2e_ctr := m.frames.e2e_ctr.clone()
-	secoc_on := m.frames.secoc_on.clone()
-	secoc_id := m.frames.secoc_id.clone()
-	secoc_fresh := m.frames.secoc_fresh.clone()
-	secoc_mac := m.frames.secoc_mac.clone()
-	secoc_maclen := m.frames.secoc_maclen.clone()
-	secoc_key := m.frames.secoc_key.clone()
 	mut glue := []string{}
 	mut bus_names := []string{}
 	mut bus_dests := map[string][]string{}
-	for bname, _ in buses {
+	for bname, _ in m.buses {
 		if comm_thread_on {
 			continue
 		}
 		bb := snake(bname)
 		mut rx_by_msg := map[string][]string{}
 		mut tx_by_msg := map[string][]string{}
-		for sname in sig_names {
-			si := sig_of[sname] or { continue }
+		for sname in m.sig_names {
+			si := m.sig_of[sname] or { continue }
 			if !si.external || si.bus != bname {
 				continue
 			}
@@ -940,15 +918,15 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 			}
 		}
 		mut conns := []IsotpConn{}
-		for c in isotp_conns {
+		for c in m.isotp_conns {
 			if c.bus == bname {
 				conns << c
 			}
 		}
-		// routes that ORIGINATE on this bus, and the distinct destination buses
+		// m.routes that ORIGINATE on this bus, and the distinct destination m.buses
 		mut my_routes := []Route{}
 		mut dests := []string{}
-		for r in routes {
+		for r in m.routes {
 			if r.from_bus == bname {
 				my_routes << r
 				if r.to_bus !in dests {
@@ -966,7 +944,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 		// io fn needs a timestamp to gate tx, monitor rx deadlines, or pace ISO-TP
 		mut uses_now := tx_by_msg.len > 0 || conns.len > 0
 		for msg, _ in rx_by_msg {
-			if (rx_timeout_us[msg] or { 0 }) > 0 {
+			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 				uses_now = true
 			}
 		}
@@ -977,22 +955,22 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 		glue << '\tchan can.Channel'
 		for msg, _ in tx_by_msg {
 			glue << '\ttx_${msg}_st com.TxState'
-			if e2e_on[msg] or { false } {
+			if m.frames.e2e_on[msg] or { false } {
 				glue << '\te2e_tx_${msg} e2e.TxState'
 			}
-			if secoc_on[msg] or { false } {
+			if m.frames.secoc_on[msg] or { false } {
 				glue << '\tsecoc_key_${msg} secoc.Key'
 				glue << '\tsecoc_tx_${msg} secoc.TxState'
 			}
 		}
 		for msg, _ in rx_by_msg {
-			if (rx_timeout_us[msg] or { 0 }) > 0 {
+			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 				glue << '\trx_${msg}_st com.RxState'
 			}
-			if e2e_on[msg] or { false } {
+			if m.frames.e2e_on[msg] or { false } {
 				glue << '\te2e_rx_${msg} e2e.RxState'
 			}
-			if secoc_on[msg] or { false } {
+			if m.frames.secoc_on[msg] or { false } {
 				glue << '\tsecoc_key_${msg} secoc.Key'
 				glue << '\tsecoc_rx_${msg} secoc.RxState'
 			}
@@ -1033,26 +1011,26 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 				// the actual bytes into the reused frame, so a short same-id frame
 				// would otherwise be decoded over stale trailing bytes.
 				glue << '\t\tif rx.id == ${msg}_id && rx.len == ${msg}_dlc {'
-				e2e := e2e_on[msg] or { false }
-				secoc := secoc_on[msg] or { false }
+				e2e := m.frames.e2e_on[msg] or { false }
+				secoc := m.frames.secoc_on[msg] or { false }
 				// protected frames are decoded only if the check passes; a bad frame
 				// is ignored (the rx deadline then invalidates).
 				mut ind := '\t\t\t'
 				if secoc {
-					glue << '\t\t\tif st.secoc_rx_${msg}.verify(&st.secoc_key_${msg}, &rx.data[0], int(${msg}_dlc), u16(0x${(secoc_id[msg] or {
+					glue << '\t\t\tif st.secoc_rx_${msg}.verify(&st.secoc_key_${msg}, &rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.secoc_id[msg] or {
 						0
-					}).hex()}), ${secoc_fresh[msg] or { 0 }}, ${secoc_mac[msg] or { 0 }}, ${secoc_maclen[msg] or {
+					}).hex()}), ${m.frames.secoc_fresh[msg] or { 0 }}, ${m.frames.secoc_mac[msg] or { 0 }}, ${m.frames.secoc_maclen[msg] or {
 						0
 					}}).usable() {'
 					ind = '\t\t\t\t'
 				} else if e2e {
-					glue << '\t\t\tif st.e2e_rx_${msg}.check(&rx.data[0], int(${msg}_dlc), u16(0x${(e2e_id[msg] or {
+					glue << '\t\t\tif st.e2e_rx_${msg}.check(&rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or {
 						0
-					}).hex()}), ${e2e_crc[msg] or { 0 }}, ${e2e_ctr[msg] or { 0 }}).usable() {'
+					}).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }}).usable() {'
 					ind = '\t\t\t\t'
 				}
 				for sname in list {
-					si := sig_of[sname] or { continue }
+					si := m.sig_of[sname] or { continue }
 					fld := snake(sname)
 					dec := '${si.dbc_msg}_${snake(sname)}_phys(rx.data)'
 					valassign := if si.val_type == 'bool' {
@@ -1064,7 +1042,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 					glue << '${ind}mut ${fld} := sig.${sname}{ ${valassign}${validassign} }'
 					glue << '${ind}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
 				}
-				if (rx_timeout_us[msg] or { 0 }) > 0 {
+				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 					glue << '${ind}st.rx_${msg}_st.on_receive(now)'
 				}
 				if secoc || e2e {
@@ -1085,10 +1063,10 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 			glue << '\t}'
 			// rx deadline crossed -> publish invalid (valid=false) signals, once
 			for msg, list in rx_by_msg {
-				if (rx_timeout_us[msg] or { 0 }) > 0 {
+				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 					glue << '\tif st.rx_${msg}_st.expired(now) {'
 					for sname in list {
-						si := sig_of[sname] or { continue }
+						si := m.sig_of[sname] or { continue }
 						fld := snake(sname)
 						glue << '\t\tmut ${fld} := sig.${sname}{}'
 						glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
@@ -1100,11 +1078,11 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 			// request, drain the segmented response.
 			for c in conns {
 				tp := snake(c.name)
-				for idx, did in dids {
+				for idx, did in m.dids {
 					if did.signal == '' {
 						continue
 					}
-					si := sig_of[did.signal] or { continue }
+					si := m.sig_of[did.signal] or { continue }
 					f := snake(did.signal)
 					glue << '\tmut ${f}_did := sig.${did.signal}{}'
 					glue << '\tif osal.${acquire_fn(si.transport)}(${f}_ch, &${f}_did, u8(sizeof(${f}_did))) {'
@@ -1141,7 +1119,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 			glue << '\t}'
 			glue << '\tmut tx_${msg}_any := false'
 			for sname in list {
-				si := sig_of[sname] or { continue }
+				si := m.sig_of[sname] or { continue }
 				fld := snake(sname)
 				phys := if si.val_type == 'bool' {
 					'if ${fld}.${si.val_field} { f64(1) } else { f64(0) }'
@@ -1158,8 +1136,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 			// advances the E2E/SecOC counter nor consumes the change/trigger — the PDU
 			// just retries next tick (REQ-COM-006). mark_sent() commits the send only
 			// once the channel accepts the frame.
-			e2e_here := e2e_on[msg] or { false }
-			secoc_here := secoc_on[msg] or { false }
+			e2e_here := m.frames.e2e_on[msg] or { false }
+			secoc_here := m.frames.secoc_on[msg] or { false }
 			needs_pre := e2e_here || secoc_here
 			glue << '\tif tx_${msg}_any && st.chan.tx_ready() && st.tx_${msg}_st.should_send(now, tx_${msg}.data, ${msg}_dlc) {'
 			if needs_pre {
@@ -1170,17 +1148,17 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 				// advances the counter as a side effect); then stamp CRC + counter after the
 				// change decision (so the counter doesn't make every frame look "changed").
 				glue << '\t\te2e_save_${msg} := st.e2e_tx_${msg}'
-				glue << '\t\tst.e2e_tx_${msg}.protect(&tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(e2e_id[msg] or {
+				glue << '\t\tst.e2e_tx_${msg}.protect(&tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or {
 					0
-				}).hex()}), ${e2e_crc[msg] or { 0 }}, ${e2e_ctr[msg] or { 0 }})'
+				}).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }})'
 			}
 			if secoc_here {
 				// snapshot freshness for the same rewind; then authenticate (stamp freshness
 				// + truncated AES-CMAC) after the change decision.
 				glue << '\t\tsecoc_save_${msg} := st.secoc_tx_${msg}'
-				glue << '\t\tst.secoc_tx_${msg}.protect(&st.secoc_key_${msg}, &tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(secoc_id[msg] or {
+				glue << '\t\tst.secoc_tx_${msg}.protect(&st.secoc_key_${msg}, &tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(m.frames.secoc_id[msg] or {
 					0
-				}).hex()}), ${secoc_fresh[msg] or { 0 }}, ${secoc_mac[msg] or { 0 }}, ${secoc_maclen[msg] or {
+				}).hex()}), ${m.frames.secoc_fresh[msg] or { 0 }}, ${m.frames.secoc_mac[msg] or { 0 }}, ${m.frames.secoc_maclen[msg] or {
 					0
 				}})'
 			}
@@ -1217,7 +1195,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 			psig += ', commring voidptr'
 		}
 		glue << 'pub fn partition_${bb}(${psig}) {'
-		glue << '\tosal.pin_to_core(${bus_core[bname] or { 0 }})'
+		glue << '\tosal.pin_to_core(${m.bus_core[bname] or { 0 }})'
 		glue << '\tmut st := Bridge_${bb}_state{'
 		glue << '\t\tchan: ch'
 		glue << '\t}'
@@ -1225,30 +1203,30 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 			glue << '\tst.route_${snake(d)} = route_${snake(d)}'
 		}
 		for msg, _ in tx_by_msg {
-			mode := tx_mode[msg] or { 'cyclic' }
-			mut cyc := tx_cycle_us[msg] or { 0 }
+			mode := m.frames.tx_mode[msg] or { 'cyclic' }
+			mut cyc := m.frames.tx_cycle_us[msg] or { 0 }
 			if cyc == 0 {
 				cyc = 100000 // default cyclic period when unspecified
 			}
 			glue << '\tst.tx_${msg}_st = com.TxState{'
 			glue << '\t\tmode: com.TxMode.${mode}'
 			glue << '\t\tcycle_us: ${cyc}'
-			glue << '\t\tmin_delay_us: ${tx_min_us[msg] or { 0 }}'
+			glue << '\t\tmin_delay_us: ${m.frames.tx_min_us[msg] or { 0 }}'
 			glue << '\t}'
-			if secoc_on[msg] or { false } {
-				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(secoc_key[msg] or {
+			if m.frames.secoc_on[msg] or { false } {
+				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(m.frames.secoc_key[msg] or {
 					[]u8{}
 				})})'
 			}
 		}
 		for msg, _ in rx_by_msg {
-			if (rx_timeout_us[msg] or { 0 }) > 0 {
+			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 				glue << '\tst.rx_${msg}_st = com.RxState{'
-				glue << '\t\ttimeout_us: ${rx_timeout_us[msg]}'
+				glue << '\t\ttimeout_us: ${m.frames.rx_timeout_us[msg]}'
 				glue << '\t}'
 			}
-			if secoc_on[msg] or { false } {
-				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(secoc_key[msg] or {
+			if m.frames.secoc_on[msg] or { false } {
+				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(m.frames.secoc_key[msg] or {
 					[]u8{}
 				})})'
 			}
@@ -1260,7 +1238,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 			glue << '\t\tstmin: ${c.stmin}'
 			glue << '\t}'
 			glue << '\tst.uds_${tp} = uds.Server{}'
-			for idx, did in dids {
+			for idx, did in m.dids {
 				glue << '\tst.uds_${tp}.dids[${idx}] = uds.Did{'
 				glue << '\t\tid: u16(0x${did.id.hex()})'
 				if did.writable {
@@ -1274,11 +1252,11 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 					glue << '\tst.uds_${tp}.dids[${idx}].len = ${did.bytes.len}'
 				}
 			}
-			glue << '\tst.uds_${tp}.ndid = ${dids.len}'
+			glue << '\tst.uds_${tp}.ndid = ${m.dids.len}'
 		}
 		glue << '\tmut sched := loom.Scheduler{}'
 		glue << '\tsched.every(10_000, io_${bb}_10ms, &st)'
-		bc := bus_core[bname] or { 0 }
+		bc := m.bus_core[bname] or { 0 }
 		if trace_multicore {
 			// P3b: the bridge is a traced comm thread. Emit a THREAD span for each drain cycle that
 			// actually ran the COM handler (no FBs, so no fb records), apply routed arm/stop/freeze
@@ -1313,10 +1291,10 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 			glue << '\t\tloom_t1 := osal.now_us()'
 			glue << '\t\tif sched.handler_stat(0).count != before { // the COM drain ran -> a comm busy span'
 			glue << '\t\t\ttrace_thread_span(mut cap, loom_t0, loom_t1)'
-			if trace_budget_us > 0 {
+			if m.trace.budget_us > 0 {
 				// A COM drain that overran the budget is a freeze culprit too — mirror the app hook:
 				// freeze this comm ring and raise its request so the owner fans a coherent freeze out.
-				glue << '\t\t\tif loom_t1 - loom_t0 > ${trace_budget_us} && cap.buf.state() == .capturing {'
+				glue << '\t\t\tif loom_t1 - loom_t0 > ${m.trace.budget_us} && cap.buf.state() == .capturing {'
 				glue << '\t\t\t\tcap.buf.trigger()'
 				glue << '\t\t\t\tosal.scratch_set(cap.trig_slot, osal.scratch_get(cap.trig_slot) + 1)'
 				glue << '\t\t\t}'
