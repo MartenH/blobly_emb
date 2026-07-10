@@ -423,6 +423,7 @@ struct Model {
 	part         PartMap
 	telem        TelemetryCfg
 	target       TargetCfg
+	trace        TraceCfg
 }
 
 fn build_model(doc toml.Doc, dbc string) Model {
@@ -441,6 +442,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		part:         parse_partitions(doc)
 		telem:        parse_telemetry(doc)
 		target:       parse_target(doc)
+		trace:        parse_trace(doc, dbc)
 	}
 }
 
@@ -596,12 +598,16 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 			tid++
 		}
 	}
+	timer_rows := trace_manifest_timer_row(m, tid)
+	man << timer_rows
+	tid += timer_rows.len
 	// Comm threads (P3b): one per bridge bus, AFTER the app threads (matches the gate's comm_tid
 	// numbering).
 	for bb in bridge_bus_list {
 		man << 'thread,${tid},comm_${bb},${m.bus_core[bb] or { 0 }}'
 		tid++
 	}
+	man << trace_manifest_frames(m)
 	return man
 }
 
@@ -1115,6 +1121,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << 'fn C._tx_thread_sleep(u32) u32'
 			glue << 'fn C._tx_initialize_kernel_enter()'
 			glue << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
+			glue << trace_c_decls(m)
 			if comm_thread_on {
 				// Board glue (examples/<x>/comm_glue.c): the FDCAN Rx-FIFO0 ISR posts a semaphore
 				// that comm_rx_wait blocks on, so the comm thread wakes on rx instead of polling.
@@ -1148,6 +1155,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '__global ('
 			glue << '\tg_${part}_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned'
 			glue << '\tg_${part}_stack [4096]u8'
+			glue << trace_scratch_fields(m, part)
 			if comm_thread_on {
 				glue << '\tg_comm_tcb   [32]u64  // the bus-owning comm thread'
 				glue << '\tg_comm_stack [4096]u8'
@@ -1293,6 +1301,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						glue << '\tmut last_overruns := u32(0)'
 					}
 				}
+				glue << trace_stream_state(m)
 				for si in tx_sigs {
 					glue << '\tmut last_tx_${snake(si.name)} := u64(0)'
 				}
@@ -1356,6 +1365,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t\tch.send(tf)'
 					glue << '\t\t}'
 				}
+				glue << trace_stream(m, part)
 				glue << '\t}'
 				glue << '}'
 				glue << ''
@@ -1669,6 +1679,18 @@ fn main() {
 	// Single parse pass: ecu.toml + bus.dbc -> the Model. The emit code below reads from `m`
 	// (rebound to the existing locals so it stays unchanged). (Step (a): parse -> model.)
 	m := build_model(doc, dbc)
+
+	// [trace]: the ThreadX exec-hook stream is the generated path (gen_trace.v); validate what it
+	// can honour. The host/bare-metal command-driven protocol moved to the platform (comm/trace
+	// TraceModule, docs/com-modules.md) and lands via frame->module routing — warn, don't silently
+	// drop, until that wiring exists.
+	if m.trace.on && m.target.threadx {
+		validate_trace_threadx(m)
+	} else if m.trace.on {
+		eprintln('loom2v: WARNING: [trace] on a host/bare-metal build is not generated (the ' +
+			'command-driven trace protocol moved to comm/trace TraceModule; frame->module routing ' +
+			'wiring is pending — docs/com-modules.md). Building WITHOUT trace.')
+	}
 
 	// [[signal]] -> the model, then emit the `sig` module.
 	signals := emit_signals(m.sig_of, m.sig_names, ecu)

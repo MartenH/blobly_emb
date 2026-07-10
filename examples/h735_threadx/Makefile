@@ -46,10 +46,10 @@ all: $(BUILD)/$(NAME).bin
 # 0) generate the ThreadX target (gen/ports/sig) from ecu.toml via loom2v.
 GEN = gen/loom_gen.v ports/ports_gen.v sig/signals_gen.v
 gen: gen/.stamp
-gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(REPO)/tools/ecucheck/gen.v $(REPO)/tools/loom2v/gen.v $(REPO)/tools/ecumodel/model.v
+gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(REPO)/tools/ecucheck/gen.v $(wildcard $(REPO)/tools/loom2v/*.v) $(REPO)/tools/ecumodel/model.v
 	@mkdir -p gen ports sig
 	cd $(REPO) && $(V) run tools/ecucheck/gen.v examples/$(NAME)/ecu.toml
-	cd $(REPO) && $(V) run tools/loom2v/gen.v examples/$(NAME)/ecu.toml examples/$(NAME)/bus.dbc \
+	cd $(REPO) && $(V) run tools/loom2v examples/$(NAME)/ecu.toml examples/$(NAME)/bus.dbc \
 	  examples/$(NAME)/sig/signals_gen.v examples/$(NAME)/ports/ports_gen.v examples/$(NAME)/gen/loom_gen.v \
 	  examples/$(NAME)/gen/trace-manifest.csv
 	@touch gen/.stamp
