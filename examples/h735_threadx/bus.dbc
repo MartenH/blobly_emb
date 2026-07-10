@@ -25,6 +25,9 @@ BO_ 2017 LoadDetail: 8 SUT
 BO_ 291 CmdFrame: 4 Tester
  SG_ Command : 0|32@1+ (1,0) [0|4294967295] "" SUT
 
+BO_ 512 WorkloadFrame: 4 SUT
+ SG_ Workload : 0|32@1+ (1,0) [0|4294967295] "" Tester
+
 BA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;
 BA_DEF_DEF_ "GenMsgCycleTime" 0;
 BA_ "GenMsgCycleTime" BO_ 2016 500;

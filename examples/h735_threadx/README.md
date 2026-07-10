@@ -47,6 +47,11 @@ cansend can0 123#00000000   # Command = 0 -> Governor resumes its breathing swee
 This is the FB↔comm IOC path the earlier lean cut deferred — an rx signal that actually
 drives application logic, not just a frame counter.
 
+The **tx** direction mirrors it: `Workload` (Load's accumulator output) is `to = "can0"`, so
+the FB writes it into an IOC cell and the comm thread reads that cell, encodes it, and sends
+it cyclically (`[[frame]]` → `WorkloadFrame`, id `0x200`, 100 ms). `candump can0` shows `0x200`
+carrying the FB's live computed value — the bus → app → bus round trip, all wait-free.
+
 ## Config → generated
 
 `ecu.toml` places all three FBs on the one thread `app_main`, so this generates one FB
@@ -54,11 +59,11 @@ thread + the comm thread (the ECU model still rejects >1 `[[partition.thread]]` 
 partition). The rx signal (`from = "can0"`) makes loom2v emit the comm thread's rx path + the
 IOC wiring; `Governor` listing `reads = ["Command"]` wires the IOC cell into its input port.
 
-**Lean-cut scope** (loom2v rejects with a clear message, for now): external **tx** signals
-(app → bus), non-`can0` buses (the Rx-ISR glue is FDCAN1-specific — see the interrupt boundary
-in `docs/architecture.md`), extended (29-bit) ids, per-frame COM protection (E2E/SecOC/rx
-deadline), ISO-TP, and routes. Multi-thread FB partitions and a per-signal DBC codec (for
-non-byte-aligned rx signals) are the remaining generalisations.
+**Lean-cut scope** (loom2v rejects with a clear message, for now): non-`can0` buses (the
+Rx-ISR glue is FDCAN1-specific — see the interrupt boundary in `docs/architecture.md`),
+extended (29-bit) ids, per-frame COM protection (E2E/SecOC/rx deadline), ISO-TP, and routes.
+Both rx and tx signals must be a plain unsigned LE 32-bit value at bit 0; a per-signal DBC
+codec (for other layouts) and multi-thread FB partitions are the remaining generalisations.
 
 ## Handwritten target glue
 
@@ -71,6 +76,7 @@ triple-buffer, reused from `threadx_h735`), `vectors.S` (routes IRQ19 → the Rx
 ## Verified on the board
 
 `make flash`, `candump can0`: CpuLoad `0x7E0` + LoadDetail `0x7E1` stream from the comm
-thread; the trace `0x7E5` shows comm/app/timer + the Rx ISR (id 35); and `cansend 0x123`
-drives the load via the IOC (pins CpuLoad, releases back to the sweep). The generated
-counterpart of the hand-written `threadx_h735` (the golden reference).
+thread; the trace `0x7E5` shows comm/app/timer + the Rx ISR (id 35); `0x200` carries the
+`Workload` signal (Load's live output, FB → IOC → bus); and `cansend 0x123` drives the load
+via the IOC (pins CpuLoad, releases back to the sweep). The generated counterpart of the
+hand-written `threadx_h735` (the golden reference).
