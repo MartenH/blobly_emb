@@ -39,9 +39,9 @@ decodes the frame and publishes it into a **target IOC cell** (the wait-free tri
 pass through its input port. So a host **commands the core load over CAN**:
 
 ```
-cansend can0 123#A003020000000000   # Command.code = 132000 -> Governor pins the load
-candump can0                        # 0x7E0 byte0 jumps to ~72% and HOLDS (was sweeping)
-cansend can0 123#0000000000000000   # Command = 0 -> Governor resumes its breathing sweep
+cansend can0 123#A0030200   # Command.code = 132000 (4-byte CmdFrame) -> Governor pins the load
+candump can0                # 0x7E0 byte0 jumps to ~72% and HOLDS (was sweeping)
+cansend can0 123#00000000   # Command = 0 -> Governor resumes its breathing sweep
 ```
 
 This is the FB↔comm IOC path the earlier lean cut deferred — an rx signal that actually
