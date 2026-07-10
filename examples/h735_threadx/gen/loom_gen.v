@@ -20,6 +20,10 @@ mut:
 fn handler_app_governor_on_100ms(ctx voidptr) {
 	mut st := unsafe { &Partition_app_state(ctx) }
 	mut inp := ports.GovernorIn{}
+	mut command_a := u32(0)
+	mut command_b := u32(0)
+	C.ioc_get(0, &command_a, &command_b)
+	inp.command.code = u32(command_a)
 	mut outp := ports.GovernorOut{}
 	st.governor.on_100ms(inp, mut outp)
 	st.cell_load_cmd = outp.load_cmd // local
@@ -54,6 +58,9 @@ fn C.load_100ms() u32
 fn C.load_1s() u32
 fn C.load_10s() u32
 fn C.load_overruns() u32
+fn C.ioc_pool_init()
+fn C.ioc_pub(int, u32, u32)
+fn C.ioc_get(int, &u32, &u32)
 
 __global (
 	g_app_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
@@ -111,6 +118,7 @@ fn comm_thread_entry(input u32) {
 			if rx.id == u32(0x123) { // cmd_frame
 				g_rx_count++
 				g_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)
+				C.ioc_pub(0, g_rx_last, u32(0))
 			}
 		}
 		t1 := C.board_now_us()
@@ -180,5 +188,6 @@ fn tx_application_define(first_unused voidptr) {
 // tx_application_define above). main.v does the board bring-up then calls this —
 // referencing it also forces this module (incl. tx_application_define) to link.
 pub fn boot() {
+	C.ioc_pool_init() // init the cross-thread signal IOC cells before any thread runs
 	C._tx_initialize_kernel_enter()
 }

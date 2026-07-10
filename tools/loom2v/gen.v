@@ -21,6 +21,7 @@ import tools.ecumodel
 
 struct SigInfo {
 mut:
+	name      string // the signal name (so a bare SigInfo still knows its own name)
 	transport string
 	from      string
 	to        string
@@ -137,6 +138,7 @@ fn main() {
 		signals << '}'
 
 		sig_of[name] = SigInfo{
+			name:      name
 			transport: (m['transport'] or { toml.Any('double') }).string()
 			from:      from
 			to:        to
@@ -569,28 +571,32 @@ fn main() {
 	// the same. The lean first cut supports external RX signals (bus -> app), drained + counted
 	// by the comm thread; external TX signals, ISO-TP, and routes are not generated yet.
 	comm_thread_on := target_threadx && has_bridge
+	// rx signals an FB reads flow bus -> comm(decode) -> target IOC pool cell -> FB input (6b-2b).
+	// ioc_idx maps each such signal to its pool cell; visible to the comm emitter + handler glue.
+	mut ioc_idx := map[string]int{}
 	if comm_thread_on {
 		if has_routes || isotp_conns.len > 0 {
 			panic('loom2v: [target] kind="threadx" comm thread: routes / ISO-TP are not generated ' +
 				'yet (phase 6b-2 lean cut = external rx signals only)')
 		}
-		// Signals any FB handler touches (reads OR writes) — the lean cut counts rx frames comm-
-		// locally and emits NO FB<->comm IOC, so an rx signal a handler reads/writes would generate
-		// osal.acquire/publish(...), which the freestanding image doesn't link (no osal). Reject
-		// those until the IOC layer (6b-2b). (A `writes` on an rx signal takes the same osal path.)
-		mut touched_by_fb := map[string]bool{}
+		// Which signals FB handlers read vs write. An rx signal READ by an FB flows through the
+		// target IOC pool (6b-2b); an rx signal WRITTEN by an FB is a config error (an input isn't
+		// written). Everything else external is still deferred (rejected below).
+		mut read_by_fb := map[string]bool{}
+		mut written_by_fb := map[string]bool{}
 		for fb in ecumodel.toml_arr(doc, 'fb') {
 			for h in (fb.as_map()['handler'] or { toml.Any([]toml.Any{}) }).array() {
 				hm := h.as_map()
 				for r in (hm['reads'] or { toml.Any([]toml.Any{}) }).array() {
-					touched_by_fb[r.string()] = true
+					read_by_fb[r.string()] = true
 				}
 				for w in (hm['writes'] or { toml.Any([]toml.Any{}) }).array() {
-					touched_by_fb[w.string()] = true
+					written_by_fb[w.string()] = true
 				}
 			}
 		}
-		for sname, si in sig_of {
+		for sname in sig_names {
+			si := sig_of[sname] or { continue }
 			if si.external && !si.rx {
 				panic('loom2v: [target] kind="threadx" comm thread: external TX signal "${sname}" ' +
 					'(app -> bus) is not generated yet (phase 6b-2 lean cut = rx only)')
@@ -598,10 +604,9 @@ fn main() {
 			if !si.rx {
 				continue
 			}
-			if touched_by_fb[sname] {
-				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" is read/written ' +
-					'by an FB handler, but the lean cut has no FB<->comm IOC yet — it only counts rx ' +
-					'frames comm-locally; drop the handler read/write or wait for the IOC layer (6b-2b)')
+			if written_by_fb[sname] {
+				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" is WRITTEN by an ' +
+					'FB handler — an rx (bus -> app) signal is an input; drop the handler write')
 			}
 			if si.bus != telem_bus {
 				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" is on bus ' +
@@ -619,6 +624,16 @@ fn main() {
 					'deadline / E2E / SecOC, but the lean comm thread only counts raw rx.id matches — ' +
 					'those COM checks are not generated yet (phase 6b-2b)')
 			}
+			// rx signal an FB reads -> give it a target IOC pool cell (assigned in sig_names order,
+			// so the comm-write and FB-read sides agree). The lean decode packs the signal's value
+			// into the IOC sig_t's `a` field (a single scalar at byte 0).
+			if read_by_fb[sname] {
+				ioc_idx[sname] = ioc_idx.len
+			}
+		}
+		if ioc_idx.len > 4 {
+			panic('loom2v: [target] kind="threadx" comm thread: ${ioc_idx.len} rx-to-FB signals need IOC ' +
+				'cells, but the pool (comm_glue.c IOC_POOL_N) has 4 — raise IOC_POOL_N or reduce signals')
 		}
 	}
 	// Which buses run a COM bridge (an external signal, an ISO-TP conn, or a route touches them).
@@ -1016,6 +1031,13 @@ fn main() {
 					si := sig_of[rn] or { SigInfo{} }
 					if si.local {
 						glue << '\tinp.${snake(rn)} = st.cell_${snake(rn)} // local'
+					} else if idx := ioc_idx[rn] {
+						// bus -> comm(decode) -> target IOC cell ${idx} -> this FB input (6b-2b). One
+						// ioc_get per read (it advances the reader slot); the value field is `a`.
+						glue << '\tmut ${snake(rn)}_a := u32(0)'
+						glue << '\tmut ${snake(rn)}_b := u32(0)'
+						glue << '\tC.ioc_get(${idx}, &${snake(rn)}_a, &${snake(rn)}_b)'
+						glue << '\tinp.${snake(rn)}.${snake(si.val_field)} = ${si.val_type}(${snake(rn)}_a)'
 					} else {
 						glue << '\tosal.${acquire_fn(si.transport)}(${snake(rn)}_ch, &inp.${snake(rn)}, u8(sizeof(inp.${snake(rn)})))'
 					}
@@ -1842,6 +1864,14 @@ fn main() {
 				glue << 'fn C.load_1s() u32'
 				glue << 'fn C.load_10s() u32'
 				glue << 'fn C.load_overruns() u32'
+				if ioc_idx.len > 0 {
+					// Target IOC pool (comm_glue.c, wait-free triple-buffer ioc.h): the comm thread
+					// publishes a decoded rx signal into a cell (ioc_pub), an FB reads it (ioc_get);
+					// ioc_pool_init runs once before the kernel starts.
+					glue << 'fn C.ioc_pool_init()'
+					glue << 'fn C.ioc_pub(int, u32, u32)'
+					glue << 'fn C.ioc_get(int, &u32, &u32)'
+				}
 			}
 			glue << ''
 			// TCB as [32]u64 (256 B >= sizeof(TX_THREAD) = 200 B) so it is 8-byte aligned — the
@@ -2070,6 +2100,12 @@ fn main() {
 					glue << '\t\t\tif rx.id == u32(0x${si.dbc_id.hex()}) { // ${si.dbc_msg}'
 					glue << '\t\t\t\tg_rx_count++'
 					glue << '\t\t\t\tg_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)'
+					if idx := ioc_idx[si.name] {
+						// FB reads this signal: publish the decoded value (byte-0 scalar) into its IOC
+						// cell so the app thread picks up the latest command wait-free. (Lean decode:
+						// a single whole-frame scalar; per-bit/multi-signal decode needs the codec.)
+						glue << '\t\t\t\tC.ioc_pub(${idx}, g_rx_last, u32(0))'
+					}
 					glue << '\t\t\t}'
 				}
 				glue << '\t\t}'
@@ -2161,6 +2197,9 @@ fn main() {
 			glue << '// tx_application_define above). main.v does the board bring-up then calls this —'
 			glue << '// referencing it also forces this module (incl. tx_application_define) to link.'
 			glue << 'pub fn boot() {'
+			if ioc_idx.len > 0 {
+				glue << '\tC.ioc_pool_init() // init the cross-thread signal IOC cells before any thread runs'
+			}
 			glue << '\tC._tx_initialize_kernel_enter()'
 			glue << '}'
 		}

@@ -5,6 +5,8 @@ import sig
 
 pub struct GovernorIn {
 pub mut:
+	// signal "Command" — ch, transport double, can0 -> app
+	command sig.Command
 }
 pub struct GovernorOut {
 pub mut:
