@@ -513,6 +513,28 @@ fn build_model(doc toml.Doc, dbc string) Model {
 // this interface, not threading a fresh set of flags/params through every emitter. Hooks are filled
 // in phase by phase as the producer redesign lands; each returns the emit fragment for one injection
 // point, or an empty slice when that producer contributes nothing there.
+// BusCtx is the run-model's scope + data-access contract, handed to each producer's bus_tick. The
+// producer owns the frame-build/send LOGIC; the run-model owns HOW to read the data and which local
+// names are free (its loop already declares f/rf/pf etc., so a producer must be told a collision-free
+// frame/loop name). This is what lets one bus_tick reproduce the bare-metal / ThreadX / inline loops
+// byte-for-byte — the genuine differences (load accessor, tx_ready gate, timebase) live here, not in
+// copy-pasted blocks. now = the loop's current-time expr; period = the deadline expr (a var name or an
+// already-evaluated literal); gate = a '&& ch.tx_ready()' suffix or ''; load/det_lines = the accessor
+// lines; frame/detframe/idx = collision-free local names for this run-model's scope.
+struct BusCtx {
+	telem_active bool
+	lead         []string // optional leading comment line(s) some run-models emit before the tick
+	now          string
+	period       string
+	gate         string
+	load         []string
+	det_ovr      string
+	det_lines    []string
+	frame        string
+	detframe     string
+	idx          string
+}
+
 interface Producer {
 	// The partition superloop is one skeleton; each producer injects at four points, keyed by
 	// 'p:<partition>' (or 'b:<bus>' for a bridge). preamble runs once before the loop; loop_top and
@@ -522,13 +544,56 @@ interface Producer {
 	partition_loop_top(part_key string) []string
 	partition_dispatch(part_key string) []string
 	partition_loop_body(part_key string) []string
+	// bus_tick is this producer's periodic emission inside a bus-owning run loop (send a frame when
+	// due), rendered for the given run-model contract. Empty when the producer isn't active there.
+	bus_tick(ctx BusCtx) []string
 }
 
 // TelemProducer publishes each partition's Loom load to a scratch cell so the bus owner can ship it
-// as a CpuLoad frame. slot maps a partition key ('p:app' / 'b:can0') to its scratch cell index.
+// as a CpuLoad frame (bus_tick), and reads it back on the bus loop. slot maps a partition key
+// ('p:app' / 'b:can0') to its scratch cell index; id/detail_id are the CpuLoad / LoadDetail frame ids.
 struct TelemProducer {
-	on   bool
-	slot map[string]int
+	on        bool
+	slot      map[string]int
+	id        u32
+	detail_id u32
+}
+
+// bus_tick emits the CpuLoad (+ optional LoadDetail) send, gated on the period, using the run-model's
+// data accessors and collision-free names from ctx. Byte-identical to the former per-run-model blocks.
+fn (t TelemProducer) bus_tick(ctx BusCtx) []string {
+	if !ctx.telem_active {
+		return []string{}
+	}
+	mut g := []string{}
+	g << ctx.lead
+	g << '\t\tif ${ctx.now} - last_telem >= ${ctx.period}${ctx.gate} {'
+	g << '\t\t\tlast_telem = ${ctx.now}'
+	g << ctx.load
+	g << '\t\t\tframe := telem.encode_cpuload(load, 1)'
+	g << '\t\t\tmut ${ctx.frame} := can.Frame{'
+	g << '\t\t\t\tid:  u32(0x${t.id.hex()})'
+	g << '\t\t\t\tlen: 8'
+	g << '\t\t\t}'
+	g << '\t\t\tfor ${ctx.idx} in 0 .. 8 {'
+	g << '\t\t\t\t${ctx.frame}.data[${ctx.idx}] = frame[${ctx.idx}]'
+	g << '\t\t\t}'
+	g << '\t\t\tch.send(${ctx.frame})'
+	if t.detail_id != 0 {
+		g << '\t\t\tovr := ${ctx.det_ovr}'
+		g << ctx.det_lines
+		g << '\t\t\tlast_overruns = ovr'
+		g << '\t\t\tmut ${ctx.detframe} := can.Frame{'
+		g << '\t\t\t\tid:  u32(0x${t.detail_id.hex()})'
+		g << '\t\t\t\tlen: 8'
+		g << '\t\t\t}'
+		g << '\t\t\tfor ${ctx.idx} in 0 .. 8 {'
+		g << '\t\t\t\t${ctx.detframe}.data[${ctx.idx}] = detail[${ctx.idx}]'
+		g << '\t\t\t}'
+		g << '\t\t\tch.send(${ctx.detframe})'
+	}
+	g << '\t\t}'
+	return g
 }
 
 fn (t TelemProducer) partition_preamble(_ string) []string {
@@ -625,6 +690,12 @@ fn (t TraceProducer) partition_dispatch(_ string) []string {
 }
 
 fn (t TraceProducer) partition_loop_body(_ string) []string {
+	return []string{}
+}
+
+// bus_tick: the exec-hook ring stream. Still emitted inline in the run-models for now (next slice);
+// stubbed here so TraceProducer satisfies the interface without changing output.
+fn (t TraceProducer) bus_tick(_ BusCtx) []string {
 	return []string{}
 }
 
@@ -1325,7 +1396,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []
 // emit_run_target emits the on-target run(): the bare-metal / ThreadX single-core superloop
 // (no osal, no spawn) plus — for the ThreadX target — comm_thread_entry and tx_application_define.
 // Reads the Model; doc/all_regs/ioc_idx/msg_ioc_idx/telem_iface/comm_thread_on are main's emit state.
-fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_iface string, comm_thread_on bool, ioc_idx map[string]int, msg_ioc_idx map[int]int) []string {
+fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_iface string, comm_thread_on bool, ioc_idx map[string]int, msg_ioc_idx map[int]int, producers []Producer) []string {
 	mut glue := []string{}
 		// --- target run(): one inline single-core superloop. No spawn, no osal. The
 		//     timebase is the board's DWT clock (board_now_us); the loop paces to a
@@ -1507,34 +1578,18 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '\t\tC.load_pub(u32(sched.load_permille()), u32(sched.load_permille_100ms()),'
 			glue << '\t\t\tu32(sched.load_permille_1s()), u32(sched.load_permille_10s()), sched.overruns())'
 		}
-		if m.telem.on && telem_iface != '' && !comm_thread_on {
-			glue << '\t\tif t1 - last_telem >= telem_period_us {'
-			glue << '\t\t\tlast_telem = t1'
-			glue << '\t\t\tload[0] = sched.load_permille() // single M7 -> core 0 only'
-			glue << '\t\t\tframe := telem.encode_cpuload(load, 1)'
-			glue << '\t\t\tmut f := can.Frame{'
-			glue << '\t\t\t\tid:  u32(0x${m.telem.id.hex()})'
-			glue << '\t\t\t\tlen: 8'
-			glue << '\t\t\t}'
-			glue << '\t\t\tfor i in 0 .. 8 {'
-			glue << '\t\t\t\tf.data[i] = frame[i]'
-			glue << '\t\t\t}'
-			glue << '\t\t\tch.send(f)'
-			if m.telem.detail_id != 0 {
-				glue << '\t\t\tovr := sched.overruns()'
-				glue << '\t\t\tdetail := telem.encode_loaddetail(sched.load_permille_100ms(),'
-				glue << '\t\t\t\tsched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)'
-				glue << '\t\t\tlast_overruns = ovr'
-				glue << '\t\t\tmut d := can.Frame{'
-				glue << '\t\t\t\tid:  u32(0x${m.telem.detail_id.hex()})'
-				glue << '\t\t\t\tlen: 8'
-				glue << '\t\t\t}'
-				glue << '\t\t\tfor i in 0 .. 8 {'
-				glue << '\t\t\t\td.data[i] = detail[i]'
-				glue << '\t\t\t}'
-				glue << '\t\t\tch.send(d)'
-			}
-			glue << '\t\t}'
+		for p in producers {
+			glue << p.bus_tick(BusCtx{
+				telem_active: m.telem.on && telem_iface != '' && !comm_thread_on
+				now:          't1'
+				period:       'telem_period_us'
+				load:         ['\t\t\tload[0] = sched.load_permille() // single M7 -> core 0 only']
+				det_ovr:      'sched.overruns()'
+				det_lines:    ['\t\t\tdetail := telem.encode_loaddetail(sched.load_permille_100ms(),', '\t\t\t\tsched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)']
+				frame:        'f'
+				detframe:     'd'
+				idx:          'i'
+			})
 		}
 		if m.target.threadx && m.trace.on && !comm_thread_on {
 			// Stream the exec-hook trace ring ~1 s, single-owner + incremental. trace_snapshot
@@ -1686,35 +1741,20 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << '\t\t}'
 				glue << '\t\tt1 := C.board_now_us()'
-				if m.telem.on && telem_iface != '' {
-					glue << "\t\t// PRODUCER: CpuLoad telemetry — reads the FB thread's load scratch"
-					glue << '\t\tif t1 - last_telem >= telem_period_us && ch.tx_ready() {'
-					glue << '\t\t\tlast_telem = t1'
-					glue << '\t\t\tmut load := [8]u16{}'
-					glue << '\t\t\tload[0] = u16(C.load_permille())'
-					glue << '\t\t\tframe := telem.encode_cpuload(load, 1)'
-					glue << '\t\t\tmut f := can.Frame{'
-					glue << '\t\t\t\tid:  u32(0x${m.telem.id.hex()})'
-					glue << '\t\t\t\tlen: 8'
-					glue << '\t\t\t}'
-					glue << '\t\t\tfor i in 0 .. 8 {'
-					glue << '\t\t\t\tf.data[i] = frame[i]'
-					glue << '\t\t\t}'
-					glue << '\t\t\tch.send(f)'
-					if m.telem.detail_id != 0 {
-						glue << '\t\t\tovr := C.load_overruns()'
-						glue << '\t\t\tdetail := telem.encode_loaddetail(u16(C.load_100ms()), u16(C.load_1s()), u16(C.load_10s()), ovr - last_overruns)'
-						glue << '\t\t\tlast_overruns = ovr'
-						glue << '\t\t\tmut d := can.Frame{'
-						glue << '\t\t\t\tid:  u32(0x${m.telem.detail_id.hex()})'
-						glue << '\t\t\t\tlen: 8'
-						glue << '\t\t\t}'
-						glue << '\t\t\tfor i in 0 .. 8 {'
-						glue << '\t\t\t\td.data[i] = detail[i]'
-						glue << '\t\t\t}'
-						glue << '\t\t\tch.send(d)'
-					}
-					glue << '\t\t}'
+				for p in producers {
+					glue << p.bus_tick(BusCtx{
+						telem_active: m.telem.on && telem_iface != ''
+						lead:         ["\t\t// PRODUCER: CpuLoad telemetry — reads the FB thread's load scratch"]
+						now:          't1'
+						period:       'telem_period_us'
+						gate:         ' && ch.tx_ready()'
+						load:         ['\t\t\tmut load := [8]u16{}', '\t\t\tload[0] = u16(C.load_permille())']
+						det_ovr:      'C.load_overruns()'
+						det_lines:    ['\t\t\tdetail := telem.encode_loaddetail(u16(C.load_100ms()), u16(C.load_1s()), u16(C.load_10s()), ovr - last_overruns)']
+						frame:        'f'
+						detframe:     'd'
+						idx:          'i'
+					})
 				}
 				for si in tx_sigs {
 					mut cyc := m.frames.tx_cycle_us[si.dbc_msg] or { 0 }
@@ -1811,7 +1851,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 // handshake + ISO-TP dump of the frozen ring, the HandlerStat heartbeat, and CpuLoad. Also the
 // trace_target case (a baremetal target that polls the trace path). Reads the Model; doc / all_regs
 // / telem_iface / single_part / trace_target are main's emit-time state.
-fn emit_run_inline(m Model, doc toml.Doc, all_regs map[string][]string, telem_iface string, single_part string, trace_target bool) []string {
+fn emit_run_inline(m Model, doc toml.Doc, all_regs map[string][]string, telem_iface string, single_part string, trace_target bool, producers []Producer) []string {
 	eff_trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
 	mut glue := []string{}
 		// --- inline-trace run(): the single app core owns the trace bus channel and runs one
@@ -2074,37 +2114,18 @@ fn emit_run_inline(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '\t\t\t}'
 			glue << '\t\t}'
 		}
-		if cpuload_on {
-			glue << '\t\tif now - last_telem >= ${m.telem.period_us} {'
-			glue << '\t\t\tlast_telem = now'
-			glue << '\t\t\tmut load := [8]u16{}'
-			glue << '\t\t\tload[0] = u16(sched.load_permille())'
-			glue << '\t\t\tframe := telem.encode_cpuload(load, 1)'
-			glue << '\t\t\tmut cf := can.Frame{'
-			glue << '\t\t\t\tid:  u32(0x${m.telem.id.hex()})'
-			glue << '\t\t\t\tlen: 8'
-			glue << '\t\t\t}'
-			glue << '\t\t\tfor j in 0 .. 8 {'
-			glue << '\t\t\t\tcf.data[j] = frame[j]'
-			glue << '\t\t\t}'
-			glue << '\t\t\tch.send(cf)'
-			if m.telem.detail_id != 0 {
-				// LoadDetail (multi-window load + per-period overruns) — same frame the plain target
-				// emits; keep it under trace so a bare-metal config's detail_id isn't silently dropped.
-				glue << '\t\t\tovr := sched.overruns()'
-				glue << '\t\t\tdetail := telem.encode_loaddetail(sched.load_permille_100ms(),'
-				glue << '\t\t\t\tsched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)'
-				glue << '\t\t\tlast_overruns = ovr'
-				glue << '\t\t\tmut df := can.Frame{'
-				glue << '\t\t\t\tid:  u32(0x${m.telem.detail_id.hex()})'
-				glue << '\t\t\t\tlen: 8'
-				glue << '\t\t\t}'
-				glue << '\t\t\tfor j in 0 .. 8 {'
-				glue << '\t\t\t\tdf.data[j] = detail[j]'
-				glue << '\t\t\t}'
-				glue << '\t\t\tch.send(df)'
-			}
-			glue << '\t\t}'
+		for p in producers {
+			glue << p.bus_tick(BusCtx{
+				telem_active: cpuload_on
+				now:          'now'
+				period:       '${m.telem.period_us}'
+				load:         ['\t\t\tmut load := [8]u16{}', '\t\t\tload[0] = u16(sched.load_permille())']
+				det_ovr:      'sched.overruns()'
+				det_lines:    ['\t\t\tdetail := telem.encode_loaddetail(sched.load_permille_100ms(),', '\t\t\t\tsched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)']
+				frame:        'cf'
+				detframe:     'df'
+				idx:          'j'
+			})
 		}
 		if trace_target {
 			glue << '\t\tfor C.board_now_us() < next_tick {} // idle to the tick (real idle)'
@@ -3088,8 +3109,10 @@ fn main() {
 	// The platform producers (telemetry, trace) the shared emitters iterate — so no emitter names a
 	// specific capability for its partition-loop injection. NM / COM-tx join this list later.
 	producers := [Producer(TelemProducer{
-		on:   m.telem.on
-		slot: telem_slot.clone()
+		on:        m.telem.on
+		slot:      telem_slot.clone()
+		id:        m.telem.id
+		detail_id: m.telem.detail_id
 	}), Producer(TraceProducer{
 		multicore:    trace_multicore
 		cmd_base:     trace_cmd_base
@@ -3131,9 +3154,9 @@ fn main() {
 	}
 	extra_dest_buses.sort()
 	if m.target.on && (m.target.threadx || !m.trace.on) {
-		glue << emit_run_target(m, doc, all_regs, telem_iface, comm_thread_on, ioc_idx, msg_ioc_idx)
+		glue << emit_run_target(m, doc, all_regs, telem_iface, comm_thread_on, ioc_idx, msg_ioc_idx, producers)
 	} else if trace_inline || trace_target {
-		glue << emit_run_inline(m, doc, all_regs, telem_iface, single_part, trace_target)
+		glue << emit_run_inline(m, doc, all_regs, telem_iface, single_part, trace_target, producers)
 	} else if trace_multicore {
 		glue << emit_run_multicore(m, doc, telem_iface, bus_names, bus_dests, extra_dest_buses, trace_ncores)
 	} else {
