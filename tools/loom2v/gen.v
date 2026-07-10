@@ -75,67 +75,6 @@ mut:
 	to_id      int
 }
 
-// TraceCfg is the parsed [trace] block. Ids default to the docs/telemetry.md convention; sw_keys
-// records which software-packer-only keys were set EXPLICITLY (so the ThreadX exec-hook path can
-// reject them without rejecting a bare config).
-struct TraceCfg {
-mut:
-	on             bool
-	bus            string
-	cmd_id         u32 = 0x7E2
-	rsp_id         u32 = 0x7E3
-	stat_id        u32 = 0x7E4
-	record_id      u32 = 0x7E5
-	dump_fc_id     u32 = 0x7E6
-	level          string = 'thread+fb'
-	mode           string = 'ring'
-	buffer_records int = 64
-	pre_pct        int = 50
-	push_us        u64 = 1_000_000
-	budget_us      u64 // overrun trigger budget (0 = no software trigger)
-	sw_keys        []string
-}
-
-// parse_trace parses the [trace] block into a TraceCfg (part of the model). A block is active
-// unless enabled = false; ids resolve to bus.dbc only when active (a disabled block generates
-// nothing, so a stale `cmd_id = "SomeName"` must not load the DBC or panic on a missing message).
-fn parse_trace(doc toml.Doc, dbc string) TraceCfg {
-	mut t := TraceCfg{}
-	if trcfg := doc.value_opt('trace') {
-		trm := trcfg.as_map()
-		t.on = (trm['enabled'] or { toml.Any(true) }).bool()
-		t.bus = (trm['bus'] or { toml.Any('') }).string()
-		if t.on {
-			t.cmd_id = trace_frame_id(trm, 'cmd_id', t.cmd_id, dbc)
-			t.rsp_id = trace_frame_id(trm, 'rsp_id', t.rsp_id, dbc)
-			t.stat_id = trace_frame_id(trm, 'stat_id', t.stat_id, dbc)
-			t.record_id = trace_frame_id(trm, 'record_id', t.record_id, dbc)
-			t.dump_fc_id = trace_frame_id(trm, 'dump_fc_id', t.dump_fc_id, dbc)
-		}
-		t.level = (trm['level'] or { toml.Any(t.level) }).string()
-		t.mode = (trm['mode'] or { toml.Any(t.mode) }).string()
-		t.buffer_records = int((trm['buffer_records'] or { toml.Any(t.buffer_records) }).int())
-		t.pre_pct = int((trm['pre_pct'] or { toml.Any(t.pre_pct) }).int())
-		if pms := trm['push_ms'] {
-			t.push_us = u64(pms.int()) * 1000
-		}
-		for k in ['cmd_id', 'rsp_id', 'stat_id', 'dump_fc_id', 'push_ms', 'pre_pct'] {
-			if k in trm {
-				t.sw_keys << k
-			}
-		}
-		// trigger = { source = "overrun", budget_us = N }: freeze the ring when a handler runs
-		// longer than N µs. Only "overrun" is generated today; other sources are reserved.
-		if tg := trm['trigger'] {
-			tgm := tg.as_map()
-			if (tgm['source'] or { toml.Any('') }).string() == 'overrun' {
-				t.budget_us = u64((tgm['budget_us'] or { toml.Any(0) }).int())
-			}
-		}
-	}
-	return t
-}
-
 // TargetCfg is the parsed [target] block. kind selects the on-target emitter: 'baremetal' =
 // single-core inline superloop (P3c-0); 'threadx' = the preemptive-RTOS target (P3c-1).
 struct TargetCfg {
@@ -483,7 +422,6 @@ struct Model {
 	dids         []DidCfg
 	part         PartMap
 	telem        TelemetryCfg
-	trace        TraceCfg
 	target       TargetCfg
 }
 
@@ -502,9 +440,116 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		dids:         parse_dids(doc)
 		part:         parse_partitions(doc)
 		telem:        parse_telemetry(doc)
-		trace:        parse_trace(doc, dbc)
 		target:       parse_target(doc)
 	}
+}
+
+// Producer is a platform capability that lives on a bus — telemetry and trace today, NM / COM-tx
+// tomorrow. The generator iterates producers so the SHARED emitters (the partition loop, each
+// run-model, the imports, the manifest) never name a specific capability: adding one is implementing
+// this interface, not threading a fresh set of flags/params through every emitter. Hooks are filled
+// in phase by phase as the producer redesign lands; each returns the emit fragment for one injection
+// point, or an empty slice when that producer contributes nothing there.
+// BusCtx is the run-model's scope + data-access contract, handed to each producer's bus_tick. The
+// producer owns the frame-build/send LOGIC; the run-model owns HOW to read the data and which local
+// names are free (its loop already declares f/rf/pf etc., so a producer must be told a collision-free
+// frame/loop name). This is what lets one bus_tick reproduce the bare-metal / ThreadX / inline loops
+// byte-for-byte — the genuine differences (load accessor, tx_ready gate, timebase) live here, not in
+// copy-pasted blocks. now = the loop's current-time expr; period = the deadline expr (a var name or an
+// already-evaluated literal); gate = a '&& ch.tx_ready()' suffix or ''; load/det_lines = the accessor
+// lines; frame/detframe/idx = collision-free local names for this run-model's scope.
+struct BusCtx {
+	telem_active bool
+	lead         []string // optional leading comment line(s) some run-models emit before the tick
+	now          string
+	period       string
+	gate         string
+	load         []string
+	det_ovr      string
+	det_lines    []string
+	frame        string
+	detframe     string
+	idx          string
+}
+
+interface Producer {
+	// The partition superloop is one skeleton; each producer injects at four points, keyed by
+	// 'p:<partition>' (or 'b:<bus>' for a bridge). preamble runs once before the loop; loop_top and
+	// loop_body run each iteration (top = before dispatch, body = after); dispatch OVERRIDES the
+	// default plain dispatch when non-empty (only one producer may — the profiling one).
+	partition_preamble(part_key string) []string
+	partition_loop_top(part_key string) []string
+	partition_dispatch(part_key string) []string
+	partition_loop_body(part_key string) []string
+	// bus_tick is this producer's periodic emission inside a bus-owning run loop (send a frame when
+	// due), rendered for the given run-model contract. Empty when the producer isn't active there.
+	bus_tick(ctx BusCtx) []string
+}
+
+// TelemProducer publishes each partition's Loom load to a scratch cell so the bus owner can ship it
+// as a CpuLoad frame (bus_tick), and reads it back on the bus loop. slot maps a partition key
+// ('p:app' / 'b:can0') to its scratch cell index; id/detail_id are the CpuLoad / LoadDetail frame ids.
+struct TelemProducer {
+	on        bool
+	slot      map[string]int
+	id        u32
+	detail_id u32
+}
+
+// bus_tick emits the CpuLoad (+ optional LoadDetail) send, gated on the period, using the run-model's
+// data accessors and collision-free names from ctx. Byte-identical to the former per-run-model blocks.
+fn (t TelemProducer) bus_tick(ctx BusCtx) []string {
+	if !ctx.telem_active {
+		return []string{}
+	}
+	mut g := []string{}
+	g << ctx.lead
+	g << '\t\tif ${ctx.now} - last_telem >= ${ctx.period}${ctx.gate} {'
+	g << '\t\t\tlast_telem = ${ctx.now}'
+	g << ctx.load
+	g << '\t\t\tframe := telem.encode_cpuload(load, 1)'
+	g << '\t\t\tmut ${ctx.frame} := can.Frame{'
+	g << '\t\t\t\tid:  u32(0x${t.id.hex()})'
+	g << '\t\t\t\tlen: 8'
+	g << '\t\t\t}'
+	g << '\t\t\tfor ${ctx.idx} in 0 .. 8 {'
+	g << '\t\t\t\t${ctx.frame}.data[${ctx.idx}] = frame[${ctx.idx}]'
+	g << '\t\t\t}'
+	g << '\t\t\tch.send(${ctx.frame})'
+	if t.detail_id != 0 {
+		g << '\t\t\tovr := ${ctx.det_ovr}'
+		g << ctx.det_lines
+		g << '\t\t\tlast_overruns = ovr'
+		g << '\t\t\tmut ${ctx.detframe} := can.Frame{'
+		g << '\t\t\t\tid:  u32(0x${t.detail_id.hex()})'
+		g << '\t\t\t\tlen: 8'
+		g << '\t\t\t}'
+		g << '\t\t\tfor ${ctx.idx} in 0 .. 8 {'
+		g << '\t\t\t\t${ctx.detframe}.data[${ctx.idx}] = detail[${ctx.idx}]'
+		g << '\t\t\t}'
+		g << '\t\t\tch.send(${ctx.detframe})'
+	}
+	g << '\t\t}'
+	return g
+}
+
+fn (t TelemProducer) partition_preamble(_ string) []string {
+	return []string{}
+}
+
+fn (t TelemProducer) partition_loop_top(_ string) []string {
+	return []string{}
+}
+
+fn (t TelemProducer) partition_dispatch(_ string) []string {
+	return []string{}
+}
+
+fn (t TelemProducer) partition_loop_body(part_key string) []string {
+	if t.on && part_key in t.slot {
+		return ['\t\tosal.scratch_set(${t.slot[part_key]}, u64(sched.load_permille()))']
+	}
+	return []string{}
 }
 
 // emit_manifest builds the trace-identity CSV (optional arg 6): the tables blobly_net loads to
@@ -551,41 +596,11 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 			tid++
 		}
 	}
-	// ThreadX System Timer Thread: the default (non-TX_TIMER_PROCESS_IN_ISR) build runs a hidden
-	// timer thread to expire tx_thread_sleep/timers, and trace_hooks.c assigns it an id like any
-	// other _tx_thread_current_ptr. It first appears AFTER the AUTO_START app thread(s) (which run
-	// at kernel entry, before the first tick wakes the timer thread), so it takes the next id here.
-	// Without this row blobly_net sees an unlabelled THREAD lane (docs/telemetry.md "System Timer
-	// Thread"). Reserve it on the primary core.
-	if m.target.threadx && m.trace.on {
-		man << 'thread,${tid},tx_system_timer,0'
-		tid++
-	}
 	// Comm threads (P3b): one per bridge bus, AFTER the app threads (matches the gate's comm_tid
-	// numbering). bridge_bus_list is empty unless the trace path traces the bridges.
+	// numbering).
 	for bb in bridge_bus_list {
 		man << 'thread,${tid},comm_${bb},${m.bus_core[bb] or { 0 }}'
 		tid++
-	}
-	// The observability frame ids on the trace bus. The protocol (TraceCmd/Rsp/HandlerStat +
-	// the ISO-TP record dump) is fixed and first-party, so blobly_net decodes it natively from
-	// these ids — no generated DBC. Names given in [trace] were already resolved to ids above.
-	if m.trace.on {
-		tbus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
-		man << '# trace frames: frame,id,bus'
-		// The ThreadX target streams ONLY the raw record frames (exec-hook stream on the bus
-		// owner's single channel) — it implements no TraceCmd/Rsp/HandlerStat request path and
-		// no ISO-TP flow control. Advertise only what it actually sends, so blobly_net doesn't
-		// wait on cmd/rsp/stat/dump_fc ids that never appear.
-		if !m.target.threadx {
-			man << 'cmd,0x${m.trace.cmd_id.hex()},${tbus}'
-			man << 'rsp,0x${m.trace.rsp_id.hex()},${tbus}'
-			man << 'stat,0x${m.trace.stat_id.hex()},${tbus}'
-		}
-		man << 'record,0x${m.trace.record_id.hex()},${tbus}'
-		if !m.target.threadx {
-			man << 'dump_fc,0x${m.trace.dump_fc_id.hex()},${tbus}'
-		}
 	}
 	return man
 }
@@ -595,8 +610,8 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 // inline-trace modes send CpuLoad inline from run(). Returns the glue lines, or none when the
 // telemetry-tx thread doesn't apply. (slot_core / telem_iface / trace_inline are main's emit-time
 // derived state; everything else comes from the Model.)
-fn emit_partition_telem(m Model, telem_iface string, slot_core []int, trace_inline bool) []string {
-	if !(m.telem.on && telem_iface != '' && !m.target.on && !trace_inline) {
+fn emit_partition_telem(m Model, telem_iface string, slot_core []int) []string {
+	if !(m.telem.on && telem_iface != '' && !m.target.on) {
 		return []string{}
 	}
 	mut ncores := 0
@@ -641,175 +656,24 @@ fn emit_partition_telem(m Model, telem_iface string, slot_core []int, trace_inli
 	return glue
 }
 
-// emit_partition_trace emits the P3a multi-core trace-bus owner. It NEVER mutates a partition's
-// ring (single-writer isolation): arm/stop/reset are ROUTED to the owning partition via a per-core
-// command cell, the reply is a read-only status_rsp, and an overrun freeze is fanned in (per-core
-// trigger counter) then out as a freeze command. Only `dump` reads the (frozen) rings, streaming
-// each as one self-describing ISO-TP block sequentially. The three scratch bases (core pin, cmd
-// cells, trigger cells) are main's derived scratch layout; the frame ids come from the Model.
-fn emit_partition_trace(m Model, trace_core int, trace_cmd_base int, trace_trig_base int) []string {
-	mut glue := []string{}
-	glue << ''
-	glue << 'fn partition_trace(chp can.Channel, base voidptr, ncores int) {'
-	glue << '\tosal.pin_to_core(${trace_core})'
-	glue << '\tmut ch := chp'
-	glue << '\tmut rings := unsafe { &trace.TraceBuffer(base) } // rings[0 .. ncores]'
-	glue << '\tmut link := isotp.Link{}'
-	glue << '\tmut dumpbuf := [${m.trace.buffer_records * 8 + 8}]u8{} // one block: header + records'
-	glue << '\tmut pending := u16(0) // cores whose frozen ring still needs streaming'
-	glue << '\tmut seq := u64(0)     // command generation — the owner is the SOLE writer of cmd cells'
-	glue << '\tmut froze := false    // whether the current session\'s freeze has been fanned out'
-	glue << '\tmut last_trig := [16]u64{} // last freeze-request counter seen per core (edge detect)'
-	glue << '\tfor {'
-	glue << '\t\tmut rx := can.Frame{}'
-	glue << '\t\tif ch.recv(mut rx) {'
-	glue << '\t\t\tif rx.id == u32(0x${m.trace.cmd_id.hex()}) && rx.len >= 8 {'
-	glue << '\t\t\t\tmut cb := [8]u8{}'
-	glue << '\t\t\t\tfor j in 0 .. 8 {'
-	glue << '\t\t\t\t\tcb[j] = rx.data[j]'
-	glue << '\t\t\t\t}'
-	glue << '\t\t\t\tc := trace.decode_cmd(cb)'
-	glue << '\t\t\t\tarm := c.opcode == trace.op_arm || c.opcode == trace.op_start || c.opcode == trace.op_reset'
-	glue << '\t\t\t\tif arm { // new session: forget prior overruns, re-enable the freeze fan-out'
-	glue << '\t\t\t\t\tfroze = false'
-	glue << '\t\t\t\t\tfor cc in 0 .. ncores {'
-	glue << '\t\t\t\t\t\tlast_trig[cc] = osal.scratch_get(${trace_trig_base} + cc)'
-	glue << '\t\t\t\t\t}'
-	glue << '\t\t\t\t\tpending = 0        // cancel any in-flight dump so a fresh capture isn\'t'
-	glue << '\t\t\t\t\tlink = isotp.Link{} // mixed with the previous session\'s blocks (F1281)'
-	glue << '\t\t\t\t}'
-	glue << '\t\t\t\tdump_busy := pending != 0 || link.busy()'
-	glue << '\t\t\t\tfor cc in 0 .. ncores {'
-	glue << '\t\t\t\t\tif !c.targets(u8(cc)) {'
-	glue << '\t\t\t\t\t\tcontinue'
-	glue << '\t\t\t\t\t}'
-	glue << '\t\t\t\t\t// Route the mutating ops to the OWNING partition (single-writer): the owner'
-	glue << '\t\t\t\t\t// only posts a (generation | opcode) command + reads the ring for the ack.'
-	glue << '\t\t\t\t\tif arm || c.opcode == trace.op_stop {'
-	glue << '\t\t\t\t\t\tseq++'
-	glue << '\t\t\t\t\t\tosal.scratch_set(${trace_cmd_base} + cc, (seq << 8) | u64(c.opcode))'
-	glue << '\t\t\t\t\t}'
-	glue << '\t\t\t\t\ttbv := unsafe { rings[cc] } // read-only snapshot for the status reply'
-	glue << '\t\t\t\t\tmut result := trace.result_ok'
-	glue << '\t\t\t\t\tif c.opcode == trace.op_dump {'
-	glue << '\t\t\t\t\t\tif tbv.state() != .full && tbv.state() != .frozen {'
-	glue << '\t\t\t\t\t\t\tresult = trace.result_not_ready'
-	glue << '\t\t\t\t\t\t} else if dump_busy {'
-	glue << '\t\t\t\t\t\t\tresult = trace.result_busy'
-	glue << '\t\t\t\t\t\t} else {'
-	glue << '\t\t\t\t\t\t\tpending |= u16(1) << cc'
-	glue << '\t\t\t\t\t\t}'
-	glue << '\t\t\t\t\t} else if c.opcode == trace.op_set_push {'
-	glue << '\t\t\t\t\t\tresult = trace.result_unsupported // push is config-driven, not runtime (F1297)'
-	glue << '\t\t\t\t\t} else if !arm && c.opcode != trace.op_stop && c.opcode != trace.op_status {'
-	glue << '\t\t\t\t\t\tresult = trace.result_bad_opcode'
-	glue << '\t\t\t\t\t}'
-	glue << '\t\t\t\t\trspb := trace.status_rsp(tbv, c.opcode, result, u8(cc))'
-	glue << '\t\t\t\t\tmut rf := can.Frame{'
-	glue << '\t\t\t\t\t\tid:  u32(0x${m.trace.rsp_id.hex()})'
-	glue << '\t\t\t\t\t\tlen: 8'
-	glue << '\t\t\t\t\t}'
-	glue << '\t\t\t\t\tfor j in 0 .. 8 {'
-	glue << '\t\t\t\t\t\trf.data[j] = rspb[j]'
-	glue << '\t\t\t\t\t}'
-	glue << '\t\t\t\t\tch.send(rf)'
-	glue << '\t\t\t\t}'
-	glue << '\t\t\t} else if rx.id == u32(0x${m.trace.dump_fc_id.hex()}) {'
-	glue << '\t\t\t\tmut p := isotp.Pdu{}'
-	glue << '\t\t\t\tfor j in 0 .. 8 {'
-	glue << '\t\t\t\t\tp.data[j] = rx.data[j]'
-	glue << '\t\t\t\t}'
-	glue << '\t\t\t\tlink.on_frame(osal.now_us(), p)'
-	glue << '\t\t\t}'
-	glue << '\t\t}'
-	glue << '\t\tlink.tick(osal.now_us()) // advance the N_Bs timeout even when tx_ready gates poll out'
-	glue << '\t\tmut tp := isotp.Pdu{}'
-	glue << '\t\tfor ch.tx_ready() && link.poll(osal.now_us(), mut tp) {'
-	glue << '\t\t\tmut pf := can.Frame{'
-	glue << '\t\t\t\tid:  u32(0x${m.trace.record_id.hex()})'
-	glue << '\t\t\t\tlen: 8'
-	glue << '\t\t\t}'
-	glue << '\t\t\tfor j in 0 .. 8 {'
-	glue << '\t\t\t\tpf.data[j] = tp.data[j]'
-	glue << '\t\t\t}'
-	glue << '\t\t\tch.send(pf)'
-	glue << '\t\t}'
-	glue << '\t\tmut newtrig := false'
-	glue << '\t\tfor cc in 0 .. ncores {'
-	glue << '\t\t\tv := osal.scratch_get(${trace_trig_base} + cc)'
-	glue << '\t\t\tif v != last_trig[cc] {'
-	glue << '\t\t\t\tlast_trig[cc] = v'
-	glue << '\t\t\t\tnewtrig = true'
-	glue << '\t\t\t}'
-	glue << '\t\t}'
-	glue << '\t\tif newtrig && !froze {'
-	glue << '\t\t\tfroze = true'
-	glue << '\t\t\tfor cc in 0 .. ncores {'
-	glue << '\t\t\t\tseq++'
-	glue << '\t\t\t\tosal.scratch_set(${trace_cmd_base} + cc, (seq << 8) | u64(0xf1)) // 0xf1 = freeze'
-	glue << '\t\t\t}'
-	glue << '\t\t}'
-	glue << '\t\tif !link.busy() && pending != 0 { // previous block drained -> start the next core'
-	glue << '\t\t\tmut cc := 0'
-	glue << '\t\t\tfor cc < ncores && (pending & (u16(1) << cc)) == 0 {'
-	glue << '\t\t\t\tcc++'
-	glue << '\t\t\t}'
-	glue << '\t\t\tif cc < ncores {'
-	glue << '\t\t\t\tpending &= ~(u16(1) << cc)'
-	glue << '\t\t\t\tmut tb := unsafe { &rings[cc] }'
-	glue << '\t\t\t\tn := tb.pack_block(&dumpbuf[0], ${m.trace.buffer_records * 8 + 8}, u8(cc))'
-	glue << '\t\t\t\tif n > 0 {'
-	glue << '\t\t\t\t\tlink.send(&dumpbuf[0], n)'
-	glue << '\t\t\t\t}'
-	glue << '\t\t\t}'
-	glue << '\t\t}'
-	glue << '\t\tosal.sleep_us(1000)'
-	glue << '\t}'
-	glue << '}'
-	return glue
-}
-
 // emit_bridges emits the host COM bus bridge(s): per external bus, decode rx -> IOC cells and
 // encode IOC cells -> tx frames (+ raw routes, ISO-TP, E2E/SecOC). Skipped for the ThreadX
 // comm-thread target (comm_thread_on), which owns rx in its own comm_thread_entry. Returns the
 // glue lines plus the bus_names / bus_dests the run() emitters need; reads the Model, with the
 // derived scratch/thread layout (telem_slot, comm_tid, trace bases) from main's emit-time state.
-fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot map[string]int, comm_tid map[string]int, trace_cmd_base int, trace_trig_base int) ([]string, []string, map[string][]string) {
-	buses := m.buses.clone()
-	bus_core := m.bus_core.clone()
-	sig_names := m.sig_names
-	sig_of := m.sig_of.clone()
-	isotp_conns := m.isotp_conns
-	routes := m.routes
-	dids := m.dids
-	telem_on := m.telem.on
-	trace_budget_us := m.trace.budget_us
-	tx_mode := m.frames.tx_mode.clone()
-	tx_cycle_us := m.frames.tx_cycle_us.clone()
-	tx_min_us := m.frames.tx_min_us.clone()
-	rx_timeout_us := m.frames.rx_timeout_us.clone()
-	e2e_on := m.frames.e2e_on.clone()
-	e2e_id := m.frames.e2e_id.clone()
-	e2e_crc := m.frames.e2e_crc.clone()
-	e2e_ctr := m.frames.e2e_ctr.clone()
-	secoc_on := m.frames.secoc_on.clone()
-	secoc_id := m.frames.secoc_id.clone()
-	secoc_fresh := m.frames.secoc_fresh.clone()
-	secoc_mac := m.frames.secoc_mac.clone()
-	secoc_maclen := m.frames.secoc_maclen.clone()
-	secoc_key := m.frames.secoc_key.clone()
+fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, []string, map[string][]string) {
 	mut glue := []string{}
 	mut bus_names := []string{}
 	mut bus_dests := map[string][]string{}
-	for bname, _ in buses {
+	for bname, _ in m.buses {
 		if comm_thread_on {
 			continue
 		}
 		bb := snake(bname)
 		mut rx_by_msg := map[string][]string{}
 		mut tx_by_msg := map[string][]string{}
-		for sname in sig_names {
-			si := sig_of[sname] or { continue }
+		for sname in m.sig_names {
+			si := m.sig_of[sname] or { continue }
 			if !si.external || si.bus != bname {
 				continue
 			}
@@ -820,15 +684,15 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 			}
 		}
 		mut conns := []IsotpConn{}
-		for c in isotp_conns {
+		for c in m.isotp_conns {
 			if c.bus == bname {
 				conns << c
 			}
 		}
-		// routes that ORIGINATE on this bus, and the distinct destination buses
+		// m.routes that ORIGINATE on this bus, and the distinct destination m.buses
 		mut my_routes := []Route{}
 		mut dests := []string{}
-		for r in routes {
+		for r in m.routes {
 			if r.from_bus == bname {
 				my_routes << r
 				if r.to_bus !in dests {
@@ -846,7 +710,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 		// io fn needs a timestamp to gate tx, monitor rx deadlines, or pace ISO-TP
 		mut uses_now := tx_by_msg.len > 0 || conns.len > 0
 		for msg, _ in rx_by_msg {
-			if (rx_timeout_us[msg] or { 0 }) > 0 {
+			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 				uses_now = true
 			}
 		}
@@ -857,22 +721,22 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 		glue << '\tchan can.Channel'
 		for msg, _ in tx_by_msg {
 			glue << '\ttx_${msg}_st com.TxState'
-			if e2e_on[msg] or { false } {
+			if m.frames.e2e_on[msg] or { false } {
 				glue << '\te2e_tx_${msg} e2e.TxState'
 			}
-			if secoc_on[msg] or { false } {
+			if m.frames.secoc_on[msg] or { false } {
 				glue << '\tsecoc_key_${msg} secoc.Key'
 				glue << '\tsecoc_tx_${msg} secoc.TxState'
 			}
 		}
 		for msg, _ in rx_by_msg {
-			if (rx_timeout_us[msg] or { 0 }) > 0 {
+			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 				glue << '\trx_${msg}_st com.RxState'
 			}
-			if e2e_on[msg] or { false } {
+			if m.frames.e2e_on[msg] or { false } {
 				glue << '\te2e_rx_${msg} e2e.RxState'
 			}
-			if secoc_on[msg] or { false } {
+			if m.frames.secoc_on[msg] or { false } {
 				glue << '\tsecoc_key_${msg} secoc.Key'
 				glue << '\tsecoc_rx_${msg} secoc.RxState'
 			}
@@ -913,26 +777,26 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 				// the actual bytes into the reused frame, so a short same-id frame
 				// would otherwise be decoded over stale trailing bytes.
 				glue << '\t\tif rx.id == ${msg}_id && rx.len == ${msg}_dlc {'
-				e2e := e2e_on[msg] or { false }
-				secoc := secoc_on[msg] or { false }
+				e2e := m.frames.e2e_on[msg] or { false }
+				secoc := m.frames.secoc_on[msg] or { false }
 				// protected frames are decoded only if the check passes; a bad frame
 				// is ignored (the rx deadline then invalidates).
 				mut ind := '\t\t\t'
 				if secoc {
-					glue << '\t\t\tif st.secoc_rx_${msg}.verify(&st.secoc_key_${msg}, &rx.data[0], int(${msg}_dlc), u16(0x${(secoc_id[msg] or {
+					glue << '\t\t\tif st.secoc_rx_${msg}.verify(&st.secoc_key_${msg}, &rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.secoc_id[msg] or {
 						0
-					}).hex()}), ${secoc_fresh[msg] or { 0 }}, ${secoc_mac[msg] or { 0 }}, ${secoc_maclen[msg] or {
+					}).hex()}), ${m.frames.secoc_fresh[msg] or { 0 }}, ${m.frames.secoc_mac[msg] or { 0 }}, ${m.frames.secoc_maclen[msg] or {
 						0
 					}}).usable() {'
 					ind = '\t\t\t\t'
 				} else if e2e {
-					glue << '\t\t\tif st.e2e_rx_${msg}.check(&rx.data[0], int(${msg}_dlc), u16(0x${(e2e_id[msg] or {
+					glue << '\t\t\tif st.e2e_rx_${msg}.check(&rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or {
 						0
-					}).hex()}), ${e2e_crc[msg] or { 0 }}, ${e2e_ctr[msg] or { 0 }}).usable() {'
+					}).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }}).usable() {'
 					ind = '\t\t\t\t'
 				}
 				for sname in list {
-					si := sig_of[sname] or { continue }
+					si := m.sig_of[sname] or { continue }
 					fld := snake(sname)
 					dec := '${si.dbc_msg}_${snake(sname)}_phys(rx.data)'
 					valassign := if si.val_type == 'bool' {
@@ -944,7 +808,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 					glue << '${ind}mut ${fld} := sig.${sname}{ ${valassign}${validassign} }'
 					glue << '${ind}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
 				}
-				if (rx_timeout_us[msg] or { 0 }) > 0 {
+				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 					glue << '${ind}st.rx_${msg}_st.on_receive(now)'
 				}
 				if secoc || e2e {
@@ -965,10 +829,10 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 			glue << '\t}'
 			// rx deadline crossed -> publish invalid (valid=false) signals, once
 			for msg, list in rx_by_msg {
-				if (rx_timeout_us[msg] or { 0 }) > 0 {
+				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 					glue << '\tif st.rx_${msg}_st.expired(now) {'
 					for sname in list {
-						si := sig_of[sname] or { continue }
+						si := m.sig_of[sname] or { continue }
 						fld := snake(sname)
 						glue << '\t\tmut ${fld} := sig.${sname}{}'
 						glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
@@ -980,11 +844,11 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 			// request, drain the segmented response.
 			for c in conns {
 				tp := snake(c.name)
-				for idx, did in dids {
+				for idx, did in m.dids {
 					if did.signal == '' {
 						continue
 					}
-					si := sig_of[did.signal] or { continue }
+					si := m.sig_of[did.signal] or { continue }
 					f := snake(did.signal)
 					glue << '\tmut ${f}_did := sig.${did.signal}{}'
 					glue << '\tif osal.${acquire_fn(si.transport)}(${f}_ch, &${f}_did, u8(sizeof(${f}_did))) {'
@@ -1021,7 +885,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 			glue << '\t}'
 			glue << '\tmut tx_${msg}_any := false'
 			for sname in list {
-				si := sig_of[sname] or { continue }
+				si := m.sig_of[sname] or { continue }
 				fld := snake(sname)
 				phys := if si.val_type == 'bool' {
 					'if ${fld}.${si.val_field} { f64(1) } else { f64(0) }'
@@ -1038,8 +902,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 			// advances the E2E/SecOC counter nor consumes the change/trigger — the PDU
 			// just retries next tick (REQ-COM-006). mark_sent() commits the send only
 			// once the channel accepts the frame.
-			e2e_here := e2e_on[msg] or { false }
-			secoc_here := secoc_on[msg] or { false }
+			e2e_here := m.frames.e2e_on[msg] or { false }
+			secoc_here := m.frames.secoc_on[msg] or { false }
 			needs_pre := e2e_here || secoc_here
 			glue << '\tif tx_${msg}_any && st.chan.tx_ready() && st.tx_${msg}_st.should_send(now, tx_${msg}.data, ${msg}_dlc) {'
 			if needs_pre {
@@ -1050,17 +914,17 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 				// advances the counter as a side effect); then stamp CRC + counter after the
 				// change decision (so the counter doesn't make every frame look "changed").
 				glue << '\t\te2e_save_${msg} := st.e2e_tx_${msg}'
-				glue << '\t\tst.e2e_tx_${msg}.protect(&tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(e2e_id[msg] or {
+				glue << '\t\tst.e2e_tx_${msg}.protect(&tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or {
 					0
-				}).hex()}), ${e2e_crc[msg] or { 0 }}, ${e2e_ctr[msg] or { 0 }})'
+				}).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }})'
 			}
 			if secoc_here {
 				// snapshot freshness for the same rewind; then authenticate (stamp freshness
 				// + truncated AES-CMAC) after the change decision.
 				glue << '\t\tsecoc_save_${msg} := st.secoc_tx_${msg}'
-				glue << '\t\tst.secoc_tx_${msg}.protect(&st.secoc_key_${msg}, &tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(secoc_id[msg] or {
+				glue << '\t\tst.secoc_tx_${msg}.protect(&st.secoc_key_${msg}, &tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(m.frames.secoc_id[msg] or {
 					0
-				}).hex()}), ${secoc_fresh[msg] or { 0 }}, ${secoc_mac[msg] or { 0 }}, ${secoc_maclen[msg] or {
+				}).hex()}), ${m.frames.secoc_fresh[msg] or { 0 }}, ${m.frames.secoc_mac[msg] or { 0 }}, ${m.frames.secoc_maclen[msg] or {
 					0
 				}})'
 			}
@@ -1091,13 +955,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 		for d in dests {
 			psig += ', route_${snake(d)} can.Channel'
 		}
-		// P3b: when tracing, the bridge is a traced comm thread — it takes a ring pointer (its own,
-		// owned by run()) as a trailing voidptr, exactly like a traced app partition.
-		if trace_multicore {
-			psig += ', commring voidptr'
-		}
 		glue << 'pub fn partition_${bb}(${psig}) {'
-		glue << '\tosal.pin_to_core(${bus_core[bname] or { 0 }})'
+		glue << '\tosal.pin_to_core(${m.bus_core[bname] or { 0 }})'
 		glue << '\tmut st := Bridge_${bb}_state{'
 		glue << '\t\tchan: ch'
 		glue << '\t}'
@@ -1105,30 +964,30 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 			glue << '\tst.route_${snake(d)} = route_${snake(d)}'
 		}
 		for msg, _ in tx_by_msg {
-			mode := tx_mode[msg] or { 'cyclic' }
-			mut cyc := tx_cycle_us[msg] or { 0 }
+			mode := m.frames.tx_mode[msg] or { 'cyclic' }
+			mut cyc := m.frames.tx_cycle_us[msg] or { 0 }
 			if cyc == 0 {
 				cyc = 100000 // default cyclic period when unspecified
 			}
 			glue << '\tst.tx_${msg}_st = com.TxState{'
 			glue << '\t\tmode: com.TxMode.${mode}'
 			glue << '\t\tcycle_us: ${cyc}'
-			glue << '\t\tmin_delay_us: ${tx_min_us[msg] or { 0 }}'
+			glue << '\t\tmin_delay_us: ${m.frames.tx_min_us[msg] or { 0 }}'
 			glue << '\t}'
-			if secoc_on[msg] or { false } {
-				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(secoc_key[msg] or {
+			if m.frames.secoc_on[msg] or { false } {
+				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(m.frames.secoc_key[msg] or {
 					[]u8{}
 				})})'
 			}
 		}
 		for msg, _ in rx_by_msg {
-			if (rx_timeout_us[msg] or { 0 }) > 0 {
+			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 				glue << '\tst.rx_${msg}_st = com.RxState{'
-				glue << '\t\ttimeout_us: ${rx_timeout_us[msg]}'
+				glue << '\t\ttimeout_us: ${m.frames.rx_timeout_us[msg]}'
 				glue << '\t}'
 			}
-			if secoc_on[msg] or { false } {
-				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(secoc_key[msg] or {
+			if m.frames.secoc_on[msg] or { false } {
+				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(m.frames.secoc_key[msg] or {
 					[]u8{}
 				})})'
 			}
@@ -1140,7 +999,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 			glue << '\t\tstmin: ${c.stmin}'
 			glue << '\t}'
 			glue << '\tst.uds_${tp} = uds.Server{}'
-			for idx, did in dids {
+			for idx, did in m.dids {
 				glue << '\tst.uds_${tp}.dids[${idx}] = uds.Did{'
 				glue << '\t\tid: u16(0x${did.id.hex()})'
 				if did.writable {
@@ -1154,71 +1013,20 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 					glue << '\tst.uds_${tp}.dids[${idx}].len = ${did.bytes.len}'
 				}
 			}
-			glue << '\tst.uds_${tp}.ndid = ${dids.len}'
+			glue << '\tst.uds_${tp}.ndid = ${m.dids.len}'
 		}
 		glue << '\tmut sched := loom.Scheduler{}'
 		glue << '\tsched.every(10_000, io_${bb}_10ms, &st)'
-		bc := bus_core[bname] or { 0 }
-		if trace_multicore {
-			// P3b: the bridge is a traced comm thread. Emit a THREAD span for each drain cycle that
-			// actually ran the COM handler (no FBs, so no fb records), apply routed arm/stop/freeze
-			// commands to its OWN ring (single-writer, exactly like an app partition), and share the
-			// P3a coordination. run_profiled accounts load internally.
-			glue << '\tmut cap := TraceCapture{'
-			glue << '\t\tbuf:       unsafe { &trace.TraceBuffer(commring) }'
-			glue << '\t\tstart:     osal.now_us()'
-			glue << '\t\tthread_id: ${comm_tid[bname] or { 0 }}'
-			glue << '\t\ttrig_slot: ${trace_trig_base + bc}'
-			glue << '\t}'
-			glue << '\tmut last_cmd := osal.scratch_get(${trace_cmd_base + bc})'
-			glue << '\tfor {'
-			glue << '\t\tcmdv := osal.scratch_get(${trace_cmd_base + bc})'
-			glue << '\t\tif cmdv != last_cmd {'
-			glue << '\t\t\tlast_cmd = cmdv'
-			glue << '\t\t\top := u8(cmdv & 0xff)'
-			glue << '\t\t\tif op == trace.op_arm || op == trace.op_start || op == trace.op_reset {'
-			glue << '\t\t\t\tcap.buf.start()'
-			glue << '\t\t\t\tcap.start = osal.now_us()'
-			glue << '\t\t\t\tcap.base = 0'
-			glue << '\t\t\t\tcap.busy_end = 0'
-			glue << '\t\t\t} else if op == trace.op_stop {'
-			glue << '\t\t\t\tcap.buf.stop()'
-			glue << '\t\t\t} else if op == 0xf1 {'
-			glue << '\t\t\t\tcap.buf.trigger()'
-			glue << '\t\t\t}'
-			glue << '\t\t}'
-			glue << '\t\tloom_t0 := osal.now_us()'
-			glue << '\t\tbefore := sched.handler_stat(0).count'
-			glue << '\t\tsched.run_profiled(osal.now_us)'
-			glue << '\t\tloom_t1 := osal.now_us()'
-			glue << '\t\tif sched.handler_stat(0).count != before { // the COM drain ran -> a comm busy span'
-			glue << '\t\t\ttrace_thread_span(mut cap, loom_t0, loom_t1)'
-			if trace_budget_us > 0 {
-				// A COM drain that overran the budget is a freeze culprit too — mirror the app hook:
-				// freeze this comm ring and raise its request so the owner fans a coherent freeze out.
-				glue << '\t\t\tif loom_t1 - loom_t0 > ${trace_budget_us} && cap.buf.state() == .capturing {'
-				glue << '\t\t\t\tcap.buf.trigger()'
-				glue << '\t\t\t\tosal.scratch_set(cap.trig_slot, osal.scratch_get(cap.trig_slot) + 1)'
-				glue << '\t\t\t}'
-			}
-			glue << '\t\t}'
-			if telem_on && 'b:${bname}' in telem_slot {
-				glue << '\t\tosal.scratch_set(${telem_slot['b:${bname}']}, u64(sched.load_permille()))'
-			}
-			glue << '\t\tosal.sleep_us(1000)'
-			glue << '\t}'
-		} else {
 			glue << '\tfor {'
 			glue << '\t\tloom_t0 := osal.now_us()'
 			glue << '\t\tsched.run(loom_t0)'
 			glue << '\t\tloom_t1 := osal.now_us()'
 			glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
-			if telem_on && 'b:${bname}' in telem_slot {
-				glue << '\t\tosal.scratch_set(${telem_slot['b:${bname}']}, u64(sched.load_permille()))'
+			for p in producers {
+				glue << p.partition_loop_body('b:${bname}')
 			}
 			glue << '\t\tosal.sleep_us(1000)'
 			glue << '\t}'
-		}
 		glue << '}'
 	}
 	return glue, bus_names, bus_dests
@@ -1227,23 +1035,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 // emit_run_target emits the on-target run(): the bare-metal / ThreadX single-core superloop
 // (no osal, no spawn) plus — for the ThreadX target — comm_thread_entry and tx_application_define.
 // Reads the Model; doc/all_regs/ioc_idx/msg_ioc_idx/telem_iface/comm_thread_on are main's emit state.
-fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_iface string, comm_thread_on bool, ioc_idx map[string]int, msg_ioc_idx map[int]int) []string {
-	sig_of := m.sig_of.clone()
-	sig_names := m.sig_names
-	by_part := m.part.by_part.clone()
-	threads_of := m.part.threads_of.clone()
-	thread_prio := m.part.thread_prio.clone()
-	tx_cycle_us := m.frames.tx_cycle_us.clone()
-	telem_on := m.telem.on
-	telem_bus := m.telem.bus
-	telem_id := m.telem.id
-	telem_detail_id := m.telem.detail_id
-	telem_period_us := m.telem.period_us
-	target_threadx := m.target.threadx
-	target_tick_us := m.target.tick_us
-	trace_on := m.trace.on
-	trace_record_id := m.trace.record_id
-	trace_buffer_records := m.trace.buffer_records
+fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_iface string, comm_thread_on bool, ioc_idx map[string]int, msg_ioc_idx map[int]int, producers []Producer) []string {
 	mut glue := []string{}
 		// --- target run(): one inline single-core superloop. No spawn, no osal. The
 		//     timebase is the board's DWT clock (board_now_us); the loop paces to a
@@ -1253,62 +1045,62 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		//     load as run-time / wall-clock, so unpaced spinning would read ~50%). The
 		//     CpuLoad frame is sent inline from load_permille() — no scratch, no tx
 		//     thread. Takes the telemetry bus channel (main.v opens it after board init).
-		// The target emits ONE app thread from the single FB-bearing partition. by_part is keyed
+		// The target emits ONE app thread from the single FB-bearing partition. m.part.by_part is keyed
 		// only by partitions that own fbs, so an extra FB-LESS partition would slip past a
-		// by_part-only check yet still be created as a labelled thread by the manifest loop (which
+		// m.part.by_part-only check yet still be created as a labelled thread by the manifest loop (which
 		// walks every declared partition) — shifting the hook ids (e.g. the ThreadX System Timer
 		// Thread id). Require exactly one DECLARED partition so declared == generated.
 		np_declared := ecumodel.toml_arr(doc, 'partition').len
-		if by_part.keys().len != 1 || np_declared != 1 {
+		if m.part.by_part.keys().len != 1 || np_declared != 1 {
 			panic('loom2v: [target] supports exactly one partition (got ${np_declared} declared, ' +
-				'${by_part.keys().len} with fbs) — a second or FB-less partition is never generated ' +
+				'${m.part.by_part.keys().len} with fbs) — a second or FB-less partition is never generated ' +
 				'yet would still be labelled in the trace manifest; multi-partition/multi-core is not generated yet')
 		}
-		part := by_part.keys()[0]
-		chp := snake(telem_bus)
+		part := m.part.by_part.keys()[0]
+		chp := snake(m.telem.bus)
 		// ThreadX target config: the app thread's priority, the telem bus fd-mode + index, and
 		// the sleep-per-pass in ThreadX ticks (1 tick = 1 ms; tx_initialize_low_level runs a 1 kHz
 		// SysTick for the threadx target), all from ecu.toml rather than hardcoded.
-		app_thread := (threads_of[part] or { [''] })[0]
-		tx_prio := thread_prio[app_thread] or { 10 }
+		app_thread := (m.part.threads_of[part] or { [''] })[0]
+		tx_prio := m.part.thread_prio[app_thread] or { 10 }
 		// ThreadX priorities are 0..TX_MAX_PRIORITIES-1 (default 32); a value the schema type-checks
 		// but the kernel rejects would make tx_thread_create fail and start no thread. Catch it here.
-		if target_threadx && (tx_prio < 0 || tx_prio > 31) {
+		if m.target.threadx && (tx_prio < 0 || tx_prio > 31) {
 			panic('loom2v: [target] kind="threadx" thread "${app_thread}" priority ${tx_prio} is out ' +
 				'of the ThreadX range 0..31')
 		}
 		mut tx_bus_fd := false
 		mut tx_bus_idx := '0'
-		if target_threadx {
-			if bc := doc.value('bus').as_map()[telem_bus] {
+		if m.target.threadx {
+			if bc := doc.value('bus').as_map()[m.telem.bus] {
 				tx_bus_fd = (bc.as_map()['fd'] or { toml.Any(false) }).bool()
 			}
 			// The register-level FDCAN backend is classic-only (blob_can_open rejects fd_mode), so
 			// a CAN-FD telemetry bus would open -1 and the thread would exit. Reject it at gen time.
 			if tx_bus_fd {
-				panic('loom2v: [target] kind="threadx": bus "${telem_bus}" has fd = true, but the ' +
-					'FDCAN backend used here is classic-only — set [bus.${telem_bus}].fd = false')
+				panic('loom2v: [target] kind="threadx": bus "${m.telem.bus}" has fd = true, but the ' +
+					'FDCAN backend used here is classic-only — set [bus.${m.telem.bus}].fd = false')
 			}
 			// The driver opens the bus by a SINGLE-digit index "0".."2" (blob_can_open reads
 			// name[0]-'0'); derive it from the bus name (e.g. "can0" -> "0"). Require exactly one
 			// digit in 0..2 — reject a name with no digit ("powertrain" -> bus 0 silently) OR an
 			// ambiguous multi-digit one ("can10"/"can01", where the driver would read only '1'/'0').
 			mut digits := ''
-			for cc in telem_bus {
+			for cc in m.telem.bus {
 				if cc >= `0` && cc <= `9` {
 					digits += cc.ascii_str()
 				}
 			}
 			if digits.len != 1 || digits[0] < `0` || digits[0] > `2` {
-				panic('loom2v: [target] kind="threadx": telemetry bus "${telem_bus}" must name a single ' +
+				panic('loom2v: [target] kind="threadx": telemetry bus "${m.telem.bus}" must name a single ' +
 					'FDCAN index 0..2 (e.g. "can0") — the driver opens buses by a one-digit index')
 			}
 			tx_bus_idx = digits
 		}
-		tx_sleep_ticks := if target_tick_us / 1000 > 1 { target_tick_us / 1000 } else { u64(1) }
+		tx_sleep_ticks := if m.target.tick_us / 1000 > 1 { m.target.tick_us / 1000 } else { u64(1) }
 		glue << ''
 		glue << 'fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)'
-		if target_threadx {
+		if m.target.threadx {
 			// ThreadX target: the FB superloop runs inside a real ThreadX thread (paced by
 			// tx_thread_sleep) that tx_application_define creates on tx_kernel_enter. TCB + stack
 			// are static (globals). This partition has one thread; a multi-thread config would
@@ -1323,12 +1115,6 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << 'fn C._tx_thread_sleep(u32) u32'
 			glue << 'fn C._tx_initialize_kernel_enter()'
 			glue << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
-			if trace_on {
-				// The exec-change-hook trace recorder (trace_hooks.c, driver-independent): it copies
-				// the ring into our scratch buffer under a brief freeze, and THIS thread (the sole
-				// bus owner) streams the stable copy. RING_CAP = 256 records * 8 bytes.
-				glue << 'fn C.trace_snapshot(voidptr, u32) u32'
-			}
 			if comm_thread_on {
 				// Board glue (examples/<x>/comm_glue.c): the FDCAN Rx-FIFO0 ISR posts a semaphore
 				// that comm_rx_wait blocks on, so the comm thread wakes on rx instead of polling.
@@ -1362,9 +1148,6 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '__global ('
 			glue << '\tg_${part}_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned'
 			glue << '\tg_${part}_stack [4096]u8'
-			if trace_on {
-				glue << '\tg_${part}_trace [${trace_buffer_records}][8]u8 // scratch snapshot of the trace ring (owner streams it)'
-			}
 			if comm_thread_on {
 				glue << '\tg_comm_tcb   [32]u64  // the bus-owning comm thread'
 				glue << '\tg_comm_stack [4096]u8'
@@ -1390,25 +1173,17 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		for r in all_regs[part] or { []string{} } {
 			glue << r
 		}
-		if telem_on && telem_iface != '' && !comm_thread_on {
+		if m.telem.on && telem_iface != '' && !comm_thread_on {
 			glue << '\tmut load := [8]u16{}'
-			glue << '\ttelem_period_us := u64(${telem_period_us})'
+			glue << '\ttelem_period_us := u64(${m.telem.period_us})'
 			glue << '\tmut last_telem := u64(0)'
-			if telem_detail_id != 0 {
+			if m.telem.detail_id != 0 {
 				glue << '\tmut last_overruns := u32(0) // for the per-period overrun count'
 			}
 		}
-		glue << '\ttick_us := u64(${target_tick_us})'
-		if !target_threadx {
+		glue << '\ttick_us := u64(${m.target.tick_us})'
+		if !m.target.threadx {
 			glue << '\tmut next_tick := C.board_now_us() + tick_us'
-		}
-		if target_threadx && trace_on && !comm_thread_on {
-			// Exec-hook trace stream state: snapshot the ring ~1 s, then stream the stable copy
-			// in chunks across iterations (this thread is the sole bus owner => lock-free).
-			glue << '\tmut last_trace := u64(0)'
-			glue << '\tmut tr_pos := u32(0)'
-			glue << '\tmut tr_n := u32(0)'
-			glue << '\tmut tr_active := false'
 		}
 		glue << '\tfor {'
 		glue << '\t\tt0 := C.board_now_us()'
@@ -1425,76 +1200,20 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '\t\tC.load_pub(u32(sched.load_permille()), u32(sched.load_permille_100ms()),'
 			glue << '\t\t\tu32(sched.load_permille_1s()), u32(sched.load_permille_10s()), sched.overruns())'
 		}
-		if telem_on && telem_iface != '' && !comm_thread_on {
-			glue << '\t\tif t1 - last_telem >= telem_period_us {'
-			glue << '\t\t\tlast_telem = t1'
-			glue << '\t\t\tload[0] = sched.load_permille() // single M7 -> core 0 only'
-			glue << '\t\t\tframe := telem.encode_cpuload(load, 1)'
-			glue << '\t\t\tmut f := can.Frame{'
-			glue << '\t\t\t\tid:  u32(0x${telem_id.hex()})'
-			glue << '\t\t\t\tlen: 8'
-			glue << '\t\t\t}'
-			glue << '\t\t\tfor i in 0 .. 8 {'
-			glue << '\t\t\t\tf.data[i] = frame[i]'
-			glue << '\t\t\t}'
-			glue << '\t\t\tch.send(f)'
-			if telem_detail_id != 0 {
-				glue << '\t\t\tovr := sched.overruns()'
-				glue << '\t\t\tdetail := telem.encode_loaddetail(sched.load_permille_100ms(),'
-				glue << '\t\t\t\tsched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)'
-				glue << '\t\t\tlast_overruns = ovr'
-				glue << '\t\t\tmut d := can.Frame{'
-				glue << '\t\t\t\tid:  u32(0x${telem_detail_id.hex()})'
-				glue << '\t\t\t\tlen: 8'
-				glue << '\t\t\t}'
-				glue << '\t\t\tfor i in 0 .. 8 {'
-				glue << '\t\t\t\td.data[i] = detail[i]'
-				glue << '\t\t\t}'
-				glue << '\t\t\tch.send(d)'
-			}
-			glue << '\t\t}'
+		for p in producers {
+			glue << p.bus_tick(BusCtx{
+				telem_active: m.telem.on && telem_iface != '' && !comm_thread_on
+				now:          't1'
+				period:       'telem_period_us'
+				load:         ['\t\t\tload[0] = sched.load_permille() // single M7 -> core 0 only']
+				det_ovr:      'sched.overruns()'
+				det_lines:    ['\t\t\tdetail := telem.encode_loaddetail(sched.load_permille_100ms(),', '\t\t\t\tsched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)']
+				frame:        'f'
+				detframe:     'd'
+				idx:          'i'
+			})
 		}
-		if target_threadx && trace_on && !comm_thread_on {
-			// Stream the exec-hook trace ring ~1 s, single-owner + incremental. trace_snapshot
-			// copies the ring into g_${part}_trace under a brief freeze; we then send 16 records
-			// per pass, only while the Tx FIFO has room (no spin) — so a stuck bus can't wedge
-			// the owner and the FB scheduling above still runs between chunks. Records go out raw
-			// (one 8-byte record per classic frame on the trace record id); the host decodes with
-			// candump + decode_trace.py.
-			//
-			// NOTE (raw-stream limitation): these are the trace_hooks.c records verbatim, whose
-			// start_us is absolute DWT µs truncated to u24 — it wraps every ~16.7 s with no epoch
-			// re-anchor, so decode_trace.py orders a window, not an unbounded absolute timeline.
-			// This matches the hand-written threadx_h735 bring-up stream. blobly_net's swimlane
-			// consumes the ISO-TP *block* dump (relative records + per-block epoch anchor, which
-			// handles the wrap) — emitting that block/epoch protocol on the ThreadX target is a
-			// later phase; until then the manifest advertises only the raw `record` frame.
-			glue << '\t\tif !tr_active && t1 - last_trace >= u64(1000000) {'
-			glue << '\t\t\ttr_n = C.trace_snapshot(&g_${part}_trace[0], ${trace_buffer_records})'
-			glue << '\t\t\ttr_pos = 0'
-			glue << '\t\t\ttr_active = true'
-			glue << '\t\t}'
-			glue << '\t\tif tr_active {'
-			glue << '\t\t\tmut sent := 0'
-			glue << '\t\t\tfor tr_pos < tr_n && sent < 16 && ch.tx_ready() {'
-			glue << '\t\t\t\tmut tf := can.Frame{'
-			glue << '\t\t\t\t\tid:  u32(0x${trace_record_id.hex()})'
-			glue << '\t\t\t\t\tlen: 8'
-			glue << '\t\t\t\t}'
-			glue << '\t\t\t\tfor j in 0 .. 8 {'
-			glue << '\t\t\t\t\ttf.data[j] = g_${part}_trace[tr_pos][j]'
-			glue << '\t\t\t\t}'
-			glue << '\t\t\t\tch.send(tf)'
-			glue << '\t\t\t\ttr_pos++'
-			glue << '\t\t\t\tsent++'
-			glue << '\t\t\t}'
-			glue << '\t\t\tif tr_pos >= tr_n {'
-			glue << '\t\t\t\ttr_active = false'
-			glue << '\t\t\t\tlast_trace = C.board_now_us()'
-			glue << '\t\t\t}'
-			glue << '\t\t}'
-		}
-		if target_threadx {
+		if m.target.threadx {
 			// Yield to the RTOS between passes: sleep the configured tick (in 1 ms ThreadX
 			// ticks), so lower-priority threads run and the Loom's load = run-time / wall-clock
 			// stays honest (no busy-wait). ThreadX runs a 1 kHz SysTick for the threadx target.
@@ -1509,7 +1228,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		}
 		glue << '\t}'
 		glue << '}'
-		if target_threadx {
+		if m.target.threadx {
 			// The ThreadX app thread + the kernel's application-define entry. main.v does the board
 			// clock/CAN init then C.tx_kernel_enter(), which calls tx_application_define below.
 			glue << ''
@@ -1530,15 +1249,15 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// boundary") — until then the lean cut owns FDCAN1 only.
 				if tx_bus_idx != '0' {
 					panic('loom2v: [target] kind="threadx" comm thread: the Rx-ISR glue serves FDCAN1 ' +
-						'(bus index 0) only, but bus "${telem_bus}" opens index ${tx_bus_idx}; use a ' +
+						'(bus index 0) only, but bus "${m.telem.bus}" opens index ${tx_bus_idx}; use a ' +
 						'can0/index-0 bus, or add per-instance IRQ glue (phase 6b-2b)')
 				}
 				// One rx branch per DBC MESSAGE (id), not per signal — several signals can share a
 				// message, and the lean cut counts received frames, so a frame must increment once.
 				mut rx_sigs := []SigInfo{}
 				mut rx_ids_seen := map[int]bool{}
-				for sn in sig_names {
-					s := sig_of[sn] or { continue }
+				for sn in m.sig_names {
+					s := m.sig_of[sn] or { continue }
 					if s.rx && !rx_ids_seen[s.dbc_id] {
 						rx_ids_seen[s.dbc_id] = true
 						rx_sigs << s
@@ -1546,8 +1265,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				// external TX signals (FB writes -> IOC -> comm sends), a producer each.
 				mut tx_sigs := []SigInfo{}
-				for sn in sig_names {
-					s := sig_of[sn] or { continue }
+				for sn in m.sig_names {
+					s := m.sig_of[sn] or { continue }
 					if s.external && !s.rx {
 						tx_sigs << s
 					}
@@ -1563,22 +1282,16 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// here is trace-specific: NM and COM-tx will slot in later as more producers/consumers.
 				glue << 'fn comm_thread_entry(input u32) {'
 				glue << '\tmut ch := can.Channel{}'
-				glue << "\tif !ch.open('${tx_bus_idx}', ${tx_bus_fd}) { // ${telem_bus}; board clocks/pins set by main.v"
+				glue << "\tif !ch.open('${tx_bus_idx}', ${tx_bus_fd}) { // ${m.telem.bus}; board clocks/pins set by main.v"
 				glue << '\t\tfor { C._tx_thread_sleep(1000) } // dead channel — park, never own a bus we can\'t drive'
 				glue << '\t}'
 				glue << '\tC.comm_rx_irq_enable() // arm the FDCAN Rx-FIFO0 interrupt now the bus is open'
-				if telem_on && telem_iface != '' {
+				if m.telem.on && telem_iface != '' {
 					glue << '\tmut last_telem := u64(0)'
-					glue << '\ttelem_period_us := u64(${telem_period_us})'
-					if telem_detail_id != 0 {
+					glue << '\ttelem_period_us := u64(${m.telem.period_us})'
+					if m.telem.detail_id != 0 {
 						glue << '\tmut last_overruns := u32(0)'
 					}
-				}
-				if trace_on {
-					glue << '\tmut last_trace := u64(0)'
-					glue << '\tmut tr_pos := u32(0)'
-					glue << '\tmut tr_n := u32(0)'
-					glue << '\tmut tr_active := false'
 				}
 				for si in tx_sigs {
 					glue << '\tmut last_tx_${snake(si.name)} := u64(0)'
@@ -1604,38 +1317,23 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << '\t\t}'
 				glue << '\t\tt1 := C.board_now_us()'
-				if telem_on && telem_iface != '' {
-					glue << "\t\t// PRODUCER: CpuLoad telemetry — reads the FB thread's load scratch"
-					glue << '\t\tif t1 - last_telem >= telem_period_us && ch.tx_ready() {'
-					glue << '\t\t\tlast_telem = t1'
-					glue << '\t\t\tmut load := [8]u16{}'
-					glue << '\t\t\tload[0] = u16(C.load_permille())'
-					glue << '\t\t\tframe := telem.encode_cpuload(load, 1)'
-					glue << '\t\t\tmut f := can.Frame{'
-					glue << '\t\t\t\tid:  u32(0x${telem_id.hex()})'
-					glue << '\t\t\t\tlen: 8'
-					glue << '\t\t\t}'
-					glue << '\t\t\tfor i in 0 .. 8 {'
-					glue << '\t\t\t\tf.data[i] = frame[i]'
-					glue << '\t\t\t}'
-					glue << '\t\t\tch.send(f)'
-					if telem_detail_id != 0 {
-						glue << '\t\t\tovr := C.load_overruns()'
-						glue << '\t\t\tdetail := telem.encode_loaddetail(u16(C.load_100ms()), u16(C.load_1s()), u16(C.load_10s()), ovr - last_overruns)'
-						glue << '\t\t\tlast_overruns = ovr'
-						glue << '\t\t\tmut d := can.Frame{'
-						glue << '\t\t\t\tid:  u32(0x${telem_detail_id.hex()})'
-						glue << '\t\t\t\tlen: 8'
-						glue << '\t\t\t}'
-						glue << '\t\t\tfor i in 0 .. 8 {'
-						glue << '\t\t\t\td.data[i] = detail[i]'
-						glue << '\t\t\t}'
-						glue << '\t\t\tch.send(d)'
-					}
-					glue << '\t\t}'
+				for p in producers {
+					glue << p.bus_tick(BusCtx{
+						telem_active: m.telem.on && telem_iface != ''
+						lead:         ["\t\t// PRODUCER: CpuLoad telemetry — reads the FB thread's load scratch"]
+						now:          't1'
+						period:       'telem_period_us'
+						gate:         ' && ch.tx_ready()'
+						load:         ['\t\t\tmut load := [8]u16{}', '\t\t\tload[0] = u16(C.load_permille())']
+						det_ovr:      'C.load_overruns()'
+						det_lines:    ['\t\t\tdetail := telem.encode_loaddetail(u16(C.load_100ms()), u16(C.load_1s()), u16(C.load_10s()), ovr - last_overruns)']
+						frame:        'f'
+						detframe:     'd'
+						idx:          'i'
+					})
 				}
 				for si in tx_sigs {
-					mut cyc := tx_cycle_us[si.dbc_msg] or { 0 }
+					mut cyc := m.frames.tx_cycle_us[si.dbc_msg] or { 0 }
 					if cyc <= 0 {
 						cyc = 100000 // default cyclic 100 ms if no [[frame]].tx.cycle_ms
 					}
@@ -1658,33 +1356,6 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t\tch.send(tf)'
 					glue << '\t\t}'
 				}
-				if trace_on {
-					glue << '\t\t// PRODUCER: exec-hook trace ring (a burst -> tx_ready-gated 16-record chunks)'
-					glue << '\t\tif !tr_active && t1 - last_trace >= u64(1000000) {'
-					glue << '\t\t\ttr_n = C.trace_snapshot(&g_${part}_trace[0], ${trace_buffer_records})'
-					glue << '\t\t\ttr_pos = 0'
-					glue << '\t\t\ttr_active = true'
-					glue << '\t\t}'
-					glue << '\t\tif tr_active {'
-					glue << '\t\t\tmut sent := 0'
-					glue << '\t\t\tfor tr_pos < tr_n && sent < 16 && ch.tx_ready() {'
-					glue << '\t\t\t\tmut tf := can.Frame{'
-					glue << '\t\t\t\t\tid:  u32(0x${trace_record_id.hex()})'
-					glue << '\t\t\t\t\tlen: 8'
-					glue << '\t\t\t\t}'
-					glue << '\t\t\t\tfor j in 0 .. 8 {'
-					glue << '\t\t\t\t\ttf.data[j] = g_${part}_trace[tr_pos][j]'
-					glue << '\t\t\t\t}'
-					glue << '\t\t\t\tch.send(tf)'
-					glue << '\t\t\t\ttr_pos++'
-					glue << '\t\t\t\tsent++'
-					glue << '\t\t\t}'
-					glue << '\t\t\tif tr_pos >= tr_n {'
-					glue << '\t\t\t\ttr_active = false'
-					glue << '\t\t\t\tlast_trace = C.board_now_us()'
-					glue << '\t\t\t}'
-					glue << '\t\t}'
-				}
 				glue << '\t}'
 				glue << '}'
 				glue << ''
@@ -1698,7 +1369,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			} else {
 				glue << 'fn ${part}_thread_entry(input u32) {'
 				glue << '\tmut ch := can.Channel{}'
-				glue << "\tif !ch.open('${tx_bus_idx}', ${tx_bus_fd}) { // ${telem_bus}; board clocks/pins set by main.v"
+				glue << "\tif !ch.open('${tx_bus_idx}', ${tx_bus_fd}) { // ${m.telem.bus}; board clocks/pins set by main.v"
 				glue << '\t\treturn // CAN open failed (bad bus index / FD unsupported) — don\'t run with a dead channel'
 				glue << '\t}'
 				glue << '\trun(ch)'
@@ -1724,435 +1395,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 	return glue
 }
 
-// emit_run_inline emits the single-core inline-trace run(): the app core owns the trace bus
-// channel and runs one profiled superloop — dispatch + capture hook, the TraceCmd/TraceRsp
-// handshake + ISO-TP dump of the frozen ring, the HandlerStat heartbeat, and CpuLoad. Also the
-// trace_target case (a baremetal target that polls the trace path). Reads the Model; doc / all_regs
-// / telem_iface / single_part / trace_target are main's emit-time state.
-fn emit_run_inline(m Model, doc toml.Doc, all_regs map[string][]string, telem_iface string, single_part string, trace_target bool) []string {
-	core_of := m.part.core_of.clone()
-	threads_of := m.part.threads_of.clone()
-	telem_on := m.telem.on
-	telem_bus := m.telem.bus
-	telem_id := m.telem.id
-	telem_detail_id := m.telem.detail_id
-	telem_period_us := m.telem.period_us
-	target_tick_us := m.target.tick_us
-	trace_cmd_id := m.trace.cmd_id
-	trace_rsp_id := m.trace.rsp_id
-	trace_stat_id := m.trace.stat_id
-	trace_record_id := m.trace.record_id
-	trace_dump_fc_id := m.trace.dump_fc_id
-	trace_buffer_records := m.trace.buffer_records
-	trace_level := m.trace.level
-	trace_push_us := m.trace.push_us
-	trace_budget_us := m.trace.budget_us
-	trace_pre_pct := m.trace.pre_pct
-	trace_mode := m.trace.mode
-	eff_trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
-	mut glue := []string{}
-		// --- inline-trace run(): the single app core owns the trace bus channel and runs one
-		//     superloop — profiled dispatch + capture hook, the TraceCmd/TraceRsp handshake +
-		//     ISO-TP dump of the frozen ring, the HandlerStat heartbeat, and CpuLoad. Single
-		//     core, so no IOC fan-out (that's the multi-core path, not generated yet). On a
-		//     bare-metal [target] (trace_target, P3c-0) the same body is emitted with the board
-		//     DWT clock instead of osal and a busy-wait idle to the tick — no osal at all. ---
-		part := single_part
-		chp := snake(eff_trace_bus)
-		pcore := core_of[part] or { 0 } // the core the partition (and this loop) is pinned to
-		// Clock seam: host uses osal.now_us; the bare-metal target uses the board's DWT µs counter
-		// (declared as a C fn below). nowcall is the call expression; nowref is the bare fn value
-		// passed to run_profiled/account.
-		nowcall := if trace_target { 'C.board_now_us()' } else { 'osal.now_us()' }
-		nowref := if trace_target { 'board_clock' } else { 'osal.now_us' }
-		// The single-core host capture only produces fb records (no thread switches / ISRs on a
-		// polled loop), so a thread-only level would capture nothing.
-		if trace_level !in ['thread+fb', 'all'] {
-			panic('loom2v: [trace] level "${trace_level}" needs thread/ISR events, which the ' +
-				'single-core host capture does not have — use "thread+fb" or "all" (thread/ISR ' +
-				'capture is the ThreadX target)')
-		}
-		// The inline runner owns only the trace bus channel, so it can only fold CpuLoad onto that
-		// bus. A telemetry bus that differs from the trace bus needs its own channel/thread.
-		if telem_on && telem_bus != eff_trace_bus {
-			panic('loom2v: [trace] inline runner sends CpuLoad on the trace bus "${eff_trace_bus}", ' +
-				'but [telemetry].bus is "${telem_bus}" — cross-bus telemetry with inline trace is ' +
-				'not generated yet')
-		}
-		// buffer_records is bounded to 1..64 by ecumodel.validate (the ISO-TP single-payload dump
-		// limit), which ran at the top of main() — so the dump buffer sizing below always fits.
-		mut pre := trace_pre_pct
-		if pre > 100 {
-			pre = 100
-		}
-		modelit := if trace_mode == 'oneshot' { '.oneshot' } else { '.ring' }
-		// the capture hook: one record per dispatched handler (global fb id == sched index for
-		// a single partition), re-anchoring the u24 start_us origin with an epoch before it
-		// wraps, and the overrun software trigger when a budget is configured.
-		glue << ''
-		glue << 'struct TraceState {'
-		glue << 'mut:'
-		glue << '\tbuf       trace.TraceBuffer'
-		glue << '\tstart     u64 // wall-clock µs of the capture origin'
-		glue << '\tbase      u64 // elapsed µs at the last epoch re-anchor'
-		glue << '\tthread_id u16 // this partition\'s thread id (for the derived THREAD records)'
-		glue << '\tbusy_end  u64 // elapsed µs at the end of the last busy span (idle-gap start)'
-		glue << '\tfb_count  u32 // handlers dispatched (the loop reads this to bracket a busy span)'
-		glue << '}'
-		glue << ''
-		glue << 'fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {'
-		glue << '\tmut t := unsafe { &TraceState(ctx) }'
-		glue << '\tt.fb_count++'
-		glue << '\telapsed := start_us - t.start'
-		glue << '\tif elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor'
-		glue << '\t\tt.base = elapsed'
-		glue << '\t\tt.buf.push(trace.new_epoch(u32(elapsed)))'
-		glue << '\t}'
-		glue << '\tmut dt := dt_us'
-		glue << '\tmut flags := u8(0)'
-		glue << '\tif dt > 0xFFFF { // clamp to the u16 field, and mark it saturated'
-		glue << '\t\tdt = 0xFFFF'
-		glue << '\t\tflags |= trace.flag_saturated'
-		glue << '\t}'
-		if trace_budget_us > 0 {
-			// flag the record that exceeded the budget so blobly_net outlines the freeze culprit.
-			glue << '\tif dt_us > ${trace_budget_us} {'
-			glue << '\t\tflags |= trace.flag_overran'
-			glue << '\t}'
-		}
-		glue << '\tt.buf.push(trace.new_fb(u16(idx), flags, u32(elapsed - t.base), u16(dt)))'
-		if trace_budget_us > 0 {
-			glue << '\tif dt_us > ${trace_budget_us} { // overrun: freeze the ring around the anomaly'
-			glue << '\t\tt.buf.trigger()'
-			glue << '\t}'
-		}
-		glue << '}'
-		glue << ''
-		// The polled superloop has no preemptive context switches, so synthesise the schedule it
-		// actually runs: a THREAD record bracketing each busy iteration (the app_main thread ran these
-		// handlers) + an IDLE record for the gap since the previous busy span. Same derivation as the
-		// multi-core path — so thread+fb shows the thread + idle lanes, not just fb bars. Real
-		// preemptive thread/ISR boundaries are the ThreadX target (P3c-1).
-		glue << 'fn trace_thread_span(mut t TraceState, t0_us u64, t1_us u64) {'
-		glue << '\te_start := t0_us - t.start // elapsed at the busy span start'
-		glue << '\te_end := t1_us - t.start   // elapsed at the busy span end'
-		glue << '\tif e_start > t.base && e_start - t.base > 0x00ff_ffff { // re-anchor before the u24 wraps'
-		glue << '\t\tt.base = e_start'
-		glue << '\t\tt.buf.push(trace.new_epoch(u32(e_start)))'
-		glue << '\t}'
-		glue << '\tgap_from := if t.busy_end > t.base { t.busy_end } else { t.base }'
-		glue << '\tif e_start > gap_from { // idle gap since the last busy span (within this epoch)'
-		glue << '\t\tmut gap := e_start - gap_from'
-		glue << '\t\tif gap > 0xFFFF {'
-		glue << '\t\t\tgap = 0xFFFF'
-		glue << '\t\t}'
-		glue << '\t\tt.buf.push(trace.new_idle(trace.reason_yield, u32(gap_from - t.base), u16(gap)))'
-		glue << '\t}'
-		glue << '\ts_from := if e_start > t.base { e_start } else { t.base } // clamp across an epoch re-anchor'
-		glue << '\tmut busy := if e_end > s_from { e_end - s_from } else { u64(0) }'
-		glue << '\tif busy > 0xFFFF {'
-		glue << '\t\tbusy = 0xFFFF'
-		glue << '\t}'
-		glue << '\tt.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(s_from - t.base), u16(busy)))'
-		glue << '\tt.busy_end = e_end'
-		glue << '}'
-		glue << ''
-		if trace_target {
-			glue << 'fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)'
-			glue << ''
-			// A V wrapper so the clock can be passed by value to run_profiled/account (a bare C.fn
-			// reference isn\'t a first-class fn value in V).
-			glue << 'fn board_clock() u64 {'
-			glue << '\treturn C.board_now_us()'
-			glue << '}'
-			glue << ''
-		}
-		glue << 'pub fn run(${chp} can.Channel) {'
-		if !trace_target {
-			glue << '\tosal.pin_to_core(${pcore}) // so the manifest/TraceRsp core label matches reality'
-		}
-		glue << '\tmut ch := ${chp}'
-		glue << '\tmut st := Partition_${part}_state{}'
-		glue << '\tmut sched := loom.Scheduler{}'
-		for r in all_regs[part] or { []string{} } {
-			glue << r
-		}
-		glue << '\tmut backing := [${trace_buffer_records}]trace.Record{}'
-		glue << '\tmut ts := TraceState{'
-		glue << '\t\tbuf: trace.new_buffer(&backing[0], ${trace_buffer_records}, ${modelit}, ${pre})'
-		glue << '\t}'
-		glue << '\tts.start = ${nowcall}'
-		// The THREAD records must carry the SAME thread id the manifest assigns — it numbers threads
-		// 1-based across every partition in TOML order (including FB-less ones before this partition),
-		// so it isn't always 1. Recompute it the manifest's way for this partition's (only) thread.
-		mut inline_tid := 1
-		for p in ecumodel.toml_arr(doc, 'partition') {
-			pn := (p.as_map()['name'] or { toml.Any('') }).string()
-			if pn == part {
-				break
-			}
-			inline_tid += (threads_of[pn] or { []string{} }).len
-		}
-		glue << '\tts.thread_id = ${inline_tid} // manifest thread id of ${part}\'s thread'
-		glue << '\tts.buf.start()'
-		glue << '\tsched.set_trace_hook(trace_capture, &ts)'
-		glue << '\tmut link := isotp.Link{}'
-		glue << '\tmut dumpbuf := [${trace_buffer_records * 8}]u8{} // buffer_records x 8, one ISO-TP payload'
-		heartbeat_on := trace_push_us > 0 // the HandlerStat push (push_ms = 0 disables it)
-		cpuload_on := telem_on && telem_iface != ''
-		nhandlers := (all_regs[part] or { []string{} }).len // one sched.every() line per handler
-		// Only emit the state each optional block uses — V rejects unused locals, so a config that
-		// disables the heartbeat (push_ms = 0) and/or telemetry must not declare their counters.
-		if heartbeat_on {
-			glue << '\tmut last_push := u64(0)'
-			glue << '\tmut last_count := [${nhandlers}]u32{}'
-		}
-		if cpuload_on {
-			glue << '\tmut last_telem := u64(0)'
-			if telem_detail_id != 0 {
-				glue << '\tmut last_overruns := u32(0) // for the LoadDetail per-period overrun delta'
-			}
-		}
-		if trace_target {
-			// Pace the superloop to a fixed tick with a busy-wait so idle is real idle — the Loom
-			// measures load as run-time / wall-clock, so an unpaced spin would read ~100%.
-			glue << '\ttick_us := u64(${target_tick_us})'
-			glue << '\tmut next_tick := C.board_now_us() + tick_us'
-		}
-		glue << '\tfor {'
-		glue << '\t\tloom_t0 := ${nowcall}'
-		glue << '\t\tbefore := ts.fb_count'
-		glue << '\t\tsched.run_profiled(${nowref})'
-		glue << '\t\tif ts.fb_count != before { // a handler ran -> bracket this busy iteration as a thread span'
-		glue << '\t\t\ttrace_thread_span(mut ts, loom_t0, ${nowcall})'
-		glue << '\t\t}'
-		if trace_target {
-			// Account tick overruns like the plain target, so the LoadDetail overrun count is real
-			// (run_profiled doesn't mark them). A pass whose handler time exceeds the tick budget overran.
-			glue << '\t\tif ${nowcall} - loom_t0 > tick_us {'
-			glue << '\t\t\tsched.mark_overrun()'
-			glue << '\t\t}'
-		}
-		glue << '\t\tmut rx := can.Frame{}'
-		glue << '\t\tif ch.recv(mut rx) {'
-		glue << '\t\t\tif rx.id == u32(0x${trace_cmd_id.hex()}) && rx.len >= 8 {'
-		glue << '\t\t\t\tmut cb := [8]u8{}'
-		glue << '\t\t\t\tfor j in 0 .. 8 {'
-		glue << '\t\t\t\t\tcb[j] = rx.data[j]'
-		glue << '\t\t\t\t}'
-		glue << '\t\t\t\tc := trace.decode_cmd(cb)'
-		glue << '\t\t\t\tmut rspb, do_dump, addressed := trace.handle_cmd(mut ts.buf, c, ${pcore})'
-		glue << '\t\t\t\tif addressed {'
-		glue << '\t\t\t\t\tif c.opcode == trace.op_arm || c.opcode == trace.op_start'
-		glue << '\t\t\t\t\t\t|| c.opcode == trace.op_reset {'
-		glue << '\t\t\t\t\t\tts.start = ${nowcall}'
-		glue << '\t\t\t\t\t\tts.base = 0'
-		glue << '\t\t\t\t\t\tts.busy_end = 0 // fresh origin: don\'t treat the old capture\'s span end as the idle-gap start'
-		glue << '\t\t\t\t\t\tlink = isotp.Link{}'
-		glue << '\t\t\t\t\t}'
-		glue << '\t\t\t\t\tif do_dump {'
-		glue << '\t\t\t\t\t\tn := ts.buf.pack(&dumpbuf[0], ${trace_buffer_records * 8})'
-		glue << '\t\t\t\t\t\tif n > 0 && !link.send(&dumpbuf[0], n) {'
-		glue << '\t\t\t\t\t\t\trspb[1] = trace.result_busy'
-		glue << '\t\t\t\t\t\t}'
-		glue << '\t\t\t\t\t}'
-		glue << '\t\t\t\t\tmut rf := can.Frame{'
-		glue << '\t\t\t\t\t\tid:  u32(0x${trace_rsp_id.hex()})'
-		glue << '\t\t\t\t\t\tlen: 8'
-		glue << '\t\t\t\t\t}'
-		glue << '\t\t\t\t\tfor j in 0 .. 8 {'
-		glue << '\t\t\t\t\t\trf.data[j] = rspb[j]'
-		glue << '\t\t\t\t\t}'
-		glue << '\t\t\t\t\tch.send(rf)'
-		glue << '\t\t\t\t}'
-		glue << '\t\t\t} else if rx.id == u32(0x${trace_dump_fc_id.hex()}) {'
-		glue << '\t\t\t\tmut p := isotp.Pdu{}'
-		glue << '\t\t\t\tfor j in 0 .. 8 {'
-		glue << '\t\t\t\t\tp.data[j] = rx.data[j]'
-		glue << '\t\t\t\t}'
-		glue << '\t\t\t\tlink.on_frame(${nowcall}, p)'
-		glue << '\t\t\t}'
-		glue << '\t\t}'
-		glue << '\t\tlink.tick(${nowcall}) // advance the N_Bs timeout even when tx_ready gates poll out'
-		glue << '\t\tmut tp := isotp.Pdu{}'
-		// Gate on tx_ready so the dump never overruns the Tx FIFO or blocks in the driver — send at
-		// most a FIFO\'s worth per pass and resume next pass (poll advances tx state, so only poll when
-		// there\'s room to send).
-		glue << '\t\tfor ch.tx_ready() && link.poll(${nowcall}, mut tp) {'
-		glue << '\t\t\tmut pf := can.Frame{'
-		glue << '\t\t\t\tid:  u32(0x${trace_record_id.hex()})'
-		glue << '\t\t\t\tlen: 8'
-		glue << '\t\t\t}'
-		glue << '\t\t\tfor j in 0 .. 8 {'
-		glue << '\t\t\t\tpf.data[j] = tp.data[j]'
-		glue << '\t\t\t}'
-		glue << '\t\t\tch.send(pf)'
-		glue << '\t\t}'
-		if heartbeat_on || cpuload_on {
-			glue << '\t\tnow := ${nowcall}'
-		}
-		if heartbeat_on {
-			glue << '\t\tif now - last_push >= ${trace_push_us} {'
-			glue << '\t\t\tlast_push = now'
-			glue << '\t\t\tfor i in 0 .. sched.handler_count() {'
-			glue << '\t\t\t\ths := sched.handler_stat(i)'
-			glue << '\t\t\t\tdelta := hs.count - last_count[i]'
-			glue << '\t\t\t\tlast_count[i] = hs.count'
-			glue << '\t\t\t\tpayload := telem.encode_handlerstat(u8(i), 0, hs.last_us, hs.max_us, delta)'
-			glue << '\t\t\t\tmut f := can.Frame{'
-			glue << '\t\t\t\t\tid:  u32(0x${trace_stat_id.hex()})'
-			glue << '\t\t\t\t\tlen: 8'
-			glue << '\t\t\t\t}'
-			glue << '\t\t\t\tfor j in 0 .. 8 {'
-			glue << '\t\t\t\t\tf.data[j] = payload[j]'
-			glue << '\t\t\t\t}'
-			glue << '\t\t\t\tch.send(f)'
-			glue << '\t\t\t\tsched.reset_handler_max(i)'
-			glue << '\t\t\t}'
-			glue << '\t\t}'
-		}
-		if cpuload_on {
-			glue << '\t\tif now - last_telem >= ${telem_period_us} {'
-			glue << '\t\t\tlast_telem = now'
-			glue << '\t\t\tmut load := [8]u16{}'
-			glue << '\t\t\tload[0] = u16(sched.load_permille())'
-			glue << '\t\t\tframe := telem.encode_cpuload(load, 1)'
-			glue << '\t\t\tmut cf := can.Frame{'
-			glue << '\t\t\t\tid:  u32(0x${telem_id.hex()})'
-			glue << '\t\t\t\tlen: 8'
-			glue << '\t\t\t}'
-			glue << '\t\t\tfor j in 0 .. 8 {'
-			glue << '\t\t\t\tcf.data[j] = frame[j]'
-			glue << '\t\t\t}'
-			glue << '\t\t\tch.send(cf)'
-			if telem_detail_id != 0 {
-				// LoadDetail (multi-window load + per-period overruns) — same frame the plain target
-				// emits; keep it under trace so a bare-metal config's detail_id isn't silently dropped.
-				glue << '\t\t\tovr := sched.overruns()'
-				glue << '\t\t\tdetail := telem.encode_loaddetail(sched.load_permille_100ms(),'
-				glue << '\t\t\t\tsched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)'
-				glue << '\t\t\tlast_overruns = ovr'
-				glue << '\t\t\tmut df := can.Frame{'
-				glue << '\t\t\t\tid:  u32(0x${telem_detail_id.hex()})'
-				glue << '\t\t\t\tlen: 8'
-				glue << '\t\t\t}'
-				glue << '\t\t\tfor j in 0 .. 8 {'
-				glue << '\t\t\t\tdf.data[j] = detail[j]'
-				glue << '\t\t\t}'
-				glue << '\t\t\tch.send(df)'
-			}
-			glue << '\t\t}'
-		}
-		if trace_target {
-			glue << '\t\tfor C.board_now_us() < next_tick {} // idle to the tick (real idle)'
-			glue << '\t\tnext_tick += tick_us'
-			glue << '\t\ttnow := C.board_now_us()'
-			glue << '\t\tif tnow > next_tick { // a pass overran the tick — resync'
-			glue << '\t\t\tnext_tick = tnow + tick_us'
-			glue << '\t\t}'
-		} else {
-			glue << '\t\tosal.sleep_us(1000)'
-		}
-		glue << '\t}'
-		glue << '}'
-	return glue
-}
-
-// emit_run_multicore emits the multi-core host run(): spawn each partition (+ each bridge comm
-// thread) pinned to its core, plus the single partition_trace owner over per-core rings. Reads
-// the Model; doc / telem_iface / bus_names / bus_dests / extra_dest_buses / trace_ncores are
-// main's emit-time state.
-fn emit_run_multicore(m Model, doc toml.Doc, telem_iface string, bus_names []string, bus_dests map[string][]string, extra_dest_buses []string, trace_ncores int) []string {
-	by_part := m.part.by_part.clone()
-	core_of := m.part.core_of.clone()
-	bus_core := m.bus_core.clone()
-	telem_on := m.telem.on
-	trace_buffer_records := m.trace.buffer_records
-	trace_pre_pct := m.trace.pre_pct
-	trace_mode := m.trace.mode
-	eff_trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
-	mut glue := []string{}
-		// --- multi-core trace run() (P3a + P3b): own the per-core rings (fixed arrays on this frame,
-		//     which outlives the joined partitions), spawn each traced app partition AND each traced
-		//     comm-thread bridge with a pointer to its ring, plus the single partition_trace owner +
-		//     partition_telem, then wait. One channel param per bus: the trace bus first, then each
-		//     bridge bus (bus_names is empty in the pure-P3a case). ---
-		chp := snake(eff_trace_bus)
-		mut mpre := trace_pre_pct
-		if mpre > 100 {
-			mpre = 100
-		}
-		mmode := if trace_mode == 'oneshot' { '.oneshot' } else { '.ring' }
-		glue << ''
-		mut params := ['${chp} can.Channel']
-		for b in bus_names {
-			params << '${snake(b)} can.Channel'
-		}
-		for b in extra_dest_buses {
-			params << '${snake(b)} can.Channel' // route-dest-only bus: channel arg, no bridge/ring
-		}
-		glue << 'pub fn run(${params.join(', ')}) {'
-		glue << '\tmut backings := [${trace_ncores}][${trace_buffer_records}]trace.Record{}'
-		glue << '\tmut rings := [${trace_ncores}]trace.TraceBuffer{}'
-		// rings: one per app partition (by core) + one per comm-thread bridge (by bus core).
-		for p in ecumodel.toml_arr(doc, 'partition') {
-			pname := (p.as_map()['name'] or { toml.Any('') }).string()
-			if pname !in by_part {
-				continue
-			}
-			pc := core_of[pname] or { 0 }
-			glue << '\trings[${pc}] = trace.new_buffer(&backings[${pc}][0], ${trace_buffer_records}, ${mmode}, ${mpre})'
-			glue << '\trings[${pc}].start()'
-		}
-		for b in bus_names {
-			bc := bus_core[b] or { 0 }
-			glue << '\trings[${bc}] = trace.new_buffer(&backings[${bc}][0], ${trace_buffer_records}, ${mmode}, ${mpre}) // comm_${b}'
-			glue << '\trings[${bc}].start()'
-		}
-		mut mwaits := []string{}
-		// Pass each ring as a voidptr (a typed &T arg into a voidptr param makes V's spawn wrapper
-		// mis-forward it). &rings[i] escapes the fixed array, but run() joins below so the frame
-		// outlives every spawned loop, keeping the pointer valid.
-		for p in ecumodel.toml_arr(doc, 'partition') {
-			pname := (p.as_map()['name'] or { toml.Any('') }).string()
-			if pname !in by_part {
-				continue
-			}
-			pc := core_of[pname] or { 0 }
-			glue << '\tt_${pname} := spawn partition_${pname}(${pc}, unsafe { voidptr(&rings[${pc}]) })'
-			mwaits << 't_${pname}'
-		}
-		for b in bus_names {
-			bb := snake(b)
-			bc := bus_core[b] or { 0 }
-			mut sargs := bb // the bridge's own bus channel
-			for d in bus_dests[b] or { []string{} } {
-				sargs += ', ${snake(d)}' // route-dest channels
-			}
-			sargs += ', unsafe { voidptr(&rings[${bc}]) }' // the comm thread's ring (P3b)
-			glue << '\tt_${bb} := spawn partition_${bb}(${sargs})'
-			mwaits << 't_${bb}'
-		}
-		if telem_on && telem_iface != '' {
-			glue << '\tt_telem := spawn partition_telem()'
-			mwaits << 't_telem'
-		}
-		glue << '\tt_trace := spawn partition_trace(${chp}, unsafe { voidptr(&rings[0]) }, ${trace_ncores})'
-		mwaits << 't_trace'
-		for w in mwaits {
-			glue << '\t${w}.wait()'
-		}
-		glue << '}'
-	return glue
-}
-
 // emit_run_host emits the plain multi-core host run(): launch every bus bridge + app partition,
 // then wait. One Channel param per bus (sorted for a stable signature). Reads the Model; telem_iface
 // / bus_names / bus_dests / extra_dest_buses are main's emit-time state.
 fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[string][]string, extra_dest_buses []string) []string {
-	by_part := m.part.by_part.clone()
-	core_of := m.part.core_of.clone()
-	telem_on := m.telem.on
 	mut glue := []string{}
 		// --- host run(): launch every bus bridge + app partition, then wait. One
 		//     Channel param per bus (sorted for a stable signature main.v can rely on). ---
@@ -2179,11 +1425,11 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 				waits << 't_${bb}'
 			}
 		}
-		for part, _ in by_part {
-			glue << '\tt_${part} := spawn partition_${part}(${core_of[part] or { 0 }}, unsafe { nil })'
+		for part, _ in m.part.by_part {
+			glue << '\tt_${part} := spawn partition_${part}(${m.part.core_of[part] or { 0 }}, unsafe { nil })'
 			waits << 't_${part}'
 		}
-		if telem_on && telem_iface != '' {
+		if m.telem.on && telem_iface != '' {
 			glue << '\tt_telem := spawn partition_telem()'
 			waits << 't_telem'
 		}
@@ -2199,17 +1445,11 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 // sched.every() lines the run() emitters reuse). Returns (ports, glue, all_regs); reads the Model,
 // with the derived scratch/id layout (telem_slot, ioc_idx, trace bases, fb_id_base, thread_id_of)
 // and the trace-mode flags from main's emit-time state.
-fn emit_handlers(m Model, telem_slot map[string]int, ioc_idx map[string]int, trace_cmd_base int, trace_trig_base int, trace_inline bool, trace_multicore bool, fb_id_base map[string]int, thread_id_of map[string]int) ([]string, []string, map[string][]string) {
-	sig_of := m.sig_of.clone()
-	sig_names := m.sig_names
-	by_part := m.part.by_part.clone()
-	core_of := m.part.core_of.clone()
-	telem_on := m.telem.on
-	target_on := m.target.on
+fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int) ([]string, []string, map[string][]string) {
 	mut ports := []string{}
 	mut glue := []string{}
 	mut all_regs := map[string][]string{}
-	for part, clist in by_part {
+	for part, clist in m.part.by_part {
 		glue << ''
 		glue << 'struct Partition_${part}_state {'
 		glue << 'mut:'
@@ -2217,8 +1457,8 @@ fn emit_handlers(m Model, telem_slot map[string]int, ioc_idx map[string]int, tra
 			cname := (c.as_map()['name'] or { toml.Any('') }).string()
 			glue << '\t${snake(cname)} app.${cname}'
 		}
-		for sname in sig_names {
-			si := sig_of[sname] or { continue }
+		for sname in m.sig_names {
+			si := m.sig_of[sname] or { continue }
 			if si.local && si.from == part {
 				glue << '\tcell_${snake(sname)} sig.${sname} // local FB->FB signal'
 			}
@@ -2242,14 +1482,14 @@ fn emit_handlers(m Model, telem_slot map[string]int, ioc_idx map[string]int, tra
 				ports << 'pub struct ${cname}In {'
 				ports << 'pub mut:'
 				for r in reads {
-					ports << provenance(r.string(), sig_of)
+					ports << provenance(r.string(), m.sig_of)
 					ports << '\t${snake(r.string())} sig.${r.string()}'
 				}
 				ports << '}'
 				ports << 'pub struct ${cname}Out {'
 				ports << 'pub mut:'
 				for w in writes {
-					ports << provenance(w.string(), sig_of)
+					ports << provenance(w.string(), m.sig_of)
 					ports << '\t${snake(w.string())} sig.${w.string()}'
 				}
 				ports << '}'
@@ -2262,7 +1502,7 @@ fn emit_handlers(m Model, telem_slot map[string]int, ioc_idx map[string]int, tra
 				glue << '\tmut inp := ports.${cname}In{}'
 				for r in reads {
 					rn := r.string()
-					si := sig_of[rn] or { SigInfo{} }
+					si := m.sig_of[rn] or { SigInfo{} }
 					if si.local {
 						glue << '\tinp.${snake(rn)} = st.cell_${snake(rn)} // local'
 					} else if idx := ioc_idx[rn] {
@@ -2280,7 +1520,7 @@ fn emit_handlers(m Model, telem_slot map[string]int, ioc_idx map[string]int, tra
 				glue << '\tst.${field}.${hname}(inp, mut outp)'
 				for w in writes {
 					wn := w.string()
-					si := sig_of[wn] or { SigInfo{} }
+					si := m.sig_of[wn] or { SigInfo{} }
 					if si.local {
 						glue << '\tst.cell_${snake(wn)} = outp.${snake(wn)} // local'
 					} else if idx := ioc_idx[wn] {
@@ -2297,81 +1537,44 @@ fn emit_handlers(m Model, telem_slot map[string]int, ioc_idx map[string]int, tra
 		}
 		all_regs[part] = regs.clone()
 
-		// Host: one spawned superloop per partition, paced by osal.sleep_us. Target
-		// mode emits a single inline superloop in run() instead; inline-trace mode folds
-		// the (single) partition into the trace run(ch) below (see both).
-		if !target_on && !trace_inline && !trace_multicore {
+		// One spawned superloop per partition (host mode + the multi-core traced path). Target mode
+		// emits a single inline superloop in run() instead; inline-trace folds the (single) partition
+		// into run(ch). The skeleton is one shape; producers inject preamble / loop-top / dispatch /
+		// loop-body (trace: capture ctx + command poll + profiled dispatch; telem: the load publish),
+		// so this emitter names no capability.
+		if !m.target.on {
 			glue << ''
 			glue << 'pub fn partition_${part}(core int, arg voidptr) {'
-			glue << '\tosal.pin_to_core(${core_of[part] or { 0 }})'
+			glue << '\tosal.pin_to_core(${m.part.core_of[part] or { 0 }})'
 			glue << '\tmut st := Partition_${part}_state{}'
 			glue << '\tmut sched := loom.Scheduler{}'
 			for r in regs {
 				glue << r
 			}
-			glue << '\tfor {'
-			glue << '\t\tloom_t0 := osal.now_us()'
-			glue << '\t\tsched.run(loom_t0)'
-			glue << '\t\tloom_t1 := osal.now_us()'
-			glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
-			if telem_on && 'p:${part}' in telem_slot {
-				glue << '\t\tosal.scratch_set(${telem_slot['p:${part}']}, u64(sched.load_permille()))'
+			for p in producers {
+				glue << p.partition_preamble('p:${part}')
 			}
-			glue << '\t\tosal.sleep_us(1000)'
-			glue << '\t}'
-			glue << '}'
-		} else if trace_multicore {
-			// Traced partition (P3a): profiled dispatch into this core's ring (passed as `arg` by
-			// run()). run_profiled fires trace_capture per handler and accounts load internally;
-			// the load is published to scratch for CpuLoad (partition_telem reads it).
-			pcore := core_of[part] or { 0 }
-			glue << ''
-			glue << 'pub fn partition_${part}(core int, arg voidptr) {'
-			glue << '\tosal.pin_to_core(${pcore})'
-			glue << '\tmut st := Partition_${part}_state{}'
-			glue << '\tmut sched := loom.Scheduler{}'
-			for r in regs {
-				glue << r
-			}
-			glue << '\tmut cap := TraceCapture{'
-			glue << '\t\tbuf:       unsafe { &trace.TraceBuffer(arg) }'
-			glue << '\t\tstart:     osal.now_us()'
-			glue << '\t\tid_base:   ${fb_id_base[part] or { 0 }}'
-			glue << '\t\tthread_id: ${thread_id_of[part] or { 0 }}'
-			glue << '\t\ttrig_slot: ${trace_trig_base + pcore}'
-			glue << '\t}'
-			glue << '\tsched.set_trace_hook(trace_capture, &cap)'
-			glue << '\tmut last_cmd := osal.scratch_get(${trace_cmd_base + pcore})'
 			glue << '\tfor {'
-			// Apply any command the owner routed to THIS core (arm/stop/reset/freeze). Only this
-			// partition ever mutates its own ring (single-writer isolation — the owner just posts
-			// commands + reads). Checked BEFORE dispatch so a freeze lands before the next handler
-			// is recorded (F668); arm reseats this core's own origin (F5) only when targeted (F1244).
-			glue << '\t\tcmdv := osal.scratch_get(${trace_cmd_base + pcore})'
-			glue << '\t\tif cmdv != last_cmd {'
-			glue << '\t\t\tlast_cmd = cmdv'
-			glue << '\t\t\top := u8(cmdv & 0xff)'
-			glue << '\t\t\tif op == trace.op_arm || op == trace.op_start || op == trace.op_reset {'
-			glue << '\t\t\t\tcap.buf.start()'
-			glue << '\t\t\t\tcap.start = osal.now_us()'
-			glue << '\t\t\t\tcap.base = 0'
-			glue << '\t\t\t\tcap.busy_end = 0'
-			glue << '\t\t\t} else if op == trace.op_stop {'
-			glue << '\t\t\t\tcap.buf.stop()'
-			glue << '\t\t\t} else if op == 0xf1 { // freeze: the owner fanned out another core\'s overrun'
-			glue << '\t\t\t\tcap.buf.trigger()'
-			glue << '\t\t\t}'
-			glue << '\t\t}'
-			// Bracket the dispatch: run_profiled fires trace_capture (fb records) for each due
-			// handler; if any ran, emit the THREAD span + idle gap for this iteration.
-			glue << '\t\tt0 := osal.now_us()'
-			glue << '\t\tbefore := cap.fb_count'
-			glue << '\t\tsched.run_profiled(osal.now_us)'
-			glue << '\t\tif cap.fb_count != before {'
-			glue << '\t\t\ttrace_thread_span(mut cap, t0, osal.now_us())'
-			glue << '\t\t}'
-			if telem_on && 'p:${part}' in telem_slot {
-				glue << '\t\tosal.scratch_set(${telem_slot['p:${part}']}, u64(sched.load_permille()))'
+			for p in producers {
+				glue << p.partition_loop_top('p:${part}')
+			}
+			mut disp := [
+				'\t\tloom_t0 := osal.now_us()',
+				'\t\tsched.run(loom_t0)',
+				'\t\tloom_t1 := osal.now_us()',
+				'\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load',
+			]
+			for p in producers {
+				d := p.partition_dispatch('p:${part}')
+				if d.len > 0 {
+					disp = d.clone()
+				}
+			}
+			for l in disp {
+				glue << l
+			}
+			for p in producers {
+				glue << p.partition_loop_body('p:${part}')
 			}
 			glue << '\t\tosal.sleep_us(1000)'
 			glue << '\t}'
@@ -2381,109 +1584,10 @@ fn emit_handlers(m Model, telem_slot map[string]int, ioc_idx map[string]int, tra
 	return ports, glue, all_regs
 }
 
-// emit_trace_capture emits the multi-core (P3a) shared capture hook: the TraceCapture ctx struct
-// plus trace_capture (per-handler push) and trace_thread_span (thread busy/idle spans). Each traced
-// partition installs it with its own ctx (ring + fb-id base + thread id). Reads the Model.
-fn emit_trace_capture(m Model) []string {
-	trace_budget_us := m.trace.budget_us
-	mut glue := []string{}
-		glue << ''
-		glue << 'struct TraceCapture {'
-		glue << 'mut:'
-		glue << '\tbuf       &trace.TraceBuffer = unsafe { nil } // this core\'s ring (owned by run())'
-		glue << '\tstart     u64 // wall-clock µs of the capture origin'
-		glue << '\tbase      u64 // elapsed µs at the last epoch re-anchor'
-		glue << '\tid_base   u32 // GLOBAL fb id of this partition\'s first handler (+ local idx)'
-		glue << '\tthread_id u16 // this partition\'s thread id (for the THREAD records)'
-		glue << '\tbusy_end  u64 // elapsed µs at the end of the last busy span (idle-gap start)'
-		glue << '\tfb_count  u32 // handlers dispatched (the loop reads this to bracket a busy span)'
-		glue << '\ttrig_slot int // THIS core\'s freeze-request scratch cell (single-writer: only here)'
-		glue << '}'
-		glue << ''
-		glue << 'fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {'
-		glue << '\tmut t := unsafe { &TraceCapture(ctx) }'
-		glue << '\tt.fb_count++'
-		glue << '\telapsed := start_us - t.start'
-		glue << '\tif elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor'
-		glue << '\t\tt.base = elapsed'
-		glue << '\t\tt.buf.push(trace.new_epoch(u32(elapsed)))'
-		glue << '\t}'
-		glue << '\tmut dt := dt_us'
-		glue << '\tmut flags := u8(0)'
-		glue << '\tif dt > 0xFFFF { // clamp to the u16 field, and mark it as saturated (F648)'
-		glue << '\t\tdt = 0xFFFF'
-		glue << '\t\tflags |= trace.flag_saturated'
-		glue << '\t}'
-		if trace_budget_us > 0 {
-			// flag the record that exceeded the budget — the handler that trips the ring trigger;
-			// the decoder outlines it so the freeze culprit is visible in the dump.
-			glue << '\tif dt_us > ${trace_budget_us} {'
-			glue << '\t\tflags |= trace.flag_overran'
-			glue << '\t}'
-		}
-		glue << '\tt.buf.push(trace.new_fb(u16(t.id_base + u32(idx)), flags, u32(elapsed - t.base), u16(dt)))'
-		if trace_budget_us > 0 {
-			// This core overran: freeze its OWN ring now (single-writer), and raise its freeze
-			// request — the trace owner fans that out as a freeze command to every core, so the
-			// per-core snapshots are coherent without any core mutating another core's ring. Only
-			// when actually capturing: a handler still runs (and can overrun) while the ring is
-			// frozen, and a stale request would re-freeze the next capture the instant it re-arms.
-			glue << '\tif dt_us > ${trace_budget_us} && t.buf.state() == .capturing {'
-			glue << '\t\tt.buf.trigger()'
-			glue << '\t\tosal.scratch_set(t.trig_slot, osal.scratch_get(t.trig_slot) + 1) // bump the request counter (edge, not level)'
-			glue << '\t}'
-		}
-		glue << '}'
-		glue << ''
-		// trace_thread_span brackets one busy superloop iteration: an IDLE record for the gap since
-		// the previous busy span, then a THREAD record for [t0, t1] (the thread ran its handlers).
-		// The partition loop calls it only when a handler actually ran, so idle records are bounded
-		// by the handler rate (not the 1 ms tick). start_us are relative to the current epoch base.
-		glue << 'fn trace_thread_span(mut t TraceCapture, t0_us u64, t1_us u64) {'
-		glue << '\te_start := t0_us - t.start // elapsed at the busy span start'
-		glue << '\te_end := t1_us - t.start   // elapsed at the busy span end'
-		// A comm thread has no per-FB trace_capture to advance the epoch, so re-anchor here when the
-		// u24 start_us would wrap — otherwise long comm captures drift out of alignment with the app
-		// cores. Idempotent for the app path: trace_capture already re-anchored, so t.base stays within
-		// the window and (e_start > t.base) fails (base can even lead e_start after a mid-span wrap).
-		glue << '\tif e_start > t.base && e_start - t.base > 0x00ff_ffff {'
-		glue << '\t\tt.base = e_start'
-		glue << '\t\tt.buf.push(trace.new_epoch(u32(e_start)))'
-		glue << '\t}'
-		// The idle-gap start is relative to the current epoch base. If an epoch re-anchor moved the
-		// base past the previous busy_end (a capture spanning the u24 window), clamp the gap to the
-		// new base so u32(start - base) can\'t underflow and land the idle ~16 s in the future (F684).
-		glue << '\tgap_from := if t.busy_end > t.base { t.busy_end } else { t.base }'
-		glue << '\tif e_start > gap_from { // idle gap since the last busy span (within this epoch)'
-		glue << '\t\tmut gap := e_start - gap_from'
-		glue << '\t\tif gap > 0xFFFF {'
-		glue << '\t\t\tgap = 0xFFFF'
-		glue << '\t\t}'
-		glue << '\t\tt.buf.push(trace.new_idle(trace.reason_yield, u32(gap_from - t.base), u16(gap)))'
-		glue << '\t}'
-		glue << '\ts_from := if e_start > t.base { e_start } else { t.base } // clamp across an epoch re-anchor (F708)'
-		glue << '\tmut busy := if e_end > s_from { e_end - s_from } else { u64(0) }'
-		glue << '\tif busy > 0xFFFF {'
-		glue << '\t\tbusy = 0xFFFF'
-		glue << '\t}'
-		glue << '\tt.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(s_from - t.base), u16(busy)))'
-		glue << '\tt.busy_end = e_end'
-		glue << '}'
-	return glue
-}
-
 // emit_module_headers builds the `module ports` and `module gen` preambles: the code-gen banner,
 // module decl, and the conditional imports each generated module needs. Returns (ports, glue) seeded
 // with those header lines; reads the Model, with the trace-mode flags + comm_thread_on from main.
-fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_inline bool, trace_target bool, trace_multicore bool) ([]string, []string) {
-	sig_names := m.sig_names
-	sig_of := m.sig_of.clone()
-	by_part := m.part.by_part.clone()
-	has_external := m.has_external
-	target_on := m.target.on
-	telem_on := m.telem.on
-	trace_push_us := m.trace.push_us
-	isotp_conns := m.isotp_conns
+fn emit_module_headers(m Model, ecu string, comm_thread_on bool) ([]string, []string) {
 	has_e2e := m.frames.e2e_on.len > 0
 	has_secoc := m.frames.secoc_on.len > 0
 	mut ports := []string{}
@@ -2492,15 +1596,15 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_inline bo
 	ports << ''
 	// Port structs carry sig.* fields only when there are signals; a pure-compute app (e.g. a
 	// trace demo) has none, so skip the import rather than emit an unused-import warning.
-	if sig_names.len > 0 {
+	if m.sig_names.len > 0 {
 		ports << 'import sig'
 	}
 
 	// glue references sig.* only for local-cell types; import it only if needed.
 	mut has_local := false
-	for part, _ in by_part {
-		for sname in sig_names {
-			si := sig_of[sname] or { continue }
+	for part, _ in m.part.by_part {
+		for sname in m.sig_names {
+			si := m.sig_of[sname] or { continue }
 			if si.local && si.from == part {
 				has_local = true
 			}
@@ -2511,28 +1615,23 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_inline bo
 	glue << '// Code generated by tools/loom2v from ${os.file_name(ecu)} — DO NOT EDIT.'
 	glue << 'module gen'
 	glue << ''
-	if has_local || has_external {
+	if has_local || m.has_external {
 		glue << 'import sig' // local-cell types and/or bus-bridge signal structs
 	}
 	glue << 'import ports'
 	glue << 'import app'
 	glue << 'import loom'
-	if !target_on {
+	if !m.target.on {
 		glue << 'import osal' // host: IOC + now_us/sleep_us. Target has none of these.
 	}
-	// telem.* is used for CpuLoad (telemetry) and the inline HandlerStat heartbeat — import it
-	// only when one is actually emitted (a push_ms = 0 trace with no telemetry uses neither).
-	if telem_on || ((trace_inline || trace_target) && trace_push_us > 0) {
-		glue << 'import comm.telem' // CpuLoad / HandlerStat packing
+	// telem.* is used for CpuLoad (telemetry) — import it only when it's actually emitted.
+	if m.telem.on {
+		glue << 'import comm.telem' // CpuLoad packing
 	}
-	if trace_inline || trace_multicore || trace_target {
-		glue << 'import comm.trace' // capture ring(s) + cmd/rsp control
-		glue << 'import comm.isotp' // bulk record dump transport
+	if m.has_external || m.isotp_conns.len > 0 || m.telem.on {
+		glue << 'import driver.can' // the generated bus bridge
 	}
-	if has_external || isotp_conns.len > 0 || telem_on || trace_inline || trace_multicore || trace_target {
-		glue << 'import driver.can' // the generated bus bridge / trace channel
-	}
-	if has_external && !comm_thread_on {
+	if m.has_external && !comm_thread_on {
 		glue << 'import comm.com' // per-PDU TX modes + RX deadline monitoring (host bridge only)
 	}
 	if has_e2e {
@@ -2541,7 +1640,7 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_inline bo
 	if has_secoc {
 		glue << 'import comm.secoc' // SecOC authentication (AES-CMAC + freshness)
 	}
-	if isotp_conns.len > 0 {
+	if m.isotp_conns.len > 0 {
 		glue << 'import comm.isotp' // ISO-TP diagnostic transport
 		glue << 'import comm.uds' // UDS diagnostic services
 	}
@@ -2570,31 +1669,15 @@ fn main() {
 	// Single parse pass: ecu.toml + bus.dbc -> the Model. The emit code below reads from `m`
 	// (rebound to the existing locals so it stays unchanged). (Step (a): parse -> model.)
 	m := build_model(doc, dbc)
-	bus_core := m.bus_core.clone()
 
 	// [[signal]] -> the model, then emit the `sig` module.
-	sig_of := m.sig_of.clone()
-	sig_names := m.sig_names.clone()
-	has_external := m.has_external
-	signals := emit_signals(sig_of, sig_names, ecu)
+	signals := emit_signals(m.sig_of, m.sig_names, ecu)
 
 	// Per-PDU COM behaviour ([[frame]]), rebound to the existing locals.
-	fcfg := m.frames
-	tx_mode := fcfg.tx_mode.clone()
-	rx_timeout_us := fcfg.rx_timeout_us.clone()
-	e2e_on := fcfg.e2e_on.clone()
-	e2e_crc := fcfg.e2e_crc.clone()
-	e2e_ctr := fcfg.e2e_ctr.clone()
-	secoc_on := fcfg.secoc_on.clone()
-	secoc_fresh := fcfg.secoc_fresh.clone()
-	secoc_mac := fcfg.secoc_mac.clone()
-	secoc_maclen := fcfg.secoc_maclen.clone()
-	secoc_key := fcfg.secoc_key.clone()
-	has_e2e := e2e_on.len > 0
-	has_secoc := secoc_on.len > 0
+	has_e2e := m.frames.e2e_on.len > 0
+	has_secoc := m.frames.secoc_on.len > 0
 
-	routes := m.routes.clone()
-	has_routes := routes.len > 0
+	has_routes := m.routes.len > 0
 
 	// Validate E2E byte positions against each frame's DLC (they index unsafe into
 	// the frame's [64]u8 in the generated bridge).
@@ -2602,24 +1685,24 @@ fn main() {
 		db := candb.load_dbc_file(dbc) or {
 			panic('protected frames need a DBC: load ${dbc}: ${err}')
 		}
-		for fk, _ in e2e_on {
+		for fk, _ in m.frames.e2e_on {
 			dlc := dbc_dlc_of(db, fk) or {
 				panic('e2e: frame "${fk}" is not a message in ${os.file_name(dbc)}')
 			}
-			cp := e2e_crc[fk] or { 0 }
-			np := e2e_ctr[fk] or { 0 }
+			cp := m.frames.e2e_crc[fk] or { 0 }
+			np := m.frames.e2e_ctr[fk] or { 0 }
 			if cp < 0 || cp >= dlc || np < 0 || np >= dlc || cp == np {
 				panic('e2e ${fk}: crc_pos=${cp}, counter_pos=${np} must be distinct and within dlc=${dlc}')
 			}
 		}
-		for fk, _ in secoc_on {
+		for fk, _ in m.frames.secoc_on {
 			dlc := dbc_dlc_of(db, fk) or {
 				panic('secoc: frame "${fk}" is not a message in ${os.file_name(dbc)}')
 			}
-			fp := secoc_fresh[fk] or { 0 }
-			mp := secoc_mac[fk] or { 0 }
-			ml := secoc_maclen[fk] or { 0 }
-			if (secoc_key[fk] or { []u8{} }).len != 16 {
+			fp := m.frames.secoc_fresh[fk] or { 0 }
+			mp := m.frames.secoc_mac[fk] or { 0 }
+			ml := m.frames.secoc_maclen[fk] or { 0 }
+			if (m.frames.secoc_key[fk] or { []u8{} }).len != 16 {
 				panic('secoc ${fk}: key must be 16 bytes (AES-128)')
 			}
 			if ml < 1 || ml > 16 || fp < 0 || fp >= dlc || mp < 0 || mp + ml > dlc
@@ -2629,20 +1712,13 @@ fn main() {
 		}
 	}
 
-	isotp_conns := m.isotp_conns.clone()
 
 	// partition/thread/fb topology, rebound to the existing locals.
-	pmap := m.part
-	core_of := pmap.core_of.clone()
-	by_part := pmap.by_part.clone()
-	// (fb_thread is read only by emit_manifest, straight from the model — no local rebind.)
+	// (m.part.fb_thread is read only by emit_manifest, straight from the model — no local rebind.)
 
 	// --- telemetry: give every app partition + every bus(bridge) a scratch slot,
 	//     remembering its core, so a generated tx can sum processor load by core
 	//     and ship it as a CpuLoad CAN frame. Gated by an [telemetry] config block. ---
-	tmc := m.telem
-	telem_on := tmc.on
-	telem_bus := tmc.bus
 	mut telem_iface := '' // derived from the bus interface below
 	mut telem_slot := map[string]int{}
 	mut slot_core := []int{}
@@ -2656,15 +1732,6 @@ fn main() {
 	// to that message's id (and required to exist). Defaults are the docs/telemetry.md ids.
 	// [trace] block -> the model (parse_trace). Rebound to the existing locals so the emit code
 	// below is unchanged. (Step (a) of the parse->model->emit refactor.)
-	tc := m.trace
-	trace_on := tc.on
-	trace_bus := tc.bus
-	trace_record_id := tc.record_id
-	trace_level := tc.level
-	trace_mode := tc.mode
-	trace_push_us := tc.push_us
-	trace_budget_us := tc.budget_us
-	trace_sw_keys := tc.sw_keys
 
 	// [target] baremetal: emit a single-core inline superloop instead of the host's
 	// spawned partitions + osal. No threads, no osal (POSIX now_us/sleep_us don't
@@ -2674,10 +1741,7 @@ fn main() {
 	// superloop (P3c-0); 'threadx' (P3c-1) wraps the same FB/telemetry work in a real
 	// ThreadX thread paced by tx_thread_sleep (the preemptive-RTOS target — see
 	// examples/threadx_h735, the hand-written golden reference this generates).
-	tgc := m.target
-	target_on := tgc.on
-	target_threadx := tgc.threadx
-	if target_on && has_external && !target_threadx {
+	if m.target.on && m.has_external && !m.target.threadx {
 		panic('loom2v: [target] baremetal does not support external/bus signals yet ' +
 			'(every [[signal]] must be partition-local: from == to). The ThreadX target does — ' +
 			'its comm thread services rx (phase 6b-2).')
@@ -2690,107 +1754,42 @@ fn main() {
 	// capture it for free — see the threadx run() below (phase 6b-1).
 	// The threadx app thread opens the telemetry bus for its CAN channel, so the target needs
 	// [telemetry] ENABLED, with a bus that actually exists (the schema makes all of that
-	// optional in general, and only `driver.can` gets imported when telem_on).
-	if target_threadx {
+	// optional in general, and only `driver.can` gets imported when m.telem.on).
+	if m.target.threadx {
 		mut bus_exists := false
 		if busv := doc.value_opt('bus') {
-			bus_exists = telem_bus in busv.as_map()
+			bus_exists = m.telem.bus in busv.as_map()
 		}
-		if !telem_on || telem_bus == '' {
+		if !m.telem.on || m.telem.bus == '' {
 			panic('loom2v: [target] kind="threadx" needs [telemetry] enabled with a bus — the app ' +
 				'thread opens it for the CAN channel')
 		}
 		if !bus_exists {
-			panic('loom2v: [target] kind="threadx": [telemetry].bus = "${telem_bus}" has no matching ' +
-				'[bus.${telem_bus}]')
+			panic('loom2v: [target] kind="threadx": [telemetry].bus = "${m.telem.bus}" has no matching ' +
+				'[bus.${m.telem.bus}]')
 		}
 	}
 
-	// The trace cmd/rsp + dump ride a CAN channel: trace.bus, or [telemetry].bus by default.
-	eff_trace_bus := if trace_bus != '' { trace_bus } else { telem_bus }
-	// ThreadX target trace is the RAW exec-hook stream: THREAD/ISR records only, one classic
-	// 11-bit frame per record, streamed by the single bus owner on the telemetry channel. No
-	// TraceCmd/Rsp/HandlerStat/ISO-TP. Reject configs it can't honour rather than emit code
-	// that silently ignores them.
-	if target_threadx && trace_on {
-		// The exec-change hooks fire on BOTH context switches and ISR enter/exit unconditionally,
-		// so the stream is always exactly "thread+isr" — a "thread"-only or FB-inclusive level
-		// can't be honoured. Reject anything but the one level the hooks actually produce.
-		if trace_level != 'thread+isr' {
-			panic('loom2v: [target] kind="threadx" [trace].level "${trace_level}" is not producible — ' +
-				'the exec-change hooks always capture context switches AND ISRs (no thread-only, no ' +
-				'handler-level FB records) — use level = "thread+isr"')
-		}
-		// Only the overwrite ring is implemented (trace_hooks.c has no oneshot/stop-when-full ring),
-		// and the generated stream re-snapshots every ~1 s. A "oneshot" request would silently get
-		// continuous ring behaviour.
-		if trace_mode != 'ring' {
-			panic('loom2v: [target] kind="threadx" [trace].mode "${trace_mode}" is not implemented — ' +
-				'the exec-hook recorder is an overwrite ring streamed continuously — use mode = "ring"')
-		}
-		if trace_record_id > 0x7ff {
-			panic('loom2v: [target] kind="threadx" [trace].record_id 0x${trace_record_id.hex()} is an ' +
-				'extended (29-bit) id, but the classic FDCAN backend sends 11-bit frames — use a ' +
-				'standard id (<= 0x7FF)')
-		}
-		// The exec-hook path snapshots and streams the ring on a fixed ~1 s cadence; it has no
-		// overrun-triggered freeze (trace_budget_us is only wired into the software packer's inline
-		// hook). A [trace].trigger config would build but silently produce a continuous ring.
-		if trace_budget_us > 0 {
-			panic('loom2v: [target] kind="threadx" [trace].trigger (budget_us) is not implemented — ' +
-				'the exec-hook recorder streams the ring on a fixed cadence with no overrun freeze — ' +
-				'drop the trigger for threadx builds')
-		}
-		// The exec-hook stream is raw records only: no TraceCmd/Rsp request path, no HandlerStat
-		// heartbeat, no ISO-TP dump flow control. These keys have non-zero defaults but are inert
-		// here, so an explicitly-set one (copied from a bare-metal trace block) would build while
-		// silently doing nothing. Reject the explicit ones rather than ignore them.
-		if trace_sw_keys.len > 0 {
-			panic('loom2v: [target] kind="threadx" [trace] key(s) ${trace_sw_keys} are not implemented — ' +
-				'the exec-hook stream has no TraceCmd/Rsp request path, HandlerStat heartbeat ' +
-				'(push_ms/stat_id), ISO-TP dump flow control (dump_fc_id), or pre-trigger split ' +
-				'(pre_pct); it streams only raw records on record_id — remove these keys for threadx builds')
-		}
-		if trace_bus != '' && trace_bus != telem_bus {
-			panic('loom2v: [target] kind="threadx" [trace].bus "${trace_bus}" must equal ' +
-				'[telemetry].bus "${telem_bus}" — the single bus owner streams both on one channel')
-		}
-	}
-	mut trace_core := 0
-	if eff_trace_bus != '' {
-		if bc := doc.value('bus').as_map()[eff_trace_bus] {
-			trace_core = int((bc.as_map()['core'] or { toml.Any(0) }).int())
-		}
-	}
 	// Single-core inline trace: exactly one (fb-bearing) partition, host, pinned to the trace
 	// bus's core, and NO COM bus bridge — so one superloop owns the channel and drives capture +
 	// cmd/rsp + dump + the HandlerStat heartbeat directly (no IOC, nothing else to schedule). A
-	// bridge (external signals / ISO-TP / routes) or multiple cores need the comm-thread model,
+	// bridge (external signals / ISO-TP / m.routes) or multiple cores need the comm-thread model,
 	// not generated yet.
-	single_part := if by_part.keys().len == 1 { by_part.keys()[0] } else { '' }
-	// P3c-0: a bare-metal [target] with [trace] reuses the single-core inline-trace machinery on the
-	// board (DWT) timebase — same capture hook + cmd/rsp + ISO-TP dump as the host inline path, no
-	// osal. It's single-core only; real preemptive thread/ISR capture (the TX execution-change hooks)
-	// is the larger P3c slice. A multi-partition target isn't generated at all yet (see the target
-	// run() one-partition guard), so trace on it has nothing coherent to capture.
-	if trace_on && target_on && single_part == '' {
-		panic('loom2v: [trace] on a bare-metal [target] supports exactly one partition (single-core ' +
-			'host-style capture on the board timebase); multi-thread / ISR capture is the larger P3c slice')
-	}
-	has_bridge := has_external || isotp_conns.len > 0 || has_routes
+	single_part := if m.part.by_part.keys().len == 1 { m.part.by_part.keys()[0] } else { '' }
+	has_bridge := m.has_external || m.isotp_conns.len > 0 || has_routes
 	// ThreadX COM bridge (phase 6b-2): the target grows a bus-owning comm thread that services
 	// rx (woken by the FDCAN Rx ISR) while the FB thread stays off CAN and publishes load via a
 	// scratch cell. The comm thread is the generic bus owner — telemetry and the trace ring are
 	// its first two producers, rx frames go to consumers — so NM/COM-tx slot in later as more of
 	// the same. The lean first cut supports external RX signals (bus -> app), drained + counted
-	// by the comm thread; external TX signals, ISO-TP, and routes are not generated yet.
-	comm_thread_on := target_threadx && has_bridge
+	// by the comm thread; external TX signals, ISO-TP, and m.routes are not generated yet.
+	comm_thread_on := m.target.threadx && has_bridge
 	// rx signals an FB reads flow bus -> comm(decode) -> target IOC pool cell -> FB input (6b-2b).
 	// ioc_idx maps each such signal to its pool cell; visible to the comm emitter + handler glue.
 	mut ioc_idx := map[string]int{}
 	mut msg_ioc_idx := map[int]int{} // DBC id -> its (single) rx-read signal's IOC cell
 	if comm_thread_on {
-		if has_routes || isotp_conns.len > 0 {
+		if has_routes || m.isotp_conns.len > 0 {
 			panic('loom2v: [target] kind="threadx" comm thread: routes / ISO-TP are not generated ' +
 				'yet (phase 6b-2 lean cut = external rx signals only)')
 		}
@@ -2813,14 +1812,14 @@ fn main() {
 		// How many rx signals READ by FBs each DBC message carries (the lean whole-frame decode
 		// serves one per message; more need the per-signal codec).
 		mut msg_read_sigs := map[string]int{}
-		for sn in sig_names {
-			s := sig_of[sn] or { continue }
+		for sn in m.sig_names {
+			s := m.sig_of[sn] or { continue }
 			if s.rx && read_count[sn] > 0 {
 				msg_read_sigs[s.dbc_msg]++
 			}
 		}
-		for sname in sig_names {
-			si := sig_of[sname] or { continue }
+		for sname in m.sig_names {
+			si := m.sig_of[sname] or { continue }
 			if si.external && !si.rx {
 				// external TX signal (app -> bus): an FB writes it into a target IOC cell, the comm
 				// thread reads the cell each tx period, encodes, and sends. Mirror of rx; same lean
@@ -2843,15 +1842,15 @@ fn main() {
 					panic('loom2v: [target] kind="threadx" comm thread: TX signal "${sname}" DBC message is ' +
 						'extended (29-bit) — the classic FDCAN backend sends 11-bit frames; use a standard id')
 				}
-				if si.bus != telem_bus {
+				if si.bus != m.telem.bus {
 					panic('loom2v: [target] kind="threadx" comm thread: TX signal "${sname}" is on bus ' +
-						'"${si.bus}", but the comm thread owns only [telemetry].bus "${telem_bus}"')
+						'"${si.bus}", but the comm thread owns only [telemetry].bus "${m.telem.bus}"')
 				}
-				if (e2e_on[si.dbc_msg] or { false }) || (secoc_on[si.dbc_msg] or { false }) {
+				if (m.frames.e2e_on[si.dbc_msg] or { false }) || (m.frames.secoc_on[si.dbc_msg] or { false }) {
 					panic('loom2v: [target] kind="threadx" comm thread: TX message "${si.dbc_msg}" has ' +
 						'E2E / SecOC, but the lean encode only packs the raw value — not generated yet')
 				}
-				tx_m := tx_mode[si.dbc_msg] or { 'cyclic' }
+				tx_m := m.frames.tx_mode[si.dbc_msg] or { 'cyclic' }
 				if tx_m != 'cyclic' {
 					panic('loom2v: [target] kind="threadx" comm thread: TX message "${si.dbc_msg}" tx.mode ' +
 						'"${tx_m}" is not generated — the comm producer sends purely cyclically (no ' +
@@ -2872,9 +1871,9 @@ fn main() {
 				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" is WRITTEN by an ' +
 					'FB handler — an rx (bus -> app) signal is an input; drop the handler write')
 			}
-			if si.bus != telem_bus {
+			if si.bus != m.telem.bus {
 				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" is on bus ' +
-					'"${si.bus}", but the comm thread owns only [telemetry].bus "${telem_bus}" — a per-bus ' +
+					'"${si.bus}", but the comm thread owns only [telemetry].bus "${m.telem.bus}" — a per-bus ' +
 					'comm owner is not generated yet (phase 6b-2 lean cut = one bus)')
 			}
 			if si.dbc_ext || si.dbc_id > 0x7ff {
@@ -2882,8 +1881,8 @@ fn main() {
 					'extended (29-bit${if si.dbc_ext { ' — the EFF flag is set' } else { '' }}), but the ' +
 					'classic FDCAN backend delivers only 11-bit standard frames — use a standard id')
 			}
-			if (rx_timeout_us[si.dbc_msg] or { 0 }) > 0 || (e2e_on[si.dbc_msg] or { false })
-				|| (secoc_on[si.dbc_msg] or { false }) {
+			if (m.frames.rx_timeout_us[si.dbc_msg] or { 0 }) > 0 || (m.frames.e2e_on[si.dbc_msg] or { false })
+				|| (m.frames.secoc_on[si.dbc_msg] or { false }) {
 				panic('loom2v: [target] kind="threadx" comm thread: rx message "${si.dbc_msg}" has an RX ' +
 					'deadline / E2E / SecOC, but the lean comm thread only counts raw rx.id matches — ' +
 					'those COM checks are not generated yet (phase 6b-2b)')
@@ -2921,7 +1920,7 @@ fn main() {
 				'cells, but the pool (comm_glue.c IOC_POOL_N) has 4 — raise IOC_POOL_N or reduce signals')
 		}
 	}
-	// Which buses run a COM bridge (an external signal, an ISO-TP conn, or a route touches them).
+	// Which m.buses run a COM bridge (an external signal, an ISO-TP conn, or a route touches them).
 	// P3b traces each bridge as a `comm_<bus>` thread; the DIFFERENT-bus case (trace rides a bus with
 	// no bridge) reuses the P3a owner cleanly, the SAME-bus case (the bridge owns the trace channel)
 	// is the follow-up — docs/trace-multicore.md §4.3.
@@ -2929,212 +1928,71 @@ fn main() {
 	// an ISO-TP conn, or a route it forwards FROM. (A route's dest bus only receives forwarded
 	// frames on its channel; it gets no loop of its own — matches the bus_names set below.)
 	mut bridge_buses := map[string]bool{}
-	for _, si in sig_of {
+	for _, si in m.sig_of {
 		if si.external {
 			bridge_buses[si.bus] = true
 		}
 	}
-	for c in isotp_conns {
+	for c in m.isotp_conns {
 		bridge_buses[c.bus] = true
 	}
-	for r in routes {
+	for r in m.routes {
 		bridge_buses[r.from_bus] = true
 	}
 	// The trace bus must carry NO COM at all for the different-bus path — not even route-forwarded
 	// tx (which would share its channel with the trace handshake). Flag a route dest too.
-	mut trace_bus_has_bridge := eff_trace_bus in bridge_buses
-	for r in routes {
-		if r.to_bus == eff_trace_bus {
-			trace_bus_has_bridge = true
-		}
-	}
-	// Core 0 only: the single-core INLINE path folds everything into one run(ch) superloop and
-	// assumes core 0 throughout (pin, CpuLoad byte 0, TraceCmd core_mask == 0 default). A traced
-	// app on other/multiple cores (or with a comm bridge on another bus) uses the MULTICORE path
-	// (P3a/P3b, docs/trace-multicore.md): per-core rings owned by run(), each partition + comm thread
-	// captures into its own, and one partition_trace() owns the trace channel + streams the blocks.
-	trace_inline := trace_on && !target_on && single_part != '' && !has_bridge
-		&& (core_of[single_part] or { 0 }) == trace_core && trace_core == 0
-	// P3c-0: bare-metal single-core trace — the same inline machinery, emitted with the board timebase
-	// (C.board_now_us) and no osal. Guaranteed single-core (target rejects external signals, so no
-	// bridge, and the target run() is one-partition).
-	// trace_target is the BARE-METAL target's polled inline trace. The ThreadX target is
-	// excluded — its trace is the exec-change-hook stream emitted in the threadx run(), not
-	// this V-stack capture machinery.
-	trace_target := trace_on && target_on && !target_threadx
-	// The bare-metal target trace runner services only trace + CpuLoad on one channel — it never runs
-	// a COM bridge. has_external is already rejected for target above; ISO-TP / routes make has_bridge
-	// true without has_external, so reject those too rather than silently drop the configured bus work.
-	if trace_target && has_bridge {
-		panic('loom2v: [trace] on a bare-metal [target] with a COM bridge (ISO-TP / routes / external ' +
-			'signals) is not generated — the target trace runner has no bridge/UDS/route loop; drop the ' +
-			'bridge config or set [trace].enabled = false for target builds')
-	}
-	trace_multicore := trace_on && !target_on && !trace_inline && !trace_bus_has_bridge
-	// SAME-bus (the trace bus itself carries a bridge) is P3b's follow-up: the bridge loop would have
-	// to own the trace channel and dispatch TraceCmd vs COM. Not generated yet — reject it.
-	if trace_on && !target_on && trace_bus_has_bridge {
-		panic('loom2v: [trace] bus "${eff_trace_bus}" also runs a COM bridge (external signals / ' +
-			'ISO-TP / routes on it) — trace piggybacked on a bridge bus (same-bus P3b) is not ' +
-			'generated yet; put [trace].bus on a dedicated bus (docs/trace-multicore.md §4.3)')
-	}
 	// P3a: each core's polled superloop is one cooperative thread — no preemptive context switches
-	// or ISRs, so we synthesise the schedule the loop actually runs: an fb record per handler, a
-	// THREAD record bracketing each busy iteration (the thread ran these handlers), and an IDLE
-	// record for the gap between busy spans. So thread+fb shows the thread + idle lanes honestly;
-	// real preemptive thread/ISR interleaving is the ThreadX target (P3c). The trace owner +
-	// partitions share memory, so require one partition per core (unambiguous per-core rings/mask).
-	mut trace_ncores := 0
-	mut fb_id_base := map[string]int{} // partition -> its first handler's GLOBAL fb id (manifest order)
-	mut thread_id_of := map[string]int{} // partition -> its thread id (manifest order, 1-based; 0 = idle)
-	mut comm_tid := map[string]int{} // bridge bus -> its comm thread id (P3b; after the app threads)
-	mut bridge_bus_list := []string{} // sorted bridge buses — stable comm-thread numbering + ring order
-	if trace_multicore {
-		if trace_level !in ['thread+fb', 'all'] {
-			panic('loom2v: [trace] level "${trace_level}" is not generated for multi-core host — use ' +
-				'"thread+fb" or "all" (the host emits fb + derived thread/idle; ISR capture is the ' +
-				'ThreadX target, P3c)')
-		}
-		// The live HandlerStat heartbeat is emitted only by the single-core inline path; the
-		// cross-core fan-out isn't generated yet. A positive push_ms would advertise stat_id in the
-		// manifest but send nothing — reject it rather than silently drop the heartbeat.
-		if trace_push_us > 0 {
-			panic('loom2v: [trace] push_ms > 0 is not generated for multi-core yet (the HandlerStat ' +
-				'heartbeat fan-out across cores is a P3a follow-up) — set push_ms = 0')
-		}
-		mut seen_core := map[int]string{}
-		mut acc := 0
-		mut tid := 0
-		for p in ecumodel.toml_arr(doc, 'partition') {
-			pname := (p.as_map()['name'] or { toml.Any('') }).string()
-			// Thread id tracks the manifest's numbering: one per partition, EVERY partition in TOML
-			// order (the manifest emits a thread row for each, FBs or not), so a traced partition's
-			// THREAD records land on the right lane even after an FB-less partition (F506).
-			tid++
-			thread_id_of[pname] = tid
-			if pname !in by_part {
-				continue // no FBs -> not traced; its thread id was still consumed above
-			}
-			pc := core_of[pname] or { 0 }
-			// The TraceCmd core_mask is 16 bits and Cmd.targets() ignores core >= 16, so a ring on
-			// core 16+ could never be armed/stopped/dumped — reject it rather than generate a
-			// partition + ring the trace protocol can't address.
-			if pc >= 16 {
-				panic('loom2v: [trace] partition "${pname}" is on core ${pc}, but the TraceCmd core ' +
-					'mask only addresses cores 0..15 — a traced partition must be on core 0..15')
-			}
-			if pc in seen_core {
-				panic('loom2v: multi-core trace needs one partition per core today — partitions ' +
-					'"${seen_core[pc]}" and "${pname}" are both on core ${pc} (P3a limitation, ' +
-					'docs/trace-multicore.md)')
-			}
-			seen_core[pc] = pname
-			if pc + 1 > trace_ncores {
-				trace_ncores = pc + 1
-			}
-			// GLOBAL fb id base + thread id — must match the manifest's partition->fb->handler and
-			// partition->thread numbering below (threads are 1-based; id 0 is reserved for idle).
-			fb_id_base[pname] = acc
-			for c in by_part[pname] {
-				acc += (c.as_map()['handler'] or { toml.Any([]toml.Any{}) }).array().len
-			}
-		}
-		// Comm threads (P3b): each bridge bus is a traced `comm_<bus>` thread on its bus core — same
-		// "one traced entity per core, dense" invariant as an app partition. It gets a thread id
-		// continuing the app numbering (matching the manifest's app-then-comm order) and a ring in the
-		// registry; no FBs, so no fb_id_base. Sorted for a stable id assignment.
-		bridge_bus_list = bridge_buses.keys()
-		bridge_bus_list.sort()
-		for bb in bridge_bus_list {
-			tid++
-			comm_tid[bb] = tid
-			bc := bus_core[bb] or { 0 }
-			if bc >= 16 {
-				panic('loom2v: [trace] comm bridge on bus "${bb}" is on core ${bc}; the TraceCmd mask ' +
-					'only addresses cores 0..15')
-			}
-			if bc in seen_core {
-				panic('loom2v: multi-core trace needs one traced entity per core — the comm bridge on ' +
-					'bus "${bb}" (core ${bc}) collides with "${seen_core[bc]}"; use distinct cores')
-			}
-			seen_core[bc] = 'comm_${bb}'
-			if bc + 1 > trace_ncores {
-				trace_ncores = bc + 1
-			}
-		}
-		// Cores must be numbered densely from 0: trace_ncores = max_core + 1 sizes the ring array +
-		// the per-core scratch cells, so a hole (a high core with no traced partition below it) would
-		// reserve cells for a producer that doesn't exist and can overflow the scratch budget (F523).
-		for cc in 0 .. trace_ncores {
-			if cc !in seen_core {
-				panic('loom2v: multi-core trace needs cores numbered densely from 0 — core ${cc} has ' +
-					'no traced partition but a higher core does; renumber the partition cores 0..N-1')
-			}
-		}
-	}
+	bridge_bus_list := []string{} // sorted bridge m.buses — stable comm-thread numbering + ring order
 
-	if telem_on {
-		if bc := doc.value('bus').as_map()[telem_bus] {
+	if m.telem.on {
+		if bc := doc.value('bus').as_map()[m.telem.bus] {
 			telem_iface = (bc.as_map()['interface'] or { toml.Any('') }).string()
 		}
-		mut tparts := by_part.keys()
+		mut tparts := m.part.by_part.keys()
 		tparts.sort()
 		for tp in tparts {
 			if slot_core.len < 16 { // scratch holds 16 u64s
 				telem_slot['p:${tp}'] = slot_core.len
-				slot_core << (core_of[tp] or { 0 })
+				slot_core << (m.part.core_of[tp] or { 0 })
 			}
 		}
-		mut tbuses := bus_core.keys()
+		mut tbuses := m.bus_core.keys()
 		tbuses.sort()
 		for tb in tbuses {
 			if slot_core.len < 16 {
 				telem_slot['b:${tb}'] = slot_core.len
-				slot_core << (bus_core[tb] or { 0 })
+				slot_core << (m.bus_core[tb] or { 0 })
 			}
 		}
 	}
 
-	// Multi-core (P3a): per-core scratch cells for SINGLE-WRITER trace coordination (the owner
-	// never mutates a partition's ring). cmd_base+cc is written ONLY by the owner — a command
-	// (generation << 8 | opcode) for core cc, which that partition applies to its OWN ring (arm/
-	// stop/reset/freeze) + reseats its own capture origin. trig_base+cc is written ONLY by core cc's
-	// capture hook — an overrun freeze request the owner fans out to every core as a freeze command,
-	// so the snapshot is coherent. Reserved after telem's cells; rejected if they'd overflow the 16.
-	trace_cmd_base := slot_core.len
-	trace_trig_base := slot_core.len + trace_ncores
-	if trace_multicore && slot_core.len + 2 * trace_ncores > 16 {
-		panic('loom2v: multi-core trace needs 2 scratch cells per core (command + trigger request), ' +
-			'but ${slot_core.len} telemetry cell(s) + ${2 * trace_ncores} for ${trace_ncores} core(s) ' +
-			'exceed osal.scratch (16 cells) — reduce telemetry')
-	}
 
-	mp, mg := emit_module_headers(m, ecu, comm_thread_on, trace_inline, trace_target, trace_multicore)
+	mp, mg := emit_module_headers(m, ecu, comm_thread_on)
 	mut ports := mp.clone()
 	mut glue := mg.clone()
 
-	// Multi-core (P3a): the shared capture hook (TraceCapture + trace_capture/trace_thread_span),
-	// installed per traced partition — emitted by emit_trace_capture.
-	if trace_multicore {
-		glue << emit_trace_capture(m)
-	}
 
-	fb_ports, fb_glue, all_regs := emit_handlers(m, telem_slot, ioc_idx, trace_cmd_base, trace_trig_base, trace_inline, trace_multicore, fb_id_base, thread_id_of)
+	// The platform producers (telemetry, trace) the shared emitters iterate — so no emitter names a
+	// specific capability for its partition-loop injection. NM / COM-tx join this list later.
+	producers := [Producer(TelemProducer{
+		on:        m.telem.on
+		slot:      telem_slot.clone()
+		id:        m.telem.id
+		detail_id: m.telem.detail_id
+	})]
+
+	fb_ports, fb_glue, all_regs := emit_handlers(m, producers, ioc_idx)
 	ports << fb_ports
 	glue << fb_glue
 
 	// --- generated COM bus bridge(s) — emitted by emit_bridges ---
-	bridge_glue, bnames, bus_dests := emit_bridges(m, comm_thread_on, trace_multicore, telem_slot, comm_tid, trace_cmd_base, trace_trig_base)
+	bridge_glue, bnames, bus_dests := emit_bridges(m, comm_thread_on, producers)
 	glue << bridge_glue
 	mut bus_names := bnames.clone()
 
 	// --- telemetry tx: sum per-partition load by core -> CpuLoad frame on the bus (emit_partition_telem) ---
-	glue << emit_partition_telem(m, telem_iface, slot_core, trace_inline)
+	glue << emit_partition_telem(m, telem_iface, slot_core)
 
-	// --- partition_trace (P3a): the single trace-bus owner — emitted by emit_partition_trace ---
-	if trace_multicore {
-		glue << emit_partition_trace(m, trace_core, trace_cmd_base, trace_trig_base)
-	}
 
 	bus_names.sort()
 	// A raw [[route]] to an otherwise-unused bus makes that bus a channel arg (it's forwarded to the
@@ -3150,12 +2008,8 @@ fn main() {
 		}
 	}
 	extra_dest_buses.sort()
-	if target_on && (target_threadx || !trace_on) {
-		glue << emit_run_target(m, doc, all_regs, telem_iface, comm_thread_on, ioc_idx, msg_ioc_idx)
-	} else if trace_inline || trace_target {
-		glue << emit_run_inline(m, doc, all_regs, telem_iface, single_part, trace_target)
-	} else if trace_multicore {
-		glue << emit_run_multicore(m, doc, telem_iface, bus_names, bus_dests, extra_dest_buses, trace_ncores)
+	if m.target.on {
+		glue << emit_run_target(m, doc, all_regs, telem_iface, comm_thread_on, ioc_idx, msg_ioc_idx, producers)
 	} else {
 		glue << emit_run_host(m, telem_iface, bus_names, bus_dests, extra_dest_buses)
 	}
@@ -3171,30 +2025,7 @@ fn main() {
 		os.write_file(args[6], man.join('\n') + '\n') or { panic('write ${args[6]}: ${err}') }
 	}
 
-	eprintln('loom2v: ${sig_names.len} signals (${bus_names.len} bus bridge), ${isotp_conns.len} isotp, ${by_part.len} partition(s)')
-}
-
-// trace_frame_id resolves a [trace] observability id: a literal number is the CAN id (used
-// as-is — a colliding id is the author's problem); a string is a bus.dbc message name that must
-// exist, and its id is used (so trace frames can piggyback on ids already defined in the DBC).
-fn trace_frame_id(trm map[string]toml.Any, field string, def u32, dbc string) u32 {
-	v := trm[field] or { return def }
-	if v is string {
-		db := candb.load_dbc_file(dbc) or {
-			panic('loom2v: [trace] ${field} = "${v}" is a bus.dbc message name but ${os.file_name(dbc)} did not load: ${err}')
-		}
-		id := dbc_id_of(db, snake(v)) or {
-			panic('loom2v: [trace] ${field} = "${v}" is not a message in ${os.file_name(dbc)}')
-		}
-		return u32(id)
-	}
-	// A literal id must be a legal CAN identifier — read as i64 (so a >32-bit value doesn't
-	// wrap) and reject out-of-range before it becomes a bogus manifest frame.
-	n := v.i64()
-	if n < 0 || n > 0x1fff_ffff {
-		panic('loom2v: [trace] ${field} ${n} is not a valid CAN id (0..0x1FFFFFFF)')
-	}
-	return u32(n)
+	eprintln('loom2v: ${m.sig_names.len} signals (${bus_names.len} bus bridge), ${m.isotp_conns.len} isotp, ${m.part.by_part.len} partition(s)')
 }
 
 // did_signal_encode emits the big-endian write of a live signal value into a
