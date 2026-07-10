@@ -206,6 +206,100 @@ mut:
 	fb_thread   map[string]string      // fb -> its thread
 }
 
+// parse_buses returns the declared buses (endpoint names that mean "external / on the wire")
+// and each bus's core.
+// parse_routes parses [[route]] (raw-PDU gateway: forward a frame bus->bus, no decode) and
+// resolves each from-frame to its DBC id (routes need a DBC).
+fn parse_routes(doc toml.Doc, dbc string) []Route {
+	mut routes := []Route{}
+	for r in ecumodel.toml_arr(doc, 'route') {
+		m := r.as_map()
+		fm := (m['from'] or { toml.Any('') }).as_map()
+		tm := (m['to'] or { toml.Any('') }).as_map()
+		fb := (fm['bus'] or { toml.Any('') }).string()
+		if fb == '' {
+			continue
+		}
+		routes << Route{
+			from_bus:   fb
+			from_frame: (fm['frame'] or { toml.Any('') }).string()
+			to_bus:     (tm['bus'] or { toml.Any('') }).string()
+			to_id:      int((tm['id'] or { toml.Any(0) }).int())
+		}
+	}
+	if routes.len > 0 {
+		db := candb.load_dbc_file(dbc) or { panic('routes need a DBC: load ${dbc}: ${err}') }
+		for i, r in routes {
+			id := dbc_id_of(db, snake(r.from_frame)) or {
+				panic('route: frame "${r.from_frame}" is not a message in ${os.file_name(dbc)}')
+			}
+			routes[i].from_id = id
+			if routes[i].to_id == 0 {
+				routes[i].to_id = id // keep the source id unless remapped
+			}
+		}
+	}
+	return routes
+}
+
+// parse_isotp parses [[isotp]] diagnostic connections.
+fn parse_isotp(doc toml.Doc) []IsotpConn {
+	mut isotp_conns := []IsotpConn{}
+	for c in ecumodel.toml_arr(doc, 'isotp') {
+		m := c.as_map()
+		name := (m['name'] or { toml.Any('') }).string()
+		if name == '' {
+			continue // absent [[isotp]] section can yield a phantom empty entry
+		}
+		isotp_conns << IsotpConn{
+			name:  name
+			bus:   (m['bus'] or { toml.Any('') }).string()
+			rx_id: int((m['rx_id'] or { toml.Any(0) }).int())
+			tx_id: int((m['tx_id'] or { toml.Any(0) }).int())
+			bs:    int((m['bs'] or { toml.Any(0) }).int())
+			stmin: int((m['stmin_ms'] or { toml.Any(0) }).int())
+		}
+	}
+	return isotp_conns
+}
+
+// parse_dids parses [[did]] UDS Data Identifiers: constant (ascii/bytes), writable RAM, or live signal.
+fn parse_dids(doc toml.Doc) []DidCfg {
+	mut dids := []DidCfg{}
+	for d in ecumodel.toml_arr(doc, 'did') {
+		m := d.as_map()
+		id := int((m['id'] or { toml.Any(0) }).int())
+		if id == 0 {
+			continue
+		}
+		mut bytes := []u8{}
+		if 'ascii' in m {
+			for ch in (m['ascii'] or { toml.Any('') }).string() {
+				bytes << u8(ch)
+			}
+		} else if 'bytes' in m {
+			bytes = parse_hex((m['bytes'] or { toml.Any('') }).string())
+		}
+		dids << DidCfg{
+			id:       id
+			bytes:    bytes
+			writable: (m['writable'] or { toml.Any(false) }).bool()
+			signal:   (m['signal'] or { toml.Any('') }).string()
+		}
+	}
+	return dids
+}
+
+fn parse_buses(doc toml.Doc) (map[string]bool, map[string]int) {
+	mut buses := map[string]bool{}
+	mut bus_core := map[string]int{}
+	for bname, bcfg in doc.value('bus').as_map() {
+		buses[bname] = true
+		bus_core[bname] = int((bcfg.as_map()['core'] or { toml.Any(0) }).int())
+	}
+	return buses, bus_core
+}
+
 fn parse_partitions(doc toml.Doc) PartMap {
 	mut p := PartMap{}
 	for pt in ecumodel.toml_arr(doc, 'partition') {
@@ -313,13 +407,7 @@ fn main() {
 		panic('loom2v: invalid ecu.toml:\n  ' + verrs.join('\n  '))
 	}
 
-	// declared buses (endpoint names that mean "external / on the wire")
-	mut buses := map[string]bool{}
-	mut bus_core := map[string]int{}
-	for bname, bcfg in doc.value('bus').as_map() {
-		buses[bname] = true
-		bus_core[bname] = int((bcfg.as_map()['core'] or { toml.Any(0) }).int())
-	}
+	buses, bus_core := parse_buses(doc)
 
 	// [[signal]] -> the model (sig_of): parse only, no emit. value field = the single non-"valid"
 	// field; `valid` (if any) is freshness. Fields captured in declaration order for emit_signals.
@@ -420,36 +508,8 @@ fn main() {
 	has_e2e := e2e_on.len > 0
 	has_secoc := secoc_on.len > 0
 
-	// Raw-PDU gateway routes ([[route]]): forward a frame bus->bus, no decode.
-	mut routes := []Route{}
-	for r in ecumodel.toml_arr(doc, 'route') {
-		m := r.as_map()
-		fm := (m['from'] or { toml.Any('') }).as_map()
-		tm := (m['to'] or { toml.Any('') }).as_map()
-		fb := (fm['bus'] or { toml.Any('') }).string()
-		if fb == '' {
-			continue
-		}
-		routes << Route{
-			from_bus:   fb
-			from_frame: (fm['frame'] or { toml.Any('') }).string()
-			to_bus:     (tm['bus'] or { toml.Any('') }).string()
-			to_id:      int((tm['id'] or { toml.Any(0) }).int())
-		}
-	}
+	routes := parse_routes(doc, dbc)
 	has_routes := routes.len > 0
-	if has_routes {
-		db := candb.load_dbc_file(dbc) or { panic('routes need a DBC: load ${dbc}: ${err}') }
-		for i, r in routes {
-			id := dbc_id_of(db, snake(r.from_frame)) or {
-				panic('route: frame "${r.from_frame}" is not a message in ${os.file_name(dbc)}')
-			}
-			routes[i].from_id = id
-			if routes[i].to_id == 0 {
-				routes[i].to_id = id // keep the source id unless remapped
-			}
-		}
-	}
 
 	// Validate E2E byte positions against each frame's DLC (they index unsafe into
 	// the frame's [64]u8 in the generated bridge).
@@ -484,47 +544,8 @@ fn main() {
 		}
 	}
 
-	// ISO-TP diagnostic connections ([[isotp]]).
-	mut isotp_conns := []IsotpConn{}
-	for c in ecumodel.toml_arr(doc, 'isotp') {
-		m := c.as_map()
-		name := (m['name'] or { toml.Any('') }).string()
-		if name == '' {
-			continue // absent [[isotp]] section can yield a phantom empty entry
-		}
-		isotp_conns << IsotpConn{
-			name:  name
-			bus:   (m['bus'] or { toml.Any('') }).string()
-			rx_id: int((m['rx_id'] or { toml.Any(0) }).int())
-			tx_id: int((m['tx_id'] or { toml.Any(0) }).int())
-			bs:    int((m['bs'] or { toml.Any(0) }).int())
-			stmin: int((m['stmin_ms'] or { toml.Any(0) }).int())
-		}
-	}
-
-	// UDS Data Identifiers ([[did]]): constant (ascii/bytes), writable RAM, or live signal.
-	mut dids := []DidCfg{}
-	for d in ecumodel.toml_arr(doc, 'did') {
-		m := d.as_map()
-		id := int((m['id'] or { toml.Any(0) }).int())
-		if id == 0 {
-			continue
-		}
-		mut bytes := []u8{}
-		if 'ascii' in m {
-			for ch in (m['ascii'] or { toml.Any('') }).string() {
-				bytes << u8(ch)
-			}
-		} else if 'bytes' in m {
-			bytes = parse_hex((m['bytes'] or { toml.Any('') }).string())
-		}
-		dids << DidCfg{
-			id:       id
-			bytes:    bytes
-			writable: (m['writable'] or { toml.Any(false) }).bool()
-			signal:   (m['signal'] or { toml.Any('') }).string()
-		}
-	}
+	isotp_conns := parse_isotp(doc)
+	dids := parse_dids(doc)
 
 	// Build the partition/thread maps (already validated up front, right after parse).
 	// partition/thread/fb topology -> the model (parse_partitions), rebound to the existing locals.
