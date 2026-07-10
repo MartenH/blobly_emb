@@ -38,6 +38,13 @@ from = "app"
 to   = "app"
 transport = "double"
 
+[[signal]]
+name = "Command"
+fields = { code = "u32" }
+from = "can0"
+to   = "app"
+transport = "double"
+
 [[fb]]
 name      = "Governor"
 thread    = "app_main"
