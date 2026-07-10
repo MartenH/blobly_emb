@@ -35,8 +35,13 @@ transport = "double"
 name = "Workload"
 fields = { v = "u32" }
 from = "app"
-to   = "app"
+to   = "can0"
 transport = "double"
+
+[[frame]]
+name = "WorkloadFrame"
+bus  = "can0"
+tx   = { mode = "cyclic", cycle_ms = 100 }
 
 [[signal]]
 name = "Command"

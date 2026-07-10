@@ -586,7 +586,7 @@ fn main() {
 		// target IOC pool (6b-2b); an rx signal WRITTEN by an FB is a config error (an input isn't
 		// written). Everything else external is still deferred (rejected below).
 		mut read_count := map[string]int{} // how many FB handlers read each signal
-		mut written_by_fb := map[string]bool{}
+		mut written_count := map[string]int{} // how many FB handlers write each signal
 		for fb in ecumodel.toml_arr(doc, 'fb') {
 			for h in (fb.as_map()['handler'] or { toml.Any([]toml.Any{}) }).array() {
 				hm := h.as_map()
@@ -594,7 +594,7 @@ fn main() {
 					read_count[r.string()]++
 				}
 				for w in (hm['writes'] or { toml.Any([]toml.Any{}) }).array() {
-					written_by_fb[w.string()] = true
+					written_count[w.string()]++
 				}
 			}
 		}
@@ -610,13 +610,42 @@ fn main() {
 		for sname in sig_names {
 			si := sig_of[sname] or { continue }
 			if si.external && !si.rx {
-				panic('loom2v: [target] kind="threadx" comm thread: external TX signal "${sname}" ' +
-					'(app -> bus) is not generated yet (phase 6b-2 lean cut = rx only)')
+				// external TX signal (app -> bus): an FB writes it into a target IOC cell, the comm
+				// thread reads the cell each tx period, encodes, and sends. Mirror of rx; same lean
+				// constraints so the whole-frame encode + SPSC pool stay correct.
+				if written_count[sname] != 1 {
+					panic('loom2v: [target] kind="threadx" comm thread: external TX signal "${sname}" ' +
+						'must be written by exactly one FB (got ${written_count[sname]}) — the IOC cell is ' +
+						'single-writer (SPSC); multiple producers would race the writer slot')
+				}
+				if read_count[sname] > 0 {
+					panic('loom2v: [target] kind="threadx" comm thread: external TX signal "${sname}" is ' +
+						'also read by an FB — a local consumer of a to-bus signal is not generated yet')
+				}
+				if !si.dbc_trivial {
+					panic('loom2v: [target] kind="threadx" comm thread: TX signal "${sname}" is not a plain ' +
+						'unsigned little-endian 32-bit value at bit 0 (factor 1, offset 0); other layouts ' +
+						'need the DBC codec on target — not generated yet')
+				}
+				if si.dbc_ext || si.dbc_id > 0x7ff {
+					panic('loom2v: [target] kind="threadx" comm thread: TX signal "${sname}" DBC message is ' +
+						'extended (29-bit) — the classic FDCAN backend sends 11-bit frames; use a standard id')
+				}
+				if si.bus != telem_bus {
+					panic('loom2v: [target] kind="threadx" comm thread: TX signal "${sname}" is on bus ' +
+						'"${si.bus}", but the comm thread owns only [telemetry].bus "${telem_bus}"')
+				}
+				if (e2e_on[si.dbc_msg] or { false }) || (secoc_on[si.dbc_msg] or { false }) {
+					panic('loom2v: [target] kind="threadx" comm thread: TX message "${si.dbc_msg}" has ' +
+						'E2E / SecOC, but the lean encode only packs the raw value — not generated yet')
+				}
+				ioc_idx[sname] = ioc_idx.len
+				continue
 			}
 			if !si.rx {
 				continue
 			}
-			if written_by_fb[sname] {
+			if written_count[sname] > 0 {
 				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" is WRITTEN by an ' +
 					'FB handler — an rx (bus -> app) signal is an input; drop the handler write')
 			}
@@ -1082,6 +1111,10 @@ fn main() {
 					si := sig_of[wn] or { SigInfo{} }
 					if si.local {
 						glue << '\tst.cell_${snake(wn)} = outp.${snake(wn)} // local'
+					} else if idx := ioc_idx[wn] {
+						// external TX (app -> bus): publish the value into its IOC cell; the comm thread
+						// reads it each tx period, encodes, and sends. Value field -> sig_t.a (b unused).
+						glue << '\tC.ioc_pub(${idx}, u32(outp.${snake(wn)}.${snake(si.val_field)}), u32(0))'
 					} else {
 						glue << '\tosal.${publish_fn(si.transport)}(${snake(wn)}_ch, &outp.${snake(wn)}, u8(sizeof(outp.${snake(wn)})))'
 					}
@@ -2096,6 +2129,14 @@ fn main() {
 						rx_sigs << s
 					}
 				}
+				// external TX signals (FB writes -> IOC -> comm sends), a producer each.
+				mut tx_sigs := []SigInfo{}
+				for sn in sig_names {
+					s := sig_of[sn] or { continue }
+					if s.external && !s.rx {
+						tx_sigs << s
+					}
+				}
 				// The FB thread runs run() OFF CAN (it publishes load to the scratch); the comm
 				// thread owns the bus. ThreadX: lower priority number = higher priority.
 				glue << 'fn ${part}_thread_entry(input u32) {'
@@ -2123,6 +2164,9 @@ fn main() {
 					glue << '\tmut tr_pos := u32(0)'
 					glue << '\tmut tr_n := u32(0)'
 					glue << '\tmut tr_active := false'
+				}
+				for si in tx_sigs {
+					glue << '\tmut last_tx_${snake(si.name)} := u64(0)'
 				}
 				glue << '\tmut rx := can.Frame{}'
 				glue << '\tfor {'
@@ -2173,6 +2217,30 @@ fn main() {
 						glue << '\t\t\t}'
 						glue << '\t\t\tch.send(d)'
 					}
+					glue << '\t\t}'
+				}
+				for si in tx_sigs {
+					mut cyc := tx_cycle_us[si.dbc_msg] or { 0 }
+					if cyc <= 0 {
+						cyc = 100000 // default cyclic 100 ms if no [[frame]].tx.cycle_ms
+					}
+					idx := ioc_idx[si.name] or { 0 }
+					glue << '\t\t// PRODUCER: external tx signal "${si.name}" — read the FB-published IOC'
+					glue << '\t\t// cell, encode the value (LE at byte 0), and send it cyclically (tx_ready-gated).'
+					glue << '\t\tif t1 - last_tx_${snake(si.name)} >= u64(${cyc}) && ch.tx_ready() {'
+					glue << '\t\t\tlast_tx_${snake(si.name)} = t1'
+					glue << '\t\t\tmut tv_a := u32(0)'
+					glue << '\t\t\tmut tv_b := u32(0)'
+					glue << '\t\t\tC.ioc_get(${idx}, &tv_a, &tv_b)'
+					glue << '\t\t\tmut tf := can.Frame{'
+					glue << '\t\t\t\tid:  u32(0x${si.dbc_id.hex()})'
+					glue << '\t\t\t\tlen: ${si.dbc_dlc}'
+					glue << '\t\t\t}'
+					glue << '\t\t\ttf.data[0] = u8(tv_a & 0xff)'
+					glue << '\t\t\ttf.data[1] = u8((tv_a >> 8) & 0xff)'
+					glue << '\t\t\ttf.data[2] = u8((tv_a >> 16) & 0xff)'
+					glue << '\t\t\ttf.data[3] = u8((tv_a >> 24) & 0xff)'
+					glue << '\t\t\tch.send(tf)'
 					glue << '\t\t}'
 				}
 				if trace_on {
