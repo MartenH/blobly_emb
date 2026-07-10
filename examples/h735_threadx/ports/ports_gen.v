@@ -21,7 +21,7 @@ pub mut:
 }
 pub struct LoadOut {
 pub mut:
-	// signal "Workload" — local cell in partition "app"
+	// signal "Workload" — ch, transport double, app -> can0
 	workload sig.Workload
 }
 

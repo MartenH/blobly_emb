@@ -14,7 +14,6 @@ mut:
 	load app.Load
 	heartbeat app.Heartbeat
 	cell_load_cmd sig.LoadCmd // local FB->FB signal
-	cell_workload sig.Workload // local FB->FB signal
 }
 
 fn handler_app_governor_on_100ms(ctx voidptr) {
@@ -22,7 +21,7 @@ fn handler_app_governor_on_100ms(ctx voidptr) {
 	mut inp := ports.GovernorIn{}
 	mut command_a := u32(0)
 	mut command_b := u32(0)
-	C.ioc_get(0, &command_a, &command_b)
+	C.ioc_get(1, &command_a, &command_b)
 	inp.command.code = u32(command_a)
 	mut outp := ports.GovernorOut{}
 	st.governor.on_100ms(inp, mut outp)
@@ -35,7 +34,7 @@ fn handler_app_load_on_1ms(ctx voidptr) {
 	inp.load_cmd = st.cell_load_cmd // local
 	mut outp := ports.LoadOut{}
 	st.load.on_1ms(inp, mut outp)
-	st.cell_workload = outp.workload // local
+	C.ioc_pub(0, u32(outp.workload.v), u32(0))
 }
 
 fn handler_app_heartbeat_on_100ms(ctx voidptr) {
@@ -110,6 +109,7 @@ fn comm_thread_entry(input u32) {
 	mut tr_pos := u32(0)
 	mut tr_n := u32(0)
 	mut tr_active := false
+	mut last_tx_workload := u64(0)
 	mut rx := can.Frame{}
 	for {
 		C.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame
@@ -118,7 +118,7 @@ fn comm_thread_entry(input u32) {
 			if rx.id == u32(0x123) && rx.len == 4 { // cmd_frame
 				g_rx_count++
 				g_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)
-				C.ioc_pub(0, g_rx_last, u32(0))
+				C.ioc_pub(1, g_rx_last, u32(0))
 			}
 		}
 		t1 := C.board_now_us()
@@ -147,6 +147,23 @@ fn comm_thread_entry(input u32) {
 				d.data[i] = detail[i]
 			}
 			ch.send(d)
+		}
+		// PRODUCER: external tx signal "Workload" — read the FB-published IOC
+		// cell, encode the value (LE at byte 0), and send it cyclically (tx_ready-gated).
+		if t1 - last_tx_workload >= u64(100000) && ch.tx_ready() {
+			last_tx_workload = t1
+			mut tv_a := u32(0)
+			mut tv_b := u32(0)
+			C.ioc_get(0, &tv_a, &tv_b)
+			mut tf := can.Frame{
+				id:  u32(0x200)
+				len: 4
+			}
+			tf.data[0] = u8(tv_a & 0xff)
+			tf.data[1] = u8((tv_a >> 8) & 0xff)
+			tf.data[2] = u8((tv_a >> 16) & 0xff)
+			tf.data[3] = u8((tv_a >> 24) & 0xff)
+			ch.send(tf)
 		}
 		// PRODUCER: exec-hook trace ring (a burst -> tx_ready-gated 16-record chunks)
 		if !tr_active && t1 - last_trace >= u64(1000000) {
