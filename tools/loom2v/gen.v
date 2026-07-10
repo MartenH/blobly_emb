@@ -533,9 +533,6 @@ struct BusCtx {
 	frame        string
 	detframe     string
 	idx          string
-	// bus_stream (trace exec-hook ring) contract:
-	stream_active bool
-	part          string
 }
 
 interface Producer {
@@ -550,9 +547,6 @@ interface Producer {
 	// bus_tick is this producer's periodic emission inside a bus-owning run loop (send a frame when
 	// due), rendered for the given run-model contract. Empty when the producer isn't active there.
 	bus_tick(ctx BusCtx) []string
-	// bus_stream: a second, separately-gated bus-loop injection (a burst stream). Trace uses it for
-	// the exec-hook ring; other producers return empty.
-	bus_stream(ctx BusCtx) []string
 }
 
 // TelemProducer publishes each partition's Loom load to a scratch cell so the bus owner can ship it
@@ -602,10 +596,6 @@ fn (t TelemProducer) bus_tick(ctx BusCtx) []string {
 	return g
 }
 
-fn (t TelemProducer) bus_stream(_ BusCtx) []string {
-	return []string{}
-}
-
 fn (t TelemProducer) partition_preamble(_ string) []string {
 	return []string{}
 }
@@ -623,125 +613,6 @@ fn (t TelemProducer) partition_loop_body(part_key string) []string {
 		return ['\t\tosal.scratch_set(${t.slot[part_key]}, u64(sched.load_permille()))']
 	}
 	return []string{}
-}
-
-// TraceProducer captures the execution timeline. On the multi-core path it OWNS the traced partition
-// runner's trace parts: it installs the per-core capture ctx (preamble), applies the owner's routed
-// commands from its scratch cell (loop_top, single-writer), and swaps plain dispatch for profiled
-// dispatch (dispatch). It holds the trace scratch layout so no shared emitter carries trace_cmd_base.
-struct TraceProducer {
-	multicore    bool
-	cmd_base     int
-	trig_base    int
-	core_of      map[string]int
-	fb_id_base   map[string]int
-	thread_id_of map[string]int
-	record_id      u32
-	buffer_records int
-}
-
-fn (t TraceProducer) part_core(part_key string) int {
-	return t.core_of[part_key#[2..]] or { 0 }
-}
-
-fn (t TraceProducer) partition_preamble(part_key string) []string {
-	if !t.multicore {
-		return []string{}
-	}
-	part := part_key#[2..]
-	pcore := t.core_of[part] or { 0 }
-	return [
-		'\tmut cap := TraceCapture{',
-		'\t\tbuf:       unsafe { &trace.TraceBuffer(arg) }',
-		'\t\tstart:     osal.now_us()',
-		'\t\tid_base:   ${t.fb_id_base[part] or { 0 }}',
-		'\t\tthread_id: ${t.thread_id_of[part] or { 0 }}',
-		'\t\ttrig_slot: ${t.trig_base + pcore}',
-		'\t}',
-		'\tsched.set_trace_hook(trace_capture, &cap)',
-		'\tmut last_cmd := osal.scratch_get(${t.cmd_base + pcore})',
-	]
-}
-
-fn (t TraceProducer) partition_loop_top(part_key string) []string {
-	if !t.multicore {
-		return []string{}
-	}
-	pcore := t.part_core(part_key)
-	return [
-		'\t\tcmdv := osal.scratch_get(${t.cmd_base + pcore})',
-		'\t\tif cmdv != last_cmd {',
-		'\t\t\tlast_cmd = cmdv',
-		'\t\t\top := u8(cmdv & 0xff)',
-		'\t\t\tif op == trace.op_arm || op == trace.op_start || op == trace.op_reset {',
-		'\t\t\t\tcap.buf.start()',
-		'\t\t\t\tcap.start = osal.now_us()',
-		'\t\t\t\tcap.base = 0',
-		'\t\t\t\tcap.busy_end = 0',
-		'\t\t\t} else if op == trace.op_stop {',
-		'\t\t\t\tcap.buf.stop()',
-		'\t\t\t} else if op == 0xf1 { // freeze: the owner fanned out another core\'s overrun',
-		'\t\t\t\tcap.buf.trigger()',
-		'\t\t\t}',
-		'\t\t}',
-	]
-}
-
-fn (t TraceProducer) partition_dispatch(_ string) []string {
-	if !t.multicore {
-		return []string{}
-	}
-	return [
-		'\t\tt0 := osal.now_us()',
-		'\t\tbefore := cap.fb_count',
-		'\t\tsched.run_profiled(osal.now_us)',
-		'\t\tif cap.fb_count != before {',
-		'\t\t\ttrace_thread_span(mut cap, t0, osal.now_us())',
-		'\t\t}',
-	]
-}
-
-fn (t TraceProducer) partition_loop_body(_ string) []string {
-	return []string{}
-}
-
-// bus_tick: the exec-hook ring stream. Still emitted inline in the run-models for now (next slice);
-// stubbed here so TraceProducer satisfies the interface without changing output.
-fn (t TraceProducer) bus_tick(_ BusCtx) []string {
-	return []string{}
-}
-
-fn (t TraceProducer) bus_stream(ctx BusCtx) []string {
-	if !ctx.stream_active {
-		return []string{}
-	}
-	mut g := []string{}
-	g << ctx.lead
-	g << '\t\tif !tr_active && t1 - last_trace >= u64(1000000) {'
-	g << '\t\t\ttr_n = C.trace_snapshot(&g_${ctx.part}_trace[0], ${t.buffer_records})'
-	g << '\t\t\ttr_pos = 0'
-	g << '\t\t\ttr_active = true'
-	g << '\t\t}'
-	g << '\t\tif tr_active {'
-	g << '\t\t\tmut sent := 0'
-	g << '\t\t\tfor tr_pos < tr_n && sent < 16 && ch.tx_ready() {'
-	g << '\t\t\t\tmut tf := can.Frame{'
-	g << '\t\t\t\t\tid:  u32(0x${t.record_id.hex()})'
-	g << '\t\t\t\t\tlen: 8'
-	g << '\t\t\t\t}'
-	g << '\t\t\t\tfor j in 0 .. 8 {'
-	g << '\t\t\t\t\ttf.data[j] = g_${ctx.part}_trace[tr_pos][j]'
-	g << '\t\t\t\t}'
-	g << '\t\t\t\tch.send(tf)'
-	g << '\t\t\t\ttr_pos++'
-	g << '\t\t\t\tsent++'
-	g << '\t\t\t}'
-	g << '\t\t\tif tr_pos >= tr_n {'
-	g << '\t\t\t\ttr_active = false'
-	g << '\t\t\t\tlast_trace = C.board_now_us()'
-	g << '\t\t\t}'
-	g << '\t\t}'
-	return g
 }
 
 // emit_manifest builds the trace-identity CSV (optional arg 6): the tables blobly_net loads to
@@ -873,134 +744,6 @@ fn emit_partition_telem(m Model, telem_iface string, slot_core []int, trace_inli
 	glue << '\t\t}'
 	glue << '\t\tc.send(f)'
 	glue << '\t\tosal.sleep_us(${m.telem.period_us})'
-	glue << '\t}'
-	glue << '}'
-	return glue
-}
-
-// emit_partition_trace emits the P3a multi-core trace-bus owner. It NEVER mutates a partition's
-// ring (single-writer isolation): arm/stop/reset are ROUTED to the owning partition via a per-core
-// command cell, the reply is a read-only status_rsp, and an overrun freeze is fanned in (per-core
-// trigger counter) then out as a freeze command. Only `dump` reads the (frozen) rings, streaming
-// each as one self-describing ISO-TP block sequentially. The three scratch bases (core pin, cmd
-// cells, trigger cells) are main's derived scratch layout; the frame ids come from the Model.
-fn emit_partition_trace(m Model, trace_core int, trace_cmd_base int, trace_trig_base int) []string {
-	mut glue := []string{}
-	glue << ''
-	glue << 'fn partition_trace(chp can.Channel, base voidptr, ncores int) {'
-	glue << '\tosal.pin_to_core(${trace_core})'
-	glue << '\tmut ch := chp'
-	glue << '\tmut rings := unsafe { &trace.TraceBuffer(base) } // rings[0 .. ncores]'
-	glue << '\tmut link := isotp.Link{}'
-	glue << '\tmut dumpbuf := [${m.trace.buffer_records * 8 + 8}]u8{} // one block: header + records'
-	glue << '\tmut pending := u16(0) // cores whose frozen ring still needs streaming'
-	glue << '\tmut seq := u64(0)     // command generation — the owner is the SOLE writer of cmd cells'
-	glue << '\tmut froze := false    // whether the current session\'s freeze has been fanned out'
-	glue << '\tmut last_trig := [16]u64{} // last freeze-request counter seen per core (edge detect)'
-	glue << '\tfor {'
-	glue << '\t\tmut rx := can.Frame{}'
-	glue << '\t\tif ch.recv(mut rx) {'
-	glue << '\t\t\tif rx.id == u32(0x${m.trace.cmd_id.hex()}) && rx.len >= 8 {'
-	glue << '\t\t\t\tmut cb := [8]u8{}'
-	glue << '\t\t\t\tfor j in 0 .. 8 {'
-	glue << '\t\t\t\t\tcb[j] = rx.data[j]'
-	glue << '\t\t\t\t}'
-	glue << '\t\t\t\tc := trace.decode_cmd(cb)'
-	glue << '\t\t\t\tarm := c.opcode == trace.op_arm || c.opcode == trace.op_start || c.opcode == trace.op_reset'
-	glue << '\t\t\t\tif arm { // new session: forget prior overruns, re-enable the freeze fan-out'
-	glue << '\t\t\t\t\tfroze = false'
-	glue << '\t\t\t\t\tfor cc in 0 .. ncores {'
-	glue << '\t\t\t\t\t\tlast_trig[cc] = osal.scratch_get(${trace_trig_base} + cc)'
-	glue << '\t\t\t\t\t}'
-	glue << '\t\t\t\t\tpending = 0        // cancel any in-flight dump so a fresh capture isn\'t'
-	glue << '\t\t\t\t\tlink = isotp.Link{} // mixed with the previous session\'s blocks (F1281)'
-	glue << '\t\t\t\t}'
-	glue << '\t\t\t\tdump_busy := pending != 0 || link.busy()'
-	glue << '\t\t\t\tfor cc in 0 .. ncores {'
-	glue << '\t\t\t\t\tif !c.targets(u8(cc)) {'
-	glue << '\t\t\t\t\t\tcontinue'
-	glue << '\t\t\t\t\t}'
-	glue << '\t\t\t\t\t// Route the mutating ops to the OWNING partition (single-writer): the owner'
-	glue << '\t\t\t\t\t// only posts a (generation | opcode) command + reads the ring for the ack.'
-	glue << '\t\t\t\t\tif arm || c.opcode == trace.op_stop {'
-	glue << '\t\t\t\t\t\tseq++'
-	glue << '\t\t\t\t\t\tosal.scratch_set(${trace_cmd_base} + cc, (seq << 8) | u64(c.opcode))'
-	glue << '\t\t\t\t\t}'
-	glue << '\t\t\t\t\ttbv := unsafe { rings[cc] } // read-only snapshot for the status reply'
-	glue << '\t\t\t\t\tmut result := trace.result_ok'
-	glue << '\t\t\t\t\tif c.opcode == trace.op_dump {'
-	glue << '\t\t\t\t\t\tif tbv.state() != .full && tbv.state() != .frozen {'
-	glue << '\t\t\t\t\t\t\tresult = trace.result_not_ready'
-	glue << '\t\t\t\t\t\t} else if dump_busy {'
-	glue << '\t\t\t\t\t\t\tresult = trace.result_busy'
-	glue << '\t\t\t\t\t\t} else {'
-	glue << '\t\t\t\t\t\t\tpending |= u16(1) << cc'
-	glue << '\t\t\t\t\t\t}'
-	glue << '\t\t\t\t\t} else if c.opcode == trace.op_set_push {'
-	glue << '\t\t\t\t\t\tresult = trace.result_unsupported // push is config-driven, not runtime (F1297)'
-	glue << '\t\t\t\t\t} else if !arm && c.opcode != trace.op_stop && c.opcode != trace.op_status {'
-	glue << '\t\t\t\t\t\tresult = trace.result_bad_opcode'
-	glue << '\t\t\t\t\t}'
-	glue << '\t\t\t\t\trspb := trace.status_rsp(tbv, c.opcode, result, u8(cc))'
-	glue << '\t\t\t\t\tmut rf := can.Frame{'
-	glue << '\t\t\t\t\t\tid:  u32(0x${m.trace.rsp_id.hex()})'
-	glue << '\t\t\t\t\t\tlen: 8'
-	glue << '\t\t\t\t\t}'
-	glue << '\t\t\t\t\tfor j in 0 .. 8 {'
-	glue << '\t\t\t\t\t\trf.data[j] = rspb[j]'
-	glue << '\t\t\t\t\t}'
-	glue << '\t\t\t\t\tch.send(rf)'
-	glue << '\t\t\t\t}'
-	glue << '\t\t\t} else if rx.id == u32(0x${m.trace.dump_fc_id.hex()}) {'
-	glue << '\t\t\t\tmut p := isotp.Pdu{}'
-	glue << '\t\t\t\tfor j in 0 .. 8 {'
-	glue << '\t\t\t\t\tp.data[j] = rx.data[j]'
-	glue << '\t\t\t\t}'
-	glue << '\t\t\t\tlink.on_frame(osal.now_us(), p)'
-	glue << '\t\t\t}'
-	glue << '\t\t}'
-	glue << '\t\tlink.tick(osal.now_us()) // advance the N_Bs timeout even when tx_ready gates poll out'
-	glue << '\t\tmut tp := isotp.Pdu{}'
-	glue << '\t\tfor ch.tx_ready() && link.poll(osal.now_us(), mut tp) {'
-	glue << '\t\t\tmut pf := can.Frame{'
-	glue << '\t\t\t\tid:  u32(0x${m.trace.record_id.hex()})'
-	glue << '\t\t\t\tlen: 8'
-	glue << '\t\t\t}'
-	glue << '\t\t\tfor j in 0 .. 8 {'
-	glue << '\t\t\t\tpf.data[j] = tp.data[j]'
-	glue << '\t\t\t}'
-	glue << '\t\t\tch.send(pf)'
-	glue << '\t\t}'
-	glue << '\t\tmut newtrig := false'
-	glue << '\t\tfor cc in 0 .. ncores {'
-	glue << '\t\t\tv := osal.scratch_get(${trace_trig_base} + cc)'
-	glue << '\t\t\tif v != last_trig[cc] {'
-	glue << '\t\t\t\tlast_trig[cc] = v'
-	glue << '\t\t\t\tnewtrig = true'
-	glue << '\t\t\t}'
-	glue << '\t\t}'
-	glue << '\t\tif newtrig && !froze {'
-	glue << '\t\t\tfroze = true'
-	glue << '\t\t\tfor cc in 0 .. ncores {'
-	glue << '\t\t\t\tseq++'
-	glue << '\t\t\t\tosal.scratch_set(${trace_cmd_base} + cc, (seq << 8) | u64(0xf1)) // 0xf1 = freeze'
-	glue << '\t\t\t}'
-	glue << '\t\t}'
-	glue << '\t\tif !link.busy() && pending != 0 { // previous block drained -> start the next core'
-	glue << '\t\t\tmut cc := 0'
-	glue << '\t\t\tfor cc < ncores && (pending & (u16(1) << cc)) == 0 {'
-	glue << '\t\t\t\tcc++'
-	glue << '\t\t\t}'
-	glue << '\t\t\tif cc < ncores {'
-	glue << '\t\t\t\tpending &= ~(u16(1) << cc)'
-	glue << '\t\t\t\tmut tb := unsafe { &rings[cc] }'
-	glue << '\t\t\t\tn := tb.pack_block(&dumpbuf[0], ${m.trace.buffer_records * 8 + 8}, u8(cc))'
-	glue << '\t\t\t\tif n > 0 {'
-	glue << '\t\t\t\t\tlink.send(&dumpbuf[0], n)'
-	glue << '\t\t\t\t}'
-	glue << '\t\t\t}'
-	glue << '\t\t}'
-	glue << '\t\tosal.sleep_us(1000)'
 	glue << '\t}'
 	glue << '}'
 	return glue
@@ -1619,12 +1362,6 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				idx:          'i'
 			})
 		}
-		for p in producers {
-			glue << p.bus_stream(BusCtx{
-				stream_active: m.target.threadx && m.trace.on && !comm_thread_on
-				part:          '${part}'
-			})
-		}
 		if m.target.threadx {
 			// Yield to the RTOS between passes: sleep the configured tick (in 1 ms ThreadX
 			// ticks), so lower-priority threads run and the Loom's load = run-time / wall-clock
@@ -1767,13 +1504,6 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t\ttf.data[3] = u8((tv_a >> 24) & 0xff)'
 					glue << '\t\t\tch.send(tf)'
 					glue << '\t\t}'
-				}
-				for p in producers {
-					glue << p.bus_stream(BusCtx{
-						stream_active: m.trace.on
-						lead:          ['\t\t// PRODUCER: exec-hook trace ring (a burst -> tx_ready-gated 16-record chunks)']
-						part:          '${part}'
-					})
 				}
 				glue << '\t}'
 				glue << '}'
@@ -2001,96 +1731,6 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_in
 		}
 	}
 	return ports, glue, all_regs
-}
-
-// emit_trace_capture emits the multi-core (P3a) shared capture hook: the TraceCapture ctx struct
-// plus trace_capture (per-handler push) and trace_thread_span (thread busy/idle spans). Each traced
-// partition installs it with its own ctx (ring + fb-id base + thread id). Reads the Model.
-fn emit_trace_capture(m Model) []string {
-	mut glue := []string{}
-		glue << ''
-		glue << 'struct TraceCapture {'
-		glue << 'mut:'
-		glue << '\tbuf       &trace.TraceBuffer = unsafe { nil } // this core\'s ring (owned by run())'
-		glue << '\tstart     u64 // wall-clock µs of the capture origin'
-		glue << '\tbase      u64 // elapsed µs at the last epoch re-anchor'
-		glue << '\tid_base   u32 // GLOBAL fb id of this partition\'s first handler (+ local idx)'
-		glue << '\tthread_id u16 // this partition\'s thread id (for the THREAD records)'
-		glue << '\tbusy_end  u64 // elapsed µs at the end of the last busy span (idle-gap start)'
-		glue << '\tfb_count  u32 // handlers dispatched (the loop reads this to bracket a busy span)'
-		glue << '\ttrig_slot int // THIS core\'s freeze-request scratch cell (single-writer: only here)'
-		glue << '}'
-		glue << ''
-		glue << 'fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {'
-		glue << '\tmut t := unsafe { &TraceCapture(ctx) }'
-		glue << '\tt.fb_count++'
-		glue << '\telapsed := start_us - t.start'
-		glue << '\tif elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor'
-		glue << '\t\tt.base = elapsed'
-		glue << '\t\tt.buf.push(trace.new_epoch(u32(elapsed)))'
-		glue << '\t}'
-		glue << '\tmut dt := dt_us'
-		glue << '\tmut flags := u8(0)'
-		glue << '\tif dt > 0xFFFF { // clamp to the u16 field, and mark it as saturated (F648)'
-		glue << '\t\tdt = 0xFFFF'
-		glue << '\t\tflags |= trace.flag_saturated'
-		glue << '\t}'
-		if m.trace.budget_us > 0 {
-			// flag the record that exceeded the budget — the handler that trips the ring trigger;
-			// the decoder outlines it so the freeze culprit is visible in the dump.
-			glue << '\tif dt_us > ${m.trace.budget_us} {'
-			glue << '\t\tflags |= trace.flag_overran'
-			glue << '\t}'
-		}
-		glue << '\tt.buf.push(trace.new_fb(u16(t.id_base + u32(idx)), flags, u32(elapsed - t.base), u16(dt)))'
-		if m.trace.budget_us > 0 {
-			// This core overran: freeze its OWN ring now (single-writer), and raise its freeze
-			// request — the trace owner fans that out as a freeze command to every core, so the
-			// per-core snapshots are coherent without any core mutating another core's ring. Only
-			// when actually capturing: a handler still runs (and can overrun) while the ring is
-			// frozen, and a stale request would re-freeze the next capture the instant it re-arms.
-			glue << '\tif dt_us > ${m.trace.budget_us} && t.buf.state() == .capturing {'
-			glue << '\t\tt.buf.trigger()'
-			glue << '\t\tosal.scratch_set(t.trig_slot, osal.scratch_get(t.trig_slot) + 1) // bump the request counter (edge, not level)'
-			glue << '\t}'
-		}
-		glue << '}'
-		glue << ''
-		// trace_thread_span brackets one busy superloop iteration: an IDLE record for the gap since
-		// the previous busy span, then a THREAD record for [t0, t1] (the thread ran its handlers).
-		// The partition loop calls it only when a handler actually ran, so idle records are bounded
-		// by the handler rate (not the 1 ms tick). start_us are relative to the current epoch base.
-		glue << 'fn trace_thread_span(mut t TraceCapture, t0_us u64, t1_us u64) {'
-		glue << '\te_start := t0_us - t.start // elapsed at the busy span start'
-		glue << '\te_end := t1_us - t.start   // elapsed at the busy span end'
-		// A comm thread has no per-FB trace_capture to advance the epoch, so re-anchor here when the
-		// u24 start_us would wrap — otherwise long comm captures drift out of alignment with the app
-		// cores. Idempotent for the app path: trace_capture already re-anchored, so t.base stays within
-		// the window and (e_start > t.base) fails (base can even lead e_start after a mid-span wrap).
-		glue << '\tif e_start > t.base && e_start - t.base > 0x00ff_ffff {'
-		glue << '\t\tt.base = e_start'
-		glue << '\t\tt.buf.push(trace.new_epoch(u32(e_start)))'
-		glue << '\t}'
-		// The idle-gap start is relative to the current epoch base. If an epoch re-anchor moved the
-		// base past the previous busy_end (a capture spanning the u24 window), clamp the gap to the
-		// new base so u32(start - base) can\'t underflow and land the idle ~16 s in the future (F684).
-		glue << '\tgap_from := if t.busy_end > t.base { t.busy_end } else { t.base }'
-		glue << '\tif e_start > gap_from { // idle gap since the last busy span (within this epoch)'
-		glue << '\t\tmut gap := e_start - gap_from'
-		glue << '\t\tif gap > 0xFFFF {'
-		glue << '\t\t\tgap = 0xFFFF'
-		glue << '\t\t}'
-		glue << '\t\tt.buf.push(trace.new_idle(trace.reason_yield, u32(gap_from - t.base), u16(gap)))'
-		glue << '\t}'
-		glue << '\ts_from := if e_start > t.base { e_start } else { t.base } // clamp across an epoch re-anchor (F708)'
-		glue << '\tmut busy := if e_end > s_from { e_end - s_from } else { u64(0) }'
-		glue << '\tif busy > 0xFFFF {'
-		glue << '\t\tbusy = 0xFFFF'
-		glue << '\t}'
-		glue << '\tt.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(s_from - t.base), u16(busy)))'
-		glue << '\tt.busy_end = e_end'
-		glue << '}'
-	return glue
 }
 
 // emit_module_headers builds the `module ports` and `module gen` preambles: the code-gen banner,
@@ -2691,11 +2331,6 @@ fn main() {
 	mut ports := mp.clone()
 	mut glue := mg.clone()
 
-	// Multi-core (P3a): the shared capture hook (TraceCapture + trace_capture/trace_thread_span),
-	// installed per traced partition — emitted by emit_trace_capture.
-	if trace_multicore {
-		glue << emit_trace_capture(m)
-	}
 
 	// The platform producers (telemetry, trace) the shared emitters iterate — so no emitter names a
 	// specific capability for its partition-loop injection. NM / COM-tx join this list later.
@@ -2704,15 +2339,6 @@ fn main() {
 		slot:      telem_slot.clone()
 		id:        m.telem.id
 		detail_id: m.telem.detail_id
-	}), Producer(TraceProducer{
-		multicore:    trace_multicore
-		cmd_base:     trace_cmd_base
-		trig_base:    trace_trig_base
-		core_of:      m.part.core_of.clone()
-		fb_id_base:   fb_id_base.clone()
-		thread_id_of: thread_id_of.clone()
-		record_id:      m.trace.record_id
-		buffer_records: m.trace.buffer_records
 	})]
 
 	fb_ports, fb_glue, all_regs := emit_handlers(m, producers, ioc_idx, trace_inline)
@@ -2727,10 +2353,6 @@ fn main() {
 	// --- telemetry tx: sum per-partition load by core -> CpuLoad frame on the bus (emit_partition_telem) ---
 	glue << emit_partition_telem(m, telem_iface, slot_core, trace_inline)
 
-	// --- partition_trace (P3a): the single trace-bus owner — emitted by emit_partition_trace ---
-	if trace_multicore {
-		glue << emit_partition_trace(m, trace_core, trace_cmd_base, trace_trig_base)
-	}
 
 	bus_names.sort()
 	// A raw [[route]] to an otherwise-unused bus makes that bus a channel arg (it's forwarded to the
