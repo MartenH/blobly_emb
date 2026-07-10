@@ -32,6 +32,8 @@ mut:
 	val_type  string // its V type
 	has_valid bool   // a `valid` field is present
 	dbc_msg   string // snake(DBC message name) carrying this signal (if external)
+	dbc_id    int    // the DBC message's CAN id (if external) — resolved once at parse time
+	dbc_dlc   int    // the DBC message's DLC (if external)
 }
 
 // IsotpConn is one [[isotp]] diagnostic connection on a bus.
@@ -162,6 +164,8 @@ fn main() {
 			si.dbc_msg = dbc_message_of(db, sname) or {
 				panic('signal "${sname}" has a bus endpoint but is not in ${os.file_name(dbc)}')
 			}
+			si.dbc_id = dbc_id_of(db, si.dbc_msg) or { 0 }
+			si.dbc_dlc = dbc_dlc_of(db, si.dbc_msg) or { 8 }
 			sig_of[sname] = si
 		}
 	}
@@ -455,9 +459,10 @@ fn main() {
 			target_tick_us = u64(tms.int()) * 1000
 		}
 	}
-	if target_on && has_external {
+	if target_on && has_external && !target_threadx {
 		panic('loom2v: [target] baremetal does not support external/bus signals yet ' +
-			'(every [[signal]] must be partition-local: from == to)')
+			'(every [[signal]] must be partition-local: from == to). The ThreadX target does — ' +
+			'its comm thread services rx (phase 6b-2).')
 	}
 	// The ThreadX target's trace is the EXEC-CHANGE-HOOK model (trace_hooks.c captures every
 	// real context switch + ISR into a ring), NOT the loom2v polled V-stack capture. So a
@@ -555,14 +560,24 @@ fn main() {
 			'host-style capture on the board timebase); multi-thread / ISR capture is the larger P3c slice')
 	}
 	has_bridge := has_external || isotp_conns.len > 0 || has_routes
-	// The threadx target has no COM bridge / comm thread yet (phase 6b). has_external is
-	// already rejected for any target above, but ISO-TP conns and routes make has_bridge true
-	// without has_external — reject those too rather than emit a partition_* bridge loop with no
-	// ThreadX comm thread / FDCAN Rx ISR to drive it.
-	if target_threadx && has_bridge {
-		panic('loom2v: [target] kind="threadx" with a COM bridge (external signals / routes / ' +
-			'ISO-TP) is not generated yet (phase 6b — the ThreadX comm thread + FDCAN Rx ISR); ' +
-			'drop the bridge config for threadx builds')
+	// ThreadX COM bridge (phase 6b-2): the target grows a bus-owning comm thread that services
+	// rx (woken by the FDCAN Rx ISR) while the FB thread stays off CAN and publishes load via a
+	// scratch cell. The comm thread is the generic bus owner — telemetry and the trace ring are
+	// its first two producers, rx frames go to consumers — so NM/COM-tx slot in later as more of
+	// the same. The lean first cut supports external RX signals (bus -> app), drained + counted
+	// by the comm thread; external TX signals, ISO-TP, and routes are not generated yet.
+	comm_thread_on := target_threadx && has_bridge
+	if comm_thread_on {
+		if has_routes || isotp_conns.len > 0 {
+			panic('loom2v: [target] kind="threadx" comm thread: routes / ISO-TP are not generated ' +
+				'yet (phase 6b-2 lean cut = external rx signals only)')
+		}
+		for sname, si in sig_of {
+			if si.external && !si.rx {
+				panic('loom2v: [target] kind="threadx" comm thread: external TX signal "${sname}" ' +
+					'(app -> bus) is not generated yet (phase 6b-2 lean cut = rx only)')
+			}
+		}
 	}
 	// Which buses run a COM bridge (an external signal, an ISO-TP conn, or a route touches them).
 	// P3b traces each bridge as a `comm_<bus>` thread; the DIFFERENT-bus case (trace rides a bus with
@@ -798,8 +813,8 @@ fn main() {
 	if has_external || isotp_conns.len > 0 || telem_on || trace_inline || trace_multicore || trace_target {
 		glue << 'import driver.can' // the generated bus bridge / trace channel
 	}
-	if has_external {
-		glue << 'import comm.com' // per-PDU TX modes + RX deadline monitoring
+	if has_external && !comm_thread_on {
+		glue << 'import comm.com' // per-PDU TX modes + RX deadline monitoring (host bridge only)
 	}
 	if has_e2e {
 		glue << 'import comm.e2e' // end-to-end protection (CRC + alive counter)
@@ -1063,9 +1078,16 @@ fn main() {
 	}
 
 	// --- generated COM bus bridge(s): decode rx -> IOC, IOC -> encode tx ---
+	// The ThreadX comm-thread target owns rx in its own generated comm_thread_entry (a
+	// freestanding, osal-free loop), so skip the host-style osal/spawn bridge entirely for it —
+	// otherwise this would emit partition_<bus>/io_<bus> referencing osal + the dbc2cfg `gen`
+	// codec, neither of which links into the freestanding image.
 	mut bus_names := []string{}
 	mut bus_dests := map[string][]string{} // bus -> its gateway destination buses
 	for bname, _ in buses {
+		if comm_thread_on {
+			continue
+		}
 		bb := snake(bname)
 		mut rx_by_msg := map[string][]string{}
 		mut tx_by_msg := map[string][]string{}
@@ -1762,6 +1784,13 @@ fn main() {
 				// bus owner) streams the stable copy. RING_CAP = 256 records * 8 bytes.
 				glue << 'fn C.trace_snapshot(voidptr, u32) u32'
 			}
+			if comm_thread_on {
+				// Board glue (examples/<x>/comm_glue.c): the FDCAN Rx-FIFO0 ISR posts a semaphore
+				// that comm_rx_wait blocks on, so the comm thread wakes on rx instead of polling.
+				// comm_rx_irq_enable arms the Rx interrupt (called once, after the channel opens).
+				glue << 'fn C.comm_rx_irq_enable()'
+				glue << 'fn C.comm_rx_wait(u32) u32 // block up to N ticks; returns 0 if woken by rx'
+			}
 			glue << ''
 			// TCB as [32]u64 (256 B >= sizeof(TX_THREAD) = 200 B) so it is 8-byte aligned — the
 			// kernel reads/writes word fields through this pointer as a TX_THREAD*, so a byte-
@@ -1773,17 +1802,39 @@ fn main() {
 			if trace_on {
 				glue << '\tg_${part}_trace [${trace_buffer_records}][8]u8 // scratch snapshot of the trace ring (owner streams it)'
 			}
+			if comm_thread_on {
+				glue << '\tg_comm_tcb   [32]u64  // the bus-owning comm thread'
+				glue << '\tg_comm_stack [4096]u8'
+				// Load scratch: the FB thread (single writer) publishes the Loom load here each pass;
+				// the comm thread (single reader) reads it for CpuLoad. Aligned u16/u32 words are
+				// atomic on the M7, and load is slowly-changing telemetry, so no triple-buffer needed.
+				glue << '\tg_load_permille u16'
+				glue << '\tg_load_100ms    u16'
+				glue << '\tg_load_1s       u16'
+				glue << '\tg_load_10s      u16'
+				glue << '\tg_overruns_pub  u32'
+				// Rx accounting: the comm thread counts received frames + keeps the last value, so a
+				// host cansend is observable (surfaced in LoadDetail). The rx CONSUMER of the lean cut.
+				glue << '\tg_rx_count u32'
+				glue << '\tg_rx_last  u32'
+			}
 			glue << ')'
 		}
 		glue << ''
-		glue << 'pub fn run(${chp} can.Channel) {'
-		glue << '\tmut ch := ${chp}'
+		if comm_thread_on {
+			// The FB thread stays OFF CAN: the comm thread owns the bus. run() just dispatches the
+			// FBs and publishes load to the scratch cell for the comm thread to send.
+			glue << 'pub fn run() {'
+		} else {
+			glue << 'pub fn run(${chp} can.Channel) {'
+			glue << '\tmut ch := ${chp}'
+		}
 		glue << '\tmut st := Partition_${part}_state{}'
 		glue << '\tmut sched := loom.Scheduler{}'
 		for r in all_regs[part] or { []string{} } {
 			glue << r
 		}
-		if telem_on && telem_iface != '' {
+		if telem_on && telem_iface != '' && !comm_thread_on {
 			glue << '\tmut load := [8]u16{}'
 			glue << '\ttelem_period_us := u64(${telem_period_us})'
 			glue << '\tmut last_telem := u64(0)'
@@ -1795,7 +1846,7 @@ fn main() {
 		if !target_threadx {
 			glue << '\tmut next_tick := C.board_now_us() + tick_us'
 		}
-		if target_threadx && trace_on {
+		if target_threadx && trace_on && !comm_thread_on {
 			// Exec-hook trace stream state: snapshot the ring ~1 s, then stream the stable copy
 			// in chunks across iterations (this thread is the sole bus owner => lock-free).
 			glue << '\tmut last_trace := u64(0)'
@@ -1811,7 +1862,18 @@ fn main() {
 		glue << '\t\tif t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun'
 		glue << '\t\t\tsched.mark_overrun()'
 		glue << '\t\t}'
-		if telem_on && telem_iface != '' {
+		if comm_thread_on {
+			// Publish this core's load to the scratch (single writer) for the comm thread's CpuLoad
+			// producer. Single M7 -> core 0 only; the comm thread reads these each telemetry period.
+			glue << '\t\tg_load_permille = u16(sched.load_permille())'
+			if telem_detail_id != 0 {
+				glue << '\t\tg_load_100ms = u16(sched.load_permille_100ms())'
+				glue << '\t\tg_load_1s = u16(sched.load_permille_1s())'
+				glue << '\t\tg_load_10s = u16(sched.load_permille_10s())'
+				glue << '\t\tg_overruns_pub = sched.overruns()'
+			}
+		}
+		if telem_on && telem_iface != '' && !comm_thread_on {
 			glue << '\t\tif t1 - last_telem >= telem_period_us {'
 			glue << '\t\t\tlast_telem = t1'
 			glue << '\t\t\tload[0] = sched.load_permille() // single M7 -> core 0 only'
@@ -1840,7 +1902,7 @@ fn main() {
 			}
 			glue << '\t\t}'
 		}
-		if target_threadx && trace_on {
+		if target_threadx && trace_on && !comm_thread_on {
 			// Stream the exec-hook trace ring ~1 s, single-owner + incremental. trace_snapshot
 			// copies the ring into g_${part}_trace under a brief freeze; we then send 16 records
 			// per pass, only while the Tx FIFO has room (no spin) — so a stuck bus can't wedge
@@ -1899,19 +1961,137 @@ fn main() {
 			// The ThreadX app thread + the kernel's application-define entry. main.v does the board
 			// clock/CAN init then C.tx_kernel_enter(), which calls tx_application_define below.
 			glue << ''
-			glue << 'fn ${part}_thread_entry(input u32) {'
-			glue << '\tmut ch := can.Channel{}'
-			glue << "\tif !ch.open('${tx_bus_idx}', ${tx_bus_fd}) { // ${telem_bus}; board clocks/pins set by main.v"
-			glue << '\t\treturn // CAN open failed (bad bus index / FD unsupported) — don\'t run with a dead channel'
-			glue << '\t}'
-			glue << '\trun(ch)'
-			glue << '}'
-			glue << ''
-			glue << "@[export: 'tx_application_define']"
-			glue << 'fn tx_application_define(first_unused voidptr) {'
-			glue << '\tC._tx_thread_create(&g_${part}_tcb[0], c\'${part}\', ${part}_thread_entry, u32(0),'
-			glue << '\t\t&g_${part}_stack[0], u32(g_${part}_stack.len), u32(${tx_prio}), u32(${tx_prio}), u32(0), u32(1))'
-			glue << '}'
+			if comm_thread_on {
+				comm_prio := if tx_prio > 1 { 1 } else { 0 } // higher than the FB thread (lower number)
+				mut rx_sigs := []SigInfo{}
+				for sn in sig_names {
+					s := sig_of[sn] or { continue }
+					if s.rx {
+						rx_sigs << s
+					}
+				}
+				// The FB thread runs run() OFF CAN (it publishes load to the scratch); the comm
+				// thread owns the bus. ThreadX: lower priority number = higher priority.
+				glue << 'fn ${part}_thread_entry(input u32) {'
+				glue << '\trun() // FB dispatch only — the comm thread owns the bus'
+				glue << '}'
+				glue << ''
+				// The comm thread: the sole bus owner. A generic loop — drain rx (consumer), then
+				// serve each producer (CpuLoad telemetry, the trace ring) gated on tx_ready. Nothing
+				// here is trace-specific: NM and COM-tx will slot in later as more producers/consumers.
+				glue << 'fn comm_thread_entry(input u32) {'
+				glue << '\tmut ch := can.Channel{}'
+				glue << "\tif !ch.open('${tx_bus_idx}', ${tx_bus_fd}) { // ${telem_bus}; board clocks/pins set by main.v"
+				glue << '\t\tfor { C._tx_thread_sleep(1000) } // dead channel — park, never own a bus we can\'t drive'
+				glue << '\t}'
+				glue << '\tC.comm_rx_irq_enable() // arm the FDCAN Rx-FIFO0 interrupt now the bus is open'
+				if telem_on && telem_iface != '' {
+					glue << '\tmut last_telem := u64(0)'
+					glue << '\ttelem_period_us := u64(${telem_period_us})'
+					if telem_detail_id != 0 {
+						glue << '\tmut last_overruns := u32(0)'
+					}
+				}
+				if trace_on {
+					glue << '\tmut last_trace := u64(0)'
+					glue << '\tmut tr_pos := u32(0)'
+					glue << '\tmut tr_n := u32(0)'
+					glue << '\tmut tr_active := false'
+				}
+				glue << '\tmut rx := can.Frame{}'
+				glue << '\tfor {'
+				glue << '\t\tC.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame'
+				glue << '\t\t// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame'
+				glue << '\t\tfor ch.recv(mut rx) {'
+				for si in rx_sigs {
+					glue << '\t\t\tif rx.id == u32(0x${si.dbc_id.hex()}) { // ${si.dbc_msg}'
+					glue << '\t\t\t\tg_rx_count++'
+					glue << '\t\t\t\tg_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)'
+					glue << '\t\t\t}'
+				}
+				glue << '\t\t}'
+				glue << '\t\tt1 := C.board_now_us()'
+				if telem_on && telem_iface != '' {
+					glue << "\t\t// PRODUCER: CpuLoad telemetry — reads the FB thread's load scratch"
+					glue << '\t\tif t1 - last_telem >= telem_period_us && ch.tx_ready() {'
+					glue << '\t\t\tlast_telem = t1'
+					glue << '\t\t\tmut load := [8]u16{}'
+					glue << '\t\t\tload[0] = g_load_permille'
+					glue << '\t\t\tframe := telem.encode_cpuload(load, 1)'
+					glue << '\t\t\tmut f := can.Frame{'
+					glue << '\t\t\t\tid:  u32(0x${telem_id.hex()})'
+					glue << '\t\t\t\tlen: 8'
+					glue << '\t\t\t}'
+					glue << '\t\t\tfor i in 0 .. 8 {'
+					glue << '\t\t\t\tf.data[i] = frame[i]'
+					glue << '\t\t\t}'
+					glue << '\t\t\tch.send(f)'
+					if telem_detail_id != 0 {
+						glue << '\t\t\tdetail := telem.encode_loaddetail(g_load_100ms, g_load_1s, g_load_10s, g_overruns_pub - last_overruns)'
+						glue << '\t\t\tlast_overruns = g_overruns_pub'
+						glue << '\t\t\tmut d := can.Frame{'
+						glue << '\t\t\t\tid:  u32(0x${telem_detail_id.hex()})'
+						glue << '\t\t\t\tlen: 8'
+						glue << '\t\t\t}'
+						glue << '\t\t\tfor i in 0 .. 8 {'
+						glue << '\t\t\t\td.data[i] = detail[i]'
+						glue << '\t\t\t}'
+						glue << '\t\t\tch.send(d)'
+					}
+					glue << '\t\t}'
+				}
+				if trace_on {
+					glue << '\t\t// PRODUCER: exec-hook trace ring (a burst -> tx_ready-gated 16-record chunks)'
+					glue << '\t\tif !tr_active && t1 - last_trace >= u64(1000000) {'
+					glue << '\t\t\ttr_n = C.trace_snapshot(&g_${part}_trace[0], ${trace_buffer_records})'
+					glue << '\t\t\ttr_pos = 0'
+					glue << '\t\t\ttr_active = true'
+					glue << '\t\t}'
+					glue << '\t\tif tr_active {'
+					glue << '\t\t\tmut sent := 0'
+					glue << '\t\t\tfor tr_pos < tr_n && sent < 16 && ch.tx_ready() {'
+					glue << '\t\t\t\tmut tf := can.Frame{'
+					glue << '\t\t\t\t\tid:  u32(0x${trace_record_id.hex()})'
+					glue << '\t\t\t\t\tlen: 8'
+					glue << '\t\t\t\t}'
+					glue << '\t\t\t\tfor j in 0 .. 8 {'
+					glue << '\t\t\t\t\ttf.data[j] = g_${part}_trace[tr_pos][j]'
+					glue << '\t\t\t\t}'
+					glue << '\t\t\t\tch.send(tf)'
+					glue << '\t\t\t\ttr_pos++'
+					glue << '\t\t\t\tsent++'
+					glue << '\t\t\t}'
+					glue << '\t\t\tif tr_pos >= tr_n {'
+					glue << '\t\t\t\ttr_active = false'
+					glue << '\t\t\t\tlast_trace = C.board_now_us()'
+					glue << '\t\t\t}'
+					glue << '\t\t}'
+				}
+				glue << '\t}'
+				glue << '}'
+				glue << ''
+				glue << "@[export: 'tx_application_define']"
+				glue << 'fn tx_application_define(first_unused voidptr) {'
+				glue << '\tC._tx_thread_create(&g_${part}_tcb[0], c\'${part}\', ${part}_thread_entry, u32(0),'
+				glue << '\t\t&g_${part}_stack[0], u32(g_${part}_stack.len), u32(${tx_prio}), u32(${tx_prio}), u32(0), u32(1))'
+				glue << '\tC._tx_thread_create(&g_comm_tcb[0], c\'comm\', comm_thread_entry, u32(0),'
+				glue << '\t\t&g_comm_stack[0], u32(g_comm_stack.len), u32(${comm_prio}), u32(${comm_prio}), u32(0), u32(1))'
+				glue << '}'
+			} else {
+				glue << 'fn ${part}_thread_entry(input u32) {'
+				glue << '\tmut ch := can.Channel{}'
+				glue << "\tif !ch.open('${tx_bus_idx}', ${tx_bus_fd}) { // ${telem_bus}; board clocks/pins set by main.v"
+				glue << '\t\treturn // CAN open failed (bad bus index / FD unsupported) — don\'t run with a dead channel'
+				glue << '\t}'
+				glue << '\trun(ch)'
+				glue << '}'
+				glue << ''
+				glue << "@[export: 'tx_application_define']"
+				glue << 'fn tx_application_define(first_unused voidptr) {'
+				glue << '\tC._tx_thread_create(&g_${part}_tcb[0], c\'${part}\', ${part}_thread_entry, u32(0),'
+				glue << '\t\t&g_${part}_stack[0], u32(g_${part}_stack.len), u32(${tx_prio}), u32(${tx_prio}), u32(0), u32(1))'
+				glue << '}'
+			}
 			glue << ''
 			glue << '// boot: hand control to the ThreadX kernel (never returns; calls'
 			glue << '// tx_application_define above). main.v does the board bring-up then calls this —'

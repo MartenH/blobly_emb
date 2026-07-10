@@ -10,3 +10,8 @@ pub struct Workload {
 pub mut:
 	v u32
 }
+
+pub struct Command {
+pub mut:
+	code u32
+}

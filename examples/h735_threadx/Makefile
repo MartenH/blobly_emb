@@ -39,7 +39,7 @@ TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
 
 # board bring-up (asm + board.c) + the exec-change trace recorder, reused from
 # examples/threadx_h735 (trace_hooks.c is driver-independent — pure recorder).
-BSP = crt0.S vectors.S tx_initialize_low_level.S board.c $(REPO)/examples/threadx_h735/trace_hooks.c
+BSP = crt0.S vectors.S tx_initialize_low_level.S board.c comm_glue.c $(REPO)/examples/threadx_h735/trace_hooks.c
 
 all: $(BUILD)/$(NAME).bin
 
