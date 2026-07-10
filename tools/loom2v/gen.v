@@ -659,41 +659,11 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 			tid++
 		}
 	}
-	// ThreadX System Timer Thread: the default (non-TX_TIMER_PROCESS_IN_ISR) build runs a hidden
-	// timer thread to expire tx_thread_sleep/timers, and trace_hooks.c assigns it an id like any
-	// other _tx_thread_current_ptr. It first appears AFTER the AUTO_START app thread(s) (which run
-	// at kernel entry, before the first tick wakes the timer thread), so it takes the next id here.
-	// Without this row blobly_net sees an unlabelled THREAD lane (docs/telemetry.md "System Timer
-	// Thread"). Reserve it on the primary core.
-	if m.target.threadx && m.trace.on {
-		man << 'thread,${tid},tx_system_timer,0'
-		tid++
-	}
 	// Comm threads (P3b): one per bridge bus, AFTER the app threads (matches the gate's comm_tid
-	// numbering). bridge_bus_list is empty unless the trace path traces the bridges.
+	// numbering).
 	for bb in bridge_bus_list {
 		man << 'thread,${tid},comm_${bb},${m.bus_core[bb] or { 0 }}'
 		tid++
-	}
-	// The observability frame ids on the trace bus. The protocol (TraceCmd/Rsp/HandlerStat +
-	// the ISO-TP record dump) is fixed and first-party, so blobly_net decodes it natively from
-	// these ids — no generated DBC. Names given in [trace] were already resolved to ids above.
-	if m.trace.on {
-		tbus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
-		man << '# trace frames: frame,id,bus'
-		// The ThreadX target streams ONLY the raw record frames (exec-hook stream on the bus
-		// owner's single channel) — it implements no TraceCmd/Rsp/HandlerStat request path and
-		// no ISO-TP flow control. Advertise only what it actually sends, so blobly_net doesn't
-		// wait on cmd/rsp/stat/dump_fc ids that never appear.
-		if !m.target.threadx {
-			man << 'cmd,0x${m.trace.cmd_id.hex()},${tbus}'
-			man << 'rsp,0x${m.trace.rsp_id.hex()},${tbus}'
-			man << 'stat,0x${m.trace.stat_id.hex()},${tbus}'
-		}
-		man << 'record,0x${m.trace.record_id.hex()},${tbus}'
-		if !m.target.threadx {
-			man << 'dump_fc,0x${m.trace.dump_fc_id.hex()},${tbus}'
-		}
 	}
 	return man
 }
@@ -1736,7 +1706,7 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_in
 // emit_module_headers builds the `module ports` and `module gen` preambles: the code-gen banner,
 // module decl, and the conditional imports each generated module needs. Returns (ports, glue) seeded
 // with those header lines; reads the Model, with the trace-mode flags + comm_thread_on from main.
-fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_inline bool, trace_target bool, trace_multicore bool) ([]string, []string) {
+fn emit_module_headers(m Model, ecu string, comm_thread_on bool) ([]string, []string) {
 	has_e2e := m.frames.e2e_on.len > 0
 	has_secoc := m.frames.secoc_on.len > 0
 	mut ports := []string{}
@@ -1773,17 +1743,12 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_inline bo
 	if !m.target.on {
 		glue << 'import osal' // host: IOC + now_us/sleep_us. Target has none of these.
 	}
-	// telem.* is used for CpuLoad (telemetry) and the inline HandlerStat heartbeat — import it
-	// only when one is actually emitted (a push_ms = 0 trace with no telemetry uses neither).
-	if m.telem.on || ((trace_inline || trace_target) && m.trace.push_us > 0) {
-		glue << 'import comm.telem' // CpuLoad / HandlerStat packing
+	// telem.* is used for CpuLoad (telemetry) — import it only when it's actually emitted.
+	if m.telem.on {
+		glue << 'import comm.telem' // CpuLoad packing
 	}
-	if trace_inline || trace_multicore || trace_target {
-		glue << 'import comm.trace' // capture ring(s) + cmd/rsp control
-		glue << 'import comm.isotp' // bulk record dump transport
-	}
-	if m.has_external || m.isotp_conns.len > 0 || m.telem.on || trace_inline || trace_multicore || trace_target {
-		glue << 'import driver.can' // the generated bus bridge / trace channel
+	if m.has_external || m.isotp_conns.len > 0 || m.telem.on {
+		glue << 'import driver.can' // the generated bus bridge
 	}
 	if m.has_external && !comm_thread_on {
 		glue << 'import comm.com' // per-PDU TX modes + RX deadline monitoring (host bridge only)
@@ -2327,7 +2292,7 @@ fn main() {
 			'exceed osal.scratch (16 cells) — reduce telemetry')
 	}
 
-	mp, mg := emit_module_headers(m, ecu, comm_thread_on, trace_inline, trace_target, trace_multicore)
+	mp, mg := emit_module_headers(m, ecu, comm_thread_on)
 	mut ports := mp.clone()
 	mut glue := mg.clone()
 
