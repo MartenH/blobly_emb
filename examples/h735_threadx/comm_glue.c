@@ -12,6 +12,29 @@
  */
 #include "tx_api.h"
 #include <stm32h7xx.h>
+#include "ioc.h"
+
+/* Cross-thread signal IOC pool (wait-free triple-buffer, ioc.h). GENERIC target glue: a small
+ * indexed pool the generator assigns cells out of, so a bus->app rx signal decoded by the comm
+ * thread reaches an FB on the app thread without a lock (the blobly IOC invariant), and V — which
+ * can't express the atomics/volatile — calls these scalar wrappers by cell index. loom2v wires
+ * which index carries which signal; this file stays config-independent. (A generated per-MCU/
+ * target C backend could emit this later; per docs/architecture.md it's fine as target glue now.) */
+#define IOC_POOL_N 4
+static ioc_t g_ioc_pool[IOC_POOL_N];
+void ioc_pool_init(void) {
+    for (int i = 0; i < IOC_POOL_N; i++) ioc_init(&g_ioc_pool[i]);
+}
+void ioc_pub(int i, unsigned a, unsigned b) {
+    sig_t v = { a, b };
+    if (i >= 0 && i < IOC_POOL_N) ioc_write(&g_ioc_pool[i], v);
+}
+/* One ioc_read per logical read (it advances the reader's private slot), returning both fields. */
+void ioc_get(int i, unsigned *a, unsigned *b) {
+    sig_t v = { 0, 0 };
+    if (i >= 0 && i < IOC_POOL_N) v = ioc_read(&g_ioc_pool[i]);
+    *a = v.a; *b = v.b;
+}
 
 /* Comm-thread wake semaphore: the Rx ISR posts it; comm_rx_wait (called from the generated
  * comm thread) blocks on it, so the thread wakes on rx instead of polling. */
