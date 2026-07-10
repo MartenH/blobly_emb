@@ -2058,6 +2058,94 @@ fn emit_run_inline(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 	return glue
 }
 
+// emit_run_multicore emits the multi-core host run(): spawn each partition (+ each bridge comm
+// thread) pinned to its core, plus the single partition_trace owner over per-core rings. Reads
+// the Model; doc / telem_iface / bus_names / bus_dests / extra_dest_buses / trace_ncores are
+// main's emit-time state.
+fn emit_run_multicore(m Model, doc toml.Doc, telem_iface string, bus_names []string, bus_dests map[string][]string, extra_dest_buses []string, trace_ncores int) []string {
+	by_part := m.part.by_part.clone()
+	core_of := m.part.core_of.clone()
+	bus_core := m.bus_core.clone()
+	telem_on := m.telem.on
+	trace_buffer_records := m.trace.buffer_records
+	trace_pre_pct := m.trace.pre_pct
+	trace_mode := m.trace.mode
+	eff_trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
+	mut glue := []string{}
+		// --- multi-core trace run() (P3a + P3b): own the per-core rings (fixed arrays on this frame,
+		//     which outlives the joined partitions), spawn each traced app partition AND each traced
+		//     comm-thread bridge with a pointer to its ring, plus the single partition_trace owner +
+		//     partition_telem, then wait. One channel param per bus: the trace bus first, then each
+		//     bridge bus (bus_names is empty in the pure-P3a case). ---
+		chp := snake(eff_trace_bus)
+		mut mpre := trace_pre_pct
+		if mpre > 100 {
+			mpre = 100
+		}
+		mmode := if trace_mode == 'oneshot' { '.oneshot' } else { '.ring' }
+		glue << ''
+		mut params := ['${chp} can.Channel']
+		for b in bus_names {
+			params << '${snake(b)} can.Channel'
+		}
+		for b in extra_dest_buses {
+			params << '${snake(b)} can.Channel' // route-dest-only bus: channel arg, no bridge/ring
+		}
+		glue << 'pub fn run(${params.join(', ')}) {'
+		glue << '\tmut backings := [${trace_ncores}][${trace_buffer_records}]trace.Record{}'
+		glue << '\tmut rings := [${trace_ncores}]trace.TraceBuffer{}'
+		// rings: one per app partition (by core) + one per comm-thread bridge (by bus core).
+		for p in ecumodel.toml_arr(doc, 'partition') {
+			pname := (p.as_map()['name'] or { toml.Any('') }).string()
+			if pname !in by_part {
+				continue
+			}
+			pc := core_of[pname] or { 0 }
+			glue << '\trings[${pc}] = trace.new_buffer(&backings[${pc}][0], ${trace_buffer_records}, ${mmode}, ${mpre})'
+			glue << '\trings[${pc}].start()'
+		}
+		for b in bus_names {
+			bc := bus_core[b] or { 0 }
+			glue << '\trings[${bc}] = trace.new_buffer(&backings[${bc}][0], ${trace_buffer_records}, ${mmode}, ${mpre}) // comm_${b}'
+			glue << '\trings[${bc}].start()'
+		}
+		mut mwaits := []string{}
+		// Pass each ring as a voidptr (a typed &T arg into a voidptr param makes V's spawn wrapper
+		// mis-forward it). &rings[i] escapes the fixed array, but run() joins below so the frame
+		// outlives every spawned loop, keeping the pointer valid.
+		for p in ecumodel.toml_arr(doc, 'partition') {
+			pname := (p.as_map()['name'] or { toml.Any('') }).string()
+			if pname !in by_part {
+				continue
+			}
+			pc := core_of[pname] or { 0 }
+			glue << '\tt_${pname} := spawn partition_${pname}(${pc}, unsafe { voidptr(&rings[${pc}]) })'
+			mwaits << 't_${pname}'
+		}
+		for b in bus_names {
+			bb := snake(b)
+			bc := bus_core[b] or { 0 }
+			mut sargs := bb // the bridge's own bus channel
+			for d in bus_dests[b] or { []string{} } {
+				sargs += ', ${snake(d)}' // route-dest channels
+			}
+			sargs += ', unsafe { voidptr(&rings[${bc}]) }' // the comm thread's ring (P3b)
+			glue << '\tt_${bb} := spawn partition_${bb}(${sargs})'
+			mwaits << 't_${bb}'
+		}
+		if telem_on && telem_iface != '' {
+			glue << '\tt_telem := spawn partition_telem()'
+			mwaits << 't_telem'
+		}
+		glue << '\tt_trace := spawn partition_trace(${chp}, unsafe { voidptr(&rings[0]) }, ${trace_ncores})'
+		mwaits << 't_trace'
+		for w in mwaits {
+			glue << '\t${w}.wait()'
+		}
+		glue << '}'
+	return glue
+}
+
 fn main() {
 	args := os.args
 	if args.len < 6 {
@@ -2172,8 +2260,6 @@ fn main() {
 	trace_record_id := tc.record_id
 	trace_level := tc.level
 	trace_mode := tc.mode
-	trace_buffer_records := tc.buffer_records
-	trace_pre_pct := tc.pre_pct
 	trace_push_us := tc.push_us
 	trace_budget_us := tc.budget_us
 	trace_sw_keys := tc.sw_keys
@@ -2974,77 +3060,7 @@ fn main() {
 	} else if trace_inline || trace_target {
 		glue << emit_run_inline(m, doc, all_regs, telem_iface, single_part, trace_target)
 	} else if trace_multicore {
-		// --- multi-core trace run() (P3a + P3b): own the per-core rings (fixed arrays on this frame,
-		//     which outlives the joined partitions), spawn each traced app partition AND each traced
-		//     comm-thread bridge with a pointer to its ring, plus the single partition_trace owner +
-		//     partition_telem, then wait. One channel param per bus: the trace bus first, then each
-		//     bridge bus (bus_names is empty in the pure-P3a case). ---
-		chp := snake(eff_trace_bus)
-		mut mpre := trace_pre_pct
-		if mpre > 100 {
-			mpre = 100
-		}
-		mmode := if trace_mode == 'oneshot' { '.oneshot' } else { '.ring' }
-		glue << ''
-		mut params := ['${chp} can.Channel']
-		for b in bus_names {
-			params << '${snake(b)} can.Channel'
-		}
-		for b in extra_dest_buses {
-			params << '${snake(b)} can.Channel' // route-dest-only bus: channel arg, no bridge/ring
-		}
-		glue << 'pub fn run(${params.join(', ')}) {'
-		glue << '\tmut backings := [${trace_ncores}][${trace_buffer_records}]trace.Record{}'
-		glue << '\tmut rings := [${trace_ncores}]trace.TraceBuffer{}'
-		// rings: one per app partition (by core) + one per comm-thread bridge (by bus core).
-		for p in ecumodel.toml_arr(doc, 'partition') {
-			pname := (p.as_map()['name'] or { toml.Any('') }).string()
-			if pname !in by_part {
-				continue
-			}
-			pc := core_of[pname] or { 0 }
-			glue << '\trings[${pc}] = trace.new_buffer(&backings[${pc}][0], ${trace_buffer_records}, ${mmode}, ${mpre})'
-			glue << '\trings[${pc}].start()'
-		}
-		for b in bus_names {
-			bc := bus_core[b] or { 0 }
-			glue << '\trings[${bc}] = trace.new_buffer(&backings[${bc}][0], ${trace_buffer_records}, ${mmode}, ${mpre}) // comm_${b}'
-			glue << '\trings[${bc}].start()'
-		}
-		mut mwaits := []string{}
-		// Pass each ring as a voidptr (a typed &T arg into a voidptr param makes V's spawn wrapper
-		// mis-forward it). &rings[i] escapes the fixed array, but run() joins below so the frame
-		// outlives every spawned loop, keeping the pointer valid.
-		for p in ecumodel.toml_arr(doc, 'partition') {
-			pname := (p.as_map()['name'] or { toml.Any('') }).string()
-			if pname !in by_part {
-				continue
-			}
-			pc := core_of[pname] or { 0 }
-			glue << '\tt_${pname} := spawn partition_${pname}(${pc}, unsafe { voidptr(&rings[${pc}]) })'
-			mwaits << 't_${pname}'
-		}
-		for b in bus_names {
-			bb := snake(b)
-			bc := bus_core[b] or { 0 }
-			mut sargs := bb // the bridge's own bus channel
-			for d in bus_dests[b] or { []string{} } {
-				sargs += ', ${snake(d)}' // route-dest channels
-			}
-			sargs += ', unsafe { voidptr(&rings[${bc}]) }' // the comm thread's ring (P3b)
-			glue << '\tt_${bb} := spawn partition_${bb}(${sargs})'
-			mwaits << 't_${bb}'
-		}
-		if telem_on && telem_iface != '' {
-			glue << '\tt_telem := spawn partition_telem()'
-			mwaits << 't_telem'
-		}
-		glue << '\tt_trace := spawn partition_trace(${chp}, unsafe { voidptr(&rings[0]) }, ${trace_ncores})'
-		mwaits << 't_trace'
-		for w in mwaits {
-			glue << '\t${w}.wait()'
-		}
-		glue << '}'
+		glue << emit_run_multicore(m, doc, telem_iface, bus_names, bus_dests, extra_dest_buses, trace_ncores)
 	} else {
 		// --- host run(): launch every bus bridge + app partition, then wait. One
 		//     Channel param per bus (sorted for a stable signature main.v can rely on). ---
