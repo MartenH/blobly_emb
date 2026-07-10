@@ -572,10 +572,45 @@ fn main() {
 			panic('loom2v: [target] kind="threadx" comm thread: routes / ISO-TP are not generated ' +
 				'yet (phase 6b-2 lean cut = external rx signals only)')
 		}
+		// Signals any FB handler reads — the lean cut counts rx frames comm-locally and emits NO
+		// FB<->comm IOC, so an rx signal a handler reads would generate osal.acquire(...), which the
+		// freestanding image doesn't link (no osal). Reject those until the IOC layer (6b-2b).
+		mut read_by_fb := map[string]bool{}
+		for fb in ecumodel.toml_arr(doc, 'fb') {
+			for h in (fb.as_map()['handler'] or { toml.Any([]toml.Any{}) }).array() {
+				for r in (h.as_map()['reads'] or { toml.Any([]toml.Any{}) }).array() {
+					read_by_fb[r.string()] = true
+				}
+			}
+		}
 		for sname, si in sig_of {
 			if si.external && !si.rx {
 				panic('loom2v: [target] kind="threadx" comm thread: external TX signal "${sname}" ' +
 					'(app -> bus) is not generated yet (phase 6b-2 lean cut = rx only)')
+			}
+			if !si.rx {
+				continue
+			}
+			if read_by_fb[sname] {
+				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" is read by an ' +
+					'FB handler, but the lean cut has no FB<->comm IOC yet — it only counts rx frames ' +
+					'comm-locally; drop the handler read or wait for the IOC layer (phase 6b-2b)')
+			}
+			if si.bus != telem_bus {
+				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" is on bus ' +
+					'"${si.bus}", but the comm thread owns only [telemetry].bus "${telem_bus}" — a per-bus ' +
+					'comm owner is not generated yet (phase 6b-2 lean cut = one bus)')
+			}
+			if si.dbc_id > 0x7ff {
+				panic('loom2v: [target] kind="threadx" comm thread: rx signal "${sname}" DBC id ' +
+					'0x${si.dbc_id.hex()} is extended (29-bit), but the classic FDCAN backend delivers ' +
+					'only 11-bit standard frames — use a standard id (<= 0x7FF)')
+			}
+			if (rx_timeout_us[si.dbc_msg] or { 0 }) > 0 || (e2e_on[si.dbc_msg] or { false })
+				|| (secoc_on[si.dbc_msg] or { false }) {
+				panic('loom2v: [target] kind="threadx" comm thread: rx message "${si.dbc_msg}" has an RX ' +
+					'deadline / E2E / SecOC, but the lean comm thread only counts raw rx.id matches — ' +
+					'those COM checks are not generated yet (phase 6b-2b)')
 			}
 		}
 	}
@@ -1962,11 +1997,23 @@ fn main() {
 			// clock/CAN init then C.tx_kernel_enter(), which calls tx_application_define below.
 			glue << ''
 			if comm_thread_on {
-				comm_prio := if tx_prio > 1 { 1 } else { 0 } // higher than the FB thread (lower number)
+				// The comm thread must be STRICTLY higher priority (lower number) than the FB thread
+				// so it preempts a long app pass to drain rx after the ISR posts (zero time slice
+				// means no round-robin). With comm fixed at 1, the app thread must be >= 2.
+				if tx_prio <= 1 {
+					panic('loom2v: [target] kind="threadx" comm thread needs a priority strictly higher ' +
+						'than the FB thread, but thread "${app_thread}" priority is ${tx_prio}; use ' +
+						'priority >= 2 so the comm owner (priority 1) preempts it to drain rx promptly')
+				}
+				comm_prio := 1
+				// One rx branch per DBC MESSAGE (id), not per signal — several signals can share a
+				// message, and the lean cut counts received frames, so a frame must increment once.
 				mut rx_sigs := []SigInfo{}
+				mut rx_ids_seen := map[int]bool{}
 				for sn in sig_names {
 					s := sig_of[sn] or { continue }
-					if s.rx {
+					if s.rx && !rx_ids_seen[s.dbc_id] {
+						rx_ids_seen[s.dbc_id] = true
 						rx_sigs << s
 					}
 				}
@@ -2548,6 +2595,15 @@ fn main() {
 		}
 		man << '# threads: thread,id,name,core  (id 0 reserved = idle)'
 		mut tid := 1
+		// ThreadX comm thread (phase 6b-2): AUTO_START at priority 1 — strictly higher than the FB
+		// thread and above the still-suspended system timer thread — so at kernel entry it is the
+		// FIRST thread the scheduler runs. trace_hooks.c assigns ids by first sight, so the comm
+		// thread takes id 1, ahead of the app thread (id 2) and the timer (id 3). Emit it first to
+		// match that observed order, else its records are mislabelled / shift the other lanes.
+		if comm_thread_on {
+			man << 'thread,${tid},comm,${core_of[single_part] or { 0 }}'
+			tid++
+		}
 		for p in ecumodel.toml_arr(doc, 'partition') {
 			pname := (p.as_map()['name'] or { toml.Any('') }).string()
 			for tname in threads_of[pname] {

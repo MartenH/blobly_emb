@@ -84,14 +84,23 @@ void board_timebase_init(void) {
 /* board_now_us: monotonic microseconds since board_timebase_init(). The 32-bit
  * CYCCNT wraps every ~7.8 s at 550 MHz; we accumulate deltas into a 64-bit counter so
  * the returned value never wraps as long as this is called at least that often (the
- * super-loop calls it every pass — far more often). Single-core, single caller. */
+ * super-loop calls it every pass — far more often).
+ *
+ * The last/acc_cycles statics are shared: on the ThreadX target BOTH the FB thread and the
+ * bus-owning comm thread call this (and an ISR could preempt mid-update). A brief PRIMASK
+ * critical section serialises the read-modify-write so the delta can't be applied twice or
+ * out of order (which would corrupt the load cadence + every trace/telemetry timestamp). */
 uint64_t board_now_us(void) {
 	static uint32_t last = 0u;
 	static uint64_t acc_cycles = 0u;
+	uint32_t prim;
+	__asm__ volatile("mrs %0, primask; cpsid i" : "=r"(prim) : : "memory");
 	uint32_t now = DWT->CYCCNT;
 	acc_cycles += (uint32_t)(now - last); /* modular 32-bit delta handles wrap */
 	last = now;
-	return acc_cycles / g_cpu_mhz;
+	uint64_t r = acc_cycles / g_cpu_mhz;
+	__asm__ volatile("msr primask, %0" : : "r"(prim) : "memory");
+	return r;
 }
 
 void board_can_clock_pins_init(void) {
