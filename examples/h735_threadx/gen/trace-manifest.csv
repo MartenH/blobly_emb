@@ -4,7 +4,8 @@
 1,app,0,Load,on_1ms,1000,app_main
 2,app,0,Heartbeat,on_100ms,100000,app_main
 # threads: thread,id,name,core  (id 0 reserved = idle)
-thread,1,app_main,0
-thread,2,tx_system_timer,0
+thread,1,comm,0
+thread,2,app_main,0
+thread,3,tx_system_timer,0
 # trace frames: frame,id,bus
 record,0x7e5,can0
