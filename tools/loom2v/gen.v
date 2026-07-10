@@ -2194,6 +2194,193 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 	return glue
 }
 
+// emit_handlers emits, per partition: its state struct, each handler's port structs (module ports)
+// and dispatch glue (module gen), the host partition_<p>() runner, and builds all_regs (the
+// sched.every() lines the run() emitters reuse). Returns (ports, glue, all_regs); reads the Model,
+// with the derived scratch/id layout (telem_slot, ioc_idx, trace bases, fb_id_base, thread_id_of)
+// and the trace-mode flags from main's emit-time state.
+fn emit_handlers(m Model, telem_slot map[string]int, ioc_idx map[string]int, trace_cmd_base int, trace_trig_base int, trace_inline bool, trace_multicore bool, fb_id_base map[string]int, thread_id_of map[string]int) ([]string, []string, map[string][]string) {
+	sig_of := m.sig_of.clone()
+	sig_names := m.sig_names
+	by_part := m.part.by_part.clone()
+	core_of := m.part.core_of.clone()
+	telem_on := m.telem.on
+	target_on := m.target.on
+	mut ports := []string{}
+	mut glue := []string{}
+	mut all_regs := map[string][]string{}
+	for part, clist in by_part {
+		glue << ''
+		glue << 'struct Partition_${part}_state {'
+		glue << 'mut:'
+		for c in clist {
+			cname := (c.as_map()['name'] or { toml.Any('') }).string()
+			glue << '\t${snake(cname)} app.${cname}'
+		}
+		for sname in sig_names {
+			si := sig_of[sname] or { continue }
+			if si.local && si.from == part {
+				glue << '\tcell_${snake(sname)} sig.${sname} // local FB->FB signal'
+			}
+		}
+		glue << '}'
+
+		mut regs := []string{}
+		for c in clist {
+			cm := c.as_map()
+			cname := (cm['name'] or { toml.Any('') }).string()
+			field := snake(cname)
+			for h in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
+				hm := h.as_map()
+				hname := (hm['name'] or { toml.Any('') }).string()
+				period_us := int((hm['period_ms'] or { toml.Any(0) }).int()) * 1000
+				reads := (hm['reads'] or { toml.Any([]toml.Any{}) }).array()
+				writes := (hm['writes'] or { toml.Any([]toml.Any{}) }).array()
+
+				// --- port structs (module ports) ---
+				ports << ''
+				ports << 'pub struct ${cname}In {'
+				ports << 'pub mut:'
+				for r in reads {
+					ports << provenance(r.string(), sig_of)
+					ports << '\t${snake(r.string())} sig.${r.string()}'
+				}
+				ports << '}'
+				ports << 'pub struct ${cname}Out {'
+				ports << 'pub mut:'
+				for w in writes {
+					ports << provenance(w.string(), sig_of)
+					ports << '\t${snake(w.string())} sig.${w.string()}'
+				}
+				ports << '}'
+
+				// --- glue handler (module gen) ---
+				gname := 'handler_${part}_${field}_${hname}'
+				glue << ''
+				glue << 'fn ${gname}(ctx voidptr) {'
+				glue << '\tmut st := unsafe { &Partition_${part}_state(ctx) }'
+				glue << '\tmut inp := ports.${cname}In{}'
+				for r in reads {
+					rn := r.string()
+					si := sig_of[rn] or { SigInfo{} }
+					if si.local {
+						glue << '\tinp.${snake(rn)} = st.cell_${snake(rn)} // local'
+					} else if idx := ioc_idx[rn] {
+						// bus -> comm(decode) -> target IOC cell ${idx} -> this FB input (6b-2b). One
+						// ioc_get per read (it advances the reader slot); the value field is `a`.
+						glue << '\tmut ${snake(rn)}_a := u32(0)'
+						glue << '\tmut ${snake(rn)}_b := u32(0)'
+						glue << '\tC.ioc_get(${idx}, &${snake(rn)}_a, &${snake(rn)}_b)'
+						glue << '\tinp.${snake(rn)}.${snake(si.val_field)} = ${si.val_type}(${snake(rn)}_a)'
+					} else {
+						glue << '\tosal.${acquire_fn(si.transport)}(${snake(rn)}_ch, &inp.${snake(rn)}, u8(sizeof(inp.${snake(rn)})))'
+					}
+				}
+				glue << '\tmut outp := ports.${cname}Out{}'
+				glue << '\tst.${field}.${hname}(inp, mut outp)'
+				for w in writes {
+					wn := w.string()
+					si := sig_of[wn] or { SigInfo{} }
+					if si.local {
+						glue << '\tst.cell_${snake(wn)} = outp.${snake(wn)} // local'
+					} else if idx := ioc_idx[wn] {
+						// external TX (app -> bus): publish the value into its IOC cell; the comm thread
+						// reads it each tx period, encodes, and sends. Value field -> sig_t.a (b unused).
+						glue << '\tC.ioc_pub(${idx}, u32(outp.${snake(wn)}.${snake(si.val_field)}), u32(0))'
+					} else {
+						glue << '\tosal.${publish_fn(si.transport)}(${snake(wn)}_ch, &outp.${snake(wn)}, u8(sizeof(outp.${snake(wn)})))'
+					}
+				}
+				glue << '}'
+				regs << '\tsched.every(${period_us}, ${gname}, &st)'
+			}
+		}
+		all_regs[part] = regs.clone()
+
+		// Host: one spawned superloop per partition, paced by osal.sleep_us. Target
+		// mode emits a single inline superloop in run() instead; inline-trace mode folds
+		// the (single) partition into the trace run(ch) below (see both).
+		if !target_on && !trace_inline && !trace_multicore {
+			glue << ''
+			glue << 'pub fn partition_${part}(core int, arg voidptr) {'
+			glue << '\tosal.pin_to_core(${core_of[part] or { 0 }})'
+			glue << '\tmut st := Partition_${part}_state{}'
+			glue << '\tmut sched := loom.Scheduler{}'
+			for r in regs {
+				glue << r
+			}
+			glue << '\tfor {'
+			glue << '\t\tloom_t0 := osal.now_us()'
+			glue << '\t\tsched.run(loom_t0)'
+			glue << '\t\tloom_t1 := osal.now_us()'
+			glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
+			if telem_on && 'p:${part}' in telem_slot {
+				glue << '\t\tosal.scratch_set(${telem_slot['p:${part}']}, u64(sched.load_permille()))'
+			}
+			glue << '\t\tosal.sleep_us(1000)'
+			glue << '\t}'
+			glue << '}'
+		} else if trace_multicore {
+			// Traced partition (P3a): profiled dispatch into this core's ring (passed as `arg` by
+			// run()). run_profiled fires trace_capture per handler and accounts load internally;
+			// the load is published to scratch for CpuLoad (partition_telem reads it).
+			pcore := core_of[part] or { 0 }
+			glue << ''
+			glue << 'pub fn partition_${part}(core int, arg voidptr) {'
+			glue << '\tosal.pin_to_core(${pcore})'
+			glue << '\tmut st := Partition_${part}_state{}'
+			glue << '\tmut sched := loom.Scheduler{}'
+			for r in regs {
+				glue << r
+			}
+			glue << '\tmut cap := TraceCapture{'
+			glue << '\t\tbuf:       unsafe { &trace.TraceBuffer(arg) }'
+			glue << '\t\tstart:     osal.now_us()'
+			glue << '\t\tid_base:   ${fb_id_base[part] or { 0 }}'
+			glue << '\t\tthread_id: ${thread_id_of[part] or { 0 }}'
+			glue << '\t\ttrig_slot: ${trace_trig_base + pcore}'
+			glue << '\t}'
+			glue << '\tsched.set_trace_hook(trace_capture, &cap)'
+			glue << '\tmut last_cmd := osal.scratch_get(${trace_cmd_base + pcore})'
+			glue << '\tfor {'
+			// Apply any command the owner routed to THIS core (arm/stop/reset/freeze). Only this
+			// partition ever mutates its own ring (single-writer isolation — the owner just posts
+			// commands + reads). Checked BEFORE dispatch so a freeze lands before the next handler
+			// is recorded (F668); arm reseats this core's own origin (F5) only when targeted (F1244).
+			glue << '\t\tcmdv := osal.scratch_get(${trace_cmd_base + pcore})'
+			glue << '\t\tif cmdv != last_cmd {'
+			glue << '\t\t\tlast_cmd = cmdv'
+			glue << '\t\t\top := u8(cmdv & 0xff)'
+			glue << '\t\t\tif op == trace.op_arm || op == trace.op_start || op == trace.op_reset {'
+			glue << '\t\t\t\tcap.buf.start()'
+			glue << '\t\t\t\tcap.start = osal.now_us()'
+			glue << '\t\t\t\tcap.base = 0'
+			glue << '\t\t\t\tcap.busy_end = 0'
+			glue << '\t\t\t} else if op == trace.op_stop {'
+			glue << '\t\t\t\tcap.buf.stop()'
+			glue << '\t\t\t} else if op == 0xf1 { // freeze: the owner fanned out another core\'s overrun'
+			glue << '\t\t\t\tcap.buf.trigger()'
+			glue << '\t\t\t}'
+			glue << '\t\t}'
+			// Bracket the dispatch: run_profiled fires trace_capture (fb records) for each due
+			// handler; if any ran, emit the THREAD span + idle gap for this iteration.
+			glue << '\t\tt0 := osal.now_us()'
+			glue << '\t\tbefore := cap.fb_count'
+			glue << '\t\tsched.run_profiled(osal.now_us)'
+			glue << '\t\tif cap.fb_count != before {'
+			glue << '\t\t\ttrace_thread_span(mut cap, t0, osal.now_us())'
+			glue << '\t\t}'
+			if telem_on && 'p:${part}' in telem_slot {
+				glue << '\t\tosal.scratch_set(${telem_slot['p:${part}']}, u64(sched.load_permille()))'
+			}
+			glue << '\t\tosal.sleep_us(1000)'
+			glue << '\t}'
+			glue << '}'
+		}
+	}
+	return ports, glue, all_regs
+}
+
 fn main() {
 	args := os.args
 	if args.len < 6 {
@@ -2905,176 +3092,9 @@ fn main() {
 		glue << '}'
 	}
 
-	mut all_regs := map[string][]string{} // per-partition sched.every(...) lines, reused by target run()
-	for part, clist in by_part {
-		glue << ''
-		glue << 'struct Partition_${part}_state {'
-		glue << 'mut:'
-		for c in clist {
-			cname := (c.as_map()['name'] or { toml.Any('') }).string()
-			glue << '\t${snake(cname)} app.${cname}'
-		}
-		for sname in sig_names {
-			si := sig_of[sname] or { continue }
-			if si.local && si.from == part {
-				glue << '\tcell_${snake(sname)} sig.${sname} // local FB->FB signal'
-			}
-		}
-		glue << '}'
-
-		mut regs := []string{}
-		for c in clist {
-			cm := c.as_map()
-			cname := (cm['name'] or { toml.Any('') }).string()
-			field := snake(cname)
-			for h in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
-				hm := h.as_map()
-				hname := (hm['name'] or { toml.Any('') }).string()
-				period_us := int((hm['period_ms'] or { toml.Any(0) }).int()) * 1000
-				reads := (hm['reads'] or { toml.Any([]toml.Any{}) }).array()
-				writes := (hm['writes'] or { toml.Any([]toml.Any{}) }).array()
-
-				// --- port structs (module ports) ---
-				ports << ''
-				ports << 'pub struct ${cname}In {'
-				ports << 'pub mut:'
-				for r in reads {
-					ports << provenance(r.string(), sig_of)
-					ports << '\t${snake(r.string())} sig.${r.string()}'
-				}
-				ports << '}'
-				ports << 'pub struct ${cname}Out {'
-				ports << 'pub mut:'
-				for w in writes {
-					ports << provenance(w.string(), sig_of)
-					ports << '\t${snake(w.string())} sig.${w.string()}'
-				}
-				ports << '}'
-
-				// --- glue handler (module gen) ---
-				gname := 'handler_${part}_${field}_${hname}'
-				glue << ''
-				glue << 'fn ${gname}(ctx voidptr) {'
-				glue << '\tmut st := unsafe { &Partition_${part}_state(ctx) }'
-				glue << '\tmut inp := ports.${cname}In{}'
-				for r in reads {
-					rn := r.string()
-					si := sig_of[rn] or { SigInfo{} }
-					if si.local {
-						glue << '\tinp.${snake(rn)} = st.cell_${snake(rn)} // local'
-					} else if idx := ioc_idx[rn] {
-						// bus -> comm(decode) -> target IOC cell ${idx} -> this FB input (6b-2b). One
-						// ioc_get per read (it advances the reader slot); the value field is `a`.
-						glue << '\tmut ${snake(rn)}_a := u32(0)'
-						glue << '\tmut ${snake(rn)}_b := u32(0)'
-						glue << '\tC.ioc_get(${idx}, &${snake(rn)}_a, &${snake(rn)}_b)'
-						glue << '\tinp.${snake(rn)}.${snake(si.val_field)} = ${si.val_type}(${snake(rn)}_a)'
-					} else {
-						glue << '\tosal.${acquire_fn(si.transport)}(${snake(rn)}_ch, &inp.${snake(rn)}, u8(sizeof(inp.${snake(rn)})))'
-					}
-				}
-				glue << '\tmut outp := ports.${cname}Out{}'
-				glue << '\tst.${field}.${hname}(inp, mut outp)'
-				for w in writes {
-					wn := w.string()
-					si := sig_of[wn] or { SigInfo{} }
-					if si.local {
-						glue << '\tst.cell_${snake(wn)} = outp.${snake(wn)} // local'
-					} else if idx := ioc_idx[wn] {
-						// external TX (app -> bus): publish the value into its IOC cell; the comm thread
-						// reads it each tx period, encodes, and sends. Value field -> sig_t.a (b unused).
-						glue << '\tC.ioc_pub(${idx}, u32(outp.${snake(wn)}.${snake(si.val_field)}), u32(0))'
-					} else {
-						glue << '\tosal.${publish_fn(si.transport)}(${snake(wn)}_ch, &outp.${snake(wn)}, u8(sizeof(outp.${snake(wn)})))'
-					}
-				}
-				glue << '}'
-				regs << '\tsched.every(${period_us}, ${gname}, &st)'
-			}
-		}
-		all_regs[part] = regs.clone()
-
-		// Host: one spawned superloop per partition, paced by osal.sleep_us. Target
-		// mode emits a single inline superloop in run() instead; inline-trace mode folds
-		// the (single) partition into the trace run(ch) below (see both).
-		if !target_on && !trace_inline && !trace_multicore {
-			glue << ''
-			glue << 'pub fn partition_${part}(core int, arg voidptr) {'
-			glue << '\tosal.pin_to_core(${core_of[part] or { 0 }})'
-			glue << '\tmut st := Partition_${part}_state{}'
-			glue << '\tmut sched := loom.Scheduler{}'
-			for r in regs {
-				glue << r
-			}
-			glue << '\tfor {'
-			glue << '\t\tloom_t0 := osal.now_us()'
-			glue << '\t\tsched.run(loom_t0)'
-			glue << '\t\tloom_t1 := osal.now_us()'
-			glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
-			if telem_on && 'p:${part}' in telem_slot {
-				glue << '\t\tosal.scratch_set(${telem_slot['p:${part}']}, u64(sched.load_permille()))'
-			}
-			glue << '\t\tosal.sleep_us(1000)'
-			glue << '\t}'
-			glue << '}'
-		} else if trace_multicore {
-			// Traced partition (P3a): profiled dispatch into this core's ring (passed as `arg` by
-			// run()). run_profiled fires trace_capture per handler and accounts load internally;
-			// the load is published to scratch for CpuLoad (partition_telem reads it).
-			pcore := core_of[part] or { 0 }
-			glue << ''
-			glue << 'pub fn partition_${part}(core int, arg voidptr) {'
-			glue << '\tosal.pin_to_core(${pcore})'
-			glue << '\tmut st := Partition_${part}_state{}'
-			glue << '\tmut sched := loom.Scheduler{}'
-			for r in regs {
-				glue << r
-			}
-			glue << '\tmut cap := TraceCapture{'
-			glue << '\t\tbuf:       unsafe { &trace.TraceBuffer(arg) }'
-			glue << '\t\tstart:     osal.now_us()'
-			glue << '\t\tid_base:   ${fb_id_base[part] or { 0 }}'
-			glue << '\t\tthread_id: ${thread_id_of[part] or { 0 }}'
-			glue << '\t\ttrig_slot: ${trace_trig_base + pcore}'
-			glue << '\t}'
-			glue << '\tsched.set_trace_hook(trace_capture, &cap)'
-			glue << '\tmut last_cmd := osal.scratch_get(${trace_cmd_base + pcore})'
-			glue << '\tfor {'
-			// Apply any command the owner routed to THIS core (arm/stop/reset/freeze). Only this
-			// partition ever mutates its own ring (single-writer isolation — the owner just posts
-			// commands + reads). Checked BEFORE dispatch so a freeze lands before the next handler
-			// is recorded (F668); arm reseats this core's own origin (F5) only when targeted (F1244).
-			glue << '\t\tcmdv := osal.scratch_get(${trace_cmd_base + pcore})'
-			glue << '\t\tif cmdv != last_cmd {'
-			glue << '\t\t\tlast_cmd = cmdv'
-			glue << '\t\t\top := u8(cmdv & 0xff)'
-			glue << '\t\t\tif op == trace.op_arm || op == trace.op_start || op == trace.op_reset {'
-			glue << '\t\t\t\tcap.buf.start()'
-			glue << '\t\t\t\tcap.start = osal.now_us()'
-			glue << '\t\t\t\tcap.base = 0'
-			glue << '\t\t\t\tcap.busy_end = 0'
-			glue << '\t\t\t} else if op == trace.op_stop {'
-			glue << '\t\t\t\tcap.buf.stop()'
-			glue << '\t\t\t} else if op == 0xf1 { // freeze: the owner fanned out another core\'s overrun'
-			glue << '\t\t\t\tcap.buf.trigger()'
-			glue << '\t\t\t}'
-			glue << '\t\t}'
-			// Bracket the dispatch: run_profiled fires trace_capture (fb records) for each due
-			// handler; if any ran, emit the THREAD span + idle gap for this iteration.
-			glue << '\t\tt0 := osal.now_us()'
-			glue << '\t\tbefore := cap.fb_count'
-			glue << '\t\tsched.run_profiled(osal.now_us)'
-			glue << '\t\tif cap.fb_count != before {'
-			glue << '\t\t\ttrace_thread_span(mut cap, t0, osal.now_us())'
-			glue << '\t\t}'
-			if telem_on && 'p:${part}' in telem_slot {
-				glue << '\t\tosal.scratch_set(${telem_slot['p:${part}']}, u64(sched.load_permille()))'
-			}
-			glue << '\t\tosal.sleep_us(1000)'
-			glue << '\t}'
-			glue << '}'
-		}
-	}
+	fb_ports, fb_glue, all_regs := emit_handlers(m, telem_slot, ioc_idx, trace_cmd_base, trace_trig_base, trace_inline, trace_multicore, fb_id_base, thread_id_of)
+	ports << fb_ports
+	glue << fb_glue
 
 	// --- generated COM bus bridge(s) — emitted by emit_bridges ---
 	bridge_glue, bnames, bus_dests := emit_bridges(m, comm_thread_on, trace_multicore, telem_slot, comm_tid, trace_cmd_base, trace_trig_base)
