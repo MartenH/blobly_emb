@@ -590,6 +590,57 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	return man
 }
 
+// emit_partition_telem emits the host CpuLoad tx thread: sum each core's per-partition load from
+// the scratch slots and ship it as a CpuLoad frame every period. Host only — the target and
+// inline-trace modes send CpuLoad inline from run(). Returns the glue lines, or none when the
+// telemetry-tx thread doesn't apply. (slot_core / telem_iface / trace_inline are main's emit-time
+// derived state; everything else comes from the Model.)
+fn emit_partition_telem(m Model, telem_iface string, slot_core []int, trace_inline bool) []string {
+	if !(m.telem.on && telem_iface != '' && !m.target.on && !trace_inline) {
+		return []string{}
+	}
+	mut ncores := 0
+	for sc in slot_core {
+		if sc + 1 > ncores {
+			ncores = sc + 1
+		}
+	}
+	mut glue := []string{}
+	glue << ''
+	glue << 'fn partition_telem() {'
+	glue << '\tosal.pin_to_core(${m.bus_core[m.telem.bus] or { 0 }})'
+	glue << '\tmut c := can.Channel{}'
+	glue << "\tif !c.open('${telem_iface}', false) {"
+	glue << '\t\treturn'
+	glue << '\t}'
+	glue << '\tfor {'
+	glue << '\t\tmut load := [8]u16{}'
+	for cc in 0 .. ncores {
+		mut terms := []string{}
+		for slot, sc in slot_core {
+			if sc == cc {
+				terms << 'u16(osal.scratch_get(${slot}))'
+			}
+		}
+		if terms.len > 0 {
+			glue << '\t\tload[${cc}] = ${terms.join(' + ')}'
+		}
+	}
+	glue << '\t\tframe := telem.encode_cpuload(load, ${ncores})'
+	glue << '\t\tmut f := can.Frame{'
+	glue << '\t\t\tid:  u32(0x${m.telem.id.hex()})'
+	glue << '\t\t\tlen: 8'
+	glue << '\t\t}'
+	glue << '\t\tfor i in 0 .. 8 {'
+	glue << '\t\t\tf.data[i] = frame[i]'
+	glue << '\t\t}'
+	glue << '\t\tc.send(f)'
+	glue << '\t\tosal.sleep_us(${m.telem.period_us})'
+	glue << '\t}'
+	glue << '}'
+	return glue
+}
+
 fn main() {
 	args := os.args
 	if args.len < 6 {
@@ -1918,49 +1969,8 @@ fn main() {
 		glue << '}'
 	}
 
-	// --- telemetry tx: sum per-partition load by core -> CpuLoad frame on the bus ---
-	// (host only: a spawned tx thread reading the per-core scratch slots. Target and
-	// inline-trace modes send the CpuLoad frame inline from run() instead.)
-	if telem_on && telem_iface != '' && !target_on && !trace_inline {
-		mut ncores := 0
-		for sc in slot_core {
-			if sc + 1 > ncores {
-				ncores = sc + 1
-			}
-		}
-		glue << ''
-		glue << 'fn partition_telem() {'
-		glue << '\tosal.pin_to_core(${bus_core[telem_bus] or { 0 }})'
-		glue << '\tmut c := can.Channel{}'
-		glue << "\tif !c.open('${telem_iface}', false) {"
-		glue << '\t\treturn'
-		glue << '\t}'
-		glue << '\tfor {'
-		glue << '\t\tmut load := [8]u16{}'
-		for cc in 0 .. ncores {
-			mut terms := []string{}
-			for slot, sc in slot_core {
-				if sc == cc {
-					terms << 'u16(osal.scratch_get(${slot}))'
-				}
-			}
-			if terms.len > 0 {
-				glue << '\t\tload[${cc}] = ${terms.join(' + ')}'
-			}
-		}
-		glue << '\t\tframe := telem.encode_cpuload(load, ${ncores})'
-		glue << '\t\tmut f := can.Frame{'
-		glue << '\t\t\tid:  u32(0x${telem_id.hex()})'
-		glue << '\t\t\tlen: 8'
-		glue << '\t\t}'
-		glue << '\t\tfor i in 0 .. 8 {'
-		glue << '\t\t\tf.data[i] = frame[i]'
-		glue << '\t\t}'
-		glue << '\t\tc.send(f)'
-		glue << '\t\tosal.sleep_us(${telem_period_us})'
-		glue << '\t}'
-		glue << '}'
-	}
+	// --- telemetry tx: sum per-partition load by core -> CpuLoad frame on the bus (emit_partition_telem) ---
+	glue << emit_partition_telem(m, telem_iface, slot_core, trace_inline)
 
 	// --- partition_trace (P3a): the single trace-bus owner. It NEVER mutates a partition's ring
 	//     (single-writer isolation): arm/stop/reset are ROUTED to the owning partition via a per-core
