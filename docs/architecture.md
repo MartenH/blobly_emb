@@ -242,6 +242,49 @@ The services are loosely coupled, but the **shutdown/sleep** path shows how they
 Wake is the reverse: a wakeup source fires → ECU state *sleep → run* → comm threads resume →
 NM *repeat-message → normal*.
 
+### Interrupts and the generic ↔ target boundary
+
+The comm thread is woken by a hardware interrupt (the CAN Rx-FIFO "new message" IRQ). *Which*
+interrupt, at what *priority*, and on which *core* it fires is ECU configuration — a bus
+declares it:
+
+```toml
+[bus.can0]
+core        = 0            # the interrupt routes HERE — the comm thread on core 0 services it
+rx          = "interrupt"  # "interrupt" | "polled"
+rx_priority = 0x40         # NVIC priority; default = SysTick's, so it can't nest with the tick
+```
+
+"Which interrupt to enable" is `rx = "interrupt"`; "which core" is `[bus].core` — a bus's Rx
+IRQ can only sensibly fire on the core that owns the bus. Non-bus interrupts (a timer, a pin)
+would take a general `[[interrupt]]` table with an explicit core + priority.
+
+**The one hard rule — no silicon in the generic layers.** The generic stack (the `ecu.toml`
+schema, `ecumodel`, the loom2v core) carries **no** Cortex-M / NVIC / vector-table /
+IRQ-number / peripheral-register knowledge. It expresses only *intent*. Everything
+silicon-specific — FDCAN1 → IRQ 19 → vector slot 35 → enable `IE.RF0NE | ILE.EINT0`, the
+NVIC, the vector table — lives **below** that line, and only there.
+
+Below the line there are **two acceptable ways** to satisfy the intent; the choice is a bloat
+trade-off, not an architectural one:
+
+1. **A target-specific generator** (a ThreadX/Cortex-M backend + a small per-MCU descriptor)
+   emits `vectors.S`, the NVIC enable, and the peripheral `IE`/`ILE` poke from the intent —
+   fully config-driven, at the cost of the MCU-descriptor machinery.
+2. **Handcrafted target board glue** — exactly what `examples/h735_threadx/comm_glue.c` +
+   `vectors.S` are today: a few lines of hand-written, per-target C/asm. **If generating them
+   is more machinery than it earns, they stay hand-written, and that's fine** — they are
+   already isolated to the target layer and never leak a Cortex-M detail upward.
+
+So the invariant is the *layering*, not that every line is generated: the generic stack stays
+MCU-agnostic either way, and MCU specifics live **only** in a target-specific generator or in
+handcrafted target glue. Only when a second MCU/peripheral makes the hand-written glue
+repetitive does option 1 earn its place.
+
+Status: not built — today the Rx IRQ is enabled by handcrafted `comm_glue.c` and routed by a
+handcrafted `vectors.S` (option 2). This note fixes the boundary so that stays a deliberate,
+isolated choice rather than an assumption that creeps into the generic stack.
+
 ## Where each piece lives
 
 | Layer | Directory | Hand / generated |
