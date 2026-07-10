@@ -507,6 +507,40 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	}
 }
 
+// Producer is a platform capability that lives on a bus — telemetry and trace today, NM / COM-tx
+// tomorrow. The generator iterates producers so the SHARED emitters (the partition loop, each
+// run-model, the imports, the manifest) never name a specific capability: adding one is implementing
+// this interface, not threading a fresh set of flags/params through every emitter. Hooks are filled
+// in phase by phase as the producer redesign lands; each returns the emit fragment for one injection
+// point, or an empty slice when that producer contributes nothing there.
+interface Producer {
+	// partition_loop_body returns the lines injected into a partition's per-iteration loop body
+	// (after dispatch + load accounting). part_key is 'p:<partition>' or 'b:<bus>' (a bridge).
+	partition_loop_body(part_key string) []string
+}
+
+// TelemProducer publishes each partition's Loom load to a scratch cell so the bus owner can ship it
+// as a CpuLoad frame. slot maps a partition key ('p:app' / 'b:can0') to its scratch cell index.
+struct TelemProducer {
+	on   bool
+	slot map[string]int
+}
+
+fn (t TelemProducer) partition_loop_body(part_key string) []string {
+	if t.on && part_key in t.slot {
+		return ['\t\tosal.scratch_set(${t.slot[part_key]}, u64(sched.load_permille()))']
+	}
+	return []string{}
+}
+
+// TraceProducer captures the execution timeline. Its partition injections are a preamble (install
+// the capture ctx) and a loop-TOP command poll, not the loop body — so this hook is empty for it.
+struct TraceProducer {}
+
+fn (t TraceProducer) partition_loop_body(_ string) []string {
+	return []string{}
+}
+
 // emit_manifest builds the trace-identity CSV (optional arg 6): the tables blobly_net loads to
 // resolve an entity_id back to a name. Two CSV tables, ids assigned GLOBALLY + STABLY in
 // declaration order (partition -> fb -> handler for fb.handlers; partition -> thread for threads).
@@ -774,7 +808,7 @@ fn emit_partition_trace(m Model, trace_core int, trace_cmd_base int, trace_trig_
 // comm-thread target (comm_thread_on), which owns rx in its own comm_thread_entry. Returns the
 // glue lines plus the bus_names / bus_dests the run() emitters need; reads the Model, with the
 // derived scratch/thread layout (telem_slot, comm_tid, trace bases) from main's emit-time state.
-fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot map[string]int, comm_tid map[string]int, trace_cmd_base int, trace_trig_base int) ([]string, []string, map[string][]string) {
+fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, producers []Producer, comm_tid map[string]int, trace_cmd_base int, trace_trig_base int) ([]string, []string, map[string][]string) {
 	buses := m.buses.clone()
 	bus_core := m.bus_core.clone()
 	sig_names := m.sig_names
@@ -782,7 +816,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 	isotp_conns := m.isotp_conns
 	routes := m.routes
 	dids := m.dids
-	telem_on := m.telem.on
 	trace_budget_us := m.trace.budget_us
 	tx_mode := m.frames.tx_mode.clone()
 	tx_cycle_us := m.frames.tx_cycle_us.clone()
@@ -1202,8 +1235,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 				glue << '\t\t\t}'
 			}
 			glue << '\t\t}'
-			if telem_on && 'b:${bname}' in telem_slot {
-				glue << '\t\tosal.scratch_set(${telem_slot['b:${bname}']}, u64(sched.load_permille()))'
+			for p in producers {
+				glue << p.partition_loop_body('b:${bname}')
 			}
 			glue << '\t\tosal.sleep_us(1000)'
 			glue << '\t}'
@@ -1213,8 +1246,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_multicore bool, telem_slot m
 			glue << '\t\tsched.run(loom_t0)'
 			glue << '\t\tloom_t1 := osal.now_us()'
 			glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
-			if telem_on && 'b:${bname}' in telem_slot {
-				glue << '\t\tosal.scratch_set(${telem_slot['b:${bname}']}, u64(sched.load_permille()))'
+			for p in producers {
+				glue << p.partition_loop_body('b:${bname}')
 			}
 			glue << '\t\tosal.sleep_us(1000)'
 			glue << '\t}'
@@ -2199,12 +2232,11 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 // sched.every() lines the run() emitters reuse). Returns (ports, glue, all_regs); reads the Model,
 // with the derived scratch/id layout (telem_slot, ioc_idx, trace bases, fb_id_base, thread_id_of)
 // and the trace-mode flags from main's emit-time state.
-fn emit_handlers(m Model, telem_slot map[string]int, ioc_idx map[string]int, trace_cmd_base int, trace_trig_base int, trace_inline bool, trace_multicore bool, fb_id_base map[string]int, thread_id_of map[string]int) ([]string, []string, map[string][]string) {
+fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_cmd_base int, trace_trig_base int, trace_inline bool, trace_multicore bool, fb_id_base map[string]int, thread_id_of map[string]int) ([]string, []string, map[string][]string) {
 	sig_of := m.sig_of.clone()
 	sig_names := m.sig_names
 	by_part := m.part.by_part.clone()
 	core_of := m.part.core_of.clone()
-	telem_on := m.telem.on
 	target_on := m.target.on
 	mut ports := []string{}
 	mut glue := []string{}
@@ -2314,8 +2346,8 @@ fn emit_handlers(m Model, telem_slot map[string]int, ioc_idx map[string]int, tra
 			glue << '\t\tsched.run(loom_t0)'
 			glue << '\t\tloom_t1 := osal.now_us()'
 			glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
-			if telem_on && 'p:${part}' in telem_slot {
-				glue << '\t\tosal.scratch_set(${telem_slot['p:${part}']}, u64(sched.load_permille()))'
+			for p in producers {
+				glue << p.partition_loop_body('p:${part}')
 			}
 			glue << '\t\tosal.sleep_us(1000)'
 			glue << '\t}'
@@ -2370,8 +2402,8 @@ fn emit_handlers(m Model, telem_slot map[string]int, ioc_idx map[string]int, tra
 			glue << '\t\tif cap.fb_count != before {'
 			glue << '\t\t\ttrace_thread_span(mut cap, t0, osal.now_us())'
 			glue << '\t\t}'
-			if telem_on && 'p:${part}' in telem_slot {
-				glue << '\t\tosal.scratch_set(${telem_slot['p:${part}']}, u64(sched.load_permille()))'
+			for p in producers {
+				glue << p.partition_loop_body('p:${part}')
 			}
 			glue << '\t\tosal.sleep_us(1000)'
 			glue << '\t}'
@@ -3119,12 +3151,19 @@ fn main() {
 		glue << emit_trace_capture(m)
 	}
 
-	fb_ports, fb_glue, all_regs := emit_handlers(m, telem_slot, ioc_idx, trace_cmd_base, trace_trig_base, trace_inline, trace_multicore, fb_id_base, thread_id_of)
+	// The platform producers (telemetry, trace) the shared emitters iterate — so no emitter names a
+	// specific capability for its partition-loop injection. NM / COM-tx join this list later.
+	producers := [Producer(TelemProducer{
+		on:   telem_on
+		slot: telem_slot.clone()
+	}), Producer(TraceProducer{})]
+
+	fb_ports, fb_glue, all_regs := emit_handlers(m, producers, ioc_idx, trace_cmd_base, trace_trig_base, trace_inline, trace_multicore, fb_id_base, thread_id_of)
 	ports << fb_ports
 	glue << fb_glue
 
 	// --- generated COM bus bridge(s) — emitted by emit_bridges ---
-	bridge_glue, bnames, bus_dests := emit_bridges(m, comm_thread_on, trace_multicore, telem_slot, comm_tid, trace_cmd_base, trace_trig_base)
+	bridge_glue, bnames, bus_dests := emit_bridges(m, comm_thread_on, trace_multicore, producers, comm_tid, trace_cmd_base, trace_trig_base)
 	glue << bridge_glue
 	mut bus_names := bnames.clone()
 
