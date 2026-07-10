@@ -673,8 +673,8 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 // inline-trace modes send CpuLoad inline from run(). Returns the glue lines, or none when the
 // telemetry-tx thread doesn't apply. (slot_core / telem_iface / trace_inline are main's emit-time
 // derived state; everything else comes from the Model.)
-fn emit_partition_telem(m Model, telem_iface string, slot_core []int, trace_inline bool) []string {
-	if !(m.telem.on && telem_iface != '' && !m.target.on && !trace_inline) {
+fn emit_partition_telem(m Model, telem_iface string, slot_core []int) []string {
+	if !(m.telem.on && telem_iface != '' && !m.target.on) {
 		return []string{}
 	}
 	mut ncores := 0
@@ -1564,7 +1564,7 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 // sched.every() lines the run() emitters reuse). Returns (ports, glue, all_regs); reads the Model,
 // with the derived scratch/id layout (telem_slot, ioc_idx, trace bases, fb_id_base, thread_id_of)
 // and the trace-mode flags from main's emit-time state.
-fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_inline bool) ([]string, []string, map[string][]string) {
+fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int) ([]string, []string, map[string][]string) {
 	mut ports := []string{}
 	mut glue := []string{}
 	mut all_regs := map[string][]string{}
@@ -1661,7 +1661,7 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_in
 		// into run(ch). The skeleton is one shape; producers inject preamble / loop-top / dispatch /
 		// loop-body (trace: capture ctx + command poll + profiled dispatch; telem: the load publish),
 		// so this emitter names no capability.
-		if !m.target.on && !trace_inline {
+		if !m.target.on {
 			glue << ''
 			glue << 'pub fn partition_${part}(core int, arg voidptr) {'
 			glue << '\tosal.pin_to_core(${m.part.core_of[part] or { 0 }})'
@@ -2306,7 +2306,7 @@ fn main() {
 		detail_id: m.telem.detail_id
 	})]
 
-	fb_ports, fb_glue, all_regs := emit_handlers(m, producers, ioc_idx, trace_inline)
+	fb_ports, fb_glue, all_regs := emit_handlers(m, producers, ioc_idx)
 	ports << fb_ports
 	glue << fb_glue
 
@@ -2316,7 +2316,7 @@ fn main() {
 	mut bus_names := bnames.clone()
 
 	// --- telemetry tx: sum per-partition load by core -> CpuLoad frame on the bus (emit_partition_telem) ---
-	glue << emit_partition_telem(m, telem_iface, slot_core, trace_inline)
+	glue << emit_partition_telem(m, telem_iface, slot_core)
 
 
 	bus_names.sort()
