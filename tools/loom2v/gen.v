@@ -1521,12 +1521,6 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << 'fn C._tx_thread_sleep(u32) u32'
 			glue << 'fn C._tx_initialize_kernel_enter()'
 			glue << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
-			if m.trace.on {
-				// The exec-change-hook trace recorder (trace_hooks.c, driver-independent): it copies
-				// the ring into our scratch buffer under a brief freeze, and THIS thread (the sole
-				// bus owner) streams the stable copy. RING_CAP = 256 records * 8 bytes.
-				glue << 'fn C.trace_snapshot(voidptr, u32) u32'
-			}
 			if comm_thread_on {
 				// Board glue (examples/<x>/comm_glue.c): the FDCAN Rx-FIFO0 ISR posts a semaphore
 				// that comm_rx_wait blocks on, so the comm thread wakes on rx instead of polling.
@@ -1560,9 +1554,6 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '__global ('
 			glue << '\tg_${part}_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned'
 			glue << '\tg_${part}_stack [4096]u8'
-			if m.trace.on {
-				glue << '\tg_${part}_trace [${m.trace.buffer_records}][8]u8 // scratch snapshot of the trace ring (owner streams it)'
-			}
 			if comm_thread_on {
 				glue << '\tg_comm_tcb   [32]u64  // the bus-owning comm thread'
 				glue << '\tg_comm_stack [4096]u8'
@@ -1599,14 +1590,6 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		glue << '\ttick_us := u64(${m.target.tick_us})'
 		if !m.target.threadx {
 			glue << '\tmut next_tick := C.board_now_us() + tick_us'
-		}
-		if m.target.threadx && m.trace.on && !comm_thread_on {
-			// Exec-hook trace stream state: snapshot the ring ~1 s, then stream the stable copy
-			// in chunks across iterations (this thread is the sole bus owner => lock-free).
-			glue << '\tmut last_trace := u64(0)'
-			glue << '\tmut tr_pos := u32(0)'
-			glue << '\tmut tr_n := u32(0)'
-			glue << '\tmut tr_active := false'
 		}
 		glue << '\tfor {'
 		glue << '\t\tt0 := C.board_now_us()'
@@ -1721,12 +1704,6 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					if m.telem.detail_id != 0 {
 						glue << '\tmut last_overruns := u32(0)'
 					}
-				}
-				if m.trace.on {
-					glue << '\tmut last_trace := u64(0)'
-					glue << '\tmut tr_pos := u32(0)'
-					glue << '\tmut tr_n := u32(0)'
-					glue << '\tmut tr_active := false'
 				}
 				for si in tx_sigs {
 					glue << '\tmut last_tx_${snake(si.name)} := u64(0)'
