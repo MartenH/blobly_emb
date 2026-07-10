@@ -31,26 +31,26 @@ _vectors:
   .word 0 // Reserved
   .word __tx_PendSVHandler
   .word __tx_SysTickHandler   // Used by Threadx timer functionality
-  .word __tx_BadHandler       // Populate with user Interrupt handler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
+  .word __tx_BadHandler       // IRQ0  (Populate with user Interrupt handlers)
+  .word __tx_BadHandler       // IRQ1
+  .word __tx_BadHandler       // IRQ2
+  .word __tx_BadHandler       // IRQ3
+  .word __tx_BadHandler       // IRQ4
+  .word __tx_BadHandler       // IRQ5
+  .word __tx_BadHandler       // IRQ6
+  .word __tx_BadHandler       // IRQ7
+  .word __tx_BadHandler       // IRQ8
+  .word __tx_BadHandler       // IRQ9
+  .word __tx_BadHandler       // IRQ10
+  .word __tx_BadHandler       // IRQ11
+  .word __tx_BadHandler       // IRQ12
+  .word __tx_BadHandler       // IRQ13
+  .word __tx_BadHandler       // IRQ14
+  .word __tx_BadHandler       // IRQ15
+  .word __tx_BadHandler       // IRQ16
+  .word __tx_BadHandler       // IRQ17
+  .word __tx_BadHandler       // IRQ18
+  .word FDCAN1_IT0_IRQHandler // IRQ19 = FDCAN1 interrupt line 0 (Rx FIFO0) -> vector id 35 (comm_glue.c)
   .word __tx_BadHandler
   .word __tx_BadHandler
   .word __tx_BadHandler

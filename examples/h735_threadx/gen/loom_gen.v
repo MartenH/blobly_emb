@@ -46,29 +46,32 @@ fn C._tx_thread_sleep(u32) u32
 fn C._tx_initialize_kernel_enter()
 fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32
 fn C.trace_snapshot(voidptr, u32) u32
+fn C.comm_rx_irq_enable()
+fn C.comm_rx_wait(u32) u32 // block up to N ticks; returns 0 if woken by rx
+fn C.load_pub(u32, u32, u32, u32, u32)
+fn C.load_permille() u32
+fn C.load_100ms() u32
+fn C.load_1s() u32
+fn C.load_10s() u32
+fn C.load_overruns() u32
 
 __global (
 	g_app_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
 	g_app_stack [4096]u8
 	g_app_trace [64][8]u8 // scratch snapshot of the trace ring (owner streams it)
+	g_comm_tcb   [32]u64  // the bus-owning comm thread
+	g_comm_stack [4096]u8
+	g_rx_count u32
+	g_rx_last  u32
 )
 
-pub fn run(can0 can.Channel) {
-	mut ch := can0
+pub fn run() {
 	mut st := Partition_app_state{}
 	mut sched := loom.Scheduler{}
 	sched.every(100000, handler_app_governor_on_100ms, &st)
 	sched.every(1000, handler_app_load_on_1ms, &st)
 	sched.every(100000, handler_app_heartbeat_on_100ms, &st)
-	mut load := [8]u16{}
-	telem_period_us := u64(500000)
-	mut last_telem := u64(0)
-	mut last_overruns := u32(0) // for the per-period overrun count
 	tick_us := u64(1000)
-	mut last_trace := u64(0)
-	mut tr_pos := u32(0)
-	mut tr_n := u32(0)
-	mut tr_active := false
 	for {
 		t0 := C.board_now_us()
 		sched.run(t0)
@@ -77,9 +80,45 @@ pub fn run(can0 can.Channel) {
 		if t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun
 			sched.mark_overrun()
 		}
-		if t1 - last_telem >= telem_period_us {
+		C.load_pub(u32(sched.load_permille()), u32(sched.load_permille_100ms()),
+			u32(sched.load_permille_1s()), u32(sched.load_permille_10s()), sched.overruns())
+		C._tx_thread_sleep(u32(1))
+	}
+}
+
+fn app_thread_entry(input u32) {
+	run() // FB dispatch only — the comm thread owns the bus
+}
+
+fn comm_thread_entry(input u32) {
+	mut ch := can.Channel{}
+	if !ch.open('0', false) { // can0; board clocks/pins set by main.v
+		for { C._tx_thread_sleep(1000) } // dead channel — park, never own a bus we can't drive
+	}
+	C.comm_rx_irq_enable() // arm the FDCAN Rx-FIFO0 interrupt now the bus is open
+	mut last_telem := u64(0)
+	telem_period_us := u64(500000)
+	mut last_overruns := u32(0)
+	mut last_trace := u64(0)
+	mut tr_pos := u32(0)
+	mut tr_n := u32(0)
+	mut tr_active := false
+	mut rx := can.Frame{}
+	for {
+		C.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame
+		// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame
+		for ch.recv(mut rx) {
+			if rx.id == u32(0x123) { // cmd_frame
+				g_rx_count++
+				g_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)
+			}
+		}
+		t1 := C.board_now_us()
+		// PRODUCER: CpuLoad telemetry — reads the FB thread's load scratch
+		if t1 - last_telem >= telem_period_us && ch.tx_ready() {
 			last_telem = t1
-			load[0] = sched.load_permille() // single M7 -> core 0 only
+			mut load := [8]u16{}
+			load[0] = u16(C.load_permille())
 			frame := telem.encode_cpuload(load, 1)
 			mut f := can.Frame{
 				id:  u32(0x7e0)
@@ -89,9 +128,8 @@ pub fn run(can0 can.Channel) {
 				f.data[i] = frame[i]
 			}
 			ch.send(f)
-			ovr := sched.overruns()
-			detail := telem.encode_loaddetail(sched.load_permille_100ms(),
-				sched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)
+			ovr := C.load_overruns()
+			detail := telem.encode_loaddetail(u16(C.load_100ms()), u16(C.load_1s()), u16(C.load_10s()), ovr - last_overruns)
 			last_overruns = ovr
 			mut d := can.Frame{
 				id:  u32(0x7e1)
@@ -102,6 +140,7 @@ pub fn run(can0 can.Channel) {
 			}
 			ch.send(d)
 		}
+		// PRODUCER: exec-hook trace ring (a burst -> tx_ready-gated 16-record chunks)
 		if !tr_active && t1 - last_trace >= u64(1000000) {
 			tr_n = C.trace_snapshot(&g_app_trace[0], 64)
 			tr_pos = 0
@@ -126,22 +165,15 @@ pub fn run(can0 can.Channel) {
 				last_trace = C.board_now_us()
 			}
 		}
-		C._tx_thread_sleep(u32(1))
 	}
-}
-
-fn app_thread_entry(input u32) {
-	mut ch := can.Channel{}
-	if !ch.open('0', false) { // can0; board clocks/pins set by main.v
-		return // CAN open failed (bad bus index / FD unsupported) — don't run with a dead channel
-	}
-	run(ch)
 }
 
 @[export: 'tx_application_define']
 fn tx_application_define(first_unused voidptr) {
 	C._tx_thread_create(&g_app_tcb[0], c'app', app_thread_entry, u32(0),
 		&g_app_stack[0], u32(g_app_stack.len), u32(10), u32(10), u32(0), u32(1))
+	C._tx_thread_create(&g_comm_tcb[0], c'comm', comm_thread_entry, u32(0),
+		&g_comm_stack[0], u32(g_comm_stack.len), u32(1), u32(1), u32(0), u32(1))
 }
 
 // boot: hand control to the ThreadX kernel (never returns; calls
