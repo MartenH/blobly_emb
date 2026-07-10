@@ -639,6 +639,17 @@ fn main() {
 					panic('loom2v: [target] kind="threadx" comm thread: TX message "${si.dbc_msg}" has ' +
 						'E2E / SecOC, but the lean encode only packs the raw value — not generated yet')
 				}
+				tx_m := tx_mode[si.dbc_msg] or { 'cyclic' }
+				if tx_m != 'cyclic' {
+					panic('loom2v: [target] kind="threadx" comm thread: TX message "${si.dbc_msg}" tx.mode ' +
+						'"${tx_m}" is not generated — the comm producer sends purely cyclically (no ' +
+						'event/mixed/triggered or min_delay_ms); use mode = "cyclic"')
+				}
+				if si.dbc_dlc > 8 {
+					panic('loom2v: [target] kind="threadx" comm thread: TX message "${si.dbc_msg}" DLC ' +
+						'${si.dbc_dlc} > 8 (CAN-FD sized), but the classic FDCAN backend rejects len > 8; ' +
+						'use a <= 8-byte frame')
+				}
 				ioc_idx[sname] = ioc_idx.len
 				continue
 			}
