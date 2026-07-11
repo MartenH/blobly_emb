@@ -194,6 +194,7 @@ fn trace_c_decls(m Model) []string {
 	mut g := [
 		'fn C.trace_snapshot(voidptr, u32) u32',
 		'fn C.trace_arm()',
+		'fn C.trace_bind_thread(voidptr)',
 	]
 	if m.trace.level == 'all' {
 		g << 'fn C.trace_fb(u32, u64, u32)'

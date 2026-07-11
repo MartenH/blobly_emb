@@ -1498,6 +1498,19 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << '\tC._tx_thread_create(&g_comm_tcb[0], c\'comm\', comm_thread_entry, u32(0),'
 				glue << '\t\t&g_comm_stack[0], u32(g_comm_stack.len), u32(${comm_prio}), u32(${comm_prio}), u32(0), u32(1))'
+				if m.trace.on {
+					// Deterministic trace thread ids (manifest order): comm = 1, then the app
+					// threads by priority; the ONLY first-sight id left is the ThreadX timer
+					// thread — always last, exactly as the manifest's tx_system_timer row says.
+					glue << '\tC.trace_bind_thread(&g_comm_tcb[0])'
+					if multi {
+						for thr in app_threads {
+							glue << '\tC.trace_bind_thread(&g_${thr}_tcb[0])'
+						}
+					} else {
+						glue << '\tC.trace_bind_thread(&g_${part}_tcb[0])'
+					}
+				}
 				glue << '}'
 			} else {
 				glue << 'fn ${part}_thread_entry(input u32) {'
