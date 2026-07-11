@@ -7,7 +7,7 @@
 // input). The rules encoded here are exactly loom2v's current capabilities:
 //   - every partition has a `name` (a valid identifier) and >=1 [[partition.thread]];
 //   - thread names are GLOBALLY unique (so an fb names one and its partition is derived);
-//   - only ONE thread per partition for now (per-thread schedulers not generated yet);
+//   - at most FOUR threads per partition (one scheduler + TCB/stack + load slot per thread);
 //   - every fb has a unique `name` and a `thread` that resolves to a declared thread;
 //   - every handler has exactly the `period_ms` trigger (`irq` is reserved, not generated yet).
 module ecumodel
@@ -101,8 +101,8 @@ pub fn validate(doc toml.Doc) []string {
 		}
 		if nthreads == 0 {
 			errs << 'partition "${pname}" declares no [[partition.thread]] — every partition needs at least one thread'
-		} else if nthreads > 1 {
-			errs << 'partition "${pname}" declares ${nthreads} threads — multiple threads per partition is not generated yet (one scheduler per partition today); declare a single [[partition.thread]]'
+		} else if nthreads > 4 {
+			errs << 'partition "${pname}" declares ${nthreads} threads — at most 4 are generated (one scheduler per thread; static TCB/stack + a load slot each)'
 		}
 	}
 

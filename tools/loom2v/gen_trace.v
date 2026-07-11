@@ -14,6 +14,7 @@ module main
 import os
 import toml
 import tools.candb
+import tools.ecumodel
 import comm.trace
 
 // The [trace] config keys that are NOT endpoint bindings. Everything else in the block must be
@@ -378,23 +379,51 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	return g
 }
 
-// trace_fb_hooks: the FB enter/exit family on the ThreadX target — a Loom trace hook that hands
-// each dispatched handler to the exec-hook recorder (trace_fb, IRQ-safe) so FB bars appear inside
-// the thread lanes. Emitted only for level = "all".
-fn trace_fb_hooks(m Model) []string {
+// trace_fb_hooks: the FB enter/exit family on the ThreadX target — a Loom trace hook per FB
+// thread that hands each dispatched handler to the exec-hook recorder (trace_fb, IRQ-safe) so FB
+// bars appear inside the thread lanes. Emitted only for level = "all". Handler ids are GLOBAL
+// (manifest order: partition -> fb -> handler), but each thread's scheduler indexes its OWN
+// handlers 0..n — so multi-thread emits one id table per thread mapping the local idx back to
+// the global id (a thread's handlers need not be contiguous in the global numbering).
+fn trace_fb_hooks(m Model, doc toml.Doc, app_threads []string, multi bool) []string {
 	if !(m.trace.on && m.trace.level == 'all') {
 		return []string{}
 	}
-	return [
-		'',
-		'fn trace_clock() u64 {',
-		'\treturn C.board_now_us()',
-		'}',
-		'',
-		'fn trace_fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {',
-		'\tC.trace_fb(u32(idx), start_us, u32(dt_us))',
-		'}',
-	]
+	mut g := ['', 'fn trace_clock() u64 {', '\treturn C.board_now_us()', '}']
+	if !multi {
+		g << ''
+		g << 'fn trace_fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {'
+		g << '\tC.trace_fb(u32(idx), start_us, u32(dt_us))'
+		g << '}'
+		return g
+	}
+	// global handler ids per thread, in manifest order
+	mut hids := map[string][]int{}
+	mut hid := 0
+	for p in ecumodel.toml_arr(doc, 'partition') {
+		pname := (p.as_map()['name'] or { toml.Any('') }).string()
+		for c in m.part.by_part[pname] {
+			cm := c.as_map()
+			fbname := (cm['name'] or { toml.Any('') }).string()
+			thr := m.part.fb_thread[fbname] or { app_threads[0] }
+			for _ in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
+				hids[thr] << hid
+				hid++
+			}
+		}
+	}
+	for thr in app_threads {
+		mut elems := []string{}
+		for h in hids[thr] or { []int{} } {
+			elems << 'u32(${h})'
+		}
+		g << ''
+		g << 'const trace_hids_${thr} = [${elems.join(', ')}]'
+		g << 'fn trace_fb_hook_${thr}(ctx voidptr, idx int, start_us u64, dt_us u64) {'
+		g << '\tC.trace_fb(trace_hids_${thr}[idx], start_us, u32(dt_us))'
+		g << '}'
+	}
+	return g
 }
 
 // trace_fb_install: install the hook on the FB thread's scheduler (before its loop).
