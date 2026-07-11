@@ -150,6 +150,31 @@ dispatch stays the generated static match. And drift is self-catching twice:
 config↔schema drift fails generation, schema↔code drift (an endpoint without its
 `on_<name>` method) fails to V-compile in the generated output.
 
+## Endpoints carry frames, not types
+
+An endpoint's payload structure is entirely the module's business: the layout of
+a TraceCmd is defined by `decode_cmd` in `comm/trace` — plain V next to the state
+machine, unit-testable, no codegen — and neither the router, the schema, nor COM
+ever interprets a byte. So a module can put *any* structure on a port and the
+routing/binding/validation machinery just works, because it only touches `id`,
+`dir` and `dlc`. What the machinery deliberately does **not** do is marshal:
+`on_<endpoint>` hands the module a `can.Frame`, `produce` takes one back. Typed
+endpoint delivery would need a generated decoder per endpoint — the hand-tailored
+smear this design exists to kill.
+
+The typed path already exists — it's a **signal**. Rule of thumb:
+
+| your data is…                            | use             | layout defined by  | delivered as            |
+|------------------------------------------|-----------------|--------------------|-------------------------|
+| app data (sensor values, FB commands)    | signal          | DBC                | typed struct via IOC    |
+| protocol data (trace cmd, NM PDU, dump)  | module endpoint | the module's V code| `can.Frame`, module decodes |
+
+App data is per-project (so its layout belongs in config/DBC); protocol data is
+fixed by the protocol's implementation (ecu.toml must not be able to redefine
+what a TraceCmd looks like — only *where* it rides). Structures bigger than a
+frame are the ISO-TP case above: the module segments internally, still just
+frames at the port.
+
 ## Sizes and transports: what must match, and where it's checked
 
 **Segmented transports (ISO-TP) are seamless by construction** — segmentation is
