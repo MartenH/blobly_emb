@@ -9,16 +9,39 @@ import comm.telem
 import comm.trace
 import driver.can
 
-struct Partition_app_state {
+struct Thread_load_fast_state {
+mut:
+	load_fast app.LoadFast
+}
+
+struct Thread_load_mid_state {
+mut:
+	load_mid app.LoadMid
+}
+
+struct Thread_ctrl_slow_state {
 mut:
 	governor app.Governor
-	load app.Load
-	heartbeat app.Heartbeat
+	load_slow app.LoadSlow
 	cell_load_cmd sig.LoadCmd // local FB->FB signal
 }
 
+fn handler_app_load_fast_on_10ms(ctx voidptr) {
+	mut st := unsafe { &Thread_load_fast_state(ctx) }
+	mut inp := ports.LoadFastIn{}
+	mut outp := ports.LoadFastOut{}
+	st.load_fast.on_10ms(inp, mut outp)
+}
+
+fn handler_app_load_mid_on_20ms(ctx voidptr) {
+	mut st := unsafe { &Thread_load_mid_state(ctx) }
+	mut inp := ports.LoadMidIn{}
+	mut outp := ports.LoadMidOut{}
+	st.load_mid.on_20ms(inp, mut outp)
+}
+
 fn handler_app_governor_on_100ms(ctx voidptr) {
-	mut st := unsafe { &Partition_app_state(ctx) }
+	mut st := unsafe { &Thread_ctrl_slow_state(ctx) }
 	mut inp := ports.GovernorIn{}
 	mut command_a := u32(0)
 	mut command_b := u32(0)
@@ -29,20 +52,13 @@ fn handler_app_governor_on_100ms(ctx voidptr) {
 	st.cell_load_cmd = outp.load_cmd // local
 }
 
-fn handler_app_load_on_1ms(ctx voidptr) {
-	mut st := unsafe { &Partition_app_state(ctx) }
-	mut inp := ports.LoadIn{}
+fn handler_app_load_slow_on_100ms(ctx voidptr) {
+	mut st := unsafe { &Thread_ctrl_slow_state(ctx) }
+	mut inp := ports.LoadSlowIn{}
 	inp.load_cmd = st.cell_load_cmd // local
-	mut outp := ports.LoadOut{}
-	st.load.on_1ms(inp, mut outp)
+	mut outp := ports.LoadSlowOut{}
+	st.load_slow.on_100ms(inp, mut outp)
 	C.ioc_pub(0, u32(outp.workload.v), u32(0))
-}
-
-fn handler_app_heartbeat_on_100ms(ctx voidptr) {
-	mut st := unsafe { &Partition_app_state(ctx) }
-	mut inp := ports.HeartbeatIn{}
-	mut outp := ports.HeartbeatOut{}
-	st.heartbeat.on_100ms(inp, mut outp)
 }
 
 fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)
@@ -57,24 +73,49 @@ fn trace_clock() u64 {
 	return C.board_now_us()
 }
 
-fn trace_fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
-	C.trace_fb(u32(idx), start_us, u32(dt_us))
+fn trace_fb_hook_load_fast(ctx voidptr, idx int, start_us u64, dt_us u64) {
+	hid := match idx {
+		0 { u32(0) }
+		else { u32(0x3fff) } // unknown local idx — the 14-bit id space top
+	}
+	C.trace_fb(hid, start_us, u32(dt_us))
+}
+
+fn trace_fb_hook_load_mid(ctx voidptr, idx int, start_us u64, dt_us u64) {
+	hid := match idx {
+		0 { u32(1) }
+		else { u32(0x3fff) } // unknown local idx — the 14-bit id space top
+	}
+	C.trace_fb(hid, start_us, u32(dt_us))
+}
+
+fn trace_fb_hook_ctrl_slow(ctx voidptr, idx int, start_us u64, dt_us u64) {
+	hid := match idx {
+		0 { u32(2) }
+		1 { u32(3) }
+		else { u32(0x3fff) } // unknown local idx — the 14-bit id space top
+	}
+	C.trace_fb(hid, start_us, u32(dt_us))
 }
 fn C.comm_rx_irq_enable()
 fn C.comm_rx_wait(u32) u32 // block up to N ticks; returns 0 if woken by rx
-fn C.load_pub(u32, u32, u32, u32, u32)
-fn C.load_permille() u32
-fn C.load_100ms() u32
-fn C.load_1s() u32
-fn C.load_10s() u32
-fn C.load_overruns() u32
+fn C.load_pub_slot(int, u32, u32, u32, u32, u32)
+fn C.load_sum_permille() u32
+fn C.load_sum_100ms() u32
+fn C.load_sum_1s() u32
+fn C.load_sum_10s() u32
+fn C.load_sum_overruns() u32
 fn C.ioc_pool_init()
 fn C.ioc_pub(int, u32, u32)
 fn C.ioc_get(int, &u32, &u32)
 
 __global (
-	g_app_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
-	g_app_stack [4096]u8
+	g_load_fast_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
+	g_load_fast_stack [4096]u8
+	g_load_mid_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
+	g_load_mid_stack [4096]u8
+	g_ctrl_slow_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
+	g_ctrl_slow_stack [4096]u8
 	g_app_trace [64][8]u8 // scratch snapshot of the trace ring (owner streams it)
 	g_trace_ring [64]trace.Record
 	g_tm trace.TraceModule
@@ -84,14 +125,12 @@ __global (
 	g_rx_last  u32
 )
 
-pub fn run() {
-	mut st := Partition_app_state{}
+fn run_load_fast() {
+	mut st := Thread_load_fast_state{}
 	mut sched := loom.Scheduler{}
-	sched.every(100000, handler_app_governor_on_100ms, &st)
-	sched.every(1000, handler_app_load_on_1ms, &st)
-	sched.every(100000, handler_app_heartbeat_on_100ms, &st)
+	sched.every(10000, handler_app_load_fast_on_10ms, &st)
 	tick_us := u64(1000)
-	sched.set_trace_hook(trace_fb_hook, unsafe { nil })
+	sched.set_trace_hook(trace_fb_hook_load_fast, unsafe { nil })
 	for {
 		t0 := C.board_now_us()
 		sched.run_profiled(trace_clock)
@@ -99,14 +138,62 @@ pub fn run() {
 		if t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun
 			sched.mark_overrun()
 		}
-		C.load_pub(u32(sched.load_permille()), u32(sched.load_permille_100ms()),
+		C.load_pub_slot(0, u32(sched.load_permille()), u32(sched.load_permille_100ms()),
 			u32(sched.load_permille_1s()), u32(sched.load_permille_10s()), sched.overruns())
 		C._tx_thread_sleep(u32(1))
 	}
 }
 
-fn app_thread_entry(input u32) {
-	run() // FB dispatch only — the comm thread owns the bus
+fn run_load_mid() {
+	mut st := Thread_load_mid_state{}
+	mut sched := loom.Scheduler{}
+	sched.every(20000, handler_app_load_mid_on_20ms, &st)
+	tick_us := u64(1000)
+	sched.set_trace_hook(trace_fb_hook_load_mid, unsafe { nil })
+	for {
+		t0 := C.board_now_us()
+		sched.run_profiled(trace_clock)
+		t1 := C.board_now_us()
+		if t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun
+			sched.mark_overrun()
+		}
+		C.load_pub_slot(1, u32(sched.load_permille()), u32(sched.load_permille_100ms()),
+			u32(sched.load_permille_1s()), u32(sched.load_permille_10s()), sched.overruns())
+		C._tx_thread_sleep(u32(1))
+	}
+}
+
+fn run_ctrl_slow() {
+	mut st := Thread_ctrl_slow_state{}
+	mut sched := loom.Scheduler{}
+	sched.every(100000, handler_app_governor_on_100ms, &st)
+	sched.every(100000, handler_app_load_slow_on_100ms, &st)
+	tick_us := u64(1000)
+	sched.set_trace_hook(trace_fb_hook_ctrl_slow, unsafe { nil })
+	for {
+		t0 := C.board_now_us()
+		sched.run_profiled(trace_clock)
+		t1 := C.board_now_us()
+		if t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun
+			sched.mark_overrun()
+		}
+		C.load_pub_slot(2, u32(sched.load_permille()), u32(sched.load_permille_100ms()),
+			u32(sched.load_permille_1s()), u32(sched.load_permille_10s()), sched.overruns())
+		C._tx_thread_sleep(u32(1))
+	}
+}
+
+
+fn load_fast_thread_entry(input u32) {
+	run_load_fast() // FB dispatch only — the comm thread owns the bus
+}
+
+fn load_mid_thread_entry(input u32) {
+	run_load_mid() // FB dispatch only — the comm thread owns the bus
+}
+
+fn ctrl_slow_thread_entry(input u32) {
+	run_ctrl_slow() // FB dispatch only — the comm thread owns the bus
 }
 
 fn comm_thread_entry(input u32) {
@@ -151,7 +238,7 @@ fn comm_thread_entry(input u32) {
 		if t1 - last_telem >= telem_period_us && ch.tx_ready() {
 			last_telem = t1
 			mut load := [8]u16{}
-			load[0] = u16(C.load_permille())
+			load[0] = u16(C.load_sum_permille()) // sum of the FB threads (one core)
 			frame := telem.encode_cpuload(load, 1)
 			mut f := can.Frame{
 				id:  u32(0x7e0)
@@ -161,8 +248,8 @@ fn comm_thread_entry(input u32) {
 				f.data[i] = frame[i]
 			}
 			ch.send(f)
-			ovr := C.load_overruns()
-			detail := telem.encode_loaddetail(u16(C.load_100ms()), u16(C.load_1s()), u16(C.load_10s()), ovr - last_overruns)
+			ovr := C.load_sum_overruns()
+			detail := telem.encode_loaddetail(u16(C.load_sum_100ms()), u16(C.load_sum_1s()), u16(C.load_sum_10s()), ovr - last_overruns)
 			last_overruns = ovr
 			mut d := can.Frame{
 				id:  u32(0x7e1)
@@ -198,10 +285,14 @@ fn comm_thread_entry(input u32) {
 
 @[export: 'tx_application_define']
 fn tx_application_define(first_unused voidptr) {
-	C._tx_thread_create(&g_app_tcb[0], c'app', app_thread_entry, u32(0),
-		&g_app_stack[0], u32(g_app_stack.len), u32(10), u32(10), u32(0), u32(1))
+	C._tx_thread_create(&g_load_fast_tcb[0], c'load_fast', load_fast_thread_entry, u32(0),
+		&g_load_fast_stack[0], u32(g_load_fast_stack.len), u32(11), u32(11), u32(0), u32(1))
+	C._tx_thread_create(&g_load_mid_tcb[0], c'load_mid', load_mid_thread_entry, u32(0),
+		&g_load_mid_stack[0], u32(g_load_mid_stack.len), u32(12), u32(12), u32(0), u32(1))
+	C._tx_thread_create(&g_ctrl_slow_tcb[0], c'ctrl_slow', ctrl_slow_thread_entry, u32(0),
+		&g_ctrl_slow_stack[0], u32(g_ctrl_slow_stack.len), u32(13), u32(13), u32(0), u32(1))
 	C._tx_thread_create(&g_comm_tcb[0], c'comm', comm_thread_entry, u32(0),
-		&g_comm_stack[0], u32(g_comm_stack.len), u32(1), u32(1), u32(0), u32(1))
+		&g_comm_stack[0], u32(g_comm_stack.len), u32(10), u32(10), u32(0), u32(1))
 }
 
 // boot: hand control to the ThreadX kernel (never returns; calls
