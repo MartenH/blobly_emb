@@ -183,8 +183,8 @@ pub fn validate(doc toml.Doc) []string {
 		}
 		if 'level' in trm {
 			lvl := str_of(trm, 'level')
-			if lvl !in ['thread', 'thread+isr', 'thread+fb', 'all'] {
-				errs << '[trace] level "${lvl}" is invalid (thread | thread+isr | thread+fb | all)'
+			if lvl !in ['fb', 'thread', 'thread+isr', 'thread+fb', 'all'] {
+				errs << '[trace] level "${lvl}" is invalid (fb | thread | thread+isr | thread+fb | all)'
 			}
 		}
 		if 'mode' in trm {

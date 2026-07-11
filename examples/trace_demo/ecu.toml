@@ -16,16 +16,13 @@ period_ms = 500
 
 [trace]
 bus            = "can0"
-level          = "thread+fb"  # thread | thread+isr | thread+fb | all
+level          = "fb"         # the module runner captures FB records via the Loom hook
 buffer_records = 64           # per-core ring depth (static array)
 mode           = "ring"       # ring (flight recorder) | oneshot
 pre_pct        = 50           # ring pre/post-trigger split
-push_ms        = 1000         # live HandlerStat heartbeat (0 = off)
-cmd_id         = 0x7E2
-rsp_id         = 0x7E3
-stat_id        = 0x7E4
-record_id      = 0x7E5        # ISO-TP dump data (target -> host)
-dump_fc_id     = 0x7E6        # ISO-TP flow control (host -> target)
+cmd            = 0x7E2
+rsp            = 0x7E3
+record         = 0x7E5        # dump stream (raw records)
 trigger        = { source = "overrun", budget_us = 500 }  # freeze the ring on a >500us handler
 
 # One partition, one thread. The thread name is globally unique so an fb names it directly

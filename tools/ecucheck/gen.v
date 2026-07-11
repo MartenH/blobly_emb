@@ -92,11 +92,10 @@ fn specs() map[string]map[string]Key {
 			'mode':           k(.str)
 			'pre_pct':        k(.int)
 			'push_ms':        k(.int)
-			'cmd_id':         k(.id)
-			'rsp_id':         k(.id)
-			'stat_id':        k(.id)
-			'record_id':      k(.id)
-			'dump_fc_id':     k(.id)
+			// endpoint bindings (comm/trace's schema, docs/com-modules.md): DBC name or literal id
+			'cmd':            k(.id)
+			'rsp':            k(.id)
+			'record':         k(.id)
 			'trigger':        sub(.tbl, false, 'trigger')
 		}
 		'trigger':    {

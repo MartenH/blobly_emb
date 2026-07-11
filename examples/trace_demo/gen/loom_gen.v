@@ -7,7 +7,6 @@ import loom
 import osal
 import comm.telem
 import comm.trace
-import comm.isotp
 import driver.can
 
 struct Partition_app_state {
@@ -38,162 +37,41 @@ fn handler_app_slow_work_on_20ms(ctx voidptr) {
 	st.slow_work.on_20ms(inp, mut outp)
 }
 
-struct TraceState {
-mut:
-	buf       trace.TraceBuffer
-	start     u64 // wall-clock µs of the capture origin
-	base      u64 // elapsed µs at the last epoch re-anchor
-	thread_id u16 // this partition's thread id (for the derived THREAD records)
-	busy_end  u64 // elapsed µs at the end of the last busy span (idle-gap start)
-	fb_count  u32 // handlers dispatched (the loop reads this to bracket a busy span)
-}
-
-fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {
-	mut t := unsafe { &TraceState(ctx) }
-	t.fb_count++
-	elapsed := start_us - t.start
-	if elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor
-		t.base = elapsed
-		t.buf.push(trace.new_epoch(u32(elapsed)))
-	}
-	mut dt := dt_us
-	mut flags := u8(0)
-	if dt > 0xFFFF { // clamp to the u16 field, and mark it saturated
-		dt = 0xFFFF
-		flags |= trace.flag_saturated
-	}
-	if dt_us > 500 {
-		flags |= trace.flag_overran
-	}
-	t.buf.push(trace.new_fb(u16(idx), flags, u32(elapsed - t.base), u16(dt)))
-	if dt_us > 500 { // overrun: freeze the ring around the anomaly
-		t.buf.trigger()
-	}
-}
-
-fn trace_thread_span(mut t TraceState, t0_us u64, t1_us u64) {
-	e_start := t0_us - t.start // elapsed at the busy span start
-	e_end := t1_us - t.start   // elapsed at the busy span end
-	if e_start > t.base && e_start - t.base > 0x00ff_ffff { // re-anchor before the u24 wraps
-		t.base = e_start
-		t.buf.push(trace.new_epoch(u32(e_start)))
-	}
-	gap_from := if t.busy_end > t.base { t.busy_end } else { t.base }
-	if e_start > gap_from { // idle gap since the last busy span (within this epoch)
-		mut gap := e_start - gap_from
-		if gap > 0xFFFF {
-			gap = 0xFFFF
-		}
-		t.buf.push(trace.new_idle(trace.reason_yield, u32(gap_from - t.base), u16(gap)))
-	}
-	s_from := if e_start > t.base { e_start } else { t.base } // clamp across an epoch re-anchor
-	mut busy := if e_end > s_from { e_end - s_from } else { u64(0) }
-	if busy > 0xFFFF {
-		busy = 0xFFFF
-	}
-	t.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(s_from - t.base), u16(busy)))
-	t.busy_end = e_end
-}
-
-pub fn run(can0 can.Channel) {
-	osal.pin_to_core(0) // so the manifest/TraceRsp core label matches reality
-	mut ch := can0
+pub fn run(chp can.Channel) {
+	osal.pin_to_core(0)
+	mut ch := chp
 	mut st := Partition_app_state{}
 	mut sched := loom.Scheduler{}
 	sched.every(5000, handler_app_fast_work_on_5ms, &st)
 	sched.every(10000, handler_app_med_work_on_10ms, &st)
 	sched.every(20000, handler_app_slow_work_on_20ms, &st)
-	mut backing := [64]trace.Record{}
-	mut ts := TraceState{
-		buf: trace.new_buffer(&backing[0], 64, .ring, 50)
-	}
-	ts.start = osal.now_us()
-	ts.thread_id = 1 // manifest thread id of app's thread
-	ts.buf.start()
-	sched.set_trace_hook(trace_capture, &ts)
-	mut link := isotp.Link{}
-	mut dumpbuf := [512]u8{} // buffer_records x 8, one ISO-TP payload
-	mut last_push := u64(0)
-	mut last_count := [3]u32{}
+	// trace: the ring + module (comm/trace) — the platform serves the protocol, this loop
+	// only feeds it: fb_hook records each dispatched handler, on_cmd applies routed commands,
+	// produce yields the response + dump stream.
+	mut ring := [64]trace.Record{}
+	mut tm := trace.new_module(u32(0x7e3), u32(0x7e5), 0,
+		trace.new_buffer(&ring[0], 64, .ring, 50))
+	mut cap := tm.capture(0, 500, osal.now_us())
+	sched.set_trace_hook(trace.fb_hook, &cap)
 	mut last_telem := u64(0)
+	mut rx := can.Frame{}
+	mut txf := can.Frame{}
 	for {
 		loom_t0 := osal.now_us()
-		before := ts.fb_count
 		sched.run_profiled(osal.now_us)
-		if ts.fb_count != before { // a handler ran -> bracket this busy iteration as a thread span
-			trace_thread_span(mut ts, loom_t0, osal.now_us())
-		}
-		mut rx := can.Frame{}
-		if ch.recv(mut rx) {
-			if rx.id == u32(0x7e2) && rx.len >= 8 {
-				mut cb := [8]u8{}
-				for j in 0 .. 8 {
-					cb[j] = rx.data[j]
-				}
-				c := trace.decode_cmd(cb)
-				mut rspb, do_dump, addressed := trace.handle_cmd(mut ts.buf, c, 0)
-				if addressed {
-					if c.opcode == trace.op_arm || c.opcode == trace.op_start
-						|| c.opcode == trace.op_reset {
-						ts.start = osal.now_us()
-						ts.base = 0
-						ts.busy_end = 0 // fresh origin: don't treat the old capture's span end as the idle-gap start
-						link = isotp.Link{}
-					}
-					if do_dump {
-						n := ts.buf.pack(&dumpbuf[0], 512)
-						if n > 0 && !link.send(&dumpbuf[0], n) {
-							rspb[1] = trace.result_busy
-						}
-					}
-					mut rf := can.Frame{
-						id:  u32(0x7e3)
-						len: 8
-					}
-					for j in 0 .. 8 {
-						rf.data[j] = rspb[j]
-					}
-					ch.send(rf)
-				}
-			} else if rx.id == u32(0x7e6) {
-				mut p := isotp.Pdu{}
-				for j in 0 .. 8 {
-					p.data[j] = rx.data[j]
-				}
-				link.on_frame(osal.now_us(), p)
+		loom_t1 := osal.now_us()
+		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
+		// the generated router match: each rx binding dispatches to its endpoint handler
+		for ch.recv(mut rx) {
+			match rx.id {
+				u32(0x7e2) { tm.on_cmd(rx) } // trace.cmd
+				else {}
 			}
 		}
-		link.tick(osal.now_us()) // advance the N_Bs timeout even when tx_ready gates poll out
-		mut tp := isotp.Pdu{}
-		for ch.tx_ready() && link.poll(osal.now_us(), mut tp) {
-			mut pf := can.Frame{
-				id:  u32(0x7e5)
-				len: 8
-			}
-			for j in 0 .. 8 {
-				pf.data[j] = tp.data[j]
-			}
-			ch.send(pf)
+		for ch.tx_ready() && tm.produce(mut txf) {
+			ch.send(txf)
 		}
 		now := osal.now_us()
-		if now - last_push >= 1000000 {
-			last_push = now
-			for i in 0 .. sched.handler_count() {
-				hs := sched.handler_stat(i)
-				delta := hs.count - last_count[i]
-				last_count[i] = hs.count
-				payload := telem.encode_handlerstat(u8(i), 0, hs.last_us, hs.max_us, delta)
-				mut f := can.Frame{
-					id:  u32(0x7e4)
-					len: 8
-				}
-				for j in 0 .. 8 {
-					f.data[j] = payload[j]
-				}
-				ch.send(f)
-				sched.reset_handler_max(i)
-			}
-		}
 		if now - last_telem >= 500000 {
 			last_telem = now
 			mut load := [8]u16{}
