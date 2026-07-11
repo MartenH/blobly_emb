@@ -12,17 +12,24 @@ make flash              # st-flash the generated .bin
 candump can0            # CpuLoad (0x7E0) + LoadDetail (0x7E1) + trace (0x7E5)
 ```
 
-## Two threads, one bus owner (6b-2)
+## Four threads, one bus owner — rate-monotonic preemption
 
-loom2v generates **two** ThreadX threads:
+loom2v generates **four** ThreadX threads (one per `[[partition.thread]]` + comm), at
+priorities from the config; the comm priority is **derived** as min(app) − 1:
 
-- the **FB thread** (`app_main`) — runs the Governor/Load/Heartbeat handlers. It **never
-  touches CAN**; it publishes its Loom load to a volatile scratch (`comm_glue.c`) for the comm
-  thread to send.
-- the **comm thread** — the **sole bus owner** (lock-free single-owner, no mutex). A generic
-  producer/consumer loop: it drains rx (woken by the **FDCAN Rx-FIFO0 ISR** via a semaphore),
-  and produces the CpuLoad/LoadDetail telemetry + the exec-hook trace stream (tx_ready-gated).
-  Telemetry and trace are just two *producers*; NM / COM-tx slot in later as more of the same.
+| thread      | prio | runs                                   |
+|-------------|------|----------------------------------------|
+| `comm`      | 10   | the sole bus owner (rx drain + producers) |
+| `load_fast` | 11   | LoadFast `on_10ms` (~2.5 ms burn + a ~5.5 ms spike every ~0.6 s) |
+| `load_mid`  | 12   | LoadMid `on_20ms` (~3 ms burn)          |
+| `ctrl_slow` | 13   | Governor + LoadSlow `on_100ms` (swept 1–4 ms burn) |
+
+Total ~45 % load with real idle — and the point: **preemption is visible**. The fast thread
+carves the mid/slow burns into pieces every cycle, comm cuts into everything when a frame
+arrives, and the trace's swimlane shows it (hatched = preempted out). Each FB thread never
+touches CAN; each publishes its Loom load to its own scratch **slot** (`comm_glue.c`), and
+the comm thread sums the slots for CpuLoad. Telemetry and trace are just two *producers*;
+NM / COM-tx slot in later as more of the same.
 
 **Trace.** `[trace]` engages the **exec-change-hook** recorder (`trace_hooks.c`,
 driver-independent) — the FB loop and comm loop being real ThreadX threads means the hooks

@@ -413,14 +413,17 @@ fn trace_fb_hooks(m Model, doc toml.Doc, app_threads []string, multi bool) []str
 		}
 	}
 	for thr in app_threads {
-		mut elems := []string{}
-		for h in hids[thr] or { []int{} } {
-			elems << 'u32(${h})'
-		}
+		// the local-idx -> global-id map as a match, NOT a const array: V const arrays need the
+		// runtime's _vinit, which a freestanding image never runs — the array would read junk.
 		g << ''
-		g << 'const trace_hids_${thr} = [${elems.join(', ')}]'
 		g << 'fn trace_fb_hook_${thr}(ctx voidptr, idx int, start_us u64, dt_us u64) {'
-		g << '\tC.trace_fb(trace_hids_${thr}[idx], start_us, u32(dt_us))'
+		g << '\thid := match idx {'
+		for li, h in hids[thr] or { []int{} } {
+			g << '\t\t${li} { u32(${h}) }'
+		}
+		g << '\t\telse { u32(0x3fff) } // unknown local idx — the 14-bit id space top'
+		g << '\t}'
+		g << '\tC.trace_fb(hid, start_us, u32(dt_us))'
 		g << '}'
 	}
 	return g

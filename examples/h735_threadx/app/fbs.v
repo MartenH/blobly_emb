@@ -2,103 +2,107 @@ module app
 
 import ports
 
-// Function blocks for the h735_app showcase — pure, portable handlers (no board or
-// osal calls), so the SAME ecu.toml + FBs generate both a host/sim build and the
-// bare-metal H735 target. Each is the usual shape: private state + a periodic handler
-// that is a pure function of its input ports to its output ports.
+// A "realistic" mixed-rate load for the multi-thread ThreadX target: three FB threads at
+// rate-monotonic priorities (fast 10 ms > mid 20 ms > slow 100 ms, comm above all of them),
+// so the trace's swimlane shows real preemption — the fast thread cutting into the mid/slow
+// burns, comm cutting into everything when a frame arrives.
 //
-// They exist to put a controllable, visible load on the core so the Loom's per-core
-// load measurement (loom.Scheduler.load_permille) has something to report over CAN —
-// watchable live in blobly_net.
+// Calibrated against THIS image's MEASURED throughput: ~183k LCG iters per ms (bench, FB trace
+// lane: burn(45k) -> 246 us — the standalone burn() compiles ~10x tighter than the old inline
+// loop, so calibrate against what the trace MEASURES, not what a previous image did). Budgets:
+//   fast : ~2.5 ms per 10 ms  (~25 %)  + a ~5.5 ms spike every ~0.6 s (the visible outlier)
+//   mid  : ~3.0 ms per 20 ms  (~15 %)
+//   slow : 1..4 ms per 100 ms (~1-4 %) — the Governor-swept, CAN-commandable burn
+// Total ~45 % with clear idle — half the core busy, half visibly free.
+pub const fast_iters = u32(450_000) // ~2.5 ms of a 10 ms period
+pub const fast_spike = u32(1_000_000) // ~5.5 ms: blows the period every spike_every runs
+pub const spike_every = u32(64) // one spike per ~0.6 s of fast runs
+pub const mid_iters = u32(550_000) // ~3 ms of a 20 ms period
+pub const slow_min = u32(180_000) // sweep floor: ~1 ms per 100 ms
+pub const slow_max = u32(730_000) // sweep peak: ~4 ms per 100 ms
+pub const slow_step = u32(20_000) // one step / 100 ms -> a slow, watchable sweep
 
-// Governor emits a triangle-wave work command (LCG iteration count) so the synthetic
-// load breathes up and down — in blobly_net you watch Load_Core0 rise and fall rather
-// than sit flat. One step per 100 ms; a full sweep takes ~10 s, slow relative to the
-// Loom's 1 s load-averaging window so the reported load tracks the command.
-//
-// Calibrated for a REALISTIC trace, not a saturated one — against THIS image's MEASURED
-// throughput: ~18.3k LCG iters per ms (bench: iters=48000 pinned over CAN -> 2624 us/dispatch,
-// via the FB trace lane). That is ~13x slower than h735_app's 240k/ms — a V->C build-flags
-// difference between the examples (open follow-up); tune the constants to what the trace
-// measured, so the swimlane shows a healthy breathing core with REAL idle gaps.
-pub const iters_min = u32(5_500) // breathing floor: ~300 us = ~30 % of the 1 ms slot
-pub const iters_max = u32(11_000) // breathing peak: ~600 us = ~60 % of the 1 ms slot
-pub const iters_step = u32(250) // one step / 100 ms -> a slow, watchable ~2 s sweep each way
-pub const iters_spike = u32(27_500) // ~1.5 ms: one visible overrun outlier every spike_every runs
-pub const spike_every = u32(512) // inject the spike every ~512 Load runs (~0.5 s)
+// burn spins the LCG `iters` times and returns the accumulator, so the work is observable
+// and the compiler can't elide the loop.
+fn burn(seed u32, iters u32) u32 {
+	mut a := seed
+	for _ in 0 .. iters {
+		a = a * 1664525 + 1013904223
+	}
+	return a
+}
 
-// Breathe between iters_min and iters_max (not down to 0), so the core stays a realistic
-// 60–80 % idle across the whole sweep — a healthy busy system, never pegged, never dead.
+// LoadFast: the 10 ms high-priority worker — it preempts everything below it. Every
+// spike_every-th run injects the one-off overrun the flight recorder exists to catch.
+pub struct LoadFast {
+pub mut:
+	acc u32 = 1
+	n   u32
+}
+
+pub fn (mut l LoadFast) on_10ms(inp ports.LoadFastIn, mut out ports.LoadFastOut) {
+	l.n++
+	mut iters := fast_iters
+	if l.n % spike_every == 0 {
+		iters = fast_spike
+	}
+	l.acc = burn(l.acc, iters)
+}
+
+// LoadMid: the 20 ms mid-priority worker — visibly sliced by LoadFast and comm.
+pub struct LoadMid {
+pub mut:
+	acc u32 = 1
+}
+
+pub fn (mut l LoadMid) on_20ms(inp ports.LoadMidIn, mut out ports.LoadMidOut) {
+	l.acc = burn(l.acc, mid_iters)
+}
+
+// Governor: the 100 ms low-priority controller — sweeps the slow burn between slow_min and
+// slow_max so the total load breathes; a host command (bus -> comm -> rx IOC -> here)
+// overrides the sweep, clamped to a safe range. code == 0 means "no command" -> sweep.
 pub struct Governor {
 pub mut:
-	iters  u32 = 48_000 // = iters_min: start mid-load, not idle
+	iters  u32 = 180_000 // = slow_min
 	rising bool = true
 }
 
 pub fn (mut g Governor) on_100ms(inp ports.GovernorIn, mut out ports.GovernorOut) {
-	// A host command (bus -> comm thread -> rx IOC -> here) overrides the breathing sweep: hold
-	// the commanded iteration count, clamped to a safe range, so `cansend` visibly drives the core
-	// load on CpuLoad. code == 0 (the IOC's initial/idle value) means "no command" -> sweep.
 	if inp.command.code != 0 {
 		mut c := inp.command.code
-		if c < iters_min {
-			c = iters_min
+		if c < slow_min {
+			c = slow_min
 		}
-		if c > iters_spike {
-			c = iters_spike
+		if c > slow_max {
+			c = slow_max
 		}
 		g.iters = c
 	} else if g.rising {
-		g.iters += iters_step
-		if g.iters >= iters_max {
-			g.iters = iters_max
+		g.iters += slow_step
+		if g.iters >= slow_max {
+			g.iters = slow_max
 			g.rising = false
 		}
 	} else {
-		g.iters -= iters_step
-		if g.iters <= iters_min {
-			g.iters = iters_min
+		g.iters -= slow_step
+		if g.iters <= slow_min {
+			g.iters = slow_min
 			g.rising = true
 		}
 	}
 	out.load_cmd.iters = g.iters
 }
 
-// Load is a compute-bound FB: it burns the commanded number of LCG rounds, consuming a
-// controllable slice of the core. That CPU time is exactly what the Loom accounts as
-// processor load. Most runs stay well inside the 1 ms slot (≥60 % idle); every
-// spike_every-th run injects a one-off ~550 us spike that exceeds [trace].trigger.
-// budget_us, so the flight recorder has a realistic rare anomaly to freeze around —
-// mostly-idle timeline with a single outlined overrun in the middle. The accumulator is
-// published as Workload so the work is observed and the compiler can't elide the loop.
-pub struct Load {
+// LoadSlow: the 100 ms low-priority burn (same thread as the Governor, so LoadCmd stays a
+// plain local cell — cross-thread signals are the IOC's job). Publishes its accumulator as
+// Workload so the work is observed on the bus.
+pub struct LoadSlow {
 pub mut:
 	acc u32 = 1
-	n   u32
 }
 
-pub fn (mut l Load) on_1ms(inp ports.LoadIn, mut out ports.LoadOut) {
-	l.n++
-	mut iters := inp.load_cmd.iters
-	if l.n % spike_every == 0 {
-		iters = iters_spike // periodic overrun: the trace trigger fires here
-	}
-	mut a := l.acc
-	for _ in 0 .. iters {
-		a = a * 1664525 + 1013904223
-	}
-	l.acc = a
-	out.workload.v = a
-}
-
-// Heartbeat is a cheap "I'm alive" FB — a periodic counter. Stands in for a real
-// low-rate application handler and proves the schedule keeps ticking even while the
-// Load FB is hammering the core.
-pub struct Heartbeat {
-pub mut:
-	ticks u32
-}
-
-pub fn (mut h Heartbeat) on_100ms(inp ports.HeartbeatIn, mut out ports.HeartbeatOut) {
-	h.ticks++
+pub fn (mut l LoadSlow) on_100ms(inp ports.LoadSlowIn, mut out ports.LoadSlowOut) {
+	l.acc = burn(l.acc, inp.load_cmd.iters)
+	out.workload.v = l.acc
 }

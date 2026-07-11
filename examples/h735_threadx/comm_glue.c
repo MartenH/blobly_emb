@@ -46,17 +46,39 @@ static TX_SEMAPHORE g_comm_sem;
  * thread keeps sending a stale value. Single-writer/single-reader scalars need no lock; volatile
  * is enough. The wait-free triple-buffer IOC replaces this when the target IOC layer lands
  * (6b-2b); V can't emit volatile globals, so it lives here as thin target glue for now. */
-static volatile unsigned short g_ld_pm, g_ld_100, g_ld_1s, g_ld_10s;
-static volatile unsigned g_ld_ovr;
-void load_pub(unsigned pm, unsigned p100, unsigned p1s, unsigned p10s, unsigned ovr) {
-    g_ld_pm = (unsigned short)pm; g_ld_100 = (unsigned short)p100;
-    g_ld_1s = (unsigned short)p1s; g_ld_10s = (unsigned short)p10s; g_ld_ovr = ovr;
+#define LOAD_SLOTS 4  /* one per FB thread (ecumodel caps threads at 4) */
+static volatile unsigned short g_ld_pm[LOAD_SLOTS], g_ld_100[LOAD_SLOTS],
+                               g_ld_1s[LOAD_SLOTS], g_ld_10s[LOAD_SLOTS];
+static volatile unsigned g_ld_ovr[LOAD_SLOTS];
+/* per-thread publisher: each FB thread owns ONE slot (single writer), comm sums them. */
+void load_pub_slot(int i, unsigned pm, unsigned p100, unsigned p1s, unsigned p10s, unsigned ovr) {
+    if (i < 0 || i >= LOAD_SLOTS) return;
+    g_ld_pm[i] = (unsigned short)pm; g_ld_100[i] = (unsigned short)p100;
+    g_ld_1s[i] = (unsigned short)p1s; g_ld_10s[i] = (unsigned short)p10s; g_ld_ovr[i] = ovr;
 }
-unsigned load_permille(void) { return g_ld_pm; }
-unsigned load_100ms(void)    { return g_ld_100; }
-unsigned load_1s(void)       { return g_ld_1s; }
-unsigned load_10s(void)      { return g_ld_10s; }
-unsigned load_overruns(void) { return g_ld_ovr; }
+/* single-thread compatibility: the historical API writes slot 0. */
+void load_pub(unsigned pm, unsigned p100, unsigned p1s, unsigned p10s, unsigned ovr) {
+    load_pub_slot(0, pm, p100, p1s, p10s, ovr);
+}
+static unsigned sum16(volatile unsigned short *a) {
+    unsigned s = 0;
+    for (int i = 0; i < LOAD_SLOTS; i++) s += a[i];
+    return s > 1000u ? 1000u : s; /* clamp: the threads share one core */
+}
+unsigned load_permille(void) { return g_ld_pm[0]; }
+unsigned load_100ms(void)    { return g_ld_100[0]; }
+unsigned load_1s(void)       { return g_ld_1s[0]; }
+unsigned load_10s(void)      { return g_ld_10s[0]; }
+unsigned load_overruns(void) { return g_ld_ovr[0]; }
+unsigned load_sum_permille(void) { return sum16(g_ld_pm); }
+unsigned load_sum_100ms(void)    { return sum16(g_ld_100); }
+unsigned load_sum_1s(void)       { return sum16(g_ld_1s); }
+unsigned load_sum_10s(void)      { return sum16(g_ld_10s); }
+unsigned load_sum_overruns(void) {
+    unsigned s = 0;
+    for (int i = 0; i < LOAD_SLOTS; i++) s += g_ld_ovr[i];
+    return s;
+}
 
 /* The exec-change trace hooks (trace_hooks.c). A C ISR isn't wrapped by the port's asm
  * __tx_IntHandler, so we bracket the handler with these to get it traced — the same calls the
