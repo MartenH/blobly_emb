@@ -272,6 +272,25 @@ That's it. `gen_trace.v` collapses from ~1000 lines of generated protocol to a
 handful of lines of config — "trace is a module routed at `0x712`, 64-entry ring,
 records on `0x7E5`." NM lands the same way with no new generator code.
 
+## Module ↔ module: calls, events, signals
+
+Endpoints cover the wire. When platform modules talk to *each other* on the ECU
+(the ECU manager driving NM, NM indicating "network down" back), the mechanism is
+picked by thread boundary and semantics — all three already exist in the
+architecture (see [architecture.md](architecture.md), "The management plane"):
+
+| interaction                              | mechanism               | why                                            |
+|------------------------------------------|-------------------------|------------------------------------------------|
+| same-thread module↔module (ecum ↔ nm)    | **direct call**         | both state machines run on the mode thread — `nm.request()` / `nm.release()`, no framework |
+| cross-thread event / request             | **mode mailbox** (SPSC ring) | requests must *queue*: a sleep-request burst must not overwrite a shutdown command |
+| cross-thread state (NmState for FBs/telem)| **signal / IOC**        | latest-value is the semantics — and it can be a declared `[[signal]]` |
+| anything over the wire                    | **endpoint binding**    | frames, routed                                 |
+
+The `ComModule` on the comm thread is a module's **bus adapter**, not its brain:
+NM's `pdu` rx posts an indication to the mode mailbox and `produce` sends what
+the state machine decided; the state machine itself runs on the mode tick next
+to ECU state. Same split trace has — hooks record, the module serves the bus.
+
 ## Why this is the fix, not another move
 
 Every earlier attempt (extract emitters, a `Producer` interface, relocate to
