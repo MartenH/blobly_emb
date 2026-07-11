@@ -145,10 +145,10 @@ fn validate_trace_threadx(m Model) {
 		// The exec-change hooks fire on BOTH context switches and ISR enter/exit unconditionally,
 		// so the stream is always exactly "thread+isr" — a "thread"-only or FB-inclusive level
 		// can't be honoured. Reject anything but the one level the hooks actually produce.
-		if m.trace.level != 'thread+isr' {
+		if m.trace.level !in ['thread+isr', 'all'] {
 			panic('loom2v: [target] kind="threadx" [trace].level "${m.trace.level}" is not producible — ' +
-				'the exec-change hooks always capture context switches AND ISRs (no thread-only, no ' +
-				'handler-level FB records) — use level = "thread+isr"')
+				'the exec-change hooks always capture context switches AND ISRs, and "all" adds the ' +
+				'FB records via the Loom hook — use level = "thread+isr" or "all"')
 		}
 		// Only the overwrite ring is implemented (trace_hooks.c has no oneshot/stop-when-full ring),
 		// and the generated stream re-snapshots every ~1 s. A "oneshot" request would silently get
@@ -190,10 +190,14 @@ fn trace_c_decls(m Model) []string {
 	if !m.trace.on {
 		return []string{}
 	}
-	return [
+	mut g := [
 		'fn C.trace_snapshot(voidptr, u32) u32',
 		'fn C.trace_arm()',
 	]
+	if m.trace.level == 'all' {
+		g << 'fn C.trace_fb(u32, u64, u32)'
+	}
+	return g
 }
 
 // trace_scratch_fields: the owner's stable snapshot buffer (a struct field of the comm state).
@@ -372,4 +376,31 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	g << '\t}'
 	g << '}'
 	return g
+}
+
+// trace_fb_hooks: the FB enter/exit family on the ThreadX target — a Loom trace hook that hands
+// each dispatched handler to the exec-hook recorder (trace_fb, IRQ-safe) so FB bars appear inside
+// the thread lanes. Emitted only for level = "all".
+fn trace_fb_hooks(m Model) []string {
+	if !(m.trace.on && m.trace.level == 'all') {
+		return []string{}
+	}
+	return [
+		'',
+		'fn trace_clock() u64 {',
+		'\treturn C.board_now_us()',
+		'}',
+		'',
+		'fn trace_fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {',
+		'\tC.trace_fb(u32(idx), start_us, u32(dt_us))',
+		'}',
+	]
+}
+
+// trace_fb_install: install the hook on the FB thread's scheduler (before its loop).
+fn trace_fb_install(m Model) []string {
+	if !(m.trace.on && m.trace.level == 'all') {
+		return []string{}
+	}
+	return ['\tsched.set_trace_hook(trace_fb_hook, unsafe { nil })']
 }
