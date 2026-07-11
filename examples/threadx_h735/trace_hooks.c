@@ -183,6 +183,16 @@ void _tx_execution_isr_exit(void)
  * owner then streams from its stable copy, so records can't be torn by new pushes and no
  * capture window is lost. Each 8-byte record is one classic CAN frame on the host side
  * (candump | decode_trace.py); blobly_net's ISO-TP swimlane is a later concern. */
+/* trace_arm(): start a fresh capture window — clear the ring under a brief freeze and resume
+ * recording. The command path (TraceCmd arm/start/reset routed to the trace module) calls this
+ * so "arm" means "from now", not "the last RING_CAP records of forever". */
+void trace_arm(void)
+{
+    g_capturing = 0;
+    g_head = 0;
+    g_capturing = 1;
+}
+
 unsigned trace_snapshot(unsigned char out[][8], unsigned max)
 {
     g_capturing = 0; /* freeze only for the copy below */

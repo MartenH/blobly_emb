@@ -96,6 +96,7 @@ fn specs() map[string]map[string]Key {
 			'cmd':            k(.id)
 			'rsp':            k(.id)
 			'record':         k(.id)
+			'dump_fc':        k(.id)
 			'trigger':        sub(.tbl, false, 'trigger')
 		}
 		'trigger':    {

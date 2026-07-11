@@ -49,7 +49,7 @@ pub fn run(chp can.Channel) {
 	// only feeds it: fb_hook records each dispatched handler, on_cmd applies routed commands,
 	// produce yields the response + dump stream.
 	mut ring := [64]trace.Record{}
-	mut tm := trace.new_module(u32(0x7e3), u32(0x7e5), 0,
+	mut tm := trace.new_module(u32(0x7e3), u32(0x7e5), 0, false,
 		trace.new_buffer(&ring[0], 64, .ring, 50))
 	mut cap := tm.capture(0, 500, osal.now_us())
 	sched.set_trace_hook(trace.fb_hook, &cap)
@@ -68,7 +68,7 @@ pub fn run(chp can.Channel) {
 				else {}
 			}
 		}
-		for ch.tx_ready() && tm.produce(mut txf) {
+		for ch.tx_ready() && tm.produce(loom_t1, mut txf) {
 			ch.send(txf)
 		}
 		now := osal.now_us()
