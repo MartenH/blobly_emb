@@ -37,11 +37,9 @@ buffer_records = 64
 mode           = "ring"
 pre_pct        = 50
 push_ms        = 0
-cmd_id         = 0x7E2
-rsp_id         = 0x7E3
-stat_id        = 0x7E4
-record_id      = 0x7E5
-dump_fc_id     = 0x7E6
+cmd            = 0x7E2
+rsp            = 0x7E3
+record         = 0x7E5
 trigger        = { source = "overrun", budget_us = 500 }
 
 # One app partition on its own core (core 1); the comm thread (can0 bridge) sits on core 0.
