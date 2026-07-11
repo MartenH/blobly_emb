@@ -68,7 +68,7 @@ for ch.recv(mut rx) {
     match rx.id {
         0x123 { /* signal Command -> its IOC cell */ }
         0x712 { tm.on_cmd(rx) }     // trace.cmd
-        0x714 { tm.on_fc(rx) }      // trace.dump_fc
+        0x714 { tm.on_dump_fc(rx) } // trace.dump_fc
         0x400 { nm.on_pdu(rx) }     // nm.pdu
         else {}
     }
@@ -93,6 +93,61 @@ What this buys, point by point:
 to="trace.cmd"` — work for rx but strand the tx ids in the module block anyway,
 splitting one module's ids across two config shapes. And DBC-only naming, since
 the raw record stream isn't a decodable message.)*
+
+## What the endpoint schema looks like
+
+The schema is **data owned by the platform module itself** — a `pub const` next
+to the code that serves it, which loom2v (a V program) imports. No generator-side
+table to drift from the module: the module *is* the table. One shared type
+(`comm/com`, since COM owns routing):
+
+```v
+pub enum Dir {
+    rx
+    tx
+    rxtx
+}
+
+pub struct Endpoint {
+pub:
+    name string
+    dir  Dir
+    doc  string
+}
+```
+
+Each module declares its ports:
+
+```v
+// comm/trace/module.v
+pub const endpoints = [
+    com.Endpoint{name: 'cmd',     dir: .rx, doc: 'TraceCmd control'},
+    com.Endpoint{name: 'dump_fc', dir: .rx, doc: 'ISO-TP flow control for the dump'},
+    com.Endpoint{name: 'rsp',     dir: .tx, doc: 'command response'},
+    com.Endpoint{name: 'record',  dir: .tx, doc: 'raw records / dump stream'},
+    com.Endpoint{name: 'stat',    dir: .tx, doc: 'HandlerStat heartbeat'},
+]
+
+// comm/nm — same shape, nothing module-specific in the mechanism
+pub const endpoints = [
+    com.Endpoint{name: 'pdu', dir: .rxtx, doc: 'NM PDU (hears and sends on one id)'},
+]
+```
+
+The rx convention is mechanical — endpoint `x` is served by method `on_x` — so
+loom2v, importing the const:
+
+- **validates** the `[trace]` block's keys against it (unknown endpoint or an
+  unbound rx endpoint is a clear generation error listing the valid names),
+- **emits** one match arm per bound rx endpoint (`0x714 { tm.on_dump_fc(rx) }`),
+- **passes tx bindings into the constructor** (`trace.new_module(rsp_id: ...,
+  record_id: ...)`) — tx endpoints are config the module stamps on its output;
+  an `rxtx` endpoint simply gets both.
+
+Runtime cost: zero — the const is generator input, the target never iterates it;
+dispatch stays the generated static match. And drift is self-catching twice:
+config↔schema drift fails generation, schema↔code drift (an endpoint without its
+`on_<name>` method) fails to V-compile in the generated output.
 
 ## The COM-module interface (platform, written once)
 
