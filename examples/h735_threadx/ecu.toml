@@ -92,7 +92,7 @@ bus            = "can0"
 level          = "thread+isr"
 buffer_records = 64
 mode           = "ring"
-record_id      = 0x7E5
+record         = 0x7E5
 
 [target]
 kind    = "threadx"

@@ -1,16 +1,40 @@
 module trace
 
+import comm.com
 import driver.can
 
 // TraceModule makes trace an ordinary bus client (see docs/com-modules.md): it owns a capture ring,
-// claims its command frame id, applies routed commands through the existing handle_cmd primitive, and
-// produces the response + record stream. This is the interface every capability shares — trace, NM,
-// telemetry all look like {claims, on_rx, produce}; the bus owner iterates them and names none.
-//
-// This file lands the CONTROL path (routing -> handle_cmd -> pending response). The record/dump
-// streaming is produce()'s remaining job; kept small on purpose, since handle_cmd already is the logic.
+// applies routed commands through the existing handle_cmd primitive, and produces the response +
+// record stream. The generator routes frames straight to the endpoint handlers (the mechanical
+// `on_<endpoint>` convention) — the module never inspects ids; where each port rides on the wire is
+// the ecu.toml binding's business.
+
+// The endpoint schema: this module's wire ports. Declared as data so the generator can validate the
+// ecu.toml [trace] bindings against it and emit the router match. These are the ports the CODE serves
+// today; the ISO-TP block dump (`dump_fc` rx) and the HandlerStat heartbeat (`stat` tx) join the list
+// when they move in from the old generated protocol.
+pub const endpoints = [
+	com.Endpoint{
+		name: 'cmd'
+		dir:  .rx
+		dlc:  8
+		doc:  'TraceCmd control (arm/stop/reset/dump/status)'
+	},
+	com.Endpoint{
+		name: 'rsp'
+		dir:  .tx
+		dlc:  8
+		doc:  'command response'
+	},
+	com.Endpoint{
+		name: 'record'
+		dir:  .tx
+		dlc:  8
+		doc:  'raw records — the dump stream'
+	},
+]
+
 pub struct TraceModule {
-	cmd_id    u32
 	rsp_id    u32
 	record_id u32
 	core      u8
@@ -22,9 +46,8 @@ mut:
 	dump_pos u32 // next record_at() index while a dump streams
 }
 
-pub fn new_module(cmd_id u32, rsp_id u32, record_id u32, core u8, buf TraceBuffer) TraceModule {
+pub fn new_module(rsp_id u32, record_id u32, core u8, buf TraceBuffer) TraceModule {
 	return TraceModule{
-		cmd_id:    cmd_id
 		rsp_id:    rsp_id
 		record_id: record_id
 		core:      core
@@ -32,16 +55,11 @@ pub fn new_module(cmd_id u32, rsp_id u32, record_id u32, core u8, buf TraceBuffe
 	}
 }
 
-// claims reports whether a frame id routes to this module (the routing table dispatches on it).
-pub fn (m TraceModule) claims(id u32) bool {
-	return id == m.cmd_id
-}
-
-// on_rx applies a routed command frame to our ring via handle_cmd, stashing the response for the next
-// produce() and remembering whether a dump was armed.
-pub fn (mut m TraceModule) on_rx(f can.Frame) {
-	if f.id != m.cmd_id {
-		return
+// on_cmd serves the `cmd` endpoint: apply a routed command frame to our ring via handle_cmd,
+// stashing the response for the next produce() and remembering whether a dump was armed.
+pub fn (mut m TraceModule) on_cmd(f can.Frame) {
+	if f.len < 8 {
+		return // short frame on the wire — never decode stale bytes
 	}
 	mut b := [8]u8{}
 	for i in 0 .. 8 {

@@ -81,11 +81,9 @@ buffer_records = 64
 mode           = "ring"
 pre_pct        = 50
 push_ms        = 1000        # live HandlerStat heartbeat
-cmd_id         = 0x7E2
-rsp_id         = 0x7E3
-stat_id        = 0x7E4
-record_id      = 0x7E5       # ISO-TP dump data (target -> host)
-dump_fc_id     = 0x7E6       # ISO-TP flow control (host -> target)
+cmd            = 0x7E2
+rsp            = 0x7E3
+record         = 0x7E5       # ISO-TP dump data (target -> host)
 trigger        = { source = "overrun", budget_us = 500 }
 
 [target]
