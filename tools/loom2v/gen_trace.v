@@ -284,7 +284,7 @@ fn trace_manifest_timer_row(m Model, tid int) []string {
 	if !(m.target.threadx && m.trace.on) {
 		return []string{}
 	}
-	return ['thread,${tid},tx_system_timer,0']
+	return ['thread,${tid},tx_system_timer,0,0'] // TX_TIMER_THREAD_PRIORITY = 0: the HIGHEST — it just runs only when a tick expires a timer
 }
 
 // trace_manifest_frames: the observability frame ids blobly_net decodes natively — the module

@@ -67,6 +67,7 @@ fn C._tx_initialize_kernel_enter()
 fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32
 fn C.trace_snapshot(voidptr, u32) u32
 fn C.trace_arm()
+fn C.trace_bind_thread(voidptr)
 fn C.trace_fb(u32, u64, u32)
 
 fn trace_clock() u64 {
@@ -293,6 +294,10 @@ fn tx_application_define(first_unused voidptr) {
 		&g_ctrl_slow_stack[0], u32(g_ctrl_slow_stack.len), u32(13), u32(13), u32(0), u32(1))
 	C._tx_thread_create(&g_comm_tcb[0], c'comm', comm_thread_entry, u32(0),
 		&g_comm_stack[0], u32(g_comm_stack.len), u32(10), u32(10), u32(0), u32(1))
+	C.trace_bind_thread(&g_comm_tcb[0])
+	C.trace_bind_thread(&g_load_fast_tcb[0])
+	C.trace_bind_thread(&g_load_mid_tcb[0])
+	C.trace_bind_thread(&g_ctrl_slow_tcb[0])
 }
 
 // boot: hand control to the ThreadX kernel (never returns; calls
