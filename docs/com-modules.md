@@ -112,6 +112,7 @@ pub struct Endpoint {
 pub:
     name string
     dir  Dir
+    dlc  u8 // payload bytes this endpoint sends/expects (0 = flexible)
     doc  string
 }
 ```
@@ -121,16 +122,16 @@ Each module declares its ports:
 ```v
 // comm/trace/module.v
 pub const endpoints = [
-    com.Endpoint{name: 'cmd',     dir: .rx, doc: 'TraceCmd control'},
-    com.Endpoint{name: 'dump_fc', dir: .rx, doc: 'ISO-TP flow control for the dump'},
-    com.Endpoint{name: 'rsp',     dir: .tx, doc: 'command response'},
-    com.Endpoint{name: 'record',  dir: .tx, doc: 'raw records / dump stream'},
-    com.Endpoint{name: 'stat',    dir: .tx, doc: 'HandlerStat heartbeat'},
+    com.Endpoint{name: 'cmd',     dir: .rx, dlc: 8, doc: 'TraceCmd control'},
+    com.Endpoint{name: 'dump_fc', dir: .rx, dlc: 8, doc: 'ISO-TP flow control for the dump'},
+    com.Endpoint{name: 'rsp',     dir: .tx, dlc: 8, doc: 'command response'},
+    com.Endpoint{name: 'record',  dir: .tx, dlc: 8, doc: 'raw records / dump stream'},
+    com.Endpoint{name: 'stat',    dir: .tx, dlc: 8, doc: 'HandlerStat heartbeat'},
 ]
 
 // comm/nm — same shape, nothing module-specific in the mechanism
 pub const endpoints = [
-    com.Endpoint{name: 'pdu', dir: .rxtx, doc: 'NM PDU (hears and sends on one id)'},
+    com.Endpoint{name: 'pdu', dir: .rxtx, dlc: 8, doc: 'NM PDU (hears and sends on one id)'},
 ]
 ```
 
@@ -148,6 +149,30 @@ Runtime cost: zero — the const is generator input, the target never iterates i
 dispatch stays the generated static match. And drift is self-catching twice:
 config↔schema drift fails generation, schema↔code drift (an endpoint without its
 `on_<name>` method) fails to V-compile in the generated output.
+
+## Sizes and transports: what must match, and where it's checked
+
+**Segmented transports (ISO-TP) are seamless by construction** — segmentation is
+*inside* the module, invisible to COM. The trace dump owns an `isotp.Link`:
+inbound flow control routes to `on_dump_fc` (just a frame), and `produce` hands
+out whatever the link yields next (just frames on `record`). COM moves frames;
+it never knows a "block" exists. Nothing transport-shaped is needed in the
+schema or the router — the wire-visible things are already ports.
+
+**Frame sizes must match, at three layers** (the repo's existing pattern:
+validate at generation, guard at runtime):
+
+1. **Binding vs DBC** — the endpoint's `dlc` is checked against the bound DBC
+   message's DLC at generation: `cmd = "TraceCmd"` with a 4-byte TraceCmd fails
+   with a clear error, not on the bench. (Literal-id bindings have no DBC to
+   check; the module stamps the schema's `dlc` on what it sends.)
+2. **Bus vs module** — `[bus.canX] fd` already declares the MTU (8 / 64); the
+   generator passes it to the module constructor so ISO-TP framing and stream
+   `len` adapt. (Later, free win: an FD bus can batch 8 records per 64-byte
+   `record` frame.)
+3. **Wire vs handler** — `recv` copies only the bytes that arrived, so rx
+   handlers keep their `f.len` guard regardless (same convention as signal
+   decode: never read stale bytes off a short frame).
 
 ## The COM-module interface (platform, written once)
 
