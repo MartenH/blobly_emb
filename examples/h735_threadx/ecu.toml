@@ -21,8 +21,16 @@ core    = 0
 trusted = true
 
   [[partition.thread]]
-  name     = "app_main"
-  priority = 10
+  name     = "load_fast"
+  priority = 11
+
+  [[partition.thread]]
+  name     = "load_mid"
+  priority = 12
+
+  [[partition.thread]]
+  name     = "ctrl_slow"
+  priority = 13
 
 [[signal]]
 name = "LoadCmd"
@@ -51,8 +59,22 @@ to   = "app"
 transport = "double"
 
 [[fb]]
+name      = "LoadFast"
+thread    = "load_fast"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+
+[[fb]]
+name      = "LoadMid"
+thread    = "load_mid"
+  [[fb.handler]]
+  name      = "on_20ms"
+  period_ms = 20
+
+[[fb]]
 name      = "Governor"
-thread    = "app_main"
+thread    = "ctrl_slow"
   [[fb.handler]]
   name      = "on_100ms"
   period_ms = 100
@@ -60,20 +82,13 @@ thread    = "app_main"
   writes    = ["LoadCmd"]
 
 [[fb]]
-name      = "Load"
-thread    = "app_main"
-  [[fb.handler]]
-  name      = "on_1ms"
-  period_ms = 1
-  reads     = ["LoadCmd"]
-  writes    = ["Workload"]
-
-[[fb]]
-name      = "Heartbeat"
-thread    = "app_main"
+name      = "LoadSlow"
+thread    = "ctrl_slow"
   [[fb.handler]]
   name      = "on_100ms"
-  period_ms = 100 # timer-only handler (this trailing comment terminates the [[fb.handler]] array parse)
+  period_ms = 100
+  reads     = ["LoadCmd"]
+  writes    = ["Workload"] # trailing comment terminates the nested [[fb.handler]] parse (vlang/v#27684)
 
 [telemetry]
 enabled   = true
