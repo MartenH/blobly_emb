@@ -77,7 +77,17 @@ pub fn (mut m TraceModule) on_cmd(f can.Frame) {
 	for i in 0 .. 8 {
 		b[i] = f.data[i]
 	}
-	rsp, do_dump, has := handle_cmd(mut m.buf, decode_cmd(b), m.core)
+	mut rsp, do_dump, has := handle_cmd(mut m.buf, decode_cmd(b), m.core)
+	if do_dump && m.use_isotp && m.link.busy() {
+		// the previous dump is still streaming — answer BUSY instead of silently dropping the
+		// request (link.send would fail); the host drains/waits and retries.
+		rsp[1] = result_busy
+		if has {
+			m.rsp = rsp
+			m.rsp_due = true
+		}
+		return
+	}
 	if has {
 		m.rsp = rsp
 		m.rsp_due = true

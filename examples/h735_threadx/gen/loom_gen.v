@@ -212,7 +212,8 @@ fn comm_thread_entry(input u32) {
 	mut last_tx_workload := u64(0)
 	mut rx := can.Frame{}
 	for {
-		C.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame
+		wait_ticks := if g_tm.is_dumping() { u32(1) } else { u32(10) }
+		C.comm_rx_wait(wait_ticks) // the FDCAN Rx ISR wakes us early on a new frame
 		// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame
 		for ch.recv(mut rx) {
 			if rx.id == u32(0x123) && rx.len == 4 { // cmd_frame
