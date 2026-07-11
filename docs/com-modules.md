@@ -15,20 +15,84 @@ routing table — the same as NM, the same as everything.
 ## The one generalisation: routes terminate at a signal *or* a module
 
 Today `ecu.toml` routes `frame → signal → IOC cell`. We add `frame → module` as a
-first-class route. The **routing table is the single source of truth**: every id
-in the config points at a signal or a module, by id (`0x712`) or by DBC name.
+first-class routing destination: an inbound id can be delivered to a platform
+module instead of decoded into a signal. Nothing about "trace" is special to the
+router — it wires any module the same way.
+
+But a module is not *one* id. Trace alone has five logical ports — `cmd` (rx),
+`dump_fc` (rx), `rsp` (tx), `record` (tx), `stat` (tx) — and a bare
+`0x712 → trace` route leaves two problems: the module would have to re-inspect
+ids to tell `cmd` from `dump_fc` (the hand-tailoring back through the back door),
+and the tx ids can't live in routes at all (a route is inherently bus→inward;
+`rsp`/`record` are outbound). So the authored form is a **binding**, below; the
+frame→module *routes* are generated from the rx bindings.
+
+## Endpoint bindings: direction is declared, ids appear once
+
+Each module's **endpoint schema** — its port names and their directions — is fixed
+in the platform, part of the module itself:
+
+| module | endpoint  | dir | meaning                                   |
+|--------|-----------|-----|-------------------------------------------|
+| trace  | `cmd`     | rx  | TraceCmd control frame → `on_cmd`         |
+| trace  | `dump_fc` | rx  | ISO-TP flow control for the dump          |
+| trace  | `rsp`     | tx  | command response                          |
+| trace  | `record`  | tx  | raw records / dump stream                 |
+| trace  | `stat`    | tx  | HandlerStat heartbeat                     |
+| nm     | `pdu`     | rx+tx | NM hears and sends on the same id       |
+| telem  | `cpuload` | tx  | CpuLoad                                   |
+| telem  | `detail`  | tx  | LoadDetail                                |
+
+`ecu.toml` **binds** each endpoint to a frame — a `bus.dbc` message name (the id
+authority, same as signals) or a literal id — in the module's own block, so one
+module's whole wire footprint sits in one place:
 
 ```toml
-# frame -> signal (today): decoded into an IOC cell
-[[route]]  id = 0x123  to = "Command"        # a signal
+[trace]
+bus     = "can0"
+cmd     = "TraceCmd"   # rx: becomes a generated router entry
+dump_fc = "TraceFc"    # rx
+rsp     = "TraceRsp"   # tx: the module stamps outbound frames with this id
+record  = 0x7E5        # tx: literal id (the raw stream isn't a decodable DBC message)
 
-# frame -> module (new): delivered to the module's on_rx
-[[route]]  id = 0x712  to = "trace"          # the trace control frame
-[[route]]  id = 0x400  to = "nm"             # an NM frame
+[nm]
+bus = "can0"
+pdu = 0x400            # rx+tx per the schema — COM knows the direction from the endpoint
 ```
 
-Nothing about `to = "trace"` is trace-specific. The generator sees a route whose
-destination is a module and wires it the same way for any module.
+The router loom2v generates is one match over **all** rx bindings — signals and
+module endpoints alike — dispatching straight to the endpoint handler:
+
+```v
+for ch.recv(mut rx) {
+    match rx.id {
+        0x123 { /* signal Command -> its IOC cell */ }
+        0x712 { tm.on_cmd(rx) }     // trace.cmd
+        0x714 { tm.on_fc(rx) }      // trace.dump_fc
+        0x400 { nm.on_pdu(rx) }     // nm.pdu
+        else {}
+    }
+}
+```
+
+What this buys, point by point:
+
+- **Ids appear once** — the binding. No `[[route]]` entry duplicating an id the
+  module also has to know.
+- **Direction is declared, not hand-tailored** — the schema says `cmd` is inbound
+  and `rsp` is outbound; COM acts on the declaration, the generator emits nothing
+  capability-specific.
+- **The module never inspects ids** — the generated match calls `on_cmd`/`on_fc`
+  directly (static dispatch, no-alloc, no interface table on target). The id → 
+  endpoint mapping the old code hand-wove is now a config-driven table entry.
+- **The "one routing table" survives as a generated artifact** — the manifest
+  lists every id with its destination (signal or `module.endpoint`), so the
+  at-a-glance view exists without the config duplicating itself.
+
+*(Considered and rejected: endpoint-qualified routes — `[[route]] id=0x712
+to="trace.cmd"` — work for rx but strand the tx ids in the module block anyway,
+splitting one module's ids across two config shapes. And DBC-only naming, since
+the raw record stream isn't a decodable message.)*
 
 ## The COM-module interface (platform, written once)
 
@@ -93,7 +157,7 @@ loop — neither of which is trace-specific.
 - the trace owner logic (dump streaming, multi-core coordination) *inside* `TraceModule`.
 
 **loom2v generates** (the same generation for every module):
-- the **routing table** from `ecu.toml` (id → signal | module),
+- the **router match** from the rx bindings (id → signal | `module.endpoint`),
 - entity-id / ring-size / scratch-cell **assignment**,
 - **registration**: instantiate each configured module, hand it its config, add it
   to the comm thread's module list,
