@@ -16,15 +16,15 @@ import ports
 // than sit flat. One step per 100 ms; a full sweep takes ~10 s, slow relative to the
 // Loom's 1 s load-averaging window so the reported load tracks the command.
 //
-// Calibrated for a REALISTIC trace, not a saturated one: on the H735 (-Os) the load is
-// linear at ~240k LCG iters per full 1 ms slot. iters_max = 96k keeps the Load handler
-// at ≤~40 % of its slot, so the core sits at ≥60 % idle across the whole sweep — a
-// healthy system, not a pegged one. The one anomaly is a periodic SPIKE injected by the
-// Load handler (see below), not a sustained overload.
-pub const iters_min = u32(48_000) // breathing floor: ~20 % of the 1 ms slot (~80 % idle)
-pub const iters_max = u32(96_000) // breathing peak: ~40 % of the 1 ms slot (~60 % idle)
-pub const iters_step = u32(2_000) // one step / 100 ms -> a slow, watchable sweep
-pub const iters_spike = u32(132_000) // ~550 us: one slow run, just past the 500 us trace budget
+// Calibrated for a REALISTIC trace, not a saturated one — against THIS image's MEASURED
+// throughput: ~18.3k LCG iters per ms (bench: iters=48000 pinned over CAN -> 2624 us/dispatch,
+// via the FB trace lane). That is ~13x slower than h735_app's 240k/ms — a V->C build-flags
+// difference between the examples (open follow-up); tune the constants to what the trace
+// measured, so the swimlane shows a healthy breathing core with REAL idle gaps.
+pub const iters_min = u32(5_500) // breathing floor: ~300 us = ~30 % of the 1 ms slot
+pub const iters_max = u32(11_000) // breathing peak: ~600 us = ~60 % of the 1 ms slot
+pub const iters_step = u32(250) // one step / 100 ms -> a slow, watchable ~2 s sweep each way
+pub const iters_spike = u32(27_500) // ~1.5 ms: one visible overrun outlier every spike_every runs
 pub const spike_every = u32(512) // inject the spike every ~512 Load runs (~0.5 s)
 
 // Breathe between iters_min and iters_max (not down to 0), so the core stays a realistic
