@@ -222,6 +222,7 @@ void trace_arm(void)
 
 unsigned trace_snapshot(unsigned char out[][8], unsigned max)
 {
+    int was = g_capturing;
     g_capturing = 0; /* freeze only for the copy below */
     unsigned total = g_head;
     unsigned n = total > RING_CAP ? RING_CAP : total;
@@ -233,6 +234,14 @@ unsigned trace_snapshot(unsigned char out[][8], unsigned max)
     for (unsigned i = 0; i < n; i++)
         for (int j = 0; j < 8; j++)
             out[i][j] = g_ring[(start + i) & (RING_CAP - 1u)][j];
-    g_capturing = 1; /* re-arm immediately — recording resumes for the whole stream */
+    g_capturing = was; /* restore — a FROZEN recorder (trace_freeze) stays frozen, so repeated
+                        * snapshots of a stopped window are IDENTICAL; a running one resumes. */
     return n;
+}
+
+/* trace_freeze(): stop recording until the next trace_arm() — the command path's op_stop.
+ * With the recorder frozen, stop+dump is idempotent: every dump re-reads the SAME window. */
+void trace_freeze(void)
+{
+    g_capturing = 0;
 }
