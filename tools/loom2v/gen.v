@@ -595,7 +595,7 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 			}
 		}
 	}
-	man << '# threads: thread,id,name,core  (id 0 reserved = idle)'
+	man << '# threads: thread,id,name,core,prio  (id 0 reserved = idle; prio - = no RTOS prio)'
 	mut tid := 1
 	// ThreadX comm thread (phase 6b-2): AUTO_START at priority 1 — strictly higher than the FB
 	// thread and above the still-suspended system timer thread — so at kernel entry it is the
@@ -603,13 +603,29 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	// thread takes id 1, ahead of the app thread (id 2) and the timer (id 3). Emit it first to
 	// match that observed order, else its records are mislabelled / shift the other lanes.
 	if comm_thread_on {
-		man << 'thread,${tid},comm,${m.part.core_of[single_part] or { 0 }}'
+		// comm's priority is derived in the target emit (min(app) - 1, or the historical 1 for a
+		// single-thread config) — recompute it here so the manifest can show it.
+		mut mp := 32
+		for _, thrs in m.part.threads_of {
+			for thr in thrs {
+				pr := m.part.thread_prio[thr] or { 10 }
+				if pr < mp {
+					mp = pr
+				}
+			}
+		}
+		mut nthr := 0
+		for _, thrs in m.part.threads_of {
+			nthr += thrs.len
+		}
+		cp := if nthr > 1 { mp - 1 } else { 1 }
+		man << 'thread,${tid},comm,${m.part.core_of[single_part] or { 0 }},${cp}'
 		tid++
 	}
 	for p in ecumodel.toml_arr(doc, 'partition') {
 		pname := (p.as_map()['name'] or { toml.Any('') }).string()
 		for tname in m.part.threads_of[pname] {
-			man << 'thread,${tid},${tname},${m.part.core_of[pname]}' // name = the globally-unique thread name
+			man << 'thread,${tid},${tname},${m.part.core_of[pname]},${m.part.thread_prio[tname] or { 10 }}' // name = the globally-unique thread name
 			tid++
 		}
 	}
@@ -619,7 +635,7 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	// Comm threads (P3b): one per bridge bus, AFTER the app threads (matches the gate's comm_tid
 	// numbering).
 	for bb in bridge_bus_list {
-		man << 'thread,${tid},comm_${bb},${m.bus_core[bb] or { 0 }}'
+		man << 'thread,${tid},comm_${bb},${m.bus_core[bb] or { 0 }},-' // host threads: no RTOS prio
 		tid++
 	}
 	man << trace_manifest_frames(m)
