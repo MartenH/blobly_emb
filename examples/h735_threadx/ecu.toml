@@ -89,7 +89,7 @@ period_ms = 500
 [trace]
 enabled        = true
 bus            = "can0"
-level          = "thread+isr"
+level          = "all"
 buffer_records = 64
 mode           = "ring"
 cmd            = 0x7E2

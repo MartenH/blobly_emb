@@ -13,6 +13,7 @@
 
 #define KIND_ISR       0u
 #define KIND_THREAD    1u
+#define KIND_FB        2u
 #define REASON_PREEMPT 0u
 #define REASON_BLOCK   1u
 #define REASON_YIELD   2u
@@ -183,6 +184,20 @@ void _tx_execution_isr_exit(void)
  * owner then streams from its stable copy, so records can't be torn by new pushes and no
  * capture window is lost. Each 8-byte record is one classic CAN frame on the host side
  * (candump | decode_trace.py); blobly_net's ISO-TP swimlane is a later concern. */
+/* trace_fb(): an FB-handler interval from the app thread's Loom hook. The ring is otherwise
+ * written from ISR/scheduler context, so a thread-context push must not be torn by a preempting
+ * ISR push — briefly mask interrupts around it (a few dozen cycles, same as board_now_us). */
+void trace_fb(unsigned id, unsigned long long start_us, unsigned dur_us)
+{
+    /* start_us is a 64-bit us timestamp: on AAPCS32 it rides r2:r3 (r1 skipped for alignment)
+     * and dur lands on the stack — the prototype must be 64-bit or every arg after id is junk. */
+    unsigned pm;
+    __asm volatile("mrs %0, primask" : "=r"(pm));
+    __asm volatile("cpsid i" ::: "memory");
+    push_rec(KIND_FB, id, 0u, (unsigned long)start_us, dur_us > 0xFFFFu ? 0xFFFFu : dur_us);
+    __asm volatile("msr primask, %0" :: "r"(pm) : "memory");
+}
+
 /* trace_arm(): start a fresh capture window — clear the ring under a brief freeze and resume
  * recording. The command path (TraceCmd arm/start/reset routed to the trace module) calls this
  * so "arm" means "from now", not "the last RING_CAP records of forever". */
