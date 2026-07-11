@@ -8,6 +8,4 @@ thread,1,app_main,0
 # trace frames: frame,id,bus
 cmd,0x7e2,can0
 rsp,0x7e3,can0
-stat,0x7e4,can0
 record,0x7e5,can0
-dump_fc,0x7e6,can0

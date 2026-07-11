@@ -259,15 +259,92 @@ fn trace_manifest_timer_row(m Model, tid int) []string {
 	return ['thread,${tid},tx_system_timer,0']
 }
 
-// trace_manifest_frames: the observability frame ids blobly_net decodes natively. The ThreadX
-// target streams ONLY raw records — advertise exactly what it sends.
-fn trace_manifest_frames(m Model) []string {
+// trace_manifest_frames: the observability frame ids blobly_net decodes natively — exactly what
+// each shape actually sends: the ThreadX target streams only raw records; the host module also
+// serves the TraceCmd/TraceRsp pair.
+fn trace_manifest_frames(m Model, trace_host bool) []string {
 	if !m.trace.on {
 		return []string{}
 	}
 	tbus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
-	return [
-		'# trace frames: frame,id,bus',
-		'record,0x${m.trace.record_id.hex()},${tbus}',
-	]
+	mut rows := ['# trace frames: frame,id,bus']
+	if trace_host {
+		rows << 'cmd,0x${m.trace.cmd_id.hex()},${tbus}'
+		rows << 'rsp,0x${m.trace.rsp_id.hex()},${tbus}'
+	}
+	rows << 'record,0x${m.trace.record_id.hex()},${tbus}'
+	return rows
+}
+
+// emit_run_trace_host emits the single-core host run(ch) for a traced app: ONE loop owns the bus
+// and the schedule, so the FB hook, the module's ring, and the bus side share a thread (no locks,
+// single owner). The trace protocol itself is comm/trace's TraceModule — this only WIRES it: build
+// the ring from config, install the platform fb_hook, route the cmd binding to on_cmd (the
+// generated router match, docs/com-modules.md), drain produce, and send CpuLoad inline.
+fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string, part string) []string {
+	if m.trace.level != 'fb' {
+		panic('loom2v: [trace] level "${m.trace.level}" is not generated for the host module runner — ' +
+			'it captures FB records via the Loom hook (level = "fb"); thread spans are the follow-up')
+	}
+	mode := if m.trace.mode == 'oneshot' { '.oneshot' } else { '.ring' }
+	telem_on := m.telem.on && telem_iface != ''
+	mut g := []string{}
+	g << ''
+	g << 'pub fn run(chp can.Channel) {'
+	g << '\tosal.pin_to_core(${m.bus_core[m.trace.bus] or { 0 }})'
+	g << '\tmut ch := chp'
+	g << '\tmut st := Partition_${part}_state{}'
+	g << '\tmut sched := loom.Scheduler{}'
+	for r in all_regs[part] or { []string{} } {
+		g << r
+	}
+	g << '\t// trace: the ring + module (comm/trace) — the platform serves the protocol, this loop'
+	g << '\t// only feeds it: fb_hook records each dispatched handler, on_cmd applies routed commands,'
+	g << '\t// produce yields the response + dump stream.'
+	g << '\tmut ring := [${m.trace.buffer_records}]trace.Record{}'
+	g << '\tmut tm := trace.new_module(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), 0,'
+	g << '\t\ttrace.new_buffer(&ring[0], ${m.trace.buffer_records}, ${mode}, ${m.trace.pre_pct}))'
+	g << '\tmut cap := tm.capture(0, ${m.trace.budget_us}, osal.now_us())'
+	g << '\tsched.set_trace_hook(trace.fb_hook, &cap)'
+	if telem_on {
+		g << '\tmut last_telem := u64(0)'
+	}
+	g << '\tmut rx := can.Frame{}'
+	g << '\tmut txf := can.Frame{}'
+	g << '\tfor {'
+	g << '\t\tloom_t0 := osal.now_us()'
+	g << '\t\tsched.run_profiled(osal.now_us)'
+	g << '\t\tloom_t1 := osal.now_us()'
+	g << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
+	g << '\t\t// the generated router match: each rx binding dispatches to its endpoint handler'
+	g << '\t\tfor ch.recv(mut rx) {'
+	g << '\t\t\tmatch rx.id {'
+	g << '\t\t\t\tu32(0x${m.trace.cmd_id.hex()}) { tm.on_cmd(rx) } // trace.cmd'
+	g << '\t\t\t\telse {}'
+	g << '\t\t\t}'
+	g << '\t\t}'
+	g << '\t\tfor ch.tx_ready() && tm.produce(mut txf) {'
+	g << '\t\t\tch.send(txf)'
+	g << '\t\t}'
+	if telem_on {
+		g << '\t\tnow := osal.now_us()'
+		g << '\t\tif now - last_telem >= ${m.telem.period_us} {'
+		g << '\t\t\tlast_telem = now'
+		g << '\t\t\tmut load := [8]u16{}'
+		g << '\t\t\tload[0] = u16(sched.load_permille())'
+		g << '\t\t\tframe := telem.encode_cpuload(load, 1)'
+		g << '\t\t\tmut cf := can.Frame{'
+		g << '\t\t\t\tid:  u32(0x${m.telem.id.hex()})'
+		g << '\t\t\t\tlen: 8'
+		g << '\t\t\t}'
+		g << '\t\t\tfor j in 0 .. 8 {'
+		g << '\t\t\t\tcf.data[j] = frame[j]'
+		g << '\t\t\t}'
+		g << '\t\t\tch.send(cf)'
+		g << '\t\t}'
+	}
+	g << '\t\tosal.sleep_us(1000)'
+	g << '\t}'
+	g << '}'
+	return g
 }
