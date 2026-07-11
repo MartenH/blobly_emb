@@ -14,19 +14,23 @@ module main
 import os
 import toml
 import tools.candb
+import comm.trace
 
-// TraceCfg is the parsed [trace] block. Ids default to the docs/telemetry.md convention; sw_keys
-// records which software-packer-only keys were set EXPLICITLY (so the ThreadX exec-hook path can
-// reject them without rejecting a bare config).
+// The [trace] config keys that are NOT endpoint bindings. Everything else in the block must be
+// an endpoint name from comm.trace's schema — anything unknown fails generation.
+const trace_config_keys = ['enabled', 'bus', 'level', 'mode', 'buffer_records', 'pre_pct',
+	'push_ms', 'trigger']
+
+// TraceCfg is the parsed [trace] block. Endpoint ids default to the docs/telemetry.md convention;
+// sw_keys records which software-packer-only keys were set EXPLICITLY (so the ThreadX exec-hook
+// path can reject them without rejecting a bare config).
 struct TraceCfg {
 mut:
 	on             bool
 	bus            string
 	cmd_id         u32 = 0x7E2
 	rsp_id         u32 = 0x7E3
-	stat_id        u32 = 0x7E4
 	record_id      u32 = 0x7E5
-	dump_fc_id     u32 = 0x7E6
 	level          string = 'thread+fb'
 	mode           string = 'ring'
 	buffer_records int = 64
@@ -36,21 +40,38 @@ mut:
 	sw_keys        []string
 }
 
-// parse_trace parses the [trace] block into a TraceCfg (part of the model). A block is active
-// unless enabled = false; ids resolve to bus.dbc only when active (a disabled block generates
-// nothing, so a stale `cmd_id = "SomeName"` must not load the DBC or panic on a missing message).
+// parse_trace parses the [trace] block: config keys plus one BINDING per module endpoint —
+// `cmd = "TraceCmd"` / `record = 0x7E5` (a bus.dbc message name or a literal id), validated
+// against comm.trace's endpoint schema (docs/com-modules.md): an unknown key fails generation
+// listing the valid names, and a name binding's DLC must match the endpoint's declared dlc.
+// A block is active unless enabled = false; bindings resolve against the DBC only when active.
 fn parse_trace(doc toml.Doc, dbc string) TraceCfg {
 	mut t := TraceCfg{}
 	if trcfg := doc.value_opt('trace') {
 		trm := trcfg.as_map()
 		t.on = (trm['enabled'] or { toml.Any(true) }).bool()
 		t.bus = (trm['bus'] or { toml.Any('') }).string()
+		// Every key must be a config key or a schema endpoint — catch typos and stale keys at
+		// generation, not as silently-ignored config.
+		mut endpoint_names := []string{}
+		for e in trace.endpoints {
+			endpoint_names << e.name
+		}
+		for k, _ in trm {
+			if k !in trace_config_keys && k !in endpoint_names {
+				panic('loom2v: [trace] unknown key "${k}" — endpoints: ${endpoint_names}, ' +
+					'config: ${trace_config_keys}')
+			}
+		}
 		if t.on {
-			t.cmd_id = trace_frame_id(trm, 'cmd_id', t.cmd_id, dbc)
-			t.rsp_id = trace_frame_id(trm, 'rsp_id', t.rsp_id, dbc)
-			t.stat_id = trace_frame_id(trm, 'stat_id', t.stat_id, dbc)
-			t.record_id = trace_frame_id(trm, 'record_id', t.record_id, dbc)
-			t.dump_fc_id = trace_frame_id(trm, 'dump_fc_id', t.dump_fc_id, dbc)
+			for e in trace.endpoints {
+				match e.name {
+					'cmd' { t.cmd_id = trace_binding(trm, e.name, e.dlc, t.cmd_id, dbc) }
+					'rsp' { t.rsp_id = trace_binding(trm, e.name, e.dlc, t.rsp_id, dbc) }
+					'record' { t.record_id = trace_binding(trm, e.name, e.dlc, t.record_id, dbc) }
+					else { panic('loom2v: comm.trace endpoint "${e.name}" has no TraceCfg field — teach parse_trace about it') }
+				}
+			}
 		}
 		t.level = (trm['level'] or { toml.Any(t.level) }).string()
 		t.mode = (trm['mode'] or { toml.Any(t.mode) }).string()
@@ -59,7 +80,7 @@ fn parse_trace(doc toml.Doc, dbc string) TraceCfg {
 		if pms := trm['push_ms'] {
 			t.push_us = u64(pms.int()) * 1000
 		}
-		for k in ['cmd_id', 'rsp_id', 'stat_id', 'dump_fc_id', 'push_ms', 'pre_pct'] {
+		for k in ['cmd', 'push_ms', 'pre_pct'] {
 			if k in trm {
 				t.sw_keys << k
 			}
@@ -76,17 +97,25 @@ fn parse_trace(doc toml.Doc, dbc string) TraceCfg {
 	return t
 }
 
-// trace_frame_id resolves a [trace] observability id: a literal number is the CAN id (used
-// as-is — a colliding id is the author's problem); a string is a bus.dbc message name that must
-// exist, and its id is used (so trace frames can piggyback on ids already defined in the DBC).
-fn trace_frame_id(trm map[string]toml.Any, field string, def u32, dbc string) u32 {
-	v := trm[field] or { return def }
+// trace_binding resolves one endpoint binding: a literal number is the CAN id (used as-is —
+// a colliding id is the author's problem); a string is a bus.dbc message name that must exist,
+// its id is used, and its DLC must match the endpoint's declared dlc (validate at generation,
+// per docs/com-modules.md "sizes must match").
+fn trace_binding(trm map[string]toml.Any, key string, want_dlc u8, def u32, dbc string) u32 {
+	v := trm[key] or { return def }
 	if v is string {
 		db := candb.load_dbc_file(dbc) or {
-			panic('loom2v: [trace] ${field} = "${v}" is a bus.dbc message name but ${os.file_name(dbc)} did not load: ${err}')
+			panic('loom2v: [trace] ${key} = "${v}" is a bus.dbc message name but ${os.file_name(dbc)} did not load: ${err}')
 		}
 		id := dbc_id_of(db, snake(v)) or {
-			panic('loom2v: [trace] ${field} = "${v}" is not a message in ${os.file_name(dbc)}')
+			panic('loom2v: [trace] ${key} = "${v}" is not a message in ${os.file_name(dbc)}')
+		}
+		if want_dlc > 0 {
+			dlc := dbc_dlc_of(db, snake(v)) or { 0 }
+			if dlc != int(want_dlc) {
+				panic('loom2v: [trace] ${key} = "${v}" has dlc ${dlc} in ${os.file_name(dbc)}, but ' +
+					'the trace.${key} endpoint sends/expects ${want_dlc} bytes')
+			}
 		}
 		return u32(id)
 	}
@@ -94,7 +123,7 @@ fn trace_frame_id(trm map[string]toml.Any, field string, def u32, dbc string) u3
 	// wrap) and reject out-of-range before it becomes a bogus manifest frame.
 	n := v.i64()
 	if n < 0 || n > 0x1fff_ffff {
-		panic('loom2v: [trace] ${field} ${n} is not a valid CAN id (0..0x1FFFFFFF)')
+		panic('loom2v: [trace] ${key} ${n} is not a valid CAN id (0..0x1FFFFFFF)')
 	}
 	return u32(n)
 }
@@ -135,15 +164,15 @@ fn validate_trace_threadx(m Model) {
 				'the exec-hook recorder streams the ring on a fixed cadence with no overrun freeze — ' +
 				'drop the trigger for threadx builds')
 		}
-		// The exec-hook stream is raw records only: no TraceCmd/Rsp request path, no HandlerStat
-		// heartbeat, no ISO-TP dump flow control. These keys have non-zero defaults but are inert
-		// here, so an explicitly-set one (copied from a bare-metal trace block) would build while
-		// silently doing nothing. Reject the explicit ones rather than ignore them.
+		// The exec-hook stream is raw records only: no TraceCmd request path, no HandlerStat
+		// heartbeat, no pre-trigger split. These keys have working defaults but are inert here,
+		// so an explicitly-set one (copied from a host trace block) would build while silently
+		// doing nothing. Reject the explicit ones rather than ignore them.
 		if m.trace.sw_keys.len > 0 {
 			panic('loom2v: [target] kind="threadx" [trace] key(s) ${m.trace.sw_keys} are not implemented — ' +
-				'the exec-hook stream has no TraceCmd/Rsp request path, HandlerStat heartbeat ' +
-				'(push_ms/stat_id), ISO-TP dump flow control (dump_fc_id), or pre-trigger split ' +
-				'(pre_pct); it streams only raw records on record_id — remove these keys for threadx builds')
+				'the exec-hook stream has no TraceCmd request path (cmd), HandlerStat heartbeat ' +
+				'(push_ms), or pre-trigger split (pre_pct); it streams only raw records on the ' +
+				'record binding — remove these keys for threadx builds')
 		}
 		if m.trace.bus != '' && m.trace.bus != m.telem.bus {
 			panic('loom2v: [target] kind="threadx" [trace].bus "${m.trace.bus}" must equal ' +
