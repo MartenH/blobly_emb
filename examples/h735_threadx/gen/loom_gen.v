@@ -51,6 +51,15 @@ fn C._tx_initialize_kernel_enter()
 fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32
 fn C.trace_snapshot(voidptr, u32) u32
 fn C.trace_arm()
+fn C.trace_fb(u32, u64, u32)
+
+fn trace_clock() u64 {
+	return C.board_now_us()
+}
+
+fn trace_fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
+	C.trace_fb(u32(idx), start_us, u32(dt_us))
+}
 fn C.comm_rx_irq_enable()
 fn C.comm_rx_wait(u32) u32 // block up to N ticks; returns 0 if woken by rx
 fn C.load_pub(u32, u32, u32, u32, u32)
@@ -82,11 +91,11 @@ pub fn run() {
 	sched.every(1000, handler_app_load_on_1ms, &st)
 	sched.every(100000, handler_app_heartbeat_on_100ms, &st)
 	tick_us := u64(1000)
+	sched.set_trace_hook(trace_fb_hook, unsafe { nil })
 	for {
 		t0 := C.board_now_us()
-		sched.run(t0)
+		sched.run_profiled(trace_clock)
 		t1 := C.board_now_us()
-		sched.account(t1 - t0, t1) // handler time -> this core's load
 		if t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun
 			sched.mark_overrun()
 		}
