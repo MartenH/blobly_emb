@@ -86,6 +86,18 @@ extern TX_THREAD *_tx_thread_current_ptr;
 #define MAX_THREADS 8
 static void *g_tid_ptr[MAX_THREADS];
 static unsigned g_tid_n;
+/* trace_bind_thread(): pre-assign the NEXT thread id to a known TCB, in creation order — called
+ * from the generated tx_application_define so ids are DETERMINISTIC and match the manifest.
+ * Without this, ids go by first sight, and the ThreadX timer thread (priority 0) can jump the
+ * queue at tick 1, stealing a low id from an app thread that hadn't run yet (seen on the bench:
+ * ctrl_slow's burn labelled tx_system_timer). With every real thread pre-bound, the only
+ * first-sight assignment left is the timer thread itself — deterministically the last id. */
+void trace_bind_thread(void *tcb)
+{
+    if (g_tid_n < MAX_THREADS)
+        g_tid_ptr[g_tid_n++] = tcb;
+}
+
 static unsigned thread_id(void *p)
 {
     if (!p)
