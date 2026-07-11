@@ -1437,7 +1437,15 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << '\tmut rx := can.Frame{}'
 				glue << '\tfor {'
-				glue << '\t\tC.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame'
+				if m.trace.on {
+					// While a dump stream is in flight, wake every tick: the Tx FIFO holds ~3
+					// frames, so a 10-tick pace stretches a 75-frame block to ~300 ms (blowing
+					// host budgets); at 1 tick it drains in ~25 ms.
+					glue << '\t\twait_ticks := if g_tm.is_dumping() { u32(1) } else { u32(10) }'
+					glue << '\t\tC.comm_rx_wait(wait_ticks) // the FDCAN Rx ISR wakes us early on a new frame'
+				} else {
+					glue << '\t\tC.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame'
+				}
 				glue << '\t\t// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame'
 				glue << '\t\tfor ch.recv(mut rx) {'
 				for si in rx_sigs {
