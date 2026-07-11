@@ -1122,6 +1122,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << 'fn C._tx_initialize_kernel_enter()'
 			glue << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
 			glue << trace_c_decls(m)
+			glue << trace_fb_hooks(m)
 			if comm_thread_on {
 				// Board glue (examples/<x>/comm_glue.c): the FDCAN Rx-FIFO0 ISR posts a semaphore
 				// that comm_rx_wait blocks on, so the comm thread wakes on rx instead of polling.
@@ -1194,11 +1195,18 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		if !m.target.threadx {
 			glue << '\tmut next_tick := C.board_now_us() + tick_us'
 		}
+		glue << trace_fb_install(m)
 		glue << '\tfor {'
 		glue << '\t\tt0 := C.board_now_us()'
-		glue << '\t\tsched.run(t0)'
-		glue << '\t\tt1 := C.board_now_us()'
-		glue << "\t\tsched.account(t1 - t0, t1) // handler time -> this core's load"
+		if m.trace.on && m.trace.level == 'all' {
+			// profiled dispatch: run_profiled accounts internally and fires the FB trace hook
+			glue << '\t\tsched.run_profiled(trace_clock)'
+			glue << '\t\tt1 := C.board_now_us()'
+		} else {
+			glue << '\t\tsched.run(t0)'
+			glue << '\t\tt1 := C.board_now_us()'
+			glue << "\t\tsched.account(t1 - t0, t1) // handler time -> this core's load"
+		}
 		glue << '\t\tif t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun'
 		glue << '\t\t\tsched.mark_overrun()'
 		glue << '\t\t}'
