@@ -194,6 +194,7 @@ fn trace_c_decls(m Model) []string {
 	mut g := [
 		'fn C.trace_snapshot(voidptr, u32) u32',
 		'fn C.trace_arm()',
+		'fn C.trace_freeze()',
 		'fn C.trace_bind_thread(voidptr)',
 	]
 	if m.trace.level == 'all' {
@@ -251,6 +252,7 @@ fn trace_rx_arms(m Model, part string) []string {
 	g << '\t\t\t\tif op == trace.op_arm || op == trace.op_start || op == trace.op_reset {'
 	g << "\t\t\t\t\tC.trace_arm() // fresh window in the exec-hook recorder"
 	g << '\t\t\t\t} else if op == trace.op_stop {'
+	g << '\t\t\t\t\tC.trace_freeze() // stop RECORDING until the next arm — repeated dumps are identical'
 	g << '\t\t\t\t\ttr_n := C.trace_snapshot(&g_${part}_trace[0], ${m.trace.buffer_records})'
 	g << '\t\t\t\t\tg_tm.load_snapshot(&g_${part}_trace[0][0], tr_n)'
 	g << '\t\t\t\t}'

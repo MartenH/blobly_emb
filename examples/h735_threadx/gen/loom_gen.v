@@ -67,6 +67,7 @@ fn C._tx_initialize_kernel_enter()
 fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32
 fn C.trace_snapshot(voidptr, u32) u32
 fn C.trace_arm()
+fn C.trace_freeze()
 fn C.trace_bind_thread(voidptr)
 fn C.trace_fb(u32, u64, u32)
 
@@ -226,6 +227,7 @@ fn comm_thread_entry(input u32) {
 				if op == trace.op_arm || op == trace.op_start || op == trace.op_reset {
 					C.trace_arm() // fresh window in the exec-hook recorder
 				} else if op == trace.op_stop {
+					C.trace_freeze() // stop RECORDING until the next arm — repeated dumps are identical
 					tr_n := C.trace_snapshot(&g_app_trace[0], 64)
 					g_tm.load_snapshot(&g_app_trace[0][0], tr_n)
 				}
