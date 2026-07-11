@@ -24,12 +24,22 @@ loom2v generates **two** ThreadX threads:
   and produces the CpuLoad/LoadDetail telemetry + the exec-hook trace stream (tx_ready-gated).
   Telemetry and trace are just two *producers*; NM / COM-tx slot in later as more of the same.
 
-**Trace (6b-1).** `[trace]` engages the **exec-change-hook** recorder (`trace_hooks.c`,
+**Trace.** `[trace]` engages the **exec-change-hook** recorder (`trace_hooks.c`,
 driver-independent) — the FB loop and comm loop being real ThreadX threads means the hooks
-capture every context switch + ISR for free. Decode with `candump can0 | decode_trace.py`
-(raw per-record frames on `record_id`). The trace shows three lanes — **comm** (id 1, runs
-first at kernel entry), **app_main** (id 2), and the hidden ThreadX **System Timer Thread**
-(id 3) — plus the **FDCAN Rx ISR as id 35** and SysTick as id 15.
+capture every context switch + ISR for free. The protocol is the **platform's TraceModule**
+(`comm/trace`, docs/com-modules.md) served by the comm thread via the `[trace]` endpoint
+bindings: `arm` clears the recorder, `stop` imports the frozen window, `dump` streams it as
+one **ISO-TP block** on `record` (flow control on `dump_fc`) — blobly_net's native format:
+
+```
+cansend can0 7E2#0100000000000000     # arm (fresh window)
+cansend can0 7E2#0300000000000000     # stop -> rsp shows used=64, frozen
+# blobly_net does the rest (its trace_dump tool or the GUI's Trace Chart):
+v run cmd/trace_dump/dump.v can0 0 .../h735_threadx/gen/trace-manifest.csv
+```
+
+The decoded lanes: **comm** (t1, runs first at kernel entry), **app_main** (t2), the hidden
+ThreadX **System Timer Thread** (t3), the **FDCAN Rx ISR as v35** and SysTick as v15.
 
 ## rx drives an FB via the target IOC (6b-2b)
 

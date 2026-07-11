@@ -1,20 +1,22 @@
 module trace
 
+import comm.isotp
 import driver.can
 
 // The endpoint schema is data the generator consumes: rx ports get an on_<name> method (checked by
 // the generated code compiling), tx ports become constructor bindings. Guard the invariants here.
 fn test_endpoint_schema() {
-	assert endpoints.len == 3
+	assert endpoints.len == 4
 	mut names := []string{}
 	for e in endpoints {
 		names << e.name
 		assert e.dlc == 8
 	}
-	assert names == ['cmd', 'rsp', 'record']
-	assert endpoints[0].dir == .rx // cmd is the only rx port today
-	assert endpoints[1].dir == .tx
+	assert names == ['cmd', 'dump_fc', 'rsp', 'record']
+	assert endpoints[0].dir == .rx
+	assert endpoints[1].dir == .rx
 	assert endpoints[2].dir == .tx
+	assert endpoints[3].dir == .tx
 }
 
 // TraceModule as a bus client: the control path (a routed command frame drives the ring through
@@ -22,7 +24,7 @@ fn test_endpoint_schema() {
 fn test_trace_module_control_path() {
 	mut backing := [8]Record{}
 	buf := new_buffer(&backing[0], 8, .ring, 0)
-	mut m := new_module(0x713, 0x7e5, 0, buf)
+	mut m := new_module(0x713, 0x7e5, 0, false, buf)
 
 	// fresh: idle, nothing to send, not dumping
 	assert m.state() == .idle
@@ -52,14 +54,14 @@ fn test_trace_module_control_path() {
 fn test_trace_module_produce_streams_dump() {
 	mut backing := [8]Record{}
 	buf := new_buffer(&backing[0], 8, .ring, 0)
-	mut m := new_module(0x713, 0x7e5, 0, buf)
+	mut m := new_module(0x713, 0x7e5, 0, false, buf)
 
 	m.on_cmd(cmd_frame(op_arm))
 	mut f := can.Frame{}
-	assert m.produce(mut f) // the arm response
+	assert m.produce(0, mut f) // the arm response
 	assert f.id == 0x713
 	assert f.data[0] == op_arm // opcode echo
-	assert !m.produce(mut f) // nothing else pending
+	assert !m.produce(0, mut f) // nothing else pending
 
 	// capture three records through the module's ring
 	m.push(new_fb(1, 0, 100, 10))
@@ -67,23 +69,23 @@ fn test_trace_module_produce_streams_dump() {
 	m.push(new_fb(3, 0, 300, 30))
 
 	m.on_cmd(cmd_frame(op_stop))
-	assert m.produce(mut f) // the stop response
+	assert m.produce(0, mut f) // the stop response
 	assert f.id == 0x713
 
 	m.on_cmd(cmd_frame(op_dump))
-	assert m.produce(mut f) // the dump response (ok)
+	assert m.produce(0, mut f) // the dump response (ok)
 	assert f.id == 0x713
 	assert f.data[1] == result_ok
 
 	// then the records, oldest first, raw on record_id
 	mut ids := []u16{}
-	for m.produce(mut f) {
+	for m.produce(0, mut f) {
 		assert f.id == 0x7e5
 		ids << u16(f.data[0]) | (u16(f.data[1]) << 8)
 	}
 	assert ids.len == 3
 	assert !m.is_dumping() // stream drained
-	assert !m.produce(mut f) // and stays dry
+	assert !m.produce(0, mut f) // and stays dry
 }
 
 // The FB hook family: fb_hook (installed via sched.set_trace_hook) pushes fb records into the
@@ -92,7 +94,7 @@ fn test_fb_hook_records_and_triggers() {
 	mut backing := [8]Record{}
 	// pre_pct 100: keep the whole pre-trigger window -> the trigger freezes immediately
 	buf := new_buffer(&backing[0], 8, .ring, 100)
-	mut m := new_module(0x713, 0x7e5, 0, buf)
+	mut m := new_module(0x713, 0x7e5, 0, false, buf)
 	m.on_cmd(cmd_frame(op_arm))
 	mut cap := m.capture(10, 500, 1_000_000) // id_base 10, budget 500 us
 
@@ -103,10 +105,10 @@ fn test_fb_hook_records_and_triggers() {
 
 	m.on_cmd(cmd_frame(op_dump))
 	mut f := can.Frame{}
-	assert m.produce(mut f) // rsp
-	assert m.produce(mut f) // record 1: fb id 10, no flags
+	assert m.produce(0, mut f) // rsp
+	assert m.produce(0, mut f) // record 1: fb id 10, no flags
 	assert u16(f.data[0]) | (u16(f.data[1]) << 8) == entity(kind_fb, 10)
-	assert m.produce(mut f) // record 2: fb id 12, overran flag
+	assert m.produce(0, mut f) // record 2: fb id 12, overran flag
 	assert u16(f.data[0]) | (u16(f.data[1]) << 8) == entity(kind_fb, 12)
 	assert f.data[2] & flag_overran != 0
 }
@@ -118,4 +120,89 @@ fn cmd_frame(opcode u8) can.Frame {
 	}
 	f.data[0] = opcode
 	return f
+}
+
+// The ISO-TP block dump: dump_fc bound -> the frozen ring streams as ONE pack_block payload
+// through the link, flow-controlled by a host-side Link — the format blobly_net consumes.
+fn test_trace_module_isotp_block_dump() {
+	mut backing := [8]Record{}
+	buf := new_buffer(&backing[0], 8, .ring, 0)
+	mut m := new_module(0x713, 0x7e5, 0, true, buf)
+
+	m.on_cmd(cmd_frame(op_arm))
+	mut f := can.Frame{}
+	assert m.produce(0, mut f) // arm rsp
+	m.push(new_fb(1, 0, 100, 10))
+	m.push(new_fb(2, 0, 200, 20))
+	m.on_cmd(cmd_frame(op_stop))
+	assert m.produce(0, mut f) // stop rsp
+	m.on_cmd(cmd_frame(op_dump))
+	assert m.produce(0, mut f) // dump rsp
+	assert f.id == 0x713
+
+	// host side: an isotp.Link reassembles what the module streams on record_id
+	mut host := isotp.Link{}
+	mut now := u64(1000)
+	for _ in 0 .. 64 {
+		if m.produce(now, mut f) {
+			assert f.id == 0x7e5
+			mut p := isotp.Pdu{}
+			for j in 0 .. 8 {
+				p.data[j] = f.data[j]
+			}
+			host.on_frame(now, p)
+		}
+		// route the host's FC back to the module's dump_fc endpoint
+		mut fc := isotp.Pdu{}
+		if host.poll(now, mut fc) {
+			mut fcf := can.Frame{
+				id:  0x7e6
+				len: 8
+			}
+			for j in 0 .. 8 {
+				fcf.data[j] = fc.data[j]
+			}
+			m.on_dump_fc(now, fcf)
+		}
+		now += 1000
+	}
+	mut block := [520]u8{}
+	n := host.take(&block[0])
+	assert n == 8 + 2 * 8 // header + 2 records
+	// header: count, then the two fb records in wire form
+	r1 := decode_record([block[8], block[9], block[10], block[11], block[12], block[13], block[14],
+		block[15]]!)
+	assert r1.entity_id == entity(kind_fb, 1)
+	assert !m.is_dumping() // link drained
+}
+
+// load_snapshot: the exec-hook target path — raw 8-byte records captured in C land in the module
+// ring as a frozen window, so status counts and the dump serve the real capture.
+fn test_load_snapshot_imports_wire_records() {
+	mut backing := [8]Record{}
+	buf := new_buffer(&backing[0], 8, .ring, 0)
+	mut m := new_module(0x713, 0x7e5, 0, false, buf)
+
+	mut raw := [24]u8{} // 3 records in wire form
+	for i in 0 .. 3 {
+		b := encode_record(new_thread(u16(i + 1), reason_yield, u32(i * 100), u16(i * 10)))
+		for j in 0 .. 8 {
+			raw[i * 8 + j] = b[j]
+		}
+	}
+	m.load_snapshot(&raw[0], 3)
+	assert m.state() != .capturing // frozen window
+	m.on_cmd(cmd_frame(op_status))
+	mut f := can.Frame{}
+	assert m.produce(0, mut f) // status rsp
+	assert u16(f.data[3]) | (u16(f.data[4]) << 8) == 3 // records_used = 3
+
+	m.on_cmd(cmd_frame(op_dump))
+	assert m.produce(0, mut f) // dump rsp
+	mut ids := []u16{}
+	for m.produce(0, mut f) {
+		ids << u16(f.data[0]) | (u16(f.data[1]) << 8)
+	}
+	assert ids.len == 3
+	assert ids[0] == entity(kind_thread, 1)
 }
