@@ -607,7 +607,7 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 		man << 'thread,${tid},comm_${bb},${m.bus_core[bb] or { 0 }}'
 		tid++
 	}
-	man << trace_manifest_frames(m, trace_host)
+	man << trace_manifest_frames(m)
 	return man
 }
 
@@ -1156,6 +1156,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '\tg_${part}_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned'
 			glue << '\tg_${part}_stack [4096]u8'
 			glue << trace_scratch_fields(m, part)
+			glue << trace_module_globals(m)
 			if comm_thread_on {
 				glue << '\tg_comm_tcb   [32]u64  // the bus-owning comm thread'
 				glue << '\tg_comm_stack [4096]u8'
@@ -1301,7 +1302,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						glue << '\tmut last_overruns := u32(0)'
 					}
 				}
-				glue << trace_stream_state(m)
+				glue << trace_module_init(m)
 				for si in tx_sigs {
 					glue << '\tmut last_tx_${snake(si.name)} := u64(0)'
 				}
@@ -1324,6 +1325,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					}
 					glue << '\t\t\t}'
 				}
+				glue << trace_rx_arms(m, part)
 				glue << '\t\t}'
 				glue << '\t\tt1 := C.board_now_us()'
 				for p in producers {
@@ -1365,7 +1367,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t\tch.send(tf)'
 					glue << '\t\t}'
 				}
-				glue << trace_stream(m, part)
+				glue << trace_produce_drain(m)
 				glue << '\t}'
 				glue << '}'
 				glue << ''
@@ -1638,8 +1640,8 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 	if m.telem.on {
 		glue << 'import comm.telem' // CpuLoad packing
 	}
-	if trace_host {
-		glue << 'import comm.trace' // the TraceModule + ring + fb_hook (docs/com-modules.md)
+	if trace_host || (m.trace.on && m.target.threadx) {
+		glue << 'import comm.trace' // the TraceModule + ring + hooks (docs/com-modules.md)
 	}
 	if m.has_external || m.isotp_conns.len > 0 || m.telem.on {
 		glue << 'import driver.can' // the generated bus bridge

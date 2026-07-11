@@ -31,6 +31,8 @@ mut:
 	cmd_id         u32 = 0x7E2
 	rsp_id         u32 = 0x7E3
 	record_id      u32 = 0x7E5
+	dump_fc_id     u32 = 0x7E6
+	dump_fc_bound  bool // dump_fc bound -> the ISO-TP block dump (else the raw record stream)
 	level          string = 'thread+fb'
 	mode           string = 'ring'
 	buffer_records int = 64
@@ -69,6 +71,10 @@ fn parse_trace(doc toml.Doc, dbc string) TraceCfg {
 					'cmd' { t.cmd_id = trace_binding(trm, e.name, e.dlc, t.cmd_id, dbc) }
 					'rsp' { t.rsp_id = trace_binding(trm, e.name, e.dlc, t.rsp_id, dbc) }
 					'record' { t.record_id = trace_binding(trm, e.name, e.dlc, t.record_id, dbc) }
+					'dump_fc' {
+						t.dump_fc_id = trace_binding(trm, e.name, e.dlc, t.dump_fc_id, dbc)
+						t.dump_fc_bound = e.name in trm
+					}
 					else { panic('loom2v: comm.trace endpoint "${e.name}" has no TraceCfg field — teach parse_trace about it') }
 				}
 			}
@@ -80,7 +86,7 @@ fn parse_trace(doc toml.Doc, dbc string) TraceCfg {
 		if pms := trm['push_ms'] {
 			t.push_us = u64(pms.int()) * 1000
 		}
-		for k in ['cmd', 'push_ms', 'pre_pct'] {
+		for k in ['push_ms', 'pre_pct'] {
 			if k in trm {
 				t.sw_keys << k
 			}
@@ -164,15 +170,13 @@ fn validate_trace_threadx(m Model) {
 				'the exec-hook recorder streams the ring on a fixed cadence with no overrun freeze — ' +
 				'drop the trigger for threadx builds')
 		}
-		// The exec-hook stream is raw records only: no TraceCmd request path, no HandlerStat
-		// heartbeat, no pre-trigger split. These keys have working defaults but are inert here,
-		// so an explicitly-set one (copied from a host trace block) would build while silently
-		// doing nothing. Reject the explicit ones rather than ignore them.
+		// The exec-hook recorder has no HandlerStat heartbeat and no pre-trigger split. These
+		// keys have working defaults but are inert here, so an explicitly-set one (copied from a
+		// host trace block) would build while silently doing nothing. Reject rather than ignore.
 		if m.trace.sw_keys.len > 0 {
 			panic('loom2v: [target] kind="threadx" [trace] key(s) ${m.trace.sw_keys} are not implemented — ' +
-				'the exec-hook stream has no TraceCmd request path (cmd), HandlerStat heartbeat ' +
-				'(push_ms), or pre-trigger split (pre_pct); it streams only raw records on the ' +
-				'record binding — remove these keys for threadx builds')
+				'the exec-hook recorder has no HandlerStat heartbeat (push_ms) or pre-trigger ' +
+				'split (pre_pct) — remove these keys for threadx builds')
 		}
 		if m.trace.bus != '' && m.trace.bus != m.telem.bus {
 			panic('loom2v: [target] kind="threadx" [trace].bus "${m.trace.bus}" must equal ' +
@@ -188,6 +192,7 @@ fn trace_c_decls(m Model) []string {
 	}
 	return [
 		'fn C.trace_snapshot(voidptr, u32) u32',
+		'fn C.trace_arm()',
 	]
 }
 
@@ -201,52 +206,69 @@ fn trace_scratch_fields(m Model, part string) []string {
 	]
 }
 
-// trace_stream_state: the stream's loop-local state vars.
-fn trace_stream_state(m Model) []string {
+// trace_module_globals: the module + its ring live in __global (the ISO-TP link alone is ~1 KB
+// — keep it off the 4 KB comm stack). Initialised at comm-thread start (trace_module_init).
+fn trace_module_globals(m Model) []string {
 	if !m.trace.on {
 		return []string{}
 	}
 	return [
-		'\tmut last_trace := u64(0)',
-		'\tmut tr_pos := u32(0)',
-		'\tmut tr_n := u32(0)',
-		'\tmut tr_active := false',
+		'\tg_trace_ring [${m.trace.buffer_records}]trace.Record',
+		'\tg_tm trace.TraceModule',
 	]
 }
 
-// trace_stream: the exec-hook ring stream inside the bus-owner loop — snapshot ~1 s, then send raw
-// 8-byte records in tx_ready-gated 16-record chunks (a stuck bus can't wedge the owner).
-fn trace_stream(m Model, part string) []string {
+// trace_module_init: construct the TraceModule from the bindings — the platform serves the
+// protocol (docs/com-modules.md); dump_fc bound selects the ISO-TP block dump.
+fn trace_module_init(m Model) []string {
+	if !m.trace.on {
+		return []string{}
+	}
+	return [
+		'\tg_tm = trace.new_module(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), 0, ${m.trace.dump_fc_bound},',
+		'\t\ttrace.new_buffer(&g_trace_ring[0], ${m.trace.buffer_records}, .ring, 0))',
+		'\tmut trace_txf := can.Frame{}',
+	]
+}
+
+// trace_rx_arms: the router match arms inside the comm thread's rx drain — cmd routes to the
+// module (with the exec-hook C recorder orchestrated around it: arm clears the C ring, stop
+// imports the frozen window via load_snapshot so status/dump serve the real capture), dump_fc
+// feeds the ISO-TP flow control.
+fn trace_rx_arms(m Model, part string) []string {
 	if !m.trace.on {
 		return []string{}
 	}
 	mut g := []string{}
-	g << '\t\t// PRODUCER: exec-hook trace ring (a burst -> tx_ready-gated 16-record chunks)'
-	g << '\t\tif !tr_active && t1 - last_trace >= u64(1000000) {'
-	g << '\t\t\ttr_n = C.trace_snapshot(&g_${part}_trace[0], ${m.trace.buffer_records})'
-	g << '\t\t\ttr_pos = 0'
-	g << '\t\t\ttr_active = true'
-	g << '\t\t}'
-	g << '\t\tif tr_active {'
-	g << '\t\t\tmut sent := 0'
-	g << '\t\t\tfor tr_pos < tr_n && sent < 16 && ch.tx_ready() {'
-	g << '\t\t\t\tmut tf := can.Frame{'
-	g << '\t\t\t\t\tid:  u32(0x${m.trace.record_id.hex()})'
-	g << '\t\t\t\t\tlen: 8'
+	g << '\t\t\tif rx.id == u32(0x${m.trace.cmd_id.hex()}) && rx.len == 8 { // trace.cmd -> the module'
+	g << '\t\t\t\top := rx.data[0]'
+	g << '\t\t\t\tif op == trace.op_arm || op == trace.op_start || op == trace.op_reset {'
+	g << "\t\t\t\t\tC.trace_arm() // fresh window in the exec-hook recorder"
+	g << '\t\t\t\t} else if op == trace.op_stop {'
+	g << '\t\t\t\t\ttr_n := C.trace_snapshot(&g_${part}_trace[0], ${m.trace.buffer_records})'
+	g << '\t\t\t\t\tg_tm.load_snapshot(&g_${part}_trace[0][0], tr_n)'
 	g << '\t\t\t\t}'
-	g << '\t\t\t\tfor j in 0 .. 8 {'
-	g << '\t\t\t\t\ttf.data[j] = g_${part}_trace[tr_pos][j]'
-	g << '\t\t\t\t}'
-	g << '\t\t\t\tch.send(tf)'
-	g << '\t\t\t\ttr_pos++'
-	g << '\t\t\t\tsent++'
+	g << '\t\t\t\tg_tm.on_cmd(rx)'
 	g << '\t\t\t}'
-	g << '\t\t\tif tr_pos >= tr_n {'
-	g << '\t\t\t\ttr_active = false'
-	g << '\t\t\t\tlast_trace = C.board_now_us()'
-	g << '\t\t\t}'
-	g << '\t\t}'
+	if m.trace.dump_fc_bound {
+		g << '\t\t\tif rx.id == u32(0x${m.trace.dump_fc_id.hex()}) { // trace.dump_fc -> ISO-TP FC'
+		g << '\t\t\t\tg_tm.on_dump_fc(C.board_now_us(), rx)'
+		g << '\t\t\t}'
+	}
 	return g
+}
+
+// trace_produce_drain: stream whatever the module has ready (response, then the dump), gated on
+// tx_ready so a stuck bus never wedges the owner.
+fn trace_produce_drain(m Model) []string {
+	if !m.trace.on {
+		return []string{}
+	}
+	return [
+		'\t\tfor ch.tx_ready() && g_tm.produce(t1, mut trace_txf) {',
+		'\t\t\tch.send(trace_txf)',
+		'\t\t}',
+	]
 }
 
 // trace_manifest_timer_row: the hidden ThreadX System Timer Thread takes the id right after the
@@ -259,20 +281,20 @@ fn trace_manifest_timer_row(m Model, tid int) []string {
 	return ['thread,${tid},tx_system_timer,0']
 }
 
-// trace_manifest_frames: the observability frame ids blobly_net decodes natively — exactly what
-// each shape actually sends: the ThreadX target streams only raw records; the host module also
-// serves the TraceCmd/TraceRsp pair.
-fn trace_manifest_frames(m Model, trace_host bool) []string {
+// trace_manifest_frames: the observability frame ids blobly_net decodes natively — the module
+// serves cmd/rsp + the dump on record (ISO-TP when dump_fc is bound, raw records otherwise).
+fn trace_manifest_frames(m Model) []string {
 	if !m.trace.on {
 		return []string{}
 	}
 	tbus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
 	mut rows := ['# trace frames: frame,id,bus']
-	if trace_host {
-		rows << 'cmd,0x${m.trace.cmd_id.hex()},${tbus}'
-		rows << 'rsp,0x${m.trace.rsp_id.hex()},${tbus}'
-	}
+	rows << 'cmd,0x${m.trace.cmd_id.hex()},${tbus}'
+	rows << 'rsp,0x${m.trace.rsp_id.hex()},${tbus}'
 	rows << 'record,0x${m.trace.record_id.hex()},${tbus}'
+	if m.trace.dump_fc_bound {
+		rows << 'dump_fc,0x${m.trace.dump_fc_id.hex()},${tbus}'
+	}
 	return rows
 }
 
@@ -302,7 +324,7 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	g << '\t// only feeds it: fb_hook records each dispatched handler, on_cmd applies routed commands,'
 	g << '\t// produce yields the response + dump stream.'
 	g << '\tmut ring := [${m.trace.buffer_records}]trace.Record{}'
-	g << '\tmut tm := trace.new_module(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), 0,'
+	g << '\tmut tm := trace.new_module(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), 0, ${m.trace.dump_fc_bound},'
 	g << '\t\ttrace.new_buffer(&ring[0], ${m.trace.buffer_records}, ${mode}, ${m.trace.pre_pct}))'
 	g << '\tmut cap := tm.capture(0, ${m.trace.budget_us}, osal.now_us())'
 	g << '\tsched.set_trace_hook(trace.fb_hook, &cap)'
@@ -320,10 +342,13 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	g << '\t\tfor ch.recv(mut rx) {'
 	g << '\t\t\tmatch rx.id {'
 	g << '\t\t\t\tu32(0x${m.trace.cmd_id.hex()}) { tm.on_cmd(rx) } // trace.cmd'
+	if m.trace.dump_fc_bound {
+		g << '\t\t\t\tu32(0x${m.trace.dump_fc_id.hex()}) { tm.on_dump_fc(loom_t1, rx) } // trace.dump_fc'
+	}
 	g << '\t\t\t\telse {}'
 	g << '\t\t\t}'
 	g << '\t\t}'
-	g << '\t\tfor ch.tx_ready() && tm.produce(mut txf) {'
+	g << '\t\tfor ch.tx_ready() && tm.produce(loom_t1, mut txf) {'
 	g << '\t\t\tch.send(txf)'
 	g << '\t\t}'
 	if telem_on {

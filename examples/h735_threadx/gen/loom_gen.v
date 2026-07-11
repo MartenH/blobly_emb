@@ -6,6 +6,7 @@ import ports
 import app
 import loom
 import comm.telem
+import comm.trace
 import driver.can
 
 struct Partition_app_state {
@@ -49,6 +50,7 @@ fn C._tx_thread_sleep(u32) u32
 fn C._tx_initialize_kernel_enter()
 fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32
 fn C.trace_snapshot(voidptr, u32) u32
+fn C.trace_arm()
 fn C.comm_rx_irq_enable()
 fn C.comm_rx_wait(u32) u32 // block up to N ticks; returns 0 if woken by rx
 fn C.load_pub(u32, u32, u32, u32, u32)
@@ -65,6 +67,8 @@ __global (
 	g_app_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
 	g_app_stack [4096]u8
 	g_app_trace [64][8]u8 // scratch snapshot of the trace ring (owner streams it)
+	g_trace_ring [64]trace.Record
+	g_tm trace.TraceModule
 	g_comm_tcb   [32]u64  // the bus-owning comm thread
 	g_comm_stack [4096]u8
 	g_rx_count u32
@@ -105,10 +109,9 @@ fn comm_thread_entry(input u32) {
 	mut last_telem := u64(0)
 	telem_period_us := u64(500000)
 	mut last_overruns := u32(0)
-	mut last_trace := u64(0)
-	mut tr_pos := u32(0)
-	mut tr_n := u32(0)
-	mut tr_active := false
+	g_tm = trace.new_module(u32(0x7e3), u32(0x7e5), 0, true,
+		trace.new_buffer(&g_trace_ring[0], 64, .ring, 0))
+	mut trace_txf := can.Frame{}
 	mut last_tx_workload := u64(0)
 	mut rx := can.Frame{}
 	for {
@@ -119,6 +122,19 @@ fn comm_thread_entry(input u32) {
 				g_rx_count++
 				g_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)
 				C.ioc_pub(1, g_rx_last, u32(0))
+			}
+			if rx.id == u32(0x7e2) && rx.len == 8 { // trace.cmd -> the module
+				op := rx.data[0]
+				if op == trace.op_arm || op == trace.op_start || op == trace.op_reset {
+					C.trace_arm() // fresh window in the exec-hook recorder
+				} else if op == trace.op_stop {
+					tr_n := C.trace_snapshot(&g_app_trace[0], 64)
+					g_tm.load_snapshot(&g_app_trace[0][0], tr_n)
+				}
+				g_tm.on_cmd(rx)
+			}
+			if rx.id == u32(0x7e6) { // trace.dump_fc -> ISO-TP FC
+				g_tm.on_dump_fc(C.board_now_us(), rx)
 			}
 		}
 		t1 := C.board_now_us()
@@ -165,30 +181,8 @@ fn comm_thread_entry(input u32) {
 			tf.data[3] = u8((tv_a >> 24) & 0xff)
 			ch.send(tf)
 		}
-		// PRODUCER: exec-hook trace ring (a burst -> tx_ready-gated 16-record chunks)
-		if !tr_active && t1 - last_trace >= u64(1000000) {
-			tr_n = C.trace_snapshot(&g_app_trace[0], 64)
-			tr_pos = 0
-			tr_active = true
-		}
-		if tr_active {
-			mut sent := 0
-			for tr_pos < tr_n && sent < 16 && ch.tx_ready() {
-				mut tf := can.Frame{
-					id:  u32(0x7e5)
-					len: 8
-				}
-				for j in 0 .. 8 {
-					tf.data[j] = g_app_trace[tr_pos][j]
-				}
-				ch.send(tf)
-				tr_pos++
-				sent++
-			}
-			if tr_pos >= tr_n {
-				tr_active = false
-				last_trace = C.board_now_us()
-			}
+		for ch.tx_ready() && g_tm.produce(t1, mut trace_txf) {
+			ch.send(trace_txf)
 		}
 	}
 }
