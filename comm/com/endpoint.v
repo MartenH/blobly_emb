@@ -16,8 +16,9 @@ pub enum Dir {
 
 pub struct Endpoint {
 pub:
-	name string
-	dir  Dir
-	dlc  u8 // payload bytes this endpoint sends/expects (0 = flexible)
-	doc  string
+	name  string
+	dir   Dir
+	dlc   u8 // payload bytes this endpoint sends/expects (0 = flexible)
+	range bool // rx only: binds an INCLUSIVE [lo, hi] id range, not one id (NM peer traffic)
+	doc   string
 }

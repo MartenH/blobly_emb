@@ -8,6 +8,8 @@ import loom
 import comm.telem
 import comm.trace
 import comm.shell
+import comm.nm
+import comm.nm_can
 import driver.can
 
 struct Thread_load_fast_state {
@@ -88,6 +90,18 @@ fn shell_bmc_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 	}
 }
 
+fn shell_nm_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
+	if args_len >= 3 && unsafe { args[0] } == `r` && unsafe { args[1] } == `e` {
+		if unsafe { args[2] } == `q` {
+			g_nm.request(now)
+		} else {
+			g_nm.release()
+		}
+	}
+	rsp.write(g_nm.state_str())
+	rsp.nl()
+}
+
 fn trace_clock() u64 {
 	return C.board_now_us()
 }
@@ -142,6 +156,7 @@ __global (
 	g_trace_ring [64]trace.Record
 	g_tm trace.TraceModule
 	g_sh shell.ShellModule
+	g_nm nm_can.NmModule
 	g_comm_tcb   [32]u64  // the bus-owning comm thread
 	g_comm_stack [4096]u8
 	g_rx_count u32
@@ -235,6 +250,15 @@ fn comm_thread_entry(input u32) {
 	g_sh.register('ps', 'threads: prio, state, stack high-water', shell_ps_cmd)
 	g_sh.register('bmc', 'DWT core benchmark (CPI, LSU, folds)', shell_bmc_cmd)
 	mut shell_txf := can.Frame{}
+	g_sh.register('nm', 'NM state; nm req|rel', shell_nm_cmd)
+	g_nm.init(u8(0x12), u32(0x512), u64(0), nm.Timings{
+		msg_cycle_us:  100000
+		timeout_us:    300000
+		repeat_us:     200000
+		wait_sleep_us: 150000
+	})
+	g_nm.request(C.board_now_us()) // this ECU's COM needs the bus from boot ([nm] request)
+	mut nm_txf := can.Frame{}
 	mut last_tx_workload := u64(0)
 	mut rx := can.Frame{}
 	for {
@@ -266,6 +290,9 @@ fn comm_thread_entry(input u32) {
 			}
 			if rx.id == u32(0x7f2) { // shell.fc -> ISO-TP FC
 				g_sh.on_fc(C.board_now_us(), rx)
+			}
+			if rx.id >= u32(0x500) && rx.id <= u32(0x53f) { // nm.peers -> cluster NM
+				g_nm.on_peers(C.board_now_us(), rx)
 			}
 		}
 		t1 := C.board_now_us()
@@ -317,6 +344,9 @@ fn comm_thread_entry(input u32) {
 		}
 		for ch.tx_ready() && g_sh.produce(t1, mut shell_txf) {
 			ch.send(shell_txf)
+		}
+		for ch.tx_ready() && g_nm.produce(t1, mut nm_txf) {
+			ch.send(nm_txf)
 		}
 	}
 }

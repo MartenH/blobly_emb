@@ -90,26 +90,30 @@ BO_ 1024 NM_Powertrain: 8 ThisECU
 
 ## Configuration
 
-Per network, in `config/ecu.toml`. `cfg2v` generates `gen.nm_<bus>_*` constants
-(ms → µs). These are **calibration**, not requirements — a requirement says *"the
-configured timeout"*, this is where the value lives.
+On a ThreadX target NM is a **ComModule** (docs/com-modules.md): `comm/nm_can.NmModule`
+declares two endpoints — `alive` (tx, this node's NM frame) and `peers` (rx, the cluster's
+NM traffic as an inclusive **id range**, the first range endpoint) — and `[nm]` in ecu.toml
+binds them. loom2v emits the router range arm, the produce drain, and (with `[shell]`) an
+`nm` command (`nm` = state, `nm req` / `nm rel` = demand). Timings are **calibration**, not
+requirements — a requirement says *"the configured timeout"*, this is where the value lives.
 
 ```toml
-[nm.can0]
-node_id       = 7        # source node id (NID byte)
-tx_id         = 0x400    # this ECU's NM message id
-rx_lo         = 0x400    # NM id range treated as NM traffic on rx (cluster's NM ids);
-rx_hi         = 0x4ff    #   REQUIRED — must span the cluster's NM ids, not just tx_id
-pn_local      = 0        # partial networks this node requests (bitmask)  (REQ-NM-010)
-msg_cycle_ms  = 100      # periodic NM message while awake     (REQ-NM-008)
-timeout_ms    = 300      # no-demand time before sleeping      (REQ-NM-006)
-repeat_ms     = 200      # repeat-message phase after wake     (REQ-NM-007)
-wait_sleep_ms = 150      # prepare_bus_sleep grace period
-# --- frame layout (for the NM↔CAN glue) ---
-nid_pos       = 0        # byte offset of NID in the PDU
-cbv_pos       = 1        # byte offset of the control bit vector
-pn_enabled    = false    # partial networking (bytes 2–7)      (REQ-NM-010)
+[nm]
+node  = 0x12           # source node id (NID byte)                    REQUIRED
+alive = 0x512          # this node's NM id (default: peers base + node)
+peers = [0x500, 0x53F] # the cluster's NM id range (inclusive)
+pn    = 0              # partial networks this node requests (bitmask) (REQ-NM-010)
+request = true         # request the bus from boot (release via `nm rel`)
+msg_cycle_ms  = 100    # periodic NM message while awake     (REQ-NM-008)
+timeout_ms    = 300    # no-demand time before sleeping      (REQ-NM-006)
+repeat_ms     = 200    # repeat-message phase after wake     (REQ-NM-007)
+wait_sleep_ms = 150    # prepare_bus_sleep grace period
 ```
+
+The legacy host path (`nm_can.Link`, a pull-model Transport binding) is configured per
+network as `[nm.<bus>]` (node_id/tx_id/rx_lo/rx_hi/...), which `cfg2v` turns into
+`gen.nm_<bus>_*` constants — both shapes coexist in one file (`[nm]` scalars are the module
+bindings; `[nm.<bus>]` sub-tables are the legacy per-net blocks).
 
 `cfg2v` turns this into `gen.nm_can0_*` constants, so an app builds the binding's
 `Config` and the state machine's `Timings` straight from generated values — no
