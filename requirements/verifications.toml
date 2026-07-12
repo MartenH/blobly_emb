@@ -74,3 +74,19 @@ context = "h735/ThreadX"
 verifies = ["REQ-NM-005"]
 approved_by = "Claude bench session — STM32H735G-DK vs PCAN-USB Pro FD"
 date = "2026-07-12"
+
+# Second board: NUCLEO-H755ZI-Q (CM7 @ 400 MHz VOS1, HSE 8 MHz from ST-LINK MCO) via
+# boards/h755zi + an external TLE9251V (MIKROE CAN FD Click on jumper wires, FDCAN1 on
+# PD0/PD1, Zio CN9). examples/h755_echo echoed 500/500 frames back with id+1 against the
+# PCAN at 500 kbit, error counters 0/0. Bring-up root causes, in order: the click's STB
+# (mikroBUS CS) floats into standby (TLE9251V internal pull-up) -> tie to GND; CANH/CANL
+# were swapped (the SAME first-contact fault as the H735 bench). The click's VIO SEL
+# 0-ohm strap at 5V leaves TXD's ~3.5 V VIH marginally above the 3.3 V drive — it holds
+# on this unit at room temperature; move the strap to 3V3 if TX ever flakes.
+[[review]]
+id = "h755-fdcan-hardware"
+method = "review"
+context = "h755/FDCAN"
+verifies = ["REQ-CAN-DRV-001", "REQ-CAN-DRV-002", "REQ-CAN-DRV-003"]
+approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
+date = "2026-07-12"
