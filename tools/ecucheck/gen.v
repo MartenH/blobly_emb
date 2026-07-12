@@ -66,6 +66,7 @@ fn specs() map[string]map[string]Key {
 			'trace':     sub(.tbl, false, 'trace')
 			'shell':     sub(.tbl, false, 'shell')
 			'nm':        sub(.tbl, false, 'nm')
+			'duo':       sub(.tbl, false, 'duo')
 			'target':    sub(.tbl, false, 'target')
 			'bus':       sub(.namedmap, false, 'bus')
 			'partition': sub(.arr, false, 'partition')
@@ -93,6 +94,14 @@ fn specs() map[string]map[string]Key {
 			'out':      k(.id)
 			'fc':       k(.id)
 			'commands': k(.str_arr) // example-provided target commands (comm_glue.c)
+		}
+		'duo':        {
+			'signal': sub(.arr, false, 'duo_signal')
+		}
+		'duo_signal': {
+			'name':      req(.str)
+			'frame':     k(.id)
+			'period_ms': k(.int)
 		}
 		'nm':         {
 			'enabled':       k(.boolean)

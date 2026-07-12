@@ -19,7 +19,7 @@ include $(REPO)/boards/$(BOARD)/board.mk
 
 CFLAGS  = $(MCU_CM4) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
           $(BOARD_DEFS_CM4) -DBOARD_ENTRY=main__main \
-          -I. $(BOARD_INCS) -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
+          -I. -I$(REPO)/examples/h755_threadx/gen $(BOARD_INCS) -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU_CM4) -T $(BOARD_LD_CM4_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
 

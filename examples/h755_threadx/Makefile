@@ -33,7 +33,7 @@ include $(REPO)/boards/$(BOARD)/board.mk
 # BOARD_ENTRY: crt0 jumps into the generated V image's main__main.
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
           $(BOARD_DEFS) -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY -DBOARD_ENTRY=main__main $(CAN_DEFS) \
-          -I. $(BOARD_INCS) -I$(REPO)/driver/can -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
+          -I. -Igen $(BOARD_INCS) -I$(REPO)/driver/can -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
 
