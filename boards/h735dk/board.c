@@ -95,7 +95,7 @@ void board_timebase_init(void) {
  * the returned value never wraps as long as this is called at least that often (the
  * super-loop calls it every pass — far more often).
  *
- * The last/acc_cycles statics are shared: on the ThreadX target BOTH the FB thread and the
+ * The last/acc_cycles statics are shared: on a ThreadX build BOTH the FB thread and the
  * bus-owning comm thread call this (and an ISR could preempt mid-update). A brief PRIMASK
  * critical section serialises the read-modify-write so the delta can't be applied twice or
  * out of order (which would corrupt the load cadence + every trace/telemetry timestamp). */

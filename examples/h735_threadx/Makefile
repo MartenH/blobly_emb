@@ -18,16 +18,18 @@ NAME    := $(notdir $(CURDIR))
 TX       = $(REPO)/third_party/threadx
 PORT     = $(TX)/ports/cortex_m7/gnu
 
-MCU     = -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb
-CMSIS   = -I$(REPO)/third_party/cmsis_device_h7/Include -I$(REPO)/third_party/cmsis_core/CMSIS/Core/Include
-CAN_DEFS = -DBLOB_CAN_FDCAN -DBLOB_FDCAN_KCLK_HZ=25000000 -DBLOB_FDCAN_TQ=10 \
-           -DBLOB_FDCAN_NTSEG1=7 -DBLOB_FDCAN_NTSEG2=2
+# The board (clock/flash/I-cache bring-up, startup, vectors, FDCAN timing, linker script)
+# comes from boards/$(BOARD) — MCU/CMSIS/BOARD_DEFS/CAN_DEFS/BOARD_BSP_*/BOARD_LD_*.
+BOARD := h735dk
+include $(REPO)/boards/$(BOARD)/board.mk
+
 # TX_ENABLE_EXECUTION_CHANGE_NOTIFY makes the ThreadX port's context-switch + SysTick asm call
 # the four _tx_execution_* hooks (trace_hooks.c) — the source of the real thread/ISR trace.
+# BOARD_ENTRY: crt0 jumps into the generated V image's main__main.
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
-          -DSTM32H735xx -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY -DTRACE_CPU_MHZ=550 $(CAN_DEFS) \
-          -I. -I$(REPO)/driver/can -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
-LDFLAGS = $(MCU) -T threadx_h735.ld -nostartfiles -Wl,--gc-sections \
+          $(BOARD_DEFS) -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY -DBOARD_ENTRY=main__main $(CAN_DEFS) \
+          -I. -I$(BOARD_DIR) -I$(REPO)/driver/can -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
+LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
 
 BUILD    = build
@@ -39,7 +41,7 @@ TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
 
 # board bring-up (asm + board.c) + the exec-change trace recorder, reused from
 # examples/threadx_h735 (trace_hooks.c is driver-independent — pure recorder).
-BSP = crt0.S vectors.S tx_initialize_low_level.S board.c comm_glue.c $(REPO)/examples/threadx_h735/trace_hooks.c
+BSP = $(BOARD_BSP_THREADX) comm_glue.c $(REPO)/examples/threadx_h735/trace_hooks.c
 
 all: $(BUILD)/$(NAME).bin
 
@@ -75,7 +77,7 @@ $(TX_A): $(TX_OBJ)
 	$(AR) -rc $@ $^
 
 # 3) cross-compile + link: generated app.c + board bring-up + CAN backend + ThreadX kernel.
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) threadx_h735.ld
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(BOARD_LD_THREADX)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) -o $@
 	$(SIZE) $@
 
