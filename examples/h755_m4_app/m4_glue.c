@@ -3,7 +3,7 @@
  * IOC pool, and the boot handshake. */
 #include <stdint.h>
 #include "duo.h"
-#include "ioc.h"
+#include "xioc.h"
 
 /* --- boot handshake -------------------------------------------------------------------
  * Park until the CM7 signals clocks-ready (duo.h): the kernel's SysTick is configured
@@ -38,14 +38,15 @@ uint64_t board_now_us(void) {
 }
 
 /* --- cross-core IOC + heartbeat -------------------------------------------------------
- * The pool lives at a fixed SRAM4 address (duo.h), NOT in either image's bss: the same
- * ioc.h triple buffer that carries cross-thread signals on one core carries them across
- * cores when the buffers live here. The M4 writes; the M7 reads. */
-#define DUO_POOL ((ioc_t *)DUO_IOC_ADDR)
+ * The pool lives at a fixed SRAM4 address (duo.h), NOT in either image's bss. The channel
+ * is xioc (boards/common/xioc.h) — plain-store seq-stamped slots: ioc.h's exchange-based
+ * handoff is only sound within one core (its LDREX/STREX doesn't arbitrate across cores
+ * on this fabric; 162/200k torn reads measured before this redesign). M4 writes, M7 reads. */
+#define DUO_POOL ((xioc_t *)DUO_IOC_ADDR)
 
 void duo_ioc_init(void) {
 	for (int i = 0; i < DUO_IOC_N; i++) {
-		ioc_init(&DUO_POOL[i]);
+		xioc_init(&DUO_POOL[i]);
 	}
 	volatile uint32_t *hb = (volatile uint32_t *)DUO_HB_ADDR;
 	hb[1] = 0u;
@@ -54,8 +55,7 @@ void duo_ioc_init(void) {
 
 void duo_pub(int i, uint32_t a, uint32_t b) {
 	if (i >= 0 && i < DUO_IOC_N) {
-		sig_t v; v.a = a; v.b = b;
-		ioc_write(&DUO_POOL[i], v);
+		xioc_write(&DUO_POOL[i], a, b);
 	}
 }
 

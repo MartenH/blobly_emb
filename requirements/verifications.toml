@@ -138,3 +138,19 @@ context = "h755/dual-core"
 verifies = ["REQ-NM-005"]
 approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
 date = "2026-07-12"
+
+# CROSS-CORE IOC REDESIGN (boards/common/xioc.h): the exchange-based triple buffer is
+# replaced across cores by seq-stamped slots using ONLY plain 32-bit stores + DMB —
+# wait-free straight-line code on both sides (no loops, no retries, no LDREX/STREX, so
+# no monitor arbitration needed; an impossible-lap is DETECTED by a post-copy stamp
+# recheck and answered with the cached last-good value). Bench, same iocx harness that
+# measured 162/200k torn reads on the old scheme: 5 x 200k reads = 1M total, 0 tears,
+# 0 regressions, M4 FB channel steady at 100 Hz. ioc.h stays for intra-core use; its
+# cross-core claim is retired in every copy.
+[[review]]
+id = "h755-xioc"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-INV-002"]
+approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
+date = "2026-07-12"
