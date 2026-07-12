@@ -104,3 +104,19 @@ context = "h755/ThreadX"
 verifies = ["REQ-SHELL-004", "REQ-NM-005"]
 approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
 date = "2026-07-12"
+
+# DUAL-CORE FIRST CONTACT (multicore rung 3): examples/h755_cm4_heartbeat (180-byte C
+# image, flash bank 2) counts into the SRAM4 heartbeat cell (0x38000000, uncached on
+# both cores by policy); the CM7's full stack reads it over CAN via the new generic
+# [shell] commands seam — `cm4` reported the counter live at 16677 increments/ms
+# (~12 CM4 cycles per volatile SRAM4 round-trip at 200 MHz), while the CM7 stack ran
+# unperturbed (CpuLoad in envelope, stat/ps/trace unchanged). Both cores auto-boot from
+# the factory option bytes; the CM7 owns RCC/PWR, the CM4 touches nothing shared but
+# its cell.
+[[review]]
+id = "h755-dualcore-heartbeat"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-CAN-DRV-001"]
+approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
+date = "2026-07-12"

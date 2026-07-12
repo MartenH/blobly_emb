@@ -124,6 +124,7 @@ alive = 0x513          # = peers base + node, spelled out for the wire docs
 peers = [0x500, 0x53F] # the cluster's NM id range
 
 [shell]
+commands = ["cm4"]      # board command: the CM4 heartbeat readout (comm_glue.c shell_cm4)
 bus = "can0"
 in  = 0x7F0
 out = 0x7F1
