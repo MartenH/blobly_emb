@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 87 | 52 | 5 | 30 | 0 |
+| 88 | 53 | 5 | 30 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -71,6 +71,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-SHELL-002 | QM | test | verified | shell_test.v (pass) |
 | REQ-SHELL-003 | QM | test | verified | shell_test.v (pass) |
 | REQ-SHELL-004 | QM | test | verified | h735-shell-hardware (approved) |
+| REQ-SHELL-005 | QM | test | verified | h735-shell-bmc (approved) |
 | SYS-REQ-COMMS-001 | QM | test | covered | overspeed.lua (pending) |
 | SYS-REQ-COMMS-002 | QM | test | covered | overspeed.lua (pending) |
 | SYS-REQ-COMMS-003 | QM | test | verified | com_test.v (pass) |
@@ -163,6 +164,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-SHELL-002 | | | | ✓ | | |
 | REQ-SHELL-003 | | | | ✓ | | |
 | REQ-SHELL-004 | | ✓ | | | | |
+| REQ-SHELL-005 | | ✓ | | | | |
 | SYS-REQ-COMMS-001 | | | · | | | |
 | SYS-REQ-COMMS-002 | | | · | | | |
 | SYS-REQ-COMMS-003 | | | | ✓ | | |

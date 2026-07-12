@@ -42,3 +42,15 @@ status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-OBS-003"
+
+# The 8-bit DWT profiling counters can't run free (overflow events only reach the absent
+# ITM sink), so the benchmark is a bounded window sampled in chunks < 256 events — exact
+# 64-bit totals by construction. Verified on target (h735-shell-bmc in verifications.toml).
+[[req]]
+id = "REQ-SHELL-005"
+title = "Core micro-benchmark (bmc)"
+text = "On a target with DWT profiling counters, a bmc command shall run a bounded, known instruction window and report exact cycle, instruction, CPI, load/store-extra, folded, exception-overhead and sleep totals, accumulating the 8-bit counters wrap-safely."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-003"
