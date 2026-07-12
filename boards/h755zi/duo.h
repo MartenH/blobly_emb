@@ -8,7 +8,9 @@
  *   +0x08  clocks-ready: magic 'CLKR' the CM7 writes AFTER board_clock_init — the CM4
  *          parks until it appears, so its SysTick is configured against the final
  *          200 MHz HCLK, never the 64 MHz boot clock
- *   +0x20  cross-core IOC pool: ioc_t[DUO_IOC_N] (32 B each, line-aligned)
+ *   +0x20  cross-core IOC pool: xioc_t[DUO_IOC_N] (96 B each, line-aligned — see
+ *          boards/common/xioc.h: plain-store seq-stamped slots; ioc.h's exchange-based
+ *          triple buffer is NOT cross-core safe on this fabric, measured 2026-07-12)
  *          slot 0 = the M4 FB's signal {n, acc}     (semantic, 100 Hz)
  *          slot 1 = the stress channel {n, n*K}     (max-rate, tear detection)
  */
