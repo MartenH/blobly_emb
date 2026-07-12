@@ -170,3 +170,22 @@ context = "h755/dual-core"
 verifies = ["REQ-INV-002"]
 approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
 date = "2026-07-12"
+
+# TWO-CORE TRACE (the multicore swimlane's data path): the M4 runs the SAME recorder
+# (trace_hooks.c — exec-change thread/ISR hooks + the Loom FB hook, its own ring, its own
+# DWT timebase) and the M7 stays the SINGLE DUMP OWNER: satellite-targeted TraceCmds
+# (core-mask bit 1) forward through the SRAM4 dtrace handoff cell (arm; stop = freeze +
+# snapshot; dump imports the acked snapshot via TraceModule.load_remote) and the satellite's
+# window streams as its OWN self-describing ISO-TP block after the local one. Bench via
+# cmd/trace_dump mask 0x3: block 0 = core 0 (comm/loads/SysTick/LoadFast 3380us), block 1 =
+# core 1 (m4_app 1 kHz slices, m4_stress 963us runs, the M4's SysTick, handler 8 = the M4
+# FB at 1609us). Unit test: two sequential transfers, cores [0,1], correct counts.
+# REMAINING (blobly_net): per-core thread-id namespacing for labels + the GUI's core mask —
+# the CLI decoder is already fully multi-core.
+[[review]]
+id = "h755-duo-trace"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-TRACE-001"]
+approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
+date = "2026-07-12"

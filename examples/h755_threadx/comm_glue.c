@@ -141,6 +141,30 @@ void duo_clocks_ready(void) {
 #include "duo_gen.h" /* generated: the cross-core slot contract (gen/duo_gen.h) */
 #define DUO_POOL ((xioc_t *)DUO_IOC_ADDR)
 
+/* dtrace: the M7 half of the two-core trace handoff (duo.h). Single writer per field:
+ * we own req_seq/op, the satellite owns ack_seq/count and the snapshot buffer. */
+void duo_trace_req(uint32_t op) {
+    volatile uint32_t *c = (volatile uint32_t *)DUO_TRC_ADDR;
+    c[1] = op;
+    __asm__ volatile("dmb" ::: "memory");
+    c[0] = c[0] + 1u; /* req_seq++ releases the request */
+}
+
+int duo_trace_ready(void) {
+    volatile uint32_t *c = (volatile uint32_t *)DUO_TRC_ADDR;
+    return c[2] == c[0]; /* ack caught up */
+}
+
+uint32_t duo_trace_count(void) {
+    volatile uint32_t *c = (volatile uint32_t *)DUO_TRC_ADDR;
+    uint32_t n = c[3];
+    return n > DUO_TRC_MAX_REC ? DUO_TRC_MAX_REC : n;
+}
+
+unsigned char *duo_trace_buf(void) {
+    return (unsigned char *)DUO_TRC_BUF_ADDR;
+}
+
 /* duo_poll — the generated comm loop's reader: 1 if slot i has a value newer than the
  * last poll (out params always hold the best-known value). Reader state per slot lives
  * here (comm thread only). */

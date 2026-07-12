@@ -17,8 +17,10 @@ PORT     = $(TX)/ports/cortex_m4/gnu
 BOARD := h755zi
 include $(REPO)/boards/$(BOARD)/board.mk
 
+# TX_ENABLE_EXECUTION_CHANGE_NOTIFY: this core records its OWN thread/ISR trace
+# (trace_hooks.c — the same recorder as the M7, its ring in this image's bss).
 CFLAGS  = $(MCU_CM4) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
-          $(BOARD_DEFS_CM4) -DBOARD_ENTRY=main__main \
+          $(BOARD_DEFS_CM4) -DBOARD_ENTRY=main__main -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY \
           -I. -I$(REPO)/examples/h755_threadx/gen $(BOARD_INCS) -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU_CM4) -T $(BOARD_LD_CM4_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
@@ -30,7 +32,8 @@ TX_C   = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
          $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 
-BSP = $(BOARD_BSP_CM4_THREADX) $(BOARD_BSP_CM4_BARE) m4_glue.c
+BSP = $(BOARD_BSP_CM4_THREADX) $(BOARD_BSP_CM4_BARE) m4_glue.c \
+      $(REPO)/examples/threadx_h735/trace_hooks.c
 
 all: $(BUILD)/$(NAME).bin
 
