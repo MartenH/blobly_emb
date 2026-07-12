@@ -123,6 +123,10 @@ pub fn (mut m ShellModule) init(out_id u32) {
 	// help is handled intrinsically in on_in (a plain fn pointer can't reach the registry);
 	// everything else is an ordinary registered command.
 	m.register('uptime', 'time since boot', uptime_cmd)
+	// clear is really the CLIENT's job (the scrollback is the client's display, and the GUI
+	// intercepts it locally) — registered here anyway so help, the registry's single source
+	// of truth, lists it; a client that does forward it gets a truthful answer.
+	m.register('clear', 'clear the screen (client-side)', clear_cmd)
 }
 
 // register adds a command (static name/help strings; the table is fixed-size, no alloc).
@@ -238,6 +242,11 @@ pub fn (mut m ShellModule) produce(now u64, mut f can.Frame) bool {
 }
 
 // builtins ---------------------------------------------------------------------------------------
+
+fn clear_cmd(args &u8, args_len int, now u64, mut rsp Rsp) {
+	rsp.write('(clearing is the client display\'s job)')
+	rsp.nl()
+}
 
 fn uptime_cmd(args &u8, args_len int, now u64, mut rsp Rsp) {
 	secs := u32(now / 1_000_000)
