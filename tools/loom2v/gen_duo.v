@@ -155,6 +155,74 @@ fn duo_produce_drain(m Model) []string {
 	return g
 }
 
+// duo trace forwarding — the two-core dump. Emitted only when BOTH [duo] and an ISO-TP
+// [trace] are on: the rx arm forwards satellite-targeted commands (core-mask bit 1) into
+// the dtrace handoff cell, and the comm loop imports the acked snapshot as the remote
+// dump block (TraceModule.load_remote → streamed after the local block).
+fn duo_trace_on(m Model) bool {
+	return m.duo.on && m.trace.on && m.trace.dump_fc_id != 0
+}
+
+fn duo_trace_c_decls(m Model) []string {
+	if !duo_trace_on(m) {
+		return []string{}
+	}
+	return [
+		'fn C.duo_trace_req(u32) // post arm(1)/snapshot(2) to the satellite (duo.h dtrace cell)',
+		'fn C.duo_trace_ready() int',
+		'fn C.duo_trace_count() u32',
+		'fn C.duo_trace_buf() &u8',
+	]
+}
+
+fn duo_trace_globals(m Model) []string {
+	if !duo_trace_on(m) {
+		return []string{}
+	}
+	return ["\tg_duo_trace_ring [64]trace.Record // the satellite core's imported dump window"]
+}
+
+fn duo_trace_locals(m Model) []string {
+	if !duo_trace_on(m) {
+		return []string{}
+	}
+	return [
+		'\tg_tm.set_remote(u8(1), &g_duo_trace_ring[0], 64) // satellite blocks ride our dump link',
+		'\tmut duo_trc_wait := false // a satellite snapshot was requested by op_dump',
+	]
+}
+
+// the rx-arm extension: parse the SAME trace cmd frame the module gets; bit 1 of the core
+// mask (data[6]) addresses the satellite. arm/reset forward as arm; stop forwards as
+// freeze+snapshot (so the window is frozen close to the local one); dump waits for the ack.
+fn duo_trace_rx_arm(m Model) []string {
+	if !duo_trace_on(m) {
+		return []string{}
+	}
+	return [
+		'\t\t\tif rx.id == u32(0x${m.trace.cmd_id.hex()}) && rx.len == 8 && rx.data[6] & 0x02 != 0 {',
+		'\t\t\t\tmatch rx.data[0] {',
+		'\t\t\t\t\t1, 2, 4 { C.duo_trace_req(1) } // arm/start/reset -> satellite arm',
+		'\t\t\t\t\t3 { C.duo_trace_req(2) } // stop -> satellite freeze+snapshot',
+		'\t\t\t\t\t6 { duo_trc_wait = true } // dump -> import the ack below',
+		'\t\t\t\t\telse {}',
+		'\t\t\t\t}',
+		'\t\t\t}',
+	]
+}
+
+fn duo_trace_poll(m Model) []string {
+	if !duo_trace_on(m) {
+		return []string{}
+	}
+	return [
+		'\t\tif duo_trc_wait && C.duo_trace_ready() != 0 {',
+		'\t\t\tg_tm.load_remote(C.duo_trace_buf(), C.duo_trace_count())',
+		'\t\t\tduo_trc_wait = false',
+		'\t\t}',
+	]
+}
+
 fn duo_manifest(m Model) []string {
 	if !m.duo.on {
 		return []string{}

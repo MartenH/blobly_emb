@@ -93,7 +93,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TELEM-003 | QM | test | verified | loom_test.v (pass) |
 | REQ-TELEM-004 | QM | test | verified | loom_test.v (pass) |
 | REQ-TRACE-010 | QM | test | uncovered | — |
-| REQ-TRACE-001 | QM | test | verified | loom_test.v (pass) |
+| REQ-TRACE-001 | QM | test | verified | loom_test.v (pass), h755-duo-trace (approved) |
 | REQ-TRACE-002 | QM | test | uncovered | — |
 | REQ-TRACE-008 | QM | test | uncovered | — |
 | REQ-TRACE-009 | QM | test | uncovered | — |
@@ -186,7 +186,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TELEM-003 | | | | | | | ✓ | | |
 | REQ-TELEM-004 | | | | | | | ✓ | | |
 | REQ-TRACE-010 | | | | | | | | | |
-| REQ-TRACE-001 | | | | | | | ✓ | | |
+| REQ-TRACE-001 | | | | | ✓ | | ✓ | | |
 | REQ-TRACE-002 | | | | | | | | | |
 | REQ-TRACE-008 | | | | | | | | | |
 | REQ-TRACE-009 | | | | | | | | | |

@@ -71,6 +71,33 @@ void duo_pub_stress(uint32_t n, uint32_t h) {
 	duo_pub(DUO_SLOT_STRESS, n, h);
 }
 
+/* --- dtrace: the two-core trace handoff (duo.h) -----------------------------------------
+ * The recorder itself is trace_hooks.c (exec-change + FB hooks into this core's OWN ring,
+ * DWT-timestamped). The bus owner never touches our ring: it posts a request in the SRAM4
+ * cell; our app loop services it here — arm clears the ring, snapshot freezes + copies up
+ * to 64 wire-form records into the shared buffer and acks with the count. */
+void trace_arm(void);
+void trace_freeze(void);
+unsigned trace_snapshot(unsigned char out[][8], unsigned max);
+
+void duo_trace_service(void) {
+	volatile uint32_t *c = (volatile uint32_t *)DUO_TRC_ADDR;
+	uint32_t req = c[0];
+	if (req == c[2]) {
+		return; /* nothing new (c[2] = ack_seq) */
+	}
+	uint32_t op = c[1];
+	if (op == DUO_TRC_OP_ARM) {
+		trace_arm();
+		c[3] = 0u;
+	} else if (op == DUO_TRC_OP_SNAP) {
+		trace_freeze();
+		c[3] = trace_snapshot((unsigned char (*)[8])DUO_TRC_BUF_ADDR, DUO_TRC_MAX_REC);
+	}
+	__asm__ volatile("dmb" ::: "memory");
+	c[2] = req; /* ack */
+}
+
 void duo_hb_bump(void) {
 	volatile uint32_t *hb = (volatile uint32_t *)DUO_HB_ADDR;
 	hb[1] = hb[1] + 1u;
