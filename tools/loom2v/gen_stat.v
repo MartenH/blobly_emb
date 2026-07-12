@@ -37,9 +37,10 @@ fn stat_shell_fns(m Model, doc toml.Doc, app_threads []string, multi bool) []str
 	labels := stat_labels(m, doc, app_threads, multi)
 	mut g := []string{}
 	g << ''
-	g << '// stat_row: one handler line for the shell `stat` command (20/7/7/7 columns).'
-	g << 'fn stat_row(mut rsp shell.Rsp, name string, st loom.HandlerStat) {'
-	g << '\trsp.write_padded(name, 20)'
+	g << '// stat_vals: one handler line, values only — the caller writes the label first (the'
+	g << '// helper deliberately takes no text parameter: this generated file sits inside the'
+	g << '// no-alloc lint scan, which bans the heap-backed text type even as a param).'
+	g << 'fn stat_vals(mut rsp shell.Rsp, st loom.HandlerStat) {'
 	g << '\trsp.write_u32_padded(st.last_us, 7)'
 	g << '\trsp.write_u32_padded(st.max_us, 7)'
 	g << '\tmean := if st.count > 0 { u32(st.total_us / u64(st.count)) } else { u32(0) }'
@@ -54,13 +55,15 @@ fn stat_shell_fns(m Model, doc toml.Doc, app_threads []string, multi bool) []str
 	if multi {
 		for thr in app_threads {
 			for i, label in labels[thr] or { []string{} } {
-				g << "\tstat_row(mut rsp, '${label}', g_sched_${thr}.stat(${i}))"
+				g << "\trsp.write_padded('${label}', 20)"
+				g << '\tstat_vals(mut rsp, g_sched_${thr}.stat(${i}))'
 			}
 		}
 	} else {
 		part := m.part.by_part.keys()[0]
 		for i, label in labels[''] or { []string{} } {
-			g << "\tstat_row(mut rsp, '${label}', g_sched_${part}.stat(${i}))"
+			g << "\trsp.write_padded('${label}', 20)"
+			g << '\tstat_vals(mut rsp, g_sched_${part}.stat(${i}))'
 		}
 	}
 	g << '}'
