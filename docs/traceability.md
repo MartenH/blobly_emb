@@ -55,7 +55,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NM-002 | QM | test | verified | module_test.v (pass), nm_test.v (pass) |
 | REQ-NM-003 | QM | test | verified | module_test.v (pass), nm_can_test.v (pass), nm_test.v (pass) |
 | REQ-NM-004 | QM | test | verified | module_test.v (pass), nm_can_test.v (pass), nm_test.v (pass) |
-| REQ-NM-005 | QM | test | verified | frame_test.v (pass), h735-nm-hardware (approved), h755-threadx-stack (approved) |
+| REQ-NM-005 | QM | test | verified | frame_test.v (pass), h735-nm-hardware (approved), h755-threadx-stack (approved), h755-duo-ioc-fb (approved) |
 | REQ-NM-006 | QM | test | verified | module_test.v (pass), nm_test.v (pass) |
 | REQ-NM-007 | QM | test | verified | nm_test.v (pass) |
 | REQ-NM-008 | QM | test | verified | module_test.v (pass), nm_test.v (pass) |
@@ -148,7 +148,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NM-002 | | | | | | | ✓ | | |
 | REQ-NM-003 | | | | | | | ✓ | | |
 | REQ-NM-004 | | | | | | | ✓ | | |
-| REQ-NM-005 | | ✓ | | ✓ | | | ✓ | | |
+| REQ-NM-005 | | ✓ | | ✓ | ✓ | | ✓ | | |
 | REQ-NM-006 | | | | | | | ✓ | | |
 | REQ-NM-007 | | | | | | | ✓ | | |
 | REQ-NM-008 | | | | | | | ✓ | | |

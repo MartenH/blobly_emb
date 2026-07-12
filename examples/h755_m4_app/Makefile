@@ -1,0 +1,68 @@
+# h755_m4_app — ThreadX + a Loom FB on the NUCLEO-H755ZI-Q's Cortex-M4 (flash bank 2).
+# The V stack transpiles freestanding exactly like the M7 examples; the kernel is the
+# SAME pinned ThreadX built for the cortex_m4 port; the board layer contributes the
+# shared startup triad + the CM4 memory maps. Flash independently of bank 1:
+#     make flash
+CROSS   ?= arm-none-eabi-
+CC       = $(CROSS)gcc
+AR       = $(CROSS)ar
+OBJCOPY  = $(CROSS)objcopy
+SIZE     = $(CROSS)size
+V       ?= v
+REPO     = ../..
+NAME    := $(notdir $(CURDIR))
+TX       = $(REPO)/third_party/threadx
+PORT     = $(TX)/ports/cortex_m4/gnu
+
+BOARD := h755zi
+include $(REPO)/boards/$(BOARD)/board.mk
+
+CFLAGS  = $(MCU_CM4) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
+          $(BOARD_DEFS_CM4) -DBOARD_ENTRY=main__main \
+          -I. $(BOARD_INCS) -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
+LDFLAGS = $(MCU_CM4) -T $(BOARD_LD_CM4_THREADX) -nostartfiles -Wl,--gc-sections \
+          --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
+
+BUILD = build
+TX_A  = $(BUILD)/tx.a
+TX_ASM = $(wildcard $(PORT)/src/*.S)
+TX_C   = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
+TX_OBJ = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
+         $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
+
+BSP = $(BOARD_BSP_CM4_THREADX) $(BOARD_BSP_CM4_BARE) m4_glue.c
+
+all: $(BUILD)/$(NAME).bin
+
+$(BUILD)/app.c: main.v $(wildcard app/*.v) $(wildcard $(REPO)/loom/*.v) | $(BUILD)
+	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals \
+	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
+	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
+
+$(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
+	@mkdir -p $(BUILD)/tx
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile
+	@mkdir -p $(BUILD)/tx
+	$(CC) $(CFLAGS) -c $< -o $@
+$(TX_A): $(TX_OBJ)
+	$(AR) -rc $@ $^
+
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(BOARD_LD_CM4_THREADX)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(TX_A) -o $@
+	$(SIZE) $@
+
+$(BUILD)/$(NAME).bin: $(BUILD)/$(NAME).elf
+	$(OBJCOPY) -O binary $< $@
+
+$(BUILD):
+	mkdir -p $(BUILD)
+
+flash: $(BUILD)/$(NAME).bin
+	st-flash write $(BUILD)/$(NAME).bin 0x08100000
+	st-flash reset
+
+clean:
+	rm -rf $(BUILD)
+
+.PHONY: all flash clean

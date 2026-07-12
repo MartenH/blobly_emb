@@ -50,7 +50,12 @@ _vectors:
   .word __tx_BadHandler       // IRQ16
   .word __tx_BadHandler       // IRQ17
   .word __tx_BadHandler       // IRQ18
-  .word FDCAN1_IT0_IRQHandler // IRQ19 = FDCAN1 interrupt line 0 (Rx FIFO0) -> vector id 35 (comm_glue.c)
+  /* IRQ19 = FDCAN1 interrupt line 0 (Rx FIFO0) -> vector id 35. The image must provide the
+   * handler: comm_glue.c on a bus-owning core, a trivial stub on a CAN-less one (m4_glue.c).
+   * NEVER weak-alias it here: a same-object `.weak`+`.set` default captures this .word's
+   * relocation, the real handler goes unreferenced, --gc-sections deletes it, and every
+   * received CAN frame spins the core in __tx_BadHandler (a full bench day, 2026-07-12). */
+  .word FDCAN1_IT0_IRQHandler
   .word __tx_BadHandler
   .word __tx_BadHandler
   .word __tx_BadHandler
