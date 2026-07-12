@@ -67,7 +67,7 @@ fn test_help_lists_commands() {
 	out := pump(mut m)
 	assert out.contains('help')
 	assert out.contains('uptime')
-	assert out.contains('ps  - threads + stacks')
+	assert out.contains('ps      - threads + stacks') // 8-col aligned name
 }
 
 fn test_dispatch_and_args() {
@@ -106,6 +106,6 @@ fn test_busy_drops_second_line() {
 	// response still streaming (nothing pumped yet): a second line is dropped, not interleaved
 	m.on_in(0, line('uptime'))
 	out := pump(mut m)
-	assert out.contains('uptime  - time since boot') // the help listing, not the uptime output
+	assert out.contains('uptime  - time since boot') // the help listing (8-col aligned), not the uptime output
 	assert !out.contains('up 0m')
 }
