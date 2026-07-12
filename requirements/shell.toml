@@ -1,0 +1,44 @@
+# SHELL — the interactive engineering command line over the bus (comm/shell). One raw
+# frame carries one complete command line (editing/history are the host client's job);
+# the response streams back as one ISO-TP block under host flow control — the wire shape
+# the trace dump proved. A ComModule (docs/com-modules.md): the module owns the protocol,
+# loom2v only binds its in/fc/out endpoints to frames from [shell] in ecu.toml.
+
+[[req]]
+id = "REQ-SHELL-001"
+title = "Command line over the bus"
+text = "The ECU shall accept a command line as a single bus frame and return the command's text output to the host, streamed under host flow control; a line naming no registered command shall be answered with an error that echoes the received input."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-003"
+
+[[req]]
+id = "REQ-SHELL-002"
+title = "Command registry with help"
+text = "Shell commands shall be registered in a fixed-size table (name, help text, handler) without allocation, and a help command shall list every registered command with its help text."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-003"
+
+[[req]]
+id = "REQ-SHELL-003"
+title = "Bounded, non-blocking execution"
+text = "A shell command shall run bounded and non-blocking on the bus owner's thread, and while a response is still streaming, further command lines shall be discarded (single-flight) rather than queued or allowed to block the bus owner."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-003"
+
+# Verified on target (h735-shell-hardware in verifications.toml): the state map and the
+# stack scan are kernel-port-specific (ThreadX TX_STACK_FILL), so a host unit test would
+# only restate its own mock.
+[[req]]
+id = "REQ-SHELL-004"
+title = "Thread inspection (ps)"
+text = "On a kernel target, a ps command shall report every kernel thread's name, priority, scheduler state, and stack high-water mark against its stack size."
+status = "agreed"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-003"
