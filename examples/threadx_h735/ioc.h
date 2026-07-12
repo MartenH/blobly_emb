@@ -6,8 +6,9 @@
  * Three buffers + one atomically-exchanged index byte (2 index bits + a fresh flag) hand
  * ownership over without a lock. On the single-core H735 the writer and reader are two
  * ThreadX threads (a context switch can land mid-operation, so the exchange must be
- * atomic); the SAME code carries a signal across cores when the buffers live in shared
- * SRAM — which is what Phase 6's generated cross-core IOC will do.
+ * atomic). CROSS-CORE this exchange is NOT sound: LDREX/STREX between the H755's cores
+ * does not arbitrate (162/200k torn reads measured 2026-07-12) — cross-core signals use
+ * boards/common/xioc.h (plain-store seq-stamped slots) instead.
  */
 #ifndef BLOBLY_THREADX_H735_IOC_H
 #define BLOBLY_THREADX_H735_IOC_H
