@@ -49,3 +49,14 @@ context = "h735/ThreadX"
 verifies = ["REQ-SHELL-004"]
 approved_by = "Claude bench session — STM32H735G-DK vs PCAN-USB Pro FD"
 date = "2026-07-12"
+
+# bmc live on the bench: 64k-iter LCG window on the comm thread, IRQs live — 1209995
+# cycles (2199 us), 1150730 instructions, CPIx100 = 105 (I-cache on), exc = 64 cycles
+# (SysTick entry/exit during the window), sleep = 0; v7-M profiling identity holds.
+[[review]]
+id = "h735-shell-bmc"
+method = "review"
+context = "h735/ThreadX"
+verifies = ["REQ-SHELL-005"]
+approved_by = "Claude bench session — STM32H735G-DK vs PCAN-USB Pro FD"
+date = "2026-07-12"

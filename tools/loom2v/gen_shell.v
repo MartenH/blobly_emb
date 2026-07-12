@@ -54,7 +54,10 @@ fn shell_c_decls(m Model) []string {
 	if !m.shell.on {
 		return []string{}
 	}
-	return ['fn C.shell_ps(&u8, int) int']
+	return [
+		'fn C.shell_ps(&u8, int) int',
+		'fn C.shell_bmc(&u8, int) int',
+	]
 }
 
 // shell_module_globals / init: the module lives in __global (its ISO-TP link is ~1 KB).
@@ -72,6 +75,7 @@ fn shell_module_init(m Model) []string {
 	return [
 		'\tg_sh.init(u32(0x${m.shell.out_id.hex()})) // in place: no module-sized stack copies',
 		"\tg_sh.register('ps', 'threads: prio, state, stack high-water', shell_ps_cmd)",
+		"\tg_sh.register('bmc', 'DWT core benchmark (CPI, LSU, folds)', shell_bmc_cmd)",
 		'\tmut shell_txf := can.Frame{}',
 	]
 }
@@ -86,6 +90,13 @@ fn shell_cmd_fns(m Model) []string {
 		'',
 		'fn shell_ps_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {',
 		'\tn := C.shell_ps(&rsp.buf[0], ${shell.max_rsp})',
+		'\tif n > 0 {',
+		'\t\trsp.len = n',
+		'\t}',
+		'}',
+		'',
+		'fn shell_bmc_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {',
+		'\tn := C.shell_bmc(&rsp.buf[0], ${shell.max_rsp})',
 		'\tif n > 0 {',
 		'\t\trsp.len = n',
 		'\t}',
