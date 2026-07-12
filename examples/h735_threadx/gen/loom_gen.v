@@ -102,6 +102,26 @@ fn shell_nm_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 	rsp.nl()
 }
 
+// stat_row: one handler line for the shell `stat` command (20/7/7/7 columns).
+fn stat_row(mut rsp shell.Rsp, name string, st loom.HandlerStat) {
+	rsp.write_padded(name, 20)
+	rsp.write_u32_padded(st.last_us, 7)
+	rsp.write_u32_padded(st.max_us, 7)
+	mean := if st.count > 0 { u32(st.total_us / u64(st.count)) } else { u32(0) }
+	rsp.write_u32_padded(mean, 7)
+	rsp.write_u32(st.count)
+	rsp.nl()
+}
+
+fn shell_stat_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
+	rsp.write('handler             last   max    mean   n (us)')
+	rsp.nl()
+	stat_row(mut rsp, 'LoadFast.on_10ms', g_sched_load_fast.stat(0))
+	stat_row(mut rsp, 'LoadMid.on_20ms', g_sched_load_mid.stat(0))
+	stat_row(mut rsp, 'Governor.on_100ms', g_sched_ctrl_slow.stat(0))
+	stat_row(mut rsp, 'LoadSlow.on_100ms', g_sched_ctrl_slow.stat(1))
+}
+
 fn trace_clock() u64 {
 	return C.board_now_us()
 }
@@ -251,6 +271,7 @@ fn comm_thread_entry(input u32) {
 	g_sh.register('bmc', 'DWT core benchmark (CPI, LSU, folds)', shell_bmc_cmd)
 	mut shell_txf := can.Frame{}
 	g_sh.register('nm', 'NM state; nm req|rel', shell_nm_cmd)
+	g_sh.register('stat', 'per-handler us: last, max, mean, count', shell_stat_cmd)
 	g_nm.init(u8(0x12), u32(0x512), u64(0), nm.Timings{
 		msg_cycle_us:  100000
 		timeout_us:    300000
