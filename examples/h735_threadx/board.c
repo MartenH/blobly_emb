@@ -71,6 +71,15 @@ void board_clock_init(void) {
 		if (t >= 4000000u) return;
 	}
 	g_cpu_mhz = 550; /* SYSCLK confirmed on PLL1 -> DWT ticks at 550 MHz */
+
+	/* 8. Instruction cache. Without it the M7 fetches every instruction from 3-WS flash
+	 * and a tight loop's throughput depends on where its fetch boundaries happen to land
+	 * — a code-size change ANYWHERE re-rolls that dice (observed on this bench: the same
+	 * LCG loop swung 18k..183k iters/ms between otherwise-identical images, and one
+	 * 9-line shell commit tipped the load demo from 43% into permanent overrun). The
+	 * D-cache stays off on purpose: nothing here DMAs, but cache-coherency bugs are a
+	 * class we don't need today, and the I-cache alone removes the fetch lottery. */
+	SCB_EnableICache();
 }
 
 /* board_timebase_init: start the DWT cycle counter (free-running, 32-bit). It
