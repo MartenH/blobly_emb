@@ -1,3 +1,9 @@
+/* BOARD_ENTRY: the C symbol crt0 jumps to after bss/data init. The hand-written examples
+ * use plain main(); a loom2v-generated V image enters at main__main (override with
+ * -DBOARD_ENTRY=main__main in the example Makefile). */
+#ifndef BOARD_ENTRY
+#define BOARD_ENTRY main
+#endif
   .syntax	unified
   .section .init, "ax"
   .code 16
@@ -56,7 +62,7 @@ start:
   /* Jump to main() */
   mov r0, #0
   mov r1, #0
-  ldr r2, =main__main
+  ldr r2, =BOARD_ENTRY
   blx r2
   /*  when main returns, loop forever. */
 crt0_exit_loop:

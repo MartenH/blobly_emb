@@ -34,8 +34,12 @@
     .global     __tx_IntHandler                     // Int 0
 
 SYSTEM_CLOCK      =   550000000                      // STM32H735 CM7 at 550 MHz (board_clock_init, PLL1)
-SYSTICK_CYCLES    =   ((SYSTEM_CLOCK / 1000) -1)     // -> a 1 kHz ThreadX tick = 1 ms, matching the generated
-                                                    // target's [target].tick_ms=1 (loom2v sleeps N ms-ticks)
+/* SYSTICK_HZ: the ThreadX tick rate. Default 1 kHz = 1 ms, matching the generated target's
+ * [target].tick_ms=1 (loom2v sleeps N ms-ticks); override with -DSYSTICK_HZ=<hz>. */
+#ifndef SYSTICK_HZ
+#define SYSTICK_HZ 1000
+#endif
+SYSTICK_CYCLES    =   ((SYSTEM_CLOCK / SYSTICK_HZ) -1)
 
     .text 32
     .align 4
