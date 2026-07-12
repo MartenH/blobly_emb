@@ -90,3 +90,17 @@ context = "h755/FDCAN"
 verifies = ["REQ-CAN-DRV-001", "REQ-CAN-DRV-002", "REQ-CAN-DRV-003"]
 approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
 date = "2026-07-12"
+
+# The full generated ThreadX stack on the second board: examples/h755_threadx (BOARD :=
+# h755zi, NM node 0x13) ran the entire observability suite over can0 — CpuLoad 63% (the
+# H735's 43% scaled by exactly 550/400), Workload churning, NM alive 0x513, shell ps/nm/
+# bmc answering (bmc: identical cycle count + CPI 1.05 to the H735, wall time scaled by
+# the clock ratio — the I-cache and DWT timebase both proven), and a trace arm/stop/dump
+# session decoded 65 records (SysTick + 3 load threads + comm) via the generated manifest.
+[[review]]
+id = "h755-threadx-stack"
+method = "review"
+context = "h755/ThreadX"
+verifies = ["REQ-SHELL-004", "REQ-NM-005"]
+approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
+date = "2026-07-12"
