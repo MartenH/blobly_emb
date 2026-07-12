@@ -29,9 +29,9 @@ VDBG ?=
 BOARD := h735dk
 include $(REPO)/boards/$(BOARD)/board.mk
 
-INCS = $(CMSIS) -I$(BOARD_DIR) -I$(REPO)/driver/can
+INCS = $(CMSIS) $(BOARD_INCS) -I$(REPO)/driver/can
 CFLAGS   = $(MCU) -ffreestanding $(OPT) $(CDBG) -ffunction-sections -fdata-sections $(INCS) \
-           $(BOARD_DEFS) $(CAN_DEFS) -include $(BOARD_DIR)/board.h
+           $(BOARD_DEFS) $(CAN_DEFS) -include $(BOARD_COMMON)/board.h
 LDFLAGS  = $(MCU) -T $(BOARD_LD_BARE) -nostartfiles --specs=nano.specs --specs=nosys.specs \
            -Wl,--gc-sections -Wl,-Map=$(BUILD)/app.map
 OOCD_CFG = -f interface/stlink.cfg -f target/stm32h7x.cfg
