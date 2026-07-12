@@ -137,18 +137,20 @@ void duo_clocks_ready(void) {
     __asm__ volatile("dsb");
 }
 
-#define DUO_POOL ((ioc_t *)DUO_IOC_ADDR)
+#include "xioc.h"
+#define DUO_POOL ((xioc_t *)DUO_IOC_ADDR)
 
 /* shell_m4sig — the `m4sig` command: the M4 FB's signal off cross-core IOC slot 0.
  * ioc_read is the reader half of the same triple buffer the M4 writes: wait-free,
  * latest-complete-value. n advances 100/s while the M4's 10 ms handler runs. */
 int shell_m4sig(unsigned char *out, int cap) {
     char *p = (char *)out, *end = (char *)out + cap;
-    sig_t v = ioc_read(&DUO_POOL[DUO_SLOT_M4SIG]);
+    static xioc_rd_t rd; /* reader state is reader-private (comm thread only) */
+    xioc_read(&DUO_POOL[DUO_SLOT_M4SIG], &rd);
     p = ps_str(p, end, "M4 FB: n ");
-    p = ps_u32(p, end, v.a);
+    p = ps_u32(p, end, rd.a);
     p = ps_str(p, end, "  acc ");
-    p = ps_u32(p, end, v.b);
+    p = ps_u32(p, end, rd.b);
     p = ps_str(p, end, "\n");
     return (int)(p - (char *)out);
 }
@@ -161,12 +163,13 @@ int shell_iocx(unsigned char *out, int cap) {
     char *p = (char *)out, *end = (char *)out + cap;
     uint32_t reads = 200000u, tears = 0u, regress = 0u, advances = 0u;
     uint32_t prev = 0u;
+    xioc_rd_t rd = {0u, 0u, 0u};
     for (uint32_t i = 0; i < reads; i++) {
-        sig_t v = ioc_read(&DUO_POOL[DUO_SLOT_STRESS]);
-        if (v.b != v.a * DUO_STRESS_K) tears++;
-        if (v.a < prev) regress++;
-        if (v.a > prev) advances++;
-        prev = v.a;
+        xioc_read(&DUO_POOL[DUO_SLOT_STRESS], &rd);
+        if (rd.seq != 0u && rd.b != rd.a * DUO_STRESS_K) tears++;
+        if (rd.a < prev) regress++;
+        if (rd.a > prev) advances++;
+        prev = rd.a;
     }
     p = ps_str(p, end, "iocx: ");
     p = ps_u32(p, end, reads);
