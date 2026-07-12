@@ -22,6 +22,7 @@ enum Typ {
 	arr      // an array of tables (e.g. [[partition]])
 	tbl      // a single sub-table (e.g. [trace.trigger] or inline tx = {...})
 	str_arr  // an array of strings (reads/writes)
+	id_range // an inclusive [lo, hi] pair of CAN ids (an NM peers range)
 	namedmap // a table of arbitrary-named sub-tables (e.g. [bus.<name>])
 	str_map  // a table of arbitrary string->string (e.g. signal fields)
 	id       // a CAN id: an integer literal OR a bus.dbc message name (string)
@@ -64,9 +65,9 @@ fn specs() map[string]map[string]Key {
 			'telemetry': sub(.tbl, false, 'telemetry')
 			'trace':     sub(.tbl, false, 'trace')
 			'shell':     sub(.tbl, false, 'shell')
+			'nm':        sub(.tbl, false, 'nm')
 			'target':    sub(.tbl, false, 'target')
 			'bus':       sub(.namedmap, false, 'bus')
-			'nm':        sub(.namedmap, false, 'nm')
 			'partition': sub(.arr, false, 'partition')
 			'fb':        sub(.arr, false, 'fb')
 			'signal':    sub(.arr, false, 'signal')
@@ -91,6 +92,20 @@ fn specs() map[string]map[string]Key {
 			'in':      k(.id)
 			'out':     k(.id)
 			'fc':      k(.id)
+		}
+		'nm':         {
+			'enabled':       k(.boolean)
+			'bus':           k(.str)
+			'node':          k(.int) // required by loom2v when module bindings are present
+			'pn':            k(.int)
+			'request':       k(.boolean)
+			'msg_cycle_ms':  k(.int)
+			'timeout_ms':    k(.int)
+			'repeat_ms':     k(.int)
+			'wait_sleep_ms': k(.int)
+			// endpoint bindings (comm/nm_can's schema): alive = one id, peers = [lo, hi]
+			'alive':         k(.id)
+			'peers':         k(.id_range)
 		}
 		'trace':      {
 			'enabled':        k(.boolean)
@@ -124,7 +139,10 @@ fn specs() map[string]map[string]Key {
 			'fd':        k(.boolean)
 			'core':      k(.int)
 		}
-		'nm':         {
+		// the LEGACY per-network cfg2v shape ([nm.<bus>], gen.nm_<bus>_* constants); the
+		// module world's [nm] endpoint bindings live in the 'nm' schema above. Both coexist:
+		// [nm.can0] parses as a table-valued key of [nm] and validates against this.
+		'nm_net':     {
 			'node_id':       k(.int)
 			'tx_id':         k(.int)
 			'rx_lo':         k(.int)
@@ -232,7 +250,8 @@ fn label(ctx string) string {
 		'handler' { '[[fb.handler]]' }
 		'trigger' { '[trace.trigger]' }
 		'bus' { '[bus.*]' }
-		'nm' { '[nm.*]' }
+		'nm' { '[nm]' }
+		'nm_net' { '[nm.*]' }
 		'tx', 'rx', 'e2e', 'secoc' { 'inline ${ctx}' }
 		'route_from' { '[[route]] from' }
 		'route_to' { '[[route]] to' }
@@ -278,6 +297,12 @@ fn check_table(m map[string]toml.Any, ctx string, sp map[string]map[string]Key, 
 	keys := sp[ctx].clone()
 	for name, v in m {
 		key := keys[name] or {
+			// [nm] carries both worlds: scalar keys = the module bindings (this schema);
+			// a TABLE-valued key = a legacy cfg2v per-network block ([nm.can0] -> nm_net).
+			if ctx == 'nm' && v is map[string]toml.Any {
+				check_table(v, 'nm_net', sp, mut errs) // smart-cast: v IS the sub-table map
+				continue
+			}
 			errs << '${label(ctx)}: unknown key "${name}"${suggest(name, keys.keys())} (allowed: ${keys.keys().join(', ')})'
 			continue
 		}
@@ -350,6 +375,13 @@ fn type_ok(v toml.Any, typ Typ) bool {
 				false
 			}
 		}
+		.id_range {
+			if v is []toml.Any {
+				v.len == 2 && v[0] is i64 && v[1] is i64
+			} else {
+				false
+			}
+		}
 	}
 }
 
@@ -362,6 +394,7 @@ fn type_name(typ Typ) string {
 		.arr { 'an array of tables' }
 		.tbl, .namedmap { 'a table' }
 		.str_arr { 'an array of strings' }
+		.id_range { 'an inclusive [lo, hi] pair of CAN ids' }
 		.str_map { 'a table of string values' }
 	}
 }

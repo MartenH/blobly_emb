@@ -17,7 +17,7 @@ fail=0
 # schema/registry metadata (endpoint names, command names/help) pointing at rodata,
 # never concatenated, interpolated, or otherwise built at runtime. A V string literal
 # is a {ptr,len} view of static data: no heap. Growable []T / map stay banned here too.
-allow=("comm/com/endpoint.v" "comm/shell/shell.v")
+allow=("comm/com/endpoint.v" "comm/shell/shell.v" "comm/nm_can/module.v")
 
 for d in "${dirs[@]}"; do
 	[ -d "$d" ] || continue
