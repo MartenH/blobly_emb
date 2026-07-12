@@ -138,7 +138,20 @@ void duo_clocks_ready(void) {
 }
 
 #include "xioc.h"
+#include "duo_gen.h" /* generated: the cross-core slot contract (gen/duo_gen.h) */
 #define DUO_POOL ((xioc_t *)DUO_IOC_ADDR)
+
+/* duo_poll — the generated comm loop's reader: 1 if slot i has a value newer than the
+ * last poll (out params always hold the best-known value). Reader state per slot lives
+ * here (comm thread only). */
+int duo_poll(int i, uint32_t *a, uint32_t *b) {
+    static xioc_rd_t rd[DUO_IOC_N];
+    if (i < 0 || i >= DUO_IOC_N) return 0;
+    int fresh = xioc_read(&DUO_POOL[i], &rd[i]);
+    *a = rd[i].a;
+    *b = rd[i].b;
+    return fresh;
+}
 
 /* shell_m4sig — the `m4sig` command: the M4 FB's signal off cross-core IOC slot 0.
  * ioc_read is the reader half of the same triple buffer the M4 writes: wait-free,
@@ -146,7 +159,7 @@ void duo_clocks_ready(void) {
 int shell_m4sig(unsigned char *out, int cap) {
     char *p = (char *)out, *end = (char *)out + cap;
     static xioc_rd_t rd; /* reader state is reader-private (comm thread only) */
-    xioc_read(&DUO_POOL[DUO_SLOT_M4SIG], &rd);
+    xioc_read(&DUO_POOL[DUO_SLOT_M4LOAD], &rd);
     p = ps_str(p, end, "M4 FB: n ");
     p = ps_u32(p, end, rd.a);
     p = ps_str(p, end, "  acc ");
@@ -165,7 +178,7 @@ int shell_iocx(unsigned char *out, int cap) {
     uint32_t prev = 0u;
     xioc_rd_t rd = {0u, 0u, 0u};
     for (uint32_t i = 0; i < reads; i++) {
-        xioc_read(&DUO_POOL[DUO_SLOT_STRESS], &rd);
+        xioc_read(&DUO_POOL[DUO_SLOT_STRESS], &rd); /* slot from duo_gen.h */
         if (rd.seq != 0u && rd.b != rd.a * DUO_STRESS_K) tears++;
         if (rd.a < prev) regress++;
         if (rd.a > prev) advances++;

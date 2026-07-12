@@ -23,3 +23,6 @@ out,0x7f1,can0
 alive,0x513,can0
 peers_lo,0x500,can0
 peers_hi,0x53f,can0
+# duo signals: name,slot,frame
+m4load,0,0x201
+stress,1,-

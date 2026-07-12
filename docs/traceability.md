@@ -47,7 +47,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-MODE-002 | QM | test | verified | ecu_test.v (pass) |
 | REQ-MODE-003 | QM | test | verified | ecu_test.v (pass) |
 | REQ-INV-001 | QM | analysis | verified | noalloc-driver-lint (pass) |
-| REQ-INV-002 | B | analysis | verified | h755-xioc (approved) |
+| REQ-INV-002 | B | analysis | verified | h755-xioc (approved), h755-duo-signal (approved) |
 | REQ-INV-003 | B | analysis | uncovered | — |
 | REQ-INV-004 | QM | analysis | verified | noalloc-driver-lint (pass) |
 | REQ-INV-005 | QM | review | covered | naming-review (pending) |
