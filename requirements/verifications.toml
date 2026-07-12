@@ -120,3 +120,21 @@ context = "h755/dual-core"
 verifies = ["REQ-CAN-DRV-001"]
 approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
 date = "2026-07-12"
+
+# MULTICORE RUNGS 4+5: examples/h755_m4_app — ThreadX + a V Loom FB on the Cortex-M4,
+# publishing across cores via the shared-SRAM4 IOC (duo.h). Bench: the M4 FB dispatches
+# at exactly 100 Hz (m4sig: n 500 -> 644 in 1.44 s) read over CAN through the CM7 shell;
+# the iocx stress harness (200k reads vs a max-rate M4 writer) measured 0 regressions
+# BUT 162 torn reads: cross-core LDREXB/STREXB to D3 SRAM4 does NOT arbitrate between
+# the cores' exclusive monitors — the triple buffer's exchange is only safe within one
+# core. KNOWN ISSUE, fix designed: a seq-stamped slot scheme with plain stores + DMB for
+# the cross-core flavor. Bring-up postmortem: a same-object .weak/.set default for the
+# FDCAN vector let --gc-sections delete the REAL ISR, so every received frame spun the
+# CM7 in __tx_BadHandler — one full evening of ghost 'dual-core interference'.
+[[review]]
+id = "h755-duo-ioc-fb"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-NM-005"]
+approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
+date = "2026-07-12"

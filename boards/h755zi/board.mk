@@ -32,6 +32,11 @@ BOARD_INCS        = -I$(BOARD_DIR) -I$(BOARD_COMMON)
 # never touch it); a CM4 image is startup + app only. Shared memory = D3 SRAM4
 # (0x38000000, 64K) — uncached on both cores by policy, so no coherency management.
 MCU_CM4        = -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb
-BOARD_DEFS_CM4 = -DSTM32H755xx -DCORE_CM4
-BOARD_BSP_CM4_BARE = $(BOARD_COMMON)/startup.c
-BOARD_LD_CM4_BARE  = $(BOARD_DIR)/cm4_bare.ld
+# SYSTEM_CLOCK for the CM4 = HCLK after the CM7's bring-up (400/2); it must not configure
+# SysTick before the CM7 signals clocks-ready (duo.h) or the tick is 3.125x off.
+BOARD_DEFS_CM4 = -DSTM32H755xx -DCORE_CM4 -DTRACE_CPU_MHZ=200 -DSYSTEM_CLOCK=200000000
+BOARD_BSP_CM4_BARE    = $(BOARD_COMMON)/startup.c
+BOARD_LD_CM4_BARE     = $(BOARD_DIR)/cm4_bare.ld
+BOARD_BSP_CM4_THREADX = $(BOARD_COMMON)/crt0.S $(BOARD_COMMON)/vectors.S \
+                        $(BOARD_COMMON)/tx_initialize_low_level.S
+BOARD_LD_CM4_THREADX  = $(BOARD_DIR)/cm4_threadx.ld
