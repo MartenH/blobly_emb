@@ -102,9 +102,10 @@ fn shell_nm_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 	rsp.nl()
 }
 
-// stat_row: one handler line for the shell `stat` command (20/7/7/7 columns).
-fn stat_row(mut rsp shell.Rsp, name string, st loom.HandlerStat) {
-	rsp.write_padded(name, 20)
+// stat_vals: one handler line, values only — the caller writes the label first (the
+// helper deliberately takes no text parameter: this generated file sits inside the
+// no-alloc lint scan, which bans the heap-backed text type even as a param).
+fn stat_vals(mut rsp shell.Rsp, st loom.HandlerStat) {
 	rsp.write_u32_padded(st.last_us, 7)
 	rsp.write_u32_padded(st.max_us, 7)
 	mean := if st.count > 0 { u32(st.total_us / u64(st.count)) } else { u32(0) }
@@ -116,10 +117,14 @@ fn stat_row(mut rsp shell.Rsp, name string, st loom.HandlerStat) {
 fn shell_stat_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 	rsp.write('handler             last   max    mean   n (us)')
 	rsp.nl()
-	stat_row(mut rsp, 'LoadFast.on_10ms', g_sched_load_fast.stat(0))
-	stat_row(mut rsp, 'LoadMid.on_20ms', g_sched_load_mid.stat(0))
-	stat_row(mut rsp, 'Governor.on_100ms', g_sched_ctrl_slow.stat(0))
-	stat_row(mut rsp, 'LoadSlow.on_100ms', g_sched_ctrl_slow.stat(1))
+	rsp.write_padded('LoadFast.on_10ms', 20)
+	stat_vals(mut rsp, g_sched_load_fast.stat(0))
+	rsp.write_padded('LoadMid.on_20ms', 20)
+	stat_vals(mut rsp, g_sched_load_mid.stat(0))
+	rsp.write_padded('Governor.on_100ms', 20)
+	stat_vals(mut rsp, g_sched_ctrl_slow.stat(0))
+	rsp.write_padded('LoadSlow.on_100ms', 20)
+	stat_vals(mut rsp, g_sched_ctrl_slow.stat(1))
 }
 
 fn trace_clock() u64 {
