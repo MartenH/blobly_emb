@@ -26,7 +26,7 @@ include $(REPO)/boards/$(BOARD)/board.mk
 # the four _tx_execution_* hooks (trace_hooks.c).
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
           -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY -DSYSTICK_HZ=100 $(BOARD_DEFS) \
-          $(CAN_DEFS) -I. -I$(BOARD_DIR) -I$(REPO)/driver/can -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
+          $(CAN_DEFS) -I. $(BOARD_INCS) -I$(REPO)/driver/can -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
 
