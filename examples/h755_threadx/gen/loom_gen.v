@@ -78,6 +78,7 @@ fn C.shell_bmc(&u8, int) int
 fn C.shell_cm4(&u8, int) int
 fn C.shell_m4sig(&u8, int) int
 fn C.shell_iocx(&u8, int) int
+fn C.duo_poll(int, &u32, &u32) int // xioc reader (comm_glue.c): 1 = fresh value
 
 fn shell_ps_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 	n := C.shell_ps(&rsp.buf[0], 520)
@@ -312,6 +313,11 @@ fn comm_thread_entry(input u32) {
 	})
 	g_nm.request(C.board_now_us()) // this ECU's COM needs the bus from boot ([nm] request)
 	mut nm_txf := can.Frame{}
+	// cross-core signals (gen_duo): last tx time + latest polled value per signal
+	mut duo_m4load_last := u64(0)
+	mut duo_m4load_a := u32(0)
+	mut duo_m4load_b := u32(0)
+	mut duo_txf := can.Frame{}
 	mut last_tx_workload := u64(0)
 	mut rx := can.Frame{}
 	for {
@@ -400,6 +406,21 @@ fn comm_thread_entry(input u32) {
 		}
 		for ch.tx_ready() && g_nm.produce(t1, mut nm_txf) {
 			ch.send(nm_txf)
+		}
+		if C.duo_poll(0, &duo_m4load_a, &duo_m4load_b) != 0
+			&& t1 - duo_m4load_last >= 100000 && ch.tx_ready() {
+			duo_txf.id = u32(0x201)
+			duo_txf.len = 8
+			duo_txf.data[0] = u8(duo_m4load_a)
+			duo_txf.data[1] = u8(duo_m4load_a >> 8)
+			duo_txf.data[2] = u8(duo_m4load_a >> 16)
+			duo_txf.data[3] = u8(duo_m4load_a >> 24)
+			duo_txf.data[4] = u8(duo_m4load_b)
+			duo_txf.data[5] = u8(duo_m4load_b >> 8)
+			duo_txf.data[6] = u8(duo_m4load_b >> 16)
+			duo_txf.data[7] = u8(duo_m4load_b >> 24)
+			ch.send(duo_txf)
+			duo_m4load_last = t1
 		}
 	}
 }

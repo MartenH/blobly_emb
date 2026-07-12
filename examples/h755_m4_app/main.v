@@ -15,7 +15,8 @@ fn C.duo_wait_clocks()
 fn C.board_timebase_init()
 fn C.board_now_us() u64
 fn C.duo_ioc_init()
-fn C.duo_pub(int, u32, u32)
+fn C.duo_pub_m4load(u32, u32)
+fn C.duo_pub_stress(u32, u32)
 fn C.duo_hb_bump()
 fn C._tx_initialize_kernel_enter()
 fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32
@@ -37,7 +38,7 @@ mut:
 fn handler_m4load_on_10ms(ctx voidptr) {
 	mut st := unsafe { &AppState(ctx) }
 	acc := st.load.next()
-	C.duo_pub(0, st.load.n, acc) // cross-core: the M7's `m4sig` reads this
+	C.duo_pub_m4load(st.load.n, acc) // cross-core: the M7 transmits this as M4LoadFrame
 }
 
 fn run_app() {
@@ -61,7 +62,7 @@ fn stress_thread_entry(input u32) {
 	mut n := u32(0)
 	for {
 		n++
-		C.duo_pub(1, n, n * 2654435761)
+		C.duo_pub_stress(n, n * 2654435761)
 		C.duo_hb_bump()
 	}
 }

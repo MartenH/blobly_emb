@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include "duo.h"
 #include "xioc.h"
+#include "duo_gen.h" /* the GENERATED slot contract (../h755_threadx/gen — one generator run
+                      * owns the cross-core map; this satellite image consumes it) */
 
 /* --- boot handshake -------------------------------------------------------------------
  * Park until the CM7 signals clocks-ready (duo.h): the kernel's SysTick is configured
@@ -57,6 +59,16 @@ void duo_pub(int i, uint32_t a, uint32_t b) {
 	if (i >= 0 && i < DUO_IOC_N) {
 		xioc_write(&DUO_POOL[i], a, b);
 	}
+}
+
+/* Named publishers: the V app calls these; slot numbers stay inside the generated
+ * contract and appear in no V source. */
+void duo_pub_m4load(uint32_t n, uint32_t acc) {
+	duo_pub(DUO_SLOT_M4LOAD, n, acc);
+}
+
+void duo_pub_stress(uint32_t n, uint32_t h) {
+	duo_pub(DUO_SLOT_STRESS, n, h);
 }
 
 void duo_hb_bump(void) {

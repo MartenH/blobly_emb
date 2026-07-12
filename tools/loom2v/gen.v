@@ -442,6 +442,7 @@ mut:
 	trace        TraceCfg
 	shell        ShellCfg
 	nm           NmCfg
+	duo          DuoCfg
 }
 
 fn build_model(doc toml.Doc, dbc string) Model {
@@ -463,6 +464,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		trace:        parse_trace(doc, dbc)
 		shell:        parse_shell(doc, dbc)
 		nm:           parse_nm(doc, dbc)
+		duo:          parse_duo(doc, dbc)
 	}
 }
 
@@ -646,6 +648,7 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	man << trace_manifest_frames(m)
 	man << shell_manifest_frames(m)
 	man << nm_manifest_frames(m)
+	man << duo_manifest(m)
 	return man
 }
 
@@ -1176,6 +1179,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
 			glue << trace_c_decls(m)
 			glue << shell_c_decls(m)
+			glue << duo_c_decls(m)
 			glue << shell_cmd_fns(m)
 			glue << nm_shell_fns(m)
 			glue << stat_shell_fns(m, doc, app_threads, multi)
@@ -1460,6 +1464,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << nm_shell_register(m)
 				glue << stat_shell_register(m)
 				glue << nm_module_init(m)
+				glue << duo_comm_locals(m)
 				for si in tx_sigs {
 					glue << '\tmut last_tx_${snake(si.name)} := u64(0)'
 				}
@@ -1537,6 +1542,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << trace_produce_drain(m)
 				glue << shell_produce_drain(m)
 				glue << nm_produce_drain(m)
+				glue << duo_produce_drain(m)
 				glue << '\t}'
 				glue << '}'
 				glue << ''
@@ -1954,6 +1960,11 @@ fn main() {
 			'(the module lives on the bus owner). Building WITHOUT NM.')
 		m.nm.on = false
 	}
+	if m.duo.on && !(m.target.threadx) {
+		eprintln('loom2v: WARNING: [duo] cross-core signals need the ThreadX comm-thread target ' +
+			'(the bus owner transmits them). Building WITHOUT duo.')
+		m.duo.on = false
+	}
 	if m.trace.on && m.target.threadx {
 		validate_trace_threadx(m)
 	} else if m.trace.on && !trace_host {
@@ -2322,6 +2333,12 @@ fn main() {
 		for _, regs in all_regs {
 			if regs.len > slots {
 				slots = regs.len
+			}
+		}
+		if m.duo.on {
+			hpath := os.join_path(os.dir(args[5]), 'duo_gen.h')
+			os.write_file(hpath, duo_gen_h(m).join('\n') + '\n') or {
+				panic('write ${hpath}: ${err}')
 			}
 		}
 		mkpath := os.join_path(os.dir(args[5]), 'loom_build.mk')
