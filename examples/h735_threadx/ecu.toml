@@ -114,6 +114,15 @@ dump_fc        = 0x7E6
 
 # The CAN shell (comm/shell): type `help`/`ps` from blobly_net's shell panel — one raw frame in,
 # an ISO-TP text block out, served by the comm thread like every other module.
+# Network management: coordinated bus sleep/wake (docs/nm.md). This node announces on
+# `alive` while anything needs the bus and listens to the cluster's `peers` id range;
+# with no demand and a silent cluster it times out to bus_sleep. request=true keeps it
+# requested from boot; `nm rel` in the shell releases it (demo: watch 0x512 stop).
+[nm]
+node  = 0x12
+alive = 0x512          # = peers base + node, spelled out for the wire docs
+peers = [0x500, 0x53F] # the cluster's NM id range
+
 [shell]
 bus = "can0"
 in  = 0x7F0

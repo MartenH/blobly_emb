@@ -60,3 +60,17 @@ context = "h735/ThreadX"
 verifies = ["REQ-SHELL-005"]
 approved_by = "Claude bench session — STM32H735G-DK vs PCAN-USB Pro FD"
 date = "2026-07-12"
+
+# NM live on the bench (examples/h735_threadx vs PCAN on can0): alive 0x512 at 10 Hz with
+# CBV active-wakeup from boot; shell `nm rel` -> ready_sleep -> timeout -> bus_sleep with
+# the transmitter SILENT; a peer NM frame (0x507) woke it passively (CBV ready-to-sleep,
+# no active-wakeup) and it re-slept when the cluster went quiet; `nm req` re-woke it
+# actively (first frame CBV 0x11 = active-wakeup + repeat-message request). The shell `nm`
+# command reported every state along the way (bus_sleep/repeat_message/normal_operation).
+[[review]]
+id = "h735-nm-hardware"
+method = "review"
+context = "h735/ThreadX"
+verifies = ["REQ-NM-005"]
+approved_by = "Claude bench session — STM32H735G-DK vs PCAN-USB Pro FD"
+date = "2026-07-12"
