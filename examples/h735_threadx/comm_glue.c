@@ -36,6 +36,67 @@ void ioc_get(int i, unsigned *a, unsigned *b) {
     *a = v.a; *b = v.b;
 }
 
+/* shell_ps: the `ps` command — walk ThreadX's created-thread list and format one line per
+ * thread: name, priority, state, stack used/size (high-water = first untouched byte from the
+ * stack's low end; stacks live in zeroed BSS, so scanning for the first non-zero byte is a
+ * faithful watermark without TX_ENABLE_STACK_CHECKING). Read-only kernel globals — safe from
+ * the comm thread (com-modules interaction rule 1). Bounded: <=16 threads, one pass each. */
+extern TX_THREAD *_tx_thread_created_ptr;
+extern ULONG _tx_thread_created_count;
+
+static char *ps_str(char *p, char *end, const char *s) {
+    while (*s && p < end) *p++ = *s++;
+    return p;
+}
+static char *ps_u32(char *p, char *end, unsigned v) {
+    char d[10]; int n = 0;
+    if (!v) { if (p < end) *p++ = '0'; return p; }
+    while (v) { d[n++] = (char)('0' + v % 10u); v /= 10u; }
+    while (n && p < end) *p++ = d[--n];
+    return p;
+}
+static const char *ps_state(unsigned st) {
+    switch (st) {
+    case 0:  return "ready";
+    case 1:  return "done";
+    case 2:  return "dead";
+    case 3:  return "susp";
+    case 4:  return "sleep";
+    case 6:  return "sem";
+    case 13: return "mutex";
+    default: return "wait";
+    }
+}
+int shell_ps(unsigned char *out, int cap) {
+    char *p = (char *)out, *end = (char *)out + cap;
+    p = ps_str(p, end, "name                pri state stack\n");
+    TX_THREAD *t = _tx_thread_created_ptr;
+    for (ULONG i = 0; i < _tx_thread_created_count && t && i < 16u; i++, t = t->tx_thread_created_next) {
+        const char *nm = t->tx_thread_name ? t->tx_thread_name : "?";
+        char *col = p + 20;
+        for (int c = 0; nm[c] && c < 19 && p < end; c++) *p++ = nm[c];
+        while (p < col && p < end) *p++ = ' ';
+        p = ps_u32(p, end, (unsigned)t->tx_thread_priority);
+        p = ps_str(p, end, "  ");
+        p = ps_str(p, end, ps_state((unsigned)t->tx_thread_state));
+        p = ps_str(p, end, "  ");
+        /* high-water: first non-zero byte from the stack's LOW end (stacks grow down) */
+        unsigned char *lo = (unsigned char *)t->tx_thread_stack_start;
+        unsigned char *hi = (unsigned char *)t->tx_thread_stack_end;
+        unsigned size = (unsigned)(hi - lo) + 1u;
+        /* ThreadX memsets the whole stack to TX_STACK_FILL (0xEF) at create (default build,
+         * TX_DISABLE_STACK_FILLING off) — the high-water mark is the first byte the thread
+         * overwrote, scanning up from the stack's low end. */
+        unsigned untouched = 0;
+        while (lo + untouched <= hi && lo[untouched] == 0xEFu) untouched++;
+        p = ps_u32(p, end, size - untouched);
+        p = ps_str(p, end, "/");
+        p = ps_u32(p, end, size);
+        p = ps_str(p, end, "\n");
+    }
+    return (int)(p - (char *)out);
+}
+
 /* Comm-thread wake semaphore: the Rx ISR posts it; comm_rx_wait (called from the generated
  * comm thread) blocks on it, so the thread wakes on rx instead of polling. */
 static TX_SEMAPHORE g_comm_sem;

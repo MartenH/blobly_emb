@@ -1,0 +1,236 @@
+module shell
+
+import comm.com
+import comm.isotp
+import driver.can
+
+// ShellModule — an interactive command line over CAN, as an ordinary ComModule
+// (docs/com-modules.md): a command LINE arrives as one raw frame on `in` (≤ 8 chars — bmc, ps,
+// help, top all fit; multi-frame input is a later slice), the handler runs BOUNDED on the comm
+// thread, and the text response streams as one ISO-TP block on `out`, flow-controlled by the
+// host on `fc` — the exact wire shape the trace dump proved. Line editing (backspace, history)
+// is the CLIENT's job; the target only ever sees complete lines.
+//
+// How commands may interact with the rest of the system (the com-modules rules):
+//   1. read-only hardware/kernel globals (DWT counters, the ThreadX thread list): direct reads;
+//   2. comm-thread-owned modules (trace): direct calls — same thread, no locks;
+//   3. other threads' data: read their PUBLISHED slots (single-writer scratch / IOC);
+//   4. mutating another thread: a request via the mode mailbox / IOC — never a direct poke.
+// A handler must be bounded and non-blocking: it runs inside the bus owner's loop.
+pub const endpoints = [
+	com.Endpoint{
+		name: 'in'
+		dir:  .rx
+		dlc:  0 // a raw command line, 1..8 bytes (frame length = line length)
+		doc:  'the command line (one raw frame)'
+	},
+	com.Endpoint{
+		name: 'fc'
+		dir:  .rx
+		dlc:  8
+		doc:  'ISO-TP flow control for the response stream'
+	},
+	com.Endpoint{
+		name: 'out'
+		dir:  .tx
+		dlc:  8
+		doc:  'the response text (one ISO-TP block)'
+	},
+]
+
+pub const max_rsp = isotp.max_payload // one ISO-TP block; help/ps for a handful of threads fits
+
+// Rsp is the no-alloc response writer — a fixed buffer the handlers append text into.
+pub struct Rsp {
+pub mut:
+	buf [520]u8
+	len int
+}
+
+pub fn (mut r Rsp) write(s string) {
+	for i in 0 .. s.len {
+		if r.len >= max_rsp {
+			return
+		}
+		r.buf[r.len] = s[i]
+		r.len++
+	}
+}
+
+pub fn (mut r Rsp) write_u32(n u32) {
+	if n == 0 {
+		r.write('0')
+		return
+	}
+	mut digits := [10]u8{}
+	mut v := n
+	mut nd := 0
+	for v > 0 {
+		digits[nd] = u8(`0` + v % 10)
+		v /= 10
+		nd++
+	}
+	for i := nd - 1; i >= 0; i-- {
+		if r.len >= max_rsp {
+			return
+		}
+		r.buf[r.len] = digits[i]
+		r.len++
+	}
+}
+
+pub fn (mut r Rsp) nl() {
+	r.write('\n')
+}
+
+// CmdFn runs one command: raw argument bytes (whatever followed the command name), the current
+// time (µs, the bus owner's clock), and the response writer. BOUNDED — it runs on the comm thread.
+pub type CmdFn = fn (args &u8, args_len int, now u64, mut rsp Rsp)
+
+struct Cmd {
+	name string
+	help string
+	f    CmdFn = unsafe { nil }
+}
+
+pub struct ShellModule {
+mut:
+	out_id u32
+	link   isotp.Link
+	cmds [16]Cmd
+	ncmd int
+}
+
+// init prepares the module IN PLACE — the instance usually lives in a __global (its ISO-TP
+// link alone is ~1 KB), and building it as a stack local + return-copy would put ~2x its size
+// on the caller's (4 KB comm) stack. No constructor by value, ever, for module-sized structs.
+pub fn (mut m ShellModule) init(out_id u32) {
+	m.out_id = out_id
+	m.ncmd = 0
+	// help is handled intrinsically in on_in (a plain fn pointer can't reach the registry);
+	// everything else is an ordinary registered command.
+	m.register('uptime', 'time since boot', uptime_cmd)
+}
+
+// register adds a command (static name/help strings; the table is fixed-size, no alloc).
+pub fn (mut m ShellModule) register(name string, help string, f CmdFn) {
+	if m.ncmd >= m.cmds.len {
+		return
+	}
+	m.cmds[m.ncmd] = Cmd{
+		name: name
+		help: help
+		f:    f
+	}
+	m.ncmd++
+}
+
+// on_in serves the `in` endpoint: one raw frame = one command line. Split "name args", find the
+// command, run it, and hand the response to the ISO-TP link (produce streams it). While a previous
+// response still streams, the line is answered with a busy note appended after it drains — keep it
+// simple: drop with no reply (the client times out and the user retypes; single-flight by design).
+pub fn (mut m ShellModule) on_in(now u64, f can.Frame) {
+	if m.link.busy() || f.len == 0 {
+		return
+	}
+	// split the line at the first space: [0..sp) = name, (sp..len) = args
+	mut sp := int(f.len)
+	for i in 0 .. int(f.len) {
+		if f.data[i] == ` ` {
+			sp = i
+			break
+		}
+	}
+	mut rsp := Rsp{}
+	// `help` is intrinsic: it lists the registry, which a plain fn pointer can't reach.
+	if sp == 4 && name_eq('help', f.data, 4) {
+		rsp.write('help    - list commands')
+		rsp.nl()
+		for i in 0 .. m.ncmd {
+			rsp.write(m.cmds[i].name)
+			rsp.write('  - ')
+			rsp.write(m.cmds[i].help)
+			rsp.nl()
+		}
+		m.link.send(&rsp.buf[0], rsp.len)
+		return
+	}
+	mut found := false
+	for i in 0 .. m.ncmd {
+		c := m.cmds[i]
+		if c.name.len == sp && name_eq(c.name, f.data, sp) {
+			ai := if sp < int(f.len) { sp + 1 } else { int(f.len) }
+			c.f(unsafe { &f.data[ai] }, int(f.len) - ai, now, mut rsp)
+			found = true
+			break
+		}
+	}
+	if !found {
+		rsp.write('unknown command — try help')
+		rsp.nl()
+		// echo what we got, so a mistyped/truncated line is diagnosable
+		rsp.write('got: "')
+		for i in 0 .. int(f.len) {
+			if rsp.len < max_rsp {
+				rsp.buf[rsp.len] = f.data[i]
+				rsp.len++
+			}
+		}
+		rsp.write('"')
+		rsp.nl()
+	}
+	if rsp.len == 0 {
+		rsp.write('ok')
+		rsp.nl()
+	}
+	m.link.send(&rsp.buf[0], rsp.len)
+}
+
+fn name_eq(name string, data [64]u8, n int) bool {
+	for i in 0 .. n {
+		if name[i] != data[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// on_fc serves the `fc` endpoint: the host's ISO-TP flow control for the response stream.
+pub fn (mut m ShellModule) on_fc(now u64, f can.Frame) {
+	if f.len < 3 {
+		return
+	}
+	mut p := isotp.Pdu{}
+	for i in 0 .. 8 {
+		p.data[i] = f.data[i]
+	}
+	m.link.on_frame(now, p)
+}
+
+// produce fills at most ONE tx frame per call (the bus owner gates on tx_ready) — the response
+// stream, ISO-TP paced.
+pub fn (mut m ShellModule) produce(now u64, mut f can.Frame) bool {
+	m.link.tick(now)
+	mut p := isotp.Pdu{}
+	if m.link.poll(now, mut p) {
+		f.id = m.out_id
+		f.len = 8
+		for i in 0 .. 8 {
+			f.data[i] = p.data[i]
+		}
+		return true
+	}
+	return false
+}
+
+// builtins ---------------------------------------------------------------------------------------
+
+fn uptime_cmd(args &u8, args_len int, now u64, mut rsp Rsp) {
+	secs := u32(now / 1_000_000)
+	rsp.write('up ')
+	rsp.write_u32(secs / 60)
+	rsp.write('m ')
+	rsp.write_u32(secs % 60)
+	rsp.write('s')
+	rsp.nl()
+}

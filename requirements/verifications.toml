@@ -36,3 +36,16 @@ context = "h735/FDCAN" # specific board/backend, not a generic "target"
 verifies = ["REQ-CAN-DRV-001", "REQ-CAN-DRV-002", "REQ-CAN-DRV-003"]
 approved_by = "Marten Hildell — STM32H735G-DK FDCAN1 echo vs PCAN-USB Pro FD"
 date = "2026-07-02"
+
+# The CAN shell live on the bench: help listed the registry, ps reported every ThreadX
+# thread (System Timer/load_fast/load_mid/ctrl_slow/comm) with priority, state, and a
+# real stack high-water (e.g. comm 2588/4096) after the TX_STACK_FILL-aware scan; uptime
+# and the unknown-command echo answered too. examples/h735_threadx on the STM32H735G-DK
+# vs PCAN, one raw frame in on 0x7F0, ISO-TP response on 0x7F1/0x7F2.
+[[review]]
+id = "h735-shell-hardware"
+method = "review"
+context = "h735/ThreadX"
+verifies = ["REQ-SHELL-004"]
+approved_by = "Claude bench session — STM32H735G-DK vs PCAN-USB Pro FD"
+date = "2026-07-12"

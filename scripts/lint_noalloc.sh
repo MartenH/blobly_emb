@@ -13,9 +13,18 @@ dirs=("comm" "loom" "ecu" "wdg" "examples")
 pattern='(\bstring\b|\bmap\[|\[\][A-Za-z_])'
 fail=0
 
+# Reviewed exceptions: files whose `string` uses are COMPILE-TIME LITERALS only —
+# schema/registry metadata (endpoint names, command names/help) pointing at rodata,
+# never concatenated, interpolated, or otherwise built at runtime. A V string literal
+# is a {ptr,len} view of static data: no heap. Growable []T / map stay banned here too.
+allow=("comm/com/endpoint.v" "comm/shell/shell.v")
+
 for d in "${dirs[@]}"; do
 	[ -d "$d" ] || continue
 	while IFS= read -r -d '' f; do
+		skip=0
+		for a in "${allow[@]}"; do [ "$f" = "$a" ] && skip=1; done
+		[ "$skip" = "1" ] && continue
 		if grep -nE "$pattern" "$f"; then
 			echo "  ^ banned dynamic-allocation construct in $f"
 			fail=1

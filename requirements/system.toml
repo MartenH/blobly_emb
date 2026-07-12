@@ -125,3 +125,11 @@ text = "The ECU shall make each handler's runtime (execution time and invocation
 status = "draft"
 method = "test"
 asil = "QM"
+
+[[req]]
+id = "SYS-REQ-OBS-003"
+title = "Interactive runtime inspection"
+text = "The ECU shall let a host interactively inspect runtime state (threads, counters, uptime) over the bus while the target keeps running."
+status = "agreed"
+method = "test"
+asil = "QM"
