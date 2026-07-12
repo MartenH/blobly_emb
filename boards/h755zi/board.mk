@@ -26,3 +26,12 @@ BOARD_BSP_BARE    = $(BOARD_COMMON)/startup.c $(BOARD_DIR)/board.c
 BOARD_LD_THREADX  = $(BOARD_DIR)/threadx.ld
 BOARD_LD_BARE     = $(BOARD_DIR)/bare.ld
 BOARD_INCS        = -I$(BOARD_DIR) -I$(BOARD_COMMON)
+
+# --- the OTHER core: Cortex-M4 (flash bank 2 @ 0x08100000, D2 SRAM) -------------------
+# No board.c: the CM7 owns RCC/PWR (one core initializes the clock tree, the other must
+# never touch it); a CM4 image is startup + app only. Shared memory = D3 SRAM4
+# (0x38000000, 64K) — uncached on both cores by policy, so no coherency management.
+MCU_CM4        = -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb
+BOARD_DEFS_CM4 = -DSTM32H755xx -DCORE_CM4
+BOARD_BSP_CM4_BARE = $(BOARD_COMMON)/startup.c
+BOARD_LD_CM4_BARE  = $(BOARD_DIR)/cm4_bare.ld

@@ -8,7 +8,7 @@ module main
 import toml
 import comm.shell
 
-const shell_config_keys = ['enabled', 'bus']
+const shell_config_keys = ['enabled', 'bus', 'commands']
 
 struct ShellCfg {
 mut:
@@ -17,6 +17,10 @@ mut:
 	in_id  u32 = 0x7F0
 	fc_id  u32 = 0x7F2
 	out_id u32 = 0x7F1
+	// example-provided commands ([shell] commands = ["cm4"]): each name X becomes
+	// `int shell_X(unsigned char*, int)` in the example's comm_glue.c, an adapter, and a
+	// registry entry — target-backed commands without touching the generator per command.
+	commands []string
 }
 
 fn parse_shell(doc toml.Doc, dbc string) ShellCfg {
@@ -25,6 +29,18 @@ fn parse_shell(doc toml.Doc, dbc string) ShellCfg {
 		sm := scfg.as_map()
 		t.on = (sm['enabled'] or { toml.Any(true) }).bool()
 		t.bus = (sm['bus'] or { toml.Any('') }).string()
+		for c in (sm['commands'] or { toml.Any([]toml.Any{}) }).array() {
+			name := c.string()
+			if name.len == 0 || name.len > 8 {
+				panic('loom2v: [shell] commands: "${name}" must be 1..8 chars (one CAN frame)')
+			}
+			for ch in name {
+				if !((ch >= `a` && ch <= `z`) || (ch >= `0` && ch <= `9`) || ch == `_`) {
+					panic('loom2v: [shell] commands: "${name}" must be [a-z0-9_] (a C symbol suffix)')
+				}
+			}
+			t.commands << name
+		}
 		mut endpoint_names := []string{}
 		for e in shell.endpoints {
 			endpoint_names << e.name
@@ -54,10 +70,14 @@ fn shell_c_decls(m Model) []string {
 	if !m.shell.on {
 		return []string{}
 	}
-	return [
+	mut g := [
 		'fn C.shell_ps(&u8, int) int',
 		'fn C.shell_bmc(&u8, int) int',
 	]
+	for name in m.shell.commands {
+		g << 'fn C.shell_${name}(&u8, int) int'
+	}
+	return g
 }
 
 // shell_module_globals / init: the module lives in __global (its ISO-TP link is ~1 KB).
@@ -72,12 +92,17 @@ fn shell_module_init(m Model) []string {
 	if !m.shell.on {
 		return []string{}
 	}
-	return [
+	base := [
 		'\tg_sh.init(u32(0x${m.shell.out_id.hex()})) // in place: no module-sized stack copies',
 		"\tg_sh.register('ps', 'threads: prio, state, stack high-water', shell_ps_cmd)",
 		"\tg_sh.register('bmc', 'DWT core benchmark (CPI, LSU, folds)', shell_bmc_cmd)",
 		'\tmut shell_txf := can.Frame{}',
 	]
+	mut g := base.clone()
+	for name in m.shell.commands {
+		g.insert(g.len - 1, "\tg_sh.register('${name}', 'target command (comm_glue.c)', shell_${name}_cmd)")
+	}
+	return g
 }
 
 // shell_cmd_fns: module-level command adapters (target-backed commands bridge to C here — the
@@ -86,7 +111,7 @@ fn shell_cmd_fns(m Model) []string {
 	if !m.shell.on {
 		return []string{}
 	}
-	return [
+	base := [
 		'',
 		'fn shell_ps_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {',
 		'\tn := C.shell_ps(&rsp.buf[0], ${shell.max_rsp})',
@@ -102,6 +127,17 @@ fn shell_cmd_fns(m Model) []string {
 		'\t}',
 		'}',
 	]
+	mut g := base.clone()
+	for name in m.shell.commands {
+		g << ''
+		g << 'fn shell_${name}_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {'
+		g << '\tn := C.shell_${name}(&rsp.buf[0], ${shell.max_rsp})'
+		g << '\tif n > 0 {'
+		g << '\t\trsp.len = n'
+		g << '\t}'
+		g << '}'
+	}
+	return g
 }
 
 // shell_rx_arms: the router match arms in the comm thread's rx drain.

@@ -87,11 +87,12 @@ fn specs() map[string]map[string]Key {
 			'period_ms': k(.int)
 		}
 		'shell':      {
-			'enabled': k(.boolean)
-			'bus':     k(.str)
-			'in':      k(.id)
-			'out':     k(.id)
-			'fc':      k(.id)
+			'enabled':  k(.boolean)
+			'bus':      k(.str)
+			'in':       k(.id)
+			'out':      k(.id)
+			'fc':       k(.id)
+			'commands': k(.str_arr) // example-provided target commands (comm_glue.c)
 		}
 		'nm':         {
 			'enabled':       k(.boolean)
