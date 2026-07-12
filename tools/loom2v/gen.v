@@ -1219,6 +1219,11 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				own := if multi { thr } else { part }
 				glue << '\tg_${own}_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned'
 				glue << '\tg_${own}_stack [4096]u8'
+				// The Scheduler is ~1.6 KB (max_tasks slots) and lives for the thread's lifetime —
+				// as an entry-frame local it would permanently sit under every deeper frame and eat
+				// half the 4 KB thread stack (the stack-local cousin of the shell's boot-hang copy).
+				// bss-zero == Scheduler{} (its only field default is a nil hook), so no init needed.
+				glue << '\tg_sched_${own} loom.Scheduler // ~1.6 KB: bss, never an entry-frame local'
 			}
 			glue << trace_scratch_fields(m, part)
 			glue << trace_module_globals(m)
@@ -1242,8 +1247,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			// exactly what the trace's swimlane is for.
 			for ti, thr in app_threads {
 				glue << 'fn run_${thr}() {'
-				glue << '\tmut st := Thread_${thr}_state{}'
-				glue << '\tmut sched := loom.Scheduler{}'
+				glue << '\tmut st := Thread_${thr}_state{} // small + carries the FB field defaults: stack is right'
+				glue << '\tmut sched := &g_sched_${thr} // ~1.6 KB: lives in bss, not this lifetime frame'
 				for r in all_regs['${part}/${thr}'] or { []string{} } {
 					glue << r
 				}
@@ -1282,7 +1287,13 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		}
 		if !multi {
 		glue << '\tmut st := Partition_${part}_state{}'
-		glue << '\tmut sched := loom.Scheduler{}'
+		if m.target.threadx {
+			// same rule as the multi-thread path: the FB thread has a 4 KB stack. Bare metal
+			// keeps the local — run() sits on the main stack, which owns the remaining RAM.
+			glue << '\tmut sched := &g_sched_${part} // ~1.6 KB: lives in bss, not this lifetime frame'
+		} else {
+			glue << '\tmut sched := loom.Scheduler{}'
+		}
 		for r in all_regs[part] or { []string{} } {
 			glue << r
 		}
