@@ -67,6 +67,62 @@ static const char *ps_state(unsigned st) {
     default: return "wait";
     }
 }
+/* shell_bmc — the `bmc` shell command: a BOUNDED micro-benchmark over the DWT profiling
+ * counters. The counters (CPICNT/EXCCNT/SLEEPCNT/LSUCNT/FOLDCNT) are 8 BITS wide; their
+ * DWT_CTRL.*EVTENA enables make them count, and on wrap they emit an event -- but only
+ * into the ITM trace stream, which this board has no sink for. So free-running system-wide
+ * totals are impossible here; instead bmc runs a known register-only LCG loop (the same
+ * arithmetic the load FBs burn) in chunks small enough that NO counter can advance 256
+ * between samples, accumulating exact 64-bit totals. IRQs stay live (~0.5 ms on the comm
+ * thread), so exc/sleep show real interference during the window.
+ *
+ * v7-M profiling identity: instructions retired
+ *     = CYCCNT - CPICNT - EXCCNT - SLEEPCNT - LSUCNT + FOLDCNT.
+ */
+#define BMC_CHUNKS 1024
+#define BMC_ITERS  64 /* per chunk: ~5 instr each, every 8-bit delta stays < 256 */
+int shell_bmc(unsigned char *out, int cap) {
+    char *p = (char *)out, *end = (char *)out + cap;
+    if (DWT->CTRL & DWT_CTRL_NOPRFCNT_Msk)
+        return (int)(ps_str(p, end, "no DWT profiling counters on this core\n") - (char *)out);
+    DWT->CTRL |= DWT_CTRL_CPIEVTENA_Msk | DWT_CTRL_EXCEVTENA_Msk | DWT_CTRL_SLEEPEVTENA_Msk
+               | DWT_CTRL_LSUEVTENA_Msk | DWT_CTRL_FOLDEVTENA_Msk;
+    uint32_t cpi = 0, exc = 0, slp = 0, lsu = 0, fold = 0;
+    uint32_t acc = 1u;
+    uint32_t c0 = DWT->CYCCNT;
+    for (int chunk = 0; chunk < BMC_CHUNKS; chunk++) {
+        uint8_t cpi0 = (uint8_t)DWT->CPICNT, exc0 = (uint8_t)DWT->EXCCNT;
+        uint8_t slp0 = (uint8_t)DWT->SLEEPCNT, lsu0 = (uint8_t)DWT->LSUCNT;
+        uint8_t fold0 = (uint8_t)DWT->FOLDCNT;
+        for (int i = 0; i < BMC_ITERS; i++) acc = acc * 1664525u + 1013904223u;
+        __asm__ volatile("" : : "r"(acc)); /* consume acc so the loop survives -Os */
+        cpi  += (uint8_t)((uint8_t)DWT->CPICNT   - cpi0);
+        exc  += (uint8_t)((uint8_t)DWT->EXCCNT   - exc0);
+        slp  += (uint8_t)((uint8_t)DWT->SLEEPCNT - slp0);
+        lsu  += (uint8_t)((uint8_t)DWT->LSUCNT   - lsu0);
+        fold += (uint8_t)((uint8_t)DWT->FOLDCNT  - fold0);
+    }
+    uint32_t cycles = DWT->CYCCNT - c0;
+    uint32_t insn = cycles - cpi - exc - slp - lsu + fold; /* the identity above */
+    uint32_t us = cycles / TRACE_CPU_MHZ; /* build define; DWT ticks at the CPU clock */
+    p = ps_str(p, end, "64k-iter LCG window on comm, IRQs live\n");
+    p = ps_str(p, end, "cycles "); p = ps_u32(p, end, cycles);
+    p = ps_str(p, end, " ("); p = ps_u32(p, end, us); p = ps_str(p, end, " us)\n");
+    p = ps_str(p, end, "instr  "); p = ps_u32(p, end, insn);
+    p = ps_str(p, end, "  CPIx100 "); p = ps_u32(p, end, insn ? (uint32_t)((uint64_t)cycles * 100u / insn) : 0u);
+    p = ps_str(p, end, "\n");
+    p = ps_str(p, end, "cpi+   "); p = ps_u32(p, end, cpi);
+    p = ps_str(p, end, "  (multi-cycle/fetch-stall extras)\n");
+    p = ps_str(p, end, "lsu+   "); p = ps_u32(p, end, lsu);
+    p = ps_str(p, end, "  (load/store extras)\n");
+    p = ps_str(p, end, "fold   "); p = ps_u32(p, end, fold);
+    p = ps_str(p, end, "  (0-cycle instructions)\n");
+    p = ps_str(p, end, "exc    "); p = ps_u32(p, end, exc);
+    p = ps_str(p, end, "  (exception entry/exit cycles)\n");
+    p = ps_str(p, end, "sleep  "); p = ps_u32(p, end, slp); p = ps_str(p, end, "\n");
+    return (int)(p - (char *)out);
+}
+
 int shell_ps(unsigned char *out, int cap) {
     char *p = (char *)out, *end = (char *)out + cap;
     p = ps_str(p, end, "name                pri state stack\n");
