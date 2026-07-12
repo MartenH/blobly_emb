@@ -33,7 +33,12 @@
     .global     __tx_SysTickHandler                 // SysTick
     .global     __tx_IntHandler                     // Int 0
 
-SYSTEM_CLOCK      =   550000000                      // STM32H735 CM7 at 550 MHz (board_clock_init, PLL1)
+/* SYSTEM_CLOCK: the achieved CPU clock, defined by the board's board.mk
+ * (-DSYSTEM_CLOCK=<hz>) — h735dk 550 MHz, h755zi 400 MHz (VOS1: the -Q SMPS
+ * supply rules the 480 MHz VOS0 point out). */
+#ifndef SYSTEM_CLOCK
+#error "SYSTEM_CLOCK not defined - the board's board.mk must pass -DSYSTEM_CLOCK=<hz>"
+#endif
 /* SYSTICK_HZ: the ThreadX tick rate. Default 1 kHz = 1 ms, matching the generated target's
  * [target].tick_ms=1 (loom2v sleeps N ms-ticks); override with -DSYSTICK_HZ=<hz>. */
 #ifndef SYSTICK_HZ
