@@ -15,7 +15,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | req | asil | method | status | verifications |
 |---|---|---|---|---|
-| REQ-CAN-DRV-001 | QM | test | covered | route.lua (pending), h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
+| REQ-CAN-DRV-001 | QM | test | covered | route.lua (pending), h735-fdcan-hardware (approved), h755-fdcan-hardware (approved), h755-dualcore-heartbeat (approved) |
 | REQ-CAN-DRV-002 | QM | test | covered | route.lua (pending), h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
 | REQ-CAN-DRV-003 | QM | test | verified | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
 | REQ-CAN-DRV-004 | QM | test | uncovered | — |
@@ -106,93 +106,93 @@ Generated from `requirements/*.toml` + verification links. See
 
 ## Matrix — requirement × execution context
 
-| req | h735/FDCAN | h735/ThreadX | h755/FDCAN | h755/ThreadX | host/SocketCAN | host/unit | review | static |
-|---|---|---|---|---|---|---|---|---|
-| REQ-CAN-DRV-001 | ✓ | | ✓ | | · | | | |
-| REQ-CAN-DRV-002 | ✓ | | ✓ | | · | | | |
-| REQ-CAN-DRV-003 | ✓ | | ✓ | | | | | |
-| REQ-CAN-DRV-004 | | | | | | | | |
-| REQ-CAN-DRV-005 | | | | | | | | |
-| REQ-CAN-DRV-006 | | | | | | | | |
-| REQ-CAN-DRV-007 | | | | | | | | |
-| REQ-CAN-DRV-008 | | | | | | | | |
-| REQ-COM-001 | | | | | | | | |
-| REQ-COM-002 | | | | | | | | |
-| REQ-COM-003 | | | | | | | | |
-| REQ-COM-004 | | | | | | | | |
-| REQ-COM-005 | | | | | | | | |
-| REQ-COM-006 | | | | | | ✓ | | |
-| REQ-DIAG-001 | | | | | | | | |
-| REQ-DIAG-002 | | | | | | | | |
-| REQ-E2E-001 | | | | | | | | |
-| REQ-E2E-002 | | | | | | | | |
-| REQ-E2E-003 | | | | | | | | |
-| REQ-E2E-004 | | | | | | | | |
-| REQ-ECU-001 | | | | | | ✓ | | |
-| REQ-ECU-002 | | | | | | ✓ | | |
-| REQ-ECU-003 | | | | | | ✓ | | |
-| REQ-ECU-004 | | | | | | ✓ | | |
-| REQ-ECU-005 | | | | | | ✓ | | |
-| REQ-INIT-001 | | | | | | ✓ | | |
-| REQ-INIT-002 | | | | | | ✓ | | |
-| REQ-INIT-003 | | | | | | ✓ | | |
-| REQ-MODE-001 | | | | | | ✓ | | |
-| REQ-MODE-002 | | | | | | ✓ | | |
-| REQ-MODE-003 | | | | | | ✓ | | |
-| REQ-INV-001 | | | | | | | | ✓ |
-| REQ-INV-002 | | | | | | | | |
-| REQ-INV-003 | | | | | | | | |
-| REQ-INV-004 | | | | | | | | ✓ |
-| REQ-INV-005 | | | | | | | · | |
-| REQ-NM-001 | | | | | | ✓ | | |
-| REQ-NM-002 | | | | | | ✓ | | |
-| REQ-NM-003 | | | | | | ✓ | | |
-| REQ-NM-004 | | | | | | ✓ | | |
-| REQ-NM-005 | | ✓ | | ✓ | | ✓ | | |
-| REQ-NM-006 | | | | | | ✓ | | |
-| REQ-NM-007 | | | | | | ✓ | | |
-| REQ-NM-008 | | | | | | ✓ | | |
-| REQ-NM-009 | | | | | | ✓ | | |
-| REQ-NM-010 | | | | | | ✓ | | |
-| REQ-NM-011 | | | | | | ✓ | | |
-| REQ-NM-012 | | | | | | ✓ | | |
-| REQ-NM-013 | | | | | | ✓ | | |
-| REQ-SEC-001 | | | | | | | | |
-| REQ-SEC-002 | | | | | | | | |
-| REQ-SEC-003 | | | | | | | | |
-| REQ-SHELL-001 | | | | | | ✓ | | |
-| REQ-SHELL-002 | | | | | | ✓ | | |
-| REQ-SHELL-003 | | | | | | ✓ | | |
-| REQ-SHELL-004 | | ✓ | | ✓ | | | | |
-| REQ-SHELL-005 | | ✓ | | | | | | |
-| SYS-REQ-COMMS-001 | | | | | · | | | |
-| SYS-REQ-COMMS-002 | | | | | · | | | |
-| SYS-REQ-COMMS-003 | | | | | | ✓ | | |
-| SYS-REQ-SAFE-001 | | | | | | ✓ | | |
-| SYS-REQ-SAFE-002 | | | | | | | | |
-| SYS-REQ-SAFE-003 | | | | | | | | |
-| SYS-REQ-SEC-001 | | | | | | ✓ | | |
-| SYS-REQ-DIAG-001 | | | | | | ✓ | | |
-| SYS-REQ-NM-001 | | | | | | | | |
-| SYS-REQ-LIFE-001 | | | | | | | | |
-| SYS-REQ-LIFE-002 | | | | | | | | |
-| SYS-REQ-RES-001 | | | | | | | | ✓ |
-| SYS-REQ-MC-001 | | | | | | | | |
-| SYS-REQ-OBS-001 | | | | | | | | |
-| SYS-REQ-OBS-002 | | | | | | | | |
-| SYS-REQ-OBS-003 | | | | | | | | |
-| REQ-TELEM-001 | | | | | | ✓ | | |
-| REQ-TELEM-002 | | | | | | ✓ | | |
-| REQ-TELEM-003 | | | | | | ✓ | | |
-| REQ-TELEM-004 | | | | | | ✓ | | |
-| REQ-TRACE-010 | | | | | | | | |
-| REQ-TRACE-001 | | | | | | ✓ | | |
-| REQ-TRACE-002 | | | | | | | | |
-| REQ-TRACE-008 | | | | | | | | |
-| REQ-TRACE-009 | | | | | | | | |
-| REQ-TP-001 | | | | | | | | |
-| REQ-TP-002 | | | | | | | | |
-| REQ-WDG-001 | | | | | | ✓ | | |
-| REQ-WDG-002 | | | | | | ✓ | | |
-| REQ-WDG-003 | | | | | | ✓ | | |
-| REQ-WDG-004 | | | | | | ✓ | | |
+| req | h735/FDCAN | h735/ThreadX | h755/FDCAN | h755/ThreadX | h755/dual-core | host/SocketCAN | host/unit | review | static |
+|---|---|---|---|---|---|---|---|---|---|
+| REQ-CAN-DRV-001 | ✓ | | ✓ | | ✓ | · | | | |
+| REQ-CAN-DRV-002 | ✓ | | ✓ | | | · | | | |
+| REQ-CAN-DRV-003 | ✓ | | ✓ | | | | | | |
+| REQ-CAN-DRV-004 | | | | | | | | | |
+| REQ-CAN-DRV-005 | | | | | | | | | |
+| REQ-CAN-DRV-006 | | | | | | | | | |
+| REQ-CAN-DRV-007 | | | | | | | | | |
+| REQ-CAN-DRV-008 | | | | | | | | | |
+| REQ-COM-001 | | | | | | | | | |
+| REQ-COM-002 | | | | | | | | | |
+| REQ-COM-003 | | | | | | | | | |
+| REQ-COM-004 | | | | | | | | | |
+| REQ-COM-005 | | | | | | | | | |
+| REQ-COM-006 | | | | | | | ✓ | | |
+| REQ-DIAG-001 | | | | | | | | | |
+| REQ-DIAG-002 | | | | | | | | | |
+| REQ-E2E-001 | | | | | | | | | |
+| REQ-E2E-002 | | | | | | | | | |
+| REQ-E2E-003 | | | | | | | | | |
+| REQ-E2E-004 | | | | | | | | | |
+| REQ-ECU-001 | | | | | | | ✓ | | |
+| REQ-ECU-002 | | | | | | | ✓ | | |
+| REQ-ECU-003 | | | | | | | ✓ | | |
+| REQ-ECU-004 | | | | | | | ✓ | | |
+| REQ-ECU-005 | | | | | | | ✓ | | |
+| REQ-INIT-001 | | | | | | | ✓ | | |
+| REQ-INIT-002 | | | | | | | ✓ | | |
+| REQ-INIT-003 | | | | | | | ✓ | | |
+| REQ-MODE-001 | | | | | | | ✓ | | |
+| REQ-MODE-002 | | | | | | | ✓ | | |
+| REQ-MODE-003 | | | | | | | ✓ | | |
+| REQ-INV-001 | | | | | | | | | ✓ |
+| REQ-INV-002 | | | | | | | | | |
+| REQ-INV-003 | | | | | | | | | |
+| REQ-INV-004 | | | | | | | | | ✓ |
+| REQ-INV-005 | | | | | | | | · | |
+| REQ-NM-001 | | | | | | | ✓ | | |
+| REQ-NM-002 | | | | | | | ✓ | | |
+| REQ-NM-003 | | | | | | | ✓ | | |
+| REQ-NM-004 | | | | | | | ✓ | | |
+| REQ-NM-005 | | ✓ | | ✓ | | | ✓ | | |
+| REQ-NM-006 | | | | | | | ✓ | | |
+| REQ-NM-007 | | | | | | | ✓ | | |
+| REQ-NM-008 | | | | | | | ✓ | | |
+| REQ-NM-009 | | | | | | | ✓ | | |
+| REQ-NM-010 | | | | | | | ✓ | | |
+| REQ-NM-011 | | | | | | | ✓ | | |
+| REQ-NM-012 | | | | | | | ✓ | | |
+| REQ-NM-013 | | | | | | | ✓ | | |
+| REQ-SEC-001 | | | | | | | | | |
+| REQ-SEC-002 | | | | | | | | | |
+| REQ-SEC-003 | | | | | | | | | |
+| REQ-SHELL-001 | | | | | | | ✓ | | |
+| REQ-SHELL-002 | | | | | | | ✓ | | |
+| REQ-SHELL-003 | | | | | | | ✓ | | |
+| REQ-SHELL-004 | | ✓ | | ✓ | | | | | |
+| REQ-SHELL-005 | | ✓ | | | | | | | |
+| SYS-REQ-COMMS-001 | | | | | | · | | | |
+| SYS-REQ-COMMS-002 | | | | | | · | | | |
+| SYS-REQ-COMMS-003 | | | | | | | ✓ | | |
+| SYS-REQ-SAFE-001 | | | | | | | ✓ | | |
+| SYS-REQ-SAFE-002 | | | | | | | | | |
+| SYS-REQ-SAFE-003 | | | | | | | | | |
+| SYS-REQ-SEC-001 | | | | | | | ✓ | | |
+| SYS-REQ-DIAG-001 | | | | | | | ✓ | | |
+| SYS-REQ-NM-001 | | | | | | | | | |
+| SYS-REQ-LIFE-001 | | | | | | | | | |
+| SYS-REQ-LIFE-002 | | | | | | | | | |
+| SYS-REQ-RES-001 | | | | | | | | | ✓ |
+| SYS-REQ-MC-001 | | | | | | | | | |
+| SYS-REQ-OBS-001 | | | | | | | | | |
+| SYS-REQ-OBS-002 | | | | | | | | | |
+| SYS-REQ-OBS-003 | | | | | | | | | |
+| REQ-TELEM-001 | | | | | | | ✓ | | |
+| REQ-TELEM-002 | | | | | | | ✓ | | |
+| REQ-TELEM-003 | | | | | | | ✓ | | |
+| REQ-TELEM-004 | | | | | | | ✓ | | |
+| REQ-TRACE-010 | | | | | | | | | |
+| REQ-TRACE-001 | | | | | | | ✓ | | |
+| REQ-TRACE-002 | | | | | | | | | |
+| REQ-TRACE-008 | | | | | | | | | |
+| REQ-TRACE-009 | | | | | | | | | |
+| REQ-TP-001 | | | | | | | | | |
+| REQ-TP-002 | | | | | | | | | |
+| REQ-WDG-001 | | | | | | | ✓ | | |
+| REQ-WDG-002 | | | | | | | ✓ | | |
+| REQ-WDG-003 | | | | | | | ✓ | | |
+| REQ-WDG-004 | | | | | | | ✓ | | |
