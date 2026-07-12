@@ -14,6 +14,7 @@
 #include <stm32h7xx.h>
 #include "ioc.h"
 #include "board.h" /* board_now_us for the cm4 rate window */
+#include "duo.h"  /* the dual-core shared-SRAM map (heartbeat, clocks-ready, IOC pool) */
 
 /* Cross-thread signal IOC pool (wait-free triple-buffer, ioc.h). GENERIC target glue: a small
  * indexed pool the generator assigns cells out of, so a bus->app rx signal decoded by the comm
@@ -129,6 +130,56 @@ int shell_bmc(unsigned char *out, int cap) {
  * both cores by policy). Rate is computed between successive calls (statics), so call it
  * twice: the first call anchors, later calls report counts/ms — which also doubles as a
  * CM4 clock probe (the increment rate steps when HCLK moves). */
+/* duo_clocks_ready — the boot handshake's CM7 half: written once after board_clock_init,
+ * releasing the parked CM4 (its SysTick assumes the final 200 MHz HCLK). */
+void duo_clocks_ready(void) {
+    *(volatile uint32_t *)DUO_CLK_ADDR = DUO_CLK_MAGIC;
+    __asm__ volatile("dsb");
+}
+
+#define DUO_POOL ((ioc_t *)DUO_IOC_ADDR)
+
+/* shell_m4sig — the `m4sig` command: the M4 FB's signal off cross-core IOC slot 0.
+ * ioc_read is the reader half of the same triple buffer the M4 writes: wait-free,
+ * latest-complete-value. n advances 100/s while the M4's 10 ms handler runs. */
+int shell_m4sig(unsigned char *out, int cap) {
+    char *p = (char *)out, *end = (char *)out + cap;
+    sig_t v = ioc_read(&DUO_POOL[DUO_SLOT_M4SIG]);
+    p = ps_str(p, end, "M4 FB: n ");
+    p = ps_u32(p, end, v.a);
+    p = ps_str(p, end, "  acc ");
+    p = ps_u32(p, end, v.b);
+    p = ps_str(p, end, "\n");
+    return (int)(p - (char *)out);
+}
+
+/* shell_iocx — the `iocx` command: cross-core IOC VALIDATION against the M4's max-rate
+ * stress channel (slot 1 carries {n, n*K}). A bounded burst of reads checks the triple
+ * buffer's two invariants across the core boundary: no torn value (b == a*K exactly) and
+ * no time travel (a never decreases). ~200k reads in a few ms on the comm thread. */
+int shell_iocx(unsigned char *out, int cap) {
+    char *p = (char *)out, *end = (char *)out + cap;
+    uint32_t reads = 200000u, tears = 0u, regress = 0u, advances = 0u;
+    uint32_t prev = 0u;
+    for (uint32_t i = 0; i < reads; i++) {
+        sig_t v = ioc_read(&DUO_POOL[DUO_SLOT_STRESS]);
+        if (v.b != v.a * DUO_STRESS_K) tears++;
+        if (v.a < prev) regress++;
+        if (v.a > prev) advances++;
+        prev = v.a;
+    }
+    p = ps_str(p, end, "iocx: ");
+    p = ps_u32(p, end, reads);
+    p = ps_str(p, end, " reads  tears ");
+    p = ps_u32(p, end, tears);
+    p = ps_str(p, end, "  regressions ");
+    p = ps_u32(p, end, regress);
+    p = ps_str(p, end, "  fresh advances ");
+    p = ps_u32(p, end, advances);
+    p = ps_str(p, end, "\n");
+    return (int)(p - (char *)out);
+}
+
 #define CM4_HB_MAGIC 0x434D3452u /* "CM4R" */
 int shell_cm4(unsigned char *out, int cap) {
     char *p = (char *)out, *end = (char *)out + cap;
