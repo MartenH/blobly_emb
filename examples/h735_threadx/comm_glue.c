@@ -76,10 +76,14 @@ int shell_ps(unsigned char *out, int cap) {
         char *col = p + 20;
         for (int c = 0; nm[c] && c < 19 && p < end; c++) *p++ = nm[c];
         while (p < col && p < end) *p++ = ' ';
+        /* pri and state are space-padded to fixed columns (like the name) — natural width
+         * ('0' vs '11', 'susp' vs 'ready') would make every column after them wobble */
+        col = p + 4;
         p = ps_u32(p, end, (unsigned)t->tx_thread_priority);
-        p = ps_str(p, end, "  ");
+        while (p < col && p < end) *p++ = ' ';
+        col = p + 6;
         p = ps_str(p, end, ps_state((unsigned)t->tx_thread_state));
-        p = ps_str(p, end, "  ");
+        while (p < col && p < end) *p++ = ' ';
         /* high-water: first non-zero byte from the stack's LOW end (stacks grow down) */
         unsigned char *lo = (unsigned char *)t->tx_thread_stack_start;
         unsigned char *hi = (unsigned char *)t->tx_thread_stack_end;
