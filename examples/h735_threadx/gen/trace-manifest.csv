@@ -19,3 +19,7 @@ dump_fc,0x7e6,can0
 in,0x7f0,can0
 fc,0x7f2,can0
 out,0x7f1,can0
+# nm frames: frame,id,bus
+alive,0x512,can0
+peers_lo,0x500,can0
+peers_hi,0x53f,can0
