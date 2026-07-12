@@ -10,7 +10,16 @@ module loom
 
 pub type Handler = fn (ctx voidptr)
 
-const max_tasks = 32
+// The table capacity is the compile value $d('loom_max_tasks', 32): a target image
+// right-sizes every fixed table below with `v -d loom_max_tasks=N` (loom2v derives N from
+// the real per-thread handler count and emits it into the example's gen/loom_build.mk) —
+// a Scheduler is ~1.6 KB at the host default of 32, ~200 B exact-fit, and one lives in
+// bss per thread. Two V pitfalls shape the spelling: the checker can't fold a
+// $d-initialized CONST into a fixed-array dimension (so the dims repeat $d() inline),
+// and such a const isn't folded at USE sites either — it becomes a _vinit-assigned
+// runtime global, which freestanding never initializes (it read 0 on target and every()
+// silently rejected all handlers). So there is NO const: bounds checks use the fixed
+// array's own .len, which is always compile-time.
 
 // Load is measured over three averaging windows at once: a fast 100 ms window that
 // exposes bursts and overruns as they happen, a 1 s window for the steady figure, and
@@ -38,10 +47,10 @@ pub type RunHook = fn (ctx voidptr, idx int, start_us u64, dt_us u64)
 
 pub struct Scheduler {
 mut:
-	handlers [max_tasks]Handler
-	ctx      [max_tasks]voidptr
-	period   [max_tasks]u64 // microseconds
-	due      [max_tasks]u64 // next due time, microseconds
+	handlers [$d('loom_max_tasks', 32)]Handler
+	ctx      [$d('loom_max_tasks', 32)]voidptr
+	period   [$d('loom_max_tasks', 32)]u64 // microseconds
+	due      [$d('loom_max_tasks', 32)]u64 // next due time, microseconds
 	count    int
 	// Per-core load accounting, per window. The run loop feeds time spent in run() to
 	// account(); once per window the busy/elapsed ratio latches into load_pm[win].
@@ -49,7 +58,7 @@ mut:
 	win_base   [load_windows]u64 // window start (monotonic µs); 0 = not started
 	load_pm    [load_windows]u16 // last load, per-mille of wall clock (0..1000)
 	overruns   u32               // times a scheduling pass exceeded its tick budget
-	stats      [max_tasks]HandlerStat // per-handler timing (run_profiled)
+	stats      [$d('loom_max_tasks', 32)]HandlerStat // per-handler timing (run_profiled)
 	trace_hook RunHook = unsafe { nil } // optional per-invocation trace sink
 	trace_ctx  voidptr
 }
@@ -57,7 +66,7 @@ mut:
 // every registers a handler + its partition-state context to run on a fixed
 // period. No-op if the static table is full.
 pub fn (mut s Scheduler) every(period_us u64, h Handler, ctx voidptr) {
-	if s.count >= max_tasks {
+	if s.count >= s.handlers.len {
 		return
 	}
 	s.handlers[s.count] = h
