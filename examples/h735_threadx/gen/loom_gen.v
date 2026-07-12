@@ -7,6 +7,7 @@ import app
 import loom
 import comm.telem
 import comm.trace
+import comm.shell
 import driver.can
 
 struct Thread_load_fast_state {
@@ -70,6 +71,14 @@ fn C.trace_arm()
 fn C.trace_freeze()
 fn C.trace_bind_thread(voidptr)
 fn C.trace_fb(u32, u64, u32)
+fn C.shell_ps(&u8, int) int
+
+fn shell_ps_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
+	n := C.shell_ps(&rsp.buf[0], 520)
+	if n > 0 {
+		rsp.len = n
+	}
+}
 
 fn trace_clock() u64 {
 	return C.board_now_us()
@@ -121,6 +130,7 @@ __global (
 	g_app_trace [64][8]u8 // scratch snapshot of the trace ring (owner streams it)
 	g_trace_ring [64]trace.Record
 	g_tm trace.TraceModule
+	g_sh shell.ShellModule
 	g_comm_tcb   [32]u64  // the bus-owning comm thread
 	g_comm_stack [4096]u8
 	g_rx_count u32
@@ -210,6 +220,9 @@ fn comm_thread_entry(input u32) {
 	g_tm = trace.new_module(u32(0x7e3), u32(0x7e5), 0, true,
 		trace.new_buffer(&g_trace_ring[0], 64, .ring, 0))
 	mut trace_txf := can.Frame{}
+	g_sh.init(u32(0x7f1)) // in place: no module-sized stack copies
+	g_sh.register('ps', 'threads: prio, state, stack high-water', shell_ps_cmd)
+	mut shell_txf := can.Frame{}
 	mut last_tx_workload := u64(0)
 	mut rx := can.Frame{}
 	for {
@@ -235,6 +248,12 @@ fn comm_thread_entry(input u32) {
 			}
 			if rx.id == u32(0x7e6) { // trace.dump_fc -> ISO-TP FC
 				g_tm.on_dump_fc(C.board_now_us(), rx)
+			}
+			if rx.id == u32(0x7f0) { // shell.in -> one command line
+				g_sh.on_in(C.board_now_us(), rx)
+			}
+			if rx.id == u32(0x7f2) { // shell.fc -> ISO-TP FC
+				g_sh.on_fc(C.board_now_us(), rx)
 			}
 		}
 		t1 := C.board_now_us()
@@ -283,6 +302,9 @@ fn comm_thread_entry(input u32) {
 		}
 		for ch.tx_ready() && g_tm.produce(t1, mut trace_txf) {
 			ch.send(trace_txf)
+		}
+		for ch.tx_ready() && g_sh.produce(t1, mut shell_txf) {
+			ch.send(shell_txf)
 		}
 	}
 }

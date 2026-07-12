@@ -112,6 +112,14 @@ rsp            = 0x7E3
 record         = 0x7E5
 dump_fc        = 0x7E6
 
+# The CAN shell (comm/shell): type `help`/`ps` from blobly_net's shell panel — one raw frame in,
+# an ISO-TP text block out, served by the comm thread like every other module.
+[shell]
+bus = "can0"
+in  = 0x7F0
+out = 0x7F1
+fc  = 0x7F2
+
 [target]
 kind    = "threadx"
 tick_ms = 1

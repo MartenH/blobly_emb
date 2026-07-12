@@ -3,11 +3,9 @@
 0,app,0,Governor,on_100ms,100000,app_main
 1,app,0,Load,on_1ms,1000,app_main
 2,app,0,Heartbeat,on_100ms,100000,app_main
-# threads: thread,id,name,core  (id 0 reserved = idle)
-thread,1,app_main,0
+# threads: thread,id,name,core,prio  (id 0 reserved = idle; prio - = no RTOS prio)
+thread,1,app_main,0,10
 # trace frames: frame,id,bus
 cmd,0x7e2,can0
 rsp,0x7e3,can0
-stat,0x7e4,can0
 record,0x7e5,can0
-dump_fc,0x7e6,can0

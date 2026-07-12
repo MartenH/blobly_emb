@@ -426,6 +426,7 @@ fn parse_target(doc toml.Doc) TargetCfg {
 // Model is the parsed ecu.toml + bus.dbc — everything the emitters need, with no toml.Any left.
 // build_model is the single parse pass; the emit code (still in main for now) reads from it.
 struct Model {
+mut:
 	buses        map[string]bool
 	bus_core     map[string]int
 	sig_of       map[string]SigInfo
@@ -439,6 +440,7 @@ struct Model {
 	telem        TelemetryCfg
 	target       TargetCfg
 	trace        TraceCfg
+	shell        ShellCfg
 }
 
 fn build_model(doc toml.Doc, dbc string) Model {
@@ -458,6 +460,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		telem:        parse_telemetry(doc)
 		target:       parse_target(doc)
 		trace:        parse_trace(doc, dbc)
+		shell:        parse_shell(doc, dbc)
 	}
 }
 
@@ -639,6 +642,7 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 		tid++
 	}
 	man << trace_manifest_frames(m)
+	man << shell_manifest_frames(m)
 	return man
 }
 
@@ -1168,6 +1172,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << 'fn C._tx_initialize_kernel_enter()'
 			glue << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
 			glue << trace_c_decls(m)
+			glue << shell_c_decls(m)
+			glue << shell_cmd_fns(m)
 			glue << trace_fb_hooks(m, doc, app_threads, multi)
 			if comm_thread_on {
 				// Board glue (examples/<x>/comm_glue.c): the FDCAN Rx-FIFO0 ISR posts a semaphore
@@ -1216,6 +1222,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			}
 			glue << trace_scratch_fields(m, part)
 			glue << trace_module_globals(m)
+			glue << shell_module_globals(m)
 			if comm_thread_on {
 				glue << '\tg_comm_tcb   [32]u64  // the bus-owning comm thread'
 				glue << '\tg_comm_stack [4096]u8'
@@ -1432,6 +1439,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					}
 				}
 				glue << trace_module_init(m)
+				glue << shell_module_init(m)
 				for si in tx_sigs {
 					glue << '\tmut last_tx_${snake(si.name)} := u64(0)'
 				}
@@ -1463,6 +1471,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t\t}'
 				}
 				glue << trace_rx_arms(m, part)
+			glue << shell_rx_arms(m)
 				glue << '\t\t}'
 				glue << '\t\tt1 := C.board_now_us()'
 				for p in producers {
@@ -1505,6 +1514,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t}'
 				}
 				glue << trace_produce_drain(m)
+				glue << shell_produce_drain(m)
 				glue << '\t}'
 				glue << '}'
 				glue << ''
@@ -1855,6 +1865,9 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 	if trace_host || (m.trace.on && m.target.threadx) {
 		glue << 'import comm.trace' // the TraceModule + ring + hooks (docs/com-modules.md)
 	}
+	if m.shell.on && m.target.threadx {
+		glue << 'import comm.shell' // the CAN shell module (docs/com-modules.md)
+	}
 	if m.has_external || m.isotp_conns.len > 0 || m.telem.on {
 		glue << 'import driver.can' // the generated bus bridge
 	}
@@ -1895,7 +1908,7 @@ fn main() {
 
 	// Single parse pass: ecu.toml + bus.dbc -> the Model. The emit code below reads from `m`
 	// (rebound to the existing locals so it stays unchanged). (Step (a): parse -> model.)
-	m := build_model(doc, dbc)
+	mut m := build_model(doc, dbc)
 
 	// [trace]: the ThreadX exec-hook stream is the generated path (gen_trace.v); validate what it
 	// can honour. The host/bare-metal command-driven protocol moved to the platform (comm/trace
@@ -1905,6 +1918,11 @@ fn main() {
 	// owns the schedule and the bus, serving comm/trace's TraceModule via the endpoint bindings.
 	trace_host := m.trace.on && !m.target.on && m.part.by_part.keys().len == 1
 		&& !(m.has_external || m.isotp_conns.len > 0 || m.routes.len > 0)
+	if m.shell.on && !(m.target.threadx) {
+		eprintln('loom2v: WARNING: [shell] is generated for the ThreadX comm-thread target only ' +
+			'(the module lives on the bus owner). Building WITHOUT the shell.')
+		m.shell.on = false
+	}
 	if m.trace.on && m.target.threadx {
 		validate_trace_threadx(m)
 	} else if m.trace.on && !trace_host {

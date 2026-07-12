@@ -63,6 +63,7 @@ fn specs() map[string]map[string]Key {
 			'import':    sub(.tbl, false, 'import')
 			'telemetry': sub(.tbl, false, 'telemetry')
 			'trace':     sub(.tbl, false, 'trace')
+			'shell':     sub(.tbl, false, 'shell')
 			'target':    sub(.tbl, false, 'target')
 			'bus':       sub(.namedmap, false, 'bus')
 			'nm':        sub(.namedmap, false, 'nm')
@@ -83,6 +84,13 @@ fn specs() map[string]map[string]Key {
 			'id':        k(.int)
 			'detail_id': k(.int)
 			'period_ms': k(.int)
+		}
+		'shell':      {
+			'enabled': k(.boolean)
+			'bus':     k(.str)
+			'in':      k(.id)
+			'out':     k(.id)
+			'fc':      k(.id)
 		}
 		'trace':      {
 			'enabled':        k(.boolean)
