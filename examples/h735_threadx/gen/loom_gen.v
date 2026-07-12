@@ -123,13 +123,13 @@ fn C.ioc_get(int, &u32, &u32)
 __global (
 	g_load_fast_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
 	g_load_fast_stack [4096]u8
-	g_sched_load_fast loom.Scheduler // ~1.6 KB: bss, never an entry-frame local
+	g_sched_load_fast loom.Scheduler // bss, never an entry-frame local
 	g_load_mid_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
 	g_load_mid_stack [4096]u8
-	g_sched_load_mid loom.Scheduler // ~1.6 KB: bss, never an entry-frame local
+	g_sched_load_mid loom.Scheduler // bss, never an entry-frame local
 	g_ctrl_slow_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
 	g_ctrl_slow_stack [4096]u8
-	g_sched_ctrl_slow loom.Scheduler // ~1.6 KB: bss, never an entry-frame local
+	g_sched_ctrl_slow loom.Scheduler // bss, never an entry-frame local
 	g_app_trace [64][8]u8 // scratch snapshot of the trace ring (owner streams it)
 	g_trace_ring [64]trace.Record
 	g_tm trace.TraceModule
@@ -142,7 +142,7 @@ __global (
 
 fn run_load_fast() {
 	mut st := Thread_load_fast_state{} // small + carries the FB field defaults: stack is right
-	mut sched := &g_sched_load_fast // ~1.6 KB: lives in bss, not this lifetime frame
+	mut sched := &g_sched_load_fast // module-sized: lives in bss, not this lifetime frame
 	sched.every(10000, handler_app_load_fast_on_10ms, &st)
 	tick_us := u64(1000)
 	sched.set_trace_hook(trace_fb_hook_load_fast, unsafe { nil })
@@ -161,7 +161,7 @@ fn run_load_fast() {
 
 fn run_load_mid() {
 	mut st := Thread_load_mid_state{} // small + carries the FB field defaults: stack is right
-	mut sched := &g_sched_load_mid // ~1.6 KB: lives in bss, not this lifetime frame
+	mut sched := &g_sched_load_mid // module-sized: lives in bss, not this lifetime frame
 	sched.every(20000, handler_app_load_mid_on_20ms, &st)
 	tick_us := u64(1000)
 	sched.set_trace_hook(trace_fb_hook_load_mid, unsafe { nil })
@@ -180,7 +180,7 @@ fn run_load_mid() {
 
 fn run_ctrl_slow() {
 	mut st := Thread_ctrl_slow_state{} // small + carries the FB field defaults: stack is right
-	mut sched := &g_sched_ctrl_slow // ~1.6 KB: lives in bss, not this lifetime frame
+	mut sched := &g_sched_ctrl_slow // module-sized: lives in bss, not this lifetime frame
 	sched.every(100000, handler_app_governor_on_100ms, &st)
 	sched.every(100000, handler_app_load_slow_on_100ms, &st)
 	tick_us := u64(1000)
