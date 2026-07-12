@@ -13,6 +13,10 @@ import app
 
 fn C.duo_wait_clocks()
 fn C.board_timebase_init()
+fn C.duo_trace_service()
+fn C.trace_arm()
+fn C.trace_bind_thread(voidptr)
+fn C.trace_fb(u32, u64, u32)
 fn C.board_now_us() u64
 fn C.duo_ioc_init()
 fn C.duo_pub_m4load(u32, u32)
@@ -41,12 +45,24 @@ fn handler_m4load_on_10ms(ctx voidptr) {
 	C.duo_pub_m4load(st.load.n, acc) // cross-core: the M7 transmits this as M4LoadFrame
 }
 
+fn trace_clock() u64 {
+	return C.board_now_us()
+}
+
+// this core's FB lane: handler ids 8+ so they never collide with the M7's 0..3 in the
+// combined swimlane (the block header carries the core; ids stay globally distinct too)
+fn trace_fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
+	C.trace_fb(u32(8 + idx), start_us, u32(dt_us))
+}
+
 fn run_app() {
 	mut st := AppState{} // small + carries the FB field defaults: stack is right
 	mut sched := &g_sched
 	sched.every(10000, handler_m4load_on_10ms, &st)
+	sched.set_trace_hook(trace_fb_hook, unsafe { nil })
 	for {
-		sched.run(C.board_now_us())
+		sched.run_profiled(trace_clock)
+		C.duo_trace_service() // the dtrace handoff: ~10 ms request latency, plenty
 		C._tx_thread_sleep(u32(1))
 	}
 }
@@ -71,13 +87,16 @@ fn stress_thread_entry(input u32) {
 fn tx_application_define(first_unused voidptr) {
 	C._tx_thread_create(&g_app_tcb[0], c'm4_app', app_thread_entry, u32(0), &g_app_stack[0],
 		u32(g_app_stack.len), u32(11), u32(11), u32(0), u32(1))
+	C.trace_bind_thread(&g_app_tcb[0]) // deterministic thread ids, creation order
 	C._tx_thread_create(&g_stress_tcb[0], c'm4_stress', stress_thread_entry, u32(0),
 		&g_stress_stack[0], u32(g_stress_stack.len), u32(12), u32(12), u32(0), u32(1))
+	C.trace_bind_thread(&g_stress_tcb[0])
 }
 
 fn main() {
 	C.duo_wait_clocks() // park until the CM7's PLL is up: SysTick assumes the final HCLK
 	C.board_timebase_init()
 	C.duo_ioc_init()
+	C.trace_arm() // this core's recorder free-runs from boot; the owner re-arms per session
 	C._tx_initialize_kernel_enter() // never returns
 }

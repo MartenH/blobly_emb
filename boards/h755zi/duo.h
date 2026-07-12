@@ -8,6 +8,10 @@
  *   +0x08  clocks-ready: magic 'CLKR' the CM7 writes AFTER board_clock_init — the CM4
  *          parks until it appears, so its SysTick is configured against the final
  *          200 MHz HCLK, never the 64 MHz boot clock
+ *   +0x200 dtrace handoff (two-core trace): {req_seq, op, ack_seq, count} + 512 B of
+ *          wire-form records. The bus owner requests (op 1 = arm, 2 = freeze+snapshot);
+ *          the satellite's app loop services it and acks; the owner imports the snapshot
+ *          as that core's dump block (TraceModule.load_remote). Single writer per field.
  *   +0x20  cross-core IOC pool: xioc_t[DUO_IOC_N] (96 B each, line-aligned — see
  *          boards/common/xioc.h: plain-store seq-stamped slots; ioc.h's exchange-based
  *          triple buffer is NOT cross-core safe on this fabric, measured 2026-07-12)
@@ -27,6 +31,12 @@
 #define DUO_CLK_ADDR   0x38000008u
 #define DUO_IOC_ADDR   0x38000020u
 #define DUO_IOC_N      4
+
+#define DUO_TRC_ADDR     0x38000200u
+#define DUO_TRC_BUF_ADDR 0x38000210u
+#define DUO_TRC_MAX_REC  64u
+#define DUO_TRC_OP_ARM   1u
+#define DUO_TRC_OP_SNAP  2u
 
 /* Slot assignments are GENERATED — gen/duo_gen.h (loom2v [duo]) is the one source; both
  * images compile against it. Only the pool geometry lives here. */
