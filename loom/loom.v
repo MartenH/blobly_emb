@@ -63,6 +63,20 @@ mut:
 	trace_ctx  voidptr
 }
 
+// stat returns handler i's run_profiled timing; nhandlers the registered count. The
+// Scheduler's fields are module-private — these are the read-only window the generated
+// shell `stat` command (and any future telemetry stat endpoint) uses.
+pub fn (s &Scheduler) stat(i int) HandlerStat {
+	if i < 0 || i >= s.count {
+		return HandlerStat{}
+	}
+	return s.stats[i]
+}
+
+pub fn (s &Scheduler) nhandlers() int {
+	return s.count
+}
+
 // every registers a handler + its partition-state context to run on a fixed
 // period. No-op if the static table is full.
 pub fn (mut s Scheduler) every(period_us u64, h Handler, ctx voidptr) {
