@@ -24,23 +24,20 @@ else
 endif
 VDBG ?=
 
-# CAN backend = register-level FDCAN; kernel clock = HSE 25 MHz, so 10 tq/bit
-# (NBRP 5, tseg1 7 + tseg2 2 = 80% sample) keeps the prescaler integer at 500 kbit.
-INCS = -I$(REPO)/third_party/cmsis_device_h7/Include \
-       -I$(REPO)/third_party/cmsis_core/CMSIS/Core/Include \
-       -I$(REPO)/driver/can
-DEFS = -DSTM32H735xx -DBLOB_CAN_FDCAN \
-       -DBLOB_FDCAN_KCLK_HZ=25000000 -DBLOB_FDCAN_TQ=10 \
-       -DBLOB_FDCAN_NTSEG1=7 -DBLOB_FDCAN_NTSEG2=2
+# The board (clock/I-cache bring-up, startup, FDCAN timing, linker script) comes from
+# boards/$(BOARD) — MCU/CMSIS/BOARD_DEFS/CAN_DEFS/BOARD_BSP_BARE/BOARD_LD_BARE.
+BOARD := h735dk
+include $(REPO)/boards/$(BOARD)/board.mk
 
-MCU      = -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb
-CFLAGS   = $(MCU) -ffreestanding $(OPT) $(CDBG) -ffunction-sections -fdata-sections $(INCS) $(DEFS) -include board.h
-LDFLAGS  = $(MCU) -T linker.ld -nostartfiles --specs=nano.specs --specs=nosys.specs \
+INCS = $(CMSIS) -I$(BOARD_DIR) -I$(REPO)/driver/can
+CFLAGS   = $(MCU) -ffreestanding $(OPT) $(CDBG) -ffunction-sections -fdata-sections $(INCS) \
+           $(BOARD_DEFS) $(CAN_DEFS) -include $(BOARD_DIR)/board.h
+LDFLAGS  = $(MCU) -T $(BOARD_LD_BARE) -nostartfiles --specs=nano.specs --specs=nosys.specs \
            -Wl,--gc-sections -Wl,-Map=$(BUILD)/app.map
 OOCD_CFG = -f interface/stlink.cfg -f target/stm32h7x.cfg
 
 BUILD    = build
-CSRC     = $(BUILD)/app.c startup.c board.c $(REPO)/driver/can/can_backend.c
+CSRC     = $(BUILD)/app.c $(BOARD_BSP_BARE) $(REPO)/driver/can/can_backend.c
 
 all: $(BUILD)/app.bin
 
@@ -66,8 +63,8 @@ $(BUILD)/app.c: main.v gen/.stamp | $(BUILD)
 	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
 
 # 2) cross-compile + link: V output + startup + board shim + CAN backend
-$(BUILD)/app.elf: $(CSRC) linker.ld | $(BUILD)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c startup.c board.c $(REPO)/driver/can/can_backend.c -o $@
+$(BUILD)/app.elf: $(CSRC) $(BOARD_LD_BARE) | $(BUILD)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(CSRC) -o $@
 	$(SIZE) $@
 
 # 3) raw binary for the flasher

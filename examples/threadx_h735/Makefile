@@ -16,21 +16,18 @@ REPO    = ../..
 TX      = $(REPO)/third_party/threadx
 PORT    = $(TX)/ports/cortex_m7/gnu
 
-MCU     = -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb
+# The board comes from boards/$(BOARD) (see boards/h735dk/board.mk). This hand-written
+# demo keeps its historical 100 Hz ThreadX tick (-DSYSTICK_HZ=100); the generated targets
+# run the default 1 kHz. crt0's default entry is plain main() — no BOARD_ENTRY needed.
+BOARD := h735dk
+include $(REPO)/boards/$(BOARD)/board.mk
+
 # TX_ENABLE_EXECUTION_CHANGE_NOTIFY makes the port's context-switch + ISR-entry asm call
-# the four _tx_execution_* hooks (trace_hooks.c). TRACE_CPU_MHZ=550 makes now_us() convert
-# DWT cycles to real µs on this board. STM32H735xx + CMSIS are for board.c's clock init.
-CMSIS   = -I$(REPO)/third_party/cmsis_device_h7/Include \
-          -I$(REPO)/third_party/cmsis_core/CMSIS/Core/Include
-# FDCAN backend (register-level, no HAL): kernel clock HSE 25 MHz -> 10 tq/bit
-# (NBRP 5, tseg1 7 + tseg2 2 = 80% sample) keeps the prescaler integer at 500 kbit —
-# same timing as examples/h735_app.
-CAN_DEFS = -DBLOB_CAN_FDCAN -DBLOB_FDCAN_KCLK_HZ=25000000 -DBLOB_FDCAN_TQ=10 \
-           -DBLOB_FDCAN_NTSEG1=7 -DBLOB_FDCAN_NTSEG2=2
+# the four _tx_execution_* hooks (trace_hooks.c).
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
-          -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY -DTRACE_CPU_MHZ=550 -DSTM32H735xx \
-          $(CAN_DEFS) -I. -I$(REPO)/driver/can -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
-LDFLAGS = $(MCU) -T threadx_h735.ld -nostartfiles -Wl,--gc-sections \
+          -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY -DSYSTICK_HZ=100 $(BOARD_DEFS) \
+          $(CAN_DEFS) -I. -I$(BOARD_DIR) -I$(REPO)/driver/can -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
+LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
 
 BUILD = build
@@ -43,7 +40,7 @@ TX_C   = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
          $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 
-APP = crt0.S vectors.S tx_initialize_low_level.S main.c comm.c fbs.c trace_hooks.c board.c \
+APP = $(BOARD_BSP_THREADX) main.c comm.c fbs.c trace_hooks.c \
       $(REPO)/driver/can/can_backend.c
 
 all: $(BUILD)/threadx_h735.bin
@@ -58,7 +55,7 @@ $(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile
 $(TX_A): $(TX_OBJ)
 	$(AR) -rc $@ $^
 
-$(BUILD)/threadx_h735.elf: $(APP) $(TX_A) threadx_h735.ld
+$(BUILD)/threadx_h735.elf: $(APP) $(TX_A) $(BOARD_LD_THREADX)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(APP) $(TX_A) -o $@
 	$(SIZE) $@
