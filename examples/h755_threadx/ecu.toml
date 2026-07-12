@@ -1,0 +1,134 @@
+# h735_threadx: the SAME FBs + Loom + CpuLoad telemetry as examples/h735_app, but the
+# [target] kind is "threadx" — loom2v wraps the FB superloop in a real ThreadX thread
+# (created by tx_application_define, paced by tx_thread_sleep) instead of the bare-metal
+# inline superloop. This is P3c-1 phase 6a: the generated counterpart of the hand-written
+# examples/threadx_h735 (the golden reference). Trace + the comm thread come in 6b.
+#
+# NOTE: no inline comments inside [[...]] tables — a comment in a nested table trips V's
+# TOML parser (drops the next key). See vlang/v#27684.
+
+[import]
+dbc = "bus.dbc"
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0
+
+[[partition]]
+name    = "app"
+core    = 0
+trusted = true
+
+  [[partition.thread]]
+  name     = "load_fast"
+  priority = 11
+
+  [[partition.thread]]
+  name     = "load_mid"
+  priority = 12
+
+  [[partition.thread]]
+  name     = "ctrl_slow"
+  priority = 13
+
+[[signal]]
+name = "LoadCmd"
+fields = { iters = "u32" }
+from = "app"
+to   = "app"
+transport = "double"
+
+[[signal]]
+name = "Workload"
+fields = { v = "u32" }
+from = "app"
+to   = "can0"
+transport = "double"
+
+[[frame]]
+name = "WorkloadFrame"
+bus  = "can0"
+tx   = { mode = "cyclic", cycle_ms = 100 }
+
+[[signal]]
+name = "Command"
+fields = { code = "u32" }
+from = "can0"
+to   = "app"
+transport = "double"
+
+[[fb]]
+name      = "LoadFast"
+thread    = "load_fast"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+
+[[fb]]
+name      = "LoadMid"
+thread    = "load_mid"
+  [[fb.handler]]
+  name      = "on_20ms"
+  period_ms = 20
+
+[[fb]]
+name      = "Governor"
+thread    = "ctrl_slow"
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  reads     = ["Command"]
+  writes    = ["LoadCmd"]
+
+[[fb]]
+name      = "LoadSlow"
+thread    = "ctrl_slow"
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  reads     = ["LoadCmd"]
+  writes    = ["Workload"] # trailing comment terminates the nested [[fb.handler]] parse (vlang/v#27684)
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E0
+detail_id = 0x7E1
+period_ms = 500
+
+# On the ThreadX target, [trace] engages the exec-change-hook recorder (trace_hooks.c) — the
+# generated bus owner streams the ring on record_id. This is the REAL preemptive thread/ISR
+# capture (not the bare-metal polled trace), and the FB thread being a real ThreadX thread
+# means the hooks capture it for free.
+[trace]
+enabled        = true
+bus            = "can0"
+level          = "all"
+buffer_records = 64
+mode           = "ring"
+cmd            = 0x7E2
+rsp            = 0x7E3
+record         = 0x7E5
+dump_fc        = 0x7E6
+
+# The CAN shell (comm/shell): type `help`/`ps` from blobly_net's shell panel — one raw frame in,
+# an ISO-TP text block out, served by the comm thread like every other module.
+# Network management: coordinated bus sleep/wake (docs/nm.md). This node announces on
+# `alive` while anything needs the bus and listens to the cluster's `peers` id range;
+# with no demand and a silent cluster it times out to bus_sleep. request=true keeps it
+# requested from boot; `nm rel` in the shell releases it (demo: watch 0x512 stop).
+[nm]
+node  = 0x13           # the H735 bench node is 0x12 — distinct ids for a future two-node bus
+alive = 0x513          # = peers base + node, spelled out for the wire docs
+peers = [0x500, 0x53F] # the cluster's NM id range
+
+[shell]
+bus = "can0"
+in  = 0x7F0
+out = 0x7F1
+fc  = 0x7F2
+
+[target]
+kind    = "threadx"
+tick_ms = 1
