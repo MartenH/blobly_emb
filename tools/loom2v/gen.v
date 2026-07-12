@@ -1178,6 +1178,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << shell_c_decls(m)
 			glue << shell_cmd_fns(m)
 			glue << nm_shell_fns(m)
+			glue << stat_shell_fns(m, doc, app_threads, multi)
 			glue << trace_fb_hooks(m, doc, app_threads, multi)
 			if comm_thread_on {
 				// Board glue (examples/<x>/comm_glue.c): the FDCAN Rx-FIFO0 ISR posts a semaphore
@@ -1457,6 +1458,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << trace_module_init(m)
 				glue << shell_module_init(m)
 				glue << nm_shell_register(m)
+				glue << stat_shell_register(m)
 				glue << nm_module_init(m)
 				for si in tx_sigs {
 					glue << '\tmut last_tx_${snake(si.name)} := u64(0)'
