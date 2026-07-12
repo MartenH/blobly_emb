@@ -154,3 +154,19 @@ context = "h755/dual-core"
 verifies = ["REQ-INV-002"]
 approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
 date = "2026-07-12"
+
+# THE FIRST DISTRIBUTED-ECU SIGNAL ([duo] codegen, multi-image slice 1): one ecu.toml
+# names the cross-core signals; loom2v assigns xioc slots, emits gen/duo_gen.h (the ONE
+# contract header both images compile against — slot numbers appear nowhere else), and
+# generates the bus-owner's fresh-gated periodic tx. Bench: M4LoadFrame 0x201 at 10 Hz,
+# M4Count advancing exactly +10 per frame (the M4's 100 Hz Loom FB through xioc through
+# the M7's comm loop); shell/NM/iocx (0 tears)/telemetry all unaffected. The satellite
+# image stays hand-written (examples/h755_m4_app) and consumes the generated contract —
+# the full second-image emitter absorbs it later, as h735_threadx absorbed threadx_h735.
+[[review]]
+id = "h755-duo-signal"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-INV-002"]
+approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
+date = "2026-07-12"

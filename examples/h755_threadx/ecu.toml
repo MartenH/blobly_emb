@@ -123,6 +123,20 @@ node  = 0x13           # the H735 bench node is 0x12 — distinct ids for a futu
 alive = 0x513          # = peers base + node, spelled out for the wire docs
 peers = [0x500, 0x53F] # the cluster's NM id range
 
+# Cross-core signals (gen_duo, boards/common/xioc.h): the M4 publishes, this image
+# transmits. Slots are GENERATED into gen/duo_gen.h — the satellite compiles against it.
+[duo]
+# m4load: the M4 FB's {n, acc} -> M4LoadFrame every 100 ms.
+# stress: the iocx tear-detection channel — slot only, never on CAN.
+# (No comments inside the [[blocks]]: the V TOML parser drops the next key, vlang/v#27684.)
+[[duo.signal]]
+name      = "m4load"
+frame     = "M4LoadFrame"
+period_ms = 100
+
+[[duo.signal]]
+name      = "stress"
+
 [shell]
 commands = ["cm4", "m4sig", "iocx"] # CM4 heartbeat / M4 FB signal / cross-core IOC stress
 bus = "can0"

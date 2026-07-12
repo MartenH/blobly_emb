@@ -28,7 +28,7 @@
 #define DUO_IOC_ADDR   0x38000020u
 #define DUO_IOC_N      4
 
-#define DUO_SLOT_M4SIG  0
-#define DUO_SLOT_STRESS 1
+/* Slot assignments are GENERATED — gen/duo_gen.h (loom2v [duo]) is the one source; both
+ * images compile against it. Only the pool geometry lives here. */
 
 #endif
