@@ -79,6 +79,22 @@ pub fn (mut r Rsp) write_u32(n u32) {
 	}
 }
 
+// write_u32_padded writes n space-padded to column w (tabular output, like write_padded).
+// The pad count is computed BEFORE the loop on purpose: a V range bound is re-evaluated
+// every iteration (C for-loop semantics), so a bound depending on r.len — which each
+// r.write(' ') advances — would chase itself and pad only half the distance.
+pub fn (mut r Rsp) write_u32_padded(n u32, w int) {
+	start := r.len
+	r.write_u32(n)
+	mut pad := w - (r.len - start)
+	if pad < 1 {
+		pad = 1
+	}
+	for _ in 0 .. pad {
+		r.write(' ')
+	}
+}
+
 pub fn (mut r Rsp) nl() {
 	r.write('\n')
 }
