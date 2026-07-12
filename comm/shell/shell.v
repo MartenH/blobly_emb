@@ -83,6 +83,19 @@ pub fn (mut r Rsp) nl() {
 	r.write('\n')
 }
 
+// write_padded writes s space-padded to column w (one space minimum when s overflows w),
+// so tabular output (the help listing, ps) lines up.
+pub fn (mut r Rsp) write_padded(s string, w int) {
+	r.write(s)
+	if s.len >= w {
+		r.write(' ')
+		return
+	}
+	for _ in 0 .. w - s.len {
+		r.write(' ')
+	}
+}
+
 // CmdFn runs one command: raw argument bytes (whatever followed the command name), the current
 // time (µs, the bus owner's clock), and the response writer. BOUNDED — it runs on the comm thread.
 pub type CmdFn = fn (args &u8, args_len int, now u64, mut rsp Rsp)
@@ -144,11 +157,12 @@ pub fn (mut m ShellModule) on_in(now u64, f can.Frame) {
 	mut rsp := Rsp{}
 	// `help` is intrinsic: it lists the registry, which a plain fn pointer can't reach.
 	if sp == 4 && name_eq('help', f.data, 4) {
-		rsp.write('help    - list commands')
+		rsp.write_padded('help', 8)
+		rsp.write('- list commands')
 		rsp.nl()
 		for i in 0 .. m.ncmd {
-			rsp.write(m.cmds[i].name)
-			rsp.write('  - ')
+			rsp.write_padded(m.cmds[i].name, 8)
+			rsp.write('- ')
 			rsp.write(m.cmds[i].help)
 			rsp.nl()
 		}
