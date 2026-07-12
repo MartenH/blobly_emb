@@ -1,13 +1,16 @@
-/* Minimal Cortex-M7 startup for the STM32H735 — vector table + reset.
+/* Minimal Cortex-M startup (M7 and M4F) — vector table + reset.
  * No ST startup file, no CMSIS: init memory and jump to the V main loop. */
 #include <stdint.h>
 
 extern uint32_t _sidata, _sdata, _edata, _sbss, _ebss, _estack;
-/* Call V's `fn main` body directly (main__main), NOT V's `int main(int,char**)`
- * wrapper — that wrapper runs _vinit (arg/global setup for a hosted OS) and pulls
- * in the heap runtime, which faults bare-metal. main.v only calls C shims, so it
- * needs none of that; bypassing it also lets the linker drop the whole runtime. */
-extern void main__main(void);
+/* BOARD_ENTRY defaults to V's `fn main` body (main__main) called directly, NOT V's
+ * `int main(int,char**)` wrapper — that wrapper runs _vinit (arg/global setup for a
+ * hosted OS) and pulls in the heap runtime, which faults bare-metal. A plain-C image
+ * (e.g. the CM4 heartbeat) overrides with -DBOARD_ENTRY=<fn>. */
+#ifndef BOARD_ENTRY
+#define BOARD_ENTRY main__main
+#endif
+extern void BOARD_ENTRY(void);
 
 void Default_Handler(void) {
 	for (;;) {
@@ -15,7 +18,7 @@ void Default_Handler(void) {
 }
 
 void Reset_Handler(void) {
-	/* Cortex-M7 with -mfloat-abi=hard: enable the FPU (CPACR CP10/CP11 full). */
+	/* -mfloat-abi=hard: enable the FPU (CPACR CP10/CP11 full) — same on M7 and M4F. */
 	*(volatile uint32_t *)0xE000ED88u |= (0xFu << 20);
 	__asm__ volatile("dsb");
 	__asm__ volatile("isb");
@@ -30,7 +33,7 @@ void Reset_Handler(void) {
 		*dst++ = 0;
 	}
 
-	main__main();
+	BOARD_ENTRY();
 	for (;;) {
 	}
 }
