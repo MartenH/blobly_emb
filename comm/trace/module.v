@@ -55,6 +55,13 @@ mut:
 	rsp_due  bool
 	dumping  bool // raw-stream progress
 	dump_pos u32  // next record_at() index while a raw dump streams
+	// A SATELLITE core's imported window (multi-image targets): the bus owner fetches the
+	// remote core's frozen snapshot over shared memory, loads it here, and produce() streams
+	// it as that core's OWN self-describing block once the local block's transfer completes —
+	// the host reads one ISO-TP transfer per core (mask_popcount blocks), decoder unchanged.
+	remote      TraceBuffer
+	remote_core u8
+	remote_due  bool
 }
 
 pub fn new_module(rsp_id u32, record_id u32, core u8, use_isotp bool, buf TraceBuffer) TraceModule {
@@ -137,6 +144,16 @@ pub fn (mut m TraceModule) produce(now u64, mut f can.Frame) bool {
 			fill(mut f, m.record_id, p.data)
 			return true
 		}
+		if m.remote_due && !m.link.busy() {
+			// the local block's transfer is done: start the satellite core's block as its own
+			// ISO-TP transfer (the host FC-handshakes each block separately)
+			m.remote_due = false
+			mut scratch := [isotp.max_payload]u8{}
+			n := m.remote.pack_block(&scratch[0], isotp.max_payload, m.remote_core)
+			if n > 0 {
+				m.link.send(&scratch[0], n)
+			}
+		}
 		return false
 	}
 	if m.dumping {
@@ -163,6 +180,28 @@ fn fill(mut f can.Frame, id u32, b [8]u8) {
 // deliver their timestamped records. The hooks own WHEN; the module owns the ring and the bus side.
 pub fn (mut m TraceModule) push(r Record) {
 	m.buf.push(r)
+}
+
+// set_remote wires the import buffer for ONE satellite core (caller-owned backing, like
+// new_buffer) — the single-dump-owner rule: remote cores never touch the bus themselves.
+pub fn (mut m TraceModule) set_remote(core u8, backing &Record, capacity u32) {
+	m.remote = new_buffer(backing, capacity, .oneshot, 0)
+	m.remote_core = core
+}
+
+// load_remote imports the satellite's snapshot (wire-form records, oldest first) and queues
+// it as the next dump block. Call after the LOCAL dump was granted; produce() sequences it.
+pub fn (mut m TraceModule) load_remote(src &u8, n u32) {
+	m.remote.start()
+	for i in 0 .. n {
+		mut b := [8]u8{}
+		for j in 0 .. 8 {
+			b[j] = unsafe { src[i * 8 + u32(j)] }
+		}
+		m.remote.push(decode_record(b))
+	}
+	m.remote.stop()
+	m.remote_due = true
 }
 
 // load_snapshot imports a window captured OUTSIDE the module in the 8-byte wire form — the
@@ -193,5 +232,5 @@ pub fn (m TraceModule) rsp_pending() bool {
 }
 
 pub fn (m TraceModule) is_dumping() bool {
-	return m.dumping || m.link.busy()
+	return m.dumping || m.link.busy() || m.remote_due
 }

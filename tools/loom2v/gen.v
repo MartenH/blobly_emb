@@ -1180,6 +1180,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << trace_c_decls(m)
 			glue << shell_c_decls(m)
 			glue << duo_c_decls(m)
+			glue << duo_trace_c_decls(m)
 			glue << shell_cmd_fns(m)
 			glue << nm_shell_fns(m)
 			glue << stat_shell_fns(m, doc, app_threads, multi)
@@ -1237,6 +1238,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << trace_scratch_fields(m, part)
 			glue << trace_module_globals(m)
 			glue << shell_module_globals(m)
+			glue << duo_trace_globals(m)
 			glue << nm_module_globals(m)
 			if comm_thread_on {
 				glue << '\tg_comm_tcb   [32]u64  // the bus-owning comm thread'
@@ -1465,6 +1467,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << stat_shell_register(m)
 				glue << nm_module_init(m)
 				glue << duo_comm_locals(m)
+				glue << duo_trace_locals(m)
 				for si in tx_sigs {
 					glue << '\tmut last_tx_${snake(si.name)} := u64(0)'
 				}
@@ -1498,6 +1501,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << trace_rx_arms(m, part)
 			glue << shell_rx_arms(m)
 			glue << nm_rx_arms(m)
+			glue << duo_trace_rx_arm(m)
 				glue << '\t\t}'
 				glue << '\t\tt1 := C.board_now_us()'
 				for p in producers {
@@ -1542,6 +1546,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << trace_produce_drain(m)
 				glue << shell_produce_drain(m)
 				glue << nm_produce_drain(m)
+				glue << duo_trace_poll(m)
 				glue << duo_produce_drain(m)
 				glue << '\t}'
 				glue << '}'

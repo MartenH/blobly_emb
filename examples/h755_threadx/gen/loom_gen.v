@@ -79,6 +79,10 @@ fn C.shell_cm4(&u8, int) int
 fn C.shell_m4sig(&u8, int) int
 fn C.shell_iocx(&u8, int) int
 fn C.duo_poll(int, &u32, &u32) int // xioc reader (comm_glue.c): 1 = fresh value
+fn C.duo_trace_req(u32) // post arm(1)/snapshot(2) to the satellite (duo.h dtrace cell)
+fn C.duo_trace_ready() int
+fn C.duo_trace_count() u32
+fn C.duo_trace_buf() &u8
 
 fn shell_ps_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 	n := C.shell_ps(&rsp.buf[0], 520)
@@ -206,6 +210,7 @@ __global (
 	g_trace_ring [64]trace.Record
 	g_tm trace.TraceModule
 	g_sh shell.ShellModule
+	g_duo_trace_ring [64]trace.Record // the satellite core's imported dump window
 	g_nm nm_can.NmModule
 	g_comm_tcb   [32]u64  // the bus-owning comm thread
 	g_comm_stack [4096]u8
@@ -318,6 +323,8 @@ fn comm_thread_entry(input u32) {
 	mut duo_m4load_a := u32(0)
 	mut duo_m4load_b := u32(0)
 	mut duo_txf := can.Frame{}
+	g_tm.set_remote(u8(1), &g_duo_trace_ring[0], 64) // satellite blocks ride our dump link
+	mut duo_trc_wait := false // a satellite snapshot was requested by op_dump
 	mut last_tx_workload := u64(0)
 	mut rx := can.Frame{}
 	for {
@@ -352,6 +359,14 @@ fn comm_thread_entry(input u32) {
 			}
 			if rx.id >= u32(0x500) && rx.id <= u32(0x53f) { // nm.peers -> cluster NM
 				g_nm.on_peers(C.board_now_us(), rx)
+			}
+			if rx.id == u32(0x7e2) && rx.len == 8 && rx.data[6] & 0x02 != 0 {
+				match rx.data[0] {
+					1, 2, 4 { C.duo_trace_req(1) } // arm/start/reset -> satellite arm
+					3 { C.duo_trace_req(2) } // stop -> satellite freeze+snapshot
+					6 { duo_trc_wait = true } // dump -> import the ack below
+					else {}
+				}
 			}
 		}
 		t1 := C.board_now_us()
@@ -406,6 +421,10 @@ fn comm_thread_entry(input u32) {
 		}
 		for ch.tx_ready() && g_nm.produce(t1, mut nm_txf) {
 			ch.send(nm_txf)
+		}
+		if duo_trc_wait && C.duo_trace_ready() != 0 {
+			g_tm.load_remote(C.duo_trace_buf(), C.duo_trace_count())
+			duo_trc_wait = false
 		}
 		if C.duo_poll(0, &duo_m4load_a, &duo_m4load_b) != 0
 			&& t1 - duo_m4load_last >= 100000 && ch.tx_ready() {

@@ -206,3 +206,75 @@ fn test_load_snapshot_imports_wire_records() {
 	assert ids.len == 3
 	assert ids[0] == entity(kind_thread, 1)
 }
+
+// Multi-image dump: a satellite core's imported snapshot streams as its OWN block after the
+// local one — two sequential ISO-TP transfers, each self-describing (block header carries the
+// core), exactly what blobly_net's per-core decoder already consumes.
+fn test_remote_block_streams_after_local() {
+	mut backing := [8]Record{}
+	buf := new_buffer(&backing[0], 8, .ring, 0)
+	mut m := new_module(0x713, 0x7e5, 0, true, buf)
+	mut rbacking := [8]Record{}
+	m.set_remote(1, &rbacking[0], 8)
+
+	// local capture: one fb record; remote snapshot: two wire-form records from "core 1"
+	m.on_cmd(cmd_frame(op_arm))
+	mut f := can.Frame{}
+	assert m.produce(0, mut f)
+	m.push(new_fb(1, 0, 100, 10))
+	m.on_cmd(cmd_frame(op_stop))
+	assert m.produce(0, mut f)
+	m.on_cmd(cmd_frame(op_dump))
+	assert m.produce(0, mut f) // dump rsp
+	mut wire := [16]u8{}
+	e1 := encode_record(new_fb(9, 0, 111, 5))
+	e2 := encode_record(new_fb(9, 0, 222, 6))
+	for j in 0 .. 8 {
+		wire[j] = e1[j]
+		wire[8 + j] = e2[j]
+	}
+	m.load_remote(&wire[0], 2)
+	assert m.is_dumping() // remote queued keeps the owner pacing
+
+	// host reassembles BOTH transfers back to back
+	mut host := isotp.Link{}
+	mut now := u64(1000)
+	mut blocks := 0
+	mut cores := []u8{}
+	mut counts := []u32{}
+	for _ in 0 .. 256 {
+		if m.produce(now, mut f) {
+			mut p := isotp.Pdu{}
+			for j in 0 .. 8 {
+				p.data[j] = f.data[j]
+			}
+			host.on_frame(now, p)
+		}
+		mut fc := isotp.Pdu{}
+		if host.poll(now, mut fc) {
+			mut fcf := can.Frame{
+				id:  0x7e6
+				len: 8
+			}
+			for j in 0 .. 8 {
+				fcf.data[j] = fc.data[j]
+			}
+			m.on_dump_fc(now, fcf)
+		}
+		mut block := [520]u8{}
+		n := host.take(&block[0])
+		if n > 0 {
+			blocks++
+			hdr := decode_record([block[0], block[1], block[2], block[3], block[4], block[5],
+				block[6], block[7]]!)
+			assert hdr.is_block_header()
+			cores << hdr.header_core()
+			counts << u32((n - 8) / 8)
+		}
+		now += 1000
+	}
+	assert blocks == 2
+	assert cores == [u8(0), 1] // local first, then the satellite's block
+	assert counts == [u32(1), 2]
+	assert !m.is_dumping()
+}
