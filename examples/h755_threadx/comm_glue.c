@@ -125,11 +125,6 @@ int shell_bmc(unsigned char *out, int cap) {
     return (int)(p - (char *)out);
 }
 
-/* shell_cm4 — the `cm4` shell command: liveness + rate of the second core, read from the
- * SRAM4 heartbeat cell (examples/h755_cm4_heartbeat writes it; 0x38000000 is uncached on
- * both cores by policy). Rate is computed between successive calls (statics), so call it
- * twice: the first call anchors, later calls report counts/ms — which also doubles as a
- * CM4 clock probe (the increment rate steps when HCLK moves). */
 /* duo_clocks_ready — the boot handshake's CM7 half: written once after board_clock_init,
  * releasing the parked CM4 (its SysTick assumes the final 200 MHz HCLK). */
 void duo_clocks_ready(void) {
@@ -183,7 +178,7 @@ int duo_poll(int i, uint32_t *a, uint32_t *b) {
 int shell_m4sig(unsigned char *out, int cap) {
     char *p = (char *)out, *end = (char *)out + cap;
     static xioc_rd_t rd; /* reader state is reader-private (comm thread only) */
-    xioc_read(&DUO_POOL[DUO_SLOT_M4LOAD], &rd);
+    xioc_read(&DUO_POOL[DUO_SLOT_M4_COUNT], &rd);
     p = ps_str(p, end, "M4 FB: n ");
     p = ps_u32(p, end, rd.a);
     p = ps_str(p, end, "  acc ");
@@ -192,17 +187,18 @@ int shell_m4sig(unsigned char *out, int cap) {
     return (int)(p - (char *)out);
 }
 
-/* shell_iocx — the `iocx` command: cross-core IOC VALIDATION against the M4's max-rate
- * stress channel (slot 1 carries {n, n*K}). A bounded burst of reads checks the triple
- * buffer's two invariants across the core boundary: no torn value (b == a*K exactly) and
- * no time travel (a never decreases). ~200k reads in a few ms on the comm thread. */
+/* shell_iocx — the `iocx` command: cross-core xioc HEALTH CHECK against the M4Stress
+ * signal (the M4Churn FB publishes {k, k*K} at 500 Hz). A bounded burst of reads checks
+ * the channel's two invariants across the core boundary: no torn value (b == a*K
+ * exactly) and no time travel (a never decreases). The max-rate tear harness that
+ * condemned cross-core LDREX/STREX lived here before the emitter (emb#110). */
 int shell_iocx(unsigned char *out, int cap) {
     char *p = (char *)out, *end = (char *)out + cap;
     uint32_t reads = 200000u, tears = 0u, regress = 0u, advances = 0u;
     uint32_t prev = 0u;
     xioc_rd_t rd = {0u, 0u, 0u};
     for (uint32_t i = 0; i < reads; i++) {
-        xioc_read(&DUO_POOL[DUO_SLOT_STRESS], &rd); /* slot from duo_gen.h */
+        xioc_read(&DUO_POOL[DUO_SLOT_M4_STRESS], &rd); /* slot from duo_gen.h */
         if (rd.seq != 0u && rd.b != rd.a * DUO_STRESS_K) tears++;
         if (rd.a < prev) regress++;
         if (rd.a > prev) advances++;
@@ -217,42 +213,6 @@ int shell_iocx(unsigned char *out, int cap) {
     p = ps_str(p, end, "  fresh advances ");
     p = ps_u32(p, end, advances);
     p = ps_str(p, end, "\n");
-    return (int)(p - (char *)out);
-}
-
-#define CM4_HB_MAGIC 0x434D3452u /* "CM4R" */
-int shell_cm4(unsigned char *out, int cap) {
-    char *p = (char *)out, *end = (char *)out + cap;
-    volatile uint32_t *hb = (volatile uint32_t *)0x38000000u;
-    if (hb[0] != CM4_HB_MAGIC) {
-        p = ps_str(p, end, "CM4: no heartbeat (magic ");
-        p = ps_u32(p, end, hb[0]);
-        p = ps_str(p, end, ") - bank 2 image missing or core not booted\n");
-        return (int)(p - (char *)out);
-    }
-    static uint32_t last_count = 0u;
-    static uint64_t last_us = 0u;
-    uint32_t n = hb[1];
-    uint64_t now = board_now_us();
-    p = ps_str(p, end, "CM4 alive: count ");
-    p = ps_u32(p, end, n);
-    if (last_us != 0u && now > last_us) {
-        uint32_t d_ms = (uint32_t)((now - last_us) / 1000u);
-        if (d_ms > 0u) {
-            p = ps_str(p, end, "  (+");
-            p = ps_u32(p, end, (uint32_t)(n - last_count));
-            p = ps_str(p, end, " in ");
-            p = ps_u32(p, end, d_ms);
-            p = ps_str(p, end, " ms = ");
-            p = ps_u32(p, end, (uint32_t)((n - last_count) / d_ms));
-            p = ps_str(p, end, "/ms)");
-        }
-    } else {
-        p = ps_str(p, end, "  (call again for the rate)");
-    }
-    p = ps_str(p, end, "\n");
-    last_count = n;
-    last_us = now;
     return (int)(p - (char *)out);
 }
 
