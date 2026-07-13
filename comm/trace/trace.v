@@ -93,11 +93,16 @@ pub fn new_fb(id u16, flags u8, start_us u32, cpu_us u16) Record {
 // new_block_header — the wire-only per-core header leading one core's block in a multi-core
 // dump: names the core and how many records follow, so the stream splits by core with no
 // external framing. CONTROL kind / ctl_block subtype; on the wire b2 = core, b3-6 = count (u32).
-pub fn new_block_header(core u8, count u32) Record {
+// `more` (info bit 7) marks a CONTINUATION stream: further blocks for this core follow.
+// The end-of-stream lives IN THE FORMAT, never in transport heuristics — the same block
+// sequence rides ISO-TP today and any future transport (Ethernet/DoIP) unchanged. Old
+// decoders masked nothing here, but cores are < 16, so bit 7 was always 0 = "last".
+pub fn new_block_header(core u8, count u32, more bool) Record {
+	info := if more { u32(core) | 0x80 } else { u32(core) }
 	return Record{
 		entity_id: entity(kind_control, ctl_block)
-		cpu_us:    u16((count >> 24) & 0xff)                 // b6 = count byte 3, b7 = 0
-		tsinfo:    (count & 0x00ff_ffff) | (u32(core) << 24) // info(b2)=core, start(b3-5)=count low 24
+		cpu_us:    u16((count >> 24) & 0xff)              // b6 = count byte 3, b7 = 0
+		tsinfo:    (count & 0x00ff_ffff) | (info << 24)   // info(b2)=core|more, start(b3-5)=count low 24
 	}
 }
 
@@ -138,7 +143,12 @@ pub fn (r Record) is_block_header() bool {
 
 // block-header accessors (valid when is_block_header()).
 pub fn (r Record) header_core() u8 {
-	return r.info()
+	return r.info() & 0x7f // bit 7 = header_more
+}
+
+// header_more reports that further blocks for this core follow (a multi-block dump).
+pub fn (r Record) header_more() bool {
+	return r.info() & 0x80 != 0
 }
 
 pub fn (r Record) header_count() u32 {
@@ -399,27 +409,40 @@ pub fn (t TraceBuffer) pack(out &u8, out_cap int) int {
 // no external framing. The header count reflects records actually written, so a block
 // truncated by `out_cap` stays internally consistent.
 pub fn (t TraceBuffer) pack_block(out &u8, out_cap int, core u8) int {
-	if out_cap < 8 {
-		return 0
+	n, _, _ := t.pack_chunk(out, out_cap, core, 0)
+	return n
+}
+
+// pack_chunk writes one CONTINUATION block of this buffer's window: records [from..), as many
+// as fit `out_cap`, ALWAYS preceded by an epoch carrying the base applicable at `from` (the
+// decoder re-anchors per block, so every block must be self-anchoring) and the block header
+// (core, count, more). Returns (bytes written, next `from`, more-blocks-follow). Chunk size is
+// the CALLER's cap — the transport binding passes its own payload limit, the format doesn't
+// care (520 B over ISO-TP today, a datagram-sized cap over Ethernet later).
+pub fn (t TraceBuffer) pack_chunk(out &u8, out_cap int, core u8, from u32) (int, u32, bool) {
+	if out_cap < 24 || from >= t.used { // header + epoch + at least one record
+		return 0, from, false
 	}
-	mut n := 8 // reserve the header slot; backfill it once the count is known
-	mut count := u32(0)
-	mut i0 := u32(0)
-	// A preserved epoch (aged out of the ring) replaces the oldest slot (like pack()), so the
-	// block stays `used` records — the header count and TraceRsp.records_used agree — and every
-	// in-buffer epoch is retained.
-	if t.has_prefix && t.used > 0 && n + 8 <= out_cap {
-		p := encode_record(new_epoch(t.prefix_base))
-		unsafe {
-			for j in 0 .. 8 {
-				out[n + j] = p[j]
-			}
+	// the base applicable at `from`: the preserved prefix base, updated by every epoch
+	// record that precedes `from` in the window
+	mut base := if t.has_prefix { t.prefix_base } else { u32(0) }
+	for i in 0 .. from {
+		r := t.record_at(i)
+		if r.is_epoch() {
+			base = r.epoch_base()
 		}
-		n += 8
-		count++
-		i0 = 1
 	}
-	for i in i0 .. t.used {
+	mut n := 8 // reserve the header slot; backfill once the count is known
+	ep := encode_record(new_epoch(base))
+	unsafe {
+		for j in 0 .. 8 {
+			out[n + j] = ep[j]
+		}
+	}
+	n += 8
+	mut count := u32(1)
+	mut i := from
+	for i < t.used {
 		if n + 8 > out_cap {
 			break
 		}
@@ -431,15 +454,18 @@ pub fn (t TraceBuffer) pack_block(out &u8, out_cap int, core u8) int {
 		}
 		n += 8
 		count++
+		i++
 	}
-	hdr := encode_record(new_block_header(core, count))
+	more := i < t.used
+	hdr := encode_record(new_block_header(core, count, more))
 	unsafe {
 		for j in 0 .. 8 {
 			out[j] = hdr[j]
 		}
 	}
-	return n
+	return n, i, more
 }
+
 
 // record_at returns the i-th record in chronological (oldest-first) order — the read-out
 // order for a dump. For a wrapped ring the oldest sits at `head`.

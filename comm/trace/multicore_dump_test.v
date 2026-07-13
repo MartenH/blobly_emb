@@ -49,20 +49,20 @@ fn test_multicore_dump_roundtrip() {
 	// core 3's block (from b0)
 	mut g0 := [128]u8{}
 	m0 := send_block(mut b0, 3, &g0[0])
-	assert m0 == 8 * 4 // header + 3 records
+	assert m0 == 8 * 5 // header + leading epoch (blocks self-anchor) + 3 records
 	h0 := decode_record(first8(g0))
-	assert h0.is_block_header() && h0.header_core() == 3 && h0.header_count() == 3
-	sw := decode_record(at8(g0, 16)) // 2nd record is the thread event
+	assert h0.is_block_header() && h0.header_core() == 3 && h0.header_count() == 4 // + leading epoch
+	sw := decode_record(at8(g0, 24)) // header, epoch, rec1, then the thread event
 	assert sw.kind() == kind_thread && sw.id() == 1
 	assert sw.info() == reason_preempt
 
 	// core 5's block (from b1) — a different, self-identifying header
 	mut g1 := [128]u8{}
 	m1 := send_block(mut b1, 5, &g1[0])
-	assert m1 == 8 * 2 // header + 1 record
+	assert m1 == 8 * 3 // header + leading epoch + 1 record
 	h1 := decode_record(first8(g1))
-	assert h1.is_block_header() && h1.header_core() == 5 && h1.header_count() == 1
-	assert decode_record(at8(g1, 8)).id() == 9
+	assert h1.is_block_header() && h1.header_core() == 5 && h1.header_count() == 2 // + epoch
+	assert decode_record(at8(g1, 16)).id() == 9
 }
 
 fn first8(a [128]u8) [8]u8 {

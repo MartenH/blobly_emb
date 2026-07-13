@@ -268,7 +268,7 @@ fn comm_thread_entry(input u32) {
 	mut last_telem := u64(0)
 	telem_period_us := u64(500000)
 	mut last_overruns := u32(0)
-	g_tm = trace.new_module(u32(0x7e3), u32(0x7e5), 0, true,
+	g_tm.init(u32(0x7e3), u32(0x7e5), 0, true, // in place: no module-sized stack copy
 		trace.new_buffer(&g_trace_ring[0], 64, .ring, 0))
 	mut trace_txf := can.Frame{}
 	g_sh.init(u32(0x7f1)) // in place: no module-sized stack copies

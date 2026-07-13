@@ -206,11 +206,11 @@ __global (
 	g_ctrl_slow_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
 	g_ctrl_slow_stack [4096]u8
 	g_sched_ctrl_slow loom.Scheduler // bss, never an entry-frame local
-	g_app_trace [64][8]u8 // scratch snapshot of the trace ring (owner streams it)
-	g_trace_ring [64]trace.Record
+	g_app_trace [256][8]u8 // scratch snapshot of the trace ring (owner streams it)
+	g_trace_ring [256]trace.Record
 	g_tm trace.TraceModule
 	g_sh shell.ShellModule
-	g_duo_trace_ring [64]trace.Record // the satellite core's imported dump window
+	g_duo_trace_ring [256]trace.Record // the satellite core's imported dump window
 	g_nm nm_can.NmModule
 	g_comm_tcb   [32]u64  // the bus-owning comm thread
 	g_comm_stack [4096]u8
@@ -298,8 +298,8 @@ fn comm_thread_entry(input u32) {
 	mut last_telem := u64(0)
 	telem_period_us := u64(500000)
 	mut last_overruns := u32(0)
-	g_tm = trace.new_module(u32(0x7e3), u32(0x7e5), 0, true,
-		trace.new_buffer(&g_trace_ring[0], 64, .ring, 0))
+	g_tm.init(u32(0x7e3), u32(0x7e5), 0, true, // in place: no module-sized stack copy
+		trace.new_buffer(&g_trace_ring[0], 256, .ring, 0))
 	mut trace_txf := can.Frame{}
 	g_sh.init(u32(0x7f1)) // in place: no module-sized stack copies
 	g_sh.register('ps', 'threads: prio, state, stack high-water', shell_ps_cmd)
@@ -323,7 +323,7 @@ fn comm_thread_entry(input u32) {
 	mut duo_m4load_a := u32(0)
 	mut duo_m4load_b := u32(0)
 	mut duo_txf := can.Frame{}
-	g_tm.set_remote(u8(1), &g_duo_trace_ring[0], 64) // satellite blocks ride our dump link
+	g_tm.set_remote(u8(1), &g_duo_trace_ring[0], 256) // satellite blocks ride our dump link
 	mut duo_trc_wait := false // a satellite snapshot was requested by op_dump
 	mut last_tx_workload := u64(0)
 	mut rx := can.Frame{}
@@ -343,7 +343,7 @@ fn comm_thread_entry(input u32) {
 					C.trace_arm() // fresh window in the exec-hook recorder
 				} else if op == trace.op_stop {
 					C.trace_freeze() // stop RECORDING until the next arm — repeated dumps are identical
-					tr_n := C.trace_snapshot(&g_app_trace[0], 64)
+					tr_n := C.trace_snapshot(&g_app_trace[0], 256)
 					g_tm.load_snapshot(&g_app_trace[0][0], tr_n)
 				}
 				g_tm.on_cmd(rx)
