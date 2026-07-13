@@ -60,6 +60,16 @@ snapshot — inputs never change mid-run. Related values that are produced toget
 belong in ONE multi-field signal (`fields = { fl = "u32", fr = "u32", ... }`) rather
 than four; and an FB wanting 20 unrelated inputs is often two FBs.
 
+This is the ONLY port-access pattern, **by design**. AUTOSAR's RTE offers a zoo of
+them — `Rte_Read`/`Rte_Write` (explicit), `Rte_IRead`/`Rte_IWrite` (implicit),
+`Rte_DRead`, queued `Rte_Send`/`Rte_Receive`, `Rte_Call` client-server, inter-runnable
+variables — and every component picks its own mix, so reading a foreign SWC starts
+with decoding which access semantics it uses. blobly keeps exactly the one good idea
+(the implicit coherent-snapshot sender-receiver) as the single pattern; anything a
+second pattern would buy has to earn its way in through the platform, not per-FB
+choice. The full pattern-by-pattern mapping is
+[../autosar-comparison.md](../autosar-comparison.md).
+
 The handler must stay inside its period at the thread's tick — the scheduler marks
 overruns and the trace makes them visible (`[trace] level = "all"` draws each handler
 run as a bar inside its thread's lane).
