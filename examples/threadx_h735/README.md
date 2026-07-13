@@ -3,7 +3,7 @@
 **Phase 5 — the h735_app FBs as ThreadX threads + a wait-free IOC.** The A/B/C demo
 workers are replaced by the real `h735_app` function blocks — **Governor**, **Load**,
 **Heartbeat** (`fbs.c`) — each on its own preemptive thread, with the cross-thread signals
-carried by a **wait-free triple-buffer IOC** (`ioc.h`): `Governor → [LoadCmd] → Load →
+carried by a **wait-free triple-buffer IOC** (`boards/common/ioc.h`): `Governor → [LoadCmd] → Load →
 [Workload] → comm → CAN`. No locks, no spinning, no torn values (the blobly IOC invariant);
 on this single-core H735 the buffers live in DTCM, and the identical code carries a signal
 across cores from shared SRAM (Phase 6). Verified on the board: `candump can0` shows the
@@ -96,7 +96,7 @@ cansend can0 123#0011223344556677    # -> Rx ISR (id 35) + comm wake appear in t
 - `main.c` — creates the FB threads (Governor/Load/Heartbeat) + the comm thread, inits the
   IOCs; `board_clock_init()` + `board_can_clock_pins_init()` + `blob_can_open` first.
 - `fbs.c` — the h735_app FBs as ThreadX threads (Governor → LoadCmd, Load → Workload, Heartbeat).
-- `ioc.h` — the wait-free triple-buffer IOC (SPSC, latest-value-wins, `__atomic` handoff).
+- `boards/common/ioc.h` — the wait-free triple-buffer IOC (SPSC, latest-value-wins, `__atomic` handoff).
 - `comm.c` — FDCAN1 Rx-FIFO0 ISR + the comm thread (rx-drain + periodic tx of the Workload signal).
 - `trace_hooks.c` — the four `_tx_execution_*` hooks → blobly 8-byte records + the FDCAN
   ring dump (`trace_dump_can`, copied from `threadx_min` then retargeted off semihosting).

@@ -33,7 +33,7 @@ TX_OBJ = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
          $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 
 BSP = $(BOARD_BSP_CM4_THREADX) $(BOARD_BSP_CM4_BARE) m4_glue.c \
-      $(REPO)/examples/threadx_h735/trace_hooks.c
+      $(REPO)/boards/common/trace_hooks.c
 
 all: $(BUILD)/$(NAME).bin
 
