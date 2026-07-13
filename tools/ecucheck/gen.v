@@ -66,7 +66,6 @@ fn specs() map[string]map[string]Key {
 			'trace':     sub(.tbl, false, 'trace')
 			'shell':     sub(.tbl, false, 'shell')
 			'nm':        sub(.tbl, false, 'nm')
-			'duo':       sub(.tbl, false, 'duo')
 			'target':    sub(.tbl, false, 'target')
 			'bus':       sub(.namedmap, false, 'bus')
 			'partition': sub(.arr, false, 'partition')
@@ -94,14 +93,6 @@ fn specs() map[string]map[string]Key {
 			'out':      k(.id)
 			'fc':       k(.id)
 			'commands': k(.str_arr) // example-provided target commands (comm_glue.c)
-		}
-		'duo':        {
-			'signal': sub(.arr, false, 'duo_signal')
-		}
-		'duo_signal': {
-			'name':      req(.str)
-			'frame':     k(.id)
-			'period_ms': k(.int)
 		}
 		'nm':         {
 			'enabled':       k(.boolean)
@@ -169,7 +160,8 @@ fn specs() map[string]map[string]Key {
 			'name':     k(.str)
 			'core':     k(.int)
 			'trusted':  k(.boolean)
-			'external': k(.boolean) // declared-but-not-generated (a satellite core's image)
+			'external': k(.boolean) // declared-but-hand-written (a satellite core's image)
+			'image':    k(.str) // emit this partition's image into <dir> (docs/multi-image.md)
 			'thread':   sub(.arr, false, 'thread')
 		}
 		'thread':     {

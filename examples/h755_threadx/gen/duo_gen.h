@@ -3,7 +3,7 @@
  * duo_pub(DUO_SLOT_<NAME>, ...); the bus owner polls the same slots). */
 #ifndef BLOBLY_DUO_GEN_H
 #define BLOBLY_DUO_GEN_H
-#define DUO_SLOT_M4LOAD 0
-#define DUO_SLOT_STRESS 1
+#define DUO_SLOT_M4_COUNT 0
+#define DUO_SLOT_M4_STRESS 1
 #define DUO_GEN_SLOTS 2
 #endif

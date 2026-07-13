@@ -123,22 +123,8 @@ node  = 0x13           # the H735 bench node is 0x12 — distinct ids for a futu
 alive = 0x513          # = peers base + node, spelled out for the wire docs
 peers = [0x500, 0x53F] # the cluster's NM id range
 
-# Cross-core signals (gen_duo, boards/common/xioc.h): the M4 publishes, this image
-# transmits. Slots are GENERATED into gen/duo_gen.h — the satellite compiles against it.
-[duo]
-# m4load: the M4 FB's {n, acc} -> M4LoadFrame every 100 ms.
-# stress: the iocx tear-detection channel — slot only, never on CAN.
-# (No comments inside the [[blocks]]: the V TOML parser drops the next key, vlang/v#27684.)
-[[duo.signal]]
-name      = "m4load"
-frame     = "M4LoadFrame"
-period_ms = 100
-
-[[duo.signal]]
-name      = "stress"
-
 [shell]
-commands = ["cm4", "m4sig", "iocx"] # CM4 heartbeat / M4 FB signal / cross-core IOC stress
+commands = ["m4sig", "iocx"] # M4 FB signal / cross-core xioc health check
 bus = "can0"
 in  = 0x7F0
 out = 0x7F1
@@ -148,16 +134,15 @@ fc  = 0x7F2
 kind    = "threadx"
 tick_ms = 1
 
-# --- the satellite core, DECLARED (external = true: its image is examples/h755_m4_app,
-# hand-written until the multi-image emitter absorbs it). Declaration buys IDENTITY: the
-# manifest's core-1 thread rows (per-core ids, mirroring the satellite recorder's bind
-# order) and a globally-assigned handler id for its FB — nothing here emits code. The
-# thread names/priorities MUST match the hand-written image (the emitter closes this
-# coupling later). Keep [[blocks]] comment-free (vlang/v#27684).
+# --- the satellite core (docs/multi-image.md): an ORDINARY partition whose image the
+# generator emits into examples/h755_m4_app (image = <dir>). Its signals are ordinary
+# signals — `from = "m4"` derives an xioc slot (gen/duo_gen.h); M4Count rides
+# M4LoadFrame on this image's comm loop, M4Stress is slot-only (read by platform C,
+# the iocx health check). Keep [[blocks]] comment-free (vlang/v#27684).
 [[partition]]
-name     = "m4"
-core     = 1
-external = true
+name  = "m4"
+core  = 1
+image = "../h755_m4_app"
 
 [[partition.thread]]
 name     = "m4_app"
@@ -167,6 +152,23 @@ priority = 11
 name     = "m4_stress"
 priority = 12
 
+[[signal]]
+name   = "M4Count"
+fields = { n = "u32", acc = "u32" }
+from   = "m4"
+to     = "can0"
+
+[[frame]]
+name = "M4LoadFrame"
+bus  = "can0"
+tx   = { mode = "cyclic", cycle_ms = 100 }
+
+[[signal]]
+name   = "M4Stress"
+fields = { k = "u32", chk = "u32" }
+from   = "m4"
+to     = "app"
+
 [[fb]]
 name   = "M4Load"
 thread = "m4_app"
@@ -174,3 +176,13 @@ thread = "m4_app"
 [[fb.handler]]
 name      = "on_10ms"
 period_ms = 10
+writes    = ["M4Count"]
+
+[[fb]]
+name   = "M4Churn"
+thread = "m4_stress"
+
+[[fb.handler]]
+name      = "on_2ms"
+period_ms = 2
+writes    = ["M4Stress"]
