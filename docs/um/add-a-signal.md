@@ -15,12 +15,39 @@ or a bus — and that's all you say; the generator derives the transport from th
 ```toml
 [[signal]]
 name   = "Workload"            # a valid identifier; becomes `sig.Workload`
-fields = { v = "u32" }         # 1..n typed fields -> the sig struct
+fields = { v = "u32" }         # the APP-facing struct: field NAME = V type
 from   = "app"                 # partition or bus name
 to     = "can0"
 ```
 
 Comments go ABOVE the block, never inside it (vlang/v#27684).
+
+### What `fields` is (and isn't)
+
+`fields` defines the **V struct your app code sees** — nothing about the wire. Field
+names are yours to choose; each entry becomes a typed struct field in `sig/`:
+
+```v
+pub struct Workload {      // fields = { v = "u32" }
+pub mut:
+	v u32                  // handler code: outp.workload.v = ...
+}
+```
+
+A signal with `fields = { n = "u32", acc = "u32" }` is a two-field struct
+(`outp.m4_count.n`, `.acc`). Prefer a descriptive name over `v` (`speed_kph = "u16"`).
+The name `valid` is reserved — a freshness flag some host transports carry.
+
+The **wire layout is the DBC's job**, matched by NAME: when an endpoint is a bus, the
+signal name must be a DBC signal, and the DBC says where its bits live. In DBC terms a
+signal may start at any bit, span byte borders, and scale — the host bridge codec
+handles that generally. The lean ThreadX target codec does NOT yet: it generates only
+the trivial layout (unsigned little-endian u32 at bit 0, factor 1, offset 0) and
+**fails generation loudly** for anything else — so a spanning signal can't silently
+decode as garbage; it just doesn't build until the on-target DBC codec phase lands.
+Practically: a bus-endpoint signal on target today is one u32 value field. Cross-core
+signals are the exception where two fields hit the wire ({a, b} at bytes 0–3/4–7,
+DLC = 4 × field count, checked).
 
 ## 2. Wire it to an FB
 
