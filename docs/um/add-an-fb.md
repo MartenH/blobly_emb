@@ -52,6 +52,14 @@ pub fn (mut g Governor) on_100ms(inp ports.GovernorIn, mut outp ports.GovernorOu
 }
 ```
 
+The signature never grows: a handler always takes exactly `(inp, mut outp)` — every
+signal in `reads`/`writes` is a FIELD of those generated structs, so 20 inputs and 10
+outputs is still two parameters (`inp.wheel_speed_fl`, `outp.brake_cmd`, ...). The
+wrapper fills ALL of `inp` before the call, so the handler computes on a coherent
+snapshot — inputs never change mid-run. Related values that are produced together
+belong in ONE multi-field signal (`fields = { fl = "u32", fr = "u32", ... }`) rather
+than four; and an FB wanting 20 unrelated inputs is often two FBs.
+
 The handler must stay inside its period at the thread's tick — the scheduler marks
 overruns and the trace makes them visible (`[trace] level = "all"` draws each handler
 run as a bar inside its thread's lane).
