@@ -206,3 +206,21 @@ context = "h755/dual-core"
 verifies = ["REQ-TRACE-002"]
 approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
 date = "2026-07-13"
+
+# MULTI-BLOCK DUMP: a core's window streams as a SEQUENCE of self-describing blocks (header
+# more-flag until the last, each re-anchored by a leading epoch), so the ring is no longer
+# capped by one transport payload AND end-of-stream lives in the format, not a transport
+# heuristic — the same block stream rides ISO-TP today and Ethernet/DoIP later unchanged
+# (the reason we didn't just widen the payload). pack_chunk continues from a cursor; the
+# module's pack scratch moved into the __global struct (a stack local overran the comm stack
+# on the first dump); TraceModule.init() builds in place (the by-value new_module return-copy
+# overran the boot stack once the scratch field grew it — the 'survived by luck' case the
+# stack-copy note flagged). buffer_records cap raised 64->4096. Bench: h755 rings 256 deep,
+# dump = 5 blocks/core, 512 records, windows 67 ms (core 0) / 82 ms (core 1), board healthy.
+[[review]]
+id = "h755-multiblock-dump"
+method = "review"
+context = "h755/ThreadX"
+verifies = ["REQ-TRACE-001"]
+approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
+date = "2026-07-13"

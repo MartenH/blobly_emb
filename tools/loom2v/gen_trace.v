@@ -232,7 +232,7 @@ fn trace_module_init(m Model) []string {
 		return []string{}
 	}
 	return [
-		'\tg_tm = trace.new_module(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), 0, ${m.trace.dump_fc_bound},',
+		'\tg_tm.init(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), 0, ${m.trace.dump_fc_bound}, // in place: no module-sized stack copy',
 		'\t\ttrace.new_buffer(&g_trace_ring[0], ${m.trace.buffer_records}, .ring, 0))',
 		'\tmut trace_txf := can.Frame{}',
 	]

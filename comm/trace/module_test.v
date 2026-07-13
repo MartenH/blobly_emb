@@ -168,10 +168,10 @@ fn test_trace_module_isotp_block_dump() {
 	}
 	mut block := [520]u8{}
 	n := host.take(&block[0])
-	assert n == 8 + 2 * 8 // header + 2 records
-	// header: count, then the two fb records in wire form
-	r1 := decode_record([block[8], block[9], block[10], block[11], block[12], block[13], block[14],
-		block[15]]!)
+	assert n == 8 + 8 + 2 * 8 // header + leading epoch (blocks self-anchor) + 2 records
+	// header, epoch, then the two fb records in wire form
+	r1 := decode_record([block[16], block[17], block[18], block[19], block[20], block[21],
+		block[22], block[23]]!)
 	assert r1.entity_id == entity(kind_fb, 1)
 	assert !m.is_dumping() // link drained
 }
@@ -275,6 +275,80 @@ fn test_remote_block_streams_after_local() {
 	}
 	assert blocks == 2
 	assert cores == [u8(0), 1] // local first, then the satellite's block
-	assert counts == [u32(1), 2]
+	assert counts == [u32(2), 3] // each block: leading epoch + its records
+	assert !m.is_dumping()
+}
+
+// Multi-BLOCK dump: a window deeper than one ISO-TP payload streams as continuation blocks
+// (header more-flag set until the last), each self-anchored by a leading epoch — the ring is
+// no longer capped by the transport payload, and the block stream is transport-neutral.
+fn test_multiblock_local_and_remote() {
+	mut backing := [128]Record{}
+	buf := new_buffer(&backing[0], 128, .ring, 0)
+	mut m := new_module(0x713, 0x7e5, 0, true, buf)
+	mut rbacking := [128]Record{}
+	m.set_remote(1, &rbacking[0], 128)
+
+	m.on_cmd(cmd_frame(op_arm))
+	mut f := can.Frame{}
+	assert m.produce(0, mut f)
+	for i in 0 .. 100 { // > 63: needs two local blocks
+		m.push(new_fb(u16(i % 8), 0, u32(100 + i), 3))
+	}
+	m.on_cmd(cmd_frame(op_stop))
+	assert m.produce(0, mut f)
+	m.on_cmd(cmd_frame(op_dump))
+	assert m.produce(0, mut f) // dump rsp
+	mut wire := [70 * 8]u8{}
+	for i in 0 .. 70 { // remote window: > 63, needs two blocks too
+		e := encode_record(new_fb(u16(9), 0, u32(500 + i), 2))
+		for j in 0 .. 8 {
+			wire[i * 8 + j] = e[j]
+		}
+	}
+	m.load_remote(&wire[0], 70)
+
+	mut host := isotp.Link{}
+	mut now := u64(1000)
+	mut cores := []u8{}
+	mut mores := []bool{}
+	mut recs := []u32{}
+	for _ in 0 .. 4096 {
+		if m.produce(now, mut f) {
+			mut p := isotp.Pdu{}
+			for j in 0 .. 8 {
+				p.data[j] = f.data[j]
+			}
+			host.on_frame(now, p)
+		}
+		mut fc := isotp.Pdu{}
+		if host.poll(now, mut fc) {
+			mut fcf := can.Frame{
+				id:  0x7e6
+				len: 8
+			}
+			for j in 0 .. 8 {
+				fcf.data[j] = fc.data[j]
+			}
+			m.on_dump_fc(now, fcf)
+		}
+		mut block := [520]u8{}
+		n := host.take(&block[0])
+		if n > 0 {
+			hdr := decode_record([block[0], block[1], block[2], block[3], block[4], block[5],
+				block[6], block[7]]!)
+			assert hdr.is_block_header()
+			cores << hdr.header_core()
+			mores << hdr.header_more()
+			recs << u32((n - 8) / 8)
+		}
+		now += 1000
+	}
+	// local window (100 recs + leading epochs) = 2 blocks, then the remote (70) = 2 blocks
+	assert cores == [u8(0), 0, 1, 1]
+	assert mores == [true, false, true, false] // end-of-stream lives IN the format
+	assert recs[0] == 64 // epoch + 63 records fills one payload
+	assert recs[0] + recs[1] == 102 // 100 records + one leading epoch per block
+	assert recs[2] + recs[3] == 72 // 70 + 2 epochs
 	assert !m.is_dumping()
 }

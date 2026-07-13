@@ -105,7 +105,7 @@ period_ms = 500
 enabled        = true
 bus            = "can0"
 level          = "all"
-buffer_records = 64
+buffer_records = 256   # = trace_hooks RING_CAP: full flight-recorder depth, multi-block dumped
 mode           = "ring"
 cmd            = 0x7E2
 rsp            = 0x7E3

@@ -44,11 +44,11 @@ pub const endpoints = [
 ]
 
 pub struct TraceModule {
+mut:
 	rsp_id    u32
 	record_id u32
 	core      u8
 	use_isotp bool // dump_fc bound -> ISO-TP block dump; else the raw record stream
-mut:
 	buf      TraceBuffer
 	link     isotp.Link
 	rsp      [8]u8
@@ -62,16 +62,37 @@ mut:
 	remote      TraceBuffer
 	remote_core u8
 	remote_due  bool
+	remote_from u32 // continuation cursor into the remote window
+	// local ISO-TP dump continuation: the window streams as SELF-DESCRIBING ~one-payload
+	// blocks (header carries a more-flag; each block re-anchors with an epoch), so the ring
+	// is no longer capped by one transfer — and the same block stream rides any future
+	// transport binding (Ethernet/DoIP) unchanged.
+	local_due  bool
+	local_from u32
+	// pack scratch — a full ISO-TP payload. The module lives in __global on target, so this
+	// is bss; a [isotp.max_payload]u8 STACK local in produce() overran the 4 KB comm stack
+	// (baseline ~2.6 K) the moment a dump ran (see stack-copy-boot-hang).
+	scratch [isotp.max_payload]u8
 }
 
+// new_module builds a module by VALUE — host use only (a spacious stack). On target the
+// module lives in __global and MUST be built in place: it carries an ISO-TP link (~1 KB),
+// the remote import buffer, and a full-payload scratch — a return-copy of all that overran
+// the 4 KB comm stack at boot (stack-copy-boot-hang; TraceModule was the 'survived by luck'
+// case that note warned about — the scratch field finally tipped it). Use init() on target.
 pub fn new_module(rsp_id u32, record_id u32, core u8, use_isotp bool, buf TraceBuffer) TraceModule {
-	return TraceModule{
-		rsp_id:    rsp_id
-		record_id: record_id
-		core:      core
-		use_isotp: use_isotp
-		buf:       buf
-	}
+	mut m := TraceModule{}
+	m.init(rsp_id, record_id, core, use_isotp, buf)
+	return m
+}
+
+// init constructs the module IN PLACE (no module-sized stack copy) — the target path.
+pub fn (mut m TraceModule) init(rsp_id u32, record_id u32, core u8, use_isotp bool, buf TraceBuffer) {
+	m.rsp_id = rsp_id
+	m.record_id = record_id
+	m.core = core
+	m.use_isotp = use_isotp
+	m.buf = buf
 }
 
 // on_cmd serves the `cmd` endpoint: apply a routed command frame to our ring via handle_cmd,
@@ -101,13 +122,10 @@ pub fn (mut m TraceModule) on_cmd(f can.Frame) {
 	}
 	if do_dump {
 		if m.use_isotp {
-			// One self-describing block (header + preserved epoch + records) into the link;
-			// the link segments it and produce() streams the frames, FC-paced by the host.
-			mut scratch := [isotp.max_payload]u8{}
-			n := m.buf.pack_block(&scratch[0], isotp.max_payload, m.core)
-			if n > 0 {
-				m.link.send(&scratch[0], n)
-			}
+			// stream the window as continuation blocks; produce() packs + sends each one as
+			// the previous transfer completes (multi-block: the ring outgrows one payload)
+			m.local_due = true
+			m.local_from = 0
 		} else {
 			m.dumping = true
 			m.dump_pos = 0
@@ -144,14 +162,25 @@ pub fn (mut m TraceModule) produce(now u64, mut f can.Frame) bool {
 			fill(mut f, m.record_id, p.data)
 			return true
 		}
-		if m.remote_due && !m.link.busy() {
-			// the local block's transfer is done: start the satellite core's block as its own
-			// ISO-TP transfer (the host FC-handshakes each block separately)
-			m.remote_due = false
-			mut scratch := [isotp.max_payload]u8{}
-			n := m.remote.pack_block(&scratch[0], isotp.max_payload, m.remote_core)
-			if n > 0 {
-				m.link.send(&scratch[0], n)
+		if !m.link.busy() {
+			// the previous transfer completed: send the next continuation block — the local
+			// window first, then the satellite's, each block its own FC-handshaked transfer
+			if m.local_due {
+				n, next, more := m.buf.pack_chunk(&m.scratch[0], isotp.max_payload, m.core,
+					m.local_from)
+				m.local_from = next
+				m.local_due = more
+				if n > 0 {
+					m.link.send(&m.scratch[0], n)
+				}
+			} else if m.remote_due {
+				n, next, more := m.remote.pack_chunk(&m.scratch[0], isotp.max_payload,
+					m.remote_core, m.remote_from)
+				m.remote_from = next
+				m.remote_due = more
+				if n > 0 {
+					m.link.send(&m.scratch[0], n)
+				}
 			}
 		}
 		return false
@@ -202,6 +231,7 @@ pub fn (mut m TraceModule) load_remote(src &u8, n u32) {
 	}
 	m.remote.stop()
 	m.remote_due = true
+	m.remote_from = 0
 }
 
 // load_snapshot imports a window captured OUTSIDE the module in the 8-byte wire form — the
@@ -232,5 +262,5 @@ pub fn (m TraceModule) rsp_pending() bool {
 }
 
 pub fn (m TraceModule) is_dumping() bool {
-	return m.dumping || m.link.busy() || m.remote_due
+	return m.dumping || m.link.busy() || m.remote_due || m.local_due
 }
