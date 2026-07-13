@@ -17,6 +17,9 @@ fn stat_labels(m Model, doc toml.Doc, app_threads []string, multi bool) map[stri
 	mut labels := map[string][]string{}
 	for p in ecumodel.toml_arr(doc, 'partition') {
 		pname := (p.as_map()['name'] or { toml.Any('') }).string()
+		if m.part.external[pname] {
+			continue // no local scheduler to read stats from
+		}
 		for c in m.part.by_part[pname] {
 			cm := c.as_map()
 			fbname := (cm['name'] or { toml.Any('') }).string()

@@ -189,3 +189,20 @@ context = "h755/dual-core"
 verifies = ["REQ-TRACE-001"]
 approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
 date = "2026-07-12"
+
+# EXTERNAL PARTITIONS (core-generic satellite identity — no new duo vocabulary, per the
+# user's directive): [[partition]] external = true declares a core whose image is provided
+# elsewhere; it participates in IDENTITY (manifest thread rows with PER-CORE ids mirroring
+# the satellite recorder's bind order + its kernel timer; globally-assigned handler ids)
+# but no code is emitted and it is excluded from local derivations (comm priority, thread
+# counts, stat labels). blobly_net keys threads by (core, tid). Bench: handler 4 =
+# m4/M4Load.on_10ms decodes named from core 1's block; the GUI's core mask derives 0x3
+# from the manifest's two handler cores. N-core by construction: a third core is another
+# [[partition]] block.
+[[review]]
+id = "h755-external-partitions"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-TRACE-002"]
+approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
+date = "2026-07-13"
