@@ -73,15 +73,20 @@ fn app_thread_entry(input u32) {
 	run_app()
 }
 
-// stress floods IOC slot 1 with {n, n*K} as fast as the core goes (preempted each tick by
-// the FB thread) — every read the M7 makes must satisfy b == a*K or the cross-core triple
-// buffer tore. Also carries the rung-3 heartbeat, so the `cm4` command stays meaningful.
+// stress exercises cross-core IOC writes on slot 1 ({n, n*K}: every read the M7 makes must
+// satisfy b == a*K or the buffer tore) and carries the rung-3 heartbeat. DUTY-CYCLED, not
+// flat-out: a ~0.4 ms burst per 1 ms tick (bench-calibrated iteratively — preemption overhead scales with burst size, so 850
+// lands ≈ 30% of the core; with the FB's ~20% this core runs a realistic ~50% and the swimlane
+// shows genuine idle) — the write rate stays orders of magnitude beyond what iocx needs.
 fn stress_thread_entry(input u32) {
 	mut n := u32(0)
 	for {
-		n++
-		C.duo_pub_stress(n, n * 2654435761)
-		C.duo_hb_bump()
+		for _ in 0 .. 850 {
+			n++
+			C.duo_pub_stress(n, n * 2654435761)
+			C.duo_hb_bump()
+		}
+		C._tx_thread_sleep(u32(2)) // wake every 2nd tick: ~0.5 ms burst / 2 ms cycle ≈ 25%
 	}
 }
 
