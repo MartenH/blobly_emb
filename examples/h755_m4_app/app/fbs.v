@@ -13,7 +13,8 @@ pub mut:
 // next burns a bounded LCG window and returns the running checksum — the M4's "work".
 pub fn (mut l M4Load) next() u32 {
 	mut a := l.acc
-	for _ in 0 .. 20_000 { // ~0.5 ms at 200 MHz: visible work, far from overrun
+	for _ in 0 .. 28_000 { // ~2.2 ms at 200 MHz (bench-measured): with the stress thread's
+	// ~27% this core sits near a realistic 50% — visible work, far from overrun
 		a = a * 1664525 + 1013904223
 	}
 	l.acc = a
