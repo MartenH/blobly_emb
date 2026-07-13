@@ -1,17 +1,20 @@
-/* P3c-1 Phase 5 — wait-free triple-buffer IOC for cross-thread (cross-core-ready) signals.
+/* Wait-free triple-buffer IOC for cross-THREAD signals — the ONE copy every target
+ * example compiles against (it is a platform CONTRACT: generated V code and each
+ * example's glue C share sig_t + the handoff protocol, so per-example copies could only
+ * drift into an ABI bug).
  *
  * A single-producer / single-consumer "latest value wins" channel: the writer always has
  * a private buffer to fill and the reader always gets the most recent COMPLETE value —
  * neither ever blocks, spins, or tears a value (the blobly IOC invariant, ioc-perf memory).
  * Three buffers + one atomically-exchanged index byte (2 index bits + a fresh flag) hand
- * ownership over without a lock. On the single-core H735 the writer and reader are two
- * ThreadX threads (a context switch can land mid-operation, so the exchange must be
- * atomic). CROSS-CORE this exchange is NOT sound: LDREX/STREX between the H755's cores
- * does not arbitrate (162/200k torn reads measured 2026-07-12) — cross-core signals use
+ * ownership over without a lock. The writer and reader are two ThreadX threads on ONE
+ * core (a context switch can land mid-operation, so the exchange must be atomic).
+ * CROSS-CORE this exchange is NOT sound: LDREX/STREX between the H755's cores does not
+ * arbitrate (162/200k torn reads measured 2026-07-12) — cross-core signals use
  * boards/common/xioc.h (plain-store seq-stamped slots) instead.
  */
-#ifndef BLOBLY_THREADX_H735_IOC_H
-#define BLOBLY_THREADX_H735_IOC_H
+#ifndef BLOBLY_IOC_H
+#define BLOBLY_IOC_H
 
 #include <stdint.h>
 

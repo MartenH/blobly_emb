@@ -1,8 +1,9 @@
 # ThreadX on the STM32H735 (P3c-1 Phase 3). The QEMU foundation (threadx_min) proven,
 # now on silicon: the same ThreadX kernel + the four execution-change hooks, retargeted
 # with the H735 board clock (board.c, 550 MHz PLL1), H735 linker (flash 0x08000000 / DTCM),
-# and DWT-timestamped trace. The bring-up triad (crt0/vectors/tx_initialize_low_level) and
-# trace_hooks.c are copied from threadx_min unchanged except SYSTEM_CLOCK = 550 MHz.
+# and DWT-timestamped trace. The bring-up triad (crt0/vectors/tx_initialize_low_level) is
+# the boards layer's; trace_hooks.c (the exec-hook recorder every ThreadX target shares)
+# lives in boards/common.
 #
 #   make -C ../.. deps      # once: fetch ThreadX + CMSIS
 #   make flash              # st-flash the .bin to the board
@@ -40,7 +41,7 @@ TX_C   = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
          $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 
-APP = $(BOARD_BSP_THREADX) main.c comm.c fbs.c trace_hooks.c \
+APP = $(BOARD_BSP_THREADX) main.c comm.c fbs.c $(REPO)/boards/common/trace_hooks.c \
       $(REPO)/driver/can/can_backend.c
 
 all: $(BUILD)/threadx_h735.bin

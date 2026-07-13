@@ -52,7 +52,7 @@ ThreadX **System Timer Thread** (t3), the **FDCAN Rx ISR as v35** and SysTick as
 
 An **external rx signal** (`Command`, id `0x123`) reaches an FB wait-free: the comm thread
 decodes the frame and publishes it into a **target IOC cell** (the wait-free triple-buffer
-`ioc.h`, via a generic index-addressed pool in `comm_glue.c`); Governor reads that cell each
+`boards/common/ioc.h`, via a generic index-addressed pool in `comm_glue.c`); Governor reads that cell each
 pass through its input port. So a host **commands the core load over CAN**:
 
 ```
@@ -86,7 +86,7 @@ codec (for other layouts) and multi-thread FB partitions are the remaining gener
 
 The generic stack stays MCU-agnostic; the small target-specific C lives here (per
 `docs/architecture.md` "the generic ↔ target boundary"): `comm_glue.c` (the FDCAN1 Rx ISR +
-wake semaphore, the volatile load scratch, and the IOC pool), `ioc.h` (the wait-free
+wake semaphore, the volatile load scratch, and the IOC pool), `boards/common/ioc.h` (the wait-free
 triple-buffer, reused from `threadx_h735`), `vectors.S` (routes IRQ19 → the Rx ISR), and
 `board.c` (550 MHz clock + FDCAN pins + a PRIMASK-serialised `board_now_us`).
 
