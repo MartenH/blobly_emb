@@ -166,10 +166,11 @@ fn specs() map[string]map[string]Key {
 		// partition/thread/fb/handler required-ness + names + one-trigger live in ecumodel.validate
 		// (shared with loom2v); here the schema only checks unknown keys + types for them.
 		'partition':  {
-			'name':    k(.str)
-			'core':    k(.int)
-			'trusted': k(.boolean)
-			'thread':  sub(.arr, false, 'thread')
+			'name':     k(.str)
+			'core':     k(.int)
+			'trusted':  k(.boolean)
+			'external': k(.boolean) // declared-but-not-generated (a satellite core's image)
+			'thread':   sub(.arr, false, 'thread')
 		}
 		'thread':     {
 			'name':     k(.str)

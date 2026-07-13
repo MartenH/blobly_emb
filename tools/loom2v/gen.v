@@ -224,6 +224,11 @@ mut:
 	thread_prio map[string]int         // thread -> [[partition.thread]].priority (default 10)
 	by_part     map[string][]toml.Any  // partition -> its fb config objects
 	fb_thread   map[string]string      // fb -> its thread
+	// external = declared-but-not-generated: the partition's image is provided elsewhere (a
+	// hand-written satellite core today, another emitter run later). It still participates in
+	// IDENTITY — manifest rows, global handler ids — but no code is emitted for it, and it is
+	// excluded from every local derivation (comm priority, thread counts, stat labels).
+	external map[string]bool
 }
 
 // parse_buses returns the declared buses (endpoint names that mean "external / on the wire")
@@ -326,6 +331,7 @@ fn parse_partitions(doc toml.Doc) PartMap {
 		m := pt.as_map()
 		pname := (m['name'] or { toml.Any('') }).string()
 		p.core_of[pname] = int((m['core'] or { toml.Any(0) }).int())
+		p.external[pname] = (m['external'] or { toml.Any(false) }).bool()
 		for t in (m['thread'] or { toml.Any([]toml.Any{}) }).array() {
 			tm := t.as_map()
 			tname := (tm['name'] or { toml.Any('') }).string()
@@ -613,7 +619,10 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 		// comm's priority is derived in the target emit (min(app) - 1, or the historical 1 for a
 		// single-thread config) — recompute it here so the manifest can show it.
 		mut mp := 32
-		for _, thrs in m.part.threads_of {
+		for pn, thrs in m.part.threads_of {
+			if m.part.external[pn] {
+				continue // comm competes only with its OWN core's threads
+			}
 			for thr in thrs {
 				pr := m.part.thread_prio[thr] or { 10 }
 				if pr < mp {
@@ -622,8 +631,10 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 			}
 		}
 		mut nthr := 0
-		for _, thrs in m.part.threads_of {
-			nthr += thrs.len
+		for pn, thrs in m.part.threads_of {
+			if !m.part.external[pn] {
+				nthr += thrs.len
+			}
 		}
 		cp := if nthr > 1 { mp - 1 } else { 1 }
 		man << 'thread,${tid},comm,${m.part.core_of[single_part] or { 0 }},${cp}'
@@ -631,6 +642,9 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	}
 	for p in ecumodel.toml_arr(doc, 'partition') {
 		pname := (p.as_map()['name'] or { toml.Any('') }).string()
+		if m.part.external[pname] {
+			continue // external cores get their OWN per-core id sequence below
+		}
 		for tname in m.part.threads_of[pname] {
 			man << 'thread,${tid},${tname},${m.part.core_of[pname]},${m.part.thread_prio[tname] or { 10 }}' // name = the globally-unique thread name
 			tid++
@@ -639,6 +653,25 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	timer_rows := trace_manifest_timer_row(m, tid)
 	man << timer_rows
 	tid += timer_rows.len
+	// EXTERNAL partitions (satellite cores): thread ids are PER-CORE — the satellite's own
+	// recorder assigns first-sight ids from 1, so its records carry 1..N regardless of what
+	// this core numbers. Consumers key threads by (core, id); rows here mirror the satellite's
+	// bind order (priority order, then its kernel timer) exactly as core 0's rows mirror ours.
+	for p in ecumodel.toml_arr(doc, 'partition') {
+		pname := (p.as_map()['name'] or { toml.Any('') }).string()
+		if !m.part.external[pname] {
+			continue
+		}
+		xcore := m.part.core_of[pname]
+		mut xtid := 1
+		for tname in m.part.threads_of[pname] {
+			man << 'thread,${xtid},${tname},${xcore},${m.part.thread_prio[tname] or { 10 }}'
+			xtid++
+		}
+		if m.target.threadx && m.trace.on {
+			man << 'thread,${xtid},tx_system_timer,${xcore},0'
+		}
+	}
 	// Comm threads (P3b): one per bridge bus, AFTER the app threads (matches the gate's comm_tid
 	// numbering).
 	for bb in bridge_bus_list {
@@ -1097,13 +1130,18 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		// m.part.by_part-only check yet still be created as a labelled thread by the manifest loop (which
 		// walks every declared partition) — shifting the hook ids (e.g. the ThreadX System Timer
 		// Thread id). Require exactly one DECLARED partition so declared == generated.
-		np_declared := ecumodel.toml_arr(doc, 'partition').len
-		if m.part.by_part.keys().len != 1 || np_declared != 1 {
-			panic('loom2v: [target] supports exactly one partition (got ${np_declared} declared, ' +
-				'${m.part.by_part.keys().len} with fbs) — a second or FB-less partition is never generated ' +
-				'yet would still be labelled in the trace manifest; multi-partition/multi-core is not generated yet')
+		mut local_parts := []string{}
+		for pname, _ in m.part.core_of {
+			if !m.part.external[pname] {
+				local_parts << pname
+			}
 		}
-		part := m.part.by_part.keys()[0]
+		if local_parts.len != 1 {
+			panic('loom2v: [target] generates exactly one LOCAL partition (got ${local_parts.len}) — ' +
+				'additional cores are declared with external = true (their images are provided ' +
+				'elsewhere; the full multi-image emitter absorbs them later)')
+		}
+		part := local_parts[0]
 		chp := snake(m.telem.bus)
 		// ThreadX target config: the app thread's priority, the telem bus fd-mode + index, and
 		// the sleep-per-pass in ThreadX ticks (1 tick = 1 ms; tx_initialize_low_level runs a 1 kHz
@@ -1663,6 +1701,9 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 	mut glue := []string{}
 	mut all_regs := map[string][]string{}
 	for part, clist in m.part.by_part {
+		if m.part.external[part] {
+			continue // declared elsewhere: identity only, no generated code
+		}
 		threads := m.part.threads_of[part] or { [''] }
 		multi := threads.len > 1
 		// Which thread serves each fb, and which thread WRITES each local signal (its cell lives
