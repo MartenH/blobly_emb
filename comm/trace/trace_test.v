@@ -144,7 +144,7 @@ fn test_pack_block_header() {
 	t.push(new_thread(1, reason_yield, 500, 10)) // a thread event mixed into the run records
 	mut out := [64]u8{}
 	n := t.pack_block(&out[0], 64, 2)
-	assert n == 8 * 4 // header + 3 records
+	assert n == 8 * 5 // header + LEADING EPOCH (blocks self-anchor) + 3 records
 	// first 8 bytes are the block header for core 2, count 3
 	mut hb := [8]u8{}
 	for i in 0 .. 8 {
@@ -153,11 +153,11 @@ fn test_pack_block_header() {
 	h := decode_record(hb)
 	assert h.is_block_header()
 	assert h.header_core() == 2
-	assert h.header_count() == 3
-	// second record cell is the first run record
+	assert h.header_count() == 4 // the leading self-anchor epoch counts as a record
+	// header, then the leading self-anchor epoch, then the first run record
 	mut rb := [8]u8{}
 	for i in 0 .. 8 {
-		rb[i] = out[8 + i]
+		rb[i] = out[16 + i]
 	}
 	assert decode_record(rb).id() == 10
 }
@@ -182,7 +182,7 @@ fn test_pack_block_truncates_consistently() {
 
 // A large block-header count uses all 32 bits (b3-6) — round-trips past a u16.
 fn test_block_header_count_is_u32() {
-	h := decode_record(encode_record(new_block_header(7, 100000)))
+	h := decode_record(encode_record(new_block_header(7, 100000, false)))
 	assert h.is_block_header()
 	assert h.header_core() == 7
 	assert h.header_count() == 100000 // > 65535

@@ -215,15 +215,17 @@ pub fn validate(doc toml.Doc) []string {
 			}
 		}
 		if v := trm['buffer_records'] {
-			// A dump block is one ISO-TP payload — an 8-byte block header + the records — and
-			// comm/isotp.max_payload (520) is sized to hold a header + 64 records, so the ring
-			// can't exceed 64 records today. Reject it at the gate, before codegen.
+			// The dump streams the window as MULTIPLE self-describing blocks (each ~one
+			// transport payload, header more-flag until the last), so the ring is no longer
+			// capped by a single payload. The bound left is memory sanity — 4096 records is
+			// 32 KB of ring — and the ThreadX exec-hook path also can't snapshot more than
+			// the recorder's RING_CAP (256 in trace_hooks.c).
 			if v is i64 {
-				if v < 1 || v > 64 {
-					errs << '[trace] buffer_records ${v} out of range (1..64 — a dump block is one ISO-TP payload: an 8-byte header + up to 64 records)'
+				if v < 1 || v > 4096 {
+					errs << '[trace] buffer_records ${v} out of range (1..4096 — the dump is multi-block; 4096 records = 32 KB of ring)'
 				}
 			} else {
-				errs << '[trace] buffer_records must be an integer (1..64)'
+				errs << '[trace] buffer_records must be an integer (1..4096)'
 			}
 		}
 		// Frame ids (cmd_id/rsp_id/stat_id/record_id/dump_fc_id) are each either a literal CAN id
