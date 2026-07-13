@@ -12,11 +12,18 @@ name   = "Governor"            # unique identifier == the app struct's type name
 thread = "ctrl_slow"           # a [[partition.thread]] name (globally unique)
 
 [[fb.handler]]
-name      = "on_100ms"         # == the method name on the struct
+name      = "on_100ms"         # == the method name on the struct (see below)
 period_ms = 100                # the only trigger today (irq is reserved)
 reads     = ["Command"]        # optional; signal names -> In ports
 writes    = ["LoadCmd"]        # optional; signal names -> Out ports
 ```
+
+The handler name is NOT magic — `on_100ms` is convention, not syntax. Any valid
+identifier works (`name = "foobar"` → the struct needs a `foobar` method); it's used as
+the method to call, part of the generated wrapper symbol (unique within the FB), and
+the label in the manifest/trace/`stat`. The schedule comes ONLY from `period_ms` —
+nothing checks the name against it, so a `on_100ms` running at `period_ms = 10` would
+mislabel itself to every human reader. Keep the convention honest.
 
 Rules ecucheck/loom2v enforce: every FB needs ≥ 1 handler; every handler needs
 `period_ms`; the thread must exist. Comments above blocks, never inside.
