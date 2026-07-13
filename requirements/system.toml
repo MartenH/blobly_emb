@@ -67,6 +67,14 @@ method = "test"
 asil = "QM"
 
 [[req]]
+id = "SYS-REQ-PROG-001"
+title = "In-field software update"
+text = "The ECU shall accept a new application software image in the field over a diagnostic transport, and shall remain recoverable if an update is interrupted at any point."
+status = "draft"
+method = "test"
+asil = "QM"
+
+[[req]]
 id = "SYS-REQ-NM-001"
 title = "Coordinated network sleep"
 text = "The ECU shall coordinate network wake-up and sleep with the other nodes on each network."
