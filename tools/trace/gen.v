@@ -69,7 +69,7 @@ fn main() {
 
 	// 2a) inline @verifies tags in tests
 	mut tfiles := os.walk_ext('examples', '.lua')
-	for dir in ['comm', 'loom', 'osal', 'driver', 'ecu', 'wdg'] {
+	for dir in ['comm', 'loom', 'osal', 'driver', 'ecu', 'wdg', 'boot'] {
 		for f in os.walk_ext(dir, '.v') {
 			if f.ends_with('_test.v') {
 				tfiles << f

@@ -1,7 +1,20 @@
-# Bootloader — design sketch
+# Bootloader — design + build log
 
-> Status: SKETCH (2026-07-13). Requirements: `requirements/boot.toml` (draft, deriving
-> from SYS-REQ-PROG-001). Nothing is built yet; this page is the shape to argue with.
+> Status (2026-07-13): **P1+P2 DRY-CODED AND SIM-VERIFIED** — no silicon run yet.
+> Requirements: `requirements/boot.toml` (draft; REQ-BOOT-001/002/004/005/008/009
+> exercised by tests + the vcan end-to-end). Built so far:
+> - `boot/` — header contract + CRC-32 + decision (`boot.v`), the UDS programming
+>   session 0x27/0x31/0x34/0x36/0x37/0x11 over FlashOps hooks (`prog.v`); unit
+>   tests cover the happy path, corrupt transfer, region protection, sequence guards.
+> - `examples/boot_sim` — the SAME session on vcan0 (rx 0x7B0 / tx 0x7B8), flash =
+>   a file, one run = one power cycle. Verified against blobly_net `cmd/flash`:
+>   fresh→stay_boot, flash→run_app, power-cycle persistence, corrupt→stay_boot,
+>   recovery reflash→run_app.
+> - `tools/mkimage` — wrap a .bin in the header (`--valid` factory / `--pad-vectors`
+>   target layout); blobly_net `cmd/flash` = the host flasher (BLBT passthrough).
+> - `examples/h755_boot` + `boards/h755zi/{flash.c,bootmap.h}` — the TARGET SKELETON:
+>   compiles freestanding (25 KB, fits sector 0), **flash.c dry-coded from RM0399,
+>   bench-unverified** — the P1/P2 hardware pass is the next step when a board is back.
 
 ## Goal
 
