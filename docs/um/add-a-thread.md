@@ -20,7 +20,13 @@ trusted = true
   priority = 13
 ```
 
-- **At most 4 threads per partition** (static TCB/stack/scheduler per thread).
+- **At most 4 declared threads per partition.** Implicit threads (the comm thread,
+  ThreadX's internal timer thread) do NOT count. The bound exists because everything
+  per-thread is static — TCB, 4 KB stack, scheduler tables, and a CpuLoad scratch slot
+  in the example's glue C (`LOAD_SLOTS 4` in `comm_glue.c`, summed by telemetry). It's
+  a guardrail, not an architectural wall: to go higher, raise `LOAD_SLOTS` and the
+  ecumodel bound together. In practice 4 rate groups suffice — handlers multiplex onto
+  threads by period, so you usually want more handlers per thread, not more threads.
 - Priorities are rate-monotonic by convention: fastest handlers on the
   highest-priority (lowest-number) thread.
 - The **comm thread is implicit** — the bus owner gets one at `min(app priorities) - 1`
