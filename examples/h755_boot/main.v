@@ -1,0 +1,125 @@
+module main
+
+// h755_boot — the boot manager (docs/bootloader.md), bank-1 sector 0. Bare
+// metal, no kernel, one superloop: decide, and either jump (happy path, from
+// near-reset state — clocks and CAN never touched) or stay and serve the UDS
+// programming session over ISO-TP (rx 0x7B0 / tx 0x7B8), exactly the session
+// examples/boot_sim proved on vcan — same boot.Prog, different FlashOps.
+//
+// *** TARGET SKELETON: compiles freestanding; flash.c is dry-coded and the
+// whole image is BENCH-UNVERIFIED (P1/P2 hardware pass pending). ***
+import boot
+import comm.isotp
+import driver.can
+
+// boards/h755zi/bootmap.h owns these numbers — keep in lockstep (the V side
+// cannot include the C header; ecucheck-style codegen can bind them later).
+const app_base = u32(0x0802_0000)
+const app_size = u32(0x000E_0000)
+const req_id = u32(0x7B0)
+const rsp_id = u32(0x7B8)
+
+fn C.board_clock_init()
+fn C.board_now_us() u64
+fn C.bootcell_take_request() u32
+fn C.bootcell_set_info(reason u32)
+fn C.boot_jump_app()
+fn C.boot_sys_reset()
+fn C.bflash_erase(addr u32, size u32) int
+fn C.bflash_program(addr u32, data &u8, len u32) int
+fn C.bflash_read(addr u32, out &u8, len u32) int
+
+// FlashOps wrappers (the ctx is unused on target — the flash is the flash)
+fn fl_erase(ctx voidptr, addr u32, size u32) bool {
+	return C.bflash_erase(addr, size) != 0
+}
+
+fn fl_program(ctx voidptr, addr u32, data &u8, len u32) bool {
+	return C.bflash_program(addr, data, len) != 0
+}
+
+fn fl_read(ctx voidptr, addr u32, out &u8, len u32) bool {
+	return C.bflash_read(addr, out, len) != 0
+}
+
+// module-sized state stays OUT of entry frames (stack-copy discipline)
+__global (
+	g_prog boot.Prog
+	g_link isotp.Link
+	g_req  [520]u8
+	g_rsp  [520]u8
+)
+
+fn main() {
+	// --- the boot decision, from near-reset state (REQ-BOOT-001/002/010) ---
+	requested := C.bootcell_take_request() != 0
+	app_ok := boot.check_image(unsafe { &u8(app_base) }) // memory-mapped flash
+	if boot.decide(requested, app_ok) == .run_app {
+		C.bootcell_set_info(0) // BOOT_REASON_NORMAL
+		C.boot_jump_app() // never returns; nothing was initialized
+	}
+
+	// --- stay: programming mode (REQ-BOOT-004: always reachable) ---
+	C.bootcell_set_info(2) // BOOT_REASON_NO_APP (or a pending request)
+	C.board_clock_init()
+	mut ch := can.Channel{}
+	if !ch.open('0', false) {
+		for {} // no bus, nothing to serve — parked, but flashable over SWD
+	}
+
+	g_prog.flash = boot.FlashOps{
+		erase:   fl_erase
+		program: fl_program
+		read:    fl_read
+	}
+	g_prog.app_base = app_base
+	g_prog.app_size = app_size
+	// identification (REQ-BOOT-009): F180 = bootloader version, F181 = app state
+	g_prog.srv.dids[0].id = 0xF180
+	g_prog.srv.dids[0].data[0] = 0x00
+	g_prog.srv.dids[0].data[1] = 0x01
+	g_prog.srv.dids[0].len = 2
+	g_prog.srv.dids[1].id = 0xF181
+	g_prog.srv.dids[1].data[0] = if app_ok { u8(1) } else { 0 }
+	g_prog.srv.dids[1].len = 1
+	g_prog.srv.ndid = 2
+
+	for {
+		now := C.board_now_us()
+		mut f := can.Frame{}
+		for ch.recv(mut f) {
+			if f.id != req_id {
+				continue
+			}
+			mut pdu := isotp.Pdu{}
+			for i in 0 .. 8 {
+				pdu.data[i] = f.data[i]
+			}
+			g_link.on_frame(now, pdu)
+		}
+		if g_link.ready {
+			n := g_link.take(&g_req[0])
+			rn := g_prog.handle(&g_req[0], n, &g_rsp[0])
+			if rn > 0 {
+				g_link.send(&g_rsp[0], rn)
+			}
+		}
+		g_link.tick(now)
+		mut out := isotp.Pdu{}
+		for ch.tx_ready() && g_link.poll(now, mut out) {
+			mut tf := can.Frame{
+				id:  rsp_id
+				len: 8
+			}
+			for i in 0 .. 8 {
+				tf.data[i] = out.data[i]
+			}
+			ch.send(tf)
+			out = isotp.Pdu{}
+		}
+		if g_prog.reset_pending && !g_link.busy() {
+			C.bootcell_set_info(1) // BOOT_REASON_PROGRAMMED
+			C.boot_sys_reset()
+		}
+	}
+}
