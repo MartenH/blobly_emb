@@ -147,3 +147,30 @@ fc  = 0x7F2
 [target]
 kind    = "threadx"
 tick_ms = 1
+
+# --- the satellite core, DECLARED (external = true: its image is examples/h755_m4_app,
+# hand-written until the multi-image emitter absorbs it). Declaration buys IDENTITY: the
+# manifest's core-1 thread rows (per-core ids, mirroring the satellite recorder's bind
+# order) and a globally-assigned handler id for its FB — nothing here emits code. The
+# thread names/priorities MUST match the hand-written image (the emitter closes this
+# coupling later). Keep [[blocks]] comment-free (vlang/v#27684).
+[[partition]]
+name     = "m4"
+core     = 1
+external = true
+
+[[partition.thread]]
+name     = "m4_app"
+priority = 11
+
+[[partition.thread]]
+name     = "m4_stress"
+priority = 12
+
+[[fb]]
+name   = "M4Load"
+thread = "m4_app"
+
+[[fb.handler]]
+name      = "on_10ms"
+period_ms = 10

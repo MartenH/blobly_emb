@@ -4,12 +4,16 @@
 1,app,0,LoadMid,on_20ms,20000,load_mid
 2,app,0,Governor,on_100ms,100000,ctrl_slow
 3,app,0,LoadSlow,on_100ms,100000,ctrl_slow
+4,m4,1,M4Load,on_10ms,10000,m4_app
 # threads: thread,id,name,core,prio  (id 0 reserved = idle; prio - = no RTOS prio)
 thread,1,comm,0,10
 thread,2,load_fast,0,11
 thread,3,load_mid,0,12
 thread,4,ctrl_slow,0,13
 thread,5,tx_system_timer,0,0
+thread,1,m4_app,1,11
+thread,2,m4_stress,1,12
+thread,3,tx_system_timer,1,0
 # trace frames: frame,id,bus
 cmd,0x7e2,can0
 rsp,0x7e3,can0
