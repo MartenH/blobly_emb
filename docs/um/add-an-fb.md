@@ -19,11 +19,15 @@ writes    = ["LoadCmd"]        # optional; signal names -> Out ports
 ```
 
 The handler name is NOT magic — `on_100ms` is convention, not syntax. Any valid
-identifier works (`name = "foobar"` → the struct needs a `foobar` method); it's used as
-the method to call, part of the generated wrapper symbol (unique within the FB), and
-the label in the manifest/trace/`stat`. The schedule comes ONLY from `period_ms` —
-nothing checks the name against it, so a `on_100ms` running at `period_ms = 10` would
-mislabel itself to every human reader. Keep the convention honest.
+identifier works: `name = "foobar"` means the FB's struct (the `app/` type named by
+`[[fb]] name`, here `Governor`) needs a `foobar` method — the generated wrapper calls
+`st.governor.foobar(inp, mut outp)`. That name match (plus the struct-type match on
+`[[fb]] name`) is the ENTIRE config→code binding; no registration step, and a mismatch
+is a compile error naming the missing method. The handler name is also the wrapper
+symbol (unique within the FB) and the label in the manifest/trace/`stat`. The schedule
+comes ONLY from `period_ms` — nothing checks the name against it, so an `on_100ms`
+running at `period_ms = 10` would mislabel itself to every human reader. Keep the
+convention honest.
 
 Rules ecucheck/loom2v enforce: every FB needs ≥ 1 handler; every handler needs
 `period_ms`; the thread must exist. Comments above blocks, never inside.
