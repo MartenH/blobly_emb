@@ -39,36 +39,24 @@ uint64_t board_now_us(void) {
 	return r;
 }
 
-/* --- cross-core IOC + heartbeat -------------------------------------------------------
+/* --- cross-core signal pool ------------------------------------------------------------
  * The pool lives at a fixed SRAM4 address (duo.h), NOT in either image's bss. The channel
  * is xioc (boards/common/xioc.h) — plain-store seq-stamped slots: ioc.h's exchange-based
  * handoff is only sound within one core (its LDREX/STREX doesn't arbitrate across cores
- * on this fabric; 162/200k torn reads measured before this redesign). M4 writes, M7 reads. */
+ * on this fabric; 162/200k torn reads measured before this redesign). M4 writes, M7 reads.
+ * The generated wrappers publish via duo_pub with slots from gen/duo_gen.h. */
 #define DUO_POOL ((xioc_t *)DUO_IOC_ADDR)
 
 void duo_ioc_init(void) {
 	for (int i = 0; i < DUO_IOC_N; i++) {
 		xioc_init(&DUO_POOL[i]);
 	}
-	volatile uint32_t *hb = (volatile uint32_t *)DUO_HB_ADDR;
-	hb[1] = 0u;
-	hb[0] = DUO_HB_MAGIC;
 }
 
 void duo_pub(int i, uint32_t a, uint32_t b) {
 	if (i >= 0 && i < DUO_IOC_N) {
 		xioc_write(&DUO_POOL[i], a, b);
 	}
-}
-
-/* Named publishers: the V app calls these; slot numbers stay inside the generated
- * contract and appear in no V source. */
-void duo_pub_m4load(uint32_t n, uint32_t acc) {
-	duo_pub(DUO_SLOT_M4LOAD, n, acc);
-}
-
-void duo_pub_stress(uint32_t n, uint32_t h) {
-	duo_pub(DUO_SLOT_STRESS, n, h);
 }
 
 /* --- dtrace: the two-core trace handoff (duo.h) -----------------------------------------
@@ -96,11 +84,6 @@ void duo_trace_service(void) {
 	}
 	__asm__ volatile("dmb" ::: "memory");
 	c[2] = req; /* ack */
-}
-
-void duo_hb_bump(void) {
-	volatile uint32_t *hb = (volatile uint32_t *)DUO_HB_ADDR;
-	hb[1] = hb[1] + 1u;
 }
 
 /* The shared vector table (boards/common/vectors.S) names the FDCAN1 ISR unconditionally

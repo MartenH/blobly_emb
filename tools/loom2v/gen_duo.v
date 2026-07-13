@@ -1,87 +1,41 @@
-// loom2v's DUO codegen — the first slice of multi-image generation: cross-core signals.
+// loom2v's cross-core signal emission — the xioc half of multi-image generation.
 //
-// One ecu.toml names the signals a SATELLITE core publishes over the shared-SRAM xioc
-// channel (boards/common/xioc.h); the generator owns the CONTRACT and the bus-owner's
-// half of the wire:
-//   - assigns each named signal an xioc slot and emits gen/duo_gen.h — the ONE header
-//     both images compile against (the satellite's hand-written app publishes through
-//     these defines; slot numbers appear nowhere else),
-//   - emits the bus-owning image's reader->CAN wiring: a fresh-gated, period-paced
-//     transmit of each frame-bound signal inside the comm loop (via C.duo_poll, the
-//     xioc reader living in comm_glue.c),
-//   - advertises the signals in the manifest (`# duo signals`).
+// There is NO config here: a signal whose `from` partition lives in another image is
+// REMOTE (derived in build_model, docs/multi-image.md), and every remote signal gets an
+// xioc slot (boards/common/xioc.h) in declaration order. This file owns:
+//   - gen/duo_gen.h — the ONE contract header both images compile against (the satellite
+//     publishes via duo_pub(DUO_SLOT_<NAME>, ...); the bus owner polls the same slots;
+//     slot numbers appear nowhere else),
+//   - the bus-owning image's reader->CAN wiring: a fresh-gated, period-paced transmit of
+//     each frame-bound remote signal inside the comm loop (via C.duo_poll, the xioc
+//     reader living in comm_glue.c),
+//   - the satellite trace forwarding (dtrace handoff cell: arm / freeze+snapshot / import)
+//     — gated on satellite PARTITIONS existing, not on signals,
+//   - the manifest's `# duo signals` rows.
 //
-// The satellite IMAGE itself (kernel scaffolding, threads) stays hand-written for now —
-// examples/h755_m4_app is the reference the full multi-image emitter will absorb later,
-// exactly as threadx_h735 was for the M7 path. Payloads are the xioc cell's {a, b} pair
-// (2 x u32, 8-byte frames); typed/wider signals arrive with the full emitter.
-//
-//   [duo]
-//   [[duo.signal]]
-//   name      = "m4load"   # -> DUO_SLOT_M4LOAD in gen/duo_gen.h
-//   frame     = 0x201      # or a bus.dbc message name; OMIT for a slot with no CAN tx
-//   period_ms = 100        # tx cadence (latest value, sent only when fresh)
+// A remote signal `to = <bus>` is transmitted here; `to = <local partition>` is a slot
+// with no generated consumer (platform C — shell m4sig/iocx — reads it via the header).
 module main
 
-import toml
-
-const duo_signal_keys = ['name', 'frame', 'period_ms']
-
-struct DuoSignal {
-mut:
-	name      string
-	frame     u32 // 0 = no CAN tx (slot only, e.g. the iocx stress channel)
-	period_ms u32 = 100
+// duo_on: any cross-image signal slots to wire.
+fn duo_on(m Model) bool {
+	return m.duo_names.len > 0
 }
 
-struct DuoCfg {
-mut:
-	on      bool
-	signals []DuoSignal
-}
-
-fn parse_duo(doc toml.Doc, dbc string) DuoCfg {
-	mut t := DuoCfg{}
-	dcfg := doc.value_opt('duo') or { return t }
-	dm := dcfg.as_map()
-	for k, _ in dm {
-		if k != 'signal' {
-			panic('loom2v: [duo] unknown key "${k}" — only [[duo.signal]] entries')
+// has_satellite: any partition whose image lives elsewhere (hand-written or generated) —
+// the gate for trace forwarding, which exists per CORE, not per signal.
+fn has_satellite(m Model) bool {
+	for _, ext in m.part.external {
+		if ext {
+			return true
 		}
 	}
-	for sv in (dm['signal'] or { toml.Any([]toml.Any{}) }).array() {
-		sm := sv.as_map()
-		for k, _ in sm {
-			if k !in duo_signal_keys {
-				panic('loom2v: [[duo.signal]] unknown key "${k}" (allowed: ${duo_signal_keys})')
-			}
-		}
-		mut sig := DuoSignal{}
-		sig.name = (sm['name'] or { panic('loom2v: [[duo.signal]] needs name') }).string()
-		if sig.name.len == 0 || sig.name.len > 16 {
-			panic('loom2v: [[duo.signal]] name "${sig.name}" must be 1..16 chars')
-		}
-		for ch in sig.name {
-			if !((ch >= `a` && ch <= `z`) || (ch >= `0` && ch <= `9`) || ch == `_`) {
-				panic('loom2v: [[duo.signal]] name "${sig.name}" must be [a-z0-9_] (it becomes a C define)')
-			}
-		}
-		sig.frame = trace_binding(sm, 'frame', 8, 0, dbc)
-		sig.period_ms = u32((sm['period_ms'] or { toml.Any(100) }).int())
-		for other in t.signals {
-			if other.name == sig.name {
-				panic('loom2v: [[duo.signal]] duplicate name "${sig.name}"')
-			}
-		}
-		t.signals << sig
-	}
-	t.on = t.signals.len > 0
-	return t
+	return false
 }
 
 // duo_gen_h: the generated cross-core contract header — slots appear ONLY here.
 fn duo_gen_h(m Model) []string {
-	if !m.duo.on {
+	if !duo_on(m) {
 		return []string{}
 	}
 	mut g := []string{}
@@ -90,16 +44,16 @@ fn duo_gen_h(m Model) []string {
 	g << ' * duo_pub(DUO_SLOT_<NAME>, ...); the bus owner polls the same slots). */'
 	g << '#ifndef BLOBLY_DUO_GEN_H'
 	g << '#define BLOBLY_DUO_GEN_H'
-	for i, sig in m.duo.signals {
-		g << '#define DUO_SLOT_${sig.name.to_upper()} ${i}'
+	for sname in m.duo_names {
+		g << '#define DUO_SLOT_${snake(sname).to_upper()} ${m.duo_idx[sname] or { 0 }}'
 	}
-	g << '#define DUO_GEN_SLOTS ${m.duo.signals.len}'
+	g << '#define DUO_GEN_SLOTS ${m.duo_names.len}'
 	g << '#endif'
 	return g
 }
 
 fn duo_c_decls(m Model) []string {
-	if !m.duo.on {
+	if !duo_on(m) {
 		return []string{}
 	}
 	return ['fn C.duo_poll(int, &u32, &u32) int // xioc reader (comm_glue.c): 1 = fresh value']
@@ -107,15 +61,16 @@ fn duo_c_decls(m Model) []string {
 
 // duo_comm_locals: per-frame-bound-signal pacing state in the comm thread.
 fn duo_comm_locals(m Model) []string {
-	if !m.duo.on {
+	if !duo_on(m) {
 		return []string{}
 	}
 	mut g := []string{}
-	for sig in m.duo.signals {
-		if sig.frame != 0 {
-			g << '\tmut duo_${sig.name}_last := u64(0)'
-			g << '\tmut duo_${sig.name}_a := u32(0)'
-			g << '\tmut duo_${sig.name}_b := u32(0)'
+	for sname in m.duo_names {
+		si := m.sig_of[sname] or { continue }
+		if si.external {
+			g << '\tmut duo_${snake(sname)}_last := u64(0)'
+			g << '\tmut duo_${snake(sname)}_a := u32(0)'
+			g << '\tmut duo_${snake(sname)}_b := u32(0)'
 		}
 	}
 	if g.len > 0 {
@@ -128,39 +83,48 @@ fn duo_comm_locals(m Model) []string {
 // duo_produce_drain: poll each slot and transmit frame-bound signals on their period,
 // fresh-gated — a stale satellite (or a dead core) simply goes quiet on the bus.
 fn duo_produce_drain(m Model) []string {
-	if !m.duo.on {
+	if !duo_on(m) {
 		return []string{}
 	}
 	mut g := []string{}
-	for i, sig in m.duo.signals {
-		if sig.frame == 0 {
-			continue
+	for sname in m.duo_names {
+		si := m.sig_of[sname] or { continue }
+		if !si.external {
+			continue // slot-only (satellite -> local partition): no CAN tx
 		}
-		g << '\t\tif C.duo_poll(${i}, &duo_${sig.name}_a, &duo_${sig.name}_b) != 0'
-		g << '\t\t\t&& t1 - duo_${sig.name}_last >= ${u64(sig.period_ms) * 1000} && ch.tx_ready() {'
-		g << '\t\t\tduo_txf.id = u32(0x${sig.frame.hex()})'
-		g << '\t\t\tduo_txf.len = 8'
-		g << '\t\t\tduo_txf.data[0] = u8(duo_${sig.name}_a)'
-		g << '\t\t\tduo_txf.data[1] = u8(duo_${sig.name}_a >> 8)'
-		g << '\t\t\tduo_txf.data[2] = u8(duo_${sig.name}_a >> 16)'
-		g << '\t\t\tduo_txf.data[3] = u8(duo_${sig.name}_a >> 24)'
-		g << '\t\t\tduo_txf.data[4] = u8(duo_${sig.name}_b)'
-		g << '\t\t\tduo_txf.data[5] = u8(duo_${sig.name}_b >> 8)'
-		g << '\t\t\tduo_txf.data[6] = u8(duo_${sig.name}_b >> 16)'
-		g << '\t\t\tduo_txf.data[7] = u8(duo_${sig.name}_b >> 24)'
+		slot := m.duo_idx[sname] or { 0 }
+		mut cyc := m.frames.tx_cycle_us[si.dbc_msg] or { 0 }
+		if cyc <= 0 {
+			cyc = 100000 // default cyclic 100 ms if no [[frame]].tx.cycle_ms
+		}
+		n := snake(sname)
+		g << '\t\tif C.duo_poll(${slot}, &duo_${n}_a, &duo_${n}_b) != 0'
+		g << '\t\t\t&& t1 - duo_${n}_last >= u64(${cyc}) && ch.tx_ready() {'
+		g << '\t\t\tduo_txf.id = u32(0x${si.dbc_id.hex()})'
+		g << '\t\t\tduo_txf.len = ${si.dbc_dlc}'
+		g << '\t\t\tduo_txf.data[0] = u8(duo_${n}_a)'
+		g << '\t\t\tduo_txf.data[1] = u8(duo_${n}_a >> 8)'
+		g << '\t\t\tduo_txf.data[2] = u8(duo_${n}_a >> 16)'
+		g << '\t\t\tduo_txf.data[3] = u8(duo_${n}_a >> 24)'
+		if si.dbc_dlc == 8 {
+			g << '\t\t\tduo_txf.data[4] = u8(duo_${n}_b)'
+			g << '\t\t\tduo_txf.data[5] = u8(duo_${n}_b >> 8)'
+			g << '\t\t\tduo_txf.data[6] = u8(duo_${n}_b >> 16)'
+			g << '\t\t\tduo_txf.data[7] = u8(duo_${n}_b >> 24)'
+		}
 		g << '\t\t\tch.send(duo_txf)'
-		g << '\t\t\tduo_${sig.name}_last = t1'
+		g << '\t\t\tduo_${n}_last = t1'
 		g << '\t\t}'
 	}
 	return g
 }
 
-// duo trace forwarding — the two-core dump. Emitted only when BOTH [duo] and an ISO-TP
-// [trace] are on: the rx arm forwards satellite-targeted commands (core-mask bit 1) into
-// the dtrace handoff cell, and the comm loop imports the acked snapshot as the remote
-// dump block (TraceModule.load_remote → streamed after the local block).
+// duo trace forwarding — the multi-core dump. Emitted only when a SATELLITE PARTITION and
+// an ISO-TP [trace] are both on: the rx arm forwards satellite-targeted commands (core-mask
+// bit 1) into the dtrace handoff cell, and the comm loop imports the acked snapshot as the
+// remote dump block (TraceModule.load_remote → streamed after the local blocks).
 fn duo_trace_on(m Model) bool {
-	return m.duo.on && m.trace.on && m.trace.dump_fc_id != 0
+	return has_satellite(m) && m.trace.on && m.trace.dump_fc_id != 0
 }
 
 fn duo_trace_c_decls(m Model) []string {
@@ -224,13 +188,14 @@ fn duo_trace_poll(m Model) []string {
 }
 
 fn duo_manifest(m Model) []string {
-	if !m.duo.on {
+	if !duo_on(m) {
 		return []string{}
 	}
 	mut g := ['# duo signals: name,slot,frame']
-	for i, sig in m.duo.signals {
-		fr := if sig.frame != 0 { '0x${sig.frame.hex()}' } else { '-' }
-		g << '${sig.name},${i},${fr}'
+	for sname in m.duo_names {
+		si := m.sig_of[sname] or { continue }
+		fr := if si.external { '0x${si.dbc_id.hex()}' } else { '-' }
+		g << '${sname},${m.duo_idx[sname] or { 0 }},${fr}'
 	}
 	return g
 }

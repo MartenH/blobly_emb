@@ -38,6 +38,9 @@ mut:
 	dbc_ext   bool   // the DBC message is an extended (29-bit) frame (EFF flag) — id may be stripped
 	dbc_trivial bool // the DBC signal is a plain unsigned LE 32-bit value at bit 0 (factor 1, offset 0)
 	fields    []SigField // the signal's fields in declaration order (for the `sig` struct emit)
+	remote    bool // `from` is a partition on ANOTHER image (external/imaged) — the crossing
+	// rides an xioc slot (gen_duo.v); derived in build_model, never configured. SMP note:
+	// a coherent single-image target would derive `false` here and use ordinary IOC.
 }
 
 // SigField is one field of a signal's payload struct (name + V type), in declaration order.
@@ -224,11 +227,15 @@ mut:
 	thread_prio map[string]int         // thread -> [[partition.thread]].priority (default 10)
 	by_part     map[string][]toml.Any  // partition -> its fb config objects
 	fb_thread   map[string]string      // fb -> its thread
-	// external = declared-but-not-generated: the partition's image is provided elsewhere (a
-	// hand-written satellite core today, another emitter run later). It still participates in
-	// IDENTITY — manifest rows, global handler ids — but no code is emitted for it, and it is
-	// excluded from every local derivation (comm priority, thread counts, stat labels).
+	// external = not part of THIS image: the partition's code lives elsewhere — hand-written
+	// (external = true) or emitted by the multi-image pass (image = "<dir>"). It still
+	// participates in IDENTITY — manifest rows, global handler ids — but the owner image emits
+	// no code for it, and it is excluded from every local derivation (comm priority, thread
+	// counts, stat labels).
 	external map[string]bool
+	// image = the directory a GENERATED satellite image is emitted into (relative to the
+	// example dir), keyed by partition. Implies external for the owner image.
+	image map[string]string
 }
 
 // parse_buses returns the declared buses (endpoint names that mean "external / on the wire")
@@ -331,7 +338,11 @@ fn parse_partitions(doc toml.Doc) PartMap {
 		m := pt.as_map()
 		pname := (m['name'] or { toml.Any('') }).string()
 		p.core_of[pname] = int((m['core'] or { toml.Any(0) }).int())
-		p.external[pname] = (m['external'] or { toml.Any(false) }).bool()
+		img := (m['image'] or { toml.Any('') }).string()
+		if img != '' {
+			p.image[pname] = img
+		}
+		p.external[pname] = (m['external'] or { toml.Any(false) }).bool() || img != ''
 		for t in (m['thread'] or { toml.Any([]toml.Any{}) }).array() {
 			tm := t.as_map()
 			tname := (tm['name'] or { toml.Any('') }).string()
@@ -448,12 +459,59 @@ mut:
 	trace        TraceCfg
 	shell        ShellCfg
 	nm           NmCfg
-	duo          DuoCfg
+	// Cross-core signal slots (derived, never configured): every REMOTE signal — one whose
+	// `from` partition lives in another image — gets an xioc slot, allocated in declaration
+	// order. Slot numbers surface ONLY in gen/duo_gen.h (the contract header both images
+	// compile against). duo_names keeps the allocation order for stable emission.
+	duo_idx   map[string]int
+	duo_names []string
 }
 
 fn build_model(doc toml.Doc, dbc string) Model {
+	if _ := doc.value_opt('duo') {
+		panic('loom2v: [duo] has dissolved into the signal model — declare cross-core signals as ' +
+			'[[signal]] from = "<satellite partition>" (slots are derived; see docs/multi-image.md)')
+	}
 	buses, bus_core := parse_buses(doc)
-	sig_of, sig_names, has_external := parse_signals(doc, dbc, buses)
+	mut sig_of, sig_names, has_external := parse_signals(doc, dbc, buses)
+	part := parse_partitions(doc)
+	// Derive the cross-image crossings: a signal FROM a partition whose code lives in another
+	// image is REMOTE — it rides an xioc slot (see docs/multi-image.md; the transport is derived
+	// from the topology, never configured). The satellite side publishes, this image polls.
+	mut duo_idx := map[string]int{}
+	mut duo_names := []string{}
+	for sname in sig_names {
+		mut si := sig_of[sname] or { continue }
+		from_ext := part.external[si.from] or { false }
+		to_ext := part.external[si.to] or { false }
+		if to_ext {
+			panic('loom2v: signal "${sname}" flows INTO satellite partition "${si.to}" — a ' +
+				'satellite-side consumer is not generated yet; satellites only publish (from = "${si.to}")')
+		}
+		if !from_ext {
+			continue
+		}
+		si.remote = true
+		// The xioc cell is one {a, b} pair: 1..2 plain u32 fields, no `valid` (freshness IS the
+		// slot's seq stamp). Wider/typed payloads arrive when the cell grows.
+		if si.has_valid {
+			panic('loom2v: remote signal "${sname}" has a `valid` field — xioc freshness is the ' +
+				'slot stamp; drop the field')
+		}
+		if si.fields.len < 1 || si.fields.len > 2 {
+			panic('loom2v: remote signal "${sname}" has ${si.fields.len} fields — the xioc cell ' +
+				'carries 1..2 u32 fields (widen the cell when a signal earns it)')
+		}
+		for f in si.fields {
+			if f.typ != 'u32' {
+				panic('loom2v: remote signal "${sname}" field "${f.name}" is ${f.typ} — the xioc ' +
+					'cell carries u32 fields only')
+			}
+		}
+		duo_idx[sname] = duo_names.len
+		duo_names << sname
+		sig_of[sname] = si
+	}
 	return Model{
 		buses:        buses
 		bus_core:     bus_core
@@ -464,13 +522,14 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		routes:       parse_routes(doc, dbc)
 		isotp_conns:  parse_isotp(doc)
 		dids:         parse_dids(doc)
-		part:         parse_partitions(doc)
+		part:         part
 		telem:        parse_telemetry(doc)
 		target:       parse_target(doc)
 		trace:        parse_trace(doc, dbc)
 		shell:        parse_shell(doc, dbc)
 		nm:           parse_nm(doc, dbc)
-		duo:          parse_duo(doc, dbc)
+		duo_idx:      duo_idx
+		duo_names:    duo_names
 	}
 }
 
@@ -1448,11 +1507,12 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						rx_sigs << s
 					}
 				}
-				// external TX signals (FB writes -> IOC -> comm sends), a producer each.
+				// external TX signals (FB writes -> IOC -> comm sends), a producer each. REMOTE
+				// tx signals (satellite -> bus) ride the xioc drain (duo_produce_drain) instead.
 				mut tx_sigs := []SigInfo{}
 				for sn in m.sig_names {
 					s := m.sig_of[sn] or { continue }
-					if s.external && !s.rx {
+					if s.external && !s.rx && !s.remote {
 						tx_sigs << s
 					}
 				}
@@ -1696,13 +1756,20 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 // sched.every() lines the run() emitters reuse). Returns (ports, glue, all_regs); reads the Model,
 // with the derived scratch/id layout (telem_slot, ioc_idx, trace bases, fb_id_base, thread_id_of)
 // and the trace-mode flags from main's emit-time state.
-fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_host bool) ([]string, []string, map[string][]string) {
+//
+// image_part selects the pass: '' emits the OWNER image (every non-external partition);
+// a partition name emits ONLY that satellite partition (the multi-image pass, gen_image.v)
+// — same structs/wrappers, with remote writes going to duo_pub instead of an IOC cell.
+fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_host bool, image_part string) ([]string, []string, map[string][]string) {
 	mut ports := []string{}
 	mut glue := []string{}
 	mut all_regs := map[string][]string{}
 	for part, clist in m.part.by_part {
-		if m.part.external[part] {
+		if image_part == '' && m.part.external[part] {
 			continue // declared elsewhere: identity only, no generated code
+		}
+		if image_part != '' && part != image_part {
+			continue // the satellite pass emits exactly one partition
 		}
 		threads := m.part.threads_of[part] or { [''] }
 		multi := threads.len > 1
@@ -1817,6 +1884,11 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 						glue << '\tC.ioc_get(${idx}, &${snake(rn)}_a, &${snake(rn)}_b)'
 						glue << '\tinp.${snake(rn)}.${snake(si.val_field)} = ${si.val_type}(${snake(rn)}_a)'
 					} else {
+						if image_part != '' {
+							panic('loom2v: satellite partition "${part}" fb "${cname}" reads signal ' +
+								'"${rn}", which is not thread-local — an owner->satellite transport is ' +
+								'not generated yet (docs/multi-image.md)')
+						}
 						glue << '\tosal.${acquire_fn(si.transport)}(${snake(rn)}_ch, &inp.${snake(rn)}, u8(sizeof(inp.${snake(rn)})))'
 					}
 				}
@@ -1827,11 +1899,26 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 					si := m.sig_of[wn] or { SigInfo{} }
 					if si.local {
 						glue << '\tst.cell_${snake(wn)} = outp.${snake(wn)} // local'
+					} else if dslot := m.duo_idx[wn] {
+						// remote (cross-image) signal: publish the {a, b} pair into its xioc slot —
+						// the bus owner polls it (duo_produce_drain / platform C). Field order = wire
+						// order (validated against the DBC in the comm-thread walk).
+						b_expr := if si.fields.len > 1 {
+							'u32(outp.${snake(wn)}.${snake(si.fields[1].name)})'
+						} else {
+							'u32(0)'
+						}
+						glue << '\tC.duo_pub(${dslot}, u32(outp.${snake(wn)}.${snake(si.fields[0].name)}), ${b_expr})'
 					} else if idx := ioc_idx[wn] {
 						// external TX (app -> bus): publish the value into its IOC cell; the comm thread
 						// reads it each tx period, encodes, and sends. Value field -> sig_t.a (b unused).
 						glue << '\tC.ioc_pub(${idx}, u32(outp.${snake(wn)}.${snake(si.val_field)}), u32(0))'
 					} else {
+						if image_part != '' {
+							panic('loom2v: satellite partition "${part}" fb "${cname}" writes signal ' +
+								'"${wn}", which is neither thread-local nor a remote xioc signal — a ' +
+								'satellite image has no other transport (docs/multi-image.md)')
+						}
 						glue << '\tosal.${publish_fn(si.transport)}(${snake(wn)}_ch, &outp.${snake(wn)}, u8(sizeof(outp.${snake(wn)})))'
 					}
 				}
@@ -2006,10 +2093,11 @@ fn main() {
 			'(the module lives on the bus owner). Building WITHOUT NM.')
 		m.nm.on = false
 	}
-	if m.duo.on && !(m.target.threadx) {
-		eprintln('loom2v: WARNING: [duo] cross-core signals need the ThreadX comm-thread target ' +
-			'(the bus owner transmits them). Building WITHOUT duo.')
-		m.duo.on = false
+	if m.duo_names.len > 0 && !(m.target.threadx) {
+		eprintln('loom2v: WARNING: cross-core (remote) signals need the ThreadX comm-thread ' +
+			'target (the bus owner transmits them). Building WITHOUT the xioc slots.')
+		m.duo_idx.clear()
+		m.duo_names.clear()
 	}
 	if m.trace.on && m.target.threadx {
 		validate_trace_threadx(m)
@@ -2210,6 +2298,18 @@ fn main() {
 						'${si.dbc_dlc} > 8 (CAN-FD sized), but the classic FDCAN backend rejects len > 8; ' +
 						'use a <= 8-byte frame')
 				}
+				if si.remote {
+					// remote TX (satellite -> bus): the satellite image publishes into the signal's
+					// xioc slot; the comm producer polls it (duo_produce_drain) — no owner IOC cell.
+					// The lean encode packs the {a, b} pair LE at bytes 0/4, so the frame must be
+					// exactly the fields' width (field order = DBC layout order by convention).
+					if si.dbc_dlc != 4 * si.fields.len {
+						panic('loom2v: remote TX signal "${sname}" has ${si.fields.len} u32 field(s) ' +
+							'but DBC message "${si.dbc_msg}" DLC is ${si.dbc_dlc} — the xioc encode packs ' +
+							'4 bytes per field (expect DLC ${4 * si.fields.len})')
+					}
+					continue
+				}
 				ioc_idx[sname] = ioc_idx.len
 				continue
 			}
@@ -2330,7 +2430,7 @@ fn main() {
 		detail_id: m.telem.detail_id
 	})]
 
-	fb_ports, fb_glue, all_regs := emit_handlers(m, producers, ioc_idx, trace_host)
+	fb_ports, fb_glue, all_regs := emit_handlers(m, producers, ioc_idx, trace_host, '')
 	ports << fb_ports
 	glue << fb_glue
 
@@ -2381,7 +2481,7 @@ fn main() {
 				slots = regs.len
 			}
 		}
-		if m.duo.on {
+		if duo_on(m) {
 			hpath := os.join_path(os.dir(args[5]), 'duo_gen.h')
 			os.write_file(hpath, duo_gen_h(m).join('\n') + '\n') or {
 				panic('write ${hpath}: ${err}')
@@ -2393,6 +2493,10 @@ fn main() {
 			panic('write ${mkpath}: ${err}')
 		}
 	}
+
+	// --- satellite images (docs/multi-image.md): one generated image per `image =`
+	//     partition, written into its own example directory by THIS run. ---
+	emit_satellite_images(m, doc, producers, ecu)
 
 	// --- trace manifest (optional arg 6): the identity tables blobly_net loads to resolve
 	//     an entity_id back to a name (emit_manifest). ---

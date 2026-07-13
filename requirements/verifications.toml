@@ -207,6 +207,25 @@ verifies = ["REQ-TRACE-002"]
 approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
 date = "2026-07-13"
 
+# THE MULTI-IMAGE EMITTER (docs/multi-image.md): one ecu.toml -> one generator run -> an
+# image per core. [[partition]] image = "<dir>" emits the satellite's sig/ports/gen files
+# (boot handshake, per-thread kernel scaffolding with the stack disciplines baked in,
+# handler wrappers, walk-assigned global trace ids, dtrace service); a cross-core signal is
+# an ORDINARY [[signal]] whose `from` partition lives in another image — the generator
+# derives the xioc slot ([duo] dissolved; transports are derived from topology, never
+# configured, keeping SMP open per the directive). examples/h755_m4_app is generated now,
+# absorbed exactly as threadx_h735 was. Bench: M4Count +10/frame via the generated
+# wrapper->xioc->comm-loop path; iocx 200k reads 0 tears through the generated M4Stress
+# channel; two-core dump shows handlers 4/5 on core 1 (1689us @10ms + 659us @2ms ≈ 50%);
+# h735_threadx + host examples regenerate byte-identical; blobly_net unchanged.
+[[review]]
+id = "h755-multi-image"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-INV-002"]
+approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
+date = "2026-07-13"
+
 # MULTI-BLOCK DUMP: a core's window streams as a SEQUENCE of self-describing blocks (header
 # more-flag until the last, each re-anchored by a leading epoch), so the ring is no longer
 # capped by one transport payload AND end-of-stream lives in the format, not a transport
