@@ -42,6 +42,8 @@ basic one-FB case.
 
 ## How it works
 
+- **User manual** (task recipes: add a signal / frame / FB / core, record a trace) —
+  [docs/um/](docs/um/README.md).
 - **Architecture overview** (start here): how FBs, the Loom, COM, the IOC and
   diagnostics fit — [docs/architecture.md](docs/architecture.md).
 - **Config-driven**: `ecu.toml` (+ a DBC) generates the COM codec, IOC channels,
