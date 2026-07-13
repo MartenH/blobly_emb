@@ -34,7 +34,7 @@
 
 #define DUO_TRC_ADDR     0x38000200u
 #define DUO_TRC_BUF_ADDR 0x38000210u
-#define DUO_TRC_MAX_REC  64u
+#define DUO_TRC_MAX_REC  256u /* = the satellite recorder's RING_CAP */
 #define DUO_TRC_OP_ARM   1u
 #define DUO_TRC_OP_SNAP  2u
 

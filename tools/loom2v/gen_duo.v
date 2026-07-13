@@ -179,7 +179,7 @@ fn duo_trace_globals(m Model) []string {
 	if !duo_trace_on(m) {
 		return []string{}
 	}
-	return ["\tg_duo_trace_ring [64]trace.Record // the satellite core's imported dump window"]
+	return ["\tg_duo_trace_ring [${m.trace.buffer_records}]trace.Record // the satellite core's imported dump window"]
 }
 
 fn duo_trace_locals(m Model) []string {
@@ -187,7 +187,7 @@ fn duo_trace_locals(m Model) []string {
 		return []string{}
 	}
 	return [
-		'\tg_tm.set_remote(u8(1), &g_duo_trace_ring[0], 64) // satellite blocks ride our dump link',
+		'\tg_tm.set_remote(u8(1), &g_duo_trace_ring[0], ${m.trace.buffer_records}) // satellite blocks ride our dump link',
 		'\tmut duo_trc_wait := false // a satellite snapshot was requested by op_dump',
 	]
 }
