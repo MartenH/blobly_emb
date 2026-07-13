@@ -363,10 +363,30 @@ b6-7  core_mask       (u16) bit i = core i; one cmd addresses several cores at o
 ```
 
 A **multi-core dump** is one `dump` with several `core_mask` bits set. The bus core owns
-the fan-out: for each selected core it pulls that core's frozen buffer **over IOC** (never
-a direct cross-core read — the recording invariant), sends that core's TraceRsp, then
-streams its self-describing ISO-TP block (block-header record + records). One command,
-N per-core blocks, in ascending core order.
+the fan-out: for each selected core it imports that core's frozen window over shared
+memory (never a direct cross-core ring read — the recording invariant), sends the
+TraceRsp, then streams that core's blocks. One command, all selected cores, ascending
+core order.
+
+**The block stream (multi-block dump).** A core's window travels as a SEQUENCE of
+self-describing blocks, each one:
+
+```
+[ block header ][ epoch ][ record ]…[ record ]
+```
+
+- **block header** (`CONTROL/ctl_block`): b2 = `core` in bits 0-6 and a **more-flag in
+  bit 7** — set on every block except the core's last. End-of-stream lives IN THE
+  FORMAT: the host reads blocks until every selected core's final (more = 0) block has
+  arrived — never inferred from a block count, payload size, or timeout. b3-6 = the
+  record count that follows (the leading epoch counts).
+- **leading epoch**: every block re-anchors its own timeline (the base applicable at its
+  first record), so blocks decode independently and in sequence alike.
+- **block size** is the transport binding's payload cap, not a format constant: over
+  ISO-TP a block is ≤ 520 bytes (64 records); a future Ethernet/DoIP binding carries the
+  identical block sequence with its own cap and neither the format nor the decoder
+  changes. This is why the ring depth (`buffer_records`, up to 4096) is decoupled from
+  any transport limit.
 
 **TraceRsp** — target → host (`rsp_id`), one per cmd:
 
