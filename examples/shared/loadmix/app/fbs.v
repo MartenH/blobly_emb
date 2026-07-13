@@ -2,6 +2,14 @@ module app
 
 import ports
 
+// The SHARED demo app (examples/shared/loadmix): h735_threadx and h755_threadx run this
+// same mixed-rate load — one source instead of two byte-identical copies drifting apart.
+// Each example's Makefile adds this directory to the V module path; the per-board ports/
+// sig modules still come from the example's own generated files. NOTE: each example's
+// ports module must declare the same FB In/Out shapes (they do — same ecu.toml FB set);
+// the iteration calibration below was measured on the H735 at 550 MHz (the H755 runs the
+// same budgets slower — still far from overrun).
+//
 // A "realistic" mixed-rate load for the multi-thread ThreadX target: three FB threads at
 // rate-monotonic priorities (fast 10 ms > mid 20 ms > slow 100 ms, comm above all of them),
 // so the trace's swimlane shows real preemption — the fast thread cutting into the mid/slow
