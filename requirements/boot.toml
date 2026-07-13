@@ -1,0 +1,103 @@
+# Bootloader (BOOT): reset-time boot decision + in-field reprogramming.
+# Capability-level — nothing here names a flash geometry, a CPU, or a transport
+# instance; CAN/ISO-TP is merely the first BINDING of the programming protocol
+# (see REQ-BOOT-006). Design sketch: docs/bootloader.md.
+
+[[req]]
+id = "REQ-BOOT-001"
+title = "Boot decision at every reset"
+text = "At every reset the bootloader shall decide between starting the application and staying in programming mode, based on application validity and any pending programming request."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-002"
+title = "Never start an invalid application"
+text = "The bootloader shall verify the application image's integrity before transferring control to it, and shall stay in programming mode when verification fails."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-003"
+title = "Application-requested reprogramming"
+text = "A running application shall be able to request programming mode such that the request survives the reset into the bootloader."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-004"
+title = "Unbrickable update"
+text = "An update interrupted at any point (power loss, lost link, aborted transfer) shall leave the bootloader reachable over its programming transports at the next reset."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-005"
+title = "Block-wise transfer with final verification"
+text = "The bootloader shall accept an application image in bounded blocks with per-block acknowledgement, and shall mark the image valid only after the complete image passes an integrity check."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-006"
+title = "Transport-independent programming protocol"
+text = "The programming services shall be independent of the physical transport; adding a transport binding shall not change the services, the block format, or the session flow."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-007"
+title = "Atomic activation"
+text = "Activation of a new application shall be atomic: after any reset the ECU shall run either the complete previous application or the complete new one, never a mixture."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-008"
+title = "Bootloader self-protection"
+text = "The normal application-update flow shall not be able to erase or overwrite the bootloader's own program storage."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-009"
+title = "Identification"
+text = "The bootloader shall report its own identification and the application's identification (version, validity) over the programming services."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-010"
+title = "Bounded boot delay"
+text = "When no programming request is pending and the application is valid, the boot decision shall add only a bounded, configured delay before the application starts."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-011"
+title = "Authenticated images"
+text = "The bootloader shall accept only application images whose authenticity is verified against a key held by the ECU."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-SEC-001"
