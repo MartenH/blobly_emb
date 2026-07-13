@@ -8,7 +8,7 @@
 # thin platform entry — init-time socket open / string ifname is OK) and *_test.v.
 set -euo pipefail
 
-dirs=("comm" "loom" "ecu" "wdg" "examples")
+dirs=("comm" "loom" "ecu" "wdg" "boot" "examples")
 # string keyword | map literal/type | empty-bracket slice type []T
 pattern='(\bstring\b|\bmap\[|\[\][A-Za-z_])'
 fail=0
