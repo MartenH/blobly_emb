@@ -1,7 +1,7 @@
 # h735_threadx — GENERATED ThreadX target from ecu.toml (P3c-1 phase 6a). loom2v's
 # [target] kind="threadx" emitter wraps the FB superloop in a ThreadX thread; this build
 # transpiles the V stack to freestanding C and links it with the vendored ThreadX kernel
-# + the H735 board bring-up (reused from examples/threadx_h735) + the register-level FDCAN
+# + the H735 board bring-up (the shared recorder from examples/threadx_h735) + the register-level FDCAN
 # backend. The generated counterpart of the hand-written examples/threadx_h735.
 #
 #   make -C ../.. deps      # once: ThreadX + CMSIS
@@ -39,16 +39,16 @@ TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 
-# board bring-up (asm + board.c) + the exec-change trace recorder, reused from
-# examples/threadx_h735 (trace_hooks.c is driver-independent — pure recorder).
-BSP = $(BOARD_BSP_THREADX) comm_glue.c $(REPO)/examples/threadx_h735/trace_hooks.c
+# board bring-up (asm + board.c) + the exec-change trace recorder, the shared recorder from
+# boards/common (trace_hooks.c is driver-independent — pure recorder).
+BSP = $(BOARD_BSP_THREADX) comm_glue.c $(REPO)/boards/common/trace_hooks.c
 
 all: $(BUILD)/$(NAME).bin
 
 # 0) generate the ThreadX target (gen/ports/sig) from ecu.toml via loom2v.
 GEN = gen/loom_gen.v ports/ports_gen.v sig/signals_gen.v
 gen: gen/.stamp
-gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(REPO)/tools/ecucheck/gen.v $(wildcard $(REPO)/tools/loom2v/*.v) $(REPO)/tools/ecumodel/model.v
+gen/.stamp: ecu.toml bus.dbc $(wildcard $(REPO)/examples/shared/loadmix/app/*.v) $(REPO)/tools/ecucheck/gen.v $(wildcard $(REPO)/tools/loom2v/*.v) $(REPO)/tools/ecumodel/model.v
 	@mkdir -p gen ports sig
 	cd $(REPO) && $(V) run tools/ecucheck/gen.v examples/$(NAME)/ecu.toml
 	cd $(REPO) && $(V) run tools/loom2v examples/$(NAME)/ecu.toml examples/$(NAME)/bus.dbc \
@@ -61,9 +61,9 @@ gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(REPO)/tools/ecucheck/gen.v $(
 -include gen/loom_build.mk
 
 # 1) transpile the V stack to freestanding C (-enable-globals for the ThreadX TCB/stack statics).
-$(BUILD)/app.c: main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard app/*.v) | $(BUILD)
+$(BUILD)/app.c: main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/examples/shared/loadmix/app/*.v) | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
-	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
+	  -path "@vlib|@vmodules|.|examples/$(NAME)|examples/shared/loadmix" \
 	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
 
 # 2) ThreadX kernel objects (same as examples/threadx_h735).
