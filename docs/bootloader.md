@@ -50,6 +50,32 @@ programming session` → write the request cell → reset. That is REQ-BOOT-003 
 new machinery — the request cell is the SRAM4-handshake pattern from the dual-core
 work, aimed at a reset instead of a second core.
 
+## The handoff, both directions
+
+**Boot → app: the jump only ever happens from near-reset state.** On the happy path
+boot has touched NOTHING before deciding — no PLL, no CAN, no interrupts enabled;
+reading a RAM cell and CRC-ing flash needs only reset defaults. So the direct jump is
+clean by construction: set VTOR to the app's vector table, load MSP from its word 0,
+jump to its reset vector. The app is linked at the app-region base and its startup is
+unchanged; any later reset lands back in boot by hardware (boot owns the boot address).
+
+The one state-laden case — after a programming session (CAN up, clocks configured,
+a diagnostic session to tear down) — **never jumps**: it writes its result and
+self-resets, and the next cycle takes the virgin happy path. Peripheral-state leakage
+into the app is eliminated by construction, not managed by a deinit checklist.
+
+**App → boot** is the request cell above; **information forward** is its sibling: a
+`boot_info` no-init cell (boot reason — normal / freshly-flashed / was-invalid,
+bootloader version) written by boot before the jump, exposed by the app over a
+DID/shell command without re-deriving anything. Both cells live in one board-owned
+header (the `duo.h` pattern) and are bound in `[boot]` so generator, app, and boot
+manager cannot disagree on the addresses.
+
+**Dual-bank caveat for P4:** a full-bank swap swaps the bootloader out with the app —
+so bank-swap activation means either boot duplicated at the base of BOTH banks, or
+no-swap with per-bank-linked images and a boot-side bank choice. Named now, decided
+in P4 with the silicon on the bench.
+
 ## Programming session (REQ-BOOT-005/006/009)
 
 Plain UDS, because it is already transport-neutral by construction:
