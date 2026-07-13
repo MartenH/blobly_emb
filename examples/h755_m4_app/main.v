@@ -49,10 +49,12 @@ fn trace_clock() u64 {
 	return C.board_now_us()
 }
 
-// this core's FB lane: handler ids 8+ so they never collide with the M7's 0..3 in the
-// combined swimlane (the block header carries the core; ids stay globally distinct too)
+// this core's FB lane: handler ids are GLOBAL, assigned by loom2v's manifest walk over
+// ecu.toml (core-0's four handlers take 0..3, this partition's M4Load.on_10ms is 4 — see
+// examples/h755_threadx ecu.toml [[partition]] m4, external = true). Hand-aligned until
+// the multi-image emitter generates this file and the coupling disappears.
 fn trace_fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
-	C.trace_fb(u32(8 + idx), start_us, u32(dt_us))
+	C.trace_fb(u32(4 + idx), start_us, u32(dt_us))
 }
 
 fn run_app() {
