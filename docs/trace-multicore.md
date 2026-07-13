@@ -4,7 +4,8 @@
 > DONE (bare-metal single-core trace); P3c-1 (real thread/ISR capture) next.**
 > The design writeup for the multi-core trace-codegen phase, extending the inline single-core path
 > from #54/#55/#56. **P3a is shipped** — `examples/trace_multicore` (two partitions, cores 0+1): a
-> single dump command streams one self-describing ISO-TP block per core, coherent single-writer
+> single dump command streams each core's window as self-describing blocks (multi-block with a
+> continuation more-flag since emb#116), coherent single-writer
 > cross-core freeze, decoded natively by blobly_net. **P3b (comm thread visible) is shipped** — the
 > per-bus COM bridge is a traced `comm_<bus>` thread (`examples/trace_comm`), different-bus reusing
 > the P3a owner; same-bus (piggyback) is the remaining follow-up. **P3c-0 (bare-metal single-core
@@ -31,8 +32,11 @@ loop has no thread switches or ISRs, so `thread`/`thread+isr` levels are rejecte
 
 The record wire format (from #54) is already multi-core-ready and blobly_net already decodes it
 (PR blobly_net#21): entity kinds `ISR | THREAD | FB | CONTROL`, a `CONTROL/ctl_block` **per-core
-block header** (core + record count), and `CONTROL/ctl_epoch` timeline re-anchors. The dump is one
-ISO-TP payload of N per-core blocks; the host reassembles `mask_popcount(mask)` blocks. **So the
+block header** (core + record count + a more-flag in bit 7 of the core byte for multi-block
+continuation), and `CONTROL/ctl_epoch` timeline re-anchors. A core's window streams as one or
+more self-describing blocks (each re-anchored by a leading epoch); the host reads blocks until
+every selected core's final (more = 0) block arrives — end-of-stream lives in the format, so the
+same stream rides ISO-TP today and any future transport unchanged. **So the
 protocol does not change in this phase — only the generator and the runtime wiring do.**
 
 The panics that mark the boundary (all in `gen.v` around 458–475, 1126, 1133):
@@ -86,10 +90,11 @@ a **shared trace region** (same mechanism as the IOC region / `osal.scratch`) so
 read them.
 
 **One dump owner.** The loop that owns the **trace-bus channel** runs the TraceCmd/dump handshake
-(as today). On `op_dump` with a core mask, it freezes each selected core's ring and packs them into
-one ISO-TP payload — a `ctl_block` header + that core's records, per selected core, in mask order.
-`trace.pack_block` already preserves per-block prefix epochs; this phase adds the multi-block
-aggregation loop. The freeze is a flag the owner sets in each ring's shared header; the producing
+(as today). On `op_dump` with a core mask, it freezes each selected core's ring and streams each
+core's window as one or more self-describing blocks — `ctl_block` header (with the continuation
+more-flag) + a leading epoch + that core's records — per selected core, in mask order, one
+transport transfer per block. `trace.pack_chunk` packs from a continuation cursor and preserves
+epoch anchoring per block. The freeze is a flag the owner sets in each ring's shared header; the producing
 core observes it at its next `buf.push` and stops writing (wait-free, one writer / one reader flag).
 
 **HandlerStat fan-out.** Today the owner reads `sched.handler_stat(i)` for its own partition. For
@@ -242,7 +247,8 @@ This depends on the ThreadX port work and is the natural place to stop for now �
 4. **Dump ownership: single owner.** One `partition_trace()` loop owns the trace-bus channel, runs
    the TraceCmd/Rsp handshake, and on `op_dump` freezes + `pack_block`s each selected core's ring
    into one ISO-TP message per core (mask order). This matches the one-stream / N-blocks model the
-   blobly_net dump worker already expects (it `recv`s `mask_popcount(mask)` blocks).
+   blobly_net dump worker already expects (it reads blocks until every selected core's
+   final more = 0 block — multi-block since emb#116/net#45).
 
 ## 7. P3a runtime shape (generated)
 
