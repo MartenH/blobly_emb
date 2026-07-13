@@ -1,6 +1,9 @@
 # Configuration
 
-blobly_emb is configured from a **single `config/ecu.toml`** (TOML). Host
+> Looking for "how do I add a signal/frame/FB/core"? That's the task-oriented
+> **user manual**: [docs/um/](um/README.md). This page is the design rationale.
+
+blobly_emb is configured from a **single `ecu.toml` per example** (TOML). Host
 build-time tools read it and **generate static, no-alloc V tables** — nothing
 parses config on the target.
 
