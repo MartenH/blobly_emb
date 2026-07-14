@@ -32,7 +32,7 @@ derives = "SYS-REQ-NVM-001"
 [[req]]
 id = "REQ-NVM-004"
 title = "Persistence through signals only"
-text = "Application components shall access persistent data exclusively through signals; persistence shall be a configuration property, not an application API."
+text = "Function blocks (FBs) shall access persistent data exclusively through signals; persistence shall be a configuration property, not an application API."
 status = "draft"
 method = "review"
 asil = "QM"
