@@ -1,0 +1,75 @@
+# Persistence (NVM): retained data as persistent signals + an append journal.
+# Capability-level — no flash geometry, no sector counts, no board. Design:
+# docs/nvm.md.
+
+[[req]]
+id = "REQ-NVM-001"
+title = "Restore before first activation"
+text = "A persistent signal shall present its last stored value to the application before the application's first activation after a reset."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-002"
+title = "Default on missing or corrupt data"
+text = "A persistent signal whose stored value is missing or fails its integrity check shall present its configured default value."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-003"
+title = "Power-loss safety"
+text = "An interrupted persistence write shall never corrupt or lose previously stored values; after any interruption the last completely stored value wins."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-004"
+title = "Persistence through signals only"
+text = "Application components shall access persistent data exclusively through signals; persistence shall be a configuration property, not an application API."
+status = "draft"
+method = "review"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-005"
+title = "Bounded wear"
+text = "The write policy shall bound storage wear: changes are persisted rate-limited and amortized, never per-activation."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-006"
+title = "Flush at quiet points"
+text = "Unpersisted changes shall be written out when the ECU prepares for network sleep, before low power is entered."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-007"
+title = "Execution non-interference"
+text = "Persistence operations shall not stall application execution beyond configured bounds; long operations (erase, compaction) shall run only at designated quiet points."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-008"
+title = "Diagnostic write path"
+text = "Writable diagnostic identifiers may bind to persistent storage, providing the explicit write path (calibration, configuration) outside the application."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
