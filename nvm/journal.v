@@ -211,9 +211,11 @@ pub fn (mut j Journal) mount() bool {
 	return true
 }
 
-// put appends a new value. On failure the table is ROLLED BACK (a failed put
-// must be neither served nor re-persisted by a later compaction) and the
-// flash slot is burned — see program_slot.
+// put appends a new value. The table is updated ONLY after the flash append
+// succeeds — an uncommitted value must never be served, and an inline compact
+// (which copies the table) must never persist it either. The write ATTEMPT
+// dirties the tail regardless of outcome: a torn post-marker slot reads
+// unclean at mount, and the runtime state must agree.
 pub fn (mut j Journal) put(block u16, data &u8, len u16) bool {
 	if !j.mounted || block == marker_block || int(block) >= max_blocks {
 		return false
@@ -221,18 +223,8 @@ pub fn (mut j Journal) put(block u16, data &u8, len u16) bool {
 	if len == 0 || u32(len) > data_max {
 		return false // empty would be indistinguishable from absent — reject
 	}
-	prev := j.table[block] // rollback copy (fixed-size struct, plain value)
-	j.table[block].present = true
-	j.table[block].len = len
-	for i in 0 .. int(len) {
-		j.table[block].data[i] = unsafe { data[i] }
-	}
-	if !j.append_block(block) {
-		j.table[block] = prev
-		return false
-	}
-	j.tail_clean = false
-	return true
+	j.tail_clean = false // the attempt itself is post-marker activity
+	return j.append_data(block, data, len)
 }
 
 // get reads the mounted/current value into out; returns the length (0 = absent).
@@ -359,8 +351,10 @@ pub fn (mut j Journal) compact() bool {
 
 // erase_pending performs the deferred cleanup at the caller's quiet point.
 // If the pending sector still holds any block's NEWEST record (strays — a
-// crash interrupted a compaction), erasing would orphan them: run a compact
-// instead (it erases the pending target first and re-homes everything).
+// crash interrupted a compaction), they are re-homed INTO THE ACTIVE sector
+// FIRST, then the erase runs: a power cut anywhere in that order never leaves
+// a value without a durable copy (erase-before-copy would). The fit check is
+// watermark-gated dead code in a valid config; the engine refuses regardless.
 pub fn (mut j Journal) erase_pending() bool {
 	if !j.mounted {
 		return false
@@ -371,8 +365,18 @@ pub fn (mut j Journal) erase_pending() bool {
 	if j.pending_erase == j.active {
 		return false // never erase the active sector (state-corruption guard)
 	}
-	if j.strays(j.pending_erase) > 0 {
-		return j.compact() // re-homes strays; pending moves to the old active
+	ns := j.strays(j.pending_erase)
+	if ns > 0 {
+		if j.free_records() < ns {
+			return false // re-homing must not itself compact into the pending sector
+		}
+		for b in 1 .. max_blocks {
+			if j.table[b].present && j.table[b].sector == j.pending_erase {
+				if !j.append_block(u16(b)) {
+					return false // burned slot; retry at the next quiet point
+				}
+			}
+		}
 	}
 	if !j.ops.erase(j.ops.ctx, j.sector_addr(j.pending_erase), j.cfg.size) {
 		return false
@@ -405,6 +409,8 @@ fn (mut j Journal) ensure_space() bool {
 	return true
 }
 
+// append_block re-appends a block's CURRENT table value (compaction copies,
+// stray re-homing).
 fn (mut j Journal) append_block(block u16) bool {
 	if !j.ensure_space() {
 		return false
@@ -418,6 +424,31 @@ fn (mut j Journal) append_block(block u16) bool {
 		return false
 	}
 	j.max_seq = seq
+	j.table[block].seq = seq
+	j.table[block].sector = j.active
+	return true
+}
+
+// append_data appends a NEW value from the caller's buffer and installs it in
+// the table only on success — so an inline compact fired by ensure_space()
+// copies the block's OLD value (the new one is not yet committed anywhere),
+// and a failed program leaves the table untouched (nothing to roll back).
+fn (mut j Journal) append_data(block u16, data &u8, len u16) bool {
+	if !j.ensure_space() {
+		return false
+	}
+	mut rec := [32]u8{}
+	seq := j.max_seq + 1
+	encode_record(mut rec, block, len, seq, data)
+	if !j.program_slot(&rec[0]) {
+		return false
+	}
+	j.max_seq = seq
+	j.table[block].present = true
+	j.table[block].len = len
+	for i in 0 .. int(len) {
+		j.table[block].data[i] = unsafe { data[i] }
+	}
 	j.table[block].seq = seq
 	j.table[block].sector = j.active
 	return true
@@ -458,10 +489,14 @@ fn (mut j Journal) slot_blank(addr u32, rec &u8) bool {
 		if j.ops.blank(j.ops.ctx, addr, rec_size) {
 			return true
 		}
-		j.read_slot(addr, rec) // best effort; garbage is CRC-rejected
+		if !j.read_slot(addr, rec) {
+			zero_rec(rec) // never let a failed read leave the PREVIOUS slot's
+			// bytes in the shared buffer — they would parse as a duplicate
+		}
 		return false
 	}
 	if !j.read_slot(addr, rec) {
+		zero_rec(rec)
 		return false // unreadable = not blank; treated as dirt
 	}
 	for i in 0 .. int(rec_size) {
@@ -470,6 +505,16 @@ fn (mut j Journal) slot_blank(addr u32, rec &u8) bool {
 		}
 	}
 	return true
+}
+
+// zero_rec: an all-zero buffer can never parse as a valid record (the stored
+// CRC field is 0, the CRC of 28 zero bytes is not).
+fn zero_rec(rec &u8) {
+	for i in 0 .. int(rec_size) {
+		unsafe {
+			rec[i] = 0
+		}
+	}
 }
 
 fn (mut j Journal) read_slot(addr u32, rec &u8) bool {

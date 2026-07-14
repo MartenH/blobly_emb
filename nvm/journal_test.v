@@ -522,3 +522,67 @@ fn test_clean_is_honest() {
 	assert j6.clean, 'old-sector debris must not poison a clean shutdown'
 	assert getv(j6, 1)? == 9
 }
+
+// Codex round-2 P1 trio.
+// (1) An inline compact must NOT durably persist an uncommitted put value:
+// fill the sector, then cut the put's OWN record program (which lands after
+// the compact) — the compact's copy must carry the OLD value.
+fn test_compact_never_persists_uncommitted_put() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 0xE1)
+	for j.free_records() > 0 {
+		putv(mut j, 2, j.free_records())
+	}
+	// next put: ensure_space compacts (2 copies = 2 programs), then programs
+	// the new record as the 3rd call — cut exactly there
+	f.cut_call = f.calls + 3
+	f.cut_bytes = 0
+	data := [u8(0xE2), 0, 0, 0]
+	assert !j.put(1, &data[0], 4)
+	assert getv(j, 1)? == 0xE1 // not served...
+	mut j2 := remount(mut f)
+	assert getv(j2, 1)? == 0xE1, 'the compact copy leaked an uncommitted value'
+	assert !f.double_prog
+}
+
+// (2) erase_pending re-homes strays BEFORE erasing: if the erase itself dies
+// (or power cuts anywhere in the order), every value has a durable copy.
+fn test_erase_pending_rehomes_before_erase() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 71)
+	putv(mut j, 2, 72)
+	f.cut_call = f.calls + 2 // interrupt the compaction copy -> strays remain
+	f.cut_bytes = 16
+	j.compact()
+	f.cut_call = 0xFFFF_FFFF
+	mut j2 := remount(mut f)
+	f.erase_cut = true // the erase after the re-home dies...
+	assert !j2.erase_pending()
+	mut j3 := remount(mut f) // ...and power is lost right there
+	assert getv(j3, 1)? == 71, 'a stray lost its only durable copy'
+	assert getv(j3, 2)? == 72
+	assert j3.erase_pending() // recovery converges
+	mut j4 := remount(mut f)
+	assert getv(j4, 1)? == 71
+	assert !f.double_prog
+}
+
+// (3) A FAILED post-marker write still dirties the tail: a later compact must
+// not re-append the marker over the evidence.
+fn test_failed_post_marker_write_dirties_tail() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 81)
+	assert j.mark_clean()
+	f.cut_call = f.calls + 1
+	f.cut_bytes = 5 // the wake's write tears
+	data := [u8(82), 0, 0, 0]
+	assert !j.put(1, &data[0], 4)
+	assert j.compact() // must NOT restore the clean tail
+	mut j2 := remount(mut f)
+	assert !j2.clean, 'a failed post-marker write was erased from history'
+	assert getv(j2, 1)? == 81
+	assert !f.double_prog
+}
