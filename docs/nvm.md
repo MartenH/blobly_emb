@@ -19,8 +19,26 @@ name    = "OdoMeters"
 fields  = { m = "u32" }
 from    = "app"
 to      = "app"
-persist = true
+persist = "now"        # or "shutdown" — INTENT, not a tuning number
 ```
+
+Two policies, declared as intent:
+
+- `persist = "shutdown"` — survives orderly shutdowns: flushed at NM sleep-entry
+  only. Settings, learned trims. Near-zero wear. On a crash it loses everything
+  since the last orderly sleep — that is the declared meaning, not a defect.
+- `persist = "now"` — journaled on write, as fast as the system allows: staged
+  wait-free by the wrapper, appended on the comm thread's next idle pass, FLOORED
+  by the one global `[nvm] min_write_ms` (the system wear floor). Position,
+  counters — anything that must survive a crash. The honest loss window is
+  `floor + one comm pass` (milliseconds), and correctness never depends on a
+  clean shutdown.
+
+There is no per-signal interval knob: intent + one system floor. The generator
+KNOWS each writing handler's period, so every `now` signal gets a generation-time
+worst-case wear check (records/hour vs the sector budget) — binding `now` to an
+absurd writer fails generation with the math in the error message. Wear is a
+config-review fact, not a field surprise.
 
 There is deliberately NO `nvm_read`/`nvm_write` in application code. An API would
 break the pure In→Out handler contract and reproduce AUTOSAR's NvM surface
@@ -86,10 +104,9 @@ block — its fields restore coherently from one atomic record. Group values tha
 must survive together into one signal.
 
 For a value that changes continuously on an ECU that may lose power at ANY moment,
-the sleep-entry flush is irrelevant — the rate-limited on-change journal is the
-mechanism: the loss window is exactly the signal's write interval, so the interval
-is a PER-SIGNAL property (`persist_ms = 200`), not just the global default. The
-escalation ladder when the window must shrink:
+declare `persist = "now"` — the sleep-entry flush is irrelevant to it; the floored
+on-change journal is the mechanism, and the loss window is the global floor plus
+one comm pass. The escalation ladder when that window must shrink further:
 
 1. **Deadband in the FB** — quantize before writing, so "changed" means
    meaningfully changed (app logic, where it belongs).
@@ -135,7 +152,7 @@ wants the journal) — owned by platform modules, still never by FBs.
 
 The full path for one signal:
 
-1. **Identity**: the generator walks `persist = true` signals in declaration order
+1. **Identity**: the generator walks persistent signals (`persist = "now"`/`"shutdown"`) in declaration order
    → block_id 1..N + packed size into the contract table (0/0xFFFF reserved;
    all-0xFF can never parse as a record, so erased flash is self-marking).
 2. **Packing**: fields little-endian in declaration order — the wire-encode
@@ -169,7 +186,7 @@ The entire layer develops dry.
 
 1. **P1 — the journal engine** (`nvm/` module): format, mount, append, compact
    over FlashOps; power-cut fuzz tests. Pure host work.
-2. **P2 — `persist = true` codegen**: restore-before-dispatch + change-detect +
+2. **P2 — `persist` codegen**: restore-before-dispatch + change-detect +
    rate-limited journal on the comm thread; host sim example (file-backed).
 3. **P3 — target**: reuse `boards/h755zi/flash.c`; flash map decision per board;
    NM sleep-entry flush + compaction window. (Bench: pull power mid-append, on a

@@ -76,9 +76,18 @@ derives = "SYS-REQ-NVM-001"
 
 [[req]]
 id = "REQ-NVM-009"
-title = "Bounded loss window"
-text = "The data lost by a persistent signal on an abrupt power failure shall be bounded by that signal's configured write interval; correctness shall not depend on an orderly shutdown."
+title = "Loss window follows declared policy"
+text = "A persistent signal's data loss on abrupt power failure shall follow its declared policy: an immediately-persisted signal loses at most the configured system write floor, and its correctness shall not depend on an orderly shutdown; a shutdown-persisted signal is defined to retain the value from the last orderly shutdown."
 status = "draft"
 method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-010"
+title = "Wear provable at configuration time"
+text = "For every immediately-persisted signal, the worst-case write rate (from its writer's activation period and the system write floor) shall be checked against the storage wear budget when the configuration is generated, failing generation if exceeded."
+status = "draft"
+method = "analysis"
 asil = "QM"
 derives = "SYS-REQ-NVM-001"
