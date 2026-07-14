@@ -1,0 +1,66 @@
+# Signal <-> IO (IO): physical inputs/outputs as signal endpoints.
+# Capability-level — no pin names, no peripheral kinds beyond the capability
+# (analog in, digital in/out, PWM out), no board. Design: docs/io.md.
+
+[[req]]
+id = "REQ-IO-001"
+title = "Inputs are signals"
+text = "A configured physical input shall be presented to the application as an ordinary signal, sampled at its configured rate."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-002"
+title = "Outputs are signals"
+text = "A configured physical output shall be driven from an ordinary signal written by the application."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-003"
+title = "Wait-free access"
+text = "Reading an input signal or writing an output signal shall never block the application; the application always observes the most recent complete sample."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-004"
+title = "Config-only extension"
+text = "Adding, removing, or re-pinning an IO point shall require only configuration changes; application handlers reference the signal alone."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-005"
+title = "Coherent with the port snapshot"
+text = "Input signals shall be sampled into the application's input snapshot before handler dispatch, so a handler's inputs are mutually coherent within one activation."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-006"
+title = "Platform pins are not application signals"
+text = "Pins owned by platform units (transceiver mode control, PHY management) shall be controlled by their owning platform module through board-layer hooks and shall not be exposed as application signals."
+status = "draft"
+method = "review"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-007"
+title = "Transceiver follows network state"
+text = "A controllable bus transceiver shall follow its network's management state: normal while the network is awake, low-power when asleep, and shall be usable as a wake source where the hardware provides one."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
