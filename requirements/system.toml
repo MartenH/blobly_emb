@@ -67,6 +67,14 @@ method = "test"
 asil = "QM"
 
 [[req]]
+id = "SYS-REQ-IO-001"
+title = "Physical inputs and outputs"
+text = "The ECU shall exchange application signals with configured physical inputs and outputs (analog in, digital in/out, PWM out)."
+status = "draft"
+method = "test"
+asil = "QM"
+
+[[req]]
 id = "SYS-REQ-NM-001"
 title = "Coordinated network sleep"
 text = "The ECU shall coordinate network wake-up and sleep with the other nodes on each network."

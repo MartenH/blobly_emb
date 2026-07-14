@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 88 | 55 | 5 | 28 | 0 |
+| 96 | 55 | 5 | 36 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -51,6 +51,13 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-INV-003 | B | analysis | uncovered | — |
 | REQ-INV-004 | QM | analysis | verified | noalloc-driver-lint (pass) |
 | REQ-INV-005 | QM | review | covered | naming-review (pending) |
+| REQ-IO-001 | QM | test | uncovered | — |
+| REQ-IO-002 | QM | test | uncovered | — |
+| REQ-IO-003 | QM | test | uncovered | — |
+| REQ-IO-004 | QM | analysis | uncovered | — |
+| REQ-IO-005 | QM | test | uncovered | — |
+| REQ-IO-006 | QM | review | uncovered | — |
+| REQ-IO-007 | QM | test | uncovered | — |
 | REQ-NM-001 | QM | test | verified | nm_test.v (pass) |
 | REQ-NM-002 | QM | test | verified | module_test.v (pass), nm_test.v (pass) |
 | REQ-NM-003 | QM | test | verified | module_test.v (pass), nm_can_test.v (pass), nm_test.v (pass) |
@@ -80,6 +87,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-SAFE-003 | B | analysis | uncovered | — |
 | SYS-REQ-SEC-001 | QM | test | verified | secoc_test.v (pass) |
 | SYS-REQ-DIAG-001 | QM | test | verified | uds_test.v (pass) |
+| SYS-REQ-IO-001 | QM | test | uncovered | — |
 | SYS-REQ-NM-001 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-LIFE-001 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-LIFE-002 | QM | test | verified | ↳ derived (all children verified) |
@@ -144,6 +152,13 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-INV-003 | | | | | | | | | |
 | REQ-INV-004 | | | | | | | | | ✓ |
 | REQ-INV-005 | | | | | | | | · | |
+| REQ-IO-001 | | | | | | | | | |
+| REQ-IO-002 | | | | | | | | | |
+| REQ-IO-003 | | | | | | | | | |
+| REQ-IO-004 | | | | | | | | | |
+| REQ-IO-005 | | | | | | | | | |
+| REQ-IO-006 | | | | | | | | | |
+| REQ-IO-007 | | | | | | | | | |
 | REQ-NM-001 | | | | | | | ✓ | | |
 | REQ-NM-002 | | | | | | | ✓ | | |
 | REQ-NM-003 | | | | | | | ✓ | | |
@@ -173,6 +188,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-SAFE-003 | | | | | | | | | |
 | SYS-REQ-SEC-001 | | | | | | | ✓ | | |
 | SYS-REQ-DIAG-001 | | | | | | | ✓ | | |
+| SYS-REQ-IO-001 | | | | | | | | | |
 | SYS-REQ-NM-001 | | | | | | | | | |
 | SYS-REQ-LIFE-001 | | | | | | | | | |
 | SYS-REQ-LIFE-002 | | | | | | | | | |
