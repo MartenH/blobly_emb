@@ -237,7 +237,15 @@ The full path for one signal:
    fields, lose the stored value.
 3. **Mount** (boot): scan both sectors; per block keep the highest-seq record with
    a valid CRC into a fixed-size RAM table (generator-dimensioned); the write
-   cursor is the first erased word.
+   cursor is the first erased word. Mount is strictly READ-ONLY (hardened in the
+   P1 review round): it never programs and never erases — strays from an
+   interrupted compaction stay where they are, served from the union table, and
+   `erase_pending()` re-homes them via a compact at the quiet point. A failed
+   program BURNS its slot (the driver may have pulsed the word — re-programming
+   a touched ECC word is illegal), and `put()` rolls the table back so a failed
+   value is neither served nor re-persisted. Clean is judged honestly: an
+   all-torn journal is unclean, and a torn write after the marker (the ECU woke,
+   then died mid-put) is unclean — old-sector debris doesn't poison it.
 4. **Restore**: generated thread init unpacks the table entry into the signal's
    cell BEFORE the first dispatch — a restored value is indistinguishable from a
    computed one.
