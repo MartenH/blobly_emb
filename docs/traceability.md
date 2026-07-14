@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 100 | 60 | 5 | 35 | 0 |
+| 113 | 63 | 5 | 45 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -75,6 +75,18 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NM-011 | QM | test | verified | nm_can_test.v (pass), frame_test.v (pass) |
 | REQ-NM-012 | QM | test | verified | nm_can_test.v (pass), nm_can_test.v (pass), frame_test.v (pass) |
 | REQ-NM-013 | QM | test | verified | nm_can_test.v (pass), nm_can_test.v (pass), frame_test.v (pass) |
+| REQ-NVM-001 | QM | test | uncovered | — |
+| REQ-NVM-002 | QM | test | verified | journal_test.v (pass) |
+| REQ-NVM-003 | QM | test | verified | journal_test.v (pass) |
+| REQ-NVM-004 | QM | review | uncovered | — |
+| REQ-NVM-005 | QM | analysis | uncovered | — |
+| REQ-NVM-006 | QM | test | uncovered | — |
+| REQ-NVM-007 | QM | test | uncovered | — |
+| REQ-NVM-008 | QM | test | uncovered | — |
+| REQ-NVM-009 | QM | test | uncovered | — |
+| REQ-NVM-010 | QM | analysis | uncovered | — |
+| REQ-NVM-011 | QM | analysis | uncovered | — |
+| REQ-NVM-012 | QM | test | verified | journal_test.v (pass) |
 | REQ-SEC-001 | QM | test | uncovered | — |
 | REQ-SEC-002 | QM | test | uncovered | — |
 | REQ-SEC-003 | QM | test | uncovered | — |
@@ -92,6 +104,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-SEC-001 | QM | test | verified | secoc_test.v (pass) |
 | SYS-REQ-DIAG-001 | QM | test | verified | uds_test.v (pass) |
 | SYS-REQ-PROG-001 | QM | test | uncovered | — |
+| SYS-REQ-NVM-001 | QM | test | uncovered | — |
 | SYS-REQ-NM-001 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-LIFE-001 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-LIFE-002 | QM | test | verified | ↳ derived (all children verified) |
@@ -180,6 +193,18 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NM-011 | | | | | | | ✓ | | |
 | REQ-NM-012 | | | | | | | ✓ | | |
 | REQ-NM-013 | | | | | | | ✓ | | |
+| REQ-NVM-001 | | | | | | | | | |
+| REQ-NVM-002 | | | | | | | ✓ | | |
+| REQ-NVM-003 | | | | | | | ✓ | | |
+| REQ-NVM-004 | | | | | | | | | |
+| REQ-NVM-005 | | | | | | | | | |
+| REQ-NVM-006 | | | | | | | | | |
+| REQ-NVM-007 | | | | | | | | | |
+| REQ-NVM-008 | | | | | | | | | |
+| REQ-NVM-009 | | | | | | | | | |
+| REQ-NVM-010 | | | | | | | | | |
+| REQ-NVM-011 | | | | | | | | | |
+| REQ-NVM-012 | | | | | | | ✓ | | |
 | REQ-SEC-001 | | | | | | | | | |
 | REQ-SEC-002 | | | | | | | | | |
 | REQ-SEC-003 | | | | | | | | | |
@@ -197,6 +222,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-SEC-001 | | | | | | | ✓ | | |
 | SYS-REQ-DIAG-001 | | | | | | | ✓ | | |
 | SYS-REQ-PROG-001 | | | | | | | | | |
+| SYS-REQ-NVM-001 | | | | | | | | | |
 | SYS-REQ-NM-001 | | | | | | | | | |
 | SYS-REQ-LIFE-001 | | | | | | | | | |
 | SYS-REQ-LIFE-002 | | | | | | | | | |

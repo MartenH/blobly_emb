@@ -75,6 +75,14 @@ method = "test"
 asil = "QM"
 
 [[req]]
+id = "SYS-REQ-NVM-001"
+title = "Data retention across power cycles"
+text = "The ECU shall retain configured application and platform data across resets and power cycles, tolerating power loss at any moment."
+status = "draft"
+method = "test"
+asil = "QM"
+
+[[req]]
 id = "SYS-REQ-NM-001"
 title = "Coordinated network sleep"
 text = "The ECU shall coordinate network wake-up and sleep with the other nodes on each network."
