@@ -91,3 +91,21 @@ status = "draft"
 method = "analysis"
 asil = "QM"
 derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-011"
+title = "Shutdown write-out needs no reclamation"
+text = "The shutdown write-out shall always complete without storage reclamation: reserved headroom for the worst-case flush is guaranteed at configuration time, and reclamation runs ahead of need during normal operation."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-012"
+title = "Writes accepted at all times"
+text = "Persistence shall accept new values whenever the ECU is running — including during storage reclamation and during shutdown preparation — without blocking the application or the bus."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"

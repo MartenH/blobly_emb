@@ -127,6 +127,55 @@ sector pair (duty-cycled to 2 h/day ≈ 6 years); deadbands and the system floor
 keep real traffic far below that, the generation-time wear check (REQ-NVM-010)
 proves it per config, and rungs 2/3 exist for the outliers.
 
+## Shutdown choreography (and why GC can't collide with it)
+
+The classic journal deadlock — the flush needing space exactly when there is no
+time to make space — is closed structurally, not handled:
+
+- **Reserved headroom, generation-sized.** The worst-case shutdown write-out is a
+  KNOWN constant: N_live records + the clean marker (the generator knows N — the
+  same fact behind the capacity gate). The journal keeps that reserve untouchable,
+  and the compaction WATERMARK sits above it: free space below `reserve + margin`
+  makes compaction due during NORMAL runtime, on the comm thread's schedule, long
+  before shutdown needs the room. The sleep flush therefore never erases — it is
+  N microsecond-scale appends into space guaranteed to exist. GC-at-shutdown is
+  not a case to handle; it is a state that cannot be reached.
+- **Quiesce ordering, NvM holds the door.** Dispatch stops → flush dirty →
+  clean marker → (compact now if the watermark says so — on same-bank boards this
+  IS the designated erase window; other-bank boards already compacted at runtime)
+  → NvM-done → only then power down. NM coordinates the BUS sleep on its own
+  timeline; the LOCAL power-down waits on NvM-done. A power cut anywhere in the
+  sequence converges by the format rules above.
+- **Writes are never forbidden — including during shutdown.** Appends are legal
+  whenever cursor space exists, and headroom guarantees it does. The wake-up race
+  (bus activity aborts the sleep after the flush) is benign: new records land
+  after the marker and life continues. Which gives crash detection its cleanest
+  form: **a session was clean iff the newest record is a marker.** A marker with
+  records after it means "slept, then woke" — the next sleep writes a new one.
+  No flags, no state machine; the journal's tail IS the shutdown state.
+
+**Writes DURING a compaction** are equally unremarkable, by construction:
+
+- All flash work is ONE thread (FBs stage to RAM; the comm thread appends and
+  compacts) — "concurrent" never means racing writers, only interleaved work.
+- Compaction is incremental, not a critical section: the copy phase reads **the
+  RAM mount table, never old flash** — a write landing mid-GC either updates the
+  table before its block is copied (the copy takes the fresh value) or appends
+  after it with a newer seq. Both orders are correct; a stale copy can never
+  outrank a fresh write, because copies never see stale data.
+- From GC start, appends target the NEW sector; the old one is read-only and
+  merely awaits erase.
+- The erase itself is hardware-autonomous (start it, poll completion each comm
+  pass) — the CPU services the bus and new appends throughout; the seconds are
+  the flash controller's, not the thread's.
+- The new sector cannot overflow mid-GC: it starts empty and absorbs live set +
+  margin — the same generation-time arithmetic as the headroom.
+
+One invariant, stated once: the journal accepts appends at ANY moment the ECU is
+alive — during compaction, during shutdown, during the wake race — because
+ordering is seq, sourcing is the RAM table, and the only slow operation runs in
+hardware.
+
 ## Where it lives in flash (the honest part)
 
 Erasing a sector STALLS same-bank execution (seconds for 128 KB) — the flash map
