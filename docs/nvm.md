@@ -57,10 +57,23 @@ record (one 32-byte flash word — the program granularity, atomic by constructi
   torn record whose CRC fails — it is simply ignored: the previous value wins.
   Power-loss safety falls out of the format, exactly like the boot header's
   valid-mark-last rule.
-- **Compaction**: when the active sector fills, live values are rewritten into the
-  partner sector and the old one is erased (ping-pong). Values > 20 bytes span
-  chained records (same block_id/seq, part index in len's high bits) — v1 keeps
-  persistent signals small; big blobs are not the target.
+- **Compaction (= the garbage collection)**: a superseded record is garbage the
+  moment a newer seq lands — nothing marks it (flash bits are one-way; tombstones
+  buy nothing), mount simply ignores it, and its only cost is sector space. When
+  the cursor hits the sector end (or opportunistically at sleep-entry past a fill
+  threshold), the latest value of every live block is copied into the partner
+  sector with BUMPED seq — the copies strictly outrank the originals — and the old
+  sector is erased. Crash mid-copy: mount unions both sectors, highest seq wins,
+  consistent. Crash before the erase: full duplicates, copies win, the stale
+  sector is detected (full + everywhere-outranked) and erased LAZILY at the next
+  quiet point — never at mount, where a seconds-long erase would stall boot.
+  Repeated crashes converge (idempotent). No sector headers, no state machine in
+  flash: which sector is active is DERIVED from content (erased space + freshest
+  records). Wear levels perfectly by construction (alternating erase); a wider
+  ring is the linear-life upgrade. Whether the live set fits after compaction is
+  a GENERATION-TIME check (the generator knows N) — never a runtime failure.
+  Values > 20 bytes span chained records (same block_id/seq, part index in len's
+  high bits) — v1 keeps persistent signals small; big blobs are not the target.
 - **Wear math** (H7: 128 KB sectors, 10k cycles): 4096 records/sector. Even one
   record per second sustained = one erase per ~68 min ≈ 1.3 years of CONTINUOUS
   max-rate writing per pair — and `min_write_ms` plus on-change gating keeps real
@@ -83,12 +96,37 @@ must be drawn per board, next to the bootloader's:
   `boards/<b>/flash.c` driver. One flash driver, two customers, one bench
   validation.
 
-## Under the hood: blocks
+## Under the hood: blocks, and the signal ↔ journal mechanics
 
 Persistent signals compile down to numbered blocks (generator-assigned ids in a
 `nvm_gen.h`-style contract — the duo/io pattern again). `[[nvm.block]]` stays for
 NON-signal platform data (diagnostic records later, bootloader metadata if it ever
 wants the journal) — owned by platform modules, still never by FBs.
+
+The full path for one signal:
+
+1. **Identity**: the generator walks `persist = true` signals in declaration order
+   → block_id 1..N + packed size into the contract table (0/0xFFFF reserved;
+   all-0xFF can never parse as a record, so erased flash is self-marking).
+2. **Packing**: fields little-endian in declaration order — the wire-encode
+   convention, deliberately NOT raw struct memory (stable across compilers and
+   firmware updates). Changing a persistent signal's fields changes its packed
+   len → stored value reads as corrupt → declared default. Honest rule: edit the
+   fields, lose the stored value.
+3. **Mount** (boot): scan both sectors; per block keep the highest-seq record with
+   a valid CRC into a fixed-size RAM table (generator-dimensioned); the write
+   cursor is the first erased word.
+4. **Restore**: generated thread init unpacks the table entry into the signal's
+   cell BEFORE the first dispatch — a restored value is indistinguishable from a
+   computed one.
+5. **Write**: the generated wrapper (which already routes every signal write)
+   additionally stages the new value into the block's RAM-table slot and marks it
+   dirty — a seq-stamped latest-value slot, the xioc pattern, because it is the
+   same problem (single writer thread, single journal reader, never block, latest
+   wins). The COMM THREAD polls dirty flags on its idle path and appends records,
+   rate-limited; the FB thread never touches flash.
+6. **Flush/compact**: NM prepare-to-sleep journals all dirty blocks and is the
+   designated compaction window where erase would otherwise stall a live core.
 
 ## Sim story
 
