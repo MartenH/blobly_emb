@@ -176,6 +176,31 @@ alive — during compaction, during shutdown, during the wake race — because
 ordering is seq, sourcing is the RAM table, and the only slow operation runs in
 hardware.
 
+## Flash portability (what the 32-byte record does and does not assume)
+
+The record size is NOT an H7-ism. The engine's real requirements of a flash:
+
+1. **The program unit must DIVIDE 32** (1/2/4/8/16/32) — a record programmed as
+   several smaller units is still power-cut safe, because ANY missing unit fails
+   the record CRC. That covers AURIX TriCore (PFLASH 32 B pages, DFLASH 8 B —
+   and DFLASH, built for EEPROM emulation at ~125k endurance, is the journal's
+   natural home there), NXP S32K (8 B phrases), RH850 data flash, classic STM32
+   (word program), external NOR (byte program), FRAM (byte, no erase at all —
+   the erase hook degenerates to a fill and wear stops being a topic).
+2. **Append-only satisfies ECC no-overwrite** (H7/AURIX/S32K3/RH850 forbid
+   re-programming inside a word even with identical bits — we never do).
+3. **Blankness is the DRIVER's question.** "Erased reads as 0xFF" is ST/NOR
+   folklore, not physics — Infineon DFLASH blankness is a hardware blank-check,
+   not a readable pattern. FlashOps carries an optional `blank(addr, len)` hook;
+   the engine prefers it and falls back to the FF pattern test.
+4. **Reads must be fault-tolerant on ECC parts**: a power-cut-torn word can
+   raise an ECC double-error ON READ (H7) — the driver absorbs it and returns
+   garbage; the CRC layer rejects it. On the H7 bench checklist, explicitly.
+
+A flash whose program unit EXCEEDS 32 bytes would need a larger record — the
+size becomes a board profile constant at that point; no such internal flash is
+on the roadmap.
+
 ## Where it lives in flash (the honest part)
 
 Erasing a sector STALLS same-bank execution (seconds for 128 KB) — the flash map
