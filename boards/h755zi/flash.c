@@ -108,7 +108,13 @@ int bflash_program(uint32_t addr, const uint8_t *data, uint32_t len) {
 }
 
 /* bflash_read: flash is memory-mapped — a plain copy (the hook exists so the
- * session logic stays testable off-target). */
+ * session logic stays testable off-target).
+ *
+ * BENCH TODO (ECC): a power-cut-torn flash word can raise an ECC double-error
+ * (bus fault / ECCD) ON READ on the H7 — the NvM journal's mount scan will hit
+ * exactly that after a real power cut. This read must become fault-tolerant
+ * (handle/clear ECCD, return the garbage bytes; the CRC layer above rejects
+ * them) before the journal runs on silicon. */
 int bflash_read(uint32_t addr, uint8_t *out, uint32_t len) {
 	const uint8_t *src = (const uint8_t *)addr;
 	for (uint32_t i = 0; i < len; i++) out[i] = src[i];

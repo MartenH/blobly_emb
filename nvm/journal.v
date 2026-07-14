@@ -103,7 +103,7 @@ pub fn (mut j Journal) mount() bool {
 			if !j.ops.read(j.ops.ctx, j.sector_addr(s) + off, &rec[0], rec_size) {
 				return false
 			}
-			if word_erased(&rec[0]) {
+			if j.word_blank(j.sector_addr(s) + off, &rec[0]) {
 				if !past_end {
 					past_end = true
 					cursors[s] = off
@@ -312,7 +312,14 @@ fn (mut j Journal) append_raw(rec &u8) bool {
 	return true
 }
 
-fn word_erased(p &u8) bool {
+// word_blank: is this record slot erased? Prefers the driver's blank-check hook
+// (mandatory on flashes where blankness is not a readable pattern — Infineon
+// DFLASH); falls back to the all-0xFF test for ST/most-NOR erased state. The
+// already-read bytes are passed so the fallback costs no extra read.
+fn (j Journal) word_blank(addr u32, p &u8) bool {
+	if j.ops.blank != unsafe { nil } {
+		return j.ops.blank(j.ops.ctx, addr, rec_size)
+	}
 	for i in 0 .. int(rec_size) {
 		if unsafe { p[i] } != 0xFF {
 			return false
