@@ -39,10 +39,15 @@ pub const routine_check = u16(0xFF01)
 //   - `read` must be fault-tolerant on ECC flashes: a torn (power-cut) word can
 //     raise an ECC double-error on read (STM32H7) — the driver absorbs that and
 //     returns the bytes it can (garbage is fine; CRC layers above reject it).
-//   - `blank` answers "is this range erased?". nil = the caller may use the
-//     all-0xFF pattern test (true for ST/most NOR). On flashes where blankness
-//     is a hardware question, not a readable pattern (Infineon DFLASH
-//     blank-check), the driver MUST provide it.
+//   - `program` failure may still have touched the word: callers must treat a
+//     failed program's address as CONSUMED (never re-program it — illegal on
+//     ECC flash). When one call spans several hardware pages, pages program in
+//     ascending address order, so a cut leaves a prefix + blank/torn tail.
+//   - `blank` answers "is this ENTIRE range erased?" (AND over all pages). nil
+//     = the caller may use the all-0xFF pattern test (ST/most NOR). On flashes
+//     where blankness is a hardware question, not a readable pattern (Infineon
+//     DFLASH blank-check), and on ECC parts where a torn word can READ as
+//     erased while being unprogrammable, the driver MUST provide it.
 pub struct FlashOps {
 pub mut:
 	ctx     voidptr = unsafe { nil }
