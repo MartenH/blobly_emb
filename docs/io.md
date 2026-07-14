@@ -47,11 +47,17 @@ The generator assigns each io point a channel index and emits `gen/io_gen.h` —
 contract header the example's/boards' C glue compiles against. The V side never sees
 pins or peripherals:
 
-- **Inputs**: sampled wait-free. ADC runs timer-triggered with DMA into a
-  latest-value buffer (the IOC philosophy applied to the pin: the loop READS, never
-  waits on a conversion); GPIO reads are direct. The generated per-thread loop
-  publishes into the signal's cell at `period_ms`, before dispatch — FBs see a
-  coherent snapshot as always.
+- **Inputs**: sampled wait-free. The ADC is configured ONCE at init — continuous
+  scan mode over the configured channels, circular DMA into a latest-value array —
+  and free-runs from then on; no timers, no conversion interrupts, no per-sample
+  management (the IOC philosophy applied to the pin: the loop READS, never waits).
+  GPIO reads are direct. Two cadences, deliberately decoupled: conversions free-run
+  (hardware's business), while `period_ms` is the PUBLISH cadence — when the
+  generated loop copies the latest value into the signal's cell, before dispatch,
+  so FBs see a coherent snapshot as always. Equidistant sampling would only matter
+  for signal-processing use — which is a non-goal below. (NM footnote: stopping the
+  free-running ADC/DMA at sleep-entry is platform lifecycle, the same hook family
+  as the transceiver — P4.)
 - **Outputs**: applied after dispatch — GPIO write / PWM compare-register update,
   both near-free. PWM signal value = duty in permille (0..1000); the carrier
   `freq_hz` is config, not data.
