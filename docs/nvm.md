@@ -123,8 +123,9 @@ one comm pass. The escalation ladder when that window must shrink further:
    Detection, not prevention — sometimes the correct system answer.
 
 Wear reality check at 5 records/s continuous: ~190 days of NONSTOP writing per
-sector pair (duty-cycled to 2 h/day ≈ 6 years); deadbands and per-signal intervals
-keep real traffic far below that, and rungs 2/3 exist for the outliers.
+sector pair (duty-cycled to 2 h/day ≈ 6 years); deadbands and the system floor
+keep real traffic far below that, the generation-time wear check (REQ-NVM-010)
+proves it per config, and rungs 2/3 exist for the outliers.
 
 ## Where it lives in flash (the honest part)
 
