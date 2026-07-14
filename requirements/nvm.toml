@@ -73,3 +73,12 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-009"
+title = "Bounded loss window"
+text = "The data lost by a persistent signal on an abrupt power failure shall be bounded by that signal's configured write interval; correctness shall not depend on an orderly shutdown."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"

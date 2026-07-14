@@ -79,6 +79,36 @@ record (one 32-byte flash word — the program granularity, atomic by constructi
   max-rate writing per pair — and `min_write_ms` plus on-change gating keeps real
   traffic orders below that. More sectors in the ring = linear life extension.
 
+## Dynamic data without a clean shutdown (position, odometer, hours)
+
+One persistent signal = one block, and a multi-field signal ({x, y, angle}) is ONE
+block — its fields restore coherently from one atomic record. Group values that
+must survive together into one signal.
+
+For a value that changes continuously on an ECU that may lose power at ANY moment,
+the sleep-entry flush is irrelevant — the rate-limited on-change journal is the
+mechanism: the loss window is exactly the signal's write interval, so the interval
+is a PER-SIGNAL property (`persist_ms = 200`), not just the global default. The
+escalation ladder when the window must shrink:
+
+1. **Deadband in the FB** — quantize before writing, so "changed" means
+   meaningfully changed (app logic, where it belongs).
+2. **Last-gasp write** — the brown-out/PVD interrupt fires while bulk capacitance
+   still holds milliseconds; one 32-byte record append costs tens of µs. One ISR,
+   one append: exact at every power loss. Fits the format unchanged (a later
+   phase, needs board support).
+3. **Backend swap** — the engine sees only FlashOps: FRAM/EEPROM (byte-write, no
+   wear limit) is a board-level backend for signals that write fast forever, not
+   a redesign.
+4. **Re-reference on unclean start** — the sleep flush writes a clean-shutdown
+   marker record; a mount without one means the last session crashed, and the
+   platform can expose that so an FB re-homes instead of trusting a stale value.
+   Detection, not prevention — sometimes the correct system answer.
+
+Wear reality check at 5 records/s continuous: ~190 days of NONSTOP writing per
+sector pair (duty-cycled to 2 h/day ≈ 6 years); deadbands and per-signal intervals
+keep real traffic far below that, and rungs 2/3 exist for the outliers.
+
 ## Where it lives in flash (the honest part)
 
 Erasing a sector STALLS same-bank execution (seconds for 128 KB) — the flash map
