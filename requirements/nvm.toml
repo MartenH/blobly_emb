@@ -118,3 +118,12 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-014"
+title = "Sleep writes preserve the clean claim"
+text = "A value accepted for persistence while the bus is asleep shall leave the storage in the clean-shutdown state: the journal re-establishes the clean marker after each such write, so a power-off at any point during bus sleep mounts clean and restores the newest values. A failed in-sleep write leaves the claim broken (conservative: the values are not durable)."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"

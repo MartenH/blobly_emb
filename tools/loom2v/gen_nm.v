@@ -136,6 +136,15 @@ fn nm_rx_arms(m Model) []string {
 	]
 }
 
+// nm_gate: the producer-side guard expression for REQ-COM-007 (empty without [nm]).
+// NM's own drain never uses it — the state machine owns its wire behaviour.
+fn nm_gate(m Model) string {
+	if m.nm.on {
+		return 'nm_up && '
+	}
+	return ''
+}
+
 fn nm_produce_drain(m Model) []string {
 	if !m.nm.on {
 		return []string{}

@@ -172,3 +172,18 @@ init→run→sleep→wake in `ecu/handoff_test.v` (REQ-ECU-003/004).
 The `comm/nm_can` `Config` + `nm.Timings` are now generated from `ecu.toml` by
 `cfg2v` (`gen.nm_<bus>_*`, see Configuration above). Remaining: a full ECU app
 example running the Conductor, NM, and partitions together end-to-end.
+
+## NM-gated transmission (REQ-COM-007)
+
+While the state machine reports `bus_sleep`, the node transmits NOTHING: the
+generated comm loop computes `nm_up := g_nm.awake()` once per pass and every
+producer — cyclic signal tx, telemetry, the trace and shell drains, the
+cross-core forwarders — gates on it. NM's own drain is exempt (the state
+machine owns its wire behaviour, and nothing needs to go out in sleep anyway:
+the wake path is `request()` or a peers-range rx). Two consequences worth
+knowing: a shell/trace response caught by sleep stays queued in its module and
+goes out after wake (the ISO-TP link does not tick while gated), and
+last-is-best semantics mean wake resumes with CURRENT values — no stale-frame
+flush. Bench: release → total bus silence within one wait-sleep interval;
+peers frame → everything resumes.
+

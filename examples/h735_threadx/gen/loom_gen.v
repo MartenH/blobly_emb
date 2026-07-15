@@ -323,8 +323,12 @@ fn comm_thread_entry(input u32) {
 			}
 		}
 		t1 := C.board_now_us()
+		for ch.tx_ready() && g_nm.produce(t1, mut nm_txf) {
+			ch.send(nm_txf)
+		}
+		nm_up := g_nm.awake() // NM-gated COM tx (REQ-COM-007, post-tick)
 		// PRODUCER: CpuLoad telemetry — reads the FB thread's load scratch
-		if t1 - last_telem >= telem_period_us && ch.tx_ready() {
+		if t1 - last_telem >= telem_period_us && nm_up && ch.tx_ready() {
 			last_telem = t1
 			mut load := [8]u16{}
 			load[0] = u16(C.load_sum_permille()) // sum of the FB threads (one core)
@@ -351,7 +355,7 @@ fn comm_thread_entry(input u32) {
 		}
 		// PRODUCER: external tx signal "Workload" — read the FB-published IOC
 		// cell, encode the value (LE at byte 0), and send it cyclically (tx_ready-gated).
-		if t1 - last_tx_workload >= u64(100000) && ch.tx_ready() {
+		if nm_up && t1 - last_tx_workload >= u64(100000) && ch.tx_ready() {
 			last_tx_workload = t1
 			mut tv_a := u32(0)
 			mut tv_b := u32(0)
@@ -366,14 +370,11 @@ fn comm_thread_entry(input u32) {
 			tf.data[3] = u8((tv_a >> 24) & 0xff)
 			ch.send(tf)
 		}
-		for ch.tx_ready() && g_tm.produce(t1, mut trace_txf) {
+		for nm_up && ch.tx_ready() && g_tm.produce(t1, mut trace_txf) {
 			ch.send(trace_txf)
 		}
-		for ch.tx_ready() && g_sh.produce(t1, mut shell_txf) {
+		for nm_up && ch.tx_ready() && g_sh.produce(t1, mut shell_txf) {
 			ch.send(shell_txf)
-		}
-		for ch.tx_ready() && g_nm.produce(t1, mut nm_txf) {
-			ch.send(nm_txf)
 		}
 	}
 }

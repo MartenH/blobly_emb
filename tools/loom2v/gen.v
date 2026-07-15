@@ -1364,7 +1364,12 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << nm_module_globals(m)
 			if comm_thread_on {
 				glue << '\tg_comm_tcb   [32]u64  // the bus-owning comm thread'
-				glue << '\tg_comm_stack [4096]u8'
+				// The comm thread hosts EVERY module (COM, trace, shell, NM) and — with
+				// [nvm] — the journal put path into the real flash driver. 4 KB was
+				// measured paper-thin on the H755 bench (the v4 image faulted with PSP
+				// 40 B below the DTCM floor mid-put): 8 KB with [nvm], 4 KB without.
+				comm_stack := if m.nvm.on { 8192 } else { 4096 }
+				glue << '\tg_comm_stack [${comm_stack}]u8'
 				// (The load cell is the volatile C scratch in comm_glue.c, via load_pub/load_*.)
 				// Rx accounting: the comm thread counts received frames + keeps the last value, so a
 				// host cansend is observable. The rx CONSUMER of the lean cut (comm-thread-local).
@@ -1632,13 +1637,23 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << duo_trace_rx_arm(m)
 				glue << '\t\t}'
 				glue << '\t\tt1 := C.board_now_us()'
+				// NM drains FIRST: produce() ticks the state machine, so the gate
+				// below reflects THIS pass's state — otherwise the producers get one
+				// free frame past the sleep boundary (codex on emb#135).
+				glue << nm_produce_drain(m)
+				if m.nm.on {
+					// REQ-COM-007: every producer below gates on this — the bus is
+					// SILENT in sleep; NM's own drain is exempt (its state machine
+					// owns its wire behaviour, and the wake announcement must out).
+					glue << '\t\tnm_up := g_nm.awake() // NM-gated COM tx (REQ-COM-007, post-tick)'
+				}
 				for p in producers {
 					glue << p.bus_tick(BusCtx{
 						telem_active: m.telem.on && telem_iface != ''
 						lead:         ["\t\t// PRODUCER: CpuLoad telemetry — reads the FB thread's load scratch"]
 						now:          't1'
 						period:       'telem_period_us'
-						gate:         ' && ch.tx_ready()'
+						gate:         if m.nm.on { ' && nm_up && ch.tx_ready()' } else { ' && ch.tx_ready()' }
 						load:         ['\t\t\tmut load := [8]u16{}', comm_load_line]
 						det_ovr:      comm_det_ovr
 						det_lines:    [comm_det_line]
@@ -1655,7 +1670,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					idx := ioc_idx[si.name] or { 0 }
 					glue << '\t\t// PRODUCER: external tx signal "${si.name}" — read the FB-published IOC'
 					glue << '\t\t// cell, encode the value (LE at byte 0), and send it cyclically (tx_ready-gated).'
-					glue << '\t\tif t1 - last_tx_${snake(si.name)} >= u64(${cyc}) && ch.tx_ready() {'
+					nm_gate := if m.nm.on { 'nm_up && ' } else { '' }
+					glue << '\t\tif ${nm_gate}t1 - last_tx_${snake(si.name)} >= u64(${cyc}) && ch.tx_ready() {'
 					glue << '\t\t\tlast_tx_${snake(si.name)} = t1'
 					glue << '\t\t\tmut tv_a := u32(0)'
 					glue << '\t\t\tmut tv_b := u32(0)'
@@ -1673,7 +1689,6 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << trace_produce_drain(m)
 				glue << shell_produce_drain(m)
-				glue << nm_produce_drain(m)
 				glue << duo_trace_poll(m)
 				glue << duo_produce_drain(m)
 				glue << nvm_service(m, ioc_idx)
