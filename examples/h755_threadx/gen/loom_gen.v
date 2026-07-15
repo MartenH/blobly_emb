@@ -498,6 +498,7 @@ fn comm_thread_entry(input u32) {
 						if g_nvm.put(12844, &nvm_pack[0], 4) {
 							nvm_load_cmd_a = a
 							nvm_load_cmd_b = b
+							nvm_load_cmd_t = t1 // the flush restarts the floor: no wake-churn double put
 						} else {
 							nvm_flush_ok = false // a value is NOT durable: no clean claim
 						}

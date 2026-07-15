@@ -338,9 +338,12 @@ unsigned comm_rx_wait(unsigned ticks)
  * and an intra-bank erase stalls its fetches for the erase duration. The
  * design accepts that because ERASES ONLY RUN IN THE NM QUIET WINDOW (the
  * append path never erases — v2 engine rule; the generated flush runs
- * erase_pending at prepare_bus_sleep, when the node is quiescing). If the M4
- * ever needs to run through sleep windows, the documented alternative is
- * copying its ~30 KB image to RAM at boot. Record APPENDS (32 B programs,
+ * erase_pending at the sleep edges, when the node is quiescing). The M4 is
+ * NOT NM-aware: its handlers WILL overrun during that erase (seconds of
+ * stalled fetches) — accepted for the demo load on a node entering sleep.
+ * A real M4 workload that must run through sleep windows takes the
+ * documented out: copy its ~30 KB image to RAM at boot (docs/nvm.md), or
+ * park it via a duo-cell handshake before the erase. Record APPENDS (32 B programs,
  * ~us) stall the M4 negligibly. DRY-CODED; the bench validates flash.c for
  * boot + NvM in one pass. Driver: boards/h755zi/flash.c (shared with the
  * bootloader — one driver, two customers). */
