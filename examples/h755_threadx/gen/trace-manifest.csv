@@ -31,3 +31,5 @@ peers_hi,0x53f,can0
 # duo signals: name,slot,frame
 M4Count,0,0x201
 M4Stress,1,-
+# nvm signals: name,id,policy
+LoadCmd,0x322c,now
