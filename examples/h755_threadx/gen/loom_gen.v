@@ -483,10 +483,12 @@ fn comm_thread_entry(input u32) {
 			// before power-off (writes DURING bus_sleep remain the app's
 			// risk until NM-gated dispatch lands)
 			if nm_now != nvm_prev_nm && (nm_now == .prepare_bus_sleep || nm_now == .bus_sleep) {
-				// the quiet point: run the deferred erase FIRST so a full
-				// sector with a dirty partner cannot refuse the flush puts
-				g_nvm.erase_pending()
+				// FLUSH FIRST: the capacity gate reserved a full flush set of
+				// headroom, so values go durable in microseconds — never behind
+				// a seconds-long erase (a cut mid-erase must not cost values).
 				mut nvm_flush_ok := true
+				for nvm_pass := 0; nvm_pass < 2; nvm_pass++ {
+					nvm_flush_ok = true
 				{ // flush LoadCmd
 					mut a := u32(0)
 					mut b := u32(0)
@@ -505,10 +507,17 @@ fn comm_thread_entry(input u32) {
 						}
 					}
 				}
+					if nvm_flush_ok || nvm_pass > 0 {
+						break
+					}
+					// recovery pass: a refused put (dirty partner blocking the
+					// inline compact) earns ONE quiet-point erase, then a retry
+					g_nvm.erase_pending()
+				}
 				if nvm_flush_ok {
 					g_nvm.mark_clean() // clean ONLY when every value is durable
 				}
-				g_nvm.erase_pending() // cleanup after any flush-triggered compaction
+				g_nvm.erase_pending() // cleanup AFTER values + marker are durable
 			}
 			nvm_prev_nm = nm_now
 		}

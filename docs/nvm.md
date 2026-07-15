@@ -24,9 +24,13 @@ persist = "now"        # or "shutdown" — INTENT, not a tuning number
 
 Two policies, declared as intent:
 
-- `persist = "shutdown"` — survives orderly shutdowns: flushed at NM sleep-entry
-  only. Settings, learned trims. Near-zero wear. On a crash it loses everything
-  since the last orderly sleep — that is the declared meaning, not a defect.
+- `persist = "shutdown"` — survives orderly shutdowns: flushed at the NM sleep
+  edges only. Settings, learned trims. Near-zero wear. After a CRASH (unclean
+  mount) shutdown signals restore their declared DEFAULTS — a partial final
+  flush must never masquerade as an orderly one, and marker-relative lookup
+  (restore the value from the last COMPLETE epoch) is an engine vNext if a
+  deployment needs crash-surviving shutdown values. That is the declared
+  meaning, not a defect.
 - `persist = "now"` — journaled on write, as fast as the system allows: staged
   wait-free by the wrapper, appended on the comm thread's next idle pass, FLOORED
   by the one global `[nvm] min_write_ms` (the system wear floor). Position,

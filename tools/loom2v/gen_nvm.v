@@ -213,12 +213,15 @@ fn derive_nvm(mut m Model, doc toml.Doc) ([]string, map[string]u16) {
 			'(journal pool = 64 rows, and schema migrations need headroom for stale ' +
 			'ids until prune) — persist less, or grow nvm.max_blocks first')
 	}
-	// capacity + GLOBAL REWRITE HEADROOM, mirroring the engine's runtime gate:
-	// every persistent signal is one record (P2 <= 8 B), live = n + marker.
+	// capacity: the docs/nvm.md headroom rule, enforced at generation — the
+	// worst-case sleep-edge flush (EVERY signal dirty + the clean marker) must
+	// fit in the post-compact free space, so the flush NEVER needs an erase:
+	// sector >= live set (n + marker) + flush set (n + marker) = 2n + 2.
 	live := u32(names.len) + 1
-	if live + 1 > m.nvm.sector_records {
-		panic('loom2v: ${names.len} persistent signals + the marker exceed the sector ' +
-			'(${m.nvm.sector_records} records) — grow the sectors or persist less')
+	if live + live > m.nvm.sector_records {
+		panic('loom2v: ${names.len} persistent signals need ${live + live} records of ' +
+			'sector headroom (live set + a full sleep-edge flush, docs/nvm.md) but ' +
+			'[nvm] sector_records = ${m.nvm.sector_records} — grow the sectors or persist less')
 	}
 	// WEAR (REQ-NVM-010): worst case, every "now" signal writes at its writer's
 	// activation rate, floored by min_write_ms. Records/hour fill sectors;
@@ -391,9 +394,16 @@ fn nvm_boot_lines(m Model, ioc_idx map[string]int) []string {
 		n := snake(sname)
 		packed := si.packed_size()
 		cell := ioc_idx[sname] or { 0 }
+		mut cond := 'g_nvm.get(${id}, &g_nvmres_${n}[0], ${packed + 1}) == ${packed}'
+		if si.persist == 'shutdown' {
+			// a "shutdown" value is DEFINED as the last ORDERLY shutdown's: a
+			// partial final flush (cut between a put and the marker) must not
+			// masquerade as one — unclean mount -> declared default.
+			cond = 'g_nvm.clean && ${cond}'
+		}
 		g << '\t\t// cap = packed+1: an OVERLONG stored record (schema drift under a'
 		g << '\t\t// pinned id) truncates to packed+1 != packed and is refused'
-		g << '\t\tif g_nvm.get(${id}, &g_nvmres_${n}[0], ${packed + 1}) == ${packed} {'
+		g << '\t\tif ${cond} {'
 		g << '\t\t\tg_nvmres_${n}_n = ${packed}'
 		g << '\t\t\tC.ioc_pub(${cell}, ${nvm_unpack_expr(si, 0, 'g_nvmres_${n}')}, ${nvm_unpack_expr(si,
 			1, 'g_nvmres_${n}')})'
@@ -511,10 +521,12 @@ fn nvm_service(m Model, ioc_idx map[string]int) []string {
 		g << '\t\t\t// before power-off (writes DURING bus_sleep remain the app\'s'
 		g << '\t\t\t// risk until NM-gated dispatch lands)'
 		g << '\t\t\tif nm_now != nvm_prev_nm && (nm_now == .prepare_bus_sleep || nm_now == .bus_sleep) {'
-		g << '\t\t\t\t// the quiet point: run the deferred erase FIRST so a full'
-		g << '\t\t\t\t// sector with a dirty partner cannot refuse the flush puts'
-		g << '\t\t\t\tg_nvm.erase_pending()'
+		g << '\t\t\t\t// FLUSH FIRST: the capacity gate reserved a full flush set of'
+		g << '\t\t\t\t// headroom, so values go durable in microseconds — never behind'
+		g << '\t\t\t\t// a seconds-long erase (a cut mid-erase must not cost values).'
 		g << '\t\t\t\tmut nvm_flush_ok := true'
+		g << '\t\t\t\tfor nvm_pass := 0; nvm_pass < 2; nvm_pass++ {'
+		g << '\t\t\t\t\tnvm_flush_ok = true'
 		for sname in m.nvm_names {
 			si := m.sig_of[sname] or { continue }
 			n := snake(sname)
@@ -536,10 +548,17 @@ fn nvm_service(m Model, ioc_idx map[string]int) []string {
 			g << '\t\t\t\t\t}'
 			g << '\t\t\t\t}'
 		}
+		g << '\t\t\t\t\tif nvm_flush_ok || nvm_pass > 0 {'
+		g << '\t\t\t\t\t\tbreak'
+		g << '\t\t\t\t\t}'
+		g << '\t\t\t\t\t// recovery pass: a refused put (dirty partner blocking the'
+		g << '\t\t\t\t\t// inline compact) earns ONE quiet-point erase, then a retry'
+		g << '\t\t\t\t\tg_nvm.erase_pending()'
+		g << '\t\t\t\t}'
 		g << '\t\t\t\tif nvm_flush_ok {'
 		g << '\t\t\t\t\tg_nvm.mark_clean() // clean ONLY when every value is durable'
 		g << '\t\t\t\t}'
-		g << '\t\t\t\tg_nvm.erase_pending() // cleanup after any flush-triggered compaction'
+		g << '\t\t\t\tg_nvm.erase_pending() // cleanup AFTER values + marker are durable'
 		g << '\t\t\t}'
 		g << '\t\t\tnvm_prev_nm = nm_now'
 		g << '\t\t}'
