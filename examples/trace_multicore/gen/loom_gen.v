@@ -222,9 +222,6 @@ fn partition_trace(chp can.Channel, base voidptr, ncores int) {
 	mut ch := chp
 	mut rings := unsafe { &trace.TraceBuffer(base) } // rings[0 .. ncores]
 	mut link := isotp.Link{}
-	link.init_defaults() // HAND-PATCHED on the stale gen (emb#134): Link lost its
-	// field defaults (the _vinit rule) and REGENERATING this example breaks its
-	// main.v — the host-runner emitter contract drifted since this gen was pinned.
 	mut dumpbuf := [520]u8{} // one block: header + records
 	mut pending := u16(0) // cores whose frozen ring still needs streaming
 	mut seq := u64(0)     // command generation — the owner is the SOLE writer of cmd cells

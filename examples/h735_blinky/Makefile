@@ -71,3 +71,7 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all flash debug gdbserver gdb clean
+
+# a failed recipe (the vinit lint) must not leave its half-made target: GNU make only
+# deletes targets on error when asked (make manual, Errors in Recipes)
+.DELETE_ON_ERROR:
