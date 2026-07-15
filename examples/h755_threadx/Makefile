@@ -36,6 +36,11 @@ CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
           -I. -Igen $(BOARD_INCS) -I$(REPO)/driver/can -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
+# APP_LINK=boot: link at APP_VECTORS (bootmap.h APP_BASE 0x08020000 + 0x400) for the
+# bootloader chain; wrap the .bin with tools/mkimage --pad-vectors before flashing.
+ifeq ($(APP_LINK),boot)
+LDFLAGS += -Wl,--defsym,__flash_base__=0x08020400 -Wl,--defsym,__flash_len__=0xDFC00
+endif
 
 BUILD    = build
 TX_A     = $(BUILD)/tx.a
