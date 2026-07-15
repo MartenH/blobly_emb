@@ -15,7 +15,10 @@
 //     `nvm_id = N` pin suggestion.
 //   - the WEAR CHECK (REQ-NVM-010): worst-case records/hour from each writer's
 //     period vs the floor, against sector geometry + endurance — a config that
-//     cannot survive `min_years` fails generation with the math.
+//     cannot survive `min_years` fails generation with the math. Model notes:
+//     sleep-edge flush records (per sleep cycle) are unmodeled (unknowable at
+//     generation), while the erase formula is ~2x conservative (fills
+//     alternate the pair's sectors) — the safe direction partly offsets.
 //   - the emitted wiring: journal mount + prune + restore staging BEFORE the
 //     kernel starts (single-threaded window), per-thread cell restore, wrapper
 //     staging through intra-core IOC cells (single-writer, wait-free, proven),
@@ -152,6 +155,11 @@ fn derive_nvm(mut m Model, doc toml.Doc) ([]string, map[string]u16) {
 					'persist supports unsigned scalar fields (u8/u16/u32)')
 			}
 		}
+		// PIN CAVEAT: a pinned id keeps its identity ACROSS layout changes —
+		// the runtime guard is only the packed-length check, so an equal-size
+		// field change (u32 -> u16+u16) reinterprets old bytes silently. Pin
+		// ONLY to resolve hash collisions, and BUMP THE PIN when editing the
+		// fields (the hash path invalidates automatically; pins are manual).
 		if si.nvm_id == 0xFFFF {
 			panic('loom2v: signal "${sname}" pins nvm_id = 65535 — 0xFFFF is reserved ' +
 				'(erased-like) and 0 is the clean marker; pin within 1..65534')
@@ -186,11 +194,13 @@ fn derive_nvm(mut m Model, doc toml.Doc) ([]string, map[string]u16) {
 	mut recs_per_hour := f64(0)
 	for sname in names {
 		si := m.sig_of[sname] or { continue }
+		// the one-writer validation applies to EVERY persistent signal (the
+		// staging cell is SPSC regardless of policy); the rate feeds wear
+		// only for "now"
+		mut eff := writer_period_ms(doc, sname)
 		if si.persist != 'now' {
 			continue
 		}
-		period_ms := writer_period_ms(doc, sname)
-		mut eff := period_ms
 		if eff < m.nvm.min_write_ms {
 			eff = m.nvm.min_write_ms
 		}
@@ -255,6 +265,7 @@ fn nvm_c_decls(m Model) []string {
 		'fn C.bflash_erase(addr u32, size u32) int',
 		'fn C.bflash_program(addr u32, data &u8, len u32) int',
 		'fn C.bflash_read(addr u32, out &u8, len u32) int',
+		'fn C.bflash_blank(addr u32, len u32) int',
 	]
 }
 
@@ -279,6 +290,10 @@ fn nvm_flash_wrappers(m Model) []string {
 		'',
 		'fn nvm_fl_erase(ctx voidptr, addr u32, size u32) bool {',
 		'\treturn C.bflash_erase(addr, size) != 0',
+		'}',
+		'',
+		'fn nvm_fl_blank(ctx voidptr, addr u32, len u32) bool {',
+		'\treturn C.bflash_blank(addr, len) != 0',
 		'}',
 		'',
 		'fn nvm_fl_program(ctx voidptr, addr u32, data &u8, len u32) bool {',
@@ -306,13 +321,20 @@ fn nvm_boot_lines(m Model, ioc_idx map[string]int) []string {
 	g << '\t\terase:   nvm_fl_erase'
 	g << '\t\tprogram: nvm_fl_program'
 	g << '\t\tread:    nvm_fl_read'
+	g << '\t\tblank:   nvm_fl_blank // ECC-aware: torn words never become the frontier'
 	g << '\t}'
 	g << '\tg_nvm.cfg = nvm.SectorCfg{'
 	g << '\t\ta_addr: C.nvm_map_a()'
 	g << '\t\tb_addr: C.nvm_map_b()'
 	g << '\t\tsize:   C.nvm_map_size()'
 	g << '\t}'
-	g << '\tif g_nvm.mount() {'
+	g << '\tif g_nvm.mount() && g_nvm.slots() != ${m.nvm.sector_records} {'
+	g << '\t\t// the [nvm] sector_records claim (the wear/capacity proof\'s input)'
+	g << '\t\t// does not match the REAL map — refuse service (detectable: every'
+	g << '\t\t// put fails, no clean claim) rather than run on a voided proof'
+	g << '\t\tg_nvm.mounted = false'
+	g << '\t}'
+	g << '\tif g_nvm.mounted {'
 	mut keep := []string{}
 	for sname in m.nvm_names {
 		keep << 'u16(${m.nvm_ids[sname] or { 0 }})'
@@ -394,7 +416,7 @@ fn nvm_comm_locals(m Model, ioc_idx map[string]int) []string {
 		g << '\tmut nvm_${n}_a := u32(0)'
 		g << '\tmut nvm_${n}_b := u32(0)'
 		g << '\tC.ioc_get(${cell}, &nvm_${n}_a, &nvm_${n}_b)'
-		g << '\tmut nvm_${n}_t := u64(0)'
+		g << '\tmut nvm_${n}_t := u64(0) // first change persists after ONE floor from boot: chosen pacing'
 	}
 	if m.nm.on {
 		g << '\tmut nvm_prev_nm := g_nm.state()'
@@ -437,7 +459,14 @@ fn nvm_service(m Model, ioc_idx map[string]int) []string {
 	if m.nm.on {
 		g << '\t\t{ // persist flush at the NM quiet point (docs/nvm.md choreography)'
 		g << '\t\t\tnm_now := g_nm.state()'
-		g << '\t\t\tif nm_now == .prepare_bus_sleep && nvm_prev_nm != .prepare_bus_sleep {'
+		g << '\t\t\t// flush on BOTH sleep edges: prepare entry AND bus_sleep entry —'
+		g << '\t\t\t// a write landing inside the wait-sleep window still flushes'
+		g << '\t\t\t// before power-off (writes DURING bus_sleep remain the app\'s'
+		g << '\t\t\t// risk until NM-gated dispatch lands)'
+		g << '\t\t\tif nm_now != nvm_prev_nm && (nm_now == .prepare_bus_sleep || nm_now == .bus_sleep) {'
+		g << '\t\t\t\t// the quiet point: run the deferred erase FIRST so a full'
+		g << '\t\t\t\t// sector with a dirty partner cannot refuse the flush puts'
+		g << '\t\t\t\tg_nvm.erase_pending()'
 		g << '\t\t\t\tmut nvm_flush_ok := true'
 		for sname in m.nvm_names {
 			si := m.sig_of[sname] or { continue }
@@ -462,7 +491,7 @@ fn nvm_service(m Model, ioc_idx map[string]int) []string {
 		g << '\t\t\t\tif nvm_flush_ok {'
 		g << '\t\t\t\t\tg_nvm.mark_clean() // clean ONLY when every value is durable'
 		g << '\t\t\t\t}'
-		g << '\t\t\t\tg_nvm.erase_pending() // the deferred erase, in the quiet window'
+		g << '\t\t\t\tg_nvm.erase_pending() // cleanup after any flush-triggered compaction'
 		g << '\t\t\t}'
 		g << '\t\t\tnvm_prev_nm = nm_now'
 		g << '\t\t}'

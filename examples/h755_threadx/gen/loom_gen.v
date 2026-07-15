@@ -89,6 +89,7 @@ fn C.nvm_map_size() u32
 fn C.bflash_erase(addr u32, size u32) int
 fn C.bflash_program(addr u32, data &u8, len u32) int
 fn C.bflash_read(addr u32, out &u8, len u32) int
+fn C.bflash_blank(addr u32, len u32) int
 fn C.duo_trace_req(u32) // post arm(1)/snapshot(2) to the satellite (duo.h dtrace cell)
 fn C.duo_trace_ready() int
 fn C.duo_trace_count() u32
@@ -337,7 +338,7 @@ fn comm_thread_entry(input u32) {
 	mut nvm_load_cmd_a := u32(0)
 	mut nvm_load_cmd_b := u32(0)
 	C.ioc_get(2, &nvm_load_cmd_a, &nvm_load_cmd_b)
-	mut nvm_load_cmd_t := u64(0)
+	mut nvm_load_cmd_t := u64(0) // first change persists after ONE floor from boot: chosen pacing
 	mut nvm_prev_nm := g_nm.state()
 	mut nvm_pack := [8]u8{}
 	g_tm.set_remote(u8(1), &g_duo_trace_ring[0], 256) // satellite blocks ride our dump link
@@ -476,7 +477,14 @@ fn comm_thread_entry(input u32) {
 		}
 		{ // persist flush at the NM quiet point (docs/nvm.md choreography)
 			nm_now := g_nm.state()
-			if nm_now == .prepare_bus_sleep && nvm_prev_nm != .prepare_bus_sleep {
+			// flush on BOTH sleep edges: prepare entry AND bus_sleep entry —
+			// a write landing inside the wait-sleep window still flushes
+			// before power-off (writes DURING bus_sleep remain the app's
+			// risk until NM-gated dispatch lands)
+			if nm_now != nvm_prev_nm && (nm_now == .prepare_bus_sleep || nm_now == .bus_sleep) {
+				// the quiet point: run the deferred erase FIRST so a full
+				// sector with a dirty partner cannot refuse the flush puts
+				g_nvm.erase_pending()
 				mut nvm_flush_ok := true
 				{ // flush LoadCmd
 					mut a := u32(0)
@@ -498,7 +506,7 @@ fn comm_thread_entry(input u32) {
 				if nvm_flush_ok {
 					g_nvm.mark_clean() // clean ONLY when every value is durable
 				}
-				g_nvm.erase_pending() // the deferred erase, in the quiet window
+				g_nvm.erase_pending() // cleanup after any flush-triggered compaction
 			}
 			nvm_prev_nm = nm_now
 		}
@@ -529,6 +537,10 @@ fn nvm_fl_erase(ctx voidptr, addr u32, size u32) bool {
 	return C.bflash_erase(addr, size) != 0
 }
 
+fn nvm_fl_blank(ctx voidptr, addr u32, len u32) bool {
+	return C.bflash_blank(addr, len) != 0
+}
+
 fn nvm_fl_program(ctx voidptr, addr u32, data &u8, len u32) bool {
 	return C.bflash_program(addr, data, len) != 0
 }
@@ -545,13 +557,20 @@ pub fn boot() {
 		erase:   nvm_fl_erase
 		program: nvm_fl_program
 		read:    nvm_fl_read
+		blank:   nvm_fl_blank // ECC-aware: torn words never become the frontier
 	}
 	g_nvm.cfg = nvm.SectorCfg{
 		a_addr: C.nvm_map_a()
 		b_addr: C.nvm_map_b()
 		size:   C.nvm_map_size()
 	}
-	if g_nvm.mount() {
+	if g_nvm.mount() && g_nvm.slots() != 4096 {
+		// the [nvm] sector_records claim (the wear/capacity proof's input)
+		// does not match the REAL map — refuse service (detectable: every
+		// put fails, no clean claim) rather than run on a voided proof
+		g_nvm.mounted = false
+	}
+	if g_nvm.mounted {
 		keep := [u16(12844)]!
 		g_nvm.prune(&keep[0], 1)
 		if g_nvm.get(12844, &g_nvmres_load_cmd[0], 8) == 4 {

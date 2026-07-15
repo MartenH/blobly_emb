@@ -120,7 +120,9 @@ fn (j Journal) sector_addr(s int) u32 {
 	return if s == 0 { j.cfg.a_addr } else { j.cfg.b_addr }
 }
 
-fn (j Journal) slots() u32 {
+// slots: the sector capacity in records — pub so generated code can verify
+// the config's geometry claim against the REAL map at boot.
+pub fn (j Journal) slots() u32 {
 	return j.cfg.size / rec_size
 }
 
