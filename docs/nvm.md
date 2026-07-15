@@ -90,12 +90,9 @@ record (one 32-byte flash word — the program granularity, atomic by constructi
   records). Wear levels perfectly by construction (alternating erase); a wider
   ring is the linear-life upgrade. Whether the live set fits after compaction is
   a GENERATION-TIME check (the generator knows N) — never a runtime failure.
-  Values > 20 bytes are REFUSED (put() at runtime; a generation-time
-  size gate in P2 — split the signal instead: values that don't change together
-  don't belong in one atomic unit). The format RESERVES chained records (same
-  block_id/seq, part index in len's high bits) but v1 does not implement them:
-  a chain loses single-record atomicity and needs its own all-parts-or-previous
-  mount rule + fuzz — it does not exist until a value earns it.
+  Values > 20 bytes are REFUSED by v1 (put() at runtime; a
+  generation-time size gate in P2). Chained values are DESIGNED for the v2
+  engine slice — see "Chained values" below.
 - **Wear math** (H7: 128 KB sectors, 10k cycles): 4096 records/sector. Even one
   record per second sustained = one erase per ~68 min ≈ 1.3 years of CONTINUOUS
   max-rate writing per pair — and `min_write_ms` plus on-change gating keeps real
@@ -204,6 +201,36 @@ The record size is NOT an H7-ism. The engine's real requirements of a flash:
 A flash whose program unit EXCEEDS 32 bytes would need a larger record — the
 size becomes a board profile constant at that point; no such internal flash is
 on the roadmap.
+
+## Chained values (v2, designed 2026-07-15 — ISO-TP-shaped)
+
+The 20-byte cell is right for signals and wrong as a hard wall. v2 chains
+records the way ISO-TP frames a message (no FC — storage has no flow to
+control):
+
+- one logical write = ONE seq shared by all its parts (block_id identical);
+- part index in len's high 5 bits, part length in the low bits →
+  up to 31 parts ≈ 570 B per value;
+- part 0 (the FF) carries total_len in its first payload bytes;
+- the LAST part's final 4 bytes = CRC32 over the ASSEMBLED value — written
+  last, the valid-mark-last rule one level up. Mount groups by (block, seq)
+  and takes the highest seq with ALL parts present and the whole-CRC valid;
+  a power cut mid-chain leaves an incomplete group and the previous complete
+  chain wins — the v1 fallback rule, unchanged in spirit.
+
+Engine consequences (why this is a slice, not a patch): the RAM table stores
+a REFERENCE (sector + offset + len) for chained blocks instead of inlining
+(no-alloc; get() assembles from flash — append-only flash is immutable, so
+the copy-from-table rule is not violated: it guarded against STALE flash, and
+a chain reference is by definition the newest). Compaction/re-homing copy
+part-by-part under one new seq; live/free/reserve math counts parts; the
+power-cut fuzz gains a dimension (cuts at and inside every part). Lands
+together with the keyed table (schema-identity hashes) — same Entry/mount
+rework, one review loop.
+
+Consequence for diagnostics: ~570 B chains likely dissolve the second
+wider-record journal — freeze frames chain in the same engine; a separate
+SectorCfg region remains available purely for wear isolation.
 
 ## v2 mount: sector epoch headers (designed, not built)
 
