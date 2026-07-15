@@ -47,7 +47,7 @@ fn tf_read(ctx voidptr, addr u32, out &u8, len u32) bool {
 }
 
 fn new_prog(mut f TestFlash) Prog {
-	return Prog{
+	mut p := Prog{
 		flash:    FlashOps{
 			ctx:     f
 			erase:   tf_erase
@@ -57,6 +57,8 @@ fn new_prog(mut f TestFlash) Prog {
 		app_base: t_base
 		app_size: t_size
 	}
+	p.init() // the target-required seed/session path, exercised by every test
+	return p
 }
 
 // ask: one request/response exchange; returns the response bytes.

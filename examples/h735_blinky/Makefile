@@ -36,7 +36,7 @@ all: $(BUILD)/blinky.bin
 # 1) transpile the V superloop to freestanding C (no host compile/link)
 $(BUILD)/blinky.c: main.v | $(BUILD)
 	$(V) $(VDBG) -freestanding -gc none -o $@ main.v
-	$(REPO)/scripts/lint_vinit.sh $@
+	../../scripts/lint_vinit.sh $@
 
 # 2) cross-compile + link the V output with the startup and board shim
 $(BUILD)/blinky.elf: $(CSRC) linker.ld | $(BUILD)
