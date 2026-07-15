@@ -1,4 +1,4 @@
-# Persistence (NvM) — design
+# Persistence (non-volatile storage) — design
 
 > Status: DESIGN (2026-07-14). Requirements: `requirements/nvm.toml` (draft, deriving
 > from SYS-REQ-NVM-001). Nothing is built; this page is the shape to argue with.
@@ -140,11 +140,11 @@ time to make space — is closed structurally, not handled:
   before shutdown needs the room. The sleep flush therefore never erases — it is
   N microsecond-scale appends into space guaranteed to exist. GC-at-shutdown is
   not a case to handle; it is a state that cannot be reached.
-- **Quiesce ordering, NvM holds the door.** Dispatch stops → flush dirty →
+- **Quiesce ordering, storage holds the door.** Dispatch stops → flush dirty →
   clean marker → (compact now if the watermark says so — on same-bank boards this
   IS the designated erase window; other-bank boards already compacted at runtime)
-  → NvM-done → only then power down. NM coordinates the BUS sleep on its own
-  timeline; the LOCAL power-down waits on NvM-done. A power cut anywhere in the
+  → storage-done → only then power down. NM coordinates the BUS sleep on its own
+  timeline; the LOCAL power-down waits on storage-done. A power cut anywhere in the
   sequence converges by the format rules above.
 - **Writes are never forbidden — including during shutdown.** Appends are legal
   whenever cursor space exists, and headroom guarantees it does. The wake-up race
