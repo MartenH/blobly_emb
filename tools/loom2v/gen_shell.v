@@ -160,7 +160,9 @@ fn shell_produce_drain(m Model) []string {
 		return []string{}
 	}
 	return [
-		'\t\tfor ch.tx_ready() && g_sh.produce(t1, mut shell_txf) {',
+		// REQ-COM-007: silent in sleep — the response stays queued in the module
+		// and goes out after wake (the link does not tick while gated).
+		'\t\tfor ${nm_gate(m)}ch.tx_ready() && g_sh.produce(t1, mut shell_txf) {',
 		'\t\t\tch.send(shell_txf)',
 		'\t\t}',
 	]

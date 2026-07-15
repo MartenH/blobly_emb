@@ -507,6 +507,16 @@ fn nvm_service(m Model, ioc_idx map[string]int) []string {
 		g << '\t\t\t\tif g_nvm.put(${id}, &nvm_pack[0], ${si.packed_size()}) {'
 		g << '\t\t\t\t\tnvm_${n}_a = a'
 		g << '\t\t\t\t\tnvm_${n}_b = b'
+		if m.nm.on {
+			// REQ-NVM-014: an in-sleep write re-runs the FULL flush choreography —
+			// shutdown-class dirt goes durable too before the marker is re-laid,
+			// so clean never lies about a mixed config (codex on emb#135); a
+			// power-off at any point during bus_sleep then mounts clean with the
+			// newest values. The prepare/entry edges have their own invocation.
+			g << '\t\t\t\t\tif g_nm.state() == .bus_sleep {'
+			g << nvm_flush_choreo(m, ioc_idx, '\t\t\t\t\t\t')
+			g << '\t\t\t\t\t}'
+		}
 		g << '\t\t\t\t}'
 		g << '\t\t\t\tnvm_${n}_t = t1 // failed puts wait the floor too: a burned'
 		g << '\t\t\t\t// slot per COMM PASS would be a wear storm; per FLOOR is policy'
@@ -524,44 +534,79 @@ fn nvm_service(m Model, ioc_idx map[string]int) []string {
 		g << '\t\t\t\t// FLUSH FIRST: the capacity gate reserved a full flush set of'
 		g << '\t\t\t\t// headroom, so values go durable in microseconds — never behind'
 		g << '\t\t\t\t// a seconds-long erase (a cut mid-erase must not cost values).'
-		g << '\t\t\t\tmut nvm_flush_ok := true'
-		g << '\t\t\t\tfor nvm_pass := 0; nvm_pass < 2; nvm_pass++ {'
-		g << '\t\t\t\t\tnvm_flush_ok = true'
-		for sname in m.nvm_names {
-			si := m.sig_of[sname] or { continue }
-			n := snake(sname)
-			cell := ioc_idx[sname] or { 0 }
-			id := m.nvm_ids[sname] or { 0 }
-			g << '\t\t\t\t{ // flush ${sname}'
-			g << '\t\t\t\t\tmut a := u32(0)'
-			g << '\t\t\t\t\tmut b := u32(0)'
-			g << '\t\t\t\t\tC.ioc_get(${cell}, &a, &b)'
-			g << '\t\t\t\t\tif a != nvm_${n}_a || b != nvm_${n}_b {'
-			g << nvm_pack_lines(si, 6)
-			g << '\t\t\t\t\t\tif g_nvm.put(${id}, &nvm_pack[0], ${si.packed_size()}) {'
-			g << '\t\t\t\t\t\t\tnvm_${n}_a = a'
-			g << '\t\t\t\t\t\t\tnvm_${n}_b = b'
-			g << '\t\t\t\t\t\t\tnvm_${n}_t = t1 // the flush restarts the floor: no wake-churn double put'
-			g << '\t\t\t\t\t\t} else {'
-			g << '\t\t\t\t\t\t\tnvm_flush_ok = false // a value is NOT durable: no clean claim'
-			g << '\t\t\t\t\t\t}'
-			g << '\t\t\t\t\t}'
-			g << '\t\t\t\t}'
-		}
-		g << '\t\t\t\t\tif nvm_flush_ok || nvm_pass > 0 {'
-		g << '\t\t\t\t\t\tbreak'
-		g << '\t\t\t\t\t}'
-		g << '\t\t\t\t\t// recovery pass: a refused put (dirty partner blocking the'
-		g << '\t\t\t\t\t// inline compact) earns ONE quiet-point erase, then a retry'
-		g << '\t\t\t\t\tg_nvm.erase_pending()'
-		g << '\t\t\t\t}'
-		g << '\t\t\t\tif nvm_flush_ok {'
-		g << '\t\t\t\t\tg_nvm.mark_clean() // clean ONLY when every value is durable'
-		g << '\t\t\t\t}'
-		g << '\t\t\t\tg_nvm.erase_pending() // cleanup AFTER values + marker are durable'
+		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t\t')
 		g << '\t\t\t}'
 		g << '\t\t\tnvm_prev_nm = nm_now'
 		g << '\t\t}'
+	}
+	return g
+}
+
+
+// nvm_flush_choreo: the flush-first choreography — 2 passes (one erase-recovery),
+// every persist signal flushed, clean marked ONLY when all values are durable,
+// deferred erase last. Emitted at the NM edges AND after an in-sleep put
+// (REQ-NVM-014: the marker must cover ALL persist dirt — a "now" write during
+// sleep flushes shutdown-class changes too before claiming clean). A failed
+// mark leaves the claim broken (values durable, conservative); the next
+// in-sleep write or edge retries it.
+fn nvm_flush_choreo(m Model, ioc_idx map[string]int, ind string) []string {
+	mut g := []string{}
+	g << '${ind}mut nvm_flush_ok := true'
+	g << '${ind}for nvm_pass := 0; nvm_pass < 2; nvm_pass++ {'
+	g << '${ind}\tnvm_flush_ok = true'
+	for sname in m.nvm_names {
+		si := m.sig_of[sname] or { continue }
+		n := snake(sname)
+		cell := ioc_idx[sname] or { 0 }
+		id := m.nvm_ids[sname] or { 0 }
+		g << '${ind}{ // flush ${sname}'
+		g << '${ind}\tmut fa := u32(0)'
+		g << '${ind}\tmut fb := u32(0)'
+		g << '${ind}\tC.ioc_get(${cell}, &fa, &fb)'
+		g << '${ind}\tif fa != nvm_${n}_a || fb != nvm_${n}_b {'
+		g << nvm_pack_lines_named(si, ind + '\t\t', 'fa', 'fb')
+		g << '${ind}\t\tif g_nvm.put(${id}, &nvm_pack[0], ${si.packed_size()}) {'
+		g << '${ind}\t\t\tnvm_${n}_a = fa'
+		g << '${ind}\t\t\tnvm_${n}_b = fb'
+		g << '${ind}\t\t\tnvm_${n}_t = t1 // the flush restarts the floor: no wake-churn double put'
+		g << '${ind}\t\t} else {'
+		g << '${ind}\t\t\tnvm_flush_ok = false // a value is NOT durable: no clean claim'
+		g << '${ind}\t\t}'
+		g << '${ind}\t}'
+		g << '${ind}}'
+	}
+	g << '${ind}\tif nvm_flush_ok || nvm_pass > 0 {'
+	g << '${ind}\t\tbreak'
+	g << '${ind}\t}'
+	g << '${ind}\t// recovery pass: a refused put (dirty partner blocking the'
+	g << '${ind}\t// inline compact) earns ONE quiet-point erase, then a retry'
+	g << '${ind}\tg_nvm.erase_pending()'
+	g << '${ind}}'
+	g << '${ind}if nvm_flush_ok {'
+	g << '${ind}\tg_nvm.mark_clean() // clean ONLY when every value is durable (a failed'
+	g << '${ind}\t// mark stays unclean: retried on the next in-sleep write or edge)'
+	g << '${ind}}'
+	g << '${ind}g_nvm.erase_pending() // cleanup AFTER values + marker are durable'
+	return g
+}
+
+// nvm_pack_lines_named: pack from named staging vars (the flush uses fa/fb so it can
+// nest inside the "now"-put block whose a/b are live).
+fn nvm_pack_lines_named(si SigInfo, ind string, va string, vb string) []string {
+	mut g := []string{}
+	mut off := 0
+	for fi, f in si.fields {
+		src := if fi == 0 { va } else { vb }
+		w := field_width(f.typ)
+		for byi in 0 .. w {
+			if byi == 0 {
+				g << '${ind}nvm_pack[${off}] = u8(${src})'
+			} else {
+				g << '${ind}nvm_pack[${off}] = u8(${src} >> ${8 * byi})'
+			}
+			off++
+		}
 	}
 	return g
 }

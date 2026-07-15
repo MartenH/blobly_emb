@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 115 | 63 | 5 | 47 | 0 |
+| 117 | 63 | 5 | 49 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -41,6 +41,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-004 | QM | test | uncovered | — |
 | REQ-COM-005 | QM | test | uncovered | — |
 | REQ-COM-006 | QM | test | verified | com_test.v (pass) |
+| REQ-COM-007 | QM | test | uncovered | — |
 | REQ-DIAG-001 | QM | test | uncovered | — |
 | REQ-DIAG-002 | QM | test | uncovered | — |
 | REQ-E2E-001 | B | test | uncovered | — |
@@ -89,6 +90,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NVM-011 | QM | analysis | uncovered | — |
 | REQ-NVM-012 | QM | test | uncovered | — |
 | REQ-NVM-013 | QM | test | verified | journal_test.v (pass) |
+| REQ-NVM-014 | QM | test | uncovered | — |
 | REQ-SEC-001 | QM | test | uncovered | — |
 | REQ-SEC-002 | QM | test | uncovered | — |
 | REQ-SEC-003 | QM | test | uncovered | — |
@@ -161,6 +163,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-004 | | | | | | | | | |
 | REQ-COM-005 | | | | | | | | | |
 | REQ-COM-006 | | | | | | | ✓ | | |
+| REQ-COM-007 | | | | | | | | | |
 | REQ-DIAG-001 | | | | | | | | | |
 | REQ-DIAG-002 | | | | | | | | | |
 | REQ-E2E-001 | | | | | | | | | |
@@ -209,6 +212,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NVM-011 | | | | | | | | | |
 | REQ-NVM-012 | | | | | | | | | |
 | REQ-NVM-013 | | | | | | | ✓ | | |
+| REQ-NVM-014 | | | | | | | | | |
 | REQ-SEC-001 | | | | | | | | | |
 | REQ-SEC-002 | | | | | | | | | |
 | REQ-SEC-003 | | | | | | | | | |

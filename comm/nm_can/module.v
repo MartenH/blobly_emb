@@ -84,6 +84,12 @@ pub fn (mut m NmModule) release() {
 	m.sm.release()
 }
 
+// awake reports whether the network is up (anything but bus_sleep) — the
+// producer gate for NM-gated COM tx (REQ-COM-007).
+pub fn (m &NmModule) awake() bool {
+	return m.sm.awake()
+}
+
 pub fn (m NmModule) state() nm.State {
 	return m.sm.state
 }
