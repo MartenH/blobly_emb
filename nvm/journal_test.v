@@ -725,13 +725,18 @@ fn test_chain_roundtrip() {
 	mut j2 := remount(mut f)
 	check_big(j2, 10, 21, 0x11)
 	check_big(j2, 11, 100, 0x22)
-	// ceiling in a fresh journal (634 B = 32 parts = the whole test sector)
+	// GEOMETRY ceiling: this test sector holds 32 records, and the live set
+	// (+ the marker slot) must always fit one sector — so 614 B (31 parts) is
+	// the largest storable value HERE, and 634 (the FORMAT ceiling, 32 parts)
+	// is refused because it would wedge future compaction. Real geometry
+	// (4096 slots) stores the format ceiling comfortably.
 	mut f2 := &TestFlash{}
 	mut j3 := new_journal(mut f2)
-	put_big(mut j3, 12, chain_data_max, 0x33)
-	check_big(j3, 12, chain_data_max, 0x33)
+	put_big(mut j3, 12, 614, 0x33)
+	check_big(j3, 12, 614, 0x33)
 	mut d := [640]u8{}
-	assert !j3.put(13, &d[0], chain_data_max + 1)
+	assert !j3.put(13, &d[0], chain_data_max) // 32 parts + marker > 32 slots
+	assert !j3.put(13, &d[0], chain_data_max + 1) // beyond the format ceiling
 	assert !f.double_prog && !f2.double_prog
 }
 
@@ -894,4 +899,84 @@ fn test_pool_boundary_no_false_overflow() {
 	// and the 65th DISTINCT id is refused at put time (session-level guard)
 	data := [u8(1), 2, 3, 4]
 	assert !j2.put(999, &data[0], 4)
+}
+
+// ---- codex round 1 on v2 ------------------------------------------------------
+
+// Cut mid-chain-copy inside compact(): the half-written target's ORPHAN parts
+// (valid records, no adopted value) must not win active selection — recovery
+// must converge, never wedge.
+fn test_cut_chain_copy_recovery_converges() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 11)
+	put_big(mut j, 2, 100, 0x77) // 6 parts
+	putv(mut j, 3, 33)
+	// compact copies entry pool order; cut inside the chain's parts
+	f.cut_call = f.calls + 3
+	f.cut_bytes = 16
+	j.compact()
+	f.cut_call = 0xFFFF_FFFF
+	mut j2 := remount(mut f)
+	assert getv(j2, 1)? == 11
+	check_big(j2, 2, 100, 0x77)
+	assert getv(j2, 3)? == 33
+	// recovery converges: cleanup + writes keep working
+	assert j2.erase_pending()
+	putv(mut j2, 3, 34)
+	mut j3 := remount(mut f)
+	assert getv(j3, 3)? == 34
+	check_big(j3, 2, 100, 0x77)
+	assert !f.double_prog
+}
+
+// Stale ids (older firmware's persisted blocks) are PRUNED on the generator's
+// word: their pool rows free immediately and their records die at compaction.
+fn test_prune_stale_ids() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 100, 1)
+	putv(mut j, 200, 2)
+	putv(mut j, 300, 3)
+	keep := [u16(100), 300]
+	assert j.prune(&keep[0], 2) == 1
+	assert getv(j, 200) == none
+	assert j.compact() && j.erase_pending()
+	mut j2 := remount(mut f)
+	assert getv(j2, 100)? == 1
+	assert getv(j2, 200) == none // gone from flash too
+	assert getv(j2, 300)? == 3
+}
+
+// pool_overflow = read-mostly degraded mode: destructive cleanup refuses so
+// dropped ids' only flash copies survive until the config is fixed.
+fn test_pool_overflow_blocks_destruction() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 5)
+	assert j.compact() // creates a pending sector
+	j.pool_overflow = true // as a violated generator gate would latch
+	assert !j.compact()
+	assert !j.erase_pending()
+	j.pool_overflow = false
+	assert j.erase_pending()
+}
+
+// Post-mount rot in a chain part: get() refuses (0 = caller's default), a
+// compact of the rotted source fails instead of copying garbage forward, and
+// a rewrite recovers the block.
+fn test_chain_rot_after_mount() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	put_big(mut j, 70, 100, 0x70)
+	putv(mut j, 71, 1)
+	f.mem[j.table[j.find(70)].ref_off + 32 + 8] ^= 0x01 // rot part 1 post-mount
+	mut out := [640]u8{}
+	assert j.get(70, &out[0], 640) == 0 // refused, never garbage
+	assert !j.compact() // the rotted source is not copied forward
+	put_big(mut j, 70, 60, 0x71) // the rewrite heals the block
+	check_big(j, 70, 60, 0x71)
+	assert j.compact()
+	mut j2 := remount(mut f)
+	check_big(j2, 70, 60, 0x71)
 }
