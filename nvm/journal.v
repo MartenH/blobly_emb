@@ -241,7 +241,11 @@ pub fn (mut j Journal) mount() bool {
 			if seq > j.max_seq {
 				j.max_seq = seq
 			}
-			if seq > maxseq_in[s] {
+			// maxseq_in drives ACTIVE selection and must follow ADOPTED content:
+			// an incomplete chain's parts (valid records, no value) must not
+			// attract the cursor to a half-written compaction target — bumped
+			// for plain records/markers here, for chains only on completion.
+			if lenf & chain_flag == 0 && seq > maxseq_in[s] {
 				maxseq_in[s] = seq
 			}
 			if seq > newest_seq {
@@ -256,6 +260,9 @@ pub fn (mut j Journal) mount() bool {
 				// candidate value
 				if j.chain_step(mut cs, blk, lenf, seq, rec_off, &rec[0]) {
 					j.adopt_chain(cs, s)
+					if cs.seq > maxseq_in[s] {
+						maxseq_in[s] = cs.seq // completed chains count for selection
+					}
 					cs.active = false
 				}
 				continue
@@ -414,6 +421,18 @@ pub fn (mut j Journal) put(block u16, data &u8, len u16) bool {
 	if len == 0 || len > chain_data_max {
 		return false
 	}
+	// the RESULTING live set (marker slot included via live_records) must fit
+	// one sector, or compaction can never converge afterwards — refuse the
+	// write that would wedge future recovery, not the recovery itself.
+	new_rec := if u32(len) <= data_max { u32(1) } else { chain_parts(len) }
+	mut old_rec := u32(0)
+	ei := j.find(block)
+	if ei >= 0 {
+		old_rec = j.records_of(ei)
+	}
+	if j.live_records() - old_rec + new_rec > j.slots() {
+		return false
+	}
 	j.tail_clean = false // the attempt itself is post-marker activity
 	if u32(len) <= data_max {
 		return j.append_plain(block, data, len)
@@ -463,7 +482,14 @@ fn (j Journal) read_chain(i int, out &u8, n u16) bool {
 		if !j.ops.read(j.ops.ctx, base + k * rec_size, &rec[0], rec_size) {
 			return false
 		}
-		lenf := u16(rec[2]) | (u16(rec[3]) << 8)
+		// re-validate: mount's verdict does not cover rot/ECC decay AFTER
+		// mount — a chain read must never serve garbage silently
+		blk, lenf2, seq2, ok := parse_record(&rec[0])
+		if !ok || blk != j.table[i].id || seq2 != j.table[i].seq
+			|| lenf2 & chain_flag == 0 || u32((lenf2 >> part_shift) & 0x1F) != k {
+			return false
+		}
+		lenf := lenf2
 		plen := u32(lenf & plen_mask)
 		prefix := if k == 0 { u32(2) } else { u32(0) }
 		mut avail := plen - prefix
@@ -481,6 +507,34 @@ fn (j Journal) read_chain(i int, out &u8, n u16) bool {
 		}
 	}
 	return copied == u32(n)
+}
+
+// prune drops pool rows whose id is not in keep[0..n) — the generator calls
+// this after mount with the CURRENT schema's id set, so ids persisted by
+// older firmware stop occupying pool rows and their records die at the next
+// compaction. Returns the number of rows dropped.
+pub fn (mut j Journal) prune(keep &u16, n int) u32 {
+	if !j.mounted {
+		return 0
+	}
+	mut dropped := u32(0)
+	for i in 0 .. max_blocks {
+		if !j.table[i].present {
+			continue
+		}
+		mut found := false
+		for k in 0 .. n {
+			if unsafe { keep[k] } == j.table[i].id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			j.table[i] = Entry{}
+			dropped++
+		}
+	}
+	return dropped
 }
 
 // mark_clean appends the clean-shutdown marker — call it LAST in the shutdown
@@ -535,6 +589,9 @@ pub fn (j Journal) strays(sector int) u32 {
 pub fn (mut j Journal) compact() bool {
 	if !j.mounted || j.compacting {
 		return false
+	}
+	if j.pool_overflow {
+		return false // ids were dropped at mount: compacting would DESTROY them
 	}
 	if j.live_records() > j.slots() {
 		return false // cannot converge; refuse rather than recurse
@@ -608,6 +665,9 @@ pub fn (mut j Journal) erase_pending() bool {
 	}
 	if j.pending_erase == j.active {
 		return false // never erase the active sector (state-corruption guard)
+	}
+	if j.pool_overflow {
+		return false // dropped ids still live ONLY in flash: never erase them
 	}
 	if !j.rehome_strays(j.pending_erase) {
 		return false
@@ -726,7 +786,11 @@ fn (mut j Journal) emit_entry(i int) (u32, u32, bool) {
 		if !j.ops.read(j.ops.ctx, old_base + k * rec_size, &old[0], rec_size) {
 			return 0, 0, false
 		}
-		lenf := u16(old[2]) | (u16(old[3]) << 8)
+		blk, lenf, oseq, ok := parse_record(&old[0])
+		if !ok || blk != j.table[i].id || oseq != j.table[i].seq
+			|| lenf & chain_flag == 0 || u32((lenf >> part_shift) & 0x1F) != k {
+			return 0, 0, false // rotted source: never copy garbage forward
+		}
 		encode_record_raw(mut rec, j.table[i].id, lenf, seq, &old[8])
 		if !j.program_slot(&rec[0]) {
 			return 0, 0, false
