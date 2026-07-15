@@ -112,9 +112,13 @@ int bflash_program(uint32_t addr, const uint8_t *data, uint32_t len) {
  * FLASH raises a flag (an interrupt only if DBECCERRIE is enabled, which we
  * never enable), so a flag-checked copy is the fault-tolerant read. BENCH
  * ITEM: verify no BusFault escalation path is configured on this part. */
-#define SR_DBECCERR (1u << 26)
+#define SR_SNECCERR (1u << 25) /* single-bit: CORRECTED data, flag still sets */
+#define SR_DBECCERR (1u << 26) /* double-bit: data invalid */
 
-static void ecc_clear(int b) { CCR(b) = SR_DBECCERR; }
+/* clear BOTH ECC flags: a lingering SNECCERR from a read would otherwise be
+ * read by the next program's wait_done (SR_ERRS includes it) as a failure. */
+static void ecc_clear(int b) { CCR(b) = SR_SNECCERR | SR_DBECCERR; }
+/* only DOUBLE-bit errors invalidate data — single-bit was corrected. */
 static int ecc_fired(int b) { return (SR(b) & SR_DBECCERR) != 0; }
 
 /* bflash_read: flash is memory-mapped — a flag-checked, word-wise copy. A

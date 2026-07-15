@@ -471,8 +471,9 @@ fn comm_thread_entry(input u32) {
 				if g_nvm.put(12844, &nvm_pack[0], 4) {
 					nvm_load_cmd_a = a
 					nvm_load_cmd_b = b
-					nvm_load_cmd_t = t1
 				}
+				nvm_load_cmd_t = t1 // failed puts wait the floor too: a burned
+				// slot per COMM PASS would be a wear storm; per FLOOR is policy
 			}
 		}
 		{ // persist flush at the NM quiet point (docs/nvm.md choreography)
