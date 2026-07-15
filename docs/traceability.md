@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 114 | 63 | 5 | 46 | 0 |
+| 115 | 63 | 5 | 47 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -26,6 +26,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-009 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-010 | QM | test | uncovered | — |
 | REQ-BOOT-011 | QM | test | uncovered | — |
+| REQ-BOOT-012 | QM | test | uncovered | — |
 | REQ-CAN-DRV-001 | QM | test | covered | route.lua (pending), h735-fdcan-hardware (approved), h755-fdcan-hardware (approved), h755-dualcore-heartbeat (approved) |
 | REQ-CAN-DRV-002 | QM | test | covered | route.lua (pending), h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
 | REQ-CAN-DRV-003 | QM | test | verified | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
@@ -145,6 +146,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-009 | | | | | | | ✓ | | |
 | REQ-BOOT-010 | | | | | | | | | |
 | REQ-BOOT-011 | | | | | | | | | |
+| REQ-BOOT-012 | | | | | | | | | |
 | REQ-CAN-DRV-001 | ✓ | | ✓ | | ✓ | · | | | |
 | REQ-CAN-DRV-002 | ✓ | | ✓ | | | · | | | |
 | REQ-CAN-DRV-003 | ✓ | | ✓ | | | | | | |

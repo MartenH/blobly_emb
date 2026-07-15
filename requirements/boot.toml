@@ -101,3 +101,12 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-SEC-001"
+
+[[req]]
+id = "REQ-BOOT-012"
+title = "Reset response reaches the wire"
+text = "The bootloader shall transmit the ECU-reset positive response onto the bus before executing the reset: the reset waits until the CAN controller reports all handed-off frames transmitted (bounded by a timeout so a dead bus cannot hold off the reset). Found on the H755 bench: the ISO-TP layer going idle only means the frame reached the Tx FIFO, and an immediate reset loses it mid-controller."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
