@@ -167,6 +167,13 @@ fn derive_nvm(mut m Model, doc toml.Doc) ([]string, map[string]u16) {
 		id := if si.nvm_id != 0 {
 			si.nvm_id
 		} else {
+			// RESIDUAL (16-bit identity space): a RETIRED signal's flash
+			// records keep their id until pruned+compacted; a NEW signal
+			// whose hash collides with a retired id AND matches its packed
+			// size restores stale bytes ONCE (until first overwrite). The
+			// collision check below covers CURRENT signals only — historic
+			// ids are unknowable. Odds ~n_retired/65k per new signal; a
+			// 32-bit identity (record format vNext) removes it.
 			// COUPLING INVARIANT: the hash derives from si.fields in the SAME
 			// order the pack/unpack/restore emitters use — identity and byte
 			// layout can only ever drift TOGETHER (new identity -> declared
@@ -476,8 +483,9 @@ fn nvm_service(m Model, ioc_idx map[string]int) []string {
 		g << '\t\t\t\tif g_nvm.put(${id}, &nvm_pack[0], ${si.packed_size()}) {'
 		g << '\t\t\t\t\tnvm_${n}_a = a'
 		g << '\t\t\t\t\tnvm_${n}_b = b'
-		g << '\t\t\t\t\tnvm_${n}_t = t1'
 		g << '\t\t\t\t}'
+		g << '\t\t\t\tnvm_${n}_t = t1 // failed puts wait the floor too: a burned'
+		g << '\t\t\t\t// slot per COMM PASS would be a wear storm; per FLOOR is policy'
 		g << '\t\t\t}'
 		g << '\t\t}'
 	}
