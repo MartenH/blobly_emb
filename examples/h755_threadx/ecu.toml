@@ -129,7 +129,7 @@ alive = 0x513          # = peers base + node, spelled out for the wire docs
 peers = [0x500, 0x53F] # the cluster's NM id range
 
 [shell]
-commands = ["m4sig", "iocx"] # M4 FB signal / cross-core xioc health check
+commands = ["m4sig", "iocx", "boot"] # M4 FB signal / xioc health check / reboot into the boot manager
 bus = "can0"
 in  = 0x7F0
 out = 0x7F1

@@ -164,3 +164,37 @@ the generator keeps bootloader and app agreeing on the layout — one config, as
 - Delta/compressed updates, multi-image orchestration across cores (the satellite
   image rides the owner's flash banks for now).
 - Production key management (P5 notes the seam; a deployment owns the keys).
+
+## Bench log — NUCLEO-H755ZI-Q, 2026-07-15 (first silicon pass)
+
+The dry-coded chain, end to end on the H755 bench (ST-LINK + PCAN, classic 500 k):
+
+- **P1 jump**: boot at sector 0, `mkimage --valid --pad-vectors` app at APP_BASE —
+  header magic + CRC over 50 KB verified, VTOR/MSP/jump; the full ThreadX app
+  (both cores, NM, telemetry, NvM persist) runs linked at `APP_VECTORS`. The app
+  side is one make flag: `make APP_LINK=boot` (defsym-driven FLASH origin).
+- **app→boot rung**: the `boot` shell command writes the SRAM4 request cell and
+  resets; the response is deliberately lost to the reset (0x11-style — silence is
+  the ack). Boot takes the request and stays.
+- **P2 CAN reflash**: session → seed/key → UDS erase (0x31 FF00, real 128 KB
+  sector) → 50 956 bytes in 100 ISO-TP blocks → on-target full-image CRC (0x31
+  FF01) → valid mark written → reset → the delivered app runs.
+- **Pull-power mid-transfer**: flasher killed ~30 blocks in, board reset — the
+  torn image (header landed, tail missing, no valid mark) is REFUSED, boot stays,
+  bus silent; recovery = plain reflash from programming mode → app runs.
+- **Bootcell**: NVIC-reset survival (request honored) and POR/stale-garbage
+  rejection (fresh flashes jump straight to the app) both observed.
+
+Dry-code gaps the bench found (all fixed in this pass):
+1. Boot never muxed PD0/PD1 (`board_can_clock_pins_init` — `blob_can_open` does
+   clocks, not pins): programming session timed out into a dead wire.
+2. `Prog.seed`'s struct-field default ('BLOB') is `_vinit` work that freestanding
+   never runs — the __global read seed 0, the tester took the already-unlocked
+   convention and skipped the key, every guarded service NRC'd 0x33. Third
+   sighting of the vlang `_vinit` trap; seed is now assigned explicitly.
+3. Host side: SocketCAN's default `txqueuelen 10` drops the ISO-TP burst
+   (`No buffer space available`) — `ip link set can0 txqueuelen 1000`.
+
+Known polish (not blocking): the 0x11 positive response is lost to the immediate
+reset (drain the Tx FIFO first); `st-flash erase` mass-erases — never use it for
+a single sector on a populated part.
