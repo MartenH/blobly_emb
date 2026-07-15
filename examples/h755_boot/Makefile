@@ -27,6 +27,7 @@ $(BUILD)/boot.c: main.v $(wildcard $(REPO)/boot/*.v) $(wildcard $(REPO)/comm/iso
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals \
 	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
 	  -o examples/$(NAME)/$(BUILD)/boot.c examples/$(NAME)/main.v
+	$(REPO)/scripts/lint_vinit.sh $@
 
 $(BUILD)/$(NAME).elf: $(BUILD)/boot.c $(BSP) $(BOARD_LD_BARE)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/boot.c $(BSP) -o $@
@@ -46,3 +47,7 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all flash clean
+
+# a failed recipe (the vinit lint) must not leave its half-made target: GNU make only
+# deletes targets on error when asked (make manual, Errors in Recipes)
+.DELETE_ON_ERROR:

@@ -1157,6 +1157,9 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			glue << '\t\tbs:    ${c.bs}'
 			glue << '\t\tstmin: ${c.stmin}'
 			glue << '\t}'
+			// no field defaults on Link (the _vinit rule): the N_Bs/WFTmax
+			// timeouts are set explicitly or a lost FC wedges the bridge
+			glue << '\tst.tp_${tp}.init_defaults()'
 			glue << '\tst.uds_${tp} = uds.Server{}'
 			for idx, did in m.dids {
 				glue << '\tst.uds_${tp}.dids[${idx}] = uds.Did{'

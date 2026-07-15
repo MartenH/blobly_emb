@@ -226,6 +226,7 @@ pub fn partition_can0(ch can.Channel) {
 		bs:    8
 		stmin: 0
 	}
+	st.tp_diag.init_defaults()
 	st.uds_diag = uds.Server{}
 	st.uds_diag.dids[0] = uds.Did{
 		id: u16(0xf190)

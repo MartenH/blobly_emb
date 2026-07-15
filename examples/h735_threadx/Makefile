@@ -65,6 +65,7 @@ $(BUILD)/app.c: main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
 	  -path "@vlib|@vmodules|.|examples/$(NAME)|examples/shared/loadmix" \
 	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
+	$(REPO)/scripts/lint_vinit.sh $@
 
 # 2) ThreadX kernel objects (same as examples/threadx_h735).
 $(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
@@ -95,3 +96,7 @@ clean:
 	rm -rf $(BUILD) gen ports sig
 
 .PHONY: all gen flash clean
+
+# a failed recipe (the vinit lint) must not leave its half-made target: GNU make only
+# deletes targets on error when asked (make manual, Errors in Recipes)
+.DELETE_ON_ERROR:
