@@ -268,7 +268,10 @@ The full path for one signal:
    fail generation with an explicit pin (`nvm_id = 7`, the way frames pin CAN
    ids). There is NO migration, ever: a value that must survive a schema change
    is migrated by the APPLICATION (declare old + new signals for one release,
-   copy in a handler).
+   copy in a handler). Engine consequence (P2): records carry the full 16-bit
+   identity, so the RAM table keys by id (a linear scan over N <= 63 entries)
+   instead of v1's direct index — a contained journal change that rides the
+   persist-codegen slice.
 4. **Mount** (boot): scan both sectors; per block keep the highest-seq record with
    a valid CRC into a fixed-size RAM table (generator-dimensioned); the write
    cursor is the first erased word. Mount is strictly READ-ONLY (hardened in the
