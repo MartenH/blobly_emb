@@ -21,6 +21,8 @@ pub struct GovernorIn {
 pub mut:
 	// signal "Command" — ch, transport double, can0 -> app
 	command sig.Command
+	// signal "LoadCmd" — local cell in partition "app"
+	load_cmd sig.LoadCmd
 }
 pub struct GovernorOut {
 pub mut:

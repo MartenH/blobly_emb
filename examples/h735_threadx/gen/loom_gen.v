@@ -50,6 +50,7 @@ fn handler_app_governor_on_100ms(ctx voidptr) {
 	mut command_b := u32(0)
 	C.ioc_get(1, &command_a, &command_b)
 	inp.command.code = u32(command_a)
+	inp.load_cmd = st.cell_load_cmd // local
 	mut outp := ports.GovernorOut{}
 	st.governor.on_100ms(inp, mut outp)
 	st.cell_load_cmd = outp.load_cmd // local

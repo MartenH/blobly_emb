@@ -67,7 +67,7 @@ gen/.stamp: ecu.toml bus.dbc $(wildcard $(REPO)/examples/shared/loadmix/app/*.v)
 -include gen/loom_build.mk
 
 # 1) transpile the V stack to freestanding C (-enable-globals for the ThreadX TCB/stack statics).
-$(BUILD)/app.c: main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/examples/shared/loadmix/app/*.v) | $(BUILD)
+$(BUILD)/app.c: main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/nvm/*.v) $(wildcard $(REPO)/boot/*.v) $(wildcard $(REPO)/examples/shared/loadmix/app/*.v) | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
 	  -path "@vlib|@vmodules|.|examples/$(NAME)|examples/shared/loadmix" \
 	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v

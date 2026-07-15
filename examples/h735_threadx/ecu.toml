@@ -78,7 +78,7 @@ thread    = "ctrl_slow"
   [[fb.handler]]
   name      = "on_100ms"
   period_ms = 100
-  reads     = ["Command"]
+  reads     = ["Command", "LoadCmd"]
   writes    = ["LoadCmd"]
 
 [[fb]]

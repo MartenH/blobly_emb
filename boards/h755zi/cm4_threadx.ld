@@ -9,7 +9,10 @@
 MEMORY
 {
   RAM   (wx) : ORIGIN = 0x10000000, LENGTH = 0x00048000   /* 288 KiB D2 SRAM1+2+3 */
-  FLASH (rx) : ORIGIN = 0x08100000, LENGTH = 0x00100000   /* 1 MiB flash  */
+  FLASH (rx) : ORIGIN = 0x08100000, LENGTH = 0x000C0000   /* 768 KiB: bank-2 head.
+                                  The TAIL (sectors 6+7, 0x081C0000..0x08200000) is
+                                  RESERVED for the NvM journal pair (docs/nvm.md) —
+                                  outside every image's link region by construction. */
 }
 
 __STACKSIZE__ = 1024;

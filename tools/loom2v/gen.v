@@ -2263,6 +2263,10 @@ fn main() {
 	// the same. The lean first cut supports external RX signals (bus -> app), drained + counted
 	// by the comm thread; external TX signals, ISO-TP, and m.routes are not generated yet.
 	comm_thread_on := m.target.threadx && has_bridge
+	if m.nvm_names.len > 0 && m.target.threadx && !comm_thread_on {
+		panic('loom2v: persistent signals need the comm thread (the journal service runs ' +
+			'there) — this config has no bus bridge; give the node a bus or drop persist')
+	}
 	// rx signals an FB reads flow bus -> comm(decode) -> target IOC pool cell -> FB input (6b-2b).
 	// ioc_idx maps each such signal to its pool cell; visible to the comm emitter + handler glue.
 	mut ioc_idx := map[string]int{}
