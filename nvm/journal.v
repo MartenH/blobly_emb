@@ -422,18 +422,28 @@ pub fn (mut j Journal) put(block u16, data &u8, len u16) bool {
 		return false
 	}
 	// the RESULTING live set (marker slot included via live_records) must fit
-	// one sector WITH REWRITE HEADROOM: a rewrite appends the new records
-	// while the old value is still live, so a value whose live set leaves
-	// fewer than its own record count free post-compact could land once and
-	// then be stuck forever. Refuse the write that would wedge the future,
-	// not the future itself.
+	// one sector WITH GLOBAL REWRITE HEADROOM: a rewrite appends new records
+	// while the old value is still live, so after ANY write the LARGEST live
+	// value must still fit in the post-compact free space — otherwise small
+	// writes could quietly strand a big value (each passing a merely
+	// per-block check). Refuse the write that would wedge any future, not
+	// the future itself.
 	new_rec := if u32(len) <= data_max { u32(1) } else { chain_parts(len) }
 	mut old_rec := u32(0)
 	ei := j.find(block)
 	if ei >= 0 {
 		old_rec = j.records_of(ei)
 	}
-	if j.live_records() - old_rec + new_rec + new_rec > j.slots() {
+	mut worst := new_rec
+	for i in 0 .. max_blocks {
+		if j.table[i].present && i != ei {
+			r := j.records_of(i)
+			if r > worst {
+				worst = r
+			}
+		}
+	}
+	if j.live_records() - old_rec + new_rec + worst > j.slots() {
 		return false
 	}
 	if u32(len) <= data_max {

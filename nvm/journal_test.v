@@ -1021,3 +1021,28 @@ fn test_prune_clears_overflow_when_safe() {
 	assert !j.pool_overflow // all current ids present: degraded mode lifts
 	assert j.compact()
 }
+
+// Codex round 3: the headroom gate is GLOBAL — small writes must not strand a
+// big value's rewrite. 15-part chain (294 B) + one small block = this
+// geometry's maximum; the next small put is refused, and shrinking the chain
+// restores room.
+fn test_global_rewrite_headroom() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	put_big(mut j, 1, 294, 0x41) // live 16, worst 15
+	putv(mut j, 2, 2) // live 17; 17 + 15 = 32: exactly fits
+	data := [u8(3), 0, 0, 0]
+	assert !j.put(3, &data[0], 4), 'a small write stranded the chain rewrite'
+	// the chain itself still rewrites (its own slots are reclaimed)
+	put_big(mut j, 1, 294, 0x42)
+	check_big(j, 1, 294, 0x42)
+	// shrinking the big value frees global headroom for new blocks
+	put_big(mut j, 1, 100, 0x43) // 6 parts: live 8, worst 6
+	putv(mut j, 3, 3)
+	putv(mut j, 4, 4)
+	mut j2 := remount(mut f)
+	check_big(j2, 1, 100, 0x43)
+	assert getv(j2, 3)? == 3
+	assert getv(j2, 4)? == 4
+	assert !f.double_prog
+}
