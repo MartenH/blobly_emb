@@ -49,6 +49,7 @@ $(BUILD)/app.c: main.v gen/loom_gen.v $(wildcard app/*.v) $(wildcard $(REPO)/loo
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
 	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
 	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
+	$(REPO)/scripts/lint_vinit.sh $@
 
 $(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
 	@mkdir -p $(BUILD)/tx

@@ -104,7 +104,10 @@ pub mut:
 	cursor  u32 // byte offset of the next append in the active sector
 	// a sector holding outranked records / interrupted-erase dirt, awaiting
 	// cleanup (erase — or re-homing first when strays live there)
-	pending_erase int = -1
+	// -1 = none; OWNED BY mount(), which every path is gated on (erase_pending
+	// refuses unmounted) — no field default (the _vinit rule): on target this
+	// reads 0 pre-mount, which without the gate would mean "sector 0 pending".
+	pending_erase int
 	// the non-active sector is KNOWN fully erased (compact may skip its erase)
 	partner_clean bool
 	// mount verdict: the previous session ended with the clean marker as the
