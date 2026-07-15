@@ -834,3 +834,64 @@ fn test_chain_get_truncated() {
 		assert out[i] == (u8(i) ^ 0x66)
 	}
 }
+
+// craft: place a raw record directly in the test flash (hostile-flash tests).
+fn craft(mut f TestFlash, off u32, block u16, lenf u16, seq u32, b0 u8) {
+	f.mem[off + 0] = u8(block)
+	f.mem[off + 1] = u8(block >> 8)
+	f.mem[off + 2] = u8(lenf)
+	f.mem[off + 3] = u8(lenf >> 8)
+	f.mem[off + 4] = u8(seq)
+	f.mem[off + 5] = u8(seq >> 8)
+	f.mem[off + 6] = u8(seq >> 16)
+	f.mem[off + 7] = u8(seq >> 24)
+	for i in u32(8) .. 28 {
+		f.mem[off + i] = 0
+	}
+	f.mem[off + 8] = b0
+	crc := boot.crc32(&f.mem[off], 28)
+	f.mem[off + 28] = u8(crc)
+	f.mem[off + 29] = u8(crc >> 8)
+	f.mem[off + 30] = u8(crc >> 16)
+	f.mem[off + 31] = u8(crc >> 24)
+}
+
+// Agent finding 1: a crafted CHAIN-FLAGGED block-0 record with the newest seq
+// must not testify to a clean shutdown (a real marker is always plain).
+fn test_chain_flagged_marker_is_not_clean() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 5)
+	// crafted at the cursor: blk 0, chain flag, part 1, plen 5, newest seq
+	craft(mut f, j.cursor, 0, chain_flag | (u16(1) << part_shift) | 5, j.max_seq + 10, 0xEE)
+	mut j2 := remount(mut f)
+	assert !j2.clean, 'a chain-flagged block-0 record spoofed the clean verdict'
+	assert getv(j2, 1)? == 5
+}
+
+// Agent finding 2: pool exhaustion must be DETECTABLE, never silent. In this
+// test geometry 64 flash slots = 64 pool rows, so true overflow is physically
+// unconstructible here (it IS reachable on real geometry: 4096 slots vs a
+// 64-row pool) — the boundary case pins the accounting: exactly 64 distinct
+// ids mount clean, no false overflow, every id served.
+fn test_pool_boundary_no_false_overflow() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	mut seq := u32(1)
+	for k in u32(0) .. 32 {
+		craft(mut f, k * 32, u16(100 + k), 4, seq, u8(k))
+		seq++
+	}
+	for k in u32(0) .. 32 {
+		craft(mut f, sec_size + k * 32, u16(200 + k), 4, seq, u8(k))
+		seq++
+	}
+	mut j2 := remount(mut f)
+	assert !j2.pool_overflow
+	mut out := [4]u8{}
+	assert j2.get(100, &out[0], 4) == 4
+	assert j2.get(231, &out[0], 4) == 4
+	// and the 65th DISTINCT id is refused at put time (session-level guard)
+	data := [u8(1), 2, 3, 4]
+	assert !j2.put(999, &data[0], 4)
+}

@@ -108,6 +108,10 @@ pub mut:
 	// runtime tail state: the newest appended record is the marker
 	tail_clean bool
 	mounted    bool
+	// mount found MORE distinct ids on flash than the pool holds and had to
+	// drop some (scan-order). Unreachable behind the generator's block-count
+	// gate; latched so misconfiguration is DETECTABLE, never silent loss.
+	pool_overflow bool
 	// reentry guard: compact()'s own copy appends must never re-compact
 	compacting bool
 }
@@ -191,6 +195,7 @@ pub fn (mut j Journal) mount() bool {
 	}
 	j.max_seq = 0
 	j.pending_erase = -1
+	j.pool_overflow = false
 	mut newest_is_marker := true // empty journal = clean
 	mut newest_seq := u32(0)
 	mut any_valid := false
@@ -241,7 +246,10 @@ pub fn (mut j Journal) mount() bool {
 			}
 			if seq > newest_seq {
 				newest_seq = seq
-				newest_is_marker = blk == marker_block
+				// a REAL marker is always plain — a chain-flagged block-0 record
+				// is a crafted/corrupt artifact and must not testify to a clean
+				// shutdown (defense-in-depth; per-record CRC blocks bit flips)
+				newest_is_marker = blk == marker_block && (lenf & chain_flag) == 0
 			}
 			if lenf & chain_flag != 0 {
 				// a chain part: feed the run validator; a completed run is a
@@ -258,7 +266,8 @@ pub fn (mut j Journal) mount() bool {
 			}
 			i := j.slot_for(blk)
 			if i < 0 {
-				continue // pool full: generation-gated; served ids keep working
+				j.pool_overflow = true // detectable: generator gate was violated
+				continue
 			}
 			if !j.table[i].present || seq > j.table[i].seq {
 				j.table[i].present = true
@@ -378,6 +387,7 @@ fn (mut j Journal) chain_step(mut cs ChainScan, blk u16, lenf u16, seq u32, off 
 fn (mut j Journal) adopt_chain(cs ChainScan, s int) {
 	i := j.slot_for(cs.id)
 	if i < 0 {
+		j.pool_overflow = true // detectable: generator gate was violated
 		return
 	}
 	if !j.table[i].present || cs.seq > j.table[i].seq {
