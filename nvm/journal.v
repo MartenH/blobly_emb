@@ -216,6 +216,11 @@ pub fn (mut j Journal) mount() bool {
 // (which copies the table) must never persist it either. The write ATTEMPT
 // dirties the tail regardless of outcome: a torn post-marker slot reads
 // unclean at mount, and the runtime state must agree.
+//
+// CONTRACT: put() == false means UNCONFIRMED, not not-written — the driver
+// may fail AFTER the record landed (status-window cut). Such a record is
+// valid flash and an honest mount serves it; the caller retries or accepts.
+// A retry always outranks it (its seq was consumed).
 pub fn (mut j Journal) put(block u16, data &u8, len u16) bool {
 	if !j.mounted || block == marker_block || int(block) >= max_blocks {
 		return false
@@ -305,8 +310,13 @@ pub fn (mut j Journal) compact() bool {
 	}
 	target := 1 - j.active
 	if !j.partner_clean {
-		// safe even when the target holds an interrupted compaction's source:
-		// the TABLE already unions everything, nothing is lost.
+		// POWER-SAFETY ORDER: any block whose newest durable record lives in
+		// the target must be re-homed into the active sector BEFORE the erase
+		// — the RAM table alone is not durability (a cut between erase and
+		// the copies would orphan them). Fit-refusal is watermark-gated.
+		if !j.rehome_strays(target) {
+			return false
+		}
 		if !j.ops.erase(j.ops.ctx, j.sector_addr(target), j.cfg.size) {
 			return false
 		}
@@ -365,24 +375,48 @@ pub fn (mut j Journal) erase_pending() bool {
 	if j.pending_erase == j.active {
 		return false // never erase the active sector (state-corruption guard)
 	}
-	ns := j.strays(j.pending_erase)
-	if ns > 0 {
-		if j.free_records() < ns {
-			return false // re-homing must not itself compact into the pending sector
-		}
-		for b in 1 .. max_blocks {
-			if j.table[b].present && j.table[b].sector == j.pending_erase {
-				if !j.append_block(u16(b)) {
-					return false // burned slot; retry at the next quiet point
-				}
-			}
-		}
+	if !j.rehome_strays(j.pending_erase) {
+		return false
 	}
 	if !j.ops.erase(j.ops.ctx, j.sector_addr(j.pending_erase), j.cfg.size) {
 		return false
 	}
 	j.partner_clean = true
 	j.pending_erase = -1
+	return true
+}
+
+// rehome_strays: append every block whose newest durable record lives in
+// `from` into the ACTIVE sector, then restore the clean marker if the tail
+// was clean (re-homing after an orderly shutdown must not un-clean it). Fit-
+// checked so the appends can never trigger a compact themselves — refusal is
+// dead code under the watermark policy (free >= live set at all times).
+fn (mut j Journal) rehome_strays(from int) bool {
+	if from == j.active {
+		return false
+	}
+	ns := j.strays(from)
+	if ns == 0 {
+		return true
+	}
+	was_clean := j.tail_clean
+	need := ns + if was_clean { u32(1) } else { u32(0) }
+	if j.free_records() < need {
+		return false
+	}
+	for b in 1 .. max_blocks {
+		if j.table[b].present && j.table[b].sector == from {
+			if !j.append_block(u16(b)) {
+				return false // burned slot; retry at the next quiet point
+			}
+		}
+	}
+	if was_clean {
+		if !j.append_marker() {
+			return false
+		}
+		j.tail_clean = true
+	}
 	return true
 }
 
@@ -419,11 +453,13 @@ fn (mut j Journal) append_block(block u16) bool {
 	// pre-allocated one would land out of order (the outranked-marker bug).
 	mut rec := [32]u8{}
 	seq := j.max_seq + 1
+	j.max_seq = seq // consumed even on failure: the record may have LANDED
+	// (contract: a failed program can still complete) — a retry must outrank
+	// it, never share its seq
 	encode_record(mut rec, block, j.table[block].len, seq, &j.table[block].data[0])
 	if !j.program_slot(&rec[0]) {
 		return false
 	}
-	j.max_seq = seq
 	j.table[block].seq = seq
 	j.table[block].sector = j.active
 	return true
@@ -439,11 +475,11 @@ fn (mut j Journal) append_data(block u16, data &u8, len u16) bool {
 	}
 	mut rec := [32]u8{}
 	seq := j.max_seq + 1
+	j.max_seq = seq // consumed even on failure (see append_block)
 	encode_record(mut rec, block, len, seq, data)
 	if !j.program_slot(&rec[0]) {
 		return false
 	}
-	j.max_seq = seq
 	j.table[block].present = true
 	j.table[block].len = len
 	for i in 0 .. int(len) {
@@ -460,11 +496,11 @@ fn (mut j Journal) append_marker() bool {
 	}
 	mut rec := [32]u8{}
 	seq := j.max_seq + 1
+	j.max_seq = seq // consumed even on failure (see append_block)
 	encode_record(mut rec, marker_block, 0, seq, unsafe { nil })
 	if !j.program_slot(&rec[0]) {
 		return false
 	}
-	j.max_seq = seq
 	return true
 }
 

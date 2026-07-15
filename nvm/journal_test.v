@@ -586,3 +586,78 @@ fn test_failed_post_marker_write_dirties_tail() {
 	assert getv(j2, 1)? == 81
 	assert !f.double_prog
 }
+
+// Codex round-3 trio.
+// (1) compact() itself must re-home strays BEFORE its erase: after an
+// interrupted compaction, cut compact's first post-erase program — every
+// value must still have a durable copy at remount.
+fn test_compact_rehomes_strays_before_erase() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 91)
+	putv(mut j, 2, 92)
+	f.cut_call = f.calls + 2 // interrupt the first compaction -> strays
+	f.cut_bytes = 16
+	j.compact()
+	f.cut_call = 0xFFFF_FFFF
+	mut j2 := remount(mut f)
+	assert getv(j2, 1)? == 91
+	assert getv(j2, 2)? == 92
+	// now a DIRECT compact (not erase_pending): cut its first copy program —
+	// power dies right after its internal erase of the stray-bearing sector
+	f.cut_call = f.calls + 1
+	f.cut_bytes = 0
+	j2.compact()
+	mut j3 := remount(mut f)
+	assert getv(j3, 1)? == 91, 'compact erased a stray before re-homing it'
+	assert getv(j3, 2)? == 92
+	assert !f.double_prog
+}
+
+// (2) A failed program may have LANDED a complete record (status-window cut):
+// its seq is consumed, so a retry with a DIFFERENT value always outranks it —
+// two records must never share a seq.
+fn test_landed_failure_consumes_seq() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 0xD1)
+	f.cut_call = f.calls + 1
+	f.cut_bytes = 32 // the record lands COMPLETELY, the driver reports failure
+	data := [u8(0xD2), 0, 0, 0]
+	assert !j.put(1, &data[0], 4) // unconfirmed by contract
+	// the caller retries with a NEWER value
+	putv(mut j, 1, 0xD3)
+	assert getv(j, 1)? == 0xD3
+	mut j2 := remount(mut f)
+	assert getv(j2, 1)? == 0xD3, 'the retry must outrank the landed failure'
+	assert !f.double_prog
+}
+
+// (2b) ...and with NO retry, the landed record is honest durability: mount
+// serves it (put's false meant UNCONFIRMED, not not-written).
+fn test_landed_failure_without_retry_is_served() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 0xD1)
+	f.cut_call = f.calls + 1
+	f.cut_bytes = 32
+	data := [u8(0xD2), 0, 0, 0]
+	assert !j.put(1, &data[0], 4)
+	mut j2 := remount(mut f)
+	assert getv(j2, 1)? == 0xD2 // it IS on flash, complete and valid
+}
+
+// (3) Quiet-point cleanup must not un-clean an orderly tail: clean shutdown,
+// compact, then erase_pending — every remount along the way stays clean.
+fn test_clean_survives_quiet_point_cleanup() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 7)
+	assert j.mark_clean()
+	assert j.compact()
+	assert j.erase_pending()
+	mut j2 := remount(mut f)
+	assert j2.clean, 'quiet-point cleanup destroyed the clean tail'
+	assert getv(j2, 1)? == 7
+	assert !f.double_prog
+}
