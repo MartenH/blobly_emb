@@ -20,6 +20,18 @@ record         = 0x7E5
 dump_fc        = 0x7E6
 ```
 
+- **Bindings take a DBC name too**: `cmd = "TraceCmd"` resolves the id from `bus.dbc`
+  and validates the DLC — same rule as every module endpoint binding.
+- **RAM**: a record is 8 bytes, but the target holds several copies of the window —
+  the C recorder ring (`boards/common/trace_hooks.c`, `RING_CAP` 256 = 2 KB), the
+  freeze/snapshot scratch (2 KB), the module's decoded ring (2 KB), plus one imported
+  ring per satellite core on the dump owner. 256 records ≈ 6 KB single-core, ≈ 8 KB on
+  a two-core owner. Config cap is 4096 (32 KB per copy). Keep `buffer_records` equal
+  to the platform `RING_CAP` — smaller truncates the window, larger buys nothing.
+- **Modes**: `ring` (overwrite-oldest flight recorder, the default) and `oneshot`
+  (fill once, freeze). The ThreadX target implements ring ONLY and fails generation
+  otherwise; oneshot is a host-runner mode.
+
 `make gen` wires the recorder, the command routing, and writes
 `gen/trace-manifest.csv` — the identity table (handler/thread names per core) every
 viewer loads. Satellites get their own recorder automatically; the owner remains the
@@ -50,12 +62,21 @@ core's window; blocks decode with named threads and handlers.
 - Overruns: a handler bar longer than its thread's tick budget — cross-check with the
   `stat` shell command (max µs per handler).
 
-## Triggers and modes
+## Triggers
 
-`[trace.trigger]` freezes the ring around an event instead of on Stop — e.g.
-`source = "overrun"` with `budget_us` catches the first handler that blows its budget,
-keeping `pre` percent of history (proven on the host runner; see
-[../trace-codegen.md](../trace-codegen.md) for what each target shape generates).
+`[trace.trigger]` freezes the ring around an event instead of on Stop:
+
+```toml
+[trace.trigger]
+source    = "overrun"    # freeze when a handler exceeds its budget
+budget_us = 500
+pre       = 50           # keep this % of history before the trigger point
+```
+
+Host runner only today (proven on vcan in `examples/trace_demo`). The ThreadX target
+**fails generation** if a trigger is configured — deliberately, so it can't silently
+build a continuous ring you believed was triggered. See
+[../trace-codegen.md](../trace-codegen.md) for what each target shape generates.
 
 ## Gotchas
 

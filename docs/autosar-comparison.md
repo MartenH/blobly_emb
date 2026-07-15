@@ -17,12 +17,15 @@ lock-free, no-alloc — and skips the rest.
 | Implicit sender-receiver — coherent input snapshot in, outputs committed out | `Rte_IRead` / `Rte_IWrite` | Loom snapshots the In ports before the handler, publishes Out after | ✅ have (it's the core model) |
 | Last-is-best data semantics | S/R "data" element | IOC seqlock / double / triple | ✅ have |
 | Typed ports | PortInterface / data elements | generated `In`/`Out` port structs | ✅ have |
-| Periodic trigger | `TimingEvent` | `on_<period>` handler | ✅ have |
+| Periodic trigger | `TimingEvent` | `[[fb.handler]] period_ms` (the `on_<period>` name is convention, not syntax) | ✅ have |
 | Per-runnable private state | Inter-Runnable Variables (IRV) | the FB's private struct | ✅ have |
-| Deadline / alive timeout, init value, invalidation | COM rx monitoring | COM rx deadline → `valid = false` | ✅ have |
-| Transmission modes (cyclic / on-change / mixed, min-delay) | COM tx modes + filters | `[[frame]].tx` | ✅ have |
-| Raw↔physical scaling at the boundary | RTE/COM data conversion | DBC codec in the bridge | ✅ have |
+| Deadline / alive timeout, init value, invalidation | COM rx monitoring | COM rx deadline → `valid = false` | ✅ have[^host] |
+| Transmission modes (cyclic / on-change / mixed, min-delay) | COM tx modes + filters | `[[frame]].tx` | ✅ have[^host] |
+| Raw↔physical scaling at the boundary | RTE/COM data conversion | DBC codec in the bridge | ✅ have[^host] |
 | Diagnostics request/response | DCM/DEM over the RTE | ISO-TP + UDS at the bus | ✅ have |
+| Network management — coordinated bus sleep/wake | CanNm / NmIf | `comm/nm` + `[nm]` endpoint bindings (request/release, cluster listen, bench-verified) | ✅ have |
+| Cross-core communication in one ECU | OS-Application partitioning + the OS **IOC** + per-core RTE config | an ordinary `[[signal]]` whose endpoints sit on different cores; the generator derives the transport (xioc) and emits an image per core from ONE config ([multi-image.md](multi-image.md)) | ✅ have |
+| Runtime observability — thread/ISR/handler trace, per-handler timing, CPU load | ARTI/ORTI + vendor tracing tools, DLT | per-core flight recorder → multi-core swimlane, `stat` (per-handler last/max/mean µs), CpuLoad telemetry — all config-wired, dumped over the bus | ✅ have |
 | Queued (event) sender-receiver — discrete events, none dropped | `Rte_Send`/`Rte_Receive`, `isQueued` | — (IOC is last-value) | 🔜 planned |
 | React on reception, not on a clock | `DataReceivedEvent` | — (handlers are cyclic) | 🔜 planned |
 | Mode management (gate handlers / reconfigure by ECU state) | ModeDeclarationGroup, `ModeSwitchEvent` | — (only NM sleep/wake) | 🔜 planned |
@@ -87,6 +90,11 @@ lock-free, no-alloc — and skips the rest.
 The line we hold: borrow a semantic only when it **extends** the model, lock-free and
 no-alloc. That keeps blobly a lean alternative instead of a re-implementation of the
 thing it avoids.
+
+[^host]: On the host COM bridge. The lean ThreadX target codec generates cyclic tx and
+    the trivial signal layout only for now — richer layouts, rx deadlines, and tx modes
+    on target fail generation loudly rather than half-work (see
+    [um/add-a-signal.md](um/add-a-signal.md)).
 
 [^spsc]: **SPSC ring** = *single-producer, single-consumer ring buffer*: a fixed array
     with a producer-owned head index and a consumer-owned tail index (both atomic),
