@@ -93,6 +93,14 @@ int blob_can_tx_ready(int h) {
 	return 1;
 }
 
+/* The CanIf shim has no drain query — TxConfirmation isn't tracked here. Report
+ * idle (same fallback shape as tx_ready): a self-resetting node on this backend
+ * relies on the REQ-BOOT-012 bounded wait rather than a real confirmation. */
+int blob_can_tx_idle(int h) {
+	(void)h;
+	return 1;
+}
+
 int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
 	if (h < 0 || h >= BLOB_CAN_BUSES) return -1;
 	return blob_ring_pop(&rx_ring[h], id, data, len);
