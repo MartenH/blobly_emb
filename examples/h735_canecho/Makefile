@@ -46,6 +46,7 @@ all: $(BUILD)/canecho.bin
 $(BUILD)/canecho.c: main.v | $(BUILD)
 	cd $(REPO) && $(V) $(VDBG) -freestanding -gc none -no-bounds-checking -path "@vlib|@vmodules|." \
 	  -o examples/h735_canecho/$(BUILD)/canecho.c examples/h735_canecho/main.v
+	$(REPO)/scripts/lint_vinit.sh $@
 
 # 2) cross-compile + link: V output + startup + board shim + CAN backend
 $(BUILD)/canecho.elf: $(CSRC) linker.ld | $(BUILD)

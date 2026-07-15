@@ -29,7 +29,10 @@ pub mut:
 
 pub struct Server {
 pub mut:
-	session u8 = 0x01 // current diagnostic session (default)
+	// current diagnostic session. No field default (the _vinit rule): the OWNING
+	// service (boot.Prog.init) sets 0x01; a bare Srv reads 0 = "no session yet",
+	// which no sub-service matches — fail-closed.
+	session u8
 	dids    [max_dids]Did
 	ndid    int
 }

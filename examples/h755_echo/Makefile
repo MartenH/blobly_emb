@@ -30,6 +30,7 @@ all: $(BUILD)/$(NAME).bin
 $(BUILD)/$(NAME).c: main.v | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -path "@vlib|@vmodules|." \
 	  -o examples/$(NAME)/$(BUILD)/$(NAME).c examples/$(NAME)/main.v
+	$(REPO)/scripts/lint_vinit.sh $@
 
 $(BUILD)/$(NAME).elf: $(CSRC) $(BOARD_LD_BARE) | $(BUILD)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(CSRC) -o $@
