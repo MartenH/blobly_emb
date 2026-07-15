@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 88 | 55 | 5 | 28 | 0 |
+| 100 | 60 | 5 | 35 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -15,6 +15,17 @@ Generated from `requirements/*.toml` + verification links. See
 
 | req | asil | method | status | verifications |
 |---|---|---|---|---|
+| REQ-BOOT-001 | QM | test | verified | boot_test.v (pass) |
+| REQ-BOOT-002 | QM | test | verified | boot_test.v (pass) |
+| REQ-BOOT-003 | QM | test | uncovered | — |
+| REQ-BOOT-004 | QM | test | uncovered | — |
+| REQ-BOOT-005 | QM | test | verified | prog_test.v (pass) |
+| REQ-BOOT-006 | QM | analysis | uncovered | — |
+| REQ-BOOT-007 | QM | test | uncovered | — |
+| REQ-BOOT-008 | QM | test | verified | prog_test.v (pass) |
+| REQ-BOOT-009 | QM | test | verified | prog_test.v (pass) |
+| REQ-BOOT-010 | QM | test | uncovered | — |
+| REQ-BOOT-011 | QM | test | uncovered | — |
 | REQ-CAN-DRV-001 | QM | test | covered | route.lua (pending), h735-fdcan-hardware (approved), h755-fdcan-hardware (approved), h755-dualcore-heartbeat (approved) |
 | REQ-CAN-DRV-002 | QM | test | covered | route.lua (pending), h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
 | REQ-CAN-DRV-003 | QM | test | verified | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
@@ -80,6 +91,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-SAFE-003 | B | analysis | uncovered | — |
 | SYS-REQ-SEC-001 | QM | test | verified | secoc_test.v (pass) |
 | SYS-REQ-DIAG-001 | QM | test | verified | uds_test.v (pass) |
+| SYS-REQ-PROG-001 | QM | test | uncovered | — |
 | SYS-REQ-NM-001 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-LIFE-001 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-LIFE-002 | QM | test | verified | ↳ derived (all children verified) |
@@ -108,6 +120,17 @@ Generated from `requirements/*.toml` + verification links. See
 
 | req | h735/FDCAN | h735/ThreadX | h755/FDCAN | h755/ThreadX | h755/dual-core | host/SocketCAN | host/unit | review | static |
 |---|---|---|---|---|---|---|---|---|---|
+| REQ-BOOT-001 | | | | | | | ✓ | | |
+| REQ-BOOT-002 | | | | | | | ✓ | | |
+| REQ-BOOT-003 | | | | | | | | | |
+| REQ-BOOT-004 | | | | | | | | | |
+| REQ-BOOT-005 | | | | | | | ✓ | | |
+| REQ-BOOT-006 | | | | | | | | | |
+| REQ-BOOT-007 | | | | | | | | | |
+| REQ-BOOT-008 | | | | | | | ✓ | | |
+| REQ-BOOT-009 | | | | | | | ✓ | | |
+| REQ-BOOT-010 | | | | | | | | | |
+| REQ-BOOT-011 | | | | | | | | | |
 | REQ-CAN-DRV-001 | ✓ | | ✓ | | ✓ | · | | | |
 | REQ-CAN-DRV-002 | ✓ | | ✓ | | | · | | | |
 | REQ-CAN-DRV-003 | ✓ | | ✓ | | | | | | |
@@ -173,6 +196,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-SAFE-003 | | | | | | | | | |
 | SYS-REQ-SEC-001 | | | | | | | ✓ | | |
 | SYS-REQ-DIAG-001 | | | | | | | ✓ | | |
+| SYS-REQ-PROG-001 | | | | | | | | | |
 | SYS-REQ-NM-001 | | | | | | | | | |
 | SYS-REQ-LIFE-001 | | | | | | | | | |
 | SYS-REQ-LIFE-002 | | | | | | | | | |
