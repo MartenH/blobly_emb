@@ -53,11 +53,21 @@ fn parse_nvm(doc toml.Doc) NvmCfg {
 		}
 	}
 	t.on = (nm['enabled'] or { toml.Any(true) }).bool()
-	t.min_write_ms = u32((nm['min_write_ms'] or { toml.Any(1000) }).int())
-	t.sector_records = u32((nm['sector_records'] or { toml.Any(4096) }).int())
-	t.endurance = u32((nm['endurance'] or { toml.Any(10000) }).int())
-	t.min_years = u32((nm['min_years'] or { toml.Any(10) }).int())
+	t.min_write_ms = nvm_range(nm, 'min_write_ms', 1000, 1, 86_400_000)
+	t.sector_records = nvm_range(nm, 'sector_records', 4096, 8, 1_000_000)
+	t.endurance = nvm_range(nm, 'endurance', 10000, 1, 10_000_000)
+	t.min_years = nvm_range(nm, 'min_years', 10, 1, 100)
 	return t
+}
+
+// nvm_range: a bounded positive [nvm] integer — a negative typo must fail
+// generation, not wrap through a u32 cast into "never writes for 49 days".
+fn nvm_range(nm map[string]toml.Any, key string, def int, lo int, hi int) u32 {
+	v := int((nm[key] or { toml.Any(def) }).int())
+	if v < lo || v > hi {
+		panic('loom2v: [nvm] ${key} = ${v} is out of range (${lo}..${hi})')
+	}
+	return u32(v)
 }
 
 // field_width: packed bytes of one signal field (persist supports unsigned scalars).
@@ -117,6 +127,16 @@ fn derive_nvm(mut m Model, doc toml.Doc) ([]string, map[string]u16) {
 			panic('loom2v: persistent signal "${sname}" is not thread-local (from "${si.from}" ' +
 				'to "${si.to}") — P2 persists local signals; bus/cross-core persistence is not designed')
 		}
+		if m.part.external[si.from] or { false } {
+			panic('loom2v: persistent signal "${sname}" is local to partition "${si.from}", whose ' +
+				'image is generated/provided elsewhere — the owner journal cannot serve a satellite ' +
+				'partition\'s local state (persist it on the owner, or wait for cross-core persist)')
+		}
+		if !m.nm.on {
+			panic('loom2v: persistent signals need [nm] — the NM prepare-bus-sleep edge IS the ' +
+				'generated flush/mark-clean/erase quiet point (docs/nvm.md shutdown choreography); ' +
+				'without it values would never flush and every boot would read unclean')
+		}
 		if si.has_valid {
 			panic('loom2v: persistent signal "${sname}" has a `valid` field — persistence ' +
 				'restores VALUES; freshness is not a stored property')
@@ -131,6 +151,10 @@ fn derive_nvm(mut m Model, doc toml.Doc) ([]string, map[string]u16) {
 				panic('loom2v: persistent signal "${sname}" field "${f.name}" is ${f.typ} — ' +
 					'persist supports unsigned scalar fields (u8/u16/u32)')
 			}
+		}
+		if si.nvm_id == 0xFFFF {
+			panic('loom2v: signal "${sname}" pins nvm_id = 65535 — 0xFFFF is reserved ' +
+				'(erased-like) and 0 is the clean marker; pin within 1..65534')
 		}
 		id := if si.nvm_id != 0 {
 			si.nvm_id
@@ -185,20 +209,32 @@ fn derive_nvm(mut m Model, doc toml.Doc) ([]string, map[string]u16) {
 	return names, ids
 }
 
-// writer_period_ms: the activation period of the handler that WRITES a signal
-// (validated single-writer elsewhere); 0 = not found (treated as floor-paced).
+// writer_period_ms: the activation period of THE handler that writes a
+// persistent signal. Exactly one writer is required — the staging cell is
+// single-writer (SPSC) and the wear math needs one honest rate.
 fn writer_period_ms(doc toml.Doc, sname string) u32 {
+	mut period := u32(0)
+	mut writers := 0
 	for fb in ecumodel.toml_arr(doc, 'fb') {
 		for h in (fb.as_map()['handler'] or { toml.Any([]toml.Any{}) }).array() {
 			hm := h.as_map()
 			for w in (hm['writes'] or { toml.Any([]toml.Any{}) }).array() {
 				if w.string() == sname {
-					return u32((hm['period_ms'] or { toml.Any(0) }).int())
+					writers++
+					period = u32((hm['period_ms'] or { toml.Any(0) }).int())
 				}
 			}
 		}
 	}
-	return 0
+	if writers > 1 {
+		panic('loom2v: persistent signal "${sname}" has ${writers} writers — the staging ' +
+			'cell is single-writer and the wear math needs one rate; keep one writing handler')
+	}
+	if writers == 0 {
+		panic('loom2v: persistent signal "${sname}" has no writing handler — nothing would ' +
+			'ever journal it; add it to a handler\'s writes or drop persist')
+	}
+	return period
 }
 
 fn nvm_on(m Model) bool {
@@ -402,6 +438,7 @@ fn nvm_service(m Model, ioc_idx map[string]int) []string {
 		g << '\t\t{ // persist flush at the NM quiet point (docs/nvm.md choreography)'
 		g << '\t\t\tnm_now := g_nm.state()'
 		g << '\t\t\tif nm_now == .prepare_bus_sleep && nvm_prev_nm != .prepare_bus_sleep {'
+		g << '\t\t\t\tmut nvm_flush_ok := true'
 		for sname in m.nvm_names {
 			si := m.sig_of[sname] or { continue }
 			n := snake(sname)
@@ -416,11 +453,15 @@ fn nvm_service(m Model, ioc_idx map[string]int) []string {
 			g << '\t\t\t\t\t\tif g_nvm.put(${id}, &nvm_pack[0], ${si.packed_size()}) {'
 			g << '\t\t\t\t\t\t\tnvm_${n}_a = a'
 			g << '\t\t\t\t\t\t\tnvm_${n}_b = b'
+			g << '\t\t\t\t\t\t} else {'
+			g << '\t\t\t\t\t\t\tnvm_flush_ok = false // a value is NOT durable: no clean claim'
 			g << '\t\t\t\t\t\t}'
 			g << '\t\t\t\t\t}'
 			g << '\t\t\t\t}'
 		}
-		g << '\t\t\t\tg_nvm.mark_clean()'
+		g << '\t\t\t\tif nvm_flush_ok {'
+		g << '\t\t\t\t\tg_nvm.mark_clean() // clean ONLY when every value is durable'
+		g << '\t\t\t\t}'
 		g << '\t\t\t\tg_nvm.erase_pending() // the deferred erase, in the quiet window'
 		g << '\t\t\t}'
 		g << '\t\t\tnvm_prev_nm = nm_now'

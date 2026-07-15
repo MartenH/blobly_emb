@@ -52,6 +52,7 @@ fn handler_app_governor_on_100ms(ctx voidptr) {
 	mut command_b := u32(0)
 	C.ioc_get(1, &command_a, &command_b)
 	inp.command.code = u32(command_a)
+	inp.load_cmd = st.cell_load_cmd // local
 	mut outp := ports.GovernorOut{}
 	st.governor.on_100ms(inp, mut outp)
 	st.cell_load_cmd = outp.load_cmd // local
@@ -476,6 +477,7 @@ fn comm_thread_entry(input u32) {
 		{ // persist flush at the NM quiet point (docs/nvm.md choreography)
 			nm_now := g_nm.state()
 			if nm_now == .prepare_bus_sleep && nvm_prev_nm != .prepare_bus_sleep {
+				mut nvm_flush_ok := true
 				{ // flush LoadCmd
 					mut a := u32(0)
 					mut b := u32(0)
@@ -488,10 +490,14 @@ fn comm_thread_entry(input u32) {
 						if g_nvm.put(12844, &nvm_pack[0], 4) {
 							nvm_load_cmd_a = a
 							nvm_load_cmd_b = b
+						} else {
+							nvm_flush_ok = false // a value is NOT durable: no clean claim
 						}
 					}
 				}
-				g_nvm.mark_clean()
+				if nvm_flush_ok {
+					g_nvm.mark_clean() // clean ONLY when every value is durable
+				}
 				g_nvm.erase_pending() // the deferred erase, in the quiet window
 			}
 			nvm_prev_nm = nm_now

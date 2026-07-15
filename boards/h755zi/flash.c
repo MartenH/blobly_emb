@@ -107,16 +107,62 @@ int bflash_program(uint32_t addr, const uint8_t *data, uint32_t len) {
 	return 1;
 }
 
-/* bflash_read: flash is memory-mapped — a plain copy (the hook exists so the
- * session logic stays testable off-target).
- *
- * BENCH TODO (ECC): a power-cut-torn flash word can raise an ECC double-error
- * (bus fault / ECCD) ON READ on the H7 — the NvM journal's mount scan will hit
- * exactly that after a real power cut. This read must become fault-tolerant
- * (handle/clear ECCD, return the garbage bytes; the CRC layer above rejects
- * them) before the journal runs on silicon. */
+/* SR double-ECC flags (per bank): DBECCERR reports a torn/rotted flash word
+ * detected during a read — RM0399: the data returned is corrupted and the
+ * FLASH raises a flag (an interrupt only if DBECCERRIE is enabled, which we
+ * never enable), so a flag-checked copy is the fault-tolerant read. BENCH
+ * ITEM: verify no BusFault escalation path is configured on this part. */
+#define SR_DBECCERR (1u << 26)
+
+static void ecc_clear(int b) { CCR(b) = SR_DBECCERR; }
+static int ecc_fired(int b) { return (SR(b) & SR_DBECCERR) != 0; }
+
+/* bflash_read: flash is memory-mapped — a flag-checked, word-wise copy. A
+ * word whose read raises a double-ECC error is returned ZEROED (an all-zero
+ * record can never parse valid: the CRC layer above rejects it) and the flag
+ * is cleared so the scan continues. The hook also keeps the session logic
+ * testable off-target. */
 int bflash_read(uint32_t addr, uint8_t *out, uint32_t len) {
-	const uint8_t *src = (const uint8_t *)addr;
-	for (uint32_t i = 0; i < len; i++) out[i] = src[i];
+	uint32_t i = 0;
+	while (i < len) {
+		int b = bank_of(addr + i);
+		if (b < 0) {
+			/* not our flash (RAM-backed tests, headers): plain copy */
+			out[i] = *(const uint8_t *)(addr + i);
+			i++;
+			continue;
+		}
+		uint32_t chunk = 32u - ((addr + i) & 31u); /* to the flash-word edge */
+		if (chunk > len - i) chunk = len - i;
+		ecc_clear(b);
+		const uint8_t *src = (const uint8_t *)(addr + i);
+		for (uint32_t k = 0; k < chunk; k++) out[i + k] = src[k];
+		if (ecc_fired(b)) {
+			for (uint32_t k = 0; k < chunk; k++) out[i + k] = 0; /* CRC-rejected */
+			ecc_clear(b);
+		}
+		i += chunk;
+	}
+	return 1;
+}
+
+/* bflash_blank: "is this range erased?" — the journal's blank hook. A word
+ * whose read fires double-ECC was TOUCHED (a torn program can read all-0xFF
+ * on weak cells while being unprogrammable): not blank. Otherwise the erased
+ * pattern decides. */
+int bflash_blank(uint32_t addr, uint32_t len) {
+	for (uint32_t i = 0; i < len; i += 32u) {
+		int b = bank_of(addr + i);
+		if (b < 0) return 0;
+		ecc_clear(b);
+		const uint32_t *w = (const uint32_t *)(addr + i);
+		uint32_t acc = 0xFFFFFFFFu;
+		for (int k = 0; k < 8; k++) acc &= w[k];
+		if (ecc_fired(b)) {
+			ecc_clear(b);
+			return 0; /* touched word: never the frontier */
+		}
+		if (acc != 0xFFFFFFFFu) return 0;
+	}
 	return 1;
 }
