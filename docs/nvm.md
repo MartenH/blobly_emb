@@ -202,7 +202,7 @@ A flash whose program unit EXCEEDS 32 bytes would need a larger record — the
 size becomes a board profile constant at that point; no such internal flash is
 on the roadmap.
 
-## Chained values (v2, designed 2026-07-15 — ISO-TP-shaped)
+## Chained values (v2 — BUILT 2026-07-15, ISO-TP-shaped)
 
 The 20-byte cell is right for signals and wrong as a hard wall. v2 chains
 records the way ISO-TP frames a message (no FC — storage has no flow to
@@ -218,7 +218,9 @@ control):
   a power cut mid-chain leaves an incomplete group and the previous complete
   chain wins — the v1 fallback rule, unchanged in spirit.
 
-Engine consequences (why this is a slice, not a patch): the RAM table stores
+Built with the keyed table in the v2 engine slice (fuzzed: cuts at and inside
+every part; corrupt-part fallback; chains through compaction/re-homing;
+representation flips plain<->chained). Engine consequences: the RAM table stores
 a REFERENCE (sector + offset + len) for chained blocks instead of inlining
 (no-alloc; get() assembles from flash — append-only flash is immutable, so
 the copy-from-table rule is not violated: it guarded against STALE flash, and

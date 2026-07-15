@@ -465,7 +465,8 @@ fn test_misuse_guards() {
 	mut j2 := new_journal(mut f)
 	assert !j2.put(0, &data[0], 4) // the marker block is not writable
 	assert !j2.put(1, &data[0], 0) // empty = indistinguishable from absent
-	assert !j2.put(u16(max_blocks), &data[0], 4)
+	assert !j2.put(0xFFFF, &data[0], 4) // the reserved (erased-like) id
+	assert j2.put(u16(max_blocks), &data[0], 4) // v2: ids are keyed, not indexes
 	assert !f.double_prog
 }
 
@@ -674,4 +675,162 @@ fn test_no_erase_in_append_path() {
 	assert getv(j2, 2)? == 888
 	assert getv(j2, 1)? == 1
 	assert !f.double_prog
+}
+
+// ---- v2: keyed ids + chained values -----------------------------------------
+
+fn put_big(mut j Journal, block u16, len u16, seed u8) {
+	mut d := []u8{len: int(len)}
+	for i in 0 .. int(len) {
+		d[i] = u8(i) ^ seed
+	}
+	assert j.put(block, unsafe { &d[0] }, len)
+}
+
+fn check_big(j Journal, block u16, len u16, seed u8) {
+	mut out := [640]u8{}
+	n := j.get(block, &out[0], 640)
+	assert n == len, 'expected ${len} bytes, got ${n}'
+	for i in 0 .. int(len) {
+		assert out[i] == (u8(i) ^ seed), 'byte ${i} differs'
+	}
+}
+
+// Keyed table: full-range u16 ids (schema-identity hashes) roundtrip and
+// coexist; latest wins per id across remount.
+fn test_keyed_ids() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 0xA5F3, 1)
+	putv(mut j, 0x0001, 2)
+	putv(mut j, 0xFFFE, 3)
+	putv(mut j, 0xA5F3, 4)
+	mut j2 := remount(mut f)
+	assert getv(j2, 0xA5F3)? == 4
+	assert getv(j2, 0x0001)? == 2
+	assert getv(j2, 0xFFFE)? == 3
+	assert getv(j2, 0xBEEF) == none
+	assert !f.double_prog
+}
+
+// Chained values roundtrip at boundary sizes: 21 (smallest chain), 100
+// (freeze-frame scale), 634 (the ceiling); 635 refused.
+fn test_chain_roundtrip() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	put_big(mut j, 10, 21, 0x11)
+	put_big(mut j, 11, 100, 0x22)
+	check_big(j, 10, 21, 0x11)
+	check_big(j, 11, 100, 0x22)
+	mut j2 := remount(mut f)
+	check_big(j2, 10, 21, 0x11)
+	check_big(j2, 11, 100, 0x22)
+	// ceiling in a fresh journal (634 B = 32 parts = the whole test sector)
+	mut f2 := &TestFlash{}
+	mut j3 := new_journal(mut f2)
+	put_big(mut j3, 12, chain_data_max, 0x33)
+	check_big(j3, 12, chain_data_max, 0x33)
+	mut d := [640]u8{}
+	assert !j3.put(13, &d[0], chain_data_max + 1)
+	assert !f.double_prog && !f2.double_prog
+}
+
+// A chain REWRITE outranks the previous chain; a plain rewrite of a chained
+// block (and vice versa) flips representation cleanly.
+fn test_chain_rewrite_and_flip() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	put_big(mut j, 20, 50, 0x01)
+	put_big(mut j, 20, 40, 0x02) // chain over chain
+	check_big(j, 20, 40, 0x02)
+	putv(mut j, 20, 7) // plain over chain
+	assert getv(j, 20)? == 7
+	put_big(mut j, 20, 30, 0x03) // chain over plain
+	mut j2 := remount(mut f)
+	check_big(j2, 20, 30, 0x03)
+	assert !f.double_prog
+}
+
+// The chain power-cut fuzz: cut the write of a NEW chain at every part
+// boundary and inside every part — the PREVIOUS complete value must win, and
+// life continues past the torn run.
+fn test_chain_power_cut() {
+	nparts := int(chain_parts(100)) // 6 parts
+	for part in 0 .. nparts {
+		for cut in [u32(0), 16] {
+			mut f := &TestFlash{}
+			mut j := new_journal(mut f)
+			put_big(mut j, 30, 100, 0xAA) // the previous complete chain
+			f.cut_call = f.calls + u32(part) + 1
+			f.cut_bytes = cut
+			mut d := []u8{len: 100}
+			for i in 0 .. 100 {
+				d[i] = u8(i) ^ 0xBB
+			}
+			assert !j.put(30, unsafe { &d[0] }, 100)
+			mut j2 := remount(mut f)
+			check_big(j2, 30, 100, 0xAA)
+			assert !j2.clean // torn tail after activity
+			put_big(mut j2, 30, 60, 0xCC) // life continues
+			mut j3 := remount(mut f)
+			check_big(j3, 30, 60, 0xCC)
+			assert !f.double_prog, 'part ${part} cut ${cut}: double program'
+		}
+	}
+}
+
+// A corrupt middle part invalidates the WHOLE chain (whole-CRC): previous
+// value wins; corrupting the newest chain's part falls back to the older one.
+fn test_chain_corrupt_part() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	put_big(mut j, 40, 100, 0x0A)
+	start := j.cursor // next chain begins here
+	put_big(mut j, 40, 100, 0x0B)
+	f.mem[start + 2 * 32 + 8] ^= 0x01 // flip a data byte in part 2 of the NEW chain
+	mut j2 := remount(mut f)
+	check_big(j2, 40, 100, 0x0A) // the older complete chain wins
+	assert !f.double_prog
+}
+
+// Chains survive compaction and stray re-homing (copies under one fresh seq,
+// verbatim payloads, references re-pointed).
+fn test_chain_compaction_and_strays() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	put_big(mut j, 50, 80, 0x5A)
+	putv(mut j, 51, 51)
+	assert j.compact()
+	check_big(j, 50, 80, 0x5A)
+	assert getv(j, 51)? == 51
+	assert j.erase_pending()
+	mut j2 := remount(mut f)
+	check_big(j2, 50, 80, 0x5A)
+	// interrupted compaction with a chain in flight -> strays re-home at the
+	// quiet point, chain intact throughout
+	f.cut_call = f.calls + 2
+	f.cut_bytes = 16
+	j2.compact()
+	f.cut_call = 0xFFFF_FFFF
+	mut j3 := remount(mut f)
+	check_big(j3, 50, 80, 0x5A)
+	assert j3.erase_pending()
+	check_big(j3, 50, 80, 0x5A)
+	mut j4 := remount(mut f)
+	check_big(j4, 50, 80, 0x5A)
+	assert getv(j4, 51)? == 51
+	assert !f.double_prog
+}
+
+// get() truncation: a small cap yields a clean prefix of a chained value.
+fn test_chain_get_truncated() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	put_big(mut j, 60, 100, 0x66)
+	mut out := [10]u8{}
+	n := j.get(60, &out[0], 10)
+	assert n == 10
+	for i in 0 .. 10 {
+		assert out[i] == (u8(i) ^ 0x66)
+	}
 }
