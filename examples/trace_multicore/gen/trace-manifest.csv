@@ -4,10 +4,12 @@
 1,sense,0,MedSense,on_10ms,10000,sense_main
 2,ctrl,1,CtrlWork,on_10ms,10000,ctrl_main
 3,ctrl,1,SlowCtrl,on_20ms,20000,ctrl_main
-# threads: thread,id,name,core,prio  (id 0 reserved = idle; prio - = no RTOS prio)
-thread,1,sense_main,0,10
-thread,2,ctrl_main,1,10
+# threads: thread,id,name,core  (id 0 reserved = idle)
+thread,1,sense_main,0
+thread,2,ctrl_main,1
 # trace frames: frame,id,bus
 cmd,0x7e2,can0
 rsp,0x7e3,can0
+stat,0x7e4,can0
 record,0x7e5,can0
+dump_fc,0x7e6,can0
