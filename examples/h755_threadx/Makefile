@@ -38,9 +38,16 @@ LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
 # APP_LINK=boot: link at APP_VECTORS (bootmap.h APP_BASE 0x08020000 + 0x400) for the
 # bootloader chain; wrap the .bin with tools/mkimage --pad-vectors before flashing.
+# The link mode is PART OF THE ARTIFACT: the stamp below forces a relink when it
+# changes, so `make APP_LINK=boot` can never reuse a stale standalone .elf whose
+# vectors still point at 0x08000000 (codex on emb#130).
 ifeq ($(APP_LINK),boot)
 LDFLAGS += -Wl,--defsym,__flash_base__=0x08020400 -Wl,--defsym,__flash_len__=0xDFC00
+LINKMODE = boot
+else
+LINKMODE = std
 endif
+LINKSTAMP = $(BUILD)/link.$(LINKMODE).stamp
 
 BUILD    = build
 TX_A     = $(BUILD)/tx.a
@@ -88,7 +95,11 @@ $(TX_A): $(TX_OBJ)
 	$(AR) -rc $@ $^
 
 # 3) cross-compile + link: generated app.c + board bring-up + CAN backend + ThreadX kernel.
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(BOARD_LD_THREADX)
+$(LINKSTAMP): | $(BUILD)
+	@rm -f $(BUILD)/link.*.stamp
+	@touch $@
+
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(BOARD_LD_THREADX) $(LINKSTAMP)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) -o $@
 	$(SIZE) $@
 
@@ -99,8 +110,12 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 flash: $(BUILD)/$(NAME).bin
+ifeq ($(APP_LINK),boot)
+	$(error a boot-linked image is not standalone: wrap it (tools/mkimage --pad-vectors) and deliver via the boot manager — flashing this .bin at 0x08000000 would overwrite the bootloader with vectors that point into the app slot)
+else
 	st-flash write $(BUILD)/$(NAME).bin 0x08000000
 	st-flash reset
+endif
 
 clean:
 	rm -rf $(BUILD) gen ports sig
