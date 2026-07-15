@@ -72,6 +72,26 @@ int blob_can_open(const char *name, int fd_mode) {
 	return idx;
 }
 
+/* In-flight PDUs per bus: CanIf_Transmit acceptance only means "buffered" — the
+ * frame is on the wire when CanIf calls TxConfirmation. blob_can_send increments,
+ * Blobly_TxConfirmation decrements, tx_idle is pending == 0 (REQ-BOOT-012: a
+ * self-resetting node must not reset its response away). Route the Tx PDUs'
+ * upper-layer confirmation to this CDD, same as the Rx indication. If the
+ * integration does NOT wire it, pending never drains and tx_idle stays 0 — the
+ * caller's bounded wait then rules (fail-slow, never lose-the-ack). */
+static volatile uint32_t tx_pending[BLOB_CAN_BUSES];
+
+void Blobly_TxConfirmation(PduIdType pdu) {
+	for (int i = 0; i < tx_map_n; i++) {
+		if (tx_map[i].pdu == pdu) {
+			int b = tx_map[i].bus;
+			if (b >= 0 && b < BLOB_CAN_BUSES)
+				__atomic_fetch_sub(&tx_pending[b], 1u, __ATOMIC_SEQ_CST);
+			return;
+		}
+	}
+}
+
 int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int fd_mode) {
 	(void)fd_mode;
 	for (int i = 0; i < tx_map_n; i++) {
@@ -80,7 +100,13 @@ int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int fd_m
 			pdu.SduDataPtr  = (uint8_t *)data;
 			pdu.SduLength   = len;
 			pdu.MetaDataPtr = 0; /* set for dynamic-id Tx PDUs (id carried in MetaData) */
-			return CanIf_Transmit(tx_map[i].pdu, &pdu) == E_OK ? 0 : -1;
+			if (h >= 0 && h < BLOB_CAN_BUSES) /* atomics: confirmation runs in CanIf/ISR context */
+				__atomic_fetch_add(&tx_pending[h], 1u, __ATOMIC_SEQ_CST);
+			if (CanIf_Transmit(tx_map[i].pdu, &pdu) == E_OK)
+				return 0;
+			if (h >= 0 && h < BLOB_CAN_BUSES)
+				__atomic_fetch_sub(&tx_pending[h], 1u, __ATOMIC_SEQ_CST); /* rejected: undo */
+			return -1;
 		}
 	}
 	return -1; /* (bus,id) not in the CanIf Tx config */
@@ -93,12 +119,11 @@ int blob_can_tx_ready(int h) {
 	return 1;
 }
 
-/* The CanIf shim has no drain query — TxConfirmation isn't tracked here. Report
- * idle (same fallback shape as tx_ready): a self-resetting node on this backend
- * relies on the REQ-BOOT-012 bounded wait rather than a real confirmation. */
+/* Wire-done via the TxConfirmation tally above (REQ-BOOT-012). */
 int blob_can_tx_idle(int h) {
-	(void)h;
-	return 1;
+	if (h < 0 || h >= BLOB_CAN_BUSES)
+		return 1;
+	return __atomic_load_n(&tx_pending[h], __ATOMIC_SEQ_CST) == 0u;
 }
 
 int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
