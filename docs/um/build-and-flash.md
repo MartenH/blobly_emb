@@ -36,11 +36,13 @@ cd examples/h755_threadx
 make gen        # ecucheck + loom2v (only after ecu.toml / app changes)
 make            # build/h755_threadx.bin, linked at 0x08000000
 make flash      # st-flash write + reset
-candump can0    # NM alive 0x513, workload 0x200/0x201, CpuLoad 0x7E0/0x7E1
+candump can0    # NM alive 0x513, Workload 0x200, CpuLoad 0x7E0/0x7E1
+                # (0x201 = M4LoadFrame appears only once the CM4 image below runs)
 ```
 
 The CM4 satellite image is generated into its own example and flashed to bank 2 once
-(rebuild/reflash only when the config that feeds it changes):
+(rebuild/reflash only when the config that feeds it changes — on a fresh or erased
+board flash it FIRST, or the two-core checks stay dark):
 
 ```sh
 make -C ../h755_m4_app
@@ -68,21 +70,30 @@ make -C examples/h755_boot
 
 # the SAME app, linked for the app slot — the link mode is part of the artifact,
 # switching APP_LINK relinks automatically, and `make APP_LINK=boot flash` refuses
+# (both guards land with the REQ-BOOT-012 PR; on older trees `rm build/*.elf` first)
 cd examples/h755_threadx && make APP_LINK=boot
 
-# wrap: header + vector padding (+ --valid ONLY for factory/SWD flashing —
-# a field image is validated and marked by the bootloader itself)
+# wrap TWICE — the two images are NOT interchangeable:
+#   factory (--valid): pre-marked, for SWD flashing only
+#   field  (no mark):  the bootloader itself verifies and writes the mark LAST —
+#                      that ordering IS the torn-transfer recovery guarantee
 cd ../.. && v run tools/mkimage examples/h755_threadx/build/h755_threadx.bin \
-    examples/h755_threadx/build/h755_threadx.img <sw_version> --valid --pad-vectors
+    examples/h755_threadx/build/factory.img <sw_version> --valid --pad-vectors
+v run tools/mkimage examples/h755_threadx/build/h755_threadx.bin \
+    examples/h755_threadx/build/field.img <sw_version> --pad-vectors
 ```
 
 **First time (factory, over SWD):**
 
 ```sh
 st-flash write examples/h755_boot/build/h755_boot.bin 0x08000000
-st-flash write examples/h755_threadx/build/h755_threadx.img 0x08020000
+st-flash write examples/h755_threadx/build/factory.img 0x08020000
+st-flash write ../h755_m4_app/build/h755_m4_app.bin 0x08100000   # bank 2: the satellite
 st-flash reset        # boot verifies header+CRC and jumps; the app appears on can0
 ```
+
+The boot manager owns only the CM7 app slot — **CAN field updates do not refresh the
+CM4 image**; it rides bank 2 and is reflashed over SWD when its config changes.
 
 **Every time after (field, over CAN):** the app's `boot` shell command reboots into the
 boot manager (no reply — silence is the ack, the reset preempts it), then the flasher
@@ -92,13 +103,13 @@ drives the whole UDS session (erase, transfer, on-target CRC, valid mark, reset)
 cansend can0 7F0#626F6F74      # ascii "boot" -> app traffic stops, boot mode
 cd ../blobly_net
 v -enable-globals -path "@vlib|@vmodules|modules" run cmd/flash \
-    can0 ../blobly_emb/examples/h755_threadx/build/h755_threadx.img 08020000 7B0 7B8 <sw_version>
+    can0 ../blobly_emb/examples/h755_threadx/build/field.img 08020000 7B0 7B8 <sw_version>
 # ...
 # flash: image verified + marked valid
 # flash: ECU reset — done          <- the app is running again
 ```
 
-Wrap the field image WITHOUT `--valid`. A transfer cut anywhere leaves an image the boot
+A transfer cut anywhere leaves an image the boot
 refuses (valid mark last) — the board sits in programming mode and a plain re-run of
 `cmd/flash` recovers it. All bench-verified, including pull-power mid-transfer
 ([../bootloader.md](../bootloader.md) bench log).
@@ -132,11 +143,18 @@ signals, and the Lua **Script panel**.
 | `cmd/dbc_decode`, `cmd/signal_decode` | bus decoding against a DBC |
 | `scripts/runtests.sh` | headless Lua test runner (CI) |
 
-**Shell from the raw CLI** (no GUI): single frame in, ISO-TP out — fine for one-liners
-(`cansend can0 7F0#7073` = `ps`) but multi-frame responses need a flow control on the
-`fc` id; if you skip it the shell waits in that stream and later commands get no answer
-(a reset clears it). Use the GUI shell or `isotprecv -s 0x7F2 -d 0x7F1 can0` for real
-sessions.
+**Shell from the raw CLI** (no GUI): single frame in, ISO-TP out — but nearly every
+response is multi-frame, and a multi-frame response needs a flow control on the `fc`
+id. Start the receiver first, then send:
+
+```sh
+isotprecv -s 0x7F2 -d 0x7F1 can0 &     # answers the FF with the flow control
+cansend can0 7F0#7073                  # "ps"
+```
+
+A bare `cansend` without the receiver leaves the shell waiting inside that response
+stream and every later command gets silence (a reset clears it). The GUI shell panel
+does all of this for you.
 
 ## Debugging the target
 
