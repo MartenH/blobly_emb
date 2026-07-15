@@ -36,6 +36,7 @@ all: $(BUILD)/blinky.bin
 # 1) transpile the V superloop to freestanding C (no host compile/link)
 $(BUILD)/blinky.c: main.v | $(BUILD)
 	$(V) $(VDBG) -freestanding -gc none -o $@ main.v
+	../../scripts/lint_vinit.sh $@
 
 # 2) cross-compile + link the V output with the startup and board shim
 $(BUILD)/blinky.elf: $(CSRC) linker.ld | $(BUILD)
@@ -70,3 +71,7 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all flash debug gdbserver gdb clean
+
+# a failed recipe (the vinit lint) must not leave its half-made target: GNU make only
+# deletes targets on error when asked (make manual, Errors in Recipes)
+.DELETE_ON_ERROR:

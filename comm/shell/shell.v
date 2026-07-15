@@ -135,6 +135,7 @@ mut:
 // on the caller's (4 KB comm) stack. No constructor by value, ever, for module-sized structs.
 pub fn (mut m ShellModule) init(out_id u32) {
 	m.out_id = out_id
+	m.link.init_defaults() // _vinit never runs on target: timeouts are set HERE
 	m.ncmd = 0
 	// help is handled intrinsically in on_in (a plain fn pointer can't reach the registry);
 	// everything else is an ordinary registered command.
