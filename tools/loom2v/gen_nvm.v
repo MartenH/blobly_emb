@@ -167,6 +167,11 @@ fn derive_nvm(mut m Model, doc toml.Doc) ([]string, map[string]u16) {
 		id := if si.nvm_id != 0 {
 			si.nvm_id
 		} else {
+			// COUPLING INVARIANT: the hash derives from si.fields in the SAME
+			// order the pack/unpack/restore emitters use — identity and byte
+			// layout can only ever drift TOGETHER (new identity -> declared
+			// default: safe loss), never apart (which would silently
+			// reinterpret old bytes). Never hash a differently-ordered view.
 			nvm_hash16('${sname}:${si.fields.map('${it.name}=${it.typ}').join(',')}')
 		}
 		for other, oid in ids {
@@ -180,6 +185,14 @@ fn derive_nvm(mut m Model, doc toml.Doc) ([]string, map[string]u16) {
 	}
 	if names.len == 0 {
 		return names, ids
+	}
+	// the journal's RAM pool holds max_blocks distinct ids — and stale ids
+	// from OLDER firmware occupy rows until prune() runs, so leave migration
+	// headroom rather than filling the pool with current ids.
+	if names.len > 48 {
+		panic('loom2v: ${names.len} persistent signals exceed the safe pool budget ' +
+			'(journal pool = 64 rows, and schema migrations need headroom for stale ' +
+			'ids until prune) — persist less, or grow nvm.max_blocks first')
 	}
 	// capacity + GLOBAL REWRITE HEADROOM, mirroring the engine's runtime gate:
 	// every persistent signal is one record (P2 <= 8 B), live = n + marker.
@@ -225,6 +238,7 @@ fn derive_nvm(mut m Model, doc toml.Doc) ([]string, map[string]u16) {
 fn writer_period_ms(doc toml.Doc, sname string) u32 {
 	mut period := u32(0)
 	mut writers := 0
+	mut writer_reads := false
 	for fb in ecumodel.toml_arr(doc, 'fb') {
 		for h in (fb.as_map()['handler'] or { toml.Any([]toml.Any{}) }).array() {
 			hm := h.as_map()
@@ -232,6 +246,11 @@ fn writer_period_ms(doc toml.Doc, sname string) u32 {
 				if w.string() == sname {
 					writers++
 					period = u32((hm['period_ms'] or { toml.Any(0) }).int())
+					for r in (hm['reads'] or { toml.Any([]toml.Any{}) }).array() {
+						if r.string() == sname {
+							writer_reads = true
+						}
+					}
 				}
 			}
 		}
@@ -239,6 +258,12 @@ fn writer_period_ms(doc toml.Doc, sname string) u32 {
 	if writers > 1 {
 		panic('loom2v: persistent signal "${sname}" has ${writers} writers — the staging ' +
 			'cell is single-writer and the wear math needs one rate; keep one writing handler')
+	}
+	if writers == 1 && !writer_reads {
+		panic('loom2v: persistent signal "${sname}"\'s writing handler does not READ it — ' +
+			'the first dispatch would clobber the restored value with freshly computed state, ' +
+			'defeating persistence. A value that must survive resets should be derivable from ' +
+			'itself: add "${sname}" to the writer\'s reads (docs/nvm.md, the Governor lesson)')
 	}
 	if writers == 0 {
 		panic('loom2v: persistent signal "${sname}" has no writing handler — nothing would ' +
@@ -482,6 +507,7 @@ fn nvm_service(m Model, ioc_idx map[string]int) []string {
 			g << '\t\t\t\t\t\tif g_nvm.put(${id}, &nvm_pack[0], ${si.packed_size()}) {'
 			g << '\t\t\t\t\t\t\tnvm_${n}_a = a'
 			g << '\t\t\t\t\t\t\tnvm_${n}_b = b'
+			g << '\t\t\t\t\t\t\tnvm_${n}_t = t1 // the flush restarts the floor: no wake-churn double put'
 			g << '\t\t\t\t\t\t} else {'
 			g << '\t\t\t\t\t\t\tnvm_flush_ok = false // a value is NOT durable: no clean claim'
 			g << '\t\t\t\t\t\t}'
