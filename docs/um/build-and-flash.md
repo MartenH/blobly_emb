@@ -88,7 +88,7 @@ v run tools/mkimage examples/h755_threadx/build/h755_threadx.bin \
 ```sh
 st-flash write examples/h755_boot/build/h755_boot.bin 0x08000000
 st-flash write examples/h755_threadx/build/factory.img 0x08020000
-st-flash write ../h755_m4_app/build/h755_m4_app.bin 0x08100000   # bank 2: the satellite
+st-flash write examples/h755_m4_app/build/h755_m4_app.bin 0x08100000  # bank 2: the satellite
 st-flash reset        # boot verifies header+CRC and jumps; the app appears on can0
 ```
 
