@@ -355,8 +355,16 @@ The entire layer develops dry.
 
 1. **P1 — the journal engine** (`nvm/` module): format, mount, append, compact
    over FlashOps; power-cut fuzz tests. Pure host work.
-2. **P2 — `persist` codegen**: restore-before-dispatch + change-detect +
-   rate-limited journal on the comm thread; host sim example (file-backed).
+2. **P2 — `persist` codegen**: BUILT 2026-07-15 ("the toml part"): [nvm] block +
+   `persist = "now"/"shutdown"` on signals; schema-identity hashes (+ `nvm_id`
+   pin), the generation-time WEAR CHECK (it fired on its first real config:
+   LoadCmd at a 1 s floor = 1.3 years — the error showed the math), capacity/
+   headroom gates; emitted wiring = pre-kernel mount+prune+restore (the
+   single-threaded window), per-thread cell restore, wrapper staging through
+   ioc cells (seeded with restored values — no phantom first put), comm-thread
+   change+floor-gated puts, NM prepare-bus-sleep edge flush + mark_clean +
+   deferred erase. P2 cut: local signals, 1..2 unsigned fields. Host sim
+   example (file-backed) = the next slice.
 3. **P3 — target**: reuse `boards/h755zi/flash.c`; flash map decision per board;
    NM sleep-entry flush + compaction window. (Bench: pull power mid-append, on a
    loop, and count survivors.)
