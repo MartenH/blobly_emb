@@ -1,6 +1,6 @@
 module nvm
 
-// @verifies REQ-NVM-002, REQ-NVM-003, REQ-NVM-012
+// @verifies REQ-NVM-002, REQ-NVM-003
 // The journal engine against RAM-backed FlashOps. The TestFlash enforces one
 // invariant EVERYWHERE: no flash word is ever programmed twice (double_prog
 // latches if any programmed byte wasn't erased) — the ECC-legality rule the
@@ -614,37 +614,26 @@ fn test_compact_rehomes_strays_before_erase() {
 	assert !f.double_prog
 }
 
-// (2) A failed program may have LANDED a complete record (status-window cut):
-// its seq is consumed, so a retry with a DIFFERENT value always outranks it —
-// two records must never share a seq.
-fn test_landed_failure_consumes_seq() {
+// (2) A "failed" program that LANDED the complete record (status-window cut)
+// is verified by read-back and treated as a SUCCESS — RAM and flash agree
+// immediately, no unconfirmed limbo, and a later compact cannot destroy a
+// durable newer value with a re-persisted older one.
+fn test_landed_failure_is_a_success() {
 	mut f := &TestFlash{}
 	mut j := new_journal(mut f)
 	putv(mut j, 1, 0xD1)
 	f.cut_call = f.calls + 1
 	f.cut_bytes = 32 // the record lands COMPLETELY, the driver reports failure
 	data := [u8(0xD2), 0, 0, 0]
-	assert !j.put(1, &data[0], 4) // unconfirmed by contract
-	// the caller retries with a NEWER value
-	putv(mut j, 1, 0xD3)
-	assert getv(j, 1)? == 0xD3
+	assert j.put(1, &data[0], 4) // read-back verifies: this IS a success
+	assert getv(j, 1)? == 0xD2
 	mut j2 := remount(mut f)
-	assert getv(j2, 1)? == 0xD3, 'the retry must outrank the landed failure'
+	assert getv(j2, 1)? == 0xD2
+	// and further writes continue normally with ordered seqs
+	putv(mut j2, 1, 0xD3)
+	mut j3 := remount(mut f)
+	assert getv(j3, 1)? == 0xD3
 	assert !f.double_prog
-}
-
-// (2b) ...and with NO retry, the landed record is honest durability: mount
-// serves it (put's false meant UNCONFIRMED, not not-written).
-fn test_landed_failure_without_retry_is_served() {
-	mut f := &TestFlash{}
-	mut j := new_journal(mut f)
-	putv(mut j, 1, 0xD1)
-	f.cut_call = f.calls + 1
-	f.cut_bytes = 32
-	data := [u8(0xD2), 0, 0, 0]
-	assert !j.put(1, &data[0], 4)
-	mut j2 := remount(mut f)
-	assert getv(j2, 1)? == 0xD2 // it IS on flash, complete and valid
 }
 
 // (3) Quiet-point cleanup must not un-clean an orderly tail: clean shutdown,
@@ -659,5 +648,30 @@ fn test_clean_survives_quiet_point_cleanup() {
 	mut j2 := remount(mut f)
 	assert j2.clean, 'quiet-point cleanup destroyed the clean tail'
 	assert getv(j2, 1)? == 7
+	assert !f.double_prog
+}
+
+// Round 4: the append path never erases. A put that fills the active sector
+// while the partner is still dirty REFUSES (quiet-point discipline) instead
+// of erasing inline; after erase_pending() the retry succeeds.
+fn test_no_erase_in_append_path() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 1)
+	for j.free_records() > 0 {
+		putv(mut j, 2, j.free_records())
+	}
+	putv(mut j, 2, 777) // fills again via inline compact (partner clean: no erase)
+	for j.free_records() > 0 {
+		putv(mut j, 2, j.free_records())
+	}
+	// active full AND partner dirty: the put must refuse, not erase inline
+	data := [u8(9), 0, 0, 0]
+	assert !j.put(2, &data[0], 4)
+	assert j.erase_pending() // the quiet point frees the partner
+	putv(mut j, 2, 888) // retry succeeds (compact without erase)
+	mut j2 := remount(mut f)
+	assert getv(j2, 2)? == 888
+	assert getv(j2, 1)? == 1
 	assert !f.double_prog
 }

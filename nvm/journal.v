@@ -17,9 +17,10 @@ module nvm
 //   [28..31] crc32       LE   over bytes 0..27
 //
 // Invariants (the design's, HARDENED per the 2026-07-15 review round):
-//   - append-only; no flash word is ever programmed twice — a FAILED program
-//     burns its slot (the driver may have touched the word; re-programming a
-//     touched ECC word is illegal);
+//   - append-only; no flash word is ever programmed twice — a reported
+//     program failure is READ-BACK-VERIFIED (landed intact = success), and a
+//     genuinely failed slot is burned (the driver may have touched the word;
+//     re-programming a touched ECC word is illegal);
 //   - mount is READ-ONLY: scan + table + cursor. It never programs and never
 //     erases; crash recovery belongs to erase_pending()/compact() at runtime;
 //   - a power cut or transient driver failure at any point leaves the journal
@@ -397,6 +398,15 @@ fn (mut j Journal) rehome_strays(from int) bool {
 	}
 	ns := j.strays(from)
 	if ns == 0 {
+		// no data strays — but the NEWEST clean marker may still live in the
+		// sector about to be erased (reachable via the dirty-tail active
+		// override). Re-anchoring the marker in the active sector costs one
+		// slot and keeps an orderly shutdown orderly.
+		if j.tail_clean {
+			if !j.append_marker() {
+				return false
+			}
+		}
 		return true
 	}
 	was_clean := j.tail_clean
@@ -433,7 +443,15 @@ fn (mut j Journal) ensure_space() bool {
 		if j.compacting {
 			return false // a copy overflowing the target = capacity bug; refuse
 		}
-		if !j.compact() {
+		if !j.partner_clean {
+			// an inline compact would ERASE inside the append path (seconds of
+			// stall on the comm thread — REQ-NVM-007's quiet-point rule).
+			// Refuse; the caller's erase_pending() at the next quiet point
+			// frees the partner and the retry succeeds. The watermark policy
+			// keeps this branch off the hot path entirely.
+			return false
+		}
+		if !j.compact() { // erase-free: the partner is known clean
 			return false
 		}
 		if j.cursor + rec_size > j.cfg.size {
@@ -507,11 +525,26 @@ fn (mut j Journal) append_marker() bool {
 // program_slot: one record at the cursor. The slot is consumed WHETHER OR NOT
 // the program succeeds — a failing driver may still have touched the word,
 // and re-programming a touched ECC word is illegal (H7 PGSERR / ECC garbage).
-// A burned slot reads as a torn record at the next mount and is skipped.
+// A reported FAILURE is verified by READ-BACK: if the record landed intact
+// (status-window cut), the append IS a success — otherwise RAM and flash
+// would disagree until a compact destroyed the durable newer value. A burned
+// slot (read-back mismatch) reads as a torn record at the next mount.
 fn (mut j Journal) program_slot(rec &u8) bool {
 	addr := j.sector_addr(j.active) + j.cursor
 	j.cursor += rec_size
-	return j.ops.program(j.ops.ctx, addr, rec, rec_size)
+	if j.ops.program(j.ops.ctx, addr, rec, rec_size) {
+		return true
+	}
+	mut back := [32]u8{}
+	if !j.ops.read(j.ops.ctx, addr, &back[0], rec_size) {
+		return false
+	}
+	for i in 0 .. int(rec_size) {
+		if back[i] != unsafe { rec[i] } {
+			return false
+		}
+	}
+	return true // the record is durably on flash: the failure was cosmetic
 }
 
 // slot_blank: is the record slot at addr erased? The driver blank-check is
