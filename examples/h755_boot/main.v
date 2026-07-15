@@ -78,12 +78,10 @@ fn main() {
 		program: fl_program
 		read:    fl_read
 	}
-	// EXPLICIT: Prog.seed's field default ('BLOB') is _vinit work — freestanding
-	// never runs it, so the __global's seed reads 0 and the tester skips the key
-	// (seed==0 = already-unlocked convention) -> every guarded service NRCs 0x33.
-	// Found on the P2 bench; the vlang _vinit trap, third sighting. P5 replaces
-	// the whole scheme anyway.
-	g_prog.seed = u32(0x424C4F42)
+	// EXPLICIT init: field defaults are _vinit work — freestanding never runs it
+	// (the P2 bench found seed reading 0 = the already-unlocked convention).
+	g_prog.init() // seed + default session
+	g_link.init_defaults() // ISO-TP N_Bs/WFTmax — 0 would wait forever on a lost FC
 	g_prog.app_base = app_base
 	g_prog.app_size = app_size
 	// identification (REQ-BOOT-009): F180 = bootloader version, F181 = app state

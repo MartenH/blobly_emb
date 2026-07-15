@@ -61,6 +61,7 @@ $(BUILD)/app.c: main.v gen/.stamp | $(BUILD)
 	cd $(REPO) && $(V) $(VDBG) -freestanding -gc none -no-bounds-checking \
 	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
 	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
+	$(REPO)/scripts/lint_vinit.sh $@
 
 # 2) cross-compile + link: V output + startup + board shim + CAN backend
 $(BUILD)/app.elf: $(CSRC) $(BOARD_LD_BARE) | $(BUILD)
@@ -92,3 +93,7 @@ clean:
 	rm -rf $(BUILD) gen ports sig
 
 .PHONY: all gen flash debug gdbserver gdb clean
+
+# a failed recipe (the vinit lint) must not leave its half-made target: GNU make only
+# deletes targets on error when asked (make manual, Errors in Recipes)
+.DELETE_ON_ERROR:

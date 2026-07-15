@@ -1,3 +1,8 @@
+# *** BROKEN ON MAIN (pre-existing, surfaced by emb#134): this example's main.v is
+# pinned to a RETIRED emitter contract — `make` regenerates gen/ first and the fresh
+# gen no longer matches main.v (run() signature drift). Re-wiring it to the modern
+# emitter is an open slice; nothing here builds until then (so the committed gen is
+# dead code — do NOT hand-patch it, AGENTS.md rule).
 # Two-core handler-tracing demo — fully generated from ecu.toml (loom2v P3a). The generation +
 # build + clean rules are shared in examples/common.mk (identical pipeline to the other
 # examples); only the trace-specific vcan bring-up + watch helpers are here. Sim-first: `make
