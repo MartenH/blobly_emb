@@ -20,6 +20,7 @@ const req_id = u32(0x7B0)
 const rsp_id = u32(0x7B8)
 
 fn C.board_clock_init()
+fn C.board_can_clock_pins_init() // FDCAN1 kernel clock + PD0/PD1 AF9 — blob_can_open does NOT mux pins
 fn C.board_now_us() u64
 fn C.bootcell_take_request() u32
 fn C.bootcell_set_info(reason u32)
@@ -62,6 +63,7 @@ fn main() {
 	// --- stay: programming mode (REQ-BOOT-004: always reachable) ---
 	C.bootcell_set_info(2) // BOOT_REASON_NO_APP (or a pending request)
 	C.board_clock_init()
+	C.board_can_clock_pins_init() // found on the P2 bench: without the pin mux the session times out
 	mut ch := can.Channel{}
 	if !ch.open('0', false) {
 		for {} // no bus, nothing to serve — parked, but flashable over SWD
@@ -72,6 +74,12 @@ fn main() {
 		program: fl_program
 		read:    fl_read
 	}
+	// EXPLICIT: Prog.seed's field default ('BLOB') is _vinit work — freestanding
+	// never runs it, so the __global's seed reads 0 and the tester skips the key
+	// (seed==0 = already-unlocked convention) -> every guarded service NRCs 0x33.
+	// Found on the P2 bench; the vlang _vinit trap, third sighting. P5 replaces
+	// the whole scheme anyway.
+	g_prog.seed = u32(0x424C4F42)
 	g_prog.app_base = app_base
 	g_prog.app_size = app_size
 	// identification (REQ-BOOT-009): F180 = bootloader version, F181 = app state
