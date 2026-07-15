@@ -10,6 +10,8 @@ import comm.trace
 import comm.shell
 import comm.nm
 import comm.nm_can
+import nvm
+import boot as bootfl
 import driver.can
 
 struct Thread_load_fast_state {
@@ -53,6 +55,7 @@ fn handler_app_governor_on_100ms(ctx voidptr) {
 	mut outp := ports.GovernorOut{}
 	st.governor.on_100ms(inp, mut outp)
 	st.cell_load_cmd = outp.load_cmd // local
+	C.ioc_pub(2, u32(outp.load_cmd.iters), u32(0)) // persist staging
 }
 
 fn handler_app_load_slow_on_100ms(ctx voidptr) {
@@ -78,6 +81,13 @@ fn C.shell_bmc(&u8, int) int
 fn C.shell_m4sig(&u8, int) int
 fn C.shell_iocx(&u8, int) int
 fn C.duo_poll(int, &u32, &u32) int // xioc reader (comm_glue.c): 1 = fresh value
+// [nvm]: the journal storage map + flash driver (boards layer / example glue)
+fn C.nvm_map_a() u32
+fn C.nvm_map_b() u32
+fn C.nvm_map_size() u32
+fn C.bflash_erase(addr u32, size u32) int
+fn C.bflash_program(addr u32, data &u8, len u32) int
+fn C.bflash_read(addr u32, out &u8, len u32) int
 fn C.duo_trace_req(u32) // post arm(1)/snapshot(2) to the satellite (duo.h dtrace cell)
 fn C.duo_trace_ready() int
 fn C.duo_trace_count() u32
@@ -203,6 +213,9 @@ __global (
 	g_tm trace.TraceModule
 	g_sh shell.ShellModule
 	g_duo_trace_ring [256]trace.Record // the satellite core's imported dump window
+	g_nvm nvm.Journal // the persistence journal (mounted pre-kernel)
+	g_nvmres_load_cmd [8]u8 // restore staging (pre-kernel -> thread init)
+	g_nvmres_load_cmd_n u16
 	g_nm nm_can.NmModule
 	g_comm_tcb   [32]u64  // the bus-owning comm thread
 	g_comm_stack [4096]u8
@@ -250,6 +263,9 @@ fn run_load_mid() {
 
 fn run_ctrl_slow() {
 	mut st := Thread_ctrl_slow_state{} // small + carries the FB field defaults: stack is right
+	if g_nvmres_load_cmd_n == 4 { // restored before first dispatch
+		st.cell_load_cmd.iters = u32(u32(g_nvmres_load_cmd[0]) | (u32(g_nvmres_load_cmd[1]) << 8) | (u32(g_nvmres_load_cmd[2]) << 16) | (u32(g_nvmres_load_cmd[3]) << 24))
+	}
 	mut sched := &g_sched_ctrl_slow // module-sized: lives in bss, not this lifetime frame
 	sched.every(100000, handler_app_governor_on_100ms, &st)
 	sched.every(100000, handler_app_load_slow_on_100ms, &st)
@@ -314,6 +330,15 @@ fn comm_thread_entry(input u32) {
 	mut duo_m4_count_a := u32(0)
 	mut duo_m4_count_b := u32(0)
 	mut duo_txf := can.Frame{}
+	// [nvm]: last-persisted values + pacing (change+floor-gated puts).
+	// Initialized from the staging cells, which boot() seeded with the
+	// RESTORED values — the first pass sees no phantom change.
+	mut nvm_load_cmd_a := u32(0)
+	mut nvm_load_cmd_b := u32(0)
+	C.ioc_get(2, &nvm_load_cmd_a, &nvm_load_cmd_b)
+	mut nvm_load_cmd_t := u64(0)
+	mut nvm_prev_nm := g_nm.state()
+	mut nvm_pack := [8]u8{}
 	g_tm.set_remote(u8(1), &g_duo_trace_ring[0], 256) // satellite blocks ride our dump link
 	mut duo_trc_wait := false // a satellite snapshot was requested by op_dump
 	mut last_tx_workload := u64(0)
@@ -432,6 +457,45 @@ fn comm_thread_entry(input u32) {
 			ch.send(duo_txf)
 			duo_m4_count_last = t1
 		}
+		{ // persist "now": LoadCmd
+			mut a := u32(0)
+			mut b := u32(0)
+			C.ioc_get(2, &a, &b)
+			if (a != nvm_load_cmd_a || b != nvm_load_cmd_b) && t1 - nvm_load_cmd_t >= u64(10000000) {
+				nvm_pack[0] = u8(a)
+				nvm_pack[1] = u8(a >> 8)
+				nvm_pack[2] = u8(a >> 16)
+				nvm_pack[3] = u8(a >> 24)
+				if g_nvm.put(12844, &nvm_pack[0], 4) {
+					nvm_load_cmd_a = a
+					nvm_load_cmd_b = b
+					nvm_load_cmd_t = t1
+				}
+			}
+		}
+		{ // persist flush at the NM quiet point (docs/nvm.md choreography)
+			nm_now := g_nm.state()
+			if nm_now == .prepare_bus_sleep && nvm_prev_nm != .prepare_bus_sleep {
+				{ // flush LoadCmd
+					mut a := u32(0)
+					mut b := u32(0)
+					C.ioc_get(2, &a, &b)
+					if a != nvm_load_cmd_a || b != nvm_load_cmd_b {
+						nvm_pack[0] = u8(a)
+						nvm_pack[1] = u8(a >> 8)
+						nvm_pack[2] = u8(a >> 16)
+						nvm_pack[3] = u8(a >> 24)
+						if g_nvm.put(12844, &nvm_pack[0], 4) {
+							nvm_load_cmd_a = a
+							nvm_load_cmd_b = b
+						}
+					}
+				}
+				g_nvm.mark_clean()
+				g_nvm.erase_pending() // the deferred erase, in the quiet window
+			}
+			nvm_prev_nm = nm_now
+		}
 	}
 }
 
@@ -454,7 +518,40 @@ fn tx_application_define(first_unused voidptr) {
 // boot: hand control to the ThreadX kernel (never returns; calls
 // tx_application_define above). main.v does the board bring-up then calls this —
 // referencing it also forces this module (incl. tx_application_define) to link.
+
+fn nvm_fl_erase(ctx voidptr, addr u32, size u32) bool {
+	return C.bflash_erase(addr, size) != 0
+}
+
+fn nvm_fl_program(ctx voidptr, addr u32, data &u8, len u32) bool {
+	return C.bflash_program(addr, data, len) != 0
+}
+
+fn nvm_fl_read(ctx voidptr, addr u32, out &u8, len u32) bool {
+	return C.bflash_read(addr, out, len) != 0
+}
 pub fn boot() {
 	C.ioc_pool_init() // init the cross-thread signal IOC cells before any thread runs
+	// [nvm]: mount + restore BEFORE the kernel — the single-threaded window.
+	// Restored values seed both the thread-init staging AND the persist ioc
+	// cells (so the comm service sees no phantom change on the first pass).
+	g_nvm.ops = bootfl.FlashOps{
+		erase:   nvm_fl_erase
+		program: nvm_fl_program
+		read:    nvm_fl_read
+	}
+	g_nvm.cfg = nvm.SectorCfg{
+		a_addr: C.nvm_map_a()
+		b_addr: C.nvm_map_b()
+		size:   C.nvm_map_size()
+	}
+	if g_nvm.mount() {
+		keep := [u16(12844)]!
+		g_nvm.prune(&keep[0], 1)
+		if g_nvm.get(12844, &g_nvmres_load_cmd[0], 8) == 4 {
+			g_nvmres_load_cmd_n = 4
+			C.ioc_pub(2, u32(g_nvmres_load_cmd[0]) | (u32(g_nvmres_load_cmd[1]) << 8) | (u32(g_nvmres_load_cmd[2]) << 16) | (u32(g_nvmres_load_cmd[3]) << 24), u32(0))
+		}
+	}
 	C._tx_initialize_kernel_enter()
 }

@@ -32,12 +32,17 @@ trusted = true
   name     = "ctrl_slow"
   priority = 13
 
+# LoadCmd persists ("now"): the Governor's triangle-sweep position survives
+# resets — the demo persistence signal (docs/nvm.md; restored before the first
+# activation, journaled change+floor-gated on the comm thread, flushed +
+# marked clean at the NM sleep edge).
 [[signal]]
 name = "LoadCmd"
 fields = { iters = "u32" }
 from = "app"
 to   = "app"
 transport = "double"
+persist = "now"
 
 [[signal]]
 name = "Workload"
@@ -129,6 +134,14 @@ bus = "can0"
 in  = 0x7F0
 out = 0x7F1
 fc  = 0x7F2
+
+# Persistence storage ([nvm], docs/nvm.md): the journal engine over a sector
+# pair the glue maps (nvm_map_* in comm_glue.c -> boards flash driver).
+[nvm]
+min_write_ms   = 10000 # LoadCmd changes EVERY write window: 10 s floor = 13-year wear
+sector_records = 4096
+endurance      = 10000
+min_years      = 10
 
 [target]
 kind    = "threadx"

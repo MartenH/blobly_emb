@@ -329,3 +329,14 @@ unsigned comm_rx_wait(unsigned ticks)
 {
     return (unsigned)tx_semaphore_get(&g_comm_sem, (ULONG)ticks);
 }
+
+/* --- [nvm] persistence storage map (docs/nvm.md) ---------------------------------
+ * The journal's sector pair lives in the BANK-2 TAIL (sectors 6+7 of bank 2):
+ * read-while-write across banks means erases never stall this core's XIP, and
+ * the ~30 KB M4 image at the bank-2 head is a megabyte away. DRY-CODED like
+ * the rest of the flash path — the bench validates flash.c for boot and NvM
+ * in one pass. The driver is boards/h755zi/flash.c (bflash_*), shared with
+ * the bootloader (one driver, two customers). */
+uint32_t nvm_map_a(void) { return 0x081C0000u; } /* bank 2, sector 6 */
+uint32_t nvm_map_b(void) { return 0x081E0000u; } /* bank 2, sector 7 */
+uint32_t nvm_map_size(void) { return 0x00020000u; } /* 128 KB each */
