@@ -112,6 +112,18 @@ fn nvm_hash16(ident string) u16 {
 fn derive_nvm(mut m Model, doc toml.Doc) ([]string, map[string]u16) {
 	mut names := []string{}
 	mut ids := map[string]u16{}
+	if !m.target.threadx {
+		// warn-off BEFORE any validation can panic: a host config with a
+		// persist key gets the standard module warning, not a hard failure
+		for sname in m.sig_names {
+			if (m.sig_of[sname] or { continue }).persist != '' {
+				eprintln('loom2v: WARNING: [nvm] persistence is generated for the ThreadX ' +
+					'comm-thread target only. Building WITHOUT persistence.')
+				break
+			}
+		}
+		return names, ids
+	}
 	for sname in m.sig_names {
 		si := m.sig_of[sname] or { continue }
 		if si.persist == '' {
@@ -307,7 +319,7 @@ fn nvm_globals(m Model) []string {
 	}
 	mut g := ['\tg_nvm nvm.Journal // the persistence journal (mounted pre-kernel)']
 	for sname in m.nvm_names {
-		g << '\tg_nvmres_${snake(sname)} [8]u8 // restore staging (pre-kernel -> thread init)'
+		g << '\tg_nvmres_${snake(sname)} [12]u8 // restore staging (pre-kernel -> thread init; +headroom for the overlong check)'
 		g << '\tg_nvmres_${snake(sname)}_n u16'
 	}
 	return g
@@ -379,7 +391,9 @@ fn nvm_boot_lines(m Model, ioc_idx map[string]int) []string {
 		n := snake(sname)
 		packed := si.packed_size()
 		cell := ioc_idx[sname] or { 0 }
-		g << '\t\tif g_nvm.get(${id}, &g_nvmres_${n}[0], 8) == ${packed} {'
+		g << '\t\t// cap = packed+1: an OVERLONG stored record (schema drift under a'
+		g << '\t\t// pinned id) truncates to packed+1 != packed and is refused'
+		g << '\t\tif g_nvm.get(${id}, &g_nvmres_${n}[0], ${packed + 1}) == ${packed} {'
 		g << '\t\t\tg_nvmres_${n}_n = ${packed}'
 		g << '\t\t\tC.ioc_pub(${cell}, ${nvm_unpack_expr(si, 0, 'g_nvmres_${n}')}, ${nvm_unpack_expr(si,
 			1, 'g_nvmres_${n}')})'

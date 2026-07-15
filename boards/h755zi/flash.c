@@ -37,7 +37,10 @@
 #define SR_BSY (1u << 0)
 #define SR_QW (1u << 2)
 /* error summary: WRPERR|PGSERR|STRBERR|INCERR|OPERR|RDPERR|RDSERR|SNECCERR|DBECCERR */
-#define SR_ERRS 0x0FEE0000u
+/* error summary EXCLUDING SNECCERR (bit 25): a corrected single-bit event is
+ * data-valid and must not fail a program/erase verdict (it is cleared, not
+ * counted). DBECCERR stays in. */
+#define SR_ERRS 0x0DEE0000u
 
 static int bank_of(uint32_t addr) {
 	if (addr >= BANK1_ADDR && addr < BANK1_ADDR + BANK_SIZE) return 0;
@@ -143,8 +146,8 @@ int bflash_read(uint32_t addr, uint8_t *out, uint32_t len) {
 		for (uint32_t k = 0; k < chunk; k++) out[i + k] = src[k];
 		if (ecc_fired(b)) {
 			for (uint32_t k = 0; k < chunk; k++) out[i + k] = 0; /* CRC-rejected */
-			ecc_clear(b);
 		}
+		ecc_clear(b); /* ALWAYS: a corrected-only SNECCERR must not linger either */
 		i += chunk;
 	}
 	return 1;
@@ -162,10 +165,9 @@ int bflash_blank(uint32_t addr, uint32_t len) {
 		const uint32_t *w = (const uint32_t *)(addr + i);
 		uint32_t acc = 0xFFFFFFFFu;
 		for (int k = 0; k < 8; k++) acc &= w[k];
-		if (ecc_fired(b)) {
-			ecc_clear(b);
-			return 0; /* touched word: never the frontier */
-		}
+		int fired = ecc_fired(b);
+		ecc_clear(b); /* ALWAYS: corrected-only events must not linger */
+		if (fired) return 0; /* touched word: never the frontier */
 		if (acc != 0xFFFFFFFFu) return 0;
 	}
 	return 1;

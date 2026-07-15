@@ -2139,11 +2139,6 @@ fn main() {
 			'(the module lives on the bus owner). Building WITHOUT NM.')
 		m.nm.on = false
 	}
-	if m.nvm_names.len > 0 && !(m.target.threadx) {
-		eprintln('loom2v: WARNING: [nvm] persistence is generated for the ThreadX comm-thread ' +
-			'target only (the journal lives on the bus owner). Building WITHOUT persistence.')
-		m.nvm_names.clear()
-	}
 	if m.duo_names.len > 0 && !(m.target.threadx) {
 		eprintln('loom2v: WARNING: cross-core (remote) signals need the ThreadX comm-thread ' +
 			'target (the bus owner transmits them). Building WITHOUT the xioc slots.')
