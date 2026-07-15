@@ -507,6 +507,15 @@ fn nvm_service(m Model, ioc_idx map[string]int) []string {
 		g << '\t\t\t\tif g_nvm.put(${id}, &nvm_pack[0], ${si.packed_size()}) {'
 		g << '\t\t\t\t\tnvm_${n}_a = a'
 		g << '\t\t\t\t\tnvm_${n}_b = b'
+		if m.nm.on {
+			// REQ-NVM-014: an in-sleep write re-establishes the clean marker in
+			// the SAME pass — a power-off at any point during bus_sleep mounts
+			// clean with the newest value (2 records per in-sleep write; the
+			// prepare/entry edges are already covered by the flush block).
+			g << '\t\t\t\t\tif g_nm.state() == .bus_sleep {'
+			g << '\t\t\t\t\t\tg_nvm.mark_clean() // REQ-NVM-014: the claim survives sleep writes'
+			g << '\t\t\t\t\t}'
+		}
 		g << '\t\t\t\t}'
 		g << '\t\t\t\tnvm_${n}_t = t1 // failed puts wait the floor too: a burned'
 		g << '\t\t\t\t// slot per COMM PASS would be a wear storm; per FLOOR is policy'

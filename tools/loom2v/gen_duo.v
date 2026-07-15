@@ -99,7 +99,7 @@ fn duo_produce_drain(m Model) []string {
 		}
 		n := snake(sname)
 		g << '\t\tif C.duo_poll(${slot}, &duo_${n}_a, &duo_${n}_b) != 0'
-		g << '\t\t\t&& t1 - duo_${n}_last >= u64(${cyc}) && ch.tx_ready() {'
+		g << '\t\t\t&& t1 - duo_${n}_last >= u64(${cyc}) && ${nm_gate(m)}ch.tx_ready() {' // REQ-COM-007
 		g << '\t\t\tduo_txf.id = u32(0x${si.dbc_id.hex()})'
 		g << '\t\t\tduo_txf.len = ${si.dbc_dlc}'
 		g << '\t\t\tduo_txf.data[0] = u8(duo_${n}_a)'
