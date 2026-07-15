@@ -32,14 +32,29 @@ pub const routine_check = u16(0xFF01)
 
 // FlashOps: the target seam (ctx-carrying hooks, the trace-hook pattern — the
 // target passes nil and plain functions; tests/sims pass their backing store).
-// All addresses are absolute; program len is a multiple of prog_word and the
-// region was erased first.
+// All addresses are absolute; program len is a multiple of the program unit and
+// the region was erased first.
+//
+// Driver contract notes (portability — the reasons these are HOOKS):
+//   - `read` must be fault-tolerant on ECC flashes: a torn (power-cut) word can
+//     raise an ECC double-error on read (STM32H7) — the driver absorbs that and
+//     returns the bytes it can (garbage is fine; CRC layers above reject it).
+//   - `program` failure may still have touched the word: callers must treat a
+//     failed program's address as CONSUMED (never re-program it — illegal on
+//     ECC flash). When one call spans several hardware pages, pages program in
+//     ascending address order, so a cut leaves a prefix + blank/torn tail.
+//   - `blank` answers "is this ENTIRE range erased?" (AND over all pages). nil
+//     = the caller may use the all-0xFF pattern test (ST/most NOR). On flashes
+//     where blankness is a hardware question, not a readable pattern (Infineon
+//     DFLASH blank-check), and on ECC parts where a torn word can READ as
+//     erased while being unprogrammable, the driver MUST provide it.
 pub struct FlashOps {
 pub mut:
 	ctx     voidptr = unsafe { nil }
 	erase   fn (ctx voidptr, addr u32, size u32) bool = unsafe { nil }
 	program fn (ctx voidptr, addr u32, data &u8, len u32) bool = unsafe { nil }
 	read    fn (ctx voidptr, addr u32, out &u8, len u32) bool = unsafe { nil }
+	blank   fn (ctx voidptr, addr u32, len u32) bool = unsafe { nil }
 }
 
 // Prog is the bootloader's UDS server: the app region it may touch, the flash
