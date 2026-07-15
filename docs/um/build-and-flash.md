@@ -68,10 +68,12 @@ Boot manager at sector 0, app at APP_BASE 0x08020000 (64-byte header, vectors at
 # the boot manager (bare metal, UDS on 0x7B0/0x7B8)
 make -C examples/h755_boot
 
-# the SAME app, linked for the app slot — the link mode is part of the artifact,
+# the SAME app, linked for the app slot — the link mode is part of the artifact:
 # switching APP_LINK relinks automatically, and `make APP_LINK=boot flash` refuses
-# (both guards land with the REQ-BOOT-012 PR; on older trees `rm build/*.elf` first)
 cd examples/h755_threadx && make APP_LINK=boot
+
+# the CM4 satellite (bank 2) — built here too: the factory flash below writes it
+make -C ../h755_m4_app
 
 # wrap TWICE — the two images are NOT interchangeable:
 #   factory (--valid): pre-marked, for SWD flashing only
@@ -152,9 +154,9 @@ isotprecv -s 0x7F2 -d 0x7F1 can0 &     # answers the FF with the flow control
 cansend can0 7F0#7073                  # "ps"
 ```
 
-A bare `cansend` without the receiver leaves the shell waiting inside that response
-stream and every later command gets silence (a reset clears it). The GUI shell panel
-does all of this for you.
+A bare `cansend` without the receiver wastes that response: the shell waits for the
+flow control, times out after ~1 s (ISO-TP N_Bs), and recovers — retry with the
+receiver running. The GUI shell panel does all of this for you.
 
 ## Debugging the target
 
