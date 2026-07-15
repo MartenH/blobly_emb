@@ -24,9 +24,13 @@ persist = "now"        # or "shutdown" — INTENT, not a tuning number
 
 Two policies, declared as intent:
 
-- `persist = "shutdown"` — survives orderly shutdowns: flushed at NM sleep-entry
-  only. Settings, learned trims. Near-zero wear. On a crash it loses everything
-  since the last orderly sleep — that is the declared meaning, not a defect.
+- `persist = "shutdown"` — survives orderly shutdowns: flushed at the NM sleep
+  edges only. Settings, learned trims. Near-zero wear. After a CRASH (unclean
+  mount) shutdown signals restore their declared DEFAULTS — a partial final
+  flush must never masquerade as an orderly one, and marker-relative lookup
+  (restore the value from the last COMPLETE epoch) is an engine vNext if a
+  deployment needs crash-surviving shutdown values. That is the declared
+  meaning, not a defect.
 - `persist = "now"` — journaled on write, as fast as the system allows: staged
   wait-free by the wrapper, appended on the comm thread's next idle pass, FLOORED
   by the one global `[nvm] min_write_ms` (the system wear floor). Position,
@@ -355,8 +359,16 @@ The entire layer develops dry.
 
 1. **P1 — the journal engine** (`nvm/` module): format, mount, append, compact
    over FlashOps; power-cut fuzz tests. Pure host work.
-2. **P2 — `persist` codegen**: restore-before-dispatch + change-detect +
-   rate-limited journal on the comm thread; host sim example (file-backed).
+2. **P2 — `persist` codegen**: BUILT 2026-07-15 ("the toml part"): [nvm] block +
+   `persist = "now"/"shutdown"` on signals; schema-identity hashes (+ `nvm_id`
+   pin), the generation-time WEAR CHECK (it fired on its first real config:
+   LoadCmd at a 1 s floor = 1.3 years — the error showed the math), capacity/
+   headroom gates; emitted wiring = pre-kernel mount+prune+restore (the
+   single-threaded window), per-thread cell restore, wrapper staging through
+   ioc cells (seeded with restored values — no phantom first put), comm-thread
+   change+floor-gated puts, NM prepare-bus-sleep edge flush + mark_clean +
+   deferred erase. P2 cut: local signals, 1..2 unsigned fields. Host sim
+   example (file-backed) = the next slice.
 3. **P3 — target**: reuse `boards/h755zi/flash.c`; flash map decision per board;
    NM sleep-entry flush + compaction window. (Bench: pull power mid-append, on a
    loop, and count survivors.)

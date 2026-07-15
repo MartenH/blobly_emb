@@ -66,6 +66,7 @@ fn specs() map[string]map[string]Key {
 			'trace':     sub(.tbl, false, 'trace')
 			'shell':     sub(.tbl, false, 'shell')
 			'nm':        sub(.tbl, false, 'nm')
+			'nvm':       sub(.tbl, false, 'nvm')
 			'target':    sub(.tbl, false, 'target')
 			'bus':       sub(.namedmap, false, 'bus')
 			'partition': sub(.arr, false, 'partition')
@@ -93,6 +94,13 @@ fn specs() map[string]map[string]Key {
 			'out':      k(.id)
 			'fc':       k(.id)
 			'commands': k(.str_arr) // example-provided target commands (comm_glue.c)
+		}
+		'nvm':        {
+			'enabled':        k(.boolean)
+			'min_write_ms':   k(.int)
+			'sector_records': k(.int)
+			'endurance':      k(.int)
+			'min_years':      k(.int)
 		}
 		'nm':         {
 			'enabled':       k(.boolean)
@@ -186,6 +194,8 @@ fn specs() map[string]map[string]Key {
 			'from':      req(.str)
 			'to':        req(.str)
 			'transport': k(.str)
+			'persist':   k(.str) // "now" | "shutdown" — intent, not tuning (docs/nvm.md)
+			'nvm_id':    k(.int) // explicit schema-identity pin (hash-collision escape)
 		}
 		'frame':      {
 			'name':  req(.str)

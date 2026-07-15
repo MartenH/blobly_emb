@@ -4,7 +4,7 @@
  * are absolute addresses owned by neither core's linker. */
 MEMORY
 {
-    FLASH (rx) : ORIGIN = 0x08100000, LENGTH = 1024K
+    FLASH (rx) : ORIGIN = 0x08100000, LENGTH = 768K /* tail sectors 6+7 = the NvM journal pair (docs/nvm.md) */
     RAM  (rwx) : ORIGIN = 0x10000000, LENGTH = 288K  /* D2 SRAM1+2+3 */
 }
 
