@@ -20,6 +20,7 @@ const req_id = u32(0x7B0)
 const rsp_id = u32(0x7B8)
 
 fn C.board_clock_init()
+fn C.board_timebase_init()
 fn C.board_can_clock_pins_init() // FDCAN1 kernel clock + PD0/PD1 AF9 — blob_can_open does NOT mux pins
 fn C.board_now_us() u64
 fn C.bootcell_take_request() u32
@@ -63,6 +64,9 @@ fn main() {
 	// --- stay: programming mode (REQ-BOOT-004: always reachable) ---
 	C.bootcell_set_info(2) // BOOT_REASON_NO_APP (or a pending request)
 	C.board_clock_init()
+	C.board_timebase_init() // board_now_us reads DWT: without this, `now` is frozen
+	// at 0 — the ISO-TP timeouts AND the REQ-BOOT-012 reset bound would never
+	// expire (codex on emb#132: an unbounded wait on a dead bus)
 	C.board_can_clock_pins_init() // found on the P2 bench: without the pin mux the session times out
 	mut ch := can.Channel{}
 	if !ch.open('0', false) {
