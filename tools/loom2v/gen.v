@@ -122,6 +122,15 @@ mut:
 // parse_signals parses [[signal]] into the model: sig_of (with each signal's fields in
 // declaration order), sig_names, and has_external. External signals are then resolved against
 // bus.dbc (message id/dlc/ext/trivial). Value field = the single non-"valid" field.
+// parse_nvm_id: range-check BEFORE narrowing — nvm_id = 65536 must fail, not
+// silently become 0 (= auto-hash) through the u16 cast.
+fn parse_nvm_id(name string, v int) u16 {
+	if v < 0 || v > 65534 {
+		panic('ecu.toml: signal "${name}" nvm_id = ${v} is out of range (0 = auto, 1..65534 = pin)')
+	}
+	return u16(v)
+}
+
 fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool) (map[string]SigInfo, []string, bool) {
 	mut sig_of := map[string]SigInfo{}
 	mut sig_names := []string{}
@@ -164,7 +173,7 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool) (map[string]Si
 			name:      name
 			transport: (m['transport'] or { toml.Any('double') }).string()
 			persist:   (m['persist'] or { toml.Any('') }).string()
-			nvm_id:    u16((m['nvm_id'] or { toml.Any(0) }).int())
+			nvm_id:    parse_nvm_id(name, int((m['nvm_id'] or { toml.Any(0) }).int()))
 			from:      from
 			to:        to
 			local:     from == to

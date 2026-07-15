@@ -331,12 +331,19 @@ unsigned comm_rx_wait(unsigned ticks)
 }
 
 /* --- [nvm] persistence storage map (docs/nvm.md) ---------------------------------
- * The journal's sector pair lives in the BANK-2 TAIL (sectors 6+7 of bank 2):
- * read-while-write across banks means erases never stall this core's XIP, and
- * the ~30 KB M4 image at the bank-2 head is a megabyte away. DRY-CODED like
- * the rest of the flash path — the bench validates flash.c for boot and NvM
- * in one pass. The driver is boards/h755zi/flash.c (bflash_*), shared with
- * the bootloader (one driver, two customers). */
+ * The journal's sector pair = the BANK-2 TAIL (sectors 6+7, carved OUT of the
+ * CM4 link regions in cm4_*.ld). Placement honesty (docs/nvm.md "where it
+ * lives"): bank-2 programs/erases never stall THIS core (M7 executes from
+ * bank 1 — true read-while-write), but the M4 executes from the bank-2 HEAD,
+ * and an intra-bank erase stalls its fetches for the erase duration. The
+ * design accepts that because ERASES ONLY RUN IN THE NM QUIET WINDOW (the
+ * append path never erases — v2 engine rule; the generated flush runs
+ * erase_pending at prepare_bus_sleep, when the node is quiescing). If the M4
+ * ever needs to run through sleep windows, the documented alternative is
+ * copying its ~30 KB image to RAM at boot. Record APPENDS (32 B programs,
+ * ~us) stall the M4 negligibly. DRY-CODED; the bench validates flash.c for
+ * boot + NvM in one pass. Driver: boards/h755zi/flash.c (shared with the
+ * bootloader — one driver, two customers). */
 uint32_t nvm_map_a(void) { return 0x081C0000u; } /* bank 2, sector 6 */
 uint32_t nvm_map_b(void) { return 0x081E0000u; } /* bank 2, sector 7 */
 uint32_t nvm_map_size(void) { return 0x00020000u; } /* 128 KB each */
