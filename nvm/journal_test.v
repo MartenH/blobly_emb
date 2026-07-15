@@ -465,7 +465,8 @@ fn test_misuse_guards() {
 	mut j2 := new_journal(mut f)
 	assert !j2.put(0, &data[0], 4) // the marker block is not writable
 	assert !j2.put(1, &data[0], 0) // empty = indistinguishable from absent
-	assert !j2.put(u16(max_blocks), &data[0], 4)
+	assert !j2.put(0xFFFF, &data[0], 4) // the reserved (erased-like) id
+	assert j2.put(u16(max_blocks), &data[0], 4) // v2: ids are keyed, not indexes
 	assert !f.double_prog
 }
 
@@ -673,5 +674,375 @@ fn test_no_erase_in_append_path() {
 	mut j2 := remount(mut f)
 	assert getv(j2, 2)? == 888
 	assert getv(j2, 1)? == 1
+	assert !f.double_prog
+}
+
+// ---- v2: keyed ids + chained values -----------------------------------------
+
+fn put_big(mut j Journal, block u16, len u16, seed u8) {
+	mut d := []u8{len: int(len)}
+	for i in 0 .. int(len) {
+		d[i] = u8(i) ^ seed
+	}
+	assert j.put(block, unsafe { &d[0] }, len)
+}
+
+fn check_big(j Journal, block u16, len u16, seed u8) {
+	mut out := [640]u8{}
+	n := j.get(block, &out[0], 640)
+	assert n == len, 'expected ${len} bytes, got ${n}'
+	for i in 0 .. int(len) {
+		assert out[i] == (u8(i) ^ seed), 'byte ${i} differs'
+	}
+}
+
+// Keyed table: full-range u16 ids (schema-identity hashes) roundtrip and
+// coexist; latest wins per id across remount.
+fn test_keyed_ids() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 0xA5F3, 1)
+	putv(mut j, 0x0001, 2)
+	putv(mut j, 0xFFFE, 3)
+	putv(mut j, 0xA5F3, 4)
+	mut j2 := remount(mut f)
+	assert getv(j2, 0xA5F3)? == 4
+	assert getv(j2, 0x0001)? == 2
+	assert getv(j2, 0xFFFE)? == 3
+	assert getv(j2, 0xBEEF) == none
+	assert !f.double_prog
+}
+
+// Chained values roundtrip at boundary sizes: 21 (smallest chain), 100
+// (freeze-frame scale), 634 (the ceiling); 635 refused.
+fn test_chain_roundtrip() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	put_big(mut j, 10, 21, 0x11)
+	put_big(mut j, 11, 100, 0x22)
+	check_big(j, 10, 21, 0x11)
+	check_big(j, 11, 100, 0x22)
+	mut j2 := remount(mut f)
+	check_big(j2, 10, 21, 0x11)
+	check_big(j2, 11, 100, 0x22)
+	// GEOMETRY ceiling: this test sector holds 32 records, and a value must
+	// leave REWRITE HEADROOM (live set + its own record count post-compact) —
+	// so 294 B (15 parts: 1 marker + 15 live + 15 rewrite = 31 <= 32) is the
+	// largest storable value HERE; 314 B (16 parts) and the format ceiling
+	// (634 B) are refused as future-wedging. Real geometry (4096 slots)
+	// stores the format ceiling comfortably.
+	mut f2 := &TestFlash{}
+	mut j3 := new_journal(mut f2)
+	put_big(mut j3, 12, 294, 0x33)
+	check_big(j3, 12, 294, 0x33)
+	// and the headroom is REAL: the same value rewrites repeatedly
+	put_big(mut j3, 12, 294, 0x34)
+	put_big(mut j3, 12, 294, 0x35)
+	check_big(j3, 12, 294, 0x35)
+	mut d := [640]u8{}
+	assert !j3.put(13, &d[0], 314) // 16 parts: no rewrite headroom here
+	assert !j3.put(13, &d[0], chain_data_max) // 32 parts + marker > 32 slots
+	assert !j3.put(13, &d[0], chain_data_max + 1) // beyond the format ceiling
+	assert !f.double_prog && !f2.double_prog
+}
+
+// A chain REWRITE outranks the previous chain; a plain rewrite of a chained
+// block (and vice versa) flips representation cleanly.
+fn test_chain_rewrite_and_flip() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	put_big(mut j, 20, 50, 0x01)
+	put_big(mut j, 20, 40, 0x02) // chain over chain
+	check_big(j, 20, 40, 0x02)
+	putv(mut j, 20, 7) // plain over chain
+	assert getv(j, 20)? == 7
+	put_big(mut j, 20, 30, 0x03) // chain over plain
+	mut j2 := remount(mut f)
+	check_big(j2, 20, 30, 0x03)
+	assert !f.double_prog
+}
+
+// The chain power-cut fuzz: cut the write of a NEW chain at every part
+// boundary and inside every part — the PREVIOUS complete value must win, and
+// life continues past the torn run.
+fn test_chain_power_cut() {
+	nparts := int(chain_parts(100)) // 6 parts
+	for part in 0 .. nparts {
+		for cut in [u32(0), 16] {
+			mut f := &TestFlash{}
+			mut j := new_journal(mut f)
+			put_big(mut j, 30, 100, 0xAA) // the previous complete chain
+			f.cut_call = f.calls + u32(part) + 1
+			f.cut_bytes = cut
+			mut d := []u8{len: 100}
+			for i in 0 .. 100 {
+				d[i] = u8(i) ^ 0xBB
+			}
+			assert !j.put(30, unsafe { &d[0] }, 100)
+			mut j2 := remount(mut f)
+			check_big(j2, 30, 100, 0xAA)
+			assert !j2.clean // torn tail after activity
+			put_big(mut j2, 30, 60, 0xCC) // life continues
+			mut j3 := remount(mut f)
+			check_big(j3, 30, 60, 0xCC)
+			assert !f.double_prog, 'part ${part} cut ${cut}: double program'
+		}
+	}
+}
+
+// A corrupt middle part invalidates the WHOLE chain (whole-CRC): previous
+// value wins; corrupting the newest chain's part falls back to the older one.
+fn test_chain_corrupt_part() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	put_big(mut j, 40, 100, 0x0A)
+	start := j.cursor // next chain begins here
+	put_big(mut j, 40, 100, 0x0B)
+	f.mem[start + 2 * 32 + 8] ^= 0x01 // flip a data byte in part 2 of the NEW chain
+	mut j2 := remount(mut f)
+	check_big(j2, 40, 100, 0x0A) // the older complete chain wins
+	assert !f.double_prog
+}
+
+// Chains survive compaction and stray re-homing (copies under one fresh seq,
+// verbatim payloads, references re-pointed).
+fn test_chain_compaction_and_strays() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	put_big(mut j, 50, 80, 0x5A)
+	putv(mut j, 51, 51)
+	assert j.compact()
+	check_big(j, 50, 80, 0x5A)
+	assert getv(j, 51)? == 51
+	assert j.erase_pending()
+	mut j2 := remount(mut f)
+	check_big(j2, 50, 80, 0x5A)
+	// interrupted compaction with a chain in flight -> strays re-home at the
+	// quiet point, chain intact throughout
+	f.cut_call = f.calls + 2
+	f.cut_bytes = 16
+	j2.compact()
+	f.cut_call = 0xFFFF_FFFF
+	mut j3 := remount(mut f)
+	check_big(j3, 50, 80, 0x5A)
+	assert j3.erase_pending()
+	check_big(j3, 50, 80, 0x5A)
+	mut j4 := remount(mut f)
+	check_big(j4, 50, 80, 0x5A)
+	assert getv(j4, 51)? == 51
+	assert !f.double_prog
+}
+
+// get() truncation: a small cap yields a clean prefix of a chained value.
+fn test_chain_get_truncated() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	put_big(mut j, 60, 100, 0x66)
+	mut out := [10]u8{}
+	n := j.get(60, &out[0], 10)
+	assert n == 10
+	for i in 0 .. 10 {
+		assert out[i] == (u8(i) ^ 0x66)
+	}
+}
+
+// craft: place a raw record directly in the test flash (hostile-flash tests).
+fn craft(mut f TestFlash, off u32, block u16, lenf u16, seq u32, b0 u8) {
+	f.mem[off + 0] = u8(block)
+	f.mem[off + 1] = u8(block >> 8)
+	f.mem[off + 2] = u8(lenf)
+	f.mem[off + 3] = u8(lenf >> 8)
+	f.mem[off + 4] = u8(seq)
+	f.mem[off + 5] = u8(seq >> 8)
+	f.mem[off + 6] = u8(seq >> 16)
+	f.mem[off + 7] = u8(seq >> 24)
+	for i in u32(8) .. 28 {
+		f.mem[off + i] = 0
+	}
+	f.mem[off + 8] = b0
+	crc := boot.crc32(&f.mem[off], 28)
+	f.mem[off + 28] = u8(crc)
+	f.mem[off + 29] = u8(crc >> 8)
+	f.mem[off + 30] = u8(crc >> 16)
+	f.mem[off + 31] = u8(crc >> 24)
+}
+
+// Agent finding 1: a crafted CHAIN-FLAGGED block-0 record with the newest seq
+// must not testify to a clean shutdown (a real marker is always plain).
+fn test_chain_flagged_marker_is_not_clean() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 5)
+	// crafted at the cursor: blk 0, chain flag, part 1, plen 5, newest seq
+	craft(mut f, j.cursor, 0, chain_flag | (u16(1) << part_shift) | 5, j.max_seq + 10, 0xEE)
+	mut j2 := remount(mut f)
+	assert !j2.clean, 'a chain-flagged block-0 record spoofed the clean verdict'
+	assert getv(j2, 1)? == 5
+}
+
+// Agent finding 2: pool exhaustion must be DETECTABLE, never silent. In this
+// test geometry 64 flash slots = 64 pool rows, so true overflow is physically
+// unconstructible here (it IS reachable on real geometry: 4096 slots vs a
+// 64-row pool) — the boundary case pins the accounting: exactly 64 distinct
+// ids mount clean, no false overflow, every id served.
+fn test_pool_boundary_no_false_overflow() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	mut seq := u32(1)
+	for k in u32(0) .. 32 {
+		craft(mut f, k * 32, u16(100 + k), 4, seq, u8(k))
+		seq++
+	}
+	for k in u32(0) .. 32 {
+		craft(mut f, sec_size + k * 32, u16(200 + k), 4, seq, u8(k))
+		seq++
+	}
+	mut j2 := remount(mut f)
+	assert !j2.pool_overflow
+	mut out := [4]u8{}
+	assert j2.get(100, &out[0], 4) == 4
+	assert j2.get(231, &out[0], 4) == 4
+	// and the 65th DISTINCT id is refused at put time (session-level guard)
+	data := [u8(1), 2, 3, 4]
+	assert !j2.put(999, &data[0], 4)
+}
+
+// ---- codex round 1 on v2 ------------------------------------------------------
+
+// Cut mid-chain-copy inside compact(): the half-written target's ORPHAN parts
+// (valid records, no adopted value) must not win active selection — recovery
+// must converge, never wedge.
+fn test_cut_chain_copy_recovery_converges() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 11)
+	put_big(mut j, 2, 100, 0x77) // 6 parts
+	putv(mut j, 3, 33)
+	// compact copies entry pool order; cut inside the chain's parts
+	f.cut_call = f.calls + 3
+	f.cut_bytes = 16
+	j.compact()
+	f.cut_call = 0xFFFF_FFFF
+	mut j2 := remount(mut f)
+	assert getv(j2, 1)? == 11
+	check_big(j2, 2, 100, 0x77)
+	assert getv(j2, 3)? == 33
+	// recovery converges: cleanup + writes keep working
+	assert j2.erase_pending()
+	putv(mut j2, 3, 34)
+	mut j3 := remount(mut f)
+	assert getv(j3, 3)? == 34
+	check_big(j3, 2, 100, 0x77)
+	assert !f.double_prog
+}
+
+// Stale ids (older firmware's persisted blocks) are PRUNED on the generator's
+// word: their pool rows free immediately and their records die at compaction.
+fn test_prune_stale_ids() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 100, 1)
+	putv(mut j, 200, 2)
+	putv(mut j, 300, 3)
+	keep := [u16(100), 300]
+	assert j.prune(&keep[0], 2) == 1
+	assert getv(j, 200) == none
+	assert j.compact() && j.erase_pending()
+	mut j2 := remount(mut f)
+	assert getv(j2, 100)? == 1
+	assert getv(j2, 200) == none // gone from flash too
+	assert getv(j2, 300)? == 3
+}
+
+// pool_overflow = read-mostly degraded mode: destructive cleanup refuses so
+// dropped ids' only flash copies survive until the config is fixed.
+fn test_pool_overflow_blocks_destruction() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 5)
+	assert j.compact() // creates a pending sector
+	j.pool_overflow = true // as a violated generator gate would latch
+	assert !j.compact()
+	assert !j.erase_pending()
+	j.pool_overflow = false
+	assert j.erase_pending()
+}
+
+// Post-mount rot in a chain part: get() refuses (0 = caller's default), a
+// compact of the rotted source fails instead of copying garbage forward, and
+// a rewrite recovers the block.
+fn test_chain_rot_after_mount() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	put_big(mut j, 70, 100, 0x70)
+	putv(mut j, 71, 1)
+	f.mem[j.table[j.find(70)].ref_off + 32 + 8] ^= 0x01 // rot part 1 post-mount
+	mut out := [640]u8{}
+	assert j.get(70, &out[0], 640) == 0 // refused, never garbage
+	assert !j.compact() // the rotted source is not copied forward
+	put_big(mut j, 70, 60, 0x71) // the rewrite heals the block
+	check_big(j, 70, 60, 0x71)
+	assert j.compact()
+	mut j2 := remount(mut f)
+	check_big(j2, 70, 60, 0x71)
+}
+
+// ---- codex round 2 on v2 ------------------------------------------------------
+
+// A refused put that never touched flash must not un-clean an orderly tail.
+fn test_refused_put_keeps_clean_tail() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 5)
+	assert j.mark_clean()
+	mut d := [640]u8{}
+	assert !j.put(2, &d[0], chain_data_max + 1) // refused before any program
+	assert !j.put(2, &d[0], 634) // geometry-refused before any program
+	assert j.compact() // must re-append the marker (tail still clean)
+	mut j2 := remount(mut f)
+	assert j2.clean, 'a flash-untouched refusal dirtied the clean tail'
+	assert getv(j2, 1)? == 5
+}
+
+// prune() lifts the degraded mode when every CURRENT id is present — whatever
+// mount dropped is then stale by definition; a missing keep id keeps the latch.
+fn test_prune_clears_overflow_when_safe() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 100, 1)
+	putv(mut j, 200, 2)
+	j.pool_overflow = true // as a violated gate would latch at mount
+	missing := [u16(100), 999] // 999 might be among the dropped
+	assert j.prune(&missing[0], 2) == 1 // drops 200
+	assert j.pool_overflow // latch stays: 999 unaccounted for
+	putv(mut j, 999, 3)
+	keep := [u16(100), 999]
+	assert j.prune(&keep[0], 2) == 0
+	assert !j.pool_overflow // all current ids present: degraded mode lifts
+	assert j.compact()
+}
+
+// Codex round 3: the headroom gate is GLOBAL — small writes must not strand a
+// big value's rewrite. 15-part chain (294 B) + one small block = this
+// geometry's maximum; the next small put is refused, and shrinking the chain
+// restores room.
+fn test_global_rewrite_headroom() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	put_big(mut j, 1, 294, 0x41) // live 16, worst 15
+	putv(mut j, 2, 2) // live 17; 17 + 15 = 32: exactly fits
+	data := [u8(3), 0, 0, 0]
+	assert !j.put(3, &data[0], 4), 'a small write stranded the chain rewrite'
+	// the chain itself still rewrites (its own slots are reclaimed)
+	put_big(mut j, 1, 294, 0x42)
+	check_big(j, 1, 294, 0x42)
+	// shrinking the big value frees global headroom for new blocks
+	put_big(mut j, 1, 100, 0x43) // 6 parts: live 8, worst 6
+	putv(mut j, 3, 3)
+	putv(mut j, 4, 4)
+	mut j2 := remount(mut f)
+	check_big(j2, 1, 100, 0x43)
+	assert getv(j2, 3)? == 3
+	assert getv(j2, 4)? == 4
 	assert !f.double_prog
 }
