@@ -201,6 +201,27 @@ A flash whose program unit EXCEEDS 32 bytes would need a larger record — the
 size becomes a board profile constant at that point; no such internal flash is
 on the roadmap.
 
+## v2 mount: sector epoch headers (designed, not built)
+
+v1's mount FULL-SCANS both sectors — the only evidence a half-finished erase
+cannot forge (a partial erase wipes randomly, not front-to-back, so any single
+slot can lie). Cost: milliseconds of sequential reads at boot on a memory-mapped
+part; but per-slot hardware blank-checks (DFLASH) or external SPI flash would
+pay 4096 operations per sector, per boot.
+
+The upgrade (user-proposed, 2026-07-15): a SECTOR HEADER record at slot 0,
+written ONLY after its erase completes, carrying an erase EPOCH. Valid header =
+everything behind it is post-erase append-only territory = first-blank IS the
+frontier. The stale-survivor hole closes by protocol: only the PENDING (older-
+epoch) sector is ever erased, so a partial-erase survivor header is always the
+older one — classified pending, never appended into, re-erased at the quiet
+point. A torn header write = "unformatted" = one redundant erase, nothing lost.
+Strays stay consistent: erase runs only after re-homing (v1 rule), so a
+headerless sector holds nothing worth recovering. Costs: one slot per sector,
+one program per erase cycle, an epoch compare at mount. Motivated when a
+blank-check-per-slot or external-flash target lands — v1's full scan stays
+until then (it is the fuzz-proven code).
+
 ## Where it lives in flash (the honest part)
 
 Erasing a sector STALLS same-bank execution (seconds for 128 KB) — the flash map
