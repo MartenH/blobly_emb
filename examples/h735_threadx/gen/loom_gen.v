@@ -323,7 +323,10 @@ fn comm_thread_entry(input u32) {
 			}
 		}
 		t1 := C.board_now_us()
-		nm_up := g_nm.awake() // NM-gated COM tx (REQ-COM-007)
+		for ch.tx_ready() && g_nm.produce(t1, mut nm_txf) {
+			ch.send(nm_txf)
+		}
+		nm_up := g_nm.awake() // NM-gated COM tx (REQ-COM-007, post-tick)
 		// PRODUCER: CpuLoad telemetry — reads the FB thread's load scratch
 		if t1 - last_telem >= telem_period_us && nm_up && ch.tx_ready() {
 			last_telem = t1
@@ -372,9 +375,6 @@ fn comm_thread_entry(input u32) {
 		}
 		for nm_up && ch.tx_ready() && g_sh.produce(t1, mut shell_txf) {
 			ch.send(shell_txf)
-		}
-		for ch.tx_ready() && g_nm.produce(t1, mut nm_txf) {
-			ch.send(nm_txf)
 		}
 	}
 }

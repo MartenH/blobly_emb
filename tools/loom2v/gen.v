@@ -1637,11 +1637,15 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << duo_trace_rx_arm(m)
 				glue << '\t\t}'
 				glue << '\t\tt1 := C.board_now_us()'
+				// NM drains FIRST: produce() ticks the state machine, so the gate
+				// below reflects THIS pass's state — otherwise the producers get one
+				// free frame past the sleep boundary (codex on emb#135).
+				glue << nm_produce_drain(m)
 				if m.nm.on {
 					// REQ-COM-007: every producer below gates on this — the bus is
 					// SILENT in sleep; NM's own drain is exempt (its state machine
 					// owns its wire behaviour, and the wake announcement must out).
-					glue << '\t\tnm_up := g_nm.awake() // NM-gated COM tx (REQ-COM-007)'
+					glue << '\t\tnm_up := g_nm.awake() // NM-gated COM tx (REQ-COM-007, post-tick)'
 				}
 				for p in producers {
 					glue << p.bus_tick(BusCtx{
@@ -1685,7 +1689,6 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << trace_produce_drain(m)
 				glue << shell_produce_drain(m)
-				glue << nm_produce_drain(m)
 				glue << duo_trace_poll(m)
 				glue << duo_produce_drain(m)
 				glue << nvm_service(m, ioc_idx)
