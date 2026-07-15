@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 113 | 62 | 5 | 46 | 0 |
+| 114 | 63 | 5 | 46 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -87,6 +87,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NVM-010 | QM | analysis | uncovered | — |
 | REQ-NVM-011 | QM | analysis | uncovered | — |
 | REQ-NVM-012 | QM | test | uncovered | — |
+| REQ-NVM-013 | QM | test | verified | journal_test.v (pass) |
 | REQ-SEC-001 | QM | test | uncovered | — |
 | REQ-SEC-002 | QM | test | uncovered | — |
 | REQ-SEC-003 | QM | test | uncovered | — |
@@ -205,6 +206,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NVM-010 | | | | | | | | | |
 | REQ-NVM-011 | | | | | | | | | |
 | REQ-NVM-012 | | | | | | | | | |
+| REQ-NVM-013 | | | | | | | ✓ | | |
 | REQ-SEC-001 | | | | | | | | | |
 | REQ-SEC-002 | | | | | | | | | |
 | REQ-SEC-003 | | | | | | | | | |

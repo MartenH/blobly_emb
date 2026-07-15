@@ -88,6 +88,11 @@ pub mut:
 	size   u32 // per sector, a multiple of rec_size
 }
 
+// Journal is ~2.6 KB (the 64-entry table dominates). Receivers MUST be `&Journal`
+// or `mut Journal` — a value receiver copies the whole struct onto the caller's
+// stack, and on target the comm thread has 4 KB sitting at the bottom of DTCM:
+// one nested pair of value-receiver calls walks the stack off the memory map
+// (REQ-NVM-013, found on the H755 bench as a t=+10s HardFault with PC=0).
 pub struct Journal {
 pub mut:
 	ops boot.FlashOps
@@ -116,13 +121,13 @@ pub mut:
 	compacting bool
 }
 
-fn (j Journal) sector_addr(s int) u32 {
+fn (j &Journal) sector_addr(s int) u32 {
 	return if s == 0 { j.cfg.a_addr } else { j.cfg.b_addr }
 }
 
 // slots: the sector capacity in records — pub so generated code can verify
 // the config's geometry claim against the REAL map at boot.
-pub fn (j Journal) slots() u32 {
+pub fn (j &Journal) slots() u32 {
 	return j.cfg.size / rec_size
 }
 
@@ -133,7 +138,7 @@ fn chain_parts(total u16) u32 {
 }
 
 // find: pool index of a block id, or -1.
-fn (j Journal) find(id u16) int {
+fn (j &Journal) find(id u16) int {
 	for i in 0 .. max_blocks {
 		if j.table[i].present && j.table[i].id == id {
 			return i
@@ -143,7 +148,7 @@ fn (j Journal) find(id u16) int {
 }
 
 // slot_for: existing pool row for id, or a free row (-1 = pool full).
-fn (j Journal) slot_for(id u16) int {
+fn (j &Journal) slot_for(id u16) int {
 	mut free := -1
 	for i in 0 .. max_blocks {
 		if j.table[i].present {
@@ -158,7 +163,7 @@ fn (j Journal) slot_for(id u16) int {
 }
 
 // records_of: how many flash records this entry's newest value occupies.
-fn (j Journal) records_of(i int) u32 {
+fn (j &Journal) records_of(i int) u32 {
 	if j.table[i].chained {
 		return chain_parts(j.table[i].len)
 	}
@@ -463,7 +468,7 @@ fn (mut j Journal) dirty_tail_now() {
 
 // get reads the mounted/current value into out; returns the copied length
 // (0 = absent; truncated to cap).
-pub fn (j Journal) get(block u16, out &u8, cap u16) u16 {
+pub fn (j &Journal) get(block u16, out &u8, cap u16) u16 {
 	if !j.mounted {
 		return 0
 	}
@@ -491,7 +496,7 @@ pub fn (j Journal) get(block u16, out &u8, cap u16) u16 {
 }
 
 // read_chain copies `n` assembled data bytes of chained entry i into out.
-fn (j Journal) read_chain(i int, out &u8, n u16) bool {
+fn (j &Journal) read_chain(i int, out &u8, n u16) bool {
 	base := j.sector_addr(j.table[i].sector) + j.table[i].ref_off
 	nparts := chain_parts(j.table[i].len)
 	mut rec := [32]u8{}
@@ -588,13 +593,13 @@ pub fn (mut j Journal) mark_clean() bool {
 
 // free_records: append slots left in the active sector — the caller's
 // watermark input (reserve = live RECORDS + 1 marker, checked at generation).
-pub fn (j Journal) free_records() u32 {
+pub fn (j &Journal) free_records() u32 {
 	return (j.cfg.size - j.cursor) / rec_size
 }
 
 // live_records: current live set size in RECORDS (chain parts counted) + the
 // marker's slot — the shutdown reserve and the compaction footprint.
-pub fn (j Journal) live_records() u32 {
+pub fn (j &Journal) live_records() u32 {
 	mut n := u32(1)
 	for i in 0 .. max_blocks {
 		if j.table[i].present {
@@ -606,7 +611,7 @@ pub fn (j Journal) live_records() u32 {
 
 // strays: RECORDS whose newest copy sits in the given sector — the slots a
 // re-home needs before that sector's erase.
-pub fn (j Journal) strays(sector int) u32 {
+pub fn (j &Journal) strays(sector int) u32 {
 	mut n := u32(0)
 	for i in 0 .. max_blocks {
 		if j.table[i].present && j.table[i].sector == sector {
