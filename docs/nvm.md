@@ -383,3 +383,18 @@ The entire layer develops dry.
   through the owner — needs a crossing design; defer until a real M4 use case).
 - Redundant dual-copy storage per block (the journal's previous-record fallback
   covers the power-cut case; true redundancy arrives with an ASIL owner).
+
+## Sleep writes and the clean claim (REQ-NVM-014)
+
+"Writes accepted at all times" (REQ-NVM-012) used to cost the clean claim: any
+put during `bus_sleep` appended after the marker, so a power-off then mounted
+unclean and shutdown-gated signals restored defaults even though the shutdown
+WAS orderly. Since REQ-NVM-014 the generated service pairs every in-sleep put
+with an immediate `mark_clean()` in the same pass — the tail is a marker again
+before the loop sleeps, so a power-off at ANY point during bus sleep mounts
+clean with the newest values. Costs and edges: an in-sleep write consumes two
+records (value + marker); a FAILED in-sleep put leaves the claim broken on
+purpose (the value is not durable — conservative wins); the prepare/entry
+edges were already covered by the flush choreography. Bench-verified on the
+H755: release → silence → puts land for 30 s → reset at an arbitrary moment →
+`clean = 1`, newest value restored.

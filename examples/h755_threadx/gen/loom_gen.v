@@ -228,7 +228,7 @@ __global (
 	g_nvmres_load_cmd_n u16
 	g_nm nm_can.NmModule
 	g_comm_tcb   [32]u64  // the bus-owning comm thread
-	g_comm_stack [4096]u8
+	g_comm_stack [8192]u8
 	g_rx_count u32
 	g_rx_last  u32
 )
@@ -397,8 +397,9 @@ fn comm_thread_entry(input u32) {
 			}
 		}
 		t1 := C.board_now_us()
+		nm_up := g_nm.awake() // NM-gated COM tx (REQ-COM-007)
 		// PRODUCER: CpuLoad telemetry — reads the FB thread's load scratch
-		if t1 - last_telem >= telem_period_us && ch.tx_ready() {
+		if t1 - last_telem >= telem_period_us && nm_up && ch.tx_ready() {
 			last_telem = t1
 			mut load := [8]u16{}
 			load[0] = u16(C.load_sum_permille()) // sum of the FB threads (one core)
@@ -425,7 +426,7 @@ fn comm_thread_entry(input u32) {
 		}
 		// PRODUCER: external tx signal "Workload" — read the FB-published IOC
 		// cell, encode the value (LE at byte 0), and send it cyclically (tx_ready-gated).
-		if t1 - last_tx_workload >= u64(100000) && ch.tx_ready() {
+		if nm_up && t1 - last_tx_workload >= u64(100000) && ch.tx_ready() {
 			last_tx_workload = t1
 			mut tv_a := u32(0)
 			mut tv_b := u32(0)
@@ -440,10 +441,10 @@ fn comm_thread_entry(input u32) {
 			tf.data[3] = u8((tv_a >> 24) & 0xff)
 			ch.send(tf)
 		}
-		for ch.tx_ready() && g_tm.produce(t1, mut trace_txf) {
+		for nm_up && ch.tx_ready() && g_tm.produce(t1, mut trace_txf) {
 			ch.send(trace_txf)
 		}
-		for ch.tx_ready() && g_sh.produce(t1, mut shell_txf) {
+		for nm_up && ch.tx_ready() && g_sh.produce(t1, mut shell_txf) {
 			ch.send(shell_txf)
 		}
 		for ch.tx_ready() && g_nm.produce(t1, mut nm_txf) {
@@ -454,7 +455,7 @@ fn comm_thread_entry(input u32) {
 			duo_trc_wait = false
 		}
 		if C.duo_poll(0, &duo_m4_count_a, &duo_m4_count_b) != 0
-			&& t1 - duo_m4_count_last >= u64(100000) && ch.tx_ready() {
+			&& t1 - duo_m4_count_last >= u64(100000) && nm_up && ch.tx_ready() {
 			duo_txf.id = u32(0x201)
 			duo_txf.len = 8
 			duo_txf.data[0] = u8(duo_m4_count_a)
@@ -480,6 +481,9 @@ fn comm_thread_entry(input u32) {
 				if g_nvm.put(12844, &nvm_pack[0], 4) {
 					nvm_load_cmd_a = a
 					nvm_load_cmd_b = b
+					if g_nm.state() == .bus_sleep {
+						g_nvm.mark_clean() // REQ-NVM-014: the claim survives sleep writes
+					}
 				}
 				nvm_load_cmd_t = t1 // failed puts wait the floor too: a burned
 				// slot per COMM PASS would be a wear storm; per FLOOR is policy
