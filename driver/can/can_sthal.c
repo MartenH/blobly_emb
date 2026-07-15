@@ -117,6 +117,15 @@ int blob_can_tx_ready(int h) {
 	return (hf && HAL_FDCAN_GetTxFifoFreeLevel(hf) > 0) ? 1 : 0;
 }
 
+/* Wire-done (REQ-BOOT-012): TXBRP still set = a requested transmission not yet
+ * completed. Same register the bare-metal backend reads, via the HAL handle. */
+int blob_can_tx_idle(int h) {
+	FDCAN_HandleTypeDef *hf = bus_handle(h);
+	if (!hf)
+		return 1;
+	return hf->Instance->TXBRP == 0u;
+}
+
 int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
 	if (!hf) return -1;
