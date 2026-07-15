@@ -725,16 +725,22 @@ fn test_chain_roundtrip() {
 	mut j2 := remount(mut f)
 	check_big(j2, 10, 21, 0x11)
 	check_big(j2, 11, 100, 0x22)
-	// GEOMETRY ceiling: this test sector holds 32 records, and the live set
-	// (+ the marker slot) must always fit one sector — so 614 B (31 parts) is
-	// the largest storable value HERE, and 634 (the FORMAT ceiling, 32 parts)
-	// is refused because it would wedge future compaction. Real geometry
-	// (4096 slots) stores the format ceiling comfortably.
+	// GEOMETRY ceiling: this test sector holds 32 records, and a value must
+	// leave REWRITE HEADROOM (live set + its own record count post-compact) —
+	// so 294 B (15 parts: 1 marker + 15 live + 15 rewrite = 31 <= 32) is the
+	// largest storable value HERE; 314 B (16 parts) and the format ceiling
+	// (634 B) are refused as future-wedging. Real geometry (4096 slots)
+	// stores the format ceiling comfortably.
 	mut f2 := &TestFlash{}
 	mut j3 := new_journal(mut f2)
-	put_big(mut j3, 12, 614, 0x33)
-	check_big(j3, 12, 614, 0x33)
+	put_big(mut j3, 12, 294, 0x33)
+	check_big(j3, 12, 294, 0x33)
+	// and the headroom is REAL: the same value rewrites repeatedly
+	put_big(mut j3, 12, 294, 0x34)
+	put_big(mut j3, 12, 294, 0x35)
+	check_big(j3, 12, 294, 0x35)
 	mut d := [640]u8{}
+	assert !j3.put(13, &d[0], 314) // 16 parts: no rewrite headroom here
 	assert !j3.put(13, &d[0], chain_data_max) // 32 parts + marker > 32 slots
 	assert !j3.put(13, &d[0], chain_data_max + 1) // beyond the format ceiling
 	assert !f.double_prog && !f2.double_prog
@@ -979,4 +985,39 @@ fn test_chain_rot_after_mount() {
 	assert j.compact()
 	mut j2 := remount(mut f)
 	check_big(j2, 70, 60, 0x71)
+}
+
+// ---- codex round 2 on v2 ------------------------------------------------------
+
+// A refused put that never touched flash must not un-clean an orderly tail.
+fn test_refused_put_keeps_clean_tail() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 1, 5)
+	assert j.mark_clean()
+	mut d := [640]u8{}
+	assert !j.put(2, &d[0], chain_data_max + 1) // refused before any program
+	assert !j.put(2, &d[0], 634) // geometry-refused before any program
+	assert j.compact() // must re-append the marker (tail still clean)
+	mut j2 := remount(mut f)
+	assert j2.clean, 'a flash-untouched refusal dirtied the clean tail'
+	assert getv(j2, 1)? == 5
+}
+
+// prune() lifts the degraded mode when every CURRENT id is present — whatever
+// mount dropped is then stale by definition; a missing keep id keeps the latch.
+fn test_prune_clears_overflow_when_safe() {
+	mut f := &TestFlash{}
+	mut j := new_journal(mut f)
+	putv(mut j, 100, 1)
+	putv(mut j, 200, 2)
+	j.pool_overflow = true // as a violated gate would latch at mount
+	missing := [u16(100), 999] // 999 might be among the dropped
+	assert j.prune(&missing[0], 2) == 1 // drops 200
+	assert j.pool_overflow // latch stays: 999 unaccounted for
+	putv(mut j, 999, 3)
+	keep := [u16(100), 999]
+	assert j.prune(&keep[0], 2) == 0
+	assert !j.pool_overflow // all current ids present: degraded mode lifts
+	assert j.compact()
 }
