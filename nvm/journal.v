@@ -422,22 +422,31 @@ pub fn (mut j Journal) put(block u16, data &u8, len u16) bool {
 		return false
 	}
 	// the RESULTING live set (marker slot included via live_records) must fit
-	// one sector, or compaction can never converge afterwards — refuse the
-	// write that would wedge future recovery, not the recovery itself.
+	// one sector WITH REWRITE HEADROOM: a rewrite appends the new records
+	// while the old value is still live, so a value whose live set leaves
+	// fewer than its own record count free post-compact could land once and
+	// then be stuck forever. Refuse the write that would wedge the future,
+	// not the future itself.
 	new_rec := if u32(len) <= data_max { u32(1) } else { chain_parts(len) }
 	mut old_rec := u32(0)
 	ei := j.find(block)
 	if ei >= 0 {
 		old_rec = j.records_of(ei)
 	}
-	if j.live_records() - old_rec + new_rec > j.slots() {
+	if j.live_records() - old_rec + new_rec + new_rec > j.slots() {
 		return false
 	}
-	j.tail_clean = false // the attempt itself is post-marker activity
 	if u32(len) <= data_max {
 		return j.append_plain(block, data, len)
 	}
 	return j.append_chain(block, data, len)
+}
+
+// dirty_tail_now: called by the append paths immediately before the first
+// program attempt — a refusal that never touched flash must not un-clean an
+// orderly tail (a later compact would honestly re-append the marker).
+fn (mut j Journal) dirty_tail_now() {
+	j.tail_clean = false
 }
 
 // get reads the mounted/current value into out; returns the copied length
@@ -532,6 +541,21 @@ pub fn (mut j Journal) prune(keep &u16, n int) u32 {
 		if !found {
 			j.table[i] = Entry{}
 			dropped++
+		}
+	}
+	// if every CURRENT id is present in the pool, whatever mount dropped is
+	// stale by definition — destroying it at compaction is the intent, so the
+	// degraded mode lifts. A missing keep id may be among the dropped: latch.
+	if j.pool_overflow {
+		mut all_present := true
+		for k in 0 .. n {
+			if j.find(unsafe { keep[k] }) < 0 {
+				all_present = false
+				break
+			}
+		}
+		if all_present {
+			j.pool_overflow = false
 		}
 	}
 	return dropped
@@ -809,6 +833,7 @@ fn (mut j Journal) append_plain(block u16, data &u8, len u16) bool {
 	if i < 0 {
 		return false // pool full (generation-gated)
 	}
+	j.dirty_tail_now()
 	mut rec := [32]u8{}
 	seq := j.max_seq + 1
 	j.max_seq = seq
@@ -841,6 +866,7 @@ fn (mut j Journal) append_chain(block u16, data &u8, len u16) bool {
 	if i < 0 {
 		return false
 	}
+	j.dirty_tail_now()
 	whole := boot.crc32(data, u32(len))
 	start := j.cursor
 	seq := j.max_seq + 1
