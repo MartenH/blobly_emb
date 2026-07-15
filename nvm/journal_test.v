@@ -10,6 +10,7 @@ module nvm
 // refusal, marker preservation across compaction.
 
 import boot
+import os
 
 const sec_size = u32(1024) // 32 records/sector: small enough to force compaction
 const a_addr = u32(0x1000)
@@ -1045,4 +1046,42 @@ fn test_global_rewrite_headroom() {
 	assert getv(j2, 3)? == 3
 	assert getv(j2, 4)? == 4
 	assert !f.double_prog
+}
+
+// @verifies REQ-NVM-013
+// The engine must never copy Journal-sized state onto the call stack: on target
+// the comm thread runs put/get/compact on a 4 KB stack at the bottom of DTCM,
+// and one nested pair of by-value receiver calls (sizeof(Journal) ~2.6 KB each)
+// walks the stack off the memory map (H755 bench, HardFault with PC=0 at the
+// first put). V compiles a plain `fn (j Journal)` receiver to a by-value C
+// parameter, so the source itself is the checkable artifact.
+fn test_no_value_receivers_on_journal() {
+	src := os.read_file(os.join_path(os.dir(@FILE), 'journal.v')) or {
+		assert false, 'journal.v unreadable'
+		return
+	}
+	// Any `<ident> Journal` receiver or parameter (ending in `,` or `)`) is a
+	// by-value copy unless the ident is `mut` (reference in V). `&Journal`
+	// never matches the needle (no space before the type). Spelling-agnostic:
+	// `fn (journal Journal)`, `fn helper(x int, j Journal)` are all rejected.
+	for lnum, line in src.split_into_lines() {
+		if !line.contains('fn ') {
+			continue
+		}
+		mut idx := 0
+		for {
+			p := line.index_after(' Journal', idx) or { break }
+			idx = p + 1
+			after := p + ' Journal'.len
+			if after >= line.len || (line[after] != `,` && line[after] != `)`) {
+				continue // return type / doc text, not a param
+			}
+			mut s := p
+			for s > 0 && (line[s - 1].is_alnum() || line[s - 1] == `_`) {
+				s--
+			}
+			ident := line[s..p]
+			assert line[..s].ends_with('mut '), 'journal.v:${lnum + 1}: `${ident} Journal` passes ~2.6 KB by value — use &Journal (REQ-NVM-013)'
+		}
+	}
 }

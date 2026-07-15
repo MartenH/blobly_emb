@@ -109,3 +109,12 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-013"
+title = "Engine runs on a thread stack"
+text = "Every journal operation reachable from the comm service (put, get, compact, erase_pending, mark_clean, prune) shall execute within a 4 KB thread stack: the engine shall not copy journal-sized state onto the call stack (value receivers and by-value parameters of the Journal struct are forbidden). Found on the H755 bench: a by-value receiver costs sizeof(Journal) ~2.6 KB per call; one nested pair overflows the comm thread stack off the bottom of DTCM."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
