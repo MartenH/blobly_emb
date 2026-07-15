@@ -15,7 +15,9 @@ set -u
 f="$1"
 [ -r "$f" ] || { echo "lint_vinit: cannot read $f" >&2; exit 2; }
 body=$(awk '/^void _vinit\(int ___argc, voidptr ___argv\) \{/{on=1} on{print} on&&/^\}/{exit}' "$f")
-bad=$(printf '%s\n' "$body" | grep '// global' | grep -E '=[[:space:]]*-[0-9]|\.([A-Za-z_0-9]+)[[:space:]]*=[[:space:]]*(-[0-9]+|0x0*[1-9a-fA-F][0-9a-fA-F]*|[1-9][0-9]*)\b|_S\(' || true)
+# three shapes: a struct FIELD default (.f = N), a negative anywhere, a bare
+# top-level scalar global (g_x = 42;) — calls/casts stay out of scope (documented).
+bad=$(printf '%s\n' "$body" | grep '// global' | grep -E '=[[:space:]]*-[0-9]|\.([A-Za-z_0-9]+)[[:space:]]*=[[:space:]]*(-[0-9]+|0x0*[1-9a-fA-F][0-9a-fA-F]*|[1-9][0-9]*)\b|_S\(|^[[:space:]]*[A-Za-z_][A-Za-z_0-9]*[[:space:]]*=[[:space:]]*(\(\([a-z0-9_]+\)\))?(-?0x0*[1-9a-fA-F][0-9a-fA-F]*|-?[1-9][0-9]*)[[:space:]]*;' || true)
 if [ -n "$bad" ]; then
     echo "lint_vinit: $f: __global initializers live in _vinit, which freestanding NEVER runs —" >&2
     echo "these non-zero field defaults read 0 on target (drop the default; set it in an init fn):" >&2
