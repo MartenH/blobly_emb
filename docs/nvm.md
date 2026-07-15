@@ -90,8 +90,12 @@ record (one 32-byte flash word — the program granularity, atomic by constructi
   records). Wear levels perfectly by construction (alternating erase); a wider
   ring is the linear-life upgrade. Whether the live set fits after compaction is
   a GENERATION-TIME check (the generator knows N) — never a runtime failure.
-  Values > 20 bytes span chained records (same block_id/seq, part index in len's
-  high bits) — v1 keeps persistent signals small; big blobs are not the target.
+  Values > 20 bytes are REFUSED (put() at runtime; a generation-time
+  size gate in P2 — split the signal instead: values that don't change together
+  don't belong in one atomic unit). The format RESERVES chained records (same
+  block_id/seq, part index in len's high bits) but v1 does not implement them:
+  a chain loses single-record atomicity and needs its own all-parts-or-previous
+  mount rule + fuzz — it does not exist until a value earns it.
 - **Wear math** (H7: 128 KB sectors, 10k cycles): 4096 records/sector. Even one
   record per second sustained = one erase per ~68 min ≈ 1.3 years of CONTINUOUS
   max-rate writing per pair — and `min_write_ms` plus on-change gating keeps real
