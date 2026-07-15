@@ -243,6 +243,26 @@ must be drawn per board, next to the bootloader's:
   `boards/<b>/flash.c` driver. One flash driver, two customers, one bench
   validation.
 
+## Diagnostics / fault memory (freeze frames) — the other customer
+
+A freeze frame is a bundle of values captured at fault time — realistically
+30..150 bytes per fault-memory entry (snapshot DIDs + DTC + status + counters),
+times tens of faults. It does NOT fit the 20-byte signal cell, and it was never
+meant to: fault memory is a PLATFORM module (the `[[nvm.block]]` customer), not
+a persistent signal.
+
+Storage shape when diagnostics lands: a SECOND journal instance over its own
+sector pair with WIDER records — `rec_size` becomes a per-instance parameter
+(64 B -> 52-byte payload, 128 B -> 116) so one freeze frame is ONE atomic
+record: captured-at-fault coherence for free, every fuzz-proven invariant
+unchanged (nothing in the format depends on 32 specifically; program-unit-
+divides-rec_size still holds), diagnostic wear isolated from signal wear.
+Preferred over chained records, which buy the same capacity at the cost of an
+all-parts-or-previous mount rule and fresh crash-window analysis. The write
+pattern fits the engine as-is: event-driven appends at fault occurrence (the
+fault CAUSING the power loss is exactly what the append-CRC format survives),
+small counter updates, no cyclic traffic.
+
 ## Under the hood: blocks, and the signal ↔ journal mechanics
 
 Persistent signals compile down to numbered blocks (generator-assigned ids in a
