@@ -216,7 +216,7 @@ __global (
 	g_sh shell.ShellModule
 	g_duo_trace_ring [256]trace.Record // the satellite core's imported dump window
 	g_nvm nvm.Journal // the persistence journal (mounted pre-kernel)
-	g_nvmres_load_cmd [8]u8 // restore staging (pre-kernel -> thread init)
+	g_nvmres_load_cmd [12]u8 // restore staging (pre-kernel -> thread init; +headroom for the overlong check)
 	g_nvmres_load_cmd_n u16
 	g_nm nm_can.NmModule
 	g_comm_tcb   [32]u64  // the bus-owning comm thread
@@ -575,7 +575,9 @@ pub fn boot() {
 	if g_nvm.mounted {
 		keep := [u16(12844)]!
 		g_nvm.prune(&keep[0], 1)
-		if g_nvm.get(12844, &g_nvmres_load_cmd[0], 8) == 4 {
+		// cap = packed+1: an OVERLONG stored record (schema drift under a
+		// pinned id) truncates to packed+1 != packed and is refused
+		if g_nvm.get(12844, &g_nvmres_load_cmd[0], 5) == 4 {
 			g_nvmres_load_cmd_n = 4
 			C.ioc_pub(2, u32(g_nvmres_load_cmd[0]) | (u32(g_nvmres_load_cmd[1]) << 8) | (u32(g_nvmres_load_cmd[2]) << 16) | (u32(g_nvmres_load_cmd[3]) << 24), u32(0))
 		}
