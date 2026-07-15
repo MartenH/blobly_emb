@@ -71,7 +71,7 @@ pub mut:
 	// is a hook to replace, the SEQUENCE enforcement is what this layer owns.
 	unlocked  bool
 	seed_sent bool
-	seed      u32 = 0x424C4F42 // 'BLOB' — placeholder until the real scheme (P5)
+	seed      u32 // set by init() — 'BLOB' placeholder until the real scheme (P5)
 	// transfer state
 	erased     bool
 	downloading bool
@@ -100,6 +100,15 @@ pub fn (mut p Prog) handle(req &u8, req_len int, resp &u8) int {
 		0x11 { return p.ecu_reset(req, req_len, resp) }
 		else { return p.srv.handle(req, req_len, resp) }
 	}
+}
+
+// init sets the state a freshly-booted programming service runs with. Field
+// defaults can't (a __global's initializers live in the never-called _vinit on
+// freestanding targets — the H755 bench found seed reading 0 = the
+// already-unlocked convention), so every consumer calls this first.
+pub fn (mut p Prog) init() {
+	p.seed = 0x424C4F42 // 'BLOB' — placeholder until the real scheme (P5)
+	p.srv.session = 0x01 // default diagnostic session
 }
 
 fn (mut p Prog) in_programming_session() bool {

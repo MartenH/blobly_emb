@@ -90,6 +90,7 @@ fn main() {
 		app_base: app_base
 		app_size: app_size
 	}
+	p.init() // seed + default session — no field defaults (the _vinit rule)
 	// identification DIDs (REQ-BOOT-009): F180 = boot version, F181 = app state
 	p.srv.dids[0].id = 0xF180
 	p.srv.dids[0].data[0] = 0x00
@@ -108,6 +109,7 @@ fn main() {
 	println('boot_sim: serving UDS on ${iface} rx 0x${req_id.hex()} / tx 0x${rsp_id.hex()}')
 
 	mut link := isotp.Link{}
+	link.init_defaults()
 	mut req := [isotp.max_payload]u8{}
 	mut rsp := [isotp.max_payload]u8{}
 	for {

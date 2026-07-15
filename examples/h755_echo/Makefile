@@ -30,6 +30,7 @@ all: $(BUILD)/$(NAME).bin
 $(BUILD)/$(NAME).c: main.v | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -path "@vlib|@vmodules|." \
 	  -o examples/$(NAME)/$(BUILD)/$(NAME).c examples/$(NAME)/main.v
+	$(REPO)/scripts/lint_vinit.sh $@
 
 $(BUILD)/$(NAME).elf: $(CSRC) $(BOARD_LD_BARE) | $(BUILD)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(CSRC) -o $@
@@ -49,3 +50,7 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all flash clean
+
+# a failed recipe (the vinit lint) must not leave its half-made target: GNU make only
+# deletes targets on error when asked (make manual, Errors in Recipes)
+.DELETE_ON_ERROR:
