@@ -15,6 +15,7 @@ fn C.blob_can_open(&char, int) int
 fn C.blob_can_send(int, u32, &u8, u8, int) int
 fn C.blob_can_recv(int, &u32, &u8, &u8) int
 fn C.blob_can_tx_ready(int) int
+fn C.blob_can_tx_idle(int) int
 fn C.blob_can_rx_overruns(int) u32
 fn C.blob_can_close(int)
 
@@ -51,6 +52,13 @@ pub fn (mut c Channel) send(f Frame) bool {
 // SocketCAN is always ready (large kernel queue).
 pub fn (c Channel) tx_ready() bool {
 	return C.blob_can_tx_ready(c.sock) != 0
+}
+
+// tx_idle reports wire-done, not software-done: every frame handed to the controller
+// has actually been transmitted. A self-resetting node (the boot manager's 0x11) gates
+// on this so its last response isn't lost mid-controller (REQ-BOOT-012).
+pub fn (c Channel) tx_idle() bool {
+	return C.blob_can_tx_idle(c.sock) != 0
 }
 
 // recv returns true and fills `f` when a frame is available; false if none.

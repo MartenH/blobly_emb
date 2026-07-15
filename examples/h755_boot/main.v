@@ -126,6 +126,12 @@ fn main() {
 			out = isotp.Pdu{}
 		}
 		if g_prog.reset_pending && !g_link.busy() {
+			// REQ-BOOT-012: the link going idle only means the 0x51 response
+			// reached the Tx FIFO — wait for the CONTROLLER to put it on the
+			// wire, bounded so a dead bus can't hold off the reset (found on
+			// the P2 bench: cmd/flash saw 'ecu reset: timeout').
+			t0 := C.board_now_us()
+			for !ch.tx_idle() && C.board_now_us() - t0 < 20000 {}
 			C.bootcell_set_info(1) // BOOT_REASON_PROGRAMMED
 			C.boot_sys_reset()
 		}
