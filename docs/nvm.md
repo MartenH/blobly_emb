@@ -257,10 +257,19 @@ The full path for one signal:
    all-0xFF can never parse as a record, so erased flash is self-marking).
 2. **Packing**: fields little-endian in declaration order — the wire-encode
    convention, deliberately NOT raw struct memory (stable across compilers and
-   firmware updates). Changing a persistent signal's fields changes its packed
-   len → stored value reads as corrupt → declared default. Honest rule: edit the
-   fields, lose the stored value.
-3. **Mount** (boot): scan both sectors; per block keep the highest-seq record with
+   firmware updates).
+3. **Schema identity (2026-07-15 design fix)**: block_id is NOT declaration
+   order — inserting a persistent signal would shift every later id and
+   cross-restore old values into the wrong signals, and a same-length field
+   mutation would silently misinterpret old bytes. Identity = a 16-bit hash of
+   the signal's NAME + field names + field types: ANY layout change produces a
+   new identity → the old record never matches → the declared default, never a
+   lie. Reordering/inserting signals is safe by construction. Hash collisions
+   fail generation with an explicit pin (`nvm_id = 7`, the way frames pin CAN
+   ids). There is NO migration, ever: a value that must survive a schema change
+   is migrated by the APPLICATION (declare old + new signals for one release,
+   copy in a handler).
+4. **Mount** (boot): scan both sectors; per block keep the highest-seq record with
    a valid CRC into a fixed-size RAM table (generator-dimensioned); the write
    cursor is the first erased word. Mount is strictly READ-ONLY (hardened in the
    P1 review round): it never programs and never erases — strays from an
@@ -271,16 +280,16 @@ The full path for one signal:
    value is neither served nor re-persisted. Clean is judged honestly: an
    all-torn journal is unclean, and a torn write after the marker (the ECU woke,
    then died mid-put) is unclean — old-sector debris doesn't poison it.
-4. **Restore**: generated thread init unpacks the table entry into the signal's
+5. **Restore**: generated thread init unpacks the table entry into the signal's
    cell BEFORE the first dispatch — a restored value is indistinguishable from a
    computed one.
-5. **Write**: the generated wrapper (which already routes every signal write)
+6. **Write**: the generated wrapper (which already routes every signal write)
    additionally stages the new value into the block's RAM-table slot and marks it
    dirty — a seq-stamped latest-value slot, the xioc pattern, because it is the
    same problem (single writer thread, single journal reader, never block, latest
    wins). The COMM THREAD polls dirty flags on its idle path and appends records,
    rate-limited; the FB thread never touches flash.
-6. **Flush/compact**: NM prepare-to-sleep journals all dirty blocks and is the
+7. **Flush/compact**: NM prepare-to-sleep journals all dirty blocks and is the
    designated compaction window where erase would otherwise stall a live core.
 
 ## Sim story
