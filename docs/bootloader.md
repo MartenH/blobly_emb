@@ -129,18 +129,129 @@ affords:
   gone but the ECU is not bricked. Honest, documented downgrade — same rule as the
   lean codec: fail loudly, never half-work.
 
-## Image header (the contract between build and boot)
+## Image container (the contract between build and boot)
 
-Emitted by the build (objcopy step or a tiny host tool), verified by boot:
+`tools/mkimage` wraps a raw application `.bin` into the container the host flasher
+transfers and the boot verifies:
 
 ```
-magic | header_ver | image_length | crc32 | sw_version | entry | [signature (BOOT-011)]
+  offset  field                                         written by
+  ┌──────────────────────────── header word 0 (signed) ───────────────────────┐
+   0      magic       u32  'BLBT'
+   4      hdr_ver     u16  = 1
+   8      image_len   u32  bytes of the app image (excludes header + signature)
+  12      image_crc   u32  CRC-32 of the image (fast bit-rot pre-check)
+  16      sw_version  u32
+  20      hdr_size    u32  = 64
+  28      word0_crc   u32  CRC-32 over bytes 0..27 (header self-check)
+  ├──────────────────────────── header word 1 ────────────────────────────────┤
+  32      valid_mark  u32  'VALD'  ← the boot writes this LAST, after verifying
+  36..63  reserved (0xFF)
+  └────────────────────────────────────────────────────────────────────────────┘
+  64                    image  (image_len bytes; --pad-vectors puts vectors @ +0x400)
+  64+image_len          signature  Ed25519, 64 bytes  ← --sign; over header[0..32] ‖ image
 ```
 
-Written into a fixed slot at the front of the app region; the CRC covers everything
-but the header itself; the valid mark is the LAST thing the programming session
-writes. `[boot]` in ecu.toml binds the request-cell address, app region, and DIDs so
-the generator keeps bootloader and app agreeing on the layout — one config, as always.
+Two words by design: the **valid mark lives alone in word 1** so it can be programmed
+last (a torn update leaves an *invalid* header — unbrickable, REQ-BOOT-005). The
+**signature covers header word 0 ‖ image** — so `image_len`, `image_crc`, and
+`sw_version` are all bound and cannot be tampered — and is excluded from what it
+signs (the valid mark is the boot's to write). `[boot]` in ecu.toml binds the
+request-cell address, app region, and DIDs so generator, app, and boot agree on the
+layout — one config, as always.
+
+Build invocations:
+
+```sh
+# field image — the boot verifies the signature and marks it valid itself
+v run tools/mkimage app.bin app.img <ver> --pad-vectors --sign examples/keys/dev.seed
+
+# factory image — pre-marked, SWD-only, physical-trust path (no --sign; the two
+# are mutually exclusive: pre-marking would bypass the signature check)
+v run tools/mkimage app.bin app.img <ver> --pad-vectors --valid
+```
+
+## Trust model — what the tester holds vs what the ECU holds
+
+Asymmetric all the way down (P5): the **private key never touches an ECU or a build
+machine** — a signing service / HSM owns it. Every device only holds the **public**
+key and can *verify* but never *forge*. The boot manager is the **root of trust**:
+it's the small immutable stage that holds the key and gates both the image and the
+session.
+
+```mermaid
+flowchart LR
+    subgraph SIGN["Signing service (offline / HSM)"]
+        PRIV["Ed25519 PRIVATE key<br/>(never leaves)"]
+    end
+    subgraph TESTER["Tester (blobly_net cmd/flash + GUI)"]
+        IMG["signed image.img<br/>= header ‖ image ‖ sig"]
+        TPRIV["tester PRIVATE key<br/>(for 0x29 session auth)"]
+    end
+    subgraph ECU["ECU — boot manager (immutable, root of trust)"]
+        PUB["Ed25519 PUBLIC key (baked in)"]
+        VER["verify: signature + 0x29 challenge"]
+        FLASH["app slot (bank / sectors)"]
+    end
+    PRIV -->|signs image at release| IMG
+    IMG -->|UDS transfer over CAN/DoIP| VER
+    TPRIV -->|signs the ECU's challenge| VER
+    PUB --> VER
+    VER -->|only if BOTH verify| FLASH
+```
+
+Two independent gates, both anchored in that one public key:
+
+- **Session gate (0x29)** — before any erase/download, the tester proves it holds a
+  private key by signing an ECU-chosen random challenge (below). Stops an
+  *unauthorised* tester from starting a reflash.
+- **Image gate (signature)** — the boot verifies the image signature before writing
+  the valid mark, and (as `check_and_mark`) rejects an unsigned or wrongly-signed
+  image. Stops a *tampered or forged* image from ever booting, even if the session
+  gate were somehow bypassed. This is the last line of defence.
+
+> Key separation: this stack uses one dev keypair for both gates for simplicity. A
+> production deployment typically separates the **release-signing** key (signs images,
+> lives in the build pipeline's HSM) from a **diagnostic/tester** key or PKI (authorises
+> 0x29 sessions, per-tester or per-technician) — both trusted by the boot, different
+> blast radius if one leaks.
+
+## Session authentication — UDS 0x29 (REQ-BOOT-016)
+
+The boot's flash-write services (erase/download/transfer) are locked until the tester
+authenticates. `0x29` replaces the legacy `0x27` seed/key: instead of a shared secret,
+the ECU issues a random challenge and the tester returns a **signature** over it, which
+the ECU verifies with the public key it already holds. Nothing extractable from an ECU
+lets an attacker forge it.
+
+```mermaid
+sequenceDiagram
+    participant T as Tester
+    participant B as Boot manager (ECU)
+    Note over B: flash services LOCKED (NRC 0x33)
+    T->>B: 0x10 02  (enter programming session)
+    B-->>T: 0x50 02
+    T->>B: 0x29 01  requestChallenge
+    B->>B: draw random nonce (challenge)
+    B-->>T: 0x69 01  challenge
+    T->>T: sign(challenge) with the PRIVATE key
+    T->>B: 0x29 02  proofOfOwnership = signature
+    B->>B: Ed25519 verify(pubkey, challenge, signature)
+    alt signature valid
+        B-->>T: 0x69 02  authenticated
+        Note over B: flash services UNLOCKED
+        T->>B: 0x31 FF00 erase → 0x34 → 0x36×N → 0x37
+        T->>B: 0x31 FF01 check image
+        B->>B: CRC + Ed25519 verify(image) before the mark
+        B-->>T: marked valid → 0x11 reset → app runs
+    else invalid / silent tester
+        B-->>T: 0x7F 29 (or S3 timeout → re-lock, REQ-BOOT-013)
+    end
+```
+
+Note the two verifications are distinct: 0x29 authenticates the **tester** (a live
+challenge, so a captured session can't be replayed), and `check image` authenticates
+the **image** (a signature over the bytes). Both must pass.
 
 ## Phasing (each rung bench-verified, as usual)
 
@@ -152,8 +263,11 @@ the generator keeps bootloader and app agreeing on the layout — one config, as
    application (NM-aware: hold the bus awake during the session).
 4. **P4 — dual-bank atomic activation** on the H755 (+ the single-bank degrade
    documented on H735).
-5. **P5 — authenticity** (REQ-BOOT-011): CMAC first (comm/secoc precedent, key
-   management honestly out of scope), asymmetric signature when it earns its way in.
+5. **P5 — authenticity** (REQ-BOOT-011/016): asymmetric (Ed25519 + SHA-512, the
+   no-alloc `bcrypto/` module, RFC-vector verified). **Image signing** — verify
+   before the mark — is built and bench-verified; the **0x29 session gate** is the
+   remaining rung (see the trust model + sequence above). Key management (the private
+   key off every ECU) is a deployment concern the design names but does not own.
 6. **Ethernet/DoIP binding** when hardware with Ethernet lands — by construction a
    new binding, not a redesign.
 
