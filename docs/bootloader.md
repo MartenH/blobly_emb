@@ -156,7 +156,7 @@ Build invocations:
 
 ```sh
 # field image — the boot verifies the signature and marks it valid itself
-v run tools/mkimage app.bin app.img <ver> --pad-vectors --sign examples/keys/dev.seed
+v run tools/mkimage app.bin app.img <ver> --pad-vectors --sign examples/keys/mkimage.seed
 
 # factory image — pre-marked, SWD-only, physical-trust path (no --sign; the two
 # are mutually exclusive: pre-marking would bypass the signature check)
@@ -202,11 +202,13 @@ Two independent gates, both anchored in that one public key:
   image. Stops a *tampered or forged* image from ever booting, even if the session
   gate were somehow bypassed. This is the last line of defence.
 
-> Key separation: this stack uses one dev keypair for both gates for simplicity. A
-> production deployment typically separates the **release-signing** key (signs images,
-> lives in the build pipeline's HSM) from a **diagnostic/tester** key or PKI (authorises
-> 0x29 sessions, per-tester or per-technician) — both trusted by the boot, different
-> blast radius if one leaks.
+> Key separation: this stack uses **two** dev keys, named for their consumer
+> (`examples/keys`): `mkimage.seed` (the **release** key — signs images, verified by the
+> boot's `image_key`) and `tester.seed` (the **tester** key — authorises 0x29 sessions,
+> verified by the boot's `session_key`). Different custody, different blast radius: leak
+> the tester key and someone can *start sessions*; leak the release key and someone can
+> *forge firmware*. Production keeps the release seed in a signing service/HSM and the
+> tester seed with the technician (ideally per-technician PKI, not a shared file).
 
 ## Session authentication — UDS 0x29 (REQ-BOOT-016)
 
@@ -407,8 +409,9 @@ The full asymmetric chain on real silicon:
   (`lint_vinit` + the no-heap source guard), challenge from `board_rng` (HSI48
   kernel clock, bounded polling → conditionsNotCorrect if the RNG is dead).
 
-Dev key: `examples/keys/dev.seed` (00..1f, clearly not-for-production); public
-key baked into the boot. `cmd/flash` takes the tester seed from
+Dev keys: `examples/keys/mkimage.seed` (release, verified by `image_key`) +
+`tester.seed` (0x29, verified by `session_key`) — both public halves baked into the
+boot. `cmd/flash` takes the tester seed from
 `$BLOBLY_FLASH_SEED` or the dev default.
 
 ## Bench log — NUCLEO-H755ZI-Q, 2026-07-15 (first silicon pass)

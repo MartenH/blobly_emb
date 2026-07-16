@@ -71,7 +71,8 @@ fn new_prog(mut f TestFlash) Prog {
 	}
 	p.init()
 	p.rng = fake_rng // 0x29 challenge source
-	p.pubkey = dev_pubkey() // the key that verifies both the session and the image
+	p.image_key = image_pubkey() // verifies the firmware signature
+	p.session_key = tester_pubkey() // verifies the 0x29 proof
 	return p
 }
 
@@ -89,7 +90,7 @@ fn unlock(mut p Prog) {
 	ch := ask(mut p, [u8(0x29), 0x01]) // requestChallenge
 	assert ch[0] == 0x69 && ch[1] == 0x01 && ch.len == 34
 	challenge := ch[2..34].clone()
-	sig := bcrypto.sign(dev_seed, challenge)
+	sig := bcrypto.sign(tester_seed, challenge)
 	mut proof := [u8(0x29), 0x02]
 	for i in 0 .. 64 {
 		proof << sig[i]
@@ -297,17 +298,26 @@ fn test_idle_return_window() {
 
 // ---- P5: signed-image authenticity (REQ-BOOT-011) ----
 
-const dev_seed = [u8(0), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+// image/release seed (signs firmware) and tester seed (0x29) — separate keys.
+const image_seed = [u8(0), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
 	20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]!
 
-fn dev_pubkey() [32]u8 {
-	return bcrypto.public_key(dev_seed)
+const tester_seed = [u8(0x20), 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a,
+	0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
+	0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f]!
+
+fn image_pubkey() [32]u8 {
+	return bcrypto.public_key(image_seed)
+}
+
+fn tester_pubkey() [32]u8 {
+	return bcrypto.public_key(tester_seed)
 }
 
 // signed_image = payload_image + a 64-byte Ed25519 signature over header[0..32] ‖ image,
 // exactly what mkimage --sign emits and the boot verifies.
 fn signed_image(image_len u32) []u8 {
-	return signed_image_with(image_len, dev_seed)
+	return signed_image_with(image_len, image_seed)
 }
 
 fn signed_image_with(image_len u32, seed [32]u8) []u8 {
@@ -331,7 +341,7 @@ fn signed_image_with(image_len u32, seed [32]u8) []u8 {
 fn test_signed_image_marks_valid() {
 	mut f := &TestFlash{}
 	mut p := new_prog(mut f)
-	p.pubkey = dev_pubkey()
+	p.image_key = image_pubkey()
 	img := signed_image(700)
 	unlock(mut p)
 	transfer(mut p, img)
@@ -344,7 +354,7 @@ fn test_signed_image_marks_valid() {
 fn test_signed_tamper_rejected() {
 	mut f := &TestFlash{}
 	mut p := new_prog(mut f)
-	p.pubkey = dev_pubkey()
+	p.image_key = image_pubkey()
 	img := signed_image(700)
 	unlock(mut p)
 	transfer(mut p, img)
@@ -362,11 +372,11 @@ fn test_signed_wrong_key_rejected() {
 	// signed with a DIFFERENT key -> the image verify fails, no mark.
 	mut other_seed := [32]u8{}
 	for i in 0 .. 32 {
-		other_seed[i] = dev_seed[i]
+		other_seed[i] = image_seed[i]
 	}
 	other_seed[0] ^= 0xff
 	img := signed_image_with(700, other_seed)
-	unlock(mut p) // authenticates with the dev key (matches p.pubkey)
+	unlock(mut p) // authenticates with the tester key (session ok); image key differs
 	transfer(mut p, img)
 	assert ask(mut p, [u8(0x31), 0x01, 0xFF, 0x01]) == [u8(0x71), 0x01, 0xFF, 0x01, 0x01]
 	assert !check_image(&f.mem[0])
@@ -377,7 +387,7 @@ fn test_signed_wrong_key_rejected() {
 fn test_unsigned_rejected_when_key_set() {
 	mut f := &TestFlash{}
 	mut p := new_prog(mut f)
-	p.pubkey = dev_pubkey()
+	p.image_key = image_pubkey()
 	mut img := payload_image(700) // no signature appended
 	for _ in 0 .. 64 {
 		img << 0xFF // erased-looking tail where a signature would be
@@ -400,7 +410,7 @@ fn test_0x29_wrong_proof_stays_locked() {
 	assert ch[0] == 0x69 && ch.len == 34
 	mut wrong_seed := [32]u8{}
 	for i in 0 .. 32 {
-		wrong_seed[i] = dev_seed[i]
+		wrong_seed[i] = tester_seed[i]
 	}
 	wrong_seed[5] ^= 0xff
 	bad_sig := bcrypto.sign(wrong_seed, ch[2..34].clone())
@@ -449,4 +459,19 @@ fn test_prewritten_mark_is_dropped() {
 	// and the legitimate path still works: check_and_mark verifies + writes it
 	assert ask(mut p, [u8(0x31), 0x01, 0xFF, 0x01]) == [u8(0x71), 0x01, 0xFF, 0x01, 0x00]
 	assert check_image(&f.mem[0])
+}
+
+// @verifies REQ-BOOT-011, REQ-BOOT-016
+// Key separation bites: a tester who authenticates with the TESTER key still
+// cannot install firmware signed with that key — the image is verified against
+// the IMAGE key. A leaked tester key starts sessions but never forges firmware.
+fn test_key_separation_tester_cannot_forge_image() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	img := signed_image_with(700, tester_seed) // signed with the TESTER key
+	unlock(mut p) // session auth succeeds (tester key)
+	transfer(mut p, img)
+	// image verify uses image_key, not session_key -> rejected, no mark
+	assert ask(mut p, [u8(0x31), 0x01, 0xFF, 0x01]) == [u8(0x71), 0x01, 0xFF, 0x01, 0x01]
+	assert !check_image(&f.mem[0])
 }
