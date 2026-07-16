@@ -42,3 +42,45 @@ void boot_sys_reset(void) {
 	for (;;) {
 	}
 }
+
+/* board_rng — the 0x29 challenge source (REQ-BOOT-016): the STM32H7 true RNG.
+ * Kernel clock = HSI48 (RNGSEL 00). Bounded polling so a dead RNG can't hang the
+ * boot — it returns 0 and the 0x29 request answers conditionsNotCorrect. */
+#define RCC_CR_R       (*(volatile uint32_t *)0x58024400u)
+#define RCC_D2CCIP2R_R (*(volatile uint32_t *)0x58024454u)
+#define RCC_AHB2ENR_R  (*(volatile uint32_t *)0x580244DCu)
+#define RNG_CR_R       (*(volatile uint32_t *)0x48021800u)
+#define RNG_SR_R       (*(volatile uint32_t *)0x48021804u)
+#define RNG_DR_R       (*(volatile uint32_t *)0x48021808u)
+
+static int g_rng_ready = 0;
+static int rng_setup(void) {
+	RCC_CR_R |= (1u << 12); /* HSI48ON */
+	for (uint32_t t = 0; !(RCC_CR_R & (1u << 13)); t++)
+		if (t > 2000000u) return 0; /* HSI48RDY never came */
+	RCC_D2CCIP2R_R &= ~(3u << 8); /* RNGSEL = 00 = HSI48 */
+	RCC_AHB2ENR_R |= (1u << 6);    /* RNG kernel+bus clock */
+	(void)RCC_AHB2ENR_R;
+	RNG_CR_R = (1u << 2); /* RNGEN, clock-error detection on */
+	g_rng_ready = 1;
+	return 1;
+}
+
+int board_rng(uint8_t *out, int n) {
+	if (!g_rng_ready && !rng_setup()) return 0;
+	int i = 0;
+	while (i < n) {
+		uint32_t t = 0;
+		while (!(RNG_SR_R & 1u)) { /* DRDY */
+			if (++t > 200000u) return 0;
+		}
+		if (RNG_SR_R & 0x6u) { /* seed/clock error */
+			RNG_SR_R = 0;
+			return 0;
+		}
+		uint32_t w = RNG_DR_R;
+		for (int b = 0; b < 4 && i < n; b++, i++)
+			out[i] = (uint8_t)(w >> (8 * b));
+	}
+	return 1;
+}

@@ -23,6 +23,7 @@ fn C.board_clock_init()
 fn C.board_timebase_init()
 fn C.board_can_clock_pins_init() // FDCAN1 kernel clock + PD0/PD1 AF9 — blob_can_open does NOT mux pins
 fn C.board_now_us() u64
+fn C.board_rng(out &u8, n int) int
 fn C.bootcell_take_request() u32
 fn C.bootcell_set_info(reason u32)
 fn C.boot_jump_app()
@@ -51,6 +52,10 @@ __global (
 	g_req  [520]u8
 	g_rsp  [520]u8
 )
+
+fn rng_hook(out &u8, n int) bool {
+	return C.board_rng(out, n) != 0
+}
 
 fn main() {
 	// --- the boot decision, from near-reset state (REQ-BOOT-001/002/010) ---
@@ -85,6 +90,7 @@ fn main() {
 	// dev image-signing public key (examples/keys) — REAL deployments bake their
 	// own; the matching seed never touches an ECU or build machine (REQ-BOOT-011)
 	g_prog.pubkey = [u8(0x03), 0xa1, 0x07, 0xbf, 0xf3, 0xce, 0x10, 0xbe, 0x1d, 0x70, 0xdd, 0x18, 0xe7, 0x4b, 0xc0, 0x99, 0x67, 0xe4, 0xd6, 0x30, 0x9b, 0xa5, 0x0d, 0x5f, 0x1d, 0xdc, 0x86, 0x64, 0x12, 0x55, 0x31, 0xb8]!
+	g_prog.rng = rng_hook // 0x29 challenge source (STM32H7 TRNG)
 	g_link.init_defaults() // ISO-TP N_Bs/WFTmax — 0 would wait forever on a lost FC
 	g_prog.app_base = app_base
 	g_prog.app_size = app_size
