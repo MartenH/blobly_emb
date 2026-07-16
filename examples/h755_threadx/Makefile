@@ -42,7 +42,11 @@ LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
 # changes, so `make APP_LINK=boot` can never reuse a stale standalone .elf whose
 # vectors still point at 0x08000000 (codex on emb#130).
 ifeq ($(APP_LINK),boot)
-LDFLAGS += -Wl,--defsym,__flash_base__=0x08020400 -Wl,--defsym,__flash_len__=0xDFC00
+# __flash_len__ = APP_SIZE(0xE0000) - vector pad(0x400) - signature(0x40): the
+# signed container is header ‖ image ‖ 64-byte sig, so the app must leave 64 bytes
+# at the top of the slot or a max-size signed image overflows the boot's region
+# check (codex on emb#137).
+LDFLAGS += -Wl,--defsym,__flash_base__=0x08020400 -Wl,--defsym,__flash_len__=0xDFBC0
 LINKMODE = boot
 else
 LINKMODE = std

@@ -320,6 +320,21 @@ fn reduce_scalar(digest [64]u8) [32]u8 {
 	return r
 }
 
+// s_canonical reports S < L for the signature's S half (sig[32..64], little-endian).
+fn s_canonical(sig [64]u8) bool {
+	for i := 31; i >= 0; i-- {
+		sb := int(sig[32 + i])
+		lb := int(ed_l[i])
+		if sb < lb {
+			return true
+		}
+		if sb > lb {
+			return false
+		}
+	}
+	return false // S == L is also non-canonical
+}
+
 // Verifier streams the message for verify (the boot hashes an image from flash
 // in chunks — there is no RAM to buffer it). Usage:
 //   mut v := verify_start(pubkey, sig)
@@ -352,6 +367,11 @@ pub fn (mut v Verifier) update(data &u8, n int) {
 
 pub fn (mut v Verifier) finish() bool {
 	if !v.key_ok {
+		return false
+	}
+	// RFC 8032 §8.4: reject non-canonical S (S >= L) — anti-malleability. TweetNaCl
+	// omits this; a secure-boot verifier must not. Compare sig[32..64] (LE) < L.
+	if !s_canonical(v.sig) {
 		return false
 	}
 	digest := v.hc.final()

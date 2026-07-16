@@ -175,3 +175,30 @@ fn test_verify_path_no_heap_forms() {
 		}
 	}
 }
+
+// @verifies REQ-BOOT-017
+// RFC 8032 §8.4: a signature with S += L is a different encoding of the SAME
+// point (S ≡ S+L mod L) — a naive verifier accepts both (malleability). A
+// canonical verifier rejects S >= L. This is the exact bypass a secure-boot
+// verifier must not have.
+fn test_ed25519_rejects_noncanonical_s() {
+	v := rfc8032[2]
+	pkey := fix32(unhex(v.pub))
+	msg := unhex(v.msg)
+	sig := fix64(unhex(v.sig))
+	assert verify(pkey, msg, sig) // the canonical signature verifies
+
+	// L (little-endian) — the group order
+	l := [u8(0xed), 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde,
+		0xf9, 0xde, 0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10]!
+	// S' = S + L (byte-wise add with carry into the S half)
+	mut mal := sig
+	mut carry := u16(0)
+	for i in 0 .. 32 {
+		s := u16(mal[32 + i]) + u16(l[i]) + carry
+		mal[32 + i] = u8(s & 0xff)
+		carry = s >> 8
+	}
+	// same underlying point, non-canonical S -> MUST be rejected
+	assert !verify(pkey, msg, mal)
+}

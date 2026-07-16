@@ -37,6 +37,9 @@ fn main() {
 	valid := 'valid' in flags(args)
 	pad_vectors := 'pad-vectors' in flags(args)
 	sign_seed := opt(args, '--sign')
+	if 'sign' in flags(args) && sign_seed == '' {
+		panic('mkimage: --sign needs a seed file argument (e.g. --sign examples/keys/dev.seed)')
+	}
 	if valid && sign_seed != '' {
 		panic('mkimage: --valid and --sign are mutually exclusive (a signed image is ' +
 			'authenticated by the boot before it marks valid; --valid would skip that)')
