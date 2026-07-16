@@ -29,7 +29,8 @@ the DBC on both sides). Multi-node makes it **derived and validated**, exactly a
 cross-core went from hand-wired duo plumbing to `to = "m4"` → xioc.
 
 So the work is not a new transport. It is: a **system view** that lets the
-generator see all the nodes at once, so it can (a) derive cross-node routing,
+generator see all the nodes at once, so it can (a) derive each node's
+cross-node wiring AND the gateway routing from where producers/consumers sit,
 (b) treat the DBC as the system contract every node conforms to, and (c) catch
 cross-node bugs at build time — the single-writer rule, id collisions, orphan
 receivers — the way it already catches them within a node.
@@ -131,23 +132,44 @@ Given this, `make gen` at the system level:
    ids, the shared DBC) — the observer and the OTA master read this instead of
    being told each node by hand.
 
-Each node's `ecu.toml` is unchanged in spirit. The one addition: a signal
-endpoint may name **another node's role**, and the generator lowers it to the
-bus. Two spellings, pick per taste (this is a design decision, see below):
+## What is generated vs authored (the dissolution)
+
+`system.toml` is the **source** — the generator derives each node's system-facing
+wiring *and the routing* from it. The per-node `ecu.toml`'s cross-node half
+**dissolves** into `system.toml` (declared once, emitted down), exactly as
+`[duo]` dissolved into ordinary signals in the multi-image phase and the
+hand-written satellite was absorbed by the emitter. What splits:
+
+**Generated (derived from `system.toml`):**
+- each node's **bus wiring** — which signals it tx/rx, the COM encode/decode, the
+  DBC frames — declared once at system scope, emitted into each participating node
+  (no more "both ends declare the shared signal");
+- the **routes** — a cross-node signal whose producer and consumers sit on
+  *different buses* has its gateway route **derived** (frame forward if the ids
+  are 1:1, signal decode-re-encode if the DBCs differ). You declare the signal and
+  who produces/consumes it; the generator places the route on the gateway.
+  Explicit `[[route]]` remains only to pin raw-forward / firewall behaviour;
+- the **identities** (NM / diag / trace) and the **system manifest**.
+
+**Authored (cannot be derived — it is the logic):**
+- each node's **application**: its FBs (the V code) and internal structure
+  (partitions, threads, and which FB *produces / consumes* which signal). A node
+  keeps a small local description of its own internals + its FB code, so it stays
+  developable and unit-testable on its own; it just no longer re-declares the
+  cross-node bus contract.
+
+**The generator merges** `system.toml` (the system contract) with each node's
+authored internals → that node's complete generated output (ports, loom, the
+COM + route bridge). So a signal is declared where it belongs: cross-node ones
+once in `system.toml`, node-local ones in the node.
 
 ```toml
-# explicit (works today): the author owns the DBC frame
-[[signal]]
-name = "VehicleSpeed"
-from = "app"
-to   = "veh"                 # a bus -> a DBC frame the author placed on both nodes
-
-# derived (the sugar multi-node adds): name the consumer's node/role
-[[signal]]
-name = "VehicleSpeed"
-from = "app"
-to   = "hmi"                 # 'hmi' is another node -> the generator routes it
-                             # over the shared bus, matched to a DBC frame
+# in a node's local description: name what it produces/consumes; the SYSTEM
+# owns where that goes and how it crosses buses.
+[[fb.handler]]
+name    = "on_100ms"
+reads   = ["VehicleSpeed"]   # a system signal -> generator wires the rx (+ any route)
+writes  = ["BrakeCmd"]       # a system signal -> generator wires the tx (+ frame)
 ```
 
 ## Multiple buses and the gateway
