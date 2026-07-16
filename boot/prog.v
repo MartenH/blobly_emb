@@ -12,6 +12,7 @@ module boot
 // transfer data is staged and programmed in whole words; the tail pads with 0xFF.
 
 import comm.uds
+import bcrypto
 
 pub const prog_word = u32(32) // program granularity (STM32H7 flash word)
 pub const max_block_data = 512 // 0x36 payload cap advertised in the 0x34 response
@@ -67,6 +68,11 @@ pub mut:
 	// the bootloader's own region — is rejected at erase and download time.
 	app_base u32
 	app_size u32
+	// Ed25519 image-authenticity public key (REQ-BOOT-011). When non-zero the
+	// check routine REQUIRES a valid signature over header[0..32] ‖ image before
+	// writing the valid mark; all-zero disables the check (tests / a transition
+	// build). The seed that signs is never on the ECU — see examples/keys.
+	pubkey [32]u8
 	// security (REQ-BOOT-011 seam): a trivial seed/key pair for now — the algo
 	// is a hook to replace, the SEQUENCE enforcement is what this layer owns.
 	unlocked  bool
@@ -381,6 +387,17 @@ fn (mut p Prog) ecu_reset(req &u8, req_len int, resp &u8) int {
 	return 2
 }
 
+// pubkey_is_zero reports whether image-signature verification is disabled
+// (an all-zero key). A real boot bakes a non-zero key and always verifies.
+fn (p &Prog) pubkey_is_zero() bool {
+	for b in p.pubkey {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // check_and_mark: read back the header + image through the flash hooks, verify,
 // and program the valid-mark word (word 1 of the header) on success.
 fn (mut p Prog) check_and_mark() bool {
@@ -393,14 +410,28 @@ fn (mut p Prog) check_and_mark() bool {
 	if h.magic != magic || h.hdr_ver != hdr_ver || h.hdr_size != hdr_size {
 		return false
 	}
+	// a signed image also has a 64-byte signature after the image; require the
+	// whole extent (header ‖ image ‖ sig) to sit inside the app window.
+	signed := !p.pubkey_is_zero()
+	sig_span := if signed { u32(64) } else { u32(0) }
 	if h.image_len == 0 || h.image_len > max_image_len
-		|| !p.region_ok(p.app_base, hdr_size + h.image_len) {
+		|| !p.region_ok(p.app_base, hdr_size + h.image_len + sig_span) {
 		return false
 	}
 	if crc32(&hdr[0], 28) != h.word0_crc {
 		return false
 	}
-	// image CRC, streamed through the read hook in stage-sized chunks
+	// One image pass feeds BOTH the CRC (fast bit-rot pre-check) and the
+	// Ed25519 verify (authenticity). The signed region is header[0..32] ‖ image.
+	mut ver := bcrypto.Verifier{}
+	if signed {
+		mut sig := [64]u8{}
+		if !p.flash.read(p.flash.ctx, p.app_base + hdr_size + h.image_len, &sig[0], 64) {
+			return false
+		}
+		ver = bcrypto.verify_start(p.pubkey, sig)
+		ver.update(&hdr[0], 32)
+	}
 	mut crc := u32(0xFFFF_FFFF)
 	mut off := u32(0)
 	mut buf := [64]u8{}
@@ -413,9 +444,17 @@ fn (mut p Prog) check_and_mark() bool {
 			return false
 		}
 		crc = crc32_update(crc, &buf[0], n)
+		if signed {
+			ver.update(&buf[0], int(n))
+		}
 		off += n
 	}
 	if (crc ^ 0xFFFF_FFFF) != h.image_crc {
+		return false
+	}
+	// authenticity is the last gate before the mark: an unsigned or
+	// wrongly-signed image is refused (no mark, decide() -> stay_boot).
+	if signed && !ver.finish() {
 		return false
 	}
 	// the LAST write: the valid mark, alone in its 32-byte flash word
