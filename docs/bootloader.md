@@ -1,6 +1,6 @@
 # Bootloader — design + build log
 
-> Status (2026-07-16): **P1–P3 + P5 BENCH-VERIFIED on the H755; P4 (dual-bank) pending.**
+> Status (2026-07-16): **P1–P3 + P5 BENCH-VERIFIED on the H755; P4 (atomic activation) pending.**
 > The chain runs on real silicon: header-verified jump, CAN reflash + torn-image
 > recovery, S3/return-to-app session timers, and full asymmetric authenticity —
 > Ed25519 image signatures verified on the CM7 (no heap) + a 0x29 session gate
@@ -313,8 +313,11 @@ lighter middle ground if the trade pinches before a full PKI earns its way in.
    host flasher tool in blobly_net. First real reflash over the wire.
 3. **P3 — app-side handoff**: programming session request from the running
    application (NM-aware: hold the bus awake during the session).
-4. **P4 — dual-bank atomic activation** on the H755 (+ the single-bank degrade
-   documented on H735).
+4. **P4 — atomic activation** (REQ-BOOT-007, instance-agnostic): the requirement is
+   "run the whole old or the whole new image, never a mixture." *Implementation note*
+   — the boards layer picks the strategy the silicon affords: dual-bank swap on
+   parts that have it (H755/H743), the valid-mark-last degrade on single-bank parts
+   (H735). The requirement names neither; see "Atomic activation" above.
 5. **P5 — authenticity** (REQ-BOOT-011/016): asymmetric (Ed25519 + SHA-512, the
    no-alloc `bcrypto/` module, RFC-vector verified). **Image signing** — verify
    before the mark — is built and bench-verified; the **0x29 session gate** is the
