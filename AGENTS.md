@@ -65,6 +65,11 @@ Enforce these as high-priority (P0/P1); they are the project's hard invariants.
   steady-state handlers. `tools/` is unrestricted. Flag any heap in a runtime layer.
   Examples build with **`-gc none`** (no collector — the runtime doesn't allocate);
   this also keeps the footprint small (no Boehm GC code/heap/threads linked).
+  Exception (tier 1): a **bounded pool/arena carved from static memory** — fixed
+  count, sized at config, provable ceiling, owned by one subsystem, exhaustion
+  returns a value not a fault — is sanctioned for buffer-churn subsystems (net
+  stack, etc.). That is NOT the heap (no `malloc`/fragmentation); the static
+  worst-case footprint is preserved. See [docs/no-alloc.md](docs/no-alloc.md).
 - **IOC is single-writer-per-channel (SPSC).** Each channel has exactly one
   producing partition. The lock-free seqlock/double/triple algorithms are only
   valid under SPSC — flag any second writer, any cross-core shared mutable state
