@@ -1,15 +1,8 @@
-# sysnode — the H735 system node's local description (multi-node P1). It owns
-# its internals (partition/thread/FB); the SYSTEM (../../system.toml) owns the
-# cross-node contract and identity. On the compute bus it TRANSMITS VehicleSpeed
-# and RECEIVES EngineRpm — the clean single-writer split the domain node mirrors.
-
-[import]
-dbc = "compute.dbc"
-
-[bus.can0] # the compute-bus interface, matched to system [bus.compute]
-interface = "can0"
-fd        = false
-core      = 0
+# sysnode — the H735 system node's AUTHORED INTERNALS ONLY (dissolution model).
+# The bus wiring ([bus]/[[signal]]/[[frame]]) and identity ([nm]) are generated
+# from ../../system.toml by tools/sysgen. Here we describe only the logic: a
+# partition/thread and an FB that reads EngineRpm and writes VehicleSpeed (both
+# cross-node signals the system declares). Not a complete ecu.toml on its own.
 
 [[partition]]
 name = "app"
@@ -17,23 +10,6 @@ core = 0
 
   [[partition.thread]]
   name = "ctrl"
-
-[[signal]]
-name   = "VehicleSpeed" # produced here -> transmitted on compute
-fields = { kph = "u16" }
-from   = "app"
-to     = "can0"
-
-  [[frame]]
-  name = "VehSpeedFrame"
-  bus  = "can0"
-  tx   = { mode = "cyclic", cycle_ms = 100 }
-
-[[signal]]
-name   = "EngineRpm" # consumed here -> received from compute
-fields = { rpm = "u16" }
-from   = "can0"
-to     = "app"
 
 [[fb]]
 name   = "Dashboard"
@@ -44,8 +20,3 @@ thread = "ctrl"
   period_ms = 100
   reads     = ["EngineRpm"]
   writes    = ["VehicleSpeed"] # trailing comment terminates the nested [[fb.handler]] parse (vlang/v#27684)
-
-[nm]
-node  = 0x11
-alive = 0x511
-peers = [0x500, 0x53F]

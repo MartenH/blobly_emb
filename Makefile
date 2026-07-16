@@ -76,6 +76,12 @@ SYSTEM ?= examples/system_bench/system.toml
 syscheck:
 	$(V) -enable-globals run tools/syscheck $(SYSTEM)
 
+# Generate a complete ecu.toml per node from a DISSOLVED system.toml (P1b): the
+# cross-node signals declared once + each node's authored internals -> gen-<node>.toml,
+# each gated by ecucheck. docs/multi-node.md. Override with SYSTEM=.
+gen-system:
+	$(V) -enable-globals run tools/sysgen $(SYSTEM)
+
 # ---- Misc -------------------------------------------------------------------
 lint:
 	./scripts/lint_noalloc.sh

@@ -1,15 +1,6 @@
-# domain — the H755 domain controller's local description (multi-node P1). The
-# mirror of sysnode on the compute bus: it TRANSMITS EngineRpm and RECEIVES
-# VehicleSpeed, so every compute-bus signal has exactly one writer and one
-# reader (REQ-TOPO-001). Identity (NM 0x13) is allocated by ../../system.toml.
-
-[import]
-dbc = "compute.dbc"
-
-[bus.can0] # the compute-bus interface, matched to system [bus.compute]
-interface = "can0"
-fd        = false
-core      = 0
+# domain — the H755 domain controller's AUTHORED INTERNALS ONLY (dissolution).
+# The mirror of sysnode: an FB that reads VehicleSpeed and writes EngineRpm. The
+# bus wiring + identity are generated from ../../system.toml by tools/sysgen.
 
 [[partition]]
 name = "ctl"
@@ -17,23 +8,6 @@ core = 0
 
   [[partition.thread]]
   name = "engine"
-
-[[signal]]
-name   = "EngineRpm" # produced here -> transmitted on compute
-fields = { rpm = "u16" }
-from   = "ctl"
-to     = "can0"
-
-  [[frame]]
-  name = "EngineRpmFrame"
-  bus  = "can0"
-  tx   = { mode = "cyclic", cycle_ms = 100 }
-
-[[signal]]
-name   = "VehicleSpeed" # consumed here -> received from compute
-fields = { kph = "u16" }
-from   = "can0"
-to     = "ctl"
 
 [[fb]]
 name   = "EngineCtl"
@@ -44,8 +18,3 @@ thread = "engine"
   period_ms = 100
   reads     = ["VehicleSpeed"]
   writes    = ["EngineRpm"] # trailing comment terminates the nested [[fb.handler]] parse (vlang/v#27684)
-
-[nm]
-node  = 0x13
-alive = 0x513
-peers = [0x500, 0x53F]
