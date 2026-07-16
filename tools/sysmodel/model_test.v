@@ -45,11 +45,12 @@ fn clean_system() System {
 					consumes:  {
 						'can0': ['Rpm']
 					}
-					has_nm:   true
-					nm_node:  0x11
-					alive:    0x511
-					peers_lo: 0x500
-					peers_hi: 0x53f
+					has_nm:      true
+					nm_node:     0x11
+					alive:       0x511
+					peers_lo:    0x500
+					peers_hi:    0x53f
+					local_buses: ['can0']
 				}
 			},
 			Node{
@@ -64,11 +65,12 @@ fn clean_system() System {
 					consumes:  {
 						'can0': ['Speed']
 					}
-					has_nm:   true
-					nm_node:  0x13
-					alive:    0x513
-					peers_lo: 0x500
-					peers_hi: 0x53f
+					has_nm:      true
+					nm_node:     0x13
+					alive:       0x513
+					peers_lo:    0x500
+					peers_hi:    0x53f
+					local_buses: ['can0']
 				}
 			},
 		]
@@ -232,6 +234,7 @@ fn test_route_satisfies_cross_bus_consumer() {
 		interface: 'can1'
 	}
 	s.nodes[0].buses = ['compute', 'edge'] // sysnode gateways
+	s.nodes[0].view.local_buses = ['can0', 'can1'] // the gateway opens both interfaces
 	// zone consumes Speed on edge; only sysnode produces it on compute
 	s.nodes << Node{
 		name:  'zone'
@@ -239,12 +242,15 @@ fn test_route_satisfies_cross_bus_consumer() {
 		nm:    0x20
 		trace: 3
 		view:  NodeView{
-			consumes: {
+			consumes:    {
 				'can1': ['Speed']
 			}
-			has_nm:   true
-			peers_lo: 0x500
-			peers_hi: 0x53f
+			has_nm:      true
+			nm_node:     0x20
+			alive:       0x520
+			peers_lo:    0x500
+			peers_hi:    0x53f
+			local_buses: ['can1']
 		}
 	}
 	// without a route -> error (no producer on edge)
@@ -257,6 +263,105 @@ fn test_route_satisfies_cross_bus_consumer() {
 		to:      'edge'
 	}
 	assert !errs(validate_system(s)).any(it.contains('Speed') && it.contains('no node transmits')), 'route should satisfy the cross-bus consumer'
+}
+
+// --- codex #141 review fixes ---
+
+// REQ-TOPO-002: a shared diagnostic RESPONSE id collides even with distinct
+// request ids (two ECUs answer on the same CAN id).
+fn test_shared_diag_response_id_is_error() {
+	mut s := clean_system()
+	s.nodes[0].diag = Diag{
+		req: 0x7a0
+		rsp: 0x7a8
+	}
+	s.nodes[1].diag = Diag{
+		req: 0x7b0
+		rsp: 0x7a8 // distinct req, SAME rsp
+	}
+	issues := validate_system(s)
+	assert errs(issues).any(it.contains('response id 0x7a8') && it.contains('collides')), errs(issues).str()
+}
+
+// REQ-TOPO-001/005: a bus a node claims must be declared AND map to a local
+// interface in the node's ecu.toml — else the node's traffic is silently dropped.
+fn test_bus_membership_errors() {
+	mut s := clean_system()
+	s.nodes[0].buses = ['nosuchbus'] // undeclared
+	assert errs(validate_system(s)).any(it.contains('bus "nosuchbus" is not declared')), 'undeclared bus'
+
+	mut s2 := clean_system()
+	s2.nodes[0].view.local_buses = ['can9'] // ecu.toml doesn't open can0
+	assert errs(validate_system(s2)).any(it.contains('no [bus.can0] interface')), 'missing local interface'
+}
+
+// REQ-TOPO-005: system.toml allocates an nm id but the node has no [nm] block.
+fn test_missing_local_nm_is_error() {
+	mut s := clean_system()
+	s.nodes[0].view.has_nm = false // ecu.toml has no [nm]
+	issues := validate_system(s)
+	assert errs(issues).any(it.contains('has no [nm] block')), errs(issues).str()
+	assert 'REQ-TOPO-005' in reqs_of(issues, .error)
+}
+
+// REQ-TOPO-004: nodes on one bus must agree on the sleep/wake timing.
+fn test_nm_timing_mismatch_is_error() {
+	mut s := clean_system()
+	s.nodes[0].view.nm_timeout_ms = 300
+	s.nodes[1].view.nm_timeout_ms = 500 // both declared, differ
+	issues := validate_system(s)
+	assert errs(issues).any(it.contains('timeout_ms mismatch')), errs(issues).str()
+	// a param only one node declares must NOT false-positive (default vs explicit)
+	mut s2 := clean_system()
+	s2.nodes[0].view.nm_repeat_ms = 200 // only one declares it
+	assert !errs(validate_system(s2)).any(it.contains('repeat_ms mismatch')), 'one-sided default should not flag'
+}
+
+// REQ-TOPO-001: two nodes transmitting the SAME frame (different signals into
+// one PDU) contend on the wire even though each signal has one writer.
+fn test_frame_single_writer_is_error() {
+	mut s := clean_system()
+	s.nodes[0].view.tx_frames['can0'] = ['StatusFrame']
+	s.nodes[1].view.tx_frames['can0'] = ['StatusFrame'] // both own the same frame
+	issues := validate_system(s)
+	assert errs(issues).any(it.contains('frame "StatusFrame"') && it.contains('one frame owner')), errs(issues).str()
+}
+
+// REQ-TOPO-001: a signal route whose SOURCE bus has no producer does not satisfy
+// a consumer — the gateway has nothing to forward.
+fn test_route_without_source_producer_is_error() {
+	mut s := clean_system()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[0].buses = ['compute', 'edge']
+	s.nodes[0].view.local_buses = ['can0', 'can1']
+	s.nodes << Node{
+		name:  'zone'
+		buses: ['edge']
+		nm:    0x20
+		trace: 3
+		view:  NodeView{
+			consumes:    {
+				'can1': ['Torque']
+			}
+			has_nm:      true
+			nm_node:     0x20
+			alive:       0x520
+			peers_lo:    0x500
+			peers_hi:    0x53f
+			local_buses: ['can1']
+		}
+	}
+	// a route for Torque exists, but NOBODY produces Torque on compute
+	s.routes << Route{
+		gateway: 'sysnode'
+		signal:  'Torque'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system(s)).any(it.contains('Torque') && it.contains('no node transmits')), 'route without a source producer must not satisfy the consumer'
 }
 
 // parse_system + load_node round-trip on a written system.toml + node ecu.toml.
