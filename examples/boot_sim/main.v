@@ -127,11 +127,13 @@ fn main() {
 		}
 		if link.ready {
 			n := link.take(&req[0])
+			p.last_rx_us = now // the tester-silence clock (REQ-BOOT-013)
 			rn := p.handle(&req[0], n, &rsp[0])
 			if rn > 0 {
 				link.send(&rsp[0], rn)
 			}
 		}
+		p.tick(now) // S3 (REQ-BOOT-013): silence drops the session + unlock
 		link.tick(now)
 		mut out := isotp.Pdu{}
 		for ch.tx_ready() && link.poll(now, mut out) {
