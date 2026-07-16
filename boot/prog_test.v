@@ -517,3 +517,22 @@ fn test_keyless_build_flashes_open() {
 	assert ask(mut p, [u8(0x31), 0x01, 0xFF, 0x01]) == [u8(0x71), 0x01, 0xFF, 0x01, 0x00]
 	assert check_image(&f.mem[0])
 }
+
+// @verifies REQ-BOOT-016
+// A session change de-authenticates: after 0x10 01 then 0x10 02, the prior
+// unlock is gone and erase is refused until a fresh 0x29 (no stale-unlock reuse).
+fn test_session_change_clears_auth() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	unlock(mut p) // authenticated in a programming session
+	er := [u8(0x31), 0x01, 0xFF, 0x00, u8(t_base >> 24), u8(t_base >> 16), u8(t_base >> 8),
+		u8(t_base), 0x00, 0x00, 0x10, 0x00]
+	assert ask(mut p, er)[0] == 0x71 // erase works while authenticated
+	// bounce the session: default, then back to programming
+	assert ask(mut p, [u8(0x10), 0x01])[0] == 0x50
+	assert ask(mut p, [u8(0x10), 0x02])[0] == 0x50
+	// the old unlock is cleared -> erase refused until re-auth
+	assert ask(mut p, er) == [u8(0x7F), 0x31, 0x33]
+	unlock(mut p) // fresh 0x29
+	assert ask(mut p, er)[0] == 0x71
+}

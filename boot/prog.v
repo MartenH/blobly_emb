@@ -108,6 +108,17 @@ pub fn (mut p Prog) handle(req &u8, req_len int, resp &u8) int {
 	}
 	sid := unsafe { req[0] }
 	match sid {
+		0x10 {
+			// DiagnosticSessionControl: a session change DE-AUTHENTICATES (ISO
+			// 14229 — security/auth is per-session). Clearing here stops a
+			// 0x10 01 -> 0x10 02 sequence from reaching erase/download on a stale
+			// unlock. The session itself is still comm/uds's to set.
+			p.unlocked = false
+			p.challenge_valid = false
+			p.downloading = false
+			p.erased = false
+			return p.srv.handle(req, req_len, resp)
+		}
 		0x29 { return p.authentication(req, req_len, resp) }
 		0x31 { return p.routine_control(req, req_len, resp) }
 		0x34 { return p.request_download(req, req_len, resp) }

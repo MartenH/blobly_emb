@@ -321,10 +321,12 @@ lighter middle ground if the trade pinches before a full PKI earns its way in.
    parts that have it (H755/H743), the valid-mark-last degrade on single-bank parts
    (H735). The requirement names neither; see "Atomic activation" above.
 5. **P5 — authenticity** (REQ-BOOT-011/016): asymmetric (Ed25519 + SHA-512, the
-   no-alloc `bcrypto/` module, RFC-vector verified). **Image signing** — verify
-   before the mark — is built and bench-verified; the **0x29 session gate** is the
-   remaining rung (see the trust model + sequence above). Key management (the private
-   key off every ECU) is a deployment concern the design names but does not own.
+   no-alloc `bcrypto/` module, RFC-vector verified). **Both rungs done and
+   bench-verified** — image signing (verify before the mark) *and* the 0x29
+   session gate (challenge/response, TRNG-backed), with the release and tester
+   keys separated (see the trust model + sequence above). Key management (the
+   private keys off every ECU) is a deployment concern the design names but does
+   not own.
 6. **P6 — hardware root of trust** (REQ-BOOT-018): RDP2 + boot-sector write
    protection + secure-boot option bytes, so the verifier itself can't be swapped.
    Irreversible — validated on a sacrificial board. Optional siblings: a
