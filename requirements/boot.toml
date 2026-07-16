@@ -110,3 +110,30 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-013"
+title = "Programming session expires on tester silence"
+text = "A non-default diagnostic session shall expire after 5 s without a tester request (ISO 14229 S3server): the server falls back to the default session, security re-locks, and an interrupted download is abandoned. TesterPresent (0x3E) keeps the session alive."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-014"
+title = "Return to the application on tester silence"
+text = "When the boot manager entered programming mode by application request while a valid application image exists, and the tester stays silent for a bounded window in the default session, the boot manager shall reset into the application — an ECU must not stay parked in boot because a tester died. With no valid image it keeps serving (REQ-BOOT-004: always reachable)."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-015"
+title = "Programming-mode entry gated by the application"
+text = "The application shall request the transition to programming mode only when its safety pre-conditions hold (vehicle stationary, power stable — the application's own state model); the request mechanism itself carries the decision, since the boot manager cannot know vehicle state. The bench shell command is exempt as a development tool."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
