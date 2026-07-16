@@ -82,6 +82,9 @@ fn main() {
 	// EXPLICIT init: field defaults are _vinit work — freestanding never runs it
 	// (the P2 bench found seed reading 0 = the already-unlocked convention).
 	g_prog.init() // seed + default session
+	// dev image-signing public key (examples/keys) — REAL deployments bake their
+	// own; the matching seed never touches an ECU or build machine (REQ-BOOT-011)
+	g_prog.pubkey = [u8(0x03), 0xa1, 0x07, 0xbf, 0xf3, 0xce, 0x10, 0xbe, 0x1d, 0x70, 0xdd, 0x18, 0xe7, 0x4b, 0xc0, 0x99, 0x67, 0xe4, 0xd6, 0x30, 0x9b, 0xa5, 0x0d, 0x5f, 0x1d, 0xdc, 0x86, 0x64, 0x12, 0x55, 0x31, 0xb8]!
 	g_link.init_defaults() // ISO-TP N_Bs/WFTmax — 0 would wait forever on a lost FC
 	g_prog.app_base = app_base
 	g_prog.app_size = app_size

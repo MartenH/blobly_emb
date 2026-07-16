@@ -1,5 +1,7 @@
 module boot
 
+import bcrypto
+
 // @verifies REQ-BOOT-005, REQ-BOOT-008, REQ-BOOT-009
 // The full programming session against RAM-backed FlashOps: the same session
 // logic the target and the vcan simulator run, REQ-checked at the byte level.
@@ -272,4 +274,93 @@ fn test_idle_return_window() {
 	// in a programming session the window never fires
 	assert ask(mut p, [u8(0x10), 0x02])[0] == 0x50
 	assert !p.idle_return_due(t1 + 100 * idle_return_us, t0)
+}
+
+// ---- P5: signed-image authenticity (REQ-BOOT-011) ----
+
+const dev_seed = [u8(0), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+	20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]!
+
+fn dev_pubkey() [32]u8 {
+	return bcrypto.public_key(dev_seed)
+}
+
+// signed_image = payload_image + a 64-byte Ed25519 signature over header[0..32] ‖ image,
+// exactly what mkimage --sign emits and the boot verifies.
+fn signed_image(image_len u32) []u8 {
+	base := payload_image(image_len)
+	mut msg := []u8{cap: 32 + int(image_len)}
+	for i in 0 .. 32 {
+		msg << base[i]
+	}
+	for i in int(hdr_size) .. base.len {
+		msg << base[i]
+	}
+	sig := bcrypto.sign(dev_seed, msg)
+	mut out := base.clone()
+	for i in 0 .. 64 {
+		out << sig[i]
+	}
+	return out
+}
+
+// @verifies REQ-BOOT-011
+fn test_signed_image_marks_valid() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	p.pubkey = dev_pubkey()
+	img := signed_image(700)
+	unlock(mut p)
+	transfer(mut p, img)
+	assert !check_header(&f.mem[0]) // not marked until the check routine verifies
+	assert ask(mut p, [u8(0x31), 0x01, 0xFF, 0x01]) == [u8(0x71), 0x01, 0xFF, 0x01, 0x00]
+	assert check_image(&f.mem[0]) // signature checked out -> marked valid
+}
+
+// @verifies REQ-BOOT-011
+fn test_signed_tamper_rejected() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	p.pubkey = dev_pubkey()
+	img := signed_image(700)
+	unlock(mut p)
+	transfer(mut p, img)
+	// flip one image byte in the flashed store (post-transfer, pre-check)
+	f.mem[int(t_base - t_base) + int(hdr_size) + 100] ^= 0x01
+	assert ask(mut p, [u8(0x31), 0x01, 0xFF, 0x01]) == [u8(0x71), 0x01, 0xFF, 0x01, 0x01]
+	assert !check_image(&f.mem[0])
+}
+
+// @verifies REQ-BOOT-011
+fn test_signed_wrong_key_rejected() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	// bake a DIFFERENT key than the one that signed
+	mut other_seed := [32]u8{}
+	for i in 0 .. 32 {
+		other_seed[i] = dev_seed[i]
+	}
+	other_seed[0] ^= 0xff
+	p.pubkey = bcrypto.public_key(other_seed)
+	img := signed_image(700) // signed with dev_seed
+	unlock(mut p)
+	transfer(mut p, img)
+	assert ask(mut p, [u8(0x31), 0x01, 0xFF, 0x01]) == [u8(0x71), 0x01, 0xFF, 0x01, 0x01]
+	assert !check_image(&f.mem[0])
+}
+
+// @verifies REQ-BOOT-011
+// an UNSIGNED image is refused when a key is baked (garbage where the sig should be)
+fn test_unsigned_rejected_when_key_set() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	p.pubkey = dev_pubkey()
+	mut img := payload_image(700) // no signature appended
+	for _ in 0 .. 64 {
+		img << 0xFF // erased-looking tail where a signature would be
+	}
+	unlock(mut p)
+	transfer(mut p, img)
+	assert ask(mut p, [u8(0x31), 0x01, 0xFF, 0x01]) == [u8(0x71), 0x01, 0xFF, 0x01, 0x01]
+	assert !check_image(&f.mem[0])
 }
