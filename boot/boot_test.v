@@ -39,6 +39,23 @@ fn test_valid_image_checks_out() {
 	assert h.sw_version == 0x0001_0002
 }
 
+// check_image_slot bounds the CRC walk to the app slot: a header can keep its
+// valid mark while a torn erase / bit rot leaves image_len pointing past the
+// region (mark and length live in different flash words). The unbounded walk
+// would read off the end of flash BEFORE CAN is up — check_image_slot rejects
+// it first (REQ-BOOT-002).
+fn test_slot_bound_rejects_oversized_length() {
+	img := build_image(1000, true, false, false)
+	// generous slot: header + image fit, verdict matches the plain check
+	assert check_image_slot(&img[0], hdr_size + 1000)
+	assert check_image_slot(&img[0], 0x0010_0000)
+	// slot smaller than hdr_size + image_len: reject before the CRC walk, even
+	// though check_image (unbounded) would have trusted the marked header
+	assert !check_image_slot(&img[0], hdr_size + 999)
+	assert !check_image_slot(&img[0], 512)
+	assert check_image(&img[0]) // the image itself is genuinely valid
+}
+
 // The valid mark is the LAST thing written: without it a perfectly transferred
 // image must still not boot (REQ-BOOT-002/005 — a torn update looks exactly
 // like this).

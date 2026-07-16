@@ -111,6 +111,22 @@ pub fn check_image(img &u8) bool {
 	return unsafe { crc32(&u8(&img[hdr_size]), h.image_len) } == h.image_crc
 }
 
+// check_image_slot: the boot-decision verdict, BOUNDED to the app slot. The
+// bare check_image caps image_len only at max_image_len (16 MB) and trusts the
+// caller to keep hdr_size + image_len readable. A valid mark and the length
+// field live in DIFFERENT flash words, so bit rot or a torn erase can leave a
+// marked header advertising a length past the app region; check_image would
+// then walk crc32 off the end of flash BEFORE CAN is up — an OOB read that can
+// fault the ECU out of programming mode, the one thing the boot must never do.
+// Callers on real flash pass `slot` = the app region size (app_size).
+pub fn check_image_slot(img &u8, slot u32) bool {
+	h := parse_header(img)
+	if u64(hdr_size) + u64(h.image_len) > u64(slot) {
+		return false
+	}
+	return check_image(img)
+}
+
 // The boot decision (REQ-BOOT-001/002): stay in the bootloader when programming
 // is requested or no valid application exists; otherwise run the app. Pure —
 // the caller reads the request cell and the flash, then acts on the verdict.

@@ -60,7 +60,10 @@ fn rng_hook(out &u8, n int) bool {
 fn main() {
 	// --- the boot decision, from near-reset state (REQ-BOOT-001/002/010) ---
 	requested := C.bootcell_take_request() != 0
-	app_ok := boot.check_image(unsafe { &u8(app_base) }) // memory-mapped flash
+	// slot-bounded: a bit-rotted/torn header can keep the valid mark while its
+	// length field points past the app region — check_image_slot rejects that
+	// before crc32 walks off the end of flash (fault before CAN is up)
+	app_ok := boot.check_image_slot(unsafe { &u8(app_base) }, app_size) // memory-mapped flash
 	if boot.decide(requested, app_ok) == .run_app {
 		C.bootcell_set_info(0) // BOOT_REASON_NORMAL
 		C.boot_jump_app() // never returns; nothing was initialized
