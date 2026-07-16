@@ -47,6 +47,7 @@ fn clean_system() System {
 					}
 					has_nm:      true
 					nm_node:     0x11
+					has_nm_node: true
 					alive:       0x511
 					peers_lo:    0x500
 					peers_hi:    0x53f
@@ -67,6 +68,7 @@ fn clean_system() System {
 					}
 					has_nm:      true
 					nm_node:     0x13
+					has_nm_node: true
 					alive:       0x513
 					peers_lo:    0x500
 					peers_hi:    0x53f
@@ -247,6 +249,7 @@ fn test_route_satisfies_cross_bus_consumer() {
 			}
 			has_nm:      true
 			nm_node:     0x20
+			has_nm_node: true
 			alive:       0x520
 			peers_lo:    0x500
 			peers_hi:    0x53f
@@ -348,6 +351,7 @@ fn test_route_without_source_producer_is_error() {
 			}
 			has_nm:      true
 			nm_node:     0x20
+			has_nm_node: true
 			alive:       0x520
 			peers_lo:    0x500
 			peers_hi:    0x53f
@@ -362,6 +366,77 @@ fn test_route_without_source_producer_is_error() {
 		to:      'edge'
 	}
 	assert errs(validate_system(s)).any(it.contains('Torque') && it.contains('no node transmits')), 'route without a source producer must not satisfy the consumer'
+}
+
+// --- codex #141 round-2 fixes ---
+
+// REQ-TOPO-006: two system buses sharing an interface alias one physical channel.
+fn test_duplicate_bus_interface_is_error() {
+	mut s := clean_system()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can0' // same as compute
+	}
+	assert errs(validate_system(s)).any(it.contains('share interface "can0"')), 'dup interface'
+}
+
+// REQ-TOPO-002: duplicate node names break route/identity lookup.
+fn test_duplicate_node_name_is_error() {
+	mut s := clean_system()
+	s.nodes[1].name = 'sysnode' // collide
+	assert errs(validate_system(s)).any(it.contains('duplicate node name "sysnode"')), 'dup node name'
+}
+
+// REQ-TOPO-005: a local interface matching a system bus that the node forgets to
+// claim in `buses` would silently drop its traffic — flag it.
+fn test_unclaimed_local_interface_is_error() {
+	mut s := clean_system()
+	s.nodes[0].buses = [] // opens [bus.can0] but claims no bus
+	assert errs(validate_system(s)).any(it.contains('does not claim') && it.contains('unchecked')), 'unclaimed interface'
+}
+
+// REQ-TOPO-005: [nm] node = 0 is a valid id; a system nm of 0x11 must still flag
+// the disagreement (0 is not "unset" once [nm] declares node).
+fn test_local_nm_node_zero_disagrees() {
+	mut s := clean_system()
+	s.nodes[0].view.nm_node = 0 // declared as 0...
+	s.nodes[0].view.has_nm_node = true
+	// ...but system.toml allocates 0x11
+	assert errs(validate_system(s)).any(it.contains('disagrees with system.toml')), 'node=0 vs 0x11'
+}
+
+// REQ-TOPO-004: with 3 nodes, a param the FIRST omits must still catch a later
+// conflict (per-parameter anchor, not the cluster anchor).
+fn test_nm_timing_anchor_is_per_param() {
+	mut s := clean_system()
+	// sysnode omits timeout (0); domain sets 300; add a third at 500
+	s.nodes[1].view.nm_timeout_ms = 300
+	s.nodes << Node{
+		name:  'third'
+		buses: ['compute']
+		nm:    0x15
+		trace: 4
+		view:  NodeView{
+			has_nm:        true
+			nm_node:       0x15
+			has_nm_node:   true
+			alive:         0x515
+			peers_lo:      0x500
+			peers_hi:      0x53f
+			local_buses:   ['can0']
+			nm_timeout_ms: 500 // conflicts with domain's 300
+		}
+	}
+	assert errs(validate_system(s)).any(it.contains('timeout_ms mismatch') && it.contains('500')), 'per-param anchor'
+}
+
+// REQ-TOPO-005: a node whose ecu.toml can't pass ecucheck can't be a clean
+// system — its structural errors surface through syscheck.
+fn test_node_config_error_surfaces() {
+	mut s := clean_system()
+	s.nodes[0].view.config_errors = ['partition "app" is missing `core`']
+	issues := validate_system(s)
+	assert errs(issues).any(it.contains('ecu.toml invalid') && it.contains('missing `core`')), 'node config error'
 }
 
 // parse_system + load_node round-trip on a written system.toml + node ecu.toml.
