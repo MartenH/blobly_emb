@@ -31,6 +31,22 @@ CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
           -I. $(BOARD_INCS) -I$(REPO)/driver/can -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
+# APP_LINK=boot: link at APP_VECTORS (bootmap.h APP_BASE 0x08020000 + 0x400) for the
+# bootloader chain; wrap the .bin with tools/mkimage --pad-vectors before flashing.
+# The link mode is PART OF THE ARTIFACT: the stamp below forces a relink when it
+# changes, so `make APP_LINK=boot` can never reuse a stale standalone .elf whose
+# vectors still point at 0x08000000 (codex on emb#130).
+ifeq ($(APP_LINK),boot)
+# __flash_len__ = APP_SIZE(0xE0000) - vector pad(0x400) - signature(0x40): the
+# signed container is header ‖ image ‖ 64-byte sig, so the app must leave 64 bytes
+# at the top of the slot or a max-size signed image overflows the boot's region
+# check (codex on emb#137).
+LDFLAGS += -Wl,--defsym,__flash_base__=0x08020400 -Wl,--defsym,__flash_len__=0xDFBC0
+LINKMODE = boot
+else
+LINKMODE = std
+endif
+LINKSTAMP = $(BUILD)/link.$(LINKMODE).stamp
 
 BUILD    = build
 TX_A     = $(BUILD)/tx.a
@@ -77,8 +93,14 @@ $(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile
 $(TX_A): $(TX_OBJ)
 	$(AR) -rc $@ $^
 
+# the link mode is part of the artifact: a switch between std and boot re-links
+# (else `make APP_LINK=boot` reuses a stale standalone .elf, vectors at 0x08000000).
+$(LINKSTAMP): | $(BUILD)
+	@rm -f $(BUILD)/link.*.stamp
+	@touch $@
+
 # 3) cross-compile + link: generated app.c + board bring-up + CAN backend + ThreadX kernel.
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(BOARD_LD_THREADX)
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(BOARD_LD_THREADX) $(LINKSTAMP)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) -o $@
 	$(SIZE) $@
 
@@ -89,8 +111,12 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 flash: $(BUILD)/$(NAME).bin
-	st-flash write $(BUILD)/$(NAME).bin 0x08000000
-	st-flash reset
+ifeq ($(APP_LINK),boot)
+	$(error a boot-linked image is not standalone: wrap it (tools/mkimage --pad-vectors) and deliver via the boot manager — flashing this .bin at 0x08000000 would overwrite the bootloader with vectors that point into the app slot)
+else
+	st-flash $(if $(H735),--serial $(H735),) write $(BUILD)/$(NAME).bin 0x08000000
+	st-flash $(if $(H735),--serial $(H735),) reset
+endif
 
 clean:
 	rm -rf $(BUILD) gen ports sig
