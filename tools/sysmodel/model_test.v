@@ -547,9 +547,8 @@ fn clean_dissolved() System {
 				has_nm_alloc: true
 				trace:        1
 				view:         NodeView{
-					fb_writes:   ['Speed']
-					fb_reads:    ['Rpm']
-					local_buses: ['can0']
+					fb_writes: ['Speed']
+					fb_reads:  ['Rpm']
 				}
 			},
 			Node{
@@ -559,9 +558,8 @@ fn clean_dissolved() System {
 				has_nm_alloc: true
 				trace:        2
 				view:         NodeView{
-					fb_writes:   ['Rpm']
-					fb_reads:    ['Speed']
-					local_buses: ['can0']
+					fb_writes: ['Rpm']
+					fb_reads:  ['Speed']
 				}
 			},
 		]
@@ -669,6 +667,63 @@ fn test_dissolved_nonproducer_write_rejected() {
 	mut s := clean_dissolved()
 	s.nodes[1].view.fb_writes = ['Rpm', 'Speed'] // b writes Speed, but a is the producer
 	assert errs(validate_system_gen(s)).any(it.contains('only the producer may write'))
+}
+
+// --- P1b dissolution: codex #142 round-2 fixes ---
+
+// REQ-TOPO-001: a signal declared with no fields (loom2v rejects an empty map).
+fn test_dissolved_signal_no_fields() {
+	mut s := clean_dissolved()
+	s.signals[0].fields = map[string]string{}
+	assert errs(validate_system_gen(s)).any(it.contains('has no `fields`'))
+}
+
+// REQ-TOPO-005: a partial node that authors bus wiring (bypasses the checks).
+fn test_dissolved_partial_authors_wiring() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.local_buses = ['can0'] // authored a [bus.can0]
+	assert errs(validate_system_gen(s)).any(it.contains('authors bus wiring'))
+}
+
+// REQ-TOPO-001: a node whose bus is not declared in system.toml.
+fn test_dissolved_undeclared_bus() {
+	mut s := clean_dissolved()
+	s.nodes[0].buses = ['ghostbus']
+	s.signals[0].bus = 'ghostbus' // so membership passes textually
+	assert errs(validate_system_gen(s)).any(it.contains('bus "ghostbus" is not declared'))
+}
+
+// REQ-TOPO-002: an NM node id above 0xff (loom2v requires 0..255).
+fn test_dissolved_nm_over_255() {
+	mut s := clean_dissolved()
+	s.buses[0].nm_peers_hi = 0x6ff // widen so the alive check doesn't mask this
+	s.nodes[0].nm = 0x100
+	assert errs(validate_system_gen(s)).any(it.contains('exceeds 0xff'))
+}
+
+// REQ-TOPO-001: two signals sharing a frame disagree on cycle_ms.
+fn test_dissolved_frame_cycle_conflict() {
+	mut s := clean_dissolved()
+	// make Rpm ride the same frame as Speed, same producer, but a different cycle
+	s.signals[0].producer = 'a'
+	s.signals[0].cycle_ms = 100
+	s.signals[1].producer = 'a'
+	s.signals[1].frame = 'SpeedFrame'
+	s.signals[1].cycle_ms = 50
+	s.nodes[0].view.fb_writes = ['Speed', 'Rpm'] // a produces both
+	s.nodes[1].view.fb_writes = []
+	assert errs(validate_system_gen(s)).any(it.contains('disagree on cycle_ms'))
+}
+
+// REQ-TOPO-001: a consumer that reads a signal but isn't on its bus.
+fn test_dissolved_consumer_off_bus() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[1].buses = ['edge'] // b reads Speed (on compute) but sits on edge
+	assert errs(validate_system_gen(s)).any(it.contains('consumer "b"') && it.contains('not on its bus'))
 }
 
 // --- P1b-2 DBC conformance (REQ-TOPO-003) ---

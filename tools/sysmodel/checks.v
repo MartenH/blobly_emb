@@ -47,9 +47,42 @@ pub fn validate_system_gen(s System) []Issue {
 	issues << check_topology_wellformed(s)
 	issues << check_identity_alloc(s)
 	issues << check_dissolved_nodes(s)
+	issues << check_partial_no_wiring(s)
 	issues << check_routes(s)
 	issues << check_signals_dissolved(s)
 	issues << check_dbc_conformance(s)
+	return issues
+}
+
+// check_partial_no_wiring: a dissolved node authors INTERNALS ONLY. If its
+// ecu.toml declares bus wiring — a [bus.*], a [[signal]] with a bus endpoint, a
+// [[frame]], or a [nm] — the generator appends it verbatim and it bypasses every
+// dissolution check (e.g. an unowned extra transmitter defeats single-writer).
+// The system owns all bus wiring + identity (REQ-TOPO-005).
+fn check_partial_no_wiring(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		mut authored := []string{}
+		if n.view.local_buses.len > 0 {
+			authored << '[bus.*]'
+		}
+		if n.view.produces.len > 0 || n.view.consumes.len > 0 {
+			authored << 'a [[signal]] with a bus endpoint'
+		}
+		if n.view.tx_frames.len > 0 {
+			authored << 'a [[frame]]'
+		}
+		if n.view.has_nm {
+			authored << 'a [nm]'
+		}
+		if authored.len > 0 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": authors bus wiring (${authored.join(", ")}) — a dissolved node is internals-only; the system owns the wiring + identity'
+			}
+		}
+	}
 	return issues
 }
 
@@ -67,6 +100,13 @@ fn check_dissolved_nodes(s System) []Issue {
 				req:      'REQ-TOPO-005'
 				msg:      'node "${n.name}": system.toml must allocate an `nm` (the generator emits [nm] for every node)'
 			}
+		} else if n.nm > 0xff {
+			// loom2v requires the NM node id in 0..255 (the generated [nm] node)
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-002'
+				msg:      'node "${n.name}": nm 0x${n.nm.hex()} exceeds 0xff — the NM node id is 0..255'
+			}
 		}
 		if n.buses.len != 1 {
 			issues << Issue{
@@ -76,7 +116,14 @@ fn check_dissolved_nodes(s System) []Issue {
 			}
 			continue
 		}
-		bus := s.bus_by_name(n.buses[0]) or { continue }
+		bus := s.bus_by_name(n.buses[0]) or {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'node "${n.name}": bus "${n.buses[0]}" is not declared in system.toml'
+			}
+			continue
+		}
 		if bus.has_nm_cluster && n.has_nm_alloc {
 			alive := bus.nm_peers_lo + n.nm
 			if alive < bus.nm_peers_lo || alive > bus.nm_peers_hi {
@@ -167,8 +214,17 @@ fn check_signals_dissolved(s System) []Issue {
 			sig_seen[sig.name] = true
 		}
 	}
-	mut frame_owner := map[string]string{} // frame -> producer node
+	mut frame_owner := map[string]string{} // (bus, frame) -> producer node
+	mut frame_cycle := map[string]int{}    // (bus, frame) -> cycle_ms
 	for sig in s.signals {
+		// loom2v rejects an empty field map — a signal must carry at least one field
+		if sig.fields.len == 0 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}": has no `fields` — a signal must carry at least one field'
+			}
+		}
 		// the producer must be a declared node on the signal's bus
 		mut prod := ?Node(none)
 		for n in s.nodes {
@@ -214,27 +270,50 @@ fn check_signals_dissolved(s System) []Issue {
 				msg:      'signal "${sig.name}": producer "${p.name}" writes it from ${nwrite} FBs — a signal needs exactly one writer'
 			}
 		}
-		// one producer per DBC frame — two signals in one frame from two nodes
-		// contend for the PDU on the wire (REQ-TOPO-001)
+		// one producer per DBC frame, PER BUS (the same message name on two
+		// separate buses/DBCs is fine): two signals in one frame from two nodes
+		// contend for the PDU (REQ-TOPO-001). Same-frame signals must also agree
+		// on tx cadence — sysgen emits one [[frame]] per PDU and loom2v keys frame
+		// timing by message name, so conflicting cycle_ms silently overwrites.
 		if sig.frame != '' {
-			if prev := frame_owner[sig.frame] {
+			key := '${sig.bus}\x1f${sig.frame}'
+			if prev := frame_owner[key] {
 				if prev != sig.producer {
 					issues << Issue{
 						severity: .error
 						req:      'REQ-TOPO-001'
-						msg:      'frame "${sig.frame}": carries signals from both "${prev}" and "${sig.producer}" — one frame owner per bus'
+						msg:      'frame "${sig.frame}" on bus "${sig.bus}": carries signals from both "${prev}" and "${sig.producer}" — one frame owner per bus'
+					}
+				}
+				if sig.cycle_ms != 0 && frame_cycle[key] != 0 && sig.cycle_ms != frame_cycle[key] {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-001'
+						msg:      'frame "${sig.frame}" on bus "${sig.bus}": signals disagree on cycle_ms (${frame_cycle[key]} vs ${sig.cycle_ms}) — a frame has one cadence'
 					}
 				}
 			} else {
-				frame_owner[sig.frame] = sig.producer
+				frame_owner[key] = sig.producer
+			}
+			if sig.cycle_ms != 0 && frame_cycle[key] == 0 {
+				frame_cycle[key] = sig.cycle_ms
 			}
 		}
-		// reachability: does anyone read it? (a produced-but-unconsumed signal)
+		// reachability: does anyone read it? (a produced-but-unconsumed signal).
+		// A reader must sit on the signal's bus — else sysgen emits its rx on the
+		// wrong interface (the reader's sole bus, not sig.bus) (REQ-TOPO-001).
 		mut consumed := false
 		for n in s.nodes {
-			if n.name != sig.producer && sig.name in n.view.fb_reads {
-				consumed = true
-				break
+			if n.name == sig.producer || sig.name !in n.view.fb_reads {
+				continue
+			}
+			consumed = true
+			if sig.bus !in n.buses {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'signal "${sig.name}": consumer "${n.name}" reads it but is not on its bus "${sig.bus}"'
+				}
 			}
 		}
 		if !consumed {
