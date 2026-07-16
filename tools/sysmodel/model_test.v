@@ -2,7 +2,7 @@ module sysmodel
 
 import os
 
-// @verifies REQ-TOPO-001, REQ-TOPO-002, REQ-TOPO-004, REQ-TOPO-005, REQ-TOPO-006
+// @verifies REQ-TOPO-001, REQ-TOPO-002, REQ-TOPO-003, REQ-TOPO-004, REQ-TOPO-005, REQ-TOPO-006
 
 fn errs(issues []Issue) []string {
 	mut out := []string{}
@@ -669,6 +669,85 @@ fn test_dissolved_nonproducer_write_rejected() {
 	mut s := clean_dissolved()
 	s.nodes[1].view.fb_writes = ['Rpm', 'Speed'] // b writes Speed, but a is the producer
 	assert errs(validate_system_gen(s)).any(it.contains('only the producer may write'))
+}
+
+// --- P1b-2 DBC conformance (REQ-TOPO-003) ---
+
+// dissolved_with_dbc writes a compute.dbc whose two frames match clean_dissolved
+// (SpeedFrame from a, RpmFrame from b) and points the system at it.
+fn dissolved_with_dbc(dir string, dbc string) System {
+	os.mkdir_all(dir) or { panic(err) }
+	os.write_file(os.join_path(dir, 'compute.dbc'), dbc) or { panic(err) }
+	mut s := clean_dissolved()
+	s.dir = dir
+	s.buses[0].dbc = 'compute.dbc'
+	return s
+}
+
+const good_dbc = 'VERSION ""
+
+BU_: a b
+
+BO_ 288 SpeedFrame: 8 a
+ SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b
+
+BO_ 289 RpmFrame: 8 b
+ SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a
+'
+
+fn test_dbc_conformance_clean() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_ok_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	s := dissolved_with_dbc(dir, good_dbc)
+	issues := check_dbc_conformance(s)
+	assert errs(issues).len == 0, 'clean DBC flagged: ${errs(issues)}'
+}
+
+// REQ-TOPO-003: a signal whose frame is not defined in the bus DBC.
+fn test_dbc_frame_missing() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_miss_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// DBC has only SpeedFrame; RpmFrame is absent
+	s := dissolved_with_dbc(dir, 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b\n')
+	assert errs(check_dbc_conformance(s)).any(it.contains('frame "RpmFrame" is not defined'))
+}
+
+// REQ-TOPO-003: the DBC transmitter disagreeing with the declared producer.
+fn test_dbc_sender_mismatch() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_snd_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// SpeedFrame sender is 'b' in the DBC but producer is 'a' in system.toml
+	bad := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 b\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" a\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
+	s := dissolved_with_dbc(dir, bad)
+	assert errs(check_dbc_conformance(s)).any(it.contains('transmitted by "b"') && it.contains('producer "a"'))
+}
+
+// REQ-TOPO-003: a signal whose fields overflow the DBC frame's payload.
+fn test_dbc_fields_overflow() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_ovf_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	mut s := dissolved_with_dbc(dir, good_dbc)
+	// widen Speed to 9x u64 = 576 bits, past the 8-byte (64-bit) frame
+	s.signals[0].fields = {
+		'a': 'u64'
+		'b': 'u64'
+		'c': 'u64'
+		'd': 'u64'
+		'e': 'u64'
+		'f': 'u64'
+		'g': 'u64'
+		'h': 'u64'
+		'i': 'u64'
+	}
+	assert errs(check_dbc_conformance(s)).any(it.contains('need') && it.contains('only 8 bytes'))
 }
 
 // parse_system + load_node round-trip on a written system.toml + node ecu.toml.
