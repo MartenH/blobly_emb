@@ -49,6 +49,7 @@ pub fn validate_system_gen(s System) []Issue {
 	issues << check_dissolved_nodes(s)
 	issues << check_routes(s)
 	issues << check_signals_dissolved(s)
+	issues << check_dbc_conformance(s)
 	return issues
 }
 

@@ -68,14 +68,12 @@ dissolution model from the presence of system-scope `[[signal]]`s.
 | One owner per DBC frame | REQ-TOPO-001 |
 | Every read/written signal is reachable (a producer, or a route) | REQ-TOPO-001 |
 | NM / diagnostic / trace id uniqueness | REQ-TOPO-002 |
-| Per-bus DBC conformance | REQ-TOPO-003 *(deferred — needs a DBC parse)* |
+| Per-bus DBC conformance — frame exists, DBC transmitter = producer, fields fit | REQ-TOPO-003 |
 | NM cluster is system-declared (peers + timing), coherent by construction | REQ-TOPO-004 |
 | Identities system-allocated; a claimed bus maps to the node | REQ-TOPO-005 |
 | Route validity — gateway on both buses, distinct from/to, one of frame/signal | REQ-TOPO-006 |
 
 ## Next (docs/multi-node.md)
 
-- **P1b-2** — DBC conformance (REQ-TOPO-003): parse `compute.dbc` and check every
-  signal's layout + one `BO_` transmitter per frame (closes the implicit-frame gap).
 - **P2** — add the **edge** bus (its own DBC) and an H723; the sysnode gateways
   `compute`↔`edge` with a frame route and a signal route.
