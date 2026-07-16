@@ -1,4 +1,4 @@
-module crypto
+module bcrypto
 
 // SHA-512 (FIPS 180-4), no-alloc, streaming. The boot manager hashes an image
 // in flash-read-sized chunks (update), so this is a context, not one-shot only.
