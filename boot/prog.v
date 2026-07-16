@@ -1,6 +1,6 @@
 module boot
 
-// The programming session — UDS services 0x27/0x31/0x34/0x36/0x37/0x11 layered
+// The programming session — UDS services 0x29/0x31/0x34/0x36/0x37/0x11 layered
 // on comm/uds's Server (which keeps 0x10/0x22/0x2E/0x3E). Transport-agnostic by
 // construction (REQ-BOOT-006): requests arrive as reassembled byte blocks from
 // WHATEVER transport binding feeds it (ISO-TP/CAN today, DoIP later), and block
@@ -12,6 +12,7 @@ module boot
 // transfer data is staged and programmed in whole words; the tail pads with 0xFF.
 
 import comm.uds
+import bcrypto
 
 pub const prog_word = u32(32) // program granularity (STM32H7 flash word)
 pub const max_block_data = 512 // 0x36 payload cap advertised in the 0x34 response
@@ -67,11 +68,23 @@ pub mut:
 	// the bootloader's own region — is rejected at erase and download time.
 	app_base u32
 	app_size u32
-	// security (REQ-BOOT-011 seam): a trivial seed/key pair for now — the algo
-	// is a hook to replace, the SEQUENCE enforcement is what this layer owns.
-	unlocked  bool
-	seed_sent bool
-	seed      u32 // set by init() — 'BLOB' placeholder until the real scheme (P5)
+	// TWO separate trust anchors — different keys, different custody (see
+	// examples/keys). The private halves are NEVER on the ECU.
+	//   image_key   — verifies the firmware signature (REQ-BOOT-011). Its private
+	//                 half is the RELEASE key (mkimage.seed), an offline/HSM key
+	//                 in the build pipeline. Leak ⇒ forged firmware (catastrophic).
+	//   session_key — verifies the 0x29 proof (REQ-BOOT-016). Its private half is
+	//                 the TESTER key (tester.seed), out in the field with the
+	//                 technician. Leak ⇒ start sessions only (annoyance, not RCE).
+	// All-zero disables the respective check (tests / a transition build).
+	image_key   [32]u8
+	session_key [32]u8
+	// 0x29 challenge source: the board's TRNG on target, a deterministic source
+	// in tests. A null rng leaves the session unlockable (fail-closed).
+	rng fn (out &u8, n int) bool = unsafe { nil }
+	unlocked        bool
+	challenge       [32]u8
+	challenge_valid bool
 	// transfer state
 	erased     bool
 	downloading bool
@@ -95,7 +108,18 @@ pub fn (mut p Prog) handle(req &u8, req_len int, resp &u8) int {
 	}
 	sid := unsafe { req[0] }
 	match sid {
-		0x27 { return p.security_access(req, req_len, resp) }
+		0x10 {
+			// DiagnosticSessionControl: a session change DE-AUTHENTICATES (ISO
+			// 14229 — security/auth is per-session). Clearing here stops a
+			// 0x10 01 -> 0x10 02 sequence from reaching erase/download on a stale
+			// unlock. The session itself is still comm/uds's to set.
+			p.unlocked = false
+			p.challenge_valid = false
+			p.downloading = false
+			p.erased = false
+			return p.srv.handle(req, req_len, resp)
+		}
+		0x29 { return p.authentication(req, req_len, resp) }
 		0x31 { return p.routine_control(req, req_len, resp) }
 		0x34 { return p.request_download(req, req_len, resp) }
 		0x36 { return p.transfer_data(req, req_len, resp) }
@@ -110,8 +134,7 @@ pub fn (mut p Prog) handle(req &u8, req_len int, resp &u8) int {
 // freestanding targets — the H755 bench found seed reading 0 = the
 // already-unlocked convention), so every consumer calls this first.
 pub fn (mut p Prog) init() {
-	p.seed = 0x424C4F42 // 'BLOB' — placeholder until the real scheme (P5)
-	p.srv.session = 0x01 // default diagnostic session
+	p.srv.session = 0x01 // default diagnostic session (0x29 auth stays LOCKED)
 }
 
 // S3server (ISO 14229): a non-default session dies after 5 s of tester silence.
@@ -129,7 +152,7 @@ pub fn (mut p Prog) tick(now u64) {
 	if p.srv.session != 0x01 && p.last_rx_us != 0 && now - p.last_rx_us > s3_server_us {
 		p.srv.session = 0x01
 		p.unlocked = false
-		p.seed_sent = false
+		p.challenge_valid = false
 		p.downloading = false
 		p.erased = false
 	}
@@ -151,6 +174,14 @@ fn (mut p Prog) in_programming_session() bool {
 	return p.srv.session == 0x02
 }
 
+// write_locked: flash-write services (erase/download/check) require a passed
+// 0x29 unlock — UNLESS no session key is baked, in which case a keyless
+// transition/dev build flashes openly (REQ-BOOT-016). Independent of image_key:
+// a build can require signed images without a session gate, or vice versa.
+fn (p &Prog) write_locked() bool {
+	return !p.unlocked && !key_is_zero(p.session_key)
+}
+
 // region_ok: [addr, addr+size) inside the app window, non-empty, no overflow.
 fn (p Prog) region_ok(addr u32, size u32) bool {
 	if size == 0 {
@@ -160,60 +191,73 @@ fn (p Prog) region_ok(addr u32, size u32) bool {
 	return addr >= p.app_base && end <= u64(p.app_base) + u64(p.app_size)
 }
 
-// 0x27 SecurityAccess: sub 0x01 = request seed, sub 0x02 = send key.
-fn (mut p Prog) security_access(req &u8, req_len int, resp &u8) int {
+// 0x29 Authentication (REQ-BOOT-016): a simplified challenge/response profile —
+// sub 0x01 requestChallenge, sub 0x02 verifyProofOfOwnership. The boot draws a
+// random challenge, the tester returns an Ed25519 signature over it, the boot
+// verifies with its public key. A live challenge means a captured session
+// cannot be replayed; only a private-key holder can pass. Unlocks the flash
+// services (erase/download/transfer) — the same `unlocked` gate 0x27 used.
+const auth_request_challenge = u8(0x01)
+const auth_send_proof = u8(0x02)
+
+fn (mut p Prog) authentication(req &u8, req_len int, resp &u8) int {
 	if req_len < 2 {
-		return negative(resp, 0x27, nrc_incorrect_length)
+		return negative(resp, 0x29, nrc_incorrect_length)
 	}
 	if !p.in_programming_session() {
-		return negative(resp, 0x27, nrc_conditions_not_correct)
+		return negative(resp, 0x29, nrc_conditions_not_correct)
 	}
 	sub := unsafe { req[1] }
 	match sub {
-		0x01 {
-			// already unlocked -> an all-zero seed by convention
-			s := if p.unlocked { u32(0) } else { p.seed }
+		auth_request_challenge {
+			// no rng / no key baked -> cannot authenticate (fail-closed)
+			if p.rng == unsafe { nil } || key_is_zero(p.session_key) {
+				return negative(resp, 0x29, nrc_conditions_not_correct)
+			}
+			if !p.rng(&p.challenge[0], 32) {
+				return negative(resp, 0x29, nrc_conditions_not_correct)
+			}
+			p.challenge_valid = true
 			unsafe {
-				resp[0] = 0x67
-				resp[1] = 0x01
-				resp[2] = u8(s >> 24)
-				resp[3] = u8(s >> 16)
-				resp[4] = u8(s >> 8)
-				resp[5] = u8(s)
+				resp[0] = 0x69
+				resp[1] = auth_request_challenge
 			}
-			p.seed_sent = true
-			return 6
+			for i in 0 .. 32 {
+				unsafe {
+					resp[2 + i] = p.challenge[i]
+				}
+			}
+			return 34
 		}
-		0x02 {
-			if !p.seed_sent {
-				return negative(resp, 0x27, nrc_request_sequence_error)
+		auth_send_proof {
+			if !p.challenge_valid {
+				return negative(resp, 0x29, nrc_request_sequence_error)
 			}
-			if req_len < 6 {
-				return negative(resp, 0x27, nrc_incorrect_length)
+			if req_len < 2 + 64 {
+				return negative(resp, 0x29, nrc_incorrect_length)
 			}
-			key := unsafe { (u32(req[2]) << 24) | (u32(req[3]) << 16) | (u32(req[4]) << 8) | u32(req[5]) }
-			if key != expected_key(p.seed) {
-				p.seed_sent = false
-				return negative(resp, 0x27, nrc_invalid_key)
+			mut sig := [64]u8{}
+			for i in 0 .. 64 {
+				sig[i] = unsafe { req[2 + i] }
+			}
+			p.challenge_valid = false // one-shot: a fresh challenge per attempt
+			// verify the signature over the challenge (no-alloc streaming verify)
+			mut v := bcrypto.verify_start(p.session_key, sig)
+			v.update(&p.challenge[0], 32)
+			if !v.finish() {
+				return negative(resp, 0x29, nrc_invalid_key)
 			}
 			p.unlocked = true
 			unsafe {
-				resp[0] = 0x67
-				resp[1] = 0x02
+				resp[0] = 0x69
+				resp[1] = auth_send_proof
 			}
 			return 2
 		}
 		else {
-			return negative(resp, 0x27, nrc_request_out_of_range)
+			return negative(resp, 0x29, nrc_request_out_of_range)
 		}
 	}
-}
-
-// expected_key — the placeholder algorithm both sides share until P5: key =
-// seed XOR'd with the complement rotated. Deliberately trivial and deliberately
-// one function: replacing it IS the P5 upgrade path.
-pub fn expected_key(seed u32) u32 {
-	return (seed ^ 0xA5A5_A5A5) + (seed << 3 | seed >> 29)
 }
 
 // 0x31 RoutineControl (start only): erase (params addr+size) and check-image.
@@ -226,7 +270,7 @@ fn (mut p Prog) routine_control(req &u8, req_len int, resp &u8) int {
 	if sub != 0x01 {
 		return negative(resp, 0x31, nrc_request_out_of_range)
 	}
-	if !p.in_programming_session() || !p.unlocked {
+	if !p.in_programming_session() || p.write_locked() {
 		return negative(resp, 0x31, nrc_security_access_denied)
 	}
 	match rid {
@@ -270,11 +314,25 @@ fn (mut p Prog) request_download(req &u8, req_len int, resp &u8) int {
 	if req_len < 11 {
 		return negative(resp, 0x34, nrc_incorrect_length)
 	}
-	if !p.in_programming_session() || !p.unlocked {
+	if !p.in_programming_session() || p.write_locked() {
 		return negative(resp, 0x34, nrc_security_access_denied)
 	}
 	if !p.erased {
 		return negative(resp, 0x34, nrc_request_sequence_error)
+	}
+	// a STALE valid mark must not survive into a new download: if the erase left
+	// 'VALD' in word1 (an erase that didn't cover the mark word, or a permissive
+	// backend), a later failed check_and_mark would leave the old mark and reset
+	// would boot the new UNSIGNED image (check_image trusts the mark, not the
+	// signature). Require the mark word blanked first — the app-sector erase that
+	// programming the header needs already does this on real flash (REQ-BOOT-011).
+	mut mk := [4]u8{}
+	if !p.flash.read(p.flash.ctx, p.app_base + 32, &mk[0], 4) {
+		return negative(resp, 0x34, nrc_general_programming_failure)
+	}
+	if mk[0] == u8(valid_mark) && mk[1] == u8(valid_mark >> 8) && mk[2] == u8(valid_mark >> 16)
+		&& mk[3] == u8(valid_mark >> 24) {
+		return negative(resp, 0x34, nrc_conditions_not_correct) // erase the mark word first
 	}
 	if unsafe { req[1] } != 0x00 || unsafe { req[2] } != 0x44 {
 		return negative(resp, 0x34, nrc_request_out_of_range)
@@ -301,6 +359,29 @@ fn (mut p Prog) request_download(req &u8, req_len int, resp &u8) int {
 	return 4
 }
 
+// program_stage writes the staged prog_word, EXCEPT the valid-mark word (the
+// second flash word, at app_base + 32): that word is the BOOT's to write, and
+// only after the signature verifies (check_and_mark). A wire-supplied VALD is
+// dropped — otherwise an authenticated tester could transfer a pre-marked
+// (--valid / CRC-correct) UNSIGNED image and decide() would boot it at reset
+// without any signature check (REQ-BOOT-011). The word stays erased for
+// check_and_mark; it is neither CRC-covered (word0_crc is over 0..27) nor
+// signed (the signature covers header[0..32]), so skipping it changes nothing
+// for a legitimate signed image.
+fn (mut p Prog) program_stage() bool {
+	if p.dl_addr == p.app_base + 32 {
+		p.dl_addr += prog_word // skip the valid-mark word; leave it erased
+		p.stage_len = 0
+		return true
+	}
+	if !p.flash.program(p.flash.ctx, p.dl_addr, &p.stage[0], prog_word) {
+		return false
+	}
+	p.dl_addr += prog_word
+	p.stage_len = 0
+	return true
+}
+
 // 0x36 TransferData: [sid, blockCounter, data...] — stage and program in
 // prog_word units.
 fn (mut p Prog) transfer_data(req &u8, req_len int, resp &u8) int {
@@ -325,11 +406,9 @@ fn (mut p Prog) transfer_data(req &u8, req_len int, resp &u8) int {
 		p.stage[p.stage_len] = unsafe { req[2 + i] }
 		p.stage_len++
 		if p.stage_len == prog_word {
-			if !p.flash.program(p.flash.ctx, p.dl_addr, &p.stage[0], prog_word) {
+			if !p.program_stage() {
 				return negative(resp, 0x36, nrc_general_programming_failure)
 			}
-			p.dl_addr += prog_word
-			p.stage_len = 0
 		}
 	}
 	p.next_block++
@@ -350,11 +429,9 @@ fn (mut p Prog) transfer_exit(req &u8, req_len int, resp &u8) int {
 		for i in p.stage_len .. prog_word {
 			p.stage[i] = 0xFF
 		}
-		if !p.flash.program(p.flash.ctx, p.dl_addr, &p.stage[0], prog_word) {
+		if !p.program_stage() {
 			return negative(resp, 0x37, nrc_general_programming_failure)
 		}
-		p.dl_addr += prog_word
-		p.stage_len = 0
 	}
 	p.downloading = false
 	unsafe {
@@ -381,6 +458,17 @@ fn (mut p Prog) ecu_reset(req &u8, req_len int, resp &u8) int {
 	return 2
 }
 
+// key_is_zero reports whether a trust anchor is unset (all-zero) — the gate it
+// guards is then disabled. A real boot bakes non-zero keys and always verifies.
+fn key_is_zero(k [32]u8) bool {
+	for b in k {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // check_and_mark: read back the header + image through the flash hooks, verify,
 // and program the valid-mark word (word 1 of the header) on success.
 fn (mut p Prog) check_and_mark() bool {
@@ -393,14 +481,28 @@ fn (mut p Prog) check_and_mark() bool {
 	if h.magic != magic || h.hdr_ver != hdr_ver || h.hdr_size != hdr_size {
 		return false
 	}
+	// a signed image also has a 64-byte signature after the image; require the
+	// whole extent (header ‖ image ‖ sig) to sit inside the app window.
+	signed := !key_is_zero(p.image_key)
+	sig_span := if signed { u32(64) } else { u32(0) }
 	if h.image_len == 0 || h.image_len > max_image_len
-		|| !p.region_ok(p.app_base, hdr_size + h.image_len) {
+		|| !p.region_ok(p.app_base, hdr_size + h.image_len + sig_span) {
 		return false
 	}
 	if crc32(&hdr[0], 28) != h.word0_crc {
 		return false
 	}
-	// image CRC, streamed through the read hook in stage-sized chunks
+	// One image pass feeds BOTH the CRC (fast bit-rot pre-check) and the
+	// Ed25519 verify (authenticity). The signed region is header[0..32] ‖ image.
+	mut ver := bcrypto.Verifier{}
+	if signed {
+		mut sig := [64]u8{}
+		if !p.flash.read(p.flash.ctx, p.app_base + hdr_size + h.image_len, &sig[0], 64) {
+			return false
+		}
+		ver = bcrypto.verify_start(p.image_key, sig)
+		ver.update(&hdr[0], 32)
+	}
 	mut crc := u32(0xFFFF_FFFF)
 	mut off := u32(0)
 	mut buf := [64]u8{}
@@ -413,9 +515,17 @@ fn (mut p Prog) check_and_mark() bool {
 			return false
 		}
 		crc = crc32_update(crc, &buf[0], n)
+		if signed {
+			ver.update(&buf[0], int(n))
+		}
 		off += n
 	}
 	if (crc ^ 0xFFFF_FFFF) != h.image_crc {
+		return false
+	}
+	// authenticity is the last gate before the mark: an unsigned or
+	// wrongly-signed image is refused (no mark, decide() -> stay_boot).
+	if signed && !ver.finish() {
 		return false
 	}
 	// the LAST write: the valid mark, alone in its 32-byte flash word

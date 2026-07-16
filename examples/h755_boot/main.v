@@ -23,6 +23,7 @@ fn C.board_clock_init()
 fn C.board_timebase_init()
 fn C.board_can_clock_pins_init() // FDCAN1 kernel clock + PD0/PD1 AF9 — blob_can_open does NOT mux pins
 fn C.board_now_us() u64
+fn C.board_rng(out &u8, n int) int
 fn C.bootcell_take_request() u32
 fn C.bootcell_set_info(reason u32)
 fn C.boot_jump_app()
@@ -51,6 +52,10 @@ __global (
 	g_req  [520]u8
 	g_rsp  [520]u8
 )
+
+fn rng_hook(out &u8, n int) bool {
+	return C.board_rng(out, n) != 0
+}
 
 fn main() {
 	// --- the boot decision, from near-reset state (REQ-BOOT-001/002/010) ---
@@ -82,6 +87,12 @@ fn main() {
 	// EXPLICIT init: field defaults are _vinit work — freestanding never runs it
 	// (the P2 bench found seed reading 0 = the already-unlocked convention).
 	g_prog.init() // seed + default session
+	// dev image-signing public key (examples/keys) — REAL deployments bake their
+	// own; the matching seed never touches an ECU or build machine (REQ-BOOT-011)
+	// two trust anchors (examples/keys) — image vs session, different custody
+	g_prog.image_key = [u8(0x03), 0xa1, 0x07, 0xbf, 0xf3, 0xce, 0x10, 0xbe, 0x1d, 0x70, 0xdd, 0x18, 0xe7, 0x4b, 0xc0, 0x99, 0x67, 0xe4, 0xd6, 0x30, 0x9b, 0xa5, 0x0d, 0x5f, 0x1d, 0xdc, 0x86, 0x64, 0x12, 0x55, 0x31, 0xb8]!
+	g_prog.session_key = [u8(0x29), 0xac, 0xba, 0xe1, 0x41, 0xbc, 0xca, 0xf0, 0xb2, 0x2e, 0x1a, 0x94, 0xd3, 0x4d, 0x0b, 0xc7, 0x36, 0x1e, 0x52, 0x6d, 0x0b, 0xfe, 0x12, 0xc8, 0x97, 0x94, 0xbc, 0x93, 0x22, 0x96, 0x6d, 0xd7]!
+	g_prog.rng = rng_hook // 0x29 challenge source (STM32H7 TRNG)
 	g_link.init_defaults() // ISO-TP N_Bs/WFTmax — 0 would wait forever on a lost FC
 	g_prog.app_base = app_base
 	g_prog.app_size = app_size

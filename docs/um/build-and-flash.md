@@ -82,7 +82,7 @@ make -C ../h755_m4_app
 cd ../.. && v run tools/mkimage examples/h755_threadx/build/h755_threadx.bin \
     examples/h755_threadx/build/factory.img <sw_version> --valid --pad-vectors
 v run tools/mkimage examples/h755_threadx/build/h755_threadx.bin \
-    examples/h755_threadx/build/field.img <sw_version> --pad-vectors
+    examples/h755_threadx/build/field.img <sw_version> --pad-vectors --sign examples/keys/mkimage.seed
 ```
 
 **First time (factory, over SWD):**

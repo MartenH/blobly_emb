@@ -1,20 +1,12 @@
 # Bootloader — design + build log
 
-> Status (2026-07-13): **P1+P2 DRY-CODED AND SIM-VERIFIED** — no silicon run yet.
-> Requirements: `requirements/boot.toml` (draft; REQ-BOOT-001/002/004/005/008/009
-> exercised by tests + the vcan end-to-end). Built so far:
-> - `boot/` — header contract + CRC-32 + decision (`boot.v`), the UDS programming
->   session 0x27/0x31/0x34/0x36/0x37/0x11 over FlashOps hooks (`prog.v`); unit
->   tests cover the happy path, corrupt transfer, region protection, sequence guards.
-> - `examples/boot_sim` — the SAME session on vcan0 (rx 0x7B0 / tx 0x7B8), flash =
->   a file, one run = one power cycle. Verified against blobly_net `cmd/flash`:
->   fresh→stay_boot, flash→run_app, power-cycle persistence, corrupt→stay_boot,
->   recovery reflash→run_app.
-> - `tools/mkimage` — wrap a .bin in the header (`--valid` factory / `--pad-vectors`
->   target layout); blobly_net `cmd/flash` = the host flasher (BLBT passthrough).
-> - `examples/h755_boot` + `boards/h755zi/{flash.c,bootmap.h}` — the TARGET SKELETON:
->   compiles freestanding (25 KB, fits sector 0), **flash.c dry-coded from RM0399,
->   bench-unverified** — the P1/P2 hardware pass is the next step when a board is back.
+> Status (2026-07-16): **P1–P3 + P5 BENCH-VERIFIED on the H755; P4 (atomic activation) pending.**
+> The chain runs on real silicon: header-verified jump, CAN reflash + torn-image
+> recovery, S3/return-to-app session timers, and full asymmetric authenticity —
+> Ed25519 image signatures verified on the CM7 (no heap) + a 0x29 session gate
+> backed by the STM32H7 hardware TRNG. flash.c is silicon-proven. See the bench
+> logs at the bottom. Crypto lives in `bcrypto/` (SHA-512 + Ed25519, RFC-vector
+> verified); signing is host tooling (`tools/mkimage --sign`, `examples/keys`).
 
 ## Goal
 
@@ -97,13 +89,13 @@ Plain UDS, because it is already transport-neutral by construction:
 |---|---|---|
 | enter | 0x10 programming session | boot manager answers; app forwards + resets (above) |
 | identify | 0x22 read DID | bootloader + app version/validity (REQ-BOOT-009) |
-| unlock | 0x27 security access | seed/key; the hook where REQ-BOOT-011 lands |
+| authenticate | 0x29 Authentication | challenge/response; the tester signs, the boot verifies with its public key (REQ-BOOT-016) |
 | erase | 0x31 routine: erase region | region = app area only (REQ-BOOT-008 enforced here) |
 | transfer | 0x34 / 0x36 × N / 0x37 | block-wise, per-block ack (ISO-TP flow control does the pacing on CAN; DoIP brings its own) |
 | verify | 0x31 routine: check image | full-image CRC (+ signature when REQ-BOOT-011 lands) — only THEN is the header's valid mark written (REQ-BOOT-005) |
 | go | 0x11 ECU reset | boot decision runs again, now finds a valid image |
 
-`comm/uds` today serves DIDs; the bootloader adds 0x10/0x27/0x31/0x34/0x36/0x37/0x11 —
+`comm/uds` today serves DIDs; the bootloader adds 0x10/0x29/0x31/0x34/0x36/0x37/0x11 —
 services the host side (`cantester_v` heritage in blobly_net) already knows how to
 drive. The host flasher is a blobly_net `cmd/` tool speaking the same modules.
 
@@ -129,18 +121,191 @@ affords:
   gone but the ECU is not bricked. Honest, documented downgrade — same rule as the
   lean codec: fail loudly, never half-work.
 
-## Image header (the contract between build and boot)
+## Image container (the contract between build and boot)
 
-Emitted by the build (objcopy step or a tiny host tool), verified by boot:
+`tools/mkimage` wraps a raw application `.bin` into the container the host flasher
+transfers and the boot verifies:
 
 ```
-magic | header_ver | image_length | crc32 | sw_version | entry | [signature (BOOT-011)]
+  offset  field                                         written by
+  ┌──────────────────────────── header word 0 (signed) ───────────────────────┐
+   0      magic       u32  'BLBT'
+   4      hdr_ver     u16  = 1
+   8      image_len   u32  bytes of the app image (excludes header + signature)
+  12      image_crc   u32  CRC-32 of the image (fast bit-rot pre-check)
+  16      sw_version  u32
+  20      hdr_size    u32  = 64
+  28      word0_crc   u32  CRC-32 over bytes 0..27 (header self-check)
+  ├──────────────────────────── header word 1 ────────────────────────────────┤
+  32      valid_mark  u32  'VALD'  ← the boot writes this LAST, after verifying
+  36..63  reserved (0xFF)
+  └────────────────────────────────────────────────────────────────────────────┘
+  64                    image  (image_len bytes; --pad-vectors puts vectors @ +0x400)
+  64+image_len          signature  Ed25519, 64 bytes  ← --sign; over header[0..32] ‖ image
 ```
 
-Written into a fixed slot at the front of the app region; the CRC covers everything
-but the header itself; the valid mark is the LAST thing the programming session
-writes. `[boot]` in ecu.toml binds the request-cell address, app region, and DIDs so
-the generator keeps bootloader and app agreeing on the layout — one config, as always.
+Two words by design: the **valid mark lives alone in word 1** so it can be programmed
+last (a torn update leaves an *invalid* header — unbrickable, REQ-BOOT-005). The
+**signature covers header word 0 ‖ image** — so `image_len`, `image_crc`, and
+`sw_version` are all bound and cannot be tampered — and is excluded from what it
+signs (the valid mark is the boot's to write). `[boot]` in ecu.toml binds the
+request-cell address, app region, and DIDs so generator, app, and boot agree on the
+layout — one config, as always.
+
+Build invocations:
+
+```sh
+# field image — the boot verifies the signature and marks it valid itself
+v run tools/mkimage app.bin app.img <ver> --pad-vectors --sign examples/keys/mkimage.seed
+
+# factory image — pre-marked, SWD-only, physical-trust path (no --sign; the two
+# are mutually exclusive: pre-marking would bypass the signature check)
+v run tools/mkimage app.bin app.img <ver> --pad-vectors --valid
+```
+
+## Trust model — what the tester holds vs what the ECU holds
+
+Asymmetric all the way down (P5): the **private key never touches an ECU or a build
+machine** — a signing service / HSM owns it. Every device only holds the **public**
+key and can *verify* but never *forge*. The boot manager is the **root of trust**:
+it's the small immutable stage that holds the key and gates both the image and the
+session.
+
+```mermaid
+flowchart LR
+    subgraph SIGN["Signing service (offline / HSM)"]
+        PRIV["Ed25519 PRIVATE key<br/>(never leaves)"]
+    end
+    subgraph TESTER["Tester (blobly_net cmd/flash + GUI)"]
+        IMG["signed image.img<br/>= header ‖ image ‖ sig"]
+        TPRIV["tester PRIVATE key<br/>(for 0x29 session auth)"]
+    end
+    subgraph ECU["ECU — boot manager (immutable, root of trust)"]
+        PUB["Ed25519 PUBLIC key (baked in)"]
+        VER["verify: signature + 0x29 challenge"]
+        FLASH["app slot (bank / sectors)"]
+    end
+    PRIV -->|signs image at release| IMG
+    IMG -->|UDS transfer over CAN/DoIP| VER
+    TPRIV -->|signs the ECU's challenge| VER
+    PUB --> VER
+    VER -->|only if BOTH verify| FLASH
+```
+
+Two independent gates, both anchored in that one public key:
+
+- **Session gate (0x29)** — before any erase/download, the tester proves it holds a
+  private key by signing an ECU-chosen random challenge (below). Stops an
+  *unauthorised* tester from starting a reflash.
+- **Image gate (signature)** — the boot verifies the image signature before writing
+  the valid mark, and (as `check_and_mark`) rejects an unsigned or wrongly-signed
+  image. Stops a *tampered or forged* image from ever booting, even if the session
+  gate were somehow bypassed. This is the last line of defence.
+
+> Key separation: this stack uses **two** dev keys, named for their consumer
+> (`examples/keys`): `mkimage.seed` (the **release** key — signs images, verified by the
+> boot's `image_key`) and `tester.seed` (the **tester** key — authorises 0x29 sessions,
+> verified by the boot's `session_key`). Different custody, different blast radius: leak
+> the tester key and someone can *start sessions*; leak the release key and someone can
+> *forge firmware*. Production keeps the release seed in a signing service/HSM and the
+> tester seed with the technician (ideally per-technician PKI, not a shared file).
+
+## Session authentication — UDS 0x29 (REQ-BOOT-016)
+
+The boot's flash-write services (erase/download/transfer) are locked until the tester
+authenticates. `0x29` replaces the legacy `0x27` seed/key: instead of a shared secret,
+the ECU issues a random challenge and the tester returns a **signature** over it, which
+the ECU verifies with the public key it already holds. Nothing extractable from an ECU
+lets an attacker forge it.
+
+```mermaid
+sequenceDiagram
+    participant T as Tester
+    participant B as Boot manager (ECU)
+    Note over B: flash services LOCKED (NRC 0x33)
+    T->>B: 0x10 02  (enter programming session)
+    B-->>T: 0x50 02
+    T->>B: 0x29 01  requestChallenge
+    B->>B: draw random nonce (challenge)
+    B-->>T: 0x69 01  challenge
+    T->>T: sign(challenge) with the PRIVATE key
+    T->>B: 0x29 02  proofOfOwnership = signature
+    B->>B: Ed25519 verify(pubkey, challenge, signature)
+    alt signature valid
+        B-->>T: 0x69 02  authenticated
+        Note over B: flash services UNLOCKED
+        T->>B: 0x31 FF00 erase → 0x34 → 0x36×N → 0x37
+        T->>B: 0x31 FF01 check image
+        B->>B: CRC + Ed25519 verify(image) before the mark
+        B-->>T: marked valid → 0x11 reset → app runs
+    else invalid / silent tester
+        B-->>T: 0x7F 29 (or S3 timeout → re-lock, REQ-BOOT-013)
+    end
+```
+
+Note the two verifications are distinct: 0x29 authenticates the **tester** (a live
+challenge, so a captured session can't be replayed), and `check image` authenticates
+the **image** (a signature over the bytes). Both must pass.
+
+## Threat model — what P5 covers, and what it does not (yet)
+
+Being precise so "signatures verified" is not mistaken for "fully locked down."
+
+**P5 guarantees** — rooted in a public key the ECU holds:
+
+- **Image authenticity/integrity.** A forged, tampered, or unsigned image cannot
+  boot: the boot verifies the Ed25519 signature before writing the valid mark.
+- **Session authorisation.** An unauthorised tester cannot start a reflash: the
+  0x29 challenge/response admits only a private-key holder, and the live
+  challenge defeats replay.
+
+**Not covered yet** — each is a *layer on top*, not a flaw in the crypto:
+
+1. **Replacing the root of trust itself.** The boot manager and its baked key are
+   immutable only *by convention* — the app-update path cannot write the boot
+   region (REQ-BOOT-008), but SWD/JTAG still can. An attacker with debug access
+   could reflash the boot and swap the public key. Closing this needs the
+   silicon's own mechanisms — **RDP level 2** (disables the debug port,
+   irreversible), **write-protecting the boot sector**, and, where the part
+   provides it, **secure-boot option bytes** that make the ROM verify the boot
+   manager at power-on. That completes the chain (silicon → boot → app); today we
+   built only the boot → app link. **REQ-BOOT-018**; a hardware-config phase (P6),
+   validated on a *sacrificial* board because RDP2 cannot be undone.
+2. **Private-key custody.** In dev the signing seed is a file (`examples/keys`).
+   Production keeps it in an HSM / KMS on the signing side; the ECU is agnostic
+   (it verifies with a public key) — swap the signer, the boot test is unchanged.
+   The `$BLOBLY_FLASH_SEED` seam is where that swap happens.
+3. **Rollback.** A validly-signed *old* image (with a since-fixed vulnerability)
+   still verifies. `sw_version` is in the header but nothing enforces
+   monotonicity; anti-rollback (a stored minimum version) is a future rung.
+4. **Confidentiality.** Images are signed, not encrypted — the firmware is
+   readable on the wire and in flash. If IP protection matters, add image
+   encryption (a separate concern from authenticity).
+
+### Trust anchor: a raw key today, certificates later
+
+The boot holds **one raw Ed25519 public key**, baked in — the simplest trust
+anchor ("trust exactly this key"), the same model as an SSH `authorized_keys`
+entry or verified-boot with an embedded key, and common in embedded secure boot.
+
+The mainstream automotive answer is **X.509 certificates**, and *real* UDS 0x29
+uses them: its `verifyCertificateUnidirectional`/`Bidirectional` sub-functions
+transmit a certificate the ECU validates against a stored **root CA** before the
+challenge/response. This stack implements a **simplified 0x29 profile** that skips
+the certificate and uses the raw key directly. What a certificate chain would buy,
+and why it is deferred:
+
+- **Rotation / revocation** without reflashing every boot: rotate a leaf/
+  intermediate; the ECU trusts anything the CA vouches for. A single baked raw key
+  means a compromised key ⇒ reflash all boots.
+- **Delegation** to multiple *limited* signers — per-plant, per-supplier, or a
+  per-technician key for 0x29 — all trusted via one root the ECU stores.
+- **Identity + metadata** — validity periods, key-usage constraints the ECU checks.
+
+The cost is why it is not here first: **ASN.1/DER parsing is heavy and a real
+attack surface** (cert-parser bugs are a CVE genre), and a full chain drags in
+more crypto. A minimal cert format, or rotation via a signed *key-list*, is a
+lighter middle ground if the trade pinches before a full PKI earns its way in.
 
 ## Phasing (each rung bench-verified, as usual)
 
@@ -150,11 +315,24 @@ the generator keeps bootloader and app agreeing on the layout — one config, as
    host flasher tool in blobly_net. First real reflash over the wire.
 3. **P3 — app-side handoff**: programming session request from the running
    application (NM-aware: hold the bus awake during the session).
-4. **P4 — dual-bank atomic activation** on the H755 (+ the single-bank degrade
-   documented on H735).
-5. **P5 — authenticity** (REQ-BOOT-011): CMAC first (comm/secoc precedent, key
-   management honestly out of scope), asymmetric signature when it earns its way in.
-6. **Ethernet/DoIP binding** when hardware with Ethernet lands — by construction a
+4. **P4 — atomic activation** (REQ-BOOT-007, instance-agnostic): the requirement is
+   "run the whole old or the whole new image, never a mixture." *Implementation note*
+   — the boards layer picks the strategy the silicon affords: dual-bank swap on
+   parts that have it (H755/H743), the valid-mark-last degrade on single-bank parts
+   (H735). The requirement names neither; see "Atomic activation" above.
+5. **P5 — authenticity** (REQ-BOOT-011/016): asymmetric (Ed25519 + SHA-512, the
+   no-alloc `bcrypto/` module, RFC-vector verified). **Both rungs done and
+   bench-verified** — image signing (verify before the mark) *and* the 0x29
+   session gate (challenge/response, TRNG-backed), with the release and tester
+   keys separated (see the trust model + sequence above). Key management (the
+   private keys off every ECU) is a deployment concern the design names but does
+   not own.
+6. **P6 — hardware root of trust** (REQ-BOOT-018): RDP2 + boot-sector write
+   protection + secure-boot option bytes, so the verifier itself can't be swapped.
+   Irreversible — validated on a sacrificial board. Optional siblings: a
+   certificate chain (rotation/revocation/delegation), anti-rollback, image
+   encryption — each earns its way in against the threat model above.
+7. **Ethernet/DoIP binding** when hardware with Ethernet lands — by construction a
    new binding, not a redesign.
 
 ## Non-goals (now)
@@ -215,6 +393,28 @@ cryptographic signature (authenticity), same choreography. A tester that
 somehow bypassed every session barrier still cannot make the boot manager run
 an image that fails this check; a torn or tampered transfer leaves an invalid
 header the decide() path refuses forever.
+
+## Bench log — P5 authenticity, 2026-07-16 (H755)
+
+The full asymmetric chain on real silicon:
+
+- **Ed25519 image signature** verified on the CM7 before the mark: a
+  `mkimage --sign` image (51 KB, dev key) delivered over CAN → the boot streamed
+  the image through SHA-512 + Ed25519 verify (no-alloc, no heap on the target) →
+  valid mark → reset → app v10 ran. A wrongly-signed or tampered image is
+  refused (no mark).
+- **0x29 session gate** with the STM32H7 **hardware TRNG** as the challenge
+  source: request challenge → tester signs with the dev private key → CM7
+  verifies with the baked public key → flash services unlocked. A **wrong tester
+  seed** is rejected with NRC 0x35 and nothing is flashed.
+- The boot image is 38.6 KB (crypto included), verify path allocation-free
+  (`lint_vinit` + the no-heap source guard), challenge from `board_rng` (HSI48
+  kernel clock, bounded polling → conditionsNotCorrect if the RNG is dead).
+
+Dev keys: `examples/keys/mkimage.seed` (release, verified by `image_key`) +
+`tester.seed` (0x29, verified by `session_key`) — both public halves baked into the
+boot. `cmd/flash` takes the tester seed from
+`$BLOBLY_FLASH_SEED` or the dev default.
 
 ## Bench log — NUCLEO-H755ZI-Q, 2026-07-15 (first silicon pass)
 
