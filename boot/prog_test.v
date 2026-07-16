@@ -48,6 +48,16 @@ fn tf_read(ctx voidptr, addr u32, out &u8, len u32) bool {
 	return true
 }
 
+// deterministic non-zero challenge source for tests (the board's TRNG on target)
+fn fake_rng(out &u8, n int) bool {
+	unsafe {
+		for i in 0 .. n {
+			out[i] = u8((i * 7 + 1) & 0xff)
+		}
+	}
+	return true
+}
+
 fn new_prog(mut f TestFlash) Prog {
 	mut p := Prog{
 		flash:    FlashOps{
@@ -59,7 +69,9 @@ fn new_prog(mut f TestFlash) Prog {
 		app_base: t_base
 		app_size: t_size
 	}
-	p.init() // the target-required seed/session path, exercised by every test
+	p.init()
+	p.rng = fake_rng // 0x29 challenge source
+	p.pubkey = dev_pubkey() // the key that verifies both the session and the image
 	return p
 }
 
@@ -70,16 +82,19 @@ fn ask(mut p Prog, req []u8) []u8 {
 	return resp[..n]
 }
 
+// unlock runs the 0x29 challenge/response: request a challenge, sign it with the
+// dev private key, send the proof — exactly what the host flasher does.
 fn unlock(mut p Prog) {
 	assert ask(mut p, [u8(0x10), 0x02])[0] == 0x50 // programming session
-	seed_rsp := ask(mut p, [u8(0x27), 0x01])
-	assert seed_rsp[0] == 0x67
-	seed := (u32(seed_rsp[2]) << 24) | (u32(seed_rsp[3]) << 16) | (u32(seed_rsp[4]) << 8) | u32(seed_rsp[5])
-	key := expected_key(seed)
-	assert ask(mut p, [u8(0x27), 0x02, u8(key >> 24), u8(key >> 16), u8(key >> 8), u8(key)]) == [
-		u8(0x67),
-		0x02,
-	]
+	ch := ask(mut p, [u8(0x29), 0x01]) // requestChallenge
+	assert ch[0] == 0x69 && ch[1] == 0x01 && ch.len == 34
+	challenge := ch[2..34].clone()
+	sig := bcrypto.sign(dev_seed, challenge)
+	mut proof := [u8(0x29), 0x02]
+	for i in 0 .. 64 {
+		proof << sig[i]
+	}
+	assert ask(mut p, proof) == [u8(0x69), 0x02]
 }
 
 // build a valid (unmarked) image: header word 0 + payload, as the host flasher
@@ -136,7 +151,7 @@ fn transfer(mut p Prog, img []u8) {
 fn test_full_session_marks_valid() {
 	mut f := &TestFlash{}
 	mut p := new_prog(mut f)
-	img := payload_image(700)
+	img := signed_image(700)
 
 	unlock(mut p)
 	transfer(mut p, img)
@@ -156,8 +171,8 @@ fn test_full_session_marks_valid() {
 fn test_corrupt_transfer_fails_check() {
 	mut f := &TestFlash{}
 	mut p := new_prog(mut f)
-	mut img := payload_image(700)
-	img[100] ^= 0x01 // corrupt one payload byte AFTER the CRC was computed
+	mut img := signed_image(700)
+	img[int(hdr_size) + 100] ^= 0x01 // corrupt one image byte after signing
 
 	unlock(mut p)
 	transfer(mut p, img)
@@ -193,10 +208,14 @@ fn test_sequence_guards() {
 	er := [u8(0x31), 0x01, 0xFF, 0x00, u8(t_base >> 24), u8(t_base >> 16), u8(t_base >> 8),
 		u8(t_base), 0x00, 0x00, 0x10, 0x00]
 	assert ask(mut p, er) == [u8(0x7F), 0x31, 0x33]
-	// wrong key locks the seed handshake again
-	seed_rsp := ask(mut p, [u8(0x27), 0x01])
-	assert seed_rsp[0] == 0x67
-	assert ask(mut p, [u8(0x27), 0x02, 0xDE, 0xAD, 0xBE, 0xEF]) == [u8(0x7F), 0x27, 0x35]
+	// a wrong proof is rejected (0x29 invalidKey); a fresh challenge is required
+	ch := ask(mut p, [u8(0x29), 0x01])
+	assert ch[0] == 0x69
+	mut bad := [u8(0x29), 0x02]
+	for _ in 0 .. 64 {
+		bad << 0x00
+	}
+	assert ask(mut p, bad) == [u8(0x7F), 0x29, 0x35]
 	unlock(mut p)
 	// download before erase -> sequence error
 	dl := [u8(0x34), 0x00, 0x44, u8(t_base >> 24), u8(t_base >> 16), u8(t_base >> 8), u8(t_base),
@@ -228,7 +247,7 @@ fn test_identification_did() {
 fn test_no_unlock_in_default_session() {
 	mut f := &TestFlash{}
 	mut p := new_prog(mut f)
-	assert ask(mut p, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x22]
+	assert ask(mut p, [u8(0x29), 0x01]) == [u8(0x7F), 0x29, 0x22]
 }
 
 
@@ -288,6 +307,10 @@ fn dev_pubkey() [32]u8 {
 // signed_image = payload_image + a 64-byte Ed25519 signature over header[0..32] ‖ image,
 // exactly what mkimage --sign emits and the boot verifies.
 fn signed_image(image_len u32) []u8 {
+	return signed_image_with(image_len, dev_seed)
+}
+
+fn signed_image_with(image_len u32, seed [32]u8) []u8 {
 	base := payload_image(image_len)
 	mut msg := []u8{cap: 32 + int(image_len)}
 	for i in 0 .. 32 {
@@ -296,7 +319,7 @@ fn signed_image(image_len u32) []u8 {
 	for i in int(hdr_size) .. base.len {
 		msg << base[i]
 	}
-	sig := bcrypto.sign(dev_seed, msg)
+	sig := bcrypto.sign(seed, msg)
 	mut out := base.clone()
 	for i in 0 .. 64 {
 		out << sig[i]
@@ -335,15 +358,15 @@ fn test_signed_tamper_rejected() {
 fn test_signed_wrong_key_rejected() {
 	mut f := &TestFlash{}
 	mut p := new_prog(mut f)
-	// bake a DIFFERENT key than the one that signed
+	// the boot holds the dev key (session auth succeeds), but the IMAGE was
+	// signed with a DIFFERENT key -> the image verify fails, no mark.
 	mut other_seed := [32]u8{}
 	for i in 0 .. 32 {
 		other_seed[i] = dev_seed[i]
 	}
 	other_seed[0] ^= 0xff
-	p.pubkey = bcrypto.public_key(other_seed)
-	img := signed_image(700) // signed with dev_seed
-	unlock(mut p)
+	img := signed_image_with(700, other_seed)
+	unlock(mut p) // authenticates with the dev key (matches p.pubkey)
 	transfer(mut p, img)
 	assert ask(mut p, [u8(0x31), 0x01, 0xFF, 0x01]) == [u8(0x71), 0x01, 0xFF, 0x01, 0x01]
 	assert !check_image(&f.mem[0])
@@ -363,4 +386,44 @@ fn test_unsigned_rejected_when_key_set() {
 	transfer(mut p, img)
 	assert ask(mut p, [u8(0x31), 0x01, 0xFF, 0x01]) == [u8(0x71), 0x01, 0xFF, 0x01, 0x01]
 	assert !check_image(&f.mem[0])
+}
+
+// @verifies REQ-BOOT-016
+// 0x29 session gate: without a matching key the tester cannot unlock, and every
+// flash-write service stays refused (NRC 0x33).
+fn test_0x29_wrong_proof_stays_locked() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	assert ask(mut p, [u8(0x10), 0x02])[0] == 0x50
+	// a challenge, then a proof signed by the WRONG key -> invalidKey, no unlock
+	ch := ask(mut p, [u8(0x29), 0x01])
+	assert ch[0] == 0x69 && ch.len == 34
+	mut wrong_seed := [32]u8{}
+	for i in 0 .. 32 {
+		wrong_seed[i] = dev_seed[i]
+	}
+	wrong_seed[5] ^= 0xff
+	bad_sig := bcrypto.sign(wrong_seed, ch[2..34].clone())
+	mut proof := [u8(0x29), 0x02]
+	for i in 0 .. 64 {
+		proof << bad_sig[i]
+	}
+	assert ask(mut p, proof) == [u8(0x7F), 0x29, 0x35]
+	// still locked: erase refused
+	er := [u8(0x31), 0x01, 0xFF, 0x00, u8(t_base >> 24), u8(t_base >> 16), u8(t_base >> 8),
+		u8(t_base), 0x00, 0x00, 0x10, 0x00]
+	assert ask(mut p, er) == [u8(0x7F), 0x31, 0x33]
+}
+
+// @verifies REQ-BOOT-016
+// proof without a prior challenge is a sequence error (no replay of a stale one)
+fn test_0x29_proof_needs_challenge() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	assert ask(mut p, [u8(0x10), 0x02])[0] == 0x50
+	mut proof := [u8(0x29), 0x02]
+	for _ in 0 .. 64 {
+		proof << 0x00
+	}
+	assert ask(mut p, proof) == [u8(0x7F), 0x29, 0x24]
 }

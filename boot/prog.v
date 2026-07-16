@@ -1,6 +1,6 @@
 module boot
 
-// The programming session — UDS services 0x27/0x31/0x34/0x36/0x37/0x11 layered
+// The programming session — UDS services 0x29/0x31/0x34/0x36/0x37/0x11 layered
 // on comm/uds's Server (which keeps 0x10/0x22/0x2E/0x3E). Transport-agnostic by
 // construction (REQ-BOOT-006): requests arrive as reassembled byte blocks from
 // WHATEVER transport binding feeds it (ISO-TP/CAN today, DoIP later), and block
@@ -73,11 +73,15 @@ pub mut:
 	// writing the valid mark; all-zero disables the check (tests / a transition
 	// build). The seed that signs is never on the ECU — see examples/keys.
 	pubkey [32]u8
-	// security (REQ-BOOT-011 seam): a trivial seed/key pair for now — the algo
-	// is a hook to replace, the SEQUENCE enforcement is what this layer owns.
-	unlocked  bool
-	seed_sent bool
-	seed      u32 // set by init() — 'BLOB' placeholder until the real scheme (P5)
+	// 0x29 Authentication (REQ-BOOT-016): the tester proves it holds a private
+	// key by signing an ECU-chosen random challenge; the boot verifies with
+	// `pubkey`. `rng` fills the challenge (the board's TRNG on target, a
+	// deterministic source in tests) — a null rng leaves the session unlockable
+	// (fail-closed). Replaces the 0x27 seed/key entirely.
+	rng fn (out &u8, n int) bool = unsafe { nil }
+	unlocked        bool
+	challenge       [32]u8
+	challenge_valid bool
 	// transfer state
 	erased     bool
 	downloading bool
@@ -101,7 +105,7 @@ pub fn (mut p Prog) handle(req &u8, req_len int, resp &u8) int {
 	}
 	sid := unsafe { req[0] }
 	match sid {
-		0x27 { return p.security_access(req, req_len, resp) }
+		0x29 { return p.authentication(req, req_len, resp) }
 		0x31 { return p.routine_control(req, req_len, resp) }
 		0x34 { return p.request_download(req, req_len, resp) }
 		0x36 { return p.transfer_data(req, req_len, resp) }
@@ -116,8 +120,7 @@ pub fn (mut p Prog) handle(req &u8, req_len int, resp &u8) int {
 // freestanding targets — the H755 bench found seed reading 0 = the
 // already-unlocked convention), so every consumer calls this first.
 pub fn (mut p Prog) init() {
-	p.seed = 0x424C4F42 // 'BLOB' — placeholder until the real scheme (P5)
-	p.srv.session = 0x01 // default diagnostic session
+	p.srv.session = 0x01 // default diagnostic session (0x29 auth stays LOCKED)
 }
 
 // S3server (ISO 14229): a non-default session dies after 5 s of tester silence.
@@ -135,7 +138,7 @@ pub fn (mut p Prog) tick(now u64) {
 	if p.srv.session != 0x01 && p.last_rx_us != 0 && now - p.last_rx_us > s3_server_us {
 		p.srv.session = 0x01
 		p.unlocked = false
-		p.seed_sent = false
+		p.challenge_valid = false
 		p.downloading = false
 		p.erased = false
 	}
@@ -166,60 +169,73 @@ fn (p Prog) region_ok(addr u32, size u32) bool {
 	return addr >= p.app_base && end <= u64(p.app_base) + u64(p.app_size)
 }
 
-// 0x27 SecurityAccess: sub 0x01 = request seed, sub 0x02 = send key.
-fn (mut p Prog) security_access(req &u8, req_len int, resp &u8) int {
+// 0x29 Authentication (REQ-BOOT-016): a simplified challenge/response profile —
+// sub 0x01 requestChallenge, sub 0x02 verifyProofOfOwnership. The boot draws a
+// random challenge, the tester returns an Ed25519 signature over it, the boot
+// verifies with its public key. A live challenge means a captured session
+// cannot be replayed; only a private-key holder can pass. Unlocks the flash
+// services (erase/download/transfer) — the same `unlocked` gate 0x27 used.
+const auth_request_challenge = u8(0x01)
+const auth_send_proof = u8(0x02)
+
+fn (mut p Prog) authentication(req &u8, req_len int, resp &u8) int {
 	if req_len < 2 {
-		return negative(resp, 0x27, nrc_incorrect_length)
+		return negative(resp, 0x29, nrc_incorrect_length)
 	}
 	if !p.in_programming_session() {
-		return negative(resp, 0x27, nrc_conditions_not_correct)
+		return negative(resp, 0x29, nrc_conditions_not_correct)
 	}
 	sub := unsafe { req[1] }
 	match sub {
-		0x01 {
-			// already unlocked -> an all-zero seed by convention
-			s := if p.unlocked { u32(0) } else { p.seed }
+		auth_request_challenge {
+			// no rng / no key baked -> cannot authenticate (fail-closed)
+			if p.rng == unsafe { nil } || p.pubkey_is_zero() {
+				return negative(resp, 0x29, nrc_conditions_not_correct)
+			}
+			if !p.rng(&p.challenge[0], 32) {
+				return negative(resp, 0x29, nrc_conditions_not_correct)
+			}
+			p.challenge_valid = true
 			unsafe {
-				resp[0] = 0x67
-				resp[1] = 0x01
-				resp[2] = u8(s >> 24)
-				resp[3] = u8(s >> 16)
-				resp[4] = u8(s >> 8)
-				resp[5] = u8(s)
+				resp[0] = 0x69
+				resp[1] = auth_request_challenge
 			}
-			p.seed_sent = true
-			return 6
+			for i in 0 .. 32 {
+				unsafe {
+					resp[2 + i] = p.challenge[i]
+				}
+			}
+			return 34
 		}
-		0x02 {
-			if !p.seed_sent {
-				return negative(resp, 0x27, nrc_request_sequence_error)
+		auth_send_proof {
+			if !p.challenge_valid {
+				return negative(resp, 0x29, nrc_request_sequence_error)
 			}
-			if req_len < 6 {
-				return negative(resp, 0x27, nrc_incorrect_length)
+			if req_len < 2 + 64 {
+				return negative(resp, 0x29, nrc_incorrect_length)
 			}
-			key := unsafe { (u32(req[2]) << 24) | (u32(req[3]) << 16) | (u32(req[4]) << 8) | u32(req[5]) }
-			if key != expected_key(p.seed) {
-				p.seed_sent = false
-				return negative(resp, 0x27, nrc_invalid_key)
+			mut sig := [64]u8{}
+			for i in 0 .. 64 {
+				sig[i] = unsafe { req[2 + i] }
+			}
+			p.challenge_valid = false // one-shot: a fresh challenge per attempt
+			// verify the signature over the challenge (no-alloc streaming verify)
+			mut v := bcrypto.verify_start(p.pubkey, sig)
+			v.update(&p.challenge[0], 32)
+			if !v.finish() {
+				return negative(resp, 0x29, nrc_invalid_key)
 			}
 			p.unlocked = true
 			unsafe {
-				resp[0] = 0x67
-				resp[1] = 0x02
+				resp[0] = 0x69
+				resp[1] = auth_send_proof
 			}
 			return 2
 		}
 		else {
-			return negative(resp, 0x27, nrc_request_out_of_range)
+			return negative(resp, 0x29, nrc_request_out_of_range)
 		}
 	}
-}
-
-// expected_key — the placeholder algorithm both sides share until P5: key =
-// seed XOR'd with the complement rotated. Deliberately trivial and deliberately
-// one function: replacing it IS the P5 upgrade path.
-pub fn expected_key(seed u32) u32 {
-	return (seed ^ 0xA5A5_A5A5) + (seed << 3 | seed >> 29)
 }
 
 // 0x31 RoutineControl (start only): erase (params addr+size) and check-image.

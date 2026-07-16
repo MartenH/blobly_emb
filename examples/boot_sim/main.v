@@ -56,6 +56,17 @@ fn ff_read(ctx voidptr, addr u32, out &u8, len u32) bool {
 	return true
 }
 
+// sim challenge source — NOT cryptographic (a demo nonce); the target uses the
+// board TRNG. Enough to exercise the 0x29 challenge/response end to end.
+fn sim_rng(out &u8, n int) bool {
+	unsafe {
+		for i in 0 .. n {
+			out[i] = u8((i * 13 + 7) & 0xff)
+		}
+	}
+	return true
+}
+
 fn main() {
 	iface := if os.args.len > 1 { os.args[1] } else { 'vcan0' }
 	os.mkdir_all('bin') or {}
@@ -92,6 +103,7 @@ fn main() {
 	}
 	p.init() // seed + default session — no field defaults (the _vinit rule)
 	p.pubkey = [u8(0x03), 0xa1, 0x07, 0xbf, 0xf3, 0xce, 0x10, 0xbe, 0x1d, 0x70, 0xdd, 0x18, 0xe7, 0x4b, 0xc0, 0x99, 0x67, 0xe4, 0xd6, 0x30, 0x9b, 0xa5, 0x0d, 0x5f, 0x1d, 0xdc, 0x86, 0x64, 0x12, 0x55, 0x31, 0xb8]! // dev signing key (examples/keys, REQ-BOOT-011)
+	p.rng = sim_rng // 0x29 challenge source
 	// identification DIDs (REQ-BOOT-009): F180 = boot version, F181 = app state
 	p.srv.dids[0].id = 0xF180
 	p.srv.dids[0].data[0] = 0x00
