@@ -228,3 +228,48 @@ fn test_no_unlock_in_default_session() {
 	mut p := new_prog(mut f)
 	assert ask(mut p, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x22]
 }
+
+
+// @verifies REQ-BOOT-013
+// S3server: a silent tester loses the programming session, the unlock, and a
+// half-done download; activity inside the window keeps everything alive.
+fn test_s3_silence_expires_session() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	unlock(mut p)
+	p.last_rx_us = 1_000_000
+	// just inside the window: session + unlock survive
+	p.tick(1_000_000 + s3_server_us)
+	assert p.srv.session == 0x02
+	assert p.unlocked
+	// past the window: default session, re-locked, download abandoned
+	p.downloading = true
+	p.tick(1_000_000 + s3_server_us + 1)
+	assert p.srv.session == 0x01
+	assert !p.unlocked
+	assert !p.downloading
+	// and the guarded services refuse again, exactly like a fresh boot
+	er := [u8(0x31), 0x01, 0xFF, 0x00, u8(t_base >> 24), u8(t_base >> 16), u8(t_base >> 8),
+		u8(t_base), 0x00, 0x00, 0x10, 0x00]
+	assert ask(mut p, er) == [u8(0x7F), 0x31, 0x33]
+}
+
+// @verifies REQ-BOOT-014
+// The stay-window: default session + tester silence -> due; activity restarts
+// it; a non-default session NEVER trips it (S3 owns that path); a
+// never-contacted boot counts from its own start.
+fn test_idle_return_window() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	t0 := u64(500_000)
+	assert !p.idle_return_due(t0 + idle_return_us, t0)
+	assert p.idle_return_due(t0 + idle_return_us + 1, t0)
+	// tester spoke at t1: the window restarts from there
+	t1 := t0 + 2_000_000
+	p.last_rx_us = t1
+	assert !p.idle_return_due(t1 + idle_return_us, t0)
+	assert p.idle_return_due(t1 + idle_return_us + 1, t0)
+	// in a programming session the window never fires
+	assert ask(mut p, [u8(0x10), 0x02])[0] == 0x50
+	assert !p.idle_return_due(t1 + 100 * idle_return_us, t0)
+}

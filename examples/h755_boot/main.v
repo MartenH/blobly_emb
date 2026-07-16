@@ -67,6 +67,7 @@ fn main() {
 	C.board_timebase_init() // board_now_us reads DWT: without this, `now` is frozen
 	// at 0 — the ISO-TP timeouts AND the REQ-BOOT-012 reset bound would never
 	// expire (codex on emb#132: an unbounded wait on a dead bus)
+	boot_t0 := C.board_now_us() // REQ-BOOT-014: the stay-window baseline
 	C.board_can_clock_pins_init() // found on the P2 bench: without the pin mux the session times out
 	mut ch := can.Channel{}
 	if !ch.open('0', false) {
@@ -109,10 +110,18 @@ fn main() {
 		}
 		if g_link.ready {
 			n := g_link.take(&g_req[0])
+			g_prog.last_rx_us = now // the tester-silence clock (REQ-BOOT-013/014)
 			rn := g_prog.handle(&g_req[0], n, &g_rsp[0])
 			if rn > 0 {
 				g_link.send(&g_rsp[0], rn)
 			}
+		}
+		g_prog.tick(now) // S3: a silent tester loses the session + the unlock
+		// REQ-BOOT-014: entered by request over a VALID app + tester silence ->
+		// give the ECU back to the application (a dead tester must not park it)
+		if requested && app_ok && g_prog.idle_return_due(now, boot_t0) {
+			C.bootcell_set_info(0) // BOOT_REASON_NORMAL
+			C.boot_sys_reset() // no request pending -> the boot jumps to the app
 		}
 		g_link.tick(now)
 		mut out := isotp.Pdu{}

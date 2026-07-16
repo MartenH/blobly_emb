@@ -165,6 +165,57 @@ the generator keeps bootloader and app agreeing on the layout — one config, as
   image rides the owner's flash banks for now).
 - Production key management (P5 notes the seam; a deployment owns the keys).
 
+## Entering programming mode — production practice vs this stack
+
+Production bootloaders wrap the entry and the session in layers this stack
+implements partially (by design — each deferred layer has a named seam). The
+map, so nobody mistakes the bench workflow for the field workflow:
+
+**1. Pre-conditions (before entry).** An OEM application refuses the switch to
+programming mode unless the vehicle state allows it — speed = 0, engine off,
+battery voltage in a safe window, transmission in park — answering NRC 0x22
+(conditionsNotCorrect) otherwise. In this stack the entry request is the app's
+`boot` shell command (bootcell + reset), and today it is UNCONDITIONAL — a
+bench tool. The gate belongs to the application layer (only the app knows its
+state model), which is exactly the mode-management seam: a production app
+gates the bootcell write on its own safe-state signal (REQ-BOOT-015 names
+this; the boot manager itself cannot know vehicle state and never will).
+
+**2. Entry strategy.** The two production shapes are unlock-the-app-first
+(0x27 to the application, then 0x10 02 triggers the reset) and
+authenticate-in-boot (free transition, locked bootloader). This stack is the
+second shape: the app's entry path carries no authentication, and every
+write/erase service in the boot refuses (NRC 0x33) until the in-boot
+SecurityAccess handshake passes. A production deployment layering UDS into
+the application would likely move to the first shape — the bootcell transition
+flag is already the mechanism both shapes share.
+
+**3. Session discipline (ISO 14229 timers).** The programming session dies
+after 5 s of tester silence (S3server, REQ-BOOT-013): back to the default
+session, security re-locked, a half-done download abandoned. And a boot
+entered BY REQUEST over a valid app returns to the application after a
+bounded quiet window (REQ-BOOT-014) — a dead tester must not park the ECU in
+boot until power-off. TesterPresent (0x3E) keeps a session alive through
+longer tester-side pauses.
+
+**4. Authentication (0x27 today, 0x29 at P5).** The seed/key here is a
+placeholder pair sharing one function with the host (`expected_key` — the P5
+replacement point). Production practice: a DEDICATED security level for
+flashing (distinct from any application diagnostics level), and increasingly
+UDS 0x29 Authentication — a PKI challenge/response (the tester signs the
+ECU's random challenge; the boot verifies against an OEM public key in
+protected storage) per ISO/SAE 21434 expectations. P5 (REQ-BOOT-011) covers
+both rungs: real seed/key material first, 0x29 + signed images when a
+deployment demands them.
+
+**5. The last line: image verification before the mark.** Independent of any
+session security, the check routine (0x31 FF01) hashes the flashed image and
+only THEN writes the valid mark — today a CRC-32 (integrity), at P5 a
+cryptographic signature (authenticity), same choreography. A tester that
+somehow bypassed every session barrier still cannot make the boot manager run
+an image that fails this check; a torn or tampered transfer leaves an invalid
+header the decide() path refuses forever.
+
 ## Bench log — NUCLEO-H755ZI-Q, 2026-07-15 (first silicon pass)
 
 The dry-coded chain, end to end on the H755 bench (ST-LINK + PCAN, classic 500 k):
