@@ -155,3 +155,12 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-SEC-001"
+
+[[req]]
+id = "REQ-BOOT-018"
+title = "Root of trust protected in hardware"
+text = "The boot manager and its trust anchor (the baked public key) shall be protected from field modification by the silicon's own mechanisms: readout protection that disables the debug port, write protection of the boot region, and — where the part provides it — secure-boot verification of the boot manager at power-on. Image-signature verification (REQ-BOOT-011) establishes trust in the application; this requirement establishes that the verifier itself cannot be silently replaced. Distinct from the cryptographic protocol; validated by inspection of the option-byte configuration on a locked device."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-SEC-001"
