@@ -25,12 +25,68 @@ pub:
 // then routes.
 pub fn validate_system(s System) []Issue {
 	mut issues := []Issue{}
+	issues << check_topology_wellformed(s)
+	issues << check_node_configs(s)
 	issues << check_bus_membership(s)
 	issues << check_identity_uniqueness(s)
 	issues << check_bus_single_writer(s)
 	issues << check_frame_single_writer(s)
 	issues << check_nm_cluster_coherence(s)
 	issues << check_routes(s)
+	return issues
+}
+
+// The system contract must be well-formed before the semantic checks trust it:
+// bus interfaces and node names are LOOKUP KEYS. A duplicate interface lets two
+// system buses alias one physical channel (a route between them crosses no wire);
+// a duplicate node name makes route resolution pick the wrong gateway
+// (REQ-TOPO-002/006).
+fn check_topology_wellformed(s System) []Issue {
+	mut issues := []Issue{}
+	mut iface_seen := map[string]string{}
+	for b in s.buses {
+		if b.interface == '' {
+			continue
+		}
+		if prev := iface_seen[b.interface] {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-006'
+				msg:      'buses "${prev}" and "${b.name}" share interface "${b.interface}" — one system bus per physical channel'
+			}
+		} else {
+			iface_seen[b.interface] = b.name
+		}
+	}
+	mut name_seen := map[string]bool{}
+	for n in s.nodes {
+		if n.name in name_seen {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-002'
+				msg:      'duplicate node name "${n.name}" — node names are the route/identity key and must be unique'
+			}
+		} else {
+			name_seen[n.name] = true
+		}
+	}
+	return issues
+}
+
+// A node that can't pass ecucheck can't be generated — surface its structural
+// errors (partition core, fb thread, unique names, …) so a clean system verdict
+// implies buildable nodes (REQ-TOPO-005).
+fn check_node_configs(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		for e in n.view.config_errors {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}" ecu.toml invalid: ${e}'
+			}
+		}
+	}
 	return issues
 }
 
@@ -59,6 +115,19 @@ fn check_bus_membership(s System) []Issue {
 				}
 			}
 		}
+		// the reverse: a local interface that matches a system bus must be CLAIMED
+		// in `buses`, or producers_on/consumers_on (which filter on `buses`) drop
+		// this node's traffic silently — its collisions vanish from the checks.
+		for iface in n.view.local_buses {
+			b := s.bus_by_interface(iface) or { continue }
+			if b.name !in n.buses {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": opens interface [bus.${iface}] (system bus "${b.name}") but does not claim "${b.name}" in its buses — its traffic there is unchecked'
+				}
+			}
+		}
 	}
 	return issues
 }
@@ -67,6 +136,12 @@ fn check_bus_membership(s System) []Issue {
 // nodes writing different signals into the same DBC message still contend for
 // the same PDU on the wire and overwrite each other's fields — signal-level
 // single-writer misses this, so the frame owner is checked directly.
+//
+// SCOPE: this catches EXPLICIT [[frame]] tx ownership. A signal with `to =
+// <bus>` and NO [[frame]] still gets a default transmit frame from loom2v, so
+// two nodes writing different signals that map to the SAME DBC message is a
+// collision this can't see without resolving signals→messages through the bus
+// DBC — that is REQ-TOPO-003 (DBC conformance), deferred pending a DBC parse.
 fn check_frame_single_writer(s System) []Issue {
 	mut issues := []Issue{}
 	for bus in s.buses {
@@ -193,7 +268,9 @@ fn check_identity_uniqueness(s System) []Issue {
 					req:      'REQ-TOPO-005'
 					msg:      'node "${n.name}": system.toml allocates nm 0x${n.nm.hex()} but its ecu.toml has no [nm] block'
 				}
-			} else if n.view.nm_node != 0 && n.view.nm_node != n.nm {
+			} else if n.view.has_nm_node && n.view.nm_node != n.nm {
+				// node id 0 is a valid local id, so compare whenever it is
+				// DECLARED (not just when non-zero) — the system is the source.
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-005'
@@ -257,7 +334,6 @@ fn check_nm_cluster_coherence(s System) []Issue {
 		mut lo := u32(0)
 		mut hi := u32(0)
 		mut anchor := ''
-		mut a := NodeView{}
 		for n in s.nodes {
 			if bus.name !in n.buses || !n.view.has_nm {
 				continue
@@ -266,7 +342,6 @@ fn check_nm_cluster_coherence(s System) []Issue {
 				lo = n.view.peers_lo
 				hi = n.view.peers_hi
 				anchor = n.name
-				a = n.view
 				continue
 			}
 			if n.view.peers_lo != lo || n.view.peers_hi != hi {
@@ -276,20 +351,30 @@ fn check_nm_cluster_coherence(s System) []Issue {
 					msg:      'bus "${bus.name}": NM cluster range mismatch — "${anchor}" has [0x${lo.hex()},0x${hi.hex()}] but "${n.name}" has [0x${n.view.peers_lo.hex()},0x${n.view.peers_hi.hex()}]'
 				}
 			}
-			// the sleep/wake timing must agree too, or the state machines
-			// transition at incompatible times. Compare only params BOTH nodes
-			// declare (0 = defaulted) so an omission doesn't false-positive.
-			for param, pair in {
-				'msg_cycle_ms':  [a.nm_msg_cycle_ms, n.view.nm_msg_cycle_ms]
-				'timeout_ms':    [a.nm_timeout_ms, n.view.nm_timeout_ms]
-				'repeat_ms':     [a.nm_repeat_ms, n.view.nm_repeat_ms]
-				'wait_sleep_ms': [a.nm_wait_sleep_ms, n.view.nm_wait_sleep_ms]
-			} {
-				if pair[0] != 0 && pair[1] != 0 && pair[0] != pair[1] {
+		}
+		// the sleep/wake timing must agree too, or the state machines transition
+		// at incompatible times. Anchor EACH param on its first non-default
+		// declaration (not the cluster anchor) — else a node that omits a param
+		// makes every later conflict compare against its 0 and slip through.
+		for param in ['msg_cycle_ms', 'timeout_ms', 'repeat_ms', 'wait_sleep_ms'] {
+			mut ref := 0
+			mut ref_node := ''
+			for n in s.nodes {
+				if bus.name !in n.buses || !n.view.has_nm {
+					continue
+				}
+				val := nm_timing(n.view, param)
+				if val == 0 {
+					continue
+				}
+				if ref_node == '' {
+					ref = val
+					ref_node = n.name
+				} else if val != ref {
 					issues << Issue{
 						severity: .error
 						req:      'REQ-TOPO-004'
-						msg:      'bus "${bus.name}": NM ${param} mismatch — "${anchor}"=${pair[0]} vs "${n.name}"=${pair[1]}'
+						msg:      'bus "${bus.name}": NM ${param} mismatch — "${ref_node}"=${ref} vs "${n.name}"=${val}'
 					}
 				}
 			}
@@ -311,6 +396,17 @@ fn check_nm_cluster_coherence(s System) []Issue {
 		}
 	}
 	return issues
+}
+
+// nm_timing pulls one NM sleep/wake parameter by name (0 = unset/defaulted).
+fn nm_timing(v NodeView, param string) int {
+	return match param {
+		'msg_cycle_ms' { v.nm_msg_cycle_ms }
+		'timeout_ms' { v.nm_timeout_ms }
+		'repeat_ms' { v.nm_repeat_ms }
+		'wait_sleep_ms' { v.nm_wait_sleep_ms }
+		else { 0 }
+	}
 }
 
 // REQ-TOPO-006: every route references a real gateway that sits on BOTH buses,

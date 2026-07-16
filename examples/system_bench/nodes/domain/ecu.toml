@@ -10,6 +10,7 @@ dbc = "compute.dbc"
 
 [[partition]]
 name = "ctl"
+core = 0
 
   [[partition.thread]]
   name = "engine"
@@ -30,7 +31,8 @@ from = "can0"
 to   = "ctl"
 
 [[fb]]
-name = "EngineCtl"
+name   = "EngineCtl"
+thread = "engine"
 
   [[fb.handler]]
   name      = "on_100ms"

@@ -10,6 +10,7 @@ dbc = "compute.dbc"
 
 [[partition]]
 name = "app"
+core = 0
 
   [[partition.thread]]
   name = "ctrl"
@@ -30,7 +31,8 @@ from = "can0"
 to   = "app"
 
 [[fb]]
-name = "Dashboard"
+name   = "Dashboard"
+thread = "ctrl"
 
   [[fb.handler]]
   name      = "on_100ms"
