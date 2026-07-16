@@ -505,6 +505,111 @@ totally_unknown_key = 42
 	assert view.config_errors.any(it.contains('unknown key') || it.contains('totally_unknown_key')), view.config_errors.str()
 }
 
+// --- P1b dissolution model (validate_system_gen) ---
+
+// a clean dissolved system: two cross-node signals declared at system scope,
+// nodes carry only FB read/write intent. `a` produces Speed + reads Rpm; `b`
+// produces Rpm + reads Speed.
+fn clean_dissolved() System {
+	return System{
+		buses:   [Bus{
+			name:           'compute'
+			interface:      'can0'
+			has_nm_cluster: true
+			nm_peers_lo:    0x500
+			nm_peers_hi:    0x53f
+		}]
+		signals: [
+			SysSignal{
+				name:     'Speed'
+				producer: 'a'
+				bus:      'compute'
+				frame:    'SpeedFrame'
+				fields:   {
+					'kph': 'u16'
+				}
+			},
+			SysSignal{
+				name:     'Rpm'
+				producer: 'b'
+				bus:      'compute'
+				frame:    'RpmFrame'
+				fields:   {
+					'rpm': 'u16'
+				}
+			},
+		]
+		nodes:   [
+			Node{
+				name:         'a'
+				buses:        ['compute']
+				nm:           0x11
+				has_nm_alloc: true
+				trace:        1
+				view:         NodeView{
+					fb_writes:   ['Speed']
+					fb_reads:    ['Rpm']
+					local_buses: ['can0']
+				}
+			},
+			Node{
+				name:         'b'
+				buses:        ['compute']
+				nm:           0x13
+				has_nm_alloc: true
+				trace:        2
+				view:         NodeView{
+					fb_writes:   ['Rpm']
+					fb_reads:    ['Speed']
+					local_buses: ['can0']
+				}
+			},
+		]
+	}
+}
+
+fn test_dissolved_clean() {
+	issues := validate_system_gen(clean_dissolved())
+	assert errs(issues).len == 0, 'clean dissolved system flagged: ${errs(issues)}'
+}
+
+// REQ-TOPO-001: a signal whose producer isn't a declared node.
+fn test_dissolved_producer_not_a_node() {
+	mut s := clean_dissolved()
+	s.signals[0].producer = 'ghost'
+	assert errs(validate_system_gen(s)).any(it.contains('producer "ghost" is not a declared node'))
+}
+
+// REQ-TOPO-001: the producer must sit on the signal's bus.
+fn test_dissolved_producer_off_bus() {
+	mut s := clean_dissolved()
+	s.nodes[0].buses = [] // 'a' produces Speed on compute but isn't on it
+	assert errs(validate_system_gen(s)).any(it.contains('does not sit on its bus'))
+}
+
+// REQ-TOPO-005: the producer's FBs must actually write the signal.
+fn test_dissolved_producer_doesnt_write() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.fb_writes = [] // 'a' declared producer of Speed but writes nothing
+	assert errs(validate_system_gen(s)).any(it.contains('has no FB that writes it'))
+}
+
+// REQ-TOPO-001: two signals in one DBC frame from different producers contend.
+fn test_dissolved_frame_owner_collision() {
+	mut s := clean_dissolved()
+	s.signals[1].frame = 'SpeedFrame' // Rpm(prod b) shares SpeedFrame with Speed(prod a)
+	assert errs(validate_system_gen(s)).any(it.contains('one frame owner per bus'))
+}
+
+// REQ-TOPO-001: a signal no other node reads is a warning, not an error.
+fn test_dissolved_unread_signal_is_warning() {
+	mut s := clean_dissolved()
+	s.nodes[1].view.fb_reads = [] // nobody reads Speed anymore
+	issues := validate_system_gen(s)
+	assert errs(issues).len == 0
+	assert issues.any(it.severity == .warning && it.msg.contains('Speed') && it.msg.contains('read by no other node'))
+}
+
 // parse_system + load_node round-trip on a written system.toml + node ecu.toml.
 fn test_parse_and_load_roundtrip() {
 	dir := os.join_path(os.temp_dir(), 'sysmodel_test_${os.getpid()}')

@@ -36,6 +36,164 @@ pub fn validate_system(s System) []Issue {
 	return issues
 }
 
+// validate_system_gen — the checks for the DISSOLUTION model (docs/multi-node.md
+// P1b): cross-node signals are declared once in system.toml with a producer, and
+// nodes carry only FB read/write intent. Identity/NM/route checks are shared
+// with the composed model; single-writer/reachability come from the producer +
+// FB intent instead of per-node [[signal]] endpoints. (The per-node ecucheck
+// runs on the GENERATED output, in sysgen — a partial node can't pass alone.)
+pub fn validate_system_gen(s System) []Issue {
+	mut issues := []Issue{}
+	issues << check_topology_wellformed(s)
+	issues << check_identity_alloc(s)
+	issues << check_routes(s)
+	issues << check_signals_dissolved(s)
+	return issues
+}
+
+// check_identity_alloc: uniqueness of the SYSTEM-ALLOCATED ids (dissolution).
+// The [nm]/alive/timing are GENERATED into each node from system.toml, so there
+// is no authored node identity to cross-check and the cluster is coherent by
+// construction — only uniqueness across the allocations matters (REQ-TOPO-002).
+// (alive = peers base + nm, so it is unique whenever nm is.)
+fn check_identity_alloc(s System) []Issue {
+	mut issues := []Issue{}
+	mut nm_seen := map[u32]string{}
+	mut diag_seen := map[u32]string{}
+	mut trace_seen := map[int]string{}
+	for n in s.nodes {
+		if n.has_nm_alloc {
+			if prev := nm_seen[n.nm] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-002'
+					msg:      'NM id 0x${n.nm.hex()} shared by "${prev}" and "${n.name}"'
+				}
+			} else {
+				nm_seen[n.nm] = n.name
+			}
+		}
+		for kind, id in {
+			'request':  n.diag.req
+			'response': n.diag.rsp
+		} {
+			if id == 0 {
+				continue
+			}
+			if prev := diag_seen[id] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-002'
+					msg:      'diagnostic ${kind} id 0x${id.hex()} (node "${n.name}") collides with an id already used by "${prev}"'
+				}
+			} else {
+				diag_seen[id] = n.name
+			}
+		}
+		if n.trace != 0 {
+			if prev := trace_seen[n.trace] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-002'
+					msg:      'trace node id ${n.trace} shared by "${prev}" and "${n.name}"'
+				}
+			} else {
+				trace_seen[n.trace] = n.name
+			}
+		}
+	}
+	return issues
+}
+
+// check_signals_dissolved: single-writer + reachability over system-scope
+// signals. Each SysSignal has exactly one declared producer (REQ-TOPO-001) that
+// sits on the signal's bus and actually WRITES it (REQ-TOPO-005 consistency); a
+// signal an FB writes but the system doesn't declare, or two signals sharing a
+// DBC frame across producers, is a bug; a signal no FB reads is a warning.
+fn check_signals_dissolved(s System) []Issue {
+	mut issues := []Issue{}
+	mut frame_owner := map[string]string{} // frame -> producer node
+	for sig in s.signals {
+		// the producer must be a declared node on the signal's bus
+		mut prod := ?Node(none)
+		for n in s.nodes {
+			if n.name == sig.producer {
+				prod = n
+				break
+			}
+		}
+		p := prod or {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}": producer "${sig.producer}" is not a declared node'
+			}
+			continue
+		}
+		if sig.bus !in p.buses {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}": producer "${p.name}" does not sit on its bus "${sig.bus}"'
+			}
+		}
+		// the producer's FBs must actually write it (else nothing drives the tx)
+		if sig.name !in p.view.fb_writes {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'signal "${sig.name}": producer "${p.name}" has no FB that writes it'
+			}
+		}
+		// one producer per DBC frame — two signals in one frame from two nodes
+		// contend for the PDU on the wire (REQ-TOPO-001)
+		if sig.frame != '' {
+			if prev := frame_owner[sig.frame] {
+				if prev != sig.producer {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-001'
+						msg:      'frame "${sig.frame}": carries signals from both "${prev}" and "${sig.producer}" — one frame owner per bus'
+					}
+				}
+			} else {
+				frame_owner[sig.frame] = sig.producer
+			}
+		}
+		// reachability: does anyone read it? (a produced-but-unconsumed signal)
+		mut consumed := false
+		for n in s.nodes {
+			if n.name != sig.producer && sig.name in n.view.fb_reads {
+				consumed = true
+				break
+			}
+		}
+		if !consumed {
+			issues << Issue{
+				severity: .warning
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}" (producer "${sig.producer}") is read by no other node'
+			}
+		}
+	}
+	// an FB that WRITES a name the system never declared can't be wired
+	// cross-node (it may be a node-local signal, but P1's dissolution routes all
+	// cross-node signals through system.toml — flag the unknown as a warning).
+	for n in s.nodes {
+		for w in n.view.fb_writes {
+			if _ := s.signal_by_name(w) {
+				continue
+			}
+			issues << Issue{
+				severity: .warning
+				req:      'REQ-TOPO-001'
+				msg:      'node "${n.name}": FB writes "${w}" which system.toml does not declare (node-local, or a missing system signal)'
+			}
+		}
+	}
+	return issues
+}
+
 // The system contract must be well-formed before the semantic checks trust it:
 // bus interfaces and node names are LOOKUP KEYS. A duplicate interface lets two
 // system buses alias one physical channel (a route between them crosses no wire);

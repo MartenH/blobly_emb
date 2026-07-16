@@ -2,9 +2,7 @@
 
 The smallest real *system* of ECUs (docs/multi-node.md): the **H735-DK system
 node** and the **H755 dual-core domain controller** on one shared bus
-(`compute`), exchanging a signal and sharing an NM cluster. It exists to exercise
-the **system-level validator** — the cross-node checks a single `ecu.toml`
-cannot do because it cannot see its peers.
+(`compute`), exchanging a signal and sharing an NM cluster.
 
 ```
    sysnode (H735, nm 0x11)            domain (H755, nm 0x13)
@@ -13,50 +11,71 @@ cannot do because it cannot see its peers.
                         compute bus (can0, 500 kbit)
 ```
 
-## Run the checks
+## The dissolution model (P1b)
+
+A cross-node signal is authored **once**, in `system.toml`, with its producer and
+DBC frame:
+
+```toml
+[[signal]]
+name     = "VehicleSpeed"
+fields   = { kph = "u16" }
+producer = "sysnode"
+bus      = "compute"
+frame    = "VehSpeedFrame"   # authored in compute.dbc
+```
+
+Each node's `ecu.toml` under `nodes/<name>/` carries **only its internals** — a
+partition/thread and FBs that `read`/`write` those signals by name. No `[bus]`,
+no `[[signal]]` bus lines, no `[[frame]]`, no `[nm]`: those are **generated**.
+
+```toml
+# nodes/sysnode/ecu.toml  (authored — internals only)
+[[fb.handler]]
+name   = "on_100ms"
+reads  = ["EngineRpm"]      # a cross-node signal
+writes = ["VehicleSpeed"]   # a cross-node signal
+```
+
+## Generate + check
 
 ```sh
-make syscheck                       # = tools/syscheck examples/system_bench/system.toml
-# or point it anywhere:
-make syscheck SYSTEM=path/to/system.toml
+make gen-system     # sysgen -> gen-<node>.toml per node, each gated by ecucheck
+make syscheck       # cross-node checks (single-writer, identity, NM, routes)
 ```
 
-Clean output (every compute-bus signal has exactly one writer and one reader,
-identities are unique, the cluster agrees):
+`make gen-system` merges `system.toml` + each node's internals into a **complete**
+`gen-<node>.toml` (derived `[bus]`/`[[signal]]`/`[[frame]]` wiring + a generated
+`[nm]` identity, `alive = peers.lo + node`), then runs the real `ecucheck` on the
+result — so a generated node is guaranteed buildable by `loom2v`. The DBC is never
+touched (it's the authored wire contract). `make syscheck` auto-detects the
+dissolution model from the presence of system-scope `[[signal]]`s.
 
-```
-system: 1 bus(es), 2 node(s), 0 route(s)
-  bus compute: can0 500000 classic (compute.dbc)
-  node sysnode: nm=0x11 trace=1 buses=['compute']
-  node domain: nm=0x13 trace=2 buses=['compute']
-syscheck: OK (0 warning(s))
-```
+## What is authored vs generated
 
-## What is authored vs owned by the system
-
-Each node keeps its **own `ecu.toml`** under `nodes/<name>/` — its partitions,
-threads, and FBs (the logic). `system.toml` owns the **cross-node contract**: the
-buses and their DBCs, and each node's **identities** (NM id, diagnostic address,
-trace id). The validator cross-checks that the two agree (a node's `[nm] node`
-must match the `nm` the system allocates it) and that the composition is sound.
+| | authored | generated |
+|---|---|---|
+| **system.toml** | buses (+ DBC, NM cluster), cross-node signals (+ producer/frame), node identities | — |
+| **node ecu.toml** | partitions/threads/FBs + read/write intent | — |
+| **compute.dbc** | frame ids + bit layout (the wire contract) | — |
+| **gen-<node>.toml** | — | `[bus]` + `[[signal]]` tx/rx + `[[frame]]` + `[nm]`, then the authored internals |
 
 ## The checks (REQ-TOPO-*)
 
 | Check | Requirement |
 |---|---|
-| One transmitter + at least one receiver per signal, per bus | REQ-TOPO-001 |
-| One owner per CAN frame, per bus | REQ-TOPO-001 |
-| Bus-scoped reachability (a consumer needs a producer on its bus or a route) | REQ-TOPO-001 |
-| NM / alive / diagnostic / trace id uniqueness | REQ-TOPO-002 |
+| One producer per signal, on its bus, whose FB writes it | REQ-TOPO-001/005 |
+| One owner per DBC frame | REQ-TOPO-001 |
+| Every read/written signal is reachable (a producer, or a route) | REQ-TOPO-001 |
+| NM / diagnostic / trace id uniqueness | REQ-TOPO-002 |
 | Per-bus DBC conformance | REQ-TOPO-003 *(deferred — needs a DBC parse)* |
-| NM cluster coherence — peers range + sleep/wake timing, alive-in-range | REQ-TOPO-004 |
-| System↔node identity consistency; a bus a node claims maps to its ecu.toml | REQ-TOPO-005 |
+| NM cluster is system-declared (peers + timing), coherent by construction | REQ-TOPO-004 |
+| Identities system-allocated; a claimed bus maps to the node | REQ-TOPO-005 |
 | Route validity — gateway on both buses, distinct from/to, one of frame/signal | REQ-TOPO-006 |
 
 ## Next (docs/multi-node.md)
 
-- **P1b** — *generate* each node's bus wiring from `system.toml` (the
-  "dissolution": declare a cross-node signal once, emit the tx/rx into each
-  node) rather than hand-authoring it on both sides.
+- **P1b-2** — DBC conformance (REQ-TOPO-003): parse `compute.dbc` and check every
+  signal's layout + one `BO_` transmitter per frame (closes the implicit-frame gap).
 - **P2** — add the **edge** bus (its own DBC) and an H723; the sysnode gateways
   `compute`↔`edge` with a frame route and a signal route.

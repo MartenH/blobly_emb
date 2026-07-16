@@ -20,12 +20,18 @@ fn main() {
 		eprintln('syscheck: ${err}')
 		exit(2)
 	}
-	load_errs := sys.load_nodes()
+	// two authoring models (docs/multi-node.md): DISSOLUTION — the system declares
+	// cross-node [[signal]]s and nodes are partial (internals only), gated once
+	// generated; or COMPOSED — nodes are complete ecu.tomls that hand-author their
+	// bus signals. The presence of system-scope [[signal]] picks the model.
+	dissolved := sys.signals.len > 0
+	load_errs := if dissolved { sys.load_nodes_partial() } else { sys.load_nodes() }
 	for e in load_errs {
 		eprintln('syscheck: could not load ${e}')
 	}
 
-	println('system: ${sys.buses.len} bus(es), ${sys.nodes.len} node(s), ${sys.routes.len} route(s)')
+	mode := if dissolved { 'dissolution' } else { 'composed' }
+	println('system (${mode}): ${sys.buses.len} bus(es), ${sys.nodes.len} node(s), ${sys.signals.len} signal(s), ${sys.routes.len} route(s)')
 	for b in sys.buses {
 		fd := if b.fd { 'FD' } else { 'classic' }
 		println('  bus ${b.name}: ${b.interface} ${b.bitrate} ${fd} (${b.dbc})')
@@ -34,7 +40,7 @@ fn main() {
 		println('  node ${n.name}: nm=0x${n.nm.hex()} trace=${n.trace} buses=${n.buses}')
 	}
 
-	issues := sysmodel.validate_system(sys)
+	issues := if dissolved { sysmodel.validate_system_gen(sys) } else { sysmodel.validate_system(sys) }
 	mut nerr := 0
 	mut nwarn := 0
 	for iss in issues {
