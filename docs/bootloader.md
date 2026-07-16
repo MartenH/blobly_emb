@@ -330,6 +330,27 @@ somehow bypassed every session barrier still cannot make the boot manager run
 an image that fails this check; a torn or tampered transfer leaves an invalid
 header the decide() path refuses forever.
 
+## Bench log — P5 authenticity, 2026-07-16 (H755)
+
+The full asymmetric chain on real silicon:
+
+- **Ed25519 image signature** verified on the CM7 before the mark: a
+  `mkimage --sign` image (51 KB, dev key) delivered over CAN → the boot streamed
+  the image through SHA-512 + Ed25519 verify (no-alloc, no heap on the target) →
+  valid mark → reset → app v10 ran. A wrongly-signed or tampered image is
+  refused (no mark).
+- **0x29 session gate** with the STM32H7 **hardware TRNG** as the challenge
+  source: request challenge → tester signs with the dev private key → CM7
+  verifies with the baked public key → flash services unlocked. A **wrong tester
+  seed** is rejected with NRC 0x35 and nothing is flashed.
+- The boot image is 38.6 KB (crypto included), verify path allocation-free
+  (`lint_vinit` + the no-heap source guard), challenge from `board_rng` (HSI48
+  kernel clock, bounded polling → conditionsNotCorrect if the RNG is dead).
+
+Dev key: `examples/keys/dev.seed` (00..1f, clearly not-for-production); public
+key baked into the boot. `cmd/flash` takes the tester seed from
+`$BLOBLY_FLASH_SEED` or the dev default.
+
 ## Bench log — NUCLEO-H755ZI-Q, 2026-07-15 (first silicon pass)
 
 The dry-coded chain, end to end on the H755 bench (ST-LINK + PCAN, classic 500 k):
