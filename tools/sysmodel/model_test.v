@@ -2,7 +2,7 @@ module sysmodel
 
 import os
 
-// @verifies REQ-TOPO-001, REQ-TOPO-002, REQ-TOPO-004, REQ-TOPO-006
+// @verifies REQ-TOPO-001, REQ-TOPO-002, REQ-TOPO-004, REQ-TOPO-005, REQ-TOPO-006
 
 fn errs(issues []Issue) []string {
 	mut out := []string{}
