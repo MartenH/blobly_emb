@@ -68,16 +68,19 @@ pub mut:
 	// the bootloader's own region — is rejected at erase and download time.
 	app_base u32
 	app_size u32
-	// Ed25519 image-authenticity public key (REQ-BOOT-011). When non-zero the
-	// check routine REQUIRES a valid signature over header[0..32] ‖ image before
-	// writing the valid mark; all-zero disables the check (tests / a transition
-	// build). The seed that signs is never on the ECU — see examples/keys.
-	pubkey [32]u8
-	// 0x29 Authentication (REQ-BOOT-016): the tester proves it holds a private
-	// key by signing an ECU-chosen random challenge; the boot verifies with
-	// `pubkey`. `rng` fills the challenge (the board's TRNG on target, a
-	// deterministic source in tests) — a null rng leaves the session unlockable
-	// (fail-closed). Replaces the 0x27 seed/key entirely.
+	// TWO separate trust anchors — different keys, different custody (see
+	// examples/keys). The private halves are NEVER on the ECU.
+	//   image_key   — verifies the firmware signature (REQ-BOOT-011). Its private
+	//                 half is the RELEASE key (mkimage.seed), an offline/HSM key
+	//                 in the build pipeline. Leak ⇒ forged firmware (catastrophic).
+	//   session_key — verifies the 0x29 proof (REQ-BOOT-016). Its private half is
+	//                 the TESTER key (tester.seed), out in the field with the
+	//                 technician. Leak ⇒ start sessions only (annoyance, not RCE).
+	// All-zero disables the respective check (tests / a transition build).
+	image_key   [32]u8
+	session_key [32]u8
+	// 0x29 challenge source: the board's TRNG on target, a deterministic source
+	// in tests. A null rng leaves the session unlockable (fail-closed).
 	rng fn (out &u8, n int) bool = unsafe { nil }
 	unlocked        bool
 	challenge       [32]u8
@@ -189,7 +192,7 @@ fn (mut p Prog) authentication(req &u8, req_len int, resp &u8) int {
 	match sub {
 		auth_request_challenge {
 			// no rng / no key baked -> cannot authenticate (fail-closed)
-			if p.rng == unsafe { nil } || p.pubkey_is_zero() {
+			if p.rng == unsafe { nil } || key_is_zero(p.session_key) {
 				return negative(resp, 0x29, nrc_conditions_not_correct)
 			}
 			if !p.rng(&p.challenge[0], 32) {
@@ -220,7 +223,7 @@ fn (mut p Prog) authentication(req &u8, req_len int, resp &u8) int {
 			}
 			p.challenge_valid = false // one-shot: a fresh challenge per attempt
 			// verify the signature over the challenge (no-alloc streaming verify)
-			mut v := bcrypto.verify_start(p.pubkey, sig)
+			mut v := bcrypto.verify_start(p.session_key, sig)
 			v.update(&p.challenge[0], 32)
 			if !v.finish() {
 				return negative(resp, 0x29, nrc_invalid_key)
@@ -422,10 +425,10 @@ fn (mut p Prog) ecu_reset(req &u8, req_len int, resp &u8) int {
 	return 2
 }
 
-// pubkey_is_zero reports whether image-signature verification is disabled
-// (an all-zero key). A real boot bakes a non-zero key and always verifies.
-fn (p &Prog) pubkey_is_zero() bool {
-	for b in p.pubkey {
+// key_is_zero reports whether a trust anchor is unset (all-zero) — the gate it
+// guards is then disabled. A real boot bakes non-zero keys and always verifies.
+fn key_is_zero(k [32]u8) bool {
+	for b in k {
 		if b != 0 {
 			return false
 		}
@@ -447,7 +450,7 @@ fn (mut p Prog) check_and_mark() bool {
 	}
 	// a signed image also has a 64-byte signature after the image; require the
 	// whole extent (header ‖ image ‖ sig) to sit inside the app window.
-	signed := !p.pubkey_is_zero()
+	signed := !key_is_zero(p.image_key)
 	sig_span := if signed { u32(64) } else { u32(0) }
 	if h.image_len == 0 || h.image_len > max_image_len
 		|| !p.region_ok(p.app_base, hdr_size + h.image_len + sig_span) {
@@ -464,7 +467,7 @@ fn (mut p Prog) check_and_mark() bool {
 		if !p.flash.read(p.flash.ctx, p.app_base + hdr_size + h.image_len, &sig[0], 64) {
 			return false
 		}
-		ver = bcrypto.verify_start(p.pubkey, sig)
+		ver = bcrypto.verify_start(p.image_key, sig)
 		ver.update(&hdr[0], 32)
 	}
 	mut crc := u32(0xFFFF_FFFF)
