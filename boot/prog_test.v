@@ -475,3 +475,45 @@ fn test_key_separation_tester_cannot_forge_image() {
 	assert ask(mut p, [u8(0x31), 0x01, 0xFF, 0x01]) == [u8(0x71), 0x01, 0xFF, 0x01, 0x01]
 	assert !check_image(&f.mem[0])
 }
+
+// @verifies REQ-BOOT-011
+// A stale VALD must not survive into a new download: an erase that leaves the
+// mark word intact -> request_download is refused (else a failed check would
+// leave the old mark and reset would boot the new unsigned image).
+fn test_stale_mark_blocks_download() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	// pre-existing valid mark in word1 (a previous good image)
+	f.mem[32] = 0x56 // 'V' 'A' 'L' 'D'
+	f.mem[33] = 0x41
+	f.mem[34] = 0x4C
+	f.mem[35] = 0x44
+	unlock(mut p)
+	// erase the IMAGE body but NOT the header/mark word (addr past the mark)
+	er := [u8(0x31), 0x01, 0xFF, 0x00, u8((t_base + 0x1000) >> 24), u8((t_base + 0x1000) >> 16),
+		u8((t_base + 0x1000) >> 8), u8(t_base + 0x1000), 0x00, 0x00, 0x10, 0x00]
+	assert ask(mut p, er)[0] == 0x71
+	// download refused: the stale mark word is still 'VALD'
+	dl := [u8(0x34), 0x00, 0x44, u8(t_base >> 24), u8(t_base >> 16), u8(t_base >> 8), u8(t_base),
+		0x00, 0x00, 0x02, 0x00]
+	assert ask(mut p, dl) == [u8(0x7F), 0x34, 0x22]
+}
+
+// @verifies REQ-BOOT-016
+// Keyless transition build (no session key): flash-write works WITHOUT 0x29.
+fn test_keyless_build_flashes_open() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	p.session_key = [32]u8{} // no session key -> open flashing
+	p.image_key = [32]u8{} // and no image key -> no signature required
+	assert ask(mut p, [u8(0x10), 0x02])[0] == 0x50
+	// erase without any 0x29 unlock -> allowed
+	er := [u8(0x31), 0x01, 0xFF, 0x00, u8(t_base >> 24), u8(t_base >> 16), u8(t_base >> 8),
+		u8(t_base), u8(t_size >> 24), u8(t_size >> 16), u8(t_size >> 8), u8(t_size)]
+	assert ask(mut p, er) == [u8(0x71), 0x01, 0xFF, 0x00, 0x00]
+	// and an unsigned image marks valid (image_key zero -> no verify)
+	img := payload_image(400)
+	transfer(mut p, img)
+	assert ask(mut p, [u8(0x31), 0x01, 0xFF, 0x01]) == [u8(0x71), 0x01, 0xFF, 0x01, 0x00]
+	assert check_image(&f.mem[0])
+}

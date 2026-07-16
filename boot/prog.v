@@ -163,6 +163,14 @@ fn (mut p Prog) in_programming_session() bool {
 	return p.srv.session == 0x02
 }
 
+// write_locked: flash-write services (erase/download/check) require a passed
+// 0x29 unlock — UNLESS no session key is baked, in which case a keyless
+// transition/dev build flashes openly (REQ-BOOT-016). Independent of image_key:
+// a build can require signed images without a session gate, or vice versa.
+fn (p &Prog) write_locked() bool {
+	return !p.unlocked && !key_is_zero(p.session_key)
+}
+
 // region_ok: [addr, addr+size) inside the app window, non-empty, no overflow.
 fn (p Prog) region_ok(addr u32, size u32) bool {
 	if size == 0 {
@@ -251,7 +259,7 @@ fn (mut p Prog) routine_control(req &u8, req_len int, resp &u8) int {
 	if sub != 0x01 {
 		return negative(resp, 0x31, nrc_request_out_of_range)
 	}
-	if !p.in_programming_session() || !p.unlocked {
+	if !p.in_programming_session() || p.write_locked() {
 		return negative(resp, 0x31, nrc_security_access_denied)
 	}
 	match rid {
@@ -295,11 +303,25 @@ fn (mut p Prog) request_download(req &u8, req_len int, resp &u8) int {
 	if req_len < 11 {
 		return negative(resp, 0x34, nrc_incorrect_length)
 	}
-	if !p.in_programming_session() || !p.unlocked {
+	if !p.in_programming_session() || p.write_locked() {
 		return negative(resp, 0x34, nrc_security_access_denied)
 	}
 	if !p.erased {
 		return negative(resp, 0x34, nrc_request_sequence_error)
+	}
+	// a STALE valid mark must not survive into a new download: if the erase left
+	// 'VALD' in word1 (an erase that didn't cover the mark word, or a permissive
+	// backend), a later failed check_and_mark would leave the old mark and reset
+	// would boot the new UNSIGNED image (check_image trusts the mark, not the
+	// signature). Require the mark word blanked first — the app-sector erase that
+	// programming the header needs already does this on real flash (REQ-BOOT-011).
+	mut mk := [4]u8{}
+	if !p.flash.read(p.flash.ctx, p.app_base + 32, &mk[0], 4) {
+		return negative(resp, 0x34, nrc_general_programming_failure)
+	}
+	if mk[0] == u8(valid_mark) && mk[1] == u8(valid_mark >> 8) && mk[2] == u8(valid_mark >> 16)
+		&& mk[3] == u8(valid_mark >> 24) {
+		return negative(resp, 0x34, nrc_conditions_not_correct) // erase the mark word first
 	}
 	if unsafe { req[1] } != 0x00 || unsafe { req[2] } != 0x44 {
 		return negative(resp, 0x34, nrc_request_out_of_range)
