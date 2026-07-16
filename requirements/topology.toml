@@ -39,8 +39,8 @@ derives = "SYS-REQ-TOPO-001"
 
 [[req]]
 id = "REQ-TOPO-005"
-title = "Per-node generation and independence"
-text = "Each node shall be generated from the system composition together with its own node description, and shall remain buildable and testable in isolation; the system composition allocates identity and validates cross-node consistency without absorbing the node descriptions."
+title = "System-sourced generation with local application"
+text = "The cross-node contract (buses, cross-node signals, routes, identities) shall be declared once in the system composition, from which each node's system-facing wiring and the routing are generated; a node authors only its application (its function blocks and internal structure) and shall remain developable and unit-testable in isolation. The generator merges the system contract with each node's authored internals to produce that node's complete output; a node shall not re-declare the cross-node contract."
 status = "draft"
 method = "analysis"
 asil = "QM"
