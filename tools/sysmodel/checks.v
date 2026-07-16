@@ -46,8 +46,47 @@ pub fn validate_system_gen(s System) []Issue {
 	mut issues := []Issue{}
 	issues << check_topology_wellformed(s)
 	issues << check_identity_alloc(s)
+	issues << check_dissolved_nodes(s)
 	issues << check_routes(s)
 	issues << check_signals_dissolved(s)
+	return issues
+}
+
+// check_dissolved_nodes: node-shape rules the generator relies on. Every node
+// gets a generated [nm], so every node must be NM-allocated (REQ-TOPO-005) and
+// its derived alive id (peers base + node) must land in the cluster range
+// (REQ-TOPO-004). P1 emits wiring for ONE bus per node; a multi-bus (gateway)
+// node is P2 — reject it now rather than silently wiring everything to bus[0].
+fn check_dissolved_nodes(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		if !n.has_nm_alloc {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": system.toml must allocate an `nm` (the generator emits [nm] for every node)'
+			}
+		}
+		if n.buses.len != 1 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-006'
+				msg:      'node "${n.name}": is on ${n.buses.len} buses — P1 generation wires exactly one bus per node (a multi-bus gateway is P2)'
+			}
+			continue
+		}
+		bus := s.bus_by_name(n.buses[0]) or { continue }
+		if bus.has_nm_cluster && n.has_nm_alloc {
+			alive := bus.nm_peers_lo + n.nm
+			if alive < bus.nm_peers_lo || alive > bus.nm_peers_hi {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-004'
+					msg:      'node "${n.name}": derived alive id 0x${alive.hex()} (peers base + nm 0x${n.nm.hex()}) is outside the cluster range [0x${bus.nm_peers_lo.hex()},0x${bus.nm_peers_hi.hex()}]'
+				}
+			}
+		}
+	}
 	return issues
 }
 
@@ -112,6 +151,21 @@ fn check_identity_alloc(s System) []Issue {
 // DBC frame across producers, is a bug; a signal no FB reads is a warning.
 fn check_signals_dissolved(s System) []Issue {
 	mut issues := []Issue{}
+	// a cross-node signal is declared EXACTLY ONCE — a duplicate makes
+	// signal_by_name (consumers) disagree with generate_node (which emits a tx
+	// per declaration) (REQ-TOPO-001).
+	mut sig_seen := map[string]bool{}
+	for sig in s.signals {
+		if sig.name in sig_seen {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}" declared more than once — a cross-node signal is declared exactly once'
+			}
+		} else {
+			sig_seen[sig.name] = true
+		}
+	}
 	mut frame_owner := map[string]string{} // frame -> producer node
 	for sig in s.signals {
 		// the producer must be a declared node on the signal's bus
@@ -137,12 +191,26 @@ fn check_signals_dissolved(s System) []Issue {
 				msg:      'signal "${sig.name}": producer "${p.name}" does not sit on its bus "${sig.bus}"'
 			}
 		}
-		// the producer's FBs must actually write it (else nothing drives the tx)
-		if sig.name !in p.view.fb_writes {
+		// the producer's FBs must write it EXACTLY ONCE — zero = nothing drives
+		// the tx; two+ = two publishers to one SPSC channel (the ThreadX emitter
+		// rejects that shape too) (REQ-TOPO-005).
+		mut nwrite := 0
+		for w in p.view.fb_writes {
+			if w == sig.name {
+				nwrite++
+			}
+		}
+		if nwrite == 0 {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-005'
 				msg:      'signal "${sig.name}": producer "${p.name}" has no FB that writes it'
+			}
+		} else if nwrite > 1 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}": producer "${p.name}" writes it from ${nwrite} FBs — a signal needs exactly one writer'
 			}
 		}
 		// one producer per DBC frame — two signals in one frame from two nodes
@@ -176,18 +244,37 @@ fn check_signals_dissolved(s System) []Issue {
 			}
 		}
 	}
-	// an FB that WRITES a name the system never declared can't be wired
-	// cross-node (it may be a node-local signal, but P1's dissolution routes all
-	// cross-node signals through system.toml — flag the unknown as a warning).
+	// every FB read/write must reference a DECLARED system signal, and only the
+	// declared producer may write it — else the generator emits a port to an
+	// undeclared sig.<name> type (build fails despite a "gated" report), or wires
+	// a second transmitter of the frame. P1 routes ALL cross-node signals through
+	// system.toml (node-local signals are a future extension) (REQ-TOPO-001).
 	for n in s.nodes {
 		for w in n.view.fb_writes {
-			if _ := s.signal_by_name(w) {
+			if sig := s.signal_by_name(w) {
+				if sig.producer != n.name {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-001'
+						msg:      'node "${n.name}": FB writes "${w}" but its declared producer is "${sig.producer}" — only the producer may write a signal'
+					}
+				}
+			} else {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'node "${n.name}": FB writes "${w}" which system.toml does not declare'
+				}
+			}
+		}
+		for r in n.view.fb_reads {
+			if _ := s.signal_by_name(r) {
 				continue
 			}
 			issues << Issue{
-				severity: .warning
+				severity: .error
 				req:      'REQ-TOPO-001'
-				msg:      'node "${n.name}": FB writes "${w}" which system.toml does not declare (node-local, or a missing system signal)'
+				msg:      'node "${n.name}": FB reads "${r}" which system.toml does not declare'
 			}
 		}
 	}

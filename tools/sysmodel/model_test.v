@@ -610,6 +610,67 @@ fn test_dissolved_unread_signal_is_warning() {
 	assert issues.any(it.severity == .warning && it.msg.contains('Speed') && it.msg.contains('read by no other node'))
 }
 
+// --- P1b dissolution: codex #142 round-1 fixes ---
+
+// REQ-TOPO-004: a node whose derived alive id (peers base + nm) falls outside
+// the cluster range would be ignored by NM.
+fn test_dissolved_alive_out_of_range() {
+	mut s := clean_dissolved()
+	s.nodes[0].nm = 0x40 // 0x500 + 0x40 = 0x540, outside [0x500,0x53f]
+	assert errs(validate_system_gen(s)).any(it.contains('outside the cluster range'))
+}
+
+// REQ-TOPO-001: a cross-node signal declared twice.
+fn test_dissolved_duplicate_signal_name() {
+	mut s := clean_dissolved()
+	s.signals << SysSignal{
+		name:     'Speed'
+		producer: 'a'
+		bus:      'compute'
+		frame:    'SpeedFrame'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('declared more than once'))
+}
+
+// REQ-TOPO-001: an FB reading a signal the system never declared.
+fn test_dissolved_unknown_read_is_error() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.fb_reads = ['Rpm', 'Ghost']
+	assert errs(validate_system_gen(s)).any(it.contains('reads "Ghost"') && it.contains('does not declare'))
+}
+
+// REQ-TOPO-005: a node with no NM allocation (the generator always emits [nm]).
+fn test_dissolved_node_without_nm_alloc() {
+	mut s := clean_dissolved()
+	s.nodes[0].has_nm_alloc = false
+	assert errs(validate_system_gen(s)).any(it.contains('must allocate an `nm`'))
+}
+
+// REQ-TOPO-006: a multi-bus node (P1 wires one bus per node; gateways are P2).
+fn test_dissolved_multibus_node_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[0].buses = ['compute', 'edge']
+	assert errs(validate_system_gen(s)).any(it.contains('wires exactly one bus per node'))
+}
+
+// REQ-TOPO-001: the producer writing a signal from two FBs (two publishers).
+fn test_dissolved_two_writers_rejected() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.fb_writes = ['Speed', 'Speed'] // two handlers write Speed
+	assert errs(validate_system_gen(s)).any(it.contains('writes it from 2 FBs'))
+}
+
+// REQ-TOPO-001: a NON-producer node writing a declared signal.
+fn test_dissolved_nonproducer_write_rejected() {
+	mut s := clean_dissolved()
+	s.nodes[1].view.fb_writes = ['Rpm', 'Speed'] // b writes Speed, but a is the producer
+	assert errs(validate_system_gen(s)).any(it.contains('only the producer may write'))
+}
+
 // parse_system + load_node round-trip on a written system.toml + node ecu.toml.
 fn test_parse_and_load_roundtrip() {
 	dir := os.join_path(os.temp_dir(), 'sysmodel_test_${os.getpid()}')
