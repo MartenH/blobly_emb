@@ -25,12 +25,12 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-008 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-009 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-010 | QM | test | uncovered | — |
-| REQ-BOOT-011 | QM | test | verified | prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), ed25519_test.v (pass) |
+| REQ-BOOT-011 | QM | test | verified | prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), ed25519_test.v (pass) |
 | REQ-BOOT-012 | QM | test | uncovered | — |
 | REQ-BOOT-013 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-014 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-015 | QM | analysis | uncovered | — |
-| REQ-BOOT-016 | QM | test | verified | prog_test.v (pass), prog_test.v (pass), prog_test.v (pass) |
+| REQ-BOOT-016 | QM | test | verified | prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass) |
 | REQ-BOOT-017 | QM | test | verified | ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_interop_test.v (pass), sha512_test.v (pass) |
 | REQ-BOOT-018 | QM | analysis | uncovered | — |
 | REQ-CAN-DRV-001 | QM | test | covered | route.lua (pending), h735-fdcan-hardware (approved), h755-fdcan-hardware (approved), h755-dualcore-heartbeat (approved) |
