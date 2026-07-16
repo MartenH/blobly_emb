@@ -78,6 +78,9 @@ pub mut:
 	dl_addr    u32 // next absolute write address
 	dl_end     u32
 	next_block u8
+	// tester-silence clocks (REQ-BOOT-013/014): handle() stamps last_rx_us,
+	// tick() expires the session, idle_return_due() answers the stay-window
+	last_rx_us u64
 	// stage buffer: fills to prog_word, then programs
 	stage     [32]u8
 	stage_len u32
@@ -109,6 +112,39 @@ pub fn (mut p Prog) handle(req &u8, req_len int, resp &u8) int {
 pub fn (mut p Prog) init() {
 	p.seed = 0x424C4F42 // 'BLOB' — placeholder until the real scheme (P5)
 	p.srv.session = 0x01 // default diagnostic session
+}
+
+// S3server (ISO 14229): a non-default session dies after 5 s of tester silence.
+pub const s3_server_us = u64(5_000_000)
+
+// The boot-stay window (REQ-BOOT-014): entered-by-request + valid app + default
+// session + this much silence -> give the ECU back to the application.
+pub const idle_return_us = u64(10_000_000)
+
+// tick expires the diagnostic session on tester silence (REQ-BOOT-013): back to
+// the default session, security re-locked, a half-done download abandoned (the
+// torn image is refused by the valid-mark-last rule anyway — conservative wins).
+// Call it from the serve loop; handle() stamps the activity clock.
+pub fn (mut p Prog) tick(now u64) {
+	if p.srv.session != 0x01 && p.last_rx_us != 0 && now - p.last_rx_us > s3_server_us {
+		p.srv.session = 0x01
+		p.unlocked = false
+		p.seed_sent = false
+		p.downloading = false
+		p.erased = false
+	}
+}
+
+// idle_return_due: the serve loop's exit question (REQ-BOOT-014). Only in the
+// default session — an ACTIVE tester (incl. TesterPresent) never trips it —
+// and only the caller knows whether boot was entered by request over a valid
+// app (with no valid app there is nothing to return to: keep serving).
+pub fn (p &Prog) idle_return_due(now u64, boot_start_us u64) bool {
+	if p.srv.session != 0x01 {
+		return false
+	}
+	last := if p.last_rx_us != 0 { p.last_rx_us } else { boot_start_us }
+	return now - last > idle_return_us
 }
 
 fn (mut p Prog) in_programming_session() bool {
