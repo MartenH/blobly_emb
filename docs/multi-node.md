@@ -2,7 +2,7 @@
 
 > Design sketch (2026-07-16). The natural successor to the multi-image emitter
 > ([multi-image.md](multi-image.md)): that phase generates an image per **core**
-> from one `ecu.toml`; this phase composes a **system of nodes** on a shared bus
+> from one `ecu.toml`; this phase composes a **system of nodes** on shared buses
 > from one `system.toml`, generating each node and validating the whole. Nothing
 > here is new plumbing — the bus, the DBC, NM, and signed boot are already the
 > fabric; multi-node is the **composition + validation** layer over them.
@@ -54,37 +54,58 @@ receivers — the way it already catches them within a node.
 
 A thin top-level file that **composes nodes** — it does not replace each node's
 `ecu.toml` (a node still owns its partitions/threads/FBs internally); it names
-the nodes, the shared bus(es) and DBC, and each node's identities:
+the **buses** (a real system has ≥2, each with its own DBC), the nodes and which
+buses each sits on, the cross-bus **routes**, and each node's identities:
 
 ```toml
-[import]
-dbc = "system.dbc"          # the ONE cross-node contract
-
-[bus.veh]                    # the shared vehicle bus, defined ONCE
+[bus.ctrl]                   # control/powertrain segment
 interface = "can0"
 fd        = true
 bitrate   = 500000
+dbc       = "ctrl.dbc"       # this bus's frame contract
+
+[bus.body]                   # body/HMI/diagnostic segment
+interface = "can1"
+fd        = false
+bitrate   = 500000
+dbc       = "body.dbc"       # a DIFFERENT contract — different frames/layouts
 
 [[node]]
-name  = "domain"             # the H755 domain controller
+name  = "domain"             # the H755 domain controller — on BOTH buses (gateway)
 ecu   = "nodes/domain/ecu.toml"
+buses = ["ctrl", "body"]     # 2 CAN peripherals (H7 has FDCAN1/2/3)
 nm    = 0x11                 # NM node id (cluster-unique)
 diag  = { req = 0x7A0, rsp = 0x7A8 }   # UDS/boot ISO-TP ids (OTA address)
 trace = 1                    # trace node id (observer lane group)
 
 [[node]]
-name  = "hmi"                # the H735 with the display
+name  = "zone_a"             # an H723 edge ECU — control bus only
+ecu   = "nodes/zone_a/ecu.toml"
+buses = ["ctrl"]
+nm    = 0x13
+diag  = { req = 0x7C0, rsp = 0x7C8 }
+trace = 3
+
+[[node]]
+name  = "hmi"                # the H735 with the display — body bus only
 ecu   = "nodes/hmi/ecu.toml"
+buses = ["body"]
 nm    = 0x12
 diag  = { req = 0x7B0, rsp = 0x7B8 }
 trace = 2
 
-[[node]]
-name  = "zone_a"             # an H723 edge ECU
-ecu   = "nodes/zone_a/ecu.toml"
-nm    = 0x13
-diag  = { req = 0x7C0, rsp = 0x7C8 }
-trace = 3
+# cross-bus routing lives on the gateway node (domain). Two flavours:
+[[route]]                    # FRAME route: forward a PDU unchanged A -> B
+gateway = "domain"
+frame   = "VehStatus"        # must be a valid frame on both DBCs (1:1)
+from    = "ctrl"
+to      = "body"
+
+[[route]]                    # SIGNAL route: re-pack across differing DBCs
+gateway = "domain"
+signal  = "VehicleSpeed"     # decode per ctrl.dbc, re-encode per body.dbc
+from    = "ctrl"
+to      = "body"
 ```
 
 Given this, `make gen` at the system level:
@@ -114,6 +135,37 @@ to   = "hmi"                 # 'hmi' is another node -> the generator routes it
                              # over the shared bus, matched to a DBC frame
 ```
 
+## Multiple buses and the gateway
+
+A real system is not one bus — it is ≥2 segments (control, body, diagnostic,
+zonal), each with **its own DBC**, split for bandwidth, fault isolation, and
+security/domain boundaries. That immediately implies a **gateway**: a node on
+two or more buses that routes between them. Two routing flavours, and the
+per-bus DBC is exactly what forces the distinction:
+
+- **Frame (raw-PDU) routing** — forward a CAN frame from bus A to bus B
+  unchanged (same id, same bytes). Transparent and cheap, but only valid when
+  the frame means the same thing on both DBCs (a 1:1 id). Also the natural place
+  for a **firewall**: route only the allow-listed frames across the boundary.
+- **Signal (translating) routing** — decode signals from a frame on bus A *per
+  A's DBC*, re-encode them into a *different* frame on bus B *per B's DBC*. This
+  is what production gateways do — the two networks have different frame layouts,
+  ids, and rates — and it is only expressible because each bus carries its own
+  contract. Rate adaptation (a 10 ms signal on A re-emitted at 100 ms on B) lives
+  here too.
+
+This is the recognised `route` module (raw-PDU routing / gateway, area ROUTE —
+planned). Multi-node gives it a home: a route is declared on the gateway node in
+`system.toml`, and the generator emits the forward (frame) or decode-re-encode
+(signal) logic into that node's comm loop, alongside its own COM. The gateway is
+just another node — the most capable one (the H755, with FDCAN1/2/3) is the
+natural gateway *and* domain controller, mirroring real zonal/domain designs.
+
+Consequences the system view must handle (see the checks below): a signal's
+reach is now **bus-scoped** — a consumer only sees producers on *its* bus unless
+a route carries the signal across — and NM must decide whether the cluster spans
+buses (one sleep domain the gateway bridges) or each bus sleeps independently.
+
 ## Node identity — three ids, all cluster-unique
 
 Multi-node's second job (after routing) is **identity**, allocated in
@@ -136,13 +188,17 @@ The blobly bet is that the generator catches integration bugs at build time. The
 same discipline, now *across nodes* — the checks a single `ecu.toml` cannot do
 because it cannot see its peers:
 
-- **Single writer, across nodes.** Every cross-node signal is *transmitted by
+- **Single writer, per bus.** On each bus, every signal is *transmitted by
   exactly one node* and *received by at least one* — the IOC single-writer rule
-  lifted to the bus. A signal two nodes both transmit, or that nobody produces,
-  is a build error (today: an undetected runtime surprise).
-- **DBC conformance.** Every node's frame/signal layout matches the shared DBC —
-  id, DLC, bit layout, endianness agree on both ends. (The DBC is the contract;
-  the check enforces it.)
+  lifted to the wire. Two transmitters, or none, is a build error.
+- **Bus-scoped reachability + routes.** A consumer's need is satisfied by a
+  producer *on its bus* OR by a **route** that carries the signal from a bus
+  where it is produced. A consumer on bus B with a producer only on bus A and no
+  route is a build error — the check that catches "we forgot the gateway rule."
+  Every route must reference frames/signals valid on *both* its DBCs.
+- **DBC conformance, per bus.** Every node's frame/signal layout matches *that
+  bus's* DBC — id, DLC, bit layout, endianness agree on both ends; a signal route
+  is checked against the source and destination DBCs independently.
 - **Identity uniqueness.** No two nodes share an NM id, a diagnostic address, or
   a trace node id.
 - **NM cluster coherence.** All nodes agree on the cluster (`peers` range, the
@@ -173,16 +229,22 @@ The target system: **H755** domain controller, **H735** HMI (its display),
 master + observer — the peer mesh runs with no master; Linux *adds* observability
 and OTA when present.
 
-1. **P1 — two nodes, one bus, shared DBC.** `system.toml` composes H755 + one
-   H723; the generator emits both and runs the tx/rx-pairing + id-uniqueness
-   checks. Bench: the two nodes exchange a signal and sleep together via NM.
-2. **P2 — the observer.** blobly_net loads `system.toml`; the trace swimlane
-   grows node lanes (aggregate the two nodes' dumps). One system timeline.
-3. **P3 — the HMI node.** H735 example: read bus signals, drive the display. A
-   new example (board support exists; the LCD driver is the new bit).
-4. **P4 — OTA in miniature.** The Linux master reflashes any node by its
-   diagnostic address (the P5 signed boot per node) — the whole OTA flow from
-   the last discussion, on the desk.
+1. **P1 — two nodes, one bus, one DBC.** `system.toml` composes H755 + one H723
+   on the control bus; the generator emits both and runs the per-bus
+   single-writer + id-uniqueness checks. Bench: they exchange a signal and sleep
+   together via NM. (Prove the composition + checks before adding a second bus.)
+2. **P2 — two buses + the gateway.** Add the body bus (its own DBC) and the H735
+   HMI on it; the H755 becomes the gateway (FDCAN1 = ctrl, FDCAN2 = body) with a
+   frame route and a signal route. Bench: a control-bus signal reaches the HMI
+   only via the gateway; the bus-scoped reachability check fails if the route is
+   removed. This is the real system shape.
+3. **P3 — the observer.** blobly_net loads `system.toml`; the trace swimlane
+   grows node lanes across both buses (aggregate every node's dump). One system
+   timeline spanning networks.
+4. **P4 — the HMI + OTA.** H735 drives its display from routed signals; the Linux
+   master reflashes any node by its diagnostic address, reaching nodes on either
+   bus through the gateway — the whole OTA flow from the last discussion, on the
+   desk.
 
 ## Open questions / decisions (for when the phase starts)
 
@@ -195,10 +257,10 @@ and OTA when present.
   (internal partitions/threads); `system.toml` composes + allocates identity +
   validates. It does *not* absorb the node files — that keeps a node buildable
   and testable alone.
-- **Requirements area.** A new `requirements/topology.toml` (REQ-TOPO-\*) under a
-  `SYS-REQ-TOPO-001` — the cross-node single-writer, identity-uniqueness, DBC
-  conformance, and cluster-coherence guarantees each get a requirement, verified
-  by a system-check test the way REQ-COM/NM are.
+- **Requirements area.** `requirements/topology.toml` (REQ-TOPO-001..006) under
+  `SYS-REQ-TOPO-001` — per-bus single-writer, identity-uniqueness, per-bus DBC
+  conformance, cluster-coherence, per-node independence, and cross-bus routing —
+  each verified by a system-check test the way REQ-COM/NM are.
 - **Heterogeneous boards.** Nodes are different parts (H755/H735/H723); the
   boards layer already isolates arch — the system view must not leak board
   assumptions (same rule as multi-image's "no Cortex-M in emission").
