@@ -250,7 +250,10 @@ fn check_identity_uniqueness(s System) []Issue {
 	mut diag_seen := map[u32]string{}
 	mut trace_seen := map[int]string{}
 	for n in s.nodes {
-		if n.nm != 0 {
+		// key uniqueness/consistency on ALLOCATION PRESENCE, not on a nonzero
+		// value — nm id 0 is a valid allocation, so `nm = 0` must not read as
+		// "unset" and skip the checks.
+		if n.has_nm_alloc {
 			if prev := nm_seen[n.nm] {
 				issues << Issue{
 					severity: .error
@@ -261,16 +264,20 @@ fn check_identity_uniqueness(s System) []Issue {
 				nm_seen[n.nm] = n.name
 			}
 			// system.toml is the identity SOURCE: a node it allocates an NM id to
-			// must actually declare [nm], and with the matching node id (REQ-TOPO-005).
+			// must declare [nm], with `node`, and with the matching id (REQ-TOPO-005).
 			if !n.view.has_nm {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-005'
 					msg:      'node "${n.name}": system.toml allocates nm 0x${n.nm.hex()} but its ecu.toml has no [nm] block'
 				}
-			} else if n.view.has_nm_node && n.view.nm_node != n.nm {
-				// node id 0 is a valid local id, so compare whenever it is
-				// DECLARED (not just when non-zero) — the system is the source.
+			} else if !n.view.has_nm_node {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": system.toml allocates nm 0x${n.nm.hex()} but its [nm] has no `node` id (loom2v requires it)'
+				}
+			} else if n.view.nm_node != n.nm {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-005'
@@ -278,7 +285,17 @@ fn check_identity_uniqueness(s System) []Issue {
 				}
 			}
 		}
-		if n.view.alive != 0 {
+		// a node with a local NM identity the system never allocated: its runtime
+		// id is invisible to the uniqueness check above, so two such nodes could
+		// collide silently. system.toml must own every NM identity (REQ-TOPO-005).
+		if n.view.has_nm && !n.has_nm_alloc {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": has a local [nm] block but system.toml allocates it no `nm` — every NM identity must be system-allocated'
+			}
+		}
+		if n.view.has_alive {
 			if prev := alive_seen[n.view.alive] {
 				issues << Issue{
 					severity: .error
@@ -383,7 +400,7 @@ fn check_nm_cluster_coherence(s System) []Issue {
 		// inside the cluster range it participates in — the node id itself is a
 		// small ordinal, not a wire id.
 		for n in s.nodes {
-			if bus.name !in n.buses || !n.view.has_nm || n.view.alive == 0 || anchor == '' {
+			if bus.name !in n.buses || !n.view.has_nm || !n.view.has_alive || anchor == '' {
 				continue
 			}
 			if n.view.alive < lo || n.view.alive > hi {
