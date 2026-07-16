@@ -1,0 +1,94 @@
+# Networking (NET): on-target TCP/IP over Ethernet. Capability-level — nothing
+# here names NetX Duo, the STM32H7 ETH peripheral, or a PHY; those are the first
+# BINDING (docs/net.md). DoIP is the networked binding of the same programming
+# protocol REQ-BOOT-006 binds to CAN. Design sketch: docs/net.md.
+
+[[req]]
+id = "REQ-NET-001"
+title = "No runtime heap in the net stack"
+text = "The networking subsystem shall allocate all runtime buffers from fixed-size pools carved from static memory; it shall not use a general-purpose runtime heap."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-NET-001"
+
+[[req]]
+id = "REQ-NET-002"
+title = "Bounded network footprint"
+text = "The packet-pool block size and count, socket count, and DMA descriptor rings shall be fixed at configuration time so the subsystem's worst-case memory is statically bounded."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-NET-001"
+
+[[req]]
+id = "REQ-NET-003"
+title = "Link management"
+text = "The subsystem shall detect physical link up and down and adapt to the negotiated speed and duplex, and shall not transmit while the link is down."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-001"
+
+[[req]]
+id = "REQ-NET-004"
+title = "IP reachability"
+text = "The ECU shall answer address-resolution and echo requests so its presence and reachability can be confirmed from a host on the same network."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-001"
+
+[[req]]
+id = "REQ-NET-005"
+title = "Datagram service"
+text = "The subsystem shall provide a connectionless datagram service for sending and receiving application messages over the network."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-001"
+
+[[req]]
+id = "REQ-NET-006"
+title = "Reliable stream service"
+text = "The subsystem shall provide a reliable, ordered byte-stream service over the network for request/response protocols."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-001"
+
+[[req]]
+id = "REQ-NET-007"
+title = "Diagnostics over the network"
+text = "The diagnostic services shall be reachable over the network stream transport, reusing the same service logic as the bus transport (a networked binding of the diagnostic protocol)."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-NET-008"
+title = "Reprogramming over the network"
+text = "The in-field programming protocol shall be reachable over the network stream transport as a second binding, such that a node can be reprogrammed over the network with the same session and safety guarantees as over the bus."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-NET-009"
+title = "Resource-exhaustion resilience"
+text = "When a packet pool or socket resource is exhausted the subsystem shall degrade by dropping or refusing the request, never by faulting the ECU."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-001"
+
+[[req]]
+id = "REQ-NET-010"
+title = "Image authenticity over the network"
+text = "An application image delivered over the network shall be subject to the same authenticity and integrity verification as one delivered over the bus, so a network-reachable programming path cannot install an unauthenticated image."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-SEC-001"
