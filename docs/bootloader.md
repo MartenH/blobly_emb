@@ -1,20 +1,12 @@
 # Bootloader — design + build log
 
-> Status (2026-07-13): **P1+P2 DRY-CODED AND SIM-VERIFIED** — no silicon run yet.
-> Requirements: `requirements/boot.toml` (draft; REQ-BOOT-001/002/004/005/008/009
-> exercised by tests + the vcan end-to-end). Built so far:
-> - `boot/` — header contract + CRC-32 + decision (`boot.v`), the UDS programming
->   session 0x27/0x31/0x34/0x36/0x37/0x11 over FlashOps hooks (`prog.v`); unit
->   tests cover the happy path, corrupt transfer, region protection, sequence guards.
-> - `examples/boot_sim` — the SAME session on vcan0 (rx 0x7B0 / tx 0x7B8), flash =
->   a file, one run = one power cycle. Verified against blobly_net `cmd/flash`:
->   fresh→stay_boot, flash→run_app, power-cycle persistence, corrupt→stay_boot,
->   recovery reflash→run_app.
-> - `tools/mkimage` — wrap a .bin in the header (`--valid` factory / `--pad-vectors`
->   target layout); blobly_net `cmd/flash` = the host flasher (BLBT passthrough).
-> - `examples/h755_boot` + `boards/h755zi/{flash.c,bootmap.h}` — the TARGET SKELETON:
->   compiles freestanding (25 KB, fits sector 0), **flash.c dry-coded from RM0399,
->   bench-unverified** — the P1/P2 hardware pass is the next step when a board is back.
+> Status (2026-07-16): **P1–P3 + P5 BENCH-VERIFIED on the H755; P4 (dual-bank) pending.**
+> The chain runs on real silicon: header-verified jump, CAN reflash + torn-image
+> recovery, S3/return-to-app session timers, and full asymmetric authenticity —
+> Ed25519 image signatures verified on the CM7 (no heap) + a 0x29 session gate
+> backed by the STM32H7 hardware TRNG. flash.c is silicon-proven. See the bench
+> logs at the bottom. Crypto lives in `bcrypto/` (SHA-512 + Ed25519, RFC-vector
+> verified); signing is host tooling (`tools/mkimage --sign`, `examples/keys`).
 
 ## Goal
 
@@ -97,13 +89,13 @@ Plain UDS, because it is already transport-neutral by construction:
 |---|---|---|
 | enter | 0x10 programming session | boot manager answers; app forwards + resets (above) |
 | identify | 0x22 read DID | bootloader + app version/validity (REQ-BOOT-009) |
-| unlock | 0x27 security access | seed/key; the hook where REQ-BOOT-011 lands |
+| authenticate | 0x29 Authentication | challenge/response; the tester signs, the boot verifies with its public key (REQ-BOOT-016) |
 | erase | 0x31 routine: erase region | region = app area only (REQ-BOOT-008 enforced here) |
 | transfer | 0x34 / 0x36 × N / 0x37 | block-wise, per-block ack (ISO-TP flow control does the pacing on CAN; DoIP brings its own) |
 | verify | 0x31 routine: check image | full-image CRC (+ signature when REQ-BOOT-011 lands) — only THEN is the header's valid mark written (REQ-BOOT-005) |
 | go | 0x11 ECU reset | boot decision runs again, now finds a valid image |
 
-`comm/uds` today serves DIDs; the bootloader adds 0x10/0x27/0x31/0x34/0x36/0x37/0x11 —
+`comm/uds` today serves DIDs; the bootloader adds 0x10/0x29/0x31/0x34/0x36/0x37/0x11 —
 services the host side (`cantester_v` heritage in blobly_net) already knows how to
 drive. The host flasher is a blobly_net `cmd/` tool speaking the same modules.
 
