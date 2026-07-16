@@ -1,0 +1,33 @@
+# system_bench — the multi-node P1 system (docs/multi-node.md): the H735-DK
+# system node + the H755 dual-core domain controller on ONE bus (compute),
+# exchanging a signal and sharing an NM cluster. This is the composition +
+# validation layer: `v run tools/syscheck examples/system_bench/system.toml`
+# runs the cross-node checks (single-writer per bus, identity uniqueness, NM
+# cluster coherence) that a single ecu.toml cannot do because it can't see its
+# peers.
+#
+# P1 is one bus; P2 adds the edge bus + an H723 and the gateway routes. Each
+# node keeps its own ecu.toml (its partitions/threads/FBs) — system.toml owns
+# the cross-node contract and the identities.
+
+[bus.compute] # H735 FDCAN1 <-> H755 FDCAN1 (the heavy domain controller)
+interface = "can0"
+fd        = false
+bitrate   = 500000
+dbc       = "compute.dbc"
+
+[[node]]
+name  = "sysnode" # the H735-DK: gateway + OTA stager + HMI (NM 0x11)
+ecu   = "nodes/sysnode/ecu.toml"
+buses = ["compute"]
+nm    = 0x11
+diag  = { req = 0x7A0, rsp = 0x7A8 }
+trace = 1
+
+[[node]]
+name  = "domain" # the H755 dual-core domain controller (NM 0x13)
+ecu   = "nodes/domain/ecu.toml"
+buses = ["compute"]
+nm    = 0x13
+diag  = { req = 0x7B0, rsp = 0x7B8 }
+trace = 2
