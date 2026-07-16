@@ -245,6 +245,66 @@ Note the two verifications are distinct: 0x29 authenticates the **tester** (a li
 challenge, so a captured session can't be replayed), and `check image` authenticates
 the **image** (a signature over the bytes). Both must pass.
 
+## Threat model — what P5 covers, and what it does not (yet)
+
+Being precise so "signatures verified" is not mistaken for "fully locked down."
+
+**P5 guarantees** — rooted in a public key the ECU holds:
+
+- **Image authenticity/integrity.** A forged, tampered, or unsigned image cannot
+  boot: the boot verifies the Ed25519 signature before writing the valid mark.
+- **Session authorisation.** An unauthorised tester cannot start a reflash: the
+  0x29 challenge/response admits only a private-key holder, and the live
+  challenge defeats replay.
+
+**Not covered yet** — each is a *layer on top*, not a flaw in the crypto:
+
+1. **Replacing the root of trust itself.** The boot manager and its baked key are
+   immutable only *by convention* — the app-update path cannot write the boot
+   region (REQ-BOOT-008), but SWD/JTAG still can. An attacker with debug access
+   could reflash the boot and swap the public key. Closing this needs the
+   silicon's own mechanisms — **RDP level 2** (disables the debug port,
+   irreversible), **write-protecting the boot sector**, and, where the part
+   provides it, **secure-boot option bytes** that make the ROM verify the boot
+   manager at power-on. That completes the chain (silicon → boot → app); today we
+   built only the boot → app link. **REQ-BOOT-018**; a hardware-config phase (P6),
+   validated on a *sacrificial* board because RDP2 cannot be undone.
+2. **Private-key custody.** In dev the signing seed is a file (`examples/keys`).
+   Production keeps it in an HSM / KMS on the signing side; the ECU is agnostic
+   (it verifies with a public key) — swap the signer, the boot test is unchanged.
+   The `$BLOBLY_FLASH_SEED` seam is where that swap happens.
+3. **Rollback.** A validly-signed *old* image (with a since-fixed vulnerability)
+   still verifies. `sw_version` is in the header but nothing enforces
+   monotonicity; anti-rollback (a stored minimum version) is a future rung.
+4. **Confidentiality.** Images are signed, not encrypted — the firmware is
+   readable on the wire and in flash. If IP protection matters, add image
+   encryption (a separate concern from authenticity).
+
+### Trust anchor: a raw key today, certificates later
+
+The boot holds **one raw Ed25519 public key**, baked in — the simplest trust
+anchor ("trust exactly this key"), the same model as an SSH `authorized_keys`
+entry or verified-boot with an embedded key, and common in embedded secure boot.
+
+The mainstream automotive answer is **X.509 certificates**, and *real* UDS 0x29
+uses them: its `verifyCertificateUnidirectional`/`Bidirectional` sub-functions
+transmit a certificate the ECU validates against a stored **root CA** before the
+challenge/response. This stack implements a **simplified 0x29 profile** that skips
+the certificate and uses the raw key directly. What a certificate chain would buy,
+and why it is deferred:
+
+- **Rotation / revocation** without reflashing every boot: rotate a leaf/
+  intermediate; the ECU trusts anything the CA vouches for. A single baked raw key
+  means a compromised key ⇒ reflash all boots.
+- **Delegation** to multiple *limited* signers — per-plant, per-supplier, or a
+  per-technician key for 0x29 — all trusted via one root the ECU stores.
+- **Identity + metadata** — validity periods, key-usage constraints the ECU checks.
+
+The cost is why it is not here first: **ASN.1/DER parsing is heavy and a real
+attack surface** (cert-parser bugs are a CVE genre), and a full chain drags in
+more crypto. A minimal cert format, or rotation via a signed *key-list*, is a
+lighter middle ground if the trade pinches before a full PKI earns its way in.
+
 ## Phasing (each rung bench-verified, as usual)
 
 1. **P1 — boot manager skeleton** on the H755: header check + jump + request cell;
@@ -260,7 +320,12 @@ the **image** (a signature over the bytes). Both must pass.
    before the mark — is built and bench-verified; the **0x29 session gate** is the
    remaining rung (see the trust model + sequence above). Key management (the private
    key off every ECU) is a deployment concern the design names but does not own.
-6. **Ethernet/DoIP binding** when hardware with Ethernet lands — by construction a
+6. **P6 — hardware root of trust** (REQ-BOOT-018): RDP2 + boot-sector write
+   protection + secure-boot option bytes, so the verifier itself can't be swapped.
+   Irreversible — validated on a sacrificial board. Optional siblings: a
+   certificate chain (rotation/revocation/delegation), anti-rollback, image
+   encryption — each earns its way in against the threat model above.
+7. **Ethernet/DoIP binding** when hardware with Ethernet lands — by construction a
    new binding, not a redesign.
 
 ## Non-goals (now)
