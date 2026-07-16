@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 123 | 68 | 5 | 50 | 0 |
+| 129 | 68 | 5 | 56 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -30,7 +30,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-013 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-014 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-015 | QM | analysis | uncovered | — |
-| REQ-BOOT-016 | QM | test | verified | prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass) |
+| REQ-BOOT-016 | QM | test | verified | prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass) |
 | REQ-BOOT-017 | QM | test | verified | ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_interop_test.v (pass), sha512_test.v (pass) |
 | REQ-BOOT-018 | QM | analysis | uncovered | — |
 | REQ-CAN-DRV-001 | QM | test | covered | route.lua (pending), h735-fdcan-hardware (approved), h755-fdcan-hardware (approved), h755-dualcore-heartbeat (approved) |
@@ -123,6 +123,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-OBS-001 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-OBS-002 | QM | test | uncovered | — |
 | SYS-REQ-OBS-003 | QM | test | verified | ↳ derived (all children verified) |
+| SYS-REQ-TOPO-001 | QM | analysis | uncovered | — |
 | REQ-TELEM-001 | QM | test | verified | loom_test.v (pass) |
 | REQ-TELEM-002 | QM | test | verified | telem_test.v (pass) |
 | REQ-TELEM-003 | QM | test | verified | loom_test.v (pass) |
@@ -132,6 +133,11 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TRACE-002 | QM | test | verified | h755-external-partitions (approved) |
 | REQ-TRACE-008 | QM | test | uncovered | — |
 | REQ-TRACE-009 | QM | test | uncovered | — |
+| REQ-TOPO-001 | QM | test | uncovered | — |
+| REQ-TOPO-002 | QM | test | uncovered | — |
+| REQ-TOPO-003 | QM | test | uncovered | — |
+| REQ-TOPO-004 | QM | test | uncovered | — |
+| REQ-TOPO-005 | QM | analysis | uncovered | — |
 | REQ-TP-001 | QM | test | uncovered | — |
 | REQ-TP-002 | QM | test | uncovered | — |
 | REQ-WDG-001 | B | test | verified | wdg_test.v (pass) |
@@ -251,6 +257,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-OBS-001 | | | | | | | | | |
 | SYS-REQ-OBS-002 | | | | | | | | | |
 | SYS-REQ-OBS-003 | | | | | | | | | |
+| SYS-REQ-TOPO-001 | | | | | | | | | |
 | REQ-TELEM-001 | | | | | | | ✓ | | |
 | REQ-TELEM-002 | | | | | | | ✓ | | |
 | REQ-TELEM-003 | | | | | | | ✓ | | |
@@ -260,6 +267,11 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TRACE-002 | | | | | ✓ | | | | |
 | REQ-TRACE-008 | | | | | | | | | |
 | REQ-TRACE-009 | | | | | | | | | |
+| REQ-TOPO-001 | | | | | | | | | |
+| REQ-TOPO-002 | | | | | | | | | |
+| REQ-TOPO-003 | | | | | | | | | |
+| REQ-TOPO-004 | | | | | | | | | |
+| REQ-TOPO-005 | | | | | | | | | |
 | REQ-TP-001 | | | | | | | | | |
 | REQ-TP-002 | | | | | | | | | |
 | REQ-WDG-001 | | | | | | | ✓ | | |

@@ -1,0 +1,47 @@
+# TOPOLOGY — multi-node system composition (docs/multi-node.md). Sketch phase:
+# draft requirements for the cross-node guarantees a system view must enforce.
+
+[[req]]
+id = "REQ-TOPO-001"
+title = "Cross-node single writer"
+text = "Every signal exchanged between nodes shall be transmitted by exactly one node and received by at least one; a signal with no producer, or with more than one producer, shall be a generation-time error."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
+
+[[req]]
+id = "REQ-TOPO-002"
+title = "Node identity uniqueness"
+text = "Within a system, no two nodes shall share a network-management id, a diagnostic/boot address, or a trace node id; a collision shall be a generation-time error."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
+
+[[req]]
+id = "REQ-TOPO-003"
+title = "Bus-contract conformance"
+text = "Each node's frame and signal layout for a cross-node signal shall conform to the shared bus contract (id, length, bit layout, endianness) on both the transmitting and receiving side; a mismatch shall be a generation-time error."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
+
+[[req]]
+id = "REQ-TOPO-004"
+title = "Network-management cluster coherence"
+text = "All nodes of a system shall share one coherent network-management cluster (peer id range and sleep/wake parameters); an incoherent node shall be a generation-time error."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
+
+[[req]]
+id = "REQ-TOPO-005"
+title = "Per-node generation and independence"
+text = "Each node shall be generated from the system composition together with its own node description, and shall remain buildable and testable in isolation; the system composition allocates identity and validates cross-node consistency without absorbing the node descriptions."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
