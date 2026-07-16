@@ -6,10 +6,15 @@
  *   DTCM  128 KB @ 0x20000000 (ThreadX static memory: stacks, ring, .data/.bss)
  * The FDCAN message RAM (SRAMCAN) is a fixed peripheral address the driver writes
  * directly and is NOT placed here (Phase 3 dumps over semihosting, no CAN yet). */
+/* The bootloader chain links the SAME image at APP_VECTORS (bootmap.h:
+ * 0x08020000 header + 0x400 vector alignment): pass
+ *   -Wl,--defsym,__flash_base__=0x08020400,--defsym,__flash_len__=0xDFBC0
+ * (make APP_LINK=boot). Default = standalone at the flash base. */
 MEMORY
 {
   RAM   (wx) : ORIGIN = 0x20000000, LENGTH = 0x00020000   /* 128 KiB DTCM */
-  FLASH (rx) : ORIGIN = 0x08000000, LENGTH = 0x00100000   /* 1 MiB flash  */
+  FLASH (rx) : ORIGIN = DEFINED(__flash_base__) ? __flash_base__ : 0x08000000,
+               LENGTH = DEFINED(__flash_len__)  ? __flash_len__  : 0x00100000
 }
 
 __STACKSIZE__ = 1024;
