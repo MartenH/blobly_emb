@@ -15,7 +15,7 @@ bytes; the Governor/Load/Heartbeat/comm *names* come from `tx_thread_create` and
 to the ids by blobly_net's manifest — the Phase-6 swimlane.)
 
 
-Phase 3 takes the QEMU foundation ([`threadx_min`](../threadx_min), Phases 1–2) onto
+Phase 3 takes the QEMU ThreadX foundation (Phases 1–2, now removed) onto
 silicon. Same vendored ThreadX kernel, same four TX execution-change hooks
 (`trace_hooks.c`, `TX_ENABLE_EXECUTION_CHANGE_NOTIFY`) turning every *real* context
 switch and ISR into a blobly 8-byte trace record — now on an STM32H735G-DK at **550 MHz
@@ -24,7 +24,7 @@ with true DWT µs timestamps** (QEMU doesn't model `DWT->CYCCNT`, so it fell bac
 board run standalone by streaming the ring over **FDCAN1** (register-level backend,
 `driver/can`) instead of semihosting — see the run section below.
 
-What changed from `threadx_min`:
+What changed from the QEMU proof:
 
 - **`board.c`** (reused from `h735_app`) brings the M7 to 550 MHz on PLL1; `main()` calls
   `board_clock_init()` **before** `tx_kernel_enter`, so the SysTick reload programmed in
@@ -99,7 +99,7 @@ cansend can0 123#0011223344556677    # -> Rx ISR (id 35) + comm wake appear in t
 - `boards/common/ioc.h` — the wait-free triple-buffer IOC (SPSC, latest-value-wins, `__atomic` handoff).
 - `comm.c` — FDCAN1 Rx-FIFO0 ISR + the comm thread (rx-drain + periodic tx of the Workload signal).
 - `trace_hooks.c` — the four `_tx_execution_*` hooks → blobly 8-byte records + the FDCAN
-  ring dump (`trace_dump_can`, copied from `threadx_min` then retargeted off semihosting).
+  ring dump (`trace_dump_can`, from the QEMU proof then retargeted off semihosting).
 - `board.c` / `board.h` — 550 MHz clock + FDCAN1 clock/pins (copied from `h735_app`).
 - `crt0.S`, `vectors.S`, `tx_initialize_low_level.S`, `threadx_h735.ld` — board bring-up.
 - `Makefile` — builds `third_party/threadx` + `driver/can` (FDCAN backend) + the demo,
