@@ -126,6 +126,7 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 	b << ''
 
 	// produced signals (this node is the SysSignal.producer): tx on the bus.
+	mut emitted_frames := map[string]bool{}
 	for sig in sys.signals {
 		if sig.producer != node.name {
 			continue
@@ -137,15 +138,26 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		b << 'from   = "${part}"'
 		b << 'to     = "${bus.interface}"'
 		b << ''
-		b << '  [[frame]]'
-		b << '  name = "${sig.frame}"'
-		b << '  bus  = "${bus.interface}"'
-		cyc := if sig.cycle_ms > 0 { sig.cycle_ms } else { 100 }
-		b << '  tx   = { mode = "cyclic", cycle_ms = ${cyc} } # trailing comment terminates the nested [[frame]] parse (vlang/v#27684)'
-		b << ''
+		// one [[frame]] per PDU: several signals may share a DBC message, but its
+		// tx cadence is configured once (validated to agree in check_signals_dissolved).
+		if sig.frame != '' && sig.frame !in emitted_frames {
+			emitted_frames[sig.frame] = true
+			cyc := if sig.cycle_ms > 0 { sig.cycle_ms } else { 100 }
+			b << '  [[frame]]'
+			b << '  name = "${sig.frame}"'
+			b << '  bus  = "${bus.interface}"'
+			b << '  tx   = { mode = "cyclic", cycle_ms = ${cyc} } # trailing comment terminates the nested [[frame]] parse (vlang/v#27684)'
+			b << ''
+		}
 	}
 	// consumed signals (an FB here reads a signal ANOTHER node produces): rx.
+	// dedup repeated reads — two handlers reading one signal is a single rx port.
+	mut rx_seen := map[string]bool{}
 	for name in view.fb_reads {
+		if name in rx_seen {
+			continue
+		}
+		rx_seen[name] = true
 		sig := sys.signal_by_name(name) or { continue }
 		if sig.producer == node.name {
 			continue // locally produced (or self-loop) — not a bus rx
