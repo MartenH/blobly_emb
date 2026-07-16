@@ -79,6 +79,12 @@ pub mut:
 	peers_lo   u32
 	peers_hi   u32
 	has_nm     bool
+	// NM sleep/wake timing (0 = defaulted/unset). The cluster must agree on
+	// these or its state machines transition at incompatible times (REQ-TOPO-004).
+	nm_msg_cycle_ms  int
+	nm_timeout_ms    int
+	nm_repeat_ms     int
+	nm_wait_sleep_ms int
 	local_buses []string // the [bus.X] names declared in the node's ecu.toml
 }
 
@@ -246,6 +252,10 @@ pub fn load_node(path string) !NodeView {
 		v.has_nm = true
 		v.nm_node = m_u32(m, 'node')
 		v.alive = m_u32(m, 'alive')
+		v.nm_msg_cycle_ms = m_int(m, 'msg_cycle_ms')
+		v.nm_timeout_ms = m_int(m, 'timeout_ms')
+		v.nm_repeat_ms = m_int(m, 'repeat_ms')
+		v.nm_wait_sleep_ms = m_int(m, 'wait_sleep_ms')
 		peers := (m['peers'] or { toml.Any([]toml.Any{}) }).array()
 		if peers.len == 2 {
 			v.peers_lo = u32(peers[0].int())

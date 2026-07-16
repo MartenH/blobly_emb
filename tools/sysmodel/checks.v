@@ -25,10 +25,70 @@ pub:
 // then routes.
 pub fn validate_system(s System) []Issue {
 	mut issues := []Issue{}
+	issues << check_bus_membership(s)
 	issues << check_identity_uniqueness(s)
 	issues << check_bus_single_writer(s)
+	issues << check_frame_single_writer(s)
 	issues << check_nm_cluster_coherence(s)
 	issues << check_routes(s)
+	return issues
+}
+
+// REQ-TOPO-001/005: every bus a node claims must be a declared system bus AND
+// map to a local bus in the node's ecu.toml (by that bus's interface). A typo
+// in `buses`, or a system bus whose interface the node never opens, would
+// otherwise silently drop all of that node's traffic on the bus — its
+// collisions and orphaned consumers would go unreported.
+fn check_bus_membership(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		for bname in n.buses {
+			b := s.bus_by_name(bname) or {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'node "${n.name}": bus "${bname}" is not declared in system.toml'
+				}
+				continue
+			}
+			if b.interface !in n.view.local_buses {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": claims bus "${bname}" but its ecu.toml has no [bus.${b.interface}] interface (declares ${n.view.local_buses})'
+				}
+			}
+		}
+	}
+	return issues
+}
+
+// REQ-TOPO-001: each CAN frame on a bus has exactly one transmitting node. Two
+// nodes writing different signals into the same DBC message still contend for
+// the same PDU on the wire and overwrite each other's fields — signal-level
+// single-writer misses this, so the frame owner is checked directly.
+fn check_frame_single_writer(s System) []Issue {
+	mut issues := []Issue{}
+	for bus in s.buses {
+		mut owners := map[string][]string{}
+		for n in s.nodes {
+			if bus.name !in n.buses {
+				continue
+			}
+			for fr in n.view.tx_frames[bus.interface] {
+				owners[fr] << n.name
+			}
+		}
+		for fr, nodes in owners {
+			if nodes.len > 1 {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'bus "${bus.name}": frame "${fr}" transmitted by ${nodes.len} nodes (${nodes.join(", ")}) — one frame owner per bus'
+				}
+			}
+		}
+	}
 	return issues
 }
 
@@ -125,8 +185,15 @@ fn check_identity_uniqueness(s System) []Issue {
 			} else {
 				nm_seen[n.nm] = n.name
 			}
-			// the node's authored ecu.toml must agree with system.toml (REQ-TOPO-005)
-			if n.view.has_nm && n.view.nm_node != 0 && n.view.nm_node != n.nm {
+			// system.toml is the identity SOURCE: a node it allocates an NM id to
+			// must actually declare [nm], and with the matching node id (REQ-TOPO-005).
+			if !n.view.has_nm {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": system.toml allocates nm 0x${n.nm.hex()} but its ecu.toml has no [nm] block'
+				}
+			} else if n.view.nm_node != 0 && n.view.nm_node != n.nm {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-005'
@@ -145,15 +212,24 @@ fn check_identity_uniqueness(s System) []Issue {
 				alive_seen[n.view.alive] = n.name
 			}
 		}
-		if n.diag.req != 0 {
-			if prev := diag_seen[n.diag.req] {
+		// ALL diagnostic ids (req AND rsp, across every node) must be distinct —
+		// two ECUs answering on the same rsp id collide, and one node's rsp equal
+		// to another's req cross-wires the two sessions.
+		for kind, id in {
+			'request':  n.diag.req
+			'response': n.diag.rsp
+		} {
+			if id == 0 {
+				continue
+			}
+			if prev := diag_seen[id] {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-002'
-					msg:      'diagnostic request id 0x${n.diag.req.hex()} shared by "${prev}" and "${n.name}"'
+					msg:      'diagnostic ${kind} id 0x${id.hex()} (node "${n.name}") collides with an id already used by "${prev}"'
 				}
 			} else {
-				diag_seen[n.diag.req] = n.name
+				diag_seen[id] = n.name
 			}
 		}
 		if n.trace != 0 {
@@ -181,6 +257,7 @@ fn check_nm_cluster_coherence(s System) []Issue {
 		mut lo := u32(0)
 		mut hi := u32(0)
 		mut anchor := ''
+		mut a := NodeView{}
 		for n in s.nodes {
 			if bus.name !in n.buses || !n.view.has_nm {
 				continue
@@ -189,6 +266,7 @@ fn check_nm_cluster_coherence(s System) []Issue {
 				lo = n.view.peers_lo
 				hi = n.view.peers_hi
 				anchor = n.name
+				a = n.view
 				continue
 			}
 			if n.view.peers_lo != lo || n.view.peers_hi != hi {
@@ -196,6 +274,23 @@ fn check_nm_cluster_coherence(s System) []Issue {
 					severity: .error
 					req:      'REQ-TOPO-004'
 					msg:      'bus "${bus.name}": NM cluster range mismatch — "${anchor}" has [0x${lo.hex()},0x${hi.hex()}] but "${n.name}" has [0x${n.view.peers_lo.hex()},0x${n.view.peers_hi.hex()}]'
+				}
+			}
+			// the sleep/wake timing must agree too, or the state machines
+			// transition at incompatible times. Compare only params BOTH nodes
+			// declare (0 = defaulted) so an omission doesn't false-positive.
+			for param, pair in {
+				'msg_cycle_ms':  [a.nm_msg_cycle_ms, n.view.nm_msg_cycle_ms]
+				'timeout_ms':    [a.nm_timeout_ms, n.view.nm_timeout_ms]
+				'repeat_ms':     [a.nm_repeat_ms, n.view.nm_repeat_ms]
+				'wait_sleep_ms': [a.nm_wait_sleep_ms, n.view.nm_wait_sleep_ms]
+			} {
+				if pair[0] != 0 && pair[1] != 0 && pair[0] != pair[1] {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-004'
+						msg:      'bus "${bus.name}": NM ${param} mismatch — "${anchor}"=${pair[0]} vs "${n.name}"=${pair[1]}'
+					}
 				}
 			}
 		}
@@ -276,23 +371,36 @@ fn check_routes(s System) []Issue {
 	return issues
 }
 
-// signal_routed_to reports whether a route carries `sig` INTO `bus` (so a
-// consumer there is satisfied by the gateway, not a local producer).
+// signal_routed_to reports whether a SIGNAL route carries `sig` INTO `bus` from
+// a source bus that ACTUALLY PRODUCES it — only then does the gateway have a
+// value to forward, so only then is a consumer on `bus` satisfied (REQ-TOPO-001/
+// 006). Frame (raw-PDU) routes are NOT matched here: a frame route names a DBC
+// message, not a signal, so resolving which signals it carries needs the DBC
+// (REQ-TOPO-003, deferred) — until then a frame route can't satisfy a signal
+// consumer.
 fn signal_routed_to(s System, sig string, bus string) bool {
-	dst := bus
 	for r in s.routes {
-		if r.to == dst && (r.signal == sig || r.frame == sig) {
+		if r.to != bus || r.signal != sig {
+			continue
+		}
+		src := s.bus_by_name(r.from) or { continue }
+		if sig in producers_on(s, src) {
 			return true
 		}
 	}
 	return false
 }
 
-// signal_routed_from reports whether a route carries `sig` OUT of `bus` (so a
-// producer there is "used" by the gateway even if no local node consumes it).
+// signal_routed_from reports whether a SIGNAL route carries `sig` OUT of `bus`
+// to a destination that has a consumer (so a producer here is "used" by the
+// gateway even if no local node consumes it).
 fn signal_routed_from(s System, sig string, bus string) bool {
 	for r in s.routes {
-		if r.from == bus && (r.signal == sig || r.frame == sig) {
+		if r.from != bus || r.signal != sig {
+			continue
+		}
+		dst := s.bus_by_name(r.to) or { continue }
+		if sig in consumers_on(s, dst) {
 			return true
 		}
 	}
