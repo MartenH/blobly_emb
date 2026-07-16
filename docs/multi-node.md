@@ -57,56 +57,71 @@ A thin top-level file that **composes nodes** — it does not replace each node'
 the **buses** (a real system has ≥2, each with its own DBC), the nodes and which
 buses each sits on, the cross-bus **routes**, and each node's identities:
 
+The concrete bench system: the **H735-DK is the system node** — its 3
+transceivers, storage, and display make it the gateway, OTA stager, and local
+HMI in one board — bridging three buses by purpose:
+
 ```toml
-[bus.ctrl]                   # control/powertrain segment
-interface = "can0"
+[bus.compute]                # H735 <-> H755 (the heavy domain controller)
+interface = "can0"           # H735 FDCAN1
 fd        = true
 bitrate   = 500000
-dbc       = "ctrl.dbc"       # this bus's frame contract
+dbc       = "compute.dbc"
 
-[bus.body]                   # body/HMI/diagnostic segment
-interface = "can1"
+[bus.edge]                   # H735 <-> the H723 edge ECUs
+interface = "can1"           # H735 FDCAN2
+fd        = true
+bitrate   = 500000
+dbc       = "edge.dbc"
+
+[bus.diag]                   # H735 <-> Linux — diagnostic/OTA, kept OFF the functional buses
+interface = "can2"           # H735 FDCAN3
 fd        = false
 bitrate   = 500000
-dbc       = "body.dbc"       # a DIFFERENT contract — different frames/layouts
+dbc       = "diag.dbc"
 
 [[node]]
-name  = "domain"             # the H755 domain controller — on BOTH buses (gateway)
+name  = "sysnode"            # the H735-DK: gateway + OTA stager + HMI
+ecu   = "nodes/sysnode/ecu.toml"
+buses = ["compute", "edge", "diag"]    # all three transceivers
+nm    = 0x11
+diag  = { req = 0x7A0, rsp = 0x7A8 }
+trace = 1
+
+[[node]]
+name  = "domain"             # the H755 dual-core domain controller
 ecu   = "nodes/domain/ecu.toml"
-buses = ["ctrl", "body"]     # 2 CAN peripherals (H7 has FDCAN1/2/3)
-nm    = 0x11                 # NM node id (cluster-unique)
-diag  = { req = 0x7A0, rsp = 0x7A8 }   # UDS/boot ISO-TP ids (OTA address)
-trace = 1                    # trace node id (observer lane group)
-
-[[node]]
-name  = "zone_a"             # an H723 edge ECU — control bus only
-ecu   = "nodes/zone_a/ecu.toml"
-buses = ["ctrl"]
-nm    = 0x13
-diag  = { req = 0x7C0, rsp = 0x7C8 }
-trace = 3
-
-[[node]]
-name  = "hmi"                # the H735 with the display — body bus only
-ecu   = "nodes/hmi/ecu.toml"
-buses = ["body"]
+buses = ["compute"]
 nm    = 0x12
 diag  = { req = 0x7B0, rsp = 0x7B8 }
 trace = 2
 
-# cross-bus routing lives on the gateway node (domain). Two flavours:
-[[route]]                    # FRAME route: forward a PDU unchanged A -> B
-gateway = "domain"
-frame   = "VehStatus"        # must be a valid frame on both DBCs (1:1)
-from    = "ctrl"
-to      = "body"
+[[node]]
+name  = "zone_a"             # an H723 edge ECU
+ecu   = "nodes/zone_a/ecu.toml"
+buses = ["edge"]
+nm    = 0x13
+diag  = { req = 0x7C0, rsp = 0x7C8 }
+trace = 3
+
+# cross-bus routing lives on the gateway (sysnode). Two flavours:
+[[route]]                    # FRAME route: forward a PDU unchanged
+gateway = "sysnode"
+frame   = "VehStatus"        # valid on both DBCs (1:1)
+from    = "compute"
+to      = "edge"
 
 [[route]]                    # SIGNAL route: re-pack across differing DBCs
-gateway = "domain"
-signal  = "VehicleSpeed"     # decode per ctrl.dbc, re-encode per body.dbc
-from    = "ctrl"
-to      = "body"
+gateway = "sysnode"
+signal  = "VehicleSpeed"     # decode per compute.dbc, re-encode per edge.dbc
+from    = "compute"
+to      = "edge"
 ```
+
+The Linux node (blobly_net) attaches on `diag` — the cloud/dev tier that pushes
+campaigns and observes; the H735 sysnode stages the images (its storage) and
+reflashes each functional node over its bus. The system runs standalone without
+Linux; Linux *adds* OTA + observability when present.
 
 Given this, `make gen` at the system level:
 
@@ -158,8 +173,11 @@ This is the recognised `route` module (raw-PDU routing / gateway, area ROUTE —
 planned). Multi-node gives it a home: a route is declared on the gateway node in
 `system.toml`, and the generator emits the forward (frame) or decode-re-encode
 (signal) logic into that node's comm loop, alongside its own COM. The gateway is
-just another node — the most capable one (the H755, with FDCAN1/2/3) is the
-natural gateway *and* domain controller, mirroring real zonal/domain designs.
+just another node — the one with the transceivers, storage, and display (the
+H735-DK) is the natural gateway *and* OTA stager *and* local HMI, mirroring how a
+real in-vehicle system node sits between domains. Its storage stages a whole
+campaign's images; its display shows system status; the Linux tier supplies
+campaigns over a dedicated diagnostic bus, kept off the functional buses.
 
 Consequences the system view must handle (see the checks below): a signal's
 reach is now **bus-scoped** — a consumer only sees producers on *its* bus unless
@@ -224,27 +242,27 @@ because it cannot see its peers:
 
 ## Phasing (bench rungs, on the hardware to hand)
 
-The target system: **H755** domain controller, **H735** HMI (its display),
-**2× H723** edge/zone ECUs, a **Linux node** (blobly_net) as OTA/diagnostic
-master + observer — the peer mesh runs with no master; Linux *adds* observability
-and OTA when present.
+The target system: the **H735-DK system node** (3 transceivers, storage,
+display) as gateway + OTA stager + HMI, bridging a **compute** bus to the **H755**
+dual-core domain controller, an **edge** bus to the **2× H723** ECUs, and a
+**diag** bus to a **Linux node** (blobly_net) — the cloud/dev/OTA tier. The
+functional mesh runs standalone; Linux *adds* campaigns + observability when present.
 
-1. **P1 — two nodes, one bus, one DBC.** `system.toml` composes H755 + one H723
-   on the control bus; the generator emits both and runs the per-bus
-   single-writer + id-uniqueness checks. Bench: they exchange a signal and sleep
-   together via NM. (Prove the composition + checks before adding a second bus.)
-2. **P2 — two buses + the gateway.** Add the body bus (its own DBC) and the H735
-   HMI on it; the H755 becomes the gateway (FDCAN1 = ctrl, FDCAN2 = body) with a
-   frame route and a signal route. Bench: a control-bus signal reaches the HMI
-   only via the gateway; the bus-scoped reachability check fails if the route is
-   removed. This is the real system shape.
-3. **P3 — the observer.** blobly_net loads `system.toml`; the trace swimlane
-   grows node lanes across both buses (aggregate every node's dump). One system
-   timeline spanning networks.
-4. **P4 — the HMI + OTA.** H735 drives its display from routed signals; the Linux
-   master reflashes any node by its diagnostic address, reaching nodes on either
-   bus through the gateway — the whole OTA flow from the last discussion, on the
-   desk.
+1. **P1 — sysnode + one node, one bus.** `system.toml` composes the H735 sysnode
+   + the H755 on the **compute** bus; the generator emits both and runs the
+   per-bus single-writer + id-uniqueness checks. Bench: they exchange a signal
+   and sleep together via NM. (Prove composition + checks before the second bus.)
+2. **P2 — the gateway across two buses.** Add the **edge** bus (its own DBC) and
+   an H723; the H735 sysnode gateways compute<->edge (FDCAN1/FDCAN2) with a frame
+   route + a signal route. Bench: a compute-bus signal reaches the H723 only via
+   the gateway; the reachability check fails if the route is removed. Real shape.
+3. **P3 — the observer.** blobly_net attaches on the **diag** bus, loads
+   `system.toml`; the trace swimlane grows node lanes across all buses (aggregate
+   every node's dump). One system timeline spanning networks.
+4. **P4 — HMI + staged OTA.** The H735 drives its display from routed signals and
+   stages images in its storage; Linux pushes a campaign over `diag`, the sysnode
+   reflashes each functional node over its bus by diagnostic address — the whole
+   in-vehicle-master OTA flow, on the desk.
 
 ## Open questions / decisions (for when the phase starts)
 
