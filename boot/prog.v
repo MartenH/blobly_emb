@@ -323,6 +323,29 @@ fn (mut p Prog) request_download(req &u8, req_len int, resp &u8) int {
 	return 4
 }
 
+// program_stage writes the staged prog_word, EXCEPT the valid-mark word (the
+// second flash word, at app_base + 32): that word is the BOOT's to write, and
+// only after the signature verifies (check_and_mark). A wire-supplied VALD is
+// dropped — otherwise an authenticated tester could transfer a pre-marked
+// (--valid / CRC-correct) UNSIGNED image and decide() would boot it at reset
+// without any signature check (REQ-BOOT-011). The word stays erased for
+// check_and_mark; it is neither CRC-covered (word0_crc is over 0..27) nor
+// signed (the signature covers header[0..32]), so skipping it changes nothing
+// for a legitimate signed image.
+fn (mut p Prog) program_stage() bool {
+	if p.dl_addr == p.app_base + 32 {
+		p.dl_addr += prog_word // skip the valid-mark word; leave it erased
+		p.stage_len = 0
+		return true
+	}
+	if !p.flash.program(p.flash.ctx, p.dl_addr, &p.stage[0], prog_word) {
+		return false
+	}
+	p.dl_addr += prog_word
+	p.stage_len = 0
+	return true
+}
+
 // 0x36 TransferData: [sid, blockCounter, data...] — stage and program in
 // prog_word units.
 fn (mut p Prog) transfer_data(req &u8, req_len int, resp &u8) int {
@@ -347,11 +370,9 @@ fn (mut p Prog) transfer_data(req &u8, req_len int, resp &u8) int {
 		p.stage[p.stage_len] = unsafe { req[2 + i] }
 		p.stage_len++
 		if p.stage_len == prog_word {
-			if !p.flash.program(p.flash.ctx, p.dl_addr, &p.stage[0], prog_word) {
+			if !p.program_stage() {
 				return negative(resp, 0x36, nrc_general_programming_failure)
 			}
-			p.dl_addr += prog_word
-			p.stage_len = 0
 		}
 	}
 	p.next_block++
@@ -372,11 +393,9 @@ fn (mut p Prog) transfer_exit(req &u8, req_len int, resp &u8) int {
 		for i in p.stage_len .. prog_word {
 			p.stage[i] = 0xFF
 		}
-		if !p.flash.program(p.flash.ctx, p.dl_addr, &p.stage[0], prog_word) {
+		if !p.program_stage() {
 			return negative(resp, 0x37, nrc_general_programming_failure)
 		}
-		p.dl_addr += prog_word
-		p.stage_len = 0
 	}
 	p.downloading = false
 	unsafe {

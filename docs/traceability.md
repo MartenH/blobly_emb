@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 123 | 67 | 5 | 51 | 0 |
+| 123 | 68 | 5 | 50 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -25,13 +25,13 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-008 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-009 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-010 | QM | test | uncovered | — |
-| REQ-BOOT-011 | QM | test | verified | prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass) |
+| REQ-BOOT-011 | QM | test | verified | prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), ed25519_test.v (pass) |
 | REQ-BOOT-012 | QM | test | uncovered | — |
 | REQ-BOOT-013 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-014 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-015 | QM | analysis | uncovered | — |
 | REQ-BOOT-016 | QM | test | verified | prog_test.v (pass), prog_test.v (pass) |
-| REQ-BOOT-017 | QM | test | uncovered | — |
+| REQ-BOOT-017 | QM | test | verified | ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_interop_test.v (pass), sha512_test.v (pass) |
 | REQ-BOOT-018 | QM | analysis | uncovered | — |
 | REQ-CAN-DRV-001 | QM | test | covered | route.lua (pending), h735-fdcan-hardware (approved), h755-fdcan-hardware (approved), h755-dualcore-heartbeat (approved) |
 | REQ-CAN-DRV-002 | QM | test | covered | route.lua (pending), h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
@@ -159,7 +159,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-014 | | | | | | | ✓ | | |
 | REQ-BOOT-015 | | | | | | | | | |
 | REQ-BOOT-016 | | | | | | | ✓ | | |
-| REQ-BOOT-017 | | | | | | | | | |
+| REQ-BOOT-017 | | | | | | | ✓ | | |
 | REQ-BOOT-018 | | | | | | | | | |
 | REQ-CAN-DRV-001 | ✓ | | ✓ | | ✓ | · | | | |
 | REQ-CAN-DRV-002 | ✓ | | ✓ | | | · | | | |
