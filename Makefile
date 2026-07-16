@@ -68,6 +68,14 @@ trace:
 trace-check:
 	$(V) run tools/trace/gen.v --check
 
+# System-level validation (docs/multi-node.md): the cross-node checks over a
+# system.toml — single-writer per bus, identity uniqueness, NM cluster
+# coherence, routes. The build gate for a system of ECUs, as `check` is per node.
+# Override with SYSTEM=path/to/system.toml.
+SYSTEM ?= examples/system_bench/system.toml
+syscheck:
+	$(V) -enable-globals run tools/syscheck $(SYSTEM)
+
 # ---- Misc -------------------------------------------------------------------
 lint:
 	./scripts/lint_noalloc.sh
