@@ -427,3 +427,26 @@ fn test_0x29_proof_needs_challenge() {
 	}
 	assert ask(mut p, proof) == [u8(0x7F), 0x29, 0x24]
 }
+
+// @verifies REQ-BOOT-011
+// A pre-marked image (VALD already in word1, CRC-correct, NO valid signature)
+// must not boot: the boot never writes the valid-mark word from the wire, so it
+// stays erased and decide() finds no valid image (the pre-mark bypass).
+fn test_prewritten_mark_is_dropped() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	mut img := signed_image(700)
+	// forge the valid mark into the transferred header word1 (offset 32)
+	img[32] = 0x56 // 'V'
+	img[33] = 0x41
+	img[34] = 0x4C
+	img[35] = 0x44
+	unlock(mut p)
+	transfer(mut p, img)
+	// the mark word was NOT written from the wire -> image is not valid at reset
+	assert !check_image(&f.mem[0])
+	assert decide(false, check_image(&f.mem[0])) == .stay_boot
+	// and the legitimate path still works: check_and_mark verifies + writes it
+	assert ask(mut p, [u8(0x31), 0x01, 0xFF, 0x01]) == [u8(0x71), 0x01, 0xFF, 0x01, 0x00]
+	assert check_image(&f.mem[0])
+}
