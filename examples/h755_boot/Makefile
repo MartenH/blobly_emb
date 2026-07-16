@@ -23,7 +23,7 @@ BSP = $(BOARD_BSP_BARE) boot_glue.c $(BOARD_DIR)/flash.c $(REPO)/driver/can/can_
 
 all: $(BUILD)/$(NAME).bin
 
-$(BUILD)/boot.c: main.v $(wildcard $(REPO)/boot/*.v) $(wildcard $(REPO)/comm/isotp/*.v) $(wildcard $(REPO)/comm/uds/*.v) | $(BUILD)
+$(BUILD)/boot.c: main.v $(wildcard $(REPO)/boot/*.v) $(wildcard $(REPO)/bcrypto/*.v) $(wildcard $(REPO)/comm/isotp/*.v) $(wildcard $(REPO)/comm/uds/*.v) | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals \
 	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
 	  -o examples/$(NAME)/$(BUILD)/boot.c examples/$(NAME)/main.v

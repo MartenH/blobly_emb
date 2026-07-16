@@ -278,8 +278,10 @@ fn unpackneg(mut r [4]Gf, pk &u8) int {
 	return 0
 }
 
-// modL reduces the 64-limb x mod L into the low 32 bytes of r.
-fn modl(mut r []u8, mut x []i64) {
+// modL reduces the 64-limb x mod L into the low 32 bytes of r. No-alloc: fixed
+// arrays throughout — the on-target verify path must not touch a heap the boot
+// does not have.
+fn modl(mut r [32]u8, mut x [64]i64) {
 	mut carry := i64(0)
 	for i := 63; i >= 32; i-- {
 		carry = 0
@@ -307,16 +309,15 @@ fn modl(mut r []u8, mut x []i64) {
 	}
 }
 
-// reduce takes a 64-byte little-endian hash, reduces mod L into its low 32 bytes.
-fn reduce(mut r []u8) {
-	mut x := []i64{len: 64}
+// reduce_scalar reduces a 64-byte little-endian hash mod L to a 32-byte scalar.
+fn reduce_scalar(digest [64]u8) [32]u8 {
+	mut x := [64]i64{}
 	for i in 0 .. 64 {
-		x[i] = i64(r[i])
+		x[i] = i64(digest[i])
 	}
-	for i in 0 .. 64 {
-		r[i] = 0
-	}
+	mut r := [32]u8{}
 	modl(mut r, mut x)
+	return r
 }
 
 // Verifier streams the message for verify (the boot hashes an image from flash
@@ -354,15 +355,14 @@ pub fn (mut v Verifier) finish() bool {
 		return false
 	}
 	digest := v.hc.final()
-	mut h := []u8{len: 64}
-	for i in 0 .. 64 {
-		h[i] = digest[i]
-	}
-	reduce(mut h)
+	mut h := reduce_scalar(digest)
 	mut p := [4]Gf{}
 	scalarmult(mut p, mut v.q, unsafe { &h[0] }) // p = [h](-A)
 	mut sb := [4]Gf{}
-	s := v.sig[32..64].clone()
+	mut s := [32]u8{}
+	for i in 0 .. 32 {
+		s[i] = v.sig[32 + i]
+	}
 	scalarbase(mut sb, unsafe { &s[0] }) // sb = [S]B
 	add_pt(mut p, sb) // p = [S]B - [h]A
 	mut packed := [32]u8{}
@@ -420,13 +420,9 @@ pub fn sign(seed [32]u8, msg []u8) [64]u8 {
 		rc.update(&msg[0], msg.len)
 	}
 	rdig := rc.final()
-	mut rbuf := []u8{len: 64}
-	for i in 0 .. 64 {
-		rbuf[i] = rdig[i]
-	}
-	reduce(mut rbuf)
+	mut rr := reduce_scalar(rdig) // r mod L
 	mut p := [4]Gf{}
-	scalarbase(mut p, unsafe { &rbuf[0] }) // R = [r]B
+	scalarbase(mut p, unsafe { &rr[0] }) // R = [r]B
 	mut sig := [64]u8{}
 	mut renc := [32]u8{}
 	pack_point(mut renc, p)
@@ -441,22 +437,18 @@ pub fn sign(seed [32]u8, msg []u8) [64]u8 {
 		kc.update(&msg[0], msg.len)
 	}
 	kdig := kc.final()
-	mut h := []u8{len: 64}
-	for i in 0 .. 64 {
-		h[i] = kdig[i]
-	}
-	reduce(mut h)
+	h := reduce_scalar(kdig) // k mod L
 	// S = (r + k·a) mod L
-	mut x := []i64{len: 64}
+	mut x := [64]i64{}
 	for i in 0 .. 32 {
-		x[i] = i64(rbuf[i])
+		x[i] = i64(rr[i])
 	}
 	for i in 0 .. 32 {
 		for j in 0 .. 32 {
 			x[i + j] += i64(h[i]) * i64(d[j])
 		}
 	}
-	mut sbytes := []u8{len: 32}
+	mut sbytes := [32]u8{}
 	modl(mut sbytes, mut x)
 	for i in 0 .. 32 {
 		sig[32 + i] = sbytes[i]

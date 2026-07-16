@@ -1,5 +1,7 @@
 module bcrypto
 
+import os
+
 // @verifies REQ-BOOT-011, REQ-BOOT-017
 // Ed25519 against the RFC 8032 §7.1 test vectors — public-key derivation,
 // signing, and verification all match — plus the negative cases that matter
@@ -141,4 +143,35 @@ fn test_ed25519_streaming_verify() {
 	mut v2 := verify_start(pkey, sig)
 	v2.update(unsafe { &bad[0] }, bad.len)
 	assert !v2.finish()
+}
+
+// @verifies REQ-BOOT-017
+// The on-target verify path must be allocation-free (the boot has no heap). We
+// can't inspect the C here, but the source guard forbids the slice/heap forms
+// in the verify call graph — a regression to []u8{len:} or .clone() would trip
+// the freestanding boot at runtime (caught structurally, like lint_vinit).
+fn test_verify_path_no_heap_forms() {
+	src := os.read_file(os.join_path(os.dir(@FILE), 'ed25519.v')) or {
+		assert false, 'ed25519.v unreadable'
+		return
+	}
+	lines := src.split_into_lines()
+	mut in_verify_graph := false
+	for ln in lines {
+		t := ln.trim_space()
+		// the target verify call graph: everything from verify_start through the
+		// sign() boundary (sign is host-only and may use dynamic forms)
+		if t.starts_with('pub fn verify_start') || t.starts_with('fn reduce_scalar')
+			|| t.starts_with('fn modl') || t.starts_with('pub fn (mut v Verifier)') {
+			in_verify_graph = true
+		}
+		if t.starts_with('pub fn public_key') || t.starts_with('pub fn sign') {
+			in_verify_graph = false // host-only from here
+		}
+		if in_verify_graph {
+			assert !ln.contains('[]u8{len'), 'heap slice in the verify path: ${t}'
+			assert !ln.contains('[]i64{len'), 'heap slice in the verify path: ${t}'
+			assert !ln.contains('.clone()'), 'clone in the verify path: ${t}'
+		}
+	}
 }
