@@ -1,0 +1,44 @@
+# domain — the H755 domain controller's local description (multi-node P1). The
+# mirror of sysnode on the compute bus: it TRANSMITS EngineRpm and RECEIVES
+# VehicleSpeed, so every compute-bus signal has exactly one writer and one
+# reader (REQ-TOPO-001). Identity (NM 0x13) is allocated by ../../system.toml.
+
+[import]
+dbc = "compute.dbc"
+
+[bus.can0] # the compute-bus interface, matched to system [bus.compute]
+
+[[partition]]
+name = "ctl"
+
+  [[partition.thread]]
+  name = "engine"
+
+[[signal]]
+name = "EngineRpm" # produced here -> transmitted on compute
+from = "ctl"
+to   = "can0"
+
+  [[frame]]
+  name = "EngineRpmFrame"
+  bus  = "can0"
+  tx   = { mode = "cyclic", cycle_ms = 100 }
+
+[[signal]]
+name = "VehicleSpeed" # consumed here -> received from compute
+from = "can0"
+to   = "ctl"
+
+[[fb]]
+name = "EngineCtl"
+
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  reads     = ["VehicleSpeed"]
+  writes    = ["EngineRpm"] # trailing comment terminates the nested [[fb.handler]] parse (vlang/v#27684)
+
+[nm]
+node  = 0x13
+alive = 0x513
+peers = [0x500, 0x53F]

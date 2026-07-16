@@ -1,0 +1,44 @@
+# sysnode — the H735 system node's local description (multi-node P1). It owns
+# its internals (partition/thread/FB); the SYSTEM (../../system.toml) owns the
+# cross-node contract and identity. On the compute bus it TRANSMITS VehicleSpeed
+# and RECEIVES EngineRpm — the clean single-writer split the domain node mirrors.
+
+[import]
+dbc = "compute.dbc"
+
+[bus.can0] # the compute-bus interface, matched to system [bus.compute]
+
+[[partition]]
+name = "app"
+
+  [[partition.thread]]
+  name = "ctrl"
+
+[[signal]]
+name = "VehicleSpeed" # produced here -> transmitted on compute
+from = "app"
+to   = "can0"
+
+  [[frame]]
+  name = "VehSpeedFrame"
+  bus  = "can0"
+  tx   = { mode = "cyclic", cycle_ms = 100 }
+
+[[signal]]
+name = "EngineRpm" # consumed here -> received from compute
+from = "can0"
+to   = "app"
+
+[[fb]]
+name = "Dashboard"
+
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  reads     = ["EngineRpm"]
+  writes    = ["VehicleSpeed"] # trailing comment terminates the nested [[fb.handler]] parse (vlang/v#27684)
+
+[nm]
+node  = 0x11
+alive = 0x511
+peers = [0x500, 0x53F]
