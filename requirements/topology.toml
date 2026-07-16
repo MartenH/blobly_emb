@@ -45,3 +45,12 @@ status = "draft"
 method = "analysis"
 asil = "QM"
 derives = "SYS-REQ-TOPO-001"
+
+[[req]]
+id = "REQ-TOPO-006"
+title = "Cross-bus routing via a gateway"
+text = "A signal or frame required on a bus other than the one it is produced on shall be carried by a declared route on a gateway node that sits on both buses: a frame route forwards a PDU unchanged (valid on both bus contracts), a signal route decodes per the source bus contract and re-encodes per the destination bus contract. A cross-bus consumer with no producer on its bus and no route shall be a generation-time error."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
