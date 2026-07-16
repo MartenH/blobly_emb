@@ -37,6 +37,7 @@ fn clean_system() System {
 				name:  'sysnode'
 				buses: ['compute']
 				nm:    0x11
+				has_nm_alloc: true
 				trace: 1
 				view:  NodeView{
 					produces:  {
@@ -49,6 +50,7 @@ fn clean_system() System {
 					nm_node:     0x11
 					has_nm_node: true
 					alive:       0x511
+					has_alive:   true
 					peers_lo:    0x500
 					peers_hi:    0x53f
 					local_buses: ['can0']
@@ -58,6 +60,7 @@ fn clean_system() System {
 				name:  'domain'
 				buses: ['compute']
 				nm:    0x13
+				has_nm_alloc: true
 				trace: 2
 				view:  NodeView{
 					produces:  {
@@ -70,6 +73,7 @@ fn clean_system() System {
 					nm_node:     0x13
 					has_nm_node: true
 					alive:       0x513
+					has_alive:   true
 					peers_lo:    0x500
 					peers_hi:    0x53f
 					local_buses: ['can0']
@@ -242,6 +246,7 @@ fn test_route_satisfies_cross_bus_consumer() {
 		name:  'zone'
 		buses: ['edge']
 		nm:    0x20
+		has_nm_alloc: true
 		trace: 3
 		view:  NodeView{
 			consumes:    {
@@ -251,6 +256,7 @@ fn test_route_satisfies_cross_bus_consumer() {
 			nm_node:     0x20
 			has_nm_node: true
 			alive:       0x520
+			has_alive:   true
 			peers_lo:    0x500
 			peers_hi:    0x53f
 			local_buses: ['can1']
@@ -344,6 +350,7 @@ fn test_route_without_source_producer_is_error() {
 		name:  'zone'
 		buses: ['edge']
 		nm:    0x20
+		has_nm_alloc: true
 		trace: 3
 		view:  NodeView{
 			consumes:    {
@@ -353,6 +360,7 @@ fn test_route_without_source_producer_is_error() {
 			nm_node:     0x20
 			has_nm_node: true
 			alive:       0x520
+			has_alive:   true
 			peers_lo:    0x500
 			peers_hi:    0x53f
 			local_buses: ['can1']
@@ -415,12 +423,14 @@ fn test_nm_timing_anchor_is_per_param() {
 		name:  'third'
 		buses: ['compute']
 		nm:    0x15
+		has_nm_alloc: true
 		trace: 4
 		view:  NodeView{
 			has_nm:        true
 			nm_node:       0x15
 			has_nm_node:   true
 			alive:         0x515
+			has_alive:   true
 			peers_lo:      0x500
 			peers_hi:      0x53f
 			local_buses:   ['can0']
@@ -437,6 +447,62 @@ fn test_node_config_error_surfaces() {
 	s.nodes[0].view.config_errors = ['partition "app" is missing `core`']
 	issues := validate_system(s)
 	assert errs(issues).any(it.contains('ecu.toml invalid') && it.contains('missing `core`')), 'node config error'
+}
+
+// --- codex #141 round-3 fixes (declaration presence + full node gate) ---
+
+// REQ-TOPO-005: a node with a local [nm] the system never allocated is invisible
+// to the uniqueness check — every NM identity must be system-allocated.
+fn test_unallocated_local_nm_is_error() {
+	mut s := clean_system()
+	s.nodes[0].has_nm_alloc = false // ecu.toml has [nm] but system.toml omits nm
+	issues := validate_system(s)
+	assert errs(issues).any(it.contains('allocates it no `nm`')), errs(issues).str()
+	assert 'REQ-TOPO-005' in reqs_of(issues, .error)
+}
+
+// REQ-TOPO-005: an allocated node whose [nm] omits `node` still can't be
+// generated (loom2v requires node) — has_nm true but has_nm_node false.
+fn test_nm_block_without_node_id_is_error() {
+	mut s := clean_system()
+	s.nodes[0].view.has_nm_node = false // [nm] present, `node` absent
+	issues := validate_system(s)
+	assert errs(issues).any(it.contains('has no `node` id')), errs(issues).str()
+}
+
+// REQ-TOPO-002: alive = 0 is a valid CAN id, so two nodes both declaring it
+// collide (0 must not read as "unset").
+fn test_alive_zero_declared_collides() {
+	mut s := clean_system()
+	s.nodes[0].view.alive = 0
+	s.nodes[1].view.alive = 0 // both explicitly 0, both has_alive
+	issues := validate_system(s)
+	assert errs(issues).any(it.contains('alive id 0x0') && it.contains('shared')), errs(issues).str()
+}
+
+// REQ-TOPO-005 (integration): the FULL per-node gate runs — an unknown key that
+// ecumodel.validate alone would miss is caught by shelling to ecucheck.
+fn test_full_node_gate_catches_unknown_key() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_gate_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'bad.toml'), '
+[bus.can0]
+interface = "can0"
+fd = false
+core = 0
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "t"
+totally_unknown_key = 42
+') or { panic(err) }
+	view := load_node(os.join_path(dir, 'bad.toml')) or { panic(err) }
+	assert view.config_errors.len > 0, 'ecucheck should flag the unknown key'
+	assert view.config_errors.any(it.contains('unknown key') || it.contains('totally_unknown_key')), view.config_errors.str()
 }
 
 // parse_system + load_node round-trip on a written system.toml + node ecu.toml.

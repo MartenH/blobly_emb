@@ -7,6 +7,9 @@
 dbc = "compute.dbc"
 
 [bus.can0] # the compute-bus interface, matched to system [bus.compute]
+interface = "can0"
+fd        = false
+core      = 0
 
 [[partition]]
 name = "app"
@@ -16,9 +19,10 @@ core = 0
   name = "ctrl"
 
 [[signal]]
-name = "VehicleSpeed" # produced here -> transmitted on compute
-from = "app"
-to   = "can0"
+name   = "VehicleSpeed" # produced here -> transmitted on compute
+fields = { kph = "u16" }
+from   = "app"
+to     = "can0"
 
   [[frame]]
   name = "VehSpeedFrame"
@@ -26,9 +30,10 @@ to   = "can0"
   tx   = { mode = "cyclic", cycle_ms = 100 }
 
 [[signal]]
-name = "EngineRpm" # consumed here -> received from compute
-from = "can0"
-to   = "app"
+name   = "EngineRpm" # consumed here -> received from compute
+fields = { rpm = "u16" }
+from   = "can0"
+to     = "app"
 
 [[fb]]
 name   = "Dashboard"
