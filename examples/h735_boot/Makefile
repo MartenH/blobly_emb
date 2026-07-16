@@ -16,7 +16,11 @@ include $(REPO)/boards/$(BOARD)/board.mk
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
           $(BOARD_DEFS) $(CAN_DEFS) -DBOARD_ENTRY=main__main \
           -I. $(BOARD_INCS) -I$(REPO)/driver/can $(CMSIS)
+# __flash_len__ = BOOT_SIZE (sector 0, 128 KB): the linker refuses an image that
+# outgrows the boot region instead of letting `make flash` overflow into APP_BASE
+# and destroy the installed app (codex emb#140). Keep in lockstep with bootmap.h.
 LDFLAGS = $(MCU) -T $(BOARD_LD_BARE) -nostartfiles -Wl,--gc-sections \
+          -Wl,--defsym,__flash_len__=0x20000 \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/boot.map
 
 BUILD = build
