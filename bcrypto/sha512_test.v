@@ -1,4 +1,4 @@
-module crypto
+module bcrypto
 
 // @verifies REQ-BOOT-017
 // SHA-512 against the FIPS 180-4 / RFC 6234 known-answer vectors, plus a

@@ -1,4 +1,4 @@
-module crypto
+module bcrypto
 
 // @verifies REQ-BOOT-011, REQ-BOOT-017
 // Ed25519 against the RFC 8032 §7.1 test vectors — public-key derivation,
@@ -104,4 +104,41 @@ fn test_ed25519_roundtrip_large() {
 	assert verify(pkey, msg, sig)
 	msg[4999] ^= 0x01
 	assert !verify(pkey, msg, sig)
+}
+
+// the streaming Verifier (the boot's flash-chunked path) must match one-shot verify
+fn test_ed25519_streaming_verify() {
+	mut seed := [32]u8{}
+	for i in 0 .. 32 {
+		seed[i] = u8((i * 11 + 5) & 0xff)
+	}
+	pkey := public_key(seed)
+	mut msg := []u8{len: 3333}
+	for i in 0 .. msg.len {
+		msg[i] = u8((i * 97 + 13) & 0xff)
+	}
+	sig := sign(seed, msg)
+	// feed in uneven chunks
+	mut v := verify_start(pkey, sig)
+	mut off := 0
+	for step in [1, 500, 33, 1024, 700] {
+		mut n := step
+		if off + n > msg.len {
+			n = msg.len - off
+		}
+		if n > 0 {
+			v.update(unsafe { &msg[off] }, n)
+			off += n
+		}
+	}
+	if off < msg.len {
+		v.update(unsafe { &msg[off] }, msg.len - off)
+	}
+	assert v.finish()
+	// tamper mid-stream -> reject
+	mut bad := msg.clone()
+	bad[1000] ^= 0x01
+	mut v2 := verify_start(pkey, sig)
+	v2.update(unsafe { &bad[0] }, bad.len)
+	assert !v2.finish()
 }

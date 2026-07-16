@@ -1,4 +1,4 @@
-module crypto
+module bcrypto
 
 // Ed25519 (RFC 8032) — a faithful port of TweetNaCl (D. Bernstein et al.,
 // public domain), whose field is 16 × i64 limbs radix 2^16, so it needs no
@@ -319,34 +319,64 @@ fn reduce(mut r []u8) {
 	modl(mut r, mut x)
 }
 
-// verify returns true iff sig is a valid Ed25519 signature of msg under pubkey.
-pub fn verify(pubkey [32]u8, msg []u8, sig [64]u8) bool {
-	mut q := [4]Gf{}
-	if unpackneg(mut q, &pubkey[0]) != 0 {
-		return false // public key not a curve point
+// Verifier streams the message for verify (the boot hashes an image from flash
+// in chunks — there is no RAM to buffer it). Usage:
+//   mut v := verify_start(pubkey, sig)
+//   v.update(chunk, n) ...            // the signed message, in any pieces
+//   ok := v.finish()
+pub struct Verifier {
+mut:
+	q       [4]Gf   // the unpacked -A point
+	hc      Sha512  // hashing R ‖ A ‖ M
+	sig     [64]u8
+	key_ok  bool
+}
+
+// verify_start unpacks the public key and seeds the hash with R ‖ A. If the key
+// is not a curve point, finish() will return false regardless of the message.
+pub fn verify_start(pubkey [32]u8, sig [64]u8) Verifier {
+	mut v := Verifier{
+		sig: sig
 	}
-	// h = SHA512(R ‖ A ‖ M), streamed (no big buffer)
-	mut hc := new_sha512()
-	hc.update(&sig[0], 32) // R = sig[0..32]
-	hc.update(&pubkey[0], 32)
-	if msg.len > 0 {
-		hc.update(&msg[0], msg.len)
+	v.key_ok = unpackneg(mut v.q, &pubkey[0]) == 0
+	v.hc = new_sha512()
+	v.hc.update(&sig[0], 32) // R
+	v.hc.update(&pubkey[0], 32) // A
+	return v
+}
+
+pub fn (mut v Verifier) update(data &u8, n int) {
+	v.hc.update(data, n)
+}
+
+pub fn (mut v Verifier) finish() bool {
+	if !v.key_ok {
+		return false
 	}
-	digest := hc.final()
+	digest := v.hc.final()
 	mut h := []u8{len: 64}
 	for i in 0 .. 64 {
 		h[i] = digest[i]
 	}
 	reduce(mut h)
 	mut p := [4]Gf{}
-	scalarmult(mut p, mut q, unsafe { &h[0] }) // p = [h](-A)
+	scalarmult(mut p, mut v.q, unsafe { &h[0] }) // p = [h](-A)
 	mut sb := [4]Gf{}
-	s := sig[32..64].clone()
+	s := v.sig[32..64].clone()
 	scalarbase(mut sb, unsafe { &s[0] }) // sb = [S]B
 	add_pt(mut p, sb) // p = [S]B - [h]A
 	mut packed := [32]u8{}
 	pack_point(mut packed, p) // encode, normalising by Z
-	return crypto_verify_32(&sig[0], &packed[0]) == 0
+	return crypto_verify_32(&v.sig[0], &packed[0]) == 0
+}
+
+// verify returns true iff sig is a valid Ed25519 signature of msg under pubkey.
+pub fn verify(pubkey [32]u8, msg []u8, sig [64]u8) bool {
+	mut v := verify_start(pubkey, sig)
+	if msg.len > 0 {
+		v.update(&msg[0], msg.len)
+	}
+	return v.finish()
 }
 
 // pack_point encodes a point [4]Gf to its 32-byte form (y ‖ sign(x)).
