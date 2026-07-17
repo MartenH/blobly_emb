@@ -124,6 +124,7 @@ alive = 0x512          # = peers base + node, spelled out for the wire docs
 peers = [0x500, 0x53F] # the cluster's NM id range
 
 [shell]
+commands = ["boot"] # reboot into the boot manager (app->boot rung for debugger-free CAN reflash)
 bus = "can0"
 in  = 0x7F0
 out = 0x7F1

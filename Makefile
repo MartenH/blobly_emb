@@ -73,6 +73,7 @@ trace-check:
 # coherence, routes. The build gate for a system of ECUs, as `check` is per node.
 # Override with SYSTEM=path/to/system.toml.
 SYSTEM ?= examples/system_bench/system.toml
+.PHONY: syscheck gen-system
 syscheck:
 	$(V) -enable-globals run tools/syscheck $(SYSTEM)
 

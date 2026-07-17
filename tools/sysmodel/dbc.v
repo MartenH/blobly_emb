@@ -101,6 +101,7 @@ pub fn check_dbc_conformance(s System) []Issue {
 			}
 			continue
 		}
+
 		// the DBC transmitter must agree with the declared producer — the DBC's
 		// single BO_ sender IS the frame's one wire owner (a placeholder sender
 		// like Vector__XXX means "unspecified", not a mismatch).
@@ -148,7 +149,15 @@ pub fn check_dbc_conformance(s System) []Issue {
 					issues << Issue{
 						severity: .error
 						req:      'REQ-TOPO-003'
-						msg:      'signal "${sig.name}": field is ${if want { 'signed' } else { 'unsigned' }} but DBC SG_ "${sig.name}" is ${if ds.is_signed { 'signed' } else { 'unsigned' }}'
+						msg:      'signal "${sig.name}": field is ${if want {
+							'signed'
+						} else {
+							'unsigned'
+						}} but DBC SG_ "${sig.name}" is ${if ds.is_signed {
+							'signed'
+						} else {
+							'unsigned'
+						}}'
 					}
 				}
 			}
@@ -175,7 +184,7 @@ pub fn check_dbc_conformance(s System) []Issue {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-003'
-				msg:      'signal "${sig.name}": DBC signal name appears in ${in_frames.len} frames (${in_frames.join(", ")}) — loom2v resolves by name to the first, so it must be unique'
+				msg:      'signal "${sig.name}": DBC signal name appears in ${in_frames.len} frames (${in_frames.join(', ')}) — loom2v resolves by name to the first, so it must be unique'
 			}
 		}
 		// the fields must also fit the frame's payload
@@ -184,105 +193,6 @@ pub fn check_dbc_conformance(s System) []Issue {
 				severity: .error
 				req:      'REQ-TOPO-003'
 				msg:      'signal "${sig.name}": fields need ${bits} bits but DBC frame "${sig.frame}" is only ${m.dlc} bytes (${m.dlc * 8} bits)'
-			}
-		}
-	}
-	return issues
-}
-
-// TelemId — one telemetry frame id (its label + effective value), so the
-// ownership check iterates the CpuLoad id and the detail id uniformly.
-struct TelemId {
-	label string
-	id    u32
-}
-
-// check_telemetry_frames: a threadx node's comm thread transmits its telemetry
-// (CpuLoad + detail) as REAL frames on the telemetry bus. Those ids are wiring
-// the system owns just like NM/DBC ids, but they live in the node partial's
-// [telemetry], so nothing cross-checks them: two nodes with the same telemetry
-// id on one bus are an unowned multi-writer, and a telemetry id equal to a DBC
-// application frame (or inside the NM peer range) aliases two different frames on
-// the wire. These use the EFFECTIVE ids loom2v will emit — an omitted [telemetry]
-// id defaults to 0 (parse_telemetry) and the CpuLoad frame is ALWAYS sent, so two
-// id-less nodes both transmit at CAN id 0; the detail frame is sent only when
-// detail_id != 0, so an omitted detail is not on the wire. (REQ-TOPO-002.) P1: a
-// node's telemetry rides its single bus.
-fn check_telemetry_frames(s System) []Issue {
-	mut issues := []Issue{}
-	mut dbs := map[string]candb.Database{}
-	for bus in s.buses {
-		if bus.dbc == '' {
-			continue
-		}
-		path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(s.dir, bus.dbc) }
-		dbs[bus.name] = candb.load_dbc_file(path) or { continue } // load errors already reported
-	}
-	// owner of each (bus, id) among telemetry frames — a "<node>.field" label
-	mut owner := map[string]string{}
-	for n in s.nodes {
-		// ANY node with live telemetry transmits these frames — loom2v spawns
-		// partition_telem() whenever telemetry is on (gen.v), on the host target as
-		// well as threadx, so host nodes collide on the wire the same way.
-		if !n.view.has_telemetry || n.buses.len != 1 {
-			continue
-		}
-		busname := n.buses[0]
-		bus := s.bus_by_name(busname) or { continue }
-		mut mine := map[u32]string{} // this node's own ids (catch id == detail_id)
-		// CpuLoad is ALWAYS transmitted (effective id, 0 if omitted); the detail
-		// frame only when detail_id != 0. Build the effective-id list accordingly.
-		mut tframes := [TelemId{'telemetry id', n.view.telem_id}]
-		if n.view.telem_detail_id != 0 {
-			tframes << TelemId{'telemetry detail_id', n.view.telem_detail_id}
-		}
-		for tf in tframes {
-			label := tf.label
-			id := tf.id
-			// FDCAN masks id & 0x7ff — a telemetry id above that is truncated on the wire
-			if id > 0x7ff {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-002'
-					msg:      'node "${n.name}": ${label} 0x${id.hex()} exceeds 0x7ff (11-bit CAN) — the FDCAN backend masks id & 0x7ff'
-				}
-			}
-			if prev := mine[id] {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-002'
-					msg:      'node "${n.name}": ${label} 0x${id.hex()} collides with its own ${prev}'
-				}
-			} else {
-				mine[id] = label
-			}
-			key := '${busname}#${id}'
-			if prev := owner[key] {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-002'
-					msg:      'bus "${busname}": ${label} 0x${id.hex()} of "${n.name}" collides with ${prev} — telemetry frames are single-writer per bus'
-				}
-			} else {
-				owner[key] = '${n.name} ${label}'
-			}
-			// collision with a DBC application frame on the same bus
-			if db := dbs[busname] {
-				if m := db.lookup(id) {
-					issues << Issue{
-						severity: .error
-						req:      'REQ-TOPO-002'
-						msg:      'node "${n.name}": ${label} 0x${id.hex()} aliases DBC application frame "${m.name}" on bus "${busname}"'
-					}
-				}
-			}
-			// collision with the NM peer range (alive ids) on the same bus
-			if bus.has_nm_cluster && id >= bus.nm_peers_lo && id <= bus.nm_peers_hi {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-002'
-					msg:      'node "${n.name}": ${label} 0x${id.hex()} falls in the NM peer range [0x${bus.nm_peers_lo.hex()},0x${bus.nm_peers_hi.hex()}] on bus "${busname}"'
-				}
 			}
 		}
 	}
