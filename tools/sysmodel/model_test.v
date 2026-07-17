@@ -2285,3 +2285,53 @@ fn test_zero_partition_host_no_trace() {
 	}
 	assert !errs(validate_system(s)).any(it.contains('trace record id 0x7e5')), errs(validate_system(s)).str()
 }
+
+// --- codex #141 round-24 fixes ---
+
+// REQ-TOPO-002: host trace eligibility counts FB-BEARING partitions (loom2v's
+// m.part.by_part), so a second partition with no FB does not disqualify trace.
+fn test_partition_count_is_fb_bearing() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_fbpart_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// two partitions; only "app" hosts an FB -> FB-partition count = 1
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "ctrl"
+[[partition]]
+name = "idle"
+core = 0
+  [[partition.thread]]
+  name = "spin" # trailing comment (vlang/v#27684)
+[[fb]]
+name   = "Dashboard"
+thread = "ctrl" # trailing comment (vlang/v#27684)
+') or { panic(err) }
+	view := load_node(os.join_path(dir, 'n.toml')) or { panic(err) }
+	assert view.partition_count == 1, 'only the FB-bearing partition counts, got ${view.partition_count}'
+}
+
+// REQ-TOPO-002: an empty `route = []` is NOT a trace blocker (loom2v uses
+// m.routes.len > 0).
+fn test_empty_route_not_a_trace_blocker() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_emptyroute_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'n.toml'), '
+route = []
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "ctrl" # trailing comment (vlang/v#27684)
+') or { panic(err) }
+	view := load_node(os.join_path(dir, 'n.toml')) or { panic(err) }
+	assert !view.has_route, 'an empty route array is not a route'
+}
