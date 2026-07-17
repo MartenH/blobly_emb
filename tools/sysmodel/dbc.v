@@ -92,6 +92,18 @@ pub fn check_dbc_conformance(s System) []Issue {
 					msg:      'signal "${sig.name}": fields are ${bits} bits but DBC SG_ "${sig.name}" in frame "${sig.frame}" is ${ds.length} bits'
 				}
 			}
+			// signedness must agree: a signed SG_ decodes to negative physical
+			// values, which the bridge then casts to the declared V type — a u-field
+			// on a signed SG_ (or vice versa) flips the sign of high-bit values.
+			if want := field_signed(sig.fields) {
+				if want != ds.is_signed {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-003'
+						msg:      'signal "${sig.name}": field is ${if want { 'signed' } else { 'unsigned' }} but DBC SG_ "${sig.name}" is ${if ds.is_signed { 'signed' } else { 'unsigned' }}'
+					}
+				}
+			}
 		} else {
 			issues << Issue{
 				severity: .error
@@ -137,6 +149,19 @@ fn field_bits(fields map[string]string) int {
 		total += type_bits(typ)
 	}
 	return total
+}
+
+// field_signed reports the declared signedness of a signal's single integer
+// field, or none for a non-integer (bool/float — DBC signedness doesn't apply).
+fn field_signed(fields map[string]string) ?bool {
+	for _, typ in fields {
+		return match typ {
+			'i8', 'i16', 'i32', 'i64' { true }
+			'u8', 'u16', 'u32', 'u64' { false }
+			else { return none } // bool / float: skip the signedness check
+		}
+	}
+	return none
 }
 
 fn type_bits(typ string) int {

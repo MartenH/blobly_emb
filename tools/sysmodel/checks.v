@@ -251,7 +251,25 @@ fn check_signals_dissolved(s System) []Issue {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-001'
-					msg:      'signal "${sig.name}": field "${fname}" has unsupported type "${ftype}" (use a fixed scalar: bool/u8/i8/u16/i16/u32/i32/u64/i64/f32/f64)'
+					msg:      'signal "${sig.name}": field "${fname}" has unsupported type "${ftype}" (use a fixed scalar: bool/u8/i8/u16/i16/u32/i32/f32/f64)'
+				}
+			} else if ftype == 'u64' || ftype == 'i64' {
+				// loom2v's host bridge routes every non-bool value through an f64,
+				// whose 53-bit mantissa cannot represent all 64-bit integers — a
+				// large value would be silently corrupted on the wire.
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'signal "${sig.name}": field "${fname}" is ${ftype} — 64-bit integers are lossy through the f64 bridge; use <=32-bit widths'
+				}
+			}
+			// loom2v excludes a field named `valid` when picking the value field, so
+			// a lone `valid` leaves the generated bridge with nothing to serialize.
+			if sig.fields.len == 1 && fname == 'valid' {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'signal "${sig.name}": its only field is named "valid", which the bridge reserves — the value field needs another name'
 				}
 			}
 		}
@@ -270,6 +288,16 @@ fn check_signals_dissolved(s System) []Issue {
 				msg:      'signal "${sig.name}": producer "${sig.producer}" is not a declared node'
 			}
 			continue
+		}
+		// the producer must not ALSO read its own bus-published signal: sysgen
+		// emits only the TX endpoint, so the FB and the COM bridge would both hold
+		// the one SPSC TX channel (loom2v rejects a bus TX signal with any reader).
+		if sig.name in p.view.fb_reads {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}": producer "${p.name}" also reads it — a bus-published signal has no local reader (use a separate local feedback signal)'
+			}
 		}
 		if sig.bus !in p.buses {
 			issues << Issue{

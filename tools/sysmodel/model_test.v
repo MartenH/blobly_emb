@@ -899,6 +899,45 @@ fn test_dbc_ambiguous_signal_name() {
 	assert errs(check_dbc_conformance(s)).any(it.contains('appears in 2 frames'))
 }
 
+// --- P1b dissolution: codex #142 round-5 fixes ---
+
+// REQ-TOPO-001: a 64-bit integer field is lossy through loom2v's f64 bridge.
+fn test_dissolved_u64_field_rejected() {
+	mut s := clean_dissolved()
+	s.signals[0].fields = {
+		'big': 'u64'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('64-bit integers are lossy'))
+}
+
+// REQ-TOPO-001: a lone `valid` field has no value for the bridge to serialize.
+fn test_dissolved_sole_valid_field_rejected() {
+	mut s := clean_dissolved()
+	s.signals[0].fields = {
+		'valid': 'bool'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('reserves'))
+}
+
+// REQ-TOPO-001: a producer that also reads its own bus-published signal.
+fn test_dissolved_producer_reads_own_signal() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.fb_reads = ['Rpm', 'Speed'] // a produces Speed AND reads it
+	assert errs(validate_system_gen(s)).any(it.contains('also reads it'))
+}
+
+// REQ-TOPO-003: a u16 field on a SIGNED DBC SG_ (or vice versa).
+fn test_dbc_signedness_mismatch() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_sgn_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// SpeedFrame's SG_ is SIGNED (@1-) but the field is u16
+	bad := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|16@1- (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
+	s := dissolved_with_dbc(dir, bad)
+	assert errs(check_dbc_conformance(s)).any(it.contains('field is unsigned but DBC SG_') && it.contains('signed'))
+}
+
 // parse_system + load_node round-trip on a written system.toml + node ecu.toml.
 fn test_parse_and_load_roundtrip() {
 	dir := os.join_path(os.temp_dir(), 'sysmodel_test_${os.getpid()}')
