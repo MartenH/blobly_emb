@@ -457,9 +457,11 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 	}
 	if tlv := doc.value_opt('telemetry') {
 		tm := tlv.as_map()
-		// loom2v's threadx gate needs BOTH a bus AND telemetry on (m.telem.on) —
-		// enabled = false leaves the target without the channel NM rides.
-		telem_on := (tm['enabled'] or { toml.Any(true) }).bool()
+		// loom2v's threadx gate needs BOTH a bus AND telemetry on (m.telem.on).
+		// parse_telemetry defaults an OMITTED `enabled` to FALSE, so [telemetry]
+		// with a bus but no enabled key does NOT give a threadx node its channel —
+		// mirror that default (true would wrongly pass a node loom2v then panics on).
+		telem_on := (tm['enabled'] or { toml.Any(false) }).bool()
 		v.has_telemetry = telem_on && m_str(tm, 'bus') != ''
 		// the on-wire telemetry frame ids (0 = defaulted by loom2v, but an explicit
 		// id is what collides — record presence so the ownership check sees only

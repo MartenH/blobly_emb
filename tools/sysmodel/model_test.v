@@ -1,6 +1,7 @@
 module sysmodel
 
 import os
+import toml
 
 // @verifies REQ-TOPO-001, REQ-TOPO-002, REQ-TOPO-003, REQ-TOPO-004, REQ-TOPO-005, REQ-TOPO-006
 
@@ -1166,4 +1167,30 @@ trace = 1
 	assert sys.nodes[0].view.has_nm
 	assert sys.nodes[0].view.peers_lo == 0x500
 	assert sys.nodes[0].view.peers_hi == 0x53f
+}
+
+// codex parity (#141 round 11): loom2v's parse_telemetry defaults an omitted
+// `enabled` to FALSE — [telemetry] with a bus but no enabled key does not give a
+// threadx node its telemetry channel.
+fn test_telemetry_enabled_defaults_false_gen() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_tenon_gen_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "t" # trailing comment (vlang/v#27684)
+[target]
+kind    = "threadx"
+tick_ms = 1
+[telemetry]
+bus = "can0"
+') or { panic(err) }
+	doc := toml.parse_file(os.join_path(dir, 'n.toml')) or { panic(err) }
+	view := parse_node_view(doc)
+	assert !view.has_telemetry, 'omitted [telemetry].enabled must default to false (loom2v parse_telemetry)'
 }
