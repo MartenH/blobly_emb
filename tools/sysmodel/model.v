@@ -76,20 +76,24 @@ pub mut:
 	consumes map[string][]string
 	// interface -> frame names the node transmits on that bus (for frame routes
 	// / frame-level single-writer)
-	tx_frames     map[string][]string
-	nm_node       u32  // the node's own [nm] node id (checked against system.toml's)
-	has_nm_node   bool // whether [nm].node was declared (node id 0 is valid, 0..255)
-	nm_node_ok    bool // whether [nm].node is in loom2v's 0..255 range
-	alive         u32  // the node's [nm] alive id (the on-wire id, within peers)
-	has_alive     bool // whether [nm].alive was declared (alive = 0 is a valid CAN id)
-	peers_lo      u32
-	peers_hi      u32
-	has_nm        bool   // an [nm] table is present
-	nm_enabled    bool   // [nm].enabled (default true) — false = a non-participant node
-	nm_bus        string // the bus this node runs NM on (nm.bus, else the telemetry bus)
-	alive_binding string // [nm].alive when it is a DBC message NAME (not a numeric id)
-	is_threadx    bool   // [target].kind == "threadx" (loom2v generates NM only then)
-	is_baremetal  bool   // [target].kind == "baremetal" (loom2v rejects bus signals there)
+	tx_frames   map[string][]string
+	nm_node     u32  // the node's own [nm] node id (checked against system.toml's)
+	has_nm_node bool // whether [nm].node was declared (node id 0 is valid, 0..255)
+	nm_node_ok  bool // whether [nm].node is in loom2v's 0..255 range
+	alive       u32  // the node's [nm] alive id (the on-wire id, within peers)
+	has_alive   bool // whether [nm].alive was declared (alive = 0 is a valid CAN id)
+	// alive resolved from a NAMED DBC binding (a DBC message deliberately IS the
+	// alive frame). Only THEN is that message exempt from the application-frame-in-
+	// NM-range check — a numeric alive id does not make a same-id app frame legal.
+	alive_from_binding bool
+	peers_lo           u32
+	peers_hi           u32
+	has_nm             bool   // an [nm] table is present
+	nm_enabled         bool   // [nm].enabled (default true) — false = a non-participant node
+	nm_bus             string // the bus this node runs NM on (nm.bus, else the telemetry bus)
+	alive_binding      string // [nm].alive when it is a DBC message NAME (not a numeric id)
+	is_threadx         bool   // [target].kind == "threadx" (loom2v generates NM only then)
+	is_baremetal       bool   // [target].kind == "baremetal" (loom2v rejects bus signals there)
 	// loom2v emits the comm thread (and, only inside it, the NM state machine, the
 	// threadx trace module, and the shell) when the threadx target has a BRIDGE —
 	// >=1 external bus signal or an ISO-TP connection (comm_thread_on). A bridgeless
@@ -379,6 +383,7 @@ pub fn (mut s System) load_nodes() []string {
 				if snake(msg.name) == snake(name) {
 					s.nodes[i].view.alive = msg.id
 					s.nodes[i].view.has_alive = true
+					s.nodes[i].view.alive_from_binding = true
 					s.nodes[i].view.alive_binding = ''
 					hit = true
 					break
