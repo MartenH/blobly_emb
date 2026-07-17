@@ -301,7 +301,10 @@ fn check_frame_single_writer(s System) []Issue {
 				continue
 			}
 			for fr in n.view.tx_frames[bus.interface] {
-				owners[fr] << n.name
+				// loom2v snake()-normalizes every [[frame]].name before binding it to a
+				// DBC PDU, so "SpeedFrame" and "speed_frame" are the SAME frame — key
+				// the owner map by the normalized name to see both writers.
+				owners[snake(fr)] << n.name
 			}
 		}
 		for fr, nodes in owners {
@@ -611,6 +614,16 @@ fn check_nm_cluster_coherence(s System) []Issue {
 					severity: .error
 					req:      'REQ-TOPO-004'
 					msg:      'bus "${bus.name}": node "${n.name}" alive id 0x${n.view.alive.hex()} outside its cluster range [0x${lo.hex()},0x${hi.hex()}]'
+				}
+			}
+			// the threadx FDCAN backend masks id & 0x7ff, so an active alive id (or
+			// peer range) above 0x7ff is silently truncated — e.g. 0x811 goes out as
+			// 0x11 and collides. Validate the 11-bit limit before trusting the id.
+			if n.view.alive > 0x7ff || n.view.peers_hi > 0x7ff {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-004'
+					msg:      'bus "${bus.name}": node "${n.name}" active NM alive 0x${n.view.alive.hex()} / peer range hi 0x${n.view.peers_hi.hex()} exceeds 0x7ff (11-bit CAN) — the FDCAN backend masks id & 0x7ff'
 				}
 			}
 		}

@@ -13,23 +13,28 @@ module sysmodel
 import os
 import tools.candb
 
-// ModuleFrame — one generated comm-module tx frame: the bus interface it rides,
-// a human label, and its effective CAN id.
+// ModuleFrame — one generated comm-module CAN frame: the bus interface it rides,
+// a human label, its effective CAN id, and whether the id came from a DBC-NAME
+// binding (a bound endpoint IS that DBC frame, so it must not be flagged as
+// aliasing an unrelated application frame).
 struct ModuleFrame {
 	iface string
 	label string
 	id    u32
+	bound bool
 }
 
 // resolve_binding maps a module id binding to its numeric CAN id: a name resolves
-// against the given bus DBC (else falls back to `id`), a numeric passes through.
+// against the given bus DBC — normalized with snake() the same way loom2v matches
+// (record = "trace_record" hits a DBC message "TraceRecord") — else falls back to
+// `id`; a numeric passes through.
 fn resolve_binding(dbs map[string]candb.Database, busname string, id u32, name string) u32 {
 	if name == '' {
 		return id
 	}
 	if db := dbs[busname] {
 		for m in db.messages {
-			if m.name == name {
+			if snake(m.name) == snake(name) {
 				return m.id
 			}
 		}
@@ -43,11 +48,11 @@ fn resolve_binding(dbs map[string]candb.Database, busname string, id u32, name s
 fn module_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame {
 	mut out := []ModuleFrame{}
 	// [telemetry]: CpuLoad is always sent (effective id, 0 if omitted); detail only
-	// when detail_id != 0.
+	// when detail_id != 0. (No DBC-name binding — always a numeric/default id.)
 	if n.view.has_telemetry && n.view.telem_bus != '' {
-		out << ModuleFrame{n.view.telem_bus, 'telemetry id', n.view.telem_id}
+		out << ModuleFrame{n.view.telem_bus, 'telemetry id', n.view.telem_id, false}
 		if n.view.telem_detail_id != 0 {
-			out << ModuleFrame{n.view.telem_bus, 'telemetry detail_id', n.view.telem_detail_id}
+			out << ModuleFrame{n.view.telem_bus, 'telemetry detail_id', n.view.telem_detail_id, false}
 		}
 	}
 	// [trace]: the TraceModule transmits the record stream AND command responses.
@@ -56,17 +61,42 @@ fn module_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame 
 	if n.view.trace_on {
 		tbus := if n.view.trace_bus != '' { n.view.trace_bus } else { n.view.telem_bus }
 		if tbus != '' {
-			out << ModuleFrame{tbus, 'trace record id', resolve_binding(dbs, tbus_name(s, tbus),
-				n.view.trace_record_id, n.view.trace_record_name)}
-			out << ModuleFrame{tbus, 'trace rsp id', resolve_binding(dbs, tbus_name(s, tbus),
-				n.view.trace_rsp_id, n.view.trace_rsp_name)}
+			bn := tbus_name(s, tbus)
+			out << ModuleFrame{tbus, 'trace record id', resolve_binding(dbs, bn,
+				n.view.trace_record_id, n.view.trace_record_name), n.view.trace_record_name != ''}
+			out << ModuleFrame{tbus, 'trace rsp id', resolve_binding(dbs, bn, n.view.trace_rsp_id,
+				n.view.trace_rsp_name), n.view.trace_rsp_name != ''}
 		}
 	}
 	// [shell]: the threadx comm thread transmits shell.out responses on the comm
 	// (telemetry) channel.
 	if n.view.is_threadx && n.view.shell_on && n.view.telem_bus != '' {
-		out << ModuleFrame{n.view.telem_bus, 'shell out id', resolve_binding(dbs, tbus_name(s,
-			n.view.telem_bus), n.view.shell_out_id, n.view.shell_out_name)}
+		bn := tbus_name(s, n.view.telem_bus)
+		out << ModuleFrame{n.view.telem_bus, 'shell out id', resolve_binding(dbs, bn,
+			n.view.shell_out_id, n.view.shell_out_name), n.view.shell_out_name != ''}
+	}
+	return out
+}
+
+// module_rx_frames returns the RECEIVE endpoint ids a node's runtime listens on
+// (trace cmd + dump_fc, shell in). Another node TRANSMITTING at one of these ids
+// would drive this node's module state, so they are reserved on the bus.
+fn module_rx_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame {
+	mut out := []ModuleFrame{}
+	if n.view.trace_on {
+		tbus := if n.view.trace_bus != '' { n.view.trace_bus } else { n.view.telem_bus }
+		if tbus != '' {
+			bn := tbus_name(s, tbus)
+			out << ModuleFrame{tbus, 'trace cmd (rx) id', resolve_binding(dbs, bn,
+				n.view.trace_cmd_id, n.view.trace_cmd_name), n.view.trace_cmd_name != ''}
+			out << ModuleFrame{tbus, 'trace dump_fc (rx) id', resolve_binding(dbs, bn,
+				n.view.trace_dump_fc_id, n.view.trace_dump_fc_name), n.view.trace_dump_fc_name != ''}
+		}
+	}
+	if n.view.is_threadx && n.view.shell_on && n.view.telem_bus != '' {
+		bn := tbus_name(s, n.view.telem_bus)
+		out << ModuleFrame{n.view.telem_bus, 'shell in (rx) id', resolve_binding(dbs, bn,
+			n.view.shell_in_id, n.view.shell_in_name), n.view.shell_in_name != ''}
 	}
 	return out
 }
@@ -103,6 +133,17 @@ fn check_telemetry_frames(s System) []Issue {
 				owner[key] = 'the NM alive id of "${n.name}"'
 			}
 		}
+		// RESERVE each node's module RECEIVE ids: a frame transmitted at one of them
+		// is misrouted into the module (seeded, not reported — two listeners on one
+		// rx id is not itself a collision).
+		for f in module_rx_frames(n, s, dbs) {
+			bus := s.bus_by_interface(f.iface) or { continue }
+			key := '${bus.name}#${f.id}'
+			if _ := owner[key] {
+			} else {
+				owner[key] = '${f.label} of "${n.name}"'
+			}
+		}
 	}
 	for n in s.nodes {
 		frames := module_frames(n, s, dbs)
@@ -136,13 +177,17 @@ fn check_telemetry_frames(s System) []Issue {
 			} else {
 				owner[key] = 'the ${f.label} of "${n.name}"'
 			}
-			// collision with a DBC application frame on the same bus
-			if db := dbs[bus.name] {
-				if m := db.lookup(f.id) {
-					issues << Issue{
-						severity: .error
-						req:      'REQ-TOPO-002'
-						msg:      'node "${n.name}": ${f.label} 0x${f.id.hex()} aliases DBC application frame "${m.name}" on bus "${bus.name}"'
+			// collision with a DBC application frame on the same bus — but NOT for a
+			// name-bound endpoint, which IS that DBC frame by design (loom2v supports
+			// named trace/shell bindings).
+			if !f.bound {
+				if db := dbs[bus.name] {
+					if m := db.lookup(f.id) {
+						issues << Issue{
+							severity: .error
+							req:      'REQ-TOPO-002'
+							msg:      'node "${n.name}": ${f.label} 0x${f.id.hex()} aliases DBC application frame "${m.name}" on bus "${bus.name}"'
+						}
 					}
 				}
 			}

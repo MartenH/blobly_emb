@@ -111,6 +111,13 @@ pub mut:
 	trace_record_name string // a DBC message NAME binding (resolved against the bus DBC)
 	trace_rsp_id      u32    // the TraceModule also transmits command RESPONSES (default 0x7e3)
 	trace_rsp_name    string
+	// trace RECEIVE endpoints: the module reacts to cmd (0x7e2) and dump_fc (0x7e6),
+	// so another node transmitting at those ids would drive its trace state. These
+	// ids are RESERVED on the trace bus (a tx frame colliding with them is a bug).
+	trace_cmd_id       u32
+	trace_cmd_name     string
+	trace_dump_fc_id   u32
+	trace_dump_fc_name string
 	// [[isotp]] diagnostic connections: their rx_id/tx_id are on-wire diagnostic CAN
 	// ids (must be unique across nodes). loom2v ALSO cannot emit ISO-TP on the
 	// threadx comm thread (it panics), so a threadx node with any isotp can't build.
@@ -121,6 +128,10 @@ pub mut:
 	shell_on       bool
 	shell_out_id   u32
 	shell_out_name string // a DBC message NAME binding (resolved against the bus DBC)
+	// shell RECEIVE endpoint: the comm thread reads command lines on shell.in
+	// (default 0x7f0) — a RESERVED rx id on the comm bus.
+	shell_in_id   u32
+	shell_in_name string
 	// NM timing presence: loom2v applies its default only when the KEY is ABSENT,
 	// so an explicit 0 must be preserved (not normalized to the default).
 	nm_has_msg_cycle  bool
@@ -176,6 +187,30 @@ fn binding_id(m map[string]toml.Any, key string, def u32) (u32, string) {
 		return u32(v.int()), ''
 	}
 	return def, ''
+}
+
+// snake mirrors loom2v's snake() (tools/loom2v/gen.v): CamelCase -> snake_case, so
+// a named endpoint binding resolves the same way the generator does (record =
+// "trace_record" matches a DBC message "TraceRecord").
+fn snake(name string) string {
+	mut out := []u8{}
+	for i, c in name {
+		is_upper := c >= `A` && c <= `Z`
+		if is_upper && i > 0 {
+			prev := name[i - 1]
+			if (prev >= `a` && prev <= `z`) || (prev >= `0` && prev <= `9`) {
+				out << `_`
+			}
+		}
+		if (c >= `a` && c <= `z`) || (c >= `0` && c <= `9`) {
+			out << c
+		} else if is_upper {
+			out << c + 32
+		} else {
+			out << `_`
+		}
+	}
+	return out.bytestr()
 }
 
 // parse_system reads a system.toml into a System (nodes not yet loaded — call
@@ -441,6 +476,8 @@ pub fn load_node(path string) !NodeView {
 		if v.trace_on {
 			v.trace_record_id, v.trace_record_name = binding_id(trm, 'record', 0x7e5)
 			v.trace_rsp_id, v.trace_rsp_name = binding_id(trm, 'rsp', 0x7e3)
+			v.trace_cmd_id, v.trace_cmd_name = binding_id(trm, 'cmd', 0x7e2)
+			v.trace_dump_fc_id, v.trace_dump_fc_name = binding_id(trm, 'dump_fc', 0x7e6)
 		}
 	}
 	// [[isotp]] — diagnostic/ISO-TP connections. rx_id/tx_id are on-wire diagnostic
@@ -466,6 +503,7 @@ pub fn load_node(path string) !NodeView {
 		v.shell_on = (sm['enabled'] or { toml.Any(true) }).bool()
 		if v.shell_on {
 			v.shell_out_id, v.shell_out_name = binding_id(sm, 'out', 0x7f1)
+			v.shell_in_id, v.shell_in_name = binding_id(sm, 'in', 0x7f0)
 		}
 	}
 	// [nm] cluster + identity
