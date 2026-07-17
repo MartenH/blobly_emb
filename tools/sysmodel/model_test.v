@@ -558,6 +558,8 @@ fn clean_dissolved() System {
 					fb_reads:      ['Rpm']
 					is_threadx:    true
 					has_telemetry: true
+					has_telem_id:  true
+					telem_id:      0x7e0 // CpuLoad is always sent; a real id avoids the effective-0 clash
 				}
 			},
 			Node{
@@ -571,6 +573,8 @@ fn clean_dissolved() System {
 					fb_reads:      ['Speed']
 					is_threadx:    true
 					has_telemetry: true
+					has_telem_id:  true
+					telem_id:      0x7e2
 				}
 			},
 		]
@@ -634,6 +638,47 @@ fn test_dissolved_telemetry_id_equals_detail_is_error() {
 	s.nodes[0].view.has_telem_det = true
 	s.nodes[0].view.telem_detail_id = 0x7e0 // same as its own id
 	assert errs(validate_system_gen(s)).any(it.contains('collides with its own')), errs(validate_system_gen(s)).str()
+}
+
+// --- codex #142 round-9 fixes ---
+
+// REQ-TOPO-002: an OMITTED telemetry id defaults to 0 and the CpuLoad frame is
+// always sent, so two id-less threadx nodes both transmit at CAN id 0 — the
+// effective ids collide even though neither authored one.
+fn test_dissolved_omitted_telemetry_ids_collide_at_zero() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.has_telem_id = false // both omit the id -> effective 0
+	s.nodes[0].view.telem_id = 0
+	s.nodes[1].view.has_telem_id = false
+	s.nodes[1].view.telem_id = 0
+	assert errs(validate_system_gen(s)).any(it.contains('telemetry id 0x0')
+		&& it.contains('single-writer')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-003: a bus DBC with two BO_ sharing one CAN id is ambiguous — the
+// generator would emit both transmitters under one wire id.
+fn test_dissolved_dbc_duplicate_frame_id_is_error() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dupid_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// SpeedFrame and Shadow both at id 288
+	dup := 'VERSION ""
+
+BU_: a b
+
+BO_ 288 SpeedFrame: 8 a
+ SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b
+
+BO_ 288 Shadow: 8 b
+ SG_ Ghost : 0|16@1+ (1,0) [0|65535] "" a
+
+BO_ 289 RpmFrame: 8 b
+ SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a
+'
+	s := dissolved_with_dbc(dir, dup)
+	assert errs(check_dbc_conformance(s)).any(it.contains('share CAN id 0x120')), errs(check_dbc_conformance(s)).str()
 }
 
 // REQ-TOPO-001: a signal whose producer isn't a declared node.
