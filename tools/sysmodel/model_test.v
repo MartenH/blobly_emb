@@ -1387,3 +1387,38 @@ fn test_shell_out_id_collision_is_error() {
 	assert errs(validate_system(s)).any(it.contains('shell out id 0x7f1')
 		&& it.contains('single-writer')), errs(validate_system(s)).str()
 }
+
+// --- codex #141 round-14 fixes ---
+
+// REQ-TOPO-002: the TraceModule transmits command RESPONSES (rsp_id, default
+// 0x7e3) too, not just records — two nodes sharing a trace rsp id collide.
+fn test_trace_rsp_id_collision() {
+	mut s := clean_system()
+	for i in 0 .. 2 {
+		s.nodes[i].view.is_threadx = true
+		s.nodes[i].view.has_telemetry = true
+		s.nodes[i].view.telem_bus = 'can0'
+		s.nodes[i].view.nm_bus = 'can0'
+		s.nodes[i].view.telem_id = u32(0x7a0 + i) // distinct telemetry
+		s.nodes[i].view.trace_on = true
+		s.nodes[i].view.trace_record_id = u32(0x7b0 + i) // distinct records
+		s.nodes[i].view.trace_rsp_id = 0x7e3 // same rsp -> collide
+	}
+	assert errs(validate_system(s)).any(it.contains('trace rsp id 0x7e3')
+		&& it.contains('single-writer')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-002: a host node can trace on [trace].bus with telemetry DISABLED, so
+// two such nodes with colliding record ids must still be caught.
+fn test_host_trace_without_telemetry_collision() {
+	mut s := clean_system()
+	for i in 0 .. 2 {
+		s.nodes[i].view.is_threadx = false // host target
+		s.nodes[i].view.has_telemetry = false // telemetry off
+		s.nodes[i].view.trace_on = true
+		s.nodes[i].view.trace_bus = 'can0' // trace rides the compute bus
+		s.nodes[i].view.trace_record_id = 0x7e5 // same record id -> collide
+	}
+	assert errs(validate_system(s)).any(it.contains('trace record id 0x7e5')
+		&& it.contains('single-writer')), errs(validate_system(s)).str()
+}
