@@ -89,6 +89,7 @@ pub mut:
 	nm_bus        string // the bus this node runs NM on (nm.bus, else the telemetry bus)
 	alive_binding string // [nm].alive when it is a DBC message NAME (not a numeric id)
 	is_threadx    bool   // [target].kind == "threadx" (loom2v generates NM only then)
+	is_baremetal  bool   // [target].kind == "baremetal" (loom2v rejects bus signals there)
 	has_telemetry bool   // a [telemetry] block with a bus (loom2v requires it for threadx)
 	telem_bus     string // [telemetry].bus resolved to its interface
 	// NM timing presence: loom2v applies its default only when the KEY is ABSENT,
@@ -347,10 +348,14 @@ pub fn load_node(path string) !NodeView {
 	// [target].kind — loom2v generates NM only for the threadx target (it forces
 	// nm.on = false otherwise), so a non-threadx node is a NM non-participant.
 	mut target_threadx := false
+	mut target_baremetal := false
 	if tv := doc.value_opt('target') {
-		target_threadx = (tv.as_map()['kind'] or { toml.Any('') }).string() == 'threadx'
+		kind := (tv.as_map()['kind'] or { toml.Any('') }).string()
+		target_threadx = kind == 'threadx'
+		target_baremetal = kind == 'baremetal'
 	}
 	v.is_threadx = target_threadx
+	v.is_baremetal = target_baremetal
 	// [telemetry] — loom2v requires it (with a bus) for the threadx target, and
 	// uses its bus as the implicit NM bus when [nm].bus is absent.
 	if tlv := doc.value_opt('telemetry') {
@@ -424,19 +429,36 @@ pub fn load_node(path string) !NodeView {
 	return v
 }
 
+// run_capture runs `exe` with an ARGUMENT VECTOR (never a shell command string),
+// so a node/DBC path containing shell metacharacters (`$(...)`, backticks, `;`)
+// is passed to the child literally and can never trigger command substitution —
+// syscheck loads whatever paths a system.toml names, so those are untrusted
+// input. Returns combined stdout+stderr and the exit code.
+fn run_capture(exe string, args []string) (string, int) {
+	mut p := os.new_process(exe)
+	p.set_args(args)
+	p.set_redirect_stdio()
+	p.run()
+	out := p.stdout_slurp() + p.stderr_slurp()
+	p.wait()
+	code := p.code
+	p.close()
+	return out, code
+}
+
 // ecucheck_errors runs the real per-node gate (tools/ecucheck) on a node's
-// ecu.toml and returns its error lines (empty = clean). Shelling to @VEXE keeps
-// this the EXACT validation loom2v builds behind — no re-implementation to
+// ecu.toml and returns its error lines (empty = clean). Running the REAL @VEXE
+// keeps this the EXACT validation loom2v builds behind — no re-implementation to
 // drift. ecucheck prints "<file>: <msg>" per error and a "ecucheck: N …"
 // summary, then exits non-zero; we keep the messages, drop the summary/prefix.
 fn ecucheck_errors(node_path string) []string {
-	res := os.execute('${@VEXE} run ${@VMODROOT}/tools/ecucheck/gen.v "${node_path}"')
-	if res.exit_code == 0 {
+	output, code := run_capture(@VEXE, ['run', '${@VMODROOT}/tools/ecucheck/gen.v', node_path])
+	if code == 0 {
 		return []string{}
 	}
 	fname := os.file_name(node_path)
 	mut out := []string{}
-	for line in res.output.split_into_lines() {
+	for line in output.split_into_lines() {
 		t := line.trim_space()
 		if t == '' || t.starts_with('ecucheck:') {
 			continue // the count summary, not an error
@@ -447,7 +469,7 @@ fn ecucheck_errors(node_path string) []string {
 	if out.len == 0 {
 		// ecucheck failed for a reason it didn't print as a schema error (a
 		// build/parse failure) — surface something rather than swallow it.
-		out << 'ecucheck failed (exit ${res.exit_code})'
+		out << 'ecucheck failed (exit ${code})'
 	}
 	return out
 }

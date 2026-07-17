@@ -1012,3 +1012,57 @@ trace = 1
 	load_errs := sys.load_nodes()
 	assert load_errs.any(it.contains('no such message')), load_errs.str()
 }
+
+// --- codex #141 round-9 fixes ---
+
+// REQ-TOPO-004: loom2v runs NM on the TELEMETRY bus (nm.bus only labels the
+// manifest), so an explicit [nm].bus other than [telemetry].bus is rejected —
+// otherwise coherence is scoped to a bus the node doesn't physically run NM on.
+fn test_nm_bus_must_match_telemetry() {
+	mut s := clean_system()
+	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.has_telemetry = true
+	s.nodes[0].view.telem_bus = 'can0'
+	s.nodes[0].view.nm_bus = 'can1' // differs from the telemetry bus
+	assert errs(validate_system(s)).any(it.contains('[nm].bus "can1"')
+		&& it.contains('[telemetry].bus "can0"')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-005: loom2v's baremetal superloop panics for any external/bus signal
+// (no comm bridge), so a baremetal node with bus-facing signals is not buildable.
+fn test_baremetal_with_bus_signal_is_error() {
+	mut s := clean_system()
+	s.nodes[0].view.is_baremetal = true // node produces Speed on can0 (a bus signal)
+	assert errs(validate_system(s)).any(it.contains('target is baremetal')
+		&& it.contains('bus-facing signals')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-001: a local interface no system bus declares, carrying bus-facing
+// signals, has no system contract — its traffic must not silently pass unchecked.
+fn test_undeclared_interface_with_signals_is_error() {
+	mut s := clean_system()
+	s.nodes[0].view.local_buses = ['can0', 'can1'] // can1 is not a system bus
+	s.nodes[0].view.produces['can1'] = ['Extra'] // ...yet it transmits there
+	assert errs(validate_system(s)).any(it.contains('[bus.can1]')
+		&& it.contains('no system contract')), errs(validate_system(s)).str()
+}
+
+// The per-node gate runs ecucheck via run_capture, which uses an ARGUMENT VECTOR
+// rather than a shell string — so an untrusted path (an `ecu = "$(...)"` a
+// system.toml names) is passed literally and cannot run code (regression).
+fn test_run_capture_does_not_shell() {
+	if !os.exists('/bin/echo') {
+		return // no echo to probe with; skip rather than fail on an odd host
+	}
+	dir := os.join_path(os.temp_dir(), 'sysmodel_argv_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	marker := os.join_path(dir, 'pwned')
+	// were this exec'd through a shell, `$(touch <marker>)` would create the
+	// marker; through an argv it is just a literal string echo prints back.
+	out, _ := run_capture('/bin/echo', ['\$(touch ${marker})'])
+	assert !os.exists(marker), 'run_capture executed a shell command substitution'
+	assert out.contains('touch'), 'echo should print the arg literally: ${out}'
+}
