@@ -46,9 +46,10 @@ fn check_telemetry_frames(s System) []Issue {
 		}
 	}
 	for n in s.nodes {
-		// only a threadx node with live telemetry transmits these frames; they ride
-		// the telemetry bus (an interface -> its system bus).
-		if !n.view.is_threadx || !n.view.has_telemetry {
+		// ANY node with live telemetry transmits CpuLoad/detail — loom2v spawns
+		// partition_telem() on the host target too, not just threadx (gen.v). The
+		// frames ride the telemetry bus (an interface -> its system bus).
+		if !n.view.has_telemetry {
 			continue
 		}
 		bus := s.bus_by_interface(n.view.telem_bus) or { continue }
@@ -57,8 +58,8 @@ fn check_telemetry_frames(s System) []Issue {
 		if n.view.telem_detail_id != 0 {
 			tframes << TelemId{'telemetry detail_id', n.view.telem_detail_id}
 		}
-		// the threadx exec-hook trace streams its record frame on the SAME telemetry
-		// channel (record_id, default 0x7e5) — another real tx frame on this bus.
+		// the exec-hook trace streams its record frame on the SAME telemetry channel
+		// (record_id, default 0x7e5) — another real tx frame on this bus.
 		if n.view.trace_on {
 			mut rid := n.view.trace_record_id
 			if n.view.trace_record_name != '' {
@@ -72,6 +73,22 @@ fn check_telemetry_frames(s System) []Issue {
 				}
 			}
 			tframes << TelemId{'trace record id', rid}
+		}
+		// a threadx node's comm thread also transmits shell.out responses (default
+		// 0x7f1) on this channel when [shell] is enabled.
+		if n.view.is_threadx && n.view.shell_on {
+			mut sid := n.view.shell_out_id
+			if n.view.shell_out_name != '' {
+				if db := dbs[bus.name] {
+					for m in db.messages {
+						if m.name == n.view.shell_out_name {
+							sid = m.id
+							break
+						}
+					}
+				}
+			}
+			tframes << TelemId{'shell out id', sid}
 		}
 		for tf in tframes {
 			label := tf.label

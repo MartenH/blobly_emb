@@ -76,14 +76,14 @@ pub mut:
 	consumes map[string][]string
 	// interface -> frame names the node transmits on that bus (for frame routes
 	// / frame-level single-writer)
-	tx_frames  map[string][]string
-	nm_node    u32 // the node's own [nm] node id (checked against system.toml's)
-	has_nm_node bool // whether [nm].node was declared (node id 0 is valid, 0..255)
-	nm_node_ok  bool // whether [nm].node is in loom2v's 0..255 range
-	alive      u32 // the node's [nm] alive id (the on-wire id, within peers)
-	has_alive  bool // whether [nm].alive was declared (alive = 0 is a valid CAN id)
-	peers_lo   u32
-	peers_hi   u32
+	tx_frames     map[string][]string
+	nm_node       u32  // the node's own [nm] node id (checked against system.toml's)
+	has_nm_node   bool // whether [nm].node was declared (node id 0 is valid, 0..255)
+	nm_node_ok    bool // whether [nm].node is in loom2v's 0..255 range
+	alive         u32  // the node's [nm] alive id (the on-wire id, within peers)
+	has_alive     bool // whether [nm].alive was declared (alive = 0 is a valid CAN id)
+	peers_lo      u32
+	peers_hi      u32
 	has_nm        bool   // an [nm] table is present
 	nm_enabled    bool   // [nm].enabled (default true) — false = a non-participant node
 	nm_bus        string // the bus this node runs NM on (nm.bus, else the telemetry bus)
@@ -108,6 +108,16 @@ pub mut:
 	trace_on          bool
 	trace_record_id   u32
 	trace_record_name string // a DBC message NAME binding (resolved against the bus DBC)
+	// [[isotp]] diagnostic connections: their rx_id/tx_id are on-wire diagnostic CAN
+	// ids (must be unique across nodes). loom2v ALSO cannot emit ISO-TP on the
+	// threadx comm thread (it panics), so a threadx node with any isotp can't build.
+	has_isotp bool
+	isotp_ids []u32
+	// [shell]: a threadx node transmits shell.out responses (default 0x7f1) on the
+	// comm channel — a REAL tx frame that must not collide with other bus ids.
+	shell_on       bool
+	shell_out_id   u32
+	shell_out_name string // a DBC message NAME binding (resolved against the bus DBC)
 	// NM timing presence: loom2v applies its default only when the KEY is ABSENT,
 	// so an explicit 0 must be preserved (not normalized to the default).
 	nm_has_msg_cycle  bool
@@ -123,7 +133,7 @@ pub mut:
 	nm_timeout_ms    int
 	nm_repeat_ms     int
 	nm_wait_sleep_ms int
-	local_buses []string // the [bus.X] names declared in the node's ecu.toml
+	local_buses      []string // the [bus.X] names declared in the node's ecu.toml
 }
 
 // System — the whole parsed system.toml plus each node's loaded view.
@@ -368,7 +378,7 @@ pub fn load_node(path string) !NodeView {
 			m := f.as_map()
 			name := m_str(m, 'name')
 			bus := m_str(m, 'bus')
-			if name != '' && ('tx' in m) {
+			if name != '' && 'tx' in m {
 				if iface := iface_of(bus) {
 					v.tx_frames[iface] << name
 				}
@@ -419,6 +429,40 @@ pub fn load_node(path string) !NodeView {
 				}
 			} else {
 				v.trace_record_id = 0x7e5
+			}
+		}
+	}
+	// [[isotp]] — diagnostic/ISO-TP connections. rx_id/tx_id are on-wire diagnostic
+	// CAN ids; loom2v also can't emit ISO-TP on the threadx comm thread.
+	if iv := doc.value_opt('isotp') {
+		for c in iv.array() {
+			cm := c.as_map()
+			v.has_isotp = true
+			rx := m_u32(cm, 'rx_id')
+			tx := m_u32(cm, 'tx_id')
+			if rx != 0 {
+				v.isotp_ids << rx
+			}
+			if tx != 0 {
+				v.isotp_ids << tx
+			}
+		}
+	}
+	// [shell] — the threadx comm thread transmits shell.out responses (default
+	// 0x7f1). parse_shell defaults an omitted `enabled` to TRUE when present.
+	if shv := doc.value_opt('shell') {
+		sm := shv.as_map()
+		v.shell_on = (sm['enabled'] or { toml.Any(true) }).bool()
+		if v.shell_on {
+			if ov := sm['out'] {
+				if ov is string {
+					v.shell_out_name = ov // a DBC name; resolved in the check
+					v.shell_out_id = 0x7f1
+				} else {
+					v.shell_out_id = u32(ov.int())
+				}
+			} else {
+				v.shell_out_id = 0x7f1
 			}
 		}
 	}

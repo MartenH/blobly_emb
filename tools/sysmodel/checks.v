@@ -132,6 +132,16 @@ fn check_node_configs(s System) []Issue {
 				msg:      'node "${n.name}": target is threadx but its telemetry bus "${n.view.telem_bus}" has fd = true — loom2v\'s FDCAN backend here is classic-only'
 			}
 		}
+		// loom2v's threadx comm thread turns on for ISO-TP but then panics because
+		// routes / ISO-TP are not generated for it (gen.v). So a threadx node with
+		// any [[isotp]] connection is not buildable yet (REQ-TOPO-005).
+		if n.view.is_threadx && n.view.has_isotp {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": target is threadx but has an [[isotp]] connection — loom2v does not generate ISO-TP on the comm thread yet (it panics)'
+			}
+		}
 		// loom2v's baremetal superloop has NO comm bridge and panics for any
 		// external/bus signal ("baremetal does not support external/bus signals
 		// yet"); only the threadx comm thread services bus traffic. So a baremetal
@@ -143,30 +153,30 @@ fn check_node_configs(s System) []Issue {
 				msg:      'node "${n.name}": target is baremetal but has bus-facing signals (produces/consumes on a bus) — loom2v\'s baremetal superloop has no comm bridge; only the threadx target services bus signals'
 			}
 		}
-			// loom2v's threadx comm thread owns ONLY the telemetry bus and panics for a
-			// TX or RX signal on any other bus (gen.v). Every bus-facing signal of a
-			// threadx node must ride its telemetry bus; a signal on another claimed system
-			// bus is not generatable until a per-bus comm owner exists (P2, REQ-TOPO-005).
-			if n.view.is_threadx && n.view.has_telemetry {
-				for iface, sigs in n.view.produces {
-					if sigs.len > 0 && iface != n.view.telem_bus {
-						issues << Issue{
-							severity: .error
-							req:      'REQ-TOPO-005'
-							msg:      'node "${n.name}": transmits ${sigs} on bus "${iface}" but its threadx comm thread owns only the telemetry bus "${n.view.telem_bus}" (one comm bus per node in P1)'
-						}
-					}
-				}
-				for iface, sigs in n.view.consumes {
-					if sigs.len > 0 && iface != n.view.telem_bus {
-						issues << Issue{
-							severity: .error
-							req:      'REQ-TOPO-005'
-							msg:      'node "${n.name}": receives ${sigs} on bus "${iface}" but its threadx comm thread owns only the telemetry bus "${n.view.telem_bus}" (one comm bus per node in P1)'
-						}
+		// loom2v's threadx comm thread owns ONLY the telemetry bus and panics for a
+		// TX or RX signal on any other bus (gen.v). Every bus-facing signal of a
+		// threadx node must ride its telemetry bus; a signal on another claimed system
+		// bus is not generatable until a per-bus comm owner exists (P2, REQ-TOPO-005).
+		if n.view.is_threadx && n.view.has_telemetry {
+			for iface, sigs in n.view.produces {
+				if sigs.len > 0 && iface != n.view.telem_bus {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-005'
+						msg:      'node "${n.name}": transmits ${sigs} on bus "${iface}" but its threadx comm thread owns only the telemetry bus "${n.view.telem_bus}" (one comm bus per node in P1)'
 					}
 				}
 			}
+			for iface, sigs in n.view.consumes {
+				if sigs.len > 0 && iface != n.view.telem_bus {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-005'
+						msg:      'node "${n.name}": receives ${sigs} on bus "${iface}" but its threadx comm thread owns only the telemetry bus "${n.view.telem_bus}" (one comm bus per node in P1)'
+					}
+				}
+			}
+		}
 		// loom2v runs NM inside the comm thread, which owns the TELEMETRY bus —
 		// [nm].bus only labels the manifest (gen_nm.v), it does NOT move NM's tx.
 		// So an explicit nm.bus other than the telemetry bus is a lie: syscheck
@@ -255,7 +265,7 @@ fn check_bus_membership(s System) []Issue {
 					issues << Issue{
 						severity: .error
 						req:      'REQ-TOPO-001'
-						msg:      'node "${n.name}": opens interface [bus.${iface}] not declared by any system bus, yet carries ${kinds.join("/")} on it — that traffic has no system contract and is never checked for writers, reachability, or frame ownership'
+						msg:      'node "${n.name}": opens interface [bus.${iface}] not declared by any system bus, yet carries ${kinds.join('/')} on it — that traffic has no system contract and is never checked for writers, reachability, or frame ownership'
 					}
 				}
 				continue
@@ -299,7 +309,7 @@ fn check_frame_single_writer(s System) []Issue {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-001'
-					msg:      'bus "${bus.name}": frame "${fr}" transmitted by ${nodes.len} nodes (${nodes.join(", ")}) — one frame owner per bus'
+					msg:      'bus "${bus.name}": frame "${fr}" transmitted by ${nodes.len} nodes (${nodes.join(', ')}) — one frame owner per bus'
 				}
 			}
 		}
@@ -351,7 +361,7 @@ fn check_bus_single_writer(s System) []Issue {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-001'
-					msg:      'bus "${bus.name}": signal "${sig}" transmitted by ${nodes.len} nodes (${nodes.join(", ")}) — exactly one writer per bus'
+					msg:      'bus "${bus.name}": signal "${sig}" transmitted by ${nodes.len} nodes (${nodes.join(', ')}) — exactly one writer per bus'
 				}
 			}
 		}
@@ -362,7 +372,7 @@ fn check_bus_single_writer(s System) []Issue {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-001'
-					msg:      'bus "${bus.name}": signal "${sig}" consumed by ${nodes.join(", ")} but no node transmits it here (missing producer or route)'
+					msg:      'bus "${bus.name}": signal "${sig}" consumed by ${nodes.join(', ')} but no node transmits it here (missing producer or route)'
 				}
 			}
 		}
@@ -372,7 +382,7 @@ fn check_bus_single_writer(s System) []Issue {
 				issues << Issue{
 					severity: .warning
 					req:      'REQ-TOPO-001'
-					msg:      'bus "${bus.name}": signal "${sig}" transmitted by ${nodes.join(", ")} but no node consumes it here'
+					msg:      'bus "${bus.name}": signal "${sig}" transmitted by ${nodes.join(', ')} but no node consumes it here'
 				}
 			}
 		}
@@ -499,6 +509,24 @@ fn check_identity_uniqueness(s System) []Issue {
 				}
 			} else {
 				diag_seen[id] = n.name
+			}
+		}
+		// the ECU's ACTUAL [[isotp]] rx_id/tx_id are the on-wire diagnostic ids
+		// (loom2v emits them); system.toml `diag` is only the allocation. Register
+		// the real ids in the SAME map so two nodes physically using one diagnostic
+		// CAN id collide even when their system diag allocations differ.
+		for iid in n.view.isotp_ids {
+			if iid == 0 {
+				continue
+			}
+			if prev := diag_seen[iid] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-002'
+					msg:      'node "${n.name}": [[isotp]] diagnostic id 0x${iid.hex()} collides with an id already used by "${prev}"'
+				}
+			} else {
+				diag_seen[iid] = n.name
 			}
 		}
 		if n.trace != 0 {
@@ -678,6 +706,7 @@ fn check_routes(s System) []Issue {
 			}
 			continue
 		}
+
 		if r.from == '' || r.to == '' {
 			issues << Issue{
 				severity: .error
