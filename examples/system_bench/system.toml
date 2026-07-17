@@ -21,7 +21,7 @@ nm        = { peers = [0x500, 0x53F], timeout_ms = 300, repeat_ms = 200 }
 # --- cross-node signals: declared ONCE, wired into every participant ---
 [[signal]]
 name     = "VehicleSpeed"
-fields   = { kph = "u16" }
+fields   = { kph = "u32" }
 producer = "sysnode" # the H735 transmits it
 bus      = "compute"
 frame    = "VehSpeedFrame"
@@ -29,7 +29,7 @@ cycle_ms = 100
 
 [[signal]]
 name     = "EngineRpm"
-fields   = { rpm = "u16" }
+fields   = { rpm = "u32" }
 producer = "domain" # the H755 transmits it
 bus      = "compute"
 frame    = "EngineRpmFrame"

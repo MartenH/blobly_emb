@@ -59,11 +59,27 @@ fn main() {
 			exit(1)
 		}
 		// gate the GENERATED node (partials never pass alone — the guarantee is
-		// that what sysgen EMITS is buildable).
+		// that what sysgen EMITS is buildable). ecucheck is the SCHEMA gate;
+		// loom2v is the TARGET gate — it enforces the comm-thread bridge
+		// constraints ecucheck can't see (a threadx external signal must be a
+		// trivial u32 LE @ bit0, a standard id, cyclic, no E2E/SecOC), so a clean
+		// verdict means the node actually generates, not just parses.
 		gerrs := sysmodel.ecucheck_errors(gen_path)
 		if gerrs.len > 0 {
 			for e in gerrs {
 				eprintln('sysgen: generated ${n.name}: ${e}')
+			}
+			exit(1)
+		}
+		bus := node_bus(sys, n) or {
+			eprintln('sysgen: node "${n.name}": ${err}')
+			exit(1)
+		}
+		dbc_path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(sys.dir, bus.dbc) }
+		lerrs := sysmodel.loom2v_errors(gen_path, dbc_path)
+		if lerrs.len > 0 {
+			for e in lerrs {
+				eprintln('sysgen: generated ${n.name}: loom2v: ${e}')
 			}
 			exit(1)
 		}

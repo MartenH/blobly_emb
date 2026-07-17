@@ -138,6 +138,13 @@ pub mut:
 	// threadx + have a [telemetry] bus, or its NM is generated but dead.
 	is_threadx    bool
 	has_telemetry bool
+	// the telemetry frames the threadx comm thread transmits on the telemetry bus
+	// (CpuLoad + its detail). These are REAL tx ids on the wire, so they must be
+	// unique across nodes and not collide with a DBC application frame (REQ-TOPO-002).
+	has_telem_id    bool
+	telem_id        u32
+	has_telem_det   bool
+	telem_detail_id u32
 }
 
 // System — the whole parsed system.toml plus each node's loaded view.
@@ -449,7 +456,18 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 		v.is_threadx = (tv.as_map()['kind'] or { toml.Any('') }).string() == 'threadx'
 	}
 	if tlv := doc.value_opt('telemetry') {
-		v.has_telemetry = m_str(tlv.as_map(), 'bus') != ''
+		tm := tlv.as_map()
+		// loom2v's threadx gate needs BOTH a bus AND telemetry on (m.telem.on) —
+		// enabled = false leaves the target without the channel NM rides.
+		telem_on := (tm['enabled'] or { toml.Any(true) }).bool()
+		v.has_telemetry = telem_on && m_str(tm, 'bus') != ''
+		// the on-wire telemetry frame ids (0 = defaulted by loom2v, but an explicit
+		// id is what collides — record presence so the ownership check sees only
+		// authored ids).
+		v.has_telem_id = 'id' in tm
+		v.telem_id = m_u32(tm, 'id')
+		v.has_telem_det = 'detail_id' in tm
+		v.telem_detail_id = m_u32(tm, 'detail_id')
 	}
 	if _ := doc.value_opt('route') {
 		v.authored_routes = true
@@ -481,6 +499,44 @@ pub fn ecucheck_errors(node_path string) []string {
 		// ecucheck failed for a reason it didn't print as a schema error (a
 		// build/parse failure) — surface something rather than swallow it.
 		out << 'ecucheck failed (exit ${res.exit_code})'
+	}
+	return out
+}
+
+// loom2v_errors runs the REAL generator (tools/loom2v) on a node's ecu.toml with
+// its bus DBC, returning any panic lines (empty = clean). ecucheck validates the
+// SCHEMA; loom2v enforces TARGET-BRIDGE constraints ecucheck cannot see — a
+// threadx comm thread packs an external signal as a plain unsigned LE 32-bit
+// value at bit 0, so a 16-bit/signed/offset DBC signal, an extended id, an
+// E2E/SecOC frame, or a non-cyclic tx mode panics. Shelling the generator keeps
+// the gate EXACT (no reimplementation to drift), so "clean syscheck" implies a
+// node that actually generates (REQ-TOPO-005). Outputs go to a temp dir and are
+// discarded — only the exit code / diagnostics matter.
+pub fn loom2v_errors(node_path string, dbc_path string) []string {
+	tmp := os.join_path(os.temp_dir(), 'sysgen_loom_${os.getpid()}_${os.file_name(node_path)}')
+	os.mkdir_all(tmp) or { return ['loom2v: cannot create temp dir: ${err}'] }
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	sig := os.join_path(tmp, 'signals.v')
+	ports := os.join_path(tmp, 'ports.v')
+	glue := os.join_path(tmp, 'glue.v')
+	man := os.join_path(tmp, 'manifest.toml')
+	res := os.execute('${@VEXE} run ${@VMODROOT}/tools/loom2v "${node_path}" "${dbc_path}" "${sig}" "${ports}" "${glue}" "${man}"')
+	if res.exit_code == 0 {
+		return []string{}
+	}
+	mut out := []string{}
+	for line in res.output.split_into_lines() {
+		t := line.trim_space()
+		// keep the generator's own diagnostics (its panics/errors carry "loom2v:");
+		// V prefixes a runtime panic with "V panic:" — keep that line's message too.
+		if t.contains('loom2v:') {
+			out << t.all_after('loom2v:').trim_space()
+		}
+	}
+	if out.len == 0 {
+		out << 'loom2v generation failed (exit ${res.exit_code})'
 	}
 	return out
 }
