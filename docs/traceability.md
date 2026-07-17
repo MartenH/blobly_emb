@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 130 | 72 | 5 | 53 | 0 |
+| 143 | 72 | 5 | 66 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -70,6 +70,18 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-INV-003 | B | analysis | uncovered | — |
 | REQ-INV-004 | QM | analysis | verified | noalloc-driver-lint (pass) |
 | REQ-INV-005 | QM | review | covered | naming-review (pending) |
+| REQ-NET-001 | QM | analysis | uncovered | — |
+| REQ-NET-002 | QM | analysis | uncovered | — |
+| REQ-NET-003 | QM | test | uncovered | — |
+| REQ-NET-004 | QM | test | uncovered | — |
+| REQ-NET-005 | QM | test | uncovered | — |
+| REQ-NET-006 | QM | test | uncovered | — |
+| REQ-NET-007 | QM | test | uncovered | — |
+| REQ-NET-008 | QM | test | uncovered | — |
+| REQ-NET-009 | QM | test | uncovered | — |
+| REQ-NET-010 | QM | test | uncovered | — |
+| REQ-NET-011 | QM | test | uncovered | — |
+| REQ-NET-012 | QM | test | uncovered | — |
 | REQ-NM-001 | QM | test | verified | nm_test.v (pass) |
 | REQ-NM-002 | QM | test | verified | module_test.v (pass), nm_test.v (pass) |
 | REQ-NM-003 | QM | test | verified | module_test.v (pass), nm_can_test.v (pass), nm_test.v (pass) |
@@ -124,6 +136,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-OBS-002 | QM | test | uncovered | — |
 | SYS-REQ-OBS-003 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-TOPO-001 | QM | analysis | uncovered | — |
+| SYS-REQ-NET-001 | QM | test | uncovered | — |
 | REQ-TELEM-001 | QM | test | verified | loom_test.v (pass) |
 | REQ-TELEM-002 | QM | test | verified | telem_test.v (pass) |
 | REQ-TELEM-003 | QM | test | verified | loom_test.v (pass) |
@@ -205,6 +218,18 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-INV-003 | | | | | | | | | |
 | REQ-INV-004 | | | | | | | | | ✓ |
 | REQ-INV-005 | | | | | | | | · | |
+| REQ-NET-001 | | | | | | | | | |
+| REQ-NET-002 | | | | | | | | | |
+| REQ-NET-003 | | | | | | | | | |
+| REQ-NET-004 | | | | | | | | | |
+| REQ-NET-005 | | | | | | | | | |
+| REQ-NET-006 | | | | | | | | | |
+| REQ-NET-007 | | | | | | | | | |
+| REQ-NET-008 | | | | | | | | | |
+| REQ-NET-009 | | | | | | | | | |
+| REQ-NET-010 | | | | | | | | | |
+| REQ-NET-011 | | | | | | | | | |
+| REQ-NET-012 | | | | | | | | | |
 | REQ-NM-001 | | | | | | | ✓ | | |
 | REQ-NM-002 | | | | | | | ✓ | | |
 | REQ-NM-003 | | | | | | | ✓ | | |
@@ -259,6 +284,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-OBS-002 | | | | | | | | | |
 | SYS-REQ-OBS-003 | | | | | | | | | |
 | SYS-REQ-TOPO-001 | | | | | | | | | |
+| SYS-REQ-NET-001 | | | | | | | | | |
 | REQ-TELEM-001 | | | | | | | ✓ | | |
 | REQ-TELEM-002 | | | | | | | ✓ | | |
 | REQ-TELEM-003 | | | | | | | ✓ | | |
