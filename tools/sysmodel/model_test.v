@@ -2207,3 +2207,81 @@ fn test_trace_id_zero_collides() {
 	assert errs(validate_system(s)).any(it.contains('trace node id 0')
 		&& it.contains('shared')), errs(validate_system(s)).str()
 }
+
+// --- codex #141 round-23 fixes ---
+
+// REQ-TOPO-002: a produced application frame at a module RECEIVE id (here a trace
+// node's cmd id 0x7e2) is routed into that module — reject it.
+fn test_app_frame_on_module_rx_id_is_error() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_apprx_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// SpeedFrame at 0x7e2 (== the default trace cmd rx id)
+	os.write_file(os.join_path(dir, 'compute.dbc'), 'VERSION ""
+
+BU_: a b
+
+BO_ 2018 SpeedFrame: 8 b
+ SG_ Speed : 0|32@1+ (1,0) [0|4294967295] "" a
+') or { panic(err) }
+	mut s := System{
+		dir:   dir
+		buses: [Bus{
+			name:      'compute'
+			interface: 'can0'
+			dbc:       'compute.dbc'
+		}]
+		nodes: [
+			Node{
+				name:  'tracer'
+				buses: ['compute']
+				view:  NodeView{
+					is_threadx:     true
+					comm_thread_on: true
+					has_telemetry:  true
+					telem_bus:      'can0'
+					telem_id:       0x7a0
+					trace_on:       true
+					trace_record_id: 0x7a1
+					trace_rsp_id:   0x7a2
+					trace_cmd_id:   0x7e2 // reserved rx
+					consumes:       {
+						'can0': ['Speed']
+					}
+					local_buses: ['can0']
+				}
+			},
+			Node{
+				name:  'b'
+				buses: ['compute']
+				view:  NodeView{
+					produces:    {
+						'can0': ['Speed'] // SpeedFrame is at 0x7e2
+					}
+					local_buses: ['can0']
+				}
+			},
+		]
+	}
+	assert errs(check_telemetry_frames(s)).any(it.contains('application frame "SpeedFrame"')
+		&& it.contains('trace cmd (rx) id of "tracer"')), errs(check_telemetry_frames(s)).str()
+}
+
+// REQ-TOPO-002: a host node with ZERO partitions gets no trace (loom2v trace_host
+// needs exactly one), so its trace ids are not reserved.
+fn test_zero_partition_host_no_trace() {
+	mut s := clean_system()
+	for i in 0 .. 2 {
+		s.nodes[i].view.is_threadx = false
+		s.nodes[i].view.has_telemetry = false
+		s.nodes[i].view.trace_on = true
+		s.nodes[i].view.trace_bus = 'can0'
+		s.nodes[i].view.trace_record_id = 0x7e5
+		s.nodes[i].view.partition_count = 0 // zero partitions -> no host trace
+		s.nodes[i].view.produces = map[string][]string{}
+		s.nodes[i].view.consumes = map[string][]string{}
+	}
+	assert !errs(validate_system(s)).any(it.contains('trace record id 0x7e5')), errs(validate_system(s)).str()
+}

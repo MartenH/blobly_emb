@@ -69,9 +69,10 @@ fn trace_generated(n Node) bool {
 		return n.view.comm_thread_on
 	}
 	host := !n.view.is_baremetal // no target / host runner
-	// loom2v's trace_host also requires no bridge (COM signal / ISO-TP) AND no
-	// node-local route — otherwise it warns and builds WITHOUT trace.
-	return host && n.view.partition_count <= 1 && !node_has_bus_signal(n) && !n.view.has_isotp
+	// loom2v's trace_host requires EXACTLY one partition (m.part.by_part.len == 1)
+	// and no bridge (COM signal / ISO-TP) and no node-local route — otherwise it
+	// warns and builds WITHOUT trace. Zero partitions also gets no trace.
+	return host && n.view.partition_count == 1 && !node_has_bus_signal(n) && !n.view.has_isotp
 		&& !n.view.has_route
 }
 
@@ -314,6 +315,10 @@ fn check_telemetry_frames(s System) []Issue {
 		dbs[bus.name] = candb.load_dbc_file(path) or { continue } // load errors already reported
 	}
 	mut owner := map[string]string{} // "<busname>#<id>" -> a phrase naming the owner
+	// module RECEIVE + TRANSMIT reservations only (NOT alive/app frames): a produced
+	// application frame landing on one is misrouted into that module or contends for
+	// the id, so those are scanned against this map after ownership is built.
+	mut reserved := map[string]string{}
 	// SEED every ACTIVE NM node's alive id as a frame owner on its NM bus, so a
 	// module frame equal to ANY node's alive id is caught — not only the emitting
 	// node's own range. alive-vs-alive uniqueness is check_identity_uniqueness's job.
@@ -343,6 +348,7 @@ fn check_telemetry_frames(s System) []Issue {
 			}
 			bus := s.bus_by_interface(f.iface) or { continue }
 			key := '${bus.name}#${f.id}'
+			reserved[key] = '${f.label} of "${n.name}"'
 			if _ := owner[key] {
 			} else {
 				owner[key] = '${f.label} of "${n.name}"'
@@ -381,6 +387,7 @@ fn check_telemetry_frames(s System) []Issue {
 				continue // already reported this node's id; don't double-count in owner
 			}
 			mine[key] = f.label
+			reserved[key] = 'the ${f.label} of "${n.name}"'
 			if prev := owner[key] {
 				issues << Issue{
 					severity: .error
@@ -411,6 +418,27 @@ fn check_telemetry_frames(s System) []Issue {
 					severity: .error
 					req:      'REQ-TOPO-002'
 					msg:      'node "${n.name}": ${f.label} 0x${f.id.hex()} falls in the NM peer range [0x${n.view.peers_lo.hex()},0x${n.view.peers_hi.hex()}] on bus "${bus.name}"'
+				}
+			}
+		}
+	}
+	// a produced DBC application frame must not land on a module RECEIVE/TRANSMIT
+	// reservation (trace cmd/dump_fc, shell in/fc, ISO-TP rx, or a module tx like
+	// telemetry): the application traffic would be routed into that module's
+	// on_cmd/receiver, or contend with a module transmitter, on the same CAN id.
+	for n in s.nodes {
+		for iface, sigs in n.view.produces {
+			bus := s.bus_by_interface(iface) or { continue }
+			db := dbs[bus.name] or { continue }
+			for sig in sigs {
+				m := message_of_signal(db, sig) or { continue }
+				key := '${bus.name}#${m.id}'
+				if prev := reserved[key] {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-002'
+						msg:      'bus "${bus.name}": application frame "${m.name}" 0x${m.id.hex()} produced by "${n.name}" collides with ${prev} — application traffic would be misrouted into that module / contend for the id'
+					}
 				}
 			}
 		}
