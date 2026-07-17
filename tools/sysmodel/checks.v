@@ -119,8 +119,50 @@ fn check_node_configs(s System) []Issue {
 				msg:      'node "${n.name}": target is threadx but has no [telemetry] bus (loom2v requires it for the threadx target)'
 			}
 		}
+		// loom2v's baremetal superloop has NO comm bridge and panics for any
+		// external/bus signal ("baremetal does not support external/bus signals
+		// yet"); only the threadx comm thread services bus traffic. So a baremetal
+		// node with a bus-facing producer/consumer is not buildable (REQ-TOPO-005).
+		if n.view.is_baremetal && node_has_bus_signal(n) {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": target is baremetal but has bus-facing signals (produces/consumes on a bus) — loom2v\'s baremetal superloop has no comm bridge; only the threadx target services bus signals'
+			}
+		}
+		// loom2v runs NM inside the comm thread, which owns the TELEMETRY bus —
+		// [nm].bus only labels the manifest (gen_nm.v), it does NOT move NM's tx.
+		// So an explicit nm.bus other than the telemetry bus is a lie: syscheck
+		// would scope cluster coherence to nm.bus while the node physically runs
+		// NM on telem.bus (REQ-TOPO-004). (nm.bus absent -> nm_bus == telem_bus,
+		// so this only fires on an explicit, divergent nm.bus.)
+		if n.view.is_threadx && n.view.has_telemetry && n.view.nm_enabled
+			&& n.view.nm_bus != n.view.telem_bus {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-004'
+				msg:      'node "${n.name}": [nm].bus "${n.view.nm_bus}" differs from [telemetry].bus "${n.view.telem_bus}" — loom2v runs NM on the telemetry bus, so nm.bus must match it (multi-bus NM ownership is not generated yet)'
+			}
+		}
 	}
 	return issues
+}
+
+// node_has_bus_signal reports whether a node transmits or receives any signal on
+// a bus (an external/bus-facing [[signal]] endpoint). produces/consumes are keyed
+// by the node's local interface; any non-empty entry means bus traffic.
+fn node_has_bus_signal(n Node) bool {
+	for _, sigs in n.view.produces {
+		if sigs.len > 0 {
+			return true
+		}
+	}
+	for _, sigs in n.view.consumes {
+		if sigs.len > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // REQ-TOPO-001/005: every bus a node claims must be a declared system bus AND
@@ -152,7 +194,19 @@ fn check_bus_membership(s System) []Issue {
 		// in `buses`, or producers_on/consumers_on (which filter on `buses`) drop
 		// this node's traffic silently — its collisions vanish from the checks.
 		for iface in n.view.local_buses {
-			b := s.bus_by_interface(iface) or { continue }
+			b := s.bus_by_interface(iface) or {
+				// an interface no system bus declares has NO system contract. If it
+				// carries bus-facing signals, that cross-node traffic is invisible to
+				// the writer/reachability checks — flag it rather than silently drop it.
+				if n.view.produces[iface].len > 0 || n.view.consumes[iface].len > 0 {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-001'
+						msg:      'node "${n.name}": opens interface [bus.${iface}] not declared by any system bus, yet transmits/receives signals on it — that cross-node traffic has no system contract and is never checked for writers or reachability'
+					}
+				}
+				continue
+			}
 			if b.name !in n.buses {
 				issues << Issue{
 					severity: .error
