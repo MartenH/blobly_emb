@@ -345,16 +345,57 @@ fn test_nm_timing_mismatch_is_error() {
 	assert !errs(validate_system(s2)).any(it.contains('repeat_ms mismatch')), 'one-sided default should not flag'
 }
 
-// REQ-TOPO-001: two nodes transmitting the SAME frame (different signals into
-// one PDU) contend on the wire even though each signal has one writer.
+// REQ-TOPO-001: two nodes producing DIFFERENT signals that map to the SAME DBC
+// message contend for one PDU on the wire — a frame collision each signal's
+// single-writer check can't see. Ownership is derived from the produced signals
+// resolved to their DBC message, not a [[frame]] tx-config block.
 fn test_frame_single_writer_is_error() {
-	mut s := clean_system()
-	// authored spellings differ but loom2v snake()-normalizes both to the SAME DBC
-	// PDU, so this is still one frame with two writers.
-	s.nodes[0].view.tx_frames['can0'] = ['StatusFrame']
-	s.nodes[1].view.tx_frames['can0'] = ['status_frame'] // same PDU, different spelling
-	issues := validate_system(s)
-	assert errs(issues).any(it.contains('frame "status_frame"') && it.contains('one frame owner')), errs(issues).str()
+	dir := os.join_path(os.temp_dir(), 'sysmodel_frameown_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// one message StatusFrame with two signals A (from a) and B (from b)
+	os.write_file(os.join_path(dir, 'compute.dbc'), 'VERSION ""
+
+BU_: a b
+
+BO_ 288 StatusFrame: 8 a
+ SG_ A : 0|8@1+ (1,0) [0|255] "" b
+ SG_ B : 8|8@1+ (1,0) [0|255] "" a
+') or { panic(err) }
+	mut s := System{
+		dir:   dir
+		buses: [Bus{
+			name:      'compute'
+			interface: 'can0'
+			dbc:       'compute.dbc'
+		}]
+		nodes: [
+			Node{
+				name:  'a'
+				buses: ['compute']
+				view:  NodeView{
+					produces:    {
+						'can0': ['A']
+					}
+					local_buses: ['can0']
+				}
+			},
+			Node{
+				name:  'b'
+				buses: ['compute']
+				view:  NodeView{
+					produces:    {
+						'can0': ['B']
+					}
+					local_buses: ['can0']
+				}
+			},
+		]
+	}
+	assert errs(check_frame_single_writer(s)).any(it.contains('frame "status_frame"')
+		&& it.contains('one frame owner')), errs(check_frame_single_writer(s)).str()
 }
 
 // REQ-TOPO-001: a signal route whose SOURCE bus has no producer does not satisfy
@@ -599,6 +640,11 @@ tick_ms = 1
 node  = 0x11
 alive = "AliveMsg"
 peers = [0x500, 0x53F]
+[[isotp]]
+name  = "diag"
+bus   = "can0"
+rx_id = 0x101
+tx_id = 0x102
 ') or { panic(err) }
 	view := load_node(os.join_path(dir, 'n.toml')) or { panic(err) }
 	assert view.has_nm
@@ -785,6 +831,7 @@ fn test_local_nm_node_out_of_range() {
 fn test_threadx_requires_telemetry() {
 	mut s := clean_system()
 	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.comm_thread_on = true
 	s.nodes[0].view.has_telemetry = false
 	assert errs(validate_system(s)).any(it.contains('no [telemetry] bus'))
 }
@@ -965,6 +1012,11 @@ tick_ms = 1
 node  = 0x11
 alive = "AliveMsg"
 peers = [0x500, 0x53F]
+[[isotp]]
+name  = "diag"
+bus   = "can0"
+rx_id = 0x101
+tx_id = 0x102
 ') or { panic(err) }
 	os.write_file(os.join_path(dir, 'system.toml'), '
 [bus.compute]
@@ -1011,6 +1063,11 @@ tick_ms = 1
 node  = 0x11
 alive = "AliveMsg"
 peers = [0x500, 0x53F]
+[[isotp]]
+name  = "diag"
+bus   = "can0"
+rx_id = 0x101
+tx_id = 0x102
 ') or { panic(err) }
 	os.write_file(os.join_path(dir, 'system.toml'), '
 [bus.compute]
@@ -1036,6 +1093,7 @@ trace = 1
 fn test_nm_bus_must_match_telemetry() {
 	mut s := clean_system()
 	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.comm_thread_on = true
 	s.nodes[0].view.has_telemetry = true
 	s.nodes[0].view.telem_bus = 'can0'
 	s.nodes[0].view.nm_bus = 'can1' // differs from the telemetry bus
@@ -1091,6 +1149,7 @@ fn test_telemetry_id_collision_is_error() {
 	mut s := clean_system()
 	for i in 0 .. 2 {
 		s.nodes[i].view.is_threadx = true
+		s.nodes[i].view.comm_thread_on = true
 		s.nodes[i].view.has_telemetry = true
 		s.nodes[i].view.telem_bus = 'can0'
 		s.nodes[i].view.nm_bus = 'can0'
@@ -1107,6 +1166,7 @@ fn test_omitted_telemetry_ids_collide_at_zero() {
 	mut s := clean_system()
 	for i in 0 .. 2 {
 		s.nodes[i].view.is_threadx = true
+		s.nodes[i].view.comm_thread_on = true
 		s.nodes[i].view.has_telemetry = true
 		s.nodes[i].view.telem_bus = 'can0'
 		s.nodes[i].view.nm_bus = 'can0'
@@ -1121,6 +1181,7 @@ fn test_omitted_telemetry_ids_collide_at_zero() {
 fn test_threadx_fd_telemetry_bus_is_error() {
 	mut s := clean_system()
 	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.comm_thread_on = true
 	s.nodes[0].view.has_telemetry = true
 	s.nodes[0].view.telem_bus = 'can0'
 	s.nodes[0].view.nm_bus = 'can0'
@@ -1158,6 +1219,11 @@ tick_ms = 1
 node  = 0x11
 alive = "AliveMsg"
 peers = [0x500, 0x53F]
+[[isotp]]
+name  = "diag"
+bus   = "can0"
+rx_id = 0x101
+tx_id = 0x102
 ') or { panic(err) }
 	os.write_file(os.join_path(dir, 'system.toml'), '
 [bus.compute]
@@ -1215,6 +1281,7 @@ fn test_threadx_signal_off_telemetry_bus_is_error() {
 	}
 	s.nodes[0].buses = ['compute', 'edge']
 	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.comm_thread_on = true
 	s.nodes[0].view.has_telemetry = true
 	s.nodes[0].view.telem_bus = 'can0'
 	s.nodes[0].view.nm_bus = 'can0'
@@ -1230,6 +1297,7 @@ fn test_threadx_signal_off_telemetry_bus_is_error() {
 fn test_undeclared_telemetry_interface_is_error() {
 	mut s := clean_system()
 	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.comm_thread_on = true
 	s.nodes[0].view.has_telemetry = true
 	s.nodes[0].view.telem_bus = 'can9' // not a system bus interface
 	s.nodes[0].view.nm_bus = 'can9'
@@ -1266,6 +1334,7 @@ fn test_telemetry_id_aliases_other_node_alive() {
 	mut s := clean_system()
 	// node 0 has NO NM of its own but transmits telemetry at 0x513 = node 1's alive
 	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.comm_thread_on = true
 	s.nodes[0].view.has_telemetry = true
 	s.nodes[0].view.telem_bus = 'can0'
 	s.nodes[0].view.nm_bus = 'can0'
@@ -1284,6 +1353,7 @@ fn test_trace_record_id_collision_is_error() {
 	mut s := clean_system()
 	for i in 0 .. 2 {
 		s.nodes[i].view.is_threadx = true
+		s.nodes[i].view.comm_thread_on = true
 		s.nodes[i].view.has_telemetry = true
 		s.nodes[i].view.telem_bus = 'can0'
 		s.nodes[i].view.nm_bus = 'can0'
@@ -1318,6 +1388,11 @@ core = 0
 node  = 0x11
 alive = "AliveMsg"
 peers = [0x500, 0x53F]
+[[isotp]]
+name  = "diag"
+bus   = "can0"
+rx_id = 0x101
+tx_id = 0x102
 ') or { panic(err) }
 	os.write_file(os.join_path(dir, 'system.toml'), '
 [bus.compute]
@@ -1341,6 +1416,7 @@ trace = 1
 fn test_threadx_isotp_is_error() {
 	mut s := clean_system()
 	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.comm_thread_on = true
 	s.nodes[0].view.has_telemetry = true
 	s.nodes[0].view.telem_bus = 'can0'
 	s.nodes[0].view.nm_bus = 'can0'
@@ -1379,6 +1455,7 @@ fn test_shell_out_id_collision_is_error() {
 	mut s := clean_system()
 	for i in 0 .. 2 {
 		s.nodes[i].view.is_threadx = true
+		s.nodes[i].view.comm_thread_on = true
 		s.nodes[i].view.has_telemetry = true
 		s.nodes[i].view.telem_bus = 'can0'
 		s.nodes[i].view.nm_bus = 'can0'
@@ -1398,6 +1475,7 @@ fn test_trace_rsp_id_collision() {
 	mut s := clean_system()
 	for i in 0 .. 2 {
 		s.nodes[i].view.is_threadx = true
+		s.nodes[i].view.comm_thread_on = true
 		s.nodes[i].view.has_telemetry = true
 		s.nodes[i].view.telem_bus = 'can0'
 		s.nodes[i].view.nm_bus = 'can0'
@@ -1459,6 +1537,7 @@ BO_ 288 TraceRecord: 8 a
 			buses: ['compute']
 			view:  NodeView{
 				is_threadx:        true
+				comm_thread_on: true
 				has_telemetry:     true
 				telem_bus:         'can0'
 				trace_on:          true
@@ -1477,6 +1556,7 @@ fn test_module_rx_id_reserved() {
 	mut s := clean_system()
 	// node 0 traces: distinct tx ids + the default rx ids (0x7e2 cmd, 0x7e6 dump_fc)
 	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.comm_thread_on = true
 	s.nodes[0].view.has_telemetry = true
 	s.nodes[0].view.telem_bus = 'can0'
 	s.nodes[0].view.nm_bus = 'can0'
@@ -1487,6 +1567,7 @@ fn test_module_rx_id_reserved() {
 	s.nodes[0].view.trace_cmd_id = 0x7e2 // reserved rx
 	s.nodes[0].view.trace_dump_fc_id = 0x7e6 // reserved rx
 	s.nodes[1].view.is_threadx = true
+	s.nodes[1].view.comm_thread_on = true
 	s.nodes[1].view.has_telemetry = true
 	s.nodes[1].view.telem_bus = 'can0'
 	s.nodes[1].view.nm_bus = 'can0'
@@ -1524,6 +1605,7 @@ BO_ 300 TraceRecord: 8 a
 				buses: ['compute']
 				view:  NodeView{
 					is_threadx:        true
+					comm_thread_on: true
 					has_telemetry:     true
 					telem_bus:         'can0'
 					telem_id:          0x7a0
@@ -1537,6 +1619,7 @@ BO_ 300 TraceRecord: 8 a
 				buses: ['compute']
 				view:  NodeView{
 					is_threadx:        true
+					comm_thread_on: true
 					has_telemetry:     true
 					telem_bus:         'can0'
 					telem_id:          0x7a2
@@ -1606,6 +1689,7 @@ BO_ 288 SpeedFrame: 8 a
 			buses: ['compute']
 			view:  NodeView{
 				is_threadx:    true
+				comm_thread_on: true
 				has_telemetry: true
 				telem_bus:     'can0'
 				produces:      {
@@ -1624,6 +1708,7 @@ BO_ 288 SpeedFrame: 8 a
 fn test_shell_fc_id_reserved() {
 	mut s := clean_system()
 	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.comm_thread_on = true
 	s.nodes[0].view.has_telemetry = true
 	s.nodes[0].view.telem_bus = 'can0'
 	s.nodes[0].view.nm_bus = 'can0'
@@ -1633,6 +1718,7 @@ fn test_shell_fc_id_reserved() {
 	s.nodes[0].view.shell_in_id = 0x7f0
 	s.nodes[0].view.shell_fc_id = 0x7f2 // reserved rx
 	s.nodes[1].view.is_threadx = true
+	s.nodes[1].view.comm_thread_on = true
 	s.nodes[1].view.has_telemetry = true
 	s.nodes[1].view.telem_bus = 'can0'
 	s.nodes[1].view.nm_bus = 'can0'
@@ -1668,6 +1754,7 @@ BO_ 288 Other: 8 a
 			buses: ['compute']
 			view:  NodeView{
 				is_threadx:        true
+				comm_thread_on: true
 				has_telemetry:     true
 				telem_bus:         'can0'
 				telem_id:          0x7a0
@@ -1765,6 +1852,7 @@ trace = 1
 fn test_unbound_dump_fc_not_reserved() {
 	mut s := clean_system()
 	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.comm_thread_on = true
 	s.nodes[0].view.has_telemetry = true
 	s.nodes[0].view.telem_bus = 'can0'
 	s.nodes[0].view.nm_bus = 'can0'
@@ -1776,6 +1864,7 @@ fn test_unbound_dump_fc_not_reserved() {
 	s.nodes[0].view.trace_dump_fc_id = 0x7e6
 	s.nodes[0].view.trace_dump_fc_bound = false // NOT bound -> no receiver
 	s.nodes[1].view.is_threadx = true
+	s.nodes[1].view.comm_thread_on = true
 	s.nodes[1].view.has_telemetry = true
 	s.nodes[1].view.telem_bus = 'can0'
 	s.nodes[1].view.nm_bus = 'can0'
@@ -1787,6 +1876,7 @@ fn test_unbound_dump_fc_not_reserved() {
 fn test_bound_dump_fc_reserved() {
 	mut s := clean_system()
 	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.comm_thread_on = true
 	s.nodes[0].view.has_telemetry = true
 	s.nodes[0].view.telem_bus = 'can0'
 	s.nodes[0].view.nm_bus = 'can0'
@@ -1798,6 +1888,7 @@ fn test_bound_dump_fc_reserved() {
 	s.nodes[0].view.trace_dump_fc_id = 0x7e6
 	s.nodes[0].view.trace_dump_fc_bound = true // bound -> reserved
 	s.nodes[1].view.is_threadx = true
+	s.nodes[1].view.comm_thread_on = true
 	s.nodes[1].view.has_telemetry = true
 	s.nodes[1].view.telem_bus = 'can0'
 	s.nodes[1].view.nm_bus = 'can0'

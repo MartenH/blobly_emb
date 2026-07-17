@@ -63,7 +63,10 @@ fn trace_generated(n Node) bool {
 		return false
 	}
 	if n.view.is_threadx {
-		return true
+		// threadx trace runs inside the comm thread (trace_module_init / rx arms /
+		// trace_produce_drain are emitted only under comm_thread_on) — a bridgeless
+		// threadx node has no comm thread, so no trace frame reaches the wire.
+		return n.view.comm_thread_on
 	}
 	host := !n.view.is_baremetal // no target / host runner
 	return host && n.view.partition_count <= 1 && !node_has_bus_signal(n) && !n.view.has_isotp
@@ -100,7 +103,7 @@ fn module_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame 
 	}
 	// [shell]: the threadx comm thread transmits shell.out responses on the comm
 	// (telemetry) channel.
-	if n.view.is_threadx && n.view.shell_on && n.view.telem_bus != '' {
+	if n.view.comm_thread_on && n.view.shell_on && n.view.telem_bus != '' {
 		out << module_frame(dbs, s, n.view.telem_bus, 'shell out id', n.view.shell_out_id,
 			n.view.shell_out_name)
 	}
@@ -125,7 +128,7 @@ fn module_rx_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFra
 			}
 		}
 	}
-	if n.view.is_threadx && n.view.shell_on && n.view.telem_bus != '' {
+	if n.view.comm_thread_on && n.view.shell_on && n.view.telem_bus != '' {
 		out << module_frame(dbs, s, n.view.telem_bus, 'shell in (rx) id', n.view.shell_in_id,
 			n.view.shell_in_name)
 		out << module_frame(dbs, s, n.view.telem_bus, 'shell fc (rx) id', n.view.shell_fc_id,
@@ -188,6 +191,60 @@ fn check_threadx_signal_layout(s System) []Issue {
 						req:      'REQ-TOPO-003'
 						msg:      'node "${n.name}": ${kind} signal "${sig}" whose DBC layout is not a plain unsigned little-endian 32-bit value at bit 0 (factor 1, offset 0) — loom2v\'s threadx comm bridge cannot encode/decode it'
 					}
+				}
+			}
+		}
+	}
+	return issues
+}
+
+// message_of_signal returns the snake-normalized DBC message name that carries a
+// signal (SG_), or none if the signal is in no message.
+fn message_of_signal(db candb.Database, signame string) ?string {
+	for m in db.messages {
+		for sg in m.signals {
+			if sg.name == signame {
+				return snake(m.name)
+			}
+		}
+	}
+	return none
+}
+
+// check_frame_single_writer: each CAN frame (DBC message) on a bus has exactly one
+// transmitting node. loom2v emits a frame only when a node PRODUCES a signal that
+// maps to it (`tx_by_msg`), NOT merely because a [[frame]] tx-policy block names
+// it — so ownership is derived from each node's actual `to = <bus>` signals
+// resolved to their DBC messages, not from tx-config presence (REQ-TOPO-001).
+fn check_frame_single_writer(s System) []Issue {
+	mut issues := []Issue{}
+	for bus in s.buses {
+		if bus.dbc == '' {
+			continue // no DBC -> can't resolve signals to messages
+		}
+		path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(s.dir, bus.dbc) }
+		db := candb.load_dbc_file(path) or { continue }
+		mut owners := map[string][]string{} // message name -> distinct node names
+		for n in s.nodes {
+			if bus.name !in n.buses {
+				continue
+			}
+			mut seen := map[string]bool{} // one message per node even if it writes >1 SG
+			for sig in n.view.produces[bus.interface] {
+				msg := message_of_signal(db, sig) or { continue }
+				if msg in seen {
+					continue
+				}
+				seen[msg] = true
+				owners[msg] << n.name
+			}
+		}
+		for fr, nodes in owners {
+			if nodes.len > 1 {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'bus "${bus.name}": frame "${fr}" transmitted by ${nodes.len} nodes (${nodes.join(', ')}) — one frame owner per bus'
 				}
 			}
 		}

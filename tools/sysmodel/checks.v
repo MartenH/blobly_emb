@@ -116,14 +116,40 @@ fn check_node_generatable(s System) []Issue {
 		if !os.exists(node_path) {
 			continue // a missing/unloadable node is already reported by load_nodes
 		}
-		// the node's bus DBC — loom2v resolves its external signals against it.
-		mut dbc_path := ''
-		if n.buses.len > 0 {
-			if b := s.bus_by_name(n.buses[0]) {
-				if b.dbc != '' {
-					dbc_path = if os.is_abs_path(b.dbc) { b.dbc } else { os.join_path(s.dir, b.dbc) }
+		// the node's bus DBC — loom2v resolves its external signals against it. Pick
+		// the ACTIVE bus (its telemetry/signal bus), NOT buses[0]: a valid P1 node may
+		// list an unused diagnostic bus first, and resolving signals against that
+		// unrelated DBC would wrongly report the node non-generatable.
+		mut active_iface := n.view.telem_bus
+		if active_iface == '' {
+			for iface, sigs in n.view.produces {
+				if sigs.len > 0 {
+					active_iface = iface
+					break
 				}
 			}
+		}
+		if active_iface == '' {
+			for iface, sigs in n.view.consumes {
+				if sigs.len > 0 {
+					active_iface = iface
+					break
+				}
+			}
+		}
+		mut dbc := ''
+		if active_iface != '' {
+			if b := s.bus_by_interface(active_iface) {
+				dbc = b.dbc
+			}
+		} else if n.buses.len > 0 {
+			if b := s.bus_by_name(n.buses[0]) {
+				dbc = b.dbc
+			}
+		}
+		mut dbc_path := ''
+		if dbc != '' {
+			dbc_path = if os.is_abs_path(dbc) { dbc } else { os.join_path(s.dir, dbc) }
 		}
 		for e in loom2v_errors(node_path, dbc_path) {
 			issues << Issue{
@@ -342,33 +368,8 @@ fn check_bus_membership(s System) []Issue {
 // two nodes writing different signals that map to the SAME DBC message is a
 // collision this can't see without resolving signals→messages through the bus
 // DBC — that is REQ-TOPO-003 (DBC conformance), deferred pending a DBC parse.
-fn check_frame_single_writer(s System) []Issue {
-	mut issues := []Issue{}
-	for bus in s.buses {
-		mut owners := map[string][]string{}
-		for n in s.nodes {
-			if bus.name !in n.buses {
-				continue
-			}
-			for fr in n.view.tx_frames[bus.interface] {
-				// loom2v snake()-normalizes every [[frame]].name before binding it to a
-				// DBC PDU, so "SpeedFrame" and "speed_frame" are the SAME frame — key
-				// the owner map by the normalized name to see both writers.
-				owners[snake(fr)] << n.name
-			}
-		}
-		for fr, nodes in owners {
-			if nodes.len > 1 {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-001'
-					msg:      'bus "${bus.name}": frame "${fr}" transmitted by ${nodes.len} nodes (${nodes.join(', ')}) — one frame owner per bus'
-				}
-			}
-		}
-	}
-	return issues
-}
+// check_frame_single_writer is defined in telem.v (it resolves produced signals to
+// their DBC messages, so it needs candb).
 
 // producers_on returns, for a system bus, a map signal -> [node names that
 // transmit it on that bus]. A node produces on bus B the signals its ecu.toml

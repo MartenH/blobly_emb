@@ -90,8 +90,13 @@ pub mut:
 	alive_binding string // [nm].alive when it is a DBC message NAME (not a numeric id)
 	is_threadx    bool   // [target].kind == "threadx" (loom2v generates NM only then)
 	is_baremetal  bool   // [target].kind == "baremetal" (loom2v rejects bus signals there)
-	has_telemetry bool   // a [telemetry] block with a bus (loom2v requires it for threadx)
-	telem_bus     string // [telemetry].bus resolved to its interface
+	// loom2v emits the comm thread (and, only inside it, the NM state machine, the
+	// threadx trace module, and the shell) when the threadx target has a BRIDGE —
+	// >=1 external bus signal or an ISO-TP connection (comm_thread_on). A bridgeless
+	// threadx node builds WITHOUT any of those frames on the wire.
+	comm_thread_on bool
+	has_telemetry  bool   // a [telemetry] block with a bus (loom2v requires it for threadx)
+	telem_bus      string // [telemetry].bus resolved to its interface
 	// the telemetry frames the threadx comm thread transmits on the telemetry bus
 	// (CpuLoad + its detail). REAL tx ids: unique across nodes, not colliding with
 	// an application frame or the NM range (REQ-TOPO-002). CpuLoad is always sent
@@ -579,6 +584,25 @@ pub fn load_node(path string) !NodeView {
 		v.nm_repeat_ms = m_int(m, 'repeat_ms')
 		v.nm_wait_sleep_ms = m_int(m, 'wait_sleep_ms')
 	}
+	// comm_thread_on = threadx target WITH a bridge (>=1 external bus signal or an
+	// ISO-TP connection). loom2v emits the NM state machine, the threadx trace
+	// module, and the shell ONLY inside that comm thread — so a bridgeless threadx
+	// node runs none of them, and its NM must NOT count as an active participant
+	// (else syscheck reports a coherent cluster / duplicate ids that never hit the
+	// wire). Gate nm_enabled on it, matching loom2v's runtime behaviour.
+	mut has_bus_sig := false
+	for _, sigs in v.produces {
+		if sigs.len > 0 {
+			has_bus_sig = true
+		}
+	}
+	for _, sigs in v.consumes {
+		if sigs.len > 0 {
+			has_bus_sig = true
+		}
+	}
+	v.comm_thread_on = v.is_threadx && (has_bus_sig || v.has_isotp)
+	v.nm_enabled = v.nm_enabled && v.comm_thread_on
 	return v
 }
 
