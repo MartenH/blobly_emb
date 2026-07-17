@@ -1699,3 +1699,61 @@ fn test_multipartition_host_trace_not_reserved() {
 	}
 	assert !errs(validate_system(s)).any(it.contains('trace record id 0x7e5')), errs(validate_system(s)).str()
 }
+
+// --- codex #141 round-17: run the real loom2v per node ---
+
+// REQ-TOPO-005: a node that passes ecucheck (valid schema) but that loom2v cannot
+// generate (here a threadx [trace].level the exec-hook recorder can't produce) is
+// caught by the loom2v gate, so a clean syscheck implies a generatable node. This
+// one covers the whole family of round-17 target constraints at once.
+fn test_node_generatable_gate_catches_loom2v_panic() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_gen_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'compute.dbc'), 'VERSION ""
+
+BU_: a
+
+BO_ 288 VehSpeedFrame: 8 a
+ SG_ VehicleSpeed : 0|32@1+ (1,0) [0|4294967295] "" a
+') or { panic(err) }
+	// a schema-valid threadx node whose [trace].level = "fb" loom2v rejects
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[bus.can0]
+interface = "can0"
+fd = false
+core = 0
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "t" # trailing comment (vlang/v#27684)
+[target]
+kind    = "threadx"
+tick_ms = 1
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E0
+[trace]
+enabled = true
+bus     = "can0"
+level   = "fb"
+') or { panic(err) }
+	os.write_file(os.join_path(dir, 'system.toml'), '
+[bus.compute]
+interface = "can0"
+dbc = "compute.dbc"
+[[node]]
+name = "a"
+ecu = "n.toml"
+buses = ["compute"]
+nm = 0x11
+trace = 1
+') or { panic(err) }
+	mut sys := parse_system(os.join_path(dir, 'system.toml')) or { panic(err) }
+	sys.load_nodes()
+	assert errs(validate_system(sys)).any(it.contains('not generatable')), errs(validate_system(sys)).str()
+}

@@ -624,3 +624,41 @@ fn ecucheck_errors(node_path string) []string {
 	}
 	return out
 }
+
+// loom2v_errors runs the REAL generator (tools/loom2v) on a node's ecu.toml with
+// its bus DBC, returning any panic lines (empty = clean). ecucheck validates the
+// SCHEMA; loom2v enforces every TARGET-dependent constraint ecucheck can't see —
+// the threadx comm-thread bridge (trivial-u32 signals, standard 11-bit ids), the
+// single-local-partition rule, comm-owner priority, trace-setting limits, the
+// telemetry-bus-must-exist rule, ISO-TP/routes-not-generated. Shelling the
+// generator keeps "clean syscheck => buildable node" EXACT — no reimplementation
+// to drift. `dbc_path` is the node's bus DBC (loom2v resolves external signals
+// against it); '' when the bus declares none. Outputs go to a temp dir, discarded.
+pub fn loom2v_errors(node_path string, dbc_path string) []string {
+	tmp := os.join_path(os.temp_dir(), 'syscheck_loom_${os.getpid()}_${os.file_name(node_path)}')
+	os.mkdir_all(tmp) or { return ['loom2v: cannot create temp dir: ${err}'] }
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	sig := os.join_path(tmp, 'signals.v')
+	ports := os.join_path(tmp, 'ports.v')
+	glue := os.join_path(tmp, 'glue.v')
+	man := os.join_path(tmp, 'manifest.toml')
+	output, code := run_capture(@VEXE, ['-enable-globals', 'run', '${@VMODROOT}/tools/loom2v',
+		node_path, dbc_path, sig, ports, glue, man])
+	if code == 0 {
+		return []string{}
+	}
+	mut out := []string{}
+	for line in output.split_into_lines() {
+		t := line.trim_space()
+		// keep the generator's own diagnostics (its panics carry "loom2v:")
+		if t.contains('loom2v:') {
+			out << t.all_after('loom2v:').trim_space()
+		}
+	}
+	if out.len == 0 {
+		out << 'loom2v generation failed (exit ${code})'
+	}
+	return out
+}
