@@ -33,6 +33,7 @@ pub fn validate_system(s System) []Issue {
 	issues << check_frame_single_writer(s)
 	issues << check_nm_cluster_coherence(s)
 	issues << check_telemetry_frames(s)
+	issues << check_threadx_signal_layout(s)
 	issues << check_routes(s)
 	return issues
 }
@@ -234,6 +235,17 @@ fn check_bus_membership(s System) []Issue {
 					severity: .error
 					req:      'REQ-TOPO-005'
 					msg:      'node "${n.name}": claims bus "${bname}" but its ecu.toml has no [bus.${b.interface}] interface (declares ${n.view.local_buses})'
+				}
+			} else if (n.view.local_bus_fd[b.interface] or { false }) != b.fd {
+				// the node's local [bus.X].fd must match the system bus contract, or its
+				// generated driver opens the channel in a different CAN mode than its
+				// peers (classic vs FD are not interoperable on one wire) — REQ-TOPO-005.
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": [bus.${b.interface}].fd = ${n.view.local_bus_fd[b.interface] or {
+						false
+					}} disagrees with system bus "${bname}" fd = ${b.fd} — one CAN mode per wire'
 				}
 			}
 		}

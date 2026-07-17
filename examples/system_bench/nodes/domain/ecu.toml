@@ -20,7 +20,7 @@ core = 0
 
 [[signal]]
 name   = "EngineRpm" # produced here -> transmitted on compute
-fields = { rpm = "u16" }
+fields = { rpm = "u32" }
 from   = "ctl"
 to     = "can0"
 
@@ -31,7 +31,7 @@ to     = "can0"
 
 [[signal]]
 name   = "VehicleSpeed" # consumed here -> received from compute
-fields = { kph = "u16" }
+fields = { kph = "u32" }
 from   = "can0"
 to     = "ctl"
 
