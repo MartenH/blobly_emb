@@ -49,3 +49,7 @@ thread = "engine"
 node  = 0x13
 alive = 0x513
 peers = [0x500, 0x53F]
+
+[target]
+kind    = "threadx"
+tick_ms = 1
