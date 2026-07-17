@@ -229,12 +229,30 @@ fn check_signals_dissolved(s System) []Issue {
 	mut frame_owner := map[string]string{} // (bus, frame) -> producer node
 	mut frame_cycle := map[string]int{}    // (bus, frame) -> cycle_ms
 	for sig in s.signals {
-		// loom2v rejects an empty field map — a signal must carry at least one field
+		// loom2v's external bridge serializes only ONE value field per DBC signal,
+		// so a cross-node signal carries EXACTLY ONE field (a multi-field codec is
+		// future work) of a KNOWN fixed scalar type (an unknown/heap type like
+		// "string" would violate the no-runtime-heap invariant). REQ-TOPO-001.
 		if sig.fields.len == 0 {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-001'
-				msg:      'signal "${sig.name}": has no `fields` — a signal must carry at least one field'
+				msg:      'signal "${sig.name}": has no `fields` — a signal must carry exactly one field'
+			}
+		} else if sig.fields.len > 1 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}": has ${sig.fields.len} fields — a cross-node signal carries exactly one value field (loom2v serializes one per DBC signal)'
+			}
+		}
+		for fname, ftype in sig.fields {
+			if type_bits(ftype) == 0 {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'signal "${sig.name}": field "${fname}" has unsupported type "${ftype}" (use a fixed scalar: bool/u8/i8/u16/i16/u32/i32/u64/i64/f32/f64)'
+				}
 			}
 		}
 		// the producer must be a declared node on the signal's bus

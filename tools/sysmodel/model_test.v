@@ -511,10 +511,17 @@ totally_unknown_key = 42
 // nodes carry only FB read/write intent. `a` produces Speed + reads Rpm; `b`
 // produces Rpm + reads Speed.
 fn clean_dissolved() System {
+	// a bus carrying cross-node signals needs a DBC; write one that matches the
+	// signals (SpeedFrame from a, RpmFrame from b) to a stable temp path.
+	dir := os.join_path(os.temp_dir(), 'sysmodel_clean_dissolved')
+	os.mkdir_all(dir) or {}
+	os.write_file(os.join_path(dir, 'compute.dbc'), good_dbc) or {}
 	return System{
+		dir:     dir
 		buses:   [Bus{
 			name:           'compute'
 			interface:      'can0'
+			dbc:            'compute.dbc'
 			has_nm_cluster: true
 			nm_peers_lo:    0x500
 			nm_peers_hi:    0x53f
@@ -848,6 +855,48 @@ fn test_dbc_fields_overflow() {
 		'i': 'u64'
 	}
 	assert errs(check_dbc_conformance(s)).any(it.contains('need') && it.contains('only 8 bytes'))
+}
+
+// --- P1b dissolution: codex #142 round-4 fixes ---
+
+// REQ-TOPO-001: a cross-node signal must carry EXACTLY ONE field (loom2v's
+// bridge serializes only the first value field per DBC signal).
+fn test_dissolved_multifield_signal() {
+	mut s := clean_dissolved()
+	s.signals[0].fields = {
+		'kph': 'u16'
+		'mph': 'u16'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('exactly one value field'))
+}
+
+// REQ-TOPO-001: a signal field must be a fixed scalar type (no heap types).
+fn test_dissolved_non_scalar_field() {
+	mut s := clean_dissolved()
+	s.signals[0].fields = {
+		'kph': 'string'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('unsupported type "string"'))
+}
+
+// REQ-TOPO-003: a bus carrying cross-node signals must declare a DBC.
+fn test_dissolved_bus_without_dbc() {
+	mut s := clean_dissolved()
+	s.buses[0].dbc = '' // no DBC, but it carries Speed/Rpm
+	assert errs(check_dbc_conformance(s)).any(it.contains('carries cross-node signals but declares no `dbc`'))
+}
+
+// REQ-TOPO-003: a DBC signal name that appears in more than one frame is
+// ambiguous — loom2v resolves by name to the first match.
+fn test_dbc_ambiguous_signal_name() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_amb_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// "Speed" appears in BOTH SpeedFrame and OtherFrame
+	amb := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 290 OtherFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
+	s := dissolved_with_dbc(dir, amb)
+	assert errs(check_dbc_conformance(s)).any(it.contains('appears in 2 frames'))
 }
 
 // parse_system + load_node round-trip on a written system.toml + node ecu.toml.

@@ -15,7 +15,9 @@ pub fn check_dbc_conformance(s System) []Issue {
 	mut issues := []Issue{}
 	mut dbs := map[string]candb.Database{}
 	mut loaded := map[string]bool{}
+	mut has_dbc := map[string]bool{}
 	for bus in s.buses {
+		has_dbc[bus.name] = bus.dbc != ''
 		if bus.dbc == '' {
 			continue
 		}
@@ -32,8 +34,18 @@ pub fn check_dbc_conformance(s System) []Issue {
 		loaded[bus.name] = true
 	}
 	for sig in s.signals {
+		// loom2v MUST load a DBC for any bus carrying external (cross-node)
+		// signals, so a bus with signals but no `dbc` cannot be code-generated.
+		if !(has_dbc[sig.bus] or { false }) {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'signal "${sig.name}": bus "${sig.bus}" carries cross-node signals but declares no `dbc`'
+			}
+			continue
+		}
 		if sig.bus !in loaded {
-			continue // no DBC, or a load error already reported
+			continue // DBC declared but failed to load — already reported
 		}
 		db := dbs[sig.bus]
 		mut found := ?candb.Message(none)
@@ -85,6 +97,25 @@ pub fn check_dbc_conformance(s System) []Issue {
 				severity: .error
 				req:      'REQ-TOPO-003'
 				msg:      'signal "${sig.name}": frame "${sig.frame}" exists but has no SG_ named "${sig.name}" (loom2v resolves external signals by DBC signal name)'
+			}
+		}
+		// the SG_ name must be UNIQUE across the bus DBC: loom2v resolves an
+		// external signal by name and takes the FIRST matching message, so a name
+		// that also lives in another frame could be sent/received on the wrong one.
+		mut in_frames := []string{}
+		for msg in db.messages {
+			for ds in msg.signals {
+				if ds.name == sig.name {
+					in_frames << msg.name
+					break
+				}
+			}
+		}
+		if in_frames.len > 1 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'signal "${sig.name}": DBC signal name appears in ${in_frames.len} frames (${in_frames.join(", ")}) — loom2v resolves by name to the first, so it must be unique'
 			}
 		}
 		// the fields must also fit the frame's payload
