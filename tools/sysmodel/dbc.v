@@ -33,6 +33,23 @@ pub fn check_dbc_conformance(s System) []Issue {
 		dbs[bus.name] = db
 		loaded[bus.name] = true
 	}
+	// application frame ids must not fall in the NM peer range: loom2v arms the
+	// whole peers range as the NM receiver, so a BO_ inside it is consumed as an
+	// NM frame, and one at peers.lo + node collides with that node's alive tx.
+	for bus in s.buses {
+		if !bus.has_nm_cluster || bus.name !in loaded {
+			continue
+		}
+		for msg in dbs[bus.name].messages {
+			if msg.id >= bus.nm_peers_lo && msg.id <= bus.nm_peers_hi {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'bus "${bus.name}": DBC frame "${msg.name}" id 0x${msg.id.hex()} falls in the NM peer range [0x${bus.nm_peers_lo.hex()},0x${bus.nm_peers_hi.hex()}] — application ids must not overlap NM'
+				}
+			}
+		}
+	}
 	for sig in s.signals {
 		// loom2v MUST load a DBC for any bus carrying external (cross-node)
 		// signals, so a bus with signals but no `dbc` cannot be code-generated.

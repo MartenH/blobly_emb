@@ -973,6 +973,21 @@ fn test_dbc_multiplexed_signal_rejected() {
 	assert errs(check_dbc_conformance(s)).any(it.contains('is multiplexed'))
 }
 
+// --- P1b dissolution: codex #142 round-7 fix ---
+
+// REQ-TOPO-003: an application DBC frame id inside the NM peer range would be
+// consumed as an NM frame (loom2v arms the whole range as the NM receiver).
+fn test_dbc_frame_id_in_nm_range() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_nm_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// SpeedFrame id 0x510 falls in the cluster's peers range [0x500,0x53f]
+	bad := 'VERSION ""\nBU_: a b\nBO_ 1296 SpeedFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
+	s := dissolved_with_dbc(dir, bad) // clean_dissolved's bus has peers [0x500,0x53f]
+	assert errs(check_dbc_conformance(s)).any(it.contains('falls in the NM peer range'))
+}
+
 // parse_system + load_node round-trip on a written system.toml + node ecu.toml.
 fn test_parse_and_load_roundtrip() {
 	dir := os.join_path(os.temp_dir(), 'sysmodel_test_${os.getpid()}')
