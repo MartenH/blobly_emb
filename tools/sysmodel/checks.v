@@ -32,6 +32,7 @@ pub fn validate_system(s System) []Issue {
 	issues << check_bus_single_writer(s)
 	issues << check_frame_single_writer(s)
 	issues << check_nm_cluster_coherence(s)
+	issues << check_telemetry_frames(s)
 	issues << check_routes(s)
 	return issues
 }
@@ -117,6 +118,18 @@ fn check_node_configs(s System) []Issue {
 				severity: .error
 				req:      'REQ-TOPO-005'
 				msg:      'node "${n.name}": target is threadx but has no [telemetry] bus (loom2v requires it for the threadx target)'
+			}
+		}
+		// loom2v's threadx FDCAN backend is classic-only and panics when the
+		// telemetry bus has fd = true (blob_can_open rejects fd_mode), so a threadx
+		// node on an fd bus is not buildable (REQ-TOPO-005).
+		if n.view.is_threadx && n.view.has_telemetry && (n.view.local_bus_fd[n.view.telem_bus] or {
+			false
+		}) {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": target is threadx but its telemetry bus "${n.view.telem_bus}" has fd = true — loom2v\'s FDCAN backend here is classic-only'
 			}
 		}
 		// loom2v's baremetal superloop has NO comm bridge and panics for any
