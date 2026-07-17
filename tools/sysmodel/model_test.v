@@ -1991,14 +1991,15 @@ BO_ 1297 AliveMsg: 8 a
 			name:  'a'
 			buses: ['compute']
 			view:  NodeView{
-				has_nm:      true
-				nm_enabled:  true
-				nm_bus:      'can0'
-				peers_lo:    0x500
-				peers_hi:    0x53f
-				alive:       0x511 // resolved from the AliveMsg binding
-				has_alive:   true
-				local_buses: ['can0']
+				has_nm:             true
+				nm_enabled:         true
+				nm_bus:             'can0'
+				peers_lo:           0x500
+				peers_hi:           0x53f
+				alive:              0x511 // resolved from the AliveMsg binding
+				has_alive:          true
+				alive_from_binding: true // AliveMsg is explicitly the alive frame
+				local_buses:        ['can0']
 			}
 		}]
 	}
@@ -2075,4 +2076,76 @@ fn test_host_route_disables_trace_reservation() {
 		s.nodes[i].view.consumes = map[string][]string{}
 	}
 	assert !errs(validate_system(s)).any(it.contains('trace record id 0x7e5')), errs(validate_system(s)).str()
+}
+
+// --- codex #141 round-21 fixes ---
+
+// REQ-TOPO-002: a NUMERIC alive id does NOT exempt a same-id application frame —
+// only a named-binding alive frame is legal in the range.
+fn test_numeric_alive_does_not_exempt_app_frame() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_numalive_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'compute.dbc'), 'VERSION ""
+
+BU_: a
+
+BO_ 1297 SpeedFrame: 8 a
+ SG_ Speed : 0|32@1+ (1,0) [0|4294967295] "" a
+') or { panic(err) }
+	mut s := System{
+		dir:   dir
+		buses: [Bus{
+			name:      'compute'
+			interface: 'can0'
+			dbc:       'compute.dbc'
+		}]
+		nodes: [Node{
+			name:  'a'
+			buses: ['compute']
+			view:  NodeView{
+				has_nm:             true
+				nm_enabled:         true
+				nm_bus:             'can0'
+				peers_lo:           0x500
+				peers_hi:           0x53f
+				alive:              0x511 // NUMERIC alive, not a DBC binding
+				has_alive:          true
+				alive_from_binding: false
+				local_buses:        ['can0']
+			}
+		}]
+	}
+	// SpeedFrame at 0x511 is a real app frame colliding with the numeric alive id
+	assert errs(check_telemetry_frames(s)).any(it.contains('SpeedFrame')
+		&& it.contains('NM peer range')), errs(check_telemetry_frames(s)).str()
+}
+
+// REQ-TOPO-003: a declared bus DBC that cannot be parsed is a system error, not a
+// silently-absent contract.
+fn test_unreadable_bus_dbc_is_error() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_baddbc_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	mut s := System{
+		dir:   dir
+		buses: [Bus{
+			name:      'compute'
+			interface: 'can0'
+			dbc:       'missing.dbc' // declared but does not exist
+		}]
+		nodes: [Node{
+			name:  'a'
+			buses: ['compute']
+			view:  NodeView{
+				local_buses: ['can0']
+			}
+		}]
+	}
+	assert errs(validate_system(s)).any(it.contains('cannot load declared DBC')
+		&& it.contains('missing.dbc')), errs(validate_system(s)).str()
 }

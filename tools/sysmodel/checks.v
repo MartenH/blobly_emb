@@ -37,6 +37,7 @@ pub fn validate_system(s System) []Issue {
 	issues << check_nm_cluster_coherence(s)
 	issues << check_telemetry_frames(s)
 	issues << check_threadx_signal_layout(s)
+	issues << check_bus_dbcs(s)
 	issues << check_routes(s)
 	return issues
 }

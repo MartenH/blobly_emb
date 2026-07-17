@@ -201,6 +201,28 @@ fn check_threadx_signal_layout(s System) []Issue {
 	return issues
 }
 
+// check_bus_dbcs: every DECLARED bus DBC must parse. loom2v loads a DBC lazily
+// (only when a feature needs it), so a system with a missing/malformed DBC can
+// otherwise pass syscheck when its nodes happen not to touch it — accepting a bus
+// whose advertised contract cannot be read (REQ-TOPO-003).
+fn check_bus_dbcs(s System) []Issue {
+	mut issues := []Issue{}
+	for bus in s.buses {
+		if bus.dbc == '' {
+			continue
+		}
+		path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(s.dir, bus.dbc) }
+		candb.load_dbc_file(path) or {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'bus "${bus.name}": cannot load declared DBC "${bus.dbc}": ${err}'
+			}
+		}
+	}
+	return issues
+}
+
 // message_of_signal returns the DBC message that carries a signal (SG_) — its
 // name and on-wire CAN id/format — or none if the signal is in no message.
 fn message_of_signal(db candb.Database, signame string) ?candb.Message {
@@ -386,16 +408,17 @@ fn check_telemetry_frames(s System) []Issue {
 		mut lo := u32(0)
 		mut hi := u32(0)
 		mut have := false
-		// the alive ids legitimately in the range (a node may BIND [nm].alive to a
-		// DBC message — loom2v emits that message AS the alive frame, so it is not an
-		// application frame and must not be flagged here).
+		// only a DBC message EXPLICITLY bound as [nm].alive is exempt — loom2v emits
+		// that message AS the alive frame, so it is not an application frame. A
+		// numeric/default alive id does NOT make a same-id app frame legal: both the
+		// NM rx arm and the app frame's rx path run for that id, so they collide.
 		mut alive_ids := map[u32]bool{}
 		for n in s.nodes {
 			if n.view.has_nm && n.view.nm_enabled && n.view.nm_bus == bus.interface {
 				lo = n.view.peers_lo
 				hi = n.view.peers_hi
 				have = true
-				if n.view.has_alive {
+				if n.view.alive_from_binding {
 					alive_ids[n.view.alive] = true
 				}
 			}
