@@ -2,7 +2,10 @@ module sysmodel
 
 import os
 
-// @verifies REQ-TOPO-001, REQ-TOPO-002, REQ-TOPO-004, REQ-TOPO-005, REQ-TOPO-006
+// REQ-TOPO-005 is method = "analysis" (the system-sourced-generation architecture,
+// argued in docs/multi-node.md) — these validator tests exercise cross-node checks,
+// not that generation analysis, so they must NOT claim to verify it by test.
+// @verifies REQ-TOPO-001, REQ-TOPO-002, REQ-TOPO-004, REQ-TOPO-006
 
 fn errs(issues []Issue) []string {
 	mut out := []string{}
@@ -920,4 +923,92 @@ trace = 1
 	assert sys.nodes[0].view.has_nm
 	assert sys.nodes[0].view.peers_lo == 0x500
 	assert sys.nodes[0].view.peers_hi == 0x53f
+}
+
+// --- codex #141 round-8 fixes ---
+
+// REQ-TOPO-002: a NAMED [nm].alive binding resolves through the bus DBC to a
+// numeric on-wire id during load, so it flows through the SAME uniqueness check
+// as a literal — a name and a literal that hit the same id must not slip past in
+// separate maps. Here "AliveMsg" is 0x511 in the DBC; after load_nodes the view
+// carries alive = 0x511 (not a raw string), and the binding is cleared.
+fn test_named_alive_resolves_via_dbc() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_ralive_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'compute.dbc'), 'VERSION ""
+
+BU_: a
+
+BO_ 1297 AliveMsg: 8 a
+ SG_ Alive : 0|8@1+ (1,0) [0|255] "" a
+') or { panic(err) }
+	os.write_file(os.join_path(dir, 'node_a.toml'), '
+[bus.can0]
+[telemetry]
+bus = "can0"
+[nm]
+node  = 0x11
+alive = "AliveMsg"
+peers = [0x500, 0x53F]
+') or { panic(err) }
+	os.write_file(os.join_path(dir, 'system.toml'), '
+[bus.compute]
+interface = "can0"
+dbc = "compute.dbc"
+[[node]]
+name = "a"
+ecu = "node_a.toml"
+buses = ["compute"]
+nm = 0x11
+trace = 1
+') or { panic(err) }
+	mut sys := parse_system(os.join_path(dir, 'system.toml')) or { panic(err) }
+	load_errs := sys.load_nodes()
+	assert load_errs.len == 0, load_errs.str()
+	assert sys.nodes[0].view.has_alive, 'named alive should resolve to a numeric id'
+	assert sys.nodes[0].view.alive == 0x511, 'AliveMsg is 0x511 in the DBC, got 0x${sys.nodes[0].view.alive.hex()}'
+	assert sys.nodes[0].view.alive_binding == '', 'a resolved binding is cleared'
+}
+
+// A named [nm].alive whose message is absent from the bus DBC is a load error
+// (loom2v would fail to resolve it too).
+fn test_named_alive_unknown_message_errors() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_ualive_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'compute.dbc'), 'VERSION ""
+
+BU_: a
+
+BO_ 1297 OtherMsg: 8 a
+ SG_ X : 0|8@1+ (1,0) [0|255] "" a
+') or { panic(err) }
+	os.write_file(os.join_path(dir, 'node_a.toml'), '
+[bus.can0]
+[telemetry]
+bus = "can0"
+[nm]
+node  = 0x11
+alive = "AliveMsg"
+peers = [0x500, 0x53F]
+') or { panic(err) }
+	os.write_file(os.join_path(dir, 'system.toml'), '
+[bus.compute]
+interface = "can0"
+dbc = "compute.dbc"
+[[node]]
+name = "a"
+ecu = "node_a.toml"
+buses = ["compute"]
+nm = 0x11
+trace = 1
+') or { panic(err) }
+	mut sys := parse_system(os.join_path(dir, 'system.toml')) or { panic(err) }
+	load_errs := sys.load_nodes()
+	assert load_errs.any(it.contains('no such message')), load_errs.str()
 }

@@ -359,8 +359,10 @@ fn check_identity_uniqueness(s System) []Issue {
 				alive_seen[n.view.alive] = n.name
 			}
 		}
-		// a NAMED alive binding (a DBC message name) resolves to one CAN id, so two
-		// nodes naming the same message share the on-wire alive id (REQ-TOPO-002).
+		// FALLBACK for a named alive binding load_nodes could NOT resolve to a
+		// numeric id (no DBC on the bus): two nodes naming the same DBC message
+		// still share one on-wire alive id, even undecoded (REQ-TOPO-002). A
+		// RESOLVED binding is cleared to '' and already caught numerically above.
 		if n.view.alive_binding != '' && n.view.nm_enabled {
 			if prev := alive_binding_seen[n.view.alive_binding] {
 				issues << Issue{
