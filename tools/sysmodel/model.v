@@ -439,13 +439,32 @@ pub fn load_node(path string) !NodeView {
 	iface_of := fn [key_iface] (logical string) ?string {
 		return key_iface[logical] or { none }
 	}
-	// [[partition]] count — host trace generation needs the single-partition shape.
-	if pv := doc.value_opt('partition') {
-		v.partition_count = pv.array().len
+	// host trace generation counts FB-BEARING partitions, not raw [[partition]]
+	// blocks: loom2v's m.part.by_part is populated only while assigning FBs, so a
+	// partition whose threads host no FB is not counted (trace_host = 1 FB-partition).
+	mut fb_threads := map[string]bool{}
+	if fv := doc.value_opt('fb') {
+		for f in fv.array() {
+			fb_threads[m_str(f.as_map(), 'thread')] = true
+		}
 	}
-	// a node-local [[route]] disables host trace generation (loom2v trace_host).
-	if _ := doc.value_opt('route') {
-		v.has_route = true
+	if pv := doc.value_opt('partition') {
+		for p in pv.array() {
+			pm := p.as_map()
+			if tv := pm['thread'] {
+				for t in tv.array() {
+					if fb_threads[m_str(t.as_map(), 'name')] {
+						v.partition_count++
+						break // this partition hosts >=1 FB — count it once
+					}
+				}
+			}
+		}
+	}
+	// a NON-EMPTY node-local [[route]] disables host trace generation (loom2v
+	// trace_host uses m.routes.len > 0 — an empty `route = []` still emits trace).
+	if rv := doc.value_opt('route') {
+		v.has_route = rv.array().len > 0
 	}
 	// [[signal]] from/to a bus = consume/produce on that bus (keyed by interface)
 	if sv := doc.value_opt('signal') {
