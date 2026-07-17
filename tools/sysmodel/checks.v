@@ -431,13 +431,15 @@ fn check_bus_single_writer(s System) []Issue {
 				}
 			}
 		}
-		// a produced signal nobody consumes on this bus = unused (warning)
+		// a produced cross-node signal with NO receiver is an ERROR: REQ-TOPO-001
+		// requires every transmitted signal to be received by at least one node, so
+		// a typo or missing consumer that silently drops all data must fail the gate.
 		for sig, nodes in prod {
 			if sig !in cons && !signal_routed_from(s, sig, bus.name) {
 				issues << Issue{
-					severity: .warning
+					severity: .error
 					req:      'REQ-TOPO-001'
-					msg:      'bus "${bus.name}": signal "${sig}" transmitted by ${nodes.join(', ')} but no node consumes it here'
+					msg:      'bus "${bus.name}": signal "${sig}" transmitted by ${nodes.join(', ')} but no node receives it (REQ-TOPO-001: every cross-node signal needs >=1 receiver)'
 				}
 			}
 		}
@@ -567,14 +569,19 @@ fn check_identity_uniqueness(s System) []Issue {
 			}
 		}
 		// the ECU's ACTUAL [[isotp]] rx_id/tx_id are the on-wire diagnostic ids
-		// (loom2v emits them); system.toml `diag` is only the allocation. Register
-		// the real ids in the SAME map so two nodes physically using one diagnostic
-		// CAN id collide even when their system diag allocations differ.
-		for iid in n.view.isotp_ids {
-			if iid == 0 {
-				continue
-			}
+		// (loom2v emits them, id 0 INCLUDED); system.toml `diag` is only the
+		// allocation. Register the real ids in the SAME map so two nodes physically
+		// using one diagnostic CAN id collide even when their diag allocations differ.
+		mut isotp_ids := []u32{}
+		for c in n.view.isotp_conns {
+			isotp_ids << c.rx_id
+			isotp_ids << c.tx_id
+		}
+		for iid in isotp_ids {
 			if prev := diag_seen[iid] {
+				if prev == n.name {
+					continue // the node's own diag allocation == its isotp id (expected)
+				}
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-002'
@@ -584,7 +591,10 @@ fn check_identity_uniqueness(s System) []Issue {
 				diag_seen[iid] = n.name
 			}
 		}
-		if n.trace != 0 {
+		// trace id uniqueness by DECLARED presence — 0 is a valid trace id, so two
+		// nodes explicitly allocated `trace = 0` are indistinguishable in the manifest
+		// (an omitted `trace` is not a participant).
+		if n.has_trace {
 			if prev := trace_seen[n.trace] {
 				issues << Issue{
 					severity: .error
