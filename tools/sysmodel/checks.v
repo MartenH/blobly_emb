@@ -12,6 +12,15 @@ pub enum Severity {
 	warning
 }
 
+// default_cycle_ms — the tx cadence the generator emits when a signal omits
+// cycle_ms. Shared so the cadence-agreement check compares the SAME effective
+// value the generator will emit (a signal at 0 and one at 100 are NOT a conflict).
+pub const default_cycle_ms = 100
+
+pub fn effective_cycle_ms(cycle_ms int) int {
+	return if cycle_ms > 0 { cycle_ms } else { default_cycle_ms }
+}
+
 pub struct Issue {
 pub:
 	severity Severity
@@ -66,10 +75,13 @@ fn check_partial_no_wiring(s System) []Issue {
 		if n.view.local_buses.len > 0 {
 			authored << '[bus.*]'
 		}
-		if n.view.produces.len > 0 || n.view.consumes.len > 0 {
-			authored << 'a [[signal]] with a bus endpoint'
+		// ANY [[signal]]/[[frame]] — even one whose bus endpoint has no matching
+		// [bus.*] (produces/consumes miss those, but the generator prepends the
+		// interface, activating the authored wiring).
+		if n.view.authored_signals {
+			authored << 'a [[signal]]'
 		}
-		if n.view.tx_frames.len > 0 {
+		if n.view.authored_frames {
 			authored << 'a [[frame]]'
 		}
 		if n.view.has_nm {
@@ -285,18 +297,20 @@ fn check_signals_dissolved(s System) []Issue {
 						msg:      'frame "${sig.frame}" on bus "${sig.bus}": carries signals from both "${prev}" and "${sig.producer}" — one frame owner per bus'
 					}
 				}
-				if sig.cycle_ms != 0 && frame_cycle[key] != 0 && sig.cycle_ms != frame_cycle[key] {
+				eff := effective_cycle_ms(sig.cycle_ms)
+				if frame_cycle[key] != 0 && eff != frame_cycle[key] {
 					issues << Issue{
 						severity: .error
 						req:      'REQ-TOPO-001'
-						msg:      'frame "${sig.frame}" on bus "${sig.bus}": signals disagree on cycle_ms (${frame_cycle[key]} vs ${sig.cycle_ms}) — a frame has one cadence'
+						msg:      'frame "${sig.frame}" on bus "${sig.bus}": signals disagree on cycle (${frame_cycle[key]} vs ${eff} ms effective) — a frame has one cadence'
 					}
+				}
+				if frame_cycle[key] == 0 {
+					frame_cycle[key] = eff
 				}
 			} else {
 				frame_owner[key] = sig.producer
-			}
-			if sig.cycle_ms != 0 && frame_cycle[key] == 0 {
-				frame_cycle[key] = sig.cycle_ms
+				frame_cycle[key] = effective_cycle_ms(sig.cycle_ms)
 			}
 		}
 		// reachability: does anyone read it? (a produced-but-unconsumed signal).

@@ -61,8 +61,33 @@ pub fn check_dbc_conformance(s System) []Issue {
 				msg:      'signal "${sig.name}": DBC frame "${sig.frame}" is transmitted by "${m.sender}" but system.toml declares producer "${sig.producer}"'
 			}
 		}
-		// the fields must fit the frame's payload
+		// the signal must be an SG_ IN the frame — loom2v resolves external signals
+		// by exact DBC signal name, and aborts if it is absent — and its width must
+		// match the fields (a single-field signal maps to one SG_ of that width).
 		bits := field_bits(sig.fields)
+		mut dbc_sig := ?candb.Signal(none)
+		for ds in m.signals {
+			if ds.name == sig.name {
+				dbc_sig = ds
+				break
+			}
+		}
+		if ds := dbc_sig {
+			if bits != 0 && ds.length != bits {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'signal "${sig.name}": fields are ${bits} bits but DBC SG_ "${sig.name}" in frame "${sig.frame}" is ${ds.length} bits'
+				}
+			}
+		} else {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'signal "${sig.name}": frame "${sig.frame}" exists but has no SG_ named "${sig.name}" (loom2v resolves external signals by DBC signal name)'
+			}
+		}
+		// the fields must also fit the frame's payload
 		if bits > m.dlc * 8 {
 			issues << Issue{
 				severity: .error

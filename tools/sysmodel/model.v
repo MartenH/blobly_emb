@@ -123,6 +123,12 @@ pub mut:
 	// reads with no system declaration, is a cross-node bug.
 	fb_reads  []string
 	fb_writes []string
+	// a dissolved partial is INTERNALS-ONLY: it must declare NO [[signal]],
+	// [[frame]], [bus] or [nm] (the system owns all wiring). These flag ANY such
+	// section, even a [[signal]] with a bus endpoint but no matching [bus.*]
+	// (which produces/consumes above would miss).
+	authored_signals bool
+	authored_frames  bool
 }
 
 // System — the whole parsed system.toml plus each node's loaded view.
@@ -352,6 +358,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 	// [[signal]] from/to a bus = consume/produce on that bus
 	if sv := doc.value_opt('signal') {
 		for s in sv.array() {
+			v.authored_signals = true // ANY [[signal]] — a dissolved partial has none
 			m := s.as_map()
 			name := m_str(m, 'name')
 			from := m_str(m, 'from')
@@ -370,6 +377,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 	// [[frame]] with a tx spec = this node transmits that frame on bus
 	if fv := doc.value_opt('frame') {
 		for f in fv.array() {
+			v.authored_frames = true // ANY [[frame]]
 			m := f.as_map()
 			name := m_str(m, 'name')
 			bus := m_str(m, 'bus')
