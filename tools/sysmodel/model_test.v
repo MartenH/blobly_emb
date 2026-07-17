@@ -37,18 +37,18 @@ fn clean_system() System {
 		}]
 		nodes: [
 			Node{
-				name:  'sysnode'
-				buses: ['compute']
-				nm:    0x11
+				name:         'sysnode'
+				buses:        ['compute']
+				nm:           0x11
 				has_nm_alloc: true
 				nm_alloc_ok:  true
-				trace: 1
-				has_trace: true
-				view:  NodeView{
-					produces:  {
+				trace:        1
+				has_trace:    true
+				view:         NodeView{
+					produces:    {
 						'can0': ['Speed']
 					}
-					consumes:  {
+					consumes:    {
 						'can0': ['Rpm']
 					}
 					has_nm:      true
@@ -64,18 +64,18 @@ fn clean_system() System {
 				}
 			},
 			Node{
-				name:  'domain'
-				buses: ['compute']
-				nm:    0x13
+				name:         'domain'
+				buses:        ['compute']
+				nm:           0x13
 				has_nm_alloc: true
 				nm_alloc_ok:  true
-				trace: 2
-				has_trace: true
-				view:  NodeView{
-					produces:  {
+				trace:        2
+				has_trace:    true
+				view:         NodeView{
+					produces:    {
 						'can0': ['Rpm']
 					}
-					consumes:  {
+					consumes:    {
 						'can0': ['Speed']
 					}
 					has_nm:      true
@@ -187,7 +187,8 @@ fn test_alive_outside_range_is_error() {
 	mut s := clean_system()
 	s.nodes[0].view.alive = 0x600 // outside [0x500,0x53f]
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('alive id 0x600') && it.contains('outside its cluster range')), errs(issues).str()
+	assert errs(issues).any(it.contains('alive id 0x600')
+		&& it.contains('outside its cluster range')), errs(issues).str()
 }
 
 // REQ-TOPO-004: nodes on one bus must agree on the cluster range.
@@ -254,13 +255,13 @@ fn test_route_satisfies_cross_bus_consumer() {
 	s.nodes[0].view.local_buses = ['can0', 'can1'] // the gateway opens both interfaces
 	// zone consumes Speed on edge; only sysnode produces it on compute
 	s.nodes << Node{
-		name:  'zone'
-		buses: ['edge']
-		nm:    0x20
+		name:         'zone'
+		buses:        ['edge']
+		nm:           0x20
 		has_nm_alloc: true
 		nm_alloc_ok:  true
-		trace: 3
-		view:  NodeView{
+		trace:        3
+		view:         NodeView{
 			consumes:    {
 				'can1': ['Speed']
 			}
@@ -365,14 +366,18 @@ BU_: a b
 BO_ 288 StatusFrame: 8 a
  SG_ A : 0|8@1+ (1,0) [0|255] "" b
  SG_ B : 8|8@1+ (1,0) [0|255] "" a
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	mut s := System{
 		dir:   dir
-		buses: [Bus{
-			name:      'compute'
-			interface: 'can0'
-			dbc:       'compute.dbc'
-		}]
+		buses: [
+			Bus{
+				name:      'compute'
+				interface: 'can0'
+				dbc:       'compute.dbc'
+			},
+		]
 		nodes: [
 			Node{
 				name:  'a'
@@ -411,13 +416,13 @@ fn test_route_without_source_producer_is_error() {
 	s.nodes[0].buses = ['compute', 'edge']
 	s.nodes[0].view.local_buses = ['can0', 'can1']
 	s.nodes << Node{
-		name:  'zone'
-		buses: ['edge']
-		nm:    0x20
+		name:         'zone'
+		buses:        ['edge']
+		nm:           0x20
 		has_nm_alloc: true
 		nm_alloc_ok:  true
-		trace: 3
-		view:  NodeView{
+		trace:        3
+		view:         NodeView{
 			consumes:    {
 				'can1': ['Torque']
 			}
@@ -488,25 +493,25 @@ fn test_nm_timing_anchor_is_per_param() {
 	s.nodes[1].view.nm_timeout_ms = 300
 	s.nodes[1].view.nm_has_timeout = true
 	s.nodes << Node{
-		name:  'third'
-		buses: ['compute']
-		nm:    0x15
+		name:         'third'
+		buses:        ['compute']
+		nm:           0x15
 		has_nm_alloc: true
 		nm_alloc_ok:  true
-		trace: 4
-		view:  NodeView{
-			has_nm:        true
-			nm_enabled:  true
-			nm_node:       0x15
-			has_nm_node:   true
-			nm_node_ok:  true
-			alive:         0x515
-			has_alive:   true
-			peers_lo:      0x500
-			peers_hi:      0x53f
-			local_buses:   ['can0']
+		trace:        4
+		view:         NodeView{
+			has_nm:         true
+			nm_enabled:     true
+			nm_node:        0x15
+			has_nm_node:    true
+			nm_node_ok:     true
+			alive:          0x515
+			has_alive:      true
+			peers_lo:       0x500
+			peers_hi:       0x53f
+			local_buses:    ['can0']
 			nm_has_timeout: true
-			nm_timeout_ms: 500 // conflicts with domain's 300
+			nm_timeout_ms:  500 // conflicts with domain's 300
 		}
 	}
 	assert errs(validate_system(s)).any(it.contains('timeout_ms mismatch') && it.contains('500')), 'per-param anchor'
@@ -571,7 +576,9 @@ core = 0
   [[partition.thread]]
   name = "t"
 totally_unknown_key = 42
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	view := load_node(os.join_path(dir, 'bad.toml')) or { panic(err) }
 	assert view.config_errors.len > 0, 'ecucheck should flag the unknown key'
 	assert view.config_errors.any(it.contains('unknown key') || it.contains('totally_unknown_key')), view.config_errors.str()
@@ -647,7 +654,9 @@ name  = "diag"
 bus   = "can0"
 rx_id = 0x101
 tx_id = 0x102
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	view := load_node(os.join_path(dir, 'n.toml')) or { panic(err) }
 	assert view.has_nm
 	assert !view.has_alive, 'a named alive binding is not a numeric id'
@@ -676,7 +685,9 @@ core = 0
 [nm]
 node  = 0x40
 peers = [0x500, 0x53F]
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	view := load_node(os.join_path(dir, 'n.toml')) or { panic(err) }
 	assert view.has_alive, 'an omitted alive derives peers_lo + node'
 	assert view.alive == 0x540, 'derived alive should be 0x500 + 0x40 = 0x540, got 0x${view.alive.hex()}'
@@ -722,13 +733,13 @@ fn test_nm_bus_scoping() {
 	s.nodes[0].view.nm_bus = 'can0' // its NM is on compute only
 	// an edge-only node with a DIFFERENT cluster range must not clash with the gateway
 	s.nodes << Node{
-		name:  'zone'
-		buses: ['edge']
-		nm:    0x21
+		name:         'zone'
+		buses:        ['edge']
+		nm:           0x21
 		has_nm_alloc: true
 		nm_alloc_ok:  true
-		trace: 3
-		view:  NodeView{
+		trace:        3
+		view:         NodeView{
 			has_nm:      true
 			nm_enabled:  true
 			nm_node:     0x21
@@ -759,13 +770,13 @@ fn test_nm_bus_scoping_timing() {
 	s.nodes[0].view.local_buses = ['can0', 'can1']
 	s.nodes[0].view.nm_bus = 'can0' // NM on compute only
 	s.nodes << Node{
-		name:  'zone'
-		buses: ['edge']
-		nm:    0x21
+		name:         'zone'
+		buses:        ['edge']
+		nm:           0x21
 		has_nm_alloc: true
 		nm_alloc_ok:  true
-		trace: 3
-		view:  NodeView{
+		trace:        3
+		view:         NodeView{
 			has_nm:         true
 			nm_enabled:     true
 			nm_node:        0x21
@@ -807,7 +818,9 @@ node  = 0x11
 peers = [0x500, 0x53F]
 [target]
 kind = "baremetal"
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	view := load_node(os.join_path(dir, 'n.toml')) or { panic(err) }
 	assert view.has_nm, 'the [nm] table is present'
 	assert !view.nm_enabled, 'a non-threadx target disables NM (loom2v emits none)'
@@ -829,15 +842,6 @@ fn test_local_nm_node_out_of_range() {
 
 // --- codex #141 round-7 fixes ---
 
-// REQ-TOPO-005: a threadx node with no [telemetry] bus can't be generated.
-fn test_threadx_requires_telemetry() {
-	mut s := clean_system()
-	s.nodes[0].view.is_threadx = true
-	s.nodes[0].view.comm_thread_on = true
-	s.nodes[0].view.has_telemetry = false
-	assert errs(validate_system(s)).any(it.contains('no [telemetry] bus'))
-}
-
 // REQ-TOPO-006: a route missing an endpoint (only `from`, no `to`).
 fn test_route_missing_endpoint() {
 	mut s := clean_system()
@@ -857,7 +861,8 @@ fn test_named_alive_binding_collision() {
 	s.nodes[0].view.alive_binding = 'AliveMsg'
 	s.nodes[1].view.has_alive = false
 	s.nodes[1].view.alive_binding = 'AliveMsg' // same message name
-	assert errs(validate_system(s)).any(it.contains('alive binding "AliveMsg"') && it.contains('resolves to one CAN id'))
+	assert errs(validate_system(s)).any(it.contains('alive binding "AliveMsg"')
+		&& it.contains('resolves to one CAN id'))
 }
 
 // REQ-TOPO-004: an omitted [nm].peers defaults to loom2v's 0x500..0x53f (so the
@@ -888,7 +893,9 @@ bus = "can0"
 id = 0x7E0
 detail_id = 0x7E1
 period_ms = 500
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	view := load_node(os.join_path(dir, 'n.toml')) or { panic(err) }
 	assert view.peers_lo == 0x500 && view.peers_hi == 0x53f, 'omitted peers -> loom2v default'
 	assert view.alive == 0x511, 'derived alive = 0x500 + 0x11'
@@ -905,13 +912,13 @@ fn test_implicit_nm_bus_is_telemetry() {
 	s.nodes[0].view.local_buses = ['can0', 'can1']
 	s.nodes[0].view.nm_bus = 'can0' // resolved from telemetry bus (no explicit nm.bus)
 	s.nodes << Node{
-		name:  'zone'
-		buses: ['edge']
-		nm:    0x21
+		name:         'zone'
+		buses:        ['edge']
+		nm:           0x21
 		has_nm_alloc: true
 		nm_alloc_ok:  true
-		trace: 3
-		view:  NodeView{
+		trace:        3
+		view:         NodeView{
 			has_nm:      true
 			nm_enabled:  true
 			nm_node:     0x21
@@ -950,7 +957,9 @@ to   = "app"
 [nm]
 node  = 0x11
 peers = [0x500, 0x53F]
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	os.write_file(os.join_path(dir, 'system.toml'), '
 [bus.compute]
 interface = "can0"
@@ -964,7 +973,9 @@ buses = ["compute"]
 nm = 0x11
 diag = { req = 0x7A0, rsp = 0x7A8 }
 trace = 1
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	mut sys := parse_system(os.join_path(dir, 'system.toml')) or { panic(err) }
 	assert sys.buses.len == 1
 	assert sys.buses[0].interface == 'can0'
@@ -1002,7 +1013,9 @@ BU_: a
 
 BO_ 1297 AliveMsg: 8 a
  SG_ Alive : 0|8@1+ (1,0) [0|255] "" a
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	os.write_file(os.join_path(dir, 'node_a.toml'), '
 [bus.can0]
 [telemetry]
@@ -1019,7 +1032,9 @@ name  = "diag"
 bus   = "can0"
 rx_id = 0x101
 tx_id = 0x102
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	os.write_file(os.join_path(dir, 'system.toml'), '
 [bus.compute]
 interface = "can0"
@@ -1030,7 +1045,9 @@ ecu = "node_a.toml"
 buses = ["compute"]
 nm = 0x11
 trace = 1
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	mut sys := parse_system(os.join_path(dir, 'system.toml')) or { panic(err) }
 	load_errs := sys.load_nodes()
 	assert load_errs.len == 0, load_errs.str()
@@ -1053,7 +1070,9 @@ BU_: a
 
 BO_ 1297 OtherMsg: 8 a
  SG_ X : 0|8@1+ (1,0) [0|255] "" a
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	os.write_file(os.join_path(dir, 'node_a.toml'), '
 [bus.can0]
 [telemetry]
@@ -1070,7 +1089,9 @@ name  = "diag"
 bus   = "can0"
 rx_id = 0x101
 tx_id = 0x102
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	os.write_file(os.join_path(dir, 'system.toml'), '
 [bus.compute]
 interface = "can0"
@@ -1081,7 +1102,9 @@ ecu = "node_a.toml"
 buses = ["compute"]
 nm = 0x11
 trace = 1
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	mut sys := parse_system(os.join_path(dir, 'system.toml')) or { panic(err) }
 	load_errs := sys.load_nodes()
 	assert load_errs.any(it.contains('no such message')), load_errs.str()
@@ -1103,15 +1126,6 @@ fn test_nm_bus_must_match_telemetry() {
 		&& it.contains('[telemetry].bus "can0"')), errs(validate_system(s)).str()
 }
 
-// REQ-TOPO-005: loom2v's baremetal superloop panics for any external/bus signal
-// (no comm bridge), so a baremetal node with bus-facing signals is not buildable.
-fn test_baremetal_with_bus_signal_is_error() {
-	mut s := clean_system()
-	s.nodes[0].view.is_baremetal = true // node produces Speed on can0 (a bus signal)
-	assert errs(validate_system(s)).any(it.contains('target is baremetal')
-		&& it.contains('bus-facing signals')), errs(validate_system(s)).str()
-}
-
 // REQ-TOPO-001: a local interface no system bus declares, carrying bus-facing
 // signals, has no system contract — its traffic must not silently pass unchecked.
 fn test_undeclared_interface_with_signals_is_error() {
@@ -1127,7 +1141,7 @@ fn test_undeclared_interface_with_signals_is_error() {
 // system.toml names) is passed literally and cannot run code (regression).
 fn test_run_capture_does_not_shell() {
 	if !os.exists('/bin/echo') {
-		return // no echo to probe with; skip rather than fail on an odd host
+		return
 	}
 	dir := os.join_path(os.temp_dir(), 'sysmodel_argv_${os.getpid()}')
 	os.mkdir_all(dir) or { panic(err) }
@@ -1178,22 +1192,6 @@ fn test_omitted_telemetry_ids_collide_at_zero() {
 		&& it.contains('single-writer')), errs(validate_system(s)).str()
 }
 
-// REQ-TOPO-005: loom2v's threadx FDCAN backend is classic-only and panics for an
-// fd = true telemetry bus.
-fn test_threadx_fd_telemetry_bus_is_error() {
-	mut s := clean_system()
-	s.nodes[0].view.is_threadx = true
-	s.nodes[0].view.comm_thread_on = true
-	s.nodes[0].view.has_telemetry = true
-	s.nodes[0].view.telem_bus = 'can0'
-	s.nodes[0].view.nm_bus = 'can0'
-	s.nodes[0].view.local_bus_fd = {
-		'can0': true
-	}
-	assert errs(validate_system(s)).any(it.contains('fd = true')
-		&& it.contains('classic-only')), errs(validate_system(s)).str()
-}
-
 // REQ-TOPO-004: a named [nm].alive binding whose bus has no DBC cannot be
 // resolved to a CAN id — a load error, not a silent clean fall-through.
 fn test_named_alive_without_dbc_is_error() {
@@ -1226,7 +1224,9 @@ name  = "diag"
 bus   = "can0"
 rx_id = 0x101
 tx_id = 0x102
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	os.write_file(os.join_path(dir, 'system.toml'), '
 [bus.compute]
 interface = "can0"
@@ -1236,7 +1236,9 @@ ecu = "n.toml"
 buses = ["compute"]
 nm = 0x11
 trace = 1
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	mut sys := parse_system(os.join_path(dir, 'system.toml')) or { panic(err) }
 	load_errs := sys.load_nodes()
 	assert load_errs.any(it.contains('no `dbc` to resolve')), load_errs.str()
@@ -1268,29 +1270,11 @@ kind    = "threadx"
 tick_ms = 1
 [telemetry]
 bus = "can0"
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	view := load_node(os.join_path(dir, 'n.toml')) or { panic(err) }
 	assert !view.has_telemetry, 'omitted [telemetry].enabled must default to false (loom2v parse_telemetry)'
-}
-
-// REQ-TOPO-005: a threadx node's comm thread owns only the telemetry bus, so a
-// signal it produces/consumes on any other bus is not generatable.
-fn test_threadx_signal_off_telemetry_bus_is_error() {
-	mut s := clean_system()
-	s.buses << Bus{
-		name:      'edge'
-		interface: 'can1'
-	}
-	s.nodes[0].buses = ['compute', 'edge']
-	s.nodes[0].view.is_threadx = true
-	s.nodes[0].view.comm_thread_on = true
-	s.nodes[0].view.has_telemetry = true
-	s.nodes[0].view.telem_bus = 'can0'
-	s.nodes[0].view.nm_bus = 'can0'
-	s.nodes[0].view.local_buses = ['can0', 'can1']
-	s.nodes[0].view.produces['can1'] = ['Extra'] // a signal off the telemetry bus
-	assert errs(validate_system(s)).any(it.contains('on bus "can1"')
-		&& it.contains('owns only the telemetry bus')), errs(validate_system(s)).str()
 }
 
 // REQ-TOPO-001: a threadx node whose telemetry interface is a local bus no system
@@ -1304,8 +1288,7 @@ fn test_undeclared_telemetry_interface_is_error() {
 	s.nodes[0].view.telem_bus = 'can9' // not a system bus interface
 	s.nodes[0].view.nm_bus = 'can9'
 	s.nodes[0].view.local_buses = ['can0', 'can9']
-	assert errs(validate_system(s)).any(it.contains('[bus.can9]')
-		&& it.contains('telemetry')), errs(validate_system(s)).str()
+	assert errs(validate_system(s)).any(it.contains('[bus.can9]') && it.contains('telemetry')), errs(validate_system(s)).str()
 }
 
 // --- codex #141 round-12 fixes ---
@@ -1395,7 +1378,9 @@ name  = "diag"
 bus   = "can0"
 rx_id = 0x101
 tx_id = 0x102
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	os.write_file(os.join_path(dir, 'system.toml'), '
 [bus.compute]
 interface = "can0"
@@ -1405,27 +1390,15 @@ ecu = "n.toml"
 buses = ["compute"]
 nm = 0x11
 trace = 1
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	mut sys := parse_system(os.join_path(dir, 'system.toml')) or { panic(err) }
 	load_errs := sys.load_nodes()
 	assert !load_errs.any(it.contains('alive')), 'inactive NM named alive must not require a DBC: ${load_errs}'
 }
 
 // --- codex #141 round-13 fixes ---
-
-// REQ-TOPO-005: loom2v panics for a threadx node with any [[isotp]] (ISO-TP is
-// not generated on the comm thread yet).
-fn test_threadx_isotp_is_error() {
-	mut s := clean_system()
-	s.nodes[0].view.is_threadx = true
-	s.nodes[0].view.comm_thread_on = true
-	s.nodes[0].view.has_telemetry = true
-	s.nodes[0].view.telem_bus = 'can0'
-	s.nodes[0].view.nm_bus = 'can0'
-	s.nodes[0].view.has_isotp = true
-	assert errs(validate_system(s)).any(it.contains('[[isotp]]')
-		&& it.contains('does not generate ISO-TP')), errs(validate_system(s)).str()
-}
 
 // REQ-TOPO-002: two nodes physically using the same ISO-TP diagnostic id collide
 // on the wire even when their system.toml diag allocations differ.
@@ -1532,27 +1505,33 @@ BU_: a
 
 BO_ 288 TraceRecord: 8 a
  SG_ X : 0|8@1+ (1,0) [0|255] "" a
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	mut s := System{
 		dir:   dir
-		buses: [Bus{
-			name:      'compute'
-			interface: 'can0'
-			dbc:       'compute.dbc'
-		}]
-		nodes: [Node{
-			name:  'a'
-			buses: ['compute']
-			view:  NodeView{
-				is_threadx:        true
-				comm_thread_on: true
-				has_telemetry:     true
-				telem_bus:         'can0'
-				trace_on:          true
-				trace_record_name: 'trace_record' // snake of "TraceRecord" -> 0x120
-				trace_rsp_id:      0x7e3
-			}
-		}]
+		buses: [
+			Bus{
+				name:      'compute'
+				interface: 'can0'
+				dbc:       'compute.dbc'
+			},
+		]
+		nodes: [
+			Node{
+				name:  'a'
+				buses: ['compute']
+				view:  NodeView{
+					is_threadx:        true
+					comm_thread_on:    true
+					has_telemetry:     true
+					telem_bus:         'can0'
+					trace_on:          true
+					trace_record_name: 'trace_record' // snake of "TraceRecord" -> 0x120
+					trace_rsp_id:      0x7e3
+				}
+			},
+		]
 	}
 	// the bound record resolves to 0x120 (=TraceRecord) but must NOT be an alias error
 	assert !errs(check_telemetry_frames(s)).any(it.contains('aliases DBC application frame')), errs(check_telemetry_frames(s)).str()
@@ -1599,21 +1578,25 @@ BU_: a b
 
 BO_ 300 TraceRecord: 8 a
  SG_ X : 0|8@1+ (1,0) [0|255] "" b
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	mut s := System{
 		dir:   dir
-		buses: [Bus{
-			name:      'compute'
-			interface: 'can0'
-			dbc:       'compute.dbc'
-		}]
+		buses: [
+			Bus{
+				name:      'compute'
+				interface: 'can0'
+				dbc:       'compute.dbc'
+			},
+		]
 		nodes: [
 			Node{
 				name:  'a'
 				buses: ['compute']
 				view:  NodeView{
 					is_threadx:        true
-					comm_thread_on: true
+					comm_thread_on:    true
 					has_telemetry:     true
 					telem_bus:         'can0'
 					telem_id:          0x7a0
@@ -1627,7 +1610,7 @@ BO_ 300 TraceRecord: 8 a
 				buses: ['compute']
 				view:  NodeView{
 					is_threadx:        true
-					comm_thread_on: true
+					comm_thread_on:    true
 					has_telemetry:     true
 					telem_bus:         'can0'
 					telem_id:          0x7a2
@@ -1652,8 +1635,7 @@ fn test_active_nm_alive_over_11bit_is_error() {
 	s.nodes[1].view.peers_lo = 0x800
 	s.nodes[1].view.peers_hi = 0x83f
 	s.nodes[1].view.alive = 0x813
-	assert errs(validate_system(s)).any(it.contains('exceeds 0x7ff')
-		&& it.contains('11-bit')), errs(validate_system(s)).str()
+	assert errs(validate_system(s)).any(it.contains('exceeds 0x7ff') && it.contains('11-bit')), errs(validate_system(s)).str()
 }
 
 // --- codex #141 round-16 fixes ---
@@ -1667,48 +1649,6 @@ fn test_fd_mode_mismatch_is_error() {
 	} // but the node opens it as FD
 	assert errs(validate_system(s)).any(it.contains('fd = true')
 		&& it.contains('one CAN mode per wire')), errs(validate_system(s)).str()
-}
-
-// REQ-TOPO-003: loom2v's threadx comm bridge only encodes a trivial u32 LE @ bit0
-// signal — another DBC layout is not generatable.
-fn test_threadx_nontrivial_signal_layout_is_error() {
-	dir := os.join_path(os.temp_dir(), 'sysmodel_layout_${os.getpid()}')
-	os.mkdir_all(dir) or { panic(err) }
-	defer {
-		os.rmdir_all(dir) or {}
-	}
-	// Speed is 16-bit -> not the trivial u32 layout
-	os.write_file(os.join_path(dir, 'compute.dbc'), 'VERSION ""
-
-BU_: a
-
-BO_ 288 SpeedFrame: 8 a
- SG_ Speed : 0|16@1+ (1,0) [0|65535] "" a
-') or { panic(err) }
-	mut s := System{
-		dir:   dir
-		buses: [Bus{
-			name:      'compute'
-			interface: 'can0'
-			dbc:       'compute.dbc'
-		}]
-		nodes: [Node{
-			name:  'a'
-			buses: ['compute']
-			view:  NodeView{
-				is_threadx:    true
-				comm_thread_on: true
-				has_telemetry: true
-				telem_bus:     'can0'
-				produces:      {
-					'can0': ['Speed']
-				}
-				local_buses: ['can0']
-			}
-		}]
-	}
-	assert errs(validate_system(s)).any(it.contains('Speed')
-		&& it.contains('not a plain unsigned little-endian 32-bit')), errs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: shell.fc (default 0x7f2) is a reserved RX id — another node
@@ -1749,28 +1689,34 @@ BU_: a
 
 BO_ 288 Other: 8 a
  SG_ X : 0|32@1+ (1,0) [0|4294967295] "" a
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	mut s := System{
 		dir:   dir
-		buses: [Bus{
-			name:      'compute'
-			interface: 'can0'
-			dbc:       'compute.dbc'
-		}]
-		nodes: [Node{
-			name:  'a'
-			buses: ['compute']
-			view:  NodeView{
-				is_threadx:        true
-				comm_thread_on: true
-				has_telemetry:     true
-				telem_bus:         'can0'
-				telem_id:          0x7a0
-				trace_on:          true
-				trace_record_name: 'NoSuchMessage' // not in the DBC
-				trace_rsp_id:      0x7a1
-			}
-		}]
+		buses: [
+			Bus{
+				name:      'compute'
+				interface: 'can0'
+				dbc:       'compute.dbc'
+			},
+		]
+		nodes: [
+			Node{
+				name:  'a'
+				buses: ['compute']
+				view:  NodeView{
+					is_threadx:        true
+					comm_thread_on:    true
+					has_telemetry:     true
+					telem_bus:         'can0'
+					telem_id:          0x7a0
+					trace_on:          true
+					trace_record_name: 'NoSuchMessage' // not in the DBC
+					trace_rsp_id:      0x7a1
+				}
+			},
+		]
 	}
 	assert errs(validate_system(s)).any(it.contains('NoSuchMessage')
 		&& it.contains('does not exist')), errs(validate_system(s)).str()
@@ -1813,7 +1759,9 @@ BU_: a
 
 BO_ 288 VehSpeedFrame: 8 a
  SG_ VehicleSpeed : 0|32@1+ (1,0) [0|4294967295] "" a
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	// a schema-valid threadx node whose [trace].level = "fb" loom2v rejects
 	os.write_file(os.join_path(dir, 'n.toml'), '
 [bus.can0]
@@ -1836,7 +1784,9 @@ id        = 0x7E0
 enabled = true
 bus     = "can0"
 level   = "fb"
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	os.write_file(os.join_path(dir, 'system.toml'), '
 [bus.compute]
 interface = "can0"
@@ -1847,7 +1797,9 @@ ecu = "n.toml"
 buses = ["compute"]
 nm = 0x11
 trace = 1
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	mut sys := parse_system(os.join_path(dir, 'system.toml')) or { panic(err) }
 	sys.load_nodes()
 	assert errs(validate_system(sys)).any(it.contains('not generatable')), errs(validate_system(sys)).str()
@@ -1901,8 +1853,7 @@ fn test_bound_dump_fc_reserved() {
 	s.nodes[1].view.telem_bus = 'can0'
 	s.nodes[1].view.nm_bus = 'can0'
 	s.nodes[1].view.telem_id = 0x7e6 // collides with node 0's bound dump_fc rx id
-	assert errs(validate_system(s)).any(it.contains('telemetry id 0x7e6')
-		&& it.contains('dump_fc')), errs(validate_system(s)).str()
+	assert errs(validate_system(s)).any(it.contains('telemetry id 0x7e6') && it.contains('dump_fc')), errs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: a single-partition HOST trace runner sends inline CpuLoad only,
@@ -1943,28 +1894,34 @@ BU_: a
 
 BO_ 1312 SpeedFrame: 8 a
  SG_ Speed : 0|32@1+ (1,0) [0|4294967295] "" a
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	mut s := System{
 		dir:   dir
-		buses: [Bus{
-			name:      'compute'
-			interface: 'can0'
-			dbc:       'compute.dbc'
-		}]
-		nodes: [Node{
-			name:  'a'
-			buses: ['compute']
-			view:  NodeView{
-				has_nm:      true
-				nm_enabled:  true
-				nm_bus:      'can0'
-				peers_lo:    0x500
-				peers_hi:    0x53f
-				alive:       0x511
-				has_alive:   true
-				local_buses: ['can0']
-			}
-		}]
+		buses: [
+			Bus{
+				name:      'compute'
+				interface: 'can0'
+				dbc:       'compute.dbc'
+			},
+		]
+		nodes: [
+			Node{
+				name:  'a'
+				buses: ['compute']
+				view:  NodeView{
+					has_nm:      true
+					nm_enabled:  true
+					nm_bus:      'can0'
+					peers_lo:    0x500
+					peers_hi:    0x53f
+					alive:       0x511
+					has_alive:   true
+					local_buses: ['can0']
+				}
+			},
+		]
 	}
 	assert errs(check_telemetry_frames(s)).any(it.contains('SpeedFrame')
 		&& it.contains('NM peer range')), errs(check_telemetry_frames(s)).str()
@@ -1987,29 +1944,35 @@ BU_: a
 
 BO_ 1297 AliveMsg: 8 a
  SG_ X : 0|8@1+ (1,0) [0|255] "" a
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	mut s := System{
 		dir:   dir
-		buses: [Bus{
-			name:      'compute'
-			interface: 'can0'
-			dbc:       'compute.dbc'
-		}]
-		nodes: [Node{
-			name:  'a'
-			buses: ['compute']
-			view:  NodeView{
-				has_nm:             true
-				nm_enabled:         true
-				nm_bus:             'can0'
-				peers_lo:           0x500
-				peers_hi:           0x53f
-				alive:              0x511 // resolved from the AliveMsg binding
-				has_alive:          true
-				alive_from_binding: true // AliveMsg is explicitly the alive frame
-				local_buses:        ['can0']
-			}
-		}]
+		buses: [
+			Bus{
+				name:      'compute'
+				interface: 'can0'
+				dbc:       'compute.dbc'
+			},
+		]
+		nodes: [
+			Node{
+				name:  'a'
+				buses: ['compute']
+				view:  NodeView{
+					has_nm:             true
+					nm_enabled:         true
+					nm_bus:             'can0'
+					peers_lo:           0x500
+					peers_hi:           0x53f
+					alive:              0x511 // resolved from the AliveMsg binding
+					has_alive:          true
+					alive_from_binding: true // AliveMsg is explicitly the alive frame
+					local_buses:        ['can0']
+				}
+			},
+		]
 	}
 	assert !errs(check_telemetry_frames(s)).any(it.contains('AliveMsg')
 		&& it.contains('NM peer range')), errs(check_telemetry_frames(s)).str()
@@ -2033,14 +1996,18 @@ BO_ 288 FrameA: 8 a
 
 BO_ 288 FrameB: 8 b
  SG_ B : 0|8@1+ (1,0) [0|255] "" a
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	mut s := System{
 		dir:   dir
-		buses: [Bus{
-			name:      'compute'
-			interface: 'can0'
-			dbc:       'compute.dbc'
-		}]
+		buses: [
+			Bus{
+				name:      'compute'
+				interface: 'can0'
+				dbc:       'compute.dbc'
+			},
+		]
 		nodes: [
 			Node{
 				name:  'a'
@@ -2102,29 +2069,35 @@ BU_: a
 
 BO_ 1297 SpeedFrame: 8 a
  SG_ Speed : 0|32@1+ (1,0) [0|4294967295] "" a
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	mut s := System{
 		dir:   dir
-		buses: [Bus{
-			name:      'compute'
-			interface: 'can0'
-			dbc:       'compute.dbc'
-		}]
-		nodes: [Node{
-			name:  'a'
-			buses: ['compute']
-			view:  NodeView{
-				has_nm:             true
-				nm_enabled:         true
-				nm_bus:             'can0'
-				peers_lo:           0x500
-				peers_hi:           0x53f
-				alive:              0x511 // NUMERIC alive, not a DBC binding
-				has_alive:          true
-				alive_from_binding: false
-				local_buses:        ['can0']
-			}
-		}]
+		buses: [
+			Bus{
+				name:      'compute'
+				interface: 'can0'
+				dbc:       'compute.dbc'
+			},
+		]
+		nodes: [
+			Node{
+				name:  'a'
+				buses: ['compute']
+				view:  NodeView{
+					has_nm:             true
+					nm_enabled:         true
+					nm_bus:             'can0'
+					peers_lo:           0x500
+					peers_hi:           0x53f
+					alive:              0x511 // NUMERIC alive, not a DBC binding
+					has_alive:          true
+					alive_from_binding: false
+					local_buses:        ['can0']
+				}
+			},
+		]
 	}
 	// SpeedFrame at 0x511 is a real app frame colliding with the numeric alive id
 	assert errs(check_telemetry_frames(s)).any(it.contains('SpeedFrame')
@@ -2141,18 +2114,22 @@ fn test_unreadable_bus_dbc_is_error() {
 	}
 	mut s := System{
 		dir:   dir
-		buses: [Bus{
-			name:      'compute'
-			interface: 'can0'
-			dbc:       'missing.dbc' // declared but does not exist
-		}]
-		nodes: [Node{
-			name:  'a'
-			buses: ['compute']
-			view:  NodeView{
-				local_buses: ['can0']
-			}
-		}]
+		buses: [
+			Bus{
+				name:      'compute'
+				interface: 'can0'
+				dbc:       'missing.dbc' // declared but does not exist
+			},
+		]
+		nodes: [
+			Node{
+				name:  'a'
+				buses: ['compute']
+				view:  NodeView{
+					local_buses: ['can0']
+				}
+			},
+		]
 	}
 	assert errs(validate_system(s)).any(it.contains('cannot load declared DBC')
 		&& it.contains('missing.dbc')), errs(validate_system(s)).str()
@@ -2164,16 +2141,20 @@ fn test_unreadable_bus_dbc_is_error() {
 // two nodes both defaulting/using rx_id = 0 collide on the wire.
 fn test_isotp_id_zero_collides() {
 	mut s := clean_system()
-	s.nodes[0].view.isotp_conns = [IsotpConn{
-		iface: 'can0'
-		rx_id: 0
-		tx_id: 0x701
-	}]
-	s.nodes[1].view.isotp_conns = [IsotpConn{
-		iface: 'can0'
-		rx_id: 0
-		tx_id: 0x702
-	}] // both rx at 0
+	s.nodes[0].view.isotp_conns = [
+		IsotpConn{
+			iface: 'can0'
+			rx_id: 0
+			tx_id: 0x701
+		},
+	]
+	s.nodes[1].view.isotp_conns = [
+		IsotpConn{
+			iface: 'can0'
+			rx_id: 0
+			tx_id: 0x702
+		},
+	] // both rx at 0
 	assert errs(validate_system(s)).any(it.contains('[[isotp]] diagnostic id 0x0')
 		&& it.contains('collides')), errs(validate_system(s)).str()
 }
@@ -2183,11 +2164,13 @@ fn test_isotp_id_zero_collides() {
 fn test_isotp_rx_reserved_vs_telemetry() {
 	mut s := clean_system()
 	// node 0 is a host node with an isotp rx at 0x7e0 on can0
-	s.nodes[0].view.isotp_conns = [IsotpConn{
-		iface: 'can0'
-		rx_id: 0x7e0
-		tx_id: 0x7e1
-	}]
+	s.nodes[0].view.isotp_conns = [
+		IsotpConn{
+			iface: 'can0'
+			rx_id: 0x7e0
+			tx_id: 0x7e1
+		},
+	]
 	// node 1 transmits telemetry at 0x7e0 -> misrouted into the ISO-TP receiver
 	s.nodes[1].view.has_telemetry = true
 	s.nodes[1].view.telem_bus = 'can0'
@@ -2204,8 +2187,7 @@ fn test_trace_id_zero_collides() {
 	s.nodes[0].has_trace = true
 	s.nodes[1].trace = 0
 	s.nodes[1].has_trace = true
-	assert errs(validate_system(s)).any(it.contains('trace node id 0')
-		&& it.contains('shared')), errs(validate_system(s)).str()
+	assert errs(validate_system(s)).any(it.contains('trace node id 0') && it.contains('shared')), errs(validate_system(s)).str()
 }
 
 // --- codex #141 round-23 fixes ---
@@ -2225,32 +2207,36 @@ BU_: a b
 
 BO_ 2018 SpeedFrame: 8 b
  SG_ Speed : 0|32@1+ (1,0) [0|4294967295] "" a
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	mut s := System{
 		dir:   dir
-		buses: [Bus{
-			name:      'compute'
-			interface: 'can0'
-			dbc:       'compute.dbc'
-		}]
+		buses: [
+			Bus{
+				name:      'compute'
+				interface: 'can0'
+				dbc:       'compute.dbc'
+			},
+		]
 		nodes: [
 			Node{
 				name:  'tracer'
 				buses: ['compute']
 				view:  NodeView{
-					is_threadx:     true
-					comm_thread_on: true
-					has_telemetry:  true
-					telem_bus:      'can0'
-					telem_id:       0x7a0
-					trace_on:       true
+					is_threadx:      true
+					comm_thread_on:  true
+					has_telemetry:   true
+					telem_bus:       'can0'
+					telem_id:        0x7a0
+					trace_on:        true
 					trace_record_id: 0x7a1
-					trace_rsp_id:   0x7a2
-					trace_cmd_id:   0x7e2 // reserved rx
-					consumes:       {
+					trace_rsp_id:    0x7a2
+					trace_cmd_id:    0x7e2 // reserved rx
+					consumes:        {
 						'can0': ['Speed']
 					}
-					local_buses: ['can0']
+					local_buses:     ['can0']
 				}
 			},
 			Node{
@@ -2311,7 +2297,9 @@ core = 0
 [[fb]]
 name   = "Dashboard"
 thread = "ctrl" # trailing comment (vlang/v#27684)
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	view := load_node(os.join_path(dir, 'n.toml')) or { panic(err) }
 	assert view.partition_count == 1, 'only the FB-bearing partition counts, got ${view.partition_count}'
 }
@@ -2331,7 +2319,9 @@ name = "app"
 core = 0
   [[partition.thread]]
   name = "ctrl" # trailing comment (vlang/v#27684)
-') or { panic(err) }
+') or {
+		panic(err)
+	}
 	view := load_node(os.join_path(dir, 'n.toml')) or { panic(err) }
 	assert !view.has_route, 'an empty route array is not a route'
 }

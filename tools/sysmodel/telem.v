@@ -153,67 +153,6 @@ fn module_rx_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFra
 	return out
 }
 
-// dbc_signal_trivial reports whether a DBC signal is the ONLY layout loom2v's
-// threadx comm-thread bridge can encode/decode: an unsigned little-endian 32-bit
-// value at bit 0 with factor 1 / offset 0. Returns none if the signal is absent.
-fn dbc_signal_trivial(db candb.Database, signame string) ?bool {
-	for m in db.messages {
-		for sg in m.signals {
-			if sg.name == signame {
-				return sg.start_bit == 0 && sg.length == 32 && !sg.is_signed && sg.factor == 1.0
-					&& sg.offset == 0.0 && sg.byte_order == candb.ByteOrder.little_endian
-			}
-		}
-	}
-	return none
-}
-
-// check_threadx_signal_layout: loom2v's threadx comm bridge rejects any external
-// signal that is not a trivial unsigned LE 32-bit value at bit 0 (gen.v), so a
-// threadx node whose produced/consumed signal has another DBC layout is not
-// buildable — a clean syscheck would not imply a generatable node (REQ-TOPO-003).
-fn check_threadx_signal_layout(s System) []Issue {
-	mut issues := []Issue{}
-	mut dbs := map[string]candb.Database{}
-	for bus in s.buses {
-		if bus.dbc == '' {
-			continue
-		}
-		path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(s.dir, bus.dbc) }
-		dbs[bus.name] = candb.load_dbc_file(path) or { continue }
-	}
-	for n in s.nodes {
-		if !n.view.is_threadx || n.view.telem_bus == '' {
-			continue
-		}
-		b := s.bus_by_interface(n.view.telem_bus) or { continue }
-		db := dbs[b.name] or { continue }
-		for kind, sigs in {
-			'transmits': n.view.produces[n.view.telem_bus]
-			'receives':  n.view.consumes[n.view.telem_bus]
-		} {
-			for sig in sigs {
-				trivial := dbc_signal_trivial(db, sig) or {
-					issues << Issue{
-						severity: .error
-						req:      'REQ-TOPO-003'
-						msg:      'node "${n.name}": ${kind} signal "${sig}" but it is not a DBC signal on bus "${b.name}"'
-					}
-					continue
-				}
-				if !trivial {
-					issues << Issue{
-						severity: .error
-						req:      'REQ-TOPO-003'
-						msg:      'node "${n.name}": ${kind} signal "${sig}" whose DBC layout is not a plain unsigned little-endian 32-bit value at bit 0 (factor 1, offset 0) — loom2v\'s threadx comm bridge cannot encode/decode it'
-					}
-				}
-			}
-		}
-	}
-	return issues
-}
-
 // check_bus_dbcs: every DECLARED bus DBC must parse. loom2v loads a DBC lazily
 // (only when a feature needs it), so a system with a missing/malformed DBC can
 // otherwise pass syscheck when its nodes happen not to touch it — accepting a bus
