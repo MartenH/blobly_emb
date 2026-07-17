@@ -1,0 +1,62 @@
+# sysnode — the H735 system node's local description (multi-node P1). It owns
+# its internals (partition/thread/FB); the SYSTEM (../../system.toml) owns the
+# cross-node contract and identity. On the compute bus it TRANSMITS VehicleSpeed
+# and RECEIVES EngineRpm — the clean single-writer split the domain node mirrors.
+
+[import]
+dbc = "compute.dbc"
+
+[bus.can0] # the compute-bus interface, matched to system [bus.compute]
+interface = "can0"
+fd        = false
+core      = 0
+
+[[partition]]
+name = "app"
+core = 0
+
+  [[partition.thread]]
+  name = "ctrl"
+
+[[signal]]
+name   = "VehicleSpeed" # produced here -> transmitted on compute
+fields = { kph = "u32" }
+from   = "app"
+to     = "can0"
+
+  [[frame]]
+  name = "VehSpeedFrame"
+  bus  = "can0"
+  tx   = { mode = "cyclic", cycle_ms = 100 }
+
+[[signal]]
+name   = "EngineRpm" # consumed here -> received from compute
+fields = { rpm = "u32" }
+from   = "can0"
+to     = "app"
+
+[[fb]]
+name   = "Dashboard"
+thread = "ctrl"
+
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  reads     = ["EngineRpm"]
+  writes    = ["VehicleSpeed"] # trailing comment terminates the nested [[fb.handler]] parse (vlang/v#27684)
+
+[nm]
+node  = 0x11
+alive = 0x511
+peers = [0x500, 0x53F]
+
+[target]
+kind    = "threadx"
+tick_ms = 1
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E0
+detail_id = 0x7E1
+period_ms = 500
