@@ -349,10 +349,12 @@ fn test_nm_timing_mismatch_is_error() {
 // one PDU) contend on the wire even though each signal has one writer.
 fn test_frame_single_writer_is_error() {
 	mut s := clean_system()
+	// authored spellings differ but loom2v snake()-normalizes both to the SAME DBC
+	// PDU, so this is still one frame with two writers.
 	s.nodes[0].view.tx_frames['can0'] = ['StatusFrame']
-	s.nodes[1].view.tx_frames['can0'] = ['StatusFrame'] // both own the same frame
+	s.nodes[1].view.tx_frames['can0'] = ['status_frame'] // same PDU, different spelling
 	issues := validate_system(s)
-	assert errs(issues).any(it.contains('frame "StatusFrame"') && it.contains('one frame owner')), errs(issues).str()
+	assert errs(issues).any(it.contains('frame "status_frame"') && it.contains('one frame owner')), errs(issues).str()
 }
 
 // REQ-TOPO-001: a signal route whose SOURCE bus has no producer does not satisfy
@@ -1421,4 +1423,140 @@ fn test_host_trace_without_telemetry_collision() {
 	}
 	assert errs(validate_system(s)).any(it.contains('trace record id 0x7e5')
 		&& it.contains('single-writer')), errs(validate_system(s)).str()
+}
+
+// --- codex #141 round-15 fixes ---
+
+// REQ-TOPO-002: a module endpoint BOUND to a DBC message name is that frame by
+// design (loom2v supports it) — it must NOT be flagged as aliasing an application
+// frame. Here trace.record binds to the DBC message; expect no alias error.
+fn test_bound_endpoint_not_dbc_alias() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_bound_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'compute.dbc'), 'VERSION ""
+
+BU_: a
+
+BO_ 288 TraceRecord: 8 a
+ SG_ X : 0|8@1+ (1,0) [0|255] "" a
+') or { panic(err) }
+	mut s := System{
+		dir:   dir
+		buses: [Bus{
+			name:      'compute'
+			interface: 'can0'
+			dbc:       'compute.dbc'
+		}]
+		nodes: [Node{
+			name:  'a'
+			buses: ['compute']
+			view:  NodeView{
+				is_threadx:        true
+				has_telemetry:     true
+				telem_bus:         'can0'
+				trace_on:          true
+				trace_record_name: 'trace_record' // snake of "TraceRecord" -> 0x120
+				trace_rsp_id:      0x7e3
+			}
+		}]
+	}
+	// the bound record resolves to 0x120 (=TraceRecord) but must NOT be an alias error
+	assert !errs(check_telemetry_frames(s)).any(it.contains('aliases DBC application frame')), errs(check_telemetry_frames(s)).str()
+}
+
+// REQ-TOPO-002: a node's module RECEIVE id (trace cmd, default 0x7e2) is reserved
+// — another node transmitting telemetry there would be misrouted into on_cmd.
+fn test_module_rx_id_reserved() {
+	mut s := clean_system()
+	// node 0 traces: distinct tx ids + the default rx ids (0x7e2 cmd, 0x7e6 dump_fc)
+	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.has_telemetry = true
+	s.nodes[0].view.telem_bus = 'can0'
+	s.nodes[0].view.nm_bus = 'can0'
+	s.nodes[0].view.telem_id = 0x7a0
+	s.nodes[0].view.trace_on = true
+	s.nodes[0].view.trace_record_id = 0x7a1
+	s.nodes[0].view.trace_rsp_id = 0x7a2
+	s.nodes[0].view.trace_cmd_id = 0x7e2 // reserved rx
+	s.nodes[0].view.trace_dump_fc_id = 0x7e6 // reserved rx
+	s.nodes[1].view.is_threadx = true
+	s.nodes[1].view.has_telemetry = true
+	s.nodes[1].view.telem_bus = 'can0'
+	s.nodes[1].view.nm_bus = 'can0'
+	s.nodes[1].view.telem_id = 0x7e2 // transmits at node 0's reserved trace cmd id
+	assert errs(validate_system(s)).any(it.contains('telemetry id 0x7e2')
+		&& it.contains('trace cmd (rx) id of "sysnode"')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-002: a named binding resolves the way loom2v does (snake-normalized),
+// so record = "trace_record" hits DBC "TraceRecord" — two nodes both binding it
+// (to the same id) collide.
+fn test_named_binding_snake_normalized() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_snake_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'compute.dbc'), 'VERSION ""
+
+BU_: a b
+
+BO_ 300 TraceRecord: 8 a
+ SG_ X : 0|8@1+ (1,0) [0|255] "" b
+') or { panic(err) }
+	mut s := System{
+		dir:   dir
+		buses: [Bus{
+			name:      'compute'
+			interface: 'can0'
+			dbc:       'compute.dbc'
+		}]
+		nodes: [
+			Node{
+				name:  'a'
+				buses: ['compute']
+				view:  NodeView{
+					is_threadx:        true
+					has_telemetry:     true
+					telem_bus:         'can0'
+					telem_id:          0x7a0
+					trace_on:          true
+					trace_record_name: 'trace_record' // -> 0x12c
+					trace_rsp_id:      0x7a1
+				}
+			},
+			Node{
+				name:  'b'
+				buses: ['compute']
+				view:  NodeView{
+					is_threadx:        true
+					has_telemetry:     true
+					telem_bus:         'can0'
+					telem_id:          0x7a2
+					trace_on:          true
+					trace_record_name: 'TraceRecord' // same PDU, different spelling -> 0x12c
+					trace_rsp_id:      0x7a3
+				}
+			},
+		]
+	}
+	assert errs(check_telemetry_frames(s)).any(it.contains('trace record id 0x12c')
+		&& it.contains('single-writer')), errs(check_telemetry_frames(s)).str()
+}
+
+// REQ-TOPO-004: an active NM alive id above 0x7ff is masked to 11 bits by the
+// FDCAN backend, so it must be rejected (0x811 goes out as 0x11).
+fn test_active_nm_alive_over_11bit_is_error() {
+	mut s := clean_system()
+	s.nodes[0].view.peers_lo = 0x800
+	s.nodes[0].view.peers_hi = 0x83f
+	s.nodes[0].view.alive = 0x811
+	s.nodes[1].view.peers_lo = 0x800
+	s.nodes[1].view.peers_hi = 0x83f
+	s.nodes[1].view.alive = 0x813
+	assert errs(validate_system(s)).any(it.contains('exceeds 0x7ff')
+		&& it.contains('11-bit')), errs(validate_system(s)).str()
 }
