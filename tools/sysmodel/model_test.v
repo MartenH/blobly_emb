@@ -47,6 +47,7 @@ fn clean_system() System {
 						'can0': ['Rpm']
 					}
 					has_nm:      true
+					nm_enabled:  true
 					nm_node:     0x11
 					has_nm_node: true
 					alive:       0x511
@@ -70,6 +71,7 @@ fn clean_system() System {
 						'can0': ['Speed']
 					}
 					has_nm:      true
+					nm_enabled:  true
 					nm_node:     0x13
 					has_nm_node: true
 					alive:       0x513
@@ -253,6 +255,7 @@ fn test_route_satisfies_cross_bus_consumer() {
 				'can1': ['Speed']
 			}
 			has_nm:      true
+			nm_enabled:  true
 			nm_node:     0x20
 			has_nm_node: true
 			alive:       0x520
@@ -357,6 +360,7 @@ fn test_route_without_source_producer_is_error() {
 				'can1': ['Torque']
 			}
 			has_nm:      true
+			nm_enabled:  true
 			nm_node:     0x20
 			has_nm_node: true
 			alive:       0x520
@@ -427,6 +431,7 @@ fn test_nm_timing_anchor_is_per_param() {
 		trace: 4
 		view:  NodeView{
 			has_nm:        true
+			nm_enabled:  true
 			nm_node:       0x15
 			has_nm_node:   true
 			alive:         0x515
@@ -503,6 +508,74 @@ totally_unknown_key = 42
 	view := load_node(os.join_path(dir, 'bad.toml')) or { panic(err) }
 	assert view.config_errors.len > 0, 'ecucheck should flag the unknown key'
 	assert view.config_errors.any(it.contains('unknown key') || it.contains('totally_unknown_key')), view.config_errors.str()
+}
+
+// --- codex #141 round-4 fixes ---
+
+// REQ-TOPO-004: a node that OMITS a timing (runs at loom2v's default) conflicts
+// with a peer that explicitly sets a different value.
+fn test_nm_timing_effective_default_conflict() {
+	mut s := clean_system()
+	// node 0 omits timeout_ms (0 -> effective 300); node 1 sets 500
+	s.nodes[1].view.nm_timeout_ms = 500
+	issues := validate_system(s)
+	assert errs(issues).any(it.contains('timeout_ms mismatch') && it.contains('300')
+		&& it.contains('500')), errs(issues).str()
+}
+
+// REQ-TOPO-004/005: an [nm] enabled = false node is a non-participant — no
+// missing-allocation error and no bogus cluster mismatch.
+fn test_nm_disabled_node_is_nonparticipant() {
+	mut s := clean_system()
+	s.nodes[1].view.nm_enabled = false
+	s.nodes[1].has_nm_alloc = false // no system nm — fine, it doesn't participate
+	s.nodes[1].view.peers_hi = 0x5ff // a different range must NOT flag (it's inactive)
+	issues := validate_system(s)
+	assert !errs(issues).any(it.contains('cluster range mismatch')), 'disabled node should not flag: ${errs(issues)}'
+	assert !errs(issues).any(it.contains('allocates it no')), 'disabled node needs no allocation'
+}
+
+// REQ-TOPO-001: an empty / typo'd system (no buses or nodes) is not a clean gate.
+fn test_empty_system_rejected() {
+	issues := validate_system(System{})
+	assert errs(issues).any(it.contains('no [bus.*] declared'))
+	assert errs(issues).any(it.contains('no [[node]] declared'))
+}
+
+// REQ-TOPO-001: an unknown top-level section (e.g. a misspelled [[nodes]]).
+fn test_unknown_top_level_section_rejected() {
+	mut s := clean_system()
+	s.unknown_keys = ['nodes']
+	assert errs(validate_system(s)).any(it.contains('unknown top-level section "nodes"'))
+}
+
+// REQ-TOPO-002: a named alive binding (a DBC message name) is NOT range/collision
+// checked as a numeric 0 — parse leaves has_alive false for the string form.
+fn test_named_alive_binding_not_numeric() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_alive_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[bus.can0]
+interface = "can0"
+fd = false
+core = 0
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "t" # trailing comment terminates the nested [[partition.thread]] parse (vlang/v#27684)
+[nm]
+node  = 0x11
+alive = "AliveMsg"
+peers = [0x500, 0x53F]
+') or { panic(err) }
+	view := load_node(os.join_path(dir, 'n.toml')) or { panic(err) }
+	assert view.has_nm
+	assert !view.has_alive, 'a named alive binding is not a numeric id'
+	assert view.alive == 0
 }
 
 // parse_system + load_node round-trip on a written system.toml + node ecu.toml.

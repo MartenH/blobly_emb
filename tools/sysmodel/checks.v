@@ -43,6 +43,29 @@ pub fn validate_system(s System) []Issue {
 // (REQ-TOPO-002/006).
 fn check_topology_wellformed(s System) []Issue {
 	mut issues := []Issue{}
+	// a parseable-but-empty/typo'd system must not pass as a clean build gate:
+	// no buses or no nodes (e.g. a misspelled [[nodes]]) is not a system.
+	if s.buses.len == 0 {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-001'
+			msg:      'no [bus.*] declared — a system needs at least one bus'
+		}
+	}
+	if s.nodes.len == 0 {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-001'
+			msg:      'no [[node]] declared — a system needs at least one node (check for a typo like [[nodes]])'
+		}
+	}
+	for k in s.unknown_keys {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-001'
+			msg:      'unknown top-level section "${k}" in system.toml (expected bus / node / signal / route)'
+		}
+	}
 	mut iface_seen := map[string]string{}
 	for b in s.buses {
 		if b.interface == '' {
@@ -288,11 +311,11 @@ fn check_identity_uniqueness(s System) []Issue {
 		// a node with a local NM identity the system never allocated: its runtime
 		// id is invisible to the uniqueness check above, so two such nodes could
 		// collide silently. system.toml must own every NM identity (REQ-TOPO-005).
-		if n.view.has_nm && !n.has_nm_alloc {
+		if n.view.has_nm && n.view.nm_enabled && !n.has_nm_alloc {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-005'
-				msg:      'node "${n.name}": has a local [nm] block but system.toml allocates it no `nm` — every NM identity must be system-allocated'
+				msg:      'node "${n.name}": has an active [nm] block but system.toml allocates it no `nm` — every NM identity must be system-allocated'
 			}
 		}
 		if n.view.has_alive {
@@ -352,7 +375,7 @@ fn check_nm_cluster_coherence(s System) []Issue {
 		mut hi := u32(0)
 		mut anchor := ''
 		for n in s.nodes {
-			if bus.name !in n.buses || !n.view.has_nm {
+			if bus.name !in n.buses || !n.view.has_nm || !n.view.nm_enabled {
 				continue
 			}
 			if anchor == '' {
@@ -377,13 +400,13 @@ fn check_nm_cluster_coherence(s System) []Issue {
 			mut ref := 0
 			mut ref_node := ''
 			for n in s.nodes {
-				if bus.name !in n.buses || !n.view.has_nm {
+				if bus.name !in n.buses || !n.view.has_nm || !n.view.nm_enabled {
 					continue
 				}
-				val := nm_timing(n.view, param)
-				if val == 0 {
-					continue
-				}
+				// compare the EFFECTIVE value (declared, or loom2v's default) — a node
+				// that OMITS a timing still runs at the default, so an omission vs an
+				// explicit change IS a mismatch.
+				val := nm_timing_effective(n.view, param)
 				if ref_node == '' {
 					ref = val
 					ref_node = n.name
@@ -391,7 +414,7 @@ fn check_nm_cluster_coherence(s System) []Issue {
 					issues << Issue{
 						severity: .error
 						req:      'REQ-TOPO-004'
-						msg:      'bus "${bus.name}": NM ${param} mismatch — "${ref_node}"=${ref} vs "${n.name}"=${val}'
+						msg:      'bus "${bus.name}": NM ${param} mismatch — "${ref_node}"=${ref} vs "${n.name}"=${val} (effective, incl. defaults)'
 					}
 				}
 			}
@@ -400,7 +423,8 @@ fn check_nm_cluster_coherence(s System) []Issue {
 		// inside the cluster range it participates in — the node id itself is a
 		// small ordinal, not a wire id.
 		for n in s.nodes {
-			if bus.name !in n.buses || !n.view.has_nm || !n.view.has_alive || anchor == '' {
+			if bus.name !in n.buses || !n.view.has_nm || !n.view.nm_enabled || !n.view.has_alive
+				|| anchor == '' {
 				continue
 			}
 			if n.view.alive < lo || n.view.alive > hi {
@@ -424,6 +448,25 @@ fn nm_timing(v NodeView, param string) int {
 		'wait_sleep_ms' { v.nm_wait_sleep_ms }
 		else { 0 }
 	}
+}
+
+// nm_default is loom2v's default for an omitted NM timing (tools/loom2v/gen_nm.v)
+// — kept in lockstep so coherence compares what loom2v actually emits.
+fn nm_default(param string) int {
+	return match param {
+		'msg_cycle_ms' { 100 }
+		'timeout_ms' { 300 }
+		'repeat_ms' { 200 }
+		'wait_sleep_ms' { 150 }
+		else { 0 }
+	}
+}
+
+// nm_timing_effective returns the node's declared value for a param, or loom2v's
+// default when it is omitted (0).
+fn nm_timing_effective(v NodeView, param string) int {
+	got := nm_timing(v, param)
+	return if got != 0 { got } else { nm_default(param) }
 }
 
 // REQ-TOPO-006: every route references a real gateway that sits on BOTH buses,
