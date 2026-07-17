@@ -554,8 +554,10 @@ fn clean_dissolved() System {
 				has_nm_alloc: true
 				trace:        1
 				view:         NodeView{
-					fb_writes: ['Speed']
-					fb_reads:  ['Rpm']
+					fb_writes:     ['Speed']
+					fb_reads:      ['Rpm']
+					is_threadx:    true
+					has_telemetry: true
 				}
 			},
 			Node{
@@ -565,8 +567,10 @@ fn clean_dissolved() System {
 				has_nm_alloc: true
 				trace:        2
 				view:         NodeView{
-					fb_writes: ['Rpm']
-					fb_reads:  ['Speed']
+					fb_writes:     ['Rpm']
+					fb_reads:      ['Speed']
+					is_threadx:    true
+					has_telemetry: true
 				}
 			},
 		]
@@ -986,6 +990,30 @@ fn test_dbc_frame_id_in_nm_range() {
 	bad := 'VERSION ""\nBU_: a b\nBO_ 1296 SpeedFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
 	s := dissolved_with_dbc(dir, bad) // clean_dissolved's bus has peers [0x500,0x53f]
 	assert errs(check_dbc_conformance(s)).any(it.contains('falls in the NM peer range'))
+}
+
+// --- P1b dissolution: codex #142 (missed @08:17) fixes ---
+
+// REQ-TOPO-004: a host (non-threadx) node on an NM cluster gets a dead [nm].
+fn test_dissolved_host_node_nm_dead() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.is_threadx = false // a host node
+	assert errs(validate_system_gen(s)).any(it.contains('not a threadx target') && it.contains('no runtime'))
+}
+
+// REQ-TOPO-004: NM ids above 0x7ff are truncated by the 11-bit FDCAN backend.
+fn test_dissolved_nm_id_over_11bit() {
+	mut s := clean_dissolved()
+	s.buses[0].nm_peers_lo = 0x800
+	s.buses[0].nm_peers_hi = 0x83f // range above 11-bit
+	assert errs(validate_system_gen(s)).any(it.contains('exceeds 0x7ff'))
+}
+
+// REQ-TOPO-005: a [[route]] authored in a partial is uncheckable wiring.
+fn test_dissolved_partial_authors_route() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.authored_routes = true
+	assert errs(validate_system_gen(s)).any(it.contains('authors bus wiring') && it.contains('[[route]]'))
 }
 
 // parse_system + load_node round-trip on a written system.toml + node ecu.toml.

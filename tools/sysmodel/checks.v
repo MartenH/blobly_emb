@@ -87,6 +87,11 @@ fn check_partial_no_wiring(s System) []Issue {
 		if n.view.has_nm {
 			authored << 'a [nm]'
 		}
+		// a [[route]] in a partial is copied verbatim but never enters System.routes,
+		// so check_routes never verifies its gateway/buses — an unchecked forward.
+		if n.view.authored_routes {
+			authored << 'a [[route]]'
+		}
 		if authored.len > 0 {
 			issues << Issue{
 				severity: .error
@@ -143,6 +148,25 @@ fn check_dissolved_nodes(s System) []Issue {
 					severity: .error
 					req:      'REQ-TOPO-004'
 					msg:      'node "${n.name}": derived alive id 0x${alive.hex()} (peers base + nm 0x${n.nm.hex()}) is outside the cluster range [0x${bus.nm_peers_lo.hex()},0x${bus.nm_peers_hi.hex()}]'
+				}
+			}
+			// the generated [nm] only has a runtime on the threadx target with a
+			// telemetry bus (loom2v injects host NM nowhere), so a host node with a
+			// cluster gets a dead [nm] — its alive never transmits, traffic ungated.
+			if !n.view.is_threadx || !n.view.has_telemetry {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-004'
+					msg:      'node "${n.name}": is on an NM cluster but is not a threadx target with a [telemetry] bus — the generated [nm] would have no runtime'
+				}
+			}
+			// NM ids must fit a standard 11-bit CAN id: the FDCAN backend masks
+			// (id & 0x7ff), so a range/alive above 0x7ff is silently truncated.
+			if bus.nm_peers_hi > 0x7ff || alive > 0x7ff {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-004'
+					msg:      'node "${n.name}": NM peer range/alive exceeds 0x7ff (11-bit CAN) — the FDCAN backend masks id & 0x7ff'
 				}
 			}
 		}

@@ -132,6 +132,12 @@ pub mut:
 	// (which produces/consumes above would miss).
 	authored_signals bool
 	authored_frames  bool
+	authored_routes  bool // a [[route]] in a partial (appended verbatim, uncheckable)
+	// the generated [nm] only has a runtime on the threadx target with telemetry
+	// (loom2v injects NM there only), so a dissolved node with a cluster must be
+	// threadx + have a [telemetry] bus, or its NM is generated but dead.
+	is_threadx    bool
+	has_telemetry bool
 }
 
 // System — the whole parsed system.toml plus each node's loaded view.
@@ -436,6 +442,17 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 			v.peers_lo = u32(peers[0].int())
 			v.peers_hi = u32(peers[1].int())
 		}
+	}
+	// [target] / [telemetry] — the generated NM only runs on the threadx target
+	// with a telemetry bus. A [[route]] in a partial is authored wiring.
+	if tv := doc.value_opt('target') {
+		v.is_threadx = (tv.as_map()['kind'] or { toml.Any('') }).string() == 'threadx'
+	}
+	if tlv := doc.value_opt('telemetry') {
+		v.has_telemetry = m_str(tlv.as_map(), 'bus') != ''
+	}
+	if _ := doc.value_opt('route') {
+		v.authored_routes = true
 	}
 	return v
 }

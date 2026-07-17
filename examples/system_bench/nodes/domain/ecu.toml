@@ -18,3 +18,14 @@ thread = "engine"
   period_ms = 100
   reads     = ["VehicleSpeed"]
   writes    = ["EngineRpm"] # trailing comment terminates the nested [[fb.handler]] parse (vlang/v#27684)
+
+[target]
+kind    = "threadx"
+tick_ms = 1
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E2
+detail_id = 0x7E3
+period_ms = 500
