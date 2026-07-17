@@ -1,20 +1,39 @@
 # system_bench — the multi-node P1 system (docs/multi-node.md): the H735-DK
-# system node + the H755 dual-core domain controller on ONE bus (compute),
-# exchanging a signal and sharing an NM cluster. This is the composition +
-# validation layer: `v run tools/syscheck examples/system_bench/system.toml`
-# runs the cross-node checks (single-writer per bus, identity uniqueness, NM
-# cluster coherence) that a single ecu.toml cannot do because it can't see its
-# peers.
+# system node + the H755 dual-core domain controller on ONE bus (compute). The
+# DISSOLUTION model (P1b): each cross-node signal is declared ONCE here with its
+# producer and DBC frame; the nodes author only their internals (partitions/
+# threads/FBs with reads/writes by name). Generate + validate:
 #
-# P1 is one bus; P2 adds the edge bus + an H723 and the gateway routes. Each
-# node keeps its own ecu.toml (its partitions/threads/FBs) — system.toml owns
-# the cross-node contract and the identities.
+#   make gen-system       # sysgen -> gen-<node>.toml (complete, gated by ecucheck)
+#   make syscheck         # cross-node checks (single-writer, identity, NM, DBC)
+#
+# P1 is one bus; P2 adds the edge bus + an H723 and the gateway routes.
 
-[bus.compute] # H735 FDCAN1 <-> H755 FDCAN1 (the heavy domain controller)
+[bus.compute] # H735 FDCAN1 <-> H755 FDCAN1
 interface = "can0"
 fd        = false
 bitrate   = 500000
 dbc       = "compute.dbc"
+# the NM cluster on this bus (the identity source; alive ids fall in peers,
+# generated as peers.lo + node). One cluster, so every node agrees by construction.
+nm        = { peers = [0x500, 0x53F], timeout_ms = 300, repeat_ms = 200 }
+
+# --- cross-node signals: declared ONCE, wired into every participant ---
+[[signal]]
+name     = "VehicleSpeed"
+fields   = { kph = "u32" }
+producer = "sysnode" # the H735 transmits it
+bus      = "compute"
+frame    = "VehSpeedFrame"
+cycle_ms = 100
+
+[[signal]]
+name     = "EngineRpm"
+fields   = { rpm = "u32" }
+producer = "domain" # the H755 transmits it
+bus      = "compute"
+frame    = "EngineRpmFrame"
+cycle_ms = 100
 
 [[node]]
 name  = "sysnode" # the H735-DK: gateway + OTA stager + HMI (NM 0x11)

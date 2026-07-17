@@ -14,6 +14,15 @@ pub enum Severity {
 	warning
 }
 
+// default_cycle_ms — the tx cadence the generator emits when a signal omits
+// cycle_ms. Shared so the cadence-agreement check compares the SAME effective
+// value the generator will emit (a signal at 0 and one at 100 are NOT a conflict).
+pub const default_cycle_ms = 100
+
+pub fn effective_cycle_ms(cycle_ms int) int {
+	return if cycle_ms > 0 { cycle_ms } else { default_cycle_ms }
+}
+
 pub struct Issue {
 pub:
 	severity Severity
@@ -38,6 +47,452 @@ pub fn validate_system(s System) []Issue {
 	issues << check_telemetry_frames(s)
 	issues << check_bus_dbcs(s)
 	issues << check_routes(s)
+	return issues
+}
+
+// validate_system_gen — the checks for the DISSOLUTION model (docs/multi-node.md
+// P1b): cross-node signals are declared once in system.toml with a producer, and
+// nodes carry only FB read/write intent. Identity/NM/route checks are shared
+// with the composed model; single-writer/reachability come from the producer +
+// FB intent instead of per-node [[signal]] endpoints. (The per-node ecucheck
+// runs on the GENERATED output, in sysgen — a partial node can't pass alone.)
+pub fn validate_system_gen(s System) []Issue {
+	mut issues := []Issue{}
+	issues << check_topology_wellformed(s)
+	issues << check_identity_alloc(s)
+	issues << check_dissolved_nodes(s)
+	issues << check_partial_no_wiring(s)
+	issues << check_routes(s)
+	issues << check_signals_dissolved(s)
+	issues << check_dbc_conformance(s)
+	issues << check_telemetry_frames(s)
+	return issues
+}
+
+// check_partial_no_wiring: a dissolved node authors INTERNALS ONLY. If its
+// ecu.toml declares bus wiring — a [bus.*], a [[signal]] with a bus endpoint, a
+// [[frame]], or a [nm] — the generator appends it verbatim and it bypasses every
+// dissolution check (e.g. an unowned extra transmitter defeats single-writer).
+// The system owns all bus wiring + identity (REQ-TOPO-005).
+fn check_partial_no_wiring(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		mut authored := []string{}
+		if n.view.local_buses.len > 0 {
+			authored << '[bus.*]'
+		}
+		// ANY [[signal]]/[[frame]] — even one whose bus endpoint has no matching
+		// [bus.*] (produces/consumes miss those, but the generator prepends the
+		// interface, activating the authored wiring).
+		if n.view.authored_signals {
+			authored << 'a [[signal]]'
+		}
+		if n.view.authored_frames {
+			authored << 'a [[frame]]'
+		}
+		if n.view.has_nm {
+			authored << 'a [nm]'
+		}
+		// a [[route]] in a partial is copied verbatim but never enters System.routes,
+		// so check_routes never verifies its gateway/buses — an unchecked forward.
+		if n.view.authored_routes {
+			authored << 'a [[route]]'
+		}
+		if authored.len > 0 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": authors bus wiring (${authored.join(", ")}) — a dissolved node is internals-only; the system owns the wiring + identity'
+			}
+		}
+	}
+	return issues
+}
+
+// check_dissolved_nodes: node-shape rules the generator relies on. Every node
+// gets a generated [nm], so every node must be NM-allocated (REQ-TOPO-005) and
+// its derived alive id (peers base + node) must land in the cluster range
+// (REQ-TOPO-004). P1 emits wiring for ONE bus per node; a multi-bus (gateway)
+// node is P2 — reject it now rather than silently wiring everything to bus[0].
+fn check_dissolved_nodes(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		if !n.has_nm_alloc {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": system.toml must allocate an `nm` (the generator emits [nm] for every node)'
+			}
+		} else if n.nm > 0xff {
+			// loom2v requires the NM node id in 0..255 (the generated [nm] node)
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-002'
+				msg:      'node "${n.name}": nm 0x${n.nm.hex()} exceeds 0xff — the NM node id is 0..255'
+			}
+		}
+		if n.buses.len != 1 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-006'
+				msg:      'node "${n.name}": is on ${n.buses.len} buses — P1 generation wires exactly one bus per node (a multi-bus gateway is P2)'
+			}
+			continue
+		}
+		bus := s.bus_by_name(n.buses[0]) or {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'node "${n.name}": bus "${n.buses[0]}" is not declared in system.toml'
+			}
+			continue
+		}
+		if bus.has_nm_cluster && n.has_nm_alloc {
+			alive := bus.nm_peers_lo + n.nm
+			if alive < bus.nm_peers_lo || alive > bus.nm_peers_hi {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-004'
+					msg:      'node "${n.name}": derived alive id 0x${alive.hex()} (peers base + nm 0x${n.nm.hex()}) is outside the cluster range [0x${bus.nm_peers_lo.hex()},0x${bus.nm_peers_hi.hex()}]'
+				}
+			}
+			// the generated [nm] only has a runtime on the threadx target with a
+			// telemetry bus (loom2v injects host NM nowhere), so a host node with a
+			// cluster gets a dead [nm] — its alive never transmits, traffic ungated.
+			if !n.view.is_threadx || !n.view.has_telemetry {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-004'
+					msg:      'node "${n.name}": is on an NM cluster but is not a threadx target with a [telemetry] bus — the generated [nm] would have no runtime'
+				}
+			} else if !node_has_external(s, n) {
+				// even threadx + telemetry: loom2v runs NM ONLY inside the comm
+				// thread, and emits that thread only when the node has a BRIDGE
+				// (>=1 external signal / ISO-TP / route). Telemetry alone is not a
+				// bridge, so a signal-less cluster member gets a [nm] with no comm
+				// thread — its alive frames never transmit (dead NM), and its COM
+				// tx is never NM-gated.
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-004'
+					msg:      'node "${n.name}": is on an NM cluster but produces/consumes no system signal — loom2v emits NM only inside the comm thread, which needs a bridge (>=1 external signal); its NM would never transmit'
+				}
+			}
+			// NM ids must fit a standard 11-bit CAN id: the FDCAN backend masks
+			// (id & 0x7ff), so a range/alive above 0x7ff is silently truncated.
+			if bus.nm_peers_hi > 0x7ff || alive > 0x7ff {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-004'
+					msg:      'node "${n.name}": NM peer range/alive exceeds 0x7ff (11-bit CAN) — the FDCAN backend masks id & 0x7ff'
+				}
+			}
+		}
+	}
+	return issues
+}
+
+// node_has_external: does this node produce or consume any system signal? loom2v
+// turns on the comm thread (has_bridge) only for a node with >=1 external signal
+// (P1 models ISO-TP / routes elsewhere). Telemetry alone is NOT a bridge.
+fn node_has_external(s System, n Node) bool {
+	for sig in s.signals {
+		if sig.producer == n.name {
+			return true
+		}
+	}
+	for r in n.view.fb_reads {
+		if _ := s.signal_by_name(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// check_identity_alloc: uniqueness of the SYSTEM-ALLOCATED ids (dissolution).
+// The [nm]/alive/timing are GENERATED into each node from system.toml, so there
+// is no authored node identity to cross-check and the cluster is coherent by
+// construction — only uniqueness across the allocations matters (REQ-TOPO-002).
+// (alive = peers base + nm, so it is unique whenever nm is.)
+fn check_identity_alloc(s System) []Issue {
+	mut issues := []Issue{}
+	mut nm_seen := map[u32]string{}
+	mut diag_seen := map[u32]string{}
+	mut trace_seen := map[int]string{}
+	for n in s.nodes {
+		if n.has_nm_alloc {
+			if prev := nm_seen[n.nm] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-002'
+					msg:      'NM id 0x${n.nm.hex()} shared by "${prev}" and "${n.name}"'
+				}
+			} else {
+				nm_seen[n.nm] = n.name
+			}
+		}
+		for kind, id in {
+			'request':  n.diag.req
+			'response': n.diag.rsp
+		} {
+			if id == 0 {
+				continue
+			}
+			if prev := diag_seen[id] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-002'
+					msg:      'diagnostic ${kind} id 0x${id.hex()} (node "${n.name}") collides with an id already used by "${prev}"'
+				}
+			} else {
+				diag_seen[id] = n.name
+			}
+		}
+		if n.trace != 0 {
+			if prev := trace_seen[n.trace] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-002'
+					msg:      'trace node id ${n.trace} shared by "${prev}" and "${n.name}"'
+				}
+			} else {
+				trace_seen[n.trace] = n.name
+			}
+		}
+	}
+	return issues
+}
+
+// check_signals_dissolved: single-writer + reachability over system-scope
+// signals. Each SysSignal has exactly one declared producer (REQ-TOPO-001) that
+// sits on the signal's bus and actually WRITES it (REQ-TOPO-005 consistency); a
+// signal an FB writes but the system doesn't declare, or two signals sharing a
+// DBC frame across producers, is a bug; a signal no FB reads is a warning.
+fn check_signals_dissolved(s System) []Issue {
+	mut issues := []Issue{}
+	// a cross-node signal is declared EXACTLY ONCE — a duplicate makes
+	// signal_by_name (consumers) disagree with generate_node (which emits a tx
+	// per declaration) (REQ-TOPO-001).
+	mut sig_seen := map[string]bool{}
+	for sig in s.signals {
+		if sig.name in sig_seen {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}" declared more than once — a cross-node signal is declared exactly once'
+			}
+		} else {
+			sig_seen[sig.name] = true
+		}
+	}
+	mut frame_owner := map[string]string{} // (bus, frame) -> producer node
+	mut frame_cycle := map[string]int{}    // (bus, frame) -> cycle_ms
+	for sig in s.signals {
+		// loom2v's external bridge serializes only ONE value field per DBC signal,
+		// so a cross-node signal carries EXACTLY ONE field (a multi-field codec is
+		// future work) of a KNOWN fixed scalar type (an unknown/heap type like
+		// "string" would violate the no-runtime-heap invariant). REQ-TOPO-001.
+		// loom2v serializes ONE value field per DBC signal and treats a `valid`
+		// field as metadata (excluded from the wire, set true on RX). So the
+		// supported shape is exactly one NON-`valid` value field of a fixed scalar
+		// type (no u64/i64 — lossy through the f64 bridge), plus an optional
+		// `valid` bool. REQ-TOPO-001.
+		mut n_value := 0
+		for fname, ftype in sig.fields {
+			if fname == 'valid' {
+				if ftype != 'bool' {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-001'
+						msg:      'signal "${sig.name}": the `valid` field must be bool, not "${ftype}"'
+					}
+				}
+				continue
+			}
+			n_value++
+			if type_bits(ftype) == 0 {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'signal "${sig.name}": field "${fname}" has unsupported type "${ftype}" (use a fixed scalar: bool/u8/i8/u16/i16/u32/i32/f32/f64)'
+				}
+			} else if ftype == 'u64' || ftype == 'i64' {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'signal "${sig.name}": field "${fname}" is ${ftype} — 64-bit integers are lossy through the f64 bridge; use <=32-bit widths'
+				}
+			}
+		}
+		if n_value == 0 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}": has no value field (a `valid` field alone is not serializable) — declare exactly one non-`valid` field'
+			}
+		} else if n_value > 1 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}": has ${n_value} value fields — a cross-node signal carries exactly one (plus an optional `valid`)'
+			}
+		}
+		// the producer must be a declared node on the signal's bus
+		mut prod := ?Node(none)
+		for n in s.nodes {
+			if n.name == sig.producer {
+				prod = n
+				break
+			}
+		}
+		p := prod or {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}": producer "${sig.producer}" is not a declared node'
+			}
+			continue
+		}
+		// the producer must not ALSO read its own bus-published signal: sysgen
+		// emits only the TX endpoint, so the FB and the COM bridge would both hold
+		// the one SPSC TX channel (loom2v rejects a bus TX signal with any reader).
+		if sig.name in p.view.fb_reads {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}": producer "${p.name}" also reads it — a bus-published signal has no local reader (use a separate local feedback signal)'
+			}
+		}
+		if sig.bus !in p.buses {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}": producer "${p.name}" does not sit on its bus "${sig.bus}"'
+			}
+		}
+		// the producer's FBs must write it EXACTLY ONCE — zero = nothing drives
+		// the tx; two+ = two publishers to one SPSC channel (the ThreadX emitter
+		// rejects that shape too) (REQ-TOPO-005).
+		mut nwrite := 0
+		for w in p.view.fb_writes {
+			if w == sig.name {
+				nwrite++
+			}
+		}
+		if nwrite == 0 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'signal "${sig.name}": producer "${p.name}" has no FB that writes it'
+			}
+		} else if nwrite > 1 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}": producer "${p.name}" writes it from ${nwrite} FBs — a signal needs exactly one writer'
+			}
+		}
+		// one producer per DBC frame, PER BUS (the same message name on two
+		// separate buses/DBCs is fine): two signals in one frame from two nodes
+		// contend for the PDU (REQ-TOPO-001). Same-frame signals must also agree
+		// on tx cadence — sysgen emits one [[frame]] per PDU and loom2v keys frame
+		// timing by message name, so conflicting cycle_ms silently overwrites.
+		if sig.frame != '' {
+			key := '${sig.bus}\x1f${sig.frame}'
+			if prev := frame_owner[key] {
+				if prev != sig.producer {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-001'
+						msg:      'frame "${sig.frame}" on bus "${sig.bus}": carries signals from both "${prev}" and "${sig.producer}" — one frame owner per bus'
+					}
+				}
+				eff := effective_cycle_ms(sig.cycle_ms)
+				if frame_cycle[key] != 0 && eff != frame_cycle[key] {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-001'
+						msg:      'frame "${sig.frame}" on bus "${sig.bus}": signals disagree on cycle (${frame_cycle[key]} vs ${eff} ms effective) — a frame has one cadence'
+					}
+				}
+				if frame_cycle[key] == 0 {
+					frame_cycle[key] = eff
+				}
+			} else {
+				frame_owner[key] = sig.producer
+				frame_cycle[key] = effective_cycle_ms(sig.cycle_ms)
+			}
+		}
+		// reachability: does anyone read it? (a produced-but-unconsumed signal).
+		// A reader must sit on the signal's bus — else sysgen emits its rx on the
+		// wrong interface (the reader's sole bus, not sig.bus) (REQ-TOPO-001).
+		mut consumed := false
+		for n in s.nodes {
+			if n.name == sig.producer || sig.name !in n.view.fb_reads {
+				continue
+			}
+			consumed = true
+			if sig.bus !in n.buses {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'signal "${sig.name}": consumer "${n.name}" reads it but is not on its bus "${sig.bus}"'
+				}
+			}
+		}
+		if !consumed {
+			issues << Issue{
+				severity: .warning
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}" (producer "${sig.producer}") is read by no other node'
+			}
+		}
+	}
+	// every FB read/write must reference a DECLARED system signal, and only the
+	// declared producer may write it — else the generator emits a port to an
+	// undeclared sig.<name> type (build fails despite a "gated" report), or wires
+	// a second transmitter of the frame. P1 routes ALL cross-node signals through
+	// system.toml (node-local signals are a future extension) (REQ-TOPO-001).
+	for n in s.nodes {
+		for w in n.view.fb_writes {
+			if sig := s.signal_by_name(w) {
+				if sig.producer != n.name {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-001'
+						msg:      'node "${n.name}": FB writes "${w}" but its declared producer is "${sig.producer}" — only the producer may write a signal'
+					}
+				}
+			} else {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'node "${n.name}": FB writes "${w}" which system.toml does not declare'
+				}
+			}
+		}
+		for r in n.view.fb_reads {
+			if _ := s.signal_by_name(r) {
+				continue
+			}
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'node "${n.name}": FB reads "${r}" which system.toml does not declare'
+			}
+		}
+		// a cross-node RX signal read from >1 partition = concurrent readers of the
+		// one bus-to-partition SPSC IOC channel sysgen emits (a race). REQ-TOPO-001.
+		for sig, parts in n.view.read_partitions {
+			if parts.len > 1 && s.signal_by_name(sig) != none {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'node "${n.name}": signal "${sig}" is read from ${parts.len} partitions (${parts.join(", ")}) — one bus-RX signal has a single reader partition'
+				}
+			}
+		}
+	}
 	return issues
 }
 

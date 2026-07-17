@@ -1,6 +1,7 @@
 module sysmodel
 
 import os
+import toml
 
 // REQ-TOPO-005 is method = "analysis" (the system-sourced-generation architecture,
 // argued in docs/multi-node.md) — these validator tests exercise cross-node checks,
@@ -2324,4 +2325,615 @@ core = 0
 	}
 	view := load_node(os.join_path(dir, 'n.toml')) or { panic(err) }
 	assert !view.has_route, 'an empty route array is not a route'
+}
+
+// ===== DISSOLUTION model tests (merged from #142) =====
+
+// a clean dissolved system: two cross-node signals declared at system scope,
+// nodes carry only FB read/write intent. `a` produces Speed + reads Rpm; `b`
+// produces Rpm + reads Speed.
+fn clean_dissolved() System {
+	// a bus carrying cross-node signals needs a DBC; write one that matches the
+	// signals (SpeedFrame from a, RpmFrame from b) to a stable temp path.
+	dir := os.join_path(os.temp_dir(), 'sysmodel_clean_dissolved')
+	os.mkdir_all(dir) or {}
+	os.write_file(os.join_path(dir, 'compute.dbc'), good_dbc) or {}
+	return System{
+		dir:     dir
+		buses:   [
+			Bus{
+				name:           'compute'
+				interface:      'can0'
+				dbc:            'compute.dbc'
+				has_nm_cluster: true
+				nm_peers_lo:    0x500
+				nm_peers_hi:    0x53f
+			},
+		]
+		signals: [
+			SysSignal{
+				name:     'Speed'
+				producer: 'a'
+				bus:      'compute'
+				frame:    'SpeedFrame'
+				fields:   {
+					'kph': 'u16'
+				}
+			},
+			SysSignal{
+				name:     'Rpm'
+				producer: 'b'
+				bus:      'compute'
+				frame:    'RpmFrame'
+				fields:   {
+					'rpm': 'u16'
+				}
+			},
+		]
+		nodes:   [
+			Node{
+				name:         'a'
+				buses:        ['compute']
+				nm:           0x11
+				has_nm_alloc: true
+				trace:        1
+				view:         NodeView{
+					fb_writes:     ['Speed']
+					fb_reads:      ['Rpm']
+					is_threadx:    true
+					has_telemetry: true
+					telem_bus:     'can0'
+					telem_id:      0x7e0 // CpuLoad is always sent; a real id avoids the effective-0 clash
+				}
+			},
+			Node{
+				name:         'b'
+				buses:        ['compute']
+				nm:           0x13
+				has_nm_alloc: true
+				trace:        2
+				view:         NodeView{
+					fb_writes:     ['Rpm']
+					fb_reads:      ['Speed']
+					is_threadx:    true
+					has_telemetry: true
+					telem_bus:     'can0'
+					telem_id:      0x7e2
+				}
+			},
+		]
+	}
+}
+
+// dissolved_with_dbc writes a compute.dbc whose two frames match clean_dissolved
+// (SpeedFrame from a, RpmFrame from b) and points the system at it.
+fn dissolved_with_dbc(dir string, dbc string) System {
+	os.mkdir_all(dir) or { panic(err) }
+	os.write_file(os.join_path(dir, 'compute.dbc'), dbc) or { panic(err) }
+	mut s := clean_dissolved()
+	s.dir = dir
+	s.buses[0].dbc = 'compute.dbc'
+	return s
+}
+
+const good_dbc = 'VERSION ""
+
+BU_: a b
+
+BO_ 288 SpeedFrame: 8 a
+ SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b
+
+BO_ 289 RpmFrame: 8 b
+ SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a
+'
+
+// REQ-TOPO-003: a DBC signal name that appears in more than one frame is
+// ambiguous — loom2v resolves by name to the first match.
+fn test_dbc_ambiguous_signal_name() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_amb_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// "Speed" appears in BOTH SpeedFrame and OtherFrame
+	amb := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 290 OtherFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
+	s := dissolved_with_dbc(dir, amb)
+	assert errs(check_dbc_conformance(s)).any(it.contains('appears in 2 frames'))
+}
+
+fn test_dbc_conformance_clean() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_ok_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	s := dissolved_with_dbc(dir, good_dbc)
+	issues := check_dbc_conformance(s)
+	assert errs(issues).len == 0, 'clean DBC flagged: ${errs(issues)}'
+}
+
+// REQ-TOPO-003: a signal whose fields overflow the DBC frame's payload.
+fn test_dbc_fields_overflow() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_ovf_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	mut s := dissolved_with_dbc(dir, good_dbc)
+	// widen Speed to 9x u64 = 576 bits, past the 8-byte (64-bit) frame
+	s.signals[0].fields = {
+		'a': 'u64'
+		'b': 'u64'
+		'c': 'u64'
+		'd': 'u64'
+		'e': 'u64'
+		'f': 'u64'
+		'g': 'u64'
+		'h': 'u64'
+		'i': 'u64'
+	}
+	assert errs(check_dbc_conformance(s)).any(it.contains('need') && it.contains('only 8 bytes'))
+}
+
+// REQ-TOPO-003: an application DBC frame id inside the NM peer range would be
+// consumed as an NM frame (loom2v arms the whole range as the NM receiver).
+fn test_dbc_frame_id_in_nm_range() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_nm_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// SpeedFrame id 0x510 falls in the cluster's peers range [0x500,0x53f]
+	bad := 'VERSION ""\nBU_: a b\nBO_ 1296 SpeedFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
+	s := dissolved_with_dbc(dir, bad) // clean_dissolved's bus has peers [0x500,0x53f]
+	assert errs(check_dbc_conformance(s)).any(it.contains('falls in the NM peer range'))
+}
+
+// REQ-TOPO-003: a signal whose frame is not defined in the bus DBC.
+fn test_dbc_frame_missing() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_miss_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// DBC has only SpeedFrame; RpmFrame is absent
+	s := dissolved_with_dbc(dir,
+		'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b\n')
+	assert errs(check_dbc_conformance(s)).any(it.contains('frame "RpmFrame" is not defined'))
+}
+
+// REQ-TOPO-003: a multiplexed DBC SG_ has no codec support in this model.
+fn test_dbc_multiplexed_signal_rejected() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_mux_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// Speed is multiplexed (m0) in SpeedFrame
+	mux := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Mode M : 16|8@1+ (1,0) [0|255] "" b\n SG_ Speed m0 : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
+	s := dissolved_with_dbc(dir, mux)
+	assert errs(check_dbc_conformance(s)).any(it.contains('is multiplexed'))
+}
+
+// REQ-TOPO-003: the DBC transmitter disagreeing with the declared producer.
+fn test_dbc_sender_mismatch() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_snd_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// SpeedFrame sender is 'b' in the DBC but producer is 'a' in system.toml
+	bad := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 b\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" a\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
+	s := dissolved_with_dbc(dir, bad)
+	assert errs(check_dbc_conformance(s)).any(it.contains('transmitted by "b"')
+		&& it.contains('producer "a"'))
+}
+
+// REQ-TOPO-003: a signal whose name is not an SG_ in its DBC frame.
+fn test_dbc_signal_not_in_frame() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_sg_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// SpeedFrame carries SG_ "Velocity", not "Speed"
+	bad := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Velocity : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
+	s := dissolved_with_dbc(dir, bad)
+	assert errs(check_dbc_conformance(s)).any(it.contains('has no SG_ named "Speed"'))
+}
+
+// REQ-TOPO-003: a signal whose field width disagrees with the DBC SG_ width.
+fn test_dbc_signal_width_mismatch() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_w_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// Speed's field is u16 (16 bits) but the DBC SG_ is 8 bits
+	bad := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|8@1+ (1,0) [0|255] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
+	s := dissolved_with_dbc(dir, bad)
+	assert errs(check_dbc_conformance(s)).any(it.contains('16 bits') && it.contains('8 bits'))
+}
+
+// REQ-TOPO-003: a u16 field on a SIGNED DBC SG_ (or vice versa).
+fn test_dbc_signedness_mismatch() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_sgn_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// SpeedFrame's SG_ is SIGNED (@1-) but the field is u16
+	bad := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|16@1- (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
+	s := dissolved_with_dbc(dir, bad)
+	assert errs(check_dbc_conformance(s)).any(it.contains('field is unsigned but DBC SG_')
+		&& it.contains('signed'))
+}
+
+// REQ-TOPO-004: a node whose derived alive id (peers base + nm) falls outside
+// the cluster range would be ignored by NM.
+fn test_dissolved_alive_out_of_range() {
+	mut s := clean_dissolved()
+	s.nodes[0].nm = 0x40 // 0x500 + 0x40 = 0x540, outside [0x500,0x53f]
+	assert errs(validate_system_gen(s)).any(it.contains('outside the cluster range'))
+}
+
+// REQ-TOPO-003: a bus carrying cross-node signals must declare a DBC.
+fn test_dissolved_bus_without_dbc() {
+	mut s := clean_dissolved()
+	s.buses[0].dbc = '' // no DBC, but it carries Speed/Rpm
+	assert errs(check_dbc_conformance(s)).any(it.contains('carries cross-node signals but declares no `dbc`'))
+}
+
+fn test_dissolved_clean() {
+	issues := validate_system_gen(clean_dissolved())
+	assert errs(issues).len == 0, 'clean dissolved system flagged: ${errs(issues)}'
+}
+
+// REQ-TOPO-001: a consumer that reads a signal but isn't on its bus.
+fn test_dissolved_consumer_off_bus() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[1].buses = ['edge'] // b reads Speed (on compute) but sits on edge
+	assert errs(validate_system_gen(s)).any(it.contains('consumer "b"')
+		&& it.contains('not on its bus'))
+}
+
+// REQ-TOPO-001: a cross-node RX signal read from two partitions (SPSC violation).
+fn test_dissolved_cross_partition_reader() {
+	mut s := clean_dissolved()
+	// domain (b) reads Speed from two partitions
+	s.nodes[1].view.read_partitions = {
+		'Speed': ['ctlA', 'ctlB']
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('read from 2 partitions'))
+}
+
+// REQ-TOPO-003: a bus DBC with two BO_ sharing one CAN id is ambiguous — the
+// generator would emit both transmitters under one wire id.
+fn test_dissolved_dbc_duplicate_frame_id_is_error() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dupid_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// SpeedFrame and Shadow both at id 288
+	dup := 'VERSION ""
+
+BU_: a b
+
+BO_ 288 SpeedFrame: 8 a
+ SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b
+
+BO_ 288 Shadow: 8 b
+ SG_ Ghost : 0|16@1+ (1,0) [0|65535] "" a
+
+BO_ 289 RpmFrame: 8 b
+ SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a
+'
+	s := dissolved_with_dbc(dir, dup)
+	assert errs(check_dbc_conformance(s)).any(it.contains('share CAN id 0x120')), errs(check_dbc_conformance(s)).str()
+}
+
+// REQ-TOPO-001: a cross-node signal declared twice.
+fn test_dissolved_duplicate_signal_name() {
+	mut s := clean_dissolved()
+	s.signals << SysSignal{
+		name:     'Speed'
+		producer: 'a'
+		bus:      'compute'
+		frame:    'SpeedFrame'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('declared more than once'))
+}
+
+// REQ-TOPO-001: two signals sharing a frame disagree on cycle_ms.
+fn test_dissolved_frame_cycle_conflict() {
+	mut s := clean_dissolved()
+	// make Rpm ride the same frame as Speed, same producer, but a different cycle
+	s.signals[0].producer = 'a'
+	s.signals[0].cycle_ms = 100
+	s.signals[1].producer = 'a'
+	s.signals[1].frame = 'SpeedFrame'
+	s.signals[1].cycle_ms = 50
+	s.nodes[0].view.fb_writes = ['Speed', 'Rpm'] // a produces both
+	s.nodes[1].view.fb_writes = []
+	assert errs(validate_system_gen(s)).any(it.contains('disagree on cycle'))
+}
+
+// REQ-TOPO-001: a shared frame where one signal omits cycle_ms (defaults to 100)
+// and another sets 50 — the effective cadences conflict.
+fn test_dissolved_frame_effective_cycle_conflict() {
+	mut s := clean_dissolved()
+	s.signals[0].producer = 'a'
+	s.signals[0].cycle_ms = 0 // -> effective 100
+	s.signals[1].producer = 'a'
+	s.signals[1].frame = 'SpeedFrame'
+	s.signals[1].cycle_ms = 50
+	s.nodes[0].view.fb_writes = ['Speed', 'Rpm']
+	s.nodes[1].view.fb_writes = []
+	assert errs(validate_system_gen(s)).any(it.contains('disagree on cycle')
+		&& it.contains('effective'))
+}
+
+// REQ-TOPO-001: two signals in one DBC frame from different producers contend.
+fn test_dissolved_frame_owner_collision() {
+	mut s := clean_dissolved()
+	s.signals[1].frame = 'SpeedFrame' // Rpm(prod b) shares SpeedFrame with Speed(prod a)
+	assert errs(validate_system_gen(s)).any(it.contains('one frame owner per bus'))
+}
+
+// REQ-TOPO-004: a host (non-threadx) node on an NM cluster gets a dead [nm].
+fn test_dissolved_host_node_nm_dead() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.is_threadx = false // a host node
+	assert errs(validate_system_gen(s)).any(it.contains('not a threadx target')
+		&& it.contains('no runtime'))
+}
+
+// REQ-TOPO-006: a multi-bus node (P1 wires one bus per node; gateways are P2).
+fn test_dissolved_multibus_node_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[0].buses = ['compute', 'edge']
+	assert errs(validate_system_gen(s)).any(it.contains('wires exactly one bus per node'))
+}
+
+// REQ-TOPO-001: a cross-node signal must carry EXACTLY ONE field (loom2v's
+// bridge serializes only the first value field per DBC signal).
+fn test_dissolved_multifield_signal() {
+	mut s := clean_dissolved()
+	s.signals[0].fields = {
+		'kph': 'u16'
+		'mph': 'u16'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('value fields')
+		&& it.contains('carries exactly one'))
+}
+
+// REQ-TOPO-005: a node with no NM allocation (the generator always emits [nm]).
+fn test_dissolved_node_without_nm_alloc() {
+	mut s := clean_dissolved()
+	s.nodes[0].has_nm_alloc = false
+	assert errs(validate_system_gen(s)).any(it.contains('must allocate an `nm`'))
+}
+
+// REQ-TOPO-001: a signal field must be a fixed scalar type (no heap types).
+fn test_dissolved_non_scalar_field() {
+	mut s := clean_dissolved()
+	s.signals[0].fields = {
+		'kph': 'string'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('unsupported type "string"'))
+}
+
+// REQ-TOPO-001: a NON-producer node writing a declared signal.
+fn test_dissolved_nonproducer_write_rejected() {
+	mut s := clean_dissolved()
+	s.nodes[1].view.fb_writes = ['Rpm', 'Speed'] // b writes Speed, but a is the producer
+	assert errs(validate_system_gen(s)).any(it.contains('only the producer may write'))
+}
+
+// REQ-TOPO-002: an OMITTED telemetry id defaults to 0 and the CpuLoad frame is
+// always sent, so two id-less threadx nodes both transmit at CAN id 0 — the
+// effective ids collide even though neither authored one.
+fn test_dissolved_omitted_telemetry_ids_collide_at_zero() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.telem_id = 0
+	s.nodes[1].view.telem_id = 0
+	assert errs(validate_system_gen(s)).any(it.contains('telemetry id 0x0')
+		&& it.contains('single-writer')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-005: a [[route]] authored in a partial is uncheckable wiring.
+fn test_dissolved_partial_authors_route() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.authored_routes = true
+	assert errs(validate_system_gen(s)).any(it.contains('authors bus wiring')
+		&& it.contains('[[route]]'))
+}
+
+// REQ-TOPO-005: a partial node that authors bus wiring (bypasses the checks).
+fn test_dissolved_partial_authors_wiring() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.local_buses = ['can0'] // authored a [bus.can0]
+	assert errs(validate_system_gen(s)).any(it.contains('authors bus wiring'))
+}
+
+// REQ-TOPO-005: a partial authoring a bus-endpoint [[signal]] with NO [bus.*].
+fn test_dissolved_partial_signal_without_bus_table() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.authored_signals = true // authored a [[signal]] (no [bus])
+	assert errs(validate_system_gen(s)).any(it.contains('authors bus wiring')
+		&& it.contains('[[signal]]'))
+}
+
+// REQ-TOPO-005: the producer's FBs must actually write the signal.
+fn test_dissolved_producer_doesnt_write() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.fb_writes = [] // 'a' declared producer of Speed but writes nothing
+	assert errs(validate_system_gen(s)).any(it.contains('has no FB that writes it'))
+}
+
+// REQ-TOPO-001: a signal whose producer isn't a declared node.
+fn test_dissolved_producer_not_a_node() {
+	mut s := clean_dissolved()
+	s.signals[0].producer = 'ghost'
+	assert errs(validate_system_gen(s)).any(it.contains('producer "ghost" is not a declared node'))
+}
+
+// REQ-TOPO-001: the producer must sit on the signal's bus.
+fn test_dissolved_producer_off_bus() {
+	mut s := clean_dissolved()
+	s.nodes[0].buses = [] // 'a' produces Speed on compute but isn't on it
+	assert errs(validate_system_gen(s)).any(it.contains('does not sit on its bus'))
+}
+
+// REQ-TOPO-001: a producer that also reads its own bus-published signal.
+fn test_dissolved_producer_reads_own_signal() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.fb_reads = ['Rpm', 'Speed'] // a produces Speed AND reads it
+	assert errs(validate_system_gen(s)).any(it.contains('also reads it'))
+}
+
+// REQ-TOPO-001: a signal declared with no fields (loom2v rejects an empty map).
+fn test_dissolved_signal_no_fields() {
+	mut s := clean_dissolved()
+	s.signals[0].fields = map[string]string{}
+	assert errs(validate_system_gen(s)).any(it.contains('has no value field'))
+}
+
+// REQ-TOPO-004: a threadx+telemetry cluster member that produces/consumes NO
+// system signal has no bridge, so loom2v emits no comm thread — its generated
+// [nm] never runs (dead NM). Telemetry alone is not a bridge.
+fn test_dissolved_signalless_cluster_member_is_error() {
+	mut s := clean_dissolved()
+	s.nodes << Node{
+		name:         'c'
+		buses:        ['compute']
+		nm:           0x15
+		has_nm_alloc: true
+		trace:        3
+		view:         NodeView{
+			is_threadx:    true
+			has_telemetry: true
+			// no fb_reads / fb_writes: not a producer, reads nothing -> no bridge
+		}
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('node "c"')
+		&& it.contains('produces/consumes no system signal')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-001: a lone `valid` field has no value for the bridge to serialize.
+fn test_dissolved_sole_valid_field_rejected() {
+	mut s := clean_dissolved()
+	s.signals[0].fields = {
+		'valid': 'bool'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('has no value field'))
+}
+
+// REQ-TOPO-002: a telemetry id equal to a DBC application frame aliases two
+// different frames on the wire.
+fn test_dissolved_telemetry_aliases_dbc_frame_is_error() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.telem_id = 0x120 // == SpeedFrame (288) in good_dbc
+	assert errs(validate_system_gen(s)).any(it.contains('aliases DBC application frame "SpeedFrame"')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-002: two nodes with the same explicit telemetry id on one bus are an
+// unowned multi-writer (the comm threads both transmit that frame).
+fn test_dissolved_telemetry_id_collision_is_error() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.telem_id = 0x7e0
+	s.nodes[1].view.telem_id = 0x7e0 // same id as node a
+	assert errs(validate_system_gen(s)).any(it.contains('telemetry id 0x7e0')
+		&& it.contains('single-writer')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-002: a node's telemetry id and detail_id must differ.
+fn test_dissolved_telemetry_id_equals_detail_is_error() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.telem_id = 0x7e0
+	s.nodes[0].view.telem_detail_id = 0x7e0 // same as its own id
+	assert errs(validate_system_gen(s)).any(it.contains('collides with its own')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-001: the producer writing a signal from two FBs (two publishers).
+fn test_dissolved_two_writers_rejected() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.fb_writes = ['Speed', 'Speed'] // two handlers write Speed
+	assert errs(validate_system_gen(s)).any(it.contains('writes it from 2 FBs'))
+}
+
+// REQ-TOPO-001: a node whose bus is not declared in system.toml.
+fn test_dissolved_undeclared_bus() {
+	mut s := clean_dissolved()
+	s.nodes[0].buses = ['ghostbus']
+	s.signals[0].bus = 'ghostbus' // so membership passes textually
+	assert errs(validate_system_gen(s)).any(it.contains('bus "ghostbus" is not declared'))
+}
+
+// REQ-TOPO-001: an FB reading a signal the system never declared.
+fn test_dissolved_unknown_read_is_error() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.fb_reads = ['Rpm', 'Ghost']
+	assert errs(validate_system_gen(s)).any(it.contains('reads "Ghost"')
+		&& it.contains('does not declare'))
+}
+
+// REQ-TOPO-001: a signal no other node reads is a warning, not an error.
+fn test_dissolved_unread_signal_is_warning() {
+	mut s := clean_dissolved()
+	s.nodes[1].view.fb_reads = [] // nobody reads Speed anymore
+	issues := validate_system_gen(s)
+	assert errs(issues).len == 0
+	assert issues.any(it.severity == .warning && it.msg.contains('Speed')
+		&& it.msg.contains('read by no other node'))
+}
+
+// REQ-TOPO-001: a value field ALONGSIDE `valid` is the supported shape (valid is
+// metadata, excluded from the wire) — it must NOT be rejected.
+fn test_dissolved_value_plus_valid_ok() {
+	mut s := clean_dissolved()
+	s.signals[0].fields = {
+		'kph':   'u16'
+		'valid': 'bool'
+	}
+	assert !errs(validate_system_gen(s)).any(it.contains('field') || it.contains('bits')), 'value+valid is valid: ${errs(validate_system_gen(s))}'
+}
+
+// codex #142 round 10: loom2v spawns partition_telem() on the HOST target too
+// (not just threadx), so two host telemetry nodes sharing an id collide.
+fn test_host_telemetry_id_collision_gen() {
+	mut s := clean_dissolved()
+	for i in 0 .. 2 {
+		s.nodes[i].view.is_threadx = false // host target
+		s.nodes[i].view.telem_id = 0x7e0 // same id on the same bus
+	}
+	assert errs(check_telemetry_frames(s)).any(it.contains('telemetry id 0x7e0')
+		&& it.contains('single-writer')), errs(check_telemetry_frames(s)).str()
+}
+
+// codex parity (#141 round 11): loom2v's parse_telemetry defaults an omitted
+// `enabled` to FALSE — [telemetry] with a bus but no enabled key does not give a
+// threadx node its telemetry channel.
+fn test_telemetry_enabled_defaults_false_gen() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_tenon_gen_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "t" # trailing comment (vlang/v#27684)
+[target]
+kind    = "threadx"
+tick_ms = 1
+[telemetry]
+bus = "can0"
+') or {
+		panic(err)
+	}
+	doc := toml.parse_file(os.join_path(dir, 'n.toml')) or { panic(err) }
+	view := parse_node_view(doc)
+	assert !view.has_telemetry, 'omitted [telemetry].enabled must default to false (loom2v parse_telemetry)'
 }

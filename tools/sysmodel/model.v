@@ -27,6 +27,16 @@ pub mut:
 	fd        bool
 	bitrate   int
 	dbc       string
+	// the NM cluster on this bus (dissolution: the identity source the generator
+	// stamps into each node's [nm]). peers = the alive-id range; the timings are
+	// the shared sleep/wake config. 0/absent = the module defaults.
+	nm_peers_lo      u32
+	nm_peers_hi      u32
+	has_nm_cluster   bool
+	nm_msg_cycle_ms  int
+	nm_timeout_ms    int
+	nm_repeat_ms     int
+	nm_wait_sleep_ms int
 }
 
 // Diag — a node's ISO-TP diagnostic/boot address pair (how the OTA master
@@ -62,6 +72,21 @@ pub mut:
 	iface string
 	rx_id u32
 	tx_id u32
+}
+
+// SysSignal — a cross-node signal declared ONCE at system scope (the full
+// dissolution, docs/multi-node.md): its name, fields, the node that PRODUCES it,
+// the bus it rides, and the AUTHORED DBC frame it maps to (no wire format is
+// ever invented). The generator emits `to = <bus>` into the producer and
+// `from = <bus>` into every node whose FB reads it.
+pub struct SysSignal {
+pub mut:
+	name     string
+	fields   map[string]string // field name -> type ("u16", …), the [[signal]].fields table
+	producer string            // the node name that transmits it
+	bus      string            // the system bus name it rides
+	frame    string            // the authored DBC frame it maps to
+	cycle_ms int               // the producer's tx cadence (0 = event/default)
 }
 
 // Route — a cross-bus forward on a gateway node. Exactly one of `frame`
@@ -178,6 +203,20 @@ pub mut:
 	nm_repeat_ms     int
 	nm_wait_sleep_ms int
 	local_buses      []string // the [bus.X] names declared in the node's ecu.toml
+	// --- DISSOLUTION model (docs/multi-node.md P1b): a partial node authors only
+	// its internals; the generator derives wiring from these + system.toml. ---
+	// FB intent: the signal names this node's handlers read / write, by name.
+	fb_reads  []string
+	fb_writes []string
+	// signal name -> the distinct partitions whose FBs read it (a cross-node RX
+	// signal read from >1 partition = concurrent readers of one SPSC IOC channel).
+	read_partitions map[string][]string
+	// a dissolved partial is INTERNALS-ONLY: it must declare NO [[signal]],
+	// [[frame]], or [[route]] (the system owns all wiring). These flag ANY such
+	// section (has_nm / local_buses already flag [nm] / [bus]).
+	authored_signals bool
+	authored_frames  bool
+	authored_routes  bool
 }
 
 // System — the whole parsed system.toml plus each node's loaded view.
@@ -185,9 +224,20 @@ pub struct System {
 pub mut:
 	buses        []Bus
 	nodes        []Node
+	signals      []SysSignal // cross-node signals declared at system scope (dissolution)
 	routes       []Route
 	unknown_keys []string // top-level sections that aren't part of the schema (typos)
 	dir          string   // directory of system.toml (node/dbc paths resolve against it)
+}
+
+// signal_by_name returns the system signal with the given name, or none.
+pub fn (s System) signal_by_name(name string) ?SysSignal {
+	for sig in s.signals {
+		if sig.name == name {
+			return sig
+		}
+	}
+	return none
 }
 
 fn m_str(m map[string]toml.Any, key string) string {
@@ -264,13 +314,47 @@ pub fn parse_system(path string) !System {
 	if bv := doc.value_opt('bus') {
 		for name, cfg in bv.as_map() {
 			m := cfg.as_map()
-			sys.buses << Bus{
+			mut bus := Bus{
 				name:      name
 				interface: m_str(m, 'interface')
 				fd:        m_bool(m, 'fd')
 				bitrate:   m_int(m, 'bitrate')
 				dbc:       m_str(m, 'dbc')
 			}
+			// [bus.<name>.nm] — the dissolution NM cluster (peers range + timings)
+			if nmv := m['nm'] {
+				nm := nmv.as_map()
+				bus.has_nm_cluster = true
+				bus.nm_msg_cycle_ms = m_int(nm, 'msg_cycle_ms')
+				bus.nm_timeout_ms = m_int(nm, 'timeout_ms')
+				bus.nm_repeat_ms = m_int(nm, 'repeat_ms')
+				bus.nm_wait_sleep_ms = m_int(nm, 'wait_sleep_ms')
+				peers := (nm['peers'] or { toml.Any([]toml.Any{}) }).array()
+				if peers.len == 2 {
+					bus.nm_peers_lo = u32(peers[0].int())
+					bus.nm_peers_hi = u32(peers[1].int())
+				}
+			}
+			sys.buses << bus
+		}
+	}
+	// [[signal]] — cross-node signals declared once at system scope (dissolution)
+	if sv := doc.value_opt('signal') {
+		for sg in sv.array() {
+			m := sg.as_map()
+			mut sig := SysSignal{
+				name:     m_str(m, 'name')
+				producer: m_str(m, 'producer')
+				bus:      m_str(m, 'bus')
+				frame:    m_str(m, 'frame')
+				cycle_ms: m_int(m, 'cycle_ms')
+			}
+			if fm := m['fields'] {
+				for fname, ftype in fm.as_map() {
+					sig.fields[fname] = ftype.string()
+				}
+			}
+			sys.signals << sig
 		}
 	}
 	// [[node]]
@@ -409,16 +493,43 @@ pub fn (mut s System) load_nodes() []string {
 	return errs
 }
 
+// load_nodes_partial fills each node's view with the PURE parse (parse_node_view,
+// NO ecucheck) — the DISSOLUTION path: a partial node can't pass ecucheck alone
+// (the gate moves to the GENERATED output, in sysgen).
+pub fn (mut s System) load_nodes_partial() []string {
+	mut errs := []string{}
+	for i in 0 .. s.nodes.len {
+		path := if os.is_abs_path(s.nodes[i].ecu) {
+			s.nodes[i].ecu
+		} else {
+			os.join_path(s.dir, s.nodes[i].ecu)
+		}
+		doc := toml.parse_file(path) or {
+			errs << 'node "${s.nodes[i].name}": parse ${path}: ${err}'
+			continue
+		}
+		s.nodes[i].view = parse_node_view(doc)
+	}
+	return errs
+}
+
 // load_node parses a node's ecu.toml and extracts its NodeView.
 pub fn load_node(path string) !NodeView {
 	doc := toml.parse_file(path) or { return error('parse ${path}: ${err}') }
-	mut v := NodeView{}
+	mut v := parse_node_view(doc)
 	// the node must ALSO pass the FULL per-node gate — not just the structural
 	// rules but unknown keys, wrong types, and the nested-comment trap. Run the
-	// REAL ecucheck (@VEXE run, so it's the exact gate loom2v builds behind, no
-	// drift) and surface its errors: a clean system must imply buildable nodes
-	// (REQ-TOPO-005). @VMODROOT = the repo root, so the path holds from any cwd.
+	// REAL ecucheck (the exact gate loom2v builds behind) and surface its errors:
+	// a clean system must imply buildable nodes (REQ-TOPO-005).
 	v.config_errors = ecucheck_errors(path)
+	return v
+}
+
+// parse_node_view extracts the system-relevant slice of a node's ecu.toml — the
+// PURE parse with NO external gate. load_node adds the ecucheck; the DISSOLUTION
+// generator (tools/sysgen) runs this directly on a partial node's internals.
+pub fn parse_node_view(doc toml.Doc) NodeView {
+	mut v := NodeView{}
 	// [bus.<name>] — the node's local bus tables. The table KEY is the node's
 	// LOGICAL name (used by signal from/to); its `interface` field is the PLATFORM
 	// binding (the physical channel). A node is matched to a system bus by
@@ -465,6 +576,46 @@ pub fn load_node(path string) !NodeView {
 	// trace_host uses m.routes.len > 0 — an empty `route = []` still emits trace).
 	if rv := doc.value_opt('route') {
 		v.has_route = rv.array().len > 0
+	}
+	// --- DISSOLUTION (partial node): authored-section flags + FB signal intent.
+	// A dissolved partial is internals-ONLY, so ANY [[signal]]/[[frame]]/[[route]]
+	// is authored wiring the system should own (flagged by check_partial_no_wiring).
+	if _ := doc.value_opt('signal') {
+		v.authored_signals = true
+	}
+	if _ := doc.value_opt('frame') {
+		v.authored_frames = true
+	}
+	v.authored_routes = v.has_route
+	// [[fb]] handlers' reads/writes = the node's signal intent, attributed to the
+	// partition hosting each FB (thread -> partition). The generator derives the
+	// tx/rx wiring from these + each SysSignal's producer.
+	mut thread_part := map[string]string{}
+	for p in (doc.value_opt('partition') or { toml.Any([]toml.Any{}) }).array() {
+		pm := p.as_map()
+		pname := m_str(pm, 'name')
+		for t in (pm['thread'] or { toml.Any([]toml.Any{}) }).array() {
+			thread_part[m_str(t.as_map(), 'name')] = pname
+		}
+	}
+	if fbv := doc.value_opt('fb') {
+		for fb in fbv.array() {
+			fm := fb.as_map()
+			part := thread_part[m_str(fm, 'thread')] or { '' }
+			for h in (fm['handler'] or { toml.Any([]toml.Any{}) }).array() {
+				hm := h.as_map()
+				for r in (hm['reads'] or { toml.Any([]toml.Any{}) }).array() {
+					name := r.string()
+					v.fb_reads << name
+					if part != '' && part !in v.read_partitions[name] {
+						v.read_partitions[name] << part
+					}
+				}
+				for w in (hm['writes'] or { toml.Any([]toml.Any{}) }).array() {
+					v.fb_writes << w.string()
+				}
+			}
+		}
 	}
 	// [[signal]] from/to a bus = consume/produce on that bus (keyed by interface)
 	if sv := doc.value_opt('signal') {
@@ -669,7 +820,7 @@ fn run_capture(exe string, args []string) (string, int) {
 // keeps this the EXACT validation loom2v builds behind — no re-implementation to
 // drift. ecucheck prints "<file>: <msg>" per error and a "ecucheck: N …"
 // summary, then exits non-zero; we keep the messages, drop the summary/prefix.
-fn ecucheck_errors(node_path string) []string {
+pub fn ecucheck_errors(node_path string) []string {
 	output, code := run_capture(@VEXE, ['run', '${@VMODROOT}/tools/ecucheck/gen.v', node_path])
 	if code == 0 {
 		return []string{}
