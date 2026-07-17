@@ -1331,3 +1331,59 @@ trace = 1
 	load_errs := sys.load_nodes()
 	assert !load_errs.any(it.contains('alive')), 'inactive NM named alive must not require a DBC: ${load_errs}'
 }
+
+// --- codex #141 round-13 fixes ---
+
+// REQ-TOPO-005: loom2v panics for a threadx node with any [[isotp]] (ISO-TP is
+// not generated on the comm thread yet).
+fn test_threadx_isotp_is_error() {
+	mut s := clean_system()
+	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.has_telemetry = true
+	s.nodes[0].view.telem_bus = 'can0'
+	s.nodes[0].view.nm_bus = 'can0'
+	s.nodes[0].view.has_isotp = true
+	assert errs(validate_system(s)).any(it.contains('[[isotp]]')
+		&& it.contains('does not generate ISO-TP')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-002: two nodes physically using the same ISO-TP diagnostic id collide
+// on the wire even when their system.toml diag allocations differ.
+fn test_isotp_id_collision_is_error() {
+	mut s := clean_system()
+	s.nodes[0].view.isotp_ids = [u32(0x700)]
+	s.nodes[1].view.isotp_ids = [u32(0x700)] // same on-wire diag id
+	assert errs(validate_system(s)).any(it.contains('[[isotp]] diagnostic id 0x700')
+		&& it.contains('collides')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-002: a host (non-threadx) node with telemetry still transmits CpuLoad,
+// so two host telemetry nodes sharing an id collide.
+fn test_host_telemetry_id_collision() {
+	mut s := clean_system()
+	for i in 0 .. 2 {
+		s.nodes[i].view.is_threadx = false // host target
+		s.nodes[i].view.has_telemetry = true
+		s.nodes[i].view.telem_bus = 'can0'
+		s.nodes[i].view.telem_id = 0x7e0 // same id
+	}
+	assert errs(validate_system(s)).any(it.contains('telemetry id 0x7e0')
+		&& it.contains('single-writer')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-002: a threadx node's shell.out response frame (default 0x7f1) is a
+// real tx frame that must not collide with another node's telemetry/shell frame.
+fn test_shell_out_id_collision_is_error() {
+	mut s := clean_system()
+	for i in 0 .. 2 {
+		s.nodes[i].view.is_threadx = true
+		s.nodes[i].view.has_telemetry = true
+		s.nodes[i].view.telem_bus = 'can0'
+		s.nodes[i].view.nm_bus = 'can0'
+		s.nodes[i].view.telem_id = u32(0x7a0 + i) // distinct telemetry ids
+		s.nodes[i].view.shell_on = true
+		s.nodes[i].view.shell_out_id = 0x7f1 // both default -> collide
+	}
+	assert errs(validate_system(s)).any(it.contains('shell out id 0x7f1')
+		&& it.contains('single-writer')), errs(validate_system(s)).str()
+}
