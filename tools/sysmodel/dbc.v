@@ -221,8 +221,10 @@ fn check_telemetry_frames(s System) []Issue {
 	// owner of each (bus, id) among telemetry frames — a "<node>.field" label
 	mut owner := map[string]string{}
 	for n in s.nodes {
-		// only a threadx node with live telemetry actually transmits these frames
-		if !n.view.is_threadx || !n.view.has_telemetry || n.buses.len != 1 {
+		// ANY node with live telemetry transmits these frames — loom2v spawns
+		// partition_telem() whenever telemetry is on (gen.v), on the host target as
+		// well as threadx, so host nodes collide on the wire the same way.
+		if !n.view.has_telemetry || n.buses.len != 1 {
 			continue
 		}
 		busname := n.buses[0]

@@ -1194,3 +1194,16 @@ bus = "can0"
 	view := parse_node_view(doc)
 	assert !view.has_telemetry, 'omitted [telemetry].enabled must default to false (loom2v parse_telemetry)'
 }
+
+// codex #142 round 10: loom2v spawns partition_telem() on the HOST target too
+// (not just threadx), so two host telemetry nodes sharing an id collide.
+fn test_host_telemetry_id_collision_gen() {
+	mut s := clean_dissolved()
+	for i in 0 .. 2 {
+		s.nodes[i].view.is_threadx = false // host target
+		s.nodes[i].view.has_telem_id = true
+		s.nodes[i].view.telem_id = 0x7e0 // same id on the same bus
+	}
+	assert errs(check_telemetry_frames(s)).any(it.contains('telemetry id 0x7e0')
+		&& it.contains('single-writer')), errs(check_telemetry_frames(s)).str()
+}
