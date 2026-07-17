@@ -275,8 +275,12 @@ fn check_identity_uniqueness(s System) []Issue {
 	for n in s.nodes {
 		// key uniqueness/consistency on ALLOCATION PRESENCE, not on a nonzero
 		// value — nm id 0 is a valid allocation, so `nm = 0` must not read as
-		// "unset" and skip the checks.
-		if n.has_nm_alloc {
+		// "unset" and skip the checks. A disabled [nm] node (has table, enabled=
+		// false) is a non-participant: loom2v emits no NM, so its id can't collide
+		// and its [nm] fields need not match — skip its NM checks (a missing table
+		// with an allocation is still flagged, below).
+		disabled := n.view.has_nm && !n.view.nm_enabled
+		if n.has_nm_alloc && !disabled {
 			if prev := nm_seen[n.nm] {
 				issues << Issue{
 					severity: .error
@@ -318,7 +322,7 @@ fn check_identity_uniqueness(s System) []Issue {
 				msg:      'node "${n.name}": has an active [nm] block but system.toml allocates it no `nm` — every NM identity must be system-allocated'
 			}
 		}
-		if n.view.has_alive {
+		if n.view.has_alive && n.view.nm_enabled {
 			if prev := alive_seen[n.view.alive] {
 				issues << Issue{
 					severity: .error
@@ -375,7 +379,7 @@ fn check_nm_cluster_coherence(s System) []Issue {
 		mut hi := u32(0)
 		mut anchor := ''
 		for n in s.nodes {
-			if bus.name !in n.buses || !n.view.has_nm || !n.view.nm_enabled {
+			if !nm_participates(n, bus) {
 				continue
 			}
 			if anchor == '' {
@@ -423,8 +427,7 @@ fn check_nm_cluster_coherence(s System) []Issue {
 		// inside the cluster range it participates in — the node id itself is a
 		// small ordinal, not a wire id.
 		for n in s.nodes {
-			if bus.name !in n.buses || !n.view.has_nm || !n.view.nm_enabled || !n.view.has_alive
-				|| anchor == '' {
+			if !nm_participates(n, bus) || !n.view.has_alive || anchor == '' {
 				continue
 			}
 			if n.view.alive < lo || n.view.alive > hi {
@@ -437,6 +440,21 @@ fn check_nm_cluster_coherence(s System) []Issue {
 		}
 	}
 	return issues
+}
+
+// nm_participates reports whether a node is an active member of a system bus's
+// NM cluster. [nm] has ONE `bus` binding (loom2v runs the module on that bus
+// only), so a node with an explicit nm.bus participates ONLY on that bus — a
+// gateway on compute+edge with nm.bus="compute" is not compared to edge's
+// cluster. With no explicit nm.bus it participates on the bus(es) it claims.
+fn nm_participates(n Node, bus Bus) bool {
+	if bus.name !in n.buses || !n.view.has_nm || !n.view.nm_enabled {
+		return false
+	}
+	if n.view.nm_bus != '' {
+		return n.view.nm_bus == bus.interface
+	}
+	return true
 }
 
 // nm_timing pulls one NM sleep/wake parameter by name (0 = unset/defaulted).
@@ -462,11 +480,22 @@ fn nm_default(param string) int {
 	}
 }
 
-// nm_timing_effective returns the node's declared value for a param, or loom2v's
-// default when it is omitted (0).
+// nm_has reports whether a timing KEY was declared (an explicit 0 counts).
+fn nm_has(v NodeView, param string) bool {
+	return match param {
+		'msg_cycle_ms' { v.nm_has_msg_cycle }
+		'timeout_ms' { v.nm_has_timeout }
+		'repeat_ms' { v.nm_has_repeat }
+		'wait_sleep_ms' { v.nm_has_wait_sleep }
+		else { false }
+	}
+}
+
+// nm_timing_effective returns the node's declared value (even an explicit 0), or
+// loom2v's default ONLY when the key is ABSENT — matching loom2v, which defaults
+// on absence, not on a zero value.
 fn nm_timing_effective(v NodeView, param string) int {
-	got := nm_timing(v, param)
-	return if got != 0 { got } else { nm_default(param) }
+	return if nm_has(v, param) { nm_timing(v, param) } else { nm_default(param) }
 }
 
 // REQ-TOPO-006: every route references a real gateway that sits on BOTH buses,

@@ -320,12 +320,15 @@ fn test_missing_local_nm_is_error() {
 fn test_nm_timing_mismatch_is_error() {
 	mut s := clean_system()
 	s.nodes[0].view.nm_timeout_ms = 300
+	s.nodes[0].view.nm_has_timeout = true
 	s.nodes[1].view.nm_timeout_ms = 500 // both declared, differ
+	s.nodes[1].view.nm_has_timeout = true
 	issues := validate_system(s)
 	assert errs(issues).any(it.contains('timeout_ms mismatch')), errs(issues).str()
 	// a param only one node declares must NOT false-positive (default vs explicit)
 	mut s2 := clean_system()
 	s2.nodes[0].view.nm_repeat_ms = 200 // only one declares it
+	s2.nodes[0].view.nm_has_repeat = true
 	assert !errs(validate_system(s2)).any(it.contains('repeat_ms mismatch')), 'one-sided default should not flag'
 }
 
@@ -423,6 +426,7 @@ fn test_nm_timing_anchor_is_per_param() {
 	mut s := clean_system()
 	// sysnode omits timeout (0); domain sets 300; add a third at 500
 	s.nodes[1].view.nm_timeout_ms = 300
+	s.nodes[1].view.nm_has_timeout = true
 	s.nodes << Node{
 		name:  'third'
 		buses: ['compute']
@@ -439,6 +443,7 @@ fn test_nm_timing_anchor_is_per_param() {
 			peers_lo:      0x500
 			peers_hi:      0x53f
 			local_buses:   ['can0']
+			nm_has_timeout: true
 			nm_timeout_ms: 500 // conflicts with domain's 300
 		}
 	}
@@ -518,6 +523,7 @@ fn test_nm_timing_effective_default_conflict() {
 	mut s := clean_system()
 	// node 0 omits timeout_ms (0 -> effective 300); node 1 sets 500
 	s.nodes[1].view.nm_timeout_ms = 500
+	s.nodes[1].view.nm_has_timeout = true
 	issues := validate_system(s)
 	assert errs(issues).any(it.contains('timeout_ms mismatch') && it.contains('300')
 		&& it.contains('500')), errs(issues).str()
@@ -576,6 +582,96 @@ peers = [0x500, 0x53F]
 	assert view.has_nm
 	assert !view.has_alive, 'a named alive binding is not a numeric id'
 	assert view.alive == 0
+}
+
+// --- codex #141 round-5 fixes ---
+
+// REQ-TOPO-004: alive OMITTED -> loom2v derives peers_lo + node; validate that.
+fn test_derived_default_alive() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dalive_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[bus.can0]
+interface = "can0"
+fd = false
+core = 0
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "t" # trailing comment (vlang/v#27684)
+[nm]
+node  = 0x40
+peers = [0x500, 0x53F]
+') or { panic(err) }
+	view := load_node(os.join_path(dir, 'n.toml')) or { panic(err) }
+	assert view.has_alive, 'an omitted alive derives peers_lo + node'
+	assert view.alive == 0x540, 'derived alive should be 0x500 + 0x40 = 0x540, got 0x${view.alive.hex()}'
+}
+
+// REQ-TOPO-002: a disabled [nm] node does not collide with an active one.
+fn test_disabled_node_no_nm_collision() {
+	mut s := clean_system()
+	s.nodes[1].nm = 0x11 // same as sysnode...
+	s.nodes[1].view.nm_enabled = false // ...but disabled -> non-participant, no collision
+	assert !errs(validate_system(s)).any(it.contains('NM id 0x11') && it.contains('shared')), 'disabled node should not collide'
+}
+
+// REQ-TOPO-004: an EXPLICIT timeout_ms = 0 is preserved (not normalized to the
+// default), so it conflicts with a peer running the default.
+fn test_explicit_zero_timing_conflict() {
+	mut s := clean_system()
+	s.nodes[0].view.nm_timeout_ms = 0 // explicit 0
+	s.nodes[0].view.nm_has_timeout = true
+	// node 1 omits timeout -> loom2v default 300; 0 vs 300 conflict
+	assert errs(validate_system(s)).any(it.contains('timeout_ms mismatch') && it.contains('300')), 'explicit 0 vs default 300 must conflict'
+}
+
+// REQ-TOPO-005: a node matched to a system bus by INTERFACE, not the [bus] key —
+// [bus.can0] interface = "can1" is a different channel than compute (can0).
+fn test_bus_matched_by_interface() {
+	mut s := clean_system()
+	s.nodes[0].view.local_buses = ['can1'] // its [bus].interface is can1, not can0
+	assert errs(validate_system(s)).any(it.contains('has no [bus.can0] interface')), 'membership is by interface'
+}
+
+// REQ-TOPO-004: NM coherence scoped to the node's nm.bus — a gateway with
+// nm.bus = compute is not compared against the edge cluster.
+fn test_nm_bus_scoping() {
+	mut s := clean_system()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	// sysnode gateways compute+edge but runs NM only on compute
+	s.nodes[0].buses = ['compute', 'edge']
+	s.nodes[0].view.local_buses = ['can0', 'can1']
+	s.nodes[0].view.nm_bus = 'can0' // its NM is on compute only
+	// an edge-only node with a DIFFERENT cluster range must not clash with the gateway
+	s.nodes << Node{
+		name:  'zone'
+		buses: ['edge']
+		nm:    0x21
+		has_nm_alloc: true
+		trace: 3
+		view:  NodeView{
+			has_nm:      true
+			nm_enabled:  true
+			nm_node:     0x21
+			has_nm_node: true
+			nm_bus:      'can1'
+			alive:       0x521
+			has_alive:   true
+			peers_lo:    0x510
+			peers_hi:    0x5ff // a different range than compute's [0x500,0x53f]
+			local_buses: ['can1']
+		}
+	}
+	// the gateway (nm.bus=compute) must NOT be compared against edge's range
+	assert !errs(validate_system(s)).any(it.contains('cluster range mismatch')), 'nm.bus scopes coherence: ${errs(validate_system(s))}'
 }
 
 // parse_system + load_node round-trip on a written system.toml + node ecu.toml.
