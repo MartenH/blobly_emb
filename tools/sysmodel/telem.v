@@ -14,91 +14,173 @@ import os
 import tools.candb
 
 // ModuleFrame — one generated comm-module CAN frame: the bus interface it rides,
-// a human label, its effective CAN id, and whether the id came from a DBC-NAME
-// binding (a bound endpoint IS that DBC frame, so it must not be flagged as
-// aliasing an unrelated application frame).
+// a human label, its effective CAN id, whether the id came from a DBC-NAME binding
+// (a bound endpoint IS that DBC frame, so it must not be flagged as aliasing an
+// unrelated application frame), and the binding name if it FAILED to resolve
+// (loom2v fails generation for a name with no matching DBC message).
 struct ModuleFrame {
-	iface string
-	label string
-	id    u32
-	bound bool
+	iface      string
+	label      string
+	id         u32
+	bound      bool
+	unresolved string // the binding name if it named a DBC message that doesn't exist
 }
 
-// resolve_binding maps a module id binding to its numeric CAN id: a name resolves
-// against the given bus DBC — normalized with snake() the same way loom2v matches
-// (record = "trace_record" hits a DBC message "TraceRecord") — else falls back to
-// `id`; a numeric passes through.
-fn resolve_binding(dbs map[string]candb.Database, busname string, id u32, name string) u32 {
+// resolve_binding maps a module id binding to its CAN id: a name resolves against
+// the bus DBC — snake()-normalized the way loom2v matches (record = "trace_record"
+// hits a DBC message "TraceRecord") — a numeric passes through. Returns (id, ok);
+// ok = false only when a NAME was given but no DBC message matched.
+fn resolve_binding(dbs map[string]candb.Database, busname string, id u32, name string) (u32, bool) {
 	if name == '' {
-		return id
+		return id, true
 	}
 	if db := dbs[busname] {
 		for m in db.messages {
 			if snake(m.name) == snake(name) {
-				return m.id
+				return m.id, true
 			}
 		}
 	}
-	return id
+	return id, false
+}
+
+// module_frame builds a ModuleFrame, resolving an optional DBC-name binding and
+// flagging an unresolved name (loom2v would fail generation on it).
+fn module_frame(dbs map[string]candb.Database, s System, iface string, label string, id u32, name string) ModuleFrame {
+	rid, ok := resolve_binding(dbs, tbus_name(s, iface), id, name)
+	return ModuleFrame{iface, label, rid, name != '', if name != '' && !ok { name } else { '' }}
 }
 
 // module_frames returns every comm-module tx frame a node emits, each tagged with
 // the bus interface it rides. Telemetry + trace run on the host target too; shell
 // is the threadx comm thread only. Trace rides [trace].bus (else the telemetry bus).
+// trace_generated reports whether loom2v actually emits the trace module for a
+// node: always for a threadx target, and for a HOST target only in the
+// single-partition shape with no COM bridge (trace_host) — a multi-partition or
+// bus-facing host node builds WITHOUT trace, so its trace ids never hit the wire.
+fn trace_generated(n Node) bool {
+	if !n.view.trace_on {
+		return false
+	}
+	if n.view.is_threadx {
+		return true
+	}
+	host := !n.view.is_baremetal // no target / host runner
+	return host && n.view.partition_count <= 1 && !node_has_bus_signal(n) && !n.view.has_isotp
+}
+
 fn module_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame {
 	mut out := []ModuleFrame{}
 	// [telemetry]: CpuLoad is always sent (effective id, 0 if omitted); detail only
 	// when detail_id != 0. (No DBC-name binding — always a numeric/default id.)
 	if n.view.has_telemetry && n.view.telem_bus != '' {
-		out << ModuleFrame{n.view.telem_bus, 'telemetry id', n.view.telem_id, false}
+		out << ModuleFrame{n.view.telem_bus, 'telemetry id', n.view.telem_id, false, ''}
 		if n.view.telem_detail_id != 0 {
-			out << ModuleFrame{n.view.telem_bus, 'telemetry detail_id', n.view.telem_detail_id, false}
+			out << ModuleFrame{n.view.telem_bus, 'telemetry detail_id', n.view.telem_detail_id, false, ''}
 		}
 	}
-	// [trace]: the TraceModule transmits the record stream AND command responses.
-	// The trace bus is [trace].bus, else the telemetry bus (a host runner can trace
-	// with telemetry disabled, so this is independent of has_telemetry).
-	if n.view.trace_on {
+	// [trace]: the TraceModule transmits the record stream AND command responses,
+	// on [trace].bus (else the telemetry bus) — only when loom2v actually emits it.
+	if trace_generated(n) {
 		tbus := if n.view.trace_bus != '' { n.view.trace_bus } else { n.view.telem_bus }
 		if tbus != '' {
-			bn := tbus_name(s, tbus)
-			out << ModuleFrame{tbus, 'trace record id', resolve_binding(dbs, bn,
-				n.view.trace_record_id, n.view.trace_record_name), n.view.trace_record_name != ''}
-			out << ModuleFrame{tbus, 'trace rsp id', resolve_binding(dbs, bn, n.view.trace_rsp_id,
-				n.view.trace_rsp_name), n.view.trace_rsp_name != ''}
+			out << module_frame(dbs, s, tbus, 'trace record id', n.view.trace_record_id,
+				n.view.trace_record_name)
+			out << module_frame(dbs, s, tbus, 'trace rsp id', n.view.trace_rsp_id,
+				n.view.trace_rsp_name)
 		}
 	}
 	// [shell]: the threadx comm thread transmits shell.out responses on the comm
 	// (telemetry) channel.
 	if n.view.is_threadx && n.view.shell_on && n.view.telem_bus != '' {
-		bn := tbus_name(s, n.view.telem_bus)
-		out << ModuleFrame{n.view.telem_bus, 'shell out id', resolve_binding(dbs, bn,
-			n.view.shell_out_id, n.view.shell_out_name), n.view.shell_out_name != ''}
+		out << module_frame(dbs, s, n.view.telem_bus, 'shell out id', n.view.shell_out_id,
+			n.view.shell_out_name)
 	}
 	return out
 }
 
 // module_rx_frames returns the RECEIVE endpoint ids a node's runtime listens on
-// (trace cmd + dump_fc, shell in). Another node TRANSMITTING at one of these ids
-// would drive this node's module state, so they are reserved on the bus.
+// (trace cmd + dump_fc, shell in + fc). Another node TRANSMITTING at one of these
+// ids would drive this node's module state, so they are reserved on the bus.
 fn module_rx_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame {
 	mut out := []ModuleFrame{}
-	if n.view.trace_on {
+	if trace_generated(n) {
 		tbus := if n.view.trace_bus != '' { n.view.trace_bus } else { n.view.telem_bus }
 		if tbus != '' {
-			bn := tbus_name(s, tbus)
-			out << ModuleFrame{tbus, 'trace cmd (rx) id', resolve_binding(dbs, bn,
-				n.view.trace_cmd_id, n.view.trace_cmd_name), n.view.trace_cmd_name != ''}
-			out << ModuleFrame{tbus, 'trace dump_fc (rx) id', resolve_binding(dbs, bn,
-				n.view.trace_dump_fc_id, n.view.trace_dump_fc_name), n.view.trace_dump_fc_name != ''}
+			out << module_frame(dbs, s, tbus, 'trace cmd (rx) id', n.view.trace_cmd_id,
+				n.view.trace_cmd_name)
+			out << module_frame(dbs, s, tbus, 'trace dump_fc (rx) id', n.view.trace_dump_fc_id,
+				n.view.trace_dump_fc_name)
 		}
 	}
 	if n.view.is_threadx && n.view.shell_on && n.view.telem_bus != '' {
-		bn := tbus_name(s, n.view.telem_bus)
-		out << ModuleFrame{n.view.telem_bus, 'shell in (rx) id', resolve_binding(dbs, bn,
-			n.view.shell_in_id, n.view.shell_in_name), n.view.shell_in_name != ''}
+		out << module_frame(dbs, s, n.view.telem_bus, 'shell in (rx) id', n.view.shell_in_id,
+			n.view.shell_in_name)
+		out << module_frame(dbs, s, n.view.telem_bus, 'shell fc (rx) id', n.view.shell_fc_id,
+			n.view.shell_fc_name)
 	}
 	return out
+}
+
+// dbc_signal_trivial reports whether a DBC signal is the ONLY layout loom2v's
+// threadx comm-thread bridge can encode/decode: an unsigned little-endian 32-bit
+// value at bit 0 with factor 1 / offset 0. Returns none if the signal is absent.
+fn dbc_signal_trivial(db candb.Database, signame string) ?bool {
+	for m in db.messages {
+		for sg in m.signals {
+			if sg.name == signame {
+				return sg.start_bit == 0 && sg.length == 32 && !sg.is_signed && sg.factor == 1.0
+					&& sg.offset == 0.0 && sg.byte_order == candb.ByteOrder.little_endian
+			}
+		}
+	}
+	return none
+}
+
+// check_threadx_signal_layout: loom2v's threadx comm bridge rejects any external
+// signal that is not a trivial unsigned LE 32-bit value at bit 0 (gen.v), so a
+// threadx node whose produced/consumed signal has another DBC layout is not
+// buildable — a clean syscheck would not imply a generatable node (REQ-TOPO-003).
+fn check_threadx_signal_layout(s System) []Issue {
+	mut issues := []Issue{}
+	mut dbs := map[string]candb.Database{}
+	for bus in s.buses {
+		if bus.dbc == '' {
+			continue
+		}
+		path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(s.dir, bus.dbc) }
+		dbs[bus.name] = candb.load_dbc_file(path) or { continue }
+	}
+	for n in s.nodes {
+		if !n.view.is_threadx || n.view.telem_bus == '' {
+			continue
+		}
+		b := s.bus_by_interface(n.view.telem_bus) or { continue }
+		db := dbs[b.name] or { continue }
+		for kind, sigs in {
+			'transmits': n.view.produces[n.view.telem_bus]
+			'receives':  n.view.consumes[n.view.telem_bus]
+		} {
+			for sig in sigs {
+				trivial := dbc_signal_trivial(db, sig) or {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-003'
+						msg:      'node "${n.name}": ${kind} signal "${sig}" but it is not a DBC signal on bus "${b.name}"'
+					}
+					continue
+				}
+				if !trivial {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-003'
+						msg:      'node "${n.name}": ${kind} signal "${sig}" whose DBC layout is not a plain unsigned little-endian 32-bit value at bit 0 (factor 1, offset 0) — loom2v\'s threadx comm bridge cannot encode/decode it'
+					}
+				}
+			}
+		}
+	}
+	return issues
 }
 
 // tbus_name maps a bus INTERFACE to its system bus name (for the DBC map), or
@@ -137,6 +219,14 @@ fn check_telemetry_frames(s System) []Issue {
 		// is misrouted into the module (seeded, not reported — two listeners on one
 		// rx id is not itself a collision).
 		for f in module_rx_frames(n, s, dbs) {
+			if f.unresolved != '' {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-002'
+					msg:      'node "${n.name}": ${f.label} names DBC message "${f.unresolved}" which does not exist on its bus — loom2v fails generation for an unresolved binding'
+				}
+				continue
+			}
 			bus := s.bus_by_interface(f.iface) or { continue }
 			key := '${bus.name}#${f.id}'
 			if _ := owner[key] {
@@ -149,6 +239,15 @@ fn check_telemetry_frames(s System) []Issue {
 		frames := module_frames(n, s, dbs)
 		mut mine := map[string]string{} // this node's own frames (catch id == id)
 		for f in frames {
+			// a named binding that resolves to no DBC message fails loom2v generation
+			if f.unresolved != '' {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-002'
+					msg:      'node "${n.name}": ${f.label} names DBC message "${f.unresolved}" which does not exist on its bus — loom2v fails generation for an unresolved binding'
+				}
+				continue
+			}
 			bus := s.bus_by_interface(f.iface) or { continue }
 			key := '${bus.name}#${f.id}'
 			// FDCAN masks id & 0x7ff — an id above that is truncated on the wire

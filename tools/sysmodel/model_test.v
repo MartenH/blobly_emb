@@ -1420,6 +1420,10 @@ fn test_host_trace_without_telemetry_collision() {
 		s.nodes[i].view.trace_on = true
 		s.nodes[i].view.trace_bus = 'can0' // trace rides the compute bus
 		s.nodes[i].view.trace_record_id = 0x7e5 // same record id -> collide
+		// host trace generates only for the single-partition, no-COM-bridge shape
+		s.nodes[i].view.partition_count = 1
+		s.nodes[i].view.produces = map[string][]string{}
+		s.nodes[i].view.consumes = map[string][]string{}
 	}
 	assert errs(validate_system(s)).any(it.contains('trace record id 0x7e5')
 		&& it.contains('single-writer')), errs(validate_system(s)).str()
@@ -1559,4 +1563,139 @@ fn test_active_nm_alive_over_11bit_is_error() {
 	s.nodes[1].view.alive = 0x813
 	assert errs(validate_system(s)).any(it.contains('exceeds 0x7ff')
 		&& it.contains('11-bit')), errs(validate_system(s)).str()
+}
+
+// --- codex #141 round-16 fixes ---
+
+// REQ-TOPO-005: a node's local [bus.X].fd must match the system bus contract.
+fn test_fd_mode_mismatch_is_error() {
+	mut s := clean_system()
+	s.buses[0].fd = false // system bus is classic
+	s.nodes[0].view.local_bus_fd = {
+		'can0': true
+	} // but the node opens it as FD
+	assert errs(validate_system(s)).any(it.contains('fd = true')
+		&& it.contains('one CAN mode per wire')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-003: loom2v's threadx comm bridge only encodes a trivial u32 LE @ bit0
+// signal — another DBC layout is not generatable.
+fn test_threadx_nontrivial_signal_layout_is_error() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_layout_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// Speed is 16-bit -> not the trivial u32 layout
+	os.write_file(os.join_path(dir, 'compute.dbc'), 'VERSION ""
+
+BU_: a
+
+BO_ 288 SpeedFrame: 8 a
+ SG_ Speed : 0|16@1+ (1,0) [0|65535] "" a
+') or { panic(err) }
+	mut s := System{
+		dir:   dir
+		buses: [Bus{
+			name:      'compute'
+			interface: 'can0'
+			dbc:       'compute.dbc'
+		}]
+		nodes: [Node{
+			name:  'a'
+			buses: ['compute']
+			view:  NodeView{
+				is_threadx:    true
+				has_telemetry: true
+				telem_bus:     'can0'
+				produces:      {
+					'can0': ['Speed']
+				}
+				local_buses: ['can0']
+			}
+		}]
+	}
+	assert errs(validate_system(s)).any(it.contains('Speed')
+		&& it.contains('not a plain unsigned little-endian 32-bit')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-002: shell.fc (default 0x7f2) is a reserved RX id — another node
+// transmitting there is misrouted into g_sh.on_fc.
+fn test_shell_fc_id_reserved() {
+	mut s := clean_system()
+	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.has_telemetry = true
+	s.nodes[0].view.telem_bus = 'can0'
+	s.nodes[0].view.nm_bus = 'can0'
+	s.nodes[0].view.telem_id = 0x7a0
+	s.nodes[0].view.shell_on = true
+	s.nodes[0].view.shell_out_id = 0x7f1
+	s.nodes[0].view.shell_in_id = 0x7f0
+	s.nodes[0].view.shell_fc_id = 0x7f2 // reserved rx
+	s.nodes[1].view.is_threadx = true
+	s.nodes[1].view.has_telemetry = true
+	s.nodes[1].view.telem_bus = 'can0'
+	s.nodes[1].view.nm_bus = 'can0'
+	s.nodes[1].view.telem_id = 0x7f2 // transmits at node 0's reserved shell fc id
+	assert errs(validate_system(s)).any(it.contains('telemetry id 0x7f2')
+		&& it.contains('shell fc (rx) id of "sysnode"')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-002: a named module binding that resolves to no DBC message fails
+// loom2v generation, so syscheck must reject it (not silently use the default id).
+fn test_unresolved_named_binding_is_error() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_unres_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'compute.dbc'), 'VERSION ""
+
+BU_: a
+
+BO_ 288 Other: 8 a
+ SG_ X : 0|32@1+ (1,0) [0|4294967295] "" a
+') or { panic(err) }
+	mut s := System{
+		dir:   dir
+		buses: [Bus{
+			name:      'compute'
+			interface: 'can0'
+			dbc:       'compute.dbc'
+		}]
+		nodes: [Node{
+			name:  'a'
+			buses: ['compute']
+			view:  NodeView{
+				is_threadx:        true
+				has_telemetry:     true
+				telem_bus:         'can0'
+				telem_id:          0x7a0
+				trace_on:          true
+				trace_record_name: 'NoSuchMessage' // not in the DBC
+				trace_rsp_id:      0x7a1
+			}
+		}]
+	}
+	assert errs(validate_system(s)).any(it.contains('NoSuchMessage')
+		&& it.contains('does not exist')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-002: a MULTI-partition host node builds WITHOUT trace, so its trace
+// ids are not on the wire and must not be reserved/collision-checked.
+fn test_multipartition_host_trace_not_reserved() {
+	mut s := clean_system()
+	// two host nodes, each multi-partition, both "trace" at 0x7e5 — but neither
+	// actually generates trace, so there must be NO collision reported.
+	for i in 0 .. 2 {
+		s.nodes[i].view.is_threadx = false
+		s.nodes[i].view.has_telemetry = false
+		s.nodes[i].view.trace_on = true
+		s.nodes[i].view.trace_bus = 'can0'
+		s.nodes[i].view.trace_record_id = 0x7e5
+		s.nodes[i].view.partition_count = 3 // multi-partition -> no host trace
+		s.nodes[i].view.produces = map[string][]string{}
+		s.nodes[i].view.consumes = map[string][]string{}
+	}
+	assert !errs(validate_system(s)).any(it.contains('trace record id 0x7e5')), errs(validate_system(s)).str()
 }

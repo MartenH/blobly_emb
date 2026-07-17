@@ -128,10 +128,16 @@ pub mut:
 	shell_on       bool
 	shell_out_id   u32
 	shell_out_name string // a DBC message NAME binding (resolved against the bus DBC)
-	// shell RECEIVE endpoint: the comm thread reads command lines on shell.in
-	// (default 0x7f0) — a RESERVED rx id on the comm bus.
+	// shell RECEIVE endpoints: command lines on shell.in (default 0x7f0) and ISO-TP
+	// flow control on shell.fc (default 0x7f2) — RESERVED rx ids on the comm bus.
 	shell_in_id   u32
 	shell_in_name string
+	shell_fc_id   u32
+	shell_fc_name string
+	// number of [[partition]] blocks: loom2v generates the host trace module only
+	// for the SINGLE-partition host shape (trace_host), so a multi-partition host
+	// node emits no trace frames.
+	partition_count int
 	// NM timing presence: loom2v applies its default only when the KEY is ABSENT,
 	// so an explicit 0 must be preserved (not normalized to the default).
 	nm_has_msg_cycle  bool
@@ -359,7 +365,9 @@ pub fn (mut s System) load_nodes() []string {
 			}
 			mut hit := false
 			for msg in db.messages {
-				if msg.name == name {
+				// loom2v resolves endpoint names snake-normalized (snake(m.name) == key),
+				// so alive = "alive_msg" matches a DBC message "AliveMsg".
+				if snake(msg.name) == snake(name) {
 					s.nodes[i].view.alive = msg.id
 					s.nodes[i].view.has_alive = true
 					s.nodes[i].view.alive_binding = ''
@@ -404,6 +412,10 @@ pub fn load_node(path string) !NodeView {
 	}
 	iface_of := fn [key_iface] (logical string) ?string {
 		return key_iface[logical] or { none }
+	}
+	// [[partition]] count — host trace generation needs the single-partition shape.
+	if pv := doc.value_opt('partition') {
+		v.partition_count = pv.array().len
 	}
 	// [[signal]] from/to a bus = consume/produce on that bus (keyed by interface)
 	if sv := doc.value_opt('signal') {
@@ -504,6 +516,7 @@ pub fn load_node(path string) !NodeView {
 		if v.shell_on {
 			v.shell_out_id, v.shell_out_name = binding_id(sm, 'out', 0x7f1)
 			v.shell_in_id, v.shell_in_name = binding_id(sm, 'in', 0x7f0)
+			v.shell_fc_id, v.shell_fc_name = binding_id(sm, 'fc', 0x7f2)
 		}
 	}
 	// [nm] cluster + identity
