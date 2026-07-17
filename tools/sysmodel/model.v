@@ -123,6 +123,9 @@ pub mut:
 	// reads with no system declaration, is a cross-node bug.
 	fb_reads  []string
 	fb_writes []string
+	// signal name -> the distinct partitions whose FBs read it. A cross-node RX
+	// signal read from >1 partition = concurrent readers of one SPSC IOC channel.
+	read_partitions map[string][]string
 	// a dissolved partial is INTERNALS-ONLY: it must declare NO [[signal]],
 	// [[frame]], [bus] or [nm] (the system owns all wiring). These flag ANY such
 	// section, even a [[signal]] with a bus endpoint but no matching [bus.*]
@@ -386,14 +389,29 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 			}
 		}
 	}
+	// thread -> partition (to attribute each FB's reads to its partition)
+	mut thread_part := map[string]string{}
+	for p in (doc.value_opt('partition') or { toml.Any([]toml.Any{}) }).array() {
+		pm := p.as_map()
+		pname := m_str(pm, 'name')
+		for t in (pm['thread'] or { toml.Any([]toml.Any{}) }).array() {
+			thread_part[m_str(t.as_map(), 'name')] = pname
+		}
+	}
 	// [[fb]] -> [[fb.handler]] reads/writes: the node's signal intent by name
 	// (the authored half of the dissolution — the generator derives the wiring).
 	if fbv := doc.value_opt('fb') {
 		for fb in fbv.array() {
-			for h in (fb.as_map()['handler'] or { toml.Any([]toml.Any{}) }).array() {
+			fm := fb.as_map()
+			part := thread_part[m_str(fm, 'thread')] or { '' }
+			for h in (fm['handler'] or { toml.Any([]toml.Any{}) }).array() {
 				hm := h.as_map()
 				for r in (hm['reads'] or { toml.Any([]toml.Any{}) }).array() {
-					v.fb_reads << r.string()
+					name := r.string()
+					v.fb_reads << name
+					if part != '' && part !in v.read_partitions[name] {
+						v.read_partitions[name] << part
+					}
 				}
 				for w in (hm['writes'] or { toml.Any([]toml.Any{}) }).array() {
 					v.fb_writes << w.string()

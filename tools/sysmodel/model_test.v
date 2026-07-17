@@ -682,7 +682,7 @@ fn test_dissolved_nonproducer_write_rejected() {
 fn test_dissolved_signal_no_fields() {
 	mut s := clean_dissolved()
 	s.signals[0].fields = map[string]string{}
-	assert errs(validate_system_gen(s)).any(it.contains('has no `fields`'))
+	assert errs(validate_system_gen(s)).any(it.contains('has no value field'))
 }
 
 // REQ-TOPO-005: a partial node that authors bus wiring (bypasses the checks).
@@ -867,7 +867,7 @@ fn test_dissolved_multifield_signal() {
 		'kph': 'u16'
 		'mph': 'u16'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('exactly one value field'))
+	assert errs(validate_system_gen(s)).any(it.contains('value fields') && it.contains('carries exactly one'))
 }
 
 // REQ-TOPO-001: a signal field must be a fixed scalar type (no heap types).
@@ -916,7 +916,7 @@ fn test_dissolved_sole_valid_field_rejected() {
 	s.signals[0].fields = {
 		'valid': 'bool'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('reserves'))
+	assert errs(validate_system_gen(s)).any(it.contains('has no value field'))
 }
 
 // REQ-TOPO-001: a producer that also reads its own bus-published signal.
@@ -936,6 +936,41 @@ fn test_dbc_signedness_mismatch() {
 	bad := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|16@1- (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
 	s := dissolved_with_dbc(dir, bad)
 	assert errs(check_dbc_conformance(s)).any(it.contains('field is unsigned but DBC SG_') && it.contains('signed'))
+}
+
+// --- P1b dissolution: codex #142 round-6 fixes ---
+
+// REQ-TOPO-001: a value field ALONGSIDE `valid` is the supported shape (valid is
+// metadata, excluded from the wire) — it must NOT be rejected.
+fn test_dissolved_value_plus_valid_ok() {
+	mut s := clean_dissolved()
+	s.signals[0].fields = {
+		'kph':   'u16'
+		'valid': 'bool'
+	}
+	assert !errs(validate_system_gen(s)).any(it.contains('field') || it.contains('bits')), 'value+valid is valid: ${errs(validate_system_gen(s))}'
+}
+
+// REQ-TOPO-001: a cross-node RX signal read from two partitions (SPSC violation).
+fn test_dissolved_cross_partition_reader() {
+	mut s := clean_dissolved()
+	// domain (b) reads Speed from two partitions
+	s.nodes[1].view.read_partitions = {
+		'Speed': ['ctlA', 'ctlB']
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('read from 2 partitions'))
+}
+
+// REQ-TOPO-003: a multiplexed DBC SG_ has no codec support in this model.
+fn test_dbc_multiplexed_signal_rejected() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_mux_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// Speed is multiplexed (m0) in SpeedFrame
+	mux := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Mode M : 16|8@1+ (1,0) [0|255] "" b\n SG_ Speed m0 : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
+	s := dissolved_with_dbc(dir, mux)
+	assert errs(check_dbc_conformance(s)).any(it.contains('is multiplexed'))
 }
 
 // parse_system + load_node round-trip on a written system.toml + node ecu.toml.
