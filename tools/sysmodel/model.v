@@ -81,8 +81,15 @@ pub mut:
 	has_alive  bool // whether [nm].alive was declared (alive = 0 is a valid CAN id)
 	peers_lo   u32
 	peers_hi   u32
-	has_nm     bool // an [nm] table is present
-	nm_enabled bool // [nm].enabled (default true) — false = a non-participant node
+	has_nm     bool   // an [nm] table is present
+	nm_enabled bool   // [nm].enabled (default true) — false = a non-participant node
+	nm_bus     string // [nm].bus — the SINGLE bus this node runs NM on (loom2v: one NmCfg)
+	// NM timing presence: loom2v applies its default only when the KEY is ABSENT,
+	// so an explicit 0 must be preserved (not normalized to the default).
+	nm_has_msg_cycle  bool
+	nm_has_timeout    bool
+	nm_has_repeat     bool
+	nm_has_wait_sleep bool
 	// the node's FULL per-node gate result (tools/ecucheck: unknown keys, wrong
 	// types, structural rules) — a system can't be clean if a node can't build.
 	config_errors []string
@@ -244,16 +251,24 @@ pub fn load_node(path string) !NodeView {
 	// drift) and surface its errors: a clean system must imply buildable nodes
 	// (REQ-TOPO-005). @VMODROOT = the repo root, so the path holds from any cwd.
 	v.config_errors = ecucheck_errors(path)
-	// [bus.<name>] — the node's local bus interfaces
+	// [bus.<name>] — the node's local bus tables. The table KEY is the node's
+	// LOGICAL name (used by signal from/to); its `interface` field is the PLATFORM
+	// binding (the physical channel). A node is matched to a system bus by
+	// INTERFACE, not by the logical key — so produces/consumes/tx_frames + the
+	// local-bus set are keyed by the resolved interface (else `[bus.can0]
+	// interface = "can1"` would be credited to the wrong system bus).
+	mut key_iface := map[string]string{} // logical name -> interface
 	if bv := doc.value_opt('bus') {
-		for name, _ in bv.as_map() {
-			v.local_buses << name
+		for name, cfg in bv.as_map() {
+			iface := m_str(cfg.as_map(), 'interface')
+			key_iface[name] = if iface != '' { iface } else { name }
+			v.local_buses << key_iface[name]
 		}
 	}
-	is_bus := fn [v] (name string) bool {
-		return name in v.local_buses
+	iface_of := fn [key_iface] (logical string) ?string {
+		return key_iface[logical] or { none }
 	}
-	// [[signal]] from/to a bus = consume/produce on that bus
+	// [[signal]] from/to a bus = consume/produce on that bus (keyed by interface)
 	if sv := doc.value_opt('signal') {
 		for s in sv.array() {
 			m := s.as_map()
@@ -263,11 +278,11 @@ pub fn load_node(path string) !NodeView {
 			if name == '' {
 				continue
 			}
-			if is_bus(to) {
-				v.produces[to] << name
+			if iface := iface_of(to) {
+				v.produces[iface] << name
 			}
-			if is_bus(from) {
-				v.consumes[from] << name
+			if iface := iface_of(from) {
+				v.consumes[iface] << name
 			}
 		}
 	}
@@ -277,40 +292,57 @@ pub fn load_node(path string) !NodeView {
 			m := f.as_map()
 			name := m_str(m, 'name')
 			bus := m_str(m, 'bus')
-			if name != '' && is_bus(bus) && ('tx' in m) {
-				v.tx_frames[bus] << name
+			if name != '' && ('tx' in m) {
+				if iface := iface_of(bus) {
+					v.tx_frames[iface] << name
+				}
 			}
 		}
 	}
-	// [nm] cluster range
+	// [nm] cluster + identity
 	if nmv := doc.value_opt('nm') {
 		m := nmv.as_map()
 		v.has_nm = true
 		// [nm] enabled = false = a declared-but-inactive NM (loom2v emits no NM):
-		// a non-participant, so the cluster/alive/allocation checks skip it.
+		// a non-participant, so the cluster/alive/allocation/uniqueness checks skip it.
 		v.nm_enabled = (m['enabled'] or { toml.Any(true) }).bool()
+		// the SINGLE bus this node runs NM on, resolved to its interface (the
+		// [nm].bus value is a logical bus name, like signal endpoints).
+		nmbus := m_str(m, 'bus')
+		if nmbus != '' {
+			v.nm_bus = key_iface[nmbus] or { nmbus }
+		}
 		v.has_nm_node = 'node' in m // node id 0 is valid — distinguish from absent
 		v.nm_node = m_u32(m, 'node')
-		// alive may be a NUMERIC literal OR a DBC message NAME (loom2v resolves the
-		// binding). Only the numeric form feeds the id uniqueness/range checks; a
-		// named binding is left to loom2v (has_alive stays false).
-		if av := m['alive'] {
-			if av is string {
-				// named binding — not a numeric id we can range-check here
-			} else {
-				v.alive = u32(av.int())
-				v.has_alive = true
-			}
-		}
-		v.nm_msg_cycle_ms = m_int(m, 'msg_cycle_ms')
-		v.nm_timeout_ms = m_int(m, 'timeout_ms')
-		v.nm_repeat_ms = m_int(m, 'repeat_ms')
-		v.nm_wait_sleep_ms = m_int(m, 'wait_sleep_ms')
 		peers := (m['peers'] or { toml.Any([]toml.Any{}) }).array()
 		if peers.len == 2 {
 			v.peers_lo = u32(peers[0].int())
 			v.peers_hi = u32(peers[1].int())
 		}
+		// alive: NUMERIC literal -> that id; DBC message NAME -> loom2v resolves it
+		// (skip the numeric checks); ABSENT -> loom2v derives peers_lo + node, so
+		// derive + range-check the SAME value.
+		if av := m['alive'] {
+			if av is string {
+				// named binding — left to loom2v's DBC resolution
+			} else {
+				v.alive = u32(av.int())
+				v.has_alive = true
+			}
+		} else if v.has_nm_node {
+			v.alive = v.peers_lo + v.nm_node
+			v.has_alive = true
+		}
+		// timing: presence tracked so an EXPLICIT 0 is preserved (loom2v applies
+		// its default only when the key is ABSENT — an explicit 0 stays 0).
+		v.nm_has_msg_cycle = 'msg_cycle_ms' in m
+		v.nm_has_timeout = 'timeout_ms' in m
+		v.nm_has_repeat = 'repeat_ms' in m
+		v.nm_has_wait_sleep = 'wait_sleep_ms' in m
+		v.nm_msg_cycle_ms = m_int(m, 'msg_cycle_ms')
+		v.nm_timeout_ms = m_int(m, 'timeout_ms')
+		v.nm_repeat_ms = m_int(m, 'repeat_ms')
+		v.nm_wait_sleep_ms = m_int(m, 'wait_sleep_ms')
 	}
 	return v
 }
