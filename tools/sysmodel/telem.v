@@ -30,7 +30,21 @@ fn check_telemetry_frames(s System) []Issue {
 		path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(s.dir, bus.dbc) }
 		dbs[bus.name] = candb.load_dbc_file(path) or { continue } // load errors already reported
 	}
-	mut owner := map[string]string{} // "<busname>#<id>" -> "<node> <label>"
+	mut owner := map[string]string{} // "<busname>#<id>" -> a phrase naming the owner
+	// SEED every ACTIVE NM node's alive id as a frame owner on its NM bus, so a
+	// telemetry/trace frame equal to ANY node's alive id is caught — not only the
+	// transmitting node's own range (a trace/telemetry-only node has no NM range of
+	// its own). alive-vs-alive uniqueness is check_identity_uniqueness's job.
+	for n in s.nodes {
+		if n.view.has_nm && n.view.nm_enabled && n.view.has_alive {
+			nb := s.bus_by_interface(n.view.nm_bus) or { continue }
+			key := '${nb.name}#${n.view.alive}'
+			if _ := owner[key] {
+			} else {
+				owner[key] = 'the NM alive id of "${n.name}"'
+			}
+		}
+	}
 	for n in s.nodes {
 		// only a threadx node with live telemetry transmits these frames; they ride
 		// the telemetry bus (an interface -> its system bus).
@@ -42,6 +56,22 @@ fn check_telemetry_frames(s System) []Issue {
 		mut tframes := [TelemId{'telemetry id', n.view.telem_id}]
 		if n.view.telem_detail_id != 0 {
 			tframes << TelemId{'telemetry detail_id', n.view.telem_detail_id}
+		}
+		// the threadx exec-hook trace streams its record frame on the SAME telemetry
+		// channel (record_id, default 0x7e5) — another real tx frame on this bus.
+		if n.view.trace_on {
+			mut rid := n.view.trace_record_id
+			if n.view.trace_record_name != '' {
+				if db := dbs[bus.name] {
+					for m in db.messages {
+						if m.name == n.view.trace_record_name {
+							rid = m.id
+							break
+						}
+					}
+				}
+			}
+			tframes << TelemId{'trace record id', rid}
 		}
 		for tf in tframes {
 			label := tf.label
@@ -68,10 +98,10 @@ fn check_telemetry_frames(s System) []Issue {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-002'
-					msg:      'bus "${bus.name}": ${label} 0x${id.hex()} of "${n.name}" collides with ${prev} — telemetry frames are single-writer per bus'
+					msg:      'bus "${bus.name}": ${label} 0x${id.hex()} of "${n.name}" collides with ${prev} — these are single-writer per bus'
 				}
 			} else {
-				owner[key] = '${n.name} ${label}'
+				owner[key] = 'the ${label} of "${n.name}"'
 			}
 			// collision with a DBC application frame on the same bus
 			if db := dbs[bus.name] {
