@@ -233,20 +233,24 @@ fn check_signals_dissolved(s System) []Issue {
 		// so a cross-node signal carries EXACTLY ONE field (a multi-field codec is
 		// future work) of a KNOWN fixed scalar type (an unknown/heap type like
 		// "string" would violate the no-runtime-heap invariant). REQ-TOPO-001.
-		if sig.fields.len == 0 {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-001'
-				msg:      'signal "${sig.name}": has no `fields` — a signal must carry exactly one field'
-			}
-		} else if sig.fields.len > 1 {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-001'
-				msg:      'signal "${sig.name}": has ${sig.fields.len} fields — a cross-node signal carries exactly one value field (loom2v serializes one per DBC signal)'
-			}
-		}
+		// loom2v serializes ONE value field per DBC signal and treats a `valid`
+		// field as metadata (excluded from the wire, set true on RX). So the
+		// supported shape is exactly one NON-`valid` value field of a fixed scalar
+		// type (no u64/i64 — lossy through the f64 bridge), plus an optional
+		// `valid` bool. REQ-TOPO-001.
+		mut n_value := 0
 		for fname, ftype in sig.fields {
+			if fname == 'valid' {
+				if ftype != 'bool' {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-001'
+						msg:      'signal "${sig.name}": the `valid` field must be bool, not "${ftype}"'
+					}
+				}
+				continue
+			}
+			n_value++
 			if type_bits(ftype) == 0 {
 				issues << Issue{
 					severity: .error
@@ -254,23 +258,24 @@ fn check_signals_dissolved(s System) []Issue {
 					msg:      'signal "${sig.name}": field "${fname}" has unsupported type "${ftype}" (use a fixed scalar: bool/u8/i8/u16/i16/u32/i32/f32/f64)'
 				}
 			} else if ftype == 'u64' || ftype == 'i64' {
-				// loom2v's host bridge routes every non-bool value through an f64,
-				// whose 53-bit mantissa cannot represent all 64-bit integers — a
-				// large value would be silently corrupted on the wire.
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-001'
 					msg:      'signal "${sig.name}": field "${fname}" is ${ftype} — 64-bit integers are lossy through the f64 bridge; use <=32-bit widths'
 				}
 			}
-			// loom2v excludes a field named `valid` when picking the value field, so
-			// a lone `valid` leaves the generated bridge with nothing to serialize.
-			if sig.fields.len == 1 && fname == 'valid' {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-001'
-					msg:      'signal "${sig.name}": its only field is named "valid", which the bridge reserves — the value field needs another name'
-				}
+		}
+		if n_value == 0 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}": has no value field (a `valid` field alone is not serializable) — declare exactly one non-`valid` field'
+			}
+		} else if n_value > 1 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'signal "${sig.name}": has ${n_value} value fields — a cross-node signal carries exactly one (plus an optional `valid`)'
 			}
 		}
 		// the producer must be a declared node on the signal's bus
@@ -415,6 +420,17 @@ fn check_signals_dissolved(s System) []Issue {
 				severity: .error
 				req:      'REQ-TOPO-001'
 				msg:      'node "${n.name}": FB reads "${r}" which system.toml does not declare'
+			}
+		}
+		// a cross-node RX signal read from >1 partition = concurrent readers of the
+		// one bus-to-partition SPSC IOC channel sysgen emits (a race). REQ-TOPO-001.
+		for sig, parts in n.view.read_partitions {
+			if parts.len > 1 && s.signal_by_name(sig) != none {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'node "${n.name}": signal "${sig}" is read from ${parts.len} partitions (${parts.join(", ")}) — one bus-RX signal has a single reader partition'
+				}
 			}
 		}
 	}

@@ -85,6 +85,16 @@ pub fn check_dbc_conformance(s System) []Issue {
 			}
 		}
 		if ds := dbc_sig {
+			// a multiplexed/multiplexor SG_ needs selector semantics the dissolution
+			// codec doesn't carry — the generated getters/setters ignore the switch,
+			// so an inactive branch is (de)serialized as if always present.
+			if ds.is_multiplexed || ds.is_multiplexor {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'signal "${sig.name}": DBC SG_ "${sig.name}" is multiplexed — the dissolution codec has no multiplexor support'
+				}
+			}
 			if bits != 0 && ds.length != bits {
 				issues << Issue{
 					severity: .error
@@ -143,18 +153,27 @@ pub fn check_dbc_conformance(s System) []Issue {
 }
 
 // field_bits sums a signal's field widths (the [[signal]].fields types).
+// field_bits is the wire width of a signal's VALUE field — the `valid` metadata
+// field is not serialized, so it doesn't count toward the DBC SG_ width.
 fn field_bits(fields map[string]string) int {
 	mut total := 0
-	for _, typ in fields {
+	for name, typ in fields {
+		if name == 'valid' {
+			continue
+		}
 		total += type_bits(typ)
 	}
 	return total
 }
 
-// field_signed reports the declared signedness of a signal's single integer
-// field, or none for a non-integer (bool/float — DBC signedness doesn't apply).
+// field_signed reports the declared signedness of a signal's single VALUE
+// integer field (the `valid` metadata field is not on the wire), or none for a
+// non-integer (bool/float — DBC signedness doesn't apply).
 fn field_signed(fields map[string]string) ?bool {
-	for _, typ in fields {
+	for name, typ in fields {
+		if name == 'valid' {
+			continue
+		}
 		return match typ {
 			'i8', 'i16', 'i32', 'i64' { true }
 			'u8', 'u16', 'u32', 'u64' { false }
