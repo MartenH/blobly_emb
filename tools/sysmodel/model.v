@@ -46,6 +46,7 @@ pub mut:
 	buses        []string
 	nm           u32  // NM node id allocated by system.toml (node id 0 is valid)
 	has_nm_alloc bool // whether [[node]] declared `nm` at all (0 != absent)
+	nm_alloc_ok  bool // whether the allocated `nm` is in loom2v's 0..255 range
 	diag         Diag
 	trace        int
 	// --- extracted from the node's ecu.toml (filled by load_node) ---
@@ -77,6 +78,7 @@ pub mut:
 	tx_frames  map[string][]string
 	nm_node    u32 // the node's own [nm] node id (checked against system.toml's)
 	has_nm_node bool // whether [nm].node was declared (node id 0 is valid, 0..255)
+	nm_node_ok  bool // whether [nm].node is in loom2v's 0..255 range
 	alive      u32 // the node's [nm] alive id (the on-wire id, within peers)
 	has_alive  bool // whether [nm].alive was declared (alive = 0 is a valid CAN id)
 	peers_lo   u32
@@ -162,11 +164,13 @@ pub fn parse_system(path string) !System {
 	if nv := doc.value_opt('node') {
 		for n in nv.array() {
 			m := n.as_map()
+			nm_raw := (m['nm'] or { toml.Any(0) }).int() // signed, to range-check
 			mut node := Node{
 				name:         m_str(m, 'name')
 				ecu:          m_str(m, 'ecu')
-				nm:           m_u32(m, 'nm')
+				nm:           u32(nm_raw)
 				has_nm_alloc: 'nm' in m
+				nm_alloc_ok:  nm_raw >= 0 && nm_raw <= 255
 				trace:        m_int(m, 'trace')
 			}
 			for b in (m['buses'] or { toml.Any([]toml.Any{}) }).array() {
@@ -299,13 +303,20 @@ pub fn load_node(path string) !NodeView {
 			}
 		}
 	}
+	// [target].kind — loom2v generates NM only for the threadx target (it forces
+	// nm.on = false otherwise), so a non-threadx node is a NM non-participant.
+	mut target_threadx := false
+	if tv := doc.value_opt('target') {
+		target_threadx = (tv.as_map()['kind'] or { toml.Any('') }).string() == 'threadx'
+	}
 	// [nm] cluster + identity
 	if nmv := doc.value_opt('nm') {
 		m := nmv.as_map()
 		v.has_nm = true
-		// [nm] enabled = false = a declared-but-inactive NM (loom2v emits no NM):
-		// a non-participant, so the cluster/alive/allocation/uniqueness checks skip it.
-		v.nm_enabled = (m['enabled'] or { toml.Any(true) }).bool()
+		// enabled = false OR a non-threadx target = a declared-but-inactive NM
+		// (loom2v emits no NM): a non-participant, so the cluster/alive/allocation/
+		// uniqueness checks skip it.
+		v.nm_enabled = (m['enabled'] or { toml.Any(true) }).bool() && target_threadx
 		// the SINGLE bus this node runs NM on, resolved to its interface (the
 		// [nm].bus value is a logical bus name, like signal endpoints).
 		nmbus := m_str(m, 'bus')
@@ -313,7 +324,12 @@ pub fn load_node(path string) !NodeView {
 			v.nm_bus = key_iface[nmbus] or { nmbus }
 		}
 		v.has_nm_node = 'node' in m // node id 0 is valid — distinguish from absent
-		v.nm_node = m_u32(m, 'node')
+		// keep the SIGNED value long enough to range-check: loom2v rejects a node
+		// id outside 0..255, but m_u32 would turn -1 into a huge value that could
+		// collide (REQ-TOPO-005 "clean system => buildable nodes").
+		node_raw := (m['node'] or { toml.Any(0) }).int()
+		v.nm_node = u32(node_raw)
+		v.nm_node_ok = node_raw >= 0 && node_raw <= 255
 		peers := (m['peers'] or { toml.Any([]toml.Any{}) }).array()
 		if peers.len == 2 {
 			v.peers_lo = u32(peers[0].int())

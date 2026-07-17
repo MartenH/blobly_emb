@@ -49,3 +49,7 @@ thread = "ctrl"
 node  = 0x11
 alive = 0x511
 peers = [0x500, 0x53F]
+
+[target]
+kind    = "threadx"
+tick_ms = 1

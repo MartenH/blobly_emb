@@ -279,6 +279,15 @@ fn check_identity_uniqueness(s System) []Issue {
 		// false) is a non-participant: loom2v emits no NM, so its id can't collide
 		// and its [nm] fields need not match — skip its NM checks (a missing table
 		// with an allocation is still flagged, below).
+		// the system allocation itself must be a valid node id (a negative nm would
+		// cast to a huge u32 and could false-match another negative one).
+		if n.has_nm_alloc && !n.nm_alloc_ok {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-002'
+				msg:      'node "${n.name}": system.toml nm is outside the 0..255 node-id range'
+			}
+		}
 		disabled := n.view.has_nm && !n.view.nm_enabled
 		if n.has_nm_alloc && !disabled {
 			if prev := nm_seen[n.nm] {
@@ -303,6 +312,12 @@ fn check_identity_uniqueness(s System) []Issue {
 					severity: .error
 					req:      'REQ-TOPO-005'
 					msg:      'node "${n.name}": system.toml allocates nm 0x${n.nm.hex()} but its [nm] has no `node` id (loom2v requires it)'
+				}
+			} else if !n.view.nm_node_ok {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": ecu.toml [nm] node is outside the 0..255 range loom2v requires'
 				}
 			} else if n.view.nm_node != n.nm {
 				issues << Issue{
@@ -404,7 +419,7 @@ fn check_nm_cluster_coherence(s System) []Issue {
 			mut ref := 0
 			mut ref_node := ''
 			for n in s.nodes {
-				if bus.name !in n.buses || !n.view.has_nm || !n.view.nm_enabled {
+				if !nm_participates(n, bus) {
 					continue
 				}
 				// compare the EFFECTIVE value (declared, or loom2v's default) — a node

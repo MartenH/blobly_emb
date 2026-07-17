@@ -38,6 +38,7 @@ fn clean_system() System {
 				buses: ['compute']
 				nm:    0x11
 				has_nm_alloc: true
+				nm_alloc_ok:  true
 				trace: 1
 				view:  NodeView{
 					produces:  {
@@ -50,6 +51,7 @@ fn clean_system() System {
 					nm_enabled:  true
 					nm_node:     0x11
 					has_nm_node: true
+					nm_node_ok:  true
 					alive:       0x511
 					has_alive:   true
 					peers_lo:    0x500
@@ -62,6 +64,7 @@ fn clean_system() System {
 				buses: ['compute']
 				nm:    0x13
 				has_nm_alloc: true
+				nm_alloc_ok:  true
 				trace: 2
 				view:  NodeView{
 					produces:  {
@@ -74,6 +77,7 @@ fn clean_system() System {
 					nm_enabled:  true
 					nm_node:     0x13
 					has_nm_node: true
+					nm_node_ok:  true
 					alive:       0x513
 					has_alive:   true
 					peers_lo:    0x500
@@ -249,6 +253,7 @@ fn test_route_satisfies_cross_bus_consumer() {
 		buses: ['edge']
 		nm:    0x20
 		has_nm_alloc: true
+		nm_alloc_ok:  true
 		trace: 3
 		view:  NodeView{
 			consumes:    {
@@ -258,6 +263,7 @@ fn test_route_satisfies_cross_bus_consumer() {
 			nm_enabled:  true
 			nm_node:     0x20
 			has_nm_node: true
+			nm_node_ok:  true
 			alive:       0x520
 			has_alive:   true
 			peers_lo:    0x500
@@ -357,6 +363,7 @@ fn test_route_without_source_producer_is_error() {
 		buses: ['edge']
 		nm:    0x20
 		has_nm_alloc: true
+		nm_alloc_ok:  true
 		trace: 3
 		view:  NodeView{
 			consumes:    {
@@ -366,6 +373,7 @@ fn test_route_without_source_producer_is_error() {
 			nm_enabled:  true
 			nm_node:     0x20
 			has_nm_node: true
+			nm_node_ok:  true
 			alive:       0x520
 			has_alive:   true
 			peers_lo:    0x500
@@ -432,12 +440,14 @@ fn test_nm_timing_anchor_is_per_param() {
 		buses: ['compute']
 		nm:    0x15
 		has_nm_alloc: true
+		nm_alloc_ok:  true
 		trace: 4
 		view:  NodeView{
 			has_nm:        true
 			nm_enabled:  true
 			nm_node:       0x15
 			has_nm_node:   true
+			nm_node_ok:  true
 			alive:         0x515
 			has_alive:   true
 			peers_lo:      0x500
@@ -656,12 +666,14 @@ fn test_nm_bus_scoping() {
 		buses: ['edge']
 		nm:    0x21
 		has_nm_alloc: true
+		nm_alloc_ok:  true
 		trace: 3
 		view:  NodeView{
 			has_nm:      true
 			nm_enabled:  true
 			nm_node:     0x21
 			has_nm_node: true
+			nm_node_ok:  true
 			nm_bus:      'can1'
 			alive:       0x521
 			has_alive:   true
@@ -672,6 +684,87 @@ fn test_nm_bus_scoping() {
 	}
 	// the gateway (nm.bus=compute) must NOT be compared against edge's range
 	assert !errs(validate_system(s)).any(it.contains('cluster range mismatch')), 'nm.bus scopes coherence: ${errs(validate_system(s))}'
+}
+
+// --- codex #141 round-6 fixes ---
+
+// REQ-TOPO-004: NM TIMING coherence is scoped to nm.bus too (not just range/alive).
+fn test_nm_bus_scoping_timing() {
+	mut s := clean_system()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[0].buses = ['compute', 'edge']
+	s.nodes[0].view.local_buses = ['can0', 'can1']
+	s.nodes[0].view.nm_bus = 'can0' // NM on compute only
+	s.nodes << Node{
+		name:  'zone'
+		buses: ['edge']
+		nm:    0x21
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace: 3
+		view:  NodeView{
+			has_nm:         true
+			nm_enabled:     true
+			nm_node:        0x21
+			has_nm_node:    true
+			nm_node_ok:     true
+			nm_bus:         'can1'
+			alive:          0x521
+			has_alive:      true
+			peers_lo:       0x500
+			peers_hi:       0x53f
+			local_buses:    ['can1']
+			nm_has_timeout: true
+			nm_timeout_ms:  999 // a different timeout than the gateway's default
+		}
+	}
+	assert !errs(validate_system(s)).any(it.contains('timeout_ms mismatch')), 'nm.bus scopes timing: ${errs(validate_system(s))}'
+}
+
+// REQ-TOPO-002/005: a non-threadx target disables NM (loom2v emits none), so the
+// node is a non-participant — no allocation/collision errors.
+fn test_non_threadx_disables_nm() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_tgt_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[bus.can0]
+interface = "can0"
+fd = false
+core = 0
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "t" # (vlang/v#27684)
+[nm]
+node  = 0x11
+peers = [0x500, 0x53F]
+[target]
+kind = "baremetal"
+') or { panic(err) }
+	view := load_node(os.join_path(dir, 'n.toml')) or { panic(err) }
+	assert view.has_nm, 'the [nm] table is present'
+	assert !view.nm_enabled, 'a non-threadx target disables NM (loom2v emits none)'
+}
+
+// REQ-TOPO-002: a system nm id outside 0..255 (a negative would cast to a huge u32).
+fn test_system_nm_out_of_range() {
+	mut s := clean_system()
+	s.nodes[0].nm_alloc_ok = false // system.toml nm was out of range (e.g. -1 or 0x100)
+	assert errs(validate_system(s)).any(it.contains('outside the 0..255 node-id range'))
+}
+
+// REQ-TOPO-005: a local [nm] node outside 0..255 (loom2v rejects it).
+fn test_local_nm_node_out_of_range() {
+	mut s := clean_system()
+	s.nodes[0].view.nm_node_ok = false // e.g. node = -1 or node = 300
+	assert errs(validate_system(s)).any(it.contains('outside the 0..255 range loom2v requires'))
 }
 
 // parse_system + load_node round-trip on a written system.toml + node ecu.toml.
