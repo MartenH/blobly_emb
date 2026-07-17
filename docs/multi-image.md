@@ -1,5 +1,7 @@
 # Multi-image generation — one ecu.toml, an image per core
 
+> **Successor:** [multi-node.md](multi-node.md) lifts this one-config-many-images idea to a system of ECUs on a shared bus — the same transport-derivation, one rung lower (cross-node = a bus frame).
+
 > Design + phase log for the multi-image emitter (2026-07-13). Prereqs all shipped and
 > bench-proven: xioc (the cross-core SPSC channel, boards/common/xioc.h), external
 > partitions (identity without code), the generated duo contract header, the two-core

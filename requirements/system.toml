@@ -149,3 +149,11 @@ text = "The ECU shall let a host interactively inspect runtime state (threads, c
 status = "agreed"
 method = "test"
 asil = "QM"
+
+[[req]]
+id = "SYS-REQ-TOPO-001"
+title = "System of nodes from one description"
+text = "A system of ECU nodes on a shared bus shall be describable as one composition (the nodes, the shared bus and signal contract, and each node's identities), from which each node is generated and the whole is validated for cross-node consistency."
+status = "draft"
+method = "analysis"
+asil = "QM"
