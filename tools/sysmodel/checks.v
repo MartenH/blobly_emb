@@ -60,6 +60,7 @@ pub fn validate_system_gen(s System) []Issue {
 	issues << check_routes(s)
 	issues << check_signals_dissolved(s)
 	issues << check_dbc_conformance(s)
+	issues << check_telemetry_frames(s)
 	return issues
 }
 
@@ -159,6 +160,18 @@ fn check_dissolved_nodes(s System) []Issue {
 					req:      'REQ-TOPO-004'
 					msg:      'node "${n.name}": is on an NM cluster but is not a threadx target with a [telemetry] bus — the generated [nm] would have no runtime'
 				}
+			} else if !node_has_external(s, n) {
+				// even threadx + telemetry: loom2v runs NM ONLY inside the comm
+				// thread, and emits that thread only when the node has a BRIDGE
+				// (>=1 external signal / ISO-TP / route). Telemetry alone is not a
+				// bridge, so a signal-less cluster member gets a [nm] with no comm
+				// thread — its alive frames never transmit (dead NM), and its COM
+				// tx is never NM-gated.
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-004'
+					msg:      'node "${n.name}": is on an NM cluster but produces/consumes no system signal — loom2v emits NM only inside the comm thread, which needs a bridge (>=1 external signal); its NM would never transmit'
+				}
 			}
 			// NM ids must fit a standard 11-bit CAN id: the FDCAN backend masks
 			// (id & 0x7ff), so a range/alive above 0x7ff is silently truncated.
@@ -172,6 +185,23 @@ fn check_dissolved_nodes(s System) []Issue {
 		}
 	}
 	return issues
+}
+
+// node_has_external: does this node produce or consume any system signal? loom2v
+// turns on the comm thread (has_bridge) only for a node with >=1 external signal
+// (P1 models ISO-TP / routes elsewhere). Telemetry alone is NOT a bridge.
+fn node_has_external(s System, n Node) bool {
+	for sig in s.signals {
+		if sig.producer == n.name {
+			return true
+		}
+	}
+	for r in n.view.fb_reads {
+		if _ := s.signal_by_name(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // check_identity_alloc: uniqueness of the SYSTEM-ALLOCATED ids (dissolution).

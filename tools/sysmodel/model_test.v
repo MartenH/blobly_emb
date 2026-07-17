@@ -582,6 +582,60 @@ fn test_dissolved_clean() {
 	assert errs(issues).len == 0, 'clean dissolved system flagged: ${errs(issues)}'
 }
 
+// --- codex #142 round-8 fixes ---
+
+// REQ-TOPO-004: a threadx+telemetry cluster member that produces/consumes NO
+// system signal has no bridge, so loom2v emits no comm thread — its generated
+// [nm] never runs (dead NM). Telemetry alone is not a bridge.
+fn test_dissolved_signalless_cluster_member_is_error() {
+	mut s := clean_dissolved()
+	s.nodes << Node{
+		name:         'c'
+		buses:        ['compute']
+		nm:           0x15
+		has_nm_alloc: true
+		trace:        3
+		view:         NodeView{
+			is_threadx:    true
+			has_telemetry: true
+			// no fb_reads / fb_writes: not a producer, reads nothing -> no bridge
+		}
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('node "c"')
+		&& it.contains('produces/consumes no system signal')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-002: two nodes with the same explicit telemetry id on one bus are an
+// unowned multi-writer (the comm threads both transmit that frame).
+fn test_dissolved_telemetry_id_collision_is_error() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.has_telem_id = true
+	s.nodes[0].view.telem_id = 0x7e0
+	s.nodes[1].view.has_telem_id = true
+	s.nodes[1].view.telem_id = 0x7e0 // same id as node a
+	assert errs(validate_system_gen(s)).any(it.contains('telemetry id 0x7e0')
+		&& it.contains('single-writer')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-002: a telemetry id equal to a DBC application frame aliases two
+// different frames on the wire.
+fn test_dissolved_telemetry_aliases_dbc_frame_is_error() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.has_telem_id = true
+	s.nodes[0].view.telem_id = 0x120 // == SpeedFrame (288) in good_dbc
+	assert errs(validate_system_gen(s)).any(it.contains('aliases DBC application frame "SpeedFrame"')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-002: a node's telemetry id and detail_id must differ.
+fn test_dissolved_telemetry_id_equals_detail_is_error() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.has_telem_id = true
+	s.nodes[0].view.telem_id = 0x7e0
+	s.nodes[0].view.has_telem_det = true
+	s.nodes[0].view.telem_detail_id = 0x7e0 // same as its own id
+	assert errs(validate_system_gen(s)).any(it.contains('collides with its own')), errs(validate_system_gen(s)).str()
+}
+
 // REQ-TOPO-001: a signal whose producer isn't a declared node.
 fn test_dissolved_producer_not_a_node() {
 	mut s := clean_dissolved()
