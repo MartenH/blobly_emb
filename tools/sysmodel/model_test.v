@@ -1757,3 +1757,116 @@ trace = 1
 	sys.load_nodes()
 	assert errs(validate_system(sys)).any(it.contains('not generatable')), errs(validate_system(sys)).str()
 }
+
+// --- codex #141 round-18 fixes ---
+
+// REQ-TOPO-002: dump_fc reserves an rx id ONLY when explicitly bound — an unbound
+// node (the normal case) has no dump_fc receiver, so a peer at 0x7e6 is fine.
+fn test_unbound_dump_fc_not_reserved() {
+	mut s := clean_system()
+	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.has_telemetry = true
+	s.nodes[0].view.telem_bus = 'can0'
+	s.nodes[0].view.nm_bus = 'can0'
+	s.nodes[0].view.telem_id = 0x7a0
+	s.nodes[0].view.trace_on = true
+	s.nodes[0].view.trace_record_id = 0x7a1
+	s.nodes[0].view.trace_rsp_id = 0x7a2
+	s.nodes[0].view.trace_cmd_id = 0x7e2
+	s.nodes[0].view.trace_dump_fc_id = 0x7e6
+	s.nodes[0].view.trace_dump_fc_bound = false // NOT bound -> no receiver
+	s.nodes[1].view.is_threadx = true
+	s.nodes[1].view.has_telemetry = true
+	s.nodes[1].view.telem_bus = 'can0'
+	s.nodes[1].view.nm_bus = 'can0'
+	s.nodes[1].view.telem_id = 0x7e6 // == node 0's unbound dump_fc id -> should be OK
+	assert !errs(validate_system(s)).any(it.contains('0x7e6')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-002: bound dump_fc IS reserved.
+fn test_bound_dump_fc_reserved() {
+	mut s := clean_system()
+	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.has_telemetry = true
+	s.nodes[0].view.telem_bus = 'can0'
+	s.nodes[0].view.nm_bus = 'can0'
+	s.nodes[0].view.telem_id = 0x7a0
+	s.nodes[0].view.trace_on = true
+	s.nodes[0].view.trace_record_id = 0x7a1
+	s.nodes[0].view.trace_rsp_id = 0x7a2
+	s.nodes[0].view.trace_cmd_id = 0x7e2
+	s.nodes[0].view.trace_dump_fc_id = 0x7e6
+	s.nodes[0].view.trace_dump_fc_bound = true // bound -> reserved
+	s.nodes[1].view.is_threadx = true
+	s.nodes[1].view.has_telemetry = true
+	s.nodes[1].view.telem_bus = 'can0'
+	s.nodes[1].view.nm_bus = 'can0'
+	s.nodes[1].view.telem_id = 0x7e6 // collides with node 0's bound dump_fc rx id
+	assert errs(validate_system(s)).any(it.contains('telemetry id 0x7e6')
+		&& it.contains('dump_fc')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-002: a single-partition HOST trace runner sends inline CpuLoad only,
+// never LoadDetail — a peer using that detail id is not a collision.
+fn test_host_trace_detail_not_counted() {
+	mut s := clean_system()
+	s.nodes[0].view.is_threadx = false // host trace runner
+	s.nodes[0].view.has_telemetry = true
+	s.nodes[0].view.telem_bus = 'can0'
+	s.nodes[0].view.telem_id = 0x7a0
+	s.nodes[0].view.telem_detail_id = 0x7a1 // NOT sent by the host trace runner
+	s.nodes[0].view.trace_on = true
+	s.nodes[0].view.trace_bus = 'can0'
+	s.nodes[0].view.trace_record_id = 0x7a2
+	s.nodes[0].view.trace_rsp_id = 0x7a3
+	s.nodes[0].view.partition_count = 1
+	s.nodes[0].view.produces = map[string][]string{}
+	s.nodes[0].view.consumes = map[string][]string{}
+	s.nodes[1].view.telem_id = 0x7a1 // == node 0's (unsent) detail id -> OK
+	s.nodes[1].view.is_threadx = false
+	s.nodes[1].view.has_telemetry = true
+	s.nodes[1].view.telem_bus = 'can0'
+	assert !errs(validate_system(s)).any(it.contains('0x7a1')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-002: a DBC application frame in an active NM peer range is misread as
+// an alive frame by the NM receiver.
+fn test_app_frame_in_nm_range_is_error() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_appnm_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// SpeedFrame id 0x511 sits inside the cluster range [0x500,0x53f]
+	os.write_file(os.join_path(dir, 'compute.dbc'), 'VERSION ""
+
+BU_: a
+
+BO_ 1297 SpeedFrame: 8 a
+ SG_ Speed : 0|32@1+ (1,0) [0|4294967295] "" a
+') or { panic(err) }
+	mut s := System{
+		dir:   dir
+		buses: [Bus{
+			name:      'compute'
+			interface: 'can0'
+			dbc:       'compute.dbc'
+		}]
+		nodes: [Node{
+			name:  'a'
+			buses: ['compute']
+			view:  NodeView{
+				has_nm:      true
+				nm_enabled:  true
+				nm_bus:      'can0'
+				peers_lo:    0x500
+				peers_hi:    0x53f
+				alive:       0x511
+				has_alive:   true
+				local_buses: ['can0']
+			}
+		}]
+	}
+	assert errs(check_telemetry_frames(s)).any(it.contains('SpeedFrame')
+		&& it.contains('NM peer range')), errs(check_telemetry_frames(s)).str()
+}
