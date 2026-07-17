@@ -76,6 +76,7 @@ fn C.trace_bind_thread(voidptr)
 fn C.trace_fb(u32, u64, u32)
 fn C.shell_ps(&u8, int) int
 fn C.shell_bmc(&u8, int) int
+fn C.shell_boot(&u8, int) int
 
 fn shell_ps_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 	n := C.shell_ps(&rsp.buf[0], 520)
@@ -86,6 +87,13 @@ fn shell_ps_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 
 fn shell_bmc_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 	n := C.shell_bmc(&rsp.buf[0], 520)
+	if n > 0 {
+		rsp.len = n
+	}
+}
+
+fn shell_boot_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
+	n := C.shell_boot(&rsp.buf[0], 520)
 	if n > 0 {
 		rsp.len = n
 	}
@@ -275,6 +283,7 @@ fn comm_thread_entry(input u32) {
 	g_sh.init(u32(0x7f1)) // in place: no module-sized stack copies
 	g_sh.register('ps', 'threads: prio, state, stack high-water', shell_ps_cmd)
 	g_sh.register('bmc', 'DWT core benchmark (CPI, LSU, folds)', shell_bmc_cmd)
+	g_sh.register('boot', 'target command (comm_glue.c)', shell_boot_cmd)
 	mut shell_txf := can.Frame{}
 	g_sh.register('nm', 'NM state; nm req|rel', shell_nm_cmd)
 	g_sh.register('stat', 'per-handler us: last, max, mean, count', shell_stat_cmd)

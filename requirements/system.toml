@@ -157,3 +157,11 @@ text = "A system of ECU nodes on a shared bus shall be describable as one compos
 status = "draft"
 method = "analysis"
 asil = "QM"
+
+[[req]]
+id = "SYS-REQ-NET-001"
+title = "Networked diagnostics and update"
+text = "The ECU shall support IP networking over Ethernet such that diagnostics and in-field software update are reachable over a routed network (in addition to the CAN transport), without a runtime heap."
+status = "draft"
+method = "test"
+asil = "QM"
