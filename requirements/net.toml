@@ -60,20 +60,20 @@ derives = "SYS-REQ-NET-001"
 [[req]]
 id = "REQ-NET-007"
 title = "Diagnostics over the network"
-text = "The diagnostic services shall be reachable over the network stream transport, reusing the same service logic as the bus transport (a networked binding of the diagnostic protocol)."
+text = "The diagnostic services shall be reachable over the network stream transport, reusing the same service logic as the bus transport (a networked binding of the diagnostic protocol per SYS-REQ-DIAG-001)."
 status = "draft"
 method = "test"
 asil = "QM"
-derives = "SYS-REQ-DIAG-001"
+derives = "SYS-REQ-NET-001"
 
 [[req]]
 id = "REQ-NET-008"
 title = "Reprogramming over the network"
-text = "The in-field programming protocol shall be reachable over the network stream transport as a second binding, such that a node can be reprogrammed over the network with the same session and safety guarantees as over the bus."
+text = "The in-field programming protocol shall be reachable over the network stream transport as a second binding, such that a node can be reprogrammed over the network with the same session and safety guarantees as over the bus (a networked binding of the programming protocol per SYS-REQ-PROG-001)."
 status = "draft"
 method = "test"
 asil = "QM"
-derives = "SYS-REQ-PROG-001"
+derives = "SYS-REQ-NET-001"
 
 [[req]]
 id = "REQ-NET-009"
@@ -87,8 +87,26 @@ derives = "SYS-REQ-NET-001"
 [[req]]
 id = "REQ-NET-010"
 title = "Image authenticity over the network"
-text = "An application image delivered over the network shall be subject to the same authenticity and integrity verification as one delivered over the bus, so a network-reachable programming path cannot install an unauthenticated image."
+text = "An application image delivered over the network shall be subject to the same authenticity and integrity verification as one delivered over the bus (SYS-REQ-SEC-001), so a network-reachable programming path cannot install an unauthenticated image."
 status = "draft"
 method = "test"
 asil = "QM"
-derives = "SYS-REQ-SEC-001"
+derives = "SYS-REQ-NET-001"
+
+[[req]]
+id = "REQ-NET-011"
+title = "Trust anchor required for a network-reachable programming path"
+text = "A build that exposes the programming protocol over the network shall reject an unset image trust anchor, so the keyless/open programming mode permitted for closed benches cannot be reached over a routed network."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-001"
+
+[[req]]
+id = "REQ-NET-012"
+title = "Authenticated diagnostic access over the network"
+text = "Diagnostic services that alter ECU state (e.g. writing data identifiers) shall require an authenticated session before they act when reached over the network, not only over the bus; reachability alone shall not grant write access."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-001"
