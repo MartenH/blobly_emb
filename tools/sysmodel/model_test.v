@@ -276,14 +276,18 @@ fn test_route_satisfies_cross_bus_consumer() {
 	}
 	// without a route -> error (no producer on edge)
 	assert errs(validate_system(s)).any(it.contains('Speed') && it.contains('no node transmits'))
-	// add the route -> the consumer is satisfied
+	// add the route -> it is WELL-FORMED (suppresses the raw missing-producer gap)
+	// but P1 does not GENERATE cross-bus routing, so the route itself is rejected:
+	// a clean verdict would wrongly imply a forwarder exists at runtime.
 	s.routes << Route{
 		gateway: 'sysnode'
 		signal:  'Speed'
 		from:    'compute'
 		to:      'edge'
 	}
-	assert !errs(validate_system(s)).any(it.contains('Speed') && it.contains('no node transmits')), 'route should satisfy the cross-bus consumer'
+	e := errs(validate_system(s))
+	assert !e.any(it.contains('Speed') && it.contains('no node transmits')), 'a well-formed route suppresses the raw missing-producer gap'
+	assert e.any(it.contains('not generated in P1')), 'but the ungenerated route is itself rejected: ${e}'
 }
 
 // --- codex #141 review fixes ---
@@ -586,6 +590,9 @@ name = "app"
 core = 0
   [[partition.thread]]
   name = "t" # trailing comment terminates the nested [[partition.thread]] parse (vlang/v#27684)
+[target]
+kind    = "threadx"
+tick_ms = 1
 [nm]
 node  = 0x11
 alive = "AliveMsg"
@@ -949,6 +956,9 @@ BO_ 1297 AliveMsg: 8 a
 [bus.can0]
 [telemetry]
 bus = "can0"
+[target]
+kind    = "threadx"
+tick_ms = 1
 [nm]
 node  = 0x11
 alive = "AliveMsg"
@@ -992,6 +1002,9 @@ BO_ 1297 OtherMsg: 8 a
 [bus.can0]
 [telemetry]
 bus = "can0"
+[target]
+kind    = "threadx"
+tick_ms = 1
 [nm]
 node  = 0x11
 alive = "AliveMsg"
@@ -1136,6 +1149,9 @@ core = 0
   name = "t" # trailing comment (vlang/v#27684)
 [telemetry]
 bus = "can0"
+[target]
+kind    = "threadx"
+tick_ms = 1
 [nm]
 node  = 0x11
 alive = "AliveMsg"
@@ -1218,4 +1234,100 @@ fn test_undeclared_telemetry_interface_is_error() {
 	s.nodes[0].view.local_buses = ['can0', 'can9']
 	assert errs(validate_system(s)).any(it.contains('[bus.can9]')
 		&& it.contains('telemetry')), errs(validate_system(s)).str()
+}
+
+// --- codex #141 round-12 fixes ---
+
+// REQ-TOPO-006: a system-level cross-bus route is not generated in P1 (loom2v
+// emits no system routes), so its mere presence is an error — a clean verdict
+// must not imply a forwarder exists.
+fn test_system_route_not_generated_is_error() {
+	mut s := clean_system()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[0].buses = ['compute', 'edge']
+	s.nodes[0].view.local_buses = ['can0', 'can1']
+	s.routes << Route{
+		gateway: 'sysnode'
+		frame:   'VehFrame'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system(s)).any(it.contains('not generated in P1')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-002: a telemetry id equal to ANOTHER node's alive id collides on the
+// wire — checked against every active NM participant, not just the sender's range.
+fn test_telemetry_id_aliases_other_node_alive() {
+	mut s := clean_system()
+	// node 0 has NO NM of its own but transmits telemetry at 0x513 = node 1's alive
+	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.has_telemetry = true
+	s.nodes[0].view.telem_bus = 'can0'
+	s.nodes[0].view.nm_bus = 'can0'
+	s.nodes[0].view.has_nm = false
+	s.nodes[0].view.nm_enabled = false
+	s.nodes[0].view.telem_id = 0x513 // == node 1's alive id
+	// node 1 is an active NM participant with alive 0x513 (from clean_system)
+	s.nodes[1].view.nm_bus = 'can0'
+	assert errs(validate_system(s)).any(it.contains('telemetry id 0x513')
+		&& it.contains('NM alive id of "domain"')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-002: a threadx node's exec-hook trace record frame (default 0x7e5)
+// must not collide with another trace/telemetry frame on the same bus.
+fn test_trace_record_id_collision_is_error() {
+	mut s := clean_system()
+	for i in 0 .. 2 {
+		s.nodes[i].view.is_threadx = true
+		s.nodes[i].view.has_telemetry = true
+		s.nodes[i].view.telem_bus = 'can0'
+		s.nodes[i].view.nm_bus = 'can0'
+		s.nodes[i].view.telem_id = u32(0x7a0 + i) // distinct telemetry ids
+		s.nodes[i].view.trace_on = true
+		s.nodes[i].view.trace_record_id = 0x7e5 // both default -> collide
+	}
+	assert errs(validate_system(s)).any(it.contains('trace record id 0x7e5')
+		&& it.contains('single-writer')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-004: a DISABLED [nm] block with a named alive binding needs no DBC —
+// loom2v resolves no binding for an inactive NM, so it must not be a load error.
+fn test_named_alive_inactive_nm_no_dbc_ok() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_inactnm_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// no [target] threadx -> nm_enabled = false, so the named alive is inert
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[bus.can0]
+interface = "can0"
+fd = false
+core = 0
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "t" # trailing comment (vlang/v#27684)
+[nm]
+node  = 0x11
+alive = "AliveMsg"
+peers = [0x500, 0x53F]
+') or { panic(err) }
+	os.write_file(os.join_path(dir, 'system.toml'), '
+[bus.compute]
+interface = "can0"
+[[node]]
+name = "a"
+ecu = "n.toml"
+buses = ["compute"]
+nm = 0x11
+trace = 1
+') or { panic(err) }
+	mut sys := parse_system(os.join_path(dir, 'system.toml')) or { panic(err) }
+	load_errs := sys.load_nodes()
+	assert !load_errs.any(it.contains('alive')), 'inactive NM named alive must not require a DBC: ${load_errs}'
 }

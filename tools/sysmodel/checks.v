@@ -651,6 +651,18 @@ fn nm_timing_effective(v NodeView, param string) int {
 fn check_routes(s System) []Issue {
 	mut issues := []Issue{}
 	for r in s.routes {
+		// P1 does NOT generate cross-bus routing: sysgen never passes a system route
+		// into a node's ecu.toml, and loom2v only parses node-local [[route]] entries
+		// (raw-frame-only). So a system route — a SIGNAL route especially — would let
+		// syscheck pass while no gateway forwards it at runtime. Reject it until the
+		// gateway wiring is generated (P2). The well-formedness checks below still run
+		// so a malformed route is caught too, ready for when generation lands.
+		kind := if r.signal != '' { 'signal' } else { 'frame' }
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-006'
+			msg:      'route on "${r.gateway}" (${kind} "${r.signal}${r.frame}", ${r.from} -> ${r.to}): cross-bus routing is not generated in P1 — sysgen/loom2v do not emit system routes yet (P2), so a clean verdict would not imply a forwarder exists'
+		}
 		mut gw := ?Node(none)
 		for n in s.nodes {
 			if n.name == r.gateway {

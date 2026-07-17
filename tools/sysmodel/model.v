@@ -101,6 +101,13 @@ pub mut:
 	// per local-bus-interface FD flag: loom2v's threadx FDCAN backend is
 	// classic-only, so a threadx node on an fd = true telemetry bus can't build.
 	local_bus_fd map[string]bool
+	// [trace]: a threadx node streams the raw exec-hook trace as ONE frame per
+	// record (record_id, default 0x7e5) on the telemetry channel — a REAL tx frame
+	// that must not collide with telemetry/application/NM ids (REQ-TOPO-002). (The
+	// cmd/rsp/dump_fc protocol is host-only, not emitted on the threadx target.)
+	trace_on          bool
+	trace_record_id   u32
+	trace_record_name string // a DBC message NAME binding (resolved against the bus DBC)
 	// NM timing presence: loom2v applies its default only when the KEY is ABSENT,
 	// so an explicit 0 must be preserved (not normalized to the default).
 	nm_has_msg_cycle  bool
@@ -263,7 +270,10 @@ pub fn (mut s System) load_nodes() []string {
 		// separate name/number maps would miss (REQ-TOPO-002). On success the
 		// binding is cleared; if it can't be resolved it stays for the name-level
 		// fallback check (two nodes naming the same message collide even undecoded).
-		if s.nodes[i].view.alive_binding != '' {
+		// Only for an ACTIVE NM node: loom2v's parse_nm returns early for enabled =
+		// false (and a non-threadx node emits no NM), so an inactive [nm] has no live
+		// alive id to resolve — requiring a DBC there would reject a buildable node.
+		if s.nodes[i].view.alive_binding != '' && s.nodes[i].view.nm_enabled {
 			name := s.nodes[i].view.alive_binding
 			// a named alive binding MUST resolve to a numeric CAN id (loom2v does),
 			// or its collision + in-range checks are silently skipped. An NM bus with
@@ -392,6 +402,25 @@ pub fn load_node(path string) !NodeView {
 		// so an omitted id still transmits at 0 — see check_telemetry_frames).
 		v.telem_id = m_u32(tm, 'id')
 		v.telem_detail_id = m_u32(tm, 'detail_id')
+	}
+	// [trace] — for the threadx target this streams the exec-hook record frame on
+	// the telemetry channel (record_id, default 0x7e5). parse_trace defaults an
+	// omitted `enabled` to TRUE when the block is present.
+	if trv := doc.value_opt('trace') {
+		trm := trv.as_map()
+		v.trace_on = (trm['enabled'] or { toml.Any(true) }).bool()
+		if v.trace_on {
+			if rv := trm['record'] {
+				if rv is string {
+					v.trace_record_name = rv // a DBC name; resolved in the check
+					v.trace_record_id = 0x7e5
+				} else {
+					v.trace_record_id = u32(rv.int())
+				}
+			} else {
+				v.trace_record_id = 0x7e5
+			}
+		}
 	}
 	// [nm] cluster + identity
 	if nmv := doc.value_opt('nm') {
