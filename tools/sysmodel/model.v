@@ -81,7 +81,8 @@ pub mut:
 	has_alive  bool // whether [nm].alive was declared (alive = 0 is a valid CAN id)
 	peers_lo   u32
 	peers_hi   u32
-	has_nm     bool
+	has_nm     bool // an [nm] table is present
+	nm_enabled bool // [nm].enabled (default true) — false = a non-participant node
 	// the node's FULL per-node gate result (tools/ecucheck: unknown keys, wrong
 	// types, structural rules) — a system can't be clean if a node can't build.
 	config_errors []string
@@ -97,10 +98,11 @@ pub mut:
 // System — the whole parsed system.toml plus each node's loaded view.
 pub struct System {
 pub mut:
-	buses  []Bus
-	nodes  []Node
-	routes []Route
-	dir    string // directory of system.toml (node/dbc paths resolve against it)
+	buses        []Bus
+	nodes        []Node
+	routes       []Route
+	unknown_keys []string // top-level sections that aren't part of the schema (typos)
+	dir          string   // directory of system.toml (node/dbc paths resolve against it)
 }
 
 fn m_str(m map[string]toml.Any, key string) string {
@@ -126,6 +128,15 @@ pub fn parse_system(path string) !System {
 	doc := toml.parse_file(path) or { return error('sysmodel: parse ${path}: ${err}') }
 	mut sys := System{
 		dir: os.dir(path)
+	}
+	// flag unknown top-level sections (a misspelled [[nodes]] would otherwise
+	// parse to zero nodes and pass silently). `signal` is the dissolution's
+	// system-scope signal section (forward-compatible with the composed model).
+	allowed := ['bus', 'node', 'route', 'signal']
+	for key, _ in doc.to_any().as_map() {
+		if key !in allowed {
+			sys.unknown_keys << key
+		}
 	}
 	// [bus.<name>] — a table of tables keyed by name
 	if bv := doc.value_opt('bus') {
@@ -275,10 +286,22 @@ pub fn load_node(path string) !NodeView {
 	if nmv := doc.value_opt('nm') {
 		m := nmv.as_map()
 		v.has_nm = true
+		// [nm] enabled = false = a declared-but-inactive NM (loom2v emits no NM):
+		// a non-participant, so the cluster/alive/allocation checks skip it.
+		v.nm_enabled = (m['enabled'] or { toml.Any(true) }).bool()
 		v.has_nm_node = 'node' in m // node id 0 is valid — distinguish from absent
 		v.nm_node = m_u32(m, 'node')
-		v.alive = m_u32(m, 'alive')
-		v.has_alive = 'alive' in m // alive = 0 is a valid CAN id — distinguish from absent
+		// alive may be a NUMERIC literal OR a DBC message NAME (loom2v resolves the
+		// binding). Only the numeric form feeds the id uniqueness/range checks; a
+		// named binding is left to loom2v (has_alive stays false).
+		if av := m['alive'] {
+			if av is string {
+				// named binding — not a numeric id we can range-check here
+			} else {
+				v.alive = u32(av.int())
+				v.has_alive = true
+			}
+		}
 		v.nm_msg_cycle_ms = m_int(m, 'msg_cycle_ms')
 		v.nm_timeout_ms = m_int(m, 'timeout_ms')
 		v.nm_repeat_ms = m_int(m, 'repeat_ms')
