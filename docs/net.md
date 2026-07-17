@@ -136,3 +136,45 @@ builds** (REQ-NET-010/011).
 
 See [[functional-scope]] (Ethernet = NetX Duo), [[bootloader-phase]] (DoIP OTA
 path), docs/multi-node.md (the diag bus tier), docs/no-alloc.md (tier-1 pools).
+
+## P1 implementation status (2026-07-17)
+
+**Vendored + build-wired.** NetX Duo is cloned + pinned under `third_party/netxduo`
+via `make deps` (`NETXDUO_PIN`, alongside ThreadX). Its Cortex-M7/GNU port
+(`ports/cortex_m7/gnu`) matches the H735, and `common/inc/nx_api.h` is the stack
+API. The structural reference for our driver is NetX's own RAM driver
+(`test/regression/test/nx_ram_network_driver_test_1500.c`) — it shows the exact
+`_nx_driver_*` command dispatch we mirror.
+
+**P1 = link + ping** (REQ-NET-003/004): a packet pool + IP instance + ICMP, over
+the STM32H7 ETH MAC/DMA + LAN8742A RMII driver. The stack above is vendored; the
+driver (`boards/h735dk/eth.c` register-level + `net/nx_driver_stm32h7.c` NetX glue)
+is the one new hardware bring-up.
+
+### BLOCKING INPUT — confirm the RMII pinout from the MB1520 schematic
+
+The driver muxes 9 RMII pins + the LAN8742A MDIO address; these are board-specific
+and MUST come from the schematic (schematic_pack/mb1520-h735i-b02, UM2679). A web
+search returned an **inconsistent / possibly RGMII-confused** result — DO NOT trust
+it. Fill this table from the schematic, then the driver's pin-config block is the
+only hardware-specific part:
+
+| RMII signal | STM32H735 pin (CONFIRM) | web-search guess (UNVERIFIED) |
+| --- | --- | --- |
+| REF_CLK  | ? | PA1 |
+| MDIO     | ? | PA2 |
+| MDC      | ? | PC1 (search said PC4 — suspect) |
+| CRS_DV   | ? | PA7 (search said PA3 — suspect) |
+| RXD0     | ? | PC4 |
+| RXD1     | ? | PC5 |
+| TX_EN    | ? | PG11 (search said PB10 — suspect) |
+| TXD0     | ? | PG13 (search said PB11 — suspect) |
+| TXD1     | ? | PG12 (search said PB12 — suspect) |
+| LAN8742A MDIO/SMI address | ? | 0x00 (typical) |
+| PHY nRST (if any) | ? | — |
+
+Once these are confirmed, the driver is: (1) RCC clock the ETH + mux these pins,
+(2) LAN8742 soft-reset + auto-neg, (3) MAC + DMA descriptor rings from static
+memory, (4) ISR → `_nx_ip_packet_receive`, TX descriptor kick, (5) NetX IP +
+ICMP + a ping. D-cache is off (docs/no-alloc.md), which removes the DMA
+clean/invalidate dance.
