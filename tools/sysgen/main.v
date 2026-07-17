@@ -142,7 +142,7 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		// tx cadence is configured once (validated to agree in check_signals_dissolved).
 		if sig.frame != '' && sig.frame !in emitted_frames {
 			emitted_frames[sig.frame] = true
-			cyc := if sig.cycle_ms > 0 { sig.cycle_ms } else { 100 }
+			cyc := sysmodel.effective_cycle_ms(sig.cycle_ms)
 			b << '  [[frame]]'
 			b << '  name = "${sig.frame}"'
 			b << '  bus  = "${bus.interface}"'

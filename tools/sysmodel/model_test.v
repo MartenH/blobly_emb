@@ -712,7 +712,52 @@ fn test_dissolved_frame_cycle_conflict() {
 	s.signals[1].cycle_ms = 50
 	s.nodes[0].view.fb_writes = ['Speed', 'Rpm'] // a produces both
 	s.nodes[1].view.fb_writes = []
-	assert errs(validate_system_gen(s)).any(it.contains('disagree on cycle_ms'))
+	assert errs(validate_system_gen(s)).any(it.contains('disagree on cycle'))
+}
+
+// REQ-TOPO-001: a shared frame where one signal omits cycle_ms (defaults to 100)
+// and another sets 50 — the effective cadences conflict.
+fn test_dissolved_frame_effective_cycle_conflict() {
+	mut s := clean_dissolved()
+	s.signals[0].producer = 'a'
+	s.signals[0].cycle_ms = 0 // -> effective 100
+	s.signals[1].producer = 'a'
+	s.signals[1].frame = 'SpeedFrame'
+	s.signals[1].cycle_ms = 50
+	s.nodes[0].view.fb_writes = ['Speed', 'Rpm']
+	s.nodes[1].view.fb_writes = []
+	assert errs(validate_system_gen(s)).any(it.contains('disagree on cycle') && it.contains('effective'))
+}
+
+// REQ-TOPO-003: a signal whose name is not an SG_ in its DBC frame.
+fn test_dbc_signal_not_in_frame() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_sg_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// SpeedFrame carries SG_ "Velocity", not "Speed"
+	bad := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Velocity : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
+	s := dissolved_with_dbc(dir, bad)
+	assert errs(check_dbc_conformance(s)).any(it.contains('has no SG_ named "Speed"'))
+}
+
+// REQ-TOPO-003: a signal whose field width disagrees with the DBC SG_ width.
+fn test_dbc_signal_width_mismatch() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_w_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// Speed's field is u16 (16 bits) but the DBC SG_ is 8 bits
+	bad := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|8@1+ (1,0) [0|255] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
+	s := dissolved_with_dbc(dir, bad)
+	assert errs(check_dbc_conformance(s)).any(it.contains('16 bits') && it.contains('8 bits'))
+}
+
+// REQ-TOPO-005: a partial authoring a bus-endpoint [[signal]] with NO [bus.*].
+fn test_dissolved_partial_signal_without_bus_table() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.authored_signals = true // authored a [[signal]] (no [bus])
+	assert errs(validate_system_gen(s)).any(it.contains('authors bus wiring') && it.contains('[[signal]]'))
 }
 
 // REQ-TOPO-001: a consumer that reads a signal but isn't on its bus.
