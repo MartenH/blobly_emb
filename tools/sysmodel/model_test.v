@@ -394,7 +394,7 @@ BO_ 288 StatusFrame: 8 a
 			},
 		]
 	}
-	assert errs(check_frame_single_writer(s)).any(it.contains('frame "status_frame"')
+	assert errs(check_frame_single_writer(s)).any(it.contains('frame "StatusFrame"')
 		&& it.contains('one frame owner')), errs(check_frame_single_writer(s)).str()
 }
 
@@ -1933,7 +1933,7 @@ fn test_app_frame_in_nm_range_is_error() {
 
 BU_: a
 
-BO_ 1297 SpeedFrame: 8 a
+BO_ 1312 SpeedFrame: 8 a
  SG_ Speed : 0|32@1+ (1,0) [0|4294967295] "" a
 ') or { panic(err) }
 	mut s := System{
@@ -1960,4 +1960,119 @@ BO_ 1297 SpeedFrame: 8 a
 	}
 	assert errs(check_telemetry_frames(s)).any(it.contains('SpeedFrame')
 		&& it.contains('NM peer range')), errs(check_telemetry_frames(s)).str()
+}
+
+// --- codex #141 round-20 fixes ---
+
+// REQ-TOPO-002: a DBC message BOUND as [nm].alive IS the alive frame, so it must
+// NOT be flagged as an application frame in the NM peer range.
+fn test_alive_bound_frame_not_flagged_as_app() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_alivebind_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// AliveMsg at 0x511 (inside the cluster range) is the alive frame, not an app frame
+	os.write_file(os.join_path(dir, 'compute.dbc'), 'VERSION ""
+
+BU_: a
+
+BO_ 1297 AliveMsg: 8 a
+ SG_ X : 0|8@1+ (1,0) [0|255] "" a
+') or { panic(err) }
+	mut s := System{
+		dir:   dir
+		buses: [Bus{
+			name:      'compute'
+			interface: 'can0'
+			dbc:       'compute.dbc'
+		}]
+		nodes: [Node{
+			name:  'a'
+			buses: ['compute']
+			view:  NodeView{
+				has_nm:      true
+				nm_enabled:  true
+				nm_bus:      'can0'
+				peers_lo:    0x500
+				peers_hi:    0x53f
+				alive:       0x511 // resolved from the AliveMsg binding
+				has_alive:   true
+				local_buses: ['can0']
+			}
+		}]
+	}
+	assert !errs(check_telemetry_frames(s)).any(it.contains('AliveMsg')
+		&& it.contains('NM peer range')), errs(check_telemetry_frames(s)).str()
+}
+
+// REQ-TOPO-001: two differently-NAMED DBC messages at the SAME CAN id are one wire
+// frame — two nodes each producing into one of them collide (ownership keyed by id).
+fn test_frame_owner_keyed_by_can_id() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dupframe_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// FrameA and FrameB both at CAN id 0x120
+	os.write_file(os.join_path(dir, 'compute.dbc'), 'VERSION ""
+
+BU_: a b
+
+BO_ 288 FrameA: 8 a
+ SG_ A : 0|8@1+ (1,0) [0|255] "" b
+
+BO_ 288 FrameB: 8 b
+ SG_ B : 0|8@1+ (1,0) [0|255] "" a
+') or { panic(err) }
+	mut s := System{
+		dir:   dir
+		buses: [Bus{
+			name:      'compute'
+			interface: 'can0'
+			dbc:       'compute.dbc'
+		}]
+		nodes: [
+			Node{
+				name:  'a'
+				buses: ['compute']
+				view:  NodeView{
+					produces:    {
+						'can0': ['A']
+					}
+					local_buses: ['can0']
+				}
+			},
+			Node{
+				name:  'b'
+				buses: ['compute']
+				view:  NodeView{
+					produces:    {
+						'can0': ['B']
+					}
+					local_buses: ['can0']
+				}
+			},
+		]
+	}
+	assert errs(check_frame_single_writer(s)).any(it.contains('one frame owner')
+		&& it.contains('288')), errs(check_frame_single_writer(s)).str()
+}
+
+// REQ-TOPO-002: a host node with a node-local [[route]] builds WITHOUT trace
+// (loom2v trace_host needs routes.len == 0), so its trace ids are not reserved.
+fn test_host_route_disables_trace_reservation() {
+	mut s := clean_system()
+	for i in 0 .. 2 {
+		s.nodes[i].view.is_threadx = false
+		s.nodes[i].view.has_telemetry = false
+		s.nodes[i].view.trace_on = true
+		s.nodes[i].view.trace_bus = 'can0'
+		s.nodes[i].view.trace_record_id = 0x7e5
+		s.nodes[i].view.partition_count = 1
+		s.nodes[i].view.has_route = true // a node-local route -> no host trace
+		s.nodes[i].view.produces = map[string][]string{}
+		s.nodes[i].view.consumes = map[string][]string{}
+	}
+	assert !errs(validate_system(s)).any(it.contains('trace record id 0x7e5')), errs(validate_system(s)).str()
 }
