@@ -767,6 +767,108 @@ fn test_local_nm_node_out_of_range() {
 	assert errs(validate_system(s)).any(it.contains('outside the 0..255 range loom2v requires'))
 }
 
+// --- codex #141 round-7 fixes ---
+
+// REQ-TOPO-005: a threadx node with no [telemetry] bus can't be generated.
+fn test_threadx_requires_telemetry() {
+	mut s := clean_system()
+	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.has_telemetry = false
+	assert errs(validate_system(s)).any(it.contains('no [telemetry] bus'))
+}
+
+// REQ-TOPO-006: a route missing an endpoint (only `from`, no `to`).
+fn test_route_missing_endpoint() {
+	mut s := clean_system()
+	s.routes << Route{
+		gateway: 'sysnode'
+		frame:   'Status'
+		from:    'compute'
+		// no `to`
+	}
+	assert errs(validate_system(s)).any(it.contains('needs both `from` and `to`'))
+}
+
+// REQ-TOPO-002: two active nodes naming the same alive DBC binding collide.
+fn test_named_alive_binding_collision() {
+	mut s := clean_system()
+	s.nodes[0].view.has_alive = false
+	s.nodes[0].view.alive_binding = 'AliveMsg'
+	s.nodes[1].view.has_alive = false
+	s.nodes[1].view.alive_binding = 'AliveMsg' // same message name
+	assert errs(validate_system(s)).any(it.contains('alive binding "AliveMsg"') && it.contains('resolves to one CAN id'))
+}
+
+// REQ-TOPO-004: an omitted [nm].peers defaults to loom2v's 0x500..0x53f (so the
+// derived alive is in range) — a load round-trip confirms the default.
+fn test_omitted_peers_defaults() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_peers_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[bus.can0]
+interface = "can0"
+fd = false
+core = 0
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "t" # (vlang/v#27684)
+[nm]
+node = 0x11
+[target]
+kind = "threadx"
+[telemetry]
+enabled = true
+bus = "can0"
+id = 0x7E0
+detail_id = 0x7E1
+period_ms = 500
+') or { panic(err) }
+	view := load_node(os.join_path(dir, 'n.toml')) or { panic(err) }
+	assert view.peers_lo == 0x500 && view.peers_hi == 0x53f, 'omitted peers -> loom2v default'
+	assert view.alive == 0x511, 'derived alive = 0x500 + 0x11'
+}
+
+// REQ-TOPO-004: a gateway with NO [nm].bus runs NM on its telemetry bus.
+fn test_implicit_nm_bus_is_telemetry() {
+	mut s := clean_system()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[0].buses = ['compute', 'edge']
+	s.nodes[0].view.local_buses = ['can0', 'can1']
+	s.nodes[0].view.nm_bus = 'can0' // resolved from telemetry bus (no explicit nm.bus)
+	s.nodes << Node{
+		name:  'zone'
+		buses: ['edge']
+		nm:    0x21
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace: 3
+		view:  NodeView{
+			has_nm:      true
+			nm_enabled:  true
+			nm_node:     0x21
+			has_nm_node: true
+			nm_node_ok:  true
+			nm_bus:      'can1'
+			alive:       0x521
+			has_alive:   true
+			peers_lo:    0x510
+			peers_hi:    0x5ff
+			local_buses: ['can1']
+		}
+	}
+	// the gateway's NM runs on compute (its telemetry bus), so edge's different
+	// range must NOT clash with it
+	assert !errs(validate_system(s)).any(it.contains('cluster range mismatch')), 'implicit nm.bus = telemetry bus'
+}
+
 // parse_system + load_node round-trip on a written system.toml + node ecu.toml.
 fn test_parse_and_load_roundtrip() {
 	dir := os.join_path(os.temp_dir(), 'sysmodel_test_${os.getpid()}')
