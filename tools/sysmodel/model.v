@@ -144,6 +144,9 @@ pub mut:
 	// for the SINGLE-partition host shape (trace_host), so a multi-partition host
 	// node emits no trace frames.
 	partition_count int
+	// a node-local [[route]]: loom2v's trace_host also requires routes.len == 0, so
+	// a routed host node builds WITHOUT trace (its trace frames are not on the wire).
+	has_route bool
 	// NM timing presence: loom2v applies its default only when the KEY is ABSENT,
 	// so an explicit 0 must be preserved (not normalized to the default).
 	nm_has_msg_cycle  bool
@@ -422,6 +425,10 @@ pub fn load_node(path string) !NodeView {
 	// [[partition]] count — host trace generation needs the single-partition shape.
 	if pv := doc.value_opt('partition') {
 		v.partition_count = pv.array().len
+	}
+	// a node-local [[route]] disables host trace generation (loom2v trace_host).
+	if _ := doc.value_opt('route') {
+		v.has_route = true
 	}
 	// [[signal]] from/to a bus = consume/produce on that bus (keyed by interface)
 	if sv := doc.value_opt('signal') {

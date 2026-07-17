@@ -69,7 +69,10 @@ fn trace_generated(n Node) bool {
 		return n.view.comm_thread_on
 	}
 	host := !n.view.is_baremetal // no target / host runner
+	// loom2v's trace_host also requires no bridge (COM signal / ISO-TP) AND no
+	// node-local route — otherwise it warns and builds WITHOUT trace.
 	return host && n.view.partition_count <= 1 && !node_has_bus_signal(n) && !n.view.has_isotp
+		&& !n.view.has_route
 }
 
 // is_trace_host reports the single-partition HOST trace-runner shape: loom2v's
@@ -198,24 +201,26 @@ fn check_threadx_signal_layout(s System) []Issue {
 	return issues
 }
 
-// message_of_signal returns the snake-normalized DBC message name that carries a
-// signal (SG_), or none if the signal is in no message.
-fn message_of_signal(db candb.Database, signame string) ?string {
+// message_of_signal returns the DBC message that carries a signal (SG_) — its
+// name and on-wire CAN id/format — or none if the signal is in no message.
+fn message_of_signal(db candb.Database, signame string) ?candb.Message {
 	for m in db.messages {
 		for sg in m.signals {
 			if sg.name == signame {
-				return snake(m.name)
+				return m
 			}
 		}
 	}
 	return none
 }
 
-// check_frame_single_writer: each CAN frame (DBC message) on a bus has exactly one
-// transmitting node. loom2v emits a frame only when a node PRODUCES a signal that
-// maps to it (`tx_by_msg`), NOT merely because a [[frame]] tx-policy block names
-// it — so ownership is derived from each node's actual `to = <bus>` signals
-// resolved to their DBC messages, not from tx-config presence (REQ-TOPO-001).
+// check_frame_single_writer: each CAN frame on a bus has exactly one transmitting
+// node. loom2v emits a frame only when a node PRODUCES a signal that maps to it
+// (`tx_by_msg`), NOT merely because a [[frame]] tx-policy block names it — so
+// ownership is derived from each node's actual `to = <bus>` signals resolved to
+// their DBC messages. Keyed by on-wire CAN ID + format (candb accepts duplicate
+// BO_ ids, and two differently-named messages at one id are the SAME wire frame)
+// (REQ-TOPO-001).
 fn check_frame_single_writer(s System) []Issue {
 	mut issues := []Issue{}
 	for bus in s.buses {
@@ -224,27 +229,30 @@ fn check_frame_single_writer(s System) []Issue {
 		}
 		path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(s.dir, bus.dbc) }
 		db := candb.load_dbc_file(path) or { continue }
-		mut owners := map[string][]string{} // message name -> distinct node names
+		mut owners := map[string][]string{} // "<id>:<ext>" -> distinct node names
+		mut label := map[string]string{} // key -> a readable frame name for the message
 		for n in s.nodes {
 			if bus.name !in n.buses {
 				continue
 			}
-			mut seen := map[string]bool{} // one message per node even if it writes >1 SG
+			mut seen := map[string]bool{} // one frame per node even if it writes >1 SG
 			for sig in n.view.produces[bus.interface] {
-				msg := message_of_signal(db, sig) or { continue }
-				if msg in seen {
+				m := message_of_signal(db, sig) or { continue }
+				key := '${m.id}:${m.ext}'
+				label[key] = m.name
+				if key in seen {
 					continue
 				}
-				seen[msg] = true
-				owners[msg] << n.name
+				seen[key] = true
+				owners[key] << n.name
 			}
 		}
-		for fr, nodes in owners {
+		for key, nodes in owners {
 			if nodes.len > 1 {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-001'
-					msg:      'bus "${bus.name}": frame "${fr}" transmitted by ${nodes.len} nodes (${nodes.join(', ')}) — one frame owner per bus'
+					msg:      'bus "${bus.name}": frame "${label[key]}" (CAN id ${key}) transmitted by ${nodes.len} nodes (${nodes.join(', ')}) — one frame owner per bus'
 				}
 			}
 		}
@@ -378,19 +386,25 @@ fn check_telemetry_frames(s System) []Issue {
 		mut lo := u32(0)
 		mut hi := u32(0)
 		mut have := false
+		// the alive ids legitimately in the range (a node may BIND [nm].alive to a
+		// DBC message — loom2v emits that message AS the alive frame, so it is not an
+		// application frame and must not be flagged here).
+		mut alive_ids := map[u32]bool{}
 		for n in s.nodes {
 			if n.view.has_nm && n.view.nm_enabled && n.view.nm_bus == bus.interface {
 				lo = n.view.peers_lo
 				hi = n.view.peers_hi
 				have = true
-				break
+				if n.view.has_alive {
+					alive_ids[n.view.alive] = true
+				}
 			}
 		}
 		if !have {
 			continue
 		}
 		for m in db.messages {
-			if m.id >= lo && m.id <= hi {
+			if m.id >= lo && m.id <= hi && m.id !in alive_ids {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-002'
