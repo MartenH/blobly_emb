@@ -25,3 +25,4 @@ third_party/
 # bare-metal example build output
 examples/**/build/
 examples/**/gen/.stamp
+examples/system_bench/gen-*.toml
