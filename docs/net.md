@@ -96,14 +96,29 @@ stack above it is vendored.
 
 DoIP is a remote attack surface in a way ISO-TP-over-CAN is not (routable, often
 internet-adjacent via the master node). The boot's asymmetric authenticity
-already defends the *image* (Ed25519 signed, 0x29 gated — [[bootloader-phase]]),
-so an attacker who reaches the DoIP port still cannot install an unsigned image.
-Beyond that, P3+ must consider: the DoIP entity's access control (the 0x29
-session gate carries over the transport), rate-limiting/SYN-flood resistance
-(bounded pools already cap resource exhaustion to "drop", not crash), and — later
-— **TLS** for the diag channel (again vendored, given a pool; never hand-rolled).
-Confidentiality of diagnostics is out of scope for P1–P4; authenticity of the
-image is already in.
+defends the *image* (Ed25519 signed, 0x29 gated — [[bootloader-phase]]) — but
+that protection is **conditional on a provisioned key**, and normal diagnostics
+are **not** gated by it. Two things must therefore be closed BEFORE the
+programming/diag path is exposed over IP, not after:
+
+- **A trust anchor is mandatory on an IP build (REQ-NET-011).** `boot.Prog` treats
+  an all-zero `image_key` as a keyless/open build and *skips* signature
+  verification (`test_keyless_build_flashes_open` covers that mode) — fine for a
+  closed bench, catastrophic if reachable over a routed network. An IP-enabled
+  build must refuse to boot the programming path with an unset image key.
+- **Diagnostic writes need authentication (REQ-NET-012).** The 0x29 gate lives in
+  `boot.Prog`; the application UDS server (`uds.Server.handle`) currently accepts
+  `0x2E WriteDataByIdentifier` on any writable DID with no auth. Over CAN that is
+  a physically-present adversary; over IP, reachability alone would grant write
+  access. The app diag server needs an authenticated-session gate (the same 0x29
+  primitive, or a session-based access control) before it is externally reachable.
+
+Beyond those, P3+ must consider: rate-limiting/SYN-flood resistance (bounded
+pools already cap resource exhaustion to "drop", not crash) and — later — **TLS**
+for the diag channel (again vendored, given a pool; never hand-rolled).
+Confidentiality of diagnostics is out of scope for P1–P4; image authenticity is
+in **once the trust anchor is provisioned and the keyless bypass is closed on IP
+builds** (REQ-NET-010/011).
 
 ## Open questions (for when the phase starts)
 

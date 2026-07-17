@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 134 | 68 | 5 | 61 | 0 |
+| 143 | 68 | 5 | 70 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -80,6 +80,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-008 | QM | test | uncovered | — |
 | REQ-NET-009 | QM | test | uncovered | — |
 | REQ-NET-010 | QM | test | uncovered | — |
+| REQ-NET-011 | QM | test | uncovered | — |
+| REQ-NET-012 | QM | test | uncovered | — |
 | REQ-NM-001 | QM | test | verified | nm_test.v (pass) |
 | REQ-NM-002 | QM | test | verified | module_test.v (pass), nm_test.v (pass) |
 | REQ-NM-003 | QM | test | verified | module_test.v (pass), nm_can_test.v (pass), nm_test.v (pass) |
@@ -133,6 +135,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-OBS-001 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-OBS-002 | QM | test | uncovered | — |
 | SYS-REQ-OBS-003 | QM | test | verified | ↳ derived (all children verified) |
+| SYS-REQ-TOPO-001 | QM | analysis | uncovered | — |
 | SYS-REQ-NET-001 | QM | test | uncovered | — |
 | REQ-TELEM-001 | QM | test | verified | loom_test.v (pass) |
 | REQ-TELEM-002 | QM | test | verified | telem_test.v (pass) |
@@ -143,6 +146,12 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TRACE-002 | QM | test | verified | h755-external-partitions (approved) |
 | REQ-TRACE-008 | QM | test | uncovered | — |
 | REQ-TRACE-009 | QM | test | uncovered | — |
+| REQ-TOPO-001 | QM | test | uncovered | — |
+| REQ-TOPO-002 | QM | test | uncovered | — |
+| REQ-TOPO-003 | QM | test | uncovered | — |
+| REQ-TOPO-004 | QM | test | uncovered | — |
+| REQ-TOPO-005 | QM | analysis | uncovered | — |
+| REQ-TOPO-006 | QM | test | uncovered | — |
 | REQ-TP-001 | QM | test | uncovered | — |
 | REQ-TP-002 | QM | test | uncovered | — |
 | REQ-WDG-001 | B | test | verified | wdg_test.v (pass) |
@@ -219,6 +228,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-008 | | | | | | | | | |
 | REQ-NET-009 | | | | | | | | | |
 | REQ-NET-010 | | | | | | | | | |
+| REQ-NET-011 | | | | | | | | | |
+| REQ-NET-012 | | | | | | | | | |
 | REQ-NM-001 | | | | | | | ✓ | | |
 | REQ-NM-002 | | | | | | | ✓ | | |
 | REQ-NM-003 | | | | | | | ✓ | | |
@@ -272,6 +283,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-OBS-001 | | | | | | | | | |
 | SYS-REQ-OBS-002 | | | | | | | | | |
 | SYS-REQ-OBS-003 | | | | | | | | | |
+| SYS-REQ-TOPO-001 | | | | | | | | | |
 | SYS-REQ-NET-001 | | | | | | | | | |
 | REQ-TELEM-001 | | | | | | | ✓ | | |
 | REQ-TELEM-002 | | | | | | | ✓ | | |
@@ -282,6 +294,12 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TRACE-002 | | | | | ✓ | | | | |
 | REQ-TRACE-008 | | | | | | | | | |
 | REQ-TRACE-009 | | | | | | | | | |
+| REQ-TOPO-001 | | | | | | | | | |
+| REQ-TOPO-002 | | | | | | | | | |
+| REQ-TOPO-003 | | | | | | | | | |
+| REQ-TOPO-004 | | | | | | | | | |
+| REQ-TOPO-005 | | | | | | | | | |
+| REQ-TOPO-006 | | | | | | | | | |
 | REQ-TP-001 | | | | | | | | | |
 | REQ-TP-002 | | | | | | | | | |
 | REQ-WDG-001 | | | | | | | ✓ | | |
