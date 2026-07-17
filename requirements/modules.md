@@ -27,6 +27,7 @@ from each ID prefix (`REQ-<AREA>-NNN` / `SYS-REQ-<AREA>-NNN`).
 | **ecu** (Conductor) | ECU lifecycle states + deterministic init order + mode arbitration | ECU, INIT, MODE | ✅ |
 | **wdg** (Sentinel) | alive + deadline supervision, services the HW watchdog | WDG | ✅ |
 | **nvm** | non-volatile storage of calibration / state | MEM | future |
+| **topology** | multi-node system composition (nodes, ids, bus contract, cross-node checks) | TOPO | sketch |
 
 Cross-cutting (not a module — properties of the whole):
 

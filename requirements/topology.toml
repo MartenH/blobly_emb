@@ -1,0 +1,56 @@
+# TOPOLOGY — multi-node system composition (docs/multi-node.md). Sketch phase:
+# draft requirements for the cross-node guarantees a system view must enforce.
+
+[[req]]
+id = "REQ-TOPO-001"
+title = "Cross-node single writer"
+text = "Every signal exchanged between nodes shall be transmitted by exactly one node and received by at least one; a signal with no producer, or with more than one producer, shall be a generation-time error."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
+
+[[req]]
+id = "REQ-TOPO-002"
+title = "Node identity uniqueness"
+text = "Within a system, no two nodes shall share a network-management id, a diagnostic/boot address, or a trace node id; a collision shall be a generation-time error."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
+
+[[req]]
+id = "REQ-TOPO-003"
+title = "Bus-contract conformance"
+text = "Each node's frame and signal layout for a cross-node signal shall conform to the shared bus contract (id, length, bit layout, endianness) on both the transmitting and receiving side; a mismatch shall be a generation-time error."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
+
+[[req]]
+id = "REQ-TOPO-004"
+title = "Network-management cluster coherence"
+text = "All nodes of a system shall share one coherent network-management cluster (peer id range and sleep/wake parameters); an incoherent node shall be a generation-time error."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
+
+[[req]]
+id = "REQ-TOPO-005"
+title = "System-sourced generation with local application"
+text = "The cross-node contract (buses, cross-node signals, routes, identities) shall be declared once in the system composition, from which each node's system-facing wiring and the routing are generated; a node authors only its application (its function blocks and internal structure) and shall remain developable and unit-testable in isolation. The generator merges the system contract with each node's authored internals to produce that node's complete output; a node shall not re-declare the cross-node contract."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
+
+[[req]]
+id = "REQ-TOPO-006"
+title = "Cross-bus routing via a gateway"
+text = "A signal or frame required on a bus other than the one it is produced on shall be carried by a declared route on a gateway node that sits on both buses: a frame route forwards a PDU unchanged (valid on both bus contracts), a signal route decodes per the source bus contract and re-encodes per the destination bus contract. A cross-bus consumer with no producer on its bus and no route shall be a generation-time error."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
