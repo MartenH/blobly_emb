@@ -1155,3 +1155,67 @@ trace = 1
 	load_errs := sys.load_nodes()
 	assert load_errs.any(it.contains('no `dbc` to resolve')), load_errs.str()
 }
+
+// --- codex #141 round-11 fixes ---
+
+// REQ-TOPO-005: loom2v's parse_telemetry defaults an omitted `enabled` to false,
+// so [telemetry] with a bus but no enabled key does NOT give a threadx node its
+// telemetry channel — it fails the same way a missing [telemetry] does.
+fn test_telemetry_enabled_defaults_false() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_tenon_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[bus.can0]
+interface = "can0"
+fd = false
+core = 0
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "t" # trailing comment (vlang/v#27684)
+[target]
+kind    = "threadx"
+tick_ms = 1
+[telemetry]
+bus = "can0"
+') or { panic(err) }
+	view := load_node(os.join_path(dir, 'n.toml')) or { panic(err) }
+	assert !view.has_telemetry, 'omitted [telemetry].enabled must default to false (loom2v parse_telemetry)'
+}
+
+// REQ-TOPO-005: a threadx node's comm thread owns only the telemetry bus, so a
+// signal it produces/consumes on any other bus is not generatable.
+fn test_threadx_signal_off_telemetry_bus_is_error() {
+	mut s := clean_system()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[0].buses = ['compute', 'edge']
+	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.has_telemetry = true
+	s.nodes[0].view.telem_bus = 'can0'
+	s.nodes[0].view.nm_bus = 'can0'
+	s.nodes[0].view.local_buses = ['can0', 'can1']
+	s.nodes[0].view.produces['can1'] = ['Extra'] // a signal off the telemetry bus
+	assert errs(validate_system(s)).any(it.contains('on bus "can1"')
+		&& it.contains('owns only the telemetry bus')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-001: a threadx node whose telemetry interface is a local bus no system
+// bus declares transmits telemetry on an undeclared channel — flagged even with
+// no application signal on it.
+fn test_undeclared_telemetry_interface_is_error() {
+	mut s := clean_system()
+	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.has_telemetry = true
+	s.nodes[0].view.telem_bus = 'can9' // not a system bus interface
+	s.nodes[0].view.nm_bus = 'can9'
+	s.nodes[0].view.local_buses = ['can0', 'can9']
+	assert errs(validate_system(s)).any(it.contains('[bus.can9]')
+		&& it.contains('telemetry')), errs(validate_system(s)).str()
+}
