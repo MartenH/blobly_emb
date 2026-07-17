@@ -7,6 +7,8 @@
 // CLI can exit non-zero on an error and still surface warnings.
 module sysmodel
 
+import os
+
 pub enum Severity {
 	error
 	warning
@@ -27,6 +29,7 @@ pub fn validate_system(s System) []Issue {
 	mut issues := []Issue{}
 	issues << check_topology_wellformed(s)
 	issues << check_node_configs(s)
+	issues << check_node_generatable(s)
 	issues << check_bus_membership(s)
 	issues << check_identity_uniqueness(s)
 	issues << check_bus_single_writer(s)
@@ -93,6 +96,41 @@ fn check_topology_wellformed(s System) []Issue {
 			}
 		} else {
 			name_seen[n.name] = true
+		}
+	}
+	return issues
+}
+
+// check_node_generatable runs the REAL loom2v on each node with its bus DBC, so a
+// clean syscheck implies every node actually GENERATES — not just parses. loom2v
+// enforces the whole family of target-dependent constraints the manual checks
+// would otherwise each have to mirror (threadx comm bridge signal/id format, the
+// single-local-partition rule, comm-owner priority, trace-setting limits, the
+// telemetry-bus-exists rule, ISO-TP/routes). Shelling the generator keeps the gate
+// EXACT (REQ-TOPO-005). Cross-node checks (identity, single-writer, telemetry
+// ownership) stay separate — loom2v is per-node and cannot see a node's peers.
+fn check_node_generatable(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		node_path := if os.is_abs_path(n.ecu) { n.ecu } else { os.join_path(s.dir, n.ecu) }
+		if !os.exists(node_path) {
+			continue // a missing/unloadable node is already reported by load_nodes
+		}
+		// the node's bus DBC — loom2v resolves its external signals against it.
+		mut dbc_path := ''
+		if n.buses.len > 0 {
+			if b := s.bus_by_name(n.buses[0]) {
+				if b.dbc != '' {
+					dbc_path = if os.is_abs_path(b.dbc) { b.dbc } else { os.join_path(s.dir, b.dbc) }
+				}
+			}
+		}
+		for e in loom2v_errors(node_path, dbc_path) {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}" is not generatable: ${e}'
+			}
 		}
 	}
 	return issues
