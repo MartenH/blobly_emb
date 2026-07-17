@@ -50,8 +50,18 @@ pub mut:
 	nm_alloc_ok  bool // whether the allocated `nm` is in loom2v's 0..255 range
 	diag         Diag
 	trace        int
+	has_trace    bool // whether [[node]] declared `trace` (0 is a valid trace id)
 	// --- extracted from the node's ecu.toml (filled by load_node) ---
 	view NodeView
+}
+
+// IsotpConn — one [[isotp]] diagnostic connection: the local bus interface it
+// rides and its on-wire rx/tx CAN ids (0 is a valid id loom2v emits as configured).
+pub struct IsotpConn {
+pub mut:
+	iface string
+	rx_id u32
+	tx_id u32
 }
 
 // Route — a cross-bus forward on a gateway node. Exactly one of `frame`
@@ -129,10 +139,11 @@ pub mut:
 	trace_dump_fc_name  string
 	trace_dump_fc_bound bool // dump_fc reserves a RX id ONLY when explicitly bound
 	// [[isotp]] diagnostic connections: their rx_id/tx_id are on-wire diagnostic CAN
-	// ids (must be unique across nodes). loom2v ALSO cannot emit ISO-TP on the
-	// threadx comm thread (it panics), so a threadx node with any isotp can't build.
-	has_isotp bool
-	isotp_ids []u32
+	// ids (0 is valid — loom2v emits them as configured), reserved on the isotp bus.
+	// loom2v ALSO cannot emit ISO-TP on the threadx comm thread (it panics), so a
+	// threadx node with any isotp can't build.
+	has_isotp   bool
+	isotp_conns []IsotpConn
 	// [shell]: a threadx node transmits shell.out responses (default 0x7f1) on the
 	// comm channel — a REAL tx frame that must not collide with other bus ids.
 	shell_on       bool
@@ -272,6 +283,7 @@ pub fn parse_system(path string) !System {
 				ecu:          m_str(m, 'ecu')
 				nm:           u32(nm_raw)
 				has_nm_alloc: 'nm' in m
+				has_trace:    'trace' in m
 				nm_alloc_ok:  nm_raw >= 0 && nm_raw <= 255
 				trace:        m_int(m, 'trace')
 			}
@@ -517,13 +529,11 @@ pub fn load_node(path string) !NodeView {
 		for c in iv.array() {
 			cm := c.as_map()
 			v.has_isotp = true
-			rx := m_u32(cm, 'rx_id')
-			tx := m_u32(cm, 'tx_id')
-			if rx != 0 {
-				v.isotp_ids << rx
-			}
-			if tx != 0 {
-				v.isotp_ids << tx
+			bus := m_str(cm, 'bus')
+			v.isotp_conns << IsotpConn{
+				iface: key_iface[bus] or { bus }
+				rx_id: m_u32(cm, 'rx_id')
+				tx_id: m_u32(cm, 'tx_id')
 			}
 		}
 	}

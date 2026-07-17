@@ -43,6 +43,7 @@ fn clean_system() System {
 				has_nm_alloc: true
 				nm_alloc_ok:  true
 				trace: 1
+				has_trace: true
 				view:  NodeView{
 					produces:  {
 						'can0': ['Speed']
@@ -69,6 +70,7 @@ fn clean_system() System {
 				has_nm_alloc: true
 				nm_alloc_ok:  true
 				trace: 2
+				has_trace: true
 				view:  NodeView{
 					produces:  {
 						'can0': ['Rpm']
@@ -121,13 +123,13 @@ fn test_consumer_without_producer_is_error() {
 	assert e.any(it.contains('Torque') && it.contains('no node transmits')), e.str()
 }
 
-// REQ-TOPO-001: a produced signal nobody consumes is a WARNING, not an error.
-fn test_unused_producer_is_warning_only() {
+// REQ-TOPO-001: a produced cross-node signal with no receiver is an ERROR (every
+// transmitted signal must be received by at least one node).
+fn test_unconsumed_producer_is_error() {
 	mut s := clean_system()
 	s.nodes[0].view.produces['can0'] = ['Speed', 'Spare']
 	issues := validate_system(s)
-	assert errs(issues).len == 0, 'unused producer should not be an error: ${errs(issues)}'
-	assert issues.any(it.severity == .warning && it.msg.contains('Spare')), 'expected Spare warning'
+	assert errs(issues).any(it.contains('Spare') && it.contains('no node receives it')), errs(issues).str()
 }
 
 // REQ-TOPO-002: two nodes sharing an NM id is an error.
@@ -1429,8 +1431,14 @@ fn test_threadx_isotp_is_error() {
 // on the wire even when their system.toml diag allocations differ.
 fn test_isotp_id_collision_is_error() {
 	mut s := clean_system()
-	s.nodes[0].view.isotp_ids = [u32(0x700)]
-	s.nodes[1].view.isotp_ids = [u32(0x700)] // same on-wire diag id
+	s.nodes[0].view.isotp_conns = [IsotpConn{
+		iface: 'can0'
+		rx_id: 0x700
+	}]
+	s.nodes[1].view.isotp_conns = [IsotpConn{
+		iface: 'can0'
+		rx_id: 0x700
+	}] // same on-wire diag id
 	assert errs(validate_system(s)).any(it.contains('[[isotp]] diagnostic id 0x700')
 		&& it.contains('collides')), errs(validate_system(s)).str()
 }
@@ -2148,4 +2156,54 @@ fn test_unreadable_bus_dbc_is_error() {
 	}
 	assert errs(validate_system(s)).any(it.contains('cannot load declared DBC')
 		&& it.contains('missing.dbc')), errs(validate_system(s)).str()
+}
+
+// --- codex #141 round-22 fixes ---
+
+// REQ-TOPO-002: ISO-TP rx/tx ids include 0 (loom2v emits them as configured) —
+// two nodes both defaulting/using rx_id = 0 collide on the wire.
+fn test_isotp_id_zero_collides() {
+	mut s := clean_system()
+	s.nodes[0].view.isotp_conns = [IsotpConn{
+		iface: 'can0'
+		rx_id: 0
+		tx_id: 0x701
+	}]
+	s.nodes[1].view.isotp_conns = [IsotpConn{
+		iface: 'can0'
+		rx_id: 0
+		tx_id: 0x702
+	}] // both rx at 0
+	assert errs(validate_system(s)).any(it.contains('[[isotp]] diagnostic id 0x0')
+		&& it.contains('collides')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-002: an ISO-TP rx id is reserved on its bus — a telemetry frame at the
+// same id is misdelivered to the ISO-TP/UDS receiver.
+fn test_isotp_rx_reserved_vs_telemetry() {
+	mut s := clean_system()
+	// node 0 is a host node with an isotp rx at 0x7e0 on can0
+	s.nodes[0].view.isotp_conns = [IsotpConn{
+		iface: 'can0'
+		rx_id: 0x7e0
+		tx_id: 0x7e1
+	}]
+	// node 1 transmits telemetry at 0x7e0 -> misrouted into the ISO-TP receiver
+	s.nodes[1].view.has_telemetry = true
+	s.nodes[1].view.telem_bus = 'can0'
+	s.nodes[1].view.telem_id = 0x7e0
+	assert errs(validate_system(s)).any(it.contains('telemetry id 0x7e0')
+		&& it.contains('isotp rx (rx) id of "sysnode"')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-002: two nodes explicitly allocated trace = 0 share a trace id (0 is a
+// valid, declared trace node id — tracked by presence, not != 0).
+fn test_trace_id_zero_collides() {
+	mut s := clean_system()
+	s.nodes[0].trace = 0
+	s.nodes[0].has_trace = true
+	s.nodes[1].trace = 0
+	s.nodes[1].has_trace = true
+	assert errs(validate_system(s)).any(it.contains('trace node id 0')
+		&& it.contains('shared')), errs(validate_system(s)).str()
 }
