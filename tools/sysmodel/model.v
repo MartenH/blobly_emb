@@ -106,8 +106,11 @@ pub mut:
 	// that must not collide with telemetry/application/NM ids (REQ-TOPO-002). (The
 	// cmd/rsp/dump_fc protocol is host-only, not emitted on the threadx target.)
 	trace_on          bool
+	trace_bus         string // [trace].bus resolved to its interface (else the telemetry bus)
 	trace_record_id   u32
 	trace_record_name string // a DBC message NAME binding (resolved against the bus DBC)
+	trace_rsp_id      u32    // the TraceModule also transmits command RESPONSES (default 0x7e3)
+	trace_rsp_name    string
 	// [[isotp]] diagnostic connections: their rx_id/tx_id are on-wire diagnostic CAN
 	// ids (must be unique across nodes). loom2v ALSO cannot emit ISO-TP on the
 	// threadx comm thread (it panics), so a threadx node with any isotp can't build.
@@ -160,6 +163,19 @@ fn m_u32(m map[string]toml.Any, key string) u32 {
 
 fn m_bool(m map[string]toml.Any, key string) bool {
 	return (m[key] or { toml.Any(false) }).bool()
+}
+
+// binding_id reads a comm-module endpoint binding (trace record/rsp, shell out):
+// a numeric CAN id, a DBC message NAME (resolved later against the bus DBC), or
+// absent (the module default). Returns (id, name) — name empty unless a binding.
+fn binding_id(m map[string]toml.Any, key string, def u32) (u32, string) {
+	if v := m[key] {
+		if v is string {
+			return def, v
+		}
+		return u32(v.int()), ''
+	}
+	return def, ''
 }
 
 // parse_system reads a system.toml into a System (nodes not yet loaded — call
@@ -413,23 +429,18 @@ pub fn load_node(path string) !NodeView {
 		v.telem_id = m_u32(tm, 'id')
 		v.telem_detail_id = m_u32(tm, 'detail_id')
 	}
-	// [trace] — for the threadx target this streams the exec-hook record frame on
-	// the telemetry channel (record_id, default 0x7e5). parse_trace defaults an
+	// [trace] — the TraceModule transmits its record frame (record_id, default
+	// 0x7e5) AND command responses (rsp_id, default 0x7e3) on the trace bus (the
+	// telemetry bus, or [trace].bus for a host runner). parse_trace defaults an
 	// omitted `enabled` to TRUE when the block is present.
 	if trv := doc.value_opt('trace') {
 		trm := trv.as_map()
 		v.trace_on = (trm['enabled'] or { toml.Any(true) }).bool()
+		tb := m_str(trm, 'bus')
+		v.trace_bus = key_iface[tb] or { tb }
 		if v.trace_on {
-			if rv := trm['record'] {
-				if rv is string {
-					v.trace_record_name = rv // a DBC name; resolved in the check
-					v.trace_record_id = 0x7e5
-				} else {
-					v.trace_record_id = u32(rv.int())
-				}
-			} else {
-				v.trace_record_id = 0x7e5
-			}
+			v.trace_record_id, v.trace_record_name = binding_id(trm, 'record', 0x7e5)
+			v.trace_rsp_id, v.trace_rsp_name = binding_id(trm, 'rsp', 0x7e3)
 		}
 	}
 	// [[isotp]] — diagnostic/ISO-TP connections. rx_id/tx_id are on-wire diagnostic
@@ -454,16 +465,7 @@ pub fn load_node(path string) !NodeView {
 		sm := shv.as_map()
 		v.shell_on = (sm['enabled'] or { toml.Any(true) }).bool()
 		if v.shell_on {
-			if ov := sm['out'] {
-				if ov is string {
-					v.shell_out_name = ov // a DBC name; resolved in the check
-					v.shell_out_id = 0x7f1
-				} else {
-					v.shell_out_id = u32(ov.int())
-				}
-			} else {
-				v.shell_out_id = 0x7f1
-			}
+			v.shell_out_id, v.shell_out_name = binding_id(sm, 'out', 0x7f1)
 		}
 	}
 	// [nm] cluster + identity
