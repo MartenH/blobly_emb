@@ -92,6 +92,15 @@ pub mut:
 	is_baremetal  bool   // [target].kind == "baremetal" (loom2v rejects bus signals there)
 	has_telemetry bool   // a [telemetry] block with a bus (loom2v requires it for threadx)
 	telem_bus     string // [telemetry].bus resolved to its interface
+	// the telemetry frames the threadx comm thread transmits on the telemetry bus
+	// (CpuLoad + its detail). REAL tx ids: unique across nodes, not colliding with
+	// an application frame or the NM range (REQ-TOPO-002). CpuLoad is always sent
+	// (effective id, 0 if omitted); the detail only when detail_id != 0.
+	telem_id        u32
+	telem_detail_id u32
+	// per local-bus-interface FD flag: loom2v's threadx FDCAN backend is
+	// classic-only, so a threadx node on an fd = true telemetry bus can't build.
+	local_bus_fd map[string]bool
 	// NM timing presence: loom2v applies its default only when the KEY is ABSENT,
 	// so an explicit 0 must be preserved (not normalized to the default).
 	nm_has_msg_cycle  bool
@@ -256,8 +265,16 @@ pub fn (mut s System) load_nodes() []string {
 		// fallback check (two nodes naming the same message collide even undecoded).
 		if s.nodes[i].view.alive_binding != '' {
 			name := s.nodes[i].view.alive_binding
-			b := s.bus_by_interface(s.nodes[i].view.nm_bus) or { continue }
+			// a named alive binding MUST resolve to a numeric CAN id (loom2v does),
+			// or its collision + in-range checks are silently skipped. An NM bus with
+			// no DBC (or no matching system bus) cannot resolve it — that is a config
+			// error, not a clean fall-through (REQ-TOPO-004).
+			b := s.bus_by_interface(s.nodes[i].view.nm_bus) or {
+				errs << 'node "${s.nodes[i].name}": [nm].alive names "${name}" but its NM bus "${s.nodes[i].view.nm_bus}" maps to no system bus with a DBC to resolve it'
+				continue
+			}
 			if b.dbc == '' {
+				errs << 'node "${s.nodes[i].name}": [nm].alive names "${name}" but its NM bus "${b.name}" has no `dbc` to resolve the name to a CAN id'
 				continue
 			}
 			dpath := if os.is_abs_path(b.dbc) { b.dbc } else { os.join_path(s.dir, b.dbc) }
@@ -306,9 +323,12 @@ pub fn load_node(path string) !NodeView {
 	mut key_iface := map[string]string{} // logical name -> interface
 	if bv := doc.value_opt('bus') {
 		for name, cfg in bv.as_map() {
-			iface := m_str(cfg.as_map(), 'interface')
-			key_iface[name] = if iface != '' { iface } else { name }
-			v.local_buses << key_iface[name]
+			cm := cfg.as_map()
+			iface := m_str(cm, 'interface')
+			resolved := if iface != '' { iface } else { name }
+			key_iface[name] = resolved
+			v.local_buses << resolved
+			v.local_bus_fd[resolved] = m_bool(cm, 'fd')
 		}
 	}
 	iface_of := fn [key_iface] (logical string) ?string {
@@ -367,6 +387,10 @@ pub fn load_node(path string) !NodeView {
 		telem_on := (tm['enabled'] or { toml.Any(true) }).bool()
 		v.telem_bus = key_iface[tbus] or { tbus }
 		v.has_telemetry = telem_on && tbus != ''
+		// the on-wire telemetry frame ids (omitted -> 0; CpuLoad is always sent,
+		// so an omitted id still transmits at 0 — see check_telemetry_frames).
+		v.telem_id = m_u32(tm, 'id')
+		v.telem_detail_id = m_u32(tm, 'detail_id')
 	}
 	// [nm] cluster + identity
 	if nmv := doc.value_opt('nm') {

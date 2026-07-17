@@ -1066,3 +1066,92 @@ fn test_run_capture_does_not_shell() {
 	assert !os.exists(marker), 'run_capture executed a shell command substitution'
 	assert out.contains('touch'), 'echo should print the arg literally: ${out}'
 }
+
+// --- codex #141 round-10 fixes ---
+
+// REQ-TOPO-002: two threadx nodes with the same [telemetry].id on one bus both
+// transmit that CAN id — a telemetry-frame multi-writer the [[frame]] single-
+// writer check can't see (telemetry ids live in [telemetry], not [[frame]]).
+fn test_telemetry_id_collision_is_error() {
+	mut s := clean_system()
+	for i in 0 .. 2 {
+		s.nodes[i].view.is_threadx = true
+		s.nodes[i].view.has_telemetry = true
+		s.nodes[i].view.telem_bus = 'can0'
+		s.nodes[i].view.nm_bus = 'can0'
+	}
+	s.nodes[0].view.telem_id = 0x7e0
+	s.nodes[1].view.telem_id = 0x7e0 // same telemetry id on the same bus
+	assert errs(validate_system(s)).any(it.contains('telemetry id 0x7e0')
+		&& it.contains('single-writer')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-002: an OMITTED telemetry id defaults to 0 and CpuLoad is always sent,
+// so two id-less threadx nodes both transmit at CAN id 0.
+fn test_omitted_telemetry_ids_collide_at_zero() {
+	mut s := clean_system()
+	for i in 0 .. 2 {
+		s.nodes[i].view.is_threadx = true
+		s.nodes[i].view.has_telemetry = true
+		s.nodes[i].view.telem_bus = 'can0'
+		s.nodes[i].view.nm_bus = 'can0'
+		s.nodes[i].view.telem_id = 0 // both omit -> effective 0
+	}
+	assert errs(validate_system(s)).any(it.contains('telemetry id 0x0')
+		&& it.contains('single-writer')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-005: loom2v's threadx FDCAN backend is classic-only and panics for an
+// fd = true telemetry bus.
+fn test_threadx_fd_telemetry_bus_is_error() {
+	mut s := clean_system()
+	s.nodes[0].view.is_threadx = true
+	s.nodes[0].view.has_telemetry = true
+	s.nodes[0].view.telem_bus = 'can0'
+	s.nodes[0].view.nm_bus = 'can0'
+	s.nodes[0].view.local_bus_fd = {
+		'can0': true
+	}
+	assert errs(validate_system(s)).any(it.contains('fd = true')
+		&& it.contains('classic-only')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-004: a named [nm].alive binding whose bus has no DBC cannot be
+// resolved to a CAN id — a load error, not a silent clean fall-through.
+fn test_named_alive_without_dbc_is_error() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_nodbc_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[bus.can0]
+interface = "can0"
+fd = false
+core = 0
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "t" # trailing comment (vlang/v#27684)
+[telemetry]
+bus = "can0"
+[nm]
+node  = 0x11
+alive = "AliveMsg"
+peers = [0x500, 0x53F]
+') or { panic(err) }
+	os.write_file(os.join_path(dir, 'system.toml'), '
+[bus.compute]
+interface = "can0"
+[[node]]
+name = "a"
+ecu = "n.toml"
+buses = ["compute"]
+nm = 0x11
+trace = 1
+') or { panic(err) }
+	mut sys := parse_system(os.join_path(dir, 'system.toml')) or { panic(err) }
+	load_errs := sys.load_nodes()
+	assert load_errs.any(it.contains('no `dbc` to resolve')), load_errs.str()
+}
