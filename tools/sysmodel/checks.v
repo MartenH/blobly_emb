@@ -143,6 +143,30 @@ fn check_node_configs(s System) []Issue {
 				msg:      'node "${n.name}": target is baremetal but has bus-facing signals (produces/consumes on a bus) — loom2v\'s baremetal superloop has no comm bridge; only the threadx target services bus signals'
 			}
 		}
+			// loom2v's threadx comm thread owns ONLY the telemetry bus and panics for a
+			// TX or RX signal on any other bus (gen.v). Every bus-facing signal of a
+			// threadx node must ride its telemetry bus; a signal on another claimed system
+			// bus is not generatable until a per-bus comm owner exists (P2, REQ-TOPO-005).
+			if n.view.is_threadx && n.view.has_telemetry {
+				for iface, sigs in n.view.produces {
+					if sigs.len > 0 && iface != n.view.telem_bus {
+						issues << Issue{
+							severity: .error
+							req:      'REQ-TOPO-005'
+							msg:      'node "${n.name}": transmits ${sigs} on bus "${iface}" but its threadx comm thread owns only the telemetry bus "${n.view.telem_bus}" (one comm bus per node in P1)'
+						}
+					}
+				}
+				for iface, sigs in n.view.consumes {
+					if sigs.len > 0 && iface != n.view.telem_bus {
+						issues << Issue{
+							severity: .error
+							req:      'REQ-TOPO-005'
+							msg:      'node "${n.name}": receives ${sigs} on bus "${iface}" but its threadx comm thread owns only the telemetry bus "${n.view.telem_bus}" (one comm bus per node in P1)'
+						}
+					}
+				}
+			}
 		// loom2v runs NM inside the comm thread, which owns the TELEMETRY bus —
 		// [nm].bus only labels the manifest (gen_nm.v), it does NOT move NM's tx.
 		// So an explicit nm.bus other than the telemetry bus is a lie: syscheck
@@ -209,13 +233,29 @@ fn check_bus_membership(s System) []Issue {
 		for iface in n.view.local_buses {
 			b := s.bus_by_interface(iface) or {
 				// an interface no system bus declares has NO system contract. If it
-				// carries bus-facing signals, that cross-node traffic is invisible to
-				// the writer/reachability checks — flag it rather than silently drop it.
-				if n.view.produces[iface].len > 0 || n.view.consumes[iface].len > 0 {
+				// carries real traffic it is invisible to the writer/reachability, the
+				// telemetry-frame, and the NM-coherence checks (all keyed by a system
+				// bus) — flag it rather than silently drop it. A threadx node also puts
+				// telemetry (and NM) on its telem/nm interface, which counts as traffic
+				// even with no application signal.
+				carries_app := n.view.produces[iface].len > 0 || n.view.consumes[iface].len > 0
+				carries_telem := n.view.has_telemetry && iface == n.view.telem_bus
+				carries_nm := n.view.has_nm && n.view.nm_enabled && iface == n.view.nm_bus
+				if carries_app || carries_telem || carries_nm {
+					mut kinds := []string{}
+					if carries_app {
+						kinds << 'signals'
+					}
+					if carries_telem {
+						kinds << 'telemetry'
+					}
+					if carries_nm {
+						kinds << 'NM'
+					}
 					issues << Issue{
 						severity: .error
 						req:      'REQ-TOPO-001'
-						msg:      'node "${n.name}": opens interface [bus.${iface}] not declared by any system bus, yet transmits/receives signals on it — that cross-node traffic has no system contract and is never checked for writers or reachability'
+						msg:      'node "${n.name}": opens interface [bus.${iface}] not declared by any system bus, yet carries ${kinds.join("/")} on it — that traffic has no system contract and is never checked for writers, reachability, or frame ownership'
 					}
 				}
 				continue

@@ -382,9 +382,10 @@ pub fn load_node(path string) !NodeView {
 		tm := tlv.as_map()
 		tbus := m_str(tm, 'bus')
 		// loom2v's threadx gate requires BOTH a telemetry bus AND telemetry on
-		// (m.telem.on) — [telemetry] enabled = false leaves the target without the
-		// telemetry channel it needs, so it does not satisfy the gate.
-		telem_on := (tm['enabled'] or { toml.Any(true) }).bool()
+		// (m.telem.on). parse_telemetry defaults an OMITTED `enabled` to FALSE, so
+		// [telemetry] with a bus but no enabled key does NOT satisfy the gate —
+		// mirror that default (true would wrongly pass a node loom2v then panics on).
+		telem_on := (tm['enabled'] or { toml.Any(false) }).bool()
 		v.telem_bus = key_iface[tbus] or { tbus }
 		v.has_telemetry = telem_on && tbus != ''
 		// the on-wire telemetry frame ids (omitted -> 0; CpuLoad is always sent,
