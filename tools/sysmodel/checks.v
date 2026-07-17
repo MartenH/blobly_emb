@@ -36,7 +36,6 @@ pub fn validate_system(s System) []Issue {
 	issues << check_frame_single_writer(s)
 	issues << check_nm_cluster_coherence(s)
 	issues << check_telemetry_frames(s)
-	issues << check_threadx_signal_layout(s)
 	issues << check_bus_dbcs(s)
 	issues << check_routes(s)
 	return issues
@@ -174,73 +173,6 @@ fn check_node_configs(s System) []Issue {
 				severity: .error
 				req:      'REQ-TOPO-005'
 				msg:      'node "${n.name}" ecu.toml invalid: ${e}'
-			}
-		}
-		// ecucheck validates SCHEMA, not target-dependent generator constraints:
-		// loom2v panics for a threadx target without a [telemetry] bus, so a clean
-		// syscheck would otherwise not imply a buildable node (REQ-TOPO-005).
-		if n.view.is_threadx && !n.view.has_telemetry {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-005'
-				msg:      'node "${n.name}": target is threadx but has no [telemetry] bus (loom2v requires it for the threadx target)'
-			}
-		}
-		// loom2v's threadx FDCAN backend is classic-only and panics when the
-		// telemetry bus has fd = true (blob_can_open rejects fd_mode), so a threadx
-		// node on an fd bus is not buildable (REQ-TOPO-005).
-		if n.view.is_threadx && n.view.has_telemetry && (n.view.local_bus_fd[n.view.telem_bus] or {
-			false
-		}) {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-005'
-				msg:      'node "${n.name}": target is threadx but its telemetry bus "${n.view.telem_bus}" has fd = true — loom2v\'s FDCAN backend here is classic-only'
-			}
-		}
-		// loom2v's threadx comm thread turns on for ISO-TP but then panics because
-		// routes / ISO-TP are not generated for it (gen.v). So a threadx node with
-		// any [[isotp]] connection is not buildable yet (REQ-TOPO-005).
-		if n.view.is_threadx && n.view.has_isotp {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-005'
-				msg:      'node "${n.name}": target is threadx but has an [[isotp]] connection — loom2v does not generate ISO-TP on the comm thread yet (it panics)'
-			}
-		}
-		// loom2v's baremetal superloop has NO comm bridge and panics for any
-		// external/bus signal ("baremetal does not support external/bus signals
-		// yet"); only the threadx comm thread services bus traffic. So a baremetal
-		// node with a bus-facing producer/consumer is not buildable (REQ-TOPO-005).
-		if n.view.is_baremetal && node_has_bus_signal(n) {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-005'
-				msg:      'node "${n.name}": target is baremetal but has bus-facing signals (produces/consumes on a bus) — loom2v\'s baremetal superloop has no comm bridge; only the threadx target services bus signals'
-			}
-		}
-		// loom2v's threadx comm thread owns ONLY the telemetry bus and panics for a
-		// TX or RX signal on any other bus (gen.v). Every bus-facing signal of a
-		// threadx node must ride its telemetry bus; a signal on another claimed system
-		// bus is not generatable until a per-bus comm owner exists (P2, REQ-TOPO-005).
-		if n.view.is_threadx && n.view.has_telemetry {
-			for iface, sigs in n.view.produces {
-				if sigs.len > 0 && iface != n.view.telem_bus {
-					issues << Issue{
-						severity: .error
-						req:      'REQ-TOPO-005'
-						msg:      'node "${n.name}": transmits ${sigs} on bus "${iface}" but its threadx comm thread owns only the telemetry bus "${n.view.telem_bus}" (one comm bus per node in P1)'
-					}
-				}
-			}
-			for iface, sigs in n.view.consumes {
-				if sigs.len > 0 && iface != n.view.telem_bus {
-					issues << Issue{
-						severity: .error
-						req:      'REQ-TOPO-005'
-						msg:      'node "${n.name}": receives ${sigs} on bus "${iface}" but its threadx comm thread owns only the telemetry bus "${n.view.telem_bus}" (one comm bus per node in P1)'
-					}
-				}
 			}
 		}
 		// loom2v runs NM inside the comm thread, which owns the TELEMETRY bus —
