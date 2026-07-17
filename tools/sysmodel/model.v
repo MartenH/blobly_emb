@@ -114,10 +114,11 @@ pub mut:
 	// trace RECEIVE endpoints: the module reacts to cmd (0x7e2) and dump_fc (0x7e6),
 	// so another node transmitting at those ids would drive its trace state. These
 	// ids are RESERVED on the trace bus (a tx frame colliding with them is a bug).
-	trace_cmd_id       u32
-	trace_cmd_name     string
-	trace_dump_fc_id   u32
-	trace_dump_fc_name string
+	trace_cmd_id        u32
+	trace_cmd_name      string
+	trace_dump_fc_id    u32
+	trace_dump_fc_name  string
+	trace_dump_fc_bound bool // dump_fc reserves a RX id ONLY when explicitly bound
 	// [[isotp]] diagnostic connections: their rx_id/tx_id are on-wire diagnostic CAN
 	// ids (must be unique across nodes). loom2v ALSO cannot emit ISO-TP on the
 	// threadx comm thread (it panics), so a threadx node with any isotp can't build.
@@ -490,6 +491,7 @@ pub fn load_node(path string) !NodeView {
 			v.trace_rsp_id, v.trace_rsp_name = binding_id(trm, 'rsp', 0x7e3)
 			v.trace_cmd_id, v.trace_cmd_name = binding_id(trm, 'cmd', 0x7e2)
 			v.trace_dump_fc_id, v.trace_dump_fc_name = binding_id(trm, 'dump_fc', 0x7e6)
+			v.trace_dump_fc_bound = 'dump_fc' in trm
 		}
 	}
 	// [[isotp]] — diagnostic/ISO-TP connections. rx_id/tx_id are on-wire diagnostic

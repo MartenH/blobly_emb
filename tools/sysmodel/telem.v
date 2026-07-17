@@ -69,13 +69,21 @@ fn trace_generated(n Node) bool {
 	return host && n.view.partition_count <= 1 && !node_has_bus_signal(n) && !n.view.has_isotp
 }
 
+// is_trace_host reports the single-partition HOST trace-runner shape: loom2v's
+// emit_run_trace_host sends only the inline CpuLoad frame and never emits the
+// LoadDetail frame, so a trace-host node's telemetry detail_id is NOT on the wire.
+fn is_trace_host(n Node) bool {
+	return !n.view.is_threadx && trace_generated(n)
+}
+
 fn module_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame {
 	mut out := []ModuleFrame{}
 	// [telemetry]: CpuLoad is always sent (effective id, 0 if omitted); detail only
 	// when detail_id != 0. (No DBC-name binding — always a numeric/default id.)
 	if n.view.has_telemetry && n.view.telem_bus != '' {
 		out << ModuleFrame{n.view.telem_bus, 'telemetry id', n.view.telem_id, false, ''}
-		if n.view.telem_detail_id != 0 {
+		// the host trace runner sends inline CpuLoad only — never the detail frame.
+		if n.view.telem_detail_id != 0 && !is_trace_host(n) {
 			out << ModuleFrame{n.view.telem_bus, 'telemetry detail_id', n.view.telem_detail_id, false, ''}
 		}
 	}
@@ -109,8 +117,12 @@ fn module_rx_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFra
 		if tbus != '' {
 			out << module_frame(dbs, s, tbus, 'trace cmd (rx) id', n.view.trace_cmd_id,
 				n.view.trace_cmd_name)
-			out << module_frame(dbs, s, tbus, 'trace dump_fc (rx) id', n.view.trace_dump_fc_id,
-				n.view.trace_dump_fc_name)
+			// dump_fc receives ONLY when explicitly bound (loom2v emits its rx arm
+			// under dump_fc_bound) — otherwise there is no receiver to reserve.
+			if n.view.trace_dump_fc_bound {
+				out << module_frame(dbs, s, tbus, 'trace dump_fc (rx) id', n.view.trace_dump_fc_id,
+					n.view.trace_dump_fc_name)
+			}
 		}
 	}
 	if n.view.is_threadx && n.view.shell_on && n.view.telem_bus != '' {
@@ -297,6 +309,35 @@ fn check_telemetry_frames(s System) []Issue {
 					severity: .error
 					req:      'REQ-TOPO-002'
 					msg:      'node "${n.name}": ${f.label} 0x${f.id.hex()} falls in the NM peer range [0x${n.view.peers_lo.hex()},0x${n.view.peers_hi.hex()}] on bus "${bus.name}"'
+				}
+			}
+		}
+	}
+	// application DBC frames must not fall in an ACTIVE NM peer range on their bus:
+	// the NM receiver accepts the whole peer range by CAN id, so a transmitted app
+	// frame there is misread as an alive frame and can corrupt cluster state.
+	for bus in s.buses {
+		db := dbs[bus.name] or { continue }
+		mut lo := u32(0)
+		mut hi := u32(0)
+		mut have := false
+		for n in s.nodes {
+			if n.view.has_nm && n.view.nm_enabled && n.view.nm_bus == bus.interface {
+				lo = n.view.peers_lo
+				hi = n.view.peers_hi
+				have = true
+				break
+			}
+		}
+		if !have {
+			continue
+		}
+		for m in db.messages {
+			if m.id >= lo && m.id <= hi {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-002'
+					msg:      'bus "${bus.name}": DBC application frame "${m.name}" id 0x${m.id.hex()} falls in the NM peer range [0x${lo.hex()},0x${hi.hex()}] — the NM receiver would misread it as an alive frame'
 				}
 			}
 		}
