@@ -137,7 +137,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-002 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-003 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-004 | QM | test | verified | model_test.v (pass) |
-| REQ-TOPO-005 | QM | analysis | verified | model_test.v (pass) |
+| REQ-TOPO-005 | QM | analysis | verified | gen_test.v (pass), model_test.v (pass) |
 | REQ-TOPO-006 | QM | test | verified | model_test.v (pass) |
 | REQ-TP-001 | QM | test | uncovered | — |
 | REQ-TP-002 | QM | test | uncovered | — |

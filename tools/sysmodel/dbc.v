@@ -33,6 +33,27 @@ pub fn check_dbc_conformance(s System) []Issue {
 		dbs[bus.name] = db
 		loaded[bus.name] = true
 	}
+	// two BO_ with the SAME CAN id (differently named) are two frames aliasing one
+	// wire id. Frame ownership is keyed by NAME, so the generator would emit both
+	// transmitters and distinct producers send incompatible payloads under one id.
+	// candb keeps duplicate-id messages, so reject the ambiguous DBC here.
+	for bus in s.buses {
+		if bus.name !in loaded {
+			continue
+		}
+		mut id_seen := map[u32]string{}
+		for msg in dbs[bus.name].messages {
+			if prev := id_seen[msg.id] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'bus "${bus.name}": DBC frames "${prev}" and "${msg.name}" share CAN id 0x${msg.id.hex()} — one frame per id'
+				}
+			} else {
+				id_seen[msg.id] = msg.name
+			}
+		}
+	}
 	// application frame ids must not fall in the NM peer range: loom2v arms the
 	// whole peers range as the NM receiver, so a BO_ inside it is consumed as an
 	// NM frame, and one at peers.lo + node collides with that node's alive tx.
@@ -169,12 +190,11 @@ pub fn check_dbc_conformance(s System) []Issue {
 	return issues
 }
 
-// TelemId — one authored telemetry frame id (its label, whether it was declared,
-// and its value), so the ownership check iterates id + detail_id uniformly.
+// TelemId — one telemetry frame id (its label + effective value), so the
+// ownership check iterates the CpuLoad id and the detail id uniformly.
 struct TelemId {
-	label   string
-	present bool
-	id      u32
+	label string
+	id    u32
 }
 
 // check_telemetry_frames: a threadx node's comm thread transmits its telemetry
@@ -183,8 +203,11 @@ struct TelemId {
 // [telemetry], so nothing cross-checks them: two nodes with the same telemetry
 // id on one bus are an unowned multi-writer, and a telemetry id equal to a DBC
 // application frame (or inside the NM peer range) aliases two different frames on
-// the wire. Load each bus DBC once and check every explicit telemetry id
-// (REQ-TOPO-002). P1: a node's telemetry rides its single bus.
+// the wire. These use the EFFECTIVE ids loom2v will emit — an omitted [telemetry]
+// id defaults to 0 (parse_telemetry) and the CpuLoad frame is ALWAYS sent, so two
+// id-less nodes both transmit at CAN id 0; the detail frame is sent only when
+// detail_id != 0, so an omitted detail is not on the wire. (REQ-TOPO-002.) P1: a
+// node's telemetry rides its single bus.
 fn check_telemetry_frames(s System) []Issue {
 	mut issues := []Issue{}
 	mut dbs := map[string]candb.Database{}
@@ -205,13 +228,13 @@ fn check_telemetry_frames(s System) []Issue {
 		busname := n.buses[0]
 		bus := s.bus_by_name(busname) or { continue }
 		mut mine := map[u32]string{} // this node's own ids (catch id == detail_id)
-		for tf in [
-			TelemId{'telemetry id', n.view.has_telem_id, n.view.telem_id},
-			TelemId{'telemetry detail_id', n.view.has_telem_det, n.view.telem_detail_id},
-		] {
-			if !tf.present {
-				continue // loom2v defaults an omitted id; only authored ids collide
-			}
+		// CpuLoad is ALWAYS transmitted (effective id, 0 if omitted); the detail
+		// frame only when detail_id != 0. Build the effective-id list accordingly.
+		mut tframes := [TelemId{'telemetry id', n.view.telem_id}]
+		if n.view.telem_detail_id != 0 {
+			tframes << TelemId{'telemetry detail_id', n.view.telem_detail_id}
+		}
+		for tf in tframes {
 			label := tf.label
 			id := tf.id
 			// FDCAN masks id & 0x7ff — a telemetry id above that is truncated on the wire

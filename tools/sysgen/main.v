@@ -138,6 +138,13 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		if bus.nm_wait_sleep_ms > 0 {
 			b << 'wait_sleep_ms = ${bus.nm_wait_sleep_ms}'
 		}
+	} else {
+		// no [bus.*.nm] cluster declared -> NM must NOT run. loom2v defaults an
+		// [nm] with scalar keys (like `node`) to enabled = true with its default
+		// peer range 0x500..0x53f, so without this the node would transmit
+		// unvalidated default NM (syscheck skips NM checks when has_nm_cluster is
+		// false). Disable it explicitly.
+		b << 'enabled = false'
 	}
 	b << ''
 
