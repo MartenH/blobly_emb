@@ -83,9 +83,13 @@ pub mut:
 	has_alive  bool // whether [nm].alive was declared (alive = 0 is a valid CAN id)
 	peers_lo   u32
 	peers_hi   u32
-	has_nm     bool   // an [nm] table is present
-	nm_enabled bool   // [nm].enabled (default true) — false = a non-participant node
-	nm_bus     string // [nm].bus — the SINGLE bus this node runs NM on (loom2v: one NmCfg)
+	has_nm        bool   // an [nm] table is present
+	nm_enabled    bool   // [nm].enabled (default true) — false = a non-participant node
+	nm_bus        string // the bus this node runs NM on (nm.bus, else the telemetry bus)
+	alive_binding string // [nm].alive when it is a DBC message NAME (not a numeric id)
+	is_threadx    bool   // [target].kind == "threadx" (loom2v generates NM only then)
+	has_telemetry bool   // a [telemetry] block with a bus (loom2v requires it for threadx)
+	telem_bus     string // [telemetry].bus resolved to its interface
 	// NM timing presence: loom2v applies its default only when the KEY is ABSENT,
 	// so an explicit 0 must be preserved (not normalized to the default).
 	nm_has_msg_cycle  bool
@@ -309,6 +313,15 @@ pub fn load_node(path string) !NodeView {
 	if tv := doc.value_opt('target') {
 		target_threadx = (tv.as_map()['kind'] or { toml.Any('') }).string() == 'threadx'
 	}
+	v.is_threadx = target_threadx
+	// [telemetry] — loom2v requires it (with a bus) for the threadx target, and
+	// uses its bus as the implicit NM bus when [nm].bus is absent.
+	if tlv := doc.value_opt('telemetry') {
+		tm := tlv.as_map()
+		tbus := m_str(tm, 'bus')
+		v.telem_bus = key_iface[tbus] or { tbus }
+		v.has_telemetry = tbus != ''
+	}
 	// [nm] cluster + identity
 	if nmv := doc.value_opt('nm') {
 		m := nmv.as_map()
@@ -317,11 +330,13 @@ pub fn load_node(path string) !NodeView {
 		// (loom2v emits no NM): a non-participant, so the cluster/alive/allocation/
 		// uniqueness checks skip it.
 		v.nm_enabled = (m['enabled'] or { toml.Any(true) }).bool() && target_threadx
-		// the SINGLE bus this node runs NM on, resolved to its interface (the
-		// [nm].bus value is a logical bus name, like signal endpoints).
+		// the bus this node runs NM on: [nm].bus if set, else the telemetry bus
+		// (loom2v uses m.telem.bus when nm.bus is absent), resolved to its interface.
 		nmbus := m_str(m, 'bus')
 		if nmbus != '' {
 			v.nm_bus = key_iface[nmbus] or { nmbus }
+		} else {
+			v.nm_bus = v.telem_bus
 		}
 		v.has_nm_node = 'node' in m // node id 0 is valid — distinguish from absent
 		// keep the SIGNED value long enough to range-check: loom2v rejects a node
@@ -330,17 +345,22 @@ pub fn load_node(path string) !NodeView {
 		node_raw := (m['node'] or { toml.Any(0) }).int()
 		v.nm_node = u32(node_raw)
 		v.nm_node_ok = node_raw >= 0 && node_raw <= 255
+		// peers range: loom2v defaults an omitted range to 0x500..0x53f (its NmCfg
+		// defaults), and derives alive from that base — so default it here too.
 		peers := (m['peers'] or { toml.Any([]toml.Any{}) }).array()
 		if peers.len == 2 {
 			v.peers_lo = u32(peers[0].int())
 			v.peers_hi = u32(peers[1].int())
+		} else {
+			v.peers_lo = 0x500
+			v.peers_hi = 0x53f
 		}
 		// alive: NUMERIC literal -> that id; DBC message NAME -> loom2v resolves it
-		// (skip the numeric checks); ABSENT -> loom2v derives peers_lo + node, so
-		// derive + range-check the SAME value.
+		// to a CAN id (record the NAME for a name-level collision check); ABSENT ->
+		// loom2v derives peers_lo + node, so derive + range-check the SAME value.
 		if av := m['alive'] {
 			if av is string {
-				// named binding — left to loom2v's DBC resolution
+				v.alive_binding = av
 			} else {
 				v.alive = u32(av.int())
 				v.has_alive = true

@@ -109,6 +109,16 @@ fn check_node_configs(s System) []Issue {
 				msg:      'node "${n.name}" ecu.toml invalid: ${e}'
 			}
 		}
+		// ecucheck validates SCHEMA, not target-dependent generator constraints:
+		// loom2v panics for a threadx target without a [telemetry] bus, so a clean
+		// syscheck would otherwise not imply a buildable node (REQ-TOPO-005).
+		if n.view.is_threadx && !n.view.has_telemetry {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": target is threadx but has no [telemetry] bus (loom2v requires it for the threadx target)'
+			}
+		}
 	}
 	return issues
 }
@@ -270,6 +280,7 @@ fn check_identity_uniqueness(s System) []Issue {
 	mut issues := []Issue{}
 	mut nm_seen := map[u32]string{}
 	mut alive_seen := map[u32]string{}
+	mut alive_binding_seen := map[string]string{}
 	mut diag_seen := map[u32]string{}
 	mut trace_seen := map[int]string{}
 	for n in s.nodes {
@@ -346,6 +357,19 @@ fn check_identity_uniqueness(s System) []Issue {
 				}
 			} else {
 				alive_seen[n.view.alive] = n.name
+			}
+		}
+		// a NAMED alive binding (a DBC message name) resolves to one CAN id, so two
+		// nodes naming the same message share the on-wire alive id (REQ-TOPO-002).
+		if n.view.alive_binding != '' && n.view.nm_enabled {
+			if prev := alive_binding_seen[n.view.alive_binding] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-002'
+					msg:      'alive binding "${n.view.alive_binding}" named by both "${prev}" and "${n.name}" — it resolves to one CAN id'
+				}
+			} else {
+				alive_binding_seen[n.view.alive_binding] = n.name
 			}
 		}
 		// ALL diagnostic ids (req AND rsp, across every node) must be distinct —
@@ -533,7 +557,14 @@ fn check_routes(s System) []Issue {
 			}
 			continue
 		}
-		if r.from == r.to {
+		if r.from == '' || r.to == '' {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-006'
+				msg:      'route on "${r.gateway}": needs both `from` and `to` buses (a route with one endpoint carries nothing)'
+			}
+		}
+		if r.from == r.to && r.from != '' {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-006'

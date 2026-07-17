@@ -53,3 +53,10 @@ peers = [0x500, 0x53F]
 [target]
 kind    = "threadx"
 tick_ms = 1
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E0
+detail_id = 0x7E1
+period_ms = 500
