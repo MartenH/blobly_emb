@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 130 | 73 | 5 | 52 | 0 |
+| 130 | 72 | 5 | 53 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -137,7 +137,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-002 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-003 | QM | test | uncovered | — |
 | REQ-TOPO-004 | QM | test | verified | model_test.v (pass) |
-| REQ-TOPO-005 | QM | analysis | verified | model_test.v (pass) |
+| REQ-TOPO-005 | QM | analysis | uncovered | — |
 | REQ-TOPO-006 | QM | test | verified | model_test.v (pass) |
 | REQ-TP-001 | QM | test | uncovered | — |
 | REQ-TP-002 | QM | test | uncovered | — |
@@ -272,7 +272,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-002 | | | | | | | ✓ | | |
 | REQ-TOPO-003 | | | | | | | | | |
 | REQ-TOPO-004 | | | | | | | ✓ | | |
-| REQ-TOPO-005 | | | | | | | ✓ | | |
+| REQ-TOPO-005 | | | | | | | | | |
 | REQ-TOPO-006 | | | | | | | ✓ | | |
 | REQ-TP-001 | | | | | | | | | |
 | REQ-TP-002 | | | | | | | | | |

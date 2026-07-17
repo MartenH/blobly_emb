@@ -15,6 +15,7 @@ module sysmodel
 
 import os
 import toml
+import tools.candb
 
 // Bus — one CAN segment with its own contract. `name` is the system-scope key
 // ([bus.compute]); `interface` is the SocketCAN/driver name a node's ecu.toml
@@ -233,6 +234,7 @@ pub fn (s System) bus_by_interface(iface string) ?Bus {
 // caller reports them without aborting the rest of the system view.
 pub fn (mut s System) load_nodes() []string {
 	mut errs := []string{}
+	mut dbc_cache := map[string]candb.Database{}
 	for i in 0 .. s.nodes.len {
 		// node paths resolve against system.toml's dir, unless already absolute
 		path := if os.is_abs_path(s.nodes[i].ecu) {
@@ -245,6 +247,41 @@ pub fn (mut s System) load_nodes() []string {
 			continue
 		}
 		s.nodes[i].view = view
+		// resolve a NAMED [nm].alive binding to its numeric on-wire id via the
+		// node's NM-bus DBC, so it flows through the SAME numeric alive-uniqueness
+		// check — a name and a literal that hit the same CAN id are a collision the
+		// separate name/number maps would miss (REQ-TOPO-002). On success the
+		// binding is cleared; if it can't be resolved it stays for the name-level
+		// fallback check (two nodes naming the same message collide even undecoded).
+		if s.nodes[i].view.alive_binding != '' {
+			name := s.nodes[i].view.alive_binding
+			b := s.bus_by_interface(s.nodes[i].view.nm_bus) or { continue }
+			if b.dbc == '' {
+				continue
+			}
+			dpath := if os.is_abs_path(b.dbc) { b.dbc } else { os.join_path(s.dir, b.dbc) }
+			db := dbc_cache[dpath] or {
+				loaded := candb.load_dbc_file(dpath) or {
+					errs << 'node "${s.nodes[i].name}": cannot load DBC "${b.dbc}" to resolve [nm].alive "${name}": ${err}'
+					continue
+				}
+				dbc_cache[dpath] = loaded
+				loaded
+			}
+			mut hit := false
+			for msg in db.messages {
+				if msg.name == name {
+					s.nodes[i].view.alive = msg.id
+					s.nodes[i].view.has_alive = true
+					s.nodes[i].view.alive_binding = ''
+					hit = true
+					break
+				}
+			}
+			if !hit {
+				errs << 'node "${s.nodes[i].name}": [nm].alive names "${name}" but DBC "${b.dbc}" has no such message'
+			}
+		}
 	}
 	return errs
 }
@@ -319,8 +356,12 @@ pub fn load_node(path string) !NodeView {
 	if tlv := doc.value_opt('telemetry') {
 		tm := tlv.as_map()
 		tbus := m_str(tm, 'bus')
+		// loom2v's threadx gate requires BOTH a telemetry bus AND telemetry on
+		// (m.telem.on) — [telemetry] enabled = false leaves the target without the
+		// telemetry channel it needs, so it does not satisfy the gate.
+		telem_on := (tm['enabled'] or { toml.Any(true) }).bool()
 		v.telem_bus = key_iface[tbus] or { tbus }
-		v.has_telemetry = tbus != ''
+		v.has_telemetry = telem_on && tbus != ''
 	}
 	// [nm] cluster + identity
 	if nmv := doc.value_opt('nm') {
