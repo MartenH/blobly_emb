@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 151 | 79 | 5 | 67 | 0 |
+| 151 | 78 | 5 | 68 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -135,7 +135,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-IO-001 | QM | test | uncovered | — |
 | SYS-REQ-PROG-001 | QM | test | uncovered | — |
 | SYS-REQ-NVM-001 | QM | test | uncovered | — |
-| SYS-REQ-NM-001 | QM | test | verified | ↳ derived (all children verified) |
+| SYS-REQ-NM-001 | QM | test | uncovered | — |
 | SYS-REQ-LIFE-001 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-LIFE-002 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-RES-001 | QM | analysis | verified | noalloc-driver-lint (pass) |

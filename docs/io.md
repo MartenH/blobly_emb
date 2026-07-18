@@ -40,6 +40,9 @@ endpoint class, **io** (next to partition and bus): `from = "io"` = an input the
 platform publishes, `to = "io"` = an output the platform drives. Direction is
 therefore declared once, on the signal, and the generator cross-checks it against
 the io kind (an `[[io.adc]]` bound to a `to = "io"` signal is a config error).
+`io` becomes a **reserved endpoint name**: ecucheck rejects a partition, thread,
+or bus named `io` (endpoints resolve by name, so a user `io` partition would be
+ambiguous against this class — same rule family as the TOML nested-comment guard).
 
 ## Derived glue (the duo_gen.h pattern, third use)
 
@@ -54,7 +57,14 @@ pins or peripherals:
   GPIO reads are direct. Two cadences, deliberately decoupled: conversions free-run
   (hardware's business), while `period_ms` is the PUBLISH cadence — when the
   generated loop copies the latest value into the signal's cell, before dispatch,
-  so FBs see a coherent snapshot as always. Equidistant sampling would only matter
+  so FBs see a coherent snapshot as always. **Single-writer, like every signal**:
+  an io input is homed to exactly ONE thread (where its consuming FB runs; with
+  consumers on several threads, the generator homes it to one — config picks, the
+  same way a signal's producer is unique today) and only that thread's loop
+  samples-and-publishes. Every other consumer acquires the published value over
+  the ordinary cross-thread transport (IOC) — never by re-sampling the pin. One
+  hardware sample per period, one producer per cell; the SPSC invariant holds and
+  all consumers see the same value. Equidistant sampling would only matter
   for signal-processing use — which is a non-goal below. (NM footnote: stopping the
   free-running ADC/DMA at sleep-entry is platform lifecycle, the same hook family
   as the transceiver — P4.)
@@ -107,7 +117,13 @@ boards layer owns the pin; the owning platform module owns the WHEN:
 Host examples back io points with **files** (the boot_sim flash.bin move): an input
 point reads its value from `io/<name>`, an output writes there — a shell/GUI pokes
 inputs and watches outputs with zero target hardware. The FlashOps precedent says
-this is enough to develop the whole layer dry.
+this is enough to develop the whole layer dry. **File access never sits on the
+sampled path**: the sim's io glue mirrors the ADC/DMA shape — a background reader
+polls `io/<name>` at its own pace into an in-memory latest-value array (tolerating
+a mid-`echo` torn read; the next poll heals it), and the dispatch-path
+`io_*_read(ch)` is a plain memory read, exactly as on target. The wait-free /
+latest-complete-sample contract (REQ-IO-003) holds in both worlds; a blocking or
+truncated filesystem op can delay the mirror, never the loop.
 
 ## Phasing (each rung gated; bench when silicon is back)
 
