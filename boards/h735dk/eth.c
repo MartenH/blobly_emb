@@ -146,8 +146,10 @@ static int phy_bringup(void) {
 
 /* phy_sync_maccr: apply the PHY's NEGOTIATED speed/duplex (PSCSR reg 31,
  * bits[4:2]: bit1 of the field = 100 Mbit, bit2 = full duplex) to MACCR. Falls
- * back to 100M/full if the field reads 0 (autoneg not settled). Idempotent. */
-static void phy_sync_maccr(void) {
+ * back to 100M/full if the field reads 0 (autoneg not settled). Idempotent.
+ * Returns 1 when a REAL negotiated mode was applied, 0 on the fallback guess —
+ * callers use this to keep retrying until the PHY has actually settled. */
+static int phy_sync_maccr(void) {
 	uint16_t pscsr = 0;
 	(void)phy_read(31u, &pscsr);
 	eth_phy_pscsr = pscsr;
@@ -166,6 +168,7 @@ static void phy_sync_maccr(void) {
 	if (maccr != ETH->MACCR) {
 		ETH->MACCR = maccr;
 	}
+	return spd != 0u;
 }
 
 int eth_link_up(void) {
@@ -182,9 +185,13 @@ int eth_link_up(void) {
 		/* down->up edge: re-sync MACCR with what THIS link actually negotiated —
 		 * covers the boot-without-cable case where eth_init's bounded autoneg wait
 		 * fell back to a guess (a 10M/half partner would otherwise never talk).
-		 * Edge-only: a steady-state poll costs one MDIO read, not two. */
-		phy_sync_maccr();
-		prev_up = 1;
+		 * Latch only once the PHY reports a REAL mode: right at the edge PSCSR can
+		 * still read 0 (autoneg finishing) and the sync would apply the fallback;
+		 * without the retry the mismatch would persist until the next unplug.
+		 * Edge-only once latched: a steady-state poll costs one MDIO read. */
+		if (phy_sync_maccr()) {
+			prev_up = 1;
+		}
 	}
 	return 1;
 }

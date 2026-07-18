@@ -197,15 +197,19 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 		 * single frame). Report up optimistically, as the RAM driver / ST drivers do;
 		 * the MAC is already RX/TX-enabled, so traffic flows once the PHY settles.
 		 * GET_STATUS reports the live PHY state. Re-arm RX in case of a prior DISABLE. */
+		/* Frames that arrived while DISABLED sit CPU-owned in the ring: drain and
+		 * DROP them (they were captured while the interface was down — delivering
+		 * them now would replay stale ARP/IP traffic), which also recycles the
+		 * descriptors. Without this, a disable across a >=ring-size burst leaves
+		 * the RX DMA suspended on RBU with no future RI possible (recycle only
+		 * happens on drain, drain only on RI) — RX dead for good. Safe scratch:
+		 * all driver entry is serialized under the IP protection mutex. */
+		if (nx_driver_initialized) {
+			while (eth_recv(nx_driver_txlin, sizeof(nx_driver_txlin)) != 0u) {
+			}
+		}
 		eth_set_rx_callback(nx_driver_rx_signal);
 		interface_ptr->nx_interface_link_up = NX_TRUE;
-		/* Kick one deferred-processing pass: frames that arrived while disabled sit
-		 * CPU-owned in the ring, and if it FILLED, the RX DMA is suspended with no
-		 * future RI possible (recycle only happens on drain, drain only on RI) —
-		 * without this kick a disable across a >=ring-size burst kills RX for good. */
-		if (nx_driver_initialized) {
-			_nx_ip_driver_deferred_processing(ip_ptr);
-		}
 		break;
 
 	case NX_LINK_DISABLE:
@@ -217,12 +221,18 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 		interface_ptr->nx_interface_link_up = NX_FALSE;
 		break;
 
+	case NX_LINK_RARP_SEND:
+		/* RARP unsupported (nothing enables it; routing it would only link dead
+		 * NetX code) — but a *_SEND command hands us the packet, so declining it
+		 * must still release it or every attempt leaks one pool packet. */
+		nx_packet_transmit_release(driver_req_ptr->nx_ip_driver_packet);
+		driver_req_ptr->nx_ip_driver_status = NX_UNHANDLED_COMMAND;
+		break;
+
 	case NX_LINK_PACKET_SEND:
 	case NX_LINK_PACKET_BROADCAST:
 	case NX_LINK_ARP_SEND:
 	case NX_LINK_ARP_RESPONSE_SEND: {
-		/* (RARP_SEND deliberately unhandled: nothing enables RARP, and routing it
-		 * would only link dead NetX code into the image.) */
 		if (!nx_driver_initialized) {
 			nx_packet_transmit_release(driver_req_ptr->nx_ip_driver_packet);
 			driver_req_ptr->nx_ip_driver_status = NX_NOT_SUCCESSFUL;
