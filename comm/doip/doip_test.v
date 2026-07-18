@@ -237,6 +237,35 @@ fn test_tiny_resp_buffer_never_written() {
 	assert s.buf_len == 0 // stream state still reset
 }
 
+fn test_routing_length_must_be_exact() {
+	// 8-byte payload is neither 7 (plain) nor 11 (with OEM): NACK, no activation
+	mut s := Server{}
+	s.entity_addr = 0x0E80
+	mut inb := [max_msg]u8{}
+	mut resp := [max_msg]u8{}
+	n := frame(&inb[0], 0x0005, [u8(0x0E), 0x00, 0x00, 0, 0, 0, 0, 0xAA])
+	rlen := s.feed(&inb[0], n, &resp[0], max_msg)
+	assert rlen == 9
+	assert resp[8] == 0x04 // invalid payload length
+	assert !s.activated
+}
+
+fn test_ident_accepts_generic_version() {
+	// discovery may use the generic 0xFF/0x00 pattern (tester doesn't yet know
+	// the entity's DoIP revision); the response still carries version 0x02
+	mut s := Server{}
+	s.entity_addr = 0x0E80
+	eid := [u8(0x02), 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]
+	mut req := [64]u8{}
+	mut resp := [64]u8{}
+	req[0] = 0xFF
+	req[1] = 0x00
+	req[2] = 0x00
+	req[3] = 0x01 // vehicle identification request, plen 0
+	assert s.ident_response(&req[0], 8, &eid[0], &resp[0]) == 40
+	assert resp[0] == 0x02 && resp[1] == 0xFD
+}
+
 fn test_announcement_layout() {
 	mut s := Server{}
 	s.entity_addr = 0x0E80
