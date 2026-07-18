@@ -52,6 +52,17 @@ verifies = ["REQ-NET-001", "REQ-NET-002", "REQ-NET-003", "REQ-NET-004"]
 approved_by = "Marten Hildell — STM32H735G-DK ping 0% loss, LAN + direct PC cable"
 date = "2026-07-18"
 
+# P2 UDP on-target (emb#146): echo socket round-trips datagrams from a WSL host
+# through the Windows NAT (3/3, net_udp_echoed matches); 1 Hz telemetry broadcast
+# of the bench counters to the subnet (net_telem_sent climbing, `nc -ul 5006`).
+[[review]]
+id = "h735-udp-hardware"
+method = "review"
+context = "h735/ETH-UDP"
+verifies = ["REQ-NET-005"]
+approved_by = "Marten Hildell — STM32H735G-DK UDP echo + telemetry on the bench"
+date = "2026-07-18"
+
 # The CAN shell live on the bench: help listed the registry, ps reported every ThreadX
 # thread (System Timer/load_fast/load_mid/ctrl_slow/comm) with priority, state, and a
 # real stack high-water (e.g. comm 2588/4096) after the TX_STACK_FILL-aware scan; uptime
