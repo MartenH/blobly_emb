@@ -74,6 +74,17 @@ verifies = ["REQ-NET-006"]
 approved_by = "Marten Hildell — STM32H735G-DK TCP echo, 3 connections via WSL"
 date = "2026-07-18"
 
+# P3b DoIP on-target: examples/h735_doip (first V+NetX image) on the live internal
+# network — routing activation, 0x22 F190 -> "H735-DK", 0x3E tester-present, all
+# pass from the WSL doip_client.py through the Windows NAT.
+[[review]]
+id = "h735-doip-hardware"
+method = "review"
+context = "h735/ETH-DoIP"
+verifies = ["REQ-NET-007"]
+approved_by = "Marten Hildell — STM32H735G-DK DoIP bench, WSL client ALL PASS"
+date = "2026-07-18"
+
 # The CAN shell live on the bench: help listed the registry, ps reported every ThreadX
 # thread (System Timer/load_fast/load_mid/ctrl_slow/comm) with priority, state, and a
 # real stack high-water (e.g. comm 2588/4096) after the TX_STACK_FILL-aware scan; uptime
