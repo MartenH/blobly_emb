@@ -42,7 +42,6 @@ static void (*rx_cb)(void);
 #define TDES2_B1L_MASK (0x00003FFFu)    /* buffer-1 length */
 #define TDES3_FD (1u << 29)
 #define TDES3_LD (1u << 28)
-#define TDES3_CIC_IPHDR_PL (3u << 16)   /* checksum insertion: IP header + payload */
 
 /* ------------------------------------------------------------------ MDIO ---- */
 /* The MAC's MDIO clause-22 access (MACMDIOAR/MACMDIODR). CR = clock-range divider
@@ -227,7 +226,11 @@ int eth_send(const uint8_t *frame, uint32_t len) {
 	d->des0 = (uint32_t)(uintptr_t)&tx_buf[tx_idx][0];
 	d->des1 = 0;
 	d->des2 = (len & TDES2_B1L_MASK) | TDES2_IOC;
-	d->des3 = DESC_OWN | TDES3_FD | TDES3_LD | TDES3_CIC_IPHDR_PL;
+	/* NO hardware checksum insertion (CIC=0): NetX computes IP/ICMP/TCP/UDP
+	 * checksums in software, and letting the MAC also insert would OVERWRITE the
+	 * correct value with a (for ICMP, wrong) recompute — the frame is then dropped
+	 * by the peer. ARP has no checksum, which is why it worked and ping didn't. */
+	d->des3 = DESC_OWN | TDES3_FD | TDES3_LD;
 	tx_idx = (tx_idx + 1u) % ETH_TX_DESC_CNT;
 	/* poke the tail pointer to wake the TX DMA. */
 	ETH->DMACTDTPR = (uint32_t)(uintptr_t)&tx_desc[tx_idx];
