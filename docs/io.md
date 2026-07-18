@@ -66,6 +66,11 @@ signal:
   `[[io.*]]` entry, and every io point names exactly one such signal — an
   unmatched io signal would otherwise silently resolve as a phantom endpoint
   with no physical producer, and duplicates would be an ambiguous pin binding;
+- **the other endpoint is the application**: an io signal's non-io side must be
+  a partition/thread — `from = "can0", to = "io"` (a bus value driving a pin
+  with no FB in between) and `io`-to-`io` are config errors; REQ-IO-002 says
+  outputs are written BY the application, and the freshness gate presumes a
+  producing FB;
 - **shape per kind**: exactly one field, an aligned scalar of at most 32 bits
   (a single atomic load in the latest-value handoff), AND the type fits the
   kind — gpio: `bool`; adc: `u16`/`u32`; pwm: `u16`/`u32` (a `u8` cannot carry
@@ -121,7 +126,10 @@ pins or peripherals:
   freshness**: until the producing FB has published at least once, the io thread
   keeps applying the configured `init`, never the channel's zero-initialized
   unread value (the host IOC API already reports freshness; the target slot
-  protocol grows the same bit when the target phase lands). PWM signal value =
+  protocol grows the same bit when the target phase lands). The gate **re-arms
+  on wake**: a pre-sleep actuator command still sitting in the channel must not
+  be re-applied after resume — outputs hold `init` until the first POST-WAKE
+  publication (REQ-IO-009). PWM signal value =
   duty in permille (0..1000), **clamped to 1000** above range — a u16 can carry
   1001..65535 and the clamp makes the out-of-range policy deterministic across
   timer backends instead of backend-dependent wrap/saturate. The carrier
