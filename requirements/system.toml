@@ -114,6 +114,17 @@ status = "agreed"
 method = "test"
 asil = "QM"
 
+# Split from the sleep/wake chain (which is agreed and verified) so the
+# transceiver work can mature as draft without un-verifying it; folds up once
+# the IO P4 bench lands.
+[[req]]
+id = "SYS-REQ-LIFE-003"
+title = "Network-state-driven hardware lifecycle"
+text = "Bus hardware under ECU control (transceivers, network peripherals) shall follow the network management state: operational while the network is awake, low-power when asleep, and shall serve as configured wake sources."
+status = "draft"
+method = "test"
+asil = "QM"
+
 [[req]]
 id = "SYS-REQ-RES-001"
 title = "No dynamic allocation"

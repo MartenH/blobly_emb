@@ -56,8 +56,10 @@ method = "review"
 asil = "QM"
 derives = "SYS-REQ-IO-001"
 
-# Platform-pin lifecycle: this is NM's evidence chain, not application IO —
-# SYS-REQ-IO-001 stays scoped to application signals over configured io points.
+# Platform-pin lifecycle: this evidence belongs to the network/lifecycle chain,
+# not application IO — SYS-REQ-IO-001 stays scoped to application signals. It
+# derives from draft SYS-REQ-LIFE-003 (not agreed NM-001/LIFE-002: the trace
+# rollup would un-verify an agreed parent while this stays draft until P4).
 [[req]]
 id = "REQ-IO-007"
 title = "Transceiver follows network state"
@@ -65,4 +67,4 @@ text = "A controllable bus transceiver shall follow its network's management sta
 status = "draft"
 method = "test"
 asil = "QM"
-derives = "SYS-REQ-NM-001"
+derives = "SYS-REQ-LIFE-003"
