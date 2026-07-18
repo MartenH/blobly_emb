@@ -146,10 +146,9 @@ static int phy_bringup(void) {
 
 /* phy_sync_maccr: apply the PHY's NEGOTIATED speed/duplex (PSCSR reg 31,
  * bits[4:2]: bit1 of the field = 100 Mbit, bit2 = full duplex) to MACCR. Falls
- * back to 100M/full if the field reads 0 (autoneg not settled). Idempotent.
- * Returns 1 when a REAL negotiated mode was applied, 0 on the fallback guess —
- * callers use this to keep retrying until the PHY has actually settled. */
-static int phy_sync_maccr(void) {
+ * back to 100M/full if the field reads 0 (autoneg not settled). Idempotent —
+ * only writes MACCR when the mode actually changed. */
+static void phy_sync_maccr(void) {
 	uint16_t pscsr = 0;
 	(void)phy_read(31u, &pscsr);
 	eth_phy_pscsr = pscsr;
@@ -168,31 +167,23 @@ static int phy_sync_maccr(void) {
 	if (maccr != ETH->MACCR) {
 		ETH->MACCR = maccr;
 	}
-	return spd != 0u;
 }
 
 int eth_link_up(void) {
-	static uint8_t prev_up; /* edge detect: sync MACCR once per link-up, not per poll */
 	uint16_t bsr;
 	if (phy_read(1u, &bsr) != 0) {
 		return 0;
 	}
 	if ((bsr & 0x0004u) == 0u) {
-		prev_up = 0;
 		return 0;
 	}
-	if (prev_up == 0u) {
-		/* down->up edge: re-sync MACCR with what THIS link actually negotiated —
-		 * covers the boot-without-cable case where eth_init's bounded autoneg wait
-		 * fell back to a guess (a 10M/half partner would otherwise never talk).
-		 * Latch only once the PHY reports a REAL mode: right at the edge PSCSR can
-		 * still read 0 (autoneg finishing) and the sync would apply the fallback;
-		 * without the retry the mismatch would persist until the next unplug.
-		 * Edge-only once latched: a steady-state poll costs one MDIO read. */
-		if (phy_sync_maccr()) {
-			prev_up = 1;
-		}
-	}
+	/* Link up: sync MACCR to the CURRENT negotiated mode on every poll — no edge
+	 * latch, because a replug/renegotiation between polls would miss the down
+	 * edge and leave a stale speed/duplex. phy_sync_maccr only writes MACCR when
+	 * it actually changed, so the steady-state cost is one extra ~29 us MDIO read
+	 * per poll, and a PSCSR still reading 0 (autoneg finishing) is retried on the
+	 * next poll for free. */
+	phy_sync_maccr();
 	return 1;
 }
 

@@ -197,18 +197,20 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 		 * single frame). Report up optimistically, as the RAM driver / ST drivers do;
 		 * the MAC is already RX/TX-enabled, so traffic flows once the PHY settles.
 		 * GET_STATUS reports the live PHY state. Re-arm RX in case of a prior DISABLE. */
-		/* Frames that arrived while DISABLED sit CPU-owned in the ring: drain and
-		 * DROP them (they were captured while the interface was down — delivering
-		 * them now would replay stale ARP/IP traffic), which also recycles the
-		 * descriptors. Without this, a disable across a >=ring-size burst leaves
-		 * the RX DMA suspended on RBU with no future RI possible (recycle only
-		 * happens on drain, drain only on RI) — RX dead for good. Safe scratch:
-		 * all driver entry is serialized under the IP protection mutex. */
+		/* Re-arm FIRST, then drain: a frame arriving mid-drain fires RI, and with
+		 * the callback already armed that queues a deferred pass which sweeps any
+		 * leftovers after we return (the IP mutex serializes it behind us) — armed
+		 * after the drain, that RI would be silently cleared and a quiet link
+		 * would strand the frame. The drain itself DROPS everything captured while
+		 * DISABLED (delivering it would replay stale traffic) and recycles the
+		 * descriptors — without it, a disable across a >=ring-size burst leaves
+		 * the RX DMA suspended on RBU with no future RI possible: RX dead for
+		 * good. Scratch reuse is safe: all driver entry holds the IP mutex. */
+		eth_set_rx_callback(nx_driver_rx_signal);
 		if (nx_driver_initialized) {
 			while (eth_recv(nx_driver_txlin, sizeof(nx_driver_txlin)) != 0u) {
 			}
 		}
-		eth_set_rx_callback(nx_driver_rx_signal);
 		interface_ptr->nx_interface_link_up = NX_TRUE;
 		break;
 
