@@ -6,8 +6,9 @@ pinging the gateway. A plain-C ThreadX app — no loom2v, no CAN, no config code
 so the only moving parts are the driver and the NetX glue this example exists to
 prove on silicon.
 
-*** BENCH-UNVERIFIED on H735 *** — the code compiles + links; DMA/PHY/ISR timing is
-verified on the DK. Same posture as `boards/h735dk/flash.c`.
+**BENCH-VERIFIED on the H735-DK (2026-07-18):** 0% ping loss in both directions at
+~1 ms RTT (direct board↔PC cable and via a switch). The bring-up found four real
+bugs — see docs/net.md "P1 bring-up findings".
 
 ## Pieces
 

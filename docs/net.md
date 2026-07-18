@@ -171,11 +171,11 @@ signals are alternate function AF11:
 | LAN8742A MDIO/SMI address | **0** |
 | PHY nRST | none dedicated (soft-reset over MDIO; board NRST/power-on) |
 
-### Driver written — builds, BENCH-UNVERIFIED (2026-07-18)
+### P1 BENCH-VERIFIED (2026-07-18)
 
-The full P1 stack is written and compiles + links clean for the H735 target
-(`make -C examples/h735_net all`). It is **untested on silicon** (same posture as
-`boards/h735dk/flash.c`); the bench is where the DMA/PHY/ISR timing gets verified.
+The full P1 stack is **verified on the H735-DK**: link + ARP + IPv4 + ICMP, both
+directions, 0% ping loss at ~1 ms RTT (`ping 192.168.0.50` from the host; the
+board pings its gateway). Build: `make -C examples/h735_net all`.
 
 - **`boards/h735dk/eth.c` + `eth.h`** — register-level ETH MAC/DMA (RM0468): RCC +
   RMII pin mux (the AF11 table above), `SYSCFG_PMCR` RMII select, LAN8742 soft-reset
@@ -197,11 +197,33 @@ its clock enabled in `eth_init`. The shared `boards/common/vectors.S` is extende
 IRQ61 (ETH); non-net images resolve it via a **weak** `ETH_IRQHandler` in each
 board's `board.c` (separate object, so no `--gc-sections` capture).
 
-### Bench bring-up checklist (for the H735-DK)
+### P1 bring-up findings (all silicon-found, all fixed)
 
-1. `make -C ../.. deps` then `make -C examples/h735_net flash`.
-2. Plug the DK's RJ45 into a LAN with a `192.168.1.0/24` host; set the board IP
-   (`IP_ADDR`) / gateway (`GATEWAY`) in `main.c` to match your subnet.
-3. Halt over SWD and read `net_link_up` (auto-neg settled?) then `net_ping_ok`.
-4. If link never comes up: verify the PHY address (0) and REF_CLK on PA1; if link is
-   up but no ping: check the D2 SRAM clock enable and the `SYSCFG_PMCR` RMII select.
+The register bring-up (clocks, RMII mux, PHY, rings) worked first flash; every bug
+was in the seams between the driver, NetX, and the M7 memory model:
+
+1. **Link-up latch** — NetX issues `NX_LINK_ENABLE` before PHY auto-negotiation
+   (~2-3 s) completes; gating `nx_interface_link_up` on the instantaneous PHY status
+   latched "down" and NetX never transmitted a single frame. Report up at ENABLE.
+2. **TX checksum offload vs NetX** — `TDES3 CIC=3` made the MAC overwrite NetX's
+   software-computed checksums (wrong for ICMP): every IP frame dropped by the peer,
+   while ARP (no checksum) sailed through. Offload off; NetX owns checksums.
+3. **IP-header 4-byte alignment (the "50% loss")** — NetX's checksum routine reads
+   32-bit words; an IP header at frame+14 with the frame 4-byte aligned lands 2 mod 4
+   and mis-sums ~half the packets (pool-position dependent) → dropped as checksum
+   errors. RX path now offsets each frame so the IP header is 4-byte aligned.
+4. **DSB before the DMA doorbell (the "one frame behind")** — the M7 store buffer
+   can deliver the device-memory tail-pointer write before the normal-memory
+   descriptor OWN write; the DMA fetches OWN=0 and idles, transmitting the frame only
+   on the NEXT doorbell (frames left the board in back-to-back pairs). `__DSB()`
+   between descriptor stores and `DMACTDTPR`/`DMACRDTPR`.
+
+Also tuned on-bench: `NX_IP_PERIODIC_RATE`/`TX_TIMER_TICKS_PER_SECOND` forced to
+1000 to match the 1 kHz SysTick (nx_port.h hard-defines 100 → every NetX timeout ran
+10x fast), speed/duplex read from the PHY's negotiated result instead of hardcoded,
+and RX ring sized 16 (4 could overflow on a broadcast-heavy LAN).
+
+Bench diagnostics that survived into the code: `eth_rx/tx/isr_count` +
+`eth_phy_pscsr` (eth.c), `net_ping_ok/fail`, `net_link_up` (the app) — read over
+SWD with openocd (`init; halt; mdw <addr>; resume`). NOTE: st-util resets the target
+on attach and silently wipes this state; use openocd for live reads.

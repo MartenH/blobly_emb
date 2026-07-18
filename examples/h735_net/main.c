@@ -7,23 +7,23 @@
  * exists to prove the driver on silicon. Success/failure are exposed as globals
  * (net_ping_ok / net_ping_fail) so the bench can read them over SWD without a UART.
  *
- * *** BENCH-UNVERIFIED on H735 *** — see eth.c / nx_driver_stm32h7.c. */
+ * BENCH-VERIFIED on the H735-DK 2026-07-18: 0% ping loss both directions, ~1 ms RTT. */
 #include "tx_api.h"
 #include "nx_api.h"
 
 /* board bring-up (boards/h735dk/board.c) */
 extern void board_clock_init(void);
 
-/* Static addressing (no DHCP for P1 — fewer moving parts to bench-debug). The
- * board takes a free host on the dev subnet and pings the ROUTER: routers answer
- * ICMP on the LAN side reliably, whereas a PC's firewall usually drops inbound
- * echo (net_ping_fail would climb even with a working driver). The complementary
- * test — `ping 192.168.0.50` FROM the PC — is firewall-independent (the PC's
- * outbound ping is always allowed) and exercises the board's full RX+ARP+TX path. */
+/* Static addressing (no DHCP for P1 — fewer moving parts to bench-debug). Set
+ * IP_ADDR/GATEWAY/PING_DEST for the bench subnet. PING_DEST defaults to the
+ * gateway (routers answer LAN-side ping; a PC's firewall usually drops inbound
+ * echo) — on a direct board<->PC cable, point it at the PC's NIC instead. The
+ * reverse test, `ping <IP_ADDR>` FROM the PC, needs no config and exercises the
+ * board's full RX+ARP+TX path. */
 #define IP_ADDR    IP_ADDRESS(192, 168, 0, 50)
 #define IP_MASK    0xFFFFFF00UL              /* /24 */
 #define GATEWAY    IP_ADDRESS(192, 168, 0, 1)
-#define PING_DEST  GATEWAY                   /* the router — a reliable ICMP responder */
+#define PING_DEST  GATEWAY
 #define PING_WAIT  (2 * NX_IP_PERIODIC_RATE) /* 2 s */
 
 /* --- static memory (no heap; REQ-NET-001/002). Packet payload rounds the 1514

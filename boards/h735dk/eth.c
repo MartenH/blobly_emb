@@ -5,9 +5,10 @@
  * HAL bring-up order. D-cache is OFF on this board (docs/no-alloc.md), so DMA
  * descriptors/buffers need NO clean+invalidate — a real simplification here.
  *
- * *** DRY-CODED, BENCH-UNVERIFIED on H735 *** (same posture as flash.c): the
- * H735-DK bench is where the ISR/DMA/PHY timing gets silicon-verified. Pinout is
- * the CONFIRMED MB1520 map (docs/net.md); all ETH signals are AF11.
+ * BENCH-VERIFIED on the H735-DK (2026-07-18): link + ARP + ICMP both directions,
+ * 0% loss at ~1 ms RTT. Two silicon-found bugs live in this file's history: the
+ * DSB-before-doorbell ordering (see eth_send) and TX checksum-offload vs NetX
+ * software checksums. Pinout is the CONFIRMED MB1520 map (docs/net.md), AF11.
  *
  * Descriptor format: the H7 "normal" 4-word descriptor (RDES/TDES 0..3). One
  * buffer per descriptor, single-frame (no chaining) for the P1 link+ping cut. */
@@ -30,6 +31,13 @@ static uint8_t tx_buf[ETH_TX_DESC_CNT][ETH_BUF_SIZE] __attribute__((aligned(32),
 static uint32_t rx_idx; /* next RX descriptor the CPU will inspect */
 static uint32_t tx_idx; /* next TX descriptor the CPU will fill */
 static void (*rx_cb)(void);
+
+/* bench-observable frame counters (read over SWD) — cheap, and they were how the
+ * P1 bring-up bugs were found; keep them. */
+volatile uint32_t eth_rx_count;
+volatile uint32_t eth_tx_count;
+volatile uint32_t eth_isr_count;
+volatile uint32_t eth_phy_pscsr; /* LAN8742 reg31: negotiated speed/duplex */
 
 /* --- RDES3 / TDES3 bit fields (RM0468) --- */
 #define DESC_OWN (1u << 31) /* owned by DMA */
@@ -162,6 +170,7 @@ static void rings_init(void) {
 	ETH->DMACTDLAR = (uint32_t)(uintptr_t)&tx_desc[0];
 	ETH->DMACTDRLR = ETH_TX_DESC_CNT - 1u;
 	ETH->DMACTDTPR = (uint32_t)(uintptr_t)&tx_desc[0];
+	__DSB(); /* ring contents visible before the DMA is started */
 }
 
 /* ---------------------------------------------------------------- init ------ */
@@ -190,6 +199,9 @@ int eth_init(const uint8_t mac[6]) {
 	ETH->MACA0HR = ((uint32_t)mac[5] << 8) | (uint32_t)mac[4];
 	ETH->MACA0LR = ((uint32_t)mac[3] << 24) | ((uint32_t)mac[2] << 16)
 	             | ((uint32_t)mac[1] << 8) | (uint32_t)mac[0];
+	/* Perfect filter (MACPFR reset value 0): accept unicast matching MACA0 +
+	 * broadcast. NOT promiscuous — on a busy network promiscuous floods the small
+	 * RX ring and crowds out our own reply traffic (bench: ~50% ICMP loss). */
 	if (phy_bringup() != 0) {
 		return -2;
 	}
@@ -205,9 +217,34 @@ int eth_init(const uint8_t mac[6]) {
 	ETH->DMACIER = ETH_DMACIER_RIE | ETH_DMACIER_NIE;
 	NVIC_EnableIRQ(ETH_IRQn);
 
-	/* 6. go: MAC TX/RX enable (100 Mbit full duplex — LAN8742 auto-neg to 100FD on
-	 * the DK), then DMA start. Speed/duplex are re-synced from the PHY in link-up. */
-	ETH->MACCR |= ETH_MACCR_FES | ETH_MACCR_DM | ETH_MACCR_TE | ETH_MACCR_RE;
+	/* 6. match the MAC to the PHY's AUTO-NEGOTIATED speed/duplex. Hardcoding a
+	 * mismatch (MAC full-duplex on a half-duplex link) is the classic cause of
+	 * ~50% packet loss. Wait for auto-negotiation to finish (BSR bit5), then read
+	 * the LAN8742 PSCSR (reg 31): bits[4:2] = speed indication, encoded so bit1 of
+	 * that field = 100 Mbit and bit2 = full duplex (0b110 = 100M full). */
+	uint16_t bsr = 0;
+	for (uint32_t t = 0; t < 500000u; t++) {
+		if (phy_read(1u, &bsr) == 0 && (bsr & 0x0020u) != 0u) {
+			break; /* auto-negotiation complete */
+		}
+	}
+	uint16_t pscsr = 0;
+	(void)phy_read(31u, &pscsr);
+	eth_phy_pscsr = pscsr;
+	uint32_t spd = ((uint32_t)pscsr >> 2) & 0x7u;
+	uint32_t maccr = ETH->MACCR & ~(ETH_MACCR_FES | ETH_MACCR_DM);
+	if (spd == 0u) {
+		maccr |= ETH_MACCR_FES | ETH_MACCR_DM; /* read failed -> assume 100M full */
+	} else {
+		if ((spd & 0x2u) != 0u) {
+			maccr |= ETH_MACCR_FES; /* 100 Mbit (else 10) */
+		}
+		if ((spd & 0x4u) != 0u) {
+			maccr |= ETH_MACCR_DM; /* full duplex (else half) */
+		}
+	}
+	maccr |= ETH_MACCR_TE | ETH_MACCR_RE;
+	ETH->MACCR = maccr;
 	ETH->DMACTCR |= ETH_DMACTCR_ST;
 	ETH->DMACRCR |= ETH_DMACRCR_SR;
 	return 0;
@@ -232,8 +269,15 @@ int eth_send(const uint8_t *frame, uint32_t len) {
 	 * by the peer. ARP has no checksum, which is why it worked and ping didn't. */
 	d->des3 = DESC_OWN | TDES3_FD | TDES3_LD;
 	tx_idx = (tx_idx + 1u) % ETH_TX_DESC_CNT;
+	/* DSB: the descriptor stores (normal memory, D2 SRAM) must be visible BEFORE
+	 * the tail-pointer doorbell (device memory) — the M7 store buffer otherwise
+	 * lets the doorbell arrive first, the DMA fetches the descriptor with OWN
+	 * still 0 and goes idle, and the frame only leaves on the NEXT doorbell
+	 * (bench: every TX one frame behind, frames leaving in back-to-back pairs). */
+	__DSB();
 	/* poke the tail pointer to wake the TX DMA. */
 	ETH->DMACTDTPR = (uint32_t)(uintptr_t)&tx_desc[tx_idx];
+	eth_tx_count++;
 	return 0;
 }
 
@@ -250,10 +294,13 @@ uint32_t eth_recv(uint8_t *buf, uint32_t buf_size) {
 			len = buf_size;
 		}
 		memcpy(buf, &rx_buf[rx_idx][0], len);
+		eth_rx_count++;
 	}
-	/* recycle the descriptor back to the DMA. */
+	/* recycle the descriptor back to the DMA (DSB: same store-ordering rule as
+	 * eth_send — OWN must be visible before the doorbell). */
 	d->des0 = (uint32_t)(uintptr_t)&rx_buf[rx_idx][0];
 	d->des3 = DESC_OWN | RDES3_IOC | RDES3_BUF1V;
+	__DSB();
 	ETH->DMACRDTPR = (uint32_t)(uintptr_t)&rx_desc[rx_idx];
 	rx_idx = (rx_idx + 1u) % ETH_RX_DESC_CNT;
 	return len;
@@ -267,6 +314,7 @@ void eth_set_rx_callback(void (*cb)(void)) {
 /* The NVIC entry (vectors.S IRQ61). A board.c weak default absorbs it in images
  * that don't link the ETH driver; this strong definition wins in the net image. */
 void ETH_IRQHandler(void) {
+	eth_isr_count++;
 	uint32_t sr = ETH->DMACSR;
 	ETH->DMACSR = sr; /* write-1-clear the pending flags */
 	if ((sr & ETH_DMACSR_RI) != 0u && rx_cb != 0) {
