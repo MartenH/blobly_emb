@@ -20,7 +20,6 @@
  * (they are not exported from nx_api.h). */
 #define NX_ETHERNET_IP   0x0800u
 #define NX_ETHERNET_ARP  0x0806u
-#define NX_ETHERNET_RARP 0x8035u
 #define NX_ETHERNET_IPV6 0x86DDu
 #define NX_ETHERNET_SIZE 14u
 #define NX_LINK_MTU      1514u
@@ -90,12 +89,10 @@ static void nx_driver_receive(void) {
 			packet->nx_packet_prepend_ptr += NX_ETHERNET_SIZE;
 			packet->nx_packet_length -= NX_ETHERNET_SIZE;
 			_nx_arp_packet_deferred_receive(nx_driver_ip, packet);
-		} else if (ether_type == NX_ETHERNET_RARP) {
-			packet->nx_packet_prepend_ptr += NX_ETHERNET_SIZE;
-			packet->nx_packet_length -= NX_ETHERNET_SIZE;
-			_nx_rarp_packet_deferred_receive(nx_driver_ip, packet);
 		} else {
-			nx_packet_release(packet); /* unknown EtherType */
+			/* unknown EtherType (incl. RARP — never enabled here; routing it would
+			 * only link dead NetX code the image can't use). */
+			nx_packet_release(packet);
 		}
 	}
 }
@@ -110,6 +107,9 @@ static void nx_driver_ethernet_send(NX_IP_DRIVER *req, UINT ether_type) {
 	ULONG total = packet->nx_packet_length;
 
 	if (total + NX_ETHERNET_SIZE > sizeof(nx_driver_txlin)) {
+		/* Unreachable at the configured MTU (1500), but keep the guard honest:
+		 * a dropped frame is not a successful send. */
+		req->nx_ip_driver_status = NX_NOT_SUCCESSFUL;
 		nx_packet_transmit_release(packet);
 		return;
 	}
@@ -199,6 +199,13 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 		 * GET_STATUS reports the live PHY state. Re-arm RX in case of a prior DISABLE. */
 		eth_set_rx_callback(nx_driver_rx_signal);
 		interface_ptr->nx_interface_link_up = NX_TRUE;
+		/* Kick one deferred-processing pass: frames that arrived while disabled sit
+		 * CPU-owned in the ring, and if it FILLED, the RX DMA is suspended with no
+		 * future RI possible (recycle only happens on drain, drain only on RI) —
+		 * without this kick a disable across a >=ring-size burst kills RX for good. */
+		if (nx_driver_initialized) {
+			_nx_ip_driver_deferred_processing(ip_ptr);
+		}
 		break;
 
 	case NX_LINK_DISABLE:
@@ -213,8 +220,9 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 	case NX_LINK_PACKET_SEND:
 	case NX_LINK_PACKET_BROADCAST:
 	case NX_LINK_ARP_SEND:
-	case NX_LINK_ARP_RESPONSE_SEND:
-	case NX_LINK_RARP_SEND: {
+	case NX_LINK_ARP_RESPONSE_SEND: {
+		/* (RARP_SEND deliberately unhandled: nothing enables RARP, and routing it
+		 * would only link dead NetX code into the image.) */
 		if (!nx_driver_initialized) {
 			nx_packet_transmit_release(driver_req_ptr->nx_ip_driver_packet);
 			driver_req_ptr->nx_ip_driver_status = NX_NOT_SUCCESSFUL;
@@ -224,8 +232,6 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 		UINT cmd = driver_req_ptr->nx_ip_driver_command;
 		if (cmd == NX_LINK_ARP_SEND || cmd == NX_LINK_ARP_RESPONSE_SEND) {
 			et = NX_ETHERNET_ARP;
-		} else if (cmd == NX_LINK_RARP_SEND) {
-			et = NX_ETHERNET_RARP;
 		} else if (driver_req_ptr->nx_ip_driver_packet->nx_packet_ip_version == 4) {
 			et = NX_ETHERNET_IP;
 		} else {
@@ -251,7 +257,9 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 	}
 
 	case NX_LINK_SET_PHYSICAL_ADDRESS: {
-		/* re-program the station MAC and re-init so the MAC filter matches. */
+		/* Reprogram the address FILTER only — a full eth_init here would soft-reset
+		 * the MAC while the caller holds the IP mutex (~4 s stack freeze), discard
+		 * live rings, and wipe MACPFR multicast state. */
 		nx_driver_mac[0] = (UCHAR)(driver_req_ptr->nx_ip_driver_physical_address_msw >> 8);
 		nx_driver_mac[1] = (UCHAR)(driver_req_ptr->nx_ip_driver_physical_address_msw);
 		nx_driver_mac[2] = (UCHAR)(driver_req_ptr->nx_ip_driver_physical_address_lsw >> 24);
@@ -259,7 +267,7 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 		nx_driver_mac[4] = (UCHAR)(driver_req_ptr->nx_ip_driver_physical_address_lsw >> 8);
 		nx_driver_mac[5] = (UCHAR)(driver_req_ptr->nx_ip_driver_physical_address_lsw);
 		if (nx_driver_initialized) {
-			(void)eth_init(nx_driver_mac);
+			eth_set_mac(nx_driver_mac);
 		}
 		break;
 	}

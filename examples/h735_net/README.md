@@ -24,5 +24,7 @@ make -C ../.. deps    # once: ThreadX + NetX Duo + CMSIS headers
 make flash            # st-flash the .bin, then halt + read net_ping_ok over SWD
 ```
 
-Set `IP_ADDR` / `GATEWAY` in `main.c` for your subnet first. See docs/net.md
-"Bench bring-up checklist" for the debug order if link or ping doesn't come up.
+Set `IP_ADDR` / `GATEWAY` in `main.c` for your subnet first. If link or ping
+doesn't come up, see docs/net.md "P1 bring-up findings" — the debug order that
+worked on the bench: RJ45 link LED (PHY alive?) → `net_link_up` over SWD
+(autoneg?) → `eth_rx/tx_count` (frames moving?) → Wireshark on the peer.
