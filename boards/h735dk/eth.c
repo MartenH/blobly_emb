@@ -294,7 +294,10 @@ int eth_init(const uint8_t mac[6]) {
 		}
 	}
 	phy_sync_maccr();
-	ETH->MACCR |= ETH_MACCR_TE | ETH_MACCR_RE;
+	/* ACS+CST: strip pad/FCS in hardware so RDES3's length is the frame WITHOUT
+	 * the 4-byte CRC — otherwise every RX is 4 bytes long (NetX's IP-length trim
+	 * hid it for small pings; full-MTU frames would exceed the advertised MTU). */
+	ETH->MACCR |= ETH_MACCR_ACS | ETH_MACCR_CST | ETH_MACCR_TE | ETH_MACCR_RE;
 	ETH->DMACTCR |= ETH_DMACTCR_ST;
 	ETH->DMACRCR |= ETH_DMACRCR_SR;
 	return 0;

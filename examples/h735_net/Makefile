@@ -59,16 +59,19 @@ APP  = main.c
 
 all: $(BUILD)/$(NAME).bin
 
-$(BUILD)/tx/%.o: $(TX_PORT)/src/%.S | $(BUILD)
+$(BUILD)/tx/%.o: $(TX_PORT)/src/%.S Makefile | $(BUILD)
 	@mkdir -p $(BUILD)/tx
 	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/tx/%.o: $(TX)/common/src/%.c | $(BUILD)
+$(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile | $(BUILD)
 	@mkdir -p $(BUILD)/tx
 	$(CC) $(CFLAGS) -c $< -o $@
 $(TX_A): $(TX_OBJ)
 	$(AR) -rc $@ $^
 
-$(BUILD)/nx/%.o: $(NX)/common/src/%.c | $(BUILD)
+# Makefile in the deps: NetX/ThreadX behavior hangs on Makefile-only CFLAGS
+# (e.g. -DNX_IP_PERIODIC_RATE) — a flag change must rebuild the archives, not
+# silently reuse stale objects (bit us on the tick-rate fix).
+$(BUILD)/nx/%.o: $(NX)/common/src/%.c Makefile | $(BUILD)
 	@mkdir -p $(BUILD)/nx
 	$(CC) $(CFLAGS) -c $< -o $@
 $(NX_A): $(NX_OBJ)
