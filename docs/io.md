@@ -70,7 +70,10 @@ signal:
   a partition/thread — `from = "can0", to = "io"` (a bus value driving a pin
   with no FB in between) and `io`-to-`io` are config errors; REQ-IO-002 says
   outputs are written BY the application, and the freshness gate presumes a
-  producing FB;
+  producing FB. For an OUTPUT, exactly ONE handler may list the signal in its
+  `writes` — two handlers in the same partition would satisfy the endpoint
+  rule yet publish into one channel as two producers, breaking SPSC; ecucheck
+  counts writers per io output and rejects more than one;
 - **shape per kind**: exactly one field, an aligned scalar of at most 32 bits
   (a single atomic load in the latest-value handoff), AND the type fits the
   kind — gpio: `bool`; adc: `u16`/`u32`; pwm: `u16`/`u32` (a `u8` cannot carry
@@ -108,7 +111,10 @@ pins or peripherals:
   `double`/`triple` are single-reader transports — fan-out by channel
   multiplication, never by multi-reader channels or re-sampling the pin. One
   hardware sample per period, every consumer sees the same value, wait-free on
-  both sides.
+  both sides. **Representation**: today a signal's `to` is a single endpoint,
+  so multi-consumer fan-out is not yet expressible in config — it arrives as a
+  `to = ["a", "b"]` list form in the phase that first needs it, and the P1
+  generator/ecucheck REJECT a second consumer rather than half-support it.
 - **Inputs**: sampled wait-free. The ADC is configured ONCE at init — continuous
   scan mode over the configured channels, circular DMA into a latest-value array —
   and free-runs from then on; no timers, no conversion interrupts, no per-sample
@@ -127,24 +133,33 @@ pins or peripherals:
   keeps applying the configured `init`, never the channel's zero-initialized
   unread value (the host IOC API already reports freshness; the target slot
   protocol grows the same bit when the target phase lands). The gate **re-arms
-  on wake**: a pre-sleep actuator command still sitting in the channel must not
-  be re-applied after resume — outputs hold `init` until the first POST-WAKE
-  publication (REQ-IO-009). PWM signal value =
+  on wake**, and by GENERATION, not a boolean: a triple-buffer acquire happily
+  returns the retained pre-sleep value, so the io thread latches the channel's
+  publication count at wake and holds `init` until that count ADVANCES — only
+  a genuinely post-wake publication opens the gate (REQ-IO-009; the host IOC
+  exposes the publication count, the target slot protocol grows it with the
+  target phase). PWM signal value =
   duty in permille (0..1000), **clamped to 1000** above range — a u16 can carry
   1001..65535 and the clamp makes the out-of-range policy deterministic across
   timer backends instead of backend-dependent wrap/saturate. The carrier
   `freq_hz` is config, not data.
   **Before the first publication** (startup, a disabled FB, a delayed first
   activation) the pin holds its configured `init` value — every output point
-  declares one (`init = false` level, `init = 0` duty), applied by the io
-  thread at its own init, BEFORE the app starts. No window where the pin state
-  is whatever the peripheral reset left behind, and no accidental drive from an
-  unpublished zero-value channel.
+  declares one (`init = false` level, `init = 0` duty), established by
+  `io_init()` at DRIVER init, in the same board bring-up step that muxes the
+  pin (configure the output register to `init` BEFORE switching the pin from
+  its reset state to output mode — no reset-to-thread window, no glitch
+  through a floating pin into an active-high actuator). The io thread starts
+  later and only ever re-applies.
 - **Startup ordering — inputs too**: the io thread publishes ONE initial sample
-  of every input (waiting out the ADC's first conversion) before application
-  dispatch begins, so the first activation never reads an empty channel's zero
-  as if it were a hardware sample. Same ordering rule the deterministic
-  start-up chain already imposes (SYS-REQ-LIFE-001): platform first, app after.
+  of every input before application dispatch begins, so the first activation
+  never reads an empty channel's zero as if it were a hardware sample. The
+  ADC's first-conversion wait is BOUNDED (a few conversion periods, config
+  const): a silent converter must not hang deterministic startup — on timeout
+  the io thread publishes the raw latest-value (still all-zero), bumps a
+  startup-fault counter observable over telemetry/shell, and lets the ECU
+  start. Same ordering rule the deterministic start-up chain already imposes
+  (SYS-REQ-LIFE-001): platform first, app after.
 - The C implementations (`io_adc_read(ch)`, `io_gpio_read/write(ch)`,
   `io_pwm_set(ch, permille)`) live behind a **driver io port** (`driver/io`,
   the same seam as `driver/can`): a platform-independent port header with a
