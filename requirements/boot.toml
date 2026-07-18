@@ -1,0 +1,166 @@
+# Bootloader (BOOT): reset-time boot decision + in-field reprogramming.
+# Capability-level — nothing here names a flash geometry, a CPU, or a transport
+# instance; CAN/ISO-TP is merely the first BINDING of the programming protocol
+# (see REQ-BOOT-006). Design sketch: docs/bootloader.md.
+
+[[req]]
+id = "REQ-BOOT-001"
+title = "Boot decision at every reset"
+text = "At every reset the bootloader shall decide between starting the application and staying in programming mode, based on application validity and any pending programming request."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-002"
+title = "Never start an invalid application"
+text = "The bootloader shall verify the application image's integrity before transferring control to it, and shall stay in programming mode when verification fails."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-003"
+title = "Application-requested reprogramming"
+text = "A running application shall be able to request programming mode such that the request survives the reset into the bootloader."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-004"
+title = "Unbrickable update"
+text = "An update interrupted at any point (power loss, lost link, aborted transfer) shall leave the bootloader reachable over its programming transports at the next reset."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-005"
+title = "Block-wise transfer with final verification"
+text = "The bootloader shall accept an application image in bounded blocks with per-block acknowledgement, and shall mark the image valid only after the complete image passes an integrity check."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-006"
+title = "Transport-independent programming protocol"
+text = "The programming services shall be independent of the physical transport; adding a transport binding shall not change the services, the block format, or the session flow."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-007"
+title = "Atomic activation"
+text = "Activation of a new application shall be atomic: after any reset the ECU shall run either the complete previous application or the complete new one, never a mixture."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-008"
+title = "Bootloader self-protection"
+text = "The normal application-update flow shall not be able to erase or overwrite the bootloader's own program storage."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-009"
+title = "Identification"
+text = "The bootloader shall report its own identification and the application's identification (version, validity) over the programming services."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-010"
+title = "Bounded boot delay"
+text = "When no programming request is pending and the application is valid, the boot decision shall add only a bounded, configured delay before the application starts."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-011"
+title = "Authenticated images"
+text = "The bootloader shall accept only application images whose authenticity is verified by an asymmetric digital signature: the boot manager holds only a PUBLIC key and cannot forge an image; the signature covers the header (excluding the valid mark) and the full image; verification runs in the check routine and the valid mark is written only on success. An unsigned or wrongly-signed image is refused (no mark, decide() -> stay_boot)."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-SEC-001"
+
+[[req]]
+id = "REQ-BOOT-012"
+title = "Reset response reaches the wire"
+text = "The bootloader shall transmit the ECU-reset positive response onto the bus before executing the reset: the reset waits until the CAN controller reports all handed-off frames transmitted (bounded by a timeout so a dead bus cannot hold off the reset). Found on the H755 bench: the ISO-TP layer going idle only means the frame reached the Tx FIFO, and an immediate reset loses it mid-controller."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-013"
+title = "Programming session expires on tester silence"
+text = "A non-default diagnostic session shall expire after 5 s without a tester request (ISO 14229 S3server): the server falls back to the default session, security re-locks, and an interrupted download is abandoned. TesterPresent (0x3E) keeps the session alive."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-014"
+title = "Return to the application on tester silence"
+text = "When the boot manager entered programming mode by application request while a valid application image exists, and the tester stays silent for a bounded window in the default session, the boot manager shall reset into the application — an ECU must not stay parked in boot because a tester died. With no valid image it keeps serving (REQ-BOOT-004: always reachable)."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-015"
+title = "Programming-mode entry gated by the application"
+text = "The application shall request the transition to programming mode only when its safety pre-conditions hold (vehicle stationary, power stable — the application's own state model); the request mechanism itself carries the decision, since the boot manager cannot know vehicle state. The bench shell command is exempt as a development tool."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-PROG-001"
+
+[[req]]
+id = "REQ-BOOT-016"
+title = "Cryptographic authentication of the programming session"
+text = "The boot manager shall authenticate the tester with UDS 0x29 (Authentication) before accepting any flash-write service (erase, request download, transfer): a challenge/response in which the tester proves possession of a private key and the boot manager verifies with its public key. The gate lives in the boot manager (the root of trust) and does not depend on application integrity; without authentication every write service is refused (NRC 0x33). This retires the placeholder 0x27 seed/key."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-SEC-001"
+
+[[req]]
+id = "REQ-BOOT-017"
+title = "Cryptographic primitives verified against published vectors"
+text = "The signature and hash primitives (Ed25519 per RFC 8032, SHA-512 per FIPS 180-4) shall be implemented no-alloc and verified against the official published test vectors before use, including negative cases (a single-bit change in image, signature, or public key is rejected). Only signature VERIFICATION runs on the target; signing is host-side release tooling."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-SEC-001"
+
+[[req]]
+id = "REQ-BOOT-018"
+title = "Root of trust protected in hardware"
+text = "The boot manager and its trust anchor (the baked public key) shall be protected from field modification by the silicon's own mechanisms: readout protection that disables the debug port, write protection of the boot region, and — where the part provides it — secure-boot verification of the boot manager at power-on. Image-signature verification (REQ-BOOT-011) establishes trust in the application; this requirement establishes that the verifier itself cannot be silently replaced. Distinct from the cryptographic protocol; validated by inspection of the option-byte configuration on a locked device."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-SEC-001"

@@ -50,6 +50,7 @@ fn handler_app_governor_on_100ms(ctx voidptr) {
 	mut command_b := u32(0)
 	C.ioc_get(1, &command_a, &command_b)
 	inp.command.code = u32(command_a)
+	inp.load_cmd = st.cell_load_cmd // local
 	mut outp := ports.GovernorOut{}
 	st.governor.on_100ms(inp, mut outp)
 	st.cell_load_cmd = outp.load_cmd // local
@@ -75,6 +76,7 @@ fn C.trace_bind_thread(voidptr)
 fn C.trace_fb(u32, u64, u32)
 fn C.shell_ps(&u8, int) int
 fn C.shell_bmc(&u8, int) int
+fn C.shell_boot(&u8, int) int
 
 fn shell_ps_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 	n := C.shell_ps(&rsp.buf[0], 520)
@@ -85,6 +87,13 @@ fn shell_ps_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 
 fn shell_bmc_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 	n := C.shell_bmc(&rsp.buf[0], 520)
+	if n > 0 {
+		rsp.len = n
+	}
+}
+
+fn shell_boot_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
+	n := C.shell_boot(&rsp.buf[0], 520)
 	if n > 0 {
 		rsp.len = n
 	}
@@ -274,6 +283,7 @@ fn comm_thread_entry(input u32) {
 	g_sh.init(u32(0x7f1)) // in place: no module-sized stack copies
 	g_sh.register('ps', 'threads: prio, state, stack high-water', shell_ps_cmd)
 	g_sh.register('bmc', 'DWT core benchmark (CPI, LSU, folds)', shell_bmc_cmd)
+	g_sh.register('boot', 'target command (comm_glue.c)', shell_boot_cmd)
 	mut shell_txf := can.Frame{}
 	g_sh.register('nm', 'NM state; nm req|rel', shell_nm_cmd)
 	g_sh.register('stat', 'per-handler us: last, max, mean, count', shell_stat_cmd)
@@ -322,8 +332,12 @@ fn comm_thread_entry(input u32) {
 			}
 		}
 		t1 := C.board_now_us()
+		for ch.tx_ready() && g_nm.produce(t1, mut nm_txf) {
+			ch.send(nm_txf)
+		}
+		nm_up := g_nm.awake() // NM-gated COM tx (REQ-COM-007, post-tick)
 		// PRODUCER: CpuLoad telemetry — reads the FB thread's load scratch
-		if t1 - last_telem >= telem_period_us && ch.tx_ready() {
+		if t1 - last_telem >= telem_period_us && nm_up && ch.tx_ready() {
 			last_telem = t1
 			mut load := [8]u16{}
 			load[0] = u16(C.load_sum_permille()) // sum of the FB threads (one core)
@@ -350,7 +364,7 @@ fn comm_thread_entry(input u32) {
 		}
 		// PRODUCER: external tx signal "Workload" — read the FB-published IOC
 		// cell, encode the value (LE at byte 0), and send it cyclically (tx_ready-gated).
-		if t1 - last_tx_workload >= u64(100000) && ch.tx_ready() {
+		if nm_up && t1 - last_tx_workload >= u64(100000) && ch.tx_ready() {
 			last_tx_workload = t1
 			mut tv_a := u32(0)
 			mut tv_b := u32(0)
@@ -365,14 +379,11 @@ fn comm_thread_entry(input u32) {
 			tf.data[3] = u8((tv_a >> 24) & 0xff)
 			ch.send(tf)
 		}
-		for ch.tx_ready() && g_tm.produce(t1, mut trace_txf) {
+		for nm_up && ch.tx_ready() && g_tm.produce(t1, mut trace_txf) {
 			ch.send(trace_txf)
 		}
-		for ch.tx_ready() && g_sh.produce(t1, mut shell_txf) {
+		for nm_up && ch.tx_ready() && g_sh.produce(t1, mut shell_txf) {
 			ch.send(shell_txf)
-		}
-		for ch.tx_ready() && g_nm.produce(t1, mut nm_txf) {
-			ch.send(nm_txf)
 		}
 	}
 }

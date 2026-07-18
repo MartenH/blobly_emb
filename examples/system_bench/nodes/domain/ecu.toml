@@ -1,0 +1,31 @@
+# domain — the H755 domain controller's AUTHORED INTERNALS ONLY (dissolution).
+# The mirror of sysnode: an FB that reads VehicleSpeed and writes EngineRpm. The
+# bus wiring + identity are generated from ../../system.toml by tools/sysgen.
+
+[[partition]]
+name = "ctl"
+core = 0
+
+  [[partition.thread]]
+  name = "engine"
+
+[[fb]]
+name   = "EngineCtl"
+thread = "engine"
+
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  reads     = ["VehicleSpeed"]
+  writes    = ["EngineRpm"] # trailing comment terminates the nested [[fb.handler]] parse (vlang/v#27684)
+
+[target]
+kind    = "threadx"
+tick_ms = 1
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E2
+detail_id = 0x7E3
+period_ms = 500

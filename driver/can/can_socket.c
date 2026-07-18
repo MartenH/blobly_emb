@@ -79,6 +79,13 @@ int blob_can_tx_ready(int sock) {
 	return (r > 0 && (pfd.revents & POLLOUT)) ? 1 : 0;
 }
 
+/* Host SocketCAN: the kernel queue drains asynchronously and a sim reset is not a
+ * power event — idle by definition (the target semantics live in can_fdcan.c). */
+int blob_can_tx_idle(int sock) {
+	(void)sock;
+	return 1;
+}
+
 /* Per-socket cumulative kernel Rx-queue drop count, kept from the SO_RXQ_OVFL ancillary
  * data recvmsg() delivers. Small fixed table; a slot is free when !in_use (an explicit
  * flag, not an fd sentinel — socket() can legitimately return fd 0 with stdin closed).

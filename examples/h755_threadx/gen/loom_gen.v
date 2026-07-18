@@ -10,6 +10,8 @@ import comm.trace
 import comm.shell
 import comm.nm
 import comm.nm_can
+import nvm
+import boot as bootfl
 import driver.can
 
 struct Thread_load_fast_state {
@@ -50,9 +52,11 @@ fn handler_app_governor_on_100ms(ctx voidptr) {
 	mut command_b := u32(0)
 	C.ioc_get(1, &command_a, &command_b)
 	inp.command.code = u32(command_a)
+	inp.load_cmd = st.cell_load_cmd // local
 	mut outp := ports.GovernorOut{}
 	st.governor.on_100ms(inp, mut outp)
 	st.cell_load_cmd = outp.load_cmd // local
+	C.ioc_pub(2, u32(outp.load_cmd.iters), u32(0)) // persist staging
 }
 
 fn handler_app_load_slow_on_100ms(ctx voidptr) {
@@ -77,7 +81,16 @@ fn C.shell_ps(&u8, int) int
 fn C.shell_bmc(&u8, int) int
 fn C.shell_m4sig(&u8, int) int
 fn C.shell_iocx(&u8, int) int
+fn C.shell_boot(&u8, int) int
 fn C.duo_poll(int, &u32, &u32) int // xioc reader (comm_glue.c): 1 = fresh value
+// [nvm]: the journal storage map + flash driver (boards layer / example glue)
+fn C.nvm_map_a() u32
+fn C.nvm_map_b() u32
+fn C.nvm_map_size() u32
+fn C.bflash_erase(addr u32, size u32) int
+fn C.bflash_program(addr u32, data &u8, len u32) int
+fn C.bflash_read(addr u32, out &u8, len u32) int
+fn C.bflash_blank(addr u32, len u32) int
 fn C.duo_trace_req(u32) // post arm(1)/snapshot(2) to the satellite (duo.h dtrace cell)
 fn C.duo_trace_ready() int
 fn C.duo_trace_count() u32
@@ -106,6 +119,13 @@ fn shell_m4sig_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 
 fn shell_iocx_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 	n := C.shell_iocx(&rsp.buf[0], 520)
+	if n > 0 {
+		rsp.len = n
+	}
+}
+
+fn shell_boot_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
+	n := C.shell_boot(&rsp.buf[0], 520)
 	if n > 0 {
 		rsp.len = n
 	}
@@ -203,9 +223,12 @@ __global (
 	g_tm trace.TraceModule
 	g_sh shell.ShellModule
 	g_duo_trace_ring [256]trace.Record // the satellite core's imported dump window
+	g_nvm nvm.Journal // the persistence journal (mounted pre-kernel)
+	g_nvmres_load_cmd [12]u8 // restore staging (pre-kernel -> thread init; +headroom for the overlong check)
+	g_nvmres_load_cmd_n u16
 	g_nm nm_can.NmModule
 	g_comm_tcb   [32]u64  // the bus-owning comm thread
-	g_comm_stack [4096]u8
+	g_comm_stack [8192]u8
 	g_rx_count u32
 	g_rx_last  u32
 )
@@ -250,6 +273,9 @@ fn run_load_mid() {
 
 fn run_ctrl_slow() {
 	mut st := Thread_ctrl_slow_state{} // small + carries the FB field defaults: stack is right
+	if g_nvmres_load_cmd_n == 4 { // restored before first dispatch
+		st.cell_load_cmd.iters = u32(u32(g_nvmres_load_cmd[0]) | (u32(g_nvmres_load_cmd[1]) << 8) | (u32(g_nvmres_load_cmd[2]) << 16) | (u32(g_nvmres_load_cmd[3]) << 24))
+	}
 	mut sched := &g_sched_ctrl_slow // module-sized: lives in bss, not this lifetime frame
 	sched.every(100000, handler_app_governor_on_100ms, &st)
 	sched.every(100000, handler_app_load_slow_on_100ms, &st)
@@ -298,6 +324,7 @@ fn comm_thread_entry(input u32) {
 	g_sh.register('bmc', 'DWT core benchmark (CPI, LSU, folds)', shell_bmc_cmd)
 	g_sh.register('m4sig', 'target command (comm_glue.c)', shell_m4sig_cmd)
 	g_sh.register('iocx', 'target command (comm_glue.c)', shell_iocx_cmd)
+	g_sh.register('boot', 'target command (comm_glue.c)', shell_boot_cmd)
 	mut shell_txf := can.Frame{}
 	g_sh.register('nm', 'NM state; nm req|rel', shell_nm_cmd)
 	g_sh.register('stat', 'per-handler us: last, max, mean, count', shell_stat_cmd)
@@ -314,6 +341,15 @@ fn comm_thread_entry(input u32) {
 	mut duo_m4_count_a := u32(0)
 	mut duo_m4_count_b := u32(0)
 	mut duo_txf := can.Frame{}
+	// [nvm]: last-persisted values + pacing (change+floor-gated puts).
+	// Initialized from the staging cells, which boot() seeded with the
+	// RESTORED values — the first pass sees no phantom change.
+	mut nvm_load_cmd_a := u32(0)
+	mut nvm_load_cmd_b := u32(0)
+	C.ioc_get(2, &nvm_load_cmd_a, &nvm_load_cmd_b)
+	mut nvm_load_cmd_t := u64(0) // first change persists after ONE floor from boot: chosen pacing
+	mut nvm_prev_nm := g_nm.state()
+	mut nvm_pack := [8]u8{}
 	g_tm.set_remote(u8(1), &g_duo_trace_ring[0], 256) // satellite blocks ride our dump link
 	mut duo_trc_wait := false // a satellite snapshot was requested by op_dump
 	mut last_tx_workload := u64(0)
@@ -361,8 +397,12 @@ fn comm_thread_entry(input u32) {
 			}
 		}
 		t1 := C.board_now_us()
+		for ch.tx_ready() && g_nm.produce(t1, mut nm_txf) {
+			ch.send(nm_txf)
+		}
+		nm_up := g_nm.awake() // NM-gated COM tx (REQ-COM-007, post-tick)
 		// PRODUCER: CpuLoad telemetry — reads the FB thread's load scratch
-		if t1 - last_telem >= telem_period_us && ch.tx_ready() {
+		if t1 - last_telem >= telem_period_us && nm_up && ch.tx_ready() {
 			last_telem = t1
 			mut load := [8]u16{}
 			load[0] = u16(C.load_sum_permille()) // sum of the FB threads (one core)
@@ -389,7 +429,7 @@ fn comm_thread_entry(input u32) {
 		}
 		// PRODUCER: external tx signal "Workload" — read the FB-published IOC
 		// cell, encode the value (LE at byte 0), and send it cyclically (tx_ready-gated).
-		if t1 - last_tx_workload >= u64(100000) && ch.tx_ready() {
+		if nm_up && t1 - last_tx_workload >= u64(100000) && ch.tx_ready() {
 			last_tx_workload = t1
 			mut tv_a := u32(0)
 			mut tv_b := u32(0)
@@ -404,20 +444,17 @@ fn comm_thread_entry(input u32) {
 			tf.data[3] = u8((tv_a >> 24) & 0xff)
 			ch.send(tf)
 		}
-		for ch.tx_ready() && g_tm.produce(t1, mut trace_txf) {
+		for nm_up && ch.tx_ready() && g_tm.produce(t1, mut trace_txf) {
 			ch.send(trace_txf)
 		}
-		for ch.tx_ready() && g_sh.produce(t1, mut shell_txf) {
+		for nm_up && ch.tx_ready() && g_sh.produce(t1, mut shell_txf) {
 			ch.send(shell_txf)
-		}
-		for ch.tx_ready() && g_nm.produce(t1, mut nm_txf) {
-			ch.send(nm_txf)
 		}
 		if duo_trc_wait && C.duo_trace_ready() != 0 {
 			g_tm.load_remote(C.duo_trace_buf(), C.duo_trace_count())
 			duo_trc_wait = false
 		}
-		if C.duo_poll(0, &duo_m4_count_a, &duo_m4_count_b) != 0
+		if nm_up && C.duo_poll(0, &duo_m4_count_a, &duo_m4_count_b) != 0
 			&& t1 - duo_m4_count_last >= u64(100000) && ch.tx_ready() {
 			duo_txf.id = u32(0x201)
 			duo_txf.len = 8
@@ -431,6 +468,104 @@ fn comm_thread_entry(input u32) {
 			duo_txf.data[7] = u8(duo_m4_count_b >> 24)
 			ch.send(duo_txf)
 			duo_m4_count_last = t1
+		}
+		{ // persist "now": LoadCmd
+			mut a := u32(0)
+			mut b := u32(0)
+			C.ioc_get(2, &a, &b)
+			if (a != nvm_load_cmd_a || b != nvm_load_cmd_b) && t1 - nvm_load_cmd_t >= u64(10000000) {
+				nvm_pack[0] = u8(a)
+				nvm_pack[1] = u8(a >> 8)
+				nvm_pack[2] = u8(a >> 16)
+				nvm_pack[3] = u8(a >> 24)
+				if g_nvm.put(12844, &nvm_pack[0], 4) {
+					nvm_load_cmd_a = a
+					nvm_load_cmd_b = b
+					if g_nm.state() == .bus_sleep {
+						mut nvm_flush_ok := true
+						for nvm_pass := 0; nvm_pass < 2; nvm_pass++ {
+							nvm_flush_ok = true
+						{ // flush LoadCmd
+							mut fa := u32(0)
+							mut fb := u32(0)
+							C.ioc_get(2, &fa, &fb)
+							if fa != nvm_load_cmd_a || fb != nvm_load_cmd_b {
+								nvm_pack[0] = u8(fa)
+								nvm_pack[1] = u8(fa >> 8)
+								nvm_pack[2] = u8(fa >> 16)
+								nvm_pack[3] = u8(fa >> 24)
+								if g_nvm.put(12844, &nvm_pack[0], 4) {
+									nvm_load_cmd_a = fa
+									nvm_load_cmd_b = fb
+									nvm_load_cmd_t = t1 // the flush restarts the floor: no wake-churn double put
+								} else {
+									nvm_flush_ok = false // a value is NOT durable: no clean claim
+								}
+							}
+						}
+							if nvm_flush_ok || nvm_pass > 0 {
+								break
+							}
+							// recovery pass: a refused put (dirty partner blocking the
+							// inline compact) earns ONE quiet-point erase, then a retry
+							g_nvm.erase_pending()
+						}
+						if nvm_flush_ok {
+							g_nvm.mark_clean() // clean ONLY when every value is durable (a failed
+							// mark stays unclean: retried on the next in-sleep write or edge)
+						}
+						g_nvm.erase_pending() // cleanup AFTER values + marker are durable
+					}
+				}
+				nvm_load_cmd_t = t1 // failed puts wait the floor too: a burned
+				// slot per COMM PASS would be a wear storm; per FLOOR is policy
+			}
+		}
+		{ // persist flush at the NM quiet point (docs/nvm.md choreography)
+			nm_now := g_nm.state()
+			// flush on BOTH sleep edges: prepare entry AND bus_sleep entry —
+			// a write landing inside the wait-sleep window still flushes
+			// before power-off (writes DURING bus_sleep remain the app's
+			// risk until NM-gated dispatch lands)
+			if nm_now != nvm_prev_nm && (nm_now == .prepare_bus_sleep || nm_now == .bus_sleep) {
+				// FLUSH FIRST: the capacity gate reserved a full flush set of
+				// headroom, so values go durable in microseconds — never behind
+				// a seconds-long erase (a cut mid-erase must not cost values).
+				mut nvm_flush_ok := true
+				for nvm_pass := 0; nvm_pass < 2; nvm_pass++ {
+					nvm_flush_ok = true
+				{ // flush LoadCmd
+					mut fa := u32(0)
+					mut fb := u32(0)
+					C.ioc_get(2, &fa, &fb)
+					if fa != nvm_load_cmd_a || fb != nvm_load_cmd_b {
+						nvm_pack[0] = u8(fa)
+						nvm_pack[1] = u8(fa >> 8)
+						nvm_pack[2] = u8(fa >> 16)
+						nvm_pack[3] = u8(fa >> 24)
+						if g_nvm.put(12844, &nvm_pack[0], 4) {
+							nvm_load_cmd_a = fa
+							nvm_load_cmd_b = fb
+							nvm_load_cmd_t = t1 // the flush restarts the floor: no wake-churn double put
+						} else {
+							nvm_flush_ok = false // a value is NOT durable: no clean claim
+						}
+					}
+				}
+					if nvm_flush_ok || nvm_pass > 0 {
+						break
+					}
+					// recovery pass: a refused put (dirty partner blocking the
+					// inline compact) earns ONE quiet-point erase, then a retry
+					g_nvm.erase_pending()
+				}
+				if nvm_flush_ok {
+					g_nvm.mark_clean() // clean ONLY when every value is durable (a failed
+					// mark stays unclean: retried on the next in-sleep write or edge)
+				}
+				g_nvm.erase_pending() // cleanup AFTER values + marker are durable
+			}
+			nvm_prev_nm = nm_now
 		}
 	}
 }
@@ -454,7 +589,53 @@ fn tx_application_define(first_unused voidptr) {
 // boot: hand control to the ThreadX kernel (never returns; calls
 // tx_application_define above). main.v does the board bring-up then calls this —
 // referencing it also forces this module (incl. tx_application_define) to link.
+
+fn nvm_fl_erase(ctx voidptr, addr u32, size u32) bool {
+	return C.bflash_erase(addr, size) != 0
+}
+
+fn nvm_fl_blank(ctx voidptr, addr u32, len u32) bool {
+	return C.bflash_blank(addr, len) != 0
+}
+
+fn nvm_fl_program(ctx voidptr, addr u32, data &u8, len u32) bool {
+	return C.bflash_program(addr, data, len) != 0
+}
+
+fn nvm_fl_read(ctx voidptr, addr u32, out &u8, len u32) bool {
+	return C.bflash_read(addr, out, len) != 0
+}
 pub fn boot() {
 	C.ioc_pool_init() // init the cross-thread signal IOC cells before any thread runs
+	// [nvm]: mount + restore BEFORE the kernel — the single-threaded window.
+	// Restored values seed both the thread-init staging AND the persist ioc
+	// cells (so the comm service sees no phantom change on the first pass).
+	g_nvm.ops = bootfl.FlashOps{
+		erase:   nvm_fl_erase
+		program: nvm_fl_program
+		read:    nvm_fl_read
+		blank:   nvm_fl_blank // ECC-aware: torn words never become the frontier
+	}
+	g_nvm.cfg = nvm.SectorCfg{
+		a_addr: C.nvm_map_a()
+		b_addr: C.nvm_map_b()
+		size:   C.nvm_map_size()
+	}
+	if g_nvm.mount() && g_nvm.slots() != 4096 {
+		// the [nvm] sector_records claim (the wear/capacity proof's input)
+		// does not match the REAL map — refuse service (detectable: every
+		// put fails, no clean claim) rather than run on a voided proof
+		g_nvm.mounted = false
+	}
+	if g_nvm.mounted {
+		keep := [u16(12844)]!
+		g_nvm.prune(&keep[0], 1)
+		// cap = packed+1: an OVERLONG stored record (schema drift under a
+		// pinned id) truncates to packed+1 != packed and is refused
+		if g_nvm.get(12844, &g_nvmres_load_cmd[0], 5) == 4 {
+			g_nvmres_load_cmd_n = 4
+			C.ioc_pub(2, u32(g_nvmres_load_cmd[0]) | (u32(g_nvmres_load_cmd[1]) << 8) | (u32(g_nvmres_load_cmd[2]) << 16) | (u32(g_nvmres_load_cmd[3]) << 24), u32(0))
+		}
+	}
 	C._tx_initialize_kernel_enter()
 }

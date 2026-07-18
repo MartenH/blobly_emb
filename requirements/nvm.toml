@@ -1,0 +1,129 @@
+# Persistence (NVM): retained data as persistent signals + an append journal.
+# Capability-level — no flash geometry, no sector counts, no board. Design:
+# docs/nvm.md.
+
+[[req]]
+id = "REQ-NVM-001"
+title = "Restore before first activation"
+text = "A persistent signal shall present its last stored value to the application before the application's first activation after a reset."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-002"
+title = "Default on missing or corrupt data"
+text = "A persistent signal whose stored value is missing or fails its integrity check shall present its configured default value."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-003"
+title = "Power-loss safety"
+text = "An interrupted persistence write shall never corrupt or lose previously stored values; after any interruption the last completely stored value wins."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-004"
+title = "Persistence through signals only"
+text = "Function blocks (FBs) shall access persistent data exclusively through signals; persistence shall be a configuration property, not an application API."
+status = "draft"
+method = "review"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-005"
+title = "Bounded wear"
+text = "The write policy shall bound storage wear: changes are persisted rate-limited and amortized, never per-activation."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-006"
+title = "Flush at quiet points"
+text = "Unpersisted changes shall be written out when the ECU prepares for network sleep, before low power is entered."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-007"
+title = "Execution non-interference"
+text = "Persistence operations shall not stall application execution beyond configured bounds; long operations (erase, compaction) shall run only at designated quiet points."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-008"
+title = "Diagnostic write path"
+text = "Writable diagnostic identifiers may bind to persistent storage, providing the explicit write path (calibration, configuration) outside the application."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-009"
+title = "Loss window follows declared policy"
+text = "A persistent signal's data loss on abrupt power failure shall follow its declared policy: an immediately-persisted signal loses at most the configured system write floor, and its correctness shall not depend on an orderly shutdown; a shutdown-persisted signal is defined to retain the value from the last orderly shutdown."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-010"
+title = "Wear provable at configuration time"
+text = "For every immediately-persisted signal, the worst-case write rate (from its writer's activation period and the system write floor) shall be checked against the storage wear budget when the configuration is generated, failing generation if exceeded."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-011"
+title = "Shutdown write-out needs no reclamation"
+text = "The shutdown write-out shall always complete without storage reclamation: reserved headroom for the worst-case flush is guaranteed at configuration time, and reclamation runs ahead of need during normal operation."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-012"
+title = "Writes accepted at all times"
+text = "Persistence shall accept new values whenever the ECU is running — including during storage reclamation and during shutdown preparation — without blocking the application or the bus."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-013"
+title = "Engine runs on a thread stack"
+text = "Every journal operation reachable from the comm service (put, get, compact, erase_pending, mark_clean, prune) shall execute within a 4 KB thread stack: the engine shall not copy journal-sized state onto the call stack (value receivers and by-value parameters of the Journal struct are forbidden). Found on the H755 bench: a by-value receiver costs sizeof(Journal) ~2.6 KB per call; one nested pair overflows the comm thread stack off the bottom of DTCM."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"
+
+[[req]]
+id = "REQ-NVM-014"
+title = "Sleep writes preserve the clean claim"
+text = "A value accepted for persistence while the bus is asleep shall leave the storage in the clean-shutdown state: the journal re-establishes the clean marker after each such write, so a power-off at any point during bus sleep mounts clean and restores the newest values. A failed in-sleep write leaves the claim broken (conservative: the values are not durable)."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NVM-001"

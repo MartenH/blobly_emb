@@ -47,13 +47,17 @@ pub mut:
 	bs    u8 // BlockSize we grant in our FC (0 = whole message at once)
 	stmin u8 // STmin we ask of the sender (ms)
 	// N_Bs: max time to wait for a flow-control frame before aborting the tx. A lost
-	// or never-sent FC must not wedge the link busy forever (ISO 15765-2 N_Bs;
-	// default 1 s). 0 disables the timeout (wait indefinitely).
-	n_bs_us u64 = 1_000_000
+	// or never-sent FC must not wedge the link busy forever (ISO 15765-2 N_Bs).
+	// 0 disables the timeout (wait indefinitely). NO field default: a __global's
+	// field initializers land in _vinit, which freestanding never runs — the
+	// target read 0 = disabled and the shell wedged on one unanswered FF (the
+	// H755 bench, 4th _vinit sighting). Call init_defaults() instead.
+	n_bs_us u64
 	// WFTmax: how many consecutive FC.WAIT frames to tolerate before aborting. Each WAIT
 	// legitimately restarts N_Bs, so without a bound an endless-WAIT peer would re-wedge
 	// the link the N_Bs timeout exists to protect. 0 disables the WAIT bound.
-	wft_max u8 = 16
+	// No field default — same _vinit rule as n_bs_us.
+	wft_max u8
 	// reassembly (rx)
 	rx        RxPhase
 	rx_buf    [max_payload]u8
@@ -214,6 +218,15 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 // of poll(). A caller that gates poll() on Tx-FIFO space (`for tx_ready() && poll(...)`) must
 // call tick() every cycle so a full FIFO can't wedge the link in wait_fc forever — otherwise a
 // dump on a down/quiet bus (FF sent, no FC, FIFO stays full) never reaches its abort deadline.
+// init_defaults sets the protocol timeouts every embedded consumer must run with
+// (N_Bs 1 s, WFTmax 16). Field defaults can't do this job: on a freestanding
+// target a __global's initializers live in the never-called _vinit, so every
+// module init path calls this explicitly (the build lint enforces the class).
+pub fn (mut l Link) init_defaults() {
+	l.n_bs_us = 1_000_000
+	l.wft_max = 16
+}
+
 pub fn (mut l Link) tick(now u64) {
 	// Abort a tx that made no progress within its deadline — in wait_fc (no flow control) OR in
 	// send_cf (CTS received, but backpressure kept the FIFO full so no CF went out). fc_deadline

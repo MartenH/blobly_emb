@@ -70,7 +70,39 @@ _vectors:
   .word __tx_BadHandler
   .word __tx_BadHandler
   .word __tx_BadHandler
-  .word __tx_BadHandler
+  .word __tx_BadHandler       // IRQ34
+  .word __tx_BadHandler       // IRQ35
+  .word __tx_BadHandler       // IRQ36
+  .word __tx_BadHandler       // IRQ37
+  .word __tx_BadHandler       // IRQ38
+  .word __tx_BadHandler       // IRQ39
+  .word __tx_BadHandler       // IRQ40
+  .word __tx_BadHandler       // IRQ41
+  .word __tx_BadHandler       // IRQ42
+  .word __tx_BadHandler       // IRQ43
+  .word __tx_BadHandler       // IRQ44
+  .word __tx_BadHandler       // IRQ45
+  .word __tx_BadHandler       // IRQ46
+  .word __tx_BadHandler       // IRQ47
+  .word __tx_BadHandler       // IRQ48
+  .word __tx_BadHandler       // IRQ49
+  .word __tx_BadHandler       // IRQ50
+  .word __tx_BadHandler       // IRQ51
+  .word __tx_BadHandler       // IRQ52
+  .word __tx_BadHandler       // IRQ53
+  .word __tx_BadHandler       // IRQ54
+  .word __tx_BadHandler       // IRQ55
+  .word __tx_BadHandler       // IRQ56
+  .word __tx_BadHandler       // IRQ57
+  .word __tx_BadHandler       // IRQ58
+  .word __tx_BadHandler       // IRQ59
+  .word __tx_BadHandler       // IRQ60
+  /* IRQ61 = ETH global interrupt (RM0468 NVIC id 61). Same rule as FDCAN1_IT0
+   * above: the image provides the strong handler (boards/h735dk/eth.c). Non-net
+   * images fall back to the WEAK ETH_IRQHandler in their board.c — a SEPARATE
+   * object, so it never captures this .word's relocation the way a same-object
+   * .weak+.set would (the --gc-sections trap the FDCAN note warns about). */
+  .word ETH_IRQHandler        // IRQ61
 
   .section .init, "ax"
   .thumb_func
