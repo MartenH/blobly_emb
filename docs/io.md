@@ -45,6 +45,12 @@ cadence). The io thread runs at the fastest configured period and serves each
 point on its own multiple; without this an output-only ECU would have no
 defined cadence at all.
 
+The io thread's **home core** is config: an optional top-level `[io]` table
+with `core = N`, defaulting to the IO core (core 0 — where the bus bridges
+already live, the comm-thread precedent). That placement is what the
+same-core/cross-core transport derivation below is computed against, and on
+the MPU target it decides which peripheral region the platform partition maps.
+
 Each `[[io.*]]` entry names a `[[signal]]`; the signal's `from`/`to` gains a third
 endpoint class, **io** (next to partition and bus): `from = "io"` = an input the
 platform publishes, `to = "io"` = an output the platform drives. Direction is
