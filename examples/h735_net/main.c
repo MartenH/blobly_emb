@@ -15,12 +15,15 @@
 extern void board_clock_init(void);
 
 /* Static addressing (no DHCP for P1 — fewer moving parts to bench-debug). The
- * board takes a free host on the dev subnet; the ping target is the dev PC, a
- * known-alive host you can watch (Wireshark / `ping 192.168.0.50` in reverse). */
+ * board takes a free host on the dev subnet and pings the ROUTER: routers answer
+ * ICMP on the LAN side reliably, whereas a PC's firewall usually drops inbound
+ * echo (net_ping_fail would climb even with a working driver). The complementary
+ * test — `ping 192.168.0.50` FROM the PC — is firewall-independent (the PC's
+ * outbound ping is always allowed) and exercises the board's full RX+ARP+TX path. */
 #define IP_ADDR    IP_ADDRESS(192, 168, 0, 50)
 #define IP_MASK    0xFFFFFF00UL              /* /24 */
 #define GATEWAY    IP_ADDRESS(192, 168, 0, 1)
-#define PING_DEST  IP_ADDRESS(192, 168, 0, 190) /* the dev PC */
+#define PING_DEST  GATEWAY                   /* the router — a reliable ICMP responder */
 #define PING_WAIT  (2 * NX_IP_PERIODIC_RATE) /* 2 s */
 
 /* --- static memory (no heap; REQ-NET-001/002). Packet payload rounds the 1514
