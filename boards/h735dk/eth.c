@@ -284,8 +284,11 @@ int eth_init(const uint8_t mac[6]) {
 	 * cause. Bounded wait for autoneg (BSR bit5), then sync; if the cable is
 	 * absent at boot this falls back to 100M/full and eth_link_up() re-syncs when
 	 * a link actually comes up. */
+	/* Each iteration is one MDIO read = 64 MDC bits at 2.2 MHz ~= 29 us, so the
+	 * bound is the autoneg budget: 140k * 29 us ~= 4 s (802.3 settles in < 3 s).
+	 * No cable -> falls through after ~4 s; eth_link_up() re-syncs on late plug. */
 	uint16_t bsr = 0;
-	for (uint32_t t = 0; t < 500000u; t++) {
+	for (uint32_t t = 0; t < 140000u; t++) {
 		if (phy_read(1u, &bsr) == 0 && (bsr & 0x0020u) != 0u) {
 			break; /* auto-negotiation complete */
 		}
