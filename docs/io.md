@@ -50,27 +50,35 @@ The generator assigns each io point a channel index and emits `gen/io_gen.h` —
 contract header the example's/boards' C glue compiles against. The V side never sees
 pins or peripherals:
 
+- **The platform io thread owns every pin touch.** Peripheral registers belong to
+  the platform partition — on the MPU target an application partition has no
+  peripheral region (docs/memory-protection.md), so app threads can neither sample
+  inputs nor apply outputs themselves. The generator therefore emits a first-class
+  **io thread** (the comm-thread precedent, [[platform-scheduling-comm-thread]]):
+  each period it samples the due input points and publishes them, and acquires
+  output points and applies them. App threads only ever see signal cells.
+- **Fan-out stays SPSC.** The io thread is the single producer of every input
+  signal; a point consumed by several threads gets **one generated channel per
+  consumer edge** (the io thread publishes the same sample into each), because
+  `double`/`triple` are single-reader transports — fan-out by channel
+  multiplication, never by multi-reader channels or re-sampling the pin. One
+  hardware sample per period, every consumer sees the same value, wait-free on
+  both sides.
 - **Inputs**: sampled wait-free. The ADC is configured ONCE at init — continuous
   scan mode over the configured channels, circular DMA into a latest-value array —
   and free-runs from then on; no timers, no conversion interrupts, no per-sample
-  management (the IOC philosophy applied to the pin: the loop READS, never waits).
-  GPIO reads are direct. Two cadences, deliberately decoupled: conversions free-run
-  (hardware's business), while `period_ms` is the PUBLISH cadence — when the
-  generated loop copies the latest value into the signal's cell, before dispatch,
-  so FBs see a coherent snapshot as always. **Single-writer, like every signal**:
-  an io input is homed to exactly ONE thread (where its consuming FB runs; with
-  consumers on several threads, the generator homes it to one — config picks, the
-  same way a signal's producer is unique today) and only that thread's loop
-  samples-and-publishes. Every other consumer acquires the published value over
-  the ordinary cross-thread transport (IOC) — never by re-sampling the pin. One
-  hardware sample per period, one producer per cell; the SPSC invariant holds and
-  all consumers see the same value. Equidistant sampling would only matter
-  for signal-processing use — which is a non-goal below. (NM footnote: stopping the
+  management (the IOC philosophy applied to the pin: the io thread READS, never
+  waits). GPIO reads are direct. Two cadences, deliberately decoupled: conversions
+  free-run (hardware's business), while `period_ms` is the PUBLISH cadence — the
+  io thread's copy from latest-value array into the signal channels. Values are
+  ≤32-bit aligned scalars (ADC counts, levels, permille), so the DMA-array read
+  is a single atomic load. Equidistant sampling would only matter for
+  signal-processing use — which is a non-goal below. (NM footnote: stopping the
   free-running ADC/DMA at sleep-entry is platform lifecycle, the same hook family
   as the transceiver — P4.)
-- **Outputs**: applied after dispatch — GPIO write / PWM compare-register update,
-  both near-free. PWM signal value = duty in permille (0..1000); the carrier
-  `freq_hz` is config, not data.
+- **Outputs**: the io thread acquires each output signal's channel and applies it —
+  GPIO write / PWM compare-register update, both near-free. PWM signal value =
+  duty in permille (0..1000); the carrier `freq_hz` is config, not data.
 - The C implementations (`io_adc_read(ch)`, `io_gpio_read/write(ch)`,
   `io_pwm_set(ch, permille)`) live in the boards layer / example glue, exactly as
   `duo_pub`/`comm_glue.c` do today.
@@ -94,7 +102,10 @@ boards layer owns the pin; the owning platform module owns the WHEN:
   transceiver's wake output is a wake source. Seam: `board_can_mode(bus, mode)` —
   a boards-layer hook, default no-op (today's bench transceivers strap STB to GND,
   i.e. permanently normal — the hook makes that a board property, not a design
-  assumption). NM calls it on its sleep/wake transitions; nothing else does.
+  assumption). NM calls it on its sleep/wake transitions — and ONCE at init to
+  establish the configured initial state (NM starts in `bus_sleep` without a
+  transition, and a transceiver that powers up in normal mode must not stay awake
+  while NM reports sleep). Nothing else calls it.
 - **Ethernet PHY ← the net stack.** NetX Duo's driver calls PHY hooks
   (reset, link poll, power-down) that the boards layer provides. Same shape.
 - Litmus test for which class a pin is: *would an FB ever read or write it?* If the
@@ -117,20 +128,24 @@ boards layer owns the pin; the owning platform module owns the WHEN:
 Host examples back io points with **files** (the boot_sim flash.bin move): an input
 point reads its value from `io/<name>`, an output writes there — a shell/GUI pokes
 inputs and watches outputs with zero target hardware. The FlashOps precedent says
-this is enough to develop the whole layer dry. **File access never sits on the
-sampled path**: the sim's io glue mirrors the ADC/DMA shape — a background reader
-polls `io/<name>` at its own pace into an in-memory latest-value array (tolerating
-a mid-`echo` torn read; the next poll heals it), and the dispatch-path
-`io_*_read(ch)` is a plain memory read, exactly as on target. The wait-free /
-latest-complete-sample contract (REQ-IO-003) holds in both worlds; a blocking or
-truncated filesystem op can delay the mirror, never the loop.
+this is enough to develop the whole layer dry. **The io thread makes this safe by
+construction**: on host, the same platform io thread does the file work in both
+directions — it polls `io/<name>` into its latest-value array (tolerating a
+mid-`echo` torn read; the next poll heals it) and writes output files after
+applying (the hardware's compare-register write becomes an `io/<name>` write).
+App threads never touch a file: values cross on the same generated SPSC channels
+as on target, which is also what makes the handoff race-free — no plain shared
+array between threads, no C-level data race. A blocking or truncated filesystem
+op can delay the io thread's next period, never an app loop; the wait-free /
+latest-complete-sample contract (REQ-IO-003) holds identically in both worlds.
 
 ## Phasing (each rung gated; bench when silicon is back)
 
 1. **P1 — GPIO** in/out on the H755 (user LED + button are on-board: button →
    CAN frame, shell → LED — observable with nothing but the bench). Model +
    generator + `io_gen.h` + boards glue land here.
-2. **P2 — ADC** inputs (timer + DMA latest-value; the wait-free contract).
+2. **P2 — ADC** inputs (continuous-scan + circular-DMA latest-value, no timers —
+   the free-running model above; the wait-free contract).
 3. **P3 — PWM** outputs.
 4. **P4 — NM transceiver hook** (`board_can_mode`) + wake source — needs a board
    with a controllable transceiver on the bench.

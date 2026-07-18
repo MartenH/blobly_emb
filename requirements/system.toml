@@ -119,8 +119,8 @@ asil = "QM"
 # the IO P4 bench lands.
 [[req]]
 id = "SYS-REQ-LIFE-003"
-title = "Network-state-driven hardware lifecycle"
-text = "Bus hardware under ECU control (transceivers, network peripherals) shall follow the network management state: operational while the network is awake, low-power when asleep, and shall serve as configured wake sources."
+title = "Transceiver lifecycle follows network state"
+text = "Controllable bus transceivers shall follow the network management state: operational while the network is awake, low-power when asleep, and shall serve as configured wake sources. Other network peripherals get their own lifecycle requirements when their phases land."
 status = "draft"
 method = "test"
 asil = "QM"
