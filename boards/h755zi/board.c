@@ -133,3 +133,9 @@ void board_can_clock_pins_init(void) {
 	GPIOD->AFR[0] &= ~((0xFu << (0u * 4u)) | (0xFu << (1u * 4u)));
 	GPIOD->AFR[0] |= ((9u << (0u * 4u)) | (9u << (1u * 4u)));
 }
+
+/* Weak default for the ETH interrupt (boards/common/vectors.S IRQ61), shared with
+ * the H735. The H755 has no ETH driver yet, so this absorbs the vector's .word so
+ * the common table links; a future net driver overrides it with a strong handler. */
+__attribute__((weak)) void ETH_IRQHandler(void) {
+}

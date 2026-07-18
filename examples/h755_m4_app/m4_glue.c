@@ -86,11 +86,17 @@ void duo_trace_service(void) {
 	c[2] = req; /* ack */
 }
 
-/* The shared vector table (boards/common/vectors.S) names the FDCAN1 ISR unconditionally
- * and deliberately provides no weak default (see the warning there). This core never
- * enables that IRQ in its NVIC — the CM7 owns the bus — so a parked stub satisfies the
- * link and would trap loudly if it ever fired. */
+/* The shared vector table (boards/common/vectors.S) names the FDCAN1 and ETH ISRs
+ * unconditionally; the M7 board.c weak defaults don't apply here (this image links
+ * without board.c). This core never enables either IRQ in its NVIC — the CM7 owns
+ * the bus and the MAC — so parked stubs satisfy the link and would trap loudly if
+ * they ever fired. */
 void FDCAN1_IT0_IRQHandler(void) {
+	for (;;) {
+	}
+}
+
+void ETH_IRQHandler(void) {
 	for (;;) {
 	}
 }

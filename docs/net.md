@@ -136,3 +136,101 @@ builds** (REQ-NET-010/011).
 
 See [[functional-scope]] (Ethernet = NetX Duo), [[bootloader-phase]] (DoIP OTA
 path), docs/multi-node.md (the diag bus tier), docs/no-alloc.md (tier-1 pools).
+
+## P1 implementation status (2026-07-17)
+
+**Vendored + build-wired.** NetX Duo is cloned + pinned under `third_party/netxduo`
+via `make deps` (`NETXDUO_PIN`, alongside ThreadX). Its Cortex-M7/GNU port
+(`ports/cortex_m7/gnu`) matches the H735, and `common/inc/nx_api.h` is the stack
+API. The structural reference for our driver is NetX's own RAM driver
+(`test/regression/test/nx_ram_network_driver_test_1500.c`) — it shows the exact
+`_nx_driver_*` command dispatch we mirror.
+
+**P1 = link + ping** (REQ-NET-003/004): a packet pool + IP instance + ICMP, over
+the STM32H7 ETH MAC/DMA + LAN8742A RMII driver. The stack above is vendored; the
+driver (`boards/h735dk/eth.c` register-level + `net/nx_driver_stm32h7.c` NetX glue)
+is the one new hardware bring-up.
+
+### RMII pinout (confirmed)
+
+RMII pinout — CONFIRMED from the stm32h7xx-hal H735G-DK ethernet example (working
+reference code, cross-checks the ST BSP) + the user (PHY address = 0). All ETH
+signals are alternate function AF11:
+
+| RMII signal | STM32H735 pin (AF11) |
+| --- | --- |
+| REF_CLK  | PA1 |
+| MDIO     | PA2 |
+| MDC      | PC1 |
+| CRS_DV   | PA7 |
+| RXD0     | PC4 |
+| RXD1     | PC5 |
+| TX_EN    | PB11 |
+| TXD0     | PB12 |
+| TXD1     | PB13 |
+| LAN8742A MDIO/SMI address | **0** |
+| PHY nRST | none dedicated (soft-reset over MDIO; board NRST/power-on) |
+
+### P1 BENCH-VERIFIED (2026-07-18)
+
+The full P1 stack is **verified on the H735-DK**: link + ARP + IPv4 + ICMP, both
+directions, 0% ping loss at ~1 ms RTT (`ping 192.168.0.50` from the host; the
+board pings its gateway). Build: `make -C examples/h735_net all`.
+
+- **`boards/h735dk/eth.c` + `eth.h`** — register-level ETH MAC/DMA (RM0468): RCC +
+  RMII pin mux (the AF11 table above), `SYSCFG_PMCR` RMII select, LAN8742 soft-reset
+  + auto-neg over MDIO, 4+4 descriptor rings, `eth_send`/`eth_recv`, `ETH_IRQHandler`.
+- **`net/nx_driver_stm32h7.c`** — the NetX `NX_IP_DRIVER` command dispatch (mirrors
+  the vendored RAM driver): TX linearises the packet chain → `eth_send`; the RX ISR
+  signals `_nx_ip_driver_deferred_processing`, and `DEFERRED_PROCESSING` drains
+  `eth_recv` into `NX_PACKET`s routed by EtherType. Copy-based, so only eth.c's
+  buffers touch DMA.
+- **`examples/h735_net/`** — a plain-C ThreadX+NetX app (no loom2v/CAN): packet pool
+  + IP + ICMP, brings the link up and pings the gateway on a loop. Outcome is exposed
+  as `net_ping_ok` / `net_ping_fail` / `net_link_up` globals to read over SWD.
+
+Two hardware facts drove the layout: **D-cache is off** (docs/no-alloc.md), so DMA
+needs no clean/invalidate; and the ETH DMA is an AHB master that **cannot reach the
+DTCM** the rest of RAM sits in, so the descriptor rings + frame buffers live in a
+`.eth_dma` section in **D2 AHB SRAM (0x30000000)** — a new region in `threadx.ld`,
+its clock enabled in `eth_init`. The shared `boards/common/vectors.S` is extended to
+IRQ61 (ETH); non-net images resolve it via a **weak** `ETH_IRQHandler` in each
+board's `board.c` (separate object, so no `--gc-sections` capture).
+
+### P1 bring-up findings (all silicon-found, all fixed)
+
+The register bring-up (clocks, RMII mux, PHY, rings) worked first flash; every bug
+was in the seams between the driver, NetX, and the M7 memory model:
+
+1. **Link-up latch** — NetX issues `NX_LINK_ENABLE` before PHY auto-negotiation
+   (~2-3 s) completes; gating `nx_interface_link_up` on the instantaneous PHY status
+   latched "down" and NetX never transmitted a single frame. Report up at ENABLE.
+2. **TX checksum offload vs NetX** — `TDES3 CIC=3` made the MAC overwrite NetX's
+   software-computed checksums (wrong for ICMP): every IP frame dropped by the peer,
+   while ARP (no checksum) sailed through. Offload off; NetX owns checksums.
+3. **IP-header 4-byte alignment (the "50% loss")** — NetX's checksum routine reads
+   32-bit words; an IP header at frame+14 with the frame 4-byte aligned lands 2 mod 4
+   and mis-sums ~half the packets (pool-position dependent) → dropped as checksum
+   errors. RX path now offsets each frame so the IP header is 4-byte aligned.
+4. **DSB before the DMA doorbell (the "one frame behind")** — the M7 store buffer
+   can deliver the device-memory tail-pointer write before the normal-memory
+   descriptor OWN write; the DMA fetches OWN=0 and idles, transmitting the frame only
+   on the NEXT doorbell (frames left the board in back-to-back pairs). `__DSB()`
+   between descriptor stores and `DMACTDTPR`/`DMACRDTPR`.
+
+Also tuned on-bench: `NX_IP_PERIODIC_RATE`/`TX_TIMER_TICKS_PER_SECOND` forced to
+1000 to match the 1 kHz SysTick (nx_port.h hard-defines 100 → every NetX timeout ran
+10x fast), speed/duplex read from the PHY's negotiated result instead of hardcoded,
+and RX ring sized 16 (4 could overflow on a broadcast-heavy LAN).
+
+Bench diagnostics that survived into the code: `eth_rx/tx/isr_count` +
+`eth_phy_pscsr` (eth.c), `net_ping_ok/fail`, `net_link_up` (the app) — read over
+SWD with openocd (`init; halt; mdw <addr>; resume`). NOTE: st-util resets the target
+on attach and silently wipes this state; use openocd for live reads.
+
+**P2 debt — drop the autoneg wait from eth_init.** eth_init still blocks up to
+~4 s (bounded MDIO poll, ~29 us/read) so a cable-present boot starts with the
+negotiated speed/duplex — the minimal P1 bridge, running on the IP thread only.
+Once P2's periodic link/telemetry loop polls GET_STATUS (whose eth_link_up()
+already re-syncs MACCR), the monitor owns speed/duplex and this wait goes to
+zero: init configures and returns, link management is fully asynchronous.

@@ -140,3 +140,10 @@ void board_can_clock_pins_init(void) {
 	GPIOH->AFR[1] &= ~((0xFu << ((13u - 8u) * 4u)) | (0xFu << ((14u - 8u) * 4u)));
 	GPIOH->AFR[1] |= ((9u << ((13u - 8u) * 4u)) | (9u << ((14u - 8u) * 4u)));
 }
+
+/* Weak default for the ETH interrupt (vectors.S IRQ61). Images that link the ETH
+ * driver (boards/h735dk/eth.c) override this with the strong ETH_IRQHandler; every
+ * other image resolves the vector's .word here so the shared table still links.
+ * Separate object from vectors.S — no --gc-sections relocation-capture. */
+__attribute__((weak)) void ETH_IRQHandler(void) {
+}
