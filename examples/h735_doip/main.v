@@ -50,7 +50,9 @@ fn blobly_doip_run() {
 	mut inb := [256]u8{}
 	mut resp := [512]u8{}
 	for {
-		n := C.net_stream_recv(&inb[0], 256, 100) // ~100 ms slice
+		// only ask for what the assembly buffer can still take: a buffered
+		// fragment plus a full chunk must not trip the too-large NACK
+		n := C.net_stream_recv(&inb[0], 256 - g_srv.buf_len, 100) // ~100 ms slice
 		if n > 0 {
 			mut fed := n
 			// feed stops consuming when the response buffer fills; drain the
@@ -60,19 +62,27 @@ fn blobly_doip_run() {
 				if rlen <= 0 {
 					break
 				}
-				C.net_stream_send(&resp[0], rlen)
+				if C.net_stream_send(&resp[0], rlen) < 0 {
+					// send failed: the glue recycled the connection
+					session_reset()
+					break
+				}
 				fed = 0
 			}
 		} else if n < 0 {
-			// connection dropped: a new tester must re-activate routing and
-			// gets the default diagnostic session, not the last tester's
-			g_srv.activated = false
-			g_srv.buf_len = 0
-			g_srv.uds.session = 0x01
+			session_reset() // connection dropped
 		} else {
 			C.net_link_poll() // idle: keep MACCR synced to the live link
 		}
 	}
+}
+
+// a new tester must re-activate routing and gets the default diagnostic
+// session — no state leaks across connections
+fn session_reset() {
+	g_srv.activated = false
+	g_srv.buf_len = 0
+	g_srv.uds.session = 0x01
 }
 
 fn main() {

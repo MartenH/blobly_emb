@@ -161,15 +161,18 @@ int net_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
 	return (int)got;
 }
 
+/* a failed send recycles the connection (feed already consumed the request, so
+ * the response is unrecoverable — a half-served tester must reconnect, not wait
+ * on a reply that will never come); the V side resets its session state on -1 */
 int net_stream_send(const unsigned char *buf, int len) {
 	NX_PACKET *p = NX_NULL;
 	if (nx_packet_allocate(&pool, &p, NX_TCP_PACKET, NX_IP_PERIODIC_RATE) != NX_SUCCESS) {
-		return -1;
+		return stream_recycle();
 	}
 	if (nx_packet_data_append(p, (void *)buf, (ULONG)len, &pool, NX_IP_PERIODIC_RATE) != NX_SUCCESS ||
 	    nx_tcp_socket_send(&tcp_sock, p, NX_IP_PERIODIC_RATE) != NX_SUCCESS) {
 		nx_packet_release(p); /* send takes ownership only on success */
-		return -1;
+		return stream_recycle();
 	}
 	doip_tx_bytes += (ULONG)len;
 	return len;
