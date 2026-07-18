@@ -86,6 +86,7 @@ static UINT u32_dec(char *dst, ULONG v) {
 }
 
 extern VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr);
+static void trng_seed(void); /* defined with the rand() override below */
 
 static UINT append(char *dst, UINT o, const char *s) {
 	while (*s != '\0') {
@@ -124,12 +125,17 @@ static void tcp_entry(ULONG arg) {
 	(void)arg;
 	nx_tcp_socket_create(&ip, &tcp_sock, "tcp-echo", NX_IP_NORMAL, NX_DONT_FRAGMENT,
 	                     0x80, TCP_WINDOW, NX_NULL, NX_NULL);
-	nx_tcp_server_socket_listen(&ip, TCP_ECHO_PORT, &tcp_sock, 5, NX_NULL);
+	/* backlog 1: a single-connection server queuing 5 pending SYNs would pin
+	 * pool packets (12 total) behind a session it can't serve anyway. */
+	nx_tcp_server_socket_listen(&ip, TCP_ECHO_PORT, &tcp_sock, 1, NX_NULL);
 	for (;;) {
 		if (nx_tcp_server_socket_accept(&tcp_sock, NX_WAIT_FOREVER) == NX_SUCCESS) {
 			net_tcp_conns++;
 			NX_PACKET *p = NX_NULL;
-			while (nx_tcp_socket_receive(&tcp_sock, &p, NX_WAIT_FOREVER) == NX_SUCCESS) {
+			/* finite receive timeout: an idle client holding the ONLY socket
+			 * forever would block the stream service until reset — 60 s idle
+			 * disconnects it and re-listens. */
+			while (nx_tcp_socket_receive(&tcp_sock, &p, 60 * NX_IP_PERIODIC_RATE) == NX_SUCCESS) {
 				if (nx_tcp_socket_send(&tcp_sock, p, NX_IP_PERIODIC_RATE) == NX_SUCCESS) {
 					net_tcp_echoed++;
 				} else {
@@ -229,6 +235,7 @@ static void ping_entry(ULONG arg) {
 void tx_application_define(void *first_unused_memory) {
 	(void)first_unused_memory;
 
+	trng_seed(); /* before any socket bind/ISN draws on rand() */
 	nx_system_initialize();
 
 	nx_packet_pool_create(&pool, "blobly-pool", POOL_PAYLOAD, pool_mem, sizeof(pool_mem));
@@ -263,11 +270,54 @@ void tx_application_define(void *first_unused_memory) {
 void FDCAN1_IT0_IRQHandler(void) {
 }
 
-/* NetX's UDP/TCP bind uses rand() (NX_RAND) for ephemeral ports; newlib-nano's
- * rand drags the reent/malloc/_sbrk chain into this no-alloc image (link error:
- * _sbrk needs `end`). A strong xorshift32 here keeps newlib's out entirely —
- * port randomization needs no cryptographic quality. */
-static unsigned int rand_state = 0x2624B0B1u; /* nonzero seed */
+/* NetX's UDP/TCP bind and the TCP initial sequence numbers come from rand()
+ * (NX_RAND); newlib-nano's rand drags the reent/malloc/_sbrk chain into this
+ * no-alloc image (link error: _sbrk needs `end`), so a strong xorshift32 keeps
+ * newlib's out entirely. The xorshift is SEEDED FROM THE H7 TRNG at startup
+ * (same register recipe as the boot's board_rng, examples/h755_boot/boot_glue.c)
+ * — a constant seed would repeat the TCP ISN stream on every reset, making
+ * sessions predictable. Falls back to UID^SysTick if the TRNG never comes up. */
+#define RCC_CR_R       (*(volatile unsigned int *)0x58024400u)
+#define RCC_D2CCIP2R_R (*(volatile unsigned int *)0x58024454u)
+#define RCC_AHB2ENR_R  (*(volatile unsigned int *)0x580244DCu)
+#define RNG_CR_R       (*(volatile unsigned int *)0x48021800u)
+#define RNG_SR_R       (*(volatile unsigned int *)0x48021804u)
+#define RNG_DR_R       (*(volatile unsigned int *)0x48021808u)
+#define SYST_VAL_R     (*(volatile unsigned int *)0xE000E018u)
+
+static unsigned int rand_state = 0x2624B0B1u; /* replaced by trng_seed() */
+
+static void trng_seed(void) {
+	RCC_CR_R |= (1u << 12); /* HSI48ON (the RNG kernel clock) */
+	for (unsigned int t = 0; (RCC_CR_R & (1u << 13)) == 0u; t++) {
+		if (t > 2000000u) {
+			goto fallback;
+		}
+	}
+	RCC_D2CCIP2R_R &= ~(3u << 8); /* RNGSEL = 00 = HSI48 */
+	RCC_AHB2ENR_R |= (1u << 6);
+	(void)RCC_AHB2ENR_R;
+	RNG_CR_R = (1u << 2); /* RNGEN */
+	for (unsigned int t = 0; (RNG_SR_R & 1u) == 0u; t++) { /* DRDY */
+		if (t > 200000u) {
+			goto fallback;
+		}
+	}
+	rand_state = RNG_DR_R;
+	if (rand_state != 0u) {
+		return;
+	}
+fallback:
+	/* dead TRNG: per-device UID + tick phase — weaker, but never a constant. */
+	{
+		const volatile unsigned int *uid = (const volatile unsigned int *)0x1FF1E800u;
+		rand_state = uid[0] ^ uid[1] ^ uid[2] ^ SYST_VAL_R;
+		if (rand_state == 0u) {
+			rand_state = 0x2624B0B1u;
+		}
+	}
+}
+
 int rand(void) {
 	rand_state ^= rand_state << 13;
 	rand_state ^= rand_state >> 17;
