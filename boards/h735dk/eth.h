@@ -43,6 +43,10 @@ uint32_t eth_recv(uint8_t *buf, uint32_t buf_size);
 /* eth_link_up: read the LAN8742 status over MDIO; returns 1 if link is up. */
 int eth_link_up(void);
 
+/* eth_multicast_all: open the MAC RX filter to all multicast (MACPFR.PM); the
+ * stack filters per-group in software. Idempotent. */
+void eth_multicast_all(void);
+
 /* The ETH DMA RX interrupt plumbing. ETH_IRQHandler is the NVIC entry (vectors.S
  * IRQ61): it clears the DMA flag and calls the callback the driver installs with
  * eth_set_rx_callback (nx_driver_stm32h7.c points it at NetX deferred processing). */
