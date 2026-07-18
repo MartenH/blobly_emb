@@ -92,7 +92,7 @@ derives = "SYS-REQ-IO-001"
 [[req]]
 id = "REQ-IO-009"
 title = "IO lifecycle: startup, quiesce, resume"
-text = "At startup the IO layer shall drive every output to its configured init value and publish an initial complete sample of every input before application dispatch begins. On sleep entry it shall stop acquisition, drive every output to its configured init value, and quiesce before the ECU sleeps; on wake it shall re-establish acquisition, publish an initial sample of every input before application dispatch resumes, and hold every output at its init value until the first post-wake publication (the freshness gate re-arms on wake)."
+text = "At startup the IO layer shall drive every output to its configured init value and hold it there until that output's first publication, and shall publish an initial complete sample of every input before application dispatch begins. On sleep entry it shall stop acquisition, drive every output to its configured init value, and quiesce before the ECU sleeps; on wake it shall re-establish acquisition, publish an initial sample of every input before application dispatch resumes, and hold every output at its init value until the first post-wake publication (the freshness gate re-arms on wake)."
 status = "draft"
 method = "test"
 asil = "QM"
