@@ -95,11 +95,18 @@ signal:
   instead;
 - **pins are exclusive**: two io points naming the same `pin` — even one input
   and one output with distinct signals — is a config error: one physical pad
-  cannot serve two contracts, and whichever configured last would silently win;
+  cannot serve two contracts, and whichever configured last would silently win.
+  The boards-layer pin table extends the same rule to PLATFORM-owned pads: an
+  io point that names a pad the board has assigned to CAN, transceiver control,
+  or the ETH PHY fails the glue's compile-time check — ecucheck knows the
+  config's pins, only the board knows which pads the platform already owns;
 - **PWM carriers are sane**: `freq_hz` must be positive (a zero carrier is a
   zero timer divisor); whether the frequency is ACHIEVABLE on the bound timer
   is the boards layer's compile-time pin-table check, next to pin validity —
-  ecucheck knows config, the board knows silicon.
+  ecucheck knows config, the board knows silicon. That same check requires
+  points sharing one hardware timer to declare the SAME `freq_hz`: channels
+  share the prescaler/period registers, so a second carrier would silently
+  retune the first actuator.
 
 ## Derived glue (the duo_gen.h pattern, third use)
 
@@ -174,7 +181,10 @@ pins or peripherals:
   telemetry/shell, and lets the ECU start. Consumers of the failed point see
   their port's declared default until the converter recovers and a real sample
   publishes — degraded, observable, and honest; plausibility handling beyond
-  that is application logic, not io glue. Same ordering rule the deterministic start-up chain already imposes
+  that is application logic, not io glue. REQ-IO-009 carries this exception
+  explicitly (initial-sample-before-dispatch OR the bounded-timeout fault
+  path), so the degraded start is inside the requirement, not a violation the
+  trace would miss. Same ordering rule the deterministic start-up chain already imposes
   (SYS-REQ-LIFE-001): platform first, app after.
 - The C implementations (`io_adc_read(ch)`, `io_gpio_read/write(ch)`,
   `io_pwm_set(ch, permille)`) live behind a **driver io port** (`driver/io`,
