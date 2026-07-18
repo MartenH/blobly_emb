@@ -52,7 +52,13 @@ static void nx_driver_receive(void) {
 	for (;;) {
 		NX_PACKET *packet;
 		if (nx_packet_allocate(nx_driver_pool, &packet, NX_RECEIVE_PACKET, NX_NO_WAIT) != NX_SUCCESS) {
-			return; /* pool exhausted — drop the backlog, DMA keeps its buffers */
+			/* Pool exhausted: still DRAIN the ring — receive into the TX scratch
+			 * (all driver entry is on the IP thread, so it's idle here) and drop.
+			 * Bailing out instead would leave CPU-owned descriptors unrecycled,
+			 * and with ring(16) > pool(12) a burst could stall RX for good. */
+			while (eth_recv(nx_driver_txlin, sizeof(nx_driver_txlin)) != 0u) {
+			}
+			return;
 		}
 		/* Align the IP header to a 4-byte boundary. NetX's IP/ICMP checksum routine
 		 * reads 32-bit words and mis-sums a header that isn't 4-byte aligned. The IP
@@ -239,9 +245,13 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 		break;
 	}
 
-	/* Benign for a single-MAC-filter P1 driver: promiscuous RX means multicast
-	 * groups are already received; the IP layer filters. */
 	case NX_LINK_MULTICAST_JOIN:
+		/* Coarse hardware filter: pass ALL multicast from the first join on;
+		 * NetX filters per-group in software. LEAVE stays a no-op (the coarse
+		 * filter has no per-address state to undo). */
+		eth_multicast_all();
+		break;
+
 	case NX_LINK_MULTICAST_LEAVE:
 	case NX_LINK_UNINITIALIZE:
 	case NX_LINK_INTERFACE_DETACH:

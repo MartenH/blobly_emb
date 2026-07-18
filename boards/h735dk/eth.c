@@ -37,7 +37,15 @@ static void (*rx_cb)(void);
 volatile uint32_t eth_rx_count;
 volatile uint32_t eth_tx_count;
 volatile uint32_t eth_isr_count;
+volatile uint32_t eth_tx_drops;  /* eth_send calls refused because the ring was full */
 volatile uint32_t eth_phy_pscsr; /* LAN8742 reg31: negotiated speed/duplex */
+
+/* eth_multicast_all: coarse multicast enable (MACPFR.PM, pass-all-multicast).
+ * Called on the first NetX MULTICAST_JOIN; NetX does the precise per-group
+ * filtering in software, so per-address hash filtering would be bloat here. */
+void eth_multicast_all(void) {
+	ETH->MACPFR |= ETH_MACPFR_PM;
+}
 
 /* --- RDES3 / TDES3 bit fields (RM0468) --- */
 #define DESC_OWN (1u << 31) /* owned by DMA */
@@ -254,7 +262,8 @@ int eth_init(const uint8_t mac[6]) {
 int eth_send(const uint8_t *frame, uint32_t len) {
 	eth_desc_t *d = &tx_desc[tx_idx];
 	if ((d->des3 & DESC_OWN) != 0u) {
-		return -1; /* DMA still owns it — ring full */
+		eth_tx_drops++; /* ring full: drop (Ethernet is lossy; protocols retry) */
+		return -1;
 	}
 	if (len > ETH_BUF_SIZE) {
 		len = ETH_BUF_SIZE;
