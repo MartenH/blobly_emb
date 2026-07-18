@@ -70,10 +70,11 @@ signal:
   a partition/thread — `from = "can0", to = "io"` (a bus value driving a pin
   with no FB in between) and `io`-to-`io` are config errors; REQ-IO-002 says
   outputs are written BY the application, and the freshness gate presumes a
-  producing FB. For an OUTPUT, exactly ONE handler may list the signal in its
-  `writes` — two handlers in the same partition would satisfy the endpoint
-  rule yet publish into one channel as two producers, breaking SPSC; ecucheck
-  counts writers per io output and rejects more than one;
+  producing FB. For an OUTPUT, EXACTLY one handler must list the signal in its
+  `writes` — two would publish into one channel as dual producers (breaking
+  SPSC), and ZERO would leave the pin at `init` forever behind a config that
+  looks valid; ecucheck counts writers per io output and rejects anything but
+  exactly one;
 - **shape per kind**: exactly one field, an aligned scalar of at most 32 bits
   (a single atomic load in the latest-value handoff), AND the type fits the
   kind — gpio: `bool`; adc: `u16`/`u32`; pwm: `u16`/`u32` (a `u8` cannot carry
@@ -88,9 +89,17 @@ signal:
   the only correct one per edge;
 - **periods harmonic**: every `period_ms` is at least 1 (the Loom tick — zero
   or negative would make "fastest" divide-by-zero or saturate the io core) and
-  an integer multiple of the fastest configured io period — the io thread runs at the fastest and serves each
-  point on its own multiple, so a non-divisible cadence (7 ms vs 10 ms) would
-  silently publish off-spec; ecucheck rejects it instead.
+  an integer multiple of the fastest configured io period — the io thread runs
+  at the fastest and serves each point on its own multiple, so a non-divisible
+  cadence (7 ms vs 10 ms) would silently publish off-spec; ecucheck rejects it
+  instead;
+- **pins are exclusive**: two io points naming the same `pin` — even one input
+  and one output with distinct signals — is a config error: one physical pad
+  cannot serve two contracts, and whichever configured last would silently win;
+- **PWM carriers are sane**: `freq_hz` must be positive (a zero carrier is a
+  zero timer divisor); whether the frequency is ACHIEVABLE on the bound timer
+  is the boards layer's compile-time pin-table check, next to pin validity —
+  ecucheck knows config, the board knows silicon.
 
 ## Derived glue (the duo_gen.h pattern, third use)
 
@@ -132,13 +141,16 @@ pins or peripherals:
   freshness**: until the producing FB has published at least once, the io thread
   keeps applying the configured `init`, never the channel's zero-initialized
   unread value (the host IOC API already reports freshness; the target slot
-  protocol grows the same bit when the target phase lands). The gate **re-arms
-  on wake**, and by GENERATION, not a boolean: a triple-buffer acquire happily
-  returns the retained pre-sleep value, so the io thread latches the channel's
-  publication count at wake and holds `init` until that count ADVANCES — only
-  a genuinely post-wake publication opens the gate (REQ-IO-009; the host IOC
-  exposes the publication count, the target slot protocol grows it with the
-  target phase). PWM signal value =
+  protocol grows the same bit when the target phase lands). The STARTUP gate needs
+  nothing new: the existing acquire already distinguishes never-published
+  (empty) from published, which is exactly the boot case. The WAKE re-arm is
+  stronger — a triple-buffer acquire happily returns the retained pre-sleep
+  value forever — so it is specified as a **publication counter** on the
+  channel: the io thread latches the count at wake and holds `init` until it
+  ADVANCES. That counter does not exist in the IOC today (host or target); it
+  is an osal extension that lands WITH the sleep phase (P4) — the gate is
+  specified here so the P4 implementation has its contract, not because P1
+  can ship it. PWM signal value =
   duty in permille (0..1000), **clamped to 1000** above range — a u16 can carry
   1001..65535 and the clamp makes the out-of-range policy deterministic across
   timer backends instead of backend-dependent wrap/saturate. The carrier
@@ -156,9 +168,13 @@ pins or peripherals:
   never reads an empty channel's zero as if it were a hardware sample. The
   ADC's first-conversion wait is BOUNDED (a few conversion periods, config
   const): a silent converter must not hang deterministic startup — on timeout
-  the io thread publishes the raw latest-value (still all-zero), bumps a
-  startup-fault counter observable over telemetry/shell, and lets the ECU
-  start. Same ordering rule the deterministic start-up chain already imposes
+  the io thread publishes NOTHING for that point (no fabricated sample: an
+  all-zero DMA word is not a measurement, and REQ-IO-003 promises only real
+  published samples), bumps a startup-fault counter observable over
+  telemetry/shell, and lets the ECU start. Consumers of the failed point see
+  their port's declared default until the converter recovers and a real sample
+  publishes — degraded, observable, and honest; plausibility handling beyond
+  that is application logic, not io glue. Same ordering rule the deterministic start-up chain already imposes
   (SYS-REQ-LIFE-001): platform first, app after.
 - The C implementations (`io_adc_read(ch)`, `io_gpio_read/write(ch)`,
   `io_pwm_set(ch, permille)`) live behind a **driver io port** (`driver/io`,
