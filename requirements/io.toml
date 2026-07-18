@@ -20,10 +20,12 @@ method = "test"
 asil = "QM"
 derives = "SYS-REQ-IO-001"
 
+# Complete-sample is testable at runtime; wait-freedom is a universal claim a
+# passing stress test cannot establish — it is REQ-IO-008, method analysis.
 [[req]]
 id = "REQ-IO-003"
-title = "Wait-free access"
-text = "Reading an input signal or writing an output signal shall never block the application; the application always observes the most recent complete sample."
+title = "Latest complete sample"
+text = "The application shall always observe the most recent complete sample of an input signal; a partially updated value shall never be observable."
 status = "draft"
 method = "test"
 asil = "QM"
@@ -68,3 +70,47 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-LIFE-003"
+
+# Wait-freedom is an invariant, not a runtime observation — analysis (code
+# review of the generated access path), split out of REQ-IO-003 so a passing
+# stress test cannot mark it verified.
+[[req]]
+id = "REQ-IO-008"
+title = "Wait-free access"
+text = "Reading an input signal or writing an output signal shall never block the application and shall complete in a bounded number of steps regardless of concurrent IO-thread activity."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+# The io thread's sleep choreography must be requirement-linked evidence, not
+# an unverifiable doc paragraph.
+[[req]]
+id = "REQ-IO-009"
+title = "IO quiesce and resume"
+text = "On sleep entry the IO layer shall stop acquisition, drive every output to its configured init value, and quiesce before the ECU sleeps; on wake it shall re-establish acquisition and publish an initial sample of every input before application dispatch resumes."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+# Capability-specific children: GPIO evidence (P1) must not roll SYS-REQ-IO-001
+# up as verified while analog input and PWM output are still unbuilt — these
+# stay unverified until their phases (P2 ADC, P3 PWM) land on a bench.
+[[req]]
+id = "REQ-IO-010"
+title = "Analog acquisition"
+text = "A configured analog input shall be acquired and published as a signal carrying the converted value, at the point's configured publish cadence."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-011"
+title = "PWM generation"
+text = "A configured PWM output shall drive its pin at the configured carrier frequency with the duty commanded by its signal in permille, values above 1000 clamped to 1000."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
