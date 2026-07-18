@@ -1,0 +1,225 @@
+module doip
+
+import comm.uds
+
+// DoIP (ISO 13400-2) server framing, no-alloc and transport-agnostic — the
+// networked binding of the same uds.Server the bus transport uses (REQ-NET-007).
+// The glue owns the sockets and hands this module raw TCP bytes; it assembles
+// DoIP messages, drives the embedded uds.Server, and writes the response
+// stream (ack + diagnostic response) back for the glue to send. One UDP frame,
+// the vehicle announcement, is produced by `announcement` for the glue to
+// broadcast at boot (discovery per ISO 13400).
+//
+// Scope (P3b first cut): routing activation (0x0005/0x0006), diagnostic
+// message + acks (0x8001/0x8002/0x8003), generic NACK (0x0000), vehicle
+// announcement (0x0004). Alive-check and entity-status answer as unknown-type
+// NACKs until a phase needs them.
+
+pub const header_len = 8
+pub const max_msg = 256 // DoIP header + the largest UDS payload we serve
+
+const proto_ver = u8(0x02) // ISO 13400-2:2012
+const proto_inv = u8(0xFD)
+
+// payload types
+const pt_gen_nack = u16(0x0000)
+const pt_announce = u16(0x0004)
+const pt_route_req = u16(0x0005)
+const pt_route_resp = u16(0x0006)
+const pt_diag = u16(0x8001)
+const pt_diag_ack = u16(0x8002)
+const pt_diag_nack = u16(0x8003)
+
+// generic NACK codes
+const nack_bad_pattern = u8(0x00)
+const nack_unknown_type = u8(0x01)
+const nack_too_large = u8(0x02)
+
+// diagnostic-message NACK codes
+const dnack_invalid_source = u8(0x02)
+const dnack_unknown_target = u8(0x03)
+
+pub struct Server {
+pub mut:
+	entity_addr u16 // our DoIP logical address
+	tester_addr u16 // learned from routing activation
+	activated   bool
+	vin         [17]u8
+	uds         uds.Server
+	// assembly buffer: TCP chunks accumulate here until a message completes
+	buf     [max_msg]u8
+	buf_len int
+}
+
+fn put_header(resp &u8, at int, ptype u16, plen u32) int {
+	unsafe {
+		resp[at] = proto_ver
+		resp[at + 1] = proto_inv
+		resp[at + 2] = u8(ptype >> 8)
+		resp[at + 3] = u8(ptype)
+		resp[at + 4] = u8(plen >> 24)
+		resp[at + 5] = u8(plen >> 16)
+		resp[at + 6] = u8(plen >> 8)
+		resp[at + 7] = u8(plen)
+	}
+	return at + header_len
+}
+
+fn gen_nack(resp &u8, at int, code u8) int {
+	o := put_header(resp, at, pt_gen_nack, 1)
+	unsafe {
+		resp[o] = code
+	}
+	return o + 1
+}
+
+// announcement builds the vehicle-announcement payload (UDP broadcast at boot,
+// also the answer to a vehicle-identification request): VIN, logical address,
+// EID/GID (we use the MAC-derived EID for both), further-action 0x00.
+pub fn (mut s Server) announcement(eid &u8, resp &u8) int {
+	o := put_header(resp, 0, pt_announce, 17 + 2 + 6 + 6 + 1)
+	unsafe {
+		for i in 0 .. 17 {
+			resp[o + i] = s.vin[i]
+		}
+		resp[o + 17] = u8(s.entity_addr >> 8)
+		resp[o + 18] = u8(s.entity_addr)
+		for i in 0 .. 6 {
+			resp[o + 19 + i] = eid[i]
+			resp[o + 25 + i] = eid[i]
+		}
+		resp[o + 31] = 0 // further action: none
+	}
+	return o + 32
+}
+
+// feed consumes one chunk of TCP bytes and processes every COMPLETE DoIP message
+// assembled so far; the response stream (possibly several frames: ack + reply)
+// is written to resp. Returns the number of response bytes (0 = nothing yet).
+pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
+	// append (a chunk that would overflow the assembly buffer is a too-large
+	// message: drop the stream state and NACK — the glue closes on that).
+	if s.buf_len + data_len > max_msg {
+		s.buf_len = 0
+		return gen_nack(resp, 0, nack_too_large)
+	}
+	unsafe {
+		for i in 0 .. data_len {
+			s.buf[s.buf_len + i] = data[i]
+		}
+	}
+	s.buf_len += data_len
+
+	mut out := 0
+	for {
+		if s.buf_len < header_len {
+			break
+		}
+		if s.buf[0] != proto_ver || s.buf[1] != proto_inv {
+			s.buf_len = 0
+			return gen_nack(resp, out, nack_bad_pattern)
+		}
+		plen := (u32(s.buf[4]) << 24) | (u32(s.buf[5]) << 16) | (u32(s.buf[6]) << 8) | u32(s.buf[7])
+		if int(plen) > max_msg - header_len {
+			s.buf_len = 0
+			return gen_nack(resp, out, nack_too_large)
+		}
+		total := header_len + int(plen)
+		if s.buf_len < total {
+			break // wait for more bytes
+		}
+		ptype := (u16(s.buf[2]) << 8) | u16(s.buf[3])
+		out = s.dispatch(ptype, int(plen), resp, out, resp_max)
+		// shift any following message to the front
+		unsafe {
+			for i in 0 .. s.buf_len - total {
+				s.buf[i] = s.buf[total + i]
+			}
+		}
+		s.buf_len -= total
+	}
+	return out
+}
+
+fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int, resp_max int) int {
+	// worst response per message: ack(13) + diag hdr(12) + uds resp — bound it
+	if at + header_len + 5 + header_len + 4 + int(uds.max_did_data) + 3 > resp_max {
+		return at // out of response room: drop (glue sizes resp to prevent this)
+	}
+	match ptype {
+		pt_route_req {
+			if plen < 7 {
+				return gen_nack(resp, at, nack_bad_pattern)
+			}
+			s.tester_addr = (u16(s.buf[header_len]) << 8) | u16(s.buf[header_len + 1])
+			s.activated = true
+			o := put_header(resp, at, pt_route_resp, 9)
+			unsafe {
+				resp[o] = u8(s.tester_addr >> 8)
+				resp[o + 1] = u8(s.tester_addr)
+				resp[o + 2] = u8(s.entity_addr >> 8)
+				resp[o + 3] = u8(s.entity_addr)
+				resp[o + 4] = 0x10 // routing successfully activated
+				resp[o + 5] = 0
+				resp[o + 6] = 0
+				resp[o + 7] = 0
+				resp[o + 8] = 0
+			}
+			return o + 9
+		}
+		pt_diag {
+			if plen < 4 {
+				return gen_nack(resp, at, nack_bad_pattern)
+			}
+			sa := (u16(s.buf[header_len]) << 8) | u16(s.buf[header_len + 1])
+			ta := (u16(s.buf[header_len + 2]) << 8) | u16(s.buf[header_len + 3])
+			if !s.activated || sa != s.tester_addr {
+				return s.diag_nack(resp, at, sa, dnack_invalid_source)
+			}
+			if ta != s.entity_addr {
+				return s.diag_nack(resp, at, sa, dnack_unknown_target)
+			}
+			// positive ack first, then the UDS response as its own message
+			mut o := put_header(resp, at, pt_diag_ack, 5)
+			unsafe {
+				resp[o] = u8(s.entity_addr >> 8)
+				resp[o + 1] = u8(s.entity_addr)
+				resp[o + 2] = u8(sa >> 8)
+				resp[o + 3] = u8(sa)
+				resp[o + 4] = 0x00 // ack
+			}
+			o += 5
+			mut ubuf := [uds.max_did_data + 8]u8{}
+			ulen := s.uds.handle(unsafe { &s.buf[header_len + 4] }, plen - 4, &ubuf[0])
+			if ulen > 0 {
+				o = put_header(resp, o, pt_diag, u32(4 + ulen))
+				unsafe {
+					resp[o] = u8(s.entity_addr >> 8)
+					resp[o + 1] = u8(s.entity_addr)
+					resp[o + 2] = u8(sa >> 8)
+					resp[o + 3] = u8(sa)
+					for i in 0 .. ulen {
+						resp[o + 4 + i] = ubuf[i]
+					}
+				}
+				o += 4 + ulen
+			}
+			return o
+		}
+		else {
+			return gen_nack(resp, at, nack_unknown_type)
+		}
+	}
+}
+
+fn (mut s Server) diag_nack(resp &u8, at int, sa u16, code u8) int {
+	o := put_header(resp, at, pt_diag_nack, 5)
+	unsafe {
+		resp[o] = u8(s.entity_addr >> 8)
+		resp[o + 1] = u8(s.entity_addr)
+		resp[o + 2] = u8(sa >> 8)
+		resp[o + 3] = u8(sa)
+		resp[o + 4] = code
+	}
+	return o + 5
+}

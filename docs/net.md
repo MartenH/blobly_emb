@@ -250,3 +250,23 @@ with three full connect/echo/disconnect cycles from a WSL host
 (`echo hi | nc -w2 192.168.0.50 5007`). +13 KB flash for the NetX TCP engine.
 Next: P3b — DoIP (REQ-NET-007): the UDS server over a TCP socket, reusing
 comm/uds + the boot Prog, announced per ISO 13400.
+
+## P3b status — DoIP (2026-07-18, BENCH-VERIFIED)
+
+REQ-NET-007 on silicon: `examples/h735_doip`, the first V+NetX hybrid image.
+DoIP framing (ISO 13400-2: routing activation, diagnostic message + acks,
+vehicle announcement, generic NACK) is tested V code in `comm/doip`, driving
+the SAME `comm.uds.Server` the bus transport uses; `netx_glue.c` owns
+ThreadX/NetX/sockets behind a four-call byte-pipe seam. Bench: routing
+activation → 0x22 F190 → "H735-DK" → 0x3E tester-present, all pass from a WSL
+client (`doip_client.py`) through the Windows NAT on the live internal network.
+
+Bring-up finding (the busy-network wedge): a **finite-timeout**
+`nx_tcp_server_socket_accept` in a re-accept loop is a NetX trap. On timeout the
+connect-cleanup returns the socket to LISTEN without repopulating `connect_ip`;
+the next accept then sends the SYN-ACK itself with a null destination IP,
+tripping `NX_ASSERT` in the checksum path — which parks the calling thread in an
+infinite sleep **while holding `nx_ip_protection`**, starving the IP thread and
+freezing all RX (reads exactly like a driver deadlock; diagnosed by per-thread
+state + mutex owner over SWD). Server sockets accept with `NX_WAIT_FOREVER`
+(the P1-P3a pattern); only the receive is bounded.
