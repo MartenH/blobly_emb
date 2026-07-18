@@ -1,0 +1,5 @@
+#!/bin/sh
+# ioset <name> <value> — poke a sim IO point atomically (docs/io.md): a bare
+# `echo > io/<name>` can expose a torn value; write-then-rename cannot.
+[ $# -eq 2 ] || { echo "usage: ioset <name> <value>" >&2; exit 1; }
+printf '%s\n' "$2" > "io/.$1.tmp" && mv "io/.$1.tmp" "io/$1"

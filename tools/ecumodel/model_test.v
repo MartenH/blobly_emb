@@ -278,3 +278,171 @@ push_ms = -1
 ' + app)
 	assert e.any(it.contains('push_ms') && it.contains('must be >= 0'))
 }
+
+// ---- [io] rules (docs/io.md P1, @verifies REQ-IO-004 REQ-IO-005 REQ-IO-006) ----
+
+// a valid single-point io config: button input read by the app handler
+const io_ok = '
+[io]
+core = 0
+[[io.gpio]]
+name      = "UserButton"
+pin       = "PC13"
+period_ms = 10
+
+[[signal]]
+name = "UserButton"
+fields = { pressed = "bool" }
+from = "io"
+to   = "app"
+
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "app_main"
+
+[[fb]]
+name = "Work"
+thread = "app_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  reads = ["UserButton"]
+'
+
+fn test_io_good_config_passes() {
+	assert errs_of(io_ok) == []
+}
+
+fn test_io_reserved_endpoint_name() {
+	e := errs_of('
+[[partition]]
+name = "io"
+core = 0
+  [[partition.thread]]
+  name = "t"
+')
+	assert e.any(it.contains('reserved endpoint name'))
+}
+
+fn test_io_point_without_signal_rejected() {
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "Ghost"
+pin       = "PA0"
+period_ms = 10
+' + app)
+	assert e.any(it.contains('no [[signal]] of that name'))
+}
+
+fn test_io_signal_without_point_rejected() {
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "UserButton"
+pin       = "PC13"
+period_ms = 10
+
+[[signal]]
+name = "UserButton"
+fields = { pressed = "bool" }
+from = "io"
+to   = "app"
+
+[[signal]]
+name = "Orphan"
+fields = { on = "bool" }
+from = "io"
+to   = "app"
+' + app)
+	assert e.any(it.contains('phantom endpoint'))
+}
+
+fn test_io_output_needs_init_and_one_writer() {
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "Led"
+pin       = "PB0"
+period_ms = 10
+
+[[signal]]
+name = "Led"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+' + app)
+	assert e.any(it.contains('must declare init'))
+	assert e.any(it.contains('exactly one writing handler'))
+}
+
+fn test_io_rejects_bus_to_pin_and_explicit_transport() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[io]
+[[io.gpio]]
+name      = "Led"
+pin       = "PB0"
+period_ms = 10
+init      = false
+
+[[signal]]
+name = "Led"
+fields = { on = "bool" }
+from = "can0"
+to   = "io"
+transport = "double"
+' + app)
+	assert e.any(it.contains('never bus-to-pin'))
+	assert e.any(it.contains('transport is derived'))
+}
+
+fn test_io_pin_exclusive_and_harmonic_periods() {
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "A"
+pin       = "PB0"
+period_ms = 7
+
+[[io.gpio]]
+name      = "B"
+pin       = "PB0"
+period_ms = 10
+
+[[signal]]
+name = "A"
+fields = { on = "bool" }
+from = "io"
+to   = "app"
+
+[[signal]]
+name = "B"
+fields = { on = "bool" }
+from = "io"
+to   = "app"
+' + app)
+	assert e.any(it.contains('one physical pad'))
+	assert e.any(it.contains('not a multiple of the fastest'))
+}
+
+fn test_io_shape_must_be_single_bool() {
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "Btn"
+pin       = "PC13"
+period_ms = 10
+
+[[signal]]
+name = "Btn"
+fields = { level = "u16" }
+from = "io"
+to   = "app"
+' + app)
+	assert e.any(it.contains('carries a bool field'))
+}

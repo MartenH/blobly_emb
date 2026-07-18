@@ -1,0 +1,48 @@
+# io_gpio example: NO bus — a button pin drives a LED pin through one FB
+# (docs/io.md P1: GPIO in/out; host backs the pins with io/<name> files).
+
+# The io thread's home core; P1 keeps the app on the same core (cross-core io
+# is target-phase). Direction comes from each bound signal, not the point.
+[io]
+core = 0
+
+[[io.gpio]]
+name      = "UserButton"
+pin       = "PC13"
+period_ms = 10
+
+[[io.gpio]]
+name      = "LedGreen"
+pin       = "PB0"
+period_ms = 10
+init      = false
+
+[[partition]]
+name    = "app"
+core    = 0
+trusted = false
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+# io is a signal endpoint like a bus or a partition; transport is derived.
+[[signal]]
+name = "UserButton"
+fields = { pressed = "bool" }
+from = "io"
+to   = "app"
+
+[[signal]]
+name = "LedGreen"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+
+[[fb]]
+name   = "ButtonLamp"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["UserButton"]
+  writes    = ["LedGreen"]
