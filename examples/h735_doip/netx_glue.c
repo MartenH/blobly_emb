@@ -22,20 +22,24 @@ static UCHAR pool_mem[POOL_COUNT * (POOL_PAYLOAD + sizeof(NX_PACKET))]
 static UCHAR ip_thread_stack[2048] __attribute__((aligned(8)));
 static UCHAR arp_cache[1024] __attribute__((aligned(4)));
 static UCHAR app_thread_stack[4096] __attribute__((aligned(8))); /* runs the V loop */
+static UCHAR svc_thread_stack[2048] __attribute__((aligned(8))); /* link + UDP discovery */
 
 static NX_PACKET_POOL pool;
 static NX_IP ip;
 static TX_THREAD app_thread;
+static TX_THREAD svc_thread;
 static NX_TCP_SOCKET tcp_sock;
 static NX_UDP_SOCKET udp_sock;
 static UINT tcp_connected;
 static NX_PACKET *rx_pending;   /* partially-consumed receive (packet > caller's buf) */
 static ULONG rx_pending_off;
 static ULONG rx_idle_ticks;     /* ticks since the peer last sent anything */
+static UINT sess_activated;     /* V-side routing activation state (selects the idle limit) */
 
-/* ISO 13400 T_TCP_General_Inactivity (default 5 min): a silent peer on the one
- * server socket would otherwise hold DoIP hostage for every later tester. */
-#define DOIP_IDLE_LIMIT (300u * NX_IP_PERIODIC_RATE)
+/* ISO 13400 inactivity: 2 s initial (a connection that never activates routing
+ * must not hold the one server socket), 5 min general after activation. */
+#define DOIP_IDLE_INITIAL (2u * NX_IP_PERIODIC_RATE)
+#define DOIP_IDLE_GENERAL (300u * NX_IP_PERIODIC_RATE)
 
 /* bench-observable (SWD) */
 volatile ULONG net_link_up;
@@ -138,10 +142,11 @@ int net_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
 		if (s != NX_SUCCESS) {
 			rx_pending = NX_NULL;
 			if (s == NX_NO_PACKET) {
-				/* timeout: expire a peer that has gone silent (ISO 13400
-				 * general inactivity), else the connection stays up */
+				/* timeout: expire a silent peer (ISO 13400 inactivity —
+				 * short before routing activation, long after) */
+				ULONG limit = sess_activated ? DOIP_IDLE_GENERAL : DOIP_IDLE_INITIAL;
 				rx_idle_ticks += timeout_ticks;
-				return (rx_idle_ticks >= DOIP_IDLE_LIMIT) ? stream_recycle() : 0;
+				return (rx_idle_ticks >= limit) ? stream_recycle() : 0;
 			}
 			return stream_recycle(); /* peer closed or error */
 		}
@@ -189,6 +194,17 @@ void net_udp_broadcast(int port, const unsigned char *buf, int len) {
 	}
 }
 
+/* V-side fatal framing error: NACK already sent, drop the connection */
+void net_stream_drop(void) {
+	if (tcp_connected) {
+		(void)stream_recycle();
+	}
+}
+
+void net_stream_notify_activated(int on) {
+	sess_activated = (UINT)on;
+}
+
 void net_eid(unsigned char eid[6]) {
 	ULONG msw = ip.nx_ip_interface[0].nx_interface_physical_address_msw;
 	ULONG lsw = ip.nx_ip_interface[0].nx_interface_physical_address_lsw;
@@ -200,10 +216,43 @@ void net_eid(unsigned char eid[6]) {
 	eid[5] = (unsigned char)lsw;
 }
 
-void net_link_poll(void) {
-	ULONG up = NX_FALSE;
-	nx_ip_driver_direct_command(&ip, NX_LINK_GET_STATUS, &up);
-	net_link_up = up;
+/* ---- housekeeping thread ---------------------------------------------------
+ * The V loop parks in an infinite accept between testers, so link management
+ * and UDP discovery cannot live there. This thread (1) polls the driver link
+ * status — which also resyncs MACCR speed/duplex after renegotiation — and
+ * (2) answers vehicle-identification requests on UDP 13400 so testers can
+ * discover the ECU after the boot announcements are long gone. */
+extern int blobly_doip_ident(const unsigned char *req, int len, unsigned char *resp);
+
+static void svc_entry(ULONG arg) {
+	(void)arg;
+	for (;;) {
+		tx_thread_sleep(NX_IP_PERIODIC_RATE / 5); /* 200 ms */
+		ULONG up = NX_FALSE;
+		nx_ip_driver_direct_command(&ip, NX_LINK_GET_STATUS, &up);
+		net_link_up = up;
+		NX_PACKET *p;
+		while (nx_udp_socket_receive(&udp_sock, &p, NX_NO_WAIT) == NX_SUCCESS) {
+			unsigned char req[64], resp[64];
+			ULONG got = 0, peer_ip = 0;
+			UINT peer_port = 0;
+			nx_udp_packet_info_extract(p, &peer_ip, NX_NULL, &peer_port, NX_NULL);
+			nx_packet_data_extract_offset(p, 0, req, sizeof(req), &got);
+			nx_packet_release(p);
+			int n = blobly_doip_ident(req, (int)got, resp);
+			if (n <= 0) {
+				continue;
+			}
+			NX_PACKET *r = NX_NULL;
+			if (nx_packet_allocate(&pool, &r, NX_UDP_PACKET, NX_NO_WAIT) != NX_SUCCESS) {
+				continue;
+			}
+			if (nx_packet_data_append(r, resp, (ULONG)n, &pool, NX_NO_WAIT) != NX_SUCCESS ||
+			    nx_udp_socket_send(&udp_sock, r, peer_ip, peer_port) != NX_SUCCESS) {
+				nx_packet_release(r);
+			}
+		}
+	}
 }
 
 /* ---- bring-up -------------------------------------------------------------- */
@@ -226,6 +275,9 @@ static void app_entry(ULONG arg) {
 	nx_tcp_socket_create(&ip, &tcp_sock, "doip-tcp", NX_IP_NORMAL, NX_DONT_FRAGMENT,
 	                     0x80, TCP_WINDOW, NX_NULL, NX_NULL);
 	nx_tcp_server_socket_listen(&ip, DOIP_PORT, &tcp_sock, 1, NX_NULL);
+	tx_thread_create(&svc_thread, "doip-svc", svc_entry, 0,
+	                 svc_thread_stack, sizeof(svc_thread_stack),
+	                 8, 8, TX_NO_TIME_SLICE, TX_AUTO_START);
 	blobly_doip_run(); /* the V server loop; never returns */
 }
 
