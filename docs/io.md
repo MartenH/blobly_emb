@@ -64,10 +64,14 @@ signal:
   (a single atomic load in the latest-value handoff), AND the type fits the
   kind — gpio: `bool`; adc: `u16`/`u32`; pwm: `u16`/`u32` (a `u8` cannot carry
   0..1000 permille, an `f32` has no defined digital-level meaning);
-- **transport**: `triple` only. `seqlock` retries under a saturating writer
-  (not wait-free), and `double` tears when the reader is preempted across two
-  publishes (docs/multicore-perf.md documents exactly this) — REQ-IO-003's
-  "always a complete sample" leaves triple as the only qualifying transport;
+- **transport is topology-derived, not chosen**: same-core consumer → `triple`;
+  cross-core consumer → `xioc` (the plain-store slot protocol) — exactly the
+  derivation ordinary signals already use, and for the recorded reason: triple
+  across H755 cores tore 162 reads before xioc replaced it, while `seqlock`
+  retries under a saturating writer (not wait-free) and `double` tears when the
+  reader is preempted across two publishes (docs/multicore-perf.md). An explicit
+  `transport =` on an io-bound signal is a config error — the generator derives
+  the only correct one per edge;
 - **periods harmonic**: every `period_ms` is an integer multiple of the fastest
   configured io period — the io thread runs at the fastest and serves each
   point on its own multiple, so a non-divisible cadence (7 ms vs 10 ms) would
@@ -106,8 +110,15 @@ pins or peripherals:
   free-running ADC/DMA at sleep-entry is platform lifecycle, the same hook family
   as the transceiver — P4.)
 - **Outputs**: the io thread acquires each output signal's channel and applies it —
-  GPIO write / PWM compare-register update, both near-free. PWM signal value =
-  duty in permille (0..1000); the carrier `freq_hz` is config, not data.
+  GPIO write / PWM compare-register update, both near-free — **gated on
+  freshness**: until the producing FB has published at least once, the io thread
+  keeps applying the configured `init`, never the channel's zero-initialized
+  unread value (the host IOC API already reports freshness; the target slot
+  protocol grows the same bit when the target phase lands). PWM signal value =
+  duty in permille (0..1000), **clamped to 1000** above range — a u16 can carry
+  1001..65535 and the clamp makes the out-of-range policy deterministic across
+  timer backends instead of backend-dependent wrap/saturate. The carrier
+  `freq_hz` is config, not data.
   **Before the first publication** (startup, a disabled FB, a delayed first
   activation) the pin holds its configured `init` value — every output point
   declares one (`init = false` level, `init = 0` duty), applied by the io
@@ -125,14 +136,20 @@ pins or peripherals:
   host backend (the sim's file mirror) and target backends that own the
   registers, fed by the board's pin table. Generated code calls the port and
   nothing else — C interop stays behind the OSAL/driver boundary (AGENTS.md);
-  boards/example glue never surface functions into generated code.
+  boards/example glue never surface functions into generated code. One explicit
+  port-contract clause: the DMA latest-value region must be **non-cacheable or
+  cache-maintained by the backend** — an aligned load alone does not guarantee
+  freshness through a data cache (today's H7 boards run D-cache off by policy,
+  which satisfies it trivially; the contract makes the assumption visible for
+  any board that turns D-cache on).
 - **Management plane**: the io thread is a platform thread like the comm
   thread, and joins the same choreography — it appears in the manifest and
   trace by name, checkpoints the watchdog (a stuck io thread must not leave
   stale actuator values behind a happily-fed watchdog), and takes the
   quiesce/resume mode events: at sleep-entry it stops the free-running
   ADC/DMA, drives outputs to their `init` values, and parks; wake restarts
-  the sampling before the app resumes (the NM/NvM in-sleep pattern).
+  the sampling before the app resumes (the NM/NvM in-sleep pattern;
+  REQ-IO-009 makes this choreography traceable evidence, not a hope).
 
 Pins are named in ecu.toml because an example is already board-specific (it selects
 `BOARD` in its Makefile); the glue C validates the pin table at compile time. If a
@@ -195,7 +212,9 @@ latest-complete-sample contract (REQ-IO-003) holds identically in both worlds.
 One subtlety: a bare `echo 100 > io/PotVolt` is not atomic — a mid-write read
 could see `1`, syntactically valid but never a supplied value. The update
 protocol is therefore write-then-rename (`io/.PotVolt.tmp` → `io/PotVolt`,
-atomic on POSIX; a two-line `ioset` helper ships with the sim), and the reader
+atomic on POSIX; a two-line `ioset` helper ships with the sim) — and the io
+thread's own OUTPUT writes use the same temp-and-rename, so a GUI or test
+reading an actuator file never observes a truncated value either. The reader
 keeps the LAST-GOOD value whenever a read is empty or unparsable — a partial
 supplied value can still slip through a non-conforming writer, which is the
 sim's documented cost of file transparency, not a violation the target can hit.
