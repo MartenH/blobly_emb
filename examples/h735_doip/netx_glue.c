@@ -35,9 +35,11 @@ static NX_PACKET *rx_pending;   /* partially-consumed receive (packet > caller's
 static ULONG rx_pending_off;
 static ULONG rx_idle_ticks;     /* ticks since the peer last sent anything */
 static UINT sess_activated;     /* V-side routing activation state (selects the idle limit) */
+static ULONG conn_start;        /* tick of accept: the pre-activation deadline base */
 
 /* ISO 13400 inactivity: 2 s initial (a connection that never activates routing
- * must not hold the one server socket), 5 min general after activation. */
+ * must not hold the one server socket — measured from ACCEPT, so trickled bytes
+ * don't extend it), 5 min general idle after activation. */
 #define DOIP_IDLE_INITIAL (2u * NX_IP_PERIODIC_RATE)
 #define DOIP_IDLE_GENERAL (300u * NX_IP_PERIODIC_RATE)
 
@@ -136,17 +138,23 @@ int net_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
 		}
 		tcp_connected = 1;
 		rx_idle_ticks = 0;
+		conn_start = tx_time_get();
+	}
+	/* pre-activation deadline is ABSOLUTE from accept: a peer trickling bytes
+	 * (or partial frames) without ever activating routing gets cut all the same */
+	if (!sess_activated && (tx_time_get() - conn_start) >= DOIP_IDLE_INITIAL) {
+		return stream_recycle();
 	}
 	if (!rx_pending) {
 		UINT s = nx_tcp_socket_receive(&tcp_sock, &rx_pending, timeout_ticks);
 		if (s != NX_SUCCESS) {
 			rx_pending = NX_NULL;
 			if (s == NX_NO_PACKET) {
-				/* timeout: expire a silent peer (ISO 13400 inactivity —
-				 * short before routing activation, long after) */
-				ULONG limit = sess_activated ? DOIP_IDLE_GENERAL : DOIP_IDLE_INITIAL;
+				/* timeout: expire an activated-but-silent peer (ISO 13400
+				 * general inactivity; pre-activation is handled above) */
 				rx_idle_ticks += timeout_ticks;
-				return (rx_idle_ticks >= limit) ? stream_recycle() : 0;
+				return (sess_activated && rx_idle_ticks >= DOIP_IDLE_GENERAL)
+					? stream_recycle() : 0;
 			}
 			return stream_recycle(); /* peer closed or error */
 		}
@@ -202,7 +210,15 @@ void net_stream_drop(void) {
 }
 
 void net_stream_notify_activated(int on) {
+	if (on && !sess_activated) {
+		rx_idle_ticks = 0; /* the general-inactivity clock starts at activation */
+	}
 	sess_activated = (UINT)on;
+}
+
+/* paces the V side's boot announcements (ISO 13400 announce interval) */
+void net_sleep_ms(int ms) {
+	tx_thread_sleep((ULONG)ms * NX_IP_PERIODIC_RATE / 1000u);
 }
 
 void net_eid(unsigned char eid[6]) {

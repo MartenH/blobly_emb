@@ -16,6 +16,7 @@ fn C.net_stream_drop()
 fn C.net_stream_notify_activated(on int)
 fn C.net_udp_broadcast(port int, buf &u8, len int)
 fn C.net_eid(eid &u8)
+fn C.net_sleep_ms(ms int)
 
 // module-sized state lives on the __global, initialized IN PLACE — never built
 // by value on a thread stack (the stack-copy boot-hang rule).
@@ -45,7 +46,11 @@ fn blobly_doip_run() {
 	C.net_eid(&eid[0])
 	mut abuf := [64]u8{}
 	alen := g_srv.announcement(&eid[0], &abuf[0])
-	for _ in 0 .. 3 {
+	for i in 0 .. 3 {
+		if i > 0 {
+			C.net_sleep_ms(500) // ISO 13400 announce interval — spread the
+			// window so a tester that misses one broadcast catches the next
+		}
 		C.net_udp_broadcast(13400, &abuf[0], alen)
 	}
 

@@ -117,7 +117,11 @@ pub fn (mut s Server) ident_response(data &u8, data_len int, eid &u8, resp &u8) 
 		return 0
 	}
 	unsafe {
-		if data[0] != proto_ver || data[1] != proto_inv {
+		// identification may use the generic version pattern 0xFF/0x00 — a
+		// tester discovers entities without knowing their DoIP revision
+		ver_ok := (data[0] == proto_ver && data[1] == proto_inv)
+			|| (data[0] == 0xFF && data[1] == 0x00)
+		if !ver_ok {
 			return 0
 		}
 		ptype := (u16(data[2]) << 8) | u16(data[3])
@@ -225,7 +229,9 @@ const max_resp_per_msg = header_len + 5 + header_len + 4 + int(uds.max_did_data)
 fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 	match ptype {
 		pt_route_req {
-			if plen < 7 {
+			// version-2 framing: exactly 7 bytes, or 11 with the optional OEM
+			// field — a longer blob must NACK, not "activate" on its prefix
+			if plen != 7 && plen != 11 {
 				return gen_nack(resp, at, nack_bad_length)
 			}
 			sa := (u16(s.buf[header_len]) << 8) | u16(s.buf[header_len + 1])
