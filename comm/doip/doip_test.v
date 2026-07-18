@@ -163,6 +163,36 @@ fn test_full_resp_buffer_retains_message() {
 	assert s.activated
 }
 
+fn test_dataless_diag_nacks_no_silent_ack() {
+	// plen 4 = addresses only, no UDS byte: must NACK, not ack-then-nothing
+	mut s := Server{}
+	s.entity_addr = 0x0E80
+	mut inb := [max_msg]u8{}
+	mut resp := [max_msg]u8{}
+	n := frame(&inb[0], 0x0005, [u8(0x0E), 0x00, 0x00, 0, 0, 0, 0])
+	mut rlen := s.feed(&inb[0], n, &resp[0], max_msg)
+	assert s.activated
+	n2 := frame(&inb[0], 0x8001, [u8(0x0E), 0x00, 0x0E, 0x80])
+	rlen = s.feed(&inb[0], n2, &resp[0], max_msg)
+	assert rlen == 9
+	assert resp[2] == 0x00 && resp[3] == 0x00 // generic NACK
+	assert resp[8] == 0x04 // invalid payload length
+}
+
+fn test_tiny_resp_buffer_never_written() {
+	// resp_max below even a NACK: feed must not write a single byte
+	mut s := Server{}
+	mut inb := [max_msg]u8{}
+	mut resp := [max_msg]u8{}
+	resp[0] = 0xAA
+	inb[0] = 0x03 // wrong version -> would NACK
+	inb[1] = 0xFD
+	rlen := s.feed(&inb[0], 8, &resp[0], 4)
+	assert rlen == 0
+	assert resp[0] == 0xAA // untouched
+	assert s.buf_len == 0 // stream state still reset
+}
+
 fn test_announcement_layout() {
 	mut s := Server{}
 	s.entity_addr = 0x0E80

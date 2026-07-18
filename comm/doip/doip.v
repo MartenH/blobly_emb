@@ -34,6 +34,7 @@ const pt_diag_nack = u16(0x8003)
 const nack_bad_pattern = u8(0x00)
 const nack_unknown_type = u8(0x01)
 const nack_too_large = u8(0x02)
+const nack_bad_length = u8(0x04)
 
 // diagnostic-message NACK codes
 const dnack_invalid_source = u8(0x02)
@@ -73,6 +74,16 @@ fn gen_nack(resp &u8, at int, code u8) int {
 	return o + 1
 }
 
+// gen_nack gated on the caller's response capacity: feed's early NACKs run
+// before the per-message room check, and with bounds checks off an unguarded
+// write past resp_max is an out-of-bounds write, not a crash
+fn nack_if_room(resp &u8, at int, code u8, resp_max int) int {
+	if at + header_len + 1 > resp_max {
+		return at
+	}
+	return gen_nack(resp, at, code)
+}
+
 // announcement builds the vehicle-announcement payload (UDP broadcast at boot,
 // also the answer to a vehicle-identification request): VIN, logical address,
 // EID/GID (we use the MAC-derived EID for both), further-action 0x00.
@@ -101,7 +112,7 @@ pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 	// message: drop the stream state and NACK — the glue closes on that).
 	if s.buf_len + data_len > max_msg {
 		s.buf_len = 0
-		return gen_nack(resp, 0, nack_too_large)
+		return nack_if_room(resp, 0, nack_too_large, resp_max)
 	}
 	unsafe {
 		for i in 0 .. data_len {
@@ -117,14 +128,14 @@ pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 		}
 		if s.buf[0] != proto_ver || s.buf[1] != proto_inv {
 			s.buf_len = 0
-			return gen_nack(resp, out, nack_bad_pattern)
+			return nack_if_room(resp, out, nack_bad_pattern, resp_max)
 		}
 		plen := (u32(s.buf[4]) << 24) | (u32(s.buf[5]) << 16) | (u32(s.buf[6]) << 8) | u32(s.buf[7])
 		// compare in u32: a high-bit length narrowed to int goes negative and
 		// would bypass the bound, then run the shift loop off the buffer
 		if plen > u32(max_msg - header_len) {
 			s.buf_len = 0
-			return gen_nack(resp, out, nack_too_large)
+			return nack_if_room(resp, out, nack_too_large, resp_max)
 		}
 		total := header_len + int(plen)
 		if s.buf_len < total {
@@ -157,7 +168,7 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 	match ptype {
 		pt_route_req {
 			if plen < 7 {
-				return gen_nack(resp, at, nack_bad_pattern)
+				return gen_nack(resp, at, nack_bad_length)
 			}
 			s.tester_addr = (u16(s.buf[header_len]) << 8) | u16(s.buf[header_len + 1])
 			s.activated = true
@@ -176,8 +187,11 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 			return o + 9
 		}
 		pt_diag {
-			if plen < 4 {
-				return gen_nack(resp, at, nack_bad_pattern)
+			// addresses (4) + at least one UDS service byte: a data-less diag
+			// message would get a positive ack and then no response — the
+			// tester would wait forever
+			if plen < 5 {
+				return gen_nack(resp, at, nack_bad_length)
 			}
 			sa := (u16(s.buf[header_len]) << 8) | u16(s.buf[header_len + 1])
 			ta := (u16(s.buf[header_len + 2]) << 8) | u16(s.buf[header_len + 3])

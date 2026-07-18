@@ -14,15 +14,19 @@ ENTITY, TESTER = 0x0E80, 0x0E00
 def frame(ptype, payload):
     return struct.pack(">BBHI", 0x02, 0xFD, ptype, len(payload)) + payload
 
+def read_exact(s, n):
+    data = b""
+    while len(data) < n:
+        chunk = s.recv(n - len(data))
+        if not chunk:
+            raise RuntimeError("connection closed by board mid-message")
+        data += chunk
+    return data
+
 def read_msg(s):
-    hdr = b""
-    while len(hdr) < 8:
-        hdr += s.recv(8 - len(hdr))
+    hdr = read_exact(s, 8)
     _, _, ptype, plen = struct.unpack(">BBHI", hdr)
-    payload = b""
-    while len(payload) < plen:
-        payload += s.recv(plen - len(payload))
-    return ptype, payload
+    return ptype, read_exact(s, plen)
 
 def diag(s, uds_bytes):
     s.sendall(frame(0x8001, struct.pack(">HH", TESTER, ENTITY) + uds_bytes))
