@@ -33,6 +33,11 @@ extern void board_clock_init(void);
 #define UDP_TELEM_PORT 5006
 #define TELEM_DEST     (IP_ADDR | ~IP_MASK) /* subnet broadcast, follows IP config */
 
+/* P3 TCP (REQ-NET-006): a byte-stream echo server — one connection at a time
+ * (`nc 192.168.0.50 5007`), re-listens after each disconnect. */
+#define TCP_ECHO_PORT  5007
+#define TCP_WINDOW     2048 /* small: echo never buffers much, pool is 12 packets */
+
 /* --- static memory (no heap; REQ-NET-001/002). Packet payload rounds the 1514
  * frame up so an Ethernet frame + NetX overhead fits one packet. */
 #define POOL_PAYLOAD 1568u
@@ -43,13 +48,16 @@ static UCHAR ip_thread_stack[2048] __attribute__((aligned(8)));
 static UCHAR arp_cache[1024] __attribute__((aligned(4)));
 static UCHAR ping_thread_stack[2048] __attribute__((aligned(8)));
 static UCHAR echo_thread_stack[2048] __attribute__((aligned(8)));
+static UCHAR tcp_thread_stack[2048] __attribute__((aligned(8)));
 
 static NX_PACKET_POOL pool;
 static NX_IP ip;
 static TX_THREAD ping_thread;
 static TX_THREAD echo_thread;
+static TX_THREAD tcp_thread;
 static NX_UDP_SOCKET echo_sock;
 static NX_UDP_SOCKET telem_sock;
+static NX_TCP_SOCKET tcp_sock;
 
 /* bench-observable outcome (read over SWD; no UART on the DK's default wiring). */
 volatile ULONG net_ping_ok;
@@ -57,6 +65,8 @@ volatile ULONG net_ping_fail;
 volatile ULONG net_link_up;
 volatile ULONG net_udp_echoed;   /* datagrams echoed back */
 volatile ULONG net_telem_sent;   /* telemetry broadcasts sent */
+volatile ULONG net_tcp_echoed;   /* TCP segments echoed back */
+volatile ULONG net_tcp_conns;    /* TCP connections accepted */
 
 /* driver counters (boards/h735dk/eth.c), reported in the telemetry line. */
 extern volatile unsigned int eth_rx_count, eth_tx_count, eth_tx_drops;
@@ -107,6 +117,34 @@ static void echo_entry(ULONG arg) {
 	}
 }
 
+/* TCP echo (REQ-NET-006, the reliable-stream service): single connection at a
+ * time, every received segment sent straight back, re-listen after disconnect —
+ * `nc <board> 5007` from the host. */
+static void tcp_entry(ULONG arg) {
+	(void)arg;
+	nx_tcp_socket_create(&ip, &tcp_sock, "tcp-echo", NX_IP_NORMAL, NX_DONT_FRAGMENT,
+	                     0x80, TCP_WINDOW, NX_NULL, NX_NULL);
+	nx_tcp_server_socket_listen(&ip, TCP_ECHO_PORT, &tcp_sock, 5, NX_NULL);
+	for (;;) {
+		if (nx_tcp_server_socket_accept(&tcp_sock, NX_WAIT_FOREVER) == NX_SUCCESS) {
+			net_tcp_conns++;
+			NX_PACKET *p = NX_NULL;
+			while (nx_tcp_socket_receive(&tcp_sock, &p, NX_WAIT_FOREVER) == NX_SUCCESS) {
+				if (nx_tcp_socket_send(&tcp_sock, p, NX_IP_PERIODIC_RATE) == NX_SUCCESS) {
+					net_tcp_echoed++;
+				} else {
+					nx_packet_release(p); /* send takes ownership only on success */
+					break;
+				}
+			}
+			/* peer closed (receive fails NX_NOT_CONNECTED) or send failed. */
+			nx_tcp_socket_disconnect(&tcp_sock, NX_IP_PERIODIC_RATE);
+		}
+		nx_tcp_server_socket_unaccept(&tcp_sock);
+		nx_tcp_server_socket_relisten(&ip, TCP_ECHO_PORT, &tcp_sock);
+	}
+}
+
 static void ping_entry(ULONG arg) {
 	(void)arg;
 	ULONG status_bits;
@@ -136,8 +174,8 @@ static void ping_entry(ULONG arg) {
 		 * cadence still stretches to ~3 s while pings time out — acceptable for a
 		 * bench diagnostic; a separate timer thread for perfect 1 Hz would be bloat).
 		 * The counters line is the CpuLoad-over-CAN idea carried to UDP.
-		 * Worst case: 39 literal chars + 6 x 10-digit counters + '\n' = 100 bytes. */
-		char line[112];
+		 * Worst case: 44 literal chars + 7 x 10-digit counters + '\n' = 115 bytes. */
+		char line[128];
 		UINT o = 0;
 		o = append(line, o, "blobly ok=");
 		o += u32_dec(line + o, net_ping_ok);
@@ -151,6 +189,8 @@ static void ping_entry(ULONG arg) {
 		o += u32_dec(line + o, eth_tx_drops);
 		o = append(line, o, " echoed=");
 		o += u32_dec(line + o, net_udp_echoed);
+		o = append(line, o, " tcp=");
+		o += u32_dec(line + o, net_tcp_echoed);
 		line[o++] = '\n';
 		NX_PACKET *tp = NX_NULL;
 		if (nx_packet_allocate(&pool, &tp, NX_UDP_PACKET, NX_NO_WAIT) == NX_SUCCESS) {
@@ -199,6 +239,7 @@ void tx_application_define(void *first_unused_memory) {
 	nx_arp_enable(&ip, arp_cache, sizeof(arp_cache));
 	nx_icmp_enable(&ip);
 	nx_udp_enable(&ip); /* P2: the datagram service */
+	nx_tcp_enable(&ip); /* P3: the reliable-stream service */
 	nx_ip_gateway_address_set(&ip, GATEWAY);
 
 	tx_thread_create(&ping_thread, "ping", ping_entry, 0,
@@ -206,6 +247,9 @@ void tx_application_define(void *first_unused_memory) {
 	                 3, 3, TX_NO_TIME_SLICE, TX_AUTO_START);
 	tx_thread_create(&echo_thread, "udp-echo", echo_entry, 0,
 	                 echo_thread_stack, sizeof(echo_thread_stack),
+	                 4, 4, TX_NO_TIME_SLICE, TX_AUTO_START);
+	tx_thread_create(&tcp_thread, "tcp-echo", tcp_entry, 0,
+	                 tcp_thread_stack, sizeof(tcp_thread_stack),
 	                 4, 4, TX_NO_TIME_SLICE, TX_AUTO_START);
 }
 
