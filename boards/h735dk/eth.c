@@ -47,6 +47,20 @@ void eth_multicast_all(void) {
 	ETH->MACPFR |= ETH_MACPFR_PM;
 }
 
+/* eth_unique_mac: a locally-administered MAC derived from the STM32 96-bit unique
+ * device ID — two boards running the same image must not share an address (ARP
+ * caches/switch tables flap). 0x02 prefix = locally administered, unicast. */
+void eth_unique_mac(uint8_t mac[6]) {
+	const volatile uint32_t *uid = (const volatile uint32_t *)UID_BASE;
+	uint32_t mix = uid[0] ^ (uid[1] << 1) ^ (uid[2] << 2);
+	mac[0] = 0x02u;
+	mac[1] = (uint8_t)(uid[2] >> 8);
+	mac[2] = (uint8_t)(mix >> 24);
+	mac[3] = (uint8_t)(mix >> 16);
+	mac[4] = (uint8_t)(mix >> 8);
+	mac[5] = (uint8_t)mix;
+}
+
 /* --- RDES3 / TDES3 bit fields (RM0468) --- */
 #define DESC_OWN (1u << 31) /* owned by DMA */
 #define RDES3_IOC (1u << 30)
@@ -317,27 +331,34 @@ int eth_send(const uint8_t *frame, uint32_t len) {
 
 /* ---------------------------------------------------------------- recv ------ */
 uint32_t eth_recv(uint8_t *buf, uint32_t buf_size) {
-	eth_desc_t *d = &rx_desc[rx_idx];
-	if ((d->des3 & DESC_OWN) != 0u) {
-		return 0; /* DMA still owns it — nothing received */
-	}
-	uint32_t len = 0;
-	if ((d->des3 & (RDES3_FD | RDES3_LD)) == (RDES3_FD | RDES3_LD)) {
-		len = d->des3 & RDES3_PL_MASK;
-		if (len > buf_size) {
-			len = buf_size;
+	/* Loop past bad/context/fragmented descriptors: returning 0 for one of those
+	 * would be indistinguishable from "ring empty" and strand any good frames
+	 * queued behind it until the next interrupt. 0 means ONLY "nothing pending". */
+	for (;;) {
+		eth_desc_t *d = &rx_desc[rx_idx];
+		if ((d->des3 & DESC_OWN) != 0u) {
+			return 0; /* DMA still owns it — nothing received */
 		}
-		memcpy(buf, &rx_buf[rx_idx][0], len);
-		eth_rx_count++;
+		uint32_t len = 0;
+		if ((d->des3 & (RDES3_FD | RDES3_LD)) == (RDES3_FD | RDES3_LD)) {
+			len = d->des3 & RDES3_PL_MASK;
+			if (len > buf_size) {
+				len = buf_size;
+			}
+			memcpy(buf, &rx_buf[rx_idx][0], len);
+			eth_rx_count++;
+		}
+		/* recycle the descriptor back to the DMA (DSB: same store-ordering rule
+		 * as eth_send — OWN must be visible before the doorbell). */
+		d->des0 = (uint32_t)(uintptr_t)&rx_buf[rx_idx][0];
+		d->des3 = DESC_OWN | RDES3_IOC | RDES3_BUF1V;
+		__DSB();
+		ETH->DMACRDTPR = (uint32_t)(uintptr_t)&rx_desc[rx_idx];
+		rx_idx = (rx_idx + 1u) % ETH_RX_DESC_CNT;
+		if (len != 0u) {
+			return len;
+		}
 	}
-	/* recycle the descriptor back to the DMA (DSB: same store-ordering rule as
-	 * eth_send — OWN must be visible before the doorbell). */
-	d->des0 = (uint32_t)(uintptr_t)&rx_buf[rx_idx][0];
-	d->des3 = DESC_OWN | RDES3_IOC | RDES3_BUF1V;
-	__DSB();
-	ETH->DMACRDTPR = (uint32_t)(uintptr_t)&rx_desc[rx_idx];
-	rx_idx = (rx_idx + 1u) % ETH_RX_DESC_CNT;
-	return len;
 }
 
 /* ---------------------------------------------------------------- ISR ------- */
