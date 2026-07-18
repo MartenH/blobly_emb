@@ -72,8 +72,9 @@ signal:
   reader is preempted across two publishes (docs/multicore-perf.md). An explicit
   `transport =` on an io-bound signal is a config error — the generator derives
   the only correct one per edge;
-- **periods harmonic**: every `period_ms` is an integer multiple of the fastest
-  configured io period — the io thread runs at the fastest and serves each
+- **periods harmonic**: every `period_ms` is at least 1 (the Loom tick — zero
+  or negative would make "fastest" divide-by-zero or saturate the io core) and
+  an integer multiple of the fastest configured io period — the io thread runs at the fastest and serves each
   point on its own multiple, so a non-divisible cadence (7 ms vs 10 ms) would
   silently publish off-spec; ecucheck rejects it instead.
 
@@ -136,12 +137,15 @@ pins or peripherals:
   host backend (the sim's file mirror) and target backends that own the
   registers, fed by the board's pin table. Generated code calls the port and
   nothing else — C interop stays behind the OSAL/driver boundary (AGENTS.md);
-  boards/example glue never surface functions into generated code. One explicit
-  port-contract clause: the DMA latest-value region must be **non-cacheable or
-  cache-maintained by the backend** — an aligned load alone does not guarantee
-  freshness through a data cache (today's H7 boards run D-cache off by policy,
-  which satisfies it trivially; the contract makes the assumption visible for
-  any board that turns D-cache on).
+  boards/example glue never surface functions into generated code. Two explicit
+  port-contract clauses for the latest-value handoff: (1) the DMA region must
+  be **non-cacheable or cache-maintained by the backend** — an aligned load
+  alone does not guarantee freshness through a data cache (today's H7 boards
+  run D-cache off by policy, which satisfies it trivially); (2) the backend
+  must write each sample **single-copy-atomically at the signal's width** and
+  the CPU accessor must be **volatile** — a DMA that beats a u32 out in bytes,
+  or a compiler that caches the load, can serve a torn or stale value through
+  a perfectly aligned address.
 - **Management plane**: the io thread is a platform thread like the comm
   thread, and joins the same choreography — it appears in the manifest and
   trace by name, checkpoints the watchdog (a stuck io thread must not leave
@@ -173,10 +177,14 @@ boards layer owns the pin; the owning platform module owns the WHEN:
   boundary like all C interop). The default backend is a no-op (today's bench
   transceivers strap STB to GND, i.e. permanently normal — the port makes that
   a board property, not a design assumption); a target backend drives the
-  board's pin table. NM calls it on its sleep/wake transitions — and ONCE at
-  init to establish the configured initial state (NM starts in `bus_sleep`
-  without a transition, and a transceiver that powers up in normal mode must
-  not stay awake while NM reports sleep). Nothing else calls it.
+  board's pin table. **The comm thread makes the call, not NM directly**: the
+  comm thread exclusively owns the bus driver (docs/architecture.md), and on
+  the dedicated-mode-thread topology NM runs elsewhere — so NM emits its state
+  transition as a mode event and the comm-thread owner applies the transceiver
+  mode through the port, on transitions and ONCE at init to establish the
+  configured initial state (NM starts in `bus_sleep` without a transition, and
+  a transceiver that powers up in normal mode must not stay awake while NM
+  reports sleep). Nothing else touches it.
 - **Ethernet PHY ← the net stack.** NetX Duo's driver calls PHY hooks
   (reset, link poll, power-down) that the boards layer provides. Same shape.
 - Litmus test for which class a pin is: *would an FB ever read or write it?* If the

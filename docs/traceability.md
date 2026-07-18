@@ -72,7 +72,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-INV-005 | QM | review | covered | naming-review (pending) |
 | REQ-IO-001 | QM | test | uncovered | — |
 | REQ-IO-002 | QM | test | uncovered | — |
-| REQ-IO-003 | QM | test | uncovered | — |
+| REQ-IO-003 | QM | analysis | uncovered | — |
 | REQ-IO-004 | QM | analysis | uncovered | — |
 | REQ-IO-005 | QM | test | uncovered | — |
 | REQ-IO-006 | QM | review | uncovered | — |
