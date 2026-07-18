@@ -29,12 +29,14 @@ period_ms = 10
 name      = "LedGreen"    # output: consumed (an FB writes it)
 pin       = "PB0"
 period_ms = 10            # apply cadence — every point declares one
+init      = false         # REQUIRED on outputs: the pre-publication pin state
 
 [[io.pwm]]
 name      = "FanDuty"     # output: duty from the signal value (0..1000 permille)
 pin       = "PE9"
 period_ms = 10
 freq_hz   = 20000
+init      = 0             # duty before the first publication
 ```
 
 `period_ms` is mandatory on every point, outputs included — it is the io
@@ -51,13 +53,25 @@ the io kind (an `[[io.adc]]` bound to a `to = "io"` signal is a config error).
 `io` becomes a **reserved endpoint name**: ecucheck rejects a partition, thread,
 or bus named `io` (endpoints resolve by name, so a user `io` partition would be
 ambiguous against this class — same rule family as the TOML nested-comment guard).
-ecucheck also validates the **shape and transport** of an io-bound signal: exactly
-one field, an aligned scalar of at most 32 bits (that is what `io_adc_read`/
-`io_pwm_set` carry, and what makes the latest-value handoff a single atomic load) —
-a multi-field or wider signal bound to an io point is a config error — and the
-signal's transport must be a wait-free single-reader one (`double`/`triple`;
-`seqlock` is rejected: its reader retries under a saturating writer, which breaks
-REQ-IO-003's wait-free guarantee).
+ecucheck also validates the **binding, shape, and transport** of an io-bound
+signal:
+
+- **one-to-one binding**: every `from/to = "io"` signal has exactly ONE matching
+  `[[io.*]]` entry, and every io point names exactly one such signal — an
+  unmatched io signal would otherwise silently resolve as a phantom endpoint
+  with no physical producer, and duplicates would be an ambiguous pin binding;
+- **shape per kind**: exactly one field, an aligned scalar of at most 32 bits
+  (a single atomic load in the latest-value handoff), AND the type fits the
+  kind — gpio: `bool`; adc: `u16`/`u32`; pwm: `u16`/`u32` (a `u8` cannot carry
+  0..1000 permille, an `f32` has no defined digital-level meaning);
+- **transport**: `triple` only. `seqlock` retries under a saturating writer
+  (not wait-free), and `double` tears when the reader is preempted across two
+  publishes (docs/multicore-perf.md documents exactly this) — REQ-IO-003's
+  "always a complete sample" leaves triple as the only qualifying transport;
+- **periods harmonic**: every `period_ms` is an integer multiple of the fastest
+  configured io period — the io thread runs at the fastest and serves each
+  point on its own multiple, so a non-divisible cadence (7 ms vs 10 ms) would
+  silently publish off-spec; ecucheck rejects it instead.
 
 ## Derived glue (the duo_gen.h pattern, third use)
 
@@ -96,10 +110,15 @@ pins or peripherals:
   duty in permille (0..1000); the carrier `freq_hz` is config, not data.
   **Before the first publication** (startup, a disabled FB, a delayed first
   activation) the pin holds its configured `init` value — every output point
-  declares one (`init = 0` duty, `init = "low"`), applied by the io thread at
-  its own init, BEFORE the app starts. No window where the pin state is
-  whatever the peripheral reset left behind, and no accidental drive from an
+  declares one (`init = false` level, `init = 0` duty), applied by the io
+  thread at its own init, BEFORE the app starts. No window where the pin state
+  is whatever the peripheral reset left behind, and no accidental drive from an
   unpublished zero-value channel.
+- **Startup ordering — inputs too**: the io thread publishes ONE initial sample
+  of every input (waiting out the ADC's first conversion) before application
+  dispatch begins, so the first activation never reads an empty channel's zero
+  as if it were a hardware sample. Same ordering rule the deterministic
+  start-up chain already imposes (SYS-REQ-LIFE-001): platform first, app after.
 - The C implementations (`io_adc_read(ch)`, `io_gpio_read/write(ch)`,
   `io_pwm_set(ch, permille)`) live behind a **driver io port** (`driver/io`,
   the same seam as `driver/can`): a platform-independent port header with a
@@ -107,6 +126,13 @@ pins or peripherals:
   registers, fed by the board's pin table. Generated code calls the port and
   nothing else — C interop stays behind the OSAL/driver boundary (AGENTS.md);
   boards/example glue never surface functions into generated code.
+- **Management plane**: the io thread is a platform thread like the comm
+  thread, and joins the same choreography — it appears in the manifest and
+  trace by name, checkpoints the watchdog (a stuck io thread must not leave
+  stale actuator values behind a happily-fed watchdog), and takes the
+  quiesce/resume mode events: at sleep-entry it stops the free-running
+  ADC/DMA, drives outputs to their `init` values, and parks; wake restarts
+  the sampling before the app resumes (the NM/NvM in-sleep pattern).
 
 Pins are named in ecu.toml because an example is already board-specific (it selects
 `BOARD` in its Makefile); the glue C validates the pin table at compile time. If a
@@ -124,13 +150,16 @@ boards layer owns the pin; the owning platform module owns the WHEN:
 
 - **CAN transceiver ← NM.** The transceiver mode pin follows the network state
   machine: normal while awake, standby on bus_sleep, and (where wired) the
-  transceiver's wake output is a wake source. Seam: `board_can_mode(bus, mode)` —
-  a boards-layer hook, default no-op (today's bench transceivers strap STB to GND,
-  i.e. permanently normal — the hook makes that a board property, not a design
-  assumption). NM calls it on its sleep/wake transitions — and ONCE at init to
-  establish the configured initial state (NM starts in `bus_sleep` without a
-  transition, and a transceiver that powers up in normal mode must not stay awake
-  while NM reports sleep). Nothing else calls it.
+  transceiver's wake output is a wake source. Seam: a **driver-port call**
+  (`blob_can_xcvr_mode(bus, mode)` in the CAN driver port, beside open/send/recv
+  — NOT a bare boards hook: generated/NM code must stay behind the driver
+  boundary like all C interop). The default backend is a no-op (today's bench
+  transceivers strap STB to GND, i.e. permanently normal — the port makes that
+  a board property, not a design assumption); a target backend drives the
+  board's pin table. NM calls it on its sleep/wake transitions — and ONCE at
+  init to establish the configured initial state (NM starts in `bus_sleep`
+  without a transition, and a transceiver that powers up in normal mode must
+  not stay awake while NM reports sleep). Nothing else calls it.
 - **Ethernet PHY ← the net stack.** NetX Duo's driver calls PHY hooks
   (reset, link poll, power-down) that the boards layer provides. Same shape.
 - Litmus test for which class a pin is: *would an FB ever read or write it?* If the
@@ -179,7 +208,7 @@ sim's documented cost of file transparency, not a violation the target can hit.
 2. **P2 — ADC** inputs (continuous-scan + circular-DMA latest-value, no timers —
    the free-running model above; the wait-free contract).
 3. **P3 — PWM** outputs.
-4. **P4 — NM transceiver hook** (`board_can_mode`) + wake source — needs a board
+4. **P4 — NM transceiver port** (`blob_can_xcvr_mode`) + wake source — needs a board
    with a controllable transceiver on the bench.
 5. **P5 — irq-triggered handlers** (the reserved trigger) when a real use case
    demands sub-tick latency.
