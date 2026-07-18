@@ -14,9 +14,13 @@
 /* board bring-up (boards/h735dk/board.c) */
 extern void board_clock_init(void);
 
-#define IP_ADDR    IP_ADDRESS(192, 168, 1, 50)
+/* Static addressing (no DHCP for P1 — fewer moving parts to bench-debug). The
+ * board takes a free host on the dev subnet; the ping target is the dev PC, a
+ * known-alive host you can watch (Wireshark / `ping 192.168.0.50` in reverse). */
+#define IP_ADDR    IP_ADDRESS(192, 168, 0, 50)
 #define IP_MASK    0xFFFFFF00UL              /* /24 */
-#define GATEWAY    IP_ADDRESS(192, 168, 1, 1)
+#define GATEWAY    IP_ADDRESS(192, 168, 0, 1)
+#define PING_DEST  IP_ADDRESS(192, 168, 0, 190) /* the dev PC */
 #define PING_WAIT  (2 * NX_IP_PERIODIC_RATE) /* 2 s */
 
 /* --- static memory (no heap; REQ-NET-001/002). Packet payload rounds the 1514
@@ -52,7 +56,7 @@ static void ping_entry(ULONG arg) {
 
 	for (;;) {
 		NX_PACKET *resp = NX_NULL;
-		UINT s = nx_icmp_ping(&ip, GATEWAY, "blobly-p1", 9, &resp, PING_WAIT);
+		UINT s = nx_icmp_ping(&ip, PING_DEST, "blobly-p1", 9, &resp, PING_WAIT);
 		if (s == NX_SUCCESS) {
 			net_ping_ok++;
 			nx_packet_release(resp);
