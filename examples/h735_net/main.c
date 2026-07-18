@@ -248,9 +248,12 @@ void tx_application_define(void *first_unused_memory) {
 	tx_thread_create(&echo_thread, "udp-echo", echo_entry, 0,
 	                 echo_thread_stack, sizeof(echo_thread_stack),
 	                 4, 4, TX_NO_TIME_SLICE, TX_AUTO_START);
+	/* priority 5, BELOW udp-echo(4): a TCP client streaming back-to-back data
+	 * keeps this thread runnable (receive returns immediately on queued data),
+	 * and at equal priority with no time slice it would starve the UDP echo. */
 	tx_thread_create(&tcp_thread, "tcp-echo", tcp_entry, 0,
 	                 tcp_thread_stack, sizeof(tcp_thread_stack),
-	                 4, 4, TX_NO_TIME_SLICE, TX_AUTO_START);
+	                 5, 5, TX_NO_TIME_SLICE, TX_AUTO_START);
 }
 
 /* This image has no CAN, but the shared vector table (boards/common/vectors.S)
