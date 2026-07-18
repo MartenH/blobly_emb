@@ -5,7 +5,7 @@
 [[req]]
 id = "REQ-IO-001"
 title = "Inputs are signals"
-text = "A configured physical input shall be presented to the application as an ordinary signal, sampled at its configured rate."
+text = "A configured physical input shall be presented to the application as an ordinary signal, published at its configured cadence with the most recent hardware sample (conversion may free-run; the cadence governs publication, not conversion)."
 status = "draft"
 method = "test"
 asil = "QM"
@@ -40,8 +40,8 @@ derives = "SYS-REQ-IO-001"
 
 [[req]]
 id = "REQ-IO-005"
-title = "Coherent with the port snapshot"
-text = "Input signals shall be sampled into the application's input snapshot before handler dispatch, so a handler's inputs are mutually coherent within one activation."
+title = "Stable within the port snapshot"
+text = "Input signals shall be captured into the application's input snapshot before handler dispatch, and each input shall be stable for the duration of the activation. Simultaneity across distinct inputs is not guaranteed: values may originate from different publish instants."
 status = "draft"
 method = "test"
 asil = "QM"

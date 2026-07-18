@@ -18,7 +18,7 @@ cross-core endpoints → xioc slots).
 [[io.adc]]
 name      = "PotVolt"     # publishes the [[signal]] of the same name
 pin       = "PA3"
-period_ms = 10            # sample cadence
+period_ms = 10            # publish cadence (conversion free-runs; see below)
 
 [[io.gpio]]
 name      = "UserButton"  # input: publishes; direction from the signal's flow
@@ -28,12 +28,20 @@ period_ms = 10
 [[io.gpio]]
 name      = "LedGreen"    # output: consumed (an FB writes it)
 pin       = "PB0"
+period_ms = 10            # apply cadence — every point declares one
 
 [[io.pwm]]
 name      = "FanDuty"     # output: duty from the signal value (0..1000 permille)
 pin       = "PE9"
+period_ms = 10
 freq_hz   = 20000
 ```
+
+`period_ms` is mandatory on every point, outputs included — it is the io
+thread's contract for that point (publish inputs / apply outputs at this
+cadence). The io thread runs at the fastest configured period and serves each
+point on its own multiple; without this an output-only ECU would have no
+defined cadence at all.
 
 Each `[[io.*]]` entry names a `[[signal]]`; the signal's `from`/`to` gains a third
 endpoint class, **io** (next to partition and bus): `from = "io"` = an input the
@@ -43,6 +51,13 @@ the io kind (an `[[io.adc]]` bound to a `to = "io"` signal is a config error).
 `io` becomes a **reserved endpoint name**: ecucheck rejects a partition, thread,
 or bus named `io` (endpoints resolve by name, so a user `io` partition would be
 ambiguous against this class — same rule family as the TOML nested-comment guard).
+ecucheck also validates the **shape and transport** of an io-bound signal: exactly
+one field, an aligned scalar of at most 32 bits (that is what `io_adc_read`/
+`io_pwm_set` carry, and what makes the latest-value handoff a single atomic load) —
+a multi-field or wider signal bound to an io point is a config error — and the
+signal's transport must be a wait-free single-reader one (`double`/`triple`;
+`seqlock` is rejected: its reader retries under a saturating writer, which breaks
+REQ-IO-003's wait-free guarantee).
 
 ## Derived glue (the duo_gen.h pattern, third use)
 
@@ -79,9 +94,19 @@ pins or peripherals:
 - **Outputs**: the io thread acquires each output signal's channel and applies it —
   GPIO write / PWM compare-register update, both near-free. PWM signal value =
   duty in permille (0..1000); the carrier `freq_hz` is config, not data.
+  **Before the first publication** (startup, a disabled FB, a delayed first
+  activation) the pin holds its configured `init` value — every output point
+  declares one (`init = 0` duty, `init = "low"`), applied by the io thread at
+  its own init, BEFORE the app starts. No window where the pin state is
+  whatever the peripheral reset left behind, and no accidental drive from an
+  unpublished zero-value channel.
 - The C implementations (`io_adc_read(ch)`, `io_gpio_read/write(ch)`,
-  `io_pwm_set(ch, permille)`) live in the boards layer / example glue, exactly as
-  `duo_pub`/`comm_glue.c` do today.
+  `io_pwm_set(ch, permille)`) live behind a **driver io port** (`driver/io`,
+  the same seam as `driver/can`): a platform-independent port header with a
+  host backend (the sim's file mirror) and target backends that own the
+  registers, fed by the board's pin table. Generated code calls the port and
+  nothing else — C interop stays behind the OSAL/driver boundary (AGENTS.md);
+  boards/example glue never surface functions into generated code.
 
 Pins are named in ecu.toml because an example is already board-specific (it selects
 `BOARD` in its Makefile); the glue C validates the pin table at compile time. If a
@@ -138,6 +163,13 @@ as on target, which is also what makes the handoff race-free — no plain shared
 array between threads, no C-level data race. A blocking or truncated filesystem
 op can delay the io thread's next period, never an app loop; the wait-free /
 latest-complete-sample contract (REQ-IO-003) holds identically in both worlds.
+One subtlety: a bare `echo 100 > io/PotVolt` is not atomic — a mid-write read
+could see `1`, syntactically valid but never a supplied value. The update
+protocol is therefore write-then-rename (`io/.PotVolt.tmp` → `io/PotVolt`,
+atomic on POSIX; a two-line `ioset` helper ships with the sim), and the reader
+keeps the LAST-GOOD value whenever a read is empty or unparsable — a partial
+supplied value can still slip through a non-conforming writer, which is the
+sim's documented cost of file transparency, not a violation the target can hit.
 
 ## Phasing (each rung gated; bench when silicon is back)
 
