@@ -58,6 +58,14 @@ static void ping_entry(ULONG arg) {
 	net_link_up = 1;
 
 	for (;;) {
+		/* Live link poll (driver GET_STATUS -> PHY BSR): keeps net_link_up honest
+		 * (the ENABLE flag is optimistic and would read 1 even with no cable) AND
+		 * drives the driver's down->up MACCR speed/duplex resync — without this
+		 * poll a board booted cableless would stay on the 100M/full guess forever. */
+		ULONG live = NX_FALSE;
+		nx_ip_driver_direct_command(&ip, NX_LINK_GET_STATUS, &live);
+		net_link_up = live;
+
 		NX_PACKET *resp = NX_NULL;
 		UINT s = nx_icmp_ping(&ip, PING_DEST, "blobly-p1", 9, &resp, PING_WAIT);
 		if (s == NX_SUCCESS) {

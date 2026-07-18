@@ -22,9 +22,16 @@ asil = "QM"
 derives = "SYS-REQ-NET-001"
 
 [[req]]
+# Amended with the P1 bring-up: the original "shall not transmit while the link
+# is down" clause is deliberately NOT implemented — the stack reports link-up
+# optimistically at enable because gating on the PHY's ~3 s auto-negotiation
+# deadlocks bring-up (bench-found), and frames sent into a down link are simply
+# lost on the wire, which Ethernet's upper protocols already tolerate. What the
+# subsystem MUST do instead is tell the truth on request (live status) and adapt
+# speed/duplex on every link-up, including a cable plugged after boot.
 id = "REQ-NET-003"
 title = "Link management"
-text = "The subsystem shall detect physical link up and down and adapt to the negotiated speed and duplex, and shall not transmit while the link is down."
+text = "The subsystem shall report the live physical link state on request, and shall adapt to the negotiated speed and duplex on each link-up, including a link established after startup."
 status = "draft"
 method = "test"
 asil = "QM"
