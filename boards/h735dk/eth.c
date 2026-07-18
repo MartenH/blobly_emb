@@ -289,28 +289,12 @@ int eth_init(const uint8_t mac[6]) {
 	ETH->DMACIER = ETH_DMACIER_RIE | ETH_DMACIER_NIE;
 	NVIC_EnableIRQ(ETH_IRQn);
 
-	/* 6. match the MAC to the PHY's AUTO-NEGOTIATED speed/duplex — a hardcoded
-	 * mismatch (MAC full-duplex on a half-duplex link) is the classic ~50%-loss
-	 * cause. Bounded wait for autoneg (BSR bit5), then sync; if the cable is
-	 * absent at boot this falls back to 100M/full and eth_link_up() re-syncs when
-	 * a link actually comes up. */
-	/* Each iteration is one MDIO read = 64 MDC bits at 2.2 MHz ~= 29 us, so the
-	 * bound is the autoneg budget: 140k * 29 us ~= 4 s (802.3 settles in < 3 s).
-	 * No cable -> falls through after ~4 s; eth_link_up() re-syncs on late plug.
-	 * A FAILED read costs mdio_wait's full ~10 ms timeout, not 29 us — bail after
-	 * a few consecutive failures or a wedged MDIO turns 4 s into ~20 minutes. */
-	uint16_t bsr = 0;
-	uint32_t mdio_fails = 0;
-	for (uint32_t t = 0; t < 140000u && mdio_fails < 5u; t++) {
-		if (phy_read(1u, &bsr) != 0) {
-			mdio_fails++;
-			continue;
-		}
-		mdio_fails = 0;
-		if ((bsr & 0x0020u) != 0u) {
-			break; /* auto-negotiation complete */
-		}
-	}
+	/* 6. speed/duplex: NO blocking autoneg wait (P1 carried a bounded ~4 s MDIO
+	 * poll here — the documented P2 debt). Link management is asynchronous now:
+	 * one non-blocking sync applies the real mode if autoneg already settled (or
+	 * the 100M/full fallback if not), and the app's periodic eth_link_up() poll
+	 * converges MACCR to every link's actual negotiation within one poll period.
+	 * Init configures and returns; nothing blocks the IP thread. */
 	phy_sync_maccr();
 	/* ACS+CST: strip pad/FCS in hardware so RDES3's length is the frame WITHOUT
 	 * the 4-byte CRC — otherwise every RX is 4 bytes long (NetX's IP-length trim

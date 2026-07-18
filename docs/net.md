@@ -228,9 +228,17 @@ Bench diagnostics that survived into the code: `eth_rx/tx/isr_count` +
 SWD with openocd (`init; halt; mdw <addr>; resume`). NOTE: st-util resets the target
 on attach and silently wipes this state; use openocd for live reads.
 
-**P2 debt — drop the autoneg wait from eth_init.** eth_init still blocks up to
-~4 s (bounded MDIO poll, ~29 us/read) so a cable-present boot starts with the
-negotiated speed/duplex — the minimal P1 bridge, running on the IP thread only.
-Once P2's periodic link/telemetry loop polls GET_STATUS (whose eth_link_up()
-already re-syncs MACCR), the monitor owns speed/duplex and this wait goes to
-zero: init configures and returns, link management is fully asynchronous.
+~~P2 debt — drop the autoneg wait from eth_init.~~ **Retired with P2**: the app's
+1 Hz GET_STATUS poll owns speed/duplex (per-poll MACCR sync), so eth_init now
+configures and returns — nothing blocks the IP thread.
+
+## P2 status — UDP datagram service (2026-07-18, BENCH-VERIFIED)
+
+REQ-NET-005 on silicon, in `examples/h735_net`: a UDP **echo** socket (port 5005,
+every datagram straight back to its sender — verified round-tripping from a WSL
+host through the Windows NAT) and a 1 Hz **telemetry broadcast** (port 5006, the
+bench counters as a text line to the subnet — the CpuLoad-over-CAN idea carried to
+UDP; `nc -ul 5006` on any subnet host). Notes: NetX's bind path calls `rand()`
+for ephemeral ports — newlib-nano's rand drags the reent/malloc/_sbrk chain, so
+the image provides a local xorshift32 (no-alloc preserved). Next per phasing:
+P3 — TCP echo, then DoIP (UDS over TCP, reusing comm/uds + the boot Prog).
