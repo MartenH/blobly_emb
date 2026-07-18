@@ -88,6 +88,7 @@ pub fn new_module(rsp_id u32, record_id u32, core u8, use_isotp bool, buf TraceB
 
 // init constructs the module IN PLACE (no module-sized stack copy) — the target path.
 pub fn (mut m TraceModule) init(rsp_id u32, record_id u32, core u8, use_isotp bool, buf TraceBuffer) {
+	m.link.init_defaults() // _vinit never runs on target: timeouts are set HERE
 	m.rsp_id = rsp_id
 	m.record_id = record_id
 	m.core = core

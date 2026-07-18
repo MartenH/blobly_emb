@@ -38,6 +38,8 @@ mut:
 	dbc_ext   bool   // the DBC message is an extended (29-bit) frame (EFF flag) — id may be stripped
 	dbc_trivial bool // the DBC signal is a plain unsigned LE 32-bit value at bit 0 (factor 1, offset 0)
 	fields    []SigField // the signal's fields in declaration order (for the `sig` struct emit)
+	persist   string // '' | 'now' | 'shutdown' — restored + journaled by the platform
+	nvm_id    u16 // explicit schema-identity pin (0 = derive by hash); see gen_nvm.v
 	remote    bool // `from` is a partition on ANOTHER image (external/imaged) — the crossing
 	// rides an xioc slot (gen_duo.v); derived in build_model, never configured. SMP note:
 	// a coherent single-image target would derive `false` here and use ordinary IOC.
@@ -120,6 +122,15 @@ mut:
 // parse_signals parses [[signal]] into the model: sig_of (with each signal's fields in
 // declaration order), sig_names, and has_external. External signals are then resolved against
 // bus.dbc (message id/dlc/ext/trivial). Value field = the single non-"valid" field.
+// parse_nvm_id: range-check BEFORE narrowing — nvm_id = 65536 must fail, not
+// silently become 0 (= auto-hash) through the u16 cast.
+fn parse_nvm_id(name string, v int) u16 {
+	if v < 0 || v > 65534 {
+		panic('ecu.toml: signal "${name}" nvm_id = ${v} is out of range (0 = auto, 1..65534 = pin)')
+	}
+	return u16(v)
+}
+
 fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool) (map[string]SigInfo, []string, bool) {
 	mut sig_of := map[string]SigInfo{}
 	mut sig_names := []string{}
@@ -161,6 +172,8 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool) (map[string]Si
 		sig_of[name] = SigInfo{
 			name:      name
 			transport: (m['transport'] or { toml.Any('double') }).string()
+			persist:   (m['persist'] or { toml.Any('') }).string()
+			nvm_id:    parse_nvm_id(name, int((m['nvm_id'] or { toml.Any(0) }).int()))
 			from:      from
 			to:        to
 			local:     from == to
@@ -465,6 +478,11 @@ mut:
 	// compile against). duo_names keeps the allocation order for stable emission.
 	duo_idx   map[string]int
 	duo_names []string
+	// [nvm] (gen_nvm.v): persistent-signal names in declaration order + their
+	// schema-identity block ids — all derived, never configured beyond intent.
+	nvm       NvmCfg
+	nvm_names []string
+	nvm_ids   map[string]u16
 }
 
 fn build_model(doc toml.Doc, dbc string) Model {
@@ -530,6 +548,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		nm:           parse_nm(doc, dbc)
 		duo_idx:      duo_idx
 		duo_names:    duo_names
+		nvm:          parse_nvm(doc)
 	}
 }
 
@@ -741,6 +760,7 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	man << shell_manifest_frames(m)
 	man << nm_manifest_frames(m)
 	man << duo_manifest(m)
+	man << nvm_manifest(m)
 	return man
 }
 
@@ -1137,6 +1157,9 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			glue << '\t\tbs:    ${c.bs}'
 			glue << '\t\tstmin: ${c.stmin}'
 			glue << '\t}'
+			// no field defaults on Link (the _vinit rule): the N_Bs/WFTmax
+			// timeouts are set explicitly or a lost FC wedges the bridge
+			glue << '\tst.tp_${tp}.init_defaults()'
 			glue << '\tst.uds_${tp} = uds.Server{}'
 			for idx, did in m.dids {
 				glue << '\tst.uds_${tp}.dids[${idx}] = uds.Did{'
@@ -1277,6 +1300,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << trace_c_decls(m)
 			glue << shell_c_decls(m)
 			glue << duo_c_decls(m)
+			glue << nvm_c_decls(m)
 			glue << duo_trace_c_decls(m)
 			glue << shell_cmd_fns(m)
 			glue << nm_shell_fns(m)
@@ -1336,10 +1360,16 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << trace_module_globals(m)
 			glue << shell_module_globals(m)
 			glue << duo_trace_globals(m)
+			glue << nvm_globals(m)
 			glue << nm_module_globals(m)
 			if comm_thread_on {
 				glue << '\tg_comm_tcb   [32]u64  // the bus-owning comm thread'
-				glue << '\tg_comm_stack [4096]u8'
+				// The comm thread hosts EVERY module (COM, trace, shell, NM) and — with
+				// [nvm] — the journal put path into the real flash driver. 4 KB was
+				// measured paper-thin on the H755 bench (the v4 image faulted with PSP
+				// 40 B below the DTCM floor mid-put): 8 KB with [nvm], 4 KB without.
+				comm_stack := if m.nvm.on { 8192 } else { 4096 }
+				glue << '\tg_comm_stack [${comm_stack}]u8'
 				// (The load cell is the volatile C scratch in comm_glue.c, via load_pub/load_*.)
 				// Rx accounting: the comm thread counts received frames + keeps the last value, so a
 				// host cansend is observable. The rx CONSUMER of the lean cut (comm-thread-local).
@@ -1357,6 +1387,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			for ti, thr in app_threads {
 				glue << 'fn run_${thr}() {'
 				glue << '\tmut st := Thread_${thr}_state{} // small + carries the FB field defaults: stack is right'
+				glue << nvm_restore_lines(m, nvm_writer_thr(m, doc), thr, true)
 				glue << '\tmut sched := &g_sched_${thr} // module-sized: lives in bss, not this lifetime frame'
 				for r in all_regs['${part}/${thr}'] or { []string{} } {
 					glue << r
@@ -1396,6 +1427,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		}
 		if !multi {
 		glue << '\tmut st := Partition_${part}_state{}'
+		if m.target.threadx {
+			glue << nvm_restore_lines(m, nvm_writer_thr(m, doc), '', false)
+		}
 		if m.target.threadx {
 			// same rule as the multi-thread path: the FB thread has a 4 KB stack. Bare metal
 			// keeps the local — run() sits on the main stack, which owns the remaining RAM.
@@ -1565,6 +1599,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << stat_shell_register(m)
 				glue << nm_module_init(m)
 				glue << duo_comm_locals(m)
+				glue << nvm_comm_locals(m, ioc_idx)
 				glue << duo_trace_locals(m)
 				for si in tx_sigs {
 					glue << '\tmut last_tx_${snake(si.name)} := u64(0)'
@@ -1602,13 +1637,23 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << duo_trace_rx_arm(m)
 				glue << '\t\t}'
 				glue << '\t\tt1 := C.board_now_us()'
+				// NM drains FIRST: produce() ticks the state machine, so the gate
+				// below reflects THIS pass's state — otherwise the producers get one
+				// free frame past the sleep boundary (codex on emb#135).
+				glue << nm_produce_drain(m)
+				if m.nm.on {
+					// REQ-COM-007: every producer below gates on this — the bus is
+					// SILENT in sleep; NM's own drain is exempt (its state machine
+					// owns its wire behaviour, and the wake announcement must out).
+					glue << '\t\tnm_up := g_nm.awake() // NM-gated COM tx (REQ-COM-007, post-tick)'
+				}
 				for p in producers {
 					glue << p.bus_tick(BusCtx{
 						telem_active: m.telem.on && telem_iface != ''
 						lead:         ["\t\t// PRODUCER: CpuLoad telemetry — reads the FB thread's load scratch"]
 						now:          't1'
 						period:       'telem_period_us'
-						gate:         ' && ch.tx_ready()'
+						gate:         if m.nm.on { ' && nm_up && ch.tx_ready()' } else { ' && ch.tx_ready()' }
 						load:         ['\t\t\tmut load := [8]u16{}', comm_load_line]
 						det_ovr:      comm_det_ovr
 						det_lines:    [comm_det_line]
@@ -1625,7 +1670,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					idx := ioc_idx[si.name] or { 0 }
 					glue << '\t\t// PRODUCER: external tx signal "${si.name}" — read the FB-published IOC'
 					glue << '\t\t// cell, encode the value (LE at byte 0), and send it cyclically (tx_ready-gated).'
-					glue << '\t\tif t1 - last_tx_${snake(si.name)} >= u64(${cyc}) && ch.tx_ready() {'
+					nm_gate := if m.nm.on { 'nm_up && ' } else { '' }
+					glue << '\t\tif ${nm_gate}t1 - last_tx_${snake(si.name)} >= u64(${cyc}) && ch.tx_ready() {'
 					glue << '\t\t\tlast_tx_${snake(si.name)} = t1'
 					glue << '\t\t\tmut tv_a := u32(0)'
 					glue << '\t\t\tmut tv_b := u32(0)'
@@ -1643,9 +1689,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << trace_produce_drain(m)
 				glue << shell_produce_drain(m)
-				glue << nm_produce_drain(m)
 				glue << duo_trace_poll(m)
 				glue << duo_produce_drain(m)
+				glue << nvm_service(m, ioc_idx)
 				glue << '\t}'
 				glue << '}'
 				glue << ''
@@ -1696,10 +1742,12 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '// boot: hand control to the ThreadX kernel (never returns; calls'
 			glue << '// tx_application_define above). main.v does the board bring-up then calls this —'
 			glue << '// referencing it also forces this module (incl. tx_application_define) to link.'
+			glue << nvm_flash_wrappers(m)
 			glue << 'pub fn boot() {'
 			if ioc_idx.len > 0 {
 				glue << '\tC.ioc_pool_init() // init the cross-thread signal IOC cells before any thread runs'
 			}
+			glue << nvm_boot_lines(m, ioc_idx)
 			glue << '\tC._tx_initialize_kernel_enter()'
 			glue << '}'
 		}
@@ -1899,6 +1947,17 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 					si := m.sig_of[wn] or { SigInfo{} }
 					if si.local {
 						glue << '\tst.cell_${snake(wn)} = outp.${snake(wn)} // local'
+						if si.persist != '' && image_part == '' && wn in ioc_idx {
+							// persistent: stage the new value for the comm thread's
+							// journal service (wait-free ioc cell, single writer)
+							f0 := 'u32(outp.${snake(wn)}.${snake(si.fields[0].name)})'
+							f1 := if si.fields.len > 1 {
+								'u32(outp.${snake(wn)}.${snake(si.fields[1].name)})'
+							} else {
+								'u32(0)'
+							}
+							glue << '\tC.ioc_pub(${ioc_idx[wn]}, ${f0}, ${f1}) // persist staging'
+						}
 					} else if dslot := m.duo_idx[wn] {
 						// remote (cross-image) signal: publish the {a, b} pair into its xioc slot —
 						// the bus owner polls it (duo_produce_drain / platform C). Field order = wire
@@ -2033,6 +2092,10 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 		glue << 'import comm.nm' // the NM state machine (Timings)
 		glue << 'import comm.nm_can' // NM-over-CAN as a ComModule (docs/com-modules.md)
 	}
+	if nvm_on(m) && m.target.threadx {
+		glue << 'import nvm' // the persistence journal (docs/nvm.md)
+		glue << 'import boot as bootfl' // FlashOps — aliased: gen has its own boot()
+	}
 	if m.has_external || m.isotp_conns.len > 0 || m.telem.on {
 		glue << 'import driver.can' // the generated bus bridge
 	}
@@ -2074,6 +2137,7 @@ fn main() {
 	// Single parse pass: ecu.toml + bus.dbc -> the Model. The emit code below reads from `m`
 	// (rebound to the existing locals so it stays unchanged). (Step (a): parse -> model.)
 	mut m := build_model(doc, dbc)
+	m.nvm_names, m.nvm_ids = derive_nvm(mut m, doc)
 
 	// [trace]: the ThreadX exec-hook stream is the generated path (gen_trace.v); validate what it
 	// can honour. The host/bare-metal command-driven protocol moved to the platform (comm/trace
@@ -2221,6 +2285,10 @@ fn main() {
 	// the same. The lean first cut supports external RX signals (bus -> app), drained + counted
 	// by the comm thread; external TX signals, ISO-TP, and m.routes are not generated yet.
 	comm_thread_on := m.target.threadx && has_bridge
+	if m.nvm_names.len > 0 && m.target.threadx && !comm_thread_on {
+		panic('loom2v: persistent signals need the comm thread (the journal service runs ' +
+			'there) — this config has no bus bridge; give the node a bus or drop persist')
+	}
 	// rx signals an FB reads flow bus -> comm(decode) -> target IOC pool cell -> FB input (6b-2b).
 	// ioc_idx maps each such signal to its pool cell; visible to the comm emitter + handler glue.
 	mut ioc_idx := map[string]int{}
@@ -2364,9 +2432,15 @@ fn main() {
 				msg_ioc_idx[si.dbc_id] = ioc_idx[sname]
 			}
 		}
+		// [nvm]: each persistent signal stages through its own intra-core IOC
+		// cell (single-writer wait-free — the proven transport, reused).
+		for sname in m.nvm_names {
+			ioc_idx[sname] = ioc_idx.len
+		}
 		if ioc_idx.len > 4 {
-			panic('loom2v: [target] kind="threadx" comm thread: ${ioc_idx.len} rx-to-FB signals need IOC ' +
-				'cells, but the pool (comm_glue.c IOC_POOL_N) has 4 — raise IOC_POOL_N or reduce signals')
+			panic('loom2v: [target] kind="threadx" comm thread: ${ioc_idx.len} signals need IOC ' +
+				'cells (rx-to-FB + persist staging), but the pool (comm_glue.c IOC_POOL_N) has 4 — ' +
+				'raise IOC_POOL_N or reduce signals')
 		}
 	}
 	// Which m.buses run a COM bridge (an external signal, an ISO-TP conn, or a route touches them).

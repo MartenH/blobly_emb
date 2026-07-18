@@ -216,6 +216,24 @@ int shell_iocx(unsigned char *out, int cap) {
     return (int)(p - (char *)out);
 }
 
+#include "bootmap.h" /* the boot manager <-> app contract (docs/bootloader.md) */
+
+/* shell_boot — the `boot` command: write the SRAM4 request cell and reset into
+ * the boot manager (the app->boot rung, REQ-BOOT-003). The response never
+ * leaves the board — the reset preempts the ISO-TP exchange, 0x11-style: NO
+ * reply to `boot` IS the ack; the tester's next move is a UDS session to the
+ * boot ids. SRAM4 (D3) is already clocked — the duo pool lives there. */
+int shell_boot(unsigned char *out, int cap) {
+    (void)out;
+    (void)cap;
+    volatile uint32_t *cell = (volatile uint32_t *)BOOTCELL_REQ_ADDR;
+    cell[1] = 1u; /* arg first: the magic makes the pair valid, so it lands last */
+    cell[0] = BOOTCELL_REQ_MAGIC;
+    __asm__ volatile("dsb");
+    NVIC_SystemReset();
+    return 0; /* unreachable */
+}
+
 int shell_ps(unsigned char *out, int cap) {
     char *p = (char *)out, *end = (char *)out + cap;
     p = ps_str(p, end, "name                pri state stack\n");
@@ -329,3 +347,24 @@ unsigned comm_rx_wait(unsigned ticks)
 {
     return (unsigned)tx_semaphore_get(&g_comm_sem, (ULONG)ticks);
 }
+
+/* --- [nvm] persistence storage map (docs/nvm.md) ---------------------------------
+ * The journal's sector pair = the BANK-2 TAIL (sectors 6+7, carved OUT of the
+ * CM4 link regions in cm4_*.ld). Placement honesty (docs/nvm.md "where it
+ * lives"): bank-2 programs/erases never stall THIS core (M7 executes from
+ * bank 1 — true read-while-write), but the M4 executes from the bank-2 HEAD,
+ * and an intra-bank erase stalls its fetches for the erase duration. The
+ * design accepts that because ERASES ONLY RUN IN THE NM QUIET WINDOW (the
+ * append path never erases — v2 engine rule; the generated flush runs
+ * erase_pending at the sleep edges, when the node is quiescing). The M4 is
+ * NOT NM-aware: its handlers WILL overrun during that erase (seconds of
+ * stalled fetches) — accepted for the demo load on a node entering sleep.
+ * A real M4 workload that must run through sleep windows takes the
+ * documented out: copy its ~30 KB image to RAM at boot (docs/nvm.md), or
+ * park it via a duo-cell handshake before the erase. Record APPENDS (32 B programs,
+ * ~us) stall the M4 negligibly. DRY-CODED; the bench validates flash.c for
+ * boot + NvM in one pass. Driver: boards/h755zi/flash.c (shared with the
+ * bootloader — one driver, two customers). */
+uint32_t nvm_map_a(void) { return 0x081C0000u; } /* bank 2, sector 6 */
+uint32_t nvm_map_b(void) { return 0x081E0000u; } /* bank 2, sector 7 */
+uint32_t nvm_map_size(void) { return 0x00020000u; } /* 128 KB each */

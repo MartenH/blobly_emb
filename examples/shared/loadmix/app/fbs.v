@@ -67,13 +67,19 @@ pub fn (mut l LoadMid) on_20ms(inp ports.LoadMidIn, mut out ports.LoadMidOut) {
 	l.acc = burn(l.acc, mid_iters)
 }
 
-// Governor: the 100 ms low-priority controller — sweeps the slow burn between slow_min and
-// slow_max so the total load breathes; a host command (bus -> comm -> rx IOC -> here)
-// overrides the sweep, clamped to a safe range. code == 0 means "no command" -> sweep.
+// Governor: the 100 ms low-priority controller — a SAWTOOTH sweep of the slow
+// burn between slow_min and slow_max; a host command (bus -> comm -> rx IOC ->
+// here) overrides the sweep, clamped. code == 0 means "no command" -> sweep.
+//
+// STATELESS by design: the next value derives from the CURRENT LoadCmd (read
+// back through the ports), never from private fields — so when LoadCmd is a
+// persistent signal (h755: persist = "now"), the restored value IS the
+// complete sweep state and the ramp resumes exactly where the last power
+// cycle left it. (A triangle would hide a direction bit in the FB; a value
+// that must survive resets should be derivable from itself — docs/nvm.md.)
 pub struct Governor {
 pub mut:
-	iters  u32 = 180_000 // = slow_min
-	rising bool = true
+	unused u8 // no state: see above (V structs want a field)
 }
 
 pub fn (mut g Governor) on_100ms(inp ports.GovernorIn, mut out ports.GovernorOut) {
@@ -85,21 +91,15 @@ pub fn (mut g Governor) on_100ms(inp ports.GovernorIn, mut out ports.GovernorOut
 		if c > slow_max {
 			c = slow_max
 		}
-		g.iters = c
-	} else if g.rising {
-		g.iters += slow_step
-		if g.iters >= slow_max {
-			g.iters = slow_max
-			g.rising = false
-		}
-	} else {
-		g.iters -= slow_step
-		if g.iters <= slow_min {
-			g.iters = slow_min
-			g.rising = true
-		}
+		out.load_cmd.iters = c
+		return
 	}
-	out.load_cmd.iters = g.iters
+	cur := inp.load_cmd.iters
+	mut next := if cur < slow_min { slow_min } else { cur + slow_step }
+	if next > slow_max {
+		next = slow_min // sawtooth wrap
+	}
+	out.load_cmd.iters = next
 }
 
 // LoadSlow: the 100 ms low-priority burn (same thread as the Governor, so LoadCmd stays a

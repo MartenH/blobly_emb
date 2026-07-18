@@ -25,3 +25,6 @@ third_party/
 # bare-metal example build output
 examples/**/build/
 examples/**/gen/.stamp
+
+# sysgen output (regenerable from system.toml, P1b)
+examples/**/gen-*.toml

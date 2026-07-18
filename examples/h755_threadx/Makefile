@@ -36,6 +36,22 @@ CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
           -I. -Igen $(BOARD_INCS) -I$(REPO)/driver/can -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
+# APP_LINK=boot: link at APP_VECTORS (bootmap.h APP_BASE 0x08020000 + 0x400) for the
+# bootloader chain; wrap the .bin with tools/mkimage --pad-vectors before flashing.
+# The link mode is PART OF THE ARTIFACT: the stamp below forces a relink when it
+# changes, so `make APP_LINK=boot` can never reuse a stale standalone .elf whose
+# vectors still point at 0x08000000 (codex on emb#130).
+ifeq ($(APP_LINK),boot)
+# __flash_len__ = APP_SIZE(0xE0000) - vector pad(0x400) - signature(0x40): the
+# signed container is header ‖ image ‖ 64-byte sig, so the app must leave 64 bytes
+# at the top of the slot or a max-size signed image overflows the boot's region
+# check (codex on emb#137).
+LDFLAGS += -Wl,--defsym,__flash_base__=0x08020400 -Wl,--defsym,__flash_len__=0xDFBC0
+LINKMODE = boot
+else
+LINKMODE = std
+endif
+LINKSTAMP = $(BUILD)/link.$(LINKMODE).stamp
 
 BUILD    = build
 TX_A     = $(BUILD)/tx.a
@@ -46,7 +62,8 @@ TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
 
 # board bring-up (asm + board.c) + the exec-change trace recorder, the shared recorder from
 # boards/common (trace_hooks.c is driver-independent — pure recorder).
-BSP = $(BOARD_BSP_THREADX) comm_glue.c $(REPO)/boards/common/trace_hooks.c
+BSP = $(BOARD_BSP_THREADX) comm_glue.c $(REPO)/boards/common/trace_hooks.c \
+      $(BOARD_DIR)/flash.c
 
 all: $(BUILD)/$(NAME).bin
 
@@ -66,10 +83,11 @@ gen/.stamp: ecu.toml bus.dbc $(wildcard $(REPO)/examples/shared/loadmix/app/*.v)
 -include gen/loom_build.mk
 
 # 1) transpile the V stack to freestanding C (-enable-globals for the ThreadX TCB/stack statics).
-$(BUILD)/app.c: main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/examples/shared/loadmix/app/*.v) | $(BUILD)
+$(BUILD)/app.c: main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/nvm/*.v) $(wildcard $(REPO)/boot/*.v) $(wildcard $(REPO)/examples/shared/loadmix/app/*.v) | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
 	  -path "@vlib|@vmodules|.|examples/$(NAME)|examples/shared/loadmix" \
 	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
+	$(REPO)/scripts/lint_vinit.sh $@
 
 # 2) ThreadX kernel objects (same as examples/threadx_h735).
 $(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
@@ -82,7 +100,11 @@ $(TX_A): $(TX_OBJ)
 	$(AR) -rc $@ $^
 
 # 3) cross-compile + link: generated app.c + board bring-up + CAN backend + ThreadX kernel.
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(BOARD_LD_THREADX)
+$(LINKSTAMP): | $(BUILD)
+	@rm -f $(BUILD)/link.*.stamp
+	@touch $@
+
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(BOARD_LD_THREADX) $(LINKSTAMP)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) -o $@
 	$(SIZE) $@
 
@@ -93,10 +115,18 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 flash: $(BUILD)/$(NAME).bin
+ifeq ($(APP_LINK),boot)
+	$(error a boot-linked image is not standalone: wrap it (tools/mkimage --pad-vectors) and deliver via the boot manager — flashing this .bin at 0x08000000 would overwrite the bootloader with vectors that point into the app slot)
+else
 	st-flash write $(BUILD)/$(NAME).bin 0x08000000
 	st-flash reset
+endif
 
 clean:
 	rm -rf $(BUILD) gen ports sig
 
 .PHONY: all gen flash clean
+
+# a failed recipe (the vinit lint) must not leave its half-made target: GNU make only
+# deletes targets on error when asked (make manual, Errors in Recipes)
+.DELETE_ON_ERROR:

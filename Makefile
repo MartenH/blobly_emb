@@ -38,10 +38,15 @@ deps:
 	@[ -d third_party/cmsis_core ]       || git clone --depth 1 https://github.com/STMicroelectronics/cmsis_core       third_party/cmsis_core
 	@[ -d third_party/threadx/.git ]     || git clone https://github.com/eclipse-threadx/threadx third_party/threadx
 	@cd third_party/threadx && git checkout -q $(THREADX_PIN) 2>/dev/null || (git fetch --quiet origin && git checkout -q $(THREADX_PIN))
-	@echo "CMSIS headers + ThreadX ($(THREADX_PIN)) ready under third_party/ (device cross-builds only)"
+	@[ -d third_party/netxduo/.git ]     || git clone https://github.com/eclipse-threadx/netxduo third_party/netxduo
+	@cd third_party/netxduo && git checkout -q $(NETXDUO_PIN) 2>/dev/null || (git fetch --quiet origin && git checkout -q $(NETXDUO_PIN))
+	@echo "CMSIS headers + ThreadX ($(THREADX_PIN)) + NetX Duo ($(NETXDUO_PIN)) ready under third_party/ (device cross-builds only)"
 
 # ThreadX is pinned so the M7 kernel + execution-change hooks are reproducible across machines.
 THREADX_PIN ?= 44d7c95c582d415c4ad84527180b29c93c3bf664
+# NetX Duo (TCP/IP over Ethernet, docs/net.md) — ThreadX-native, packet-pool
+# (no heap). Cortex-M7/GNU port matches the H735. Needed ONLY by the h735dk net build.
+NETXDUO_PIN ?= 473d192822babbd831dc5907b9e279b340a3925b
 
 # ---- Backend harness (POSIX / ThreadX), self-contained ----------------------
 demo:
@@ -67,6 +72,21 @@ trace:
 # CI gate: nonzero exit if any requirement's linked verification FAILED.
 trace-check:
 	$(V) run tools/trace/gen.v --check
+
+# System-level validation (docs/multi-node.md): the cross-node checks over a
+# system.toml — single-writer per bus, identity uniqueness, NM cluster
+# coherence, routes. The build gate for a system of ECUs, as `check` is per node.
+# Override with SYSTEM=path/to/system.toml.
+SYSTEM ?= examples/system_bench/system.toml
+.PHONY: syscheck gen-system
+syscheck:
+	$(V) -enable-globals run tools/syscheck $(SYSTEM)
+
+# Generate a complete ecu.toml per node from a DISSOLVED system.toml (P1b): the
+# cross-node signals declared once + each node's authored internals -> gen-<node>.toml,
+# each gated by ecucheck. docs/multi-node.md. Override with SYSTEM=.
+gen-system:
+	$(V) -enable-globals run tools/sysgen $(SYSTEM)
 
 # ---- Misc -------------------------------------------------------------------
 lint:

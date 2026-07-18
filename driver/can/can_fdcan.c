@@ -181,6 +181,17 @@ int blob_can_tx_ready(int h) {
 	return (c->TXFQS & FDCAN_TXFQS_TFQF) ? 0 : 1;
 }
 
+/* Wire-done, not software-done: TXBRP holds a bit per Tx buffer with a transmission
+ * REQUESTED but not yet completed. 0 means every frame handed to the controller has
+ * actually left (or was cancelled). The boot manager gates its self-reset on this so
+ * the 0x11 positive response isn't lost mid-controller (REQ-BOOT-012). */
+int blob_can_tx_idle(int h) {
+	FDCAN_GlobalTypeDef *c = inst(h);
+	if (!c)
+		return 1;
+	return c->TXBRP == 0u;
+}
+
 int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
 	FDCAN_GlobalTypeDef *c = inst(h);
 	if (!c)

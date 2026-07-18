@@ -12,11 +12,22 @@ name   = "Governor"            # unique identifier == the app struct's type name
 thread = "ctrl_slow"           # a [[partition.thread]] name (globally unique)
 
 [[fb.handler]]
-name      = "on_100ms"         # == the method name on the struct
+name      = "on_100ms"         # == the method name on the struct (see below)
 period_ms = 100                # the only trigger today (irq is reserved)
 reads     = ["Command"]        # optional; signal names -> In ports
 writes    = ["LoadCmd"]        # optional; signal names -> Out ports
 ```
+
+The handler name is NOT magic — `on_100ms` is convention, not syntax. Any valid
+identifier works: `name = "foobar"` means the FB's struct (the `app/` type named by
+`[[fb]] name`, here `Governor`) needs a `foobar` method — the generated wrapper calls
+`st.governor.foobar(inp, mut outp)`. That name match (plus the struct-type match on
+`[[fb]] name`) is the ENTIRE config→code binding; no registration step, and a mismatch
+is a compile error naming the missing method. The handler name is also the wrapper
+symbol (unique within the FB) and the label in the manifest/trace/`stat`. The schedule
+comes ONLY from `period_ms` — nothing checks the name against it, so an `on_100ms`
+running at `period_ms = 10` would mislabel itself to every human reader. Keep the
+convention honest.
 
 Rules ecucheck/loom2v enforce: every FB needs ≥ 1 handler; every handler needs
 `period_ms`; the thread must exist. Comments above blocks, never inside.
@@ -40,6 +51,24 @@ pub fn (mut g Governor) on_100ms(inp ports.GovernorIn, mut outp ports.GovernorOu
 	outp.load_cmd.iters = next_level(inp.command.code)
 }
 ```
+
+The signature never grows: a handler always takes exactly `(inp, mut outp)` — every
+signal in `reads`/`writes` is a FIELD of those generated structs, so 20 inputs and 10
+outputs is still two parameters (`inp.wheel_speed_fl`, `outp.brake_cmd`, ...). The
+wrapper fills ALL of `inp` before the call, so the handler computes on a coherent
+snapshot — inputs never change mid-run. Related values that are produced together
+belong in ONE multi-field signal (`fields = { fl = "u32", fr = "u32", ... }`) rather
+than four; and an FB wanting 20 unrelated inputs is often two FBs.
+
+This is the ONLY port-access pattern, **by design**. AUTOSAR's RTE offers a zoo of
+them — `Rte_Read`/`Rte_Write` (explicit), `Rte_IRead`/`Rte_IWrite` (implicit),
+`Rte_DRead`, queued `Rte_Send`/`Rte_Receive`, `Rte_Call` client-server, inter-runnable
+variables — and every component picks its own mix, so reading a foreign SWC starts
+with decoding which access semantics it uses. blobly keeps exactly the one good idea
+(the implicit coherent-snapshot sender-receiver) as the single pattern; anything a
+second pattern would buy has to earn its way in through the platform, not per-FB
+choice. The full pattern-by-pattern mapping is
+[../autosar-comparison.md](../autosar-comparison.md).
 
 The handler must stay inside its period at the thread's tick — the scheduler marks
 overruns and the trace makes them visible (`[trace] level = "all"` draws each handler

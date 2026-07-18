@@ -63,3 +63,12 @@ status = "agreed"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-COMMS-001"
+
+[[req]]
+id = "REQ-COM-007"
+title = "Network-gated transmission"
+text = "While network management reports the bus asleep, the node shall transmit nothing on that bus: cyclic and event transmissions, telemetry, and module responses are withheld and resume with CURRENT values after wake (last-is-best; no queue of stale frames is flushed). Network management's own transmissions are exempt — its state machine decides its wire behaviour."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"
