@@ -146,7 +146,11 @@ static void nx_driver_ethernet_send(NX_IP_DRIVER *req, UINT ether_type) {
 			break;
 		}
 	}
-	(void)eth_send(nx_driver_txlin, off);
+	if (eth_send(nx_driver_txlin, off) != 0) {
+		/* TX ring full: the frame is dropped (counted in eth_tx_drops; Ethernet
+		 * is lossy and protocols retransmit) — but tell NetX the truth. */
+		req->nx_ip_driver_status = NX_NOT_SUCCESSFUL;
+	}
 	nx_packet_transmit_release(packet);
 }
 
@@ -253,8 +257,15 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 		break;
 
 	case NX_LINK_MULTICAST_LEAVE:
+		break;
+
 	case NX_LINK_UNINITIALIZE:
 	case NX_LINK_INTERFACE_DETACH:
+		/* Detach the ISR from NetX: a frame arriving after teardown must not run
+		 * deferred processing on a stale NX_IP. (Full MAC/NVIC teardown is out of
+		 * scope — blobly targets create the IP instance once, statically, at boot.) */
+		eth_set_rx_callback(0);
+		nx_driver_initialized = 0;
 		break;
 
 	default:

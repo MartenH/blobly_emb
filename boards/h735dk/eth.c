@@ -61,7 +61,9 @@ void eth_multicast_all(void) {
 
 /* ------------------------------------------------------------------ MDIO ---- */
 /* The MAC's MDIO clause-22 access (MACMDIOAR/MACMDIODR). CR = clock-range divider
- * for the MDC (must yield 1..2.5 MHz from the AHB/HCLK ~275 MHz -> DIV124). */
+ * for the MDC: HCLK is 275 MHz here, so the 250-300 MHz range (DIV124) is the one
+ * that keeps MDC under the PHY's 2.5 MHz limit — 275/124 = 2.2 MHz. (The 150-250
+ * range's DIV102 would give 2.7 MHz: over-spec, worked on one bench, not reliable.) */
 static int mdio_wait(void) {
 	for (uint32_t t = 0; (ETH->MACMDIOAR & ETH_MACMDIOAR_MB) != 0u; t++) {
 		if (t > 200000u) {
@@ -74,7 +76,7 @@ static int mdio_wait(void) {
 static int phy_read(uint32_t reg, uint16_t *val) {
 	uint32_t ar = (ETH_PHY_ADDR << ETH_MACMDIOAR_PA_Pos)
 	            | ((reg & 0x1Fu) << ETH_MACMDIOAR_RDA_Pos)
-	            | (4u << ETH_MACMDIOAR_CR_Pos) /* DIV124 */
+	            | ETH_MACMDIOAR_CR_DIV124
 	            | (3u << ETH_MACMDIOAR_MOC_Pos) /* 11 = read */
 	            | ETH_MACMDIOAR_MB;
 	ETH->MACMDIOAR = ar;
@@ -89,7 +91,7 @@ static int phy_write(uint32_t reg, uint16_t val) {
 	ETH->MACMDIODR = val;
 	uint32_t ar = (ETH_PHY_ADDR << ETH_MACMDIOAR_PA_Pos)
 	            | ((reg & 0x1Fu) << ETH_MACMDIOAR_RDA_Pos)
-	            | (4u << ETH_MACMDIOAR_CR_Pos)
+	            | ETH_MACMDIOAR_CR_DIV124
 	            | (1u << ETH_MACMDIOAR_MOC_Pos) /* 01 = write */
 	            | ETH_MACMDIOAR_MB;
 	ETH->MACMDIOAR = ar;
@@ -120,12 +122,43 @@ static int phy_bringup(void) {
 	return 0;
 }
 
+/* phy_sync_maccr: apply the PHY's NEGOTIATED speed/duplex (PSCSR reg 31,
+ * bits[4:2]: bit1 of the field = 100 Mbit, bit2 = full duplex) to MACCR. Falls
+ * back to 100M/full if the field reads 0 (autoneg not settled). Idempotent. */
+static void phy_sync_maccr(void) {
+	uint16_t pscsr = 0;
+	(void)phy_read(31u, &pscsr);
+	eth_phy_pscsr = pscsr;
+	uint32_t spd = ((uint32_t)pscsr >> 2) & 0x7u;
+	uint32_t maccr = ETH->MACCR & ~(ETH_MACCR_FES | ETH_MACCR_DM);
+	if (spd == 0u) {
+		maccr |= ETH_MACCR_FES | ETH_MACCR_DM;
+	} else {
+		if ((spd & 0x2u) != 0u) {
+			maccr |= ETH_MACCR_FES; /* 100 Mbit (else 10) */
+		}
+		if ((spd & 0x4u) != 0u) {
+			maccr |= ETH_MACCR_DM; /* full duplex (else half) */
+		}
+	}
+	if (maccr != ETH->MACCR) {
+		ETH->MACCR = maccr;
+	}
+}
+
 int eth_link_up(void) {
 	uint16_t bsr;
 	if (phy_read(1u, &bsr) != 0) {
 		return 0;
 	}
-	return (bsr & 0x0004u) ? 1 : 0;
+	if ((bsr & 0x0004u) == 0u) {
+		return 0;
+	}
+	/* Link is up: re-sync MACCR with what THIS link actually negotiated — covers
+	 * the boot-without-cable case where eth_init's bounded autoneg wait fell back
+	 * to a guess (a 10M/half partner would otherwise never communicate). */
+	phy_sync_maccr();
+	return 1;
 }
 
 /* ---------------------------------------------------------- pins + clocks --- */
@@ -221,38 +254,30 @@ int eth_init(const uint8_t mac[6]) {
 	ETH->DMACRCR = (ETH->DMACRCR & ~ETH_DMACRCR_RBSZ_Msk) | (ETH_BUF_SIZE << ETH_DMACRCR_RBSZ_Pos);
 	rings_init();
 
-	/* 5. interrupts: RX complete + normal-interrupt summary. */
+	/* 5. interrupts: RX complete + normal-interrupt summary on the DMA side, and
+	 * MASK the MMC statistics counters — their half/full-rollover interrupts are
+	 * unmasked at reset and share ETH_IRQn, but our handler only clears DMACSR:
+	 * an unmasked MMC source would storm the CPU on a long/busy run. */
+	ETH->MMCRIMR = ETH_MMCRIMR_RXLPITRCIM | ETH_MMCRIMR_RXLPIUSCIM
+	             | ETH_MMCRIMR_RXUCGPIM | ETH_MMCRIMR_RXALGNERPIM | ETH_MMCRIMR_RXCRCERPIM;
+	ETH->MMCTIMR = ETH_MMCTIMR_TXLPITRCIM | ETH_MMCTIMR_TXLPIUSCIM
+	             | ETH_MMCTIMR_TXGPKTIM | ETH_MMCTIMR_TXMCOLGPIM | ETH_MMCTIMR_TXSCOLGPIM;
 	ETH->DMACIER = ETH_DMACIER_RIE | ETH_DMACIER_NIE;
 	NVIC_EnableIRQ(ETH_IRQn);
 
-	/* 6. match the MAC to the PHY's AUTO-NEGOTIATED speed/duplex. Hardcoding a
-	 * mismatch (MAC full-duplex on a half-duplex link) is the classic cause of
-	 * ~50% packet loss. Wait for auto-negotiation to finish (BSR bit5), then read
-	 * the LAN8742 PSCSR (reg 31): bits[4:2] = speed indication, encoded so bit1 of
-	 * that field = 100 Mbit and bit2 = full duplex (0b110 = 100M full). */
+	/* 6. match the MAC to the PHY's AUTO-NEGOTIATED speed/duplex — a hardcoded
+	 * mismatch (MAC full-duplex on a half-duplex link) is the classic ~50%-loss
+	 * cause. Bounded wait for autoneg (BSR bit5), then sync; if the cable is
+	 * absent at boot this falls back to 100M/full and eth_link_up() re-syncs when
+	 * a link actually comes up. */
 	uint16_t bsr = 0;
 	for (uint32_t t = 0; t < 500000u; t++) {
 		if (phy_read(1u, &bsr) == 0 && (bsr & 0x0020u) != 0u) {
 			break; /* auto-negotiation complete */
 		}
 	}
-	uint16_t pscsr = 0;
-	(void)phy_read(31u, &pscsr);
-	eth_phy_pscsr = pscsr;
-	uint32_t spd = ((uint32_t)pscsr >> 2) & 0x7u;
-	uint32_t maccr = ETH->MACCR & ~(ETH_MACCR_FES | ETH_MACCR_DM);
-	if (spd == 0u) {
-		maccr |= ETH_MACCR_FES | ETH_MACCR_DM; /* read failed -> assume 100M full */
-	} else {
-		if ((spd & 0x2u) != 0u) {
-			maccr |= ETH_MACCR_FES; /* 100 Mbit (else 10) */
-		}
-		if ((spd & 0x4u) != 0u) {
-			maccr |= ETH_MACCR_DM; /* full duplex (else half) */
-		}
-	}
-	maccr |= ETH_MACCR_TE | ETH_MACCR_RE;
-	ETH->MACCR = maccr;
+	phy_sync_maccr();
+	ETH->MACCR |= ETH_MACCR_TE | ETH_MACCR_RE;
 	ETH->DMACTCR |= ETH_DMACTCR_ST;
 	ETH->DMACRCR |= ETH_DMACRCR_SR;
 	return 0;
