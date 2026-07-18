@@ -26,7 +26,7 @@ derives = "SYS-REQ-IO-001"
 [[req]]
 id = "REQ-IO-003"
 title = "Latest complete sample"
-text = "The application shall always observe the most recent complete sample of an input signal; a partially updated value shall never be observable."
+text = "The application shall never observe a partially updated input value. Under concurrent publication the observed value may be the previous complete sample rather than the newest (the cross-core slot protocol retains last-good on an overwrite collision); it shall never be torn and never older than one publish cadence behind."
 status = "draft"
 method = "analysis"
 asil = "QM"
