@@ -43,6 +43,8 @@ mut:
 	remote    bool // `from` is a partition on ANOTHER image (external/imaged) — the crossing
 	// rides an xioc slot (gen_duo.v); derived in build_model, never configured. SMP note:
 	// a coherent single-image target would derive `false` here and use ordinary IOC.
+	io_in  bool // `from` is the io endpoint class (docs/io.md): the io thread publishes it
+	io_out bool // `to` is the io endpoint class: the io thread acquires + applies it
 }
 
 // SigField is one field of a signal's payload struct (name + V type), in declaration order.
@@ -147,6 +149,17 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool) (map[string]Si
 		if external {
 			has_external = true
 		}
+		// io is a RESERVED endpoint class (docs/io.md), never a bus or partition —
+		// without this an io endpoint would fall through as a phantom partition.
+		// Its transport is DERIVED, never configured: same-core consumer -> triple
+		// (wait-free both sides); cross-core (xioc) arrives with the target phase
+		// (checked in build_model).
+		io_in := from == 'io'
+		io_out := to == 'io'
+		mut transport := (m['transport'] or { toml.Any('double') }).string()
+		if io_in || io_out {
+			transport = 'triple'
+		}
 
 		fields := (m['fields'] or { toml.Any(map[string]toml.Any{}) }).as_map()
 		if fields.len == 0 {
@@ -171,7 +184,7 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool) (map[string]Si
 
 		sig_of[name] = SigInfo{
 			name:      name
-			transport: (m['transport'] or { toml.Any('double') }).string()
+			transport: transport
 			persist:   (m['persist'] or { toml.Any('') }).string()
 			nvm_id:    parse_nvm_id(name, int((m['nvm_id'] or { toml.Any(0) }).int()))
 			from:      from
@@ -184,6 +197,8 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool) (map[string]Si
 			val_type:  val_type
 			has_valid: has_valid
 			fields:    sfields
+			io_in:     io_in
+			io_out:    io_out
 		}
 		sig_names << name
 	}
@@ -338,11 +353,51 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 fn parse_buses(doc toml.Doc) (map[string]bool, map[string]int) {
 	mut buses := map[string]bool{}
 	mut bus_core := map[string]int{}
-	for bname, bcfg in doc.value('bus').as_map() {
-		buses[bname] = true
-		bus_core[bname] = int((bcfg.as_map()['core'] or { toml.Any(0) }).int())
+	// value_opt (not value): no [bus] must yield no buses — value() returns Null
+	// for a missing key, which as_map() coerces into a phantom "0" entry.
+	if bv := doc.value_opt('bus') {
+		for bname, bcfg in bv.as_map() {
+			buses[bname] = true
+			bus_core[bname] = int((bcfg.as_map()['core'] or { toml.Any(0) }).int())
+		}
 	}
 	return buses, bus_core
+}
+
+// IoPoint is one [[io.gpio]] entry, bound one-to-one to the [[signal]] of the same
+// name (docs/io.md). ch is the generator-assigned driver channel (array index);
+// output comes from the bound signal's direction (to == "io"), never re-declared.
+struct IoPoint {
+	name      string
+	pin       string
+	period_ms int
+	init      bool
+	output    bool
+	ch        int
+}
+
+// parse_io reads [io] (optional core, default 0 — the IO core) and its [[io.gpio]]
+// points. Needs sig_of for the direction lookup, so it runs after parse_signals;
+// binding/shape/period/exclusivity rules are already enforced by ecumodel.validate.
+fn parse_io(doc toml.Doc, sig_of map[string]SigInfo) ([]IoPoint, int) {
+	mut points := []IoPoint{}
+	io_tbl := doc.value_opt('io') or { return points, 0 }
+	iom := io_tbl.as_map()
+	core := int((iom['core'] or { toml.Any(0) }).int())
+	for p in (iom['gpio'] or { toml.Any([]toml.Any{}) }).array() {
+		pm := p.as_map()
+		name := (pm['name'] or { toml.Any('') }).string()
+		si := sig_of[name] or { continue } // one-to-one binding validated upstream
+		points << IoPoint{
+			name:      name
+			pin:       (pm['pin'] or { toml.Any('') }).string()
+			period_ms: int((pm['period_ms'] or { toml.Any(0) }).int())
+			init:      (pm['init'] or { toml.Any(false) }).bool()
+			output:    si.io_out
+			ch:        points.len
+		}
+	}
+	return points, core
 }
 
 fn parse_partitions(doc toml.Doc) PartMap {
@@ -469,6 +524,8 @@ mut:
 	part         PartMap
 	telem        TelemetryCfg
 	target       TargetCfg
+	io_points    []IoPoint // [[io.gpio]] points in driver-channel order (docs/io.md)
+	io_core      int       // the io thread's home core ([io].core, default 0)
 	trace        TraceCfg
 	shell        ShellCfg
 	nm           NmCfg
@@ -493,6 +550,18 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	buses, bus_core := parse_buses(doc)
 	mut sig_of, sig_names, has_external := parse_signals(doc, dbc, buses)
 	part := parse_partitions(doc)
+	io_points, io_core := parse_io(doc, sig_of)
+	// P1 generates the SAME-core transport derivation only (triple): the io thread
+	// and every io-signal endpoint must share [io].core (docs/io.md).
+	for pt in io_points {
+		si := sig_of[pt.name] or { continue }
+		other := if pt.output { si.from } else { si.to }
+		pname := if other in part.core_of { other } else { part.thread_part[other] or { '' } }
+		if (part.core_of[pname] or { 0 }) != io_core {
+			panic('loom2v: io signal "${pt.name}": cross-core io arrives with the target phase ' +
+				'(endpoint "${other}" is on core ${part.core_of[pname] or { 0 }}, [io].core is ${io_core})')
+		}
+	}
 	// Derive the cross-image crossings: a signal FROM a partition whose code lives in another
 	// image is REMOTE — it rides an xioc slot (see docs/multi-image.md; the transport is derived
 	// from the topology, never configured). The satellite side publishes, this image polls.
@@ -543,6 +612,8 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		part:         part
 		telem:        parse_telemetry(doc)
 		target:       parse_target(doc)
+		io_points:    io_points
+		io_core:      io_core
 		trace:        parse_trace(doc, dbc)
 		shell:        parse_shell(doc, dbc)
 		nm:           parse_nm(doc, dbc)
@@ -756,6 +827,11 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 		man << 'thread,${tid},comm_${bb},${m.bus_core[bb] or { 0 }},-' // host threads: no RTOS prio
 		tid++
 	}
+	// The platform io thread (docs/io.md): trace-visible by name, like the comm threads.
+	if m.io_points.len > 0 {
+		man << 'thread,${tid},io,${m.io_core},-'
+		tid++
+	}
 	man << trace_manifest_frames(m)
 	man << shell_manifest_frames(m)
 	man << nm_manifest_frames(m)
@@ -810,6 +886,55 @@ fn emit_partition_telem(m Model, telem_iface string, slot_core []int, trace_host
 	glue << '\t\t}'
 	glue << '\t\tc.send(f)'
 	glue << '\t\tosal.sleep_us(${m.telem.period_us})'
+	glue << '\t}'
+	glue << '}'
+	return glue
+}
+
+// emit_partition_io emits the host platform io thread (docs/io.md): the SINGLE owner of
+// every pin touch. It runs at the fastest configured io period and serves each point on
+// its own multiple — inputs sample -> publish into the signal channel, outputs acquire
+// from the channel -> apply, gated on freshness (until the producing FB has published
+// once, the acquire reports no data and the driver keeps holding the configured init).
+fn emit_partition_io(m Model) []string {
+	if m.io_points.len == 0 {
+		return []string{}
+	}
+	mut fastest := m.io_points[0].period_ms
+	for pt in m.io_points {
+		if pt.period_ms < fastest {
+			fastest = pt.period_ms
+		}
+	}
+	mut glue := []string{}
+	glue << ''
+	glue << 'fn partition_io() {'
+	glue << '\tosal.pin_to_core(${m.io_core})'
+	glue << '\tmut tick := u64(0)'
+	glue << '\tfor {'
+	for pt in m.io_points {
+		si := m.sig_of[pt.name] or { continue }
+		fld := snake(pt.name)
+		mult := pt.period_ms / fastest
+		ind := if mult > 1 { '\t\t\t' } else { '\t\t' }
+		if mult > 1 {
+			glue << '\t\tif tick % ${mult} == 0 { // ${pt.period_ms} ms point on the ${fastest} ms tick'
+		}
+		if pt.output {
+			glue << '${ind}mut ${fld} := sig.${pt.name}{}'
+			glue << '${ind}if osal.${acquire_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld}))) {'
+			glue << '${ind}\tio.gpio_write(${pt.ch}, ${fld}.${si.val_field}) // freshness-gated: init holds until the first publish'
+			glue << '${ind}}'
+		} else {
+			glue << '${ind}mut ${fld} := sig.${pt.name}{ ${si.val_field}: io.gpio_read(${pt.ch}) }'
+			glue << '${ind}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+		}
+		if mult > 1 {
+			glue << '\t\t}'
+		}
+	}
+	glue << '\t\ttick++'
+	glue << '\t\tosal.sleep_us(${fastest * 1000})'
 	glue << '\t}'
 	glue << '}'
 	return glue
@@ -1774,15 +1899,41 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 				params << '${snake(b)} can.Channel' // route-dest-only bus: channel arg, no bridge
 			}
 			glue << 'pub fn run(${params.join(', ')}) {'
-			for b in bus_names {
-				bb := snake(b)
-				mut spawn_args := bb
-				for d in bus_dests[b] or { []string{} } {
-					spawn_args += ', ${snake(d)}'
-				}
-				glue << '\tt_${bb} := spawn partition_${bb}(${spawn_args})'
-				waits << 't_${bb}'
+		}
+		if m.io_points.len > 0 {
+			// io before EVERYTHING (REQ-IO-009): declare + init the points — outputs
+			// hold their configured init from here — then publish ONE initial sample
+			// per input so the first app activation never reads an empty channel
+			// (docs/io.md startup ordering: platform first, app after).
+			for pt in m.io_points {
+				iv := if pt.init { 1 } else { 0 }
+				glue << "\tif !io.cfg(${pt.ch}, '${pt.name}', '${pt.pin}', ${pt.output}, ${iv}) {"
+				glue << "\t\tpanic('io cfg failed: ${pt.name}')"
+				glue << '\t}'
 			}
+			glue << '\tif !io.init() {'
+			glue << "\t\tpanic('io init failed')"
+			glue << '\t}'
+			for pt in m.io_points {
+				if pt.output {
+					continue
+				}
+				si := m.sig_of[pt.name] or { continue }
+				fld := snake(pt.name)
+				glue << '\tmut boot_${fld} := sig.${pt.name}{ ${si.val_field}: io.gpio_read(${pt.ch}) }'
+				glue << '\tosal.${publish_fn(si.transport)}(${fld}_ch, &boot_${fld}, u8(sizeof(boot_${fld})))'
+			}
+			glue << '\tt_io := spawn partition_io()'
+			waits << 't_io'
+		}
+		for b in bus_names {
+			bb := snake(b)
+			mut spawn_args := bb
+			for d in bus_dests[b] or { []string{} } {
+				spawn_args += ', ${snake(d)}'
+			}
+			glue << '\tt_${bb} := spawn partition_${bb}(${spawn_args})'
+			waits << 't_${bb}'
 		}
 		for part, _ in m.part.by_part {
 			glue << '\tt_${part} := spawn partition_${part}(${m.part.core_of[part] or { 0 }}, unsafe { nil })'
@@ -2069,14 +2220,17 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 	glue << '// Code generated by tools/loom2v from ${os.file_name(ecu)} — DO NOT EDIT.'
 	glue << 'module gen'
 	glue << ''
-	if has_local || m.has_external {
-		glue << 'import sig' // local-cell types and/or bus-bridge signal structs
+	if has_local || m.has_external || m.io_points.len > 0 {
+		glue << 'import sig' // local-cell, bus-bridge and/or io-thread signal structs
 	}
 	glue << 'import ports'
 	glue << 'import app'
 	glue << 'import loom'
 	if !m.target.on {
 		glue << 'import osal' // host: IOC + now_us/sleep_us. Target has none of these.
+	}
+	if m.io_points.len > 0 && !m.target.on {
+		glue << 'import driver.io' // the io port — the platform io thread owns every pin touch
 	}
 	// telem.* is used for CpuLoad (telemetry) — import it only when it's actually emitted.
 	if m.telem.on {
@@ -2147,6 +2301,12 @@ fn main() {
 	// owns the schedule and the bus, serving comm/trace's TraceModule via the endpoint bindings.
 	trace_host := m.trace.on && !m.target.on && m.part.by_part.keys().len == 1
 		&& !(m.has_external || m.isotp_conns.len > 0 || m.routes.len > 0)
+	// io P1 emits the HOST io thread only (docs/io.md phasing): the target/trace-host
+	// run-models spawn no partition_io, so the pins would silently never move.
+	if m.io_points.len > 0 && (m.target.on || trace_host) {
+		panic('loom2v: [[io.gpio]] is generated for the plain host run() only (P1) — the ' +
+			'target io thread lands with the bench phase (docs/io.md)')
+	}
 	if m.shell.on && !(m.target.threadx) {
 		eprintln('loom2v: WARNING: [shell] is generated for the ThreadX comm-thread target only ' +
 			'(the module lives on the bus owner). Building WITHOUT the shell.')
@@ -2515,6 +2675,9 @@ fn main() {
 
 	// --- telemetry tx: sum per-partition load by core -> CpuLoad frame on the bus (emit_partition_telem) ---
 	glue << emit_partition_telem(m, telem_iface, slot_core, trace_host)
+
+	// --- io: the platform io thread (docs/io.md P1, host) ---
+	glue << emit_partition_io(m)
 
 
 	bus_names.sort()

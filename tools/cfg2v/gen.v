@@ -115,16 +115,20 @@ fn main() {
 	}
 
 	// --- Bus config (per bus: CAN-FD flag) ---
-	bus := doc.value('bus').as_map()
-	if bus.len > 0 {
-		b << ''
-		b << '// Bus config (per bus)'
-		for name, cfg in bus {
-			m := cfg.as_map()
-			b << 'pub const ${snake(name)}_fd = ${(m['fd'] or { toml.Any(false) }).bool()}'
-			// NOTE: the bus *interface* name (e.g. "vcan0") is a platform binding and
-			// lives in the hand-written main.v (the no-heap exempt entry), not here —
-			// gen/ is no-`string` runtime config.
+	// value_opt (same reason as [nm] above): a bus-less config (io-only node) must
+	// generate nothing — Null.as_map() would coerce into a phantom "0" bus.
+	if busv := doc.value_opt('bus') {
+		bus := busv.as_map()
+		if bus.len > 0 {
+			b << ''
+			b << '// Bus config (per bus)'
+			for name, cfg in bus {
+				m := cfg.as_map()
+				b << 'pub const ${snake(name)}_fd = ${(m['fd'] or { toml.Any(false) }).bool()}'
+				// NOTE: the bus *interface* name (e.g. "vcan0") is a platform binding and
+				// lives in the hand-written main.v (the no-heap exempt entry), not here —
+				// gen/ is no-`string` runtime config.
+			}
 		}
 	}
 
