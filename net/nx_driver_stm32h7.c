@@ -172,6 +172,9 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 		nx_driver_ip = ip_ptr;
 		nx_driver_interface = interface_ptr;
 		nx_driver_pool = ip_ptr->nx_ip_default_packet_pool;
+		/* Per-chip MAC from the STM32 unique ID — two boards on one image must not
+		 * share an address. SET_PHYSICAL_ADDRESS can still override at runtime. */
+		eth_unique_mac(nx_driver_mac);
 		eth_set_rx_callback(nx_driver_rx_signal);
 		if (eth_init(nx_driver_mac) != 0) {
 			driver_req_ptr->nx_ip_driver_status = NX_NOT_SUCCESSFUL;
@@ -193,11 +196,17 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 		 * eth_link_up() (it would read "down", and NetX would then never transmit a
 		 * single frame). Report up optimistically, as the RAM driver / ST drivers do;
 		 * the MAC is already RX/TX-enabled, so traffic flows once the PHY settles.
-		 * GET_STATUS still reports the live PHY state. */
+		 * GET_STATUS reports the live PHY state. Re-arm RX in case of a prior DISABLE. */
+		eth_set_rx_callback(nx_driver_rx_signal);
 		interface_ptr->nx_interface_link_up = NX_TRUE;
 		break;
 
 	case NX_LINK_DISABLE:
+		/* NetX documents DISABLE as disabling the physical interface: stop feeding
+		 * RX up the stack (frames land in the ring and age out; TX is refused by
+		 * the !initialized guard only on UNINITIALIZE, not here — the IP layer
+		 * already gates sends on nx_interface_link_up). */
+		eth_set_rx_callback(0);
 		interface_ptr->nx_interface_link_up = NX_FALSE;
 		break;
 
@@ -230,10 +239,16 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 		nx_driver_receive();
 		break;
 
-	case NX_LINK_GET_STATUS:
-		*(driver_req_ptr->nx_ip_driver_return_ptr) =
-		    interface_ptr->nx_interface_link_up ? NX_TRUE : NX_FALSE;
+	case NX_LINK_GET_STATUS: {
+		/* LIVE PHY status (not the latched ENABLE flag) — and eth_link_up() also
+		 * re-syncs MACCR speed/duplex when it finds the link up, which covers the
+		 * boot-without-cable fallback. Keep the interface flag in step so
+		 * nx_ip_status_check sees reality too. */
+		UINT up = eth_link_up() ? NX_TRUE : NX_FALSE;
+		interface_ptr->nx_interface_link_up = up;
+		*(driver_req_ptr->nx_ip_driver_return_ptr) = up;
 		break;
+	}
 
 	case NX_LINK_SET_PHYSICAL_ADDRESS: {
 		/* re-program the station MAC and re-init so the MAC filter matches. */
