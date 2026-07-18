@@ -29,6 +29,13 @@ static TX_THREAD app_thread;
 static NX_TCP_SOCKET tcp_sock;
 static NX_UDP_SOCKET udp_sock;
 static UINT tcp_connected;
+static NX_PACKET *rx_pending;   /* partially-consumed receive (packet > caller's buf) */
+static ULONG rx_pending_off;
+static ULONG rx_idle_ticks;     /* ticks since the peer last sent anything */
+
+/* ISO 13400 T_TCP_General_Inactivity (default 5 min): a silent peer on the one
+ * server socket would otherwise hold DoIP hostage for every later tester. */
+#define DOIP_IDLE_LIMIT (300u * NX_IP_PERIODIC_RATE)
 
 /* bench-observable (SWD) */
 volatile ULONG net_link_up;
@@ -105,31 +112,53 @@ void srand(unsigned int seed) {
  * thread forever and wedges RX (bench-paid on the busy internal network; the
  * quiet P1-P3a benches, which accept()-forever, never reached it). timeout_ticks
  * still bounds the receive below, so the idle-link poll keeps running. */
+/* drop the connection and return the socket to listening */
+static int stream_recycle(void) {
+	if (rx_pending) {
+		nx_packet_release(rx_pending);
+		rx_pending = NX_NULL;
+	}
+	nx_tcp_socket_disconnect(&tcp_sock, NX_IP_PERIODIC_RATE);
+	nx_tcp_server_socket_unaccept(&tcp_sock);
+	nx_tcp_server_socket_relisten(&ip, DOIP_PORT, &tcp_sock);
+	tcp_connected = 0;
+	return -1;
+}
+
 int net_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
 	if (!tcp_connected) {
 		if (nx_tcp_server_socket_accept(&tcp_sock, NX_WAIT_FOREVER) != NX_SUCCESS) {
 			return 0;
 		}
 		tcp_connected = 1;
+		rx_idle_ticks = 0;
 	}
-	NX_PACKET *p = NX_NULL;
-	UINT s = nx_tcp_socket_receive(&tcp_sock, &p, timeout_ticks);
-	if (s == NX_SUCCESS) {
-		ULONG got = 0;
-		nx_packet_data_extract_offset(p, 0, buf, (ULONG)max, &got);
-		nx_packet_release(p);
-		doip_rx_bytes += got;
-		return (int)got;
+	if (!rx_pending) {
+		UINT s = nx_tcp_socket_receive(&tcp_sock, &rx_pending, timeout_ticks);
+		if (s != NX_SUCCESS) {
+			rx_pending = NX_NULL;
+			if (s == NX_NO_PACKET) {
+				/* timeout: expire a peer that has gone silent (ISO 13400
+				 * general inactivity), else the connection stays up */
+				rx_idle_ticks += timeout_ticks;
+				return (rx_idle_ticks >= DOIP_IDLE_LIMIT) ? stream_recycle() : 0;
+			}
+			return stream_recycle(); /* peer closed or error */
+		}
+		rx_pending_off = 0;
 	}
-	if (s == NX_NO_PACKET) {
-		return 0; /* just a timeout, connection still up */
+	/* hand out up to max bytes; a packet larger than the caller's buffer is
+	 * kept and continued next call (TCP coalescing must not lose bytes) */
+	ULONG got = 0;
+	nx_packet_data_extract_offset(rx_pending, rx_pending_off, buf, (ULONG)max, &got);
+	rx_pending_off += got;
+	if (rx_pending_off >= rx_pending->nx_packet_length) {
+		nx_packet_release(rx_pending);
+		rx_pending = NX_NULL;
 	}
-	/* peer closed or error: recycle to listening */
-	nx_tcp_socket_disconnect(&tcp_sock, NX_IP_PERIODIC_RATE);
-	nx_tcp_server_socket_unaccept(&tcp_sock);
-	nx_tcp_server_socket_relisten(&ip, DOIP_PORT, &tcp_sock);
-	tcp_connected = 0;
-	return -1;
+	rx_idle_ticks = 0;
+	doip_rx_bytes += got;
+	return (int)got;
 }
 
 int net_stream_send(const unsigned char *buf, int len) {
@@ -181,6 +210,13 @@ static void app_entry(ULONG arg) {
 	ULONG bits;
 	while (nx_ip_status_check(&ip, NX_IP_LINK_ENABLED, &bits, 2 * NX_IP_PERIODIC_RATE) != NX_SUCCESS) {
 	}
+	/* NX_IP_LINK_ENABLED is reported optimistically (REQ-NET-003) — wait for
+	 * the real PHY link too, or the V loop's boot announcements (its first act)
+	 * go out during auto-negotiation and are lost */
+	while (!eth_link_up()) {
+		tx_thread_sleep(NX_IP_PERIODIC_RATE / 10);
+	}
+	net_link_up = 1;
 	/* sockets: UDP (announcement source) + the DoIP TCP listener */
 	nx_udp_socket_create(&ip, &udp_sock, "doip-udp", NX_IP_NORMAL, NX_DONT_FRAGMENT, 0x80, 5);
 	nx_udp_socket_bind(&udp_sock, DOIP_PORT, NX_WAIT_FOREVER);

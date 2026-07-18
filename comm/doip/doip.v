@@ -120,7 +120,9 @@ pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 			return gen_nack(resp, out, nack_bad_pattern)
 		}
 		plen := (u32(s.buf[4]) << 24) | (u32(s.buf[5]) << 16) | (u32(s.buf[6]) << 8) | u32(s.buf[7])
-		if int(plen) > max_msg - header_len {
+		// compare in u32: a high-bit length narrowed to int goes negative and
+		// would bypass the bound, then run the shift loop off the buffer
+		if plen > u32(max_msg - header_len) {
 			s.buf_len = 0
 			return gen_nack(resp, out, nack_too_large)
 		}
@@ -128,8 +130,14 @@ pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 		if s.buf_len < total {
 			break // wait for more bytes
 		}
+		// stop (don't consume) when the worst-case response for one more message
+		// no longer fits: the message stays buffered and the caller drains it
+		// with feed(len 0) after sending what accumulated so far
+		if out + max_resp_per_msg > resp_max {
+			break
+		}
 		ptype := (u16(s.buf[2]) << 8) | u16(s.buf[3])
-		out = s.dispatch(ptype, int(plen), resp, out, resp_max)
+		out = s.dispatch(ptype, int(plen), resp, out)
 		// shift any following message to the front
 		unsafe {
 			for i in 0 .. s.buf_len - total {
@@ -141,11 +149,11 @@ pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 	return out
 }
 
-fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int, resp_max int) int {
-	// worst response per message: ack(13) + diag hdr(12) + uds resp — bound it
-	if at + header_len + 5 + header_len + 4 + int(uds.max_did_data) + 3 > resp_max {
-		return at // out of response room: drop (glue sizes resp to prevent this)
-	}
+// worst response per message: ack(8+5) + diag hdr(8+4) + uds resp — feed
+// stops before dispatching a message this might not fit
+const max_resp_per_msg = header_len + 5 + header_len + 4 + int(uds.max_did_data) + 3
+
+fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 	match ptype {
 		pt_route_req {
 			if plen < 7 {
