@@ -159,19 +159,23 @@ search returned an **inconsistent / possibly RGMII-confused** result — DO NOT 
 it. Fill this table from the schematic, then the driver's pin-config block is the
 only hardware-specific part:
 
-| RMII signal | STM32H735 pin (CONFIRM) | web-search guess (UNVERIFIED) |
-| --- | --- | --- |
-| REF_CLK  | ? | PA1 |
-| MDIO     | ? | PA2 |
-| MDC      | ? | PC1 (search said PC4 — suspect) |
-| CRS_DV   | ? | PA7 (search said PA3 — suspect) |
-| RXD0     | ? | PC4 |
-| RXD1     | ? | PC5 |
-| TX_EN    | ? | PG11 (search said PB10 — suspect) |
-| TXD0     | ? | PG13 (search said PB11 — suspect) |
-| TXD1     | ? | PG12 (search said PB12 — suspect) |
-| LAN8742A MDIO/SMI address | ? | 0x00 (typical) |
-| PHY nRST (if any) | ? | — |
+RMII pinout — CONFIRMED from the stm32h7xx-hal H735G-DK ethernet example (working
+reference code, cross-checks the ST BSP) + the user (PHY address = 0). All ETH
+signals are alternate function AF11:
+
+| RMII signal | STM32H735 pin (AF11) |
+| --- | --- |
+| REF_CLK  | PA1 |
+| MDIO     | PA2 |
+| MDC      | PC1 |
+| CRS_DV   | PA7 |
+| RXD0     | PC4 |
+| RXD1     | PC5 |
+| TX_EN    | PB11 |
+| TXD0     | PB12 |
+| TXD1     | PB13 |
+| LAN8742A MDIO/SMI address | **0** |
+| PHY nRST | none dedicated (soft-reset over MDIO; board NRST/power-on) |
 
 Once these are confirmed, the driver is: (1) RCC clock the ETH + mux these pins,
 (2) LAN8742 soft-reset + auto-neg, (3) MAC + DMA descriptor rings from static
