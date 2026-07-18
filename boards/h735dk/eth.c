@@ -300,7 +300,12 @@ int eth_init(const uint8_t mac[6]) {
 /* ---------------------------------------------------------------- send ------ */
 int eth_send(const uint8_t *frame, uint32_t len) {
 	eth_desc_t *d = &tx_desc[tx_idx];
-	if ((d->des3 & DESC_OWN) != 0u) {
+	uint32_t next = (tx_idx + 1u) % ETH_TX_DESC_CNT;
+	/* N-1 rule: also require the NEXT slot (the tail target) to be free. If the
+	 * tail wrapped onto a still-OWNed descriptor it could equal the DMA's current
+	 * pointer, which the H7 DMA reads as "no work" — all pending frames hang and
+	 * every later send drops: a permanent TX wedge. One reserved slot ends that. */
+	if ((d->des3 & DESC_OWN) != 0u || (tx_desc[next].des3 & DESC_OWN) != 0u) {
 		eth_tx_drops++; /* ring full: drop (Ethernet is lossy; protocols retry) */
 		return -1;
 	}
