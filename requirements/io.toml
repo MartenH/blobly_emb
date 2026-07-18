@@ -20,14 +20,15 @@ method = "test"
 asil = "QM"
 derives = "SYS-REQ-IO-001"
 
-# Complete-sample is testable at runtime; wait-freedom is a universal claim a
-# passing stress test cannot establish — it is REQ-IO-008, method analysis.
+# Both halves of the old REQ-IO-003 are universal claims a finite stress run
+# cannot establish (requirements/README method rules): tear-freedom here and
+# wait-freedom in REQ-IO-008 are verified by analysis of the generated handoff.
 [[req]]
 id = "REQ-IO-003"
 title = "Latest complete sample"
 text = "The application shall always observe the most recent complete sample of an input signal; a partially updated value shall never be observable."
 status = "draft"
-method = "test"
+method = "analysis"
 asil = "QM"
 derives = "SYS-REQ-IO-001"
 
@@ -83,12 +84,12 @@ method = "analysis"
 asil = "QM"
 derives = "SYS-REQ-IO-001"
 
-# The io thread's sleep choreography must be requirement-linked evidence, not
-# an unverifiable doc paragraph.
+# The io thread's startup and sleep choreography must be requirement-linked
+# evidence, not an unverifiable doc paragraph.
 [[req]]
 id = "REQ-IO-009"
-title = "IO quiesce and resume"
-text = "On sleep entry the IO layer shall stop acquisition, drive every output to its configured init value, and quiesce before the ECU sleeps; on wake it shall re-establish acquisition and publish an initial sample of every input before application dispatch resumes."
+title = "IO lifecycle: startup, quiesce, resume"
+text = "At startup the IO layer shall drive every output to its configured init value and publish an initial complete sample of every input before application dispatch begins. On sleep entry it shall stop acquisition, drive every output to its configured init value, and quiesce before the ECU sleeps; on wake it shall re-establish acquisition and publish an initial sample of every input before application dispatch resumes."
 status = "draft"
 method = "test"
 asil = "QM"
