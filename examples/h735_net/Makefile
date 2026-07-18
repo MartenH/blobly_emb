@@ -25,8 +25,15 @@ include $(REPO)/boards/$(BOARD)/board.mk
 INCS = $(CMSIS) $(BOARD_INCS) -I$(REPO)/boards/$(BOARD) \
        -I$(TX_PORT)/inc -I$(TX)/common/inc \
        -I$(NX_PORT)/inc -I$(NX)/common/inc
+# Tick rate: this board's SysTick is 1 kHz (SYSTICK_HZ default), but ThreadX/NetX
+# default to 100 ticks/second, which makes every NetX timeout run 10x too fast (a
+# 2 s ping timeout becomes 200 ms -> ~50% of round-trips time out). The loom targets
+# don't care (they count raw ticks); NetX's second-based timers do. NX_IP_PERIODIC_RATE
+# must be forced directly because nx_port.h hard-defines it to 100 BEFORE nx_api.h's
+# TX_TIMER_TICKS_PER_SECOND-derived default can apply; set TX_TIMER_TICKS_PER_SECOND too
+# for ThreadX/NetX time conversions.
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
-          $(BOARD_DEFS) $(INCS)
+          -DTX_TIMER_TICKS_PER_SECOND=1000 -DNX_IP_PERIODIC_RATE=1000 $(BOARD_DEFS) $(INCS)
 LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
 

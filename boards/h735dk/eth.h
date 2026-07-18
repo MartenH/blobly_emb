@@ -4,23 +4,25 @@
  * nx_driver_stm32h7.c calls this; nothing here knows about NetX. Pinout is the
  * CONFIRMED MB1520 map (stm32h7xx-hal reference + user); all ETH signals are AF11.
  *
- * *** DRY-CODED, BENCH-UNVERIFIED on H735 *** — same convention as flash.c: the
- * register sequences follow RM0468 (H72x/H73x) and the ST HAL, to be silicon-
- * verified on the DK. */
+ * Register sequences follow RM0468 (H72x/H73x) and the ST HAL; BENCH-VERIFIED on
+ * the H735-DK 2026-07-18 (0% ping loss, ~1 ms RTT). */
 #ifndef BLOBLY_H735DK_ETH_H
 #define BLOBLY_H735DK_ETH_H
 
 #include <stdint.h>
 
-/* --- CONFIRMED RMII pinout (all AF11), see docs/net.md "P1 implementation status"
+/* --- CONFIRMED RMII pinout (all AF11), bench-verified 2026-07-18 —
  * REF_CLK PA1 | MDIO PA2 | MDC PC1 | CRS_DV PA7 | RXD0 PC4 | RXD1 PC5
  * TX_EN PB11 | TXD0 PB12 | TXD1 PB13 | LAN8742A MDIO address = 0. */
 #define ETH_PHY_ADDR 0u
 
 /* Descriptor ring + buffer sizing — all static (no heap; REQ-NET-001/002). A
  * standard Ethernet MTU frame is 1522 bytes incl. CRC; round the buffer to a
- * cache-line-friendly 1536. Small rings are fine for P1 link+ping. */
-#define ETH_RX_DESC_CNT 4u
+ * cache-line-friendly 1536. The RX ring must absorb a broadcast burst between IP-
+ * thread drains without dropping our own reply traffic — 4 was far too small (bench:
+ * ~50% ICMP loss on a busy LAN). 16 RX + 4 TX buffers = 30 KB, inside the 32 KB
+ * D2 SRAM the .eth_dma section lives in (TX needs few — one reply/ping in flight). */
+#define ETH_RX_DESC_CNT 16u
 #define ETH_TX_DESC_CNT 4u
 #define ETH_BUF_SIZE    1536u
 

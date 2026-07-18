@@ -6,13 +6,13 @@
  * eth_init/eth_send/eth_recv calls. Register-level details live entirely in eth.c;
  * this file knows nothing about the H735's registers.
  *
- * TX: NetX prepends the Ethernet header into the packet chain (the PACKET_SEND
- * case below), so we just linearise the chain and hand the bytes to eth_send.
- * RX: the ETH ISR (eth_isr) signals deferred processing; NX_LINK_DEFERRED_PROCESSING
- * drains eth_recv, allocates an NX_PACKET, and routes by EtherType — mirroring the
- * RAM driver's _nx_ram_network_driver_receive.
+ * TX: the driver builds the Ethernet header + linearised payload in its own
+ * buffer and hands it to eth_send (see nx_driver_ethernet_send for why not the
+ * RAM driver's in-packet header trick). RX: the ETH ISR signals deferred
+ * processing; NX_LINK_DEFERRED_PROCESSING drains eth_recv into NX_PACKETs routed
+ * by EtherType, with the IP header 4-byte aligned (NetX checksum requirement).
  *
- * *** BENCH-UNVERIFIED on H735 *** — see eth.c. Scope = P1 (link + IPv4 + ICMP). */
+ * BENCH-VERIFIED on the H735-DK 2026-07-18. Scope = P1 (link + IPv4 + ICMP). */
 #include "nx_api.h"
 #include "eth.h"
 
@@ -54,6 +54,15 @@ static void nx_driver_receive(void) {
 		if (nx_packet_allocate(nx_driver_pool, &packet, NX_RECEIVE_PACKET, NX_NO_WAIT) != NX_SUCCESS) {
 			return; /* pool exhausted — drop the backlog, DMA keeps its buffers */
 		}
+		/* Align the IP header to a 4-byte boundary. NetX's IP/ICMP checksum routine
+		 * reads 32-bit words and mis-sums a header that isn't 4-byte aligned. The IP
+		 * header sits at frame_start + 14 (Ethernet), so offset the frame so that
+		 * lands on a 4-byte boundary — the standard Ethernet-driver 2-byte pad. */
+		{
+			uintptr_t p = (uintptr_t)packet->nx_packet_prepend_ptr;
+			uint32_t off = (4u - (uint32_t)((p + NX_ETHERNET_SIZE) & 3u)) & 3u;
+			packet->nx_packet_prepend_ptr += off;
+		}
 		uint32_t len = eth_recv(packet->nx_packet_prepend_ptr,
 		                        (uint32_t)(packet->nx_packet_data_end - packet->nx_packet_prepend_ptr));
 		if (len == 0u) {
@@ -85,51 +94,54 @@ static void nx_driver_receive(void) {
 	}
 }
 
-/* --- linearise a (possibly chained) NX_PACKET and transmit it. */
-static void nx_driver_transmit(NX_PACKET *packet) {
+/* --- build the Ethernet header + linearised payload into the driver's own TX
+ * buffer and transmit. Deliberately does NOT use the RAM driver's write-header-
+ * backwards-into-the-packet trick (ULONG stores at prepend_ptr - 2): an echo
+ * reply reuses the received packet, and that trick writes before the payload
+ * area. Building in our buffer touches nothing NetX owns. */
+static void nx_driver_ethernet_send(NX_IP_DRIVER *req, UINT ether_type) {
+	NX_PACKET *packet = req->nx_ip_driver_packet;
 	ULONG total = packet->nx_packet_length;
-	if (total > sizeof(nx_driver_txlin)) {
+
+	if (total + NX_ETHERNET_SIZE > sizeof(nx_driver_txlin)) {
 		nx_packet_transmit_release(packet);
 		return;
 	}
-	ULONG off = 0;
+
+	/* 14-byte header: dest MAC (from the request's msw/lsw), src MAC, EtherType. */
+	UCHAR *h = nx_driver_txlin;
+	h[0] = (UCHAR)(req->nx_ip_driver_physical_address_msw >> 8);
+	h[1] = (UCHAR)(req->nx_ip_driver_physical_address_msw);
+	h[2] = (UCHAR)(req->nx_ip_driver_physical_address_lsw >> 24);
+	h[3] = (UCHAR)(req->nx_ip_driver_physical_address_lsw >> 16);
+	h[4] = (UCHAR)(req->nx_ip_driver_physical_address_lsw >> 8);
+	h[5] = (UCHAR)(req->nx_ip_driver_physical_address_lsw);
+	h[6] = (UCHAR)(nx_driver_interface->nx_interface_physical_address_msw >> 8);
+	h[7] = (UCHAR)(nx_driver_interface->nx_interface_physical_address_msw);
+	h[8] = (UCHAR)(nx_driver_interface->nx_interface_physical_address_lsw >> 24);
+	h[9] = (UCHAR)(nx_driver_interface->nx_interface_physical_address_lsw >> 16);
+	h[10] = (UCHAR)(nx_driver_interface->nx_interface_physical_address_lsw >> 8);
+	h[11] = (UCHAR)(nx_driver_interface->nx_interface_physical_address_lsw);
+	h[12] = (UCHAR)(ether_type >> 8);
+	h[13] = (UCHAR)(ether_type);
+
+	/* linearise the (possibly chained) payload after the header. */
+	ULONG off = NX_ETHERNET_SIZE;
 	for (NX_PACKET *p = packet; p != NX_NULL; p = p->nx_packet_next) {
 		ULONG chunk = (ULONG)(p->nx_packet_append_ptr - p->nx_packet_prepend_ptr);
-		if (off + chunk > total) {
-			chunk = total - off;
+		if (off - NX_ETHERNET_SIZE + chunk > total) {
+			chunk = total - (off - NX_ETHERNET_SIZE);
 		}
 		for (ULONG j = 0; j < chunk; j++) {
 			nx_driver_txlin[off + j] = p->nx_packet_prepend_ptr[j];
 		}
 		off += chunk;
-		if (off >= total) {
+		if (off - NX_ETHERNET_SIZE >= total) {
 			break;
 		}
 	}
 	(void)eth_send(nx_driver_txlin, off);
 	nx_packet_transmit_release(packet);
-}
-
-/* --- prepend the Ethernet header NetX asked us to build, then transmit.
- * Identical framing to the RAM driver's non-VLAN PACKET_SEND path. */
-static void nx_driver_ethernet_send(NX_IP_DRIVER *req, UINT ether_type) {
-	NX_PACKET *packet = req->nx_ip_driver_packet;
-
-	packet->nx_packet_prepend_ptr -= NX_ETHERNET_SIZE;
-	packet->nx_packet_length += NX_ETHERNET_SIZE;
-
-	ULONG *frame = (ULONG *)(packet->nx_packet_prepend_ptr - 2);
-	*frame = req->nx_ip_driver_physical_address_msw;
-	*(frame + 1) = req->nx_ip_driver_physical_address_lsw;
-	*(frame + 2) = (nx_driver_interface->nx_interface_physical_address_msw << 16)
-	             | (nx_driver_interface->nx_interface_physical_address_lsw >> 16);
-	*(frame + 3) = (nx_driver_interface->nx_interface_physical_address_lsw << 16) | ether_type;
-	NX_CHANGE_ULONG_ENDIAN(*(frame));
-	NX_CHANGE_ULONG_ENDIAN(*(frame + 1));
-	NX_CHANGE_ULONG_ENDIAN(*(frame + 2));
-	NX_CHANGE_ULONG_ENDIAN(*(frame + 3));
-
-	nx_driver_transmit(packet);
 }
 
 /* ================================================================= entry ==== */
