@@ -31,7 +31,7 @@ extern void board_clock_init(void);
  * bench counters to the subnet once a second (config-free host side: nc -ul). */
 #define UDP_ECHO_PORT  5005
 #define UDP_TELEM_PORT 5006
-#define TELEM_DEST     IP_ADDRESS(192, 168, 0, 255) /* subnet broadcast */
+#define TELEM_DEST     (IP_ADDR | ~IP_MASK) /* subnet broadcast, follows IP config */
 
 /* --- static memory (no heap; REQ-NET-001/002). Packet payload rounds the 1514
  * frame up so an Ethernet frame + NetX overhead fits one packet. */
@@ -99,8 +99,9 @@ static void echo_entry(ULONG arg) {
 		ULONG src_ip;
 		UINT src_port;
 		nx_udp_source_extract(p, &src_ip, &src_port);
-		net_udp_echoed++;
-		if (nx_udp_socket_send(&echo_sock, p, src_ip, src_port) != NX_SUCCESS) {
+		if (nx_udp_socket_send(&echo_sock, p, src_ip, src_port) == NX_SUCCESS) {
+			net_udp_echoed++; /* count only what was actually handed to TX */
+		} else {
 			nx_packet_release(p); /* send takes ownership only on success */
 		}
 	}
@@ -130,18 +131,13 @@ static void ping_entry(ULONG arg) {
 		nx_ip_driver_direct_command(&ip, NX_LINK_GET_STATUS, &live);
 		net_link_up = live;
 
-		NX_PACKET *resp = NX_NULL;
-		UINT s = nx_icmp_ping(&ip, PING_DEST, "blobly-p1", 9, &resp, PING_WAIT);
-		if (s == NX_SUCCESS) {
-			net_ping_ok++;
-			nx_packet_release(resp);
-		} else {
-			net_ping_fail++;
-		}
-
-		/* 1 Hz telemetry: the bench counters as one text line, broadcast to the
-		 * subnet — the CpuLoad-over-CAN idea carried to UDP (docs/net.md P2). */
-		char line[96];
+		/* Telemetry FIRST, ping after: a dark gateway makes nx_icmp_ping block for
+		 * PING_WAIT, and telemetry sent before it stays prompt each iteration (the
+		 * cadence still stretches to ~3 s while pings time out — acceptable for a
+		 * bench diagnostic; a separate timer thread for perfect 1 Hz would be bloat).
+		 * The counters line is the CpuLoad-over-CAN idea carried to UDP.
+		 * Worst case: 39 literal chars + 6 x 10-digit counters + '\n' = 100 bytes. */
+		char line[112];
 		UINT o = 0;
 		o = append(line, o, "blobly ok=");
 		o += u32_dec(line + o, net_ping_ok);
@@ -164,6 +160,25 @@ static void ping_entry(ULONG arg) {
 			} else {
 				nx_packet_release(tp);
 			}
+		}
+
+		/* Drain anything RECEIVED on the telemetry port (other boards' broadcasts,
+		 * port scans): the socket queues up to its depth and nothing else reads it,
+		 * so unread datagrams would pin pool packets forever (5 of 12!). */
+		{
+			NX_PACKET *junk = NX_NULL;
+			while (nx_udp_socket_receive(&telem_sock, &junk, NX_NO_WAIT) == NX_SUCCESS) {
+				nx_packet_release(junk);
+			}
+		}
+
+		NX_PACKET *resp = NX_NULL;
+		UINT s = nx_icmp_ping(&ip, PING_DEST, "blobly-p1", 9, &resp, PING_WAIT);
+		if (s == NX_SUCCESS) {
+			net_ping_ok++;
+			nx_packet_release(resp);
+		} else {
+			net_ping_fail++;
 		}
 
 		tx_thread_sleep(NX_IP_PERIODIC_RATE); /* 1 s cadence */
