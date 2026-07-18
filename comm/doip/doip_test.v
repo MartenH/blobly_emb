@@ -117,6 +117,50 @@ fn test_bad_pattern_nacks_and_resets() {
 	assert resp[2] == 0x00 && resp[3] == 0x00 // generic NACK
 	assert resp[8] == 0x00 // incorrect pattern
 	assert s.buf_len == 0
+	assert s.fatal // stream is desynced: the transport must drop the connection
+}
+
+fn test_unsupported_activation_type_rejected() {
+	mut s := Server{}
+	s.entity_addr = 0x0E80
+	mut inb := [max_msg]u8{}
+	mut resp := [max_msg]u8{}
+	n := frame(&inb[0], 0x0005, [u8(0x0E), 0x00, 0xE0, 0, 0, 0, 0]) // OEM type
+	rlen := s.feed(&inb[0], n, &resp[0], max_msg)
+	assert rlen == 17
+	assert resp[2] == 0x00 && resp[3] == 0x06
+	assert resp[12] == 0x06 // unsupported routing activation type
+	assert !s.activated
+}
+
+fn test_vehicle_ident_requests() {
+	mut s := Server{}
+	s.entity_addr = 0x0E80
+	vin := 'BLOBLY0TESTVIN001'
+	for i in 0 .. 17 {
+		s.vin[i] = vin[i]
+	}
+	eid := [u8(0x02), 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]
+	mut req := [64]u8{}
+	mut resp := [64]u8{}
+	// 0x0001 (any): answered with the announcement
+	n := frame(&req[0], 0x0001, []u8{})
+	assert s.ident_response(&req[0], n, &eid[0], &resp[0]) == 40
+	assert resp[2] == 0x00 && resp[3] == 0x04
+	// 0x0003 by VIN: match answers, mismatch is silence
+	mut vp := []u8{len: 17}
+	for i in 0 .. 17 {
+		vp[i] = vin[i]
+	}
+	n2 := frame(&req[0], 0x0003, vp)
+	assert s.ident_response(&req[0], n2, &eid[0], &resp[0]) == 40
+	req[8] = `X`
+	assert s.ident_response(&req[0], n2, &eid[0], &resp[0]) == 0
+	// 0x0002 by EID: mismatch is silence
+	n3 := frame(&req[0], 0x0002, [u8(9), 9, 9, 9, 9, 9])
+	assert s.ident_response(&req[0], n3, &eid[0], &resp[0]) == 0
+	// truncated / non-ident types: silence
+	assert s.ident_response(&req[0], 4, &eid[0], &resp[0]) == 0
 }
 
 fn test_unknown_type_nacks() {

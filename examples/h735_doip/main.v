@@ -12,13 +12,15 @@ fn C.board_clock_init()
 fn C.glue_kernel_enter()
 fn C.net_stream_recv(buf &u8, max int, timeout_ticks u32) int
 fn C.net_stream_send(buf &u8, len int) int
+fn C.net_stream_drop()
+fn C.net_stream_notify_activated(on int)
 fn C.net_udp_broadcast(port int, buf &u8, len int)
 fn C.net_eid(eid &u8)
-fn C.net_link_poll()
 
 // module-sized state lives on the __global, initialized IN PLACE — never built
 // by value on a thread stack (the stack-copy boot-hang rule).
 __global g_srv doip.Server
+__global g_ready bool // ident serving waits until g_srv is initialized
 
 @[export: 'blobly_doip_run']
 fn blobly_doip_run() {
@@ -47,6 +49,8 @@ fn blobly_doip_run() {
 		C.net_udp_broadcast(13400, &abuf[0], alen)
 	}
 
+	g_ready = true
+
 	mut inb := [256]u8{}
 	mut resp := [512]u8{}
 	for {
@@ -69,20 +73,40 @@ fn blobly_doip_run() {
 				}
 				fed = 0
 			}
+			if g_srv.fatal {
+				// stream desynced (NACK already sent): drop the connection
+				C.net_stream_drop()
+				session_reset()
+			}
+			// the glue applies the short initial-inactivity limit until
+			// routing activation completes
+			C.net_stream_notify_activated(if g_srv.activated { 1 } else { 0 })
 		} else if n < 0 {
 			session_reset() // connection dropped
-		} else {
-			C.net_link_poll() // idle: keep MACCR synced to the live link
 		}
 	}
+}
+
+// the glue's housekeeping thread hands us each UDP datagram on 13400; answer
+// vehicle-identification requests with the announcement (0 = no response)
+@[export: 'blobly_doip_ident']
+fn blobly_doip_ident(req &u8, req_len int, resp &u8) int {
+	if !g_ready {
+		return 0
+	}
+	mut eid := [6]u8{}
+	C.net_eid(&eid[0])
+	return g_srv.ident_response(req, req_len, &eid[0], resp)
 }
 
 // a new tester must re-activate routing and gets the default diagnostic
 // session — no state leaks across connections
 fn session_reset() {
 	g_srv.activated = false
+	g_srv.fatal = false
 	g_srv.buf_len = 0
 	g_srv.uds.session = 0x01
+	C.net_stream_notify_activated(0)
 }
 
 fn main() {

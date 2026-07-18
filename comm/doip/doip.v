@@ -23,6 +23,9 @@ const proto_inv = u8(0xFD)
 
 // payload types
 const pt_gen_nack = u16(0x0000)
+const pt_ident_any = u16(0x0001) // vehicle identification request
+const pt_ident_eid = u16(0x0002) // ... by EID
+const pt_ident_vin = u16(0x0003) // ... by VIN
 const pt_announce = u16(0x0004)
 const pt_route_req = u16(0x0005)
 const pt_route_resp = u16(0x0006)
@@ -45,6 +48,7 @@ pub mut:
 	entity_addr u16 // our DoIP logical address
 	tester_addr u16 // learned from routing activation
 	activated   bool
+	fatal       bool // stream desynced (bad pattern / oversized): transport must drop the connection
 	vin         [17]u8
 	uds         uds.Server
 	// assembly buffer: TCP chunks accumulate here until a message completes
@@ -104,6 +108,57 @@ pub fn (mut s Server) announcement(eid &u8, resp &u8) int {
 	return o + 32
 }
 
+// ident_response answers a UDP vehicle-identification request (0x0001 any,
+// 0x0002 by EID, 0x0003 by VIN) with the announcement — discovery must work
+// after the boot broadcasts too. Returns 0 for anything that is not a
+// well-formed, matching request (UDP: no NACKs, just silence).
+pub fn (mut s Server) ident_response(data &u8, data_len int, eid &u8, resp &u8) int {
+	if data_len < header_len {
+		return 0
+	}
+	unsafe {
+		if data[0] != proto_ver || data[1] != proto_inv {
+			return 0
+		}
+		ptype := (u16(data[2]) << 8) | u16(data[3])
+		plen := (u32(data[4]) << 24) | (u32(data[5]) << 16) | (u32(data[6]) << 8) | u32(data[7])
+		if u32(data_len - header_len) != plen {
+			return 0
+		}
+		match ptype {
+			pt_ident_any {
+				if plen != 0 {
+					return 0
+				}
+			}
+			pt_ident_eid {
+				if plen != 6 {
+					return 0
+				}
+				for i in 0 .. 6 {
+					if data[header_len + i] != eid[i] {
+						return 0
+					}
+				}
+			}
+			pt_ident_vin {
+				if plen != 17 {
+					return 0
+				}
+				for i in 0 .. 17 {
+					if data[header_len + i] != s.vin[i] {
+						return 0
+					}
+				}
+			}
+			else {
+				return 0
+			}
+		}
+	}
+	return s.announcement(eid, resp)
+}
+
 // feed consumes one chunk of TCP bytes and processes every COMPLETE DoIP message
 // assembled so far; the response stream (possibly several frames: ack + reply)
 // is written to resp. Returns the number of response bytes (0 = nothing yet).
@@ -112,6 +167,7 @@ pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 	// message: drop the stream state and NACK — the glue closes on that).
 	if s.buf_len + data_len > max_msg {
 		s.buf_len = 0
+		s.fatal = true
 		return nack_if_room(resp, 0, nack_too_large, resp_max)
 	}
 	unsafe {
@@ -128,6 +184,7 @@ pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 		}
 		if s.buf[0] != proto_ver || s.buf[1] != proto_inv {
 			s.buf_len = 0
+			s.fatal = true
 			return nack_if_room(resp, out, nack_bad_pattern, resp_max)
 		}
 		plen := (u32(s.buf[4]) << 24) | (u32(s.buf[5]) << 16) | (u32(s.buf[6]) << 8) | u32(s.buf[7])
@@ -135,6 +192,7 @@ pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 		// would bypass the bound, then run the shift loop off the buffer
 		if plen > u32(max_msg - header_len) {
 			s.buf_len = 0
+			s.fatal = true
 			return nack_if_room(resp, out, nack_too_large, resp_max)
 		}
 		total := header_len + int(plen)
@@ -170,15 +228,24 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 			if plen < 7 {
 				return gen_nack(resp, at, nack_bad_length)
 			}
-			s.tester_addr = (u16(s.buf[header_len]) << 8) | u16(s.buf[header_len + 1])
-			s.activated = true
+			sa := (u16(s.buf[header_len]) << 8) | u16(s.buf[header_len + 1])
+			// only the default activation type (0x00) is served; anything else
+			// (WWH-OBD, OEM ranges) must be rejected, not silently "activated"
+			// under semantics we do not implement
+			mut code := u8(0x10) // routing successfully activated
+			if s.buf[header_len + 2] == 0x00 {
+				s.tester_addr = sa
+				s.activated = true
+			} else {
+				code = 0x06 // unsupported routing activation type
+			}
 			o := put_header(resp, at, pt_route_resp, 9)
 			unsafe {
-				resp[o] = u8(s.tester_addr >> 8)
-				resp[o + 1] = u8(s.tester_addr)
+				resp[o] = u8(sa >> 8)
+				resp[o + 1] = u8(sa)
 				resp[o + 2] = u8(s.entity_addr >> 8)
 				resp[o + 3] = u8(s.entity_addr)
-				resp[o + 4] = 0x10 // routing successfully activated
+				resp[o + 4] = code
 				resp[o + 5] = 0
 				resp[o + 6] = 0
 				resp[o + 7] = 0
