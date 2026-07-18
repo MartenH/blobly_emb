@@ -1,4 +1,4 @@
-# h735_net — TCP/IP P1+P2: link, ping, UDP (STM32H735G-DK)
+# h735_net — TCP/IP P1-P3a: link, ping, UDP, TCP (STM32H735G-DK)
 
 The on-target TCP/IP bring-up milestones (docs/net.md): **ThreadX + NetX Duo + the
 register-level ETH driver**. P1 brings the LAN8742 link up and pings the gateway;
@@ -14,7 +14,8 @@ bring-up found four real bugs — see docs/net.md "P1 bring-up findings".
 ## P2 bench checks
 
 ```sh
-echo hi | nc -u -w2 192.168.0.50 5005   # echo: prints "hi" back
+echo hi | nc -u -w2 192.168.0.50 5005   # UDP echo: prints "hi" back
+echo hi | nc -w2 192.168.0.50 5007      # TCP echo: connect, echo, disconnect
 nc -ul 5006                             # telemetry: one counters line per second
                                         #  (run on a host on the subnet; a WSL VM
                                         #   won't see the broadcast through NAT)

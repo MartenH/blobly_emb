@@ -240,5 +240,13 @@ host through the Windows NAT) and a 1 Hz **telemetry broadcast** (port 5006, the
 bench counters as a text line to the subnet — the CpuLoad-over-CAN idea carried to
 UDP; `nc -ul 5006` on any subnet host). Notes: NetX's bind path calls `rand()`
 for ephemeral ports — newlib-nano's rand drags the reent/malloc/_sbrk chain, so
-the image provides a local xorshift32 (no-alloc preserved). Next per phasing:
-P3 — TCP echo, then DoIP (UDS over TCP, reusing comm/uds + the boot Prog).
+the image provides a local xorshift32 (no-alloc preserved).
+
+## P3a status — TCP echo (2026-07-18, BENCH-VERIFIED)
+
+REQ-NET-006's byte-stream service on silicon: a single-connection TCP echo
+server (port 5007, 2 KB window, re-listens after each disconnect) — verified
+with three full connect/echo/disconnect cycles from a WSL host
+(`echo hi | nc -w2 192.168.0.50 5007`). +13 KB flash for the NetX TCP engine.
+Next: P3b — DoIP (REQ-NET-007): the UDS server over a TCP socket, reusing
+comm/uds + the boot Prog, announced per ISO 13400.
