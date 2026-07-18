@@ -21,14 +21,16 @@ asil = "QM"
 derives = "SYS-REQ-IO-001"
 
 # Both halves of the old REQ-IO-003 are universal claims a finite stress run
-# cannot establish (requirements/README method rules): tear-freedom here and
-# wait-freedom in REQ-IO-008 are verified by analysis of the generated handoff.
+# cannot establish: tear-freedom here and wait-freedom in REQ-IO-008 are
+# verified by a recorded human review of the generated handoff (per
+# requirements/README: analysis = automated checker, review = signed-off
+# inspection — this is the latter until a real static checker exists).
 [[req]]
 id = "REQ-IO-003"
 title = "Latest complete sample"
 text = "The application shall never observe a partially updated input value: every observed value is a previously published complete sample. Under an overwrite collision the reader retains the sample from its own last successful read (the cross-core slot protocol's last-good), so staleness is bounded by the consumer's read cadence and collision run, not by a fixed publish count."
 status = "draft"
-method = "analysis"
+method = "review"
 asil = "QM"
 derives = "SYS-REQ-IO-001"
 
@@ -72,15 +74,16 @@ method = "test"
 asil = "QM"
 derives = "SYS-REQ-LIFE-003"
 
-# Wait-freedom is an invariant, not a runtime observation — analysis (code
-# review of the generated access path), split out of REQ-IO-003 so a passing
+# Wait-freedom is an invariant, not a runtime observation — a recorded review
+# of the generated access path (method per requirements/README; not "analysis",
+# which means an automated checker), split out of REQ-IO-003 so a passing
 # stress test cannot mark it verified.
 [[req]]
 id = "REQ-IO-008"
 title = "Wait-free access"
 text = "Reading an input signal or writing an output signal shall never block the application and shall complete in a bounded number of steps regardless of concurrent IO-thread activity."
 status = "draft"
-method = "analysis"
+method = "review"
 asil = "QM"
 derives = "SYS-REQ-IO-001"
 
