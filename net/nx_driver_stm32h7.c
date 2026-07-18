@@ -166,7 +166,13 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 	}
 
 	case NX_LINK_ENABLE:
-		interface_ptr->nx_interface_link_up = eth_link_up() ? NX_TRUE : NX_FALSE;
+		/* NetX issues ENABLE right after INITIALIZE — before the PHY's ~2-3 s
+		 * auto-negotiation finishes — so we must NOT gate this on the instantaneous
+		 * eth_link_up() (it would read "down", and NetX would then never transmit a
+		 * single frame). Report up optimistically, as the RAM driver / ST drivers do;
+		 * the MAC is already RX/TX-enabled, so traffic flows once the PHY settles.
+		 * GET_STATUS still reports the live PHY state. */
+		interface_ptr->nx_interface_link_up = NX_TRUE;
 		break;
 
 	case NX_LINK_DISABLE:
