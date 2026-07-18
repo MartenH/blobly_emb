@@ -52,14 +52,23 @@ fn blobly_doip_run() {
 	for {
 		n := C.net_stream_recv(&inb[0], 256, 100) // ~100 ms slice
 		if n > 0 {
-			rlen := g_srv.feed(&inb[0], n, &resp[0], 512)
-			if rlen > 0 {
+			mut fed := n
+			// feed stops consuming when the response buffer fills; drain the
+			// retained messages with len-0 feeds until quiet
+			for {
+				rlen := g_srv.feed(&inb[0], fed, &resp[0], 512)
+				if rlen <= 0 {
+					break
+				}
 				C.net_stream_send(&resp[0], rlen)
+				fed = 0
 			}
 		} else if n < 0 {
-			// connection dropped: a new tester must re-activate routing
+			// connection dropped: a new tester must re-activate routing and
+			// gets the default diagnostic session, not the last tester's
 			g_srv.activated = false
 			g_srv.buf_len = 0
+			g_srv.uds.session = 0x01
 		} else {
 			C.net_link_poll() // idle: keep MACCR synced to the live link
 		}

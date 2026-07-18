@@ -129,6 +129,40 @@ fn test_unknown_type_nacks() {
 	assert resp[8] == 0x01 // unknown payload type
 }
 
+fn test_high_bit_length_nacks_not_wraps() {
+	// plen 0x80000000 narrowed to int is negative; the u32 bound must catch it
+	// before the shift loop runs off the buffer
+	mut s := Server{}
+	mut inb := [max_msg]u8{}
+	mut resp := [max_msg]u8{}
+	inb[0] = 0x02
+	inb[1] = 0xFD
+	inb[2] = 0x80
+	inb[3] = 0x01
+	inb[4] = 0x80 // plen = 0x80000000
+	rlen := s.feed(&inb[0], 8, &resp[0], max_msg)
+	assert rlen == 9
+	assert resp[8] == 0x02 // too large
+	assert s.buf_len == 0
+}
+
+fn test_full_resp_buffer_retains_message() {
+	// no room for even one worst-case response: the message must stay buffered
+	// (not be silently consumed) and drain on a later len-0 feed
+	mut s := Server{}
+	s.entity_addr = 0x0E80
+	mut inb := [max_msg]u8{}
+	mut resp := [max_msg]u8{}
+	n := frame(&inb[0], 0x0005, [u8(0x0E), 0x00, 0x00, 0, 0, 0, 0])
+	mut rlen := s.feed(&inb[0], n, &resp[0], 16)
+	assert rlen == 0
+	assert !s.activated
+	assert s.buf_len == n
+	rlen = s.feed(&inb[0], 0, &resp[0], max_msg)
+	assert rlen == 17
+	assert s.activated
+}
+
 fn test_announcement_layout() {
 	mut s := Server{}
 	s.entity_addr = 0x0E80
