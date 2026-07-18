@@ -37,6 +37,21 @@ verifies = ["REQ-CAN-DRV-001", "REQ-CAN-DRV-002", "REQ-CAN-DRV-003"]
 approved_by = "Marten Hildell — STM32H735G-DK FDCAN1 echo vs PCAN-USB Pro FD"
 date = "2026-07-02"
 
+# TCP/IP P1 on-target bring-up (emb#144): examples/h735_net on the STM32H735G-DK,
+# ETH MAC/DMA + LAN8742 RMII + NetX Duo. Bidirectional ICMP at 0% steady-state loss
+# (~1 ms RTT) against a LAN peer and a direct PC cable; ARP answered; speed/duplex
+# taken from the PHY's negotiated PSCSR. All buffers/rings/pools static (001/002 by
+# inspection of eth.c/main.c: .eth_dma D2 SRAM rings, fixed packet pool, no heap).
+# Root-caused on silicon: IP-header alignment vs NetX checksum, DSB-vs-doorbell
+# store ordering, TX checksum-offload conflict, ring tail-wrap wedge (docs/net.md).
+[[review]]
+id = "h735-eth-hardware"
+method = "review"
+context = "h735/ETH"
+verifies = ["REQ-NET-001", "REQ-NET-002", "REQ-NET-003", "REQ-NET-004"]
+approved_by = "Marten Hildell — STM32H735G-DK ping 0% loss, LAN + direct PC cable"
+date = "2026-07-18"
+
 # The CAN shell live on the bench: help listed the registry, ps reported every ThreadX
 # thread (System Timer/load_fast/load_mid/ctrl_slow/comm) with priority, state, and a
 # real stack high-water (e.g. comm 2588/4096) after the TX_STACK_FILL-aware scan; uptime

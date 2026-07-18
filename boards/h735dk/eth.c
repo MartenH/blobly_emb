@@ -47,6 +47,14 @@ void eth_multicast_all(void) {
 	ETH->MACPFR |= ETH_MACPFR_PM;
 }
 
+/* eth_set_mac: reprogram the station address filter ONLY — a runtime MAC change
+ * (NetX SET_PHYSICAL_ADDRESS) must not reset the MAC/DMA or renegotiate the PHY. */
+void eth_set_mac(const uint8_t mac[6]) {
+	ETH->MACA0HR = ((uint32_t)mac[5] << 8) | (uint32_t)mac[4];
+	ETH->MACA0LR = ((uint32_t)mac[3] << 24) | ((uint32_t)mac[2] << 16)
+	             | ((uint32_t)mac[1] << 8) | (uint32_t)mac[0];
+}
+
 /* eth_unique_mac: a locally-administered MAC derived from the STM32 96-bit unique
  * device ID — two boards running the same image must not share an address (ARP
  * caches/switch tables flap). 0x02 prefix = locally administered, unicast. */
@@ -138,7 +146,8 @@ static int phy_bringup(void) {
 
 /* phy_sync_maccr: apply the PHY's NEGOTIATED speed/duplex (PSCSR reg 31,
  * bits[4:2]: bit1 of the field = 100 Mbit, bit2 = full duplex) to MACCR. Falls
- * back to 100M/full if the field reads 0 (autoneg not settled). Idempotent. */
+ * back to 100M/full if the field reads 0 (autoneg not settled). Idempotent —
+ * only writes MACCR when the mode actually changed. */
 static void phy_sync_maccr(void) {
 	uint16_t pscsr = 0;
 	(void)phy_read(31u, &pscsr);
@@ -168,9 +177,12 @@ int eth_link_up(void) {
 	if ((bsr & 0x0004u) == 0u) {
 		return 0;
 	}
-	/* Link is up: re-sync MACCR with what THIS link actually negotiated — covers
-	 * the boot-without-cable case where eth_init's bounded autoneg wait fell back
-	 * to a guess (a 10M/half partner would otherwise never communicate). */
+	/* Link up: sync MACCR to the CURRENT negotiated mode on every poll — no edge
+	 * latch, because a replug/renegotiation between polls would miss the down
+	 * edge and leave a stale speed/duplex. phy_sync_maccr only writes MACCR when
+	 * it actually changed, so the steady-state cost is one extra ~29 us MDIO read
+	 * per poll, and a PSCSR still reading 0 (autoneg finishing) is retried on the
+	 * next poll for free. */
 	phy_sync_maccr();
 	return 1;
 }
@@ -251,9 +263,7 @@ int eth_init(const uint8_t mac[6]) {
 	}
 
 	/* 3. MAC: station address, then bring up the PHY over MDIO. */
-	ETH->MACA0HR = ((uint32_t)mac[5] << 8) | (uint32_t)mac[4];
-	ETH->MACA0LR = ((uint32_t)mac[3] << 24) | ((uint32_t)mac[2] << 16)
-	             | ((uint32_t)mac[1] << 8) | (uint32_t)mac[0];
+	eth_set_mac(mac);
 	/* Perfect filter (MACPFR reset value 0): accept unicast matching MACA0 +
 	 * broadcast. NOT promiscuous — on a busy network promiscuous floods the small
 	 * RX ring and crowds out our own reply traffic (bench: ~50% ICMP loss). */
@@ -286,10 +296,18 @@ int eth_init(const uint8_t mac[6]) {
 	 * a link actually comes up. */
 	/* Each iteration is one MDIO read = 64 MDC bits at 2.2 MHz ~= 29 us, so the
 	 * bound is the autoneg budget: 140k * 29 us ~= 4 s (802.3 settles in < 3 s).
-	 * No cable -> falls through after ~4 s; eth_link_up() re-syncs on late plug. */
+	 * No cable -> falls through after ~4 s; eth_link_up() re-syncs on late plug.
+	 * A FAILED read costs mdio_wait's full ~10 ms timeout, not 29 us — bail after
+	 * a few consecutive failures or a wedged MDIO turns 4 s into ~20 minutes. */
 	uint16_t bsr = 0;
-	for (uint32_t t = 0; t < 140000u; t++) {
-		if (phy_read(1u, &bsr) == 0 && (bsr & 0x0020u) != 0u) {
+	uint32_t mdio_fails = 0;
+	for (uint32_t t = 0; t < 140000u && mdio_fails < 5u; t++) {
+		if (phy_read(1u, &bsr) != 0) {
+			mdio_fails++;
+			continue;
+		}
+		mdio_fails = 0;
+		if ((bsr & 0x0020u) != 0u) {
 			break; /* auto-negotiation complete */
 		}
 	}
@@ -350,6 +368,11 @@ uint32_t eth_recv(uint8_t *buf, uint32_t buf_size) {
 		if ((d->des3 & DESC_OWN) != 0u) {
 			return 0; /* DMA still owns it — nothing received */
 		}
+		/* DMB: order the frame/length reads AFTER the OWN observation — the read-
+		 * side mirror of the write-side DSB. ARMv7-M permits Normal-memory load
+		 * reordering; unobservable on this in-order M7 + cacheless D2 SRAM, but
+		 * one instruction makes the code match the architecture, not the bench. */
+		__DMB();
 		uint32_t len = 0;
 		if ((d->des3 & (RDES3_FD | RDES3_LD)) == (RDES3_FD | RDES3_LD)) {
 			len = d->des3 & RDES3_PL_MASK;
