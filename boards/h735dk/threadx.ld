@@ -12,9 +12,10 @@
  * (make APP_LINK=boot). Default = standalone at the flash base. */
 MEMORY
 {
-  RAM   (wx) : ORIGIN = 0x20000000, LENGTH = 0x00020000   /* 128 KiB DTCM */
-  FLASH (rx) : ORIGIN = DEFINED(__flash_base__) ? __flash_base__ : 0x08000000,
-               LENGTH = DEFINED(__flash_len__)  ? __flash_len__  : 0x00100000
+  RAM    (wx) : ORIGIN = 0x20000000, LENGTH = 0x00020000   /* 128 KiB DTCM */
+  D2SRAM (wx) : ORIGIN = 0x30000000, LENGTH = 0x00008000   /* 32 KiB D2 AHB SRAM1+2 */
+  FLASH  (rx) : ORIGIN = DEFINED(__flash_base__) ? __flash_base__ : 0x08000000,
+                LENGTH = DEFINED(__flash_len__)  ? __flash_len__  : 0x00100000
 }
 
 __STACKSIZE__ = 1024;
@@ -137,4 +138,14 @@ SECTIONS
   } > RAM
 
   __RAM_segment_used_end__ = .;
+
+  /* ETH DMA descriptor rings + frame buffers (boards/h735dk/eth.c) — must sit in a
+   * bus-master-reachable SRAM, not the DTCM above. NOLOAD: uninitialised, filled at
+   * runtime by rings_init(). Empty (zero cost) in every non-net image. */
+  .eth_dma (NOLOAD) :
+  {
+    . = ALIGN(32);
+    *(.eth_dma)
+    . = ALIGN(4);
+  } > D2SRAM
 }

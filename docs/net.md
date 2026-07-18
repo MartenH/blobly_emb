@@ -151,13 +151,7 @@ the STM32H7 ETH MAC/DMA + LAN8742A RMII driver. The stack above is vendored; the
 driver (`boards/h735dk/eth.c` register-level + `net/nx_driver_stm32h7.c` NetX glue)
 is the one new hardware bring-up.
 
-### BLOCKING INPUT — confirm the RMII pinout from the MB1520 schematic
-
-The driver muxes 9 RMII pins + the LAN8742A MDIO address; these are board-specific
-and MUST come from the schematic (schematic_pack/mb1520-h735i-b02, UM2679). A web
-search returned an **inconsistent / possibly RGMII-confused** result — DO NOT trust
-it. Fill this table from the schematic, then the driver's pin-config block is the
-only hardware-specific part:
+### RMII pinout (confirmed)
 
 RMII pinout — CONFIRMED from the stm32h7xx-hal H735G-DK ethernet example (working
 reference code, cross-checks the ST BSP) + the user (PHY address = 0). All ETH
@@ -177,8 +171,37 @@ signals are alternate function AF11:
 | LAN8742A MDIO/SMI address | **0** |
 | PHY nRST | none dedicated (soft-reset over MDIO; board NRST/power-on) |
 
-Once these are confirmed, the driver is: (1) RCC clock the ETH + mux these pins,
-(2) LAN8742 soft-reset + auto-neg, (3) MAC + DMA descriptor rings from static
-memory, (4) ISR → `_nx_ip_packet_receive`, TX descriptor kick, (5) NetX IP +
-ICMP + a ping. D-cache is off (docs/no-alloc.md), which removes the DMA
-clean/invalidate dance.
+### Driver written — builds, BENCH-UNVERIFIED (2026-07-18)
+
+The full P1 stack is written and compiles + links clean for the H735 target
+(`make -C examples/h735_net all`). It is **untested on silicon** (same posture as
+`boards/h735dk/flash.c`); the bench is where the DMA/PHY/ISR timing gets verified.
+
+- **`boards/h735dk/eth.c` + `eth.h`** — register-level ETH MAC/DMA (RM0468): RCC +
+  RMII pin mux (the AF11 table above), `SYSCFG_PMCR` RMII select, LAN8742 soft-reset
+  + auto-neg over MDIO, 4+4 descriptor rings, `eth_send`/`eth_recv`, `ETH_IRQHandler`.
+- **`net/nx_driver_stm32h7.c`** — the NetX `NX_IP_DRIVER` command dispatch (mirrors
+  the vendored RAM driver): TX linearises the packet chain → `eth_send`; the RX ISR
+  signals `_nx_ip_driver_deferred_processing`, and `DEFERRED_PROCESSING` drains
+  `eth_recv` into `NX_PACKET`s routed by EtherType. Copy-based, so only eth.c's
+  buffers touch DMA.
+- **`examples/h735_net/`** — a plain-C ThreadX+NetX app (no loom2v/CAN): packet pool
+  + IP + ICMP, brings the link up and pings the gateway on a loop. Outcome is exposed
+  as `net_ping_ok` / `net_ping_fail` / `net_link_up` globals to read over SWD.
+
+Two hardware facts drove the layout: **D-cache is off** (docs/no-alloc.md), so DMA
+needs no clean/invalidate; and the ETH DMA is an AHB master that **cannot reach the
+DTCM** the rest of RAM sits in, so the descriptor rings + frame buffers live in a
+`.eth_dma` section in **D2 AHB SRAM (0x30000000)** — a new region in `threadx.ld`,
+its clock enabled in `eth_init`. The shared `boards/common/vectors.S` is extended to
+IRQ61 (ETH); non-net images resolve it via a **weak** `ETH_IRQHandler` in each
+board's `board.c` (separate object, so no `--gc-sections` capture).
+
+### Bench bring-up checklist (for the H735-DK)
+
+1. `make -C ../.. deps` then `make -C examples/h735_net flash`.
+2. Plug the DK's RJ45 into a LAN with a `192.168.1.0/24` host; set the board IP
+   (`IP_ADDR`) / gateway (`GATEWAY`) in `main.c` to match your subnet.
+3. Halt over SWD and read `net_link_up` (auto-neg settled?) then `net_ping_ok`.
+4. If link never comes up: verify the PHY address (0) and REF_CLK on PA1; if link is
+   up but no ping: check the D2 SRAM clock enable and the `SYSCFG_PMCR` RMII select.
