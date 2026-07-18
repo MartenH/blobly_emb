@@ -5,7 +5,7 @@ module main
 // Exercised for real: a pressed input reaches the app as a signal (REQ-IO-001),
 // the app's output signal reaches the pin (REQ-IO-002), and the output holds its
 // configured init from startup, before any press (REQ-IO-009).
-// @verifies REQ-IO-001 REQ-IO-002 REQ-IO-009
+// @verifies REQ-IO-001 REQ-IO-002 REQ-IO-009 REQ-IO-012 REQ-IO-013
 
 import os
 import time
