@@ -227,3 +227,10 @@ Bench diagnostics that survived into the code: `eth_rx/tx/isr_count` +
 `eth_phy_pscsr` (eth.c), `net_ping_ok/fail`, `net_link_up` (the app) — read over
 SWD with openocd (`init; halt; mdw <addr>; resume`). NOTE: st-util resets the target
 on attach and silently wipes this state; use openocd for live reads.
+
+**P2 debt — drop the autoneg wait from eth_init.** eth_init still blocks up to
+~4 s (bounded MDIO poll, ~29 us/read) so a cable-present boot starts with the
+negotiated speed/duplex — the minimal P1 bridge, running on the IP thread only.
+Once P2's periodic link/telemetry loop polls GET_STATUS (whose eth_link_up()
+already re-syncs MACCR), the monitor owns speed/duplex and this wait goes to
+zero: init configures and returns, link management is fully asynchronous.
