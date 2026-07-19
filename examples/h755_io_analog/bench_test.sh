@@ -61,13 +61,17 @@ fi
 
 # --- symbol addresses (resolved from the ELF, never hard-coded) -------------------
 sym() { arm-none-eabi-nm "$ELF" | awk -v s="$1" '$3==s {print "0x"$1; exit}'; }
-IOEXEC=$(sym g_io_exec_us); ADCDMA=$(sym g_adc_dma); IOCPOOL=$(sym g_ioc_pool)
-[ -n "$IOEXEC" ] && [ -n "$ADCDMA" ] && [ -n "$IOCPOOL" ] || { echo "FAIL: could not resolve g_io_exec_us/g_adc_dma/g_ioc_pool"; exit 1; }
+IOEXEC=$(sym g_io_exec_us); ADCDMA=$(sym g_adc_dma); IOCPOOL=$(sym g_ioc_pool); GCPU=$(sym g_cpu_mhz)
+[ -n "$IOEXEC" ] && [ -n "$ADCDMA" ] && [ -n "$IOCPOOL" ] && [ -n "$GCPU" ] || { echo "FAIL: could not resolve a required symbol"; exit 1; }
+GCPU_A=$(printf '0x%08x' "$GCPU")
 # IOC cell 2 = the Pot signal the io thread publishes (ioc_pub(2, adc_read_checked(1))).
-# ioc_t is 32 B: slot[3] (a,b u32 each -> 8 B) at +0/+8/+16, then the `shared` byte at
-# +24 whose bits0-1 index the latest published slot. Reading the published slot's `a`
-# and g_adc_dma at the SAME halt is an exact, input-independent proof the io thread READ
-# the DMA array (REQ-IO-018's read path) — no bus, no floating-value tolerance guessing.
+# ioc_t is 32 B: slot[3] (a,b u32 -> 8 B) at +0/+8/+16, then `shared` (byte +24), `wr`
+# (+25), `rd` (+26). ioc_read (boards/common/ioc.h) leaves the latest CONSUMED value in
+# slot[rd] and points `shared` at a stale spare — so the published slot is slot[shared&3]
+# only while FRESH (bit2) is set, else slot[rd] (codex #156r3). Comparing that slot's `a`
+# to g_adc_dma corroborates the io thread's read path; it is NOT a deterministic proof
+# (a stable input keeps the boot sample within tolerance even if the periodic read broke),
+# so the read-VALUE logic is additionally covered by the host e2e (examples/io_adc).
 CELL2=$(( IOCPOOL + 2*32 ))
 S0=$(printf '0x%08x' $CELL2); S1=$(printf '0x%08x' $((CELL2+8))); S2=$(printf '0x%08x' $((CELL2+16)))
 SH=$(printf '0x%08x' $((CELL2+24)))
@@ -90,7 +94,7 @@ OUT=$(timeout 30 openocd \
   -c "init" -c "halt" \
   -c "mdw 0x40010000 1" -c "mdw 0x40010044 1" -c "mdw 0x40010020 1" -c "mdw 0x40010028 1" \
   -c "mdw 0x4001002c 1" -c "mdw 0x40010034 1" -c "mdw 0x40022008 1" -c "mdw 0x40020010 1" \
-  -c "mdw $IOX_A 1" \
+  -c "mdw $IOX_A 1" -c "mdw $GCPU_A 1" -c "mdw 0x58024418 1" -c "mdw 0x5802441c 1" -c "mdw 0x58024410 1" \
   -c "mww 0x40010010 0" -c "mww 0x40020008 0x20" \
   -c "resume" -c "sleep 600" -c "halt" -c "echo SPLIT" -c "mdw 0x40010034 1" \
   -c "resume" -c "sleep 600" -c "halt" -c "echo SPLIT" \
@@ -117,18 +121,33 @@ CR1=${P[0:0x40010000]}; BDTR=${P[0:0x40010044]}; CCER=${P[0:0x40010020]}
 PSC=${P[0:0x40010028]}; ARR=${P[0:0x4001002c]}; ADCR=${P[0:0x40022008]}; S0CR=${P[0:0x40020010]}
 CCRa=${P[0:0x40010034]}; CCRb=${P[1:0x40010034]}; CCRc=${P[2:0x40010034]}
 SR=${P[2:0x40010010]}; LISR=${P[2:0x40020000]}; IOX0=${P[0:$IOX_A]}; IOX1=${P[2:$IOX_A]}
-FREQ=$(( 200000000 / ((PSC+1)*(ARR+1)) ))
 ramp_moved=$([ "$CCRa" != "$CCRb" ] || [ "$CCRb" != "$CCRc" ] || [ "$CCRa" != "$CCRc" ] && echo 1||echo 0)
-# read path: DMA destination + the io thread's published cell vs the live DMA array
-M0AR_V=${P[2:0x4002001c]}; DMA_V=$(( ${P[2:$DMA_A]} & 0xFFFF )); IDX=$(( ${P[2:$SH]} & 3 ))
+# carrier: DERIVE the timer clock from the achieved SYSCLK (g_cpu_mhz, 0/64 if PLL
+# bring-up degraded) and the ACTUAL RCC prescalers, not a hard-coded 200 MHz (codex #156r3).
+# H7 tree: HCLK = SYSCLK/HPRE(D1CFGR[3:0]); PCLK2 = HCLK/D2PPRE2(D2CFGR[10:8]); the timer
+# kernel clock = PCLK2 if that prescaler is /1, else 2xPCLK2 (TIMPRE=0) or 4xPCLK2 (TIMPRE=1).
+GCPU_MHZ=${P[0:$GCPU_A]}; D1=${P[0:0x58024418]}; D2=${P[0:0x5802441c]}; CFGR=${P[0:0x58024410]}
+hpre=$(( D1 & 0xF ));  hdiv=$([ "$hpre"  -ge 8 ] && echo $((1 << (hpre-7)))  || echo 1)
+ppre2=$(( (D2>>8)&0x7 )); pdiv=$([ "$ppre2" -ge 4 ] && echo $((1 << (ppre2-3))) || echo 1)
+timpre=$(( (CFGR>>15)&1 )); hclk=$(( GCPU_MHZ*1000000 / hdiv )); pclk2=$(( hclk / pdiv ))
+if [ "$pdiv" -eq 1 ]; then tclk=$pclk2; elif [ "$timpre" -eq 0 ]; then tclk=$(( 2*pclk2 )); else tclk=$(( 4*pclk2 )); fi
+FREQ=$(( tclk / ((PSC+1)*(ARR+1)) ))
+carrier_ok=$([ "$FREQ" -ge 19800 ] && [ "$FREQ" -le 20200 ] && echo 1 || echo 0)
+# read path: DMA destination + the io thread's CONSUMED cell (slot[rd] unless FRESH) vs g_adc_dma
+M0AR_V=${P[2:0x4002001c]}; DMA_V=$(( ${P[2:$DMA_A]} & 0xFFFF ))
+SHW=${P[2:$SH]}; SHARED=$(( SHW & 0xFF )); RD=$(( (SHW>>16)&0xFF )); FRESH=$(( (SHARED>>2)&1 ))
+IDX=$([ "$FRESH" -eq 1 ] && echo $(( SHARED & 3 )) || echo $(( RD & 3 )))
 case $IDX in 0) PUB=${P[2:$S0]};; 1) PUB=${P[2:$S1]};; 2) PUB=${P[2:$S2]};; *) PUB=999999;; esac
 PUB=$(( PUB & 0xFFFF )); rd_diff=$(( PUB>DMA_V ? PUB-DMA_V : DMA_V-PUB ))
 
-echo "== PWM (REQ-IO-021) =="
+# NOTE: freshness-gated INIT hold (REQ-IO-021's init clause / REQ-IO-009) is NOT asserted
+# here — this image's init duty is 0, which is also the ramp origin, so a boot-time read
+# cannot distinguish "held init" from "first ramp step". That clause is covered by REQ-IO-009.
+echo "== PWM (REQ-IO-021: carrier + duty->CCR) =="
 ck "TIM1 counter enabled"    "$(( CR1 & 1 ))"           "CR1=$(printf 0x%X $CR1)"
 ck "TIM1 MOE (output on)"    "$(( (BDTR>>15) & 1 ))"    "BDTR=$(printf 0x%X $BDTR)"
 ck "TIM1_CH1 output (CC1E)"  "$(( CCER & 1 ))"          "CCER=$(printf 0x%X $CCER)"
-ck "carrier 20 kHz"          "$([ "$PSC" = 0 ] && [ "$ARR" = 9999 ] && echo 1||echo 0)" "PSC=$PSC ARR=$ARR -> ${FREQ} Hz @200MHz"
+ck "carrier ~20 kHz (derived)" "$carrier_ok"            "PSC=$PSC ARR=$ARR, tim_clk=$((tclk/1000000))MHz (SYSCLK ${GCPU_MHZ}MHz) -> ${FREQ} Hz"
 ck "timer counting (UIF set)" "$(( SR & 1 ))"           "TIM1_SR=$(printf 0x%X $SR) after clear (timer wrapped)"
 ck "duty ramp reaches CCR1"  "$ramp_moved"              "CCR1 $CCRa,$CCRb,$CCRc (FB->io->pwm_write)"
 
@@ -138,7 +157,7 @@ ck "ADC1 started (ADSTART)"  "$(( (ADCR>>2) & 1 ))"     "CR=$(printf 0x%X $ADCR)
 ck "DMA stream enabled"      "$(( S0CR & 1 ))"          "S0CR=$(printf 0x%X $S0CR)"
 ck "DMA scan completing (TCIF)" "$(( (LISR>>5) & 1 ))"  "DMA1_LISR=$(printf 0x%X $LISR) after clear (a full scan landed)"
 ck "DMA writes g_adc_dma"    "$([ "$M0AR_V" = "$((ADCDMA))" ] && echo 1||echo 0)" "M0AR=$(printf 0x%X $M0AR_V) == g_adc_dma $ADCDMA"
-ck "io read+publish (read path)" "$([ "$rd_diff" -le 256 ] && echo 1||echo 0)" "IOC.pub=$PUB vs g_adc_dma=$DMA_V (|d|=$rd_diff <=256)"
+ck "io read tracks DMA (corrob.)" "$([ "$rd_diff" -le 256 ] && echo 1||echo 0)" "IOC[$IDX].pub=$PUB vs g_adc_dma=$DMA_V (|d|=$rd_diff; value logic host-tested)"
 
 echo "== io thread liveness (sanity, not a REQ-IO-024 recovery proof) =="
 ck "io serve loop advancing" "$([ "$IOX1" -gt "$IOX0" ] && echo 1||echo 0)" "g_io_exec_us $IOX0 -> $IOX1"
