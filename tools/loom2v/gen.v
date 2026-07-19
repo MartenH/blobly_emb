@@ -1523,7 +1523,8 @@ fn emit_eth_codec(m Model) []string {
 		for s in fr.signals {
 			params << 's_${snake(s)} sig.${s}'
 		}
-		glue << 'pub fn ${fb}_pack(mut d [com.max_pdu]u8, ${params.join(', ')}) {'
+		glue << '// 64 = com.max_pdu (a literal: V codegen mishandles const-sized mut fixed-array params)'
+		glue << 'pub fn ${fb}_pack(mut d [64]u8, ${params.join(', ')}) {'
 		for cell in fr.layout {
 			expr := 's_${snake(cell.sig)}.${cell.field}'
 			o := cell.offset
@@ -1554,6 +1555,81 @@ fn emit_eth_codec(m Model) []string {
 		}
 		glue << '}'
 	}
+	return glue
+}
+
+// emit_eth_bridge emits the eth comm thread (docs/someip.md, UDP tx rung):
+// acquire each tx frame's signals from IOC, pack the derived layout, gate on
+// com.TxState (the same cyclic/event/mixed machinery as CAN), stamp the E2E
+// trailer when configured, wrap in the comm/someip notification header, and
+// send one datagram to the static peer through the driver/eth seam.
+fn emit_eth_bridge(m Model) []string {
+	mut glue := []string{}
+	mut tx_frames := []EthFrame{}
+	for fr in m.eth_frames {
+		if fr.tx {
+			tx_frames << fr
+		}
+	}
+	if tx_frames.len == 0 {
+		return glue
+	}
+	eb := snake(m.eth)
+	glue << ''
+	glue << '// --- eth comm thread (${m.eth}): SOME/IP event tx over the UDP seam ---'
+	glue << 'pub fn partition_${eb}(sock eth.Socket) {'
+	glue << '\tosal.pin_to_core(${m.bus_core[m.eth] or { 0 }})'
+	for fr in tx_frames {
+		fb := snake(fr.name)
+		glue << '\tmut tx_${fb}_st := com.TxState{'
+		glue << '\t\tmode: com.TxMode.${fr.tx_mode}'
+		glue << '\t\tcycle_us: ${fr.tx_cycle_us}'
+		glue << '\t\tmin_delay_us: ${fr.tx_min_us}'
+		glue << '\t}'
+		if fr.e2e_on {
+			glue << '\tmut e2e_tx_${fb} := e2e.TxState{}'
+		}
+	}
+	glue << '\tmut dgram := [80]u8{} // someip.header_len + com.max_pdu'
+	glue << '\tfor {'
+	glue << '\t\tnow := osal.now_us()'
+	for fr in tx_frames {
+		fb := snake(fr.name)
+		mut params := []string{}
+		glue << '\t\tmut pay_${fb} := [64]u8{} // com.max_pdu'
+		glue << '\t\tmut any_${fb} := false'
+		for s in fr.signals {
+			ss := snake(s)
+			glue << '\t\tmut s_${ss} := sig.${s}{}'
+			glue << '\t\tif osal.ioc_acquire2(${ss}_ch, &s_${ss}, u8(sizeof(s_${ss}))) {'
+			glue << '\t\t\tany_${fb} = true'
+			glue << '\t\t}'
+			params << 's_${ss}'
+		}
+		glue << '\t\t${fb}_pack(mut pay_${fb}, ${params.join(', ')})'
+		glue << '\t\tif any_${fb} && tx_${fb}_st.should_send(now, pay_${fb}, ${fb}_len) {'
+		glue << '\t\t\tpre_${fb} := pay_${fb} // pre-E2E payload, for change detection'
+		if fr.e2e_on {
+			glue << '\t\t\te2e_save_${fb} := e2e_tx_${fb}'
+			glue << '\t\t\te2e_tx_${fb}.protect(&pay_${fb}[0], int(${fb}_len), ${fb}_e2e_id, ${fb}_e2e_crc, ${fb}_e2e_ctr)'
+		}
+		glue << '\t\t\th_${fb} := someip.notification(someip_service, ${fb}_event_id, someip_version, int(${fb}_len))'
+		glue << '\t\t\tn_${fb} := someip.encode(h_${fb}, &dgram[0])'
+		glue << '\t\t\tfor i in 0 .. int(${fb}_len) {'
+		glue << '\t\t\t\tdgram[n_${fb} + i] = pay_${fb}[i]'
+		glue << '\t\t\t}'
+		glue << '\t\t\tif sock.send(someip_peer_ip, someip_peer_port, &dgram[0], n_${fb} + int(${fb}_len)) {'
+		glue << '\t\t\t\ttx_${fb}_st.mark_sent(now, pre_${fb}, ${fb}_len)'
+		if fr.e2e_on {
+			glue << '\t\t\t} else {'
+			glue << '\t\t\t\te2e_tx_${fb} = e2e_save_${fb} // unsent: keep the counter honest'
+		}
+		glue << '\t\t\t}'
+		glue << '\t\t}'
+	}
+	glue << '\t\tosal.sleep_us(1000)'
+	glue << '\t}'
+	glue << '}'
 	return glue
 }
 
@@ -2708,19 +2784,29 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 		glue << ')'
 	}
 		// --- host run(): launch every bus bridge + app partition, then wait. One
-		//     Channel param per bus (sorted for a stable signature main.v can rely on). ---
+		//     Channel param per bus (sorted for a stable signature main.v can rely
+		//     on); the eth bus adds its UDP Socket param LAST (docs/someip.md). ---
 		glue << ''
 		mut waits := []string{}
-		if bus_names.len == 0 {
+		mut eth_tx := false
+		for fr in m.eth_frames {
+			if fr.tx {
+				eth_tx = true
+			}
+		}
+		mut params := []string{}
+		for b in bus_names {
+			params << '${snake(b)} can.Channel'
+		}
+		for b in extra_dest_buses {
+			params << '${snake(b)} can.Channel' // route-dest-only bus: channel arg, no bridge
+		}
+		if eth_tx {
+			params << '${snake(m.eth)}_sock eth.Socket' // the eth comm thread's UDP seam
+		}
+		if params.len == 0 {
 			glue << 'pub fn run() {'
 		} else {
-			mut params := []string{}
-			for b in bus_names {
-				params << '${snake(b)} can.Channel'
-			}
-			for b in extra_dest_buses {
-				params << '${snake(b)} can.Channel' // route-dest-only bus: channel arg, no bridge
-			}
 			glue << 'pub fn run(${params.join(', ')}) {'
 		}
 		if m.io_points.len > 0 {
@@ -2790,6 +2876,11 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 		if telem_on_can(m) && telem_iface != '' {
 			glue << '\tt_telem := spawn partition_telem()'
 			waits << 't_telem'
+		}
+		if eth_tx {
+			eb := snake(m.eth)
+			glue << '\tt_${eb} := spawn partition_${eb}(${eb}_sock)'
+			waits << 't_${eb}'
 		}
 		for w in waits {
 			glue << '\t${w}.wait()'
@@ -3157,7 +3248,18 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 	if (m.has_can_ext && !comm_thread_on) || has_eth_tx {
 		glue << 'import comm.com' // per-PDU TX modes + RX deadline; eth codec PDU bound (max_pdu)
 	}
-	if has_e2e {
+	// the host eth comm thread: the UDP seam + the SOME/IP header codec
+	if has_eth_tx && !m.target.on {
+		glue << 'import driver.eth' // the eth UDP seam (docs/someip.md)
+		glue << 'import comm.someip' // the SOME/IP header codec
+	}
+	mut eth_e2e := false
+	for fr in m.eth_frames {
+		if fr.tx && fr.e2e_on {
+			eth_e2e = true
+		}
+	}
+	if has_e2e || (eth_e2e && !m.target.on) {
 		glue << 'import comm.e2e' // end-to-end protection (CRC + alive counter)
 	}
 	if has_secoc {
@@ -3208,6 +3310,15 @@ fn main() {
 	trace_host := m.trace.on && !m.target.on && m.part.by_part.keys().len == 1
 		&& (m.bus_kind[trace_bus] or { 'can' }) != 'eth'
 		&& !(m.has_can_ext || m.isotp_conns.len > 0 || m.routes.len > 0)
+	// the trace-host runner has no eth spawn wiring — an eth tx frame there
+	// would generate a comm thread nothing starts (silently dead)
+	if trace_host {
+		for fr in m.eth_frames {
+			if fr.tx {
+				panic('loom2v: eth frames + the trace-host runner are not wired yet — the eth comm thread is spawned by the plain host run() only (docs/someip.md)')
+			}
+		}
+	}
 	// io emits the platform io thread for the plain host run() (P1) and the ThreadX
 	// target (the bench phase). The bare-metal superloop / trace-host runner still
 	// spawn no io thread — there the pins would silently never move, so fail loudly.
@@ -3648,6 +3759,10 @@ fn main() {
 
 	// --- SOME/IP eth frame table + derived-layout codec (docs/someip.md) ---
 	glue << emit_eth_codec(m)
+	// --- eth comm thread: SOME/IP event tx over UDP (host) ---
+	if !m.target.on {
+		glue << emit_eth_bridge(m)
+	}
 	mut bus_names := bnames.clone()
 
 	// --- telemetry tx: sum per-partition load by core -> CpuLoad frame on the bus (emit_partition_telem) ---
