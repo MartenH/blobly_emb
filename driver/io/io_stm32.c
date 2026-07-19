@@ -44,6 +44,9 @@ static int pin_parse(const char *s, unsigned int *port, unsigned int *pin) {
 	unsigned int n = (unsigned int)(s[2] - '0');
 	unsigned int i = 3;
 	if (s[3] >= '0' && s[3] <= '9') {
+		if (n == 0u) return -1; /* leading zero: "PB00" would alias PB0 — one
+		                         * spelling per pad, so string-level exclusivity
+		                         * above the driver stays sound (REQ-IO-006) */
 		n = n * 10u + (unsigned int)(s[3] - '0');
 		i = 4;
 	}

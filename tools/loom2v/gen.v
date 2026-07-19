@@ -1599,7 +1599,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		}
 		mut tx_bus_fd := false
 		mut tx_bus_idx := '0'
-		if m.target.threadx {
+		if m.target.threadx && !(m.io_points.len > 0 && m.buses.len == 0) {
+			// (the bus-index derivation is skipped entirely for a bus-less
+			// [[io.gpio]]-only node — its app entry is channel-free, emb#150 r4)
 			if bc := doc.value('bus').as_map()[m.telem.bus] {
 				tx_bus_fd = (bc.as_map()['fd'] or { toml.Any(false) }).bool()
 			}
@@ -1793,9 +1795,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << ''
 			}
 		}
-		if !multi && comm_thread_on {
-			// The FB thread stays OFF CAN: the comm thread owns the bus. run() just dispatches the
-			// FBs and publishes load to the scratch cell for the comm thread to send.
+		if !multi && (comm_thread_on || m.buses.len == 0) {
+			// The FB thread stays OFF CAN: with a comm thread it owns the bus, and a
+			// bus-less [[io.gpio]]-only node has no channel at all (emb#150 r4).
+			// run() just dispatches the FBs and publishes load to the scratch cell.
 			glue << 'pub fn run() {'
 		} else if !multi {
 			glue << 'pub fn run(${chp} can.Channel) {'
@@ -2131,11 +2134,18 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						'use FB priorities >= 1')
 				}
 				glue << 'fn ${part}_thread_entry(input u32) {'
-				glue << '\tmut ch := can.Channel{}'
-				glue << "\tif !ch.open('${tx_bus_idx}', ${tx_bus_fd}) { // ${m.telem.bus}; board clocks/pins set by main.v"
-				glue << '\t\treturn // CAN open failed (bad bus index / FD unsupported) — don\'t run with a dead channel'
-				glue << '\t}'
-				glue << '\trun(ch)'
+				if m.buses.len == 0 {
+					// an io-only node (no [bus] at all): run() is channel-free —
+					// emitting a can.Channel here would reference an import the
+					// header emitter correctly skipped (codex on emb#150 r4)
+					glue << '\trun()'
+				} else {
+					glue << '\tmut ch := can.Channel{}'
+					glue << "\tif !ch.open('${tx_bus_idx}', ${tx_bus_fd}) { // ${m.telem.bus}; board clocks/pins set by main.v"
+					glue << '\t\treturn // CAN open failed (bad bus index / FD unsupported) — don\'t run with a dead channel'
+					glue << '\t}'
+					glue << '\trun(ch)'
+				}
 				glue << '}'
 				glue << ''
 				glue << "@[export: 'tx_application_define']"
@@ -2787,11 +2797,14 @@ fn main() {
 		if busv := doc.value_opt('bus') {
 			bus_exists = m.telem.bus in busv.as_map()
 		}
-		if !m.telem.on || m.telem.bus == '' {
+		if (!m.telem.on || m.telem.bus == '') && !(m.io_points.len > 0 && m.buses.len == 0) {
+			// exception: an io-only node (points, no [bus] at all) is a promised
+			// shape (docs/io.md: an output-only ECU) — its app entry is emitted
+			// channel-free, so nothing here needs the CAN channel (emb#150 r4)
 			panic('loom2v: [target] kind="threadx" needs [telemetry] enabled with a bus — the app ' +
-				'thread opens it for the CAN channel')
+				'thread opens it for the CAN channel (exception: a bus-less [[io.gpio]]-only node)')
 		}
-		if !bus_exists {
+		if !bus_exists && !(m.io_points.len > 0 && m.buses.len == 0) {
 			panic('loom2v: [target] kind="threadx": [telemetry].bus = "${m.telem.bus}" has no matching ' +
 				'[bus.${m.telem.bus}]')
 		}

@@ -145,6 +145,7 @@ void board_can_clock_pins_init(void) {
  * board already assigned — an io point re-muxing one would silently kill CAN, the
  * debugger, or the PHY. Port index 0=A..10=K (the io_stm32.c parse). */
 int board_io_pin_reserved(int port, int pin) {
+	if (port == 7 && (pin == 0 || pin == 1)) return 1;   /* PH0/PH1: HSE pair — the PLL AND FDCAN clock source */
 	if (port == 0 && (pin == 13 || pin == 14)) return 1;            /* PA13/PA14: SWD */
 	if (port == 7 && (pin == 13 || pin == 14)) return 1;            /* PH13/PH14: FDCAN1 TX/RX */
 	if (port == 0 && (pin == 1 || pin == 2 || pin == 7)) return 1;  /* PA1/2/7: RMII REF_CLK/MDIO/CRS_DV (eth.c) */
@@ -153,12 +154,16 @@ int board_io_pin_reserved(int port, int pin) {
 	return 0;
 }
 
-/* Bonded pads the H735G-DK exposes (STM32H735IGK6): ports A..H are available;
- * the discovery board's own map — refine per schematic if a point ever needs
- * the high-letter ports. */
+/* Bonded pads on the H735G-DK's STM32H735IGK6 (UFBGA176): ports A..I carry
+ * application-reachable pads; PJ/PK on this package serve the DK's LCD/octo-SPI
+ * fabric and are not offered as io points. BOARD-DECLARED map (not a datasheet
+ * import): a point on a pad the schematic routes elsewhere still fails honestly
+ * at the electrical level, and the reserved() table above holds the pads the
+ * platform actively owns — extend BOTH from the schematic when a config first
+ * needs a contested pad. */
 int board_io_pin_exists(int port, int pin) {
-	if (port >= 0 && port <= 7) return pin <= 15;    /* PA..PH */
-	return 0;                                        /* PI/PJ/PK: not exposed */
+	if (port >= 0 && port <= 8) return pin <= 15;    /* PA..PI */
+	return 0;                                        /* PJ/PK: LCD/OSPI fabric */
 }
 
 /* Weak default for the ETH interrupt (vectors.S IRQ61). Images that link the ETH

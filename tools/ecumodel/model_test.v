@@ -498,7 +498,10 @@ to   = "app"
 // pin exclusivity is keyed on the PARSED pad, and non-canonical spellings are
 // rejected outright — "PB00" may not slip past raw-string uniqueness as a second
 // spelling of "PB0" (the driver parses port letter + int)
-fn test_io_pin_canonical_spelling_enforced() {
+fn test_io_pin_exclusivity_is_backend_neutral() {
+	// pin GRAMMAR lives below the driver boundary (io_stm32.c rejects "PB00" at
+	// cfg, so one pad has one spelling); the model checks only string-level
+	// exclusivity — backend-neutral, per AGENTS.md (codex on emb#150 r4).
 	e := errs_of('
 [io]
 [[io.gpio]]
@@ -508,49 +511,11 @@ period_ms = 10
 
 [[io.gpio]]
 name      = "B"
-pin       = "PB00"
+pin       = "PB0"
 period_ms = 10
-
-[[io.gpio]]
-name      = "C"
-pin       = "PB007"
-period_ms = 10
-
-[[io.gpio]]
-name      = "D"
-pin       = "PB16"
-period_ms = 10
-
-[[signal]]
-name = "A"
-fields = { on = "bool" }
-from = "io"
-to   = "app"
-
-[[signal]]
-name = "B"
-fields = { on = "bool" }
-from = "io"
-to   = "app"
-
-[[signal]]
-name = "C"
-fields = { on = "bool" }
-from = "io"
-to   = "app"
-
-[[signal]]
-name = "D"
-fields = { on = "bool" }
-from = "io"
-to   = "app"
-' + app)
-	assert e.any(it.contains('"B"') && it.contains('not a canonical pad name')) // leading zero
-	assert e.any(it.contains('"C"') && it.contains('not a canonical pad name')) // >2 digits
-	assert e.any(it.contains('"D"') && it.contains('not a canonical pad name')) // pin > 15
-	assert !e.any(it.contains('"A"') && it.contains('canonical')) // the canonical spelling passes
+')
+	assert e.any(it.contains('reuses pin "PB0"'))
 }
-
 fn test_io_shape_must_be_single_bool() {
 	e := errs_of('
 [io]
