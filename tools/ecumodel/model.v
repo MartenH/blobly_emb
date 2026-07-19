@@ -654,6 +654,12 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		if ntx > 0 && nrx > 0 {
 			errs << 'eth frame "${fname}" mixes tx and rx signals — one direction per frame (a mixed frame would make the bridge a second writer on an SPSC channel)'
 		}
+		// TEMPORARY gate, same family as shell/NM-on-eth: nothing generates an
+		// rx unpack/publish path yet, so an rx frame would leave its consumers
+		// silently reading defaults forever — reject until the rx rung (P2)
+		if nrx > 0 && ntx == 0 {
+			errs << 'eth frame "${fname}" is rx — eth reception arrives with the rx rung (P2, docs/someip.md); this rung generates tx only'
+		}
 		// the bridge derives direction from the signal endpoints — a behavior
 		// block for the OTHER direction is silently ignored (a tx mode that
 		// never publishes, an rx deadline never enforced): reject it

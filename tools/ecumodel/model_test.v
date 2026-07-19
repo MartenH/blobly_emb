@@ -1345,3 +1345,22 @@ id      = 0x8005
 		eth_tx_frame + app)
 	assert e.any(it.contains('target telemetry emitter is CAN-only'))
 }
+
+fn test_someip_rx_frames_gated_until_p2() {
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "Cmd"
+fields = { v = "u8" }
+from = "eth0"
+to   = "app"
+
+[[frame]]
+name    = "CmdEvt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Cmd"]
+' +
+		app)
+	assert e.any(it.contains('eth reception arrives with the rx rung'))
+}
