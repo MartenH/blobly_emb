@@ -145,6 +145,21 @@ int board_io_pin_reserved(int port, int pin) {
 	return 0;
 }
 
+/* board_io_pwm_map: pin -> (timer base, channel, AF number, timer kernel clock).
+ * The driver (driver/io/io_stm32.c) programs the timer from this; a pad without a
+ * mapping fails cfg (REQ-IO-022). DRY-CODED from the datasheet AF table, bench-
+ * pending. Timer kernel clock: the APB timers run at 2x their APBx clock when the
+ * APB prescaler is > 1 (this board's clock tree) — confirm the exact value on the
+ * bench for a precise carrier. Extend the table as points need pads. */
+int board_io_pwm_map(int port, int pin, void **tim_base, int *chan, int *af, unsigned int *clk_hz) {
+	/* port: 0=A..10=K. TIM1 (AF1) channels on the common H7 pads. */
+	if (port == 4 && pin == 9)  { *tim_base = TIM1; *chan = 1; *af = 1; *clk_hz = 200000000u; return 0; } /* PE9  TIM1_CH1 */
+	if (port == 4 && pin == 11) { *tim_base = TIM1; *chan = 2; *af = 1; *clk_hz = 200000000u; return 0; } /* PE11 TIM1_CH2 */
+	if (port == 0 && pin == 8)  { *tim_base = TIM1; *chan = 1; *af = 1; *clk_hz = 200000000u; return 0; } /* PA8  TIM1_CH1 */
+	if (port == 0 && pin == 0)  { *tim_base = TIM2; *chan = 1; *af = 1; *clk_hz = 200000000u; return 0; } /* PA0  TIM2_CH1 */
+	return -1; /* pad not in the PWM map */
+}
+
 /* Bonded pads on the NUCLEO-H755ZI-Q's LQFP144: ports A..G are fully bonded,
  * PH0/PH1 are the HSE pair, nothing beyond exists on this package. */
 int board_io_pin_exists(int port, int pin) {

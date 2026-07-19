@@ -259,14 +259,14 @@ static int adc_dma_start(void) {
 	 * safe) or SRAM1 (H735, shared with ETH). Guarded — the H72x/H73x parts have
 	 * fewer banks than H74x/H75x (codex emb#152). */
 	RCC->AHB2ENR |= 0u
-#ifdef RCC_AHB2ENR_D2SRAM1EN
-	              | RCC_AHB2ENR_D2SRAM1EN
+#ifdef RCC_AHB2ENR_SRAM1EN
+	              | RCC_AHB2ENR_SRAM1EN
 #endif
-#ifdef RCC_AHB2ENR_D2SRAM2EN
-	              | RCC_AHB2ENR_D2SRAM2EN
+#ifdef RCC_AHB2ENR_SRAM2EN
+	              | RCC_AHB2ENR_SRAM2EN
 #endif
-#ifdef RCC_AHB2ENR_D2SRAM3EN
-	              | RCC_AHB2ENR_D2SRAM3EN
+#ifdef RCC_AHB2ENR_SRAM3EN
+	              | RCC_AHB2ENR_SRAM3EN
 #endif
 	              ;
 	(void)RCC->AHB2ENR;
@@ -442,7 +442,14 @@ static int pwm_setup(int ch) {
 			if (g_tim_seen[k].chan == chan) return -1;                 /* duplicate (timer,channel) */
 			if (g_tim_seen[k].psc != psc || g_tim_seen[k].arr != arr)  /* conflicting carrier */
 				return -1;
-			goto period_set; /* same carrier, other channel: don't reprogram PSC/ARR */
+			/* same carrier, other channel: record THIS channel too (so a later
+			 * point on it is a detected duplicate), but don't reprogram PSC/ARR */
+			g_tim_seen[g_tim_seen_n].t = t;
+			g_tim_seen[g_tim_seen_n].chan = chan;
+			g_tim_seen[g_tim_seen_n].psc = psc;
+			g_tim_seen[g_tim_seen_n].arr = arr;
+			g_tim_seen_n++;
+			goto period_set;
 		}
 	}
 	g_tim_seen[g_tim_seen_n].t = t;

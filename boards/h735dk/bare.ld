@@ -49,11 +49,11 @@ SECTIONS
         _ebss = .;
     } > RAM
 
-    .dma_buf (NOLOAD) : {
-        *(.dma_buf .dma_buf.*)   /* ADC/DMA latest-value buffers: DMA cannot reach DTCM */
-    } > D2SRAM
-
     /* remaining DTCM is heap/stack headroom */
     . = ALIGN(8);
     PROVIDE(end = .);   /* newlib _sbrk uses `end` if malloc is ever pulled in */
+
+    .dma_buf (NOLOAD) : {
+        *(.dma_buf .dma_buf.*)   /* ADC/DMA latest-value buffers: DMA cannot reach DTCM */
+    } > D2SRAM
 }
