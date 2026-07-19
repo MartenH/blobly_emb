@@ -768,28 +768,31 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	// FIRST thread the scheduler runs. trace_hooks.c assigns ids by first sight, so the comm
 	// thread takes id 1, ahead of the app thread (id 2) and the timer (id 3). Emit it first to
 	// match that observed order, else its records are mislabelled / shift the other lanes.
+	// min FB priority + local thread count: the comm/io platform-thread priorities are
+	// DERIVED in the target emit (comm = min(app) - 1, shifted one more when the io
+	// thread sits between comm and the FBs; historical 1 for single-thread) — recompute
+	// them here so the manifest shows the real numbers.
+	mut mp := 32
+	for pn, thrs in m.part.threads_of {
+		if m.part.external[pn] {
+			continue // the platform threads compete only with their OWN core's threads
+		}
+		for thr in thrs {
+			pr := m.part.thread_prio[thr] or { 10 }
+			if pr < mp {
+				mp = pr
+			}
+		}
+	}
+	mut nthr := 0
+	for pn, thrs in m.part.threads_of {
+		if !m.part.external[pn] {
+			nthr += thrs.len
+		}
+	}
+	io_shift := if m.io_points.len > 0 { 1 } else { 0 }
 	if comm_thread_on {
-		// comm's priority is derived in the target emit (min(app) - 1, or the historical 1 for a
-		// single-thread config) — recompute it here so the manifest can show it.
-		mut mp := 32
-		for pn, thrs in m.part.threads_of {
-			if m.part.external[pn] {
-				continue // comm competes only with its OWN core's threads
-			}
-			for thr in thrs {
-				pr := m.part.thread_prio[thr] or { 10 }
-				if pr < mp {
-					mp = pr
-				}
-			}
-		}
-		mut nthr := 0
-		for pn, thrs in m.part.threads_of {
-			if !m.part.external[pn] {
-				nthr += thrs.len
-			}
-		}
-		cp := if nthr > 1 { mp - 1 } else { 1 }
+		cp := if nthr > 1 { mp - 1 - io_shift } else { 1 }
 		man << 'thread,${tid},comm,${m.part.core_of[single_part] or { 0 }},${cp}'
 		tid++
 	}
@@ -802,6 +805,17 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 			man << 'thread,${tid},${tname},${m.part.core_of[pname]},${m.part.thread_prio[tname] or { 10 }}' // name = the globally-unique thread name
 			tid++
 		}
+	}
+	// The platform io thread on the ThreadX target (docs/io.md): comm > io > FB threads
+	// (io = comm + 1 with a comm thread, min FB - 1 without). Row before the kernel
+	// timer, matching the deterministic trace-bind order in tx_application_define.
+	if m.io_points.len > 0 && m.target.threadx {
+		mut iop := mp - 1
+		if comm_thread_on && nthr <= 1 {
+			iop = 2 // single-thread comm keeps the historical 1; io just below it
+		}
+		man << 'thread,${tid},io,${m.io_core},${iop}'
+		tid++
 	}
 	timer_rows := trace_manifest_timer_row(m, tid)
 	man << timer_rows
@@ -831,8 +845,9 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 		man << 'thread,${tid},comm_${bb},${m.bus_core[bb] or { 0 }},-' // host threads: no RTOS prio
 		tid++
 	}
-	// The platform io thread (docs/io.md): trace-visible by name, like the comm threads.
-	if m.io_points.len > 0 {
+	// The HOST platform io thread (docs/io.md): trace-visible by name, like the comm
+	// threads (no RTOS prio). The ThreadX target emitted its row above, with the prio.
+	if m.io_points.len > 0 && !m.target.threadx {
 		man << 'thread,${tid},io,${m.io_core},-'
 		tid++
 	}
@@ -901,8 +916,8 @@ fn emit_partition_telem(m Model, telem_iface string, slot_core []int, trace_host
 // from the channel -> apply, gated on freshness (until the producing FB has published
 // once, the acquire reports no data and the driver keeps holding the configured init).
 fn emit_partition_io(m Model, producers []Producer) []string {
-	if m.io_points.len == 0 {
-		return []string{}
+	if m.io_points.len == 0 || m.target.on {
+		return []string{} // the ThreadX target emits its own io thread in emit_run_target
 	}
 	mut fastest := m.io_points[0].period_ms
 	for pt in m.io_points {
@@ -971,6 +986,128 @@ fn emit_partition_io(m Model, producers []Producer) []string {
 	glue << '\t}'
 	glue << '}'
 	return glue
+}
+
+// emit_io_target_entry emits the ThreadX platform io thread's entry fn (docs/io.md on
+// target): the same fastest-period loop + (tick+1)%mult sub-rating as the host emitter,
+// paced to a monotonic deadline on the DWT timebase (tx_thread_sleep is relative, so a
+// fixed sleep would accumulate serve-time as drift). Values cross on the target IOC pool
+// cells; outputs are freshness-gated through ioc_get_ever (init holds until the first
+// publish), inputs keep the checked read (only REAL values publish — uniform with the
+// host, and the port contract's failure leg stays honest on target too).
+fn emit_io_target_entry(m Model, ioc_idx map[string]int) []string {
+	mut g := []string{}
+	if m.io_points.len == 0 {
+		return g
+	}
+	mut fastest := m.io_points[0].period_ms
+	for pt in m.io_points {
+		if pt.period_ms < fastest {
+			fastest = pt.period_ms
+		}
+	}
+	g << 'fn io_thread_entry(input u32) {'
+	g << '\tmut tick := u64(0)'
+	g << '\t// monotonic deadline pacing: sleeping the remaining-to-deadline ticks (rounded'
+	g << '\t// UP: late <= 1 tick, never early) keeps the cadence drift-free under serve'
+	g << '\t// jitter. Sleeping BEFORE serving makes the first output apply land one full io'
+	g << '\t// period after resume — the driver-established init observably holds for >= one'
+	g << '\t// period (REQ-IO-009); inputs are covered by the boot sample published in'
+	g << '\t// tx_application_define before any thread ran.'
+	g << '\tmut next_us := C.board_now_us()'
+	g << '\tfor {'
+	g << '\t\tnext_us += ${fastest * 1000}'
+	g << '\t\tnow := C.board_now_us()'
+	g << '\t\tif next_us > now {'
+	g << '\t\t\tC._tx_thread_sleep(u32((next_us - now + 999) / 1000)) // 1 kHz kernel tick'
+	g << '\t\t} else {'
+	g << '\t\t\t// overrun: skip the MISSED base periods, no burst catch-up — tick'
+	g << '\t\t\t// advances with wall time so (tick+1)%mult gating stays aligned'
+	g << '\t\t\tmissed := (now - next_us) / ${fastest * 1000}'
+	g << '\t\t\ttick += missed'
+	g << '\t\t\tnext_us += missed * ${fastest * 1000}'
+	g << '\t\t}'
+	for pt in m.io_points {
+		idx := ioc_idx[pt.name] or { continue }
+		fld := snake(pt.name)
+		mult := pt.period_ms / fastest
+		ind := if mult > 1 { '\t\t\t' } else { '\t\t' }
+		if mult > 1 {
+			// (tick+1): the first serve is one fastest-period after resume, so a
+			// sub-rated point must first fire on its OWN period, not the fastest one
+			g << '\t\tif (tick + 1) % ${mult} == 0 { // ${pt.period_ms} ms point on the ${fastest} ms tick'
+		}
+		if pt.output {
+			g << '${ind}mut ${fld}_a := u32(0)'
+			g << '${ind}mut ${fld}_b := u32(0)'
+			g << '${ind}if C.ioc_get_ever(${idx}, &${fld}_a, &${fld}_b) != 0 {'
+			g << '${ind}\tio.gpio_write(${pt.ch}, ${fld}_a != 0) // freshness-gated: init holds until the first publish'
+			g << '${ind}}'
+		} else {
+			g << '${ind}if ${fld}_v := io.gpio_read_checked(${pt.ch}) {'
+			g << '${ind}\tC.ioc_pub(${idx}, if ${fld}_v { u32(1) } else { u32(0) }, u32(0))'
+			g << '${ind}}'
+		}
+		if mult > 1 {
+			g << '\t\t}'
+		}
+	}
+	g << '\t\ttick++'
+	g << '\t}'
+	g << '}'
+	g << ''
+	return g
+}
+
+// emit_io_target_boot emits the io cfg + init + one synchronous boot publish, injected at
+// the TOP of tx_application_define — before any thread is created, so it runs to completion
+// before application dispatch can begin (REQ-IO-009: platform first, app after). Outputs
+// hold their configured init from io.init() on; each input gets ONE boot sample so the
+// first activation never reads an empty cell. A failure bumps the exported
+// io_startup_faults counter (degraded, observable start) instead of wedging the boot.
+fn emit_io_target_boot(m Model, ioc_idx map[string]int) []string {
+	mut g := []string{}
+	if m.io_points.len == 0 {
+		return g
+	}
+	g << '\t// io BEFORE the app threads exist (REQ-IO-009): declare + init the points —'
+	g << '\t// outputs hold their configured init from here — then publish ONE boot sample'
+	g << '\t// per input. Failures count observably; the ECU still starts (degraded).'
+	for pt in m.io_points {
+		iv := if pt.init { 1 } else { 0 }
+		g << "\tif !io.cfg(${pt.ch}, '${pt.name}', '${pt.pin}', ${pt.output}, ${iv}) {"
+		g << '\t\tio_startup_faults++'
+		g << '\t}'
+	}
+	g << '\tif !io.init() {'
+	g << '\t\tio_startup_faults++'
+	g << '\t}'
+	for pt in m.io_points {
+		if pt.output {
+			continue
+		}
+		idx := ioc_idx[pt.name] or { continue }
+		fld := snake(pt.name)
+		g << '\tif boot_${fld}_v := io.gpio_read_checked(${pt.ch}) {'
+		g << '\t\tC.ioc_pub(${idx}, if boot_${fld}_v { u32(1) } else { u32(0) }, u32(0))'
+		g << '\t} else {'
+		g << '\t\tio_startup_faults++ // unreadable at boot: publish NOTHING (no fabricated sample)'
+		g << '\t}'
+	}
+	return g
+}
+
+// emit_io_target_create emits the io thread's create + resume, AFTER the app-thread
+// creates in tx_application_define: AUTO_START OFF then an explicit resume, so the
+// startup ordering (cfg/init/boot publish first) is in the code path, not implied by
+// scheduler timing. The kernel starts only after tx_application_define returns; the io
+// thread then outranks every FB thread, so its cadence never waits on an app pass.
+fn emit_io_target_create(io_prio int) []string {
+	mut g := []string{}
+	g << "\tC._tx_thread_create(&g_io_tcb[0], c'io', io_thread_entry, u32(0),"
+	g << '\t\t&g_io_stack[0], u32(g_io_stack.len), u32(${io_prio}), u32(${io_prio}), u32(0), u32(0))'
+	g << '\tC._tx_thread_resume(&g_io_tcb[0])'
+	return g
 }
 
 // emit_bridges emits the host COM bus bridge(s): per external bus, decode rx -> IOC cells and
@@ -1489,14 +1626,24 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << 'fn C.load_10s() u32'
 					glue << 'fn C.load_overruns() u32'
 				}
-				if ioc_idx.len > 0 {
-					// Target IOC pool (comm_glue.c, wait-free triple-buffer ioc.h): the comm thread
-					// publishes a decoded rx signal into a cell (ioc_pub), an FB reads it (ioc_get);
-					// ioc_pool_init runs once before the kernel starts.
-					glue << 'fn C.ioc_pool_init()'
-					glue << 'fn C.ioc_pub(int, u32, u32)'
-					glue << 'fn C.ioc_get(int, &u32, &u32)'
-				}
+			}
+			if ioc_idx.len > 0 {
+				// Target IOC pool (glue C, wait-free triple-buffer ioc.h): every cross-thread
+				// signal rides one indexed cell — comm-decoded rx -> FB (ioc_pub/ioc_get),
+				// persist staging, and the io thread's points; ioc_pool_init runs once before
+				// the kernel starts.
+				glue << 'fn C.ioc_pool_init()'
+				glue << 'fn C.ioc_pub(int, u32, u32)'
+				glue << 'fn C.ioc_get(int, &u32, &u32)'
+			}
+			if m.io_points.len > 0 {
+				// io thread plumbing: created AUTO_START OFF + resumed after the boot publish
+				// (REQ-IO-009). ioc_get_ever is the outputs' freshness gate — 1 once the cell
+				// has EVER been published, so the driver-established init holds until the
+				// producing FB's first publish (a plain ioc_get would drive the pin with the
+				// slot's zero-init).
+				glue << 'fn C._tx_thread_resume(voidptr) u32'
+				glue << 'fn C.ioc_get_ever(int, &u32, &u32) int'
 			}
 			glue << ''
 			// TCB as [32]u64 (256 B >= sizeof(TX_THREAD) = 200 B) so it is 8-byte aligned — the
@@ -1533,6 +1680,13 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// host cansend is observable. The rx CONSUMER of the lean cut (comm-thread-local).
 				glue << '\tg_rx_count u32'
 				glue << '\tg_rx_last  u32'
+			}
+			if m.io_points.len > 0 {
+				glue << '\tg_io_tcb   [32]u64  // the platform io thread (docs/io.md)'
+				glue << '\tg_io_stack [2048]u8 // gpio serve loop only: no modules, shallow frames'
+				// the startup-fault counter is an exported symbol (docs/io.md observability
+				// rule): SWD/bench readable even with no service on
+				glue << '\tio_startup_faults u32'
 			}
 			glue << ')'
 		}
@@ -1665,6 +1819,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			// The ThreadX app thread + the kernel's application-define entry. main.v does the board
 			// clock/CAN init then C.tx_kernel_enter(), which calls tx_application_define below.
 			glue << ''
+			glue << emit_io_target_entry(m, ioc_idx)
 			if comm_thread_on {
 				// The comm thread must be STRICTLY higher priority (lower number) than the FB thread
 				// so it preempts a long app pass to drain rx after the ISR posts (zero time slice
@@ -1674,10 +1829,19 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						'than every FB thread, but the highest FB priority is ${min_prio}; use ' +
 						'priorities >= 2 so the comm owner preempts them to drain rx promptly')
 				}
+				// With io points, TWO platform threads outrank the FBs — comm, then the io
+				// thread just below it (comm still drains rx first; io still preempts every
+				// FB to hold its cadence) — so the multi derivation shifts comm one more up
+				// and the FBs need priorities >= 3.
+				if m.io_points.len > 0 && min_prio <= 2 {
+					panic('loom2v: [target] kind="threadx" with [[io.gpio]]: comm > io > FB threads, ' +
+						'but the highest FB priority is ${min_prio}; use priorities >= 3')
+				}
+				io_shift := if m.io_points.len > 0 { 1 } else { 0 }
 				// Single-thread keeps the historical comm priority 1; multi-thread derives it as
 				// min(app priorities) - 1, so realistic numbering (apps 11/12/13 -> comm 10) works
 				// without a separate config knob and comm ALWAYS outranks the apps.
-				comm_prio := if multi { min_prio - 1 } else { 1 }
+				comm_prio := if multi { min_prio - 1 - io_shift } else { 1 }
 				// The Rx-ISR board glue (comm_glue.c) enables FDCAN1's FIFO0 interrupt + NVIC line
 				// specifically. A telemetry/rx bus that opens FDCAN2/3 (index 1/2) would drain only on
 				// the 10-tick timeout (no ISR wake -> FIFO loss under bursts). The per-instance IRQ glue
@@ -1855,6 +2019,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << ''
 				glue << "@[export: 'tx_application_define']"
 				glue << 'fn tx_application_define(first_unused voidptr) {'
+				glue << emit_io_target_boot(m, ioc_idx)
 				if multi {
 					for thr in app_threads {
 						pr := m.part.thread_prio[thr] or { 10 }
@@ -1867,10 +2032,14 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << '\tC._tx_thread_create(&g_comm_tcb[0], c\'comm\', comm_thread_entry, u32(0),'
 				glue << '\t\t&g_comm_stack[0], u32(g_comm_stack.len), u32(${comm_prio}), u32(${comm_prio}), u32(0), u32(1))'
+				if m.io_points.len > 0 {
+					glue << emit_io_target_create(comm_prio + 1)
+				}
 				if m.trace.on {
 					// Deterministic trace thread ids (manifest order): comm = 1, then the app
-					// threads by priority; the ONLY first-sight id left is the ThreadX timer
-					// thread — always last, exactly as the manifest's tx_system_timer row says.
+					// threads by priority, then the io thread; the ONLY first-sight id left is
+					// the ThreadX timer thread — always last, exactly as the manifest's
+					// tx_system_timer row says.
 					glue << '\tC.trace_bind_thread(&g_comm_tcb[0])'
 					if multi {
 						for thr in app_threads {
@@ -1879,9 +2048,19 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					} else {
 						glue << '\tC.trace_bind_thread(&g_${part}_tcb[0])'
 					}
+					if m.io_points.len > 0 {
+						glue << '\tC.trace_bind_thread(&g_io_tcb[0])'
+					}
 				}
 				glue << '}'
 			} else {
+				// No comm thread: the io thread (when present) runs just above the FB
+				// thread(s) — min FB priority - 1 — so its cadence never waits on an app pass.
+				if m.io_points.len > 0 && min_prio < 1 {
+					panic('loom2v: [target] kind="threadx" with [[io.gpio]]: the io thread runs at ' +
+						'min FB priority - 1 = ${min_prio - 1}, out of the ThreadX range 0..31; ' +
+						'use FB priorities >= 1')
+				}
 				glue << 'fn ${part}_thread_entry(input u32) {'
 				glue << '\tmut ch := can.Channel{}'
 				glue << "\tif !ch.open('${tx_bus_idx}', ${tx_bus_fd}) { // ${m.telem.bus}; board clocks/pins set by main.v"
@@ -1892,8 +2071,12 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << ''
 				glue << "@[export: 'tx_application_define']"
 				glue << 'fn tx_application_define(first_unused voidptr) {'
+				glue << emit_io_target_boot(m, ioc_idx)
 				glue << '\tC._tx_thread_create(&g_${part}_tcb[0], c\'${part}\', ${part}_thread_entry, u32(0),'
 				glue << '\t\t&g_${part}_stack[0], u32(g_${part}_stack.len), u32(${tx_prio}), u32(${tx_prio}), u32(0), u32(1))'
+				if m.io_points.len > 0 {
+					glue << emit_io_target_create(min_prio - 1)
+				}
 				glue << '}'
 			}
 			glue << ''
@@ -2153,7 +2336,12 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 						glue << '\tmut ${snake(rn)}_a := u32(0)'
 						glue << '\tmut ${snake(rn)}_b := u32(0)'
 						glue << '\tC.ioc_get(${idx}, &${snake(rn)}_a, &${snake(rn)}_b)'
-						glue << '\tinp.${snake(rn)}.${snake(si.val_field)} = ${si.val_type}(${snake(rn)}_a)'
+						if si.val_type == 'bool' {
+							// V has no u32 -> bool cast; io gpio signals are bool by shape rule
+							glue << '\tinp.${snake(rn)}.${snake(si.val_field)} = ${snake(rn)}_a != 0'
+						} else {
+							glue << '\tinp.${snake(rn)}.${snake(si.val_field)} = ${si.val_type}(${snake(rn)}_a)'
+						}
 					} else {
 						if image_part != '' {
 							panic('loom2v: satellite partition "${part}" fb "${cname}" reads signal ' +
@@ -2192,9 +2380,15 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 						}
 						glue << '\tC.duo_pub(${dslot}, u32(outp.${snake(wn)}.${snake(si.fields[0].name)}), ${b_expr})'
 					} else if idx := ioc_idx[wn] {
-						// external TX (app -> bus): publish the value into its IOC cell; the comm thread
-						// reads it each tx period, encodes, and sends. Value field -> sig_t.a (b unused).
-						glue << '\tC.ioc_pub(${idx}, u32(outp.${snake(wn)}.${snake(si.val_field)}), u32(0))'
+						// external TX (app -> bus) or io output (app -> pin): publish the value into its
+						// IOC cell; the consumer (comm thread / io thread) reads it each period. Value
+						// field -> sig_t.a (b unused). bool has no u32() cast in V — branch the literal.
+						wexpr := if si.val_type == 'bool' {
+							'if outp.${snake(wn)}.${snake(si.val_field)} { u32(1) } else { u32(0) }'
+						} else {
+							'u32(outp.${snake(wn)}.${snake(si.val_field)})'
+						}
+						glue << '\tC.ioc_pub(${idx}, ${wexpr}, u32(0))'
 					} else {
 						if image_part != '' {
 							panic('loom2v: satellite partition "${part}" fb "${cname}" writes signal ' +
@@ -2305,7 +2499,7 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 	if !m.target.on {
 		glue << 'import osal' // host: IOC + now_us/sleep_us. Target has none of these.
 	}
-	if m.io_points.len > 0 && !m.target.on {
+	if m.io_points.len > 0 {
 		glue << 'import driver.io' // the io port — the platform io thread owns every pin touch
 	}
 	// telem.* is used for CpuLoad (telemetry) — import it only when it's actually emitted.
@@ -2377,11 +2571,12 @@ fn main() {
 	// owns the schedule and the bus, serving comm/trace's TraceModule via the endpoint bindings.
 	trace_host := m.trace.on && !m.target.on && m.part.by_part.keys().len == 1
 		&& !(m.has_external || m.isotp_conns.len > 0 || m.routes.len > 0)
-	// io P1 emits the HOST io thread only (docs/io.md phasing): the target/trace-host
-	// run-models spawn no partition_io, so the pins would silently never move.
-	if m.io_points.len > 0 && (m.target.on || trace_host) {
-		panic('loom2v: [[io.gpio]] is generated for the plain host run() only (P1) — the ' +
-			'target io thread lands with the bench phase (docs/io.md)')
+	// io emits the platform io thread for the plain host run() (P1) and the ThreadX
+	// target (the bench phase). The bare-metal superloop / trace-host runner still
+	// spawn no io thread — there the pins would silently never move, so fail loudly.
+	if m.io_points.len > 0 && ((m.target.on && !m.target.threadx) || trace_host) {
+		panic('loom2v: [[io.gpio]] is generated for the plain host run() and the ThreadX ' +
+			'target only — not the bare-metal superloop / trace-host runner (docs/io.md)')
 	}
 	if m.shell.on && !(m.target.threadx) {
 		eprintln('loom2v: WARNING: [shell] is generated for the ThreadX comm-thread target only ' +
@@ -2673,11 +2868,20 @@ fn main() {
 		for sname in m.nvm_names {
 			ioc_idx[sname] = ioc_idx.len
 		}
-		if ioc_idx.len > 4 {
-			panic('loom2v: [target] kind="threadx" comm thread: ${ioc_idx.len} signals need IOC ' +
-				'cells (rx-to-FB + persist staging), but the pool (comm_glue.c IOC_POOL_N) has 4 — ' +
-				'raise IOC_POOL_N or reduce signals')
+	}
+	// io points on the ThreadX target: the io thread and the FB thread(s) are different
+	// kernel threads, so every io signal crosses through the same target IOC pool — one
+	// cell per point, allocated after the comm/persist cells (docs/io.md; the host io
+	// thread uses the osal channels instead).
+	if m.target.threadx {
+		for pt in m.io_points {
+			ioc_idx[pt.name] = ioc_idx.len
 		}
+	}
+	if ioc_idx.len > 4 {
+		panic('loom2v: [target] kind="threadx": ${ioc_idx.len} signals need target IOC ' +
+			'cells (rx-to-FB + persist staging + io points), but the pool (glue IOC_POOL_N) ' +
+			'has 4 — raise IOC_POOL_N or reduce signals')
 	}
 	// Which m.buses run a COM bridge (an external signal, an ISO-TP conn, or a route touches them).
 	// P3b traces each bridge as a `comm_<bus>` thread; the DIFFERENT-bus case (trace rides a bus with

@@ -15,6 +15,8 @@ BOARD_DEFS = -DSTM32H735xx -DTRACE_CPU_MHZ=550 -DSYSTEM_CLOCK=550000000
 # FDCAN timing for classic 500 kbit off the 25 MHz HSE kernel clock (10 tq: 1+7+2)
 CAN_DEFS   = -DBLOB_CAN_FDCAN -DBLOB_FDCAN_KCLK_HZ=25000000 -DBLOB_FDCAN_TQ=10 \
              -DBLOB_FDCAN_NTSEG1=7 -DBLOB_FDCAN_NTSEG2=2
+# driver/io GPIO backend (register-level, io_stm32.c).
+IO_DEFS    = -DBLOB_IO_STM32
 
 # startup/vectors/systick glue + the board.h API are family-generic: boards/common
 BOARD_BSP_THREADX = $(BOARD_COMMON)/crt0.S $(BOARD_COMMON)/vectors.S \
