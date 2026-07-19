@@ -60,10 +60,24 @@ __attribute__((weak)) int board_io_pin_reserved(int port, int pin) {
 	return 0;
 }
 
+/* board_io_pin_exists: the board's bonded-pad table (port 0=A..10=K). A pad can
+ * be syntactically valid yet absent from this MCU/package — configuring it
+ * "succeeds" into a floating nothing, so cfg rejects it up front (codex on
+ * emb#150). Weak default says everything exists (legacy boards keep working);
+ * each bench board declares its real map in board.c. */
+__attribute__((weak)) int board_io_pin_exists(int port, int pin) {
+	(void)port;
+	(void)pin;
+	return 1;
+}
+
 int blob_io_cfg(int ch, const char *name, const char *pin, int dir, unsigned int init_val) {
 	(void)name; /* informational on target: the parsed pin IS the table key */
 	if (ch < 0 || ch >= BLOB_IO_MAX || !name || !pin) return -1;
 	if (pin_parse(pin, &g_pt[ch].port, &g_pt[ch].pin) < 0) return -1;
+	/* the pad must be bonded on THIS package — an absent pad configures into a
+	 * floating nothing and the init level never exists physically */
+	if (!board_io_pin_exists((int)g_pt[ch].port, (int)g_pt[ch].pin)) return -1;
 	/* docs/io.md "pins are exclusive" + REQ-IO-006: a pad the board assigned to
 	 * CAN/SWD/ETH must never be re-muxed by an io point — reject before recording. */
 	if (board_io_pin_reserved((int)g_pt[ch].port, (int)g_pt[ch].pin)) return -1;

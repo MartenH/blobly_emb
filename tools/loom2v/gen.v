@@ -1101,23 +1101,35 @@ fn emit_io_target_boot(m Model, ioc_idx map[string]int) []string {
 	}
 	g << '\t// io BEFORE the app threads exist (REQ-IO-009): declare + init the points —'
 	g << '\t// outputs hold their configured init from here — then publish ONE boot sample'
-	g << '\t// per input. Input failures count observably (degraded start); an output that'
-	g << '\t// never reached its init level halts BEFORE app dispatch (counter via SWD).'
+	g << '\t// per input. Input failures count observably (degraded start); an output'
+	g << '\t// fault halts BEFORE app dispatch — but only AFTER declaring the rest and'
+	g << '\t// running init, so every VALID output still reaches its declared level'
+	g << '\t// instead of floating through the halt (codex on emb#150).'
+	if has_output {
+		g << '\tmut io_out_fault := false'
+	}
 	for pt in m.io_points {
 		iv := if pt.init { 1 } else { 0 }
 		g << "\tif !io.cfg(${pt.ch}, '${pt.name}', '${pt.pin}', ${pt.output}, ${iv}) {"
 		g << '\t\tio_startup_faults++'
 		if pt.output {
-			g << '\t\tfor {} // unconfigured OUTPUT: halt — the app must not run as if it init-ed'
+			g << '\t\tio_out_fault = true // halt LATER: first let the valid outputs init'
 		}
 		g << '\t}'
 	}
 	g << '\tif !io.init() {'
 	g << '\t\tio_startup_faults++'
 	if has_output {
-		g << '\t\tfor {} // an output never reached its init level (REQ-IO-009): halt, no app dispatch'
+		g << '\t\tio_out_fault = true'
 	}
 	g << '\t}'
+	if has_output {
+		g << '\tif io_out_fault {'
+		g << '\t\tfor {} // an OUTPUT never reached its init level (REQ-IO-009): no app'
+		g << '\t\t// dispatch — the valid outputs sit at their declared init, the fault'
+		g << '\t\t// counter reads via SWD'
+		g << '\t}'
+	}
 	for pt in m.io_points {
 		if pt.output {
 			continue
