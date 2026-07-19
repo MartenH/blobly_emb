@@ -50,6 +50,11 @@ fn partition_io() {
 	for {
 		next_us += 10000
 		now := osal.now_us()
+		// timebase-anomaly guard (REQ-IO-024): the missed-period catch-up (next_us +=
+		// missed*P) lets one bad now sample push the deadline arbitrarily far ahead with
+		// no recovery — a sleep-to-deadline would then hang for that long. Re-anchor so
+		// next_us is never more than one period ahead (bounds the sleep to <= one period).
+		if next_us > now + 10000 { next_us = now + 10000 }
 		if next_us > now {
 			osal.sleep_us(next_us - now)
 		} else {
