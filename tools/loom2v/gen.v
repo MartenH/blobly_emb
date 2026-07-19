@@ -1600,8 +1600,11 @@ fn emit_eth_bridge(m Model) []string {
 		glue << '\t\tmut any_${fb} := false'
 		for s in fr.signals {
 			ss := snake(s)
+			// the acquire must match the signal's configured transport — the
+			// FB publishes into that pool, not necessarily the double-buffer
+			tr := (m.sig_of[s] or { SigInfo{} }).transport
 			glue << '\t\tmut s_${ss} := sig.${s}{}'
-			glue << '\t\tif osal.ioc_acquire2(${ss}_ch, &s_${ss}, u8(sizeof(s_${ss}))) {'
+			glue << '\t\tif osal.${acquire_fn(tr)}(${ss}_ch, &s_${ss}, u8(sizeof(s_${ss}))) {'
 			glue << '\t\t\tany_${fb} = true'
 			glue << '\t\t}'
 			params << 's_${ss}'
