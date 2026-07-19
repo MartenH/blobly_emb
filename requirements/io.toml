@@ -113,7 +113,7 @@ derives = "SYS-REQ-IO-001"
 [[req]]
 id = "REQ-IO-011"
 title = "PWM generation"
-text = "A configured PWM output shall drive its pin at the configured carrier frequency with the duty commanded by its signal in permille, values above 1000 clamped to 1000."
+text = "A configured PWM output shall drive its pin at the configured carrier frequency with the duty commanded by its signal in permille, values above 1000 clamped to 1000, applying duty changes at the point's configured apply cadence."
 status = "draft"
 method = "test"
 asil = "QM"
@@ -132,6 +132,18 @@ derives = "SYS-REQ-IO-001"
 id = "REQ-IO-013"
 title = "Digital drive"
 text = "A configured digital output shall drive its pin to the level commanded by its signal, at the point's configured apply cadence, holding the configured init level before the first publication."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+# The io thread joins the watchdog like every platform thread — without this
+# child, all trace evidence stays green while a stalled io thread leaves stale
+# actuator values behind a happily-fed watchdog.
+[[req]]
+id = "REQ-IO-014"
+title = "IO thread supervision"
+text = "The io thread shall be enrolled as a supervised entity of the ECU watchdog; a stalled io thread shall trigger the configured supervision reaction rather than leaving outputs at stale values indefinitely."
 status = "draft"
 method = "test"
 asil = "QM"
