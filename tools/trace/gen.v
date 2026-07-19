@@ -135,12 +135,14 @@ fn main() {
 			if meth == '' {
 				meth = 'analysis'
 			}
+			// skip_exit (opt-in, per check): the exit code that means "not run" -> pending,
+			// e.g. an on-target test with no board attached. NOT global: `make lint` exits 2
+			// on a real invariant violation, which must stay 'fail' (GNU make: 2 = errors).
+			skip_code := int((m['skip_exit'] or { toml.Any(-1) }).int())
 			mut result := 'pending'
 			if cmd != '' {
-				// exit 0 = pass, 2 = SKIP (e.g. an on-target test with no board attached ->
-				// "not run", never a false regression), anything else = fail.
 				ec := os.execute(cmd).exit_code
-				result = if ec == 0 { 'pass' } else if ec == 2 { 'pending' } else { 'fail' }
+				result = if ec == 0 { 'pass' } else if ec == skip_code { 'pending' } else { 'fail' }
 			}
 			ctxset[ctx] = true
 			for v in arr(m['verifies'] or { toml.Any([]toml.Any{}) }) {
