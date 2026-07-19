@@ -120,7 +120,8 @@ bench-scale:
 hwtest:
 	@rc=0; n=0; for t in examples/*/bench_test.sh; do \
 	  [ -x "$$t" ] || continue; n=1; echo "== $$t =="; \
-	  "$$t" --flash; ec=$$?; [ $$ec = 1 ] && rc=1; \
+	  "$$t" --flash; ec=$$?; \
+	  case $$ec in 0) ;; 2) echo "  (skipped)";; *) echo "  (FAILED, exit $$ec)"; rc=1;; esac; \
 	done; [ $$n = 1 ] || echo "no examples/*/bench_test.sh found"; exit $$rc
 
 .PHONY: bench bench-scale hwtest

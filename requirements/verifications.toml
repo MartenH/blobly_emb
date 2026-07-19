@@ -38,6 +38,7 @@ id = "h755-io-analog-hwtest"
 method = "test"
 context = "h755/target"
 command = "sh -c 'if [ -z \"$BLOB_HWTEST\" ]; then exit 2; fi; exec examples/h755_io_analog/bench_test.sh --flash'"
+skip_exit = 2 # exit 2 = disabled/no-board -> pending; 1 = a real hardware FAIL
 verifies = ["REQ-IO-018", "REQ-IO-021"]
 
 [[review]]

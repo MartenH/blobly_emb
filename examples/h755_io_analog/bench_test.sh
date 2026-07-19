@@ -5,29 +5,33 @@
 # It reads the TIM1 / ADC1 / DMA1 registers and the io-thread liveness counter via
 # OpenOCD and asserts that the drivers are actually doing their job on silicon:
 #
-#   PWM  (REQ-IO-021): TIM1_CH1 enabled with MOE, the expected 20 kHz carrier, and
-#                      the duty ramp reaching CCR1 (FB -> IOC -> io thread -> pwm_write).
-#   ADC  (REQ-IO-018): ADC1 continuous scan + circular DMA enabled, started, and
-#                      producing samples (the DMA buffer advances on the floating pin).
-#   live (REQ-IO-024): the io serve loop keeps executing (g_io_exec_us advances) — the
-#                      regression guard for the pacing-sleep wedge.
+#   PWM (REQ-IO-021): TIM1_CH1 enabled with MOE, the expected 20 kHz carrier, and
+#                     the duty ramp reaching CCR1 (FB -> IOC -> io thread -> pwm_write).
+#   ADC (REQ-IO-018): ADC1 continuous scan + circular DMA enabled + started, a scan
+#                     COMPLETING (TCIF), the DMA pointed at g_adc_dma, AND the io thread
+#                     reading it wait-free -> the value published on the bus tracks the
+#                     live DMA array (the read path REQ-IO-018 requires).
 #
-# Exit: 0 = all checks pass, 1 = a check FAILED (regression), 2 = no H755 attached
-# (SKIP -> `make trace` records the h755/target context as "not run", never "fail").
+# It also asserts the io serve loop keeps advancing (g_io_exec_us), a liveness sanity —
+# NOT a REQ-IO-024 claim: that requirement is recovery after an anomalous clock sample,
+# which this test does not inject (it stays analysis-argued).
 #
-# Usage: ./bench_test.sh [--flash]      # --flash builds + flashes this image first
+# Exit: 0 = all checks pass, 1 = a check FAILED (regression), 2 = SKIP (no board, or a
+# flash requested without BLOB_H755_SERIAL). A missing/broken probe tool is exit 1
+# (infrastructure), never a silent skip.
+#
+# Usage: BLOB_H755_SERIAL=<serial> ./bench_test.sh [--flash]
 set -uo pipefail
 cd "$(dirname "$0")"
 ELF=build/h755_io_analog.elf
 FLASH=0; [ "${1:-}" = "--flash" ] && FLASH=1
 
 # --- select the target ST-LINK ---------------------------------------------------
-# BLOB_H755_SERIAL is the unambiguous identity and REQUIRED when more than one
-# H74x/H75x-family probe is present: the ST-LINK dev-type ("STM32H74x_H75x") does NOT
-# distinguish an H755 from an H743/745/753, and this test FLASHES (destructive) — we
-# must never guess which family board to overwrite. A missing/broken st-info is an
-# INFRASTRUCTURE failure (exit 1, "bench misconfigured"), NOT a skip: only a
-# successful probe that finds zero matching boards skips (exit 2, "board not attached").
+# BLOB_H755_SERIAL is the positive identity. The ST-LINK dev-type ("STM32H74x_H75x")
+# does NOT distinguish an H755 from an H743/745/753, so a family probe alone can never
+# confirm the board — and this test FLASHES (destructive). Rule: FLASHING requires an
+# explicit BLOB_H755_SERIAL; the read-only path may auto-pick a sole family probe. A
+# missing/broken st-info is INFRASTRUCTURE (exit 1), not a skip.
 if [ -n "${BLOB_H755_SERIAL:-}" ]; then
   SERIAL="$BLOB_H755_SERIAL"
   echo "target ST-LINK (BLOB_H755_SERIAL): $SERIAL"
@@ -35,11 +39,15 @@ else
   command -v st-info >/dev/null 2>&1 || { echo "FAIL: st-info not found — bench tooling missing (infrastructure)"; exit 1; }
   PROBE=$(st-info --probe 2>&1) || { echo "FAIL: st-info --probe failed (infrastructure):"; echo "$PROBE" | tail -3; exit 1; }
   mapfile -t CANDS < <(awk '/^[0-9]+\./{ser=""} /serial:/{ser=$2} /dev-type:.*STM32H74x_H75x/{print ser}' <<<"$PROBE")
-  case ${#CANDS[@]} in
-    0) echo "SKIP: no STM32H74x_H75x ST-LINK attached — on-target test not run."; exit 2 ;;
-    1) SERIAL="${CANDS[0]}"; echo "target ST-LINK (sole H74x/H75x): $SERIAL" ;;
-    *) echo "FAIL: ${#CANDS[@]} H74x/H75x probes present — set BLOB_H755_SERIAL to the NUCLEO-H755ZI-Q so the flash cannot hit the wrong board:"; printf '  %s\n' "${CANDS[@]}"; exit 1 ;;
-  esac
+  if [ "${#CANDS[@]}" = 0 ]; then
+    echo "SKIP: no STM32H74x_H75x ST-LINK attached — on-target test not run."; exit 2
+  elif [ "$FLASH" = 1 ]; then
+    echo "SKIP: --flash needs BLOB_H755_SERIAL — the H74x/H75x dev-type cannot confirm this is the H755 (won't risk flashing an H743/745/753). Set BLOB_H755_SERIAL to the board's ST-LINK serial:"; printf '  %s\n' "${CANDS[@]}"; exit 2
+  elif [ "${#CANDS[@]}" = 1 ]; then
+    SERIAL="${CANDS[0]}"; echo "target ST-LINK (sole H74x/H75x, read-only): $SERIAL"
+  else
+    echo "SKIP: ${#CANDS[@]} H74x/H75x probes — set BLOB_H755_SERIAL to pick the board:"; printf '  %s\n' "${CANDS[@]}"; exit 2
+  fi
 fi
 
 if [ "$FLASH" = 1 ]; then
@@ -53,8 +61,17 @@ fi
 
 # --- symbol addresses (resolved from the ELF, never hard-coded) -------------------
 sym() { arm-none-eabi-nm "$ELF" | awk -v s="$1" '$3==s {print "0x"$1; exit}'; }
-IOEXEC=$(sym g_io_exec_us); ADCDMA=$(sym g_adc_dma)
-[ -n "$IOEXEC" ] && [ -n "$ADCDMA" ] || { echo "FAIL: could not resolve g_io_exec_us/g_adc_dma"; exit 1; }
+IOEXEC=$(sym g_io_exec_us); ADCDMA=$(sym g_adc_dma); IOCPOOL=$(sym g_ioc_pool)
+[ -n "$IOEXEC" ] && [ -n "$ADCDMA" ] && [ -n "$IOCPOOL" ] || { echo "FAIL: could not resolve g_io_exec_us/g_adc_dma/g_ioc_pool"; exit 1; }
+# IOC cell 2 = the Pot signal the io thread publishes (ioc_pub(2, adc_read_checked(1))).
+# ioc_t is 32 B: slot[3] (a,b u32 each -> 8 B) at +0/+8/+16, then the `shared` byte at
+# +24 whose bits0-1 index the latest published slot. Reading the published slot's `a`
+# and g_adc_dma at the SAME halt is an exact, input-independent proof the io thread READ
+# the DMA array (REQ-IO-018's read path) — no bus, no floating-value tolerance guessing.
+CELL2=$(( IOCPOOL + 2*32 ))
+S0=$(printf '0x%08x' $CELL2); S1=$(printf '0x%08x' $((CELL2+8))); S2=$(printf '0x%08x' $((CELL2+16)))
+SH=$(printf '0x%08x' $((CELL2+24)))
+M0AR=0x4002001c # DMA1 Stream0 M0AR (destination address register)
 
 # Liveness is proven by STATUS FLAGS, not value diffs: a free-running counter or a
 # quantized ADC sample can read identical at two snapshots (CNT at 20 kHz aliases over
@@ -78,6 +95,7 @@ OUT=$(timeout 30 openocd \
   -c "resume" -c "sleep 600" -c "halt" -c "echo SPLIT" -c "mdw 0x40010034 1" \
   -c "resume" -c "sleep 600" -c "halt" -c "echo SPLIT" \
   -c "mdw 0x40010010 1" -c "mdw 0x40020000 1" -c "mdw 0x40010034 1" -c "mdw $IOX_A 1" \
+  -c "mdw $M0AR 1" -c "mdw $DMA_A 1" -c "mdw $S0 1" -c "mdw $S1 1" -c "mdw $S2 1" -c "mdw $SH 1" \
   -c "resume" -c "shutdown" 2>&1)
 if [ "$(grep -c '^SPLIT$' <<<"$OUT")" != 2 ] || ! grep -qE '0x[0-9a-f]{8}: [0-9a-f]{8}' <<<"$OUT"; then
   echo "FAIL: OpenOCD could not read the target (attached? powered?)"; grep -iE 'error|halt' <<<"$OUT" | tail -3; exit 1
@@ -92,15 +110,19 @@ while read -r addr val; do
 done < <(sed -nE 's/^SPLIT$/SPLIT x/p; s/^(0x[0-9a-f]{8}): ([0-9a-f]{8}).*/\1 \2/p' <<<"$OUT")
 
 # --- assert ----------------------------------------------------------------------
-fails=0
-ck() { if [ "$2" = 1 ]; then printf '  [PASS] %-28s %s\n' "$1" "$3"
-  else printf '  [FAIL] %-28s %s\n' "$1" "$3"; fails=$((fails+1)); fi ; }
+fails=0; total=0
+ck() { total=$((total+1)); if [ "$2" = 1 ]; then printf '  [PASS] %-30s %s\n' "$1" "$3"
+  else printf '  [FAIL] %-30s %s\n' "$1" "$3"; fails=$((fails+1)); fi ; }
 CR1=${P[0:0x40010000]}; BDTR=${P[0:0x40010044]}; CCER=${P[0:0x40010020]}
 PSC=${P[0:0x40010028]}; ARR=${P[0:0x4001002c]}; ADCR=${P[0:0x40022008]}; S0CR=${P[0:0x40020010]}
 CCRa=${P[0:0x40010034]}; CCRb=${P[1:0x40010034]}; CCRc=${P[2:0x40010034]}
 SR=${P[2:0x40010010]}; LISR=${P[2:0x40020000]}; IOX0=${P[0:$IOX_A]}; IOX1=${P[2:$IOX_A]}
 FREQ=$(( 200000000 / ((PSC+1)*(ARR+1)) ))
 ramp_moved=$([ "$CCRa" != "$CCRb" ] || [ "$CCRb" != "$CCRc" ] || [ "$CCRa" != "$CCRc" ] && echo 1||echo 0)
+# read path: DMA destination + the io thread's published cell vs the live DMA array
+M0AR_V=${P[2:0x4002001c]}; DMA_V=$(( ${P[2:$DMA_A]} & 0xFFFF )); IDX=$(( ${P[2:$SH]} & 3 ))
+case $IDX in 0) PUB=${P[2:$S0]};; 1) PUB=${P[2:$S1]};; 2) PUB=${P[2:$S2]};; *) PUB=999999;; esac
+PUB=$(( PUB & 0xFFFF )); rd_diff=$(( PUB>DMA_V ? PUB-DMA_V : DMA_V-PUB ))
 
 echo "== PWM (REQ-IO-021) =="
 ck "TIM1 counter enabled"    "$(( CR1 & 1 ))"           "CR1=$(printf 0x%X $CR1)"
@@ -115,10 +137,12 @@ ck "ADC1 enabled (ADEN)"     "$(( ADCR & 1 ))"          "CR=$(printf 0x%X $ADCR)
 ck "ADC1 started (ADSTART)"  "$(( (ADCR>>2) & 1 ))"     "CR=$(printf 0x%X $ADCR)"
 ck "DMA stream enabled"      "$(( S0CR & 1 ))"          "S0CR=$(printf 0x%X $S0CR)"
 ck "DMA scan completing (TCIF)" "$(( (LISR>>5) & 1 ))"  "DMA1_LISR=$(printf 0x%X $LISR) after clear (a full scan landed)"
+ck "DMA writes g_adc_dma"    "$([ "$M0AR_V" = "$((ADCDMA))" ] && echo 1||echo 0)" "M0AR=$(printf 0x%X $M0AR_V) == g_adc_dma $ADCDMA"
+ck "io read+publish (read path)" "$([ "$rd_diff" -le 256 ] && echo 1||echo 0)" "IOC.pub=$PUB vs g_adc_dma=$DMA_V (|d|=$rd_diff <=256)"
 
 echo "== io thread liveness (sanity, not a REQ-IO-024 recovery proof) =="
 ck "io serve loop advancing" "$([ "$IOX1" -gt "$IOX0" ] && echo 1||echo 0)" "g_io_exec_us $IOX0 -> $IOX1"
 
 echo
-if [ "$fails" = 0 ]; then echo "RESULT: PASS (10/10) — ADC + PWM verified on H755 silicon"; exit 0
-else echo "RESULT: FAIL ($fails check(s)) — regression on target"; exit 1; fi
+if [ "$fails" = 0 ]; then echo "RESULT: PASS ($total/$total) — ADC + PWM verified on H755 silicon"; exit 0
+else echo "RESULT: FAIL ($fails/$total failed) — regression on target"; exit 1; fi
