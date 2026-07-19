@@ -311,18 +311,26 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 		}
 	}
 
-	// reads/writes fan-in per signal across every handler (P1: exactly one each side)
+	// reads/writes fan-in per signal across every handler (P1: exactly one each
+	// side), plus the partition each access runs in — the accessor must live in
+	// the signal's DECLARED application partition or the transport derivation
+	// would use the wrong core
 	mut readers := map[string]int{}
 	mut writers := map[string]int{}
+	mut reader_part := map[string]string{}
+	mut writer_part := map[string]string{}
 	for c in toml_arr(doc, 'fb') {
 		cm := c.as_map()
+		fb_part := thread_part[str_of(cm, 'thread')] or { '' }
 		for h in arr_of(cm, 'handler') {
 			hm := h.as_map()
 			for r in arr_of(hm, 'reads') {
 				readers[r.string()]++
+				reader_part[r.string()] = fb_part
 			}
 			for w in arr_of(hm, 'writes') {
 				writers[w.string()]++
+				writer_part[w.string()] = fb_part
 			}
 		}
 	}
@@ -377,7 +385,10 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 			errs << 'signal "${name}": an io-bound signal needs io on exactly one side (from = "io" for an input, to = "io" for an output)'
 			continue
 		}
-		other := if is_input { to } else { from }
+		mut other := if is_input { to } else { from }
+		if other in thread_part {
+			other = thread_part[other] // a thread endpoint resolves to its partition
+		}
 		if other in bus_names {
 			errs << 'signal "${name}": the non-io side is bus "${other}" — an io signal must pass through the application (REQ-IO-002), never bus-to-pin'
 		} else if !(other in part_names || other in thread_part) {
@@ -393,17 +404,28 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 		} else if sig_ftype[name] != 'bool' {
 			errs << 'signal "${name}": a gpio point carries a bool field (found "${sig_ftype[name]}")'
 		}
-		// producer/consumer counts: exactly one on the application side (P1)
+		// producer/consumer counts: exactly one on the application side (P1),
+		// nothing on the io-owned side, and the accessor in the declared partition
 		if is_output {
 			if 'init' !in pm {
 				errs << 'io.gpio "${name}" is an output and must declare init (the pre-publication pin state)'
 			}
 			if writers[name] != 1 {
 				errs << 'io output "${name}" needs exactly one writing handler (found ${writers[name]}) — zero leaves the pin at init forever, two break SPSC'
+			} else if writer_part[name] != other {
+				errs << 'io output "${name}" is written from partition "${writer_part[name]}" but declares endpoint "${other}" — the writer must live in the declared partition'
+			}
+			if readers[name] > 0 {
+				errs << 'io output "${name}" appears in a handler\'s reads — the io thread owns that channel side (single-reader transport); keep the last command in FB state instead'
 			}
 		} else {
 			if readers[name] != 1 {
 				errs << 'io input "${name}" needs exactly one reading handler (found ${readers[name]}) — P1 is single-consumer (fan-out arrives with the to-list form)'
+			} else if reader_part[name] != other {
+				errs << 'io input "${name}" is read from partition "${reader_part[name]}" but declares endpoint "${other}" — the reader must live in the declared partition'
+			}
+			if writers[name] > 0 {
+				errs << 'io input "${name}" appears in a handler\'s writes — the io thread is its only producer'
 			}
 		}
 	}
