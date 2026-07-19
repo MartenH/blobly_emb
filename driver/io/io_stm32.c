@@ -13,6 +13,7 @@
  * are one BSRR store: atomic set/reset, no read-modify-write, so no faults to
  * count either. Same static 32-entry table shape as io_file.c; no heap. */
 #include "io_port.h"
+#include "board.h"    /* board_io_pin_reserved: the boards-layer pin-ownership table */
 #include <stm32h7xx.h> /* CMSIS family dispatcher (build sets -DSTM32H735xx / -DSTM32H755xx); no HAL */
 
 #define BLOB_IO_MAX 32
@@ -51,10 +52,21 @@ static int pin_parse(const char *s, unsigned int *port, unsigned int *pin) {
 	return 0;
 }
 
+/* Weak default: no platform-owned pads. Lives here (the only caller) so the
+ * symbol always links; a board.c's strong table overrides it (board.h). */
+__attribute__((weak)) int board_io_pin_reserved(int port, int pin) {
+	(void)port;
+	(void)pin;
+	return 0;
+}
+
 int blob_io_cfg(int ch, const char *name, const char *pin, int dir, unsigned int init_val) {
 	(void)name; /* informational on target: the parsed pin IS the table key */
 	if (ch < 0 || ch >= BLOB_IO_MAX || !name || !pin) return -1;
 	if (pin_parse(pin, &g_pt[ch].port, &g_pt[ch].pin) < 0) return -1;
+	/* docs/io.md "pins are exclusive" + REQ-IO-006: a pad the board assigned to
+	 * CAN/SWD/ETH must never be re-muxed by an io point — reject before recording. */
+	if (board_io_pin_reserved((int)g_pt[ch].port, (int)g_pt[ch].pin)) return -1;
 	g_pt[ch].dir = dir ? 1 : 0;
 	g_pt[ch].init = init_val ? 1u : 0u;
 	g_pt[ch].configured = 1;

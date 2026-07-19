@@ -15,4 +15,10 @@ uint64_t board_now_us(void);
 /* FDCAN1 bring-up: HSE kernel clock + APB clock + PH13/PH14 AF9. */
 void board_can_clock_pins_init(void);
 
+/* Platform pin-ownership table (docs/io.md "pins are exclusive"): 1 if the board
+ * already owns PA..PK[port]/pin (CAN, SWD/SWO, ETH PHY, ...) — an io point on such
+ * a pad is rejected at cfg. Weak default (io_stm32.c) reserves nothing; each
+ * board.c overrides with its real table — only the board knows its silicon. */
+int board_io_pin_reserved(int port, int pin);
+
 #endif

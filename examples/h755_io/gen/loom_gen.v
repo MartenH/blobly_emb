@@ -20,8 +20,9 @@ fn handler_app_button_lamp_on_10ms(ctx voidptr) {
 	mut inp := ports.ButtonLampIn{}
 	mut user_button_a := u32(0)
 	mut user_button_b := u32(0)
-	C.ioc_get(0, &user_button_a, &user_button_b)
-	inp.user_button.pressed = user_button_a != 0
+	if C.ioc_get_ever(0, &user_button_a, &user_button_b) != 0 {
+		inp.user_button.pressed = user_button_a != 0
+	}
 	mut outp := ports.ButtonLampOut{}
 	st.button_lamp.on_10ms(inp, mut outp)
 	C.ioc_pub(1, if outp.led_green.on { u32(1) } else { u32(0) }, u32(0))
@@ -141,18 +142,22 @@ fn app_thread_entry(input u32) {
 fn tx_application_define(first_unused voidptr) {
 	// io BEFORE the app threads exist (REQ-IO-009): declare + init the points —
 	// outputs hold their configured init from here — then publish ONE boot sample
-	// per input. Failures count observably; the ECU still starts (degraded).
+	// per input. Input failures count observably (degraded start); an output that
+	// never reached its init level halts BEFORE app dispatch (counter via SWD).
 	if !io.cfg(0, 'UserButton', 'PC13', false, 0) {
 		io_startup_faults++
 	}
 	if !io.cfg(1, 'LedGreen', 'PB0', true, 0) {
 		io_startup_faults++
+		for {} // unconfigured OUTPUT: halt — the app must not run as if it init-ed
 	}
 	if !io.cfg(2, 'LedYellow', 'PE1', true, 0) {
 		io_startup_faults++
+		for {} // unconfigured OUTPUT: halt — the app must not run as if it init-ed
 	}
 	if !io.init() {
 		io_startup_faults++
+		for {} // an output never reached its init level (REQ-IO-009): halt, no app dispatch
 	}
 	if boot_user_button_v := io.gpio_read_checked(0) {
 		C.ioc_pub(0, if boot_user_button_v { u32(1) } else { u32(0) }, u32(0))
