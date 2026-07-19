@@ -117,3 +117,52 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-NET-001"
+
+# 013..017: service-oriented signal/event communication over the datagram
+# service. Capability-level as above — SOME/IP is the first BINDING
+# (docs/someip.md), exactly as DoIP binds REQ-NET-007.
+
+[[req]]
+id = "REQ-NET-013"
+title = "Event publication over the network"
+text = "Configured signal groups shall be publishable over the network datagram service as events, packed by the same build-time codec as bus frames, with the same configured transmission modes (cyclic, on-change, mixed) the bus transport provides."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-001"
+
+[[req]]
+id = "REQ-NET-014"
+title = "Interoperable service wire format"
+text = "Networked events and remote calls shall carry an industry-standard service-oriented message header so that commodity network analyzers and third-party tooling can identify, decode, and generate the traffic without project-specific software."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-001"
+
+[[req]]
+id = "REQ-NET-015"
+title = "Event reception and routing"
+text = "Events received over the network datagram service shall be routed to signals or module endpoints by the same configured frame routing the bus transport uses; unknown or malformed messages shall be counted and dropped, never faulting the ECU."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-001"
+
+[[req]]
+id = "REQ-NET-016"
+title = "Remote procedure call over the network"
+text = "The subsystem shall provide request/response messaging over the network with request-to-response correlation and a distinguishable error response, so that a configured service method can be invoked remotely and its outcome attributed to the originating request."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-001"
+
+[[req]]
+id = "REQ-NET-017"
+title = "Static service endpoints"
+text = "All service communication endpoints (addresses, ports, service and method/event identities) shall be fixed at configuration time; the subsystem shall not depend on runtime service discovery to communicate."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-001"
