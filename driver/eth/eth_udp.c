@@ -31,8 +31,13 @@ int blob_eth_open(const char *bind_ip, unsigned short port) {
 		close(fd);
 		return -1;
 	}
-	// non-blocking: the comm thread must never park on the socket
-	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+	// non-blocking: the comm thread must never park on the socket — a socket
+	// that cannot be made nonblocking is a failed open, not a silent hazard
+	int fl = fcntl(fd, F_GETFL, 0);
+	if (fl < 0 || fcntl(fd, F_SETFL, fl | O_NONBLOCK) < 0) {
+		close(fd);
+		return -1;
+	}
 	return fd;
 }
 

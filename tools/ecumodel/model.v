@@ -815,17 +815,15 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		// the TARGET emitters still generate the CAN telemetry path
 		// unconditionally — an eth binding is host-sim only until the NetX
 		// rung brings the UDP producer to silicon
+		// trace/telemetry-on-eth: the id bindings below stay validated (the P1
+		// surface, and the manifest emitters are ready), but no generated
+		// producer serves either module over eth yet — reject until their
+		// rung, or the accepted stream would be silently absent on the wire
 		if blk == 'telemetry' {
-			if _ := doc.value_opt('target') {
-				errs << '[telemetry] on eth bus "${eth}" with a [target] image — the target telemetry emitter is CAN-only until the NetX rung; keep target telemetry on a CAN bus'
-				continue
-			}
+			errs << '[telemetry] is bound to eth bus "${eth}" — the eth telemetry producer arrives with its own rung (docs/someip.md); keep telemetry on a CAN bus for now'
 		}
-		// trace-on-eth: the id bindings below stay validated (the P1 surface),
-		// but no runner serves an eth trace module yet — reject until the UDP
-		// rung, or the config would silently select a CAN trace path
 		if blk == 'trace' {
-			errs << '[trace] is bound to eth bus "${eth}" — the eth trace egress arrives with the UDP rung (docs/someip.md); keep trace on a CAN bus for now'
+			errs << '[trace] is bound to eth bus "${eth}" — the eth trace egress arrives with its own rung (docs/someip.md); keep trace on a CAN bus for now'
 		}
 		mut bound := 0
 		for kk in mod_id_keys[blk] {

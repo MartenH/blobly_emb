@@ -1049,7 +1049,7 @@ record = 0x8001
 ' +
 		eth_tx_frame + app)
 	assert e.any(it.contains('[trace] record reuses event id'))
-	assert e.any(it.contains('eth trace egress arrives with the UDP rung'))
+	assert e.any(it.contains('eth trace egress arrives with its own rung'))
 	assert e.any(it.contains('[trace] cmd id 0x10 on the eth bus is not an event id'))
 	assert e.any(it.contains('[trace] rsp on the eth bus must be a literal event id'))
 }
@@ -1360,7 +1360,7 @@ bus     = "eth0"
 id      = 0x8005
 ' +
 		eth_tx_frame + app)
-	assert e.any(it.contains('target telemetry emitter is CAN-only'))
+	assert e.any(it.contains('eth telemetry producer arrives'))
 }
 
 fn test_someip_rx_frames_gated_until_p2() {
