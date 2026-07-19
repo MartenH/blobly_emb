@@ -184,3 +184,14 @@ text = "The ECU shall support IP networking over Ethernet such that diagnostics 
 status = "draft"
 method = "test"
 asil = "QM"
+
+[[req]]
+# No heap clause here: SYS-REQ-RES-001 (analysis) owns the no-allocation
+# invariant globally — repeating it under a test-method parent would let the
+# derivation rollup mark it "verified" from functional tests alone.
+id = "SYS-REQ-NET-002"
+title = "Networked application communication"
+text = "The ECU shall exchange application data over the network as configured events and remote calls, statically configured at build time and interoperable with commodity network tooling at the message-envelope level, so that application signals and services are not confined to the bus transports."
+status = "draft"
+method = "test"
+asil = "QM"

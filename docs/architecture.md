@@ -349,7 +349,9 @@ Adding **automotive Ethernet** later is therefore not a rewrite — it slots in
 
 - a generic **PDU transport** port beside `can_port.h` (CAN one backend, UDP another) —
   the role AUTOSAR splits into PduR/SoAd;
-- **SOME/IP** or signal-over-UDP for data (config from ARXML/FIBEX, not DBC);
+- **SOME/IP** for data — designed (docs/someip.md, REQ-NET-013..017): a wire-format
+  subset over the eth-bus frame model, config from ecu.toml (the earlier
+  ARXML/FIBEX assumption is superseded — ARXML import would be host tooling, if ever);
 - **DoIP** for diagnostics (the Ethernet counterpart to ISO-TP/UDS);
 - a sibling **`comm/nm_udp`** (UDP-NM) over the same NM state machine, if NM applies
   on that link at all.
