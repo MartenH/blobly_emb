@@ -2893,7 +2893,18 @@ fn main() {
 	// the same. The lean first cut supports external RX signals (bus -> app), drained + counted
 	// by the comm thread; external TX signals, ISO-TP, and m.routes are not generated yet.
 	comm_thread_on := m.target.threadx && has_bridge
-	multi_here := m.part.threads_of[single_part].len > 1
+	// the sole LOCAL partition (a satellite image = ... partition is external and
+	// makes single_part empty — the guard must count the local one, matching
+	// emit_run_target; codex on emb#150 r8)
+	mut local_part := ''
+	mut n_local := 0
+	for pn, _ in m.part.core_of {
+		if !m.part.external[pn] {
+			local_part = pn
+			n_local++
+		}
+	}
+	multi_here := n_local == 1 && (m.part.threads_of[local_part] or { [] }).len > 1
 	if m.target.threadx && multi_here && m.telem.on && !comm_thread_on {
 		// a multi-thread node with telemetry but NO comm thread (no external
 		// signal/route/isotp bridge) has no bus owner: each app thread is
