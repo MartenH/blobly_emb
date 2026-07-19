@@ -7,9 +7,10 @@ module main
 // CONFIGURED derived layout (lengths, LE offsets, field relations — an
 // endianness or offset regression fails here, not just pattern checks). Then
 // each COM tx mode is asserted by the behavior that DISTINGUISHES it:
-//   cyclic (0x8001): retransmits an UNCHANGED layout on cadence (the app
-//     quantizes its payload to every 4th cycle so repeats must appear), with
-//     the E2E trailer counter stepping loss-free;
+//   cyclic (0x8001): retransmits on PURE cadence — the 400 ms payload steps
+//     land mid-cycle (300 ms), so a change-driven impostor shows an
+//     off-cadence gap that every-gap-at-cadence rejects; unchanged-layout
+//     resends must appear, and the E2E trailer counter steps loss-free;
 //   event  (0x8002): the DEBOUNCE prover — the app steps the value every
 //     100 ms against min_delay 350 ms, so the frame must coalesce: strictly
 //     increasing levels, median pace at the configured delay, progressing
@@ -104,10 +105,18 @@ fn test_tx_modes_on_the_wire() {
 	evs := by_id[id_event] or { []Rx{} }
 	mixed := by_id[id_mixed] or { []Rx{} }
 
-	// ---- cyclic: layout decode + time-driven resends AT THE CONFIGURED rate --
-	// count band: 100 ms over ~3.5 s ≈ 35 — a 200 ms impostor lands ~17 and
-	// fails the floor; an unthrottled one blows the cap
-	assert cyc.len >= 24 && cyc.len <= 48, 'cyclic: ${cyc.len} datagrams (expected ~35 at 100 ms)'
+	// ---- cyclic: layout decode + PURE cadence across the whole window ----
+	// 300 ms over ~3.5 s ≈ 11; the app's payload steps every 400 ms land
+	// MID-cycle, so a mixed impostor's immediate change-send would create an
+	// off-cadence gap — every (non-burst) gap must sit AT the cadence
+	assert cyc.len >= 8 && cyc.len <= 16, 'cyclic: ${cyc.len} datagrams (expected ~11 at 300 ms)'
+	assert cyc.last().at - start > 3000 * time.millisecond, 'cyclic transmission stopped early'
+	for i in 1 .. cyc.len {
+		g := (cyc[i].at - cyc[i - 1].at).milliseconds()
+		if g >= 20 {
+			assert g >= 240, 'cyclic gap ${g} ms — an off-cadence (change-driven) send'
+		}
+	}
 	mut cyc_repeats := 0
 	for i, r in cyc {
 		// the CONFIGURED derived layout: load u8@0, ticks u32@1 LE, wraps
@@ -135,7 +144,9 @@ fn test_tx_modes_on_the_wire() {
 			assert (r.pay[7] & 0x0F) == ((cyc[i - 1].pay[7] & 0x0F) + 1) & 0x0F, 'cyclic E2E counter skipped'
 		}
 	}
-	assert cyc_repeats >= 5, 'cyclic: only ${cyc_repeats} unchanged-layout resends — cadence is not time-driven'
+	assert cyc_repeats >= 2, 'cyclic: only ${cyc_repeats} unchanged-layout resends — cadence is not time-driven'
+	cyc_pace := median_gap_ms(cyc)
+	assert cyc_pace >= 240 && cyc_pace <= 400, 'cyclic median pace ${cyc_pace} ms (configured 300)'
 
 	// ---- event: debounce + change-driven silence ----
 	// the source alternates 1.2 s stepping / 1.2 s holding: coalesced sends
@@ -163,6 +174,7 @@ fn test_tx_modes_on_the_wire() {
 	assert mixed.len >= 8, 'mixed: only ${mixed.len} datagrams'
 	mut repeats := 0
 	mut repeat_gaps := []i64{}
+	mut last_repeat_at := start
 	mut fast_change := false
 	for i, r in mixed {
 		assert r.pay.len == 2, 'mixed payload ${r.pay.len} bytes'
@@ -170,6 +182,7 @@ fn test_tx_modes_on_the_wire() {
 			prev := mixed[i - 1]
 			if le16(r.pay, 0) == le16(prev.pay, 0) {
 				repeats++
+				last_repeat_at = r.at
 				// same burst floor as median_gap_ms: stall-compressed dequeue
 				// gaps must not drag the heartbeat median down
 				g0 := (r.at - prev.at).milliseconds()
@@ -179,8 +192,10 @@ fn test_tx_modes_on_the_wire() {
 			} else {
 				// monotonic, usually +1 — but a stalled bridge legitimately
 				// skips setpoints (IOC keeps only the latest), so no exact
-				// step assert
+				// step assert. Values sit at 1000+n: BOTH bytes are live, so
+				// a byte-swapped packer decodes wildly out of range
 				assert le16(r.pay, 0) > le16(prev.pay, 0), 'mixed setpoint went backwards'
+				assert le16(r.pay, 0) >= 1000 && le16(r.pay, 0) < 1100, 'mixed setpoint ${le16(r.pay, 0)} out of range — layout/endianness'
 				// an off-cycle change must be published BEFORE the next
 				// heartbeat; the 20 ms floor rejects stall-compressed bursts
 				g := (r.at - prev.at).milliseconds()
@@ -196,5 +211,8 @@ fn test_tx_modes_on_the_wire() {
 	repeat_gaps.sort()
 	hb := repeat_gaps[repeat_gaps.len / 2]
 	assert hb >= 240 && hb <= 480, 'mixed: heartbeat median gap ${hb} ms (configured 300)'
+	// and the heartbeat PERSISTS — a sender that stops repeating after a good
+	// start (keeping only change-driven sends) fails this window bound
+	assert last_repeat_at - start > 2500 * time.millisecond, 'mixed: heartbeats stopped early'
 	assert fast_change, 'mixed: no change arrived inside the heartbeat interval — immediate-on-change is missing'
 }

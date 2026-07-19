@@ -44,12 +44,16 @@ to   = "eth0"
 
 # E2E: the appended loss-protection trailer (counter@7, CRC@8 — the derived
 # layout size and the byte after; ecucheck rejects anything else).
+# cycle 300 ms vs the app's 400 ms payload steps: changes land MID-cycle, so
+# a mixed-mode impostor would send off-cadence and fail the harness's
+# every-gap-at-cadence assertion — pure cyclic ignores the change until the
+# next boundary.
 [[frame]]
 name    = "BenchTelem"
 bus     = "eth0"
 id      = 0x8001
 signals = ["BenchLoad", "BenchTicks"]
-tx      = { mode = "cyclic", cycle_ms = 100 }
+tx      = { mode = "cyclic", cycle_ms = 300 }
 e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8 }
 
 # EventVal changes EVERY activation (100 ms) against min_delay 350 ms: the
