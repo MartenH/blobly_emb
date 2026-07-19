@@ -7,6 +7,9 @@ import app
 import loom
 import osal
 import comm.com
+import driver.eth
+import comm.someip
+import comm.e2e
 
 struct Partition_app_state {
 mut:
@@ -42,7 +45,7 @@ pub const someip_service = u16(0x100)
 pub const someip_version = u8(1)
 pub const someip_port = u16(30490)
 pub const someip_peer_ip = [u8(127), 0, 0, 1]!
-pub const someip_peer_port = u16(30490)
+pub const someip_peer_port = u16(30491)
 
 // BenchTelem: tx event 0x8001, 9-byte payload (incl. 2-byte E2E trailer)
 pub const bench_telem_event_id = u16(0x8001)
@@ -50,7 +53,8 @@ pub const bench_telem_len = u8(9)
 pub const bench_telem_e2e_id = u16(0x21)
 pub const bench_telem_e2e_ctr = 7
 pub const bench_telem_e2e_crc = 8
-pub fn bench_telem_pack(mut d [com.max_pdu]u8, s_bench_load sig.BenchLoad, s_bench_ticks sig.BenchTicks) {
+// 64 = com.max_pdu (a literal: V codegen mishandles const-sized mut fixed-array params)
+pub fn bench_telem_pack(mut d [64]u8, s_bench_load sig.BenchLoad, s_bench_ticks sig.BenchTicks) {
 	d[0] = u8(s_bench_load.load)
 	d[1] = u8(s_bench_ticks.ticks)
 	d[2] = u8(u64(s_bench_ticks.ticks) >> 8)
@@ -60,7 +64,51 @@ pub fn bench_telem_pack(mut d [com.max_pdu]u8, s_bench_load sig.BenchLoad, s_ben
 	d[6] = u8(u64(s_bench_ticks.wraps) >> 8)
 }
 
-pub fn run() {
+// --- eth comm thread (eth0): SOME/IP event tx over the UDP seam ---
+pub fn partition_eth0(sock eth.Socket) {
+	osal.pin_to_core(0)
+	mut tx_bench_telem_st := com.TxState{
+		mode: com.TxMode.cyclic
+		cycle_us: 100000
+		min_delay_us: 0
+	}
+	mut e2e_tx_bench_telem := e2e.TxState{}
+	mut dgram := [80]u8{} // someip.header_len + com.max_pdu
+	for {
+		now := osal.now_us()
+		mut pay_bench_telem := [64]u8{} // com.max_pdu
+		mut any_bench_telem := false
+		mut s_bench_load := sig.BenchLoad{}
+		if osal.ioc_acquire2(bench_load_ch, &s_bench_load, u8(sizeof(s_bench_load))) {
+			any_bench_telem = true
+		}
+		mut s_bench_ticks := sig.BenchTicks{}
+		if osal.ioc_acquire2(bench_ticks_ch, &s_bench_ticks, u8(sizeof(s_bench_ticks))) {
+			any_bench_telem = true
+		}
+		bench_telem_pack(mut pay_bench_telem, s_bench_load, s_bench_ticks)
+		if any_bench_telem && tx_bench_telem_st.should_send(now, pay_bench_telem, bench_telem_len) {
+			pre_bench_telem := pay_bench_telem // pre-E2E payload, for change detection
+			e2e_save_bench_telem := e2e_tx_bench_telem
+			e2e_tx_bench_telem.protect(&pay_bench_telem[0], int(bench_telem_len), bench_telem_e2e_id, bench_telem_e2e_crc, bench_telem_e2e_ctr)
+			h_bench_telem := someip.notification(someip_service, bench_telem_event_id, someip_version, int(bench_telem_len))
+			n_bench_telem := someip.encode(h_bench_telem, &dgram[0])
+			for i in 0 .. int(bench_telem_len) {
+				dgram[n_bench_telem + i] = pay_bench_telem[i]
+			}
+			if sock.send(someip_peer_ip, someip_peer_port, &dgram[0], n_bench_telem + int(bench_telem_len)) {
+				tx_bench_telem_st.mark_sent(now, pre_bench_telem, bench_telem_len)
+			} else {
+				e2e_tx_bench_telem = e2e_save_bench_telem // unsent: keep the counter honest
+			}
+		}
+		osal.sleep_us(1000)
+	}
+}
+
+pub fn run(eth0_sock eth.Socket) {
 	t_app := spawn partition_app(0, unsafe { nil })
+	t_eth0 := spawn partition_eth0(eth0_sock)
 	t_app.wait()
+	t_eth0.wait()
 }
