@@ -8,7 +8,7 @@ MEMORY
 {
     FLASH (rx) : ORIGIN = 0x08000000, LENGTH = 1024K
     RAM  (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
-    D2SRAM (wx) : ORIGIN = 0x30000000, LENGTH = 0x00008000   /* 32 KiB D2 AHB SRAM: DMA-reachable (ADC) */
+    D2SRAM (wx) : ORIGIN = 0x30040000, LENGTH = 0x00008000   /* D2 SRAM3: DMA-reachable, clear of the CM4 AMP image's SRAM1 (codex emb#152) */
 }
 
 _estack = ORIGIN(RAM) + LENGTH(RAM);

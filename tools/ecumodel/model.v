@@ -545,6 +545,16 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 			}
 		}
 	}
+	// the H7 ADC regular sequence holds at most 16 ranks — one per adc point
+	mut n_adc := 0
+	for pi2, _ in points {
+		if point_kind[pi2] == 'adc' {
+			n_adc++
+		}
+	}
+	if n_adc > 16 {
+		errs << 'io.adc: ${n_adc} analog points exceed the 16-channel ADC scan sequence — split across a second ADC (a later phase) or reduce points'
+	}
 	// every io-bound signal must have its point (the reverse of one-to-one)
 	for sname, from in sig_from {
 		if (from == 'io' || sig_to[sname] == 'io') && sname !in seen_point {

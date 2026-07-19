@@ -71,8 +71,8 @@ static int pt_write_value(const char *name, unsigned int val) {
 
 int blob_io_cfg(int ch, const char *name, const char *pin, int dir, unsigned int init_val, int active_low, int kind, unsigned int param) {
 	(void)active_low; /* the host mirror is LOGICAL by definition — polarity is a pad property */
+	if (ch < 0 || ch >= BLOB_IO_MAX || !name || !pin) return -1; /* bound BEFORE indexing g_pt (codex emb#152) */
 	g_pt[ch].adc_max = (kind == IO_ADC) ? (param ? param : 0xFFFFFFFFul) : 0;
-	if (ch < 0 || ch >= BLOB_IO_MAX || !name || !pin) return -1;
 	strncpy(g_pt[ch].name, name, sizeof(g_pt[ch].name) - 1);
 	g_pt[ch].name[sizeof(g_pt[ch].name) - 1] = '\0';
 	strncpy(g_pt[ch].pin, pin, sizeof(g_pt[ch].pin) - 1);
