@@ -45,7 +45,10 @@ static int pt_write_file(const char *name, int level) {
 	char tmp[128], path[128];
 	snprintf(tmp, sizeof(tmp), "io/.%s.drv.tmp", name);
 	pt_path(path, sizeof(path), name);
-	int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+	/* never follow a planted symlink at the tmp path: drop any stale entry,
+	 * then create exclusively */
+	unlink(tmp);
+	int fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0666);
 	if (fd < 0) return -1;
 	const char *v = level ? "1\n" : "0\n";
 	ssize_t n = write(fd, v, 2);

@@ -51,6 +51,8 @@ fn partition_io() {
 		now := osal.now_us()
 		if next_us > now {
 			osal.sleep_us(next_us - now)
+		} else {
+			next_us = now // overrun: resync, skip missed ticks — no burst catch-up
 		}
 		if user_button_v := io.gpio_read_checked(0) {
 			mut user_button := sig.UserButton{ pressed: user_button_v }

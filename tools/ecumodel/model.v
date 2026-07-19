@@ -404,12 +404,13 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 			continue
 		}
 		mut other := if is_input { to } else { from }
-		if other in thread_part {
-			other = thread_part[other] // a thread endpoint resolves to its partition
-		}
+		// bus check FIRST: a bus and a thread may share a name, and the alias
+		// rewrite would launder a bus endpoint into a partition
 		if other in bus_names {
 			errs << 'signal "${name}": the non-io side is bus "${other}" — an io signal must pass through the application (REQ-IO-002), never bus-to-pin'
-		} else if !(other in part_names || other in thread_part) {
+		} else if other in thread_part {
+			other = thread_part[other] // a thread endpoint resolves to its partition
+		} else if other !in part_names {
 			errs << 'signal "${name}": endpoint "${other}" is not a declared partition or thread'
 		}
 		if sig_has_transport[name] {
