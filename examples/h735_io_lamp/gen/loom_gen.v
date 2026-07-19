@@ -11,30 +11,19 @@ import driver.can
 
 struct Partition_app_state {
 mut:
-	button_lamp app.ButtonLamp
-	heartbeat app.Heartbeat
+	remote_lamp app.RemoteLamp
 }
 
-fn handler_app_button_lamp_on_10ms(ctx voidptr) {
+fn handler_app_remote_lamp_on_10ms(ctx voidptr) {
 	mut st := unsafe { &Partition_app_state(ctx) }
-	mut inp := ports.ButtonLampIn{}
-	mut user_button_a := u32(0)
-	mut user_button_b := u32(0)
-	if C.ioc_get_ever(1, &user_button_a, &user_button_b) != 0 {
-		inp.user_button.pressed = user_button_a != 0
-	}
-	mut outp := ports.ButtonLampOut{}
-	st.button_lamp.on_10ms(inp, mut outp)
-	C.ioc_pub(2, if outp.led_green.on { u32(1) } else { u32(0) }, u32(0))
-	C.ioc_pub(0, if outp.btn_pressed.pressed { u32(1) } else { u32(0) }, u32(0))
-}
-
-fn handler_app_heartbeat_on_500ms(ctx voidptr) {
-	mut st := unsafe { &Partition_app_state(ctx) }
-	mut inp := ports.HeartbeatIn{}
-	mut outp := ports.HeartbeatOut{}
-	st.heartbeat.on_500ms(inp, mut outp)
-	C.ioc_pub(3, if outp.led_yellow.on { u32(1) } else { u32(0) }, u32(0))
+	mut inp := ports.RemoteLampIn{}
+	mut btn_pressed_a := u32(0)
+	mut btn_pressed_b := u32(0)
+	C.ioc_get(0, &btn_pressed_a, &btn_pressed_b)
+	inp.btn_pressed.pressed = btn_pressed_a != 0
+	mut outp := ports.RemoteLampOut{}
+	st.remote_lamp.on_10ms(inp, mut outp)
+	C.ioc_pub(1, if outp.led_remote.on { u32(1) } else { u32(0) }, u32(0))
 }
 
 fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)
@@ -73,8 +62,7 @@ __global (
 pub fn run() {
 	mut st := Partition_app_state{}
 	mut sched := &g_sched_app // module-sized: lives in bss, not this lifetime frame
-	sched.every(10000, handler_app_button_lamp_on_10ms, &st)
-	sched.every(500000, handler_app_heartbeat_on_500ms, &st)
+	sched.every(10000, handler_app_remote_lamp_on_10ms, &st)
 	tick_us := u64(1000)
 	for {
 		t0 := C.board_now_us()
@@ -116,20 +104,10 @@ fn io_thread_entry(input u32) {
 		tick += missed
 		next_us += missed * 10000
 		t0 := C.board_now_us()
-		if user_button_v := io.gpio_read_checked(0) {
-			C.ioc_pub(1, if user_button_v { u32(1) } else { u32(0) }, u32(0))
-		}
-		mut led_green_a := u32(0)
-		mut led_green_b := u32(0)
-		if C.ioc_get_ever(2, &led_green_a, &led_green_b) != 0 {
-			io.gpio_write(1, led_green_a != 0) // freshness-gated: init holds until the first publish
-		}
-		if (tick + 1) % 10 == 0 { // 100 ms point on the 10 ms tick
-			mut led_yellow_a := u32(0)
-			mut led_yellow_b := u32(0)
-			if C.ioc_get_ever(3, &led_yellow_a, &led_yellow_b) != 0 {
-				io.gpio_write(2, led_yellow_a != 0) // freshness-gated: init holds until the first publish
-			}
+		mut led_remote_a := u32(0)
+		mut led_remote_b := u32(0)
+		if C.ioc_get_ever(1, &led_remote_a, &led_remote_b) != 0 {
+			io.gpio_write(0, led_remote_a != 0) // freshness-gated: init holds until the first publish
 		}
 		t1 := C.board_now_us()
 		sched.account(t1 - t0, t1) // serve time -> the io thread's load slot
@@ -151,12 +129,16 @@ fn comm_thread_entry(input u32) {
 	C.comm_rx_irq_enable() // arm the FDCAN Rx-FIFO0 interrupt now the bus is open
 	mut last_telem := u64(0)
 	telem_period_us := u64(1000000)
-	mut last_tx_btn_pressed := u64(0)
 	mut rx := can.Frame{}
 	for {
 		C.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame
 		// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame
 		for ch.recv(mut rx) {
+			if rx.id == u32(0x310) && rx.len == 4 { // button_state
+				g_rx_count++
+				g_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)
+				C.ioc_pub(0, g_rx_last, u32(0))
+			}
 		}
 		t1 := C.board_now_us()
 		// PRODUCER: CpuLoad telemetry — reads the FB thread's load scratch
@@ -166,30 +148,13 @@ fn comm_thread_entry(input u32) {
 			load[0] = u16(C.load_sum_permille()) // sum of the FB threads (one core)
 			frame := telem.encode_cpuload(load, 1)
 			mut f := can.Frame{
-				id:  u32(0x7e0)
+				id:  u32(0x7e8)
 				len: 8
 			}
 			for i in 0 .. 8 {
 				f.data[i] = frame[i]
 			}
 			ch.send(f)
-		}
-		// PRODUCER: external tx signal "BtnPressed" — read the FB-published IOC
-		// cell, encode the value (LE at byte 0), and send it cyclically (tx_ready-gated).
-		if t1 - last_tx_btn_pressed >= u64(100000) && ch.tx_ready() {
-			last_tx_btn_pressed = t1
-			mut tv_a := u32(0)
-			mut tv_b := u32(0)
-			C.ioc_get(0, &tv_a, &tv_b)
-			mut tf := can.Frame{
-				id:  u32(0x310)
-				len: 4
-			}
-			tf.data[0] = u8(tv_a & 0xff)
-			tf.data[1] = u8((tv_a >> 8) & 0xff)
-			tf.data[2] = u8((tv_a >> 16) & 0xff)
-			tf.data[3] = u8((tv_a >> 24) & 0xff)
-			ch.send(tf)
 		}
 	}
 }
@@ -200,25 +165,13 @@ fn tx_application_define(first_unused voidptr) {
 	// outputs hold their configured init from here — then publish ONE boot sample
 	// per input. Input failures count observably (degraded start); an output that
 	// never reached its init level halts BEFORE app dispatch (counter via SWD).
-	if !io.cfg(0, 'UserButton', 'PC13', false, 0) {
-		io_startup_faults++
-	}
-	if !io.cfg(1, 'LedGreen', 'PB0', true, 0) {
-		io_startup_faults++
-		for {} // unconfigured OUTPUT: halt — the app must not run as if it init-ed
-	}
-	if !io.cfg(2, 'LedYellow', 'PE1', true, 0) {
+	if !io.cfg(0, 'LedRemote', 'PC3', true, 0) {
 		io_startup_faults++
 		for {} // unconfigured OUTPUT: halt — the app must not run as if it init-ed
 	}
 	if !io.init() {
 		io_startup_faults++
 		for {} // an output never reached its init level (REQ-IO-009): halt, no app dispatch
-	}
-	if boot_user_button_v := io.gpio_read_checked(0) {
-		C.ioc_pub(1, if boot_user_button_v { u32(1) } else { u32(0) }, u32(0))
-	} else {
-		io_startup_faults++ // unreadable at boot: publish NOTHING (no fabricated sample)
 	}
 	C._tx_thread_create(&g_app_tcb[0], c'app', app_thread_entry, u32(0),
 		&g_app_stack[0], u32(g_app_stack.len), u32(10), u32(10), u32(0), u32(1))

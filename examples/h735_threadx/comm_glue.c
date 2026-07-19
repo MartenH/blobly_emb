@@ -36,6 +36,18 @@ void ioc_get(int i, unsigned *a, unsigned *b) {
     if (i >= 0 && i < IOC_POOL_N) v = ioc_read(&g_ioc_pool[i]);
     *a = v.a; *b = v.b;
 }
+/* ioc_get_ever — glue-contract completeness (the io_glue.c ever-published gate): 1 once
+ * the cell has EVER been published, latched race-free IN the consuming exchange
+ * (ioc_read_ever); seen[] is sticky and reader-private (one reader per cell). */
+int ioc_get_ever(int i, unsigned *a, unsigned *b) {
+    static unsigned char seen[IOC_POOL_N];
+    if (i < 0 || i >= IOC_POOL_N) { *a = 0; *b = 0; return 0; }
+    int ever = 0;
+    sig_t v = ioc_read_ever(&g_ioc_pool[i], &ever);
+    if (ever) seen[i] = 1;
+    *a = v.a; *b = v.b;
+    return seen[i];
+}
 
 /* shell_ps: the `ps` command — walk ThreadX's created-thread list and format one line per
  * thread: name, priority, state, stack used/size (high-water = first untouched byte from the
@@ -168,7 +180,7 @@ static TX_SEMAPHORE g_comm_sem;
  * thread keeps sending a stale value. Single-writer/single-reader scalars need no lock; volatile
  * is enough. The wait-free triple-buffer IOC replaces this when the target IOC layer lands
  * (6b-2b); V can't emit volatile globals, so it lives here as thin target glue for now. */
-#define LOAD_SLOTS 4  /* one per FB thread (ecumodel caps threads at 4) */
+#define LOAD_SLOTS 5  /* FB threads (ecumodel caps at 4) + the platform io thread */
 static volatile unsigned short g_ld_pm[LOAD_SLOTS], g_ld_100[LOAD_SLOTS],
                                g_ld_1s[LOAD_SLOTS], g_ld_10s[LOAD_SLOTS];
 static volatile unsigned g_ld_ovr[LOAD_SLOTS];

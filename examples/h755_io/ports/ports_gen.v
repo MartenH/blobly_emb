@@ -12,6 +12,8 @@ pub struct ButtonLampOut {
 pub mut:
 	// signal "LedGreen" — ch, transport triple, app -> io
 	led_green sig.LedGreen
+	// signal "BtnPressed" — ch, transport double, app -> can0
+	btn_pressed sig.BtnPressed
 }
 
 pub struct HeartbeatIn {
