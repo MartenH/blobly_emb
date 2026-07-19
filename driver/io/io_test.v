@@ -23,8 +23,8 @@ fn teardown(dir string) {
 
 fn test_init_creates_output_files_only() {
 	dir := setup('init')
-	assert cfg(0, 'LedGreen', 'PB0', true, 1)
-	assert cfg(1, 'UserButton', 'PC13', false, 0)
+	assert cfg(0, 'LedGreen', 'PB0', true, 1, 0)
+	assert cfg(1, 'UserButton', 'PC13', false, 0, 0)
 	assert init()
 	assert os.read_file('io/LedGreen')!.trim_space() == '1'
 	// input: NO driver-created file — a seeded value would be published at
@@ -37,7 +37,7 @@ fn test_init_creates_output_files_only() {
 
 fn test_write_read_round_trip() {
 	dir := setup('rt')
-	assert cfg(0, 'LedGreen', 'PB0', true, 0)
+	assert cfg(0, 'LedGreen', 'PB0', true, 0, 0)
 	assert init()
 	gpio_write(0, true)
 	assert gpio_read(0) == true
@@ -48,7 +48,7 @@ fn test_write_read_round_trip() {
 
 fn test_garbage_file_returns_last_good() {
 	dir := setup('lastgood')
-	assert cfg(0, 'UserButton', 'PC13', false, 0)
+	assert cfg(0, 'UserButton', 'PC13', false, 0, 0)
 	assert init()
 	os.write_file('io/UserButton', '1\n')!
 	assert gpio_read(0) == true // real value: last-good is now 1
@@ -75,11 +75,28 @@ fn test_garbage_file_returns_last_good() {
 
 fn test_temp_rename_leaves_no_tmp() {
 	dir := setup('tmp')
-	assert cfg(0, 'LedGreen', 'PB0', true, 0)
+	assert cfg(0, 'LedGreen', 'PB0', true, 0, 0)
 	assert init()
 	gpio_write(0, true)
 	assert !os.exists('io/.LedGreen.drv.tmp')
 	files := os.ls('io')!
 	assert files == ['LedGreen']
 	teardown(dir)
+}
+
+// @verifies REQ-IO-015
+// active_low is a pad property: the host mirror (and every consumer above the
+// driver) stays LOGICAL — cfg accepts the flag and read/write semantics are
+// unchanged from the caller's side. (The pad-level inversion itself is
+// silicon behavior: bench-verified on the H735G-DK's active-low lamp.)
+fn test_active_low_is_logical_above_the_pad() {
+	close()
+	assert cfg(0, 'LampAL', 'PB0', true, 0, 1) // active-low lamp, logically off
+	assert init()
+	gpio_write(0, true) // logically ON
+	// the host mirror reads back the LOGICAL value: polarity never leaks up
+	assert gpio_read(0) == true
+	gpio_write(0, false)
+	assert gpio_read(0) == false
+	close()
 }

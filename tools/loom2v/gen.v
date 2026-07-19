@@ -372,6 +372,7 @@ struct IoPoint {
 	pin         string
 	period_ms   int
 	init        bool
+	active_low  bool // pad polarity (REQ-IO-015): logical true = pad LOW
 	output      bool
 	ch          int
 	has_default bool // input only: the port field's pre-first-sample value
@@ -395,6 +396,7 @@ fn parse_io(doc toml.Doc, sig_of map[string]SigInfo) ([]IoPoint, int) {
 			pin:         (pm['pin'] or { toml.Any('') }).string()
 			period_ms:   int((pm['period_ms'] or { toml.Any(0) }).int())
 			init:        (pm['init'] or { toml.Any(false) }).bool()
+			active_low:  (pm['active_low'] or { toml.Any(false) }).bool()
 			output:      si.io_out
 			ch:          points.len
 			has_default: 'default' in pm
@@ -1110,7 +1112,8 @@ fn emit_io_target_boot(m Model, ioc_idx map[string]int) []string {
 	}
 	for pt in m.io_points {
 		iv := if pt.init { 1 } else { 0 }
-		g << "\tif !io.cfg(${pt.ch}, '${pt.name}', '${pt.pin}', ${pt.output}, ${iv}) {"
+		al := if pt.active_low { 1 } else { 0 }
+		g << "\tif !io.cfg(${pt.ch}, '${pt.name}', '${pt.pin}', ${pt.output}, ${iv}, ${al}) {"
 		g << '\t\tio_startup_faults++'
 		if pt.output {
 			g << '\t\tio_out_fault = true // halt LATER: first let the valid outputs init'
@@ -2217,7 +2220,8 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 			// thread's periodic reads then use last-good semantics as usual.
 			for pt in m.io_points {
 				iv := if pt.init { 1 } else { 0 }
-				glue << "\tif !io.cfg(${pt.ch}, '${pt.name}', '${pt.pin}', ${pt.output}, ${iv}) {"
+				hal := if pt.active_low { 1 } else { 0 }
+				glue << "\tif !io.cfg(${pt.ch}, '${pt.name}', '${pt.pin}', ${pt.output}, ${iv}, ${hal}) {"
 				glue << "\t\tpanic('io cfg failed: ${pt.name}')"
 				glue << '\t}'
 			}

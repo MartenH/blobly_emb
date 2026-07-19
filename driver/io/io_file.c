@@ -62,7 +62,8 @@ static int pt_write_file(const char *name, int level) {
 	return 0;
 }
 
-int blob_io_cfg(int ch, const char *name, const char *pin, int dir, unsigned int init_val) {
+int blob_io_cfg(int ch, const char *name, const char *pin, int dir, unsigned int init_val, int active_low) {
+	(void)active_low; /* the host mirror is LOGICAL by definition — polarity is a pad property */
 	if (ch < 0 || ch >= BLOB_IO_MAX || !name || !pin) return -1;
 	strncpy(g_pt[ch].name, name, sizeof(g_pt[ch].name) - 1);
 	g_pt[ch].name[sizeof(g_pt[ch].name) - 1] = '\0';
