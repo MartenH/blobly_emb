@@ -8,7 +8,7 @@
  * directly and is NOT placed here (Phase 3 dumps over semihosting, no CAN yet). */
 MEMORY
 {
-  RAM   (wx) : ORIGIN = 0x10000000, LENGTH = 0x00048000   /* 288 KiB D2 SRAM1+2+3 */
+  RAM   (wx) : ORIGIN = 0x10000000, LENGTH = 0x00040000   /* 256 KiB D2 SRAM1+2 (SRAM3 reserved for CM7 ADC DMA, emb#152) */
   FLASH (rx) : ORIGIN = 0x08100000, LENGTH = 0x000C0000   /* 768 KiB: bank-2 head.
                                   The TAIL (sectors 6+7, 0x081C0000..0x08200000) is
                                   RESERVED for the NvM journal pair (docs/nvm.md) —
