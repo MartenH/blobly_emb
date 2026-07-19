@@ -904,7 +904,8 @@ peer    = "192.168.0.10"
 }
 
 fn test_someip_e2e_trailer_counts_toward_the_bound() {
-	// 8 u64 fields = exactly 64 bytes of layout; the 2-byte E2E trailer tips it
+	// 8 u64 fields = exactly 64 bytes of layout; the 2-byte E2E trailer tips it.
+	// Positions 0/1 are also wrong: the trailer appends at 64/65.
 	e := errs_of(eth_head +
 		'
 [[signal]]
@@ -922,6 +923,101 @@ e2e     = { data_id = 1, crc_pos = 0, counter_pos = 1 }
 ' +
 		app)
 	assert e.any(it.contains('E2E trailer included'))
+	assert e.any(it.contains('counter_pos must equal the derived layout size (64)'))
+}
+
+fn test_someip_e2e_trailer_at_derived_offsets_ok() {
+	// 6-byte layout: counter at 6, crc at 7 — valid, and within the bound
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "Speed"
+fields = { kph = "u32", flags = "u16" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "SpeedEvt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Speed"]
+e2e     = { data_id = 1, counter_pos = 6, crc_pos = 7 }
+' +
+		app)
+	assert e == []
+}
+
+fn test_someip_secoc_on_eth_rejected() {
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "S"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "F"
+bus     = "eth0"
+id      = 0x8001
+signals = ["S"]
+secoc   = { key = "k1", data_id = 1, fresh_pos = 1, mac_pos = 2, mac_len = 4 }
+' +
+		app)
+	assert e.any(it.contains('SecOC on eth is not defined'))
+}
+
+fn test_someip_signal_with_eth_on_both_sides_rejected() {
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "Loop"
+fields = { v = "u8" }
+from = "eth0"
+to   = "eth0"
+
+[[frame]]
+name    = "F"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Loop"]
+' +
+		app)
+	assert e.any(it.contains('names eth bus "eth0" on BOTH sides'))
+}
+
+fn test_someip_shell_on_eth_rejected_until_rpc() {
+	e := errs_of(eth_head + '
+[shell]
+bus = "eth0"
+in  = 0x8010
+out = 0x8011
+fc  = 0x8012
+' +
+		eth_tx_frame + app)
+	assert e.any(it.contains('eth shell arrives with the RPC phase'))
+}
+
+fn test_someip_trace_inherits_telemetry_bus() {
+	// [trace] omits bus -> inherits [telemetry].bus (the generators do); its
+	// bad id must be caught even though telemetry itself is default-disabled
+	e := errs_of(eth_head + '
+[telemetry]
+bus = "eth0"
+
+[trace]
+cmd = 0x0010
+' + eth_tx_frame + app)
+	assert e.any(it.contains('[trace] cmd id 0x10 on the eth bus is not an event id'))
+}
+
+fn test_someip_module_without_endpoints_is_not_traffic() {
+	e := errs_of(eth_head + '
+[trace]
+bus = "eth0"
+' + app)
+	assert e.any(it.contains('[trace] is bound to eth bus "eth0" but binds no valid endpoint id'))
+	assert e.any(it.contains('nothing rides bus "eth0"'))
 }
 
 fn test_someip_module_ids_join_the_event_space() {

@@ -432,7 +432,9 @@ fn validate_someip(doc toml.Doc) []string {
 			} else {
 				sig_frame[sname] = fname
 			}
-			if sig_to[sname] == eth {
+			if sig_from[sname] == eth && sig_to[sname] == eth {
+				errs << 'signal "${sname}" names eth bus "${eth}" on BOTH sides — a signal has the bus on exactly one side (the bridge cannot hold both channel roles: SPSC)'
+			} else if sig_to[sname] == eth {
 				ntx++
 			} else if sig_from[sname] == eth {
 				nrx++
@@ -447,9 +449,24 @@ fn validate_someip(doc toml.Doc) []string {
 		if ntx > 0 && nrx > 0 {
 			errs << 'eth frame "${fname}" mixes tx and rx signals — one direction per frame (a mixed frame would make the bridge a second writer on an SPSC channel)'
 		}
-		// the E2E loss protection is an APPENDED trailer on eth (counter byte +
-		// CRC byte, docs/someip.md) — it counts toward the bound
-		if 'e2e' in fm {
+		// SecOC has no eth story yet: the derived payload reserves no
+		// freshness/MAC bytes and no appended auth layout is defined
+		if 'secoc' in fm {
+			errs << 'eth frame "${fname}" declares secoc — SecOC on eth is not defined (no reserved freshness/MAC bytes in the derived layout); an appended auth layout is its own rung'
+		}
+		// the E2E loss protection is an APPENDED trailer on eth (docs/someip.md):
+		// the counter byte sits at the derived layout size, the CRC after it —
+		// comm/e2e.protect writes THROUGH the configured positions, so anything
+		// else would overwrite signal bytes, not append. The trailer counts
+		// toward the bound.
+		if ev := fm['e2e'] {
+			evm := ev.as_map()
+			cpos := (evm['counter_pos'] or { toml.Any(i64(-1)) }).i64()
+			crc := (evm['crc_pos'] or { toml.Any(i64(-1)) }).i64()
+			if cpos != size || crc != size + 1 {
+				errs << 'eth frame "${fname}" E2E is an appended trailer: counter_pos must equal the derived layout size (${size}) and crc_pos ${
+					size + 1} (got ${cpos}/${crc}) — other positions overwrite signal bytes'
+			}
 			size += 2
 		}
 		if size > 64 {
@@ -467,14 +484,21 @@ fn validate_someip(doc toml.Doc) []string {
 	}
 
 	// ENABLED modules bound to the eth bus count as eth traffic for the pairing
-	// rule, and their endpoint ids join the shared event-id space (unique across
-	// ALL bindings, docs/someip.md). Defaults mirror loom2v: telemetry is off
-	// unless enabled, the others on unless disabled. NM on eth is its own phase
-	// (comm/nm_udp, docs/architecture.md) — reject it rather than half-bind it.
+	// rule — but only once at least one endpoint id is validly bound (a block
+	// that names the bus with no endpoints has nothing riding it). Their ids
+	// join the shared event-id space (unique across ALL bindings,
+	// docs/someip.md). Defaults mirror loom2v: telemetry is off unless enabled,
+	// the others on unless disabled; trace and shell INHERIT [telemetry].bus
+	// when they omit their own (the generators do). NM on eth is its own phase
+	// (comm/nm_udp), and the eth shell is the RPC phase (P3: method-form + the
+	// access gate) — both rejected rather than half-bound as events.
 	mod_id_keys := {
 		'trace':     ['cmd', 'rsp', 'record', 'dump_fc']
 		'telemetry': ['id', 'detail_id']
-		'shell':     ['in', 'out', 'fc']
+	}
+	mut telem_bus := ''
+	if tv := doc.value_opt('telemetry') {
+		telem_bus = str_of(tv.as_map(), 'bus')
 	}
 	mut mod_on_eth := false
 	for blk in ['trace', 'telemetry', 'shell', 'nm'] {
@@ -482,14 +506,22 @@ fn validate_someip(doc toml.Doc) []string {
 		bm := bt.as_map()
 		def_on := blk != 'telemetry'
 		on := (bm['enabled'] or { toml.Any(def_on) }).bool()
-		if eth == '' || !on || str_of(bm, 'bus') != eth {
+		mut mbus := str_of(bm, 'bus')
+		if 'bus' !in bm && blk in ['trace', 'shell'] {
+			mbus = telem_bus
+		}
+		if eth == '' || !on || mbus != eth {
 			continue
 		}
 		if blk == 'nm' {
 			errs << '[nm] is bound to eth bus "${eth}" — NM over eth (comm/nm_udp) is its own phase and is not generated; keep NM on a CAN bus'
 			continue
 		}
-		mod_on_eth = true
+		if blk == 'shell' {
+			errs << '[shell] is bound to eth bus "${eth}" — the eth shell arrives with the RPC phase (P3: method-form request/response + the access gate, docs/someip.md); keep the shell on a CAN bus'
+			continue
+		}
+		mut bound := 0
 		for kk in mod_id_keys[blk] {
 			v := bm[kk] or { continue }
 			if v is i64 {
@@ -499,10 +531,16 @@ fn validate_someip(doc toml.Doc) []string {
 					errs << '[${blk}] ${kk} reuses event id 0x${v.hex()} (already bound by "${seen_ids[v]}") — ids are unique across all bindings'
 				} else {
 					seen_ids[v] = '[${blk}] ${kk}'
+					bound++
 				}
 			} else {
 				errs << '[${blk}] ${kk} on the eth bus must be a literal event id — there is no DBC to resolve a name against'
 			}
+		}
+		if bound == 0 {
+			errs << '[${blk}] is bound to eth bus "${eth}" but binds no valid endpoint id — nothing rides the bus (the generator would default ids outside the event range)'
+		} else {
+			mod_on_eth = true
 		}
 	}
 
