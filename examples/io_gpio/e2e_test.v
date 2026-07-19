@@ -33,21 +33,23 @@ fn test_button_drives_led() {
 		os.rmdir_all(work) or {}
 	}
 
-	// startup: poll from process start — the FIRST observed value must be the
-	// driver-established init (1), held by the freshness gate for at least one
-	// 10 ms handler period, and only THEN the app's unpressed command (0). A
-	// first-seen 0 would mean the init hold never happened.
+	// startup: run() prints the fault line AFTER io init + boot publish and
+	// BEFORE spawning any thread — a deterministic barrier. At that instant
+	// LedGreen must already hold the driver-established init (1); no thread
+	// has run yet, so a loaded host cannot race the app's first command past
+	// this assert.
 	led := os.join_path(work, 'io', 'LedGreen')
-	mut first := ''
+	mut barrier := ''
 	for _ in 0 .. 5000 {
-		v := (os.read_file(led) or { '' }).trim_space()
-		if v == '1' || v == '0' {
-			first = v
+		barrier = p.stderr_read()
+		if barrier.contains('startup fault') {
 			break
 		}
 		time.sleep(1 * time.millisecond)
 	}
-	assert first == '1', 'first observed LedGreen was "${first}" — init (1) must precede the app command (0)'
+	assert barrier.contains('startup fault'), 'no pre-spawn stderr barrier observed'
+	first := (os.read_file(led) or { '' }).trim_space()
+	assert first == '1', 'at the pre-spawn barrier LedGreen was "${first}" — init (1) not established'
 
 	// then the app's first command lands: 0, button unpressed. With no
 	// io/UserButton file the checked reads publish NOTHING, so this 0 is the
@@ -66,8 +68,7 @@ fn test_button_drives_led() {
 	assert !os.exists(os.join_path(work, 'io', 'UserButton')), 'io/UserButton exists before the test wrote it — an input was seeded'
 	// ...and the fault must be OBSERVED, not just counted: io/UserButton was
 	// absent at boot, so run() must have reported it on stderr (REQ-IO-009)
-	stderr := p.stderr_read()
-	assert stderr.contains('startup fault'), 'no startup-fault diagnostic on stderr, got: "${stderr}"'
+	// (the stderr barrier above already proved the observable fault report)
 
 	// press the button via the ioset protocol (write-then-rename, atomic)
 	tmp := os.join_path(work, 'io', '.UserButton.tmp')

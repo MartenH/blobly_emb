@@ -156,10 +156,21 @@ int blob_io_gpio_read_checked(int ch, int *val) {
 	return 0;
 }
 
+static unsigned int g_write_faults;
+
 void blob_io_gpio_write(int ch, int level) {
 	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured) return;
-	pt_write_file(g_pt[ch].name, level ? 1 : 0);
+	if (pt_write_file(g_pt[ch].name, level ? 1 : 0) != 0) {
+		/* mirror unwritable (full/read-only fs, path replaced): the pin state
+		 * is NOT what was commanded — count it, keep last-good truthful */
+		g_write_faults++;
+		return;
+	}
 	g_pt[ch].last = level ? 1u : 0u;
+}
+
+unsigned int blob_io_write_faults(void) {
+	return g_write_faults;
 }
 
 void blob_io_close(void) {
