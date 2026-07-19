@@ -59,6 +59,13 @@ gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(REPO)/tools/ecucheck/gen.v $(
 	@touch gen/.stamp
 
 # loom's fixed Scheduler tables, right-sized to this image's real handler count.
+# The remake rule makes GNU make REGENERATE loom_build.mk (via gen/.stamp) and then
+# RE-EXEC, so LOOM_VDEFS is populated even on the first `make` after `make clean`
+# deleted it — otherwise the schedulers fall back to the default 32-handler tables
+# (oversized static RAM) for that build (codex #155). The explicit recipe (not just a
+# prerequisite) is what marks the include remade so make actually re-execs.
+gen/loom_build.mk: gen/.stamp
+	@touch $@
 -include gen/loom_build.mk
 
 # 1) transpile the V stack to freestanding C (-enable-globals for the ThreadX TCB/stack statics).
@@ -81,7 +88,7 @@ $(TX_A): $(TX_OBJ)
 # 3) cross-compile + link: generated app.c + board bring-up + CAN/IO backends + ThreadX.
 # io_backend.c textually includes the STM32 implementation — list both it and
 # the port header, or an edited driver flashes stale (codex on emb#150)
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(REPO)/driver/io/io_stm32.c $(REPO)/driver/io/io_port.h $(TX_A) $(BOARD_LD_THREADX)
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(REPO)/boards/common/ioc.h $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(REPO)/driver/io/io_stm32.c $(REPO)/driver/io/io_port.h $(TX_A) $(BOARD_LD_THREADX)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A) -o $@
 	$(SIZE) $@
 
