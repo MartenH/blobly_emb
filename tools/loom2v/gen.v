@@ -1815,10 +1815,6 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				if m.trace.on && m.trace.level == 'all' {
 					glue << '\t\tsched.run_profiled(trace_clock)'
 					glue << '\t\tt1 := C.board_now_us()'
-					if io_here {
-						glue << '\t\tio_dt := u64(C.io_exec_us() - io0)'
-						glue << '\t\tsched.discount(io_dt) // run_profiled already folded the inflated bracket'
-					}
 				} else {
 					glue << '\t\tsched.run(t0)'
 					glue << '\t\tt1 := C.board_now_us()'
@@ -1889,16 +1885,17 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		glue << '\tfor {'
 		glue << '\t\tt0 := C.board_now_us()'
 		if fb_io {
+			// read the io exec baseline immediately after t0 (and the endpoint immediately
+			// after t1): the io thread could preempt in that instruction-width gap, so the
+			// correction has a residual bounded by ONE io serve (sub-µs, below the µs
+			// telemetry resolution). A fully atomic core-load would need a single idle-time
+			// source (an idle accountant thread) — the eventual clean model (codex emb#150 r11).
 			glue << '\t\tio0 := C.io_exec_us() // io is higher priority: exclude its preemption'
 		}
 		if m.trace.on && m.trace.level == 'all' {
 			// profiled dispatch: run_profiled accounts internally and fires the FB trace hook
 			glue << '\t\tsched.run_profiled(trace_clock)'
 			glue << '\t\tt1 := C.board_now_us()'
-			if fb_io {
-				glue << '\t\tio_dt := u64(C.io_exec_us() - io0)'
-				glue << '\t\tsched.discount(io_dt) // run_profiled folded the inflated bracket (emb#150 r10)'
-			}
 		} else {
 			glue << '\t\tsched.run(t0)'
 			glue << '\t\tt1 := C.board_now_us()'
@@ -2950,6 +2947,15 @@ fn main() {
 	// the same. The lean first cut supports external RX signals (bus -> app), drained + counted
 	// by the comm thread; external TX signals, ISO-TP, and m.routes are not generated yet.
 	comm_thread_on := m.target.threadx && has_bridge
+	if m.target.threadx && m.trace.on && m.trace.level == 'all' && m.io_points.len > 0 {
+		// trace level="all" uses run_profiled (per-handler brackets that internally
+		// fold load); those brackets can't exclude higher-priority io preemption, so
+		// io + profiled load would double-count with no clean correction (codex emb#150
+		// r11). Unsupported until io is profiled too — use trace level="thread" or drop io.
+		panic('loom2v: [target] kind="threadx" with [[io.gpio]] AND [trace] level="all" is ' +
+			'not supported yet (per-handler profiled load cannot exclude io preemption) — ' +
+			'set [trace] level="thread" or remove the io points')
+	}
 	// the sole LOCAL partition (a satellite image = ... partition is external and
 	// makes single_part empty — the guard must count the local one, matching
 	// emit_run_target; codex on emb#150 r8)

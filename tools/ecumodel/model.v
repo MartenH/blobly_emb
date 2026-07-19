@@ -457,6 +457,16 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 						errs << 'signal "${name}": endpoint partition "${other}" is on core ${cv} but [io].core is ${io_core} — cross-core io arrives with the target phase'
 					}
 				}
+				// the io thread + its IOC cell live in the LOCAL image; if the
+				// non-io endpoint is a satellite (image = ...), the satellite FB
+				// publishes through its cross-image xioc slot, NOT this local cell,
+				// so an output stays at init / an input never reaches its consumer
+				// (codex emb#150 r11). Reject until io emits into the owning image.
+				img := str_of(ppm, 'image')
+				is_ext := img != '' || ((ppm['external'] or { toml.Any(false) }).bool())
+				if is_ext {
+					errs << 'signal "${name}": io endpoint partition "${other}" is an external/satellite image — the io thread and its cell are in the LOCAL image, so the point cannot reach a satellite FB (declare the io point in the owning image)'
+				}
 			}
 		}
 		if is_output {
