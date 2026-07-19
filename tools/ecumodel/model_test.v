@@ -1154,6 +1154,50 @@ to   = { bus = "can0" }
 		app)
 	assert e.any(it.contains('[telemetry] on eth bus "eth0" needs an explicit `id`'))
 	assert e.any(it.contains('[trace] dump_fc is bound on the eth bus'))
-	assert e.any(it.contains('E2E data_id must fit 16 bits'))
+	assert e.any(it.contains('E2E data_id must be an integer fitting 16 bits'))
 	assert e.any(it.contains('a [[route]] touches eth bus "eth0"'))
+}
+
+fn test_someip_round4_gates() {
+	// isotp on eth; a tx block on an rx frame; a string e2e data_id
+	e := errs_of(eth_head +
+		'
+[[isotp]]
+name  = "diag"
+bus   = "eth0"
+rx_id = 0x8100
+tx_id = 0x8101
+
+[[signal]]
+name = "Cmd"
+fields = { v = "u8" }
+from = "eth0"
+to   = "app"
+
+[[frame]]
+name    = "CmdEvt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Cmd"]
+tx      = { mode = "cyclic", cycle_ms = 100 }
+
+[[signal]]
+name = "Out"
+fields = { v = "u16" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "OutEvt"
+bus     = "eth0"
+id      = 0x8002
+signals = ["Out"]
+rx      = { timeout_ms = 200 }
+e2e     = { data_id = "nope", counter_pos = 2, crc_pos = 3 }
+' +
+		app)
+	assert e.any(it.contains('[[isotp]] "diag" is bound to eth bus "eth0"'))
+	assert e.any(it.contains('"CmdEvt" is rx (signals from the bus) but declares a tx block'))
+	assert e.any(it.contains('"OutEvt" is tx (signals to the bus) but declares an rx block'))
+	assert e.any(it.contains('E2E data_id must be an integer'))
 }

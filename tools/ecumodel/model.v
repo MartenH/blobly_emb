@@ -449,6 +449,15 @@ fn validate_someip(doc toml.Doc) []string {
 		if ntx > 0 && nrx > 0 {
 			errs << 'eth frame "${fname}" mixes tx and rx signals — one direction per frame (a mixed frame would make the bridge a second writer on an SPSC channel)'
 		}
+		// the bridge derives direction from the signal endpoints — a behavior
+		// block for the OTHER direction is silently ignored (a tx mode that
+		// never publishes, an rx deadline never enforced): reject it
+		if nrx > 0 && ntx == 0 && 'tx' in fm {
+			errs << 'eth frame "${fname}" is rx (signals from the bus) but declares a tx block — the mode would silently never publish'
+		}
+		if ntx > 0 && nrx == 0 && 'rx' in fm {
+			errs << 'eth frame "${fname}" is tx (signals to the bus) but declares an rx block — the deadline would silently never be enforced'
+		}
 		// SecOC has no eth story yet: the derived payload reserves no
 		// freshness/MAC bytes and no appended auth layout is defined
 		if 'secoc' in fm {
@@ -468,10 +477,15 @@ fn validate_someip(doc toml.Doc) []string {
 					size + 1} (got ${cpos}/${crc}) — other positions overwrite signal bytes'
 			}
 			// the generated protect call narrows data_id to u16 — distinct
-			// over-wide ids would silently alias one E2E identity
-			did := (evm['data_id'] or { toml.Any(i64(-1)) }).i64()
-			if did < 0 || did > 0xFFFF {
-				errs << 'eth frame "${fname}" E2E data_id must fit 16 bits (0..0xFFFF)'
+			// over-wide ids would silently alias one E2E identity. Type-check
+			// too: .i64() coerces a string to 0, which would pass the range
+			// when loom2v runs without ecucheck's schema pass.
+			if dv := evm['data_id'] {
+				if dv !is i64 || dv.i64() < 0 || dv.i64() > 0xFFFF {
+					errs << 'eth frame "${fname}" E2E data_id must be an integer fitting 16 bits (0..0xFFFF)'
+				}
+			} else {
+				errs << 'eth frame "${fname}" E2E data_id must be an integer fitting 16 bits (0..0xFFFF)'
 			}
 			size += 2
 		}
@@ -558,6 +572,17 @@ fn validate_someip(doc toml.Doc) []string {
 			errs << '[${blk}] is bound to eth bus "${eth}" but binds no valid endpoint id — nothing rides the bus (the generator would default ids outside the event range)'
 		} else {
 			mod_on_eth = true
+		}
+	}
+
+	// ISO-TP is CAN machinery too: a [[isotp]] connection on the eth bus would
+	// emit isotp.Pdu traffic as can.Frame ops — no segmentation path on eth
+	if eth != '' {
+		for it in toml_arr(doc, 'isotp') {
+			itm := it.as_map()
+			if str_of(itm, 'bus') == eth {
+				errs << '[[isotp]] "${str_of(itm, 'name')}" is bound to eth bus "${eth}" — there is no ISO-TP/segmentation path on eth (docs/someip.md); an eth diagnostic rung is its own phase'
+			}
 		}
 	}
 
