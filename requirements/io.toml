@@ -216,7 +216,7 @@ derives = "SYS-REQ-IO-001"
 [[req]]
 id = "REQ-IO-022"
 title = "PWM carrier validity is layered"
-text = "freq_hz must be positive (ecucheck, config-level: a zero carrier is a zero divisor); whether a frequency is ACHIEVABLE on the pin's bound timer is the boards-layer pin-table check (silicon-level), reported at build time next to pin validity."
+text = "freq_hz must be a positive value within the codegen-representable range (ecucheck, config-level: a zero carrier is a zero divisor). Whether a pin has a timer mapping AND whether the carrier is achievable on it is the boards-layer check (silicon-level): in this phase it runs at cfg time (board_io_pwm_map / pwm_setup return failure -> a loud startup fault), the same runtime pattern as pin existence (board_io_pin_exists). A build-time boards-layer table check, applied uniformly to pin validity and PWM mapping, is a later cross-cutting slice."
 status = "draft"
 method = "analysis"
 asil = "QM"
