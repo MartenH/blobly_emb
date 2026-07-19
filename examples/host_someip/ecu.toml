@@ -52,10 +52,41 @@ signals = ["BenchLoad", "BenchTicks"]
 tx      = { mode = "cyclic", cycle_ms = 100 }
 e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8 }
 
+# EventVal changes every 5th activation (500 ms): the event frame sends ONLY
+# then; MixedVal changes every 7th: the mixed frame heartbeats at 300 ms AND
+# sends immediately on the change. Together with the cyclic frame above, the
+# three COM tx modes are all on the wire — the harness (e2e_test.v) asserts
+# each one's cadence (REQ-NET-013).
+[[signal]]
+name = "EventVal"
+fields = { level = "u8" }
+from = "app"
+to   = "eth0"
+
+[[signal]]
+name = "MixedVal"
+fields = { setpoint = "u16" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "BenchEvent"
+bus     = "eth0"
+id      = 0x8002
+signals = ["EventVal"]
+tx      = { mode = "event", min_delay_ms = 50 }
+
+[[frame]]
+name    = "BenchMixed"
+bus     = "eth0"
+id      = 0x8003
+signals = ["MixedVal"]
+tx      = { mode = "mixed", cycle_ms = 300, min_delay_ms = 30 }
+
 [[fb]]
 name   = "Bench"
 thread = "app_main"
   [[fb.handler]]
   name      = "on_100ms"
   period_ms = 100
-  writes    = ["BenchLoad", "BenchTicks"]
+  writes    = ["BenchLoad", "BenchTicks", "EventVal", "MixedVal"]

@@ -19,4 +19,12 @@ pub fn (mut fb Bench) on_100ms(inp ports.BenchIn, mut out ports.BenchOut) {
 		ticks: fb.ticks
 		wraps: u16(fb.ticks >> 16)
 	}
+	// step every 5th/7th activation: the event frame's ONLY sends, and the
+	// mixed frame's immediate sends between its heartbeats
+	out.event_val = sig.EventVal{
+		level: u8(fb.ticks / 5)
+	}
+	out.mixed_val = sig.MixedVal{
+		setpoint: u16(fb.ticks / 7)
+	}
 }

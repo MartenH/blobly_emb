@@ -7,7 +7,11 @@ thread,1,app_main,0,10
 someip,0x100,1,30490,127.0.0.1:30491
 # eth frames: frame,id,len,dir,mode,cycle_us,e2e_id
 ethframe,BenchTelem,0x8001,9,tx,cyclic,100000,0x21
+ethframe,BenchEvent,0x8002,1,tx,event,100000,-
+ethframe,BenchMixed,0x8003,2,tx,mixed,300000,-
 # eth layout: frame,signal,field,offset,width,type
 ethlayout,BenchTelem,BenchLoad,load,0,1,u8
 ethlayout,BenchTelem,BenchTicks,ticks,1,4,u32
 ethlayout,BenchTelem,BenchTicks,wraps,5,2,u16
+ethlayout,BenchEvent,EventVal,level,0,1,u8
+ethlayout,BenchMixed,MixedVal,setpoint,0,2,u16
