@@ -1,0 +1,98 @@
+# h755_io — docs/io.md P1 on the ThreadX target (NUCLEO-H755ZI-Q, CM7): the three
+# on-board points — B1 user button (PC13), LD1 green (PB0), LD2 yellow (PE1) — as
+# ordinary signals. ButtonLamp mirrors the button onto the green LED; Heartbeat
+# toggles the yellow LED every 500 ms, so the io output path is bench-observable
+# without touching anything. The bus + [telemetry] exist because the ThreadX
+# emitter requires them (the app thread owns the CAN channel; CpuLoad on 0x7E0
+# doubles as the liveness beacon) — this config carries no signal over CAN.
+#
+# NOTE: no inline comments inside [[...]] tables — a comment in a nested table trips
+# V's TOML parser (drops the next key). See vlang/v#27684.
+
+[import]
+dbc = "bus.dbc"
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0
+
+# The io thread's home core (= the app's: P1/P1-target generate same-core io only).
+[io]
+core = 0
+
+[[io.gpio]]
+name      = "UserButton"
+pin       = "PC13"
+period_ms = 10
+default   = false
+
+[[io.gpio]]
+name      = "LedGreen"
+pin       = "PB0"
+period_ms = 10
+init      = false
+
+[[io.gpio]]
+name      = "LedYellow"
+pin       = "PE1"
+period_ms = 100
+init      = false
+
+[[partition]]
+name    = "app"
+core    = 0
+trusted = true
+
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+# io is a signal endpoint like a bus or a partition; transport is derived
+# (on target: one IOC pool cell per point — the io thread is its own kernel thread).
+[[signal]]
+name = "UserButton"
+fields = { pressed = "bool" }
+from = "io"
+to   = "app"
+
+[[signal]]
+name = "LedGreen"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+
+[[signal]]
+name = "LedYellow"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+
+[[fb]]
+name   = "ButtonLamp"
+thread = "app_main"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["UserButton"]
+  writes    = ["LedGreen"]
+
+[[fb]]
+name   = "Heartbeat"
+thread = "app_main"
+
+  [[fb.handler]]
+  name      = "on_500ms"
+  period_ms = 500
+  writes    = ["LedYellow"] # trailing comment terminates the nested [[fb.handler]] parse (vlang/v#27684)
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E0
+period_ms = 1000
+
+[target]
+kind    = "threadx"
+tick_ms = 1

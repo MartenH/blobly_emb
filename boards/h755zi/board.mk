@@ -19,6 +19,8 @@ BOARD_DEFS = -DSTM32H755xx -DCORE_CM7 -DTRACE_CPU_MHZ=400 -DSYSTEM_CLOCK=4000000
 # 16 tq/bit (1 + 12 + 3), sample point 81.25%.
 CAN_DEFS   = -DBLOB_CAN_FDCAN -DBLOB_FDCAN_KCLK_HZ=8000000 -DBLOB_FDCAN_TQ=16 \
              -DBLOB_FDCAN_NTSEG1=12 -DBLOB_FDCAN_NTSEG2=3
+# driver/io GPIO backend (register-level, io_stm32.c). On-board: LD1 = PB0, B1 = PC13.
+IO_DEFS    = -DBLOB_IO_STM32
 
 BOARD_BSP_THREADX = $(BOARD_COMMON)/crt0.S $(BOARD_COMMON)/vectors.S \
                     $(BOARD_COMMON)/tx_initialize_low_level.S $(BOARD_DIR)/board.c
