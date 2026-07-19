@@ -87,7 +87,7 @@ int blob_io_cfg(int ch, const char *name, const char *pin, int dir, unsigned int
 	if (board_io_pin_reserved((int)g_pt[ch].port, (int)g_pt[ch].pin)) return -1;
 	g_pt[ch].dir = dir ? 1 : 0;
 	g_pt[ch].al = active_low ? 1u : 0u;
-	/* init is LOGICAL (REQ-IO-015): store the PAD level so blob_io_init's
+	/* init is LOGICAL (REQ-IO-017): store the PAD level so blob_io_init's
 	 * BSRR write needs no polarity knowledge */
 	g_pt[ch].init = (init_val ? 1u : 0u) ^ g_pt[ch].al;
 	g_pt[ch].configured = 1;
@@ -121,7 +121,7 @@ int blob_io_init(void) {
 
 int blob_io_gpio_read(int ch) {
 	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured) return 0;
-	/* pad -> LOGICAL (REQ-IO-015): an active-low input asserts on a low pad */
+	/* pad -> LOGICAL (REQ-IO-017): an active-low input asserts on a low pad */
 	return (((gpio(g_pt[ch].port)->IDR >> g_pt[ch].pin) & 1u) ^ g_pt[ch].al) ? 1 : 0;
 }
 
@@ -135,7 +135,7 @@ int blob_io_gpio_read_checked(int ch, int *val) {
 void blob_io_gpio_write(int ch, int level) {
 	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured) return;
 	unsigned int p = g_pt[ch].pin;
-	unsigned int lv = (level ? 1u : 0u) ^ g_pt[ch].al; /* LOGICAL -> pad (REQ-IO-015) */
+	unsigned int lv = (level ? 1u : 0u) ^ g_pt[ch].al; /* LOGICAL -> pad (REQ-IO-017) */
 	gpio(g_pt[ch].port)->BSRR = lv ? (1u << p) : (1u << (p + 16u)); /* atomic, no RMW */
 }
 

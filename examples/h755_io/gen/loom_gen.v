@@ -107,11 +107,14 @@ fn io_thread_entry(input u32) {
 			C._tx_thread_sleep(u32((next_us - now + 999) / 1000)) // 1 kHz kernel tick
 			now = C.board_now_us() // a tick-phase-early wake must not serve before the deadline
 		}
-		// overrun: skip the MISSED base periods, no burst catch-up — tick
-		// advances with wall time so (tick+1)%mult gating stays aligned
+		// past the deadline now (the wait loop exits at now >= next_us). Skip the
+		// MISSED WHOLE periods, no burst catch-up — tick advances with wall time
+		// so (tick+1)%mult gating stays aligned; a sub-period lateness serves now
+		// and the next sleep re-anchors (one shortened gap, the cadence tradeoff).
 		missed := (now - next_us) / 10000
-		if missed > 0 {
-			sched.mark_overrun() // a serve blew past its io period
+		if now > next_us {
+			sched.mark_overrun() // ANY lateness is an overrun, incl. the 1..2-
+			// period case floor(missed) rounds to 0 (codex on emb#150 r6)
 		}
 		tick += missed
 		next_us += missed * 10000

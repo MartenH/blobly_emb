@@ -169,7 +169,7 @@ asil = "QM"
 derives = "SYS-REQ-IO-001"
 
 [[req]]
-id = "REQ-IO-015"
+id = "REQ-IO-017"
 title = "Pad polarity is a property of the point"
 text = "A GPIO point may declare active_low: the platform inverts between the LOGICAL signal value (true = asserted: lamp on, button pressed) and the PAD level at the driver boundary, for inputs and outputs alike, including the configured init level. Application signals never carry board wiring polarity. Found on the bench: the H735G-DK lamp is wired active-low and lit idle."
 status = "draft"

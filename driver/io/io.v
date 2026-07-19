@@ -20,7 +20,7 @@ fn C.blob_io_close()
 // cfg declares one point before init: channel, signal name, board pin,
 // direction, the pre-publication init level, and the pad polarity — init and
 // every read/write are LOGICAL values; active_low inverts at the pad
-// (REQ-IO-015: board wiring never leaks into application signals).
+// (REQ-IO-017: board wiring never leaks into application signals).
 pub fn cfg(ch int, name string, pin string, output bool, init u32, active_low int) bool {
 	return C.blob_io_cfg(ch, &char(name.str), &char(pin.str), if output { 1 } else { 0 },
 		init, active_low) == 0
