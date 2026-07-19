@@ -15,7 +15,7 @@ MEMORY
   RAM   (wx) : ORIGIN = 0x20000000, LENGTH = 0x00020000   /* 128 KiB DTCM */
   FLASH (rx) : ORIGIN = DEFINED(__flash_base__) ? __flash_base__ : 0x08000000,
                LENGTH = DEFINED(__flash_len__)  ? __flash_len__  : 0x00100000
-  D2SRAM (wx) : ORIGIN = 0x30000000, LENGTH = 0x00008000   /* 32 KiB D2 AHB SRAM: DMA-reachable (ADC/ETH) */
+  D2SRAM (wx) : ORIGIN = 0x30040000, LENGTH = 0x00008000   /* D2 SRAM3: DMA-reachable, clear of the CM4 AMP SRAM1 (codex emb#152) */
 }
 
 __STACKSIZE__ = 1024;

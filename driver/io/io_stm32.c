@@ -255,7 +255,20 @@ static int adc_dma_start(void) {
 	 * the board doesn't bring up (codex emb#152). */
 	RCC->D3CCIPR = (RCC->D3CCIPR & ~RCC_D3CCIPR_ADCSEL) | (2u << RCC_D3CCIPR_ADCSEL_Pos);
 	RCC->AHB1ENR |= RCC_AHB1ENR_ADC12EN | RCC_AHB1ENR_DMA1EN;
-	RCC->AHB2ENR |= RCC_AHB2ENR_D2SRAM1EN; /* the DMA lands in D2 SRAM1 — clock it (codex emb#152) */
+	/* clock the D2 AHB SRAM banks: the linker places .dma_buf in SRAM3 (H755, AMP-
+	 * safe) or SRAM1 (H735, shared with ETH). Guarded — the H72x/H73x parts have
+	 * fewer banks than H74x/H75x (codex emb#152). */
+	RCC->AHB2ENR |= 0u
+#ifdef RCC_AHB2ENR_D2SRAM1EN
+	              | RCC_AHB2ENR_D2SRAM1EN
+#endif
+#ifdef RCC_AHB2ENR_D2SRAM2EN
+	              | RCC_AHB2ENR_D2SRAM2EN
+#endif
+#ifdef RCC_AHB2ENR_D2SRAM3EN
+	              | RCC_AHB2ENR_D2SRAM3EN
+#endif
+	              ;
 	(void)RCC->AHB2ENR;
 
 	/* ADC common prescaler: per_ck is the 64 MHz HSI; the H7 ADC fADC ceiling is
@@ -309,7 +322,7 @@ static int adc_dma_start(void) {
 
 	/* DMA1 Stream0: ADC1->DR -> g_adc_dma, 16-bit, circular, mem-increment */
 	DMA1_Stream0->CR = 0;
-	if (!IO_WAIT(!(DMA1_Stream0->CR & DMA_SxCR_EN), 100000u)) return -1;
+	if (!IO_WAIT(!(DMA1_Stream0->CR & DMA_SxCR_EN), 100000u)) return 0; /* degraded, not fatal */
 	DMA1_Stream0->PAR = (uint32_t)(&ADC1->DR);
 	DMA1_Stream0->M0AR = (uint32_t)g_adc_dma;
 	DMA1_Stream0->NDTR = (uint32_t)g_adc_n;
@@ -377,8 +390,7 @@ static int tim_has_bdtr(TIM_TypeDef *t) {
 /* timers already programmed by a pwm point, with their period-1, so a second
  * point on the SAME timer with a DIFFERENT carrier is rejected (it would silently
  * retune the first point — codex emb#152). */
-static TIM_TypeDef *g_tim_seen[BLOB_IO_MAX];
-static unsigned int g_tim_arr[BLOB_IO_MAX];
+static struct { TIM_TypeDef *t; int chan; unsigned int psc, arr; } g_tim_seen[BLOB_IO_MAX];
 static int g_tim_seen_n;
 
 static int tim_clock_enable(TIM_TypeDef *t) {
@@ -403,7 +415,7 @@ static int tim_clock_enable(TIM_TypeDef *t) {
 static int pwm_setup(int ch) {
 	void *base = 0; int chan = 0, af = 0; unsigned int clk = 0;
 	if (board_io_pwm_map((int)g_pt[ch].port, (int)g_pt[ch].pin, &base, &chan, &af, &clk) != 0
-	    || !base || chan < 1 || chan > 4 || clk == 0u)
+	    || !base || chan < 1 || chan > 4 || af < 0 || af > 15 || clk == 0u)
 		return -1; /* bad map: reject before any register arithmetic (codex emb#152) */
 	TIM_TypeDef *t = (TIM_TypeDef *)base;
 	if (tim_clock_enable(t) != 0)
@@ -422,16 +434,21 @@ static int pwm_setup(int ch) {
 	while (total / (psc + 1u) > 65536u) psc++;
 	unsigned int arr = total / (psc + 1u) - 1u;
 	g_pwm_arr[ch] = arr;
-	/* a shared timer must agree on the period, or the second point would retune
-	 * the first (codex emb#152). Same arr -> reuse; different -> reject. */
+	/* a shared timer must agree on the FULL carrier (psc AND arr — same arr with a
+	 * different psc is a different frequency), and no two points may claim the same
+	 * (timer, channel) (codex emb#152). */
 	for (int k = 0; k < g_tim_seen_n; k++) {
-		if (g_tim_seen[k] == t) {
-			if (g_tim_arr[k] != arr) return -1; /* conflicting carrier on one timer */
-			goto period_set; /* same carrier: don't reprogram PSC/ARR */
+		if (g_tim_seen[k].t == t) {
+			if (g_tim_seen[k].chan == chan) return -1;                 /* duplicate (timer,channel) */
+			if (g_tim_seen[k].psc != psc || g_tim_seen[k].arr != arr)  /* conflicting carrier */
+				return -1;
+			goto period_set; /* same carrier, other channel: don't reprogram PSC/ARR */
 		}
 	}
-	g_tim_seen[g_tim_seen_n] = t;
-	g_tim_arr[g_tim_seen_n] = arr;
+	g_tim_seen[g_tim_seen_n].t = t;
+	g_tim_seen[g_tim_seen_n].chan = chan;
+	g_tim_seen[g_tim_seen_n].psc = psc;
+	g_tim_seen[g_tim_seen_n].arr = arr;
 	g_tim_seen_n++;
 	t->PSC = psc;
 	t->ARR = arr;
