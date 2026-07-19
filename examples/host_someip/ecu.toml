@@ -1,0 +1,61 @@
+# blobly_emb ECU configuration — SOME/IP-over-eth generation example (docs/someip.md).
+#
+# P1-gen rung: exercises the eth bus + [someip] schema end to end through
+# loom2v — the generated gen/loom_gen.v carries the frame table + the DERIVED
+# payload codec (canonical order: signals-list order, name-sorted fields, LE,
+# natural widths), and gen/trace-manifest.csv carries the same layout for the
+# host oracle (blobly_net modules/someip). No UDP yet: the tx loop that wraps
+# these payloads in the SOME/IP header is the next rung; run() here only
+# dispatches the app partition.
+
+[bus.eth0]
+kind      = "eth"
+interface = "127.0.0.1"
+core      = 0
+
+[someip]
+bus     = "eth0"
+service = 0x0100
+version = 1
+port    = 30490
+peer    = "127.0.0.1:30490"
+
+[[partition]]
+name    = "app"
+core    = 0
+trusted = false
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+# BenchLoad + BenchTicks ride ONE event frame: the derived layout is
+# load@0 (u8), then BenchTicks name-sorted — ticks@1 (u32), wraps@5 (u16).
+[[signal]]
+name = "BenchLoad"
+fields = { load = "u8" }
+from = "app"
+to   = "eth0"
+
+[[signal]]
+name = "BenchTicks"
+fields = { wraps = "u16", ticks = "u32" }
+from = "app"
+to   = "eth0"
+
+# E2E: the appended loss-protection trailer (counter@7, CRC@8 — the derived
+# layout size and the byte after; ecucheck rejects anything else).
+[[frame]]
+name    = "BenchTelem"
+bus     = "eth0"
+id      = 0x8001
+signals = ["BenchLoad", "BenchTicks"]
+tx      = { mode = "cyclic", cycle_ms = 100 }
+e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8 }
+
+[[fb]]
+name   = "Bench"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  writes    = ["BenchLoad", "BenchTicks"]

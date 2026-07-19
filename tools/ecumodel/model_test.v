@@ -745,6 +745,14 @@ name    = "BenchTelem"
 bus     = "eth0"
 id      = 0x8001
 signals = ["CpuLoad"]
+
+[[fb]]
+name   = "CpuWriter"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  writes    = ["CpuLoad"]
 '
 
 fn test_someip_good_config_has_no_errors() {
@@ -942,6 +950,14 @@ bus     = "eth0"
 id      = 0x8001
 signals = ["Speed"]
 e2e     = { data_id = 1, counter_pos = 6, crc_pos = 7 }
+
+[[fb]]
+name   = "SpeedWriter"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  writes    = ["Speed"]
 ' +
 		app)
 	assert e == []
@@ -1033,6 +1049,7 @@ record = 0x8001
 ' +
 		eth_tx_frame + app)
 	assert e.any(it.contains('[trace] record reuses event id'))
+	assert e.any(it.contains('eth trace egress arrives with the UDP rung'))
 	assert e.any(it.contains('[trace] cmd id 0x10 on the eth bus is not an event id'))
 	assert e.any(it.contains('[trace] rsp on the eth bus must be a literal event id'))
 }
@@ -1200,4 +1217,269 @@ e2e     = { data_id = "nope", counter_pos = 2, crc_pos = 3 }
 	assert e.any(it.contains('"CmdEvt" is rx (signals from the bus) but declares a tx block'))
 	assert e.any(it.contains('"OutEvt" is tx (signals to the bus) but declares an rx block'))
 	assert e.any(it.contains('E2E data_id must be an integer'))
+}
+
+fn test_someip_eth_frame_name_must_be_identifier() {
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "S"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Bench,Telem"
+bus     = "eth0"
+id      = 0x8001
+signals = ["S"]
+' +
+		app)
+	assert e.any(it.contains('eth frame name "Bench,Telem" is not a valid identifier'))
+}
+
+fn test_someip_ioc_slot_bound_counts_padding() {
+	// 5x u8 + 4x u64 alternating: wire = 37 bytes (fits), but the in-memory
+	// struct is 72 after natural alignment — over the 64-byte IOC slot
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "Padded"
+fields = { a = "u8", b = "u64", c = "u8", d = "u64", e = "u8", f = "u64", g = "u8", h = "u64", i = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "PaddedEvt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Padded"]
+' +
+		app)
+	assert e.any(it.contains('in-memory struct is 72 bytes after alignment'))
+}
+
+fn test_someip_eth_ownership_spsc() {
+	// two writers on a tx signal; a read of the same tx signal; and a writer
+	// living outside the declared endpoint partition
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "Dual"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[signal]]
+name = "Stray"
+fields = { v = "u8" }
+from = "far"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Dual", "Stray"]
+
+[[partition]]
+name = "far"
+core = 0
+  [[partition.thread]]
+  name = "far_main"
+
+[[fb]]
+name   = "W1"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  writes    = ["Dual", "Stray"]
+  reads     = ["Dual"]
+
+[[fb]]
+name   = "W2"
+thread = "far_main"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  writes    = ["Dual"]
+' +
+		app)
+	assert e.any(it.contains('eth tx signal "Dual" is written from 2 execution contexts'))
+	assert e.any(it.contains('eth tx signal "Dual" appears in a handler\'s reads'))
+	assert e.any(it.contains('eth tx signal "Stray" is written from partition "app" but declares endpoint "far"'))
+}
+
+fn test_someip_round5_gates() {
+	// snake-colliding frame names; a DID reading an eth signal
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "A"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[signal]]
+name = "B"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "FooBar"
+bus     = "eth0"
+id      = 0x8001
+signals = ["A"]
+
+[[frame]]
+name    = "Foo_Bar"
+bus     = "eth0"
+id      = 0x8002
+signals = ["B"]
+
+[[did]]
+id     = 0xF1A0
+signal = "A"
+' +
+		app)
+	assert e.any(it.contains('collides with "FooBar" after snake-case normalization'))
+	assert e.any(it.contains('diagnostic DID reads eth signal "A"'))
+}
+
+fn test_someip_target_eth_telemetry_rejected() {
+	e := errs_of(eth_head +
+		'
+[target]
+kind = "threadx"
+
+[telemetry]
+enabled = true
+bus     = "eth0"
+id      = 0x8005
+' +
+		eth_tx_frame + app)
+	assert e.any(it.contains('target telemetry emitter is CAN-only'))
+}
+
+fn test_someip_rx_frames_gated_until_p2() {
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "Cmd"
+fields = { v = "u8" }
+from = "eth0"
+to   = "app"
+
+[[frame]]
+name    = "CmdEvt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Cmd"]
+' +
+		app)
+	assert e.any(it.contains('eth reception arrives with the rx rung'))
+}
+
+fn test_someip_same_thread_double_write_is_single_context() {
+	// two handlers of one FB (one Loom thread) publish serially — legal SPSC
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "Twice"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "TwiceEvt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Twice"]
+
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "app_main"
+
+[[fb]]
+name   = "W"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  writes    = ["Twice"]
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  writes    = ["Twice"]
+')
+	assert e == []
+}
+
+fn test_someip_round7_gates() {
+	// a bad tx mode; eth frames on a [target] image
+	e := errs_of(eth_head +
+		'
+[target]
+kind = "threadx"
+
+[[signal]]
+name = "S"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["S"]
+tx      = { mode = "cylic", cycle_ms = 100 }
+' +
+		app)
+	assert e.any(it.contains('tx mode "cylic" is invalid'))
+	assert e.any(it.contains('the target comm owner is CAN-only'))
+}
+
+fn test_someip_round8_timing_bounds() {
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "S"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["S"]
+tx      = { mode = "event", min_delay_ms = -1 }
+' +
+		app)
+	assert e.any(it.contains('min_delay_ms must be 0..1000000'))
+}
+
+fn test_someip_round9_cycle_bounds_any_mode() {
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "S"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["S"]
+tx      = { mode = "event", cycle_ms = -1 }
+' +
+		app)
+	assert e.any(it.contains('tx cycle_ms must be 1..1000000'))
 }
