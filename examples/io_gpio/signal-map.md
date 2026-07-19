@@ -5,5 +5,5 @@ DO NOT EDIT — follow a signal here, or via the provenance comments in `sig/por
 
 | Signal | Unit | Source | DBC signal | Frame | Layout | Scaling | Path | Producers | Consumers |
 |--------|------|--------|------------|-------|--------|---------|------|-----------|-----------|
-| UserButton | — | io | — | — | — | — | io→IOC(double)→app | (io) | ButtonLamp |
-| LedGreen | — | app | — | — | — | — | app→IOC(double)→io | ButtonLamp | (io) |
+| UserButton | — | io | — | — | — | — | io→IOC(triple)→app | (io) | ButtonLamp |
+| LedGreen | — | app | — | — | — | — | app→IOC(triple)→io | ButtonLamp | (io) |

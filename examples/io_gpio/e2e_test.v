@@ -4,7 +4,8 @@ module main
 // the sim's file mirror — button file in, LED file out (docs/io.md sim story).
 // Exercised for real: a pressed input reaches the app as a signal (REQ-IO-001),
 // the app's output signal reaches the pin (REQ-IO-002), and the output holds its
-// configured init from startup, before any press (REQ-IO-009).
+// configured init (1 — deliberately distinct from the app's unpressed command 0)
+// from startup, BEFORE the first app command (REQ-IO-009).
 // @verifies REQ-IO-001 REQ-IO-002 REQ-IO-009 REQ-IO-012 REQ-IO-013
 
 import os
@@ -28,12 +29,32 @@ fn test_button_drives_led() {
 		os.rmdir_all(work) or {}
 	}
 
-	// startup: the output file exists at its configured init (0) — established
-	// by io.init() before any app code ran, and no press has happened yet
-	time.sleep(200 * time.millisecond)
+	// startup: poll from process start — the FIRST observed value must be the
+	// driver-established init (1), held by the freshness gate for at least one
+	// 10 ms handler period, and only THEN the app's unpressed command (0). A
+	// first-seen 0 would mean the init hold never happened.
 	led := os.join_path(work, 'io', 'LedGreen')
-	assert os.exists(led), 'io/LedGreen missing after startup'
-	assert (os.read_file(led) or { '' }).trim_space() == '0'
+	mut first := ''
+	for _ in 0 .. 5000 {
+		v := (os.read_file(led) or { '' }).trim_space()
+		if v == '1' || v == '0' {
+			first = v
+			break
+		}
+		time.sleep(1 * time.millisecond)
+	}
+	assert first == '1', 'first observed LedGreen was "${first}" — init (1) must precede the app command (0)'
+
+	// then the app's first command lands: 0, button unpressed
+	mut cleared := false
+	for _ in 0 .. 500 {
+		if (os.read_file(led) or { '' }).trim_space() == '0' {
+			cleared = true
+			break
+		}
+		time.sleep(1 * time.millisecond)
+	}
+	assert cleared, 'LedGreen never left init for the unpressed app command'
 
 	// press the button via the ioset protocol (write-then-rename, atomic)
 	tmp := os.join_path(work, 'io', '.UserButton.tmp')

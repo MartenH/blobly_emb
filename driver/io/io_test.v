@@ -2,8 +2,9 @@ module io
 
 // Host-backend (file mirror) driver tests: init seeding, write/read
 // round-trip, last-good on garbage, temp-rename hygiene. Each test runs in
-// its own temp cwd so io/ never lands in the repo. Loom-level tests carry
-// the REQ tags; only the last-good test exercises a REQ at driver level.
+// its own temp cwd so io/ never lands in the repo. No REQ tags here:
+// REQ-IO-003 is a universal claim (method = review), which a finite unit
+// test exercises but cannot verify.
 
 import os
 
@@ -41,7 +42,6 @@ fn test_write_read_round_trip() {
 	teardown(dir)
 }
 
-// @verifies REQ-IO-003
 fn test_garbage_file_returns_last_good() {
 	dir := setup('lastgood')
 	assert cfg(0, 'UserButton', 'PC13', false, 0)
@@ -56,6 +56,8 @@ fn test_garbage_file_returns_last_good() {
 	assert gpio_read(0) == true // gone: serves last-good
 	os.write_file('io/UserButton', '0\n')!
 	assert gpio_read(0) == false // conforming again: real value resumes
+	os.write_file('io/UserButton', '1garbage')! // parses as 1 + trailing junk
+	assert gpio_read(0) == false // rejected whole: serves last-good, not the prefix
 	teardown(dir)
 }
 
@@ -64,7 +66,7 @@ fn test_temp_rename_leaves_no_tmp() {
 	assert cfg(0, 'LedGreen', 'PB0', true, 0)
 	assert init()
 	gpio_write(0, true)
-	assert !os.exists('io/.LedGreen.tmp')
+	assert !os.exists('io/.LedGreen.drv.tmp')
 	files := os.ls('io')!
 	assert files == ['LedGreen']
 	teardown(dir)

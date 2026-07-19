@@ -279,7 +279,7 @@ push_ms = -1
 	assert e.any(it.contains('push_ms') && it.contains('must be >= 0'))
 }
 
-// ---- [io] rules (docs/io.md P1, @verifies REQ-IO-004 REQ-IO-005 REQ-IO-006) ----
+// ---- [io] rules (docs/io.md P1) ----
 
 // a valid single-point io config: button input read by the app handler
 const io_ok = '
@@ -358,6 +358,51 @@ from = "io"
 to   = "app"
 ' + app)
 	assert e.any(it.contains('phantom endpoint'))
+}
+
+// an io-bound signal with NO [io] table at all is still a phantom endpoint —
+// the reverse one-to-one check must not be skipped by the missing table
+fn test_io_signal_without_io_table_rejected() {
+	e := errs_of('
+[[signal]]
+name = "Orphan"
+fields = { on = "bool" }
+from = "io"
+to   = "app"
+' + app)
+	assert e.any(it.contains('phantom endpoint'))
+}
+
+// the driver backend holds at most 32 points (BLOB_IO_MAX)
+fn test_io_too_many_points_rejected() {
+	mut cfg := '[io]\n'
+	mut sigs := ''
+	for i in 0 .. 33 {
+		cfg += '[[io.gpio]]\nname = "P${i}"\npin = "PA${i}"\nperiod_ms = 10\n\n'
+		sigs += '[[signal]]\nname = "P${i}"\nfields = { on = "bool" }\nfrom = "io"\nto   = "app"\n\n'
+	}
+	e := errs_of(cfg + sigs + app)
+	assert e.any(it.contains('at most 32'))
+}
+
+// the driver name buffer is 64 bytes — a longer name would silently truncate
+// (two prefix-sharing names would collide on one mirror file)
+fn test_io_overlong_name_rejected() {
+	long := 'P' + 'x'.repeat(63)
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "${long}"
+pin       = "PC13"
+period_ms = 10
+
+[[signal]]
+name = "${long}"
+fields = { pressed = "bool" }
+from = "io"
+to   = "app"
+' + app)
+	assert e.any(it.contains('at most 63'))
 }
 
 fn test_io_output_needs_init_and_one_writer() {
