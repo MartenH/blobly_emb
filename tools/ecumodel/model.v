@@ -508,23 +508,22 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 
 	// FB reads/writes fan-in per signal (the io validator's pattern): the eth
 	// channel topology must stay SPSC — the bridge owns one side, so extra or
-	// wrong-side or wrong-partition accessors are config errors, not surprises
-	mut readers := map[string]int{}
-	mut writers := map[string]int{}
-	mut reader_part := map[string]string{}
-	mut writer_part := map[string]string{}
+	// wrong-side or wrong-partition accessors are config errors, not surprises.
+	// SPSC counts execution CONTEXTS, not handler references: two handlers on
+	// one Loom thread publish serially (race-free), so track the set of
+	// distinct THREADS touching each signal.
+	mut reader_threads := map[string]map[string]bool{}
+	mut writer_threads := map[string]map[string]bool{}
 	for c in toml_arr(doc, 'fb') {
 		cm := c.as_map()
-		fb_part := thread_part[str_of(cm, 'thread')] or { '' }
+		fb_thread := str_of(cm, 'thread')
 		for h in arr_of(cm, 'handler') {
 			hm := h.as_map()
 			for r in arr_of(hm, 'reads') {
-				readers[r.string()]++
-				reader_part[r.string()] = fb_part
+				reader_threads[r.string()][fb_thread] = true
 			}
 			for w in arr_of(hm, 'writes') {
-				writers[w.string()]++
-				writer_part[w.string()] = fb_part
+				writer_threads[w.string()][fb_thread] = true
 			}
 		}
 	}
@@ -607,13 +606,21 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 						errs << 'signal "${sname}": endpoint "${other}" is not a declared partition or thread'
 						other = ''
 					}
-					if writers[sname] or { 0 } > 1 {
-						errs << 'eth tx signal "${sname}" has ${writers[sname]} writing handlers — dual producers break SPSC'
-					} else if writers[sname] or { 0 } == 1 && other != ''
-						&& writer_part[sname] != other {
-						errs << 'eth tx signal "${sname}" is written from partition "${writer_part[sname]}" but declares endpoint "${other}" — the writer must live in the declared partition'
+					wthreads := (writer_threads[sname] or {
+						map[string]bool{}
+					}).keys()
+					if wthreads.len > 1 {
+						errs << 'eth tx signal "${sname}" is written from ${wthreads.len} execution contexts (threads ${wthreads.join(', ')}) — one producing context per SPSC channel'
+					} else if wthreads.len == 1 && other != '' && (thread_part[wthreads[0]] or {
+						''
+					}) != other {
+						errs << 'eth tx signal "${sname}" is written from partition "${thread_part[wthreads[0]] or {
+							'?'
+						}}" but declares endpoint "${other}" — the writer must live in the declared partition'
 					}
-					if readers[sname] or { 0 } > 0 {
+					if (reader_threads[sname] or {
+						map[string]bool{}
+					}).len > 0 {
 						errs << 'eth tx signal "${sname}" appears in a handler\'s reads — the bridge owns that channel side (single-reader transport)'
 					}
 				}
@@ -630,13 +637,21 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 						errs << 'signal "${sname}": endpoint "${other}" is not a declared partition or thread'
 						other = ''
 					}
-					if readers[sname] or { 0 } > 1 {
-						errs << 'eth rx signal "${sname}" has ${readers[sname]} reading handlers — the channel is single-reader'
-					} else if readers[sname] or { 0 } == 1 && other != ''
-						&& reader_part[sname] != other {
-						errs << 'eth rx signal "${sname}" is read from partition "${reader_part[sname]}" but declares endpoint "${other}" — the reader must live in the declared partition'
+					rthreads := (reader_threads[sname] or {
+						map[string]bool{}
+					}).keys()
+					if rthreads.len > 1 {
+						errs << 'eth rx signal "${sname}" is read from ${rthreads.len} execution contexts (threads ${rthreads.join(', ')}) — the channel is single-reader'
+					} else if rthreads.len == 1 && other != '' && (thread_part[rthreads[0]] or {
+						''
+					}) != other {
+						errs << 'eth rx signal "${sname}" is read from partition "${thread_part[rthreads[0]] or {
+							'?'
+						}}" but declares endpoint "${other}" — the reader must live in the declared partition'
 					}
-					if writers[sname] or { 0 } > 0 {
+					if (writer_threads[sname] or {
+						map[string]bool{}
+					}).len > 0 {
 						errs << 'eth rx signal "${sname}" appears in a handler\'s writes — the bridge is its only producer'
 					}
 				}
@@ -659,6 +674,21 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		// silently reading defaults forever — reject until the rx rung (P2)
 		if nrx > 0 && ntx == 0 {
 			errs << 'eth frame "${fname}" is rx — eth reception arrives with the rx rung (P2, docs/someip.md); this rung generates tx only'
+		}
+		// the tx mode is authoritative manifest metadata with no compiled
+		// com.TxMode reference to catch a typo — validate it here
+		if txv := fm['tx'] {
+			txm := txv.as_map()
+			mode := str_of(txm, 'mode')
+			if 'mode' in txm && mode !in ['cyclic', 'event', 'mixed', 'triggered'] {
+				errs << 'eth frame "${fname}" tx mode "${mode}" is invalid (cyclic | event | mixed | triggered — comm.com TxMode)'
+			}
+			if mode in ['', 'cyclic', 'mixed'] {
+				cyc := txm['cycle_ms'] or { toml.Any(i64(100)) }
+				if cyc !is i64 || cyc.i64() < 1 {
+					errs << 'eth frame "${fname}" tx mode "${if mode == '' { 'cyclic' } else { mode }}" needs a positive cycle_ms'
+				}
+			}
 		}
 		// the bridge derives direction from the signal endpoints — a behavior
 		// block for the OTHER direction is silently ignored (a tx mode that
@@ -704,6 +734,15 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			errs << 'eth frame "${fname}" derived payload is ${size} bytes (E2E trailer included) — the shared PDU bound is 64 (comm.com max_pdu); a wider eth PDU is its own rung, not a silent relaxation'
 		}
 	}
+	// [target] images: the ThreadX/bare-metal comm owner is CAN-only — an eth
+	// signal frame would fall into its DBC-trivial validation and FDCAN paths.
+	// Same family as the target-telemetry gate: reject until the NetX rung.
+	if n_eth_frames > 0 {
+		if _ := doc.value_opt('target') {
+			errs << 'eth [[frame]]s with a [target] image — the target comm owner is CAN-only until the NetX rung (docs/someip.md); eth frames are host-sim for now'
+		}
+	}
+
 	// the reverse membership check: an eth-bound signal outside every frame
 	// would be a phantom endpoint — no layout, no route, silently dead
 	if eth != '' {

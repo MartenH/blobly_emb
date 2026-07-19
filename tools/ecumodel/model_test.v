@@ -1282,14 +1282,14 @@ thread = "app_main"
 
 [[fb]]
 name   = "W2"
-thread = "app_main"
+thread = "far_main"
   [[fb.handler]]
   name      = "on_10ms"
   period_ms = 10
   writes    = ["Dual"]
 ' +
 		app)
-	assert e.any(it.contains('eth tx signal "Dual" has 2 writing handlers'))
+	assert e.any(it.contains('eth tx signal "Dual" is written from 2 execution contexts'))
 	assert e.any(it.contains('eth tx signal "Dual" appears in a handler\'s reads'))
 	assert e.any(it.contains('eth tx signal "Stray" is written from partition "app" but declares endpoint "far"'))
 }
@@ -1363,4 +1363,66 @@ signals = ["Cmd"]
 ' +
 		app)
 	assert e.any(it.contains('eth reception arrives with the rx rung'))
+}
+
+fn test_someip_same_thread_double_write_is_single_context() {
+	// two handlers of one FB (one Loom thread) publish serially — legal SPSC
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "Twice"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "TwiceEvt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Twice"]
+
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "app_main"
+
+[[fb]]
+name   = "W"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  writes    = ["Twice"]
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  writes    = ["Twice"]
+')
+	assert e == []
+}
+
+fn test_someip_round7_gates() {
+	// a bad tx mode; eth frames on a [target] image
+	e := errs_of(eth_head +
+		'
+[target]
+kind = "threadx"
+
+[[signal]]
+name = "S"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["S"]
+tx      = { mode = "cylic", cycle_ms = 100 }
+' +
+		app)
+	assert e.any(it.contains('tx mode "cylic" is invalid'))
+	assert e.any(it.contains('the target comm owner is CAN-only'))
 }
