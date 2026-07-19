@@ -498,8 +498,10 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 		}
 		if kind == 'pwm' {
 			fh := (pm['freq_hz'] or { toml.Any(0) })
-			if fh !is i64 || (fh as i64) <= 0 {
-				errs << 'io.pwm "${name}" needs a positive freq_hz (the carrier frequency; a zero divisor is not a timer)'
+			if fh !is i64 || (fh as i64) <= 0 || (fh as i64) > 10_000_000 {
+				// 10 MHz PWM ceiling: also keeps freq_hz inside V int / u32 before the
+				// generator narrows it (a >2^31 value would wrap — codex emb#152)
+				errs << 'io.pwm "${name}" needs a freq_hz in 1..10000000 (the carrier; a zero divisor is not a timer, and a huge value wraps the 32-bit codegen)'
 			}
 			if iv := pm['init'] {
 				if iv is i64 && (iv < 0 || iv > 1000) {

@@ -152,11 +152,17 @@ int board_io_pin_reserved(int port, int pin) {
  * APB prescaler is > 1 (this board's clock tree) — confirm the exact value on the
  * bench for a precise carrier. Extend the table as points need pads. */
 int board_io_pwm_map(int port, int pin, void **tim_base, int *chan, int *af, unsigned int *clk_hz) {
+	/* timer kernel clock = HCLK = SYSCLK/2 on this board's tree, tracked via the
+	 * achieved g_cpu_mhz (set only on PLL success). If bring-up degraded to HSI
+	 * (g_cpu_mhz still 64), reject PWM rather than emit a several-times-wrong
+	 * carrier (codex emb#152). */
+	if (g_cpu_mhz <= 64u) return -1;
+	unsigned int tclk = g_cpu_mhz * 500000u; /* MHz/2 -> Hz */
 	/* port: 0=A..10=K. TIM1 (AF1) channels on the common H7 pads. */
-	if (port == 4 && pin == 9)  { *tim_base = TIM1; *chan = 1; *af = 1; *clk_hz = 200000000u; return 0; } /* PE9  TIM1_CH1 */
-	if (port == 4 && pin == 11) { *tim_base = TIM1; *chan = 2; *af = 1; *clk_hz = 200000000u; return 0; } /* PE11 TIM1_CH2 */
-	if (port == 0 && pin == 8)  { *tim_base = TIM1; *chan = 1; *af = 1; *clk_hz = 200000000u; return 0; } /* PA8  TIM1_CH1 */
-	if (port == 0 && pin == 0)  { *tim_base = TIM2; *chan = 1; *af = 1; *clk_hz = 200000000u; return 0; } /* PA0  TIM2_CH1 */
+	if (port == 4 && pin == 9)  { *tim_base = TIM1; *chan = 1; *af = 1; *clk_hz = tclk; return 0; } /* PE9  TIM1_CH1 */
+	if (port == 4 && pin == 11) { *tim_base = TIM1; *chan = 2; *af = 1; *clk_hz = tclk; return 0; } /* PE11 TIM1_CH2 */
+	if (port == 0 && pin == 8)  { *tim_base = TIM1; *chan = 1; *af = 1; *clk_hz = tclk; return 0; } /* PA8  TIM1_CH1 */
+	if (port == 0 && pin == 0)  { *tim_base = TIM2; *chan = 1; *af = 1; *clk_hz = tclk; return 0; } /* PA0  TIM2_CH1 */
 	return -1; /* pad not in the PWM map */
 }
 

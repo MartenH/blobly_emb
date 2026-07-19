@@ -427,7 +427,10 @@ static int pwm_setup(int ch) {
 	 * PSC as small as possible (max duty resolution) with ARR <= 65535; the
 	 * frequency is then clk / ((PSC+1)*(ARR+1)) = freq_hz when clk is a multiple
 	 * of freq_hz (codex emb#152: the old fixed ARR=999 truncated the divisor). */
-	unsigned int total = (g_pt[ch].freq_hz > 0u) ? (clk / (unsigned int)g_pt[ch].freq_hz) : 0u;
+	/* round to the NEAREST period so a request just above an exact divisor isn't
+	 * needlessly rejected (codex emb#152). */
+	unsigned int fr = (unsigned int)g_pt[ch].freq_hz;
+	unsigned int total = (fr > 0u) ? ((clk + fr / 2u) / fr) : 0u;
 	if (total < 2u)
 		return -1; /* freq too high for this clock: no usable period */
 	unsigned int psc = 0u;
