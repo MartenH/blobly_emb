@@ -1220,3 +1220,76 @@ signals = ["S"]
 		app)
 	assert e.any(it.contains('eth frame name "Bench,Telem" is not a valid identifier'))
 }
+
+fn test_someip_ioc_slot_bound_counts_padding() {
+	// 5x u8 + 4x u64 alternating: wire = 37 bytes (fits), but the in-memory
+	// struct is 72 after natural alignment — over the 64-byte IOC slot
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "Padded"
+fields = { a = "u8", b = "u64", c = "u8", d = "u64", e = "u8", f = "u64", g = "u8", h = "u64", i = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "PaddedEvt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Padded"]
+' +
+		app)
+	assert e.any(it.contains('in-memory struct is 72 bytes after alignment'))
+}
+
+fn test_someip_eth_ownership_spsc() {
+	// two writers on a tx signal; a read of the same tx signal; and a writer
+	// living outside the declared endpoint partition
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "Dual"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[signal]]
+name = "Stray"
+fields = { v = "u8" }
+from = "far"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Dual", "Stray"]
+
+[[partition]]
+name = "far"
+core = 0
+  [[partition.thread]]
+  name = "far_main"
+
+[[fb]]
+name   = "W1"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  writes    = ["Dual", "Stray"]
+  reads     = ["Dual"]
+
+[[fb]]
+name   = "W2"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  writes    = ["Dual"]
+' +
+		app)
+	assert e.any(it.contains('eth tx signal "Dual" has 2 writing handlers'))
+	assert e.any(it.contains('eth tx signal "Dual" appears in a handler\'s reads'))
+	assert e.any(it.contains('eth tx signal "Stray" is written from partition "app" but declares endpoint "far"'))
+}

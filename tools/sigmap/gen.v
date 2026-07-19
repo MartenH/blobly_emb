@@ -9,6 +9,7 @@ module main
 import os
 import toml
 import tools.candb
+import tools.ecumodel
 
 struct DbcRef {
 	msg    string
@@ -43,11 +44,27 @@ fn main() {
 		for m in db.messages {
 			for s in m.signals {
 				dbc_of[s.name] = DbcRef{
-					msg: m.name, id: m.id, start: s.start_bit, length: s.length
-					factor: s.factor, offset: s.offset, unit: s.unit, found: true
+					msg:    m.name
+					id:     m.id
+					start:  s.start_bit
+					length: s.length
+					factor: s.factor
+					offset: s.offset
+					unit:   s.unit
+					found:  true
 				}
 			}
 		}
+	}
+
+	// eth frame membership + derived layout (docs/someip.md) — from the same
+	// ecumodel derivation the codec and the trace manifest use, so this table
+	// cannot drift from the wire.
+	mut eth_frame_of := map[string]string{}
+	mut eth_cells_of := map[string][]string{}
+	for c in ecumodel.eth_layouts(doc) {
+		eth_frame_of[c.sig] = '0x${c.id.hex()} (${c.frame})'
+		eth_cells_of[c.sig] << '${c.field}@${c.offset}+${c.width}'
 	}
 
 	// FB producers (writes) / consumers (reads) per signal, from [[fb]].
@@ -100,9 +117,28 @@ fn main() {
 		} else {
 			from
 		}
-		dbc_sig := if d.found { '${d.msg}.${name}' } else { '—' }
-		frame := if d.found { '0x${d.id.hex()}' } else { '—' }
-		layout := if d.found { '${d.start}|${d.length}' } else { '—' }
+		eth_frame := eth_frame_of[name] or { '' }
+		dbc_sig := if d.found {
+			'${d.msg}.${name}'
+		} else if eth_frame != '' {
+			'derived (eth)'
+		} else {
+			'—'
+		}
+		frame := if d.found {
+			'0x${d.id.hex()}'
+		} else if eth_frame != '' {
+			eth_frame
+		} else {
+			'—'
+		}
+		layout := if d.found {
+			'${d.start}|${d.length}'
+		} else if eth_frame != '' {
+			(eth_cells_of[name] or { []string{} }).join(' ')
+		} else {
+			'—'
+		}
 		scaling := if d.found && d.factor != 1.0 { 'x${d.factor}' } else { '—' }
 		unit := if d.unit != '' { d.unit } else { '—' }
 		path := if local { '${from} (local cell)' } else { '${from}→IOC(${tr})→${to}' }

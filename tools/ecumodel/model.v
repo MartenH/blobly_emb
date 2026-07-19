@@ -173,7 +173,7 @@ pub fn validate(doc toml.Doc) []string {
 	errs << validate_io(doc, part_names, thread_part, bus_names)
 
 	// [someip] / eth buses — must also stay BEFORE [trace] (early return below).
-	errs << validate_someip(doc)
+	errs << validate_someip(doc, part_names, thread_part, bus_names)
 
 	// [trace] — the runtime-observability block loom2v generates the trace wiring from. Validate
 	// the enums loom2v switches on (level, mode), the numeric ranges (pre_pct, buffer_records),
@@ -337,12 +337,97 @@ fn peer_ok(s string) bool {
 	return true
 }
 
+// EthLayoutCell is one derived-layout cell of an eth frame (docs/someip.md).
+// The canonical order — signals in list order, fields NAME-SORTED, LE, natural
+// widths, byte-aligned — is derived HERE, the single source of truth for the
+// loom2v codec, sigmap's provenance table, and the trace manifest the host
+// oracle decodes from.
+pub struct EthLayoutCell {
+pub:
+	frame  string
+	id     int
+	sig    string
+	field  string
+	offset int
+	width  int
+	typ    string
+}
+
+// eth_bus_of returns the (single, ecucheck-enforced) kind = "eth" bus, or ''.
+pub fn eth_bus_of(doc toml.Doc) string {
+	if bv := doc.value_opt('bus') {
+		for bname, bcfg in bv.as_map() {
+			if str_of(bcfg.as_map(), 'kind') == 'eth' {
+				return bname
+			}
+		}
+	}
+	return ''
+}
+
+// eth_layouts derives every eth frame's canonical payload layout. Invalid
+// pieces (unknown signals, non-scalar fields) contribute nothing — the
+// validator reports them; this derivation serves the already-valid config.
+pub fn eth_layouts(doc toml.Doc) []EthLayoutCell {
+	eth := eth_bus_of(doc)
+	mut out := []EthLayoutCell{}
+	if eth == '' {
+		return out
+	}
+	mut sig_fields := map[string]map[string]string{}
+	for sg in toml_arr(doc, 'signal') {
+		sm := sg.as_map()
+		mut fields := map[string]string{}
+		if f := sm['fields'] {
+			for fname, ftyp in f.as_map() {
+				fields[fname] = ftyp.string()
+			}
+		}
+		sig_fields[str_of(sm, 'name')] = fields.clone()
+	}
+	for f in toml_arr(doc, 'frame') {
+		fm := f.as_map()
+		if str_of(fm, 'bus') != eth {
+			continue
+		}
+		fname := str_of(fm, 'name')
+		fid := int((fm['id'] or { toml.Any(0) }).int())
+		mut off := 0
+		for sv in arr_of(fm, 'signals') {
+			sname := sv.string()
+			if sname !in sig_fields {
+				continue
+			}
+			fields := sig_fields[sname].clone()
+			mut fnames := fields.keys()
+			fnames.sort()
+			for fn_ in fnames {
+				w := scalar_width(fields[fn_])
+				if w == 0 {
+					continue
+				}
+				out << EthLayoutCell{
+					frame:  fname
+					id:     fid
+					sig:    sname
+					field:  fn_
+					offset: off
+					width:  w
+					typ:    fields[fn_]
+				}
+				off += w
+			}
+		}
+	}
+	return out
+}
+
 // validate_someip checks the eth bus + [someip] + eth [[frame]] rules
 // (docs/someip.md): one eth bus per image, the [someip]/eth-traffic pairing,
 // event-class ids unique across bindings, the signals list with its canonical
 // fixed-width layout, one direction per frame, and the shared 64-byte PDU
 // bound (comm.com max_pdu — the codec/router path is sized for it).
-fn validate_someip(doc toml.Doc) []string {
+fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[string]string, bus_names map[string]bool) []string {
 	mut errs := []string{}
 	mut eth_buses := []string{}
 	if bv := doc.value_opt('bus') {
@@ -364,6 +449,7 @@ fn validate_someip(doc toml.Doc) []string {
 	mut sig_from := map[string]string{}
 	mut sig_to := map[string]string{}
 	mut sig_size := map[string]int{}
+	mut sig_mem := map[string]int{}
 	mut sig_badfield := map[string]string{}
 	for sg in toml_arr(doc, 'signal') {
 		sm := sg.as_map()
@@ -372,14 +458,50 @@ fn validate_someip(doc toml.Doc) []string {
 		sig_to[sname] = str_of(sm, 'to')
 		if f := sm['fields'] {
 			mut size := 0
+			// the IN-MEMORY struct size too (natural alignment, declaration
+			// order): the handlers publish sig.<Name> through IOC, whose slot
+			// is 64 bytes (IOC_MAX, osal_native.c) — a signal can fit the wire
+			// yet overflow the slot after C/V padding
+			mut msize := 0
+			mut maxal := 1
 			for fname, ftyp in f.as_map() {
 				w := scalar_width(ftyp.string())
 				if w == 0 {
 					sig_badfield[sname] = '${fname} "${ftyp.string()}"'
+					continue
 				}
 				size += w
+				if w > maxal {
+					maxal = w
+				}
+				msize = (msize + w - 1) / w * w + w
 			}
+			msize = (msize + maxal - 1) / maxal * maxal
 			sig_size[sname] = size
+			sig_mem[sname] = msize
+		}
+	}
+
+	// FB reads/writes fan-in per signal (the io validator's pattern): the eth
+	// channel topology must stay SPSC — the bridge owns one side, so extra or
+	// wrong-side or wrong-partition accessors are config errors, not surprises
+	mut readers := map[string]int{}
+	mut writers := map[string]int{}
+	mut reader_part := map[string]string{}
+	mut writer_part := map[string]string{}
+	for c in toml_arr(doc, 'fb') {
+		cm := c.as_map()
+		fb_part := thread_part[str_of(cm, 'thread')] or { '' }
+		for h in arr_of(cm, 'handler') {
+			hm := h.as_map()
+			for r in arr_of(hm, 'reads') {
+				readers[r.string()]++
+				reader_part[r.string()] = fb_part
+			}
+			for w in arr_of(hm, 'writes') {
+				writers[w.string()]++
+				writer_part[w.string()] = fb_part
+			}
 		}
 	}
 
@@ -441,13 +563,58 @@ fn validate_someip(doc toml.Doc) []string {
 				errs << 'signal "${sname}" names eth bus "${eth}" on BOTH sides — a signal has the bus on exactly one side (the bridge cannot hold both channel roles: SPSC)'
 			} else if sig_to[sname] == eth {
 				ntx++
+				// SPSC ownership, tx: the app side produces, the bridge consumes.
+				mut other := sig_from[sname]
+				if other in bus_names {
+					errs << 'signal "${sname}": the non-eth side is bus "${other}" — an eth signal passes through the application, never bus-to-bus'
+				} else {
+					if other in thread_part {
+						other = thread_part[other]
+					} else if other !in part_names {
+						errs << 'signal "${sname}": endpoint "${other}" is not a declared partition or thread'
+						other = ''
+					}
+					if writers[sname] or { 0 } > 1 {
+						errs << 'eth tx signal "${sname}" has ${writers[sname]} writing handlers — dual producers break SPSC'
+					} else if writers[sname] or { 0 } == 1 && other != ''
+						&& writer_part[sname] != other {
+						errs << 'eth tx signal "${sname}" is written from partition "${writer_part[sname]}" but declares endpoint "${other}" — the writer must live in the declared partition'
+					}
+					if readers[sname] or { 0 } > 0 {
+						errs << 'eth tx signal "${sname}" appears in a handler\'s reads — the bridge owns that channel side (single-reader transport)'
+					}
+				}
 			} else if sig_from[sname] == eth {
 				nrx++
+				// SPSC ownership, rx: the bridge produces, the app side consumes.
+				mut other := sig_to[sname]
+				if other in bus_names {
+					errs << 'signal "${sname}": the non-eth side is bus "${other}" — an eth signal passes through the application, never bus-to-bus'
+				} else {
+					if other in thread_part {
+						other = thread_part[other]
+					} else if other !in part_names {
+						errs << 'signal "${sname}": endpoint "${other}" is not a declared partition or thread'
+						other = ''
+					}
+					if readers[sname] or { 0 } > 1 {
+						errs << 'eth rx signal "${sname}" has ${readers[sname]} reading handlers — the channel is single-reader'
+					} else if readers[sname] or { 0 } == 1 && other != ''
+						&& reader_part[sname] != other {
+						errs << 'eth rx signal "${sname}" is read from partition "${reader_part[sname]}" but declares endpoint "${other}" — the reader must live in the declared partition'
+					}
+					if writers[sname] or { 0 } > 0 {
+						errs << 'eth rx signal "${sname}" appears in a handler\'s writes — the bridge is its only producer'
+					}
+				}
 			} else {
 				errs << 'eth frame "${fname}" lists signal "${sname}" which does not name bus "${eth}" on either side'
 			}
 			if bad := sig_badfield[sname] {
 				errs << 'signal "${sname}" field ${bad} is not a fixed-width scalar (bool, u8..u64, i8..i64, f32/f64) — the derived eth layout has no meaning for it'
+			}
+			if sig_mem[sname] or { 0 } > 64 {
+				errs << 'signal "${sname}" in-memory struct is ${sig_mem[sname]} bytes after alignment — it exceeds the 64-byte IOC slot (IOC_MAX, osal_native.c); reorder or shrink its fields'
 			}
 			size += sig_size[sname] or { 0 }
 		}

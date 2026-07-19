@@ -414,18 +414,6 @@ mut:
 	tx_min_us   int
 }
 
-// eth_scalar_width mirrors ecumodel.scalar_width — the validator has already
-// rejected anything else, so 0 cannot happen here.
-fn eth_scalar_width(t string) int {
-	return match t {
-		'bool', 'u8', 'i8' { 1 }
-		'u16', 'i16' { 2 }
-		'u32', 'i32', 'f32' { 4 }
-		'u64', 'i64', 'f64' { 8 }
-		else { 0 }
-	}
-}
-
 // peer_parts splits the (ecucheck-validated) IPv4 address:port peer into its
 // four octets + port, for emission as fixed-width scalar consts.
 fn peer_parts(peer string) ([]int, int) {
@@ -499,27 +487,22 @@ fn parse_eth_frames(doc toml.Doc, eth string, sig_of map[string]SigInfo) []EthFr
 			if !fr.tx && !si.rx {
 				fr.tx = true
 			}
-			mut fnames := []string{}
-			for fl in si.fields {
-				fnames << fl.name
+		}
+		// the layout comes from ecumodel.eth_layouts — the SINGLE derivation
+		// (sigmap and the manifest read the same one, so they cannot drift)
+		for cell in ecumodel.eth_layouts(doc) {
+			if cell.frame != fname {
+				continue
 			}
-			fnames.sort()
-			for fn_ in fnames {
-				mut ftyp := ''
-				for fl in si.fields {
-					if fl.name == fn_ {
-						ftyp = fl.typ
-					}
-				}
-				w := eth_scalar_width(ftyp)
-				fr.layout << EthField{
-					sig:    sname
-					field:  fn_
-					offset: off
-					width:  w
-					typ:    ftyp
-				}
-				off += w
+			fr.layout << EthField{
+				sig:    cell.sig
+				field:  cell.field
+				offset: cell.offset
+				width:  cell.width
+				typ:    cell.typ
+			}
+			if cell.offset + cell.width > off {
+				off = cell.offset + cell.width
 			}
 		}
 		if ev := fm['e2e'] {
@@ -1505,7 +1488,9 @@ fn telem_on_can(m Model) bool {
 // unpack is the rx rung (consts only here).
 fn emit_eth_codec(m Model) []string {
 	mut glue := []string{}
-	if m.eth_frames.len == 0 {
+	// identity keys on [someip] itself — a module-only eth service (trace/telem
+	// bound, no [[frame]]) still needs its runtime identity/endpoint consts
+	if !m.someip.on {
 		return glue
 	}
 	glue << ''
