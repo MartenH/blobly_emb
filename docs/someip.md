@@ -293,3 +293,29 @@ two-repo pincer the CAN stack used.
 
 See docs/net.md (substrate + security posture), docs/com-modules.md (routing),
 docs/multi-node.md (the system tier this feeds), [[eth-middleware-someip]].
+
+## P1 implementation status (2026-07-19)
+
+**Rungs 1-2 MERGED (#153):** `comm/someip` (header codec, notification builder,
+the `Drop`-reason rx envelope gate) and the ecumodel/ecucheck schema battery.
+The host oracle (blobly_net `modules/someip`, its phase E3 core) is merged on
+that repo's main — golden vectors byte-compatible with `comm/someip`.
+
+**Rung 3 — codegen (this branch):** loom2v understands `kind = "eth"`:
+
+- `[someip]` + eth `[[frame]]`s parse into the model; eth signals skip DBC
+  resolution (their layout is derived, docs above), and an eth bus is excluded
+  from the CAN bridge (`bridge_buses`, `emit_bridges`) — no `can.Channel`, no
+  DBC codec, no comm thread for it yet.
+- `gen/loom_gen.v` gains the eth section: `someip_*` identity consts, per-frame
+  `<frame>_event_id`/`<frame>_len` (+ E2E trailer offsets when configured), and
+  a no-alloc `<frame>_pack(mut d [com.max_pdu]u8, ...)` per TX frame writing
+  the canonical layout (rx unpack arrives with the rx rung).
+- `gen/trace-manifest.csv` gains `someip`/`ethframe`/`ethlayout` rows — the
+  oracle decodes payloads from the same source of truth as the codec.
+- `examples/host_someip` exercises it end to end: config → generated codec +
+  manifest → compiled image (`make example NAME=host_someip`); no wire yet.
+
+Next: the UDP tx rung — the eth comm thread wrapping packed payloads in the
+`comm/someip` header over a loopback socket (proven-on-lo), reusing
+`com.TxState` for the tx modes; then the H735 NetX rung (bench).

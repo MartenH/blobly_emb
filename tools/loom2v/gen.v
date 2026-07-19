@@ -133,7 +133,7 @@ fn parse_nvm_id(name string, v int) u16 {
 	return u16(v)
 }
 
-fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool) (map[string]SigInfo, []string, bool) {
+fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (map[string]SigInfo, []string, bool, bool) {
 	mut sig_of := map[string]SigInfo{}
 	mut sig_names := []string{}
 	mut has_external := false
@@ -203,14 +203,22 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool) (map[string]Si
 		sig_names << name
 	}
 	// Map each external signal to its DBC message (so the bridge can name the generated codec
-	// fns / id / dlc). External signals must be in the DBC.
-	if has_external {
+	// fns / id / dlc). External CAN signals must be in the DBC; eth signals have
+	// no DBC — their layout is DERIVED from the declarations (docs/someip.md).
+	mut has_can_ext := false
+	for sname in sig_names {
+		si := sig_of[sname] or { continue }
+		if si.external && si.bus != eth {
+			has_can_ext = true
+		}
+	}
+	if has_can_ext {
 		db := candb.load_dbc_file(dbc) or {
 			panic('external signals need a DBC: load ${dbc}: ${err}')
 		}
 		for sname in sig_names {
 			mut si := sig_of[sname] or { continue }
-			if !si.external {
+			if !si.external || si.bus == eth {
 				continue
 			}
 			si.dbc_msg = dbc_message_of(db, sname) or {
@@ -223,7 +231,7 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool) (map[string]Si
 			sig_of[sname] = si
 		}
 	}
-	return sig_of, sig_names, has_external
+	return sig_of, sig_names, has_external, has_can_ext
 }
 
 // emit_signals generates the `sig` module — one struct per signal, fields in declaration order —
@@ -350,18 +358,158 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 	return dids
 }
 
-fn parse_buses(doc toml.Doc) (map[string]bool, map[string]int) {
+fn parse_buses(doc toml.Doc) (map[string]bool, map[string]int, map[string]string) {
 	mut buses := map[string]bool{}
 	mut bus_core := map[string]int{}
+	mut bus_kind := map[string]string{} // 'can' (default) | 'eth' (docs/someip.md)
 	// value_opt (not value): no [bus] must yield no buses — value() returns Null
 	// for a missing key, which as_map() coerces into a phantom "0" entry.
 	if bv := doc.value_opt('bus') {
 		for bname, bcfg in bv.as_map() {
 			buses[bname] = true
 			bus_core[bname] = int((bcfg.as_map()['core'] or { toml.Any(0) }).int())
+			bus_kind[bname] = (bcfg.as_map()['kind'] or { toml.Any('can') }).string()
 		}
 	}
-	return buses, bus_core
+	return buses, bus_core, bus_kind
+}
+
+// --- SOME/IP over eth (docs/someip.md): the [someip] identity + eth [[frame]]s
+//     with their DERIVED payload layout (signals in list order, fields
+//     name-sorted, LE, natural widths). ecumodel.validate_someip has already
+//     gated ranges/directions/bounds before this parse runs. ---
+
+struct SomeipCfg {
+mut:
+	on      bool
+	bus     string
+	service int
+	version int
+	port    int
+	peer    string
+}
+
+// EthField is one derived-layout cell: signal + field at a byte offset.
+struct EthField {
+	sig    string // signal name (config spelling)
+	field  string // field name
+	offset int
+	width  int
+	typ    string // the V type ('bool','u8',...,'f64')
+}
+
+// EthFrame is one eth [[frame]]: the SOME/IP event id + the derived layout.
+struct EthFrame {
+mut:
+	name        string // config spelling
+	id          int    // event id (bit 15 set — validated)
+	tx          bool   // direction: signals to the bus (else rx)
+	signals     []string
+	layout      []EthField
+	len         int  // total payload bytes (E2E trailer included)
+	e2e_on      bool // loss protection: the appended counter+CRC trailer
+	e2e_id      int
+	tx_mode     string // cyclic | change | mixed (tx frames)
+	tx_cycle_us int
+	tx_min_us   int
+}
+
+// eth_scalar_width mirrors ecumodel.scalar_width — the validator has already
+// rejected anything else, so 0 cannot happen here.
+fn eth_scalar_width(t string) int {
+	return match t {
+		'bool', 'u8', 'i8' { 1 }
+		'u16', 'i16' { 2 }
+		'u32', 'i32', 'f32' { 4 }
+		'u64', 'i64', 'f64' { 8 }
+		else { 0 }
+	}
+}
+
+fn parse_someip(doc toml.Doc) SomeipCfg {
+	mut s := SomeipCfg{}
+	if sv := doc.value_opt('someip') {
+		sm := sv.as_map()
+		s.on = true
+		s.bus = (sm['bus'] or { toml.Any('') }).string()
+		s.service = int((sm['service'] or { toml.Any(0) }).int())
+		s.version = int((sm['version'] or { toml.Any(0) }).int())
+		s.port = int((sm['port'] or { toml.Any(0) }).int())
+		s.peer = (sm['peer'] or { toml.Any('') }).string()
+	}
+	return s
+}
+
+// parse_eth_frames builds each eth frame's derived layout from the signal
+// declarations: signals in list order, fields NAME-SORTED within a signal
+// (TOML table key order is not data — docs/someip.md), byte-aligned LE at
+// natural widths, the optional E2E trailer appended.
+fn parse_eth_frames(doc toml.Doc, eth string, sig_of map[string]SigInfo) []EthFrame {
+	mut out := []EthFrame{}
+	if eth == '' {
+		return out
+	}
+	for f in ecumodel.toml_arr(doc, 'frame') {
+		fm := f.as_map()
+		if (fm['bus'] or { toml.Any('') }).string() != eth {
+			continue
+		}
+		fname := (fm['name'] or { toml.Any('') }).string()
+		mut fr := EthFrame{
+			name:        fname
+			id:          int((fm['id'] or { toml.Any(0) }).int())
+			tx_mode:     'cyclic'
+			tx_cycle_us: 100_000
+		}
+		if txv := fm['tx'] {
+			txm := txv.as_map()
+			fr.tx_mode = (txm['mode'] or { toml.Any('cyclic') }).string()
+			fr.tx_cycle_us = int((txm['cycle_ms'] or { toml.Any(100) }).int()) * 1000
+			fr.tx_min_us = int((txm['min_delay_ms'] or { toml.Any(0) }).int()) * 1000
+		}
+		mut off := 0
+		for sv in (fm['signals'] or { toml.Any([]toml.Any{}) }).array() {
+			sname := sv.string()
+			fr.signals << sname
+			si := sig_of[sname] or {
+				panic('loom2v: eth frame "${fname}" lists unknown signal "${sname}"')
+			}
+			if !fr.tx && !si.rx {
+				fr.tx = true
+			}
+			mut fnames := []string{}
+			for fl in si.fields {
+				fnames << fl.name
+			}
+			fnames.sort()
+			for fn_ in fnames {
+				mut ftyp := ''
+				for fl in si.fields {
+					if fl.name == fn_ {
+						ftyp = fl.typ
+					}
+				}
+				w := eth_scalar_width(ftyp)
+				fr.layout << EthField{
+					sig:    sname
+					field:  fn_
+					offset: off
+					width:  w
+					typ:    ftyp
+				}
+				off += w
+			}
+		}
+		if ev := fm['e2e'] {
+			evm := ev.as_map()
+			fr.e2e_on = true
+			fr.e2e_id = int((evm['data_id'] or { toml.Any(0) }).int())
+			off += 2 // the appended counter + CRC trailer (docs/someip.md)
+		}
+		fr.len = off
+		out << fr
+	}
+	return out
 }
 
 // IoPoint is one [[io.gpio]] entry, bound one-to-one to the [[signal]] of the same
@@ -530,9 +678,14 @@ struct Model {
 mut:
 	buses        map[string]bool
 	bus_core     map[string]int
+	bus_kind     map[string]string // 'can' (default) | 'eth'
+	eth          string            // the (single) eth bus name, '' = none
+	someip       SomeipCfg
+	eth_frames   []EthFrame
 	sig_of       map[string]SigInfo
 	sig_names    []string
-	has_external bool
+	has_external bool // any bus-endpoint signal (CAN or eth)
+	has_can_ext  bool // any CAN bus-endpoint signal (drives driver.can/DBC paths)
 	frames       FrameCfg
 	routes       []Route
 	isotp_conns  []IsotpConn
@@ -563,8 +716,15 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		panic('loom2v: [duo] has dissolved into the signal model — declare cross-core signals as ' +
 			'[[signal]] from = "<satellite partition>" (slots are derived; see docs/multi-image.md)')
 	}
-	buses, bus_core := parse_buses(doc)
-	mut sig_of, sig_names, has_external := parse_signals(doc, dbc, buses)
+	buses, bus_core, bus_kind := parse_buses(doc)
+	// at most ONE eth bus per image (ecucheck-enforced); '' = none
+	mut eth := ''
+	for bname, k in bus_kind {
+		if k == 'eth' {
+			eth = bname
+		}
+	}
+	mut sig_of, sig_names, has_external, has_can_ext := parse_signals(doc, dbc, buses, eth)
 	part := parse_partitions(doc)
 	io_points, io_core := parse_io(doc, sig_of)
 	// P1 generates the SAME-core transport derivation only (triple): the io thread
@@ -621,6 +781,11 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		sig_of:       sig_of
 		sig_names:    sig_names
 		has_external: has_external
+		has_can_ext:  has_can_ext
+		bus_kind:     bus_kind
+		eth:          eth
+		someip:       parse_someip(doc)
+		eth_frames:   parse_eth_frames(doc, eth, sig_of)
 		frames:       parse_frames(doc)
 		routes:       parse_routes(doc, dbc)
 		isotp_conns:  parse_isotp(doc)
@@ -868,7 +1033,32 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	man << nm_manifest_frames(m)
 	man << duo_manifest(m)
 	man << nvm_manifest(m)
+	man << someip_manifest(m)
 	return man
+}
+
+// someip_manifest: the eth service identity + each frame's DERIVED layout, so
+// the host oracle (blobly_net modules/someip) decodes the payload from the
+// same source of truth as the generated codec (docs/someip.md).
+fn someip_manifest(m Model) []string {
+	if m.eth_frames.len == 0 {
+		return []
+	}
+	mut rows := ['# someip: service,version,port,peer']
+	rows << 'someip,0x${m.someip.service.hex()},${m.someip.version},${m.someip.port},${m.someip.peer}'
+	rows << '# eth frames: frame,id,len,dir,mode,cycle_us,e2e_id'
+	for fr in m.eth_frames {
+		dir := if fr.tx { 'tx' } else { 'rx' }
+		e2e := if fr.e2e_on { '0x${fr.e2e_id.hex()}' } else { '-' }
+		rows << 'ethframe,${fr.name},0x${fr.id.hex()},${fr.len},${dir},${fr.tx_mode},${fr.tx_cycle_us},${e2e}'
+	}
+	rows << '# eth layout: frame,signal,field,offset,width,type'
+	for fr in m.eth_frames {
+		for cell in fr.layout {
+			rows << 'ethlayout,${fr.name},${cell.sig},${cell.field},${cell.offset},${cell.width},${cell.typ}'
+		}
+	}
+	return rows
 }
 
 // emit_partition_telem emits the host CpuLoad tx thread: sum each core's per-partition load from
@@ -1253,12 +1443,92 @@ fn emit_io_target_create(io_prio int) []string {
 // comm-thread target (comm_thread_on), which owns rx in its own comm_thread_entry. Returns the
 // glue lines plus the bus_names / bus_dests the run() emitters need; reads the Model, with the
 // derived scratch/thread layout (telem_slot, comm_tid, trace bases) from main's emit-time state.
+// emit_eth_codec emits the SOME/IP eth frame table + derived-layout codec
+// (docs/someip.md): the [someip] identity consts, per-frame event-id/len
+// consts, and a no-alloc pack fn per TX frame writing each field at its
+// natural width, little-endian, in canonical order (signals-list order,
+// name-sorted fields). The DBC-codec analog for the eth bus — the tx loop
+// that wraps these payloads in the comm/someip header is the UDP rung; rx
+// unpack is the rx rung (consts only here).
+fn emit_eth_codec(m Model) []string {
+	mut glue := []string{}
+	if m.eth_frames.len == 0 {
+		return glue
+	}
+	glue << ''
+	glue << '// --- SOME/IP eth frames (docs/someip.md): derived-layout codec ---'
+	glue << ''
+	glue << 'pub const someip_service = u16(0x${m.someip.service.hex()})'
+	glue << 'pub const someip_version = u8(${m.someip.version})'
+	glue << 'pub const someip_port = u16(${m.someip.port})'
+	glue << "pub const someip_peer = '${m.someip.peer}'"
+	for fr in m.eth_frames {
+		fb := snake(fr.name)
+		dir := if fr.tx { 'tx' } else { 'rx' }
+		e2e_note := if fr.e2e_on { ' (incl. 2-byte E2E trailer)' } else { '' }
+		glue << ''
+		glue << '// ${fr.name}: ${dir} event 0x${fr.id.hex()}, ${fr.len}-byte payload${e2e_note}'
+		glue << 'pub const ${fb}_event_id = u16(0x${fr.id.hex()})'
+		glue << 'pub const ${fb}_len = u8(${fr.len})'
+		if fr.e2e_on {
+			// the trailer sits after the signal layout: counter, then CRC
+			glue << 'pub const ${fb}_e2e_id = u16(0x${fr.e2e_id.hex()})'
+			glue << 'pub const ${fb}_e2e_ctr = ${fr.len - 2}'
+			glue << 'pub const ${fb}_e2e_crc = ${fr.len - 1}'
+		}
+		if !fr.tx {
+			continue // rx unpack arrives with the rx rung
+		}
+		mut params := []string{}
+		for s in fr.signals {
+			params << 's_${snake(s)} sig.${s}'
+		}
+		glue << 'pub fn ${fb}_pack(mut d [com.max_pdu]u8, ${params.join(', ')}) {'
+		for cell in fr.layout {
+			expr := 's_${snake(cell.sig)}.${cell.field}'
+			o := cell.offset
+			match cell.typ {
+				'bool' {
+					glue << '\td[${o}] = if ${expr} { u8(1) } else { u8(0) }'
+				}
+				'f32', 'f64' {
+					// bit-copy: host and target are both little-endian
+					glue << '\tunsafe {'
+					glue << '\t\tfp_${o} := &u8(&${expr})'
+					glue << '\t\tfor i in 0 .. ${cell.width} {'
+					glue << '\t\t\td[${o} + i] = fp_${o}[i]'
+					glue << '\t\t}'
+					glue << '\t}'
+				}
+				else {
+					// integer scalars: LE shifts through the unsigned widening cast
+					for i in 0 .. cell.width {
+						if i == 0 {
+							glue << '\td[${o}] = u8(${expr})'
+						} else {
+							glue << '\td[${o + i}] = u8(u64(${expr}) >> ${i * 8})'
+						}
+					}
+				}
+			}
+		}
+		glue << '}'
+	}
+	return glue
+}
+
 fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, []string, map[string][]string) {
 	mut glue := []string{}
 	mut bus_names := []string{}
 	mut bus_dests := map[string][]string{}
 	for bname, _ in m.buses {
 		if comm_thread_on {
+			continue
+		}
+		// an eth bus gets no CAN bridge: no can.Channel, no DBC codec — its tx
+		// loop is the someip/UDP rung (docs/someip.md); this rung emits the
+		// frame table + derived-layout codec only (emit_eth_codec)
+		if m.bus_kind[bname] or { 'can' } == 'eth' {
 			continue
 		}
 		bb := snake(bname)
@@ -2831,11 +3101,11 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 		glue << 'import nvm' // the persistence journal (docs/nvm.md)
 		glue << 'import boot as bootfl' // FlashOps — aliased: gen has its own boot()
 	}
-	if m.has_external || m.isotp_conns.len > 0 || m.telem.on {
+	if m.has_can_ext || m.isotp_conns.len > 0 || m.telem.on {
 		glue << 'import driver.can' // the generated bus bridge
 	}
-	if m.has_external && !comm_thread_on {
-		glue << 'import comm.com' // per-PDU TX modes + RX deadline monitoring (host bridge only)
+	if (m.has_can_ext && !comm_thread_on) || m.eth_frames.len > 0 {
+		glue << 'import comm.com' // per-PDU TX modes + RX deadline; eth codec PDU bound (max_pdu)
 	}
 	if has_e2e {
 		glue << 'import comm.e2e' // end-to-end protection (CRC + alive counter)
@@ -3245,7 +3515,9 @@ fn main() {
 	// frames on its channel; it gets no loop of its own — matches the bus_names set below.)
 	mut bridge_buses := map[string]bool{}
 	for _, si in m.sig_of {
-		if si.external {
+		// eth signals don't create a CAN bridge — their tx loop is the
+		// someip/UDP rung (this rung emits tables + codec only)
+		if si.external && si.bus != m.eth {
 			bridge_buses[si.bus] = true
 		}
 	}
@@ -3315,6 +3587,9 @@ fn main() {
 	// --- generated COM bus bridge(s) — emitted by emit_bridges ---
 	bridge_glue, bnames, bus_dests := emit_bridges(m, comm_thread_on, producers)
 	glue << bridge_glue
+
+	// --- SOME/IP eth frame table + derived-layout codec (docs/someip.md) ---
+	glue << emit_eth_codec(m)
 	mut bus_names := bnames.clone()
 
 	// --- telemetry tx: sum per-partition load by core -> CpuLoad frame on the bus (emit_partition_telem) ---
