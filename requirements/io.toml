@@ -87,12 +87,31 @@ method = "review"
 asil = "QM"
 derives = "SYS-REQ-IO-001"
 
-# The io thread's startup and sleep choreography must be requirement-linked
-# evidence, not an unverifiable doc paragraph.
+# The io lifecycle choreography, split atomically (README rule): startup here,
+# sleep quiesce in REQ-IO-015, wake resume in REQ-IO-016 — they fail
+# independently and need different test setups.
 [[req]]
 id = "REQ-IO-009"
-title = "IO lifecycle: startup, quiesce, resume"
-text = "At startup the IO layer shall drive every output to its configured init value and hold it there until that output's first publication, and shall publish an initial complete sample of every input before application dispatch begins, except an input whose bounded acquisition wait expires — that input publishes nothing, the failure is counted observably, and the ECU starts in the documented degraded mode. On sleep entry it shall stop acquisition, drive every output to its configured init value, and quiesce before the ECU sleeps; on wake it shall re-establish acquisition, publish an initial sample of every input before application dispatch resumes — under the same bounded-wait exception as startup (a silent input publishes nothing, the failure is counted, dispatch resumes degraded) — and hold every output at its init value until the first post-wake publication (the freshness gate re-arms on wake)."
+title = "IO startup ordering"
+text = "At startup the IO layer shall drive every output to its configured init value and hold it there until that output's first publication, and shall publish an initial complete sample of every input before application dispatch begins, except an input whose bounded acquisition wait expires — that input publishes nothing, the failure is counted observably, and the ECU starts in the documented degraded mode."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-015"
+title = "IO sleep quiesce"
+text = "On sleep entry the IO layer shall stop acquisition, drive every output to its configured init value, and quiesce before the ECU sleeps."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-016"
+title = "IO wake resume"
+text = "On wake the IO layer shall re-establish acquisition and publish an initial sample of every input before application dispatch resumes, under the same bounded-wait exception as startup, and shall hold every output at its init value until the first post-wake publication."
 status = "draft"
 method = "test"
 asil = "QM"
