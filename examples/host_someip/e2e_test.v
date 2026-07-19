@@ -2,12 +2,19 @@ module main
 
 // e2e: build the example, run the binary, and listen on the configured peer
 // endpoint (127.0.0.1:30491) — the io e2e pattern carried to the eth bus
-// (proven-on-lo, docs/someip.md). Every datagram is decoded and gated by the
-// REAL rx envelope code (comm/someip check_event), then the three COM tx
-// modes are each asserted by their observable wire behavior:
-//   cyclic (0x8001): keeps a steady cadence regardless of payload change;
-//   event  (0x8002): sends ONLY on change — every consecutive pair differs;
-//   mixed  (0x8003): heartbeats between changes — repeats AND changes appear.
+// (proven-on-lo, docs/someip.md). Every datagram is decoded through the REAL
+// rx envelope gate (comm/someip check_event) AND its payload decoded per the
+// CONFIGURED derived layout (lengths, LE offsets, field relations — an
+// endianness or offset regression fails here, not just pattern checks). Then
+// each COM tx mode is asserted by the behavior that DISTINGUISHES it:
+//   cyclic (0x8001): retransmits an UNCHANGED layout on cadence (the app
+//     quantizes its payload to every 4th cycle so repeats must appear), with
+//     the E2E trailer counter stepping loss-free;
+//   event  (0x8002): sends on change ONLY, and EVERY transition — decoded
+//     levels are strictly consecutive (+1, no skips, no repeats);
+//   mixed  (0x8003): heartbeats between changes AND publishes a change
+//     immediately — some transition must arrive well inside the 300 ms
+//     heartbeat interval.
 // @verifies REQ-NET-013
 import comm.someip
 import net
@@ -19,6 +26,19 @@ const iface_ver = u8(1)
 const id_cyclic = u16(0x8001)
 const id_event = u16(0x8002)
 const id_mixed = u16(0x8003)
+
+struct Rx {
+	at  time.Time
+	pay []u8
+}
+
+fn le32(p []u8, o int) u32 {
+	return u32(p[o]) | (u32(p[o + 1]) << 8) | (u32(p[o + 2]) << 16) | (u32(p[o + 3]) << 24)
+}
+
+fn le16(p []u8, o int) u16 {
+	return u16(p[o]) | (u16(p[o + 1]) << 8)
+}
 
 fn test_tx_modes_on_the_wire() {
 	dir := os.real_path(os.dir(@FILE))
@@ -39,11 +59,11 @@ fn test_tx_modes_on_the_wire() {
 		p.wait()
 	}
 
-	// collect ~3.2 s of traffic (nominal: 32 cyclic, ~6 event, ~10+4 mixed)
-	mut by_id := map[u16][][]u8{}
+	// collect ~3.5 s of traffic (nominal: ~35 cyclic, ~7 event, ~11+5 mixed)
+	mut by_id := map[u16][]Rx{}
 	mut buf := []u8{len: 2048}
 	start := time.now()
-	for time.since(start) < 3200 * time.millisecond {
+	for time.since(start) < 3500 * time.millisecond {
 		n, _ := c.read(mut buf) or { continue }
 		if n < someip.header_len {
 			continue
@@ -52,36 +72,69 @@ fn test_tx_modes_on_the_wire() {
 		assert ok
 		// the REAL envelope gate accepts every datagram the image emits
 		assert someip.check_event(h, n, service, iface_ver) == someip.Drop.none, 'dropped: ${h}'
-		by_id[h.method] << buf[someip.header_len..n].clone()
+		by_id[h.method] << Rx{
+			at:  time.now()
+			pay: buf[someip.header_len..n].clone()
+		}
 	}
 
-	ncyc := (by_id[id_cyclic] or { [][]u8{} }).len
-	evs := by_id[id_event] or { [][]u8{} }
-	mixed := by_id[id_mixed] or { [][]u8{} }
+	cyc := by_id[id_cyclic] or { []Rx{} }
+	evs := by_id[id_event] or { []Rx{} }
+	mixed := by_id[id_mixed] or { []Rx{} }
 
-	// cyclic: a steady stream — nominal 32 in the window; generous floor for a
-	// loaded host, and it must dominate the change-driven frames
-	assert ncyc >= 15, 'cyclic: only ${ncyc} datagrams'
-	assert ncyc > evs.len, 'cyclic (${ncyc}) must outnumber event (${evs.len})'
+	// ---- cyclic: layout decode + time-driven (not change-driven) resends ----
+	assert cyc.len >= 15, 'cyclic: only ${cyc.len} datagrams'
+	mut cyc_repeats := 0
+	for i, r in cyc {
+		// the CONFIGURED derived layout: load u8@0, ticks u32@1 LE, wraps
+		// u16@5 LE, E2E trailer ctr@7/crc@8 — 9 bytes exactly
+		assert r.pay.len == 9, 'cyclic payload ${r.pay.len} bytes'
+		q := le32(r.pay, 1)
+		assert r.pay[0] == u8(q % 100), 'cyclic field relation (load vs ticks)'
+		assert le16(r.pay, 5) == u16(q >> 16), 'cyclic field relation (wraps)'
+		if i > 0 {
+			// the app holds the layout for 4 cycles: cyclic MUST resend it
+			// unchanged (the signal bytes repeat; only the trailer moves)
+			if r.pay[..7] == cyc[i - 1].pay[..7] {
+				cyc_repeats++
+			}
+			// and the E2E counter steps loss-free on lo
+			assert (r.pay[7] & 0x0F) == ((cyc[i - 1].pay[7] & 0x0F) + 1) & 0x0F, 'cyclic E2E counter skipped'
+		}
+	}
+	assert cyc_repeats >= 5, 'cyclic: only ${cyc_repeats} unchanged-layout resends — cadence is not time-driven'
 
-	// event: only on change — nominal ~6; every consecutive pair DIFFERS
+	// ---- event: change-only, EVERY transition, none repeated ----
 	assert evs.len >= 3 && evs.len <= 12, 'event: ${evs.len} datagrams'
-	for i in 1 .. evs.len {
-		assert evs[i] != evs[i - 1], 'event sent an unchanged payload'
+	for i, r in evs {
+		assert r.pay.len == 1, 'event payload ${r.pay.len} bytes'
+		if i > 0 {
+			// strictly consecutive levels: a skipped transition (or an
+			// unchanged resend) is a mode violation either way
+			assert r.pay[0] == evs[i - 1].pay[0] + 1, 'event levels ${evs[i - 1].pay[0]} -> ${r.pay[0]} (must be +1)'
+		}
 	}
 
-	// mixed: heartbeat + change — nominal ~14; both repeats (the heartbeat
-	// resending an unchanged value) and changes must appear on the wire
+	// ---- mixed: heartbeat repeats AND immediate-on-change ----
 	assert mixed.len >= 8, 'mixed: only ${mixed.len} datagrams'
 	mut repeats := 0
-	mut changes := 0
-	for i in 1 .. mixed.len {
-		if mixed[i] == mixed[i - 1] {
-			repeats++
-		} else {
-			changes++
+	mut fast_change := false
+	for i, r in mixed {
+		assert r.pay.len == 2, 'mixed payload ${r.pay.len} bytes'
+		if i > 0 {
+			prev := mixed[i - 1]
+			if le16(r.pay, 0) == le16(prev.pay, 0) {
+				repeats++
+			} else {
+				assert le16(r.pay, 0) == le16(prev.pay, 0) + 1, 'mixed setpoint skipped a step'
+				// an off-cycle change must be published BEFORE the next
+				// heartbeat — a purely cyclic sender shows ~300 ms gaps only
+				if r.at - prev.at < 220 * time.millisecond {
+					fast_change = true
+				}
+			}
 		}
 	}
 	assert repeats >= 2, 'mixed: no heartbeat repeats observed (${repeats})'
-	assert changes >= 2, 'mixed: no change-driven sends observed (${changes})'
+	assert fast_change, 'mixed: no change arrived inside the heartbeat interval — immediate-on-change is missing'
 }
