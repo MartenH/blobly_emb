@@ -5,5 +5,5 @@ DO NOT EDIT — follow a signal here, or via the provenance comments in `sig/por
 
 | Signal | Unit | Source | DBC signal | Frame | Layout | Scaling | Path | Producers | Consumers |
 |--------|------|--------|------------|-------|--------|---------|------|-----------|-----------|
-| BenchLoad | — | eth0 | — | — | — | — | app→IOC(double)→eth0 | Bench | (eth0) |
-| BenchTicks | — | eth0 | — | — | — | — | app→IOC(double)→eth0 | Bench | (eth0) |
+| BenchLoad | — | eth0 | derived (eth) | 0x8001 (BenchTelem) | load@0+1 | — | app→IOC(double)→eth0 | Bench | (eth0) |
+| BenchTicks | — | eth0 | derived (eth) | 0x8001 (BenchTelem) | ticks@1+4 wraps@5+2 | — | app→IOC(double)→eth0 | Bench | (eth0) |
