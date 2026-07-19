@@ -84,7 +84,10 @@ fn main() {
 		name := (m['name'] or { toml.Any('') }).string()
 		from := (m['from'] or { toml.Any('') }).string()
 		to := (m['to'] or { toml.Any('') }).string()
-		tr := (m['transport'] or { toml.Any('double') }).string()
+		mut tr := (m['transport'] or { toml.Any('double') }).string()
+		if from == 'io' || to == 'io' {
+			tr = 'triple' // derived for io endpoints (docs/io.md), never configured
+		}
 		from_bus := from in buses
 		to_bus := to in buses
 		external := from_bus || to_bus

@@ -278,3 +278,380 @@ push_ms = -1
 ' + app)
 	assert e.any(it.contains('push_ms') && it.contains('must be >= 0'))
 }
+
+// ---- [io] rules (docs/io.md P1) ----
+
+// a valid single-point io config: button input read by the app handler
+const io_ok = '
+[io]
+core = 0
+[[io.gpio]]
+name      = "UserButton"
+pin       = "PC13"
+period_ms = 10
+
+[[signal]]
+name = "UserButton"
+fields = { pressed = "bool" }
+from = "io"
+to   = "app"
+
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "app_main"
+
+[[fb]]
+name = "Work"
+thread = "app_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  reads = ["UserButton"]
+'
+
+fn test_io_good_config_passes() {
+	assert errs_of(io_ok) == []
+}
+
+fn test_io_reserved_endpoint_name() {
+	e := errs_of('
+[[partition]]
+name = "io"
+core = 0
+  [[partition.thread]]
+  name = "t"
+')
+	assert e.any(it.contains('reserved endpoint name'))
+}
+
+fn test_io_point_without_signal_rejected() {
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "Ghost"
+pin       = "PA0"
+period_ms = 10
+' + app)
+	assert e.any(it.contains('no [[signal]] of that name'))
+}
+
+fn test_io_signal_without_point_rejected() {
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "UserButton"
+pin       = "PC13"
+period_ms = 10
+
+[[signal]]
+name = "UserButton"
+fields = { pressed = "bool" }
+from = "io"
+to   = "app"
+
+[[signal]]
+name = "Orphan"
+fields = { on = "bool" }
+from = "io"
+to   = "app"
+' + app)
+	assert e.any(it.contains('phantom endpoint'))
+}
+
+// an io-bound signal with NO [io] table at all is still a phantom endpoint —
+// the reverse one-to-one check must not be skipped by the missing table
+fn test_io_signal_without_io_table_rejected() {
+	e := errs_of('
+[[signal]]
+name = "Orphan"
+fields = { on = "bool" }
+from = "io"
+to   = "app"
+' + app)
+	assert e.any(it.contains('phantom endpoint'))
+}
+
+// the driver backend holds at most 32 points (BLOB_IO_MAX)
+fn test_io_too_many_points_rejected() {
+	mut cfg := '[io]\n'
+	mut sigs := ''
+	for i in 0 .. 33 {
+		cfg += '[[io.gpio]]\nname = "P${i}"\npin = "PA${i}"\nperiod_ms = 10\n\n'
+		sigs += '[[signal]]\nname = "P${i}"\nfields = { on = "bool" }\nfrom = "io"\nto   = "app"\n\n'
+	}
+	e := errs_of(cfg + sigs + app)
+	assert e.any(it.contains('at most 32'))
+}
+
+// the driver name buffer is 64 bytes — a longer name would silently truncate
+// (two prefix-sharing names would collide on one mirror file)
+fn test_io_overlong_name_rejected() {
+	long := 'P' + 'x'.repeat(63)
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "${long}"
+pin       = "PC13"
+period_ms = 10
+
+[[signal]]
+name = "${long}"
+fields = { pressed = "bool" }
+from = "io"
+to   = "app"
+' + app)
+	assert e.any(it.contains('at most 63'))
+}
+
+fn test_io_output_needs_init_and_one_writer() {
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "Led"
+pin       = "PB0"
+period_ms = 10
+
+[[signal]]
+name = "Led"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+' + app)
+	assert e.any(it.contains('must declare init'))
+	assert e.any(it.contains('exactly one writing handler'))
+}
+
+// default is the INPUT pre-first-sample port value — an output has init instead
+fn test_io_output_rejects_default() {
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "Led"
+pin       = "PB0"
+period_ms = 10
+init      = false
+default   = false
+
+[[signal]]
+name = "Led"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+' + app)
+	assert e.any(it.contains('default is an input'))
+}
+
+fn test_io_rejects_bus_to_pin_and_explicit_transport() {
+	e := errs_of('
+[bus.can0]
+interface = "vcan0"
+
+[io]
+[[io.gpio]]
+name      = "Led"
+pin       = "PB0"
+period_ms = 10
+init      = false
+
+[[signal]]
+name = "Led"
+fields = { on = "bool" }
+from = "can0"
+to   = "io"
+transport = "double"
+' + app)
+	assert e.any(it.contains('never bus-to-pin'))
+	assert e.any(it.contains('transport is derived'))
+}
+
+fn test_io_pin_exclusive_and_harmonic_periods() {
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "A"
+pin       = "PB0"
+period_ms = 7
+
+[[io.gpio]]
+name      = "B"
+pin       = "PB0"
+period_ms = 10
+
+[[signal]]
+name = "A"
+fields = { on = "bool" }
+from = "io"
+to   = "app"
+
+[[signal]]
+name = "B"
+fields = { on = "bool" }
+from = "io"
+to   = "app"
+' + app)
+	assert e.any(it.contains('one physical pad'))
+	assert e.any(it.contains('not a multiple of the fastest'))
+}
+
+fn test_io_shape_must_be_single_bool() {
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "Btn"
+pin       = "PC13"
+period_ms = 10
+
+[[signal]]
+name = "Btn"
+fields = { level = "u16" }
+from = "io"
+to   = "app"
+' + app)
+	assert e.any(it.contains('carries a bool field'))
+}
+
+fn test_io_direction_mirror_rules() {
+	// an FB writing an INPUT (double producer) and reading an OUTPUT
+	// (double consumer of a single-reader channel) are both rejected
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "Btn"
+pin       = "PC13"
+period_ms = 10
+
+[[io.gpio]]
+name      = "Led"
+pin       = "PB0"
+period_ms = 10
+init      = false
+
+[[signal]]
+name = "Btn"
+fields = { on = "bool" }
+from = "io"
+to   = "app"
+
+[[signal]]
+name = "Led"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "app_main"
+
+[[fb]]
+name = "Work"
+thread = "app_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  reads = ["Btn", "Led"]
+  writes = ["Led", "Btn"]
+')
+	assert e.any(it.contains('io thread is its only producer'))
+	assert e.any(it.contains('io thread owns that channel side'))
+}
+
+// a [[did]] bound to an io signal would generate a second ioc_acquire on the
+// single-reader channel — samples stolen from the app consumer
+fn test_io_did_on_io_signal_rejected() {
+	e := errs_of(io_ok + '
+[[did]]
+id     = 0xF101
+signal = "UserButton"
+')
+	assert e.any(it.contains('second reader on a single-reader channel'))
+	// a did on a NON-io signal stays legal
+	ok := errs_of(io_ok + '
+[[signal]]
+name = "Speed"
+fields = { kmh = "u16" }
+from = "app"
+to   = "app"
+
+[[did]]
+id     = 0xF102
+signal = "Speed"
+')
+	assert ok.filter(it.contains('single-reader channel')).len == 0
+}
+
+fn test_io_accessor_partition_must_match_endpoint() {
+	// the writer lives in "worker" but the signal declares "app"
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "Led"
+pin       = "PB0"
+period_ms = 10
+init      = false
+
+[[signal]]
+name = "Led"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "app_main"
+
+[[partition]]
+name = "worker"
+core = 0
+  [[partition.thread]]
+  name = "w_main"
+
+[[fb]]
+name = "Work"
+thread = "w_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  writes = ["Led"]
+')
+	assert e.any(it.contains('must live in the declared partition'))
+}
+
+fn test_io_rejects_input_init_and_cross_core() {
+	e := errs_of('
+[io]
+core = 0
+[[io.gpio]]
+name      = "Btn"
+pin       = "PC13"
+period_ms = 10
+init      = true
+
+[[signal]]
+name = "Btn"
+fields = { on = "bool" }
+from = "io"
+to   = "far"
+
+[[partition]]
+name = "far"
+core = 1
+  [[partition.thread]]
+  name = "far_main"
+
+[[fb]]
+name = "W"
+thread = "far_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  reads = ["Btn"]
+')
+	assert e.any(it.contains('init belongs to outputs'))
+	assert e.any(it.contains('cross-core io arrives with the target phase'))
+}

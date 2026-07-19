@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 161 | 80 | 5 | 76 | 0 |
+| 161 | 85 | 5 | 71 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -70,21 +70,21 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-INV-003 | B | analysis | uncovered | — |
 | REQ-INV-004 | QM | analysis | verified | noalloc-driver-lint (pass) |
 | REQ-INV-005 | QM | review | covered | naming-review (pending) |
-| REQ-IO-001 | QM | test | uncovered | — |
-| REQ-IO-002 | QM | test | uncovered | — |
+| REQ-IO-001 | QM | test | verified | e2e_test.v (pass) |
+| REQ-IO-002 | QM | test | verified | e2e_test.v (pass) |
 | REQ-IO-003 | QM | review | uncovered | — |
 | REQ-IO-004 | QM | analysis | uncovered | — |
 | REQ-IO-005 | QM | test | uncovered | — |
 | REQ-IO-006 | QM | review | uncovered | — |
 | REQ-IO-007 | QM | test | uncovered | — |
 | REQ-IO-008 | QM | review | uncovered | — |
-| REQ-IO-009 | QM | test | uncovered | — |
+| REQ-IO-009 | QM | test | verified | e2e_test.v (pass) |
 | REQ-IO-015 | QM | test | uncovered | — |
 | REQ-IO-016 | QM | test | uncovered | — |
 | REQ-IO-010 | QM | test | uncovered | — |
 | REQ-IO-011 | QM | test | uncovered | — |
-| REQ-IO-012 | QM | test | uncovered | — |
-| REQ-IO-013 | QM | test | uncovered | — |
+| REQ-IO-012 | QM | test | verified | e2e_test.v (pass) |
+| REQ-IO-013 | QM | test | verified | e2e_test.v (pass) |
 | REQ-IO-014 | QM | test | uncovered | — |
 | REQ-NET-001 | QM | analysis | verified | h735-eth-hardware (approved) |
 | REQ-NET-002 | QM | analysis | verified | h735-eth-hardware (approved) |
@@ -236,21 +236,21 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-INV-003 | | | | | | | | | | | | | |
 | REQ-INV-004 | | | | | | | | | | | | | ✓ |
 | REQ-INV-005 | | | | | | | | | | | | · | |
-| REQ-IO-001 | | | | | | | | | | | | | |
-| REQ-IO-002 | | | | | | | | | | | | | |
+| REQ-IO-001 | | | | | | | | | | | ✓ | | |
+| REQ-IO-002 | | | | | | | | | | | ✓ | | |
 | REQ-IO-003 | | | | | | | | | | | | | |
 | REQ-IO-004 | | | | | | | | | | | | | |
 | REQ-IO-005 | | | | | | | | | | | | | |
 | REQ-IO-006 | | | | | | | | | | | | | |
 | REQ-IO-007 | | | | | | | | | | | | | |
 | REQ-IO-008 | | | | | | | | | | | | | |
-| REQ-IO-009 | | | | | | | | | | | | | |
+| REQ-IO-009 | | | | | | | | | | | ✓ | | |
 | REQ-IO-015 | | | | | | | | | | | | | |
 | REQ-IO-016 | | | | | | | | | | | | | |
 | REQ-IO-010 | | | | | | | | | | | | | |
 | REQ-IO-011 | | | | | | | | | | | | | |
-| REQ-IO-012 | | | | | | | | | | | | | |
-| REQ-IO-013 | | | | | | | | | | | | | |
+| REQ-IO-012 | | | | | | | | | | | ✓ | | |
+| REQ-IO-013 | | | | | | | | | | | ✓ | | |
 | REQ-IO-014 | | | | | | | | | | | | | |
 | REQ-NET-001 | ✓ | | | | | | | | | | | | |
 | REQ-NET-002 | ✓ | | | | | | | | | | | | |
