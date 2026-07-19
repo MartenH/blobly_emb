@@ -2724,8 +2724,13 @@ fn main() {
 			}
 		}
 		// the io thread is a load-bearing platform thread like a bridge — its
-		// busy time sums into its core's CpuLoad figure via its own slot
-		if m.io_points.len > 0 && slot_core.len < 16 {
+		// busy time sums into its core's CpuLoad figure via its own slot.
+		// no silent cap: a full scratch table must fail the build, not quietly
+		// drop the io term from the load figure
+		if m.io_points.len > 0 {
+			if slot_core.len >= 16 {
+				panic('telemetry scratch slots exhausted (16): the io thread needs one — reduce telemetered partitions/buses')
+			}
 			telem_slot['io'] = slot_core.len
 			slot_core << m.io_core
 		}
