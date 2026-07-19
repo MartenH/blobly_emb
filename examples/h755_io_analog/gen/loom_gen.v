@@ -109,10 +109,12 @@ fn io_thread_entry(input u32) {
 		// next_us += missed*P, so one anomalous board_now_us() sample can push the
 		// deadline arbitrarily far ahead and it never recovers — the sleep would then
 		// be a monster tick count that parks this thread for days (bench: 1.27e9 ticks,
-		// all io frozen while comm/app ran). Re-anchor so next_us is never more than one
-		// period ahead: the sleep is bounded to <= one period, worst-case recovery is one.
-		if next_us > now + 10000 { next_us = now + 10000 }
-		for next_us > now {
+		// all io frozen while comm/app ran). Re-anchor BEFORE EVERY sleep, not just the
+		// first sample: the post-wake refresh could itself be the bad low sample and
+		// re-inflate the gap (codex #155). next_us <= now+P => every sleep <= one period.
+		for {
+			if next_us > now + 10000 { next_us = now + 10000 }
+			if next_us <= now { break } // deadline reached
 			C._tx_thread_sleep(u32((next_us - now + 999) / 1000)) // 1 kHz kernel tick
 			now = C.board_now_us() // a tick-phase-early wake must not serve before the deadline
 		}
