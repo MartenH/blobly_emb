@@ -14,7 +14,17 @@
  * count either. Same static 32-entry table shape as io_file.c; no heap. */
 #include "io_port.h"
 #include "board.h"    /* board_io_pin_reserved: the boards-layer pin-ownership table */
-#include <stm32h7xx.h> /* CMSIS family dispatcher (build sets -DSTM32H735xx / -DSTM32H755xx); no HAL */
+#include <stm32h7xx.h>
+
+/* The ADC pre-channel-select register is at offset 0x1C on all H7, but CMSIS
+ * names it PCSEL on H74x/H75x and PCSEL_RES0 on the H72x/H73x device headers.
+ * Same register — select the member by the build's part define. */
+#if defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx) || \
+    defined(STM32H733xx) || defined(STM32H735xx) || defined(STM32H73xx)
+#define ADC_PCSEL PCSEL_RES0
+#else
+#define ADC_PCSEL PCSEL
+#endif /* CMSIS family dispatcher (build sets -DSTM32H735xx / -DSTM32H755xx); no HAL */
 
 #define BLOB_IO_MAX 32
 
@@ -167,11 +177,9 @@ int blob_io_init(void) {
 			g->MODER |= (3u << (p * 2u));  /* 11 = analog */
 			g->PUPDR &= ~(3u << (p * 2u)); /* no pull on an analog pad */
 		} else if (g_pt[i].kind == IO_PWM) {
-			/* AF push-pull for the timer channel. The AF NUMBER (which TIMx) is a
-			 * pad property — the boards layer owns the pin->(timer,channel,AF)
-			 * matrix (docs/io.md); this dry path muxes AF and the timer setup
-			 * below is the bench-completion point. */
-			g->MODER = (g->MODER & ~(3u << (p * 2u))) | (2u << (p * 2u)); /* 10 = AF */
+			/* pin stays a plain INPUT here — pwm_setup() muxes it to AF only AFTER
+			 * the timer is configured and the init duty loaded, so the pad never
+			 * floats in AF driven by an unconfigured timer (codex emb#152). */
 			g->OSPEEDR |= (2u << (p * 2u)); /* medium: a 20 kHz carrier has real edges */
 			g->PUPDR &= ~(3u << (p * 2u));
 		} else if (g_pt[i].dir) {
@@ -235,6 +243,11 @@ unsigned int blob_io_write_faults(void) {
  * DRY-CODED from RM0399, bench-pending. Returns 0 on success, -1 if a bounded
  * hardware wait times out. */
 static int adc_dma_start(void) {
+	/* ADC KERNEL clock: the reset mux is PLL2_P, which board_clock_init never
+	 * enables (only PLL1) — select per_ck (ADCSEL=0b10 in D3CCIPR), sourced from
+	 * the always-on HSI, so calibration has a clock without depending on a PLL2
+	 * the board doesn't bring up (codex emb#152). */
+	RCC->D3CCIPR = (RCC->D3CCIPR & ~RCC_D3CCIPR_ADCSEL) | (2u << RCC_D3CCIPR_ADCSEL_Pos);
 	RCC->AHB1ENR |= RCC_AHB1ENR_ADC12EN | RCC_AHB1ENR_DMA1EN;
 	(void)RCC->AHB1ENR;
 
@@ -243,13 +256,17 @@ static int adc_dma_start(void) {
 	ADC1->CR |= ADC_CR_ADVREGEN;
 	for (volatile int w = 0; w < 20000; w++) { } /* > 10 us LDO startup */
 
-	/* calibrate (single-ended) — BOUNDED: a dead kernel clock must not hang */
+	/* calibrate (single-ended) — BOUNDED. Degraded, not fatal: a timeout leaves
+	 * g_adc_first_ready 0 so the checked reads fault per-point, without failing
+	 * blob_io_init and taking down valid OUTPUTS (codex emb#152). */
 	ADC1->CR &= ~ADC_CR_ADCALDIF;
 	ADC1->CR |= ADC_CR_ADCAL;
-	if (!IO_WAIT(!(ADC1->CR & ADC_CR_ADCAL), 1000000u)) return -1;
+	if (!IO_WAIT(!(ADC1->CR & ADC_CR_ADCAL), 1000000u)) return 0;
 
-	/* 12-bit right-aligned; continuous + DMA circular (DMNGT=11) */
-	ADC1->CFGR = ADC_CFGR_CONT | ADC_CFGR_DMNGT_0 | ADC_CFGR_DMNGT_1;
+	/* 12-bit (RES=0b010; RES=0 would be 16-bit — the examples scale by 4095),
+	 * right-aligned; continuous + DMA circular (DMNGT=11) */
+	ADC1->CFGR = ADC_CFGR_CONT | ADC_CFGR_DMNGT_0 | ADC_CFGR_DMNGT_1
+	           | (2u << ADC_CFGR_RES_Pos);
 
 	/* the regular sequence: g_adc_n ranks, in cfg/slot order. The H7 SQR layout
 	 * is NOT uniform: SQR1 holds L + SQ1..SQ4 (bits 6,12,18,24); SQR2 SQ5..SQ9,
@@ -270,6 +287,7 @@ static int adc_dma_start(void) {
 		}
 		if (g_pt[i].adc_ch < 10u) ADC1->SMPR1 |= (7u << (g_pt[i].adc_ch * 3u));
 		else ADC1->SMPR2 |= (7u << ((g_pt[i].adc_ch - 10u) * 3u));
+		ADC1->ADC_PCSEL |= (1u << g_pt[i].adc_ch); /* H7: a channel must be preselected to convert */
 	}
 	ADC1->SQR1 = sqr[0];
 	ADC1->SQR2 = sqr[1];
@@ -287,20 +305,18 @@ static int adc_dma_start(void) {
 	                   (1u << DMA_SxCR_MSIZE_Pos) | (1u << DMA_SxCR_PSIZE_Pos) |
 	                   DMA_SxCR_EN;
 
-	/* enable + start — BOUNDED ADRDY wait */
+	/* enable + start — BOUNDED ADRDY wait (degraded on timeout, not fatal) */
 	ADC1->ISR = ADC_ISR_ADRDY;
 	ADC1->CR |= ADC_CR_ADEN;
-	if (!IO_WAIT(ADC1->ISR & ADC_ISR_ADRDY, 1000000u)) return -1;
+	if (!IO_WAIT(ADC1->ISR & ADC_ISR_ADRDY, 1000000u)) return 0;
 	ADC1->CR |= ADC_CR_ADSTART;
 
-	/* confirm the FIRST full scan actually landed before init returns, so the
-	 * boot publish reads a real count, not the zero-initialised buffer (codex
-	 * emb#152, docs/io.md startup). NDTR reloads to g_adc_n after each scan; it
-	 * having decremented below g_adc_n proves DMA is moving. */
-	g_adc_first_ready = IO_WAIT(DMA1_Stream0->NDTR != (uint32_t)g_adc_n
-	                            || (DMA1_Stream0->CR & DMA_SxCR_EN) == 0, 2000000u)
-	                    && (DMA1_Stream0->CR & DMA_SxCR_EN);
-	return g_adc_first_ready ? 0 : -1;
+	/* confirm a FULL first scan before init returns — the DMA transfer-complete
+	 * flag (DMA1 LISR TCIF0) sets when NDTR reaches 0, i.e. every rank landed.
+	 * NDTR != g_adc_n only proves ONE transfer, not the whole scan (codex emb#152).
+	 * A timeout leaves first_ready 0: the checked reads fault, a degraded start. */
+	g_adc_first_ready = IO_WAIT(DMA1->LISR & DMA_LISR_TCIF0, 2000000u);
+	return 0;
 }
 
 unsigned int blob_io_adc_read(int ch) {
@@ -322,42 +338,62 @@ int blob_io_adc_read_checked(int ch, unsigned int *val) {
  * board_io_pwm_map fills it, weak-defaulting to "unsupported" so a pwm point on
  * a board without a map fails cfg LOUDLY rather than emitting no waveform (codex
  * emb#152). g_pwm_tim[ch] caches the resolved timer base for pwm_write. */
-__attribute__((weak)) int board_io_pwm_map(int port, int pin, void **tim_base, int *chan, int *af) {
-	(void)port; (void)pin; (void)tim_base; (void)chan; (void)af;
+__attribute__((weak)) int board_io_pwm_map(int port, int pin, void **tim_base, int *chan, int *af, unsigned int *clk_hz) {
+	(void)port; (void)pin; (void)tim_base; (void)chan; (void)af; (void)clk_hz;
 	return -1; /* no PWM map on this board yet */
 }
 static TIM_TypeDef *g_pwm_tim[BLOB_IO_MAX];
 static int g_pwm_ch[BLOB_IO_MAX];
 
-/* apply the init duty + program the timer for a pwm point, called from init. */
+/* enable the APBx timer clock gate for a timer base (codex emb#152: board clock
+ * init leaves TIMx gates off). RM0399: APB2 = TIM1/8/15/16/17; APB1 = the rest. */
+static void tim_clock_enable(TIM_TypeDef *t) {
+	if (t == TIM1) RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
+	else if (t == TIM8) RCC->APB2ENR |= RCC_APB2ENR_TIM8EN;
+	else if (t == TIM15) RCC->APB2ENR |= RCC_APB2ENR_TIM15EN;
+	else if (t == TIM16) RCC->APB2ENR |= RCC_APB2ENR_TIM16EN;
+	else if (t == TIM17) RCC->APB2ENR |= RCC_APB2ENR_TIM17EN;
+	else if (t == TIM2) RCC->APB1LENR |= RCC_APB1LENR_TIM2EN;
+	else if (t == TIM3) RCC->APB1LENR |= RCC_APB1LENR_TIM3EN;
+	else if (t == TIM4) RCC->APB1LENR |= RCC_APB1LENR_TIM4EN;
+	else if (t == TIM5) RCC->APB1LENR |= RCC_APB1LENR_TIM5EN;
+	(void)RCC->APB2ENR;
+}
+
+/* program the timer + init duty for a pwm point, then mux the pad to AF. */
 static int pwm_setup(int ch) {
-	void *base = 0; int chan = 0, af = 0;
-	if (board_io_pwm_map((int)g_pt[ch].port, (int)g_pt[ch].pin, &base, &chan, &af) != 0 || !base)
-		return -1;
+	void *base = 0; int chan = 0, af = 0; unsigned int clk = 0;
+	if (board_io_pwm_map((int)g_pt[ch].port, (int)g_pt[ch].pin, &base, &chan, &af, &clk) != 0
+	    || !base || chan < 1 || chan > 4 || clk == 0u)
+		return -1; /* bad map: reject before any register arithmetic (codex emb#152) */
 	TIM_TypeDef *t = (TIM_TypeDef *)base;
 	g_pwm_tim[ch] = t;
 	g_pwm_ch[ch] = chan;
-	/* AFR on the pad for the mapped timer AF number */
-	GPIO_TypeDef *g = gpio(g_pt[ch].port);
-	unsigned int p = g_pt[ch].pin;
-	if (p < 8u) g->AFR[0] = (g->AFR[0] & ~(0xFu << (p * 4u))) | ((unsigned)af << (p * 4u));
-	else g->AFR[1] = (g->AFR[1] & ~(0xFu << ((p - 8u) * 4u))) | ((unsigned)af << ((p - 8u) * 4u));
-	/* carrier: ARR = 1000 (a permille maps 1:1 to CCR), PSC from the timer clock.
-	 * The kernel timer clock is board-known; a bench pass sets PSC for freq_hz.
-	 * DRY: ARR=999 gives 1000 steps; PSC left 0 (bench sets it for the real Hz). */
-	t->PSC = 0;
+	tim_clock_enable(t);
+
+	/* carrier: 1000 duty steps (ARR=999) at the requested freq_hz.
+	 * step_rate = freq_hz * 1000 = clk / (PSC + 1)  ->  PSC = clk/(freq*1000) - 1. */
+	unsigned int step = g_pt[ch].freq_hz * 1000u;
+	unsigned int psc = (step > 0u && clk / step > 0u) ? (clk / step - 1u) : 0u;
+	t->PSC = psc;
 	t->ARR = 999u;
 	volatile uint32_t *ccr = &t->CCR1 + (chan - 1);
-	*ccr = (g_pt[ch].init * 1000u) / 1000u; /* init permille -> compare */
-	/* PWM mode 1 on the channel (CCMR), enable output (CCER), main output (BDTR), CR1 */
-	if (chan == 1) t->CCMR1 = (t->CCMR1 & ~0xFFu) | (6u << 4) | (1u << 3); /* OC1M=110, preload */
+	*ccr = g_pt[ch].init; /* init permille -> compare (ARR=999: 1:1) */
+	if (chan == 1) t->CCMR1 = (t->CCMR1 & ~0xFFu) | (6u << 4) | (1u << 3); /* OC1M=110 PWM1, preload */
 	else if (chan == 2) t->CCMR1 = (t->CCMR1 & ~0xFF00u) | (6u << 12) | (1u << 11);
 	else if (chan == 3) t->CCMR2 = (t->CCMR2 & ~0xFFu) | (6u << 4) | (1u << 3);
 	else t->CCMR2 = (t->CCMR2 & ~0xFF00u) | (6u << 12) | (1u << 11);
 	t->CCER |= (1u << ((chan - 1) * 4));
 	t->BDTR |= TIM_BDTR_MOE; /* advanced timers need MOE; harmless on basic ones */
+	t->EGR = TIM_EGR_UG;     /* latch PSC/ARR + the init CCR before the pad goes live */
 	t->CR1 |= TIM_CR1_ARPE | TIM_CR1_CEN;
-	t->EGR = TIM_EGR_UG; /* latch PSC/ARR */
+
+	/* pad -> AF only NOW, timer running at the init duty (no unconfigured-AF float) */
+	GPIO_TypeDef *g = gpio(g_pt[ch].port);
+	unsigned int p = g_pt[ch].pin;
+	if (p < 8u) g->AFR[0] = (g->AFR[0] & ~(0xFu << (p * 4u))) | ((unsigned)af << (p * 4u));
+	else g->AFR[1] = (g->AFR[1] & ~(0xFu << ((p - 8u) * 4u))) | ((unsigned)af << ((p - 8u) * 4u));
+	g->MODER = (g->MODER & ~(3u << (p * 2u))) | (2u << (p * 2u)); /* 10 = AF */
 	return 0;
 }
 
@@ -377,7 +413,14 @@ void blob_io_close(void) {
 	 * Pins keep their configured mode/level — yanking an actuator back to analog
 	 * on close would be a glitch, not a cleanup. */
 	DMA1_Stream0->CR &= ~DMA_SxCR_EN;
-	ADC1->CR |= ADC_CR_ADSTP;
+	if (ADC1->CR & ADC_CR_ADSTART) {
+		ADC1->CR |= ADC_CR_ADSTP;
+		(void)IO_WAIT(!(ADC1->CR & ADC_CR_ADSTP), 100000u);
+	}
+	if (ADC1->CR & ADC_CR_ADEN) {
+		ADC1->CR |= ADC_CR_ADDIS; /* H7 calibration needs ADEN=0 on the next init */
+		(void)IO_WAIT(!(ADC1->CR & ADC_CR_ADEN), 100000u);
+	}
 	g_adc_n = 0;
 	g_adc_first_ready = 0;
 	for (int i = 0; i < BLOB_IO_MAX; i++) {

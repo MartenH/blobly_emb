@@ -122,7 +122,9 @@ fn test_adc_read_u16_and_last_good() {
 	teardown(dir)
 }
 
-// @verifies REQ-IO-021
+// @verifies REQ-IO-023
+// (duty value semantics — permille + clamp; the timer application itself is
+// hardware, bench-pending, not asserted here.)
 // PWM writes a duty permille, clamped above 1000; the mirror is logical.
 fn test_pwm_write_clamps_permille() {
 	dir := setup('pwm')

@@ -1,6 +1,8 @@
 module main
 
-// @verifies REQ-IO-021
+// @verifies REQ-IO-023
+// (duty value semantics — permille + clamp; the timer application itself is
+// hardware, bench-pending, not asserted here.)
 // The PWM path end to end on the file mirror: the analog input ramps the FanDuty
 // output through the Dimmer FB; the mirror holds the duty permille (not a 0/1
 // gpio value). Proves config -> codegen -> io.pwm_write in the generated stack.
