@@ -678,7 +678,7 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		// the tx mode + timings are authoritative manifest metadata with no
 		// compiled com.TxMode reference to catch a typo, and the generator
 		// narrows/multiplies them (ms -> us int) — validate values AND bounds
-		// (1h cap: far above any real cadence, far below int wrap)
+		// (1e6 ms cap: far above any real cadence; x1000 stays inside 32-bit us)
 		if txv := fm['tx'] {
 			txm := txv.as_map()
 			mode := str_of(txm, 'mode')
@@ -689,13 +689,13 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			// emits it), and require it valid for the modes that consume it
 			if mode in ['', 'cyclic', 'mixed'] || 'cycle_ms' in txm {
 				cyc := txm['cycle_ms'] or { toml.Any(i64(100)) }
-				if cyc !is i64 || cyc.i64() < 1 || cyc.i64() > 3_600_000 {
-					errs << 'eth frame "${fname}" tx cycle_ms must be 1..3600000'
+				if cyc !is i64 || cyc.i64() < 1 || cyc.i64() > 1_000_000 {
+					errs << 'eth frame "${fname}" tx cycle_ms must be 1..1000000'
 				}
 			}
 			if v := txm['min_delay_ms'] {
-				if v !is i64 || v.i64() < 0 || v.i64() > 3_600_000 {
-					errs << 'eth frame "${fname}" tx min_delay_ms must be 0..3600000'
+				if v !is i64 || v.i64() < 0 || v.i64() > 1_000_000 {
+					errs << 'eth frame "${fname}" tx min_delay_ms must be 0..1000000'
 				}
 			}
 		}
