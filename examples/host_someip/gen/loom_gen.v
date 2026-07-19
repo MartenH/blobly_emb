@@ -41,7 +41,8 @@ pub fn partition_app(core int, arg voidptr) {
 pub const someip_service = u16(0x100)
 pub const someip_version = u8(1)
 pub const someip_port = u16(30490)
-pub const someip_peer = '127.0.0.1:30490'
+pub const someip_peer_ip = [u8(127), 0, 0, 1]!
+pub const someip_peer_port = u16(30490)
 
 // BenchTelem: tx event 0x8001, 7-byte payload
 pub const bench_telem_event_id = u16(0x8001)

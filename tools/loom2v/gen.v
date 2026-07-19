@@ -426,6 +426,28 @@ fn eth_scalar_width(t string) int {
 	}
 }
 
+// peer_parts splits the (ecucheck-validated) IPv4 address:port peer into its
+// four octets + port, for emission as fixed-width scalar consts.
+fn peer_parts(peer string) ([]int, int) {
+	mut colon := -1
+	for i, c in peer {
+		if c == `:` {
+			colon = i
+		}
+	}
+	if colon < 0 {
+		return [0, 0, 0, 0], 0
+	}
+	mut oct := []int{}
+	for o in peer[..colon].split('.') {
+		oct << o.int()
+	}
+	for oct.len < 4 {
+		oct << 0
+	}
+	return oct, peer[colon + 1..].int()
+}
+
 fn parse_someip(doc toml.Doc) SomeipCfg {
 	mut s := SomeipCfg{}
 	if sv := doc.value_opt('someip') {
@@ -1041,11 +1063,16 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 // the host oracle (blobly_net modules/someip) decodes the payload from the
 // same source of truth as the generated codec (docs/someip.md).
 fn someip_manifest(m Model) []string {
-	if m.eth_frames.len == 0 {
+	// identity keys on [someip] itself — a module-only eth service (trace/telem
+	// bound, no [[frame]]) still needs the oracle to know who it is
+	if !m.someip.on {
 		return []
 	}
 	mut rows := ['# someip: service,version,port,peer']
 	rows << 'someip,0x${m.someip.service.hex()},${m.someip.version},${m.someip.port},${m.someip.peer}'
+	if m.eth_frames.len == 0 {
+		return rows
+	}
 	rows << '# eth frames: frame,id,len,dir,mode,cycle_us,e2e_id'
 	for fr in m.eth_frames {
 		dir := if fr.tx { 'tx' } else { 'rx' }
@@ -1461,7 +1488,11 @@ fn emit_eth_codec(m Model) []string {
 	glue << 'pub const someip_service = u16(0x${m.someip.service.hex()})'
 	glue << 'pub const someip_version = u8(${m.someip.version})'
 	glue << 'pub const someip_port = u16(${m.someip.port})'
-	glue << "pub const someip_peer = '${m.someip.peer}'"
+	// the peer as fixed-width scalars — a `string` const in generated runtime
+	// code would violate no-alloc (AGENTS.md), inferred type or not
+	oct, pport := peer_parts(m.someip.peer)
+	glue << 'pub const someip_peer_ip = [u8(${oct[0]}), ${oct[1]}, ${oct[2]}, ${oct[3]}]!'
+	glue << 'pub const someip_peer_port = u16(${pport})'
 	for fr in m.eth_frames {
 		fb := snake(fr.name)
 		dir := if fr.tx { 'tx' } else { 'rx' }
