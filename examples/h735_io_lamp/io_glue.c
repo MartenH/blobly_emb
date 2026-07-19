@@ -58,6 +58,15 @@ int ioc_get_ever(int i, unsigned *a, unsigned *b) {
 static volatile unsigned short g_ld_pm[LOAD_SLOTS], g_ld_100[LOAD_SLOTS],
                                g_ld_1s[LOAD_SLOTS], g_ld_10s[LOAD_SLOTS];
 static volatile unsigned g_ld_ovr[LOAD_SLOTS];
+/* io-thread execution counter (REQ-IO-014 / emb#150): the io thread ADDS each serve's
+ * µs here (single writer); the FB thread reads it before/after its pass and SUBTRACTS the
+ * delta, so its wall bracket does not double-count the higher-priority io preemption. A
+ * volatile u32 — one aligned 32-bit load is atomic on M7, and io-exec-per-window (< 1 tick)
+ * never wraps within a diff. */
+static volatile unsigned g_io_exec_us;
+void io_exec_add(unsigned us) { g_io_exec_us += us; }
+unsigned io_exec_us(void) { return g_io_exec_us; }
+
 void load_pub_slot(int i, unsigned pm, unsigned p100, unsigned p1s, unsigned p10s, unsigned ovr) {
     if (i < 0 || i >= LOAD_SLOTS) return;
     g_ld_pm[i] = (unsigned short)pm; g_ld_100[i] = (unsigned short)p100;
