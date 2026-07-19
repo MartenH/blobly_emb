@@ -428,6 +428,9 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 			if 'init' !in pm {
 				errs << 'io.gpio "${name}" is an output and must declare init (the pre-publication pin state)'
 			}
+			if 'default' in pm {
+				errs << 'io.gpio "${name}" is an output — default is an input\'s pre-first-sample port value; outputs declare init'
+			}
 			if writers[name] != 1 {
 				errs << 'io output "${name}" needs exactly one writing handler (found ${writers[name]}) — zero leaves the pin at init forever, two break SPSC'
 			} else if writer_part[name] != other {

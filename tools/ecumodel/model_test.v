@@ -423,6 +423,26 @@ to   = "io"
 	assert e.any(it.contains('exactly one writing handler'))
 }
 
+// default is the INPUT pre-first-sample port value — an output has init instead
+fn test_io_output_rejects_default() {
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "Led"
+pin       = "PB0"
+period_ms = 10
+init      = false
+default   = false
+
+[[signal]]
+name = "Led"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+' + app)
+	assert e.any(it.contains('default is an input'))
+}
+
 fn test_io_rejects_bus_to_pin_and_explicit_transport() {
 	e := errs_of('
 [bus.can0]
