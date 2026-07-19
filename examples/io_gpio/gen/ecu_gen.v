@@ -14,7 +14,7 @@ pub const led_green_ch = 1
 pub const ioc_channel_count = 2
 
 // Per-channel transport (index = channel id)
-pub const ioc_transport = [Transport.double, Transport.double]!
+pub const ioc_transport = [Transport.triple, Transport.triple]!
 
 // Partitions — index = partition id
 pub const partition_count = 1

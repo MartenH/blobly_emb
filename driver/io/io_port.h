@@ -28,6 +28,7 @@
 int  blob_io_cfg(int ch, const char *name, const char *pin, int dir, unsigned int init_val); /* declare one point before init; dir: 0=in 1=out; 0=ok */
 int  blob_io_init(void);                    /* apply output init levels FIRST (before any app runs), open the backend; 0=ok */
 int  blob_io_gpio_read(int ch);             /* current level 0/1; on backend failure returns the last good value (never blocks) */
+int  blob_io_gpio_read_checked(int ch, int *val); /* 0 = real value in *val, -1 = unreadable/unparsable — NO last-good fallback (boot must not fabricate a sample) */
 void blob_io_gpio_write(int ch, int level); /* drive an output point */
 void blob_io_close(void);
 

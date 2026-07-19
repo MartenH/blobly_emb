@@ -281,14 +281,14 @@ pub fn validate(doc toml.Doc) []string {
 // before it could fail silently on a bench — keep them exhaustive.
 fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]string, bus_names map[string]bool) []string {
 	mut errs := []string{}
-	io_tbl := doc.value_opt('io') or { return errs }
-	iom := io_tbl.as_map()
-	points := arr_of(iom, 'gpio')
-	if points.len == 0 {
-		return errs
+	mut points := []toml.Any{}
+	if io_tbl := doc.value_opt('io') {
+		points = arr_of(io_tbl.as_map(), 'gpio')
 	}
 
-	// signals by name, plus the io-bound set (from/to = "io")
+	// signals by name, plus the io-bound set (from/to = "io") — scanned BEFORE
+	// any early return: an io-bound signal with NO [io] table (or no points)
+	// must still fail the reverse one-to-one check, not slip past as a phantom
 	mut sig_from := map[string]string{}
 	mut sig_to := map[string]string{}
 	mut sig_nfields := map[string]int{}
@@ -309,6 +309,18 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 				}
 			}
 		}
+	}
+	mut has_io_sig := false
+	for sname, from in sig_from {
+		if from == 'io' || sig_to[sname] == 'io' {
+			has_io_sig = true
+		}
+	}
+	if points.len == 0 && !has_io_sig {
+		return errs // nothing io-related to validate
+	}
+	if points.len > 32 {
+		errs << '${points.len} io points configured — the driver backend holds at most 32 (BLOB_IO_MAX)'
 	}
 
 	// reads/writes fan-in per signal across every handler (P1: exactly one each
@@ -344,6 +356,12 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 		name := str_of(pm, 'name')
 		if !ident_ok(name) {
 			errs << 'io.gpio point name "${name}" is not a valid identifier'
+			continue
+		}
+		if name.len > 63 {
+			// the driver mirrors names into fixed 64-byte buffers; a longer name
+			// would silently truncate — two prefix-sharing names on one mirror file
+			errs << 'io.gpio point name "${name}" is ${name.len} bytes — the driver name buffer holds at most 63'
 			continue
 		}
 		if name in seen_point {

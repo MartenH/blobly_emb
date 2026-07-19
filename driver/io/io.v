@@ -13,6 +13,7 @@ module io
 fn C.blob_io_cfg(int, &char, &char, int, u32) int
 fn C.blob_io_init() int
 fn C.blob_io_gpio_read(int) int
+fn C.blob_io_gpio_read_checked(int, &int) int
 fn C.blob_io_gpio_write(int, int)
 fn C.blob_io_close()
 
@@ -35,6 +36,18 @@ pub fn init() bool {
 // last-good value instead of an error the loop would have to handle.
 pub fn gpio_read(ch int) bool {
 	return C.blob_io_gpio_read(ch) != 0
+}
+
+// gpio_read_checked returns the level only when the backend parsed a REAL
+// value — none otherwise, never last-good: the boot publish must not fabricate
+// an initial sample (docs/io.md startup ordering; the periodic reads keep
+// gpio_read's last-good semantics).
+pub fn gpio_read_checked(ch int) ?bool {
+	v := 0
+	if C.blob_io_gpio_read_checked(ch, &v) != 0 {
+		return none
+	}
+	return v != 0
 }
 
 // gpio_write drives an output point.

@@ -43,7 +43,10 @@ fn main() {
 		if from == to {
 			continue // local signal — no IOC channel
 		}
-		tr := (m['transport'] or { toml.Any('double') }).string()
+		mut tr := (m['transport'] or { toml.Any('double') }).string()
+		if from == 'io' || to == 'io' {
+			tr = 'triple' // derived for io endpoints (docs/io.md), never configured — the runtime table must match loom2v's glue
+		}
 		b << 'pub const ${snake(name)}_ch = ${chcount}'
 		transports << transport_variant(tr)
 		chcount++
