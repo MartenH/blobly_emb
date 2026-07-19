@@ -1191,15 +1191,11 @@ fn emit_io_target_boot(m Model, ioc_idx map[string]int) []string {
 			// fabricated zero — codex emb#152).
 			g << '\tif boot_${fld}_v := io.adc_read_checked(${pt.ch}) {'
 			g << '\t\tC.ioc_pub(${idx}, boot_${fld}_v, u32(0))'
-			if pt.has_default {
-				g << '\t} else {'
-				g << '\t\tC.ioc_pub(${idx}, u32(${pt.default_u32}), u32(0)) // declared degraded-start default'
-				g << '\t}'
-			} else {
-				g << '\t} else {'
-				g << '\t\tio_startup_faults++ // no first conversion: publish NOTHING'
-				g << '\t}'
-			}
+			g << '\t} else {'
+			g << '\t\tio_startup_faults++ // no first conversion: publish NOTHING (the'
+			g << '\t\t// port initializer holds the declared default; a published default'
+			g << '\t\t// would mark a fabricated sample fresh — codex emb#152)'
+			g << '\t}'
 		} else {
 			g << '\tif boot_${fld}_v := io.gpio_read_checked(${pt.ch}) {'
 			g << '\t\tC.ioc_pub(${idx}, if boot_${fld}_v { u32(1) } else { u32(0) }, u32(0))'
@@ -2418,16 +2414,10 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 					glue << '\tif boot_${fld}_v := io.adc_read_checked(${pt.ch}) {'
 					glue << '\t\tmut boot_${fld} := sig.${pt.name}{ ${si.val_field}: ${adc_cast(si.val_type)}(boot_${fld}_v) }'
 					glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &boot_${fld}, u8(sizeof(boot_${fld})))'
-					if pt.has_default {
-						glue << '\t} else {'
-						glue << '\t\tmut boot_${fld} := sig.${pt.name}{ ${si.val_field}: ${adc_cast(si.val_type)}(${pt.default_u32}) }'
-						glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &boot_${fld}, u8(sizeof(boot_${fld})))'
-						glue << '\t}'
-					} else {
-						glue << '\t} else {'
-						glue << '\t\tio_startup_faults++ // no first conversion: publish NOTHING'
-						glue << '\t}'
-					}
+					glue << '\t} else {'
+					glue << '\t\tio_startup_faults++ // no first sample: publish NOTHING (the port'
+					glue << '\t\t// default holds; a published default would be a fabricated fresh sample)'
+					glue << '\t}'
 				} else {
 					glue << '\tif boot_${fld}_v := io.gpio_read_checked(${pt.ch}) {'
 					glue << '\t\tmut boot_${fld} := sig.${pt.name}{ ${si.val_field}: boot_${fld}_v }'

@@ -11,9 +11,9 @@ ENTRY(Reset_Handler)
 MEMORY
 {
     FLASH (rx) : ORIGIN = 0x08000000,
-  D2SRAM (wx) : ORIGIN = 0x30000000, LENGTH = 0x00008000   /* 32 KiB D2 AHB SRAM: DMA-reachable (ADC) */
                  LENGTH = DEFINED(__flash_len__) ? __flash_len__ : 1024K
     RAM  (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
+    D2SRAM (wx) : ORIGIN = 0x30000000, LENGTH = 0x00008000   /* 32 KiB D2 AHB SRAM: DMA-reachable (ADC) */
 }
 
 _estack = ORIGIN(RAM) + LENGTH(RAM);
@@ -38,12 +38,7 @@ SECTIONS
         *(.data*)
         . = ALIGN(4);
         _edata = .;
-    .dma_buf (NOLOAD) :
-  {
-    *(.dma_buf .dma_buf.*)   /* ADC/DMA latest-value buffers: DMA cannot reach DTCM */
-  } > D2SRAM
-
-  } > RAM AT> FLASH
+    } > RAM AT> FLASH
 
     .bss : {
         . = ALIGN(4);
@@ -53,6 +48,10 @@ SECTIONS
         . = ALIGN(4);
         _ebss = .;
     } > RAM
+
+    .dma_buf (NOLOAD) : {
+        *(.dma_buf .dma_buf.*)   /* ADC/DMA latest-value buffers: DMA cannot reach DTCM */
+    } > D2SRAM
 
     /* remaining DTCM is heap/stack headroom */
     . = ALIGN(8);

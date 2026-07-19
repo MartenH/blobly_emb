@@ -526,6 +526,15 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 			if 'init' in pm {
 				errs << 'io.${kind} "${name}" is an input — init belongs to outputs; an input\'s pre-first-sample port value is `default`'
 			}
+			if kind == 'adc' {
+				if dv := pm['default'] {
+					ft := sig_ftype[name]
+					maxv := if ft == 'u16' { i64(65535) } else { i64(4294967295) }
+					if dv !is i64 || (dv as i64) < 0 || (dv as i64) > maxv {
+						errs << 'io.adc "${name}" default must be an integer in 0..${maxv} (the bound ${ft} range) — a negative or oversized default overflows the count'
+					}
+				}
+			}
 			if readers[name] != 1 {
 				errs << 'io input "${name}" needs exactly one reading handler (found ${readers[name]}) — P1 is single-consumer (fan-out arrives with the to-list form)'
 			} else if reader_part[name] != other {
