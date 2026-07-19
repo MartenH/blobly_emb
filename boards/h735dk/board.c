@@ -163,7 +163,8 @@ int board_io_pin_reserved(int port, int pin) {
  * platform actively owns — extend BOTH from the schematic when a config first
  * needs a contested pad. */
 int board_io_pin_exists(int port, int pin) {
-	if (port >= 0 && port <= 8) return pin <= 15;    /* PA..PI */
+	if (port >= 0 && port <= 7) return pin <= 15;    /* PA..PH: fully bonded */
+	if (port == 8) return pin <= 11;                 /* PI: bonded only through PI11 (UFBGA176) */
 	return 0;                                        /* PJ/PK: LCD/OSPI fabric */
 }
 
