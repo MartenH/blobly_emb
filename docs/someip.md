@@ -47,12 +47,14 @@ core      = 0
 # bump is reviewed in the same diff that changes the layout).
 # peer — where events/responses go and where requests come from. STATIC: no SD.
 [someip]
-bus      = "eth0"
-service  = 0x0100
-instance = 0x0001
-version  = 1
-port     = 30490
-peer     = "192.168.0.10:30490"
+bus     = "eth0"
+service = 0x0100
+version = 1
+port    = 30490
+peer    = "192.168.0.10:30490"
+# NOTE deliberately no `instance`: without SD, nothing in the envelope or the
+# static endpoints carries an instance identity — a config value no wire byte
+# depends on is dead weight. The field arrives with the SD rung, if ever.
 
 # Frames on an eth bus reuse the id field as the SOME/IP method/event id.
 # Bit 15 classifies the id's ROLE, not its direction: set = event/notification
@@ -79,10 +81,14 @@ record = 0x8002
 
 On CAN, signal→frame membership and the bit layout come from the imported DBC;
 an eth frame gets neither, so the config must supply both. Membership is the
-frame's `signals` list. The layout is **derived, never authored**: fields
-packed in signal-list order, little-endian, each field at its natural width,
-byte-aligned, no other padding — deterministic from the `[[signal]]` `fields`
-declarations alone, so there are no hand-written offsets to drift. The
+frame's `signals` list. The layout is **derived, never authored**, from two
+canonical orders: signals pack in `signals`-list order (an explicit TOML
+ARRAY — order is part of its data model), and within a signal, fields pack
+in NAME-SORTED order — `fields = { ... }` is a TOML *table*, whose key order
+is NOT data (a formatter may reorder it, and `tools/sysgen` already sorts
+field names), so table order can never be a wire contract. Each field at its
+natural width, little-endian, byte-aligned, no other padding — deterministic
+from the declarations alone, so there are no hand-written offsets to drift. The
 generator emits the resulting layout table twice: into `gen/` for the image,
 and into the trace manifest so the host side (blobly_net) decodes from the
 same source of truth. Extending the DBC dialect to describe eth frames was
@@ -114,8 +120,8 @@ What ecucheck adds (same rule family as the io bindings, docs/io.md):
   `u8`..`u64`, `i8`..`i64`, `f32`/`f64`) — the layout derivation has no
   meaning for strings, slices, or anything heap-shaped, and the no-alloc
   invariant forbids them in generated runtime code anyway;
-- `service` and `instance` must fit 16 bits, `version` 8 bits, `port` is
-  1..65535, and `peer` must parse as an address:port pair — narrowing happens
+- `service` must fit 16 bits, `version` 8 bits, `port` is 1..65535, and
+  `peer` must parse as an address:port pair — narrowing happens
   in the header packing, so an over-wide value would otherwise silently
   collide instead of failing the build;
 - the derived payload must fit the SHARED PDU bound — `comm.com`'s 64-byte
@@ -167,7 +173,7 @@ enters the shared routing/codec path.
 
 ## What this deliberately is NOT
 
-- **No SOME/IP-SD on the target.** Endpoints, services, instances, and the
+- **No SOME/IP-SD on the target.** Endpoints, services, and the
   subscriber are all fixed at build time from `[someip]`. Offer/find/subscribe
   over multicast is dynamic-topology machinery; a vehicle network fixed at
   config time doesn't have that problem. If third-party interop ever demands
@@ -198,7 +204,7 @@ two-repo pincer the CAN stack used.
 
 ## Phasing (bench rungs; H735-DK is the eth board)
 
-1. **P1 — events tx (REQ-NET-013/017).** `comm/someip` header codec + the
+1. **P1 — events tx (REQ-NET-013).** `comm/someip` header codec + the
    eth-bus tx path: a cyclic SIGNAL frame (the BenchTelem sketch) AND the
    trace module's record stream, both as NOTIFICATION events from the comm
    thread over the NetX UDP socket. The bench exercises ALL THREE configured
@@ -209,10 +215,13 @@ two-repo pincer the CAN stack used.
    bandwidth ceiling ([[trace-as-com-module]]). REQ-NET-014 (the envelope) is
    *exercised* here but only *verified* at P3 — its text covers remote calls,
    which don't exist until then.
-2. **P2 — events rx + routing (REQ-NET-015).** The rx direction: datagrams
-   from the socket through the router into signals/module endpoints by frame
-   id, same tables as CAN rx. Bench: drive a signal (the lamp, in the io
-   tradition) from a host-sent event.
+2. **P2 — events rx + routing (REQ-NET-015/017).** The rx direction:
+   datagrams from the socket through the router into signals/module endpoints
+   by frame id, same tables as CAN rx. REQ-NET-017 verifies HERE, not P1 —
+   its enforced-on-reception clause needs an inbound path, and P1 has none.
+   Bench: drive a signal (the lamp, in the io tradition) from a host-sent
+   event; then the same event from a foreign source address, which must be
+   counted and dropped, not routed.
 3. **P3 — request/response (REQ-NET-014/016/018).** REQUEST/RESPONSE/ERROR
    message types with request-id correlation; the shell (comm/shell) reachable
    as a SOME/IP method — the CAN shell's 0x7F0 family gets an eth sibling.
@@ -227,6 +236,11 @@ two-repo pincer the CAN stack used.
      ID and answers an overlapping request for the same method with the
      standard busy/not-ready error — bounded state, no correlation table.
      (The DoIP server's one-connection-at-a-time posture, same reasoning.)
+     The slot cannot leak: the module contract never guarantees a response
+     (`produce` may simply never answer a request the module drops), so the
+     adapter releases the slot on a configured response deadline and answers
+     the pending Request ID with an ERROR — a wedged module costs one timeout,
+     not a permanently-busy method.
    - **Responses are one PDU.** `comm/shell` builds up to 520-byte responses
      and streams them over ISO-TP on CAN; there is no ISO-TP over the eth
      path and no segmentation. The eth shell adapter is therefore a bounded
