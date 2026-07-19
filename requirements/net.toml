@@ -117,3 +117,62 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-NET-001"
+
+# 013..017: service-oriented signal/event communication over the datagram
+# service — refining SYS-REQ-NET-002 (application communication), NOT -001
+# (diagnostics/update). Capability-level as above — SOME/IP is the first
+# BINDING (docs/someip.md), exactly as DoIP binds REQ-NET-007.
+
+[[req]]
+id = "REQ-NET-013"
+title = "Event publication over the network"
+text = "Configured signal groups shall be publishable over the network datagram service as events whose payload layout is fully determined by the build-time configuration, with the same configured transmission modes (cyclic, on-change, mixed) the bus transport provides."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-002"
+
+[[req]]
+id = "REQ-NET-014"
+title = "Interoperable service message envelope"
+text = "Networked events and remote calls shall carry an industry-standard service-oriented message header such that commodity network analyzers and third-party tooling can identify the service, method or event, length, message type, and request correlation without project-specific software; payload interpretation may additionally require the build-time configuration, as bus frame bodies require their signal database."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-002"
+
+[[req]]
+id = "REQ-NET-015"
+title = "Event reception and routing"
+text = "Events received over the network datagram service shall be routed to signals or module endpoints by the same configured frame routing the bus transport uses; unknown or malformed messages shall be counted and dropped, never faulting the ECU."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-002"
+
+[[req]]
+id = "REQ-NET-016"
+title = "Remote procedure call over the network"
+text = "The subsystem shall provide request/response messaging over the network with request-to-response correlation and a distinguishable error response, so that a configured service method can be invoked remotely and its outcome attributed to the originating request."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-002"
+
+[[req]]
+id = "REQ-NET-017"
+title = "Static service endpoints"
+text = "All service communication endpoints (addresses, ports, service and method/event identities) shall be fixed at configuration time and enforced on reception — messages from a source other than a configured endpoint shall be counted and dropped; the subsystem shall not depend on runtime service discovery to communicate."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-002"
+
+[[req]]
+id = "REQ-NET-018"
+title = "Access-controlled state-changing remote calls"
+text = "A remote call that alters ECU state shall be subject to an access-control gate before it acts; reachability alone shall not grant the ability to change state, and a build without the gate shall expose only non-state-changing methods."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-002"
