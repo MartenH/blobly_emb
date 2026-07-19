@@ -68,6 +68,7 @@ fn specs() map[string]map[string]Key {
 			'nm':        sub(.tbl, false, 'nm')
 			'nvm':       sub(.tbl, false, 'nvm')
 			'target':    sub(.tbl, false, 'target')
+			'someip':    sub(.tbl, false, 'someip')
 			'bus':       sub(.namedmap, false, 'bus')
 			'partition': sub(.arr, false, 'partition')
 			'fb':        sub(.arr, false, 'fb')
@@ -90,12 +91,12 @@ fn specs() map[string]map[string]Key {
 			'pwm':  sub(.arr, false, 'io_pwm')
 		}
 		'io_gpio':    {
-			'name':      req(.str) // binds the [[signal]] of the same name
-			'pin':       req(.str)
-			'period_ms': req(.int)
-			'init':      k(.boolean) // REQUIRED on outputs (semantic check)
+			'name':       req(.str) // binds the [[signal]] of the same name
+			'pin':        req(.str)
+			'period_ms':  req(.int)
+			'init':       k(.boolean) // REQUIRED on outputs (semantic check)
 			'active_low': k(.boolean) // pad polarity (REQ-IO-015): logical true = pad LOW
-			'default':   k(.boolean) // inputs only: port value before the first real sample
+			'default':    k(.boolean) // inputs only: port value before the first real sample
 		}
 		'io_adc':     {
 			'name':      req(.str) // binds a u16/u32 [[signal]] (input-only)
@@ -177,6 +178,16 @@ fn specs() map[string]map[string]Key {
 			'interface': req(.str)
 			'fd':        k(.boolean)
 			'core':      k(.int)
+			'kind':      k(.str) // "can" (default) | "eth" (docs/someip.md)
+		}
+		// the SOME/IP service identity + static endpoints (docs/someip.md).
+		// Deliberately NO `instance`: without SD nothing on the wire carries it.
+		'someip':     {
+			'bus':     req(.str)
+			'service': req(.int)
+			'version': req(.int) // the interface version byte, explicitly managed
+			'port':    req(.int)
+			'peer':    req(.str) // address:port — tx destination AND rx source filter
 		}
 		// the LEGACY per-network cfg2v shape ([nm.<bus>], gen.nm_<bus>_* constants); the
 		// module world's [nm] endpoint bindings live in the 'nm' schema above. Both coexist:
@@ -228,12 +239,14 @@ fn specs() map[string]map[string]Key {
 			'nvm_id':    k(.int) // explicit schema-identity pin (hash-collision escape)
 		}
 		'frame':      {
-			'name':  req(.str)
-			'bus':   req(.str)
-			'tx':    sub(.tbl, false, 'tx')
-			'rx':    sub(.tbl, false, 'rx')
-			'e2e':   sub(.tbl, false, 'e2e')
-			'secoc': sub(.tbl, false, 'secoc')
+			'name':    req(.str)
+			'bus':     req(.str)
+			'id':      k(.int) // eth frames: the SOME/IP event id (CAN ids come from the DBC)
+			'signals': k(.str_arr) // eth frames: membership + the derived layout (docs/someip.md)
+			'tx':      sub(.tbl, false, 'tx')
+			'rx':      sub(.tbl, false, 'rx')
+			'e2e':     sub(.tbl, false, 'e2e')
+			'secoc':   sub(.tbl, false, 'secoc')
 		}
 		'tx':         {
 			'mode':         k(.str)
@@ -298,7 +311,7 @@ fn label(ctx string) string {
 		'tx', 'rx', 'e2e', 'secoc' { 'inline ${ctx}' }
 		'route_from' { '[[route]] from' }
 		'route_to' { '[[route]] to' }
-		'import', 'telemetry', 'trace', 'target' { '[${ctx}]' }
+		'import', 'telemetry', 'trace', 'target', 'someip' { '[${ctx}]' }
 		else { '[[${ctx}]]' }
 	}
 }

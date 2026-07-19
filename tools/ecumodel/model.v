@@ -165,11 +165,15 @@ pub fn validate(doc toml.Doc) []string {
 			'thread' { thread_part.keys() }
 			else { bus_names.keys() }
 		}
+
 		if 'io' in names {
 			errs << 'a ${reserved_holder} is named "io" — reserved endpoint name (io points, docs/io.md)'
 		}
 	}
 	errs << validate_io(doc, part_names, thread_part, bus_names)
+
+	// [someip] / eth buses — must also stay BEFORE [trace] (early return below).
+	errs << validate_someip(doc)
 
 	// [trace] — the runtime-observability block loom2v generates the trace wiring from. Validate
 	// the enums loom2v switches on (level, mode), the numeric ranges (pre_pct, buffer_records),
@@ -267,11 +271,373 @@ pub fn validate(doc toml.Doc) []string {
 				errs << '[trace] trigger source "${src}" is not supported (only "overrun" is generated today)'
 			} else {
 				b := tgm['budget_us'] or { toml.Any(0) }
-				if !(b is i64) || b.i64() <= 0 {
+				if b !is i64 || b.i64() <= 0 {
 					errs << '[trace] trigger source "overrun" needs a positive budget_us (µs a handler may run before the ring freezes)'
 				}
 			}
 		}
+	}
+	return errs
+}
+
+// scalar_width returns the wire width of a fixed-width scalar field type, or 0
+// for anything the derived eth layout cannot carry (strings, arrays — no fixed
+// natural width, and heap-shaped types violate no-alloc in generated code).
+fn scalar_width(t string) int {
+	return match t {
+		'bool', 'u8', 'i8' { 1 }
+		'u16', 'i16' { 2 }
+		'u32', 'i32', 'f32' { 4 }
+		'u64', 'i64', 'f64' { 8 }
+		else { 0 }
+	}
+}
+
+// peer_ok reports whether s parses as an IPv4 address:port pair — narrowing
+// and resolution happen in socket setup, so a bad peer must fail the build
+// instead. IPv4 dotted-quad only: the static NetX path takes an IP, not a
+// name (hostname support is a host-sim nicety to add if ever needed).
+fn peer_ok(s string) bool {
+	mut colon := -1
+	for i, c in s {
+		if c == `:` {
+			colon = i
+		}
+	}
+	if colon < 1 || colon == s.len - 1 {
+		return false
+	}
+	port_str := s[colon + 1..]
+	for c in port_str {
+		if c < `0` || c > `9` {
+			return false
+		}
+	}
+	port := port_str.i64()
+	if port < 1 || port > 65535 {
+		return false
+	}
+	octets := s[..colon].split('.')
+	if octets.len != 4 {
+		return false
+	}
+	for o in octets {
+		if o.len < 1 || o.len > 3 {
+			return false
+		}
+		for c in o {
+			if c < `0` || c > `9` {
+				return false
+			}
+		}
+		if o.i64() > 255 {
+			return false
+		}
+	}
+	return true
+}
+
+// validate_someip checks the eth bus + [someip] + eth [[frame]] rules
+// (docs/someip.md): one eth bus per image, the [someip]/eth-traffic pairing,
+// event-class ids unique across bindings, the signals list with its canonical
+// fixed-width layout, one direction per frame, and the shared 64-byte PDU
+// bound (comm.com max_pdu — the codec/router path is sized for it).
+fn validate_someip(doc toml.Doc) []string {
+	mut errs := []string{}
+	mut eth_buses := []string{}
+	if bv := doc.value_opt('bus') {
+		for bname, btbl in bv.as_map() {
+			kind := str_of(btbl.as_map(), 'kind')
+			if kind !in ['', 'can', 'eth'] {
+				errs << 'bus "${bname}" kind "${kind}" is invalid (can | eth)'
+			} else if kind == 'eth' {
+				eth_buses << bname
+			}
+		}
+	}
+	if eth_buses.len > 1 {
+		errs << '${eth_buses.len} eth buses declared (${eth_buses.join(', ')}) — one eth bus per image (docs/someip.md; a keyed [someip.<bus>] is the later generalisation)'
+	}
+	eth := if eth_buses.len == 1 { eth_buses[0] } else { '' }
+
+	// signals by name, for direction/shape checks
+	mut sig_from := map[string]string{}
+	mut sig_to := map[string]string{}
+	mut sig_size := map[string]int{}
+	mut sig_badfield := map[string]string{}
+	for sg in toml_arr(doc, 'signal') {
+		sm := sg.as_map()
+		sname := str_of(sm, 'name')
+		sig_from[sname] = str_of(sm, 'from')
+		sig_to[sname] = str_of(sm, 'to')
+		if f := sm['fields'] {
+			mut size := 0
+			for fname, ftyp in f.as_map() {
+				w := scalar_width(ftyp.string())
+				if w == 0 {
+					sig_badfield[sname] = '${fname} "${ftyp.string()}"'
+				}
+				size += w
+			}
+			sig_size[sname] = size
+		}
+	}
+
+	mut seen_ids := map[i64]string{} // event id -> frame (unique across bindings)
+	mut sig_frame := map[string]string{} // signal -> frame (a signal rides one frame)
+	mut n_eth_frames := 0
+	for f in toml_arr(doc, 'frame') {
+		fm := f.as_map()
+		if eth == '' || str_of(fm, 'bus') != eth {
+			// on a CAN bus the eth-frame keys are silently ignored by loom2v
+			// (identity/layout come from the DBC) — reject them loud instead
+			if 'id' in fm || 'signals' in fm {
+				errs << 'frame "${str_of(fm, 'name')}" is not on an eth bus but declares eth-frame keys (`id`/`signals`) — CAN identity and layout come from the DBC'
+			}
+			continue
+		}
+		n_eth_frames++
+		fname := str_of(fm, 'name')
+		if v := fm['id'] {
+			if v is i64 {
+				if v < 0x8000 || v > 0xFFFF {
+					errs << 'eth frame "${fname}" id 0x${v.hex()} is not an event id — signal frames are events (bit 15 set: 0x8000..0xFFFF); methods are module-bound and arrive with the RPC phase'
+				} else if v in seen_ids {
+					errs << 'eth frame "${fname}" reuses event id 0x${v.hex()} (already bound by "${seen_ids[v]}") — ids are unique across all bindings'
+				} else {
+					seen_ids[v] = fname
+				}
+			} else {
+				errs << 'eth frame "${fname}" id must be an integer event id'
+			}
+		} else {
+			errs << 'eth frame "${fname}" is missing `id` (the SOME/IP event id, 0x8000..0xFFFF)'
+		}
+		sigs := arr_of(fm, 'signals')
+		if sigs.len == 0 {
+			errs << 'eth frame "${fname}" needs a non-empty `signals` list — membership and the derived layout come from it (docs/someip.md; module frames bind through their module block instead)'
+			continue
+		}
+		mut ntx := 0
+		mut nrx := 0
+		mut size := 0
+		for s in sigs {
+			sname := s.string()
+			if sname !in sig_from {
+				errs << 'eth frame "${fname}" lists unknown signal "${sname}"'
+				continue
+			}
+			if sname in sig_frame {
+				errs << 'signal "${sname}" rides two eth frames ("${sig_frame[sname]}" and "${fname}") — a signal rides exactly one frame'
+			} else {
+				sig_frame[sname] = fname
+			}
+			if sig_from[sname] == eth && sig_to[sname] == eth {
+				errs << 'signal "${sname}" names eth bus "${eth}" on BOTH sides — a signal has the bus on exactly one side (the bridge cannot hold both channel roles: SPSC)'
+			} else if sig_to[sname] == eth {
+				ntx++
+			} else if sig_from[sname] == eth {
+				nrx++
+			} else {
+				errs << 'eth frame "${fname}" lists signal "${sname}" which does not name bus "${eth}" on either side'
+			}
+			if bad := sig_badfield[sname] {
+				errs << 'signal "${sname}" field ${bad} is not a fixed-width scalar (bool, u8..u64, i8..i64, f32/f64) — the derived eth layout has no meaning for it'
+			}
+			size += sig_size[sname] or { 0 }
+		}
+		if ntx > 0 && nrx > 0 {
+			errs << 'eth frame "${fname}" mixes tx and rx signals — one direction per frame (a mixed frame would make the bridge a second writer on an SPSC channel)'
+		}
+		// the bridge derives direction from the signal endpoints — a behavior
+		// block for the OTHER direction is silently ignored (a tx mode that
+		// never publishes, an rx deadline never enforced): reject it
+		if nrx > 0 && ntx == 0 && 'tx' in fm {
+			errs << 'eth frame "${fname}" is rx (signals from the bus) but declares a tx block — the mode would silently never publish'
+		}
+		if ntx > 0 && nrx == 0 && 'rx' in fm {
+			errs << 'eth frame "${fname}" is tx (signals to the bus) but declares an rx block — the deadline would silently never be enforced'
+		}
+		// SecOC has no eth story yet: the derived payload reserves no
+		// freshness/MAC bytes and no appended auth layout is defined
+		if 'secoc' in fm {
+			errs << 'eth frame "${fname}" declares secoc — SecOC on eth is not defined (no reserved freshness/MAC bytes in the derived layout); an appended auth layout is its own rung'
+		}
+		// the E2E loss protection is an APPENDED trailer on eth (docs/someip.md):
+		// the counter byte sits at the derived layout size, the CRC after it —
+		// comm/e2e.protect writes THROUGH the configured positions, so anything
+		// else would overwrite signal bytes, not append. The trailer counts
+		// toward the bound.
+		if ev := fm['e2e'] {
+			evm := ev.as_map()
+			cpos := (evm['counter_pos'] or { toml.Any(i64(-1)) }).i64()
+			crc := (evm['crc_pos'] or { toml.Any(i64(-1)) }).i64()
+			if cpos != size || crc != size + 1 {
+				errs << 'eth frame "${fname}" E2E is an appended trailer: counter_pos must equal the derived layout size (${size}) and crc_pos ${
+					size + 1} (got ${cpos}/${crc}) — other positions overwrite signal bytes'
+			}
+			// the generated protect call narrows data_id to u16 — distinct
+			// over-wide ids would silently alias one E2E identity. Type-check
+			// too: .i64() coerces a string to 0, which would pass the range
+			// when loom2v runs without ecucheck's schema pass.
+			if dv := evm['data_id'] {
+				if dv !is i64 || dv.i64() < 0 || dv.i64() > 0xFFFF {
+					errs << 'eth frame "${fname}" E2E data_id must be an integer fitting 16 bits (0..0xFFFF)'
+				}
+			} else {
+				errs << 'eth frame "${fname}" E2E data_id must be an integer fitting 16 bits (0..0xFFFF)'
+			}
+			size += 2
+		}
+		if size > 64 {
+			errs << 'eth frame "${fname}" derived payload is ${size} bytes (E2E trailer included) — the shared PDU bound is 64 (comm.com max_pdu); a wider eth PDU is its own rung, not a silent relaxation'
+		}
+	}
+	// the reverse membership check: an eth-bound signal outside every frame
+	// would be a phantom endpoint — no layout, no route, silently dead
+	if eth != '' {
+		for sname, from in sig_from {
+			if (from == eth || sig_to[sname] == eth) && sname !in sig_frame {
+				errs << 'signal "${sname}" is bound to eth bus "${eth}" but rides no eth frame — an unpublished input or a never-transmitted output'
+			}
+		}
+	}
+
+	// ENABLED modules bound to the eth bus count as eth traffic for the pairing
+	// rule — but only once at least one endpoint id is validly bound (a block
+	// that names the bus with no endpoints has nothing riding it). Their ids
+	// join the shared event-id space (unique across ALL bindings,
+	// docs/someip.md). Defaults mirror loom2v: telemetry is off unless enabled,
+	// the others on unless disabled; trace and shell INHERIT [telemetry].bus
+	// when they omit their own (the generators do). NM on eth is its own phase
+	// (comm/nm_udp), and the eth shell is the RPC phase (P3: method-form + the
+	// access gate) — both rejected rather than half-bound as events.
+	mod_id_keys := {
+		'trace':     ['cmd', 'rsp', 'record']
+		'telemetry': ['id', 'detail_id']
+	}
+	mut telem_bus := ''
+	if tv := doc.value_opt('telemetry') {
+		telem_bus = str_of(tv.as_map(), 'bus')
+	}
+	mut mod_on_eth := false
+	for blk in ['trace', 'telemetry', 'shell', 'nm'] {
+		bt := doc.value_opt(blk) or { continue }
+		bm := bt.as_map()
+		def_on := blk != 'telemetry'
+		on := (bm['enabled'] or { toml.Any(def_on) }).bool()
+		mut mbus := str_of(bm, 'bus')
+		if 'bus' !in bm && blk in ['trace', 'shell'] {
+			mbus = telem_bus
+		}
+		if eth == '' || !on || mbus != eth {
+			continue
+		}
+		if blk == 'nm' {
+			errs << '[nm] is bound to eth bus "${eth}" — NM over eth (comm/nm_udp) is its own phase and is not generated; keep NM on a CAN bus'
+			continue
+		}
+		if blk == 'shell' {
+			errs << '[shell] is bound to eth bus "${eth}" — the eth shell arrives with the RPC phase (P3: method-form request/response + the access gate, docs/someip.md); keep the shell on a CAN bus'
+			continue
+		}
+		mut bound := 0
+		for kk in mod_id_keys[blk] {
+			v := bm[kk] or { continue }
+			if v is i64 {
+				if v < 0x8000 || v > 0xFFFF {
+					errs << '[${blk}] ${kk} id 0x${v.hex()} on the eth bus is not an event id (0x8000..0xFFFF)'
+				} else if v in seen_ids {
+					errs << '[${blk}] ${kk} reuses event id 0x${v.hex()} (already bound by "${seen_ids[v]}") — ids are unique across all bindings'
+				} else {
+					seen_ids[v] = '[${blk}] ${kk}'
+					bound++
+				}
+			} else {
+				errs << '[${blk}] ${kk} on the eth bus must be a literal event id — there is no DBC to resolve a name against'
+			}
+		}
+		// trace's dump_fc selects the ISO-TP block-dump path (comm/trace) —
+		// eth has no segmentation, so the adapter cannot honor it
+		if blk == 'trace' && 'dump_fc' in bm {
+			errs << '[trace] dump_fc is bound on the eth bus — the flow-controlled ISO-TP dump path has no eth counterpart (no segmentation, docs/someip.md); an eth block-transfer layout is its own rung'
+		}
+		// telemetry always transmits its CpuLoad frame on `id`, and the
+		// generator defaults an absent id to 0 — a method-class id that would
+		// bypass every check above
+		if blk == 'telemetry' && 'id' !in bm {
+			errs << '[telemetry] on eth bus "${eth}" needs an explicit `id` (the generator defaults it to 0, outside the event range)'
+		}
+		if bound == 0 {
+			errs << '[${blk}] is bound to eth bus "${eth}" but binds no valid endpoint id — nothing rides the bus (the generator would default ids outside the event range)'
+		} else {
+			mod_on_eth = true
+		}
+	}
+
+	// ISO-TP is CAN machinery too: a [[isotp]] connection on the eth bus would
+	// emit isotp.Pdu traffic as can.Frame ops — no segmentation path on eth
+	if eth != '' {
+		for it in toml_arr(doc, 'isotp') {
+			itm := it.as_map()
+			if str_of(itm, 'bus') == eth {
+				errs << '[[isotp]] "${str_of(itm, 'name')}" is bound to eth bus "${eth}" — there is no ISO-TP/segmentation path on eth (docs/someip.md); an eth diagnostic rung is its own phase'
+			}
+		}
+	}
+
+	// raw [[route]] gateways are CAN machinery (DBC-resolved, can.Channel both
+	// ends) — a route touching the eth bus would emit a raw-CAN gateway for a
+	// SOME/IP endpoint; a CAN↔SOME/IP gateway is its own explicit rung
+	if eth != '' {
+		for r in toml_arr(doc, 'route') {
+			rm := r.as_map()
+			mut fbus := ''
+			mut tbus := ''
+			if fv := rm['from'] {
+				fbus = str_of(fv.as_map(), 'bus')
+			}
+			if tv := rm['to'] {
+				tbus = str_of(tv.as_map(), 'bus')
+			}
+			if fbus == eth || tbus == eth {
+				errs << 'a [[route]] touches eth bus "${eth}" — raw-frame routing is CAN machinery; a CAN↔SOME/IP gateway is its own rung, not an implicit route'
+			}
+		}
+	}
+
+	if sp := doc.value_opt('someip') {
+		spm := sp.as_map()
+		if eth == '' {
+			errs << '[someip] declared but no bus has kind = "eth" — half-configured transports fail loud'
+		} else {
+			if str_of(spm, 'bus') != eth {
+				errs << '[someip] bus "${str_of(spm, 'bus')}" is not the eth bus ("${eth}")'
+			}
+			if n_eth_frames == 0 && !mod_on_eth {
+				errs << '[someip] declared but nothing rides bus "${eth}" — no eth [[frame]] and no module bound to it'
+			}
+		}
+		if v := spm['service'] {
+			if v !is i64 || v.i64() < 0 || v.i64() > 0xFFFF {
+				errs << '[someip] service must fit 16 bits (0..0xFFFF)'
+			}
+		}
+		if v := spm['version'] {
+			if v !is i64 || v.i64() < 0 || v.i64() > 0xFF {
+				errs << '[someip] version must fit 8 bits (0..255) — the interface version byte in every header'
+			}
+		}
+		if v := spm['port'] {
+			if v !is i64 || v.i64() < 1 || v.i64() > 65535 {
+				errs << '[someip] port must be 1..65535'
+			}
+		}
+		if 'peer' in spm && !peer_ok(str_of(spm, 'peer')) {
+			errs << '[someip] peer "${str_of(spm, 'peer')}" must be an address:port pair with a valid port (1..65535)'
+		}
+	} else if n_eth_frames > 0 || mod_on_eth {
+		errs << 'traffic rides eth bus "${eth}" but there is no [someip] block (the service identity + static endpoints)'
 	}
 	return errs
 }
