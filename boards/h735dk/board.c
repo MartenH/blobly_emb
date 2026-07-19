@@ -153,6 +153,14 @@ int board_io_pin_reserved(int port, int pin) {
 	return 0;
 }
 
+/* Bonded pads the H735G-DK exposes (STM32H735IGK6): ports A..H are available;
+ * the discovery board's own map — refine per schematic if a point ever needs
+ * the high-letter ports. */
+int board_io_pin_exists(int port, int pin) {
+	if (port >= 0 && port <= 7) return pin <= 15;    /* PA..PH */
+	return 0;                                        /* PI/PJ/PK: not exposed */
+}
+
 /* Weak default for the ETH interrupt (vectors.S IRQ61). Images that link the ETH
  * driver (boards/h735dk/eth.c) override this with the strong ETH_IRQHandler; every
  * other image resolves the vector's .word here so the shared table still links.

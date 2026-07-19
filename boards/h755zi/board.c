@@ -144,6 +144,14 @@ int board_io_pin_reserved(int port, int pin) {
 	return 0;
 }
 
+/* Bonded pads on the NUCLEO-H755ZI-Q's LQFP144: ports A..G are fully bonded,
+ * PH0/PH1 are the HSE pair, nothing beyond exists on this package. */
+int board_io_pin_exists(int port, int pin) {
+	if (port >= 0 && port <= 6) return pin <= 15;    /* PA..PG complete */
+	if (port == 7) return pin <= 1;                  /* PH0/PH1 (osc pair) */
+	return 0;                                        /* PI/PJ/PK: not bonded */
+}
+
 /* Weak default for the ETH interrupt (boards/common/vectors.S IRQ61), shared with
  * the H735. The H755 has no ETH driver yet, so this absorbs the vector's .word so
  * the common table links; a future net driver overrides it with a strong handler. */

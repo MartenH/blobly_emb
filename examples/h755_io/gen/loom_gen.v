@@ -198,22 +198,30 @@ fn comm_thread_entry(input u32) {
 fn tx_application_define(first_unused voidptr) {
 	// io BEFORE the app threads exist (REQ-IO-009): declare + init the points —
 	// outputs hold their configured init from here — then publish ONE boot sample
-	// per input. Input failures count observably (degraded start); an output that
-	// never reached its init level halts BEFORE app dispatch (counter via SWD).
+	// per input. Input failures count observably (degraded start); an output
+	// fault halts BEFORE app dispatch — but only AFTER declaring the rest and
+	// running init, so every VALID output still reaches its declared level
+	// instead of floating through the halt (codex on emb#150).
+	mut io_out_fault := false
 	if !io.cfg(0, 'UserButton', 'PC13', false, 0) {
 		io_startup_faults++
 	}
 	if !io.cfg(1, 'LedGreen', 'PB0', true, 0) {
 		io_startup_faults++
-		for {} // unconfigured OUTPUT: halt — the app must not run as if it init-ed
+		io_out_fault = true // halt LATER: first let the valid outputs init
 	}
 	if !io.cfg(2, 'LedYellow', 'PE1', true, 0) {
 		io_startup_faults++
-		for {} // unconfigured OUTPUT: halt — the app must not run as if it init-ed
+		io_out_fault = true // halt LATER: first let the valid outputs init
 	}
 	if !io.init() {
 		io_startup_faults++
-		for {} // an output never reached its init level (REQ-IO-009): halt, no app dispatch
+		io_out_fault = true
+	}
+	if io_out_fault {
+		for {} // an OUTPUT never reached its init level (REQ-IO-009): no app
+		// dispatch — the valid outputs sit at their declared init, the fault
+		// counter reads via SWD
 	}
 	if boot_user_button_v := io.gpio_read_checked(0) {
 		C.ioc_pub(1, if boot_user_button_v { u32(1) } else { u32(0) }, u32(0))
