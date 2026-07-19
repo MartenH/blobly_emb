@@ -173,7 +173,7 @@ pub fn validate(doc toml.Doc) []string {
 	errs << validate_io(doc, part_names, thread_part, bus_names)
 
 	// [someip] / eth buses — must also stay BEFORE [trace] (early return below).
-	errs << validate_someip(doc)
+	errs << validate_someip(doc, part_names, thread_part, bus_names)
 
 	// [trace] — the runtime-observability block loom2v generates the trace wiring from. Validate
 	// the enums loom2v switches on (level, mode), the numeric ranges (pre_pct, buffer_records),
@@ -337,12 +337,121 @@ fn peer_ok(s string) bool {
 	return true
 }
 
+// EthLayoutCell is one derived-layout cell of an eth frame (docs/someip.md).
+// The canonical order — signals in list order, fields NAME-SORTED, LE, natural
+// widths, byte-aligned — is derived HERE, the single source of truth for the
+// loom2v codec, sigmap's provenance table, and the trace manifest the host
+// oracle decodes from.
+pub struct EthLayoutCell {
+pub:
+	frame  string
+	id     int
+	sig    string
+	field  string
+	offset int
+	width  int
+	typ    string
+}
+
+// snake_name is THE snake-case normalization generated identifiers use —
+// loom2v delegates here, so the validator's collision check and the
+// generator's emission cannot drift.
+pub fn snake_name(name string) string {
+	mut out := []u8{}
+	for i, c in name {
+		is_upper := c >= `A` && c <= `Z`
+		if is_upper && i > 0 {
+			prev := name[i - 1]
+			if (prev >= `a` && prev <= `z`) || (prev >= `0` && prev <= `9`) {
+				out << `_`
+			}
+		}
+		if (c >= `a` && c <= `z`) || (c >= `0` && c <= `9`) {
+			out << c
+		} else if is_upper {
+			out << c + 32
+		} else {
+			out << `_`
+		}
+	}
+	return out.bytestr()
+}
+
+// eth_bus_of returns the (single, ecucheck-enforced) kind = "eth" bus, or ''.
+pub fn eth_bus_of(doc toml.Doc) string {
+	if bv := doc.value_opt('bus') {
+		for bname, bcfg in bv.as_map() {
+			if str_of(bcfg.as_map(), 'kind') == 'eth' {
+				return bname
+			}
+		}
+	}
+	return ''
+}
+
+// eth_layouts derives every eth frame's canonical payload layout. Invalid
+// pieces (unknown signals, non-scalar fields) contribute nothing — the
+// validator reports them; this derivation serves the already-valid config.
+pub fn eth_layouts(doc toml.Doc) []EthLayoutCell {
+	eth := eth_bus_of(doc)
+	mut out := []EthLayoutCell{}
+	if eth == '' {
+		return out
+	}
+	mut sig_fields := map[string]map[string]string{}
+	for sg in toml_arr(doc, 'signal') {
+		sm := sg.as_map()
+		mut fields := map[string]string{}
+		if f := sm['fields'] {
+			for fname, ftyp in f.as_map() {
+				fields[fname] = ftyp.string()
+			}
+		}
+		sig_fields[str_of(sm, 'name')] = fields.clone()
+	}
+	for f in toml_arr(doc, 'frame') {
+		fm := f.as_map()
+		if str_of(fm, 'bus') != eth {
+			continue
+		}
+		fname := str_of(fm, 'name')
+		fid := int((fm['id'] or { toml.Any(0) }).int())
+		mut off := 0
+		for sv in arr_of(fm, 'signals') {
+			sname := sv.string()
+			if sname !in sig_fields {
+				continue
+			}
+			fields := sig_fields[sname].clone()
+			mut fnames := fields.keys()
+			fnames.sort()
+			for fn_ in fnames {
+				w := scalar_width(fields[fn_])
+				if w == 0 {
+					continue
+				}
+				out << EthLayoutCell{
+					frame:  fname
+					id:     fid
+					sig:    sname
+					field:  fn_
+					offset: off
+					width:  w
+					typ:    fields[fn_]
+				}
+				off += w
+			}
+		}
+	}
+	return out
+}
+
 // validate_someip checks the eth bus + [someip] + eth [[frame]] rules
 // (docs/someip.md): one eth bus per image, the [someip]/eth-traffic pairing,
 // event-class ids unique across bindings, the signals list with its canonical
 // fixed-width layout, one direction per frame, and the shared 64-byte PDU
 // bound (comm.com max_pdu — the codec/router path is sized for it).
-fn validate_someip(doc toml.Doc) []string {
+fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[string]string, bus_names map[string]bool) []string {
 	mut errs := []string{}
 	mut eth_buses := []string{}
 	if bv := doc.value_opt('bus') {
@@ -364,6 +473,7 @@ fn validate_someip(doc toml.Doc) []string {
 	mut sig_from := map[string]string{}
 	mut sig_to := map[string]string{}
 	mut sig_size := map[string]int{}
+	mut sig_mem := map[string]int{}
 	mut sig_badfield := map[string]string{}
 	for sg in toml_arr(doc, 'signal') {
 		sm := sg.as_map()
@@ -372,17 +482,53 @@ fn validate_someip(doc toml.Doc) []string {
 		sig_to[sname] = str_of(sm, 'to')
 		if f := sm['fields'] {
 			mut size := 0
+			// the IN-MEMORY struct size too (natural alignment, declaration
+			// order): the handlers publish sig.<Name> through IOC, whose slot
+			// is 64 bytes (IOC_MAX, osal_native.c) — a signal can fit the wire
+			// yet overflow the slot after C/V padding
+			mut msize := 0
+			mut maxal := 1
 			for fname, ftyp in f.as_map() {
 				w := scalar_width(ftyp.string())
 				if w == 0 {
 					sig_badfield[sname] = '${fname} "${ftyp.string()}"'
+					continue
 				}
 				size += w
+				if w > maxal {
+					maxal = w
+				}
+				msize = (msize + w - 1) / w * w + w
 			}
+			msize = (msize + maxal - 1) / maxal * maxal
 			sig_size[sname] = size
+			sig_mem[sname] = msize
 		}
 	}
 
+	// FB reads/writes fan-in per signal (the io validator's pattern): the eth
+	// channel topology must stay SPSC — the bridge owns one side, so extra or
+	// wrong-side or wrong-partition accessors are config errors, not surprises.
+	// SPSC counts execution CONTEXTS, not handler references: two handlers on
+	// one Loom thread publish serially (race-free), so track the set of
+	// distinct THREADS touching each signal.
+	mut reader_threads := map[string]map[string]bool{}
+	mut writer_threads := map[string]map[string]bool{}
+	for c in toml_arr(doc, 'fb') {
+		cm := c.as_map()
+		fb_thread := str_of(cm, 'thread')
+		for h in arr_of(cm, 'handler') {
+			hm := h.as_map()
+			for r in arr_of(hm, 'reads') {
+				reader_threads[r.string()][fb_thread] = true
+			}
+			for w in arr_of(hm, 'writes') {
+				writer_threads[w.string()][fb_thread] = true
+			}
+		}
+	}
+
+	mut seen_frame_snakes := map[string]string{} // snake(name) -> original
 	mut seen_ids := map[i64]string{} // event id -> frame (unique across bindings)
 	mut sig_frame := map[string]string{} // signal -> frame (a signal rides one frame)
 	mut n_eth_frames := 0
@@ -398,6 +544,19 @@ fn validate_someip(doc toml.Doc) []string {
 		}
 		n_eth_frames++
 		fname := str_of(fm, 'name')
+		// the name reaches generated identifiers AND unquoted manifest CSV rows
+		if !ident_ok(fname) {
+			errs << 'eth frame name "${fname}" is not a valid identifier ([A-Za-z_][A-Za-z0-9_]*) — it becomes generated code names and manifest CSV cells'
+			continue
+		}
+		// uniqueness AFTER snake normalization: "FooBar" and "foo_bar" would
+		// emit duplicate generated consts/pack fns (uncompilable image)
+		fsnake := snake_name(fname)
+		if fsnake in seen_frame_snakes {
+			errs << 'eth frame "${fname}" collides with "${seen_frame_snakes[fsnake]}" after snake-case normalization ("${fsnake}") — generated names must be unique'
+			continue
+		}
+		seen_frame_snakes[fsnake] = fname
 		if v := fm['id'] {
 			if v is i64 {
 				if v < 0x8000 || v > 0xFFFF {
@@ -436,18 +595,113 @@ fn validate_someip(doc toml.Doc) []string {
 				errs << 'signal "${sname}" names eth bus "${eth}" on BOTH sides — a signal has the bus on exactly one side (the bridge cannot hold both channel roles: SPSC)'
 			} else if sig_to[sname] == eth {
 				ntx++
+				// SPSC ownership, tx: the app side produces, the bridge consumes.
+				mut other := sig_from[sname]
+				if other in bus_names {
+					errs << 'signal "${sname}": the non-eth side is bus "${other}" — an eth signal passes through the application, never bus-to-bus'
+				} else {
+					if other in thread_part {
+						other = thread_part[other]
+					} else if other !in part_names {
+						errs << 'signal "${sname}": endpoint "${other}" is not a declared partition or thread'
+						other = ''
+					}
+					wthreads := (writer_threads[sname] or {
+						map[string]bool{}
+					}).keys()
+					if wthreads.len > 1 {
+						errs << 'eth tx signal "${sname}" is written from ${wthreads.len} execution contexts (threads ${wthreads.join(', ')}) — one producing context per SPSC channel'
+					} else if wthreads.len == 1 && other != '' && (thread_part[wthreads[0]] or {
+						''
+					}) != other {
+						errs << 'eth tx signal "${sname}" is written from partition "${thread_part[wthreads[0]] or {
+							'?'
+						}}" but declares endpoint "${other}" — the writer must live in the declared partition'
+					} else if wthreads.len == 0 && other != '' {
+						// the io output rule: zero writers behind a valid-looking
+						// config is a channel that never publishes — fail loud
+						errs << 'eth tx signal "${sname}" has no writing handler — the frame would only ever carry init values (io output rule: exactly one producing context)'
+					}
+					if (reader_threads[sname] or {
+						map[string]bool{}
+					}).len > 0 {
+						errs << 'eth tx signal "${sname}" appears in a handler\'s reads — the bridge owns that channel side (single-reader transport)'
+					}
+				}
 			} else if sig_from[sname] == eth {
 				nrx++
+				// SPSC ownership, rx: the bridge produces, the app side consumes.
+				mut other := sig_to[sname]
+				if other in bus_names {
+					errs << 'signal "${sname}": the non-eth side is bus "${other}" — an eth signal passes through the application, never bus-to-bus'
+				} else {
+					if other in thread_part {
+						other = thread_part[other]
+					} else if other !in part_names {
+						errs << 'signal "${sname}": endpoint "${other}" is not a declared partition or thread'
+						other = ''
+					}
+					rthreads := (reader_threads[sname] or {
+						map[string]bool{}
+					}).keys()
+					if rthreads.len > 1 {
+						errs << 'eth rx signal "${sname}" is read from ${rthreads.len} execution contexts (threads ${rthreads.join(', ')}) — the channel is single-reader'
+					} else if rthreads.len == 1 && other != '' && (thread_part[rthreads[0]] or {
+						''
+					}) != other {
+						errs << 'eth rx signal "${sname}" is read from partition "${thread_part[rthreads[0]] or {
+							'?'
+						}}" but declares endpoint "${other}" — the reader must live in the declared partition'
+					}
+					if (writer_threads[sname] or {
+						map[string]bool{}
+					}).len > 0 {
+						errs << 'eth rx signal "${sname}" appears in a handler\'s writes — the bridge is its only producer'
+					}
+				}
 			} else {
 				errs << 'eth frame "${fname}" lists signal "${sname}" which does not name bus "${eth}" on either side'
 			}
 			if bad := sig_badfield[sname] {
 				errs << 'signal "${sname}" field ${bad} is not a fixed-width scalar (bool, u8..u64, i8..i64, f32/f64) — the derived eth layout has no meaning for it'
 			}
+			if sig_mem[sname] or { 0 } > 64 {
+				errs << 'signal "${sname}" in-memory struct is ${sig_mem[sname]} bytes after alignment — it exceeds the 64-byte IOC slot (IOC_MAX, osal_native.c); reorder or shrink its fields'
+			}
 			size += sig_size[sname] or { 0 }
 		}
 		if ntx > 0 && nrx > 0 {
 			errs << 'eth frame "${fname}" mixes tx and rx signals — one direction per frame (a mixed frame would make the bridge a second writer on an SPSC channel)'
+		}
+		// TEMPORARY gate, same family as shell/NM-on-eth: nothing generates an
+		// rx unpack/publish path yet, so an rx frame would leave its consumers
+		// silently reading defaults forever — reject until the rx rung (P2)
+		if nrx > 0 && ntx == 0 {
+			errs << 'eth frame "${fname}" is rx — eth reception arrives with the rx rung (P2, docs/someip.md); this rung generates tx only'
+		}
+		// the tx mode + timings are authoritative manifest metadata with no
+		// compiled com.TxMode reference to catch a typo, and the generator
+		// narrows/multiplies them (ms -> us int) — validate values AND bounds
+		// (1e6 ms cap: far above any real cadence; x1000 stays inside 32-bit us)
+		if txv := fm['tx'] {
+			txm := txv.as_map()
+			mode := str_of(txm, 'mode')
+			if 'mode' in txm && mode !in ['cyclic', 'event', 'mixed'] {
+				errs << 'eth frame "${fname}" tx mode "${mode}" is invalid (cyclic | event | mixed — the P1 modes; triggered has no generated trigger path)'
+			}
+			// bound cycle_ms whenever PRESENT (the generator always narrows +
+			// emits it), and require it valid for the modes that consume it
+			if mode in ['', 'cyclic', 'mixed'] || 'cycle_ms' in txm {
+				cyc := txm['cycle_ms'] or { toml.Any(i64(100)) }
+				if cyc !is i64 || cyc.i64() < 1 || cyc.i64() > 1_000_000 {
+					errs << 'eth frame "${fname}" tx cycle_ms must be 1..1000000'
+				}
+			}
+			if v := txm['min_delay_ms'] {
+				if v !is i64 || v.i64() < 0 || v.i64() > 1_000_000 {
+					errs << 'eth frame "${fname}" tx min_delay_ms must be 0..1000000'
+				}
+			}
 		}
 		// the bridge derives direction from the signal endpoints — a behavior
 		// block for the OTHER direction is silently ignored (a tx mode that
@@ -493,12 +747,29 @@ fn validate_someip(doc toml.Doc) []string {
 			errs << 'eth frame "${fname}" derived payload is ${size} bytes (E2E trailer included) — the shared PDU bound is 64 (comm.com max_pdu); a wider eth PDU is its own rung, not a silent relaxation'
 		}
 	}
+	// [target] images: the ThreadX/bare-metal comm owner is CAN-only — an eth
+	// signal frame would fall into its DBC-trivial validation and FDCAN paths.
+	// Same family as the target-telemetry gate: reject until the NetX rung.
+	if n_eth_frames > 0 {
+		if _ := doc.value_opt('target') {
+			errs << 'eth [[frame]]s with a [target] image — the target comm owner is CAN-only until the NetX rung (docs/someip.md); eth frames are host-sim for now'
+		}
+	}
+
 	// the reverse membership check: an eth-bound signal outside every frame
 	// would be a phantom endpoint — no layout, no route, silently dead
 	if eth != '' {
 		for sname, from in sig_from {
 			if (from == eth || sig_to[sname] == eth) && sname !in sig_frame {
 				errs << 'signal "${sname}" is bound to eth bus "${eth}" but rides no eth frame — an unpublished input or a never-transmitted output'
+			}
+		}
+		// a diagnostic DID reading an eth signal is a SECOND reader on its
+		// SPSC channel (the CAN bridge emits its own acquire) — same rule as io
+		for d in toml_arr(doc, 'did') {
+			dsig := str_of(d.as_map(), 'signal')
+			if dsig != '' && (sig_from[dsig] == eth || sig_to[dsig] == eth) {
+				errs << 'diagnostic DID reads eth signal "${dsig}" — a second reader on a single-reader channel; mirror it through an FB-owned signal instead'
 			}
 		}
 	}
@@ -540,6 +811,21 @@ fn validate_someip(doc toml.Doc) []string {
 		if blk == 'shell' {
 			errs << '[shell] is bound to eth bus "${eth}" — the eth shell arrives with the RPC phase (P3: method-form request/response + the access gate, docs/someip.md); keep the shell on a CAN bus'
 			continue
+		}
+		// the TARGET emitters still generate the CAN telemetry path
+		// unconditionally — an eth binding is host-sim only until the NetX
+		// rung brings the UDP producer to silicon
+		if blk == 'telemetry' {
+			if _ := doc.value_opt('target') {
+				errs << '[telemetry] on eth bus "${eth}" with a [target] image — the target telemetry emitter is CAN-only until the NetX rung; keep target telemetry on a CAN bus'
+				continue
+			}
+		}
+		// trace-on-eth: the id bindings below stay validated (the P1 surface),
+		// but no runner serves an eth trace module yet — reject until the UDP
+		// rung, or the config would silently select a CAN trace path
+		if blk == 'trace' {
+			errs << '[trace] is bound to eth bus "${eth}" — the eth trace egress arrives with the UDP rung (docs/someip.md); keep trace on a CAN bus for now'
 		}
 		mut bound := 0
 		for kk in mod_id_keys[blk] {
