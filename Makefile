@@ -111,7 +111,19 @@ bench-scale:
 	cd examples/scale && $(MAKE) all
 	./scripts/scale-bench.sh
 
-.PHONY: bench bench-scale
+# On-target regression tests — the "special tests run on target" group. Each
+# examples/*/bench_test.sh flashes its image to the attached board and asserts the
+# driver behaviour over SWD (no scope, no manual wiring). Requires the board(s) on
+# the bench; a script exits 2 (SKIP) when its board is absent, so a partial bench
+# still passes for what IS attached. `BLOB_HWTEST=1 make trace` records the results
+# into the h755/target column of docs/traceability.md.
+hwtest:
+	@rc=0; n=0; for t in examples/*/bench_test.sh; do \
+	  [ -x "$$t" ] || continue; n=1; echo "== $$t =="; \
+	  "$$t" --flash; ec=$$?; [ $$ec = 1 ] && rc=1; \
+	done; [ $$n = 1 ] || echo "no examples/*/bench_test.sh found"; exit $$rc
+
+.PHONY: bench bench-scale hwtest
 
 vcan:
 	./scripts/setup_vcan.sh

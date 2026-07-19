@@ -17,6 +17,24 @@ verifies = [
 	"REQ-INV-004",
 ]
 
+# On-target REGRESSION TEST (runnable, not a prose sign-off): the first of the
+# "special tests run on target" group. examples/h755_io_analog/bench_test.sh reads
+# TIM1 / ADC1 / DMA1 and the io-thread liveness counter over SWD on a live
+# NUCLEO-H755ZI-Q and asserts, on real silicon:
+#   ADC (REQ-IO-018): ADC1 scan enabled + started, DMA stream on, samples advancing.
+#   PWM (REQ-IO-021): TIM1_CH1 enabled with MOE, the 20 kHz carrier, and the duty
+#                     ramp reaching CCR1 (FB -> IOC -> io thread -> pwm_write).
+#   live (REQ-IO-024): the io serve loop keeps advancing (the pacing-wedge guard).
+# Gated on BLOB_HWTEST so a normal `make trace` (or CI, no board) SKIPS it (exit 2 ->
+# "not run", the h755/target cell stays "·", never a false fail). Run it with the board
+# attached via `make hwtest`, or `BLOB_HWTEST=1 make trace` to record the pass.
+[[check]]
+id = "h755-io-analog-hwtest"
+method = "test"
+context = "h755/target"
+command = "sh -c '[ -n \"$BLOB_HWTEST\" ] && examples/h755_io_analog/bench_test.sh --flash || exit 2'"
+verifies = ["REQ-IO-018", "REQ-IO-021", "REQ-IO-024"]
+
 [[review]]
 id = "naming-review"
 method = "review"
