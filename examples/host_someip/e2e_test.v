@@ -119,10 +119,16 @@ fn test_tx_modes_on_the_wire() {
 	}
 	mut cyc_repeats := 0
 	for i, r in cyc {
+		// the FIRST frame can legitimately ship before BenchTicks' first IOC
+		// publication (separate channels, either-acquired sends) — its field
+		// relations are undefined; everything from frame 1 on is strict
+		if i == 0 && le32(r.pay, 1) == 0 {
+			continue
+		}
 		// the CONFIGURED derived layout: load u8@0, ticks u32@1 LE, wraps
 		// u16@5 LE, E2E trailer ctr@7/crc@8 — 9 bytes exactly
 		assert r.pay.len == 9, 'cyclic payload ${r.pay.len} bytes'
-		q := le32(r.pay, 1)
+		q := le32(r.pay, 1) - 0x01020304 // the all-bytes-live base
 		// ticks/wraps are ONE signal (atomic snapshot); BenchLoad rides a
 		// separate IOC channel and may legitimately pair with a NEIGHBOR q at
 		// a transition — so its relation tolerates ±1 quantum, which still
@@ -152,6 +158,7 @@ fn test_tx_modes_on_the_wire() {
 	// the source alternates 1.2 s stepping / 1.2 s holding: coalesced sends
 	// at the 350 ms debounce during stepping, SILENCE during holds
 	assert evs.len >= 4 && evs.len <= 12, 'event: ${evs.len} datagrams (expected ~6 debounced)'
+
 	assert evs.last().at - start > 2200 * time.millisecond, 'event publication stopped early'
 	mut ev_hold_gap := false
 	for i, r in evs {
@@ -166,16 +173,21 @@ fn test_tx_modes_on_the_wire() {
 		}
 	}
 	ev_pace := median_gap_ms(evs)
-	assert ev_pace >= 300, 'event median pace ${ev_pace} ms — the configured 350 ms debounce is not active'
+	assert ev_pace >= 300 && ev_pace <= 700, 'event median pace ${ev_pace} ms (configured 350 ms debounce)'
+
 	assert ev_hold_gap, 'event: no silence over the source hold phase — sends are not change-driven'
 	assert evs.last().pay[0] >= 12, 'event level ${evs.last().pay[0]} — publication did not track the source through the window'
 
 	// ---- mixed: heartbeat repeats AND immediate-on-change ----
-	assert mixed.len >= 8, 'mixed: only ${mixed.len} datagrams'
+	// count band: ~11 heartbeats + ~5 changes; a duplicate-burst sender blows
+	// the cap even though its sub-20 ms gaps dodge the pacing stats
+	assert mixed.len >= 8 && mixed.len <= 26, 'mixed: ${mixed.len} datagrams'
+
 	mut repeats := 0
 	mut repeat_gaps := []i64{}
 	mut last_repeat_at := start
-	mut fast_change := false
+	mut fast_changes := 0
+	mut last_fast_at := start
 	for i, r in mixed {
 		assert r.pay.len == 2, 'mixed payload ${r.pay.len} bytes'
 		if i > 0 {
@@ -200,7 +212,8 @@ fn test_tx_modes_on_the_wire() {
 				// heartbeat; the 20 ms floor rejects stall-compressed bursts
 				g := (r.at - prev.at).milliseconds()
 				if g >= 20 && g < 220 {
-					fast_change = true
+					fast_changes++
+					last_fast_at = r.at
 				}
 			}
 		}
@@ -213,6 +226,11 @@ fn test_tx_modes_on_the_wire() {
 	assert hb >= 240 && hb <= 480, 'mixed: heartbeat median gap ${hb} ms (configured 300)'
 	// and the heartbeat PERSISTS — a sender that stops repeating after a good
 	// start (keeping only change-driven sends) fails this window bound
-	assert last_repeat_at - start > 2500 * time.millisecond, 'mixed: heartbeats stopped early'
-	assert fast_change, 'mixed: no change arrived inside the heartbeat interval — immediate-on-change is missing'
+	assert last_repeat_at - start > 3000 * time.millisecond, 'mixed: heartbeats stopped early'
+
+	// immediate-on-change works REPEATEDLY and into the window's second half —
+	// a sender that degrades to cyclic-only after one good change fails
+	assert fast_changes >= 2, 'mixed: only ${fast_changes} immediate change-sends'
+	assert last_fast_at - start > 1800 * time.millisecond, 'mixed: immediate change-sends stopped early'
+
 }

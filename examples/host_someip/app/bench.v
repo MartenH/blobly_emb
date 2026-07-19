@@ -21,9 +21,10 @@ pub fn (mut fb Bench) on_100ms(inp ports.BenchIn, mut out ports.BenchOut) {
 		load: u8(q % 100)
 	}
 	out.bench_ticks = sig.BenchTicks{
-		ticks: q
-		wraps: u16(q + 1000) // always nonzero in BOTH bytes: the harness proves
-		// the field's offset/endianness with live values (q>>16 is 0 for hours)
+		ticks: q + 0x01020304 // a live value in ALL FOUR bytes: the harness
+		// proves every byte's offset/endianness (bare q keeps the top three
+		// bytes zero for hours)
+		wraps: u16(q + 1000) // and both bytes here (same reasoning)
 	}
 	// EventVal alternates 1.2 s STEPPING (every activation — faster than the
 	// frame's 350 ms debounce, forcing coalescing) with 1.2 s HOLDING (the
