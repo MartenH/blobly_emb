@@ -27,7 +27,9 @@ graph TB
   end
 
   DRV["driver: CAN (driver/can)<br/>SocketCAN (host) · ST FDCAN HAL · AUTOSAR CanIf"]
+  IOTH["io thread (generated)<br/>samples inputs / applies outputs<br/>driver/io: file mirror (host) · GPIO registers (target)"]
   BUS["CAN bus(es)"]
+  PINS["physical pins"]
   OSAL["OSAL (osal/): cores · time · IOC pool · pinning<br/>POSIX fork-per-core  /  ThreadX AMP"]
 
   FB <--> PORTS
@@ -42,8 +44,11 @@ graph TB
   DIAG <--> IOC
   DIAG <--> DRV
   DRV <--> BUS
+  IOTH <--> IOC
+  IOTH <--> PINS
 
   LOOM -. runs on .-> OSAL
+  IOTH -. runs on .-> OSAL
   COM -. runs on .-> OSAL
   IOC -. lives in .-> OSAL
 ```
@@ -66,11 +71,14 @@ cores); the **COM bridge** is the only thing that touches the **driver** and the
 | **E2E / SecOC** | COM (the frame bytes) | `protect` on tx, `check`/`verify` on rx | integrity (CRC) / authenticity (MAC) |
 | **Router** | the driver of another bus | forward the raw frame | gateway, no decode |
 | **ISO-TP / UDS** | IOC (read live signals), driver (the diag frames) | reassemble → dispatch → segment | diagnostics request/response |
-| **driver** | the COM bridge; the bus | `open/send/recv` C shim | the only hardware-touching layer |
+| **driver** | the COM bridge; the bus | `open/send/recv` C shim | the only bus-hardware layer |
+| **io thread** | IOC (signals); `driver/io` (pins) | sample-and-publish / acquire-and-apply per point | physical IO as signal endpoints (docs/io.md); the only pin-touching thread |
 | **OSAL** | Loom, bridge, IOC | cores, time, the shared IOC region, pinning | the platform line: POSIX or ThreadX AMP |
 
-The two hard boundaries: an **FB never reaches past its ports** (no driver, no IOC,
-no other FB), and only the **bridge + `main.v`** touch the **driver**. Everything
+The hard boundaries: an **FB never reaches past its ports** (no driver, no IOC,
+no other FB); only the **bridge + `main.v`** touch the **bus driver**; and only
+the generated **io thread** touches `driver/io` — application partitions have no
+peripheral access (docs/io.md, docs/memory-protection.md). Everything
 else is platform-independent V above the OSAL/driver line.
 
 ## Runtime topology (who runs where)

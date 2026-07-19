@@ -85,4 +85,25 @@ static inline sig_t ioc_read(ioc_t *b)
 	return r;
 }
 
+/* ioc_read_ever: ioc_read plus a race-free ever-published report (REQ-IO-009).
+ * *ever latches from the SAME atomic exchange that consumes the fresh flag — a
+ * separate pre-read freshness check can lose the only sample of a short pulse
+ * (publisher lands between the check and the read; the read consumes it while
+ * the caller still believes "never published"). Only the reader clears FRESH,
+ * so exchange-path-taken == a value was truly published. *ever is monotonic
+ * only if the caller latches it (see ioc_get_ever in the example glue). */
+static inline sig_t ioc_read_ever(ioc_t *b, int *ever)
+{
+	*ever = 0;
+	if (__atomic_load_n(&b->shared, __ATOMIC_ACQUIRE) & IOC_FRESH) {
+		unsigned char prev = __atomic_exchange_n(&b->shared, b->rd, __ATOMIC_ACQ_REL);
+		b->rd = prev & 0x03u;
+		if (prev & IOC_FRESH)
+			*ever = 1;
+	}
+	sig_t r;
+	sig_vcopy((volatile sig_t *)&r, &b->slot[b->rd]);
+	return r;
+}
+
 #endif

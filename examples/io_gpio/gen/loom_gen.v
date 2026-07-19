@@ -81,10 +81,10 @@ __global (
 )
 
 pub fn run() {
-	if !io.cfg(0, 'UserButton', 'PC13', false, 0) {
+	if !io.cfg(0, 'UserButton', 'PC13', false, 0, 0) {
 		panic('io cfg failed: UserButton')
 	}
-	if !io.cfg(1, 'LedGreen', 'PB0', true, 1) {
+	if !io.cfg(1, 'LedGreen', 'PB0', true, 1, 0) {
 		panic('io cfg failed: LedGreen')
 	}
 	if !io.init() {

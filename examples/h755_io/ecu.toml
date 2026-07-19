@@ -1,0 +1,116 @@
+# h755_io — docs/io.md P1 on the ThreadX target (NUCLEO-H755ZI-Q, CM7): the three
+# on-board points — B1 user button (PC13), LD1 green (PB0), LD2 yellow (PE1) — as
+# ordinary signals. ButtonLamp mirrors the button onto the green LED AND publishes
+# the same value as BtnPressed on the bus (ButtonState 0x310, cyclic 100 ms) — the
+# tx half of the cross-node button demo (examples/h735_io_lamp is the rx half).
+# Heartbeat toggles the yellow LED every 500 ms, so the io output path is
+# bench-observable without touching anything. The bus signal turns the comm thread
+# on (loom2v: comm owns CAN, the FBs stay off the bus); CpuLoad on 0x7E0 doubles
+# as the liveness beacon.
+#
+# NOTE: no inline comments inside [[...]] tables — a comment in a nested table trips
+# V's TOML parser (drops the next key). See vlang/v#27684.
+
+[import]
+dbc = "bus.dbc"
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0
+
+# The io thread's home core (= the app's: P1/P1-target generate same-core io only).
+[io]
+core = 0
+
+[[io.gpio]]
+name      = "UserButton"
+pin       = "PC13"
+period_ms = 10
+default   = false
+
+[[io.gpio]]
+name      = "LedGreen"
+pin       = "PB0"
+period_ms = 10
+init      = false
+
+[[io.gpio]]
+name      = "LedYellow"
+pin       = "PE1"
+period_ms = 100
+init      = false
+
+[[partition]]
+name    = "app"
+core    = 0
+trusted = true
+
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+# io is a signal endpoint like a bus or a partition; transport is derived
+# (on target: one IOC pool cell per point — the io thread is its own kernel thread).
+[[signal]]
+name = "UserButton"
+fields = { pressed = "bool" }
+from = "io"
+to   = "app"
+
+[[signal]]
+name = "LedGreen"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+
+# BtnPressed: the button state onto the bus (rx side: examples/h735_io_lamp).
+# The DBC carries it as a 32-bit unsigned value (0/1) at bit 0 — the target
+# comm thread's lean codec only encodes trivial u32@0 signals (loom2v).
+[[signal]]
+name = "BtnPressed"
+fields = { pressed = "bool" }
+from = "app"
+to   = "can0"
+
+# cyclic 100 ms: the only tx mode the target comm producer generates (the
+# h755_threadx WorkloadFrame pattern).
+[[frame]]
+name = "ButtonState"
+bus  = "can0"
+tx   = { mode = "cyclic", cycle_ms = 100 }
+
+[[signal]]
+name = "LedYellow"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+
+[[fb]]
+name   = "ButtonLamp"
+thread = "app_main"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["UserButton"]
+  writes    = ["LedGreen", "BtnPressed"]
+
+[[fb]]
+name   = "Heartbeat"
+thread = "app_main"
+
+  [[fb.handler]]
+  name      = "on_500ms"
+  period_ms = 500
+  writes    = ["LedYellow"] # trailing comment terminates the nested [[fb.handler]] parse (vlang/v#27684)
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E0
+period_ms = 1000
+
+[target]
+kind    = "threadx"
+tick_ms = 1

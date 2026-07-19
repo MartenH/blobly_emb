@@ -291,3 +291,16 @@ context = "h755/ThreadX"
 verifies = ["REQ-TRACE-001"]
 approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
 date = "2026-07-13"
+
+# IO P1 target rung on silicon: examples/h755_io on the NUCLEO-H755ZI-Q — the
+# generated ThreadX io thread + register backend (BLOB_IO_STM32). Heartbeat FB
+# toggled LD2/PE1 (SWD-sampled 0->0->2 across spaced reads); LD1/PB0 held its
+# init=false until first publish (io_startup_faults=0); B1/PC13 pressed by the
+# user lit LD1 — input sample -> signal -> FB -> signal -> pin, end to end.
+[[review]]
+id = "h755-io-hardware"
+method = "review"
+context = "h755/IO-GPIO"
+verifies = ["REQ-IO-012", "REQ-IO-013"]
+approved_by = "Marten Hildell — NUCLEO-H755ZI-Q button->LED + heartbeat bench"
+date = "2026-07-19"
