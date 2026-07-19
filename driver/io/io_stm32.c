@@ -195,12 +195,15 @@ int blob_io_init(void) {
 			g->PUPDR &= ~(3u << (p * 2u)); /* no pull: the board's button has external RC */
 		}
 	}
+	int pwm_fault = 0;
 	for (int i = 0; i < BLOB_IO_MAX; i++) {
 		if (g_pt[i].configured && g_pt[i].kind == IO_PWM) {
 			if (pwm_setup(i) != 0)
-				return -1; /* no board pin->timer map: fail LOUDLY, never a dead pin */
+				pwm_fault = 1; /* configure EVERY valid pwm before failing (codex emb#152) */
 		}
 	}
+	if (pwm_fault)
+		return -1; /* some pwm point had no/invalid map — fail after the valid ones ran */
 	if (g_adc_n > 0) {
 		if (adc_dma_start() != 0)
 			return -1; /* silent/absent converter: bounded-wait timed out -> startup fault */
@@ -249,7 +252,14 @@ static int adc_dma_start(void) {
 	 * the board doesn't bring up (codex emb#152). */
 	RCC->D3CCIPR = (RCC->D3CCIPR & ~RCC_D3CCIPR_ADCSEL) | (2u << RCC_D3CCIPR_ADCSEL_Pos);
 	RCC->AHB1ENR |= RCC_AHB1ENR_ADC12EN | RCC_AHB1ENR_DMA1EN;
-	(void)RCC->AHB1ENR;
+	RCC->AHB2ENR |= RCC_AHB2ENR_D2SRAM1EN; /* the DMA lands in D2 SRAM1 — clock it (codex emb#152) */
+	(void)RCC->AHB2ENR;
+
+	/* ADC common prescaler: per_ck is the 64 MHz HSI; the H7 ADC fADC ceiling is
+	 * ~50 MHz (boost banding). Divide by 2 -> 32 MHz, in range, and set BOOST for
+	 * the 25..50 MHz band (codex emb#152). */
+	ADC12_COMMON->CCR = (ADC12_COMMON->CCR & ~ADC_CCR_PRESC) | (1u << ADC_CCR_PRESC_Pos); /* /2 */
+	ADC1->CR |= ADC_CR_BOOST_1; /* BOOST=0b10: 25..50 MHz band */
 
 	/* exit deep-power-down, enable the regulator, let the LDO settle */
 	ADC1->CR &= ~ADC_CR_DEEPPWD;
@@ -301,6 +311,8 @@ static int adc_dma_start(void) {
 	DMA1_Stream0->M0AR = (uint32_t)g_adc_dma;
 	DMA1_Stream0->NDTR = (uint32_t)g_adc_n;
 	DMAMUX1_Channel0->CCR = 9u; /* request 9 = adc1 (RM0399 DMAMUX table) */
+	DMA1->LIFCR = DMA_LIFCR_CTCIF0 | DMA_LIFCR_CHTIF0 | DMA_LIFCR_CTEIF0
+	            | DMA_LIFCR_CDMEIF0 | DMA_LIFCR_CFEIF0; /* clear stale flags (codex emb#152) */
 	DMA1_Stream0->CR = DMA_SxCR_MINC | DMA_SxCR_CIRC |
 	                   (1u << DMA_SxCR_MSIZE_Pos) | (1u << DMA_SxCR_PSIZE_Pos) |
 	                   DMA_SxCR_EN;
@@ -329,7 +341,13 @@ unsigned int blob_io_adc_read(int ch) {
 int blob_io_adc_read_checked(int ch, unsigned int *val) {
 	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured || g_pt[ch].adc_slot < 0 || !val)
 		return -1;
-	if (!g_adc_first_ready) return -1; /* no real conversion yet: boot must not fabricate */
+	if (!g_adc_first_ready) {
+		/* the init-time bounded wait may have expired one loop before the first
+		 * scan landed — latch lazily off the live TCIF so periodic reads recover
+		 * (codex emb#152) rather than fault forever on a merely-slow converter. */
+		if (!(DMA1->LISR & DMA_LISR_TCIF0)) return -1;
+		g_adc_first_ready = 1;
+	}
 	*val = (unsigned int)g_adc_dma[g_pt[ch].adc_slot];
 	return 0;
 }
@@ -344,10 +362,11 @@ __attribute__((weak)) int board_io_pwm_map(int port, int pin, void **tim_base, i
 }
 static TIM_TypeDef *g_pwm_tim[BLOB_IO_MAX];
 static int g_pwm_ch[BLOB_IO_MAX];
+static unsigned int g_pwm_arr[BLOB_IO_MAX]; /* period-1: duty = permille*(arr+1)/1000 */
 
 /* enable the APBx timer clock gate for a timer base (codex emb#152: board clock
  * init leaves TIMx gates off). RM0399: APB2 = TIM1/8/15/16/17; APB1 = the rest. */
-static void tim_clock_enable(TIM_TypeDef *t) {
+static int tim_clock_enable(TIM_TypeDef *t) {
 	if (t == TIM1) RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
 	else if (t == TIM8) RCC->APB2ENR |= RCC_APB2ENR_TIM8EN;
 	else if (t == TIM15) RCC->APB2ENR |= RCC_APB2ENR_TIM15EN;
@@ -357,7 +376,12 @@ static void tim_clock_enable(TIM_TypeDef *t) {
 	else if (t == TIM3) RCC->APB1LENR |= RCC_APB1LENR_TIM3EN;
 	else if (t == TIM4) RCC->APB1LENR |= RCC_APB1LENR_TIM4EN;
 	else if (t == TIM5) RCC->APB1LENR |= RCC_APB1LENR_TIM5EN;
+	else if (t == TIM12) RCC->APB1LENR |= RCC_APB1LENR_TIM12EN;
+	else if (t == TIM13) RCC->APB1LENR |= RCC_APB1LENR_TIM13EN;
+	else if (t == TIM14) RCC->APB1LENR |= RCC_APB1LENR_TIM14EN;
+	else return -1; /* an unrecognised timer base has no clock gate here (codex emb#152) */
 	(void)RCC->APB2ENR;
+	return 0;
 }
 
 /* program the timer + init duty for a pwm point, then mux the pad to AF. */
@@ -367,18 +391,26 @@ static int pwm_setup(int ch) {
 	    || !base || chan < 1 || chan > 4 || clk == 0u)
 		return -1; /* bad map: reject before any register arithmetic (codex emb#152) */
 	TIM_TypeDef *t = (TIM_TypeDef *)base;
+	if (tim_clock_enable(t) != 0)
+		return -1; /* no clock gate for this timer base */
 	g_pwm_tim[ch] = t;
 	g_pwm_ch[ch] = chan;
-	tim_clock_enable(t);
 
-	/* carrier: 1000 duty steps (ARR=999) at the requested freq_hz.
-	 * step_rate = freq_hz * 1000 = clk / (PSC + 1)  ->  PSC = clk/(freq*1000) - 1. */
-	unsigned int step = g_pt[ch].freq_hz * 1000u;
-	unsigned int psc = (step > 0u && clk / step > 0u) ? (clk / step - 1u) : 0u;
+	/* accurate carrier: the period is total = clk / freq_hz timer counts. Keep
+	 * PSC as small as possible (max duty resolution) with ARR <= 65535; the
+	 * frequency is then clk / ((PSC+1)*(ARR+1)) = freq_hz when clk is a multiple
+	 * of freq_hz (codex emb#152: the old fixed ARR=999 truncated the divisor). */
+	unsigned int total = (g_pt[ch].freq_hz > 0u) ? (clk / (unsigned int)g_pt[ch].freq_hz) : 0u;
+	if (total < 2u)
+		return -1; /* freq too high for this clock: no usable period */
+	unsigned int psc = 0u;
+	while (total / (psc + 1u) > 65536u) psc++;
+	unsigned int arr = total / (psc + 1u) - 1u;
+	g_pwm_arr[ch] = arr;
 	t->PSC = psc;
-	t->ARR = 999u;
+	t->ARR = arr;
 	volatile uint32_t *ccr = &t->CCR1 + (chan - 1);
-	*ccr = g_pt[ch].init; /* init permille -> compare (ARR=999: 1:1) */
+	*ccr = (g_pt[ch].init * (arr + 1u)) / 1000u; /* init permille -> compare */
 	if (chan == 1) t->CCMR1 = (t->CCMR1 & ~0xFFu) | (6u << 4) | (1u << 3); /* OC1M=110 PWM1, preload */
 	else if (chan == 2) t->CCMR1 = (t->CCMR1 & ~0xFF00u) | (6u << 12) | (1u << 11);
 	else if (chan == 3) t->CCMR2 = (t->CCMR2 & ~0xFFu) | (6u << 4) | (1u << 3);
@@ -404,7 +436,7 @@ void blob_io_pwm_write(int ch, unsigned int permille) {
 	if (permille > 1000u) permille = 1000u;
 	TIM_TypeDef *t = g_pwm_tim[ch];
 	volatile uint32_t *ccr = &t->CCR1 + (g_pwm_ch[ch] - 1);
-	*ccr = permille; /* ARR=999 so permille maps 1:1 to the compare */
+	*ccr = (permille * (g_pwm_arr[ch] + 1u)) / 1000u; /* permille -> compare at this period */
 }
 
 void blob_io_close(void) {
