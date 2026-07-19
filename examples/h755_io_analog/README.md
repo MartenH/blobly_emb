@@ -30,3 +30,32 @@ candump can0                # PotState 0x311 @ 100 ms, CpuLoad 0x7E0 @ 1 s
 
 The two paths are independent: the PWM proves itself on the scope with nothing
 wired; one jumper on PA3 proves the whole ADC + DMA + publish chain.
+
+## On-target regression test
+
+`bench_test.sh` is an **automated** version of the checks above — no scope, no
+jumper, no eyes on the board. With the H755 attached it flashes this image and
+reads TIM1 / ADC1 / DMA1 / the IOC pool over SWD and asserts, on real silicon:
+
+- **PWM (REQ-IO-021):** carrier + MOE + `CC1E`, and the duty ramp reaching CCR1.
+- **ADC (REQ-IO-018):** ADC/DMA enabled + started, a scan **completing**, the DMA
+  pointed at `g_adc_dma`, **and the io thread reading it** — the published IOC cell
+  tracks the live DMA array (the read path the requirement calls out).
+
+Liveness is proven by **status flags**, not value diffs (a free-running counter or a
+stable ADC sample can read identical at two snapshots): it clears the timer update
+flag (UIF) and the DMA transfer-complete flag (TCIF0) and asserts both re-set. The
+read path is proven by an exact same-halt compare of the io thread's published cell
+against `g_adc_dma` — input-independent, no tolerance guessing. It also checks the io
+serve loop still advances (a sanity guard; **not** a REQ-IO-024 claim — that pacing
+requirement is analysis-argued and needs a clock-anomaly injection this test omits).
+
+```sh
+export BLOB_H755_SERIAL=<st-link serial>   # required to FLASH (dev-type can't ID the H755)
+./bench_test.sh --flash             # flash + assert; exit 0 pass / 1 fail / 2 skip
+make -C ../.. hwtest                # the whole on-target test group (all bench_test.sh)
+BLOB_HWTEST=1 make -C ../.. trace   # record the pass into the h755/target column
+```
+
+It is the first member of the on-target test group; a normal `make trace` (or CI
+with no board) skips it, so it never fakes a pass or a fail.
