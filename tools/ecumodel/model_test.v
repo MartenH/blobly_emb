@@ -1445,7 +1445,7 @@ signals = ["S"]
 tx      = { mode = "event", min_delay_ms = -1 }
 ' +
 		app)
-	assert e.any(it.contains('min_delay_ms must be 0..3600000'))
+	assert e.any(it.contains('min_delay_ms must be 0..1000000'))
 }
 
 fn test_someip_round9_cycle_bounds_any_mode() {
@@ -1465,5 +1465,5 @@ signals = ["S"]
 tx      = { mode = "event", cycle_ms = -1 }
 ' +
 		app)
-	assert e.any(it.contains('tx cycle_ms must be 1..3600000'))
+	assert e.any(it.contains('tx cycle_ms must be 1..1000000'))
 }
