@@ -657,7 +657,7 @@ struct BusCtx {
 
 interface Producer {
 	// The partition superloop is one skeleton; each producer injects at four points, keyed by
-	// 'p:<partition>' (or 'b:<bus>' for a bridge). preamble runs once before the loop; loop_top and
+	// 'p:<partition>' ('b:<bus>' for a bridge, 'io' for the io thread). preamble runs once before the loop; loop_top and
 	// loop_body run each iteration (top = before dispatch, body = after); dispatch OVERRIDES the
 	// default plain dispatch when non-empty (only one producer may — the profiling one).
 	partition_preamble(part_key string) []string
@@ -900,7 +900,7 @@ fn emit_partition_telem(m Model, telem_iface string, slot_core []int, trace_host
 // its own multiple — inputs sample -> publish into the signal channel, outputs acquire
 // from the channel -> apply, gated on freshness (until the producing FB has published
 // once, the acquire reports no data and the driver keeps holding the configured init).
-fn emit_partition_io(m Model) []string {
+fn emit_partition_io(m Model, producers []Producer) []string {
 	if m.io_points.len == 0 {
 		return []string{}
 	}
@@ -915,6 +915,7 @@ fn emit_partition_io(m Model) []string {
 	glue << 'fn partition_io() {'
 	glue << '\tosal.pin_to_core(${m.io_core})'
 	glue << '\tmut tick := u64(0)'
+	glue << '\tmut sched := loom.Scheduler{} // accounting only — io busy time into the per-core load'
 	glue << '\t// monotonic deadline pacing: the file-mirror I/O time must not accumulate as'
 	glue << '\t// drift. Sleeping to the deadline BEFORE serving makes the first output apply'
 	glue << '\t// land one full period after spawn — the driver-established init observably'
@@ -927,8 +928,13 @@ fn emit_partition_io(m Model) []string {
 	glue << '\t\tif next_us > now {'
 	glue << '\t\t\tosal.sleep_us(next_us - now)'
 	glue << '\t\t} else {'
-	glue << '\t\t\tnext_us = now // overrun: resync, skip missed ticks — no burst catch-up'
+	glue << '\t\t\t// overrun: skip the MISSED base periods, no burst catch-up — tick'
+	glue << '\t\t\t// advances with wall time so (tick+1)%mult gating stays aligned'
+	glue << '\t\t\tmissed := (now - next_us) / ${fastest * 1000}'
+	glue << '\t\t\ttick += missed'
+	glue << '\t\t\tnext_us += missed * ${fastest * 1000}'
 	glue << '\t\t}'
+	glue << '\t\tloom_t0 := osal.now_us()'
 	for pt in m.io_points {
 		si := m.sig_of[pt.name] or { continue }
 		fld := snake(pt.name)
@@ -955,6 +961,11 @@ fn emit_partition_io(m Model) []string {
 		if mult > 1 {
 			glue << '\t\t}'
 		}
+	}
+	glue << '\t\tloom_t1 := osal.now_us()'
+	glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
+	for p in producers {
+		glue << p.partition_loop_body('io')
 	}
 	glue << '\t\ttick++'
 	glue << '\t}'
@@ -1968,6 +1979,12 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 				glue << '\t\tio_startup_faults++ // unreadable at boot: publish NOTHING'
 				glue << '\t}'
 			}
+			if has_io_input {
+				// host diagnostics only — the exported counter stays the bench contract
+				glue << '\tif io_startup_faults > 0 {'
+				glue << "\t\teprintln('io: \${io_startup_faults} startup fault(s)')"
+				glue << '\t}'
+			}
 			glue << '\tt_io := spawn partition_io()'
 			waits << 't_io'
 		}
@@ -2706,6 +2723,12 @@ fn main() {
 				slot_core << (m.bus_core[tb] or { 0 })
 			}
 		}
+		// the io thread is a load-bearing platform thread like a bridge — its
+		// busy time sums into its core's CpuLoad figure via its own slot
+		if m.io_points.len > 0 && slot_core.len < 16 {
+			telem_slot['io'] = slot_core.len
+			slot_core << m.io_core
+		}
 	}
 
 
@@ -2736,7 +2759,7 @@ fn main() {
 	glue << emit_partition_telem(m, telem_iface, slot_core, trace_host)
 
 	// --- io: the platform io thread (docs/io.md P1, host) ---
-	glue << emit_partition_io(m)
+	glue << emit_partition_io(m, producers)
 
 
 	bus_names.sort()

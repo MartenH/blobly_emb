@@ -319,6 +319,14 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 	if points.len == 0 && !has_io_sig {
 		return errs // nothing io-related to validate
 	}
+	// a [[did]] pointing at an io signal would emit its own ioc_acquire — a
+	// second reader on the SPSC channel, stealing samples from the real consumer
+	for d in toml_arr(doc, 'did') {
+		dsig := str_of(d.as_map(), 'signal')
+		if dsig != '' && (sig_from[dsig] == 'io' || sig_to[dsig] == 'io') {
+			errs << 'diagnostic DID reads io signal ${dsig} — a second reader on a single-reader channel; mirror it through an FB-owned signal instead'
+		}
+	}
 	if points.len > 32 {
 		errs << '${points.len} io points configured — the driver backend holds at most 32 (BLOB_IO_MAX)'
 	}

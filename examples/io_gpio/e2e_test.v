@@ -5,7 +5,9 @@ module main
 // Exercised for real: a pressed input reaches the app as a signal (REQ-IO-001),
 // the app's output signal reaches the pin (REQ-IO-002), and the output holds its
 // configured init (1 — deliberately distinct from the app's unpressed command 0)
-// from startup, BEFORE the first app command (REQ-IO-009).
+// from startup, BEFORE the first app command (REQ-IO-009). The startup-fault leg
+// is observed too: io/UserButton is absent at boot, so the counted fault must
+// surface on stderr.
 // @verifies REQ-IO-001 REQ-IO-002 REQ-IO-009 REQ-IO-012 REQ-IO-013
 
 import os
@@ -23,6 +25,7 @@ fn test_button_drives_led() {
 	os.mkdir_all(work)!
 	mut p := os.new_process(os.join_path(dir, 'bin', 'app'))
 	p.set_work_folder(work)
+	p.set_redirect_stdio() // capture stderr: the startup-fault diagnostic leg
 	p.run()
 	defer {
 		p.signal_kill()
@@ -61,6 +64,10 @@ fn test_button_drives_led() {
 	// the fault-leg proof: the input file still must not exist here — nothing
 	// seeded it, so the 0 above cannot have come from a published sample
 	assert !os.exists(os.join_path(work, 'io', 'UserButton')), 'io/UserButton exists before the test wrote it — an input was seeded'
+	// ...and the fault must be OBSERVED, not just counted: io/UserButton was
+	// absent at boot, so run() must have reported it on stderr (REQ-IO-009)
+	stderr := p.stderr_read()
+	assert stderr.contains('startup fault'), 'no startup-fault diagnostic on stderr, got: "${stderr}"'
 
 	// press the button via the ioset protocol (write-then-rename, atomic)
 	tmp := os.join_path(work, 'io', '.UserButton.tmp')
