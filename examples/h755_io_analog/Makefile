@@ -1,0 +1,105 @@
+# h755_io_analog — docs/io.md P2+P3 on the ThreadX target (NUCLEO-H755ZI-Q, CM7):
+# the generated platform io thread runs an ADC (PA3, continuous scan + circular DMA)
+# and a PWM (PE9, TIM1_CH1) through the driver/io STM32 backend (register-level,
+# selected by $(IO_DEFS) from boards/h755zi/board.mk). loom2v emits: io cfg/init +
+# one boot publish at the top of tx_application_define (REQ-IO-009: before any thread
+# exists), the io thread (AUTO_START OFF, resumed after the boot publish, priority
+# just above the FB thread), and the FB superloop in a ThreadX thread — see
+# examples/h755_threadx for the full comm-thread stack; this example is the analog slice.
+#
+#   make -C ../.. deps      # once: ThreadX + CMSIS
+#   make flash              # st-flash the .bin
+#   Scope PE9: duty sweeps 0..100%..0 (~4 s). PotState 0x311 = PA3 count on the bus;
+#   jumper PA3 to 3V3 -> ~4095 + LD1 (PB0) on, to GND -> ~0. CpuLoad 0x7E0 = liveness.
+CROSS   ?= arm-none-eabi-
+CC       = $(CROSS)gcc
+AR       = $(CROSS)ar
+OBJCOPY  = $(CROSS)objcopy
+SIZE     = $(CROSS)size
+V       ?= v
+REPO     = ../..
+NAME    := $(notdir $(CURDIR))
+TX       = $(REPO)/third_party/threadx
+PORT     = $(TX)/ports/cortex_m7/gnu
+
+# The board (clock/flash/I-cache bring-up, startup, vectors, FDCAN timing, linker script)
+# comes from boards/$(BOARD) — MCU/CMSIS/BOARD_DEFS/CAN_DEFS/IO_DEFS/BOARD_BSP_*/BOARD_LD_*.
+BOARD := h755zi
+include $(REPO)/boards/$(BOARD)/board.mk
+
+# BOARD_ENTRY: crt0 jumps into the generated V image's main__main.
+CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
+          $(BOARD_DEFS) -DBOARD_ENTRY=main__main $(CAN_DEFS) $(IO_DEFS) \
+          -I. -Igen $(BOARD_INCS) -I$(REPO)/driver/can -I$(REPO)/driver/io \
+          -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
+LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
+          --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
+
+BUILD    = build
+TX_A     = $(BUILD)/tx.a
+TX_ASM   = $(wildcard $(PORT)/src/*.S)
+TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
+TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
+           $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
+
+# board bring-up (asm + board.c) + the IOC-pool glue (no comm thread in this example).
+BSP = $(BOARD_BSP_THREADX) io_glue.c
+
+all: $(BUILD)/$(NAME).bin
+
+# 0) generate the ThreadX target (gen/ports/sig) from ecu.toml via loom2v.
+GEN = gen/loom_gen.v ports/ports_gen.v sig/signals_gen.v
+gen: gen/.stamp
+gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(REPO)/tools/ecucheck/gen.v $(wildcard $(REPO)/tools/loom2v/*.v) $(REPO)/tools/ecumodel/model.v
+	@mkdir -p gen ports sig
+	cd $(REPO) && $(V) run tools/ecucheck/gen.v examples/$(NAME)/ecu.toml
+	cd $(REPO) && $(V) run tools/loom2v examples/$(NAME)/ecu.toml examples/$(NAME)/bus.dbc \
+	  examples/$(NAME)/sig/signals_gen.v examples/$(NAME)/ports/ports_gen.v examples/$(NAME)/gen/loom_gen.v \
+	  examples/$(NAME)/gen/trace-manifest.csv
+	@touch gen/.stamp
+
+# loom's fixed Scheduler tables, right-sized to this image's real handler count.
+-include gen/loom_build.mk
+
+# 1) transpile the V stack to freestanding C (-enable-globals for the ThreadX TCB/stack statics).
+$(BUILD)/app.c: main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/driver/io/*.v) $(wildcard app/*.v) | $(BUILD)
+	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
+	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
+	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
+	$(REPO)/scripts/lint_vinit.sh $@
+
+# 2) ThreadX kernel objects (same as examples/h755_threadx).
+$(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
+	@mkdir -p $(BUILD)/tx
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile
+	@mkdir -p $(BUILD)/tx
+	$(CC) $(CFLAGS) -c $< -o $@
+$(TX_A): $(TX_OBJ)
+	$(AR) -rc $@ $^
+
+# 3) cross-compile + link: generated app.c + board bring-up + CAN/IO backends + ThreadX.
+# io_backend.c textually includes the STM32 implementation — list both it and
+# the port header, or an edited driver flashes stale (codex on emb#150)
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(REPO)/driver/io/io_stm32.c $(REPO)/driver/io/io_port.h $(TX_A) $(BOARD_LD_THREADX)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A) -o $@
+	$(SIZE) $@
+
+$(BUILD)/$(NAME).bin: $(BUILD)/$(NAME).elf
+	$(OBJCOPY) -O binary $< $@
+
+$(BUILD):
+	mkdir -p $(BUILD)
+
+flash: $(BUILD)/$(NAME).bin
+	st-flash write $(BUILD)/$(NAME).bin 0x08000000
+	st-flash reset
+
+clean:
+	rm -rf $(BUILD) gen ports sig
+
+.PHONY: all gen flash clean
+
+# a failed recipe (the vinit lint) must not leave its half-made target: GNU make only
+# deletes targets on error when asked (make manual, Errors in Recipes)
+.DELETE_ON_ERROR:
