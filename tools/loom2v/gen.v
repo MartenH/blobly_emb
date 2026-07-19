@@ -1020,6 +1020,20 @@ fn emit_partition_io(m Model, producers []Producer) []string {
 // io's own load slot — the slot AFTER the FB threads, matching its manifest row.
 // adc_cast: the value cast for an ADC point's signal field — adc_read returns
 // u32, the field is u16 or u32 (validated), so u16 fields narrow explicitly.
+// io_cfg_param: the kind param for io.cfg — pwm carrier freq_hz, or an ADC's
+// full-scale max (so the host mirror rejects an out-of-width value rather than
+// letting the u16 glue cast truncate it, codex emb#152). 0 for gpio.
+fn io_cfg_param(pt IoPoint, m Model) string {
+	if pt.kind == 'pwm' {
+		return 'u32(${pt.freq_hz})'
+	}
+	if pt.kind == 'adc' {
+		si := m.sig_of[pt.name] or { SigInfo{} }
+		return if si.val_type == 'u16' { 'u32(65535)' } else { 'u32(0xffffffff)' }
+	}
+	return 'u32(0)'
+}
+
 fn adc_cast(typ string) string {
 	return if typ == 'u16' { 'u16' } else { 'u32' }
 }
@@ -1159,7 +1173,7 @@ fn emit_io_target_boot(m Model, ioc_idx map[string]int) []string {
 		al := if pt.active_low { 1 } else { 0 }
 		kind_n := if pt.kind == 'adc' { 1 } else if pt.kind == 'pwm' { 2 } else { 0 }
 		iv := if pt.kind == 'pwm' { pt.init_pm } else if pt.init { u32(1) } else { u32(0) }
-		g << "\tif !io.cfg(${pt.ch}, '${pt.name}', '${pt.pin}', ${pt.output}, ${iv}, ${al}, ${kind_n}, u32(${pt.freq_hz})) {"
+		g << "\tif !io.cfg(${pt.ch}, '${pt.name}', '${pt.pin}', ${pt.output}, ${iv}, ${al}, ${kind_n}, ${io_cfg_param(pt, m)}) {"
 		g << '\t\tio_startup_faults++'
 		if pt.output {
 			g << '\t\tio_out_fault = true // halt LATER: first let the valid outputs init'
@@ -2397,7 +2411,7 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 				hal := if pt.active_low { 1 } else { 0 }
 				hkind := if pt.kind == 'adc' { 1 } else if pt.kind == 'pwm' { 2 } else { 0 }
 				hiv := if pt.kind == 'pwm' { pt.init_pm } else if pt.init { u32(1) } else { u32(0) }
-				glue << "\tif !io.cfg(${pt.ch}, '${pt.name}', '${pt.pin}', ${pt.output}, ${hiv}, ${hal}, ${hkind}, u32(${pt.freq_hz})) {"
+				glue << "\tif !io.cfg(${pt.ch}, '${pt.name}', '${pt.pin}', ${pt.output}, ${hiv}, ${hal}, ${hkind}, ${io_cfg_param(pt, m)}) {"
 				glue << "\t\tpanic('io cfg failed: ${pt.name}')"
 				glue << '\t}'
 			}

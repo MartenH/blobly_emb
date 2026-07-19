@@ -81,7 +81,7 @@ __global (
 )
 
 pub fn run() {
-	if !io.cfg(0, 'Pot', 'PA3', false, 0, 0, 1, u32(0)) {
+	if !io.cfg(0, 'Pot', 'PA3', false, 0, 0, 1, u32(65535)) {
 		panic('io cfg failed: Pot')
 	}
 	if !io.cfg(1, 'FanDuty', 'PE9', true, 0, 0, 2, u32(20000)) {

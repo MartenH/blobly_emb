@@ -35,6 +35,7 @@ static struct {
 	char pin[16]; /* informational on host; the pin-table key on target */
 	int dir;      /* 0=in 1=out */
 	int kind;     /* IO_GPIO / IO_ADC / IO_PWM */
+	unsigned long adc_max; /* adc: full-scale bound (u16 65535 / u32 max) */
 	unsigned int init;
 	unsigned int last; /* last-good value, served on any read failure */
 	int configured;
@@ -70,7 +71,7 @@ static int pt_write_value(const char *name, unsigned int val) {
 
 int blob_io_cfg(int ch, const char *name, const char *pin, int dir, unsigned int init_val, int active_low, int kind, unsigned int param) {
 	(void)active_low; /* the host mirror is LOGICAL by definition — polarity is a pad property */
-	(void)param;      /* pwm carrier freq: no meaning on the file mirror */
+	g_pt[ch].adc_max = (kind == IO_ADC) ? (param ? param : 0xFFFFFFFFul) : 0;
 	if (ch < 0 || ch >= BLOB_IO_MAX || !name || !pin) return -1;
 	strncpy(g_pt[ch].name, name, sizeof(g_pt[ch].name) - 1);
 	g_pt[ch].name[sizeof(g_pt[ch].name) - 1] = '\0';
@@ -162,7 +163,7 @@ int blob_io_gpio_read_checked(int ch, int *val) {
 int blob_io_adc_read_checked(int ch, unsigned int *val) {
 	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured || !val) return -1;
 	unsigned long v;
-	if (pt_read_value(ch, 0xFFFFFFFFul, &v) < 0) return -1; /* no real sample yet */
+	if (pt_read_value(ch, g_pt[ch].adc_max, &v) < 0) return -1; /* absent, garbage, or over-width */
 	g_pt[ch].last = (unsigned int)v;
 	*val = (unsigned int)v;
 	return 0;
@@ -172,7 +173,7 @@ unsigned int blob_io_adc_read(int ch) {
 	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured) return 0;
 	unsigned long v;
 	/* any failure serves last-good (REQ-IO-003); the next poll heals it. */
-	if (pt_read_value(ch, 0xFFFFFFFFul, &v) < 0) return g_pt[ch].last;
+	if (pt_read_value(ch, g_pt[ch].adc_max, &v) < 0) return g_pt[ch].last;
 	g_pt[ch].last = (unsigned int)v;
 	return (unsigned int)v;
 }
