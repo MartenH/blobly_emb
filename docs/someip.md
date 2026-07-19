@@ -39,36 +39,66 @@ kind      = "eth"
 interface = "192.168.0.50"
 core      = 0
 
-# The service identity + static endpoints. One [someip] block per eth bus for
-# now (multi-service is a later generalisation if a real need appears).
+# The service identity + static endpoints. ONE eth bus (and one [someip]
+# block) per image for now — ecucheck enforces the pair; a keyed
+# [someip.<bus>] table is the generalisation if a second eth bus ever exists.
+# version — the interface version carried in every header; explicitly managed,
+# bumped on a breaking layout change (it is config next to the frames, so the
+# bump is reviewed in the same diff that changes the layout).
 # peer — where events/responses go and where requests come from. STATIC: no SD.
 [someip]
 bus      = "eth0"
 service  = 0x0100
 instance = 0x0001
+version  = 1
 port     = 30490
 peer     = "192.168.0.10:30490"
 
-# Frames on an eth bus reuse the id field as the SOME/IP method/event id
-# (bit 15 set = event/notification, per the standard). Signals ride frames
-# exactly as on CAN; the payload bytes ARE the frame codec's packing.
+# Frames on an eth bus reuse the id field as the SOME/IP method/event id.
+# Bit 15 classifies the id's ROLE, not its direction: set = event/notification
+# (tx = we publish it, rx = we consume one), clear = method (P3
+# request/response). signals declares membership — the eth path has no DBC;
+# the layout is derived from this list (next section).
 [[frame]]
-name = "BenchTelem"
-bus  = "eth0"
-id   = 0x8001
-tx   = { mode = "cyclic", cycle_ms = 100 }
+name    = "BenchTelem"
+bus     = "eth0"
+id      = 0x8001
+signals = ["CpuLoad", "BenchCounters"]
+tx      = { mode = "cyclic", cycle_ms = 100 }
 ```
+
+## Payload layout without a DBC
+
+On CAN, signal→frame membership and the bit layout come from the imported DBC;
+an eth frame gets neither, so the config must supply both. Membership is the
+frame's `signals` list. The layout is **derived, never authored**: fields
+packed in signal-list order, little-endian, each field at its natural width,
+byte-aligned, no other padding — deterministic from the `[[signal]]` `fields`
+declarations alone, so there are no hand-written offsets to drift. The
+generator emits the resulting layout table twice: into `gen/` for the image,
+and into the trace manifest so the host side (blobly_net) decodes from the
+same source of truth. Extending the DBC dialect to describe eth frames was
+considered and rejected: it would put eth layout in a CAN-shaped artifact and
+split the config across two files for no interop gain — the payload is
+deployment-defined either way (see the wire subset below).
 
 What ecucheck adds (same rule family as the io bindings, docs/io.md):
 
-- an eth-bus frame id must fit 16 bits and its direction must match the id
-  class — tx event frames set bit 15, rx method (request) frames clear it;
-- an event frame's packed payload must fit ONE datagram (pool payload minus
-  IP/UDP/SOME-IP overhead) — segmentation (SOME/IP-TP) is out of scope, so an
-  oversize frame is a config error, not a runtime surprise;
-- `[someip]` requires an existing `kind = "eth"` bus; a `[someip]` block
-  without eth frames, or eth frames without a `[someip]` block, is an error —
-  half-configured transports fail loud at build time.
+- an eth-bus frame id must fit 16 bits, and its bit-15 class must match the
+  frame's role: event ids (bit 15 set) may be tx (we publish) or rx (we
+  consume a peer's notification) — direction does NOT decide the class;
+  method ids (bit 15 clear) exist only once the RPC phase does, and pair
+  rx request with tx response;
+- an eth frame's `signals` list must be present, non-empty, and name signals
+  whose bus endpoint is this frame's bus; a signal may ride exactly one frame;
+- the derived payload must fit the SHARED PDU bound — `comm.com`'s 64-byte
+  `max_pdu`, which the whole codec/router path is sized for — not merely the
+  datagram. A wider eth PDU type is its own later rung (open question below),
+  never a silent relaxation; segmentation (SOME/IP-TP) stays out of scope, so
+  an oversize frame is a config error, not a runtime surprise;
+- `[someip]` requires the (single) `kind = "eth"` bus; a `[someip]` block
+  without eth frames, eth frames without a `[someip]` block, or a second eth
+  bus are all errors — half-configured transports fail loud at build time.
 
 ## The wire subset
 
@@ -80,7 +110,7 @@ The 16-byte header, big-endian on the wire as the standard requires:
 | Length | 32 | 8 + payload length (bytes after this field) |
 | Request ID | 32 | events: client 0x0000 + a per-frame session counter (wraps 1..0xFFFF — receivers get loss detection for free); requests: echoed into the response |
 | Protocol version | 8 | 0x01 |
-| Interface version | 8 | derived from the config (a truncated hash of the eth frame table) — a mismatched build fails loud at the header, not as garbled signals |
+| Interface version | 8 | the configured `[someip] version`, explicitly managed — bumped in the same reviewed diff that breaks the layout. (A truncated config hash was considered and rejected: 1/256 silent collisions, and unrelated table edits would churn the version. Strict build-identity checking is host-side — the oracle compares the layout table the trace manifest carries.) |
 | Message type | 8 | P1: NOTIFICATION (0x02). P3 adds REQUEST (0x00) / RESPONSE (0x80) / ERROR (0x81) |
 | Return code | 8 | 0x00; P3 error paths use the standard codes |
 
@@ -149,6 +179,10 @@ two-repo pincer the CAN stack used.
 - **Multicast events.** Unicast-to-one-peer is P1; a multicast group per
   eventgroup is the standard's answer to N listeners and NetX supports IGMP.
   Decide when a second listener actually exists.
+- **PDUs wider than 64 bytes.** The datagram could carry ~1.4 KB, but the
+  shared codec/router path is sized to `max_pdu = 64`; a wider payload means a
+  separate statically bounded eth PDU type through that whole path. Decide
+  when a real payload outgrows a CAN-FD frame — not before.
 - **The `[someip]`/bus schema split.** `kind = "eth"` on the bus vs inferring
   from the `[someip]` binding — settle in ecumodel when the schema lands
   (reserved-name and validation details follow the io.md precedent).

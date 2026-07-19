@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 167 | 85 | 5 | 77 | 0 |
+| 168 | 85 | 5 | 78 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -161,6 +161,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-OBS-003 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-TOPO-001 | QM | analysis | uncovered | — |
 | SYS-REQ-NET-001 | QM | test | uncovered | — |
+| SYS-REQ-NET-002 | QM | test | uncovered | — |
 | REQ-TELEM-001 | QM | test | verified | loom_test.v (pass) |
 | REQ-TELEM-002 | QM | test | verified | telem_test.v (pass) |
 | REQ-TELEM-003 | QM | test | verified | loom_test.v (pass) |
@@ -333,6 +334,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-OBS-003 | | | | | | | | | | | | | | |
 | SYS-REQ-TOPO-001 | | | | | | | | | | | | | | |
 | SYS-REQ-NET-001 | | | | | | | | | | | | | | |
+| SYS-REQ-NET-002 | | | | | | | | | | | | | | |
 | REQ-TELEM-001 | | | | | | | | | | | | ✓ | | |
 | REQ-TELEM-002 | | | | | | | | | | | | ✓ | | |
 | REQ-TELEM-003 | | | | | | | | | | | | ✓ | | |

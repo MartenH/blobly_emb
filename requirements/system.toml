@@ -184,3 +184,11 @@ text = "The ECU shall support IP networking over Ethernet such that diagnostics 
 status = "draft"
 method = "test"
 asil = "QM"
+
+[[req]]
+id = "SYS-REQ-NET-002"
+title = "Networked application communication"
+text = "The ECU shall exchange application data over the network as configured events and remote calls — statically configured at build time, interoperable with commodity network tooling at the message-envelope level, and without a runtime heap — so that application signals and services are not confined to the bus transports."
+status = "draft"
+method = "test"
+asil = "QM"
