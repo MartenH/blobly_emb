@@ -64,8 +64,10 @@ fn partition_io() {
 		if osal.ioc_acquire(led_hi_ch, &led_hi, u8(sizeof(led_hi))) {
 			io.gpio_write(0, led_hi.on) // freshness-gated: init holds until the first publish
 		}
-		mut pot_volt := sig.PotVolt{ count: u16(io.adc_read(1)) }
-		osal.ioc_publish(pot_volt_ch, &pot_volt, u8(sizeof(pot_volt)))
+		if pot_volt_v := io.adc_read_checked(1) {
+			mut pot_volt := sig.PotVolt{ count: u16(pot_volt_v) }
+			osal.ioc_publish(pot_volt_ch, &pot_volt, u8(sizeof(pot_volt)))
+		}
 		loom_t1 := osal.now_us()
 		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
 		tick++

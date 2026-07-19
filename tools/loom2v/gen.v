@@ -982,8 +982,10 @@ fn emit_partition_io(m Model, producers []Producer) []string {
 			}
 			glue << '${ind}}'
 		} else if pt.kind == 'adc' {
-			glue << '${ind}mut ${fld} := sig.${pt.name}{ ${si.val_field}: ${adc_cast(si.val_type)}(io.adc_read(${pt.ch})) }'
-			glue << '${ind}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+			glue << '${ind}if ${fld}_v := io.adc_read_checked(${pt.ch}) {'
+			glue << '${ind}\tmut ${fld} := sig.${pt.name}{ ${si.val_field}: ${adc_cast(si.val_type)}(${fld}_v) }'
+			glue << '${ind}\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+			glue << '${ind}}'
 		} else {
 			// checked read: only REAL parsed values publish — after a failed boot
 			// sample a plain read would fabricate the cfg init as the first sample
@@ -1089,9 +1091,12 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int, with_load bool, load_sl
 			}
 			g << '${ind}}'
 		} else if pt.kind == 'adc' {
-			// analog input: the free-running DMA always holds a real count, so no
-			// checked-read failure leg — the io thread just reads and publishes.
-			g << '${ind}C.ioc_pub(${idx}, io.adc_read(${pt.ch}), u32(0))'
+			// analog input: publish only a REAL conversion (checked) — a degraded
+			// converter must not push a fabricated zero (codex emb#152); the cell
+			// keeps its last published value / declared default meanwhile.
+			g << '${ind}if ${fld}_v := io.adc_read_checked(${pt.ch}) {'
+			g << '${ind}\tC.ioc_pub(${idx}, ${fld}_v, u32(0))'
+			g << '${ind}}'
 		} else {
 			g << '${ind}if ${fld}_v := io.gpio_read_checked(${pt.ch}) {'
 			g << '${ind}\tC.ioc_pub(${idx}, if ${fld}_v { u32(1) } else { u32(0) }, u32(0))'
@@ -2574,7 +2579,9 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 					for pt in m.io_points {
 						if pt.name == r.string() && !pt.output && pt.has_default {
 							si_r := m.sig_of[r.string()] or { SigInfo{} }
-							dflt = ' = sig.${r.string()}{ ${si_r.val_field}: ${pt.default} }'
+							// gpio default is bool; adc default is the numeric count (codex emb#152)
+							dval := if pt.kind == 'adc' { '${pt.default_u32}' } else { '${pt.default}' }
+							dflt = ' = sig.${r.string()}{ ${si_r.val_field}: ${dval} }'
 						}
 					}
 					ports << '\t${snake(r.string())} sig.${r.string()}${dflt}'

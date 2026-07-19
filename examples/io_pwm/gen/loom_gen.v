@@ -60,8 +60,10 @@ fn partition_io() {
 			next_us += missed * 10000
 		}
 		loom_t0 := osal.now_us()
-		mut pot := sig.Pot{ count: u16(io.adc_read(0)) }
-		osal.ioc_publish(pot_ch, &pot, u8(sizeof(pot)))
+		if pot_v := io.adc_read_checked(0) {
+			mut pot := sig.Pot{ count: u16(pot_v) }
+			osal.ioc_publish(pot_ch, &pot, u8(sizeof(pot)))
+		}
 		mut fan_duty := sig.FanDuty{}
 		if osal.ioc_acquire(fan_duty_ch, &fan_duty, u8(sizeof(fan_duty))) {
 			io.pwm_write(1, u32(fan_duty.duty)) // duty permille; freshness-gated
