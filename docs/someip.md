@@ -11,7 +11,7 @@
 ## The one idea
 
 A SOME/IP event is a **frame on an eth bus**. Same `[[signal]]`/`[[frame]]`
-declarations, same build-time codec, same frame→module routing
+declarations, a payload layout fixed at build time, same frame→module routing
 (docs/com-modules.md) — the only new things are a bus kind whose frames travel
 as UDP datagrams instead of CAN frames, and the standard 16-byte SOME/IP header
 in front of the payload so the wire is legible to commodity tooling (Wireshark
@@ -65,6 +65,14 @@ bus     = "eth0"
 id      = 0x8001
 signals = ["CpuLoad", "BenchCounters"]
 tx      = { mode = "cyclic", cycle_ms = 100 }
+
+# Module-owned frames don't use [[frame]] at all: a ComModule block binds its
+# endpoints to eth event ids exactly as it binds CAN ids (docs/com-modules.md
+# — ids appear once, in the module block; the module owns its payload bytes).
+# This is how the P1 trace/telemetry egress is configured:
+[trace]
+bus    = "eth0"
+record = 0x8002
 ```
 
 ## Payload layout without a DBC
@@ -89,8 +97,20 @@ What ecucheck adds (same rule family as the io bindings, docs/io.md):
   consume a peer's notification) — direction does NOT decide the class;
   method ids (bit 15 clear) exist only once the RPC phase does, and pair
   rx request with tx response;
-- an eth frame's `signals` list must be present, non-empty, and name signals
-  whose bus endpoint is this frame's bus; a signal may ride exactly one frame;
+- a `[[frame]]` on an eth bus is a SIGNAL frame: its `signals` list must be
+  present, non-empty, and name signals whose bus endpoint is this frame's bus,
+  and a signal may ride exactly one frame. Module frames are NOT `[[frame]]`
+  entries — a ComModule block binds its endpoints to eth ids directly (the
+  `[trace]` example above), and those ids share the same 16-bit id space, so
+  ecucheck rejects a collision between the two kinds;
+- every field of an eth-frame signal must be a fixed-width scalar (`bool`,
+  `u8`..`u64`, `i8`..`i64`, `f32`/`f64`) — the layout derivation has no
+  meaning for strings, slices, or anything heap-shaped, and the no-alloc
+  invariant forbids them in generated runtime code anyway;
+- `service` and `instance` must fit 16 bits, `version` 8 bits, `port` is
+  1..65535, and `peer` must parse as an address:port pair — narrowing happens
+  in the header packing, so an over-wide value would otherwise silently
+  collide instead of failing the build;
 - the derived payload must fit the SHARED PDU bound — `comm.com`'s 64-byte
   `max_pdu`, which the whole codec/router path is sized for — not merely the
   datagram. A wider eth PDU type is its own later rung (open question below),
@@ -114,14 +134,23 @@ The 16-byte header, big-endian on the wire as the standard requires:
 | Message type | 8 | P1: NOTIFICATION (0x02). P3 adds REQUEST (0x00) / RESPONSE (0x80) / ERROR (0x81) |
 | Return code | 8 | 0x00; P3 error paths use the standard codes |
 
-The **payload** is the frame codec's packed bytes — the same packing the CAN
-path uses, little-endian scalars as the DBC/codegen already define. That is a
-declared deviation from AUTOSAR's default big-endian payload serialization:
-SOME/IP the wire standard does not mandate payload endianness (it is
-deployment-defined), the codec already exists and is tested, and the host-side
-oracle knows the layout from the same config. The header is standard so the
-*envelope* is universally legible; the payload is ours, exactly as a DBC is
-needed to read a CAN frame body.
+The **payload** is NOT the CAN codec's output — the DBC codec packs signal
+*values* at DBC bit positions with scaling and synthesizes rx-side fields; the
+eth payload is the **derived layout** above (raw declared fields, declaration
+order, little-endian, natural widths), a small generated eth codec of its own.
+For a module-bound frame the payload is the module's own bytes, exactly as on
+CAN. Little-endian is a declared deviation from AUTOSAR's default big-endian
+payload serialization: SOME/IP the wire standard does not mandate payload
+endianness (it is deployment-defined), and the host-side oracle reads the same
+config. The header is standard so the *envelope* is universally legible; the
+payload is ours, exactly as a DBC is needed to read a CAN frame body.
+
+On **rx**, the full envelope is validated against `[someip]` BEFORE anything
+reaches the router: the complete 32-bit Message ID (service high half, not
+just the frame id), protocol and interface version, a message type legal for
+the phase, and a Length consistent with the datagram. Any mismatch is counted
+and dropped (REQ-NET-015) — a configured event id under a foreign service
+never enters the shared routing/codec path.
 
 ## What this deliberately is NOT
 
@@ -156,20 +185,28 @@ two-repo pincer the CAN stack used.
 
 ## Phasing (bench rungs; H735-DK is the eth board)
 
-1. **P1 — events tx (REQ-NET-013/014/017).** `comm/someip` header codec +
-   the eth-bus tx path: cyclic telemetry/trace egress as NOTIFICATION events
-   from the comm thread over the NetX UDP socket. Bench: Wireshark's someip
-   dissector decodes the stream from the H735; a scapy/blobly_net listener
-   round-trips the payload against the config. This displaces the "dump trace
-   over FDCAN" bandwidth ceiling ([[trace-as-com-module]]).
+1. **P1 — events tx (REQ-NET-013/017).** `comm/someip` header codec + the
+   eth-bus tx path: a cyclic SIGNAL frame (the BenchTelem sketch) AND the
+   trace module's record stream, both as NOTIFICATION events from the comm
+   thread over the NetX UDP socket. Bench: Wireshark's someip dissector
+   decodes the stream from the H735; a scapy/blobly_net listener round-trips
+   the payload against the config. This displaces the "dump trace over FDCAN"
+   bandwidth ceiling ([[trace-as-com-module]]). REQ-NET-014 (the envelope) is
+   *exercised* here but only *verified* at P3 — its text covers remote calls,
+   which don't exist until then.
 2. **P2 — events rx + routing (REQ-NET-015).** The rx direction: datagrams
    from the socket through the router into signals/module endpoints by frame
    id, same tables as CAN rx. Bench: drive a signal (the lamp, in the io
    tradition) from a host-sent event.
-3. **P3 — request/response (REQ-NET-016).** REQUEST/RESPONSE/ERROR message
-   types with request-id correlation; the shell (comm/shell) reachable as a
-   SOME/IP method — the CAN shell's 0x7F0 family gets an eth sibling. State-
-   changing methods inherit the net security posture (docs/net.md, REQ-NET-012).
+3. **P3 — request/response (REQ-NET-014/016).** REQUEST/RESPONSE/ERROR
+   message types with request-id correlation; the shell (comm/shell) reachable
+   as a SOME/IP method — the CAN shell's 0x7F0 family gets an eth sibling.
+   Methods are MODULE-bound: a method id maps to a module's rx (request) and
+   tx (response) endpoints, and the module owns both payloads — which is why
+   one frame with one `signals` layout never has to describe two directions.
+   A signal-layout method (per-direction derived layouts on one id) is out of
+   scope until a concrete need exists. State-changing methods inherit the net
+   security posture (docs/net.md, REQ-NET-012).
 4. **P4 — SD, only if interop demands it.** Static offers + subscribe handling
    for a third-party consumer. Not scheduled; exists so the config surface
    above doesn't paint it out.
