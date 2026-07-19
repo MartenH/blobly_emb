@@ -44,9 +44,12 @@ pub const someip_port = u16(30490)
 pub const someip_peer_ip = [u8(127), 0, 0, 1]!
 pub const someip_peer_port = u16(30490)
 
-// BenchTelem: tx event 0x8001, 7-byte payload
+// BenchTelem: tx event 0x8001, 9-byte payload (incl. 2-byte E2E trailer)
 pub const bench_telem_event_id = u16(0x8001)
-pub const bench_telem_len = u8(7)
+pub const bench_telem_len = u8(9)
+pub const bench_telem_e2e_id = u16(0x21)
+pub const bench_telem_e2e_ctr = 7
+pub const bench_telem_e2e_crc = 8
 pub fn bench_telem_pack(mut d [com.max_pdu]u8, s_bench_load sig.BenchLoad, s_bench_ticks sig.BenchTicks) {
 	d[0] = u8(s_bench_load.load)
 	d[1] = u8(s_bench_ticks.ticks)
