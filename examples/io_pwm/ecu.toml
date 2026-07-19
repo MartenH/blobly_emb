@@ -1,0 +1,49 @@
+# io_pwm — docs/io.md P3: a PWM output as an ordinary signal. FanDuty is an
+# [[io.pwm]] point; the Dimmer FB maps the pot (0..4095) to a duty permille
+# (0..1000). ADC in -> FB -> PWM out, all config.
+# NOTE: no comments inside [[...]] tables (vlang/v#27684).
+[io]
+core = 0
+
+[[io.adc]]
+name      = "Pot"
+pin       = "PA3"
+period_ms = 10
+
+[[io.pwm]]
+name      = "FanDuty"
+pin       = "PE9"
+period_ms = 10
+freq_hz   = 20000
+init      = 0
+
+[[partition]]
+name    = "app"
+core    = 0
+trusted = false
+
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+[[signal]]
+name = "Pot"
+fields = { count = "u16" }
+from = "io"
+to   = "app"
+
+[[signal]]
+name = "FanDuty"
+fields = { duty = "u16" }
+from = "app"
+to   = "io"
+
+[[fb]]
+name   = "Dimmer"
+thread = "app_main"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["Pot"]
+  writes    = ["FanDuty"] # trailing comment terminates the nested block (vlang#27684)

@@ -1,0 +1,49 @@
+# io_adc — docs/io.md P2: an analog input as an ordinary signal. PotVolt is an
+# [[io.adc]] point (continuous scan + circular DMA on target; a mirror file on
+# the host), published as a u16 converter count. The Meter FB lights LedHi when
+# the pot crosses mid-scale — ADC in -> FB -> GPIO out, all config.
+# NOTE: no comments inside [[...]] tables (vlang/v#27684).
+[io]
+core = 0
+
+[[io.adc]]
+name      = "PotVolt"
+pin       = "PA3"
+period_ms = 10
+
+[[io.gpio]]
+name      = "LedHi"
+pin       = "PB0"
+period_ms = 10
+init      = false
+
+[[partition]]
+name    = "app"
+core    = 0
+trusted = false
+
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+[[signal]]
+name = "PotVolt"
+fields = { count = "u16" }
+from = "io"
+to   = "app"
+
+[[signal]]
+name = "LedHi"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+
+[[fb]]
+name   = "Meter"
+thread = "app_main"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["PotVolt"]
+  writes    = ["LedHi"] # trailing comment terminates the nested block (vlang#27684)

@@ -25,11 +25,17 @@
  * value (the latest-complete-sample rule, REQ-IO-003), never an error the
  * app must handle mid-loop. */
 
-int  blob_io_cfg(int ch, const char *name, const char *pin, int dir, unsigned int init_val, int active_low); /* declare one point before init; dir 0=in 1=out; init + all reads/writes are LOGICAL, active_low inverts at the pad (REQ-IO-017); 0=ok */
-int  blob_io_init(void);                    /* apply output init levels FIRST (before any app runs), open the backend; 0=ok */
+/* kind: 0 = gpio (bool level), 1 = adc (analog input, u32 count), 2 = pwm
+ * (analog output, u32 permille). `param` is the pwm carrier freq_hz; unused
+ * for gpio/adc. ADC points free-run (continuous scan + circular DMA) from
+ * blob_io_init(); the io thread only reads (REQ-IO-018). */
+int  blob_io_cfg(int ch, const char *name, const char *pin, int dir, unsigned int init_val, int active_low, int kind, unsigned int param); /* declare one point before init; dir 0=in 1=out; init + all reads/writes are LOGICAL, active_low inverts at the pad (REQ-IO-017); 0=ok */
+int  blob_io_init(void);                    /* apply output init levels FIRST (before any app runs), start ADC scan/DMA, open the backend; 0=ok */
 int  blob_io_gpio_read(int ch);             /* current level 0/1; on backend failure returns the last good value (never blocks) */
 int  blob_io_gpio_read_checked(int ch, int *val); /* 0 = real value in *val, -1 = unreadable/unparsable — NO last-good fallback (boot must not fabricate a sample) */
 void blob_io_gpio_write(int ch, int level); /* drive an output point */
+unsigned int blob_io_adc_read(int ch);      /* latest converter count — one atomic load from the DMA array (never blocks, REQ-IO-018) */
+void blob_io_pwm_write(int ch, unsigned int permille); /* set PWM duty 0..1000 (clamped above); a compare-register update */
 void blob_io_close(void);
 
 #endif
