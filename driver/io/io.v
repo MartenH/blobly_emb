@@ -10,7 +10,7 @@ module io
 #flag @VMODROOT/driver/io/io_backend.c
 #include "io_port.h"
 
-fn C.blob_io_cfg(int, &char, &char, int, u32) int
+fn C.blob_io_cfg(int, &char, &char, int, u32, int) int
 fn C.blob_io_init() int
 fn C.blob_io_gpio_read(int) int
 fn C.blob_io_gpio_read_checked(int, &int) int
@@ -18,10 +18,12 @@ fn C.blob_io_gpio_write(int, int)
 fn C.blob_io_close()
 
 // cfg declares one point before init: channel, signal name, board pin,
-// direction, and the pre-publication init level. Returns false on failure.
-pub fn cfg(ch int, name string, pin string, output bool, init u32) bool {
+// direction, the pre-publication init level, and the pad polarity — init and
+// every read/write are LOGICAL values; active_low inverts at the pad
+// (REQ-IO-017: board wiring never leaks into application signals).
+pub fn cfg(ch int, name string, pin string, output bool, init u32, active_low int) bool {
 	return C.blob_io_cfg(ch, &char(name.str), &char(pin.str), if output { 1 } else { 0 },
-		init) == 0
+		init, active_low) == 0
 }
 
 // init opens the backend and applies every output's init level FIRST — before

@@ -1,0 +1,83 @@
+# h735_io_lamp — the rx half of the cross-node button demo (STM32H735G-DK):
+# examples/h755_io publishes its B1 button as BtnPressed (ButtonState 0x310,
+# cyclic 100 ms); this node receives it and mirrors it onto an on-board LED
+# through the RemoteLamp FB — io signals always pass through an FB, never
+# bus-to-pin (docs/io.md). Comm thread owns CAN (rx drain, ISR-woken); the
+# platform io thread applies the LED at 10 ms. [telemetry] is mandatory for the
+# ThreadX emitter (the comm thread derives its bus from it); this node beacons
+# CpuLoad on 0x7E8 — NOT 0x7E0, which the h755 node already sends on the shared
+# bus (two senders of one id collide on the wire).
+#
+# No [[frame]] rx entry / timeout_ms for ButtonState: the target comm thread's
+# lean cut rejects rx deadlines (loom2v phase 6b-2b — not generated yet); the
+# LED simply holds the last received state, like h735_threadx's Command rx.
+#
+# NOTE: no inline comments inside [[...]] tables — a comment in a nested table
+# trips V's TOML parser (drops the next key). See vlang/v#27684.
+
+[import]
+dbc = "bus.dbc"
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0
+
+# The io thread's home core (= the app's: P1-target generates same-core io only).
+[io]
+core = 0
+
+# LedRemote: PC3 = LD2 (user LED, UM2679 §7.4; LD1 = PC2, LD2 = PC3, both on
+# GPIOC — the mapping bench-confirmed in examples/h735_blinky).
+[[io.gpio]]
+name      = "LedRemote"
+pin       = "PC3"
+period_ms = 10
+init      = false
+active_low = true
+
+[[partition]]
+name    = "app"
+core    = 0
+trusted = true
+
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+# BtnPressed: rx from the bus (ButtonState 0x310, sent by examples/h755_io).
+# The DBC carries it as a trivial u32@0 (0/1) — the only layout the target
+# comm thread's lean codec decodes.
+[[signal]]
+name = "BtnPressed"
+fields = { pressed = "bool" }
+from = "can0"
+to   = "app"
+
+[[signal]]
+name = "LedRemote"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+
+[[fb]]
+name   = "RemoteLamp"
+thread = "app_main"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["BtnPressed"]
+  writes    = ["LedRemote"]
+
+# Mandatory for the ThreadX emitter; id 0x7E8 keeps this node's beacon off the
+# h755's 0x7E0 (see header). The DBC's CpuLoad entry documents the h755's frame.
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E8
+period_ms = 1000
+
+[target]
+kind    = "threadx"
+tick_ms = 1

@@ -172,6 +172,11 @@ fn C.load_sum_100ms() u32
 fn C.load_sum_1s() u32
 fn C.load_sum_10s() u32
 fn C.load_sum_overruns() u32
+fn C.load_permille() u32
+fn C.load_100ms() u32
+fn C.load_1s() u32
+fn C.load_10s() u32
+fn C.load_overruns() u32
 fn C.ioc_pool_init()
 fn C.ioc_pub(int, u32, u32)
 fn C.ioc_get(int, &u32, &u32)

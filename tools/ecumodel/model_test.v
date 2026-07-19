@@ -495,6 +495,27 @@ to   = "app"
 	assert e.any(it.contains('not a multiple of the fastest'))
 }
 
+// pin exclusivity is keyed on the PARSED pad, and non-canonical spellings are
+// rejected outright — "PB00" may not slip past raw-string uniqueness as a second
+// spelling of "PB0" (the driver parses port letter + int)
+fn test_io_pin_exclusivity_is_backend_neutral() {
+	// pin GRAMMAR lives below the driver boundary (io_stm32.c rejects "PB00" at
+	// cfg, so one pad has one spelling); the model checks only string-level
+	// exclusivity — backend-neutral, per AGENTS.md (codex on emb#150 r4).
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "A"
+pin       = "PB0"
+period_ms = 10
+
+[[io.gpio]]
+name      = "B"
+pin       = "PB0"
+period_ms = 10
+')
+	assert e.any(it.contains('reuses pin "PB0"'))
+}
 fn test_io_shape_must_be_single_bool() {
 	e := errs_of('
 [io]

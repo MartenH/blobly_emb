@@ -14,6 +14,7 @@ lives in the sibling `docs/*.md` files and is linked, not repeated.
 | add a shell command | [add-a-shell-command.md](add-a-shell-command.md) |
 | record and view a trace | [record-a-trace.md](record-a-trace.md) |
 | build, flash, and talk to the target (bench, bootloader, blobly_net GUI) | [build-and-flash.md](build-and-flash.md) |
+| wire a signal across two ECUs (the button→lamp demo) | [two-node-io.md](two-node-io.md) |
 | bring up a new board | [../porting.md](../porting.md) (design doc; boards/ layer) |
 
 ## The mental model (10 lines)

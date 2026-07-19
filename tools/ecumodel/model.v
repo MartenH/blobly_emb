@@ -279,6 +279,7 @@ pub fn validate(doc toml.Doc) []string {
 // validate_io checks the [[io.gpio]] points against the io-bound signals (docs/io.md
 // P1: GPIO only, single consumer). Every rule here failed loudly in design review
 // before it could fail silently on a bench — keep them exhaustive.
+
 fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]string, bus_names map[string]bool) []string {
 	mut errs := []string{}
 	mut points := []toml.Any{}
@@ -378,6 +379,12 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 		}
 		seen_point[name] = true
 		pin := str_of(pm, 'pin')
+		// exclusivity by NAME only: the model is backend-neutral (AGENTS.md —
+		// pin GRAMMAR belongs below the driver boundary; an STM32 'PB0', an
+		// 'GPIO17', a 'P0.3' are all opaque here). The stm32 backend rejects
+		// non-canonical spellings at cfg (io_stm32.c pin_parse: no leading
+		// zeros), so one pad has exactly one accepted spelling and string
+		// uniqueness is sufficient (codex on emb#150, both rounds).
 		if pin in seen_pin {
 			errs << 'io.gpio "${name}" reuses pin "${pin}" — one physical pad cannot serve two points'
 		}
@@ -449,6 +456,16 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 					if cv is i64 && cv != io_core {
 						errs << 'signal "${name}": endpoint partition "${other}" is on core ${cv} but [io].core is ${io_core} — cross-core io arrives with the target phase'
 					}
+				}
+				// the io thread + its IOC cell live in the LOCAL image; if the
+				// non-io endpoint is a satellite (image = ...), the satellite FB
+				// publishes through its cross-image xioc slot, NOT this local cell,
+				// so an output stays at init / an input never reaches its consumer
+				// (codex emb#150 r11). Reject until io emits into the owning image.
+				img := str_of(ppm, 'image')
+				is_ext := img != '' || ((ppm['external'] or { toml.Any(false) }).bool())
+				if is_ext {
+					errs << 'signal "${name}": io endpoint partition "${other}" is an external/satellite image — the io thread and its cell are in the LOCAL image, so the point cannot reach a satellite FB (declare the io point in the owning image)'
 				}
 			}
 		}
