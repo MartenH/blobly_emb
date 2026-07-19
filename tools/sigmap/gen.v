@@ -142,8 +142,10 @@ fn main() {
 		} else {
 			'—'
 		}
-		scaling := if d.found && d.factor != 1.0 { 'x${d.factor}' } else { '—' }
-		unit := if d.unit != '' { d.unit } else { '—' }
+		// scaling/unit are DBC metadata — meaningless (and misleading) next to
+		// eth provenance, where the payload is the raw declared value
+		scaling := if eth_frame == '' && d.found && d.factor != 1.0 { 'x${d.factor}' } else { '—' }
+		unit := if eth_frame == '' && d.unit != '' { d.unit } else { '—' }
 		path := if local { '${from} (local cell)' } else { '${from}→IOC(${tr})→${to}' }
 		prod := join_or(producers[name] or { []string{} }, '(${from})')
 		cons := join_or(consumers[name] or { []string{} }, '(${to})')

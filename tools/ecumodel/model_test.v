@@ -1293,3 +1293,55 @@ thread = "app_main"
 	assert e.any(it.contains('eth tx signal "Dual" appears in a handler\'s reads'))
 	assert e.any(it.contains('eth tx signal "Stray" is written from partition "app" but declares endpoint "far"'))
 }
+
+fn test_someip_round5_gates() {
+	// snake-colliding frame names; a DID reading an eth signal
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "A"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[signal]]
+name = "B"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "FooBar"
+bus     = "eth0"
+id      = 0x8001
+signals = ["A"]
+
+[[frame]]
+name    = "Foo_Bar"
+bus     = "eth0"
+id      = 0x8002
+signals = ["B"]
+
+[[did]]
+id     = 0xF1A0
+signal = "A"
+' +
+		app)
+	assert e.any(it.contains('collides with "FooBar" after snake-case normalization'))
+	assert e.any(it.contains('diagnostic DID reads eth signal "A"'))
+}
+
+fn test_someip_target_eth_telemetry_rejected() {
+	e := errs_of(eth_head +
+		'
+[target]
+kind = "threadx"
+
+[telemetry]
+enabled = true
+bus     = "eth0"
+id      = 0x8005
+' +
+		eth_tx_frame + app)
+	assert e.any(it.contains('target telemetry emitter is CAN-only'))
+}
