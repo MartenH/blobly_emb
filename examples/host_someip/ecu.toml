@@ -52,11 +52,12 @@ signals = ["BenchLoad", "BenchTicks"]
 tx      = { mode = "cyclic", cycle_ms = 100 }
 e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8 }
 
-# EventVal changes every 5th activation (500 ms): the event frame sends ONLY
-# then; MixedVal changes every 7th: the mixed frame heartbeats at 300 ms AND
-# sends immediately on the change. Together with the cyclic frame above, the
-# three COM tx modes are all on the wire — the harness (e2e_test.v) asserts
-# each one's cadence (REQ-NET-013).
+# EventVal changes EVERY activation (100 ms) against min_delay 350 ms: the
+# event frame must DEBOUNCE — coalescing changes and sending the latest value
+# at ~350 ms pace (monotonic, skipping levels). MixedVal changes every 7th
+# activation: the mixed frame heartbeats at 300 ms AND publishes the change
+# immediately. With the cyclic frame above, all three COM tx modes AND the
+# debounce parameter are on the wire — the harness asserts each (REQ-NET-013).
 [[signal]]
 name = "EventVal"
 fields = { level = "u8" }
@@ -74,7 +75,7 @@ name    = "BenchEvent"
 bus     = "eth0"
 id      = 0x8002
 signals = ["EventVal"]
-tx      = { mode = "event", min_delay_ms = 50 }
+tx      = { mode = "event", min_delay_ms = 350 }
 
 [[frame]]
 name    = "BenchMixed"
