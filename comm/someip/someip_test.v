@@ -2,8 +2,10 @@ module someip
 
 // Host-run SOME/IP envelope tests (sim-first): the same bytes the H735 will
 // send/see over UDP, without hardware. Golden vectors are hand-computed
-// big-endian. @verifies REQ-NET-014 (the standard envelope) and REQ-NET-015
-// (malformed messages classified for the counted-drop path).
+// big-endian. Groundwork for REQ-NET-014/015, deliberately left untagged for
+// trace: 014 also covers remote calls (the RPC phase) and 015 the counted-drop
+// routing path; those requirements verify at their rungs, not from the codec
+// alone.
 
 // the doc's sketch: service 0x0100, event 0x8001, iface version 1, 4-byte payload
 fn golden() Header {

@@ -293,8 +293,10 @@ fn scalar_width(t string) int {
 	}
 }
 
-// peer_ok reports whether s parses as an address:port pair with a valid port —
-// narrowing happens in socket setup, so a bad peer must fail the build instead.
+// peer_ok reports whether s parses as an IPv4 address:port pair — narrowing
+// and resolution happen in socket setup, so a bad peer must fail the build
+// instead. IPv4 dotted-quad only: the static NetX path takes an IP, not a
+// name (hostname support is a host-sim nicety to add if ever needed).
 fn peer_ok(s string) bool {
 	mut colon := -1
 	for i, c in s {
@@ -312,7 +314,27 @@ fn peer_ok(s string) bool {
 		}
 	}
 	port := port_str.i64()
-	return port >= 1 && port <= 65535
+	if port < 1 || port > 65535 {
+		return false
+	}
+	octets := s[..colon].split('.')
+	if octets.len != 4 {
+		return false
+	}
+	for o in octets {
+		if o.len < 1 || o.len > 3 {
+			return false
+		}
+		for c in o {
+			if c < `0` || c > `9` {
+				return false
+			}
+		}
+		if o.i64() > 255 {
+			return false
+		}
+	}
+	return true
 }
 
 // validate_someip checks the eth bus + [someip] + eth [[frame]] rules
@@ -367,6 +389,11 @@ fn validate_someip(doc toml.Doc) []string {
 	for f in toml_arr(doc, 'frame') {
 		fm := f.as_map()
 		if eth == '' || str_of(fm, 'bus') != eth {
+			// on a CAN bus the eth-frame keys are silently ignored by loom2v
+			// (identity/layout come from the DBC) — reject them loud instead
+			if 'id' in fm || 'signals' in fm {
+				errs << 'frame "${str_of(fm, 'name')}" is not on an eth bus but declares eth-frame keys (`id`/`signals`) — CAN identity and layout come from the DBC'
+			}
 			continue
 		}
 		n_eth_frames++
@@ -420,17 +447,61 @@ fn validate_someip(doc toml.Doc) []string {
 		if ntx > 0 && nrx > 0 {
 			errs << 'eth frame "${fname}" mixes tx and rx signals — one direction per frame (a mixed frame would make the bridge a second writer on an SPSC channel)'
 		}
+		// the E2E loss protection is an APPENDED trailer on eth (counter byte +
+		// CRC byte, docs/someip.md) — it counts toward the bound
+		if 'e2e' in fm {
+			size += 2
+		}
 		if size > 64 {
-			errs << 'eth frame "${fname}" derived payload is ${size} bytes — the shared PDU bound is 64 (comm.com max_pdu); a wider eth PDU is its own rung, not a silent relaxation'
+			errs << 'eth frame "${fname}" derived payload is ${size} bytes (E2E trailer included) — the shared PDU bound is 64 (comm.com max_pdu); a wider eth PDU is its own rung, not a silent relaxation'
+		}
+	}
+	// the reverse membership check: an eth-bound signal outside every frame
+	// would be a phantom endpoint — no layout, no route, silently dead
+	if eth != '' {
+		for sname, from in sig_from {
+			if (from == eth || sig_to[sname] == eth) && sname !in sig_frame {
+				errs << 'signal "${sname}" is bound to eth bus "${eth}" but rides no eth frame — an unpublished input or a never-transmitted output'
+			}
 		}
 	}
 
-	// modules bound to the eth bus count as eth traffic for the pairing rule
+	// ENABLED modules bound to the eth bus count as eth traffic for the pairing
+	// rule, and their endpoint ids join the shared event-id space (unique across
+	// ALL bindings, docs/someip.md). Defaults mirror loom2v: telemetry is off
+	// unless enabled, the others on unless disabled. NM on eth is its own phase
+	// (comm/nm_udp, docs/architecture.md) — reject it rather than half-bind it.
+	mod_id_keys := {
+		'trace':     ['cmd', 'rsp', 'record', 'dump_fc']
+		'telemetry': ['id', 'detail_id']
+		'shell':     ['in', 'out', 'fc']
+	}
 	mut mod_on_eth := false
 	for blk in ['trace', 'telemetry', 'shell', 'nm'] {
-		if bt := doc.value_opt(blk) {
-			if eth != '' && str_of(bt.as_map(), 'bus') == eth {
-				mod_on_eth = true
+		bt := doc.value_opt(blk) or { continue }
+		bm := bt.as_map()
+		def_on := blk != 'telemetry'
+		on := (bm['enabled'] or { toml.Any(def_on) }).bool()
+		if eth == '' || !on || str_of(bm, 'bus') != eth {
+			continue
+		}
+		if blk == 'nm' {
+			errs << '[nm] is bound to eth bus "${eth}" — NM over eth (comm/nm_udp) is its own phase and is not generated; keep NM on a CAN bus'
+			continue
+		}
+		mod_on_eth = true
+		for kk in mod_id_keys[blk] {
+			v := bm[kk] or { continue }
+			if v is i64 {
+				if v < 0x8000 || v > 0xFFFF {
+					errs << '[${blk}] ${kk} id 0x${v.hex()} on the eth bus is not an event id (0x8000..0xFFFF)'
+				} else if v in seen_ids {
+					errs << '[${blk}] ${kk} reuses event id 0x${v.hex()} (already bound by "${seen_ids[v]}") — ids are unique across all bindings'
+				} else {
+					seen_ids[v] = '[${blk}] ${kk}'
+				}
+			} else {
+				errs << '[${blk}] ${kk} on the eth bus must be a literal event id — there is no DBC to resolve a name against'
 			}
 		}
 	}
