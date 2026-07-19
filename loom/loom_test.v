@@ -167,3 +167,20 @@ fn test_run_profiled_trace_hook() {
 	assert cap.last_start == 0, 'start=${cap.last_start}'
 	assert cap.last_dt == 50, 'dt=${cap.last_dt}'
 }
+
+// @verifies REQ-IO-014
+// discount excludes higher-priority preemption from a wall-clock bracket so summed
+// per-thread load reflects execution time, not response time (emb#150 io double-count).
+fn test_discount_excludes_preemption() {
+	mut s := Scheduler{}
+	s.account(800, 1000) // 800 µs "busy" in a bracket that included 300 µs of io preempt
+	s.discount(300)      // remove the preemption -> 500 µs true execution
+	// force a window flush at 1 s and read the permille
+	s.account(0, 1_000_000)
+	assert s.load_permille() <= 1 // 500µs over ~1s ~ 0-1‰; the point is it did NOT count 800
+	// saturating: discount beyond busy floors at 0, never underflows
+	s.account(100, 1_000_100)
+	s.discount(9999)
+	s.account(0, 2_000_000)
+	assert s.load_permille() == 0
+}

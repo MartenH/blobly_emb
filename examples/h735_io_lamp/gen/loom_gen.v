@@ -27,6 +27,8 @@ fn handler_app_remote_lamp_on_10ms(ctx voidptr) {
 }
 
 fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)
+fn C.io_exec_add(u32)  // io serve-exec µs, single writer (io thread)
+fn C.io_exec_us() u32 // FB thread reads to subtract io preemption
 fn C._tx_thread_sleep(u32) u32
 fn C._tx_initialize_kernel_enter()
 fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32
@@ -39,6 +41,11 @@ fn C.load_sum_100ms() u32
 fn C.load_sum_1s() u32
 fn C.load_sum_10s() u32
 fn C.load_sum_overruns() u32
+fn C.load_permille() u32
+fn C.load_100ms() u32
+fn C.load_1s() u32
+fn C.load_10s() u32
+fn C.load_overruns() u32
 fn C.ioc_pool_init()
 fn C.ioc_pub(int, u32, u32)
 fn C.ioc_get(int, &u32, &u32)
@@ -66,10 +73,14 @@ pub fn run() {
 	tick_us := u64(1000)
 	for {
 		t0 := C.board_now_us()
+		io0 := C.io_exec_us() // io is higher priority: exclude its preemption
 		sched.run(t0)
 		t1 := C.board_now_us()
-		sched.account(t1 - t0, t1) // handler time -> this core's load
-		if t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun
+		io_dt := u64(C.io_exec_us() - io0)
+		fb_busy := if t1 - t0 > io_dt { t1 - t0 - io_dt } else { u64(0) }
+		sched.account(fb_busy, t1) // handler time, io preemption excluded (emb#150 r10)
+		pass_us := if t1 - t0 > io_dt { t1 - t0 - io_dt } else { u64(0) }
+		if pass_us > tick_us { // OWN work over budget (io excluded)
 			sched.mark_overrun()
 		}
 		C.load_pub(u32(sched.load_permille()), u32(sched.load_permille_100ms()),
@@ -113,6 +124,8 @@ fn io_thread_entry(input u32) {
 			io.gpio_write(0, led_remote_a != 0) // freshness-gated: init holds until the first publish
 		}
 		t1 := C.board_now_us()
+		C.io_exec_add(u32(t1 - t0)) // publish exec so the FB thread can subtract
+		// this preemption from its wall bracket (no double-count, emb#150 r10)
 		sched.account(t1 - t0, t1) // serve time -> the io thread's load slot
 		if t1 - t0 > 10000 {
 			sched.mark_overrun() // the SERVE exhausted its base-period budget

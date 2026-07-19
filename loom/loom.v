@@ -192,6 +192,18 @@ pub fn (mut s Scheduler) account(busy_us u64, now_us u64) {
 	}
 }
 
+// discount removes `us` from every load window's accumulated busy time (saturating
+// at 0). It excludes a higher-priority thread's preemption that inflated this thread's
+// wall-clock bracket — so summed per-thread load reflects EXECUTION time, not response
+// time, and the same interval is not counted twice on one core (emb#150). Call it after
+// run_profiled folded the inflated bracket; the plain run()+account path subtracts before
+// accounting instead.
+pub fn (mut s Scheduler) discount(us u64) {
+	for i in 0 .. load_windows {
+		s.busy_us[i] = if s.busy_us[i] > us { s.busy_us[i] - us } else { u64(0) }
+	}
+}
+
 // mark_overrun records that a scheduling pass ran longer than its tick budget — the
 // core could not finish its due handlers within the period, so it is momentarily
 // saturated. The caller (the super-loop) detects this: pass time > tick.

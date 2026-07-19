@@ -1074,6 +1074,8 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int, with_load bool, load_sl
 		// io's serve time lands in CpuLoad through the SAME scratch seam as the FB
 		// threads: account the bracket, publish to io's slot; the comm thread sums.
 		g << '\t\tt1 := C.board_now_us()'
+		g << '\t\tC.io_exec_add(u32(t1 - t0)) // publish exec so the FB thread can subtract'
+		g << '\t\t// this preemption from its wall bracket (no double-count, emb#150 r10)'
 		g << "\t\tsched.account(t1 - t0, t1) // serve time -> the io thread's load slot"
 		g << '\t\tif t1 - t0 > ${fastest * 1000} {'
 		g << '\t\t\tsched.mark_overrun() // the SERVE exhausted its base-period budget'
@@ -1637,6 +1639,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		tx_sleep_ticks := if m.target.tick_us / 1000 > 1 { m.target.tick_us / 1000 } else { u64(1) }
 		glue << ''
 		glue << 'fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)'
+		if m.io_points.len > 0 {
+			glue << 'fn C.io_exec_add(u32)  // io serve-exec µs, single writer (io thread)'
+			glue << 'fn C.io_exec_us() u32 // FB thread reads to subtract io preemption'
+		}
 		if m.target.threadx {
 			// ThreadX target: the FB superloop runs inside a real ThreadX thread (paced by
 			// tx_thread_sleep) that tx_application_define creates on tx_kernel_enter. TCB + stack
@@ -1700,7 +1706,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << 'fn C.load_sum_1s() u32'
 					glue << 'fn C.load_sum_10s() u32'
 					glue << 'fn C.load_sum_overruns() u32'
-				} else {
+				}
+				if true {
 					glue << 'fn C.load_permille() u32'
 					glue << 'fn C.load_100ms() u32'
 					glue << 'fn C.load_1s() u32'
@@ -1795,19 +1802,44 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				if m.trace.on && m.trace.level == 'all' {
 					glue << '\tsched.set_trace_hook(trace_fb_hook_${thr}, unsafe { nil })'
 				}
+				io_here := m.io_points.len > 0
 				glue << '\tfor {'
 				glue << '\t\tt0 := C.board_now_us()'
+				if io_here {
+					// the io thread is HIGHER priority: its execution inside this bracket
+					// inflates the wall time. Sample its monotonic exec counter and subtract,
+					// so per-thread load is EXECUTION time and the core sum never double-
+					// counts io (codex on emb#150 r10).
+					glue << '\t\tio0 := C.io_exec_us()'
+				}
 				if m.trace.on && m.trace.level == 'all' {
 					glue << '\t\tsched.run_profiled(trace_clock)'
 					glue << '\t\tt1 := C.board_now_us()'
+					if io_here {
+						glue << '\t\tio_dt := u64(C.io_exec_us() - io0)'
+						glue << '\t\tsched.discount(io_dt) // run_profiled already folded the inflated bracket'
+					}
 				} else {
 					glue << '\t\tsched.run(t0)'
 					glue << '\t\tt1 := C.board_now_us()'
-					glue << "\t\tsched.account(t1 - t0, t1) // handler time -> this thread's load"
+					if io_here {
+						glue << '\t\tio_dt := u64(C.io_exec_us() - io0)'
+						glue << '\t\tfb_busy := if t1 - t0 > io_dt { t1 - t0 - io_dt } else { u64(0) }'
+						glue << "\t\tsched.account(fb_busy, t1) // handler time (io preemption excluded)"
+					} else {
+						glue << "\t\tsched.account(t1 - t0, t1) // handler time -> this thread's load"
+					}
 				}
-				glue << '\t\tif t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun'
-				glue << '\t\t\tsched.mark_overrun()'
-				glue << '\t\t}'
+				if io_here {
+					glue << '\t\tpass_us := if t1 - t0 > io_dt { t1 - t0 - io_dt } else { u64(0) }'
+					glue << '\t\tif pass_us > tick_us { // OWN work exceeded the tick (io excluded)'
+					glue << '\t\t\tsched.mark_overrun()'
+					glue << '\t\t}'
+				} else {
+					glue << '\t\tif t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun'
+					glue << '\t\t\tsched.mark_overrun()'
+					glue << '\t\t}'
+				}
 				glue << '\t\tC.load_pub_slot(${ti}, u32(sched.load_permille()), u32(sched.load_permille_100ms()),'
 				glue << '\t\t\tu32(sched.load_permille_1s()), u32(sched.load_permille_10s()), sched.overruns())'
 				glue << '\t\tC._tx_thread_sleep(u32(${tx_sleep_ticks}))'
@@ -1853,20 +1885,41 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '\tmut next_tick := C.board_now_us() + tick_us'
 		}
 		glue << trace_fb_install(m)
+		fb_io := m.io_points.len > 0 // subtract higher-prio io preemption from the wall bracket
 		glue << '\tfor {'
 		glue << '\t\tt0 := C.board_now_us()'
+		if fb_io {
+			glue << '\t\tio0 := C.io_exec_us() // io is higher priority: exclude its preemption'
+		}
 		if m.trace.on && m.trace.level == 'all' {
 			// profiled dispatch: run_profiled accounts internally and fires the FB trace hook
 			glue << '\t\tsched.run_profiled(trace_clock)'
 			glue << '\t\tt1 := C.board_now_us()'
+			if fb_io {
+				glue << '\t\tio_dt := u64(C.io_exec_us() - io0)'
+				glue << '\t\tsched.discount(io_dt) // run_profiled folded the inflated bracket (emb#150 r10)'
+			}
 		} else {
 			glue << '\t\tsched.run(t0)'
 			glue << '\t\tt1 := C.board_now_us()'
-			glue << "\t\tsched.account(t1 - t0, t1) // handler time -> this core's load"
+			if fb_io {
+				glue << '\t\tio_dt := u64(C.io_exec_us() - io0)'
+				glue << '\t\tfb_busy := if t1 - t0 > io_dt { t1 - t0 - io_dt } else { u64(0) }'
+				glue << "\t\tsched.account(fb_busy, t1) // handler time, io preemption excluded (emb#150 r10)"
+			} else {
+				glue << "\t\tsched.account(t1 - t0, t1) // handler time -> this core's load"
+			}
 		}
-		glue << '\t\tif t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun'
-		glue << '\t\t\tsched.mark_overrun()'
-		glue << '\t\t}'
+		if fb_io {
+			glue << '\t\tpass_us := if t1 - t0 > io_dt { t1 - t0 - io_dt } else { u64(0) }'
+			glue << '\t\tif pass_us > tick_us { // OWN work over budget (io excluded)'
+			glue << '\t\t\tsched.mark_overrun()'
+			glue << '\t\t}'
+		} else {
+			glue << '\t\tif t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun'
+			glue << '\t\t\tsched.mark_overrun()'
+			glue << '\t\t}'
+		}
 		if comm_thread_on || (m.target.threadx && m.io_points.len > 0) {
 			// Publish this core's load to the volatile scratch (single writer) — for the
 			// comm thread's CpuLoad producer, or (no-comm + io, emb#150 r5) so the inline
