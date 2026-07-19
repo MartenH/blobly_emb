@@ -68,7 +68,7 @@ derives = "SYS-REQ-IO-001"
 [[req]]
 id = "REQ-IO-007"
 title = "Transceiver follows network state"
-text = "A controllable bus transceiver shall follow its network's management state: normal while the network is awake, low-power when asleep, and shall be usable as a wake source where the hardware provides one."
+text = "A controllable bus transceiver shall follow its network's management state: normal while the network is awake, low-power when asleep, and shall be usable as a wake source where the hardware provides a wake output AND it is wired to a wake-capable ECU input."
 status = "draft"
 method = "test"
 asil = "QM"
