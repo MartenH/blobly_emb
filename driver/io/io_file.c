@@ -124,6 +124,10 @@ static int pt_read_file(int ch, int *val) {
 	close(fd);
 	if (n <= 0) return -1;
 	buf[n] = '\0';
+	/* an embedded NUL would let strtol "finish" before the garbage */
+	if (strlen(buf) != (size_t)n) {
+		return -1;
+	}
 	char *end = NULL;
 	long v = strtol(buf, &end, 10);
 	if (end == buf) return -1;
