@@ -319,3 +319,27 @@ that repo's main — golden vectors byte-compatible with `comm/someip`.
 Next: the UDP tx rung — the eth comm thread wrapping packed payloads in the
 `comm/someip` header over a loopback socket (proven-on-lo), reusing
 `com.TxState` for the tx modes; then the H735 NetX rung (bench).
+
+## P1 UDP tx status (2026-07-19, PROVEN ON LO)
+
+The first SOME/IP bytes on a wire. `driver/eth` (the UDP seam: POSIX host
+backend, the NetX target backend is the H735 rung) + the generated eth comm
+thread (`partition_<eth>` in loom_gen.v): acquire the tx frames' signals from
+IOC, pack the derived layout, gate on `com.TxState` (the same cyclic/event/
+mixed machinery as CAN), stamp the E2E trailer, wrap in the `comm/someip`
+notification header, one datagram to the static peer. run() gains the eth
+Socket param (last, after the CAN channels); main.v binds the node's static
+endpoint.
+
+Verified live on loopback (examples/host_someip): five consecutive datagrams
+captured and byte-checked — exact header (service/event/len/zero Request ID/
+proto/iface/NOTIFICATION), little-endian derived payload with the ticks
+counter advancing, E2E trailer counter incrementing at the derived offsets,
+~100 ms cyclic cadence, correct static source endpoint. And the pincer: the
+same captured datagram parses + validates through blobly_net's
+`modules/someip` oracle (net#49). One codegen note: V mishandles const-sized
+mut fixed-array params, so the pack fns take a literal `[64]u8` exactly as the
+DBC codec does.
+
+Next: the automated on-wire test (@verifies REQ-NET-013 needs all three tx
+modes exercised by a harness, not a hand check), then the H735 NetX rung.

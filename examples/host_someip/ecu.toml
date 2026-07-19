@@ -18,7 +18,7 @@ bus     = "eth0"
 service = 0x0100
 version = 1
 port    = 30490
-peer    = "127.0.0.1:30490"
+peer    = "127.0.0.1:30491"
 
 [[partition]]
 name    = "app"

@@ -4,7 +4,7 @@
 # threads: thread,id,name,core,prio  (id 0 reserved = idle; prio - = no RTOS prio)
 thread,1,app_main,0,10
 # someip: service,version,port,peer
-someip,0x100,1,30490,127.0.0.1:30490
+someip,0x100,1,30490,127.0.0.1:30491
 # eth frames: frame,id,len,dir,mode,cycle_us,e2e_id
 ethframe,BenchTelem,0x8001,9,tx,cyclic,100000,0x21
 # eth layout: frame,signal,field,offset,width,type
