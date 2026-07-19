@@ -54,3 +54,41 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-TOPO-001"
+
+# --- P2: route forwarder GENERATION (docs/multi-node.md "P2 — gateway generation") ---
+
+[[req]]
+id = "REQ-TOPO-007"
+title = "Frame route forwarder is generated"
+text = "For a declared or derived FRAME route on a gateway, the generator shall emit a forwarder that carries the matched frame's PDU (id, dlc, bytes) unchanged from the source bus to the destination bus. The forwarder runs in the gateway's per-bus comm loops and reuses the raw driver frame path (recv/send); no signal decode occurs for a frame route."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
+
+[[req]]
+id = "REQ-TOPO-008"
+title = "Signal route translation is generated"
+text = "For a SIGNAL route across differing bus contracts, the generator shall emit a forwarder that decodes the named signal from the source frame per the SOURCE bus DBC and re-encodes it into the destination frame per the DESTINATION bus DBC. The re-encoded frame is transmitted at the destination frame's own cyclic cadence (rate adaptation), decoupled from the source rate."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
+
+[[req]]
+id = "REQ-TOPO-009"
+title = "A route is an allow-list (firewall)"
+text = "Only frames/signals named by a route shall cross a gateway between two buses; a frame present on the source bus but not named by any route on that gateway shall not appear on the destination bus. The declared route set is the complete cross-boundary allow-list."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
+
+[[req]]
+id = "REQ-TOPO-010"
+title = "A route forwarder preserves single-writer per channel"
+text = "A route shall not transmit directly onto a channel owned by another comm thread. The source comm thread enqueues the PDU (raw, or re-encoded) into a wait-free ring; the destination bus's own comm thread drains the ring and transmits, so each CAN channel keeps exactly one owning transmitter (the IOC single-writer discipline, applied to whole PDUs)."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
