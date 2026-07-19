@@ -675,8 +675,10 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		if nrx > 0 && ntx == 0 {
 			errs << 'eth frame "${fname}" is rx — eth reception arrives with the rx rung (P2, docs/someip.md); this rung generates tx only'
 		}
-		// the tx mode is authoritative manifest metadata with no compiled
-		// com.TxMode reference to catch a typo — validate it here
+		// the tx mode + timings are authoritative manifest metadata with no
+		// compiled com.TxMode reference to catch a typo, and the generator
+		// narrows/multiplies them (ms -> us int) — validate values AND bounds
+		// (1h cap: far above any real cadence, far below int wrap)
 		if txv := fm['tx'] {
 			txm := txv.as_map()
 			mode := str_of(txm, 'mode')
@@ -685,8 +687,13 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			}
 			if mode in ['', 'cyclic', 'mixed'] {
 				cyc := txm['cycle_ms'] or { toml.Any(i64(100)) }
-				if cyc !is i64 || cyc.i64() < 1 {
-					errs << 'eth frame "${fname}" tx mode "${if mode == '' { 'cyclic' } else { mode }}" needs a positive cycle_ms'
+				if cyc !is i64 || cyc.i64() < 1 || cyc.i64() > 3_600_000 {
+					errs << 'eth frame "${fname}" tx mode "${if mode == '' { 'cyclic' } else { mode }}" needs cycle_ms in 1..3600000'
+				}
+			}
+			if v := txm['min_delay_ms'] {
+				if v !is i64 || v.i64() < 0 || v.i64() > 3_600_000 {
+					errs << 'eth frame "${fname}" tx min_delay_ms must be 0..3600000'
 				}
 			}
 		}
