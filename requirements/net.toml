@@ -162,7 +162,16 @@ derives = "SYS-REQ-NET-002"
 [[req]]
 id = "REQ-NET-017"
 title = "Static service endpoints"
-text = "All service communication endpoints (addresses, ports, service and method/event identities) shall be fixed at configuration time; the subsystem shall not depend on runtime service discovery to communicate."
+text = "All service communication endpoints (addresses, ports, service and method/event identities) shall be fixed at configuration time and enforced on reception — messages from a source other than a configured endpoint shall be counted and dropped; the subsystem shall not depend on runtime service discovery to communicate."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-NET-002"
+
+[[req]]
+id = "REQ-NET-018"
+title = "Access-controlled state-changing remote calls"
+text = "A remote call that alters ECU state shall be subject to an access-control gate before it acts; reachability alone shall not grant the ability to change state, and a build without the gate shall expose only non-state-changing methods."
 status = "draft"
 method = "test"
 asil = "QM"

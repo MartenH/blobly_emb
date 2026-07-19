@@ -99,10 +99,17 @@ What ecucheck adds (same rule family as the io bindings, docs/io.md):
   rx request with tx response;
 - a `[[frame]]` on an eth bus is a SIGNAL frame: its `signals` list must be
   present, non-empty, and name signals whose bus endpoint is this frame's bus,
-  and a signal may ride exactly one frame. Module frames are NOT `[[frame]]`
-  entries — a ComModule block binds its endpoints to eth ids directly (the
-  `[trace]` example above), and those ids share the same 16-bit id space, so
-  ecucheck rejects a collision between the two kinds;
+  and a signal may ride exactly one frame. One direction per frame: a tx
+  frame's signals all have `to = <bus>`, an rx frame's all have
+  `from = <bus>` — a mixed frame would make the bridge a second writer on a
+  channel it doesn't own (the SPSC invariant), so it is rejected, not
+  supported. Module frames are NOT `[[frame]]` entries — a ComModule block
+  binds its endpoints to eth ids directly (the `[trace]` example above);
+- eth ids are unique across EVERYTHING that binds one — signal frames and
+  every module endpoint of every module — with exactly one modeled exception:
+  a request/response endpoint pair shares its method id, disambiguated by
+  message type. Two rx bindings on one id would route to only one of them;
+  two tx bindings would give peers one id with two payload schemas;
 - every field of an eth-frame signal must be a fixed-width scalar (`bool`,
   `u8`..`u64`, `i8`..`i64`, `f32`/`f64`) — the layout derivation has no
   meaning for strings, slices, or anything heap-shaped, and the no-alloc
@@ -146,11 +153,17 @@ config. The header is standard so the *envelope* is universally legible; the
 payload is ours, exactly as a DBC is needed to read a CAN frame body.
 
 On **rx**, the full envelope is validated against `[someip]` BEFORE anything
-reaches the router: the complete 32-bit Message ID (service high half, not
-just the frame id), protocol and interface version, a message type legal for
-the phase, and a Length consistent with the datagram. Any mismatch is counted
-and dropped (REQ-NET-015) — a configured event id under a foreign service
-never enters the shared routing/codec path.
+reaches the router: the UDP source must be the configured `peer`'s
+address:port (static endpoints are a *filter*, not just a destination —
+REQ-NET-017); the complete 32-bit Message ID (service high half, not just the
+frame id), protocol and interface version, and a message type legal for the
+phase must match; the Length must be consistent with the datagram; and the
+payload length must EQUAL the destination's contract — the derived
+signal-frame size, or the module endpoint's declared dlc (the CAN bridge's
+`rx.len == dlc` rule; a self-consistent short datagram must never let a
+fixed-layout decoder read stale buffer bytes). Any mismatch is counted and
+dropped (REQ-NET-015) — a configured event id under a foreign service never
+enters the shared routing/codec path.
 
 ## What this deliberately is NOT
 
@@ -188,9 +201,11 @@ two-repo pincer the CAN stack used.
 1. **P1 — events tx (REQ-NET-013/017).** `comm/someip` header codec + the
    eth-bus tx path: a cyclic SIGNAL frame (the BenchTelem sketch) AND the
    trace module's record stream, both as NOTIFICATION events from the comm
-   thread over the NetX UDP socket. Bench: Wireshark's someip dissector
-   decodes the stream from the H735; a scapy/blobly_net listener round-trips
-   the payload against the config. This displaces the "dump trace over FDCAN"
+   thread over the NetX UDP socket. The bench exercises ALL THREE configured
+   tx modes REQ-NET-013 names — cyclic, on-change, mixed — not just the
+   cyclic frame, or the requirement stays unverified. Bench: Wireshark's
+   someip dissector decodes the stream from the H735; a scapy/blobly_net
+   listener round-trips the payload against the config. This displaces the "dump trace over FDCAN"
    bandwidth ceiling ([[trace-as-com-module]]). REQ-NET-014 (the envelope) is
    *exercised* here but only *verified* at P3 — its text covers remote calls,
    which don't exist until then.
@@ -198,15 +213,31 @@ two-repo pincer the CAN stack used.
    from the socket through the router into signals/module endpoints by frame
    id, same tables as CAN rx. Bench: drive a signal (the lamp, in the io
    tradition) from a host-sent event.
-3. **P3 — request/response (REQ-NET-014/016).** REQUEST/RESPONSE/ERROR
+3. **P3 — request/response (REQ-NET-014/016/018).** REQUEST/RESPONSE/ERROR
    message types with request-id correlation; the shell (comm/shell) reachable
    as a SOME/IP method — the CAN shell's 0x7F0 family gets an eth sibling.
    Methods are MODULE-bound: a method id maps to a module's rx (request) and
    tx (response) endpoints, and the module owns both payloads — which is why
    one frame with one `signals` layout never has to describe two directions.
    A signal-layout method (per-direction derived layouts on one id) is out of
-   scope until a concrete need exists. State-changing methods inherit the net
-   security posture (docs/net.md, REQ-NET-012).
+   scope until a concrete need exists. Three constraints the ComModule
+   contract imposes, settled now rather than discovered in P3:
+   - **One in-flight request per method.** The module contract carries frames,
+     not correlation tokens, so the someip adapter holds the pending Request
+     ID and answers an overlapping request for the same method with the
+     standard busy/not-ready error — bounded state, no correlation table.
+     (The DoIP server's one-connection-at-a-time posture, same reasoning.)
+   - **Responses are one PDU.** `comm/shell` builds up to 520-byte responses
+     and streams them over ISO-TP on CAN; there is no ISO-TP over the eth
+     path and no segmentation. The eth shell adapter is therefore a bounded
+     sibling, not a transparent port: responses that fit one PDU pass, longer
+     ones are truncated with a marker — unless the wider-eth-PDU open
+     question is resolved first, which P3 planning must decide explicitly.
+   - **State-changing methods need a gate that exists.** REQ-NET-012 covers
+     diagnostic services; `comm/shell` has no authenticated-session mechanism,
+     so nothing is "inherited". REQ-NET-018 requires access control for
+     state-changing remote calls: until an authentication gate is built, the
+     eth shell exposes the read-only command subset only.
 4. **P4 — SD, only if interop demands it.** Static offers + subscribe handling
    for a third-party consumer. Not scheduled; exists so the config surface
    above doesn't paint it out.

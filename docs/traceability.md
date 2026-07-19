@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 168 | 85 | 5 | 78 | 0 |
+| 169 | 85 | 5 | 79 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -104,6 +104,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-015 | QM | test | uncovered | — |
 | REQ-NET-016 | QM | test | uncovered | — |
 | REQ-NET-017 | QM | test | uncovered | — |
+| REQ-NET-018 | QM | test | uncovered | — |
 | REQ-NM-001 | QM | test | verified | nm_test.v (pass) |
 | REQ-NM-002 | QM | test | verified | module_test.v (pass), nm_test.v (pass) |
 | REQ-NM-003 | QM | test | verified | module_test.v (pass), nm_can_test.v (pass), nm_test.v (pass) |
@@ -277,6 +278,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-015 | | | | | | | | | | | | | | |
 | REQ-NET-016 | | | | | | | | | | | | | | |
 | REQ-NET-017 | | | | | | | | | | | | | | |
+| REQ-NET-018 | | | | | | | | | | | | | | |
 | REQ-NM-001 | | | | | | | | | | | | ✓ | | |
 | REQ-NM-002 | | | | | | | | | | | | ✓ | | |
 | REQ-NM-003 | | | | | | | | | | | | ✓ | | |
