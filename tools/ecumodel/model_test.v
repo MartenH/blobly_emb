@@ -559,6 +559,30 @@ thread = "app_main"
 	assert e.any(it.contains('io thread owns that channel side'))
 }
 
+// a [[did]] bound to an io signal would generate a second ioc_acquire on the
+// single-reader channel — samples stolen from the app consumer
+fn test_io_did_on_io_signal_rejected() {
+	e := errs_of(io_ok + '
+[[did]]
+id     = 0xF101
+signal = "UserButton"
+')
+	assert e.any(it.contains('second reader on a single-reader channel'))
+	// a did on a NON-io signal stays legal
+	ok := errs_of(io_ok + '
+[[signal]]
+name = "Speed"
+fields = { kmh = "u16" }
+from = "app"
+to   = "app"
+
+[[did]]
+id     = 0xF102
+signal = "Speed"
+')
+	assert ok.filter(it.contains('single-reader channel')).len == 0
+}
+
 fn test_io_accessor_partition_must_match_endpoint() {
 	// the writer lives in "worker" but the signal declares "app"
 	e := errs_of('

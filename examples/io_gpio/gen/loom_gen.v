@@ -40,6 +40,7 @@ pub fn partition_app(core int, arg voidptr) {
 fn partition_io() {
 	osal.pin_to_core(0)
 	mut tick := u64(0)
+	mut sched := loom.Scheduler{} // accounting only — io busy time into the per-core load
 	// monotonic deadline pacing: the file-mirror I/O time must not accumulate as
 	// drift. Sleeping to the deadline BEFORE serving makes the first output apply
 	// land one full period after spawn — the driver-established init observably
@@ -52,8 +53,13 @@ fn partition_io() {
 		if next_us > now {
 			osal.sleep_us(next_us - now)
 		} else {
-			next_us = now // overrun: resync, skip missed ticks — no burst catch-up
+			// overrun: skip the MISSED base periods, no burst catch-up — tick
+			// advances with wall time so (tick+1)%mult gating stays aligned
+			missed := (now - next_us) / 10000
+			tick += missed
+			next_us += missed * 10000
 		}
+		loom_t0 := osal.now_us()
 		if user_button_v := io.gpio_read_checked(0) {
 			mut user_button := sig.UserButton{ pressed: user_button_v }
 			osal.ioc_publish(user_button_ch, &user_button, u8(sizeof(user_button)))
@@ -62,6 +68,8 @@ fn partition_io() {
 		if osal.ioc_acquire(led_green_ch, &led_green, u8(sizeof(led_green))) {
 			io.gpio_write(1, led_green.on) // freshness-gated: init holds until the first publish
 		}
+		loom_t1 := osal.now_us()
+		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
 		tick++
 	}
 }
@@ -87,6 +95,9 @@ pub fn run() {
 		osal.ioc_publish(user_button_ch, &boot_user_button, u8(sizeof(boot_user_button)))
 	} else {
 		io_startup_faults++ // unreadable at boot: publish NOTHING
+	}
+	if io_startup_faults > 0 {
+		eprintln('io: ${io_startup_faults} startup fault(s)')
 	}
 	t_io := spawn partition_io()
 	t_app := spawn partition_app(0, unsafe { nil })
