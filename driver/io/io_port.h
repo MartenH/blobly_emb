@@ -35,6 +35,7 @@ int  blob_io_gpio_read(int ch);             /* current level 0/1; on backend fai
 int  blob_io_gpio_read_checked(int ch, int *val); /* 0 = real value in *val, -1 = unreadable/unparsable — NO last-good fallback (boot must not fabricate a sample) */
 void blob_io_gpio_write(int ch, int level); /* drive an output point */
 unsigned int blob_io_adc_read(int ch);      /* latest converter count — one atomic load from the DMA array (never blocks, REQ-IO-018) */
+int  blob_io_adc_read_checked(int ch, unsigned int *val); /* 0 = a REAL conversion in *val, -1 = none yet — boot must not fabricate (like gpio_read_checked) */
 void blob_io_pwm_write(int ch, unsigned int permille); /* set PWM duty 0..1000 (clamped above); a compare-register update */
 void blob_io_close(void);
 

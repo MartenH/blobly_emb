@@ -21,6 +21,7 @@ fn C.blob_io_gpio_read(int) int
 fn C.blob_io_gpio_read_checked(int, &int) int
 fn C.blob_io_gpio_write(int, int)
 fn C.blob_io_adc_read(int) u32
+fn C.blob_io_adc_read_checked(int, &u32) int
 fn C.blob_io_pwm_write(int, u32)
 fn C.blob_io_close()
 
@@ -70,6 +71,17 @@ pub fn gpio_write(ch int, level bool) {
 // single atomic load from the circular DMA array, never blocks (REQ-IO-018).
 pub fn adc_read(ch int) u32 {
 	return C.blob_io_adc_read(ch)
+}
+
+// adc_read_checked returns the count only when a REAL conversion has landed —
+// none before the first DMA scan completes: the boot publish must not fabricate
+// a zero sample (the analog twin of gpio_read_checked; REQ-IO-018).
+pub fn adc_read_checked(ch int) ?u32 {
+	v := u32(0)
+	if C.blob_io_adc_read_checked(ch, &v) != 0 {
+		return none
+	}
+	return v
 }
 
 // pwm_write sets a PWM output's duty in permille (0..1000, clamped above) — a

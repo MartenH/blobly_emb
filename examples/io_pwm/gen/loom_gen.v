@@ -88,8 +88,12 @@ pub fn run() {
 	if !io.init() {
 		panic('io init failed')
 	}
-	mut boot_pot := sig.Pot{ count: u16(io.adc_read(0)) }
-	osal.ioc_publish(pot_ch, &boot_pot, u8(sizeof(boot_pot)))
+	if boot_pot_v := io.adc_read_checked(0) {
+		mut boot_pot := sig.Pot{ count: u16(boot_pot_v) }
+		osal.ioc_publish(pot_ch, &boot_pot, u8(sizeof(boot_pot)))
+	} else {
+		io_startup_faults++ // no first conversion: publish NOTHING
+	}
 	if io_startup_faults > 0 {
 		eprintln('io: startup fault(s) — count in io_startup_faults') // no interpolation: -gc none
 	}

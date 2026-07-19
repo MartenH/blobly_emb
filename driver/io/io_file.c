@@ -159,6 +159,15 @@ int blob_io_gpio_read_checked(int ch, int *val) {
 	return 0;
 }
 
+int blob_io_adc_read_checked(int ch, unsigned int *val) {
+	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured || !val) return -1;
+	unsigned long v;
+	if (pt_read_value(ch, 0xFFFFFFFFul, &v) < 0) return -1; /* no real sample yet */
+	g_pt[ch].last = (unsigned int)v;
+	*val = (unsigned int)v;
+	return 0;
+}
+
 unsigned int blob_io_adc_read(int ch) {
 	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured) return 0;
 	unsigned long v;

@@ -42,12 +42,19 @@ static struct {
 /* circular-DMA latest-value array: one u16 per ADC point, in cfg order. The DMA
  * writes it continuously; the io thread does a single aligned 16-bit load
  * (atomic on M7) — wait-free (REQ-IO-018). */
-static volatile unsigned short g_adc_dma[BLOB_IO_MAX];
-static int g_adc_n; /* number of ADC points (== ranked length of the scan) */
+/* g_adc_dma MUST live in DMA-reachable SRAM: ordinary .bss is DTCM on these
+ * boards (threadx.ld RAM @ 0x20000000), which DMA1 cannot access — the samples
+ * would stay zero or raise a transfer error. .dma_buf is placed in D2 AHB SRAM
+ * (0x30000000) by the linker, the same region the ETH descriptors use (codex
+ * emb#152). */
+__attribute__((section(".dma_buf"))) static volatile unsigned short g_adc_dma[BLOB_IO_MAX];
+static int g_adc_n;            /* number of ADC points (== ranked length of the scan) */
+static int g_adc_first_ready;  /* set once DMA has delivered the first full scan */
 
 /* pin -> ADC1 channel (STM32H7 ADC1, RM0399 tbl). Small map: bench-extend as
  * points need pads. -1 = not an ADC1-capable pad on this map. */
-static void adc_dma_start(void);
+static int adc_dma_start(void);
+static int pwm_setup(int ch);
 static int adc_channel_of(unsigned int port, unsigned int pin) {
 	if (port == 0) { /* GPIOA */
 		switch (pin) {
@@ -58,7 +65,10 @@ static int adc_channel_of(unsigned int port, unsigned int pin) {
 		if (pin == 0) return 9;
 		if (pin == 1) return 5;
 	} else if (port == 2) { /* GPIOC */
-		if (pin <= 5) return (int)(10u + pin); /* PC0..PC5 -> IN10..IN15 */
+		switch (pin) {
+		case 0: return 10; case 1: return 11; case 2: return 12; case 3: return 13;
+		case 4: return 4;  case 5: return 8; /* PC4/PC5 are INP4/INP8, NOT 14/15 */
+		}
 	}
 	return -1;
 }
@@ -177,8 +187,16 @@ int blob_io_init(void) {
 			g->PUPDR &= ~(3u << (p * 2u)); /* no pull: the board's button has external RC */
 		}
 	}
-	if (g_adc_n > 0)
-		adc_dma_start();
+	for (int i = 0; i < BLOB_IO_MAX; i++) {
+		if (g_pt[i].configured && g_pt[i].kind == IO_PWM) {
+			if (pwm_setup(i) != 0)
+				return -1; /* no board pin->timer map: fail LOUDLY, never a dead pin */
+		}
+	}
+	if (g_adc_n > 0) {
+		if (adc_dma_start() != 0)
+			return -1; /* silent/absent converter: bounded-wait timed out -> startup fault */
+	}
 	return 0;
 }
 
@@ -207,68 +225,82 @@ unsigned int blob_io_write_faults(void) {
 }
 
 
+/* A bounded spin: ~N loop iterations. Returns 1 if `cond` became true, 0 on
+ * timeout — no hardware wait may hang blob_io_init (the silent-converter path
+ * must reach the startup-fault leg, codex emb#152). */
+#define IO_WAIT(cond, iters) ({ int _ok = 0; for (volatile unsigned _w = 0; _w < (iters); _w++) { if (cond) { _ok = 1; break; } } _ok; })
+
 /* adc_dma_start: ADC1 in continuous scan over the configured channels, results
  * DMA'd circularly into g_adc_dma — free-running, no interrupts (REQ-IO-018).
- * DRY-CODED from RM0399: clock + deep-power-down exit + calibration + the
- * regular-sequence ranks + DMA1 stream config. Every register here is on the
- * P2 bench checklist. */
-static void adc_dma_start(void) {
-	/* 1. kernel + bus clocks: ADC on AHB1, DMA1 on AHB1 */
+ * DRY-CODED from RM0399, bench-pending. Returns 0 on success, -1 if a bounded
+ * hardware wait times out. */
+static int adc_dma_start(void) {
 	RCC->AHB1ENR |= RCC_AHB1ENR_ADC12EN | RCC_AHB1ENR_DMA1EN;
 	(void)RCC->AHB1ENR;
 
-	/* 2. exit deep-power-down, enable the voltage regulator, wait for it */
+	/* exit deep-power-down, enable the regulator, let the LDO settle */
 	ADC1->CR &= ~ADC_CR_DEEPPWD;
 	ADC1->CR |= ADC_CR_ADVREGEN;
-	for (volatile int w = 0; w < 10000; w++) { } /* > 10 us LDO startup */
+	for (volatile int w = 0; w < 20000; w++) { } /* > 10 us LDO startup */
 
-	/* 3. calibrate (single-ended), wait for completion */
+	/* calibrate (single-ended) — BOUNDED: a dead kernel clock must not hang */
 	ADC1->CR &= ~ADC_CR_ADCALDIF;
 	ADC1->CR |= ADC_CR_ADCAL;
-	while (ADC1->CR & ADC_CR_ADCAL) { }
+	if (!IO_WAIT(!(ADC1->CR & ADC_CR_ADCAL), 1000000u)) return -1;
 
-	/* 4. 12-bit, right-aligned; continuous + DMA circular */
-	ADC1->CFGR = ADC_CFGR_CONT | ADC_CFGR_DMNGT_0 | ADC_CFGR_DMNGT_1; /* DMNGT=11: DMA circular */
+	/* 12-bit right-aligned; continuous + DMA circular (DMNGT=11) */
+	ADC1->CFGR = ADC_CFGR_CONT | ADC_CFGR_DMNGT_0 | ADC_CFGR_DMNGT_1;
 
-	/* 5. the regular sequence: g_adc_n ranks, in cfg order (the slot order the
-	 * DMA array mirrors). SQR1[3:0] = length-1; ranks pack 6/register. */
-	unsigned int sqr[4] = { 0, 0, 0, 0 };
-	sqr[0] = (unsigned int)(g_adc_n - 1); /* L field */
-	int rank = 1;
+	/* the regular sequence: g_adc_n ranks, in cfg/slot order. The H7 SQR layout
+	 * is NOT uniform: SQR1 holds L + SQ1..SQ4 (bits 6,12,18,24); SQR2 SQ5..SQ9,
+	 * SQR3 SQ10..SQ14, SQR4 SQ15..SQ16 — five/five/two, each at bits 0,6,12,...
+	 * (codex emb#152: the flat 6-per-reg math truncated rank 10+). */
+	unsigned int sqr[4] = { (unsigned int)(g_adc_n - 1), 0, 0, 0 };
 	for (int i = 0; i < BLOB_IO_MAX; i++) {
 		if (!g_pt[i].configured || g_pt[i].kind != IO_ADC) continue;
-		int slot = g_pt[i].adc_slot;      /* rank position == DMA slot */
-		int r = slot + 1;                 /* SQ1 is rank 1 */
-		int reg = r / 6, pos = (r % 6) * 6 + 5 - 5; /* 5-bit SQx fields, 6 per reg after SQR1 offset */
-		/* SQR1: SQ1..SQ4 at bits 6,12,18,24; SQR2..: 6 per reg at 0,6,12,... */
-		if (r <= 4) { sqr[0] |= (g_pt[i].adc_ch & 0x1Fu) << (6 + (r - 1) * 6); }
-		else { int rr = r - 5; reg = 1 + rr / 6; pos = (rr % 6) * 6; sqr[reg] |= (g_pt[i].adc_ch & 0x1Fu) << pos; }
-		/* long sample time for the pot's source impedance (SMPR: 3 bits/ch) */
-		if (g_pt[i].adc_ch < 10) ADC1->SMPR1 |= (7u << (g_pt[i].adc_ch * 3u));
+		unsigned int r = (unsigned int)g_pt[i].adc_slot + 1u; /* rank 1..16 */
+		unsigned int ch5 = g_pt[i].adc_ch & 0x1Fu;
+		if (r <= 4u) {
+			sqr[0] |= ch5 << (6u + (r - 1u) * 6u);       /* SQR1: SQ1..SQ4 at 6,12,18,24 */
+		} else {
+			unsigned int rr = r - 5u;                    /* 0-based across SQR2..SQR4 */
+			unsigned int reg = 1u + rr / 5u;             /* five fields per SQR2/3/4 */
+			unsigned int pos = (rr % 5u) * 6u;           /* bits 0,6,12,18,24 */
+			if (reg <= 3u) sqr[reg] |= ch5 << pos;
+		}
+		if (g_pt[i].adc_ch < 10u) ADC1->SMPR1 |= (7u << (g_pt[i].adc_ch * 3u));
 		else ADC1->SMPR2 |= (7u << ((g_pt[i].adc_ch - 10u) * 3u));
-		(void)rank; rank++;
 	}
 	ADC1->SQR1 = sqr[0];
 	ADC1->SQR2 = sqr[1];
 	ADC1->SQR3 = sqr[2];
 	ADC1->SQR4 = sqr[3];
 
-	/* 6. DMA1 Stream0: peripheral ADC1->DR -> g_adc_dma, 16-bit, circular, incr mem */
+	/* DMA1 Stream0: ADC1->DR -> g_adc_dma, 16-bit, circular, mem-increment */
 	DMA1_Stream0->CR = 0;
-	while (DMA1_Stream0->CR & DMA_SxCR_EN) { }
+	if (!IO_WAIT(!(DMA1_Stream0->CR & DMA_SxCR_EN), 100000u)) return -1;
 	DMA1_Stream0->PAR = (uint32_t)(&ADC1->DR);
 	DMA1_Stream0->M0AR = (uint32_t)g_adc_dma;
 	DMA1_Stream0->NDTR = (uint32_t)g_adc_n;
 	DMAMUX1_Channel0->CCR = 9u; /* request 9 = adc1 (RM0399 DMAMUX table) */
 	DMA1_Stream0->CR = DMA_SxCR_MINC | DMA_SxCR_CIRC |
-	                   (1u << DMA_SxCR_MSIZE_Pos) | (1u << DMA_SxCR_PSIZE_Pos) | /* 16-bit both */
+	                   (1u << DMA_SxCR_MSIZE_Pos) | (1u << DMA_SxCR_PSIZE_Pos) |
 	                   DMA_SxCR_EN;
 
-	/* 7. enable + start the ADC */
+	/* enable + start — BOUNDED ADRDY wait */
 	ADC1->ISR = ADC_ISR_ADRDY;
 	ADC1->CR |= ADC_CR_ADEN;
-	while (!(ADC1->ISR & ADC_ISR_ADRDY)) { }
+	if (!IO_WAIT(ADC1->ISR & ADC_ISR_ADRDY, 1000000u)) return -1;
 	ADC1->CR |= ADC_CR_ADSTART;
+
+	/* confirm the FIRST full scan actually landed before init returns, so the
+	 * boot publish reads a real count, not the zero-initialised buffer (codex
+	 * emb#152, docs/io.md startup). NDTR reloads to g_adc_n after each scan; it
+	 * having decremented below g_adc_n proves DMA is moving. */
+	g_adc_first_ready = IO_WAIT(DMA1_Stream0->NDTR != (uint32_t)g_adc_n
+	                            || (DMA1_Stream0->CR & DMA_SxCR_EN) == 0, 2000000u)
+	                    && (DMA1_Stream0->CR & DMA_SxCR_EN);
+	return g_adc_first_ready ? 0 : -1;
 }
 
 unsigned int blob_io_adc_read(int ch) {
@@ -278,19 +310,78 @@ unsigned int blob_io_adc_read(int ch) {
 	return (unsigned int)g_adc_dma[g_pt[ch].adc_slot];
 }
 
+int blob_io_adc_read_checked(int ch, unsigned int *val) {
+	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured || g_pt[ch].adc_slot < 0 || !val)
+		return -1;
+	if (!g_adc_first_ready) return -1; /* no real conversion yet: boot must not fabricate */
+	*val = (unsigned int)g_adc_dma[g_pt[ch].adc_slot];
+	return 0;
+}
+
+/* PWM: the pin -> (timer, channel, AF) matrix is a BOARD property (docs/io.md);
+ * board_io_pwm_map fills it, weak-defaulting to "unsupported" so a pwm point on
+ * a board without a map fails cfg LOUDLY rather than emitting no waveform (codex
+ * emb#152). g_pwm_tim[ch] caches the resolved timer base for pwm_write. */
+__attribute__((weak)) int board_io_pwm_map(int port, int pin, void **tim_base, int *chan, int *af) {
+	(void)port; (void)pin; (void)tim_base; (void)chan; (void)af;
+	return -1; /* no PWM map on this board yet */
+}
+static TIM_TypeDef *g_pwm_tim[BLOB_IO_MAX];
+static int g_pwm_ch[BLOB_IO_MAX];
+
+/* apply the init duty + program the timer for a pwm point, called from init. */
+static int pwm_setup(int ch) {
+	void *base = 0; int chan = 0, af = 0;
+	if (board_io_pwm_map((int)g_pt[ch].port, (int)g_pt[ch].pin, &base, &chan, &af) != 0 || !base)
+		return -1;
+	TIM_TypeDef *t = (TIM_TypeDef *)base;
+	g_pwm_tim[ch] = t;
+	g_pwm_ch[ch] = chan;
+	/* AFR on the pad for the mapped timer AF number */
+	GPIO_TypeDef *g = gpio(g_pt[ch].port);
+	unsigned int p = g_pt[ch].pin;
+	if (p < 8u) g->AFR[0] = (g->AFR[0] & ~(0xFu << (p * 4u))) | ((unsigned)af << (p * 4u));
+	else g->AFR[1] = (g->AFR[1] & ~(0xFu << ((p - 8u) * 4u))) | ((unsigned)af << ((p - 8u) * 4u));
+	/* carrier: ARR = 1000 (a permille maps 1:1 to CCR), PSC from the timer clock.
+	 * The kernel timer clock is board-known; a bench pass sets PSC for freq_hz.
+	 * DRY: ARR=999 gives 1000 steps; PSC left 0 (bench sets it for the real Hz). */
+	t->PSC = 0;
+	t->ARR = 999u;
+	volatile uint32_t *ccr = &t->CCR1 + (chan - 1);
+	*ccr = (g_pt[ch].init * 1000u) / 1000u; /* init permille -> compare */
+	/* PWM mode 1 on the channel (CCMR), enable output (CCER), main output (BDTR), CR1 */
+	if (chan == 1) t->CCMR1 = (t->CCMR1 & ~0xFFu) | (6u << 4) | (1u << 3); /* OC1M=110, preload */
+	else if (chan == 2) t->CCMR1 = (t->CCMR1 & ~0xFF00u) | (6u << 12) | (1u << 11);
+	else if (chan == 3) t->CCMR2 = (t->CCMR2 & ~0xFFu) | (6u << 4) | (1u << 3);
+	else t->CCMR2 = (t->CCMR2 & ~0xFF00u) | (6u << 12) | (1u << 11);
+	t->CCER |= (1u << ((chan - 1) * 4));
+	t->BDTR |= TIM_BDTR_MOE; /* advanced timers need MOE; harmless on basic ones */
+	t->CR1 |= TIM_CR1_ARPE | TIM_CR1_CEN;
+	t->EGR = TIM_EGR_UG; /* latch PSC/ARR */
+	return 0;
+}
+
 void blob_io_pwm_write(int ch, unsigned int permille) {
-	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured || g_pt[ch].kind != IO_PWM)
+	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured || g_pt[ch].kind != IO_PWM
+	    || !g_pwm_tim[ch])
 		return;
 	if (permille > 1000u) permille = 1000u;
-	/* DRY: set the bound timer channel's compare = permille * (ARR+1) / 1000.
-	 * The (timer, channel, ARR) come from the boards pin-timer map at bench
-	 * time; until then this is the shape, not a live register write. */
-	(void)permille;
+	TIM_TypeDef *t = g_pwm_tim[ch];
+	volatile uint32_t *ccr = &t->CCR1 + (g_pwm_ch[ch] - 1);
+	*ccr = permille; /* ARR=999 so permille maps 1:1 to the compare */
 }
 
 void blob_io_close(void) {
-	/* forget the table only — pins keep their configured mode and level: yanking
-	 * an actuator back to analog on close would be a glitch, not a cleanup. */
-	for (int i = 0; i < BLOB_IO_MAX; i++)
+	/* stop the free-running ADC/DMA and reset the scan bookkeeping so a re-declare
+	 * assigns fresh slots (codex emb#152: g_adc_n leaked, ghost ranks accrued).
+	 * Pins keep their configured mode/level — yanking an actuator back to analog
+	 * on close would be a glitch, not a cleanup. */
+	DMA1_Stream0->CR &= ~DMA_SxCR_EN;
+	ADC1->CR |= ADC_CR_ADSTP;
+	g_adc_n = 0;
+	g_adc_first_ready = 0;
+	for (int i = 0; i < BLOB_IO_MAX; i++) {
 		g_pt[i].configured = 0;
+		g_pwm_tim[i] = 0;
+	}
 }
