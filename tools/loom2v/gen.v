@@ -3201,8 +3201,12 @@ fn main() {
 	// trace_host: the single-core host module runner (one partition, no COM bridge) — ONE loop
 	// owns the schedule and the bus, serving comm/trace's TraceModule via the endpoint bindings.
 	// eth signals create no CAN bridge, so only CAN externals conflict with
-	// the trace-host runner owning the bus
+	// the trace-host runner owning the bus — and the trace bus itself must be
+	// CAN (an eth trace binding is validator-rejected until the UDP rung, but
+	// this predicate must never route it into the can.Channel runner)
+	trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
 	trace_host := m.trace.on && !m.target.on && m.part.by_part.keys().len == 1
+		&& (m.bus_kind[trace_bus] or { 'can' }) != 'eth'
 		&& !(m.has_can_ext || m.isotp_conns.len > 0 || m.routes.len > 0)
 	// io emits the platform io thread for the plain host run() (P1) and the ThreadX
 	// target (the bench phase). The bare-metal superloop / trace-host runner still

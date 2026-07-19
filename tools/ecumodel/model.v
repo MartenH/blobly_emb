@@ -685,10 +685,12 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			if 'mode' in txm && mode !in ['cyclic', 'event', 'mixed', 'triggered'] {
 				errs << 'eth frame "${fname}" tx mode "${mode}" is invalid (cyclic | event | mixed | triggered — comm.com TxMode)'
 			}
-			if mode in ['', 'cyclic', 'mixed'] {
+			// bound cycle_ms whenever PRESENT (the generator always narrows +
+			// emits it), and require it valid for the modes that consume it
+			if mode in ['', 'cyclic', 'mixed'] || 'cycle_ms' in txm {
 				cyc := txm['cycle_ms'] or { toml.Any(i64(100)) }
 				if cyc !is i64 || cyc.i64() < 1 || cyc.i64() > 3_600_000 {
-					errs << 'eth frame "${fname}" tx mode "${if mode == '' { 'cyclic' } else { mode }}" needs cycle_ms in 1..3600000'
+					errs << 'eth frame "${fname}" tx cycle_ms must be 1..3600000'
 				}
 			}
 			if v := txm['min_delay_ms'] {
@@ -814,6 +816,12 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 				errs << '[telemetry] on eth bus "${eth}" with a [target] image — the target telemetry emitter is CAN-only until the NetX rung; keep target telemetry on a CAN bus'
 				continue
 			}
+		}
+		// trace-on-eth: the id bindings below stay validated (the P1 surface),
+		// but no runner serves an eth trace module yet — reject until the UDP
+		// rung, or the config would silently select a CAN trace path
+		if blk == 'trace' {
+			errs << '[trace] is bound to eth bus "${eth}" — the eth trace egress arrives with the UDP rung (docs/someip.md); keep trace on a CAN bus for now'
 		}
 		mut bound := 0
 		for kk in mod_id_keys[blk] {
