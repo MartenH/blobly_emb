@@ -141,7 +141,7 @@ The 16-byte header, big-endian on the wire as the standard requires:
 |---|---|---|
 | Message ID | 32 | `service` (high 16) + frame `id` (low 16) |
 | Length | 32 | 8 + payload length (bytes after this field) |
-| Request ID | 32 | notifications: 0x0000_0000 — strict stacks expect zero, and interop is the point of the header. (A per-frame session counter for loss detection was considered and dropped as nonconforming; loss detection, when a frame wants it, is the existing E2E protection applied to the eth payload — sequence counter + CRC, already built.) Requests: echoed into the response |
+| Request ID | 32 | notifications: 0x0000_0000 — strict stacks expect zero, and interop is the point of the header. (A per-frame session counter for loss detection was considered and dropped as nonconforming. Loss detection, when a frame opts in, is the existing `comm/e2e` protection as an explicit TRAILER appended after the derived layout — counter + CRC bytes of their own, counted in the 64-byte bound — never overlaid on signal bytes, which is what `protect` would do if pointed at the bare layout.) Requests: echoed into the response |
 | Protocol version | 8 | 0x01 |
 | Interface version | 8 | the configured `[someip] version`, explicitly managed — bumped in the same reviewed diff that breaks the layout. (A truncated config hash was considered and rejected: 1/256 silent collisions, and unrelated table edits would churn the version. Strict build-identity checking is host-side — the oracle compares the layout table the trace manifest carries.) |
 | Message type | 8 | P1: NOTIFICATION (0x02). P3 adds REQUEST (0x00) / RESPONSE (0x80) / ERROR (0x81) |
@@ -164,11 +164,15 @@ reaches the router: the UDP source must be the configured `peer`'s
 address:port (static endpoints are a *filter*, not just a destination —
 REQ-NET-017); the complete 32-bit Message ID (service high half, not just the
 frame id), protocol and interface version, and a message type legal for the
-phase must match; the Length must be consistent with the datagram; and the
-payload length must EQUAL the destination's contract — the derived
-signal-frame size, or the module endpoint's declared dlc (the CAN bridge's
-`rx.len == dlc` rule; a self-consistent short datagram must never let a
-fixed-layout decoder read stale buffer bytes). Any mismatch is counted and
+phase must match; a notification's Request ID and Return Code must be ZERO
+(the wire contract fixes them — a nonzero one is malformed, not tolerated);
+the Length must be consistent with the datagram; and the payload length must
+satisfy the destination's contract — EQUAL to the derived signal-frame size
+or a module endpoint's fixed dlc (the CAN bridge's `rx.len == dlc` rule; a
+self-consistent short datagram must never let a fixed-layout decoder read
+stale buffer bytes), while a flexible endpoint (`dlc: 0`, the existing
+`comm/com/endpoint.v` semantics the shell's request endpoint uses) accepts
+1..bound. Any mismatch is counted and
 dropped (REQ-NET-015) — a configured event id under a foreign service never
 enters the shared routing/codec path.
 
@@ -241,7 +245,13 @@ two-repo pincer the CAN stack used.
      (`produce` may simply never answer a request the module drops), so the
      adapter releases the slot on a configured response deadline and answers
      the pending Request ID with an ERROR — a wedged module costs one timeout,
-     not a permanently-busy method.
+     not a permanently-busy method. And a released slot cannot mis-correlate:
+     after a timeout the method enters a DRAIN state — the module's next
+     response for it is discarded (it can only be the late answer to the
+     timed-out request, since one request was in flight), and the method
+     reopens on that discard or on a second deadline, whichever comes first.
+     Bounded two-phase, no correlation token needed, no stale response ever
+     attributed to a later Request ID.
    - **Responses are one PDU.** `comm/shell` builds up to 520-byte responses
      and streams them over ISO-TP on CAN; there is no ISO-TP over the eth
      path and no segmentation. The eth shell adapter is therefore a bounded
@@ -252,7 +262,13 @@ two-repo pincer the CAN stack used.
      diagnostic services; `comm/shell` has no authenticated-session mechanism,
      so nothing is "inherited". REQ-NET-018 requires access control for
      state-changing remote calls: until an authentication gate is built, the
-     eth shell exposes the read-only command subset only.
+     eth shell exposes the read-only command subset only. "Read-only subset"
+     must be ENFORCEABLE, which today it is not: shell commands carry no
+     access classification, and the generated `nm` command mixes inspection
+     with the state-changing `req|rel` in one registration. P3 therefore adds
+     an access class (read | mutate) to the shell command contract — validated
+     at build, mutate barred without the gate — and splits `nm` accordingly.
+     No classification, no eth shell exposure.
 4. **P4 — SD, only if interop demands it.** Static offers + subscribe handling
    for a third-party consumer. Not scheduled; exists so the config surface
    above doesn't paint it out.
