@@ -926,6 +926,8 @@ fn emit_partition_io(m Model) []string {
 	glue << '\t\tnow := osal.now_us()'
 	glue << '\t\tif next_us > now {'
 	glue << '\t\t\tosal.sleep_us(next_us - now)'
+	glue << '\t\t} else {'
+	glue << '\t\t\tnext_us = now // overrun: resync, skip missed ticks — no burst catch-up'
 	glue << '\t\t}'
 	for pt in m.io_points {
 		si := m.sig_of[pt.name] or { continue }
