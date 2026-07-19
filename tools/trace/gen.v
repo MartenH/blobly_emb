@@ -130,14 +130,22 @@ fn main() {
 			m := c.as_map()
 			ctx := s(m, 'context')
 			cmd := s(m, 'command')
+			// method defaults to 'analysis'; an on-target check declares method='test'.
+			mut meth := s(m, 'method')
+			if meth == '' {
+				meth = 'analysis'
+			}
 			mut result := 'pending'
 			if cmd != '' {
-				result = if os.execute(cmd).exit_code == 0 { 'pass' } else { 'fail' }
+				// exit 0 = pass, 2 = SKIP (e.g. an on-target test with no board attached ->
+				// "not run", never a false regression), anything else = fail.
+				ec := os.execute(cmd).exit_code
+				result = if ec == 0 { 'pass' } else if ec == 2 { 'pending' } else { 'fail' }
 			}
 			ctxset[ctx] = true
 			for v in arr(m['verifies'] or { toml.Any([]toml.Any{}) }) {
 				vmap[v.string()] << Verif{
-					method:  'analysis'
+					method:  meth
 					source:  s(m, 'id')
 					context: ctx
 					result:  result

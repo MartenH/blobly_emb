@@ -30,3 +30,21 @@ candump can0                # PotState 0x311 @ 100 ms, CpuLoad 0x7E0 @ 1 s
 
 The two paths are independent: the PWM proves itself on the scope with nothing
 wired; one jumper on PA3 proves the whole ADC + DMA + publish chain.
+
+## On-target regression test
+
+`bench_test.sh` is an **automated** version of the checks above — no scope, no
+jumper, no eyes on the board. With the H755 attached it flashes this image and
+reads TIM1 / ADC1 / DMA1 and the io-thread liveness counter over SWD, asserting
+11 things: the PWM carrier + MOE + duty→CCR chain (REQ-IO-021), the ADC scan +
+DMA producing samples (REQ-IO-018), and the io serve loop still advancing — the
+regression guard for the pacing-sleep wedge (REQ-IO-024).
+
+```sh
+./bench_test.sh --flash      # flash + assert; exit 0 pass / 1 fail / 2 no-board
+make -C ../.. hwtest         # the whole on-target test group (all bench_test.sh)
+BLOB_HWTEST=1 make -C ../.. trace   # record the pass into the h755/target column
+```
+
+It is the first member of the on-target test group; a normal `make trace` (or CI
+with no board) skips it, so it never fakes a pass or a fail.
