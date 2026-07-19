@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 159 | 88 | 5 | 66 | 0 |
+| 161 | 88 | 5 | 68 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -79,6 +79,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-IO-007 | QM | test | uncovered | — |
 | REQ-IO-008 | QM | review | uncovered | — |
 | REQ-IO-009 | QM | test | verified | e2e_test.v (pass) |
+| REQ-IO-015 | QM | test | uncovered | — |
+| REQ-IO-016 | QM | test | uncovered | — |
 | REQ-IO-010 | QM | test | uncovered | — |
 | REQ-IO-011 | QM | test | uncovered | — |
 | REQ-IO-012 | QM | test | verified | e2e_test.v (pass) |
@@ -243,6 +245,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-IO-007 | | | | | | | | | | | | |
 | REQ-IO-008 | | | | | | | | | | | | |
 | REQ-IO-009 | | | | | | | | | | ✓ | | |
+| REQ-IO-015 | | | | | | | | | | | | |
+| REQ-IO-016 | | | | | | | | | | | | |
 | REQ-IO-010 | | | | | | | | | | | | |
 | REQ-IO-011 | | | | | | | | | | | | |
 | REQ-IO-012 | | | | | | | | | | ✓ | | |
