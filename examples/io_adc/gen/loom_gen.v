@@ -84,7 +84,7 @@ pub fn run() {
 	if !io.cfg(0, 'LedHi', 'PB0', true, 0, 0, 0, u32(0)) {
 		panic('io cfg failed: LedHi')
 	}
-	if !io.cfg(1, 'PotVolt', 'PA3', false, 0, 0, 1, u32(0)) {
+	if !io.cfg(1, 'PotVolt', 'PA3', false, 0, 0, 1, u32(65535)) {
 		panic('io cfg failed: PotVolt')
 	}
 	if !io.init() {

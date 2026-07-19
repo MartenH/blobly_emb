@@ -246,6 +246,9 @@ unsigned int blob_io_write_faults(void) {
  * DRY-CODED from RM0399, bench-pending. Returns 0 on success, -1 if a bounded
  * hardware wait times out. */
 static int adc_dma_start(void) {
+	DMA1->LIFCR = DMA_LIFCR_CTCIF0; /* drop a stale scan-complete flag up front so a
+	                                 * degraded exit below can't leave first-ready fakeable */
+	g_adc_first_ready = 0;
 	/* ADC KERNEL clock: the reset mux is PLL2_P, which board_clock_init never
 	 * enables (only PLL1) — select per_ck (ADCSEL=0b10 in D3CCIPR), sourced from
 	 * the always-on HSI, so calibration has a clock without depending on a PLL2
@@ -258,8 +261,8 @@ static int adc_dma_start(void) {
 	/* ADC common prescaler: per_ck is the 64 MHz HSI; the H7 ADC fADC ceiling is
 	 * ~50 MHz (boost banding). Divide by 2 -> 32 MHz, in range, and set BOOST for
 	 * the 25..50 MHz band (codex emb#152). */
-	ADC12_COMMON->CCR = (ADC12_COMMON->CCR & ~ADC_CCR_PRESC) | (1u << ADC_CCR_PRESC_Pos); /* /2 */
-	ADC1->CR |= ADC_CR_BOOST_1; /* BOOST=0b10: 25..50 MHz band */
+	ADC12_COMMON->CCR = (ADC12_COMMON->CCR & ~ADC_CCR_PRESC) | (2u << ADC_CCR_PRESC_Pos); /* /4 -> 16 MHz */
+	ADC1->CR = (ADC1->CR & ~ADC_CR_BOOST) | ADC_CR_BOOST_1; /* BOOST=0b10: 12.5..25 MHz band */
 
 	/* exit deep-power-down, enable the regulator, let the LDO settle */
 	ADC1->CR &= ~ADC_CR_DEEPPWD;
@@ -366,6 +369,18 @@ static unsigned int g_pwm_arr[BLOB_IO_MAX]; /* period-1: duty = permille*(arr+1)
 
 /* enable the APBx timer clock gate for a timer base (codex emb#152: board clock
  * init leaves TIMx gates off). RM0399: APB2 = TIM1/8/15/16/17; APB1 = the rest. */
+/* only the advanced (TIM1/8) and TIM15/16/17 timers implement BDTR/MOE; the
+ * general-purpose TIM2-5/12-14 do not — writing MOE there is a stray store. */
+static int tim_has_bdtr(TIM_TypeDef *t) {
+	return t == TIM1 || t == TIM8 || t == TIM15 || t == TIM16 || t == TIM17;
+}
+/* timers already programmed by a pwm point, with their period-1, so a second
+ * point on the SAME timer with a DIFFERENT carrier is rejected (it would silently
+ * retune the first point — codex emb#152). */
+static TIM_TypeDef *g_tim_seen[BLOB_IO_MAX];
+static unsigned int g_tim_arr[BLOB_IO_MAX];
+static int g_tim_seen_n;
+
 static int tim_clock_enable(TIM_TypeDef *t) {
 	if (t == TIM1) RCC->APB2ENR |= RCC_APB2ENR_TIM1EN;
 	else if (t == TIM8) RCC->APB2ENR |= RCC_APB2ENR_TIM8EN;
@@ -407,8 +422,20 @@ static int pwm_setup(int ch) {
 	while (total / (psc + 1u) > 65536u) psc++;
 	unsigned int arr = total / (psc + 1u) - 1u;
 	g_pwm_arr[ch] = arr;
+	/* a shared timer must agree on the period, or the second point would retune
+	 * the first (codex emb#152). Same arr -> reuse; different -> reject. */
+	for (int k = 0; k < g_tim_seen_n; k++) {
+		if (g_tim_seen[k] == t) {
+			if (g_tim_arr[k] != arr) return -1; /* conflicting carrier on one timer */
+			goto period_set; /* same carrier: don't reprogram PSC/ARR */
+		}
+	}
+	g_tim_seen[g_tim_seen_n] = t;
+	g_tim_arr[g_tim_seen_n] = arr;
+	g_tim_seen_n++;
 	t->PSC = psc;
 	t->ARR = arr;
+period_set:;
 	volatile uint32_t *ccr = &t->CCR1 + (chan - 1);
 	*ccr = (g_pt[ch].init * (arr + 1u)) / 1000u; /* init permille -> compare */
 	if (chan == 1) t->CCMR1 = (t->CCMR1 & ~0xFFu) | (6u << 4) | (1u << 3); /* OC1M=110 PWM1, preload */
@@ -416,7 +443,7 @@ static int pwm_setup(int ch) {
 	else if (chan == 3) t->CCMR2 = (t->CCMR2 & ~0xFFu) | (6u << 4) | (1u << 3);
 	else t->CCMR2 = (t->CCMR2 & ~0xFF00u) | (6u << 12) | (1u << 11);
 	t->CCER |= (1u << ((chan - 1) * 4));
-	t->BDTR |= TIM_BDTR_MOE; /* advanced timers need MOE; harmless on basic ones */
+	if (tim_has_bdtr(t)) t->BDTR |= TIM_BDTR_MOE; /* only where BDTR exists */
 	t->EGR = TIM_EGR_UG;     /* latch PSC/ARR + the init CCR before the pad goes live */
 	t->CR1 |= TIM_CR1_ARPE | TIM_CR1_CEN;
 
@@ -453,8 +480,10 @@ void blob_io_close(void) {
 		ADC1->CR |= ADC_CR_ADDIS; /* H7 calibration needs ADEN=0 on the next init */
 		(void)IO_WAIT(!(ADC1->CR & ADC_CR_ADEN), 100000u);
 	}
+	DMA1->LIFCR = DMA_LIFCR_CTCIF0; /* drop the scan-complete flag on close too */
 	g_adc_n = 0;
 	g_adc_first_ready = 0;
+	g_tim_seen_n = 0;
 	for (int i = 0; i < BLOB_IO_MAX; i++) {
 		g_pt[i].configured = 0;
 		g_pwm_tim[i] = 0;

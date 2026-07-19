@@ -137,10 +137,10 @@ SECTIONS
     __stack_end__ = ALIGN(8);
   } > RAM
 
+  __RAM_segment_used_end__ = .; /* ThreadX first_unused_memory — captured while . is in RAM/DTCM */
+
 .dma_buf (NOLOAD) :
   {
     *(.dma_buf .dma_buf.*)   /* ADC/DMA latest-value buffers: DMA cannot reach DTCM */
   } > D2SRAM
-
-  __RAM_segment_used_end__ = .;
 }
