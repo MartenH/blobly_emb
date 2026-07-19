@@ -745,6 +745,14 @@ name    = "BenchTelem"
 bus     = "eth0"
 id      = 0x8001
 signals = ["CpuLoad"]
+
+[[fb]]
+name   = "CpuWriter"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  writes    = ["CpuLoad"]
 '
 
 fn test_someip_good_config_has_no_errors() {
@@ -942,6 +950,14 @@ bus     = "eth0"
 id      = 0x8001
 signals = ["Speed"]
 e2e     = { data_id = 1, counter_pos = 6, crc_pos = 7 }
+
+[[fb]]
+name   = "SpeedWriter"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  writes    = ["Speed"]
 ' +
 		app)
 	assert e == []

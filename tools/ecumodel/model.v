@@ -617,6 +617,10 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 						errs << 'eth tx signal "${sname}" is written from partition "${thread_part[wthreads[0]] or {
 							'?'
 						}}" but declares endpoint "${other}" — the writer must live in the declared partition'
+					} else if wthreads.len == 0 && other != '' {
+						// the io output rule: zero writers behind a valid-looking
+						// config is a channel that never publishes — fail loud
+						errs << 'eth tx signal "${sname}" has no writing handler — the frame would only ever carry init values (io output rule: exactly one producing context)'
 					}
 					if (reader_threads[sname] or {
 						map[string]bool{}
@@ -682,8 +686,8 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		if txv := fm['tx'] {
 			txm := txv.as_map()
 			mode := str_of(txm, 'mode')
-			if 'mode' in txm && mode !in ['cyclic', 'event', 'mixed', 'triggered'] {
-				errs << 'eth frame "${fname}" tx mode "${mode}" is invalid (cyclic | event | mixed | triggered — comm.com TxMode)'
+			if 'mode' in txm && mode !in ['cyclic', 'event', 'mixed'] {
+				errs << 'eth frame "${fname}" tx mode "${mode}" is invalid (cyclic | event | mixed — the P1 modes; triggered has no generated trigger path)'
 			}
 			// bound cycle_ms whenever PRESENT (the generator always narrows +
 			// emits it), and require it valid for the modes that consume it
