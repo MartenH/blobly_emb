@@ -1,17 +1,16 @@
-/* h755_io target glue: the cross-thread signal IOC pool (boards/common/ioc.h) + the
- * comm-thread board glue.
+/* h735_io_lamp target glue: the cross-thread signal IOC pool (boards/common/ioc.h) +
+ * the comm-thread board glue — the examples/h755_io io_glue.c shape on the H735.
  *
  * GENERIC target glue, config-independent (the comm_glue.c pattern): a small indexed
- * pool the generator assigns cells out of, so io signals cross between the platform io
- * thread and the FB thread without a lock (the blobly IOC invariant). V can't express
- * the atomics/volatile, so it calls these scalar wrappers by cell index; loom2v wires
- * which index carries which signal.
+ * pool the generator assigns cells out of — here the BtnPressed rx cell (comm thread
+ * decode -> RemoteLamp FB) and the LedRemote output cell (FB -> platform io thread).
+ * V can't express the atomics/volatile, so it calls these scalar wrappers by cell
+ * index; loom2v wires which index carries which signal.
  *
- * The BtnPressed bus signal makes loom2v emit the bus-owning comm thread, so this file
- * also carries its board glue (the examples/h755_threadx comm_glue.c ISR/semaphore/load
- * scratch, minus shell/trace/duo — none are configured here): the FDCAN1 Rx-FIFO0 ISR
- * posts a semaphore the comm thread blocks on, and the FB thread publishes its load
- * through volatile scalars for the CpuLoad producer.
+ * The comm-thread half: the FDCAN1 Rx-FIFO0 ISR posts a semaphore the comm thread
+ * blocks on (no decode off ISR context — the can_port.h pattern), and the FB thread
+ * publishes its load through volatile scalars (telemetry is disabled in this config,
+ * but the generated run() publishes unconditionally).
  */
 #include "tx_api.h"
 #include <stm32h7xx.h>
@@ -89,8 +88,8 @@ static TX_SEMAPHORE g_comm_sem;
 
 /* FDCAN1 Rx-FIFO0 new-message ISR (vectors.S references it unconditionally — never
  * weak-aliased, see the note there). Deliberately tiny: clear the flag, wake the comm
- * thread — no decode, no recv off ISR context (the can_port.h pattern). No exec-change
- * trace brackets: this image builds without TX_ENABLE_EXECUTION_CHANGE_NOTIFY. */
+ * thread. No exec-change trace brackets: this image builds without
+ * TX_ENABLE_EXECUTION_CHANGE_NOTIFY. */
 void FDCAN1_IT0_IRQHandler(void) {
     FDCAN1->IR = FDCAN_IR_RF0N;    /* acknowledge the new-message interrupt (write-1-clear) */
     tx_semaphore_put(&g_comm_sem); /* wake comm; rescheduling is deferred to PendSV on exit */

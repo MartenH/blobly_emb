@@ -495,6 +495,62 @@ to   = "app"
 	assert e.any(it.contains('not a multiple of the fastest'))
 }
 
+// pin exclusivity is keyed on the PARSED pad, and non-canonical spellings are
+// rejected outright — "PB00" may not slip past raw-string uniqueness as a second
+// spelling of "PB0" (the driver parses port letter + int)
+fn test_io_pin_canonical_spelling_enforced() {
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "A"
+pin       = "PB0"
+period_ms = 10
+
+[[io.gpio]]
+name      = "B"
+pin       = "PB00"
+period_ms = 10
+
+[[io.gpio]]
+name      = "C"
+pin       = "PB007"
+period_ms = 10
+
+[[io.gpio]]
+name      = "D"
+pin       = "PB16"
+period_ms = 10
+
+[[signal]]
+name = "A"
+fields = { on = "bool" }
+from = "io"
+to   = "app"
+
+[[signal]]
+name = "B"
+fields = { on = "bool" }
+from = "io"
+to   = "app"
+
+[[signal]]
+name = "C"
+fields = { on = "bool" }
+from = "io"
+to   = "app"
+
+[[signal]]
+name = "D"
+fields = { on = "bool" }
+from = "io"
+to   = "app"
+' + app)
+	assert e.any(it.contains('"B"') && it.contains('not a canonical pad name')) // leading zero
+	assert e.any(it.contains('"C"') && it.contains('not a canonical pad name')) // >2 digits
+	assert e.any(it.contains('"D"') && it.contains('not a canonical pad name')) // pin > 15
+	assert !e.any(it.contains('"A"') && it.contains('canonical')) // the canonical spelling passes
+}
+
 fn test_io_shape_must_be_single_bool() {
 	e := errs_of('
 [io]

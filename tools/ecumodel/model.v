@@ -279,6 +279,33 @@ pub fn validate(doc toml.Doc) []string {
 // validate_io checks the [[io.gpio]] points against the io-bound signals (docs/io.md
 // P1: GPIO only, single consumer). Every rule here failed loudly in design review
 // before it could fail silently on a bench — keep them exhaustive.
+// pin_canon: strict GPIO pad grammar — 'P'<A..K><0..15> with no leading zero.
+// Returns the canonical 'P<port><pin>' spelling (== the input, when valid) or
+// '' on anything else. Mirrors driver/io/io_stm32.c pin_parse, minus its
+// leading-zero tolerance: the model is the strict gate (one spelling per pad).
+fn pin_canon(s string) string {
+	if s.len < 3 || s.len > 4 || s[0] != `P` {
+		return ''
+	}
+	if s[1] < `A` || s[1] > `K` {
+		return ''
+	}
+	for i in 2 .. s.len {
+		if s[i] < `0` || s[i] > `9` {
+			return ''
+		}
+	}
+	num := s[2..]
+	if num.len == 2 && num[0] == `0` {
+		return '' // leading zero: PB00 aliases PB0 — reject the spelling
+	}
+	n := num.int()
+	if n > 15 {
+		return ''
+	}
+	return s
+}
+
 fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]string, bus_names map[string]bool) []string {
 	mut errs := []string{}
 	mut points := []toml.Any{}
@@ -378,10 +405,20 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 		}
 		seen_point[name] = true
 		pin := str_of(pm, 'pin')
-		if pin in seen_pin {
-			errs << 'io.gpio "${name}" reuses pin "${pin}" — one physical pad cannot serve two points'
+		// canonicalize BEFORE the exclusivity check: the driver's parser maps
+		// "PB0" and "PB00" to the same pad, so raw-string uniqueness would let
+		// one pad serve two points (codex on emb#150). The model enforces the
+		// strict spelling — P<A..K><0..15>, no leading zero — and keys the
+		// seen-map on the parsed (port,pin) coordinates.
+		canon := pin_canon(pin)
+		if canon == '' {
+			errs << 'io.gpio "${name}": pin "${pin}" is not a canonical pad name (write P<A..K><0..15>, no leading zeros)'
+			continue
 		}
-		seen_pin[pin] = true
+		if canon in seen_pin {
+			errs << 'io.gpio "${name}" reuses pad ${canon} — one physical pad cannot serve two points'
+		}
+		seen_pin[canon] = true
 		mut period := i64(0)
 		if v := pm['period_ms'] {
 			if v is i64 {

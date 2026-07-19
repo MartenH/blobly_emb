@@ -994,8 +994,10 @@ fn emit_partition_io(m Model, producers []Producer) []string {
 // fixed sleep would accumulate serve-time as drift). Values cross on the target IOC pool
 // cells; outputs are freshness-gated through ioc_get_ever (init holds until the first
 // publish), inputs keep the checked read (only REAL values publish — uniform with the
-// host, and the port contract's failure leg stays honest on target too).
-fn emit_io_target_entry(m Model, ioc_idx map[string]int) []string {
+// host, and the port contract's failure leg stays honest on target too). with_load (the
+// comm-thread target): serve time is accounted like an FB thread's pass and published to
+// io's own load slot — the slot AFTER the FB threads, matching its manifest row.
+fn emit_io_target_entry(m Model, ioc_idx map[string]int, with_load bool, load_slot int) []string {
 	mut g := []string{}
 	if m.io_points.len == 0 {
 		return g
@@ -1008,6 +1010,9 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int) []string {
 	}
 	g << 'fn io_thread_entry(input u32) {'
 	g << '\tmut tick := u64(0)'
+	if with_load {
+		g << '\tmut sched := &g_sched_io // load accounting only (no handlers): bss, not this frame'
+	}
 	g << '\t// monotonic deadline pacing: sleeping the remaining-to-deadline ticks (rounded'
 	g << '\t// UP: late <= 1 tick, never early) keeps the cadence drift-free under serve'
 	g << '\t// jitter. Sleeping BEFORE serving makes the first output apply land one full io'
@@ -1017,16 +1022,24 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int) []string {
 	g << '\tmut next_us := C.board_now_us()'
 	g << '\tfor {'
 	g << '\t\tnext_us += ${fastest * 1000}'
-	g << '\t\tnow := C.board_now_us()'
-	g << '\t\tif next_us > now {'
+	g << '\t\tmut now := C.board_now_us()'
+	g << '\t\tfor next_us > now {'
 	g << '\t\t\tC._tx_thread_sleep(u32((next_us - now + 999) / 1000)) // 1 kHz kernel tick'
-	g << '\t\t} else {'
-	g << '\t\t\t// overrun: skip the MISSED base periods, no burst catch-up — tick'
-	g << '\t\t\t// advances with wall time so (tick+1)%mult gating stays aligned'
-	g << '\t\t\tmissed := (now - next_us) / ${fastest * 1000}'
-	g << '\t\t\ttick += missed'
-	g << '\t\t\tnext_us += missed * ${fastest * 1000}'
+	g << '\t\t\tnow = C.board_now_us() // a tick-phase-early wake must not serve before the deadline'
 	g << '\t\t}'
+	g << '\t\t// overrun: skip the MISSED base periods, no burst catch-up — tick'
+	g << '\t\t// advances with wall time so (tick+1)%mult gating stays aligned'
+	g << '\t\tmissed := (now - next_us) / ${fastest * 1000}'
+	if with_load {
+		g << '\t\tif missed > 0 {'
+		g << '\t\t\tsched.mark_overrun() // a serve blew past its io period'
+		g << '\t\t}'
+	}
+	g << '\t\ttick += missed'
+	g << '\t\tnext_us += missed * ${fastest * 1000}'
+	if with_load {
+		g << '\t\tt0 := C.board_now_us()'
+	}
 	for pt in m.io_points {
 		idx := ioc_idx[pt.name] or { continue }
 		fld := snake(pt.name)
@@ -1051,6 +1064,14 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int) []string {
 		if mult > 1 {
 			g << '\t\t}'
 		}
+	}
+	if with_load {
+		// io's serve time lands in CpuLoad through the SAME scratch seam as the FB
+		// threads: account the bracket, publish to io's slot; the comm thread sums.
+		g << '\t\tt1 := C.board_now_us()'
+		g << "\t\tsched.account(t1 - t0, t1) // serve time -> the io thread's load slot"
+		g << '\t\tC.load_pub_slot(${load_slot}, u32(sched.load_permille()), u32(sched.load_permille_100ms()),'
+		g << '\t\t\tu32(sched.load_permille_1s()), u32(sched.load_permille_10s()), sched.overruns())'
 	}
 	g << '\t\ttick++'
 	g << '\t}'
@@ -1628,13 +1649,22 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// thread ships a stale CpuLoad. Single-writer/single-reader scalars, so no lock.
 				if multi {
 					glue << 'fn C.load_pub_slot(int, u32, u32, u32, u32, u32)'
+				} else {
+					glue << 'fn C.load_pub(u32, u32, u32, u32, u32)'
+					if m.io_points.len > 0 {
+						// the io thread publishes its OWN slot; the FB keeps the slot-0 alias
+						glue << 'fn C.load_pub_slot(int, u32, u32, u32, u32, u32)'
+					}
+				}
+				// with an io thread the single-FB cut also reads the SUMS, so io's serve
+				// time lands in CpuLoad like every FB thread's does
+				if multi || m.io_points.len > 0 {
 					glue << 'fn C.load_sum_permille() u32'
 					glue << 'fn C.load_sum_100ms() u32'
 					glue << 'fn C.load_sum_1s() u32'
 					glue << 'fn C.load_sum_10s() u32'
 					glue << 'fn C.load_sum_overruns() u32'
 				} else {
-					glue << 'fn C.load_pub(u32, u32, u32, u32, u32)'
 					glue << 'fn C.load_permille() u32'
 					glue << 'fn C.load_100ms() u32'
 					glue << 'fn C.load_1s() u32'
@@ -1699,6 +1729,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			if m.io_points.len > 0 {
 				glue << '\tg_io_tcb   [32]u64  // the platform io thread (docs/io.md)'
 				glue << '\tg_io_stack [2048]u8 // gpio serve loop only: no modules, shallow frames'
+				if comm_thread_on {
+					// load accounting only — the io thread has no handlers; module-sized, so bss
+					glue << '\tg_sched_io loom.Scheduler // io serve-time accounting for the CpuLoad seam'
+				}
 				// the startup-fault counter is an exported symbol (docs/io.md observability
 				// rule): SWD/bench readable even with no service on
 				glue << '\tio_startup_faults u32'
@@ -1834,7 +1868,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			// The ThreadX app thread + the kernel's application-define entry. main.v does the board
 			// clock/CAN init then C.tx_kernel_enter(), which calls tx_application_define below.
 			glue << ''
-			glue << emit_io_target_entry(m, ioc_idx)
+			// io load slot = the one after the FB threads (its manifest row's position);
+			// only the comm-thread target has the load scratch seam to publish into.
+			glue << emit_io_target_entry(m, ioc_idx, comm_thread_on, app_threads.len)
 			if comm_thread_on {
 				// The comm thread must be STRICTLY higher priority (lower number) than the FB thread
 				// so it preempts a long app pass to drain rx after the ISR posts (zero time slice
@@ -1906,13 +1942,16 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// serve each producer (CpuLoad telemetry, the trace ring) gated on tx_ready. Nothing
 				// here is trace-specific: NM and COM-tx will slot in later as more producers/consumers.
 				// the comm thread reads the FB thread(s)' load: one scratch (single) or the slot sums.
-				comm_load_line := if multi {
+				// the io thread publishes its own slot, so its presence flips the single-FB
+				// cut onto the summed reads too (io serve time counts like an FB thread's)
+				sum_load := multi || m.io_points.len > 0
+				comm_load_line := if sum_load {
 					'\t\t\tload[0] = u16(C.load_sum_permille()) // sum of the FB threads (one core)'
 				} else {
 					'\t\t\tload[0] = u16(C.load_permille())'
 				}
-				comm_det_ovr := if multi { 'C.load_sum_overruns()' } else { 'C.load_overruns()' }
-				comm_det_line := if multi {
+				comm_det_ovr := if sum_load { 'C.load_sum_overruns()' } else { 'C.load_overruns()' }
+				comm_det_line := if sum_load {
 					'\t\t\tdetail := telem.encode_loaddetail(u16(C.load_sum_100ms()), u16(C.load_sum_1s()), u16(C.load_sum_10s()), ovr - last_overruns)'
 				} else {
 					'\t\t\tdetail := telem.encode_loaddetail(u16(C.load_100ms()), u16(C.load_1s()), u16(C.load_10s()), ovr - last_overruns)'
@@ -2091,6 +2130,15 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << '\t\t&g_${part}_stack[0], u32(g_${part}_stack.len), u32(${tx_prio}), u32(${tx_prio}), u32(0), u32(1))'
 				if m.io_points.len > 0 {
 					glue << emit_io_target_create(min_prio - 1)
+				}
+				if m.trace.on {
+					// Deterministic ids in MANIFEST order (app thread, then io) — without
+					// explicit binds the io thread, running at min FB - 1, is first-sighted
+					// as id 1 and every lane label swaps (codex on emb#150).
+					glue << '\tC.trace_bind_thread(&g_${part}_tcb[0])'
+					if m.io_points.len > 0 {
+						glue << '\tC.trace_bind_thread(&g_io_tcb[0])'
+					}
 				}
 				glue << '}'
 			}
