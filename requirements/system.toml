@@ -67,6 +67,14 @@ method = "test"
 asil = "QM"
 
 [[req]]
+id = "SYS-REQ-IO-001"
+title = "Physical inputs and outputs"
+text = "The ECU shall exchange application signals with configured physical inputs and outputs (analog in, digital in/out, PWM out)."
+status = "draft"
+method = "test"
+asil = "QM"
+
+[[req]]
 id = "SYS-REQ-PROG-001"
 title = "In-field software update"
 text = "The ECU shall accept a new application software image in the field over a diagnostic transport, and shall remain recoverable if an update is interrupted at any point."
@@ -103,6 +111,17 @@ id = "SYS-REQ-LIFE-002"
 title = "Sleep and wake"
 text = "The ECU shall enter low-power sleep when no function requires the networks, and wake on a configured source."
 status = "agreed"
+method = "test"
+asil = "QM"
+
+# Split from the sleep/wake chain (which is agreed and verified) so the
+# transceiver work can mature as draft without un-verifying it; folds up once
+# the IO P4 bench lands.
+[[req]]
+id = "SYS-REQ-LIFE-003"
+title = "Transceiver lifecycle follows network state"
+text = "Controllable bus transceivers shall follow the network management state: operational while the network is awake, low-power when asleep, and shall serve as configured wake sources. Other network peripherals get their own lifecycle requirements when their phases land."
+status = "draft"
 method = "test"
 asil = "QM"
 

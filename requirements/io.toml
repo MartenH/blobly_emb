@@ -1,0 +1,169 @@
+# Signal <-> IO (IO): physical inputs/outputs as signal endpoints.
+# Capability-level — no pin names, no peripheral kinds beyond the capability
+# (analog in, digital in/out, PWM out), no board. Design: docs/io.md.
+
+[[req]]
+id = "REQ-IO-001"
+title = "Inputs are signals"
+text = "A configured physical input shall be presented to the application as an ordinary signal, published at its configured cadence with the most recent hardware sample (conversion may free-run; the cadence governs publication, not conversion)."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-002"
+title = "Outputs are signals"
+text = "A configured physical output shall be driven from an ordinary signal written by the application."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+# Both halves of the old REQ-IO-003 are universal claims a finite stress run
+# cannot establish: tear-freedom here and wait-freedom in REQ-IO-008 are
+# verified by a recorded human review of the generated handoff (per
+# requirements/README: analysis = automated checker, review = signed-off
+# inspection — this is the latter until a real static checker exists).
+[[req]]
+id = "REQ-IO-003"
+title = "Latest complete sample"
+text = "The application shall never observe a partially updated input value: every observed value is a previously published complete sample, except an input in the documented degraded state (REQ-IO-009 bounded-wait expiry), whose port holds its declared default until the first real sample. Under an overwrite collision the reader retains the sample from its own last successful read (the cross-core slot protocol's last-good), so staleness is bounded by the consumer's read cadence and collision run, not by a fixed publish count."
+status = "draft"
+method = "review"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-004"
+title = "Config-only extension"
+text = "Adding, removing, or re-pinning an IO point shall require only configuration changes; application handlers reference the signal alone."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-005"
+title = "Stable within the port snapshot"
+text = "Input signals shall be captured into the application's input snapshot before handler dispatch, and each input shall be stable for the duration of the activation. Simultaneity across distinct inputs is not guaranteed: values may originate from different publish instants."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-006"
+title = "Platform pins are not application signals"
+text = "Pins owned by platform units (transceiver mode control, PHY management) shall be controlled by their owning platform module through board-layer hooks and shall not be exposed as application signals."
+status = "draft"
+method = "review"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+# Platform-pin lifecycle: this evidence belongs to the network/lifecycle chain,
+# not application IO — SYS-REQ-IO-001 stays scoped to application signals. It
+# derives from draft SYS-REQ-LIFE-003 (not agreed NM-001/LIFE-002: the trace
+# rollup would un-verify an agreed parent while this stays draft until P4).
+[[req]]
+id = "REQ-IO-007"
+title = "Transceiver follows network state"
+text = "A controllable bus transceiver shall follow its network's management state: normal while the network is awake, low-power when asleep, and shall be usable as a wake source where the hardware provides a wake output AND it is wired to a wake-capable ECU input."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-LIFE-003"
+
+# Wait-freedom is an invariant, not a runtime observation — a recorded review
+# of the generated access path (method per requirements/README; not "analysis",
+# which means an automated checker), split out of REQ-IO-003 so a passing
+# stress test cannot mark it verified.
+[[req]]
+id = "REQ-IO-008"
+title = "Wait-free access"
+text = "Reading an input signal or writing an output signal shall never block the application and shall complete in a bounded number of steps regardless of concurrent IO-thread activity."
+status = "draft"
+method = "review"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+# The io lifecycle choreography, split atomically (README rule): startup here,
+# sleep quiesce in REQ-IO-015, wake resume in REQ-IO-016 — they fail
+# independently and need different test setups.
+[[req]]
+id = "REQ-IO-009"
+title = "IO startup ordering"
+text = "At startup the IO layer shall drive every output to its configured init value and hold it there until that output's first publication, and shall publish an initial complete sample of every input before application dispatch begins, except an input whose bounded acquisition wait expires — that input publishes nothing, the failure is counted observably, and the ECU starts in the documented degraded mode."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-015"
+title = "IO sleep quiesce"
+text = "On sleep entry the IO layer shall stop acquisition, drive every output to its configured init value, and quiesce before the ECU sleeps."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-016"
+title = "IO wake resume"
+text = "On wake the IO layer shall re-establish acquisition and publish an initial sample of every input before application dispatch resumes, under the same bounded-wait exception as startup, and shall hold every output at its init value until the first post-wake publication."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+# Capability-specific children: GPIO evidence (P1) must not roll SYS-REQ-IO-001
+# up as verified while analog input and PWM output are still unbuilt — these
+# stay unverified until their phases (P2 ADC, P3 PWM) land on a bench.
+[[req]]
+id = "REQ-IO-010"
+title = "Analog acquisition"
+text = "A configured analog input shall be acquired and published as a signal carrying the converted value, at the point's configured publish cadence."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-011"
+title = "PWM generation"
+text = "A configured PWM output shall drive its pin at the configured carrier frequency with the duty commanded by its signal in permille, values above 1000 clamped to 1000, applying duty changes at the point's configured apply cadence."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-012"
+title = "Digital acquisition"
+text = "A configured digital input shall be acquired and published as a signal carrying the pin level, at the point's configured publish cadence."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-013"
+title = "Digital drive"
+text = "A configured digital output shall drive its pin to the level commanded by its signal, at the point's configured apply cadence, holding the configured init level before the first publication."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+# The io thread joins the watchdog like every platform thread — without this
+# child, all trace evidence stays green while a stalled io thread leaves stale
+# actuator values behind a happily-fed watchdog.
+[[req]]
+id = "REQ-IO-014"
+title = "IO thread supervision"
+text = "The io thread shall be enrolled as a supervised entity of the ECU watchdog; a stalled io thread shall trigger the configured supervision reaction rather than leaving outputs at stale values indefinitely."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
