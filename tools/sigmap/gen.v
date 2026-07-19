@@ -117,25 +117,28 @@ fn main() {
 		} else {
 			from
 		}
+		// eth provenance WINS over a DBC name hit: an imported DBC may carry an
+		// unrelated same-named signal this ECU never uses, but an eth-bound
+		// signal's wire truth is always the derived layout
 		eth_frame := eth_frame_of[name] or { '' }
-		dbc_sig := if d.found {
-			'${d.msg}.${name}'
-		} else if eth_frame != '' {
+		dbc_sig := if eth_frame != '' {
 			'derived (eth)'
+		} else if d.found {
+			'${d.msg}.${name}'
 		} else {
 			'—'
 		}
-		frame := if d.found {
-			'0x${d.id.hex()}'
-		} else if eth_frame != '' {
+		frame := if eth_frame != '' {
 			eth_frame
+		} else if d.found {
+			'0x${d.id.hex()}'
 		} else {
 			'—'
 		}
-		layout := if d.found {
-			'${d.start}|${d.length}'
-		} else if eth_frame != '' {
+		layout := if eth_frame != '' {
 			(eth_cells_of[name] or { []string{} }).join(' ')
+		} else if d.found {
+			'${d.start}|${d.length}'
 		} else {
 			'—'
 		}
