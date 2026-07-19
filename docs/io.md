@@ -110,7 +110,9 @@ signal:
   or the ETH PHY fails the glue's compile-time check — ecucheck knows the
   config's pins, only the board knows which pads the platform already owns;
 - **PWM carriers are sane**: `freq_hz` must be positive (a zero carrier is a
-  zero timer divisor); whether the frequency is ACHIEVABLE on the bound timer
+  zero timer divisor) and a PWM `init` must be a valid permille (0..1000) —
+  the clamp governs the signal path, but `init` reaches the pin through
+  `io_init()` before any signal exists; whether the frequency is ACHIEVABLE on the bound timer
   is the boards layer's compile-time pin-table check, next to pin validity —
   ecucheck knows config, the board knows silicon. That same check requires
   points sharing one hardware timer to declare the SAME `freq_hz`: channels
@@ -186,10 +188,15 @@ pins or peripherals:
   const): a silent converter must not hang deterministic startup — on timeout
   the io thread publishes NOTHING for that point (no fabricated sample: an
   all-zero DMA word is not a measurement, and REQ-IO-003 promises only real
-  published samples), bumps a startup-fault counter observable over
-  telemetry/shell, and lets the ECU start. Consumers of the failed point see
-  their port's declared default until the converter recovers and a real sample
-  publishes — degraded, observable, and honest; plausibility handling beyond
+  published samples), bumps a startup-fault counter, and lets the ECU start. "Observable" is
+  defined bottom-up: the counter is always an exported symbol (SWD/bench
+  readable even on a services-less build), and rides telemetry/shell when
+  those are enabled — the requirement never silently depends on an optional
+  service. Consumers of the failed point see
+  their port's declared default — an input point MAY declare `default = <v>`
+  (the generated port field's initial value; absent means the type's zero,
+  which for a 0-can-be-valid quantity is exactly why `default` exists)
+  — until the converter recovers and a real sample publishes — degraded, observable, and honest; plausibility handling beyond
   that is application logic, not io glue. REQ-IO-009 carries this exception
   explicitly (initial-sample-before-dispatch OR the bounded-timeout fault
   path), so the degraded start is inside the requirement, not a violation the
