@@ -75,13 +75,15 @@ fn test_button_drives_led() {
 	os.rename(tmp, os.join_path(work, 'io', 'UserButton'))!
 
 	// input -> signal -> FB -> signal -> output, within the io/app cadences
+	// bound = a handful of 10 ms cadences (input publish + handler + output
+	// apply), NOT seconds — a 1 Hz regression must fail REQ-IO-012/013
 	mut lit := false
-	for _ in 0 .. 200 {
+	for _ in 0 .. 100 {
 		if (os.read_file(led) or { '' }).trim_space() == '1' {
 			lit = true
 			break
 		}
-		time.sleep(10 * time.millisecond)
+		time.sleep(1 * time.millisecond)
 	}
-	assert lit, 'LedGreen never followed the pressed UserButton'
+	assert lit, 'LedGreen did not follow UserButton within ~10 io/app cadences'
 }

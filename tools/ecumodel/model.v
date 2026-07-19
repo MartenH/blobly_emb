@@ -433,6 +433,25 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 		}
 		// producer/consumer counts: exactly one on the application side (P1),
 		// nothing on the io-owned side, and the accessor in the declared partition
+		// P1 generates same-core io only: fail at validation, not in build_model
+		mut io_core := i64(0)
+		if iov := doc.value_opt('io') {
+			if cv := iov.as_map()['core'] {
+				if cv is i64 {
+					io_core = cv
+				}
+			}
+		}
+		for pp in toml_arr(doc, 'partition') {
+			ppm := pp.as_map()
+			if str_of(ppm, 'name') == other {
+				if cv := ppm['core'] {
+					if cv is i64 && cv != io_core {
+						errs << 'signal "${name}": endpoint partition "${other}" is on core ${cv} but [io].core is ${io_core} — cross-core io arrives with the target phase'
+					}
+				}
+			}
+		}
 		if is_output {
 			if 'init' !in pm {
 				errs << 'io.gpio "${name}" is an output and must declare init (the pre-publication pin state)'
@@ -449,6 +468,9 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 				errs << 'io output "${name}" appears in a handler\'s reads — the io thread owns that channel side (single-reader transport); keep the last command in FB state instead'
 			}
 		} else {
+			if 'init' in pm {
+				errs << 'io.gpio "${name}" is an input — init belongs to outputs; an input\'s pre-first-sample port value is `default`'
+			}
 			if readers[name] != 1 {
 				errs << 'io input "${name}" needs exactly one reading handler (found ${readers[name]}) — P1 is single-consumer (fan-out arrives with the to-list form)'
 			} else if reader_part[name] != other {

@@ -97,7 +97,7 @@ pub fn run() {
 		io_startup_faults++ // unreadable at boot: publish NOTHING
 	}
 	if io_startup_faults > 0 {
-		eprintln('io: ${io_startup_faults} startup fault(s)')
+		eprintln('io: startup fault(s) — count in io_startup_faults') // no interpolation: -gc none
 	}
 	t_io := spawn partition_io()
 	t_app := spawn partition_app(0, unsafe { nil })

@@ -1982,7 +1982,7 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 			if has_io_input {
 				// host diagnostics only — the exported counter stays the bench contract
 				glue << '\tif io_startup_faults > 0 {'
-				glue << "\t\teprintln('io: \${io_startup_faults} startup fault(s)')"
+				glue << "\t\teprintln('io: startup fault(s) — count in io_startup_faults') // no interpolation: -gc none"
 				glue << '\t}'
 			}
 			glue << '\tt_io := spawn partition_io()'

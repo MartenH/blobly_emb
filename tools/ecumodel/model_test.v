@@ -621,3 +621,37 @@ thread = "w_main"
 ')
 	assert e.any(it.contains('must live in the declared partition'))
 }
+
+fn test_io_rejects_input_init_and_cross_core() {
+	e := errs_of('
+[io]
+core = 0
+[[io.gpio]]
+name      = "Btn"
+pin       = "PC13"
+period_ms = 10
+init      = true
+
+[[signal]]
+name = "Btn"
+fields = { on = "bool" }
+from = "io"
+to   = "far"
+
+[[partition]]
+name = "far"
+core = 1
+  [[partition.thread]]
+  name = "far_main"
+
+[[fb]]
+name = "W"
+thread = "far_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  reads = ["Btn"]
+')
+	assert e.any(it.contains('init belongs to outputs'))
+	assert e.any(it.contains('cross-core io arrives with the target phase'))
+}
