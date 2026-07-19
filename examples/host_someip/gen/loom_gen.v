@@ -88,7 +88,7 @@ pub fn partition_eth0(sock eth.Socket) {
 	osal.pin_to_core(0)
 	mut tx_bench_telem_st := com.TxState{
 		mode: com.TxMode.cyclic
-		cycle_us: 100000
+		cycle_us: 300000
 		min_delay_us: 0
 	}
 	mut e2e_tx_bench_telem := e2e.TxState{}

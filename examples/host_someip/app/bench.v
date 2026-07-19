@@ -37,6 +37,6 @@ pub fn (mut fb Bench) on_100ms(inp ports.BenchIn, mut out ports.BenchOut) {
 		level: fb.level
 	}
 	out.mixed_val = sig.MixedVal{
-		setpoint: u16(fb.ticks / 7)
+		setpoint: u16(fb.ticks / 7 + 1000) // +1000: BOTH bytes live on the wire
 	}
 }
