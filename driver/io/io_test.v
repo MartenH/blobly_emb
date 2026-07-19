@@ -1,7 +1,7 @@
 module io
 
-// Host-backend (file mirror) driver tests: init seeding, write/read
-// round-trip, last-good on garbage, temp-rename hygiene. Each test runs in
+// Host-backend (file mirror) driver tests: output-only init seeding, write/
+// read round-trip, last-good on garbage, temp-rename hygiene. Each test runs in
 // its own temp cwd so io/ never lands in the repo. No REQ tags here:
 // REQ-IO-003 is a universal claim (method = review), which a finite unit
 // test exercises but cannot verify.
@@ -21,13 +21,17 @@ fn teardown(dir string) {
 	os.rmdir_all(dir) or {}
 }
 
-fn test_init_creates_files_with_init_values() {
+fn test_init_creates_output_files_only() {
 	dir := setup('init')
 	assert cfg(0, 'LedGreen', 'PB0', true, 1)
 	assert cfg(1, 'UserButton', 'PC13', false, 0)
 	assert init()
 	assert os.read_file('io/LedGreen')!.trim_space() == '1'
-	assert os.read_file('io/UserButton')!.trim_space() == '0'
+	// input: NO driver-created file — a seeded value would be published at
+	// boot as a fabricated "real" sample
+	assert !os.exists('io/UserButton')
+	assert gpio_read_checked(1) == none // absent: checked read reports failure
+	assert gpio_read(1) == false // periodic read serves last-good (cfg init)
 	teardown(dir)
 }
 
@@ -58,6 +62,14 @@ fn test_garbage_file_returns_last_good() {
 	assert gpio_read(0) == false // conforming again: real value resumes
 	os.write_file('io/UserButton', '1garbage')! // parses as 1 + trailing junk
 	assert gpio_read(0) == false // rejected whole: serves last-good, not the prefix
+	os.write_file('io/UserButton', '1\n')!
+	assert gpio_read(0) == true // last-good is 1 again (so rejections below can't pass by luck)
+	os.write_file('io/UserButton', '2\n')! // out of gpio domain
+	assert gpio_read(0) == true // contract violation: serves last-good, no truthy coercion
+	os.write_file('io/UserButton', '-1\n')! // out of gpio domain
+	assert gpio_read(0) == true // contract violation: serves last-good
+	os.write_file('io/UserButton', '0' + ' '.repeat(80) + '\n')! // > read buffer
+	assert gpio_read(0) == true // oversized: completeness unprovable, serves last-good
 	teardown(dir)
 }
 
