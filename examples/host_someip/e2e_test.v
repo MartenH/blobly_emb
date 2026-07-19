@@ -114,11 +114,14 @@ fn test_tx_modes_on_the_wire() {
 		// u16@5 LE, E2E trailer ctr@7/crc@8 — 9 bytes exactly
 		assert r.pay.len == 9, 'cyclic payload ${r.pay.len} bytes'
 		q := le32(r.pay, 1)
-		// INTRA-struct relation only: ticks and wraps live in ONE signal, so
-		// their snapshot is atomic; BenchLoad rides a separate IOC channel and
-		// may legitimately pair with a neighbor q at a transition — range-
-		// check it instead of a cross-signal equality
-		assert r.pay[0] < 100, 'cyclic load out of range'
+		// ticks/wraps are ONE signal (atomic snapshot); BenchLoad rides a
+		// separate IOC channel and may legitimately pair with a NEIGHBOR q at
+		// a transition — so its relation tolerates ±1 quantum, which still
+		// fails a packer that drops or misplaces the byte (stuck 0 dies once
+		// q passes 1)
+		lo := r.pay[0]
+		assert lo == u8(q % 100) || lo == u8((q + 1) % 100)
+			|| (q > 0 && lo == u8((q - 1) % 100)), 'cyclic load ${lo} vs q ${q}'
 		// wraps = q + 1000: nonzero in both bytes, so a codec that drops the
 		// field or misplaces its offset/endianness fails on live values
 		assert le16(r.pay, 5) == u16(q + 1000), 'cyclic field relation (wraps)'
@@ -134,21 +137,27 @@ fn test_tx_modes_on_the_wire() {
 	}
 	assert cyc_repeats >= 5, 'cyclic: only ${cyc_repeats} unchanged-layout resends — cadence is not time-driven'
 
-	// ---- event: debounce — coalesced, paced, monotonic, to the end ----
-	// value steps every 100 ms against min_delay 350: ~10 coalesced sends
-	assert evs.len >= 5 && evs.len <= 14, 'event: ${evs.len} datagrams (expected ~10 debounced)'
+	// ---- event: debounce + change-driven silence ----
+	// the source alternates 1.2 s stepping / 1.2 s holding: coalesced sends
+	// at the 350 ms debounce during stepping, SILENCE during holds
+	assert evs.len >= 4 && evs.len <= 12, 'event: ${evs.len} datagrams (expected ~6 debounced)'
 	assert evs.last().at - start > 2200 * time.millisecond, 'event publication stopped early'
+	mut ev_hold_gap := false
 	for i, r in evs {
 		assert r.pay.len == 1, 'event payload ${r.pay.len} bytes'
 		if i > 0 {
-			// coalescing: strictly increasing (no repeats — change-driven),
-			// and SKIPPING levels is expected under the debounce
+			// change-driven: strictly increasing — a cyclic impostor RESENDS
+			// during the source's hold phases and fails right here
 			assert r.pay[0] > evs[i - 1].pay[0], 'event level did not increase (${evs[i - 1].pay[0]} -> ${r.pay[0]})'
+			if (r.at - evs[i - 1].at).milliseconds() >= 600 {
+				ev_hold_gap = true
+			}
 		}
 	}
 	ev_pace := median_gap_ms(evs)
 	assert ev_pace >= 300, 'event median pace ${ev_pace} ms — the configured 350 ms debounce is not active'
-	assert evs.last().pay[0] >= 25, 'event level ${evs.last().pay[0]} — publication did not track the source through the window'
+	assert ev_hold_gap, 'event: no silence over the source hold phase — sends are not change-driven'
+	assert evs.last().pay[0] >= 12, 'event level ${evs.last().pay[0]} — publication did not track the source through the window'
 
 	// ---- mixed: heartbeat repeats AND immediate-on-change ----
 	assert mixed.len >= 8, 'mixed: only ${mixed.len} datagrams'
@@ -161,9 +170,17 @@ fn test_tx_modes_on_the_wire() {
 			prev := mixed[i - 1]
 			if le16(r.pay, 0) == le16(prev.pay, 0) {
 				repeats++
-				repeat_gaps << (r.at - prev.at).milliseconds()
+				// same burst floor as median_gap_ms: stall-compressed dequeue
+				// gaps must not drag the heartbeat median down
+				g0 := (r.at - prev.at).milliseconds()
+				if g0 >= 20 {
+					repeat_gaps << g0
+				}
 			} else {
-				assert le16(r.pay, 0) == le16(prev.pay, 0) + 1, 'mixed setpoint skipped a step'
+				// monotonic, usually +1 — but a stalled bridge legitimately
+				// skips setpoints (IOC keeps only the latest), so no exact
+				// step assert
+				assert le16(r.pay, 0) > le16(prev.pay, 0), 'mixed setpoint went backwards'
 				// an off-cycle change must be published BEFORE the next
 				// heartbeat; the 20 ms floor rejects stall-compressed bursts
 				g := (r.at - prev.at).milliseconds()
