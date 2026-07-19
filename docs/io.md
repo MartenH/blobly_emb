@@ -15,28 +15,37 @@ absorption move the model has made twice already (bus endpoints → COM codec,
 cross-core endpoints → xioc slots).
 
 ```toml
+# PotVolt: an analog input publishing the [[signal]] of the same name.
+# period_ms = the publish cadence (conversion free-runs; see below).
+# NOTE: comments never go INSIDE a nested [[io.*]] block — V's TOML parser
+# drops the key that follows one (the ecucheck-guarded nested-comment bug).
 [[io.adc]]
-name      = "PotVolt"     # publishes the [[signal]] of the same name
+name      = "PotVolt"
 pin       = "PA3"
-period_ms = 10            # publish cadence (conversion free-runs; see below)
+period_ms = 10
 
+# UserButton: a digital input; direction comes from the signal's flow.
 [[io.gpio]]
-name      = "UserButton"  # input: publishes; direction from the signal's flow
+name      = "UserButton"
 pin       = "PC13"
 period_ms = 10
 
+# LedGreen: an output (an FB writes it). period_ms = apply cadence — every
+# point declares one. init is REQUIRED on outputs: the pre-publication state.
 [[io.gpio]]
-name      = "LedGreen"    # output: consumed (an FB writes it)
+name      = "LedGreen"
 pin       = "PB0"
-period_ms = 10            # apply cadence — every point declares one
-init      = false         # REQUIRED on outputs: the pre-publication pin state
+period_ms = 10
+init      = false
 
+# FanDuty: PWM duty from the signal value (0..1000 permille); init = duty
+# before the first publication.
 [[io.pwm]]
-name      = "FanDuty"     # output: duty from the signal value (0..1000 permille)
+name      = "FanDuty"
 pin       = "PE9"
 period_ms = 10
 freq_hz   = 20000
-init      = 0             # duty before the first publication
+init      = 0
 ```
 
 `period_ms` is mandatory on every point, outputs included — it is the io
