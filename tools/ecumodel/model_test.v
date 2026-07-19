@@ -1033,6 +1033,7 @@ record = 0x8001
 ' +
 		eth_tx_frame + app)
 	assert e.any(it.contains('[trace] record reuses event id'))
+	assert e.any(it.contains('eth trace egress arrives with the UDP rung'))
 	assert e.any(it.contains('[trace] cmd id 0x10 on the eth bus is not an event id'))
 	assert e.any(it.contains('[trace] rsp on the eth bus must be a literal event id'))
 }
@@ -1445,4 +1446,24 @@ tx      = { mode = "event", min_delay_ms = -1 }
 ' +
 		app)
 	assert e.any(it.contains('min_delay_ms must be 0..3600000'))
+}
+
+fn test_someip_round9_cycle_bounds_any_mode() {
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "S"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["S"]
+tx      = { mode = "event", cycle_ms = -1 }
+' +
+		app)
+	assert e.any(it.contains('tx cycle_ms must be 1..3600000'))
 }
