@@ -343,3 +343,23 @@ DBC codec does.
 
 Next: the automated on-wire test (@verifies REQ-NET-013 needs all three tx
 modes exercised by a harness, not a hand check), then the H735 NetX rung.
+
+## H735 NetX rung status (2026-07-19, BENCH-VERIFIED)
+
+SOME/IP events off real silicon: `examples/h735_someip`, hand-wired per the
+h735_doip precedent (tested V — comm/someip + comm/e2e — over a one-call NetX
+glue seam; full loom2v target integration is its own rung). The glue brings up
+ThreadX + NetX on the P1 driver stack, binds the node's static endpoint
+(192.168.0.50:30490), and the V loop emits the BenchTelem wire — identical
+bytes to host_someip — every 100 ms. The seam mirrors the driver/eth host
+contract (ip[4]/port/bytes), so the target backend slots under driver/eth
+unchanged at the codegen-target rung.
+
+Bench: five consecutive datagrams received on a LAN host and byte-verified —
+envelope exact, ticks advancing, E2E trailer counter stepping, correct static
+source. SWD counters (openocd): someip_tx_ok at exactly 10/s, zero failures.
+Bench notes: WSL NAT mode delivers neither subnet broadcasts nor unsolicited
+inbound UDP — the working recipe is unicast to the Windows host's LAN IP with
+the listener PRIMING the stateful firewall (one datagram out of the listening
+socket first); newlib rand() must be overridden or NetX drags malloc into the
+no-alloc image (the h735_net lesson, re-paid here).
