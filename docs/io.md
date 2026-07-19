@@ -305,9 +305,12 @@ sim's documented cost of file transparency, not a violation the target can hit.
 1. **P1 — GPIO** in/out on the H755 (user LED + button are on-board: button →
    CAN frame, shell → LED — observable with nothing but the bench). Model +
    generator + `io_gen.h` + boards glue land here.
-2. **P2 — ADC** inputs (continuous-scan + circular-DMA latest-value, no timers —
-   the free-running model above; the wait-free contract).
-3. **P3 — PWM** outputs.
+2. **P2 — ADC** inputs ✅ (continuous-scan + circular-DMA latest-value, no timers —
+   the free-running model above; the wait-free contract). `[[io.adc]]`, u16/u32
+   count, sim-proven (examples/io_adc); the H7 ADC1+DMA path is dry-coded,
+   bench-pending.
+3. **P3 — PWM** outputs ✅ (`[[io.pwm]]`, duty permille + freq_hz carrier; sim-proven
+   examples/io_pwm; the timer compare-register write is dry-coded, bench-pending).
 4. **P4 — io lifecycle + NM transceiver port**: the transceiver port
    (`blob_can_xcvr_mode`) + wake source, AND the io side of sleep — io-thread
    quiesce/resume, outputs-to-init at sleep entry, ADC/DMA stop/restart, the

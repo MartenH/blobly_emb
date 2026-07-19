@@ -176,3 +176,57 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-018"
+title = "Analog inputs are free-running, wait-free reads"
+text = "An [[io.adc]] point shall be sampled wait-free: the ADC is configured ONCE at init (continuous scan over the configured channels, circular DMA into a latest-value array) and free-runs thereafter — no timers, no conversion interrupts, no per-sample management. The io thread READS the latest DMA value and never waits (REQ-IO-008). Conversion cadence (hardware) and publish cadence (period_ms) are decoupled."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-019"
+title = "Analog value shape and range"
+text = "An [[io.adc]] point binds a signal whose single field is u16 or u32 (an ADC count); a bool or f32 binding is a config error. The published value is the raw converter count (right-aligned), scaling is the application's concern above the driver."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-020"
+title = "Analog inputs are input-only"
+text = "An [[io.adc]] point shall bind a signal that flows FROM io TO the application (from = \"io\"); an ADC bound as an output (to = \"io\") is a config error. The direction is derived from the signal flow, as for gpio."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-021"
+title = "PWM duty reaches the timer compare register"
+text = "The io thread shall apply a PWM point's commanded duty as a timer compare-register update at the configured freq_hz carrier (near-free), freshness-gated so the configured init duty holds until the producing FB publishes once (REQ-IO-009). This is target hardware behaviour and is BENCH-verified (the host mirror cannot exercise the timer)."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-022"
+title = "PWM carrier validity is layered"
+text = "freq_hz must be a positive value within the codegen-representable range (ecucheck, config-level: a zero carrier is a zero divisor). Whether a pin has a timer mapping AND whether the carrier is achievable on it is the boards-layer check (silicon-level): in this phase it runs at cfg time (board_io_pwm_map / pwm_setup return failure -> a loud startup fault), the same runtime pattern as pin existence (board_io_pin_exists). A build-time boards-layer table check, applied uniformly to pin validity and PWM mapping, is a later cross-cutting slice."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-023"
+title = "PWM duty value semantics"
+text = "A PWM point carries a duty in permille (0..1000), clamped to 1000 above range; the point is output-only with a positive freq_hz carrier. The value semantics (permille, clamp, freshness-gated init) are host-observable and unit-tested; the timer application itself is REQ-IO-021 (bench)."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"

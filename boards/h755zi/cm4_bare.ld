@@ -5,7 +5,7 @@
 MEMORY
 {
     FLASH (rx) : ORIGIN = 0x08100000, LENGTH = 768K /* tail sectors 6+7 = the NvM journal pair (docs/nvm.md) */
-    RAM  (rwx) : ORIGIN = 0x10000000, LENGTH = 288K  /* D2 SRAM1+2+3 */
+    RAM  (rwx) : ORIGIN = 0x10000000, LENGTH = 256K  /* D2 SRAM1+2 (SRAM3 reserved for CM7 ADC DMA, emb#152) */
 }
 
 _estack = ORIGIN(RAM) + LENGTH(RAM);
