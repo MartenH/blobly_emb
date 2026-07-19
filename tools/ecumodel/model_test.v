@@ -1201,3 +1201,22 @@ e2e     = { data_id = "nope", counter_pos = 2, crc_pos = 3 }
 	assert e.any(it.contains('"OutEvt" is tx (signals to the bus) but declares an rx block'))
 	assert e.any(it.contains('E2E data_id must be an integer'))
 }
+
+fn test_someip_eth_frame_name_must_be_identifier() {
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "S"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Bench,Telem"
+bus     = "eth0"
+id      = 0x8001
+signals = ["S"]
+' +
+		app)
+	assert e.any(it.contains('eth frame name "Bench,Telem" is not a valid identifier'))
+}

@@ -398,6 +398,11 @@ fn validate_someip(doc toml.Doc) []string {
 		}
 		n_eth_frames++
 		fname := str_of(fm, 'name')
+		// the name reaches generated identifiers AND unquoted manifest CSV rows
+		if !ident_ok(fname) {
+			errs << 'eth frame name "${fname}" is not a valid identifier ([A-Za-z_][A-Za-z0-9_]*) — it becomes generated code names and manifest CSV cells'
+			continue
+		}
 		if v := fm['id'] {
 			if v is i64 {
 				if v < 0x8000 || v > 0xFFFF {
