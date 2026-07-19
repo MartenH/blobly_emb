@@ -100,9 +100,9 @@ fn io_thread_entry(input u32) {
 		// so (tick+1)%mult gating stays aligned; a sub-period lateness serves now
 		// and the next sleep re-anchors (one shortened gap, the cadence tradeoff).
 		missed := (now - next_us) / 10000
-		if now > next_us {
-			sched.mark_overrun() // ANY lateness is an overrun, incl. the 1..2-
-			// period case floor(missed) rounds to 0 (codex on emb#150 r6)
+		if missed > 0 {
+			sched.mark_overrun() // a WHOLE period slipped (not the sub-tick
+			// wake rounding, which fires every healthy cycle — codex emb#150 r9)
 		}
 		tick += missed
 		next_us += missed * 10000
@@ -114,6 +114,10 @@ fn io_thread_entry(input u32) {
 		}
 		t1 := C.board_now_us()
 		sched.account(t1 - t0, t1) // serve time -> the io thread's load slot
+		if t1 - t0 > 10000 {
+			sched.mark_overrun() // the SERVE exhausted its base-period budget
+			// (the 1..2-period case floor(missed) missed — codex emb#150 r6/r9)
+		}
 		C.load_pub_slot(1, u32(sched.load_permille()), u32(sched.load_permille_100ms()),
 			u32(sched.load_permille_1s()), u32(sched.load_permille_10s()), sched.overruns())
 		tick++

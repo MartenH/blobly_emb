@@ -1035,9 +1035,9 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int, with_load bool, load_sl
 	g << '\t\t// and the next sleep re-anchors (one shortened gap, the cadence tradeoff).'
 	g << '\t\tmissed := (now - next_us) / ${fastest * 1000}'
 	if with_load {
-		g << '\t\tif now > next_us {'
-		g << '\t\t\tsched.mark_overrun() // ANY lateness is an overrun, incl. the 1..2-'
-		g << '\t\t\t// period case floor(missed) rounds to 0 (codex on emb#150 r6)'
+		g << '\t\tif missed > 0 {'
+		g << '\t\t\tsched.mark_overrun() // a WHOLE period slipped (not the sub-tick'
+		g << '\t\t\t// wake rounding, which fires every healthy cycle — codex emb#150 r9)'
 		g << '\t\t}'
 	}
 	g << '\t\ttick += missed'
@@ -1075,6 +1075,10 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int, with_load bool, load_sl
 		// threads: account the bracket, publish to io's slot; the comm thread sums.
 		g << '\t\tt1 := C.board_now_us()'
 		g << "\t\tsched.account(t1 - t0, t1) // serve time -> the io thread's load slot"
+		g << '\t\tif t1 - t0 > ${fastest * 1000} {'
+		g << '\t\t\tsched.mark_overrun() // the SERVE exhausted its base-period budget'
+		g << '\t\t\t// (the 1..2-period case floor(missed) missed — codex emb#150 r6/r9)'
+		g << '\t\t}'
 		g << '\t\tC.load_pub_slot(${load_slot}, u32(sched.load_permille()), u32(sched.load_permille_100ms()),'
 		g << '\t\t\tu32(sched.load_permille_1s()), u32(sched.load_permille_10s()), sched.overruns())'
 	}
