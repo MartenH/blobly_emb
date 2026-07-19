@@ -1,0 +1,103 @@
+# h755_io_analog — docs/io.md P2+P3 on the ThreadX target (NUCLEO-H755ZI-Q, CM7):
+# an analog IN and an analog OUT as ordinary signals, benchable with NO pot (the
+# H755 Nucleo has none). FanDuty (PE9, TIM1_CH1) is an [[io.pwm]] point whose duty
+# the Sweep FB SELF-RAMPS (a triangle, ~4 s period) from its own tick count — so PE9
+# shows a pulse width sweeping 0..100%..0 on the scope with nothing wired in. Pot
+# (PA3, Arduino A0) is an [[io.adc]] point read on the same tick: its raw count is
+# published on the bus (PotState 0x311, cyclic 100 ms) and lights LedHi (LD1 green,
+# PB0) past mid-scale. Leave PA3 floating -> it jitters (converter alive); jumper it
+# to 3V3 -> ~4095 + LED on, to GND -> ~0. The bus signal turns the comm thread on;
+# CpuLoad on 0x7E0 doubles as the liveness beacon.
+#
+# NOTE: no inline comments inside [[...]] tables — a comment in a nested table trips
+# V's TOML parser (drops the next key). See vlang/v#27684.
+
+[import]
+dbc = "bus.dbc"
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0
+
+[io]
+core = 0
+
+[[io.adc]]
+name      = "Pot"
+pin       = "PA3"
+period_ms = 10
+
+[[io.pwm]]
+name      = "FanDuty"
+pin       = "PE9"
+period_ms = 10
+freq_hz   = 20000
+init      = 0
+
+[[io.gpio]]
+name      = "LedHi"
+pin       = "PB0"
+period_ms = 10
+init      = false
+
+[[partition]]
+name    = "app"
+core    = 0
+trusted = true
+
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+[[signal]]
+name = "Pot"
+fields = { count = "u16" }
+from = "io"
+to   = "app"
+
+[[signal]]
+name = "FanDuty"
+fields = { duty = "u16" }
+from = "app"
+to   = "io"
+
+[[signal]]
+name = "LedHi"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+
+# PotLevel: the raw count onto the bus. The DBC carries it as a 32-bit unsigned
+# value at bit 0 — the target comm thread's lean codec only encodes trivial u32@0.
+[[signal]]
+name = "PotLevel"
+fields = { level = "u32" }
+from = "app"
+to   = "can0"
+
+# cyclic 100 ms: the only tx mode the target comm producer generates.
+[[frame]]
+name = "PotState"
+bus  = "can0"
+tx   = { mode = "cyclic", cycle_ms = 100 }
+
+[[fb]]
+name   = "Sweep"
+thread = "app_main"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["Pot"]
+  writes    = ["FanDuty", "LedHi", "PotLevel"] # trailing comment terminates the nested block (vlang/v#27684)
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E0
+period_ms = 1000
+
+[target]
+kind    = "threadx"
+tick_ms = 1
