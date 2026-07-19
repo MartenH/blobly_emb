@@ -35,10 +35,14 @@ wired; one jumper on PA3 proves the whole ADC + DMA + publish chain.
 
 `bench_test.sh` is an **automated** version of the checks above — no scope, no
 jumper, no eyes on the board. With the H755 attached it flashes this image and
-reads TIM1 / ADC1 / DMA1 and the io-thread liveness counter over SWD, asserting
-11 things: the PWM carrier + MOE + duty→CCR chain (REQ-IO-021), the ADC scan +
-DMA producing samples (REQ-IO-018), and the io serve loop still advancing — the
-regression guard for the pacing-sleep wedge (REQ-IO-024).
+reads TIM1 / ADC1 / DMA1 over SWD, asserting the PWM carrier + MOE + duty→CCR
+chain (REQ-IO-021) and the ADC scan + DMA (REQ-IO-018). Liveness is proven by
+**status flags**, not value diffs (a free-running counter or a stable ADC sample
+can read identical at two snapshots): it clears the timer update flag (UIF) and
+the DMA transfer-complete flag (TCIF0) and asserts both re-set — the timer
+wrapped and a scan landed — regardless of any input value. It also checks the io
+serve loop still advances (a sanity guard; the pacing requirement REQ-IO-024 is
+analysis-argued and not claimed here — this test doesn't inject a clock anomaly).
 
 ```sh
 ./bench_test.sh --flash      # flash + assert; exit 0 pass / 1 fail / 2 no-board
