@@ -96,8 +96,10 @@ signal:
   reader is preempted across two publishes (docs/multicore-perf.md). An explicit
   `transport =` on an io-bound signal is a config error — the generator derives
   the only correct one per edge;
-- **periods harmonic**: every `period_ms` is at least 1 (the Loom tick — zero
-  or negative would make "fastest" divide-by-zero or saturate the io core) and
+- **periods harmonic**: every `period_ms` is at least the CONFIGURED tick —
+  `[target].tick_ms` when set, the 1 ms host tick otherwise (zero or negative
+  would make "fastest" divide-by-zero; a period under the tick is a cadence
+  the periodic thread cannot meet) — and a multiple of that tick, and
   an integer multiple of the fastest configured io period — the io thread runs
   at the fastest and serves each point on its own multiple, so a non-divisible
   cadence (7 ms vs 10 ms) would silently publish off-spec; ecucheck rejects it
@@ -224,7 +226,7 @@ pins or peripherals:
   quiesce/resume mode events: at sleep-entry it stops the free-running
   ADC/DMA, drives outputs to their `init` values, and parks; wake restarts
   the sampling before the app resumes (the NM/NvM in-sleep pattern;
-  REQ-IO-009 makes this choreography traceable evidence, not a hope).
+  REQ-IO-009/015/016 make this choreography traceable evidence, not a hope).
 
 Pins are named in ecu.toml because an example is already board-specific (it selects
 `BOARD` in its Makefile); the glue C validates the pin table at compile time. If a
@@ -306,7 +308,11 @@ sim's documented cost of file transparency, not a violation the target can hit.
 2. **P2 — ADC** inputs (continuous-scan + circular-DMA latest-value, no timers —
    the free-running model above; the wait-free contract).
 3. **P3 — PWM** outputs.
-4. **P4 — NM transceiver port** (`blob_can_xcvr_mode`) + wake source — needs a board
+4. **P4 — io lifecycle + NM transceiver port**: the transceiver port
+   (`blob_can_xcvr_mode`) + wake source, AND the io side of sleep — io-thread
+   quiesce/resume, outputs-to-init at sleep entry, ADC/DMA stop/restart, the
+   IOC publication counter, and the wake freshness re-arm (REQ-IO-015/016).
+   Needs a board
    with a controllable transceiver on the bench.
 5. **P5 — irq-triggered handlers** (the reserved trigger) when a real use case
    demands sub-tick latency.
