@@ -82,8 +82,10 @@ fn test_tx_modes_on_the_wire() {
 	evs := by_id[id_event] or { []Rx{} }
 	mixed := by_id[id_mixed] or { []Rx{} }
 
-	// ---- cyclic: layout decode + time-driven (not change-driven) resends ----
-	assert cyc.len >= 15, 'cyclic: only ${cyc.len} datagrams'
+	// ---- cyclic: layout decode + time-driven resends AT THE CONFIGURED rate --
+	// count band: 100 ms over ~3.5 s ≈ 35 — a 200 ms impostor lands ~17 and
+	// fails the floor; an unthrottled one blows the cap
+	assert cyc.len >= 24 && cyc.len <= 48, 'cyclic: ${cyc.len} datagrams (expected ~35 at 100 ms)'
 	mut cyc_repeats := 0
 	for i, r in cyc {
 		// the CONFIGURED derived layout: load u8@0, ticks u32@1 LE, wraps
@@ -91,7 +93,9 @@ fn test_tx_modes_on_the_wire() {
 		assert r.pay.len == 9, 'cyclic payload ${r.pay.len} bytes'
 		q := le32(r.pay, 1)
 		assert r.pay[0] == u8(q % 100), 'cyclic field relation (load vs ticks)'
-		assert le16(r.pay, 5) == u16(q >> 16), 'cyclic field relation (wraps)'
+		// wraps = q + 1000: nonzero in both bytes, so a codec that drops the
+		// field or misplaces its offset/endianness fails on live values
+		assert le16(r.pay, 5) == u16(q + 1000), 'cyclic field relation (wraps)'
 		if i > 0 {
 			// the app holds the layout for 4 cycles: cyclic MUST resend it
 			// unchanged (the signal bytes repeat; only the trailer moves)
@@ -104,8 +108,11 @@ fn test_tx_modes_on_the_wire() {
 	}
 	assert cyc_repeats >= 5, 'cyclic: only ${cyc_repeats} unchanged-layout resends — cadence is not time-driven'
 
-	// ---- event: change-only, EVERY transition, none repeated ----
-	assert evs.len >= 3 && evs.len <= 12, 'event: ${evs.len} datagrams'
+	// ---- event: change-only, EVERY transition, for the WHOLE window ----
+	// ~7 transitions at 500 ms in 3.5 s: a sender that stops early fails both
+	// the floor and the last-arrival bound
+	assert evs.len >= 5 && evs.len <= 12, 'event: ${evs.len} datagrams (expected ~7)'
+	assert evs.last().at - start > 2200 * time.millisecond, 'event publication stopped early'
 	for i, r in evs {
 		assert r.pay.len == 1, 'event payload ${r.pay.len} bytes'
 		if i > 0 {
@@ -118,6 +125,7 @@ fn test_tx_modes_on_the_wire() {
 	// ---- mixed: heartbeat repeats AND immediate-on-change ----
 	assert mixed.len >= 8, 'mixed: only ${mixed.len} datagrams'
 	mut repeats := 0
+	mut paced_repeats := 0
 	mut fast_change := false
 	for i, r in mixed {
 		assert r.pay.len == 2, 'mixed payload ${r.pay.len} bytes'
@@ -125,6 +133,12 @@ fn test_tx_modes_on_the_wire() {
 			prev := mixed[i - 1]
 			if le16(r.pay, 0) == le16(prev.pay, 0) {
 				repeats++
+				// heartbeat pacing: repeats arrive at the CONFIGURED 300 ms —
+				// a fast-cyclic impostor (whose 'immediate' changes are just a
+				// short cycle) shows short repeat gaps here and fails
+				if r.at - prev.at > 240 * time.millisecond {
+					paced_repeats++
+				}
 			} else {
 				assert le16(r.pay, 0) == le16(prev.pay, 0) + 1, 'mixed setpoint skipped a step'
 				// an off-cycle change must be published BEFORE the next
@@ -136,5 +150,6 @@ fn test_tx_modes_on_the_wire() {
 		}
 	}
 	assert repeats >= 2, 'mixed: no heartbeat repeats observed (${repeats})'
+	assert paced_repeats >= 2, 'mixed: heartbeat repeats not paced at the configured cycle (${paced_repeats})'
 	assert fast_change, 'mixed: no change arrived inside the heartbeat interval — immediate-on-change is missing'
 }
