@@ -119,26 +119,27 @@ asil = "QM"
 derives = "SYS-REQ-NET-001"
 
 # 013..017: service-oriented signal/event communication over the datagram
-# service. Capability-level as above — SOME/IP is the first BINDING
-# (docs/someip.md), exactly as DoIP binds REQ-NET-007.
+# service — refining SYS-REQ-NET-002 (application communication), NOT -001
+# (diagnostics/update). Capability-level as above — SOME/IP is the first
+# BINDING (docs/someip.md), exactly as DoIP binds REQ-NET-007.
 
 [[req]]
 id = "REQ-NET-013"
 title = "Event publication over the network"
-text = "Configured signal groups shall be publishable over the network datagram service as events, packed by the same build-time codec as bus frames, with the same configured transmission modes (cyclic, on-change, mixed) the bus transport provides."
+text = "Configured signal groups shall be publishable over the network datagram service as events whose payload layout is fully determined by the build-time configuration, with the same configured transmission modes (cyclic, on-change, mixed) the bus transport provides."
 status = "draft"
 method = "test"
 asil = "QM"
-derives = "SYS-REQ-NET-001"
+derives = "SYS-REQ-NET-002"
 
 [[req]]
 id = "REQ-NET-014"
-title = "Interoperable service wire format"
-text = "Networked events and remote calls shall carry an industry-standard service-oriented message header so that commodity network analyzers and third-party tooling can identify, decode, and generate the traffic without project-specific software."
+title = "Interoperable service message envelope"
+text = "Networked events and remote calls shall carry an industry-standard service-oriented message header such that commodity network analyzers and third-party tooling can identify the service, method or event, length, message type, and request correlation without project-specific software; payload interpretation may additionally require the build-time configuration, as bus frame bodies require their signal database."
 status = "draft"
 method = "test"
 asil = "QM"
-derives = "SYS-REQ-NET-001"
+derives = "SYS-REQ-NET-002"
 
 [[req]]
 id = "REQ-NET-015"
@@ -147,7 +148,7 @@ text = "Events received over the network datagram service shall be routed to sig
 status = "draft"
 method = "test"
 asil = "QM"
-derives = "SYS-REQ-NET-001"
+derives = "SYS-REQ-NET-002"
 
 [[req]]
 id = "REQ-NET-016"
@@ -156,7 +157,7 @@ text = "The subsystem shall provide request/response messaging over the network 
 status = "draft"
 method = "test"
 asil = "QM"
-derives = "SYS-REQ-NET-001"
+derives = "SYS-REQ-NET-002"
 
 [[req]]
 id = "REQ-NET-017"
@@ -165,4 +166,4 @@ text = "All service communication endpoints (addresses, ports, service and metho
 status = "draft"
 method = "test"
 asil = "QM"
-derives = "SYS-REQ-NET-001"
+derives = "SYS-REQ-NET-002"
