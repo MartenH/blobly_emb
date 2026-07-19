@@ -141,7 +141,7 @@ The 16-byte header, big-endian on the wire as the standard requires:
 |---|---|---|
 | Message ID | 32 | `service` (high 16) + frame `id` (low 16) |
 | Length | 32 | 8 + payload length (bytes after this field) |
-| Request ID | 32 | events: client 0x0000 + a per-frame session counter (wraps 1..0xFFFF — receivers get loss detection for free); requests: echoed into the response |
+| Request ID | 32 | notifications: 0x0000_0000 — strict stacks expect zero, and interop is the point of the header. (A per-frame session counter for loss detection was considered and dropped as nonconforming; loss detection, when a frame wants it, is the existing E2E protection applied to the eth payload — sequence counter + CRC, already built.) Requests: echoed into the response |
 | Protocol version | 8 | 0x01 |
 | Interface version | 8 | the configured `[someip] version`, explicitly managed — bumped in the same reviewed diff that breaks the layout. (A truncated config hash was considered and rejected: 1/256 silent collisions, and unrelated table edits would churn the version. Strict build-identity checking is host-side — the oracle compares the layout table the trace manifest carries.) |
 | Message type | 8 | P1: NOTIFICATION (0x02). P3 adds REQUEST (0x00) / RESPONSE (0x80) / ERROR (0x81) |
@@ -149,8 +149,9 @@ The 16-byte header, big-endian on the wire as the standard requires:
 
 The **payload** is NOT the CAN codec's output — the DBC codec packs signal
 *values* at DBC bit positions with scaling and synthesizes rx-side fields; the
-eth payload is the **derived layout** above (raw declared fields, declaration
-order, little-endian, natural widths), a small generated eth codec of its own.
+eth payload is the **derived layout** above (raw declared fields in the
+CANONICAL order — signals-list order, name-sorted fields — little-endian,
+natural widths), a small generated eth codec of its own.
 For a module-bound frame the payload is the module's own bytes, exactly as on
 CAN. Little-endian is a declared deviation from AUTOSAR's default big-endian
 payload serialization: SOME/IP the wire standard does not mandate payload
