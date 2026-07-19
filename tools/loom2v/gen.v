@@ -929,7 +929,9 @@ fn emit_partition_io(m Model) []string {
 		mult := pt.period_ms / fastest
 		ind := if mult > 1 { '\t\t\t' } else { '\t\t' }
 		if mult > 1 {
-			glue << '\t\tif tick % ${mult} == 0 { // ${pt.period_ms} ms point on the ${fastest} ms tick'
+			// (tick+1): the first serve is one fastest-period after spawn, so a
+			// sub-rated point must first fire on its OWN period, not the fastest one
+			glue << '\t\tif (tick + 1) % ${mult} == 0 { // ${pt.period_ms} ms point on the ${fastest} ms tick'
 		}
 		if pt.output {
 			glue << '${ind}mut ${fld} := sig.${pt.name}{}'
