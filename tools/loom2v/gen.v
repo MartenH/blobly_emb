@@ -10,8 +10,9 @@
 //                           decodes rx signals -> IOC, encodes tx signals <- IOC
 //   * both partitions    -> INTERNAL: from == to -> local cell, else IOC channel
 //
-//   v run tools/loom2v/gen.v <ecu.toml> <bus.dbc> <signals_out> <ports_out> <glue_out>
-// (run from a freestanding example with its own v.mod, so module names are short)
+//   v run tools/loom2v <ecu.toml> <bus.dbc> <signals_out> <ports_out> <glue_out>
+// (the DIRECTORY, not gen.v alone — loom2v is split across gen_*.v sibling files in
+// `module main`; run from a freestanding example with its own v.mod so module names are short)
 module main
 
 import os
