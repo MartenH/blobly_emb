@@ -11,23 +11,23 @@ import driver.io
 
 struct Partition_app_state {
 mut:
-	button_lamp app.ButtonLamp
+	meter app.Meter
 }
 
-fn handler_app_button_lamp_on_10ms(ctx voidptr) {
+fn handler_app_meter_on_10ms(ctx voidptr) {
 	mut st := unsafe { &Partition_app_state(ctx) }
-	mut inp := ports.ButtonLampIn{}
-	osal.ioc_acquire(user_button_ch, &inp.user_button, u8(sizeof(inp.user_button)))
-	mut outp := ports.ButtonLampOut{}
-	st.button_lamp.on_10ms(inp, mut outp)
-	osal.ioc_publish(led_green_ch, &outp.led_green, u8(sizeof(outp.led_green)))
+	mut inp := ports.MeterIn{}
+	osal.ioc_acquire(pot_volt_ch, &inp.pot_volt, u8(sizeof(inp.pot_volt)))
+	mut outp := ports.MeterOut{}
+	st.meter.on_10ms(inp, mut outp)
+	osal.ioc_publish(led_hi_ch, &outp.led_hi, u8(sizeof(outp.led_hi)))
 }
 
 pub fn partition_app(core int, arg voidptr) {
 	osal.pin_to_core(0)
 	mut st := Partition_app_state{}
 	mut sched := loom.Scheduler{}
-	sched.every(10000, handler_app_button_lamp_on_10ms, &st)
+	sched.every(10000, handler_app_meter_on_10ms, &st)
 	for {
 		loom_t0 := osal.now_us()
 		sched.run(loom_t0)
@@ -60,13 +60,13 @@ fn partition_io() {
 			next_us += missed * 10000
 		}
 		loom_t0 := osal.now_us()
-		if user_button_v := io.gpio_read_checked(0) {
-			mut user_button := sig.UserButton{ pressed: user_button_v }
-			osal.ioc_publish(user_button_ch, &user_button, u8(sizeof(user_button)))
+		mut led_hi := sig.LedHi{}
+		if osal.ioc_acquire(led_hi_ch, &led_hi, u8(sizeof(led_hi))) {
+			io.gpio_write(0, led_hi.on) // freshness-gated: init holds until the first publish
 		}
-		mut led_green := sig.LedGreen{}
-		if osal.ioc_acquire(led_green_ch, &led_green, u8(sizeof(led_green))) {
-			io.gpio_write(1, led_green.on) // freshness-gated: init holds until the first publish
+		if pot_volt_v := io.adc_read_checked(1) {
+			mut pot_volt := sig.PotVolt{ count: u16(pot_volt_v) }
+			osal.ioc_publish(pot_volt_ch, &pot_volt, u8(sizeof(pot_volt)))
 		}
 		loom_t1 := osal.now_us()
 		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
@@ -81,20 +81,21 @@ __global (
 )
 
 pub fn run() {
-	if !io.cfg(0, 'UserButton', 'PC13', false, 0, 0, 0, u32(0)) {
-		panic('io cfg failed: UserButton')
+	if !io.cfg(0, 'LedHi', 'PB0', true, 0, 0, 0, u32(0)) {
+		panic('io cfg failed: LedHi')
 	}
-	if !io.cfg(1, 'LedGreen', 'PB0', true, 1, 0, 0, u32(0)) {
-		panic('io cfg failed: LedGreen')
+	if !io.cfg(1, 'PotVolt', 'PA3', false, 0, 0, 1, u32(65535)) {
+		panic('io cfg failed: PotVolt')
 	}
 	if !io.init() {
 		panic('io init failed')
 	}
-	if boot_user_button_v := io.gpio_read_checked(0) {
-		mut boot_user_button := sig.UserButton{ pressed: boot_user_button_v }
-		osal.ioc_publish(user_button_ch, &boot_user_button, u8(sizeof(boot_user_button)))
+	if boot_pot_volt_v := io.adc_read_checked(1) {
+		mut boot_pot_volt := sig.PotVolt{ count: u16(boot_pot_volt_v) }
+		osal.ioc_publish(pot_volt_ch, &boot_pot_volt, u8(sizeof(boot_pot_volt)))
 	} else {
-		io_startup_faults++ // unreadable at boot: publish NOTHING
+		io_startup_faults++ // no first sample: publish NOTHING (the port
+		// default holds; a published default would be a fabricated fresh sample)
 	}
 	if io_startup_faults > 0 {
 		eprintln('io: startup fault(s) — count in io_startup_faults') // no interpolation: -gc none

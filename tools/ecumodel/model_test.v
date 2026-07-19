@@ -514,7 +514,7 @@ name      = "B"
 pin       = "PB0"
 period_ms = 10
 ')
-	assert e.any(it.contains('reuses pin "PB0"'))
+	assert e.any(it.contains('reuses pad "PB0"'))
 }
 fn test_io_shape_must_be_single_bool() {
 	e := errs_of('

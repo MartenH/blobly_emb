@@ -370,13 +370,17 @@ fn parse_buses(doc toml.Doc) (map[string]bool, map[string]int) {
 struct IoPoint {
 	name        string
 	pin         string
+	kind        string // 'gpio' | 'adc' | 'pwm' (docs/io.md)
 	period_ms   int
-	init        bool
+	init        bool // gpio output init level
+	init_pm     u32  // pwm output init duty (permille)
+	freq_hz     int  // pwm carrier
 	active_low  bool // pad polarity (REQ-IO-017): logical true = pad LOW
 	output      bool
 	ch          int
 	has_default bool // input only: the port field's pre-first-sample value
 	default     bool
+	default_u32 u32  // adc: typed degraded-start count (has_default gates it)
 }
 
 // parse_io reads [io] (optional core, default 0 — the IO core) and its [[io.gpio]]
@@ -387,20 +391,26 @@ fn parse_io(doc toml.Doc, sig_of map[string]SigInfo) ([]IoPoint, int) {
 	io_tbl := doc.value_opt('io') or { return points, 0 }
 	iom := io_tbl.as_map()
 	core := int((iom['core'] or { toml.Any(0) }).int())
-	for p in (iom['gpio'] or { toml.Any([]toml.Any{}) }).array() {
-		pm := p.as_map()
-		name := (pm['name'] or { toml.Any('') }).string()
-		si := sig_of[name] or { continue } // one-to-one binding validated upstream
-		points << IoPoint{
-			name:        name
-			pin:         (pm['pin'] or { toml.Any('') }).string()
-			period_ms:   int((pm['period_ms'] or { toml.Any(0) }).int())
-			init:        (pm['init'] or { toml.Any(false) }).bool()
-			active_low:  (pm['active_low'] or { toml.Any(false) }).bool()
-			output:      si.io_out
-			ch:          points.len
-			has_default: 'default' in pm
-			default:     (pm['default'] or { toml.Any(false) }).bool()
+	for kind in ['gpio', 'adc', 'pwm'] {
+		for p in (iom[kind] or { toml.Any([]toml.Any{}) }).array() {
+			pm := p.as_map()
+			name := (pm['name'] or { toml.Any('') }).string()
+			si := sig_of[name] or { continue } // one-to-one binding validated upstream
+			points << IoPoint{
+				name:        name
+				pin:         (pm['pin'] or { toml.Any('') }).string()
+				kind:        kind
+				period_ms:   int((pm['period_ms'] or { toml.Any(0) }).int())
+				init:        (pm['init'] or { toml.Any(false) }).bool()
+				init_pm:     u32((pm['init'] or { toml.Any(0) }).int())
+				freq_hz:     int((pm['freq_hz'] or { toml.Any(0) }).int())
+				active_low:  (pm['active_low'] or { toml.Any(false) }).bool()
+				output:      si.io_out
+				ch:          points.len
+				has_default: 'default' in pm
+				default:     (pm['default'] or { toml.Any(false) }).bool()
+				default_u32: u32((pm['default'] or { toml.Any(0) }).int())
+			}
 		}
 	}
 	return points, core
@@ -965,7 +975,16 @@ fn emit_partition_io(m Model, producers []Producer) []string {
 		if pt.output {
 			glue << '${ind}mut ${fld} := sig.${pt.name}{}'
 			glue << '${ind}if osal.${acquire_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld}))) {'
-			glue << '${ind}\tio.gpio_write(${pt.ch}, ${fld}.${si.val_field}) // freshness-gated: init holds until the first publish'
+			if pt.kind == 'pwm' {
+				glue << '${ind}\tio.pwm_write(${pt.ch}, u32(${fld}.${si.val_field})) // duty permille; freshness-gated'
+			} else {
+				glue << '${ind}\tio.gpio_write(${pt.ch}, ${fld}.${si.val_field}) // freshness-gated: init holds until the first publish'
+			}
+			glue << '${ind}}'
+		} else if pt.kind == 'adc' {
+			glue << '${ind}if ${fld}_v := io.adc_read_checked(${pt.ch}) {'
+			glue << '${ind}\tmut ${fld} := sig.${pt.name}{ ${si.val_field}: ${adc_cast(si.val_type)}(${fld}_v) }'
+			glue << '${ind}\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
 			glue << '${ind}}'
 		} else {
 			// checked read: only REAL parsed values publish — after a failed boot
@@ -999,6 +1018,26 @@ fn emit_partition_io(m Model, producers []Producer) []string {
 // host, and the port contract's failure leg stays honest on target too). with_load (the
 // comm-thread target): serve time is accounted like an FB thread's pass and published to
 // io's own load slot — the slot AFTER the FB threads, matching its manifest row.
+// adc_cast: the value cast for an ADC point's signal field — adc_read returns
+// u32, the field is u16 or u32 (validated), so u16 fields narrow explicitly.
+// io_cfg_param: the kind param for io.cfg — pwm carrier freq_hz, or an ADC's
+// full-scale max (so the host mirror rejects an out-of-width value rather than
+// letting the u16 glue cast truncate it, codex emb#152). 0 for gpio.
+fn io_cfg_param(pt IoPoint, m Model) string {
+	if pt.kind == 'pwm' {
+		return 'u32(${pt.freq_hz})'
+	}
+	if pt.kind == 'adc' {
+		si := m.sig_of[pt.name] or { SigInfo{} }
+		return if si.val_type == 'u16' { 'u32(65535)' } else { 'u32(0xffffffff)' }
+	}
+	return 'u32(0)'
+}
+
+fn adc_cast(typ string) string {
+	return if typ == 'u16' { 'u16' } else { 'u32' }
+}
+
 fn emit_io_target_entry(m Model, ioc_idx map[string]int, with_load bool, load_slot int) []string {
 	mut g := []string{}
 	if m.io_points.len == 0 {
@@ -1059,7 +1098,18 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int, with_load bool, load_sl
 			g << '${ind}mut ${fld}_a := u32(0)'
 			g << '${ind}mut ${fld}_b := u32(0)'
 			g << '${ind}if C.ioc_get_ever(${idx}, &${fld}_a, &${fld}_b) != 0 {'
-			g << '${ind}\tio.gpio_write(${pt.ch}, ${fld}_a != 0) // freshness-gated: init holds until the first publish'
+			if pt.kind == 'pwm' {
+				g << '${ind}\tio.pwm_write(${pt.ch}, ${fld}_a) // duty permille; freshness-gated: init holds until the first publish'
+			} else {
+				g << '${ind}\tio.gpio_write(${pt.ch}, ${fld}_a != 0) // freshness-gated: init holds until the first publish'
+			}
+			g << '${ind}}'
+		} else if pt.kind == 'adc' {
+			// analog input: publish only a REAL conversion (checked) — a degraded
+			// converter must not push a fabricated zero (codex emb#152); the cell
+			// keeps its last published value / declared default meanwhile.
+			g << '${ind}if ${fld}_v := io.adc_read_checked(${pt.ch}) {'
+			g << '${ind}\tC.ioc_pub(${idx}, ${fld}_v, u32(0))'
 			g << '${ind}}'
 		} else {
 			g << '${ind}if ${fld}_v := io.gpio_read_checked(${pt.ch}) {'
@@ -1120,9 +1170,10 @@ fn emit_io_target_boot(m Model, ioc_idx map[string]int) []string {
 		g << '\tmut io_out_fault := false'
 	}
 	for pt in m.io_points {
-		iv := if pt.init { 1 } else { 0 }
 		al := if pt.active_low { 1 } else { 0 }
-		g << "\tif !io.cfg(${pt.ch}, '${pt.name}', '${pt.pin}', ${pt.output}, ${iv}, ${al}) {"
+		kind_n := if pt.kind == 'adc' { 1 } else if pt.kind == 'pwm' { 2 } else { 0 }
+		iv := if pt.kind == 'pwm' { pt.init_pm } else if pt.init { u32(1) } else { u32(0) }
+		g << "\tif !io.cfg(${pt.ch}, '${pt.name}', '${pt.pin}', ${pt.output}, ${iv}, ${al}, ${kind_n}, ${io_cfg_param(pt, m)}) {"
 		g << '\t\tio_startup_faults++'
 		if pt.output {
 			g << '\t\tio_out_fault = true // halt LATER: first let the valid outputs init'
@@ -1148,11 +1199,24 @@ fn emit_io_target_boot(m Model, ioc_idx map[string]int) []string {
 		}
 		idx := ioc_idx[pt.name] or { continue }
 		fld := snake(pt.name)
-		g << '\tif boot_${fld}_v := io.gpio_read_checked(${pt.ch}) {'
-		g << '\t\tC.ioc_pub(${idx}, if boot_${fld}_v { u32(1) } else { u32(0) }, u32(0))'
-		g << '\t} else {'
-		g << '\t\tio_startup_faults++ // unreadable at boot: publish NOTHING (no fabricated sample)'
-		g << '\t}'
+		if pt.kind == 'adc' {
+			// checked: publish only a REAL first conversion (REQ-IO-018). If none
+			// landed, publish the declared default, else count a fault (never a
+			// fabricated zero — codex emb#152).
+			g << '\tif boot_${fld}_v := io.adc_read_checked(${pt.ch}) {'
+			g << '\t\tC.ioc_pub(${idx}, boot_${fld}_v, u32(0))'
+			g << '\t} else {'
+			g << '\t\tio_startup_faults++ // no first conversion: publish NOTHING (the'
+			g << '\t\t// port initializer holds the declared default; a published default'
+			g << '\t\t// would mark a fabricated sample fresh — codex emb#152)'
+			g << '\t}'
+		} else {
+			g << '\tif boot_${fld}_v := io.gpio_read_checked(${pt.ch}) {'
+			g << '\t\tC.ioc_pub(${idx}, if boot_${fld}_v { u32(1) } else { u32(0) }, u32(0))'
+			g << '\t} else {'
+			g << '\t\tio_startup_faults++ // unreadable at boot: publish NOTHING (no fabricated sample)'
+			g << '\t}'
+		}
 	}
 	return g
 }
@@ -2344,9 +2408,10 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 			// worse than none) and bumps the exported startup-fault counter; the io
 			// thread's periodic reads then use last-good semantics as usual.
 			for pt in m.io_points {
-				iv := if pt.init { 1 } else { 0 }
 				hal := if pt.active_low { 1 } else { 0 }
-				glue << "\tif !io.cfg(${pt.ch}, '${pt.name}', '${pt.pin}', ${pt.output}, ${iv}, ${hal}) {"
+				hkind := if pt.kind == 'adc' { 1 } else if pt.kind == 'pwm' { 2 } else { 0 }
+				hiv := if pt.kind == 'pwm' { pt.init_pm } else if pt.init { u32(1) } else { u32(0) }
+				glue << "\tif !io.cfg(${pt.ch}, '${pt.name}', '${pt.pin}', ${pt.output}, ${hiv}, ${hal}, ${hkind}, ${io_cfg_param(pt, m)}) {"
 				glue << "\t\tpanic('io cfg failed: ${pt.name}')"
 				glue << '\t}'
 			}
@@ -2359,12 +2424,22 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 				}
 				si := m.sig_of[pt.name] or { continue }
 				fld := snake(pt.name)
-				glue << '\tif boot_${fld}_v := io.gpio_read_checked(${pt.ch}) {'
-				glue << '\t\tmut boot_${fld} := sig.${pt.name}{ ${si.val_field}: boot_${fld}_v }'
-				glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &boot_${fld}, u8(sizeof(boot_${fld})))'
-				glue << '\t} else {'
-				glue << '\t\tio_startup_faults++ // unreadable at boot: publish NOTHING'
-				glue << '\t}'
+				if pt.kind == 'adc' {
+					glue << '\tif boot_${fld}_v := io.adc_read_checked(${pt.ch}) {'
+					glue << '\t\tmut boot_${fld} := sig.${pt.name}{ ${si.val_field}: ${adc_cast(si.val_type)}(boot_${fld}_v) }'
+					glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &boot_${fld}, u8(sizeof(boot_${fld})))'
+					glue << '\t} else {'
+					glue << '\t\tio_startup_faults++ // no first sample: publish NOTHING (the port'
+					glue << '\t\t// default holds; a published default would be a fabricated fresh sample)'
+					glue << '\t}'
+				} else {
+					glue << '\tif boot_${fld}_v := io.gpio_read_checked(${pt.ch}) {'
+					glue << '\t\tmut boot_${fld} := sig.${pt.name}{ ${si.val_field}: boot_${fld}_v }'
+					glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &boot_${fld}, u8(sizeof(boot_${fld})))'
+					glue << '\t} else {'
+					glue << '\t\tio_startup_faults++ // unreadable at boot: publish NOTHING'
+					glue << '\t}'
+				}
 			}
 			if has_io_input {
 				// host diagnostics only — the exported counter stays the bench contract
@@ -2508,7 +2583,9 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 					for pt in m.io_points {
 						if pt.name == r.string() && !pt.output && pt.has_default {
 							si_r := m.sig_of[r.string()] or { SigInfo{} }
-							dflt = ' = sig.${r.string()}{ ${si_r.val_field}: ${pt.default} }'
+							// gpio default is bool; adc default is the numeric count (codex emb#152)
+							dval := if pt.kind == 'adc' { '${pt.default_u32}' } else { '${pt.default}' }
+							dflt = ' = sig.${r.string()}{ ${si_r.val_field}: ${dval} }'
 						}
 					}
 					ports << '\t${snake(r.string())} sig.${r.string()}${dflt}'

@@ -146,6 +146,7 @@ SECTIONS
   {
     . = ALIGN(32);
     *(.eth_dma)
+    *(.dma_buf .dma_buf.*)   /* ADC/DMA latest-value buffers share D2 SRAM */
     . = ALIGN(4);
   } > D2SRAM
 }

@@ -223,14 +223,14 @@ fn tx_application_define(first_unused voidptr) {
 	// running init, so every VALID output still reaches its declared level
 	// instead of floating through the halt (codex on emb#150).
 	mut io_out_fault := false
-	if !io.cfg(0, 'UserButton', 'PC13', false, 0, 0) {
+	if !io.cfg(0, 'UserButton', 'PC13', false, 0, 0, 0, u32(0)) {
 		io_startup_faults++
 	}
-	if !io.cfg(1, 'LedGreen', 'PB0', true, 0, 0) {
+	if !io.cfg(1, 'LedGreen', 'PB0', true, 0, 0, 0, u32(0)) {
 		io_startup_faults++
 		io_out_fault = true // halt LATER: first let the valid outputs init
 	}
-	if !io.cfg(2, 'LedYellow', 'PE1', true, 0, 0) {
+	if !io.cfg(2, 'LedYellow', 'PE1', true, 0, 0, 0, u32(0)) {
 		io_startup_faults++
 		io_out_fault = true // halt LATER: first let the valid outputs init
 	}

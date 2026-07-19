@@ -5,58 +5,91 @@ diagnostics sit, and how a signal travels from the bus to an FB and back. For th
 *why* behind each piece see `application-model.md`, `communication.md`,
 `multicore-perf.md`; this is the map that ties them together.
 
-## The stack
+## The runtime picture — threads first
+
+Everything runs in one of a handful of thread kinds, and **the only thing that
+ever crosses between two threads is an IOC channel** — that one rule generates
+the whole picture:
 
 ```mermaid
 graph TB
-  FB["Function Blocks (app/)<br/>pure: In signals -> Out signals + private state"]
-  PORTS["ports In/Out structs (generated)"]
-  LOOM["Loom scheduler (loom/)<br/>static (handler, ctx, period) table<br/>snapshots In before the call, publishes Out after"]
-
-  subgraph xport["cross-FB transport"]
-    CELL["local cell<br/>same-core FB -> FB"]
-    IOC["IOC channel (osal/)<br/>lock-free seqlock / double / triple<br/>cross-core"]
+  subgraph APPTH["app thread(s) — one Loom each, pinned to a core"]
+    FB["Function Blocks (app/)<br/>pure: In ports -> Out ports + private state"]
+    LOOM["Loom (loom/): static handler table<br/>fires each handler on its own period_ms<br/>(on_10ms / on_100ms are handlers here, NOT threads)<br/>snapshot In -> call FB -> publish Out"]
   end
 
-  subgraph bridge["COM bus bridge — generated, runs on the IO core (gen/loom_gen.v)"]
-    COM["COM<br/>signal <-> PDU, TX modes, RX deadline"]
-    CODEC["DBC codec<br/>(gen/, from dbc2cfg)"]
-    PROT["E2E / SecOC<br/>CRC / AES-CMAC + freshness"]
-    ROUTE["Router<br/>raw-PDU gateway ([[route]])"]
-    DIAG["Diagnostics<br/>ISO-TP (comm/isotp) + UDS (comm/uds)"]
+  IOC[("IOC channels (osal/)<br/>lock-free latest-value: triple / double / seqlock / xioc<br/>the only cross-thread / cross-core crossing<br/>(same-thread FB -> FB: local cell, no sync)")]
+
+  subgraph COMMTH["comm thread — one per core, owns its buses"]
+    COM["COM · DBC codec · E2E/SecOC<br/>router · ISO-TP/UDS · NM frames<br/>rx: CAN Rx IRQ -> decode -> publish<br/>tx: cyclic, TX modes"]
   end
 
-  DRV["driver: CAN (driver/can)<br/>SocketCAN (host) · ST FDCAN HAL · AUTOSAR CanIf"]
-  IOTH["io thread (generated)<br/>samples inputs / applies outputs<br/>driver/io: file mirror (host) · GPIO registers (target)"]
+  subgraph IOTH["io thread — one, platform-owned"]
+    IOSRV["samples due inputs / applies due outputs<br/>each io point at its period_ms<br/>the only pin-touching thread"]
+  end
+
+  MGMT["management plane (section below)<br/>mode thread · NvM background task · watchdog pet"]
+
+  DRV["driver/can<br/>SocketCAN (host) · ST FDCAN (target)"]
+  IODRV["driver/io<br/>file mirror (host) · GPIO/ADC/PWM registers (target)"]
   BUS["CAN bus(es)"]
   PINS["physical pins"]
-  OSAL["OSAL (osal/): cores · time · IOC pool · pinning<br/>POSIX fork-per-core  /  ThreadX AMP"]
 
-  FB <--> PORTS
-  PORTS <--> LOOM
-  LOOM <--> CELL
+  FB <--> LOOM
   LOOM <--> IOC
   IOC <--> COM
-  COM <--> CODEC
-  COM <--> PROT
+  IOC <--> IOSRV
   COM <--> DRV
-  ROUTE --> DRV
-  DIAG <--> IOC
-  DIAG <--> DRV
   DRV <--> BUS
-  IOTH <--> IOC
-  IOTH <--> PINS
-
-  LOOM -. runs on .-> OSAL
-  IOTH -. runs on .-> OSAL
-  COM -. runs on .-> OSAL
-  IOC -. lives in .-> OSAL
+  IOSRV <--> IODRV
+  IODRV <--> PINS
+  MGMT -. "mode events: quiesce / wake" .-> COMMTH
+  MGMT -. "quiesce / outputs-to-init" .-> IOTH
 ```
 
-Read it top-down: an **FB** only ever touches its **ports**; the **Loom** moves data
-between ports and the **transport** (a local cell, or an **IOC** channel across
-cores); the **COM bridge** is the only thing that touches the **driver** and the
-**bus**. Everything in the bridge box is generated and runs on the IO core.
+All of it sits on the **OSAL** (`osal/`: cores, time, the IOC pool, pinning —
+POSIX fork-per-core on host, ThreadX AMP on target).
+
+**The threads.** A running ECU has exactly these:
+
+- **app threads** — one per configured thread (today loom2v generates one per
+  partition), each a **Loom** with a static handler table. `on_10ms`,
+  `on_100ms`, … are **handler periods in that table, not threads or OS tasks**:
+  one app thread happily hosts 1 ms, 10 ms and 100 ms handlers, each fired on
+  its own multiple. Which periods exist is config (`period_ms` per
+  `[[fb.handler]]`), not a fixed part of the design.
+- **comm thread(s)** — **one per core, owning that core's buses** end-to-end
+  (COM, codec, E2E/SecOC, router, ISO-TP/UDS, NM frames); the only thing
+  touching the CAN driver. On target a thread costs a stack, so buses share
+  their core's owner rather than each spawning one; a different *transport*
+  still brings its own owner (a LIN master, an Ethernet adapter — see the
+  transport section). Target: a first-class thread, rx driven by the CAN Rx
+  interrupt, tx cyclic. Host today: a polled loop per bridge bus
+  (`comm_<bus>` in the manifest/trace) — host threads are free, and the
+  per-bus lanes are an implementation detail, not the design.
+- **io thread** — one, platform-owned; the only thread touching `driver/io`.
+  Samples inputs and applies outputs, each io point at its own `period_ms`
+  (docs/io.md).
+- **the management plane** — mode thread (NM / ECU state / watchdog
+  supervision), the NvM background task, the watchdog pet: slower, event-driven,
+  covered in its own section below.
+- **ISRs** — the CAN Rx interrupt (wakes the comm thread) and the tick.
+  Interrupt-triggered FB handlers (`irq`) are a reserved seam, not yet
+  generated.
+
+**How an IO (pin) signal travels — never through COM.** COM is the *bus*
+endpoint; the io thread is the *pin* endpoint. They are symmetric peers, and
+both talk to the app only through IOC:
+
+- **in**: pin → io thread samples it at the point's `period_ms` →
+  `ioc_publish` → the Loom snapshots it into the FB's In port.
+- **out**: the FB writes its Out port → the Loom publishes → the io thread
+  acquires and applies it to the pin (freshness-gated: the configured `init`
+  until the FB has published once).
+
+A bus signal takes the same shape through the comm thread instead — only the
+far endpoint differs. An FB cannot tell (and never needs to know) whether
+`inp.speed` came from a frame, a pin, or another FB.
 
 ## Who talks to what
 
@@ -83,27 +116,7 @@ else is platform-independent V above the OSAL/driver line.
 
 ## Runtime topology (who runs where)
 
-```mermaid
-graph LR
-  subgraph c0["core 0 — IO"]
-    BR["bus bridge — polled loop, one per bus<br/>COM · codec · E2E/SecOC · router · ISO-TP/UDS<br/><i>(target: a first-class comm thread)</i>"]
-  end
-  subgraph c1["core 1 — app"]
-    PA["partition → thread: Loom + its FBs"]
-  end
-  subgraph cn["core N — app"]
-    PB["partition → thread: Loom + its FBs"]
-  end
-  SHM[("shared IOC region<br/>mmap MAP_SHARED  /  shared SRAM")]
-  CAN["CAN driver ↔ bus(es)"]
-
-  BR <--> SHM
-  PA <--> SHM
-  PB <--> SHM
-  BR <--> CAN
-```
-
-Each **partition** is the unit of **MPU isolation**, pinned to a core; inside it runs one
+The picture above shows the threads; this section is where they land. Each **partition** is the unit of **MPU isolation**, pinned to a core; inside it runs one
 or more **threads** — the OS scheduling unit (a spawned loop on host, a ThreadX thread on
 target) — each a **Loom** dispatching the FBs mapped to it. An **fb names a thread** (thread
 names are globally unique, so the partition is *derived* — a thread belongs to one
@@ -114,13 +127,14 @@ target and modeled by codegen convention on the host — see `memory-protection.
 
 Today the **bus bridge** runs as a **polled** per-bus loop on the IO core — it drains
 `recv`, DBC-decodes rx into IOC, encodes tx from IOC, and serves ISO-TP/UDS + routing. The
-**target** model makes it a first-class **comm thread** per bus (rx driven by the CAN **Rx
-interrupt**, tx periodic) so that *every* thread — app **and** platform — appears in the
+**target** model makes it a first-class **comm thread** per core, owning that core's buses
+(rx driven by the CAN **Rx interrupt**, tx periodic) so that *every* thread — app **and** platform — appears in the
 runtime trace **by name** and the platform is never hidden (bridge / ISO-TP overhead is often
 where the time goes; see `telemetry.md`). *(The comm thread, its Rx-interrupt path, and its
 manifest entry are all target — today the bridge polls and the manifest names app threads
 only; NM is configured but not yet generated into the bridge.)* The only shared memory is the
-**IOC region**; cross-core signals cross there and nowhere else (the basis for MPU isolation).
+**IOC region** (`mmap MAP_SHARED` on host, shared SRAM on target); cross-core signals cross
+there and nowhere else (the basis for MPU isolation).
 
 ## Data-flow paths
 
@@ -186,14 +200,14 @@ plane asks "what should the ECU be *doing* now, and is it still healthy?".
 
 ### Where each runs — the recommended thread model
 
-Extending "one I/O thread per core owns the buses", the recommendation is a **dedicated mode
-thread**, so each concern has a single owner and appears in the trace by name:
+Extending "one comm thread per core owns that core's buses", the recommendation is a
+**dedicated mode thread**, so each concern has a single owner and appears in the trace by name:
 
 ```mermaid
 graph TB
   subgraph core["a core"]
     FBT["app FB thread(s)<br/>compute · IOC signals · never touch CAN"]
-    COMMT["comm / IO thread<br/>owns the bus: COM · router · NM frames · diag<br/>Rx-ISR driven + cyclic tx"]
+    COMMT["comm thread<br/>owns the bus: COM · router · NM frames · diag<br/>Rx-ISR driven + cyclic tx"]
   end
   MODET["mode thread (per ECU)<br/>NM state machines · ECU state · Watchdog supervision<br/>~10 ms mode tick + events"]
   BGT["background task (low prio)<br/>NvM job queue → memory driver"]
@@ -208,8 +222,8 @@ graph TB
 ```
 
 - **app FB thread(s)** — data plane, per partition/core (as today).
-- **comm / IO thread** — per core, owns the bus. Runs the *data-plane* comm work **and the
-  NM frame tx/rx** (NM frames are just special PDUs). Rx-ISR driven + cyclic tx.
+- **comm thread** — per core, owns that core's buses. Runs the *data-plane* comm work **and
+  the NM frame tx/rx** (NM frames are just special PDUs). Rx-ISR driven + cyclic tx.
 - **mode thread** — one per ECU. The *state machines*: NM (per network), ECU state, and
   Watchdog supervision, on a ~10 ms mode tick plus events.
 - **background task** — low priority, drains the NvM job queue to the memory driver so flash
@@ -366,7 +380,7 @@ because their *timing models* differ:
 
 So the picture generalises cleanly: **COM + router + the NM state machine sit once, above the
 PDU line**; below it there is **one bus-owner thread per network**, each with a transport-shaped
-driver, and NM gets a per-network binding (`nm_can`, `nm_udp`, …). Buses group by core (one I/O
+driver, and NM gets a per-network binding (`nm_can`, `nm_udp`, …). Buses group by core (one comm
 thread per core owns that core's buses); a mixed-transport ECU is just several bus owners —
 some CAN, one LIN master, maybe an Ethernet adapter — fed by the same COM and router. LIN's
 schedule-table master and Ethernet's SoAd are the two new driver shapes to add; everything
