@@ -433,6 +433,14 @@ static int pwm_setup(int ch) {
 	unsigned int psc = 0u;
 	while (total / (psc + 1u) > 65536u) psc++;
 	unsigned int arr = total / (psc + 1u) - 1u;
+	/* the achieved carrier must actually match the request — integer division
+	 * can silently shift it (e.g. 75 MHz on a 200 MHz clock would run at 100 MHz).
+	 * Require within ~1% (REQ-IO-011/022); reject otherwise (codex emb#152). */
+	unsigned int achieved = clk / ((psc + 1u) * (arr + 1u));
+	unsigned int req = (unsigned int)g_pt[ch].freq_hz;
+	unsigned int tol = req / 100u + 1u;
+	if (achieved > req + tol || achieved + tol < req)
+		return -1; /* carrier not representable on this timer clock */
 	g_pwm_arr[ch] = arr;
 	/* a shared timer must agree on the FULL carrier (psc AND arr — same arr with a
 	 * different psc is a different frequency), and no two points may claim the same
