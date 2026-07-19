@@ -42,12 +42,15 @@ fields = { wraps = "u16", ticks = "u32" }
 from = "app"
 to   = "eth0"
 
+# E2E: the appended loss-protection trailer (counter@7, CRC@8 — the derived
+# layout size and the byte after; ecucheck rejects anything else).
 [[frame]]
 name    = "BenchTelem"
 bus     = "eth0"
 id      = 0x8001
 signals = ["BenchLoad", "BenchTicks"]
 tx      = { mode = "cyclic", cycle_ms = 100 }
+e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8 }
 
 [[fb]]
 name   = "Bench"
