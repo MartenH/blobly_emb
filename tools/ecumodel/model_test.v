@@ -90,7 +90,8 @@ thread = "app_main"
 // --- [trace] block validation (bare tables first, then the app tail) ---
 
 fn test_trace_valid_block_ok() {
-	assert errs_of('
+	assert errs_of(
+		'
 [bus.can0]
 interface = "vcan0"
 
@@ -100,7 +101,8 @@ level = "thread+fb"
 mode = "ring"
 pre_pct = 50
 buffer_records = 64
-' + app) == []
+' +
+		app) == []
 }
 
 fn test_trace_unknown_bus_flagged() {
@@ -116,7 +118,8 @@ bus = "can9"
 
 // when trace omits `bus`, the default [telemetry].bus is validated too (must be declared).
 fn test_trace_default_telemetry_bus_flagged() {
-	e := errs_of('
+	e := errs_of(
+		'
 [bus.can0]
 interface = "vcan0"
 
@@ -126,7 +129,8 @@ bus = "can9"
 
 [trace]
 level = "thread"
-' + app)
+' +
+		app)
 	assert e.any(it.contains('[trace] bus "can9"') && it.contains('[telemetry].bus'))
 }
 
@@ -140,7 +144,8 @@ level = "thread"
 }
 
 fn test_trace_bad_level_and_mode_flagged() {
-	e := errs_of('
+	e := errs_of(
+		'
 [bus.can0]
 interface = "vcan0"
 
@@ -148,13 +153,15 @@ interface = "vcan0"
 bus = "can0"
 level = "everything"
 mode = "circular"
-' + app)
+' +
+		app)
 	assert e.any(it.contains('level "everything" is invalid'))
 	assert e.any(it.contains('mode "circular" is invalid'))
 }
 
 fn test_trace_pre_pct_and_buffer_range_flagged() {
-	e := errs_of('
+	e := errs_of(
+		'
 [bus.can0]
 interface = "vcan0"
 
@@ -162,7 +169,8 @@ interface = "vcan0"
 bus = "can0"
 pre_pct = 150
 buffer_records = 70000
-' + app)
+' +
+		app)
 	assert e.any(it.contains('pre_pct 150 out of range'))
 	assert e.any(it.contains('buffer_records 70000 out of range'))
 }
@@ -196,7 +204,8 @@ buffer_records = 0
 
 // buffer_records above 2^32 must be rejected — .int() would truncate 0x100000001 back to 1.
 fn test_trace_buffer_records_above_u32_flagged() {
-	e := errs_of('
+	e := errs_of(
+		'
 [bus.can0]
 interface = "vcan0"
 
@@ -209,53 +218,62 @@ buffer_records = 0x100000001
 
 // an "overrun" trigger with no positive budget_us never freezes the ring -> reject it.
 fn test_trace_overrun_trigger_needs_budget() {
-	no_budget := errs_of('
+	no_budget := errs_of(
+		'
 [bus.can0]
 interface = "vcan0"
 
 [trace]
 bus = "can0"
 trigger = { source = "overrun" }
-' + app)
+' +
+		app)
 	assert no_budget.any(it.contains('positive budget_us'))
 
-	zero_budget := errs_of('
+	zero_budget := errs_of(
+		'
 [bus.can0]
 interface = "vcan0"
 
 [trace]
 bus = "can0"
 trigger = { source = "overrun", budget_us = 0 }
-' + app)
+' +
+		app)
 	assert zero_budget.any(it.contains('positive budget_us'))
 
-	ok := errs_of('
+	ok := errs_of(
+		'
 [bus.can0]
 interface = "vcan0"
 
 [trace]
 bus = "can0"
 trigger = { source = "overrun", budget_us = 500 }
-' + app)
+' +
+		app)
 	assert ok.filter(it.contains('budget_us')).len == 0
 }
 
 // an unsupported/misspelled trigger source is rejected (only "overrun" is generated).
 fn test_trace_unsupported_trigger_source() {
-	e := errs_of('
+	e := errs_of(
+		'
 [bus.can0]
 interface = "vcan0"
 
 [trace]
 bus = "can0"
 trigger = { source = "signal" }
-' + app)
+' +
+		app)
 	assert e.any(it.contains('trigger source "signal" is not supported'))
 }
 
 // a trigger table present but with no source is rejected (omit it entirely for no trigger).
 fn test_trace_trigger_without_source() {
-	e := errs_of('
+	e := errs_of(
+		'
 [bus.can0]
 interface = "vcan0"
 
@@ -338,7 +356,8 @@ period_ms = 10
 }
 
 fn test_io_signal_without_point_rejected() {
-	e := errs_of('
+	e := errs_of(
+		'
 [io]
 [[io.gpio]]
 name      = "UserButton"
@@ -356,7 +375,8 @@ name = "Orphan"
 fields = { on = "bool" }
 from = "io"
 to   = "app"
-' + app)
+' +
+		app)
 	assert e.any(it.contains('phantom endpoint'))
 }
 
@@ -369,7 +389,8 @@ name = "Orphan"
 fields = { on = "bool" }
 from = "io"
 to   = "app"
-' + app)
+' +
+		app)
 	assert e.any(it.contains('phantom endpoint'))
 }
 
@@ -389,7 +410,8 @@ fn test_io_too_many_points_rejected() {
 // (two prefix-sharing names would collide on one mirror file)
 fn test_io_overlong_name_rejected() {
 	long := 'P' + 'x'.repeat(63)
-	e := errs_of('
+	e := errs_of(
+		'
 [io]
 [[io.gpio]]
 name      = "${long}"
@@ -401,12 +423,14 @@ name = "${long}"
 fields = { pressed = "bool" }
 from = "io"
 to   = "app"
-' + app)
+' +
+		app)
 	assert e.any(it.contains('at most 63'))
 }
 
 fn test_io_output_needs_init_and_one_writer() {
-	e := errs_of('
+	e := errs_of(
+		'
 [io]
 [[io.gpio]]
 name      = "Led"
@@ -418,14 +442,16 @@ name = "Led"
 fields = { on = "bool" }
 from = "app"
 to   = "io"
-' + app)
+' +
+		app)
 	assert e.any(it.contains('must declare init'))
 	assert e.any(it.contains('exactly one writing handler'))
 }
 
 // default is the INPUT pre-first-sample port value — an output has init instead
 fn test_io_output_rejects_default() {
-	e := errs_of('
+	e := errs_of(
+		'
 [io]
 [[io.gpio]]
 name      = "Led"
@@ -439,12 +465,14 @@ name = "Led"
 fields = { on = "bool" }
 from = "app"
 to   = "io"
-' + app)
+' +
+		app)
 	assert e.any(it.contains('default is an input'))
 }
 
 fn test_io_rejects_bus_to_pin_and_explicit_transport() {
-	e := errs_of('
+	e := errs_of(
+		'
 [bus.can0]
 interface = "vcan0"
 
@@ -461,13 +489,15 @@ fields = { on = "bool" }
 from = "can0"
 to   = "io"
 transport = "double"
-' + app)
+' +
+		app)
 	assert e.any(it.contains('never bus-to-pin'))
 	assert e.any(it.contains('transport is derived'))
 }
 
 fn test_io_pin_exclusive_and_harmonic_periods() {
-	e := errs_of('
+	e := errs_of(
+		'
 [io]
 [[io.gpio]]
 name      = "A"
@@ -490,7 +520,8 @@ name = "B"
 fields = { on = "bool" }
 from = "io"
 to   = "app"
-' + app)
+' +
+		app)
 	assert e.any(it.contains('one physical pad'))
 	assert e.any(it.contains('not a multiple of the fastest'))
 }
@@ -516,8 +547,10 @@ period_ms = 10
 ')
 	assert e.any(it.contains('reuses pin "PB0"'))
 }
+
 fn test_io_shape_must_be_single_bool() {
-	e := errs_of('
+	e := errs_of(
+		'
 [io]
 [[io.gpio]]
 name      = "Btn"
@@ -529,7 +562,8 @@ name = "Btn"
 fields = { level = "u16" }
 from = "io"
 to   = "app"
-' + app)
+' +
+		app)
 	assert e.any(it.contains('carries a bool field'))
 }
 
@@ -590,7 +624,8 @@ signal = "UserButton"
 ')
 	assert e.any(it.contains('second reader on a single-reader channel'))
 	// a did on a NON-io signal stays legal
-	ok := errs_of(io_ok + '
+	ok := errs_of(io_ok +
+		'
 [[signal]]
 name = "Speed"
 fields = { kmh = "u16" }
@@ -678,7 +713,9 @@ thread = "far_main"
 }
 
 // ---- [someip] / eth bus rules (docs/someip.md) ------------------------------
-// @verifies REQ-NET-017 (static endpoints fixed + checked at configuration time)
+// Groundwork for REQ-NET-017, deliberately left untagged for trace: the
+// requirement also demands enforcement on RECEPTION (the source filter), which
+// arrives with the rx rung; config-time fixing alone does not verify it.
 
 // bare tables ([bus.eth0], [someip]) must precede the array-of-tables blocks —
 // the same ordering rule the real ecu.toml files follow.
@@ -715,26 +752,30 @@ fn test_someip_good_config_has_no_errors() {
 }
 
 fn test_someip_one_eth_bus_per_image() {
-	e := errs_of('
+	e := errs_of(
+		'
 [bus.eth0]
 kind      = "eth"
 interface = "a"
 [bus.eth1]
 kind      = "eth"
 interface = "b"
-' + app)
+' +
+		app)
 	assert e.any(it.contains('one eth bus per image'))
 }
 
 fn test_someip_block_needs_an_eth_bus_and_traffic() {
-	e := errs_of('
+	e := errs_of(
+		'
 [someip]
 bus     = "eth0"
 service = 1
 version = 1
 port    = 30490
 peer    = "10.0.0.1:30490"
-' + app)
+' +
+		app)
 	assert e.any(it.contains('no bus has kind = "eth"'))
 
 	// an eth bus + [someip] but nothing riding the bus
@@ -752,7 +793,8 @@ interface = "192.168.0.50"
 }
 
 fn test_someip_signal_frame_id_must_be_an_event() {
-	e := errs_of(eth_head + '
+	e := errs_of(eth_head +
+		'
 [[signal]]
 name = "CpuLoad"
 fields = { load = "u8" }
@@ -764,12 +806,14 @@ name    = "BenchTelem"
 bus     = "eth0"
 id      = 0x0001
 signals = ["CpuLoad"]
-' + app)
+' +
+		app)
 	assert e.any(it.contains('not an event id'))
 }
 
 fn test_someip_event_ids_unique_and_one_frame_per_signal() {
-	e := errs_of(eth_head + eth_tx_frame + '
+	e := errs_of(eth_head + eth_tx_frame +
+		'
 [[frame]]
 name    = "Twin"
 bus     = "eth0"
@@ -781,7 +825,8 @@ signals = ["CpuLoad"]
 }
 
 fn test_someip_frame_direction_and_shape() {
-	e := errs_of(eth_head + '
+	e := errs_of(eth_head +
+		'
 [[signal]]
 name = "OutSig"
 fields = { v = "u8" }
@@ -811,14 +856,16 @@ name    = "Empty"
 bus     = "eth0"
 id      = 0x8002
 signals = []
-' + app)
+' +
+		app)
 	assert e.any(it.contains('mixes tx and rx'))
 	assert e.any(it.contains('not a fixed-width scalar'))
 	assert e.any(it.contains('non-empty `signals` list'))
 }
 
 fn test_someip_payload_bound_is_the_shared_64() {
-	e := errs_of(eth_head + '
+	e := errs_of(eth_head +
+		'
 [[signal]]
 name = "Big"
 fields = { a = "u64", b = "u64", c = "u64", d = "u64", e = "u64", f = "u64", g = "u64", h = "u64", i = "u64" }
@@ -830,12 +877,14 @@ name    = "TooWide"
 bus     = "eth0"
 id      = 0x8001
 signals = ["Big"]
-' + app)
+' +
+		app)
 	assert e.any(it.contains('shared PDU bound is 64'))
 }
 
 fn test_someip_identity_ranges_and_peer() {
-	e := errs_of('
+	e := errs_of(
+		'
 [bus.eth0]
 kind      = "eth"
 interface = "192.168.0.50"
@@ -846,9 +895,130 @@ service = 0x10100
 version = 300
 port    = 0
 peer    = "192.168.0.10"
-' + eth_tx_frame + app)
+' +
+		eth_tx_frame + app)
 	assert e.any(it.contains('service must fit 16 bits'))
 	assert e.any(it.contains('version must fit 8 bits'))
 	assert e.any(it.contains('port must be 1..65535'))
 	assert e.any(it.contains('address:port'))
+}
+
+fn test_someip_e2e_trailer_counts_toward_the_bound() {
+	// 8 u64 fields = exactly 64 bytes of layout; the 2-byte E2E trailer tips it
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "Full"
+fields = { a = "u64", b = "u64", c = "u64", d = "u64", e = "u64", f = "u64", g = "u64", h = "u64" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Full64"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Full"]
+e2e     = { data_id = 1, crc_pos = 0, counter_pos = 1 }
+' +
+		app)
+	assert e.any(it.contains('E2E trailer included'))
+}
+
+fn test_someip_module_ids_join_the_event_space() {
+	// trace enabled by default, bound to eth0: record collides with the frame,
+	// cmd is a method-range id, rsp is a DBC-name string (no DBC on eth)
+	e := errs_of(eth_head +
+		'
+[trace]
+bus    = "eth0"
+cmd    = 0x0010
+rsp    = "TraceRsp"
+record = 0x8001
+' +
+		eth_tx_frame + app)
+	assert e.any(it.contains('[trace] record reuses event id'))
+	assert e.any(it.contains('[trace] cmd id 0x10 on the eth bus is not an event id'))
+	assert e.any(it.contains('[trace] rsp on the eth bus must be a literal event id'))
+}
+
+fn test_someip_disabled_module_is_not_traffic() {
+	// telemetry defaults DISABLED (loom2v): naming the eth bus is not traffic
+	e := errs_of(eth_head + '
+[telemetry]
+bus = "eth0"
+id  = 0x8002
+' + app)
+	assert e.any(it.contains('nothing rides bus "eth0"'))
+}
+
+fn test_someip_nm_on_eth_rejected() {
+	e := errs_of(eth_head + '
+[nm]
+bus   = "eth0"
+node  = 1
+alive = 0x8003
+' + eth_tx_frame + app)
+	assert e.any(it.contains('NM over eth'))
+}
+
+fn test_someip_eth_bound_signal_must_ride_a_frame() {
+	e := errs_of(eth_head + eth_tx_frame +
+		'
+[[signal]]
+name = "Orphan"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+' + app)
+	assert e.any(it.contains('signal "Orphan" is bound to eth bus "eth0" but rides no eth frame'))
+}
+
+fn test_someip_eth_keys_rejected_on_can_frames() {
+	e := errs_of(
+		'
+[bus.can0]
+interface = "vcan0"
+
+[[frame]]
+name    = "Legacy"
+bus     = "can0"
+id      = 0x123
+signals = ["X"]
+' +
+		app)
+	assert e.any(it.contains('declares eth-frame keys'))
+}
+
+fn test_someip_peer_address_must_be_ipv4() {
+	e := errs_of(
+		'
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.50"
+
+[someip]
+bus     = "eth0"
+service = 1
+version = 1
+port    = 30490
+peer    = "not-an-address:30490"
+' +
+		eth_tx_frame + app)
+	assert e.any(it.contains('address:port'))
+
+	e2 := errs_of(
+		'
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.50"
+
+[someip]
+bus     = "eth0"
+service = 1
+version = 1
+port    = 30490
+peer    = "192.168.0.999:30490"
+' +
+		eth_tx_frame + app)
+	assert e2.any(it.contains('address:port'))
 }
