@@ -24,11 +24,12 @@ void ioc_get(int i, unsigned *a, unsigned *b) {
     if (i >= 0 && i < IOC_POOL_N) v = ioc_read(&g_ioc_pool[i]);
     *a = v.a; *b = v.b;
 }
-/* ioc_get_ever — the io outputs' freshness gate (docs/io.md, REQ-IO-009): returns 1 once
- * the cell has EVER been published, latched from the fresh bit BEFORE ioc_read consumes
+/* ioc_get_ever — the ever-published gate (docs/io.md, REQ-IO-009): returns 1 once the
+ * cell has EVER been published, latched from the fresh bit BEFORE ioc_read consumes
  * it; *a/*b always hold the latest value. Until then the io thread keeps the driver-
- * established init on the pin instead of driving the slot's zero-init as a command.
- * Reader-private state (the io thread is the sole reader of every output cell). */
+ * established init on an output pin, and an FB handler keeps an input port's declared
+ * default (a zero slot is not a sample). seen[] is per-cell and each cell has exactly
+ * ONE reader (io thread: outputs; FB thread: inputs) — disjoint bytes, no race. */
 int ioc_get_ever(int i, unsigned *a, unsigned *b) {
     static unsigned char seen[IOC_POOL_N];
     if (i < 0 || i >= IOC_POOL_N) { *a = 0; *b = 0; return 0; }

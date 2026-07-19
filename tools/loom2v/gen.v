@@ -1063,24 +1063,39 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int) []string {
 // the TOP of tx_application_define — before any thread is created, so it runs to completion
 // before application dispatch can begin (REQ-IO-009: platform first, app after). Outputs
 // hold their configured init from io.init() on; each input gets ONE boot sample so the
-// first activation never reads an empty cell. A failure bumps the exported
-// io_startup_faults counter (degraded, observable start) instead of wedging the boot.
+// first activation never reads an empty cell. An INPUT failure bumps the exported
+// io_startup_faults counter (degraded, observable start); an OUTPUT cfg/init failure
+// HALTS before app dispatch — REQ-IO-009 has no safe-start exception for an actuator
+// that never reached its init level (SWD reads the counter).
 fn emit_io_target_boot(m Model, ioc_idx map[string]int) []string {
 	mut g := []string{}
 	if m.io_points.len == 0 {
 		return g
 	}
+	mut has_output := false
+	for pt in m.io_points {
+		if pt.output {
+			has_output = true
+		}
+	}
 	g << '\t// io BEFORE the app threads exist (REQ-IO-009): declare + init the points —'
 	g << '\t// outputs hold their configured init from here — then publish ONE boot sample'
-	g << '\t// per input. Failures count observably; the ECU still starts (degraded).'
+	g << '\t// per input. Input failures count observably (degraded start); an output that'
+	g << '\t// never reached its init level halts BEFORE app dispatch (counter via SWD).'
 	for pt in m.io_points {
 		iv := if pt.init { 1 } else { 0 }
 		g << "\tif !io.cfg(${pt.ch}, '${pt.name}', '${pt.pin}', ${pt.output}, ${iv}) {"
 		g << '\t\tio_startup_faults++'
+		if pt.output {
+			g << '\t\tfor {} // unconfigured OUTPUT: halt — the app must not run as if it init-ed'
+		}
 		g << '\t}'
 	}
 	g << '\tif !io.init() {'
 	g << '\t\tio_startup_faults++'
+	if has_output {
+		g << '\t\tfor {} // an output never reached its init level (REQ-IO-009): halt, no app dispatch'
+	}
 	g << '\t}'
 	for pt in m.io_points {
 		if pt.output {
@@ -2335,12 +2350,28 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 						// ioc_get per read (it advances the reader slot); the value field is `a`.
 						glue << '\tmut ${snake(rn)}_a := u32(0)'
 						glue << '\tmut ${snake(rn)}_b := u32(0)'
-						glue << '\tC.ioc_get(${idx}, &${snake(rn)}_a, &${snake(rn)}_b)'
-						if si.val_type == 'bool' {
-							// V has no u32 -> bool cast; io gpio signals are bool by shape rule
-							glue << '\tinp.${snake(rn)}.${snake(si.val_field)} = ${snake(rn)}_a != 0'
+						mut io_input := false
+						for pt in m.io_points {
+							if pt.name == rn && !pt.output {
+								io_input = true
+							}
+						}
+						// V has no u32 -> bool cast; io gpio signals are bool by shape rule
+						asn := if si.val_type == 'bool' {
+							'inp.${snake(rn)}.${snake(si.val_field)} = ${snake(rn)}_a != 0'
 						} else {
-							glue << '\tinp.${snake(rn)}.${snake(si.val_field)} = ${si.val_type}(${snake(rn)}_a)'
+							'inp.${snake(rn)}.${snake(si.val_field)} = ${si.val_type}(${snake(rn)}_a)'
+						}
+						if io_input {
+							// io input: gate on ever-published (the io outputs' ioc_get_ever gate) —
+							// after a failed boot read the cell is a zero slot, not a sample; the
+							// port's declared default must hold until a REAL publish
+							glue << '\tif C.ioc_get_ever(${idx}, &${snake(rn)}_a, &${snake(rn)}_b) != 0 {'
+							glue << '\t\t${asn}'
+							glue << '\t}'
+						} else {
+							glue << '\tC.ioc_get(${idx}, &${snake(rn)}_a, &${snake(rn)}_b)'
+							glue << '\t${asn}'
 						}
 					} else {
 						if image_part != '' {

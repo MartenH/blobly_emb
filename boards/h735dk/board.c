@@ -141,6 +141,18 @@ void board_can_clock_pins_init(void) {
 	GPIOH->AFR[1] |= ((9u << ((13u - 8u) * 4u)) | (9u << ((14u - 8u) * 4u)));
 }
 
+/* Platform pin-ownership table (board.h, docs/io.md "pins are exclusive"): pads this
+ * board already assigned — an io point re-muxing one would silently kill CAN, the
+ * debugger, or the PHY. Port index 0=A..10=K (the io_stm32.c parse). */
+int board_io_pin_reserved(int port, int pin) {
+	if (port == 0 && (pin == 13 || pin == 14)) return 1;            /* PA13/PA14: SWD */
+	if (port == 7 && (pin == 13 || pin == 14)) return 1;            /* PH13/PH14: FDCAN1 TX/RX */
+	if (port == 0 && (pin == 1 || pin == 2 || pin == 7)) return 1;  /* PA1/2/7: RMII REF_CLK/MDIO/CRS_DV (eth.c) */
+	if (port == 1 && (pin == 11 || pin == 12 || pin == 13)) return 1; /* PB11/12/13: RMII TX_EN/TXD0/TXD1 */
+	if (port == 2 && (pin == 1 || pin == 4 || pin == 5)) return 1;  /* PC1/4/5: RMII MDC/RXD0/RXD1 */
+	return 0;
+}
+
 /* Weak default for the ETH interrupt (vectors.S IRQ61). Images that link the ETH
  * driver (boards/h735dk/eth.c) override this with the strong ETH_IRQHandler; every
  * other image resolves the vector's .word here so the shared table still links.
