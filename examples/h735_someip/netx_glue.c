@@ -27,6 +27,8 @@ static UCHAR app_thread_stack[4096] __attribute__((aligned(8))); /* runs the V l
 static NX_PACKET_POOL pool;
 static NX_IP ip;
 static TX_THREAD app_thread;
+static TX_THREAD svc_thread;
+static UCHAR svc_thread_stack[1024] __attribute__((aligned(8)));
 static NX_UDP_SOCKET udp_sock;
 
 /* bench-observable (SWD, openocd not st-util) */
@@ -61,10 +63,17 @@ void srand(unsigned int seed) {
 /* ---- the seam main.v drives ------------------------------------------------ */
 
 /* net_udp_send: one datagram to ip[4]:port (the driver/eth contract shape).
- * 0 = handed to the stack. Never blocks the caller beyond the packet copy. */
+ * 0 = handed to the stack. Never blocks the caller beyond the packet copy.
+ * The tx-only V loop never receives, but the socket IS bound — every inbound
+ * datagram (peer traffic, the listener's firewall-priming packet) would
+ * otherwise park one pool packet in the receive queue forever and exhaust the
+ * static pool after eight; drain nonblocking before each send. */
 int net_udp_send(const unsigned char *ip4, unsigned short port,
                  const unsigned char *buf, int len) {
 	NX_PACKET *pkt;
+	while (nx_udp_socket_receive(&udp_sock, &pkt, TX_NO_WAIT) == NX_SUCCESS) {
+		nx_packet_release(pkt);
+	}
 	if (nx_packet_allocate(&pool, &pkt, NX_UDP_PACKET, TX_NO_WAIT) != NX_SUCCESS) {
 		someip_tx_fail++;
 		return -1;
@@ -88,6 +97,18 @@ void net_sleep_ms(int ms) {
 	tx_thread_sleep((ULONG)ms * TX_TIMER_TICKS_PER_SECOND / 1000u);
 }
 
+/* svc thread: the 1 Hz PHY link poll the established H735 loops all run —
+ * eth_link_up() resynchronizes MACCR speed/duplex on every call, so a cable
+ * replug or renegotiation recovers instead of leaving the MAC stale. The V
+ * event loop never returns, so this cannot live there. */
+static void svc_entry(ULONG arg) {
+	(void)arg;
+	for (;;) {
+		net_link_up = eth_link_up();
+		tx_thread_sleep(TX_TIMER_TICKS_PER_SECOND);
+	}
+}
+
 /* app thread: wait for the PHY link (events into a down link are just lost —
  * fine for ICMP, silly for a bench whose whole point is the first events),
  * bind the socket, then hand off to the V loop forever. */
@@ -100,6 +121,9 @@ static void app_entry(ULONG arg) {
 	nx_udp_socket_create(&ip, &udp_sock, "someip", NX_IP_NORMAL,
 	                     NX_DONT_FRAGMENT, 0x80, 8);
 	nx_udp_socket_bind(&udp_sock, SRC_PORT, TX_WAIT_FOREVER);
+	tx_thread_create(&svc_thread, "someip-svc", svc_entry, 0,
+	                 svc_thread_stack, sizeof(svc_thread_stack),
+	                 5, 5, TX_NO_TIME_SLICE, TX_AUTO_START);
 	blobly_someip_run(); /* never returns */
 }
 

@@ -43,13 +43,18 @@ fn blobly_someip_run() {
 		wraps := u16(ticks >> 16)
 		pay[5] = u8(wraps)
 		pay[6] = u8(wraps >> 8)
+		// save/protect/send/rollback — the generated eth bridge's pattern: an
+		// unsent event must not advance the counter (false loss at the peer)
+		e2e_save := g_e2e
 		g_e2e.protect(&pay[0], payload_len, e2e_id, 8, 7) // crc@8, ctr@7
 		h := someip.notification(service, event_id, iface_ver, payload_len)
 		n := someip.encode(h, &dgram[0])
 		for i in 0 .. payload_len {
 			dgram[n + i] = pay[i]
 		}
-		C.net_udp_send(&peer[0], peer_port, &dgram[0], n + payload_len)
+		if C.net_udp_send(&peer[0], peer_port, &dgram[0], n + payload_len) != 0 {
+			g_e2e = e2e_save
+		}
 		C.net_sleep_ms(100)
 	}
 }
