@@ -353,6 +353,30 @@ pub:
 	typ    string
 }
 
+// snake_name is THE snake-case normalization generated identifiers use —
+// loom2v delegates here, so the validator's collision check and the
+// generator's emission cannot drift.
+pub fn snake_name(name string) string {
+	mut out := []u8{}
+	for i, c in name {
+		is_upper := c >= `A` && c <= `Z`
+		if is_upper && i > 0 {
+			prev := name[i - 1]
+			if (prev >= `a` && prev <= `z`) || (prev >= `0` && prev <= `9`) {
+				out << `_`
+			}
+		}
+		if (c >= `a` && c <= `z`) || (c >= `0` && c <= `9`) {
+			out << c
+		} else if is_upper {
+			out << c + 32
+		} else {
+			out << `_`
+		}
+	}
+	return out.bytestr()
+}
+
 // eth_bus_of returns the (single, ecucheck-enforced) kind = "eth" bus, or ''.
 pub fn eth_bus_of(doc toml.Doc) string {
 	if bv := doc.value_opt('bus') {
@@ -505,6 +529,7 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		}
 	}
 
+	mut seen_frame_snakes := map[string]string{} // snake(name) -> original
 	mut seen_ids := map[i64]string{} // event id -> frame (unique across bindings)
 	mut sig_frame := map[string]string{} // signal -> frame (a signal rides one frame)
 	mut n_eth_frames := 0
@@ -525,6 +550,14 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			errs << 'eth frame name "${fname}" is not a valid identifier ([A-Za-z_][A-Za-z0-9_]*) — it becomes generated code names and manifest CSV cells'
 			continue
 		}
+		// uniqueness AFTER snake normalization: "FooBar" and "foo_bar" would
+		// emit duplicate generated consts/pack fns (uncompilable image)
+		fsnake := snake_name(fname)
+		if fsnake in seen_frame_snakes {
+			errs << 'eth frame "${fname}" collides with "${seen_frame_snakes[fsnake]}" after snake-case normalization ("${fsnake}") — generated names must be unique'
+			continue
+		}
+		seen_frame_snakes[fsnake] = fname
 		if v := fm['id'] {
 			if v is i64 {
 				if v < 0x8000 || v > 0xFFFF {
@@ -673,6 +706,14 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 				errs << 'signal "${sname}" is bound to eth bus "${eth}" but rides no eth frame — an unpublished input or a never-transmitted output'
 			}
 		}
+		// a diagnostic DID reading an eth signal is a SECOND reader on its
+		// SPSC channel (the CAN bridge emits its own acquire) — same rule as io
+		for d in toml_arr(doc, 'did') {
+			dsig := str_of(d.as_map(), 'signal')
+			if dsig != '' && (sig_from[dsig] == eth || sig_to[dsig] == eth) {
+				errs << 'diagnostic DID reads eth signal "${dsig}" — a second reader on a single-reader channel; mirror it through an FB-owned signal instead'
+			}
+		}
 	}
 
 	// ENABLED modules bound to the eth bus count as eth traffic for the pairing
@@ -712,6 +753,15 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		if blk == 'shell' {
 			errs << '[shell] is bound to eth bus "${eth}" — the eth shell arrives with the RPC phase (P3: method-form request/response + the access gate, docs/someip.md); keep the shell on a CAN bus'
 			continue
+		}
+		// the TARGET emitters still generate the CAN telemetry path
+		// unconditionally — an eth binding is host-sim only until the NetX
+		// rung brings the UDP producer to silicon
+		if blk == 'telemetry' {
+			if _ := doc.value_opt('target') {
+				errs << '[telemetry] on eth bus "${eth}" with a [target] image — the target telemetry emitter is CAN-only until the NetX rung; keep target telemetry on a CAN bus'
+				continue
+			}
 		}
 		mut bound := 0
 		for kk in mod_id_keys[blk] {
