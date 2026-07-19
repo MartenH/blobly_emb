@@ -2893,6 +2893,17 @@ fn main() {
 	// the same. The lean first cut supports external RX signals (bus -> app), drained + counted
 	// by the comm thread; external TX signals, ISO-TP, and m.routes are not generated yet.
 	comm_thread_on := m.target.threadx && has_bridge
+	multi_here := m.part.threads_of[single_part].len > 1
+	if m.target.threadx && multi_here && m.telem.on && !comm_thread_on {
+		// a multi-thread node with telemetry but NO comm thread (no external
+		// signal/route/isotp bridge) has no bus owner: each app thread is
+		// FB-dispatch-only, so the CpuLoad frames would silently never emit
+		// (codex on emb#150 r7). Single-thread handles it inline in run(); multi
+		// needs a real owner — add a bridge signal or drop telemetry.
+		panic('loom2v: [target] kind="threadx": a multi-thread node with [telemetry] but no ' +
+			'bus bridge (external signal / route / isotp) has no thread to transmit CpuLoad — ' +
+			'give it a bus-bound signal or disable telemetry')
+	}
 	if m.nvm_names.len > 0 && m.target.threadx && !comm_thread_on {
 		panic('loom2v: persistent signals need the comm thread (the journal service runs ' +
 			'there) — this config has no bus bridge; give the node a bus or drop persist')
