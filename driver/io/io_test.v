@@ -84,13 +84,13 @@ fn test_temp_rename_leaves_no_tmp() {
 	teardown(dir)
 }
 
-// @verifies REQ-IO-015
+// @verifies REQ-IO-017
 // active_low is a pad property: the host mirror (and every consumer above the
 // driver) stays LOGICAL — cfg accepts the flag and read/write semantics are
 // unchanged from the caller's side. (The pad-level inversion itself is
 // silicon behavior: bench-verified on the H735G-DK's active-low lamp.)
 fn test_active_low_is_logical_above_the_pad() {
-	close()
+	dir := setup('active_low') // own temp dir + teardown, like every file-backend test
 	assert cfg(0, 'LampAL', 'PB0', true, 0, 1) // active-low lamp, logically off
 	assert init()
 	gpio_write(0, true) // logically ON
@@ -98,5 +98,5 @@ fn test_active_low_is_logical_above_the_pad() {
 	assert gpio_read(0) == true
 	gpio_write(0, false)
 	assert gpio_read(0) == false
-	close()
+	teardown(dir)
 }

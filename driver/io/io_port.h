@@ -25,7 +25,7 @@
  * value (the latest-complete-sample rule, REQ-IO-003), never an error the
  * app must handle mid-loop. */
 
-int  blob_io_cfg(int ch, const char *name, const char *pin, int dir, unsigned int init_val, int active_low); /* declare one point before init; dir 0=in 1=out; init + all reads/writes are LOGICAL, active_low inverts at the pad (REQ-IO-015); 0=ok */
+int  blob_io_cfg(int ch, const char *name, const char *pin, int dir, unsigned int init_val, int active_low); /* declare one point before init; dir 0=in 1=out; init + all reads/writes are LOGICAL, active_low inverts at the pad (REQ-IO-017); 0=ok */
 int  blob_io_init(void);                    /* apply output init levels FIRST (before any app runs), open the backend; 0=ok */
 int  blob_io_gpio_read(int ch);             /* current level 0/1; on backend failure returns the last good value (never blocks) */
 int  blob_io_gpio_read_checked(int ch, int *val); /* 0 = real value in *val, -1 = unreadable/unparsable — NO last-good fallback (boot must not fabricate a sample) */

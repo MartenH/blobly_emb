@@ -372,7 +372,7 @@ struct IoPoint {
 	pin         string
 	period_ms   int
 	init        bool
-	active_low  bool // pad polarity (REQ-IO-015): logical true = pad LOW
+	active_low  bool // pad polarity (REQ-IO-017): logical true = pad LOW
 	output      bool
 	ch          int
 	has_default bool // input only: the port field's pre-first-sample value
@@ -1029,12 +1029,15 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int, with_load bool, load_sl
 	g << '\t\t\tC._tx_thread_sleep(u32((next_us - now + 999) / 1000)) // 1 kHz kernel tick'
 	g << '\t\t\tnow = C.board_now_us() // a tick-phase-early wake must not serve before the deadline'
 	g << '\t\t}'
-	g << '\t\t// overrun: skip the MISSED base periods, no burst catch-up — tick'
-	g << '\t\t// advances with wall time so (tick+1)%mult gating stays aligned'
+	g << '\t\t// past the deadline now (the wait loop exits at now >= next_us). Skip the'
+	g << '\t\t// MISSED WHOLE periods, no burst catch-up — tick advances with wall time'
+	g << '\t\t// so (tick+1)%mult gating stays aligned; a sub-period lateness serves now'
+	g << '\t\t// and the next sleep re-anchors (one shortened gap, the cadence tradeoff).'
 	g << '\t\tmissed := (now - next_us) / ${fastest * 1000}'
 	if with_load {
-		g << '\t\tif missed > 0 {'
-		g << '\t\t\tsched.mark_overrun() // a serve blew past its io period'
+		g << '\t\tif now > next_us {'
+		g << '\t\t\tsched.mark_overrun() // ANY lateness is an overrun, incl. the 1..2-'
+		g << '\t\t\t// period case floor(missed) rounds to 0 (codex on emb#150 r6)'
 		g << '\t\t}'
 	}
 	g << '\t\ttick += missed'
@@ -1651,6 +1654,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << 'fn C.load_pub(u32, u32, u32, u32, u32)'
 				glue << 'fn C.load_pub_slot(int, u32, u32, u32, u32, u32)'
 				glue << 'fn C.load_sum_permille() u32'
+				glue << 'fn C.load_sum_100ms() u32'
+				glue << 'fn C.load_sum_1s() u32'
+				glue << 'fn C.load_sum_10s() u32'
+				glue << 'fn C.load_sum_overruns() u32'
 			}
 			glue << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
 			glue << trace_c_decls(m)
@@ -1875,8 +1882,17 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			} else {
 				'\t\t\tload[0] = sched.load_permille() // single M7 -> core 0 only'
 			}]
-				det_ovr:      'sched.overruns()'
-				det_lines:    ['\t\t\tdetail := telem.encode_loaddetail(sched.load_permille_100ms(),', '\t\t\t\tsched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)']
+				det_ovr:      if m.io_points.len > 0 {
+					'C.load_sum_overruns()' // io overruns count too (emb#150 r6)
+				} else {
+					'sched.overruns()'
+				}
+				det_lines:    if m.io_points.len > 0 {
+					// io accounts too: the detail frame reads the SUMS, matching CpuLoad (emb#150 r6)
+					['\t\t\tdetail := telem.encode_loaddetail(u16(C.load_sum_100ms()),', '\t\t\t\tu16(C.load_sum_1s()), u16(C.load_sum_10s()), ovr - last_overruns)']
+				} else {
+					['\t\t\tdetail := telem.encode_loaddetail(sched.load_permille_100ms(),', '\t\t\t\tsched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)']
+				}
 				frame:        'f'
 				detframe:     'd'
 				idx:          'i'
@@ -2152,10 +2168,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						'min FB priority - 1 = ${min_prio - 1}, out of the ThreadX range 0..31; ' +
 						'use FB priorities >= 1')
 				}
-				if multi && m.buses.len == 0 {
-					// bus-less multi-thread node: one entry per app thread, exactly
-					// like the comm branch — run() does not exist in the multi cut
-					// (codex on emb#150 r5)
+				if multi {
+					// multi-thread node (any bus shape): one entry per app thread,
+					// like the comm branch — run() does not exist in the multi cut,
+					// and the app threads never touch CAN here (codex on emb#150 r5/r6)
 					for thr in app_threads {
 						glue << 'fn ${thr}_thread_entry(input u32) {'
 						glue << '\trun_${thr}()'
@@ -2182,7 +2198,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << "@[export: 'tx_application_define']"
 				glue << 'fn tx_application_define(first_unused voidptr) {'
 				glue << emit_io_target_boot(m, ioc_idx)
-				if multi && m.buses.len == 0 {
+				if multi {
 					for thr in app_threads {
 						pr := m.part.thread_prio[thr] or { 10 }
 						glue << '\tC._tx_thread_create(&g_${thr}_tcb[0], c\'${thr}\', ${thr}_thread_entry, u32(0),'
@@ -2199,7 +2215,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					// Deterministic ids in MANIFEST order (app threads, then io) — without
 					// explicit binds the io thread, running at min FB - 1, is first-sighted
 					// as id 1 and every lane label swaps (codex on emb#150).
-					if multi && m.buses.len == 0 {
+					if multi {
 						for thr in app_threads {
 							glue << '\tC.trace_bind_thread(&g_${thr}_tcb[0])'
 						}
@@ -2842,14 +2858,22 @@ fn main() {
 		if busv := doc.value_opt('bus') {
 			bus_exists = m.telem.bus in busv.as_map()
 		}
-		if (!m.telem.on || m.telem.bus == '') && !(m.io_points.len > 0 && m.buses.len == 0) {
-			// exception: an io-only node (points, no [bus] at all) is a promised
-			// shape (docs/io.md: an output-only ECU) — its app entry is emitted
-			// channel-free, so nothing here needs the CAN channel (emb#150 r4)
-			panic('loom2v: [target] kind="threadx" needs [telemetry] enabled with a bus — the app ' +
-				'thread opens it for the CAN channel (exception: a bus-less [[io.gpio]]-only node)')
+		io_only_busless := m.io_points.len > 0 && m.buses.len == 0
+		if io_only_busless && m.telem.on {
+			// telemetry ENABLED but there is no bus to ship it on — the frames would
+			// silently never emit (codex on emb#150 r6). The exception below is only
+			// for telemetry-OFF io-only nodes; an enabled one must declare its bus.
+			panic('loom2v: [target] kind="threadx": [[io.gpio]]-only node with no [bus] cannot ' +
+				'enable [telemetry] — there is nothing to transmit CpuLoad on (drop telemetry or add a bus)')
 		}
-		if !bus_exists && !(m.io_points.len > 0 && m.buses.len == 0) {
+		if (!m.telem.on || m.telem.bus == '') && !io_only_busless {
+			// exception: a telemetry-OFF io-only node (points, no [bus] at all) is a
+			// promised shape (docs/io.md: an output-only ECU) — its app entry is
+			// emitted channel-free, so nothing here needs the CAN channel (emb#150 r4)
+			panic('loom2v: [target] kind="threadx" needs [telemetry] enabled with a bus — the app ' +
+				'thread opens it for the CAN channel (exception: a telemetry-off [[io.gpio]]-only node)')
+		}
+		if !bus_exists && !io_only_busless {
 			panic('loom2v: [target] kind="threadx": [telemetry].bus = "${m.telem.bus}" has no matching ' +
 				'[bus.${m.telem.bus}]')
 		}
