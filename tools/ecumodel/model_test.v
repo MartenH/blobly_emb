@@ -1118,3 +1118,42 @@ peer    = "192.168.0.999:30490"
 		eth_tx_frame + app)
 	assert e2.any(it.contains('address:port'))
 }
+
+fn test_someip_round3_gates() {
+	// telemetry without explicit id; trace dump_fc; route touching eth;
+	// e2e data_id over 16 bits — each must fail loud
+	e := errs_of(eth_head +
+		'
+[telemetry]
+enabled   = true
+bus       = "eth0"
+detail_id = 0x8005
+
+[trace]
+bus     = "eth0"
+record  = 0x8002
+dump_fc = 0x8003
+
+[[signal]]
+name = "Speed"
+fields = { kph = "u32", flags = "u16" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "SpeedEvt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Speed"]
+e2e     = { data_id = 0x10000, counter_pos = 6, crc_pos = 7 }
+
+[[route]]
+from = { bus = "eth0", frame = "SpeedEvt" }
+to   = { bus = "can0" }
+' +
+		app)
+	assert e.any(it.contains('[telemetry] on eth bus "eth0" needs an explicit `id`'))
+	assert e.any(it.contains('[trace] dump_fc is bound on the eth bus'))
+	assert e.any(it.contains('E2E data_id must fit 16 bits'))
+	assert e.any(it.contains('a [[route]] touches eth bus "eth0"'))
+}
