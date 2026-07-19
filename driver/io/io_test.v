@@ -103,7 +103,9 @@ fn test_active_low_is_logical_above_the_pad() {
 	teardown(dir)
 }
 
-// @verifies REQ-IO-018, REQ-IO-019
+// @verifies REQ-IO-019
+// (value shape end to end. The continuous-scan + circular-DMA requirement is
+// hardware-only and bench-pending — a host mirror cannot exercise it.)
 // ADC reads a full u16/u32 count from the mirror (not the gpio 0/1 contract);
 // last-good on a missing/garbage file, never blocks.
 fn test_adc_read_u16_and_last_good() {

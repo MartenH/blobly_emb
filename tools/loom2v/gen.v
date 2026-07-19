@@ -380,6 +380,7 @@ struct IoPoint {
 	ch          int
 	has_default bool // input only: the port field's pre-first-sample value
 	default     bool
+	default_u32 u32  // adc: typed degraded-start count (has_default gates it)
 }
 
 // parse_io reads [io] (optional core, default 0 — the IO core) and its [[io.gpio]]
@@ -408,6 +409,7 @@ fn parse_io(doc toml.Doc, sig_of map[string]SigInfo) ([]IoPoint, int) {
 				ch:          points.len
 				has_default: 'default' in pm
 				default:     (pm['default'] or { toml.Any(false) }).bool()
+				default_u32: u32((pm['default'] or { toml.Any(0) }).int())
 			}
 		}
 	}
@@ -1179,9 +1181,20 @@ fn emit_io_target_boot(m Model, ioc_idx map[string]int) []string {
 		idx := ioc_idx[pt.name] or { continue }
 		fld := snake(pt.name)
 		if pt.kind == 'adc' {
-			// the ADC free-runs from io.init(); by the boot publish a conversion
-			// has landed, so the DMA value is real — publish it (REQ-IO-018)
-			g << '\tC.ioc_pub(${idx}, io.adc_read(${pt.ch}), u32(0))'
+			// checked: publish only a REAL first conversion (REQ-IO-018). If none
+			// landed, publish the declared default, else count a fault (never a
+			// fabricated zero — codex emb#152).
+			g << '\tif boot_${fld}_v := io.adc_read_checked(${pt.ch}) {'
+			g << '\t\tC.ioc_pub(${idx}, boot_${fld}_v, u32(0))'
+			if pt.has_default {
+				g << '\t} else {'
+				g << '\t\tC.ioc_pub(${idx}, u32(${pt.default_u32}), u32(0)) // declared degraded-start default'
+				g << '\t}'
+			} else {
+				g << '\t} else {'
+				g << '\t\tio_startup_faults++ // no first conversion: publish NOTHING'
+				g << '\t}'
+			}
 		} else {
 			g << '\tif boot_${fld}_v := io.gpio_read_checked(${pt.ch}) {'
 			g << '\t\tC.ioc_pub(${idx}, if boot_${fld}_v { u32(1) } else { u32(0) }, u32(0))'
@@ -2397,8 +2410,19 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 				si := m.sig_of[pt.name] or { continue }
 				fld := snake(pt.name)
 				if pt.kind == 'adc' {
-					glue << '\tmut boot_${fld} := sig.${pt.name}{ ${si.val_field}: ${adc_cast(si.val_type)}(io.adc_read(${pt.ch})) }'
-					glue << '\tosal.${publish_fn(si.transport)}(${fld}_ch, &boot_${fld}, u8(sizeof(boot_${fld})))'
+					glue << '\tif boot_${fld}_v := io.adc_read_checked(${pt.ch}) {'
+					glue << '\t\tmut boot_${fld} := sig.${pt.name}{ ${si.val_field}: ${adc_cast(si.val_type)}(boot_${fld}_v) }'
+					glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &boot_${fld}, u8(sizeof(boot_${fld})))'
+					if pt.has_default {
+						glue << '\t} else {'
+						glue << '\t\tmut boot_${fld} := sig.${pt.name}{ ${si.val_field}: ${adc_cast(si.val_type)}(${pt.default_u32}) }'
+						glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &boot_${fld}, u8(sizeof(boot_${fld})))'
+						glue << '\t}'
+					} else {
+						glue << '\t} else {'
+						glue << '\t\tio_startup_faults++ // no first conversion: publish NOTHING'
+						glue << '\t}'
+					}
 				} else {
 					glue << '\tif boot_${fld}_v := io.gpio_read_checked(${pt.ch}) {'
 					glue << '\t\tmut boot_${fld} := sig.${pt.name}{ ${si.val_field}: boot_${fld}_v }'

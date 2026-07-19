@@ -101,6 +101,7 @@ fn specs() map[string]map[string]Key {
 			'name':      req(.str) // binds a u16/u32 [[signal]] (input-only)
 			'pin':       req(.str)
 			'period_ms': req(.int) // PUBLISH cadence; conversion free-runs (REQ-IO-018)
+			'default':   k(.int)   // typed degraded-start count held until the first real sample
 		}
 		'io_pwm':     {
 			'name':      req(.str) // binds a u16/u32 [[signal]] carrying permille (output-only)

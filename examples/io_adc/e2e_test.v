@@ -1,6 +1,8 @@
 module main
 
-// @verifies REQ-IO-018 REQ-IO-019
+// @verifies REQ-IO-019
+// Value shape end to end. The continuous-scan / circular-DMA requirement is
+// target-only, bench-pending, and not asserted here.
 // The ADC path end to end on the file mirror: poking the analog input (a full
 // u16 count) drives the Meter FB across mid-scale, flipping LedHi. Proves
 // config -> codegen -> io.adc_read -> FB -> io.gpio_write in the generated stack.

@@ -15,6 +15,7 @@ MEMORY
   RAM   (wx) : ORIGIN = 0x20000000, LENGTH = 0x00020000   /* 128 KiB DTCM */
   FLASH (rx) : ORIGIN = DEFINED(__flash_base__) ? __flash_base__ : 0x08000000,
                LENGTH = DEFINED(__flash_len__)  ? __flash_len__  : 0x00100000
+  D2SRAM (wx) : ORIGIN = 0x30000000, LENGTH = 0x00008000   /* 32 KiB D2 AHB SRAM: DMA-reachable (ADC/ETH) */
 }
 
 __STACKSIZE__ = 1024;
@@ -135,6 +136,11 @@ SECTIONS
     . = ALIGN(. + __STACKSIZE__, 8);
     __stack_end__ = ALIGN(8);
   } > RAM
+
+.dma_buf (NOLOAD) :
+  {
+    *(.dma_buf .dma_buf.*)   /* ADC/DMA latest-value buffers: DMA cannot reach DTCM */
+  } > D2SRAM
 
   __RAM_segment_used_end__ = .;
 }
