@@ -676,3 +676,179 @@ thread = "far_main"
 	assert e.any(it.contains('init belongs to outputs'))
 	assert e.any(it.contains('cross-core io arrives with the target phase'))
 }
+
+// ---- [someip] / eth bus rules (docs/someip.md) ------------------------------
+// @verifies REQ-NET-017 (static endpoints fixed + checked at configuration time)
+
+// bare tables ([bus.eth0], [someip]) must precede the array-of-tables blocks —
+// the same ordering rule the real ecu.toml files follow.
+const eth_head = '
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.50"
+core      = 0
+
+[someip]
+bus     = "eth0"
+service = 0x0100
+version = 1
+port    = 30490
+peer    = "192.168.0.10:30490"
+'
+
+const eth_tx_frame = '
+[[signal]]
+name = "CpuLoad"
+fields = { load = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "BenchTelem"
+bus     = "eth0"
+id      = 0x8001
+signals = ["CpuLoad"]
+'
+
+fn test_someip_good_config_has_no_errors() {
+	assert errs_of(eth_head + eth_tx_frame + app) == []
+}
+
+fn test_someip_one_eth_bus_per_image() {
+	e := errs_of('
+[bus.eth0]
+kind      = "eth"
+interface = "a"
+[bus.eth1]
+kind      = "eth"
+interface = "b"
+' + app)
+	assert e.any(it.contains('one eth bus per image'))
+}
+
+fn test_someip_block_needs_an_eth_bus_and_traffic() {
+	e := errs_of('
+[someip]
+bus     = "eth0"
+service = 1
+version = 1
+port    = 30490
+peer    = "10.0.0.1:30490"
+' + app)
+	assert e.any(it.contains('no bus has kind = "eth"'))
+
+	// an eth bus + [someip] but nothing riding the bus
+	e2 := errs_of(eth_head + app)
+	assert e2.any(it.contains('nothing rides bus "eth0"'))
+}
+
+fn test_someip_eth_frames_need_the_someip_block() {
+	e := errs_of('
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.50"
+' + eth_tx_frame + app)
+	assert e.any(it.contains('no [someip] block'))
+}
+
+fn test_someip_signal_frame_id_must_be_an_event() {
+	e := errs_of(eth_head + '
+[[signal]]
+name = "CpuLoad"
+fields = { load = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "BenchTelem"
+bus     = "eth0"
+id      = 0x0001
+signals = ["CpuLoad"]
+' + app)
+	assert e.any(it.contains('not an event id'))
+}
+
+fn test_someip_event_ids_unique_and_one_frame_per_signal() {
+	e := errs_of(eth_head + eth_tx_frame + '
+[[frame]]
+name    = "Twin"
+bus     = "eth0"
+id      = 0x8001
+signals = ["CpuLoad"]
+' + app)
+	assert e.any(it.contains('reuses event id'))
+	assert e.any(it.contains('rides two eth frames'))
+}
+
+fn test_someip_frame_direction_and_shape() {
+	e := errs_of(eth_head + '
+[[signal]]
+name = "OutSig"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[signal]]
+name = "InSig"
+fields = { v = "u8" }
+from = "eth0"
+to   = "app"
+
+[[signal]]
+name = "BadField"
+fields = { name = "string" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Mixed"
+bus     = "eth0"
+id      = 0x8001
+signals = ["OutSig", "InSig", "BadField"]
+
+[[frame]]
+name    = "Empty"
+bus     = "eth0"
+id      = 0x8002
+signals = []
+' + app)
+	assert e.any(it.contains('mixes tx and rx'))
+	assert e.any(it.contains('not a fixed-width scalar'))
+	assert e.any(it.contains('non-empty `signals` list'))
+}
+
+fn test_someip_payload_bound_is_the_shared_64() {
+	e := errs_of(eth_head + '
+[[signal]]
+name = "Big"
+fields = { a = "u64", b = "u64", c = "u64", d = "u64", e = "u64", f = "u64", g = "u64", h = "u64", i = "u64" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "TooWide"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Big"]
+' + app)
+	assert e.any(it.contains('shared PDU bound is 64'))
+}
+
+fn test_someip_identity_ranges_and_peer() {
+	e := errs_of('
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.50"
+
+[someip]
+bus     = "eth0"
+service = 0x10100
+version = 300
+port    = 0
+peer    = "192.168.0.10"
+' + eth_tx_frame + app)
+	assert e.any(it.contains('service must fit 16 bits'))
+	assert e.any(it.contains('version must fit 8 bits'))
+	assert e.any(it.contains('port must be 1..65535'))
+	assert e.any(it.contains('address:port'))
+}
