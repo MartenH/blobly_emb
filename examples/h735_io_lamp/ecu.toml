@@ -34,6 +34,7 @@ name      = "LedRemote"
 pin       = "PC3"
 period_ms = 10
 init      = false
+active_low = true
 
 [[partition]]
 name    = "app"

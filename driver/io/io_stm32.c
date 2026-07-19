@@ -22,7 +22,8 @@ static struct {
 	unsigned int port; /* 0..10 = GPIOA..GPIOK, parsed from the pin string at cfg */
 	unsigned int pin;  /* 0..15 */
 	int dir;           /* 0=in 1=out */
-	unsigned int init;
+	unsigned int init; /* PAD level (logical init ^ al) */
+	unsigned int al;   /* active_low: invert logical<->pad */
 	int configured;
 } g_pt[BLOB_IO_MAX];
 
@@ -71,7 +72,7 @@ __attribute__((weak)) int board_io_pin_exists(int port, int pin) {
 	return 1;
 }
 
-int blob_io_cfg(int ch, const char *name, const char *pin, int dir, unsigned int init_val) {
+int blob_io_cfg(int ch, const char *name, const char *pin, int dir, unsigned int init_val, int active_low) {
 	(void)name; /* informational on target: the parsed pin IS the table key */
 	if (ch < 0 || ch >= BLOB_IO_MAX || !name || !pin) return -1;
 	if (pin_parse(pin, &g_pt[ch].port, &g_pt[ch].pin) < 0) return -1;
@@ -82,7 +83,10 @@ int blob_io_cfg(int ch, const char *name, const char *pin, int dir, unsigned int
 	 * CAN/SWD/ETH must never be re-muxed by an io point — reject before recording. */
 	if (board_io_pin_reserved((int)g_pt[ch].port, (int)g_pt[ch].pin)) return -1;
 	g_pt[ch].dir = dir ? 1 : 0;
-	g_pt[ch].init = init_val ? 1u : 0u;
+	g_pt[ch].al = active_low ? 1u : 0u;
+	/* init is LOGICAL (REQ-IO-015): store the PAD level so blob_io_init's
+	 * BSRR write needs no polarity knowledge */
+	g_pt[ch].init = (init_val ? 1u : 0u) ^ g_pt[ch].al;
 	g_pt[ch].configured = 1;
 	return 0;
 }
@@ -114,7 +118,8 @@ int blob_io_init(void) {
 
 int blob_io_gpio_read(int ch) {
 	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured) return 0;
-	return (gpio(g_pt[ch].port)->IDR >> g_pt[ch].pin) & 1u ? 1 : 0;
+	/* pad -> LOGICAL (REQ-IO-015): an active-low input asserts on a low pad */
+	return (((gpio(g_pt[ch].port)->IDR >> g_pt[ch].pin) & 1u) ^ g_pt[ch].al) ? 1 : 0;
 }
 
 int blob_io_gpio_read_checked(int ch, int *val) {
@@ -127,7 +132,8 @@ int blob_io_gpio_read_checked(int ch, int *val) {
 void blob_io_gpio_write(int ch, int level) {
 	if (ch < 0 || ch >= BLOB_IO_MAX || !g_pt[ch].configured) return;
 	unsigned int p = g_pt[ch].pin;
-	gpio(g_pt[ch].port)->BSRR = level ? (1u << p) : (1u << (p + 16u)); /* atomic, no RMW */
+	unsigned int lv = (level ? 1u : 0u) ^ g_pt[ch].al; /* LOGICAL -> pad (REQ-IO-015) */
+	gpio(g_pt[ch].port)->BSRR = lv ? (1u << p) : (1u << (p + 16u)); /* atomic, no RMW */
 }
 
 unsigned int blob_io_write_faults(void) {
