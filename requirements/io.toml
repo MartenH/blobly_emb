@@ -230,3 +230,12 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-024"
+title = "io thread pacing sleep is bounded to one period"
+text = "The io thread paces its serve cadence to a monotonic deadline. The per-iteration sleep shall never exceed one io base period: before waiting, the deadline is re-anchored to at most now + one period, so a single anomalous monotonic-clock sample cannot push the accumulating deadline arbitrarily far ahead and park the thread for a long duration. Bench-found on the H755 (REQ-IO-018/021 bring-up): a corrupted deadline made the io thread sleep ~1.27e9 ticks (~14.7 days at 1 kHz), silently freezing all io outputs while the comm and app threads kept running. The guard bounds the worst-case recovery to one period."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
