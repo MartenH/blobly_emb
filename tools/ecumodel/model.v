@@ -467,6 +467,12 @@ fn validate_someip(doc toml.Doc) []string {
 				errs << 'eth frame "${fname}" E2E is an appended trailer: counter_pos must equal the derived layout size (${size}) and crc_pos ${
 					size + 1} (got ${cpos}/${crc}) — other positions overwrite signal bytes'
 			}
+			// the generated protect call narrows data_id to u16 — distinct
+			// over-wide ids would silently alias one E2E identity
+			did := (evm['data_id'] or { toml.Any(i64(-1)) }).i64()
+			if did < 0 || did > 0xFFFF {
+				errs << 'eth frame "${fname}" E2E data_id must fit 16 bits (0..0xFFFF)'
+			}
 			size += 2
 		}
 		if size > 64 {
@@ -493,7 +499,7 @@ fn validate_someip(doc toml.Doc) []string {
 	// (comm/nm_udp), and the eth shell is the RPC phase (P3: method-form + the
 	// access gate) — both rejected rather than half-bound as events.
 	mod_id_keys := {
-		'trace':     ['cmd', 'rsp', 'record', 'dump_fc']
+		'trace':     ['cmd', 'rsp', 'record']
 		'telemetry': ['id', 'detail_id']
 	}
 	mut telem_bus := ''
@@ -537,10 +543,41 @@ fn validate_someip(doc toml.Doc) []string {
 				errs << '[${blk}] ${kk} on the eth bus must be a literal event id — there is no DBC to resolve a name against'
 			}
 		}
+		// trace's dump_fc selects the ISO-TP block-dump path (comm/trace) —
+		// eth has no segmentation, so the adapter cannot honor it
+		if blk == 'trace' && 'dump_fc' in bm {
+			errs << '[trace] dump_fc is bound on the eth bus — the flow-controlled ISO-TP dump path has no eth counterpart (no segmentation, docs/someip.md); an eth block-transfer layout is its own rung'
+		}
+		// telemetry always transmits its CpuLoad frame on `id`, and the
+		// generator defaults an absent id to 0 — a method-class id that would
+		// bypass every check above
+		if blk == 'telemetry' && 'id' !in bm {
+			errs << '[telemetry] on eth bus "${eth}" needs an explicit `id` (the generator defaults it to 0, outside the event range)'
+		}
 		if bound == 0 {
 			errs << '[${blk}] is bound to eth bus "${eth}" but binds no valid endpoint id — nothing rides the bus (the generator would default ids outside the event range)'
 		} else {
 			mod_on_eth = true
+		}
+	}
+
+	// raw [[route]] gateways are CAN machinery (DBC-resolved, can.Channel both
+	// ends) — a route touching the eth bus would emit a raw-CAN gateway for a
+	// SOME/IP endpoint; a CAN↔SOME/IP gateway is its own explicit rung
+	if eth != '' {
+		for r in toml_arr(doc, 'route') {
+			rm := r.as_map()
+			mut fbus := ''
+			mut tbus := ''
+			if fv := rm['from'] {
+				fbus = str_of(fv.as_map(), 'bus')
+			}
+			if tv := rm['to'] {
+				tbus = str_of(tv.as_map(), 'bus')
+			}
+			if fbus == eth || tbus == eth {
+				errs << 'a [[route]] touches eth bus "${eth}" — raw-frame routing is CAN machinery; a CAN↔SOME/IP gateway is its own rung, not an implicit route'
+			}
 		}
 	}
 
