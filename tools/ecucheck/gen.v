@@ -76,9 +76,23 @@ fn specs() map[string]map[string]Key {
 			'isotp':     sub(.arr, false, 'isotp')
 			'did':       sub(.arr, false, 'did')
 			'route':     sub(.arr, false, 'route')
+			'io':        sub(.tbl, false, 'io')
 		}
 		'import':     {
 			'dbc': k(.str)
+		}
+		// physical IO points (docs/io.md). P1 ships gpio only — declaring an
+		// adc/pwm point is an unknown-key error until its phase lands.
+		'io':         {
+			'core': k(.int) // io thread home core (default 0, the IO core)
+			'gpio': sub(.arr, false, 'io_gpio')
+		}
+		'io_gpio':    {
+			'name':      req(.str) // binds the [[signal]] of the same name
+			'pin':       req(.str)
+			'period_ms': req(.int)
+			'init':      k(.boolean) // REQUIRED on outputs (semantic check)
+			'default':   k(.boolean) // inputs only: port value before the first real sample
 		}
 		'telemetry':  {
 			'enabled':   k(.boolean)
