@@ -309,3 +309,87 @@ functional mesh runs standalone; Linux *adds* campaigns + observability when pre
   signals (author fills scaling/comments), so the frame contract can start from
   the routing instead of being hand-kept in sync. Deferred; conformance-check
   first.
+
+## P2 — gateway generation (design)
+
+P1 shipped the source + validation + per-node generation; routes are *validated*
+(`REQ-TOPO-006`) but `check_routes` still emits a note that no forwarder is
+generated. P2 makes the route real: it **generates the forwarder** on the gateway
+node and lets reachability trust it.
+
+### The gateway is just a node on ≥2 buses
+
+A gateway node's `buses = [...]` names two or more buses, so the platform already
+gives it **one comm thread per bus** (the per-bus comm-thread model). A route
+moves a PDU from its `from` bus to its `to` bus — i.e. across two of those comm
+threads. Nothing new at the thread level; the route is extra work bolted onto the
+existing per-bus loops.
+
+### No new driver primitive
+
+`driver/can` already exposes raw frames as value types: `Channel.recv(mut Frame)`
+and `Channel.send(Frame)` (id + 64-byte data + len + fd). **Frame routing is
+exactly recv-on-A → send-on-B** — no raw-PDU passthrough to invent. Signal
+routing reuses the generated per-DBC codecs (decode with A's, encode with B's).
+
+### Where the forwarder runs — preserve single-writer
+
+A CAN channel has exactly one owning comm thread (the single-writer invariant the
+IOC rests on). A route reads on its `from` bus but must *transmit* on its `to`
+bus — a **different thread's channel**. So the route does NOT send directly across
+threads. Instead:
+
+> The `from` comm thread, on rx, matches the frame and **enqueues** the PDU (raw,
+> or re-encoded per B's DBC) into a **wait-free ring**; the `to` bus's comm thread
+> **drains** the ring in its own loop and sends. One writer per channel, no lock —
+> the same handoff discipline as the IOC, applied to whole PDUs.
+
+Rate adaptation falls out for free: the `to` thread drains and sends on *its*
+cyclic cadence, so a 10 ms signal on A can leave at 100 ms on B.
+
+### The two flavours
+
+- **Frame route (`frame = "..."`)** — raw 1:1 forward: the matched frame's bytes
+  cross unchanged. The declared frame set is an **allow-list** — only listed
+  frames cross, which is exactly the firewall (`REQ-TOPO-009`).
+- **Signal route (`signal = "..."`)** — decode the named signal from A's frame per
+  **A's DBC**, hand the value across the ring, re-encode into B's frame per
+  **B's DBC**. Different ids, layouts and rates on each side, only expressible
+  because each bus owns its contract.
+
+### Lowering (sysgen → loom2v)
+
+`sysgen` already dissolves system signals into per-node `ecu.toml`s. P2 adds:
+a `[[route]]` on the gateway lowers into that node's generated `gen-<gw>.toml` as
+a route directive loom2v consumes; a **derived** route (a cross-node signal whose
+producer and consumers sit on different buses) is emitted the same way — frame
+forward if the ids are 1:1, signal translate if the DBCs differ. loom2v gains
+**`gen_gateway.v`** (the new emitter on the freshly-split base): per route, the rx
+match + ring enqueue on the `from` thread and the drain + send on the `to` thread.
+
+### NM across buses (P2 decision)
+
+Default: **each bus is its own sleep domain** — independent NM clusters, the
+gateway a member of each, no sleep coupling through a route. A single sleep domain
+that the gateway bridges (wake on A wakes B) is a real feature but a *later*
+decision; P2 does not couple sleep, and the checks keep enforcing per-bus cluster
+coherence on each side independently.
+
+### Sub-phasing
+
+1. **P2a — frame route, sim.** Add the `edge` bus (+ DBC) and an H723 to
+   `system.toml`; generate the sysnode's frame forwarder; prove a `compute`-bus
+   frame reaches the H723 across two `vcan`s **only** via the gateway (drop the
+   route → the reachability check fails). `REQ-TOPO-007`, `-009`, `-010`.
+2. **P2b — signal route + rate adaptation.** decode/re-encode across differing
+   DBCs; `REQ-TOPO-008`.
+3. **P2c — bench.** the H735-DK gateways FDCAN1↔FDCAN2; sim-first until a second
+   transceiver/adapter is on the bench.
+
+### Open questions above — resolved for P2
+
+- *Routing spelling:* the authored DBC frame stays the ground truth; `to =
+  "<node>"` sugar is deferred — P2 uses explicit `[[route]]` + the derived-route
+  rule, never invents a wire format.
+- *Ownership:* unchanged — a node keeps its own `ecu.toml`; `system.toml`
+  composes and now also lowers routes.
