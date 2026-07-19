@@ -446,3 +446,89 @@ to   = "app"
 ' + app)
 	assert e.any(it.contains('carries a bool field'))
 }
+
+fn test_io_direction_mirror_rules() {
+	// an FB writing an INPUT (double producer) and reading an OUTPUT
+	// (double consumer of a single-reader channel) are both rejected
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "Btn"
+pin       = "PC13"
+period_ms = 10
+
+[[io.gpio]]
+name      = "Led"
+pin       = "PB0"
+period_ms = 10
+init      = false
+
+[[signal]]
+name = "Btn"
+fields = { on = "bool" }
+from = "io"
+to   = "app"
+
+[[signal]]
+name = "Led"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "app_main"
+
+[[fb]]
+name = "Work"
+thread = "app_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  reads = ["Btn", "Led"]
+  writes = ["Led", "Btn"]
+')
+	assert e.any(it.contains('io thread is its only producer'))
+	assert e.any(it.contains('io thread owns that channel side'))
+}
+
+fn test_io_accessor_partition_must_match_endpoint() {
+	// the writer lives in "worker" but the signal declares "app"
+	e := errs_of('
+[io]
+[[io.gpio]]
+name      = "Led"
+pin       = "PB0"
+period_ms = 10
+init      = false
+
+[[signal]]
+name = "Led"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "app_main"
+
+[[partition]]
+name = "worker"
+core = 0
+  [[partition.thread]]
+  name = "w_main"
+
+[[fb]]
+name = "Work"
+thread = "w_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  writes = ["Led"]
+')
+	assert e.any(it.contains('must live in the declared partition'))
+}
