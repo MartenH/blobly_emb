@@ -86,6 +86,8 @@ fn specs() map[string]map[string]Key {
 		'io':         {
 			'core': k(.int) // io thread home core (default 0, the IO core)
 			'gpio': sub(.arr, false, 'io_gpio')
+			'adc':  sub(.arr, false, 'io_adc')
+			'pwm':  sub(.arr, false, 'io_pwm')
 		}
 		'io_gpio':    {
 			'name':      req(.str) // binds the [[signal]] of the same name
@@ -94,6 +96,18 @@ fn specs() map[string]map[string]Key {
 			'init':      k(.boolean) // REQUIRED on outputs (semantic check)
 			'active_low': k(.boolean) // pad polarity (REQ-IO-015): logical true = pad LOW
 			'default':   k(.boolean) // inputs only: port value before the first real sample
+		}
+		'io_adc':     {
+			'name':      req(.str) // binds a u16/u32 [[signal]] (input-only)
+			'pin':       req(.str)
+			'period_ms': req(.int) // PUBLISH cadence; conversion free-runs (REQ-IO-018)
+		}
+		'io_pwm':     {
+			'name':      req(.str) // binds a u16/u32 [[signal]] carrying permille (output-only)
+			'pin':       req(.str)
+			'period_ms': req(.int) // APPLY cadence
+			'freq_hz':   req(.int) // carrier frequency (semantic: > 0)
+			'init':      k(.int)   // pre-publication duty, permille 0..1000
 		}
 		'telemetry':  {
 			'enabled':   k(.boolean)

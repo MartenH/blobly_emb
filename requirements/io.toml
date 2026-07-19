@@ -176,3 +176,48 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-018"
+title = "Analog inputs are free-running, wait-free reads"
+text = "An [[io.adc]] point shall be sampled wait-free: the ADC is configured ONCE at init (continuous scan over the configured channels, circular DMA into a latest-value array) and free-runs thereafter — no timers, no conversion interrupts, no per-sample management. The io thread READS the latest DMA value and never waits (REQ-IO-008). Conversion cadence (hardware) and publish cadence (period_ms) are decoupled."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-019"
+title = "Analog value shape and range"
+text = "An [[io.adc]] point binds a signal whose single field is u16 or u32 (an ADC count); a bool or f32 binding is a config error. The published value is the raw converter count (right-aligned), scaling is the application's concern above the driver."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-020"
+title = "Analog inputs are input-only"
+text = "An [[io.adc]] point shall bind a signal that flows FROM io TO the application (from = \"io\"); an ADC bound as an output (to = \"io\") is a config error. The direction is derived from the signal flow, as for gpio."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-021"
+title = "PWM outputs apply a duty in permille"
+text = "An [[io.pwm]] point binds a u16/u32 signal carrying a duty in permille (0..1000), clamped to 1000 above range. The io thread applies it as a timer compare-register update (near-free), freshness-gated: until the producing FB has published once, the configured init duty holds (REQ-IO-009). A pwm point is output-only and declares a positive freq_hz carrier."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-022"
+title = "PWM carrier validity is layered"
+text = "freq_hz must be positive (ecucheck, config-level: a zero carrier is a zero divisor); whether a frequency is ACHIEVABLE on the pin's bound timer is the boards-layer pin-table check (silicon-level), reported at build time next to pin validity."
+status = "draft"
+method = "analysis"
+asil = "QM"
+derives = "SYS-REQ-IO-001"

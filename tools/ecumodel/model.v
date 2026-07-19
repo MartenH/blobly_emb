@@ -282,9 +282,19 @@ pub fn validate(doc toml.Doc) []string {
 
 fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]string, bus_names map[string]bool) []string {
 	mut errs := []string{}
+	// gather points across the io kinds (gpio/adc/pwm), tagged so kind-specific
+	// rules (field type, direction, pwm carrier) branch while the shared rules
+	// (name, pin exclusivity, period, one-to-one binding) run once (docs/io.md).
 	mut points := []toml.Any{}
+	mut point_kind := []string{}
 	if io_tbl := doc.value_opt('io') {
-		points = arr_of(io_tbl.as_map(), 'gpio')
+		iom := io_tbl.as_map()
+		for k in ['gpio', 'adc', 'pwm'] {
+			for pt in arr_of(iom, k) {
+				points << pt
+				point_kind << k
+			}
+		}
 	}
 
 	// signals by name, plus the io-bound set (from/to = "io") — scanned BEFORE
@@ -358,23 +368,25 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 
 	mut fastest := i64(0)
 	mut periods := map[string]i64{}
+	mut period_kind := map[string]string{}
 	mut seen_point := map[string]bool{}
 	mut seen_pin := map[string]bool{}
-	for p in points {
+	for pi, p in points {
+		kind := point_kind[pi]
 		pm := p.as_map()
 		name := str_of(pm, 'name')
 		if !ident_ok(name) {
-			errs << 'io.gpio point name "${name}" is not a valid identifier'
+			errs << 'io.${kind} point name "${name}" is not a valid identifier'
 			continue
 		}
 		if name.len > 63 {
 			// the driver mirrors names into fixed 64-byte buffers; a longer name
 			// would silently truncate — two prefix-sharing names on one mirror file
-			errs << 'io.gpio point name "${name}" is ${name.len} bytes — the driver name buffer holds at most 63'
+			errs << 'io.${kind} point name "${name}" is ${name.len} bytes — the driver name buffer holds at most 63'
 			continue
 		}
 		if name in seen_point {
-			errs << 'duplicate io.gpio point "${name}" — one point per signal (one-to-one binding)'
+			errs << 'duplicate io.${kind} point "${name}" — one point per signal (one-to-one binding)'
 			continue
 		}
 		seen_point[name] = true
@@ -386,7 +398,7 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 		// zeros), so one pad has exactly one accepted spelling and string
 		// uniqueness is sufficient (codex on emb#150, both rounds).
 		if pin in seen_pin {
-			errs << 'io.gpio "${name}" reuses pin "${pin}" — one physical pad cannot serve two points'
+			errs << 'io.${kind} "${name}" reuses pad "${pin}" — one physical pad cannot serve two points'
 		}
 		seen_pin[pin] = true
 		mut period := i64(0)
@@ -396,9 +408,10 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 			}
 		}
 		if period < 1 {
-			errs << 'io.gpio "${name}" period_ms must be >= 1 ms (the Loom tick)'
+			errs << 'io.${kind} "${name}" period_ms must be >= 1 ms (the Loom tick)'
 		} else {
 			periods[name] = period
+			period_kind[name] = kind
 			if fastest == 0 || period < fastest {
 				fastest = period
 			}
@@ -407,7 +420,7 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 		// binding: the signal must exist, with io on exactly one side and the
 		// application (a partition or thread) on the other
 		if name !in sig_from {
-			errs << 'io.gpio "${name}" has no [[signal]] of that name (one-to-one binding)'
+			errs << 'io.${kind} "${name}" has no [[signal]] of that name (one-to-one binding)'
 			continue
 		}
 		from := sig_from[name]
@@ -417,6 +430,13 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 		if is_input == is_output { // both or neither
 			errs << 'signal "${name}": an io-bound signal needs io on exactly one side (from = "io" for an input, to = "io" for an output)'
 			continue
+		}
+		// kind-fixed direction: adc is input-only, pwm is output-only; gpio is either
+		if kind == 'adc' && !is_input {
+			errs << 'io.adc "${name}" is an analog INPUT — it must flow from = "io" (an ADC cannot be an output)'
+		}
+		if kind == 'pwm' && !is_output {
+			errs << 'io.pwm "${name}" is a PWM OUTPUT — it must flow to = "io" (a PWM cannot be an input)'
 		}
 		mut other := if is_input { to } else { from }
 		// bus check FIRST: a bus and a thread may share a name, and the alias
@@ -435,8 +455,15 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 		nf := sig_nfields[name] or { 0 }
 		if nf != 1 {
 			errs << 'signal "${name}": an io-bound signal carries exactly one field (found ${nf})'
-		} else if sig_ftype[name] != 'bool' {
-			errs << 'signal "${name}": a gpio point carries a bool field (found "${sig_ftype[name]}")'
+		} else {
+			ft := sig_ftype[name]
+			if kind == 'gpio' && ft != 'bool' {
+				errs << 'signal "${name}": a gpio point carries a bool field (found "${ft}")'
+			} else if kind in ['adc', 'pwm'] && ft != 'u16' && ft != 'u32' {
+				// a u8 cannot carry an ADC count / 0..1000 permille; an f32 has
+				// no defined digital-level meaning (docs/io.md REQ-IO-019)
+				errs << 'signal "${name}": an ${kind} point carries a u16 or u32 field (found "${ft}")'
+			}
 		}
 		// producer/consumer counts: exactly one on the application side (P1),
 		// nothing on the io-owned side, and the accessor in the declared partition
@@ -469,12 +496,23 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 				}
 			}
 		}
+		if kind == 'pwm' {
+			fh := (pm['freq_hz'] or { toml.Any(0) })
+			if fh !is i64 || (fh as i64) <= 0 {
+				errs << 'io.pwm "${name}" needs a positive freq_hz (the carrier frequency; a zero divisor is not a timer)'
+			}
+			if iv := pm['init'] {
+				if iv is i64 && (iv < 0 || iv > 1000) {
+					errs << 'io.pwm "${name}" init must be a permille 0..1000 (the pre-publication duty)'
+				}
+			}
+		}
 		if is_output {
 			if 'init' !in pm {
-				errs << 'io.gpio "${name}" is an output and must declare init (the pre-publication pin state)'
+				errs << 'io.${kind} "${name}" is an output and must declare init (the pre-publication pin state)'
 			}
 			if 'default' in pm {
-				errs << 'io.gpio "${name}" is an output — default is an input\'s pre-first-sample port value; outputs declare init'
+				errs << 'io.${kind} "${name}" is an output — default is an input\'s pre-first-sample port value; outputs declare init'
 			}
 			if writers[name] != 1 {
 				errs << 'io output "${name}" needs exactly one writing handler (found ${writers[name]}) — zero leaves the pin at init forever, two break SPSC'
@@ -486,7 +524,7 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 			}
 		} else {
 			if 'init' in pm {
-				errs << 'io.gpio "${name}" is an input — init belongs to outputs; an input\'s pre-first-sample port value is `default`'
+				errs << 'io.${kind} "${name}" is an input — init belongs to outputs; an input\'s pre-first-sample port value is `default`'
 			}
 			if readers[name] != 1 {
 				errs << 'io input "${name}" needs exactly one reading handler (found ${readers[name]}) — P1 is single-consumer (fan-out arrives with the to-list form)'
@@ -501,13 +539,13 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 	// every io-bound signal must have its point (the reverse of one-to-one)
 	for sname, from in sig_from {
 		if (from == 'io' || sig_to[sname] == 'io') && sname !in seen_point {
-			errs << 'signal "${sname}" is io-bound but no [[io.gpio]] point declares it — a phantom endpoint with no hardware'
+			errs << 'signal "${sname}" is io-bound but no [[io.<kind>]] point declares it — a phantom endpoint with no hardware'
 		}
 	}
 	// harmonic periods: every period an integer multiple of the fastest
 	for pname, period in periods {
 		if fastest > 0 && period % fastest != 0 {
-			errs << 'io.gpio "${pname}" period ${period} ms is not a multiple of the fastest io period (${fastest} ms) — the io thread serves points on multiples of its tick'
+			errs << 'io.${period_kind[pname]} "${pname}" period ${period} ms is not a multiple of the fastest io period (${fastest} ms) — the io thread serves points on multiples of its tick'
 		}
 	}
 	return errs
