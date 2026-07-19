@@ -46,7 +46,9 @@ fn test_button_drives_led() {
 	}
 	assert first == '1', 'first observed LedGreen was "${first}" — init (1) must precede the app command (0)'
 
-	// then the app's first command lands: 0, button unpressed
+	// then the app's first command lands: 0, button unpressed. With no
+	// io/UserButton file the checked reads publish NOTHING, so this 0 is the
+	// FB running on its port default (false), never a fabricated sample.
 	mut cleared := false
 	for _ in 0 .. 500 {
 		if (os.read_file(led) or { '' }).trim_space() == '0' {
@@ -56,6 +58,9 @@ fn test_button_drives_led() {
 		time.sleep(1 * time.millisecond)
 	}
 	assert cleared, 'LedGreen never left init for the unpressed app command'
+	// the fault-leg proof: the input file still must not exist here — nothing
+	// seeded it, so the 0 above cannot have come from a published sample
+	assert !os.exists(os.join_path(work, 'io', 'UserButton')), 'io/UserButton exists before the test wrote it — an input was seeded'
 
 	// press the button via the ioset protocol (write-then-rename, atomic)
 	tmp := os.join_path(work, 'io', '.UserButton.tmp')

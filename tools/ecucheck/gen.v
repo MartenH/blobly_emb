@@ -92,6 +92,7 @@ fn specs() map[string]map[string]Key {
 			'pin':       req(.str)
 			'period_ms': req(.int)
 			'init':      k(.boolean) // REQUIRED on outputs (semantic check)
+			'default':   k(.boolean) // inputs only: port value before the first real sample
 		}
 		'telemetry':  {
 			'enabled':   k(.boolean)

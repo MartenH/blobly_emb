@@ -6,7 +6,7 @@ import sig
 pub struct ButtonLampIn {
 pub mut:
 	// signal "UserButton" — ch, transport triple, io -> app
-	user_button sig.UserButton
+	user_button sig.UserButton = sig.UserButton{ pressed: false }
 }
 pub struct ButtonLampOut {
 pub mut:

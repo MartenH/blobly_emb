@@ -52,8 +52,10 @@ fn partition_io() {
 		if next_us > now {
 			osal.sleep_us(next_us - now)
 		}
-		mut user_button := sig.UserButton{ pressed: io.gpio_read(0) }
-		osal.ioc_publish(user_button_ch, &user_button, u8(sizeof(user_button)))
+		if user_button_v := io.gpio_read_checked(0) {
+			mut user_button := sig.UserButton{ pressed: user_button_v }
+			osal.ioc_publish(user_button_ch, &user_button, u8(sizeof(user_button)))
+		}
 		mut led_green := sig.LedGreen{}
 		if osal.ioc_acquire(led_green_ch, &led_green, u8(sizeof(led_green))) {
 			io.gpio_write(1, led_green.on) // freshness-gated: init holds until the first publish

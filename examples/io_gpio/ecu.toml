@@ -6,10 +6,13 @@
 [io]
 core = 0
 
+# default = the port field's value until the first REAL sample publishes
+# (docs/io.md startup-fault leg) — explicit here to exercise the emitter.
 [[io.gpio]]
 name      = "UserButton"
 pin       = "PC13"
 period_ms = 10
+default   = false
 
 # init = true: distinguishable from the app's first command (0, unpressed),
 # so the e2e test can observe the driver-established init actually holding.

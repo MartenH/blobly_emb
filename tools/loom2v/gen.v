@@ -368,12 +368,14 @@ fn parse_buses(doc toml.Doc) (map[string]bool, map[string]int) {
 // name (docs/io.md). ch is the generator-assigned driver channel (array index);
 // output comes from the bound signal's direction (to == "io"), never re-declared.
 struct IoPoint {
-	name      string
-	pin       string
-	period_ms int
-	init      bool
-	output    bool
-	ch        int
+	name        string
+	pin         string
+	period_ms   int
+	init        bool
+	output      bool
+	ch          int
+	has_default bool // input only: the port field's pre-first-sample value
+	default     bool
 }
 
 // parse_io reads [io] (optional core, default 0 — the IO core) and its [[io.gpio]]
@@ -389,12 +391,14 @@ fn parse_io(doc toml.Doc, sig_of map[string]SigInfo) ([]IoPoint, int) {
 		name := (pm['name'] or { toml.Any('') }).string()
 		si := sig_of[name] or { continue } // one-to-one binding validated upstream
 		points << IoPoint{
-			name:      name
-			pin:       (pm['pin'] or { toml.Any('') }).string()
-			period_ms: int((pm['period_ms'] or { toml.Any(0) }).int())
-			init:      (pm['init'] or { toml.Any(false) }).bool()
-			output:    si.io_out
-			ch:        points.len
+			name:        name
+			pin:         (pm['pin'] or { toml.Any('') }).string()
+			period_ms:   int((pm['period_ms'] or { toml.Any(0) }).int())
+			init:        (pm['init'] or { toml.Any(false) }).bool()
+			output:      si.io_out
+			ch:          points.len
+			has_default: 'default' in pm
+			default:     (pm['default'] or { toml.Any(false) }).bool()
 		}
 	}
 	return points, core
@@ -939,8 +943,12 @@ fn emit_partition_io(m Model) []string {
 			glue << '${ind}\tio.gpio_write(${pt.ch}, ${fld}.${si.val_field}) // freshness-gated: init holds until the first publish'
 			glue << '${ind}}'
 		} else {
-			glue << '${ind}mut ${fld} := sig.${pt.name}{ ${si.val_field}: io.gpio_read(${pt.ch}) }'
-			glue << '${ind}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+			// checked read: only REAL parsed values publish — after a failed boot
+			// sample a plain read would fabricate the cfg init as the first sample
+			glue << '${ind}if ${fld}_v := io.gpio_read_checked(${pt.ch}) {'
+			glue << '${ind}\tmut ${fld} := sig.${pt.name}{ ${si.val_field}: ${fld}_v }'
+			glue << '${ind}\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+			glue << '${ind}}'
 		}
 		if mult > 1 {
 			glue << '\t\t}'
@@ -2087,7 +2095,17 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 				ports << 'pub mut:'
 				for r in reads {
 					ports << provenance(r.string(), m.sig_of)
-					ports << '\t${snake(r.string())} sig.${r.string()}'
+					// an input point's declared default becomes the port field's
+					// initial value — the FB sees it until the first real sample
+					// (docs/io.md); the acquire leaves the field untouched on no-data
+					mut dflt := ''
+					for pt in m.io_points {
+						if pt.name == r.string() && !pt.output && pt.has_default {
+							si_r := m.sig_of[r.string()] or { SigInfo{} }
+							dflt = ' = sig.${r.string()}{ ${si_r.val_field}: ${pt.default} }'
+						}
+					}
+					ports << '\t${snake(r.string())} sig.${r.string()}${dflt}'
 				}
 				ports << '}'
 				ports << 'pub struct ${cname}Out {'
