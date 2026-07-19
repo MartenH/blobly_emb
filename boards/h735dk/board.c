@@ -146,6 +146,7 @@ void board_can_clock_pins_init(void) {
  * debugger, or the PHY. Port index 0=A..10=K (the io_stm32.c parse). */
 int board_io_pin_reserved(int port, int pin) {
 	if (port == 7 && (pin == 0 || pin == 1)) return 1;   /* PH0/PH1: HSE pair — the PLL AND FDCAN clock source */
+	if (port == 1 && pin == 3) return 1;                 /* PB3: SWO */
 	if (port == 0 && (pin == 13 || pin == 14)) return 1;            /* PA13/PA14: SWD */
 	if (port == 7 && (pin == 13 || pin == 14)) return 1;            /* PH13/PH14: FDCAN1 TX/RX */
 	if (port == 0 && (pin == 1 || pin == 2 || pin == 7)) return 1;  /* PA1/2/7: RMII REF_CLK/MDIO/CRS_DV (eth.c) */

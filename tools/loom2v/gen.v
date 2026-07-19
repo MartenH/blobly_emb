@@ -1644,6 +1644,14 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			// _tx_thread_sleep).
 			glue << 'fn C._tx_thread_sleep(u32) u32'
 			glue << 'fn C._tx_initialize_kernel_enter()'
+			if !comm_thread_on && m.io_points.len > 0 {
+				// no-comm + io (emb#150 r5): run() publishes its scratch slot and the
+				// inline CpuLoad producer reads the sums — the comm branch declares
+				// these for itself; this cut needs them here
+				glue << 'fn C.load_pub(u32, u32, u32, u32, u32)'
+				glue << 'fn C.load_pub_slot(int, u32, u32, u32, u32, u32)'
+				glue << 'fn C.load_sum_permille() u32'
+			}
 			glue << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
 			glue << trace_c_decls(m)
 			glue << shell_c_decls(m)
@@ -1746,8 +1754,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			if m.io_points.len > 0 {
 				glue << '\tg_io_tcb   [32]u64  // the platform io thread (docs/io.md)'
 				glue << '\tg_io_stack [2048]u8 // gpio serve loop only: no modules, shallow frames'
-				if comm_thread_on {
-					// load accounting only — the io thread has no handlers; module-sized, so bss
+				if comm_thread_on || m.telem.on {
+					// load accounting only — the io thread has no handlers; module-sized, so
+					// bss. Present whenever ANYONE ships CpuLoad (emb#150 r5: the inline
+					// producer counts io too, not just the comm thread's sums).
 					glue << '\tg_sched_io loom.Scheduler // io serve-time accounting for the CpuLoad seam'
 				}
 				// the startup-fault counter is an exported symbol (docs/io.md observability
@@ -1846,10 +1856,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		glue << '\t\tif t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun'
 		glue << '\t\t\tsched.mark_overrun()'
 		glue << '\t\t}'
-		if comm_thread_on {
-			// Publish this core's load to the volatile scratch (single writer) for the comm thread's
-			// CpuLoad producer. Single M7 -> core 0 only; the comm thread reads it each telemetry
-			// period. load_pub takes all fields (detail ones are 0 if unused — cheap, keeps it one call).
+		if comm_thread_on || (m.target.threadx && m.io_points.len > 0) {
+			// Publish this core's load to the volatile scratch (single writer) — for the
+			// comm thread's CpuLoad producer, or (no-comm + io, emb#150 r5) so the inline
+			// producer's load_sum sees the app slot next to the io thread's slot.
 			glue << '\t\tC.load_pub(u32(sched.load_permille()), u32(sched.load_permille_100ms()),'
 			glue << '\t\t\tu32(sched.load_permille_1s()), u32(sched.load_permille_10s()), sched.overruns())'
 		}
@@ -1858,7 +1868,13 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				telem_active: m.telem.on && telem_iface != '' && !comm_thread_on
 				now:          't1'
 				period:       'telem_period_us'
-				load:         ['\t\t\tload[0] = sched.load_permille() // single M7 -> core 0 only']
+				load:         [if m.io_points.len > 0 {
+				// the io thread publishes its slot to the scratch; run() publishes
+				// slot 0 — the sum is the core's whole truth (emb#150 r5)
+				'\t\t\tload[0] = u16(C.load_sum_permille())'
+			} else {
+				'\t\t\tload[0] = sched.load_permille() // single M7 -> core 0 only'
+			}]
 				det_ovr:      'sched.overruns()'
 				det_lines:    ['\t\t\tdetail := telem.encode_loaddetail(sched.load_permille_100ms(),', '\t\t\t\tsched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)']
 				frame:        'f'
@@ -1888,7 +1904,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << ''
 			// io load slot = the one after the FB threads (its manifest row's position);
 			// only the comm-thread target has the load scratch seam to publish into.
-			glue << emit_io_target_entry(m, ioc_idx, comm_thread_on, app_threads.len)
+			// io load accounting runs whenever ANYONE ships CpuLoad — the comm thread
+			// (scratch sums) or the inline producer (no-comm telemetry, emb#150 r5);
+			// without it the io thread's serve time vanishes from telemetry.
+			glue << emit_io_target_entry(m, ioc_idx, comm_thread_on || m.telem.on, app_threads.len)
 			if comm_thread_on {
 				// The comm thread must be STRICTLY higher priority (lower number) than the FB thread
 				// so it preempts a long app pass to drain rx after the ISR posts (zero time slice
@@ -2133,34 +2152,60 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						'min FB priority - 1 = ${min_prio - 1}, out of the ThreadX range 0..31; ' +
 						'use FB priorities >= 1')
 				}
-				glue << 'fn ${part}_thread_entry(input u32) {'
-				if m.buses.len == 0 {
-					// an io-only node (no [bus] at all): run() is channel-free —
-					// emitting a can.Channel here would reference an import the
-					// header emitter correctly skipped (codex on emb#150 r4)
-					glue << '\trun()'
+				if multi && m.buses.len == 0 {
+					// bus-less multi-thread node: one entry per app thread, exactly
+					// like the comm branch — run() does not exist in the multi cut
+					// (codex on emb#150 r5)
+					for thr in app_threads {
+						glue << 'fn ${thr}_thread_entry(input u32) {'
+						glue << '\trun_${thr}()'
+						glue << '}'
+						glue << ''
+					}
 				} else {
-					glue << '\tmut ch := can.Channel{}'
-					glue << "\tif !ch.open('${tx_bus_idx}', ${tx_bus_fd}) { // ${m.telem.bus}; board clocks/pins set by main.v"
-					glue << '\t\treturn // CAN open failed (bad bus index / FD unsupported) — don\'t run with a dead channel'
-					glue << '\t}'
-					glue << '\trun(ch)'
+					glue << 'fn ${part}_thread_entry(input u32) {'
+					if m.buses.len == 0 {
+						// an io-only node (no [bus] at all): run() is channel-free —
+						// emitting a can.Channel here would reference an import the
+						// header emitter correctly skipped (codex on emb#150 r4)
+						glue << '\trun()'
+					} else {
+						glue << '\tmut ch := can.Channel{}'
+						glue << "\tif !ch.open('${tx_bus_idx}', ${tx_bus_fd}) { // ${m.telem.bus}; board clocks/pins set by main.v"
+						glue << '\t\treturn // CAN open failed (bad bus index / FD unsupported) — don\'t run with a dead channel'
+						glue << '\t}'
+						glue << '\trun(ch)'
+					}
+					glue << '}'
 				}
-				glue << '}'
 				glue << ''
 				glue << "@[export: 'tx_application_define']"
 				glue << 'fn tx_application_define(first_unused voidptr) {'
 				glue << emit_io_target_boot(m, ioc_idx)
-				glue << '\tC._tx_thread_create(&g_${part}_tcb[0], c\'${part}\', ${part}_thread_entry, u32(0),'
-				glue << '\t\t&g_${part}_stack[0], u32(g_${part}_stack.len), u32(${tx_prio}), u32(${tx_prio}), u32(0), u32(1))'
+				if multi && m.buses.len == 0 {
+					for thr in app_threads {
+						pr := m.part.thread_prio[thr] or { 10 }
+						glue << '\tC._tx_thread_create(&g_${thr}_tcb[0], c\'${thr}\', ${thr}_thread_entry, u32(0),'
+						glue << '\t\t&g_${thr}_stack[0], u32(g_${thr}_stack.len), u32(${pr}), u32(${pr}), u32(0), u32(1))'
+					}
+				} else {
+					glue << '\tC._tx_thread_create(&g_${part}_tcb[0], c\'${part}\', ${part}_thread_entry, u32(0),'
+					glue << '\t\t&g_${part}_stack[0], u32(g_${part}_stack.len), u32(${tx_prio}), u32(${tx_prio}), u32(0), u32(1))'
+				}
 				if m.io_points.len > 0 {
 					glue << emit_io_target_create(min_prio - 1)
 				}
 				if m.trace.on {
-					// Deterministic ids in MANIFEST order (app thread, then io) — without
+					// Deterministic ids in MANIFEST order (app threads, then io) — without
 					// explicit binds the io thread, running at min FB - 1, is first-sighted
 					// as id 1 and every lane label swaps (codex on emb#150).
-					glue << '\tC.trace_bind_thread(&g_${part}_tcb[0])'
+					if multi && m.buses.len == 0 {
+						for thr in app_threads {
+							glue << '\tC.trace_bind_thread(&g_${thr}_tcb[0])'
+						}
+					} else {
+						glue << '\tC.trace_bind_thread(&g_${part}_tcb[0])'
+					}
 					if m.io_points.len > 0 {
 						glue << '\tC.trace_bind_thread(&g_io_tcb[0])'
 					}
