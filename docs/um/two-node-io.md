@@ -61,7 +61,7 @@ Both transceivers on the **same CANH/CANL pair** as the PCAN adapter — three n
 one classic-500k bus (`ip link set can0 up type can bitrate 500000`). Watch it:
 
 ```sh
-candump can0            # ButtonState 0x310 cyclic from the H755; CpuLoad 0x7E0 from each
+candump can0            # ButtonState 0x310 cyclic from the H755; CpuLoad 0x7E0 (H755) + 0x7E8 (H735)
 cansend can0 310#01000000   # fake a press from the PC — the H735 lamp lights (rx half in isolation)
 ```
 

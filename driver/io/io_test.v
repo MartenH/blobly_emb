@@ -84,11 +84,13 @@ fn test_temp_rename_leaves_no_tmp() {
 	teardown(dir)
 }
 
-// @verifies REQ-IO-017
-// active_low is a pad property: the host mirror (and every consumer above the
-// driver) stays LOGICAL — cfg accepts the flag and read/write semantics are
-// unchanged from the caller's side. (The pad-level inversion itself is
-// silicon behavior: bench-verified on the H735G-DK's active-low lamp.)
+// This does NOT @verifies REQ-IO-017: the file backend discards active_low by
+// design (the host mirror is logical), so this proves only the HALF of the
+// requirement that says polarity never leaks ABOVE the driver — cfg accepts
+// the flag and the caller's read/write semantics are unchanged. The pad-level
+// inversion itself (io_stm32.c) is target-only and bench-verified on the
+// H735G-DK's active-low lamp (emb#150); traceability records 017 as bench
+// evidence, not unit-verified, so a broken inversion cannot pass unseen here.
 fn test_active_low_is_logical_above_the_pad() {
 	dir := setup('active_low') // own temp dir + teardown, like every file-backend test
 	assert cfg(0, 'LampAL', 'PB0', true, 0, 1) // active-low lamp, logically off
