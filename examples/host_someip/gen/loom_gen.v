@@ -95,7 +95,7 @@ pub fn partition_eth0(sock eth.Socket) {
 	mut tx_bench_event_st := com.TxState{
 		mode: com.TxMode.event
 		cycle_us: 100000
-		min_delay_us: 50000
+		min_delay_us: 350000
 	}
 	mut tx_bench_mixed_st := com.TxState{
 		mode: com.TxMode.mixed

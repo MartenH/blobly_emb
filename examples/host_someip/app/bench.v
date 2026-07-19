@@ -24,10 +24,11 @@ pub fn (mut fb Bench) on_100ms(inp ports.BenchIn, mut out ports.BenchOut) {
 		wraps: u16(q + 1000) // always nonzero in BOTH bytes: the harness proves
 		// the field's offset/endianness with live values (q>>16 is 0 for hours)
 	}
-	// step every 5th/7th activation: the event frame's ONLY sends, and the
-	// mixed frame's immediate sends between its heartbeats
+	// EventVal steps EVERY activation — faster than the frame's 350 ms
+	// debounce, so the event frame must coalesce; MixedVal steps every 7th:
+	// the mixed frame's immediate sends between its heartbeats
 	out.event_val = sig.EventVal{
-		level: u8(fb.ticks / 5)
+		level: u8(fb.ticks)
 	}
 	out.mixed_val = sig.MixedVal{
 		setpoint: u16(fb.ticks / 7)
