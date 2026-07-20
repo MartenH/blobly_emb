@@ -1,0 +1,14 @@
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: sysnode zone
+
+BO_ 512 VehSpeed_E: 8 sysnode
+ SG_ VehicleSpeed : 0|32@1+ (1,0) [0|4294967295] "km/h" zone
+
+BA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;
+BA_DEF_DEF_ "GenMsgCycleTime" 0;
+BA_ "GenMsgCycleTime" BO_ 512 200;

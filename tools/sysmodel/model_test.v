@@ -6,7 +6,7 @@ import toml
 // REQ-TOPO-005 is method = "analysis" (the system-sourced-generation architecture,
 // argued in docs/multi-node.md) — these validator tests exercise cross-node checks,
 // not that generation analysis, so they must NOT claim to verify it by test.
-// @verifies REQ-TOPO-001, REQ-TOPO-002, REQ-TOPO-004, REQ-TOPO-006
+// @verifies REQ-TOPO-001, REQ-TOPO-002, REQ-TOPO-004, REQ-TOPO-006, REQ-TOPO-011, REQ-TOPO-012
 
 fn errs(issues []Issue) []string {
 	mut out := []string{}
@@ -280,9 +280,10 @@ fn test_route_satisfies_cross_bus_consumer() {
 	}
 	// without a route -> error (no producer on edge)
 	assert errs(validate_system(s)).any(it.contains('Speed') && it.contains('no node transmits'))
-	// add the route -> it is WELL-FORMED (suppresses the raw missing-producer gap)
-	// but P1 does not GENERATE cross-bus routing, so the route itself is rejected:
-	// a clean verdict would wrongly imply a forwarder exists at runtime.
+	// add the SIGNAL route. In the COMPOSED model it suppresses the raw
+	// missing-producer gap (reachability trusts it) BUT the route itself is rejected:
+	// a composed system never runs sysgen, so no forwarder would exist (codex #164).
+	// Signal-route ACCEPTANCE is a dissolution feature (test_dissolved_multibus_gateway_accepted).
 	s.routes << Route{
 		gateway: 'sysnode'
 		signal:  'Speed'
@@ -290,8 +291,8 @@ fn test_route_satisfies_cross_bus_consumer() {
 		to:      'edge'
 	}
 	e := errs(validate_system(s))
-	assert !e.any(it.contains('Speed') && it.contains('no node transmits')), 'a well-formed route suppresses the raw missing-producer gap'
-	assert e.any(it.contains('not generated in P1')), 'but the ungenerated route is itself rejected: ${e}'
+	assert !e.any(it.contains('Speed') && it.contains('no node transmits')), 'reachability trusts the route: ${e}'
+	assert e.any(it.contains('only generated in the dissolution model')), 'composed route rejected: ${e}'
 }
 
 // --- codex #141 review fixes ---
@@ -1294,10 +1295,11 @@ fn test_undeclared_telemetry_interface_is_error() {
 
 // --- codex #141 round-12 fixes ---
 
-// REQ-TOPO-006: a system-level cross-bus route is not generated in P1 (loom2v
-// emits no system routes), so its mere presence is an error — a clean verdict
-// must not imply a forwarder exists.
-fn test_system_route_not_generated_is_error() {
+// REQ-TOPO-006: any route in a COMPOSED system is rejected — sysgen lowers routes
+// only in the dissolution model, so a composed route would validate clean with no
+// forwarder at runtime (codex #164). (Dissolved: signal routes are accepted in
+// P2a, frame routes are gated to P2b — see the dissolved route tests.)
+fn test_composed_route_rejected() {
 	mut s := clean_system()
 	s.buses << Bus{
 		name:      'edge'
@@ -1311,7 +1313,25 @@ fn test_system_route_not_generated_is_error() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system(s)).any(it.contains('not generated in P1')), errs(validate_system(s)).str()
+	assert errs(validate_system(s)).any(it.contains('only generated in the dissolution model')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-006: in the DISSOLVED model a FRAME (raw-PDU) route is still gated to
+// P2b (its full-contract compare + tx-ready forwarder is not generated yet).
+fn test_dissolved_frame_route_is_p2b() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[0].buses = ['compute', 'edge'] // gateway
+	s.routes << Route{
+		gateway: 'a'
+		frame:   'SomeFrame'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('not generated yet (P2b)')), errs(validate_system_gen(s)).str()
 }
 
 // REQ-TOPO-002: a telemetry id equal to ANOTHER node's alive id collides on the
@@ -2715,15 +2735,532 @@ fn test_dissolved_host_node_nm_dead() {
 		&& it.contains('no runtime'))
 }
 
-// REQ-TOPO-006: a multi-bus node (P1 wires one bus per node; gateways are P2).
-fn test_dissolved_multibus_node_rejected() {
+// REQ-TOPO-006: a multi-bus node that gateways NO route is rejected (its extra
+// buses would be silently unwired). A multi-bus node is only legal as a gateway.
+fn test_dissolved_multibus_nongateway_rejected() {
 	mut s := clean_dissolved()
 	s.buses << Bus{
 		name:      'edge'
 		interface: 'can1'
 	}
 	s.nodes[0].buses = ['compute', 'edge']
-	assert errs(validate_system_gen(s)).any(it.contains('wires exactly one bus per node'))
+	assert errs(validate_system_gen(s)).any(it.contains('gateways no route'))
+}
+
+// REQ-TOPO-006: a multi-bus node IS accepted when it is a declared route gateway
+// (P2a). Here sysnode gateways the signal `kph`... — a signal route compute->edge.
+fn test_dissolved_multibus_gateway_accepted() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[0].buses = ['compute', 'edge'] // sysnode is the gateway
+	// a consumer on edge so the route is well-formed end to end
+	s.nodes << Node{
+		name:         'zone'
+		buses:        ['edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+		view:         NodeView{
+			fb_reads: [s.signals[0].name]
+		}
+	}
+	s.routes << Route{
+		gateway: s.nodes[0].name
+		signal:  s.signals[0].name
+		from:    'compute'
+		to:      'edge'
+	}
+	e := errs(validate_system_gen(s))
+	assert !e.any(it.contains('gateways no route')), 'a route gateway is allowed multi-bus: ${e}'
+	assert !e.any(it.contains('exactly one bus')), e.str()
+}
+
+// REQ-TOPO-012: the routed cell has a single writer. A node on the destination bus
+// whose FB also writes the routed signal is a second writer — rejected.
+fn test_route_dest_double_writer_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[0].buses = ['compute', 'edge'] // 'a' gateways Speed
+	s.nodes << Node{
+		name:         'zone'
+		buses:        ['edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+		view:         NodeView{
+			fb_writes: ['Speed'] // a SECOND writer of the routed signal on edge
+		}
+	}
+	s.routes << Route{
+		gateway: 'a'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('single writer')
+		|| it.contains('single-writer') || it.contains('one writer'))
+}
+
+// REQ-TOPO-006 (codex #164): a gateway that ALSO reads/writes a system signal via
+// an FB is rejected — its own signal wiring is not emitted in P2a (it may only
+// route), so the FB would reference undeclared ports.
+fn test_gateway_with_system_fb_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	// make a gateway node that also reads the system signal 'Speed'
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+		view:         NodeView{
+			fb_reads: ['Speed']
+		}
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('gateway "gw"')
+		&& it.contains('may only route'))
+}
+
+// REQ-TOPO-003 (codex #164 r2): the routed signal's fields must match the
+// DESTINATION DBC's SG_ width — check_dbc_conformance only checks the source bus,
+// so a re-encode into a differently-sized dest SG_ would truncate/reinterpret.
+fn test_route_dest_dbc_width_mismatch() {
+	mut s := clean_dissolved()
+	// Speed is 16-bit at source (good_dbc); make the destination SG_ 32-bit.
+	os.write_file(os.join_path(s.dir, 'edge.dbc'), 'VERSION ""\nBU_: gw zone\nBO_ 512 Speed_E: 8 gw\n SG_ Speed : 0|32@1+ (1,0) [0|0] "" zone\n') or {
+		panic(err)
+	}
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+		dbc:       'edge.dbc'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge'] // dedicated gateway (does not produce/consume)
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.nodes << Node{
+		name:         'zone'
+		buses:        ['edge']
+		nm:           0x16
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        5
+		view:         NodeView{
+			fb_reads: ['Speed']
+		}
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('bits but destination DBC')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-003 (codex #164 r7): a destination frame with an unrouted sibling SG_
+// is rejected — the gateway composes the WHOLE frame, but a P2a gateway can't
+// produce its own signals, so the sibling would be sent uninitialised.
+fn test_route_dest_frame_partial_rejected() {
+	mut s := clean_dissolved()
+	os.write_file(os.join_path(s.dir, 'edge.dbc'), 'VERSION ""\nBU_: gw zone\nBO_ 512 Speed_E: 8 gw\n SG_ Speed : 0|16@1+ (1,0) [0|0] "" zone\n SG_ Extra : 16|16@1+ (1,0) [0|0] "" zone\n') or {
+		panic(err)
+	}
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+		dbc:       'edge.dbc'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('partially populated')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-003 (codex #164 r7): a destination SG_ with a non-trivial factor/offset
+// is rejected — the codec routes raw values, so scaling would change the quantity.
+fn test_route_dest_factor_rejected() {
+	mut s := clean_dissolved()
+	os.write_file(os.join_path(s.dir, 'edge.dbc'), 'VERSION ""\nBU_: gw zone\nBO_ 512 Speed_E: 8 gw\n SG_ Speed : 0|16@1+ (0.1,0) [0|0] "" zone\n') or {
+		panic(err)
+	}
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+		dbc:       'edge.dbc'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('factor/offset')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-004 (codex #164 r7): a gateway with an NM cluster on its primary bus but
+// [telemetry] on a secondary bus is rejected — NM runs on the telemetry bus, so
+// its alive frames would otherwise go to the wrong network.
+fn test_gateway_nm_telemetry_bus_mismatch_rejected() {
+	mut s := clean_dissolved()
+	s.buses[0].has_nm_cluster = true
+	s.buses[0].nm_peers_lo = 0x500
+	s.buses[0].nm_peers_hi = 0x53f
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+		view:         NodeView{
+			is_threadx:    true
+			has_telemetry: true
+			telem_bus:     'can1' // telemetry on the SECONDARY bus, NM cluster on primary
+		}
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('NM runs on the telemetry bus'))
+}
+
+// REQ-TOPO-003 (codex #164 r6): a big-endian (Motorola) destination SG_ is
+// rejected — the dissolution codec re-encodes little-endian signals only.
+fn test_route_dest_big_endian_rejected() {
+	mut s := clean_dissolved()
+	os.write_file(os.join_path(s.dir, 'edge.dbc'), 'VERSION ""\nBU_: gw zone\nBO_ 512 Speed_E: 8 gw\n SG_ Speed : 7|16@0+ (1,0) [0|0] "" zone\n') or {
+		panic(err)
+	}
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+		dbc:       'edge.dbc'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('big-endian')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-003 (codex #164 r5): the destination SG_'s OCCUPIED bit range (not just
+// its width) must fit the frame — a 16-bit SG_ at bit 56 of an 8-byte frame has a
+// width that fits (16 <= 64) but overflows the payload (56+16 = 72 > 64).
+fn test_route_dest_sg_position_overflow_rejected() {
+	mut s := clean_dissolved()
+	os.write_file(os.join_path(s.dir, 'edge.dbc'), 'VERSION ""\nBU_: gw zone\nBO_ 512 Speed_E: 8 gw\n SG_ Speed : 56|16@1+ (1,0) [0|0] "" zone\n') or {
+		panic(err)
+	}
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+		dbc:       'edge.dbc'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('occupies up to bit 72')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-006 (codex #164 r4): a gateway listing a bus twice is rejected — it
+// would emit that [bus.*] table twice.
+fn test_gateway_duplicate_bus_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('listed more than once'))
+}
+
+// REQ-TOPO-003 (codex #164 r4): a signal route to a bus with no `dbc` is rejected
+// in syscheck (sysgen would otherwise fail only mid-generation).
+fn test_route_dest_bus_no_dbc_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	} // no dbc
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('has no `dbc`'))
+}
+
+// REQ-TOPO-003 (codex #164 r4): the routed signal must fit the destination FRAME's
+// DLC, not just the SG_ width (a wide SG_ in a short BO_ truncates on the wire).
+fn test_route_dest_dlc_overflow_rejected() {
+	mut s := clean_dissolved()
+	// Speed is 16-bit at source; destination frame is only 1 byte.
+	os.write_file(os.join_path(s.dir, 'edge.dbc'), 'VERSION ""\nBU_: gw zone\nBO_ 512 Speed_E: 1 gw\n SG_ Speed : 0|16@1+ (1,0) [0|0] "" zone\n') or {
+		panic(err)
+	}
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+		dbc:       'edge.dbc'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('only 1 bytes')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-006 (codex #164 r3): a signal route whose `signal` is not a declared
+// system [[signal]] is rejected — there is no typed field contract to check.
+fn test_route_undeclared_signal_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Ghost'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('not a declared system'))
+}
+
+// REQ-TOPO-006 (codex #164 r3): a signal route from a bus that does not PRODUCE
+// the signal is rejected — the gateway would decode the wrong source contract.
+fn test_route_source_not_producing_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	// Speed is produced on compute; route it FROM edge (where it isn't produced).
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'edge'
+		to:      'compute'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('not produced on its source bus'))
+}
+
+// REQ-TOPO-003 (codex #164 r3): a multiplexed destination SG_ is rejected — the
+// dissolution codec has no selector support (same as the source-side check).
+fn test_route_dest_multiplexed_rejected() {
+	mut s := clean_dissolved()
+	os.write_file(os.join_path(s.dir, 'edge.dbc'), 'VERSION ""\nBU_: gw zone\nBO_ 512 Speed_E: 8 gw\n SG_ Sel M : 0|8@1+ (1,0) [0|0] "" zone\n SG_ Speed m0 : 8|16@1+ (1,0) [0|0] "" zone\n') or {
+		panic(err)
+	}
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+		dbc:       'edge.dbc'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.nodes << Node{
+		name:         'zone'
+		buses:        ['edge']
+		nm:           0x16
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        5
+		view:         NodeView{
+			fb_reads: ['Speed']
+		}
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('multiplexed')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-004 (codex #164 r2): a gateway whose SECONDARY bus declares an NM
+// cluster is rejected — the generator emits only one NM instance (primary bus);
+// multi-instance NM is a later P2 item.
+fn test_gateway_secondary_nm_cluster_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:           'edge'
+		interface:      'can1'
+		has_nm_cluster: true
+		nm_peers_lo:    0x600
+		nm_peers_hi:    0x63f
+	}
+	s.nodes[0].buses = ['compute', 'edge'] // gateway; edge (secondary) has a cluster
+	s.nodes << Node{
+		name:         'zone'
+		buses:        ['edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+		view:         NodeView{
+			fb_reads: ['Speed']
+		}
+	}
+	s.routes << Route{
+		gateway: 'a'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('secondary bus')
+		&& it.contains('NM cluster'))
+}
+
+// REQ-TOPO-011: routes that form a bus cycle for one signal are rejected (the
+// value would recirculate forever).
+fn test_route_cycle_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[0].buses = ['compute', 'edge']
+	s.routes << Route{
+		gateway: 'a'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	s.routes << Route{
+		gateway: 'a'
+		signal:  'Speed'
+		from:    'edge'
+		to:      'compute'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('cycle'))
 }
 
 // REQ-TOPO-001: a cross-node signal must carry EXACTLY ONE field (loom2v's

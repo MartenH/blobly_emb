@@ -1,0 +1,30 @@
+# zone (H723) — AUTHORED INTERNALS ONLY (dissolution). Consumes VehicleSpeed on
+# the edge bus; it arrives ONLY via the gateway's compute -> edge route. The bus
+# wiring + identity are generated from ../../system.toml.
+# NOTE: no inline comments inside [[...]] tables (vlang/v#27684).
+
+[[partition]]
+name = "app"
+core = 0
+
+  [[partition.thread]]
+  name = "lamp"
+
+[[fb]]
+name   = "SpeedLamp"
+thread = "lamp"
+
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  reads     = ["VehicleSpeed"] # trailing comment terminates the nested block (vlang/v#27684)
+
+[target]
+kind    = "threadx"
+tick_ms = 1
+
+[telemetry]
+enabled   = true
+bus       = "can1"
+id        = 0x7E8
+period_ms = 500

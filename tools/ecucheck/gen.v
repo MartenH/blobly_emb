@@ -179,6 +179,7 @@ fn specs() map[string]map[string]Key {
 			'fd':        k(.boolean)
 			'core':      k(.int)
 			'kind':      k(.str) // "can" (default) | "eth" (docs/someip.md)
+			'dbc':       k(.str) // per-bus DBC (a multi-bus GATEWAY speaks >1 contract, P2)
 		}
 		// the SOME/IP service identity + static endpoints (docs/someip.md).
 		// Deliberately NO `instance`: without SD nothing on the wire carries it.
@@ -284,16 +285,18 @@ fn specs() map[string]map[string]Key {
 			'signal':   k(.str)
 		}
 		'route':      {
-			'from': sub(.tbl, true, 'route_from')
-			'to':   sub(.tbl, true, 'route_to')
+			'signal': k(.str) // SIGNAL route (P2): decode on `from`, re-encode into `to`
+			'from':   sub(.tbl, true, 'route_from')
+			'to':     sub(.tbl, true, 'route_to')
 		}
 		'route_from': {
 			'bus':   req(.str) // the source bus
-			'frame': req(.str) // the DBC frame to forward (loom2v looks it up)
+			'frame': req(.str) // the DBC frame to forward / decode (loom2v looks it up)
 		}
 		'route_to':   {
-			'bus': req(.str) // the destination bus
-			'id':  k(.int) // optional; 0/absent keeps the source id
+			'bus':   req(.str) // the destination bus
+			'frame': k(.str) // SIGNAL route: the destination DBC frame to re-encode into
+			'id':    k(.int) // FRAME route: optional; 0/absent keeps the source id
 		}
 	}
 }

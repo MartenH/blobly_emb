@@ -58,7 +58,16 @@ fn module_frame(dbs map[string]candb.Database, s System, iface string, label str
 // node: always for a threadx target, and for a HOST target only in the
 // single-partition shape with no COM bridge (trace_host) — a multi-partition or
 // bus-facing host node builds WITHOUT trace, so its trace ids never hit the wire.
-fn trace_generated(n Node) bool {
+// effective_comm_thread: does this node actually get a comm thread at RUNTIME? A
+// DISSOLVED node's partial has no bus signals, so parse_node_view leaves
+// comm_thread_on = false — but sysgen adds its produced/consumed/route wiring, so a
+// threadx node that is external (produces/consumes a system signal OR gateways a
+// route) does get one. The reservation scans must see those trace/shell rx ids.
+fn effective_comm_thread(n Node, s System) bool {
+	return n.view.comm_thread_on || (n.view.is_threadx && node_has_external(s, n))
+}
+
+fn trace_generated(n Node, s System) bool {
 	if !n.view.trace_on {
 		return false
 	}
@@ -66,7 +75,7 @@ fn trace_generated(n Node) bool {
 		// threadx trace runs inside the comm thread (trace_module_init / rx arms /
 		// trace_produce_drain are emitted only under comm_thread_on) — a bridgeless
 		// threadx node has no comm thread, so no trace frame reaches the wire.
-		return n.view.comm_thread_on
+		return effective_comm_thread(n, s)
 	}
 	host := !n.view.is_baremetal // no target / host runner
 	// loom2v's trace_host requires EXACTLY one partition (m.part.by_part.len == 1)
@@ -79,8 +88,8 @@ fn trace_generated(n Node) bool {
 // is_trace_host reports the single-partition HOST trace-runner shape: loom2v's
 // emit_run_trace_host sends only the inline CpuLoad frame and never emits the
 // LoadDetail frame, so a trace-host node's telemetry detail_id is NOT on the wire.
-fn is_trace_host(n Node) bool {
-	return !n.view.is_threadx && trace_generated(n)
+fn is_trace_host(n Node, s System) bool {
+	return !n.view.is_threadx && trace_generated(n, s)
 }
 
 fn module_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame {
@@ -90,13 +99,13 @@ fn module_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame 
 	if n.view.has_telemetry && n.view.telem_bus != '' {
 		out << ModuleFrame{n.view.telem_bus, 'telemetry id', n.view.telem_id, false, ''}
 		// the host trace runner sends inline CpuLoad only — never the detail frame.
-		if n.view.telem_detail_id != 0 && !is_trace_host(n) {
+		if n.view.telem_detail_id != 0 && !is_trace_host(n, s) {
 			out << ModuleFrame{n.view.telem_bus, 'telemetry detail_id', n.view.telem_detail_id, false, ''}
 		}
 	}
 	// [trace]: the TraceModule transmits the record stream AND command responses,
 	// on [trace].bus (else the telemetry bus) — only when loom2v actually emits it.
-	if trace_generated(n) {
+	if trace_generated(n, s) {
 		tbus := if n.view.trace_bus != '' { n.view.trace_bus } else { n.view.telem_bus }
 		if tbus != '' {
 			out << module_frame(dbs, s, tbus, 'trace record id', n.view.trace_record_id,
@@ -107,7 +116,7 @@ fn module_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame 
 	}
 	// [shell]: the threadx comm thread transmits shell.out responses on the comm
 	// (telemetry) channel.
-	if n.view.comm_thread_on && n.view.shell_on && n.view.telem_bus != '' {
+	if effective_comm_thread(n, s) && n.view.shell_on && n.view.telem_bus != '' {
 		out << module_frame(dbs, s, n.view.telem_bus, 'shell out id', n.view.shell_out_id,
 			n.view.shell_out_name)
 	}
@@ -125,7 +134,7 @@ fn module_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame 
 // ids would drive this node's module state, so they are reserved on the bus.
 fn module_rx_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame {
 	mut out := []ModuleFrame{}
-	if trace_generated(n) {
+	if trace_generated(n, s) {
 		tbus := if n.view.trace_bus != '' { n.view.trace_bus } else { n.view.telem_bus }
 		if tbus != '' {
 			out << module_frame(dbs, s, tbus, 'trace cmd (rx) id', n.view.trace_cmd_id,
@@ -138,7 +147,7 @@ fn module_rx_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFra
 			}
 		}
 	}
-	if n.view.comm_thread_on && n.view.shell_on && n.view.telem_bus != '' {
+	if effective_comm_thread(n, s) && n.view.shell_on && n.view.telem_bus != '' {
 		out << module_frame(dbs, s, n.view.telem_bus, 'shell in (rx) id', n.view.shell_in_id,
 			n.view.shell_in_name)
 		out << module_frame(dbs, s, n.view.telem_bus, 'shell fc (rx) id', n.view.shell_fc_id,
@@ -415,6 +424,36 @@ fn check_telemetry_frames(s System) []Issue {
 					req:      'REQ-TOPO-002'
 					msg:      'bus "${bus.name}": DBC application frame "${m.name}" id 0x${m.id.hex()} falls in the NM peer range [0x${lo.hex()},0x${hi.hex()}] — the NM receiver would misread it as an alive frame'
 				}
+			}
+		}
+	}
+	// a signal route makes the gateway TRANSMIT the destination DBC frame. If its id
+	// equals a module RECEIVE reservation on the destination bus (a trace command,
+	// shell input, or ISO-TP rx id), routed traffic is dispatched into that module.
+	// A pure dissolved gateway has no authored producer entry for the frame, so it
+	// escapes the node scans above — check routes explicitly (REQ-TOPO-002).
+	for r in s.routes {
+		if r.signal == '' || r.to == '' {
+			continue
+		}
+		tb := s.bus_by_name(r.to) or { continue }
+		db := dbs[tb.name] or { continue }
+		mut fid := ?u32(none)
+		for m in db.messages {
+			for sg in m.signals {
+				if sg.name == r.signal {
+					fid = m.id
+					break
+				}
+			}
+		}
+		id := fid or { continue }
+		key := '${tb.name}#${id}'
+		if res := reserved[key] {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-002'
+				msg:      'route on "${r.gateway}": destination frame for "${r.signal}" (id 0x${id.hex()}) on bus "${r.to}" collides with ${res} — routed traffic would be dispatched into that module'
 			}
 		}
 	}

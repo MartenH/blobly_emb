@@ -28,3 +28,9 @@ examples/**/gen/.stamp
 
 # sysgen output (regenerable from system.toml, P1b)
 examples/**/gen-*.toml
+
+# multi-node per-node loom2v output (regenerable via `make -C examples/<system>`;
+# the dissolution demonstrators build each node from its generated gen-<node>.toml)
+examples/*/nodes/*/gen/
+examples/*/nodes/*/ports/
+examples/*/nodes/*/sig/
