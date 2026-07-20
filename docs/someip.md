@@ -430,8 +430,8 @@ Full loom2v target eth integration is mapped but deliberately parked: the
 generated CAN comm thread moves cross-thread signals through the target IOC
 shim as 2×u32 scalar cells (`ioc_pub`/`ioc_get`), while eth frames carry
 multi-field signal structs — the honest fix is widening the target IOC to
-struct-bearing wait-free cells (the triple-buffer direction docs/ioc.md
-records), which is a platform design decision and touches `boards/common/`
+struct-bearing wait-free cells (the triple-buffer direction
+docs/multicore-perf.md records), which is a platform design decision and touches `boards/common/`
 IOC machinery currently being reworked on the io track. Parking it beats
 building a throwaway ≤8-byte-signals-only eth thread. The NetX seam itself
 is proven (h735_someip) and `driver/eth`'s C contract already mirrors it, so

@@ -129,8 +129,8 @@ pub enum Drop {
 
 // request builds a client request header for `method` (bit 15 clear). The
 // Request ID is the correlation token: client + session, mirrored verbatim by
-// the response (REQ-NET-016). session must be live (nonzero, wrapping 1..):
-// the server gate refuses a dead session id.
+// the response (REQ-NET-016). Both halves must be live (nonzero; session
+// wraps 1..): the server gate refuses a dead client or session id.
 pub fn request(service u16, method u16, client u16, session u16, iface u8, payload_len int) Header {
 	return Header{
 		service: service
@@ -171,9 +171,11 @@ pub fn error_response(req Header, rc u8) Header {
 // check_request validates an inbound REQUEST envelope against the configured
 // identity — the server-side twin of check_event. Same counter discipline
 // (identity before shape); method ids have bit 15 CLEAR, and the Request ID
-// must carry a live session (nonzero) or the response could not be
-// correlated. Whether the method id is actually served is the router's check
-// (unknown method -> rc_unknown_method error response, not a silent drop).
+// must be fully live: nonzero session AND nonzero client (zero client is the
+// non-request reserve — mirroring it back would hand strict peers an invalid
+// correlation id). Whether the method id is actually served is the router's
+// check (unknown method -> rc_unknown_method error response, not a silent
+// drop).
 pub fn check_request(h Header, datagram_len int, service u16, iface u8) Drop {
 	if datagram_len < header_len {
 		return .short
@@ -193,7 +195,7 @@ pub fn check_request(h Header, datagram_len int, service u16, iface u8) Drop {
 	if (h.method & event_bit) != 0 {
 		return .method
 	}
-	if h.session == 0 || h.rcode != rc_ok {
+	if h.client == 0 || h.session == 0 || h.rcode != rc_ok {
 		return .fixed
 	}
 	if h.length != u32(datagram_len - 8) {

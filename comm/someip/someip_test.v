@@ -154,6 +154,9 @@ fn test_request_gate_drops_by_reason() {
 	h.session = 0 // a dead session id could not correlate the response
 	assert check_request(h, dlen, 0x0100, 1) == Drop.fixed
 	h = golden_req()
+	h.client = 0 // the non-request reserve: an invalid correlation id
+	assert check_request(h, dlen, 0x0100, 1) == Drop.fixed
+	h = golden_req()
 	h.rcode = rc_not_ok
 	assert check_request(h, dlen, 0x0100, 1) == Drop.fixed
 
