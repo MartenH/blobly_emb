@@ -11,10 +11,12 @@ pub enum Transport {
 // IOC channels — const = slot id (cross-partition signals, declaration order)
 pub const bench_load_ch = 0
 pub const bench_ticks_ch = 1
-pub const ioc_channel_count = 2
+pub const event_val_ch = 2
+pub const mixed_val_ch = 3
+pub const ioc_channel_count = 4
 
 // Per-channel transport (index = channel id)
-pub const ioc_transport = [Transport.double, Transport.double]!
+pub const ioc_transport = [Transport.double, Transport.double, Transport.double, Transport.double]!
 
 // Partitions — index = partition id
 pub const partition_count = 1

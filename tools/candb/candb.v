@@ -22,6 +22,7 @@ pub:
 	maximum    f64
 	unit       string
 	desc       string            // human-readable description / interpretation
+	receivers  []string          // DBC RX nodes (the SG_ trailing node list; '' / Vector__XXX = none)
 	values     map[u64]string    // DBC VAL_ table: raw value -> named state (enum)
 	is_signed  bool
 	byte_order ByteOrder = .little_endian

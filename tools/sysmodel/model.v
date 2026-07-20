@@ -211,10 +211,13 @@ pub mut:
 	// signal name -> the distinct partitions whose FBs read it (a cross-node RX
 	// signal read from >1 partition = concurrent readers of one SPSC IOC channel).
 	read_partitions map[string][]string
-	// a dissolved partial is INTERNALS-ONLY: it must declare NO [[signal]],
-	// [[frame]], or [[route]] (the system owns all wiring). These flag ANY such
-	// section (has_nm / local_buses already flag [nm] / [bus]).
-	authored_signals bool
+	// a dissolved partial is INTERNALS-ONLY for BUS wiring: it must declare no
+	// bus-endpoint [[signal]], no [[frame]], no [[route]] (the system owns those).
+	// NODE-LOCAL signals — an io point or a node-internal cross-partition signal,
+	// whose endpoints are "io" or the node's own partitions, never a bus — ARE the
+	// node's application and stay authored (docs/multi-node.md: a gpio/adc/pwm node).
+	authored_signals bool     // a [[signal]] with a BUS endpoint (forbidden)
+	local_signals    []string // node-local signal names (io / cross-partition) — allowed
 	authored_frames  bool
 	authored_routes  bool
 }
@@ -580,8 +583,28 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 	// --- DISSOLUTION (partial node): authored-section flags + FB signal intent.
 	// A dissolved partial is internals-ONLY, so ANY [[signal]]/[[frame]]/[[route]]
 	// is authored wiring the system should own (flagged by check_partial_no_wiring).
-	if _ := doc.value_opt('signal') {
-		v.authored_signals = true
+	// classify each [[signal]]: a NODE-LOCAL signal (io point, or a node-internal
+	// cross-partition signal — BOTH endpoints are "io" or one of this node's own
+	// partitions, never a bus) is the node's application and stays authored; a
+	// signal with a BUS endpoint is wiring the system owns (flagged). REQ-TOPO-005.
+	mut part_names := map[string]bool{}
+	for p in (doc.value_opt('partition') or { toml.Any([]toml.Any{}) }).array() {
+		part_names[m_str(p.as_map(), 'name')] = true
+	}
+	local_ep := fn [part_names] (e string) bool {
+		return e == 'io' || e in part_names
+	}
+	for s in (doc.value_opt('signal') or { toml.Any([]toml.Any{}) }).array() {
+		m := s.as_map()
+		nm := m_str(m, 'name')
+		if nm == '' {
+			continue
+		}
+		if local_ep(m_str(m, 'from')) && local_ep(m_str(m, 'to')) {
+			v.local_signals << nm
+		} else {
+			v.authored_signals = true // a bus endpoint = authored bus wiring
+		}
 	}
 	if _ := doc.value_opt('frame') {
 		v.authored_frames = true
