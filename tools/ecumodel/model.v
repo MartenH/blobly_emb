@@ -839,8 +839,10 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			// after them would be mislabeled. Reject until the manifest models
 			// them (their creation times are load-dependent, so this needs its
 			// own design, not a quick row).
-			if _ := doc.value_opt('trace') {
-				errs << 'eth [[frame]]s with [trace] on a target image — the NetX-internal threads (IP thread, eth-svc) would take first-sight trace ids the manifest does not model; trace + eth on one image is its own rung (docs/someip.md)'
+			if trv := doc.value_opt('trace') {
+				if (trv.as_map()['enabled'] or { toml.Any(true) }).bool() {
+					errs << 'eth [[frame]]s with [trace] on a target image — the NetX-internal threads (IP thread, eth-svc) would take first-sight trace ids the manifest does not model; trace + eth on one image is its own rung (docs/someip.md)'
+				}
 			}
 			// the target byte-IOC pool is a fixed glue contract (IOCB_POOL_N = 8,
 			// the example glue) — a ninth signal would get an index the glue
