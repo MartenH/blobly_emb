@@ -1,0 +1,90 @@
+# blobly_emb ECU configuration — SOME/IP-over-eth on the ThreadX TARGET
+# (docs/someip.md target rung): the FULL loom2v pipeline on silicon, retiring
+# the hand-wired netx_glue rung. The wire is IDENTICAL to examples/host_someip
+# — same service identity, the same BenchTelem derived layout + E2E trailer —
+# so the same listener and the blobly_net oracle verify both sides of the
+# silicon line, and the rx round trip (BenchCmd -> BenchEcho) proves the
+# receive chain on target exactly as the host harness proves it on lo.
+
+[target]
+kind    = "threadx"
+tick_ms = 1
+
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.50"
+core      = 0
+
+[someip]
+bus     = "eth0"
+service = 0x0100
+version = 1
+port    = 30490
+peer    = "192.168.0.190:30491"
+
+[[partition]]
+name    = "app"
+core    = 0
+trusted = false
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+[[signal]]
+name = "BenchLoad"
+fields = { load = "u8" }
+from = "app"
+to   = "eth0"
+
+[[signal]]
+name = "BenchTicks"
+fields = { wraps = "u16", ticks = "u32" }
+from = "app"
+to   = "eth0"
+
+# the host_someip cyclic frame, byte for byte: load u8@0, ticks u32@1 LE,
+# wraps u16@5, E2E trailer ctr@7/crc@8 (data_id 0x21)
+[[frame]]
+name    = "BenchTelem"
+bus     = "eth0"
+id      = 0x8001
+signals = ["BenchLoad", "BenchTicks"]
+tx      = { mode = "cyclic", cycle_ms = 300 }
+e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8 }
+
+# the rx round trip: the bench sends BenchCmd, the app mirrors the level back
+# on BenchEcho — filter -> gate -> route -> unpack -> IOC -> app -> event tx,
+# all on silicon
+[[signal]]
+name = "LampCmd"
+fields = { level = "u8" }
+from = "eth0"
+to   = "app"
+
+[[frame]]
+name    = "BenchCmd"
+bus     = "eth0"
+id      = 0x8010
+signals = ["LampCmd"]
+
+[[signal]]
+name = "EchoVal"
+fields = { level = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "BenchEcho"
+bus     = "eth0"
+id      = 0x8004
+signals = ["EchoVal"]
+tx      = { mode = "event", min_delay_ms = 30 }
+
+[[fb]]
+name   = "Bench"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  reads     = ["LampCmd"]
+  writes    = ["BenchLoad", "BenchTicks", "EchoVal"]

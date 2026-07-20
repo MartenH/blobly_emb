@@ -1503,7 +1503,9 @@ thread = "app_main"
 }
 
 fn test_someip_round7_gates() {
-	// a bad tx mode; eth frames on a [target] image
+	// a bad tx mode; eth frames on a ThreadX [target] image are ACCEPTED as of
+	// the target rung (the generated eth thread over the NetX seam) — only the
+	// bare-metal superloop, which has no thread to run it on, still rejects
 	e := errs_of(eth_head +
 		'
 [target]
@@ -1524,8 +1526,184 @@ tx      = { mode = "cylic", cycle_ms = 100 }
 ' +
 		app)
 	assert e.any(it.contains('tx mode "cylic" is invalid'))
-	assert e.any(it.contains('the target comm owner is CAN-only'))
+	assert !e.any(it.contains('threadx')), '${e}'
+	e2 := errs_of(eth_head +
+		'
+[target]
+kind = "baremetal"
+
+[[signal]]
+name = "S"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["S"]
+tx      = { mode = "cyclic", cycle_ms = 100 }
+' +
+		app)
+	assert e2.any(it.contains('kind = "threadx"')), '${e2}'
 }
+
+fn test_someip_target_pool_bound_and_satellite_gated() {
+	// nine eth signals overflow the fixed byte-IOC pool (IOCB_POOL_N = 8) —
+	// the glue would halt at boot; the BUILD must fail instead
+	mut sigs := ''
+	mut names := []string{}
+	for i in 0 .. 9 {
+		sigs += '
+[[signal]]
+name = "S${i}"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt${i}"
+bus     = "eth0"
+id      = ${0x8001 + i}
+signals = ["S${i}"]
+tx      = { mode = "cyclic", cycle_ms = 100 }
+'
+		names << 'S${i}'
+	}
+	e := errs_of(eth_head + '
+[target]
+kind = "threadx"
+' + sigs +
+		'
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "app_main"
+
+[[fb]]
+name = "W"
+thread = "app_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  writes = ["${names.join('", "')}"]
+')
+	assert e.any(it.contains('byte-IOC pool holds 8')), '${e}'
+	// a satellite-produced eth signal has no generated transport to the eth
+	// thread — rejected until that rung
+	e2 := errs_of(eth_head + '
+[target]
+kind = "threadx"
+
+[[signal]]
+name = "S"
+fields = { v = "u8" }
+from = "sat"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["S"]
+tx      = { mode = "cyclic", cycle_ms = 100 }
+' +
+		app +
+		'
+[[partition]]
+name  = "sat"
+core  = 1
+image = "sat_img"
+  [[partition.thread]]
+  name = "sat_main"
+
+[[fb]]
+name = "W"
+thread = "sat_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  writes = ["S"]
+')
+	assert e2.any(it.contains('cross-image transport')), '${e2}'
+	// a non-numeric interface would park the target eth thread forever at
+	// boot (blob_eth_open -1) — fail the build
+	e3 := errs_of(eth_head.replace('192.168.0.50', '192.168.0.x') + '
+[target]
+kind = "threadx"
+
+[[signal]]
+name = "S"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["S"]
+tx      = { mode = "cyclic", cycle_ms = 100 }
+
+[[fb]]
+name = "W"
+thread = "app_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  writes = ["S"]
+' +
+		app)
+	assert e3.any(it.contains('dotted-quad')), '${e3}'
+	// out-of-range octets and 0.0.0.0 fail the same gate (the NetX backend
+	// refuses both at runtime — refuse at build time instead)
+	e4 := errs_of(eth_head.replace('192.168.0.50', '256.1.1.1') + target_eth_body + app)
+	assert e4.any(it.contains('dotted-quad')), '${e4}'
+	e5 := errs_of(eth_head.replace('192.168.0.50', '0.0.0.0') + target_eth_body + app)
+	assert e5.any(it.contains('dotted-quad')), '${e5}'
+	// an eth bus core differing from the local partition's core claims an
+	// affinity nothing implements
+	e6 := errs_of(eth_head.replace('core      = 0', 'core      = 1') + target_eth_body + app)
+	assert e6.any(it.contains('no cross-core eth handoff')), '${e6}'
+	// [trace] + eth on one target image: the NetX-internal threads would take
+	// first-sight trace ids the manifest does not model — rejected
+	e7 := errs_of(eth_head + '
+[trace]
+bus  = "can0"
+size = 256
+' + target_eth_body +
+		app)
+	assert e7.any(it.contains('first-sight trace ids')), '${e7}'
+}
+
+// the shared body for the interface/core gate variants above
+const target_eth_body = '
+[target]
+kind = "threadx"
+
+[[signal]]
+name = "S"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["S"]
+tx      = { mode = "cyclic", cycle_ms = 100 }
+
+[[fb]]
+name = "W"
+thread = "app_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  writes = ["S"]
+'
 
 fn test_someip_round8_timing_bounds() {
 	e := errs_of(eth_head +

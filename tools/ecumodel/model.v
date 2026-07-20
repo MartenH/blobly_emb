@@ -751,12 +751,115 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			errs << 'eth frame "${fname}" derived payload is ${size} bytes (E2E trailer included) — the shared PDU bound is 64 (comm.com max_pdu); a wider eth PDU is its own rung, not a silent relaxation'
 		}
 	}
-	// [target] images: the ThreadX/bare-metal comm owner is CAN-only — an eth
-	// signal frame would fall into its DBC-trivial validation and FDCAN paths.
-	// Same family as the target-telemetry gate: reject until the NetX rung.
+	// [target] images: the generated eth thread is a ThreadX thread over the
+	// NetX seam (docs/someip.md target rung) — the bare-metal superloop has no
+	// threads to run it on, so only kind = "threadx" carries eth frames.
 	if n_eth_frames > 0 {
-		if _ := doc.value_opt('target') {
-			errs << 'eth [[frame]]s with a [target] image — the target comm owner is CAN-only until the NetX rung (docs/someip.md); eth frames are host-sim for now'
+		if tv := doc.value_opt('target') {
+			tm := tv.as_map()
+			if (tm['kind'] or { toml.Any('') }).string() != 'threadx' {
+				errs << 'eth [[frame]]s need [target] kind = "threadx" — the eth comm thread is a ThreadX thread over the NetX seam; the bare-metal superloop has no thread to run it on (docs/someip.md)'
+			}
+			// the NetX backend binds a dotted-quad only — a hostname or typo'd
+			// interface would make blob_eth_open return -1 and the eth thread
+			// park forever with no wire symptom; fail the BUILD instead
+			if bv2 := doc.value_opt('bus') {
+				if bc2 := bv2.as_map()[eth] {
+					iface2 := (bc2.as_map()['interface'] or { toml.Any('') }).string()
+					mut octs := 0
+					mut digits := 0
+					mut oval := 0
+					mut osum := 0
+					mut bad := iface2 == ''
+					for ch2 in iface2 {
+						if ch2 == `.` {
+							if digits == 0 || oval > 255 {
+								bad = true
+							}
+							osum += oval
+							octs++
+							digits = 0
+							oval = 0
+						} else if ch2 >= `0` && ch2 <= `9` {
+							oval = oval * 10 + int(ch2 - `0`)
+							digits++
+						} else {
+							bad = true
+						}
+					}
+					osum += oval
+					// each octet 0..255, and 0.0.0.0 is not a bindable endpoint —
+					// the NetX backend refuses both, so refuse them at build time
+					if bad || octs != 3 || digits == 0 || oval > 255 || osum == 0 {
+						errs << 'eth bus "${eth}" interface "${iface2}" is not a bindable dotted-quad IPv4 address (each octet 0..255, not 0.0.0.0) — the target NetX backend binds a numeric address only (a bad one would park the eth thread forever at boot)'
+					}
+					// the eth thread is created inside THIS image on the local
+					// partition's core — a different [bus].core would claim an
+					// affinity nothing implements (and the manifest would lie)
+					bcore := int((bc2.as_map()['core'] or { toml.Any(0) }).int())
+					for p2 in toml_arr(doc, 'partition') {
+						pm2 := p2.as_map()
+						if 'image' in pm2 {
+							continue
+						}
+						if ev3 := pm2['external'] {
+							if ev3 is bool && ev3 {
+								continue
+							}
+						}
+						pcore := int((pm2['core'] or { toml.Any(0) }).int())
+						if pcore != bcore {
+							errs << 'eth bus "${eth}" core ${bcore} differs from local partition "${str_of(pm2,
+								'name')}" core ${pcore} — the eth thread runs inside this image on the partition\'s core; no cross-core eth handoff exists (docs/someip.md)'
+						}
+					}
+				}
+			}
+			// [trace] + eth on one image: blob_eth_open creates NetX-internal
+			// threads (the IP thread, eth-svc) at RUNTIME order the trace
+			// manifest's first-sight id model does not describe — every lane
+			// after them would be mislabeled. Reject until the manifest models
+			// them (their creation times are load-dependent, so this needs its
+			// own design, not a quick row).
+			if _ := doc.value_opt('trace') {
+				errs << 'eth [[frame]]s with [trace] on a target image — the NetX-internal threads (IP thread, eth-svc) would take first-sight trace ids the manifest does not model; trace + eth on one image is its own rung (docs/someip.md)'
+			}
+			// the target byte-IOC pool is a fixed glue contract (IOCB_POOL_N = 8,
+			// the example glue) — a ninth signal would get an index the glue
+			// answers with a boot halt; fail the BUILD instead
+			if sig_frame.len > 8 {
+				errs << 'a [target] image carries ${sig_frame.len} eth signals — the target byte-IOC pool holds 8 (IOCB_POOL_N in the glue); split frames across images or raise the pool with the glue'
+			}
+			// multi-image: a satellite-produced eth signal rides the xioc drain,
+			// which no generated path connects to the eth thread's byte IOC —
+			// reject until that transport rung exists
+			for p in toml_arr(doc, 'partition') {
+				pm := p.as_map()
+				// both satellite forms: a generated image AND a hand-written
+				// external core — either way the signal rides xioc, not the
+				// eth thread's byte IOC
+				mut is_sat := 'image' in pm
+				if ev2 := pm['external'] {
+					if ev2 is bool && ev2 {
+						is_sat = true
+					}
+				}
+				if !is_sat {
+					continue
+				}
+				pname := str_of(pm, 'name')
+				mut pthreads := map[string]bool{}
+				pthreads[pname] = true
+				for t in arr_of(pm, 'thread') {
+					pthreads[str_of(t.as_map(), 'name')] = true
+				}
+				for sname, _ in sig_frame {
+					other := if sig_from[sname] == eth { sig_to[sname] } else { sig_from[sname] }
+					if other in pthreads {
+						errs << 'eth signal "${sname}" ends in satellite partition "${pname}" (image = ...) — the cross-image transport to the eth thread is not generated yet (docs/multi-image.md); keep eth signals on the bus-owner image'
+					}
+				}
+			}
 		}
 	}
 
