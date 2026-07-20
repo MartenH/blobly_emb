@@ -70,8 +70,18 @@ $(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile
 $(TX_A): $(TX_OBJ)
 	$(AR) -rc $@ $^
 
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(REPO)/boards/common/ioc.h $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(REPO)/driver/io/io_stm32.c $(REPO)/driver/io/io_port.h $(TX_A) $(BOARD_LD_THREADX)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A) -o $@
+# app.c is GENERATED V code, and its warnings are all V-codegen artifacts of a
+# freestanding build on a 32-bit target: calls to the C glue via `fn C.*` with no
+# prototype in this TU (implicit-declaration — V typed them, they link + type-check at
+# the definition), and V's dead hosted runtime (dlmalloc/mmap/mem*) casting/comparing
+# 32-bit pointers as u64 (never called no-alloc; --gc-sections drops it). None are our
+# code and none are fixable in a regenerated file, so compile THIS unit quiet (-w) — the
+# hand-written glue (io_glue.c, board.c, drivers) keeps full warnings.
+$(BUILD)/app.o: $(BUILD)/app.c Makefile
+	$(CC) $(CFLAGS) -w -c $< -o $@
+
+$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/boards/common/ioc.h $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(REPO)/driver/io/io_stm32.c $(REPO)/driver/io/io_port.h $(TX_A) $(BOARD_LD_THREADX)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A) -o $@
 	$(SIZE) $@
 
 $(BUILD)/$(NAME).bin: $(BUILD)/$(NAME).elf
