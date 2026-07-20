@@ -183,6 +183,20 @@ fn check_dissolved_nodes(s System) []Issue {
 					}
 				}
 			}
+			// NM runs inside the comm thread, on the TELEMETRY bus ([nm].bus is only a
+			// manifest label, it does not move NM's tx — checks.v). So a gateway whose
+			// primary bus has an NM cluster must run its telemetry (hence the comm
+			// thread + NM) on that SAME bus, else its alive frames go to the wrong net.
+			prim_iface := if b := s.bus_by_name(n.buses[0]) { b.interface } else { '' }
+			if prim0 := s.bus_by_name(n.buses[0]) {
+				if prim0.has_nm_cluster && n.view.has_telemetry && n.view.telem_bus != prim_iface {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-004'
+						msg:      'gateway "${n.name}": NM cluster is on the primary bus "${n.buses[0]}" (${prim_iface}) but [telemetry].bus is "${n.view.telem_bus}" — NM runs on the telemetry bus, so they must be the same bus'
+					}
+				}
+			}
 			// a gateway carries a route, i.e. bus traffic — which needs a comm bridge.
 			// A bare-metal target has no comm thread (loom2v rejects external signals
 			// on bare-metal), so a bare-metal gateway cannot be built for its target.

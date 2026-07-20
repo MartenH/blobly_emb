@@ -248,10 +248,10 @@ fn generate_gateway_node(sys sysmodel.System, node sysmodel.Node, authored strin
 	b << '[nm]'
 	b << 'node  = 0x${node.nm.hex()}'
 	if prim.has_nm_cluster {
-		// pin NM to the PRIMARY bus explicitly: loom2v defaults an omitted NM bus to
-		// [telemetry].bus, which on a gateway may be a DIFFERENT (secondary) bus — so
-		// the primary-cluster alive frames would transmit on the wrong network.
-		b << 'bus   = "${prim.interface}"'
+		// NM runs INSIDE the comm thread, on the telemetry bus — [nm].bus only labels
+		// the manifest, it does not move the tx (checks.v). So the gateway's telemetry
+		// bus MUST equal its primary NM bus; that is enforced in check_dissolved_nodes,
+		// and here we simply emit the cluster (no misleading [nm].bus).
 		b << 'alive = 0x${(prim.nm_peers_lo + node.nm).hex()}'
 		b << 'peers = [0x${prim.nm_peers_lo.hex()}, 0x${prim.nm_peers_hi.hex()}]'
 		if prim.nm_msg_cycle_ms > 0 {

@@ -147,6 +147,56 @@ pub fn check_route_dbc(s System) []Issue {
 				}
 			}
 		}
+		// the codec routes RAW values — a destination SG_ with a non-trivial
+		// factor/offset would change the physical value (raw 10000 at factor 0.1 is a
+		// 10x different quantity, and encode() masks any overflow to the SG_ width).
+		if ds.factor != 1.0 || ds.offset != 0.0 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": destination DBC SG_ "${r.signal}" (bus "${r.to}") has factor/offset ${ds.factor}/${ds.offset} — the dissolution codec routes raw values (factor 1, offset 0)'
+			}
+		}
+		// the destination FRAME must be sendable on the destination bus: a classic
+		// (non-FD) bus caps the DLC at 8, and an extended-id frame has no format flag
+		// in can.Frame (it would ship as a standard id).
+		if !to.fd && dm.dlc > 8 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": destination frame "${dm.name}" is ${dm.dlc} bytes but bus "${r.to}" is classic (fd = false, DLC <= 8)'
+			}
+		}
+		if dm.ext {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": destination frame "${dm.name}" is an extended (29-bit) id — the routed forwarder has no extended-id format flag (P2)'
+			}
+		}
+		// the WHOLE destination frame is composed by the gateway's COM producer. A P2a
+		// gateway can't produce its own signals, so every OTHER SG_ in the frame must
+		// be filled by another route from the SAME gateway — else the producer emits a
+		// partially-populated PDU.
+		for sg in dm.signals {
+			if sg.name == r.signal {
+				continue
+			}
+			mut covered := false
+			for r2 in s.routes {
+				if r2.gateway == r.gateway && r2.to == r.to && r2.signal == sg.name {
+					covered = true
+					break
+				}
+			}
+			if !covered {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'route on "${r.gateway}": destination frame "${dm.name}" (bus "${r.to}") also carries SG_ "${sg.name}", which no route from "${r.gateway}" fills — the frame would be partially populated'
+				}
+			}
+		}
 	}
 	return issues
 }
