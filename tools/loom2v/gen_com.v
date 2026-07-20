@@ -836,8 +836,15 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				// beyond its deadline — the source frame's authored [[frame]].rx.timeout_ms if
 				// present, else 3x its DBC cadence (0 = no deadline, so only never-received).
 				frof := snake(r2.from_frame)
-				timeout := m.frames.rx_timeout_us[frof] or {
-					if r2.from_cyc > 0 { r2.from_cyc * 3000 } else { 0 }
+				// an authored [[frame]].rx with no timeout_ms inserts 0; treat 0 as absent and
+				// fall back to 3x the DBC cadence (0 = no deadline info at all).
+				authored_to := m.frames.rx_timeout_us[frof] or { 0 }
+				timeout := if authored_to > 0 {
+					authored_to
+				} else if r2.from_cyc > 0 {
+					r2.from_cyc * 3000
+				} else {
+					0
 				}
 				if timeout > 0 {
 					glue << '\tif st.${rk}_fresh == 0 || now - st.${rk}_fresh > u64(${timeout}) {'

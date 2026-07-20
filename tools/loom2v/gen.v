@@ -471,13 +471,14 @@ fn val_tables_phys_equal(a candb.Signal, b candb.Signal) bool {
 		return false
 	}
 	// each of a's entries must be present (same physical value + label) in b — a
-	// physical compare with a tolerance (mathematically-equal scales can differ in the
-	// last f64 bit), the raw key sign-extended per the signal.
+	// physical compare within HALF A QUANTIZATION STEP (so fine-resolution enums with
+	// distinct steps stay distinct), the raw key read as signed per the signal.
+	tol := val_tol(a, b)
 	for ka, va in a.values {
 		pa := sig_key_phys(a, ka)
 		mut found := false
 		for kb, vb in b.values {
-			if vb == va && f64_close(sig_key_phys(b, kb), pa) {
+			if vb == va && f64_close(sig_key_phys(b, kb), pa, tol) {
 				found = true
 				break
 			}
@@ -489,33 +490,37 @@ fn val_tables_phys_equal(a candb.Signal, b candb.Signal) bool {
 	return true
 }
 
-// sig_key_phys converts a DBC VAL_ raw key to its physical value, sign-extending the
-// key first for a signed signal (candb stores a negative key as its u64 two's-complement).
+// sig_key_phys converts a DBC VAL_ raw key to its physical value. candb stores a
+// negative key as its FULL u64 two's-complement (e.g. -1 -> u64(-1)), so i64(raw)
+// recovers the signed value directly.
 fn sig_key_phys(s candb.Signal, raw u64) f64 {
-	mut r := f64(raw)
-	if s.is_signed && s.length > 0 && s.length < 64 && raw >= (u64(1) << u64(s.length - 1)) {
-		r = f64(i64(raw) - i64(u64(1) << u64(s.length)))
-	}
+	r := if s.is_signed { f64(i64(raw)) } else { f64(raw) }
 	return r * s.factor + s.offset
 }
 
-// f64_close reports whether two physical values are equal within a small tolerance.
-fn f64_close(x f64, y f64) bool {
+// val_tol is half the finer of the two signals' quantization steps — small enough to
+// keep distinct enum states apart, large enough to absorb f64 rounding.
+fn val_tol(a candb.Signal, b candb.Signal) f64 {
+	mut fa := if a.factor < 0 { -a.factor } else { a.factor }
+	mut fb := if b.factor < 0 { -b.factor } else { b.factor }
+	step := if fa < fb && fa > 0 { fa } else { fb }
+	if step <= 0 {
+		return 1e-9
+	}
+	return step * 0.5
+}
+
+fn f64_close(x f64, y f64, tol f64) bool {
 	mut d := x - y
 	if d < 0 {
 		d = -d
 	}
-	return d < 1e-9
+	return d < tol
 }
 
-// phys_range returns the [min, max] PHYSICAL value a route may carry through this
-// signal: the authored DBC [minimum|maximum] when it is a real range (so a narrowed
-// contract like a 16-bit source limited to [0|250] is honoured), else the raw
-// encoding capacity scaled by factor/offset.
-fn phys_range(s candb.Signal) (f64, f64) {
-	if s.maximum > s.minimum {
-		return s.minimum, s.maximum
-	}
+// phys_capacity returns the [min, max] PHYSICAL value a signal's WIRE ENCODING can
+// hold (raw range scaled by factor/offset) — what a destination can actually carry.
+fn phys_capacity(s candb.Signal) (f64, f64) {
 	n := s.length
 	if s.is_signed {
 		half := f64(u64(1) << u64(n - 1))
@@ -527,6 +532,19 @@ fn phys_range(s candb.Signal) (f64, f64) {
 	a := s.offset
 	b := rmax * s.factor + s.offset
 	return if a < b { a, b } else { b, a }
+}
+
+// phys_range returns the CONTRACT range a route treats a signal as carrying: the
+// authored DBC [min|max] INTERSECTED with the wire capacity (an authored range wider
+// than the encoding can hold is clamped to what the wire can carry), else the capacity.
+fn phys_range(s candb.Signal) (f64, f64) {
+	clo, chi := phys_capacity(s)
+	if s.maximum > s.minimum {
+		lo := if s.minimum > clo { s.minimum } else { clo }
+		hi := if s.maximum < chi { s.maximum } else { chi }
+		return lo, hi
+	}
+	return clo, chi
 }
 
 // dbc_cycle_of returns the GenMsgCycleTime (ms) of the message whose snake-name is
