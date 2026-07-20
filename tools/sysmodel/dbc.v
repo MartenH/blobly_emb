@@ -9,6 +9,82 @@ module sysmodel
 import os
 import tools.candb
 
+// check_route_dbc validates a SIGNAL route against the DESTINATION bus's DBC —
+// check_dbc_conformance only checks a signal against its OWN (source) bus, so a
+// route whose destination SG_ has an incompatible width/signedness, or whose
+// destination frame is transmitted by another node, would otherwise slip through
+// (the gateway's loom2v gate is deferred). The re-encode must match the dest wire
+// contract and the gateway must own the destination frame (REQ-TOPO-003/-012).
+pub fn check_route_dbc(s System) []Issue {
+	mut issues := []Issue{}
+	for r in s.routes {
+		if r.signal == '' || r.to == '' {
+			continue
+		}
+		to := s.bus_by_name(r.to) or { continue }
+		sig := s.signal_by_name(r.signal) or { continue }
+		if to.dbc == '' {
+			continue // absence of a DBC is reported elsewhere
+		}
+		path := if os.is_abs_path(to.dbc) { to.dbc } else { os.join_path(s.dir, to.dbc) }
+		db := candb.load_dbc_file(path) or {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": cannot load destination DBC "${to.dbc}" for signal "${r.signal}": ${err}'
+			}
+			continue
+		}
+		mut dsg := ?candb.Signal(none)
+		mut sender := ''
+		for m in db.messages {
+			for sg in m.signals {
+				if sg.name == r.signal {
+					dsg = sg
+					sender = m.sender
+					break
+				}
+			}
+		}
+		ds := dsg or { continue } // signal-not-in-dest-DBC is caught by sysgen's frame_of_signal
+		// the destination frame is re-encoded + transmitted by the GATEWAY.
+		if sender != '' && !sender.starts_with('Vector__') && sender != r.gateway {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-012'
+				msg:      'route on "${r.gateway}": destination frame for "${r.signal}" on bus "${r.to}" is transmitted by "${sender}" in the DBC, not the gateway'
+			}
+		}
+		// the re-encode must fit the destination SG_ width + signedness.
+		bits := field_bits(sig.fields)
+		if bits != 0 && ds.length != bits {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": signal "${r.signal}" fields are ${bits} bits but destination DBC SG_ is ${ds.length} bits (bus "${r.to}")'
+			}
+		}
+		if want := field_signed(sig.fields) {
+			if want != ds.is_signed {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'route on "${r.gateway}": signal "${r.signal}" is ${if want {
+						'signed'
+					} else {
+						'unsigned'
+					}} but destination DBC SG_ is ${if ds.is_signed {
+						'signed'
+					} else {
+						'unsigned'
+					}} (bus "${r.to}")'
+				}
+			}
+		}
+	}
+	return issues
+}
+
 // check_dbc_conformance loads each bus's DBC once and checks every system signal
 // against it. A bus with no `dbc` is skipped (nothing to conform to).
 pub fn check_dbc_conformance(s System) []Issue {

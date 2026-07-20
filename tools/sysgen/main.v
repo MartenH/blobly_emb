@@ -73,17 +73,17 @@ fn main() {
 			exit(1)
 		}
 		// defer the loom2v TARGET gate ONLY for the nodes P2c will handle: a multi-bus
-		// GATEWAY (speaks >1 DBC, and its route form is not consumed by loom2v yet)
-		// and a single-bus node whose bus is not FDCAN index 0 (the Rx-ISR glue serves
-		// index 0 today; a can1+ node needs the P2c per-bus glue). An ordinary index-0
-		// single-bus node in a gateway system is STILL gated — an unrelated gateway
-		// must not mask its target-only errors (docs/multi-node.md, P2c).
+		// GATEWAY (speaks >1 DBC, route form not consumed by loom2v yet) and a THREADX
+		// node on a non-index-0 bus (the FDCAN Rx-ISR glue serves index 0 today). A
+		// HOST / bare-metal node on a secondary bus is STILL gated — loom2v's
+		// non-threadx checks (e.g. bare-metal external signals) must not be masked, and
+		// the host emitter already handles multiple buses (docs/multi-node.md, P2c).
 		bus := node_bus(sys, n) or {
 			eprintln('sysgen: node "${n.name}": ${err}')
 			exit(1)
 		}
-		if n.buses.len > 1 || bus.interface != 'can0' {
-			tag := if n.buses.len > 1 { 'gateway' } else { 'non-can0 node' }
+		if n.buses.len > 1 || (n.view.is_threadx && bus.interface != 'can0') {
+			tag := if n.buses.len > 1 { 'gateway' } else { 'threadx non-can0 node' }
 			println('sysgen: ${n.name} -> ${gen_path} (ok, ${tag} — loom2v target gate deferred to P2c)')
 			continue
 		}

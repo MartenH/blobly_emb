@@ -2840,6 +2840,82 @@ fn test_gateway_with_system_fb_rejected() {
 		&& it.contains('may only route'))
 }
 
+// REQ-TOPO-003 (codex #164 r2): the routed signal's fields must match the
+// DESTINATION DBC's SG_ width — check_dbc_conformance only checks the source bus,
+// so a re-encode into a differently-sized dest SG_ would truncate/reinterpret.
+fn test_route_dest_dbc_width_mismatch() {
+	mut s := clean_dissolved()
+	// Speed is 16-bit at source (good_dbc); make the destination SG_ 32-bit.
+	os.write_file(os.join_path(s.dir, 'edge.dbc'), 'VERSION ""\nBU_: gw zone\nBO_ 512 Speed_E: 8 gw\n SG_ Speed : 0|32@1+ (1,0) [0|0] "" zone\n') or {
+		panic(err)
+	}
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+		dbc:       'edge.dbc'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge'] // dedicated gateway (does not produce/consume)
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.nodes << Node{
+		name:         'zone'
+		buses:        ['edge']
+		nm:           0x16
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        5
+		view:         NodeView{
+			fb_reads: ['Speed']
+		}
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('bits but destination DBC')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-004 (codex #164 r2): a gateway whose SECONDARY bus declares an NM
+// cluster is rejected — the generator emits only one NM instance (primary bus);
+// multi-instance NM is a later P2 item.
+fn test_gateway_secondary_nm_cluster_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:           'edge'
+		interface:      'can1'
+		has_nm_cluster: true
+		nm_peers_lo:    0x600
+		nm_peers_hi:    0x63f
+	}
+	s.nodes[0].buses = ['compute', 'edge'] // gateway; edge (secondary) has a cluster
+	s.nodes << Node{
+		name:         'zone'
+		buses:        ['edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+		view:         NodeView{
+			fb_reads: ['Speed']
+		}
+	}
+	s.routes << Route{
+		gateway: 'a'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('secondary bus')
+		&& it.contains('NM cluster'))
+}
+
 // REQ-TOPO-011: routes that form a bus cycle for one signal are rejected (the
 // value would recirculate forever).
 fn test_route_cycle_rejected() {
