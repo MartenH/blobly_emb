@@ -903,7 +903,8 @@ fn emit_eth_target_create(m Model, prio int) []string {
 		return glue
 	}
 	if prio < 0 {
-		panic('loom2v: the eth comm thread priority fell below 0 — use FB priorities >= 1')
+		panic('loom2v: the eth comm thread priority fell below 0 — it sits above the io ' +
+			'thread (min FB - 2 without a CAN comm thread), so use FB priorities >= 2')
 	}
 	glue << "\tC._tx_thread_create(&g_eth_tcb[0], c'eth', eth_thread_entry, u32(0),"
 	glue << '\t\t&g_eth_stack[0], u32(g_eth_stack.len), u32(${prio}), u32(${prio}), u32(0), u32(1))'

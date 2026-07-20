@@ -229,7 +229,7 @@ fn tx_application_define(first_unused voidptr) {
 	C._tx_thread_create(&g_app_tcb[0], c'app', app_thread_entry, u32(0),
 		&g_app_stack[0], u32(g_app_stack.len), u32(10), u32(10), u32(0), u32(1))
 	C._tx_thread_create(&g_eth_tcb[0], c'eth', eth_thread_entry, u32(0),
-		&g_eth_stack[0], u32(g_eth_stack.len), u32(9), u32(9), u32(0), u32(1))
+		&g_eth_stack[0], u32(g_eth_stack.len), u32(8), u32(8), u32(0), u32(1))
 }
 
 // boot: hand control to the ThreadX kernel (never returns; calls

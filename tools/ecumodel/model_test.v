@@ -1549,6 +1549,87 @@ tx      = { mode = "cyclic", cycle_ms = 100 }
 	assert e2.any(it.contains('kind = "threadx"')), '${e2}'
 }
 
+fn test_someip_target_pool_bound_and_satellite_gated() {
+	// nine eth signals overflow the fixed byte-IOC pool (IOCB_POOL_N = 8) —
+	// the glue would halt at boot; the BUILD must fail instead
+	mut sigs := ''
+	mut names := []string{}
+	for i in 0 .. 9 {
+		sigs += '
+[[signal]]
+name = "S${i}"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt${i}"
+bus     = "eth0"
+id      = ${0x8001 + i}
+signals = ["S${i}"]
+tx      = { mode = "cyclic", cycle_ms = 100 }
+'
+		names << 'S${i}'
+	}
+	e := errs_of(eth_head + '
+[target]
+kind = "threadx"
+' + sigs +
+		'
+[[partition]]
+name = "app"
+core = 0
+  [[partition.thread]]
+  name = "app_main"
+
+[[fb]]
+name = "W"
+thread = "app_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  writes = ["${names.join('", "')}"]
+')
+	assert e.any(it.contains('byte-IOC pool holds 8')), '${e}'
+	// a satellite-produced eth signal has no generated transport to the eth
+	// thread — rejected until that rung
+	e2 := errs_of(eth_head + '
+[target]
+kind = "threadx"
+
+[[signal]]
+name = "S"
+fields = { v = "u8" }
+from = "sat"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["S"]
+tx      = { mode = "cyclic", cycle_ms = 100 }
+' +
+		app +
+		'
+[[partition]]
+name  = "sat"
+core  = 1
+image = "sat_img"
+  [[partition.thread]]
+  name = "sat_main"
+
+[[fb]]
+name = "W"
+thread = "sat_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  writes = ["S"]
+')
+	assert e2.any(it.contains('cross-image transport')), '${e2}'
+}
+
 fn test_someip_round8_timing_bounds() {
 	e := errs_of(eth_head +
 		'
