@@ -753,8 +753,26 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 	}
 	// [target] images: the generated eth thread is a ThreadX thread over the
 	// NetX seam (docs/someip.md target rung) — the bare-metal superloop has no
-	// threads to run it on, so only kind = "threadx" carries eth frames.
-	if n_eth_frames > 0 {
+	// threads to run it on, so only kind = "threadx" carries eth frames. An
+	// eth-bound [shell] (the RPC form, telemetry-bus inherit included) runs
+	// the SAME battery: an rpc-only image binds the same endpoint and creates
+	// the same threads, so it must not skip the interface/core/trace checks.
+	mut eth_rpc_bound := false
+	if eth != '' {
+		if sv2 := doc.value_opt('shell') {
+			sm2 := sv2.as_map()
+			if (sm2['enabled'] or { toml.Any(true) }).bool() {
+				mut sbus2 := str_of(sm2, 'bus')
+				if 'bus' !in sm2 {
+					if tv2 := doc.value_opt('telemetry') {
+						sbus2 = str_of(tv2.as_map(), 'bus')
+					}
+				}
+				eth_rpc_bound = sbus2 == eth
+			}
+		}
+	}
+	if n_eth_frames > 0 || eth_rpc_bound {
 		if tv := doc.value_opt('target') {
 			tm := tv.as_map()
 			if (tm['kind'] or { toml.Any('') }).string() != 'threadx' {
@@ -909,6 +927,11 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			mbus = telem_bus
 		}
 		if eth == '' || !on || mbus != eth {
+			if blk == 'shell' && on && 'method' in bm {
+				// a declared RPC method that is NOT bound to the eth bus would
+				// build an image that silently never serves it
+				errs << '[shell] declares `method` but resolves to bus "${mbus}", not the eth bus — bind the shell to the eth bus (bus = "${eth}") or drop the method (docs/someip.md P3)'
+			}
 			continue
 		}
 		if blk == 'nm' {
@@ -954,13 +977,6 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			// the served method IS SOME/IP traffic: an RPC-only image ([someip]
 			// + [shell], no [[frame]]) is a whole, valid configuration
 			mod_on_eth = true
-			// and it creates the same NetX-internal threads the trace manifest
-			// cannot model — the frames-path [trace] gate, mirrored here
-			if tkind == 'threadx' {
-				if _ := doc.value_opt('trace') {
-					errs << 'eth shell with [trace] on a target image — the NetX-internal threads (IP thread, eth-svc) would take first-sight trace ids the manifest does not model; trace + eth on one image is its own rung (docs/someip.md)'
-				}
-			}
 			continue
 		}
 		// the TARGET emitters still generate the CAN telemetry path
