@@ -46,15 +46,27 @@ pub fn check_route_dbc(s System) []Issue {
 		mut dsg := ?candb.Signal(none)
 		mut dmsg := ?candb.Message(none)
 		mut sender := ''
+		mut nmatch := 0
 		for m in db.messages {
 			for sg in m.signals {
 				if sg.name == r.signal {
 					dsg = sg
 					dmsg = m
 					sender = m.sender
+					nmatch++
 					break
 				}
 			}
+		}
+		// ambiguous (>1 frame): report HERE too — sysgen's frame_of_signal rejects it,
+		// so the validation gate must too (else syscheck says OK, sysgen then fails).
+		if nmatch > 1 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": signal "${r.signal}" appears in ${nmatch} frames in destination DBC "${to.dbc}" (bus "${r.to}") — the destination frame is ambiguous'
+			}
+			continue
 		}
 		// signal-not-in-dest-DBC: report HERE too, so syscheck rejects the same
 		// contract sysgen's frame_of_signal does (not only mid-generation).
@@ -94,13 +106,19 @@ pub fn check_route_dbc(s System) []Issue {
 				msg:      'route on "${r.gateway}": signal "${r.signal}" fields are ${bits} bits but destination DBC SG_ is ${ds.length} bits (bus "${r.to}")'
 			}
 		}
-		// ...and fit the destination FRAME's payload — a wide SG_ in a short BO_ would
-		// be truncated to the declared DLC on the wire (the source-side check does this).
-		if bits > dm.dlc * 8 {
+		// ...and its OCCUPIED bit range must fit the destination frame's payload — not
+		// just its width. A little-endian SG_ occupies [start_bit, start_bit+length);
+		// one starting near the end (e.g. 56|16 in an 8-byte frame) overflows the DLC
+		// and is truncated on the wire even though its width alone fits. For a
+		// big-endian SG_ the start_bit is the MSB in a different numbering, so fall
+		// back to the conservative width check there.
+		payload_bits := dm.dlc * 8
+		occupied := if ds.byte_order == .little_endian { ds.start_bit + ds.length } else { ds.length }
+		if occupied > payload_bits {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-003'
-				msg:      'route on "${r.gateway}": signal "${r.signal}" needs ${bits} bits but destination frame "${dm.name}" is only ${dm.dlc} bytes (${dm.dlc * 8} bits) on bus "${r.to}"'
+				msg:      'route on "${r.gateway}": signal "${r.signal}" occupies up to bit ${occupied} but destination frame "${dm.name}" is only ${dm.dlc} bytes (${payload_bits} bits) on bus "${r.to}"'
 			}
 		}
 		if want := field_signed(sig.fields) {
