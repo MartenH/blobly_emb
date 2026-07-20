@@ -1628,6 +1628,35 @@ thread = "sat_main"
   writes = ["S"]
 ')
 	assert e2.any(it.contains('cross-image transport')), '${e2}'
+	// a non-numeric interface would park the target eth thread forever at
+	// boot (blob_eth_open -1) — fail the build
+	e3 := errs_of(eth_head.replace('192.168.0.50', '192.168.0.x') + '
+[target]
+kind = "threadx"
+
+[[signal]]
+name = "S"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["S"]
+tx      = { mode = "cyclic", cycle_ms = 100 }
+
+[[fb]]
+name = "W"
+thread = "app_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  writes = ["S"]
+' +
+		app)
+	assert e3.any(it.contains('dotted-quad')), '${e3}'
 }
 
 fn test_someip_round8_timing_bounds() {

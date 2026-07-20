@@ -760,6 +760,33 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			if (tm['kind'] or { toml.Any('') }).string() != 'threadx' {
 				errs << 'eth [[frame]]s need [target] kind = "threadx" — the eth comm thread is a ThreadX thread over the NetX seam; the bare-metal superloop has no thread to run it on (docs/someip.md)'
 			}
+			// the NetX backend binds a dotted-quad only — a hostname or typo'd
+			// interface would make blob_eth_open return -1 and the eth thread
+			// park forever with no wire symptom; fail the BUILD instead
+			if bv2 := doc.value_opt('bus') {
+				if bc2 := bv2.as_map()[eth] {
+					iface2 := (bc2.as_map()['interface'] or { toml.Any('') }).string()
+					mut octs := 0
+					mut digits := 0
+					mut bad := iface2 == ''
+					for ch2 in iface2 {
+						if ch2 == `.` {
+							if digits == 0 {
+								bad = true
+							}
+							octs++
+							digits = 0
+						} else if ch2 >= `0` && ch2 <= `9` {
+							digits++
+						} else {
+							bad = true
+						}
+					}
+					if bad || octs != 3 || digits == 0 {
+						errs << 'eth bus "${eth}" interface "${iface2}" is not a dotted-quad IPv4 address — the target NetX backend binds a numeric address only (a bad one would park the eth thread forever at boot)'
+					}
+				}
+			}
 			// the target byte-IOC pool is a fixed glue contract (IOCB_POOL_N = 8,
 			// the example glue) — a ninth signal would get an index the glue
 			// answers with a boot halt; fail the BUILD instead
