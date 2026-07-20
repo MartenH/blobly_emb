@@ -161,6 +161,12 @@ fn someip_manifest(m Model) []string {
 // partition_telem thread) is emitted only for a CAN-bus binding — an eth
 // telemetry binding is the SOME/IP UDP producer, which is the UDP rung;
 // emitting the CAN path for it would open SocketCAN on an IP address.
+// route_field is the state-field prefix for a signal route's stored value/freshness
+// (unique per destination bus + frame + signal).
+fn route_field(r Route) string {
+	return 'rt_${snake(r.to_bus)}_${snake(r.to_frame)}_${snake(r.signal)}'
+}
+
 fn telem_on_can(m Model) bool {
 	return m.telem.on && (m.bus_kind[m.telem.bus] or { 'can' }) != 'eth'
 }
@@ -522,8 +528,30 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 		bus_names << bname
 		bus_dests[bname] = dests
 
+		// SIGNAL routes on this bus, grouped by destination frame: the P2a.2b producer
+		// stores each routed value on rx (decode -> physical, with a freshness stamp),
+		// then composes the WHOLE destination frame and re-emits it per the dest frame's
+		// cadence + TX mode (rate adaptation), from THIS (source) bridge which already
+		// holds the destination channel. dst_frames = one representative Route per
+		// distinct (to_bus, to_frame).
+		mut sig_routes := []Route{}
+		for r in my_routes {
+			if r.signal != '' {
+				sig_routes << r
+			}
+		}
+		mut dst_frames := []Route{}
+		mut seen_df := map[string]bool{}
+		for r in sig_routes {
+			dk := '${snake(r.to_bus)}_${snake(r.to_frame)}'
+			if dk !in seen_df {
+				seen_df[dk] = true
+				dst_frames << r
+			}
+		}
+
 		// io fn needs a timestamp to gate tx, monitor rx deadlines, or pace ISO-TP
-		mut uses_now := tx_by_msg.len > 0 || conns.len > 0
+		mut uses_now := tx_by_msg.len > 0 || conns.len > 0 || sig_routes.len > 0
 		for msg, _ in rx_by_msg {
 			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 				uses_now = true
@@ -566,6 +594,16 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 		for d in dests {
 			glue << '\troute_${snake(d)} can.Channel // gateway: forward to ${d}'
 		}
+		// SIGNAL-route producer state: the latest physical value + freshness stamp per
+		// routed signal, and one TxState per destination frame (its cadence + TX mode).
+		for r in sig_routes {
+			rk := route_field(r)
+			glue << '\t${rk}_v f64 // routed physical value'
+			glue << '\t${rk}_fresh u64 // rx timestamp (0 = never received)'
+		}
+		for r in dst_frames {
+			glue << '\trt_tx_${snake(r.to_bus)}_${snake(r.to_frame)} com.TxState'
+		}
 		glue << '}'
 		glue << ''
 		glue << 'fn io_${bb}_10ms(ctx voidptr) {'
@@ -578,22 +616,14 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			glue << '\tfor st.chan.recv(mut rx) {'
 			for r in my_routes {
 				if r.signal != '' {
-					// SIGNAL route: decode the routed signal from the source frame (its DBC
-					// codec), re-encode it into the DESTINATION frame — a different id + layout
-					// — and send on the destination bus. Both codec fns live in dbc_gen.v.
-					// Require rx.len == source DLC so the decode never reads stale bytes.
+					// SIGNAL route (P2a.2b): DECODE the routed signal from the source frame to
+					// its physical value and STORE it (with a freshness stamp). The producer
+					// below composes + re-emits the destination frame per its own cadence. Require
+					// rx.len == source DLC so the decode never reads stale bytes.
+					rk := route_field(r)
 					glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} {'
-					glue << '\t\t\tmut fwd := can.Frame{'
-					glue << '\t\t\t\tid:  u32(0x${r.to_id.hex()})'
-					glue << '\t\t\t\tlen: ${r.to_dlc}'
-					glue << '\t\t\t}'
-					glue << '\t\t\t${snake(r.to_frame)}_${snake(r.signal)}_set_raw(mut fwd.data, ${snake(r.from_frame)}_${snake(r.signal)}_raw(rx.data))'
-					// gate on the DESTINATION channel's tx_ready so a full Tx FIFO isn't
-					// pushed into (a cyclic source re-forwards next tick). Retain + retry
-					// per the dest frame's TX mode is the destination-producer step (next).
-					glue << '\t\t\tif st.route_${snake(r.to_bus)}.tx_ready() {'
-					glue << '\t\t\t\tst.route_${snake(r.to_bus)}.send(fwd)'
-					glue << '\t\t\t}'
+					glue << '\t\t\tst.${rk}_v = ${snake(r.from_frame)}_${snake(r.signal)}_phys(rx.data)'
+					glue << '\t\t\tst.${rk}_fresh = now'
 					glue << '\t\t}'
 					continue
 				}
@@ -784,6 +814,40 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			}
 			glue << '\t}'
 		}
+		// SIGNAL-route producers (P2a.2b): compose each destination frame from its
+		// routed signals and re-emit per the frame's own cadence + TX mode (rate
+		// adaptation), gated on the dest channel's tx_ready. A signal not yet received
+		// (fresh == 0) or stale beyond its source deadline suppresses the frame, so a
+		// downstream receiver detects the loss instead of seeing stale-as-fresh.
+		for r in dst_frames {
+			dk := '${snake(r.to_bus)}_${snake(r.to_frame)}'
+			glue << '\tmut rf_${dk} := can.Frame{'
+			glue << '\t\tid:  u32(0x${r.to_id.hex()})'
+			glue << '\t\tlen: ${r.to_dlc}'
+			glue << '\t}'
+			glue << '\tmut rf_${dk}_ok := true'
+			for r2 in sig_routes {
+				if r2.to_bus != r.to_bus || r2.to_frame != r.to_frame {
+					continue
+				}
+				rk := route_field(r2)
+				glue << '\t${snake(r2.to_frame)}_${snake(r2.signal)}_set(mut rf_${dk}.data, st.${rk}_v)'
+				if r2.from_cyc > 0 {
+					glue << '\tif st.${rk}_fresh == 0 || now - st.${rk}_fresh > u64(${u64(r2.from_cyc) * 3000}) {'
+					glue << '\t\trf_${dk}_ok = false'
+					glue << '\t}'
+				} else {
+					glue << '\tif st.${rk}_fresh == 0 {'
+					glue << '\t\trf_${dk}_ok = false'
+					glue << '\t}'
+				}
+			}
+			glue << '\tif rf_${dk}_ok && st.route_${snake(r.to_bus)}.tx_ready() && st.rt_tx_${dk}.should_send(now, rf_${dk}.data, ${r.to_dlc}) {'
+			glue << '\t\tif st.route_${snake(r.to_bus)}.send(rf_${dk}) {'
+			glue << '\t\t\tst.rt_tx_${dk}.mark_sent(now, rf_${dk}.data, ${r.to_dlc})'
+			glue << '\t\t}'
+			glue << '\t}'
+		}
 		glue << '}'
 		glue << ''
 		mut psig := 'ch can.Channel'
@@ -814,6 +878,16 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 					[]u8{}
 				})})'
 			}
+		}
+		// one TxState per routed destination frame: its re-emit cadence (the dest
+		// frame's DBC GenMsgCycleTime, default 100 ms) + cyclic TX mode.
+		for r in dst_frames {
+			dk := '${snake(r.to_bus)}_${snake(r.to_frame)}'
+			cyc := if r.to_cyc > 0 { r.to_cyc * 1000 } else { 100000 }
+			glue << '\tst.rt_tx_${dk} = com.TxState{'
+			glue << '\t\tmode: com.TxMode.cyclic'
+			glue << '\t\tcycle_us: ${cyc}'
+			glue << '\t}'
 		}
 		for msg, _ in rx_by_msg {
 			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {

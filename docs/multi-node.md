@@ -473,19 +473,22 @@ Cross-bus *sleep bridging* (wake on A wakes B) remains a later decision on top.
      enforces route-cycle (`-011`) + routed-cell single-writer (`-012`). ecucheck
      learned the per-bus `dbc` + signal-route schema. The loom2v **target** gate is
      deferred for gateway systems (that is P2c).
-   - **P2a.2 — runtime forwarder (DONE, common path).** loom2v lowers a signal
-     route into the source bus's COM bridge: decode the routed signal from the
-     source frame and re-encode it into the destination frame
-     (`dst_frame_sig_set(mut fwd.data, src_frame_sig_phys(rx.data))`, the per-DBC
-     codec fns), sending on the destination bus. Proven on 2× vcan —
-     [`examples/gw_signal`](../examples/gw_signal) routes `Speed` from `0x100`
-     (bit 0) to `0x200` (bit 8), so a raw byte-forward would be wrong; the Lua
-     regression `test/route_signal.lua` asserts the re-encode. The forwarder sends
-     the destination frame on receipt (correct for a same-rate route). **Still to
-     come (routes through the destination frame's own COM producer):** rate
-     adaptation (a 10 ms source at a 100 ms dest), the dest frame's configured TX
-     mode, validity/freshness propagation, and E2E/SecOC re-protection — they wire
-     the routed value as a producer input rather than sending on receipt.
+   - **P2a.2 — runtime forwarder (DONE).** loom2v lowers a signal route through the
+     destination frame's own COM producer. **P2a.2** (the on-receipt common path)
+     decoded + re-encoded raw and sent on receipt; **P2a.2b** moved it to the
+     producer model: in the source bus's bridge, on rx of the source frame it
+     decodes the **physical** value (`src_frame_sig_phys`) and stores it with a
+     freshness stamp; each tick a producer composes the destination frame
+     (`dst_frame_sig_set`) and re-emits it per that frame's `com.TxState` (cadence +
+     TX mode), `tx_ready`-gated. So a route now **transcodes** (differing
+     factor/offset), **rate-adapts** (a fast source → the destination's cadence),
+     **propagates validity** (a stale/never-received source suppresses the dest),
+     and **composes** several routed signals into one frame. Proven on 2× vcan —
+     [`examples/gw_signal`](../examples/gw_signal) transcodes `Speed` from `0x100`
+     (bit 0, ×0.1, 20 ms) to `0x200` (bit 8, ×1, 100 ms); the Lua regression
+     `test/route_signal.lua` asserts the value survives the factor change.
+     **Still ahead:** E2E/SecOC re-protection on a routed frame (rejected for now);
+     cross-core routes need the `xioc` transport (P2c).
 2. **P2b — frame route.** Recv-on-A → send-on-B in the comm loop (with tx-ready
    gating), the full-contract comparison (wire + signal semantics + protection),
    format flags, firewall allow-list. `REQ-TOPO-007`, `-009`, `-010`.
