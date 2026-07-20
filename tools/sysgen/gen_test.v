@@ -117,10 +117,11 @@ fn test_gateway_route_ambiguous_dst_frame() {
 	}
 }
 
-// REQ-TOPO-004 (codex #164): a gateway's generated [nm], when its primary bus has
-// the cluster, pins `bus` to the PRIMARY interface — loom2v would otherwise default
-// NM to [telemetry].bus, which on a gateway may be a different (secondary) bus.
-fn test_gateway_nm_bound_to_primary_bus() {
+// REQ-TOPO-004 (codex #164 r7): a gateway's generated [nm] emits the cluster
+// (alive + peers) but NO misleading `bus =` line — [nm].bus only labels the
+// manifest, it does not move NM's tx (NM runs on the telemetry bus). That
+// telemetry-bus == primary-bus requirement is enforced in validation instead.
+fn test_gateway_nm_no_misleading_bus_line() {
 	dir := os.join_path(os.temp_dir(), 'sysgen_gwnm_${os.getpid()}')
 	os.mkdir_all(dir) or { panic(err) }
 	defer {
@@ -168,7 +169,8 @@ fn test_gateway_nm_bound_to_primary_bus() {
 		}]
 	}
 	out := generate_node(sys, sys.nodes[0]) or { panic(err) }
-	assert out.contains('bus   = "can0"'), 'gateway NM pinned to the primary interface:\n${out}'
+	assert out.contains('alive = 0x511') && out.contains('peers = [0x500, 0x53f]'), 'gateway NM cluster emitted:\n${out}'
+	assert !out.contains('bus   = "can0"'), 'no misleading [nm].bus line:\n${out}'
 }
 
 // REQ-TOPO-006: a routed signal absent from the destination DBC is a generation

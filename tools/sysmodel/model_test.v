@@ -2882,6 +2882,99 @@ fn test_route_dest_dbc_width_mismatch() {
 	assert errs(validate_system_gen(s)).any(it.contains('bits but destination DBC')), errs(validate_system_gen(s)).str()
 }
 
+// REQ-TOPO-003 (codex #164 r7): a destination frame with an unrouted sibling SG_
+// is rejected — the gateway composes the WHOLE frame, but a P2a gateway can't
+// produce its own signals, so the sibling would be sent uninitialised.
+fn test_route_dest_frame_partial_rejected() {
+	mut s := clean_dissolved()
+	os.write_file(os.join_path(s.dir, 'edge.dbc'), 'VERSION ""\nBU_: gw zone\nBO_ 512 Speed_E: 8 gw\n SG_ Speed : 0|16@1+ (1,0) [0|0] "" zone\n SG_ Extra : 16|16@1+ (1,0) [0|0] "" zone\n') or {
+		panic(err)
+	}
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+		dbc:       'edge.dbc'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('partially populated')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-003 (codex #164 r7): a destination SG_ with a non-trivial factor/offset
+// is rejected — the codec routes raw values, so scaling would change the quantity.
+fn test_route_dest_factor_rejected() {
+	mut s := clean_dissolved()
+	os.write_file(os.join_path(s.dir, 'edge.dbc'), 'VERSION ""\nBU_: gw zone\nBO_ 512 Speed_E: 8 gw\n SG_ Speed : 0|16@1+ (0.1,0) [0|0] "" zone\n') or {
+		panic(err)
+	}
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+		dbc:       'edge.dbc'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('factor/offset')), errs(validate_system_gen(s)).str()
+}
+
+// REQ-TOPO-004 (codex #164 r7): a gateway with an NM cluster on its primary bus but
+// [telemetry] on a secondary bus is rejected — NM runs on the telemetry bus, so
+// its alive frames would otherwise go to the wrong network.
+fn test_gateway_nm_telemetry_bus_mismatch_rejected() {
+	mut s := clean_dissolved()
+	s.buses[0].has_nm_cluster = true
+	s.buses[0].nm_peers_lo = 0x500
+	s.buses[0].nm_peers_hi = 0x53f
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+		view:         NodeView{
+			is_threadx:    true
+			has_telemetry: true
+			telem_bus:     'can1' // telemetry on the SECONDARY bus, NM cluster on primary
+		}
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('NM runs on the telemetry bus'))
+}
+
 // REQ-TOPO-003 (codex #164 r6): a big-endian (Motorola) destination SG_ is
 // rejected — the dissolution codec re-encodes little-endian signals only.
 fn test_route_dest_big_endian_rejected() {
