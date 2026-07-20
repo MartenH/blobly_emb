@@ -89,6 +89,9 @@ fn route_val_phys_equal(a candb.Signal, b candb.Signal) bool {
 
 pub fn check_route_dbc(s System) []Issue {
 	mut issues := []Issue{}
+	// all signal routes composing ONE destination frame must share a source bus (each
+	// source bridge composes independently) — track the first source bus per dest frame.
+	mut frame_src := map[string]string{}
 	for r in s.routes {
 		if r.signal == '' || r.to == '' {
 			continue
@@ -151,6 +154,29 @@ pub fn check_route_dbc(s System) []Issue {
 			continue
 		}
 		dm := dmsg or { continue }
+		// the routed producer re-emits per the dest cadence, but the comm bridge ticks
+		// at 10 ms — a sub-tick DBC cadence can't be honored (loom2v panics; mirror it).
+		if dm.cycle_ms > 0 && dm.cycle_ms < 10 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": destination frame "${dm.name}" cadence ${dm.cycle_ms} ms is below the 10 ms comm-bridge tick — cannot re-emit that fast'
+			}
+		}
+		// same-source-bus composition (mirror loom2v): every route into this dest frame
+		// must originate on ONE source bus, else the frame ships two half-populated copies.
+		fkey := '${r.to}/${dm.name}'
+		if prev := frame_src[fkey] {
+			if prev != r.from {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'route on "${r.gateway}": destination frame "${dm.name}" on "${r.to}" is composed from two source buses ("${prev}" and "${r.from}") — a routed frame\'s signals must share one source bus'
+				}
+			}
+		} else {
+			frame_src[fkey] = r.from
+		}
 		// a multiplexed destination SG_ needs selector semantics the dissolution codec
 		// has no support for (same limit as the source-side check) — the re-encode
 		// would write an inactive/overlapping branch.
