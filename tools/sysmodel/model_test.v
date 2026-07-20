@@ -2882,6 +2882,86 @@ fn test_route_dest_dbc_width_mismatch() {
 	assert errs(validate_system_gen(s)).any(it.contains('bits but destination DBC')), errs(validate_system_gen(s)).str()
 }
 
+// REQ-TOPO-006 (codex #164 r4): a gateway listing a bus twice is rejected — it
+// would emit that [bus.*] table twice.
+fn test_gateway_duplicate_bus_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('listed more than once'))
+}
+
+// REQ-TOPO-003 (codex #164 r4): a signal route to a bus with no `dbc` is rejected
+// in syscheck (sysgen would otherwise fail only mid-generation).
+fn test_route_dest_bus_no_dbc_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	} // no dbc
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('has no `dbc`'))
+}
+
+// REQ-TOPO-003 (codex #164 r4): the routed signal must fit the destination FRAME's
+// DLC, not just the SG_ width (a wide SG_ in a short BO_ truncates on the wire).
+fn test_route_dest_dlc_overflow_rejected() {
+	mut s := clean_dissolved()
+	// Speed is 16-bit at source; destination frame is only 1 byte.
+	os.write_file(os.join_path(s.dir, 'edge.dbc'), 'VERSION ""\nBU_: gw zone\nBO_ 512 Speed_E: 1 gw\n SG_ Speed : 0|16@1+ (1,0) [0|0] "" zone\n') or {
+		panic(err)
+	}
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+		dbc:       'edge.dbc'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('only 1 bytes')), errs(validate_system_gen(s)).str()
+}
+
 // REQ-TOPO-006 (codex #164 r3): a signal route whose `signal` is not a declared
 // system [[signal]] is rejected — there is no typed field contract to check.
 fn test_route_undeclared_signal_rejected() {
