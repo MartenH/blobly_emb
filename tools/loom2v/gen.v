@@ -470,12 +470,14 @@ fn val_tables_phys_equal(a candb.Signal, b candb.Signal) bool {
 	if a.values.len != b.values.len {
 		return false
 	}
-	// each of a's entries must be present (same physical value + label) in b
+	// each of a's entries must be present (same physical value + label) in b — a
+	// physical compare with a tolerance (mathematically-equal scales can differ in the
+	// last f64 bit), the raw key sign-extended per the signal.
 	for ka, va in a.values {
-		pa := f64(ka) * a.factor + a.offset
+		pa := sig_key_phys(a, ka)
 		mut found := false
 		for kb, vb in b.values {
-			if vb == va && f64(kb) * b.factor + b.offset == pa {
+			if vb == va && f64_close(sig_key_phys(b, kb), pa) {
 				found = true
 				break
 			}
@@ -487,10 +489,33 @@ fn val_tables_phys_equal(a candb.Signal, b candb.Signal) bool {
 	return true
 }
 
-// phys_range returns the [min, max] PHYSICAL value a DBC signal can represent (raw
-// range scaled by factor/offset), so a route can check the destination represents
-// the full source range before the generated setter silently masks an overflow.
+// sig_key_phys converts a DBC VAL_ raw key to its physical value, sign-extending the
+// key first for a signed signal (candb stores a negative key as its u64 two's-complement).
+fn sig_key_phys(s candb.Signal, raw u64) f64 {
+	mut r := f64(raw)
+	if s.is_signed && s.length > 0 && s.length < 64 && raw >= (u64(1) << u64(s.length - 1)) {
+		r = f64(i64(raw) - i64(u64(1) << u64(s.length)))
+	}
+	return r * s.factor + s.offset
+}
+
+// f64_close reports whether two physical values are equal within a small tolerance.
+fn f64_close(x f64, y f64) bool {
+	mut d := x - y
+	if d < 0 {
+		d = -d
+	}
+	return d < 1e-9
+}
+
+// phys_range returns the [min, max] PHYSICAL value a route may carry through this
+// signal: the authored DBC [minimum|maximum] when it is a real range (so a narrowed
+// contract like a 16-bit source limited to [0|250] is honoured), else the raw
+// encoding capacity scaled by factor/offset.
 fn phys_range(s candb.Signal) (f64, f64) {
+	if s.maximum > s.minimum {
+		return s.minimum, s.maximum
+	}
 	n := s.length
 	if s.is_signed {
 		half := f64(u64(1) << u64(n - 1))
@@ -955,24 +980,35 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		}
 		// the EFFECTIVE cadence (authored [[frame]].tx.cycle_ms if present, else the DBC
 		// GenMsgCycleTime) must be at least the 10 ms comm-bridge tick.
-		eff_us := m.frames.tx_cycle_us[tof] or {
-			if r.to_cyc > 0 { r.to_cyc * 1000 } else { 100000 }
+		// an authored [[frame]].tx with no cycle_ms inserts 0; treat 0 as absent.
+		authored_us := m.frames.tx_cycle_us[tof] or { 0 }
+		eff_us := if authored_us > 0 {
+			authored_us
+		} else if r.to_cyc > 0 {
+			r.to_cyc * 1000
+		} else {
+			100000
 		}
-		if eff_us > 0 && eff_us < 10000 {
+		if eff_us < 10000 {
 			panic('route: destination frame "${r.to_frame}" cadence ${eff_us} us is below the 10 ms comm-bridge tick')
 		}
 	}
-	// every destination (bus, id) must be owned by ONE frame: reject a raw route or a
-	// different signal-route frame sharing a routed id (two on-wire writers).
+	// every destination (bus, id) must be owned by ONE writer. Multiple SIGNAL routes
+	// into the SAME frame compose it; anything else — a raw route (which forwards
+	// independently, so even two raw routes at one id collide), or a different
+	// signal-route frame — is two on-wire writers under one id.
 	mut id_owner := map[string]string{}
 	for r in m.routes {
 		key := '${r.to_bus}/${r.to_id}'
+		// a raw route is a UNIQUE writer: give each its own owner token so any share
+		// (raw+raw, raw+signal) trips the collision; signal routes share the frame name.
+		owner := if r.signal == '' { 'raw:${r.from_frame}@${r.from_bus}' } else { 'sig:${r.to_frame}' }
 		if prev := id_owner[key] {
-			if prev != r.to_frame {
-				panic('route: destination id 0x${r.to_id:x} on bus "${r.to_bus}" is written by two different frames/routes ("${prev}" vs "${r.to_frame}") — one writer per id')
+			if prev != owner || r.signal == '' {
+				panic('route: destination id 0x${r.to_id:x} on bus "${r.to_bus}" has two on-wire writers ("${prev}" vs "${owner}") — one writer per id (only signal routes into one frame compose)')
 			}
 		} else {
-			id_owner[key] = r.to_frame
+			id_owner[key] = owner
 		}
 	}
 	// all signal routes composing ONE destination frame must originate on the SAME source
