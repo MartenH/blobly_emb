@@ -1116,7 +1116,7 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 		if comm_thread_on {
 			ep = if nthr > 1 { mp - 1 - io_shift } else { 1 } // created at the comm level
 		}
-		man << 'thread,${tid},eth,0,${ep}'
+		man << 'thread,${tid},eth,${m.bus_core[m.eth] or { 0 }},${ep}'
 		tid++
 	}
 	timer_rows := trace_manifest_timer_row(m, tid)
@@ -1702,6 +1702,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				mut rx_ids_seen := map[int]bool{}
 				for sn in m.sig_names {
 					s := m.sig_of[sn] or { continue }
+					if m.eth != '' && s.bus == m.eth {
+						continue // eth signals ride the eth thread, not the CAN drain
+					}
 					if s.rx && !rx_ids_seen[s.dbc_id] {
 						rx_ids_seen[s.dbc_id] = true
 						rx_sigs << s
@@ -1712,6 +1715,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				mut tx_sigs := []SigInfo{}
 				for sn in m.sig_names {
 					s := m.sig_of[sn] or { continue }
+					if m.eth != '' && s.bus == m.eth {
+						continue // eth signals ride the eth thread, not the CAN producer
+					}
 					if s.external && !s.rx && !s.remote {
 						tx_sigs << s
 					}
@@ -2802,12 +2808,18 @@ fn main() {
 		mut msg_read_sigs := map[string]int{}
 		for sn in m.sig_names {
 			s := m.sig_of[sn] or { continue }
-			if s.rx && read_count[sn] > 0 {
+			if s.rx && read_count[sn] > 0 && !(m.eth != '' && s.bus == m.eth) {
 				msg_read_sigs[s.dbc_msg]++
 			}
 		}
 		for sname in m.sig_names {
 			si := m.sig_of[sname] or { continue }
+			// eth signals belong to the eth thread's byte IOC, never the CAN
+			// owner — a mixed image must not run them through the DBC-trivial/
+			// telemetry-bus battery (docs/someip.md target rung)
+			if m.eth != '' && si.bus == m.eth {
+				continue
+			}
 			if si.external && !si.rx {
 				// external TX signal (app -> bus): an FB writes it into a target IOC cell, the comm
 				// thread reads the cell each tx period, encodes, and sends. Mirror of rx; same lean
