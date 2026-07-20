@@ -294,6 +294,9 @@ fn test_rx_gate_filter_router() {
 	}
 	app_addr := net.resolve_addrs('127.0.0.1:30490', .ip, .udp)![0]
 	mut p := os.new_process(os.join_path(dir, 'bin', 'app'))
+	// capture stderr: the rate-limited drop notice is the counter's observable
+	// face — REQ-NET-015/017 require refusals COUNTED, not just not-echoed
+	p.set_redirect_stdio()
 	p.run()
 	defer {
 		p.signal_kill()
@@ -343,4 +346,12 @@ fn test_rx_gate_filter_router() {
 	echoes = drain_echoes(mut c, 2000 * time.millisecond)
 	assert 9 !in echoes, 'a malformed frame was decoded and echoed (REQ-NET-015)'
 	assert 55 in echoes, 'no echo after the malformed flood — a bad frame faulted the rx path'
+
+	// the refusals must have been COUNTED, not merely not-echoed: the drop
+	// counter's observable face is the rate-limited stderr notice, printed
+	// only when the count advances — silence here means the counter is dead
+	p.signal_kill()
+	p.wait()
+	errout := p.stderr_slurp()
+	assert errout.contains('someip: rx drops counted'), 'no drop notice on stderr — refusals were not counted (REQ-NET-015/017)'
 }

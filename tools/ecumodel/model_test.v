@@ -1409,6 +1409,53 @@ e2e     = { data_id = 1, counter_pos = 1, crc_pos = 2 }
 	assert e.any(it.contains('rx with e2e'))
 }
 
+fn test_someip_rx_zero_reader_and_rx_deadline_gated() {
+	// a received signal nothing reads is dead config — the bridge would
+	// receive, decode and publish into a channel nothing consumes
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "Cmd"
+fields = { v = "u8" }
+from = "eth0"
+to   = "app"
+
+[[frame]]
+name    = "CmdEvt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Cmd"]
+' +
+		app)
+	assert e.any(it.contains('no reading handler')), '${e}'
+	// the rx deadline is not generated on eth yet — reject, don't ignore
+	e2 := errs_of(eth_head +
+		'
+[[signal]]
+name = "Cmd2"
+fields = { v = "u8" }
+from = "eth0"
+to   = "app"
+
+[[frame]]
+name    = "CmdEvt2"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Cmd2"]
+rx      = { timeout_ms = 100 }
+
+[[fb]]
+name = "Reader"
+thread = "app_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  reads = ["Cmd2"]
+' +
+		app)
+	assert e2.any(it.contains('not generated yet')), '${e2}'
+}
+
 fn test_someip_same_thread_double_write_is_single_context() {
 	// two handlers of one FB (one Loom thread) publish serially — legal SPSC
 	e := errs_of(eth_head +

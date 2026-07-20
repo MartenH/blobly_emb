@@ -134,11 +134,22 @@ pub fn partition_eth0(sock eth.Socket) {
 	mut rx_told_at := u64(0)
 	for {
 		now := osal.now_us()
-		// drain every pending datagram: source filter, envelope gate, route
-		for {
+		// drain pending datagrams — BOUNDED, so a flood cannot starve the
+		// tx work below — and COALESCE per frame: signals are state (IOC
+		// keeps only the latest), so one publish per pass delivers the same
+		// values without back-to-back publishes lapping an app-side reader
+		mut got_bench_cmd := false
+		mut rxs_lamp_cmd := sig.LampCmd{}
+		for _ in 0 .. 16 {
 			rx_n := sock.recv(mut rx_ip, &rx_port, &rx_buf[0], 80)
 			if rx_n <= 0 {
 				break
+			}
+			// recv reports the REAL datagram length (MSG_TRUNC): an oversize
+			// datagram was truncated into the buffer — drop, never decode a prefix
+			if rx_n > 80 {
+				rx_drops++
+				continue
 			}
 			// static-peer source filter (REQ-NET-017): SD-less, the configured
 			// endpoint is the only legal talker — anyone else is a counted drop
@@ -161,12 +172,14 @@ pub fn partition_eth0(sock eth.Socket) {
 				for i in 0 .. int(bench_cmd_len) {
 					pay_rx_bench_cmd[i] = rx_buf[someip.header_len + i]
 				}
-				mut rxs_lamp_cmd := sig.LampCmd{}
 				bench_cmd_unpack(pay_rx_bench_cmd, mut rxs_lamp_cmd)
-				osal.ioc_publish2(lamp_cmd_ch, &rxs_lamp_cmd, u8(sizeof(rxs_lamp_cmd)))
+				got_bench_cmd = true
 			} else {
 				rx_drops++ // an event id the config does not route
 			}
+		}
+		if got_bench_cmd {
+			osal.ioc_publish2(lamp_cmd_ch, &rxs_lamp_cmd, u8(sizeof(rxs_lamp_cmd)))
 		}
 		if rx_drops != rx_drops_told && now - rx_told_at > 1_000_000 {
 			eprintln('someip: rx drops counted') // no count in the text: -gc none forbids interpolation

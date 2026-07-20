@@ -652,6 +652,11 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 						errs << 'eth rx signal "${sname}" is read from partition "${thread_part[rthreads[0]] or {
 							'?'
 						}}" but declares endpoint "${other}" — the reader must live in the declared partition'
+					} else if rthreads.len == 0 && other != '' {
+						// the tx zero-writer rule, mirrored: a channel nothing
+						// reads is dead config — the bridge would receive,
+						// decode and publish into it forever
+						errs << 'eth rx signal "${sname}" has no reading handler — received values would feed a channel nothing consumes (symmetric to the zero-writer rule)'
 					}
 					if (writer_threads[sname] or {
 						map[string]bool{}
@@ -710,6 +715,11 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		}
 		if ntx > 0 && nrx == 0 && 'rx' in fm {
 			errs << 'eth frame "${fname}" is tx (signals to the bus) but declares an rx block — the deadline would silently never be enforced'
+		}
+		// the eth bridge generates no RxState yet: a declared rx deadline
+		// would silently never invalidate — a stale command would LOOK fresh
+		if nrx > 0 && ntx == 0 && 'rx' in fm {
+			errs << 'eth frame "${fname}" declares an rx block — the eth rx deadline is not generated yet (a stale value would look fresh); it arrives with its own rung'
 		}
 		// SecOC has no eth story yet: the derived payload reserves no
 		// freshness/MAC bytes and no appended auth layout is defined
