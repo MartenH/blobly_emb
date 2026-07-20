@@ -321,6 +321,11 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 				if r.to_frame == '' {
 					panic('route: signal "${r.signal}" needs a destination frame (to = { bus = .., frame = .. })')
 				}
+				// a signal route's destination id comes from to.frame's DBC entry; an
+				// explicit to.id (parsed into to_id already) would be silently ignored.
+				if routes[i].to_id != 0 {
+					panic('route: signal "${r.signal}" sets to.id — a signal route takes its id from to.frame (drop to.id)')
+				}
 				routes[i].to_id = dbc_id_of(db, snake(r.to_frame)) or {
 					panic('route: destination frame "${r.to_frame}" is not a message in ${os.file_name(dbc)} (per-bus DBCs on a gateway are P2c)')
 				}
@@ -378,12 +383,25 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 						}
 					}
 				}
-				// - the destination must REPRESENT the source's full physical range, else
-				//   the setter masks the converted raw value (e.g. 300 in a 16->8-bit route).
-				slo, shi := phys_range(src_sg)
-				dlo, dhi := phys_range(dst_sg)
-				if slo < dlo || shi > dhi {
-					panic('route: signal "${r.signal}" source range [${slo}, ${shi}] does not fit the destination range [${dlo}, ${dhi}] — the re-encode would overflow')
+				// - a P2a.2 route RE-FRAMES a signal (new frame/id/bit-position) but does
+				//   NOT TRANSCODE its value: source and destination SG_ must share the same
+				//   value encoding (length, factor, offset, signedness, unit). Different
+				//   factor/offset would silently rescale or round (12.3@0.1 -> 12@1),
+				//   different units would relabel without converting (100 km/h -> 100 mph).
+				//   Genuine value transcoding is the destination-producer model, later.
+				if src_sg.length != dst_sg.length || src_sg.factor != dst_sg.factor
+					|| src_sg.offset != dst_sg.offset || src_sg.is_signed != dst_sg.is_signed
+					|| src_sg.unit != dst_sg.unit {
+					panic('route: signal "${r.signal}" source and destination SG_ differ in value encoding (length/factor/offset/sign/unit) — a route re-frames a signal, it does not transcode the value')
+				}
+				// - the source and destination cadence (GenMsgCycleTime) must match: the
+				//   on-receipt forwarder sends one dest frame per source frame, so a 10 ms
+				//   source into a 100 ms dest would emit 10x the dest contract's rate. Rate
+				//   adaptation is the destination-producer model, later.
+				src_cyc := dbc_cycle_of(db, snake(r.from_frame))
+				dst_cyc := dbc_cycle_of(db, snake(r.to_frame))
+				if src_cyc != 0 && dst_cyc != 0 && src_cyc != dst_cyc {
+					panic('route: signal "${r.signal}" source frame cadence ${src_cyc} ms != destination ${dst_cyc} ms — on-receipt routing cannot rate-adapt (dest-producer model)')
 				}
 				// - the SOURCE id must be UNIQUE in the DBC: the runtime matches only
 				//   rx.id + rx.len, so a second same-id/len message would be mis-decoded
@@ -417,21 +435,16 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 	return routes
 }
 
-// phys_range returns the [min, max] PHYSICAL value a DBC signal can represent
-// (raw range scaled by factor/offset), so a route can check the destination
-// represents the full source range before the setter silently masks an overflow.
-fn phys_range(s candb.Signal) (f64, f64) {
-	n := s.length
-	if s.is_signed {
-		half := f64(u64(1) << u64(n - 1))
-		a := -half * s.factor + s.offset
-		b := (half - 1) * s.factor + s.offset
-		return if a < b { a, b } else { b, a }
+// dbc_cycle_of returns the GenMsgCycleTime (ms) of the message whose snake-name is
+// `key`, or 0 if unknown — used to require a route's source and destination frames
+// share a cadence (the on-receipt forwarder cannot rate-adapt).
+fn dbc_cycle_of(db candb.Database, key string) int {
+	for m in db.messages {
+		if snake(m.name) == key {
+			return m.cycle_ms
+		}
 	}
-	rmax := f64((u64(1) << u64(n)) - 1)
-	a := s.offset
-	b := rmax * s.factor + s.offset
-	return if a < b { a, b } else { b, a }
+	return 0
 }
 
 // dbc_sig_in_frame returns the SG_ named `signame` in the message whose snake-name
@@ -818,10 +831,34 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		}
 		frof := snake(r.from_frame)
 		tof := snake(r.to_frame)
-		// a classic (non-FD) destination bus caps the DLC at 8; the socket rejects a
-		// longer send and the bridge ignores the false return (silent no-traffic).
+		// both endpoints must name a DECLARED [bus.*]; emit_bridges iterates declared
+		// buses only, so a misspelled endpoint silently drops the route.
+		if r.from_bus !in m.buses || r.to_bus !in m.buses {
+			panic('route: signal "${r.signal}" names an undeclared bus (from "${r.from_bus}", to "${r.to_bus}") — both must be a [bus.*]')
+		}
+		// the forwarder runs in the SOURCE bus\'s bridge and sends directly on the
+		// destination channel — safe only when both buses are on the same core. A
+		// cross-core route needs the sanctioned xioc crossing (P2c).
+		if (m.bus_core[r.from_bus] or { 0 }) != (m.bus_core[r.to_bus] or { 0 }) {
+			panic('route: signal "${r.signal}" crosses cores (bus "${r.from_bus}" core ${m.bus_core[r.from_bus] or {
+				0
+			}} -> "${r.to_bus}" core ${m.bus_core[r.to_bus] or { 0 }}) — a cross-core route needs an xioc transport (P2c)')
+		}
+		// a classic (non-FD) bus caps the DLC at 8 on BOTH ends: the source can never
+		// receive a >8 frame it requires by len, and the socket rejects a >8 send.
+		if !(bus_fd[r.from_bus] or { false }) && r.from_dlc > 8 {
+			panic('route: source frame "${r.from_frame}" is ${r.from_dlc} bytes but bus "${r.from_bus}" is classic (fd = false, DLC <= 8)')
+		}
 		if !(bus_fd[r.to_bus] or { false }) && r.to_dlc > 8 {
 			panic('route: destination frame "${r.to_frame}" is ${r.to_dlc} bytes but bus "${r.to_bus}" is classic (fd = false, DLC <= 8)')
+		}
+		// the destination frame must not ALSO be a COM tx frame — a [[signal]] to a bus
+		// makes its DBC message an implicit cyclic transmitter even with no [[frame]].tx
+		// (so it is not in m.frames.tx_mode). Two writers of one PDU under one id.
+		for _, si in m.sig_of {
+			if !si.rx && si.dbc_msg == tof {
+				panic('route: destination frame "${r.to_frame}" is also transmitted by COM signal "${si.name}" — one writer per frame')
+			}
 		}
 		// the route path neither verifies the source protection nor re-protects the
 		// destination — an E2E/SecOC frame must not be routed (dest-producer model).
