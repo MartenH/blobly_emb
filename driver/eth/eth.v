@@ -34,7 +34,8 @@ pub fn (s Socket) send(ip [4]u8, port u16, data &u8, len int) bool {
 // recv drains one datagram, nonblocking: returns the REAL datagram length
 // (may exceed max — only max bytes were copied, and the caller must drop such
 // a truncated datagram), with the source endpoint filled (the caller's
-// static-peer filter, REQ-NET-017); 0 = none pending.
+// static-peer filter, REQ-NET-017). -1 = none pending; 0 is a real EMPTY
+// datagram (a counted short drop for the caller, not an idle socket).
 pub fn (s Socket) recv(mut ip [4]u8, port &u16, buf &u8, max int) int {
 	return C.blob_eth_recv(s.fd, &ip[0], port, buf, max)
 }

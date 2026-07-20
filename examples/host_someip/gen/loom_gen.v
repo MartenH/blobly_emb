@@ -142,9 +142,11 @@ pub fn partition_eth0(sock eth.Socket) {
 		mut rxs_lamp_cmd := sig.LampCmd{}
 		for _ in 0 .. 16 {
 			rx_n := sock.recv(mut rx_ip, &rx_port, &rx_buf[0], 80)
-			if rx_n <= 0 {
-				break
+			if rx_n < 0 {
+				break // nothing pending — a zero-length datagram is REAL
 			}
+			// ... and falls through: decode rejects it as short, so an empty-
+			// datagram stream is counted AND cannot throttle the bounded drain
 			// recv reports the REAL datagram length (MSG_TRUNC): an oversize
 			// datagram was truncated into the buffer — drop, never decode a prefix
 			if rx_n > 80 {

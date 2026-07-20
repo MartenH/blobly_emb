@@ -351,9 +351,11 @@ fn emit_eth_bridge(m Model) []string {
 		}
 		glue << '\t\tfor _ in 0 .. 16 {'
 		glue << '\t\t\trx_n := sock.recv(mut rx_ip, &rx_port, &rx_buf[0], 80)'
-		glue << '\t\t\tif rx_n <= 0 {'
-		glue << '\t\t\t\tbreak'
+		glue << '\t\t\tif rx_n < 0 {'
+		glue << '\t\t\t\tbreak // nothing pending — a zero-length datagram is REAL'
 		glue << '\t\t\t}'
+		glue << '\t\t\t// ... and falls through: decode rejects it as short, so an empty-'
+		glue << '\t\t\t// datagram stream is counted AND cannot throttle the bounded drain'
 		glue << '\t\t\t// recv reports the REAL datagram length (MSG_TRUNC): an oversize'
 		glue << '\t\t\t// datagram was truncated into the buffer — drop, never decode a prefix'
 		glue << '\t\t\tif rx_n > 80 {'
