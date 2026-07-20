@@ -3,6 +3,7 @@
 0,app,0,Bench,on_100ms,100000,app_main
 # threads: thread,id,name,core,prio  (id 0 reserved = idle; prio - = no RTOS prio)
 thread,1,app_main,0,10
+thread,2,eth,0,8
 # someip: service,version,port,peer
 someip,0x100,1,30490,192.168.0.190:30491
 # eth frames: frame,id,len,dir,mode,cycle_us,e2e_id

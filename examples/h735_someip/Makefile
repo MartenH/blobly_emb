@@ -47,6 +47,9 @@ NX_OBJ = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
 BSP = $(BOARD_BSP_THREADX) $(REPO)/boards/$(BOARD)/eth.c \
       $(REPO)/net/nx_driver_stm32h7.c $(REPO)/driver/eth/eth_netx.c glue.c
 
+# a failed lint must not leave a linkable app.c behind (the vinit gate is mandatory)
+.DELETE_ON_ERROR:
+
 all: $(BUILD)/$(NAME).bin
 
 # 0) generate the ThreadX target (gen/ports/sig) from ecu.toml via loom2v.

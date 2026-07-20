@@ -760,6 +760,33 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			if (tm['kind'] or { toml.Any('') }).string() != 'threadx' {
 				errs << 'eth [[frame]]s need [target] kind = "threadx" — the eth comm thread is a ThreadX thread over the NetX seam; the bare-metal superloop has no thread to run it on (docs/someip.md)'
 			}
+			// the target byte-IOC pool is a fixed glue contract (IOCB_POOL_N = 8,
+			// the example glue) — a ninth signal would get an index the glue
+			// answers with a boot halt; fail the BUILD instead
+			if sig_frame.len > 8 {
+				errs << 'a [target] image carries ${sig_frame.len} eth signals — the target byte-IOC pool holds 8 (IOCB_POOL_N in the glue); split frames across images or raise the pool with the glue'
+			}
+			// multi-image: a satellite-produced eth signal rides the xioc drain,
+			// which no generated path connects to the eth thread's byte IOC —
+			// reject until that transport rung exists
+			for p in toml_arr(doc, 'partition') {
+				pm := p.as_map()
+				if 'image' !in pm {
+					continue
+				}
+				pname := str_of(pm, 'name')
+				mut pthreads := map[string]bool{}
+				pthreads[pname] = true
+				for t in arr_of(pm, 'thread') {
+					pthreads[str_of(t.as_map(), 'name')] = true
+				}
+				for sname, _ in sig_frame {
+					other := if sig_from[sname] == eth { sig_to[sname] } else { sig_from[sname] }
+					if other in pthreads {
+						errs << 'eth signal "${sname}" ends in satellite partition "${pname}" (image = ...) — the cross-image transport to the eth thread is not generated yet (docs/multi-image.md); keep eth signals on the bus-owner image'
+					}
+				}
+			}
 		}
 	}
 

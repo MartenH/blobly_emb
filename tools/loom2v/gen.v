@@ -1109,6 +1109,16 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 		man << 'thread,${tid},io,${m.io_core},${iop}'
 		tid++
 	}
+	// The eth comm thread (docs/someip.md target rung): bound after io, before
+	// the kernel timer — matching the trace-bind order in tx_application_define.
+	if m.eth_frames.len > 0 && m.target.threadx {
+		mut ep := mp - 2 // no CAN comm thread: io sits at mp-1, the eth owner one above
+		if comm_thread_on {
+			ep = if nthr > 1 { mp - 1 - io_shift } else { 1 } // created at the comm level
+		}
+		man << 'thread,${tid},eth,0,${ep}'
+		tid++
+	}
 	timer_rows := trace_manifest_timer_row(m, tid)
 	man << timer_rows
 	tid += timer_rows.len
@@ -1889,6 +1899,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					if m.io_points.len > 0 {
 						glue << '\tC.trace_bind_thread(&g_io_tcb[0])'
 					}
+					if m.eth_frames.len > 0 {
+						glue << '\tC.trace_bind_thread(&g_eth_tcb[0])'
+					}
 				}
 				glue << '}'
 			} else {
@@ -1942,7 +1955,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				if m.io_points.len > 0 {
 					glue << emit_io_target_create(min_prio - 1)
 				}
-				glue << emit_eth_target_create(m, min_prio - 1)
+				// the eth owner sits ABOVE the io thread (min-2 vs min-1): both are
+				// TX_NO_TIME_SLICE, so an equal-priority eth drain pass would run to
+				// completion ahead of a due io cadence (codex #169 r2)
+				glue << emit_eth_target_create(m, min_prio - 2)
 				if m.trace.on {
 					// Deterministic ids in MANIFEST order (app threads, then io) — without
 					// explicit binds the io thread, running at min FB - 1, is first-sighted
@@ -1956,6 +1972,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					}
 					if m.io_points.len > 0 {
 						glue << '\tC.trace_bind_thread(&g_io_tcb[0])'
+					}
+					if m.eth_frames.len > 0 {
+						glue << '\tC.trace_bind_thread(&g_eth_tcb[0])'
 					}
 				}
 				glue << '}'
