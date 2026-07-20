@@ -15,6 +15,7 @@ lives in the sibling `docs/*.md` files and is linked, not repeated.
 | record and view a trace | [record-a-trace.md](record-a-trace.md) |
 | build, flash, and talk to the target (bench, bootloader, blobly_net GUI) | [build-and-flash.md](build-and-flash.md) |
 | wire a signal across two ECUs (the button→lamp demo) | [two-node-io.md](two-node-io.md) |
+| compose a system from nodes (system.toml vs ecu.toml, how they merge) | [system-from-nodes.md](system-from-nodes.md) |
 | bring up a new board | [../porting.md](../porting.md) (design doc; boards/ layer) |
 
 ## The mental model (10 lines)
