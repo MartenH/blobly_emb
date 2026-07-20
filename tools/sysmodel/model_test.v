@@ -6,7 +6,7 @@ import toml
 // REQ-TOPO-005 is method = "analysis" (the system-sourced-generation architecture,
 // argued in docs/multi-node.md) — these validator tests exercise cross-node checks,
 // not that generation analysis, so they must NOT claim to verify it by test.
-// @verifies REQ-TOPO-001, REQ-TOPO-002, REQ-TOPO-004, REQ-TOPO-006
+// @verifies REQ-TOPO-001, REQ-TOPO-002, REQ-TOPO-004, REQ-TOPO-006, REQ-TOPO-011, REQ-TOPO-012
 
 fn errs(issues []Issue) []string {
 	mut out := []string{}
@@ -280,9 +280,8 @@ fn test_route_satisfies_cross_bus_consumer() {
 	}
 	// without a route -> error (no producer on edge)
 	assert errs(validate_system(s)).any(it.contains('Speed') && it.contains('no node transmits'))
-	// add the route -> it is WELL-FORMED (suppresses the raw missing-producer gap)
-	// but P1 does not GENERATE cross-bus routing, so the route itself is rejected:
-	// a clean verdict would wrongly imply a forwarder exists at runtime.
+	// add the SIGNAL route -> it carries Speed compute->edge, so the cross-bus
+	// consumer is satisfied AND (P2a) the signal route is accepted, not rejected.
 	s.routes << Route{
 		gateway: 'sysnode'
 		signal:  'Speed'
@@ -290,8 +289,8 @@ fn test_route_satisfies_cross_bus_consumer() {
 		to:      'edge'
 	}
 	e := errs(validate_system(s))
-	assert !e.any(it.contains('Speed') && it.contains('no node transmits')), 'a well-formed route suppresses the raw missing-producer gap'
-	assert e.any(it.contains('not generated in P1')), 'but the ungenerated route is itself rejected: ${e}'
+	assert !e.any(it.contains('Speed') && it.contains('no node transmits')), 'a signal route satisfies the cross-bus consumer: ${e}'
+	assert !e.any(it.contains('not generated')), 'a signal route is generated in P2a, not rejected: ${e}'
 }
 
 // --- codex #141 review fixes ---
@@ -1294,10 +1293,11 @@ fn test_undeclared_telemetry_interface_is_error() {
 
 // --- codex #141 round-12 fixes ---
 
-// REQ-TOPO-006: a system-level cross-bus route is not generated in P1 (loom2v
-// emits no system routes), so its mere presence is an error — a clean verdict
-// must not imply a forwarder exists.
-fn test_system_route_not_generated_is_error() {
+// REQ-TOPO-006: a FRAME (raw-PDU) route is not generated until P2b (its
+// full-contract compare + tx-ready forwarder), so its mere presence is still an
+// error — a clean verdict must not imply a forwarder exists. (Signal routes ARE
+// generated in P2a — see test_signal_route_accepted.)
+fn test_frame_route_not_generated_is_error() {
 	mut s := clean_system()
 	s.buses << Bus{
 		name:      'edge'
@@ -1311,7 +1311,7 @@ fn test_system_route_not_generated_is_error() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system(s)).any(it.contains('not generated in P1')), errs(validate_system(s)).str()
+	assert errs(validate_system(s)).any(it.contains('not generated yet (P2b)')), errs(validate_system(s)).str()
 }
 
 // REQ-TOPO-002: a telemetry id equal to ANOTHER node's alive id collides on the
@@ -2715,15 +2715,102 @@ fn test_dissolved_host_node_nm_dead() {
 		&& it.contains('no runtime'))
 }
 
-// REQ-TOPO-006: a multi-bus node (P1 wires one bus per node; gateways are P2).
-fn test_dissolved_multibus_node_rejected() {
+// REQ-TOPO-006: a multi-bus node that gateways NO route is rejected (its extra
+// buses would be silently unwired). A multi-bus node is only legal as a gateway.
+fn test_dissolved_multibus_nongateway_rejected() {
 	mut s := clean_dissolved()
 	s.buses << Bus{
 		name:      'edge'
 		interface: 'can1'
 	}
 	s.nodes[0].buses = ['compute', 'edge']
-	assert errs(validate_system_gen(s)).any(it.contains('wires exactly one bus per node'))
+	assert errs(validate_system_gen(s)).any(it.contains('gateways no route'))
+}
+
+// REQ-TOPO-006: a multi-bus node IS accepted when it is a declared route gateway
+// (P2a). Here sysnode gateways the signal `kph`... — a signal route compute->edge.
+fn test_dissolved_multibus_gateway_accepted() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[0].buses = ['compute', 'edge'] // sysnode is the gateway
+	// a consumer on edge so the route is well-formed end to end
+	s.nodes << Node{
+		name:         'zone'
+		buses:        ['edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+		view:         NodeView{
+			fb_reads: [s.signals[0].name]
+		}
+	}
+	s.routes << Route{
+		gateway: s.nodes[0].name
+		signal:  s.signals[0].name
+		from:    'compute'
+		to:      'edge'
+	}
+	e := errs(validate_system_gen(s))
+	assert !e.any(it.contains('gateways no route')), 'a route gateway is allowed multi-bus: ${e}'
+	assert !e.any(it.contains('exactly one bus')), e.str()
+}
+
+// REQ-TOPO-012: the routed cell has a single writer. A node on the destination bus
+// whose FB also writes the routed signal is a second writer — rejected.
+fn test_route_dest_double_writer_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[0].buses = ['compute', 'edge'] // 'a' gateways Speed
+	s.nodes << Node{
+		name:         'zone'
+		buses:        ['edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+		view:         NodeView{
+			fb_writes: ['Speed'] // a SECOND writer of the routed signal on edge
+		}
+	}
+	s.routes << Route{
+		gateway: 'a'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('single writer')
+		|| it.contains('single-writer') || it.contains('one writer'))
+}
+
+// REQ-TOPO-011: routes that form a bus cycle for one signal are rejected (the
+// value would recirculate forever).
+fn test_route_cycle_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[0].buses = ['compute', 'edge']
+	s.routes << Route{
+		gateway: 'a'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	s.routes << Route{
+		gateway: 'a'
+		signal:  'Speed'
+		from:    'edge'
+		to:      'compute'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('cycle'))
 }
 
 // REQ-TOPO-001: a cross-node signal must carry EXACTLY ONE field (loom2v's

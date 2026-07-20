@@ -132,12 +132,30 @@ fn check_dissolved_nodes(s System) []Issue {
 			}
 		}
 		if n.buses.len != 1 {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-006'
-				msg:      'node "${n.name}": is on ${n.buses.len} buses — P1 generation wires exactly one bus per node (a multi-bus gateway is P2)'
+			// a multi-bus node is only legal as a route GATEWAY (P2): its extra buses
+			// exist to carry routes. A multi-bus node that gateways nothing would have
+			// its non-primary buses silently unwired, so still reject that.
+			if n.buses.len == 0 || !is_route_gateway(s, n.name) {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-006'
+					msg:      'node "${n.name}": is on ${n.buses.len} buses but gateways no route — a multi-bus node must be a declared [[route]] gateway'
+				}
+				continue
 			}
-			continue
+			// gateway: every bus it names must be declared (each carries a route or
+			// its own signals); NM is scoped to the primary bus buses[0] below (a
+			// per-bus-NM gateway is a later P2 item, docs/multi-node.md).
+			for bn in n.buses {
+				if _ := s.bus_by_name(bn) {
+				} else {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-001'
+						msg:      'node "${n.name}": bus "${bn}" is not declared in system.toml'
+					}
+				}
+			}
 		}
 		bus := s.bus_by_name(n.buses[0]) or {
 			issues << Issue{
@@ -203,6 +221,19 @@ fn node_has_external(s System, n Node) bool {
 	}
 	for r in n.view.fb_reads {
 		if _ := s.signal_by_name(r) {
+			return true
+		}
+	}
+	// a route gateway is external too: its comm thread runs the forwarder (it
+	// receives on the source bus and transmits on the destination bus), so it
+	// needs the bridge even with no FB of its own reading/writing a signal.
+	return is_route_gateway(s, n.name)
+}
+
+// is_route_gateway reports whether `name` is the gateway of any declared route.
+fn is_route_gateway(s System, name string) bool {
+	for r in s.routes {
+		if r.gateway == name {
 			return true
 		}
 	}
@@ -433,10 +464,22 @@ fn check_signals_dissolved(s System) []Issue {
 			}
 			consumed = true
 			if sig.bus !in n.buses {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-001'
-					msg:      'signal "${sig.name}": consumer "${n.name}" reads it but is not on its bus "${sig.bus}"'
+				// a cross-bus consumer is legal iff a SIGNAL route carries the signal
+				// onto a bus it DOES sit on (the gateway re-encodes it there). Without
+				// such a route the rx would land on the wrong interface (REQ-TOPO-001).
+				mut routed := false
+				for b in n.buses {
+					if signal_routed_to(s, sig.name, b) {
+						routed = true
+						break
+					}
+				}
+				if !routed {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-001'
+						msg:      'signal "${sig.name}": consumer "${n.name}" reads it but is not on its bus "${sig.bus}" and no signal route carries it to a bus "${n.name}" sits on'
+					}
 				}
 			}
 		}
@@ -1146,17 +1189,17 @@ fn nm_timing_effective(v NodeView, param string) int {
 fn check_routes(s System) []Issue {
 	mut issues := []Issue{}
 	for r in s.routes {
-		// P1 does NOT generate cross-bus routing: sysgen never passes a system route
-		// into a node's ecu.toml, and loom2v only parses node-local [[route]] entries
-		// (raw-frame-only). So a system route — a SIGNAL route especially — would let
-		// syscheck pass while no gateway forwards it at runtime. Reject it until the
-		// gateway wiring is generated (P2). The well-formedness checks below still run
-		// so a malformed route is caught too, ready for when generation lands.
-		kind := if r.signal != '' { 'signal' } else { 'frame' }
-		issues << Issue{
-			severity: .error
-			req:      'REQ-TOPO-006'
-			msg:      'route on "${r.gateway}" (${kind} "${r.signal}${r.frame}", ${r.from} -> ${r.to}): cross-bus routing is not generated in P1 — sysgen/loom2v do not emit system routes yet (P2), so a clean verdict would not imply a forwarder exists'
+		// P2a generates SIGNAL routes (decode per the source DBC -> re-encode into the
+		// destination frame's COM producer). FRAME (raw-PDU) routing is P2b — its
+		// full-contract comparison + tx-ready forwarder is not generated yet, so a
+		// clean verdict would not imply a forwarder exists. Reject frame routes until
+		// then; signal routes proceed through the checks below.
+		if r.frame != '' {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-006'
+				msg:      'route on "${r.gateway}" (frame "${r.frame}", ${r.from} -> ${r.to}): raw-frame routing is not generated yet (P2b) — only signal routes are generated in P2a'
+			}
 		}
 		mut gw := ?Node(none)
 		for n in s.nodes {
@@ -1215,8 +1258,103 @@ fn check_routes(s System) []Issue {
 				}
 			}
 		}
+		// REQ-TOPO-012: a signal route makes the gateway the SOLE on-wire writer of
+		// the routed signal on the destination bus (the routed IOC/xioc cell is
+		// single-writer). Reject a gateway-local (or any node-on-`to`) FB that also
+		// writes it — that would be a second producer of the routed value.
+		if r.signal != '' && r.to != '' {
+			for n in s.nodes {
+				if r.to in n.buses && r.signal in n.view.fb_writes {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-012'
+						msg:      'route on "${r.gateway}": signal "${r.signal}" routed to bus "${r.to}" is also written by an FB on node "${n.name}" — a routed cell has exactly one writer (the route)'
+					}
+				}
+			}
+		}
+	}
+	// REQ-TOPO-012 (cont.): two routes may not carry the same signal onto the same
+	// destination bus — the second would be a second writer of that cell.
+	mut routed_dest := map[string]string{} // "signal|to" -> first gateway
+	for r in s.routes {
+		if r.signal == '' || r.to == '' {
+			continue
+		}
+		key := '${r.signal}|${r.to}'
+		if prev := routed_dest[key] {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-012'
+				msg:      'signal "${r.signal}" is routed onto bus "${r.to}" by two routes (gateways "${prev}" and "${r.gateway}") — one writer per routed cell'
+			}
+		} else {
+			routed_dest[key] = r.gateway
+		}
+	}
+	issues << check_route_cycles(s)
+	return issues
+}
+
+// check_route_cycles: REQ-TOPO-011. A routed value that re-enters a bus it already
+// traversed recirculates forever (each gateway re-emits + re-protects it). Build a
+// per-signal directed graph of bus -> bus route edges and reject any cycle. Frame
+// routes use their frame name as the key (a raw forward keeps the same frame), so
+// frame and signal cycles are both caught.
+fn check_route_cycles(s System) []Issue {
+	mut issues := []Issue{}
+	// group route edges (from_bus -> to_bus) by the carried entity (signal or frame)
+	mut edges := map[string][][]string{} // entity -> list of [from, to]
+	for r in s.routes {
+		if r.from == '' || r.to == '' {
+			continue
+		}
+		ent := if r.signal != '' { 'sig:${r.signal}' } else { 'frm:${r.frame}' }
+		edges[ent] << [r.from, r.to]
+	}
+	for ent, es in edges {
+		if graph_has_cycle(es) {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-011'
+				msg:      'routes for "${ent}" form a bus cycle — a routed value would recirculate forever (a firewall allow-list does not stop it)'
+			}
+		}
 	}
 	return issues
+}
+
+// graph_has_cycle detects a directed cycle in edges given as [from, to] pairs
+// (DFS with a visiting/visited colouring over the node set the edges span).
+fn graph_has_cycle(es [][]string) bool {
+	mut adj := map[string][]string{}
+	mut nodes := map[string]bool{}
+	for e in es {
+		adj[e[0]] << e[1]
+		nodes[e[0]] = true
+		nodes[e[1]] = true
+	}
+	mut state := map[string]int{} // 0/absent = unvisited, 1 = visiting, 2 = done
+	for n, _ in nodes {
+		if state[n] == 0 && dfs_cycle(n, adj, mut state) {
+			return true
+		}
+	}
+	return false
+}
+
+fn dfs_cycle(n string, adj map[string][]string, mut state map[string]int) bool {
+	state[n] = 1
+	for m in adj[n] or { []string{} } {
+		if state[m] == 1 {
+			return true // back-edge to a node on the current DFS stack
+		}
+		if state[m] == 0 && dfs_cycle(m, adj, mut state) {
+			return true
+		}
+	}
+	state[n] = 2
+	return false
 }
 
 // signal_routed_to reports whether a SIGNAL route carries `sig` INTO `bus` from
@@ -1231,8 +1369,46 @@ fn signal_routed_to(s System, sig string, bus string) bool {
 		if r.to != bus || r.signal != sig {
 			continue
 		}
-		src := s.bus_by_name(r.from) or { continue }
-		if sig in producers_on(s, src) {
+		// the source bus must actually produce the signal, else the gateway has
+		// nothing to forward. In the dissolved model a node authors no [[signal]],
+		// so production is the system declaration (name + bus), not the node view.
+		if signal_produced_on(s, sig, r.from) {
+			return true
+		}
+	}
+	return false
+}
+
+// signal_produced_on: is `sig` produced on bus `bus`? Handles both models — the
+// dissolved one (a system [[signal]] declared with that name + bus) and the
+// authored one (a node on the bus whose view.produces, keyed by interface, lists it).
+fn signal_produced_on(s System, sig string, bus string) bool {
+	for ss in s.signals {
+		if ss.name == sig && ss.bus == bus {
+			return true
+		}
+	}
+	b := s.bus_by_name(bus) or { return false }
+	for n in s.nodes {
+		if bus in n.buses && sig in (n.view.produces[b.interface] or { []string{} }) {
+			return true
+		}
+	}
+	return false
+}
+
+// signal_consumed_on: does a node on `bus` consume `sig`? Dissolved = an FB read;
+// authored = view.consumes (keyed by interface).
+fn signal_consumed_on(s System, sig string, bus string) bool {
+	b := s.bus_by_name(bus) or { return false }
+	for n in s.nodes {
+		if bus !in n.buses {
+			continue
+		}
+		if sig in n.view.fb_reads {
+			return true
+		}
+		if sig in (n.view.consumes[b.interface] or { []string{} }) {
 			return true
 		}
 	}
@@ -1247,8 +1423,7 @@ fn signal_routed_from(s System, sig string, bus string) bool {
 		if r.from != bus || r.signal != sig {
 			continue
 		}
-		dst := s.bus_by_name(r.to) or { continue }
-		if sig in consumers_on(s, dst) {
+		if signal_consumed_on(s, sig, r.to) {
 			return true
 		}
 	}

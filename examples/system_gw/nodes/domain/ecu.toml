@@ -1,0 +1,29 @@
+# domain (H755) — AUTHORED INTERNALS ONLY (dissolution). Produces VehicleSpeed on
+# the compute bus. The bus wiring + identity are generated from ../../system.toml.
+# NOTE: no inline comments inside [[...]] tables (vlang/v#27684).
+
+[[partition]]
+name = "ctl"
+core = 0
+
+  [[partition.thread]]
+  name = "speed"
+
+[[fb]]
+name   = "SpeedSensor"
+thread = "speed"
+
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  writes    = ["VehicleSpeed"] # trailing comment terminates the nested block (vlang/v#27684)
+
+[target]
+kind    = "threadx"
+tick_ms = 1
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E2
+period_ms = 500
