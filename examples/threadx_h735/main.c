@@ -25,6 +25,8 @@ void governor_thread(ULONG unused);                 /* fbs.c: 100 ms, writes Loa
 void load_thread(ULONG unused);                     /* fbs.c: reads LoadCmd, writes Workload */
 void heartbeat_thread(ULONG unused);                /* fbs.c: 100 ms, timer-only */
 extern ioc_t g_loadcmd, g_workload;                 /* fbs.c: the cross-thread signal IOCs */
+extern volatile uint8_t g_loadcmd_arena[3 * sizeof(sig_t)]; /* fbs.c */
+extern volatile uint8_t g_workload_arena[3 * sizeof(sig_t)];
 
 static TX_THREAD t_gov, t_load, t_hb, t_comm;
 static UCHAR s_gov[1024], s_load[1024], s_hb[1024], s_comm[1024];
@@ -34,8 +36,8 @@ void tx_application_define(void *first_unused_memory)
 {
     (void)first_unused_memory;
     /* The cross-thread signal IOCs must be initialised before any FB thread runs. */
-    ioc_init(&g_loadcmd);
-    ioc_init(&g_workload);
+    ioc_init(&g_loadcmd, g_loadcmd_arena, sizeof(sig_t));
+    ioc_init(&g_workload, g_workload_arena, sizeof(sig_t));
 
     /* The h735_app FBs as ThreadX threads (ThreadX: lower number = higher priority). Load
      * runs fastest so it gets the higher priority (5); Governor/Heartbeat are the slow
