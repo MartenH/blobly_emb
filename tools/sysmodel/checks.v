@@ -183,6 +183,16 @@ fn check_dissolved_nodes(s System) []Issue {
 					}
 				}
 			}
+			// a gateway carries a route, i.e. bus traffic — which needs a comm bridge.
+			// A bare-metal target has no comm thread (loom2v rejects external signals
+			// on bare-metal), so a bare-metal gateway cannot be built for its target.
+			if n.view.is_baremetal {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-006'
+					msg:      'gateway "${n.name}" is a bare-metal target — a route needs a comm bridge, which bare-metal has no runtime for (use a threadx or host target)'
+				}
+			}
 			// the generator emits ONE NM instance, scoped to the primary bus buses[0].
 			// A cluster on a SECONDARY bus would need a second NM instance (multi-instance
 			// NM is a later P2 item) — until then the gateway would route/transmit on the

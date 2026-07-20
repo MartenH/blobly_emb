@@ -2882,6 +2882,35 @@ fn test_route_dest_dbc_width_mismatch() {
 	assert errs(validate_system_gen(s)).any(it.contains('bits but destination DBC')), errs(validate_system_gen(s)).str()
 }
 
+// REQ-TOPO-003 (codex #164 r6): a big-endian (Motorola) destination SG_ is
+// rejected — the dissolution codec re-encodes little-endian signals only.
+fn test_route_dest_big_endian_rejected() {
+	mut s := clean_dissolved()
+	os.write_file(os.join_path(s.dir, 'edge.dbc'), 'VERSION ""\nBU_: gw zone\nBO_ 512 Speed_E: 8 gw\n SG_ Speed : 7|16@0+ (1,0) [0|0] "" zone\n') or {
+		panic(err)
+	}
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+		dbc:       'edge.dbc'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('big-endian')), errs(validate_system_gen(s)).str()
+}
+
 // REQ-TOPO-003 (codex #164 r5): the destination SG_'s OCCUPIED bit range (not just
 // its width) must fit the frame — a 16-bit SG_ at bit 56 of an 8-byte frame has a
 // width that fits (16 <= 64) but overflows the payload (56+16 = 72 > 64).

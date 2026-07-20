@@ -106,19 +106,28 @@ pub fn check_route_dbc(s System) []Issue {
 				msg:      'route on "${r.gateway}": signal "${r.signal}" fields are ${bits} bits but destination DBC SG_ is ${ds.length} bits (bus "${r.to}")'
 			}
 		}
-		// ...and its OCCUPIED bit range must fit the destination frame's payload — not
-		// just its width. A little-endian SG_ occupies [start_bit, start_bit+length);
-		// one starting near the end (e.g. 56|16 in an 8-byte frame) overflows the DLC
-		// and is truncated on the wire even though its width alone fits. For a
-		// big-endian SG_ the start_bit is the MSB in a different numbering, so fall
-		// back to the conservative width check there.
-		payload_bits := dm.dlc * 8
-		occupied := if ds.byte_order == .little_endian { ds.start_bit + ds.length } else { ds.length }
-		if occupied > payload_bits {
+		// the dissolution codec re-encodes trivial LITTLE-ENDIAN signals; a big-endian
+		// (Motorola) destination SG_ has a sawtooth bit layout the generated encoder
+		// does not produce, so reject it rather than approximate its span.
+		if ds.byte_order != .little_endian {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-003'
-				msg:      'route on "${r.gateway}": signal "${r.signal}" occupies up to bit ${occupied} but destination frame "${dm.name}" is only ${dm.dlc} bytes (${payload_bits} bits) on bus "${r.to}"'
+				msg:      'route on "${r.gateway}": destination DBC SG_ "${r.signal}" (bus "${r.to}") is big-endian (Motorola) — the dissolution codec re-encodes little-endian signals only'
+			}
+		} else {
+			// its OCCUPIED bit range must fit the destination frame's payload — not just
+			// its width. A little-endian SG_ occupies [start_bit, start_bit+length); one
+			// starting near the end (e.g. 56|16 in an 8-byte frame) overflows the DLC and
+			// is truncated on the wire even though its width alone fits.
+			payload_bits := dm.dlc * 8
+			occupied := ds.start_bit + ds.length
+			if occupied > payload_bits {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'route on "${r.gateway}": signal "${r.signal}" occupies up to bit ${occupied} but destination frame "${dm.name}" is only ${dm.dlc} bytes (${payload_bits} bits) on bus "${r.to}"'
+				}
 			}
 		}
 		if want := field_signed(sig.fields) {
