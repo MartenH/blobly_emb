@@ -205,7 +205,47 @@ fn emit_eth_codec(m Model) []string {
 			glue << 'pub const ${fb}_e2e_crc = ${fr.len - 1}'
 		}
 		if !fr.tx {
-			continue // rx unpack arrives with the rx rung
+			// the rx unpack: pack's exact inverse — each field read at its
+			// natural width, LE, from the same canonical offsets
+			mut uparams := []string{}
+			for s in fr.signals {
+				uparams << 'mut s_${snake(s)} sig.${s}'
+			}
+			glue << '// 64 = com.max_pdu (a literal: V codegen mishandles const-sized mut fixed-array params)'
+			glue << 'pub fn ${fb}_unpack(d [64]u8, ${uparams.join(', ')}) {'
+			for cell in fr.layout {
+				tgt := 's_${snake(cell.sig)}.${cell.field}'
+				o := cell.offset
+				match cell.typ {
+					'bool' {
+						glue << '\t${tgt} = d[${o}] != 0'
+					}
+					'f32', 'f64' {
+						// bit-copy: host and target are both little-endian
+						glue << '\tunsafe {'
+						glue << '\t\tup_${o} := &u8(&${tgt})'
+						glue << '\t\tfor i in 0 .. ${cell.width} {'
+						glue << '\t\t\tup_${o}[i] = d[${o} + i]'
+						glue << '\t\t}'
+						glue << '\t}'
+					}
+					else {
+						// integer scalars: LE compose through u64, then the
+						// narrowing cast truncates/sign-adjusts to the field type
+						mut parts := []string{}
+						for i in 0 .. cell.width {
+							if i == 0 {
+								parts << 'u64(d[${o}])'
+							} else {
+								parts << '(u64(d[${o + i}]) << ${i * 8})'
+							}
+						}
+						glue << '\t${tgt} = ${cell.typ}(${parts.join(' | ')})'
+					}
+				}
+			}
+			glue << '}'
+			continue
 		}
 		mut params := []string{}
 		for s in fr.signals {
@@ -246,20 +286,26 @@ fn emit_eth_codec(m Model) []string {
 	return glue
 }
 
-// emit_eth_bridge emits the eth comm thread (docs/someip.md, UDP tx rung):
-// acquire each tx frame's signals from IOC, pack the derived layout, gate on
-// com.TxState (the same cyclic/event/mixed machinery as CAN), stamp the E2E
-// trailer when configured, wrap in the comm/someip notification header, and
-// send one datagram to the static peer through the driver/eth seam.
+// emit_eth_bridge emits the eth comm thread (docs/someip.md): the tx side
+// acquires each tx frame's signals from IOC, packs the derived layout, gates
+// on com.TxState (the same cyclic/event/mixed machinery as CAN), stamps the
+// E2E trailer when configured, wraps in the comm/someip notification header,
+// and sends one datagram to the static peer through the driver/eth seam. The
+// rx side drains the same socket: source filter (REQ-NET-017) -> envelope
+// gate (REQ-NET-015) -> route by event id -> unpack -> IOC publish, every
+// refusal a counted drop, never a fault.
 fn emit_eth_bridge(m Model) []string {
 	mut glue := []string{}
 	mut tx_frames := []EthFrame{}
+	mut rx_frames := []EthFrame{}
 	for fr in m.eth_frames {
 		if fr.tx {
 			tx_frames << fr
+		} else {
+			rx_frames << fr
 		}
 	}
-	if tx_frames.len == 0 {
+	if m.eth_frames.len == 0 {
 		return glue
 	}
 	eb := snake(m.eth)
@@ -278,9 +324,73 @@ fn emit_eth_bridge(m Model) []string {
 			glue << '\tmut e2e_tx_${fb} := e2e.TxState{}'
 		}
 	}
-	glue << '\tmut dgram := [80]u8{} // someip.header_len + com.max_pdu'
+	if tx_frames.len > 0 {
+		glue << '\tmut dgram := [80]u8{} // someip.header_len + com.max_pdu'
+	}
+	if rx_frames.len > 0 {
+		glue << '\tmut rx_buf := [80]u8{} // someip.header_len + com.max_pdu — an oversize datagram truncates here and fails the Length gate'
+		glue << '\tmut rx_ip := [4]u8{}'
+		glue << '\tmut rx_port := u16(0)'
+		glue << '\tmut rx_drops := u32(0) // every refusal counted, never faulting (REQ-NET-015)'
+		glue << '\tmut rx_drops_told := u32(0)'
+		glue << '\tmut rx_told_at := u64(0)'
+	}
 	glue << '\tfor {'
 	glue << '\t\tnow := osal.now_us()'
+	if rx_frames.len > 0 {
+		glue << '\t\t// drain every pending datagram: source filter, envelope gate, route'
+		glue << '\t\tfor {'
+		glue << '\t\t\trx_n := sock.recv(mut rx_ip, &rx_port, &rx_buf[0], 80)'
+		glue << '\t\t\tif rx_n <= 0 {'
+		glue << '\t\t\t\tbreak'
+		glue << '\t\t\t}'
+		glue << '\t\t\t// static-peer source filter (REQ-NET-017): SD-less, the configured'
+		glue << '\t\t\t// endpoint is the only legal talker — anyone else is a counted drop'
+		glue << '\t\t\tif rx_ip[0] != someip_peer_ip[0] || rx_ip[1] != someip_peer_ip[1] || rx_ip[2] != someip_peer_ip[2] || rx_ip[3] != someip_peer_ip[3] || rx_port != someip_peer_port {'
+		glue << '\t\t\t\trx_drops++'
+		glue << '\t\t\t\tcontinue'
+		glue << '\t\t\t}'
+		glue << '\t\t\trh, rh_ok := someip.decode(&rx_buf[0], rx_n)'
+		glue << '\t\t\tif !rh_ok || someip.check_event(rh, rx_n, someip_service, someip_version) != .none {'
+		glue << '\t\t\t\trx_drops++'
+		glue << '\t\t\t\tcontinue'
+		glue << '\t\t\t}'
+		for i, fr in rx_frames {
+			fb := snake(fr.name)
+			kw := if i == 0 { 'if' } else { '} else if' }
+			glue << '\t\t\t${kw} rh.method == ${fb}_event_id {'
+			glue << '\t\t\t\t// the router\'s length check: the payload IS the frame, exactly'
+			glue << '\t\t\t\tif rx_n - someip.header_len != int(${fb}_len) {'
+			glue << '\t\t\t\t\trx_drops++'
+			glue << '\t\t\t\t\tcontinue'
+			glue << '\t\t\t\t}'
+			glue << '\t\t\t\tmut pay_rx_${fb} := [64]u8{} // com.max_pdu'
+			glue << '\t\t\t\tfor i in 0 .. int(${fb}_len) {'
+			glue << '\t\t\t\t\tpay_rx_${fb}[i] = rx_buf[someip.header_len + i]'
+			glue << '\t\t\t\t}'
+			mut uargs := []string{}
+			for s in fr.signals {
+				ss := snake(s)
+				glue << '\t\t\t\tmut rxs_${ss} := sig.${s}{}'
+				uargs << 'mut rxs_${ss}'
+			}
+			glue << '\t\t\t\t${fb}_unpack(pay_rx_${fb}, ${uargs.join(', ')})'
+			for s in fr.signals {
+				ss := snake(s)
+				tr := (m.sig_of[s] or { SigInfo{} }).transport
+				glue << '\t\t\t\tosal.${publish_fn(tr)}(${ss}_ch, &rxs_${ss}, u8(sizeof(rxs_${ss})))'
+			}
+		}
+		glue << '\t\t\t} else {'
+		glue << '\t\t\t\trx_drops++ // an event id the config does not route'
+		glue << '\t\t\t}'
+		glue << '\t\t}'
+		glue << '\t\tif rx_drops != rx_drops_told && now - rx_told_at > 1_000_000 {'
+		glue << "\t\t\teprintln('someip: rx drops counted') // no count in the text: -gc none forbids interpolation"
+		glue << '\t\t\trx_drops_told = rx_drops'
+		glue << '\t\t\trx_told_at = now'
+		glue << '\t\t}'
+	}
 	for fr in tx_frames {
 		fb := snake(fr.name)
 		mut params := []string{}

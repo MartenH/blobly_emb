@@ -1363,8 +1363,9 @@ id      = 0x8005
 	assert e.any(it.contains('eth telemetry producer arrives'))
 }
 
-fn test_someip_rx_frames_gated_until_p2() {
-	e := errs_of(eth_head +
+fn test_someip_rx_frames_accepted_and_e2e_rx_gated() {
+	// P2: a plain rx frame is a valid config...
+	ok := errs_of(eth_head +
 		'
 [[signal]]
 name = "Cmd"
@@ -1377,9 +1378,35 @@ name    = "CmdEvt"
 bus     = "eth0"
 id      = 0x8001
 signals = ["Cmd"]
+
+[[fb]]
+name = "Reader"
+thread = "app_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  reads = ["Cmd"]
 ' +
 		app)
-	assert e.any(it.contains('eth reception arrives with the rx rung'))
+	assert ok == [], '${ok}'
+	// ...but rx + e2e is gated until the rx-side check generates
+	e := errs_of(eth_head +
+		'
+[[signal]]
+name = "Cmd2"
+fields = { v = "u8" }
+from = "eth0"
+to   = "app"
+
+[[frame]]
+name    = "CmdEvt2"
+bus     = "eth0"
+id      = 0x8001
+signals = ["Cmd2"]
+e2e     = { data_id = 1, counter_pos = 1, crc_pos = 2 }
+' +
+		app)
+	assert e.any(it.contains('rx with e2e'))
 }
 
 fn test_someip_same_thread_double_write_is_single_context() {

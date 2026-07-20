@@ -57,3 +57,18 @@ void blob_eth_close(int fd) {
 		close(fd);
 	}
 }
+
+/* blob_eth_recv: one datagram, nonblocking. >0 = bytes copied (src ip/port
+ * filled for the caller's peer filter); 0 = nothing pending; -1 = error. */
+int blob_eth_recv(int fd, unsigned char *ip, unsigned short *port,
+                  unsigned char *buf, int max) {
+	struct sockaddr_in a;
+	socklen_t alen = sizeof a;
+	long n = recvfrom(fd, buf, (size_t)max, 0, (struct sockaddr *)&a, &alen);
+	if (n < 0) {
+		return 0; /* EAGAIN/EWOULDBLOCK and friends: nothing pending */
+	}
+	memcpy(ip, &a.sin_addr.s_addr, 4);
+	*port = ntohs(a.sin_port);
+	return (int)n;
+}
