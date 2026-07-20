@@ -66,6 +66,7 @@ pub fn validate_system_gen(s System) []Issue {
 	issues << check_routes(s, true)
 	issues << check_signals_dissolved(s)
 	issues << check_dbc_conformance(s)
+	issues << check_route_dbc(s)
 	issues << check_telemetry_frames(s)
 	return issues
 }
@@ -168,6 +169,20 @@ fn check_dissolved_nodes(s System) []Issue {
 						severity: .error
 						req:      'REQ-TOPO-006'
 						msg:      'gateway "${n.name}" reads/writes system signal "${sig.name}" via an FB — a gateway that also produces/consumes its own signals is not generated yet (P2); in P2a a gateway may only route'
+					}
+				}
+			}
+			// the generator emits ONE NM instance, scoped to the primary bus buses[0].
+			// A cluster on a SECONDARY bus would need a second NM instance (multi-instance
+			// NM is a later P2 item) — until then the gateway would route/transmit on the
+			// secondary network without participating in its sleep/wake. Reject it.
+			for bn in n.buses[1..] {
+				sb := s.bus_by_name(bn) or { continue }
+				if sb.has_nm_cluster {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-004'
+						msg:      'gateway "${n.name}": secondary bus "${bn}" declares an NM cluster, but the generator emits only ONE NM instance (on the primary bus "${n.buses[0]}") — a per-bus-NM gateway is a later P2 item'
 					}
 				}
 			}
@@ -1323,6 +1338,10 @@ fn check_routes(s System, dissolved bool) []Issue {
 	// REQ-TOPO-012 (cont.): two routes may not carry the same signal onto the same
 	// destination bus — the second would be a second writer of that cell.
 	mut routed_dest := map[string]string{} // "signal|to" -> first gateway
+	// ...and one gateway OWNS each destination (bus, frame): a DIFFERENT gateway
+	// routing into the same DBC message is PDU contention (two on-wire transmitters).
+	// The SAME gateway composing several routed signals into one frame is fine.
+	mut frame_owner := map[string]string{} // "frame|to" -> owning gateway
 	for r in s.routes {
 		if r.signal == '' || r.to == '' {
 			continue
@@ -1336,6 +1355,20 @@ fn check_routes(s System, dissolved bool) []Issue {
 			}
 		} else {
 			routed_dest[key] = r.gateway
+		}
+		to := s.bus_by_name(r.to) or { continue }
+		dst_frame := dbc_frame_of(s, to, r.signal) or { continue }
+		fkey := '${dst_frame}|${r.to}'
+		if owner := frame_owner[fkey] {
+			if owner != r.gateway {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-012'
+					msg:      'destination frame "${dst_frame}" on bus "${r.to}" is transmitted by two gateways ("${owner}" and "${r.gateway}") — one gateway owns a routed frame'
+				}
+			}
+		} else {
+			frame_owner[fkey] = r.gateway
 		}
 	}
 	issues << check_route_cycles(s)
