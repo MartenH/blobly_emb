@@ -397,8 +397,8 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 				//   Genuine value transcoding is the destination-producer model, later.
 				if src_sg.length != dst_sg.length || src_sg.factor != dst_sg.factor
 					|| src_sg.offset != dst_sg.offset || src_sg.is_signed != dst_sg.is_signed
-					|| src_sg.unit != dst_sg.unit {
-					panic('route: signal "${r.signal}" source and destination SG_ differ in value encoding (length/factor/offset/sign/unit) — a route re-frames a signal, it does not transcode the value')
+					|| src_sg.unit != dst_sg.unit || !val_tables_equal(src_sg.values, dst_sg.values) {
+					panic('route: signal "${r.signal}" source and destination SG_ differ in value encoding (length/factor/offset/sign/unit/value-table) — a route re-frames a signal, it does not transcode the value')
 				}
 				// - the source and destination cadence (GenMsgCycleTime) must match: the
 				//   on-receipt forwarder sends one dest frame per source frame, so a 10 ms
@@ -448,6 +448,21 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 		}
 	}
 	return routes
+}
+
+// val_tables_equal compares two DBC VAL_ enum tables (raw value -> name). A raw
+// route preserves the raw value, so a differing table would silently change the
+// signal's MEANING (raw 1 = "Drive" on one bus, "Reverse" on the other).
+fn val_tables_equal(a map[u64]string, b map[u64]string) bool {
+	if a.len != b.len {
+		return false
+	}
+	for k, v in a {
+		if (b[k] or { return false }) != v {
+			return false
+		}
+	}
+	return true
 }
 
 // dbc_cycle_of returns the GenMsgCycleTime (ms) of the message whose snake-name is
