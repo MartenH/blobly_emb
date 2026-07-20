@@ -768,22 +768,50 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 					iface2 := (bc2.as_map()['interface'] or { toml.Any('') }).string()
 					mut octs := 0
 					mut digits := 0
+					mut oval := 0
+					mut osum := 0
 					mut bad := iface2 == ''
 					for ch2 in iface2 {
 						if ch2 == `.` {
-							if digits == 0 {
+							if digits == 0 || oval > 255 {
 								bad = true
 							}
+							osum += oval
 							octs++
 							digits = 0
+							oval = 0
 						} else if ch2 >= `0` && ch2 <= `9` {
+							oval = oval * 10 + int(ch2 - `0`)
 							digits++
 						} else {
 							bad = true
 						}
 					}
-					if bad || octs != 3 || digits == 0 {
-						errs << 'eth bus "${eth}" interface "${iface2}" is not a dotted-quad IPv4 address — the target NetX backend binds a numeric address only (a bad one would park the eth thread forever at boot)'
+					osum += oval
+					// each octet 0..255, and 0.0.0.0 is not a bindable endpoint —
+					// the NetX backend refuses both, so refuse them at build time
+					if bad || octs != 3 || digits == 0 || oval > 255 || osum == 0 {
+						errs << 'eth bus "${eth}" interface "${iface2}" is not a bindable dotted-quad IPv4 address (each octet 0..255, not 0.0.0.0) — the target NetX backend binds a numeric address only (a bad one would park the eth thread forever at boot)'
+					}
+					// the eth thread is created inside THIS image on the local
+					// partition's core — a different [bus].core would claim an
+					// affinity nothing implements (and the manifest would lie)
+					bcore := int((bc2.as_map()['core'] or { toml.Any(0) }).int())
+					for p2 in toml_arr(doc, 'partition') {
+						pm2 := p2.as_map()
+						if 'image' in pm2 {
+							continue
+						}
+						if ev3 := pm2['external'] {
+							if ev3 is bool && ev3 {
+								continue
+							}
+						}
+						pcore := int((pm2['core'] or { toml.Any(0) }).int())
+						if pcore != bcore {
+							errs << 'eth bus "${eth}" core ${bcore} differs from local partition "${str_of(pm2,
+								'name')}" core ${pcore} — the eth thread runs inside this image on the partition\'s core; no cross-core eth handoff exists (docs/someip.md)'
+						}
 					}
 				}
 			}
