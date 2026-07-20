@@ -1,0 +1,51 @@
+# h735 (STM32H735G-DK) — AUTHORED INTERNALS ONLY. The body bus, the BtnPressed rx,
+# and [nm] are generated from ../../system.toml. Here: the LOCAL lamp LED and the
+# RemoteLamp FB that mirrors the received button onto it (io never goes bus-to-pin
+# — the FB is the middleman). Telemetry beacons on 0x7E8 to stay off the h755's
+# 0x7E0 on the shared bus.
+# NOTE: no inline comments inside [[...]] tables (vlang/v#27684).
+
+[io]
+core = 0
+
+[[io.gpio]]
+name      = "LedRemote"
+pin       = "PC3"
+period_ms = 10
+init      = false
+active_low = true
+
+[[signal]]
+name = "LedRemote"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+
+[[partition]]
+name    = "app"
+core    = 0
+trusted = true
+
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+[[fb]]
+name   = "RemoteLamp"
+thread = "app_main"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["BtnPressed"]
+  writes    = ["LedRemote"] # trailing comment terminates the nested block (vlang/v#27684)
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E8
+period_ms = 1000
+
+[target]
+kind    = "threadx"
+tick_ms = 1

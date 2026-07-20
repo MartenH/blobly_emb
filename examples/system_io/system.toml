@@ -1,0 +1,41 @@
+# system_io — the two-node IO demo composed from ONE system.toml (docs/multi-node.md
+# P1b, the dissolution). The H755 reads its B1 button and the H735 mirrors it on an
+# LED — the SAME button->lamp behaviour as the hand-written examples/h755_io +
+# examples/h735_io_lamp pair, but the cross-node signal is declared ONCE here and
+# both nodes' ecu.tomls are generated. Each node keeps its LOCAL io (button, LEDs).
+#
+#   make gen-system   # sysgen -> gen-h755.toml / gen-h735.toml
+#   make syscheck     # cross-node checks
+# Bench: H755 + H735 on one CAN; press B1 -> the H735 LED follows.
+
+[bus.body]
+interface = "can0"
+fd        = false
+bitrate   = 500000
+dbc       = "body.dbc"
+nm        = { peers = [0x500, 0x53F], timeout_ms = 300, repeat_ms = 200 }
+
+# the ONE cross-node signal: the button state, H755 -> bus -> H735.
+[[signal]]
+name     = "BtnPressed"
+fields   = { pressed = "u32" }
+producer = "h755"
+bus      = "body"
+frame    = "ButtonState"
+cycle_ms = 100
+
+[[node]]
+name  = "h755"        # NUCLEO-H755ZI-Q (CM7): the button node
+ecu   = "nodes/h755/ecu.toml"
+buses = ["body"]
+nm    = 0x11
+diag  = { req = 0x7A0, rsp = 0x7A8 }
+trace = 1
+
+[[node]]
+name  = "h735"        # STM32H735G-DK: the lamp node
+ecu   = "nodes/h735/ecu.toml"
+buses = ["body"]
+nm    = 0x13
+diag  = { req = 0x7B0, rsp = 0x7B8 }
+trace = 2
