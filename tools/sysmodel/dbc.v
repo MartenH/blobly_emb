@@ -54,6 +54,40 @@ pub fn check_dbc_conformance(s System) []Issue {
 			}
 		}
 	}
+	// every node the DBC names — a BO_ transmitter or an SG_ receiver — must be
+	// declared in that DBC's own BU_ roster. candb parses BU_ into db.nodes but
+	// nothing else consumes it, so a node named nowhere in BU_ (a dangling
+	// reference — an invalid DBC) slips through: the producer↔sender check below
+	// compares the sender to system.toml, so a node renamed ONLY in BU_ leaves the
+	// sender matching the producer and passes; a receiver isn't cross-checked at
+	// all. This catches a typo'd or renamed node roster at its source.
+	for bus in s.buses {
+		if bus.name !in loaded {
+			continue
+		}
+		db := dbs[bus.name]
+		for msg in db.messages {
+			if msg.sender != '' && !msg.sender.starts_with('Vector__')
+				&& msg.sender !in db.nodes {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'bus "${bus.name}": DBC frame "${msg.name}" is transmitted by "${msg.sender}" but that node is not in the DBC BU_ list [${db.nodes.join(', ')}]'
+				}
+			}
+			for sig in msg.signals {
+				for rx in sig.receivers {
+					if rx != '' && !rx.starts_with('Vector__') && rx !in db.nodes {
+						issues << Issue{
+							severity: .error
+							req:      'REQ-TOPO-003'
+							msg:      'bus "${bus.name}": DBC signal "${sig.name}" in frame "${msg.name}" is received by "${rx}" but that node is not in the DBC BU_ list [${db.nodes.join(', ')}]'
+						}
+					}
+				}
+			}
+		}
+	}
 	// application frame ids must not fall in the NM peer range: loom2v arms the
 	// whole peers range as the NM receiver, so a BO_ inside it is consumed as an
 	// NM frame, and one at peers.lo + node collides with that node's alive tx.

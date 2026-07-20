@@ -12,4 +12,8 @@ pub mut:
 	bench_load sig.BenchLoad
 	// signal "BenchTicks" — ch, transport double, app -> eth0
 	bench_ticks sig.BenchTicks
+	// signal "EventVal" — ch, transport double, app -> eth0
+	event_val sig.EventVal
+	// signal "MixedVal" — ch, transport double, app -> eth0
+	mixed_val sig.MixedVal
 }

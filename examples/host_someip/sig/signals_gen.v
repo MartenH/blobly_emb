@@ -11,3 +11,13 @@ pub mut:
 	wraps u16
 	ticks u32
 }
+
+pub struct EventVal {
+pub mut:
+	level u8
+}
+
+pub struct MixedVal {
+pub mut:
+	setpoint u16
+}
