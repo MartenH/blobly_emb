@@ -7,8 +7,8 @@ import app
 import loom
 import osal
 import comm.com
-import driver.eth
 import comm.someip
+import driver.eth
 import comm.e2e
 
 struct Partition_app_state {

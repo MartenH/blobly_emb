@@ -1262,9 +1262,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		}
 		mut tx_bus_fd := false
 		mut tx_bus_idx := '0'
-		if m.target.threadx && !(m.io_points.len > 0 && m.buses.len == 0) {
+		if m.target.threadx && !(m.io_points.len > 0 && m.buses.len == 0) && !eth_only_img(m) {
 			// (the bus-index derivation is skipped entirely for a bus-less
-			// [[io.gpio]]-only node — its app entry is channel-free, emb#150 r4)
+			// [[io.gpio]]-only node and an eth-only node — both app entries are
+			// channel-free; the eth thread opens a socket, not an FDCAN index)
 			if bc := doc.value('bus').as_map()[m.telem.bus] {
 				tx_bus_fd = (bc.as_map()['fd'] or { toml.Any(false) }).bool()
 			}
@@ -1378,6 +1379,18 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << 'fn C.ioc_pub(int, u32, u32)'
 				glue << 'fn C.ioc_get(int, &u32, &u32)'
 			}
+			if m.eth_frames.len > 0 {
+				// the NetX eth seam (driver/eth/eth_netx.c) + the byte IOC pool
+				// (glue): struct-bearing eth signals cross threads through
+				// size-proportional arenas (boards/common/ioc.h)
+				glue << 'fn C.blob_eth_open(&char, u16) int'
+				glue << 'fn C.blob_eth_send(int, &u8, u16, &u8, int) int'
+				glue << 'fn C.blob_eth_recv(int, &u8, &u16, &u8, int) int'
+				glue << 'fn C.iocb_cfg(int, u16)'
+				glue << 'fn C.iocb_pub(int, voidptr)'
+				glue << 'fn C.iocb_get(int, voidptr)'
+				glue << 'fn C.iocb_get_ever(int, voidptr) int'
+			}
 			if m.io_points.len > 0 {
 				// io thread plumbing: created AUTO_START OFF + resumed after the boot publish
 				// (REQ-IO-009). ioc_get_ever is the outputs' freshness gate — 1 once the cell
@@ -1422,6 +1435,14 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// host cansend is observable. The rx CONSUMER of the lean cut (comm-thread-local).
 				glue << '\tg_rx_count u32'
 				glue << '\tg_rx_last  u32'
+			}
+			if m.eth_frames.len > 0 {
+				glue << '\tg_eth_tcb   [32]u64  // the SOME/IP eth comm thread (docs/someip.md)'
+				glue << '\tg_eth_stack [4096]u8 // someip codec + TxState/E2E frames: comm-thread-class depth'
+				// drop/ok counters as exported globals: SWD-observable (the
+				// semihosting-never rule) — the host bridge prints, silicon counts
+				glue << '\tg_eth_rx_ok u32'
+				glue << '\tg_eth_rx_drops u32'
 			}
 			if m.io_points.len > 0 {
 				glue << '\tg_io_tcb   [32]u64  // the platform io thread (docs/io.md)'
@@ -1498,9 +1519,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << ''
 			}
 		}
-		if !multi && (comm_thread_on || m.buses.len == 0) {
-			// The FB thread stays OFF CAN: with a comm thread it owns the bus, and a
-			// bus-less [[io.gpio]]-only node has no channel at all (emb#150 r4).
+		if !multi && (comm_thread_on || m.buses.len == 0 || eth_only_img(m)) {
+			// The FB thread stays OFF CAN: with a comm thread it owns the bus, a
+			// bus-less [[io.gpio]]-only node has no channel at all (emb#150 r4),
+			// and an eth-only node's bus is the eth thread's socket, not a channel.
 			// run() just dispatches the FBs and publishes load to the scratch cell.
 			glue << 'pub fn run() {'
 		} else if !multi {
@@ -1850,6 +1872,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				if m.io_points.len > 0 {
 					glue << emit_io_target_create(comm_prio + 1)
 				}
+				glue << emit_eth_target_create(m, comm_prio)
 				if m.trace.on {
 					// Deterministic trace thread ids (manifest order): comm = 1, then the app
 					// threads by priority, then the io thread; the ONLY first-sight id left is
@@ -1888,10 +1911,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					}
 				} else {
 					glue << 'fn ${part}_thread_entry(input u32) {'
-					if m.buses.len == 0 {
-						// an io-only node (no [bus] at all): run() is channel-free —
-						// emitting a can.Channel here would reference an import the
-						// header emitter correctly skipped (codex on emb#150 r4)
+					if m.buses.len == 0 || eth_only_img(m) {
+						// an io-only node (no [bus] at all) or an eth-only node:
+						// run() is channel-free — emitting a can.Channel here would
+						// reference an import the header emitter correctly skipped
 						glue << '\trun()'
 					} else {
 						glue << '\tmut ch := can.Channel{}'
@@ -1919,6 +1942,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				if m.io_points.len > 0 {
 					glue << emit_io_target_create(min_prio - 1)
 				}
+				glue << emit_eth_target_create(m, min_prio - 1)
 				if m.trace.on {
 					// Deterministic ids in MANIFEST order (app threads, then io) — without
 					// explicit binds the io thread, running at min FB - 1, is first-sighted
@@ -1946,6 +1970,17 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << '\tC.ioc_pool_init() // init the cross-thread signal IOC cells before any thread runs'
 			}
 			glue << nvm_boot_lines(m, ioc_idx)
+			if m.eth_frames.len > 0 {
+				// byte IOC channels for the eth signals, each arena sized to its
+				// SIGNAL's in-memory struct (the ioc.h size-proportional rule) —
+				// configured before any thread runs, like ioc_pool_init above
+				mut bnames := eth_iocb_idx(m).keys()
+				bnames.sort()
+				for bn in bnames {
+					glue << '\tmut cfg_${snake(bn)} := sig.${bn}{}'
+					glue << '\tC.iocb_cfg(${eth_iocb_idx(m)[bn]}, u16(sizeof(cfg_${snake(bn)})))'
+				}
+			}
 			glue << '\tC._tx_initialize_kernel_enter()'
 			glue << '}'
 		}
@@ -2240,6 +2275,10 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 							glue << '\tC.ioc_get(${idx}, &${snake(rn)}_a, &${snake(rn)}_b)'
 							glue << '\t${asn}'
 						}
+					} else if bidx := eth_iocb_idx(m)[rn] {
+						// eth rx signal on the ThreadX target: the eth thread published
+						// the unpacked struct into its byte IOC channel (docs/someip.md)
+						glue << '\tC.iocb_get(${bidx}, &inp.${snake(rn)})'
 					} else {
 						if image_part != '' {
 							panic('loom2v: satellite partition "${part}" fb "${cname}" reads signal ' +
@@ -2287,6 +2326,10 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 							'u32(outp.${snake(wn)}.${snake(si.val_field)})'
 						}
 						glue << '\tC.ioc_pub(${idx}, ${wexpr}, u32(0))'
+					} else if bidx := eth_iocb_idx(m)[wn] {
+						// eth tx signal on the ThreadX target: publish the struct into
+						// its byte IOC channel; the eth thread packs it onto the wire
+						glue << '\tC.iocb_pub(${bidx}, &outp.${snake(wn)})'
 					} else {
 						if image_part != '' {
 							panic('loom2v: satellite partition "${part}" fb "${cname}" writes signal ' +
@@ -2434,11 +2477,14 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 	if (m.has_can_ext && !comm_thread_on) || has_eth_tx {
 		glue << 'import comm.com' // per-PDU TX modes + RX deadline; eth codec PDU bound (max_pdu)
 	}
-	// the host eth comm thread: the UDP seam + the SOME/IP header codec —
-	// either direction spawns it (rx-only images drain the same socket)
+	// the eth comm thread's codec: pure V, both sides of the silicon line; the
+	// driver.eth module (whose #flag compiles the POSIX backend) is host-only —
+	// the target reaches the NetX seam through raw FFI (eth_netx.c)
+	if m.eth_frames.len > 0 && (!m.target.on || m.target.threadx) {
+		glue << 'import comm.someip' // the SOME/IP header codec
+	}
 	if m.eth_frames.len > 0 && !m.target.on {
 		glue << 'import driver.eth' // the eth UDP seam (docs/someip.md)
-		glue << 'import comm.someip' // the SOME/IP header codec
 	}
 	mut eth_e2e := false
 	for fr in m.eth_frames {
@@ -2447,7 +2493,7 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 			eth_e2e = true
 		}
 	}
-	if has_e2e || (eth_e2e && !m.target.on) {
+	if has_e2e || eth_e2e {
 		glue << 'import comm.e2e' // end-to-end protection (CRC + alive counter)
 	}
 	if has_secoc {
@@ -2634,14 +2680,16 @@ fn main() {
 			panic('loom2v: [target] kind="threadx": [[io.gpio]]-only node with no [bus] cannot ' +
 				'enable [telemetry] — there is nothing to transmit CpuLoad on (drop telemetry or add a bus)')
 		}
-		if (!m.telem.on || m.telem.bus == '') && !io_only_busless {
-			// exception: a telemetry-OFF io-only node (points, no [bus] at all) is a
-			// promised shape (docs/io.md: an output-only ECU) — its app entry is
-			// emitted channel-free, so nothing here needs the CAN channel (emb#150 r4)
+		if (!m.telem.on || m.telem.bus == '') && !io_only_busless && !eth_only_img(m) {
+			// exceptions: a telemetry-OFF io-only node (docs/io.md: an output-only
+			// ECU) and an eth-ONLY node (docs/someip.md target rung: the eth comm
+			// thread owns its socket, no CAN channel exists) — both app entries are
+			// emitted channel-free, so nothing here needs the CAN channel
 			panic('loom2v: [target] kind="threadx" needs [telemetry] enabled with a bus — the app ' +
-				'thread opens it for the CAN channel (exception: a telemetry-off [[io.gpio]]-only node)')
+				'thread opens it for the CAN channel (exceptions: a telemetry-off [[io.gpio]]-only ' +
+				'node, an eth-only node)')
 		}
-		if !bus_exists && !io_only_busless {
+		if !bus_exists && !io_only_busless && !eth_only_img(m) {
 			panic('loom2v: [target] kind="threadx": [telemetry].bus = "${m.telem.bus}" has no matching ' +
 				'[bus.${m.telem.bus}]')
 		}
@@ -2653,7 +2701,16 @@ fn main() {
 	// bridge (external signals / ISO-TP / m.routes) or multiple cores need the comm-thread model,
 	// not generated yet.
 	single_part := if m.part.by_part.keys().len == 1 { m.part.by_part.keys()[0] } else { '' }
-	has_bridge := m.has_external || m.isotp_conns.len > 0 || has_routes
+	// eth-endpoint signals ride the eth comm thread (their own bus owner,
+	// docs/someip.md target rung) — they must not conjure the CAN comm thread
+	mut has_can_sig := false
+	for sn in m.sig_names {
+		s := m.sig_of[sn] or { continue }
+		if s.external && s.bus != m.eth {
+			has_can_sig = true
+		}
+	}
+	has_bridge := has_can_sig || m.isotp_conns.len > 0 || has_routes
 	// ThreadX COM bridge (phase 6b-2): the target grows a bus-owning comm thread that services
 	// rx (woken by the FDCAN Rx ISR) while the FB thread stays off CAN and publishes load via a
 	// scratch cell. The comm thread is the generic bus owner — telemetry and the trace ring are
@@ -2946,6 +3003,10 @@ fn main() {
 	// --- eth comm thread: SOME/IP event tx over UDP (host) ---
 	if !m.target.on {
 		glue << emit_eth_bridge(m)
+	}
+	// --- eth comm thread: SOME/IP over the NetX seam (ThreadX target) ---
+	if m.target.threadx {
+		glue << emit_eth_thread_target(m, doc)
 	}
 	mut bus_names := bnames.clone()
 

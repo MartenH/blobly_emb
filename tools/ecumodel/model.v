@@ -751,12 +751,15 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			errs << 'eth frame "${fname}" derived payload is ${size} bytes (E2E trailer included) — the shared PDU bound is 64 (comm.com max_pdu); a wider eth PDU is its own rung, not a silent relaxation'
 		}
 	}
-	// [target] images: the ThreadX/bare-metal comm owner is CAN-only — an eth
-	// signal frame would fall into its DBC-trivial validation and FDCAN paths.
-	// Same family as the target-telemetry gate: reject until the NetX rung.
+	// [target] images: the generated eth thread is a ThreadX thread over the
+	// NetX seam (docs/someip.md target rung) — the bare-metal superloop has no
+	// threads to run it on, so only kind = "threadx" carries eth frames.
 	if n_eth_frames > 0 {
-		if _ := doc.value_opt('target') {
-			errs << 'eth [[frame]]s with a [target] image — the target comm owner is CAN-only until the NetX rung (docs/someip.md); eth frames are host-sim for now'
+		if tv := doc.value_opt('target') {
+			tm := tv.as_map()
+			if (tm['kind'] or { toml.Any('') }).string() != 'threadx' {
+				errs << 'eth [[frame]]s need [target] kind = "threadx" — the eth comm thread is a ThreadX thread over the NetX seam; the bare-metal superloop has no thread to run it on (docs/someip.md)'
+			}
 		}
 	}
 
