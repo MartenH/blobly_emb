@@ -2722,6 +2722,15 @@ fn main() {
 		glue << emit_run_host(m, telem_iface, bus_names, bus_dests, extra_dest_buses)
 	}
 
+	// The `module gen` header emits `import sig` whenever the config COULD reference
+	// sig.* (local cells / bus bridge / io), but some shapes don't actually — the
+	// ThreadX io+bridge path hands raw u32 through the IOC, never a sig.* struct. Now
+	// that the whole body exists, drop the import if nothing uses it: no unused-import
+	// warning, in any config (the sig types still live in ports_gen.v).
+	if !glue.any(it.contains('sig.')) {
+		glue = glue.filter(it.trim_space() != 'import sig')
+	}
+
 	os.write_file(args[3], signals.join('\n') + '\n') or { panic('write ${args[3]}: ${err}') }
 	os.write_file(args[4], ports.join('\n') + '\n') or { panic('write ${args[4]}: ${err}') }
 	os.write_file(args[5], glue.join('\n') + '\n') or { panic('write ${args[5]}: ${err}') }
