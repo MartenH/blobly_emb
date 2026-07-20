@@ -315,24 +315,78 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 			routes[i].from_dlc = dbc_dlc_of(db, snake(r.from_frame)) or { 8 }
 			if r.signal != '' {
 				// SIGNAL route: resolve the DESTINATION frame's id + dlc (a distinct
-				// frame from the source); both frames' codec fns live in dbc_gen.v.
+				// frame from the source; NOTE: both frames must be in this ONE DBC —
+				// a sysgen gateway with per-bus DBCs is P2c, the panics below fire on
+				// the missing frame). Both frames' codec fns live in dbc_gen.v.
 				if r.to_frame == '' {
 					panic('route: signal "${r.signal}" needs a destination frame (to = { bus = .., frame = .. })')
 				}
 				routes[i].to_id = dbc_id_of(db, snake(r.to_frame)) or {
-					panic('route: destination frame "${r.to_frame}" is not a message in ${os.file_name(dbc)}')
+					panic('route: destination frame "${r.to_frame}" is not a message in ${os.file_name(dbc)} (per-bus DBCs on a gateway are P2c)')
 				}
 				routes[i].to_dlc = dbc_dlc_of(db, snake(r.to_frame)) or { 8 }
-				// the routed signal must exist as an SG_ in BOTH frames (decode + re-encode).
-				dbc_message_of(db, r.signal) or {
-					panic('route: signal "${r.signal}" is not defined in ${os.file_name(dbc)}')
+				// the routed signal must be an SG_ in BOTH frames (decode + re-encode).
+				src_sg := dbc_sig_in_frame(db, snake(r.from_frame), r.signal) or {
+					panic('route: signal "${r.signal}" is not in source frame "${r.from_frame}" in ${os.file_name(dbc)}')
+				}
+				dst_sg := dbc_sig_in_frame(db, snake(r.to_frame), r.signal) or {
+					panic('route: signal "${r.signal}" is not in destination frame "${r.to_frame}" in ${os.file_name(dbc)}')
+				}
+				// GUARDS — a STANDALONE ecu.toml route is gated only by ecucheck, NOT
+				// sysmodel's check_route_dbc, so loom2v must reject the shapes the
+				// _phys/_set codec cannot faithfully translate (the dissolution rejects
+				// these at syscheck; these are the same rules on the standalone path):
+				// - multiplexed: the codec ignores the selector.
+				if src_sg.is_multiplexed || src_sg.is_multiplexor || dst_sg.is_multiplexed
+					|| dst_sg.is_multiplexor {
+					panic('route: signal "${r.signal}" is multiplexed — the route codec has no multiplexor support')
+				}
+				// - wide integer: decode goes through f64 (exact only to 52 bits).
+				if src_sg.length > 52 || dst_sg.length > 52 {
+					panic('route: signal "${r.signal}" is >52 bits — the route decodes through f64, which is exact only to 52-bit integers')
+				}
+				// - extended-id destination: can.Frame carries no ext-id format flag.
+				if dbc_ext_of(db, snake(r.to_frame)) or { false } {
+					panic('route: destination frame "${r.to_frame}" is an extended (29-bit) id — the route forwarder emits standard frames only')
 				}
 			} else if routes[i].to_id == 0 {
 				routes[i].to_id = id // raw route: keep the source id unless remapped
 			}
 		}
+		// P2a.2 sends the destination frame ON RECEIPT (no composition buffer), so two
+		// routes into ONE dest frame would each send a half-populated PDU. Reject that —
+		// composing several routed signals into one frame needs the destination frame's
+		// own COM producer (a routed value wired as its input), the next step.
+		mut dest_seen := map[string]int{}
+		for r in routes {
+			if r.signal == '' {
+				continue
+			}
+			key := '${r.to_bus}/${r.to_frame}'
+			dest_seen[key]++
+			if dest_seen[key] > 1 {
+				panic('route: destination frame "${r.to_frame}" on bus "${r.to_bus}" is targeted by more than one signal route — composing several signals into one frame needs the dest-producer model (P2a.2 sends on receipt)')
+			}
+		}
 	}
 	return routes
+}
+
+// dbc_sig_in_frame returns the SG_ named `signame` in the message whose snake-name
+// is `frame_key`, or none. Used to check a routed signal's layout in a SPECIFIC
+// frame (a signal route decodes from one frame and re-encodes into another).
+fn dbc_sig_in_frame(db candb.Database, frame_key string, signame string) ?candb.Signal {
+	for m in db.messages {
+		if snake(m.name) != frame_key {
+			continue
+		}
+		for s in m.signals {
+			if s.name == signame {
+				return s
+			}
+		}
+	}
+	return none
 }
 
 // parse_isotp parses [[isotp]] diagnostic connections.
