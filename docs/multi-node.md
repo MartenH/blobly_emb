@@ -463,10 +463,19 @@ Cross-bus *sleep bridging* (wake on A wakes B) remains a later decision on top.
 
 ### Sub-phasing (signal route first — it is ordinary COM)
 
-1. **P2a — signal route, host sim (2× vcan).** The common path: a `compute`
-   signal reaches the H723's frame via the gateway's decode → dest-signal →
-   dest-COM composition; drop the route → the reachability check fails.
-   `REQ-TOPO-008`, `-011`, `-012`.
+1. **P2a — signal route.** The common path: a `compute` signal reaches the H723's
+   frame via the gateway's decode → dest-signal → dest-COM composition; drop the
+   route → the reachability check fails. `REQ-TOPO-008`, `-011`, `-012`.
+   - **P2a.1 — generation + validation (DONE).** [`examples/system_gw`](../examples/system_gw)
+     composes two buses + a signal route; `sysgen` lowers a multi-bus gateway
+     (one `[bus.*]` per bus with its DBC + the resolved `[[route]]` with concrete
+     src/dst frames); `syscheck` makes reachability trust a signal route and
+     enforces route-cycle (`-011`) + routed-cell single-writer (`-012`). ecucheck
+     learned the per-bus `dbc` + signal-route schema. The loom2v **target** gate is
+     deferred for gateway systems (that is P2c).
+   - **P2a.2 — runtime forwarder (next).** loom2v emits the decode → routed-signal
+     → destination-frame COM producer (validity/freshness + the dest frame's TX
+     mode), proven on 2× vcan.
 2. **P2b — frame route.** Recv-on-A → send-on-B in the comm loop (with tx-ready
    gating), the full-contract comparison (wire + signal semantics + protection),
    format flags, firewall allow-list. `REQ-TOPO-007`, `-009`, `-010`.

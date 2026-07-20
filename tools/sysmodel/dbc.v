@@ -9,6 +9,198 @@ module sysmodel
 import os
 import tools.candb
 
+// check_route_dbc validates a SIGNAL route against the DESTINATION bus's DBC —
+// check_dbc_conformance only checks a signal against its OWN (source) bus, so a
+// route whose destination SG_ has an incompatible width/signedness, or whose
+// destination frame is transmitted by another node, would otherwise slip through
+// (the gateway's loom2v gate is deferred). The re-encode must match the dest wire
+// contract and the gateway must own the destination frame (REQ-TOPO-003/-012).
+pub fn check_route_dbc(s System) []Issue {
+	mut issues := []Issue{}
+	for r in s.routes {
+		if r.signal == '' || r.to == '' {
+			continue
+		}
+		to := s.bus_by_name(r.to) or { continue }
+		sig := s.signal_by_name(r.signal) or { continue }
+		// a routed signal must have a destination DBC to re-encode into. Reject a
+		// dest bus with no `dbc` HERE so syscheck and sysgen fail on the same contract
+		// (sysgen's frame_of_signal would otherwise fail only mid-generation).
+		if to.dbc == '' {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": destination bus "${r.to}" has no `dbc` to re-encode signal "${r.signal}" into'
+			}
+			continue
+		}
+		path := if os.is_abs_path(to.dbc) { to.dbc } else { os.join_path(s.dir, to.dbc) }
+		db := candb.load_dbc_file(path) or {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": cannot load destination DBC "${to.dbc}" for signal "${r.signal}": ${err}'
+			}
+			continue
+		}
+		mut dsg := ?candb.Signal(none)
+		mut dmsg := ?candb.Message(none)
+		mut sender := ''
+		mut nmatch := 0
+		for m in db.messages {
+			for sg in m.signals {
+				if sg.name == r.signal {
+					dsg = sg
+					dmsg = m
+					sender = m.sender
+					nmatch++
+					break
+				}
+			}
+		}
+		// ambiguous (>1 frame): report HERE too — sysgen's frame_of_signal rejects it,
+		// so the validation gate must too (else syscheck says OK, sysgen then fails).
+		if nmatch > 1 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": signal "${r.signal}" appears in ${nmatch} frames in destination DBC "${to.dbc}" (bus "${r.to}") — the destination frame is ambiguous'
+			}
+			continue
+		}
+		// signal-not-in-dest-DBC: report HERE too, so syscheck rejects the same
+		// contract sysgen's frame_of_signal does (not only mid-generation).
+		ds := dsg or {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": signal "${r.signal}" is not defined in destination DBC "${to.dbc}" (bus "${r.to}")'
+			}
+			continue
+		}
+		dm := dmsg or { continue }
+		// a multiplexed destination SG_ needs selector semantics the dissolution codec
+		// has no support for (same limit as the source-side check) — the re-encode
+		// would write an inactive/overlapping branch.
+		if ds.is_multiplexor || ds.is_multiplexed {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": destination DBC SG_ "${r.signal}" (bus "${r.to}") is multiplexed — the dissolution codec has no multiplexor support'
+			}
+		}
+		// the destination frame is re-encoded + transmitted by the GATEWAY.
+		if sender != '' && !sender.starts_with('Vector__') && sender != r.gateway {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-012'
+				msg:      'route on "${r.gateway}": destination frame for "${r.signal}" on bus "${r.to}" is transmitted by "${sender}" in the DBC, not the gateway'
+			}
+		}
+		// the re-encode must fit the destination SG_ width + signedness.
+		bits := field_bits(sig.fields)
+		if bits != 0 && ds.length != bits {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": signal "${r.signal}" fields are ${bits} bits but destination DBC SG_ is ${ds.length} bits (bus "${r.to}")'
+			}
+		}
+		// the dissolution codec re-encodes trivial LITTLE-ENDIAN signals; a big-endian
+		// (Motorola) destination SG_ has a sawtooth bit layout the generated encoder
+		// does not produce, so reject it rather than approximate its span.
+		if ds.byte_order != .little_endian {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": destination DBC SG_ "${r.signal}" (bus "${r.to}") is big-endian (Motorola) — the dissolution codec re-encodes little-endian signals only'
+			}
+		} else {
+			// its OCCUPIED bit range must fit the destination frame's payload — not just
+			// its width. A little-endian SG_ occupies [start_bit, start_bit+length); one
+			// starting near the end (e.g. 56|16 in an 8-byte frame) overflows the DLC and
+			// is truncated on the wire even though its width alone fits.
+			payload_bits := dm.dlc * 8
+			occupied := ds.start_bit + ds.length
+			if occupied > payload_bits {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'route on "${r.gateway}": signal "${r.signal}" occupies up to bit ${occupied} but destination frame "${dm.name}" is only ${dm.dlc} bytes (${payload_bits} bits) on bus "${r.to}"'
+				}
+			}
+		}
+		if want := field_signed(sig.fields) {
+			if want != ds.is_signed {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'route on "${r.gateway}": signal "${r.signal}" is ${if want {
+						'signed'
+					} else {
+						'unsigned'
+					}} but destination DBC SG_ is ${if ds.is_signed {
+						'signed'
+					} else {
+						'unsigned'
+					}} (bus "${r.to}")'
+				}
+			}
+		}
+		// the codec routes RAW values — a destination SG_ with a non-trivial
+		// factor/offset would change the physical value (raw 10000 at factor 0.1 is a
+		// 10x different quantity, and encode() masks any overflow to the SG_ width).
+		if ds.factor != 1.0 || ds.offset != 0.0 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": destination DBC SG_ "${r.signal}" (bus "${r.to}") has factor/offset ${ds.factor}/${ds.offset} — the dissolution codec routes raw values (factor 1, offset 0)'
+			}
+		}
+		// the destination FRAME must be sendable on the destination bus: a classic
+		// (non-FD) bus caps the DLC at 8, and an extended-id frame has no format flag
+		// in can.Frame (it would ship as a standard id).
+		if !to.fd && dm.dlc > 8 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": destination frame "${dm.name}" is ${dm.dlc} bytes but bus "${r.to}" is classic (fd = false, DLC <= 8)'
+			}
+		}
+		if dm.ext {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": destination frame "${dm.name}" is an extended (29-bit) id — the routed forwarder has no extended-id format flag (P2)'
+			}
+		}
+		// the WHOLE destination frame is composed by the gateway's COM producer. A P2a
+		// gateway can't produce its own signals, so every OTHER SG_ in the frame must
+		// be filled by another route from the SAME gateway — else the producer emits a
+		// partially-populated PDU.
+		for sg in dm.signals {
+			if sg.name == r.signal {
+				continue
+			}
+			mut covered := false
+			for r2 in s.routes {
+				if r2.gateway == r.gateway && r2.to == r.to && r2.signal == sg.name {
+					covered = true
+					break
+				}
+			}
+			if !covered {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'route on "${r.gateway}": destination frame "${dm.name}" (bus "${r.to}") also carries SG_ "${sg.name}", which no route from "${r.gateway}" fills — the frame would be partially populated'
+				}
+			}
+		}
+	}
+	return issues
+}
+
 // check_dbc_conformance loads each bus's DBC once and checks every system signal
 // against it. A bus with no `dbc` is skipped (nothing to conform to).
 pub fn check_dbc_conformance(s System) []Issue {

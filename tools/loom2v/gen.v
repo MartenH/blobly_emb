@@ -283,6 +283,13 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 	mut routes := []Route{}
 	for r in ecumodel.toml_arr(doc, 'route') {
 		m := r.as_map()
+		// a SIGNAL route (top-level `signal`) decodes on the source bus and re-encodes
+		// into a DIFFERENT destination frame — that lowering is P2a.2 and NOT built
+		// here. parse_routes would otherwise ignore `signal`/`to.frame` and forward the
+		// SOURCE frame raw under the source id: silently wrong wire behavior. Reject it.
+		if (m['signal'] or { toml.Any('') }).string() != '' {
+			panic('loom2v: [[route]] signal="${(m['signal'] or { toml.Any('') }).string()}" is a SIGNAL route (decode + re-encode) — not lowered yet (P2a.2); loom2v only forwards raw frames today')
+		}
 		fm := (m['from'] or { toml.Any('') }).as_map()
 		tm := (m['to'] or { toml.Any('') }).as_map()
 		fb := (fm['bus'] or { toml.Any('') }).string()
