@@ -893,8 +893,15 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			dk := '${snake(r.to_bus)}_${snake(r.to_frame)}'
 			tof := snake(r.to_frame)
 			mode := m.frames.tx_mode[tof] or { 'cyclic' }
-			cyc := m.frames.tx_cycle_us[tof] or {
-				if r.to_cyc > 0 { r.to_cyc * 1000 } else { 100000 }
+			// an authored [[frame]].tx with no cycle_ms inserts 0; treat 0 as absent and
+			// fall back to the DBC cadence (else 100 ms) so should_send never sees 0.
+			authored_us := m.frames.tx_cycle_us[tof] or { 0 }
+			cyc := if authored_us > 0 {
+				authored_us
+			} else if r.to_cyc > 0 {
+				r.to_cyc * 1000
+			} else {
+				100000
 			}
 			glue << '\tst.rt_tx_${dk} = com.TxState{'
 			glue << '\t\tmode: com.TxMode.${mode}'

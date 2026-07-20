@@ -18,6 +18,9 @@ import tools.candb
 // route_phys_range returns a DBC signal's [min, max] physical value (raw range
 // scaled by factor/offset), for the route source-vs-dest range-containment check.
 fn route_phys_range(sg candb.Signal) (f64, f64) {
+	if sg.maximum > sg.minimum {
+		return sg.minimum, sg.maximum // the authored DBC [min|max] contract
+	}
 	n := sg.length
 	if sg.is_signed {
 		half := f64(u64(1) << u64(n - 1))
@@ -33,15 +36,31 @@ fn route_phys_range(sg candb.Signal) (f64, f64) {
 
 // route_val_phys_equal compares two DBC VAL_ enum tables by PHYSICAL value (a route
 // transcodes factor/offset, so the same enum can have different raw keys).
+fn route_sig_key_phys(s candb.Signal, raw u64) f64 {
+	mut r := f64(raw)
+	if s.is_signed && s.length > 0 && s.length < 64 && raw >= (u64(1) << u64(s.length - 1)) {
+		r = f64(i64(raw) - i64(u64(1) << u64(s.length)))
+	}
+	return r * s.factor + s.offset
+}
+
+fn route_f64_close(x f64, y f64) bool {
+	mut d := x - y
+	if d < 0 {
+		d = -d
+	}
+	return d < 1e-9
+}
+
 fn route_val_phys_equal(a candb.Signal, b candb.Signal) bool {
 	if a.values.len != b.values.len {
 		return false
 	}
 	for ka, va in a.values {
-		pa := f64(ka) * a.factor + a.offset
+		pa := route_sig_key_phys(a, ka)
 		mut found := false
 		for kb, vb in b.values {
-			if vb == va && f64(kb) * b.factor + b.offset == pa {
+			if vb == va && route_f64_close(route_sig_key_phys(b, kb), pa) {
 				found = true
 				break
 			}
