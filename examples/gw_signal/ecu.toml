@@ -1,0 +1,26 @@
+# gw_signal — a TRANSLATING gateway (P2a.2, docs/multi-node.md). A SIGNAL route:
+# decode `Speed` from SrcFrame (0x100) on can0, re-encode it into DstFrame (0x200)
+# on can1. The signal sits at a DIFFERENT bit position in each frame (bit 0 vs bit
+# 8), so a raw byte-forward would corrupt it — only a real decode + re-encode is
+# correct. No FB: the gateway only routes.
+#
+#   make -C examples/gw_signal            # gen + host build
+#   ./bin/app vcan0 vcan1                 # run on two vcans
+
+[import]
+dbc = "bus.dbc"
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0
+
+[bus.can1]
+interface = "vcan1"
+fd        = false
+core      = 0
+
+[[route]]
+signal = "Speed"
+from = { bus = "can0", frame = "SrcFrame" }
+to   = { bus = "can1", frame = "DstFrame" }

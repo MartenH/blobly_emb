@@ -431,6 +431,21 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			glue << '\tmut rx := can.Frame{}'
 			glue << '\tfor st.chan.recv(mut rx) {'
 			for r in my_routes {
+				if r.signal != '' {
+					// SIGNAL route: decode the routed signal from the source frame (its DBC
+					// codec), re-encode it into the DESTINATION frame — a different id + layout
+					// — and send on the destination bus. Both codec fns live in dbc_gen.v.
+					// Require rx.len == source DLC so the decode never reads stale bytes.
+					glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} {'
+					glue << '\t\t\tmut fwd := can.Frame{'
+					glue << '\t\t\t\tid:  u32(0x${r.to_id.hex()})'
+					glue << '\t\t\t\tlen: ${r.to_dlc}'
+					glue << '\t\t\t}'
+					glue << '\t\t\t${snake(r.to_frame)}_${snake(r.signal)}_set(mut fwd.data, ${snake(r.from_frame)}_${snake(r.signal)}_phys(rx.data))'
+					glue << '\t\t\tst.route_${snake(r.to_bus)}.send(fwd)'
+					glue << '\t\t}'
+					continue
+				}
 				// raw-PDU gateway: forward the frame to another bus, unchanged
 				// (optionally remapping the id), without decoding it to signals.
 				glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) {'
