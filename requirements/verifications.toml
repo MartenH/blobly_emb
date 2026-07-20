@@ -328,3 +328,11 @@ context = "h755/IO-GPIO"
 verifies = ["REQ-IO-012", "REQ-IO-013"]
 approved_by = "Marten Hildell — NUCLEO-H755ZI-Q button->LED + heartbeat bench"
 date = "2026-07-19"
+
+[[check]]
+id = "h735-someip-hwtest"
+method = "test"
+context = "h735/target"
+command = "sh -c 'if [ -z \"$BLOB_HWTEST\" ]; then exit 2; fi; exec examples/h735_someip/bench_test.sh --flash'"
+skip_exit = 2 # exit 2 = disabled/no-board/no-probe-host -> pending; 1 = a real FAIL
+verifies = ["REQ-NET-016"]

@@ -18,6 +18,13 @@ import comm.com
 pub const header_len = 16
 pub const max_payload = com.max_pdu // one event = one PDU: the shared 64-byte bound
 
+// max_rpc bounds a method RESPONSE payload — the one place a real payload
+// outgrows a CAN-FD frame (the doc's open-question trigger: shell help/ps
+// run to hundreds of bytes). RESPONSES ONLY: events and requests stay at
+// max_payload, so the whole codec/router path keeps its 64-byte sizing; a
+// response rides one datagram (~1.4 KB available), never segmentation.
+pub const max_rpc = 1024
+
 pub const proto_ver = u8(0x01)
 pub const event_bit = u16(0x8000) // bit 15 of the method/event id: set = event
 
@@ -38,6 +45,11 @@ pub const rc_wrong_proto = u8(0x07)
 pub const rc_wrong_iface = u8(0x08)
 pub const rc_malformed = u8(0x09)
 pub const rc_wrong_type = u8(0x0A)
+
+// deployment-defined return codes (the standard's 0x20..0x5E application
+// range): denied = the access gate refused a state-changing method
+// (REQ-NET-018 — reachability alone grants no mutation).
+pub const rc_denied = u8(0x20)
 
 pub struct Header {
 pub mut:

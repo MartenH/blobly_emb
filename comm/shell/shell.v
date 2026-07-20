@@ -117,17 +117,18 @@ pub fn (mut r Rsp) write_padded(s string, w int) {
 pub type CmdFn = fn (args &u8, args_len int, now u64, mut rsp Rsp)
 
 struct Cmd {
-	name string
-	help string
-	f    CmdFn = unsafe { nil }
+	name   string
+	help   string
+	f      CmdFn = unsafe { nil }
+	mutate bool // state-changing: the eth RPC gate refuses it unless the build allows
 }
 
 pub struct ShellModule {
 mut:
 	out_id u32
 	link   isotp.Link
-	cmds [16]Cmd
-	ncmd int
+	cmds   [16]Cmd
+	ncmd   int
 }
 
 // init prepares the module IN PLACE — the instance usually lives in a __global (its ISO-TP
@@ -146,15 +147,29 @@ pub fn (mut m ShellModule) init(out_id u32) {
 	m.register('clear', 'clear the screen (client-side)', clear_cmd)
 }
 
-// register adds a command (static name/help strings; the table is fixed-size, no alloc).
+// register adds a READ-class command (static name/help strings; the table is
+// fixed-size, no alloc). Read commands observe state and never change it.
 pub fn (mut m ShellModule) register(name string, help string, f CmdFn) {
+	m.register_class(name, help, f, false)
+}
+
+// register_mut adds a STATE-CHANGING command. Over eth these sit behind the
+// build-time access gate (REQ-NET-018): a build without the gate exposes only
+// read-class methods. The CAN shell is not gated — its threat model is
+// physical bus access, the net requirement's scope is the network path.
+pub fn (mut m ShellModule) register_mut(name string, help string, f CmdFn) {
+	m.register_class(name, help, f, true)
+}
+
+fn (mut m ShellModule) register_class(name string, help string, f CmdFn, mutate bool) {
 	if m.ncmd >= m.cmds.len {
 		return
 	}
 	m.cmds[m.ncmd] = Cmd{
-		name: name
-		help: help
-		f:    f
+		name:   name
+		help:   help
+		f:      f
+		mutate: mutate
 	}
 	m.ncmd++
 }
@@ -176,8 +191,28 @@ pub fn (mut m ShellModule) on_in(now u64, f can.Frame) {
 		}
 	}
 	mut rsp := Rsp{}
+	m.dispatch(f.data, int(f.len), now, true, mut rsp)
+	m.link.send(&rsp.buf[0], rsp.len)
+}
+
+// dispatch runs one command LINE into rsp — the transport-free core both
+// wires share: the CAN shell (on_in -> ISO-TP stream) and the eth RPC path
+// (request payload -> one response datagram, docs/someip.md P3). allow_mutate
+// is the access gate (REQ-NET-018): a state-changing command on a gated wire
+// is REFUSED before it runs. Returns false exactly for that refusal, so the
+// eth path answers with the rc_denied error response; every other outcome
+// (incl. unknown command) is a normal response with rsp text.
+pub fn (mut m ShellModule) dispatch(data [64]u8, len int, now u64, allow_mutate bool, mut rsp Rsp) bool {
+	// split the line at the first space: [0..sp) = name, (sp..len) = args
+	mut sp := len
+	for i in 0 .. len {
+		if data[i] == ` ` {
+			sp = i
+			break
+		}
+	}
 	// `help` is intrinsic: it lists the registry, which a plain fn pointer can't reach.
-	if sp == 4 && name_eq('help', f.data, 4) {
+	if sp == 4 && name_eq('help', data, 4) {
 		rsp.write_padded('help', 8)
 		rsp.write('- list commands')
 		rsp.nl()
@@ -187,15 +222,17 @@ pub fn (mut m ShellModule) on_in(now u64, f can.Frame) {
 			rsp.write(m.cmds[i].help)
 			rsp.nl()
 		}
-		m.link.send(&rsp.buf[0], rsp.len)
-		return
+		return true
 	}
 	mut found := false
 	for i in 0 .. m.ncmd {
 		c := m.cmds[i]
-		if c.name.len == sp && name_eq(c.name, f.data, sp) {
-			ai := if sp < int(f.len) { sp + 1 } else { int(f.len) }
-			c.f(unsafe { &f.data[ai] }, int(f.len) - ai, now, mut rsp)
+		if c.name.len == sp && name_eq(c.name, data, sp) {
+			if c.mutate && !allow_mutate {
+				return false // the access gate: refused BEFORE it acts
+			}
+			ai := if sp < len { sp + 1 } else { len }
+			c.f(unsafe { &data[ai] }, len - ai, now, mut rsp)
 			found = true
 			break
 		}
@@ -205,9 +242,9 @@ pub fn (mut m ShellModule) on_in(now u64, f can.Frame) {
 		rsp.nl()
 		// echo what we got, so a mistyped/truncated line is diagnosable
 		rsp.write('got: "')
-		for i in 0 .. int(f.len) {
+		for i in 0 .. len {
 			if rsp.len < max_rsp {
-				rsp.buf[rsp.len] = f.data[i]
+				rsp.buf[rsp.len] = data[i]
 				rsp.len++
 			}
 		}
@@ -218,7 +255,7 @@ pub fn (mut m ShellModule) on_in(now u64, f can.Frame) {
 		rsp.write('ok')
 		rsp.nl()
 	}
-	m.link.send(&rsp.buf[0], rsp.len)
+	return true
 }
 
 fn name_eq(name string, data [64]u8, n int) bool {
@@ -261,7 +298,7 @@ pub fn (mut m ShellModule) produce(now u64, mut f can.Frame) bool {
 // builtins ---------------------------------------------------------------------------------------
 
 fn clear_cmd(args &u8, args_len int, now u64, mut rsp Rsp) {
-	rsp.write('(clearing is the client display\'s job)')
+	rsp.write("(clearing is the client display's job)")
 	rsp.nl()
 }
 
