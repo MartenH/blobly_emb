@@ -21,7 +21,9 @@ fn io_can0_10ms(ctx voidptr) {
 				len: 8
 			}
 			dst_frame_speed_set(mut fwd.data, src_frame_speed_phys(rx.data))
-			st.route_can1.send(fwd)
+			if st.route_can1.tx_ready() {
+				st.route_can1.send(fwd)
+			}
 		}
 	}
 }

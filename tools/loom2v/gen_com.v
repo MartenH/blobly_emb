@@ -442,7 +442,12 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 					glue << '\t\t\t\tlen: ${r.to_dlc}'
 					glue << '\t\t\t}'
 					glue << '\t\t\t${snake(r.to_frame)}_${snake(r.signal)}_set(mut fwd.data, ${snake(r.from_frame)}_${snake(r.signal)}_phys(rx.data))'
-					glue << '\t\t\tst.route_${snake(r.to_bus)}.send(fwd)'
+					// gate on the DESTINATION channel's tx_ready so a full Tx FIFO isn't
+					// pushed into (a cyclic source re-forwards next tick). Retain + retry
+					// per the dest frame's TX mode is the destination-producer step (next).
+					glue << '\t\t\tif st.route_${snake(r.to_bus)}.tx_ready() {'
+					glue << '\t\t\t\tst.route_${snake(r.to_bus)}.send(fwd)'
+					glue << '\t\t\t}'
 					glue << '\t\t}'
 					continue
 				}
