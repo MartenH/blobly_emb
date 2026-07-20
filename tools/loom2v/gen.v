@@ -72,15 +72,22 @@ struct DidCfg {
 	signal   string
 }
 
-// Route is one [[route]]: forward a raw frame from one bus to another (gateway),
-// without decoding it to signals. to_id == 0 means keep the source id.
+// Route is one [[route]] on a gateway. A RAW (frame) route forwards a PDU unchanged
+// (to_id == 0 keeps the source id). A SIGNAL route (signal != '') decodes the named
+// signal from from_frame on the source bus and re-encodes it into to_frame on the
+// destination bus (a different id/layout) — the codec fns for both frames are in
+// dbc_gen.v (generated per DBC message), so the forwarder just calls _phys then _set.
 struct Route {
 mut:
 	from_bus   string
 	from_frame string
 	from_id    int
+	from_dlc   int
 	to_bus     string
 	to_id      int
+	signal     string // set => SIGNAL route (decode + re-encode); '' => raw frame route
+	to_frame   string // SIGNAL route: the destination DBC frame to re-encode into
+	to_dlc     int
 }
 
 // TargetCfg is the parsed [target] block. kind selects the on-target emitter: 'baremetal' =
@@ -283,13 +290,6 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 	mut routes := []Route{}
 	for r in ecumodel.toml_arr(doc, 'route') {
 		m := r.as_map()
-		// a SIGNAL route (top-level `signal`) decodes on the source bus and re-encodes
-		// into a DIFFERENT destination frame — that lowering is P2a.2 and NOT built
-		// here. parse_routes would otherwise ignore `signal`/`to.frame` and forward the
-		// SOURCE frame raw under the source id: silently wrong wire behavior. Reject it.
-		if (m['signal'] or { toml.Any('') }).string() != '' {
-			panic('loom2v: [[route]] signal="${(m['signal'] or { toml.Any('') }).string()}" is a SIGNAL route (decode + re-encode) — not lowered yet (P2a.2); loom2v only forwards raw frames today')
-		}
 		fm := (m['from'] or { toml.Any('') }).as_map()
 		tm := (m['to'] or { toml.Any('') }).as_map()
 		fb := (fm['bus'] or { toml.Any('') }).string()
@@ -301,6 +301,8 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 			from_frame: (fm['frame'] or { toml.Any('') }).string()
 			to_bus:     (tm['bus'] or { toml.Any('') }).string()
 			to_id:      int((tm['id'] or { toml.Any(0) }).int())
+			signal:     (m['signal'] or { toml.Any('') }).string()
+			to_frame:   (tm['frame'] or { toml.Any('') }).string()
 		}
 	}
 	if routes.len > 0 {
@@ -310,8 +312,23 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 				panic('route: frame "${r.from_frame}" is not a message in ${os.file_name(dbc)}')
 			}
 			routes[i].from_id = id
-			if routes[i].to_id == 0 {
-				routes[i].to_id = id // keep the source id unless remapped
+			routes[i].from_dlc = dbc_dlc_of(db, snake(r.from_frame)) or { 8 }
+			if r.signal != '' {
+				// SIGNAL route: resolve the DESTINATION frame's id + dlc (a distinct
+				// frame from the source); both frames' codec fns live in dbc_gen.v.
+				if r.to_frame == '' {
+					panic('route: signal "${r.signal}" needs a destination frame (to = { bus = .., frame = .. })')
+				}
+				routes[i].to_id = dbc_id_of(db, snake(r.to_frame)) or {
+					panic('route: destination frame "${r.to_frame}" is not a message in ${os.file_name(dbc)}')
+				}
+				routes[i].to_dlc = dbc_dlc_of(db, snake(r.to_frame)) or { 8 }
+				// the routed signal must exist as an SG_ in BOTH frames (decode + re-encode).
+				dbc_message_of(db, r.signal) or {
+					panic('route: signal "${r.signal}" is not defined in ${os.file_name(dbc)}')
+				}
+			} else if routes[i].to_id == 0 {
+				routes[i].to_id = id // raw route: keep the source id unless remapped
 			}
 		}
 	}
@@ -2169,8 +2186,8 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 		glue << 'import nvm' // the persistence journal (docs/nvm.md)
 		glue << 'import boot as bootfl' // FlashOps — aliased: gen has its own boot()
 	}
-	if m.has_can_ext || m.isotp_conns.len > 0 || telem_on_can(m) {
-		glue << 'import driver.can' // the generated bus bridge
+	if m.has_can_ext || m.isotp_conns.len > 0 || telem_on_can(m) || m.routes.len > 0 {
+		glue << 'import driver.can' // the generated bus bridge (+ gateway routes)
 	}
 	// eth: only a TX frame emits a pack fn referencing com.max_pdu — an
 	// rx-only image gets consts alone, and V rejects an unused import
@@ -2736,6 +2753,19 @@ fn main() {
 	// warning, in any config (the sig types still live in ports_gen.v).
 	if !glue.any(it.contains('sig.')) {
 		glue = glue.filter(it.trim_space() != 'import sig')
+	}
+	// likewise `import osal` (host IOC + now_us/sleep_us): a PURE-ROUTE gateway has no
+	// signals and no timing, so it never calls osal.* — drop the unused import.
+	if !glue.any(it.contains('osal.')) {
+		glue = glue.filter(it.trim_space() != 'import osal')
+	}
+	// and `import ports` / `import app`: a PURE-ROUTE gateway has no FB handlers, so
+	// the `app/` module may not even exist — drop the imports when nothing uses them.
+	if !glue.any(it.contains('ports.')) {
+		glue = glue.filter(it.trim_space() != 'import ports')
+	}
+	if !glue.any(it.contains('app.')) {
+		glue = glue.filter(it.trim_space() != 'import app')
 	}
 
 	os.write_file(args[3], signals.join('\n') + '\n') or { panic('write ${args[3]}: ${err}') }
