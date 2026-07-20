@@ -44,13 +44,49 @@ to   = "eth0"
 
 # E2E: the appended loss-protection trailer (counter@7, CRC@8 — the derived
 # layout size and the byte after; ecucheck rejects anything else).
+# cycle 300 ms vs the app's 400 ms payload steps: changes land MID-cycle, so
+# a mixed-mode impostor would send off-cadence and fail the harness's
+# every-gap-at-cadence assertion — pure cyclic ignores the change until the
+# next boundary.
 [[frame]]
 name    = "BenchTelem"
 bus     = "eth0"
 id      = 0x8001
 signals = ["BenchLoad", "BenchTicks"]
-tx      = { mode = "cyclic", cycle_ms = 100 }
+tx      = { mode = "cyclic", cycle_ms = 300 }
 e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8 }
+
+# EventVal changes EVERY activation (100 ms) against min_delay 350 ms: the
+# event frame must DEBOUNCE — coalescing changes and sending the latest value
+# at ~350 ms pace (monotonic, skipping levels). MixedVal changes every 7th
+# activation: the mixed frame heartbeats at 300 ms AND publishes the change
+# immediately. With the cyclic frame above, all three COM tx modes AND the
+# debounce parameter are on the wire — the harness asserts each (REQ-NET-013).
+[[signal]]
+name = "EventVal"
+fields = { level = "u8" }
+from = "app"
+to   = "eth0"
+
+[[signal]]
+name = "MixedVal"
+fields = { setpoint = "u16" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "BenchEvent"
+bus     = "eth0"
+id      = 0x8002
+signals = ["EventVal"]
+tx      = { mode = "event", min_delay_ms = 350 }
+
+[[frame]]
+name    = "BenchMixed"
+bus     = "eth0"
+id      = 0x8003
+signals = ["MixedVal"]
+tx      = { mode = "mixed", cycle_ms = 300, min_delay_ms = 30 }
 
 [[fb]]
 name   = "Bench"
@@ -58,4 +94,4 @@ thread = "app_main"
   [[fb.handler]]
   name      = "on_100ms"
   period_ms = 100
-  writes    = ["BenchLoad", "BenchTicks"]
+  writes    = ["BenchLoad", "BenchTicks", "EventVal", "MixedVal"]
