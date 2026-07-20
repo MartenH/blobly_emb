@@ -23,6 +23,8 @@ fn handler_app_bench_on_100ms(ctx voidptr) {
 	st.bench.on_100ms(inp, mut outp)
 	osal.ioc_publish2(bench_load_ch, &outp.bench_load, u8(sizeof(outp.bench_load)))
 	osal.ioc_publish2(bench_ticks_ch, &outp.bench_ticks, u8(sizeof(outp.bench_ticks)))
+	osal.ioc_publish2(event_val_ch, &outp.event_val, u8(sizeof(outp.event_val)))
+	osal.ioc_publish2(mixed_val_ch, &outp.mixed_val, u8(sizeof(outp.mixed_val)))
 }
 
 pub fn partition_app(core int, arg voidptr) {
@@ -64,15 +66,42 @@ pub fn bench_telem_pack(mut d [64]u8, s_bench_load sig.BenchLoad, s_bench_ticks 
 	d[6] = u8(u64(s_bench_ticks.wraps) >> 8)
 }
 
+// BenchEvent: tx event 0x8002, 1-byte payload
+pub const bench_event_event_id = u16(0x8002)
+pub const bench_event_len = u8(1)
+// 64 = com.max_pdu (a literal: V codegen mishandles const-sized mut fixed-array params)
+pub fn bench_event_pack(mut d [64]u8, s_event_val sig.EventVal) {
+	d[0] = u8(s_event_val.level)
+}
+
+// BenchMixed: tx event 0x8003, 2-byte payload
+pub const bench_mixed_event_id = u16(0x8003)
+pub const bench_mixed_len = u8(2)
+// 64 = com.max_pdu (a literal: V codegen mishandles const-sized mut fixed-array params)
+pub fn bench_mixed_pack(mut d [64]u8, s_mixed_val sig.MixedVal) {
+	d[0] = u8(s_mixed_val.setpoint)
+	d[1] = u8(u64(s_mixed_val.setpoint) >> 8)
+}
+
 // --- eth comm thread (eth0): SOME/IP event tx over the UDP seam ---
 pub fn partition_eth0(sock eth.Socket) {
 	osal.pin_to_core(0)
 	mut tx_bench_telem_st := com.TxState{
 		mode: com.TxMode.cyclic
-		cycle_us: 100000
+		cycle_us: 300000
 		min_delay_us: 0
 	}
 	mut e2e_tx_bench_telem := e2e.TxState{}
+	mut tx_bench_event_st := com.TxState{
+		mode: com.TxMode.event
+		cycle_us: 100000
+		min_delay_us: 350000
+	}
+	mut tx_bench_mixed_st := com.TxState{
+		mode: com.TxMode.mixed
+		cycle_us: 300000
+		min_delay_us: 30000
+	}
 	mut dgram := [80]u8{} // someip.header_len + com.max_pdu
 	for {
 		now := osal.now_us()
@@ -100,6 +129,42 @@ pub fn partition_eth0(sock eth.Socket) {
 				tx_bench_telem_st.mark_sent(now, pre_bench_telem, bench_telem_len)
 			} else {
 				e2e_tx_bench_telem = e2e_save_bench_telem // unsent: keep the counter honest
+			}
+		}
+		mut pay_bench_event := [64]u8{} // com.max_pdu
+		mut any_bench_event := false
+		mut s_event_val := sig.EventVal{}
+		if osal.ioc_acquire2(event_val_ch, &s_event_val, u8(sizeof(s_event_val))) {
+			any_bench_event = true
+		}
+		bench_event_pack(mut pay_bench_event, s_event_val)
+		if any_bench_event && tx_bench_event_st.should_send(now, pay_bench_event, bench_event_len) {
+			pre_bench_event := pay_bench_event // pre-E2E payload, for change detection
+			h_bench_event := someip.notification(someip_service, bench_event_event_id, someip_version, int(bench_event_len))
+			n_bench_event := someip.encode(h_bench_event, &dgram[0])
+			for i in 0 .. int(bench_event_len) {
+				dgram[n_bench_event + i] = pay_bench_event[i]
+			}
+			if sock.send(someip_peer_ip, someip_peer_port, &dgram[0], n_bench_event + int(bench_event_len)) {
+				tx_bench_event_st.mark_sent(now, pre_bench_event, bench_event_len)
+			}
+		}
+		mut pay_bench_mixed := [64]u8{} // com.max_pdu
+		mut any_bench_mixed := false
+		mut s_mixed_val := sig.MixedVal{}
+		if osal.ioc_acquire2(mixed_val_ch, &s_mixed_val, u8(sizeof(s_mixed_val))) {
+			any_bench_mixed = true
+		}
+		bench_mixed_pack(mut pay_bench_mixed, s_mixed_val)
+		if any_bench_mixed && tx_bench_mixed_st.should_send(now, pay_bench_mixed, bench_mixed_len) {
+			pre_bench_mixed := pay_bench_mixed // pre-E2E payload, for change detection
+			h_bench_mixed := someip.notification(someip_service, bench_mixed_event_id, someip_version, int(bench_mixed_len))
+			n_bench_mixed := someip.encode(h_bench_mixed, &dgram[0])
+			for i in 0 .. int(bench_mixed_len) {
+				dgram[n_bench_mixed + i] = pay_bench_mixed[i]
+			}
+			if sock.send(someip_peer_ip, someip_peer_port, &dgram[0], n_bench_mixed + int(bench_mixed_len)) {
+				tx_bench_mixed_st.mark_sent(now, pre_bench_mixed, bench_mixed_len)
 			}
 		}
 		osal.sleep_us(1000)
