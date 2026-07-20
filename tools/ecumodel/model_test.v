@@ -1503,7 +1503,9 @@ thread = "app_main"
 }
 
 fn test_someip_round7_gates() {
-	// a bad tx mode; eth frames on a [target] image
+	// a bad tx mode; eth frames on a ThreadX [target] image are ACCEPTED as of
+	// the target rung (the generated eth thread over the NetX seam) — only the
+	// bare-metal superloop, which has no thread to run it on, still rejects
 	e := errs_of(eth_head +
 		'
 [target]
@@ -1524,7 +1526,27 @@ tx      = { mode = "cylic", cycle_ms = 100 }
 ' +
 		app)
 	assert e.any(it.contains('tx mode "cylic" is invalid'))
-	assert e.any(it.contains('the target comm owner is CAN-only'))
+	assert !e.any(it.contains('threadx')), '${e}'
+	e2 := errs_of(eth_head +
+		'
+[target]
+kind = "baremetal"
+
+[[signal]]
+name = "S"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["S"]
+tx      = { mode = "cyclic", cycle_ms = 100 }
+' +
+		app)
+	assert e2.any(it.contains('kind = "threadx"')), '${e2}'
 }
 
 fn test_someip_round8_timing_bounds() {
