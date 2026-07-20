@@ -2840,10 +2840,10 @@ fn test_gateway_with_system_fb_rejected() {
 		&& it.contains('may only route'))
 }
 
-// REQ-TOPO-003 (codex #164 r2): the routed signal's fields must match the
-// DESTINATION DBC's SG_ width — check_dbc_conformance only checks the source bus,
-// so a re-encode into a differently-sized dest SG_ would truncate/reinterpret.
-fn test_route_dest_dbc_width_mismatch() {
+// REQ-TOPO-003 (P2a.2b): a route now TRANSCODES the physical value through the
+// destination producer, so a differing destination SG_ WIDTH is accepted (the raw-
+// copy width-equality requirement is gone; range containment is checked loom2v-side).
+fn test_route_dest_width_transcode_accepted() {
 	mut s := clean_dissolved()
 	// Speed is 16-bit at source (good_dbc); make the destination SG_ 32-bit.
 	os.write_file(os.join_path(s.dir, 'edge.dbc'), 'VERSION ""\nBU_: gw zone\nBO_ 512 Speed_E: 8 gw\n SG_ Speed : 0|32@1+ (1,0) [0|0] "" zone\n') or {
@@ -2879,7 +2879,7 @@ fn test_route_dest_dbc_width_mismatch() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('bits but destination DBC')), errs(validate_system_gen(s)).str()
+	assert !errs(validate_system_gen(s)).any(it.contains('bits but destination DBC')), errs(validate_system_gen(s)).str()
 }
 
 // REQ-TOPO-003 (codex #164 r7): a destination frame with an unrouted sibling SG_
@@ -2912,9 +2912,12 @@ fn test_route_dest_frame_partial_rejected() {
 	assert errs(validate_system_gen(s)).any(it.contains('partially populated')), errs(validate_system_gen(s)).str()
 }
 
-// REQ-TOPO-003 (codex #164 r7): a destination SG_ with a non-trivial factor/offset
+// REQ-TOPO-003 (P2a.2b): a destination SG_ with a non-trivial factor/offset is now
+// ACCEPTED — the route transcodes the physical value (the raw-copy trivial-scale
+// requirement is gone). NOTE renamed intent below.
+// (was: non-trivial factor/offset rejected)
 // is rejected — the codec routes raw values, so scaling would change the quantity.
-fn test_route_dest_factor_rejected() {
+fn test_route_dest_factor_transcode_accepted() {
 	mut s := clean_dissolved()
 	os.write_file(os.join_path(s.dir, 'edge.dbc'), 'VERSION ""\nBU_: gw zone\nBO_ 512 Speed_E: 8 gw\n SG_ Speed : 0|16@1+ (0.1,0) [0|0] "" zone\n') or {
 		panic(err)
@@ -2938,7 +2941,7 @@ fn test_route_dest_factor_rejected() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('factor/offset')), errs(validate_system_gen(s)).str()
+	assert !errs(validate_system_gen(s)).any(it.contains('factor/offset')), errs(validate_system_gen(s)).str()
 }
 
 // REQ-TOPO-004 (codex #164 r7): a gateway with an NM cluster on its primary bus but

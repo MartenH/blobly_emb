@@ -88,6 +88,8 @@ mut:
 	signal     string // set => SIGNAL route (decode + re-encode); '' => raw frame route
 	to_frame   string // SIGNAL route: the destination DBC frame to re-encode into
 	to_dlc     int
+	from_cyc   int // source frame GenMsgCycleTime (ms) — the freshness deadline base
+	to_cyc     int // destination frame GenMsgCycleTime (ms) — the re-emit cadence
 }
 
 // TargetCfg is the parsed [target] block. kind selects the on-target emitter: 'baremetal' =
@@ -354,8 +356,11 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 					|| dst_sg.is_multiplexor {
 					panic('route: signal "${r.signal}" is multiplexed — the route codec has no multiplexor support')
 				}
-				// (no width limit: the forwarder copies the RAW u64 value, so all widths
-				// up to 64 bits are exact — see the identical-encoding requirement below.)
+				// - wide integer: P2a.2b routes the PHYSICAL value through f64 (so it can
+				//   transcode a differing factor/offset), which is exact only to 52 bits.
+				if src_sg.length > 52 || dst_sg.length > 52 {
+					panic('route: signal "${r.signal}" is >52 bits — the route carries the physical value through f64 (exact only to 52-bit integers)')
+				}
 				// - extended-id SOURCE or destination: can.Frame carries no ext-id flag,
 				//   and the socket strips EFF on rx (a 29-bit id is indistinguishable from
 				//   a standard id of the same number), so both ends must be standard.
@@ -363,55 +368,44 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 					|| (dbc_ext_of(db, snake(r.to_frame)) or { false }) {
 					panic('route: signal "${r.signal}" frame is an extended (29-bit) id — the route forwarder handles standard ids only')
 				}
-				// - big-endian (Motorola): the span check + codec assume little-endian.
+				// - big-endian (Motorola): the DLC/bounds check below assumes the
+				//   little-endian [start, start+length) span; the sawtooth walk is not worth
+				//   it here (the dissolution rejects Motorola routes too).
 				if src_sg.byte_order != .little_endian || dst_sg.byte_order != .little_endian {
-					panic('route: signal "${r.signal}" is big-endian (Motorola) — the route codec handles little-endian signals only')
+					panic('route: signal "${r.signal}" is big-endian (Motorola) — the route handles little-endian signals only')
 				}
 				// - the SG_ must fit its frame's payload at its actual bit POSITION, not
 				//   just by width (a signal near the frame end overflows the DLC).
-				if src_sg.start_bit + src_sg.length > routes[i].from_dlc * 8 {
-					panic('route: signal "${r.signal}" occupies bit ${src_sg.start_bit + src_sg.length} but source frame "${r.from_frame}" is only ${routes[i].from_dlc} bytes')
+				if src_sg.start_bit + src_sg.length > routes[i].from_dlc * 8
+					|| dst_sg.start_bit + dst_sg.length > routes[i].to_dlc * 8 {
+					panic('route: signal "${r.signal}" does not fit its frame payload (source/destination DLC too small for the SG_ position)')
 				}
-				if dst_sg.start_bit + dst_sg.length > routes[i].to_dlc * 8 {
-					panic('route: signal "${r.signal}" occupies bit ${dst_sg.start_bit + dst_sg.length} but destination frame "${r.to_frame}" is only ${routes[i].to_dlc} bytes')
+				// P2a.2b TRANSCODES the physical value (differing factor/offset/width/bit-
+				// position) and RATE-ADAPTS (differing cadence) — but it routes a NUMBER, so
+				// it cannot convert UNITS or ENUM meanings, and the destination must be able
+				// to REPRESENT the source's range. Keep those three as guards:
+				// - units must match (100 km/h routed to a mph SG_ would relabel, not convert).
+				if src_sg.unit != dst_sg.unit {
+					panic('route: signal "${r.signal}" unit "${src_sg.unit}" != destination "${dst_sg.unit}" — the route transcodes scale, not units')
 				}
-				// - the destination frame must contain ONLY the routed signal: the
-				//   forwarder composes a fresh frame and sets just this SG_, so any other
-				//   SG_ would ship as zero (multi-signal composition = the dest-producer
-				//   model, later).
-				for m2 in db.messages {
-					if snake(m2.name) != snake(r.to_frame) {
-						continue
-					}
-					for other in m2.signals {
-						if other.name != r.signal {
-							panic('route: destination frame "${r.to_frame}" also carries SG_ "${other.name}" — the forwarder would send it as zero (composing several signals into one frame needs the dest-producer model)')
-						}
-					}
+				// - VAL_ enum meanings must match at the same PHYSICAL value (the route
+				//   transcodes factor/offset, so raw 100@0.1 and raw 10@1 are the SAME
+				//   physical enum — compare by physical value, not raw key).
+				if !val_tables_phys_equal(src_sg, dst_sg) {
+					panic('route: signal "${r.signal}" source and destination VAL_ tables differ (at equal physical values) — the route does not translate enum meanings')
 				}
-				// - a P2a.2 route RE-FRAMES a signal (new frame/id/bit-position) but does
-				//   NOT TRANSCODE its value: source and destination SG_ must share the same
-				//   value encoding (length, factor, offset, signedness, unit). Different
-				//   factor/offset would silently rescale or round (12.3@0.1 -> 12@1),
-				//   different units would relabel without converting (100 km/h -> 100 mph).
-				//   Genuine value transcoding is the destination-producer model, later.
-				if src_sg.length != dst_sg.length || src_sg.factor != dst_sg.factor
-					|| src_sg.offset != dst_sg.offset || src_sg.is_signed != dst_sg.is_signed
-					|| src_sg.unit != dst_sg.unit || !val_tables_equal(src_sg.values, dst_sg.values) {
-					panic('route: signal "${r.signal}" source and destination SG_ differ in value encoding (length/factor/offset/sign/unit/value-table) — a route re-frames a signal, it does not transcode the value')
+				// - the destination must represent the source's full physical range, else the
+				//   generated _set masks the converted value (e.g. 300 into an 8-bit SG_).
+				slo, shi := phys_range(src_sg)
+				dlo, dhi := phys_range(dst_sg)
+				if slo < dlo || shi > dhi {
+					panic('route: signal "${r.signal}" source range [${slo}, ${shi}] does not fit the destination range [${dlo}, ${dhi}] — the re-encode would overflow')
 				}
-				// - the source and destination cadence (GenMsgCycleTime) must match: the
-				//   on-receipt forwarder sends one dest frame per source frame, so a 10 ms
-				//   source into a 100 ms dest would emit 10x the dest contract's rate. Rate
-				//   adaptation is the destination-producer model, later.
-				// cadences must be EQUAL (including "both absent"): a declared source but
-				// absent/non-cyclic destination (or vice versa) also can't be satisfied by
-				// the on-receipt forwarder.
-				src_cyc := dbc_cycle_of(db, snake(r.from_frame))
-				dst_cyc := dbc_cycle_of(db, snake(r.to_frame))
-				if src_cyc != dst_cyc {
-					panic('route: signal "${r.signal}" source frame cadence ${src_cyc} ms != destination ${dst_cyc} ms — on-receipt routing cannot rate-adapt (dest-producer model)')
-				}
+				// resolve the cadences: source bounds freshness, destination is the re-emit
+				// rate (the EFFECTIVE-cadence sub-tick check is in validate_signal_routes_model,
+				// which also sees an authored [[frame]].tx.cycle_ms).
+				routes[i].from_cyc = dbc_cycle_of(db, snake(r.from_frame))
+				routes[i].to_cyc = dbc_cycle_of(db, snake(r.to_frame))
 				// both ids must be standard 11-bit: candb leaves an UNFLAGGED id > 0x7ff as
 				// ext = false, but the SocketCAN send would place it without CAN_EFF_FLAG
 				// and fail (the ext-flagged case is already rejected above).
@@ -431,43 +425,131 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 				routes[i].to_id = id // raw route: keep the source id unless remapped
 			}
 		}
-		// P2a.2 sends the destination frame ON RECEIPT (no composition buffer), so two
-		// routes into ONE dest frame would each send a half-populated PDU. Reject that —
-		// composing several routed signals into one frame needs the destination frame's
-		// own COM producer (a routed value wired as its input), the next step.
-		mut dest_seen := map[string]int{}
+		// P2a.2b's producer composes the WHOLE destination frame from its routed
+		// signals, so several routes MAY target one frame — but every SG_ in that frame
+		// must be filled by a route (from THIS gateway), else a sibling ships as a stale
+		// zero. Reject a route into a frame with an uncovered SG_. Also: two routes may
+		// not carry the SAME signal into one frame (double-write of one field).
+		mut routed_sigs := map[string][]string{} // "to_bus/to_frame" -> [signals]
 		for r in routes {
 			if r.signal == '' {
 				continue
 			}
 			key := '${r.to_bus}/${r.to_frame}'
-			dest_seen[key]++
-			if dest_seen[key] > 1 {
-				panic('route: destination frame "${r.to_frame}" on bus "${r.to_bus}" is targeted by more than one signal route — composing several signals into one frame needs the dest-producer model (P2a.2 sends on receipt)')
+			if r.signal in routed_sigs[key] {
+				panic('route: signal "${r.signal}" is routed into frame "${r.to_frame}" on "${r.to_bus}" twice — one route per destination field')
+			}
+			routed_sigs[key] << r.signal
+		}
+		for r in routes {
+			if r.signal == '' {
+				continue
+			}
+			key := '${r.to_bus}/${r.to_frame}'
+			for m2 in db.messages {
+				if snake(m2.name) != snake(r.to_frame) {
+					continue
+				}
+				for sg in m2.signals {
+					if sg.name !in routed_sigs[key] {
+						panic('route: destination frame "${r.to_frame}" on "${r.to_bus}" has SG_ "${sg.name}" that no route fills — every signal in a routed frame must be routed (else it ships as zero)')
+					}
+				}
 			}
 		}
 	}
 	return routes
 }
 
-// val_tables_equal compares two DBC VAL_ enum tables (raw value -> name). A raw
-// route preserves the raw value, so a differing table would silently change the
-// signal's MEANING (raw 1 = "Drive" on one bus, "Reverse" on the other).
-fn val_tables_equal(a map[u64]string, b map[u64]string) bool {
-	if a.len != b.len {
+// val_tables_phys_equal compares two DBC VAL_ enum tables by PHYSICAL value: a route
+// transcodes factor/offset, so the same enum can have different raw keys on the two
+// buses (raw 100@0.1 == raw 10@1 == physical 10.0). Every entry in each table must
+// have a matching physical value + label in the other, so the enum meaning is
+// preserved across the re-encode.
+fn val_tables_phys_equal(a candb.Signal, b candb.Signal) bool {
+	if a.values.len != b.values.len {
 		return false
 	}
-	for k, v in a {
-		if (b[k] or { return false }) != v {
+	// each of a's entries must be present (same physical value + label) in b — a
+	// physical compare within HALF A QUANTIZATION STEP (so fine-resolution enums with
+	// distinct steps stay distinct), the raw key read as signed per the signal.
+	tol := val_tol(a, b)
+	for ka, va in a.values {
+		pa := sig_key_phys(a, ka)
+		mut found := false
+		for kb, vb in b.values {
+			if vb == va && f64_close(sig_key_phys(b, kb), pa, tol) {
+				found = true
+				break
+			}
+		}
+		if !found {
 			return false
 		}
 	}
 	return true
 }
 
+// sig_key_phys converts a DBC VAL_ raw key to its physical value. candb stores a
+// negative key as its FULL u64 two's-complement (e.g. -1 -> u64(-1)), so i64(raw)
+// recovers the signed value directly.
+fn sig_key_phys(s candb.Signal, raw u64) f64 {
+	r := if s.is_signed { f64(i64(raw)) } else { f64(raw) }
+	return r * s.factor + s.offset
+}
+
+// val_tol is half the finer of the two signals' quantization steps — small enough to
+// keep distinct enum states apart, large enough to absorb f64 rounding.
+fn val_tol(a candb.Signal, b candb.Signal) f64 {
+	mut fa := if a.factor < 0 { -a.factor } else { a.factor }
+	mut fb := if b.factor < 0 { -b.factor } else { b.factor }
+	step := if fa < fb && fa > 0 { fa } else { fb }
+	if step <= 0 {
+		return 1e-9
+	}
+	return step * 0.5
+}
+
+fn f64_close(x f64, y f64, tol f64) bool {
+	mut d := x - y
+	if d < 0 {
+		d = -d
+	}
+	return d < tol
+}
+
+// phys_capacity returns the [min, max] PHYSICAL value a signal's WIRE ENCODING can
+// hold (raw range scaled by factor/offset) — what a destination can actually carry.
+fn phys_capacity(s candb.Signal) (f64, f64) {
+	n := s.length
+	if s.is_signed {
+		half := f64(u64(1) << u64(n - 1))
+		a := -half * s.factor + s.offset
+		b := (half - 1) * s.factor + s.offset
+		return if a < b { a, b } else { b, a }
+	}
+	rmax := f64((u64(1) << u64(n)) - 1)
+	a := s.offset
+	b := rmax * s.factor + s.offset
+	return if a < b { a, b } else { b, a }
+}
+
+// phys_range returns the CONTRACT range a route treats a signal as carrying: the
+// authored DBC [min|max] INTERSECTED with the wire capacity (an authored range wider
+// than the encoding can hold is clamped to what the wire can carry), else the capacity.
+fn phys_range(s candb.Signal) (f64, f64) {
+	clo, chi := phys_capacity(s)
+	if s.maximum > s.minimum {
+		lo := if s.minimum > clo { s.minimum } else { clo }
+		hi := if s.maximum < chi { s.maximum } else { chi }
+		return lo, hi
+	}
+	return clo, chi
+}
+
 // dbc_cycle_of returns the GenMsgCycleTime (ms) of the message whose snake-name is
-// `key`, or 0 if unknown — used to require a route's source and destination frames
-// share a cadence (the on-receipt forwarder cannot rate-adapt).
+// `key`, or 0 if unknown — the source cadence bounds route freshness, the
+// destination cadence is the re-emit rate.
 fn dbc_cycle_of(db candb.Database, key string) int {
 	for m in db.messages {
 		if snake(m.name) == key {
@@ -855,7 +937,7 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 			bus_fd[bname] = (bc.as_map()['fd'] or { toml.Any(false) }).bool()
 		}
 	}
-	for i, r in m.routes {
+	for r in m.routes {
 		if r.signal == '' {
 			continue
 		}
@@ -906,15 +988,61 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 			|| (m.frames.e2e_on[tof] or { false }) || (m.frames.secoc_on[tof] or { false }) {
 			panic('route: signal "${r.signal}" rides an E2E/SecOC frame — the route forwarder does not verify the source or re-protect the destination (dest-producer model)')
 		}
-		// the destination frame must have a SINGLE on-wire writer: reject when a
-		// [[signal]]/[[frame]] tx already emits it, or another route targets the same id.
-		if tof in m.frames.tx_mode {
-			panic('route: destination frame "${r.to_frame}" is also transmitted by this node (a tx [[signal]]/[[frame]]) — one writer per frame')
-		}
-		for j, r2 in m.routes {
-			if j != i && r2.to_bus == r.to_bus && r2.to_id == r.to_id {
-				panic('route: destination id 0x${r.to_id:x} on bus "${r.to_bus}" is written by two routes — one writer per frame')
+		// the routed producer composes + re-emits every tick; should_send handles cyclic
+		// (rate adaptation), but TRIGGERED needs a trigger() no route makes and EVENT change-
+		// tracking fights freshness suppression — restrict a routed dest frame to CYCLIC.
+		if mode := m.frames.tx_mode[tof] {
+			if mode != 'cyclic' {
+				panic('route: destination frame "${r.to_frame}" [[frame]].tx.mode = "${mode}" — a routed frame re-emits cyclically only (event/mixed/triggered are a later refinement)')
 			}
+		}
+		// the EFFECTIVE cadence (authored [[frame]].tx.cycle_ms if present, else the DBC
+		// GenMsgCycleTime) must be at least the 10 ms comm-bridge tick.
+		// an authored [[frame]].tx with no cycle_ms inserts 0; treat 0 as absent.
+		authored_us := m.frames.tx_cycle_us[tof] or { 0 }
+		eff_us := if authored_us > 0 {
+			authored_us
+		} else if r.to_cyc > 0 {
+			r.to_cyc * 1000
+		} else {
+			100000
+		}
+		if eff_us < 10000 {
+			panic('route: destination frame "${r.to_frame}" cadence ${eff_us} us is below the 10 ms comm-bridge tick')
+		}
+	}
+	// every destination (bus, id) must be owned by ONE writer. Multiple SIGNAL routes
+	// into the SAME frame compose it; anything else — a raw route (which forwards
+	// independently, so even two raw routes at one id collide), or a different
+	// signal-route frame — is two on-wire writers under one id.
+	mut id_owner := map[string]string{}
+	for r in m.routes {
+		key := '${r.to_bus}/${r.to_id}'
+		// a raw route is a UNIQUE writer: give each its own owner token so any share
+		// (raw+raw, raw+signal) trips the collision; signal routes share the frame name.
+		owner := if r.signal == '' { 'raw:${r.from_frame}@${r.from_bus}' } else { 'sig:${r.to_frame}' }
+		if prev := id_owner[key] {
+			if prev != owner || r.signal == '' {
+				panic('route: destination id 0x${r.to_id:x} on bus "${r.to_bus}" has two on-wire writers ("${prev}" vs "${owner}") — one writer per id (only signal routes into one frame compose)')
+			}
+		} else {
+			id_owner[key] = owner
+		}
+	}
+	// all signal routes composing ONE destination frame must originate on the SAME source
+	// bus — each source bridge composes independently, so a two-bus frame ships two halves.
+	mut frame_src := map[string]string{}
+	for r in m.routes {
+		if r.signal == '' {
+			continue
+		}
+		key := '${r.to_bus}/${r.to_frame}'
+		if prev := frame_src[key] {
+			if prev != r.from_bus {
+				panic('route: destination frame "${r.to_frame}" on "${r.to_bus}" is composed from two source buses ("${prev}" and "${r.from_bus}")')
+			}
+		} else {
+			frame_src[key] = r.from_bus
 		}
 	}
 }
@@ -2499,8 +2627,8 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 			has_eth_tx = true
 		}
 	}
-	if (m.has_can_ext && !comm_thread_on) || has_eth_tx {
-		glue << 'import comm.com' // per-PDU TX modes + RX deadline; eth codec PDU bound (max_pdu)
+	if (m.has_can_ext && !comm_thread_on) || has_eth_tx || m.routes.any(it.signal != '') {
+		glue << 'import comm.com' // per-PDU TX modes + RX deadline; eth codec PDU bound (max_pdu); signal-route producer TxState
 	}
 	// the eth comm thread's codec: pure V, both sides of the silicon line; the
 	// driver.eth module (whose #flag compiles the POSIX backend) is host-only —
