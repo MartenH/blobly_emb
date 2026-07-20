@@ -22,6 +22,14 @@ version = 1
 port    = 30490
 peer    = "192.168.0.190:30491"
 
+# The RPC form (docs/someip.md P3): the shell's command line rides method
+# 0x0001 — request in, dispatch on the eth thread, ONE response datagram out
+# (correlation mirrored). allow_mutate stays at its closed default: this
+# build exposes only read-class methods (REQ-NET-018).
+[shell]
+bus    = "eth0"
+method = 0x0001
+
 [[partition]]
 name    = "app"
 core    = 0

@@ -8,7 +8,7 @@ module main
 import toml
 import comm.shell
 
-const shell_config_keys = ['enabled', 'bus', 'commands']
+const shell_config_keys = ['enabled', 'bus', 'commands', 'method', 'allow_mutate']
 
 struct ShellCfg {
 mut:
@@ -17,6 +17,10 @@ mut:
 	in_id  u32 = 0x7F0
 	fc_id  u32 = 0x7F2
 	out_id u32 = 0x7F1
+	// the eth RPC form (docs/someip.md P3): the command line rides ONE method
+	// id; the access gate defaults CLOSED (REQ-NET-018)
+	method       u32
+	allow_mutate bool
 	// example-provided commands ([shell] commands = ["cm4"]): each name X becomes
 	// `int shell_X(unsigned char*, int)` in the example's comm_glue.c, an adapter, and a
 	// registry entry — target-backed commands without touching the generator per command.
@@ -29,6 +33,16 @@ fn parse_shell(doc toml.Doc, dbc string) ShellCfg {
 		sm := scfg.as_map()
 		t.on = (sm['enabled'] or { toml.Any(true) }).bool()
 		t.bus = (sm['bus'] or { toml.Any('') }).string()
+		if t.bus == '' {
+			// the validator's inherit rule, mirrored: [shell] without a bus
+			// rides [telemetry].bus — resolving it HERE keeps shell_on_eth
+			// true for an inherited eth binding (silent no-emit otherwise)
+			if tv := doc.value_opt('telemetry') {
+				t.bus = (tv.as_map()['bus'] or { toml.Any('') }).string()
+			}
+		}
+		t.method = u32((sm['method'] or { toml.Any(0) }).int())
+		t.allow_mutate = (sm['allow_mutate'] or { toml.Any(false) }).bool()
 		for c in (sm['commands'] or { toml.Any([]toml.Any{}) }).array() {
 			name := c.string()
 			if name.len == 0 || name.len > 8 {
@@ -172,6 +186,14 @@ fn shell_manifest_frames(m Model) []string {
 	if !m.shell.on {
 		return []string{}
 	}
+	if shell_on_eth(m) {
+		// the RPC form: ONE method id — the CAN in/fc/out endpoints do not
+		// exist on this image, so the manifest must not invent them
+		return [
+			'# eth modules: module,endpoint,id',
+			'ethmod,shell,method,0x${m.shell.method.hex()}',
+		]
+	}
 	sbus := if m.shell.bus != '' { m.shell.bus } else { m.telem.bus }
 	return [
 		'# shell frames: frame,id,bus',
@@ -179,4 +201,42 @@ fn shell_manifest_frames(m Model) []string {
 		'fc,0x${m.shell.fc_id.hex()},${sbus}',
 		'out,0x${m.shell.out_id.hex()},${sbus}',
 	]
+}
+
+// shell_on_eth: the [shell] module is bound to the eth bus — the RPC form
+// (docs/someip.md P3): one method id, request -> dispatch -> response
+// datagram, served by the generated eth thread.
+fn shell_on_eth(m Model) bool {
+	return m.shell.on && m.eth != '' && m.shell.bus == m.eth
+}
+
+// shell_eth_init: the eth thread's registry init. Built-ins + the configured
+// C-backed commands only — the CAN-side ps/bmc registrations stay with the
+// comm-thread glue that provides their C halves; sharing that C is its own
+// cleanup rung.
+fn shell_eth_init(m Model) []string {
+	if !shell_on_eth(m) {
+		return []string{}
+	}
+	mut g := ['\tg_sh.init(u32(0)) // in place; out_id unused on eth (responses are datagrams)']
+	// stat is deliberately NOT registered here: shell_stat_cmd reads the FB
+	// threads' Scheduler.stats directly, and from the eth thread that read
+	// preempts the writer mid-update (u64 totals tear on a 32-bit core). The
+	// CAN comm thread has the same latent race; a wait-free stats snapshot is
+	// its own rung — until then eth serves only race-free commands.
+	for name in m.shell.commands {
+		// C-backed commands are OPAQUE to the generator — fail CLOSED: they
+		// register as state-changing, so the REQ-NET-018 gate covers them
+		// unless the build opens it (a per-command declared class is a later
+		// schema rung)
+		g << "\tg_sh.register_mut('${name}', 'target command (glue)', shell_${name}_cmd)"
+	}
+	return g
+}
+
+// eth_thread_on: the generated eth thread exists for eth FRAMES or an
+// eth-bound shell (an RPC-only image has no [[frame]] yet still serves its
+// method) — every emission site keys on this, not on the frame count.
+fn eth_thread_on(m Model) bool {
+	return m.target.threadx && (m.eth_frames.len > 0 || shell_on_eth(m))
 }

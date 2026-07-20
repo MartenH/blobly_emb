@@ -753,8 +753,26 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 	}
 	// [target] images: the generated eth thread is a ThreadX thread over the
 	// NetX seam (docs/someip.md target rung) — the bare-metal superloop has no
-	// threads to run it on, so only kind = "threadx" carries eth frames.
-	if n_eth_frames > 0 {
+	// threads to run it on, so only kind = "threadx" carries eth frames. An
+	// eth-bound [shell] (the RPC form, telemetry-bus inherit included) runs
+	// the SAME battery: an rpc-only image binds the same endpoint and creates
+	// the same threads, so it must not skip the interface/core/trace checks.
+	mut eth_rpc_bound := false
+	if eth != '' {
+		if sv2 := doc.value_opt('shell') {
+			sm2 := sv2.as_map()
+			if (sm2['enabled'] or { toml.Any(true) }).bool() {
+				mut sbus2 := str_of(sm2, 'bus')
+				if 'bus' !in sm2 {
+					if tv2 := doc.value_opt('telemetry') {
+						sbus2 = str_of(tv2.as_map(), 'bus')
+					}
+				}
+				eth_rpc_bound = sbus2 == eth
+			}
+		}
+	}
+	if n_eth_frames > 0 || eth_rpc_bound {
 		if tv := doc.value_opt('target') {
 			tm := tv.as_map()
 			if (tm['kind'] or { toml.Any('') }).string() != 'threadx' {
@@ -821,8 +839,10 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			// after them would be mislabeled. Reject until the manifest models
 			// them (their creation times are load-dependent, so this needs its
 			// own design, not a quick row).
-			if _ := doc.value_opt('trace') {
-				errs << 'eth [[frame]]s with [trace] on a target image — the NetX-internal threads (IP thread, eth-svc) would take first-sight trace ids the manifest does not model; trace + eth on one image is its own rung (docs/someip.md)'
+			if trv := doc.value_opt('trace') {
+				if (trv.as_map()['enabled'] or { toml.Any(true) }).bool() {
+					errs << 'eth [[frame]]s with [trace] on a target image — the NetX-internal threads (IP thread, eth-svc) would take first-sight trace ids the manifest does not model; trace + eth on one image is its own rung (docs/someip.md)'
+				}
 			}
 			// the target byte-IOC pool is a fixed glue contract (IOCB_POOL_N = 8,
 			// the example glue) — a ninth signal would get an index the glue
@@ -909,6 +929,11 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			mbus = telem_bus
 		}
 		if eth == '' || !on || mbus != eth {
+			if blk == 'shell' && on && 'method' in bm {
+				// a declared RPC method that is NOT bound to the eth bus would
+				// build an image that silently never serves it
+				errs << '[shell] declares `method` but resolves to bus "${mbus}", not the eth bus — bind the shell to the eth bus (bus = "${eth}") or drop the method (docs/someip.md P3)'
+			}
 			continue
 		}
 		if blk == 'nm' {
@@ -916,7 +941,44 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			continue
 		}
 		if blk == 'shell' {
-			errs << '[shell] is bound to eth bus "${eth}" — the eth shell arrives with the RPC phase (P3: method-form request/response + the access gate, docs/someip.md); keep the shell on a CAN bus'
+			// the eth shell is the RPC phase (docs/someip.md P3): the module
+			// binds ONE method id (bit 15 clear — a method, not an event) and
+			// the generated eth thread serves request -> dispatch -> response.
+			// ThreadX-only, like every module; the access gate defaults CLOSED
+			// (allow_mutate=false: a build without the gate exposes only
+			// read-class methods, REQ-NET-018).
+			mut tkind := ''
+			if tv2 := doc.value_opt('target') {
+				tkind = str_of(tv2.as_map(), 'kind')
+			}
+			if tkind != 'threadx' {
+				errs << '[shell] on eth bus "${eth}" needs [target] kind = "threadx" — the eth RPC path is served by the generated eth thread (docs/someip.md P3)'
+			}
+			if mv := bm['method'] {
+				if mv is i64 {
+					if mv < 1 || mv > 0x7FFF {
+						errs << '[shell] method 0x${mv.hex()} is not a method id — methods have bit 15 CLEAR and are nonzero (0x0001..0x7FFF; events own 0x8000..)'
+					}
+				} else {
+					errs << '[shell] method must be an integer method id'
+				}
+			} else {
+				errs << '[shell] on eth bus "${eth}" is missing `method` (the SOME/IP method id its command line rides, 0x0001..0x7FFF)'
+			}
+			if av := bm['allow_mutate'] {
+				if av !is bool {
+					errs << '[shell] allow_mutate must be a boolean (the REQ-NET-018 access gate; default false)'
+				}
+			}
+			// single-bus images only for this rung: on a mixed image the CAN
+			// comm thread's module registrations (nm/stat) and the eth thread
+			// would share the registry across execution contexts
+			if bus_names.len > 1 {
+				errs << '[shell] on eth needs a single-bus (eth-only) image for now — a CAN comm thread would register its shell commands from another execution context (docs/someip.md P3)'
+			}
+			// the served method IS SOME/IP traffic: an RPC-only image ([someip]
+			// + [shell], no [[frame]]) is a whole, valid configuration
+			mod_on_eth = true
 			continue
 		}
 		// the TARGET emitters still generate the CAN telemetry path

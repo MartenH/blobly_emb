@@ -465,3 +465,46 @@ The eth thread and the host bridge deliberately stay two straight-line
 emitters sharing the codec/manifest (parameterizing one emitter over both
 seam sets would trade review clarity for indirection); NM-gating eth tx is an
 open question for the NM-on-eth rung.
+
+## P3 routing status (2026-07-20, BENCH-VERIFIED — a served method on silicon)
+
+The RPC phase closes its routing rung: `[shell]` binds to the eth bus with
+ONE method id (`method = 0x0001`, bit 15 clear) and the generated eth thread
+serves it — a REQUEST datagram takes the RPC branch (mtype-split before the
+event gate): `check_request` (live Request ID both halves, rc ok) →
+the router's method match (an UNKNOWN method id answers `rc_unknown_method`
+0x81 — a served port is never a silent drop; a malformed envelope IS a
+counted drop) → the REQ-NET-018 access gate (`allow_mutate`, default CLOSED:
+a state-changing command answers `rc_denied` 0x20 BEFORE it runs; a build
+without the gate exposes only read-class methods) → `shell.dispatch` (the
+transport-free core the CAN shell now shares) → ONE response datagram,
+correlation mirrored verbatim by `someip.response`. Single in-flight per
+method by construction — dispatch is synchronous on the eth thread.
+
+The wide-PDU open question resolved by its own recorded trigger ("when a
+real payload outgrows a CAN-FD frame"): `someip.max_rpc = 1024` bounds a
+method RESPONSE only — events and requests keep the 64-byte `max_pdu`, the
+whole codec/router path keeps its sizing, and a response rides one datagram,
+never segmentation. Shell command classes: `register` (read) vs
+`register_mut` (state-changing; `nm rel`-class), the gate unit-tested at the
+dispatch seam. Single-bus (eth-only) images only for this rung — a CAN comm
+thread would register its shell commands from another execution context.
+
+Bench (H735-DK, `examples/h735_someip/bench_test.sh`, the io hwtest pattern
+probed from the Windows host): `uptime` answered with the Request ID
+(client+session) mirrored byte-exact, rc ok, live payload; unknown method →
+0x81/`rc_unknown_method`; dead-session request silently dropped; `help` →
+a 107-byte response in one datagram; events streaming throughout.
+**REQ-NET-016 VERIFIED on target** (`h735-someip-hwtest`, recorded via
+`BLOB_HWTEST=1 make trace`). REQ-NET-018 stays groundwork-verified at the
+dispatch seam (untagged) until a build really exposes a mutating method.
+
+Note on `allow_mutate = true` (the open half of REQ-NET-018): the current
+gate is BUILD-TIME + the static source filter — opening it trusts the
+configured peer endpoint, nothing stronger. An authenticated per-session
+grant (the boot chain's 0x29-style challenge, key-separated) is the
+requirement's completion rung; until it exists, ship mutating methods only
+on links where the peer endpoint is a trusted boundary. The gate default
+stays closed, and `stat` is deliberately not served over eth (a cross-thread
+stats snapshot is its own rung — the reader would tear the FB schedulers'
+u64 totals).
