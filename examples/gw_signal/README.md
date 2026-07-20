@@ -39,13 +39,24 @@ candump vcan1                      # -> 200 [8] 00 34 12 00 ...  (Speed re-encod
 Verified on vcan (bench). The automated check is `test/route_signal.lua` (the
 blobly_net headless Lua runner).
 
-## Scope (P2a.2)
+## Scope (P2a.2) — a route *re-frames*, it does not *transcode*
 
-This is the **common path** — the forwarder decodes and re-encodes across frames
-and buses. It sends the destination frame on receipt of the source frame (correct
-for a same-rate route). **Rate adaptation** (a 10 ms source re-emitted at 100 ms),
-the destination frame's configured **TX mode**, **validity/freshness** propagation,
-and **E2E/SecOC** re-protection route through the destination frame's own COM
-producer — the next step (they build on the same codec, wiring the routed value as
-a producer input rather than sending on receipt). Frame (raw-PDU) routing with the
-full-contract compare is P2b; the target multi-bus comm owner is P2c.
+The forwarder decodes and re-encodes across frames and buses, sending the
+destination frame **on receipt** of the source. loom2v restricts a signal route to
+the cases this faithfully handles (it panics on the rest, which is exactly what the
+dissolution rejects at `syscheck`):
+
+- **identical value encoding** — the source and destination `SG_` must share
+  length, factor, offset, signedness, and unit. A route moves a signal to a new
+  frame / id / bit-position; it does **not** rescale (`12.3@0.1 → 12@1`) or relabel
+  units (`100 km/h → 100 mph`).
+- **matching cadence, same core, standard ids, no E2E/SecOC, one signal per
+  destination frame, single writer.**
+
+What needs the destination frame's own **COM producer** (the routed value wired as
+its input, rather than sending on receipt) — the next increment: **value
+transcoding**, **rate adaptation** (10 ms → 100 ms), the dest frame's configured
+**TX mode**, **validity/freshness** propagation, and **E2E/SecOC** re-protection.
+**Cross-core** routes need the `xioc` transport; **frame (raw-PDU)** routing with
+the full-contract compare is P2b; the **target multi-bus** comm owner (per-bus
+DBCs) is P2c.
