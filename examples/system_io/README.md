@@ -32,10 +32,19 @@ make syscheck   SYSTEM=examples/system_io/system.toml   # cross-node checks (sin
 authored `[io]`, the local io signals, and the `ButtonLamp` / `Heartbeat` FBs —
 equivalent to the hand-written `h755_io`, but derived from the system.
 
-## Bench
+## Build + flash both boards
 
-Each generated node builds and flashes like any target example (the H755 with
-`BOARD=h755zi`, the H735 with `BOARD=h735dk`), both on one CAN. Press B1 on the
-H755 → the H735 LED follows; the H755's green LED mirrors locally and its yellow
-blinks as a liveness beacon. (Per-node build wiring is the next increment; the
-generation + cross-node validation above is what this example proves today.)
+```sh
+make                                    # gen-system + build both node binaries
+make flash-h755 H755_SERIAL=<st-link>   # NUCLEO-H755ZI-Q (button)
+make flash-h735 H735_SERIAL=<st-link>   # STM32H735G-DK   (lamp)
+```
+
+Each node builds from its **generated** `gen-<node>.toml` through the same io+comm
+ThreadX pipeline as `h755_io` / `h735_io_lamp`, parameterized by `BOARD`. Wire both
+boards on one CAN bus, then **press B1 on the H755 → the H735 LED follows**; the
+H755's green LED mirrors locally and its yellow blinks as a heartbeat.
+
+Bench-verified: `can0` carries `ButtonState` 0x310 @100 ms, coherent NM alive ids
+(0x511 h755, 0x513 h735), and both telemetry beacons — the whole two-node system
+running on silicon, derived from one `system.toml`.
