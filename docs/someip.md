@@ -404,3 +404,35 @@ wedging the protected path, and the drop notice on stderr.
 
 Next: the loom2v target rung (NetX backend under driver/eth, retiring the
 hand-wired h735_someip glue) or P3 RPC.
+
+## P3 RPC transport status (2026-07-20, host layer)
+
+The transport layer of request/response, ahead of method routing:
+`comm/someip` gains `request()` / `response()` / `error_response()` — the
+correlation law in code: a response mirrors its request's service, method and
+Request ID verbatim, differing only in message type, length and return code;
+an error reply (0x81) carries a standard `rc_*` and no payload — and
+`check_request`, the server-side twin of `check_event`: method ids have bit
+15 CLEAR, the Request ID must carry a live session (nonzero — a dead session
+could not correlate the response), return code fixed at ok, plus the shared
+proto/service/iface/Length/oversize discipline. Whether a method id is
+actually SERVED is the router's decision at the routing rung (unknown method
+answers `rc_unknown_method`, not a silent drop). Golden request vector pinned
+on both repos (blobly_net oracle net#53 mirrors the session-liveness rule and
+the exact bytes — the pincer again). The method config surface, the generated
+routing, and the client adapter state (one in-flight per method, deadline,
+drain) are the routing rung; REQ-NET-016 earns its @verifies there, when a
+configured method is invocable end to end.
+
+## Target rung status (2026-07-20, DEFERRED pending a design decision)
+
+Full loom2v target eth integration is mapped but deliberately parked: the
+generated CAN comm thread moves cross-thread signals through the target IOC
+shim as 2×u32 scalar cells (`ioc_pub`/`ioc_get`), while eth frames carry
+multi-field signal structs — the honest fix is widening the target IOC to
+struct-bearing wait-free cells (the triple-buffer direction
+docs/multicore-perf.md records), which is a platform design decision and touches `boards/common/`
+IOC machinery currently being reworked on the io track. Parking it beats
+building a throwaway ≤8-byte-signals-only eth thread. The NetX seam itself
+is proven (h735_someip) and `driver/eth`'s C contract already mirrors it, so
+the rung resumes cleanly once the IOC decision lands.
