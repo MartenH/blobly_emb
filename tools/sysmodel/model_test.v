@@ -2538,6 +2538,22 @@ fn test_dbc_sender_not_in_bu() {
 		&& it.contains('BU_ list'))
 }
 
+// REQ-TOPO-003: an SG_ receiver node not in BU_ — the RX-side twin of the sender
+// case. candb keeps the SG_ receiver list, so a dangling receiver is caught even
+// though blobly derives consumers from FB reads (the DBC RX list is otherwise
+// informational).
+fn test_dbc_receiver_not_in_bu() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_rx_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// Speed's receiver 'z' is in no BU_ entry (BU_ lists a b); senders are valid.
+	bad := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" z\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
+	s := dissolved_with_dbc(dir, bad)
+	assert errs(check_dbc_conformance(s)).any(it.contains('received by "z"')
+		&& it.contains('BU_ list'))
+}
+
 // REQ-TOPO-003: a signal whose name is not an SG_ in its DBC frame.
 fn test_dbc_signal_not_in_frame() {
 	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_sg_${os.getpid()}')
