@@ -338,11 +338,27 @@ fn emit_eth_bridge(m Model) []string {
 	glue << '\tfor {'
 	glue << '\t\tnow := osal.now_us()'
 	if rx_frames.len > 0 {
-		glue << '\t\t// drain every pending datagram: source filter, envelope gate, route'
-		glue << '\t\tfor {'
+		glue << '\t\t// drain pending datagrams — BOUNDED, so a flood cannot starve the'
+		glue << '\t\t// tx work below — and COALESCE per frame: signals are state (IOC'
+		glue << '\t\t// keeps only the latest), so one publish per pass delivers the same'
+		glue << '\t\t// values without back-to-back publishes lapping an app-side reader'
+		for fr in rx_frames {
+			fb := snake(fr.name)
+			glue << '\t\tmut got_${fb} := false'
+			for s in fr.signals {
+				glue << '\t\tmut rxs_${snake(s)} := sig.${s}{}'
+			}
+		}
+		glue << '\t\tfor _ in 0 .. 16 {'
 		glue << '\t\t\trx_n := sock.recv(mut rx_ip, &rx_port, &rx_buf[0], 80)'
 		glue << '\t\t\tif rx_n <= 0 {'
 		glue << '\t\t\t\tbreak'
+		glue << '\t\t\t}'
+		glue << '\t\t\t// recv reports the REAL datagram length (MSG_TRUNC): an oversize'
+		glue << '\t\t\t// datagram was truncated into the buffer — drop, never decode a prefix'
+		glue << '\t\t\tif rx_n > 80 {'
+		glue << '\t\t\t\trx_drops++'
+		glue << '\t\t\t\tcontinue'
 		glue << '\t\t\t}'
 		glue << '\t\t\t// static-peer source filter (REQ-NET-017): SD-less, the configured'
 		glue << '\t\t\t// endpoint is the only legal talker — anyone else is a counted drop'
@@ -370,21 +386,25 @@ fn emit_eth_bridge(m Model) []string {
 			glue << '\t\t\t\t}'
 			mut uargs := []string{}
 			for s in fr.signals {
-				ss := snake(s)
-				glue << '\t\t\t\tmut rxs_${ss} := sig.${s}{}'
-				uargs << 'mut rxs_${ss}'
+				uargs << 'mut rxs_${snake(s)}'
 			}
 			glue << '\t\t\t\t${fb}_unpack(pay_rx_${fb}, ${uargs.join(', ')})'
-			for s in fr.signals {
-				ss := snake(s)
-				tr := (m.sig_of[s] or { SigInfo{} }).transport
-				glue << '\t\t\t\tosal.${publish_fn(tr)}(${ss}_ch, &rxs_${ss}, u8(sizeof(rxs_${ss})))'
-			}
+			glue << '\t\t\t\tgot_${fb} = true'
 		}
 		glue << '\t\t\t} else {'
 		glue << '\t\t\t\trx_drops++ // an event id the config does not route'
 		glue << '\t\t\t}'
 		glue << '\t\t}'
+		for fr in rx_frames {
+			fb := snake(fr.name)
+			glue << '\t\tif got_${fb} {'
+			for s in fr.signals {
+				ss := snake(s)
+				tr := (m.sig_of[s] or { SigInfo{} }).transport
+				glue << '\t\t\tosal.${publish_fn(tr)}(${ss}_ch, &rxs_${ss}, u8(sizeof(rxs_${ss})))'
+			}
+			glue << '\t\t}'
+		}
 		glue << '\t\tif rx_drops != rx_drops_told && now - rx_told_at > 1_000_000 {'
 		glue << "\t\t\teprintln('someip: rx drops counted') // no count in the text: -gc none forbids interpolation"
 		glue << '\t\t\trx_drops_told = rx_drops'

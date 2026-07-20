@@ -58,13 +58,17 @@ void blob_eth_close(int fd) {
 	}
 }
 
-/* blob_eth_recv: one datagram, nonblocking. >0 = bytes copied (src ip/port
- * filled for the caller's peer filter); 0 = nothing pending; -1 = error. */
+/* blob_eth_recv: one datagram, nonblocking. Returns the REAL datagram length
+ * (MSG_TRUNC), which may exceed max — only max bytes were copied, and the
+ * caller must DROP such a datagram rather than decode its truncated prefix
+ * (an oversize datagram whose header lies consistently would otherwise pass
+ * every gate). src ip/port filled for the caller's peer filter; 0 = nothing
+ * pending. */
 int blob_eth_recv(int fd, unsigned char *ip, unsigned short *port,
                   unsigned char *buf, int max) {
 	struct sockaddr_in a;
 	socklen_t alen = sizeof a;
-	long n = recvfrom(fd, buf, (size_t)max, 0, (struct sockaddr *)&a, &alen);
+	long n = recvfrom(fd, buf, (size_t)max, MSG_TRUNC, (struct sockaddr *)&a, &alen);
 	if (n < 0) {
 		return 0; /* EAGAIN/EWOULDBLOCK and friends: nothing pending */
 	}
