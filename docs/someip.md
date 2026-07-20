@@ -379,9 +379,14 @@ transport. Every refusal is a counted drop — never a fault — with a
 rate-limited stderr notice (no count in the text: `-gc none` forbids
 interpolation in generated runtime code).
 
-The `#154` reject-until-rung gate for rx frames is lifted; rx + `e2e` remains
-rejected (an unchecked trailer would LOOK protected — the rx-side E2E check is
-its own follow-up). `examples/host_someip` gained the round trip: `BenchCmd`
+The `#154` reject-until-rung gate for rx frames is lifted. The rx-side E2E
+check followed immediately (its interim reject-gate lifted with it): an rx
+frame with `e2e` gets an `e2e.RxState` in the bridge and the trailer is
+checked BEFORE unpack, exactly as the CAN bridge gates decode — `ok`/`lost`
+are usable (loss flagged, data valid), a wrong CRC/data-id is a counted drop
+that leaves the frame's rx state and the frames after it intact. An `rx`
+deadline block on an eth frame stays validator-rejected (no `RxState`
+deadline path is generated yet — a stale command would look fresh). `examples/host_someip` gained the round trip: `BenchCmd`
 (0x8010, rx) carries `LampCmd.level` in; the app mirrors it out on `BenchEcho`
 (0x8004, event mode) — and the harness (`e2e_test.v`, @verifies REQ-NET-015 /
 REQ-NET-017) proves: a good frame from the peer echoes back end to end; the
@@ -390,5 +395,12 @@ wrong proto/service/iface, cleared event bit, inconsistent Length, wrong
 payload length, unrouted id) is dropped without wedging the good frames that
 follow.
 
-Next: rx-side E2E check, then the loom2v target rung (NetX backend under
-driver/eth, retiring the hand-wired h735_someip glue) or P3 RPC.
+`examples/host_someip` carries both rx paths: plain `BenchCmd` and protected
+`BenchCmdSafe` (0x8011, trailer `ctr@1/crc@2`), both mirrored onto the one
+`BenchEcho` (the sum — disjoint test ranges keep the legs unambiguous). The
+harness protects its probe datagrams through the REAL `comm/e2e` and asserts:
+a protected frame accepted end to end, a tampered payload dropped without
+wedging the protected path, and the drop notice on stderr.
+
+Next: the loom2v target rung (NetX backend under driver/eth, retiring the
+hand-wired h735_someip glue) or P3 RPC.
