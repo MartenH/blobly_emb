@@ -1,16 +1,15 @@
-# examples/h735_someip — SOME/IP events on the H735-DK (docs/someip.md NetX bench rung).
-# V side (main.v + comm/someip + comm/e2e) transpiles to freestanding C like
-# h735_threadx; the ThreadX+NetX archives and the ETH driver come from the
-# h735_net recipe; netx_glue.c is the four-call seam between them.
+# examples/h735_someip — SOME/IP on the H735-DK through the FULL loom2v
+# pipeline (docs/someip.md target rung): ecu.toml -> generated FB thread + eth
+# comm thread over the NetX seam (driver/eth/eth_netx.c). Retires the
+# hand-wired netx_glue rung; the wire is byte-identical to examples/host_someip.
 #
 #   make -C ../.. deps      # once: ThreadX + NetX Duo + CMSIS
-#   make flash              # then listen for events: broadcast to :30491
+#   make flash H735=<stlink-serial>
 CROSS   ?= arm-none-eabi-
 CC       = $(CROSS)gcc
 AR       = $(CROSS)ar
 OBJCOPY  = $(CROSS)objcopy
 SIZE     = $(CROSS)size
-GDB      = $(CROSS)gdb
 V       ?= v
 REPO     = ../..
 NAME    := $(notdir $(CURDIR))
@@ -22,7 +21,7 @@ NX_PORT  = $(NX)/ports/cortex_m7/gnu
 BOARD := h735dk
 include $(REPO)/boards/$(BOARD)/board.mk
 
-INCS = $(CMSIS) $(BOARD_INCS) \
+INCS = $(CMSIS) $(BOARD_INCS) -I$(REPO)/boards/common \
        -I$(TX_PORT)/inc -I$(TX)/common/inc \
        -I$(NX_PORT)/inc -I$(NX)/common/inc
 # Tick rate: 1 kHz SysTick; nx_port.h hard-defines NX_IP_PERIODIC_RATE=100, so
@@ -33,49 +32,68 @@ CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
 LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
 
-BUILD    = build
+BUILD  = build
+TX_A   = $(BUILD)/tx.a
+TX_ASM = $(wildcard $(TX_PORT)/src/*.S)
+TX_C   = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
+TX_OBJ = $(patsubst $(TX_PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
+         $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
+NX_A   = $(BUILD)/nx.a
+NX_C   = $(wildcard $(NX)/common/src/*.c)
+NX_OBJ = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
 
-# --- ThreadX + NetX archives (identical recipes to h735_net) ---
-TX_A     = $(BUILD)/tx.a
-TX_ASM   = $(wildcard $(TX_PORT)/src/*.S)
-TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
-TX_OBJ   = $(patsubst $(TX_PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
-           $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
-NX_A     = $(BUILD)/nx.a
-NX_C     = $(wildcard $(NX)/common/src/*.c)
-NX_OBJ   = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
+# board bring-up + ETH MAC + the NetX STM32H7 driver + the shared NetX eth
+# backend + this image's byte-IOC glue
+BSP = $(BOARD_BSP_THREADX) $(REPO)/boards/$(BOARD)/eth.c \
+      $(REPO)/net/nx_driver_stm32h7.c $(REPO)/driver/eth/eth_netx.c glue.c
 
-# board bring-up + ETH driver + NetX driver glue + this example's socket glue
-BSP  = $(BOARD_BSP_THREADX) $(REPO)/boards/$(BOARD)/eth.c \
-       $(REPO)/net/nx_driver_stm32h7.c netx_glue.c
+# a failed lint must not leave a linkable app.c behind (the vinit gate is mandatory)
+.DELETE_ON_ERROR:
 
 all: $(BUILD)/$(NAME).bin
 
-# 1) transpile the V side (main.v + comm.someip + comm.e2e) to freestanding C.
-#    -enable-globals: the __global doip.Server (in-place init, no stack copy).
-$(BUILD)/app.c: main.v $(wildcard $(REPO)/comm/someip/*.v) $(wildcard $(REPO)/comm/e2e/*.v) | $(BUILD)
-	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals \
+# 0) generate the ThreadX target (gen/ports/sig) from ecu.toml via loom2v.
+gen: gen/.stamp
+gen/.stamp: ecu.toml $(REPO)/tools/ecucheck/gen.v $(wildcard $(REPO)/tools/loom2v/*.v) $(REPO)/tools/ecumodel/model.v
+	@mkdir -p gen ports sig
+	cd $(REPO) && $(V) run tools/ecucheck/gen.v examples/$(NAME)/ecu.toml
+	cd $(REPO) && $(V) run tools/loom2v examples/$(NAME)/ecu.toml examples/$(NAME)/bus.dbc \
+	  examples/$(NAME)/sig/signals_gen.v examples/$(NAME)/ports/ports_gen.v examples/$(NAME)/gen/loom_gen.v \
+	  examples/$(NAME)/gen/trace-manifest.csv
+	@touch gen/.stamp
+
+-include gen/loom_build.mk
+# remake rule: after `make clean`, regenerating via gen/.stamp must make GNU
+# make RESTART and reparse the include — without this rule LOOM_VDEFS stays
+# unset for the same run and Loom compiles its default 32-handler tables
+gen/loom_build.mk: gen/.stamp ;
+
+# 1) transpile the V stack to freestanding C (-enable-globals: ThreadX TCB/stack statics).
+$(BUILD)/app.c: main.v gen/.stamp $(wildcard app/*.v) $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) | $(BUILD)
+	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
 	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
 	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
 	$(REPO)/scripts/lint_vinit.sh $@
 
-# 2) archives (Makefile dep: NetX behavior hangs on the -D flags above)
-$(BUILD)/tx/%.o: $(TX_PORT)/src/%.S Makefile | $(BUILD)
+# 2) ThreadX + NetX kernel/stack objects.
+$(BUILD)/tx/%.o: $(TX_PORT)/src/%.S Makefile
 	@mkdir -p $(BUILD)/tx
 	$(CC) $(CFLAGS) -c $< -o $@
-$(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile | $(BUILD)
+$(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile
 	@mkdir -p $(BUILD)/tx
 	$(CC) $(CFLAGS) -c $< -o $@
 $(TX_A): $(TX_OBJ)
 	$(AR) -rc $@ $^
-$(BUILD)/nx/%.o: $(NX)/common/src/%.c Makefile | $(BUILD)
+$(BUILD)/nx/%.o: $(NX)/common/src/%.c Makefile
 	@mkdir -p $(BUILD)/nx
 	$(CC) $(CFLAGS) -c $< -o $@
 $(NX_A): $(NX_OBJ)
 	$(AR) -rc $@ $^
 
-# 3) link: V output + glue + BSP + kernel/stack archives (grouped: cross-refs)
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) | $(BUILD)
+# 3) cross-compile + link. ioc.h is a PROTOCOL contract compiled into glue.c
+# and eth_netx.c — a header change must rebuild, or `make flash` ships stale
+# IOC code against fresh generated expectations.
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(REPO)/boards/common/ioc.h
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) \
 	  -Wl,--start-group $(TX_A) $(NX_A) -Wl,--end-group -o $@
 	$(SIZE) $@
@@ -84,18 +102,13 @@ $(BUILD)/$(NAME).bin: $(BUILD)/$(NAME).elf
 	$(OBJCOPY) -O binary $< $@
 
 $(BUILD):
-	mkdir -p $(BUILD)
+	@mkdir -p $(BUILD)
 
 flash: $(BUILD)/$(NAME).bin
 	st-flash $(if $(H735),--serial $(H735),) write $(BUILD)/$(NAME).bin 0x08000000
 	st-flash $(if $(H735),--serial $(H735),) reset
 
-gdb: $(BUILD)/$(NAME).elf
-	$(GDB) $< -ex "target extended-remote :3333" -ex "load" -ex "break main__main" -ex "continue"
-
 clean:
-	rm -rf $(BUILD)
+	rm -rf $(BUILD) gen ports sig
 
-.PHONY: all flash gdb clean
-# a failed recipe (the vinit lint) must not leave its half-made target
-.DELETE_ON_ERROR:
+.PHONY: all gen flash clean

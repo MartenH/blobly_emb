@@ -424,15 +424,44 @@ routing, and the client adapter state (one in-flight per method, deadline,
 drain) are the routing rung; REQ-NET-016 earns its @verifies there, when a
 configured method is invocable end to end.
 
-## Target rung status (2026-07-20, DEFERRED pending a design decision)
+## Target rung status (2026-07-20, BENCH-VERIFIED — full pipeline on silicon)
 
-Full loom2v target eth integration is mapped but deliberately parked: the
-generated CAN comm thread moves cross-thread signals through the target IOC
-shim as 2×u32 scalar cells (`ioc_pub`/`ioc_get`), while eth frames carry
-multi-field signal structs — the honest fix is widening the target IOC to
-struct-bearing wait-free cells (the triple-buffer direction
-docs/multicore-perf.md records), which is a platform design decision and touches `boards/common/`
-IOC machinery currently being reworked on the io track. Parking it beats
-building a throwaway ≤8-byte-signals-only eth thread. The NetX seam itself
-is proven (h735_someip) and `driver/eth`'s C contract already mirrors it, so
-the rung resumes cleanly once the IOC decision lands.
+The FULL loom2v pipeline on the H735: `examples/h735_someip` is now generated
+from ecu.toml (the hand-wired netx_glue rung is retired). What the rung built:
+
+- **Size-proportional IOC** (`boards/common/ioc.h`): the triple-buffer payload
+  generalized from the demo-sized `sig_t{2xu32}` to caller-owned byte arenas —
+  3 x the SIGNAL's struct per channel, length-bounded volatile copies, IOC_MAX
+  64 as the loud ceiling only. Anything bigger is not signal state and stays
+  on owner-buffer paths (trace ring, ISO-TP link). The scalar `sig_t` layer
+  survives as wrappers, so every existing pool glue and generated contract is
+  unchanged (all seven prior target images rebuilt + h735_threadx re-benched).
+- **`driver/eth/eth_netx.c`**: the NetX backend under the same `blob_eth_*`
+  ABI as the POSIX seam — bring-up (pool/IP/ARP/ICMP/UDP + PHY link wait +
+  the 1 Hz link-poll svc thread) inside `blob_eth_open`, real-datagram-length
+  recv (the MSG_TRUNC contract), -1/0 no-data/empty sentinels, tx/fail SWD
+  counters. Selected by the Makefile source list, as the CAN backends are.
+- **The generated eth thread** (`eth_thread_entry`): the host bridge's exact
+  chain over target seams — bounded drain, source filter, envelope gate,
+  route, length check, rx-side E2E, unpack, byte-IOC publish; acquire via the
+  ever-published gate, pack, TxState, E2E stamp/rollback, NetX send. Signals
+  cross threads through the byte IOC pool (`iocb_*`, glue-owned, arenas
+  carved size-proportionally at boot). Drop/ok counters are exported globals
+  (`g_eth_rx_drops`/`g_eth_rx_ok`) — SWD-observable, the semihosting-never rule.
+- **Channel-free eth-only images**: an image whose only bus is eth needs no
+  [telemetry]/CAN — the app entry and run() emit channel-free (the io-only
+  shape's rule), and eth signals never conjure the CAN comm thread.
+
+Bench (H735-DK, 2026-07-20): generated BenchTelem events byte-verified on a
+LAN listener — envelope exact, all payload field relations live (load = q%100,
+ticks = q+0x01020304 in all four bytes, wraps = q+1000), E2E counter stepping
+loss-free, cyclic resending unchanged layouts at the 300 ms cadence. The rx
+round trip proven: BenchCmd level 0x2A from the configured peer echoed back on
+BenchEcho; a wrong-iface frame refused. SWD counters exact: g_eth_rx_ok = 1,
+g_eth_rx_drops = 2 (the firewall-priming short datagram + the wrong-iface
+frame — counted, never faulting).
+
+The eth thread and the host bridge deliberately stay two straight-line
+emitters sharing the codec/manifest (parameterizing one emitter over both
+seam sets would trade review clarity for indirection); NM-gating eth tx is an
+open question for the NM-on-eth rung.

@@ -869,3 +869,236 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 	}
 	return glue, bus_names, bus_dests
 }
+
+// eth_iocb_idx assigns each eth-frame signal its byte-IOC channel index —
+// deterministic (sorted names), derived identically by the FB glue and the
+// eth thread so the two sides can never disagree. Empty off the ThreadX
+// target (the host bridge rides osal channels instead).
+fn eth_iocb_idx(m Model) map[string]int {
+	mut idx := map[string]int{}
+	if !(m.target.threadx && m.eth_frames.len > 0) {
+		return idx
+	}
+	mut names := []string{}
+	for fr in m.eth_frames {
+		for s in fr.signals {
+			if s !in names {
+				names << s
+			}
+		}
+	}
+	names.sort()
+	for i, n in names {
+		idx[n] = i
+	}
+	return idx
+}
+
+// emit_eth_target_create emits the eth comm thread's tx_thread_create line
+// (both tx_application_define shapes call it; prio is the caller's platform
+// slot — comm-thread class).
+fn emit_eth_target_create(m Model, prio int) []string {
+	mut glue := []string{}
+	if m.eth_frames.len == 0 {
+		return glue
+	}
+	if prio < 0 {
+		panic('loom2v: the eth comm thread priority fell below 0 — it sits above the io ' +
+			'thread (min FB - 2 without a CAN comm thread), so use FB priorities >= 2')
+	}
+	glue << "\tC._tx_thread_create(&g_eth_tcb[0], c'eth', eth_thread_entry, u32(0),"
+	glue << '\t\t&g_eth_stack[0], u32(g_eth_stack.len), u32(${prio}), u32(${prio}), u32(0), u32(1))'
+	return glue
+}
+
+// emit_eth_thread_target emits the ThreadX eth comm thread — the target twin
+// of emit_eth_bridge, same chain over different seams: signals cross threads
+// through the byte IOC pool (iocb_*, ioc.h size-proportional arenas) instead
+// of osal channels, datagrams ride the NetX blob_eth_* seam instead of the
+// POSIX Socket, time is board_now_us, pacing is one kernel tick. The two
+// emitters share the codec (pack/unpack/consts) and the manifest — only the
+// loop's seams differ, and each side is bench-proven against the same host
+// oracle, so parameterizing one emitter over both seam sets would trade two
+// straight-line loops for one harder-to-review indirection (deliberate).
+fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
+	mut glue := []string{}
+	if !(m.target.threadx && m.eth_frames.len > 0) {
+		return glue
+	}
+	iocb := eth_iocb_idx(m)
+	mut iface := ''
+	if bv := doc.value_opt('bus') {
+		if bc := bv.as_map()[m.eth] {
+			iface = (bc.as_map()['interface'] or { toml.Any('') }).string()
+		}
+	}
+	mut tx_frames := []EthFrame{}
+	mut rx_frames := []EthFrame{}
+	for fr in m.eth_frames {
+		if fr.tx {
+			tx_frames << fr
+		} else {
+			rx_frames << fr
+		}
+	}
+	glue << ''
+	glue << '// --- eth comm thread (${m.eth}): SOME/IP over the NetX seam (docs/someip.md'
+	glue << '//     target rung). Rx/tx chain identical to the host bridge; IOC + NetX seams. ---'
+	glue << 'fn eth_thread_entry(input u32) {'
+	glue << "\tif C.blob_eth_open(c'${iface}', someip_port) != 0 {"
+	glue << '\t\tfor {'
+	glue << '\t\t\tC._tx_thread_sleep(1000) // dead endpoint — park, never fake a service'
+	glue << '\t\t}'
+	glue << '\t}'
+	for fr in tx_frames {
+		fb := snake(fr.name)
+		glue << '\tmut tx_${fb}_st := com.TxState{'
+		glue << '\t\tmode: com.TxMode.${fr.tx_mode}'
+		glue << '\t\tcycle_us: ${fr.tx_cycle_us}'
+		glue << '\t\tmin_delay_us: ${fr.tx_min_us}'
+		glue << '\t}'
+		if fr.e2e_on {
+			glue << '\tmut e2e_tx_${fb} := e2e.TxState{}'
+		}
+	}
+	for fr in rx_frames {
+		if fr.e2e_on {
+			glue << '\tmut e2e_rx_${snake(fr.name)} := e2e.RxState{}'
+		}
+	}
+	glue << '\tpeer_ip := someip_peer_ip // local copy: a stable address for the send seam'
+	if tx_frames.len > 0 {
+		glue << '\tmut dgram := [80]u8{} // someip.header_len + com.max_pdu'
+	}
+	// rx buffers exist for EVERY image: a tx-only endpoint still drains its
+	// bound socket — NetX queues unsolicited datagrams out of the same fixed
+	// packet pool the sends allocate from, so an undrained queue starves tx
+	// (the hand-wired glue's pool-starvation guard, kept by the generator)
+	glue << '\tmut rx_buf := [80]u8{} // oversize datagrams truncate here and drop (real length reported)'
+	glue << '\tmut rx_ip := [4]u8{}'
+	glue << '\tmut rx_port := u16(0)'
+	glue << '\tfor {'
+	glue << '\t\tC._tx_thread_sleep(1) // one kernel tick — the [target] tick_ms pace'
+	glue << '\t\tnow := C.board_now_us()'
+	if rx_frames.len == 0 {
+		glue << '\t\t// tx-only endpoint: drain and count unsolicited datagrams (bounded) —'
+		glue << '\t\t// nothing routes here, but the pool packets must come back'
+		glue << '\t\tfor _ in 0 .. 16 {'
+		glue << '\t\t\tif C.blob_eth_recv(0, &rx_ip[0], &rx_port, &rx_buf[0], 80) < 0 {'
+		glue << '\t\t\t\tbreak'
+		glue << '\t\t\t}'
+		glue << '\t\t\tg_eth_rx_drops++'
+		glue << '\t\t}'
+	}
+	if rx_frames.len > 0 {
+		glue << '\t\t// bounded drain, coalesced publish — the host bridge rules (docs/someip.md)'
+		for fr in rx_frames {
+			fb := snake(fr.name)
+			glue << '\t\tmut got_${fb} := false'
+			for s in fr.signals {
+				glue << '\t\tmut rxs_${snake(s)} := sig.${s}{}'
+			}
+		}
+		glue << '\t\tfor _ in 0 .. 16 {'
+		glue << '\t\t\trx_n := C.blob_eth_recv(0, &rx_ip[0], &rx_port, &rx_buf[0], 80)'
+		glue << '\t\t\tif rx_n < 0 {'
+		glue << '\t\t\t\tbreak // nothing pending — a zero-length datagram is REAL and falls through'
+		glue << '\t\t\t}'
+		glue << '\t\t\tif rx_n > 80 {'
+		glue << '\t\t\t\tg_eth_rx_drops++ // truncated oversize: never decode a prefix'
+		glue << '\t\t\t\tcontinue'
+		glue << '\t\t\t}'
+		glue << '\t\t\t// static-peer source filter (REQ-NET-017)'
+		glue << '\t\t\tif rx_ip[0] != someip_peer_ip[0] || rx_ip[1] != someip_peer_ip[1] || rx_ip[2] != someip_peer_ip[2] || rx_ip[3] != someip_peer_ip[3] || rx_port != someip_peer_port {'
+		glue << '\t\t\t\tg_eth_rx_drops++'
+		glue << '\t\t\t\tcontinue'
+		glue << '\t\t\t}'
+		glue << '\t\t\trh, rh_ok := someip.decode(&rx_buf[0], rx_n)'
+		glue << '\t\t\tif !rh_ok || someip.check_event(rh, rx_n, someip_service, someip_version) != .none {'
+		glue << '\t\t\t\tg_eth_rx_drops++'
+		glue << '\t\t\t\tcontinue'
+		glue << '\t\t\t}'
+		for i, fr in rx_frames {
+			fb := snake(fr.name)
+			kw := if i == 0 { 'if' } else { '} else if' }
+			glue << '\t\t\t${kw} rh.method == ${fb}_event_id {'
+			glue << '\t\t\t\tif rx_n - someip.header_len != int(${fb}_len) {'
+			glue << '\t\t\t\t\tg_eth_rx_drops++ // the router: the payload IS the frame, exactly'
+			glue << '\t\t\t\t\tcontinue'
+			glue << '\t\t\t\t}'
+			glue << '\t\t\t\tmut pay_rx_${fb} := [64]u8{} // com.max_pdu'
+			glue << '\t\t\t\tfor i in 0 .. int(${fb}_len) {'
+			glue << '\t\t\t\t\tpay_rx_${fb}[i] = rx_buf[someip.header_len + i]'
+			glue << '\t\t\t\t}'
+			if fr.e2e_on {
+				glue << '\t\t\t\tif !e2e_rx_${fb}.check(&pay_rx_${fb}[0], int(${fb}_len), ${fb}_e2e_id, ${fb}_e2e_crc, ${fb}_e2e_ctr).usable() {'
+				glue << '\t\t\t\t\tg_eth_rx_drops++'
+				glue << '\t\t\t\t\tcontinue'
+				glue << '\t\t\t\t}'
+			}
+			mut uargs := []string{}
+			for s in fr.signals {
+				uargs << 'mut rxs_${snake(s)}'
+			}
+			glue << '\t\t\t\t${fb}_unpack(pay_rx_${fb}, ${uargs.join(', ')})'
+			glue << '\t\t\t\tgot_${fb} = true'
+		}
+		glue << '\t\t\t} else {'
+		glue << '\t\t\t\tg_eth_rx_drops++ // an event id the config does not route'
+		glue << '\t\t\t}'
+		glue << '\t\t}'
+		for fr in rx_frames {
+			fb := snake(fr.name)
+			glue << '\t\tif got_${fb} {'
+			for s in fr.signals {
+				glue << '\t\t\tC.iocb_pub(${iocb[s] or { 0 }}, &rxs_${snake(s)})'
+			}
+			glue << '\t\t\tg_eth_rx_ok++'
+			glue << '\t\t}'
+		}
+	}
+	for fr in tx_frames {
+		fb := snake(fr.name)
+		mut params := []string{}
+		glue << '\t\tmut pay_${fb} := [64]u8{} // com.max_pdu'
+		glue << '\t\tmut any_${fb} := false'
+		for s in fr.signals {
+			ss := snake(s)
+			glue << '\t\tmut s_${ss} := sig.${s}{}'
+		glue << '\t\tif C.iocb_get_ever(${iocb[s] or { 0 }}, &s_${ss}) != 0 {'
+		glue << '\t\t\tany_${fb} = true'
+		glue << '\t\t}'
+			params << 's_${ss}'
+		}
+		glue << '\t\t${fb}_pack(mut pay_${fb}, ${params.join(', ')})'
+		glue << '\t\tif any_${fb} && tx_${fb}_st.should_send(now, pay_${fb}, ${fb}_len) {'
+		glue << '\t\t\tpre_${fb} := pay_${fb} // pre-E2E payload, for change detection'
+		if fr.e2e_on {
+			glue << '\t\t\te2e_save_${fb} := e2e_tx_${fb}'
+			glue << '\t\t\te2e_tx_${fb}.protect(&pay_${fb}[0], int(${fb}_len), ${fb}_e2e_id, ${fb}_e2e_crc, ${fb}_e2e_ctr)'
+		}
+		glue << '\t\t\th_${fb} := someip.notification(someip_service, ${fb}_event_id, someip_version, int(${fb}_len))'
+		glue << '\t\t\tn_${fb} := someip.encode(h_${fb}, &dgram[0])'
+		glue << '\t\t\tfor i in 0 .. int(${fb}_len) {'
+		glue << '\t\t\t\tdgram[n_${fb} + i] = pay_${fb}[i]'
+		glue << '\t\t\t}'
+		glue << '\t\t\tif C.blob_eth_send(0, &peer_ip[0], someip_peer_port, &dgram[0], n_${fb} + int(${fb}_len)) == 0 {'
+		glue << '\t\t\t\ttx_${fb}_st.mark_sent(now, pre_${fb}, ${fb}_len)'
+		if fr.e2e_on {
+			glue << '\t\t\t} else {'
+			glue << '\t\t\t\te2e_tx_${fb} = e2e_save_${fb} // unsent: keep the counter honest'
+		}
+		glue << '\t\t\t}'
+		glue << '\t\t}'
+	}
+	glue << '\t}'
+	glue << '}'
+	return glue
+}
+
+// eth_only_img: the node's ONLY bus is the eth bus — no CAN channel exists
+// anywhere in the image, so the app entry and run() are emitted channel-free
+// (the io-only shape's rule, docs/someip.md target rung).
+fn eth_only_img(m Model) bool {
+	return m.eth != '' && m.buses.len == 1
+}
