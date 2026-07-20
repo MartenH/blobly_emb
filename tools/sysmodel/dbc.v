@@ -47,6 +47,16 @@ pub fn check_route_dbc(s System) []Issue {
 			}
 		}
 		ds := dsg or { continue } // signal-not-in-dest-DBC is caught by sysgen's frame_of_signal
+		// a multiplexed destination SG_ needs selector semantics the dissolution codec
+		// has no support for (same limit as the source-side check) — the re-encode
+		// would write an inactive/overlapping branch.
+		if ds.is_multiplexor || ds.is_multiplexed {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": destination DBC SG_ "${r.signal}" (bus "${r.to}") is multiplexed — the dissolution codec has no multiplexor support'
+			}
+		}
 		// the destination frame is re-encoded + transmitted by the GATEWAY.
 		if sender != '' && !sender.starts_with('Vector__') && sender != r.gateway {
 			issues << Issue{

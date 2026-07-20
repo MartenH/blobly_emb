@@ -1298,6 +1298,28 @@ fn check_routes(s System, dissolved bool) []Issue {
 				}
 			}
 		}
+		// a SIGNAL route carries a DECLARED, typed system signal from the bus that
+		// actually produces it. Without the [[signal]] there is no field contract to
+		// check against either DBC; without a producer on `from` the gateway would
+		// decode the wrong source contract (both slip past reachability, which only
+		// fires when a cross-bus FB consumer needs the route).
+		if dissolved && r.signal != '' {
+			if _ := s.signal_by_name(r.signal) {
+			} else {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-006'
+					msg:      'route on "${r.gateway}": "${r.signal}" is not a declared system [[signal]] — a signal route carries a typed system signal'
+				}
+			}
+			if r.from != '' && !signal_produced_on(s, r.signal, r.from) {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-006'
+					msg:      'route on "${r.gateway}": signal "${r.signal}" is not produced on its source bus "${r.from}" — the gateway would decode the wrong contract'
+				}
+			}
+		}
 		// REQ-TOPO-012: a signal route makes the gateway the SOLE on-wire writer of
 		// the routed signal on the destination bus (the routed IOC/xioc cell is
 		// single-writer). Reject a gateway-local (or any node-on-`to`) FB that also

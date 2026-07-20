@@ -418,5 +418,35 @@ fn check_telemetry_frames(s System) []Issue {
 			}
 		}
 	}
+	// a signal route makes the gateway TRANSMIT the destination DBC frame. If its id
+	// equals a module RECEIVE reservation on the destination bus (a trace command,
+	// shell input, or ISO-TP rx id), routed traffic is dispatched into that module.
+	// A pure dissolved gateway has no authored producer entry for the frame, so it
+	// escapes the node scans above — check routes explicitly (REQ-TOPO-002).
+	for r in s.routes {
+		if r.signal == '' || r.to == '' {
+			continue
+		}
+		tb := s.bus_by_name(r.to) or { continue }
+		db := dbs[tb.name] or { continue }
+		mut fid := ?u32(none)
+		for m in db.messages {
+			for sg in m.signals {
+				if sg.name == r.signal {
+					fid = m.id
+					break
+				}
+			}
+		}
+		id := fid or { continue }
+		key := '${tb.name}#${id}'
+		if res := reserved[key] {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-002'
+				msg:      'route on "${r.gateway}": destination frame for "${r.signal}" (id 0x${id.hex()}) on bus "${r.to}" collides with ${res} — routed traffic would be dispatched into that module'
+			}
+		}
+	}
 	return issues
 }
