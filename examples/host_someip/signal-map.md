@@ -10,4 +10,5 @@ DO NOT EDIT — follow a signal here, or via the provenance comments in `sig/por
 | EventVal | — | eth0 | derived (eth) | 0x8002 (BenchEvent) | level@0+1 | — | app→IOC(double)→eth0 | Bench | (eth0) |
 | MixedVal | — | eth0 | derived (eth) | 0x8003 (BenchMixed) | setpoint@0+2 | — | app→IOC(double)→eth0 | Bench | (eth0) |
 | LampCmd | — | eth0 | derived (eth) | 0x8010 (BenchCmd) | level@0+1 | — | eth0→IOC(double)→app | (eth0) | Bench |
+| LampCmdSafe | — | eth0 | derived (eth) | 0x8011 (BenchCmdSafe) | level@0+1 | — | eth0→IOC(double)→app | (eth0) | Bench |
 | EchoVal | — | eth0 | derived (eth) | 0x8004 (BenchEcho) | level@0+1 | — | app→IOC(double)→eth0 | Bench | (eth0) |

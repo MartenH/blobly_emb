@@ -1363,7 +1363,7 @@ id      = 0x8005
 	assert e.any(it.contains('eth telemetry producer arrives'))
 }
 
-fn test_someip_rx_frames_accepted_and_e2e_rx_gated() {
+fn test_someip_rx_frames_accepted_plain_and_e2e() {
 	// P2: a plain rx frame is a valid config...
 	ok := errs_of(eth_head +
 		'
@@ -1389,8 +1389,9 @@ thread = "app_main"
 ' +
 		app)
 	assert ok == [], '${ok}'
-	// ...but rx + e2e is gated until the rx-side check generates
-	e := errs_of(eth_head +
+	// ...and so is rx + e2e (the generated bridge checks the trailer before
+	// unpack); the trailer must still sit AT the appended positions
+	ok2 := errs_of(eth_head +
 		'
 [[signal]]
 name = "Cmd2"
@@ -1404,9 +1405,17 @@ bus     = "eth0"
 id      = 0x8001
 signals = ["Cmd2"]
 e2e     = { data_id = 1, counter_pos = 1, crc_pos = 2 }
+
+[[fb]]
+name = "Reader"
+thread = "app_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  reads = ["Cmd2"]
 ' +
 		app)
-	assert e.any(it.contains('rx with e2e'))
+	assert ok2 == [], '${ok2}'
 }
 
 fn test_someip_rx_zero_reader_and_rx_deadline_gated() {

@@ -22,6 +22,7 @@ module main
 // sub-20 ms gaps are treated as burst artifacts, and pacing claims use
 // MEDIANS, so neither a stall nor an outlier flips a verdict.
 // @verifies REQ-NET-013
+import comm.e2e
 import comm.someip
 import net
 import os
@@ -34,6 +35,7 @@ const id_event = u16(0x8002)
 const id_mixed = u16(0x8003)
 const id_echo = u16(0x8004)
 const id_cmd = u16(0x8010)
+const id_cmd_safe = u16(0x8011)
 
 struct Rx {
 	at  time.Time
@@ -348,6 +350,24 @@ fn test_rx_gate_filter_router() {
 	assert 9 !in echoes, 'a malformed frame was decoded and echoed (REQ-NET-015)'
 	assert 55 in echoes, 'no echo after the malformed flood — a bad frame faulted the rx path'
 
+	// ---- E2E-protected rx (BenchCmdSafe): checked BEFORE unpack ----
+	// the echo sums both rx levels; the plain level rests at 55 here, so the
+	// protected legs live in a disjoint range (echo = 55 + safe level)
+	mut prot := e2e.TxState{}
+	// a properly protected frame is accepted end to end
+	c.write_to(app_addr, safe_cmd_datagram(mut prot, 100))!
+	echoes = drain_echoes(mut c, 2000 * time.millisecond)
+	assert 155 in echoes, 'no echo of the protected level — the E2E-checked rx path is broken'
+	// a tampered payload (CRC no longer matches) is a counted drop, and the
+	// good frame after it still lands (the rx state survives a bad frame)
+	mut bad := safe_cmd_datagram(mut prot, 7)
+	bad[someip.header_len] = 9 // flip the level AFTER protect: CRC now lies
+	c.write_to(app_addr, bad)!
+	c.write_to(app_addr, safe_cmd_datagram(mut prot, 110))!
+	echoes = drain_echoes(mut c, 2000 * time.millisecond)
+	assert 62 !in echoes && 64 !in echoes, 'a tampered protected frame was decoded (E2E rx check dead)'
+	assert 165 in echoes, 'no echo after the tampered frame — a bad trailer wedged the protected path'
+
 	// the refusals must have been COUNTED, not merely not-echoed: the drop
 	// counter's observable face is the rate-limited stderr notice, printed
 	// only when the count advances — silence here means the counter is dead
@@ -355,4 +375,16 @@ fn test_rx_gate_filter_router() {
 	p.wait()
 	errout := p.stderr_slurp()
 	assert errout.contains('someip: rx drops counted'), 'no drop notice on stderr — refusals were not counted (REQ-NET-015/017)'
+}
+
+// safe_cmd_datagram builds a BenchCmdSafe notification: one level byte behind
+// the configured E2E trailer (data_id 0x22, ctr@1, crc@2) — protected through
+// the REAL comm/e2e, so the probe stamps exactly what the bridge checks.
+fn safe_cmd_datagram(mut tx e2e.TxState, level u8) []u8 {
+	h := someip.notification(service, id_cmd_safe, iface_ver, 3)
+	mut d := []u8{len: someip.header_len + 3}
+	someip.encode(h, unsafe { &d[0] })
+	d[someip.header_len] = level
+	tx.protect(unsafe { &d[someip.header_len] }, 3, 0x22, 2, 1)
+	return d
 }
