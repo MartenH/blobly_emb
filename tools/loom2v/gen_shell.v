@@ -8,7 +8,7 @@ module main
 import toml
 import comm.shell
 
-const shell_config_keys = ['enabled', 'bus', 'commands']
+const shell_config_keys = ['enabled', 'bus', 'commands', 'method', 'allow_mutate']
 
 struct ShellCfg {
 mut:
@@ -17,6 +17,10 @@ mut:
 	in_id  u32 = 0x7F0
 	fc_id  u32 = 0x7F2
 	out_id u32 = 0x7F1
+	// the eth RPC form (docs/someip.md P3): the command line rides ONE method
+	// id; the access gate defaults CLOSED (REQ-NET-018)
+	method       u32
+	allow_mutate bool
 	// example-provided commands ([shell] commands = ["cm4"]): each name X becomes
 	// `int shell_X(unsigned char*, int)` in the example's comm_glue.c, an adapter, and a
 	// registry entry — target-backed commands without touching the generator per command.
@@ -29,6 +33,8 @@ fn parse_shell(doc toml.Doc, dbc string) ShellCfg {
 		sm := scfg.as_map()
 		t.on = (sm['enabled'] or { toml.Any(true) }).bool()
 		t.bus = (sm['bus'] or { toml.Any('') }).string()
+		t.method = u32((sm['method'] or { toml.Any(0) }).int())
+		t.allow_mutate = (sm['allow_mutate'] or { toml.Any(false) }).bool()
 		for c in (sm['commands'] or { toml.Any([]toml.Any{}) }).array() {
 			name := c.string()
 			if name.len == 0 || name.len > 8 {
@@ -179,4 +185,26 @@ fn shell_manifest_frames(m Model) []string {
 		'fc,0x${m.shell.fc_id.hex()},${sbus}',
 		'out,0x${m.shell.out_id.hex()},${sbus}',
 	]
+}
+
+// shell_on_eth: the [shell] module is bound to the eth bus — the RPC form
+// (docs/someip.md P3): one method id, request -> dispatch -> response
+// datagram, served by the generated eth thread.
+fn shell_on_eth(m Model) bool {
+	return m.shell.on && m.eth != '' && m.shell.bus == m.eth
+}
+
+// shell_eth_init: the eth thread's registry init. Built-ins + the configured
+// C-backed commands only — the CAN-side ps/bmc registrations stay with the
+// comm-thread glue that provides their C halves; sharing that C is its own
+// cleanup rung.
+fn shell_eth_init(m Model) []string {
+	if !shell_on_eth(m) {
+		return []string{}
+	}
+	mut g := ['\tg_sh.init(u32(0)) // in place; out_id unused on eth (responses are datagrams)']
+	for name in m.shell.commands {
+		g << "\tg_sh.register('${name}', 'target command (glue)', shell_${name}_cmd)"
+	}
+	return g
 }

@@ -5,6 +5,7 @@ import sig
 import ports
 import app
 import loom
+import comm.shell
 import comm.com
 import comm.someip
 import comm.e2e
@@ -74,6 +75,8 @@ fn eth_thread_entry(input u32) {
 			C._tx_thread_sleep(1000) // dead endpoint — park, never fake a service
 		}
 	}
+	g_sh.init(u32(0)) // in place; out_id unused on eth (responses are datagrams)
+	mut rpc_buf := [1040]u8{} // someip.header_len + someip.max_rpc: ONE response datagram
 	mut tx_bench_telem_st := com.TxState{
 		mode: com.TxMode.cyclic
 		cycle_us: 300000
@@ -111,7 +114,48 @@ fn eth_thread_entry(input u32) {
 				continue
 			}
 			rh, rh_ok := someip.decode(&rx_buf[0], rx_n)
-			if !rh_ok || someip.check_event(rh, rx_n, someip_service, someip_version) != .none {
+			if !rh_ok {
+				g_eth_rx_drops++
+				continue
+			}
+			if rh.mtype == someip.mt_request {
+				if someip.check_request(rh, rx_n, someip_service, someip_version) != .none {
+					g_eth_rx_drops++
+					continue
+				}
+				if rh.method != u16(0x1) {
+					eh := someip.error_response(rh, someip.rc_unknown_method)
+					en := someip.encode(eh, &rpc_buf[0])
+					C.blob_eth_send(0, &peer_ip[0], someip_peer_port, &rpc_buf[0], en)
+					continue
+				}
+				// the payload IS the command line (requests stay <= max_payload)
+				mut cmd_line := [64]u8{}
+				cl := rx_n - someip.header_len
+				for i in 0 .. cl {
+					cmd_line[i] = rx_buf[someip.header_len + i]
+				}
+				mut rpc_rsp := shell.Rsp{}
+				if !g_sh.dispatch(cmd_line, cl, now, false, mut rpc_rsp) {
+					// the access gate refused a state-changing command (REQ-NET-018)
+					eh := someip.error_response(rh, someip.rc_denied)
+					en := someip.encode(eh, &rpc_buf[0])
+					C.blob_eth_send(0, &peer_ip[0], someip_peer_port, &rpc_buf[0], en)
+					continue
+				}
+				mut rl := int(rpc_rsp.len)
+				if rl > someip.max_rpc {
+					rl = someip.max_rpc // one datagram, never segmentation
+				}
+				ph := someip.response(rh, rl)
+				pn := someip.encode(ph, &rpc_buf[0])
+				for i in 0 .. rl {
+					rpc_buf[pn + i] = rpc_rsp.buf[i]
+				}
+				C.blob_eth_send(0, &peer_ip[0], someip_peer_port, &rpc_buf[0], pn + rl)
+				continue
+			}
+			if someip.check_event(rh, rx_n, someip_service, someip_version) != .none {
 				g_eth_rx_drops++
 				continue
 			}
@@ -185,6 +229,41 @@ fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)
 fn C._tx_thread_sleep(u32) u32
 fn C._tx_initialize_kernel_enter()
 fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32
+fn C.shell_ps(&u8, int) int
+fn C.shell_bmc(&u8, int) int
+
+fn shell_ps_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
+	n := C.shell_ps(&rsp.buf[0], 520)
+	if n > 0 {
+		rsp.len = n
+	}
+}
+
+fn shell_bmc_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
+	n := C.shell_bmc(&rsp.buf[0], 520)
+	if n > 0 {
+		rsp.len = n
+	}
+}
+
+// stat_vals: one handler line, values only — the caller writes the label first (the
+// helper deliberately takes no text parameter: this generated file sits inside the
+// no-alloc lint scan, which bans the heap-backed text type even as a param).
+fn stat_vals(mut rsp shell.Rsp, st loom.HandlerStat) {
+	rsp.write_u32_padded(st.last_us, 7)
+	rsp.write_u32_padded(st.max_us, 7)
+	mean := if st.count > 0 { u32(st.total_us / u64(st.count)) } else { u32(0) }
+	rsp.write_u32_padded(mean, 7)
+	rsp.write_u32(st.count)
+	rsp.nl()
+}
+
+fn shell_stat_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
+	rsp.write('handler             last   max    mean   n (us)')
+	rsp.nl()
+	rsp.write_padded('Bench.on_100ms', 20)
+	stat_vals(mut rsp, g_sched_app.stat(0))
+}
 fn C.blob_eth_open(&char, u16) int
 fn C.blob_eth_send(int, &u8, u16, &u8, int) int
 fn C.blob_eth_recv(int, &u8, &u16, &u8, int) int
@@ -197,6 +276,7 @@ __global (
 	g_app_tcb   [32]u64  // >= sizeof(TX_THREAD) (200 B), 8-byte aligned
 	g_app_stack [4096]u8
 	g_sched_app loom.Scheduler // bss, never an entry-frame local
+	g_sh shell.ShellModule
 	g_eth_tcb   [32]u64  // the SOME/IP eth comm thread (docs/someip.md)
 	g_eth_stack [4096]u8 // someip codec + TxState/E2E frames: comm-thread-class depth
 	g_eth_rx_ok u32

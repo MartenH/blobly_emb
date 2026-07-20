@@ -916,7 +916,41 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			continue
 		}
 		if blk == 'shell' {
-			errs << '[shell] is bound to eth bus "${eth}" — the eth shell arrives with the RPC phase (P3: method-form request/response + the access gate, docs/someip.md); keep the shell on a CAN bus'
+			// the eth shell is the RPC phase (docs/someip.md P3): the module
+			// binds ONE method id (bit 15 clear — a method, not an event) and
+			// the generated eth thread serves request -> dispatch -> response.
+			// ThreadX-only, like every module; the access gate defaults CLOSED
+			// (allow_mutate=false: a build without the gate exposes only
+			// read-class methods, REQ-NET-018).
+			mut tkind := ''
+			if tv2 := doc.value_opt('target') {
+				tkind = str_of(tv2.as_map(), 'kind')
+			}
+			if tkind != 'threadx' {
+				errs << '[shell] on eth bus "${eth}" needs [target] kind = "threadx" — the eth RPC path is served by the generated eth thread (docs/someip.md P3)'
+			}
+			if mv := bm['method'] {
+				if mv is i64 {
+					if mv < 1 || mv > 0x7FFF {
+						errs << '[shell] method 0x${mv.hex()} is not a method id — methods have bit 15 CLEAR and are nonzero (0x0001..0x7FFF; events own 0x8000..)'
+					}
+				} else {
+					errs << '[shell] method must be an integer method id'
+				}
+			} else {
+				errs << '[shell] on eth bus "${eth}" is missing `method` (the SOME/IP method id its command line rides, 0x0001..0x7FFF)'
+			}
+			if av := bm['allow_mutate'] {
+				if av !is bool {
+					errs << '[shell] allow_mutate must be a boolean (the REQ-NET-018 access gate; default false)'
+				}
+			}
+			// single-bus images only for this rung: on a mixed image the CAN
+			// comm thread's module registrations (nm/stat) and the eth thread
+			// would share the registry across execution contexts
+			if bus_names.len > 1 {
+				errs << '[shell] on eth needs a single-bus (eth-only) image for now — a CAN comm thread would register its shell commands from another execution context (docs/someip.md P3)'
+			}
 			continue
 		}
 		// the TARGET emitters still generate the CAN telemetry path
