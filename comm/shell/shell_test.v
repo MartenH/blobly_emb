@@ -1,7 +1,6 @@
 module shell
 
 // @verifies REQ-SHELL-001 REQ-SHELL-002 REQ-SHELL-003
-
 import comm.isotp
 import driver.can
 
@@ -108,4 +107,44 @@ fn test_busy_drops_second_line() {
 	out := pump(mut m)
 	assert out.contains('uptime  - time since boot') // the help listing (8-col aligned), not the uptime output
 	assert !out.contains('up 0m')
+}
+
+// --- the access gate (REQ-NET-018 groundwork, deliberately left untagged for
+// trace: the requirement verifies where a state-changing method is really
+// exposed over the network; this proves the enforcement mechanism) ---------
+
+fn poke_cmd(args &u8, args_len int, now u64, mut rsp Rsp) {
+	rsp.write('poked')
+	rsp.nl()
+}
+
+fn gline(s string) [64]u8 {
+	mut d := [64]u8{}
+	for i in 0 .. s.len {
+		d[i] = s[i]
+	}
+	return d
+}
+
+fn test_dispatch_gates_mutating_commands() {
+	mut m := ShellModule{}
+	m.init(0)
+	m.register_mut('poke', 'a state-changing test command', poke_cmd)
+	// gated wire: the mutating command is refused BEFORE it runs
+	mut rsp := Rsp{}
+	assert !m.dispatch(gline('poke'), 4, 0, false, mut rsp)
+	assert rsp.len == 0, 'the gate must refuse before the command writes anything'
+	// ungated wire: it runs
+	mut rsp2 := Rsp{}
+	assert m.dispatch(gline('poke'), 4, 0, true, mut rsp2)
+	assert rsp2.len > 0
+	// read-class commands pass the gated wire untouched
+	mut rsp3 := Rsp{}
+	assert m.dispatch(gline('uptime'), 6, 0, false, mut rsp3)
+	assert rsp3.len > 0
+	// unknown command is a NORMAL response either way (the router's business
+	// is method ids; unknown LINES answer with help text, never a refusal)
+	mut rsp4 := Rsp{}
+	assert m.dispatch(gline('nosuch'), 6, 0, false, mut rsp4)
+	assert rsp4.len > 0
 }

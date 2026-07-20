@@ -1002,16 +1002,37 @@ signals = ["Loop"]
 	assert e.any(it.contains('names eth bus "eth0" on BOTH sides'))
 }
 
-fn test_someip_shell_on_eth_rejected_until_rpc() {
+fn test_someip_shell_on_eth_rpc_rules() {
+	// the RPC form (P3): [shell] on eth needs threadx + a method id
 	e := errs_of(eth_head + '
 [shell]
 bus = "eth0"
-in  = 0x8010
-out = 0x8011
-fc  = 0x8012
 ' +
 		eth_tx_frame + app)
-	assert e.any(it.contains('eth shell arrives with the RPC phase'))
+	assert e.any(it.contains('needs [target] kind = "threadx"')), '${e}'
+	assert e.any(it.contains('missing `method`')), '${e}'
+	// an event-class id is not a method id
+	e2 := errs_of(eth_head + '
+[target]
+kind = "threadx"
+
+[shell]
+bus    = "eth0"
+method = 0x8005
+' +
+		eth_tx_frame + app)
+	assert e2.any(it.contains('bit 15 CLEAR')), '${e2}'
+	// the valid form passes
+	e3 := errs_of(eth_head + '
+[target]
+kind = "threadx"
+
+[shell]
+bus    = "eth0"
+method = 0x0001
+' +
+		eth_tx_frame + app)
+	assert !e3.any(it.contains('[shell]')), '${e3}'
 }
 
 fn test_someip_trace_inherits_telemetry_bus() {

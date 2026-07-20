@@ -1000,7 +1000,7 @@ fn eth_iocb_idx(m Model) map[string]int {
 // slot — comm-thread class).
 fn emit_eth_target_create(m Model, prio int) []string {
 	mut glue := []string{}
-	if m.eth_frames.len == 0 {
+	if !eth_thread_on(m) {
 		return glue
 	}
 	if prio < 0 {
@@ -1023,7 +1023,7 @@ fn emit_eth_target_create(m Model, prio int) []string {
 // straight-line loops for one harder-to-review indirection (deliberate).
 fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 	mut glue := []string{}
-	if !(m.target.threadx && m.eth_frames.len > 0) {
+	if !eth_thread_on(m) {
 		return glue
 	}
 	iocb := eth_iocb_idx(m)
@@ -1051,6 +1051,10 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 	glue << '\t\t\tC._tx_thread_sleep(1000) // dead endpoint — park, never fake a service'
 	glue << '\t\t}'
 	glue << '\t}'
+	glue << shell_eth_init(m)
+	if shell_on_eth(m) {
+		glue << '\tmut rpc_buf := [1040]u8{} // someip.header_len + someip.max_rpc: ONE response datagram'
+	}
 	for fr in tx_frames {
 		fb := snake(fr.name)
 		glue << '\tmut tx_${fb}_st := com.TxState{'
@@ -1081,7 +1085,7 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 	glue << '\tfor {'
 	glue << '\t\tC._tx_thread_sleep(1) // one kernel tick — the [target] tick_ms pace'
 	glue << '\t\tnow := C.board_now_us()'
-	if rx_frames.len == 0 {
+	if rx_frames.len == 0 && !shell_on_eth(m) {
 		glue << '\t\t// tx-only endpoint: drain and count unsolicited datagrams (bounded) —'
 		glue << '\t\t// nothing routes here, but the pool packets must come back'
 		glue << '\t\tfor _ in 0 .. 16 {'
@@ -1091,7 +1095,7 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 		glue << '\t\t\tg_eth_rx_drops++'
 		glue << '\t\t}'
 	}
-	if rx_frames.len > 0 {
+	if rx_frames.len > 0 || shell_on_eth(m) {
 		glue << '\t\t// bounded drain, coalesced publish — the host bridge rules (docs/someip.md)'
 		for fr in rx_frames {
 			fb := snake(fr.name)
@@ -1115,10 +1119,19 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 		glue << '\t\t\t\tcontinue'
 		glue << '\t\t\t}'
 		glue << '\t\t\trh, rh_ok := someip.decode(&rx_buf[0], rx_n)'
-		glue << '\t\t\tif !rh_ok || someip.check_event(rh, rx_n, someip_service, someip_version) != .none {'
+		glue << '\t\t\tif !rh_ok {'
 		glue << '\t\t\t\tg_eth_rx_drops++'
 		glue << '\t\t\t\tcontinue'
 		glue << '\t\t\t}'
+		glue << emit_eth_rpc_branch(m)
+		glue << '\t\t\tif someip.check_event(rh, rx_n, someip_service, someip_version) != .none {'
+		glue << '\t\t\t\tg_eth_rx_drops++'
+		glue << '\t\t\t\tcontinue'
+		glue << '\t\t\t}'
+		if rx_frames.len == 0 {
+			// rpc-only image: a valid event NOTIFICATION has nowhere to route
+			glue << '\t\t\tg_eth_rx_drops++ // no rx event frames configured'
+		}
 		for i, fr in rx_frames {
 			fb := snake(fr.name)
 			kw := if i == 0 { 'if' } else { '} else if' }
@@ -1144,9 +1157,11 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 			glue << '\t\t\t\t${fb}_unpack(pay_rx_${fb}, ${uargs.join(', ')})'
 			glue << '\t\t\t\tgot_${fb} = true'
 		}
-		glue << '\t\t\t} else {'
-		glue << '\t\t\t\tg_eth_rx_drops++ // an event id the config does not route'
-		glue << '\t\t\t}'
+		if rx_frames.len > 0 {
+			glue << '\t\t\t} else {'
+			glue << '\t\t\t\tg_eth_rx_drops++ // an event id the config does not route'
+			glue << '\t\t\t}'
+		}
 		glue << '\t\t}'
 		for fr in rx_frames {
 			fb := snake(fr.name)
@@ -1202,4 +1217,61 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 // (the io-only shape's rule, docs/someip.md target rung).
 fn eth_only_img(m Model) bool {
 	return m.eth != '' && m.buses.len == 1
+}
+
+// emit_eth_rpc_branch: the request path inside the eth thread's drain
+// (docs/someip.md P3): a REQUEST message type takes this branch — envelope
+// gate (check_request: live Request ID, bit-15-clear method), the router's
+// method match (unknown method ANSWERS rc_unknown_method — a served port is
+// never a silent drop), the REQ-NET-018 access gate (rc_denied before the
+// command runs), then dispatch -> ONE response datagram (correlation
+// mirrored by someip.response). Single in-flight per method by construction:
+// dispatch is synchronous on this thread.
+fn emit_eth_rpc_branch(m Model) []string {
+	mut glue := []string{}
+	if !shell_on_eth(m) {
+		return glue
+	}
+	am := if m.shell.allow_mutate { 'true' } else { 'false' }
+	glue << '\t\t\tif rh.mtype == someip.mt_request {'
+	glue << '\t\t\t\tif someip.check_request(rh, rx_n, someip_service, someip_version) != .none {'
+	glue << '\t\t\t\t\tg_eth_rx_drops++'
+	glue << '\t\t\t\t\tcontinue'
+	glue << '\t\t\t\t}'
+	glue << '\t\t\t\tif rh.method != u16(0x${m.shell.method.hex()}) {'
+	glue << '\t\t\t\t\teh := someip.error_response(rh, someip.rc_unknown_method)'
+	glue << '\t\t\t\t\ten := someip.encode(eh, &rpc_buf[0])'
+	glue << '\t\t\t\t\tC.blob_eth_send(0, &peer_ip[0], someip_peer_port, &rpc_buf[0], en)'
+	glue << '\t\t\t\t\tcontinue'
+	glue << '\t\t\t\t}'
+	glue << '\t\t\t\t// the payload IS the command line (requests stay <= max_payload)'
+	glue << '\t\t\t\tmut cmd_line := [64]u8{}'
+	glue << '\t\t\t\tcl := rx_n - someip.header_len'
+	glue << '\t\t\t\tfor i in 0 .. cl {'
+	glue << '\t\t\t\t\tcmd_line[i] = rx_buf[someip.header_len + i]'
+	glue << '\t\t\t\t}'
+	glue << '\t\t\t\tmut rpc_rsp := shell.Rsp{}'
+	glue << '\t\t\t\tif !g_sh.dispatch(cmd_line, cl, now, ${am}, mut rpc_rsp) {'
+	glue << '\t\t\t\t\t// the access gate refused a state-changing command (REQ-NET-018)'
+	glue << '\t\t\t\t\teh := someip.error_response(rh, someip.rc_denied)'
+	glue << '\t\t\t\t\ten := someip.encode(eh, &rpc_buf[0])'
+	glue << '\t\t\t\t\tC.blob_eth_send(0, &peer_ip[0], someip_peer_port, &rpc_buf[0], en)'
+	glue << '\t\t\t\t\tcontinue'
+	glue << '\t\t\t\t}'
+	glue << '\t\t\t\tmut rl := int(rpc_rsp.len)'
+	glue << '\t\t\t\tif rl > shell.max_rsp {'
+	glue << '\t\t\t\t\trl = shell.max_rsp // the Rsp BUFFER bound: an over-reporting C command must not read past it'
+	glue << '\t\t\t\t}'
+	glue << '\t\t\t\tif rl > someip.max_rpc {'
+	glue << '\t\t\t\t\trl = someip.max_rpc // one datagram, never segmentation'
+	glue << '\t\t\t\t}'
+	glue << '\t\t\t\tph := someip.response(rh, rl)'
+	glue << '\t\t\t\tpn := someip.encode(ph, &rpc_buf[0])'
+	glue << '\t\t\t\tfor i in 0 .. rl {'
+	glue << '\t\t\t\t\trpc_buf[pn + i] = rpc_rsp.buf[i]'
+	glue << '\t\t\t\t}'
+	glue << '\t\t\t\tC.blob_eth_send(0, &peer_ip[0], someip_peer_port, &rpc_buf[0], pn + rl)'
+	glue << '\t\t\t\tcontinue'
+	glue << '\t\t\t}'
+	return glue
 }
