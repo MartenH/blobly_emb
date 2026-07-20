@@ -6,7 +6,7 @@ module gen
 pub const src_frame_id = u32(0x100)
 pub const src_frame_dlc = u8(8)
 
-// Speed: 0|16 @1 (Intel) unsigned (1.0,0.0) ""
+// Speed: 0|16 @1 (Intel) unsigned (0.1,0.0) "km/h"
 pub fn src_frame_speed_raw(data [64]u8) u64 {
 	mut raw := u64(0)
 	for i in 0 .. 16 {
@@ -22,7 +22,7 @@ pub fn src_frame_speed_raw(data [64]u8) u64 {
 }
 pub fn src_frame_speed_phys(data [64]u8) f64 {
 	raw := src_frame_speed_raw(data)
-	return f64(raw) * 1.0 + 0.0
+	return f64(raw) * 0.1 + 0.0
 }
 pub fn src_frame_speed_set_raw(mut data [64]u8, raw u64) {
 	for i in 0 .. 16 {
@@ -38,7 +38,7 @@ pub fn src_frame_speed_set_raw(mut data [64]u8, raw u64) {
 	}
 }
 pub fn src_frame_speed_set(mut data [64]u8, phys f64) {
-	x := (phys - 0.0) / 1.0
+	x := (phys - 0.0) / 0.1
 	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
 	if raw < 0 {
 		raw += i64(u64(1) << 16)
@@ -50,7 +50,7 @@ pub fn src_frame_speed_set(mut data [64]u8, phys f64) {
 pub const dst_frame_id = u32(0x200)
 pub const dst_frame_dlc = u8(8)
 
-// Speed: 8|16 @1 (Intel) unsigned (1.0,0.0) ""
+// Speed: 8|16 @1 (Intel) unsigned (1.0,0.0) "km/h"
 pub fn dst_frame_speed_raw(data [64]u8) u64 {
 	mut raw := u64(0)
 	for i in 0 .. 16 {
