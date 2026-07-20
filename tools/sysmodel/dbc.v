@@ -23,8 +23,16 @@ pub fn check_route_dbc(s System) []Issue {
 		}
 		to := s.bus_by_name(r.to) or { continue }
 		sig := s.signal_by_name(r.signal) or { continue }
+		// a routed signal must have a destination DBC to re-encode into. Reject a
+		// dest bus with no `dbc` HERE so syscheck and sysgen fail on the same contract
+		// (sysgen's frame_of_signal would otherwise fail only mid-generation).
 		if to.dbc == '' {
-			continue // absence of a DBC is reported elsewhere
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": destination bus "${r.to}" has no `dbc` to re-encode signal "${r.signal}" into'
+			}
+			continue
 		}
 		path := if os.is_abs_path(to.dbc) { to.dbc } else { os.join_path(s.dir, to.dbc) }
 		db := candb.load_dbc_file(path) or {
@@ -36,17 +44,29 @@ pub fn check_route_dbc(s System) []Issue {
 			continue
 		}
 		mut dsg := ?candb.Signal(none)
+		mut dmsg := ?candb.Message(none)
 		mut sender := ''
 		for m in db.messages {
 			for sg in m.signals {
 				if sg.name == r.signal {
 					dsg = sg
+					dmsg = m
 					sender = m.sender
 					break
 				}
 			}
 		}
-		ds := dsg or { continue } // signal-not-in-dest-DBC is caught by sysgen's frame_of_signal
+		// signal-not-in-dest-DBC: report HERE too, so syscheck rejects the same
+		// contract sysgen's frame_of_signal does (not only mid-generation).
+		ds := dsg or {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": signal "${r.signal}" is not defined in destination DBC "${to.dbc}" (bus "${r.to}")'
+			}
+			continue
+		}
+		dm := dmsg or { continue }
 		// a multiplexed destination SG_ needs selector semantics the dissolution codec
 		// has no support for (same limit as the source-side check) — the re-encode
 		// would write an inactive/overlapping branch.
@@ -72,6 +92,15 @@ pub fn check_route_dbc(s System) []Issue {
 				severity: .error
 				req:      'REQ-TOPO-003'
 				msg:      'route on "${r.gateway}": signal "${r.signal}" fields are ${bits} bits but destination DBC SG_ is ${ds.length} bits (bus "${r.to}")'
+			}
+		}
+		// ...and fit the destination FRAME's payload — a wide SG_ in a short BO_ would
+		// be truncated to the declared DLC on the wire (the source-side check does this).
+		if bits > dm.dlc * 8 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": signal "${r.signal}" needs ${bits} bits but destination frame "${dm.name}" is only ${dm.dlc} bytes (${dm.dlc * 8} bits) on bus "${r.to}"'
 			}
 		}
 		if want := field_signed(sig.fields) {

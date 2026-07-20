@@ -148,7 +148,18 @@ fn check_dissolved_nodes(s System) []Issue {
 			// gateway: every bus it names must be declared (each carries a route or
 			// its own signals); NM is scoped to the primary bus buses[0] below (a
 			// per-bus-NM gateway is a later P2 item, docs/multi-node.md).
+			mut seen_bus := map[string]bool{}
 			for bn in n.buses {
+				if seen_bus[bn] {
+					// a duplicate would emit that [bus.*] table twice — reject before
+					// generation rather than failing when ecucheck parses the output.
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-006'
+						msg:      'node "${n.name}": bus "${bn}" is listed more than once in `buses`'
+					}
+				}
+				seen_bus[bn] = true
 				if _ := s.bus_by_name(bn) {
 				} else {
 					issues << Issue{
