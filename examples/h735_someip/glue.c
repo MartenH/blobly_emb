@@ -14,9 +14,10 @@
 #include "ioc.h"
 
 #define IOCB_POOL_N     8
-#define IOCB_ARENA_SIZE (IOCB_POOL_N * 3 * IOC_MAX) /* worst case; used = 3 x each signal */
+/* worst case; used = the line-rounded 3 x each signal (IOC_ARENA_BYTES) */
+#define IOCB_ARENA_SIZE (IOCB_POOL_N * IOC_ARENA_BYTES(IOC_MAX))
 static ioc_t g_iocb[IOCB_POOL_N];
-static volatile uint8_t g_iocb_arena[IOCB_ARENA_SIZE];
+static volatile uint8_t g_iocb_arena[IOCB_ARENA_SIZE] __attribute__((aligned(32)));
 static uint32_t g_iocb_used;
 static unsigned char g_iocb_seen[IOCB_POOL_N]; /* sticky ever-published, reader-private */
 
@@ -25,12 +26,13 @@ static unsigned char g_iocb_seen[IOCB_POOL_N]; /* sticky ever-published, reader-
  * a config bug loud enough to halt boot (never a silent alias). */
 void iocb_cfg(int i, unsigned short size) {
 	if (i < 0 || i >= IOCB_POOL_N || size == 0u || size > IOC_MAX
-	    || g_iocb_used + 3u * (uint32_t)size > sizeof(g_iocb_arena)) {
+	    || g_iocb_used + IOC_ARENA_BYTES(size) > sizeof(g_iocb_arena)) {
 		for (;;) {
 		}
 	}
 	ioc_init(&g_iocb[i], &g_iocb_arena[g_iocb_used], size);
-	g_iocb_used += 3u * (uint32_t)size;
+	/* line-rounded stride: channels never share a cache line (ioc.h) */
+	g_iocb_used += IOC_ARENA_BYTES(size);
 }
 
 void iocb_pub(int i, const void *src) {

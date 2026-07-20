@@ -29,6 +29,15 @@
  * bound exists so glue arenas have a named limit, not so channels allocate it. */
 #define IOC_MAX 64
 
+/* IOC_ARENA_BYTES: one channel's arena size, rounded to a full Cortex-M7 cache
+ * line (and the arena storage must be aligned(32)) so independent channels never
+ * share a line — the documented no-false-sharing invariant. Same-core threads
+ * with D-cache off don't strictly need it, but the contract must hold everywhere
+ * ioc.h is compiled (shared-SRAM placements included), so the rounding is part
+ * of the arena contract, not a per-example choice. */
+#define IOC_LINE 32u
+#define IOC_ARENA_BYTES(size) ((3u * (uint32_t)(size) + (IOC_LINE - 1u)) & ~(IOC_LINE - 1u))
+
 /* The SCALAR wrapper shape (two u32s) the existing glue pools expose to generated
  * code (ioc_pub/ioc_get by index); struct-bearing channels use the byte API. */
 typedef struct {

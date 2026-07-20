@@ -18,9 +18,10 @@
 /* Cross-thread signals. Phase 6 places these in shared SRAM for the cross-core case. */
 ioc_t g_loadcmd;  /* Governor -> Load : a = iters */
 ioc_t g_workload; /* Load -> comm     : a = iters_seen, b = acc */
-/* size-proportional arenas: 3 x the scalar sig_t per channel (ioc.h) */
-volatile uint8_t g_loadcmd_arena[3 * sizeof(sig_t)];
-volatile uint8_t g_workload_arena[3 * sizeof(sig_t)];
+/* size-proportional arenas: 3 x the scalar sig_t per channel, line-rounded +
+ * line-aligned so the two channels never share a cache line (ioc.h invariant) */
+volatile uint8_t g_loadcmd_arena[IOC_ARENA_BYTES(sizeof(sig_t))] __attribute__((aligned(32)));
+volatile uint8_t g_workload_arena[IOC_ARENA_BYTES(sizeof(sig_t))] __attribute__((aligned(32)));
 
 /* Governor's triangle-wave work command (mirrors h735_app): the load breathes 48k..96k
  * LCG iterations, one 2k step per run, so Load's CPU time in the trace rises and falls
