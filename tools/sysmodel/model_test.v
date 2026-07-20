@@ -2522,6 +2522,38 @@ fn test_dbc_sender_mismatch() {
 		&& it.contains('producer "a"'))
 }
 
+// REQ-TOPO-003: a BO_ sender that is not in the DBC's own BU_ roster — a dangling
+// node reference (an invalid DBC). This is the "renamed the node ONLY in BU_"
+// slip: the sender still equals the producer, so the mismatch check above passes,
+// but the BU_ list no longer declares it.
+fn test_dbc_sender_not_in_bu() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_bu_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// SpeedFrame sender 'a' still matches producer 'a', but BU_ lists only 'b'.
+	bad := 'VERSION ""\nBU_: b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" b\n'
+	s := dissolved_with_dbc(dir, bad)
+	assert errs(check_dbc_conformance(s)).any(it.contains('transmitted by "a"')
+		&& it.contains('BU_ list'))
+}
+
+// REQ-TOPO-003: an SG_ receiver node not in BU_ — the RX-side twin of the sender
+// case. candb keeps the SG_ receiver list, so a dangling receiver is caught even
+// though blobly derives consumers from FB reads (the DBC RX list is otherwise
+// informational).
+fn test_dbc_receiver_not_in_bu() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_rx_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// Speed's receiver 'z' is in no BU_ entry (BU_ lists a b); senders are valid.
+	bad := 'VERSION ""\nBU_: a b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" z\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" a\n'
+	s := dissolved_with_dbc(dir, bad)
+	assert errs(check_dbc_conformance(s)).any(it.contains('received by "z"')
+		&& it.contains('BU_ list'))
+}
+
 // REQ-TOPO-003: a signal whose name is not an SG_ in its DBC frame.
 fn test_dbc_signal_not_in_frame() {
 	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_sg_${os.getpid()}')
@@ -2874,7 +2906,20 @@ fn test_dissolved_unknown_read_is_error() {
 	mut s := clean_dissolved()
 	s.nodes[0].view.fb_reads = ['Rpm', 'Ghost']
 	assert errs(validate_system_gen(s)).any(it.contains('reads "Ghost"')
-		&& it.contains('does not declare'))
+		&& it.contains('neither a system signal nor a node-local'))
+}
+
+// REQ-TOPO-005/001: a NODE-LOCAL signal (an io point) is the node's application,
+// not bus wiring — an FB may read/write it, and it does NOT trip the internals-only
+// or unknown-signal checks (a gpio/adc/pwm node in the dissolution).
+fn test_dissolved_local_io_signal_accepted() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.local_signals = ['UserButton', 'LedGreen']
+	s.nodes[0].view.fb_reads = ['Rpm', 'UserButton'] // Rpm = system, UserButton = local io
+	s.nodes[0].view.fb_writes = ['LedGreen'] // a local io output
+	// neither the local read nor the local write is an error
+	assert !errs(validate_system_gen(s)).any(it.contains('UserButton'))
+	assert !errs(validate_system_gen(s)).any(it.contains('LedGreen'))
 }
 
 // REQ-TOPO-001: a signal no other node reads is a warning, not an error.

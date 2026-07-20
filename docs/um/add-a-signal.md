@@ -84,6 +84,23 @@ The lean ThreadX target codec has rules (loom2v enforces them loudly):
 - a tx signal is written by exactly ONE FB (the IOC cell is single-writer),
 - everything rides the one comm-thread bus (`[telemetry] bus`).
 
+**What the DBC match covers.** The signal's **name, layout, and transmitter** are
+enforced against the DBC: the name must be an `SG_`, the fields must match its
+width/signedness/payload, and the `BO_` sender must be the producer. What is *not*
+derived from the DBC is **who receives** it — the `SG_` receiver (RX) node list is
+informational. Consumers come from which FBs `read` the signal, so in a multi-node
+system the RX list need not equal the reader nodes; `syscheck` only checks that any
+node the DBC names (`BO_` sender or `SG_` receiver) is a real `BU_` node — no
+dangling references.
+
+*Why not enforce it?* Who consumes a signal is a **node-local software fact** (an FB
+read), and adding or dropping a reader is a node-internal change. If the RX list
+were load-bearing, that internal edit would force a matching edit to the **shared,
+system-owned DBC** — breaking "a node stays developable in isolation." Everything
+that affects the wire or the wiring (layout, transmitter, a consumer with no
+producer or on the wrong bus) is already checked, so the RX list would add
+bookkeeping, not safety. See [system-from-nodes.md](system-from-nodes.md).
+
 ## Cross-core signals
 
 Nothing new to learn: give `from` a partition that lives on another core (one declared
