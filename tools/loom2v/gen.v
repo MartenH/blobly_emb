@@ -1723,12 +1723,8 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 		//     on); the eth bus adds its UDP Socket param LAST (docs/someip.md). ---
 		glue << ''
 		mut waits := []string{}
-		mut eth_tx := false
-		for fr in m.eth_frames {
-			if fr.tx {
-				eth_tx = true
-			}
-		}
+		// any eth frame (either direction) needs the comm thread + its socket
+		eth_on := m.eth_frames.len > 0
 		mut params := []string{}
 		for b in bus_names {
 			params << '${snake(b)} can.Channel'
@@ -1736,7 +1732,7 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 		for b in extra_dest_buses {
 			params << '${snake(b)} can.Channel' // route-dest-only bus: channel arg, no bridge
 		}
-		if eth_tx {
+		if eth_on {
 			params << '${snake(m.eth)}_sock eth.Socket' // the eth comm thread's UDP seam
 		}
 		if params.len == 0 {
@@ -1812,7 +1808,7 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 			glue << '\tt_telem := spawn partition_telem()'
 			waits << 't_telem'
 		}
-		if eth_tx {
+		if eth_on {
 			eb := snake(m.eth)
 			glue << '\tt_${eb} := spawn partition_${eb}(${eb}_sock)'
 			waits << 't_${eb}'
@@ -2183,8 +2179,9 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 	if (m.has_can_ext && !comm_thread_on) || has_eth_tx {
 		glue << 'import comm.com' // per-PDU TX modes + RX deadline; eth codec PDU bound (max_pdu)
 	}
-	// the host eth comm thread: the UDP seam + the SOME/IP header codec
-	if has_eth_tx && !m.target.on {
+	// the host eth comm thread: the UDP seam + the SOME/IP header codec —
+	// either direction spawns it (rx-only images drain the same socket)
+	if m.eth_frames.len > 0 && !m.target.on {
 		glue << 'import driver.eth' // the eth UDP seam (docs/someip.md)
 		glue << 'import comm.someip' // the SOME/IP header codec
 	}
@@ -2247,12 +2244,8 @@ fn main() {
 		&& !(m.has_can_ext || m.isotp_conns.len > 0 || m.routes.len > 0)
 	// the trace-host runner has no eth spawn wiring — an eth tx frame there
 	// would generate a comm thread nothing starts (silently dead)
-	if trace_host {
-		for fr in m.eth_frames {
-			if fr.tx {
-				panic('loom2v: eth frames + the trace-host runner are not wired yet — the eth comm thread is spawned by the plain host run() only (docs/someip.md)')
-			}
-		}
+	if trace_host && m.eth_frames.len > 0 {
+		panic('loom2v: eth frames + the trace-host runner are not wired yet — the eth comm thread is spawned by the plain host run() only (docs/someip.md)')
 	}
 	// io emits the platform io thread for the plain host run() (P1) and the ThreadX
 	// target (the bench phase). The bare-metal superloop / trace-host runner still

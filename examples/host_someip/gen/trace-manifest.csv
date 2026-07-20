@@ -9,9 +9,13 @@ someip,0x100,1,30490,127.0.0.1:30491
 ethframe,BenchTelem,0x8001,9,tx,cyclic,300000,0x21
 ethframe,BenchEvent,0x8002,1,tx,event,100000,-
 ethframe,BenchMixed,0x8003,2,tx,mixed,300000,-
+ethframe,BenchCmd,0x8010,1,rx,cyclic,100000,-
+ethframe,BenchEcho,0x8004,1,tx,event,100000,-
 # eth layout: frame,signal,field,offset,width,type
 ethlayout,BenchTelem,BenchLoad,load,0,1,u8
 ethlayout,BenchTelem,BenchTicks,ticks,1,4,u32
 ethlayout,BenchTelem,BenchTicks,wraps,5,2,u16
 ethlayout,BenchEvent,EventVal,level,0,1,u8
 ethlayout,BenchMixed,MixedVal,setpoint,0,2,u16
+ethlayout,BenchCmd,LampCmd,level,0,1,u8
+ethlayout,BenchEcho,EchoVal,level,0,1,u8

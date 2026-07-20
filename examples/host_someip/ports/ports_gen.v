@@ -5,6 +5,8 @@ import sig
 
 pub struct BenchIn {
 pub mut:
+	// signal "LampCmd" — ch, transport double, eth0 -> app
+	lamp_cmd sig.LampCmd
 }
 pub struct BenchOut {
 pub mut:
@@ -16,4 +18,6 @@ pub mut:
 	event_val sig.EventVal
 	// signal "MixedVal" — ch, transport double, app -> eth0
 	mixed_val sig.MixedVal
+	// signal "EchoVal" — ch, transport double, app -> eth0
+	echo_val sig.EchoVal
 }

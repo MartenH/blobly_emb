@@ -5,7 +5,6 @@ module main
 // thread packs the derived layouts, wraps them in SOME/IP notification
 // headers, and sends them to the configured peer (someip_peer_ip/port).
 // Listen on the peer side to watch the events:  nc -ul 30491 | xxd
-
 import gen
 import driver.eth
 
