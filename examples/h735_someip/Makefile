@@ -63,6 +63,10 @@ gen/.stamp: ecu.toml $(REPO)/tools/ecucheck/gen.v $(wildcard $(REPO)/tools/loom2
 	@touch gen/.stamp
 
 -include gen/loom_build.mk
+# remake rule: after `make clean`, regenerating via gen/.stamp must make GNU
+# make RESTART and reparse the include — without this rule LOOM_VDEFS stays
+# unset for the same run and Loom compiles its default 32-handler tables
+gen/loom_build.mk: gen/.stamp ;
 
 # 1) transpile the V stack to freestanding C (-enable-globals: ThreadX TCB/stack statics).
 $(BUILD)/app.c: main.v gen/.stamp $(wildcard app/*.v) $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) | $(BUILD)
@@ -86,8 +90,10 @@ $(BUILD)/nx/%.o: $(NX)/common/src/%.c Makefile
 $(NX_A): $(NX_OBJ)
 	$(AR) -rc $@ $^
 
-# 3) cross-compile + link.
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX)
+# 3) cross-compile + link. ioc.h is a PROTOCOL contract compiled into glue.c
+# and eth_netx.c — a header change must rebuild, or `make flash` ships stale
+# IOC code against fresh generated expectations.
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(REPO)/boards/common/ioc.h
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) \
 	  -Wl,--start-group $(TX_A) $(NX_A) -Wl,--end-group -o $@
 	$(SIZE) $@

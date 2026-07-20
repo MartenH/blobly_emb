@@ -970,14 +970,26 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 	if tx_frames.len > 0 {
 		glue << '\tmut dgram := [80]u8{} // someip.header_len + com.max_pdu'
 	}
-	if rx_frames.len > 0 {
-		glue << '\tmut rx_buf := [80]u8{} // oversize datagrams truncate here and drop (real length reported)'
-		glue << '\tmut rx_ip := [4]u8{}'
-		glue << '\tmut rx_port := u16(0)'
-	}
+	// rx buffers exist for EVERY image: a tx-only endpoint still drains its
+	// bound socket — NetX queues unsolicited datagrams out of the same fixed
+	// packet pool the sends allocate from, so an undrained queue starves tx
+	// (the hand-wired glue's pool-starvation guard, kept by the generator)
+	glue << '\tmut rx_buf := [80]u8{} // oversize datagrams truncate here and drop (real length reported)'
+	glue << '\tmut rx_ip := [4]u8{}'
+	glue << '\tmut rx_port := u16(0)'
 	glue << '\tfor {'
 	glue << '\t\tC._tx_thread_sleep(1) // one kernel tick — the [target] tick_ms pace'
 	glue << '\t\tnow := C.board_now_us()'
+	if rx_frames.len == 0 {
+		glue << '\t\t// tx-only endpoint: drain and count unsolicited datagrams (bounded) —'
+		glue << '\t\t// nothing routes here, but the pool packets must come back'
+		glue << '\t\tfor _ in 0 .. 16 {'
+		glue << '\t\t\tif C.blob_eth_recv(0, &rx_ip[0], &rx_port, &rx_buf[0], 80) < 0 {'
+		glue << '\t\t\t\tbreak'
+		glue << '\t\t\t}'
+		glue << '\t\t\tg_eth_rx_drops++'
+		glue << '\t\t}'
+	}
 	if rx_frames.len > 0 {
 		glue << '\t\t// bounded drain, coalesced publish — the host bridge rules (docs/someip.md)'
 		for fr in rx_frames {

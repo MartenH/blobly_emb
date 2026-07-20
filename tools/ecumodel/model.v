@@ -771,7 +771,16 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			// reject until that transport rung exists
 			for p in toml_arr(doc, 'partition') {
 				pm := p.as_map()
-				if 'image' !in pm {
+				// both satellite forms: a generated image AND a hand-written
+				// external core — either way the signal rides xioc, not the
+				// eth thread's byte IOC
+				mut is_sat := 'image' in pm
+				if ev2 := pm['external'] {
+					if ev2 is bool && ev2 {
+						is_sat = true
+					}
+				}
+				if !is_sat {
 					continue
 				}
 				pname := str_of(pm, 'name')
