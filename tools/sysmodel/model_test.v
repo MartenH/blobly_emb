@@ -2522,6 +2522,22 @@ fn test_dbc_sender_mismatch() {
 		&& it.contains('producer "a"'))
 }
 
+// REQ-TOPO-003: a BO_ sender that is not in the DBC's own BU_ roster — a dangling
+// node reference (an invalid DBC). This is the "renamed the node ONLY in BU_"
+// slip: the sender still equals the producer, so the mismatch check above passes,
+// but the BU_ list no longer declares it.
+fn test_dbc_sender_not_in_bu() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_bu_${os.getpid()}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	// SpeedFrame sender 'a' still matches producer 'a', but BU_ lists only 'b'.
+	bad := 'VERSION ""\nBU_: b\nBO_ 288 SpeedFrame: 8 a\n SG_ Speed : 0|16@1+ (1,0) [0|65535] "" b\nBO_ 289 RpmFrame: 8 b\n SG_ Rpm : 0|16@1+ (1,0) [0|65535] "" b\n'
+	s := dissolved_with_dbc(dir, bad)
+	assert errs(check_dbc_conformance(s)).any(it.contains('transmitted by "a"')
+		&& it.contains('BU_ list'))
+}
+
 // REQ-TOPO-003: a signal whose name is not an SG_ in its DBC frame.
 fn test_dbc_signal_not_in_frame() {
 	dir := os.join_path(os.temp_dir(), 'sysmodel_dbc_sg_${os.getpid()}')
