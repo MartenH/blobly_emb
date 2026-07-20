@@ -75,6 +75,8 @@ $d = Req ([byte[]](0x00,0x02)) ([byte[]](0x0E,0x01,0x00,0x0C)) ($txt.GetBytes('x
 $r = RecvType 0x81
 if (-not $r) { Write-Output 'FAIL: no error for unknown method'; exit }
 if ($r[15] -ne 0x03) { Write-Output 'FAIL: error rc not rc_unknown_method'; exit }
+if ($r[2] -ne 0x00 -or $r[3] -ne 0x02) { Write-Output 'FAIL: error method not mirrored'; exit }
+if ($r[8] -ne 0x0E -or $r[9] -ne 0x01 -or $r[10] -ne 0x00 -or $r[11] -ne 0x0C) { Write-Output 'FAIL: error Request ID not mirrored'; exit }
 # leg 3: dead session -> silent drop
 $d = Req ([byte[]](0x00,0x01)) ([byte[]](0x0E,0x01,0x00,0x00)) ($txt.GetBytes('uptime'))
 [void]$udp.Send($d, $d.Length, $board)

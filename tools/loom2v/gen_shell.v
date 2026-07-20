@@ -219,8 +219,11 @@ fn shell_eth_init(m Model) []string {
 		return []string{}
 	}
 	mut g := ['\tg_sh.init(u32(0)) // in place; out_id unused on eth (responses are datagrams)']
-	// the generated read-only stat command (per-handler timing) serves eth too
-	g << "\tg_sh.register('stat', 'per-handler us: last, max, mean, count', shell_stat_cmd)"
+	// stat is deliberately NOT registered here: shell_stat_cmd reads the FB
+	// threads' Scheduler.stats directly, and from the eth thread that read
+	// preempts the writer mid-update (u64 totals tear on a 32-bit core). The
+	// CAN comm thread has the same latent race; a wait-free stats snapshot is
+	// its own rung — until then eth serves only race-free commands.
 	for name in m.shell.commands {
 		// C-backed commands are OPAQUE to the generator — fail CLOSED: they
 		// register as state-changing, so the REQ-NET-018 gate covers them

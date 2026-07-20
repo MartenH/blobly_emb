@@ -76,7 +76,6 @@ fn eth_thread_entry(input u32) {
 		}
 	}
 	g_sh.init(u32(0)) // in place; out_id unused on eth (responses are datagrams)
-	g_sh.register('stat', 'per-handler us: last, max, mean, count', shell_stat_cmd)
 	mut rpc_buf := [1040]u8{} // someip.header_len + someip.max_rpc: ONE response datagram
 	mut tx_bench_telem_st := com.TxState{
 		mode: com.TxMode.cyclic

@@ -498,3 +498,13 @@ a 107-byte response in one datagram; events streaming throughout.
 **REQ-NET-016 VERIFIED on target** (`h735-someip-hwtest`, recorded via
 `BLOB_HWTEST=1 make trace`). REQ-NET-018 stays groundwork-verified at the
 dispatch seam (untagged) until a build really exposes a mutating method.
+
+Note on `allow_mutate = true` (the open half of REQ-NET-018): the current
+gate is BUILD-TIME + the static source filter — opening it trusts the
+configured peer endpoint, nothing stronger. An authenticated per-session
+grant (the boot chain's 0x29-style challenge, key-separated) is the
+requirement's completion rung; until it exists, ship mutating methods only
+on links where the peer endpoint is a trusted boundary. The gate default
+stays closed, and `stat` is deliberately not served over eth (a cross-thread
+stats snapshot is its own rung — the reader would tear the FB schedulers'
+u64 totals).
