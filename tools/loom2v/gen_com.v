@@ -832,8 +832,15 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				}
 				rk := route_field(r2)
 				glue << '\t${snake(r2.to_frame)}_${snake(r2.signal)}_set(mut rf_${dk}.data, st.${rk}_v)'
-				if r2.from_cyc > 0 {
-					glue << '\tif st.${rk}_fresh == 0 || now - st.${rk}_fresh > u64(${u64(r2.from_cyc) * 3000}) {'
+				// freshness: suppress the frame if the source was never received, or is stale
+				// beyond its deadline — the source frame's authored [[frame]].rx.timeout_ms if
+				// present, else 3x its DBC cadence (0 = no deadline, so only never-received).
+				frof := snake(r2.from_frame)
+				timeout := m.frames.rx_timeout_us[frof] or {
+					if r2.from_cyc > 0 { r2.from_cyc * 3000 } else { 0 }
+				}
+				if timeout > 0 {
+					glue << '\tif st.${rk}_fresh == 0 || now - st.${rk}_fresh > u64(${timeout}) {'
 					glue << '\t\trf_${dk}_ok = false'
 					glue << '\t}'
 				} else {
@@ -879,14 +886,20 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				})})'
 			}
 		}
-		// one TxState per routed destination frame: its re-emit cadence (the dest
-		// frame's DBC GenMsgCycleTime, default 100 ms) + cyclic TX mode.
+		// one TxState per routed destination frame: its TX mode + cadence come from an
+		// authored [[frame]].tx if present, else cyclic at the dest DBC GenMsgCycleTime
+		// (default 100 ms). The destination composes + re-emits per this state.
 		for r in dst_frames {
 			dk := '${snake(r.to_bus)}_${snake(r.to_frame)}'
-			cyc := if r.to_cyc > 0 { r.to_cyc * 1000 } else { 100000 }
+			tof := snake(r.to_frame)
+			mode := m.frames.tx_mode[tof] or { 'cyclic' }
+			cyc := m.frames.tx_cycle_us[tof] or {
+				if r.to_cyc > 0 { r.to_cyc * 1000 } else { 100000 }
+			}
 			glue << '\tst.rt_tx_${dk} = com.TxState{'
-			glue << '\t\tmode: com.TxMode.cyclic'
+			glue << '\t\tmode: com.TxMode.${mode}'
 			glue << '\t\tcycle_us: ${cyc}'
+			glue << '\t\tmin_delay_us: ${m.frames.tx_min_us[tof] or { 0 }}'
 			glue << '\t}'
 		}
 		for msg, _ in rx_by_msg {
