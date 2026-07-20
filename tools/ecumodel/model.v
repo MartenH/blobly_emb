@@ -951,6 +951,16 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			if bus_names.len > 1 {
 				errs << '[shell] on eth needs a single-bus (eth-only) image for now — a CAN comm thread would register its shell commands from another execution context (docs/someip.md P3)'
 			}
+			// the served method IS SOME/IP traffic: an RPC-only image ([someip]
+			// + [shell], no [[frame]]) is a whole, valid configuration
+			mod_on_eth = true
+			// and it creates the same NetX-internal threads the trace manifest
+			// cannot model — the frames-path [trace] gate, mirrored here
+			if tkind == 'threadx' {
+				if _ := doc.value_opt('trace') {
+					errs << 'eth shell with [trace] on a target image — the NetX-internal threads (IP thread, eth-svc) would take first-sight trace ids the manifest does not model; trace + eth on one image is its own rung (docs/someip.md)'
+				}
+			}
 			continue
 		}
 		// the TARGET emitters still generate the CAN telemetry path

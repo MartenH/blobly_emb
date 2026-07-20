@@ -144,6 +144,9 @@ fn eth_thread_entry(input u32) {
 					continue
 				}
 				mut rl := int(rpc_rsp.len)
+				if rl > shell.max_rsp {
+					rl = shell.max_rsp // the Rsp BUFFER bound: an over-reporting C command must not read past it
+				}
 				if rl > someip.max_rpc {
 					rl = someip.max_rpc // one datagram, never segmentation
 				}
