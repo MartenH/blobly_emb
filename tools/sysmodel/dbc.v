@@ -17,10 +17,7 @@ import tools.candb
 // contract and the gateway must own the destination frame (REQ-TOPO-003/-012).
 // route_phys_range returns a DBC signal's [min, max] physical value (raw range
 // scaled by factor/offset), for the route source-vs-dest range-containment check.
-fn route_phys_range(sg candb.Signal) (f64, f64) {
-	if sg.maximum > sg.minimum {
-		return sg.minimum, sg.maximum // the authored DBC [min|max] contract
-	}
+fn route_phys_capacity(sg candb.Signal) (f64, f64) {
 	n := sg.length
 	if sg.is_signed {
 		half := f64(u64(1) << u64(n - 1))
@@ -34,33 +31,51 @@ fn route_phys_range(sg candb.Signal) (f64, f64) {
 	return if a < b { a, b } else { b, a }
 }
 
+fn route_phys_range(sg candb.Signal) (f64, f64) {
+	clo, chi := route_phys_capacity(sg)
+	if sg.maximum > sg.minimum {
+		lo := if sg.minimum > clo { sg.minimum } else { clo }
+		hi := if sg.maximum < chi { sg.maximum } else { chi }
+		return lo, hi
+	}
+	return clo, chi
+}
+
 // route_val_phys_equal compares two DBC VAL_ enum tables by PHYSICAL value (a route
 // transcodes factor/offset, so the same enum can have different raw keys).
 fn route_sig_key_phys(s candb.Signal, raw u64) f64 {
-	mut r := f64(raw)
-	if s.is_signed && s.length > 0 && s.length < 64 && raw >= (u64(1) << u64(s.length - 1)) {
-		r = f64(i64(raw) - i64(u64(1) << u64(s.length)))
-	}
+	r := if s.is_signed { f64(i64(raw)) } else { f64(raw) }
 	return r * s.factor + s.offset
 }
 
-fn route_f64_close(x f64, y f64) bool {
+fn route_val_tol(a candb.Signal, b candb.Signal) f64 {
+	fa := if a.factor < 0 { -a.factor } else { a.factor }
+	fb := if b.factor < 0 { -b.factor } else { b.factor }
+	step := if fa < fb && fa > 0 { fa } else { fb }
+	if step <= 0 {
+		return 1e-9
+	}
+	return step * 0.5
+}
+
+fn route_f64_close(x f64, y f64, tol f64) bool {
 	mut d := x - y
 	if d < 0 {
 		d = -d
 	}
-	return d < 1e-9
+	return d < tol
 }
 
 fn route_val_phys_equal(a candb.Signal, b candb.Signal) bool {
 	if a.values.len != b.values.len {
 		return false
 	}
+	tol := route_val_tol(a, b)
 	for ka, va in a.values {
 		pa := route_sig_key_phys(a, ka)
 		mut found := false
 		for kb, vb in b.values {
-			if vb == va && route_f64_close(route_sig_key_phys(b, kb), pa) {
+			if vb == va && route_f64_close(route_sig_key_phys(b, kb), pa, tol) {
 				found = true
 				break
 			}
@@ -172,6 +187,15 @@ pub fn check_route_dbc(s System) []Issue {
 						}
 					}
 					if src := ssg {
+						// the route carries the PHYSICAL value through f64 (to transcode),
+						// exact only to 52 bits — same limit loom2v enforces standalone.
+						if src.length > 52 || ds.length > 52 {
+							issues << Issue{
+								severity: .error
+								req:      'REQ-TOPO-003'
+								msg:      'route on "${r.gateway}": signal "${r.signal}" is >52 bits — the route carries the physical value through f64 (exact only to 52-bit integers)'
+							}
+						}
 						if src.unit != ds.unit {
 							issues << Issue{
 								severity: .error
