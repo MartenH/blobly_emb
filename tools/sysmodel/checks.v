@@ -8,6 +8,7 @@
 module sysmodel
 
 import os
+import tools.candb
 
 pub enum Severity {
 	error
@@ -46,7 +47,7 @@ pub fn validate_system(s System) []Issue {
 	issues << check_nm_cluster_coherence(s)
 	issues << check_telemetry_frames(s)
 	issues << check_bus_dbcs(s)
-	issues << check_routes(s)
+	issues << check_routes(s, false)
 	return issues
 }
 
@@ -62,7 +63,7 @@ pub fn validate_system_gen(s System) []Issue {
 	issues << check_identity_alloc(s)
 	issues << check_dissolved_nodes(s)
 	issues << check_partial_no_wiring(s)
-	issues << check_routes(s)
+	issues << check_routes(s, true)
 	issues << check_signals_dissolved(s)
 	issues << check_dbc_conformance(s)
 	issues << check_telemetry_frames(s)
@@ -153,6 +154,20 @@ fn check_dissolved_nodes(s System) []Issue {
 						severity: .error
 						req:      'REQ-TOPO-001'
 						msg:      'node "${n.name}": bus "${bn}" is not declared in system.toml'
+					}
+				}
+			}
+			// P2a generates a PURE-routing gateway: its own [[signal]]/[[frame]] wiring
+			// (for FBs it runs that read/write SYSTEM signals) is not emitted yet, so
+			// such an FB would reference undeclared sig.*/port types. Reject until
+			// gateway-local signal emission lands — the routes themselves ARE generated.
+			// (Node-LOCAL io signals are fine; only system signals need the wiring.)
+			for sig in s.signals {
+				if sig.name in n.view.fb_reads || sig.name in n.view.fb_writes {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-006'
+						msg:      'gateway "${n.name}" reads/writes system signal "${sig.name}" via an FB — a gateway that also produces/consumes its own signals is not generated yet (P2); in P2a a gateway may only route'
 					}
 				}
 			}
@@ -1186,15 +1201,25 @@ fn nm_timing_effective(v NodeView, param string) int {
 
 // REQ-TOPO-006: every route references a real gateway that sits on BOTH buses,
 // names distinct from/to buses, and carries exactly one of frame/signal.
-fn check_routes(s System) []Issue {
+fn check_routes(s System, dissolved bool) []Issue {
 	mut issues := []Issue{}
 	for r in s.routes {
-		// P2a generates SIGNAL routes (decode per the source DBC -> re-encode into the
-		// destination frame's COM producer). FRAME (raw-PDU) routing is P2b — its
-		// full-contract comparison + tx-ready forwarder is not generated yet, so a
-		// clean verdict would not imply a forwarder exists. Reject frame routes until
-		// then; signal routes proceed through the checks below.
-		if r.frame != '' {
+		// routes are lowered ONLY in the dissolution (sysgen reads system.toml
+		// [[signal]]s and emits each gateway's forwarder). A COMPOSED system
+		// (validate_system) never runs sysgen, so a route there would validate clean
+		// with no forwarder at runtime — reject every route in that model.
+		if !dissolved {
+			kind := if r.signal != '' { 'signal' } else { 'frame' }
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-006'
+				msg:      'route on "${r.gateway}" (${kind} "${r.signal}${r.frame}", ${r.from} -> ${r.to}): cross-bus routing is only generated in the dissolution model (system.toml [[signal]]); a composed system does not lower routes'
+			}
+		} else if r.frame != '' {
+			// dissolution: P2a generates SIGNAL routes (decode per the source DBC ->
+			// re-encode into the destination frame's COM producer). FRAME (raw-PDU)
+			// routing is P2b — its full-contract comparison + tx-ready forwarder is not
+			// generated yet, so a clean verdict would not imply a forwarder exists.
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-006'
@@ -1269,6 +1294,27 @@ fn check_routes(s System) []Issue {
 						severity: .error
 						req:      'REQ-TOPO-012'
 						msg:      'route on "${r.gateway}": signal "${r.signal}" routed to bus "${r.to}" is also written by an FB on node "${n.name}" — a routed cell has exactly one writer (the route)'
+					}
+				}
+			}
+			// REQ-TOPO-012 (frame ownership): the route makes the gateway transmit the
+			// destination FRAME (the DBC message that carries the routed signal on `to`).
+			// If ANOTHER node already produces a system signal that maps to that SAME
+			// frame on `to`, the gateway + that node both transmit one PDU — reject it.
+			if to := s.bus_by_name(r.to) {
+				if dst_frame := dbc_frame_of(s, to, r.signal) {
+					for ss in s.signals {
+						if ss.bus != r.to || ss.name == r.signal {
+							continue
+						}
+						of := dbc_frame_of(s, to, ss.name) or { continue }
+						if of == dst_frame {
+							issues << Issue{
+								severity: .error
+								req:      'REQ-TOPO-012'
+								msg:      'route on "${r.gateway}": routed signal "${r.signal}" re-encodes into frame "${dst_frame}" on bus "${r.to}", which node "${ss.producer}" already transmits (signal "${ss.name}") — one on-wire writer per frame'
+							}
+						}
 					}
 				}
 			}
@@ -1382,6 +1428,10 @@ fn signal_routed_to(s System, sig string, bus string) bool {
 // signal_produced_on: is `sig` produced on bus `bus`? Handles both models — the
 // dissolved one (a system [[signal]] declared with that name + bus) and the
 // authored one (a node on the bus whose view.produces, keyed by interface, lists it).
+// NOTE (single-hop): this recognises only DIRECT producers, not a route INTO `bus`
+// as production. So a multi-hop chain A->B->C is conservatively REJECTED (the B->C
+// route sees no producer on B) — never wrongly accepted. Transitive multi-hop
+// reachability is a P2b+ item; the cycle graph already spans gateways for -011.
 fn signal_produced_on(s System, sig string, bus string) bool {
 	for ss in s.signals {
 		if ss.name == sig && ss.bus == bus {
@@ -1395,6 +1445,31 @@ fn signal_produced_on(s System, sig string, bus string) bool {
 		}
 	}
 	return false
+}
+
+// dbc_frame_of returns the DBC message on `bus` that carries `sig` as an SG_, or
+// none if the bus has no DBC, the DBC won't load, or `sig` is absent / ambiguous
+// (in >1 frame — sysgen's frame_of_signal rejects that; here we just decline to
+// pick one). Used to resolve the destination frame for a route's ownership check.
+fn dbc_frame_of(s System, bus Bus, sig string) ?string {
+	if bus.dbc == '' {
+		return none
+	}
+	path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(s.dir, bus.dbc) }
+	db := candb.load_dbc_file(path) or { return none }
+	mut hit := ?string(none)
+	for m in db.messages {
+		for sg in m.signals {
+			if sg.name == sig {
+				if hit != none {
+					return none // ambiguous
+				}
+				hit = m.name
+				break
+			}
+		}
+	}
+	return hit
 }
 
 // signal_consumed_on: does a node on `bus` consume `sig`? Dissolved = an FB read;
