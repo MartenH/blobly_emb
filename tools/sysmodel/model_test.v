@@ -2882,6 +2882,97 @@ fn test_route_dest_dbc_width_mismatch() {
 	assert errs(validate_system_gen(s)).any(it.contains('bits but destination DBC')), errs(validate_system_gen(s)).str()
 }
 
+// REQ-TOPO-006 (codex #164 r3): a signal route whose `signal` is not a declared
+// system [[signal]] is rejected — there is no typed field contract to check.
+fn test_route_undeclared_signal_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Ghost'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('not a declared system'))
+}
+
+// REQ-TOPO-006 (codex #164 r3): a signal route from a bus that does not PRODUCE
+// the signal is rejected — the gateway would decode the wrong source contract.
+fn test_route_source_not_producing_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	// Speed is produced on compute; route it FROM edge (where it isn't produced).
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'edge'
+		to:      'compute'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('not produced on its source bus'))
+}
+
+// REQ-TOPO-003 (codex #164 r3): a multiplexed destination SG_ is rejected — the
+// dissolution codec has no selector support (same as the source-side check).
+fn test_route_dest_multiplexed_rejected() {
+	mut s := clean_dissolved()
+	os.write_file(os.join_path(s.dir, 'edge.dbc'), 'VERSION ""\nBU_: gw zone\nBO_ 512 Speed_E: 8 gw\n SG_ Sel M : 0|8@1+ (1,0) [0|0] "" zone\n SG_ Speed m0 : 8|16@1+ (1,0) [0|0] "" zone\n') or {
+		panic(err)
+	}
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+		dbc:       'edge.dbc'
+	}
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+	}
+	s.nodes << Node{
+		name:         'zone'
+		buses:        ['edge']
+		nm:           0x16
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        5
+		view:         NodeView{
+			fb_reads: ['Speed']
+		}
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('multiplexed')), errs(validate_system_gen(s)).str()
+}
+
 // REQ-TOPO-004 (codex #164 r2): a gateway whose SECONDARY bus declares an NM
 // cluster is rejected — the generator emits only one NM instance (primary bus);
 // multi-instance NM is a later P2 item.
