@@ -1239,7 +1239,7 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	}
 	// The eth comm thread (docs/someip.md target rung): bound after io, before
 	// the kernel timer — matching the trace-bind order in tx_application_define.
-	if m.eth_frames.len > 0 && m.target.threadx {
+	if eth_thread_on(m) {
 		mut ep := mp - 2 // no CAN comm thread: io sits at mp-1, the eth owner one above
 		if comm_thread_on {
 			ep = if nthr > 1 { mp - 1 - io_shift } else { 1 } // created at the comm level
@@ -1517,7 +1517,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << 'fn C.ioc_pub(int, u32, u32)'
 				glue << 'fn C.ioc_get(int, &u32, &u32)'
 			}
-			if m.eth_frames.len > 0 {
+			if eth_thread_on(m) {
 				// the NetX eth seam (driver/eth/eth_netx.c) + the byte IOC pool
 				// (glue): struct-bearing eth signals cross threads through
 				// size-proportional arenas (boards/common/ioc.h)
@@ -1574,7 +1574,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << '\tg_rx_count u32'
 				glue << '\tg_rx_last  u32'
 			}
-			if m.eth_frames.len > 0 {
+			if eth_thread_on(m) {
 				glue << '\tg_eth_tcb   [32]u64  // the SOME/IP eth comm thread (docs/someip.md)'
 				glue << '\tg_eth_stack [4096]u8 // someip codec + TxState/E2E frames: comm-thread-class depth'
 				// drop/ok counters as exported globals: SWD-observable (the
@@ -2033,7 +2033,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					if m.io_points.len > 0 {
 						glue << '\tC.trace_bind_thread(&g_io_tcb[0])'
 					}
-					if m.eth_frames.len > 0 {
+					if eth_thread_on(m) {
 						glue << '\tC.trace_bind_thread(&g_eth_tcb[0])'
 					}
 				}
@@ -2107,7 +2107,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					if m.io_points.len > 0 {
 						glue << '\tC.trace_bind_thread(&g_io_tcb[0])'
 					}
-					if m.eth_frames.len > 0 {
+					if eth_thread_on(m) {
 						glue << '\tC.trace_bind_thread(&g_eth_tcb[0])'
 					}
 				}
@@ -2633,7 +2633,7 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 	// the eth comm thread's codec: pure V, both sides of the silicon line; the
 	// driver.eth module (whose #flag compiles the POSIX backend) is host-only —
 	// the target reaches the NetX seam through raw FFI (eth_netx.c)
-	if m.eth_frames.len > 0 && (!m.target.on || m.target.threadx) {
+	if (m.eth_frames.len > 0 && !m.target.on) || eth_thread_on(m) {
 		glue << 'import comm.someip' // the SOME/IP header codec
 	}
 	if m.eth_frames.len > 0 && !m.target.on {

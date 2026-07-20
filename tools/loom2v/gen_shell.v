@@ -33,6 +33,14 @@ fn parse_shell(doc toml.Doc, dbc string) ShellCfg {
 		sm := scfg.as_map()
 		t.on = (sm['enabled'] or { toml.Any(true) }).bool()
 		t.bus = (sm['bus'] or { toml.Any('') }).string()
+		if t.bus == '' {
+			// the validator's inherit rule, mirrored: [shell] without a bus
+			// rides [telemetry].bus — resolving it HERE keeps shell_on_eth
+			// true for an inherited eth binding (silent no-emit otherwise)
+			if tv := doc.value_opt('telemetry') {
+				t.bus = (tv.as_map()['bus'] or { toml.Any('') }).string()
+			}
+		}
 		t.method = u32((sm['method'] or { toml.Any(0) }).int())
 		t.allow_mutate = (sm['allow_mutate'] or { toml.Any(false) }).bool()
 		for c in (sm['commands'] or { toml.Any([]toml.Any{}) }).array() {
@@ -178,6 +186,14 @@ fn shell_manifest_frames(m Model) []string {
 	if !m.shell.on {
 		return []string{}
 	}
+	if shell_on_eth(m) {
+		// the RPC form: ONE method id — the CAN in/fc/out endpoints do not
+		// exist on this image, so the manifest must not invent them
+		return [
+			'# eth modules: module,endpoint,id',
+			'ethmod,shell,method,0x${m.shell.method.hex()}',
+		]
+	}
 	sbus := if m.shell.bus != '' { m.shell.bus } else { m.telem.bus }
 	return [
 		'# shell frames: frame,id,bus',
@@ -204,7 +220,18 @@ fn shell_eth_init(m Model) []string {
 	}
 	mut g := ['\tg_sh.init(u32(0)) // in place; out_id unused on eth (responses are datagrams)']
 	for name in m.shell.commands {
-		g << "\tg_sh.register('${name}', 'target command (glue)', shell_${name}_cmd)"
+		// C-backed commands are OPAQUE to the generator — fail CLOSED: they
+		// register as state-changing, so the REQ-NET-018 gate covers them
+		// unless the build opens it (a per-command declared class is a later
+		// schema rung)
+		g << "\tg_sh.register_mut('${name}', 'target command (glue)', shell_${name}_cmd)"
 	}
 	return g
+}
+
+// eth_thread_on: the generated eth thread exists for eth FRAMES or an
+// eth-bound shell (an RPC-only image has no [[frame]] yet still serves its
+// method) — every emission site keys on this, not on the frame count.
+fn eth_thread_on(m Model) bool {
+	return m.target.threadx && (m.eth_frames.len > 0 || shell_on_eth(m))
 }

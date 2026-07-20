@@ -1000,7 +1000,7 @@ fn eth_iocb_idx(m Model) map[string]int {
 // slot — comm-thread class).
 fn emit_eth_target_create(m Model, prio int) []string {
 	mut glue := []string{}
-	if m.eth_frames.len == 0 {
+	if !eth_thread_on(m) {
 		return glue
 	}
 	if prio < 0 {
@@ -1023,7 +1023,7 @@ fn emit_eth_target_create(m Model, prio int) []string {
 // straight-line loops for one harder-to-review indirection (deliberate).
 fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 	mut glue := []string{}
-	if !(m.target.threadx && m.eth_frames.len > 0) {
+	if !eth_thread_on(m) {
 		return glue
 	}
 	iocb := eth_iocb_idx(m)
@@ -1259,6 +1259,9 @@ fn emit_eth_rpc_branch(m Model) []string {
 	glue << '\t\t\t\t\tcontinue'
 	glue << '\t\t\t\t}'
 	glue << '\t\t\t\tmut rl := int(rpc_rsp.len)'
+	glue << '\t\t\t\tif rl > shell.max_rsp {'
+	glue << '\t\t\t\t\trl = shell.max_rsp // the Rsp BUFFER bound: an over-reporting C command must not read past it'
+	glue << '\t\t\t\t}'
 	glue << '\t\t\t\tif rl > someip.max_rpc {'
 	glue << '\t\t\t\t\trl = someip.max_rpc // one datagram, never segmentation'
 	glue << '\t\t\t\t}'

@@ -4,10 +4,8 @@
 # threads: thread,id,name,core,prio  (id 0 reserved = idle; prio - = no RTOS prio)
 thread,1,app_main,0,10
 thread,2,eth,0,8
-# shell frames: frame,id,bus
-in,0x7f0,eth0
-fc,0x7f2,eth0
-out,0x7f1,eth0
+# eth modules: module,endpoint,id
+ethmod,shell,method,0x1
 # someip: service,version,port,peer
 someip,0x100,1,30490,192.168.0.190:30491
 # eth frames: frame,id,len,dir,mode,cycle_us,e2e_id
