@@ -50,6 +50,7 @@ pub fn partition_can0(ch can.Channel, route_can1 can.Channel) {
 	st.rt_tx_can1_dst_frame = com.TxState{
 		mode: com.TxMode.cyclic
 		cycle_us: 100000
+		min_delay_us: 0
 	}
 	mut sched := loom.Scheduler{}
 	sched.every(10_000, io_can0_10ms, &st)

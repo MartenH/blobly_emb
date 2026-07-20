@@ -97,15 +97,11 @@ pub fn check_route_dbc(s System) []Issue {
 				msg:      'route on "${r.gateway}": destination frame for "${r.signal}" on bus "${r.to}" is transmitted by "${sender}" in the DBC, not the gateway'
 			}
 		}
-		// the re-encode must fit the destination SG_ width + signedness.
-		bits := field_bits(sig.fields)
-		if bits != 0 && ds.length != bits {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-003'
-				msg:      'route on "${r.gateway}": signal "${r.signal}" fields are ${bits} bits but destination DBC SG_ is ${ds.length} bits (bus "${r.to}")'
-			}
-		}
+		// (P2a.2b transcodes the PHYSICAL value through the destination frame's producer,
+		// so the destination SG_ MAY differ from the source in width/factor/offset/sign —
+		// the raw copy's equality requirements no longer apply. Units, VAL_ enum meaning,
+		// and physical-range containment between the SOURCE and DEST SG_ are compared
+		// loom2v-side; they land here with the P2c multi-DBC gateway generation.)
 		// the dissolution codec re-encodes trivial LITTLE-ENDIAN signals; a big-endian
 		// (Motorola) destination SG_ has a sawtooth bit layout the generated encoder
 		// does not produce, so reject it rather than approximate its span.
@@ -128,33 +124,6 @@ pub fn check_route_dbc(s System) []Issue {
 					req:      'REQ-TOPO-003'
 					msg:      'route on "${r.gateway}": signal "${r.signal}" occupies up to bit ${occupied} but destination frame "${dm.name}" is only ${dm.dlc} bytes (${payload_bits} bits) on bus "${r.to}"'
 				}
-			}
-		}
-		if want := field_signed(sig.fields) {
-			if want != ds.is_signed {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-003'
-					msg:      'route on "${r.gateway}": signal "${r.signal}" is ${if want {
-						'signed'
-					} else {
-						'unsigned'
-					}} but destination DBC SG_ is ${if ds.is_signed {
-						'signed'
-					} else {
-						'unsigned'
-					}} (bus "${r.to}")'
-				}
-			}
-		}
-		// the codec routes RAW values — a destination SG_ with a non-trivial
-		// factor/offset would change the physical value (raw 10000 at factor 0.1 is a
-		// 10x different quantity, and encode() masks any overflow to the SG_ width).
-		if ds.factor != 1.0 || ds.offset != 0.0 {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-003'
-				msg:      'route on "${r.gateway}": destination DBC SG_ "${r.signal}" (bus "${r.to}") has factor/offset ${ds.factor}/${ds.offset} — the dissolution codec routes raw values (factor 1, offset 0)'
 			}
 		}
 		// the destination FRAME must be sendable on the destination bus: a classic

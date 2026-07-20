@@ -368,20 +368,44 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 					|| (dbc_ext_of(db, snake(r.to_frame)) or { false }) {
 					panic('route: signal "${r.signal}" frame is an extended (29-bit) id — the route forwarder handles standard ids only')
 				}
+				// - big-endian (Motorola): the DLC/bounds check below assumes the
+				//   little-endian [start, start+length) span; the sawtooth walk is not worth
+				//   it here (the dissolution rejects Motorola routes too).
+				if src_sg.byte_order != .little_endian || dst_sg.byte_order != .little_endian {
+					panic('route: signal "${r.signal}" is big-endian (Motorola) — the route handles little-endian signals only')
+				}
 				// - the SG_ must fit its frame's payload at its actual bit POSITION, not
-				//   just by width (a signal near the frame end overflows the DLC). The codec
-				//   handles the layout (incl. Motorola), but the frame must be big enough.
+				//   just by width (a signal near the frame end overflows the DLC).
 				if src_sg.start_bit + src_sg.length > routes[i].from_dlc * 8
 					|| dst_sg.start_bit + dst_sg.length > routes[i].to_dlc * 8 {
 					panic('route: signal "${r.signal}" does not fit its frame payload (source/destination DLC too small for the SG_ position)')
 				}
-				// P2a.2b routes the PHYSICAL value through the destination frame's producer,
-				// so it TRANSCODES (differing factor/offset/unit) and RATE-ADAPTS (differing
-				// cadence) — no encoding/cadence-equality requirement. Resolve the cadences:
-				// the source cadence bounds freshness, the destination cadence is the re-emit
-				// rate.
+				// P2a.2b TRANSCODES the physical value (differing factor/offset/width/bit-
+				// position) and RATE-ADAPTS (differing cadence) — but it routes a NUMBER, so
+				// it cannot convert UNITS or ENUM meanings, and the destination must be able
+				// to REPRESENT the source's range. Keep those three as guards:
+				// - units must match (100 km/h routed to a mph SG_ would relabel, not convert).
+				if src_sg.unit != dst_sg.unit {
+					panic('route: signal "${r.signal}" unit "${src_sg.unit}" != destination "${dst_sg.unit}" — the route transcodes scale, not units')
+				}
+				// - VAL_ enum tables must match (raw/phys 1 = "Drive" here, "Reverse" there).
+				if !val_tables_equal(src_sg.values, dst_sg.values) {
+					panic('route: signal "${r.signal}" source and destination VAL_ tables differ — the route does not translate enum meanings')
+				}
+				// - the destination must represent the source's full physical range, else the
+				//   generated _set masks the converted value (e.g. 300 into an 8-bit SG_).
+				slo, shi := phys_range(src_sg)
+				dlo, dhi := phys_range(dst_sg)
+				if slo < dlo || shi > dhi {
+					panic('route: signal "${r.signal}" source range [${slo}, ${shi}] does not fit the destination range [${dlo}, ${dhi}] — the re-encode would overflow')
+				}
+				// resolve the cadences: source bounds freshness, destination is the re-emit
+				// rate. A destination cadence below the 10 ms bridge tick cannot be honored.
 				routes[i].from_cyc = dbc_cycle_of(db, snake(r.from_frame))
 				routes[i].to_cyc = dbc_cycle_of(db, snake(r.to_frame))
+				if routes[i].to_cyc > 0 && routes[i].to_cyc < 10 {
+					panic('route: destination frame "${r.to_frame}" cadence ${routes[i].to_cyc} ms is below the 10 ms comm-bridge tick — cannot re-emit that fast')
+				}
 				// both ids must be standard 11-bit: candb leaves an UNFLAGGED id > 0x7ff as
 				// ext = false, but the SocketCAN send would place it without CAN_EFF_FLAG
 				// and fail (the ext-flagged case is already rejected above).
@@ -437,9 +461,41 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 	return routes
 }
 
+// val_tables_equal compares two DBC VAL_ enum tables (raw value -> name). A route
+// carries a NUMBER, so a differing table would silently change the signal's MEANING
+// (raw/phys 1 = "Drive" on one bus, "Reverse" on the other).
+fn val_tables_equal(a map[u64]string, b map[u64]string) bool {
+	if a.len != b.len {
+		return false
+	}
+	for k, v in a {
+		if (b[k] or { return false }) != v {
+			return false
+		}
+	}
+	return true
+}
+
+// phys_range returns the [min, max] PHYSICAL value a DBC signal can represent (raw
+// range scaled by factor/offset), so a route can check the destination represents
+// the full source range before the generated setter silently masks an overflow.
+fn phys_range(s candb.Signal) (f64, f64) {
+	n := s.length
+	if s.is_signed {
+		half := f64(u64(1) << u64(n - 1))
+		a := -half * s.factor + s.offset
+		b := (half - 1) * s.factor + s.offset
+		return if a < b { a, b } else { b, a }
+	}
+	rmax := f64((u64(1) << u64(n)) - 1)
+	a := s.offset
+	b := rmax * s.factor + s.offset
+	return if a < b { a, b } else { b, a }
+}
+
 // dbc_cycle_of returns the GenMsgCycleTime (ms) of the message whose snake-name is
-// `key`, or 0 if unknown — used to require a route's source and destination frames
-// share a cadence (the on-receipt forwarder cannot rate-adapt).
+// `key`, or 0 if unknown — the source cadence bounds route freshness, the
+// destination cadence is the re-emit rate.
 fn dbc_cycle_of(db candb.Database, key string) int {
 	for m in db.messages {
 		if snake(m.name) == key {
@@ -827,7 +883,7 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 			bus_fd[bname] = (bc.as_map()['fd'] or { toml.Any(false) }).bool()
 		}
 	}
-	for i, r in m.routes {
+	for r in m.routes {
 		if r.signal == '' {
 			continue
 		}
@@ -878,16 +934,11 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 			|| (m.frames.e2e_on[tof] or { false }) || (m.frames.secoc_on[tof] or { false }) {
 			panic('route: signal "${r.signal}" rides an E2E/SecOC frame — the route forwarder does not verify the source or re-protect the destination (dest-producer model)')
 		}
-		// the destination frame must have a SINGLE on-wire writer: reject when a
-		// [[signal]]/[[frame]] tx already emits it, or another route targets the same id.
-		if tof in m.frames.tx_mode {
-			panic('route: destination frame "${r.to_frame}" is also transmitted by this node (a tx [[signal]]/[[frame]]) — one writer per frame')
-		}
-		for j, r2 in m.routes {
-			if j != i && r2.to_bus == r.to_bus && r2.to_id == r.to_id {
-				panic('route: destination id 0x${r.to_id:x} on bus "${r.to_bus}" is written by two routes — one writer per frame')
-			}
-		}
+			// (Several routes MAY target one destination frame — that is composition, and a
+			// bare [[frame]].tx on the destination is the route's TX-mode config, not a
+			// competing writer. A genuine second writer is a [[signal]] producing the frame,
+			// already rejected above; a double-written field or an uncovered SG_ is rejected
+			// in parse_routes.)
 	}
 }
 
