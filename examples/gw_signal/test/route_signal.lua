@@ -32,6 +32,6 @@ test("signal route: rate-adapts (dest emits at its 100 ms cadence, not on receip
     end
     sleep_ms(10)
   end
-  check.truthy(count >= 2 and count <= 15,
-    "dest re-emits at ~100 ms, not on receipt (got " .. count .. " frames in ~600 ms)")
+  check.truthy(count >= 4 and count <= 10,
+    "dest re-emits at ~100 ms cadence (~6 frames in ~600 ms), not on receipt (got " .. count .. ")")
 end)

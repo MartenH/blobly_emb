@@ -388,9 +388,11 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 				if src_sg.unit != dst_sg.unit {
 					panic('route: signal "${r.signal}" unit "${src_sg.unit}" != destination "${dst_sg.unit}" — the route transcodes scale, not units')
 				}
-				// - VAL_ enum tables must match (raw/phys 1 = "Drive" here, "Reverse" there).
-				if !val_tables_equal(src_sg.values, dst_sg.values) {
-					panic('route: signal "${r.signal}" source and destination VAL_ tables differ — the route does not translate enum meanings')
+				// - VAL_ enum meanings must match at the same PHYSICAL value (the route
+				//   transcodes factor/offset, so raw 100@0.1 and raw 10@1 are the SAME
+				//   physical enum — compare by physical value, not raw key).
+				if !val_tables_phys_equal(src_sg, dst_sg) {
+					panic('route: signal "${r.signal}" source and destination VAL_ tables differ (at equal physical values) — the route does not translate enum meanings')
 				}
 				// - the destination must represent the source's full physical range, else the
 				//   generated _set masks the converted value (e.g. 300 into an 8-bit SG_).
@@ -400,12 +402,10 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 					panic('route: signal "${r.signal}" source range [${slo}, ${shi}] does not fit the destination range [${dlo}, ${dhi}] — the re-encode would overflow')
 				}
 				// resolve the cadences: source bounds freshness, destination is the re-emit
-				// rate. A destination cadence below the 10 ms bridge tick cannot be honored.
+				// rate (the EFFECTIVE-cadence sub-tick check is in validate_signal_routes_model,
+				// which also sees an authored [[frame]].tx.cycle_ms).
 				routes[i].from_cyc = dbc_cycle_of(db, snake(r.from_frame))
 				routes[i].to_cyc = dbc_cycle_of(db, snake(r.to_frame))
-				if routes[i].to_cyc > 0 && routes[i].to_cyc < 10 {
-					panic('route: destination frame "${r.to_frame}" cadence ${routes[i].to_cyc} ms is below the 10 ms comm-bridge tick — cannot re-emit that fast')
-				}
 				// both ids must be standard 11-bit: candb leaves an UNFLAGGED id > 0x7ff as
 				// ext = false, but the SocketCAN send would place it without CAN_EFF_FLAG
 				// and fail (the ext-flagged case is already rejected above).
@@ -461,15 +461,26 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 	return routes
 }
 
-// val_tables_equal compares two DBC VAL_ enum tables (raw value -> name). A route
-// carries a NUMBER, so a differing table would silently change the signal's MEANING
-// (raw/phys 1 = "Drive" on one bus, "Reverse" on the other).
-fn val_tables_equal(a map[u64]string, b map[u64]string) bool {
-	if a.len != b.len {
+// val_tables_phys_equal compares two DBC VAL_ enum tables by PHYSICAL value: a route
+// transcodes factor/offset, so the same enum can have different raw keys on the two
+// buses (raw 100@0.1 == raw 10@1 == physical 10.0). Every entry in each table must
+// have a matching physical value + label in the other, so the enum meaning is
+// preserved across the re-encode.
+fn val_tables_phys_equal(a candb.Signal, b candb.Signal) bool {
+	if a.values.len != b.values.len {
 		return false
 	}
-	for k, v in a {
-		if (b[k] or { return false }) != v {
+	// each of a's entries must be present (same physical value + label) in b
+	for ka, va in a.values {
+		pa := f64(ka) * a.factor + a.offset
+		mut found := false
+		for kb, vb in b.values {
+			if vb == va && f64(kb) * b.factor + b.offset == pa {
+				found = true
+				break
+			}
+		}
+		if !found {
 			return false
 		}
 	}
@@ -934,11 +945,51 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 			|| (m.frames.e2e_on[tof] or { false }) || (m.frames.secoc_on[tof] or { false }) {
 			panic('route: signal "${r.signal}" rides an E2E/SecOC frame — the route forwarder does not verify the source or re-protect the destination (dest-producer model)')
 		}
-			// (Several routes MAY target one destination frame — that is composition, and a
-			// bare [[frame]].tx on the destination is the route's TX-mode config, not a
-			// competing writer. A genuine second writer is a [[signal]] producing the frame,
-			// already rejected above; a double-written field or an uncovered SG_ is rejected
-			// in parse_routes.)
+		// the routed producer composes + re-emits every tick; should_send handles cyclic
+		// (rate adaptation), but TRIGGERED needs a trigger() no route makes and EVENT change-
+		// tracking fights freshness suppression — restrict a routed dest frame to CYCLIC.
+		if mode := m.frames.tx_mode[tof] {
+			if mode != 'cyclic' {
+				panic('route: destination frame "${r.to_frame}" [[frame]].tx.mode = "${mode}" — a routed frame re-emits cyclically only (event/mixed/triggered are a later refinement)')
+			}
+		}
+		// the EFFECTIVE cadence (authored [[frame]].tx.cycle_ms if present, else the DBC
+		// GenMsgCycleTime) must be at least the 10 ms comm-bridge tick.
+		eff_us := m.frames.tx_cycle_us[tof] or {
+			if r.to_cyc > 0 { r.to_cyc * 1000 } else { 100000 }
+		}
+		if eff_us > 0 && eff_us < 10000 {
+			panic('route: destination frame "${r.to_frame}" cadence ${eff_us} us is below the 10 ms comm-bridge tick')
+		}
+	}
+	// every destination (bus, id) must be owned by ONE frame: reject a raw route or a
+	// different signal-route frame sharing a routed id (two on-wire writers).
+	mut id_owner := map[string]string{}
+	for r in m.routes {
+		key := '${r.to_bus}/${r.to_id}'
+		if prev := id_owner[key] {
+			if prev != r.to_frame {
+				panic('route: destination id 0x${r.to_id:x} on bus "${r.to_bus}" is written by two different frames/routes ("${prev}" vs "${r.to_frame}") — one writer per id')
+			}
+		} else {
+			id_owner[key] = r.to_frame
+		}
+	}
+	// all signal routes composing ONE destination frame must originate on the SAME source
+	// bus — each source bridge composes independently, so a two-bus frame ships two halves.
+	mut frame_src := map[string]string{}
+	for r in m.routes {
+		if r.signal == '' {
+			continue
+		}
+		key := '${r.to_bus}/${r.to_frame}'
+		if prev := frame_src[key] {
+			if prev != r.from_bus {
+				panic('route: destination frame "${r.to_frame}" on "${r.to_bus}" is composed from two source buses ("${prev}" and "${r.from_bus}")')
+			}
+		} else {
+			frame_src[key] = r.from_bus
+		}
 	}
 }
 

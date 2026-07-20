@@ -15,6 +15,44 @@ import tools.candb
 // destination frame is transmitted by another node, would otherwise slip through
 // (the gateway's loom2v gate is deferred). The re-encode must match the dest wire
 // contract and the gateway must own the destination frame (REQ-TOPO-003/-012).
+// route_phys_range returns a DBC signal's [min, max] physical value (raw range
+// scaled by factor/offset), for the route source-vs-dest range-containment check.
+fn route_phys_range(sg candb.Signal) (f64, f64) {
+	n := sg.length
+	if sg.is_signed {
+		half := f64(u64(1) << u64(n - 1))
+		a := -half * sg.factor + sg.offset
+		b := (half - 1) * sg.factor + sg.offset
+		return if a < b { a, b } else { b, a }
+	}
+	rmax := f64((u64(1) << u64(n)) - 1)
+	a := sg.offset
+	b := rmax * sg.factor + sg.offset
+	return if a < b { a, b } else { b, a }
+}
+
+// route_val_phys_equal compares two DBC VAL_ enum tables by PHYSICAL value (a route
+// transcodes factor/offset, so the same enum can have different raw keys).
+fn route_val_phys_equal(a candb.Signal, b candb.Signal) bool {
+	if a.values.len != b.values.len {
+		return false
+	}
+	for ka, va in a.values {
+		pa := f64(ka) * a.factor + a.offset
+		mut found := false
+		for kb, vb in b.values {
+			if vb == va && f64(kb) * b.factor + b.offset == pa {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 pub fn check_route_dbc(s System) []Issue {
 	mut issues := []Issue{}
 	for r in s.routes {
@@ -97,11 +135,51 @@ pub fn check_route_dbc(s System) []Issue {
 				msg:      'route on "${r.gateway}": destination frame for "${r.signal}" on bus "${r.to}" is transmitted by "${sender}" in the DBC, not the gateway'
 			}
 		}
-		// (P2a.2b transcodes the PHYSICAL value through the destination frame's producer,
-		// so the destination SG_ MAY differ from the source in width/factor/offset/sign —
-		// the raw copy's equality requirements no longer apply. Units, VAL_ enum meaning,
-		// and physical-range containment between the SOURCE and DEST SG_ are compared
-		// loom2v-side; they land here with the P2c multi-DBC gateway generation.)
+		// P2a.2b transcodes SCALE (factor/offset/width) — so the source and dest SG_ may
+		// differ there — but a route carries a NUMBER, so UNITS, VAL_ enum meaning, and
+		// physical RANGE must be preserved across the two buses' DBCs. Compare the source
+		// SG_ (in the FROM bus's DBC) against the dest SG_ ds.
+		if from := s.bus_by_name(r.from) {
+			if from.dbc != '' {
+				fpath := if os.is_abs_path(from.dbc) { from.dbc } else { os.join_path(s.dir, from.dbc) }
+				if fdb := candb.load_dbc_file(fpath) {
+					mut ssg := ?candb.Signal(none)
+					for fm in fdb.messages {
+						for sg in fm.signals {
+							if sg.name == r.signal {
+								ssg = sg
+								break
+							}
+						}
+					}
+					if src := ssg {
+						if src.unit != ds.unit {
+							issues << Issue{
+								severity: .error
+								req:      'REQ-TOPO-003'
+								msg:      'route on "${r.gateway}": signal "${r.signal}" unit "${src.unit}" (source) != "${ds.unit}" (destination) — the route transcodes scale, not units'
+							}
+						}
+						if !route_val_phys_equal(src, ds) {
+							issues << Issue{
+								severity: .error
+								req:      'REQ-TOPO-003'
+								msg:      'route on "${r.gateway}": signal "${r.signal}" source and destination VAL_ tables differ (at equal physical values) — the route does not translate enum meanings'
+							}
+						}
+						slo, shi := route_phys_range(src)
+						dlo, dhi := route_phys_range(ds)
+						if slo < dlo || shi > dhi {
+							issues << Issue{
+								severity: .error
+								req:      'REQ-TOPO-003'
+								msg:      'route on "${r.gateway}": signal "${r.signal}" source range [${slo}, ${shi}] does not fit the destination range [${dlo}, ${dhi}] — the re-encode would overflow'
+							}
+						}
+					}
+				}
+			}
+		}
 		// the dissolution codec re-encodes trivial LITTLE-ENDIAN signals; a big-endian
 		// (Motorola) destination SG_ has a sawtooth bit layout the generated encoder
 		// does not produce, so reject it rather than approximate its span.
