@@ -319,6 +319,57 @@ lets reachability trust it. Codex review of the first draft found the naive
 "forward a PDU through a wait-free ring" model wrong on several counts; the design
 below is the corrected one.
 
+P2 has two halves — the **generation** (sysgen lowers routes + multi-bus nodes)
+and the **runtime** (the forwarder it lowers into). The generation half is the one
+that extends the shipped `system.toml → ecu.toml` dissolution; take it first.
+
+### Lowering: `system.toml` → the gateway's `gen-<gw>.toml`
+
+P1b (`tools/sysgen`, `make gen-system`) already dissolves each cross-node signal
+declared once in `system.toml` into every participating node's complete
+`gen-<node>.toml` — the generated `[bus]` / `[[signal]]` / `[[frame]]` / `[nm]`
+followed by that node's authored internals. **But it wires exactly one bus per
+node** (`sysgen` asserts it; there is a `test_dissolved_multibus_node_rejected`).
+A gateway is multi-bus by definition, so P2's first job is on the generator, not
+the runtime:
+
+1. **Multi-bus node generation.** Lift the one-bus rule *for a gateway node*: its
+   `gen-<gw>.toml` gets one `[bus.canN]` per bus in its `buses = [...]` (each mapped
+   to that bus's `interface`), and the cross-node `[[signal]]`s for **each** bus.
+   The single-bus rule still holds for ordinary nodes.
+2. **Route lowering.** Each `[[route]]` on the gateway (and each *derived* route — a
+   cross-node signal whose producer and consumers sit on different buses) lowers
+   into the gateway's `gen-<gw>.toml` as a `[[route]]` directive that `gen_gateway.v`
+   consumes. Explicit routes pin raw-forward / firewall intent; derived routes come
+   from the reachability analysis.
+
+Concretely, this in `system.toml`:
+
+```toml
+[[route]]                     # SIGNAL route on the gateway
+gateway = "sysnode"
+signal  = "VehicleSpeed"      # decode per compute.dbc, re-encode per edge.dbc
+from    = "compute"
+to      = "edge"
+```
+
+lowers into `gen-sysnode.toml` (alongside its two generated `[bus.*]` blocks) as:
+
+```toml
+[[route]]                     # GENERATED — resolved to concrete buses + frames
+signal   = "VehicleSpeed"
+from_bus = "can0"             # compute -> the gateway's FDCAN1 interface
+to_bus   = "can1"             # edge    -> FDCAN2
+src_frame = "VehSpeedFrame"   # per compute.dbc
+dst_frame = "VehSpeed_E"      # per edge.dbc (may differ in id/layout/rate)
+```
+
+which `gen_gateway.v` turns into the decode-and-hand-off on the `from` bus + the
+destination frame's ordinary COM producer (below). A **frame** route lowers the
+same way with `frame =` instead of `signal =` and no `dst_frame` re-map. So the
+`system.toml → ecu.toml's` story extends unbroken: cross-node signals dissolved in
+P1b, routes + multi-bus gateways dissolved in P2.
+
 ### The gateway's comm owner is per-CORE, so most routing is intra-thread
 
 The established target model (`docs/architecture.md`) is **one comm thread per
