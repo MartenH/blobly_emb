@@ -88,10 +88,41 @@ id      = 0x8003
 signals = ["MixedVal"]
 tx      = { mode = "mixed", cycle_ms = 300, min_delay_ms = 30 }
 
+# --- P2 rx: the receive direction (docs/someip.md) -------------------------
+# BenchCmd arrives FROM the bus (the harness is the producer): the comm
+# thread source-filters, envelope-gates, routes by event id, unpacks and
+# publishes. Bench mirrors the level straight back out on BenchEcho — the
+# round-trip probe that proves the whole rx chain plus app dispatch.
+[[signal]]
+name = "LampCmd"
+fields = { level = "u8" }
+from = "eth0"
+to   = "app"
+
+[[frame]]
+name    = "BenchCmd"
+bus     = "eth0"
+id      = 0x8010
+signals = ["LampCmd"]
+
+[[signal]]
+name = "EchoVal"
+fields = { level = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "BenchEcho"
+bus     = "eth0"
+id      = 0x8004
+signals = ["EchoVal"]
+tx      = { mode = "event", min_delay_ms = 30 }
+
 [[fb]]
 name   = "Bench"
 thread = "app_main"
   [[fb.handler]]
   name      = "on_100ms"
   period_ms = 100
-  writes    = ["BenchLoad", "BenchTicks", "EventVal", "MixedVal"]
+  reads     = ["LampCmd"]
+  writes    = ["BenchLoad", "BenchTicks", "EventVal", "MixedVal", "EchoVal"]

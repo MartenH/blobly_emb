@@ -673,11 +673,10 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		if ntx > 0 && nrx > 0 {
 			errs << 'eth frame "${fname}" mixes tx and rx signals — one direction per frame (a mixed frame would make the bridge a second writer on an SPSC channel)'
 		}
-		// TEMPORARY gate, same family as shell/NM-on-eth: nothing generates an
-		// rx unpack/publish path yet, so an rx frame would leave its consumers
-		// silently reading defaults forever — reject until the rx rung (P2)
-		if nrx > 0 && ntx == 0 {
-			errs << 'eth frame "${fname}" is rx — eth reception arrives with the rx rung (P2, docs/someip.md); this rung generates tx only'
+		// rx frames generate as of the P2 rung; the rx-side E2E check is its
+		// own follow-up — an unchecked trailer would LOOK protected
+		if nrx > 0 && ntx == 0 && 'e2e' in fm {
+			errs << 'eth frame "${fname}" is rx with e2e — the rx-side E2E check is not generated yet; protect tx frames only for now'
 		}
 		// the tx mode + timings are authoritative manifest metadata with no
 		// compiled com.TxMode reference to catch a typo, and the generator

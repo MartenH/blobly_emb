@@ -2,7 +2,7 @@ module eth
 
 // UDP datagram port for the eth bus (docs/someip.md) — one narrow contract,
 // host POSIX backend in eth_udp.c; the NetX target backend arrives with the
-// H735 rung. Tx-only for the P1 events rung; rx joins with the P2 rung.
+// H735 rung. Tx (P1 events) + nonblocking rx (P2).
 // No heap: datagrams are caller-owned fixed buffers.
 
 #flag -I @VMODROOT/driver/eth
@@ -10,6 +10,7 @@ module eth
 
 fn C.blob_eth_open(&char, u16) int
 fn C.blob_eth_send(int, &u8, u16, &u8, int) int
+fn C.blob_eth_recv(int, &u8, &u16, &u8, int) int
 fn C.blob_eth_close(int)
 
 pub struct Socket {
@@ -28,6 +29,12 @@ pub fn (mut s Socket) open(bind_ip string, port u16) bool {
 // stack (full buffer or error) — the caller's TxState rolls back and retries.
 pub fn (s Socket) send(ip [4]u8, port u16, data &u8, len int) bool {
 	return C.blob_eth_send(s.fd, &ip[0], port, data, len) == 0
+}
+
+// recv drains one datagram, nonblocking: n > 0 bytes copied with the source
+// endpoint filled (the caller's static-peer filter, REQ-NET-017); 0 = none.
+pub fn (s Socket) recv(mut ip [4]u8, port &u16, buf &u8, max int) int {
+	return C.blob_eth_recv(s.fd, &ip[0], port, buf, max)
 }
 
 pub fn (mut s Socket) close() {

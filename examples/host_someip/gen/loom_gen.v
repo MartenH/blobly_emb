@@ -19,12 +19,14 @@ mut:
 fn handler_app_bench_on_100ms(ctx voidptr) {
 	mut st := unsafe { &Partition_app_state(ctx) }
 	mut inp := ports.BenchIn{}
+	osal.ioc_acquire2(lamp_cmd_ch, &inp.lamp_cmd, u8(sizeof(inp.lamp_cmd)))
 	mut outp := ports.BenchOut{}
 	st.bench.on_100ms(inp, mut outp)
 	osal.ioc_publish2(bench_load_ch, &outp.bench_load, u8(sizeof(outp.bench_load)))
 	osal.ioc_publish2(bench_ticks_ch, &outp.bench_ticks, u8(sizeof(outp.bench_ticks)))
 	osal.ioc_publish2(event_val_ch, &outp.event_val, u8(sizeof(outp.event_val)))
 	osal.ioc_publish2(mixed_val_ch, &outp.mixed_val, u8(sizeof(outp.mixed_val)))
+	osal.ioc_publish2(echo_val_ch, &outp.echo_val, u8(sizeof(outp.echo_val)))
 }
 
 pub fn partition_app(core int, arg voidptr) {
@@ -83,6 +85,22 @@ pub fn bench_mixed_pack(mut d [64]u8, s_mixed_val sig.MixedVal) {
 	d[1] = u8(u64(s_mixed_val.setpoint) >> 8)
 }
 
+// BenchCmd: rx event 0x8010, 1-byte payload
+pub const bench_cmd_event_id = u16(0x8010)
+pub const bench_cmd_len = u8(1)
+// 64 = com.max_pdu (a literal: V codegen mishandles const-sized mut fixed-array params)
+pub fn bench_cmd_unpack(d [64]u8, mut s_lamp_cmd sig.LampCmd) {
+	s_lamp_cmd.level = u8(u64(d[0]))
+}
+
+// BenchEcho: tx event 0x8004, 1-byte payload
+pub const bench_echo_event_id = u16(0x8004)
+pub const bench_echo_len = u8(1)
+// 64 = com.max_pdu (a literal: V codegen mishandles const-sized mut fixed-array params)
+pub fn bench_echo_pack(mut d [64]u8, s_echo_val sig.EchoVal) {
+	d[0] = u8(s_echo_val.level)
+}
+
 // --- eth comm thread (eth0): SOME/IP event tx over the UDP seam ---
 pub fn partition_eth0(sock eth.Socket) {
 	osal.pin_to_core(0)
@@ -102,9 +120,59 @@ pub fn partition_eth0(sock eth.Socket) {
 		cycle_us: 300000
 		min_delay_us: 30000
 	}
+	mut tx_bench_echo_st := com.TxState{
+		mode: com.TxMode.event
+		cycle_us: 100000
+		min_delay_us: 30000
+	}
 	mut dgram := [80]u8{} // someip.header_len + com.max_pdu
+	mut rx_buf := [80]u8{} // someip.header_len + com.max_pdu — an oversize datagram truncates here and fails the Length gate
+	mut rx_ip := [4]u8{}
+	mut rx_port := u16(0)
+	mut rx_drops := u32(0) // every refusal counted, never faulting (REQ-NET-015)
+	mut rx_drops_told := u32(0)
+	mut rx_told_at := u64(0)
 	for {
 		now := osal.now_us()
+		// drain every pending datagram: source filter, envelope gate, route
+		for {
+			rx_n := sock.recv(mut rx_ip, &rx_port, &rx_buf[0], 80)
+			if rx_n <= 0 {
+				break
+			}
+			// static-peer source filter (REQ-NET-017): SD-less, the configured
+			// endpoint is the only legal talker — anyone else is a counted drop
+			if rx_ip[0] != someip_peer_ip[0] || rx_ip[1] != someip_peer_ip[1] || rx_ip[2] != someip_peer_ip[2] || rx_ip[3] != someip_peer_ip[3] || rx_port != someip_peer_port {
+				rx_drops++
+				continue
+			}
+			rh, rh_ok := someip.decode(&rx_buf[0], rx_n)
+			if !rh_ok || someip.check_event(rh, rx_n, someip_service, someip_version) != .none {
+				rx_drops++
+				continue
+			}
+			if rh.method == bench_cmd_event_id {
+				// the router's length check: the payload IS the frame, exactly
+				if rx_n - someip.header_len != int(bench_cmd_len) {
+					rx_drops++
+					continue
+				}
+				mut pay_rx_bench_cmd := [64]u8{} // com.max_pdu
+				for i in 0 .. int(bench_cmd_len) {
+					pay_rx_bench_cmd[i] = rx_buf[someip.header_len + i]
+				}
+				mut rxs_lamp_cmd := sig.LampCmd{}
+				bench_cmd_unpack(pay_rx_bench_cmd, mut rxs_lamp_cmd)
+				osal.ioc_publish2(lamp_cmd_ch, &rxs_lamp_cmd, u8(sizeof(rxs_lamp_cmd)))
+			} else {
+				rx_drops++ // an event id the config does not route
+			}
+		}
+		if rx_drops != rx_drops_told && now - rx_told_at > 1_000_000 {
+			eprintln('someip: rx drops counted') // no count in the text: -gc none forbids interpolation
+			rx_drops_told = rx_drops
+			rx_told_at = now
+		}
 		mut pay_bench_telem := [64]u8{} // com.max_pdu
 		mut any_bench_telem := false
 		mut s_bench_load := sig.BenchLoad{}
@@ -165,6 +233,24 @@ pub fn partition_eth0(sock eth.Socket) {
 			}
 			if sock.send(someip_peer_ip, someip_peer_port, &dgram[0], n_bench_mixed + int(bench_mixed_len)) {
 				tx_bench_mixed_st.mark_sent(now, pre_bench_mixed, bench_mixed_len)
+			}
+		}
+		mut pay_bench_echo := [64]u8{} // com.max_pdu
+		mut any_bench_echo := false
+		mut s_echo_val := sig.EchoVal{}
+		if osal.ioc_acquire2(echo_val_ch, &s_echo_val, u8(sizeof(s_echo_val))) {
+			any_bench_echo = true
+		}
+		bench_echo_pack(mut pay_bench_echo, s_echo_val)
+		if any_bench_echo && tx_bench_echo_st.should_send(now, pay_bench_echo, bench_echo_len) {
+			pre_bench_echo := pay_bench_echo // pre-E2E payload, for change detection
+			h_bench_echo := someip.notification(someip_service, bench_echo_event_id, someip_version, int(bench_echo_len))
+			n_bench_echo := someip.encode(h_bench_echo, &dgram[0])
+			for i in 0 .. int(bench_echo_len) {
+				dgram[n_bench_echo + i] = pay_bench_echo[i]
+			}
+			if sock.send(someip_peer_ip, someip_peer_port, &dgram[0], n_bench_echo + int(bench_echo_len)) {
+				tx_bench_echo_st.mark_sent(now, pre_bench_echo, bench_echo_len)
 			}
 		}
 		osal.sleep_us(1000)

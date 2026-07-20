@@ -21,3 +21,13 @@ pub struct MixedVal {
 pub mut:
 	setpoint u16
 }
+
+pub struct LampCmd {
+pub mut:
+	level u8
+}
+
+pub struct EchoVal {
+pub mut:
+	level u8
+}
