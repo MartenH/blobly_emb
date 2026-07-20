@@ -1667,6 +1667,15 @@ thread = "app_main"
 	// affinity nothing implements
 	e6 := errs_of(eth_head.replace('core      = 0', 'core      = 1') + target_eth_body + app)
 	assert e6.any(it.contains('no cross-core eth handoff')), '${e6}'
+	// [trace] + eth on one target image: the NetX-internal threads would take
+	// first-sight trace ids the manifest does not model — rejected
+	e7 := errs_of(eth_head + '
+[trace]
+bus  = "can0"
+size = 256
+' + target_eth_body +
+		app)
+	assert e7.any(it.contains('first-sight trace ids')), '${e7}'
 }
 
 // the shared body for the interface/core gate variants above
