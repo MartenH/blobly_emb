@@ -2187,7 +2187,8 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 	}
 	mut eth_e2e := false
 	for fr in m.eth_frames {
-		if fr.tx && fr.e2e_on {
+		// either direction: tx stamps the trailer, rx checks it
+		if fr.e2e_on {
 			eth_e2e = true
 		}
 	}

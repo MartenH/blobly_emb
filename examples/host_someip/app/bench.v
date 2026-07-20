@@ -40,10 +40,12 @@ pub fn (mut fb Bench) on_100ms(inp ports.BenchIn, mut out ports.BenchOut) {
 	out.mixed_val = sig.MixedVal{
 		setpoint: u16(fb.ticks / 7 + 1000) // +1000: BOTH bytes live on the wire
 	}
-	// P2 rx round-trip: mirror the last received LampCmd level — the echo on
-	// the wire proves source filter -> envelope gate -> route -> unpack ->
-	// publish -> app dispatch, end to end. Event mode: sent only on change.
+	// P2 rx round-trip: mirror the received levels — the echo on the wire
+	// proves source filter -> envelope gate -> route -> (E2E check) -> unpack
+	// -> publish -> app dispatch, end to end. The SUM keeps one echo frame
+	// serving both rx paths (the harness uses disjoint value ranges); event
+	// mode: sent only on change.
 	out.echo_val = sig.EchoVal{
-		level: inp.lamp_cmd.level
+		level: inp.lamp_cmd.level + inp.lamp_cmd_safe.level
 	}
 }

@@ -105,6 +105,23 @@ bus     = "eth0"
 id      = 0x8010
 signals = ["LampCmd"]
 
+# ...and the PROTECTED rx path: BenchCmdSafe carries the same shape behind an
+# E2E trailer — the bridge checks counter+CRC BEFORE unpack, so a tampered
+# datagram is a counted drop. The echo sums both levels (disjoint test value
+# ranges keep the legs unambiguous on one echo frame).
+[[signal]]
+name = "LampCmdSafe"
+fields = { level = "u8" }
+from = "eth0"
+to   = "app"
+
+[[frame]]
+name    = "BenchCmdSafe"
+bus     = "eth0"
+id      = 0x8011
+signals = ["LampCmdSafe"]
+e2e     = { data_id = 0x22, counter_pos = 1, crc_pos = 2 }
+
 [[signal]]
 name = "EchoVal"
 fields = { level = "u8" }
@@ -124,5 +141,5 @@ thread = "app_main"
   [[fb.handler]]
   name      = "on_100ms"
   period_ms = 100
-  reads     = ["LampCmd"]
+  reads     = ["LampCmd", "LampCmdSafe"]
   writes    = ["BenchLoad", "BenchTicks", "EventVal", "MixedVal", "EchoVal"]
