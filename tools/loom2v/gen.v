@@ -72,15 +72,22 @@ struct DidCfg {
 	signal   string
 }
 
-// Route is one [[route]]: forward a raw frame from one bus to another (gateway),
-// without decoding it to signals. to_id == 0 means keep the source id.
+// Route is one [[route]] on a gateway. A RAW (frame) route forwards a PDU unchanged
+// (to_id == 0 keeps the source id). A SIGNAL route (signal != '') decodes the named
+// signal from from_frame on the source bus and re-encodes it into to_frame on the
+// destination bus (a different id/layout) — the codec fns for both frames are in
+// dbc_gen.v (generated per DBC message), so the forwarder just calls _phys then _set.
 struct Route {
 mut:
 	from_bus   string
 	from_frame string
 	from_id    int
+	from_dlc   int
 	to_bus     string
 	to_id      int
+	signal     string // set => SIGNAL route (decode + re-encode); '' => raw frame route
+	to_frame   string // SIGNAL route: the destination DBC frame to re-encode into
+	to_dlc     int
 }
 
 // TargetCfg is the parsed [target] block. kind selects the on-target emitter: 'baremetal' =
@@ -283,24 +290,32 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 	mut routes := []Route{}
 	for r in ecumodel.toml_arr(doc, 'route') {
 		m := r.as_map()
-		// a SIGNAL route (top-level `signal`) decodes on the source bus and re-encodes
-		// into a DIFFERENT destination frame — that lowering is P2a.2 and NOT built
-		// here. parse_routes would otherwise ignore `signal`/`to.frame` and forward the
-		// SOURCE frame raw under the source id: silently wrong wire behavior. Reject it.
-		if (m['signal'] or { toml.Any('') }).string() != '' {
-			panic('loom2v: [[route]] signal="${(m['signal'] or { toml.Any('') }).string()}" is a SIGNAL route (decode + re-encode) — not lowered yet (P2a.2); loom2v only forwards raw frames today')
-		}
 		fm := (m['from'] or { toml.Any('') }).as_map()
 		tm := (m['to'] or { toml.Any('') }).as_map()
 		fb := (fm['bus'] or { toml.Any('') }).string()
+		sig := (m['signal'] or { toml.Any('') }).string()
+		// a SIGNAL route with no source bus would be silently dropped by the `continue`
+		// below (a raw route with no bus is an empty section — the legacy skip); reject.
 		if fb == '' {
+			if sig != '' {
+				panic('route: signal "${sig}" has no source bus (from = { bus = .., frame = .. })')
+			}
 			continue
+		}
+		// a signal route's id comes from to.frame; an explicit to.id (even 0) is
+		// forbidden by the schema — check the KEY, not the value.
+		if sig != '' {
+			if _ := tm['id'] {
+				panic('route: signal "${sig}" sets to.id — a signal route takes its id from to.frame (drop to.id)')
+			}
 		}
 		routes << Route{
 			from_bus:   fb
 			from_frame: (fm['frame'] or { toml.Any('') }).string()
 			to_bus:     (tm['bus'] or { toml.Any('') }).string()
 			to_id:      int((tm['id'] or { toml.Any(0) }).int())
+			signal:     sig
+			to_frame:   (tm['frame'] or { toml.Any('') }).string()
 		}
 	}
 	if routes.len > 0 {
@@ -310,12 +325,173 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 				panic('route: frame "${r.from_frame}" is not a message in ${os.file_name(dbc)}')
 			}
 			routes[i].from_id = id
-			if routes[i].to_id == 0 {
-				routes[i].to_id = id // keep the source id unless remapped
+			routes[i].from_dlc = dbc_dlc_of(db, snake(r.from_frame)) or { 8 }
+			if r.signal != '' {
+				// SIGNAL route: resolve the DESTINATION frame's id + dlc (a distinct
+				// frame from the source; NOTE: both frames must be in this ONE DBC —
+				// a sysgen gateway with per-bus DBCs is P2c, the panics below fire on
+				// the missing frame). Both frames' codec fns live in dbc_gen.v.
+				if r.to_frame == '' {
+					panic('route: signal "${r.signal}" needs a destination frame (to = { bus = .., frame = .. })')
+				}
+				routes[i].to_id = dbc_id_of(db, snake(r.to_frame)) or {
+					panic('route: destination frame "${r.to_frame}" is not a message in ${os.file_name(dbc)} (per-bus DBCs on a gateway are P2c)')
+				}
+				routes[i].to_dlc = dbc_dlc_of(db, snake(r.to_frame)) or { 8 }
+				// the routed signal must be an SG_ in BOTH frames (decode + re-encode).
+				src_sg := dbc_sig_in_frame(db, snake(r.from_frame), r.signal) or {
+					panic('route: signal "${r.signal}" is not in source frame "${r.from_frame}" in ${os.file_name(dbc)}')
+				}
+				dst_sg := dbc_sig_in_frame(db, snake(r.to_frame), r.signal) or {
+					panic('route: signal "${r.signal}" is not in destination frame "${r.to_frame}" in ${os.file_name(dbc)}')
+				}
+				// GUARDS — a STANDALONE ecu.toml route is gated only by ecucheck, NOT
+				// sysmodel's check_route_dbc, so loom2v must reject the shapes the
+				// _phys/_set codec cannot faithfully translate (the dissolution rejects
+				// these at syscheck; these are the same rules on the standalone path):
+				// - multiplexed: the codec ignores the selector.
+				if src_sg.is_multiplexed || src_sg.is_multiplexor || dst_sg.is_multiplexed
+					|| dst_sg.is_multiplexor {
+					panic('route: signal "${r.signal}" is multiplexed — the route codec has no multiplexor support')
+				}
+				// (no width limit: the forwarder copies the RAW u64 value, so all widths
+				// up to 64 bits are exact — see the identical-encoding requirement below.)
+				// - extended-id SOURCE or destination: can.Frame carries no ext-id flag,
+				//   and the socket strips EFF on rx (a 29-bit id is indistinguishable from
+				//   a standard id of the same number), so both ends must be standard.
+				if (dbc_ext_of(db, snake(r.from_frame)) or { false })
+					|| (dbc_ext_of(db, snake(r.to_frame)) or { false }) {
+					panic('route: signal "${r.signal}" frame is an extended (29-bit) id — the route forwarder handles standard ids only')
+				}
+				// - big-endian (Motorola): the span check + codec assume little-endian.
+				if src_sg.byte_order != .little_endian || dst_sg.byte_order != .little_endian {
+					panic('route: signal "${r.signal}" is big-endian (Motorola) — the route codec handles little-endian signals only')
+				}
+				// - the SG_ must fit its frame's payload at its actual bit POSITION, not
+				//   just by width (a signal near the frame end overflows the DLC).
+				if src_sg.start_bit + src_sg.length > routes[i].from_dlc * 8 {
+					panic('route: signal "${r.signal}" occupies bit ${src_sg.start_bit + src_sg.length} but source frame "${r.from_frame}" is only ${routes[i].from_dlc} bytes')
+				}
+				if dst_sg.start_bit + dst_sg.length > routes[i].to_dlc * 8 {
+					panic('route: signal "${r.signal}" occupies bit ${dst_sg.start_bit + dst_sg.length} but destination frame "${r.to_frame}" is only ${routes[i].to_dlc} bytes')
+				}
+				// - the destination frame must contain ONLY the routed signal: the
+				//   forwarder composes a fresh frame and sets just this SG_, so any other
+				//   SG_ would ship as zero (multi-signal composition = the dest-producer
+				//   model, later).
+				for m2 in db.messages {
+					if snake(m2.name) != snake(r.to_frame) {
+						continue
+					}
+					for other in m2.signals {
+						if other.name != r.signal {
+							panic('route: destination frame "${r.to_frame}" also carries SG_ "${other.name}" — the forwarder would send it as zero (composing several signals into one frame needs the dest-producer model)')
+						}
+					}
+				}
+				// - a P2a.2 route RE-FRAMES a signal (new frame/id/bit-position) but does
+				//   NOT TRANSCODE its value: source and destination SG_ must share the same
+				//   value encoding (length, factor, offset, signedness, unit). Different
+				//   factor/offset would silently rescale or round (12.3@0.1 -> 12@1),
+				//   different units would relabel without converting (100 km/h -> 100 mph).
+				//   Genuine value transcoding is the destination-producer model, later.
+				if src_sg.length != dst_sg.length || src_sg.factor != dst_sg.factor
+					|| src_sg.offset != dst_sg.offset || src_sg.is_signed != dst_sg.is_signed
+					|| src_sg.unit != dst_sg.unit || !val_tables_equal(src_sg.values, dst_sg.values) {
+					panic('route: signal "${r.signal}" source and destination SG_ differ in value encoding (length/factor/offset/sign/unit/value-table) — a route re-frames a signal, it does not transcode the value')
+				}
+				// - the source and destination cadence (GenMsgCycleTime) must match: the
+				//   on-receipt forwarder sends one dest frame per source frame, so a 10 ms
+				//   source into a 100 ms dest would emit 10x the dest contract's rate. Rate
+				//   adaptation is the destination-producer model, later.
+				// cadences must be EQUAL (including "both absent"): a declared source but
+				// absent/non-cyclic destination (or vice versa) also can't be satisfied by
+				// the on-receipt forwarder.
+				src_cyc := dbc_cycle_of(db, snake(r.from_frame))
+				dst_cyc := dbc_cycle_of(db, snake(r.to_frame))
+				if src_cyc != dst_cyc {
+					panic('route: signal "${r.signal}" source frame cadence ${src_cyc} ms != destination ${dst_cyc} ms — on-receipt routing cannot rate-adapt (dest-producer model)')
+				}
+				// both ids must be standard 11-bit: candb leaves an UNFLAGGED id > 0x7ff as
+				// ext = false, but the SocketCAN send would place it without CAN_EFF_FLAG
+				// and fail (the ext-flagged case is already rejected above).
+				if routes[i].from_id > 0x7ff || routes[i].to_id > 0x7ff {
+					panic('route: signal "${r.signal}" frame id > 0x7ff without the extended flag — the forwarder emits standard (11-bit) ids only')
+				}
+				// - the SOURCE id must be UNIQUE in the DBC: the runtime matches only
+				//   rx.id + rx.len, so a second same-id/len message would be mis-decoded
+				//   with this frame's layout and forwarded as a fabricated value.
+				for m2 in db.messages {
+					if snake(m2.name) != snake(r.from_frame) && m2.id == u32(routes[i].from_id)
+						&& int(m2.dlc) == routes[i].from_dlc {
+						panic('route: source id 0x${routes[i].from_id:x} (frame "${r.from_frame}") is shared by DBC frame "${m2.name}" at the same DLC — the runtime cannot tell them apart')
+					}
+				}
+			} else if routes[i].to_id == 0 {
+				routes[i].to_id = id // raw route: keep the source id unless remapped
+			}
+		}
+		// P2a.2 sends the destination frame ON RECEIPT (no composition buffer), so two
+		// routes into ONE dest frame would each send a half-populated PDU. Reject that —
+		// composing several routed signals into one frame needs the destination frame's
+		// own COM producer (a routed value wired as its input), the next step.
+		mut dest_seen := map[string]int{}
+		for r in routes {
+			if r.signal == '' {
+				continue
+			}
+			key := '${r.to_bus}/${r.to_frame}'
+			dest_seen[key]++
+			if dest_seen[key] > 1 {
+				panic('route: destination frame "${r.to_frame}" on bus "${r.to_bus}" is targeted by more than one signal route — composing several signals into one frame needs the dest-producer model (P2a.2 sends on receipt)')
 			}
 		}
 	}
 	return routes
+}
+
+// val_tables_equal compares two DBC VAL_ enum tables (raw value -> name). A raw
+// route preserves the raw value, so a differing table would silently change the
+// signal's MEANING (raw 1 = "Drive" on one bus, "Reverse" on the other).
+fn val_tables_equal(a map[u64]string, b map[u64]string) bool {
+	if a.len != b.len {
+		return false
+	}
+	for k, v in a {
+		if (b[k] or { return false }) != v {
+			return false
+		}
+	}
+	return true
+}
+
+// dbc_cycle_of returns the GenMsgCycleTime (ms) of the message whose snake-name is
+// `key`, or 0 if unknown — used to require a route's source and destination frames
+// share a cadence (the on-receipt forwarder cannot rate-adapt).
+fn dbc_cycle_of(db candb.Database, key string) int {
+	for m in db.messages {
+		if snake(m.name) == key {
+			return m.cycle_ms
+		}
+	}
+	return 0
+}
+
+// dbc_sig_in_frame returns the SG_ named `signame` in the message whose snake-name
+// is `frame_key`, or none. Used to check a routed signal's layout in a SPECIFIC
+// frame (a signal route decodes from one frame and re-encodes into another).
+fn dbc_sig_in_frame(db candb.Database, frame_key string, signame string) ?candb.Signal {
+	for m in db.messages {
+		if snake(m.name) != frame_key {
+			continue
+		}
+		for s in m.signals {
+			if s.name == signame {
+				return s
+			}
+		}
+	}
+	return none
 }
 
 // parse_isotp parses [[isotp]] diagnostic connections.
@@ -635,7 +811,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		duo_names << sname
 		sig_of[sname] = si
 	}
-	return Model{
+	m := Model{
 		buses:        buses
 		bus_core:     bus_core
 		sig_of:       sig_of
@@ -661,6 +837,85 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		duo_idx:      duo_idx
 		duo_names:    duo_names
 		nvm:          parse_nvm(doc)
+	}
+	validate_signal_routes_model(m, doc)
+	return m
+}
+
+// validate_signal_routes_model checks a SIGNAL route against the rest of the model
+// (things parse_routes can't see with the DBC alone): the destination bus's fd
+// capacity, that the routed frames carry no E2E/SecOC the forwarder can't
+// verify/re-protect, and that no OTHER writer (a tx signal/frame, or another route)
+// already owns the destination frame. The dissolution enforces these at syscheck;
+// a STANDALONE ecu.toml route reaches only this gate.
+fn validate_signal_routes_model(m Model, doc toml.Doc) {
+	mut bus_fd := map[string]bool{}
+	if bv := doc.value_opt('bus') {
+		for bname, bc in bv.as_map() {
+			bus_fd[bname] = (bc.as_map()['fd'] or { toml.Any(false) }).bool()
+		}
+	}
+	for i, r in m.routes {
+		if r.signal == '' {
+			continue
+		}
+		frof := snake(r.from_frame)
+		tof := snake(r.to_frame)
+		// both endpoints must name a DECLARED [bus.*]; emit_bridges iterates declared
+		// buses only, so a misspelled endpoint silently drops the route.
+		if r.from_bus !in m.buses || r.to_bus !in m.buses {
+			panic('route: signal "${r.signal}" names an undeclared bus (from "${r.from_bus}", to "${r.to_bus}") — both must be a [bus.*]')
+		}
+		// the forwarder runs in the SOURCE bus\'s bridge and sends directly on the
+		// destination channel — safe only when both buses are on the same core. A
+		// cross-core route needs the sanctioned xioc crossing (P2c).
+		if (m.bus_core[r.from_bus] or { 0 }) != (m.bus_core[r.to_bus] or { 0 }) {
+			panic('route: signal "${r.signal}" crosses cores (bus "${r.from_bus}" core ${m.bus_core[r.from_bus] or {
+				0
+			}} -> "${r.to_bus}" core ${m.bus_core[r.to_bus] or { 0 }}) — a cross-core route needs an xioc transport (P2c)')
+		}
+		// a classic (non-FD) bus caps the DLC at 8 on BOTH ends: the source can never
+		// receive a >8 frame it requires by len, and the socket rejects a >8 send.
+		if !(bus_fd[r.from_bus] or { false }) && r.from_dlc > 8 {
+			panic('route: source frame "${r.from_frame}" is ${r.from_dlc} bytes but bus "${r.from_bus}" is classic (fd = false, DLC <= 8)')
+		}
+		if !(bus_fd[r.to_bus] or { false }) && r.to_dlc > 8 {
+			panic('route: destination frame "${r.to_frame}" is ${r.to_dlc} bytes but bus "${r.to_bus}" is classic (fd = false, DLC <= 8)')
+		}
+		// the destination frame must not ALSO be a COM tx frame ON THE SAME BUS — a
+		// [[signal]] to a bus makes its DBC message an implicit cyclic transmitter even
+		// with no [[frame]].tx (so it is not in m.frames.tx_mode). Two writers of one
+		// PDU under one id. (Scope by bus: the same frame on a different bus is a
+		// separate on-wire writer domain.)
+		for _, si in m.sig_of {
+			if !si.rx && si.dbc_msg == tof && si.bus == r.to_bus {
+				panic('route: destination frame "${r.to_frame}" is also transmitted by COM signal "${si.name}" on bus "${r.to_bus}" — one writer per frame')
+			}
+		}
+		// a module frame (telemetry today) on the destination bus reserves its CAN id —
+		// a routed dest id colliding with it makes the route bridge and the telemetry
+		// producer transmit different payloads under one id on one interface.
+		if m.telem.on && m.telem.bus == r.to_bus {
+			if r.to_id == int(m.telem.id) || (m.telem.detail_id != 0 && r.to_id == int(m.telem.detail_id)) {
+				panic('route: destination id 0x${r.to_id:x} on bus "${r.to_bus}" collides with the [telemetry] id — one writer per id')
+			}
+		}
+		// the route path neither verifies the source protection nor re-protects the
+		// destination — an E2E/SecOC frame must not be routed (dest-producer model).
+		if (m.frames.e2e_on[frof] or { false }) || (m.frames.secoc_on[frof] or { false })
+			|| (m.frames.e2e_on[tof] or { false }) || (m.frames.secoc_on[tof] or { false }) {
+			panic('route: signal "${r.signal}" rides an E2E/SecOC frame — the route forwarder does not verify the source or re-protect the destination (dest-producer model)')
+		}
+		// the destination frame must have a SINGLE on-wire writer: reject when a
+		// [[signal]]/[[frame]] tx already emits it, or another route targets the same id.
+		if tof in m.frames.tx_mode {
+			panic('route: destination frame "${r.to_frame}" is also transmitted by this node (a tx [[signal]]/[[frame]]) — one writer per frame')
+		}
+		for j, r2 in m.routes {
+			if j != i && r2.to_bus == r.to_bus && r2.to_id == r.to_id {
+				panic('route: destination id 0x${r.to_id:x} on bus "${r.to_bus}" is written by two routes — one writer per frame')
+			}
+		}
 	}
 }
 
@@ -2165,8 +2420,8 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 		glue << 'import nvm' // the persistence journal (docs/nvm.md)
 		glue << 'import boot as bootfl' // FlashOps — aliased: gen has its own boot()
 	}
-	if m.has_can_ext || m.isotp_conns.len > 0 || telem_on_can(m) {
-		glue << 'import driver.can' // the generated bus bridge
+	if m.has_can_ext || m.isotp_conns.len > 0 || telem_on_can(m) || m.routes.len > 0 {
+		glue << 'import driver.can' // the generated bus bridge (+ gateway routes)
 	}
 	// eth: only a TX frame emits a pack fn referencing com.max_pdu — an
 	// rx-only image gets consts alone, and V rejects an unused import
@@ -2730,6 +2985,19 @@ fn main() {
 	// warning, in any config (the sig types still live in ports_gen.v).
 	if !glue.any(it.contains('sig.')) {
 		glue = glue.filter(it.trim_space() != 'import sig')
+	}
+	// likewise `import osal` (host IOC + now_us/sleep_us): a PURE-ROUTE gateway has no
+	// signals and no timing, so it never calls osal.* — drop the unused import.
+	if !glue.any(it.contains('osal.')) {
+		glue = glue.filter(it.trim_space() != 'import osal')
+	}
+	// and `import ports` / `import app`: a PURE-ROUTE gateway has no FB handlers, so
+	// the `app/` module may not even exist — drop the imports when nothing uses them.
+	if !glue.any(it.contains('ports.')) {
+		glue = glue.filter(it.trim_space() != 'import ports')
+	}
+	if !glue.any(it.contains('app.')) {
+		glue = glue.filter(it.trim_space() != 'import app')
 	}
 
 	os.write_file(args[3], signals.join('\n') + '\n') or { panic('write ${args[3]}: ${err}') }
