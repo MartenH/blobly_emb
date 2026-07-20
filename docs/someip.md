@@ -363,3 +363,32 @@ inbound UDP — the working recipe is unicast to the Windows host's LAN IP with
 the listener PRIMING the stateful firewall (one datagram out of the listening
 socket first); newlib rand() must be overridden or NetX drags malloc into the
 no-alloc image (the h735_net lesson, re-paid here).
+
+## P2 rx status (2026-07-20, host-proven)
+
+The receive direction, host-first: the generated eth comm thread now drains
+its socket every pass — nonblocking `recv` on the driver/eth seam (POSIX
+backend; the NetX seam already carries source ip/port for this) — and runs
+each datagram through the design's rx chain: **source filter** (the configured
+static peer endpoint is the only legal talker, REQ-NET-017) → **envelope
+gate** (`comm/someip check_event`, REQ-NET-015) → **route by event id** →
+router length check (the payload IS the configured frame, exactly) →
+`<frame>_unpack` (pack's exact inverse, generated from the same
+`ecumodel.eth_layouts` derivation) → IOC publish on the signal's configured
+transport. Every refusal is a counted drop — never a fault — with a
+rate-limited stderr notice (no count in the text: `-gc none` forbids
+interpolation in generated runtime code).
+
+The `#154` reject-until-rung gate for rx frames is lifted; rx + `e2e` remains
+rejected (an unchecked trailer would LOOK protected — the rx-side E2E check is
+its own follow-up). `examples/host_someip` gained the round trip: `BenchCmd`
+(0x8010, rx) carries `LampCmd.level` in; the app mirrors it out on `BenchEcho`
+(0x8004, event mode) — and the harness (`e2e_test.v`, @verifies REQ-NET-015 /
+REQ-NET-017) proves: a good frame from the peer echoes back end to end; the
+same valid frame from a rogue port does not; and a malformed flood (short,
+wrong proto/service/iface, cleared event bit, inconsistent Length, wrong
+payload length, unrouted id) is dropped without wedging the good frames that
+follow.
+
+Next: rx-side E2E check, then the loom2v target rung (NetX backend under
+driver/eth, retiring the hand-wired h735_someip glue) or P3 RPC.

@@ -32,6 +32,8 @@ const iface_ver = u8(1)
 const id_cyclic = u16(0x8001)
 const id_event = u16(0x8002)
 const id_mixed = u16(0x8003)
+const id_echo = u16(0x8004)
+const id_cmd = u16(0x8010)
 
 struct Rx {
 	at  time.Time
@@ -135,8 +137,7 @@ fn test_tx_modes_on_the_wire() {
 		// fails a packer that drops or misplaces the byte (stuck 0 dies once
 		// q passes 1)
 		lo := r.pay[0]
-		assert lo == u8(q % 100) || lo == u8((q + 1) % 100)
-			|| (q > 0 && lo == u8((q - 1) % 100)), 'cyclic load ${lo} vs q ${q}'
+		assert lo == u8(q % 100) || lo == u8((q + 1) % 100) || (q > 0 && lo == u8((q - 1) % 100)), 'cyclic load ${lo} vs q ${q}'
 		// wraps = q + 1000: nonzero in both bytes, so a codec that drops the
 		// field or misplaces its offset/endianness fails on live values
 		assert le16(r.pay, 5) == u16(q + 1000), 'cyclic field relation (wraps)'
@@ -207,7 +208,8 @@ fn test_tx_modes_on_the_wire() {
 				// step assert. Values sit at 1000+n: BOTH bytes are live, so
 				// a byte-swapped packer decodes wildly out of range
 				assert le16(r.pay, 0) > le16(prev.pay, 0), 'mixed setpoint went backwards'
-				assert le16(r.pay, 0) >= 1000 && le16(r.pay, 0) < 1100, 'mixed setpoint ${le16(r.pay, 0)} out of range — layout/endianness'
+				assert le16(r.pay, 0) >= 1000 && le16(r.pay, 0) < 1100, 'mixed setpoint ${le16(r.pay,
+					0)} out of range — layout/endianness'
 				// an off-cycle change must be published BEFORE the next
 				// heartbeat; the 20 ms floor rejects stall-compressed bursts
 				g := (r.at - prev.at).milliseconds()
@@ -232,5 +234,125 @@ fn test_tx_modes_on_the_wire() {
 	// a sender that degrades to cyclic-only after one good change fails
 	assert fast_changes >= 2, 'mixed: only ${fast_changes} immediate change-sends'
 	assert last_fast_at - start > 1800 * time.millisecond, 'mixed: immediate change-sends stopped early'
+}
 
+// cmd_datagram builds a BenchCmd notification carrying one level byte —
+// through the REAL tx codec, so the probe cannot drift from the wire format.
+fn cmd_datagram(level u8) []u8 {
+	h := someip.notification(service, id_cmd, iface_ver, 1)
+	mut d := []u8{len: someip.header_len + 1}
+	someip.encode(h, unsafe { &d[0] })
+	d[someip.header_len] = level
+	return d
+}
+
+// drain_echoes collects every BenchEcho level arriving on the peer socket
+// within the window (the app's other event frames stream interleaved and are
+// skipped by id).
+fn drain_echoes(mut c net.UdpConn, window time.Duration) []u8 {
+	mut out := []u8{}
+	mut buf := []u8{len: 2048}
+	start := time.now()
+	for time.since(start) < window {
+		n, _ := c.read(mut buf) or { continue }
+		if n < someip.header_len {
+			continue
+		}
+		h, ok := someip.decode(unsafe { &buf[0] }, n)
+		if !ok || h.method != id_echo {
+			continue
+		}
+		assert n - someip.header_len == 1, 'echo payload ${n - someip.header_len} bytes'
+		out << buf[someip.header_len]
+	}
+	return out
+}
+
+// rx direction: the app's comm thread must accept exactly the datagrams the
+// design admits — the configured peer endpoint (source filter, REQ-NET-017),
+// a valid notification envelope (gate, REQ-NET-015), a routed event id with
+// the exact payload length — and prove acceptance end to end by the app
+// echoing the received level back on the wire. Every refusal is a silent
+// counted drop: the app must keep serving good frames through a malformed
+// flood, never faulting.
+// @verifies REQ-NET-015 REQ-NET-017
+fn test_rx_gate_filter_router() {
+	dir := os.real_path(os.dir(@FILE))
+	build := os.execute('make -C ${dir} V=${os.quoted_path(@VEXE)}')
+	assert build.exit_code == 0, build.output
+
+	// the configured peer endpoint — the ONE legal talker
+	mut c := net.listen_udp('127.0.0.1:30491')!
+	c.set_read_timeout(100 * time.millisecond)
+	defer {
+		c.close() or {}
+	}
+	// a rogue source: same host, different port — must be filtered
+	mut rogue := net.listen_udp('127.0.0.1:30492')!
+	defer {
+		rogue.close() or {}
+	}
+	app_addr := net.resolve_addrs('127.0.0.1:30490', .ip, .udp)![0]
+	mut p := os.new_process(os.join_path(dir, 'bin', 'app'))
+	// capture stderr: the rate-limited drop notice is the counter's observable
+	// face — REQ-NET-015/017 require refusals COUNTED, not just not-echoed
+	p.set_redirect_stdio()
+	p.run()
+	defer {
+		p.signal_kill()
+		p.wait()
+	}
+	time.sleep(500 * time.millisecond) // let the comm thread bind + settle
+
+	// ---- round-trip: a good frame from the good source echoes back ----
+	c.write_to(app_addr, cmd_datagram(42))!
+	mut echoes := drain_echoes(mut c, 2000 * time.millisecond)
+	assert 42 in echoes, 'no echo of level 42 — the rx chain (filter/gate/route/unpack/publish) is broken'
+
+	// ---- source filter: the same valid frame from a rogue port is dropped ----
+	rogue.write_to(app_addr, cmd_datagram(77))!
+	echoes = drain_echoes(mut c, 1000 * time.millisecond)
+	assert 77 !in echoes, 'level 77 echoed — a non-peer source got through the filter (REQ-NET-017)'
+
+	// ---- envelope gate + router: a malformed flood, then a good frame ----
+	// each refused for a different reason; the app must neither fault nor
+	// wedge, and must still serve the good frame that follows
+	c.write_to(app_addr, [u8(1), 2, 3])! // short: no header
+	c.write_to(app_addr, []u8{len: 1, init: 0}[..0])! // zero-length: a REAL datagram, counted not idle
+	mut d := cmd_datagram(9)
+	d[12] = 2 // wrong protocol version
+	c.write_to(app_addr, d)!
+	d = cmd_datagram(9)
+	d[0] = 0x99 // foreign service id
+	c.write_to(app_addr, d)!
+	d = cmd_datagram(9)
+	d[13] = 9 // interface version mismatch
+	c.write_to(app_addr, d)!
+	d = cmd_datagram(9)
+	d[2] &= 0x7F // event bit cleared: not an event id
+	c.write_to(app_addr, d)!
+	d = cmd_datagram(9)
+	d[7] = 0x30 // Length inconsistent with the datagram
+	c.write_to(app_addr, d)!
+	d = cmd_datagram(9)
+	d << u8(0)
+	d << u8(0)
+	d[7] += 2 // consistent envelope, wrong payload length for the route
+	c.write_to(app_addr, d)!
+	h := someip.notification(service, u16(0x8099), iface_ver, 1) // unrouted id
+	d = []u8{len: someip.header_len + 1}
+	someip.encode(h, unsafe { &d[0] })
+	c.write_to(app_addr, d)!
+	c.write_to(app_addr, cmd_datagram(55))! // and the good one after the storm
+	echoes = drain_echoes(mut c, 2000 * time.millisecond)
+	assert 9 !in echoes, 'a malformed frame was decoded and echoed (REQ-NET-015)'
+	assert 55 in echoes, 'no echo after the malformed flood — a bad frame faulted the rx path'
+
+	// the refusals must have been COUNTED, not merely not-echoed: the drop
+	// counter's observable face is the rate-limited stderr notice, printed
+	// only when the count advances — silence here means the counter is dead
+	p.signal_kill()
+	p.wait()
+	errout := p.stderr_slurp()
+	assert errout.contains('someip: rx drops counted'), 'no drop notice on stderr — refusals were not counted (REQ-NET-015/017)'
 }
