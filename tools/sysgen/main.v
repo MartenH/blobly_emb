@@ -47,12 +47,6 @@ fn main() {
 		exit(1)
 	}
 
-	// A gateway system is multi-bus: its target comm owner (a channel + Rx ISR per
-	// bus, multiplexed into one thread) is P2c, and even single-bus nodes on the
-	// second bus (index != 0) need that glue. So once ANY node is a gateway, defer
-	// the loom2v TARGET gate for the whole system (ecucheck still gates the schema);
-	// the loom2v gate returns with the P2c multi-bus comm owner (docs/multi-node.md).
-	has_gateway := sys.nodes.any(it.buses.len > 1)
 	for n in sys.nodes {
 		out := generate_node(sys, n) or {
 			eprintln('sysgen: node "${n.name}": ${err}')
@@ -78,17 +72,20 @@ fn main() {
 			}
 			exit(1)
 		}
-		// a multi-bus GATEWAY speaks several DBCs and its route form is not consumed
-		// by loom2v yet; a node on a second bus needs the per-bus Rx-ISR glue. Both
-		// are P2c — in a gateway system, gate with ecucheck only for now.
-		if has_gateway {
-			tag := if n.buses.len > 1 { 'gateway' } else { 'gateway-system node' }
-			println('sysgen: ${n.name} -> ${gen_path} (ok, ${tag} — loom2v target gate deferred to P2c)')
-			continue
-		}
+		// defer the loom2v TARGET gate ONLY for the nodes P2c will handle: a multi-bus
+		// GATEWAY (speaks >1 DBC, and its route form is not consumed by loom2v yet)
+		// and a single-bus node whose bus is not FDCAN index 0 (the Rx-ISR glue serves
+		// index 0 today; a can1+ node needs the P2c per-bus glue). An ordinary index-0
+		// single-bus node in a gateway system is STILL gated — an unrelated gateway
+		// must not mask its target-only errors (docs/multi-node.md, P2c).
 		bus := node_bus(sys, n) or {
 			eprintln('sysgen: node "${n.name}": ${err}')
 			exit(1)
+		}
+		if n.buses.len > 1 || bus.interface != 'can0' {
+			tag := if n.buses.len > 1 { 'gateway' } else { 'non-can0 node' }
+			println('sysgen: ${n.name} -> ${gen_path} (ok, ${tag} — loom2v target gate deferred to P2c)')
+			continue
 		}
 		dbc_path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(sys.dir, bus.dbc) }
 		lerrs := sysmodel.loom2v_errors(gen_path, dbc_path)
@@ -251,6 +248,10 @@ fn generate_gateway_node(sys sysmodel.System, node sysmodel.Node, authored strin
 	b << '[nm]'
 	b << 'node  = 0x${node.nm.hex()}'
 	if prim.has_nm_cluster {
+		// pin NM to the PRIMARY bus explicitly: loom2v defaults an omitted NM bus to
+		// [telemetry].bus, which on a gateway may be a DIFFERENT (secondary) bus — so
+		// the primary-cluster alive frames would transmit on the wrong network.
+		b << 'bus   = "${prim.interface}"'
 		b << 'alive = 0x${(prim.nm_peers_lo + node.nm).hex()}'
 		b << 'peers = [0x${prim.nm_peers_lo.hex()}, 0x${prim.nm_peers_hi.hex()}]'
 		if prim.nm_msg_cycle_ms > 0 {
@@ -311,21 +312,31 @@ fn lower_signal_route(sys sysmodel.System, r sysmodel.Route) ![]string {
 }
 
 // frame_of_signal returns the DBC message name that carries `sig` on `bus` (the
-// bus's DBC must define it as an SG_). Errors if the bus has no DBC or no such SG_.
+// bus's DBC must define it as an SG_ in EXACTLY ONE message). Errors if the bus has
+// no DBC, no such SG_, or the signal appears in more than one frame — an ambiguous
+// mapping would silently lower the route to the wrong CAN id / cadence.
 fn frame_of_signal(sys sysmodel.System, bus sysmodel.Bus, sig string) !string {
 	if bus.dbc == '' {
 		return error('bus "${bus.name}" has no DBC to resolve the frame')
 	}
 	path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(sys.dir, bus.dbc) }
 	db := candb.load_dbc_file(path) or { return error('load DBC "${bus.dbc}": ${err}') }
+	mut hits := []string{}
 	for m in db.messages {
 		for s in m.signals {
 			if s.name == sig {
-				return m.name
+				hits << m.name
+				break
 			}
 		}
 	}
-	return error('not defined in bus "${bus.name}" DBC "${bus.dbc}"')
+	if hits.len == 0 {
+		return error('not defined in bus "${bus.name}" DBC "${bus.dbc}"')
+	}
+	if hits.len > 1 {
+		return error('appears in ${hits.len} frames (${hits.join(', ')}) in bus "${bus.name}" DBC "${bus.dbc}" — the route mapping is ambiguous')
+	}
+	return hits[0]
 }
 
 // signal_partitions maps each signal a node's FBs read/write to the partition

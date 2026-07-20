@@ -280,8 +280,10 @@ fn test_route_satisfies_cross_bus_consumer() {
 	}
 	// without a route -> error (no producer on edge)
 	assert errs(validate_system(s)).any(it.contains('Speed') && it.contains('no node transmits'))
-	// add the SIGNAL route -> it carries Speed compute->edge, so the cross-bus
-	// consumer is satisfied AND (P2a) the signal route is accepted, not rejected.
+	// add the SIGNAL route. In the COMPOSED model it suppresses the raw
+	// missing-producer gap (reachability trusts it) BUT the route itself is rejected:
+	// a composed system never runs sysgen, so no forwarder would exist (codex #164).
+	// Signal-route ACCEPTANCE is a dissolution feature (test_dissolved_multibus_gateway_accepted).
 	s.routes << Route{
 		gateway: 'sysnode'
 		signal:  'Speed'
@@ -289,8 +291,8 @@ fn test_route_satisfies_cross_bus_consumer() {
 		to:      'edge'
 	}
 	e := errs(validate_system(s))
-	assert !e.any(it.contains('Speed') && it.contains('no node transmits')), 'a signal route satisfies the cross-bus consumer: ${e}'
-	assert !e.any(it.contains('not generated')), 'a signal route is generated in P2a, not rejected: ${e}'
+	assert !e.any(it.contains('Speed') && it.contains('no node transmits')), 'reachability trusts the route: ${e}'
+	assert e.any(it.contains('only generated in the dissolution model')), 'composed route rejected: ${e}'
 }
 
 // --- codex #141 review fixes ---
@@ -1293,11 +1295,11 @@ fn test_undeclared_telemetry_interface_is_error() {
 
 // --- codex #141 round-12 fixes ---
 
-// REQ-TOPO-006: a FRAME (raw-PDU) route is not generated until P2b (its
-// full-contract compare + tx-ready forwarder), so its mere presence is still an
-// error — a clean verdict must not imply a forwarder exists. (Signal routes ARE
-// generated in P2a — see test_signal_route_accepted.)
-fn test_frame_route_not_generated_is_error() {
+// REQ-TOPO-006: any route in a COMPOSED system is rejected — sysgen lowers routes
+// only in the dissolution model, so a composed route would validate clean with no
+// forwarder at runtime (codex #164). (Dissolved: signal routes are accepted in
+// P2a, frame routes are gated to P2b — see the dissolved route tests.)
+fn test_composed_route_rejected() {
 	mut s := clean_system()
 	s.buses << Bus{
 		name:      'edge'
@@ -1311,7 +1313,25 @@ fn test_frame_route_not_generated_is_error() {
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system(s)).any(it.contains('not generated yet (P2b)')), errs(validate_system(s)).str()
+	assert errs(validate_system(s)).any(it.contains('only generated in the dissolution model')), errs(validate_system(s)).str()
+}
+
+// REQ-TOPO-006: in the DISSOLVED model a FRAME (raw-PDU) route is still gated to
+// P2b (its full-contract compare + tx-ready forwarder is not generated yet).
+fn test_dissolved_frame_route_is_p2b() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	s.nodes[0].buses = ['compute', 'edge'] // gateway
+	s.routes << Route{
+		gateway: 'a'
+		frame:   'SomeFrame'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('not generated yet (P2b)')), errs(validate_system_gen(s)).str()
 }
 
 // REQ-TOPO-002: a telemetry id equal to ANOTHER node's alive id collides on the
@@ -2787,6 +2807,37 @@ fn test_route_dest_double_writer_rejected() {
 	}
 	assert errs(validate_system_gen(s)).any(it.contains('single writer')
 		|| it.contains('single-writer') || it.contains('one writer'))
+}
+
+// REQ-TOPO-006 (codex #164): a gateway that ALSO reads/writes a system signal via
+// an FB is rejected — its own signal wiring is not emitted in P2a (it may only
+// route), so the FB would reference undeclared ports.
+fn test_gateway_with_system_fb_rejected() {
+	mut s := clean_dissolved()
+	s.buses << Bus{
+		name:      'edge'
+		interface: 'can1'
+	}
+	// make a gateway node that also reads the system signal 'Speed'
+	s.nodes << Node{
+		name:         'gw'
+		buses:        ['compute', 'edge']
+		nm:           0x15
+		has_nm_alloc: true
+		nm_alloc_ok:  true
+		trace:        4
+		view:         NodeView{
+			fb_reads: ['Speed']
+		}
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		signal:  'Speed'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('gateway "gw"')
+		&& it.contains('may only route'))
 }
 
 // REQ-TOPO-011: routes that form a bus cycle for one signal are rejected (the
