@@ -319,55 +319,75 @@ lets reachability trust it. Codex review of the first draft found the naive
 "forward a PDU through a wait-free ring" model wrong on several counts; the design
 below is the corrected one.
 
-### The gateway is a node on ≥2 buses — but the target emitter isn't there yet
+### The gateway's comm owner is per-CORE, so most routing is intra-thread
 
-A gateway's `buses = [...]` names ≥2 buses. On the **host** emitter that already
-means one bus bridge per bus, so P2a/P2b prove the routing logic in sim. On the
-**ThreadX target** it does **not**: `gen.v` today creates a single comm owner and
-rejects routes + signals on any non-telemetry bus. So P2 has an explicit
-prerequisite — **multi-bus target comm generation**: per-bus FDCAN channel, Rx-FIFO
-ISR, and comm thread, one set per gateway bus. That is P2c's real content, and the
-FDCAN1↔FDCAN2 bench cannot happen before it.
+The established target model (`docs/architecture.md`) is **one comm thread per
+core, owning every bus on that core** — not one per bus (each ThreadX thread costs
+a fixed stack). So on the single-core H735 gateway, one comm owner holds FDCAN1,
+FDCAN2 and FDCAN3, and **a route between two of its buses is intra-thread**: the
+comm loop receives on the source bus and, in the same pass, transmits on the
+destination bus. **No cross-thread transport, no queue, no IOC** for the common
+single-core gateway. Cross-thread only arises when the two buses sit on different
+**cores** (an AMP gateway) — and then the sanctioned crossing already exists:
+`xioc` (the cross-core SPSC), never a parallel OSAL queue.
 
-### Signal route — the common case, and it is COM, not a new transport
+What `gen.v` *is* missing is per-bus **channels + Rx ISRs** on the target (it
+routes rx from one FDCAN today) and it rejects non-telemetry-bus signals. So P2's
+target prerequisite is: generate a channel + Rx-FIFO ISR per gateway bus,
+**multiplexed into the core's single comm owner** — not a thread per bus. That is
+P2c; the FDCAN1↔FDCAN2 bench waits on it.
 
-A signal route does **not** move a PDU across threads. It reuses the existing
-machinery end to end:
+### Signal route — it is COM, not a new transport
 
-1. On the **source** bus's comm loop, the routed frame is received and **decoded
-   through its normal COM path** — including the E2E/SecOC `check`/`verify` stage,
-   so an untrusted source frame is never translated (`REQ-TOPO-008`).
-2. The decoded signal **value** is published into the destination node's signal
-   space over the **IOC** (`osal.ioc_*`) — the only sanctioned thread crossing.
-   The IOC's latest-value semantics give **correct rate adaptation for free**: a
-   fast source overwrites; the destination samples the current value once per its
-   cycle (no FIFO burst, no unbounded latency — the bug the ring had).
-3. The **destination frame's own COM producer** reads that signal like any other
-   input, composes the **whole** frame (all routed + node-local signals — never a
-   half-populated PDU), applies **E2E/SecOC `protect`**, and sends at the frame's
-   own cyclic cadence.
+A signal route reuses the existing machinery end to end:
 
-So `gen_gateway.v` emits only step 1–2 (decode-and-publish on the source thread);
-the destination side is ordinary generated COM. A signal route is literally
-"wire the routed signal as an input to the destination frame's producer."
+1. The routed frame is received on the source bus and **decoded through its normal
+   COM path** — including E2E/SecOC `check`/`verify` and the reception-deadline
+   monitor — so an untrusted or timed-out source frame is never treated as valid
+   (`REQ-TOPO-008`).
+2. The decoded **value plus its validity/freshness** is handed to the destination
+   frame's signal — intra-thread on a single-core gateway (a plain set), or over
+   `xioc` if the destination bus is on another core. Because a routed signal cell
+   has **exactly one writer** (this route), the generator must reject a config
+   where a gateway-local FB *or* a second route also writes it — the IOC/xioc
+   single-writer rule, checked at generation (`REQ-TOPO-012`).
+3. The **destination frame's own COM producer** reads the signal like any other
+   input, composes the **whole** frame (all routed + node-local signals, never a
+   half-populated PDU), applies E2E/SecOC `protect`, and sends **per that frame's
+   configured TX mode** (cyclic → rate adaptation via the last value sampled each
+   cycle; event/triggered → on the mode's trigger). A source timeout/invalidation
+   propagates: the destination is suppressed or sent explicitly invalid, so a
+   downstream receiver detects the loss instead of seeing fresh, freshly-protected
+   stale data.
 
-### Frame route — raw 1:1 forward needs a sanctioned frame transport
+`gen_gateway.v` emits only steps 1–2; the destination side is ordinary generated
+COM — a signal route is "wire the routed signal (with its validity) as an input to
+the destination frame's producer."
 
-A frame route carries a whole PDU unchanged between two buses owned by different
-threads — a payload larger than an IOC cell. That requires a **sanctioned,
-bounded, single-producer→single-consumer frame queue** added to the OSAL (not an
-ad-hoc ring), with a documented overflow policy (drop-newest + a surfaced counter)
-and an entry in the isolation model. The source bus thread enqueues; the
-destination bus thread drains and sends, preserving one transmitter per channel.
+### Frame route — raw 1:1 forward, contract-gated
 
-Raw forward is valid **only when the frame's complete contract is identical on
-both buses** — id, DLC, bit layout, endianness, **and** frame format (classic/FD,
-standard/extended). Derivation compares the full frame definition, not id equality
-or "the DBC files differ"; any layout or format mismatch forces a signal route or
-a rejection (`REQ-TOPO-007`). Because raw forward must preserve format, the driver
-`Frame` value type / recv path is extended to carry the `fd` and extended-id flags
-(today `recv` drops them), or raw routes are restricted to a validated common
-format.
+A frame route carries a PDU unchanged. On a single-core gateway it is
+recv-on-A → send-on-B **in the one comm loop** (with the driver's `tx_ready`
+gating retained so a send that the destination TX can't yet accept is retried, not
+silently dropped); a cross-core split carries the frame over `xioc`.
+
+Raw forward is valid **only when the two buses agree on the frame's *entire*
+meaning**, which is more than byte layout:
+
+- **wire shape** — id, DLC, bit layout, endianness, and format (classic/FD,
+  standard/extended). The driver `Frame`/recv path is extended to carry the `fd`
+  and extended-id flags (today `recv` drops them), or raw routes are restricted to
+  a validated common format;
+- **signal semantics** — factor, offset, signedness, multiplexing and value tables
+  of every signal in the frame (identical raw bits under factors 0.1 vs 1.0 mean a
+  10× different value);
+- **protection** — E2E/SecOC `data_id`, protection-byte positions, MAC length and
+  **key** must match, or the destination rejects every forwarded PDU.
+
+Derivation compares this **complete** contract, not id equality or "the DBC files
+differ"; any mismatch forces a signal route (which re-encodes and re-protects) or
+a rejection (`REQ-TOPO-007`). Protected frames with differing config are therefore
+never raw-forwarded — they translate.
 
 ### Validation the router must add (system checks)
 
@@ -390,17 +410,19 @@ gateway to one bus. So per-bus NM on a gateway is an explicit P2 item
 primary bus; a two-cluster sleep-coordinating gateway waits on that generation.
 Cross-bus *sleep bridging* (wake on A wakes B) remains a later decision on top.
 
-### Sub-phasing (reordered — signal route first, it is IOC-native)
+### Sub-phasing (signal route first — it is ordinary COM)
 
-1. **P2a — signal route, host sim (2× vcan).** The common, IOC-native path: a
-   `compute` signal reaches the H723's frame via the gateway's decode→IOC→dest-COM
-   composition; drop the route → the reachability check fails. `REQ-TOPO-008`,
-   `-011`, `-012`.
-2. **P2b — frame route.** The sanctioned frame queue, full-contract comparison,
+1. **P2a — signal route, host sim (2× vcan).** The common path: a `compute`
+   signal reaches the H723's frame via the gateway's decode → dest-signal →
+   dest-COM composition; drop the route → the reachability check fails.
+   `REQ-TOPO-008`, `-011`, `-012`.
+2. **P2b — frame route.** Recv-on-A → send-on-B in the comm loop (with tx-ready
+   gating), the full-contract comparison (wire + signal semantics + protection),
    format flags, firewall allow-list. `REQ-TOPO-007`, `-009`, `-010`.
-3. **P2c — target multi-bus comm + bench.** Per-bus channel/ISR/comm-owner
-   generation on the ThreadX target, then the H735 FDCAN1↔FDCAN2 gateway;
-   sim-first until a second transceiver is on the desk.
+3. **P2c — target multi-bus + bench.** Generate a channel + Rx-FIFO ISR per
+   gateway bus, multiplexed into the core's single comm owner (not a thread per
+   bus), then the H735 FDCAN1↔FDCAN2 gateway; sim-first until a second transceiver
+   is on the desk.
 
 ### Open questions above — resolved for P2
 
