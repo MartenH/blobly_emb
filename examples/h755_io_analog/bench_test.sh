@@ -62,19 +62,22 @@ fi
 # --- symbol addresses (resolved from the ELF, never hard-coded) -------------------
 sym() { arm-none-eabi-nm "$ELF" | awk -v s="$1" '$3==s {print "0x"$1; exit}'; }
 IOEXEC=$(sym g_io_exec_us); ADCDMA=$(sym g_adc_dma); IOCPOOL=$(sym g_ioc_pool); GCPU=$(sym g_cpu_mhz)
-[ -n "$IOEXEC" ] && [ -n "$ADCDMA" ] && [ -n "$IOCPOOL" ] && [ -n "$GCPU" ] || { echo "FAIL: could not resolve a required symbol"; exit 1; }
+IOCARENA=$(sym g_ioc_arena)
+[ -n "$IOEXEC" ] && [ -n "$ADCDMA" ] && [ -n "$IOCPOOL" ] && [ -n "$IOCARENA" ] && [ -n "$GCPU" ] || { echo "FAIL: could not resolve a required symbol"; exit 1; }
 GCPU_A=$(printf '0x%08x' "$GCPU")
 # IOC cell 2 = the Pot signal the io thread publishes (ioc_pub(2, adc_read_checked(1))).
-# ioc_t is 32 B: slot[3] (a,b u32 -> 8 B) at +0/+8/+16, then `shared` (byte +24), `wr`
-# (+25), `rd` (+26). ioc_read (boards/common/ioc.h) leaves the latest CONSUMED value in
-# slot[rd] and points `shared` at a stale spare — so the published slot is slot[shared&3]
-# only while FRESH (bit2) is set, else slot[rd] (codex #156r3). Comparing that slot's `a`
-# to g_adc_dma corroborates the io thread's read path; it is NOT a deterministic proof
-# (a stable input keeps the boot sample within tolerance even if the periodic read broke),
-# so the read-VALUE logic is additionally covered by the host e2e (examples/io_adc).
-CELL2=$(( IOCPOOL + 2*32 ))
-S0=$(printf '0x%08x' $CELL2); S1=$(printf '0x%08x' $((CELL2+8))); S2=$(printf '0x%08x' $((CELL2+16)))
-SH=$(printf '0x%08x' $((CELL2+24)))
+# Size-proportional layout (ioc.h): payload slots live in g_ioc_arena — each pool row is
+# IOC_ARENA_BYTES(sizeof(sig_t)) = 32 B (3 x 8 B, line-rounded), slot k at row + k*8. The
+# ioc_t cell itself holds the arena pointer (+0), size (+4), then `shared` (byte +6),
+# `wr` (+7), `rd` (+8). ioc_read leaves the latest CONSUMED value in slot[rd] and points
+# `shared` at a stale spare — so the published slot is slot[shared&3] only while FRESH
+# (bit2) is set, else slot[rd] (codex #156r3). Comparing that slot's `a` to g_adc_dma
+# corroborates the io thread's read path; it is NOT a deterministic proof (a stable input
+# keeps the boot sample within tolerance even if the periodic read broke), so the
+# read-VALUE logic is additionally covered by the host e2e (examples/io_adc).
+ROW2=$(( IOCARENA + 2*32 ))
+S0=$(printf '0x%08x' $ROW2); S1=$(printf '0x%08x' $((ROW2+8))); S2=$(printf '0x%08x' $((ROW2+16)))
+SH=$(printf '0x%08x' $(( IOCPOOL + 2*32 + 6 )))
 M0AR=0x4002001c # DMA1 Stream0 M0AR (destination address register)
 
 # Liveness is proven by STATUS FLAGS, not value diffs: a free-running counter or a

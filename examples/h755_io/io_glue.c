@@ -19,8 +19,10 @@
 
 #define IOC_POOL_N 4
 static ioc_t g_ioc_pool[IOC_POOL_N];
-/* size-proportional arenas: 3 x the scalar sig_t per channel (ioc.h) */
-static volatile uint8_t g_ioc_arena[IOC_POOL_N][3 * sizeof(sig_t)];
+/* size-proportional arenas: 3 x the scalar sig_t per channel, line-rounded +
+ * line-aligned so channels never share a cache line (ioc.h invariant) */
+static volatile uint8_t g_ioc_arena[IOC_POOL_N][IOC_ARENA_BYTES(sizeof(sig_t))]
+    __attribute__((aligned(32)));
 void ioc_pool_init(void) {
     for (int i = 0; i < IOC_POOL_N; i++) ioc_init(&g_ioc_pool[i], g_ioc_arena[i], sizeof(sig_t));
 }
