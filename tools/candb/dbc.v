@@ -92,6 +92,7 @@ mut:
 	maximum           f64
 	unit              string
 	desc              string
+	receivers         []string
 	values            map[u64]string
 	is_signed         bool
 	byte_order        ByteOrder
@@ -163,6 +164,7 @@ pub fn parse_dbc(text string) !Database {
 				maximum:           sb.maximum
 				unit:              sb.unit
 				desc:              sb.desc
+				receivers:         sb.receivers.clone()
 				values:            sb.values.clone()
 				is_signed:         sb.is_signed
 				byte_order:        sb.byte_order
@@ -258,6 +260,14 @@ fn parse_sg(line string) !SigBuilder {
 	unit := body[q1 + 1..q2]
 	pre := body[..q1].trim_space() // "<start>|<len>@<order><sign> (f,o) [min|max]"
 
+	// receivers: the RX node list after the unit quote (comma- or space-separated).
+	mut receivers := []string{}
+	for r in body[q2 + 1..].split_any(', \t') {
+		if r.trim_space() != '' {
+			receivers << r.trim_space()
+		}
+	}
+
 	pf := pre.fields()
 	if pf.len < 2 {
 		return error('SG_ malformed layout: ${line}')
@@ -301,6 +311,7 @@ fn parse_sg(line string) !SigBuilder {
 		minimum:           minimum
 		maximum:           maximum
 		unit:              unit
+		receivers:         receivers
 		is_signed:         is_signed
 		byte_order:        byte_order
 		is_multiplexor:    is_multiplexor
