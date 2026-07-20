@@ -15,8 +15,83 @@ import tools.candb
 // destination frame is transmitted by another node, would otherwise slip through
 // (the gateway's loom2v gate is deferred). The re-encode must match the dest wire
 // contract and the gateway must own the destination frame (REQ-TOPO-003/-012).
+// route_phys_range returns a DBC signal's [min, max] physical value (raw range
+// scaled by factor/offset), for the route source-vs-dest range-containment check.
+fn route_phys_capacity(sg candb.Signal) (f64, f64) {
+	n := sg.length
+	if sg.is_signed {
+		half := f64(u64(1) << u64(n - 1))
+		a := -half * sg.factor + sg.offset
+		b := (half - 1) * sg.factor + sg.offset
+		return if a < b { a, b } else { b, a }
+	}
+	rmax := f64((u64(1) << u64(n)) - 1)
+	a := sg.offset
+	b := rmax * sg.factor + sg.offset
+	return if a < b { a, b } else { b, a }
+}
+
+fn route_phys_range(sg candb.Signal) (f64, f64) {
+	clo, chi := route_phys_capacity(sg)
+	if sg.maximum > sg.minimum {
+		lo := if sg.minimum > clo { sg.minimum } else { clo }
+		hi := if sg.maximum < chi { sg.maximum } else { chi }
+		return lo, hi
+	}
+	return clo, chi
+}
+
+// route_val_phys_equal compares two DBC VAL_ enum tables by PHYSICAL value (a route
+// transcodes factor/offset, so the same enum can have different raw keys).
+fn route_sig_key_phys(s candb.Signal, raw u64) f64 {
+	r := if s.is_signed { f64(i64(raw)) } else { f64(raw) }
+	return r * s.factor + s.offset
+}
+
+fn route_val_tol(a candb.Signal, b candb.Signal) f64 {
+	fa := if a.factor < 0 { -a.factor } else { a.factor }
+	fb := if b.factor < 0 { -b.factor } else { b.factor }
+	step := if fa < fb && fa > 0 { fa } else { fb }
+	if step <= 0 {
+		return 1e-9
+	}
+	return step * 0.5
+}
+
+fn route_f64_close(x f64, y f64, tol f64) bool {
+	mut d := x - y
+	if d < 0 {
+		d = -d
+	}
+	return d < tol
+}
+
+fn route_val_phys_equal(a candb.Signal, b candb.Signal) bool {
+	if a.values.len != b.values.len {
+		return false
+	}
+	tol := route_val_tol(a, b)
+	for ka, va in a.values {
+		pa := route_sig_key_phys(a, ka)
+		mut found := false
+		for kb, vb in b.values {
+			if vb == va && route_f64_close(route_sig_key_phys(b, kb), pa, tol) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 pub fn check_route_dbc(s System) []Issue {
 	mut issues := []Issue{}
+	// all signal routes composing ONE destination frame must share a source bus (each
+	// source bridge composes independently) — track the first source bus per dest frame.
+	mut frame_src := map[string]string{}
 	for r in s.routes {
 		if r.signal == '' || r.to == '' {
 			continue
@@ -79,6 +154,29 @@ pub fn check_route_dbc(s System) []Issue {
 			continue
 		}
 		dm := dmsg or { continue }
+		// the routed producer re-emits per the dest cadence, but the comm bridge ticks
+		// at 10 ms — a sub-tick DBC cadence can't be honored (loom2v panics; mirror it).
+		if dm.cycle_ms > 0 && dm.cycle_ms < 10 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'route on "${r.gateway}": destination frame "${dm.name}" cadence ${dm.cycle_ms} ms is below the 10 ms comm-bridge tick — cannot re-emit that fast'
+			}
+		}
+		// same-source-bus composition (mirror loom2v): every route into this dest frame
+		// must originate on ONE source bus, else the frame ships two half-populated copies.
+		fkey := '${r.to}/${dm.name}'
+		if prev := frame_src[fkey] {
+			if prev != r.from {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'route on "${r.gateway}": destination frame "${dm.name}" on "${r.to}" is composed from two source buses ("${prev}" and "${r.from}") — a routed frame\'s signals must share one source bus'
+				}
+			}
+		} else {
+			frame_src[fkey] = r.from
+		}
 		// a multiplexed destination SG_ needs selector semantics the dissolution codec
 		// has no support for (same limit as the source-side check) — the re-encode
 		// would write an inactive/overlapping branch.
@@ -97,13 +195,58 @@ pub fn check_route_dbc(s System) []Issue {
 				msg:      'route on "${r.gateway}": destination frame for "${r.signal}" on bus "${r.to}" is transmitted by "${sender}" in the DBC, not the gateway'
 			}
 		}
-		// the re-encode must fit the destination SG_ width + signedness.
-		bits := field_bits(sig.fields)
-		if bits != 0 && ds.length != bits {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-003'
-				msg:      'route on "${r.gateway}": signal "${r.signal}" fields are ${bits} bits but destination DBC SG_ is ${ds.length} bits (bus "${r.to}")'
+		// P2a.2b transcodes SCALE (factor/offset/width) — so the source and dest SG_ may
+		// differ there — but a route carries a NUMBER, so UNITS, VAL_ enum meaning, and
+		// physical RANGE must be preserved across the two buses' DBCs. Compare the source
+		// SG_ (in the FROM bus's DBC) against the dest SG_ ds.
+		if from := s.bus_by_name(r.from) {
+			if from.dbc != '' {
+				fpath := if os.is_abs_path(from.dbc) { from.dbc } else { os.join_path(s.dir, from.dbc) }
+				if fdb := candb.load_dbc_file(fpath) {
+					mut ssg := ?candb.Signal(none)
+					for fm in fdb.messages {
+						for sg in fm.signals {
+							if sg.name == r.signal {
+								ssg = sg
+								break
+							}
+						}
+					}
+					if src := ssg {
+						// the route carries the PHYSICAL value through f64 (to transcode),
+						// exact only to 52 bits — same limit loom2v enforces standalone.
+						if src.length > 52 || ds.length > 52 {
+							issues << Issue{
+								severity: .error
+								req:      'REQ-TOPO-003'
+								msg:      'route on "${r.gateway}": signal "${r.signal}" is >52 bits — the route carries the physical value through f64 (exact only to 52-bit integers)'
+							}
+						}
+						if src.unit != ds.unit {
+							issues << Issue{
+								severity: .error
+								req:      'REQ-TOPO-003'
+								msg:      'route on "${r.gateway}": signal "${r.signal}" unit "${src.unit}" (source) != "${ds.unit}" (destination) — the route transcodes scale, not units'
+							}
+						}
+						if !route_val_phys_equal(src, ds) {
+							issues << Issue{
+								severity: .error
+								req:      'REQ-TOPO-003'
+								msg:      'route on "${r.gateway}": signal "${r.signal}" source and destination VAL_ tables differ (at equal physical values) — the route does not translate enum meanings'
+							}
+						}
+						slo, shi := route_phys_range(src)
+						dlo, dhi := route_phys_range(ds)
+						if slo < dlo || shi > dhi {
+							issues << Issue{
+								severity: .error
+								req:      'REQ-TOPO-003'
+								msg:      'route on "${r.gateway}": signal "${r.signal}" source range [${slo}, ${shi}] does not fit the destination range [${dlo}, ${dhi}] — the re-encode would overflow'
+							}
+						}
+					}
+				}
 			}
 		}
 		// the dissolution codec re-encodes trivial LITTLE-ENDIAN signals; a big-endian
@@ -128,33 +271,6 @@ pub fn check_route_dbc(s System) []Issue {
 					req:      'REQ-TOPO-003'
 					msg:      'route on "${r.gateway}": signal "${r.signal}" occupies up to bit ${occupied} but destination frame "${dm.name}" is only ${dm.dlc} bytes (${payload_bits} bits) on bus "${r.to}"'
 				}
-			}
-		}
-		if want := field_signed(sig.fields) {
-			if want != ds.is_signed {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-003'
-					msg:      'route on "${r.gateway}": signal "${r.signal}" is ${if want {
-						'signed'
-					} else {
-						'unsigned'
-					}} but destination DBC SG_ is ${if ds.is_signed {
-						'signed'
-					} else {
-						'unsigned'
-					}} (bus "${r.to}")'
-				}
-			}
-		}
-		// the codec routes RAW values — a destination SG_ with a non-trivial
-		// factor/offset would change the physical value (raw 10000 at factor 0.1 is a
-		// 10x different quantity, and encode() masks any overflow to the SG_ width).
-		if ds.factor != 1.0 || ds.offset != 0.0 {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-003'
-				msg:      'route on "${r.gateway}": destination DBC SG_ "${r.signal}" (bus "${r.to}") has factor/offset ${ds.factor}/${ds.offset} — the dissolution codec routes raw values (factor 1, offset 0)'
 			}
 		}
 		// the destination FRAME must be sendable on the destination bus: a classic
