@@ -8,8 +8,11 @@ import comm.com
 // sockets, no alloc: the glue owns UDP (the netx_glue byte-pipe seam, as DoIP)
 // and checks the source endpoint; the router owns payload-vs-route length.
 //
-// Scope (P1): encode/decode + notification tx + the event rx gate. RPC state
-// (one in-flight, deadline, drain) arrives with the P3 adapter; SD does not
+// Scope: encode/decode + notification tx + the event rx gate (P1/P2), and
+// the RPC transport (P3, this layer): request/response/error builders with
+// the correlation law — a response mirrors its request's Request ID — plus
+// the server-side request gate. The client adapter state (one in-flight per
+// method, deadline, drain) arrives with the method-routing rung; SD does not
 // exist on target (static endpoints, REQ-NET-017).
 
 pub const header_len = 16
@@ -110,15 +113,96 @@ pub fn notification(service u16, event u16, iface u8, payload_len int) Header {
 // (REQ-NET-015: counted and dropped, never faulting). .none = accept.
 pub enum Drop {
 	none
-	short    // datagram cannot hold a header
-	proto    // wrong protocol version
-	service  // foreign service id
-	iface    // interface version mismatch
-	mtype    // message type not legal for the phase
-	method   // an event frame id must have bit 15 set
-	fixed    // notification Request ID / Return Code not zero
+	short   // datagram cannot hold a header
+	proto   // wrong protocol version
+	service // foreign service id
+	iface   // interface version mismatch
+	mtype   // message type not legal for the phase
+	method  // the id's bit-15 class does not match its role (event set, method clear)
+	fixed   // a fixed field violated: notification Request ID / Return Code
+	// not zero, or a request without a live session id / with rc set
 	length   // Length inconsistent with the datagram
 	oversize // payload exceeds the shared PDU bound
+}
+
+// --- P3 RPC transport (docs/someip.md): builders + the server-side gate ---
+
+// request builds a client request header for `method` (bit 15 clear). The
+// Request ID is the correlation token: client + session, mirrored verbatim by
+// the response (REQ-NET-016). session must be live (nonzero, wrapping 1..):
+// the server gate refuses a dead session id.
+pub fn request(service u16, method u16, client u16, session u16, iface u8, payload_len int) Header {
+	return Header{
+		service: service
+		method:  method
+		length:  u32(8 + payload_len)
+		client:  client
+		session: session
+		proto:   proto_ver
+		iface:   iface
+		mtype:   mt_request
+		rcode:   rc_ok
+	}
+}
+
+// response builds the success response to `req`: the correlation law — the
+// request's service/method/Request ID mirrored verbatim — with only the
+// message type (0x80) and payload differing.
+pub fn response(req Header, payload_len int) Header {
+	mut h := req
+	h.length = u32(8 + payload_len)
+	h.mtype = mt_response
+	h.rcode = rc_ok
+	return h
+}
+
+// error_response builds the distinguishable failure answer to `req`: message
+// type 0x81, the given nonzero return code, no payload — the outcome stays
+// attributable to the originating request (same mirrored Request ID) without
+// inventing a payload schema for failures.
+pub fn error_response(req Header, rc u8) Header {
+	mut h := req
+	h.length = u32(8)
+	h.mtype = mt_error
+	h.rcode = rc
+	return h
+}
+
+// check_request validates an inbound REQUEST envelope against the configured
+// identity — the server-side twin of check_event. Same counter discipline
+// (identity before shape); method ids have bit 15 CLEAR, and the Request ID
+// must carry a live session (nonzero) or the response could not be
+// correlated. Whether the method id is actually served is the router's check
+// (unknown method -> rc_unknown_method error response, not a silent drop).
+pub fn check_request(h Header, datagram_len int, service u16, iface u8) Drop {
+	if datagram_len < header_len {
+		return .short
+	}
+	if h.proto != proto_ver {
+		return .proto
+	}
+	if h.service != service {
+		return .service
+	}
+	if h.iface != iface {
+		return .iface
+	}
+	if h.mtype != mt_request {
+		return .mtype
+	}
+	if (h.method & event_bit) != 0 {
+		return .method
+	}
+	if h.session == 0 || h.rcode != rc_ok {
+		return .fixed
+	}
+	if h.length != u32(datagram_len - 8) {
+		return .length
+	}
+	if datagram_len - header_len > max_payload {
+		return .oversize
+	}
+	return .none
 }
 
 // check_event validates an inbound NOTIFICATION envelope against the configured
