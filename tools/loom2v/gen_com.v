@@ -327,6 +327,11 @@ fn emit_eth_bridge(m Model) []string {
 	if tx_frames.len > 0 {
 		glue << '\tmut dgram := [80]u8{} // someip.header_len + com.max_pdu'
 	}
+	for fr in rx_frames {
+		if fr.e2e_on {
+			glue << '\tmut e2e_rx_${snake(fr.name)} := e2e.RxState{}'
+		}
+	}
 	if rx_frames.len > 0 {
 		glue << '\tmut rx_buf := [80]u8{} // someip.header_len + com.max_pdu — an oversize datagram truncates here and fails the Length gate'
 		glue << '\tmut rx_ip := [4]u8{}'
@@ -386,6 +391,15 @@ fn emit_eth_bridge(m Model) []string {
 			glue << '\t\t\t\tfor i in 0 .. int(${fb}_len) {'
 			glue << '\t\t\t\t\tpay_rx_${fb}[i] = rx_buf[someip.header_len + i]'
 			glue << '\t\t\t\t}'
+			if fr.e2e_on {
+				// the trailer check gates the unpack, as the CAN bridge gates
+				// decode: ok and lost are usable (loss flagged, data valid),
+				// a wrong CRC/id is a counted drop
+				glue << '\t\t\t\tif !e2e_rx_${fb}.check(&pay_rx_${fb}[0], int(${fb}_len), ${fb}_e2e_id, ${fb}_e2e_crc, ${fb}_e2e_ctr).usable() {'
+				glue << '\t\t\t\t\trx_drops++'
+				glue << '\t\t\t\t\tcontinue'
+				glue << '\t\t\t\t}'
+			}
 			mut uargs := []string{}
 			for s in fr.signals {
 				uargs << 'mut rxs_${snake(s)}'

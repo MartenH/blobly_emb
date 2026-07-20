@@ -27,6 +27,11 @@ pub mut:
 	level u8
 }
 
+pub struct LampCmdSafe {
+pub mut:
+	level u8
+}
+
 pub struct EchoVal {
 pub mut:
 	level u8
