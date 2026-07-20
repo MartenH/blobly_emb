@@ -219,6 +219,8 @@ fn shell_eth_init(m Model) []string {
 		return []string{}
 	}
 	mut g := ['\tg_sh.init(u32(0)) // in place; out_id unused on eth (responses are datagrams)']
+	// the generated read-only stat command (per-handler timing) serves eth too
+	g << "\tg_sh.register('stat', 'per-handler us: last, max, mean, count', shell_stat_cmd)"
 	for name in m.shell.commands {
 		// C-backed commands are OPAQUE to the generator — fail CLOSED: they
 		// register as state-changing, so the REQ-NET-018 gate covers them
