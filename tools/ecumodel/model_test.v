@@ -1657,7 +1657,44 @@ thread = "app_main"
 ' +
 		app)
 	assert e3.any(it.contains('dotted-quad')), '${e3}'
+	// out-of-range octets and 0.0.0.0 fail the same gate (the NetX backend
+	// refuses both at runtime — refuse at build time instead)
+	e4 := errs_of(eth_head.replace('192.168.0.50', '256.1.1.1') + target_eth_body + app)
+	assert e4.any(it.contains('dotted-quad')), '${e4}'
+	e5 := errs_of(eth_head.replace('192.168.0.50', '0.0.0.0') + target_eth_body + app)
+	assert e5.any(it.contains('dotted-quad')), '${e5}'
+	// an eth bus core differing from the local partition's core claims an
+	// affinity nothing implements
+	e6 := errs_of(eth_head.replace('core      = 0', 'core      = 1') + target_eth_body + app)
+	assert e6.any(it.contains('no cross-core eth handoff')), '${e6}'
 }
+
+// the shared body for the interface/core gate variants above
+const target_eth_body = '
+[target]
+kind = "threadx"
+
+[[signal]]
+name = "S"
+fields = { v = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "Evt"
+bus     = "eth0"
+id      = 0x8001
+signals = ["S"]
+tx      = { mode = "cyclic", cycle_ms = 100 }
+
+[[fb]]
+name = "W"
+thread = "app_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+  writes = ["S"]
+'
 
 fn test_someip_round8_timing_bounds() {
 	e := errs_of(eth_head +
