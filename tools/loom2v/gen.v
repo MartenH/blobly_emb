@@ -293,15 +293,28 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 		fm := (m['from'] or { toml.Any('') }).as_map()
 		tm := (m['to'] or { toml.Any('') }).as_map()
 		fb := (fm['bus'] or { toml.Any('') }).string()
+		sig := (m['signal'] or { toml.Any('') }).string()
+		// a SIGNAL route with no source bus would be silently dropped by the `continue`
+		// below (a raw route with no bus is an empty section — the legacy skip); reject.
 		if fb == '' {
+			if sig != '' {
+				panic('route: signal "${sig}" has no source bus (from = { bus = .., frame = .. })')
+			}
 			continue
+		}
+		// a signal route's id comes from to.frame; an explicit to.id (even 0) is
+		// forbidden by the schema — check the KEY, not the value.
+		if sig != '' {
+			if _ := tm['id'] {
+				panic('route: signal "${sig}" sets to.id — a signal route takes its id from to.frame (drop to.id)')
+			}
 		}
 		routes << Route{
 			from_bus:   fb
 			from_frame: (fm['frame'] or { toml.Any('') }).string()
 			to_bus:     (tm['bus'] or { toml.Any('') }).string()
 			to_id:      int((tm['id'] or { toml.Any(0) }).int())
-			signal:     (m['signal'] or { toml.Any('') }).string()
+			signal:     sig
 			to_frame:   (tm['frame'] or { toml.Any('') }).string()
 		}
 	}
@@ -320,11 +333,6 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 				// the missing frame). Both frames' codec fns live in dbc_gen.v.
 				if r.to_frame == '' {
 					panic('route: signal "${r.signal}" needs a destination frame (to = { bus = .., frame = .. })')
-				}
-				// a signal route's destination id comes from to.frame's DBC entry; an
-				// explicit to.id (parsed into to_id already) would be silently ignored.
-				if routes[i].to_id != 0 {
-					panic('route: signal "${r.signal}" sets to.id — a signal route takes its id from to.frame (drop to.id)')
 				}
 				routes[i].to_id = dbc_id_of(db, snake(r.to_frame)) or {
 					panic('route: destination frame "${r.to_frame}" is not a message in ${os.file_name(dbc)} (per-bus DBCs on a gateway are P2c)')
@@ -346,10 +354,8 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 					|| dst_sg.is_multiplexor {
 					panic('route: signal "${r.signal}" is multiplexed — the route codec has no multiplexor support')
 				}
-				// - wide integer: decode goes through f64 (exact only to 52 bits).
-				if src_sg.length > 52 || dst_sg.length > 52 {
-					panic('route: signal "${r.signal}" is >52 bits — the route decodes through f64, which is exact only to 52-bit integers')
-				}
+				// (no width limit: the forwarder copies the RAW u64 value, so all widths
+				// up to 64 bits are exact — see the identical-encoding requirement below.)
 				// - extended-id SOURCE or destination: can.Frame carries no ext-id flag,
 				//   and the socket strips EFF on rx (a 29-bit id is indistinguishable from
 				//   a standard id of the same number), so both ends must be standard.
@@ -398,10 +404,19 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 				//   on-receipt forwarder sends one dest frame per source frame, so a 10 ms
 				//   source into a 100 ms dest would emit 10x the dest contract's rate. Rate
 				//   adaptation is the destination-producer model, later.
+				// cadences must be EQUAL (including "both absent"): a declared source but
+				// absent/non-cyclic destination (or vice versa) also can't be satisfied by
+				// the on-receipt forwarder.
 				src_cyc := dbc_cycle_of(db, snake(r.from_frame))
 				dst_cyc := dbc_cycle_of(db, snake(r.to_frame))
-				if src_cyc != 0 && dst_cyc != 0 && src_cyc != dst_cyc {
+				if src_cyc != dst_cyc {
 					panic('route: signal "${r.signal}" source frame cadence ${src_cyc} ms != destination ${dst_cyc} ms — on-receipt routing cannot rate-adapt (dest-producer model)')
+				}
+				// both ids must be standard 11-bit: candb leaves an UNFLAGGED id > 0x7ff as
+				// ext = false, but the SocketCAN send would place it without CAN_EFF_FLAG
+				// and fail (the ext-flagged case is already rejected above).
+				if routes[i].from_id > 0x7ff || routes[i].to_id > 0x7ff {
+					panic('route: signal "${r.signal}" frame id > 0x7ff without the extended flag — the forwarder emits standard (11-bit) ids only')
 				}
 				// - the SOURCE id must be UNIQUE in the DBC: the runtime matches only
 				//   rx.id + rx.len, so a second same-id/len message would be mis-decoded
@@ -852,12 +867,22 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		if !(bus_fd[r.to_bus] or { false }) && r.to_dlc > 8 {
 			panic('route: destination frame "${r.to_frame}" is ${r.to_dlc} bytes but bus "${r.to_bus}" is classic (fd = false, DLC <= 8)')
 		}
-		// the destination frame must not ALSO be a COM tx frame — a [[signal]] to a bus
-		// makes its DBC message an implicit cyclic transmitter even with no [[frame]].tx
-		// (so it is not in m.frames.tx_mode). Two writers of one PDU under one id.
+		// the destination frame must not ALSO be a COM tx frame ON THE SAME BUS — a
+		// [[signal]] to a bus makes its DBC message an implicit cyclic transmitter even
+		// with no [[frame]].tx (so it is not in m.frames.tx_mode). Two writers of one
+		// PDU under one id. (Scope by bus: the same frame on a different bus is a
+		// separate on-wire writer domain.)
 		for _, si in m.sig_of {
-			if !si.rx && si.dbc_msg == tof {
-				panic('route: destination frame "${r.to_frame}" is also transmitted by COM signal "${si.name}" — one writer per frame')
+			if !si.rx && si.dbc_msg == tof && si.bus == r.to_bus {
+				panic('route: destination frame "${r.to_frame}" is also transmitted by COM signal "${si.name}" on bus "${r.to_bus}" — one writer per frame')
+			}
+		}
+		// a module frame (telemetry today) on the destination bus reserves its CAN id —
+		// a routed dest id colliding with it makes the route bridge and the telemetry
+		// producer transmit different payloads under one id on one interface.
+		if m.telem.on && m.telem.bus == r.to_bus {
+			if r.to_id == int(m.telem.id) || (m.telem.detail_id != 0 && r.to_id == int(m.telem.detail_id)) {
+				panic('route: destination id 0x${r.to_id:x} on bus "${r.to_bus}" collides with the [telemetry] id — one writer per id')
 			}
 		}
 		// the route path neither verifies the source protection nor re-protects the
