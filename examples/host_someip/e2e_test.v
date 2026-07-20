@@ -318,6 +318,7 @@ fn test_rx_gate_filter_router() {
 	// each refused for a different reason; the app must neither fault nor
 	// wedge, and must still serve the good frame that follows
 	c.write_to(app_addr, [u8(1), 2, 3])! // short: no header
+	c.write_to(app_addr, []u8{len: 1, init: 0}[..0])! // zero-length: a REAL datagram, counted not idle
 	mut d := cmd_datagram(9)
 	d[12] = 2 // wrong protocol version
 	c.write_to(app_addr, d)!

@@ -62,15 +62,16 @@ void blob_eth_close(int fd) {
  * (MSG_TRUNC), which may exceed max — only max bytes were copied, and the
  * caller must DROP such a datagram rather than decode its truncated prefix
  * (an oversize datagram whose header lies consistently would otherwise pass
- * every gate). src ip/port filled for the caller's peer filter; 0 = nothing
- * pending. */
+ * every gate). src ip/port filled for the caller's peer filter. -1 = nothing
+ * pending; 0 is a REAL (empty) datagram — it consumed queue space and must be
+ * counted as a short drop, not mistaken for an idle socket. */
 int blob_eth_recv(int fd, unsigned char *ip, unsigned short *port,
                   unsigned char *buf, int max) {
 	struct sockaddr_in a;
 	socklen_t alen = sizeof a;
 	long n = recvfrom(fd, buf, (size_t)max, MSG_TRUNC, (struct sockaddr *)&a, &alen);
 	if (n < 0) {
-		return 0; /* EAGAIN/EWOULDBLOCK and friends: nothing pending */
+		return -1; /* EAGAIN/EWOULDBLOCK and friends: nothing pending */
 	}
 	memcpy(ip, &a.sin_addr.s_addr, 4);
 	*port = ntohs(a.sin_port);
