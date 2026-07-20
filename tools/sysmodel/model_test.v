@@ -2874,7 +2874,20 @@ fn test_dissolved_unknown_read_is_error() {
 	mut s := clean_dissolved()
 	s.nodes[0].view.fb_reads = ['Rpm', 'Ghost']
 	assert errs(validate_system_gen(s)).any(it.contains('reads "Ghost"')
-		&& it.contains('does not declare'))
+		&& it.contains('neither a system signal nor a node-local'))
+}
+
+// REQ-TOPO-005/001: a NODE-LOCAL signal (an io point) is the node's application,
+// not bus wiring — an FB may read/write it, and it does NOT trip the internals-only
+// or unknown-signal checks (a gpio/adc/pwm node in the dissolution).
+fn test_dissolved_local_io_signal_accepted() {
+	mut s := clean_dissolved()
+	s.nodes[0].view.local_signals = ['UserButton', 'LedGreen']
+	s.nodes[0].view.fb_reads = ['Rpm', 'UserButton'] // Rpm = system, UserButton = local io
+	s.nodes[0].view.fb_writes = ['LedGreen'] // a local io output
+	// neither the local read nor the local write is an error
+	assert !errs(validate_system_gen(s)).any(it.contains('UserButton'))
+	assert !errs(validate_system_gen(s)).any(it.contains('LedGreen'))
 }
 
 // REQ-TOPO-001: a signal no other node reads is a warning, not an error.

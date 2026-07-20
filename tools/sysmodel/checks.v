@@ -463,11 +463,13 @@ fn check_signals_dissolved(s System) []Issue {
 						msg:      'node "${n.name}": FB writes "${w}" but its declared producer is "${sig.producer}" — only the producer may write a signal'
 					}
 				}
-			} else {
+			} else if w !in n.view.local_signals {
+				// a node-local signal (an io output, or a node-internal signal) is
+				// the node's own — only a name that is neither system nor local errors.
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-001'
-					msg:      'node "${n.name}": FB writes "${w}" which system.toml does not declare'
+					msg:      'node "${n.name}": FB writes "${w}" which is neither a system signal nor a node-local (io) signal'
 				}
 			}
 		}
@@ -475,10 +477,13 @@ fn check_signals_dissolved(s System) []Issue {
 			if _ := s.signal_by_name(r) {
 				continue
 			}
+			if r in n.view.local_signals {
+				continue // a node-local (io) input — the node's own
+			}
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-001'
-				msg:      'node "${n.name}": FB reads "${r}" which system.toml does not declare'
+				msg:      'node "${n.name}": FB reads "${r}" which is neither a system signal nor a node-local (io) signal'
 			}
 		}
 		// a cross-node RX signal read from >1 partition = concurrent readers of the

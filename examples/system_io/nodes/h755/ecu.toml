@@ -1,0 +1,83 @@
+# h755 (NUCLEO-H755ZI-Q, CM7) — AUTHORED INTERNALS ONLY. The body bus, the
+# BtnPressed signal + ButtonState frame, and [nm] are generated from
+# ../../system.toml. Here: the LOCAL io (B1 button, the two on-board LEDs) and the
+# FBs. ButtonLamp mirrors the button to LD1 AND publishes BtnPressed (cross-node);
+# Heartbeat blinks LD2 so the board is visibly alive.
+# NOTE: no inline comments inside [[...]] tables (vlang/v#27684).
+
+[io]
+core = 0
+
+[[io.gpio]]
+name      = "UserButton"
+pin       = "PC13"
+period_ms = 10
+default   = false
+
+[[io.gpio]]
+name      = "LedGreen"
+pin       = "PB0"
+period_ms = 10
+init      = false
+
+[[io.gpio]]
+name      = "LedYellow"
+pin       = "PE1"
+period_ms = 100
+init      = false
+
+[[signal]]
+name = "UserButton"
+fields = { pressed = "bool" }
+from = "io"
+to   = "app"
+
+[[signal]]
+name = "LedGreen"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+
+[[signal]]
+name = "LedYellow"
+fields = { on = "bool" }
+from = "app"
+to   = "io"
+
+[[partition]]
+name    = "app"
+core    = 0
+trusted = true
+
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+[[fb]]
+name   = "ButtonLamp"
+thread = "app_main"
+
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["UserButton"]
+  writes    = ["LedGreen", "BtnPressed"]
+
+[[fb]]
+name   = "Heartbeat"
+thread = "app_main"
+
+  [[fb.handler]]
+  name      = "on_500ms"
+  period_ms = 500
+  writes    = ["LedYellow"] # trailing comment terminates the nested block (vlang/v#27684)
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E0
+period_ms = 1000
+
+[target]
+kind    = "threadx"
+tick_ms = 1
