@@ -18,10 +18,6 @@ thread = "speed"
   period_ms = 100
   writes    = ["VehicleSpeed"] # trailing comment terminates the nested block (vlang/v#27684)
 
-[target]
-kind    = "threadx"
-tick_ms = 1
-
 [telemetry]
 enabled   = true
 bus       = "can0"

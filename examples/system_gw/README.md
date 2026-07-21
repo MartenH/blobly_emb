@@ -33,6 +33,30 @@ from = { bus = "can0", frame = "VehSpeedFrame" }
 to   = { bus = "can1", frame = "VehSpeed_E" }
 ```
 
+## Run the gateway on two vcans
+
+The gateway node builds and runs on the host, straight from the dissolution — no
+hand-wiring. It speaks a DBC per bus, so the build **merges** them (`tools/dbcmerge`)
+into one that `dbc2cfg` + `loom2v` consume, then loom2v generates the
+destination-producer forwarder from `gen-sysnode.toml` + the merged DBC:
+
+```sh
+sudo make vcan                                   # vcan0..vcan7 once
+make -C examples/system_gw/nodes/sysnode         # sysgen -> merge -> codegen -> host build
+examples/system_gw/nodes/sysnode/bin/app vcan0 vcan1
+# inject the source frame on compute, watch the edge bus re-emit it:
+cansend vcan0 120#E803000000000000               # VehSpeedFrame, VehicleSpeed = 1000
+candump  vcan1                                    # -> 200 [8] E8 03 00 00 …  (VehSpeed_E, 200 ms)
+```
+
+Integration test (`nodes/sysnode/test/route_dissolution.lua`, 2 cases — value
+preserved across the route + rate-adaptation to the edge's 200 ms cadence):
+
+```sh
+cd examples/system_gw/nodes/sysnode
+BLOBLY_NET=$HOME/repos/blobly_net bash ../../../../scripts/integration-test.sh .
+```
+
 ## What it proves (P2a: generation + validation)
 
 - **Reachability trusts a signal route.** `zone` reads `VehicleSpeed` off the edge
@@ -45,11 +69,18 @@ to   = { bus = "can1", frame = "VehSpeed_E" }
 - **No route cycles (REQ-TOPO-011).** A directed bus cycle for a routed signal is
   rejected before it can recirculate.
 
+## What runs today (P2a, on host + vcan)
+
+- **Generation + validation** (P2a.1): sysgen lowers the route; syscheck's
+  reachability, single-writer, and no-cycle guards gate it.
+- **The runtime forwarder** (P2a.2b): decode on the source bus → dest-signal →
+  the destination frame's COM producer (transcode, validity/freshness, TX-mode,
+  rate-adaptation) — loom2v-generated and proven on two vcans above.
+
 ## What is still P2b/P2c (not here yet)
 
-- The **runtime forwarder** (decode → dest-signal → the destination frame's COM
-  producer, with validity/freshness + TX-mode) — loom2v generation.
 - **Frame (raw-PDU) routing** with the full-contract compare (P2b).
 - The **target multi-bus comm owner** (a channel + Rx ISR per bus, multiplexed
-  into one thread) and the FDCAN1↔FDCAN2 bench (P2c). The nodes therefore skip
-  the loom2v target gate for now (ecucheck still gates the schema).
+  into one thread) and the FDCAN1↔FDCAN2 bench (P2c). The nodes run on the host
+  emitter for now (ecucheck still gates the schema); the loom2v target gate for
+  a multi-bus node lands with P2c.
