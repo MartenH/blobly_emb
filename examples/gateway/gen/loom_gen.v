@@ -49,17 +49,12 @@ mut:
 fn io_can0_10ms(ctx voidptr) {
 	mut st := unsafe { &Bridge_can0_state(ctx) }
 	now := osal.now_us()
-	mut raw_busy := false
-	if st.rr_can1_300_set {
-		if st.route_can1.tx_ready() && st.route_can1.send(st.rr_can1_300) {
-			st.rr_can1_300_set = false
-		} else {
-			raw_busy = true
-		}
+	if st.rr_can1_300_set && st.route_can1.tx_ready() && st.route_can1.send(st.rr_can1_300) {
+		st.rr_can1_300_set = false
 	}
 	mut rx := can.Frame{}
-	for !raw_busy && st.chan.recv(mut rx) {
-		if rx.id == u32(0x300) && rx.len == 8 && !st.rr_can1_300_set {
+	for st.chan.recv(mut rx) {
+		if rx.id == u32(0x300) && rx.len == 8 {
 			mut fwd := rx
 			if !(st.route_can1.tx_ready() && st.route_can1.send(fwd)) {
 				st.rr_can1_300 = fwd
@@ -70,9 +65,6 @@ fn io_can0_10ms(ctx voidptr) {
 			mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), valid: true }
 			osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 			st.rx_powertrain_st.on_receive(now)
-		}
-		if st.rr_can1_300_set {
-			break
 		}
 	}
 	if st.rx_powertrain_st.expired(now) {

@@ -155,11 +155,11 @@ fn norm_block(blk []string) string {
 		t := line.trim_space()
 		if t.starts_with('BO_') {
 			f := t.fields()
-			header = f[..if f.len < 4 { f.len } else { 4 }].join(' ') // BO_ <id> <name>: <dlc> (drop sender)
+			header = canon_nums(f[..if f.len < 4 { f.len } else { 4 }].join(' ')) // BO_ <id> <name>: <dlc> (drop sender)
 		} else if t.starts_with('SG_') {
 			qi := t.last_index('"') or { -1 } // keep through the unit "..."; drop the receiver list
 			head := if qi >= 0 { t[..qi + 1] } else { t }
-			sigs << head.fields().join(' ')
+			sigs << canon_nums(head.fields().join(' '))
 		}
 		// CM_ SG_ comments are non-wire; excluded from the identity.
 	}
@@ -167,6 +167,38 @@ fn norm_block(blk []string) string {
 	mut out := [header]
 	out << sigs
 	return out.join('\n')
+}
+
+// canon_nums rewrites every embedded numeric literal to a canonical form so that
+// textually-different but value-equal DBC fields compare equal — e.g. "(1,0)" vs
+// "(1.0,0.0)", or "0.50" vs ".5". Non-numeric characters (delimiters, names, units)
+// pass through unchanged.
+fn canon_nums(s string) string {
+	mut out := []u8{}
+	mut i := 0
+	for i < s.len {
+		c := s[i]
+		num_start := (c >= `0` && c <= `9`) || c == `.`
+			|| (c == `-` && i + 1 < s.len && ((s[i + 1] >= `0` && s[i + 1] <= `9`) || s[i + 1] == `.`))
+		if num_start {
+			mut j := i
+			if s[j] == `-` {
+				j++
+			}
+			for j < s.len && ((s[j] >= `0` && s[j] <= `9`) || s[j] == `.`) {
+				j++
+			}
+			tok := s[i..j]
+			n := tok.f64()
+			norm := if n == f64(i64(n)) { i64(n).str() } else { n.str() }
+			out << norm.bytes()
+			i = j
+		} else {
+			out << c
+			i++
+		}
+	}
+	return out.bytestr()
 }
 
 // snake mirrors dbc2cfg's frame/signal name -> identifier normalization, so a name

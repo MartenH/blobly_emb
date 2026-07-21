@@ -1358,18 +1358,31 @@ fn frame_route_system(tag string, compute_dbc string, edge_dbc string) (string, 
 	return dir, s
 }
 
-const diag_compute = 'VERSION ""\nBU_: prod gw\nBO_ 1024 DiagFrame: 8 prod\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" gw\n'
+// a cyclic (GenMsgCycleTime 100) DiagFrame — a raw frame route requires a cyclic frame.
+const diag_compute = 'VERSION ""\nBU_: prod gw\nBO_ 1024 DiagFrame: 8 prod\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" gw\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 1024 100;\n'
+const diag_edge = 'VERSION ""\nBU_: gw cons\nBO_ 1024 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 1024 100;\n'
 
 // REQ-TOPO-007: a raw frame forward is VALID when both buses define the frame with
 // an identical wire contract (only the sender/receiver node names differ).
 fn test_frame_route_identical_contract_ok() {
 	// same wire, different receiver node (cons vs gw) — the topology is not compared.
-	edge := 'VERSION ""\nBU_: gw cons\nBO_ 1024 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\n'
-	dir, s := frame_route_system('frok', diag_compute, edge)
+	dir, s := frame_route_system('frok', diag_compute, diag_edge)
 	defer {
 		os.rmdir_all(dir) or {}
 	}
 	assert errs(check_route_dbc(s)).len == 0, errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-007: an EVENT frame (no GenMsgCycleTime) can't be raw-forwarded — under
+// backpressure the forwarder samples the freshest PDU, which drops events.
+fn test_frame_route_event_frame_rejected() {
+	compute := 'VERSION ""\nBU_: prod gw\nBO_ 1024 DiagFrame: 8 prod\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" gw\n'
+	edge := 'VERSION ""\nBU_: gw cons\nBO_ 1024 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\n'
+	dir, s := frame_route_system('frevt', compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('not cyclic')), errs(check_route_dbc(s)).str()
 }
 
 // REQ-TOPO-007: a signal-semantics mismatch (differing factor => a different

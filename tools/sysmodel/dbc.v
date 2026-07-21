@@ -234,10 +234,19 @@ fn check_frame_route_contract(s System, r Route) []Issue {
 	// route: it is rejected before reaching this compare. There is thus no protection
 	// metadata to compare here. A protected frame must be a SIGNAL route (its dest
 	// producer re-protects); P2c adds E2E-reprotect for a routed frame.
-	// cadence: a raw forward re-emits at the SOURCE rate (on receipt), so the two
-	// buses must agree on the frame's cycle time — else the destination's rx-deadline
-	// monitor trips (raw forwarding cannot rate-adapt; that is a signal route).
-	if sm.cycle_ms != dm.cycle_ms {
+	// cadence: a raw forward re-emits at the SOURCE rate (on receipt), so the two buses
+	// must agree on the frame's cycle time. It must also be CYCLIC (cycle_ms > 0): the
+	// forwarder holds one PDU per destination and, under tx backpressure, keeps the
+	// freshest (rate adaptation of a periodic frame) rather than blocking the source
+	// receive path. An EVENT frame (cycle_ms == 0) can't tolerate that sampling — every
+	// event matters — so it needs a signal route (or P2c's buffered delivery).
+	if sm.cycle_ms == 0 || dm.cycle_ms == 0 {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-007'
+			msg:      '${pre} frame is not cyclic (GenMsgCycleTime ${sm.cycle_ms}/${dm.cycle_ms}) — a raw forward samples the freshest PDU under backpressure, which drops events; an event frame needs a signal route'
+		}
+	} else if sm.cycle_ms != dm.cycle_ms {
 		issues << Issue{
 			severity: .error
 			req:      'REQ-TOPO-007'

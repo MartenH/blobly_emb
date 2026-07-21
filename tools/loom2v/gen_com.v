@@ -620,7 +620,6 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				glue << '\t${rf}_set bool'
 			}
 		}
-		has_raw := my_routes.any(it.signal == '')
 		glue << '}'
 		glue << ''
 		glue << 'fn io_${bb}_10ms(ctx voidptr) {'
@@ -628,31 +627,25 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 		if uses_now {
 			glue << '\tnow := osal.now_us()'
 		}
-		// flush any raw forward HELD from a previous tick. If it still can't go out,
-		// `raw_busy` blocks draining new rx below — a held PDU occupies the one slot, so
-		// pulling more frames from the RX FIFO would have nowhere to keep them; leaving
-		// them in the driver RX FIFO (a bounded hardware queue) is the backpressure, and
-		// nothing is dropped (REQ-TOPO-010: retried, never silently lost, no SW queue).
-		if has_raw {
-			glue << '\tmut raw_busy := false'
-			for r in my_routes {
-				if r.signal == '' {
-					rf := raw_field(r)
-					dch := 'st.route_${snake(r.to_bus)}'
-					glue << '\tif st.${rf}_set {'
-					glue << '\t\tif ${dch}.tx_ready() && ${dch}.send(st.${rf}) {'
-					glue << '\t\t\tst.${rf}_set = false'
-					glue << '\t\t} else {'
-					glue << '\t\t\traw_busy = true'
-					glue << '\t\t}'
-					glue << '\t}'
-				}
+		// RETRY a raw forward HELD from a previous tick — tx-ready gated (REQ-TOPO-010).
+		// This never blocks the source receive path: ingress keeps draining below, so a
+		// congested destination can't stall unrelated raw routes / local COM / ISO-TP or
+		// overrun the source RX FIFO. A raw route carries a CYCLIC frame (the contract
+		// requires cycle_ms > 0 on both buses), so if a newer PDU arrives while one is
+		// still held, FRESHEST-wins — that is rate adaptation of a periodic frame (the
+		// same sampling P2a.2b does), not data loss.
+		for r in my_routes {
+			if r.signal == '' {
+				rf := raw_field(r)
+				dch := 'st.route_${snake(r.to_bus)}'
+				glue << '\tif st.${rf}_set && ${dch}.tx_ready() && ${dch}.send(st.${rf}) {'
+				glue << '\t\tst.${rf}_set = false'
+				glue << '\t}'
 			}
 		}
 		if rx_by_msg.len > 0 || conns.len > 0 || my_routes.len > 0 {
 			glue << '\tmut rx := can.Frame{}'
-			recv_cond := if has_raw { '!raw_busy && st.chan.recv(mut rx)' } else { 'st.chan.recv(mut rx)' }
-			glue << '\tfor ${recv_cond} {'
+			glue << '\tfor st.chan.recv(mut rx) {'
 			for r in my_routes {
 				if r.signal != '' {
 					// SIGNAL route (P2a.2b): DECODE the routed signal from the source frame to
@@ -669,16 +662,14 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				// raw-PDU gateway: forward the frame to another bus, unchanged (optionally
 				// remapping the id), without decoding it to signals. Require rx.len == the
 				// contracted DLC (like the signal-route + COM rx paths) so a short/oversized
-				// frame at the routed id is NOT forwarded with stale trailing bytes. The send
-				// is tx-ready gated — if the destination TX can't accept it, HOLD this PDU in
-				// this route's own slot. Each destination route is handled INDEPENDENTLY (so
-				// fan-out to several buses still delivers to the ready ones), and local COM
-				// decode below still runs for this frame; the loop breaks only AFTER the whole
-				// iteration, once any slot is held (see below), leaving the rest in the RX FIFO.
-				// The `!_set` guard means a held PDU is never overwritten.
+				// frame at the routed id is NOT forwarded with stale trailing bytes. Each
+				// destination route is INDEPENDENT (fan-out delivers to whichever dests are
+				// ready). The send is tx-ready gated; if the destination can't accept it now,
+				// hold the FRESHEST PDU in this route's slot for retry (freshest-wins on a
+				// cyclic frame = rate adaptation) — draining never stops, so ingress flows.
 				rf := raw_field(r)
 				dch := 'st.route_${snake(r.to_bus)}'
-				glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} && !st.${rf}_set {'
+				glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} {'
 				glue << '\t\t\tmut fwd := rx'
 				if r.to_id != r.from_id {
 					glue << '\t\t\tfwd.id = u32(0x${r.to_id.hex()})'
@@ -741,21 +732,6 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				glue << '\t\t\t\tp_${tp}.data[i] = rx.data[i]'
 				glue << '\t\t\t}'
 				glue << '\t\t\tst.tp_${tp}.on_frame(now, p_${tp})'
-				glue << '\t\t}'
-			}
-			// After the frame is fully handled (all fan-out dests attempted + local
-			// decode done), stop draining if ANY forward is now held — so the held PDU
-			// isn't overwritten and following frames wait in the RX FIFO (retried next
-			// tick). Independent per-slot holds keep fan-out to non-busy dests working.
-			if has_raw {
-				mut hold_conds := []string{}
-				for r in my_routes {
-					if r.signal == '' {
-						hold_conds << 'st.${raw_field(r)}_set'
-					}
-				}
-				glue << '\t\tif ${hold_conds.join(' || ')} {'
-				glue << '\t\t\tbreak'
 				glue << '\t\t}'
 			}
 			glue << '\t}'
