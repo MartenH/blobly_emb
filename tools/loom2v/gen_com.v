@@ -614,10 +614,10 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			glue << '\trt_tx_${dk} com.TxState'
 			// a PROTECTED destination frame: the producer re-protects the composed frame
 			// with a fresh CRC/MAC before send (source frames are unprotected — guarded).
-			if m.frames.e2e_on[tof] or { false } {
+			if m.frames.e2e_here(tof, r.to_bus) {
 				glue << '\te2e_tx_${dk} e2e.TxState'
 			}
-			if m.frames.secoc_on[tof] or { false } {
+			if m.frames.secoc_here(tof, r.to_bus) {
 				glue << '\tsecoc_key_${dk} secoc.Key'
 				glue << '\tsecoc_tx_${dk} secoc.TxState'
 			}
@@ -918,8 +918,8 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			// (keeps the counter honest so the receiver sees no skip). Source frames are
 			// unprotected (guarded), so this is pure destination re-protection.
 			rtof := snake(r.to_frame)
-			r_e2e := m.frames.e2e_on[rtof] or { false }
-			r_secoc := m.frames.secoc_on[rtof] or { false }
+			r_e2e := m.frames.e2e_here(rtof, r.to_bus)
+			r_secoc := m.frames.secoc_here(rtof, r.to_bus)
 			r_pre := r_e2e || r_secoc
 			dch := 'st.route_${snake(r.to_bus)}'
 			glue << '\tif rf_${dk}_ok && ${dch}.tx_ready() && st.rt_tx_${dk}.should_send(now, rf_${dk}.data, ${r.to_dlc}) {'
@@ -1010,7 +1010,7 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			glue << '\t\tcycle_us: ${cyc}'
 			glue << '\t\tmin_delay_us: ${m.frames.tx_min_us[tof] or { 0 }}'
 			glue << '\t}'
-			if m.frames.secoc_on[tof] or { false } {
+			if m.frames.secoc_here(tof, r.to_bus) {
 				glue << '\tst.secoc_key_${dk} = secoc.new_key(${byte16_lit(m.frames.secoc_key[tof] or {
 					[]u8{}
 				})})'
