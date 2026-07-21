@@ -609,7 +609,18 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			glue << '\t${rk}_fresh u64 // rx timestamp (0 = never received)'
 		}
 		for r in dst_frames {
-			glue << '\trt_tx_${snake(r.to_bus)}_${snake(r.to_frame)} com.TxState'
+			dk := '${snake(r.to_bus)}_${snake(r.to_frame)}'
+			tof := snake(r.to_frame) // m.frames is keyed by snake(frame name)
+			glue << '\trt_tx_${dk} com.TxState'
+			// a PROTECTED destination frame: the producer re-protects the composed frame
+			// with a fresh CRC/MAC before send (source frames are unprotected — guarded).
+			if m.frames.e2e_on[tof] or { false } {
+				glue << '\te2e_tx_${dk} e2e.TxState'
+			}
+			if m.frames.secoc_on[tof] or { false } {
+				glue << '\tsecoc_key_${dk} secoc.Key'
+				glue << '\tsecoc_tx_${dk} secoc.TxState'
+			}
 		}
 		// RAW frame-route pending slot: a forward that the destination TX could not
 		// accept yet (tx_ready false / send failed) is held here and retried next tick.
@@ -901,10 +912,49 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 					glue << '\t}'
 				}
 			}
-			glue << '\tif rf_${dk}_ok && st.route_${snake(r.to_bus)}.tx_ready() && st.rt_tx_${dk}.should_send(now, rf_${dk}.data, ${r.to_dlc}) {'
-			glue << '\t\tif st.route_${snake(r.to_bus)}.send(rf_${dk}) {'
-			glue << '\t\t\tst.rt_tx_${dk}.mark_sent(now, rf_${dk}.data, ${r.to_dlc})'
-			glue << '\t\t}'
+			// re-protect the composed dest frame (fresh E2E CRC/counter or SecOC MAC) AFTER
+			// the change decision — like a normal COM producer — so the counter doesn't make
+			// every frame look "changed", and rewind it if a tx_ready-passed send is rejected
+			// (keeps the counter honest so the receiver sees no skip). Source frames are
+			// unprotected (guarded), so this is pure destination re-protection.
+			rtof := snake(r.to_frame)
+			r_e2e := m.frames.e2e_on[rtof] or { false }
+			r_secoc := m.frames.secoc_on[rtof] or { false }
+			r_pre := r_e2e || r_secoc
+			dch := 'st.route_${snake(r.to_bus)}'
+			glue << '\tif rf_${dk}_ok && ${dch}.tx_ready() && st.rt_tx_${dk}.should_send(now, rf_${dk}.data, ${r.to_dlc}) {'
+			if r_pre {
+				glue << '\t\trf_${dk}_pre := rf_${dk}.data // pre-protect payload, for mark_sent'
+			}
+			if r_e2e {
+				glue << '\t\te2e_save_${dk} := st.e2e_tx_${dk}'
+				glue << '\t\tst.e2e_tx_${dk}.protect(&rf_${dk}.data[0], int(${r.to_dlc}), u16(0x${(m.frames.e2e_id[rtof] or {
+					0
+				}).hex()}), ${m.frames.e2e_crc[rtof] or { 0 }}, ${m.frames.e2e_ctr[rtof] or { 0 }})'
+			}
+			if r_secoc {
+				glue << '\t\tsecoc_save_${dk} := st.secoc_tx_${dk}'
+				glue << '\t\tst.secoc_tx_${dk}.protect(&st.secoc_key_${dk}, &rf_${dk}.data[0], int(${r.to_dlc}), u16(0x${(m.frames.secoc_id[rtof] or {
+					0
+				}).hex()}), ${m.frames.secoc_fresh[rtof] or { 0 }}, ${m.frames.secoc_mac[rtof] or { 0 }}, ${m.frames.secoc_maclen[rtof] or {
+					0
+				}})'
+			}
+			mark_arg := if r_pre { 'rf_${dk}_pre' } else { 'rf_${dk}.data' }
+			glue << '\t\tif ${dch}.send(rf_${dk}) {'
+			glue << '\t\t\tst.rt_tx_${dk}.mark_sent(now, ${mark_arg}, ${r.to_dlc})'
+			if r_pre {
+				glue << '\t\t} else {'
+				if r_e2e {
+					glue << '\t\t\tst.e2e_tx_${dk} = e2e_save_${dk}'
+				}
+				if r_secoc {
+					glue << '\t\t\tst.secoc_tx_${dk} = secoc_save_${dk}'
+				}
+				glue << '\t\t}'
+			} else {
+				glue << '\t\t}'
+			}
 			glue << '\t}'
 		}
 		glue << '}'
@@ -960,6 +1010,11 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			glue << '\t\tcycle_us: ${cyc}'
 			glue << '\t\tmin_delay_us: ${m.frames.tx_min_us[tof] or { 0 }}'
 			glue << '\t}'
+			if m.frames.secoc_on[tof] or { false } {
+				glue << '\tst.secoc_key_${dk} = secoc.new_key(${byte16_lit(m.frames.secoc_key[tof] or {
+					[]u8{}
+				})})'
+			}
 		}
 		for msg, _ in rx_by_msg {
 			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {

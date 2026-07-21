@@ -487,8 +487,14 @@ Cross-bus *sleep bridging* (wake on A wakes B) remains a later decision on top.
      [`examples/gw_signal`](../examples/gw_signal) transcodes `Speed` from `0x100`
      (bit 0, ×0.1, 20 ms) to `0x200` (bit 8, ×1, 100 ms); the Lua regression
      `test/route_signal.lua` asserts the value survives the factor change.
-     **Still ahead:** E2E/SecOC re-protection on a routed frame (rejected for now);
-     cross-core routes need the `xioc` transport (P2c).
+   - **E2E/SecOC re-protection (DONE).** A routed **destination** frame may now be
+     E2E/SecOC-protected: the dest producer stamps a fresh CRC+counter / MAC+freshness
+     each cycle, like a normal COM producer, so a downstream check passes on the
+     re-framed value. [`examples/gw_e2e`](../examples/gw_e2e) routes into an E2E frame
+     and a SecOC frame; `test/route_e2e.lua` recomputes the E2E CRC and checks the
+     SecOC freshness/MAC on the wire. A protected **source** frame is still rejected
+     (the route decodes it raw — *source verify* is a later increment).
+     **Still ahead:** cross-core routes need the `xioc` transport (P2c).
 2. **P2b — frame route (DONE).** Recv-on-A → send-on-B in the comm loop (tx-ready
    gated — held + retried, never dropped), the full-contract comparison (id, dlc,
    format, and every signal's layout / scaling / sign / endianness / multiplexing /

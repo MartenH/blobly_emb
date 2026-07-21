@@ -982,11 +982,13 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 				panic('route: destination id 0x${r.to_id:x} on bus "${r.to_bus}" collides with the [telemetry] id — one writer per id')
 			}
 		}
-		// the route path neither verifies the source protection nor re-protects the
-		// destination — an E2E/SecOC frame must not be routed (dest-producer model).
-		if (m.frames.e2e_on[frof] or { false }) || (m.frames.secoc_on[frof] or { false })
-			|| (m.frames.e2e_on[tof] or { false }) || (m.frames.secoc_on[tof] or { false }) {
-			panic('route: signal "${r.signal}" rides an E2E/SecOC frame — the route forwarder does not verify the source or re-protect the destination (dest-producer model)')
+		// the route DECODES the source signal RAW (no E2E/SecOC verify), so a PROTECTED
+		// SOURCE frame can't be routed yet — its protection would go unchecked (source
+		// verify is a later increment). A protected DESTINATION frame IS allowed: the dest
+		// producer RE-PROTECTS the composed frame with a fresh CRC/MAC, exactly like a
+		// normal COM TX frame does (dest-producer model, REQ-TOPO-008).
+		if (m.frames.e2e_on[frof] or { false }) || (m.frames.secoc_on[frof] or { false }) {
+			panic('route: source frame "${r.from_frame}" is E2E/SecOC-protected — the route decodes it without verifying its protection (source verify is a later increment); protect the destination frame instead')
 		}
 		// the routed producer composes + re-emits every tick; should_send handles cyclic
 		// (rate adaptation), but TRIGGERED needs a trigger() no route makes and EVENT change-
