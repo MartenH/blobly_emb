@@ -4,7 +4,7 @@
 // netx_glue.c owns ThreadX/NetX/sockets and exposes a four-call seam
 // (stream recv/send, UDP broadcast, EID) plus the link poll.
 //
-// Bench: DoIP tester (blobly_net cantester, or any ISO 13400 client) to
+// Bench: DoIP tester (blobly_net, or any ISO 13400 client) to
 // 192.168.0.50:13400 — routing activation, then UDS 0x22/0x3E/0x10/0x2E.
 import comm.doip
 

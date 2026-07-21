@@ -1,5 +1,5 @@
 -- Integration test: drive the blobly `overspeed` example on vcan0 and assert the
--- WarnLamp (raw frame 0x101, byte0). Run headless by cantester_v.
+-- WarnLamp (raw frame 0x101, byte0). Run headless by blobly_net.
 -- @verifies SYS-REQ-COMMS-001, SYS-REQ-COMMS-002
 local CH, LAMP = "CAN1", 0x110
 
