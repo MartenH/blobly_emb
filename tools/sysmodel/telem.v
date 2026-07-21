@@ -433,27 +433,56 @@ fn check_telemetry_frames(s System) []Issue {
 	// A pure dissolved gateway has no authored producer entry for the frame, so it
 	// escapes the node scans above — check routes explicitly (REQ-TOPO-002).
 	for r in s.routes {
-		if r.signal == '' || r.to == '' {
+		if r.to == '' {
 			continue
 		}
-		tb := s.bus_by_name(r.to) or { continue }
-		db := dbs[tb.name] or { continue }
-		mut fid := ?u32(none)
-		for m in db.messages {
-			for sg in m.signals {
-				if sg.name == r.signal {
+		if r.signal != '' {
+			tb := s.bus_by_name(r.to) or { continue }
+			db := dbs[tb.name] or { continue }
+			mut fid := ?u32(none)
+			for m in db.messages {
+				for sg in m.signals {
+					if sg.name == r.signal {
+						fid = m.id
+						break
+					}
+				}
+			}
+			id := fid or { continue }
+			key := '${tb.name}#${id}'
+			if res := reserved[key] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-002'
+					msg:      'route on "${r.gateway}": destination frame for "${r.signal}" (id 0x${id.hex()}) on bus "${r.to}" collides with ${res} — routed traffic would be dispatched into that module'
+				}
+			}
+			continue
+		}
+		// FRAME route: the raw PDU is opaque — its id must not alias a module rx/tx
+		// reservation on EITHER endpoint. On `to`, forwarded traffic would be dispatched
+		// into a dest-bus module; on `from`, the received frame would drive the gateway's
+		// OWN module (trace cmd / shell in / ISO-TP request). Check both.
+		for role, bn in {
+			'destination': r.to
+			'source':      r.from
+		} {
+			b := s.bus_by_name(bn) or { continue }
+			db := dbs[b.name] or { continue }
+			mut fid := ?u32(none)
+			for m in db.messages {
+				if m.name == r.frame {
 					fid = m.id
 					break
 				}
 			}
-		}
-		id := fid or { continue }
-		key := '${tb.name}#${id}'
-		if res := reserved[key] {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-002'
-				msg:      'route on "${r.gateway}": destination frame for "${r.signal}" (id 0x${id.hex()}) on bus "${r.to}" collides with ${res} — routed traffic would be dispatched into that module'
+			id := fid or { continue }
+			if res := reserved['${b.name}#${id}'] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-002'
+					msg:      'frame route on "${r.gateway}": forwarded frame "${r.frame}" (id 0x${id.hex()}) collides with ${res} on the ${role} bus "${bn}" — the raw PDU would be dispatched into that module'
+				}
 			}
 		}
 	}

@@ -167,6 +167,13 @@ fn route_field(r Route) string {
 	return 'rt_${snake(r.to_bus)}_${snake(r.to_frame)}_${snake(r.signal)}'
 }
 
+// raw_field names the per-raw-route pending-frame slot (a frame route keeps the
+// tx-ready gate: if the destination TX can't accept the send yet, the PDU is held
+// and retried next tick rather than silently dropped — REQ-TOPO-010).
+fn raw_field(r Route) string {
+	return 'rr_${snake(r.to_bus)}_${r.from_id.hex()}'
+}
+
 fn telem_on_can(m Model) bool {
 	return m.telem.on && (m.bus_kind[m.telem.bus] or { 'can' }) != 'eth'
 }
@@ -604,12 +611,37 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 		for r in dst_frames {
 			glue << '\trt_tx_${snake(r.to_bus)}_${snake(r.to_frame)} com.TxState'
 		}
+		// RAW frame-route pending slot: a forward that the destination TX could not
+		// accept yet (tx_ready false / send failed) is held here and retried next tick.
+		for r in my_routes {
+			if r.signal == '' {
+				rf := raw_field(r)
+				glue << '\t${rf} can.Frame // held forward awaiting destination tx-ready'
+				glue << '\t${rf}_set bool'
+			}
+		}
 		glue << '}'
 		glue << ''
 		glue << 'fn io_${bb}_10ms(ctx voidptr) {'
 		glue << '\tmut st := unsafe { &Bridge_${bb}_state(ctx) }'
 		if uses_now {
 			glue << '\tnow := osal.now_us()'
+		}
+		// RETRY a raw forward HELD from a previous tick — tx-ready gated (REQ-TOPO-010).
+		// This never blocks the source receive path: ingress keeps draining below, so a
+		// congested destination can't stall unrelated raw routes / local COM / ISO-TP or
+		// overrun the source RX FIFO. A raw route carries a CYCLIC frame (the contract
+		// requires cycle_ms > 0 on both buses), so if a newer PDU arrives while one is
+		// still held, FRESHEST-wins — that is rate adaptation of a periodic frame (the
+		// same sampling P2a.2b does), not data loss.
+		for r in my_routes {
+			if r.signal == '' {
+				rf := raw_field(r)
+				dch := 'st.route_${snake(r.to_bus)}'
+				glue << '\tif st.${rf}_set && ${dch}.tx_ready() && ${dch}.send(st.${rf}) {'
+				glue << '\t\tst.${rf}_set = false'
+				glue << '\t}'
+			}
 		}
 		if rx_by_msg.len > 0 || conns.len > 0 || my_routes.len > 0 {
 			glue << '\tmut rx := can.Frame{}'
@@ -627,14 +659,27 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 					glue << '\t\t}'
 					continue
 				}
-				// raw-PDU gateway: forward the frame to another bus, unchanged
-				// (optionally remapping the id), without decoding it to signals.
-				glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) {'
+				// raw-PDU gateway: forward the frame to another bus, unchanged (optionally
+				// remapping the id), without decoding it to signals. Require rx.len == the
+				// contracted DLC (like the signal-route + COM rx paths) so a short/oversized
+				// frame at the routed id is NOT forwarded with stale trailing bytes. Each
+				// destination route is INDEPENDENT (fan-out delivers to whichever dests are
+				// ready). The send is tx-ready gated; if the destination can't accept it now,
+				// hold the FRESHEST PDU in this route's slot for retry (freshest-wins on a
+				// cyclic frame = rate adaptation) — draining never stops, so ingress flows.
+				rf := raw_field(r)
+				dch := 'st.route_${snake(r.to_bus)}'
+				glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} {'
 				glue << '\t\t\tmut fwd := rx'
 				if r.to_id != r.from_id {
 					glue << '\t\t\tfwd.id = u32(0x${r.to_id.hex()})'
 				}
-				glue << '\t\t\tst.route_${snake(r.to_bus)}.send(fwd)'
+				glue << '\t\t\tif ${dch}.tx_ready() && ${dch}.send(fwd) {'
+				glue << '\t\t\t\tst.${rf}_set = false // newer PDU went out; drop any stale held one (freshest-wins)'
+				glue << '\t\t\t} else {'
+				glue << '\t\t\t\tst.${rf} = fwd'
+				glue << '\t\t\t\tst.${rf}_set = true'
+				glue << '\t\t\t}'
 				glue << '\t\t}'
 			}
 			for msg, list in rx_by_msg {

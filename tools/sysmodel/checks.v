@@ -1265,17 +1265,10 @@ fn check_routes(s System, dissolved bool) []Issue {
 				req:      'REQ-TOPO-006'
 				msg:      'route on "${r.gateway}" (${kind} "${r.signal}${r.frame}", ${r.from} -> ${r.to}): cross-bus routing is only generated in the dissolution model (system.toml [[signal]]); a composed system does not lower routes'
 			}
-		} else if r.frame != '' {
-			// dissolution: P2a generates SIGNAL routes (decode per the source DBC ->
-			// re-encode into the destination frame's COM producer). FRAME (raw-PDU)
-			// routing is P2b — its full-contract comparison + tx-ready forwarder is not
-			// generated yet, so a clean verdict would not imply a forwarder exists.
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-006'
-				msg:      'route on "${r.gateway}" (frame "${r.frame}", ${r.from} -> ${r.to}): raw-frame routing is not generated yet (P2b) — only signal routes are generated in P2a'
-			}
 		}
+		// FRAME (raw-PDU) routes ARE generated now (P2b): sysgen lowers a raw forwarder
+		// and check_route_dbc's full-contract compare (REQ-TOPO-007) gates it. The
+		// well-formedness + single-writer + cycle checks below apply to both kinds.
 		mut gw := ?Node(none)
 		for n in s.nodes {
 			if n.name == r.gateway {
@@ -1391,6 +1384,32 @@ fn check_routes(s System, dissolved bool) []Issue {
 				}
 			}
 		}
+		// REQ-TOPO-012 (frame route): forwarding a frame onto `to` makes the gateway an
+		// on-wire transmitter of that PDU. Reject any OTHER node on `to` that already
+		// transmits it — a node producing a system signal mapping to the same frame on
+		// `to` would collide with the forward.
+		if r.frame != '' && r.to != '' {
+			if to := s.bus_by_name(r.to) {
+				rident := dbc_frame_ident(s, to, r.frame) or { '' }
+				if rident != '' {
+					for ss in s.signals {
+						if ss.bus != r.to {
+							continue
+						}
+						// compare ON-WIRE identity (id:ext), not the message name — a
+						// producer whose frame shares the routed frame's CAN id collides.
+						sident := dbc_sig_frame_ident(s, to, ss.name) or { continue }
+						if sident == rident {
+							issues << Issue{
+								severity: .error
+								req:      'REQ-TOPO-012'
+								msg:      'frame route on "${r.gateway}": forwarded frame "${r.frame}" onto bus "${r.to}" shares its CAN id with a frame node "${ss.producer}" already transmits (signal "${ss.name}") — one on-wire writer per frame'
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 	// REQ-TOPO-012 (cont.): two routes may not carry the same signal onto the same
 	// destination bus — the second would be a second writer of that cell.
@@ -1398,34 +1417,53 @@ fn check_routes(s System, dissolved bool) []Issue {
 	// ...and one gateway OWNS each destination (bus, frame): a DIFFERENT gateway
 	// routing into the same DBC message is PDU contention (two on-wire transmitters).
 	// The SAME gateway composing several routed signals into one frame is fine.
-	mut frame_owner := map[string]string{} // "frame|to" -> owning gateway
+	mut frame_owner := map[string]string{} // "ident|to" -> owning gateway
+	mut raw_frame_dests := map[string]bool{} // "ident|to" owned by a RAW route (sole writer)
 	for r in s.routes {
-		if r.signal == '' || r.to == '' {
+		if r.to == '' {
 			continue
 		}
-		key := '${r.signal}|${r.to}'
-		if prev := routed_dest[key] {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-012'
-				msg:      'signal "${r.signal}" is routed onto bus "${r.to}" by two routes (gateways "${prev}" and "${r.gateway}") — one writer per routed cell'
-			}
-		} else {
-			routed_dest[key] = r.gateway
-		}
-		to := s.bus_by_name(r.to) or { continue }
-		dst_frame := dbc_frame_of(s, to, r.signal) or { continue }
-		fkey := '${dst_frame}|${r.to}'
-		if owner := frame_owner[fkey] {
-			if owner != r.gateway {
+		if r.signal != '' {
+			key := '${r.signal}|${r.to}'
+			if prev := routed_dest[key] {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-012'
-					msg:      'destination frame "${dst_frame}" on bus "${r.to}" is transmitted by two gateways ("${owner}" and "${r.gateway}") — one gateway owns a routed frame'
+					msg:      'signal "${r.signal}" is routed onto bus "${r.to}" by two routes (gateways "${prev}" and "${r.gateway}") — one writer per routed cell'
+				}
+			} else {
+				routed_dest[key] = r.gateway
+			}
+		}
+		to := s.bus_by_name(r.to) or { continue }
+		// the destination frame a route makes the gateway transmit: for a frame route it
+		// IS the forwarded frame; for a signal route it is the DBC message that carries
+		// the routed signal on `to`. Key the owner by the frame's ON-WIRE identity
+		// (id:ext), not its name.
+		dst_frame := if r.frame != '' { r.frame } else { dbc_frame_of(s, to, r.signal) or {
+			continue
+		} }
+		ident := dbc_frame_ident(s, to, dst_frame) or { continue }
+		fkey := '${ident}|${r.to}'
+		// A RAW frame route is the SOLE writer of the PDU — unlike composing signal
+		// routes, it does not share the frame. So it collides with ANY other route onto
+		// that identity, INCLUDING one from the same gateway (two independent forwarders,
+		// or a raw route mixed with a signal route). Only multiple SIGNAL routes from ONE
+		// gateway legitimately compose the frame.
+		if prev := frame_owner[fkey] {
+			raw_conflict := r.frame != '' || fkey in raw_frame_dests
+			if prev != r.gateway || raw_conflict {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-012'
+					msg:      'destination frame "${dst_frame}" on bus "${r.to}" has two on-wire writers (gateways "${prev}" and "${r.gateway}"${if raw_conflict { ' — a raw frame route is a sole writer, it cannot share a frame' } else { '' }})'
 				}
 			}
 		} else {
 			frame_owner[fkey] = r.gateway
+			if r.frame != '' {
+				raw_frame_dests[fkey] = true
+			}
 		}
 	}
 	issues << check_route_cycles(s)
@@ -1493,23 +1531,47 @@ fn dfs_cycle(n string, adj map[string][]string, mut state map[string]int) bool {
 	return false
 }
 
-// signal_routed_to reports whether a SIGNAL route carries `sig` INTO `bus` from
-// a source bus that ACTUALLY PRODUCES it — only then does the gateway have a
-// value to forward, so only then is a consumer on `bus` satisfied (REQ-TOPO-001/
-// 006). Frame (raw-PDU) routes are NOT matched here: a frame route names a DBC
-// message, not a signal, so resolving which signals it carries needs the DBC
-// (REQ-TOPO-003, deferred) — until then a frame route can't satisfy a signal
-// consumer.
+// signal_routed_to reports whether a route carries `sig` INTO `bus` from a source
+// bus that ACTUALLY PRODUCES it — only then does the gateway have a value to
+// forward, so only then is a cross-bus consumer on `bus` satisfied (REQ-TOPO-001/
+// 006). A SIGNAL route names the signal directly; a FRAME (raw-PDU) route carries
+// EVERY signal of its frame unchanged, so it satisfies `sig` when the routed frame
+// (per the dest DBC) contains it and `sig` is produced on the source bus.
 fn signal_routed_to(s System, sig string, bus string) bool {
 	for r in s.routes {
-		if r.to != bus || r.signal != sig {
+		if r.to != bus {
 			continue
 		}
-		// the source bus must actually produce the signal, else the gateway has
-		// nothing to forward. In the dissolved model a node authors no [[signal]],
-		// so production is the system declaration (name + bus), not the node view.
-		if signal_produced_on(s, sig, r.from) {
-			return true
+		if r.signal == sig {
+			if signal_produced_on(s, sig, r.from) {
+				return true
+			}
+		} else if r.frame != '' {
+			to := s.bus_by_name(bus) or { continue }
+			if dbc_frame_contains(s, to, r.frame, sig) && signal_produced_on(s, sig, r.from) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// dbc_frame_contains reports whether the DBC message named `frame` on `bus` carries
+// an SG_ named `sig` — used to resolve which signals a raw frame route carries.
+fn dbc_frame_contains(s System, bus Bus, frame string, sig string) bool {
+	if bus.dbc == '' {
+		return false
+	}
+	path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(s.dir, bus.dbc) }
+	db := candb.load_dbc_file(path) or { return false }
+	for m in db.messages {
+		if m.name != frame {
+			continue
+		}
+		for sg in m.signals {
+			if sg.name == sig {
+				return true
+			}
 		}
 	}
 	return false
@@ -1560,6 +1622,30 @@ fn dbc_frame_of(s System, bus Bus, sig string) ?string {
 		}
 	}
 	return hit
+}
+
+// dbc_frame_ident returns a stable "id:ext" key for the DBC message named `frame`
+// on `bus` — its ON-WIRE identity. Ownership must compare CAN identity, not the
+// message NAME: candb accepts two differently-named BO_ at one CAN id, so a name
+// compare would miss a genuine two-writer collision on that id.
+fn dbc_frame_ident(s System, bus Bus, frame string) ?string {
+	if bus.dbc == '' {
+		return none
+	}
+	path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(s.dir, bus.dbc) }
+	db := candb.load_dbc_file(path) or { return none }
+	for m in db.messages {
+		if m.name == frame {
+			return '${m.id}:${m.ext}'
+		}
+	}
+	return none
+}
+
+// dbc_sig_frame_ident resolves the frame carrying `sig` on `bus` to its "id:ext".
+fn dbc_sig_frame_ident(s System, bus Bus, sig string) ?string {
+	fr := dbc_frame_of(s, bus, sig)?
+	return dbc_frame_ident(s, bus, fr)
 }
 
 // signal_consumed_on: does a node on `bus` consume `sig`? Dissolved = an FB read;

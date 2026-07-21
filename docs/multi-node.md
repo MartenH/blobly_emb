@@ -489,9 +489,14 @@ Cross-bus *sleep bridging* (wake on A wakes B) remains a later decision on top.
      `test/route_signal.lua` asserts the value survives the factor change.
      **Still ahead:** E2E/SecOC re-protection on a routed frame (rejected for now);
      cross-core routes need the `xioc` transport (P2c).
-2. **P2b — frame route.** Recv-on-A → send-on-B in the comm loop (with tx-ready
-   gating), the full-contract comparison (wire + signal semantics + protection),
-   format flags, firewall allow-list. `REQ-TOPO-007`, `-009`, `-010`.
+2. **P2b — frame route (DONE).** Recv-on-A → send-on-B in the comm loop (tx-ready
+   gated — held + retried, never dropped), the full-contract comparison (id, dlc,
+   format, and every signal's layout / scaling / sign / endianness / multiplexing /
+   unit / value table across the two DBCs; a mismatch forces a signal route),
+   classic/standard-only for now (ext-id + FD are P2c), firewall allow-list.
+   [`examples/system_fw`](../examples/system_fw) raw-forwards `DiagFrame` while
+   blocking `PrivateFrame`, proven on 2× vcan (`test/route_firewall.lua`).
+   `REQ-TOPO-007`, `-009`, `-010`.
 3. **P2c — target multi-bus + bench.** Generate a channel + Rx-FIFO ISR per
    gateway bus, multiplexed into the core's single comm owner (not a thread per
    bus), then the H735 FDCAN1↔FDCAN2 gateway; sim-first until a second transceiver

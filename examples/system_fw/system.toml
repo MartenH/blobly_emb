@@ -1,0 +1,43 @@
+# system_fw — the multi-node P2b FRAME-ROUTE (firewall) system. Two buses and a
+# gateway that RAW-FORWARDS a whole frame from one to the other, contract-verified.
+# Unlike system_gw (a SIGNAL route that decodes + re-encodes), a frame route carries
+# the PDU UNCHANGED — valid only because both buses define the frame identically
+# (the full-contract compare, REQ-TOPO-007). It is also a FIREWALL (REQ-TOPO-009):
+# only the frame named by a route crosses; PrivateFrame on compute never reaches edge.
+#
+#   make gen-system SYSTEM=examples/system_fw/system.toml   # sysgen -> gen-<node>.toml
+#   make syscheck   SYSTEM=examples/system_fw/system.toml   # cross-node + contract checks
+#   make -C examples/system_fw/nodes/gw && .../bin/app vcan0 vcan1
+#
+# No cross-node [[signal]] is declared: the forwarded frame's payload is opaque to
+# the gateway (downstream ECUs on edge decode it). A [[route]] alone marks the system
+# dissolved (sysgen lowers the forwarder).
+
+[bus.compute]
+interface = "can0"
+fd        = false
+bitrate   = 500000
+dbc       = "compute.dbc"
+
+[bus.edge]
+interface = "can1"
+fd        = false
+bitrate   = 500000
+dbc       = "edge.dbc"
+
+# the FRAME route on the gateway: forward DiagFrame compute -> edge, unchanged.
+# DiagFrame is defined IDENTICALLY in both DBCs (same id/dlc/layout) — the compare
+# proves the raw forward is meaning-preserving; a differing contract would be rejected.
+[[route]]
+gateway = "gw"
+frame   = "DiagFrame"
+from    = "compute"
+to      = "edge"
+
+[[node]]
+name  = "gw"       # H735-DK — the GATEWAY, on compute + edge (raw frame forwarder)
+ecu   = "nodes/gw/ecu.toml"
+buses = ["compute", "edge"]
+nm    = 0x11
+diag  = { req = 0x7A0, rsp = 0x7A8 }
+trace = 1

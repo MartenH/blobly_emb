@@ -1,0 +1,4 @@
+# gw — THE GATEWAY (frame route). AUTHORED INTERNALS ONLY. It authors no FB: the
+# compute -> edge RAW frame forward (DiagFrame) is generated from ../../system.toml.
+# Its two buses and the lowered [[route]] come from the system file.
+# NOTE: no inline comments inside [[...]] tables (vlang/v#27684).

@@ -6,7 +6,7 @@ import toml
 // REQ-TOPO-005 is method = "analysis" (the system-sourced-generation architecture,
 // argued in docs/multi-node.md) — these validator tests exercise cross-node checks,
 // not that generation analysis, so they must NOT claim to verify it by test.
-// @verifies REQ-TOPO-001, REQ-TOPO-002, REQ-TOPO-004, REQ-TOPO-006, REQ-TOPO-011, REQ-TOPO-012
+// @verifies REQ-TOPO-001, REQ-TOPO-002, REQ-TOPO-004, REQ-TOPO-006, REQ-TOPO-007, REQ-TOPO-011, REQ-TOPO-012
 
 fn errs(issues []Issue) []string {
 	mut out := []string{}
@@ -1297,8 +1297,8 @@ fn test_undeclared_telemetry_interface_is_error() {
 
 // REQ-TOPO-006: any route in a COMPOSED system is rejected — sysgen lowers routes
 // only in the dissolution model, so a composed route would validate clean with no
-// forwarder at runtime (codex #164). (Dissolved: signal routes are accepted in
-// P2a, frame routes are gated to P2b — see the dissolved route tests.)
+// forwarder at runtime (codex #164). (Dissolved: both signal routes (P2a) and frame
+// routes (P2b) are accepted — see the dissolved route + frame-contract tests.)
 fn test_composed_route_rejected() {
 	mut s := clean_system()
 	s.buses << Bus{
@@ -1316,22 +1316,227 @@ fn test_composed_route_rejected() {
 	assert errs(validate_system(s)).any(it.contains('only generated in the dissolution model')), errs(validate_system(s)).str()
 }
 
-// REQ-TOPO-006: in the DISSOLVED model a FRAME (raw-PDU) route is still gated to
-// P2b (its full-contract compare + tx-ready forwarder is not generated yet).
-fn test_dissolved_frame_route_is_p2b() {
-	mut s := clean_dissolved()
-	s.buses << Bus{
-		name:      'edge'
-		interface: 'can1'
+// frame_route_system builds a 2-bus dissolved system with a gateway raw-forwarding
+// frame "DiagFrame" compute->edge, backed by the two per-bus DBC bodies given.
+fn frame_route_system(tag string, compute_dbc string, edge_dbc string) (string, System) {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_${tag}_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	os.write_file(os.join_path(dir, 'compute.dbc'), compute_dbc) or { panic(err) }
+	os.write_file(os.join_path(dir, 'edge.dbc'), edge_dbc) or { panic(err) }
+	s := System{
+		dir:    dir
+		buses:  [
+			Bus{
+				name:      'compute'
+				interface: 'can0'
+				dbc:       'compute.dbc'
+			},
+			Bus{
+				name:      'edge'
+				interface: 'can1'
+				dbc:       'edge.dbc'
+			},
+		]
+		nodes:  [
+			Node{
+				name:  'gw'
+				buses: ['compute', 'edge']
+				view:  NodeView{
+					local_buses: ['can0', 'can1']
+				}
+			},
+		]
+		routes: [
+			Route{
+				gateway: 'gw'
+				frame:   'DiagFrame'
+				from:    'compute'
+				to:      'edge'
+			},
+		]
 	}
-	s.nodes[0].buses = ['compute', 'edge'] // gateway
+	return dir, s
+}
+
+// a cyclic (GenMsgCycleTime 100) DiagFrame — a raw frame route requires a cyclic frame.
+const diag_compute = 'VERSION ""\nBU_: prod gw\nBO_ 1024 DiagFrame: 8 prod\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" gw\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 1024 100;\n'
+const diag_edge = 'VERSION ""\nBU_: gw cons\nBO_ 1024 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 1024 100;\n'
+
+// REQ-TOPO-007: a raw frame forward is VALID when both buses define the frame with
+// an identical wire contract (only the sender/receiver node names differ).
+fn test_frame_route_identical_contract_ok() {
+	// same wire, different receiver node (cons vs gw) — the topology is not compared.
+	dir, s := frame_route_system('frok', diag_compute, diag_edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).len == 0, errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-007: an EVENT frame (no GenMsgCycleTime) can't be raw-forwarded — under
+// backpressure the forwarder samples the freshest PDU, which drops events.
+fn test_frame_route_event_frame_rejected() {
+	compute := 'VERSION ""\nBU_: prod gw\nBO_ 1024 DiagFrame: 8 prod\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" gw\n'
+	edge := 'VERSION ""\nBU_: gw cons\nBO_ 1024 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\n'
+	dir, s := frame_route_system('frevt', compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('not cyclic')), errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-007: a signal-semantics mismatch (differing factor => a different
+// physical value from the same raw bits) forces a signal route, not a raw forward.
+fn test_frame_route_factor_mismatch_rejected() {
+	edge := 'VERSION ""\nBU_: gw cons\nBO_ 1024 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (0.1,0) [0|429496729.5] "" cons\n'
+	dir, s := frame_route_system('frfac', diag_compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('factor') && it.contains('signal route')), errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-007: the destination bus must define the forwarded frame — else there is
+// no contract to agree with.
+fn test_frame_route_missing_on_dest_rejected() {
+	edge := 'VERSION ""\nBU_: gw cons\nBO_ 1025 OtherFrame: 8 gw\n SG_ X : 0|8@1+ (1,0) [0|255] "" cons\n'
+	dir, s := frame_route_system('frmiss', diag_compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('not defined in destination')), errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-007: extended-id frames are not raw-forwarded yet (the driver frame path
+// carries no ext-id flag — P2c). 1024 | 0x80000000 = 2147484672 sets the EFF bit.
+fn test_frame_route_extended_id_rejected() {
+	compute := 'VERSION ""\nBU_: prod gw\nBO_ 2147484672 DiagFrame: 8 prod\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" gw\n'
+	edge := 'VERSION ""\nBU_: gw cons\nBO_ 2147484672 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\n'
+	dir, s := frame_route_system('frext', compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('extended-id')), errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-007: an unflagged id above the 11-bit standard range can't be raw-forwarded
+// (the standard-id send omits CAN_EFF_FLAG). 2048 = 0x800, one past the standard range.
+fn test_frame_route_id_above_standard_rejected() {
+	compute := 'VERSION ""\nBU_: prod gw\nBO_ 2048 DiagFrame: 8 prod\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" gw\n'
+	edge := 'VERSION ""\nBU_: gw cons\nBO_ 2048 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\n'
+	dir, s := frame_route_system('frbig', compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('standard range')), errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-007: the two buses must share the fd mode — Channel.send picks classic vs
+// FD from the destination, and Frame carries no received-format flag, so a mixed pair
+// would silently reframe the PDU.
+fn test_frame_route_fd_mismatch_rejected() {
+	edge := 'VERSION ""\nBU_: gw cons\nBO_ 1024 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\n'
+	dir, mut s := frame_route_system('frfd', diag_compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	s.buses[1].fd = true // edge is FD, compute is classic
+	assert errs(check_route_dbc(s)).any(it.contains('CAN-FD')), errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-001/007: a frame route carries EVERY signal of its frame, so it satisfies
+// a cross-bus consumer of a signal that frame contains (when the signal is produced
+// on the source bus) — reachability trusts the raw forward, like a signal route.
+fn test_frame_route_satisfies_reachability() {
+	compute := 'VERSION ""\nBU_: prod gw\nBO_ 1024 DiagFrame: 8 prod\n SG_ Temp : 0|8@1+ (1,0) [0|255] "" gw\n'
+	edge := 'VERSION ""\nBU_: gw cons\nBO_ 1024 DiagFrame: 8 gw\n SG_ Temp : 0|8@1+ (1,0) [0|255] "" cons\n'
+	dir, mut s := frame_route_system('frreach', compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	s.signals << SysSignal{
+		name:     'Temp'
+		bus:      'compute'
+		producer: 'prod'
+		frame:    'DiagFrame'
+	}
+	assert signal_routed_to(s, 'Temp', 'edge'), 'frame route carries Temp onto edge'
+	// a signal the frame does NOT contain is not satisfied by the route
+	assert !signal_routed_to(s, 'Missing', 'edge')
+}
+
+// REQ-TOPO-012: the destination DBC must name the gateway (or a placeholder) as the
+// frame's transmitter — another named sender would be a second on-wire writer.
+fn test_frame_route_wrong_dest_sender_rejected() {
+	edge := 'VERSION ""\nBU_: evil cons\nBO_ 1024 DiagFrame: 8 evil\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\n'
+	dir, s := frame_route_system('frsend', diag_compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('not the gateway')), errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-012: a raw frame route is the SOLE writer of the PDU — two raw routes onto
+// the same destination frame collide even when the SAME gateway owns both (unlike
+// composing signal routes).
+fn test_two_raw_routes_same_gateway_collide() {
+	edge := 'VERSION ""\nBU_: gw cons\nBO_ 1024 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\n'
+	dir, mut s := frame_route_system('frdup', diag_compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
 	s.routes << Route{
-		gateway: 'a'
-		frame:   'SomeFrame'
+		gateway: 'gw'
+		frame:   'DiagFrame'
 		from:    'compute'
 		to:      'edge'
 	}
-	assert errs(validate_system_gen(s)).any(it.contains('not generated yet (P2b)')), errs(validate_system_gen(s)).str()
+	assert errs(check_routes(s, true)).any(it.contains('sole writer')), errs(check_routes(s,
+		true)).str()
+}
+
+// REQ-TOPO-007: a sub-tick cadence (< 10 ms comm-bridge tick) can't be preserved.
+fn test_frame_route_subtick_cadence_rejected() {
+	body := fn (recv string) string {
+		return 'VERSION ""\nBU_: gw ${recv}\nBO_ 1024 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" ${recv}\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 1024 5;\n'
+	}
+	dir, s := frame_route_system('frtick', body('gw'), body('cons'))
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('below the 10 ms')), errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-007: a multiplexed frame is not raw-forwarded (candb can't model SG_MUL_VAL_).
+fn test_frame_route_multiplexed_rejected() {
+	mux := 'VERSION ""\nBU_: prod gw\nBO_ 1024 DiagFrame: 8 prod\n SG_ Sel M : 0|8@1+ (1,0) [0|255] "" gw\n SG_ A m0 : 8|8@1+ (1,0) [0|255] "" gw\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 1024 100;\n'
+	dir, s := frame_route_system('frmux', mux, mux.replace('prod', 'x').replace('"" gw', '"" cons'))
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('multiplexed')), errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-007: a duplicate SG_ name makes the contract comparison ambiguous.
+fn test_frame_route_duplicate_signal_rejected() {
+	dup := 'VERSION ""\nBU_: prod gw\nBO_ 1024 DiagFrame: 8 prod\n SG_ Code : 0|16@1+ (1,0) [0|65535] "" gw\n SG_ Code : 16|16@1+ (1,0) [0|65535] "" gw\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 1024 100;\n'
+	dir, s := frame_route_system('frdupsig', dup, dup.replace('prod', 'x').replace('"" gw', '"" cons'))
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('more than once')), errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-007: raw forwarding keeps the SOURCE rate, so the two buses must agree on
+// the frame cadence — else the destination's rx-deadline monitor trips.
+fn test_frame_route_cadence_mismatch_rejected() {
+	compute := 'VERSION ""\nBU_: prod gw\nBO_ 1024 DiagFrame: 8 prod\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" gw\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 1024 100;\n'
+	edge := 'VERSION ""\nBU_: gw cons\nBO_ 1024 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 1024 200;\n'
+	dir, s := frame_route_system('frcyc', compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('cadence differs')), errs(check_route_dbc(s)).str()
 }
 
 // REQ-TOPO-002: a telemetry id equal to ANOTHER node's alive id collides on the
