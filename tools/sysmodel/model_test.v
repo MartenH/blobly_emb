@@ -6,7 +6,7 @@ import toml
 // REQ-TOPO-005 is method = "analysis" (the system-sourced-generation architecture,
 // argued in docs/multi-node.md) — these validator tests exercise cross-node checks,
 // not that generation analysis, so they must NOT claim to verify it by test.
-// @verifies REQ-TOPO-001, REQ-TOPO-002, REQ-TOPO-004, REQ-TOPO-006, REQ-TOPO-007, REQ-TOPO-011, REQ-TOPO-012
+// @verifies REQ-TOPO-001, REQ-TOPO-002, REQ-TOPO-003, REQ-TOPO-004, REQ-TOPO-006, REQ-TOPO-007, REQ-TOPO-011, REQ-TOPO-012
 
 fn errs(issues []Issue) []string {
 	mut out := []string{}
