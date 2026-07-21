@@ -1428,7 +1428,58 @@ fn test_frame_route_fd_mismatch_rejected() {
 		os.rmdir_all(dir) or {}
 	}
 	s.buses[1].fd = true // edge is FD, compute is classic
-	assert errs(check_route_dbc(s)).any(it.contains('fd mode')), errs(check_route_dbc(s)).str()
+	assert errs(check_route_dbc(s)).any(it.contains('CAN-FD')), errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-001/007: a frame route carries EVERY signal of its frame, so it satisfies
+// a cross-bus consumer of a signal that frame contains (when the signal is produced
+// on the source bus) — reachability trusts the raw forward, like a signal route.
+fn test_frame_route_satisfies_reachability() {
+	compute := 'VERSION ""\nBU_: prod gw\nBO_ 1024 DiagFrame: 8 prod\n SG_ Temp : 0|8@1+ (1,0) [0|255] "" gw\n'
+	edge := 'VERSION ""\nBU_: gw cons\nBO_ 1024 DiagFrame: 8 gw\n SG_ Temp : 0|8@1+ (1,0) [0|255] "" cons\n'
+	dir, mut s := frame_route_system('frreach', compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	s.signals << SysSignal{
+		name:     'Temp'
+		bus:      'compute'
+		producer: 'prod'
+		frame:    'DiagFrame'
+	}
+	assert signal_routed_to(s, 'Temp', 'edge'), 'frame route carries Temp onto edge'
+	// a signal the frame does NOT contain is not satisfied by the route
+	assert !signal_routed_to(s, 'Missing', 'edge')
+}
+
+// REQ-TOPO-012: the destination DBC must name the gateway (or a placeholder) as the
+// frame's transmitter — another named sender would be a second on-wire writer.
+fn test_frame_route_wrong_dest_sender_rejected() {
+	edge := 'VERSION ""\nBU_: evil cons\nBO_ 1024 DiagFrame: 8 evil\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\n'
+	dir, s := frame_route_system('frsend', diag_compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('not the gateway')), errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-012: a raw frame route is the SOLE writer of the PDU — two raw routes onto
+// the same destination frame collide even when the SAME gateway owns both (unlike
+// composing signal routes).
+fn test_two_raw_routes_same_gateway_collide() {
+	edge := 'VERSION ""\nBU_: gw cons\nBO_ 1024 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\n'
+	dir, mut s := frame_route_system('frdup', diag_compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	s.routes << Route{
+		gateway: 'gw'
+		frame:   'DiagFrame'
+		from:    'compute'
+		to:      'edge'
+	}
+	assert errs(check_routes(s, true)).any(it.contains('sole writer')), errs(check_routes(s,
+		true)).str()
 }
 
 // REQ-TOPO-007: raw forwarding keeps the SOURCE rate, so the two buses must agree on

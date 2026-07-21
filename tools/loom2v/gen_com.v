@@ -616,11 +616,11 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 		for r in my_routes {
 			if r.signal == '' {
 				rf := raw_field(r)
-				glue << '\t${rf} can.Frame // pending forward (tx-ready retry)'
+				glue << '\t${rf} can.Frame // held forward awaiting destination tx-ready'
 				glue << '\t${rf}_set bool'
-				glue << '\t${rf}_drops u32 // held PDUs superseded under backpressure (observable, not silent)'
 			}
 		}
+		has_raw := my_routes.any(it.signal == '')
 		glue << '}'
 		glue << ''
 		glue << 'fn io_${bb}_10ms(ctx voidptr) {'
@@ -628,19 +628,31 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 		if uses_now {
 			glue << '\tnow := osal.now_us()'
 		}
-		// flush any raw forward held from a previous tick before draining new rx.
-		for r in my_routes {
-			if r.signal == '' {
-				rf := raw_field(r)
-				dch := 'st.route_${snake(r.to_bus)}'
-				glue << '\tif st.${rf}_set && ${dch}.tx_ready() && ${dch}.send(st.${rf}) {'
-				glue << '\t\tst.${rf}_set = false'
-				glue << '\t}'
+		// flush any raw forward HELD from a previous tick. If it still can't go out,
+		// `raw_busy` blocks draining new rx below — a held PDU occupies the one slot, so
+		// pulling more frames from the RX FIFO would have nowhere to keep them; leaving
+		// them in the driver RX FIFO (a bounded hardware queue) is the backpressure, and
+		// nothing is dropped (REQ-TOPO-010: retried, never silently lost, no SW queue).
+		if has_raw {
+			glue << '\tmut raw_busy := false'
+			for r in my_routes {
+				if r.signal == '' {
+					rf := raw_field(r)
+					dch := 'st.route_${snake(r.to_bus)}'
+					glue << '\tif st.${rf}_set {'
+					glue << '\t\tif ${dch}.tx_ready() && ${dch}.send(st.${rf}) {'
+					glue << '\t\t\tst.${rf}_set = false'
+					glue << '\t\t} else {'
+					glue << '\t\t\traw_busy = true'
+					glue << '\t\t}'
+					glue << '\t}'
+				}
 			}
 		}
 		if rx_by_msg.len > 0 || conns.len > 0 || my_routes.len > 0 {
 			glue << '\tmut rx := can.Frame{}'
-			glue << '\tfor st.chan.recv(mut rx) {'
+			recv_cond := if has_raw { '!raw_busy && st.chan.recv(mut rx)' } else { 'st.chan.recv(mut rx)' }
+			glue << '\tfor ${recv_cond} {'
 			for r in my_routes {
 				if r.signal != '' {
 					// SIGNAL route (P2a.2b): DECODE the routed signal from the source frame to
@@ -658,11 +670,10 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				// remapping the id), without decoding it to signals. Require rx.len == the
 				// contracted DLC (like the signal-route + COM rx paths) so a short/oversized
 				// frame at the routed id is NOT forwarded with stale trailing bytes. The send
-				// is tx-ready gated — if the destination TX can't accept it now (or a PDU is
-				// already held), keep the FRESHEST PDU and retry next tick. A raw route carries
-				// a cyclic frame (the contract requires matching cadence), so freshest-wins is
-				// the right policy under backpressure; a superseded PDU is COUNTED (${raw_field(r)}_drops),
-				// never silently lost, and honours REQ-TOPO-010's no-parallel-queue rule.
+				// is tx-ready gated — if the destination TX can't accept it, HOLD this PDU in
+				// the one slot and BREAK: draining stops so every following frame stays in the
+				// RX FIFO (retried next tick, never dropped). The slot is empty on entry (the
+				// loop is gated on !raw_busy), so a held PDU is never overwritten.
 				rf := raw_field(r)
 				dch := 'st.route_${snake(r.to_bus)}'
 				glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} {'
@@ -670,14 +681,12 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				if r.to_id != r.from_id {
 					glue << '\t\t\tfwd.id = u32(0x${r.to_id.hex()})'
 				}
-				glue << '\t\t\tif !st.${rf}_set && ${dch}.tx_ready() && ${dch}.send(fwd) {'
+				glue << '\t\t\tif ${dch}.tx_ready() && ${dch}.send(fwd) {'
 				glue << '\t\t\t\t// forwarded'
 				glue << '\t\t\t} else {'
-				glue << '\t\t\t\tif st.${rf}_set {'
-				glue << '\t\t\t\t\tst.${rf}_drops++ // superseding a held PDU (backpressure)'
-				glue << '\t\t\t\t}'
 				glue << '\t\t\t\tst.${rf} = fwd'
 				glue << '\t\t\t\tst.${rf}_set = true'
+				glue << '\t\t\t\tbreak'
 				glue << '\t\t\t}'
 				glue << '\t\t}'
 			}

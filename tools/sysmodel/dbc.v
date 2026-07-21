@@ -126,6 +126,9 @@ fn sig_wire_diff(a candb.Signal, b candb.Signal) string {
 	if a.offset != b.offset {
 		return 'offset ${a.offset} vs ${b.offset}'
 	}
+	if a.minimum != b.minimum || a.maximum != b.maximum {
+		return 'physical range [${a.minimum}|${a.maximum}] vs [${b.minimum}|${b.maximum}]'
+	}
 	if a.is_signed != b.is_signed {
 		return 'signedness ${a.is_signed} vs ${b.is_signed}'
 	}
@@ -212,15 +215,16 @@ fn check_frame_route_contract(s System, r Route) []Issue {
 			msg:      '${pre} CAN-FD (dlc > 8) frames are not raw-forwarded yet (P2c) — the driver frame path does not carry the fd flag'
 		}
 	}
-	// FD MODE must match: driver.can.Channel.send picks classic vs FD from the
-	// DESTINATION channel, and Frame carries no received-format flag, so forwarding a
-	// classic PDU onto an FD bus (or vice versa) silently reframes it. Require the
-	// buses agree; a mixed pair must translate (P2c carries the format through).
-	if from.fd != to.fd {
+	// FD buses can't be raw-forwarded yet — on either side. driver.can.Channel.send
+	// always emits a canfd_frame on an FD destination, an FD receive socket accepts
+	// BOTH classic and FD frames, and can.Frame discards which format (and BRS) it
+	// received — so even a matched fd=true/fd=true pair can silently reframe a classic
+	// PDU as FD. Until Frame carries the received format (P2c), reject any FD bus.
+	if from.fd || to.fd {
 		issues << Issue{
 			severity: .error
 			req:      'REQ-TOPO-007'
-			msg:      '${pre} source bus fd=${from.fd} but destination bus fd=${to.fd} — a raw forward cannot change the frame format; both buses must share the fd mode'
+			msg:      '${pre} a bus is CAN-FD (compute fd=${from.fd}, edge fd=${to.fd}) — raw forwarding cannot preserve the frame format yet (P2c); a signal route re-encodes'
 		}
 	}
 	// PROTECTION (E2E/SecOC) is authored per-frame in a node\'s ecu.toml [[frame]]
@@ -236,6 +240,16 @@ fn check_frame_route_contract(s System, r Route) []Issue {
 			severity: .error
 			req:      'REQ-TOPO-007'
 			msg:      '${pre} cadence differs (${sm.cycle_ms} ms vs ${dm.cycle_ms} ms) — a raw forward keeps the source rate; a differing cadence needs a signal route'
+		}
+	}
+	// the gateway becomes the on-wire transmitter of the frame on `to`. If the dest
+	// DBC names a DIFFERENT BO_ transmitter, that node also sends the PDU — reject the
+	// second writer (mirror the signal-route sender check; a placeholder is fine).
+	if dm.sender != '' && !dm.sender.starts_with('Vector__') && dm.sender != r.gateway {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-012'
+			msg:      '${pre} destination DBC names "${dm.sender}" as the transmitter of "${r.frame}", not the gateway — the forward would be a second on-wire writer'
 		}
 	}
 	// wire shape must AGREE across the two buses (id, dlc), else the PDU means
