@@ -1056,6 +1056,13 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		if r.signal == '' {
 			continue
 		}
+		// the ThreadX comm thread does not generate route forwarders yet (P2c) — the host
+		// emit_bridges is skipped when a comm thread owns the bus, so a route on a threadx
+		// target would produce no forwarding. Fail fast here with a route-specific message
+		// (a generic backstop also exists deeper in the threadx emitter).
+		if m.target.threadx {
+			panic('route: signal "${r.signal}" is on a [target] kind="threadx" node — the ThreadX comm thread does not generate route forwarders yet (P2c); routes run on the host target for now')
+		}
 		frof := snake(r.from_frame)
 		tof := snake(r.to_frame)
 		// both endpoints must name a DECLARED [bus.*]; emit_bridges iterates declared
@@ -1114,11 +1121,15 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 			if nroutes > 1 {
 				panic('route: protected source frame "${r.from_frame}" feeds ${nroutes} routes — a protected source may feed only ONE (its verify runs once per frame); split it or use an unprotected source')
 			}
-			// (b) it must not ALSO be read by a normal COM signal on the same bus — both the
-			//     route and the COM rx path would verify the same frame and double-advance.
+			// (b) it must not ALSO be a normal COM frame on the same bus — whether an rx
+			//     signal reads it (both paths would verify + double-advance the counter) or
+			//     a tx signal transmits it (the tx state already declares secoc_key_<frame>,
+			//     which the source-verify state would redeclare). Reject either; shared
+			//     verify / shared key with a route is a later increment.
 			for _, si in m.sig_of {
-				if si.rx && si.dbc_msg == frof && si.bus == r.from_bus {
-					panic('route: protected source frame "${r.from_frame}" is also read by COM signal "${si.name}" — a protected frame consumed by both a route and a signal needs shared verify (a later increment)')
+				if si.dbc_msg == frof && si.bus == r.from_bus {
+					dir := if si.rx { 'read' } else { 'transmitted' }
+					panic('route: protected source frame "${r.from_frame}" is also ${dir} by COM signal "${si.name}" on the same bus — a protected frame shared by a route and a signal is a later increment')
 				}
 			}
 		}
