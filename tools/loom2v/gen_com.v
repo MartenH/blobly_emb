@@ -571,10 +571,10 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 		glue << '\tchan can.Channel'
 		for msg, _ in tx_by_msg {
 			glue << '\ttx_${msg}_st com.TxState'
-			if m.frames.e2e_on[msg] or { false } {
+			if m.frames.e2e_here(msg, bname) {
 				glue << '\te2e_tx_${msg} e2e.TxState'
 			}
-			if m.frames.secoc_on[msg] or { false } {
+			if m.frames.secoc_here(msg, bname) {
 				glue << '\tsecoc_key_${msg} secoc.Key'
 				glue << '\tsecoc_tx_${msg} secoc.TxState'
 			}
@@ -583,10 +583,10 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 				glue << '\trx_${msg}_st com.RxState'
 			}
-			if m.frames.e2e_on[msg] or { false } {
+			if m.frames.e2e_here(msg, bname) {
 				glue << '\te2e_rx_${msg} e2e.RxState'
 			}
-			if m.frames.secoc_on[msg] or { false } {
+			if m.frames.secoc_here(msg, bname) {
 				glue << '\tsecoc_key_${msg} secoc.Key'
 				glue << '\tsecoc_rx_${msg} secoc.RxState'
 			}
@@ -609,7 +609,18 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			glue << '\t${rk}_fresh u64 // rx timestamp (0 = never received)'
 		}
 		for r in dst_frames {
-			glue << '\trt_tx_${snake(r.to_bus)}_${snake(r.to_frame)} com.TxState'
+			dk := '${snake(r.to_bus)}_${snake(r.to_frame)}'
+			tof := snake(r.to_frame) // m.frames is keyed by snake(frame name)
+			glue << '\trt_tx_${dk} com.TxState'
+			// a PROTECTED destination frame: the producer re-protects the composed frame
+			// with a fresh CRC/MAC before send (source frames are unprotected — guarded).
+			if m.frames.e2e_here(tof, r.to_bus) {
+				glue << '\te2e_tx_${dk} e2e.TxState'
+			}
+			if m.frames.secoc_here(tof, r.to_bus) {
+				glue << '\tsecoc_key_${dk} secoc.Key'
+				glue << '\tsecoc_tx_${dk} secoc.TxState'
+			}
 		}
 		// RAW frame-route pending slot: a forward that the destination TX could not
 		// accept yet (tx_ready false / send failed) is held here and retried next tick.
@@ -687,8 +698,8 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				// the actual bytes into the reused frame, so a short same-id frame
 				// would otherwise be decoded over stale trailing bytes.
 				glue << '\t\tif rx.id == ${msg}_id && rx.len == ${msg}_dlc {'
-				e2e := m.frames.e2e_on[msg] or { false }
-				secoc := m.frames.secoc_on[msg] or { false }
+				e2e := m.frames.e2e_here(msg, bname)
+				secoc := m.frames.secoc_here(msg, bname)
 				// protected frames are decoded only if the check passes; a bad frame
 				// is ignored (the rx deadline then invalidates).
 				mut ind := '\t\t\t'
@@ -812,8 +823,8 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			// advances the E2E/SecOC counter nor consumes the change/trigger — the PDU
 			// just retries next tick (REQ-COM-006). mark_sent() commits the send only
 			// once the channel accepts the frame.
-			e2e_here := m.frames.e2e_on[msg] or { false }
-			secoc_here := m.frames.secoc_on[msg] or { false }
+			e2e_here := m.frames.e2e_here(msg, bname)
+			secoc_here := m.frames.secoc_here(msg, bname)
 			needs_pre := e2e_here || secoc_here
 			glue << '\tif tx_${msg}_any && st.chan.tx_ready() && st.tx_${msg}_st.should_send(now, tx_${msg}.data, ${msg}_dlc) {'
 			if needs_pre {
@@ -901,10 +912,49 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 					glue << '\t}'
 				}
 			}
-			glue << '\tif rf_${dk}_ok && st.route_${snake(r.to_bus)}.tx_ready() && st.rt_tx_${dk}.should_send(now, rf_${dk}.data, ${r.to_dlc}) {'
-			glue << '\t\tif st.route_${snake(r.to_bus)}.send(rf_${dk}) {'
-			glue << '\t\t\tst.rt_tx_${dk}.mark_sent(now, rf_${dk}.data, ${r.to_dlc})'
-			glue << '\t\t}'
+			// re-protect the composed dest frame (fresh E2E CRC/counter or SecOC MAC) AFTER
+			// the change decision — like a normal COM producer — so the counter doesn't make
+			// every frame look "changed", and rewind it if a tx_ready-passed send is rejected
+			// (keeps the counter honest so the receiver sees no skip). Source frames are
+			// unprotected (guarded), so this is pure destination re-protection.
+			rtof := snake(r.to_frame)
+			r_e2e := m.frames.e2e_here(rtof, r.to_bus)
+			r_secoc := m.frames.secoc_here(rtof, r.to_bus)
+			r_pre := r_e2e || r_secoc
+			dch := 'st.route_${snake(r.to_bus)}'
+			glue << '\tif rf_${dk}_ok && ${dch}.tx_ready() && st.rt_tx_${dk}.should_send(now, rf_${dk}.data, ${r.to_dlc}) {'
+			if r_pre {
+				glue << '\t\trf_${dk}_pre := rf_${dk}.data // pre-protect payload, for mark_sent'
+			}
+			if r_e2e {
+				glue << '\t\te2e_save_${dk} := st.e2e_tx_${dk}'
+				glue << '\t\tst.e2e_tx_${dk}.protect(&rf_${dk}.data[0], int(${r.to_dlc}), u16(0x${(m.frames.e2e_id[rtof] or {
+					0
+				}).hex()}), ${m.frames.e2e_crc[rtof] or { 0 }}, ${m.frames.e2e_ctr[rtof] or { 0 }})'
+			}
+			if r_secoc {
+				glue << '\t\tsecoc_save_${dk} := st.secoc_tx_${dk}'
+				glue << '\t\tst.secoc_tx_${dk}.protect(&st.secoc_key_${dk}, &rf_${dk}.data[0], int(${r.to_dlc}), u16(0x${(m.frames.secoc_id[rtof] or {
+					0
+				}).hex()}), ${m.frames.secoc_fresh[rtof] or { 0 }}, ${m.frames.secoc_mac[rtof] or { 0 }}, ${m.frames.secoc_maclen[rtof] or {
+					0
+				}})'
+			}
+			mark_arg := if r_pre { 'rf_${dk}_pre' } else { 'rf_${dk}.data' }
+			glue << '\t\tif ${dch}.send(rf_${dk}) {'
+			glue << '\t\t\tst.rt_tx_${dk}.mark_sent(now, ${mark_arg}, ${r.to_dlc})'
+			if r_pre {
+				glue << '\t\t} else {'
+				if r_e2e {
+					glue << '\t\t\tst.e2e_tx_${dk} = e2e_save_${dk}'
+				}
+				if r_secoc {
+					glue << '\t\t\tst.secoc_tx_${dk} = secoc_save_${dk}'
+				}
+				glue << '\t\t}'
+			} else {
+				glue << '\t\t}'
+			}
 			glue << '\t}'
 		}
 		glue << '}'
@@ -932,7 +982,7 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			glue << '\t\tcycle_us: ${cyc}'
 			glue << '\t\tmin_delay_us: ${m.frames.tx_min_us[msg] or { 0 }}'
 			glue << '\t}'
-			if m.frames.secoc_on[msg] or { false } {
+			if m.frames.secoc_here(msg, bname) {
 				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(m.frames.secoc_key[msg] or {
 					[]u8{}
 				})})'
@@ -960,6 +1010,11 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			glue << '\t\tcycle_us: ${cyc}'
 			glue << '\t\tmin_delay_us: ${m.frames.tx_min_us[tof] or { 0 }}'
 			glue << '\t}'
+			if m.frames.secoc_here(tof, r.to_bus) {
+				glue << '\tst.secoc_key_${dk} = secoc.new_key(${byte16_lit(m.frames.secoc_key[tof] or {
+					[]u8{}
+				})})'
+			}
 		}
 		for msg, _ in rx_by_msg {
 			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
@@ -967,7 +1022,7 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				glue << '\t\ttimeout_us: ${m.frames.rx_timeout_us[msg]}'
 				glue << '\t}'
 			}
-			if m.frames.secoc_on[msg] or { false } {
+			if m.frames.secoc_here(msg, bname) {
 				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(m.frames.secoc_key[msg] or {
 					[]u8{}
 				})})'

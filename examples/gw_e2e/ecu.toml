@@ -1,0 +1,42 @@
+# gw_e2e — a TRANSLATING gateway whose DESTINATION frame is E2E-protected (P2c).
+# The route decodes `Speed` from SrcFrame (0x100, UNprotected) on can0 and re-encodes
+# it into DstFrame (0x200) on can1; the destination producer RE-PROTECTS the composed
+# frame — a fresh E2E counter + CRC each cycle — so a downstream receiver's E2E check
+# passes on the re-framed value. Source frames stay unprotected (routing a protected
+# SOURCE needs source-verify, a later increment).
+#
+#   make -C examples/gw_e2e
+#   ./bin/app vcan0 vcan1
+
+[import]
+dbc = "bus.dbc"
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0
+
+[bus.can1]
+interface = "vcan1"
+fd        = false
+core      = 0
+
+[[route]]
+signal = "Speed"
+from = { bus = "can0", frame = "SrcFrame" }
+to   = { bus = "can1", frame = "DstFrame" }
+
+[[frame]]
+name = "DstFrame"
+bus  = "can1"
+e2e  = { data_id = 0x2A, crc_pos = 6, counter_pos = 7 }
+
+[[route]]
+signal = "Rpm"
+from = { bus = "can0", frame = "SrcFrame2" }
+to   = { bus = "can1", frame = "DstFrame2" }
+
+[[frame]]
+name  = "DstFrame2"
+bus   = "can1"
+secoc = { key = "10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f", data_id = 0x2B, fresh_pos = 1, mac_pos = 2, mac_len = 4 }

@@ -90,6 +90,8 @@ mut:
 	to_dlc     int
 	from_cyc   int // source frame GenMsgCycleTime (ms) — the freshness deadline base
 	to_cyc     int // destination frame GenMsgCycleTime (ms) — the re-emit cadence
+	to_bit     int // SIGNAL route: the routed signal's start bit in the destination frame
+	to_len     int // SIGNAL route: the routed signal's bit length in the destination frame
 }
 
 // TargetCfg is the parsed [target] block. kind selects the on-target emitter: 'baremetal' =
@@ -129,6 +131,19 @@ mut:
 	secoc_mac     map[string]int
 	secoc_maclen  map[string]int
 	secoc_key     map[string][]u8
+	frame_bus     map[string]string // snake(name) -> the [[frame]].bus it was authored on
+}
+
+// e2e_here / secoc_here: protection applies to a frame ONLY on the bus its [[frame]]
+// block declared. FrameCfg is name-keyed, so a route to the same frame NAME on a
+// DIFFERENT bus must NOT inherit this bus's profile (that would stamp the wrong
+// CRC/MAC onto a frame whose wire contract never asked for it).
+fn (f FrameCfg) e2e_here(frame string, bus string) bool {
+	return (f.e2e_on[frame] or { false }) && (f.frame_bus[frame] or { '' }) == bus
+}
+
+fn (f FrameCfg) secoc_here(frame string, bus string) bool {
+	return (f.secoc_on[frame] or { false }) && (f.frame_bus[frame] or { '' }) == bus
 }
 
 // parse_signals parses [[signal]] into the model: sig_of (with each signal's fields in
@@ -380,6 +395,10 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 					|| dst_sg.start_bit + dst_sg.length > routes[i].to_dlc * 8 {
 					panic('route: signal "${r.signal}" does not fit its frame payload (source/destination DLC too small for the SG_ position)')
 				}
+				// remember the destination signal's bit span so validation can reject a
+				// route whose value would land on the frame's E2E/SecOC protection bytes.
+				routes[i].to_bit = dst_sg.start_bit
+				routes[i].to_len = dst_sg.length
 				// P2a.2b TRANSCODES the physical value (differing factor/offset/width/bit-
 				// position) and RATE-ADAPTS (differing cadence) — but it routes a NUMBER, so
 				// it cannot convert UNITS or ENUM meanings, and the destination must be able
@@ -450,15 +469,78 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 				if snake(m2.name) != snake(r.to_frame) {
 					continue
 				}
+				// a protected frame's CRC/counter (E2E) or freshness/MAC (SecOC) bytes may be
+				// modeled as explicit SG_ in the DBC; the PRODUCER fills those (protect()), not
+				// a route, so exempt any SG_ whose every occupied bit lies in a protection span
+				// ON THIS BUS. owns() walks the signal's bits byte-order-aware (Motorola-safe).
+				prot := frame_reserved_bits(doc, r.to_frame, r.to_bus)
 				for sg in m2.signals {
-					if sg.name !in routed_sigs[key] {
-						panic('route: destination frame "${r.to_frame}" on "${r.to_bus}" has SG_ "${sg.name}" that no route fills — every signal in a routed frame must be routed (else it ships as zero)')
+					if sg.name in routed_sigs[key] {
+						continue
 					}
+					mut producer_filled := true
+					mut owns_any := false
+					for g in 0 .. m2.dlc * 8 {
+						if !sg.owns(g) {
+							continue
+						}
+						owns_any = true
+						mut in_prot := false
+						for pr in prot {
+							if g >= pr[0] && g < pr[1] {
+								in_prot = true
+								break
+							}
+						}
+						if !in_prot {
+							producer_filled = false
+							break
+						}
+					}
+					if owns_any && producer_filled {
+						continue
+					}
+					panic('route: destination frame "${r.to_frame}" on "${r.to_bus}" has SG_ "${sg.name}" that no route fills — every signal in a routed frame must be routed (else it ships as zero)')
 				}
 			}
 		}
 	}
 	return routes
+}
+
+// frame_reserved_bits returns the [lo, hi) bit ranges a frame's E2E/SecOC protection
+// occupies (CRC byte + counter byte, or freshness byte + MAC bytes), read from its
+// [[frame]] block. Used to exempt producer-filled protection SG_ from the routed-
+// signal completeness check.
+fn frame_reserved_bits(doc toml.Doc, frame string, bus string) [][]int {
+	mut out := [][]int{}
+	for fr in ecumodel.toml_arr(doc, 'frame') {
+		fm := fr.as_map()
+		if snake((fm['name'] or { toml.Any('') }).string()) != snake(frame) {
+			continue
+		}
+		// protection applies ONLY on the frame's authored bus (like e2e_here/secoc_here);
+		// a route on a different bus does NOT protect, so it must still fill those SG_.
+		if (fm['bus'] or { toml.Any('') }).string() != bus {
+			continue
+		}
+		if 'e2e' in fm {
+			em := (fm['e2e'] or { toml.Any('') }).as_map()
+			crc := int((em['crc_pos'] or { toml.Any(0) }).int())
+			ctr := int((em['counter_pos'] or { toml.Any(0) }).int())
+			out << [crc * 8, crc * 8 + 8]
+			out << [ctr * 8, ctr * 8 + 4] // only the LOW nibble is the counter; high nibble is free
+		}
+		if 'secoc' in fm {
+			sm := (fm['secoc'] or { toml.Any('') }).as_map()
+			fresh := int((sm['fresh_pos'] or { toml.Any(0) }).int())
+			mac := int((sm['mac_pos'] or { toml.Any(0) }).int())
+			maclen := int((sm['mac_len'] or { toml.Any(4) }).int())
+			out << [fresh * 8, fresh * 8 + 8]
+			out << [mac * 8, mac * 8 + maclen * 8]
+		}
+	}
+	return out
 }
 
 // val_tables_phys_equal compares two DBC VAL_ enum tables by PHYSICAL value: a route
@@ -720,8 +802,9 @@ fn parse_partitions(doc toml.Doc) PartMap {
 	return p
 }
 
-fn parse_frames(doc toml.Doc, eth string) FrameCfg {
+fn parse_frames(doc toml.Doc, eth string, buses map[string]bool) FrameCfg {
 	mut f := FrameCfg{}
+	mut seen_frames := map[string]string{} // snake(name) -> the bus it was authored on
 	for fr in ecumodel.toml_arr(doc, 'frame') {
 		fm := fr.as_map()
 		// eth frames live in m.eth_frames (parse_eth_frames), NOT in the CAN
@@ -731,6 +814,23 @@ fn parse_frames(doc toml.Doc, eth string) FrameCfg {
 			continue
 		}
 		fk := snake((fm['name'] or { toml.Any('') }).string())
+		fbus := (fm['bus'] or { toml.Any('') }).string()
+		// a [[frame]].bus must be a DECLARED [bus.*]: protection is applied only when the
+		// frame's bus equals the route/producer bus (e2e_here/secoc_here), so a misspelled
+		// bus would silently disable protection and put an unprotected PDU on the wire.
+		if fbus !in buses {
+			panic('frame "${fk}": bus "${fbus}" is not a declared [bus.*] — protection would be silently disabled')
+		}
+		// FrameCfg (tx mode / rx deadline / E2E / SecOC) is keyed by frame NAME only,
+		// so a second [[frame]] with the same name — e.g. the same DBC frame on another
+		// bus — would silently overwrite the first's config, and a route would stamp the
+		// wrong bus's protection onto a frame. Enforce name uniqueness so name == identity
+		// (true per-(bus,frame) keying arrives with per-bus DBCs on a gateway, P2c).
+		if prev := seen_frames[fk] {
+			panic('frame: "${fk}" is declared twice ([[frame]] on "${prev}" and "${fbus}") — frame names must be unique (per-bus DBCs on a gateway are P2c)')
+		}
+		seen_frames[fk] = fbus
+		f.frame_bus[fk] = fbus
 		if 'tx' in fm {
 			txm := (fm['tx'] or { toml.Any('') }).as_map()
 			f.tx_mode[fk] = (txm['mode'] or { toml.Any('cyclic') }).string()
@@ -745,6 +845,11 @@ fn parse_frames(doc toml.Doc, eth string) FrameCfg {
 			em := (fm['e2e'] or { toml.Any('') }).as_map()
 			f.e2e_on[fk] = true
 			f.e2e_id[fk] = int((em['data_id'] or { toml.Any(0) }).int())
+			// the protect/verify calls narrow data_id to u16 — reject a wider value here
+			// so distinct identities can't silently alias to their low 16 bits.
+			if f.e2e_id[fk] < 0 || f.e2e_id[fk] > 0xffff {
+				panic('frame "${fk}": e2e data_id 0x${f.e2e_id[fk].hex()} is out of range (0..0xFFFF)')
+			}
 			f.e2e_crc[fk] = int((em['crc_pos'] or { toml.Any(0) }).int())
 			f.e2e_ctr[fk] = int((em['counter_pos'] or { toml.Any(0) }).int())
 		}
@@ -752,10 +857,20 @@ fn parse_frames(doc toml.Doc, eth string) FrameCfg {
 			sm := (fm['secoc'] or { toml.Any('') }).as_map()
 			f.secoc_on[fk] = true
 			f.secoc_id[fk] = int((sm['data_id'] or { toml.Any(0) }).int())
+			if f.secoc_id[fk] < 0 || f.secoc_id[fk] > 0xffff {
+				panic('frame "${fk}": secoc data_id 0x${f.secoc_id[fk].hex()} is out of range (0..0xFFFF)')
+			}
 			f.secoc_fresh[fk] = int((sm['fresh_pos'] or { toml.Any(0) }).int())
 			f.secoc_mac[fk] = int((sm['mac_pos'] or { toml.Any(0) }).int())
 			f.secoc_maclen[fk] = int((sm['mac_len'] or { toml.Any(4) }).int())
 			f.secoc_key[fk] = parse_hex((sm['key'] or { toml.Any('') }).string())
+		}
+		// E2E and SecOC on ONE frame don't compose: whichever protect() runs second
+		// mutates bytes the first already covered (SecOC's freshness/MAC after the E2E
+		// CRC, or vice versa), so neither check can pass. Reject the combined profile
+		// until a defined nesting + matching verification scheme exists.
+		if (f.e2e_on[fk] or { false }) && (f.secoc_on[fk] or { false }) {
+			panic('frame "${fk}": both e2e and secoc are set — they do not compose (one protect overwrites the other\'s covered bytes); use one profile')
 		}
 	}
 	return f
@@ -904,7 +1019,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		eth:          eth
 		someip:       parse_someip(doc)
 		eth_frames:   parse_eth_frames(doc, eth, sig_of)
-		frames:       parse_frames(doc, eth)
+		frames:       parse_frames(doc, eth, buses)
 		routes:       parse_routes(doc, dbc)
 		isotp_conns:  parse_isotp(doc)
 		dids:         parse_dids(doc)
@@ -982,11 +1097,46 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 				panic('route: destination id 0x${r.to_id:x} on bus "${r.to_bus}" collides with the [telemetry] id — one writer per id')
 			}
 		}
-		// the route path neither verifies the source protection nor re-protects the
-		// destination — an E2E/SecOC frame must not be routed (dest-producer model).
-		if (m.frames.e2e_on[frof] or { false }) || (m.frames.secoc_on[frof] or { false })
-			|| (m.frames.e2e_on[tof] or { false }) || (m.frames.secoc_on[tof] or { false }) {
-			panic('route: signal "${r.signal}" rides an E2E/SecOC frame — the route forwarder does not verify the source or re-protect the destination (dest-producer model)')
+		// the route DECODES the source signal RAW (no E2E/SecOC verify), so a PROTECTED
+		// SOURCE frame can't be routed yet — its protection would go unchecked (source
+		// verify is a later increment). A protected DESTINATION frame IS allowed: the dest
+		// producer RE-PROTECTS the composed frame with a fresh CRC/MAC, exactly like a
+		// normal COM TX frame does (dest-producer model, REQ-TOPO-008).
+		if m.frames.e2e_here(frof, r.from_bus) || m.frames.secoc_here(frof, r.from_bus) {
+			panic('route: source frame "${r.from_frame}" is E2E/SecOC-protected — the route decodes it without verifying its protection (source verify is a later increment); protect the destination frame instead')
+		}
+		// the dest producer stamps protection AFTER composing the routed value, so a routed
+		// signal must not occupy any protection byte or it would be overwritten (corrupt
+		// data on the wire). Reject the overlap: the E2E CRC byte + counter low-nibble, or
+		// the SecOC freshness + MAC bytes, vs this route's dest signal bit span. (Bus-scoped:
+		// protection applies only on the frame's authored bus, so use e2e_here/secoc_here.)
+		// a routed signal is guaranteed LITTLE-ENDIAN (parse_routes rejects Motorola BEFORE
+		// setting to_bit/to_len), so [to_bit, to_bit+to_len) is exactly its occupied bit set.
+		if r.to_len > 0 {
+			slo, shi := r.to_bit, r.to_bit + r.to_len // [slo, shi) the routed signal's bits
+			mut clash := ''
+			if m.frames.e2e_here(tof, r.to_bus) {
+				cb := (m.frames.e2e_crc[tof] or { 0 }) * 8
+				nb := (m.frames.e2e_ctr[tof] or { 0 }) * 8
+				if slo < cb + 8 && shi > cb {
+					clash = 'the E2E CRC byte'
+				} else if slo < nb + 4 && shi > nb {
+					clash = 'the E2E counter nibble' // low nibble; high nibble is free
+				}
+			}
+			if m.frames.secoc_here(tof, r.to_bus) {
+				fb := (m.frames.secoc_fresh[tof] or { 0 }) * 8
+				mlo := (m.frames.secoc_mac[tof] or { 0 }) * 8
+				mhi := mlo + (m.frames.secoc_maclen[tof] or { 0 }) * 8
+				if slo < fb + 8 && shi > fb {
+					clash = 'the SecOC freshness byte'
+				} else if slo < mhi && shi > mlo {
+					clash = 'the SecOC MAC bytes'
+				}
+			}
+			if clash != '' {
+				panic('route: signal "${r.signal}" occupies ${clash} of destination frame "${r.to_frame}" — the producer would overwrite it when it re-protects; move the signal off the protection bytes')
+			}
 		}
 		// the routed producer composes + re-emits every tick; should_send handles cyclic
 		// (rate adaptation), but TRIGGERED needs a trigger() no route makes and EVENT change-
