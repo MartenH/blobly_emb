@@ -1097,13 +1097,30 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 				panic('route: destination id 0x${r.to_id:x} on bus "${r.to_bus}" collides with the [telemetry] id — one writer per id')
 			}
 		}
-		// the route DECODES the source signal RAW (no E2E/SecOC verify), so a PROTECTED
-		// SOURCE frame can't be routed yet — its protection would go unchecked (source
-		// verify is a later increment). A protected DESTINATION frame IS allowed: the dest
-		// producer RE-PROTECTS the composed frame with a fresh CRC/MAC, exactly like a
-		// normal COM TX frame does (dest-producer model, REQ-TOPO-008).
+		// a PROTECTED source frame is now VERIFIED (E2E check / SecOC verify) before the
+		// route decodes it — a bad/replayed/tampered frame leaves the value stale, so the
+		// freshness deadline suppresses the destination (REQ-TOPO-008). Two limits remain,
+		// each a later increment, because the verify runs ONCE per source frame and each
+		// verify advances the replay counter:
 		if m.frames.e2e_here(frof, r.from_bus) || m.frames.secoc_here(frof, r.from_bus) {
-			panic('route: source frame "${r.from_frame}" is E2E/SecOC-protected — the route decodes it without verifying its protection (source verify is a later increment); protect the destination frame instead')
+			// (a) a protected source may feed exactly ONE route — composing several routed
+			//     signals out of one protected frame would verify (and counter-advance) twice.
+			mut nroutes := 0
+			for r2 in m.routes {
+				if r2.signal != '' && snake(r2.from_frame) == frof && r2.from_bus == r.from_bus {
+					nroutes++
+				}
+			}
+			if nroutes > 1 {
+				panic('route: protected source frame "${r.from_frame}" feeds ${nroutes} routes — a protected source may feed only ONE (its verify runs once per frame); split it or use an unprotected source')
+			}
+			// (b) it must not ALSO be read by a normal COM signal on the same bus — both the
+			//     route and the COM rx path would verify the same frame and double-advance.
+			for _, si in m.sig_of {
+				if si.rx && si.dbc_msg == frof && si.bus == r.from_bus {
+					panic('route: protected source frame "${r.from_frame}" is also read by COM signal "${si.name}" — a protected frame consumed by both a route and a signal needs shared verify (a later increment)')
+				}
+			}
 		}
 		// the dest producer stamps protection AFTER composing the routed value, so a routed
 		// signal must not occupy any protection byte or it would be overwritten (corrupt
