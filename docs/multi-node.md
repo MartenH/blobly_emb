@@ -493,7 +493,11 @@ Cross-bus *sleep bridging* (wake on A wakes B) remains a later decision on top.
      downstream check passes on the re-framed value. [`examples/gw_e2e`](../examples/gw_e2e)
      routes into an E2E frame and a SecOC frame; `test/route_e2e.lua` recomputes
      the E2E CRC and the SecOC AES-CMAC on the wire. A protected **source** frame is
-     still rejected (the route decodes it raw — *source verify* is a later increment).
+     now VERIFIED before the route decodes it (E2E check / SecOC verify) — a bad or
+     tampered source leaves the value stale, so the freshness deadline suppresses the
+     destination. [`examples/gw_srcverify`](../examples/gw_srcverify) proves a valid
+     source routes and a CRC-tampered one never reaches the wire. (A protected source
+     may feed one route only, for now — the verify runs once per frame.)
      **Scope:** this is configured through a gateway's own `ecu.toml` `[[frame]]`
      block, so it applies to the **standalone-ECU** gateway. The `system.toml`
      **dissolution** cannot express it yet — a dissolved node partial rejects

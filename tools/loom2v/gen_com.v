@@ -608,12 +608,31 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			glue << '\t${rk}_v f64 // routed physical value'
 			glue << '\t${rk}_fresh u64 // rx timestamp (0 = never received)'
 		}
+		// source-route VERIFY state: a PROTECTED source frame is checked (E2E/SecOC)
+		// before its value is decoded. One RxState per distinct source frame; a frame
+		// also read by a normal signal (in rx_by_msg) is rejected in gen.v so the replay
+		// counter is never double-advanced, so it never needs a second state here.
+		mut src_verify_seen := map[string]bool{}
+		for r in sig_routes {
+			frof := snake(r.from_frame)
+			if frof in src_verify_seen || frof in rx_by_msg {
+				continue
+			}
+			if m.frames.e2e_here(frof, r.from_bus) {
+				src_verify_seen[frof] = true
+				glue << '\te2e_rx_${frof} e2e.RxState'
+			} else if m.frames.secoc_here(frof, r.from_bus) {
+				src_verify_seen[frof] = true
+				glue << '\tsecoc_key_${frof} secoc.Key'
+				glue << '\tsecoc_rx_${frof} secoc.RxState'
+			}
+		}
 		for r in dst_frames {
 			dk := '${snake(r.to_bus)}_${snake(r.to_frame)}'
 			tof := snake(r.to_frame) // m.frames is keyed by snake(frame name)
 			glue << '\trt_tx_${dk} com.TxState'
 			// a PROTECTED destination frame: the producer re-protects the composed frame
-			// with a fresh CRC/MAC before send (source frames are unprotected — guarded).
+			// with a fresh CRC/MAC before send.
 			if m.frames.e2e_here(tof, r.to_bus) {
 				glue << '\te2e_tx_${dk} e2e.TxState'
 			}
@@ -662,11 +681,35 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 					// SIGNAL route (P2a.2b): DECODE the routed signal from the source frame to
 					// its physical value and STORE it (with a freshness stamp). The producer
 					// below composes + re-emits the destination frame per its own cadence. Require
-					// rx.len == source DLC so the decode never reads stale bytes.
+					// rx.len == source DLC so the decode never reads stale bytes. If the SOURCE
+					// frame is E2E/SecOC-protected, VERIFY it first — decode only on a usable
+					// result, so a bad/replayed/tampered frame leaves the value stale (the
+					// freshness deadline then suppresses the destination). gen.v guarantees a
+					// protected source is routed by exactly one route (one verify per frame).
 					rk := route_field(r)
+					frof := snake(r.from_frame)
+					s_e2e := m.frames.e2e_here(frof, r.from_bus)
+					s_secoc := m.frames.secoc_here(frof, r.from_bus)
 					glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} {'
-					glue << '\t\t\tst.${rk}_v = ${snake(r.from_frame)}_${snake(r.signal)}_phys(rx.data)'
-					glue << '\t\t\tst.${rk}_fresh = now'
+					mut ind := '\t\t\t'
+					if s_secoc {
+						glue << '\t\t\tif st.secoc_rx_${frof}.verify(&st.secoc_key_${frof}, &rx.data[0], int(${r.from_dlc}), u16(0x${(m.frames.secoc_id[frof] or {
+							0
+						}).hex()}), ${m.frames.secoc_fresh[frof] or { 0 }}, ${m.frames.secoc_mac[frof] or { 0 }}, ${m.frames.secoc_maclen[frof] or {
+							0
+						}}).usable() {'
+						ind = '\t\t\t\t'
+					} else if s_e2e {
+						glue << '\t\t\tif st.e2e_rx_${frof}.check(&rx.data[0], int(${r.from_dlc}), u16(0x${(m.frames.e2e_id[frof] or {
+							0
+						}).hex()}), ${m.frames.e2e_crc[frof] or { 0 }}, ${m.frames.e2e_ctr[frof] or { 0 }}).usable() {'
+						ind = '\t\t\t\t'
+					}
+					glue << '${ind}st.${rk}_v = ${frof}_${snake(r.signal)}_phys(rx.data)'
+					glue << '${ind}st.${rk}_fresh = now'
+					if s_e2e || s_secoc {
+						glue << '\t\t\t}'
+					}
 					glue << '\t\t}'
 					continue
 				}
@@ -1024,6 +1067,20 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			}
 			if m.frames.secoc_here(msg, bname) {
 				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(m.frames.secoc_key[msg] or {
+					[]u8{}
+				})})'
+			}
+		}
+		// SecOC key for a protected source-route frame (verified before decode).
+		mut src_key_seen := map[string]bool{}
+		for r in sig_routes {
+			frof := snake(r.from_frame)
+			if frof in src_key_seen || frof in rx_by_msg {
+				continue
+			}
+			if m.frames.secoc_here(frof, r.from_bus) {
+				src_key_seen[frof] = true
+				glue << '\tst.secoc_key_${frof} = secoc.new_key(${byte16_lit(m.frames.secoc_key[frof] or {
 					[]u8{}
 				})})'
 			}

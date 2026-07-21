@@ -186,7 +186,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-005 | QM | analysis | verified | gen_test.v (pass) |
 | REQ-TOPO-006 | QM | test | covered | route_signal.lua (pending), route_dissolution.lua (pending), gen_test.v (pass), model_test.v (pass) |
 | REQ-TOPO-007 | QM | test | covered | route_firewall.lua (pending), model_test.v (pass) |
-| REQ-TOPO-008 | QM | test | covered | route_signal.lua (pending), route_dissolution.lua (pending), route_e2e.lua (pending) |
+| REQ-TOPO-008 | QM | test | covered | route_signal.lua (pending), route_dissolution.lua (pending), route_e2e.lua (pending), route_srcverify.lua (pending) |
 | REQ-TOPO-009 | QM | test | covered | route_firewall.lua (pending) |
 | REQ-TOPO-010 | QM | analysis | covered | route_firewall.lua (pending) |
 | REQ-TOPO-011 | QM | test | verified | model_test.v (pass) |

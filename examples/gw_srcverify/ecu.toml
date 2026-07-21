@@ -1,0 +1,31 @@
+# gw_srcverify — a translating gateway that VERIFIES a protected SOURCE frame (P2c).
+# SrcFrame (0x100) is E2E-protected; the route decodes `Speed` only if the source's
+# E2E check passes (CRC valid), then re-encodes it into an UNprotected DstFrame (0x200).
+# A tampered/corrupt source frame is rejected — its value never reaches the wire, and
+# once the source goes stale the destination is suppressed (freshness deadline).
+#
+#   make -C examples/gw_srcverify
+#   ./examples/gw_srcverify/bin/app vcan0 vcan1
+
+[import]
+dbc = "bus.dbc"
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0
+
+[bus.can1]
+interface = "vcan1"
+fd        = false
+core      = 0
+
+[[route]]
+signal = "Speed"
+from = { bus = "can0", frame = "SrcFrame" }
+to   = { bus = "can1", frame = "DstFrame" }
+
+[[frame]]
+name = "SrcFrame"
+bus  = "can0"
+e2e  = { data_id = 0x33, crc_pos = 6, counter_pos = 7 }
