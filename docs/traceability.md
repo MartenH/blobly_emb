@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 182 | 92 | 9 | 81 | 0 |
+| 182 | 91 | 13 | 78 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -109,7 +109,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-013 | QM | test | verified | e2e_test.v (pass) |
 | REQ-NET-014 | QM | test | uncovered | — |
 | REQ-NET-015 | QM | test | verified | e2e_test.v (pass) |
-| REQ-NET-016 | QM | test | verified | h735-someip-hwtest (pass) |
+| REQ-NET-016 | QM | test | covered | h735-someip-hwtest (pending) |
 | REQ-NET-017 | QM | test | verified | e2e_test.v (pass) |
 | REQ-NET-018 | QM | test | uncovered | — |
 | REQ-NM-001 | QM | test | verified | nm_test.v (pass) |
@@ -184,11 +184,11 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-003 | QM | test | uncovered | — |
 | REQ-TOPO-004 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-005 | QM | analysis | verified | gen_test.v (pass) |
-| REQ-TOPO-006 | QM | test | covered | route_signal.lua (pending), gen_test.v (pass), model_test.v (pass) |
-| REQ-TOPO-007 | QM | test | uncovered | — |
-| REQ-TOPO-008 | QM | test | covered | route_signal.lua (pending) |
-| REQ-TOPO-009 | QM | test | uncovered | — |
-| REQ-TOPO-010 | QM | analysis | uncovered | — |
+| REQ-TOPO-006 | QM | test | covered | route_signal.lua (pending), route_dissolution.lua (pending), gen_test.v (pass), model_test.v (pass) |
+| REQ-TOPO-007 | QM | test | covered | route_firewall.lua (pending), model_test.v (pass) |
+| REQ-TOPO-008 | QM | test | covered | route_signal.lua (pending), route_dissolution.lua (pending) |
+| REQ-TOPO-009 | QM | test | covered | route_firewall.lua (pending) |
+| REQ-TOPO-010 | QM | analysis | covered | route_firewall.lua (pending) |
 | REQ-TOPO-011 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-012 | QM | test | verified | model_test.v (pass) |
 | REQ-TP-001 | QM | test | uncovered | — |
@@ -296,7 +296,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-013 | | | | | | | | | | | | | | ✓ | | |
 | REQ-NET-014 | | | | | | | | | | | | | | | | |
 | REQ-NET-015 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NET-016 | | | | | | | ✓ | | | | | | | | | |
+| REQ-NET-016 | | | | | | | · | | | | | | | | | |
 | REQ-NET-017 | | | | | | | | | | | | | | ✓ | | |
 | REQ-NET-018 | | | | | | | | | | | | | | | | |
 | REQ-NM-001 | | | | | | | | | | | | | | ✓ | | |
@@ -372,10 +372,10 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-004 | | | | | | | | | | | | | | ✓ | | |
 | REQ-TOPO-005 | | | | | | | | | | | | | | ✓ | | |
 | REQ-TOPO-006 | | | | | | | | | | | | | · | ✓ | | |
-| REQ-TOPO-007 | | | | | | | | | | | | | | | | |
+| REQ-TOPO-007 | | | | | | | | | | | | | · | ✓ | | |
 | REQ-TOPO-008 | | | | | | | | | | | | | · | | | |
-| REQ-TOPO-009 | | | | | | | | | | | | | | | | |
-| REQ-TOPO-010 | | | | | | | | | | | | | | | | |
+| REQ-TOPO-009 | | | | | | | | | | | | | · | | | |
+| REQ-TOPO-010 | | | | | | | | | | | | | · | | | |
 | REQ-TOPO-011 | | | | | | | | | | | | | | ✓ | | |
 | REQ-TOPO-012 | | | | | | | | | | | | | | ✓ | | |
 | REQ-TP-001 | | | | | | | | | | | | | | | | |

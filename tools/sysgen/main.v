@@ -276,7 +276,8 @@ fn generate_gateway_node(sys sysmodel.System, node sysmodel.Node, authored strin
 			continue
 		}
 		if r.signal == '' {
-			continue // frame routes are P2b — not lowered yet
+			b << lower_frame_route(sys, r)!
+			continue
 		}
 		b << lower_signal_route(sys, r)!
 	}
@@ -307,6 +308,25 @@ fn lower_signal_route(sys sysmodel.System, r sysmodel.Route) ![]string {
 	out << 'signal = "${r.signal}"'
 	out << 'from = { bus = "${from.interface}", frame = "${src_frame}" }'
 	out << 'to   = { bus = "${to.interface}", frame = "${dst_frame}" }'
+	out << ''
+	return out
+}
+
+// lower_frame_route resolves a raw FRAME [[route]] to concrete interfaces. The PDU
+// is forwarded unchanged, so it emits the raw shape loom2v parses (from = { bus,
+// frame }, to = { bus }) with no `signal` and no id remap — the full-contract
+// compare (syscheck REQ-TOPO-007) has already proven both buses define the frame
+// identically, so the source id is also valid on the destination bus.
+fn lower_frame_route(sys sysmodel.System, r sysmodel.Route) ![]string {
+	from := sys.bus_by_name(r.from) or { return error('route: bus "${r.from}" not declared') }
+	to := sys.bus_by_name(r.to) or { return error('route: bus "${r.to}" not declared') }
+	if r.frame == '' {
+		return error('frame route: empty frame')
+	}
+	mut out := []string{}
+	out << '[[route]] # GENERATED — raw frame forward, contract-verified (REQ-TOPO-007)'
+	out << 'from = { bus = "${from.interface}", frame = "${r.frame}" }'
+	out << 'to   = { bus = "${to.interface}" }'
 	out << ''
 	return out
 }
