@@ -1,4 +1,4 @@
-# cantester_v project: attach to vcan0 where the blobly `minimal` example runs.
+# blobly_net project: attach to vcan0 where the blobly `minimal` example runs.
 project:
   name: blobly minimal (vcan0)
   version: 1

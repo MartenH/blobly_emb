@@ -1,4 +1,4 @@
-# cantester project: CAN1 = vcan0 (drive VehicleSpeed in), CAN2 = vcan1 (read lamp out).
+# blobly_net project: CAN1 = vcan0 (drive VehicleSpeed in), CAN2 = vcan1 (read lamp out).
 project:
   name: blobly gateway (vcan0 + vcan1)
   version: 1
