@@ -66,3 +66,7 @@ Enforced in CI: `make lint`.
 Research / learning stage. Working: FB application model + config codegen, lock-free
 multicore IOC, CAN/CAN-FD + DBC, Network Management, ThreadX AMP backend.
 Roadmap: NvM (memory stack), diagnostics (ISO-TP/UDS), real-silicon bring-up.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
