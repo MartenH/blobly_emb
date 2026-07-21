@@ -71,9 +71,12 @@ fn main() {
 				if prev := id_owner[id] {
 					// a SHARED frame (P2b frame route): the same CAN id may legitimately
 					// appear in more than one bus DBC when a gateway raw-forwards it — but
-					// only if the definition is IDENTICAL on every bus (the full-contract
-					// compare in syscheck enforces that upstream). Dedup the identical copy;
-					// reject a genuine conflict (same id, different frame/layout).
+					// only if the definition is IDENTICAL on every bus. norm_block compares
+					// the BO_/SG_ WIRE layout (id, dlc, every signal's bits/scaling/sign);
+					// the VAL_ tables + GenMsgCycleTime of a ROUTED shared frame are checked
+					// by sysgen/syscheck's check_frame_route_contract, which ALWAYS runs
+					// before this merge in the dissolution. Dedup an identical copy; reject a
+					// genuine wire-layout conflict (same id, different frame/layout).
 					if norm == (id_block[id] or { '' }) {
 						i = j
 						continue

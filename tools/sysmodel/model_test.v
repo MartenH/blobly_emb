@@ -1495,6 +1495,38 @@ fn test_two_raw_routes_same_gateway_collide() {
 		true)).str()
 }
 
+// REQ-TOPO-007: a sub-tick cadence (< 10 ms comm-bridge tick) can't be preserved.
+fn test_frame_route_subtick_cadence_rejected() {
+	body := fn (recv string) string {
+		return 'VERSION ""\nBU_: gw ${recv}\nBO_ 1024 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" ${recv}\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 1024 5;\n'
+	}
+	dir, s := frame_route_system('frtick', body('gw'), body('cons'))
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('below the 10 ms')), errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-007: a multiplexed frame is not raw-forwarded (candb can't model SG_MUL_VAL_).
+fn test_frame_route_multiplexed_rejected() {
+	mux := 'VERSION ""\nBU_: prod gw\nBO_ 1024 DiagFrame: 8 prod\n SG_ Sel M : 0|8@1+ (1,0) [0|255] "" gw\n SG_ A m0 : 8|8@1+ (1,0) [0|255] "" gw\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 1024 100;\n'
+	dir, s := frame_route_system('frmux', mux, mux.replace('prod', 'x').replace('"" gw', '"" cons'))
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('multiplexed')), errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-007: a duplicate SG_ name makes the contract comparison ambiguous.
+fn test_frame_route_duplicate_signal_rejected() {
+	dup := 'VERSION ""\nBU_: prod gw\nBO_ 1024 DiagFrame: 8 prod\n SG_ Code : 0|16@1+ (1,0) [0|65535] "" gw\n SG_ Code : 16|16@1+ (1,0) [0|65535] "" gw\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 1024 100;\n'
+	dir, s := frame_route_system('frdupsig', dup, dup.replace('prod', 'x').replace('"" gw', '"" cons'))
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('more than once')), errs(check_route_dbc(s)).str()
+}
+
 // REQ-TOPO-007: raw forwarding keeps the SOURCE rate, so the two buses must agree on
 // the frame cadence — else the destination's rx-deadline monitor trips.
 fn test_frame_route_cadence_mismatch_rejected() {

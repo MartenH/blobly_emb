@@ -56,7 +56,9 @@ fn io_can0_10ms(ctx voidptr) {
 	for st.chan.recv(mut rx) {
 		if rx.id == u32(0x300) && rx.len == 8 {
 			mut fwd := rx
-			if !(st.route_can1.tx_ready() && st.route_can1.send(fwd)) {
+			if st.route_can1.tx_ready() && st.route_can1.send(fwd) {
+				st.rr_can1_300_set = false // newer PDU went out; drop any stale held one (freshest-wins)
+			} else {
 				st.rr_can1_300 = fwd
 				st.rr_can1_300_set = true
 			}

@@ -142,8 +142,16 @@ fn sig_wire_diff(a candb.Signal, b candb.Signal) string {
 		|| a.multiplexor_value != b.multiplexor_value {
 		return 'multiplexing differs'
 	}
-	if !route_val_phys_equal(a, b) {
-		return 'VAL_ (value table) differs'
+	// a RAW forward keeps the exact bits and (checked above) identical factor/offset,
+	// so compare VAL_ enum tables by EXACT raw key — not through f64 (route_val_phys_
+	// equal), whose >2^53 rounding could let two large raw keys collapse and swap labels.
+	if a.values.len != b.values.len {
+		return 'VAL_ (value table) size differs'
+	}
+	for k, va in a.values {
+		if (b.values[k] or { '' }) != va {
+			return 'VAL_ (value table) differs at raw ${k}'
+		}
 	}
 	return ''
 }
@@ -188,9 +196,12 @@ fn check_frame_route_contract(s System, r Route) []Issue {
 		}]
 	}
 	pre := 'frame route on "${r.gateway}" ("${r.frame}", ${r.from} -> ${r.to}):'
-	// format: P2b forwards classic, standard-id frames only. The driver Frame carries
-	// neither an fd nor an extended-id flag yet (P2c), so reject those here rather
-	// than silently forwarding them as classic/standard.
+	// format: P2b forwards classic, standard-id, DATA frames only. The driver Frame
+	// carries no fd, extended-id, or RTR flag yet — recv() even masks CAN_RTR_FLAG, so
+	// an RTR request at a routed id/dlc is indistinguishable from data at this layer and
+	// the FDCAN backend drops RTR outright. All three (fd / ext-id / RTR) are the same
+	// Frame-format extension, deferred to P2c; here we reject what we CAN see (fd via the
+	// bus mode, ext-id via the DBC). A routed frame is expected to be a periodic data PDU.
 	if sm.ext || dm.ext {
 		issues << Issue{
 			severity: .error
@@ -252,6 +263,15 @@ fn check_frame_route_contract(s System, r Route) []Issue {
 			req:      'REQ-TOPO-007'
 			msg:      '${pre} cadence differs (${sm.cycle_ms} ms vs ${dm.cycle_ms} ms) — a raw forward keeps the source rate; a differing cadence needs a signal route'
 		}
+	} else if sm.cycle_ms < 10 {
+		// the comm bridge ticks every 10 ms; a sub-tick cadence can't be honored (the
+		// forwarder would burst-drain several source periods) — mirror the signal-route
+		// guard (dbc.v cadence-below-tick check).
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-007'
+			msg:      '${pre} cadence ${sm.cycle_ms} ms is below the 10 ms comm-bridge tick — a raw forward cannot preserve a sub-tick rate'
+		}
 	}
 	// the gateway becomes the on-wire transmitter of the frame on `to`. If the dest
 	// DBC names a DIFFERENT BO_ transmitter, that node also sends the PDU — reject the
@@ -277,6 +297,38 @@ fn check_frame_route_contract(s System, r Route) []Issue {
 			severity: .error
 			req:      'REQ-TOPO-007'
 			msg:      '${pre} DLC differs (${sm.dlc} vs ${dm.dlc}) — the payload layout cannot match'
+		}
+	}
+	// MULTIPLEXING is unsupported for raw forwarding: candb does not parse SG_MUL_VAL_
+	// (extended-mux selector ranges), so two frames could match on the basic mux fields
+	// yet activate a signal for different selectors. Reject any multiplexed frame — its
+	// presence semantics can't be fully verified (a signal route decodes explicitly).
+	for m in [sm, dm] {
+		for sg in m.signals {
+			if sg.is_multiplexor || sg.is_multiplexed {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-007'
+					msg:      '${pre} frame is multiplexed (signal "${sg.name}") — multiplexing is not raw-forwarded (candb does not model SG_MUL_VAL_); use a signal route'
+				}
+				break
+			}
+		}
+	}
+	// DUPLICATE SG_ names would make the name-keyed comparison below match one-to-many
+	// (a source signal could match the wrong destination occurrence). candb accepts them,
+	// so reject a frame with a repeated signal name rather than compare ambiguously.
+	for m in [sm, dm] {
+		mut seen := map[string]bool{}
+		for sg in m.signals {
+			if sg.name in seen {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-007'
+					msg:      '${pre} frame declares signal "${sg.name}" more than once — an ambiguous contract; a raw route needs uniquely-named signals'
+				}
+			}
+			seen[sg.name] = true
 		}
 	}
 	// every signal must be present on both sides with an identical wire contract.

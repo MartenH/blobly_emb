@@ -674,7 +674,9 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				if r.to_id != r.from_id {
 					glue << '\t\t\tfwd.id = u32(0x${r.to_id.hex()})'
 				}
-				glue << '\t\t\tif !(${dch}.tx_ready() && ${dch}.send(fwd)) {'
+				glue << '\t\t\tif ${dch}.tx_ready() && ${dch}.send(fwd) {'
+				glue << '\t\t\t\tst.${rf}_set = false // newer PDU went out; drop any stale held one (freshest-wins)'
+				glue << '\t\t\t} else {'
 				glue << '\t\t\t\tst.${rf} = fwd'
 				glue << '\t\t\t\tst.${rf}_set = true'
 				glue << '\t\t\t}'
