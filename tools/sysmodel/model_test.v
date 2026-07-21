@@ -1406,6 +1406,43 @@ fn test_frame_route_extended_id_rejected() {
 	assert errs(check_route_dbc(s)).any(it.contains('extended-id')), errs(check_route_dbc(s)).str()
 }
 
+// REQ-TOPO-007: an unflagged id above the 11-bit standard range can't be raw-forwarded
+// (the standard-id send omits CAN_EFF_FLAG). 2048 = 0x800, one past the standard range.
+fn test_frame_route_id_above_standard_rejected() {
+	compute := 'VERSION ""\nBU_: prod gw\nBO_ 2048 DiagFrame: 8 prod\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" gw\n'
+	edge := 'VERSION ""\nBU_: gw cons\nBO_ 2048 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\n'
+	dir, s := frame_route_system('frbig', compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('standard range')), errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-007: the two buses must share the fd mode — Channel.send picks classic vs
+// FD from the destination, and Frame carries no received-format flag, so a mixed pair
+// would silently reframe the PDU.
+fn test_frame_route_fd_mismatch_rejected() {
+	edge := 'VERSION ""\nBU_: gw cons\nBO_ 1024 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\n'
+	dir, mut s := frame_route_system('frfd', diag_compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	s.buses[1].fd = true // edge is FD, compute is classic
+	assert errs(check_route_dbc(s)).any(it.contains('fd mode')), errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-007: raw forwarding keeps the SOURCE rate, so the two buses must agree on
+// the frame cadence — else the destination's rx-deadline monitor trips.
+fn test_frame_route_cadence_mismatch_rejected() {
+	compute := 'VERSION ""\nBU_: prod gw\nBO_ 1024 DiagFrame: 8 prod\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" gw\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 1024 100;\n'
+	edge := 'VERSION ""\nBU_: gw cons\nBO_ 1024 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 1024 200;\n'
+	dir, s := frame_route_system('frcyc', compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('cadence differs')), errs(check_route_dbc(s)).str()
+}
+
 // REQ-TOPO-002: a telemetry id equal to ANOTHER node's alive id collides on the
 // wire — checked against every active NM participant, not just the sender's range.
 fn test_telemetry_id_aliases_other_node_alive() {

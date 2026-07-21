@@ -1390,16 +1390,21 @@ fn check_routes(s System, dissolved bool) []Issue {
 		// `to` would collide with the forward.
 		if r.frame != '' && r.to != '' {
 			if to := s.bus_by_name(r.to) {
-				for ss in s.signals {
-					if ss.bus != r.to {
-						continue
-					}
-					of := dbc_frame_of(s, to, ss.name) or { continue }
-					if of == r.frame {
-						issues << Issue{
-							severity: .error
-							req:      'REQ-TOPO-012'
-							msg:      'frame route on "${r.gateway}": forwarded frame "${r.frame}" onto bus "${r.to}" is also transmitted by node "${ss.producer}" (signal "${ss.name}") — one on-wire writer per frame'
+				rident := dbc_frame_ident(s, to, r.frame) or { '' }
+				if rident != '' {
+					for ss in s.signals {
+						if ss.bus != r.to {
+							continue
+						}
+						// compare ON-WIRE identity (id:ext), not the message name — a
+						// producer whose frame shares the routed frame's CAN id collides.
+						sident := dbc_sig_frame_ident(s, to, ss.name) or { continue }
+						if sident == rident {
+							issues << Issue{
+								severity: .error
+								req:      'REQ-TOPO-012'
+								msg:      'frame route on "${r.gateway}": forwarded frame "${r.frame}" onto bus "${r.to}" shares its CAN id with a frame node "${ss.producer}" already transmits (signal "${ss.name}") — one on-wire writer per frame'
+							}
 						}
 					}
 				}
@@ -1432,11 +1437,13 @@ fn check_routes(s System, dissolved bool) []Issue {
 		to := s.bus_by_name(r.to) or { continue }
 		// the destination frame a route makes the gateway transmit: for a frame route it
 		// IS the forwarded frame; for a signal route it is the DBC message that carries
-		// the routed signal on `to`. Two DIFFERENT gateways onto one (frame,bus) collide.
+		// the routed signal on `to`. Two DIFFERENT gateways onto one frame collide — key
+		// the owner by the frame's ON-WIRE identity (id:ext), not its name.
 		dst_frame := if r.frame != '' { r.frame } else { dbc_frame_of(s, to, r.signal) or {
 			continue
 		} }
-		fkey := '${dst_frame}|${r.to}'
+		ident := dbc_frame_ident(s, to, dst_frame) or { continue }
+		fkey := '${ident}|${r.to}'
 		if owner := frame_owner[fkey] {
 			if owner != r.gateway {
 				issues << Issue{
@@ -1581,6 +1588,30 @@ fn dbc_frame_of(s System, bus Bus, sig string) ?string {
 		}
 	}
 	return hit
+}
+
+// dbc_frame_ident returns a stable "id:ext" key for the DBC message named `frame`
+// on `bus` — its ON-WIRE identity. Ownership must compare CAN identity, not the
+// message NAME: candb accepts two differently-named BO_ at one CAN id, so a name
+// compare would miss a genuine two-writer collision on that id.
+fn dbc_frame_ident(s System, bus Bus, frame string) ?string {
+	if bus.dbc == '' {
+		return none
+	}
+	path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(s.dir, bus.dbc) }
+	db := candb.load_dbc_file(path) or { return none }
+	for m in db.messages {
+		if m.name == frame {
+			return '${m.id}:${m.ext}'
+		}
+	}
+	return none
+}
+
+// dbc_sig_frame_ident resolves the frame carrying `sig` on `bus` to its "id:ext".
+fn dbc_sig_frame_ident(s System, bus Bus, sig string) ?string {
+	fr := dbc_frame_of(s, bus, sig)?
+	return dbc_frame_ident(s, bus, fr)
 }
 
 // signal_consumed_on: does a node on `bus` consume `sig`? Dissolved = an FB read;

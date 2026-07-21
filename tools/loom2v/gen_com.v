@@ -618,6 +618,7 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				rf := raw_field(r)
 				glue << '\t${rf} can.Frame // pending forward (tx-ready retry)'
 				glue << '\t${rf}_set bool'
+				glue << '\t${rf}_drops u32 // held PDUs superseded under backpressure (observable, not silent)'
 			}
 		}
 		glue << '}'
@@ -653,13 +654,18 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 					glue << '\t\t}'
 					continue
 				}
-				// raw-PDU gateway: forward the frame to another bus, unchanged
-				// (optionally remapping the id), without decoding it to signals. The send
-				// is tx-ready gated — if the destination TX can't accept it now (or a slot
-				// is still pending), hold the PDU and retry next tick, never drop it silently.
+				// raw-PDU gateway: forward the frame to another bus, unchanged (optionally
+				// remapping the id), without decoding it to signals. Require rx.len == the
+				// contracted DLC (like the signal-route + COM rx paths) so a short/oversized
+				// frame at the routed id is NOT forwarded with stale trailing bytes. The send
+				// is tx-ready gated — if the destination TX can't accept it now (or a PDU is
+				// already held), keep the FRESHEST PDU and retry next tick. A raw route carries
+				// a cyclic frame (the contract requires matching cadence), so freshest-wins is
+				// the right policy under backpressure; a superseded PDU is COUNTED (${raw_field(r)}_drops),
+				// never silently lost, and honours REQ-TOPO-010's no-parallel-queue rule.
 				rf := raw_field(r)
 				dch := 'st.route_${snake(r.to_bus)}'
-				glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) {'
+				glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} {'
 				glue << '\t\t\tmut fwd := rx'
 				if r.to_id != r.from_id {
 					glue << '\t\t\tfwd.id = u32(0x${r.to_id.hex()})'
@@ -667,6 +673,9 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				glue << '\t\t\tif !st.${rf}_set && ${dch}.tx_ready() && ${dch}.send(fwd) {'
 				glue << '\t\t\t\t// forwarded'
 				glue << '\t\t\t} else {'
+				glue << '\t\t\t\tif st.${rf}_set {'
+				glue << '\t\t\t\t\tst.${rf}_drops++ // superseding a held PDU (backpressure)'
+				glue << '\t\t\t\t}'
 				glue << '\t\t\t\tst.${rf} = fwd'
 				glue << '\t\t\t\tst.${rf}_set = true'
 				glue << '\t\t\t}'

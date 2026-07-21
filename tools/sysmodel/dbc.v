@@ -195,11 +195,47 @@ fn check_frame_route_contract(s System, r Route) []Issue {
 			msg:      '${pre} extended-id frames are not raw-forwarded yet (P2c) — the driver frame path does not carry the extended-id flag'
 		}
 	}
+	// a DBC id above the 11-bit standard range with NO extended flag is malformed: the
+	// standard-id forwarder emits it without CAN_EFF_FLAG and SocketCAN rejects it.
+	// Mirror loom2v's signal-route guard and reject it even when `ext` is false.
+	if sm.id > 0x7ff || dm.id > 0x7ff {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-007'
+			msg:      '${pre} frame id is above the 11-bit standard range (0x${sm.id.hex()}/0x${dm.id.hex()}) — only standard ids are raw-forwarded (ext-id is P2c)'
+		}
+	}
 	if sm.dlc > 8 || dm.dlc > 8 {
 		issues << Issue{
 			severity: .error
 			req:      'REQ-TOPO-007'
 			msg:      '${pre} CAN-FD (dlc > 8) frames are not raw-forwarded yet (P2c) — the driver frame path does not carry the fd flag'
+		}
+	}
+	// FD MODE must match: driver.can.Channel.send picks classic vs FD from the
+	// DESTINATION channel, and Frame carries no received-format flag, so forwarding a
+	// classic PDU onto an FD bus (or vice versa) silently reframes it. Require the
+	// buses agree; a mixed pair must translate (P2c carries the format through).
+	if from.fd != to.fd {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-007'
+			msg:      '${pre} source bus fd=${from.fd} but destination bus fd=${to.fd} — a raw forward cannot change the frame format; both buses must share the fd mode'
+		}
+	}
+	// PROTECTION (E2E/SecOC) is authored per-frame in a node\'s ecu.toml [[frame]]
+	// block, which a frame route never loads — so it is NOT expressible on a system
+	// frame route, and a raw forward carries no protection re-check. A PROTECTED frame
+	// must therefore be a SIGNAL route (its destination producer re-protects) or wait
+	// for P2c\'s E2E-reprotect. Nothing to compare here because the input carries none.
+	// cadence: a raw forward re-emits at the SOURCE rate (on receipt), so the two
+	// buses must agree on the frame's cycle time — else the destination's rx-deadline
+	// monitor trips (raw forwarding cannot rate-adapt; that is a signal route).
+	if sm.cycle_ms != dm.cycle_ms {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-007'
+			msg:      '${pre} cadence differs (${sm.cycle_ms} ms vs ${dm.cycle_ms} ms) — a raw forward keeps the source rate; a differing cadence needs a signal route'
 		}
 	}
 	// wire shape must AGREE across the two buses (id, dlc), else the PDU means

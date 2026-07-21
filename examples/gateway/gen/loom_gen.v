@@ -44,6 +44,7 @@ mut:
 	route_can1 can.Channel // gateway: forward to can1
 	rr_can1_300 can.Frame // pending forward (tx-ready retry)
 	rr_can1_300_set bool
+	rr_can1_300_drops u32 // held PDUs superseded under backpressure (observable, not silent)
 }
 
 fn io_can0_10ms(ctx voidptr) {
@@ -54,11 +55,14 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
-		if rx.id == u32(0x300) {
+		if rx.id == u32(0x300) && rx.len == 8 {
 			mut fwd := rx
 			if !st.rr_can1_300_set && st.route_can1.tx_ready() && st.route_can1.send(fwd) {
 				// forwarded
 			} else {
+				if st.rr_can1_300_set {
+					st.rr_can1_300_drops++ // superseding a held PDU (backpressure)
+				}
 				st.rr_can1_300 = fwd
 				st.rr_can1_300_set = true
 			}
