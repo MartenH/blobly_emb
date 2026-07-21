@@ -1,0 +1,19 @@
+# blobly_net project: CAN1 = vcan0 (inject SrcFrame), CAN2 = vcan1 (read DstFrame).
+project:
+  name: blobly gw_e2e (vcan0 + vcan1)
+  version: 1
+channels:
+  - name: CAN1
+    type: can
+    interface: vcan0
+    bitrate: 500000
+    mode: monitor
+    databases:
+      - bus.dbc
+  - name: CAN2
+    type: can
+    interface: vcan1
+    bitrate: 500000
+    mode: monitor
+    databases:
+      - bus.dbc
