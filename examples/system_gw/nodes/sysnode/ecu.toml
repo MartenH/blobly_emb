@@ -3,13 +3,3 @@
 # re-encode per edge.dbc) is generated from ../../system.toml. Its two buses and
 # the lowered [[route]] come from the system file; here is only its own structure.
 # NOTE: no inline comments inside [[...]] tables (vlang/v#27684).
-
-[target]
-kind    = "threadx"
-tick_ms = 1
-
-[telemetry]
-enabled   = true
-bus       = "can0"
-id        = 0x7E0
-period_ms = 500

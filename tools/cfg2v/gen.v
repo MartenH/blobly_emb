@@ -89,6 +89,12 @@ fn main() {
 			b << ''
 			b << '// Network Management (per network)'
 			for net, cfg in nm {
+				// only real module [nm.<net>] SUB-TABLES are ours; the scalar-key [nm] form
+				// (node/enabled/alive/… from the multi-node dissolution) is loom2v's. A scalar
+				// value is not a map, so skip it (as_map() would wrap it into a 1-elem map).
+				if cfg !is map[string]toml.Any {
+					continue
+				}
 				m := cfg.as_map()
 				tx_id := (m['tx_id'] or { toml.Any(0) }).int()
 				// rx_lo/rx_hi are REQUIRED: they bound the NM id range. Defaulting
