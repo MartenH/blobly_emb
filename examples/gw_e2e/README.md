@@ -16,23 +16,21 @@ Two routes, one for each protection profile:
 | `Rpm`   | `SrcFrame2` 0x101 | `DstFrame2` 0x201 — **SecOC** (AES-CMAC, freshness@1, MAC@2..5) |
 
 ```sh
-sudo make -C ../.. vcan
-make -C examples/gw_e2e
-./bin/app vcan0 vcan1
-# inject Speed on can0; DstFrame on can1 carries the value + a valid, advancing E2E trailer
-cansend vcan0 100#6400000000000000        # Speed 10.0 km/h
-candump  vcan1                             # -> 200 [8] 00 0A 00 00 00 00 <crc> <ctr>
+sudo make vcan                     # bring up vcan0..vcan7
+make -C examples/gw_e2e            # gen + host build
+./examples/gw_e2e/bin/app vcan0 vcan1 &
+cansend vcan0 100#6400000000000000 # Speed 10.0 km/h -> DstFrame 0x200 (value + advancing E2E trailer)
+candump vcan1                      # -> 200 [8] 00 0A 00 00 00 00 <crc> <ctr>
 ```
 
-Test (`test/route_e2e.lua`, 2 cases) independently recomputes the E2E CRC
-(SAE J1850 CRC-8, the AUTOSAR-E2E poly) and checks the counter advances, and
-confirms the SecOC frame carries an advancing freshness + a freshness-dependent
-MAC. (The MAC's cryptographic correctness is proven against RFC 4493 vectors in
-`comm/secoc`'s own unit tests.)
+Test (`test/route_e2e.lua`) verifies **both** protections cryptographically: it
+recomputes the E2E CRC (SAE J1850 CRC-8) and checks the counter advances by
+exactly one, and it recomputes the SecOC MAC (a pure-Lua **AES-128-CMAC**,
+RFC 4493, self-checked against a known vector) so the emitted MAC is proven to be
+one a real receiver accepts — not merely nonzero/varying.
 
 ```sh
-cd examples/gw_e2e
-make test BLOBLY_NET=$HOME/repos/blobly_net
+make -C examples/gw_e2e test BLOBLY_NET=$HOME/repos/blobly_net
 ```
 
 ## Scope
