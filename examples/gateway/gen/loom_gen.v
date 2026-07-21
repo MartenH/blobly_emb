@@ -59,20 +59,20 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 	mut rx := can.Frame{}
 	for !raw_busy && st.chan.recv(mut rx) {
-		if rx.id == u32(0x300) && rx.len == 8 {
+		if rx.id == u32(0x300) && rx.len == 8 && !st.rr_can1_300_set {
 			mut fwd := rx
-			if st.route_can1.tx_ready() && st.route_can1.send(fwd) {
-				// forwarded
-			} else {
+			if !(st.route_can1.tx_ready() && st.route_can1.send(fwd)) {
 				st.rr_can1_300 = fwd
 				st.rr_can1_300_set = true
-				break
 			}
 		}
 		if rx.id == powertrain_id && rx.len == powertrain_dlc {
 			mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), valid: true }
 			osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 			st.rx_powertrain_st.on_receive(now)
+		}
+		if st.rr_can1_300_set {
+			break
 		}
 	}
 	if st.rx_powertrain_st.expired(now) {

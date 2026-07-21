@@ -671,22 +671,21 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				// contracted DLC (like the signal-route + COM rx paths) so a short/oversized
 				// frame at the routed id is NOT forwarded with stale trailing bytes. The send
 				// is tx-ready gated — if the destination TX can't accept it, HOLD this PDU in
-				// the one slot and BREAK: draining stops so every following frame stays in the
-				// RX FIFO (retried next tick, never dropped). The slot is empty on entry (the
-				// loop is gated on !raw_busy), so a held PDU is never overwritten.
+				// this route's own slot. Each destination route is handled INDEPENDENTLY (so
+				// fan-out to several buses still delivers to the ready ones), and local COM
+				// decode below still runs for this frame; the loop breaks only AFTER the whole
+				// iteration, once any slot is held (see below), leaving the rest in the RX FIFO.
+				// The `!_set` guard means a held PDU is never overwritten.
 				rf := raw_field(r)
 				dch := 'st.route_${snake(r.to_bus)}'
-				glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} {'
+				glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} && !st.${rf}_set {'
 				glue << '\t\t\tmut fwd := rx'
 				if r.to_id != r.from_id {
 					glue << '\t\t\tfwd.id = u32(0x${r.to_id.hex()})'
 				}
-				glue << '\t\t\tif ${dch}.tx_ready() && ${dch}.send(fwd) {'
-				glue << '\t\t\t\t// forwarded'
-				glue << '\t\t\t} else {'
+				glue << '\t\t\tif !(${dch}.tx_ready() && ${dch}.send(fwd)) {'
 				glue << '\t\t\t\tst.${rf} = fwd'
 				glue << '\t\t\t\tst.${rf}_set = true'
-				glue << '\t\t\t\tbreak'
 				glue << '\t\t\t}'
 				glue << '\t\t}'
 			}
@@ -742,6 +741,21 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				glue << '\t\t\t\tp_${tp}.data[i] = rx.data[i]'
 				glue << '\t\t\t}'
 				glue << '\t\t\tst.tp_${tp}.on_frame(now, p_${tp})'
+				glue << '\t\t}'
+			}
+			// After the frame is fully handled (all fan-out dests attempted + local
+			// decode done), stop draining if ANY forward is now held — so the held PDU
+			// isn't overwritten and following frames wait in the RX FIFO (retried next
+			// tick). Independent per-slot holds keep fan-out to non-busy dests working.
+			if has_raw {
+				mut hold_conds := []string{}
+				for r in my_routes {
+					if r.signal == '' {
+						hold_conds << 'st.${raw_field(r)}_set'
+					}
+				}
+				glue << '\t\tif ${hold_conds.join(' || ')} {'
+				glue << '\t\t\tbreak'
 				glue << '\t\t}'
 			}
 			glue << '\t}'

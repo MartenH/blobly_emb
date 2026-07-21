@@ -227,11 +227,13 @@ fn check_frame_route_contract(s System, r Route) []Issue {
 			msg:      '${pre} a bus is CAN-FD (compute fd=${from.fd}, edge fd=${to.fd}) — raw forwarding cannot preserve the frame format yet (P2c); a signal route re-encodes'
 		}
 	}
-	// PROTECTION (E2E/SecOC) is authored per-frame in a node\'s ecu.toml [[frame]]
-	// block, which a frame route never loads — so it is NOT expressible on a system
-	// frame route, and a raw forward carries no protection re-check. A PROTECTED frame
-	// must therefore be a SIGNAL route (its destination producer re-protects) or wait
-	// for P2c\'s E2E-reprotect. Nothing to compare here because the input carries none.
+	// PROTECTION (E2E/SecOC) is authored ONLY in a node\'s ecu.toml [[frame]] e2e/secoc
+	// block — never in the DBC or system.toml. A dissolved node partial that authors
+	// ANY [[frame]] is REJECTED upstream (checks.v, "a [[frame]]" in the authored-in-a-
+	// partial gate), so a protected frame cannot even be declared as a dissolution frame
+	// route: it is rejected before reaching this compare. There is thus no protection
+	// metadata to compare here. A protected frame must be a SIGNAL route (its dest
+	// producer re-protects); P2c adds E2E-reprotect for a routed frame.
 	// cadence: a raw forward re-emits at the SOURCE rate (on receipt), so the two
 	// buses must agree on the frame's cycle time — else the destination's rx-deadline
 	// monitor trips (raw forwarding cannot rate-adapt; that is a signal route).

@@ -149,19 +149,23 @@ fn main() {
 // only a genuine WIRE difference makes two same-id frames a conflict. Whitespace
 // runs are collapsed so differing alignment between DBCs still compares equal.
 fn norm_block(blk []string) string {
-	mut out := []string{}
+	mut header := ''
+	mut sigs := []string{} // SG_ lines, SORTED — declaration order has no wire meaning
 	for line in blk {
 		t := line.trim_space()
 		if t.starts_with('BO_') {
 			f := t.fields()
-			out << f[..if f.len < 4 { f.len } else { 4 }].join(' ') // BO_ <id> <name>: <dlc> (drop sender)
+			header = f[..if f.len < 4 { f.len } else { 4 }].join(' ') // BO_ <id> <name>: <dlc> (drop sender)
 		} else if t.starts_with('SG_') {
 			qi := t.last_index('"') or { -1 } // keep through the unit "..."; drop the receiver list
 			head := if qi >= 0 { t[..qi + 1] } else { t }
-			out << head.fields().join(' ')
+			sigs << head.fields().join(' ')
 		}
 		// CM_ SG_ comments are non-wire; excluded from the identity.
 	}
+	sigs.sort()
+	mut out := [header]
+	out << sigs
 	return out.join('\n')
 }
 
