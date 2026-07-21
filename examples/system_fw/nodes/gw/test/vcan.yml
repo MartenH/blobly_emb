@@ -1,0 +1,21 @@
+# Frame-route firewall on two vcans: CAN1 = vcan0 (compute — inject DiagFrame +
+# PrivateFrame), CAN2 = vcan1 (edge — only DiagFrame should appear). The app IS
+# the gateway ECU.
+project:
+  name: blobly system_fw frame-route firewall (vcan0 + vcan1)
+  version: 1
+channels:
+  - name: CAN1
+    type: can
+    interface: vcan0
+    bitrate: 500000
+    mode: monitor
+    databases:
+      - ../../compute.dbc
+  - name: CAN2
+    type: can
+    interface: vcan1
+    bitrate: 500000
+    mode: monitor
+    databases:
+      - ../../edge.dbc

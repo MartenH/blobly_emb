@@ -1265,17 +1265,10 @@ fn check_routes(s System, dissolved bool) []Issue {
 				req:      'REQ-TOPO-006'
 				msg:      'route on "${r.gateway}" (${kind} "${r.signal}${r.frame}", ${r.from} -> ${r.to}): cross-bus routing is only generated in the dissolution model (system.toml [[signal]]); a composed system does not lower routes'
 			}
-		} else if r.frame != '' {
-			// dissolution: P2a generates SIGNAL routes (decode per the source DBC ->
-			// re-encode into the destination frame's COM producer). FRAME (raw-PDU)
-			// routing is P2b — its full-contract comparison + tx-ready forwarder is not
-			// generated yet, so a clean verdict would not imply a forwarder exists.
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-006'
-				msg:      'route on "${r.gateway}" (frame "${r.frame}", ${r.from} -> ${r.to}): raw-frame routing is not generated yet (P2b) — only signal routes are generated in P2a'
-			}
 		}
+		// FRAME (raw-PDU) routes ARE generated now (P2b): sysgen lowers a raw forwarder
+		// and check_route_dbc's full-contract compare (REQ-TOPO-007) gates it. The
+		// well-formedness + single-writer + cycle checks below apply to both kinds.
 		mut gw := ?Node(none)
 		for n in s.nodes {
 			if n.name == r.gateway {
@@ -1391,6 +1384,27 @@ fn check_routes(s System, dissolved bool) []Issue {
 				}
 			}
 		}
+		// REQ-TOPO-012 (frame route): forwarding a frame onto `to` makes the gateway an
+		// on-wire transmitter of that PDU. Reject any OTHER node on `to` that already
+		// transmits it — a node producing a system signal mapping to the same frame on
+		// `to` would collide with the forward.
+		if r.frame != '' && r.to != '' {
+			if to := s.bus_by_name(r.to) {
+				for ss in s.signals {
+					if ss.bus != r.to {
+						continue
+					}
+					of := dbc_frame_of(s, to, ss.name) or { continue }
+					if of == r.frame {
+						issues << Issue{
+							severity: .error
+							req:      'REQ-TOPO-012'
+							msg:      'frame route on "${r.gateway}": forwarded frame "${r.frame}" onto bus "${r.to}" is also transmitted by node "${ss.producer}" (signal "${ss.name}") — one on-wire writer per frame'
+						}
+					}
+				}
+			}
+		}
 	}
 	// REQ-TOPO-012 (cont.): two routes may not carry the same signal onto the same
 	// destination bus — the second would be a second writer of that cell.
@@ -1400,21 +1414,28 @@ fn check_routes(s System, dissolved bool) []Issue {
 	// The SAME gateway composing several routed signals into one frame is fine.
 	mut frame_owner := map[string]string{} // "frame|to" -> owning gateway
 	for r in s.routes {
-		if r.signal == '' || r.to == '' {
+		if r.to == '' {
 			continue
 		}
-		key := '${r.signal}|${r.to}'
-		if prev := routed_dest[key] {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-012'
-				msg:      'signal "${r.signal}" is routed onto bus "${r.to}" by two routes (gateways "${prev}" and "${r.gateway}") — one writer per routed cell'
+		if r.signal != '' {
+			key := '${r.signal}|${r.to}'
+			if prev := routed_dest[key] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-012'
+					msg:      'signal "${r.signal}" is routed onto bus "${r.to}" by two routes (gateways "${prev}" and "${r.gateway}") — one writer per routed cell'
+				}
+			} else {
+				routed_dest[key] = r.gateway
 			}
-		} else {
-			routed_dest[key] = r.gateway
 		}
 		to := s.bus_by_name(r.to) or { continue }
-		dst_frame := dbc_frame_of(s, to, r.signal) or { continue }
+		// the destination frame a route makes the gateway transmit: for a frame route it
+		// IS the forwarded frame; for a signal route it is the DBC message that carries
+		// the routed signal on `to`. Two DIFFERENT gateways onto one (frame,bus) collide.
+		dst_frame := if r.frame != '' { r.frame } else { dbc_frame_of(s, to, r.signal) or {
+			continue
+		} }
 		fkey := '${dst_frame}|${r.to}'
 		if owner := frame_owner[fkey] {
 			if owner != r.gateway {

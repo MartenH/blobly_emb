@@ -87,13 +87,189 @@ fn route_val_phys_equal(a candb.Signal, b candb.Signal) bool {
 	return true
 }
 
+// route_load_bus_dbc loads a bus's DBC (relative to the system dir), or returns an
+// error Issue describing why the frame route can't be contract-checked.
+fn route_load_bus_dbc(s System, r Route, b Bus, role string) !candb.Database {
+	if b.dbc == '' {
+		return error('${role} bus "${b.name}" has no `dbc` to define frame "${r.frame}"')
+	}
+	path := if os.is_abs_path(b.dbc) { b.dbc } else { os.join_path(s.dir, b.dbc) }
+	return candb.load_dbc_file(path) or {
+		return error('cannot load ${role} DBC "${b.dbc}" (bus "${b.name}"): ${err}')
+	}
+}
+
+// route_msg_of finds a message by NAME in a DBC (frame routes name a DBC message).
+fn route_msg_of(db candb.Database, frame string) ?candb.Message {
+	for m in db.messages {
+		if m.name == frame {
+			return m
+		}
+	}
+	return none
+}
+
+// sig_wire_diff returns '' when two DBC signals carry the same value on the wire —
+// identical bit placement, scaling, sign, endianness, multiplexing, unit and VAL_
+// table — or a human description of the FIRST wire difference. Node (receiver)
+// names are deliberately not compared: they are per-bus topology, not the PDU.
+fn sig_wire_diff(a candb.Signal, b candb.Signal) string {
+	if a.start_bit != b.start_bit {
+		return 'start bit ${a.start_bit} vs ${b.start_bit}'
+	}
+	if a.length != b.length {
+		return 'length ${a.length} vs ${b.length}'
+	}
+	if a.factor != b.factor {
+		return 'factor ${a.factor} vs ${b.factor}'
+	}
+	if a.offset != b.offset {
+		return 'offset ${a.offset} vs ${b.offset}'
+	}
+	if a.is_signed != b.is_signed {
+		return 'signedness ${a.is_signed} vs ${b.is_signed}'
+	}
+	if a.byte_order != b.byte_order {
+		return 'endianness ${a.byte_order} vs ${b.byte_order}'
+	}
+	if a.unit != b.unit {
+		return 'unit "${a.unit}" vs "${b.unit}"'
+	}
+	if a.is_multiplexor != b.is_multiplexor || a.is_multiplexed != b.is_multiplexed
+		|| a.multiplexor_value != b.multiplexor_value {
+		return 'multiplexing differs'
+	}
+	if !route_val_phys_equal(a, b) {
+		return 'VAL_ (value table) differs'
+	}
+	return ''
+}
+
+// check_frame_route_contract enforces REQ-TOPO-007: a raw frame forward is valid
+// ONLY when the two buses agree on the frame's COMPLETE wire meaning. It resolves
+// the frame in BOTH buses' DBCs and compares id, dlc, format (classic/standard —
+// FD and extended-id are rejected until the driver Frame carries those flags, P2c),
+// and every signal's bit layout / scaling / sign / endianness / multiplexing / unit
+// / value table. Any mismatch is an error telling the author to use a signal route
+// (which re-encodes) — a differing (or protected) frame is never raw-forwarded.
+fn check_frame_route_contract(s System, r Route) []Issue {
+	mut issues := []Issue{}
+	from := s.bus_by_name(r.from) or { return issues } // structural checks already flagged it
+	to := s.bus_by_name(r.to) or { return issues }
+	src_db := route_load_bus_dbc(s, r, from, 'source') or {
+		return [Issue{
+			severity: .error
+			req:      'REQ-TOPO-007'
+			msg:      'frame route on "${r.gateway}" ("${r.frame}"): ${err}'
+		}]
+	}
+	dst_db := route_load_bus_dbc(s, r, to, 'destination') or {
+		return [Issue{
+			severity: .error
+			req:      'REQ-TOPO-007'
+			msg:      'frame route on "${r.gateway}" ("${r.frame}"): ${err}'
+		}]
+	}
+	sm := route_msg_of(src_db, r.frame) or {
+		return [Issue{
+			severity: .error
+			req:      'REQ-TOPO-007'
+			msg:      'frame route on "${r.gateway}": frame "${r.frame}" is not defined in source bus "${r.from}" DBC "${from.dbc}"'
+		}]
+	}
+	dm := route_msg_of(dst_db, r.frame) or {
+		return [Issue{
+			severity: .error
+			req:      'REQ-TOPO-007'
+			msg:      'frame route on "${r.gateway}": frame "${r.frame}" is not defined in destination bus "${r.to}" DBC "${to.dbc}" — a raw frame forward requires both buses to define the frame identically (else use a signal route)'
+		}]
+	}
+	pre := 'frame route on "${r.gateway}" ("${r.frame}", ${r.from} -> ${r.to}):'
+	// format: P2b forwards classic, standard-id frames only. The driver Frame carries
+	// neither an fd nor an extended-id flag yet (P2c), so reject those here rather
+	// than silently forwarding them as classic/standard.
+	if sm.ext || dm.ext {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-007'
+			msg:      '${pre} extended-id frames are not raw-forwarded yet (P2c) — the driver frame path does not carry the extended-id flag'
+		}
+	}
+	if sm.dlc > 8 || dm.dlc > 8 {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-007'
+			msg:      '${pre} CAN-FD (dlc > 8) frames are not raw-forwarded yet (P2c) — the driver frame path does not carry the fd flag'
+		}
+	}
+	// wire shape must AGREE across the two buses (id, dlc), else the PDU means
+	// something different on the destination and must be re-encoded (a signal route).
+	if sm.id != dm.id {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-007'
+			msg:      '${pre} CAN id differs (0x${sm.id.hex()} on "${r.from}" vs 0x${dm.id.hex()} on "${r.to}") — a raw forward keeps the id; use a signal route to re-frame'
+		}
+	}
+	if sm.dlc != dm.dlc {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-007'
+			msg:      '${pre} DLC differs (${sm.dlc} vs ${dm.dlc}) — the payload layout cannot match'
+		}
+	}
+	// every signal must be present on both sides with an identical wire contract.
+	if sm.signals.len != dm.signals.len {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-007'
+			msg:      '${pre} signal count differs (${sm.signals.len} vs ${dm.signals.len}) — use a signal route'
+		}
+	}
+	for a in sm.signals {
+		mut found := false
+		for b in dm.signals {
+			if b.name == a.name {
+				found = true
+				diff := sig_wire_diff(a, b)
+				if diff != '' {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-007'
+						msg:      '${pre} signal "${a.name}" ${diff} between buses — a raw forward carries the PDU unchanged; a differing contract needs a signal route'
+					}
+				}
+				break
+			}
+		}
+		if !found {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-007'
+				msg:      '${pre} signal "${a.name}" is on "${r.from}" but not in the same frame on "${r.to}" — use a signal route'
+			}
+		}
+	}
+	return issues
+}
+
 pub fn check_route_dbc(s System) []Issue {
 	mut issues := []Issue{}
 	// all signal routes composing ONE destination frame must share a source bus (each
 	// source bridge composes independently) — track the first source bus per dest frame.
 	mut frame_src := map[string]string{}
 	for r in s.routes {
-		if r.signal == '' || r.to == '' {
+		if r.to == '' {
+			continue
+		}
+		// FRAME (raw-PDU) route: the PDU is carried UNCHANGED, so a raw forward is
+		// valid only when both buses define the frame with an IDENTICAL wire contract
+		// (REQ-TOPO-007). Any mismatch must translate — a signal route — instead.
+		if r.frame != '' {
+			issues << check_frame_route_contract(s, r)
+			continue
+		}
+		if r.signal == '' {
 			continue
 		}
 		to := s.bus_by_name(r.to) or { continue }

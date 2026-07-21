@@ -21,10 +21,12 @@ fn main() {
 		exit(2)
 	}
 	// two authoring models (docs/multi-node.md): DISSOLUTION — the system declares
-	// cross-node [[signal]]s and nodes are partial (internals only), gated once
-	// generated; or COMPOSED — nodes are complete ecu.tomls that hand-author their
-	// bus signals. The presence of system-scope [[signal]] picks the model.
-	dissolved := sys.signals.len > 0
+	// cross-node [[signal]]s and/or [[route]]s and nodes are partial (internals only),
+	// gated once generated; or COMPOSED — nodes are complete ecu.tomls that hand-author
+	// their bus signals. A system-scope [[signal]] OR a [[route]] (both need sysgen to
+	// lower them) picks the dissolution model — a pure frame-route firewall has routes
+	// but no cross-node signals.
+	dissolved := sys.signals.len > 0 || sys.routes.len > 0
 	load_errs := if dissolved { sys.load_nodes_partial() } else { sys.load_nodes() }
 	for e in load_errs {
 		eprintln('syscheck: could not load ${e}')

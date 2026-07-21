@@ -21,6 +21,7 @@ fn main() {
 	mut node_seen := map[string]bool{}
 	mut blocks := []string{} // each BO_ header + its SG_/CM_ lines, joined
 	mut id_owner := map[u32]string{} // CAN id -> frame name (reject a collision)
+	mut id_block := map[u32]string{} // CAN id -> normalized block (dedup an identical shared frame)
 	mut name_owner := map[string]string{} // snake(name) -> frame name (reject a codegen collision)
 	mut ba_def := []string{} // BA_DEF_ / BA_DEF_DEF_ (deduped by exact text)
 	mut ba_def_seen := map[string]bool{}
@@ -50,20 +51,6 @@ fn main() {
 				f := t.fields() // whitespace-aware: a DBC may align the header with runs of spaces
 				id := u32(f[1].u64())
 				name := if f.len > 2 { f[2].trim_right(':') } else { '?' }
-				if prev := id_owner[id] {
-					eprintln('dbcmerge: CAN id ${f[1]} is used by both "${prev}" and "${name}" across the merged DBCs — ids must be unique')
-					exit(1)
-				}
-				// dbc2cfg emits <snake(name)>_id / _dlc / codec fns per frame, so two frames whose
-				// names normalize to the same identifier would collide there (a confusing duplicate-
-				// declaration build error). Reject that here, on the DBC namespace, with the message.
-				key := snake(name)
-				if prev := name_owner[key] {
-					eprintln('dbcmerge: frame names "${prev}" and "${name}" normalize to the same identifier "${key}" — frame names must be unique across the merged DBCs')
-					exit(1)
-				}
-				name_owner[key] = name
-				id_owner[id] = name
 				// the BO_ line plus every following ` SG_`/`CM_ SG_` line (the message body)
 				mut blk := [line]
 				mut j := i + 1
@@ -79,7 +66,33 @@ fn main() {
 					}
 					break
 				}
-				blocks << blk.join('\n')
+				body := blk.join('\n')
+				norm := norm_block(blk)
+				if prev := id_owner[id] {
+					// a SHARED frame (P2b frame route): the same CAN id may legitimately
+					// appear in more than one bus DBC when a gateway raw-forwards it — but
+					// only if the definition is IDENTICAL on every bus (the full-contract
+					// compare in syscheck enforces that upstream). Dedup the identical copy;
+					// reject a genuine conflict (same id, different frame/layout).
+					if norm == (id_block[id] or { '' }) {
+						i = j
+						continue
+					}
+					eprintln('dbcmerge: CAN id ${f[1]} is defined differently by "${prev}" and "${name}" across the merged DBCs — a shared (raw-forwarded) frame must be identical on every bus; a differing contract needs a signal route')
+					exit(1)
+				}
+				// dbc2cfg emits <snake(name)>_id / _dlc / codec fns per frame, so two frames whose
+				// names normalize to the same identifier would collide there (a confusing duplicate-
+				// declaration build error). Reject that here, on the DBC namespace, with the message.
+				key := snake(name)
+				if prev := name_owner[key] {
+					eprintln('dbcmerge: frame names "${prev}" and "${name}" normalize to the same identifier "${key}" — frame names must be unique across the merged DBCs')
+					exit(1)
+				}
+				name_owner[key] = name
+				id_owner[id] = name
+				id_block[id] = norm
+				blocks << body
 				i = j
 				continue
 			}
@@ -126,6 +139,30 @@ fn main() {
 		exit(1)
 	}
 	println('dbcmerge: ${blocks.len} frame(s), ${nodes.len} node(s) -> ${out}')
+}
+
+// norm_block canonicalizes a BO_ message block down to its WIRE contract for
+// equality — id, dlc, and every signal's bits/factor/offset/sign/unit — while
+// dropping the topology (the BO_ transmitter and the SG_ receiver node lists) and
+// comments. A raw-forwarded shared frame legitimately has different senders /
+// receivers on each bus (the gateway is the transmitter on the destination side);
+// only a genuine WIRE difference makes two same-id frames a conflict. Whitespace
+// runs are collapsed so differing alignment between DBCs still compares equal.
+fn norm_block(blk []string) string {
+	mut out := []string{}
+	for line in blk {
+		t := line.trim_space()
+		if t.starts_with('BO_') {
+			f := t.fields()
+			out << f[..if f.len < 4 { f.len } else { 4 }].join(' ') // BO_ <id> <name>: <dlc> (drop sender)
+		} else if t.starts_with('SG_') {
+			qi := t.last_index('"') or { -1 } // keep through the unit "..."; drop the receiver list
+			head := if qi >= 0 { t[..qi + 1] } else { t }
+			out << head.fields().join(' ')
+		}
+		// CM_ SG_ comments are non-wire; excluded from the identity.
+	}
+	return out.join('\n')
 }
 
 // snake mirrors dbc2cfg's frame/signal name -> identifier normalization, so a name
