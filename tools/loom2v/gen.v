@@ -471,20 +471,33 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 				}
 				// a protected frame's CRC/counter (E2E) or freshness/MAC (SecOC) bytes may be
 				// modeled as explicit SG_ in the DBC; the PRODUCER fills those (protect()), not
-				// a route, so exempt any SG_ that lies entirely within a protection span.
-				prot := frame_reserved_bits(doc, r.to_frame)
+				// a route, so exempt any SG_ whose every occupied bit lies in a protection span
+				// ON THIS BUS. owns() walks the signal's bits byte-order-aware (Motorola-safe).
+				prot := frame_reserved_bits(doc, r.to_frame, r.to_bus)
 				for sg in m2.signals {
 					if sg.name in routed_sigs[key] {
 						continue
 					}
-					mut producer_filled := false
-					for pr in prot {
-						if sg.start_bit >= pr[0] && sg.start_bit + sg.length <= pr[1] {
-							producer_filled = true
+					mut producer_filled := true
+					mut owns_any := false
+					for g in 0 .. m2.dlc * 8 {
+						if !sg.owns(g) {
+							continue
+						}
+						owns_any = true
+						mut in_prot := false
+						for pr in prot {
+							if g >= pr[0] && g < pr[1] {
+								in_prot = true
+								break
+							}
+						}
+						if !in_prot {
+							producer_filled = false
 							break
 						}
 					}
-					if producer_filled {
+					if owns_any && producer_filled {
 						continue
 					}
 					panic('route: destination frame "${r.to_frame}" on "${r.to_bus}" has SG_ "${sg.name}" that no route fills — every signal in a routed frame must be routed (else it ships as zero)')
@@ -499,11 +512,16 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 // occupies (CRC byte + counter byte, or freshness byte + MAC bytes), read from its
 // [[frame]] block. Used to exempt producer-filled protection SG_ from the routed-
 // signal completeness check.
-fn frame_reserved_bits(doc toml.Doc, frame string) [][]int {
+fn frame_reserved_bits(doc toml.Doc, frame string, bus string) [][]int {
 	mut out := [][]int{}
 	for fr in ecumodel.toml_arr(doc, 'frame') {
 		fm := fr.as_map()
 		if snake((fm['name'] or { toml.Any('') }).string()) != snake(frame) {
+			continue
+		}
+		// protection applies ONLY on the frame's authored bus (like e2e_here/secoc_here);
+		// a route on a different bus does NOT protect, so it must still fill those SG_.
+		if (fm['bus'] or { toml.Any('') }).string() != bus {
 			continue
 		}
 		if 'e2e' in fm {
@@ -511,7 +529,7 @@ fn frame_reserved_bits(doc toml.Doc, frame string) [][]int {
 			crc := int((em['crc_pos'] or { toml.Any(0) }).int())
 			ctr := int((em['counter_pos'] or { toml.Any(0) }).int())
 			out << [crc * 8, crc * 8 + 8]
-			out << [ctr * 8, ctr * 8 + 8]
+			out << [ctr * 8, ctr * 8 + 4] // only the LOW nibble is the counter; high nibble is free
 		}
 		if 'secoc' in fm {
 			sm := (fm['secoc'] or { toml.Any('') }).as_map()
@@ -784,7 +802,7 @@ fn parse_partitions(doc toml.Doc) PartMap {
 	return p
 }
 
-fn parse_frames(doc toml.Doc, eth string) FrameCfg {
+fn parse_frames(doc toml.Doc, eth string, buses map[string]bool) FrameCfg {
 	mut f := FrameCfg{}
 	mut seen_frames := map[string]string{} // snake(name) -> the bus it was authored on
 	for fr in ecumodel.toml_arr(doc, 'frame') {
@@ -797,6 +815,12 @@ fn parse_frames(doc toml.Doc, eth string) FrameCfg {
 		}
 		fk := snake((fm['name'] or { toml.Any('') }).string())
 		fbus := (fm['bus'] or { toml.Any('') }).string()
+		// a [[frame]].bus must be a DECLARED [bus.*]: protection is applied only when the
+		// frame's bus equals the route/producer bus (e2e_here/secoc_here), so a misspelled
+		// bus would silently disable protection and put an unprotected PDU on the wire.
+		if fbus !in buses {
+			panic('frame "${fk}": bus "${fbus}" is not a declared [bus.*] — protection would be silently disabled')
+		}
 		// FrameCfg (tx mode / rx deadline / E2E / SecOC) is keyed by frame NAME only,
 		// so a second [[frame]] with the same name — e.g. the same DBC frame on another
 		// bus — would silently overwrite the first's config, and a route would stamp the
@@ -821,6 +845,11 @@ fn parse_frames(doc toml.Doc, eth string) FrameCfg {
 			em := (fm['e2e'] or { toml.Any('') }).as_map()
 			f.e2e_on[fk] = true
 			f.e2e_id[fk] = int((em['data_id'] or { toml.Any(0) }).int())
+			// the protect/verify calls narrow data_id to u16 — reject a wider value here
+			// so distinct identities can't silently alias to their low 16 bits.
+			if f.e2e_id[fk] < 0 || f.e2e_id[fk] > 0xffff {
+				panic('frame "${fk}": e2e data_id 0x${f.e2e_id[fk].hex()} is out of range (0..0xFFFF)')
+			}
 			f.e2e_crc[fk] = int((em['crc_pos'] or { toml.Any(0) }).int())
 			f.e2e_ctr[fk] = int((em['counter_pos'] or { toml.Any(0) }).int())
 		}
@@ -828,6 +857,9 @@ fn parse_frames(doc toml.Doc, eth string) FrameCfg {
 			sm := (fm['secoc'] or { toml.Any('') }).as_map()
 			f.secoc_on[fk] = true
 			f.secoc_id[fk] = int((sm['data_id'] or { toml.Any(0) }).int())
+			if f.secoc_id[fk] < 0 || f.secoc_id[fk] > 0xffff {
+				panic('frame "${fk}": secoc data_id 0x${f.secoc_id[fk].hex()} is out of range (0..0xFFFF)')
+			}
 			f.secoc_fresh[fk] = int((sm['fresh_pos'] or { toml.Any(0) }).int())
 			f.secoc_mac[fk] = int((sm['mac_pos'] or { toml.Any(0) }).int())
 			f.secoc_maclen[fk] = int((sm['mac_len'] or { toml.Any(4) }).int())
@@ -987,7 +1019,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		eth:          eth
 		someip:       parse_someip(doc)
 		eth_frames:   parse_eth_frames(doc, eth, sig_of)
-		frames:       parse_frames(doc, eth)
+		frames:       parse_frames(doc, eth, buses)
 		routes:       parse_routes(doc, dbc)
 		isotp_conns:  parse_isotp(doc)
 		dids:         parse_dids(doc)
