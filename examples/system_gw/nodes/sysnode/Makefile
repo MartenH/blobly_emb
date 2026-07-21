@@ -11,7 +11,7 @@ V    ?= v
 REPO  = ../../../..
 GW    = examples/system_gw/nodes/sysnode
 
-.PHONY: all gen build run clean
+.PHONY: all gen build run test clean
 all: gen build
 
 gen:
@@ -32,6 +32,10 @@ build: gen
 
 run: build
 	./bin/app vcan0 vcan1
+
+# the repo's standard per-example workflow: make test BLOBLY_NET=/path/to/blobly_net
+test: build
+	BLOBLY_NET=$(BLOBLY_NET) bash $(REPO)/scripts/integration-test.sh .
 
 clean:
 	rm -rf gen ports sig bin

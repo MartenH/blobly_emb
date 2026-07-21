@@ -21,6 +21,7 @@ fn main() {
 	mut node_seen := map[string]bool{}
 	mut blocks := []string{} // each BO_ header + its SG_/CM_ lines, joined
 	mut id_owner := map[u32]string{} // CAN id -> frame name (reject a collision)
+	mut name_owner := map[string]string{} // snake(name) -> frame name (reject a codegen collision)
 	mut ba_def := []string{} // BA_DEF_ / BA_DEF_DEF_ (deduped by exact text)
 	mut ba_def_seen := map[string]bool{}
 	mut vals := []string{} // VAL_ tables + BA_ attribute values
@@ -46,13 +47,22 @@ fn main() {
 				continue
 			}
 			if t.starts_with('BO_ ') {
-				f := t.split(' ')
+				f := t.fields() // whitespace-aware: a DBC may align the header with runs of spaces
 				id := u32(f[1].u64())
 				name := if f.len > 2 { f[2].trim_right(':') } else { '?' }
 				if prev := id_owner[id] {
 					eprintln('dbcmerge: CAN id ${f[1]} is used by both "${prev}" and "${name}" across the merged DBCs — ids must be unique')
 					exit(1)
 				}
+				// dbc2cfg emits <snake(name)>_id / _dlc / codec fns per frame, so two frames whose
+				// names normalize to the same identifier would collide there (a confusing duplicate-
+				// declaration build error). Reject that here, on the DBC namespace, with the message.
+				key := snake(name)
+				if prev := name_owner[key] {
+					eprintln('dbcmerge: frame names "${prev}" and "${name}" normalize to the same identifier "${key}" — frame names must be unique across the merged DBCs')
+					exit(1)
+				}
+				name_owner[key] = name
 				id_owner[id] = name
 				// the BO_ line plus every following ` SG_`/`CM_ SG_` line (the message body)
 				mut blk := [line]
@@ -116,4 +126,29 @@ fn main() {
 		exit(1)
 	}
 	println('dbcmerge: ${blocks.len} frame(s), ${nodes.len} node(s) -> ${out}')
+}
+
+// snake mirrors dbc2cfg's frame/signal name -> identifier normalization, so a name
+// collision is caught here on the exact namespace dbc2cfg will generate into.
+fn snake(name string) string {
+	mut out := []u8{}
+	for i, c in name {
+		is_upper := c >= `A` && c <= `Z`
+		if is_upper && i > 0 {
+			prev := name[i - 1]
+			prev_lower := prev >= `a` && prev <= `z`
+			prev_digit := prev >= `0` && prev <= `9`
+			if prev_lower || prev_digit {
+				out << `_`
+			}
+		}
+		if (c >= `a` && c <= `z`) || (c >= `0` && c <= `9`) {
+			out << c
+		} else if is_upper {
+			out << c + 32 // to lowercase
+		} else {
+			out << `_`
+		}
+	}
+	return out.bytestr()
 }
