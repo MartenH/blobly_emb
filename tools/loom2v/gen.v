@@ -1110,6 +1110,8 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		// data on the wire). Reject the overlap: the E2E CRC byte + counter low-nibble, or
 		// the SecOC freshness + MAC bytes, vs this route's dest signal bit span. (Bus-scoped:
 		// protection applies only on the frame's authored bus, so use e2e_here/secoc_here.)
+		// a routed signal is guaranteed LITTLE-ENDIAN (parse_routes rejects Motorola BEFORE
+		// setting to_bit/to_len), so [to_bit, to_bit+to_len) is exactly its occupied bit set.
 		if r.to_len > 0 {
 			slo, shi := r.to_bit, r.to_bit + r.to_len // [slo, shi) the routed signal's bits
 			mut clash := ''

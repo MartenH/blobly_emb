@@ -571,10 +571,10 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 		glue << '\tchan can.Channel'
 		for msg, _ in tx_by_msg {
 			glue << '\ttx_${msg}_st com.TxState'
-			if m.frames.e2e_on[msg] or { false } {
+			if m.frames.e2e_here(msg, bname) {
 				glue << '\te2e_tx_${msg} e2e.TxState'
 			}
-			if m.frames.secoc_on[msg] or { false } {
+			if m.frames.secoc_here(msg, bname) {
 				glue << '\tsecoc_key_${msg} secoc.Key'
 				glue << '\tsecoc_tx_${msg} secoc.TxState'
 			}
@@ -583,10 +583,10 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 				glue << '\trx_${msg}_st com.RxState'
 			}
-			if m.frames.e2e_on[msg] or { false } {
+			if m.frames.e2e_here(msg, bname) {
 				glue << '\te2e_rx_${msg} e2e.RxState'
 			}
-			if m.frames.secoc_on[msg] or { false } {
+			if m.frames.secoc_here(msg, bname) {
 				glue << '\tsecoc_key_${msg} secoc.Key'
 				glue << '\tsecoc_rx_${msg} secoc.RxState'
 			}
@@ -698,8 +698,8 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				// the actual bytes into the reused frame, so a short same-id frame
 				// would otherwise be decoded over stale trailing bytes.
 				glue << '\t\tif rx.id == ${msg}_id && rx.len == ${msg}_dlc {'
-				e2e := m.frames.e2e_on[msg] or { false }
-				secoc := m.frames.secoc_on[msg] or { false }
+				e2e := m.frames.e2e_here(msg, bname)
+				secoc := m.frames.secoc_here(msg, bname)
 				// protected frames are decoded only if the check passes; a bad frame
 				// is ignored (the rx deadline then invalidates).
 				mut ind := '\t\t\t'
@@ -823,8 +823,8 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			// advances the E2E/SecOC counter nor consumes the change/trigger — the PDU
 			// just retries next tick (REQ-COM-006). mark_sent() commits the send only
 			// once the channel accepts the frame.
-			e2e_here := m.frames.e2e_on[msg] or { false }
-			secoc_here := m.frames.secoc_on[msg] or { false }
+			e2e_here := m.frames.e2e_here(msg, bname)
+			secoc_here := m.frames.secoc_here(msg, bname)
 			needs_pre := e2e_here || secoc_here
 			glue << '\tif tx_${msg}_any && st.chan.tx_ready() && st.tx_${msg}_st.should_send(now, tx_${msg}.data, ${msg}_dlc) {'
 			if needs_pre {
@@ -982,7 +982,7 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			glue << '\t\tcycle_us: ${cyc}'
 			glue << '\t\tmin_delay_us: ${m.frames.tx_min_us[msg] or { 0 }}'
 			glue << '\t}'
-			if m.frames.secoc_on[msg] or { false } {
+			if m.frames.secoc_here(msg, bname) {
 				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(m.frames.secoc_key[msg] or {
 					[]u8{}
 				})})'
@@ -1022,7 +1022,7 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				glue << '\t\ttimeout_us: ${m.frames.rx_timeout_us[msg]}'
 				glue << '\t}'
 			}
-			if m.frames.secoc_on[msg] or { false } {
+			if m.frames.secoc_here(msg, bname) {
 				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(m.frames.secoc_key[msg] or {
 					[]u8{}
 				})})'
