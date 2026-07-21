@@ -72,7 +72,7 @@ test("routed DstFrame2 is SecOC-authenticated (advancing freshness + real MAC)",
   end
   -- the 4-byte MAC (bytes 3..6, mac_pos=2) is non-zero and freshness-dependent (varies).
   -- MAC correctness itself is proven against RFC 4493 vectors in comm/secoc's unit tests.
-  local function mac(d) return string.sub(d, 4, 7) end
+  local function mac(d) return string.sub(d, 3, 6) end -- mac_pos=2 -> frame bytes 2..5 -> 1-based 3..6
   check.truthy(mac(frames[1]) ~= "\0\0\0\0", "MAC is non-zero")
   check.truthy(mac(frames[1]) ~= mac(frames[2]), "MAC depends on freshness")
 end)
