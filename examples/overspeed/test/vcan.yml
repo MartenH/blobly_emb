@@ -1,4 +1,4 @@
-# cantester_v project: attach to the real vcan0 where the blobly example runs.
+# blobly_net project: attach to the real vcan0 where the blobly example runs.
 # No `simulation:` — the blobly app IS the ECU under test.
 project:
   name: blobly overspeed (vcan0)

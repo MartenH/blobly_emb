@@ -96,7 +96,7 @@ Plain UDS, because it is already transport-neutral by construction:
 | go | 0x11 ECU reset | boot decision runs again, now finds a valid image |
 
 `comm/uds` today serves DIDs; the bootloader adds 0x10/0x29/0x31/0x34/0x36/0x37/0x11 —
-services the host side (`cantester_v` heritage in blobly_net) already knows how to
+services the host side (blobly_net) already knows how to
 drive. The host flasher is a blobly_net `cmd/` tool speaking the same modules.
 
 **Transport neutrality in practice:** the boot manager talks to `uds.Server` through
