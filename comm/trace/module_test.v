@@ -3,6 +3,84 @@ module trace
 import comm.isotp
 import driver.can
 
+// REQ-TRACE-011. The satellite's window is only comparable to ours once its clock offset rides
+// with it, so load_remote leads the block with that record — but ONLY when it was measured.
+// Emitting a 0 offset for an unmeasured core would claim the two cores are perfectly correlated,
+// the precise false precision this record exists to remove.
+fn test_load_remote_leads_with_measured_core_offset() {
+	mut backing := [8]Record{}
+	mut rbacking := [8]Record{}
+	buf := new_buffer(&backing[0], 8, .ring, 0)
+	mut m := new_module(0x713, 0x7e5, 0, true, buf)
+	m.set_remote(1, &rbacking[0], 8)
+
+	mut wire := [8]u8{}
+	e := encode_record(new_fb(9, 0, 111, 5))
+	for j in 0 .. 8 {
+		wire[j] = e[j]
+	}
+
+	// never measured -> the window imports bare, no correlation claimed
+	m.load_remote(&wire[0], 1)
+	assert m.remote.used() == 1
+	assert !m.remote.record_at(0).is_core_offset()
+
+	// measured -> the offset leads, and the imported records still all arrive after it
+	m.set_core_offset(-1_250_000, 42)
+	m.load_remote(&wire[0], 1)
+	assert m.remote.used() == 2
+	lead := m.remote.record_at(0)
+	assert lead.is_core_offset()
+	assert lead.core_offset_us() == -1_250_000
+	assert lead.core_offset_bound_us() == 42
+	assert m.remote.record_at(1).kind() == kind_fb
+}
+
+// REQ-TRACE-011. A satellite window spans several blocks (bench: 5 for a 256-record ring), but the
+// offset record is pushed ONCE at the head of the window — so every later block must re-state it
+// the way pack_chunk already re-states the epoch. Without this a host that decodes blocks
+// independently correlates block 1 and silently renders the rest on the wrong clock.
+fn test_pack_chunk_restates_core_offset_in_every_block() {
+	mut backing := [8]Record{}
+	mut t := new_buffer(&backing[0], 8, .oneshot, 0)
+	t.start()
+	t.push(new_core_offset(-1_250_000, 42))
+	for i in 0 .. 7 {
+		t.push(new_fb(u16(i), 0, u32(100 + i), 5))
+	}
+	t.stop()
+
+	// 32-byte cap = header + epoch + offset + ONE record, so the window needs several chunks
+	mut out := [32]u8{}
+	mut from := u32(0)
+	mut blocks := 0
+	for {
+		n, next, more := t.pack_chunk(&out[0], 32, 1, from)
+		assert n > 0
+		blocks++
+		// every block: header, epoch, then the offset — restated, never dropped
+		assert decode_record_at(out, 0).is_block_header()
+		assert decode_record_at(out, 1).is_epoch()
+		off := decode_record_at(out, 2)
+		assert off.is_core_offset(), 'block ${blocks} lost the core offset'
+		assert off.core_offset_us() == -1_250_000
+		assert off.core_offset_bound_us() == 42
+		from = next
+		if !more {
+			break
+		}
+	}
+	assert blocks > 1, 'test needs a multi-block window to be meaningful'
+}
+
+fn decode_record_at(out [32]u8, i int) Record {
+	mut b := [8]u8{}
+	for j in 0 .. 8 {
+		b[j] = out[i * 8 + j]
+	}
+	return decode_record(b)
+}
+
 // The endpoint schema is data the generator consumes: rx ports get an on_<name> method (checked by
 // the generated code compiling), tx ports become constructor bindings. Guard the invariants here.
 fn test_endpoint_schema() {

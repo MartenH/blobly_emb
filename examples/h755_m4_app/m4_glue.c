@@ -67,6 +67,7 @@ void duo_pub(int i, uint32_t a, uint32_t b) {
 void trace_arm(void);
 void trace_freeze(void);
 unsigned trace_snapshot(unsigned char out[][8], unsigned max);
+unsigned long trace_now_us(void);
 
 void duo_trace_service(void) {
 	volatile uint32_t *c = (volatile uint32_t *)DUO_TRC_ADDR;
@@ -82,8 +83,13 @@ void duo_trace_service(void) {
 		trace_freeze();
 		c[3] = trace_snapshot((unsigned char (*)[8])DUO_TRC_BUF_ADDR, DUO_TRC_MAX_REC);
 	}
+	/* Stamp OUR trace clock as late as possible before the ack: this is the owner's midpoint
+	 * sample, and every µs between this store and the ack it observes widens the error bound
+	 * it computes (REQ-TRACE-011). Same clock the records above are stamped from, so the
+	 * offset it yields is the one those records actually need. */
+	c[DUO_TRC_SVC_IDX] = (uint32_t)trace_now_us();
 	__asm__ volatile("dmb" ::: "memory");
-	c[2] = req; /* ack */
+	c[2] = req; /* ack — releases svc_us and the snapshot together */
 }
 
 /* The shared vector table (boards/common/vectors.S) names the FDCAN1 and ETH ISRs

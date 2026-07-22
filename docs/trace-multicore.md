@@ -33,7 +33,14 @@ loop has no thread switches or ISRs, so `thread`/`thread+isr` levels are rejecte
 The record wire format (from #54) is already multi-core-ready and blobly_net already decodes it
 (PR blobly_net#21): entity kinds `ISR | THREAD | FB | CONTROL`, a `CONTROL/ctl_block` **per-core
 block header** (core + record count + a more-flag in bit 7 of the core byte for multi-block
-continuation), and `CONTROL/ctl_epoch` timeline re-anchors. A core's window streams as one or
+continuation), and `CONTROL/ctl_epoch` timeline re-anchors.
+
+> **`ctl_epoch` is not cross-core sync.** It re-anchors the u24 `start_us` base *within* one
+> core's stream for long captures; it says nothing about how two cores' clocks relate. Each core
+> counts µs from its own first tick — the CM7 boots first and releases the CM4 later, so at the
+> same instant the two clocks read different values — and a swimlane drawn from the raw blocks
+> silently implies a shared timeline it does not have. `CONTROL/ctl_coreoffset` is what actually
+> correlates them (REQ-TRACE-011); see below. A core's window streams as one or
 more self-describing blocks (each re-anchored by a leading epoch); the host reads blocks until
 every selected core's final (more = 0) block arrives — end-of-stream lives in the format, so the
 same stream rides ISO-TP today and any future transport unchanged. **So the
@@ -249,6 +256,42 @@ This depends on the ThreadX port work and is the natural place to stop for now �
    into one ISO-TP message per core (mask order). This matches the one-stream / N-blocks model the
    blobly_net dump worker already expects (it reads blocks until every selected core's
    final more = 0 block — multi-block since emb#116/net#45).
+
+## 6b. Cross-core time correlation (REQ-TRACE-011)
+
+Per-core rings solve *who ran what*; they do not make two cores' timestamps comparable. Every core
+stamps records from `trace_now_us()` in `boards/common/trace_hooks.c`, which counts µs from **that
+core's first call** (a DWT-CYCCNT accumulator scaled by a per-core `TRACE_CPU_MHZ` — 400 on the
+CM7, 200 on the CM4). The CM7 boots first, brings up the clock tree and only then releases the
+CM4, so the two origins are offset by the boot handoff. Drawing both blocks on one axis without
+correcting for that is the failure this closes: the chart looks right and is wrong.
+
+The rates do **not** drift apart — both cores run off the same HSE/PLL tree, and `TRACE_CPU_MHZ`
+already normalises each to µs — so a single scalar offset is sufficient; there is no skew term to
+track.
+
+**The measurement rides the handoff that already exists.** The dtrace cell in `duo.h` is a
+request/ack exchange the bus owner performs on every snapshot, which is exactly the round trip a
+clock sync needs:
+
+| stamp | who | when |
+|---|---|---|
+| `t1` | CM7 | immediately before `req_seq++` releases the request |
+| `t2` | CM4 | in `duo_trace_service()`, just before it acks (cell word `DUO_TRC_SVC_IDX`) |
+| `t3` | CM7 | on the polling pass that **first** observes the ack |
+
+`t2` lies somewhere in `[t1, t3]`, so `offset = t2 − (t1+t3)/2` and the error is bounded by
+`(t3−t1)/2`. Both are emitted as a `CONTROL/ctl_coreoffset` record that `load_remote()` prepends
+to the satellite's block. Because the exchange runs per dump, the offset is re-measured every
+time — a CM4 that reset, or a debugger that halted one core, cannot leave a stale offset behind.
+
+Two deliberate choices:
+
+- **Never fabricate a zero.** If no exchange has completed, `duo_trace_offset()` returns 0 and the
+  record is omitted entirely. A 0 offset would assert perfect correlation — the exact false
+  precision this record exists to remove — so "unknown" stays visibly unknown.
+- **Both stamps come from the recorder's own clock**, not SysTick or an RTOS tick. Correlating a
+  clock the records aren't stamped from would measure a skew they don't have.
 
 ## 7. P3a runtime shape (generated)
 

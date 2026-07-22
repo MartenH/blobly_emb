@@ -199,6 +199,25 @@ fn test_epoch_carries_full_u32_base() {
 	assert e.kind() == kind_control
 }
 
+// REQ-TRACE-011. The satellite is released AFTER the bus owner, so its clock reads less at the
+// same instant and the offset is NEGATIVE — the sign has to survive the wire or the host shifts
+// the lane the wrong way, which looks plausible and is exactly backwards.
+fn test_core_offset_carries_signed_offset_and_bound() {
+	off := i32(-1_250_000) // satellite trails the owner by 1.25 s
+	r := decode_record(encode_record(new_core_offset(off, 37)))
+	assert r.is_core_offset()
+	assert !r.is_epoch() && !r.is_block_header()
+	assert r.kind() == kind_control
+	assert r.core_offset_us() == off
+	assert r.core_offset_bound_us() == 37
+
+	// and the other direction, past the 24-bit range, so the high byte is really carried
+	pos := i32(0x00ab_cdef)
+	p := decode_record(encode_record(new_core_offset(pos, 0)))
+	assert p.core_offset_us() == pos
+	assert p.core_offset_bound_us() == 0
+}
+
 // When an epoch record ages out of a ring while records that depend on it survive, the dump
 // must still carry that base — pack() leads with a synthetic epoch that REPLACES the oldest
 // slot, so the record count stays == used (matching TraceRsp.records_used).
