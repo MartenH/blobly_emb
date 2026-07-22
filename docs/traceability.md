@@ -33,7 +33,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-016 | QM | test | verified | prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass) |
 | REQ-BOOT-017 | QM | test | verified | ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_interop_test.v (pass), sha512_test.v (pass) |
 | REQ-BOOT-018 | QM | analysis | uncovered | — |
-| REQ-CAN-DRV-001 | QM | test | covered | route.lua (pending), h735-fdcan-hardware (approved), h755-fdcan-hardware (approved), h755-dualcore-heartbeat (approved) |
+| REQ-CAN-DRV-001 | QM | test | covered | route_extid.lua (pending), route.lua (pending), h735-fdcan-hardware (approved), h755-fdcan-hardware (approved), h755-dualcore-heartbeat (approved) |
 | REQ-CAN-DRV-002 | QM | test | covered | route.lua (pending), h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
 | REQ-CAN-DRV-003 | QM | test | verified | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
 | REQ-CAN-DRV-004 | QM | test | uncovered | — |
@@ -185,7 +185,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-004 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-005 | QM | analysis | verified | gen_test.v (pass) |
 | REQ-TOPO-006 | QM | test | covered | route_signal.lua (pending), route_dissolution.lua (pending), gen_test.v (pass), model_test.v (pass) |
-| REQ-TOPO-007 | QM | test | covered | route_firewall.lua (pending), model_test.v (pass) |
+| REQ-TOPO-007 | QM | test | covered | route_firewall.lua (pending), route_extid.lua (pending), model_test.v (pass) |
 | REQ-TOPO-008 | QM | test | covered | route_signal.lua (pending), route_dissolution.lua (pending), route_e2e.lua (pending), route_srcverify.lua (pending) |
 | REQ-TOPO-009 | QM | test | covered | route_firewall.lua (pending) |
 | REQ-TOPO-010 | QM | analysis | covered | route_firewall.lua (pending) |

@@ -1,0 +1,13 @@
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: Src Gw
+
+BO_ 2432500992 ExtDiag: 8 Src
+ SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" Gw
+
+BA_DEF_ BO_ "GenMsgCycleTime" INT 0 65535;
+BA_ "GenMsgCycleTime" BO_ 2432500992 100;

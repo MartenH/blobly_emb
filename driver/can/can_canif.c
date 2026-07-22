@@ -92,8 +92,8 @@ void Blobly_TxConfirmation(PduIdType pdu) {
 	}
 }
 
-int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int fd_mode) {
-	(void)fd_mode;
+int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int flags) {
+	(void)flags; /* AUTOSAR: the frame format (id width, FD) is owned by the CanIf/Can config, not set here */
 	for (int i = 0; i < tx_map_n; i++) {
 		if (tx_map[i].bus == h && tx_map[i].id == id) {
 			PduInfoType pdu;
@@ -126,8 +126,9 @@ int blob_can_tx_idle(int h) {
 	return __atomic_load_n(&tx_pending[h], __ATOMIC_SEQ_CST) == 0u;
 }
 
-int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
+int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len, int *flags) {
 	if (h < 0 || h >= BLOB_CAN_BUSES) return -1;
+	*flags = 0; /* the Rx ring carries id/data/len; per-frame format flags via CanIf are a follow-up */
 	return blob_ring_pop(&rx_ring[h], id, data, len);
 }
 

@@ -109,10 +109,10 @@ int blob_can_open(const char *name, int fd_mode) {
 	          ((NTSEG2 - 1u) << FDCAN_NBTP_NTSEG2_Pos) |
 	          ((NBRP - 1u) << FDCAN_NBTP_NBRP_Pos);
 
-	/* Accept non-matching STANDARD data frames into Rx FIFO0; reject extended-id
-	 * and remote frames — this backend handles classic 11-bit data frames only, so
-	 * recv() never has to deal with (and would mis-decode) other frame types. */
-	c->GFC = FDCAN_GFC_RRFE | FDCAN_GFC_RRFS | (2u << FDCAN_GFC_ANFE_Pos);
+	/* Accept non-matching STANDARD and EXTENDED data frames into Rx FIFO0 (ANFS/ANFE
+	 * = 0); reject REMOTE frames (RRFS/RRFE) — this backend handles classic data frames
+	 * of either id width, and recv() reports the width via BLOB_CAN_FLAG_EXT. */
+	c->GFC = FDCAN_GFC_RRFE | FDCAN_GFC_RRFS;
 	c->SIDFC = 0;
 
 	/* Rx FIFO0 at the slice start; Tx FIFO right after it */
@@ -137,11 +137,11 @@ int blob_can_open(const char *name, int fd_mode) {
 	return idx;
 }
 
-int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int fd_mode) {
+int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int flags) {
 	FDCAN_GlobalTypeDef *c = inst(h);
 	if (!c || len > 8)
-		return -1; /* classic frame */
-	(void)fd_mode;
+		return -1; /* classic frame (CAN-FD payloads are a later increment) */
+	(void)(flags & BLOB_CAN_FLAG_FD); /* FD not emitted yet — classic frames only */
 	/* Non-blocking: report FIFO-full to the caller instead of spinning here. A caller
 	 * that bursts more than the 8-deep Tx FIFO (e.g. the ISO-TP trace dump) gates on
 	 * blob_can_tx_ready() and paces itself, so the driver never blocks the loop/thread. */
@@ -154,7 +154,10 @@ int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int fd_m
 	uint32_t tx_off = region_off(h) + RX0_ELMTS * ELMT_WORDS;
 	volatile uint32_t *e = ram_at(tx_off + pi * ELMT_WORDS);
 
-	e[0] = (id & 0x7FFu) << 18; /* T0: 11-bit std id, XTD/RTR/ESI = 0 */
+	if (flags & BLOB_CAN_FLAG_EXT)
+		e[0] = (id & 0x1FFFFFFFu) | (1u << 30); /* T0: 29-bit ext id, XTD=1 (bit30) */
+	else
+		e[0] = (id & 0x7FFu) << 18; /* T0: 11-bit std id, XTD/RTR/ESI = 0 */
 	e[1] = (uint32_t)len << 16; /* T1: DLC = len (classic), no FDF/BRS */
 
 	uint32_t w0 = 0, w1 = 0;
@@ -192,7 +195,7 @@ int blob_can_tx_idle(int h) {
 	return c->TXBRP == 0u;
 }
 
-int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
+int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len, int *flags) {
 	FDCAN_GlobalTypeDef *c = inst(h);
 	if (!c)
 		return -1;
@@ -212,14 +215,20 @@ int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
 	volatile uint32_t *e = ram_at(region_off(h) + gi * ELMT_WORDS);
 
 	uint32_t r0 = e[0], r1 = e[1];
-	/* Classic standard data frames only. Extended-id (XTD) / remote (RTR) frames are
-	 * already filtered by GFC; drop any that slip through rather than deliver a bogus
-	 * id/payload. (XTD = R0 bit 30, RTR = R0 bit 29.) */
-	if ((r0 & 0x40000000u) || (r0 & 0x20000000u)) {
-		c->RXF0A = gi; /* acknowledge to advance the FIFO, then report no frame */
+	/* Classic data frames, standard OR extended id. Drop REMOTE (RTR) frames — they are
+	 * obsolete and carry no payload (RTR = R0 bit 29). XTD = R0 bit 30 selects the id
+	 * width: 29-bit ext id in bits 28:0, else 11-bit std id in bits 28:18. */
+	if (r0 & 0x20000000u) {
+		c->RXF0A = gi; /* remote frame: acknowledge to advance the FIFO, report no frame */
 		return -1;
 	}
-	*id = (r0 >> 18) & 0x7FFu;       /* standard id */
+	*flags = 0;
+	if (r0 & 0x40000000u) {
+		*id = r0 & 0x1FFFFFFFu; /* extended id */
+		*flags |= BLOB_CAN_FLAG_EXT;
+	} else {
+		*id = (r0 >> 18) & 0x7FFu; /* standard id */
+	}
 	uint8_t n = (uint8_t)((r1 >> 16) & 0xFu); /* DLC */
 	if (n > 8)
 		n = 8; /* classic clamp */

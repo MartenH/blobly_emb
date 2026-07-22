@@ -92,13 +92,14 @@ int blob_can_open(const char *name, int fd_mode) {
 	return idx;
 }
 
-int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int fd_mode) {
+int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int flags) {
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
 	if (!hf) return -1;
 	if (!dlc_exact(len)) return -1; /* don't pad to a different on-wire length */
+	int fd_mode = flags & BLOB_CAN_FLAG_FD;
 	FDCAN_TxHeaderTypeDef tx;
 	tx.Identifier          = id & 0x1FFFFFFFu;
-	tx.IdType              = (id > 0x7FFu) ? FDCAN_EXTENDED_ID : FDCAN_STANDARD_ID;
+	tx.IdType              = (flags & BLOB_CAN_FLAG_EXT) ? FDCAN_EXTENDED_ID : FDCAN_STANDARD_ID;
 	tx.TxFrameType         = FDCAN_DATA_FRAME;
 	tx.DataLength          = len_to_dlc(len);
 	tx.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
@@ -126,7 +127,7 @@ int blob_can_tx_idle(int h) {
 	return hf->Instance->TXBRP == 0u;
 }
 
-int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
+int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len, int *flags) {
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
 	if (!hf) return -1;
 	/* Note + clear a FIFO0 message-lost since the last drain, before the empty-check, so a
@@ -138,8 +139,12 @@ int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len) {
 	if (HAL_FDCAN_GetRxFifoFillLevel(hf, FDCAN_RX_FIFO0) == 0) return -1;
 	FDCAN_RxHeaderTypeDef rx;
 	if (HAL_FDCAN_GetRxMessage(hf, FDCAN_RX_FIFO0, &rx, data) != HAL_OK) return -1;
+	if (rx.RxFrameType == FDCAN_REMOTE_FRAME) return -1; /* remote frames carry no payload */
 	*id  = rx.Identifier;
 	*len = dlc_to_len(rx.DataLength);
+	*flags = 0;
+	if (rx.IdType == FDCAN_EXTENDED_ID) *flags |= BLOB_CAN_FLAG_EXT;
+	if (rx.FDFormat == FDCAN_FD_CAN)    *flags |= BLOB_CAN_FLAG_FD;
 	return 0;
 }
 

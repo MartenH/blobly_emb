@@ -12,8 +12,8 @@ module can
 #include "can_port.h"
 
 fn C.blob_can_open(&char, int) int
-fn C.blob_can_send(int, u32, &u8, u8, int) int
-fn C.blob_can_recv(int, &u32, &u8, &u8) int
+fn C.blob_can_send(int, u32, &u8, u8, int) int // last arg = flags: bit0 fd, bit1 ext-id
+fn C.blob_can_recv(int, &u32, &u8, &u8, &int) int // last arg = flags out: bit0 fd, bit1 ext-id
 fn C.blob_can_tx_ready(int) int
 fn C.blob_can_tx_idle(int) int
 fn C.blob_can_rx_overruns(int) u32
@@ -22,12 +22,18 @@ fn C.blob_can_close(int)
 pub const max_dlc = u8(64)
 
 // A CAN-FD frame. `data` is always 64 bytes; `len` says how many are valid.
+// `ext` = 29-bit extended identifier (vs the 11-bit standard id).
 pub struct Frame {
 pub mut:
 	id   u32
 	len  u8
 	data [64]u8
+	ext  bool
 }
+
+// send/recv flag bits shared with the C backends (can_port.h).
+const flag_fd = 1
+const flag_ext = 2
 
 pub struct Channel {
 mut:
@@ -43,7 +49,11 @@ pub fn (mut c Channel) open(ifname string, fd_mode bool) bool {
 }
 
 pub fn (mut c Channel) send(f Frame) bool {
-	return C.blob_can_send(c.sock, f.id, &f.data[0], f.len, if c.fd { 1 } else { 0 }) == 0
+	mut flags := if c.fd { flag_fd } else { 0 }
+	if f.ext {
+		flags |= flag_ext
+	}
+	return C.blob_can_send(c.sock, f.id, &f.data[0], f.len, flags) == 0
 }
 
 // tx_ready reports whether the Tx path can accept a frame now. A burst sender (the
@@ -63,7 +73,10 @@ pub fn (c Channel) tx_idle() bool {
 
 // recv returns true and fills `f` when a frame is available; false if none.
 pub fn (mut c Channel) recv(mut f Frame) bool {
-	return C.blob_can_recv(c.sock, &f.id, &f.data[0], &f.len) == 0
+	mut flags := 0
+	ok := C.blob_can_recv(c.sock, &f.id, &f.data[0], &f.len, &flags) == 0
+	f.ext = (flags & flag_ext) != 0
+	return ok
 }
 
 // rx_overruns is the number of Rx-overrun EVENTS the driver has seen since open — each
