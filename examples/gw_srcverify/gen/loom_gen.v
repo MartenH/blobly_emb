@@ -32,6 +32,7 @@ fn io_can0_10ms(ctx voidptr) {
 	mut rf_can1_dst_frame := can.Frame{
 		id:  u32(0x200)
 		len: 8
+		ext: false
 	}
 	mut rf_can1_dst_frame_ok := true
 	dst_frame_speed_set(mut rf_can1_dst_frame.data, st.rt_can1_dst_frame_speed_v)

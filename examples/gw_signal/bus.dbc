@@ -8,10 +8,15 @@ BU_: Gw Sink
 
 BO_ 256 SrcFrame: 8 Gw
  SG_ Speed : 0|16@1+ (0.1,0) [0|6553.5] "km/h" Sink
+ SG_ Rpm : 16|16@1+ (1,0) [0|65535] "rpm" Sink
 
 BO_ 512 DstFrame: 8 Gw
  SG_ Speed : 8|16@1+ (1,0) [0|65535] "km/h" Sink
 
+BO_ 2566849024 ExtDst: 8 Gw
+ SG_ Rpm : 0|16@1+ (1,0) [0|65535] "rpm" Sink
+
 BA_DEF_ BO_ "GenMsgCycleTime" INT 0 65535;
 BA_ "GenMsgCycleTime" BO_ 256 20;
 BA_ "GenMsgCycleTime" BO_ 512 100;
+BA_ "GenMsgCycleTime" BO_ 2566849024 100;

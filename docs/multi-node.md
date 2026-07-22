@@ -426,9 +426,10 @@ Raw forward is valid **only when the two buses agree on the frame's *entire*
 meaning**, which is more than byte layout:
 
 - **wire shape** — id, DLC, bit layout, endianness, and format (classic/FD,
-  standard/extended). The driver `Frame`/recv path is extended to carry the `fd`
-  and extended-id flags (today `recv` drops them), or raw routes are restricted to
-  a validated common format;
+  standard/extended). The driver `Frame`/recv path carries the extended-id flag
+  (emb#180) and 64-byte FD payloads (emb#181); a raw forward preserves the id
+  width, and a **signal route** re-encodes into a destination frame of either width
+  (its producer sends `Frame.ext = to_ext`);
 - **signal semantics** — factor, offset, signedness, multiplexing and value tables
   of every signal in the frame (identical raw bits under factors 0.1 vs 1.0 mean a
   10× different value);

@@ -570,13 +570,9 @@ pub fn check_route_dbc(s System) []Issue {
 				msg:      'route on "${r.gateway}": destination frame "${dm.name}" is ${dm.dlc} bytes but bus "${r.to}" is classic (fd = false, DLC <= 8)'
 			}
 		}
-		if dm.ext {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-003'
-				msg:      'route on "${r.gateway}": destination frame "${dm.name}" is an extended (29-bit) id — the routed forwarder has no extended-id format flag (P2)'
-			}
-		}
+		// (an extended-id destination is now supported: the gateway's COM producer
+		//  composes the frame and the driver sends it with Frame.ext = true — emb#180/#181,
+		//  same path the standalone loom2v signal route uses.)
 		// the WHOLE destination frame is composed by the gateway's COM producer. A P2a
 		// gateway can't produce its own signals, so every OTHER SG_ in the frame must
 		// be filled by another route from the SAME gateway — else the producer emits a
@@ -636,16 +632,20 @@ pub fn check_dbc_conformance(s System) []Issue {
 		if bus.name !in loaded {
 			continue
 		}
-		mut id_seen := map[u32]string{}
+		// key by id AND width: a standard and an extended frame with the same numeric
+		// id are distinct on the wire (recv reports the width), so only a same-id/width
+		// pair is a real one-frame-per-id clash.
+		mut id_seen := map[string]string{}
 		for msg in dbs[bus.name].messages {
-			if prev := id_seen[msg.id] {
+			key := '${msg.id}/${msg.ext}'
+			if prev := id_seen[key] {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-003'
-					msg:      'bus "${bus.name}": DBC frames "${prev}" and "${msg.name}" share CAN id 0x${msg.id.hex()} — one frame per id'
+					msg:      'bus "${bus.name}": DBC frames "${prev}" and "${msg.name}" share CAN id 0x${msg.id.hex()} (${if msg.ext { 'extended' } else { 'standard' }}) — one frame per id'
 				}
 			} else {
-				id_seen[msg.id] = msg.name
+				id_seen[key] = msg.name
 			}
 		}
 	}
@@ -691,7 +691,9 @@ pub fn check_dbc_conformance(s System) []Issue {
 			continue
 		}
 		for msg in dbs[bus.name].messages {
-			if msg.id >= bus.nm_peers_lo && msg.id <= bus.nm_peers_hi {
+			// NM peers are standard 11-bit; the NM receiver requires !rx.ext, so an
+			// extended frame with a stripped id in the range is distinct on the wire.
+			if !msg.ext && msg.id >= bus.nm_peers_lo && msg.id <= bus.nm_peers_hi {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-003'
