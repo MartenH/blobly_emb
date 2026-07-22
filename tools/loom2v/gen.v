@@ -1103,7 +1103,9 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		// a module frame (telemetry today) on the destination bus reserves its CAN id —
 		// a routed dest id colliding with it makes the route bridge and the telemetry
 		// producer transmit different payloads under one id on one interface.
-		if m.telem.on && m.telem.bus == r.to_bus {
+		// telemetry frames are standard (11-bit), so an EXTENDED destination sharing the
+		// numeric id is a distinct on-wire frame — only a same-width (standard) clash collides.
+		if m.telem.on && m.telem.bus == r.to_bus && !r.to_ext {
 			if r.to_id == int(m.telem.id) || (m.telem.detail_id != 0 && r.to_id == int(m.telem.detail_id)) {
 				panic('route: destination id 0x${r.to_id:x} on bus "${r.to_bus}" collides with the [telemetry] id — one writer per id')
 			}

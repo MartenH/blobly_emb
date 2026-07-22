@@ -53,8 +53,13 @@ pub fn j1939_pgn(id u32) u32 {
 // ones) encode prio+PGN+SA in the BO_ id, so live frames from a different
 // source address never match exactly; the PGN is the stable key.
 pub fn (db Database) lookup_frame(id u32, ext bool) ?Message {
-	if m := db.lookup(id) {
-		return m
+	// exact id AND width first: a standard and an extended frame with the same stripped
+	// id are distinct on the wire, so a received extended frame must not select the
+	// standard layout (or vice versa).
+	for m in db.messages {
+		if m.id == id && m.ext == ext {
+			return m
+		}
 	}
 	if !ext {
 		return none

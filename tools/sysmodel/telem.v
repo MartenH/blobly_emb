@@ -350,7 +350,9 @@ fn check_telemetry_frames(s System) []Issue {
 			// named trace/shell bindings).
 			if !f.bound {
 				if db := dbs[bus.name] {
-					if m := db.lookup(f.id) {
+					// module frames (telem/trace/shell) are standard 11-bit, so they only
+					// alias a STANDARD DBC frame of the same id — not an extended one.
+					if m := db.lookup_frame(f.id, false) {
 						issues << Issue{
 							severity: .error
 							req:      'REQ-TOPO-002'

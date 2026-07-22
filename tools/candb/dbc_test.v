@@ -38,4 +38,11 @@ CM_ SG_ 2147483904 ExtSig "extended signal";
 	// and its OWN signal comment
 	assert std.signals[0].desc == 'standard signal'
 	assert ext.signals[0].desc == 'extended signal'
+
+	// lookup_frame resolves by (id, width): a received extended frame must not select
+	// the standard layout, nor vice versa.
+	s := db.lookup_frame(0x100, false) or { panic('std lookup_frame miss') }
+	assert s.name == 'StdFrame', 'lookup_frame(0x100,false)=${s.name}'
+	e := db.lookup_frame(0x100, true) or { panic('ext lookup_frame miss') }
+	assert e.name == 'ExtFrame', 'lookup_frame(0x100,true)=${e.name}'
 }
