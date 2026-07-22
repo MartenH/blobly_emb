@@ -381,13 +381,9 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 				if src_sg.length > 52 || dst_sg.length > 52 {
 					panic('route: signal "${r.signal}" is >52 bits — the route carries the physical value through f64 (exact only to 52-bit integers)')
 				}
-				// - extended-id SOURCE or destination: can.Frame carries no ext-id flag,
-				//   and the socket strips EFF on rx (a 29-bit id is indistinguishable from
-				//   a standard id of the same number), so both ends must be standard.
-				if (dbc_ext_of(db, snake(r.from_frame)) or { false })
-					|| (dbc_ext_of(db, snake(r.to_frame)) or { false }) {
-					panic('route: signal "${r.signal}" frame is an extended (29-bit) id — the route forwarder handles standard ids only')
-				}
+				// (extended-id SOURCE and destination are now supported: Frame.ext carries
+				//  the id width, the signal-route rx predicate matches rx.ext == from_ext,
+				//  and the producer sends the dest frame with ext = to_ext — emb#180/#181.)
 				// - big-endian (Motorola): the DLC/bounds check below assumes the
 				//   little-endian [start, start+length) span; the sawtooth walk is not worth
 				//   it here (the dissolution rejects Motorola routes too).
@@ -430,19 +426,22 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 				// which also sees an authored [[frame]].tx.cycle_ms).
 				routes[i].from_cyc = dbc_cycle_of(db, snake(r.from_frame))
 				routes[i].to_cyc = dbc_cycle_of(db, snake(r.to_frame))
-				// both ids must be standard 11-bit: candb leaves an UNFLAGGED id > 0x7ff as
-				// ext = false, but the SocketCAN send would place it without CAN_EFF_FLAG
-				// and fail (the ext-flagged case is already rejected above).
-				if routes[i].from_id > 0x7ff || routes[i].to_id > 0x7ff {
-					panic('route: signal "${r.signal}" frame id > 0x7ff without the extended flag — the forwarder emits standard (11-bit) ids only')
+				// an id > 0x7ff must be flagged extended: candb leaves an UNFLAGGED id > 0x7ff
+				// as ext = false, and the driver would send it as an 11-bit id (truncated).
+				// A correctly EFF-flagged 29-bit id is fine (from_ext/to_ext carry the width).
+				if (routes[i].from_id > 0x7ff && !routes[i].from_ext)
+					|| (routes[i].to_id > 0x7ff && !routes[i].to_ext) {
+					panic('route: signal "${r.signal}" frame id > 0x7ff without the extended flag — a malformed DBC id')
 				}
-				// - the SOURCE id must be UNIQUE in the DBC: the runtime matches only
-				//   rx.id + rx.len, so a second same-id/len message would be mis-decoded
-				//   with this frame's layout and forwarded as a fabricated value.
+				// - the SOURCE id must be UNIQUE in the DBC: the runtime matches rx.id +
+				//   rx.len + rx.ext, so a second same-id/len/width message would be mis-
+				//   decoded with this frame's layout and forwarded as a fabricated value.
+				//   A standard and an extended frame with the same stripped id are distinct
+				//   on the wire (rx.ext disambiguates), so only a same-width clash collides.
 				for m2 in db.messages {
 					if snake(m2.name) != snake(r.from_frame) && m2.id == u32(routes[i].from_id)
-						&& int(m2.dlc) == routes[i].from_dlc {
-						panic('route: source id 0x${routes[i].from_id:x} (frame "${r.from_frame}") is shared by DBC frame "${m2.name}" at the same DLC — the runtime cannot tell them apart')
+						&& int(m2.dlc) == routes[i].from_dlc && m2.ext == routes[i].from_ext {
+						panic('route: source id 0x${routes[i].from_id:x} (frame "${r.from_frame}") is shared by DBC frame "${m2.name}" at the same DLC and id width — the runtime cannot tell them apart')
 					}
 				}
 			} else if routes[i].to_id == 0 {
@@ -1104,7 +1103,9 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		// a module frame (telemetry today) on the destination bus reserves its CAN id —
 		// a routed dest id colliding with it makes the route bridge and the telemetry
 		// producer transmit different payloads under one id on one interface.
-		if m.telem.on && m.telem.bus == r.to_bus {
+		// telemetry frames are standard (11-bit), so an EXTENDED destination sharing the
+		// numeric id is a distinct on-wire frame — only a same-width (standard) clash collides.
+		if m.telem.on && m.telem.bus == r.to_bus && !r.to_ext {
 			if r.to_id == int(m.telem.id) || (m.telem.detail_id != 0 && r.to_id == int(m.telem.detail_id)) {
 				panic('route: destination id 0x${r.to_id:x} on bus "${r.to_bus}" collides with the [telemetry] id — one writer per id')
 			}

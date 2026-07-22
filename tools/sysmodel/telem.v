@@ -275,7 +275,7 @@ fn check_telemetry_frames(s System) []Issue {
 			// (if the NM bus doesn't resolve, skip only the alive seed — NOT the rx
 			// reservation below, which is independent.)
 			if nb := s.bus_by_interface(n.view.nm_bus) {
-				key := '${nb.name}#${n.view.alive}'
+				key := '${nb.name}#${n.view.alive}#false' // NM alive ids are standard 11-bit
 				if _ := owner[key] {
 				} else {
 					owner[key] = 'the NM alive id of "${n.name}"'
@@ -295,7 +295,7 @@ fn check_telemetry_frames(s System) []Issue {
 				continue
 			}
 			bus := s.bus_by_interface(f.iface) or { continue }
-			key := '${bus.name}#${f.id}'
+			key := '${bus.name}#${f.id}#false' // modules are standard 11-bit (id>0x7ff rejected)
 			reserved[key] = '${f.label} of "${n.name}"'
 			if _ := owner[key] {
 			} else {
@@ -317,7 +317,7 @@ fn check_telemetry_frames(s System) []Issue {
 				continue
 			}
 			bus := s.bus_by_interface(f.iface) or { continue }
-			key := '${bus.name}#${f.id}'
+			key := '${bus.name}#${f.id}#false' // modules are standard 11-bit (id>0x7ff rejected)
 			// FDCAN masks id & 0x7ff — an id above that is truncated on the wire
 			if f.id > 0x7ff {
 				issues << Issue{
@@ -350,7 +350,9 @@ fn check_telemetry_frames(s System) []Issue {
 			// named trace/shell bindings).
 			if !f.bound {
 				if db := dbs[bus.name] {
-					if m := db.lookup(f.id) {
+					// module frames (telem/trace/shell) are standard 11-bit, so they only
+					// alias a STANDARD DBC frame of the same id — not an extended one.
+					if m := db.lookup_frame(f.id, false) {
 						issues << Issue{
 							severity: .error
 							req:      'REQ-TOPO-002'
@@ -380,7 +382,7 @@ fn check_telemetry_frames(s System) []Issue {
 			db := dbs[bus.name] or { continue }
 			for sig in sigs {
 				m := message_of_signal(db, sig) or { continue }
-				key := '${bus.name}#${m.id}'
+				key := '${bus.name}#${m.id}#${m.ext}'
 				if prev := reserved[key] {
 					issues << Issue{
 						severity: .error
@@ -418,7 +420,7 @@ fn check_telemetry_frames(s System) []Issue {
 			continue
 		}
 		for m in db.messages {
-			if m.id >= lo && m.id <= hi && m.id !in alive_ids {
+			if m.id >= lo && m.id <= hi && m.id !in alive_ids && !m.ext {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-002'
@@ -440,16 +442,18 @@ fn check_telemetry_frames(s System) []Issue {
 			tb := s.bus_by_name(r.to) or { continue }
 			db := dbs[tb.name] or { continue }
 			mut fid := ?u32(none)
+			mut fext := false
 			for m in db.messages {
 				for sg in m.signals {
 					if sg.name == r.signal {
 						fid = m.id
+						fext = m.ext
 						break
 					}
 				}
 			}
 			id := fid or { continue }
-			key := '${tb.name}#${id}'
+			key := '${tb.name}#${id}#${fext}'
 			if res := reserved[key] {
 				issues << Issue{
 					severity: .error
@@ -470,14 +474,16 @@ fn check_telemetry_frames(s System) []Issue {
 			b := s.bus_by_name(bn) or { continue }
 			db := dbs[b.name] or { continue }
 			mut fid := ?u32(none)
+			mut fext := false
 			for m in db.messages {
 				if m.name == r.frame {
 					fid = m.id
+					fext = m.ext
 					break
 				}
 			}
 			id := fid or { continue }
-			if res := reserved['${b.name}#${id}'] {
+			if res := reserved['${b.name}#${id}#${fext}'] {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-002'
