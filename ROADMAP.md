@@ -55,13 +55,18 @@ Status keys: ✅ shipped · 🔨 in progress · ⏭️ next · 🧭 planned · �
   cross-node validator; multi-DBC gateway runs on two vcans
 - ✅ **Multi-image (AMP)** — `[[partition]] image=` generates the satellite; cross-
   core signals as xioc slots; H755 CM4 bench-verified
-- 🧭 **On-silicon multi-node** — domain (H755) + gateway (H735) + zone (H723) from
-  one `system.toml`, a signal across the real bus (**gated on H723 CAN wiring**)
+- ⏭️ **On-silicon multi-node** — domain (H755) + gateway (H735) + zone (H723) from
+  one `system.toml`, a signal across the real bus. **No longer gated:** all three
+  boards are on CAN and the H723 echo is silicon-validated (`#184`)
 
 ## Observability
 
 - ✅ **Trace** — config-driven trace as a COM module; ThreadX thread/ISR capture;
   dumped over FDCAN (never semihosting in the data path)
+- ✅ **Cross-core time correlation** (`#186`, REQ-TRACE-011) — a satellite core's dump
+  block carries its measured clock offset + error bound, so a multi-core swimlane is
+  one timeline instead of several. Measured per dump on the existing dtrace round
+  trip; H755-verified at +49.7 ms, ±<1 ms
 - ✅ **CAN shell** — 0x7F0 command channel + GUI panel
 
 ---
@@ -72,7 +77,7 @@ Status keys: ✅ shipped · 🔨 in progress · ⏭️ next · 🧭 planned · �
 |-------|------|-------|-----|-------|
 | STM32H755ZI-Q | domain (AMP CM7+CM4) | ✅ up | ✅ FD Click | FD payload validation target |
 | STM32H735G-DK | gateway | ✅ up | ✅ on-board | 25 MHz FDCAN kclk |
-| STM32H723 | zone | ✅ up | ⛔ needs soldering | flash-ready; CAN pending |
+| STM32H723 | zone | ✅ up | ✅ FD Click | echo silicon-validated (`#184`), 8 MHz kclk |
 | PCAN-USB | host bus view | — | 🔨 `can0/can1` | passwordless bring-up via `blobly-can` |
 
 `openocd` 0.12 segfaults with the STLINK-V3s → use `st-flash` (by `--serial`).
@@ -85,10 +90,14 @@ Driver-format completeness is **done in sim**: ext-id (`#180`), CAN-FD payloads
 (`#181`), signal-route ext destinations (`#182`) — all merged. Passwordless CAN
 bring-up (`blobly-can`) is installed. Remaining:
 
-1. 🧪 **On-silicon validation** (bench): flash the H755 CAN-FD echo (`#181`) + send
-   a 64-byte FD frame; re-check H735 ext-id (`#180`). Gated on CAN wiring.
+1. ✅ **On-silicon validation** (bench) — 64-byte CAN-FD payloads verified on the
+   H755, H735 ext-id re-checked, H723 echo brought up (`#184`). BRS at 2 Mbit from
+   the 8 MHz kclk goes bus-off (only 4 tq); FD payloads verified without BRS.
 2. ⏭️ **Cross-core xioc routes** — the next substantial codegen item.
 3. 🧭 Follow-ups: generated-target FD data-timing harmonization (bench-gated);
-   canif FD recv-flag; wire H723 CAN for the 3-node silicon run.
+   canif FD recv-flag; the 3-node silicon run (all boards now wired).
+4. ⏭️ **CI** — this repo has none. 17 V test files, `make check` and `make trace`
+   run only by hand, so nothing gates a PR.
 
-Public-repo gate: `blobly_net` GPL→MIT (net#57) before the site/docs go public.
+Public-repo gate: **cleared** — `blobly_net` is MIT from its initial commit
+(relicensed 2026-07-22, history rewritten), so the site/docs are unblocked.
