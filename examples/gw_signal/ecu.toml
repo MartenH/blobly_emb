@@ -24,3 +24,10 @@ core      = 0
 signal = "Speed"
 from = { bus = "can0", frame = "SrcFrame" }
 to   = { bus = "can1", frame = "DstFrame" }
+
+# a signal route into an EXTENDED (29-bit) destination frame: the producer re-encodes
+# Rpm into ExtDst (0x18FF0200), which the driver sends with the wide id (Frame.ext).
+[[route]]
+signal = "Rpm"
+from = { bus = "can0", frame = "SrcFrame" }
+to   = { bus = "can1", frame = "ExtDst" }

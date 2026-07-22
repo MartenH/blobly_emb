@@ -12,7 +12,10 @@ mut:
 	route_can1 can.Channel // gateway: forward to can1
 	rt_can1_dst_frame_speed_v f64 // routed physical value
 	rt_can1_dst_frame_speed_fresh u64 // rx timestamp (0 = never received)
+	rt_can1_ext_dst_rpm_v f64 // routed physical value
+	rt_can1_ext_dst_rpm_fresh u64 // rx timestamp (0 = never received)
 	rt_tx_can1_dst_frame com.TxState
+	rt_tx_can1_ext_dst com.TxState
 }
 
 fn io_can0_10ms(ctx voidptr) {
@@ -24,10 +27,15 @@ fn io_can0_10ms(ctx voidptr) {
 			st.rt_can1_dst_frame_speed_v = src_frame_speed_phys(rx.data)
 			st.rt_can1_dst_frame_speed_fresh = now
 		}
+		if rx.id == u32(0x100) && rx.len == 8 && rx.ext == false {
+			st.rt_can1_ext_dst_rpm_v = src_frame_rpm_phys(rx.data)
+			st.rt_can1_ext_dst_rpm_fresh = now
+		}
 	}
 	mut rf_can1_dst_frame := can.Frame{
 		id:  u32(0x200)
 		len: 8
+		ext: false
 	}
 	mut rf_can1_dst_frame_ok := true
 	dst_frame_speed_set(mut rf_can1_dst_frame.data, st.rt_can1_dst_frame_speed_v)
@@ -39,6 +47,21 @@ fn io_can0_10ms(ctx voidptr) {
 			st.rt_tx_can1_dst_frame.mark_sent(now, rf_can1_dst_frame.data, 8)
 		}
 	}
+	mut rf_can1_ext_dst := can.Frame{
+		id:  u32(0x18ff0200)
+		len: 8
+		ext: true
+	}
+	mut rf_can1_ext_dst_ok := true
+	ext_dst_rpm_set(mut rf_can1_ext_dst.data, st.rt_can1_ext_dst_rpm_v)
+	if st.rt_can1_ext_dst_rpm_fresh == 0 || now - st.rt_can1_ext_dst_rpm_fresh > u64(60000) {
+		rf_can1_ext_dst_ok = false
+	}
+	if rf_can1_ext_dst_ok && st.route_can1.tx_ready() && st.rt_tx_can1_ext_dst.should_send(now, rf_can1_ext_dst.data, 8) {
+		if st.route_can1.send(rf_can1_ext_dst) {
+			st.rt_tx_can1_ext_dst.mark_sent(now, rf_can1_ext_dst.data, 8)
+		}
+	}
 }
 
 pub fn partition_can0(ch can.Channel, route_can1 can.Channel) {
@@ -48,6 +71,11 @@ pub fn partition_can0(ch can.Channel, route_can1 can.Channel) {
 	}
 	st.route_can1 = route_can1
 	st.rt_tx_can1_dst_frame = com.TxState{
+		mode: com.TxMode.cyclic
+		cycle_us: 100000
+		min_delay_us: 0
+	}
+	st.rt_tx_can1_ext_dst = com.TxState{
 		mode: com.TxMode.cyclic
 		cycle_us: 100000
 		min_delay_us: 0

@@ -381,13 +381,9 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 				if src_sg.length > 52 || dst_sg.length > 52 {
 					panic('route: signal "${r.signal}" is >52 bits — the route carries the physical value through f64 (exact only to 52-bit integers)')
 				}
-				// - extended-id SOURCE or destination: can.Frame carries no ext-id flag,
-				//   and the socket strips EFF on rx (a 29-bit id is indistinguishable from
-				//   a standard id of the same number), so both ends must be standard.
-				if (dbc_ext_of(db, snake(r.from_frame)) or { false })
-					|| (dbc_ext_of(db, snake(r.to_frame)) or { false }) {
-					panic('route: signal "${r.signal}" frame is an extended (29-bit) id — the route forwarder handles standard ids only')
-				}
+				// (extended-id SOURCE and destination are now supported: Frame.ext carries
+				//  the id width, the signal-route rx predicate matches rx.ext == from_ext,
+				//  and the producer sends the dest frame with ext = to_ext — emb#180/#181.)
 				// - big-endian (Motorola): the DLC/bounds check below assumes the
 				//   little-endian [start, start+length) span; the sawtooth walk is not worth
 				//   it here (the dissolution rejects Motorola routes too).
@@ -430,11 +426,12 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 				// which also sees an authored [[frame]].tx.cycle_ms).
 				routes[i].from_cyc = dbc_cycle_of(db, snake(r.from_frame))
 				routes[i].to_cyc = dbc_cycle_of(db, snake(r.to_frame))
-				// both ids must be standard 11-bit: candb leaves an UNFLAGGED id > 0x7ff as
-				// ext = false, but the SocketCAN send would place it without CAN_EFF_FLAG
-				// and fail (the ext-flagged case is already rejected above).
-				if routes[i].from_id > 0x7ff || routes[i].to_id > 0x7ff {
-					panic('route: signal "${r.signal}" frame id > 0x7ff without the extended flag — the forwarder emits standard (11-bit) ids only')
+				// an id > 0x7ff must be flagged extended: candb leaves an UNFLAGGED id > 0x7ff
+				// as ext = false, and the driver would send it as an 11-bit id (truncated).
+				// A correctly EFF-flagged 29-bit id is fine (from_ext/to_ext carry the width).
+				if (routes[i].from_id > 0x7ff && !routes[i].from_ext)
+					|| (routes[i].to_id > 0x7ff && !routes[i].to_ext) {
+					panic('route: signal "${r.signal}" frame id > 0x7ff without the extended flag — a malformed DBC id')
 				}
 				// - the SOURCE id must be UNIQUE in the DBC: the runtime matches only
 				//   rx.id + rx.len, so a second same-id/len message would be mis-decoded

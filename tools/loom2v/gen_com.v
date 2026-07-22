@@ -932,6 +932,7 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			glue << '\tmut rf_${dk} := can.Frame{'
 			glue << '\t\tid:  u32(0x${r.to_id.hex()})'
 			glue << '\t\tlen: ${r.to_dlc}'
+			glue << '\t\text: ${r.to_ext}' // re-encode into a 29-bit dest frame keeps its id width
 			glue << '\t}'
 			glue << '\tmut rf_${dk}_ok := true'
 			for r2 in sig_routes {

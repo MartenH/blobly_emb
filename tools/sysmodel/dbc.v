@@ -570,13 +570,9 @@ pub fn check_route_dbc(s System) []Issue {
 				msg:      'route on "${r.gateway}": destination frame "${dm.name}" is ${dm.dlc} bytes but bus "${r.to}" is classic (fd = false, DLC <= 8)'
 			}
 		}
-		if dm.ext {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-003'
-				msg:      'route on "${r.gateway}": destination frame "${dm.name}" is an extended (29-bit) id — the routed forwarder has no extended-id format flag (P2)'
-			}
-		}
+		// (an extended-id destination is now supported: the gateway's COM producer
+		//  composes the frame and the driver sends it with Frame.ext = true — emb#180/#181,
+		//  same path the standalone loom2v signal route uses.)
 		// the WHOLE destination frame is composed by the gateway's COM producer. A P2a
 		// gateway can't produce its own signals, so every OTHER SG_ in the frame must
 		// be filled by another route from the SAME gateway — else the producer emits a

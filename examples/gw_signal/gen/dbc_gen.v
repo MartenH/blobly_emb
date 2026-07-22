@@ -46,6 +46,46 @@ pub fn src_frame_speed_set(mut data [64]u8, phys f64) {
 	src_frame_speed_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
 }
 
+// Rpm: 16|16 @1 (Intel) unsigned (1.0,0.0) "rpm"
+pub fn src_frame_rpm_raw(data [64]u8) u64 {
+	mut raw := u64(0)
+	for i in 0 .. 16 {
+		g := 16 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit := (data[byte_idx] >> (g % 8)) & 1
+		raw |= u64(bit) << i
+	}
+	return raw
+}
+pub fn src_frame_rpm_phys(data [64]u8) f64 {
+	raw := src_frame_rpm_raw(data)
+	return f64(raw) * 1.0 + 0.0
+}
+pub fn src_frame_rpm_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 16 {
+		g := 16 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn src_frame_rpm_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 16)
+	}
+	src_frame_rpm_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+}
+
 // ===== DstFrame  id=0x200  dlc=8 =====
 pub const dst_frame_id = u32(0x200)
 pub const dst_frame_dlc = u8(8)
@@ -88,4 +128,48 @@ pub fn dst_frame_speed_set(mut data [64]u8, phys f64) {
 		raw += i64(u64(1) << 16)
 	}
 	dst_frame_speed_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
+}
+
+// ===== ExtDst  id=0x18ff0200  dlc=8 =====
+pub const ext_dst_id = u32(0x18ff0200)
+pub const ext_dst_dlc = u8(8)
+
+// Rpm: 0|16 @1 (Intel) unsigned (1.0,0.0) "rpm"
+pub fn ext_dst_rpm_raw(data [64]u8) u64 {
+	mut raw := u64(0)
+	for i in 0 .. 16 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit := (data[byte_idx] >> (g % 8)) & 1
+		raw |= u64(bit) << i
+	}
+	return raw
+}
+pub fn ext_dst_rpm_phys(data [64]u8) f64 {
+	raw := ext_dst_rpm_raw(data)
+	return f64(raw) * 1.0 + 0.0
+}
+pub fn ext_dst_rpm_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 16 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn ext_dst_rpm_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 16)
+	}
+	ext_dst_rpm_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
 }
