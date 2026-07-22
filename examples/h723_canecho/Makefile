@@ -60,9 +60,16 @@ $(BUILD)/canecho.bin: $(BUILD)/canecho.elf
 $(BUILD):
 	mkdir -p $(BUILD)
 
-# onboard ST-LINK-V3E. Address by serial when several probes are attached.
+# onboard ST-LINK-V3E. The bench has several probes attached (H723/H735/H755), and
+# st-flash picks the FIRST one it finds — so the serial is REQUIRED here rather than
+# optional: flashing without it can program a different board. `st-info --probe` lists
+# them.  Usage:  make flash STLINK_SERIAL=0055...
+STLINK_SERIAL ?=
 flash: $(BUILD)/canecho.bin
-	st-flash write $(BUILD)/canecho.bin 0x08000000
+ifeq ($(strip $(STLINK_SERIAL)),)
+	$(error set STLINK_SERIAL=<this board's ST-LINK serial> — several probes are attached; `st-info --probe` lists them)
+endif
+	st-flash --serial $(STLINK_SERIAL) --reset write $(BUILD)/canecho.bin 0x08000000
 
 debug:
 	$(MAKE) clean
