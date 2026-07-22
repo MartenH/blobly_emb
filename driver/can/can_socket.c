@@ -159,6 +159,10 @@ int blob_can_recv(int sock, uint32_t *id, uint8_t *data, uint8_t *len, int *flag
 		}
 	}
 #endif
+	/* drop REMOTE frames — Frame has no RTR flag, so a forwarder would otherwise emit
+	 * a data frame with meaningless bytes (the FDCAN backends drop RTR too). */
+	if (f.can_id & CAN_RTR_FLAG)
+		return -1;
 	*id = f.can_id & CAN_EFF_MASK;
 	*len = f.len;
 	*flags = 0;

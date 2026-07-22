@@ -54,7 +54,7 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
-		if rx.id == u32(0x300) && rx.len == 8 {
+		if rx.id == u32(0x300) && rx.len == 8 && rx.ext == false {
 			mut fwd := rx
 			if st.route_can1.tx_ready() && st.route_can1.send(fwd) {
 				st.rr_can1_300_set = false // newer PDU went out; drop any stale held one (freshest-wins)
@@ -63,7 +63,7 @@ fn io_can0_10ms(ctx voidptr) {
 				st.rr_can1_300_set = true
 			}
 		}
-		if rx.id == powertrain_id && rx.len == powertrain_dlc {
+		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false {
 			mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), valid: true }
 			osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 			st.rx_powertrain_st.on_receive(now)

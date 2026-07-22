@@ -20,7 +20,7 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
-		if rx.id == u32(0x10fd0500) && rx.len == 8 {
+		if rx.id == u32(0x10fd0500) && rx.len == 8 && rx.ext == true {
 			mut fwd := rx
 			if st.route_can1.tx_ready() && st.route_can1.send(fwd) {
 				st.rr_can1_10fd0500_set = false // newer PDU went out; drop any stale held one (freshest-wins)

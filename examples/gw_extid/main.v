@@ -12,7 +12,7 @@ import gen
 fn main() {
 	if0 := if os.args.len > 1 { os.args[1] } else { 'vcan0' }
 	if1 := if os.args.len > 2 { os.args[2] } else { 'vcan1' }
-	println('gw_signal: ${if0} (in: SrcFrame 0x100) -> Speed -> ${if1} (out: DstFrame 0x200)')
+	println('gw_extid: ${if0} -> raw-forward extended-id frame ExtDiag (0x10FD0500) -> ${if1}')
 
 	mut c0 := can.Channel{}
 	if !c0.open(if0, gen.can0_fd) {

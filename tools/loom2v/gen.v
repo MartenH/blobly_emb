@@ -92,6 +92,7 @@ mut:
 	to_cyc     int // destination frame GenMsgCycleTime (ms) — the re-emit cadence
 	to_bit     int // SIGNAL route: the routed signal's start bit in the destination frame
 	to_len     int // SIGNAL route: the routed signal's bit length in the destination frame
+	from_ext   bool // the source frame is an extended (29-bit) id — the rx match checks rx.ext
 }
 
 // TargetCfg is the parsed [target] block. kind selects the on-target emitter: 'baremetal' =
@@ -343,6 +344,7 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 			}
 			routes[i].from_id = id
 			routes[i].from_dlc = dbc_dlc_of(db, snake(r.from_frame)) or { 8 }
+			routes[i].from_ext = dbc_ext_of(db, snake(r.from_frame)) or { false }
 			if r.signal != '' {
 				// SIGNAL route: resolve the DESTINATION frame's id + dlc (a distinct
 				// frame from the source; NOTE: both frames must be in this ONE DBC —

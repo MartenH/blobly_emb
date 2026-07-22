@@ -1,7 +1,7 @@
 -- A raw-PDU gateway forwarding an EXTENDED-id (29-bit) frame: the driver Frame carries
 -- an ext flag now, so the forward preserves the extended id (a standard-id forwarder
 -- would truncate/mis-send it). CAN1 = vcan0 (inject), CAN2 = vcan1 (read).
--- @verifies REQ-TOPO-007, REQ-CAN-DRV-001
+-- @verifies REQ-TOPO-007
 
 test("extended-id frame is raw-forwarded, staying extended", function()
   local pdu = fromhex("DE AD BE EF CA FE BA BE")

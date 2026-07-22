@@ -115,14 +115,14 @@ fn io_can0_10ms(ctx voidptr) {
 	now := osal.now_us()
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
-		if rx.id == powertrain_id && rx.len == powertrain_dlc {
+		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false {
 			mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), valid: true }
 			osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 			mut engine_speed := sig.EngineSpeed{ rpm: u16(powertrain_engine_speed_phys(rx.data)), valid: true }
 			osal.ioc_publish2(engine_speed_ch, &engine_speed, u8(sizeof(engine_speed)))
 			st.rx_powertrain_st.on_receive(now)
 		}
-		if rx.id == u32(0x101) {
+		if rx.id == u32(0x101) && !rx.ext {
 			mut p_diag := isotp.Pdu{}
 			for i in 0 .. 8 {
 				p_diag.data[i] = rx.data[i]
