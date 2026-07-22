@@ -1,0 +1,18 @@
+# gw_extid — a raw-PDU gateway forwarding an EXTENDED-id (29-bit) frame (P2c). The
+# driver Frame now carries an ext flag, so a raw forward preserves the 29-bit id.
+[import]
+dbc = "bus.dbc"
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0
+
+[bus.can1]
+interface = "vcan1"
+fd        = false
+core      = 0
+
+[[route]]
+from = { bus = "can0", frame = "ExtDiag" }
+to   = { bus = "can1" }

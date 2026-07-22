@@ -247,7 +247,7 @@ fn trace_rx_arms(m Model, part string) []string {
 		return []string{}
 	}
 	mut g := []string{}
-	g << '\t\t\tif rx.id == u32(0x${m.trace.cmd_id.hex()}) && rx.len == 8 { // trace.cmd -> the module'
+	g << '\t\t\tif rx.id == u32(0x${m.trace.cmd_id.hex()}) && rx.len == 8 && !rx.ext { // trace.cmd -> the module'
 	g << '\t\t\t\top := rx.data[0]'
 	g << '\t\t\t\tif op == trace.op_arm || op == trace.op_start || op == trace.op_reset {'
 	g << "\t\t\t\t\tC.trace_arm() // fresh window in the exec-hook recorder"
@@ -259,7 +259,7 @@ fn trace_rx_arms(m Model, part string) []string {
 	g << '\t\t\t\tg_tm.on_cmd(rx)'
 	g << '\t\t\t}'
 	if m.trace.dump_fc_bound {
-		g << '\t\t\tif rx.id == u32(0x${m.trace.dump_fc_id.hex()}) { // trace.dump_fc -> ISO-TP FC'
+		g << '\t\t\tif rx.id == u32(0x${m.trace.dump_fc_id.hex()}) && !rx.ext { // trace.dump_fc -> ISO-TP FC'
 		g << '\t\t\t\tg_tm.on_dump_fc(C.board_now_us(), rx)'
 		g << '\t\t\t}'
 	}

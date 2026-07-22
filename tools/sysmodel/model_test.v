@@ -1407,16 +1407,30 @@ fn test_frame_route_missing_on_dest_rejected() {
 	assert errs(check_route_dbc(s)).any(it.contains('not defined in destination')), errs(check_route_dbc(s)).str()
 }
 
-// REQ-TOPO-007: extended-id frames are not raw-forwarded yet (the driver frame path
-// carries no ext-id flag — P2c). 1024 | 0x80000000 = 2147484672 sets the EFF bit.
-fn test_frame_route_extended_id_rejected() {
-	compute := 'VERSION ""\nBU_: prod gw\nBO_ 2147484672 DiagFrame: 8 prod\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" gw\n'
-	edge := 'VERSION ""\nBU_: gw cons\nBO_ 2147484672 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\n'
-	dir, s := frame_route_system('frext', compute, edge)
+// REQ-TOPO-007: an EXTENDED-id frame CAN be raw-forwarded now (the driver Frame carries
+// an ext flag) as long as both buses agree on the id width. 1024 | 0x80000000 sets the
+// EFF bit, so candb reports ext = true (id 0x400).
+fn test_frame_route_extended_id_matching_ok() {
+	body := fn (recv string) string {
+		return 'VERSION ""\nBU_: gw ${recv}\nBO_ 2147484672 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" ${recv}\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 2147484672 100;\n'
+	}
+	dir, s := frame_route_system('frextok', body('gw'), body('cons'))
 	defer {
 		os.rmdir_all(dir) or {}
 	}
-	assert errs(check_route_dbc(s)).any(it.contains('extended-id')), errs(check_route_dbc(s)).str()
+	assert errs(check_route_dbc(s)).len == 0, errs(check_route_dbc(s)).str()
+}
+
+// REQ-TOPO-007: a std<->ext width MISMATCH can't be raw-forwarded (the forward can't
+// change the id width) — must be a signal route.
+fn test_frame_route_id_width_mismatch_rejected() {
+	compute := 'VERSION ""\nBU_: prod gw\nBO_ 2147484672 DiagFrame: 8 prod\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" gw\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 2147484672 100;\n' // ext
+	edge := 'VERSION ""\nBU_: gw cons\nBO_ 1024 DiagFrame: 8 gw\n SG_ Code : 0|32@1+ (1,0) [0|4294967295] "" cons\nBA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;\nBA_ "GenMsgCycleTime" BO_ 1024 100;\n' // std
+	dir, s := frame_route_system('frwidth', compute, edge)
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	assert errs(check_route_dbc(s)).any(it.contains('id width differs')), errs(check_route_dbc(s)).str()
 }
 
 // REQ-TOPO-007: an unflagged id above the 11-bit standard range can't be raw-forwarded

@@ -171,7 +171,7 @@ fn route_field(r Route) string {
 // tx-ready gate: if the destination TX can't accept the send yet, the PDU is held
 // and retried next tick rather than silently dropped — REQ-TOPO-010).
 fn raw_field(r Route) string {
-	return 'rr_${snake(r.to_bus)}_${r.from_id.hex()}'
+	return 'rr_${snake(r.to_bus)}_${r.from_id.hex()}_${if r.from_ext { 'e' } else { 's' }}'
 }
 
 fn telem_on_can(m Model) bool {
@@ -487,6 +487,15 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 	mut glue := []string{}
 	mut bus_names := []string{}
 	mut bus_dests := map[string][]string{}
+	// per-DBC-message extended-id flag: every generated rx dispatch predicate must match
+	// rx.ext too, or a standard frame could satisfy an extended route (or vice versa) that
+	// shares the numeric id — the FDCAN backend now delivers both widths.
+	mut msg_ext := map[string]bool{}
+	for _, si in m.sig_of {
+		if si.external && si.dbc_msg != '' {
+			msg_ext[si.dbc_msg] = si.dbc_ext
+		}
+	}
 	for bname, _ in m.buses {
 		if comm_thread_on {
 			continue
@@ -690,7 +699,7 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 					frof := snake(r.from_frame)
 					s_e2e := m.frames.e2e_here(frof, r.from_bus)
 					s_secoc := m.frames.secoc_here(frof, r.from_bus)
-					glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} {'
+					glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} && rx.ext == ${r.from_ext} {'
 					mut ind := '\t\t\t'
 					if s_secoc {
 						glue << '\t\t\tif st.secoc_rx_${frof}.verify(&st.secoc_key_${frof}, &rx.data[0], int(${r.from_dlc}), u16(0x${(m.frames.secoc_id[frof] or {
@@ -723,7 +732,7 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				// cyclic frame = rate adaptation) — draining never stops, so ingress flows.
 				rf := raw_field(r)
 				dch := 'st.route_${snake(r.to_bus)}'
-				glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} {'
+				glue << '\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} && rx.ext == ${r.from_ext} {'
 				glue << '\t\t\tmut fwd := rx'
 				if r.to_id != r.from_id {
 					glue << '\t\t\tfwd.id = u32(0x${r.to_id.hex()})'
@@ -740,7 +749,7 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				// require the received length to match the PDU DLC — recv copies only
 				// the actual bytes into the reused frame, so a short same-id frame
 				// would otherwise be decoded over stale trailing bytes.
-				glue << '\t\tif rx.id == ${msg}_id && rx.len == ${msg}_dlc {'
+				glue << '\t\tif rx.id == ${msg}_id && rx.len == ${msg}_dlc && rx.ext == ${msg_ext[msg]} {'
 				e2e := m.frames.e2e_here(msg, bname)
 				secoc := m.frames.secoc_here(msg, bname)
 				// protected frames are decoded only if the check passes; a bad frame
@@ -782,7 +791,7 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			}
 			for c in conns {
 				tp := snake(c.name)
-				glue << '\t\tif rx.id == u32(0x${c.rx_id.hex()}) {'
+				glue << '\t\tif rx.id == u32(0x${c.rx_id.hex()}) && !rx.ext {'
 				glue << '\t\t\tmut p_${tp} := isotp.Pdu{}'
 				glue << '\t\t\tfor i in 0 .. 8 {'
 				glue << '\t\t\t\tp_${tp}.data[i] = rx.data[i]'

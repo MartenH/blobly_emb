@@ -21,11 +21,15 @@
  * single-producer/single-consumer ring (can_ring.h) that recv() drains — so
  * application code never runs in ISR/BSW context. */
 
+/* per-frame format flags for blob_can_send/recv (the `flags` arg): */
+#define BLOB_CAN_FLAG_FD  1 /* CAN-FD frame (canfd_frame / FDF) vs classic */
+#define BLOB_CAN_FLAG_EXT 2 /* 29-bit extended identifier vs 11-bit standard */
+
 int      blob_can_open(const char *name, int fd_mode);                    /* >=0 handle, -1 fail */
-int      blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int fd_mode);
+int      blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int flags); /* flags: BLOB_CAN_FLAG_* */
 int      blob_can_tx_ready(int h);                                        /* 1=Tx can accept now, 0=full */
 int      blob_can_tx_idle(int h);                                         /* 1=all handed-off frames transmitted */
-int      blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len); /* 0=frame, -1=none */
+int      blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len, int *flags); /* 0=frame (flags=BLOB_CAN_FLAG_*), -1=none */
 uint32_t blob_can_rx_overruns(int h);  /* count of Rx-overrun events since open, each >=1 frame lost (REQ-CAN-DRV-008) */
 void     blob_can_close(int h);
 

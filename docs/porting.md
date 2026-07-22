@@ -12,12 +12,18 @@ The whole contract the COM bridge depends on is six C functions
 
 ```c
 int      blob_can_open (const char *name, int fd_mode);                 /* >=0 handle, -1 fail */
-int      blob_can_send (int h, uint32_t id, const uint8_t *d, uint8_t len, int fd);
+int      blob_can_send (int h, uint32_t id, const uint8_t *d, uint8_t len, int flags);   /* flags: BLOB_CAN_FLAG_FD|EXT */
 int      blob_can_tx_ready(int h);                                      /* 1=Tx can accept now, 0=full */
-int      blob_can_recv (int h, uint32_t *id, uint8_t *d, uint8_t *len);  /* 0=frame, -1=none */
+int      blob_can_recv (int h, uint32_t *id, uint8_t *d, uint8_t *len, int *flags); /* 0=frame (flags=FD|EXT), -1=none */
 uint32_t blob_can_rx_overruns(int h);   /* count of Rx-overrun events since open, each >=1 frame lost */
 void     blob_can_close(int h);
 ```
+
+The `flags` word carries the per-frame format: `BLOB_CAN_FLAG_FD` (CAN-FD vs classic)
+and `BLOB_CAN_FLAG_EXT` (29-bit extended vs 11-bit standard id). `send` reads them from
+the caller's frame; `recv` reports them for the received frame. A backend must **drop
+REMOTE (RTR) frames** in `recv` (return "none") — the `Frame` has no RTR flag, so a
+forwarder would otherwise emit a data frame with meaningless bytes.
 
 `blob_can_rx_overruns` surfaces receive-with-loss (REQ-CAN-DRV-008): when frames arrive
 faster than `recv` drains them and overflow the Rx buffer, the backend counts the overrun
