@@ -632,16 +632,20 @@ pub fn check_dbc_conformance(s System) []Issue {
 		if bus.name !in loaded {
 			continue
 		}
-		mut id_seen := map[u32]string{}
+		// key by id AND width: a standard and an extended frame with the same numeric
+		// id are distinct on the wire (recv reports the width), so only a same-id/width
+		// pair is a real one-frame-per-id clash.
+		mut id_seen := map[string]string{}
 		for msg in dbs[bus.name].messages {
-			if prev := id_seen[msg.id] {
+			key := '${msg.id}/${msg.ext}'
+			if prev := id_seen[key] {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-003'
-					msg:      'bus "${bus.name}": DBC frames "${prev}" and "${msg.name}" share CAN id 0x${msg.id.hex()} — one frame per id'
+					msg:      'bus "${bus.name}": DBC frames "${prev}" and "${msg.name}" share CAN id 0x${msg.id.hex()} (${if msg.ext { 'extended' } else { 'standard' }}) — one frame per id'
 				}
 			} else {
-				id_seen[msg.id] = msg.name
+				id_seen[key] = msg.name
 			}
 		}
 	}

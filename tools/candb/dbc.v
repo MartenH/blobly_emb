@@ -116,11 +116,18 @@ mut:
 const can_eff_flag = u32(0x8000_0000)
 const can_eff_mask = u32(0x1FFF_FFFF)
 
+// idkey packs the stripped id and the id width into one attribute-index key, so a
+// standard and an extended frame with the same numeric id (distinct on the wire)
+// don't collide — their GenMsgCycleTime / VAL_ / comments attach to the right frame.
+fn idkey(id u32, ext bool) u64 {
+	return u64(id) | if ext { u64(1) << 32 } else { u64(0) }
+}
+
 // parse_dbc parses DBC text into a Database. Pure (no I/O) so it is directly
 // unit-testable. Returns an error only on a structurally broken BO_/SG_ line.
 pub fn parse_dbc(text string) !Database {
 	mut msgs := []MsgBuilder{}
-	mut by_id := map[u32]int{} // message id -> index into msgs
+	mut by_id := map[u64]int{} // idkey(id, ext) -> index into msgs
 	mut cur := -1              // index of the message SG_ lines attach to
 	mut nodes := []string{}
 
@@ -128,7 +135,7 @@ pub fn parse_dbc(text string) !Database {
 		line := raw_line.trim_space()
 		if line.starts_with('BO_ ') {
 			mb := parse_bo(line)!
-			by_id[mb.id] = msgs.len
+			by_id[idkey(mb.id, mb.ext)] = msgs.len
 			cur = msgs.len
 			msgs << mb
 		} else if line.starts_with('SG_ ') {
@@ -191,15 +198,16 @@ pub fn parse_dbc(text string) !Database {
 
 // apply_cycle_time parses `BA_ "GenMsgCycleTime" BO_ <id> <ms>;` and records the
 // period on the matching message (DBC convention for cyclic-message timing).
-fn apply_cycle_time(mut msgs []MsgBuilder, by_id map[u32]int, line string) {
+fn apply_cycle_time(mut msgs []MsgBuilder, by_id map[u64]int, line string) {
 	f := line.replace(';', '').fields()
 	// f: BA_ "GenMsgCycleTime" BO_ <id> <ms>
 	if f.len < 5 || f[2] != 'BO_' {
 		return
 	}
 	raw_id := u32(f[3].u64())
-	id := if raw_id & can_eff_flag != 0 { raw_id & can_eff_mask } else { raw_id }
-	if idx := by_id[id] {
+	ext := raw_id & can_eff_flag != 0
+	id := if ext { raw_id & can_eff_mask } else { raw_id }
+	if idx := by_id[idkey(id, ext)] {
 		msgs[idx].cycle_ms = f[4].int()
 	}
 }
@@ -322,15 +330,16 @@ fn parse_sg(line string) !SigBuilder {
 
 // apply_val parses a VAL_ table and attaches it to the named signal.
 //   VAL_ <id> <Signal> <int> "label" <int> "label" … ;
-fn apply_val(mut msgs []MsgBuilder, by_id map[u32]int, line string) {
+fn apply_val(mut msgs []MsgBuilder, by_id map[u64]int, line string) {
 	body := line.trim_string_left('VAL_').trim_space().trim_right(';').trim_space()
 	f := body.fields()
 	if f.len < 2 {
 		return
 	}
-	id := u32(f[0].u64()) & can_eff_mask
+	raw_id := u32(f[0].u64())
+	id := raw_id & can_eff_mask
 	sig_name := f[1]
-	mi := by_id[id] or { return }
+	mi := by_id[idkey(id, raw_id & can_eff_flag != 0)] or { return }
 	si := signal_index(msgs[mi], sig_name) or { return }
 	// remaining tokens alternate <int> "<label>"; labels can hold spaces, so
 	// scan the raw remainder after the signal name for value/quoted-label pairs.
@@ -360,18 +369,19 @@ fn apply_val(mut msgs []MsgBuilder, by_id map[u32]int, line string) {
 
 // apply_cm_sg parses a signal comment and stores it as the signal's desc.
 //   CM_ SG_ <id> <Signal> "comment" ;
-fn apply_cm_sg(mut msgs []MsgBuilder, by_id map[u32]int, line string) {
+fn apply_cm_sg(mut msgs []MsgBuilder, by_id map[u64]int, line string) {
 	rest := line.trim_string_left('CM_ SG_').trim_space()
 	f := rest.fields()
 	if f.len < 2 {
 		return
 	}
-	id := u32(f[0].u64()) & can_eff_mask
+	raw_id := u32(f[0].u64())
+	id := raw_id & can_eff_mask
 	sig_name := f[1]
 	q1 := index_byte_from(line, `"`, 0) or { return }
 	q2 := index_byte_from(line, `"`, q1 + 1) or { return }
 	comment := line[q1 + 1..q2]
-	mi := by_id[id] or { return }
+	mi := by_id[idkey(id, raw_id & can_eff_flag != 0)] or { return }
 	si := signal_index(msgs[mi], sig_name) or { return }
 	msgs[mi].sigs[si].desc = comment
 }
