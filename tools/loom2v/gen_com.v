@@ -171,7 +171,7 @@ fn route_field(r Route) string {
 // tx-ready gate: if the destination TX can't accept the send yet, the PDU is held
 // and retried next tick rather than silently dropped — REQ-TOPO-010).
 fn raw_field(r Route) string {
-	return 'rr_${snake(r.to_bus)}_${r.from_id.hex()}'
+	return 'rr_${snake(r.to_bus)}_${r.from_id.hex()}_${if r.from_ext { 'e' } else { 's' }}'
 }
 
 fn telem_on_can(m Model) bool {

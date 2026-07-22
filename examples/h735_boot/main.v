@@ -114,8 +114,8 @@ fn main() {
 		now := C.board_now_us()
 		mut f := can.Frame{}
 		for ch.recv(mut f) {
-			if f.id != req_id {
-				continue
+			if f.id != req_id || f.ext {
+				continue // standard-id diagnostic request only — an extended alias is not a boot request
 			}
 			mut pdu := isotp.Pdu{}
 			for i in 0 .. 8 {

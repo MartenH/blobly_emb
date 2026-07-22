@@ -42,25 +42,25 @@ mut:
 	chan can.Channel
 	rx_powertrain_st com.RxState
 	route_can1 can.Channel // gateway: forward to can1
-	rr_can1_300 can.Frame // held forward awaiting destination tx-ready
-	rr_can1_300_set bool
+	rr_can1_300_s can.Frame // held forward awaiting destination tx-ready
+	rr_can1_300_s_set bool
 }
 
 fn io_can0_10ms(ctx voidptr) {
 	mut st := unsafe { &Bridge_can0_state(ctx) }
 	now := osal.now_us()
-	if st.rr_can1_300_set && st.route_can1.tx_ready() && st.route_can1.send(st.rr_can1_300) {
-		st.rr_can1_300_set = false
+	if st.rr_can1_300_s_set && st.route_can1.tx_ready() && st.route_can1.send(st.rr_can1_300_s) {
+		st.rr_can1_300_s_set = false
 	}
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
 		if rx.id == u32(0x300) && rx.len == 8 && rx.ext == false {
 			mut fwd := rx
 			if st.route_can1.tx_ready() && st.route_can1.send(fwd) {
-				st.rr_can1_300_set = false // newer PDU went out; drop any stale held one (freshest-wins)
+				st.rr_can1_300_s_set = false // newer PDU went out; drop any stale held one (freshest-wins)
 			} else {
-				st.rr_can1_300 = fwd
-				st.rr_can1_300_set = true
+				st.rr_can1_300_s = fwd
+				st.rr_can1_300_s_set = true
 			}
 		}
 		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false {

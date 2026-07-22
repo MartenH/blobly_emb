@@ -30,15 +30,17 @@
  * frame correctly rather than treating an extended PDU as standard. */
 #define BLOB_CANIF_RX_EXT_BIT 0x80000000u
 
-typedef struct { int bus; uint32_t id; PduIdType pdu; } tx_map_t;
+typedef struct { int bus; uint32_t id; PduIdType pdu; int ext; } tx_map_t;
 typedef struct { PduIdType pdu; int bus; uint32_t id; int ext; } rx_map_t;
 
 /* ---- INTEGRATION TABLES — fill from the AUTOSAR ECU extract (placeholders) ---- */
 static const uint8_t bus_controller[BLOB_CAN_BUSES] = { 0, 1 };   /* CanIf ControllerId per bus */
 
 static const tx_map_t tx_map[] = {
-	/* { bus, can_id, CanIfTxPduId } — one row per tx frame. Example: */
-	{ 0, 0x101u, 0 },
+	/* { bus, can_id, CanIfTxPduId, ext } — one row per tx frame (ext = 1 for a 29-bit
+	 * extended-id PDU, so a standard and an extended PDU sharing a numeric id map to
+	 * their own CanIf Tx PduId). Example: */
+	{ 0, 0x101u, 0, 0 },
 };
 static const rx_map_t rx_map[] = {
 	/* { CanIfRxPduId, bus, can_id, ext } — one row per rx frame routed to this CDD
@@ -101,9 +103,9 @@ void Blobly_TxConfirmation(PduIdType pdu) {
 }
 
 int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int flags) {
-	(void)flags; /* AUTOSAR: the frame format (id width, FD) is owned by the CanIf/Can config, not set here */
+	int want_ext = (flags & BLOB_CAN_FLAG_EXT) ? 1 : 0; /* FD stays CanIf/Can-config-owned */
 	for (int i = 0; i < tx_map_n; i++) {
-		if (tx_map[i].bus == h && tx_map[i].id == id) {
+		if (tx_map[i].bus == h && tx_map[i].id == id && tx_map[i].ext == want_ext) {
 			PduInfoType pdu;
 			pdu.SduDataPtr  = (uint8_t *)data;
 			pdu.SduLength   = len;
