@@ -63,6 +63,12 @@ mut:
 	remote_core u8
 	remote_due  bool
 	remote_from u32 // continuation cursor into the remote window
+	// The satellite's trace clock measured against ours, re-measured per dump (REQ-TRACE-011)
+	// and prepended to its block by load_remote. Without it the satellite's records carry a
+	// different time origin than ours and the host cannot place both cores on one timeline.
+	remote_offset_us    i32  // satellite clock - our clock, signed µs
+	remote_bound_us     u16  // half round-trip: the measurement's residual uncertainty
+	remote_offset_known bool // false = never measured; emit nothing rather than imply 0 skew
 	// local ISO-TP dump continuation: the window streams as SELF-DESCRIBING ~one-payload
 	// blocks (header carries a more-flag; each block re-anchors with an epoch), so the ring
 	// is no longer capped by one transfer — and the same block stream rides any future
@@ -219,10 +225,27 @@ pub fn (mut m TraceModule) set_remote(core u8, backing &Record, capacity u32) {
 	m.remote_core = core
 }
 
+// set_core_offset records the satellite's trace clock measured against ours — `offset_us` signed
+// (satellite - us), `bound_us` the half round-trip that bounds the measurement error. Call it
+// from the transport that just completed a request/ack exchange with the satellite, BEFORE
+// load_remote: that round trip IS the measurement (REQ-TRACE-011), so the offset is fresh for
+// this dump instead of a startup constant that a core restart would silently invalidate.
+pub fn (mut m TraceModule) set_core_offset(offset_us i32, bound_us u16) {
+	m.remote_offset_us = offset_us
+	m.remote_bound_us = bound_us
+	m.remote_offset_known = true
+}
+
 // load_remote imports the satellite's snapshot (wire-form records, oldest first) and queues
 // it as the next dump block. Call after the LOCAL dump was granted; produce() sequences it.
 pub fn (mut m TraceModule) load_remote(src &u8, n u32) {
 	m.remote.start()
+	// The offset leads the block, so it is in hand before the first record it applies to. When
+	// it was never measured we emit NOTHING: a 0 offset would claim perfect correlation, which
+	// is the exact false precision this record exists to remove.
+	if m.remote_offset_known {
+		m.remote.push(new_core_offset(m.remote_offset_us, m.remote_bound_us))
+	}
 	for i in 0 .. n {
 		mut b := [8]u8{}
 		for j in 0 .. 8 {

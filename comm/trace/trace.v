@@ -39,6 +39,7 @@ pub const reason_exit = u8(3) // completed / terminated
 // CONTROL `id` subtypes.
 pub const ctl_block = u16(0) // per-core block header leading a multi-core dump
 pub const ctl_epoch = u16(1) // timeline origin: resets the u24 start_us base (long captures)
+pub const ctl_coreoffset = u16(2) // this block's core-clock offset to the dumping core (REQ-TRACE-011)
 
 // FB record flags (the `info` byte of a kind_fb record) — mirror comm.telem.trace_flag_* and
 // blobly_net's telem.flag_*. flag_overran marks the invocation that exceeded its budget, i.e. the
@@ -119,6 +120,28 @@ pub fn new_epoch(base_us u32) Record {
 	}
 }
 
+// new_core_offset — a CONTROL record stating how far THIS block's core clock runs ahead of the
+// DUMPING core's, and how well that is known. Every core timestamps from its own free-running
+// origin (a satellite released later than the bus owner reads a smaller value at the same
+// instant), so blocks are otherwise incomparable and a multi-core swimlane would imply a shared
+// timeline it does not have (REQ-TRACE-011).
+//
+// `offset_us` is signed: satellite_time - owner_time at one instant, so the host recovers owner
+// time as `record.start_us - offset_us`. `bound_us` is the half round-trip of the measurement —
+// the residual uncertainty, which the host should show rather than pretend away. The value is
+// measured per dump, not assumed from startup, so a core that restarted cannot be rendered
+// against a stale offset.
+//
+// Wire: the full i32 offset rides tsinfo exactly as ctl_epoch's base does (info = b31-24,
+// start = b23-0); the u16 bound rides cpu_us.
+pub fn new_core_offset(offset_us i32, bound_us u16) Record {
+	return Record{
+		entity_id: entity(kind_control, ctl_coreoffset)
+		cpu_us:    bound_us
+		tsinfo:    u32(offset_us) // two's complement; reassembled by core_offset_us()
+	}
+}
+
 // --- accessors ---
 pub fn (r Record) kind() u8 {
 	return u8(r.entity_id >> 14)
@@ -162,6 +185,23 @@ pub fn (r Record) is_epoch() bool {
 
 pub fn (r Record) epoch_base() u32 {
 	return r.start_us() | (u32(r.info()) << 24)
+}
+
+// is_core_offset reports a cross-core clock correlation (CONTROL / ctl_coreoffset); it applies to
+// every record after it in the same block.
+pub fn (r Record) is_core_offset() bool {
+	return r.kind() == kind_control && r.id() == ctl_coreoffset
+}
+
+// core_offset_us — signed µs this block's core clock leads the dumping core's. Subtract it from a
+// record's start_us to get the dumping core's timeline.
+pub fn (r Record) core_offset_us() i32 {
+	return i32(r.start_us() | (u32(r.info()) << 24))
+}
+
+// core_offset_bound_us — the measurement's residual uncertainty (half the round trip), in µs.
+pub fn (r Record) core_offset_bound_us() u16 {
+	return r.cpu_us
 }
 
 // encode_record packs a Record into its 8-byte wire form (little-endian):
@@ -420,17 +460,29 @@ pub fn (t TraceBuffer) pack_block(out &u8, out_cap int, core u8) int {
 // the CALLER's cap — the transport binding passes its own payload limit, the format doesn't
 // care (520 B over ISO-TP today, a datagram-sized cap over Ethernet later).
 pub fn (t TraceBuffer) pack_chunk(out &u8, out_cap int, core u8, from u32) (int, u32, bool) {
-	if out_cap < 24 || from >= t.used { // header + epoch + at least one record
+	if from >= t.used {
 		return 0, from, false
 	}
-	// the base applicable at `from`: the preserved prefix base, updated by every epoch
-	// record that precedes `from` in the window
+	// The state applicable at `from`, recovered by replaying what precedes it: the epoch base
+	// (preserved prefix, updated by every epoch record) and the core-offset record if one was
+	// already emitted. Both are re-stated at the head of EVERY block, so a block is readable on
+	// its own — a host must never need block 1 in hand to decode block 3.
 	mut base := if t.has_prefix { t.prefix_base } else { u32(0) }
+	mut skew := Record{}
+	mut has_skew := false
 	for i in 0 .. from {
 		r := t.record_at(i)
 		if r.is_epoch() {
 			base = r.epoch_base()
 		}
+		if r.is_core_offset() {
+			skew = r
+			has_skew = true
+		}
+	}
+	// header + epoch (+ re-stated offset) + at least one record
+	if out_cap < if has_skew { 32 } else { 24 } {
+		return 0, from, false
 	}
 	mut n := 8 // reserve the header slot; backfill once the count is known
 	ep := encode_record(new_epoch(base))
@@ -441,6 +493,16 @@ pub fn (t TraceBuffer) pack_chunk(out &u8, out_cap int, core u8, from u32) (int,
 	}
 	n += 8
 	mut count := u32(1)
+	if has_skew {
+		sk := encode_record(skew)
+		unsafe {
+			for j in 0 .. 8 {
+				out[n + j] = sk[j]
+			}
+		}
+		n += 8
+		count++
+	}
 	mut i := from
 	for i < t.used {
 		if n + 8 > out_cap {

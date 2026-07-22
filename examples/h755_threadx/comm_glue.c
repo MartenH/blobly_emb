@@ -153,17 +153,63 @@ void duo_clocks_ready(void) {
 #define DUO_POOL ((xioc_t *)DUO_IOC_ADDR)
 
 /* dtrace: the M7 half of the two-core trace handoff (duo.h). Single writer per field:
- * we own req_seq/op, the satellite owns ack_seq/count and the snapshot buffer. */
+ * we own req_seq/op, the satellite owns ack_seq/count and the snapshot buffer.
+ *
+ * The exchange doubles as the cross-core clock measurement (REQ-TRACE-011). Both cores
+ * timestamp their records from their own free-running origin — we boot first and release the
+ * CM4 later, so at any instant our clock reads MORE than its — and a dump of both is
+ * uncomparable until that difference is known. We bracket the round trip (t1 = request
+ * released, t3 = ack observed) around the satellite's own stamp (t2, written just before it
+ * acks) and solve it the way any round-trip clock sync does: t2 sits somewhere in [t1, t3], so
+ * the midpoint is the best estimate and half the round trip bounds the error. Re-measured on
+ * every snapshot, so a CM4 that reset cannot be drawn against a stale offset. */
+unsigned long trace_now_us(void);
+
+static uint32_t g_trc_t1;    /* our clock when we released the request */
+static uint32_t g_trc_t3;    /* our clock when we first observed the ack */
+static int g_trc_have_t3;    /* a round trip completed since the last request */
+
 void duo_trace_req(uint32_t op) {
     volatile uint32_t *c = (volatile uint32_t *)DUO_TRC_ADDR;
     c[1] = op;
+    g_trc_have_t3 = 0; /* this request's round trip has not closed yet */
+    /* Sample as late as possible before releasing: time spent here is time the bound must
+     * cover. */
+    g_trc_t1 = (uint32_t)trace_now_us();
     __asm__ volatile("dmb" ::: "memory");
     c[0] = c[0] + 1u; /* req_seq++ releases the request */
 }
 
 int duo_trace_ready(void) {
     volatile uint32_t *c = (volatile uint32_t *)DUO_TRC_ADDR;
-    return c[2] == c[0]; /* ack caught up */
+    if (c[2] != c[0])
+        return 0; /* ack has not caught up */
+    /* Stamp t3 on the polling pass that FIRST sees the ack — a later pass would charge our own
+     * poll interval to the satellite and inflate the bound. */
+    if (!g_trc_have_t3) {
+        g_trc_t3 = (uint32_t)trace_now_us();
+        g_trc_have_t3 = 1;
+    }
+    return 1;
+}
+
+/* duo_trace_offset — the satellite's clock minus ours, in µs, from the round trip that just
+ * closed; *bound_us is half that round trip, the residual uncertainty the host should show
+ * rather than round away. Returns 0 when no exchange has completed, so the caller emits no
+ * correlation at all instead of claiming a 0 skew it never measured.
+ *
+ * All three stamps come from one clock each, so the u32 subtractions are modular and stay
+ * correct across the ~71-minute wrap as long as the true offset fits in an int32 (~35 min) —
+ * far beyond any plausible core-release delay. */
+int duo_trace_offset(int32_t *off_us, uint32_t *bound_us) {
+    volatile uint32_t *c = (volatile uint32_t *)DUO_TRC_ADDR;
+    if (!g_trc_have_t3)
+        return 0;
+    uint32_t rtt = g_trc_t3 - g_trc_t1;
+    uint32_t mid = g_trc_t1 + rtt / 2u; /* our clock at the satellite's best-estimate stamp */
+    *off_us = (int32_t)(c[DUO_TRC_SVC_IDX] - mid);
+    *bound_us = rtt / 2u;
+    return 1;
 }
 
 uint32_t duo_trace_count(void) {

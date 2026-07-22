@@ -118,7 +118,7 @@ refuses (valid mark last) — the board sits in programming mode and a plain re-
 
 ## 3. blobly_net — CLI and GUI
 
-blobly_net is the tester side (a CANoe-ish tool, own repo). Everything speaks plain
+blobly_net is the tester side (an automotive bus tester, own repo). Everything speaks plain
 SocketCAN, so it works against vcan0 sims and the real bench alike.
 
 **GUI** — yes, it exists: a native Dear ImGui app.

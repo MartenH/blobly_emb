@@ -104,3 +104,16 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-OBS-002"
+
+# Each core timestamps from its OWN free-running origin, so blocks from different cores are
+# NOT comparable as dumped: a satellite released later than the bus owner reads a different
+# time at the same instant. Without a measured offset a multi-core swimlane silently implies
+# a shared timeline it does not have — the chart looks correct and is wrong.
+[[req]]
+id = "REQ-TRACE-011"
+title = "Cross-core trace time correlation"
+text = "A multi-core dump shall carry, per satellite core, the measured offset between that core's trace clock and the dumping core's, together with a bound on the offset's measurement error, so a host can place every core's records on one timeline and show the residual uncertainty. The offset shall be re-measured for each dump rather than assumed constant from startup, so a core that restarted or re-based its clock cannot be rendered against a stale offset."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-OBS-002"
