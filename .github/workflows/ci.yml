@@ -43,6 +43,12 @@ jobs:
         run: |
           v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot
 
+      # The no-alloc + isolation lint. AGENTS.md calls this MUST pass, and it guards the defining
+      # constraint of the whole stack — no dynamic allocation — so it belongs in the gate, not in
+      # a habit of remembering to run it.
+      - name: No-alloc + isolation lint (make lint)
+        run: make lint
+
       # ecucheck validates every example's ecu.toml (also guards the TOML nested-comment trap).
       - name: Config validation (make check)
         run: make check
