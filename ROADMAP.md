@@ -16,11 +16,11 @@ Status keys: ✅ shipped · 🔨 in progress · ⏭️ next · 🧭 planned · �
 - ✅ **Protected routing P2c** — E2E (CRC+counter) and SecOC (AES-CMAC) re-protect
   on re-encode, and source-verify on ingest
 - ✅ **Extended-id (29-bit)** — `#180`, all 5 driver backends, id-width-exact rx
-- 🔨 **CAN-FD payloads (DLC>8)** — `feat/p2c-canfd-payloads`; Frame/socket/ring
-  already 64-byte, fdcan M_CAN backend now does FD DLC-codes/FDF/BRS + 64-byte
-  message-RAM elements. Build-verified; **bench-validate on H755 FDCAN next**
-- ⏭️ **Signal-route extended destinations** — a signal route targeting a 29-bit
-  dest frame (raw routes already carry ext)
+- ✅ **CAN-FD payloads (DLC>8)** — `#181`, fdcan M_CAN backend (FD DLC-codes/FDF/
+  BRS + 64-byte message-RAM elements); **on-silicon H755 FDCAN validation still
+  pending the bench**
+- ✅ **Signal-route extended destinations** — `#182`, a signal route re-encodes
+  into a 29-bit dest frame; candb attribute index keyed by (id, ext)
 - ⏭️ **Cross-core routes (xioc)** — a route whose source/dest buses live on
   different cores; approved implicit-xioc-slot model, reuses multi-image plumbing
 - 🧭 **Target multi-bus comm owner** — per-bus channel + Rx-ISR multiplexed into
@@ -81,10 +81,14 @@ Status keys: ✅ shipped · 🔨 in progress · ⏭️ next · 🧭 planned · �
 
 ## Immediate (this prep day → the away days)
 
-1. 🔨 Land **CAN-FD payloads** (fdcan FD → PR → codex → merge), bench-validate a
-   64-byte FD frame on H755.
-2. ⏭️ **Signal-route ext destinations**, then **cross-core xioc routes**.
-3. ⛔→⏭️ Enable passwordless CAN bring-up (`blobly-can`) so live `candump`/`cansend`
-   validation runs unattended; wire H723 CAN for the 3-node silicon run.
+Driver-format completeness is **done in sim**: ext-id (`#180`), CAN-FD payloads
+(`#181`), signal-route ext destinations (`#182`) — all merged. Passwordless CAN
+bring-up (`blobly-can`) is installed. Remaining:
+
+1. 🧪 **On-silicon validation** (bench): flash the H755 CAN-FD echo (`#181`) + send
+   a 64-byte FD frame; re-check H735 ext-id (`#180`). Gated on CAN wiring.
+2. ⏭️ **Cross-core xioc routes** — the next substantial codegen item.
+3. 🧭 Follow-ups: generated-target FD data-timing harmonization (bench-gated);
+   canif FD recv-flag; wire H723 CAN for the 3-node silicon run.
 
 Public-repo gate: `blobly_net` GPL→MIT (net#57) before the site/docs go public.
