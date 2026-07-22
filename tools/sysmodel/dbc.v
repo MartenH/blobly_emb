@@ -691,7 +691,9 @@ pub fn check_dbc_conformance(s System) []Issue {
 			continue
 		}
 		for msg in dbs[bus.name].messages {
-			if msg.id >= bus.nm_peers_lo && msg.id <= bus.nm_peers_hi {
+			// NM peers are standard 11-bit; the NM receiver requires !rx.ext, so an
+			// extended frame with a stripped id in the range is distinct on the wire.
+			if !msg.ext && msg.id >= bus.nm_peers_lo && msg.id <= bus.nm_peers_hi {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-003'
