@@ -196,27 +196,25 @@ fn check_frame_route_contract(s System, r Route) []Issue {
 		}]
 	}
 	pre := 'frame route on "${r.gateway}" ("${r.frame}", ${r.from} -> ${r.to}):'
-	// format: P2b forwards classic, standard-id, DATA frames only. The driver Frame
-	// carries no fd, extended-id, or RTR flag yet — recv() even masks CAN_RTR_FLAG, so
-	// an RTR request at a routed id/dlc is indistinguishable from data at this layer and
-	// the FDCAN backend drops RTR outright. All three (fd / ext-id / RTR) are the same
-	// Frame-format extension, deferred to P2c; here we reject what we CAN see (fd via the
-	// bus mode, ext-id via the DBC). A routed frame is expected to be a periodic data PDU.
-	if sm.ext || dm.ext {
+	// format: a raw forward carries the id WIDTH unchanged, so both frames must share it
+	// — both standard or both extended (the driver Frame now carries an ext flag, and the
+	// forwarder copies it). A std<->ext mismatch can't be raw-forwarded (use a signal
+	// route). CAN-FD and RTR remain a later Frame-format increment (rejected below / RTR
+	// dropped by the driver). A routed frame is expected to be a periodic data PDU.
+	if sm.ext != dm.ext {
 		issues << Issue{
 			severity: .error
 			req:      'REQ-TOPO-007'
-			msg:      '${pre} extended-id frames are not raw-forwarded yet (P2c) — the driver frame path does not carry the extended-id flag'
+			msg:      '${pre} id width differs (extended ${sm.ext} on "${r.from}" vs ${dm.ext} on "${r.to}") — a raw forward cannot change standard<->extended; use a signal route'
 		}
 	}
-	// a DBC id above the 11-bit standard range with NO extended flag is malformed: the
-	// standard-id forwarder emits it without CAN_EFF_FLAG and SocketCAN rejects it.
-	// Mirror loom2v's signal-route guard and reject it even when `ext` is false.
-	if sm.id > 0x7ff || dm.id > 0x7ff {
+	// an id above the 11-bit standard range is only valid as an EXTENDED frame; an
+	// UNFLAGGED id > 0x7ff is malformed (a standard-id send would truncate/reject it).
+	if (sm.id > 0x7ff && !sm.ext) || (dm.id > 0x7ff && !dm.ext) {
 		issues << Issue{
 			severity: .error
 			req:      'REQ-TOPO-007'
-			msg:      '${pre} frame id is above the 11-bit standard range (0x${sm.id.hex()}/0x${dm.id.hex()}) — only standard ids are raw-forwarded (ext-id is P2c)'
+			msg:      '${pre} id 0x${sm.id.hex()}/0x${dm.id.hex()} is above the 11-bit standard range but not marked extended — malformed'
 		}
 	}
 	if sm.dlc > 8 || dm.dlc > 8 {

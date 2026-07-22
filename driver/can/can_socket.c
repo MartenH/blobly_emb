@@ -45,12 +45,16 @@ int blob_can_open(const char *ifname, int fd_mode) {
 	return s;
 }
 
-int blob_can_send(int sock, uint32_t id, const uint8_t *data, uint8_t len, int fd_mode) {
-	if (fd_mode) {
+int blob_can_send(int sock, uint32_t id, const uint8_t *data, uint8_t len, int flags) {
+	/* a 29-bit extended id is carried in the low bits with CAN_EFF_FLAG set. */
+	uint32_t can_id = id;
+	if (flags & BLOB_CAN_FLAG_EXT)
+		can_id |= CAN_EFF_FLAG;
+	if (flags & BLOB_CAN_FLAG_FD) {
 		if (len > 64) return -1;
 		struct canfd_frame f;
 		memset(&f, 0, sizeof(f));
-		f.can_id = id;
+		f.can_id = can_id;
 		f.len = len;
 		memcpy(f.data, data, len);
 		ssize_t n = write(sock, &f, sizeof(f));
@@ -61,7 +65,7 @@ int blob_can_send(int sock, uint32_t id, const uint8_t *data, uint8_t len, int f
 	if (len > 8) return -1;
 	struct can_frame f;
 	memset(&f, 0, sizeof(f));
-	f.can_id = id;
+	f.can_id = can_id;
 	f.can_dlc = len;
 	memcpy(f.data, data, len);
 	ssize_t n = write(sock, &f, sizeof(f));
@@ -127,38 +131,51 @@ static void ovfl_reset(int fd) {
 #endif
 }
 
-int blob_can_recv(int sock, uint32_t *id, uint8_t *data, uint8_t *len) {
+int blob_can_recv(int sock, uint32_t *id, uint8_t *data, uint8_t *len, int *flags) {
 	/* canfd_frame buffer receives BOTH classic (16B) and FD (72B) frames:
 	 * can_id @0, len/can_dlc @4, data @8 in both layouts. recvmsg (not read) so the
 	 * SO_RXQ_OVFL ancillary data — the kernel's cumulative Rx-queue drop count — rides
 	 * along and we can surface receive-with-loss (REQ-CAN-DRV-008). */
 	struct canfd_frame f;
 	struct iovec iov = { .iov_base = &f, .iov_len = sizeof(f) };
+	/* Keep draining past REMOTE (RTR) frames within this call: Frame has no RTR flag, so
+	 * returning "empty" on one would stop the bridge's drain loop and starve the data
+	 * frames queued behind it. Skip RTR and read the next frame instead (the FDCAN
+	 * backends drop RTR too). The socket is non-blocking, so an empty queue ends the loop. */
+	for (;;) {
 #ifdef SO_RXQ_OVFL
-	union {
-		char buf[CMSG_SPACE(sizeof(uint32_t))];
-		struct cmsghdr align;
-	} ctrl;
-	struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1, .msg_control = ctrl.buf,
-		              .msg_controllen = sizeof(ctrl.buf) };
+		union {
+			char buf[CMSG_SPACE(sizeof(uint32_t))];
+			struct cmsghdr align;
+		} ctrl;
+		struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1, .msg_control = ctrl.buf,
+			              .msg_controllen = sizeof(ctrl.buf) };
 #else
-	struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1 };
+		struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1 };
 #endif
-	ssize_t n = recvmsg(sock, &msg, 0);
-	if (n <= 0) return -1;
+		ssize_t n = recvmsg(sock, &msg, 0);
+		if (n <= 0) return -1;
 #ifdef SO_RXQ_OVFL
-	for (struct cmsghdr *c = CMSG_FIRSTHDR(&msg); c; c = CMSG_NXTHDR(&msg, c)) {
-		if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SO_RXQ_OVFL) {
-			uint32_t ovfl;
-			memcpy(&ovfl, CMSG_DATA(c), sizeof(ovfl));
-			ovfl_store(sock, ovfl);
+		for (struct cmsghdr *c = CMSG_FIRSTHDR(&msg); c; c = CMSG_NXTHDR(&msg, c)) {
+			if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SO_RXQ_OVFL) {
+				uint32_t ovfl;
+				memcpy(&ovfl, CMSG_DATA(c), sizeof(ovfl));
+				ovfl_store(sock, ovfl);
+			}
 		}
-	}
 #endif
-	*id = f.can_id & CAN_EFF_MASK;
-	*len = f.len;
-	memcpy(data, f.data, f.len);
-	return 0;
+		if (f.can_id & CAN_RTR_FLAG)
+			continue; /* remote frame: skip, keep draining */
+		*id = f.can_id & CAN_EFF_MASK;
+		*len = f.len;
+		*flags = 0;
+		if (f.can_id & CAN_EFF_FLAG)
+			*flags |= BLOB_CAN_FLAG_EXT;
+		if (n == (ssize_t)CANFD_MTU) /* a canfd_frame (72B) was read, not a 16B can_frame */
+			*flags |= BLOB_CAN_FLAG_FD;
+		memcpy(data, f.data, f.len);
+		return 0;
+	}
 }
 
 /* Rx-overrun events: the kernel's per-socket Rx-queue drop count (SO_RXQ_OVFL). Under

@@ -167,7 +167,7 @@ fn duo_trace_rx_arm(m Model) []string {
 		return []string{}
 	}
 	return [
-		'\t\t\tif rx.id == u32(0x${m.trace.cmd_id.hex()}) && rx.len == 8 && rx.data[6] & 0x02 != 0 {',
+		'\t\t\tif rx.id == u32(0x${m.trace.cmd_id.hex()}) && rx.len == 8 && !rx.ext && rx.data[6] & 0x02 != 0 {',
 		'\t\t\t\tmatch rx.data[0] {',
 		'\t\t\t\t\t1, 2, 4 { C.duo_trace_req(1) } // arm/start/reset -> satellite arm',
 		'\t\t\t\t\t3 { C.duo_trace_req(2) } // stop -> satellite freeze+snapshot',

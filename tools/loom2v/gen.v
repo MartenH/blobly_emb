@@ -92,6 +92,8 @@ mut:
 	to_cyc     int // destination frame GenMsgCycleTime (ms) — the re-emit cadence
 	to_bit     int // SIGNAL route: the routed signal's start bit in the destination frame
 	to_len     int // SIGNAL route: the routed signal's bit length in the destination frame
+	from_ext   bool // the source frame is an extended (29-bit) id — the rx match checks rx.ext
+	to_ext     bool // the destination on-wire id width (raw: = from_ext; signal: the dest frame)
 }
 
 // TargetCfg is the parsed [target] block. kind selects the on-target emitter: 'baremetal' =
@@ -343,6 +345,8 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 			}
 			routes[i].from_id = id
 			routes[i].from_dlc = dbc_dlc_of(db, snake(r.from_frame)) or { 8 }
+			routes[i].from_ext = dbc_ext_of(db, snake(r.from_frame)) or { false }
+			routes[i].to_ext = routes[i].from_ext // raw forward preserves the source width; a signal route overrides below
 			if r.signal != '' {
 				// SIGNAL route: resolve the DESTINATION frame's id + dlc (a distinct
 				// frame from the source; NOTE: both frames must be in this ONE DBC —
@@ -355,6 +359,7 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 					panic('route: destination frame "${r.to_frame}" is not a message in ${os.file_name(dbc)} (per-bus DBCs on a gateway are P2c)')
 				}
 				routes[i].to_dlc = dbc_dlc_of(db, snake(r.to_frame)) or { 8 }
+				routes[i].to_ext = dbc_ext_of(db, snake(r.to_frame)) or { false }
 				// the routed signal must be an SG_ in BOTH frames (decode + re-encode).
 				src_sg := dbc_sig_in_frame(db, snake(r.from_frame), r.signal) or {
 					panic('route: signal "${r.signal}" is not in source frame "${r.from_frame}" in ${os.file_name(dbc)}')
@@ -1195,7 +1200,7 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 	// signal-route frame — is two on-wire writers under one id.
 	mut id_owner := map[string]string{}
 	for r in m.routes {
-		key := '${r.to_bus}/${r.to_id}'
+		key := '${r.to_bus}/${r.to_id}/${r.to_ext}' // std and ext at the same numeric id are distinct on-wire writers
 		// a raw route is a UNIQUE writer: give each its own owner token so any share
 		// (raw+raw, raw+signal) trips the collision; signal routes share the frame name.
 		owner := if r.signal == '' { 'raw:${r.from_frame}@${r.from_bus}' } else { 'sig:${r.to_frame}' }
@@ -2101,7 +2106,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				for si in rx_sigs {
 					// Gate on the DBC DLC too: recv reuses the frame and copies only the bytes that
 					// arrived, so a short same-id frame would leave stale high bytes in the decode.
-					glue << '\t\t\tif rx.id == u32(0x${si.dbc_id.hex()}) && rx.len == ${si.dbc_dlc} { // ${si.dbc_msg}'
+					glue << '\t\t\tif rx.id == u32(0x${si.dbc_id.hex()}) && rx.len == ${si.dbc_dlc} && rx.ext == ${si.dbc_ext} { // ${si.dbc_msg}'
 					glue << '\t\t\t\tg_rx_count++'
 					glue << '\t\t\t\tg_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)'
 					if idx := msg_ioc_idx[si.dbc_id] {

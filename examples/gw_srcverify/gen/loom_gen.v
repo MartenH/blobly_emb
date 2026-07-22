@@ -22,7 +22,7 @@ fn io_can0_10ms(ctx voidptr) {
 	now := osal.now_us()
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
-		if rx.id == u32(0x100) && rx.len == 8 {
+		if rx.id == u32(0x100) && rx.len == 8 && rx.ext == false {
 			if st.e2e_rx_src_frame.check(&rx.data[0], int(8), u16(0x33), 6, 7).usable() {
 				st.rt_can1_dst_frame_speed_v = src_frame_speed_phys(rx.data)
 				st.rt_can1_dst_frame_speed_fresh = now

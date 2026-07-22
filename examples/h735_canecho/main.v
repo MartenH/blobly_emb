@@ -28,6 +28,7 @@ fn main() {
 			mut out := can.Frame{
 				id:  f.id + 1 // reply id = request id + 1 -> visibly an echo
 				len: f.len
+				ext: f.ext // preserve the request's id width — a 29-bit request echoes as 29-bit
 			}
 			for i in 0 .. int(f.len) {
 				out.data[i] = f.data[i]
