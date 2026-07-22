@@ -29,7 +29,8 @@ VDBG ?=
 INCS = -I$(REPO)/third_party/cmsis_device_h7/Include \
        -I$(REPO)/third_party/cmsis_core/CMSIS/Core/Include \
        -I$(REPO)/driver/can
-DEFS = -DSTM32H755xx -DCORE_CM7 -DBLOB_CAN_FDCAN -DBLOB_FDCAN_KCLK_HZ=8000000
+DEFS = -DSTM32H755xx -DCORE_CM7 -DBLOB_CAN_FDCAN -DBLOB_FDCAN_KCLK_HZ=8000000 \
+       -DBLOB_FDCAN_DBITRATE=2000000 -DBLOB_FDCAN_DTQ=4 -DBLOB_FDCAN_DTSEG1=2 -DBLOB_FDCAN_DTSEG2=1 -DBLOB_FDCAN_DSJW=1
 
 MCU      = -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb
 CFLAGS   = $(MCU) -ffreestanding $(OPT) $(CDBG) -ffunction-sections -fdata-sections $(INCS) $(DEFS) -include board.h

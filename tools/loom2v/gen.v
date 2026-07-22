@@ -1590,11 +1590,14 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			if bc := doc.value('bus').as_map()[m.telem.bus] {
 				tx_bus_fd = (bc.as_map()['fd'] or { toml.Any(false) }).bool()
 			}
-			// The register-level FDCAN backend is classic-only (blob_can_open rejects fd_mode), so
-			// a CAN-FD telemetry bus would open -1 and the thread would exit. Reject it at gen time.
+			// The register-level FDCAN backend now supports CAN-FD payloads (see the h755_canfd
+			// echo), but wiring FD into a GENERATED target still needs per-board data-phase timing
+			// (BLOB_FDCAN_D*) harmonized across every node on the bus — a follow-up. Until then a
+			// generated FD target bus is rejected at gen time rather than opening a mistimed bus.
 			if tx_bus_fd {
-				panic('loom2v: [target] kind="threadx": bus "${m.telem.bus}" has fd = true, but the ' +
-					'FDCAN backend used here is classic-only — set [bus.${m.telem.bus}].fd = false')
+				panic('loom2v: [target] kind="threadx": bus "${m.telem.bus}" has fd = true — CAN-FD ' +
+					'on a generated target is not wired up yet (the fdcan backend supports FD, but ' +
+					'per-board FD data-timing harmonization is a follow-up); set [bus.${m.telem.bus}].fd = false')
 			}
 			// The driver opens the bus by a SINGLE-digit index "0".."2" (blob_can_open reads
 			// name[0]-'0'); derive it from the bus name (e.g. "can0" -> "0"). Require exactly one
