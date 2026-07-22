@@ -37,6 +37,11 @@ derives = "SYS-REQ-COMMS-001"
 id = "REQ-CAN-DRV-004"
 title = "CAN-FD frames"
 text = "When configured for CAN-FD, the CAN driver shall transmit and receive frames with up to 64 payload bytes."
+# implemented: socket (canfd_frame), fdcan (M_CAN: FDOE/BRSE + DBTP, 64-byte
+# message-RAM elements, DLC-code encode/decode), st-hal (FDFormat/BRS). NOT yet
+# verified — the verification vehicle is the h755_canfd echo on FDCAN silicon
+# (bench run + sign-off pending); a host SocketCAN test is blocked (the blobly_net
+# Lua runner is classic-only, 8-byte can_frame). Stays draft until that sign-off.
 status = "draft"
 method = "test"
 asil = "QM"
