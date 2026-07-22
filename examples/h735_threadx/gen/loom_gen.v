@@ -307,12 +307,12 @@ fn comm_thread_entry(input u32) {
 		C.comm_rx_wait(wait_ticks) // the FDCAN Rx ISR wakes us early on a new frame
 		// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame
 		for ch.recv(mut rx) {
-			if rx.id == u32(0x123) && rx.len == 4 { // cmd_frame
+			if rx.id == u32(0x123) && rx.len == 4 && rx.ext == false { // cmd_frame
 				g_rx_count++
 				g_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)
 				C.ioc_pub(1, g_rx_last, u32(0))
 			}
-			if rx.id == u32(0x7e2) && rx.len == 8 { // trace.cmd -> the module
+			if rx.id == u32(0x7e2) && rx.len == 8 && !rx.ext { // trace.cmd -> the module
 				op := rx.data[0]
 				if op == trace.op_arm || op == trace.op_start || op == trace.op_reset {
 					C.trace_arm() // fresh window in the exec-hook recorder
@@ -323,16 +323,16 @@ fn comm_thread_entry(input u32) {
 				}
 				g_tm.on_cmd(rx)
 			}
-			if rx.id == u32(0x7e6) { // trace.dump_fc -> ISO-TP FC
+			if rx.id == u32(0x7e6) && !rx.ext { // trace.dump_fc -> ISO-TP FC
 				g_tm.on_dump_fc(C.board_now_us(), rx)
 			}
-			if rx.id == u32(0x7f0) { // shell.in -> one command line
+			if rx.id == u32(0x7f0) && !rx.ext { // shell.in -> one command line
 				g_sh.on_in(C.board_now_us(), rx)
 			}
-			if rx.id == u32(0x7f2) { // shell.fc -> ISO-TP FC
+			if rx.id == u32(0x7f2) && !rx.ext { // shell.fc -> ISO-TP FC
 				g_sh.on_fc(C.board_now_us(), rx)
 			}
-			if rx.id >= u32(0x500) && rx.id <= u32(0x53f) { // nm.peers -> cluster NM
+			if rx.id >= u32(0x500) && rx.id <= u32(0x53f) && !rx.ext { // nm.peers -> cluster NM
 				g_nm.on_peers(C.board_now_us(), rx)
 			}
 		}

@@ -162,7 +162,7 @@ fn comm_thread_entry(input u32) {
 		C.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame
 		// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame
 		for ch.recv(mut rx) {
-			if rx.id == u32(0x310) && rx.len == 4 { // button_state
+			if rx.id == u32(0x310) && rx.len == 4 && rx.ext == false { // button_state
 				g_rx_count++
 				g_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)
 				C.ioc_pub(0, g_rx_last, u32(0))

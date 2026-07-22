@@ -23,8 +23,15 @@
 #define BLOB_CAN_BUSES 2
 #endif
 
+/* The Rx SPSC ring carries (id, data, len) only. To convey the received frame's ID
+ * width to blob_can_recv without widening the ring entry, mark an extended-id frame
+ * by setting this top bit in the stored id (above the 29-bit id range) and mask it
+ * back off on the way out — so the generated rx.ext-aware predicates classify the
+ * frame correctly rather than treating an extended PDU as standard. */
+#define BLOB_CANIF_RX_EXT_BIT 0x80000000u
+
 typedef struct { int bus; uint32_t id; PduIdType pdu; } tx_map_t;
-typedef struct { PduIdType pdu; int bus; uint32_t id; } rx_map_t;
+typedef struct { PduIdType pdu; int bus; uint32_t id; int ext; } rx_map_t;
 
 /* ---- INTEGRATION TABLES — fill from the AUTOSAR ECU extract (placeholders) ---- */
 static const uint8_t bus_controller[BLOB_CAN_BUSES] = { 0, 1 };   /* CanIf ControllerId per bus */
@@ -34,8 +41,9 @@ static const tx_map_t tx_map[] = {
 	{ 0, 0x101u, 0 },
 };
 static const rx_map_t rx_map[] = {
-	/* { CanIfRxPduId, bus, can_id } — one row per rx frame routed to this CDD. Example: */
-	{ 0, 0, 0x100u },
+	/* { CanIfRxPduId, bus, can_id, ext } — one row per rx frame routed to this CDD
+	 * (ext = 1 for a 29-bit extended-id PDU). Example: */
+	{ 0, 0, 0x100u, 0 },
 };
 static const int tx_map_n = (int)(sizeof(tx_map) / sizeof(tx_map[0]));
 static const int rx_map_n = (int)(sizeof(rx_map) / sizeof(rx_map[0]));
@@ -128,8 +136,16 @@ int blob_can_tx_idle(int h) {
 
 int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len, int *flags) {
 	if (h < 0 || h >= BLOB_CAN_BUSES) return -1;
-	*flags = 0; /* the Rx ring carries id/data/len; per-frame format flags via CanIf are a follow-up */
-	return blob_ring_pop(&rx_ring[h], id, data, len);
+	int r = blob_ring_pop(&rx_ring[h], id, data, len);
+	if (r != 0) return r;
+	/* recover the id-width marker the RxIndication stashed in the top bit (FD via CanIf
+	 * is still a follow-up). */
+	*flags = 0;
+	if (*id & BLOB_CANIF_RX_EXT_BIT) {
+		*flags |= BLOB_CAN_FLAG_EXT;
+		*id &= ~BLOB_CANIF_RX_EXT_BIT;
+	}
+	return 0;
 }
 
 /* Rx-overrun events for this bus: frames CanIf delivered that the CDD had to drop because
@@ -152,7 +168,8 @@ void Blobly_RxIndication(PduIdType RxPduId, const PduInfoType *PduInfoPtr) {
 			/* The SPSC ring is the ISR->task boundary; if the bridge hasn't drained it and
 			 * it is full, the frame is lost HERE (below CanIf's own diagnostics), so count
 			 * it — receive-with-loss must be observable, not silent (REQ-CAN-DRV-008). */
-			if (blob_ring_push(&rx_ring[rx_map[i].bus], rx_map[i].id, PduInfoPtr->SduDataPtr,
+			uint32_t rid = rx_map[i].id | (rx_map[i].ext ? BLOB_CANIF_RX_EXT_BIT : 0u);
+			if (blob_ring_push(&rx_ring[rx_map[i].bus], rid, PduInfoPtr->SduDataPtr,
 			                   (uint8_t)PduInfoPtr->SduLength) != 0)
 				rx_lost[rx_map[i].bus]++;
 			return;

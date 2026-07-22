@@ -160,10 +160,10 @@ fn shell_rx_arms(m Model) []string {
 		return []string{}
 	}
 	mut g := []string{}
-	g << '\t\t\tif rx.id == u32(0x${m.shell.in_id.hex()}) { // shell.in -> one command line'
+	g << '\t\t\tif rx.id == u32(0x${m.shell.in_id.hex()}) && !rx.ext { // shell.in -> one command line'
 	g << '\t\t\t\tg_sh.on_in(C.board_now_us(), rx)'
 	g << '\t\t\t}'
-	g << '\t\t\tif rx.id == u32(0x${m.shell.fc_id.hex()}) { // shell.fc -> ISO-TP FC'
+	g << '\t\t\tif rx.id == u32(0x${m.shell.fc_id.hex()}) && !rx.ext { // shell.fc -> ISO-TP FC'
 	g << '\t\t\t\tg_sh.on_fc(C.board_now_us(), rx)'
 	g << '\t\t\t}'
 	return g
