@@ -1,9 +1,10 @@
 # h755_canfd — two-bus CAN on hardware (STM32H755, Nucleo-H755ZI-Q)
 
-Bare-metal **two-bus** CAN echo on the dual-core H755: **FDCAN1** and **FDCAN2**,
-each echoing received classic frames back with **id+1**, through the shared
-register-level driver (`driver/can`, no HAL). The H755 counterpart to
-[`h735_canecho`](../h735_canecho/) (which is single-bus on the H735).
+Bare-metal **two-bus CAN-FD** echo on the dual-core H755: **FDCAN1** and **FDCAN2**,
+each echoing a received frame — up to a **64-byte FD payload** — back with **id+1**
+as an FD frame (BRS, 2 Mbit/s data phase), through the shared register-level driver
+(`driver/can`, no HAL). The H755 counterpart to
+[`h735_canecho`](../h735_canecho/) (which is single-bus classic on the H735).
 
 ```
 main.v ──V -freestanding──▶ canfd.c ─┐
@@ -51,7 +52,16 @@ step (the IOC region is the cross-core seam — see `docs/multicore-perf.md`).
 
 ## Test
 
-Wire each bus's CANH/CANL to a USB-CAN adapter (500 kbit/s classic, 120 Ω both
-ends). `cansend`/`candump` on each: a frame in → the same payload back with id+1.
-That round-trip on both buses verifies **FDCAN1 + FDCAN2 on real silicon** and is
-the first exercise of the H755's dual FDCAN.
+Wire each bus's CANH/CANL to a USB-CAN adapter configured for **CAN-FD** — 500 kbit/s
+nominal + 2 Mbit/s data (BRS), 120 Ω both ends. The echo replies as an FD frame, so
+a classic-only adapter cannot decode or ACK the response.
+
+```sh
+sudo ip link set can0 up type can bitrate 500000 dbitrate 2000000 fd on   # or: sudo blobly-can up
+cansend can0 123##500112233445566778899aabbccddeeff   # ## = FD, first nibble = flags (BRS)
+candump can0                                            # -> 124 ....  (id+1, same 16-byte payload)
+```
+
+A frame in → the same payload back with id+1, up to 64 bytes. That round-trip on
+both buses verifies **CAN-FD payloads (REQ-CAN-DRV-004) on FDCAN1 + FDCAN2 silicon**
+and is the first exercise of the H755's dual FDCAN in FD mode.

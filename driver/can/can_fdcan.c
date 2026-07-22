@@ -151,10 +151,13 @@ int blob_can_open(const char *name, int fd_mode) {
 	}
 	c->CCCR |= FDCAN_CCCR_CCE;
 	if (fd_mode) {
-		/* Fail loudly if the data prescaler is out of range rather than programming a
-		 * mistimed FD bus: the board must set BLOB_FDCAN_D* so KCLK/(DBITRATE*DTQ) is an
-		 * integer in 1..32 for its kernel clock (as it already does for the nominal N*). */
-		if (DBRP < 1u || DBRP > 32u)
+		/* Fail loudly (return -1) rather than program a mistimed FD data phase: the board
+		 * must pick BLOB_FDCAN_D* so the kernel clock divides EXACTLY (an integer prescaler
+		 * in 1..32 — a fractional divide would silently shift the data bitrate) and the
+		 * segments sum to the bit time. Same discipline the nominal N* timing already needs. */
+		if (DBRP < 1u || DBRP > 32u
+		    || (BLOB_FDCAN_KCLK_HZ % (BLOB_FDCAN_DBITRATE * BLOB_FDCAN_DTQ)) != 0u
+		    || (1u + DTSEG1 + DTSEG2) != BLOB_FDCAN_DTQ)
 			return -1;
 		c->CCCR |= FDCAN_CCCR_FDOE | FDCAN_CCCR_BRSE; /* CAN-FD, bit-rate switching */
 		c->DBTP = ((DSJW - 1u) << FDCAN_DBTP_DSJW_Pos) |
@@ -208,6 +211,12 @@ int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int flag
 	if (!fd && len > 8)
 		return -1; /* a classic frame cannot exceed 8 bytes */
 	if (len > 64)
+		return -1;
+	/* Only an exact CAN-FD data length (0-8, 12,16,20,24,32,48,64) is representable. Reject a
+	 * non-canonical length (9-11, 13-15, ...) rather than pad up to the next code: the rx side
+	 * matches the literal DBC length, so padding would change the frame's on-wire length and
+	 * get it discarded. Mirrors dlc_exact() in the st-hal backend. */
+	if (dlc_to_len(len_to_dlc(len)) != len)
 		return -1;
 	/* Non-blocking: report FIFO-full to the caller instead of spinning here. A caller
 	 * that bursts more than the 8-deep Tx FIFO (e.g. the ISO-TP trace dump) gates on
