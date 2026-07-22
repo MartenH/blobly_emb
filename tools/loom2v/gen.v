@@ -433,13 +433,15 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 					|| (routes[i].to_id > 0x7ff && !routes[i].to_ext) {
 					panic('route: signal "${r.signal}" frame id > 0x7ff without the extended flag — a malformed DBC id')
 				}
-				// - the SOURCE id must be UNIQUE in the DBC: the runtime matches only
-				//   rx.id + rx.len, so a second same-id/len message would be mis-decoded
-				//   with this frame's layout and forwarded as a fabricated value.
+				// - the SOURCE id must be UNIQUE in the DBC: the runtime matches rx.id +
+				//   rx.len + rx.ext, so a second same-id/len/width message would be mis-
+				//   decoded with this frame's layout and forwarded as a fabricated value.
+				//   A standard and an extended frame with the same stripped id are distinct
+				//   on the wire (rx.ext disambiguates), so only a same-width clash collides.
 				for m2 in db.messages {
 					if snake(m2.name) != snake(r.from_frame) && m2.id == u32(routes[i].from_id)
-						&& int(m2.dlc) == routes[i].from_dlc {
-						panic('route: source id 0x${routes[i].from_id:x} (frame "${r.from_frame}") is shared by DBC frame "${m2.name}" at the same DLC — the runtime cannot tell them apart')
+						&& int(m2.dlc) == routes[i].from_dlc && m2.ext == routes[i].from_ext {
+						panic('route: source id 0x${routes[i].from_id:x} (frame "${r.from_frame}") is shared by DBC frame "${m2.name}" at the same DLC and id width — the runtime cannot tell them apart')
 					}
 				}
 			} else if routes[i].to_id == 0 {
