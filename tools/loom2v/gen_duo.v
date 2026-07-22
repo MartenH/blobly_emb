@@ -139,6 +139,7 @@ fn duo_trace_c_decls(m Model) []string {
 		'fn C.duo_trace_ready() int',
 		'fn C.duo_trace_count() u32',
 		'fn C.duo_trace_buf() &u8',
+		'fn C.duo_trace_offset(&i32, &u32) int // satellite clock - ours, + its error bound',
 	]
 }
 
@@ -146,7 +147,9 @@ fn duo_trace_globals(m Model) []string {
 	if !duo_trace_on(m) {
 		return []string{}
 	}
-	return ["\tg_duo_trace_ring [${m.trace.buffer_records}]trace.Record // the satellite core's imported dump window"]
+	// +1 slot: load_remote prepends the cross-core offset record to the block, and the import
+	// ring is oneshot — sized exactly, a full satellite window would push the LAST record out.
+	return ["\tg_duo_trace_ring [${m.trace.buffer_records + 1}]trace.Record // the satellite core's imported dump window (+1 = its offset record)"]
 }
 
 fn duo_trace_locals(m Model) []string {
@@ -154,8 +157,10 @@ fn duo_trace_locals(m Model) []string {
 		return []string{}
 	}
 	return [
-		'\tg_tm.set_remote(u8(1), &g_duo_trace_ring[0], ${m.trace.buffer_records}) // satellite blocks ride our dump link',
+		'\tg_tm.set_remote(u8(1), &g_duo_trace_ring[0], ${m.trace.buffer_records + 1}) // satellite blocks ride our dump link',
 		'\tmut duo_trc_wait := false // a satellite snapshot was requested by op_dump',
+		'\tmut duo_trc_off := i32(0) // satellite clock - ours, µs (measured by the ack round trip)',
+		'\tmut duo_trc_bound := u32(0) // half round-trip: that measurement\'s uncertainty',
 	]
 }
 
@@ -184,6 +189,12 @@ fn duo_trace_poll(m Model) []string {
 	}
 	return [
 		'\t\tif duo_trc_wait && C.duo_trace_ready() != 0 {',
+		'\t\t\t// The exchange we just completed IS the clock measurement — take it BEFORE',
+		'\t\t\t// load_remote, which prepends it to the satellite block so the host can put',
+		'\t\t\t// both cores on one timeline (REQ-TRACE-011).',
+		'\t\t\tif C.duo_trace_offset(&duo_trc_off, &duo_trc_bound) != 0 {',
+		'\t\t\t\tg_tm.set_core_offset(duo_trc_off, u16(if duo_trc_bound > 0xffff { u32(0xffff) } else { duo_trc_bound }))',
+		'\t\t\t}',
 		'\t\t\tg_tm.load_remote(C.duo_trace_buf(), C.duo_trace_count())',
 		'\t\t\tduo_trc_wait = false',
 		'\t\t}',

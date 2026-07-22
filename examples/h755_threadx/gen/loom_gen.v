@@ -95,6 +95,7 @@ fn C.duo_trace_req(u32) // post arm(1)/snapshot(2) to the satellite (duo.h dtrac
 fn C.duo_trace_ready() int
 fn C.duo_trace_count() u32
 fn C.duo_trace_buf() &u8
+fn C.duo_trace_offset(&i32, &u32) int // satellite clock - ours, + its error bound
 
 fn shell_ps_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 	n := C.shell_ps(&rsp.buf[0], 520)
@@ -227,7 +228,7 @@ __global (
 	g_trace_ring [256]trace.Record
 	g_tm trace.TraceModule
 	g_sh shell.ShellModule
-	g_duo_trace_ring [256]trace.Record // the satellite core's imported dump window
+	g_duo_trace_ring [257]trace.Record // the satellite core's imported dump window (+1 = its offset record)
 	g_nvm nvm.Journal // the persistence journal (mounted pre-kernel)
 	g_nvmres_load_cmd [12]u8 // restore staging (pre-kernel -> thread init; +headroom for the overlong check)
 	g_nvmres_load_cmd_n u16
@@ -355,8 +356,10 @@ fn comm_thread_entry(input u32) {
 	mut nvm_load_cmd_t := u64(0) // first change persists after ONE floor from boot: chosen pacing
 	mut nvm_prev_nm := g_nm.state()
 	mut nvm_pack := [8]u8{}
-	g_tm.set_remote(u8(1), &g_duo_trace_ring[0], 256) // satellite blocks ride our dump link
+	g_tm.set_remote(u8(1), &g_duo_trace_ring[0], 257) // satellite blocks ride our dump link
 	mut duo_trc_wait := false // a satellite snapshot was requested by op_dump
+	mut duo_trc_off := i32(0) // satellite clock - ours, µs (measured by the ack round trip)
+	mut duo_trc_bound := u32(0) // half round-trip: that measurement's uncertainty
 	mut last_tx_workload := u64(0)
 	mut rx := can.Frame{}
 	for {
@@ -456,6 +459,12 @@ fn comm_thread_entry(input u32) {
 			ch.send(shell_txf)
 		}
 		if duo_trc_wait && C.duo_trace_ready() != 0 {
+			// The exchange we just completed IS the clock measurement — take it BEFORE
+			// load_remote, which prepends it to the satellite block so the host can put
+			// both cores on one timeline (REQ-TRACE-011).
+			if C.duo_trace_offset(&duo_trc_off, &duo_trc_bound) != 0 {
+				g_tm.set_core_offset(duo_trc_off, u16(if duo_trc_bound > 0xffff { u32(0xffff) } else { duo_trc_bound }))
+			}
 			g_tm.load_remote(C.duo_trace_buf(), C.duo_trace_count())
 			duo_trc_wait = false
 		}

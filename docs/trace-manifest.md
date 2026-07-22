@@ -65,6 +65,15 @@ A **multi-core dump** (one `dump` with several `core_mask` bits) arrives as one 
 block per core, each led by a block-header record naming its core and count — so the tool
 splits by core without correlating to the TraceRsp timing.
 
+Each core stamps its records from **its own** free-running origin, so blocks are not comparable
+as dumped. A satellite core's block therefore also carries a `CONTROL/ctl_coreoffset` record,
+ahead of the records it applies to: `core_offset_us` is signed µs that core's clock leads the
+**dumping** core's, so subtract it to land on one timeline, and `core_offset_bound_us` is the
+residual uncertainty of that measurement (half the round trip that measured it) — show it rather
+than round it away. It is measured per dump, not once at startup, so a core that restarted is
+never drawn against a stale offset. An absent record means *not measured*: leave the lanes
+uncorrelated and say so — do NOT assume zero skew.
+
 Recipe: load the manifest → decode LoadDetail / HandlerStat / Record (layouts in
 `telemetry.md`; the `encode_*` fns in `comm/telem` and `comm/trace` are ground truth) →
 render the **swimlane timeline** (a `cpu_us`-wide bar at `start_us` per `handler_id`),
