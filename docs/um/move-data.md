@@ -78,30 +78,70 @@ between each other — the triple buffer that works within a core tore **162 rea
 across cores (measured 2026-07-12). A wider wait-free cell is a real design problem, not a
 constant to bump.
 
-## "I want to send object data to another ECU"
+## "I want to move object data to/from another ECU"
 
-Over CAN, **ISO-TP** is the bulk path — segmentation, flow control, and a fixed
-reassembly buffer per connection:
+First, the structural point that decides everything else: **bulk is a module concern, not
+an FB concern.** FBs read and write *signals* — COM-decoded, ≤64 B, latest-value-wins. A
+multi-frame payload is owned by a **ComModule** (`uds`, `trace`, `shell`) that holds the
+link and its buffer. There is no "raw bulk PDU → FB port" path, by design: an FB would
+have to own a reassembly buffer and a timeout, which is exactly what the module does.
+
+### On CAN — ISO-TP
+
+Declare the connection:
 
 ```toml
 [[isotp]]
-name    = "diag"
-bus     = "can0"
-rx_id   = 0x101
-tx_id   = 0x102
-max_len = 4095       # sizes the no-alloc reassembly buffer
+name     = "diag"
+bus      = "can0"
+rx_id    = 0x101      # Request  (DBC)
+tx_id    = 0x102      # Response (DBC)
+bs       = 8          # flow-control block size we grant
+stmin_ms = 0          # min separation we ask the sender for
 ```
 
-The build cap is **520 B** (`isotp.max_payload`), sized to hold the largest thing the
-system sends today — one trace dump block (8 B header + 64 records × 8 B). Raise it and
-every link's buffer grows, so it is a deliberate ceiling.
+The generator emits an `isotp.Link` plus a `[max_payload]u8` buffer into the ECU state and
+wires the comm loop to it — you do not write the segmentation. The API either side of that
+is two calls:
 
-For anything image-sized, use the **bootloader's block transfer** (`0x34` / `0x36`×N /
-`0x37`) rather than one enormous PDU: it acks per block and lets ISO-TP flow control do
-the pacing.
+- **send** — `l.send(src, len)`; returns **`false`** if a transfer is already in flight or
+  `len` exceeds the cap. *Check the return* — a dropped message is otherwise invisible.
+- **receive** — `l.take(dst)` copies out one fully reassembled message and returns its
+  length, or `0` if none is ready.
 
-On Ethernet, a **SOME/IP notification** is one PDU (64 B); a **method response** may carry
-up to 1024 B (`max_rpc`) — the one place a real payload is allowed past the PDU bound.
+Where it terminates today: the shipped consumer is the **UDS server** (`0x22`/`0x2E` DIDs,
+plus the bootloader's `0x34`/`0x36`×N/`0x37` block transfer). `comm/trace` owns its own
+link the same way for the dump. A new bulk consumer follows that pattern — a module with
+a link, not a new FB port.
+
+**The cap is 520 B** (`isotp.max_payload`), sized to hold the largest thing the system
+sends today (one trace dump block: 8 B header + 64 records × 8 B). Raising it grows *every*
+link's buffer, so it is a deliberate ceiling. For anything image-sized use the bootloader's
+block transfer instead — it acks per block and lets ISO-TP flow control pace it.
+
+**Two failure modes, and they are asymmetric:**
+
+- **Sending too much fails loudly-ish** — `send()` returns `false` and transmits nothing.
+- **Being *asked* to receive too much fails silently.** A FirstFrame declaring more than
+  `max_payload` is ignored: no reassembly starts and **no OVFLW flow-control is sent**, so
+  the peer just sees silence and times out. (We *honour* an OVFLW we receive, but never
+  emit one.) If a remote transfer mysteriously stalls, check its declared length first.
+
+### On Ethernet — SOME/IP
+
+A **notification** is one PDU: **64 B**. A **method response** may carry up to **1024 B**
+(`max_rpc`) — the one place a real payload is allowed past the PDU bound, precisely so
+request/response can return something substantial without resizing the whole COM path.
+See [../someip.md](../someip.md).
+
+### Which ECU it even goes to
+
+Nothing above says *which* node. That is the system layer: declare the nodes and buses in
+`system.toml` and the generator wires each node's half and any gateway route. Start with
+[two-node-io.md](two-node-io.md) (a signal across two real ECUs, end to end), then
+[system-from-nodes.md](system-from-nodes.md) for how `system.toml` and `ecu.toml` merge.
+If the two ECUs are on *different* buses, the traffic crosses a gateway —
+[gateway-a-frame.md](gateway-a-frame.md).
 
 ## Pacing bulk without starving the bus
 
@@ -118,3 +158,6 @@ snapshot, then stream in bounded chunks.
 - [../multicore-perf.md](../multicore-perf.md) — IOC transports, measured costs, `ioc_bench`
 - [../communication.md](../communication.md) — COM, router, ISO-TP, UDS
 - [gateway-a-frame.md](gateway-a-frame.md) — moving traffic between buses
+- [two-node-io.md](two-node-io.md) · [system-from-nodes.md](system-from-nodes.md) ·
+  [../multi-node.md](../multi-node.md) — getting data to a *different ECU* at all
+- [../com-modules.md](../com-modules.md) — why bulk is owned by a module, not an FB
