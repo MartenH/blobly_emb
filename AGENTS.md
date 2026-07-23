@@ -50,6 +50,35 @@ Examples use classic CAN (`[bus] fd = false`) so blobly_net (classic) can drive
 them; the driver picks classic vs CAN-FD from that flag. Integration tests live in
 each example's `test/` (blobly_net project + Lua), run by `make test`.
 
+### CI — what is and is NOT gated
+
+`.github/workflows/ci.yml` runs on every push and PR: the host unit tests
+(`v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot`), `make lint`,
+`make check` and `make trace`. Locally, run those four before opening a PR and nothing
+should surprise you.
+
+**Not gated — verify these yourself:**
+
+- **Cross-compiling the STM32H7 examples.** Needs `arm-none-eabi`, `make deps` for the
+  gitignored CMSIS headers, and a V master pin for the freestanding build. Target builds are
+  bench-verified by hand.
+- **`scripts/lint_vinit.sh`** — it takes a built ELF, so it runs from each example's Makefile
+  after a cross-build, not in host CI. It catches the `$d`-const/field-default `_vinit` trap,
+  which has cost four real casualties; do not skip it when you touch a target image.
+- **Anything on real silicon.** Bench results go in `requirements/verifications.toml`.
+
+The example e2e tests (`host_someip`, `io_*`) all bind **UDP port 30491**, so they only pass
+when run one at a time — CI runs each in its own `v test`. Plain `v test .` at the repo root
+looks broken for this reason (it also picks up `.claude/worktrees/` copies).
+
+### Commit identity (enforced)
+
+Every commit must be **authored** by `marten.hildell@gmail.com`; the committer may also be
+`noreply@github.com` (GitHub rewrites it on a web squash-merge). `.github/workflows/guard.yml`
+fails the build otherwise, and also auto-closes external PRs while the project is in its design
+phase (see `CONTRIBUTING.md`). Install the local hook so it fails in a second instead of after a
+push: `git config core.hooksPath .githooks`.
+
 ## Review guidelines
 
 Enforce these as high-priority (P0/P1); they are the project's hard invariants.

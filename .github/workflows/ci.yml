@@ -1,0 +1,70 @@
+name: ci
+
+# The first automated gate for blobly_emb. Until now nothing ran the tests on a push — the
+# 36 V test files, `make check` and `make trace` were all hand-run, so a PR could merge red.
+#
+# Scope, deliberately: this gates the HOST/SIM side — unit tests, config validation, and the
+# requirement→verification trace. It does NOT cross-compile the STM32H7 examples: that needs the
+# arm-none-eabi toolchain, gitignored CMSIS headers (`make deps`), and a V master pin for the
+# freestanding build, none of which belong in a first, reliable gate. Target builds are verified
+# on the bench and are a tracked follow-up.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: linux • host unit tests + check + trace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install V (latest)
+        uses: vlang/setup-v@v1.4
+        with:
+          check-latest: true
+
+      - name: V version
+        run: v version
+
+      # The deterministic backbone: every module that is not a socket e2e example. These are
+      # order-independent and safe to parallelise, so they are the real gate.
+      - name: Unit tests
+        run: |
+          v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot
+
+      # The no-alloc + isolation lint. AGENTS.md calls this MUST pass, and it guards the defining
+      # constraint of the whole stack — no dynamic allocation — so it belongs in the gate, not in
+      # a habit of remembering to run it.
+      - name: No-alloc + isolation lint (make lint)
+        run: make lint
+
+      # ecucheck validates every example's ecu.toml (also guards the TOML nested-comment trap).
+      - name: Config validation (make check)
+        run: make check
+
+      # Requirement → verification traceability: nonzero exit if a linked verification failed.
+      - name: Requirement trace (make trace)
+        run: make trace
+
+      # The example e2e tests each spin a UDP peer on a FIXED port (30491), so they collide when
+      # run together — parallel or not. Run each in its own `v test` invocation so the port is
+      # never shared. (Fixing them to bind an ephemeral port is a tracked follow-up; until then
+      # this runs every one for real without the false red.)
+      - name: Example e2e tests (isolated — shared port 30491)
+        run: |
+          set -e
+          for t in examples/host_someip examples/io_adc examples/io_gpio examples/io_pwm; do
+            echo "== $t =="
+            v -enable-globals test "$t"
+          done
