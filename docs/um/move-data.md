@@ -78,6 +78,42 @@ between each other — the triple buffer that works within a core tore **162 rea
 across cores (measured 2026-07-12). A wider wait-free cell is a real design problem, not a
 constant to bump.
 
+### The planned shape: loan → fill → publish (what iceoryx solves)
+
+The generated bulk path, when it lands, will use the **loan/publish** pattern (borrowed
+from Eclipse iceoryx — the zero-copy transport behind AUTOSAR Adaptive's `ara::com`;
+survey in [../bulk-transport.md](../bulk-transport.md)). It exists to kill two problems at
+once, both of which any home-grown design here would otherwise hit:
+
+- **The producer must not allocate** — but if it owns a static buffer instead, the
+  transport has to *copy* out of it, and a concurrent reader can tear the copy. Every
+  no-alloc bulk design collapses into this fork.
+- **Copying bulk is the cost the path exists to avoid** — a 2 KB window copied
+  producer→transport→consumer crosses the bus matrix three times.
+
+The pattern dissolves both by inverting ownership — **the transport hands the producer a
+buffer, never the reverse:**
+
+```
+producer:  loan()    -> a free buffer from the pool   (fails when the pool is empty)
+           fill      -> write the payload IN PLACE — no staging copy
+           publish() -> ownership moves via the descriptor ring; the producer
+                        must not touch the buffer again
+consumer:  take()    -> the oldest published buffer, by reference — still no copy
+           release() -> the buffer returns to the pool
+```
+
+Zero copies end to end; no allocation anywhere (the pool is fixed at build time from
+`ecu.toml`, so the RAM cost is visible in config); and back-pressure is **explicit and
+designed** — when the consumer falls behind, `loan()` fails and the *producer* decides
+drop-oldest / drop-newest / count-overflows, instead of a silent tear or an unbounded
+queue. Loss stays detectable, never silent — the same discipline as everything else on
+this page.
+
+The consumer side is a **service thread** (see the Ethernet section below) — it sleeps on
+the doorbell rather than polling. None of this is callable today; this section exists so
+nobody designs a bulk producer around `memcpy` into a static buffer in the meantime.
+
 ## "I want to move object data to/from another ECU"
 
 First, the structural point that decides everything else: **bulk is a module concern, not
@@ -167,6 +203,37 @@ header plus the build-time payload layout, legible to Wireshark and to blobly_ne
 | method response | **1024 B** (`max_rpc`) — the one payload allowed past the PDU bound |
 | addressing | one static peer ip/port; a datagram from anywhere else is discarded |
 
+### TCP/UDP from an application — the service-thread pattern
+
+Blocking socket work has a home, and it is not an FB (which must finish inside its period
+and may never block): it is a **service thread** — an ordinary ThreadX thread paced by the
+*data* instead of the clock. NetX is ThreadX-native, so
+`nx_tcp_socket_receive(&sock, &packet, timeout_ticks)` blocks that thread properly, with a
+timeout — no polling, no callbacks.
+
+The worked example to copy is [`examples/h735_doip`](../../examples/h735_doip):
+
+- `netx_glue.c` owns ThreadX/NetX/the sockets and exposes a **four-call seam**
+  (`net_stream_recv/send`, timeout in ticks, plus a drop and a notify);
+- a dedicated thread runs the **V protocol loop** against that seam — blocking recv with a
+  bounded timeout, every byte above the stream unit-tested V (`comm.doip` + `comm.uds`).
+
+The seam is the point: the thread never calls NetX directly, so the loop stays pure V and
+testable on the host, and the isolation rule holds (the glue is the driver boundary, like
+`main.v`).
+
+**Which NetX API:** the **native `nx_*` services** (`nx_tcp_socket_*`, `nx_udp_socket_*`),
+which is what every shipped example uses. The vendored tree also carries a **BSD
+socket-compat addon** (`third_party/netxduo/addons/BSD`) — don't reach for it: it layers
+its own internal locking and select emulation over the native calls to fake POSIX, buys
+nothing here (the native calls already block-with-timeout from a thread), and widens the
+no-alloc surface for free. One native-API trap is already documented and will bite a
+re-accept loop: server sockets accept with `NX_WAIT_FOREVER` and bound only the receive —
+see [../net.md](../net.md) ("`nx_tcp_server_socket_accept` … is a NetX trap").
+
+Today you copy that glue by hand; making the service thread + seam **declarable**
+(a `[[partition.thread]]` with an endpoint binding, glue generated) is on the roadmap.
+
 **What does not exist today** — worth knowing before you design around it:
 
 - **No app-facing socket API.** No UDP stream, no TCP connect, no app-initiated
@@ -211,3 +278,5 @@ snapshot, then stream in bounded chunks.
 - [two-node-io.md](two-node-io.md) · [system-from-nodes.md](system-from-nodes.md) ·
   [../multi-node.md](../multi-node.md) — getting data to a *different ECU* at all
 - [../com-modules.md](../com-modules.md) — why bulk is owned by a module, not an FB
+- [../bulk-transport.md](../bulk-transport.md) — the bulk design survey: how ROS 2/iceoryx/
+  RPMsg/Linux solve this, the portable contract, and the service-thread model
