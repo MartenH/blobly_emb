@@ -57,14 +57,9 @@ jobs:
       - name: Requirement trace (make trace)
         run: make trace
 
-      # The example e2e tests each spin a UDP peer on a FIXED port (30491), so they collide when
-      # run together — parallel or not. Run each in its own `v test` invocation so the port is
-      # never shared. (Fixing them to bind an ephemeral port is a tracked follow-up; until then
-      # this runs every one for real without the false red.)
-      - name: Example e2e tests (isolated — shared port 30491)
-        run: |
-          set -e
-          for t in examples/host_someip examples/io_adc examples/io_gpio examples/io_pwm; do
-            echo "== $t =="
-            v -enable-globals test "$t"
-          done
+      # The example e2e tests each shell out to `make gen` + build. They used to fail randomly in
+      # parallel because `v run <tool>` names its compiled binary after the TOOL's source path, so
+      # concurrent examples wrote and exec'd the same file (ETXTBSY / ENOENT). examples/common.mk
+      # now compiles each generator to the example's own bin/, so these are safe to run together.
+      - name: Example e2e tests
+        run: v -enable-globals test examples

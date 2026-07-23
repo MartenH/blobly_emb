@@ -16,13 +16,18 @@ all: gen build
 
 # Generate — the SAME steps for every example, so a change to [bus].fd, a new signal, or the
 # trace config is reflected in the tree.
+# `v run <tool>` derives the compiled binary's path from the TOOL's source path, so two examples
+# generating at the same time write and exec the SAME file — one gets `Text file busy` (ETXTBSY)
+# or `No such file or directory` mid-exec. That is why `v test examples` fails randomly while each
+# example passes alone. Compiling each tool to a path under THIS example's bin/ removes the shared
+# name; V's object cache is still shared, so it costs nothing.
 gen:
 	@mkdir -p gen ports sig bin
-	@if [ -f bus.dbc ]; then $(V) run $(REPO)/tools/dbc2cfg/gen.v bus.dbc gen/dbc_gen.v; fi
-	$(V) run $(REPO)/tools/ecucheck/gen.v ecu.toml
-	$(V) run $(REPO)/tools/cfg2v/gen.v  ecu.toml gen/ecu_gen.v
-	$(V) run $(REPO)/tools/loom2v ecu.toml bus.dbc sig/signals_gen.v ports/ports_gen.v gen/loom_gen.v gen/trace-manifest.csv
-	$(V) run $(REPO)/tools/sigmap/gen.v ecu.toml signal-map.md
+	@if [ -f bus.dbc ]; then $(V) -o bin/.tool-dbc2cfg $(REPO)/tools/dbc2cfg/gen.v && ./bin/.tool-dbc2cfg bus.dbc gen/dbc_gen.v; fi
+	$(V) -o bin/.tool-ecucheck $(REPO)/tools/ecucheck/gen.v && ./bin/.tool-ecucheck ecu.toml
+	$(V) -o bin/.tool-cfg2v $(REPO)/tools/cfg2v/gen.v && ./bin/.tool-cfg2v ecu.toml gen/ecu_gen.v
+	$(V) -o bin/.tool-loom2v $(REPO)/tools/loom2v && ./bin/.tool-loom2v ecu.toml bus.dbc sig/signals_gen.v ports/ports_gen.v gen/loom_gen.v gen/trace-manifest.csv
+	$(V) -o bin/.tool-sigmap $(REPO)/tools/sigmap/gen.v && ./bin/.tool-sigmap ecu.toml signal-map.md
 
 # Build: local modules (sig/app/ports/gen) + the repo framework, via V's -path.
 build:
