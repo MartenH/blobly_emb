@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 182 | 92 | 13 | 77 | 0 |
+| 183 | 93 | 13 | 77 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -179,6 +179,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TRACE-002 | QM | test | verified | h755-external-partitions (approved) |
 | REQ-TRACE-008 | QM | test | uncovered | — |
 | REQ-TRACE-009 | QM | test | uncovered | — |
+| REQ-TRACE-011 | QM | test | verified | module_test.v (pass), trace_test.v (pass) |
 | REQ-TOPO-001 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-002 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-003 | QM | test | verified | dbc_test.v (pass), model_test.v (pass) |
@@ -366,6 +367,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TRACE-002 | | | | | | | | | | | ✓ | | | | | |
 | REQ-TRACE-008 | | | | | | | | | | | | | | | | |
 | REQ-TRACE-009 | | | | | | | | | | | | | | | | |
+| REQ-TRACE-011 | | | | | | | | | | | | | | ✓ | | |
 | REQ-TOPO-001 | | | | | | | | | | | | | | ✓ | | |
 | REQ-TOPO-002 | | | | | | | | | | | | | | ✓ | | |
 | REQ-TOPO-003 | | | | | | | | | | | | | | ✓ | | |

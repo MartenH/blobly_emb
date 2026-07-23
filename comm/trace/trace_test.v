@@ -1,5 +1,10 @@
 module trace
 
+// @verifies REQ-TRACE-011
+// The cross-core clock correlation record: signed offset + measurement bound survive the wire,
+// and pack_chunk re-states it at the head of every block (module_test.v) so a continuation block
+// decodes standalone. The SILICON figure (H755, +49.7 ms) is a bench observation, not asserted here.
+
 // rec is a plain fb.handler run record with a given id (helper for the buffer tests).
 fn rec(id u8) Record {
 	return new_fb(u16(id), 0, 0, 0)
