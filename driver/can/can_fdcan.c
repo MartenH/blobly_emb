@@ -235,8 +235,17 @@ int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int flag
 	else
 		e[0] = (id & 0x7FFu) << 18; /* T0: 11-bit std id, XTD/RTR/ESI = 0 */
 	uint8_t dlc = fd ? len_to_dlc(len) : len;
-	/* T1: DLC [19:16]; FD frames set FDF (bit21) + BRS (bit20). */
+	/* T1: DLC [19:16]; FD frames set FDF (bit21) + BRS (bit20). BRS is now overridable:
+	 * -DBLOB_FDCAN_NOBRS keeps FDF without bit-rate switching. Default UNCHANGED (BRS set,
+	 * what the bench actually ran): "FD without switching" on that bench meant DBTP at the
+	 * nominal rate, i.e. the flag switched to the SAME bitrate — after 2 Mbit from the
+	 * 8 MHz kclk (4 tq) went bus-off. The opt-out makes the no-switching configuration
+	 * expressible at the frame level too (codex #188); silicon re-check is bench-queued. */
+#ifdef BLOB_FDCAN_NOBRS
+	e[1] = ((uint32_t)dlc << 16) | (fd ? (1u << 21) : 0u);
+#else
 	e[1] = ((uint32_t)dlc << 16) | (fd ? ((1u << 21) | (1u << 20)) : 0u);
+#endif
 
 	/* Write the padded data length (dlc_to_len rounds a non-standard len up to the
 	 * next code); bytes past the caller's len are zero. Up to 16 words for 64 bytes. */
