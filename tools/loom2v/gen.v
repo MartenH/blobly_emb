@@ -305,6 +305,44 @@ mut:
 // and each bus's core.
 // parse_routes parses [[route]] (raw-PDU gateway: forward a frame bus->bus, no decode) and
 // resolves each from-frame to its DBC id (routes need a DBC).
+// validate_route_cores enforces REQ-TOPO-010's cross-core half. A route whose buses sit on
+// different cores cannot use the same-core mechanism (the source bridge holding the destination
+// channel — impossible across images), so:
+//   - a FRAME route is a hard error: a raw PDU (id + flags + up to 64 B) does not fit a signal
+//     cell, and carrying it whole is the bulk transport's job (docs/bulk-transport.md). This is
+//     the contract, not a gap.
+//   - a SIGNAL route is the sanctioned crossing (its physical value rides one cross-core signal
+//     cell) but the lowering is not generated yet — reject loudly rather than emit same-core
+//     code that only works where channels happen to be shareable.
+fn validate_route_cores(routes []Route, bus_core map[string]int) []Route {
+	if msg := route_cores_error(routes, bus_core) {
+		panic(msg)
+	}
+	return routes
+}
+
+// route_cores_error returns the first cross-core violation as a message, or none — pure and
+// panic-free so routes_test.v can assert both messages in-process.
+fn route_cores_error(routes []Route, bus_core map[string]int) ?string {
+	for r in routes {
+		fc := bus_core[r.from_bus] or { 0 }
+		tc := bus_core[r.to_bus] or { 0 }
+		if fc == tc {
+			continue
+		}
+		if r.signal == '' {
+			return 'route: frame "${r.from_frame}" ${r.from_bus}(core ${fc}) -> ${r.to_bus}(core ${tc}) ' +
+				'crosses cores — a raw PDU does not fit a signal cell (REQ-TOPO-010). Route the ' +
+				'signal instead, keep both buses on one core, or wait for the bulk transport ' +
+				'(docs/bulk-transport.md).'
+		}
+		return 'route: signal "${r.signal}" ${r.from_bus}(core ${fc}) -> ${r.to_bus}(core ${tc}) ' +
+			'crosses cores — the xioc lowering (REQ-TOPO-010) is not generated yet; keep both ' +
+			'buses on one core for now.'
+	}
+	return none
+}
+
 fn parse_routes(doc toml.Doc, dbc string) []Route {
 	mut routes := []Route{}
 	for r in ecumodel.toml_arr(doc, 'route') {
@@ -1024,7 +1062,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		someip:       parse_someip(doc)
 		eth_frames:   parse_eth_frames(doc, eth, sig_of)
 		frames:       parse_frames(doc, eth, buses)
-		routes:       parse_routes(doc, dbc)
+		routes:       validate_route_cores(parse_routes(doc, dbc), bus_core)
 		isotp_conns:  parse_isotp(doc)
 		dids:         parse_dids(doc)
 		part:         part

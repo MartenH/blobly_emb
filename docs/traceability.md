@@ -189,7 +189,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-007 | QM | test | covered | model_test.v (pass), route_extid.lua (pending), route_firewall.lua (pending) |
 | REQ-TOPO-008 | QM | test | covered | route_dissolution.lua (pending), route_e2e.lua (pending), route_signal.lua (pending), route_srcverify.lua (pending) |
 | REQ-TOPO-009 | QM | test | covered | route_firewall.lua (pending) |
-| REQ-TOPO-010 | QM | analysis | covered | route_firewall.lua (pending) |
+| REQ-TOPO-010 | QM | analysis | covered | route_firewall.lua (pending), routes_test.v (pass) |
 | REQ-TOPO-011 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-012 | QM | test | verified | model_test.v (pass) |
 | REQ-TP-001 | QM | test | uncovered | — |
@@ -377,7 +377,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-007 | | | | | | | | | | | | | · | ✓ | | |
 | REQ-TOPO-008 | | | | | | | | | | | | | · | | | |
 | REQ-TOPO-009 | | | | | | | | | | | | | · | | | |
-| REQ-TOPO-010 | | | | | | | | | | | | | · | | | |
+| REQ-TOPO-010 | | | | | | | | | | | | | · | ✓ | | |
 | REQ-TOPO-011 | | | | | | | | | | | | | | ✓ | | |
 | REQ-TOPO-012 | | | | | | | | | | | | | | ✓ | | |
 | REQ-TP-001 | | | | | | | | | | | | | | | | |
