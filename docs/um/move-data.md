@@ -33,6 +33,32 @@ cell."* Sending bulk as a signal is the mistake this page exists to prevent.
 | Ethernet RPC reply | SOME/IP response, same UDP path | **1024 B** (`max_rpc`) | ✅ config |
 | Ethernet diagnostics | DoIP (`comm/doip`) over **NetX TCP** — a module + service thread, not an app path | **256 B** (`doip.max_msg`) | ❌ hand-wired (`h735_doip`) |
 
+### Coming from AUTOSAR COM? The numbers you're used to
+
+If your intuitions are COM-shaped, here is where each familiar bound lands — most of them
+map one-to-one, because both stacks ultimately bow to the same frames:
+
+| you're used to (AUTOSAR) | there | here |
+|---|---|---|
+| signal in a CAN I-PDU | 8 B (classic L-PDU) | same — 8 B classic frame |
+| signal in a CAN FD I-PDU | up to 64 B | same — `com.max_pdu` = 64 B, and it is the ceiling for *every* signal path |
+| `ComSignalLength` byte-array signals sized for **FlexRay** (~254/256 B PDUs) | FlexRay only | **not carried** — no FlexRay here, and its niche has largely moved to CAN FD / Ethernet; nothing else in the stack ever needed a >64 B *signal* |
+| **CanTp** (ISO-TP) message | 4095 B (2³²−1 with the 2016 escape) | **520 B** (`isotp.max_payload`) — a deliberate no-alloc cap sized to the largest real message; raise it consciously, every link's buffer grows |
+| **LdCom** — a payload passed whole, no signal packing | transparent, TP-segmented | the gap this page keeps pointing at: modules own links today; the loan/publish **bulk ring** is the planned equivalent ([../bulk-transport.md](../bulk-transport.md)) |
+| **OS IOC** cross-core | size is whatever the generator is configured to emit | derived, and **bounded at the same 64 B PDU ceiling** — so moving a partition never changes what a signal may be, only what it costs |
+| **SecOC / E2E** on a protected PDU | in-PDU trailer | same shape — `[[frame]].e2e` / `.secoc`, re-protected on gateway re-encode |
+| J1939 TP / big diag transfers | 1785 B / TP-paced | the bootloader's UDS `0x34`/`0x36`×N block transfer — image-sized, block-paced |
+
+Two deliberate differences worth internalising rather than fighting:
+
+- **There is no configurable signal length past the PDU.** AUTOSAR lets config declare
+  byte-array signals as big as the biggest bus allows, which is how 254 B FlexRay-era
+  signals ended up in configs that outlived FlexRay. Here "signal" *means* "fits one PDU";
+  bigger is bulk, and the build fails loudly instead of packing it anyway.
+- **The ISO-TP cap is smaller on purpose.** 4095 B reassembly buffers per connection are
+  real RAM on a no-alloc target; 520 B holds the largest message this system actually
+  sends. It is one constant — but treat raising it as a sizing decision, not a tweak.
+
 Transports are **derived, never configured** — you declare a `[[signal]]`'s endpoints and
 the generator picks the mechanism from where they sit. See
 [add-a-signal.md](add-a-signal.md).
