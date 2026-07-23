@@ -43,7 +43,7 @@ pub const max_rsp = isotp.max_payload // one ISO-TP block; help/ps for a handful
 // Rsp is the no-alloc response writer — a fixed buffer the handlers append text into.
 pub struct Rsp {
 pub mut:
-	buf [520]u8
+	buf [isotp.max_payload]u8 // derived: raising the cap grows this with it (codex #202)
 	len int
 }
 
