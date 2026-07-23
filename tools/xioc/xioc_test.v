@@ -69,6 +69,7 @@ fn test_wide_channel_never_tears_under_concurrent_writer() {
 	// channel's latest — one more read must surface it (fresh, complete, final).
 	if last_base != publishes {
 		assert C.xioc_n_read(&g_cell[0], &rd_seq, &dst[0]) == 1, 'final value must be readable after the writer joined'
+		fresh++ // this observation counts too (on a starved runner it may be the ONLY one)
 		for i in 1 .. int(words) {
 			assert dst[i] - dst[0] == u32(i), 'torn FINAL read: word ${i}'
 		}
