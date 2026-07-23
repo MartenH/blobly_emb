@@ -273,6 +273,12 @@ fn main() {
 		for v in vs {
 			srcs << '${v.source} (${v.result})'
 		}
+		// Sort: verifications are collected by walking the source tree (os.walk_ext), whose order
+		// differs between machines, so the same repo rendered the same evidence in a different
+		// ORDER here and this generated file churned in git for no semantic reason. It is checked
+		// in, so its output has to be a function of the inputs only. (Caught by CI diffing the
+		// regenerated file: identical counts, reordered rows.)
+		srcs.sort()
 		mut joined := if srcs.len > 0 { srcs.join(', ') } else { '—' }
 		if derived[r.id] {
 			joined = '↳ derived (all children verified)'

@@ -25,16 +25,16 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-008 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-009 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-010 | QM | test | uncovered | — |
-| REQ-BOOT-011 | QM | test | verified | prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), ed25519_test.v (pass) |
+| REQ-BOOT-011 | QM | test | verified | ed25519_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass) |
 | REQ-BOOT-012 | QM | test | uncovered | — |
 | REQ-BOOT-013 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-014 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-015 | QM | analysis | uncovered | — |
 | REQ-BOOT-016 | QM | test | verified | prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass) |
-| REQ-BOOT-017 | QM | test | verified | ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_interop_test.v (pass), sha512_test.v (pass) |
+| REQ-BOOT-017 | QM | test | verified | ed25519_interop_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), sha512_test.v (pass) |
 | REQ-BOOT-018 | QM | analysis | uncovered | — |
-| REQ-CAN-DRV-001 | QM | test | covered | route.lua (pending), h735-fdcan-hardware (approved), h755-fdcan-hardware (approved), h755-dualcore-heartbeat (approved) |
-| REQ-CAN-DRV-002 | QM | test | covered | route.lua (pending), h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
+| REQ-CAN-DRV-001 | QM | test | covered | h735-fdcan-hardware (approved), h755-dualcore-heartbeat (approved), h755-fdcan-hardware (approved), route.lua (pending) |
+| REQ-CAN-DRV-002 | QM | test | covered | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved), route.lua (pending) |
 | REQ-CAN-DRV-003 | QM | test | verified | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
 | REQ-CAN-DRV-004 | QM | test | uncovered | — |
 | REQ-CAN-DRV-005 | QM | test | uncovered | — |
@@ -66,7 +66,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-MODE-002 | QM | test | verified | ecu_test.v (pass) |
 | REQ-MODE-003 | QM | test | verified | ecu_test.v (pass) |
 | REQ-INV-001 | QM | analysis | verified | noalloc-driver-lint (pass) |
-| REQ-INV-002 | B | analysis | verified | h755-xioc (approved), h755-duo-signal (approved), h755-multi-image (approved) |
+| REQ-INV-002 | B | analysis | verified | h755-duo-signal (approved), h755-multi-image (approved), h755-xioc (approved) |
 | REQ-INV-003 | B | analysis | uncovered | — |
 | REQ-INV-004 | QM | analysis | verified | noalloc-driver-lint (pass) |
 | REQ-INV-005 | QM | review | covered | naming-review (pending) |
@@ -88,11 +88,11 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-IO-014 | QM | test | uncovered | — |
 | REQ-IO-017 | QM | test | uncovered | — |
 | REQ-IO-018 | QM | test | covered | h755-io-analog-hwtest (pending) |
-| REQ-IO-019 | QM | test | verified | io_test.v (pass), e2e_test.v (pass) |
+| REQ-IO-019 | QM | test | verified | e2e_test.v (pass), io_test.v (pass) |
 | REQ-IO-020 | QM | analysis | uncovered | — |
 | REQ-IO-021 | QM | test | covered | h755-io-analog-hwtest (pending) |
 | REQ-IO-022 | QM | analysis | uncovered | — |
-| REQ-IO-023 | QM | test | verified | io_test.v (pass), e2e_test.v (pass) |
+| REQ-IO-023 | QM | test | verified | e2e_test.v (pass), io_test.v (pass) |
 | REQ-IO-024 | QM | analysis | uncovered | — |
 | REQ-NET-001 | QM | analysis | verified | h735-eth-hardware (approved) |
 | REQ-NET-002 | QM | analysis | verified | h735-eth-hardware (approved) |
@@ -116,15 +116,15 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NM-002 | QM | test | verified | module_test.v (pass), nm_test.v (pass) |
 | REQ-NM-003 | QM | test | verified | module_test.v (pass), nm_can_test.v (pass), nm_test.v (pass) |
 | REQ-NM-004 | QM | test | verified | module_test.v (pass), nm_can_test.v (pass), nm_test.v (pass) |
-| REQ-NM-005 | QM | test | verified | frame_test.v (pass), h735-nm-hardware (approved), h755-threadx-stack (approved), h755-duo-ioc-fb (approved) |
+| REQ-NM-005 | QM | test | verified | frame_test.v (pass), h735-nm-hardware (approved), h755-duo-ioc-fb (approved), h755-threadx-stack (approved) |
 | REQ-NM-006 | QM | test | verified | module_test.v (pass), nm_test.v (pass) |
 | REQ-NM-007 | QM | test | verified | nm_test.v (pass) |
 | REQ-NM-008 | QM | test | verified | module_test.v (pass), nm_test.v (pass) |
 | REQ-NM-009 | QM | test | verified | frame_test.v (pass) |
 | REQ-NM-010 | QM | test | verified | frame_test.v (pass) |
-| REQ-NM-011 | QM | test | verified | nm_can_test.v (pass), frame_test.v (pass) |
-| REQ-NM-012 | QM | test | verified | nm_can_test.v (pass), nm_can_test.v (pass), frame_test.v (pass) |
-| REQ-NM-013 | QM | test | verified | nm_can_test.v (pass), nm_can_test.v (pass), frame_test.v (pass) |
+| REQ-NM-011 | QM | test | verified | frame_test.v (pass), nm_can_test.v (pass) |
+| REQ-NM-012 | QM | test | verified | frame_test.v (pass), nm_can_test.v (pass), nm_can_test.v (pass) |
+| REQ-NM-013 | QM | test | verified | frame_test.v (pass), nm_can_test.v (pass), nm_can_test.v (pass) |
 | REQ-NVM-001 | QM | test | uncovered | — |
 | REQ-NVM-002 | QM | test | verified | journal_test.v (pass) |
 | REQ-NVM-003 | QM | test | verified | journal_test.v (pass) |
@@ -175,7 +175,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TELEM-003 | QM | test | verified | loom_test.v (pass) |
 | REQ-TELEM-004 | QM | test | verified | loom_test.v (pass) |
 | REQ-TRACE-010 | QM | test | uncovered | — |
-| REQ-TRACE-001 | QM | test | verified | loom_test.v (pass), h755-duo-trace (approved), h755-multiblock-dump (approved) |
+| REQ-TRACE-001 | QM | test | verified | h755-duo-trace (approved), h755-multiblock-dump (approved), loom_test.v (pass) |
 | REQ-TRACE-002 | QM | test | verified | h755-external-partitions (approved) |
 | REQ-TRACE-008 | QM | test | uncovered | — |
 | REQ-TRACE-009 | QM | test | uncovered | — |
@@ -185,9 +185,9 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-003 | QM | test | verified | dbc_test.v (pass), model_test.v (pass) |
 | REQ-TOPO-004 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-005 | QM | analysis | verified | gen_test.v (pass) |
-| REQ-TOPO-006 | QM | test | covered | route_signal.lua (pending), route_dissolution.lua (pending), gen_test.v (pass), model_test.v (pass) |
-| REQ-TOPO-007 | QM | test | covered | route_firewall.lua (pending), route_extid.lua (pending), model_test.v (pass) |
-| REQ-TOPO-008 | QM | test | covered | route_signal.lua (pending), route_dissolution.lua (pending), route_e2e.lua (pending), route_srcverify.lua (pending) |
+| REQ-TOPO-006 | QM | test | covered | gen_test.v (pass), model_test.v (pass), route_dissolution.lua (pending), route_signal.lua (pending) |
+| REQ-TOPO-007 | QM | test | covered | model_test.v (pass), route_extid.lua (pending), route_firewall.lua (pending) |
+| REQ-TOPO-008 | QM | test | covered | route_dissolution.lua (pending), route_e2e.lua (pending), route_signal.lua (pending), route_srcverify.lua (pending) |
 | REQ-TOPO-009 | QM | test | covered | route_firewall.lua (pending) |
 | REQ-TOPO-010 | QM | analysis | covered | route_firewall.lua (pending) |
 | REQ-TOPO-011 | QM | test | verified | model_test.v (pass) |
