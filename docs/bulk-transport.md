@@ -194,15 +194,54 @@ The convergence is strong enough to just follow it. A generated bulk endpoint wo
    should mean ISO-TP (CAN) or SOME/IP-TP (eth) — the transport derived from where the
    endpoint sits, exactly as signals already work.
 
-Two decisions to make deliberately, not by default:
+## Who runs it — FBs for signals, service threads for everything else
+
+The execution-model question ("but who *calls* this API?") has an answer the tree already
+practices, three times, hand-written:
+
+- **An FB handler is the wrong home for bulk by construction.** It is cyclic, must finish
+  inside its period, and may never block — the right contract for signal work, fatal for a
+  socket or a stream.
+- **A plain ThreadX thread is the right home**, and on the eth side it is already genuinely
+  *nice*: NetX is ThreadX-native, so `nx_tcp_socket_receive(&sock, &p, timeout_ticks)`
+  blocks the thread properly, with a timeout, no polling. The existing instances:
+  - the **comm thread** — blocks on the CAN Rx, owns the bus, runs the modules;
+  - the **DoIP service thread** (`examples/h735_doip`) — `netx_glue.c` owns
+    ThreadX/NetX/sockets and exposes a four-call seam (`net_stream_recv/send`, timeout in
+    ticks); a dedicated thread runs the V protocol loop against that seam, and every byte
+    above the stream is unit-tested V (`comm.doip` + `comm.uds`);
+  - `examples/h735_net`'s echo/telemetry threads.
+
+So the model is **two kinds of application execution**, not one:
+
+| | **FB handler** | **service thread** |
+|---|---|---|
+| paced by | the clock (its period) | the *data* (blocking recv / doorbell, with timeout) |
+| may block | never | yes — that is its job |
+| carries | signals, ≤64 B, latest-value | streams, bulk rings, request/response |
+| touches a driver | never (lint-enforced) | never *directly* — it gets an injected **seam** (`net_stream_recv`-shaped), the platform owns the socket/window |
+| testable | pure V vs ports | pure V vs the seam — the DoIP loop already tests this way |
+
+What is missing is only that the second kind is **not declarable**: each instance is
+bespoke glue. The generalisation writes itself — a `[[partition.thread]]` with an
+**endpoint binding** (a stream, a datagram socket, or a bulk ring), where loom2v generates
+the glue that today is hand-written per example: the platform opens the socket / places
+the ring, creates the thread, and hands the loop its seam. The isolation rule survives
+untouched, because the seam *is* the boundary — same as `main.v` is today.
+
+The cross-core bulk consumer is then just another service thread: it blocks on a ThreadX
+event flag that the doorbell ISR (IPCC) sets — the same "sleep until data or timeout"
+shape as the socket case, which is exactly why the two belong to one endpoint concept.
+
+One decision left to make deliberately, not by default:
 
 - **Whether the ring is generic or trace-shaped.** The trace dump wants freeze-then-stream;
   a sensor stream wants continuous latest-N. One ring can serve both, but the API should
   admit both from the start.
-- **Whether bulk stays module-only.** Today only a ComModule may own a link. Letting an FB
-  declare a bulk endpoint is the ergonomic win, but the isolation rule (FBs never import a
-  driver, CI-enforced) means the *socket/link stays in the platform* — the FB gets a
-  loaned buffer, never a handle.
+
+(The earlier open question — "does bulk stay module-only?" — dissolves under this model: a
+ComModule is just a platform-owned service loop on the comm thread, and an *application*
+bulk consumer is a declared service thread. Same species, different owner.)
 
 ## Sources worth reading before building
 
