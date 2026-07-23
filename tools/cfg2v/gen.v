@@ -51,6 +51,34 @@ fn main() {
 		transports << transport_variant(tr)
 		chcount++
 	}
+	// --- Route crossings: a SIGNAL route whose buses sit on different cores carries its decoded
+	//     physical value (one f64) over an IOC channel between the two comm owners
+	//     (REQ-TOPO-010). Allocated here — cfg2v is the single channel allocator — in route
+	//     declaration order; loom2v emits the publish/acquire ends against these consts.
+	mut bus_cores := map[string]int{}
+	if bt := doc.value_opt('bus') {
+		for bname, bcfg in bt.as_map() {
+			bus_cores[bname] = int((bcfg.as_map()['core'] or { toml.Any(0) }).int())
+		}
+	}
+	for rt in doc.value('route').array() {
+		m := rt.as_map()
+		sig := (m['signal'] or { toml.Any('') }).string()
+		if sig == '' {
+			continue // frame routes never cross cores (loom2v rejects) — no channel
+		}
+		fm := (m['from'] or { toml.Any(map[string]toml.Any{}) }).as_map()
+		tm := (m['to'] or { toml.Any(map[string]toml.Any{}) }).as_map()
+		fb := (fm['bus'] or { toml.Any('') }).string()
+		tb := (tm['bus'] or { toml.Any('') }).string()
+		if (bus_cores[fb] or { 0 }) == (bus_cores[tb] or { 0 }) {
+			continue // same core: the route stays intra-thread, no channel
+		}
+		tf := (tm['frame'] or { toml.Any('') }).string()
+		b << 'pub const xr_${snake(tb)}_${snake(tf)}_${snake(sig)}_ch = ${chcount}'
+		transports << transport_variant('double')
+		chcount++
+	}
 	b << 'pub const ioc_channel_count = ${chcount}'
 	b << ''
 	// Per-channel transport (index = channel id). With no cross-partition IOC channels there is

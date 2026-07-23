@@ -526,36 +526,54 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				conns << c
 			}
 		}
-		// m.routes that ORIGINATE on this bus, and the distinct destination m.buses
+		// m.routes that ORIGINATE on this bus, and the distinct destination m.buses.
+		// `dests` (a borrowed destination channel) exists only for SAME-CORE routes: a
+		// CROSSING signal route (buses on different cores, REQ-TOPO-010) never shares a
+		// channel — its value rides an IOC channel and the DESTINATION bridge transmits.
 		mut my_routes := []Route{}
 		mut dests := []string{}
 		for r in m.routes {
 			if r.from_bus == bname {
 				my_routes << r
-				if r.to_bus !in dests {
+				if !r.crossing(m.bus_core) && r.to_bus !in dests {
 					dests << r.to_bus
 				}
 			}
 		}
 		dests.sort()
-		if rx_by_msg.len == 0 && tx_by_msg.len == 0 && conns.len == 0 && my_routes.len == 0 {
+		// crossing routes TERMINATING here: this bridge acquires the routed value and
+		// composes/sends the destination frame on its OWN channel.
+		mut in_routes := []Route{}
+		for r in m.routes {
+			if r.signal != '' && r.to_bus == bname && r.crossing(m.bus_core) {
+				in_routes << r
+			}
+		}
+		if rx_by_msg.len == 0 && tx_by_msg.len == 0 && conns.len == 0 && my_routes.len == 0
+			&& in_routes.len == 0 {
 			continue
 		}
 		bus_names << bname
 		bus_dests[bname] = dests
 
-		// SIGNAL routes on this bus, grouped by destination frame: the P2a.2b producer
-		// stores each routed value on rx (decode -> physical, with a freshness stamp),
-		// then composes the WHOLE destination frame and re-emits it per the dest frame's
-		// cadence + TX mode (rate adaptation), from THIS (source) bridge which already
-		// holds the destination channel. dst_frames = one representative Route per
-		// distinct (to_bus, to_frame).
+		// SIGNAL routes, two roles per bridge (P2a.2b + the crossing extension):
+		//   rx_routes  — source side (from == this bus): decode on rx; same-core stores the
+		//                value+freshness locally, a crossing PUBLISHES it (one f64) instead.
+		//   sig_routes — producer side (same-core from here, or crossing TO here): holds the
+		//                value+freshness state, composes the WHOLE destination frame and
+		//                re-emits it per the dest frame's cadence + TX mode. dst_frames = one
+		//                representative Route per distinct (to_bus, to_frame).
+		mut rx_routes := []Route{}
 		mut sig_routes := []Route{}
 		for r in my_routes {
 			if r.signal != '' {
-				sig_routes << r
+				rx_routes << r
+				if !r.crossing(m.bus_core) {
+					sig_routes << r
+				}
 			}
 		}
+		sig_routes << in_routes
 		mut dst_frames := []Route{}
 		mut seen_df := map[string]bool{}
 		for r in sig_routes {
@@ -622,7 +640,7 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 		// also read by a normal signal (in rx_by_msg) is rejected in gen.v so the replay
 		// counter is never double-advanced, so it never needs a second state here.
 		mut src_verify_seen := map[string]bool{}
-		for r in sig_routes {
+		for r in rx_routes { // verify state lives at the SOURCE (rx) side, crossing or not
 			frof := snake(r.from_frame)
 			if frof in src_verify_seen || frof in rx_by_msg {
 				continue
@@ -714,8 +732,16 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 						}).hex()}), ${m.frames.e2e_crc[frof] or { 0 }}, ${m.frames.e2e_ctr[frof] or { 0 }}).usable() {'
 						ind = '\t\t\t\t'
 					}
-					glue << '${ind}st.${rk}_v = ${frof}_${snake(r.signal)}_phys(rx.data)'
-					glue << '${ind}st.${rk}_fresh = now'
+					if r.crossing(m.bus_core) {
+						// crossing (REQ-TOPO-010): the value leaves this core here — one f64
+						// over the route's IOC channel; the DESTINATION bridge stamps its own
+						// freshness on acquire, so no clock ever crosses the boundary.
+						glue << '${ind}xr_${rk} := ${frof}_${snake(r.signal)}_phys(rx.data)'
+						glue << '${ind}osal.ioc_publish2(${r.xr_ch()}, &xr_${rk}, 8)'
+					} else {
+						glue << '${ind}st.${rk}_v = ${frof}_${snake(r.signal)}_phys(rx.data)'
+						glue << '${ind}st.${rk}_fresh = now'
+					}
 					if s_e2e || s_secoc {
 						glue << '\t\t\t}'
 					}
@@ -922,11 +948,25 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			}
 			glue << '\t}'
 		}
+		// CROSSING intake (REQ-TOPO-010): a routed value arriving from another core's comm
+		// owner. Freshness is stamped HERE, from the transport's fresh flag — never a
+		// timestamp carried across cores (their clocks are not comparable; the trace
+		// correlation work exists precisely because of that).
+		for r in in_routes {
+			rk := route_field(r)
+			glue << '\tmut xr_in_${rk} := f64(0)'
+			glue << '\tif osal.ioc_acquire2(${r.xr_ch()}, &xr_in_${rk}, 8) {'
+			glue << '\t\tst.${rk}_v = xr_in_${rk}'
+			glue << '\t\tst.${rk}_fresh = now'
+			glue << '\t}'
+		}
 		// SIGNAL-route producers (P2a.2b): compose each destination frame from its
 		// routed signals and re-emit per the frame's own cadence + TX mode (rate
 		// adaptation), gated on the dest channel's tx_ready. A signal not yet received
 		// (fresh == 0) or stale beyond its source deadline suppresses the frame, so a
-		// downstream receiver detects the loss instead of seeing stale-as-fresh.
+		// downstream receiver detects the loss instead of seeing stale-as-fresh. A
+		// crossing route's producer runs on the DESTINATION bridge and sends on its
+		// OWN channel; a same-core route's producer sends on the borrowed dest channel.
 		for r in dst_frames {
 			dk := '${snake(r.to_bus)}_${snake(r.to_frame)}'
 			glue << '\tmut rf_${dk} := can.Frame{'
@@ -974,7 +1014,8 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			r_e2e := m.frames.e2e_here(rtof, r.to_bus)
 			r_secoc := m.frames.secoc_here(rtof, r.to_bus)
 			r_pre := r_e2e || r_secoc
-			dch := 'st.route_${snake(r.to_bus)}'
+			// a crossing route's producer runs on the destination bridge — its own channel
+			dch := if r.crossing(m.bus_core) { 'st.chan' } else { 'st.route_${snake(r.to_bus)}' }
 			glue << '\tif rf_${dk}_ok && ${dch}.tx_ready() && st.rt_tx_${dk}.should_send(now, rf_${dk}.data, ${r.to_dlc}) {'
 			if r_pre {
 				glue << '\t\trf_${dk}_pre := rf_${dk}.data // pre-protect payload, for mark_sent'
