@@ -166,6 +166,28 @@ void blob_ioc_pub(int idx, const unsigned char *src, unsigned char len) {
 	s->wb = old & DB_IDX;
 }
 
+/* Like blob_ioc_acq, but reports PUBLICATION freshness: returns 1 only when this call
+ * consumed a buffer the writer flipped since our previous acquire (DB_DIRTY), 0 when it
+ * served the cached last-good value. Needed by consumers with a staleness deadline (the
+ * route crossing): "ever written" freshness lets one old frame satisfy the deadline
+ * forever (codex on #200). Tear-free like acq — the exchange takes whole-buffer ownership. */
+int blob_ioc_acq_fresh(int idx, unsigned char *dst, unsigned char max_len) {
+	if (idx < 0 || idx >= DB_SLOTS) return 0;
+	db_slot_t *s = &g_db[idx];
+	int fresh = 0;
+	unsigned cur = __atomic_load_n(&s->shared, __ATOMIC_ACQUIRE);
+	if (cur & DB_DIRTY) {
+		unsigned old = __atomic_exchange_n(&s->shared, s->rf, __ATOMIC_ACQ_REL);
+		s->rf = old & DB_IDX;
+		fresh = 1;
+	}
+	unsigned rf = s->rf;
+	unsigned char len = s->len[rf];
+	if (len > max_len) len = max_len;
+	vcopy(dst, s->buf[rf], len);
+	return fresh && len > 0;
+}
+
 int blob_ioc_acq(int idx, unsigned char *dst, unsigned char max_len) {
 	if (idx < 0 || idx >= DB_SLOTS) return 0;
 	db_slot_t *s = &g_db[idx];

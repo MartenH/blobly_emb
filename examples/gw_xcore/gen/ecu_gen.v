@@ -13,7 +13,7 @@ pub const xr_can1_dst_frame_speed_ch = 0
 pub const ioc_channel_count = 1
 
 // Per-channel transport (index = channel id)
-pub const ioc_transport = [Transport.double]!
+pub const ioc_transport = [Transport.triple]!
 
 // Partitions — index = partition id
 pub const partition_count = 1

@@ -17,7 +17,7 @@ fn io_can0_10ms(ctx voidptr) {
 	for st.chan.recv(mut rx) {
 		if rx.id == u32(0x100) && rx.len == 8 && rx.ext == false {
 			xr_rt_can1_dst_frame_speed := src_frame_speed_phys(rx.data)
-			osal.ioc_publish2(xr_can1_dst_frame_speed_ch, &xr_rt_can1_dst_frame_speed, 8)
+			osal.ioc_publish(xr_can1_dst_frame_speed_ch, &xr_rt_can1_dst_frame_speed, 8) // triple: tear-free when rx bursts lap the 10ms consumer (codex #200)
 		}
 	}
 }
@@ -50,7 +50,7 @@ fn io_can1_10ms(ctx voidptr) {
 	mut st := unsafe { &Bridge_can1_state(ctx) }
 	now := osal.now_us()
 	mut xr_in_rt_can1_dst_frame_speed := f64(0)
-	if osal.ioc_acquire2(xr_can1_dst_frame_speed_ch, &xr_in_rt_can1_dst_frame_speed, 8) {
+	if osal.ioc_acquire_fresh(xr_can1_dst_frame_speed_ch, &xr_in_rt_can1_dst_frame_speed, 8) { // fresh = NEW publication only — ever-written freshness never trips the staleness deadline (codex #200)
 		st.rt_can1_dst_frame_speed_v = xr_in_rt_can1_dst_frame_speed
 		st.rt_can1_dst_frame_speed_fresh = now
 	}

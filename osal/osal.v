@@ -29,6 +29,7 @@ fn C.blob_ioc_write(int, &u8, u8)
 fn C.blob_ioc_read(int, &u8, u8) int
 fn C.blob_ioc_pub(int, &u8, u8)
 fn C.blob_ioc_acq(int, &u8, u8) int
+fn C.blob_ioc_acq_fresh(int, &u8, u8) int
 fn C.blob_ioc_pub2(int, &u8, u8)
 fn C.blob_ioc_acq2(int, &u8, u8) int
 
@@ -138,6 +139,13 @@ pub fn ioc_publish(idx int, src voidptr, len u8) {
 
 pub fn ioc_acquire(idx int, dst voidptr, max_len u8) bool {
 	return C.blob_ioc_acq(idx, unsafe { &u8(dst) }, max_len) != 0
+}
+
+// ioc_acquire_fresh: triple-buffer acquire that returns true only for a NEW publication
+// (dst still receives the best-known value either way). For consumers with a staleness
+// deadline — "ever written" would satisfy the deadline forever on one old value.
+pub fn ioc_acquire_fresh(idx int, dst voidptr, max_len u8) bool {
+	return C.blob_ioc_acq_fresh(idx, unsafe { &u8(dst) }, max_len) != 0
 }
 
 // ioc_publish2 / ioc_acquire2: double-buffer variant (2x memory). Wait-free both

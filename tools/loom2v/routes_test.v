@@ -93,3 +93,41 @@ fn test_unlisted_bus_defaults_to_core_zero() {
 		assert false, 'an unlisted bus is core 0 and must not trip the cross-core check'
 	}
 }
+
+// codex #200: an eth-touching route (either end, either kind) is silently-dead traffic —
+// the bridges skip eth buses — so it must be a generation error, crossing or not.
+fn test_eth_touching_routes_rejected() {
+	kinds := {
+		'can0': 'can'
+		'eth0': 'eth'
+	}
+	msg := route_kinds_error([
+		Route{
+			from_bus: 'can0'
+			to_bus:   'eth0'
+			signal:   'Speed'
+			to_frame: 'F'
+		},
+	], kinds) or {
+		assert false, 'a CAN->eth signal route must be rejected'
+		return
+	}
+	assert msg.contains('CAN machinery')
+	if _ := route_kinds_error([Route{
+		from_bus: 'eth0'
+		to_bus:   'can0'
+		from_frame: 'F'
+	}], kinds)
+	{
+	} else {
+		assert false, 'an eth->CAN frame route must be rejected'
+	}
+	if _ := route_kinds_error([Route{
+		from_bus: 'can0'
+		to_bus:   'can0'
+		from_frame: 'F'
+	}], kinds)
+	{
+		assert false, 'a CAN-only route must pass the kind check'
+	}
+}
