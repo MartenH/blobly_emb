@@ -28,6 +28,21 @@ Status keys: ✅ shipped · 🔨 in progress · ⏭️ next · 🧭 planned · �
   thread rejects routes)
 - 🧭 **ISO-TP / UDS** — beyond the boot-loader's request path into a general
   diagnostic service layer
+- 🧭 **Cross-core BULK transport** — today a cross-core signal is capped at one
+  xioc cell (1–2 × `u32` = 8 B); anything larger has no generated path and must be
+  hand-written as a shared-memory owner-buffer + request/ack handshake (the one
+  worked example is the dtrace handoff in `boards/h755zi/duo.h`, 2 KB in SRAM4).
+  A "bulk signal" — declared in `ecu.toml`, generated on both sides, paced like
+  the trace dump's `pack_chunk` — is the missing rung. Note the constraint that
+  makes it non-trivial: the cores don't arbitrate LDREX/STREX, which is why xioc
+  is plain-store wait-free (the triple buffer tore 162/200k across cores), so a
+  wider cell is a design problem, not a bigger constant. See
+  [docs/um/move-data.md](docs/um/move-data.md).
+- 🧭 **Bulk transport benchmark** — extend the `tools/ioc_bench` family (which
+  measures the small-signal IOC/xioc path) with a THROUGHPUT harness: bytes/s and
+  latency for a cross-core owner-buffer handoff vs the same payload over ISO-TP,
+  so the "how big before it should leave the chip" answer is measured rather than
+  assumed.
 
 ## Network management & boot
 
