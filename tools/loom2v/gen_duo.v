@@ -92,6 +92,10 @@ fn duo_produce_drain(m Model) []string {
 		if !si.external {
 			continue // slot-only (satellite -> local partition): no CAN tx
 		}
+		if si.wide {
+			panic('loom2v: wide remote signal "${sname}" reaches the bus drain — the wide ' +
+				'drain lands in the next increment (REQ-INV-006 model half only)')
+		}
 		slot := m.duo_idx[sname] or { 0 }
 		mut cyc := m.frames.tx_cycle_us[si.dbc_msg] or { 0 }
 		if cyc <= 0 {

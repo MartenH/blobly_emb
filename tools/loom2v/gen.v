@@ -1010,6 +1010,11 @@ mut:
 	// compile against). duo_names keeps the allocation order for stable emission.
 	duo_idx   map[string]int
 	duo_names []string
+	// WIDE remote signals (si.wide): byte offset of each signal's xioc_n channel inside the
+	// board's wide window (duo.h DUO_XW_ADDR), 32-aligned, allocation in declaration order;
+	// duo_xw_total is the window budget consumed (checked against DUO_XW_MAX in duo_gen.h).
+	duo_xw_off   map[string]int
+	duo_xw_total int
 	// [nvm] (gen_nvm.v): persistent-signal names in declaration order + their
 	// schema-identity block ids — all derived, never configured beyond intent.
 	nvm       NvmCfg
@@ -1049,6 +1054,9 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	// from the topology, never configured). The satellite side publishes, this image polls.
 	mut duo_idx := map[string]int{}
 	mut duo_names := []string{}
+	mut duo_xw_off := map[string]int{}
+	mut duo_xw_total := 0
+	mut duo_pair_n := 0
 	for sname in sig_names {
 		mut si := sig_of[sname] or { continue }
 		from_ext := part.external[si.from] or { false }
@@ -1079,7 +1087,16 @@ fn build_model(doc toml.Doc, dbc string) Model {
 			}
 		}
 		si.wide = si.has_valid || si.fields.len > 2 || si.fields.any(it.typ != 'u32')
-		duo_idx[sname] = duo_names.len
+		if si.wide {
+			// xioc_n geometry: 32 B header + XIOC_SLOTS(4) x (1 seq + lanes) u32s, rounded up
+			// to the 32 B line so neighbouring channels never share one.
+			duo_xw_off[sname] = duo_xw_total
+			ch_bytes := 32 + 4 * 4 * (1 + si.fields.len)
+			duo_xw_total += (ch_bytes + 31) & ~31
+		} else {
+			duo_idx[sname] = duo_pair_n
+			duo_pair_n++
+		}
 		duo_names << sname
 		sig_of[sname] = si
 	}
@@ -1108,6 +1125,8 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		nm:           parse_nm(doc, dbc)
 		duo_idx:      duo_idx
 		duo_names:    duo_names
+		duo_xw_off:   duo_xw_off
+		duo_xw_total: duo_xw_total
 		nvm:          parse_nvm(doc)
 	}
 	validate_signal_routes_model(m, doc)
@@ -2713,12 +2732,11 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 							}
 							glue << '\tC.ioc_pub(${ioc_idx[wn]}, ${f0}, ${f1}) // persist staging'
 						}
+					} else if m.duo_xw_off[wn] or { -1 } >= 0 {
+						panic('loom2v: remote signal "${wn}" is WIDE (>2 fields, non-u32 types, or ' +
+							'valid) — the model accepts it (REQ-INV-006) but the wide emitters land ' +
+							'in the next increment; keep it 1-2 x u32 for now')
 					} else if dslot := m.duo_idx[wn] {
-						if si.wide {
-							panic('loom2v: remote signal "${wn}" is WIDE (>2 fields, non-u32 types, or ' +
-								'valid) — the model accepts it (REQ-INV-006) but the wide emitters land ' +
-								'in the next increment; keep it 1-2 x u32 for now')
-						}
 						// remote (cross-image) signal: publish the {a, b} pair into its xioc slot —
 						// the bus owner polls it (duo_produce_drain / platform C). Field order = wire
 						// order (validated against the DBC in the comm-thread walk).
@@ -2983,6 +3001,8 @@ fn main() {
 			'target (the bus owner transmits them). Building WITHOUT the xioc slots.')
 		m.duo_idx.clear()
 		m.duo_names.clear()
+		m.duo_xw_off.clear()
+		m.duo_xw_total = 0
 	}
 	if m.trace.on && m.target.threadx {
 		validate_trace_threadx(m)
