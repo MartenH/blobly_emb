@@ -46,6 +46,9 @@ mut:
 	// a coherent single-image target would derive `false` here and use ordinary IOC.
 	io_in  bool // `from` is the io endpoint class (docs/io.md): the io thread publishes it
 	io_out bool // `to` is the io endpoint class: the io thread acquires + applies it
+	wide   bool // remote signal that outgrows the {a,b} pair cell (fields > 2, non-u32 types,
+	// or a `valid` field): rides a wide xioc_n channel, one u32 lane per field
+	// (docs/multi-image.md "Wide remote signals", REQ-INV-006)
 }
 
 // SigField is one field of a signal's payload struct (name + V type), in declaration order.
@@ -1058,22 +1061,24 @@ fn build_model(doc toml.Doc, dbc string) Model {
 			continue
 		}
 		si.remote = true
-		// The xioc cell is one {a, b} pair: 1..2 plain u32 fields, no `valid` (freshness IS the
-		// slot's seq stamp). Wider/typed payloads arrive when the cell grows.
-		if si.has_valid {
-			panic('loom2v: remote signal "${sname}" has a `valid` field — xioc freshness is the ' +
-				'slot stamp; drop the field')
-		}
-		if si.fields.len < 1 || si.fields.len > 2 {
-			panic('loom2v: remote signal "${sname}" has ${si.fields.len} fields — the xioc cell ' +
-				'carries 1..2 u32 fields (widen the cell when a signal earns it)')
+		// One u32 LANE per field (docs/multi-image.md "Wide remote signals", REQ-INV-006:
+		// capacity is placement-independent). A 1-2 x u32 signal without `valid` keeps the
+		// bench-verified {a,b} pair cell byte-identically; anything else rides a wide
+		// xioc_n channel (words = field count, <= one PDU). 64-bit fields stay rejected
+		// until a signal earns them; past one PDU it is not a signal on ANY transport —
+		// that is the bulk ring's job.
+		if si.fields.len < 1 || si.fields.len > 16 {
+			panic('loom2v: remote signal "${sname}" has ${si.fields.len} fields — lanes carry ' +
+				'1..16 u32 lanes (one PDU, 64 B); a bigger payload is bulk, not a signal ' +
+				'(docs/bulk-transport.md)')
 		}
 		for f in si.fields {
-			if f.typ != 'u32' {
-				panic('loom2v: remote signal "${sname}" field "${f.name}" is ${f.typ} — the xioc ' +
-					'cell carries u32 fields only')
+			if f.typ !in ['u32', 'u16', 'u8', 'bool'] {
+				panic('loom2v: remote signal "${sname}" field "${f.name}" is ${f.typ} — a lane ' +
+					'carries a <=32-bit field (u32/u16/u8/bool)')
 			}
 		}
+		si.wide = si.has_valid || si.fields.len > 2 || si.fields.any(it.typ != 'u32')
 		duo_idx[sname] = duo_names.len
 		duo_names << sname
 		sig_of[sname] = si
@@ -2709,6 +2714,11 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 							glue << '\tC.ioc_pub(${ioc_idx[wn]}, ${f0}, ${f1}) // persist staging'
 						}
 					} else if dslot := m.duo_idx[wn] {
+						if si.wide {
+							panic('loom2v: remote signal "${wn}" is WIDE (>2 fields, non-u32 types, or ' +
+								'valid) — the model accepts it (REQ-INV-006) but the wide emitters land ' +
+								'in the next increment; keep it 1-2 x u32 for now')
+						}
 						// remote (cross-image) signal: publish the {a, b} pair into its xioc slot —
 						// the bus owner polls it (duo_produce_drain / platform C). Field order = wire
 						// order (validated against the DBC in the comm-thread walk).
