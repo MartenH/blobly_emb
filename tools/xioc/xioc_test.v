@@ -1,6 +1,6 @@
 module main
 
-// @verifies REQ-INV-002
+// @verifies REQ-INV-006
 // The WIDE xioc channel under a concurrent writer, on the host (the XIOC_DMB seam makes the
 // header compile off-Arm for the first time, so the plain-store discipline is CI-tested).
 // The contract under test is the location-transparency fix: a signal up to one PDU (64 B)
