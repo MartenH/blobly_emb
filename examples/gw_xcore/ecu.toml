@@ -1,0 +1,28 @@
+# gw_xcore — a CROSS-CORE translating gateway (REQ-TOPO-010's crossing half). The buses sit
+# on DIFFERENT cores, so the source bridge cannot hold the destination channel: the decoded
+# `Speed` (one f64) rides an IOC channel between the two comm owners (cfg2v allocates it,
+# see gen/ecu_gen.v `xr_can1_dst_frame_speed_ch`), and can1's OWN bridge composes DstFrame
+# (0x200) and transmits on its own channel. The signal also sits at a different bit position
+# per bus (bit 0 vs bit 8) and different scaling (0.1 vs 1), so only decode + re-encode is
+# correct — same as gw_signal, plus the core crossing.
+#
+#   make -C examples/gw_xcore            # gen + host build
+#   ./bin/app vcan0 vcan1                # run on two vcans
+
+[import]
+dbc = "bus.dbc"
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0
+
+[bus.can1]
+interface = "vcan1"
+fd        = false
+core      = 1
+
+[[route]]
+signal = "Speed"
+from = { bus = "can0", frame = "SrcFrame" }
+to   = { bus = "can1", frame = "DstFrame" }

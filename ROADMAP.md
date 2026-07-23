@@ -21,8 +21,12 @@ Status keys: ✅ shipped · 🔨 in progress · ⏭️ next · 🧭 planned · �
   pending the bench**
 - ✅ **Signal-route extended destinations** — `#182`, a signal route re-encodes
   into a 29-bit dest frame; candb attribute index keyed by (id, ext)
-- ⏭️ **Cross-core routes (xioc)** — a route whose source/dest buses live on
-  different cores; approved implicit-xioc-slot model, reuses multi-image plumbing
+- ✅ **Cross-core signal routes** (`#199`+P2) — a signal route whose buses sit on
+  different cores lowers to an IOC crossing: cfg2v allocates the channel, the source
+  bridge publishes the decoded f64, the destination bridge composes + transmits on
+  its own channel. Frame routes cross-core are a CONTRACT error (REQ-TOPO-010 —
+  a raw PDU is bulk's job). vcan-verified (`examples/gw_xcore`); silicon in the
+  bench queue
 - 🧭 **Target multi-bus comm owner** — per-bus channel + Rx-ISR multiplexed into
   one core's comm thread, so routes run on real silicon (today the ThreadX comm
   thread rejects routes)
@@ -122,8 +126,9 @@ the example e2e tests on every push.
 
 **Host-only queue (in order):**
 
-1. ⏭️ **Cross-core xioc routes** — the next substantial codegen item; model approved
-   (implicit xioc slot, reuses the multi-image plumbing). Host-testable end to end.
+1. ✅ **Cross-core signal routes** — lowered to the IOC crossing, end-to-end
+   verified on two vcans (`examples/gw_xcore`); the on-target xioc wiring rides
+   the bench queue.
 2. 🧭 **Bulk transport P1, sim-first** — the portable pool + descriptor ring of
    [docs/bulk-transport.md](docs/bulk-transport.md) in `boards/common`, proven
    cross-process on the host (`mmap`+`fork`, the `ioc_bench_mp` seam) before any
