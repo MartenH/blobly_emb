@@ -36,7 +36,28 @@
 
 #include <stdint.h>
 
+/* The ordering barrier. On Arm this is DMB (the scheme's original home); anywhere else —
+ * the host build, where this header is CI-tested — a seq-cst fence. One seam, so the same
+ * plain-store discipline is compiled and TESTED on both. */
+#if defined(__arm__) || defined(__ARM_ARCH)
+#define XIOC_DMB() __asm__ volatile("dmb" ::: "memory")
+#else
+#define XIOC_DMB() __atomic_thread_fence(__ATOMIC_SEQ_CST)
+#endif
+
 #define XIOC_SLOTS 4u
+
+/* The WIDE channel (2026-07-23): size-proportional slots up to one PDU (IOC_MAX = 64 B =
+ * XIOC_MAX_WORDS u32s). Exists because the fixed {a,b} cell broke location transparency:
+ * a 40 B signal that is legal between threads on one core became illegal the moment its
+ * producer moved cores — moving a partition must change COST, never the communication
+ * contract. Same discipline as the pair cell: plain 32-bit stores, seq invalidate ->
+ * payload -> validate -> publish, no exclusives (the cores do not arbitrate LDREX/STREX —
+ * 162/200k torn reads measured 2026-07-12). The lap argument SCALES with the width: the
+ * reader's copy window grows to <=16 loads, but a lap now requires XIOC_SLOTS-1 publishes
+ * of the SAME width (16 stores + 3 barriers each) — the implausibility ratio is preserved,
+ * and the seq recheck still DETECTS the impossible case rather than assuming it. */
+#define XIOC_MAX_WORDS 16u /* = IOC_MAX / 4: a signal wider than one PDU is bulk, not a signal */
 
 typedef struct {
 	volatile uint32_t seq; /* 0 = being written; else the publish counter that filled it */
@@ -80,12 +101,12 @@ static inline void xioc_write(xioc_t *c, uint32_t a, uint32_t b)
 	}
 	xioc_slot_t *s = &c->slot[n % XIOC_SLOTS];
 	s->seq = 0u; /* invalidate: a reader copying now will fail its recheck */
-	__asm__ volatile("dmb" ::: "memory");
+	XIOC_DMB();
 	s->a = a;
 	s->b = b;
-	__asm__ volatile("dmb" ::: "memory");
+	XIOC_DMB();
 	s->seq = n; /* validate */
-	__asm__ volatile("dmb" ::: "memory");
+	XIOC_DMB();
 	c->latest = n; /* publish */
 }
 
@@ -100,13 +121,89 @@ static inline int xioc_read(const xioc_t *c, xioc_rd_t *rd)
 	const xioc_slot_t *s = &c->slot[n % XIOC_SLOTS];
 	uint32_t a = s->a;
 	uint32_t b = s->b;
-	__asm__ volatile("dmb" ::: "memory");
+	XIOC_DMB();
 	if (s->seq != n) {
 		return 0; /* impossible-lap detected: keep the cached last-good value */
 	}
 	rd->seq = n;
 	rd->a = a;
 	rd->b = b;
+	return 1;
+}
+
+/* ---- the wide channel ------------------------------------------------------------------
+ * Layout: one header + XIOC_SLOTS slots, each slot = 1 seq word + `words` payload words,
+ * contiguous in the shared window. The generator (or glue) reserves
+ * XIOC_N_BYTES(words) per channel and both sides agree on `words` at build time.
+ */
+typedef struct __attribute__((aligned(32))) {
+	volatile uint32_t latest; /* last fully published seq; 0 = nothing yet */
+	uint32_t wseq;            /* WRITER-private publish counter */
+	uint32_t words;           /* payload words per slot (channel geometry, set once) */
+	uint32_t pad[5];
+	volatile uint32_t cell[]; /* XIOC_SLOTS x (1 seq + words payload) */
+} xioc_n_t;
+
+#define XIOC_N_BYTES(words) ((uint32_t)sizeof(xioc_n_t) + 4u * XIOC_SLOTS * (1u + (words)))
+
+static inline volatile uint32_t *xioc_n_slot(xioc_n_t *c, uint32_t n)
+{
+	return &c->cell[(n % XIOC_SLOTS) * (1u + c->words)];
+}
+
+static inline void xioc_n_init(xioc_n_t *c, uint32_t words)
+{
+	c->words = words;
+	c->latest = 0u;
+	c->wseq = 0u;
+	for (uint32_t i = 0; i < XIOC_SLOTS * (1u + words); i++) {
+		c->cell[i] = 0u;
+	}
+}
+
+static inline void xioc_n_write(xioc_n_t *c, const uint32_t *src)
+{
+	uint32_t n = ++c->wseq;
+	if (n == 0u) { /* 2^32 publishes: skip 0, it means "empty/being written" */
+		n = ++c->wseq;
+	}
+	volatile uint32_t *s = xioc_n_slot(c, n);
+	s[0] = 0u; /* invalidate: a reader copying now fails its recheck */
+	XIOC_DMB();
+	for (uint32_t i = 0; i < c->words; i++) {
+		s[1u + i] = src[i];
+	}
+	XIOC_DMB();
+	s[0] = n; /* validate */
+	XIOC_DMB();
+	c->latest = n; /* publish */
+}
+
+/* Reader: `dst` is the reader-private last-good buffer (>= words u32s, reused across
+ * calls); `rd_seq` its seq. Returns 1 when dst now holds a NEWER complete value, 0
+ * otherwise — and on 0, dst is UNTOUCHED (the copy is staged through a stack temp and
+ * committed only after the recheck), so the reader always holds a complete value.
+ * Straight-line, bounded: never loops, never spins. */
+static inline int xioc_n_read(xioc_n_t *c, uint32_t *rd_seq, uint32_t *dst)
+{
+	uint32_t n = c->latest;
+	if (n == 0u || n == *rd_seq) {
+		return 0; /* nothing published yet, or nothing new */
+	}
+	volatile uint32_t *s = xioc_n_slot(c, n);
+	uint32_t tmp[XIOC_MAX_WORDS];
+	uint32_t w = c->words;
+	for (uint32_t i = 0; i < w; i++) {
+		tmp[i] = s[1u + i];
+	}
+	XIOC_DMB();
+	if (s[0] != n) {
+		return 0; /* impossible-lap detected: keep the cached last-good value */
+	}
+	for (uint32_t i = 0; i < w; i++) {
+		dst[i] = tmp[i];
+	}
+	*rd_seq = n;
 	return 1;
 }
 
