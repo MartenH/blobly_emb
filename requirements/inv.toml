@@ -59,4 +59,4 @@ text = "A signal legal between two endpoints shall remain legal when either endp
 status = "draft"
 method = "test"
 asil = "QM"
-derives = "SYS-REQ-RES-001"
+derives = "SYS-REQ-COMMS-002"
