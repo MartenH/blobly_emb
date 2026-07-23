@@ -471,6 +471,8 @@ fn comm_thread_entry(input u32) {
 			// trustworthy (codex #186). Unmeasured stays visibly unmeasured.
 			if C.duo_trace_offset(&duo_trc_off, &duo_trc_bound) != 0 && duo_trc_bound <= 0xffff {
 				g_tm.set_core_offset(duo_trc_off, u16(duo_trc_bound))
+			} else {
+				g_tm.clear_core_offset() // a REJECTED measurement must not ship the previous dump's offset (codex #207)
 			}
 			g_tm.load_remote(C.duo_trace_buf(), C.duo_trace_count())
 			duo_trc_wait = false

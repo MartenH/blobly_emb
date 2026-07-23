@@ -236,6 +236,14 @@ pub fn (mut m TraceModule) set_core_offset(offset_us i32, bound_us u16) {
 	m.remote_offset_known = true
 }
 
+// clear_core_offset — call when THIS dump's measurement was rejected (wrap guard, bound
+// past the wire field). Without it a PREVIOUS dump's offset stays latched and ships as if
+// it were this dump's measurement — exactly the stale-correlation lie the per-dump
+// re-measurement exists to prevent (codex #207).
+pub fn (mut m TraceModule) clear_core_offset() {
+	m.remote_offset_known = false
+}
+
 // load_remote imports the satellite's snapshot (wire-form records, oldest first) and queues
 // it as the next dump block. Call after the LOCAL dump was granted; produce() sequences it.
 pub fn (mut m TraceModule) load_remote(src &u8, n u32) {

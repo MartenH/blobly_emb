@@ -201,6 +201,8 @@ fn duo_trace_poll(m Model) []string {
 		'\t\t\t// trustworthy (codex #186). Unmeasured stays visibly unmeasured.',
 		'\t\t\tif C.duo_trace_offset(&duo_trc_off, &duo_trc_bound) != 0 && duo_trc_bound <= 0xffff {',
 		'\t\t\t\tg_tm.set_core_offset(duo_trc_off, u16(duo_trc_bound))',
+		'\t\t\t} else {',
+		'\t\t\t\tg_tm.clear_core_offset() // a REJECTED measurement must not ship the previous dump\'s offset (codex #207)',
 		'\t\t\t}',
 		'\t\t\tg_tm.load_remote(C.duo_trace_buf(), C.duo_trace_count())',
 		'\t\t\tduo_trc_wait = false',

@@ -208,12 +208,15 @@ int duo_trace_offset(int32_t *off_us, uint32_t *bound_us) {
     uint32_t rtt = g_trc_t3 - g_trc_t1;
     uint32_t mid = g_trc_t1 + rtt / 2u; /* our clock at the satellite's best-estimate stamp */
     uint32_t raw = c[DUO_TRC_SVC_IDX] - mid; /* modular u32 difference */
-    /* A satellite restart once the owner has run past ~35.8 min makes the TRUE offset
-     * overflow int32; the modular cast would then wrap by 2^32 us and place the core
-     * ~71 min away while LOOKING correlated. No real release skew is anywhere near the
-     * guard band, so out-of-band = refuse the correlation (the host shows "not measured"
-     * rather than a confident lie) — codex #186. */
-    if (raw > 0x40000000u && raw < 0xC0000000u) { /* |offset| > ~17.9 min */
+    /* The u32 us clocks wrap every ~71.6 min, so a satellite restart can alias ANY
+     * modular difference back into range — a wide guard band still admits e.g. a 60-min
+     * restart aliasing to +11.6 min (codex #207, round 2). Accept only offsets inside the
+     * PLAUSIBLE release-skew window (bench measured ~50 ms; 60 s is generous), which
+     * shrinks the alias exposure to restarts landing within +/-60 s of a 71.6-min
+     * multiple. The residual alias is unfixable with 32-bit stamps — a 64-bit svc stamp
+     * is the real close-out, noted in the bench queue. Out-of-window = refuse: the host
+     * shows "not measured" rather than a confident lie. */
+    if (raw > 60000000u && raw < 0xFFFFFFFFu - 60000000u) { /* |offset| > 60 s */
         return 0;
     }
     *off_us = (int32_t)raw;
