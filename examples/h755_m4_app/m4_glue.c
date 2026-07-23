@@ -59,6 +59,19 @@ void duo_pub(int i, uint32_t a, uint32_t b) {
 	}
 }
 
+/* --- wide channels (xioc_n) ------------------------------------------------------------
+ * Signals past the {a,b} pair (3+ fields, sub-u32 types, or `valid`) ride size-
+ * proportional xioc_n channels in the DUO_XW window; per-signal offsets are generated
+ * (gen/duo_gen.h DUO_XW_<SIG>_OFF) and the generated boot inits each channel this image
+ * writes. Same plain-store discipline as the pair pool. */
+void duo_xw_init(uint32_t off, uint32_t words) {
+	xioc_n_init((xioc_n_t *)(DUO_XW_ADDR + off), words);
+}
+
+void duo_pub_n(uint32_t off, const uint32_t *src) {
+	xioc_n_write((xioc_n_t *)(DUO_XW_ADDR + off), src);
+}
+
 /* --- dtrace: the two-core trace handoff (duo.h) -----------------------------------------
  * The recorder itself is trace_hooks.c (exec-change + FB hooks into this core's OWN ring,
  * DWT-timestamped). The bus owner never touches our ring: it posts a request in the SRAM4

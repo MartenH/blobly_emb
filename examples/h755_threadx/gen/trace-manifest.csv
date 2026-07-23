@@ -28,7 +28,7 @@ out,0x7f1,can0
 alive,0x513,can0
 peers_lo,0x500,can0
 peers_hi,0x53f,can0
-# duo signals: name,slot,frame
+# duo signals: name,slot,frame  (slot: pair index, or xw+<byte offset> for wide)
 M4Count,0,0x201
 M4Stress,1,-
 # nvm signals: name,id,policy

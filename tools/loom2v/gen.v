@@ -2732,10 +2732,19 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 							}
 							glue << '\tC.ioc_pub(${ioc_idx[wn]}, ${f0}, ${f1}) // persist staging'
 						}
-					} else if m.duo_xw_off[wn] or { -1 } >= 0 {
-						panic('loom2v: remote signal "${wn}" is WIDE (>2 fields, non-u32 types, or ' +
-							'valid) — the model accepts it (REQ-INV-006) but the wide emitters land ' +
-							'in the next increment; keep it 1-2 x u32 for now')
+					} else if xoff := m.duo_xw_off[wn] {
+						// wide remote signal (xioc_n): one u32 lane per field, lane order =
+						// field order = wire order — packed into the signal's channel in the
+						// board wide window (duo_gen.h DUO_XW_*_OFF; boot init'd this side).
+						glue << '\tmut xw_${snake(wn)} := [${si.fields.len}]u32{}'
+						for fi, f in si.fields {
+							if f.typ == 'bool' {
+								glue << '\txw_${snake(wn)}[${fi}] = if outp.${snake(wn)}.${snake(f.name)} { u32(1) } else { u32(0) }'
+							} else {
+								glue << '\txw_${snake(wn)}[${fi}] = u32(outp.${snake(wn)}.${snake(f.name)})'
+							}
+						}
+						glue << '\tC.duo_pub_n(u32(${xoff}), &xw_${snake(wn)}[0])'
 					} else if dslot := m.duo_idx[wn] {
 						// remote (cross-image) signal: publish the {a, b} pair into its xioc slot —
 						// the bus owner polls it (duo_produce_drain / platform C). Field order = wire

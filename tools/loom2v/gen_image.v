@@ -57,6 +57,17 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		g << 'fn C.board_timebase_init()'
 		g << 'fn C.duo_ioc_init() // the shared xioc pool (satellite is the writer side)'
 		g << 'fn C.duo_pub(int, u32, u32) // xioc writer — slots from gen/duo_gen.h'
+		mut wide_writes := []string{}
+		for sname in m.duo_names {
+			si := m.sig_of[sname] or { continue }
+			if si.from == part && si.wide {
+				wide_writes << sname
+			}
+		}
+		if wide_writes.len > 0 {
+			g << 'fn C.duo_xw_init(u32, u32) // wide xioc_n channel init (writer side, boot)'
+			g << 'fn C.duo_pub_n(u32, &u32) // wide xioc_n writer — offsets from gen/duo_gen.h'
+		}
 		g << 'fn C._tx_thread_sleep(u32) u32'
 		g << 'fn C._tx_initialize_kernel_enter()'
 		g << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
@@ -136,6 +147,10 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		g << '\tC.duo_wait_clocks() // SysTick assumes the final HCLK: wait out the owner\'s PLL'
 		g << '\tC.board_timebase_init()'
 		g << '\tC.duo_ioc_init()'
+		for sname in wide_writes {
+			si := m.sig_of[sname] or { continue }
+			g << '\tC.duo_xw_init(u32(${m.duo_xw_off[sname] or { 0 }}), u32(${si.fields.len})) // ${sname}'
+		}
 		if m.trace.on {
 			g << '\tC.trace_arm()'
 		}

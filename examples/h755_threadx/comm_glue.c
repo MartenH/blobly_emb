@@ -152,6 +152,14 @@ void duo_clocks_ready(void) {
 #include "duo_gen.h" /* generated: the cross-core slot contract (gen/duo_gen.h) */
 #define DUO_POOL ((xioc_t *)DUO_IOC_ADDR)
 
+/* duo_poll_n — the wide-channel (xioc_n) reader: rd_seq/dst are the CALLER's per-signal
+ * state (the generated comm loop declares one seq + lane buffer per wide signal), so this
+ * stays stateless — any number of wide channels, no static table to size. 1 = dst now
+ * holds a newer complete value; on 0 dst is untouched (last-good retention). */
+int duo_poll_n(uint32_t off, uint32_t *rd_seq, uint32_t *dst) {
+	return xioc_n_read((xioc_n_t *)(DUO_XW_ADDR + off), rd_seq, dst);
+}
+
 /* dtrace: the M7 half of the two-core trace handoff (duo.h). Single writer per field:
  * we own req_seq/op, the satellite owns ack_seq/count and the snapshot buffer.
  *
