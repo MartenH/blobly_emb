@@ -151,6 +151,14 @@ int blob_can_open(const char *name, int fd_mode) {
 	}
 	c->CCCR |= FDCAN_CCCR_CCE;
 	if (fd_mode) {
+#ifdef BLOB_FDCAN_NOBRS
+		/* No bit-rate switching: every phase runs at the nominal bitrate, so the
+		 * BLOB_FDCAN_D* timing is never used — neither validated (a kernel clock that
+		 * cannot make the default 2 Mbit/s must still open; that clock is exactly who
+		 * asks for NOBRS) nor programmed (DBTP stays at reset, BRSE stays clear). */
+		c->CCCR |= FDCAN_CCCR_FDOE;
+		c->CCCR &= ~FDCAN_CCCR_BRSE;
+#else
 		/* Fail loudly (return -1) rather than program a mistimed FD data phase: the board
 		 * must pick BLOB_FDCAN_D* so the kernel clock divides EXACTLY (an integer prescaler
 		 * in 1..32 — a fractional divide would silently shift the data bitrate) and the
@@ -164,6 +172,7 @@ int blob_can_open(const char *name, int fd_mode) {
 		          ((DTSEG1 - 1u) << FDCAN_DBTP_DTSEG1_Pos) |
 		          ((DTSEG2 - 1u) << FDCAN_DBTP_DTSEG2_Pos) |
 		          ((DBRP - 1u) << FDCAN_DBTP_DBRP_Pos);
+#endif
 	} else {
 		c->CCCR &= ~(FDCAN_CCCR_FDOE | FDCAN_CCCR_BRSE); /* classic */
 	}
