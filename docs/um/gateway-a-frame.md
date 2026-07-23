@@ -7,7 +7,7 @@ picking the wrong one is the usual mistake:
 |---|---|---|
 | declares | `from`/`to` only | `signal = "..."` as well |
 | does | re-transmits the raw PDU, **never decoded** | decodes on the source, **re-encodes** into the destination frame |
-| requires | the payload to mean the same thing on both buses | the signal to exist (by name) in a source **and** a destination frame — the *layouts/scaling* may disagree completely; incompatible units, value tables, or ranges are rejected at generation |
+| requires | the payload to mean the same thing on both buses | the signal to exist (by name) in a source **and** a destination frame — *layout/scaling* may then differ freely **within the codec's limits**: no multiplexed signals, no big-endian (Motorola) layouts, ≤52-bit width (the value transits an f64); incompatible units, value tables, or ranges are also rejected at generation |
 | costs | almost nothing | a decode + encode per frame |
 | example | [`gateway`](../../examples/gateway), [`gw_extid`](../../examples/gw_extid) | [`gw_signal`](../../examples/gw_signal), [`gw_e2e`](../../examples/gw_e2e), [`gw_srcverify`](../../examples/gw_srcverify) |
 
@@ -114,7 +114,10 @@ message. Route the signal, or keep both buses on one core.
   frame, and the generator emits an independent forward (with its own retry slot) per
   route, so fan-out to several buses is just several routes. Forward *and* deliver
   locally also works: after the route blocks, the received frame still runs the normal
-  COM decode for this node's own consumers.
+  COM decode for this node's own consumers. **Unprotected sources only**: an E2E/SecOC
+  source frame allows exactly one verifying consumer — a second signal route (or local
+  COM delivery beside a route) would advance the verification counter twice per frame,
+  so generation rejects those combinations.
 - A frame route never decodes, so it cannot check E2E on the way through — that is what
   `gw_srcverify` (a signal route) is for.
 - Routes are CAN machinery. A route touching an eth bus is rejected at generation.

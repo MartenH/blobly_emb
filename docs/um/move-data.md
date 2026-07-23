@@ -186,9 +186,11 @@ you plan around it:
   generation — the target comm thread has no ISO-TP integration yet. (The bootloader has
   its own hand-bound transport; that does not make this recipe target-capable.)
 - **The generated link is a UDS endpoint, not an API.** It lives in private bridge state
-  and every completed message is fed straight to the **UDS server** (`0x22`/`0x2E` DIDs,
-  plus the bootloader's `0x34`/`0x36`×N/`0x37` block transfer); there is no generated hook
-  for another consumer to call `send`/`take` on it.
+  and every completed message is fed straight to the plain **UDS server** — `0x10`/`0x22`/
+  `0x2E`/`0x3E` only. The firmware block transfer (`0x34`/`0x36`×N/`0x37`) is **not** in
+  it: those services live in `boot.Prog`, which binds its own transport in the bootloader
+  images — a generated diagnostic endpoint does not accept downloads. And there is no
+  generated hook for another consumer to call `send`/`take` on the link.
 
 A **new bulk consumer** therefore owns its *own* `isotp.Link` inside a ComModule — exactly
 how `comm/trace` and `comm/shell` do it — and drives it with two calls:

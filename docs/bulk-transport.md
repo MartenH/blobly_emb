@@ -242,14 +242,15 @@ event flag that the doorbell ISR (HSEM release-interrupt on the H755) sets — t
 belong to one endpoint concept.
 
 One isolation consequence to face rather than wave at: a consumer that receives a loaned
-buffer **by reference** has the shared pool mapped into its own partition — that is
-cross-core shared state reached outside `osal.ioc_*`, which the architecture forbids as
-an ad-hoc arrangement. So the loan/peek path is only admissible as a **sanctioned
-transport**: the pool becomes an entry in the generated MPU region table with
-*directional* permissions (producer-writable, consumer-readable, ownership switched by
-the ring), exactly as the IOC regions are sanctioned today — or bulk termination stays in
-a platform module and the app never touches the pool. "The FB doesn't open the socket" is
-necessary, not sufficient.
+buffer **by reference** has the shared pool mapped into its own partition — cross-core
+shared state reached outside `osal.ioc_*`, which the architecture forbids as an ad-hoc
+arrangement. MPU region permissions alone do **not** repair that: they bound the blast
+radius, but the boundary the rule demands is the *API*, not the page table. So before an
+application partition ever sees a loaned buffer, loan/peek must be defined as an **OSAL/
+IOC transport in its own right** — owned by `osal.*`, in the generated region table with
+directional permissions, ownership switched by the ring, same standing as the IOC cell
+transports today. Until then, bulk termination stays in a platform module and the app
+never touches the pool. "The FB doesn't open the socket" is necessary, not sufficient.
 
 One decision left to make deliberately, not by default:
 
