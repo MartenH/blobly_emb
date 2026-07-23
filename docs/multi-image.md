@@ -99,3 +99,37 @@ the same signal declaration. Bench (NUCLEO-H755ZI-Q): M4Count +10 per 100 ms fra
 two-core trace dump streams core-1 blocks with the walk-assigned handler ids (4 = M4Load
 1689 µs @10 ms, 5 = M4Churn 659 µs @2 ms → the M4 sits at ~50%); h735_threadx and the host
 examples regenerate byte-identical. blobly_net needed zero changes.
+
+## Wide remote signals (2026-07-23, the xioc_n rung)
+
+> Design + increment log. Mechanism shipped first (`boards/common/xioc.h` `xioc_n_*`,
+> host-tear-tested); this section is the loom2v derivation on top. Motivation, verbatim
+> from review: signals over 8 B are NOT rare — moving a partition must change cost,
+> never the communication contract.
+
+**The lane model.** A remote signal's fields ride **one u32 lane each** in a wide xioc
+channel (`words = field count`, ≤ `XIOC_MAX_WORDS` 16 = one PDU). Field types up to 32
+bits (`u32`/`u16`/`u8`/`bool`) cast to/from their lane; 64-bit fields stay rejected until
+a signal earns them. `valid` is now an ordinary lane (the old ban traded location
+transparency for purity: a same-core signal with `valid` must survive its producer
+moving cores — transport freshness is still the slot stamp, `valid` is app data).
+Deterministic by construction: no V-struct layout mirroring in the generator, no
+packing drift — the same rule the {a,b} pair already followed, generalized.
+
+**Placement.** The pair pool (`DUO_IOC_ADDR`, bench-verified) is untouched; signals
+that fit it (1–2 u32-typed fields, no valid) keep generating byte-identical pair code.
+Wider signals get offsets in a **wide window** the board reserves (`DUO_XW_ADDR` /
+`DUO_XW_MAX` in `duo.h`), laid out by the generator in `duo_gen.h`
+(`DUO_XW_<SIG>_OFF`, `XIOC_N_BYTES`-sized, with a budget static-assert). Glue gains two
+thin wrappers (`duo_pub_n` / `duo_poll_n` over `xioc_n_write/read`); the pair fns stay.
+
+**Destinations.** Satellite → local partition: the dest wrapper unpacks lanes into the
+`In` struct — any ≤32-bit field types. Satellite → bus: additionally requires the
+existing lean-codec contract (u32 lanes at 32-bit offsets, factor 1) and, past 2 lanes,
+an FD frame (>8 B payload) — both enforced with the existing loud panics.
+
+**Verification honesty.** Host: generator-level tests + the committed example regen;
+the xioc_n mechanism itself is host-tear-tested (tools/xioc). Runtime on silicon —
+the H755 re-run of the tear harness at real widths — is a bench-queue item; until
+then the wide path is compile-verified only and no in-tree config enables it on
+the bench demo.
