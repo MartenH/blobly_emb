@@ -67,9 +67,10 @@ should surprise you.
   which has cost four real casualties; do not skip it when you touch a target image.
 - **Anything on real silicon.** Bench results go in `requirements/verifications.toml`.
 
-The example e2e tests (`host_someip`, `io_*`) all bind **UDP port 30491**, so they only pass
-when run one at a time — CI runs each in its own `v test`. Plain `v test .` at the repo root
-looks broken for this reason (it also picks up `.claude/worktrees/` copies).
+Plain **`v test .` at the repo root looks broken** — it walks into `.claude/worktrees/` and runs
+duplicate copies of every example e2e test concurrently. Test the real tree instead
+(`v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples`), which is
+what CI does.
 
 ### Commit identity (enforced)
 
