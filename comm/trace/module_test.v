@@ -432,3 +432,21 @@ fn test_multiblock_local_and_remote() {
 	assert recs[2] + recs[3] == 72 // 70 + 2 epochs
 	assert !m.is_dumping()
 }
+
+// codex #186: a correlated window at the 24-byte cap must refuse on the FIRST call —
+// atomically, before any partial stream — not ship one block and stall forever on the
+// second. An uncorrelated window keeps the 24-byte truncation contract.
+fn test_correlated_window_refuses_small_cap_up_front() {
+	mut backing := [8]Record{}
+	mut t := new_buffer(&backing[0], 8, .oneshot, 0)
+	t.start()
+	t.push(new_core_offset(-1000, 5))
+	t.push(new_fb(1, 0, 100, 5))
+	t.push(new_fb(2, 0, 200, 5))
+	t.stop()
+	mut out := [64]u8{}
+	n0, next0, more0 := t.pack_chunk(&out[0], 24, 1, 0)
+	assert n0 == 0 && next0 == 0 && !more0 // refused before ANY block shipped
+	n1, _, _ := t.pack_chunk(&out[0], 32, 1, 0)
+	assert n1 == 32 // at the true minimum it progresses
+}
