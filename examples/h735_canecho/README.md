@@ -2,8 +2,10 @@
 
 The second bare-metal example: drive **real CAN frames** through the register-level
 FDCAN driver (`driver/can/can_fdcan.c`, no HAL). The board opens FDCAN1 and echoes
-every classic frame it receives back on the bus with **id + 1**, so a bench tool
-sees a distinct reply for each frame it sends.
+every **odd-id** classic frame it receives back on the bus with **id + 1** (so
+`0x123 → 0x124`), and a bench tool sees a distinct reply for each frame it sends.
+Even ids — which is what every reply is — are ignored: two echo nodes on one bus
+would otherwise answer each other's replies forever.
 
 ```
 main.v ──V -freestanding──▶ canecho.c ─┐
