@@ -19,18 +19,19 @@ cell."* Sending bulk as a signal is the mistake this page exists to prevent.
 
 ## The table
 
-| crossing | transport | payload cap | generated? |
+| crossing | transport (the actual mechanism) | payload cap | generated? |
 |---|---|---|---|
 | same thread | plain struct field | — | ✅ derived |
-| thread → thread, **same core** | IOC triple buffer (`ioc.h`) | **64 B** (`IOC_MAX`) | ✅ derived |
-| **core → core**, same chip | xioc slot (`xioc.h`) | **8 B** — 1–2 × `u32` | ✅ derived |
-| **core → core**, bulk | shared-memory owner buffer + handshake | RAM-bound | ❌ **hand-written** |
-| ECU → ECU, one frame | CAN frame | 8 B classic / **64 B** FD | ✅ derived |
-| ECU → ECU, a PDU | COM | **64 B** (`com.max_pdu`) | ✅ derived |
-| ECU → ECU, bulk | ISO-TP | **520 B** (`isotp.max_payload`) | ✅ config |
-| ECU → ECU, firmware | UDS `0x34`/`0x36`×N/`0x37` | image-sized, block-paced | ✅ bootloader |
-| Ethernet event | SOME/IP notification | **64 B** | ✅ config |
-| Ethernet RPC reply | SOME/IP response | **1024 B** (`max_rpc`) | ✅ config |
+| thread → thread, **same core** | IOC triple buffer (`boards/common/ioc.h`) | **64 B** (`IOC_MAX`) | ✅ derived |
+| **core → core**, same chip | xioc slot (`boards/common/xioc.h`) | **8 B** — 1–2 × `u32` | ✅ derived |
+| **core → core**, bulk | `duo.h` dtrace-style cell: shared-window owner buffer + req/ack handshake | RAM-bound (trace uses 2 KB) | ❌ **hand-written**; planned generated form = the loan/publish ring below |
+| ECU → ECU, one frame | CAN frame (`driver/can`) | 8 B classic / **64 B** FD | ✅ derived |
+| ECU → ECU, a PDU | COM (`comm/com`) | **64 B** (`com.max_pdu`) | ✅ derived |
+| ECU → ECU, bulk | ISO-TP (`comm/isotp`) | **520 B** (`isotp.max_payload`) | ✅ config |
+| ECU → ECU, firmware | UDS `0x34`/`0x36`×N/`0x37` over ISO-TP or DoIP | image-sized, block-paced | ✅ bootloader |
+| Ethernet event | SOME/IP notification (`comm/someip`) over UDP — **NetX Duo** on target, POSIX socket on host | **64 B** | ✅ config |
+| Ethernet RPC reply | SOME/IP response, same UDP path | **1024 B** (`max_rpc`) | ✅ config |
+| Ethernet diagnostics | DoIP (`comm/doip`) over **NetX TCP** — a module + service thread, not an app path | **256 B** (`doip.max_msg`) | ❌ hand-wired (`h735_doip`) |
 
 Transports are **derived, never configured** — you declare a `[[signal]]`'s endpoints and
 the generator picks the mechanism from where they sit. See
