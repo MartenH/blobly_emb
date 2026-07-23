@@ -54,8 +54,17 @@ jobs:
         run: make check
 
       # Requirement → verification traceability: nonzero exit if a linked verification failed.
+      # `make trace` REGENERATES docs/traceability.md, so running it alone would happily rewrite a
+      # stale file and still pass — which is how the committed copy drifted to 182 reqs while the
+      # tree had 183. Fail if the regenerated output differs from what is committed.
       - name: Requirement trace (make trace)
-        run: make trace
+        run: |
+          make trace
+          if ! git diff --quiet -- docs/traceability.md; then
+            echo "::error::docs/traceability.md is out of date — run 'make trace' and commit it"
+            git --no-pager diff -- docs/traceability.md
+            exit 1
+          fi
 
       # The example e2e tests each shell out to `make gen` + build. They used to fail randomly in
       # parallel because `v run <tool>` names its compiled binary after the TOOL's source path, so

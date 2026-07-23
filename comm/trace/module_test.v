@@ -1,5 +1,7 @@
 module trace
 
+// @verifies REQ-TRACE-011
+
 import comm.isotp
 import driver.can
 
