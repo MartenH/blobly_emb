@@ -311,9 +311,9 @@ mut:
 //   - a FRAME route is a hard error: a raw PDU (id + flags + up to 64 B) does not fit a signal
 //     cell, and carrying it whole is the bulk transport's job (docs/bulk-transport.md). This is
 //     the contract, not a gap.
-//   - a SIGNAL route is the sanctioned crossing (its physical value rides one cross-core signal
-//     cell) but the lowering is not generated yet — reject loudly rather than emit same-core
-//     code that only works where channels happen to be shareable.
+//   - a SIGNAL route is the sanctioned crossing: its decoded physical value (one f64) rides an
+//     IOC channel between the two comm owners — cfg2v allocates it (xr_*_ch), the source bridge
+//     publishes on rx, the destination bridge acquires and composes/sends on ITS own channel.
 fn validate_route_cores(routes []Route, bus_core map[string]int) []Route {
 	if msg := route_cores_error(routes, bus_core) {
 		panic(msg)
@@ -336,11 +336,20 @@ fn route_cores_error(routes []Route, bus_core map[string]int) ?string {
 				'signal instead, keep both buses on one core, or wait for the bulk transport ' +
 				'(docs/bulk-transport.md).'
 		}
-		return 'route: signal "${r.signal}" ${r.from_bus}(core ${fc}) -> ${r.to_bus}(core ${tc}) ' +
-			'crosses cores — the xioc lowering (REQ-TOPO-010) is not generated yet; keep both ' +
-			'buses on one core for now.'
 	}
 	return none
+}
+
+// crossing: the route's buses sit on different cores, so its value rides an IOC channel
+// (REQ-TOPO-010) instead of the intra-thread same-core mechanism.
+fn (r Route) crossing(bus_core map[string]int) bool {
+	return (bus_core[r.from_bus] or { 0 }) != (bus_core[r.to_bus] or { 0 })
+}
+
+// xr_ch names the route crossing's IOC channel const (allocated by cfg2v in gen/ecu_gen.v —
+// same `gen` module, so bridges reference it directly).
+fn (r Route) xr_ch() string {
+	return 'xr_${snake(r.to_bus)}_${snake(r.to_frame)}_${snake(r.signal)}_ch'
 }
 
 fn parse_routes(doc toml.Doc, dbc string) []Route {
@@ -1112,14 +1121,10 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		if r.from_bus !in m.buses || r.to_bus !in m.buses {
 			panic('route: signal "${r.signal}" names an undeclared bus (from "${r.from_bus}", to "${r.to_bus}") — both must be a [bus.*]')
 		}
-		// the forwarder runs in the SOURCE bus\'s bridge and sends directly on the
-		// destination channel — safe only when both buses are on the same core. A
-		// cross-core route needs the sanctioned xioc crossing (P2c).
-		if (m.bus_core[r.from_bus] or { 0 }) != (m.bus_core[r.to_bus] or { 0 }) {
-			panic('route: signal "${r.signal}" crosses cores (bus "${r.from_bus}" core ${m.bus_core[r.from_bus] or {
-				0
-			}} -> "${r.to_bus}" core ${m.bus_core[r.to_bus] or { 0 }}) — a cross-core route needs an xioc transport (P2c)')
-		}
+		// Same-core: the forwarder runs in the SOURCE bus's bridge and sends directly on the
+		// destination channel. Cross-core: generated as the sanctioned crossing instead — the
+		// value rides an IOC channel to the DESTINATION bridge, which composes and transmits
+		// on its own channel (REQ-TOPO-010; frame routes were already rejected at parse).
 		// a classic (non-FD) bus caps the DLC at 8 on BOTH ends: the source can never
 		// receive a >8 frame it requires by len, and the socket rejects a >8 send.
 		if !(bus_fd[r.from_bus] or { false }) && r.from_dlc > 8 {

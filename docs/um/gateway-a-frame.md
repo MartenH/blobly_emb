@@ -91,6 +91,19 @@ make -C examples/gw_signal           # generate + host build
 ./examples/gw_signal/bin/app vcan0 vcan1
 ```
 
+## Buses on different cores
+
+A **signal route** may cross cores: the decoded value (one f64) rides an IOC channel
+between the two comm owners — the source bridge publishes on rx, the *destination* bridge
+composes and transmits on its own channel, and freshness is stamped on the destination
+side so no clock ever crosses the boundary (REQ-TOPO-010). Declare it exactly like a
+same-core route; the generator derives the crossing from `[bus.*] core`. Worked example:
+[`gw_xcore`](../../examples/gw_xcore).
+
+A **frame route** may not: a raw PDU does not fit a signal cell, and carrying it whole is
+the [bulk transport](../bulk-transport.md)'s job — generation fails with exactly that
+message. Route the signal, or keep both buses on one core.
+
 ## Limits worth knowing
 
 - A route is **one source → one destination**. Fan-out (one source to several
