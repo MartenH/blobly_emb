@@ -76,9 +76,10 @@ cansend can0 123#DEADBEEF      # send id 0x123, 4 bytes
 #  -> board replies: 124#DEADBEEF   (id+1, same payload)
 ```
 
-Every **odd-id** frame you send (id ≤ 0x7FF, ≤ 8 data bytes) comes back with its
-id incremented; even ids are dropped by the parity filter (they're the reply
-space — see above). **✅ Confirmed on hardware** (STM32H735G-DK ↔ PCAN-USB Pro FD,
+Every **odd-id** frame you send (id ≤ **0x7FD**, ≤ 8 data bytes) comes back with
+its id incremented; even ids are dropped by the parity filter (they're the reply
+space — see above), and the top odd id 0x7FF is too — its `id + 1` reply would
+not fit 11 bits. **✅ Confirmed on hardware** (STM32H735G-DK ↔ PCAN-USB Pro FD,
 500 kbit/s): `123`→`124`, `001`→`002`, ~0.7 ms round-trip, bus ACKed — that
 sign-off run predates the parity filter and also probed `456`→`457`, which the
 filter now ignores by design.
