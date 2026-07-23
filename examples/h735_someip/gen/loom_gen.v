@@ -135,15 +135,15 @@ fn eth_thread_entry(input u32) {
 				for i in 0 .. cl {
 					cmd_line[i] = rx_buf[someip.header_len + i]
 				}
-				mut rpc_rsp := shell.Rsp{}
-				if !g_sh.dispatch(cmd_line, cl, now, false, mut rpc_rsp) {
+				g_sh.rsp.len = 0 // module-sized Rsp lives IN the module __global, never on the 4 KB comm stack (codex #206)
+				if !g_sh.dispatch(cmd_line, cl, now, false, mut g_sh.rsp) {
 					// the access gate refused a state-changing command (REQ-NET-018)
 					eh := someip.error_response(rh, someip.rc_denied)
 					en := someip.encode(eh, &rpc_buf[0])
 					C.blob_eth_send(0, &peer_ip[0], someip_peer_port, &rpc_buf[0], en)
 					continue
 				}
-				mut rl := int(rpc_rsp.len)
+				mut rl := int(g_sh.rsp.len)
 				if rl > shell.max_rsp {
 					rl = shell.max_rsp // the Rsp BUFFER bound: an over-reporting C command must not read past it
 				}
@@ -153,7 +153,7 @@ fn eth_thread_entry(input u32) {
 				ph := someip.response(rh, rl)
 				pn := someip.encode(ph, &rpc_buf[0])
 				for i in 0 .. rl {
-					rpc_buf[pn + i] = rpc_rsp.buf[i]
+					rpc_buf[pn + i] = g_sh.rsp.buf[i]
 				}
 				C.blob_eth_send(0, &peer_ip[0], someip_peer_port, &rpc_buf[0], pn + rl)
 				continue
