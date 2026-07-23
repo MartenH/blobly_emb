@@ -7,6 +7,8 @@ lives in the sibling `docs/*.md` files and is linked, not repeated.
 | I want to... | page |
 |---|---|
 | add a signal (FB→FB, FB→CAN, CAN→FB, cross-core) | [add-a-signal.md](add-a-signal.md) |
+| **move data A→B — which transport, and how big can it be** | [move-data.md](move-data.md) |
+| **gateway a frame or a signal between two buses** | [gateway-a-frame.md](gateway-a-frame.md) |
 | add a CAN frame / change tx timing | [add-a-frame.md](add-a-frame.md) |
 | add a function block (component + handler) | [add-an-fb.md](add-an-fb.md) |
 | add a thread or partition | [add-a-thread.md](add-a-thread.md) |
