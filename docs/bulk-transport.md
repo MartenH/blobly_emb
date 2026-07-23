@@ -133,6 +133,49 @@ attribute.
 So: **MPU is enough, and the constraint that actually bites is cache coherency, not memory
 protection.**
 
+## The portable contract — this is not an STM32 design
+
+The H755 is the first instantiation, not the shape (the same directive the multi-image
+emitter was built under). Strip the survey to what the mechanism actually *requires* and
+it is three primitives, none of them ST-specific:
+
+1. **A shared window both endpoints address identically** — no translation between them.
+2. **Single-copy-atomic aligned 32-bit stores** across that window.
+3. **An ordering barrier** (`DMB`, a fence, or the compiler/OS equivalent).
+
+Everything else — doorbell, cache rules, protection — is a **per-board seam**, and the
+repo already has the seam: the porting table realises the IOC region as `mmap(MAP_SHARED)`
+on host, shared SRAM on STM32, a shared section on an AUTOSAR ECU. The bulk pool rides
+the *same* seam; a port that has the IOC region has the bulk window for free.
+
+So the layering is:
+
+| layer | contents | varies per board? |
+|---|---|---|
+| **portable core** (`boards/common/`, like `xioc.h`) | pool + SPSC descriptor ring + loan/fill/publish and peek/release, plain 32-bit stores + barriers | no |
+| **board ops** (tiny, optional) | `bulk_notify()` doorbell; `bulk_flush()/bulk_invalidate()` cache hooks | yes |
+| **config/codegen** | the endpoint in `ecu.toml`: name, buffer size × count, endpoints; the generator places the pool in the board window and derives the transport | no |
+
+Three rules keep it universal rather than accidentally ST-shaped:
+
+- **Plain stores, never exclusives.** The xioc lesson generalises: `LDREX`/`STREX` (and
+  their equivalents) are not guaranteed to arbitrate between *sides* — cores, a core and a
+  DMA engine, a core and an accelerator. Aligned-word stores + barriers are the lowest
+  common denominator that is correct everywhere the three primitives hold.
+- **The doorbell is an optimization, never a correctness requirement.** Define it as an
+  edge that may be lost or coalesced, carrying no data — the ring state is the only truth.
+  Then IPCC (ST), MU (NXP), IPC (TI), an SGI on A-class, an `eventfd` on the host, or
+  *nothing at all* (poll) are interchangeable, and the RPMsg/virtio discipline is kept.
+- **Cache maintenance is a pair of hooks that default to no-ops.** On a part where the
+  window is uncached (MPU attribute, or caches off), they compile away. On a part where it
+  isn't, the port supplies clean/invalidate. The contract is "the reader sees what the
+  writer published after the barrier", not "there is no cache".
+
+A side effect worth wanting: because the host realization is `mmap(MAP_SHARED)` + fork
+(already proven by `ioc_bench_mp`), the same ring is **testable on the host, cross-process,
+in CI** — bulk transport gets the sim-first treatment everything else here gets, before it
+ever touches a board.
+
 ## What this implies for blobly
 
 The convergence is strong enough to just follow it. A generated bulk endpoint would be:
