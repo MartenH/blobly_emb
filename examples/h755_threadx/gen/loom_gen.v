@@ -458,12 +458,21 @@ fn comm_thread_entry(input u32) {
 		for nm_up && ch.tx_ready() && g_sh.produce(t1, mut shell_txf) {
 			ch.send(shell_txf)
 		}
-		if duo_trc_wait && C.duo_trace_ready() != 0 {
+		// latch t3 EVERY tick: duo_trace_ready() stamps t3 on the pass that first sees the
+		// ack. Gating it behind duo_trc_wait meant a Stop acked at T got its t3 at the LATER
+		// dump press — a 50 ms gap biases the midpoint ~25 ms (codex #186). The call is two
+		// volatile reads when idle.
+		if C.duo_trace_ready() != 0 && duo_trc_wait {
 			// The exchange we just completed IS the clock measurement — take it BEFORE
 			// load_remote, which prepends it to the satellite block so the host can put
 			// both cores on one timeline (REQ-TRACE-011).
-			if C.duo_trace_offset(&duo_trc_off, &duo_trc_bound) != 0 {
-				g_tm.set_core_offset(duo_trc_off, u16(if duo_trc_bound > 0xffff { u32(0xffff) } else { duo_trc_bound }))
+			// bound past the u16 wire field (a debugger pause, a >131 ms round trip): OMIT the
+			// correlation — clamping would understate the error and make a bad alignment look
+			// trustworthy (codex #186). Unmeasured stays visibly unmeasured.
+			if C.duo_trace_offset(&duo_trc_off, &duo_trc_bound) != 0 && duo_trc_bound <= 0xffff {
+				g_tm.set_core_offset(duo_trc_off, u16(duo_trc_bound))
+			} else {
+				g_tm.clear_core_offset() // a REJECTED measurement must not ship the previous dump's offset (codex #207)
 			}
 			g_tm.load_remote(C.duo_trace_buf(), C.duo_trace_count())
 			duo_trc_wait = false
