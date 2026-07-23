@@ -95,7 +95,10 @@ jobs:
       # sources inside the freshness net below instead of exempting them (codex #209).
       - name: Host example builds (+ generation for cross examples)
         run: |
-          for d in examples/*/; do
+          # examples/*/nodes/*/ too: a system example's node apps are standalone Makefile
+          # dirs with no top-level Makefile above them, so plain examples/*/ never built
+          # the host gateways (system_fw/nodes/gw, system_gw/nodes/sysnode) — codex #209 r2.
+          for d in examples/*/ examples/*/nodes/*/; do
             [ -f "$d/Makefile" ] || continue
             case "$d" in
               # KNOWN BROKEN pending #191: loom2v stopped generating the multi-partition
