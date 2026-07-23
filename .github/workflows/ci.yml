@@ -88,22 +88,33 @@ jobs:
 
       # Build EVERY host example, not just the ones an e2e test happens to exercise — an example
       # without a test never got compiled by CI, so codegen or API drift only surfaced when a
-      # human next ran `make all` there (codex #189). Cross-compiled (arm-none-eabi) examples
-      # stay bench-verified per AGENTS.md; the grep is the same split their Makefiles declare.
-      - name: Host example builds
+      # human next ran `make all` there (codex #189). The cross/host split is a RECURSIVE grep:
+      # a system example (system_io) is host at the top level but builds arm-none-eabi nodes
+      # underneath (codex #209). Cross examples stay bench-compiled per AGENTS.md, but their
+      # GENERATION is host work — running `make gen` here keeps their committed generated
+      # sources inside the freshness net below instead of exempting them (codex #209).
+      - name: Host example builds (+ generation for cross examples)
         run: |
           for d in examples/*/; do
             [ -f "$d/Makefile" ] || continue
-            grep -q arm-none-eabi "$d/Makefile" && continue
             case "$d" in
               # KNOWN BROKEN pending #191: loom2v stopped generating the multi-partition
-              # trace runner these two were built with, so `make all` regenerates a
+              # trace runner these two were built with, so regenerating produces a
               # single-channel run() their main.v cannot call. This very gate found it —
               # remove the skips when #191 restores the shape.
               examples/trace_comm/|examples/trace_multicore/) echo "== $d SKIPPED (#191)"; continue ;;
             esac
-            echo "== $d"
-            make -C "$d" all
+            if grep -rq arm-none-eabi "$d" --include='Makefile*'; then
+              if make -C "$d" -n gen >/dev/null 2>&1; then
+                echo "== $d (cross: gen only)"
+                make -C "$d" gen
+              else
+                echo "== $d SKIPPED (cross, no gen target)"
+              fi
+            else
+              echo "== $d"
+              make -C "$d" all
+            fi
           done
 
       # Regenerated outputs must match what is committed. The example builds above just re-ran
