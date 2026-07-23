@@ -43,7 +43,7 @@ pub const max_rsp = isotp.max_payload // one ISO-TP block; help/ps for a handful
 // Rsp is the no-alloc response writer — a fixed buffer the handlers append text into.
 pub struct Rsp {
 pub mut:
-	buf [520]u8
+	buf [isotp.max_payload]u8 // derived: raising the cap grows this with it (codex #202)
 	len int
 }
 
@@ -124,6 +124,11 @@ struct Cmd {
 }
 
 pub struct ShellModule {
+pub mut:
+	// The response writer lives IN the module (bss via the __global), never as a comm-thread
+	// stack local: buf derives from isotp.max_payload, so a raised cap would otherwise grow a
+	// 520+ B local on the 4 KB comm stack — the stack-copy-boot-hang rule, and codex #206.
+	rsp Rsp
 mut:
 	out_id u32
 	link   isotp.Link
@@ -190,9 +195,9 @@ pub fn (mut m ShellModule) on_in(now u64, f can.Frame) {
 			break
 		}
 	}
-	mut rsp := Rsp{}
-	m.dispatch(f.data, int(f.len), now, true, mut rsp)
-	m.link.send(&rsp.buf[0], rsp.len)
+	m.rsp.len = 0
+	m.dispatch(f.data, int(f.len), now, true, mut m.rsp)
+	m.link.send(&m.rsp.buf[0], m.rsp.len)
 }
 
 // dispatch runs one command LINE into rsp — the transport-free core both

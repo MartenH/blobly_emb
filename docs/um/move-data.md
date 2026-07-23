@@ -42,11 +42,11 @@ map one-to-one, because both stacks ultimately bow to the same frames:
 |---|---|---|
 | signal in a CAN I-PDU | 8 B (classic L-PDU) | same — 8 B classic frame |
 | signal in a CAN FD I-PDU | up to 64 B | same — `com.max_pdu` = 64 B, and it is the ceiling for *every* signal path |
-| `ComSignalLength` byte-array signals sized for **FlexRay** (~254/256 B PDUs) | FlexRay only | **not carried** — no FlexRay here, and its niche has largely moved to CAN FD / Ethernet; nothing else in the stack ever needed a >64 B *signal* |
+| large `ComSignalLength` byte-arrays (`UINT8_N`/`UINT8_DYN`) — FlexRay-sized L-PDUs (~254 B) **or** a COM signal carried over a TP | any I-PDU, incl. TP-backed | **not a signal here.** No FlexRay (its niche moved to CAN FD / Ethernet), and a COM-signal-over-TP maps to the *bulk* side: ISO-TP / the bootloader block transfer today, the loan/publish ring next — "signal" never exceeds one PDU |
 | **CanTp** (ISO-TP) message | 4095 B (2³²−1 with the 2016 escape) | **520 B** (`isotp.max_payload`) — a deliberate no-alloc cap sized to the largest real message; raise it consciously, every link's buffer grows |
 | **LdCom** — a payload passed whole, no signal packing | transparent, TP-segmented | the gap this page keeps pointing at: modules own links today; the loan/publish **bulk ring** is the planned equivalent ([../bulk-transport.md](../bulk-transport.md)) |
-| **OS IOC** cross-core | size is whatever the generator is configured to emit | derived, and **bounded at the same 64 B PDU ceiling** — so moving a partition never changes what a signal may be, only what it costs |
-| **SecOC / E2E** on a protected PDU | in-PDU trailer | same shape — `[[frame]].e2e` / `.secoc`, re-protected on gateway re-encode |
+| **OS IOC** cross-core | size is whatever the generator is configured to emit | derived. **Today the generated cross-core cell is 1–2 × u32 (8 B)**; the 64 B mechanism is merged (`xioc_n`, REQ-INV-006) and the generator derivation is in flight — when it lands, moving a partition changes only cost, never contract |
+| **SecOC / E2E** on a protected PDU | in-PDU protection fields at profile-defined positions | same — `[[frame]].e2e` / `.secoc` with explicit `crc_pos`/`counter_pos`/`fresh_pos`/`mac_pos` (not necessarily trailing bytes), re-protected on gateway re-encode |
 | J1939 TP / big diag transfers | 1785 B / TP-paced | the bootloader's UDS `0x34`/`0x36`×N block transfer — image-sized, block-paced |
 
 Two deliberate differences worth internalising rather than fighting:
@@ -57,7 +57,10 @@ Two deliberate differences worth internalising rather than fighting:
   bigger is bulk, and the build fails loudly instead of packing it anyway.
 - **The ISO-TP cap is smaller on purpose.** 4095 B reassembly buffers per connection are
   real RAM on a no-alloc target; 520 B holds the largest message this system actually
-  sends. It is one constant — but treat raising it as a sizing decision, not a tweak.
+  sends. Every dependent buffer (each link, the shell response, both bootloaders'
+  request/response) **derives from `isotp.max_payload`**, so raising it grows them all
+  together — it cannot orphan a hard-coded buffer. It is still a sizing decision: every
+  link's RAM grows with it.
 
 Transports are **derived, never configured** — you declare a `[[signal]]`'s endpoints and
 the generator picks the mechanism from where they sit. See

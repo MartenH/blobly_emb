@@ -32,7 +32,7 @@ fn pump(mut m ShellModule) string {
 		}
 		now += 500
 	}
-	mut buf := [520]u8{}
+	mut buf := [isotp.max_payload]u8{}
 	n := host.take(&buf[0])
 	if n <= 0 {
 		return ''

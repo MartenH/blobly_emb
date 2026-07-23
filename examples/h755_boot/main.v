@@ -49,8 +49,8 @@ fn fl_read(ctx voidptr, addr u32, out &u8, len u32) bool {
 __global (
 	g_prog boot.Prog
 	g_link isotp.Link
-	g_req  [520]u8
-	g_rsp  [520]u8
+	g_req  [isotp.max_payload]u8 // derived from the cap — a hard-coded 520 here is an overflow if the cap is ever raised (codex #202)
+	g_rsp  [isotp.max_payload]u8
 )
 
 fn rng_hook(out &u8, n int) bool {
