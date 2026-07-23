@@ -63,6 +63,18 @@ Status keys: ✅ shipped · 🔨 in progress · ⏭️ next · 🧭 planned · �
 
 - ✅ **SOME/IP P1** — codec/schema + codegen, E2E on silicon (H735 NetX)
 - 🧭 **SOME/IP P2 rx** · 🧭 **tx-mode harness** · 🧭 **loom2v eth integration**
+- ⏭️ **Ordinary networking from an application.** Today an FB can only emit a
+  ≤64 B latest-value signal on an eth bus; everything else is platform glue
+  owning a socket in `main.v`. That is the wrong line. **Streaming UDP, a TCP
+  connection, and an app-initiated SOME/IP request/response are ordinary things
+  an application does** — they should be first-class and config-declared, the way
+  a signal is. Sending a **raw L2 Ethernet frame** is the genuinely special case
+  and may stay special. Concretely missing: an app-facing stream/datagram
+  endpoint kind, a target-side RPC *client* (we serve, we don't call), payloads
+  past the 64 B PDU bound on the signal path, and dynamic peers (the peer is
+  static config today). Must land without breaking the isolation rule that keeps
+  FBs driver-free and testable — the endpoint is declared, the socket stays in
+  the platform. See [docs/um/move-data.md](docs/um/move-data.md).
 
 ## Multi-node & platform
 

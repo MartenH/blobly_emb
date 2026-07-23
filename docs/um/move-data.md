@@ -127,12 +127,62 @@ block transfer instead — it acks per block and lets ISO-TP flow control pace i
   the peer just sees silence and times out. (We *honour* an OVFLW we receive, but never
   emit one.) If a remote transfer mysteriously stalls, check its declared length first.
 
-### On Ethernet — SOME/IP
+### On Ethernet — SOME/IP over UDP
 
-A **notification** is one PDU: **64 B**. A **method response** may carry up to **1024 B**
-(`max_rpc`) — the one place a real payload is allowed past the PDU bound, precisely so
-request/response can return something substantial without resizing the whole COM path.
-See [../someip.md](../someip.md).
+**An FB never opens a socket.** `make lint` (a CI gate) rejects `import driver` anywhere
+except `main.v` and the generated bridge, so there is no `udp_send()` to call from
+application code. That is the same rule as everywhere else here: the app reads and writes
+signals; *which wire they leave on is configuration.*
+
+So "send this over Ethernet" is a one-word change — the bus a signal points at:
+
+```toml
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.50"
+
+[someip]
+bus     = "eth0"
+service = 0x0100
+version = 1
+port    = 30490
+
+[[signal]]
+name   = "BenchLoad"
+fields = { load = "u8" }
+from   = "app"
+to     = "eth0"       # <- CAN would be "can0"; nothing else differs
+```
+
+That signal becomes a **SOME/IP notification** in a UDP datagram: the standard 16-byte
+header plus the build-time payload layout, legible to Wireshark and to blobly_net's
+`someip` module. Bench-verified on the H735 (NetX).
+
+**The limits, and they are tight:**
+
+| | limit |
+|---|---|
+| event payload (tx and rx) | **64 B** (`com.max_pdu`) |
+| rx datagram buffer | `[80]u8` = 16 B header + 64 B — **an oversize datagram truncates and is dropped by the Length gate** |
+| method response | **1024 B** (`max_rpc`) — the one payload allowed past the PDU bound |
+| addressing | one static peer ip/port; a datagram from anywhere else is discarded |
+
+**What does not exist today** — worth knowing before you design around it:
+
+- **No app-facing socket API.** No UDP stream, no TCP connect, no app-initiated
+  request/response from an FB. TCP on the target is used by **DoIP** (UDS over TCP, for
+  diagnostics and OTA) — a module, not an application path.
+- **No streaming.** The eth signal path is latest-value-wins, like every other signal
+  path. Continuous or unbounded data has no first-class route; today that means platform
+  glue owning the socket in `main.v`, the same shape as bulk on CAN.
+- **No service discovery** — SOME/IP is adopted as a *wire format*, not a middleware. The
+  peer is configured, not discovered.
+
+If you need one of those now, it is platform work (a module owning the socket), not
+something you can reach from an FB. The roadmap tracks making the ordinary cases —
+UDP/TCP/RPC from an application — first-class rather than special.
+
+See [../someip.md](../someip.md) and [../net.md](../net.md).
 
 ### Which ECU it even goes to
 
