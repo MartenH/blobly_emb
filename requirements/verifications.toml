@@ -336,3 +336,17 @@ context = "h735/target"
 command = "sh -c 'if [ -z \"$BLOB_HWTEST\" ]; then exit 2; fi; exec examples/h735_someip/bench_test.sh --flash'"
 skip_exit = 2 # exit 2 = disabled/no-board/no-probe-host -> pending; 1 = a real FAIL
 verifies = ["REQ-NET-016"]
+
+# REQ-TRACE-011 (cross-core time correlation): the host tests round-trip the offset record
+# and inject offsets via set_core_offset, but the requirement's substance — the offset is
+# RE-MEASURED per dump over the real request/ack exchange — only executes on the dual-core
+# bench (H755 run measured +49.7 ms; the wrap-guard/±60 s window changes since are unsigned).
+# Pending review keeps the ledger honest at "covered" instead of test-tag "verified"
+# (codex #192, same shape as wide-xioc-derivation-and-silicon).
+[[review]]
+id = "trace-correlation-silicon"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-TRACE-011"]
+approved_by = ""
+date = ""

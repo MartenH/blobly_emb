@@ -53,18 +53,31 @@ jobs:
       - name: Config validation (make check)
         run: make check
 
-      # Requirement → verification traceability: nonzero exit if a linked verification failed.
-      # `make trace` REGENERATES docs/traceability.md, so running it alone would happily rewrite a
-      # stale file and still pass — which is how the committed copy drifted to 182 reqs while the
-      # tree had 183. Fail if the regenerated output differs from what is committed.
-      - name: Requirement trace (make trace)
+      # Requirement → verification traceability. `make trace-check` (not `make trace`): both
+      # regenerate docs/traceability.md, but only --check exits nonzero when a requirement's
+      # linked verification FAILED — plain `make trace` would happily record the failure in
+      # the ledger and pass (codex #189). Drift is checked with `git status --porcelain`, not
+      # `git diff`: diff ignores an UNTRACKED file, so a deleted/renamed traceability.md that
+      # the regeneration just recreated would sail through (codex #192).
+      - name: Requirement trace (make trace-check)
         run: |
-          make trace
-          if ! git diff --quiet -- docs/traceability.md; then
+          make trace-check
+          if [ -n "$(git status --porcelain -- docs/traceability.md)" ]; then
             echo "::error::docs/traceability.md is out of date — run 'make trace' and commit it"
+            git status --porcelain -- docs/traceability.md
             git --no-pager diff -- docs/traceability.md
             exit 1
           fi
+
+      # System-level validation: syscheck is to a system.toml what ecucheck is to an ecu.toml
+      # (single-writer per bus, identity uniqueness, NM coherence, routes). Every committed
+      # system config gets the same gate its per-node configs already have (codex #189).
+      - name: System config validation (syscheck)
+        run: |
+          for f in examples/*/system.toml; do
+            echo "== $f"
+            make syscheck SYSTEM="$f"
+          done
 
       # The example e2e tests each shell out to `make gen` + build. They used to fail randomly in
       # parallel because `v run <tool>` names its compiled binary after the TOOL's source path, so
@@ -72,3 +85,36 @@ jobs:
       # now compiles each generator to the example's own bin/, so these are safe to run together.
       - name: Example e2e tests
         run: v -enable-globals test examples
+
+      # Build EVERY host example, not just the ones an e2e test happens to exercise — an example
+      # without a test never got compiled by CI, so codegen or API drift only surfaced when a
+      # human next ran `make all` there (codex #189). Cross-compiled (arm-none-eabi) examples
+      # stay bench-verified per AGENTS.md; the grep is the same split their Makefiles declare.
+      - name: Host example builds
+        run: |
+          for d in examples/*/; do
+            [ -f "$d/Makefile" ] || continue
+            grep -q arm-none-eabi "$d/Makefile" && continue
+            case "$d" in
+              # KNOWN BROKEN pending #191: loom2v stopped generating the multi-partition
+              # trace runner these two were built with, so `make all` regenerates a
+              # single-channel run() their main.v cannot call. This very gate found it —
+              # remove the skips when #191 restores the shape.
+              examples/trace_comm/|examples/trace_multicore/) echo "== $d SKIPPED (#191)"; continue ;;
+            esac
+            echo "== $d"
+            make -C "$d" all
+          done
+
+      # Regenerated outputs must match what is committed. The example builds above just re-ran
+      # every generator; if the tree is dirty now, a committed generated file (an example's gen/,
+      # sig/, ports/, signal-map.md) was stale — the same drift the traceability guard catches,
+      # generalized to every generated artifact (codex #189/#192). Untracked files fail too.
+      - name: Generated outputs are fresh
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::regenerated outputs differ from the committed tree — run the builds and commit"
+            git status --porcelain
+            git --no-pager diff | head -200
+            exit 1
+          fi
