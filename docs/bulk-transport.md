@@ -87,6 +87,52 @@ middleware.
 - **AUTOSAR Adaptive**: `ara::com` with the zero-copy binding — which *is* iceoryx.
 - **SOME/IP-TP**: segmentation for payloads past one datagram.
 
+## Does any of this need an MMU? (No — and an MPU part has it easier)
+
+Worth answering directly, because it decides how much of the above is even portable.
+
+**`io_uring` does not transfer at all** — it is a *Linux syscall interface*. The rings live
+in kernel memory and are `mmap`'d into user space; there is no library to port to a
+Cortex-M. What transfers is the **pattern** (a shared submission/completion ring instead
+of a call per operation), and the pattern needs no MMU whatsoever — it is a ring in memory
+both sides can see.
+
+**iceoryx's implementation needs an MMU; its design does not.** iceoryx maps one physical
+shared-memory segment into several *processes*, and those mappings land at **different
+virtual addresses** in each — which is exactly why iceoryx cannot store raw pointers in
+shared memory and uses **relative (offset) pointers** instead. `shm_open`, `mmap`, fd
+passing, offset pointers: that machinery exists to reconstruct a **single shared address
+space**.
+
+An MCU already has one. SRAM4 is at `0x38000000` for both H755 cores. So the MMU-era
+apparatus simply drops out:
+
+| MMU system needs | on an MPU part |
+|---|---|
+| `mmap` the segment per process | nothing — the window is already addressable |
+| relative/offset pointers | plain pointers; the same address means the same byte on both cores |
+| fd/handle passing to share a buffer | pass the offset (or nothing — the ring entry *is* the reference) |
+| page-level permissions | MPU regions, statically configured |
+
+**What you lose** without an MMU is real but mostly irrelevant here: no per-process virtual
+address spaces (so a wild pointer reaches anything the MPU permits — which is why the
+generated region table in [memory-protection.md](memory-protection.md) matters), and no
+demand paging or growable pools (irrelevant: no-alloc means the pool is fixed at build
+time by design).
+
+**The MPU's important job here is cacheability, not protection.** The hazard on these
+parts is not one core reading another's memory — it is one core's **D-cache** holding a
+stale line. `xioc.h` already states the rule: shared buffers must live in uncached memory,
+"the D-cache-off policy, **or an MPU non-cacheable region**". Today the H755 runs with
+D-caches off, so the question is moot — but a bulk pool is precisely the feature that
+would make you want D-cache *on* for the rest of the map, and at that moment the MPU
+region attribute becomes the mechanism that keeps the pool correct. Note the asymmetry:
+the CM7 has a D-cache, the CM4 (Cortex-M4) has none, so only the CM7 side needs the
+attribute.
+
+So: **MPU is enough, and the constraint that actually bites is cache coherency, not memory
+protection.**
+
 ## What this implies for blobly
 
 The convergence is strong enough to just follow it. A generated bulk endpoint would be:
