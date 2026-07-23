@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 183 | 93 | 13 | 77 | 0 |
+| 184 | 94 | 13 | 77 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -70,6 +70,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-INV-003 | B | analysis | uncovered | — |
 | REQ-INV-004 | QM | analysis | verified | noalloc-driver-lint (pass) |
 | REQ-INV-005 | QM | review | covered | naming-review (pending) |
+| REQ-INV-006 | QM | test | verified | xioc_test.v (pass) |
 | REQ-IO-001 | QM | test | verified | e2e_test.v (pass) |
 | REQ-IO-002 | QM | test | verified | e2e_test.v (pass) |
 | REQ-IO-003 | QM | review | uncovered | — |
@@ -258,6 +259,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-INV-003 | | | | | | | | | | | | | | | | |
 | REQ-INV-004 | | | | | | | | | | | | | | | | ✓ |
 | REQ-INV-005 | | | | | | | | | | | | | | | · | |
+| REQ-INV-006 | | | | | | | | | | | | | | ✓ | | |
 | REQ-IO-001 | | | | | | | | | | | | | | ✓ | | |
 | REQ-IO-002 | | | | | | | | | | | | | | ✓ | | |
 | REQ-IO-003 | | | | | | | | | | | | | | | | |
