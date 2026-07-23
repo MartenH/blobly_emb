@@ -205,6 +205,11 @@ static inline int xioc_n_read(xioc_n_t *c, uint32_t *rd_seq, uint32_t *dst)
 	volatile uint32_t *s = xioc_n_slot(c, n);
 	uint32_t tmp[XIOC_MAX_WORDS];
 	uint32_t w = c->words;
+	if (w == 0u || w > XIOC_MAX_WORDS) {
+		return 0; /* not (yet) initialized, or garbage geometry: NEVER a copy bound —
+		           * an uninit shared `words` would otherwise overrun tmp AND the
+		           * caller's lane buffer (cold-boot race, codex #211) */
+	}
 	for (uint32_t i = 0; i < w; i++) {
 		tmp[i] = XIOC_LD(&s[1u + i]);
 	}

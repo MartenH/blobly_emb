@@ -142,8 +142,17 @@ int shell_bmc(unsigned char *out, int cap) {
 }
 
 /* duo_clocks_ready — the boot handshake's CM7 half: written once after board_clock_init,
- * releasing the parked CM4 (its SysTick assumes the final 200 MHz HCLK). */
+ * releasing the parked CM4 (its SysTick assumes the final 200 MHz HCLK).
+ *
+ * The wide window is zeroed FIRST: the comm thread may poll a wide channel before the
+ * satellite's boot has run duo_xw_init, and an uninitialized SRAM `words` field would
+ * otherwise be trusted as a copy bound (codex #211). Zeroed, every pre-init poll reads
+ * latest == 0 -> "nothing published" — and xioc_n_read additionally clamps the bound.
+ * Config-independent: the whole DUO_XW_MAX window, not the generated layout. */
 void duo_clocks_ready(void) {
+    volatile uint32_t *xw = (volatile uint32_t *)DUO_XW_ADDR;
+    for (uint32_t i = 0; i < DUO_XW_MAX / 4u; i++) xw[i] = 0u;
+    __asm__ volatile("dsb");
     *(volatile uint32_t *)DUO_CLK_ADDR = DUO_CLK_MAGIC;
     __asm__ volatile("dsb");
 }
