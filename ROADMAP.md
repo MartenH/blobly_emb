@@ -112,20 +112,28 @@ Status keys: ✅ shipped · 🔨 in progress · ⏭️ next · 🧭 planned · �
 
 ---
 
-## Immediate (this prep day → the away days)
+## Immediate (the away window, from 2026-07-23 — **no silicon access**)
 
-Driver-format completeness is **done in sim**: ext-id (`#180`), CAN-FD payloads
-(`#181`), signal-route ext destinations (`#182`) — all merged. Passwordless CAN
-bring-up (`blobly-can`) is installed. Remaining:
+The user is travelling: work must close on **host/sim alone** (vcan, fork/mmap AMP,
+CI). Done since the last revision of this section: on-silicon driver validation
+(`#184`, FD-without-BRS finding recorded above), and **CI exists now** — `#189`/`#190`
+gate unit tests, `make lint`, `make check`, `make trace` (with the drift check) and
+the example e2e tests on every push.
 
-1. ✅ **On-silicon validation** (bench) — 64-byte CAN-FD payloads verified on the
-   H755, H735 ext-id re-checked, H723 echo brought up (`#184`). BRS at 2 Mbit from
-   the 8 MHz kclk goes bus-off (only 4 tq); FD payloads verified without BRS.
-2. ⏭️ **Cross-core xioc routes** — the next substantial codegen item.
-3. 🧭 Follow-ups: generated-target FD data-timing harmonization (bench-gated);
-   canif FD recv-flag; the 3-node silicon run (all boards now wired).
-4. ⏭️ **CI** — this repo has none. 17 V test files, `make check` and `make trace`
-   run only by hand, so nothing gates a PR.
+**Host-only queue (in order):**
+
+1. ⏭️ **Cross-core xioc routes** — the next substantial codegen item; model approved
+   (implicit xioc slot, reuses the multi-image plumbing). Host-testable end to end.
+2. 🧭 **Bulk transport P1, sim-first** — the portable pool + descriptor ring of
+   [docs/bulk-transport.md](docs/bulk-transport.md) in `boards/common`, proven
+   cross-process on the host (`mmap`+`fork`, the `ioc_bench_mp` seam) before any
+   board work.
+3. 🧭 **`trace_multicore` fix** (`#191`, vcan-only) — waiting on one design call:
+   reject `[trace]` with `record` but no `dump_fc`, or generate the dump anyway.
+
+**Bench queue (on return):** xioc-route silicon check (H755); FD data-timing
+harmonization; canif FD recv-flag; target multi-bus comm owner → the **3-node
+silicon run** (H755+H735+H723, all wired); REQ-TRACE-011 silicon sign-off.
 
 Public-repo gate: **cleared** — `blobly_net` is MIT from its initial commit
 (relicensed 2026-07-22, history rewritten), so the site/docs are unblocked.
