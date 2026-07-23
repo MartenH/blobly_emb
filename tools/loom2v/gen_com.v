@@ -737,7 +737,7 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 						// over the route's IOC channel; the DESTINATION bridge stamps its own
 						// freshness on acquire, so no clock ever crosses the boundary.
 						glue << '${ind}xr_${rk} := ${frof}_${snake(r.signal)}_phys(rx.data)'
-						glue << '${ind}osal.ioc_publish2(${r.xr_ch()}, &xr_${rk}, 8)'
+						glue << '${ind}osal.ioc_publish(${r.xr_ch()}, &xr_${rk}, 8) // triple: tear-free when rx bursts lap the 10ms consumer (codex #200)'
 					} else {
 						glue << '${ind}st.${rk}_v = ${frof}_${snake(r.signal)}_phys(rx.data)'
 						glue << '${ind}st.${rk}_fresh = now'
@@ -955,7 +955,7 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 		for r in in_routes {
 			rk := route_field(r)
 			glue << '\tmut xr_in_${rk} := f64(0)'
-			glue << '\tif osal.ioc_acquire2(${r.xr_ch()}, &xr_in_${rk}, 8) {'
+			glue << '\tif osal.ioc_acquire_fresh(${r.xr_ch()}, &xr_in_${rk}, 8) { // fresh = NEW publication only — ever-written freshness never trips the staleness deadline (codex #200)'
 			glue << '\t\tst.${rk}_v = xr_in_${rk}'
 			glue << '\t\tst.${rk}_fresh = now'
 			glue << '\t}'
@@ -1122,9 +1122,12 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				})})'
 			}
 		}
-		// SecOC key for a protected source-route frame (verified before decode).
+		// SecOC key for a protected source-route frame (verified before decode). rx_routes,
+		// NOT sig_routes: verify state+key live at the SOURCE (rx) side. With sig_routes a
+		// crossing left the source key uninitialized AND made the destination assign a
+		// source-key field its struct never declares — code that does not build (codex #200).
 		mut src_key_seen := map[string]bool{}
-		for r in sig_routes {
+		for r in rx_routes {
 			frof := snake(r.from_frame)
 			if frof in src_key_seen || frof in rx_by_msg {
 				continue

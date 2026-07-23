@@ -314,11 +314,30 @@ mut:
 //   - a SIGNAL route is the sanctioned crossing: its decoded physical value (one f64) rides an
 //     IOC channel between the two comm owners — cfg2v allocates it (xr_*_ch), the source bridge
 //     publishes on rx, the destination bridge acquires and composes/sends on ITS own channel.
-fn validate_route_cores(routes []Route, bus_core map[string]int) []Route {
+fn validate_route_cores(routes []Route, bus_core map[string]int, bus_kind map[string]string) []Route {
 	if msg := route_cores_error(routes, bus_core) {
 		panic(msg)
 	}
+	if msg := route_kinds_error(routes, bus_kind) {
+		panic(msg)
+	}
 	return routes
+}
+
+// route_kinds_error: routes are CAN machinery on BOTH ends. Same-core this was already
+// enforced; the crossing must enforce it too, because the bridges skip eth buses entirely —
+// an accepted eth-touching crossing would publish into a channel nobody acquires (CAN->eth)
+// or emit a producer whose channel is never published (eth->CAN): silently dead traffic
+// (codex #200). Pure and panic-free for routes_test.v.
+fn route_kinds_error(routes []Route, bus_kind map[string]string) ?string {
+	for r in routes {
+		if (bus_kind[r.from_bus] or { '' }) == 'eth' || (bus_kind[r.to_bus] or { '' }) == 'eth' {
+			what := if r.signal != '' { 'signal "' + r.signal + '"' } else { 'frame "' + r.from_frame + '"' }
+			return 'route: ${what} touches an eth bus (${r.from_bus} -> ${r.to_bus}) — routes are ' +
+				'CAN machinery; a SOME/IP event is declared as a [[signal]] on the eth bus, not routed'
+		}
+	}
+	return none
 }
 
 // route_cores_error returns the first cross-core violation as a message, or none — pure and
@@ -1071,7 +1090,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		someip:       parse_someip(doc)
 		eth_frames:   parse_eth_frames(doc, eth, sig_of)
 		frames:       parse_frames(doc, eth, buses)
-		routes:       validate_route_cores(parse_routes(doc, dbc), bus_core)
+		routes:       validate_route_cores(parse_routes(doc, dbc), bus_core, bus_kind)
 		isotp_conns:  parse_isotp(doc)
 		dids:         parse_dids(doc)
 		part:         part

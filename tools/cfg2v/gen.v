@@ -76,8 +76,17 @@ fn main() {
 		}
 		tf := (tm['frame'] or { toml.Any('') }).string()
 		b << 'pub const xr_${snake(tb)}_${snake(tf)}_${snake(sig)}_ch = ${chcount}'
-		transports << transport_variant('double')
+		// triple, not double: an rx burst (source cadence < the 10 ms bridge tick) laps the
+		// consumer, and the double buffer tears exactly then; the triple buffer's exchange
+		// hands over whole-buffer ownership, tear-free at any rate (codex #200).
+		transports << transport_variant('triple')
 		chcount++
+	}
+	// The host pools are fixed (osal_native.c: 256 slots per variant). Past that, publishes
+	// are silently range-rejected — a large config would build green and lose signals at
+	// runtime. Fail generation instead (codex #200).
+	if chcount > 256 {
+		panic('cfg2v: ${chcount} IOC channels exceed the host pool (256 slots, osal_native.c) — split the config or grow the pool deliberately')
 	}
 	b << 'pub const ioc_channel_count = ${chcount}'
 	b << ''
