@@ -188,12 +188,19 @@ fn duo_trace_poll(m Model) []string {
 		return []string{}
 	}
 	return [
-		'\t\tif duo_trc_wait && C.duo_trace_ready() != 0 {',
+		'\t\t// latch t3 EVERY tick: duo_trace_ready() stamps t3 on the pass that first sees the',
+		'\t\t// ack. Gating it behind duo_trc_wait meant a Stop acked at T got its t3 at the LATER',
+		'\t\t// dump press — a 50 ms gap biases the midpoint ~25 ms (codex #186). The call is two',
+		'\t\t// volatile reads when idle.',
+		'\t\tif C.duo_trace_ready() != 0 && duo_trc_wait {',
 		'\t\t\t// The exchange we just completed IS the clock measurement — take it BEFORE',
 		'\t\t\t// load_remote, which prepends it to the satellite block so the host can put',
 		'\t\t\t// both cores on one timeline (REQ-TRACE-011).',
-		'\t\t\tif C.duo_trace_offset(&duo_trc_off, &duo_trc_bound) != 0 {',
-		'\t\t\t\tg_tm.set_core_offset(duo_trc_off, u16(if duo_trc_bound > 0xffff { u32(0xffff) } else { duo_trc_bound }))',
+		'\t\t\t// bound past the u16 wire field (a debugger pause, a >131 ms round trip): OMIT the',
+		'\t\t\t// correlation — clamping would understate the error and make a bad alignment look',
+		'\t\t\t// trustworthy (codex #186). Unmeasured stays visibly unmeasured.',
+		'\t\t\tif C.duo_trace_offset(&duo_trc_off, &duo_trc_bound) != 0 && duo_trc_bound <= 0xffff {',
+		'\t\t\t\tg_tm.set_core_offset(duo_trc_off, u16(duo_trc_bound))',
 		'\t\t\t}',
 		'\t\t\tg_tm.load_remote(C.duo_trace_buf(), C.duo_trace_count())',
 		'\t\t\tduo_trc_wait = false',

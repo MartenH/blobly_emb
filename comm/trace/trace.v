@@ -480,8 +480,21 @@ pub fn (t TraceBuffer) pack_chunk(out &u8, out_cap int, core u8, from u32) (int,
 			has_skew = true
 		}
 	}
-	// header + epoch (+ re-stated offset) + at least one record
-	if out_cap < if has_skew { 32 } else { 24 } {
+	// Minimum = header + epoch + one record (24), PLUS the re-stated offset (32) when the
+	// WINDOW is correlated — decided from the window itself, not from `from`, so it is the
+	// SAME for every call. The old per-call variant deadlocked a correlated window at
+	// out_cap 24: block 1 shipped the skew record, the second call replayed it, needed 32,
+	// and returned (0, from, false) forever — records dropped, receiver hung after a
+	// more=1 block (codex #186). Now a too-small cap refuses on the FIRST call, before any
+	// partial stream exists; uncorrelated windows keep the 24-byte truncation contract.
+	mut window_has_skew := false
+	for i in 0 .. t.used {
+		if t.record_at(i).is_core_offset() {
+			window_has_skew = true
+			break
+		}
+	}
+	if out_cap < if window_has_skew { 32 } else { 24 } {
 		return 0, from, false
 	}
 	mut n := 8 // reserve the header slot; backfill once the count is known

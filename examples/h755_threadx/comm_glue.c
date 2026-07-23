@@ -207,7 +207,16 @@ int duo_trace_offset(int32_t *off_us, uint32_t *bound_us) {
         return 0;
     uint32_t rtt = g_trc_t3 - g_trc_t1;
     uint32_t mid = g_trc_t1 + rtt / 2u; /* our clock at the satellite's best-estimate stamp */
-    *off_us = (int32_t)(c[DUO_TRC_SVC_IDX] - mid);
+    uint32_t raw = c[DUO_TRC_SVC_IDX] - mid; /* modular u32 difference */
+    /* A satellite restart once the owner has run past ~35.8 min makes the TRUE offset
+     * overflow int32; the modular cast would then wrap by 2^32 us and place the core
+     * ~71 min away while LOOKING correlated. No real release skew is anywhere near the
+     * guard band, so out-of-band = refuse the correlation (the host shows "not measured"
+     * rather than a confident lie) — codex #186. */
+    if (raw > 0x40000000u && raw < 0xC0000000u) { /* |offset| > ~17.9 min */
+        return 0;
+    }
+    *off_us = (int32_t)raw;
     *bound_us = rtt / 2u;
     return 1;
 }
