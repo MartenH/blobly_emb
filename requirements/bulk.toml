@@ -1,0 +1,31 @@
+# Bulk transport (BULK): payloads that must arrive whole, moved by REFERENCE through a
+# pre-allocated pool + ownership-transferring descriptor ring (docs/bulk-transport.md).
+# P1 is the portable core in boards/common/bulk.h, proven on the host (threads + fork/
+# mmap); the board doorbell/cache seams and the config/codegen surface come later.
+
+[[req]]
+id = "REQ-BULK-001"
+title = "Bulk crosses by reference"
+text = "A bulk payload shall cross an execution boundary (thread, core, process) without being copied through a channel: the producer shall write the payload in place into a transport-owned buffer and transfer ownership via a descriptor, and the consumer shall read the same buffer and return it. Delivery shall be in publish order, and a consumed payload shall be exactly one produced payload, never a blend of two."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-MC-001"
+
+[[req]]
+id = "REQ-BULK-002"
+title = "Loan is fallible; exhaustion is observable"
+text = "The producer shall obtain buffers only by loan from a pool fixed at build time. When the pool is exhausted, loan shall return a failure value — it shall not block, fault, or reuse a buffer the consumer still owns — and the transport shall count the failed loans so back-pressure loss is observable, never silent."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-RES-001"
+
+[[req]]
+id = "REQ-BULK-003"
+title = "Plain-store cross-core discipline"
+text = "The bulk descriptor rings shall use only single-copy-atomic aligned 32-bit loads/stores and ordering barriers — no exclusive (LDREX/STREX-class) accesses — so the mechanism is sound between sides whose exclusive monitors do not arbitrate (cores, DMA engines, processes over shared memory)."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-MC-001"
