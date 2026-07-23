@@ -26,6 +26,7 @@ module main
 fn C.bulk_init(b voidptr, nbuf u32, bufsz u32)
 fn C.bulk_valid(b voidptr) int
 fn C.bulk_loan(b voidptr) int
+fn C.bulk_overflows(b voidptr) u32
 fn C.bulk_buf(b voidptr, idx u32) &u8
 fn C.bulk_publish(b voidptr, idx u32, len u32)
 fn C.bulk_ready(b voidptr) u32
@@ -44,8 +45,14 @@ const words = int(bufsz / 4)
 const region_bytes = usize(8192) // > BULK_BYTES(4, 256) = 96 + 32 + 1024
 
 __global (
-	g_region [8192]u8
+	g_region [8256]u8 // 8192 + 63 slack: region() rounds the base to the 32 B alignment
+	// bulk_t requires (a byte arena guarantees none — codex #213)
 )
+
+fn region() voidptr {
+	base := (usize(voidptr(&g_region[0])) + 31) & ~usize(31)
+	return voidptr(base)
+}
 
 fn fill(b voidptr, idx u32, seq u32) {
 	mut p := unsafe { &u32(C.bulk_buf(b, idx)) }
@@ -69,9 +76,10 @@ fn check(b voidptr, idx u32, len u32) u32 {
 }
 
 fn test_fifo_exhaustion_and_recycle() {
-	b := voidptr(&g_region[0])
+	b := region()
 	C.bulk_init(b, nbuf, bufsz)
 	assert C.bulk_valid(b) == 1
+	assert C.bulk_overflows(b) == 0
 
 	// loan the WHOLE pool, publish in order
 	mut loaned := []int{}
@@ -81,9 +89,11 @@ fn test_fifo_exhaustion_and_recycle() {
 		fill(b, u32(idx), u32(1000 + s * 100))
 		loaned << idx
 	}
-	// pool exhausted: loan fails and is COUNTED, nothing blocks, nothing is reused
+	// pool exhausted: loan fails and every failure is COUNTED (REQ-BULK-002 is the
+	// counter, not just the -1 — a green test must notice a broken increment)
 	assert C.bulk_loan(b) == -1
 	assert C.bulk_loan(b) == -1
+	assert C.bulk_overflows(b) == 2
 	for s, idx in loaned {
 		C.bulk_publish(b, u32(idx), bufsz)
 		assert C.bulk_ready(b) == u32(s + 1)
@@ -96,13 +106,18 @@ fn test_fifo_exhaustion_and_recycle() {
 		assert check(b, u32(idx), len) == u32(1000 + s * 100)
 		C.bulk_release(b, u32(idx))
 	}
-	assert C.bulk_take(b, unsafe { &u32(0) }) == -1 || true // drained (no crash path)
 	mut l := u32(0)
 	assert C.bulk_take(b, &l) == -1
-	// released buffers loan again — the pool recycles
+	// released buffers loan again — the pool recycles. The loaned buffer stays the
+	// producer's (publish-or-keep; a producer never calls release — its cursor is
+	// consumer-owned, codex #213), so the pool now has nbuf-1 loanable buffers.
 	idx2 := C.bulk_loan(b)
 	assert idx2 >= 0
-	C.bulk_release(b, u32(idx2)) // not published: returning a loan is the producer's drop path
+	fill(b, u32(idx2), 9000)
+	C.bulk_publish(b, u32(idx2), bufsz)
+	idx3 := C.bulk_take(b, &l)
+	assert idx3 == idx2 && check(b, u32(idx3), l) == 9000
+	C.bulk_release(b, u32(idx3))
 }
 
 const t_payloads = u32(50_000)
@@ -121,7 +136,7 @@ fn producer(b voidptr) {
 }
 
 fn test_cross_thread_every_payload_complete_and_ordered() {
-	b := voidptr(&g_region[0])
+	b := region()
 	C.bulk_init(b, nbuf, bufsz)
 	t := spawn producer(b)
 
