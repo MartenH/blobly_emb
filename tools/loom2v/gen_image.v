@@ -58,17 +58,25 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		g << 'fn C.duo_wait_clocks() // park until the owner signals clocks-ready (duo.h)'
 		g << 'fn C.board_timebase_init()'
 		g << 'fn C.duo_ioc_init() // the shared xioc pool (satellite is the writer side)'
-		if m.duo_names.len > 0 {
-			g << 'fn C.duo_layout_publish() // layout-id handshake: owner polls nothing until this'
-		}
-		g << 'fn C.duo_pub(int, u32, u32) // xioc writer — slots from gen/duo_gen.h'
+		// THIS partition's production decides the handshake role: only the PRODUCING
+		// satellite publishes the layout id — a non-producing image writing the cell
+		// would be a second writer, and could restore the id while the real producer
+		// is stopped, opening polling onto retained payloads (codex #211 r11).
+		mut produces := false
 		mut wide_writes := []string{}
 		for sname in m.duo_names {
 			si := m.sig_of[sname] or { continue }
-			if si.from == part && si.wide {
-				wide_writes << sname
+			if si.from == part {
+				produces = true
+				if si.wide {
+					wide_writes << sname
+				}
 			}
 		}
+		if produces {
+			g << 'fn C.duo_layout_publish() // layout-id handshake: owner polls nothing until this'
+		}
+		g << 'fn C.duo_pub(int, u32, u32) // xioc writer — slots from gen/duo_gen.h'
 		if wide_writes.len > 0 {
 			g << 'fn C.duo_xw_init(u32, u32) // wide xioc_n channel init (writer side, boot)'
 			g << 'fn C.duo_pub_n(u32, &u32) // wide xioc_n writer — offsets from gen/duo_gen.h'
@@ -124,7 +132,7 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 			if ti == 0 && m.trace.on {
 				g << '\t\tC.duo_trace_service() // ~one poll per tick: plenty for the dump handshake'
 			}
-			if ti == 0 && m.duo_names.len > 0 {
+			if ti == 0 && produces {
 				g << '\t\tC.duo_layout_publish() // REPUBLISH per tick: the owner retracts the id at ITS'
 				g << '\t\t// boot (SRAM survives an owner-only reset — a retained id + retained channels'
 				g << '\t\t// would replay one stale frame); a live satellite restores it within a tick'
@@ -161,7 +169,7 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 			si := m.sig_of[sname] or { continue }
 			g << '\tC.duo_xw_init(u32(${m.duo_xw_off[sname] or { 0 }}), u32(${si.fields.len})) // ${sname}'
 		}
-		if m.duo_names.len > 0 {
+		if produces {
 			g << '\tC.duo_layout_publish() // AFTER every channel init: the owner may poll now'
 		}
 		if m.trace.on {
