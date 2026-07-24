@@ -44,19 +44,90 @@ fn duo_gen_h(m Model) []string {
 	g << ' * duo_pub(DUO_SLOT_<NAME>, ...); the bus owner polls the same slots). */'
 	g << '#ifndef BLOBLY_DUO_GEN_H'
 	g << '#define BLOBLY_DUO_GEN_H'
+	mut pairs := 0
 	for sname in m.duo_names {
+		si := m.sig_of[sname] or { continue }
+		if si.wide {
+			continue
+		}
 		g << '#define DUO_SLOT_${snake(sname).to_upper()} ${m.duo_idx[sname] or { 0 }}'
+		pairs++
 	}
-	g << '#define DUO_GEN_SLOTS ${m.duo_names.len}'
+	g << '#define DUO_GEN_SLOTS ${pairs}'
+	g << '/* the layout id: an FNV-1a hash of the WHOLE slot/offset/schema map. The'
+	g << ' * satellite acks it against the owner boot nonce (duo.h REQ/ACK cells) after'
+	g << ' * init; the owner polls nothing until the ack matches — two images from'
+	g << ' * different generator runs never exchange slots. */'
+	g << '#define DUO_LAYOUT_ID 0x${duo_layout_id(m).hex()}u'
+	if m.duo_xw_total > 0 {
+		g << '/* wide (xioc_n) channels: byte offsets inside the board window (duo.h DUO_XW_ADDR);'
+		g << ' * words = u32 lanes, one per field. The satellite inits + writes, the owner polls. */'
+		for sname in m.duo_names {
+			si := m.sig_of[sname] or { continue }
+			if !si.wide {
+				continue
+			}
+			u := snake(sname).to_upper()
+			g << '#define DUO_XW_${u}_OFF ${m.duo_xw_off[sname] or { 0 }}u'
+			g << '#define DUO_XW_${u}_WORDS ${si.fields.len}u'
+		}
+		g << '#define DUO_XW_TOTAL ${m.duo_xw_total}u'
+		g << '#if defined(DUO_XW_MAX) && (DUO_XW_TOTAL > DUO_XW_MAX)'
+		g << '#error "wide xioc channels overflow the board window — grow DUO_XW_MAX (duo.h) or shed signals"'
+		g << '#endif'
+	}
 	g << '#endif'
 	return g
+}
+
+// duo_wide_on: any wide (xioc_n) remote signals in the model.
+fn duo_wide_on(m Model) bool {
+	return m.duo_xw_total > 0
+}
+
+// duo_layout_id hashes the complete cross-core map — pair slots, wide offsets, lane
+// counts, in declaration order — so ANY layout difference between two generator runs
+// (a renumbered slot after a signal changed shape, a moved or resized wide channel)
+// yields a different id. FNV-1a over the canonical map string.
+fn duo_layout_id(m Model) u32 {
+	mut desc := ''
+	for sname in m.duo_names {
+		si := m.sig_of[sname] or { continue }
+		// the ORDERED field schema is part of the contract: same name + same lane count
+		// with reordered/renamed/retyped fields would otherwise hash identically and a
+		// stale image would misinterpret lanes instead of going quiet (codex #211 r6)
+		mut fs := ''
+		for f in si.fields {
+			fs += '${f.name}=${f.typ},'
+		}
+		if si.wide {
+			desc += '${sname}:xw+${m.duo_xw_off[sname] or { 0 }}:${si.fields.len}[${fs}]|'
+		} else {
+			desc += '${sname}:${m.duo_idx[sname] or { 0 }}[${fs}]|'
+		}
+	}
+	mut h := u32(2166136261)
+	for b in desc.bytes() {
+		h = (h ^ u32(b)) * 16777619
+	}
+	if h == 0 {
+		// 0 is the RETRACTION sentinel duo_clocks_ready writes: a schema hashing to 0
+		// would open polling before the satellite ever published (codex #211 r9)
+		h = 0x4C594F31 // 'LYO1'
+	}
+	return h
 }
 
 fn duo_c_decls(m Model) []string {
 	if !duo_on(m) {
 		return []string{}
 	}
-	return ['fn C.duo_poll(int, &u32, &u32) int // xioc reader (comm_glue.c): 1 = fresh value']
+	mut g := ['fn C.duo_poll(int, &u32, &u32) int // xioc reader (comm_glue.c): 1 = fresh value']
+	g << 'fn C.duo_layout_ok() int // layout-id handshake: 0 = satellite absent or a DIFFERENT build'
+	if duo_wide_on(m) {
+		g << 'fn C.duo_poll_n(u32, u32, &u32, &u32) int // wide xioc_n reader: (window off, OUR lane count, &rd seq, &lanes[0]) — a mismatched writer reads as never-fresh'
+	}
+	return g
 }
 
 // duo_comm_locals: per-frame-bound-signal pacing state in the comm thread.
@@ -69,8 +140,15 @@ fn duo_comm_locals(m Model) []string {
 		si := m.sig_of[sname] or { continue }
 		if si.external {
 			g << '\tmut duo_${snake(sname)}_last := u64(0)'
-			g << '\tmut duo_${snake(sname)}_a := u32(0)'
-			g << '\tmut duo_${snake(sname)}_b := u32(0)'
+			if si.wide {
+				// wide reader state: the seq + lane buffer duo_poll_n commits into
+				// (last-good retention — on a stale poll the lanes stay untouched)
+				g << '\tmut duo_${snake(sname)}_seq := u32(0)'
+				g << '\tmut duo_${snake(sname)}_lanes := [${si.fields.len}]u32{}'
+			} else {
+				g << '\tmut duo_${snake(sname)}_a := u32(0)'
+				g << '\tmut duo_${snake(sname)}_b := u32(0)'
+			}
 		}
 	}
 	if g.len > 0 {
@@ -92,17 +170,40 @@ fn duo_produce_drain(m Model) []string {
 		if !si.external {
 			continue // slot-only (satellite -> local partition): no CAN tx
 		}
-		slot := m.duo_idx[sname] or { 0 }
 		mut cyc := m.frames.tx_cycle_us[si.dbc_msg] or { 0 }
 		if cyc <= 0 {
 			cyc = 100000 // default cyclic 100 ms if no [[frame]].tx.cycle_ms
 		}
 		n := snake(sname)
-		// the NM gate comes FIRST: duo_poll consumes the slot's freshness, so a
-		// poll during sleep would eat a value that then never transmits after
-		// wake (codex on emb#135) — short-circuit keeps it unconsumed.
-		g << '\t\tif ${nm_gate(m)}C.duo_poll(${slot}, &duo_${n}_a, &duo_${n}_b) != 0'
-		g << '\t\t\t&& t1 - duo_${n}_last >= u64(${cyc}) && ch.tx_ready() {' // REQ-COM-007
+		// ORDER MATTERS, twice over: the poll consumes the slot's freshness, so
+		// every OTHER gate must fail first. NM sleep (emb#135) and now pacing +
+		// tx_ready too (codex #211 r3) — polling first ate a fresh value that
+		// arrived off-cycle or under backpressure, and with no later publish it
+		// never transmitted. Short-circuit keeps it unconsumed until eligible.
+		if si.wide {
+			// wide (xioc_n): the poll commits the lanes as a unit; the lean encode packs
+			// each u32 lane LE at byte 4*lane — same contract the pair path had, generalized
+			// (DLC == 4 * lanes is validated in the comm-thread walk; > 8 needs FD and the
+			// classic comm thread rejects it there, loudly).
+			off := m.duo_xw_off[sname] or { 0 }
+			g << '\t\tif ${nm_gate(m)}C.duo_layout_ok() != 0 && t1 - duo_${n}_last >= u64(${cyc}) && ch.tx_ready()'
+			g << '\t\t\t&& C.duo_poll_n(u32(${off}), ${si.fields.len}, &duo_${n}_seq, &duo_${n}_lanes[0]) != 0 {' // REQ-COM-007
+			g << '\t\t\tduo_txf.id = u32(0x${si.dbc_id.hex()})'
+			g << '\t\t\tduo_txf.len = ${si.dbc_dlc}'
+			for j in 0 .. si.fields.len {
+				g << '\t\t\tduo_txf.data[${j * 4}] = u8(duo_${n}_lanes[${j}])'
+				g << '\t\t\tduo_txf.data[${j * 4 + 1}] = u8(duo_${n}_lanes[${j}] >> 8)'
+				g << '\t\t\tduo_txf.data[${j * 4 + 2}] = u8(duo_${n}_lanes[${j}] >> 16)'
+				g << '\t\t\tduo_txf.data[${j * 4 + 3}] = u8(duo_${n}_lanes[${j}] >> 24)'
+			}
+			g << '\t\t\tch.send(duo_txf)'
+			g << '\t\t\tduo_${n}_last = t1'
+			g << '\t\t}'
+			continue
+		}
+		slot := m.duo_idx[sname] or { 0 }
+		g << '\t\tif ${nm_gate(m)}C.duo_layout_ok() != 0 && t1 - duo_${n}_last >= u64(${cyc}) && ch.tx_ready()'
+		g << '\t\t\t&& C.duo_poll(${slot}, &duo_${n}_a, &duo_${n}_b) != 0 {' // REQ-COM-007
 		g << '\t\t\tduo_txf.id = u32(0x${si.dbc_id.hex()})'
 		g << '\t\t\tduo_txf.len = ${si.dbc_dlc}'
 		g << '\t\t\tduo_txf.data[0] = u8(duo_${n}_a)'
@@ -214,11 +315,16 @@ fn duo_manifest(m Model) []string {
 	if !duo_on(m) {
 		return []string{}
 	}
-	mut g := ['# duo signals: name,slot,frame']
+	mut g := ['# duo signals: name,slot,frame  (slot: pair index, or xw+<byte offset> for wide)']
 	for sname in m.duo_names {
 		si := m.sig_of[sname] or { continue }
 		fr := if si.external { '0x${si.dbc_id.hex()}' } else { '-' }
-		g << '${sname},${m.duo_idx[sname] or { 0 }},${fr}'
+		slot := if si.wide {
+			'xw+${m.duo_xw_off[sname] or { 0 }}'
+		} else {
+			(m.duo_idx[sname] or { 0 }).str()
+		}
+		g << '${sname},${slot},${fr}'
 	}
 	return g
 }

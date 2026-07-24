@@ -142,15 +142,69 @@ int shell_bmc(unsigned char *out, int cap) {
 }
 
 /* duo_clocks_ready — the boot handshake's CM7 half: written once after board_clock_init,
- * releasing the parked CM4 (its SysTick assumes the final 200 MHz HCLK). */
+ * releasing the parked CM4 (its SysTick assumes the final 200 MHz HCLK).
+ *
+ * The wide window is zeroed FIRST: the comm thread may poll a wide channel before the
+ * satellite's boot has run duo_xw_init, and an uninitialized SRAM `words` field would
+ * otherwise be trusted as a copy bound (codex #211). Zeroed, every pre-init poll reads
+ * latest == 0 -> "nothing published" — and xioc_n_read additionally clamps the bound.
+ * Config-independent: the whole DUO_XW_MAX window, not the generated layout. */
+static uint32_t g_layout_req; /* this owner boot's nonce (we also own the REQ cell) */
+
 void duo_clocks_ready(void) {
+    /* The owner NEVER touches the wide window — channel init is exclusively the
+     * WRITER's (satellite) job, and the layout handshake is the owner's barrier
+     * (codex #211 r5-r7). The handshake is two SPSC cells (duo.h): the owner bumps
+     * its RETAINED req nonce here — one writer, this core — which instantly stales
+     * every previous acknowledgement; a live same-build satellite re-acks within
+     * ~one service tick, a stale or stopped one never does. */
+    g_layout_req = (*(volatile uint32_t *)DUO_LAYOUT_REQ_ADDR + 1u) | 1u;
+    *(volatile uint32_t *)DUO_LAYOUT_REQ_ADDR = g_layout_req;
+    __asm__ volatile("dsb");
     *(volatile uint32_t *)DUO_CLK_ADDR = DUO_CLK_MAGIC;
     __asm__ volatile("dsb");
 }
 
+
 #include "xioc.h"
 #include "duo_gen.h" /* generated: the cross-core slot contract (gen/duo_gen.h) */
 #define DUO_POOL ((xioc_t *)DUO_IOC_ADDR)
+/* duo_layout_ok — the cross-image layout handshake: the satellite publishes the
+ * generated DUO_LAYOUT_ID (a hash of the whole slot/offset map) after initializing its
+ * channels; the owner polls nothing until the ids MATCH. A stale satellite image — any
+ * renumbered pair slot, moved wide offset, or resized channel — presents the wrong id
+ * and every remote signal reads as never-fresh, instead of slot cross-talk transmitting
+ * signal A's data as signal B (codex #211 r5). */
+/* ack encoding shared with the satellite: req ^ id, with 0 remapped — a (req, id) pair
+ * XORing to exactly 0 would equal the retraction sentinel and read absent-satellite as
+ * acked (codex #211 r16) */
+static uint32_t layout_ack_encode(uint32_t req) {
+    uint32_t a = req ^ DUO_LAYOUT_ID;
+    return a != 0u ? a : 0x4C594F31u; /* 'LYO1' */
+}
+
+int duo_layout_ok(void) {
+    if (*(volatile uint32_t *)DUO_LAYOUT_ACK_ADDR != layout_ack_encode(g_layout_req)) {
+        return 0; /* not acked for THIS owner boot + THIS build's layout */
+    }
+    /* acquire: pairs with the satellite's release dmb in duo_layout_publish — without
+     * this the channel loads that follow a match could be satisfied ahead of the flag
+     * read and observe pre-init state (codex #211 r6) */
+    __asm__ volatile("dmb" ::: "memory");
+    return 1;
+}
+
+
+/* duo_poll_n — the wide-channel (xioc_n) reader: rd_seq/dst are the CALLER's per-signal
+ * state (the generated comm loop declares one seq + lane buffer per wide signal), so this
+ * stays stateless — any number of wide channels, no static table to size. `words` is the
+ * READER's build-time lane count: a channel whose shared geometry disagrees (a stale
+ * satellite image after a partial reflash) reads as never-fresh instead of overrunning
+ * the lane buffer (codex #211 r2). 1 = dst now holds a newer complete value; on 0 dst
+ * is untouched (last-good retention). */
+int duo_poll_n(uint32_t off, uint32_t words, uint32_t *rd_seq, uint32_t *dst) {
+	return xioc_n_read((xioc_n_t *)(DUO_XW_ADDR + off), rd_seq, dst, words);
+}
 
 /* dtrace: the M7 half of the two-core trace handoff (duo.h). Single writer per field:
  * we own req_seq/op, the satellite owns ack_seq/count and the snapshot buffer.
@@ -249,7 +303,18 @@ int duo_poll(int i, uint32_t *a, uint32_t *b) {
 /* shell_m4sig — the `m4sig` command: the M4 FB's signal off cross-core IOC slot 0.
  * ioc_read is the reader half of the same triple buffer the M4 writes: wait-free,
  * latest-complete-value. n advances 100/s while the M4's 10 ms handler runs. */
+static char *duo_str(char *p, char *end, const char *s2) {
+    while (*s2 && p < end) *p++ = *s2++;
+    return p;
+}
 int shell_m4sig(unsigned char *out, int cap) {
+    if (!duo_layout_ok()) {
+        /* the slots may belong to a DIFFERENT build's map — reporting them would show
+         * another signal's payload as ours (codex #211 r7) */
+        return (int)(duo_str((char *)out, (char *)out + cap,
+                             "cross-core layout not established (satellite absent or stale build)\n")
+                     - (char *)out);
+    }
     char *p = (char *)out, *end = (char *)out + cap;
     static xioc_rd_t rd; /* reader state is reader-private (comm thread only) */
     xioc_read(&DUO_POOL[DUO_SLOT_M4_COUNT], &rd);
@@ -267,6 +332,11 @@ int shell_m4sig(unsigned char *out, int cap) {
  * exactly) and no time travel (a never decreases). The max-rate tear harness that
  * condemned cross-core LDREX/STREX lived here before the emitter (emb#110). */
 int shell_iocx(unsigned char *out, int cap) {
+    if (!duo_layout_ok()) {
+        return (int)(duo_str((char *)out, (char *)out + cap,
+                             "cross-core layout not established (satellite absent or stale build)\n")
+                     - (char *)out);
+    }
     char *p = (char *)out, *end = (char *)out + cap;
     uint32_t reads = 200000u, tears = 0u, regress = 0u, advances = 0u;
     uint32_t prev = 0u;

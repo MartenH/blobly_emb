@@ -35,6 +35,18 @@
 
 #define DUO_HB_ADDR    0x38000000u
 #define DUO_CLK_ADDR   0x38000008u
+/* The layout handshake is TWO SPSC cells — one writer each, per the transport's own
+ * hard invariant (a single shared cell had both cores writing it — codex #211 r15):
+ *   REQ (owner-owned):  a retained per-owner-boot nonce; a new owner boot bumps it,
+ *                       instantly invalidating every previous acknowledgement.
+ *   ACK (sat-owned):    req ^ DUO_LAYOUT_ID (gen/duo_gen.h), recomputed every service
+ *                       tick and ZEROED first thing at satellite boot, so polls stop
+ *                       while channels re-init. Owner polls nothing until ACK matches. */
+#define DUO_LAYOUT_REQ_ADDR 0x38000010u
+#define DUO_LAYOUT_ACK_ADDR 0x38000014u
+#define DUO_EPOCH_ADDR      0x38000018u /* retained satellite boot-epoch: bumped once per
+                                         * boot (SRAM4 survives resets) -> restart-unique
+                                         * wide-channel sequence seeds (DWT restarts at 0) */
 #define DUO_IOC_ADDR   0x38000020u
 #define DUO_IOC_N      4
 
@@ -44,6 +56,13 @@
 #define DUO_TRC_MAX_REC  256u /* = the satellite recorder's RING_CAP */
 #define DUO_TRC_OP_ARM   1u
 #define DUO_TRC_OP_SNAP  2u
+
+/* Wide xioc_n channels (remote signals past the {a,b} pair cell — REQ-INV-006): the
+ * generator lays out per-signal offsets inside this window (gen/duo_gen.h
+ * DUO_XW_<SIG>_OFF, 32 B-aligned) and static-checks the budget against DUO_XW_MAX.
+ * 0x38001000 clears the dtrace record buffer (0x38000220 + 256*8 = 0x38000A20). */
+#define DUO_XW_ADDR 0x38001000u
+#define DUO_XW_MAX  0x1000u
 
 /* Slot assignments are GENERATED — gen/duo_gen.h (loom2v [duo]) is the one source; both
  * images compile against it. Only the pool geometry lives here. */

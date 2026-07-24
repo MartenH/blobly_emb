@@ -83,6 +83,7 @@ fn C.shell_m4sig(&u8, int) int
 fn C.shell_iocx(&u8, int) int
 fn C.shell_boot(&u8, int) int
 fn C.duo_poll(int, &u32, &u32) int // xioc reader (comm_glue.c): 1 = fresh value
+fn C.duo_layout_ok() int // layout-id handshake: 0 = satellite absent or a DIFFERENT build
 // [nvm]: the journal storage map + flash driver (boards layer / example glue)
 fn C.nvm_map_a() u32
 fn C.nvm_map_b() u32
@@ -477,8 +478,8 @@ fn comm_thread_entry(input u32) {
 			g_tm.load_remote(C.duo_trace_buf(), C.duo_trace_count())
 			duo_trc_wait = false
 		}
-		if nm_up && C.duo_poll(0, &duo_m4_count_a, &duo_m4_count_b) != 0
-			&& t1 - duo_m4_count_last >= u64(100000) && ch.tx_ready() {
+		if nm_up && C.duo_layout_ok() != 0 && t1 - duo_m4_count_last >= u64(100000) && ch.tx_ready()
+			&& C.duo_poll(0, &duo_m4_count_a, &duo_m4_count_b) != 0 {
 			duo_txf.id = u32(0x201)
 			duo_txf.len = 8
 			duo_txf.data[0] = u8(duo_m4_count_a)

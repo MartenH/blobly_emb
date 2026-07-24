@@ -59,6 +59,60 @@ void duo_pub(int i, uint32_t a, uint32_t b) {
 	}
 }
 
+/* --- wide channels (xioc_n) ------------------------------------------------------------
+ * Signals past the {a,b} pair (3+ fields, sub-u32 types, or `valid`) ride size-
+ * proportional xioc_n channels in the DUO_XW window; per-signal offsets are generated
+ * (gen/duo_gen.h DUO_XW_<SIG>_OFF) and the generated boot inits each channel this image
+ * writes. Same plain-store discipline as the pair pool. */
+static uint32_t g_boot_seed; /* set by duo_layout_retract, boot's first act */
+
+void duo_xw_init(uint32_t off, uint32_t words) {
+	/* seq space seeded per BOOT from the retained epoch (set in duo_layout_retract,
+	 * which boot runs first): a reader preempted across our restart can never meet a
+	 * colliding sequence number from the new boot (codex #211 r13/r14) */
+	xioc_n_init((xioc_n_t *)(DUO_XW_ADDR + off), words, g_boot_seed);
+}
+
+void duo_pub_n(uint32_t off, const uint32_t *src) {
+	xioc_n_write((xioc_n_t *)(DUO_XW_ADDR + off), src);
+}
+
+/* duo_layout_retract — the satellite's FIRST act at boot, before any channel init:
+ * on a satellite-only restart beside a live owner, the retained (same-build) id would
+ * otherwise keep polling open while init clears slots and restarts wseq under the
+ * reader — an ABA window (codex #211 r12). Retract, init, then publish. The owner's
+ * per-signal read state may skip exactly one post-restart publish (rd_seq == 1
+ * collision); latest-value semantics self-heal at the producer's next cadence. */
+void duo_layout_retract(void) {
+	/* our HALF of the two-cell handshake: zero the ACK (our cell, one writer — the
+	 * owner's REQ cell is never ours to touch, codex #211 r15) so polling stops
+	 * before any channel re-init. */
+	*(volatile uint32_t *)DUO_LAYOUT_ACK_ADDR = 0u;
+	/* restart-UNIQUE epoch: SRAM4 retains the counter across resets, so ++ gives every
+	 * boot a distinct value (cold-boot garbage is as good as random) — the DWT clock
+	 * restarts at 0 each boot and could repeat (codex #211 r14). Knuth-mixed so
+	 * consecutive epochs land far apart in the sequence space; |1 avoids the 0 sentinel. */
+	uint32_t e = *(volatile uint32_t *)DUO_EPOCH_ADDR + 1u;
+	*(volatile uint32_t *)DUO_EPOCH_ADDR = e;
+	g_boot_seed = (e * 2654435761u) | 1u;
+	__asm__ volatile("dmb" ::: "memory");
+}
+
+/* duo_layout_publish — the satellite's half of the layout handshake: after every
+ * channel this image writes is initialized, publish the generated layout id; the owner
+ * refuses all remote signals until it matches (stale-image protection, codex #211 r5). */
+void duo_layout_publish(void) {
+	__asm__ volatile("dmb" ::: "memory"); /* channel inits land before the ack */
+	/* ack = the owner's CURRENT req nonce bound to OUR build's layout id: a new owner
+	 * boot (new req) is re-acked on the next tick; a stale-build satellite acks a
+	 * value the owner never accepts. One reader of req, one writer of ack. */
+	uint32_t req = *(volatile uint32_t *)DUO_LAYOUT_REQ_ADDR;
+	uint32_t ack = req ^ DUO_LAYOUT_ID;
+	if (ack == 0u) ack = 0x4C594F31u; /* 'LYO1' — never the retraction sentinel (r16) */
+	*(volatile uint32_t *)DUO_LAYOUT_ACK_ADDR = ack;
+	__asm__ volatile("dmb" ::: "memory");
+}
+
 /* --- dtrace: the two-core trace handoff (duo.h) -----------------------------------------
  * The recorder itself is trace_hooks.c (exec-change + FB hooks into this core's OWN ring,
  * DWT-timestamped). The bus owner never touches our ring: it posts a request in the SRAM4

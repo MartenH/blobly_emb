@@ -395,14 +395,16 @@ fn signal_partitions(doc toml.Doc) map[string]string {
 	return out
 }
 
-// fields_inline renders a { name = "type", … } TOML inline table deterministically
-// (sorted keys, so regeneration is byte-stable).
+// fields_inline renders a { name = "type", … } TOML inline table in SOURCE DECLARATION
+// order — field order is the WIRE contract for remote signals (one lane per field, in
+// order), so sorting here could silently swap two same-width fields' CAN lanes between
+// regenerations while every validator still passes (codex #211 r15). V's toml maps
+// preserve insertion order (the pair path has relied on it, bench-verified, since the
+// multi-image emitter), so emitting in iteration order IS byte-stable.
 fn fields_inline(fields map[string]string) string {
-	mut keys := fields.keys()
-	keys.sort()
 	mut parts := []string{}
-	for k in keys {
-		parts << '${k} = "${fields[k]}"'
+	for k, v in fields {
+		parts << '${k} = "${v}"'
 	}
 	return '{ ${parts.join(", ")} }'
 }
