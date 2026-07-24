@@ -22,16 +22,16 @@ cell."* Sending bulk as a signal is the mistake this page exists to prevent.
 | crossing | transport (the actual mechanism) | payload cap | generated? |
 |---|---|---|---|
 | same thread | plain struct field | — | ✅ derived |
-| thread → thread, **same core** | IOC triple buffer (`boards/common/ioc.h`) | **64 B** (`IOC_MAX`) | ✅ derived |
-| **core → core**, same chip | xioc slot (`boards/common/xioc.h`) | **8 B** — 1–2 × `u32` | ✅ derived |
+| thread → thread, **same core** | IOC cell (`boards/common/ioc.h`) — the *crossing* is derived, the algorithm is the signal's `transport` (**default `double`**; `triple`/`seqlock` selectable) | **64 B** (`IOC_MAX`) | ✅ derived |
+| **core → core**, same chip | xioc slot (`boards/common/xioc.h`) — **satellite → owner image only**, and generated end-to-end **only when the destination is a bus** (the owner drain transmits it); a satellite → owner-*partition* signal allocates a slot that platform C reads via the contract header — no FB consumer is generated. owner→satellite and satellite→satellite have no path | **8 B** — 1–2 × `u32` | ✅ derived (to-bus) |
 | **core → core**, bulk | `duo.h` dtrace-style cell: shared-window owner buffer + req/ack handshake | RAM-bound (trace uses 2 KB) | ❌ **hand-written**; planned generated form = the loan/publish ring below |
 | ECU → ECU, one frame | CAN frame (`driver/can`) | 8 B classic / **64 B** FD | ✅ derived |
 | ECU → ECU, a PDU | COM (`comm/com`) | **64 B** (`com.max_pdu`) | ✅ derived |
-| ECU → ECU, bulk | ISO-TP (`comm/isotp`) | **520 B** (`isotp.max_payload`) | ✅ config |
-| ECU → ECU, firmware | UDS `0x34`/`0x36`×N/`0x37` over ISO-TP or DoIP | image-sized, block-paced | ✅ bootloader |
+| ECU → ECU, bulk | ISO-TP (`comm/isotp`) — **host/sim; a `threadx` target rejects `[[isotp]]` at generation** | **520 B** (`isotp.max_payload`) | ✅ config |
+| ECU → ECU, firmware | UDS `0x34`/`0x36`×N/`0x37` over **ISO-TP** (the DoIP endpoint serves diagnostics only today — `boot.Prog` has no DoIP binding yet) | image-sized, block-paced | ✅ bootloader |
 | Ethernet event | SOME/IP notification (`comm/someip`) over UDP — **NetX Duo** on target, POSIX socket on host | **64 B** | ✅ config |
 | Ethernet RPC reply | SOME/IP response, same UDP path | **1024 B** (`max_rpc`) | ✅ config |
-| Ethernet diagnostics | DoIP (`comm/doip`) over **NetX TCP** — a module + service thread, not an app path | **256 B** (`doip.max_msg`) | ❌ hand-wired (`h735_doip`) |
+| Ethernet diagnostics | DoIP (`comm/doip`) over **NetX TCP** — a module + service thread, not an app path | 256 B *frame* (`doip.max_msg`, header-inclusive) → **244 B** usable UDS data (8 B DoIP header + 4 B addresses); a bigger message is rejected and the stream closed | ❌ hand-wired (`h735_doip`) |
 
 ### Coming from AUTOSAR COM? The numbers you're used to
 
@@ -86,9 +86,22 @@ loom2v: remote signal "X" field "f" is u16 — the xioc cell carries u32 fields 
 loom2v: remote signal "X" has a `valid` field — xioc freshness is the slot stamp
 ```
 
-**If it does not fit, there is no generated path today.** You write the transfer yourself,
-following the one worked example in the tree: the **cross-core trace handoff** in
-[`boards/h755zi/duo.h`](../../boards/h755zi/duo.h). Its shape is the shape to copy:
+**If it does not fit, there is no supported *application* path today — full stop.** The
+one worked example in the tree, the **cross-core trace handoff** in
+[`boards/h755zi/duo.h`](../../boards/h755zi/duo.h), is **platform instrumentation**: both
+of its sides live in the platform's C glue (`comm_glue.c` / `m4_glue.c`), never in an FB.
+Copying its shape into FB-facing code would create exactly the cross-partition shared
+mutable state the isolation rule forbids — an FB's bulk path arrives only when the
+loan/publish ring below lands *behind the OSAL/IOC seam*. And copying the handoff is
+not the answer for NEW platform glue either — every copy is another ad-hoc cross-core
+channel outside `osal.ioc_*`, and **platform ownership does not exempt a crossing from
+that invariant**. The **portable bulk core is merged** (`boards/common/bulk.h`: pool +
+SPSC descriptor rings, fallible loan, host-proven — REQ-BULK-001..003), but it is the
+*mechanism* the sanctioned transport will be built from, not a license to place rings
+ad hoc: until bulk is an OSAL/IOC transport (region-table entry, config surface), a new
+cross-core bulk need means ISO-TP off-chip or waiting — not a new shared-window channel.
+The dtrace handoff below stays documented as what it is — existing instrumentation, the
+one sanctioned instance, not a template:
 
 - a **window in shared memory** both cores can reach — D3 SRAM4 (`0x38000000`, 64 KB),
   uncached on both by policy, so plain volatile accesses are coherent and no cache
@@ -115,9 +128,11 @@ from Eclipse iceoryx — the zero-copy transport behind AUTOSAR Adaptive's `ara:
 survey in [../bulk-transport.md](../bulk-transport.md)). It exists to kill two problems at
 once, both of which any home-grown design here would otherwise hit:
 
-- **The producer must not allocate** — but if it owns a static buffer instead, the
-  transport has to *copy* out of it, and a concurrent reader can tear the copy. Every
-  no-alloc bulk design collapses into this fork.
+- **The producer must not allocate** — but if it owns a static buffer instead, it must
+  either freeze that buffer until the consumer acks (fine for one transfer in flight —
+  that *is* the dtrace handshake) or let the transport *copy* out of it, where a
+  concurrent reader can tear the copy. The fork bites the moment the producer must keep
+  writing while an earlier payload is still outstanding — which is what a pool buys.
 - **Copying bulk is the cost the path exists to avoid** — a 2 KB window copied
   producer→transport→consumer crosses the bus matrix three times.
 
@@ -136,13 +151,17 @@ consumer:  take()    -> the oldest published buffer, by reference — still no c
 Zero copies end to end; no allocation anywhere (the pool is fixed at build time from
 `ecu.toml`, so the RAM cost is visible in config); and back-pressure is **explicit and
 designed** — when the consumer falls behind, `loan()` fails and the *producer* decides
-drop-oldest / drop-newest / count-overflows, instead of a silent tear or an unbounded
-queue. Loss stays detectable, never silent — the same discipline as everything else on
-this page.
+drop-newest / count-overflows, instead of a silent tear or an unbounded queue. Loss stays detectable, never silent — the same discipline as everything else on
+this page. One ownership subtlety decided up front: on exhaustion the producer's safe
+choices are **drop-newest or count overflows**. Drop-*oldest* would mean reclaiming a
+buffer the consumer may already hold by reference — only a transport-coordinated reclaim
+of a still-*queued* (not yet taken) entry can ever do that safely.
 
 The consumer side is a **service thread** (see the Ethernet section below) — it sleeps on
-the doorbell rather than polling. None of this is callable today; this section exists so
-nobody designs a bulk producer around `memcpy` into a static buffer in the meantime.
+the doorbell where the board provides one, and falls back to polling where it doesn't
+(the portable contract treats the doorbell as an optimization, never a correctness
+requirement). None of this is callable today; this section exists so nobody designs a
+bulk producer around `memcpy` into a static buffer in the meantime.
 
 ## "I want to move object data to/from another ECU"
 
@@ -167,18 +186,52 @@ stmin_ms = 0          # min separation we ask the sender for
 ```
 
 The generator emits an `isotp.Link` plus a `[max_payload]u8` buffer into the ECU state and
-wires the comm loop to it — you do not write the segmentation. The API either side of that
-is two calls:
+wires the comm loop to it — you do not write the segmentation. Two scoping facts before
+you plan around it:
 
+- **Host/sim only.** A `[target] kind = "threadx"` image rejects any `[[isotp]]` at
+  generation — the target comm thread has no ISO-TP integration yet. (The bootloader has
+  its own hand-bound transport; that does not make this recipe target-capable.)
+- **The generated link is a UDS endpoint, not an API.** It lives in private bridge state
+  and every completed message is fed straight to the plain **UDS server** — `0x10`/`0x22`/
+  `0x2E`/`0x3E` only. The firmware block transfer (`0x34`/`0x36`×N/`0x37`) is **not** in
+  it: those services live in `boot.Prog`, which binds its own transport in the bootloader
+  images — a generated diagnostic endpoint does not accept downloads. And there is no
+  generated hook for another consumer to call `send`/`take` on the link.
+
+A **new bulk consumer** therefore owns its *own* `isotp.Link` inside a ComModule.
+`comm/trace` and `comm/shell` are the module-owned-link examples — but note both are
+**outbound** streamers (their FC handlers feed a send in flight; neither ever calls
+`take()`). For the complete **inbound** consume-and-dispatch loop, read the generated
+UDS bridge (`gen/loom_gen.v`: `on_frame` → `take` → handle → `send`) or the three
+hand-written bootloader loops (`examples/boot_sim`, `examples/h735_boot`,
+`examples/h755_boot` — each `main.v` runs the full loop into `boot.Prog.handle`, and
+they are the closest match for a bulk-transfer consumer). Whichever
+direction, `send`/`take` are only the payload calls — a private link *works* only wired
+into the module's frame loop, four obligations:
+
+- **feed rx** — every CAN frame on the link's **receive id only** (`rx_id`, exactly as
+  the generated bridge filters) goes to `l.on_frame(now, pdu)`; without it nothing ever
+  reassembles. Never feed the `tx_id` too: the link is id-agnostic, so with tx echo on
+  it would parse the module's own responses as new inbound transfers.
+- **tick** — `l.tick(now)` every comm cycle; the N_Bs timeout (the FC wait on a send)
+  only advances here. Note the gap honestly: there is **no receive deadline** — a peer
+  that dies after its FirstFrame leaves the link `.receiving` until other traffic moves
+  it; do not design a consumer that depends on an N_Cr abort that does not exist.
+- **drain tx** — `l.poll(now, mut pdu)` under the channel's readiness gate, sending each
+  frame it yields. This is also how the RECEIVING side emits its flow-control frames —
+  a consumer that never polls stalls its peer's multi-frame send.
 - **send** — `l.send(src, len)`; returns **`false`** if a transfer is already in flight or
   `len` exceeds the cap. *Check the return* — a dropped message is otherwise invisible.
 - **receive** — `l.take(dst)` copies out one fully reassembled message and returns its
-  length, or `0` if none is ready.
+  length, or `0` if none is ready. **`dst` must hold `isotp.max_payload` (520) bytes** —
+  `take` copies whatever arrived through the raw pointer without a capacity check, so a
+  smaller buffer is an out-of-bounds write waiting for a large message.
 
-Where it terminates today: the shipped consumer is the **UDS server** (`0x22`/`0x2E` DIDs,
-plus the bootloader's `0x34`/`0x36`×N/`0x37` block transfer). `comm/trace` owns its own
-link the same way for the dump. A new bulk consumer follows that pattern — a module with
-a link, not a new FB port.
+And one mandatory line: call **`l.init_defaults()`** before first use. The N_Bs timeout
+and the WAIT-frame cap live there; a zero-valued link waits forever on a lost flow
+control. (On target there is no `_vinit`, so nothing runs it for you — the generated
+bridge and both production modules call it explicitly.)
 
 **The cap is 520 B** (`isotp.max_payload`), sized to hold the largest thing the system
 sends today (one trace dump block: 8 B header + 64 records × 8 B). Raising it grows *every*
@@ -261,14 +314,19 @@ no-alloc surface for free. One native-API trap is already documented and will bi
 re-accept loop: server sockets accept with `NX_WAIT_FOREVER` and bound only the receive —
 see [../net.md](../net.md) ("`nx_tcp_server_socket_accept` … is a NetX trap").
 
-Today you copy that glue by hand; making the service thread + seam **declarable**
-(a `[[partition.thread]]` with an endpoint binding, glue generated) is on the roadmap.
+Today you copy that glue by hand — a **scoped stopgap**, not the architecture: the copy
+is the example's *platform* layer (the same standing as `main.v`, and the only place
+NetX/ThreadX interop may live), never application code, and each copy is a stand-in for
+the shared port that should exist. Making the service thread + seam **declarable**
+(a `[[partition.thread]]` with an endpoint binding, glue generated once, not copied) is
+the roadmap item that retires the pattern.
 
 **What does not exist today** — worth knowing before you design around it:
 
 - **No app-facing socket API.** No UDP stream, no TCP connect, no app-initiated
-  request/response from an FB. TCP on the target is used by **DoIP** (UDS over TCP, for
-  diagnostics and OTA) — a module, not an application path.
+  request/response from an FB. TCP on the target is used by **DoIP** (UDS over TCP,
+  diagnostics only — the firmware services live in `boot.Prog`, which has no DoIP
+  binding yet) — a module, not an application path.
 - **No streaming.** The eth signal path is latest-value-wins, like every other signal
   path. Continuous or unbounded data has no first-class route; today that means platform
   glue owning the socket in `main.v`, the same shape as bulk on CAN.
@@ -283,8 +341,19 @@ See [../someip.md](../someip.md) and [../net.md](../net.md).
 
 ### Which ECU it even goes to
 
-Nothing above says *which* node. That is the system layer: declare the nodes and buses in
-`system.toml` and the generator wires each node's half and any gateway route. Start with
+Nothing above says *which* node. That is the system layer — **for signals**: declare the
+nodes and buses in `system.toml` and the generator wires each node's half and any
+explicitly declared gateway route. Bulk does *not* ride that layer: `sysgen` lowers
+buses, NM and cross-node signals, but never emits an `[[isotp]]` block or wires a
+DoIP/SOME/IP connection — a bulk endpoint is **node-local configuration** on each side,
+and `sysgen` offers no diagnostic proxy: it rejects a raw route of frames the DBC
+declares **non-cyclic** — which honest DBCs do for SF/FF/CF/FC event traffic — but the
+checker only knows what the DBC says, so a DBC that stamps those ids with a cycle time
+routes them straight through, and a standalone hand-authored `ecu.toml` route forwards
+them regardless. Every such forward rides the freshest-wins retry slot — one lost CF
+kills the transfer (see [gateway-a-frame.md](gateway-a-frame.md)); `system.toml` is not
+protection, just a DBC-honesty check. Ethernet connections are not routed at all.
+Start with
 [two-node-io.md](two-node-io.md) (a signal across two real ECUs, end to end), then
 [system-from-nodes.md](system-from-nodes.md) for how `system.toml` and `ecu.toml` merge.
 If the two ECUs are on *different* buses, the traffic crosses a gateway —

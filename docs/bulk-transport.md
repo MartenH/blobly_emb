@@ -27,14 +27,14 @@ doorbell. The generalisation is "more than one buffer, and an interrupt instead 
 
 ## ROS 2 — no, it is not only DDS
 
-DDS is the default middleware, but ROS 2 explicitly **bypasses it for bulk on one
-machine**, because publishing a camera frame through a loopback DDS stack copies it
-several times:
+DDS is the default middleware, but ROS 2 avoids paying the **full serialize-and-loopback
+cost for bulk on one machine** — publishing a camera frame through the wire path copies
+it several times. The mechanisms differ in *what* they replace:
 
 | path | mechanism |
 |---|---|
-| same process | **intra-process comms** — the message pointer is passed; zero copy |
-| same machine | **shared-memory transport** (FastDDS SHM / data-sharing), or **iceoryx** via `rmw_iceoryx` |
+| same process | **intra-process comms** — the message pointer is passed (conditional on the pub/sub topology and ownership); zero copy, above the middleware |
+| same machine | **Fast DDS SHM transport** — still DDS and still *serialized* RTPS, just through shared memory instead of the network (kills wire/kernel copies only); **data-sharing delivery** — a distinct mechanism that maps the sample itself (zero-copy end to end only with loaned samples + compatible types); or **iceoryx** via `rmw_iceoryx`, which genuinely *replaces* DDS |
 | across machines | DDS on the wire (RTPS) |
 
 The interesting one for us is **iceoryx**, because its constraints are ours:
@@ -71,14 +71,16 @@ vrings**.
 
 - two **vrings** (one per direction) of descriptors in shared memory;
 - fixed buffers carved from that region at init;
-- a **mailbox/doorbell interrupt** to notify — on ST parts that is **IPCC**, with **HSEM**
-  available for locking;
+- a **mailbox/doorbell interrupt** to notify — on ST parts that is **IPCC** where it
+  exists (STM32MP1, WB/WL), with **HSEM** available for locking;
 - named **channels/endpoints** above it, so several logical streams share one transport.
 
-Linux+M4 (STM32MP1), Zephyr+M4, TI, and NXP all ship this. **The H755 has IPCC and HSEM,
-and `duo.h` uses neither** — it polls. That is fine for one 2 KB trace snapshot per dump;
-it is not fine for a continuous bulk stream, because polling either burns cycles or adds
-latency.
+Linux+M4 (STM32MP1), Zephyr+M4, TI, and NXP all ship this. **The H755 has no IPCC** — its
+inter-core notification is **HSEM's semaphore-release interrupt** (each core can take an
+interrupt when the other releases a semaphore; ST's own H7 OpenAMP port builds the RPMsg
+doorbell exactly this way). **`duo.h` uses none of it** — it polls. That is fine for one
+2 KB trace snapshot per dump; it is not fine for a continuous bulk stream, because polling
+either burns cycles or adds latency.
 
 Neighbours in the same space: TI **MessageQ**, NXP **MU + eRPC**, and ST's own OpenAMP
 middleware.
@@ -190,10 +192,15 @@ The convergence is strong enough to just follow it. A generated bulk endpoint wo
    discipline as `xioc`**, not `LDREX`/`STREX`: the H755 cores do not arbitrate exclusives
    (162 torn reads in 200k, measured 2026-07-12), which is the constraint that shaped the
    whole cross-core design.
-3. **A doorbell** — IPCC interrupt where the hardware has one, falling back to the current
-   poll. This is the piece `duo.h` is missing entirely.
+3. **A doorbell** — a mailbox interrupt where the hardware has one (HSEM release-interrupt
+   on the H755; IPCC on parts that have it), falling back to the current poll. This is the
+   piece `duo.h` is missing entirely.
 4. **A loan/publish API** on the producer and peek/release on the consumer, so an FB never
-   holds a buffer it allocated.
+   holds a buffer it allocated. **`loan()` is fallible by contract**: when a slow consumer
+   holds all N buffers, it returns an exhaustion value — it never blocks, never faults,
+   and never reuses a buffer someone still owns. Without that clause "no-alloc by
+   construction" is a claim with no leg to stand on, because exhaustion *will* happen and
+   the only other behaviours are the three wrong ones.
 5. **The same declaration for off-chip.** A bulk endpoint whose peer is another *node*
    should mean ISO-TP (CAN) or SOME/IP-TP (eth) — the transport derived from where the
    endpoint sits, exactly as signals already work.
@@ -234,8 +241,20 @@ the ring, creates the thread, and hands the loop its seam. The isolation rule su
 untouched, because the seam *is* the boundary — same as `main.v` is today.
 
 The cross-core bulk consumer is then just another service thread: it blocks on a ThreadX
-event flag that the doorbell ISR (IPCC) sets — the same "sleep until data or timeout"
-shape as the socket case, which is exactly why the two belong to one endpoint concept.
+event flag that the doorbell ISR (HSEM release-interrupt on the H755) sets — the same
+"sleep until data or timeout" shape as the socket case, which is exactly why the two
+belong to one endpoint concept.
+
+One isolation consequence to face rather than wave at: a consumer that receives a loaned
+buffer **by reference** has the shared pool mapped into its own partition — cross-core
+shared state reached outside `osal.ioc_*`, which the architecture forbids as an ad-hoc
+arrangement. MPU region permissions alone do **not** repair that: they bound the blast
+radius, but the boundary the rule demands is the *API*, not the page table. So before an
+application partition ever sees a loaned buffer, loan/peek must be defined as an **OSAL/
+IOC transport in its own right** — owned by `osal.*`, in the generated region table with
+directional permissions, ownership switched by the ring, same standing as the IOC cell
+transports today. Until then, bulk termination stays in a platform module and the app
+never touches the pool. "The FB doesn't open the socket" is necessary, not sufficient.
 
 One decision left to make deliberately, not by default:
 
@@ -250,6 +269,7 @@ bulk consumer is a declared service thread. Same species, different owner.)
 ## Sources worth reading before building
 
 - Eclipse **iceoryx** — chunk pools, loaned messages, the `ara::com` zero-copy binding.
-- **OpenAMP** / RPMsg / VirtIO vring layout; ST's IPCC + HSEM reference manual sections.
+- **OpenAMP** / RPMsg / VirtIO vring layout; ST's HSEM (H7 dual-core) and IPCC (MP1/WB)
+  reference manual sections.
 - Linux **dma-buf** and **io_uring** — for the descriptor-ring and handle-passing patterns.
 - AUTOSAR **LdCom** SWS — the transparent-PDU contract.
