@@ -101,6 +101,8 @@ bench:
 	$(V) -gc none run tools/ioc_bench_mp/bench.v
 	@echo '== Loom scheduler dispatch overhead =='
 	$(V) -prod run tools/loom_bench/bench.v
+	@echo '== Bulk ring throughput/latency vs ISO-TP (fork + MAP_SHARED) =='
+	$(V) -gc none run tools/bulk_bench/bench.v
 	@echo '== System load: 4 cores, 8 CAN buses on core0, 50 FBs/core =='
 	$(V) -gc none run tools/load_bench/bench.v
 
