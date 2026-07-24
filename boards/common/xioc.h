@@ -147,7 +147,9 @@ static inline int xioc_read(const xioc_t *c, xioc_rd_t *rd)
 typedef struct __attribute__((aligned(32))) {
 	volatile uint32_t latest; /* last fully published seq; 0 = nothing yet */
 	uint32_t wseq;            /* WRITER-private publish counter */
-	uint32_t words;           /* payload words per slot (channel geometry, set once) */
+	volatile uint32_t words;  /* payload words per slot — VOLATILE: the reader validates it
+	                           * per poll and a re-initializing writer updates it; a cached
+	                           * read would defeat the exact-width check (codex #211 r7) */
 	uint32_t pad[5];
 	volatile uint32_t cell[]; /* XIOC_SLOTS x (1 seq + words payload) */
 } xioc_n_t;

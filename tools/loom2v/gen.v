@@ -262,7 +262,17 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 			si.dbc_dlc = dbc_dlc_of(db, si.dbc_msg) or { 8 }
 			si.dbc_ext = dbc_ext_of(db, si.dbc_msg) or { false }
 			si.dbc_trivial = dbc_signal_trivial(db, sname) or { false }
-			si.dbc_lane_issue = dbc_msg_lane_issue(db, sname, si.fields.len)
+			mut fwidths := []int{}
+			for f in si.fields {
+				fwidths << match f.typ {
+					'u32' { 32 }
+					'u16' { 16 }
+					'u8' { 8 }
+					'bool' { 1 }
+					else { 32 }
+				}
+			}
+			si.dbc_lane_issue = dbc_msg_lane_issue(db, sname, si.fields.len, fwidths)
 			sig_of[sname] = si
 		}
 	}
@@ -3689,7 +3699,7 @@ fn dbc_signal_trivial(db candb.Database, signame string) ?bool {
 // factor 1 / offset 0, little-endian, one SG per lane). The lane writer stores whole
 // 4-byte lanes, so any other layout silently overwrites the co-resident SG. Returns ''
 // when clean, else the first violation (used in the remote-TX walk panic).
-fn dbc_msg_lane_issue(db candb.Database, signame string, nlanes int) string {
+fn dbc_msg_lane_issue(db candb.Database, signame string, nlanes int, widths []int) string {
 	for m in db.messages {
 		for s in m.signals {
 			if s.name != signame {
@@ -3712,6 +3722,12 @@ fn dbc_msg_lane_issue(db candb.Database, signame string, nlanes int) string {
 				lane := int(sg.start_bit / 32)
 				if prev := lanes_used[lane] {
 					return 'signals "${prev}" and "${sg.name}" share lane ${lane} — the lane writer fills whole lanes'
+				}
+				// the SG must be at least as wide as the field it carries: a u16 field over
+				// an 8-bit SG would leak its upper byte into bits the DBC calls reserved —
+				// moving the producer must never change the wire frame (codex #211 r7)
+				if lane < widths.len && sg.length < widths[lane] {
+					return 'signal "${sg.name}" is ${sg.length} bits but lane ${lane} carries a ${widths[lane]}-bit field — widen the SG or narrow the field'
 				}
 				lanes_used[lane] = sg.name
 			}

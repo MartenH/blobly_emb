@@ -156,8 +156,16 @@ void duo_clocks_ready(void) {
      * matching build id. (An earlier revision zeroed the window here, gated on the
      * retired heartbeat — a dead check that made every owner restart a second writer
      * over a live satellite's channels; codex #211 r5/r6. Cold-boot SRAM garbage is
-     * carried by the handshake + per-channel geometry validation instead: garbage
-     * must fake BOTH a 32-bit build id and exact channel geometry to be read.) */
+     * carried by the handshake + per-channel geometry validation instead.)
+     *
+     * The one word the owner DOES write, once, at boot: it RETRACTS the layout cell.
+     * SRAM4 survives an owner-only reset, so a retained id + retained channels would
+     * otherwise let the fresh reader (rd_seq = 0) transmit one stale frame before the
+     * satellite runs (codex #211 r7). The satellite REPUBLISHES the id every service
+     * tick, so a live satellite restores it within ~one tick; a stopped or stale one
+     * leaves the cell retracted and the owner stays silent. */
+    *(volatile uint32_t *)DUO_LAYOUT_ADDR = 0u;
+    __asm__ volatile("dsb");
     *(volatile uint32_t *)DUO_CLK_ADDR = DUO_CLK_MAGIC;
     __asm__ volatile("dsb");
 }
@@ -292,7 +300,18 @@ int duo_poll(int i, uint32_t *a, uint32_t *b) {
 /* shell_m4sig — the `m4sig` command: the M4 FB's signal off cross-core IOC slot 0.
  * ioc_read is the reader half of the same triple buffer the M4 writes: wait-free,
  * latest-complete-value. n advances 100/s while the M4's 10 ms handler runs. */
+static char *duo_str(char *p, char *end, const char *s2) {
+    while (*s2 && p < end) *p++ = *s2++;
+    return p;
+}
 int shell_m4sig(unsigned char *out, int cap) {
+    if (!duo_layout_ok()) {
+        /* the slots may belong to a DIFFERENT build's map — reporting them would show
+         * another signal's payload as ours (codex #211 r7) */
+        return (int)(duo_str((char *)out, (char *)out + cap,
+                             "cross-core layout not established (satellite absent or stale build)\n")
+                     - (char *)out);
+    }
     char *p = (char *)out, *end = (char *)out + cap;
     static xioc_rd_t rd; /* reader state is reader-private (comm thread only) */
     xioc_read(&DUO_POOL[DUO_SLOT_M4_COUNT], &rd);
@@ -310,6 +329,11 @@ int shell_m4sig(unsigned char *out, int cap) {
  * exactly) and no time travel (a never decreases). The max-rate tear harness that
  * condemned cross-core LDREX/STREX lived here before the emitter (emb#110). */
 int shell_iocx(unsigned char *out, int cap) {
+    if (!duo_layout_ok()) {
+        return (int)(duo_str((char *)out, (char *)out + cap,
+                             "cross-core layout not established (satellite absent or stale build)\n")
+                     - (char *)out);
+    }
     char *p = (char *)out, *end = (char *)out + cap;
     uint32_t reads = 200000u, tears = 0u, regress = 0u, advances = 0u;
     uint32_t prev = 0u;

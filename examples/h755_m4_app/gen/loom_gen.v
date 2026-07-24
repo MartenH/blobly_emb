@@ -91,6 +91,9 @@ fn run_m4_app() {
 			sched.mark_overrun()
 		}
 		C.duo_trace_service() // ~one poll per tick: plenty for the dump handshake
+		C.duo_layout_publish() // REPUBLISH per tick: the owner retracts the id at ITS
+		// boot (SRAM survives an owner-only reset — a retained id + retained channels
+		// would replay one stale frame); a live satellite restores it within a tick
 		C._tx_thread_sleep(u32(1))
 	}
 }

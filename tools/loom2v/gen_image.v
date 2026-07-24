@@ -122,6 +122,11 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 			if ti == 0 && m.trace.on {
 				g << '\t\tC.duo_trace_service() // ~one poll per tick: plenty for the dump handshake'
 			}
+			if ti == 0 && m.duo_names.len > 0 {
+				g << '\t\tC.duo_layout_publish() // REPUBLISH per tick: the owner retracts the id at ITS'
+				g << '\t\t// boot (SRAM survives an owner-only reset — a retained id + retained channels'
+				g << '\t\t// would replay one stale frame); a live satellite restores it within a tick'
+			}
 			g << '\t\tC._tx_thread_sleep(u32(1))'
 			g << '\t}'
 			g << '}'
