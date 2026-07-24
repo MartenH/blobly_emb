@@ -20,7 +20,9 @@ import comm.isotp
 import time
 
 #flag -I @VMODROOT/boards/common
+#flag -I @VMODROOT/tools/bulk_bench
 #include "bulk.h"
+#include "bench_util.h"
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -38,6 +40,9 @@ fn C.munmap(addr voidptr, len usize) int
 fn C.fork() int
 fn C.waitpid(pid int, status &int, options int) int
 fn C._exit(code int)
+fn C.pin_cpu(cpu int) int
+fn C.cpu_ns() i64
+fn C.exited_ok(status int) int
 
 const nbuf = u32(4)
 const sizes = [u32(64), 256, 1024, 4096]
@@ -69,10 +74,12 @@ fn bench_ring_throughput(bufsz u32) {
 		panic('fork failed')
 	}
 	if pid == 0 {
-		// producer child: pump at max rate on its own clock for the parent's window
-		// plus slack — no stop signal needed, the parent just stops taking. Deadline
-		// checked every 1024 payloads: a clock read per payload would sit inside the
-		// measured window and bias small sizes.
+		// producer child: PINNED to core 1 (parent takes core 0) — unpinned, the
+		// scheduler may co-locate both processes and the bench measures a same-core
+		// cache hit instead of the cross-core handoff (codex #216). Pump at max rate
+		// on its own clock for the parent's window plus slack; deadline checked every
+		// 1024 payloads so the clock read stays out of the measured window.
+		C.pin_cpu(1)
 		sw := time.new_stopwatch()
 		for {
 			for _ in 0 .. 1024 {
@@ -96,6 +103,7 @@ fn bench_ring_throughput(bufsz u32) {
 		}
 		C._exit(0)
 	}
+	C.pin_cpu(0)
 	// rendezvous: the window starts at the FIRST observed payload, so child scheduling
 	// delay is not counted as dead time
 	mut len := u32(0)
@@ -126,6 +134,9 @@ fn bench_ring_throughput(bufsz u32) {
 	el_us := f64(sw.elapsed().microseconds())
 	mut status := 0
 	C.waitpid(pid, &status, 0)
+	if C.exited_ok(status) == 0 {
+		panic('producer child died (status ${status}) — the near-zero window is NOT a measurement')
+	}
 	// producer-owned counter, read only after the producer exited: the saturation
 	// number REQ-BULK-002 makes observable
 	ovf := C.bulk_overflows(b)
@@ -143,9 +154,10 @@ fn bench_ring_latency(bufsz u32) {
 		panic('fork failed')
 	}
 	if pid == 0 {
-		// PACED producer (one payload per ~200 us): the pool never saturates, so the
-		// measured delay is the transport's, not queueing. The stamp is the child's
-		// monotonic clock; parent and child share the boot clock base on Linux.
+		// PACED producer (one payload per ~200 us), PINNED to core 1: the pool never
+		// saturates, so the measured delay is the transport's, not queueing. The stamp
+		// is the child's monotonic clock; parent and child share the base on Linux.
+		C.pin_cpu(1)
 		mut sent := 0
 		for sent < lat_samples {
 			idx := C.bulk_loan(b)
@@ -162,6 +174,7 @@ fn bench_ring_latency(bufsz u32) {
 		}
 		C._exit(0)
 	}
+	C.pin_cpu(0)
 	mut lats := []i64{cap: lat_samples}
 	live := time.new_stopwatch()
 	for lats.len < lat_samples {
@@ -179,10 +192,13 @@ fn bench_ring_latency(bufsz u32) {
 	}
 	mut status := 0
 	C.waitpid(pid, &status, 0)
+	if C.exited_ok(status) == 0 {
+		panic('latency producer died (status ${status})')
+	}
 	lats.sort()
 	median := f64(lats[lats.len / 2]) / 1000.0
 	p99 := f64(lats[(lats.len - 1) * 99 / 100]) / 1000.0
-	println('  median ${median:7.1f} us   p99 ${p99:7.1f} us (publish -> take, paced; unpinned p99 is scheduler noise)')
+	println('  median ${median:7.1f} us   p99 ${p99:7.1f} us (publish -> take, paced, cores pinned 0/1)')
 	C.munmap(b, region_bytes)
 }
 
@@ -191,7 +207,7 @@ fn bench_ring_latency(bufsz u32) {
 // One full segmentation round through a back-to-back Link pair on the host: sender
 // frames -> receiver on_frame (receiver's FC frames -> sender). Returns CPU us and
 // the CAN frame count the transfer needed.
-fn isotp_round(mut tx isotp.Link, mut rx isotp.Link, payload []u8, mut dst []u8) int {
+fn isotp_round(mut tx isotp.Link, mut rx isotp.Link, payload []u8, mut dst []u8, mut sink &u64) int {
 	mut frames := 0
 	if !tx.send(&payload[0], payload.len) {
 		panic('isotp send refused (len ${payload.len})')
@@ -213,6 +229,11 @@ fn isotp_round(mut tx isotp.Link, mut rx isotp.Link, payload []u8, mut dst []u8)
 		}
 		n := rx.take(unsafe { &dst[0] })
 		if n > 0 {
+			// consume the reassembled bytes: -prod would otherwise be free to
+			// dead-store-eliminate the copy whose cost this measures (codex #216)
+			unsafe {
+				*sink += u64(dst[0]) + u64(dst[n - 1])
+			}
 			return frames
 		}
 		if !moved {
@@ -236,18 +257,19 @@ fn bench_isotp(size u32) {
 	rx.init_defaults()
 	payload := []u8{len: int(size), init: u8(index)}
 	mut dst := []u8{len: int(isotp.max_payload)}
-	// one WARM round discarded, then ONE stopwatch across all measured rounds: a
-	// per-round Duration.microseconds() truncates sub-us rounds to 0 and the average
-	// becomes quantization noise (caught by /review)
-	mut frames := isotp_round(mut tx, mut rx, payload, mut dst)
+	// one WARM round discarded, then ONE clock across all measured rounds — and it is
+	// the PROCESS CPU clock: wall time would book preemption on a loaded host as
+	// 'CPU cost' (codex #216). Per-round us truncation was the earlier /review catch.
+	mut sink := u64(0)
+	mut frames := isotp_round(mut tx, mut rx, payload, mut dst, mut &sink)
 	rounds := 100
-	sw := time.new_stopwatch()
+	t0 := C.cpu_ns()
 	for _ in 0 .. rounds {
-		frames = isotp_round(mut tx, mut rx, payload, mut dst)
+		frames = isotp_round(mut tx, mut rx, payload, mut dst, mut &sink)
 	}
-	cpu_us := f64(sw.elapsed().nanoseconds()) / 1000.0 / f64(rounds)
+	cpu_us := f64(C.cpu_ns() - t0) / 1000.0 / f64(rounds)
 	wire_ms := f64(frames) * us_per_frame / 1000.0
-	println('  ${size:5} B: host CPU ${cpu_us:7.2f} us/transfer   ${frames:3} CAN frames  -> ~${wire_ms:6.1f} ms @ classic 500 kbit/s')
+	println('  ${size:5} B: CPU ${cpu_us:7.2f} us/transfer   ${frames:3} CAN frames  -> ~${wire_ms:6.1f} ms @ classic 500 kbit/s (checksum ${sink & 0xff})')
 }
 
 fn main() {
@@ -264,8 +286,10 @@ fn main() {
 		bench_isotp(s)
 	}
 	println('')
-	println('reading (CLASSIC 500 kbit/s wire figures): the ring moves ownership in')
-	println('~microseconds at any size; classic-CAN ISO-TP costs milliseconds of BUS time')
-	println('per transfer. CAN-FD shrinks the wire time ~20-40x (64 B frames, faster data')
-	println('phase) — size the off-chip boundary against the bus actually configured.')
+	println('reading (CLASSIC 500 kbit/s wire figures — the only path this stack')
+	println('implements: comm/isotp segments into 8-byte PDUs regardless of bus): the ring')
+	println('moves ownership in ~microseconds at any size; classic-CAN ISO-TP costs')
+	println('milliseconds of BUS time per transfer. An FD ISO-TP path (larger frames)')
+	println('would shrink wire time substantially — measure it when it exists, do not')
+	println('extrapolate from these rows.')
 }
