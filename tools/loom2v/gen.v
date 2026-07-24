@@ -3289,6 +3289,20 @@ fn main() {
 					}
 					continue
 				}
+				// LOCAL external tx: the lean producer encodes ONLY the value field (tv_a,
+				// bytes 0-3) and the IOC cell publish carries only {val_field, 0} — a second
+				// field or `valid` would silently vanish from the wire, and the SAME signal
+				// would encode differently after moving to a satellite (the lane encode
+				// carries every field). Placement must never silently change bytes (codex
+				// #211 r4): multi-field external signals are REMOTE-ONLY until the local
+				// producer encodes through the same per-field contract.
+				if si.fields.len > 1 || si.has_valid {
+					panic('loom2v: [target] kind="threadx" comm thread: TX signal "${sname}" has ' +
+						'${si.fields.len} field(s)${if si.has_valid { ' (incl. valid)' } else { '' }} ' +
+						'but the LOCAL comm producer encodes only the value field — a moved-in ' +
+						'satellite producer would put DIFFERENT bytes on the wire. Keep the ' +
+						'producer remote, or use a single-field signal, until the encode paths unify')
+				}
 				ioc_idx[sname] = ioc_idx.len
 				continue
 			}

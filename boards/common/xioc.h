@@ -203,9 +203,12 @@ static inline int xioc_n_read(xioc_n_t *c, uint32_t *rd_seq, uint32_t *dst, uint
 	if (n == 0u || n == *rd_seq) {
 		return 0; /* nothing published yet, or nothing new */
 	}
-	volatile uint32_t *s = xioc_n_slot(c, n);
+	/* ONE geometry snapshot: xioc_n_slot() re-reads c->words, so a concurrent re-init
+	 * (the partial-reflash case this validation exists for) could compute the slot with
+	 * the OLD width while the check below sees the new one — validate w first and derive
+	 * the slot from the SAME value (codex #211 r4). */
+	uint32_t w = XIOC_LD(&c->words);
 	uint32_t tmp[XIOC_MAX_WORDS];
-	uint32_t w = c->words;
 	if (w != dst_words || w > XIOC_MAX_WORDS) {
 		return 0; /* not (yet) initialized, garbage geometry, or a WRITER whose build
 		           * disagrees with ours about this channel's width (a stale satellite
@@ -215,6 +218,7 @@ static inline int xioc_n_read(xioc_n_t *c, uint32_t *rd_seq, uint32_t *dst, uint
 		           * into one "value" (codex #211 r3). Either way the honest result is
 		           * "no fresh data" — dst keeps the last complete same-geometry value. */
 	}
+	volatile uint32_t *s = &c->cell[(n % XIOC_SLOTS) * (1u + w)];
 	for (uint32_t i = 0; i < w; i++) {
 		tmp[i] = XIOC_LD(&s[1u + i]);
 	}
