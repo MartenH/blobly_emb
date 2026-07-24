@@ -82,7 +82,11 @@ fn test_button_drives_led() {
 	// the 100 ms budget starved often enough to flake (seen on emb#210's run — a
 	// docs-only diff). Scheduling slack is not a cadence regression.
 	mut lit := false
-	for _ in 0 .. 500 {
+	sw := time.new_stopwatch()
+	// a monotonic DEADLINE, not an iteration count: on a loaded runner 500 sleep(1ms)
+	// iterations can stretch past a second, and a 1 Hz cadence regression would then
+	// pass the assert this bound exists to fail (codex #214)
+	for sw.elapsed() < 500 * time.millisecond {
 		if (os.read_file(led) or { '' }).trim_space() == '1' {
 			lit = true
 			break
