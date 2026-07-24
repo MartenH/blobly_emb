@@ -477,8 +477,8 @@ fn comm_thread_entry(input u32) {
 			g_tm.load_remote(C.duo_trace_buf(), C.duo_trace_count())
 			duo_trc_wait = false
 		}
-		if nm_up && C.duo_poll(0, &duo_m4_count_a, &duo_m4_count_b) != 0
-			&& t1 - duo_m4_count_last >= u64(100000) && ch.tx_ready() {
+		if nm_up && t1 - duo_m4_count_last >= u64(100000) && ch.tx_ready()
+			&& C.duo_poll(0, &duo_m4_count_a, &duo_m4_count_b) != 0 {
 			duo_txf.id = u32(0x201)
 			duo_txf.len = 8
 			duo_txf.data[0] = u8(duo_m4_count_a)

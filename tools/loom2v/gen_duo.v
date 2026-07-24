@@ -136,17 +136,19 @@ fn duo_produce_drain(m Model) []string {
 			cyc = 100000 // default cyclic 100 ms if no [[frame]].tx.cycle_ms
 		}
 		n := snake(sname)
-		// the NM gate comes FIRST: duo_poll consumes the slot's freshness, so a
-		// poll during sleep would eat a value that then never transmits after
-		// wake (codex on emb#135) — short-circuit keeps it unconsumed.
+		// ORDER MATTERS, twice over: the poll consumes the slot's freshness, so
+		// every OTHER gate must fail first. NM sleep (emb#135) and now pacing +
+		// tx_ready too (codex #211 r3) — polling first ate a fresh value that
+		// arrived off-cycle or under backpressure, and with no later publish it
+		// never transmitted. Short-circuit keeps it unconsumed until eligible.
 		if si.wide {
 			// wide (xioc_n): the poll commits the lanes as a unit; the lean encode packs
 			// each u32 lane LE at byte 4*lane — same contract the pair path had, generalized
 			// (DLC == 4 * lanes is validated in the comm-thread walk; > 8 needs FD and the
 			// classic comm thread rejects it there, loudly).
 			off := m.duo_xw_off[sname] or { 0 }
-			g << '\t\tif ${nm_gate(m)}C.duo_poll_n(u32(${off}), ${si.fields.len}, &duo_${n}_seq, &duo_${n}_lanes[0]) != 0'
-			g << '\t\t\t&& t1 - duo_${n}_last >= u64(${cyc}) && ch.tx_ready() {' // REQ-COM-007
+			g << '\t\tif ${nm_gate(m)}t1 - duo_${n}_last >= u64(${cyc}) && ch.tx_ready()'
+			g << '\t\t\t&& C.duo_poll_n(u32(${off}), ${si.fields.len}, &duo_${n}_seq, &duo_${n}_lanes[0]) != 0 {' // REQ-COM-007
 			g << '\t\t\tduo_txf.id = u32(0x${si.dbc_id.hex()})'
 			g << '\t\t\tduo_txf.len = ${si.dbc_dlc}'
 			for j in 0 .. si.fields.len {
@@ -161,8 +163,8 @@ fn duo_produce_drain(m Model) []string {
 			continue
 		}
 		slot := m.duo_idx[sname] or { 0 }
-		g << '\t\tif ${nm_gate(m)}C.duo_poll(${slot}, &duo_${n}_a, &duo_${n}_b) != 0'
-		g << '\t\t\t&& t1 - duo_${n}_last >= u64(${cyc}) && ch.tx_ready() {' // REQ-COM-007
+		g << '\t\tif ${nm_gate(m)}t1 - duo_${n}_last >= u64(${cyc}) && ch.tx_ready()'
+		g << '\t\t\t&& C.duo_poll(${slot}, &duo_${n}_a, &duo_${n}_b) != 0 {' // REQ-COM-007
 		g << '\t\t\tduo_txf.id = u32(0x${si.dbc_id.hex()})'
 		g << '\t\t\tduo_txf.len = ${si.dbc_dlc}'
 		g << '\t\t\tduo_txf.data[0] = u8(duo_${n}_a)'

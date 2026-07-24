@@ -86,12 +86,16 @@ fn test_wide_drain_polls_and_lean_encodes_every_lane() {
 	g := duo_produce_drain(wide_model()).join('\n')
 	// wide: stateless C reader, caller-owned seq + lane buffer, one u32 lane per 4 bytes
 	assert g.contains('C.duo_poll_n(u32(0), 3, &duo_m4_wide_seq, &duo_m4_wide_lanes[0])')
+	// freshness is consumed LAST: pacing + readiness precede the poll, else an
+	// off-cycle fresh value is eaten and never transmitted (codex #211 r3)
+	assert g.contains("if t1 - duo_m4_wide_last >= u64(100000) && ch.tx_ready()")
 	assert g.contains('duo_txf.len = 12')
 	assert g.contains('duo_txf.data[0] = u8(duo_m4_wide_lanes[0])')
 	assert g.contains('duo_txf.data[7] = u8(duo_m4_wide_lanes[1] >> 24)')
 	assert g.contains('duo_txf.data[11] = u8(duo_m4_wide_lanes[2] >> 24)')
 	// pair emission rides along unchanged in the same drain
 	assert g.contains('C.duo_poll(0, &duo_m4_pair_a, &duo_m4_pair_b)')
+	assert g.contains("if t1 - duo_m4_pair_last >= u64(100000) && ch.tx_ready()")
 }
 
 fn test_wide_comm_locals_declare_seq_and_lane_buffer() {

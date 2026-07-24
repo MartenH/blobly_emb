@@ -206,12 +206,14 @@ static inline int xioc_n_read(xioc_n_t *c, uint32_t *rd_seq, uint32_t *dst, uint
 	volatile uint32_t *s = xioc_n_slot(c, n);
 	uint32_t tmp[XIOC_MAX_WORDS];
 	uint32_t w = c->words;
-	if (w == 0u || w > dst_words || w > XIOC_MAX_WORDS) {
+	if (w != dst_words || w > XIOC_MAX_WORDS) {
 		return 0; /* not (yet) initialized, garbage geometry, or a WRITER whose build
 		           * disagrees with ours about this channel's width (a stale satellite
-		           * image after a partial reflash — codex #211): the shared `words` is
-		           * NEVER a copy bound past the caller's own buffer. Refusing reads as
-		           * "no fresh data", which is the honest state for a mismatched peer. */
+		           * image after a partial reflash — codex #211): EXACT match required.
+		           * A wider writer would overrun the caller's buffer; a NARROWER one
+		           * (w < dst_words) would blend fresh low lanes with stale high lanes
+		           * into one "value" (codex #211 r3). Either way the honest result is
+		           * "no fresh data" — dst keeps the last complete same-geometry value. */
 	}
 	for (uint32_t i = 0; i < w; i++) {
 		tmp[i] = XIOC_LD(&s[1u + i]);

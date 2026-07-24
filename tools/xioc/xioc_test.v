@@ -116,6 +116,10 @@ fn test_geometry_mismatch_reads_as_never_fresh() {
 	// reader built for FEWER lanes than the writer publishes: refuse
 	assert C.xioc_n_read(&g_cell[0], &rd_seq, &dst[0], words - 1) == 0
 	assert dst[0] == 0, 'a refused read must leave dst untouched'
+	// reader expecting MORE lanes than the channel carries: refuse too — copying the
+	// narrower payload would blend fresh low lanes with stale high lanes (codex #211 r3)
+	assert C.xioc_n_read(&g_cell[0], &rd_seq, &dst[0], words + 1) == 0
+	assert dst[0] == 0, 'a refused read must leave dst untouched'
 	// matching geometry: the same publish is delivered
 	assert C.xioc_n_read(&g_cell[0], &rd_seq, &dst[0], words) == 1
 	assert dst[0] == 100
