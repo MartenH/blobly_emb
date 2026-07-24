@@ -66,7 +66,7 @@ fn region_new() voidptr {
 
 // ---- 1. ring throughput ----------------------------------------------------------
 
-fn bench_ring_throughput(bufsz u32) {
+fn bench_ring_throughput(bufsz u32, fill bool) {
 	b := region_new()
 	C.bulk_init(b, nbuf, bufsz)
 	pid := C.fork()
@@ -89,13 +89,22 @@ fn bench_ring_throughput(bufsz u32) {
 				if idx < 0 {
 					continue
 				}
-				// touch first + last byte: the number measured is OWNERSHIP TRANSFER —
-				// the payload is filled in place and never copied by the transport, so
-				// a full memset here would just benchmark memset
 				mut p := unsafe { &u8(C.bulk_buf(b, u32(idx))) }
-				unsafe {
-					p[0] = 1
-					p[bufsz - 1] = 2
+				if fill {
+					// FILLED mode: write every byte, so the rate includes the real
+					// cache traffic a producing FB pays — the honest bytes/s
+					for i in u32(0) .. bufsz {
+						unsafe {
+							p[i] = u8(i)
+						}
+					}
+				} else {
+					// OWNERSHIP mode: first + last byte only — the transport's own
+					// cost; the payload is filled in place and never copied by it
+					unsafe {
+						p[0] = 1
+						p[bufsz - 1] = 2
+					}
 				}
 				C.bulk_publish(b, u32(idx), bufsz)
 			}
@@ -121,12 +130,22 @@ fn bench_ring_throughput(bufsz u32) {
 	}
 	C.bulk_release(b, u32(first))
 	mut got := u64(1)
+	mut sink := u64(0)
 	sw := time.new_stopwatch()
 	for {
 		for _ in 0 .. 1024 {
 			idx := C.bulk_take(b, &len)
 			if idx < 0 {
 				continue
+			}
+			if fill {
+				// consume every byte — the reader's half of the real cache traffic
+				p := unsafe { &u8(C.bulk_buf(b, u32(idx))) }
+				for i in u32(0) .. len {
+					unsafe {
+						sink += u64(p[i])
+					}
+				}
 			}
 			got++
 			C.bulk_release(b, u32(idx))
@@ -146,7 +165,13 @@ fn bench_ring_throughput(bufsz u32) {
 	if C.exited_ok(status) == 0 {
 		panic('producer child died or could not pin (status ${status}) — not a measurement')
 	}
-	println('  ${bufsz:5} B: ${f64(got) * 1000.0 * 1000.0 / el_us / 1000.0 / 1000.0:6.2f} M transfers/s (ownership only — the payload is filled in place, no bytes move through the ring; ${ovf} failed loans at saturation)')
+	rate := f64(got) * 1000.0 * 1000.0 / el_us / 1000.0 / 1000.0
+	if fill {
+		mbps := f64(got) * f64(bufsz) / el_us // real bytes written AND read
+		println('  ${bufsz:5} B filled:    ${rate:6.2f} M transfers/s  ${mbps:7.0f} MB/s written+read (checksum ${sink & 0xff})')
+	} else {
+		println('  ${bufsz:5} B ownership: ${rate:6.2f} M transfers/s  (transport cost only; ${ovf} failed loans at saturation)')
+	}
 	C.munmap(b, region_bytes)
 }
 
@@ -288,9 +313,12 @@ fn bench_isotp(size u32) {
 
 fn main() {
 	println('bulk_bench — the merged bulk ring (fork + MAP_SHARED) vs ISO-TP, per payload size')
-	println('== ring throughput (max-rate producer, ${nbuf} buffers) ==')
+	println('== ring throughput (max-rate producer, ${nbuf} buffers; ownership = the')
+	println('   transport alone, filled = every byte written by the producer and read by')
+	println('   the consumer — the honest bytes/s a real FB pair would see) ==')
 	for s in sizes {
-		bench_ring_throughput(s)
+		bench_ring_throughput(s, false)
+		bench_ring_throughput(s, true)
 	}
 	println('== ring latency (paced producer; size-INDEPENDENT by construction — the ring')
 	println('   moves ownership, never bytes, so one measurement covers every size) ==')
