@@ -1794,3 +1794,22 @@ nbuf     = 0
 	assert e.any(it.contains('nbuf 0 must be > 0'))
 }
 
+fn test_bulk_cross_partition_rejected() {
+	e := errs_of('
+[[partition]]
+name = "part_b"
+core = 1
+[[partition.thread]]
+name = "thread_b"
+
+[[bulk]]
+name     = "cross_bulk"
+producer = "app_main"
+consumer = "thread_b"
+bufsz    = 64
+nbuf     = 4
+' + app)
+	assert e.any(it.contains('cross partitions'))
+}
+
+
