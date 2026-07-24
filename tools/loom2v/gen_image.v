@@ -22,20 +22,8 @@ import toml
 // is relative to the OWNER's ecu.toml (loom2v itself runs from the repo root, so a bare
 // relative path would escape the example). ecu is the owner's ecu.toml path (banner).
 fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string) {
-	// ONE satellite per model until N-core silicon exists: every satellite publishes
-	// the layout-id acknowledgement into the single DUO_LAYOUT_ADDR cell, so a second
-	// image would race it — a current image's id winning the race would open polling
-	// for a STALE sibling's incompatible slots (codex #211 r8). The per-satellite-cell
-	// design (cells at DUO_LAYOUT_ADDR + 4*i, each signal gated on its producer's
-	// cell) is documented here and lands with the first real multi-satellite target;
-	// generating it against hardware that cannot exist would be untestable plumbing.
-	if m.part.image.len > 1 {
-		mut parts := m.part.image.keys()
-		parts.sort()
-		panic('loom2v: ${m.part.image.len} satellite images (${parts.join(', ')}) — the ' +
-			'cross-core layout handshake carries ONE satellite today; multi-satellite ' +
-			'needs per-satellite layout cells (see gen_image.v) and a target to prove them on')
-	}
+	// The one-satellite-producer guard lives in build_model (it must count hand-written
+	// external satellites too, which never reach this emitter — codex #211 r10).
 	for part, rel in m.part.image {
 		img := os.norm_path(os.join_path(os.dir(ecu), rel))
 		if !m.target.threadx {

@@ -1115,6 +1115,26 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		duo_names << sname
 		sig_of[sname] = si
 	}
+	// ONE satellite producer per model, counting BOTH generated (image =) and
+	// hand-written (external = true) satellites: every producer publishes the layout-id
+	// acknowledgement into the single DUO_LAYOUT_ADDR cell, so a second satellite of
+	// either kind would race it — a current one's id winning would open polling for a
+	// stale sibling's incompatible slots (codex #211 r8/r10). The per-satellite-cell
+	// design (cells at DUO_LAYOUT_ADDR + 4*i, each signal gated on its producer's cell)
+	// lands with the first real multi-satellite target.
+	mut duo_producers := []string{}
+	for sname in duo_names {
+		si := sig_of[sname] or { continue }
+		if si.from !in duo_producers {
+			duo_producers << si.from
+		}
+	}
+	if duo_producers.len > 1 {
+		duo_producers.sort()
+		panic('loom2v: ${duo_producers.len} satellite partitions produce remote signals ' +
+			'(${duo_producers.join(', ')}) — the cross-core layout handshake carries ONE ' +
+			'satellite today (generated or hand-written); see the per-cell design note here')
+	}
 	m := Model{
 		buses:        buses
 		bus_core:     bus_core
