@@ -645,10 +645,14 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			if frof in src_verify_seen || frof in rx_by_msg {
 				continue
 			}
+			// a COMPOSED source (both protections) needs BOTH verifier states — the
+			// verify emission nests E2E under SecOC (REQ-E2E-004), and an else-if here
+			// generated references to an undeclared field (codex #218)
 			if m.frames.e2e_here(frof, r.from_bus) {
 				src_verify_seen[frof] = true
 				glue << '\te2e_rx_${frof} e2e.RxState'
-			} else if m.frames.secoc_here(frof, r.from_bus) {
+			}
+			if m.frames.secoc_here(frof, r.from_bus) {
 				src_verify_seen[frof] = true
 				glue << '\tsecoc_key_${frof} secoc.Key'
 				glue << '\tsecoc_rx_${frof} secoc.RxState'

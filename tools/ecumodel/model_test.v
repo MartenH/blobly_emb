@@ -1765,3 +1765,32 @@ tx      = { mode = "event", cycle_ms = -1 }
 		app)
 	assert e.any(it.contains('tx cycle_ms must be 1..1000000'))
 }
+
+// ---- [bulk] validation tests ----
+
+fn test_bulk_good_config_has_no_errors() {
+	assert errs_of('
+[[bulk]]
+name     = "trace_dump"
+producer = "app_main"
+consumer = "app_main"
+bufsz    = 64
+nbuf     = 4
+' + app) == []
+}
+
+fn test_bulk_missing_fields_and_bad_alignment_flagged() {
+	e := errs_of('
+[[bulk]]
+name     = "bad_bulk"
+producer = "ghost_producer"
+consumer = "ghost_consumer"
+bufsz    = 50
+nbuf     = 0
+' + app)
+	assert e.any(it.contains('producer "ghost_producer" is not a declared'))
+	assert e.any(it.contains('consumer "ghost_consumer" is not a declared'))
+	assert e.any(it.contains('bufsz 50 must be a multiple of 32'))
+	assert e.any(it.contains('nbuf 0 must be > 0'))
+}
+

@@ -1033,6 +1033,7 @@ mut:
 	nvm       NvmCfg
 	nvm_names []string
 	nvm_ids   map[string]u16
+	bulk      []BulkPoolCfg
 }
 
 fn build_model(doc toml.Doc, dbc string) Model {
@@ -1189,6 +1190,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		duo_xw_off:   duo_xw_off
 		duo_xw_total: duo_xw_total
 		nvm:          parse_nvm(doc)
+		bulk:         parse_bulk(doc)
 	}
 	validate_signal_routes_model(m, doc)
 	return m
@@ -3590,6 +3592,7 @@ fn main() {
 	} else {
 		glue << emit_run_host(m, telem_iface, bus_names, bus_dests, extra_dest_buses)
 	}
+	glue << emit_bulk_glue(m.bulk)
 
 	// The `module gen` header emits `import sig` whenever the config COULD reference
 	// sig.* (local cells / bus bridge / io), but some shapes don't actually — the
