@@ -108,7 +108,14 @@ jobs:
               examples/trace_comm/|examples/trace_multicore/) echo "== $d SKIPPED (#191)"; continue ;;
             esac
             if grep -rq arm-none-eabi "$d" --include='Makefile*'; then
-              if make -C "$d" -n gen >/dev/null 2>&1; then
+              # Probe for a gen target STATICALLY: `make -n gen` is not side-effect-free
+              # here — the Makefiles `-include gen/loom_build.mk` with a remake rule, and
+              # GNU make rebuilds included makefiles BEFORE honoring -n, so the probe
+              # itself ran real generation and a generator failure read as "no gen
+              # target" (codex #209 r3). Every example defines gen: in its own Makefile
+              # (a satellite image like h755_m4_app deliberately has none — its OWNER's
+              # gen regenerates it, which keeps it inside the freshness net below).
+              if grep -qE '^gen:' "$d/Makefile"; then
                 echo "== $d (cross: gen only)"
                 make -C "$d" gen
               else
