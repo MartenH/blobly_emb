@@ -1,6 +1,8 @@
 module uds
 
-// @verifies SYS-REQ-DIAG-001
+// @verifies SYS-REQ-DIAG-001 REQ-DIAG-001
+// (service dispatch with positive/negative responses, unknown-service/DID NRCs,
+//  and the suppressPosRspMsgIndicationBit silence in test_tester_present.)
 
 fn call(mut s Server, req []u8) []u8 {
 	mut resp := [256]u8{}

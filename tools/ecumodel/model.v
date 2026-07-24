@@ -175,6 +175,9 @@ pub fn validate(doc toml.Doc) []string {
 	// [someip] / eth buses — must also stay BEFORE [trace] (early return below).
 	errs << validate_someip(doc, part_names, thread_part, bus_names)
 
+	// [bulk] — bulk transport pools (docs/bulk-transport.md). Must stay BEFORE [trace].
+	errs << validate_bulk(doc, part_names, thread_part)
+
 	// [trace] — the runtime-observability block loom2v generates the trace wiring from. Validate
 	// the enums loom2v switches on (level, mode), the numeric ranges (pre_pct, buffer_records),
 	// and the CAN channel the traffic binds to. Frame ids are handled by loom2v (see below).
@@ -1386,6 +1389,67 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 	for pname, period in periods {
 		if fastest > 0 && period % fastest != 0 {
 			errs << 'io.${period_kind[pname]} "${pname}" period ${period} ms is not a multiple of the fastest io period (${fastest} ms) — the io thread serves points on multiples of its tick'
+		}
+	}
+	return errs
+}
+
+// validate_bulk checks [[bulk]] pool definitions (docs/bulk-transport.md).
+pub fn validate_bulk(doc toml.Doc, part_names map[string]bool, thread_part map[string]string) []string {
+	mut errs := []string{}
+	mut bulk_names := map[string]bool{}
+
+	for b in toml_arr(doc, 'bulk') {
+		bm := b.as_map()
+		bname := str_of(bm, 'name')
+		if 'name' !in bm {
+			errs << 'a [[bulk]] is missing `name`'
+		} else if !ident_ok(bname) {
+			errs << 'bulk pool name "${bname}" is not a valid identifier'
+		} else if bname in bulk_names {
+			errs << 'duplicate bulk pool name "${bname}" — bulk pool names must be unique'
+		} else {
+			bulk_names[bname] = true
+		}
+
+		prod := str_of(bm, 'producer')
+		if 'producer' !in bm {
+			errs << 'bulk pool "${bname}" is missing `producer`'
+		} else if prod !in thread_part && prod !in part_names {
+			errs << 'bulk pool "${bname}" producer "${prod}" is not a declared partition or thread'
+		}
+
+		cons := str_of(bm, 'consumer')
+		if 'consumer' !in bm {
+			errs << 'bulk pool "${bname}" is missing `consumer`'
+		} else if cons !in thread_part && cons !in part_names {
+			errs << 'bulk pool "${bname}" consumer "${cons}" is not a declared partition or thread'
+		}
+
+		if 'bufsz' !in bm {
+			errs << 'bulk pool "${bname}" is missing `bufsz`'
+		} else if v := bm['bufsz'] {
+			if v is i64 {
+				if v <= 0 {
+					errs << 'bulk pool "${bname}" bufsz ${v} must be > 0'
+				} else if v % 32 != 0 {
+					errs << 'bulk pool "${bname}" bufsz ${v} must be a multiple of 32 (cache line alignment)'
+				}
+			} else {
+				errs << 'bulk pool "${bname}" bufsz must be an integer'
+			}
+		}
+
+		if 'nbuf' !in bm {
+			errs << 'bulk pool "${bname}" is missing `nbuf`'
+		} else if v := bm['nbuf'] {
+			if v is i64 {
+				if v <= 0 {
+					errs << 'bulk pool "${bname}" nbuf ${v} must be > 0'
+				}
+			} else {
+				errs << 'bulk pool "${bname}" nbuf must be an integer'
+			}
 		}
 	}
 	return errs

@@ -953,13 +953,11 @@ fn parse_frames(doc toml.Doc, eth string, buses map[string]bool) FrameCfg {
 			f.secoc_maclen[fk] = int((sm['mac_len'] or { toml.Any(4) }).int())
 			f.secoc_key[fk] = parse_hex((sm['key'] or { toml.Any('') }).string())
 		}
-		// E2E and SecOC on ONE frame don't compose: whichever protect() runs second
-		// mutates bytes the first already covered (SecOC's freshness/MAC after the E2E
-		// CRC, or vice versa), so neither check can pass. Reject the combined profile
-		// until a defined nesting + matching verification scheme exists.
-		if (f.e2e_on[fk] or { false }) && (f.secoc_on[fk] or { false }) {
-			panic('frame "${fk}": both e2e and secoc are set — they do not compose (one protect overwrites the other\'s covered bytes); use one profile')
-		}
+		// E2E + SecOC on ONE frame COMPOSE since REQ-E2E-004 landed: the E2E CRC
+		// excludes the SecOC freshness/MAC windows (protect_ex/check_ex), TX runs
+		// E2E-then-SecOC, RX verifies SecOC-then-E2E nested. The field-disjointness
+		// this depends on is validated in build_model's protected-frames walk (the
+		// 'REQ-E2E-004 requires disjoint protection bytes' panic).
 	}
 	return f
 }
@@ -1035,6 +1033,7 @@ mut:
 	nvm       NvmCfg
 	nvm_names []string
 	nvm_ids   map[string]u16
+	bulk      []BulkPoolCfg
 }
 
 fn build_model(doc toml.Doc, dbc string) Model {
@@ -1191,6 +1190,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		duo_xw_off:   duo_xw_off
 		duo_xw_total: duo_xw_total
 		nvm:          parse_nvm(doc)
+		bulk:         parse_bulk(doc)
 	}
 	validate_signal_routes_model(m, doc)
 	return m
@@ -3125,6 +3125,21 @@ fn main() {
 				|| (fp >= mp && fp < mp + ml) {
 				panic('secoc ${fk}: fresh_pos=${fp}, mac_pos=${mp}, mac_len=${ml} must be 1..16, fit within dlc=${dlc}, and not overlap')
 			}
+			// COMPOSED frame (E2E + SecOC, REQ-E2E-004): the four protection fields
+			// must occupy disjoint bytes — the E2E CRC excludes the SecOC windows, so
+			// a CRC or counter sitting INSIDE them would be stamped over by SecOC and
+			// unverifiable; reject the layout rather than compose garbage.
+			if m.frames.e2e_on[fk] or { false } {
+				cp := m.frames.e2e_crc[fk] or { 0 }
+				np := m.frames.e2e_ctr[fk] or { 0 }
+				for pos in [cp, np] {
+					if pos == fp || (pos >= mp && pos < mp + ml) {
+						panic('e2e+secoc ${fk}: crc_pos=${cp}/counter_pos=${np} collide with ' +
+							'fresh_pos=${fp}/mac@${mp}+${ml} — REQ-E2E-004 requires disjoint ' +
+							'protection bytes (E2E covers the payload, never the SecOC fields)')
+					}
+				}
+			}
 		}
 	}
 
@@ -3577,6 +3592,7 @@ fn main() {
 	} else {
 		glue << emit_run_host(m, telem_iface, bus_names, bus_dests, extra_dest_buses)
 	}
+	glue << emit_bulk_glue(m.bulk)
 
 	// The `module gen` header emits `import sig` whenever the config COULD reference
 	// sig.* (local cells / bus bridge / io), but some shapes don't actually — the

@@ -1,5 +1,9 @@
 module isotp
 
+// @verifies REQ-TP-001 REQ-TP-002
+// (segmentation/reassembly: single/first/consecutive frames, blocksize, both
+//  directions; flow control incl. WAIT bounds and N_Bs/N_Cs timeouts either way.)
+
 // pump runs PDUs between two links until quiescent — each link's output is the
 // other's input (the bridge does this id-routing on a real bus).
 fn pump(mut a Link, mut b Link, now u64) {
