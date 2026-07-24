@@ -22,7 +22,7 @@ module main
 #flag -I @VMODROOT/boards/common
 #include "xioc.h"
 
-fn C.xioc_n_init(c voidptr, words u32)
+fn C.xioc_n_init(c voidptr, words u32, seq_seed u32)
 fn C.xioc_n_write(c voidptr, src &u32)
 fn C.xioc_n_read(c voidptr, rd_seq &u32, dst &u32, dst_words u32) int
 
@@ -44,7 +44,7 @@ fn writer() {
 }
 
 fn test_wide_channel_never_tears_under_concurrent_writer() {
-	C.xioc_n_init(&g_cell[0], words)
+	C.xioc_n_init(&g_cell[0], words, 0)
 	t := spawn writer()
 
 	mut rd_seq := u32(0)
@@ -105,7 +105,7 @@ fn test_geometry_mismatch_reads_as_never_fresh() {
 	// A writer whose build disagrees about the channel width (a stale satellite image
 	// after a partial reflash) must read as NO DATA, never as a copy past our buffer:
 	// the shared `words` is not a copy bound beyond the reader's own capacity.
-	C.xioc_n_init(&g_cell[0], words)
+	C.xioc_n_init(&g_cell[0], words, 0)
 	mut src := [16]u32{}
 	for i in 0 .. int(words) {
 		src[i] = 100 + u32(i)

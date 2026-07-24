@@ -170,14 +170,20 @@ static inline volatile uint32_t *xioc_n_slot(xioc_n_t *c, uint32_t n)
  * and the geometry is published LAST — so a reader that observes the new `words` is
  * guaranteed to find latest == 0 and zeroed seq words behind it, and a reader still
  * holding the old geometry refuses on the width mismatch (codex #211 r5). */
-static inline void xioc_n_init(xioc_n_t *c, uint32_t words)
+/* seq_seed partitions the SEQUENCE SPACE per writer boot (pass a boot-unique value,
+ * e.g. the writer's microsecond clock; 0 keeps the deterministic test behavior): a
+ * reader preempted across a writer RESTART holds a pre-restart seq, and with a
+ * zero-based restart the new wseq could eventually coincide with it — the ABA blend
+ * codex #211 r13 describes. Seeded, cross-boot coincidence is ~1/2^32 instead of
+ * inevitable-by-counting. */
+static inline void xioc_n_init(xioc_n_t *c, uint32_t words, uint32_t seq_seed)
 {
 	XIOC_ST(&c->latest, 0u);
 	XIOC_DMB();
 	for (uint32_t i = 0; i < XIOC_SLOTS * (1u + words); i++) {
 		XIOC_ST(&c->cell[i], 0u);
 	}
-	c->wseq = 0u;
+	c->wseq = seq_seed;
 	XIOC_DMB();
 	XIOC_ST(&c->words, words);
 }

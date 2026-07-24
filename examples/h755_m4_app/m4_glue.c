@@ -65,7 +65,12 @@ void duo_pub(int i, uint32_t a, uint32_t b) {
  * (gen/duo_gen.h DUO_XW_<SIG>_OFF) and the generated boot inits each channel this image
  * writes. Same plain-store discipline as the pair pool. */
 void duo_xw_init(uint32_t off, uint32_t words) {
-	xioc_n_init((xioc_n_t *)(DUO_XW_ADDR + off), words);
+	/* seq space seeded per BOOT (DWT-derived, |1 so it is never the 0 sentinel): a
+	 * reader preempted across our restart can never meet a colliding sequence
+	 * number from the new boot (codex #211 r13) */
+	extern uint64_t board_now_us(void);
+	xioc_n_init((xioc_n_t *)(DUO_XW_ADDR + off), words,
+	            (uint32_t)board_now_us() | 1u);
 }
 
 void duo_pub_n(uint32_t off, const uint32_t *src) {
