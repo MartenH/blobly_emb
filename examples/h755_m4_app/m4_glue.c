@@ -72,6 +72,17 @@ void duo_pub_n(uint32_t off, const uint32_t *src) {
 	xioc_n_write((xioc_n_t *)(DUO_XW_ADDR + off), src);
 }
 
+/* duo_layout_retract — the satellite's FIRST act at boot, before any channel init:
+ * on a satellite-only restart beside a live owner, the retained (same-build) id would
+ * otherwise keep polling open while init clears slots and restarts wseq under the
+ * reader — an ABA window (codex #211 r12). Retract, init, then publish. The owner's
+ * per-signal read state may skip exactly one post-restart publish (rd_seq == 1
+ * collision); latest-value semantics self-heal at the producer's next cadence. */
+void duo_layout_retract(void) {
+	*(volatile uint32_t *)DUO_LAYOUT_ADDR = 0u;
+	__asm__ volatile("dmb" ::: "memory");
+}
+
 /* duo_layout_publish — the satellite's half of the layout handshake: after every
  * channel this image writes is initialized, publish the generated layout id; the owner
  * refuses all remote signals until it matches (stale-image protection, codex #211 r5). */

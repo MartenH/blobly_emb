@@ -74,6 +74,7 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 			}
 		}
 		if produces {
+			g << 'fn C.duo_layout_retract() // boot FIRST act: close polling before touching channels'
 			g << 'fn C.duo_layout_publish() // layout-id handshake: owner polls nothing until this'
 		}
 		g << 'fn C.duo_pub(int, u32, u32) // xioc writer — slots from gen/duo_gen.h'
@@ -163,6 +164,10 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		g << '// boot: the whole image entry — the example\'s main.v is just `gen.boot()`.'
 		g << 'pub fn boot() {'
 		g << '\tC.duo_wait_clocks() // SysTick assumes the final HCLK: wait out the owner\'s PLL'
+		if produces {
+			g << '\tC.duo_layout_retract() // BEFORE any channel init: a satellite-only restart'
+			g << '\t// beside a live owner must close polling first (retained same-build id)'
+		}
 		g << '\tC.board_timebase_init()'
 		g << '\tC.duo_ioc_init()'
 		for sname in wide_writes {

@@ -38,6 +38,7 @@ fn C.board_now_us() u64 // DWT-based µs (this core's own counter, glue C)
 fn C.duo_wait_clocks() // park until the owner signals clocks-ready (duo.h)
 fn C.board_timebase_init()
 fn C.duo_ioc_init() // the shared xioc pool (satellite is the writer side)
+fn C.duo_layout_retract() // boot FIRST act: close polling before touching channels
 fn C.duo_layout_publish() // layout-id handshake: owner polls nothing until this
 fn C.duo_pub(int, u32, u32) // xioc writer — slots from gen/duo_gen.h
 fn C._tx_thread_sleep(u32) u32
@@ -136,6 +137,8 @@ fn tx_application_define(first_unused voidptr) {
 // boot: the whole image entry — the example's main.v is just `gen.boot()`.
 pub fn boot() {
 	C.duo_wait_clocks() // SysTick assumes the final HCLK: wait out the owner's PLL
+	C.duo_layout_retract() // BEFORE any channel init: a satellite-only restart
+	// beside a live owner must close polling first (retained same-build id)
 	C.board_timebase_init()
 	C.duo_ioc_init()
 	C.duo_layout_publish() // AFTER every channel init: the owner may poll now
