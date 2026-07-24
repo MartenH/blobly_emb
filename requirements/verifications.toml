@@ -361,5 +361,15 @@ id = "trace-correlation-silicon"
 method = "review"
 context = "h755/dual-core"
 verifies = ["REQ-TRACE-011"]
+# REQ-BULK-003 (plain-store ring discipline): the host tests prove the LOGIC (ownership
+# transfer, ordering, exhaustion) cross-thread and cross-process — but the requirement's
+# claim is soundness between sides whose exclusive monitors do not arbitrate, and x86's
+# memory model is stronger than two Cortex cores over an AXI fabric. The H755 ring run
+# (same tear methodology as the 2026-07-12 xioc measurement) signs this off on return.
+[[review]]
+id = "bulk-ring-silicon"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-BULK-003"]
 approved_by = ""
 date = ""
