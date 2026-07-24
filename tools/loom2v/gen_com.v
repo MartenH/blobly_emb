@@ -1119,6 +1119,14 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			if cyc == 0 {
 				cyc = 100000 // default cyclic period when unspecified
 			}
+			// this HOST bridge runs the tx pass once per 10 ms tick: a period below or
+			// unaligned to that tick silently transmits at the wrong rate — reject it
+			// loudly instead of letting should_send hide it (REQ-COM-003, codex #218)
+			if (mode == 'cyclic' || mode == 'mixed') && (cyc < 10000 || cyc % 10000 != 0) {
+				panic('frame "${msg}": cycle ${cyc / 1000} ms is not a multiple of the host ' +
+					"bridge's 10 ms tick — the bridge cannot transmit at that period; use a " +
+					'multiple of 10 ms')
+			}
 			glue << '\tst.tx_${msg}_st = com.TxState{'
 			glue << '\t\tmode: com.TxMode.${mode}'
 			glue << '\t\tcycle_us: ${cyc}'
@@ -1146,6 +1154,11 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				r.to_cyc * 1000
 			} else {
 				100000
+			}
+			// routed dests run from the SAME 10 ms host scheduler (codex #218 r2)
+			if (mode == 'cyclic' || mode == 'mixed') && (cyc < 10000 || cyc % 10000 != 0) {
+				panic('routed dest frame "${tof}": cycle ${cyc / 1000} ms is not a multiple of ' +
+					"the host bridge's 10 ms tick — use a multiple of 10 ms")
 			}
 			glue << '\tst.rt_tx_${dk} = com.TxState{'
 			glue << '\t\tmode: com.TxMode.${mode}'

@@ -58,6 +58,12 @@ pub mut:
 	// the link the N_Bs timeout exists to protect. 0 disables the WAIT bound.
 	// No field default — same _vinit rule as n_bs_us.
 	wft_max u8
+	// N_Cr: max gap between consecutive frames of an in-flight RECEIVE before the
+	// partial reassembly is abandoned (ISO 15765-2 N_Cr) — without it a sender that
+	// dies after its FF leaves the link .receiving forever (REQ-TP-002 bounds BOTH
+	// directions; the gap was documented in move-data.md and is now closed).
+	// 0 disables. No field default — the _vinit rule again: init_defaults() sets it.
+	n_cr_us u64
 	// reassembly (rx)
 	rx        RxPhase
 	rx_buf    [max_payload]u8
@@ -79,6 +85,7 @@ pub mut:
 	block_left  u8
 	next_us     u64 // earliest time to send the next CF
 	fc_deadline u64 // abort the tx if still in wait_fc past this (N_Bs); set on entry
+	rx_deadline u64 // abort the rx if no CF arrived by this (N_Cr); set on FF, refreshed per CF
 	wft_count   u8  // consecutive FC.WAIT frames seen for the current block (vs wft_max)
 }
 
@@ -149,11 +156,20 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 				l.rx_sn = 1
 				l.rx_count = 0
 				l.rx = .receiving
-				l.fc_send = true // answer with FC (CTS)
+				l.rx_deadline = 0 // unarm: a stale deadline from a PRIOR transfer would let
+				// tick() abort this fresh receive before its CTS ever goes out (codex #218)
+				l.fc_send = true // answer with FC (CTS); N_Cr is armed when the CTS is
+				// actually emitted (poll), not here — a backpressured bridge may hold the
+				// CTS for a while and the sender is correctly waiting for it
 			}
 		}
 		0x20 { // consecutive frame
+			if l.rx == .receiving && l.n_cr_us != 0 && l.rx_deadline != 0 && now >= l.rx_deadline {
+				l.rx = .idle // N_Cr expired: the transfer is dead — a late CF must not resurrect it
+				l.fc_send = false // and no stale CTS for it (codex #218)
+			}
 			if l.rx == .receiving && low == (l.rx_sn & 0x0F) {
+				l.rx_deadline = now + l.n_cr_us // progress: the N_Cr window restarts per CF
 				mut n := l.rx_len - l.rx_pos
 				if n > 7 {
 					n = 7
@@ -170,6 +186,8 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 					l.rx = .idle
 				} else if l.bs != 0 && l.rx_count >= l.bs {
 					l.rx_count = 0
+					l.rx_deadline = 0 // block full: the sender now waits for the next CTS, so
+					// unarm N_Cr — it re-arms when poll() emits that CTS, not before (codex #218)
 					l.fc_send = true
 				}
 			} else if l.rx == .receiving {
@@ -225,6 +243,7 @@ pub fn (mut l Link) on_frame(now u64, p Pdu) {
 pub fn (mut l Link) init_defaults() {
 	l.n_bs_us = 1_000_000
 	l.wft_max = 16
+	l.n_cr_us = 1_000_000
 }
 
 pub fn (mut l Link) tick(now u64) {
@@ -233,6 +252,14 @@ pub fn (mut l Link) tick(now u64) {
 	// is set on entering either state and refreshed on each CF sent.
 	if l.n_bs_us != 0 && (l.tx == .wait_fc || l.tx == .send_cf) && now >= l.fc_deadline {
 		l.tx = .idle
+	}
+	// N_Cr: a receive whose sender went quiet mid-transfer is abandoned, so the link
+	// (and its reassembly buffer) cannot stay .receiving forever (REQ-TP-002). Only
+	// armed deadlines count — rx_deadline == 0 means the CTS hasn't been emitted yet,
+	// so the sender is correctly waiting for flow control, not stalling (codex #218).
+	if l.n_cr_us != 0 && l.rx == .receiving && l.rx_deadline != 0 && now >= l.rx_deadline {
+		l.rx = .idle
+		l.fc_send = false // don't emit a stale CTS for an abandoned transfer (codex #218)
 	}
 }
 
@@ -243,6 +270,10 @@ pub fn (mut l Link) poll(now u64, mut out Pdu) bool {
 		out.data[1] = l.bs
 		out.data[2] = l.stmin
 		l.fc_send = false
+		// N_Cr starts NOW: the sender only sends CFs after it sees this CTS, so the
+		// receive deadline must be measured from CTS emission, not FF reception — both
+		// the initial FF and every block boundary (codex #218)
+		l.rx_deadline = now + l.n_cr_us
 		return true
 	}
 	match l.tx {

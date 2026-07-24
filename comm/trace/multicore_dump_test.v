@@ -1,8 +1,11 @@
 module trace
 
 // @verifies REQ-TRACE-009
-// (one control command with a core bitmask; the dump streams one self-describing
-//  block per selected core through a single ISO-TP transfer sequence.)
+// (the STREAMING half: one ISO-TP transfer sequence carries one self-describing
+//  block per core. The command/bitmask half is comm/trace/control_test.v's
+//  core-mask tests, and the cross-core GATHER — a satellite block fetched over
+//  the dtrace handoff, never by a direct read — is target glue, pending the
+//  h755-two-core-dump review sign-off in requirements/verifications.toml.)
 
 import comm.isotp
 
