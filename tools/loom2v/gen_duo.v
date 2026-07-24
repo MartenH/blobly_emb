@@ -54,9 +54,10 @@ fn duo_gen_h(m Model) []string {
 		pairs++
 	}
 	g << '#define DUO_GEN_SLOTS ${pairs}'
-	g << '/* the layout id: an FNV-1a hash of the WHOLE slot/offset map. The satellite'
-	g << ' * publishes it (DUO_LAYOUT_ADDR) after init; the owner polls nothing until it'
-	g << ' * matches — two images from different generator runs never exchange slots. */'
+	g << '/* the layout id: an FNV-1a hash of the WHOLE slot/offset/schema map. The'
+	g << ' * satellite acks it against the owner boot nonce (duo.h REQ/ACK cells) after'
+	g << ' * init; the owner polls nothing until the ack matches — two images from'
+	g << ' * different generator runs never exchange slots. */'
 	g << '#define DUO_LAYOUT_ID 0x${duo_layout_id(m).hex()}u'
 	if m.duo_xw_total > 0 {
 		g << '/* wide (xioc_n) channels: byte offsets inside the board window (duo.h DUO_XW_ADDR);'

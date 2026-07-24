@@ -35,13 +35,18 @@
 
 #define DUO_HB_ADDR    0x38000000u
 #define DUO_CLK_ADDR   0x38000008u
-#define DUO_LAYOUT_ADDR 0x38000010u
-#define DUO_EPOCH_ADDR  0x38000014u /* retained boot-epoch counter: the satellite bumps it
-                                     * each boot (SRAM4 survives resets), giving the wide
-                                     * channels a restart-UNIQUE sequence seed — the DWT
-                                     * clock restarts at 0 every boot and cannot be one */ /* the cross-image layout-id handshake cell (see
-                                     * gen/duo_gen.h DUO_LAYOUT_ID): satellite writes
-                                     * after init, owner gates every remote poll on it */
+/* The layout handshake is TWO SPSC cells — one writer each, per the transport's own
+ * hard invariant (a single shared cell had both cores writing it — codex #211 r15):
+ *   REQ (owner-owned):  a retained per-owner-boot nonce; a new owner boot bumps it,
+ *                       instantly invalidating every previous acknowledgement.
+ *   ACK (sat-owned):    req ^ DUO_LAYOUT_ID (gen/duo_gen.h), recomputed every service
+ *                       tick and ZEROED first thing at satellite boot, so polls stop
+ *                       while channels re-init. Owner polls nothing until ACK matches. */
+#define DUO_LAYOUT_REQ_ADDR 0x38000010u
+#define DUO_LAYOUT_ACK_ADDR 0x38000014u
+#define DUO_EPOCH_ADDR      0x38000018u /* retained satellite boot-epoch: bumped once per
+                                         * boot (SRAM4 survives resets) -> restart-unique
+                                         * wide-channel sequence seeds (DWT restarts at 0) */
 #define DUO_IOC_ADDR   0x38000020u
 #define DUO_IOC_N      4
 

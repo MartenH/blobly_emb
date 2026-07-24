@@ -149,22 +149,17 @@ int shell_bmc(unsigned char *out, int cap) {
  * otherwise be trusted as a copy bound (codex #211). Zeroed, every pre-init poll reads
  * latest == 0 -> "nothing published" — and xioc_n_read additionally clamps the bound.
  * Config-independent: the whole DUO_XW_MAX window, not the generated layout. */
+static uint32_t g_layout_req; /* this owner boot's nonce (we also own the REQ cell) */
+
 void duo_clocks_ready(void) {
     /* The owner NEVER touches the wide window — channel init is exclusively the
-     * WRITER's (satellite) job, and the layout handshake is the owner's barrier: no
-     * poll happens until the satellite has initialized its channels and published the
-     * matching build id. (An earlier revision zeroed the window here, gated on the
-     * retired heartbeat — a dead check that made every owner restart a second writer
-     * over a live satellite's channels; codex #211 r5/r6. Cold-boot SRAM garbage is
-     * carried by the handshake + per-channel geometry validation instead.)
-     *
-     * The one word the owner DOES write, once, at boot: it RETRACTS the layout cell.
-     * SRAM4 survives an owner-only reset, so a retained id + retained channels would
-     * otherwise let the fresh reader (rd_seq = 0) transmit one stale frame before the
-     * satellite runs (codex #211 r7). The satellite REPUBLISHES the id every service
-     * tick, so a live satellite restores it within ~one tick; a stopped or stale one
-     * leaves the cell retracted and the owner stays silent. */
-    *(volatile uint32_t *)DUO_LAYOUT_ADDR = 0u;
+     * WRITER's (satellite) job, and the layout handshake is the owner's barrier
+     * (codex #211 r5-r7). The handshake is two SPSC cells (duo.h): the owner bumps
+     * its RETAINED req nonce here — one writer, this core — which instantly stales
+     * every previous acknowledgement; a live same-build satellite re-acks within
+     * ~one service tick, a stale or stopped one never does. */
+    g_layout_req = (*(volatile uint32_t *)DUO_LAYOUT_REQ_ADDR + 1u) | 1u;
+    *(volatile uint32_t *)DUO_LAYOUT_REQ_ADDR = g_layout_req;
     __asm__ volatile("dsb");
     *(volatile uint32_t *)DUO_CLK_ADDR = DUO_CLK_MAGIC;
     __asm__ volatile("dsb");
@@ -181,8 +176,8 @@ void duo_clocks_ready(void) {
  * and every remote signal reads as never-fresh, instead of slot cross-talk transmitting
  * signal A's data as signal B (codex #211 r5). */
 int duo_layout_ok(void) {
-    if (*(volatile uint32_t *)DUO_LAYOUT_ADDR != DUO_LAYOUT_ID) {
-        return 0;
+    if (*(volatile uint32_t *)DUO_LAYOUT_ACK_ADDR != (g_layout_req ^ DUO_LAYOUT_ID)) {
+        return 0; /* not acked for THIS owner boot + THIS build's layout */
     }
     /* acquire: pairs with the satellite's release dmb in duo_layout_publish — without
      * this the channel loads that follow a match could be satisfied ahead of the flag

@@ -3286,13 +3286,9 @@ fn main() {
 		// (to a local partition), which never reach the external-TX check below: two
 		// writing handlers would emit two duo_pub(_n) producers racing the channel's
 		// writer-private wseq, invalidating the tear-free algorithm (codex #211 r9).
-		for sn in m.sig_names {
-			rsi := m.sig_of[sn] or { continue }
-			if rsi.remote && written_count[sn] > 1 {
-				panic('loom2v: remote signal "${sn}" is written by ${written_count[sn]} FB handlers — ' +
-					'an xioc channel has exactly ONE producer (SPSC); merge the writers or split the signal')
-			}
-		}
+		// NOTE: the SPSC validation itself lives in build_model and counts producer
+		// CONTEXTS (threads) — a raw handler count here rejected two serial handlers
+		// on one thread, a valid single producer (codex #211 r14/r15).
 		// How many rx signals READ by FBs each DBC message carries (the lean whole-frame decode
 		// serves one per message; more need the per-signal codec).
 		mut msg_read_sigs := map[string]int{}

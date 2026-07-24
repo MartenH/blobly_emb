@@ -84,7 +84,10 @@ void duo_pub_n(uint32_t off, const uint32_t *src) {
  * per-signal read state may skip exactly one post-restart publish (rd_seq == 1
  * collision); latest-value semantics self-heal at the producer's next cadence. */
 void duo_layout_retract(void) {
-	*(volatile uint32_t *)DUO_LAYOUT_ADDR = 0u;
+	/* our HALF of the two-cell handshake: zero the ACK (our cell, one writer — the
+	 * owner's REQ cell is never ours to touch, codex #211 r15) so polling stops
+	 * before any channel re-init. */
+	*(volatile uint32_t *)DUO_LAYOUT_ACK_ADDR = 0u;
 	/* restart-UNIQUE epoch: SRAM4 retains the counter across resets, so ++ gives every
 	 * boot a distinct value (cold-boot garbage is as good as random) — the DWT clock
 	 * restarts at 0 each boot and could repeat (codex #211 r14). Knuth-mixed so
@@ -99,8 +102,12 @@ void duo_layout_retract(void) {
  * channel this image writes is initialized, publish the generated layout id; the owner
  * refuses all remote signals until it matches (stale-image protection, codex #211 r5). */
 void duo_layout_publish(void) {
-	__asm__ volatile("dmb" ::: "memory"); /* channel inits land before the id */
-	*(volatile uint32_t *)DUO_LAYOUT_ADDR = DUO_LAYOUT_ID;
+	__asm__ volatile("dmb" ::: "memory"); /* channel inits land before the ack */
+	/* ack = the owner's CURRENT req nonce bound to OUR build's layout id: a new owner
+	 * boot (new req) is re-acked on the next tick; a stale-build satellite acks a
+	 * value the owner never accepts. One reader of req, one writer of ack. */
+	uint32_t req = *(volatile uint32_t *)DUO_LAYOUT_REQ_ADDR;
+	*(volatile uint32_t *)DUO_LAYOUT_ACK_ADDR = req ^ DUO_LAYOUT_ID;
 	__asm__ volatile("dmb" ::: "memory");
 }
 
