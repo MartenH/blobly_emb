@@ -32,22 +32,23 @@ Status keys: ✅ shipped · 🔨 in progress · ⏭️ next · 🧭 planned · �
   thread rejects routes)
 - 🧭 **ISO-TP / UDS** — beyond the boot-loader's request path into a general
   diagnostic service layer
-- 🧭 **Cross-core BULK transport** — today a cross-core signal is capped at one
-  xioc cell (1–2 × `u32` = 8 B); anything larger has no generated path and must be
-  hand-written as a shared-memory owner-buffer + request/ack handshake (the one
-  worked example is the dtrace handoff in `boards/h755zi/duo.h`, 2 KB in SRAM4).
-  A "bulk signal" — declared in `ecu.toml`, generated on both sides, paced like
-  the trace dump's `pack_chunk` — is the missing rung. Note the constraint that
-  makes it non-trivial: the cores don't arbitrate LDREX/STREX, which is why xioc
-  is plain-store wait-free (the triple buffer tore 162/200k across cores), so a
-  wider cell is a design problem, not a bigger constant. Survey of how ROS 2,
-  iceoryx, OpenAMP/RPMsg and Linux solve this: [docs/bulk-transport.md](docs/bulk-transport.md);
-  today's limits: [docs/um/move-data.md](docs/um/move-data.md).
-- 🧭 **Bulk transport benchmark** — extend the `tools/ioc_bench` family (which
-  measures the small-signal IOC/xioc path) with a THROUGHPUT harness: bytes/s and
-  latency for a cross-core owner-buffer handoff vs the same payload over ISO-TP,
-  so the "how big before it should leave the chip" answer is measured rather than
-  assumed.
+- ✅ **Wide cross-core signals** (`#211`, REQ-INV-006) — a remote signal carries
+  ≤16 fields of `u32`/`u16`/`u8`/`bool` as u32 lanes (`xioc_n`), pair cell
+  preserved; layout REQ/ACK handshake makes a stale/restarting satellite read as
+  never-fresh, never as cross-talk. Residue: the #212 packing decision (u64/
+  float/packed-narrow + local/remote encode unification, **user call**); H755
+  tear re-run at wide widths bench-queued (`wide-xioc-derivation-and-silicon`).
+- ✅ **Bulk P1 portable core** (`#213`, REQ-BULK-001..003) — `boards/common/bulk.h`
+  pool + SPSC descriptor rings, fallible counted loans, host-proven cross-process
+  (fork+`MAP_SHARED`); `bulk-ring-silicon` review bench-queued. Next rungs: the
+  doorbell seam (H755 = **HSEM release-interrupt**, it has no IPCC), cache hooks,
+  the `ecu.toml` surface, OSAL/IOC sanctioning before any app touches a pool.
+- ✅ **Bulk transport benchmark** (`#216`) — `tools/bulk_bench` in `make bench`:
+  the ring moves ownership at ~5 M transfers/s (0.3 µs median publish→take,
+  pinned cross-core) and ~0.9–6 GB/s payload filled+consumed, vs ~3–10 ms of
+  classic-CAN bus time per ISO-TP transfer — "how big before it leaves the chip"
+  is now a measured number (classic-scoped; FD ISO-TP unimplemented, not
+  extrapolated).
 
 ## Network management & boot
 
@@ -125,21 +126,19 @@ gate unit tests, `make lint`, `make check`, `make trace-check` (with the drift c
 and the example e2e tests on every PR and on pushes to `main` (the workflow's push
 trigger is main-only; feature branches are gated via their PR).
 
-**Host-only queue (in order):**
+**Host-only queue: CLEARED (2026-07-24).** Cross-core signal routes ✅ (`gw_xcore`
+on two vcans), wide remote signals ✅ (`#211`), bulk P1 ✅ (`#213`) + measured
+(`#216`), the full blind-merge codex backlog worked through (`#203` → 10 PRs
+merged), CI hardened twice over (`#209`/`#215`). Remaining host items wait on
+**user calls**: `#191` (trace raw-mode restore — also unblocks the
+`trace_comm`/`trace_multicore` builds the CI gate skips) and `#212` (the wide
+packing / encode-unification decision).
 
-1. ✅ **Cross-core signal routes** — lowered to the IOC crossing, end-to-end
-   verified on two vcans (`examples/gw_xcore`); the on-target xioc wiring rides
-   the bench queue.
-2. 🧭 **Bulk transport P1, sim-first** — the portable pool + descriptor ring of
-   [docs/bulk-transport.md](docs/bulk-transport.md) in `boards/common`, proven
-   cross-process on the host (`mmap`+`fork`, the `ioc_bench_mp` seam) before any
-   board work.
-3. 🧭 **`trace_multicore` fix** (`#191`, vcan-only) — waiting on one design call:
-   reject `[trace]` with `record` but no `dump_fc`, or generate the dump anyway.
-
-**Bench queue (on return):** xioc-route silicon check (H755); FD data-timing
-harmonization; canif FD recv-flag; target multi-bus comm owner → the **3-node
-silicon run** (H755+H735+H723, all wired); REQ-TRACE-011 silicon sign-off.
+**Bench queue (on return):** xioc-route silicon check (H755); wide-width tear
+re-run + layout REQ/ACK handshake on silicon (`wide-xioc-derivation-and-silicon`);
+bulk ring on silicon (`bulk-ring-silicon`); FD data-timing harmonization; canif
+FD recv-flag; target multi-bus comm owner → the **3-node silicon run**
+(H755+H735+H723, all wired); REQ-TRACE-011 silicon sign-off.
 
 Public-repo gate: **cleared** — `blobly_net` is MIT from its initial commit
 (relicensed 2026-07-22, history rewritten), so the site/docs are unblocked.
