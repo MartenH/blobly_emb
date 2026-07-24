@@ -121,8 +121,9 @@ Status keys: ✅ shipped · 🔨 in progress · ⏭️ next · 🧭 planned · �
 The user is travelling: work must close on **host/sim alone** (vcan, fork/mmap AMP,
 CI). Done since the last revision of this section: on-silicon driver validation
 (`#184`, FD-without-BRS finding recorded above), and **CI exists now** — `#189`/`#190`
-gate unit tests, `make lint`, `make check`, `make trace` (with the drift check) and
-the example e2e tests on every push.
+gate unit tests, `make lint`, `make check`, `make trace-check` (with the drift check)
+and the example e2e tests on every PR and on pushes to `main` (the workflow's push
+trigger is main-only; feature branches are gated via their PR).
 
 **Host-only queue (in order):**
 

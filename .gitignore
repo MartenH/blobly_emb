@@ -19,6 +19,10 @@ vls.log
 /blobly_demo_threadx
 bin/
 
+# `v run tools/<t>/gen.v` can leave the compiled binary beside its source; the CI
+# freshness gate treats any untracked file as drift, so keep the spill invisible
+tools/*/gen
+
 # vendored CMSIS headers for the bare-metal STM32 examples (fetch via `make deps`)
 third_party/
 
@@ -34,3 +38,7 @@ examples/**/gen-*.toml
 examples/*/nodes/*/gen/
 examples/*/nodes/*/ports/
 examples/*/nodes/*/sig/
+
+# the CI's own V toolchain: vlang/setup-v builds V inside the workspace, and the
+# freshness gate reads any untracked file as generated-output drift
+vlang/

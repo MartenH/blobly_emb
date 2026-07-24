@@ -349,3 +349,27 @@ context = "h755/dual-core"
 verifies = ["REQ-INV-006"]
 approved_by = ""
 date = ""
+
+# REQ-TRACE-011 (cross-core time correlation): the host tests round-trip the offset record
+# and inject offsets via set_core_offset, but the requirement's substance — the offset is
+# RE-MEASURED per dump over the real request/ack exchange — only executes on the dual-core
+# bench (H755 run measured +49.7 ms; the wrap-guard/±60 s window changes since are unsigned).
+# Pending review keeps the ledger honest at "covered" instead of test-tag "verified"
+# (codex #192, same shape as wide-xioc-derivation-and-silicon).
+[[review]]
+id = "trace-correlation-silicon"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-TRACE-011"]
+# REQ-BULK-003 (plain-store ring discipline): the host tests prove the LOGIC (ownership
+# transfer, ordering, exhaustion) cross-thread and cross-process — but the requirement's
+# claim is soundness between sides whose exclusive monitors do not arbitrate, and x86's
+# memory model is stronger than two Cortex cores over an AXI fabric. The H755 ring run
+# (same tear methodology as the 2026-07-12 xioc measurement) signs this off on return.
+[[review]]
+id = "bulk-ring-silicon"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-BULK-003"]
+approved_by = ""
+date = ""

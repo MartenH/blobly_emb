@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 184 | 93 | 14 | 77 | 0 |
+| 187 | 94 | 16 | 77 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -33,6 +33,9 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-016 | QM | test | verified | prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass) |
 | REQ-BOOT-017 | QM | test | verified | ed25519_interop_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), sha512_test.v (pass) |
 | REQ-BOOT-018 | QM | analysis | uncovered | — |
+| REQ-BULK-001 | QM | test | verified | bulk_test.v (pass) |
+| REQ-BULK-002 | QM | test | verified | bulk_test.v (pass) |
+| REQ-BULK-003 | QM | test | covered | bulk-ring-silicon (pending), bulk_test.v (pass) |
 | REQ-CAN-DRV-001 | QM | test | covered | h735-fdcan-hardware (approved), h755-dualcore-heartbeat (approved), h755-fdcan-hardware (approved), route.lua (pending) |
 | REQ-CAN-DRV-002 | QM | test | covered | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved), route.lua (pending) |
 | REQ-CAN-DRV-003 | QM | test | verified | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
@@ -180,7 +183,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TRACE-002 | QM | test | verified | h755-external-partitions (approved) |
 | REQ-TRACE-008 | QM | test | uncovered | — |
 | REQ-TRACE-009 | QM | test | uncovered | — |
-| REQ-TRACE-011 | QM | test | verified | module_test.v (pass), trace_test.v (pass) |
+| REQ-TRACE-011 | QM | test | covered | module_test.v (pass), trace-correlation-silicon (pending), trace_test.v (pass) |
 | REQ-TOPO-001 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-002 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-003 | QM | test | verified | dbc_test.v (pass), model_test.v (pass) |
@@ -222,6 +225,9 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-016 | | | | | | | | | | | | | | ✓ | | |
 | REQ-BOOT-017 | | | | | | | | | | | | | | ✓ | | |
 | REQ-BOOT-018 | | | | | | | | | | | | | | | | |
+| REQ-BULK-001 | | | | | | | | | | | | | | ✓ | | |
+| REQ-BULK-002 | | | | | | | | | | | | | | ✓ | | |
+| REQ-BULK-003 | | | | | | | | | | | · | | | ✓ | | |
 | REQ-CAN-DRV-001 | | | | | ✓ | | | ✓ | | | ✓ | | · | | | |
 | REQ-CAN-DRV-002 | | | | | ✓ | | | ✓ | | | | | · | | | |
 | REQ-CAN-DRV-003 | | | | | ✓ | | | ✓ | | | | | | | | |
@@ -369,7 +375,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TRACE-002 | | | | | | | | | | | ✓ | | | | | |
 | REQ-TRACE-008 | | | | | | | | | | | | | | | | |
 | REQ-TRACE-009 | | | | | | | | | | | | | | | | |
-| REQ-TRACE-011 | | | | | | | | | | | | | | ✓ | | |
+| REQ-TRACE-011 | | | | | | | | | | | · | | | ✓ | | |
 | REQ-TOPO-001 | | | | | | | | | | | | | | ✓ | | |
 | REQ-TOPO-002 | | | | | | | | | | | | | | ✓ | | |
 | REQ-TOPO-003 | | | | | | | | | | | | | | ✓ | | |
