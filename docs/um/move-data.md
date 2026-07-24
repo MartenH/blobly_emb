@@ -201,8 +201,11 @@ you plan around it:
 A **new bulk consumer** therefore owns its *own* `isotp.Link` inside a ComModule.
 `comm/trace` and `comm/shell` are the module-owned-link examples — but note both are
 **outbound** streamers (their FC handlers feed a send in flight; neither ever calls
-`take()`); the one complete **inbound** consume-and-dispatch loop in the tree is the
-generated UDS bridge (`gen/loom_gen.v`: `on_frame` → `take` → handle → `send`). Whichever
+`take()`). For the complete **inbound** consume-and-dispatch loop, read the generated
+UDS bridge (`gen/loom_gen.v`: `on_frame` → `take` → handle → `send`) or the three
+hand-written bootloader loops (`examples/boot_sim`, `examples/h735_boot`,
+`examples/h755_boot` — each `main.v` runs the full loop into `boot.Prog.handle`, and
+they are the closest match for a bulk-transfer consumer). Whichever
 direction, `send`/`take` are only the payload calls — a private link *works* only wired
 into the module's frame loop, four obligations:
 
@@ -340,12 +343,13 @@ nodes and buses in `system.toml` and the generator wires each node's half and an
 explicitly declared gateway route. Bulk does *not* ride that layer: `sysgen` lowers
 buses, NM and cross-node signals, but never emits an `[[isotp]]` block or wires a
 DoIP/SOME/IP connection — a bulk endpoint is **node-local configuration** on each side,
-and `sysgen` offers no diagnostic proxy at all: a **system** route of ISO-TP ids does
-not even generate — `sysgen`'s validation rejects raw routes of non-cyclic frames, and
-SF/FF/CF/FC traffic is event traffic. Only a standalone, hand-authored `ecu.toml`
-route will forward those frames like any other bytes, and then through the
-freshest-wins retry slot — one lost CF kills the transfer (see
-[gateway-a-frame.md](gateway-a-frame.md)). Ethernet connections are not routed at all.
+and `sysgen` offers no diagnostic proxy: it rejects a raw route of frames the DBC
+declares **non-cyclic** — which honest DBCs do for SF/FF/CF/FC event traffic — but the
+checker only knows what the DBC says, so a DBC that stamps those ids with a cycle time
+routes them straight through, and a standalone hand-authored `ecu.toml` route forwards
+them regardless. Every such forward rides the freshest-wins retry slot — one lost CF
+kills the transfer (see [gateway-a-frame.md](gateway-a-frame.md)); `system.toml` is not
+protection, just a DBC-honesty check. Ethernet connections are not routed at all.
 Start with
 [two-node-io.md](two-node-io.md) (a signal across two real ECUs, end to end), then
 [system-from-nodes.md](system-from-nodes.md) for how `system.toml` and `ecu.toml` merge.
