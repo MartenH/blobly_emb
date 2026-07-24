@@ -2,8 +2,10 @@
 
 The second bare-metal example: drive **real CAN frames** through the register-level
 FDCAN driver (`driver/can/can_fdcan.c`, no HAL). The board opens FDCAN1 and echoes
-every classic frame it receives back on the bus with **id + 1**, so a bench tool
-sees a distinct reply for each frame it sends.
+every **odd-id** classic frame it receives back on the bus with **id + 1** (so
+`0x123 → 0x124`), and a bench tool sees a distinct reply for each frame it sends.
+Even ids — which is what every reply is — are ignored: two echo nodes on one bus
+would otherwise answer each other's replies forever.
 
 ```
 main.v ──V -freestanding──▶ canecho.c ─┐
@@ -74,9 +76,13 @@ cansend can0 123#DEADBEEF      # send id 0x123, 4 bytes
 #  -> board replies: 124#DEADBEEF   (id+1, same payload)
 ```
 
-Every frame you send (id ≤ 0x7FF, ≤ 8 data bytes) comes back with its id
-incremented. **✅ Confirmed on hardware** (STM32H735G-DK ↔ PCAN-USB Pro FD,
-500 kbit/s): `123`→`124`, `456`→`457`, `001`→`002`, ~0.7 ms round-trip, bus ACKed.
+Every **odd-id** frame you send (id ≤ **0x7FD**, ≤ 8 data bytes) comes back with
+its id incremented; even ids are dropped by the parity filter (they're the reply
+space — see above), and the top odd id 0x7FF is too — its `id + 1` reply would
+not fit 11 bits. **✅ Confirmed on hardware** (STM32H735G-DK ↔ PCAN-USB Pro FD,
+500 kbit/s): `123`→`124`, `001`→`002`, ~0.7 ms round-trip, bus ACKed — that
+sign-off run predates the parity filter and also probed `456`→`457`, which the
+filter now ignores by design.
 That's the on-silicon proof of the FDCAN driver — **`REQ-CAN-DRV-001/002/003`** (the
 `h735-fdcan-hardware` sign-off in `requirements/verifications.toml`).
 
