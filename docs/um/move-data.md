@@ -143,8 +143,7 @@ consumer:  take()    -> the oldest published buffer, by reference — still no c
 Zero copies end to end; no allocation anywhere (the pool is fixed at build time from
 `ecu.toml`, so the RAM cost is visible in config); and back-pressure is **explicit and
 designed** — when the consumer falls behind, `loan()` fails and the *producer* decides
-drop-oldest / drop-newest / count-overflows, instead of a silent tear or an unbounded
-queue. Loss stays detectable, never silent — the same discipline as everything else on
+drop-newest / count-overflows, instead of a silent tear or an unbounded queue. Loss stays detectable, never silent — the same discipline as everything else on
 this page. One ownership subtlety decided up front: on exhaustion the producer's safe
 choices are **drop-newest or count overflows**. Drop-*oldest* would mean reclaiming a
 buffer the consumer may already hold by reference — only a transport-coordinated reclaim
@@ -192,14 +191,20 @@ you plan around it:
   images — a generated diagnostic endpoint does not accept downloads. And there is no
   generated hook for another consumer to call `send`/`take` on the link.
 
-A **new bulk consumer** therefore owns its *own* `isotp.Link` inside a ComModule — exactly
-how `comm/trace` and `comm/shell` do it. `send`/`take` are the payload calls, but a
-private link only *works* wired into the module's frame loop the way those two wire it —
-four obligations, all visible in their endpoint handlers and `produce()`:
+A **new bulk consumer** therefore owns its *own* `isotp.Link` inside a ComModule.
+`comm/trace` and `comm/shell` are the module-owned-link examples — but note both are
+**outbound** streamers (their FC handlers feed a send in flight; neither ever calls
+`take()`); the one complete **inbound** consume-and-dispatch loop in the tree is the
+generated UDS bridge (`gen/loom_gen.v`: `on_frame` → `take` → handle → `send`). Whichever
+direction, `send`/`take` are only the payload calls — a private link *works* only wired
+into the module's frame loop, four obligations:
 
 - **feed rx** — every CAN frame on the link's ids goes to `l.on_frame(now, pdu)`;
   without it nothing ever reassembles (and an in-flight rx never gets its flow control).
-- **tick** — `l.tick(now)` every comm cycle; the N_Bs/N_Cr timeouts only advance here.
+- **tick** — `l.tick(now)` every comm cycle; the N_Bs timeout (the FC wait on a send)
+  only advances here. Note the gap honestly: there is **no receive deadline** — a peer
+  that dies after its FirstFrame leaves the link `.receiving` until other traffic moves
+  it; do not design a consumer that depends on an N_Cr abort that does not exist.
 - **drain tx** — `l.poll(now, mut pdu)` under the channel's readiness gate, sending each
   frame it yields. This is also how the RECEIVING side emits its flow-control frames —
   a consumer that never polls stalls its peer's multi-frame send.
@@ -327,7 +332,10 @@ nodes and buses in `system.toml` and the generator wires each node's half and an
 explicitly declared gateway route. Bulk does *not* ride that layer: `sysgen` lowers
 buses, NM and cross-node signals, but never emits an `[[isotp]]` block or wires a
 DoIP/SOME/IP connection — a bulk endpoint is **node-local configuration** on each side,
-and its routes (CAN frame/signal routes) don't carry diagnostic or Ethernet traffic.
+and `sysgen` offers no transport-aware (lossless) diagnostic proxy: a raw frame route
+will happily forward ISO-TP SF/FF/CF/FC frames like any other bytes, but through the
+freshest-wins retry slot — one lost CF kills the transfer (see
+[gateway-a-frame.md](gateway-a-frame.md)); Ethernet connections are not routed at all.
 Start with
 [two-node-io.md](two-node-io.md) (a signal across two real ECUs, end to end), then
 [system-from-nodes.md](system-from-nodes.md) for how `system.toml` and `ecu.toml` merge.

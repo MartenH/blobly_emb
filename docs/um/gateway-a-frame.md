@@ -117,10 +117,11 @@ message. Route the signal, or keep both buses on one core.
   frame, and the generator emits an independent forward (with its own retry slot) per
   route, so fan-out to several buses is just several routes. Forward *and* deliver
   locally also works: after the route blocks, the received frame still runs the normal
-  COM decode for this node's own consumers. **Unprotected sources only**: an E2E/SecOC
-  source frame allows exactly one verifying consumer — a second signal route (or local
-  COM delivery beside a route) would advance the verification counter twice per frame,
-  so generation rejects those combinations.
+  COM decode for this node's own consumers. One restriction, and it is **signal-route
+  only**: an E2E/SecOC source frame allows exactly one *verifying* consumer, so a second
+  signal route from it (or local COM delivery beside a signal route) is rejected — each
+  would advance the verification counter twice per frame. Raw frame routes never verify,
+  so they fan a protected source out freely while local COM keeps the single verification.
 - A frame route never decodes, so it cannot check E2E on the way through — that is what
   `gw_srcverify` (a signal route) is for.
 - Routes are CAN machinery. A route touching an eth bus is rejected at generation.
