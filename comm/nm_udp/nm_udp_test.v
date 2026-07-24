@@ -1,16 +1,18 @@
-module nm
+module nm_udp
+
+import comm.nm
 
 fn test_udp_nm_binding() {
-	mut node_a := Nm{
-		cfg: Timings{
+	mut node_a := nm.Nm{
+		cfg: nm.Timings{
 			msg_cycle_us:  100_000
 			timeout_us:    500_000
 			repeat_us:     200_000
 			wait_sleep_us: 100_000
 		}
 	}
-	mut node_b := Nm{
-		cfg: Timings{
+	mut node_b := nm.Nm{
+		cfg: nm.Timings{
 			msg_cycle_us:  100_000
 			timeout_us:    500_000
 			repeat_us:     200_000
@@ -18,14 +20,11 @@ fn test_udp_nm_binding() {
 		}
 	}
 
-	bind_a := UdpBinding{
-		node_id:  0x01
-		pn_local: 0x05
-	}
-	bind_b := UdpBinding{
-		node_id:  0x02
-		pn_local: 0x0A
-	}
+	bind_a := new_udp_binding(0x01, 0x05, 30490)
+	bind_b := new_udp_binding(0x02, 0x0A, 30490)
+
+	assert bind_a.port == 30490
+	assert bind_b.port == 30490
 
 	// Node A requests bus awake
 	now := u64(1000)
