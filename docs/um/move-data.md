@@ -93,14 +93,15 @@ of its sides live in the platform's C glue (`comm_glue.c` / `m4_glue.c`), never 
 Copying its shape into FB-facing code would create exactly the cross-partition shared
 mutable state the isolation rule forbids — an FB's bulk path arrives only when the
 loan/publish ring below lands *behind the OSAL/IOC seam*. And copying the handoff is
-no longer the answer for NEW platform glue either — every copy is another ad-hoc
-cross-core channel outside `osal.ioc_*`, which is the invariant, not a style rule. The
-**portable bulk core is merged** (`boards/common/bulk.h`: pool + SPSC descriptor rings,
-fallible loan, host-proven — REQ-BULK-001..003): platform bulk glue should place one of
-those in the shared window instead of hand-rolling a cell, while the OSAL/config
-sanctioning that would let an *application* touch it is still to come. The dtrace
-handoff below stays documented as what it is — existing instrumentation, one sanctioned
-instance, not a template:
+not the answer for NEW platform glue either — every copy is another ad-hoc cross-core
+channel outside `osal.ioc_*`, and **platform ownership does not exempt a crossing from
+that invariant**. The **portable bulk core is merged** (`boards/common/bulk.h`: pool +
+SPSC descriptor rings, fallible loan, host-proven — REQ-BULK-001..003), but it is the
+*mechanism* the sanctioned transport will be built from, not a license to place rings
+ad hoc: until bulk is an OSAL/IOC transport (region-table entry, config surface), a new
+cross-core bulk need means ISO-TP off-chip or waiting — not a new shared-window channel.
+The dtrace handoff below stays documented as what it is — existing instrumentation, the
+one sanctioned instance, not a template:
 
 - a **window in shared memory** both cores can reach — D3 SRAM4 (`0x38000000`, 64 KB),
   uncached on both by policy, so plain volatile accesses are coherent and no cache

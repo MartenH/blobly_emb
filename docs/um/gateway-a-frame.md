@@ -7,7 +7,7 @@ picking the wrong one is the usual mistake:
 |---|---|---|
 | declares | `from`/`to` only | `signal = "..."` as well |
 | does | re-transmits the raw PDU, **never decoded** | decodes on the source, **re-encodes** into the destination frame |
-| requires | the payload to mean the same thing on both buses | the signal to exist (by name) in a source **and** a destination frame — *layout/scaling* may then differ freely **within the codec's limits**: no multiplexed signals, no big-endian (Motorola) layouts, ≤52-bit width (the value transits an f64); incompatible units, value tables, or ranges are also rejected at generation |
+| requires | the payload to mean the same thing on both buses | the signal to exist (by name) in a source **and** a destination frame, and **every other non-protection signal in the destination frame to be route-filled too** (a partially covered frame would transmit zeros for the rest — generation rejects it); *layout/scaling* may then differ freely **within the codec's limits**: no multiplexed signals, no big-endian (Motorola) layouts, ≤52-bit width (the value transits an f64); incompatible units, value tables, or ranges are also rejected at generation |
 | costs | almost nothing | a decode + encode per frame |
 | example | [`gateway`](../../examples/gateway), [`gw_extid`](../../examples/gw_extid) | [`gw_signal`](../../examples/gw_signal), [`gw_e2e`](../../examples/gw_e2e), [`gw_srcverify`](../../examples/gw_srcverify) |
 
