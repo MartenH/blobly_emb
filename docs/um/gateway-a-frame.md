@@ -27,8 +27,11 @@ immediate, with no decode in the path. `gateway`'s test injects a raw frame on `
 asserts it reappears **byte-for-byte** on `can1`. Under backpressure it is
 **freshest-wins, not drop-free**: while the destination is not ready, the bridge holds
 *one* retry frame per route and each new arrival overwrites it — right for cyclic state,
-wrong for event traffic whose every frame must survive. Frames that must all arrive are
-bulk (ISO-TP), not a route.
+wrong for event traffic whose every frame must survive. And there is **no lossless
+generated alternative across buses today**: raw-routing an ISO-TP conversation's CAN ids
+rides this same freshest-wins slot (one lost CF and the transfer dies), and the generated
+`[[isotp]]` connection terminates locally at UDS — a cross-bus ISO-TP proxy that
+terminates one link and re-originates the other is hand-written module work.
 
 Use it when:
 

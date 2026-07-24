@@ -30,7 +30,7 @@ it several times. The mechanisms differ in *what* they replace:
 | path | mechanism |
 |---|---|
 | same process | **intra-process comms** — the message pointer is passed (conditional on the pub/sub topology and ownership); zero copy, above the middleware |
-| same machine | **FastDDS SHM / data-sharing** — still DDS, delivering *through* shared memory instead of the wire (kills serialization/wire copies, does not bypass the middleware); or **iceoryx** via `rmw_iceoryx`, which genuinely *replaces* DDS |
+| same machine | **Fast DDS SHM transport** — still DDS and still *serialized* RTPS, just through shared memory instead of the network (kills wire/kernel copies only); **data-sharing delivery** — a distinct mechanism that maps the sample itself (zero-copy end to end only with loaned samples + compatible types); or **iceoryx** via `rmw_iceoryx`, which genuinely *replaces* DDS |
 | across machines | DDS on the wire (RTPS) |
 
 The interesting one for us is **iceoryx**, because its constraints are ours:

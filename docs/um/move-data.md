@@ -193,8 +193,16 @@ you plan around it:
   generated hook for another consumer to call `send`/`take` on the link.
 
 A **new bulk consumer** therefore owns its *own* `isotp.Link` inside a ComModule — exactly
-how `comm/trace` and `comm/shell` do it — and drives it with two calls:
+how `comm/trace` and `comm/shell` do it. `send`/`take` are the payload calls, but a
+private link only *works* wired into the module's frame loop the way those two wire it —
+four obligations, all visible in their endpoint handlers and `produce()`:
 
+- **feed rx** — every CAN frame on the link's ids goes to `l.on_frame(now, pdu)`;
+  without it nothing ever reassembles (and an in-flight rx never gets its flow control).
+- **tick** — `l.tick(now)` every comm cycle; the N_Bs/N_Cr timeouts only advance here.
+- **drain tx** — `l.poll(now, mut pdu)` under the channel's readiness gate, sending each
+  frame it yields. This is also how the RECEIVING side emits its flow-control frames —
+  a consumer that never polls stalls its peer's multi-frame send.
 - **send** — `l.send(src, len)`; returns **`false`** if a transfer is already in flight or
   `len` exceeds the cap. *Check the return* — a dropped message is otherwise invisible.
 - **receive** — `l.take(dst)` copies out one fully reassembled message and returns its
