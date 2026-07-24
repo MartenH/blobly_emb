@@ -150,17 +150,14 @@ int shell_bmc(unsigned char *out, int cap) {
  * latest == 0 -> "nothing published" — and xioc_n_read additionally clamps the bound.
  * Config-independent: the whole DUO_XW_MAX window, not the generated layout. */
 void duo_clocks_ready(void) {
-    /* Zero ONLY on a true cold boot: if the CM4 heartbeat is already live, this is an
-     * OWNER restart with a running satellite — zeroing then would make the reader image
-     * a second writer over channels the CM4 is actively publishing (codex #211 r5).
-     * A live satellite's channels are already initialized (writer-owned init), and the
-     * layout handshake below rejects a stale-image satellite wholesale. */
-    if (*(volatile uint32_t *)DUO_HB_ADDR != DUO_HB_MAGIC) {
-        volatile uint32_t *xw = (volatile uint32_t *)DUO_XW_ADDR;
-        for (uint32_t i = 0; i < DUO_XW_MAX / 4u; i++) xw[i] = 0u;
-        *(volatile uint32_t *)DUO_LAYOUT_ADDR = 0u; /* no layout until the satellite publishes */
-        __asm__ volatile("dsb");
-    }
+    /* The owner NEVER touches the wide window — channel init is exclusively the
+     * WRITER's (satellite) job, and the layout handshake is the owner's barrier: no
+     * poll happens until the satellite has initialized its channels and published the
+     * matching build id. (An earlier revision zeroed the window here, gated on the
+     * retired heartbeat — a dead check that made every owner restart a second writer
+     * over a live satellite's channels; codex #211 r5/r6. Cold-boot SRAM garbage is
+     * carried by the handshake + per-channel geometry validation instead: garbage
+     * must fake BOTH a 32-bit build id and exact channel geometry to be read.) */
     *(volatile uint32_t *)DUO_CLK_ADDR = DUO_CLK_MAGIC;
     __asm__ volatile("dsb");
 }
@@ -176,7 +173,14 @@ void duo_clocks_ready(void) {
  * and every remote signal reads as never-fresh, instead of slot cross-talk transmitting
  * signal A's data as signal B (codex #211 r5). */
 int duo_layout_ok(void) {
-    return *(volatile uint32_t *)DUO_LAYOUT_ADDR == DUO_LAYOUT_ID;
+    if (*(volatile uint32_t *)DUO_LAYOUT_ADDR != DUO_LAYOUT_ID) {
+        return 0;
+    }
+    /* acquire: pairs with the satellite's release dmb in duo_layout_publish — without
+     * this the channel loads that follow a match could be satisfied ahead of the flag
+     * read and observe pre-init state (codex #211 r6) */
+    __asm__ volatile("dmb" ::: "memory");
+    return 1;
 }
 
 

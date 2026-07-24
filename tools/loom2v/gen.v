@@ -262,7 +262,7 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 			si.dbc_dlc = dbc_dlc_of(db, si.dbc_msg) or { 8 }
 			si.dbc_ext = dbc_ext_of(db, si.dbc_msg) or { false }
 			si.dbc_trivial = dbc_signal_trivial(db, sname) or { false }
-			si.dbc_lane_issue = dbc_msg_lane_issue(db, sname)
+			si.dbc_lane_issue = dbc_msg_lane_issue(db, sname, si.fields.len)
 			sig_of[sname] = si
 		}
 	}
@@ -3254,7 +3254,10 @@ fn main() {
 					panic('loom2v: [target] kind="threadx" comm thread: external TX signal "${sname}" is ' +
 						'also read by an FB — a local consumer of a to-bus signal is not generated yet')
 				}
-				if !si.dbc_trivial {
+				if !si.remote && !si.dbc_trivial {
+					// LOCAL producer: the lean encode writes ONE u32 at bytes 0-3. A REMOTE
+					// signal is validated against the full lane contract instead
+					// (dbc_lane_issue below) — its first field may be sub-u32 (codex #211 r6).
 					panic('loom2v: [target] kind="threadx" comm thread: TX signal "${sname}" is not a plain ' +
 						'unsigned little-endian 32-bit value at bit 0 (factor 1, offset 0); other layouts ' +
 						'need the DBC codec on target — not generated yet')
@@ -3686,7 +3689,7 @@ fn dbc_signal_trivial(db candb.Database, signame string) ?bool {
 // factor 1 / offset 0, little-endian, one SG per lane). The lane writer stores whole
 // 4-byte lanes, so any other layout silently overwrites the co-resident SG. Returns ''
 // when clean, else the first violation (used in the remote-TX walk panic).
-fn dbc_msg_lane_issue(db candb.Database, signame string) string {
+fn dbc_msg_lane_issue(db candb.Database, signame string, nlanes int) string {
 	for m in db.messages {
 		for s in m.signals {
 			if s.name != signame {
@@ -3711,6 +3714,13 @@ fn dbc_msg_lane_issue(db candb.Database, signame string) string {
 					return 'signals "${prev}" and "${sg.name}" share lane ${lane} — the lane writer fills whole lanes'
 				}
 				lanes_used[lane] = sg.name
+			}
+			// every lane must be OWNED: a field written into a lane no SG declares is
+			// undecodable padding on every receiver (codex #211 r6)
+			for lane in 0 .. nlanes {
+				if lane !in lanes_used {
+					return 'lane ${lane} (bytes ${lane * 4}-${lane * 4 + 3}) has no DBC signal — the lane writer fills it, receivers cannot decode it'
+				}
 			}
 			return ''
 		}

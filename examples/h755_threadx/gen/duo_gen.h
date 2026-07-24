@@ -9,5 +9,5 @@
 /* the layout id: an FNV-1a hash of the WHOLE slot/offset map. The satellite
  * publishes it (DUO_LAYOUT_ADDR) after init; the owner polls nothing until it
  * matches — two images from different generator runs never exchange slots. */
-#define DUO_LAYOUT_ID 0x6383faf5u
+#define DUO_LAYOUT_ID 0x61b70df1u
 #endif

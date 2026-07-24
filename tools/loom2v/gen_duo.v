@@ -92,10 +92,17 @@ fn duo_layout_id(m Model) u32 {
 	mut desc := ''
 	for sname in m.duo_names {
 		si := m.sig_of[sname] or { continue }
+		// the ORDERED field schema is part of the contract: same name + same lane count
+		// with reordered/renamed/retyped fields would otherwise hash identically and a
+		// stale image would misinterpret lanes instead of going quiet (codex #211 r6)
+		mut fs := ''
+		for f in si.fields {
+			fs += '${f.name}=${f.typ},'
+		}
 		if si.wide {
-			desc += '${sname}:xw+${m.duo_xw_off[sname] or { 0 }}:${si.fields.len}|'
+			desc += '${sname}:xw+${m.duo_xw_off[sname] or { 0 }}:${si.fields.len}[${fs}]|'
 		} else {
-			desc += '${sname}:${m.duo_idx[sname] or { 0 }}|'
+			desc += '${sname}:${m.duo_idx[sname] or { 0 }}[${fs}]|'
 		}
 	}
 	mut h := u32(2166136261)
