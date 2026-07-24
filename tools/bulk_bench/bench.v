@@ -44,6 +44,8 @@ fn C.pin_cpu(cpu int) int
 fn C.cpu_ns() i64
 fn C.exited_ok(status int) int
 fn C.partner_cpu() int
+fn C.stop_set(p voidptr)
+fn C.stop_get(p voidptr) u32
 
 const nbuf = u32(4)
 const sizes = [u32(64), 256, 1024, 4096]
@@ -74,7 +76,11 @@ fn bench_ring_throughput(bufsz u32, fill bool) {
 	// ends, so the producer's lifetime is synchronized with the measurement instead
 	// of guessed via slack — a delayed rendezvous can no longer leave the window
 	// half-empty while the child exits 'ok' (codex #216 r4)
-	stop := unsafe { &u32(usize(b) + region_bytes - 4) }
+	stop := unsafe { voidptr(usize(b) + region_bytes - 4) }
+	partner := C.partner_cpu()
+	if partner < 0 {
+		panic('no distinct physical core verifiable (topology unreadable or all-sibling) — refusing to print cross-core numbers from one core')
+	}
 	pid := C.fork()
 	if pid < 0 {
 		panic('fork failed')
@@ -84,7 +90,7 @@ fn bench_ring_throughput(bufsz u32, fill bool) {
 		// (partner_cpu skips SMT siblings — logical 0/1 often share L1/L2, which would
 		// inflate a 'cross-core' number). Pump at max rate until the parent raises the
 		// stop flag; flag checked every 1024 payloads to stay out of the hot path.
-		if C.pin_cpu(C.partner_cpu()) != 0 {
+		if C.pin_cpu(partner) != 0 {
 			C._exit(9) // parent's exit check reports it — pinning is the measurement's premise
 		}
 		sw := time.new_stopwatch()
@@ -113,7 +119,7 @@ fn bench_ring_throughput(bufsz u32, fill bool) {
 				}
 				C.bulk_publish(b, u32(idx), bufsz)
 			}
-			if unsafe { *stop } != 0 {
+			if C.stop_get(stop) != 0 {
 				break
 			}
 			if sw.elapsed().seconds() > 30 {
@@ -163,9 +169,7 @@ fn bench_ring_throughput(bufsz u32, fill bool) {
 		}
 	}
 	el_us := f64(sw.elapsed().microseconds())
-	unsafe {
-		*stop = 1
-	}
+	C.stop_set(stop)
 	// snapshot the saturation counter AT the window boundary: the producer keeps
 	// pumping ~300 ms of pure failed loans during shutdown, which would otherwise
 	// dominate the printed number (codex #216 r2). One u32 volatile read of a
@@ -193,15 +197,19 @@ fn bench_ring_throughput(bufsz u32, fill bool) {
 fn bench_ring_latency(bufsz u32) {
 	b := region_new()
 	C.bulk_init(b, nbuf, bufsz)
+	partner := C.partner_cpu()
+	if partner < 0 {
+		panic('no distinct physical core verifiable — refusing to print cross-core latency from one core')
+	}
 	pid := C.fork()
 	if pid < 0 {
 		panic('fork failed')
 	}
 	if pid == 0 {
-		// PACED producer (one payload per ~200 us), PINNED to core 1: the pool never
+		// PACED producer (one payload per ~200 us), PINNED to a verified-distinct core: the pool never
 		// saturates, so the measured delay is the transport's, not queueing. The stamp
 		// is the child's monotonic clock; parent and child share the base on Linux.
-		if C.pin_cpu(C.partner_cpu()) != 0 {
+		if C.pin_cpu(partner) != 0 {
 			C._exit(9)
 		}
 		mut sent := 0

@@ -45,17 +45,26 @@ static inline int core_id_of(int cpu)
 	return id;
 }
 
+/* Returns -1 when a distinct physical core CANNOT be verified (unreadable topology,
+ * or a machine where every visible CPU shares cpu0's core): the bench REFUSES to run
+ * rather than print "distinct physical cores" about siblings (codex #216 r5). */
 static inline int partner_cpu(void)
 {
 	int base = core_id_of(0);
-	if (base < 0) return 1;
+	if (base < 0) return -1;
 	for (int c = 1; c < 64; c++) {
 		int id = core_id_of(c);
 		if (id < 0) break;
 		if (id != base) return c;
 	}
-	return 1;
+	return -1;
 }
+
+/* the cross-process stop flag rides the same discipline as the bulk cursors:
+ * volatile 32-bit accesses — a plain load under -prod may retain a stale zero
+ * forever (codex #216 r5) */
+static inline void stop_set(void *p) { *(volatile uint32_t *)p = 1u; }
+static inline uint32_t stop_get(void *p) { return *(volatile uint32_t *)p; }
 
 static inline int exited_ok(int status)
 {
