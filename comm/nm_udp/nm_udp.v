@@ -2,10 +2,12 @@ module nm_udp
 
 import comm.nm
 
-// nm_udp — UDP Network Management binding over comm/nm (docs/someip.md, docs/nm.md).
-// Transmits and receives 8-byte UDP-NM datagrams over Ethernet sockets.
-// PDU Layout: Byte 0: Source Node ID (NID), Byte 1: Control Bit Vector (CBV),
-// Bytes 2..7: Partial Network (PN) request mask (48-bit little-endian).
+// nm_udp — UDP Network Management PDU codec & binding over comm/nm (docs/someip.md, docs/nm.md).
+// Provides 8-byte UDP-NM datagram encoding/decoding and binding structure.
+// PDU Layout:
+//   Byte 0: Source Node ID (NID)
+//   Byte 1: Control Bit Vector (CBV)
+//   Bytes 2..7: Partial Network (PN) request mask (48-bit little-endian)
 
 pub struct UdpBinding {
 pub mut:
