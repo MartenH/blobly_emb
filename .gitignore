@@ -38,3 +38,7 @@ examples/**/gen-*.toml
 examples/*/nodes/*/gen/
 examples/*/nodes/*/ports/
 examples/*/nodes/*/sig/
+
+# the CI's own V toolchain: vlang/setup-v builds V inside the workspace, and the
+# freshness gate reads any untracked file as generated-output drift
+vlang/
