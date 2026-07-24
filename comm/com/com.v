@@ -39,7 +39,9 @@ pub fn (t &TxState) should_send(now u64, data [max_pdu]u8, len u8) bool {
 	changed := !t.sent || !same(t.last, data, len)
 	cyclic_due := (t.mode == .cyclic || t.mode == .mixed) && (!t.sent || now - t.last_us >= t.cycle_us)
 	event_due := (t.mode == .event || t.mode == .mixed) && changed && (!t.sent || now - t.last_us >= t.min_delay_us)
-	trig_due := t.mode == .triggered && t.pending
+	// min_delay applies to triggered too (REQ-COM-004 'in both cases'); the pending
+	// flag survives the wait, so a delayed trigger fires when the window opens
+	trig_due := t.mode == .triggered && t.pending && (!t.sent || now - t.last_us >= t.min_delay_us)
 	return cyclic_due || event_due || trig_due
 }
 

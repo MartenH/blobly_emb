@@ -1,6 +1,9 @@
 module secoc
 
-// @verifies SYS-REQ-SEC-001
+// @verifies SYS-REQ-SEC-001 REQ-SEC-001 REQ-SEC-002 REQ-SEC-003
+// (verify-reject on tamper and wrong key; replay rejected via freshness; protect
+//  stamps freshness + CMAC per transmission — the roundtrip + replay pair proves
+//  the freshness advances.)
 
 fn eq16(a [16]u8, b [16]u8) bool {
 	for i in 0 .. 16 {

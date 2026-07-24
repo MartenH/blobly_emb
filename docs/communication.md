@@ -200,6 +200,14 @@ is unit-tested against the FIPS-197 / RFC 4493 vectors. The wiring is identical 
 E2E — the real cost is the crypto and **key + freshness management** (distribution,
 sync, monotonicity across resets), which a production system must own.
 
+**Composing E2E + SecOC on one frame** (REQ-E2E-004) is supported with one hard rule:
+the four protection fields occupy **disjoint bytes** (the generator rejects a CRC or
+counter inside the freshness/MAC windows). The E2E CRC then *excludes* SecOC's bytes
+(`protect_ex`), TX stamps E2E first and SecOC over the E2E-protected result, and RX
+verifies SecOC first — only an authentic frame reaches the E2E check, so a passing MAC
+never masks a repeat/loss verdict. Worked example: `examples/gw_compose` (built by CI;
+semantics pinned in `comm/e2e/compose_test.v`).
+
 ## No-alloc & generation
 
 Everything new follows the existing split — build-time generators emit static

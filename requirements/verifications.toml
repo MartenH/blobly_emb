@@ -373,3 +373,16 @@ context = "h755/dual-core"
 verifies = ["REQ-BULK-003"]
 approved_by = ""
 date = ""
+
+# REQ-TRACE-008/010 (context-switch + thread-run capture): the host tests exercise the
+# ring/record/protocol layers, but the CAPTURE itself rides ThreadX's
+# TX_ENABLE_EXECUTION_CHANGE_NOTIFY hooks, which the Linux port never calls — the hooks
+# were watched firing under QEMU (Cortex-M7 kernel, thread/ISR transitions recorded) and
+# on the H755 bench trace sessions. Pending the user's sign-off of that evidence.
+[[review]]
+id = "threadx-exec-hooks-capture"
+method = "review"
+context = "threadx/qemu-m7 + h755 bench"
+verifies = ["REQ-TRACE-008", "REQ-TRACE-010"]
+approved_by = ""
+date = ""
