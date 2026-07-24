@@ -92,8 +92,7 @@ gen-system:
 lint:
 	./scripts/lint_noalloc.sh
 
-# Performance benchmarks: lock-free IOC transport (cross-thread + cross-process
-# AMP) and the Loom scheduler dispatch overhead.
+# Performance benchmarks (one per family below — the echo lines are the list).
 bench:
 	@echo '== IOC transport, cross-thread (2 pinned cores) =='
 	$(V) -prod run tools/ioc_bench/bench.v
@@ -102,7 +101,7 @@ bench:
 	@echo '== Loom scheduler dispatch overhead =='
 	$(V) -prod run tools/loom_bench/bench.v
 	@echo '== Bulk ring throughput/latency vs ISO-TP (fork + MAP_SHARED) =='
-	$(V) -gc none run tools/bulk_bench/bench.v
+	$(V) -prod -gc none run tools/bulk_bench/bench.v
 	@echo '== System load: 4 cores, 8 CAN buses on core0, 50 FBs/core =='
 	$(V) -gc none run tools/load_bench/bench.v
 
