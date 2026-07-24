@@ -85,7 +85,7 @@ fn test_duo_gen_h_wide_defines_and_budget_guard() {
 fn test_wide_drain_polls_and_lean_encodes_every_lane() {
 	g := duo_produce_drain(wide_model()).join('\n')
 	// wide: stateless C reader, caller-owned seq + lane buffer, one u32 lane per 4 bytes
-	assert g.contains('C.duo_poll_n(u32(0), &duo_m4_wide_seq, &duo_m4_wide_lanes[0])')
+	assert g.contains('C.duo_poll_n(u32(0), 3, &duo_m4_wide_seq, &duo_m4_wide_lanes[0])')
 	assert g.contains('duo_txf.len = 12')
 	assert g.contains('duo_txf.data[0] = u8(duo_m4_wide_lanes[0])')
 	assert g.contains('duo_txf.data[7] = u8(duo_m4_wide_lanes[1] >> 24)')
@@ -103,7 +103,7 @@ fn test_wide_comm_locals_declare_seq_and_lane_buffer() {
 }
 
 fn test_wide_c_decl_and_manifest_row() {
-	assert duo_c_decls(wide_model()).join('\n').contains('fn C.duo_poll_n(u32, &u32, &u32) int')
+	assert duo_c_decls(wide_model()).join('\n').contains('fn C.duo_poll_n(u32, u32, &u32, &u32) int')
 	man := duo_manifest(wide_model()).join('\n')
 	assert man.contains('M4Wide,xw+0,0x300')
 	assert man.contains('M4Pair,0,0x301')

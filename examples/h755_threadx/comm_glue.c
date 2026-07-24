@@ -163,10 +163,13 @@ void duo_clocks_ready(void) {
 
 /* duo_poll_n — the wide-channel (xioc_n) reader: rd_seq/dst are the CALLER's per-signal
  * state (the generated comm loop declares one seq + lane buffer per wide signal), so this
- * stays stateless — any number of wide channels, no static table to size. 1 = dst now
- * holds a newer complete value; on 0 dst is untouched (last-good retention). */
-int duo_poll_n(uint32_t off, uint32_t *rd_seq, uint32_t *dst) {
-	return xioc_n_read((xioc_n_t *)(DUO_XW_ADDR + off), rd_seq, dst);
+ * stays stateless — any number of wide channels, no static table to size. `words` is the
+ * READER's build-time lane count: a channel whose shared geometry disagrees (a stale
+ * satellite image after a partial reflash) reads as never-fresh instead of overrunning
+ * the lane buffer (codex #211 r2). 1 = dst now holds a newer complete value; on 0 dst
+ * is untouched (last-good retention). */
+int duo_poll_n(uint32_t off, uint32_t words, uint32_t *rd_seq, uint32_t *dst) {
+	return xioc_n_read((xioc_n_t *)(DUO_XW_ADDR + off), rd_seq, dst, words);
 }
 
 /* dtrace: the M7 half of the two-core trace handoff (duo.h). Single writer per field:

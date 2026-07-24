@@ -123,13 +123,17 @@ Wider signals get offsets in a **wide window** the board reserves (`DUO_XW_ADDR`
 (`DUO_XW_<SIG>_OFF`, `XIOC_N_BYTES`-sized, with a budget static-assert). Glue gains two
 thin wrappers (`duo_pub_n` / `duo_poll_n` over `xioc_n_write/read`); the pair fns stay.
 
-**Destinations.** Satellite → bus: generated end to end — the comm drain polls the wide
-channel (`duo_poll_n`, per-signal seq + lane buffer in the comm loop) and lean-encodes
-one u32 lane per 4 bytes; DLC must equal `4 × lanes` and, past 2 lanes, that means an FD
-frame — both enforced with the existing loud panics. Satellite → local partition: the
-slot is allocated and the satellite publishes, but — exactly like the pair cells — no
-FB-facing consumer is generated yet; platform C reads it via `duo_gen.h`. Unpacking
-lanes into a consumer `In` struct is the next rung, not this one.
+**Destinations.** Satellite → bus: the comm drain polls the wide channel (`duo_poll_n`,
+per-signal seq + lane buffer in the comm loop; the reader passes its OWN lane count, so
+a stale satellite image with different geometry reads as never-fresh instead of
+overrunning the buffer) and lean-encodes one u32 lane per 4 bytes, DLC = `4 × lanes`.
+**Reachable today up to 2 lanes** (classic DLC 8 — e.g. a `{u16, u16}` or `{u32, valid}`
+signal): 3+ lanes need an FD frame, and the ThreadX comm thread still rejects both FD
+buses and DLC > 8, so that emitter path is exercised by the generator tests only until
+the FD comm owner lands (ROADMAP "target multi-bus comm owner"). Satellite → local
+partition: the slot is allocated and the satellite publishes, but — exactly like the
+pair cells — no FB-facing consumer is generated yet; platform C reads it via
+`duo_gen.h`. Unpacking lanes into a consumer `In` struct is the next rung, not this one.
 
 **Verification honesty.** Host: generator-level tests + the committed example regen;
 the xioc_n mechanism itself is host-tear-tested (tools/xioc). Runtime on silicon —

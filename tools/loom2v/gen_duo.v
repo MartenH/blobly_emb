@@ -86,7 +86,7 @@ fn duo_c_decls(m Model) []string {
 	}
 	mut g := ['fn C.duo_poll(int, &u32, &u32) int // xioc reader (comm_glue.c): 1 = fresh value']
 	if duo_wide_on(m) {
-		g << 'fn C.duo_poll_n(u32, &u32, &u32) int // wide xioc_n reader: (window off, &rd seq, &lanes[0])'
+		g << 'fn C.duo_poll_n(u32, u32, &u32, &u32) int // wide xioc_n reader: (window off, OUR lane count, &rd seq, &lanes[0]) — a mismatched writer reads as never-fresh'
 	}
 	return g
 }
@@ -145,7 +145,7 @@ fn duo_produce_drain(m Model) []string {
 			// (DLC == 4 * lanes is validated in the comm-thread walk; > 8 needs FD and the
 			// classic comm thread rejects it there, loudly).
 			off := m.duo_xw_off[sname] or { 0 }
-			g << '\t\tif ${nm_gate(m)}C.duo_poll_n(u32(${off}), &duo_${n}_seq, &duo_${n}_lanes[0]) != 0'
+			g << '\t\tif ${nm_gate(m)}C.duo_poll_n(u32(${off}), ${si.fields.len}, &duo_${n}_seq, &duo_${n}_lanes[0]) != 0'
 			g << '\t\t\t&& t1 - duo_${n}_last >= u64(${cyc}) && ch.tx_ready() {' // REQ-COM-007
 			g << '\t\t\tduo_txf.id = u32(0x${si.dbc_id.hex()})'
 			g << '\t\t\tduo_txf.len = ${si.dbc_dlc}'

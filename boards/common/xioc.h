@@ -191,12 +191,13 @@ static inline void xioc_n_write(xioc_n_t *c, const uint32_t *src)
 	XIOC_ST(&c->latest, n); /* publish */
 }
 
-/* Reader: `dst` is the reader-private last-good buffer (>= words u32s, reused across
- * calls); `rd_seq` its seq. Returns 1 when dst now holds a NEWER complete value, 0
+/* Reader: `dst` is the reader-private last-good buffer holding `dst_words` u32s (the
+ * READER's build-time geometry — the shared channel's `words` must match or the read
+ * refuses); `rd_seq` its seq. Returns 1 when dst now holds a NEWER complete value, 0
  * otherwise — and on 0, dst is UNTOUCHED (the copy is staged through a stack temp and
  * committed only after the recheck), so the reader always holds a complete value.
  * Straight-line, bounded: never loops, never spins. */
-static inline int xioc_n_read(xioc_n_t *c, uint32_t *rd_seq, uint32_t *dst)
+static inline int xioc_n_read(xioc_n_t *c, uint32_t *rd_seq, uint32_t *dst, uint32_t dst_words)
 {
 	uint32_t n = XIOC_LD(&c->latest);
 	if (n == 0u || n == *rd_seq) {
@@ -205,10 +206,12 @@ static inline int xioc_n_read(xioc_n_t *c, uint32_t *rd_seq, uint32_t *dst)
 	volatile uint32_t *s = xioc_n_slot(c, n);
 	uint32_t tmp[XIOC_MAX_WORDS];
 	uint32_t w = c->words;
-	if (w == 0u || w > XIOC_MAX_WORDS) {
-		return 0; /* not (yet) initialized, or garbage geometry: NEVER a copy bound —
-		           * an uninit shared `words` would otherwise overrun tmp AND the
-		           * caller's lane buffer (cold-boot race, codex #211) */
+	if (w == 0u || w > dst_words || w > XIOC_MAX_WORDS) {
+		return 0; /* not (yet) initialized, garbage geometry, or a WRITER whose build
+		           * disagrees with ours about this channel's width (a stale satellite
+		           * image after a partial reflash — codex #211): the shared `words` is
+		           * NEVER a copy bound past the caller's own buffer. Refusing reads as
+		           * "no fresh data", which is the honest state for a mismatched peer. */
 	}
 	for (uint32_t i = 0; i < w; i++) {
 		tmp[i] = XIOC_LD(&s[1u + i]);
