@@ -336,3 +336,40 @@ context = "h735/target"
 command = "sh -c 'if [ -z \"$BLOB_HWTEST\" ]; then exit 2; fi; exec examples/h735_someip/bench_test.sh --flash'"
 skip_exit = 2 # exit 2 = disabled/no-board/no-probe-host -> pending; 1 = a real FAIL
 verifies = ["REQ-NET-016"]
+
+# REQ-INV-006 closes in three parts: the tear-free wide MECHANISM (xioc_test.v, passing),
+# the loom2v wide DERIVATION (feat/wide-remote-signals, in progress), and the H755 silicon
+# tear re-run at real widths (bench queue). This PENDING review holds the requirement at
+# "covered" — never "verified" — until the user signs off the remaining two on the bench
+# (codex #205: a mechanism test alone must not verify a placement-independence claim).
+[[review]]
+id = "wide-xioc-derivation-and-silicon"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-INV-006"]
+approved_by = ""
+date = ""
+
+# REQ-TRACE-011 (cross-core time correlation): the host tests round-trip the offset record
+# and inject offsets via set_core_offset, but the requirement's substance — the offset is
+# RE-MEASURED per dump over the real request/ack exchange — only executes on the dual-core
+# bench (H755 run measured +49.7 ms; the wrap-guard/±60 s window changes since are unsigned).
+# Pending review keeps the ledger honest at "covered" instead of test-tag "verified"
+# (codex #192, same shape as wide-xioc-derivation-and-silicon).
+[[review]]
+id = "trace-correlation-silicon"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-TRACE-011"]
+# REQ-BULK-003 (plain-store ring discipline): the host tests prove the LOGIC (ownership
+# transfer, ordering, exhaustion) cross-thread and cross-process — but the requirement's
+# claim is soundness between sides whose exclusive monitors do not arbitrate, and x86's
+# memory model is stronger than two Cortex cores over an AXI fabric. The H755 ring run
+# (same tear methodology as the 2026-07-12 xioc measurement) signs this off on return.
+[[review]]
+id = "bulk-ring-silicon"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-BULK-003"]
+approved_by = ""
+date = ""

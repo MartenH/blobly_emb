@@ -44,3 +44,19 @@ text = "Developer-facing names shall not adopt AUTOSAR module vocabulary."
 status = "draft"
 method = "review"
 asil = "QM"
+
+# Prompted by real-world configs (2026-07-23): signals of 8-64 B are common, and a
+# transport ceiling that changes with placement turns "move a partition" into an
+# interface redesign. The xioc_n wide channel is the mechanism; loom2v's lane
+# derivation is the enforcement surface. Evidence status: the linked tear test covers
+# the MECHANISM half only — the requirement closes when the loom2v wide derivation
+# lands (feat/wide-remote-signals) and the silicon tear re-run passes (bench queue);
+# until then the report's "verified" reads as mechanism-level evidence, status stays draft.
+[[req]]
+id = "REQ-INV-006"
+title = "Signal capacity is placement-independent"
+text = "A signal legal between two endpoints shall remain legal when either endpoint moves to another core: every signal transport (same-thread, cross-thread, cross-core) shall carry at least the shared PDU bound (64 bytes), so relocating a partition changes the cost of a signal, never its contract. Payloads above the PDU bound are not signals on any transport."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-002"

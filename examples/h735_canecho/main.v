@@ -25,6 +25,16 @@ fn main() {
 	mut f := can.Frame{}
 	for {
 		if ch.recv(mut f) {
+			// Answer ODD ids only; replies (+1) are even and therefore never re-answered.
+			// Unconditional echo cascades the moment two echo nodes share a bus — each
+			// answers the other's replies forever (codex #184). Parity chosen to keep this
+			// example's own documented probes working — README: 0x123 -> 0x124, and the
+			// recorded 0x001 -> 0x002 verification (codex #208 caught the first cut
+			// inverting this). The +1 must also stay in range for the id width.
+			max_id := if f.ext { u32(0x1fff_fffd) } else { u32(0x7fd) }
+			if f.id & 1 == 0 || f.id > max_id {
+				continue
+			}
 			mut out := can.Frame{
 				id:  f.id + 1 // reply id = request id + 1 -> visibly an echo
 				len: f.len

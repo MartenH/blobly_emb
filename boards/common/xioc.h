@@ -41,8 +41,16 @@
  * plain-store discipline is compiled and TESTED on both. */
 #if defined(__arm__) || defined(__ARM_ARCH)
 #define XIOC_DMB() __asm__ volatile("dmb" ::: "memory")
+/* On Arm the plain volatile 32-bit access IS the mechanism (single-copy atomic). */
+#define XIOC_LD(p) (*(p))
+#define XIOC_ST(p, v) (*(p) = (v))
 #else
 #define XIOC_DMB() __atomic_thread_fence(__ATOMIC_SEQ_CST)
+/* Off-Arm (the host tear test): a fence orders but does not de-race the accesses — plain
+ * concurrent loads/stores are formally UB in C. Relaxed atomics compile to the same MOVs
+ * on x86 and make the host result stand on defined behavior (codex #201). */
+#define XIOC_LD(p) __atomic_load_n((p), __ATOMIC_RELAXED)
+#define XIOC_ST(p, v) __atomic_store_n((p), (v), __ATOMIC_RELAXED)
 #endif
 
 #define XIOC_SLOTS 4u
@@ -100,29 +108,29 @@ static inline void xioc_write(xioc_t *c, uint32_t a, uint32_t b)
 		n = ++c->wseq;
 	}
 	xioc_slot_t *s = &c->slot[n % XIOC_SLOTS];
-	s->seq = 0u; /* invalidate: a reader copying now will fail its recheck */
+	XIOC_ST(&s->seq, 0u); /* invalidate: a reader copying now will fail its recheck */
 	XIOC_DMB();
-	s->a = a;
-	s->b = b;
+	XIOC_ST(&s->a, a);
+	XIOC_ST(&s->b, b);
 	XIOC_DMB();
-	s->seq = n; /* validate */
+	XIOC_ST(&s->seq, n); /* validate */
 	XIOC_DMB();
-	c->latest = n; /* publish */
+	XIOC_ST(&c->latest, n); /* publish */
 }
 
 /* Returns 1 if rd holds a NEWER value than before the call, 0 otherwise (rd always
  * holds the best-known value either way). Straight-line: never loops. */
 static inline int xioc_read(const xioc_t *c, xioc_rd_t *rd)
 {
-	uint32_t n = c->latest;
+	uint32_t n = XIOC_LD(&c->latest);
 	if (n == 0u || n == rd->seq) {
 		return 0; /* nothing published yet, or nothing new */
 	}
 	const xioc_slot_t *s = &c->slot[n % XIOC_SLOTS];
-	uint32_t a = s->a;
-	uint32_t b = s->b;
+	uint32_t a = XIOC_LD(&s->a);
+	uint32_t b = XIOC_LD(&s->b);
 	XIOC_DMB();
-	if (s->seq != n) {
+	if (XIOC_LD(&s->seq) != n) {
 		return 0; /* impossible-lap detected: keep the cached last-good value */
 	}
 	rd->seq = n;
@@ -144,7 +152,11 @@ typedef struct __attribute__((aligned(32))) {
 	volatile uint32_t cell[]; /* XIOC_SLOTS x (1 seq + words payload) */
 } xioc_n_t;
 
-#define XIOC_N_BYTES(words) ((uint32_t)sizeof(xioc_n_t) + 4u * XIOC_SLOTS * (1u + (words)))
+/* Rounded UP to the 32 B line: channels are packed consecutively, and an unrounded stride
+ * (e.g. words=10 -> 208 B) would misalign every following xioc_n_t — undefined behavior on
+ * the typed access and a violation of the no-shared-cache-line invariant (codex #201). */
+#define XIOC_N_BYTES(words) \
+	(((uint32_t)sizeof(xioc_n_t) + 4u * XIOC_SLOTS * (1u + (words)) + 31u) & ~31u)
 
 static inline volatile uint32_t *xioc_n_slot(xioc_n_t *c, uint32_t n)
 {
@@ -168,15 +180,15 @@ static inline void xioc_n_write(xioc_n_t *c, const uint32_t *src)
 		n = ++c->wseq;
 	}
 	volatile uint32_t *s = xioc_n_slot(c, n);
-	s[0] = 0u; /* invalidate: a reader copying now fails its recheck */
+	XIOC_ST(&s[0], 0u); /* invalidate: a reader copying now fails its recheck */
 	XIOC_DMB();
 	for (uint32_t i = 0; i < c->words; i++) {
-		s[1u + i] = src[i];
+		XIOC_ST(&s[1u + i], src[i]);
 	}
 	XIOC_DMB();
-	s[0] = n; /* validate */
+	XIOC_ST(&s[0], n); /* validate */
 	XIOC_DMB();
-	c->latest = n; /* publish */
+	XIOC_ST(&c->latest, n); /* publish */
 }
 
 /* Reader: `dst` is the reader-private last-good buffer (>= words u32s, reused across
@@ -186,7 +198,7 @@ static inline void xioc_n_write(xioc_n_t *c, const uint32_t *src)
  * Straight-line, bounded: never loops, never spins. */
 static inline int xioc_n_read(xioc_n_t *c, uint32_t *rd_seq, uint32_t *dst)
 {
-	uint32_t n = c->latest;
+	uint32_t n = XIOC_LD(&c->latest);
 	if (n == 0u || n == *rd_seq) {
 		return 0; /* nothing published yet, or nothing new */
 	}
@@ -194,10 +206,10 @@ static inline int xioc_n_read(xioc_n_t *c, uint32_t *rd_seq, uint32_t *dst)
 	uint32_t tmp[XIOC_MAX_WORDS];
 	uint32_t w = c->words;
 	for (uint32_t i = 0; i < w; i++) {
-		tmp[i] = s[1u + i];
+		tmp[i] = XIOC_LD(&s[1u + i]);
 	}
 	XIOC_DMB();
-	if (s[0] != n) {
+	if (XIOC_LD(&s[0]) != n) {
 		return 0; /* impossible-lap detected: keep the cached last-good value */
 	}
 	for (uint32_t i = 0; i < w; i++) {

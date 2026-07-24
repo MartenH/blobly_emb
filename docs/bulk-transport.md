@@ -2,7 +2,11 @@
 
 > Design note (2026-07-23). Prompted by a plain question: a cross-core signal is capped at
 > one xioc cell (8 B), so how do you move an *object*? Before designing an endpoint, this
-> page surveys what other systems converged on. Nothing here is built.
+> page surveys what other systems converged on. Status: the **portable core is built** —
+> `boards/common/bulk.h` (pool + SPSC rings + fallible loan/publish/take/release,
+> REQ-BULK-001..003) with host proof cross-thread and cross-process (`tools/bulk`,
+> fork + `MAP_SHARED`). The board seams (doorbell, cache hooks), the config surface and
+> silicon validation are still design, not code.
 > Companion: [um/move-data.md](um/move-data.md) (what exists today and its limits).
 
 ## The short answer

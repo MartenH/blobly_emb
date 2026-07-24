@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 183 | 93 | 13 | 77 | 0 |
+| 187 | 94 | 16 | 77 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -33,6 +33,9 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-016 | QM | test | verified | prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass), prog_test.v (pass) |
 | REQ-BOOT-017 | QM | test | verified | ed25519_interop_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), ed25519_test.v (pass), sha512_test.v (pass) |
 | REQ-BOOT-018 | QM | analysis | uncovered | — |
+| REQ-BULK-001 | QM | test | verified | bulk_test.v (pass) |
+| REQ-BULK-002 | QM | test | verified | bulk_test.v (pass) |
+| REQ-BULK-003 | QM | test | covered | bulk-ring-silicon (pending), bulk_test.v (pass) |
 | REQ-CAN-DRV-001 | QM | test | covered | h735-fdcan-hardware (approved), h755-dualcore-heartbeat (approved), h755-fdcan-hardware (approved), route.lua (pending) |
 | REQ-CAN-DRV-002 | QM | test | covered | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved), route.lua (pending) |
 | REQ-CAN-DRV-003 | QM | test | verified | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
@@ -66,10 +69,11 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-MODE-002 | QM | test | verified | ecu_test.v (pass) |
 | REQ-MODE-003 | QM | test | verified | ecu_test.v (pass) |
 | REQ-INV-001 | QM | analysis | verified | noalloc-driver-lint (pass) |
-| REQ-INV-002 | B | analysis | verified | h755-duo-signal (approved), h755-multi-image (approved), h755-xioc (approved), xioc_test.v (pass) |
+| REQ-INV-002 | B | analysis | verified | h755-duo-signal (approved), h755-multi-image (approved), h755-xioc (approved) |
 | REQ-INV-003 | B | analysis | uncovered | — |
 | REQ-INV-004 | QM | analysis | verified | noalloc-driver-lint (pass) |
 | REQ-INV-005 | QM | review | covered | naming-review (pending) |
+| REQ-INV-006 | QM | test | covered | wide-xioc-derivation-and-silicon (pending), xioc_test.v (pass) |
 | REQ-IO-001 | QM | test | verified | e2e_test.v (pass) |
 | REQ-IO-002 | QM | test | verified | e2e_test.v (pass) |
 | REQ-IO-003 | QM | review | uncovered | — |
@@ -179,7 +183,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TRACE-002 | QM | test | verified | h755-external-partitions (approved) |
 | REQ-TRACE-008 | QM | test | uncovered | — |
 | REQ-TRACE-009 | QM | test | uncovered | — |
-| REQ-TRACE-011 | QM | test | verified | module_test.v (pass), trace_test.v (pass) |
+| REQ-TRACE-011 | QM | test | covered | module_test.v (pass), trace-correlation-silicon (pending), trace_test.v (pass) |
 | REQ-TOPO-001 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-002 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-003 | QM | test | verified | dbc_test.v (pass), model_test.v (pass) |
@@ -221,6 +225,9 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-016 | | | | | | | | | | | | | | ✓ | | |
 | REQ-BOOT-017 | | | | | | | | | | | | | | ✓ | | |
 | REQ-BOOT-018 | | | | | | | | | | | | | | | | |
+| REQ-BULK-001 | | | | | | | | | | | | | | ✓ | | |
+| REQ-BULK-002 | | | | | | | | | | | | | | ✓ | | |
+| REQ-BULK-003 | | | | | | | | | | | · | | | ✓ | | |
 | REQ-CAN-DRV-001 | | | | | ✓ | | | ✓ | | | ✓ | | · | | | |
 | REQ-CAN-DRV-002 | | | | | ✓ | | | ✓ | | | | | · | | | |
 | REQ-CAN-DRV-003 | | | | | ✓ | | | ✓ | | | | | | | | |
@@ -254,10 +261,11 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-MODE-002 | | | | | | | | | | | | | | ✓ | | |
 | REQ-MODE-003 | | | | | | | | | | | | | | ✓ | | |
 | REQ-INV-001 | | | | | | | | | | | | | | | | ✓ |
-| REQ-INV-002 | | | | | | | | | | | ✓ | | | ✓ | | |
+| REQ-INV-002 | | | | | | | | | | | ✓ | | | | | |
 | REQ-INV-003 | | | | | | | | | | | | | | | | |
 | REQ-INV-004 | | | | | | | | | | | | | | | | ✓ |
 | REQ-INV-005 | | | | | | | | | | | | | | | · | |
+| REQ-INV-006 | | | | | | | | | | | · | | | ✓ | | |
 | REQ-IO-001 | | | | | | | | | | | | | | ✓ | | |
 | REQ-IO-002 | | | | | | | | | | | | | | ✓ | | |
 | REQ-IO-003 | | | | | | | | | | | | | | | | |
@@ -367,7 +375,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TRACE-002 | | | | | | | | | | | ✓ | | | | | |
 | REQ-TRACE-008 | | | | | | | | | | | | | | | | |
 | REQ-TRACE-009 | | | | | | | | | | | | | | | | |
-| REQ-TRACE-011 | | | | | | | | | | | | | | ✓ | | |
+| REQ-TRACE-011 | | | | | | | | | | | · | | | ✓ | | |
 | REQ-TOPO-001 | | | | | | | | | | | | | | ✓ | | |
 | REQ-TOPO-002 | | | | | | | | | | | | | | ✓ | | |
 | REQ-TOPO-003 | | | | | | | | | | | | | | ✓ | | |
