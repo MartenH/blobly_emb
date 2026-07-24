@@ -32,12 +32,14 @@ Status keys: ✅ shipped · 🔨 in progress · ⏭️ next · 🧭 planned · �
   thread rejects routes)
 - 🧭 **ISO-TP / UDS** — beyond the boot-loader's request path into a general
   diagnostic service layer
-- ✅ **Wide cross-core signals** (`#211`, REQ-INV-006) — a remote signal carries
-  ≤16 fields of `u32`/`u16`/`u8`/`bool` as u32 lanes (`xioc_n`), pair cell
-  preserved; layout REQ/ACK handshake makes a stale/restarting satellite read as
-  never-fresh, never as cross-talk. Residue: the #212 packing decision (u64/
-  float/packed-narrow + local/remote encode unification, **user call**); H755
-  tear re-run at wide widths bench-queued (`wide-xioc-derivation-and-silicon`).
+- ✅ **Wide cross-core signals** (`#211` — the derivation rung; **REQ-INV-006
+  itself stays draft/covered**, closing only when the #212 shapes land and the
+  silicon review signs off) — a remote signal carries ≤16 fields of
+  `u32`/`u16`/`u8`/`bool` as u32 lanes (`xioc_n`), pair cell preserved; layout
+  REQ/ACK handshake makes a stale/restarting satellite read as never-fresh,
+  never as cross-talk. Residue: the #212 packing decision (u64/signed/float/
+  packed-narrow + local/remote encode unification, **user call**); H755 tear
+  re-run at wide widths bench-queued (`wide-xioc-derivation-and-silicon`).
 - ✅ **Bulk P1 portable core** (`#213`, REQ-BULK-001..003) — `boards/common/bulk.h`
   pool + SPSC descriptor rings, fallible counted loans, host-proven cross-process
   (fork+`MAP_SHARED`); `bulk-ring-silicon` review bench-queued. Next rungs: the

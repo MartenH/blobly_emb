@@ -90,9 +90,12 @@ layout REQ/ACK handshake + exact-geometry checks), never as blended values.
 `DLC = 4 × lanes`; the `[[signal]].name` SG anchored at bit 0 (lane 0); **every** lane
 owned by exactly one SG; each SG unsigned, little-endian, factor 1 / offset 0, ≤32 bits,
 and at least as wide as the field its lane carries. Anything else panics with the exact
-violation. Past 2 lanes the DLC exceeds 8, which means an FD frame — and the ThreadX
-comm thread still rejects FD, so **3+ lanes to a bus waits for the FD comm owner** (the
-generator says so loudly).
+violation. Past 2 lanes the DLC exceeds 8, which means an FD frame — and CAN-FD only
+has discrete lengths (12/16/20/24/32/48/64 B), so **bus-bound lane counts are limited
+to 1–6, 8, 12 or 16** (7, 9–11 and 13–15 lanes make 28/36–44/52–60 B payloads no CAN
+frame can carry; pad the signal to the next valid count or keep it to-partition).
+And the ThreadX comm thread still rejects FD entirely, so **3+ lanes to a bus waits
+for the FD comm owner** (the generator says so loudly).
 
 What still rejects, deliberately, pending the **#212 packing decision**: `u64`, every
 **signed** integer (`i8`..`i64`), floats, >16 narrow fields — and multi-field/`valid`
