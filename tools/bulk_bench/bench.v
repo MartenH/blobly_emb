@@ -79,7 +79,9 @@ fn bench_ring_throughput(bufsz u32) {
 		// cache hit instead of the cross-core handoff (codex #216). Pump at max rate
 		// on its own clock for the parent's window plus slack; deadline checked every
 		// 1024 payloads so the clock read stays out of the measured window.
-		C.pin_cpu(1)
+		if C.pin_cpu(1) != 0 {
+			C._exit(9) // parent's exit check reports it — pinning is the measurement's premise
+		}
 		sw := time.new_stopwatch()
 		for {
 			for _ in 0 .. 1024 {
@@ -103,7 +105,9 @@ fn bench_ring_throughput(bufsz u32) {
 		}
 		C._exit(0)
 	}
-	C.pin_cpu(0)
+	if C.pin_cpu(0) != 0 {
+		panic('cannot pin to cpu0 — run outside the restricted cpuset; unpinned numbers would be mislabeled')
+	}
 	// rendezvous: the window starts at the FIRST observed payload, so child scheduling
 	// delay is not counted as dead time
 	mut len := u32(0)
@@ -132,14 +136,16 @@ fn bench_ring_throughput(bufsz u32) {
 		}
 	}
 	el_us := f64(sw.elapsed().microseconds())
+	// snapshot the saturation counter AT the window boundary: the producer keeps
+	// pumping ~300 ms of pure failed loans during shutdown, which would otherwise
+	// dominate the printed number (codex #216 r2). One u32 volatile read of a
+	// producer-owned counter — a report, not a synchronized value.
+	ovf := C.bulk_overflows(b)
 	mut status := 0
 	C.waitpid(pid, &status, 0)
 	if C.exited_ok(status) == 0 {
-		panic('producer child died (status ${status}) — the near-zero window is NOT a measurement')
+		panic('producer child died or could not pin (status ${status}) — not a measurement')
 	}
-	// producer-owned counter, read only after the producer exited: the saturation
-	// number REQ-BULK-002 makes observable
-	ovf := C.bulk_overflows(b)
 	println('  ${bufsz:5} B: ${f64(got) * 1000.0 * 1000.0 / el_us / 1000.0 / 1000.0:6.2f} M transfers/s (ownership only — the payload is filled in place, no bytes move through the ring; ${ovf} failed loans at saturation)')
 	C.munmap(b, region_bytes)
 }
@@ -157,7 +163,9 @@ fn bench_ring_latency(bufsz u32) {
 		// PACED producer (one payload per ~200 us), PINNED to core 1: the pool never
 		// saturates, so the measured delay is the transport's, not queueing. The stamp
 		// is the child's monotonic clock; parent and child share the base on Linux.
-		C.pin_cpu(1)
+		if C.pin_cpu(1) != 0 {
+			C._exit(9)
+		}
 		mut sent := 0
 		for sent < lat_samples {
 			idx := C.bulk_loan(b)
@@ -174,7 +182,9 @@ fn bench_ring_latency(bufsz u32) {
 		}
 		C._exit(0)
 	}
-	C.pin_cpu(0)
+	if C.pin_cpu(0) != 0 {
+		panic('cannot pin to cpu0 — run outside the restricted cpuset; unpinned numbers would be mislabeled')
+	}
 	mut lats := []i64{cap: lat_samples}
 	live := time.new_stopwatch()
 	for lats.len < lat_samples {
@@ -229,10 +239,14 @@ fn isotp_round(mut tx isotp.Link, mut rx isotp.Link, payload []u8, mut dst []u8,
 		}
 		n := rx.take(unsafe { &dst[0] })
 		if n > 0 {
-			// consume the reassembled bytes: -prod would otherwise be free to
-			// dead-store-eliminate the copy whose cost this measures (codex #216)
-			unsafe {
-				*sink += u64(dst[0]) + u64(dst[n - 1])
+			// consume EVERY reassembled byte: sampling only the ends still lets -prod
+			// eliminate the interior stores whose cost this measures; the fold's own
+			// cost is fair — a transfer is not done until the consumer reads it
+			// (codex #216 r2)
+			for i in 0 .. n {
+				unsafe {
+					*sink += u64(dst[i])
+				}
 			}
 			return frames
 		}
