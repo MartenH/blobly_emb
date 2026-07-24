@@ -210,8 +210,10 @@ they are the closest match for a bulk-transfer consumer). Whichever
 direction, `send`/`take` are only the payload calls — a private link *works* only wired
 into the module's frame loop, four obligations:
 
-- **feed rx** — every CAN frame on the link's ids goes to `l.on_frame(now, pdu)`;
-  without it nothing ever reassembles (and an in-flight rx never gets its flow control).
+- **feed rx** — every CAN frame on the link's **receive id only** (`rx_id`, exactly as
+  the generated bridge filters) goes to `l.on_frame(now, pdu)`; without it nothing ever
+  reassembles. Never feed the `tx_id` too: the link is id-agnostic, so with tx echo on
+  it would parse the module's own responses as new inbound transfers.
 - **tick** — `l.tick(now)` every comm cycle; the N_Bs timeout (the FC wait on a send)
   only advances here. Note the gap honestly: there is **no receive deadline** — a peer
   that dies after its FirstFrame leaves the link `.receiving` until other traffic moves
