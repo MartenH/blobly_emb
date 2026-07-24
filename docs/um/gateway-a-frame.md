@@ -7,7 +7,7 @@ picking the wrong one is the usual mistake:
 |---|---|---|
 | declares | `from`/`to` only | `signal = "..."` as well |
 | does | re-transmits the raw PDU, **never decoded** | decodes on the source, **re-encodes** into the destination frame |
-| requires | the payload to mean the same thing on both buses | nothing — the two DBCs may disagree completely |
+| requires | the payload to mean the same thing on both buses | the signal to exist (by name) in a source **and** a destination frame, and **every other non-protection signal in the destination frame to be route-filled too** (a partially covered frame would transmit zeros for the rest — generation rejects it); *layout/scaling* may then differ freely **within the codec's limits**: no multiplexed signals, no big-endian (Motorola) layouts, ≤52-bit width (the value transits an f64); incompatible units, value tables, or ranges are also rejected at generation |
 | costs | almost nothing | a decode + encode per frame |
 | example | [`gateway`](../../examples/gateway), [`gw_extid`](../../examples/gw_extid) | [`gw_signal`](../../examples/gw_signal), [`gw_e2e`](../../examples/gw_e2e), [`gw_srcverify`](../../examples/gw_srcverify) |
 
@@ -23,8 +23,15 @@ to   = { bus = "can1" }              # optional `id = 0x...` to remap on the way
 ```
 
 The source bus's bridge is handed the destination channel and forwards on rx —
-drop-free and immediate, with no decode in the path. `gateway`'s test injects a raw frame
-on `can0` and asserts it reappears **byte-for-byte** on `can1`.
+immediate, with no decode in the path. `gateway`'s test injects a raw frame on `can0` and
+asserts it reappears **byte-for-byte** on `can1`. Under backpressure it is
+**freshest-wins, not drop-free**: while the destination is not ready, the bridge holds
+*one* retry frame per route and each new arrival overwrites it — right for cyclic state,
+wrong for event traffic whose every frame must survive. And there is **no lossless
+generated alternative across buses today**: raw-routing an ISO-TP conversation's CAN ids
+rides this same freshest-wins slot (one lost CF and the transfer dies), and the generated
+`[[isotp]]` connection terminates locally at UDS — a cross-bus ISO-TP proxy that
+terminates one link and re-originates the other is hand-written module work.
 
 Use it when:
 
@@ -75,10 +82,10 @@ from    = "compute"
 to      = "edge"
 ```
 
-You may not need to write it at all — for a cross-node signal whose producer and
-consumers sit on different buses, the generator **derives** the route (frame forward if
-the ids are 1:1, signal route if the DBCs differ). Explicit `[[route]]` remains for
-pinning raw-forward or firewall behaviour. See
+The route must be **explicit**: when a cross-node signal's producer and consumers sit on
+different buses and no `[[route]]` names the gateway, `syscheck` reports the consumer as
+unreachable — the generator does **not** derive a route from the topology (deriving one is
+a possible future; today omitting the route is an error, not a default). See
 [system-from-nodes.md](system-from-nodes.md) and [../multi-node.md](../multi-node.md).
 
 ## 4. Verify it
@@ -106,10 +113,20 @@ message. Route the signal, or keep both buses on one core.
 
 ## Limits worth knowing
 
-- A route is **one source → one destination**. Fan-out (one source to several
-  destinations, or forward *and* deliver locally) is not implemented.
+- One `[[route]]` names **one destination** — but several routes may share a source
+  frame, and the generator emits an independent forward (with its own retry slot) per
+  route, so fan-out to several buses is just several routes. Forward *and* deliver
+  locally also works: after the route blocks, the received frame still runs the normal
+  COM decode for this node's own consumers. One restriction, and it is **signal-route
+  only**: an E2E/SecOC source frame allows exactly one *verifying* consumer, so a second
+  signal route from it (or local COM delivery beside a signal route) is rejected — each
+  would advance the verification counter twice per frame. Raw frame routes never verify,
+  so they fan a protected source out freely while local COM keeps the single verification.
 - A frame route never decodes, so it cannot check E2E on the way through — that is what
   `gw_srcverify` (a signal route) is for.
 - Routes are CAN machinery. A route touching an eth bus is rejected at generation.
+- Routes run in the **host/sim comm bridges** today. On a `kind = "threadx"` target the
+  comm thread has no route forwarder yet and generation rejects any route — the "target
+  multi-bus comm owner" roadmap item is exactly that gap.
 
 Design rationale: [../communication.md](../communication.md) §2 (router & gateway).
