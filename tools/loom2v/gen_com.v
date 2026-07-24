@@ -726,6 +726,15 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 							0
 						}}).usable() {'
 						ind = '\t\t\t\t'
+						if s_e2e {
+							// composed source: authentic first, then E2E with SecOC's bytes
+							// excluded (REQ-E2E-004) — the E2E repeat/loss verdict must not
+							// be masked by the MAC passing
+							glue << '${ind}if st.e2e_rx_${frof}.check_ex(&rx.data[0], int(${r.from_dlc}), u16(0x${(m.frames.e2e_id[frof] or {
+								0
+							}).hex()}), ${m.frames.e2e_crc[frof] or { 0 }}, ${m.frames.e2e_ctr[frof] or { 0 }}, ${m.frames.secoc_fresh[frof] or { 0 }}, 1, ${m.frames.secoc_mac[frof] or { 0 }}, ${m.frames.secoc_maclen[frof] or { 0 }}).usable() {'
+							ind = '\t\t\t\t\t'
+						}
 					} else if s_e2e {
 						glue << '\t\t\tif st.e2e_rx_${frof}.check(&rx.data[0], int(${r.from_dlc}), u16(0x${(m.frames.e2e_id[frof] or {
 							0
@@ -744,6 +753,9 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 					}
 					if s_e2e || s_secoc {
 						glue << '\t\t\t}'
+						if s_e2e && s_secoc {
+							glue << '\t\t\t}' // the nested composed E2E check (REQ-E2E-004)
+						}
 					}
 					glue << '\t\t}'
 					continue
@@ -788,6 +800,16 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 						0
 					}}).usable() {'
 					ind = '\t\t\t\t'
+					if e2e {
+						// composed frame: only an AUTHENTIC message reaches the E2E check
+						// (REQ-E2E-004 order), and the check excludes SecOC's bytes. Without
+						// this nested check, SecOC silently masked E2E's repeat/loss
+						// detection — the exact fault-masking the requirement forbids.
+						glue << '${ind}if st.e2e_rx_${msg}.check_ex(&rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or {
+							0
+						}).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }}, ${m.frames.secoc_fresh[msg] or { 0 }}, 1, ${m.frames.secoc_mac[msg] or { 0 }}, ${m.frames.secoc_maclen[msg] or { 0 }}).usable() {'
+						ind = '\t\t\t\t\t'
+					}
 				} else if e2e {
 					glue << '\t\t\tif st.e2e_rx_${msg}.check(&rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or {
 						0
@@ -812,6 +834,9 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				}
 				if secoc || e2e {
 					glue << '\t\t\t}'
+					if secoc && e2e {
+						glue << '\t\t\t}' // the nested composed E2E check (REQ-E2E-004)
+					}
 				}
 				glue << '\t\t}'
 			}
@@ -912,10 +937,18 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				// snapshot the alive counter so a rejected send can rewind it (protect()
 				// advances the counter as a side effect); then stamp CRC + counter after the
 				// change decision (so the counter doesn't make every frame look "changed").
+				// With SecOC on the same frame, the CRC must EXCLUDE the freshness/MAC
+				// bytes SecOC stamps after this call (REQ-E2E-004) — protect_ex windows.
 				glue << '\t\te2e_save_${msg} := st.e2e_tx_${msg}'
-				glue << '\t\tst.e2e_tx_${msg}.protect(&tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or {
-					0
-				}).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }})'
+				if secoc_here {
+					glue << '\t\tst.e2e_tx_${msg}.protect_ex(&tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or {
+						0
+					}).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }}, ${m.frames.secoc_fresh[msg] or { 0 }}, 1, ${m.frames.secoc_mac[msg] or { 0 }}, ${m.frames.secoc_maclen[msg] or { 0 }})'
+				} else {
+					glue << '\t\tst.e2e_tx_${msg}.protect(&tx_${msg}.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or {
+						0
+					}).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }})'
+				}
 			}
 			if secoc_here {
 				// snapshot freshness for the same rewind; then authenticate (stamp freshness
@@ -1022,9 +1055,16 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 			}
 			if r_e2e {
 				glue << '\t\te2e_save_${dk} := st.e2e_tx_${dk}'
-				glue << '\t\tst.e2e_tx_${dk}.protect(&rf_${dk}.data[0], int(${r.to_dlc}), u16(0x${(m.frames.e2e_id[rtof] or {
-					0
-				}).hex()}), ${m.frames.e2e_crc[rtof] or { 0 }}, ${m.frames.e2e_ctr[rtof] or { 0 }})'
+				if r_secoc {
+					// composed destination: E2E excludes the SecOC bytes stamped next
+					glue << '\t\tst.e2e_tx_${dk}.protect_ex(&rf_${dk}.data[0], int(${r.to_dlc}), u16(0x${(m.frames.e2e_id[rtof] or {
+						0
+					}).hex()}), ${m.frames.e2e_crc[rtof] or { 0 }}, ${m.frames.e2e_ctr[rtof] or { 0 }}, ${m.frames.secoc_fresh[rtof] or { 0 }}, 1, ${m.frames.secoc_mac[rtof] or { 0 }}, ${m.frames.secoc_maclen[rtof] or { 0 }})'
+				} else {
+					glue << '\t\tst.e2e_tx_${dk}.protect(&rf_${dk}.data[0], int(${r.to_dlc}), u16(0x${(m.frames.e2e_id[rtof] or {
+						0
+					}).hex()}), ${m.frames.e2e_crc[rtof] or { 0 }}, ${m.frames.e2e_ctr[rtof] or { 0 }})'
+				}
 			}
 			if r_secoc {
 				glue << '\t\tsecoc_save_${dk} := st.secoc_tx_${dk}'

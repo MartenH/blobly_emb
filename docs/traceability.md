@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 187 | 94 | 16 | 77 | 0 |
+| 187 | 101 | 16 | 70 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -46,17 +46,17 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-DRV-008 | QM | test | uncovered | — |
 | REQ-COM-001 | QM | test | uncovered | — |
 | REQ-COM-002 | QM | test | uncovered | — |
-| REQ-COM-003 | QM | test | uncovered | — |
-| REQ-COM-004 | QM | test | uncovered | — |
-| REQ-COM-005 | QM | test | uncovered | — |
+| REQ-COM-003 | QM | test | verified | com_test.v (pass) |
+| REQ-COM-004 | QM | test | verified | com_test.v (pass) |
+| REQ-COM-005 | QM | test | verified | com_test.v (pass) |
 | REQ-COM-006 | QM | test | verified | com_test.v (pass) |
 | REQ-COM-007 | QM | test | uncovered | — |
 | REQ-DIAG-001 | QM | test | uncovered | — |
 | REQ-DIAG-002 | QM | test | uncovered | — |
-| REQ-E2E-001 | B | test | uncovered | — |
-| REQ-E2E-002 | B | test | uncovered | — |
-| REQ-E2E-003 | B | test | uncovered | — |
-| REQ-E2E-004 | B | test | uncovered | — |
+| REQ-E2E-001 | B | test | verified | e2e_test.v (pass) |
+| REQ-E2E-002 | B | test | verified | com_test.v (pass), e2e_test.v (pass) |
+| REQ-E2E-003 | B | test | verified | e2e_test.v (pass) |
+| REQ-E2E-004 | B | test | verified | compose_test.v (pass) |
 | REQ-ECU-001 | QM | test | verified | ecu_test.v (pass) |
 | REQ-ECU-002 | QM | test | verified | ecu_test.v (pass) |
 | REQ-ECU-003 | QM | test | verified | ecu_test.v (pass), handoff_test.v (pass) |
@@ -238,17 +238,17 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-DRV-008 | | | | | | | | | | | | | | | | |
 | REQ-COM-001 | | | | | | | | | | | | | | | | |
 | REQ-COM-002 | | | | | | | | | | | | | | | | |
-| REQ-COM-003 | | | | | | | | | | | | | | | | |
-| REQ-COM-004 | | | | | | | | | | | | | | | | |
-| REQ-COM-005 | | | | | | | | | | | | | | | | |
+| REQ-COM-003 | | | | | | | | | | | | | | ✓ | | |
+| REQ-COM-004 | | | | | | | | | | | | | | ✓ | | |
+| REQ-COM-005 | | | | | | | | | | | | | | ✓ | | |
 | REQ-COM-006 | | | | | | | | | | | | | | ✓ | | |
 | REQ-COM-007 | | | | | | | | | | | | | | | | |
 | REQ-DIAG-001 | | | | | | | | | | | | | | | | |
 | REQ-DIAG-002 | | | | | | | | | | | | | | | | |
-| REQ-E2E-001 | | | | | | | | | | | | | | | | |
-| REQ-E2E-002 | | | | | | | | | | | | | | | | |
-| REQ-E2E-003 | | | | | | | | | | | | | | | | |
-| REQ-E2E-004 | | | | | | | | | | | | | | | | |
+| REQ-E2E-001 | | | | | | | | | | | | | | ✓ | | |
+| REQ-E2E-002 | | | | | | | | | | | | | | ✓ | | |
+| REQ-E2E-003 | | | | | | | | | | | | | | ✓ | | |
+| REQ-E2E-004 | | | | | | | | | | | | | | ✓ | | |
 | REQ-ECU-001 | | | | | | | | | | | | | | ✓ | | |
 | REQ-ECU-002 | | | | | | | | | | | | | | ✓ | | |
 | REQ-ECU-003 | | | | | | | | | | | | | | ✓ | | |

@@ -1,6 +1,9 @@
 module com
 
-// @verifies SYS-REQ-COMMS-003 REQ-COM-006
+// @verifies SYS-REQ-COMMS-003 REQ-COM-003 REQ-COM-004 REQ-COM-005 REQ-COM-006 REQ-E2E-002
+// (REQ-COM-003/004: the cyclic/event/mixed/triggered should_send decisions incl. debounce
+//  and backpressure; REQ-COM-005 and the timeout leg of REQ-E2E-002: the rx deadline
+//  edge/latch/disable tests — the counter leg of E2E-002 lives in comm/e2e.)
 
 fn payload(b u8) [max_pdu]u8 {
 	mut d := [max_pdu]u8{}

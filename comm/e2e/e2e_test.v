@@ -1,6 +1,9 @@
 module e2e
 
-// @verifies SYS-REQ-SAFE-001
+// @verifies SYS-REQ-SAFE-001 REQ-E2E-001 REQ-E2E-002 REQ-E2E-003
+// (corruption -> not delivered; repeat + skipped-sequence via the counter — the
+//  total-loss-by-timeout leg of E2E-002 is comm/com's rx deadline; protect-on-transmit
+//  incl. counter advance and 15->0 wrap.)
 
 const id = u16(0x0123)
 const crc_pos = 1

@@ -3125,6 +3125,21 @@ fn main() {
 				|| (fp >= mp && fp < mp + ml) {
 				panic('secoc ${fk}: fresh_pos=${fp}, mac_pos=${mp}, mac_len=${ml} must be 1..16, fit within dlc=${dlc}, and not overlap')
 			}
+			// COMPOSED frame (E2E + SecOC, REQ-E2E-004): the four protection fields
+			// must occupy disjoint bytes — the E2E CRC excludes the SecOC windows, so
+			// a CRC or counter sitting INSIDE them would be stamped over by SecOC and
+			// unverifiable; reject the layout rather than compose garbage.
+			if m.frames.e2e_on[fk] or { false } {
+				cp := m.frames.e2e_crc[fk] or { 0 }
+				np := m.frames.e2e_ctr[fk] or { 0 }
+				for pos in [cp, np] {
+					if pos == fp || (pos >= mp && pos < mp + ml) {
+						panic('e2e+secoc ${fk}: crc_pos=${cp}/counter_pos=${np} collide with ' +
+							'fresh_pos=${fp}/mac@${mp}+${ml} — REQ-E2E-004 requires disjoint ' +
+							'protection bytes (E2E covers the payload, never the SecOC fields)')
+					}
+				}
+			}
 		}
 	}
 
