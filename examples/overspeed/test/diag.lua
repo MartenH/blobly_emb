@@ -1,6 +1,12 @@
 -- UDS (ISO 14229) over ISO-TP on vcan0: drive the diag connection (Request 0x101
 -- -> Response 0x102) with blobly_net's UDS client. Exercises the service dispatch
 -- AND multi-frame segmentation (the 19-byte and 20-byte DIDs span several frames).
+-- @verifies REQ-DIAG-002
+-- (the 0xF1A0 test injects VehicleSpeed=100 on the bus then reads the live DID back
+--  through UDS and asserts ~100 — the DID returns the current signal value from the
+--  same source the application sees. NOT REQ-NVM-008: 0xF1AA is a plain RAM cell, not
+--  a persistent-storage binding — that requirement needs a DID bound to a persisted
+--  signal, which no example wires yet.)
 local function diag()
   return uds.open("CAN1", { tx = 0x101, rx = 0x102 })
 end
