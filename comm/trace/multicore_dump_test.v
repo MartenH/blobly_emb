@@ -1,5 +1,9 @@
 module trace
 
+// @verifies REQ-TRACE-009
+// (one control command with a core bitmask; the dump streams one self-describing
+//  block per selected core through a single ISO-TP transfer sequence.)
+
 import comm.isotp
 
 // pump_dump drives PDUs between a tx and rx Link until quiescent (the id-routing a bus

@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 187 | 101 | 16 | 70 | 0 |
+| 187 | 108 | 18 | 61 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -51,7 +51,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-005 | QM | test | verified | com_test.v (pass) |
 | REQ-COM-006 | QM | test | verified | com_test.v (pass) |
 | REQ-COM-007 | QM | test | uncovered | — |
-| REQ-DIAG-001 | QM | test | uncovered | — |
+| REQ-DIAG-001 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-002 | QM | test | uncovered | — |
 | REQ-E2E-001 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-002 | B | test | verified | com_test.v (pass), e2e_test.v (pass) |
@@ -143,9 +143,9 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NVM-012 | QM | test | uncovered | — |
 | REQ-NVM-013 | QM | test | verified | journal_test.v (pass) |
 | REQ-NVM-014 | QM | test | uncovered | — |
-| REQ-SEC-001 | QM | test | uncovered | — |
-| REQ-SEC-002 | QM | test | uncovered | — |
-| REQ-SEC-003 | QM | test | uncovered | — |
+| REQ-SEC-001 | QM | test | verified | secoc_test.v (pass) |
+| REQ-SEC-002 | QM | test | verified | secoc_test.v (pass) |
+| REQ-SEC-003 | QM | test | verified | secoc_test.v (pass) |
 | REQ-SHELL-001 | QM | test | verified | shell_test.v (pass) |
 | REQ-SHELL-002 | QM | test | verified | shell_test.v (pass) |
 | REQ-SHELL-003 | QM | test | verified | shell_test.v (pass) |
@@ -178,11 +178,11 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TELEM-002 | QM | test | verified | telem_test.v (pass) |
 | REQ-TELEM-003 | QM | test | verified | loom_test.v (pass) |
 | REQ-TELEM-004 | QM | test | verified | loom_test.v (pass) |
-| REQ-TRACE-010 | QM | test | uncovered | — |
+| REQ-TRACE-010 | QM | test | covered | threadx-exec-hooks-capture (pending) |
 | REQ-TRACE-001 | QM | test | verified | h755-duo-trace (approved), h755-multiblock-dump (approved), loom_test.v (pass) |
 | REQ-TRACE-002 | QM | test | verified | h755-external-partitions (approved) |
-| REQ-TRACE-008 | QM | test | uncovered | — |
-| REQ-TRACE-009 | QM | test | uncovered | — |
+| REQ-TRACE-008 | QM | test | covered | threadx-exec-hooks-capture (pending) |
+| REQ-TRACE-009 | QM | test | verified | multicore_dump_test.v (pass) |
 | REQ-TRACE-011 | QM | test | covered | module_test.v (pass), trace-correlation-silicon (pending), trace_test.v (pass) |
 | REQ-TOPO-001 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-002 | QM | test | verified | model_test.v (pass) |
@@ -196,8 +196,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-010 | QM | analysis | covered | route_firewall.lua (pending), routes_test.v (pass) |
 | REQ-TOPO-011 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-012 | QM | test | verified | model_test.v (pass) |
-| REQ-TP-001 | QM | test | uncovered | — |
-| REQ-TP-002 | QM | test | uncovered | — |
+| REQ-TP-001 | QM | test | verified | isotp_test.v (pass) |
+| REQ-TP-002 | QM | test | verified | isotp_test.v (pass) |
 | REQ-WDG-001 | B | test | verified | wdg_test.v (pass) |
 | REQ-WDG-002 | B | test | verified | wdg_test.v (pass) |
 | REQ-WDG-003 | B | test | verified | wdg_test.v (pass) |
@@ -205,192 +205,192 @@ Generated from `requirements/*.toml` + verification links. See
 
 ## Matrix — requirement × execution context
 
-| req | h735/ETH | h735/ETH-DoIP | h735/ETH-TCP | h735/ETH-UDP | h735/FDCAN | h735/ThreadX | h735/target | h755/FDCAN | h755/IO-GPIO | h755/ThreadX | h755/dual-core | h755/target | host/SocketCAN | host/unit | review | static |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| REQ-BOOT-001 | | | | | | | | | | | | | | ✓ | | |
-| REQ-BOOT-002 | | | | | | | | | | | | | | ✓ | | |
-| REQ-BOOT-003 | | | | | | | | | | | | | | | | |
-| REQ-BOOT-004 | | | | | | | | | | | | | | | | |
-| REQ-BOOT-005 | | | | | | | | | | | | | | ✓ | | |
-| REQ-BOOT-006 | | | | | | | | | | | | | | | | |
-| REQ-BOOT-007 | | | | | | | | | | | | | | | | |
-| REQ-BOOT-008 | | | | | | | | | | | | | | ✓ | | |
-| REQ-BOOT-009 | | | | | | | | | | | | | | ✓ | | |
-| REQ-BOOT-010 | | | | | | | | | | | | | | | | |
-| REQ-BOOT-011 | | | | | | | | | | | | | | ✓ | | |
-| REQ-BOOT-012 | | | | | | | | | | | | | | | | |
-| REQ-BOOT-013 | | | | | | | | | | | | | | ✓ | | |
-| REQ-BOOT-014 | | | | | | | | | | | | | | ✓ | | |
-| REQ-BOOT-015 | | | | | | | | | | | | | | | | |
-| REQ-BOOT-016 | | | | | | | | | | | | | | ✓ | | |
-| REQ-BOOT-017 | | | | | | | | | | | | | | ✓ | | |
-| REQ-BOOT-018 | | | | | | | | | | | | | | | | |
-| REQ-BULK-001 | | | | | | | | | | | | | | ✓ | | |
-| REQ-BULK-002 | | | | | | | | | | | | | | ✓ | | |
-| REQ-BULK-003 | | | | | | | | | | | · | | | ✓ | | |
-| REQ-CAN-DRV-001 | | | | | ✓ | | | ✓ | | | ✓ | | · | | | |
-| REQ-CAN-DRV-002 | | | | | ✓ | | | ✓ | | | | | · | | | |
-| REQ-CAN-DRV-003 | | | | | ✓ | | | ✓ | | | | | | | | |
-| REQ-CAN-DRV-004 | | | | | | | | | | | | | | | | |
-| REQ-CAN-DRV-005 | | | | | | | | | | | | | | | | |
-| REQ-CAN-DRV-006 | | | | | | | | | | | | | | | | |
-| REQ-CAN-DRV-007 | | | | | | | | | | | | | | | | |
-| REQ-CAN-DRV-008 | | | | | | | | | | | | | | | | |
-| REQ-COM-001 | | | | | | | | | | | | | | | | |
-| REQ-COM-002 | | | | | | | | | | | | | | | | |
-| REQ-COM-003 | | | | | | | | | | | | | | ✓ | | |
-| REQ-COM-004 | | | | | | | | | | | | | | ✓ | | |
-| REQ-COM-005 | | | | | | | | | | | | | | ✓ | | |
-| REQ-COM-006 | | | | | | | | | | | | | | ✓ | | |
-| REQ-COM-007 | | | | | | | | | | | | | | | | |
-| REQ-DIAG-001 | | | | | | | | | | | | | | | | |
-| REQ-DIAG-002 | | | | | | | | | | | | | | | | |
-| REQ-E2E-001 | | | | | | | | | | | | | | ✓ | | |
-| REQ-E2E-002 | | | | | | | | | | | | | | ✓ | | |
-| REQ-E2E-003 | | | | | | | | | | | | | | ✓ | | |
-| REQ-E2E-004 | | | | | | | | | | | | | | ✓ | | |
-| REQ-ECU-001 | | | | | | | | | | | | | | ✓ | | |
-| REQ-ECU-002 | | | | | | | | | | | | | | ✓ | | |
-| REQ-ECU-003 | | | | | | | | | | | | | | ✓ | | |
-| REQ-ECU-004 | | | | | | | | | | | | | | ✓ | | |
-| REQ-ECU-005 | | | | | | | | | | | | | | ✓ | | |
-| REQ-INIT-001 | | | | | | | | | | | | | | ✓ | | |
-| REQ-INIT-002 | | | | | | | | | | | | | | ✓ | | |
-| REQ-INIT-003 | | | | | | | | | | | | | | ✓ | | |
-| REQ-MODE-001 | | | | | | | | | | | | | | ✓ | | |
-| REQ-MODE-002 | | | | | | | | | | | | | | ✓ | | |
-| REQ-MODE-003 | | | | | | | | | | | | | | ✓ | | |
-| REQ-INV-001 | | | | | | | | | | | | | | | | ✓ |
-| REQ-INV-002 | | | | | | | | | | | ✓ | | | | | |
-| REQ-INV-003 | | | | | | | | | | | | | | | | |
-| REQ-INV-004 | | | | | | | | | | | | | | | | ✓ |
-| REQ-INV-005 | | | | | | | | | | | | | | | · | |
-| REQ-INV-006 | | | | | | | | | | | · | | | ✓ | | |
-| REQ-IO-001 | | | | | | | | | | | | | | ✓ | | |
-| REQ-IO-002 | | | | | | | | | | | | | | ✓ | | |
-| REQ-IO-003 | | | | | | | | | | | | | | | | |
-| REQ-IO-004 | | | | | | | | | | | | | | | | |
-| REQ-IO-005 | | | | | | | | | | | | | | | | |
-| REQ-IO-006 | | | | | | | | | | | | | | | | |
-| REQ-IO-007 | | | | | | | | | | | | | | | | |
-| REQ-IO-008 | | | | | | | | | | | | | | | | |
-| REQ-IO-009 | | | | | | | | | | | | | | ✓ | | |
-| REQ-IO-015 | | | | | | | | | | | | | | | | |
-| REQ-IO-016 | | | | | | | | | | | | | | | | |
-| REQ-IO-010 | | | | | | | | | | | | | | | | |
-| REQ-IO-011 | | | | | | | | | | | | | | | | |
-| REQ-IO-012 | | | | | | | | | ✓ | | | | | ✓ | | |
-| REQ-IO-013 | | | | | | | | | ✓ | | | | | ✓ | | |
-| REQ-IO-014 | | | | | | | | | | | | | | | | |
-| REQ-IO-017 | | | | | | | | | | | | | | | | |
-| REQ-IO-018 | | | | | | | | | | | | · | | | | |
-| REQ-IO-019 | | | | | | | | | | | | | | ✓ | | |
-| REQ-IO-020 | | | | | | | | | | | | | | | | |
-| REQ-IO-021 | | | | | | | | | | | | · | | | | |
-| REQ-IO-022 | | | | | | | | | | | | | | | | |
-| REQ-IO-023 | | | | | | | | | | | | | | ✓ | | |
-| REQ-IO-024 | | | | | | | | | | | | | | | | |
-| REQ-NET-001 | ✓ | | | | | | | | | | | | | | | |
-| REQ-NET-002 | ✓ | | | | | | | | | | | | | | | |
-| REQ-NET-003 | ✓ | | | | | | | | | | | | | | | |
-| REQ-NET-004 | ✓ | | | | | | | | | | | | | | | |
-| REQ-NET-005 | | | | ✓ | | | | | | | | | | | | |
-| REQ-NET-006 | | | ✓ | | | | | | | | | | | | | |
-| REQ-NET-007 | | ✓ | | | | | | | | | | | | ✓ | | |
-| REQ-NET-008 | | | | | | | | | | | | | | | | |
-| REQ-NET-009 | | | | | | | | | | | | | | | | |
-| REQ-NET-010 | | | | | | | | | | | | | | | | |
-| REQ-NET-011 | | | | | | | | | | | | | | | | |
-| REQ-NET-012 | | | | | | | | | | | | | | | | |
-| REQ-NET-013 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NET-014 | | | | | | | | | | | | | | | | |
-| REQ-NET-015 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NET-016 | | | | | | | · | | | | | | | | | |
-| REQ-NET-017 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NET-018 | | | | | | | | | | | | | | | | |
-| REQ-NM-001 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NM-002 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NM-003 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NM-004 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NM-005 | | | | | | ✓ | | | | ✓ | ✓ | | | ✓ | | |
-| REQ-NM-006 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NM-007 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NM-008 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NM-009 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NM-010 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NM-011 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NM-012 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NM-013 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NVM-001 | | | | | | | | | | | | | | | | |
-| REQ-NVM-002 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NVM-003 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NVM-004 | | | | | | | | | | | | | | | | |
-| REQ-NVM-005 | | | | | | | | | | | | | | | | |
-| REQ-NVM-006 | | | | | | | | | | | | | | | | |
-| REQ-NVM-007 | | | | | | | | | | | | | | | | |
-| REQ-NVM-008 | | | | | | | | | | | | | | | | |
-| REQ-NVM-009 | | | | | | | | | | | | | | | | |
-| REQ-NVM-010 | | | | | | | | | | | | | | | | |
-| REQ-NVM-011 | | | | | | | | | | | | | | | | |
-| REQ-NVM-012 | | | | | | | | | | | | | | | | |
-| REQ-NVM-013 | | | | | | | | | | | | | | ✓ | | |
-| REQ-NVM-014 | | | | | | | | | | | | | | | | |
-| REQ-SEC-001 | | | | | | | | | | | | | | | | |
-| REQ-SEC-002 | | | | | | | | | | | | | | | | |
-| REQ-SEC-003 | | | | | | | | | | | | | | | | |
-| REQ-SHELL-001 | | | | | | | | | | | | | | ✓ | | |
-| REQ-SHELL-002 | | | | | | | | | | | | | | ✓ | | |
-| REQ-SHELL-003 | | | | | | | | | | | | | | ✓ | | |
-| REQ-SHELL-004 | | | | | | ✓ | | | | ✓ | | | | | | |
-| REQ-SHELL-005 | | | | | | ✓ | | | | | | | | | | |
-| SYS-REQ-COMMS-001 | | | | | | | | | | | | | · | | | |
-| SYS-REQ-COMMS-002 | | | | | | | | | | | | | · | | | |
-| SYS-REQ-COMMS-003 | | | | | | | | | | | | | | ✓ | | |
-| SYS-REQ-SAFE-001 | | | | | | | | | | | | | | ✓ | | |
-| SYS-REQ-SAFE-002 | | | | | | | | | | | | | | | | |
-| SYS-REQ-SAFE-003 | | | | | | | | | | | | | | | | |
-| SYS-REQ-SEC-001 | | | | | | | | | | | | | | ✓ | | |
-| SYS-REQ-DIAG-001 | | | | | | | | | | | | | | ✓ | | |
-| SYS-REQ-IO-001 | | | | | | | | | | | | | | | | |
-| SYS-REQ-PROG-001 | | | | | | | | | | | | | | | | |
-| SYS-REQ-NVM-001 | | | | | | | | | | | | | | | | |
-| SYS-REQ-NM-001 | | | | | | | | | | | | | | | | |
-| SYS-REQ-LIFE-001 | | | | | | | | | | | | | | | | |
-| SYS-REQ-LIFE-002 | | | | | | | | | | | | | | | | |
-| SYS-REQ-LIFE-003 | | | | | | | | | | | | | | | | |
-| SYS-REQ-RES-001 | | | | | | | | | | | | | | | | ✓ |
-| SYS-REQ-MC-001 | | | | | | | | | | | | | | | | |
-| SYS-REQ-OBS-001 | | | | | | | | | | | | | | | | |
-| SYS-REQ-OBS-002 | | | | | | | | | | | | | | | | |
-| SYS-REQ-OBS-003 | | | | | | | | | | | | | | | | |
-| SYS-REQ-TOPO-001 | | | | | | | | | | | | | | | | |
-| SYS-REQ-NET-001 | | | | | | | | | | | | | | | | |
-| SYS-REQ-NET-002 | | | | | | | | | | | | | | | | |
-| REQ-TELEM-001 | | | | | | | | | | | | | | ✓ | | |
-| REQ-TELEM-002 | | | | | | | | | | | | | | ✓ | | |
-| REQ-TELEM-003 | | | | | | | | | | | | | | ✓ | | |
-| REQ-TELEM-004 | | | | | | | | | | | | | | ✓ | | |
-| REQ-TRACE-010 | | | | | | | | | | | | | | | | |
-| REQ-TRACE-001 | | | | | | | | | | ✓ | ✓ | | | ✓ | | |
-| REQ-TRACE-002 | | | | | | | | | | | ✓ | | | | | |
-| REQ-TRACE-008 | | | | | | | | | | | | | | | | |
-| REQ-TRACE-009 | | | | | | | | | | | | | | | | |
-| REQ-TRACE-011 | | | | | | | | | | | · | | | ✓ | | |
-| REQ-TOPO-001 | | | | | | | | | | | | | | ✓ | | |
-| REQ-TOPO-002 | | | | | | | | | | | | | | ✓ | | |
-| REQ-TOPO-003 | | | | | | | | | | | | | | ✓ | | |
-| REQ-TOPO-004 | | | | | | | | | | | | | | ✓ | | |
-| REQ-TOPO-005 | | | | | | | | | | | | | | ✓ | | |
-| REQ-TOPO-006 | | | | | | | | | | | | | · | ✓ | | |
-| REQ-TOPO-007 | | | | | | | | | | | | | · | ✓ | | |
-| REQ-TOPO-008 | | | | | | | | | | | | | · | | | |
-| REQ-TOPO-009 | | | | | | | | | | | | | · | | | |
-| REQ-TOPO-010 | | | | | | | | | | | | | · | ✓ | | |
-| REQ-TOPO-011 | | | | | | | | | | | | | | ✓ | | |
-| REQ-TOPO-012 | | | | | | | | | | | | | | ✓ | | |
-| REQ-TP-001 | | | | | | | | | | | | | | | | |
-| REQ-TP-002 | | | | | | | | | | | | | | | | |
-| REQ-WDG-001 | | | | | | | | | | | | | | ✓ | | |
-| REQ-WDG-002 | | | | | | | | | | | | | | ✓ | | |
-| REQ-WDG-003 | | | | | | | | | | | | | | ✓ | | |
-| REQ-WDG-004 | | | | | | | | | | | | | | ✓ | | |
+| req | h735/ETH | h735/ETH-DoIP | h735/ETH-TCP | h735/ETH-UDP | h735/FDCAN | h735/ThreadX | h735/target | h755/FDCAN | h755/IO-GPIO | h755/ThreadX | h755/dual-core | h755/target | host/SocketCAN | host/unit | review | static | threadx/qemu-m7 + h755 bench |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| REQ-BOOT-001 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-BOOT-002 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-BOOT-003 | | | | | | | | | | | | | | | | | |
+| REQ-BOOT-004 | | | | | | | | | | | | | | | | | |
+| REQ-BOOT-005 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-BOOT-006 | | | | | | | | | | | | | | | | | |
+| REQ-BOOT-007 | | | | | | | | | | | | | | | | | |
+| REQ-BOOT-008 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-BOOT-009 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-BOOT-010 | | | | | | | | | | | | | | | | | |
+| REQ-BOOT-011 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-BOOT-012 | | | | | | | | | | | | | | | | | |
+| REQ-BOOT-013 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-BOOT-014 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-BOOT-015 | | | | | | | | | | | | | | | | | |
+| REQ-BOOT-016 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-BOOT-017 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-BOOT-018 | | | | | | | | | | | | | | | | | |
+| REQ-BULK-001 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-BULK-002 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-BULK-003 | | | | | | | | | | | · | | | ✓ | | | |
+| REQ-CAN-DRV-001 | | | | | ✓ | | | ✓ | | | ✓ | | · | | | | |
+| REQ-CAN-DRV-002 | | | | | ✓ | | | ✓ | | | | | · | | | | |
+| REQ-CAN-DRV-003 | | | | | ✓ | | | ✓ | | | | | | | | | |
+| REQ-CAN-DRV-004 | | | | | | | | | | | | | | | | | |
+| REQ-CAN-DRV-005 | | | | | | | | | | | | | | | | | |
+| REQ-CAN-DRV-006 | | | | | | | | | | | | | | | | | |
+| REQ-CAN-DRV-007 | | | | | | | | | | | | | | | | | |
+| REQ-CAN-DRV-008 | | | | | | | | | | | | | | | | | |
+| REQ-COM-001 | | | | | | | | | | | | | | | | | |
+| REQ-COM-002 | | | | | | | | | | | | | | | | | |
+| REQ-COM-003 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-COM-004 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-COM-005 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-COM-006 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-COM-007 | | | | | | | | | | | | | | | | | |
+| REQ-DIAG-001 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-002 | | | | | | | | | | | | | | | | | |
+| REQ-E2E-001 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-E2E-002 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-E2E-003 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-E2E-004 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-ECU-001 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-ECU-002 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-ECU-003 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-ECU-004 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-ECU-005 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-INIT-001 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-INIT-002 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-INIT-003 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-MODE-001 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-MODE-002 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-MODE-003 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-INV-001 | | | | | | | | | | | | | | | | ✓ | |
+| REQ-INV-002 | | | | | | | | | | | ✓ | | | | | | |
+| REQ-INV-003 | | | | | | | | | | | | | | | | | |
+| REQ-INV-004 | | | | | | | | | | | | | | | | ✓ | |
+| REQ-INV-005 | | | | | | | | | | | | | | | · | | |
+| REQ-INV-006 | | | | | | | | | | | · | | | ✓ | | | |
+| REQ-IO-001 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-IO-002 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-IO-003 | | | | | | | | | | | | | | | | | |
+| REQ-IO-004 | | | | | | | | | | | | | | | | | |
+| REQ-IO-005 | | | | | | | | | | | | | | | | | |
+| REQ-IO-006 | | | | | | | | | | | | | | | | | |
+| REQ-IO-007 | | | | | | | | | | | | | | | | | |
+| REQ-IO-008 | | | | | | | | | | | | | | | | | |
+| REQ-IO-009 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-IO-015 | | | | | | | | | | | | | | | | | |
+| REQ-IO-016 | | | | | | | | | | | | | | | | | |
+| REQ-IO-010 | | | | | | | | | | | | | | | | | |
+| REQ-IO-011 | | | | | | | | | | | | | | | | | |
+| REQ-IO-012 | | | | | | | | | ✓ | | | | | ✓ | | | |
+| REQ-IO-013 | | | | | | | | | ✓ | | | | | ✓ | | | |
+| REQ-IO-014 | | | | | | | | | | | | | | | | | |
+| REQ-IO-017 | | | | | | | | | | | | | | | | | |
+| REQ-IO-018 | | | | | | | | | | | | · | | | | | |
+| REQ-IO-019 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-IO-020 | | | | | | | | | | | | | | | | | |
+| REQ-IO-021 | | | | | | | | | | | | · | | | | | |
+| REQ-IO-022 | | | | | | | | | | | | | | | | | |
+| REQ-IO-023 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-IO-024 | | | | | | | | | | | | | | | | | |
+| REQ-NET-001 | ✓ | | | | | | | | | | | | | | | | |
+| REQ-NET-002 | ✓ | | | | | | | | | | | | | | | | |
+| REQ-NET-003 | ✓ | | | | | | | | | | | | | | | | |
+| REQ-NET-004 | ✓ | | | | | | | | | | | | | | | | |
+| REQ-NET-005 | | | | ✓ | | | | | | | | | | | | | |
+| REQ-NET-006 | | | ✓ | | | | | | | | | | | | | | |
+| REQ-NET-007 | | ✓ | | | | | | | | | | | | ✓ | | | |
+| REQ-NET-008 | | | | | | | | | | | | | | | | | |
+| REQ-NET-009 | | | | | | | | | | | | | | | | | |
+| REQ-NET-010 | | | | | | | | | | | | | | | | | |
+| REQ-NET-011 | | | | | | | | | | | | | | | | | |
+| REQ-NET-012 | | | | | | | | | | | | | | | | | |
+| REQ-NET-013 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NET-014 | | | | | | | | | | | | | | | | | |
+| REQ-NET-015 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NET-016 | | | | | | | · | | | | | | | | | | |
+| REQ-NET-017 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NET-018 | | | | | | | | | | | | | | | | | |
+| REQ-NM-001 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NM-002 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NM-003 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NM-004 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NM-005 | | | | | | ✓ | | | | ✓ | ✓ | | | ✓ | | | |
+| REQ-NM-006 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NM-007 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NM-008 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NM-009 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NM-010 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NM-011 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NM-012 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NM-013 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NVM-001 | | | | | | | | | | | | | | | | | |
+| REQ-NVM-002 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NVM-003 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NVM-004 | | | | | | | | | | | | | | | | | |
+| REQ-NVM-005 | | | | | | | | | | | | | | | | | |
+| REQ-NVM-006 | | | | | | | | | | | | | | | | | |
+| REQ-NVM-007 | | | | | | | | | | | | | | | | | |
+| REQ-NVM-008 | | | | | | | | | | | | | | | | | |
+| REQ-NVM-009 | | | | | | | | | | | | | | | | | |
+| REQ-NVM-010 | | | | | | | | | | | | | | | | | |
+| REQ-NVM-011 | | | | | | | | | | | | | | | | | |
+| REQ-NVM-012 | | | | | | | | | | | | | | | | | |
+| REQ-NVM-013 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NVM-014 | | | | | | | | | | | | | | | | | |
+| REQ-SEC-001 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-SEC-002 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-SEC-003 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-SHELL-001 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-SHELL-002 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-SHELL-003 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-SHELL-004 | | | | | | ✓ | | | | ✓ | | | | | | | |
+| REQ-SHELL-005 | | | | | | ✓ | | | | | | | | | | | |
+| SYS-REQ-COMMS-001 | | | | | | | | | | | | | · | | | | |
+| SYS-REQ-COMMS-002 | | | | | | | | | | | | | · | | | | |
+| SYS-REQ-COMMS-003 | | | | | | | | | | | | | | ✓ | | | |
+| SYS-REQ-SAFE-001 | | | | | | | | | | | | | | ✓ | | | |
+| SYS-REQ-SAFE-002 | | | | | | | | | | | | | | | | | |
+| SYS-REQ-SAFE-003 | | | | | | | | | | | | | | | | | |
+| SYS-REQ-SEC-001 | | | | | | | | | | | | | | ✓ | | | |
+| SYS-REQ-DIAG-001 | | | | | | | | | | | | | | ✓ | | | |
+| SYS-REQ-IO-001 | | | | | | | | | | | | | | | | | |
+| SYS-REQ-PROG-001 | | | | | | | | | | | | | | | | | |
+| SYS-REQ-NVM-001 | | | | | | | | | | | | | | | | | |
+| SYS-REQ-NM-001 | | | | | | | | | | | | | | | | | |
+| SYS-REQ-LIFE-001 | | | | | | | | | | | | | | | | | |
+| SYS-REQ-LIFE-002 | | | | | | | | | | | | | | | | | |
+| SYS-REQ-LIFE-003 | | | | | | | | | | | | | | | | | |
+| SYS-REQ-RES-001 | | | | | | | | | | | | | | | | ✓ | |
+| SYS-REQ-MC-001 | | | | | | | | | | | | | | | | | |
+| SYS-REQ-OBS-001 | | | | | | | | | | | | | | | | | |
+| SYS-REQ-OBS-002 | | | | | | | | | | | | | | | | | |
+| SYS-REQ-OBS-003 | | | | | | | | | | | | | | | | | |
+| SYS-REQ-TOPO-001 | | | | | | | | | | | | | | | | | |
+| SYS-REQ-NET-001 | | | | | | | | | | | | | | | | | |
+| SYS-REQ-NET-002 | | | | | | | | | | | | | | | | | |
+| REQ-TELEM-001 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TELEM-002 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TELEM-003 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TELEM-004 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TRACE-010 | | | | | | | | | | | | | | | | | · |
+| REQ-TRACE-001 | | | | | | | | | | ✓ | ✓ | | | ✓ | | | |
+| REQ-TRACE-002 | | | | | | | | | | | ✓ | | | | | | |
+| REQ-TRACE-008 | | | | | | | | | | | | | | | | | · |
+| REQ-TRACE-009 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TRACE-011 | | | | | | | | | | | · | | | ✓ | | | |
+| REQ-TOPO-001 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TOPO-002 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TOPO-003 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TOPO-004 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TOPO-005 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TOPO-006 | | | | | | | | | | | | | · | ✓ | | | |
+| REQ-TOPO-007 | | | | | | | | | | | | | · | ✓ | | | |
+| REQ-TOPO-008 | | | | | | | | | | | | | · | | | | |
+| REQ-TOPO-009 | | | | | | | | | | | | | · | | | | |
+| REQ-TOPO-010 | | | | | | | | | | | | | · | ✓ | | | |
+| REQ-TOPO-011 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TOPO-012 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-001 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TP-002 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-WDG-001 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-WDG-002 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-WDG-003 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-WDG-004 | | | | | | | | | | | | | | ✓ | | | |
