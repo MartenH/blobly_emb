@@ -57,7 +57,8 @@ lock-free, no-alloc — and skips the rest.
   latency gap. Missing only because we built the cyclic path first.
 - **Large / bulk data (the LdCom shape).** COM here packs *signals* into a PDU, so
   everything an application sends is bit-packed and bounded — 64 B (`com.max_pdu`)
-  on a bus, 8 B across cores. AUTOSAR's answer to "this payload is not a set of
+  on a bus, and up to 16 u32 lanes (one PDU) across cores since the wide `xioc_n`
+  derivation (#211). AUTOSAR's answer to "this payload is not a set of
   signals" is **LdCom**: pass the buffer through **transparently**, no packing, and
   let PduR + a TP segment it. The pieces exist here (`comm/isotp` segments, the
   bootloader block-transfers an image, `comm/trace` streams a ring), but only a
