@@ -23,7 +23,7 @@ cell."* Sending bulk as a signal is the mistake this page exists to prevent.
 |---|---|---|---|
 | same thread | plain struct field | — | ✅ derived |
 | thread → thread, **same core** | IOC cell (`boards/common/ioc.h`) — the *crossing* is derived, the algorithm is the signal's `transport` (**default `double`**; `triple`/`seqlock` selectable) | **64 B** (`IOC_MAX`) | ✅ derived |
-| **core → core**, same chip | xioc slot (`boards/common/xioc.h`) — **satellite → owner image only**, and generated end-to-end **only when the destination is a bus** (the owner drain transmits it); a satellite → owner-*partition* signal allocates a slot that platform C reads via the contract header — no FB consumer is generated. owner→satellite and satellite→satellite have no path | **8 B** — 1–2 × `u32` | ✅ derived (to-bus) |
+| **core → core**, same chip | xioc slot or wide `xioc_n` channel (`boards/common/xioc.h`) — **satellite → owner image only**, and generated end-to-end **only when the destination is a bus** (the owner drain transmits it, layout-handshake-gated); a satellite → owner-*partition* signal allocates a slot/channel that platform C reads via the contract header — no FB consumer is generated. owner→satellite and satellite→satellite have no path | **≤16 fields of `u32`/`u16`/`u8`/`bool`** (one u32 lane each; to a bus: DLC = 4×lanes, >2 lanes needs FD — see below); the wider shapes (`u64`, floats, >16 narrow fields) are the #212 packing decision | ✅ derived (to-bus) |
 | **core → core**, bulk | `duo.h` dtrace-style cell: shared-window owner buffer + req/ack handshake | RAM-bound (trace uses 2 KB) | ❌ **hand-written**; planned generated form = the loan/publish ring below |
 | ECU → ECU, one frame | CAN frame (`driver/can`) | 8 B classic / **64 B** FD | ✅ derived |
 | ECU → ECU, a PDU | COM (`comm/com`) | **64 B** (`com.max_pdu`) | ✅ derived |
@@ -45,7 +45,7 @@ map one-to-one, because both stacks ultimately bow to the same frames:
 | large `ComSignalLength` byte-arrays (`UINT8_N`/`UINT8_DYN`) — FlexRay-sized L-PDUs (~254 B) **or** a COM signal carried over a TP | any I-PDU, incl. TP-backed | **not a signal here.** No FlexRay (its niche moved to CAN FD / Ethernet), and a COM-signal-over-TP maps to the *bulk* side: ISO-TP / the bootloader block transfer today, the loan/publish ring next — "signal" never exceeds one PDU |
 | **CanTp** (ISO-TP) message | 4095 B (2³²−1 with the 2016 escape) | **520 B** (`isotp.max_payload`) — a deliberate no-alloc cap sized to the largest real message; raise it consciously, every link's buffer grows |
 | **LdCom** — a payload passed whole, no signal packing | transparent, TP-segmented | the gap this page keeps pointing at: modules own links today; the loan/publish **bulk ring** is the planned equivalent ([../bulk-transport.md](../bulk-transport.md)) |
-| **OS IOC** cross-core | size is whatever the generator is configured to emit | derived. **Today the generated cross-core cell is 1–2 × u32 (8 B)**; the 64 B mechanism is merged (`xioc_n`, REQ-INV-006) and the generator derivation is in flight — when it lands, moving a partition changes only cost, never contract |
+| **OS IOC** cross-core | size is whatever the generator is configured to emit | derived — mechanism AND generator shipped (`xioc_n` + the loom2v lane derivation, REQ-INV-006): a remote signal carries up to 16 sub-u32/u32 fields as u32 lanes, so moving a partition changes cost, never contract, within that shape. The remaining widths (u64/float/packed-narrow) are one deliberate packing decision (#212); silicon tear re-run at wide widths is bench-queued |
 | **SecOC / E2E** on a protected PDU | in-PDU protection fields at profile-defined positions | same — `[[frame]].e2e` / `.secoc` with explicit `crc_pos`/`counter_pos`/`fresh_pos`/`mac_pos` (not necessarily trailing bytes), re-protected on gateway re-encode |
 | J1939 TP / big diag transfers | 1785 B / TP-paced | the bootloader's UDS `0x34`/`0x36`×N block transfer — image-sized, block-paced |
 
@@ -68,23 +68,25 @@ the generator picks the mechanism from where they sit. See
 
 ## "I want to send object data between two cores"
 
-**If it fits in two `u32`s, it is a signal.** Declare it normally:
+**If it is ≤16 fields of `u32`/`u16`/`u8`/`bool`, it is a signal.** Declare it normally:
 
 ```toml
 [[signal]]
-name   = "M4Sig"
-fields = { n = "u32", acc = "u32" }   # 1..2 u32 fields ride one xioc {a,b} cell
-from   = "m4"                          # a satellite partition
-to     = "can0"
+name   = "M4Wide"
+fields = { n = "u32", lo = "u16", ok = "bool" }  # one u32 LANE per field, field order =
+from   = "m4"                                    # wire order; 1-2 plain u32 fields keep
+to     = "can0"                                  # the bench-verified {a,b} pair cell
 ```
 
-Anything else is rejected at generation, loudly and on purpose:
-
-```
-loom2v: remote signal "X" has 3 fields — the xioc cell carries 1..2 u32 fields
-loom2v: remote signal "X" field "f" is u16 — the xioc cell carries u32 fields only
-loom2v: remote signal "X" has a `valid` field — xioc freshness is the slot stamp
-```
+The wide (`xioc_n`) channel carries it tear-free with the same plain-store discipline
+as the pair cell; a stale or restarting satellite reads as *never-fresh* (the layout
+REQ/ACK handshake + exact-geometry checks), never as blended values. Bus-bound wide
+signals need `DLC = 4 × lanes` in the DBC (each SG owning one aligned lane), which past
+2 lanes means an FD frame — and the ThreadX comm thread still rejects FD, so 3+ lanes
+to a *bus* waits for the FD comm owner (the generator says so loudly). What still
+rejects, deliberately, pending the **#212 packing decision**: `u64`/`i*`/`f*` fields,
+>16 narrow fields, and multi-field/`valid` signals from a LOCAL producer (the local
+encode carries only the value field — placement must never silently change bytes).
 
 **If it does not fit, there is no supported *application* path today — full stop.** The
 one worked example in the tree, the **cross-core trace handoff** in
@@ -115,11 +117,12 @@ one sanctioned instance, not a template:
 That is ~40 lines of C per side (`comm_glue.c` + `m4_glue.c`) and it is deliberately not
 generated yet — see the roadmap item below.
 
-**Why the 8-byte cap is not laziness:** `xioc` is wait-free on *both* sides using only
-plain 32-bit stores and barriers, because the H755's cores do not arbitrate `LDREX`/`STREX`
-between each other — the triple buffer that works within a core tore **162 reads in 200k**
-across cores (measured 2026-07-12). A wider wait-free cell is a real design problem, not a
-constant to bump.
+**Why the lane discipline is not laziness:** `xioc` is wait-free on *both* sides using
+only plain 32-bit stores and barriers, because the H755's cores do not arbitrate
+`LDREX`/`STREX` between each other — the triple buffer that works within a core tore
+**162 reads in 200k** across cores (measured 2026-07-12). The wide channel scales that
+discipline to one PDU (16 lanes) with the lap-detection argument preserved; packing
+*within* lanes (#212) is a wire-contract decision, not a constant to bump.
 
 ### The planned shape: loan → fill → publish (what iceoryx solves)
 
