@@ -33,7 +33,7 @@ fn test_udp_nm_binding() {
 
 	// Node A ticks and sends UDP NM frame
 	assert node_a.tick(now)
-	frame_bytes := bind_a.encode(&node_a)
+	frame_bytes := bind_a.encode_udp(&node_a)
 
 	// Node B receives Node A's UDP NM frame
 	bind_b.process(mut node_b, now, frame_bytes)

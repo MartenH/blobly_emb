@@ -1085,14 +1085,14 @@ id  = 0x8002
 	assert e.any(it.contains('nothing rides bus "eth0"'))
 }
 
-fn test_someip_nm_on_eth_rejected() {
+fn test_someip_nm_on_eth_allowed() {
 	e := errs_of(eth_head + '
 [nm]
 bus   = "eth0"
 node  = 1
 alive = 0x8003
 ' + eth_tx_frame + app)
-	assert e.any(it.contains('NM over eth'))
+	assert !e.any(it.contains('NM over eth'))
 }
 
 fn test_someip_eth_bound_signal_must_ride_a_frame() {
