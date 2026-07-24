@@ -940,6 +940,11 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			continue
 		}
 
+		if blk == 'nm' {
+			errs << '[nm] is bound to eth bus "${eth}" — NM over eth (comm/nm_udp) is its own phase and is not generated; keep NM on a CAN bus'
+			continue
+		}
+
 		if blk == 'shell' {
 			// the eth shell is the RPC phase (docs/someip.md P3): the module
 			// binds ONE method id (bit 15 clear — a method, not an event) and
