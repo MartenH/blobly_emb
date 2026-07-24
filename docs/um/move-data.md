@@ -23,7 +23,7 @@ cell."* Sending bulk as a signal is the mistake this page exists to prevent.
 |---|---|---|---|
 | same thread | plain struct field | — | ✅ derived |
 | thread → thread, **same core** | IOC cell (`boards/common/ioc.h`) — the *crossing* is derived, the algorithm is the signal's `transport` (**default `double`**; `triple`/`seqlock` selectable) | **64 B** (`IOC_MAX`) | ✅ derived |
-| **core → core**, same chip | xioc slot (`boards/common/xioc.h`) — **satellite → owner image only** today; owner→satellite and satellite→satellite have no generated path | **8 B** — 1–2 × `u32` | ✅ derived |
+| **core → core**, same chip | xioc slot (`boards/common/xioc.h`) — **satellite → owner image only**, and generated end-to-end **only when the destination is a bus** (the owner drain transmits it); a satellite → owner-*partition* signal allocates a slot that platform C reads via the contract header — no FB consumer is generated. owner→satellite and satellite→satellite have no path | **8 B** — 1–2 × `u32` | ✅ derived (to-bus) |
 | **core → core**, bulk | `duo.h` dtrace-style cell: shared-window owner buffer + req/ack handshake | RAM-bound (trace uses 2 KB) | ❌ **hand-written**; planned generated form = the loan/publish ring below |
 | ECU → ECU, one frame | CAN frame (`driver/can`) | 8 B classic / **64 B** FD | ✅ derived |
 | ECU → ECU, a PDU | COM (`comm/com`) | **64 B** (`com.max_pdu`) | ✅ derived |
@@ -92,8 +92,15 @@ one worked example in the tree, the **cross-core trace handoff** in
 of its sides live in the platform's C glue (`comm_glue.c` / `m4_glue.c`), never in an FB.
 Copying its shape into FB-facing code would create exactly the cross-partition shared
 mutable state the isolation rule forbids — an FB's bulk path arrives only when the
-loan/publish ring below lands *behind the OSAL/IOC seam*. If you are writing platform
-glue and cannot wait, the handoff's shape is the shape to copy:
+loan/publish ring below lands *behind the OSAL/IOC seam*. And copying the handoff is
+no longer the answer for NEW platform glue either — every copy is another ad-hoc
+cross-core channel outside `osal.ioc_*`, which is the invariant, not a style rule. The
+**portable bulk core is merged** (`boards/common/bulk.h`: pool + SPSC descriptor rings,
+fallible loan, host-proven — REQ-BULK-001..003): platform bulk glue should place one of
+those in the shared window instead of hand-rolling a cell, while the OSAL/config
+sanctioning that would let an *application* touch it is still to come. The dtrace
+handoff below stays documented as what it is — existing instrumentation, one sanctioned
+instance, not a template:
 
 - a **window in shared memory** both cores can reach — D3 SRAM4 (`0x38000000`, 64 KB),
   uncached on both by policy, so plain volatile accesses are coherent and no cache
@@ -311,8 +318,9 @@ the roadmap item that retires the pattern.
 **What does not exist today** — worth knowing before you design around it:
 
 - **No app-facing socket API.** No UDP stream, no TCP connect, no app-initiated
-  request/response from an FB. TCP on the target is used by **DoIP** (UDS over TCP, for
-  diagnostics and OTA) — a module, not an application path.
+  request/response from an FB. TCP on the target is used by **DoIP** (UDS over TCP,
+  diagnostics only — the firmware services live in `boot.Prog`, which has no DoIP
+  binding yet) — a module, not an application path.
 - **No streaming.** The eth signal path is latest-value-wins, like every other signal
   path. Continuous or unbounded data has no first-class route; today that means platform
   glue owning the socket in `main.v`, the same shape as bulk on CAN.
@@ -332,10 +340,12 @@ nodes and buses in `system.toml` and the generator wires each node's half and an
 explicitly declared gateway route. Bulk does *not* ride that layer: `sysgen` lowers
 buses, NM and cross-node signals, but never emits an `[[isotp]]` block or wires a
 DoIP/SOME/IP connection — a bulk endpoint is **node-local configuration** on each side,
-and `sysgen` offers no transport-aware (lossless) diagnostic proxy: a raw frame route
-will happily forward ISO-TP SF/FF/CF/FC frames like any other bytes, but through the
+and `sysgen` offers no diagnostic proxy at all: a **system** route of ISO-TP ids does
+not even generate — `sysgen`'s validation rejects raw routes of non-cyclic frames, and
+SF/FF/CF/FC traffic is event traffic. Only a standalone, hand-authored `ecu.toml`
+route will forward those frames like any other bytes, and then through the
 freshest-wins retry slot — one lost CF kills the transfer (see
-[gateway-a-frame.md](gateway-a-frame.md)); Ethernet connections are not routed at all.
+[gateway-a-frame.md](gateway-a-frame.md)). Ethernet connections are not routed at all.
 Start with
 [two-node-io.md](two-node-io.md) (a signal across two real ECUs, end to end), then
 [system-from-nodes.md](system-from-nodes.md) for how `system.toml` and `ecu.toml` merge.
