@@ -805,6 +805,10 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 						// (REQ-E2E-004 order), and the check excludes SecOC's bytes. Without
 						// this nested check, SecOC silently masked E2E's repeat/loss
 						// detection — the exact fault-masking the requirement forbids.
+						// STATE COUPLING: secoc's freshness window has already advanced by
+						// the time E2E rejects (verify precedes) — monotonic-only today,
+						// but any future freshness resync must account for frames the
+						// inner gate discarded.
 						glue << '${ind}if st.e2e_rx_${msg}.check_ex(&rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or {
 							0
 						}).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }}, ${m.frames.secoc_fresh[msg] or { 0 }}, 1, ${m.frames.secoc_mac[msg] or { 0 }}, ${m.frames.secoc_maclen[msg] or { 0 }}).usable() {'

@@ -64,6 +64,24 @@ fn test_disjoint_ranges_secoc_stamp_does_not_invalidate_e2e() {
 	assert srx.verify(&key, &d[0], 8, did, fresh_pos, mac_pos, mac_len) == .auth_failed
 }
 
+fn test_windows_do_not_over_exclude() {
+	key := secoc.new_key([16]u8{init: u8(7)})
+	mut etx := TxState{}
+	mut stx := secoc.TxState{}
+	// corrupt the covered byte ADJACENT to the exclusion windows: an off-by-one that
+	// silently widened a window would let this sail through as .ok — the corruption-
+	// detection hole the windows must never open
+	mut d := tx_frame(mut etx, mut stx, &key, 3)
+	d[2] = d[2] ^ 0x01 // payload byte right before crc/ctr/fresh/mac fields
+	mut erx := RxState{}
+	assert erx.check_ex(&d[0], 8, did, crc_pos, ctr_pos, fresh_pos, 1, mac_pos, mac_len) == .crc_error
+	// and the counter byte (between the windows) stays covered too
+	mut d2 := tx_frame(mut etx, mut stx, &key, 4)
+	d2[ctr_pos] = d2[ctr_pos] ^ 0xF0 // high nibble: covered, not the counter itself
+	mut erx2 := RxState{}
+	assert erx2.check_ex(&d2[0], 8, did, crc_pos, ctr_pos, fresh_pos, 1, mac_pos, mac_len) == .crc_error
+}
+
 fn test_neither_masks_the_other() {
 	key := secoc.new_key([16]u8{init: u8(7)})
 	mut etx := TxState{}

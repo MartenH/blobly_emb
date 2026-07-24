@@ -1,9 +1,12 @@
 module e2e
 
-// @verifies SYS-REQ-SAFE-001 REQ-E2E-001 REQ-E2E-002 REQ-E2E-003
-// (corruption -> not delivered; repeat + skipped-sequence via the counter — the
-//  total-loss-by-timeout leg of E2E-002 is comm/com's rx deadline; protect-on-transmit
-//  incl. counter advance and 15->0 wrap.)
+// @verifies SYS-REQ-SAFE-001 REQ-E2E-001 REQ-E2E-003
+// (corruption -> not delivered; protect-on-transmit incl. counter advance and 15->0
+//  wrap. REQ-E2E-002 is NOT tagged although the repeat/skip counter legs are covered
+//  here: its total-loss leg requires a reception timeout INSIDE the E2E mechanism
+//  (ASIL B, per the requirement text) and e2e.RxState has none — the COM deadline is
+//  explicitly only the complementary QM monitor. Implementing the E2E-owned timeout
+//  is an open gap, recorded in requirements/e2e.toml.)
 
 const id = u16(0x0123)
 const crc_pos = 1

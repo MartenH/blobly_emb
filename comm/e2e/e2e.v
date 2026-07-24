@@ -9,7 +9,8 @@ module e2e
 //
 // Layout (configured per [[frame]].e2e): the alive counter occupies the low nibble
 // of byte `counter_pos`; the CRC is byte `crc_pos`; the CRC covers the 16-bit
-// data_id + every frame byte except crc_pos itself.
+// data_id + every frame byte except crc_pos itself — and, on a frame composed with
+// SecOC (REQ-E2E-004, protect_ex/check_ex), except the freshness/MAC windows too.
 
 // crc_update is the SAE J1850 CRC-8 step (poly 0x1D), as AUTOSAR E2E P01/P02 use.
 fn crc_update(crc u8, b u8) u8 {

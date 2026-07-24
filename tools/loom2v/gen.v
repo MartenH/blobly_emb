@@ -953,13 +953,11 @@ fn parse_frames(doc toml.Doc, eth string, buses map[string]bool) FrameCfg {
 			f.secoc_maclen[fk] = int((sm['mac_len'] or { toml.Any(4) }).int())
 			f.secoc_key[fk] = parse_hex((sm['key'] or { toml.Any('') }).string())
 		}
-		// E2E and SecOC on ONE frame don't compose: whichever protect() runs second
-		// mutates bytes the first already covered (SecOC's freshness/MAC after the E2E
-		// CRC, or vice versa), so neither check can pass. Reject the combined profile
-		// until a defined nesting + matching verification scheme exists.
-		if (f.e2e_on[fk] or { false }) && (f.secoc_on[fk] or { false }) {
-			panic('frame "${fk}": both e2e and secoc are set — they do not compose (one protect overwrites the other\'s covered bytes); use one profile')
-		}
+		// E2E + SecOC on ONE frame COMPOSE since REQ-E2E-004 landed: the E2E CRC
+		// excludes the SecOC freshness/MAC windows (protect_ex/check_ex), TX runs
+		// E2E-then-SecOC, RX verifies SecOC-then-E2E nested. The field-disjointness
+		// this depends on is validated in build_model's protected-frames walk (the
+		// 'REQ-E2E-004 requires disjoint protection bytes' panic).
 	}
 	return f
 }

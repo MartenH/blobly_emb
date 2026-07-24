@@ -12,6 +12,12 @@ method = "test"
 asil = "B" # inherits the ASIL B of the parent SYS-REQ-SAFE-001 (no decomposition)
 derives = "SYS-REQ-SAFE-001"
 
+# GAP (coverage sweep, 2026-07-24): the repeat/skip counter legs are tested
+# (comm/e2e/e2e_test.v), but the total-loss leg requires a reception timeout INSIDE
+# the E2E mechanism (this requirement's own ASIL-B wording) and e2e.RxState has none —
+# comm/com's rx deadline is the complementary QM monitor only. Stays uncovered until
+# the E2E-owned timeout is implemented (small: an on_valid(now)/expired(now) pair on
+# RxState + generator wiring) or the requirement is consciously re-scoped.
 [[req]]
 id = "REQ-E2E-002"
 title = "Detect repetition and loss"
@@ -30,10 +36,14 @@ method = "test"
 asil = "B" # inherits the ASIL B of the parent SYS-REQ-SAFE-001 (no decomposition)
 derives = "SYS-REQ-SAFE-001"
 
+# Reworded 2026-07-24 (draft; coverage sweep): 'covers ONLY the application payload'
+# overpromised — the implementation covers everything except its own CRC and the SecOC
+# windows, i.e. padding stays covered (standard E2E practice, strictly safer). The
+# operative clause is the EXCLUSION of SecOC's bytes, and now says exactly that.
 [[req]]
 id = "REQ-E2E-004"
 title = "Composition with SecOC"
-text = "For a message configured with both E2E and SecOC, the protection order shall be defined and symmetric, and the two protections shall occupy disjoint byte ranges so stamping one does not invalidate the other: E2E covers only the application payload, never the SecOC MAC/freshness bytes. On transmit the E2E CRC/counter are applied to the payload first and the SecOC authentication code is then computed over the E2E-protected payload and appended; on receive the SecOC check runs first and only an authentic message is passed to the E2E check. Neither shall mask a fault the other would detect."
+text = "For a message configured with both E2E and SecOC, the protection order shall be defined and symmetric, and the two protections shall occupy disjoint byte ranges so stamping one does not invalidate the other: the E2E-covered range shall exclude the SecOC MAC/freshness bytes (it may cover padding — standard E2E practice — but never a byte SecOC stamps after the E2E protect). On transmit the E2E CRC/counter are applied to the payload first and the SecOC authentication code is then computed over the E2E-protected payload and appended; on receive the SecOC check runs first and only an authentic message is passed to the E2E check. Neither shall mask a fault the other would detect."
 # method = test: an ASIL B property is demonstrated by an executed check (corrupt ->
 # E2E fault; forge/replay -> SecOC reject; neither masks the other), not a review sign-off.
 status = "draft"

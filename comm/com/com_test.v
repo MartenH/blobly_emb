@@ -1,9 +1,10 @@
 module com
 
-// @verifies SYS-REQ-COMMS-003 REQ-COM-003 REQ-COM-004 REQ-COM-005 REQ-COM-006 REQ-E2E-002
+// @verifies SYS-REQ-COMMS-003 REQ-COM-003 REQ-COM-004 REQ-COM-005 REQ-COM-006
 // (REQ-COM-003/004: the cyclic/event/mixed/triggered should_send decisions incl. debounce
-//  and backpressure; REQ-COM-005 and the timeout leg of REQ-E2E-002: the rx deadline
-//  edge/latch/disable tests — the counter leg of E2E-002 lives in comm/e2e.)
+//  and backpressure; REQ-COM-005: the rx deadline edge/latch/disable tests. NOT tagged
+//  REQ-E2E-002: its total-loss leg must live INSIDE the ASIL-B E2E mechanism per its own
+//  text — this COM deadline is the complementary QM monitor, not that evidence.)
 
 fn payload(b u8) [max_pdu]u8 {
 	mut d := [max_pdu]u8{}

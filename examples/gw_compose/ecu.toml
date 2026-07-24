@@ -1,0 +1,33 @@
+# gw_compose — the COMPOSED protection gateway (REQ-E2E-004): the destination frame
+# carries BOTH E2E and SecOC on disjoint bytes. TX order is E2E-then-SecOC (the E2E
+# CRC excludes the freshness/MAC windows via protect_ex); a receiver verifies
+# SecOC-then-E2E, so an authentic frame still surfaces E2E's repeat/loss verdicts.
+# This example exists so CI COMPILES the composed generated bridge on every run —
+# the naive composition was silently broken twice before this rung.
+#
+#   make -C examples/gw_compose
+#   ./bin/app vcan0 vcan1
+
+[import]
+dbc = "bus.dbc"
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0
+
+[bus.can1]
+interface = "vcan1"
+fd        = false
+core      = 0
+
+[[route]]
+signal = "Speed"
+from = { bus = "can0", frame = "SrcFrame" }
+to   = { bus = "can1", frame = "DstFrame" }
+
+[[frame]]
+name  = "DstFrame"
+bus   = "can1"
+e2e   = { data_id = 0x2C, crc_pos = 2, counter_pos = 3 }
+secoc = { key = "20 21 22 23 24 25 26 27 28 29 2a 2b 2c 2d 2e 2f", data_id = 0x2C, fresh_pos = 4, mac_pos = 5, mac_len = 3 }
