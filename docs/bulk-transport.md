@@ -1,8 +1,9 @@
 # Bulk transport — how everyone else solves it, and what that implies here
 
-> Design note (2026-07-23). Prompted by a plain question: a cross-core signal is capped at
-> one xioc cell (8 B), so how do you move an *object*? Before designing an endpoint, this
-> page surveys what other systems converged on. Status: the **portable core is built** —
+> Design note (2026-07-23). Prompted by a plain question: a cross-core signal was then
+> capped at one xioc cell (8 B) — since raised to 16 u32 lanes / one PDU by the wide
+> derivation (#211), which is still a *signal* bound — so how do you move an *object*?
+> Before designing an endpoint, this page surveys what other systems converged on. Status: the **portable core is built** —
 > `boards/common/bulk.h` (pool + SPSC rings + fallible loan/publish/take/release,
 > REQ-BULK-001..003) with host proof cross-thread and cross-process (`tools/bulk`,
 > fork + `MAP_SHARED`). The board seams (doorbell, cache hooks), the config surface and

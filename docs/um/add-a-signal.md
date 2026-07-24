@@ -46,8 +46,11 @@ the trivial layout (unsigned little-endian u32 at bit 0, factor 1, offset 0) and
 **fails generation loudly** for anything else — so a spanning signal can't silently
 decode as garbage; it just doesn't build until the on-target DBC codec phase lands.
 Practically: a bus-endpoint signal on target today is one u32 value field. Cross-core
-signals are the exception where two fields hit the wire ({a, b} at bytes 0–3/4–7,
-DLC = 4 × field count, checked).
+(remote) signals are the exception where multiple fields hit the wire — one u32 lane
+per field (up to 16 of `u32`/`u16`/`u8`/`bool`; 1–2 plain u32s without `valid` keep the
+{a, b} pair cell), `DLC = 4 × lanes` with every lane SG-owned, checked. Past 2 lanes the
+frame is FD-sized and waits for the FD comm owner — see
+[move-data.md](move-data.md) for the full lane contract.
 
 ## 2. Wire it to an FB
 
@@ -104,10 +107,13 @@ bookkeeping, not safety. See [system-from-nodes.md](system-from-nodes.md).
 ## Cross-core signals
 
 Nothing new to learn: give `from` a partition that lives on another core (one declared
-with `image =` or `external = true`) and the generator allocates an xioc slot instead of
-an IOC cell. Constraints: 1–2 `u32` fields, no `valid` field, and if it goes to a bus the
-DBC DLC must be 4 × field count. See [add-a-core.md](add-a-core.md) and
-[../multi-image.md](../multi-image.md).
+with `image =` or `external = true`) and the generator allocates an xioc slot — or, past
+the {a, b} pair shape, a wide `xioc_n` channel — instead of an IOC cell. Constraints:
+up to 16 fields of `u32`/`u16`/`u8`/`bool` (1–2 plain u32s without `valid` keep the
+bench-verified pair cell); to a bus, `DLC = 4 × lanes` with the full lane contract of
+[move-data.md](move-data.md), and 3+ lanes waits for the FD comm owner. `u64`, signed
+ints, floats and >16 narrow fields are the pending #212 packing decision. See
+[add-a-core.md](add-a-core.md) and [../multi-image.md](../multi-image.md).
 
 ```toml
 [[signal]]
