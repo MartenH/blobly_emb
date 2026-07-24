@@ -73,7 +73,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-INV-003 | B | analysis | uncovered | — |
 | REQ-INV-004 | QM | analysis | verified | noalloc-driver-lint (pass) |
 | REQ-INV-005 | QM | review | covered | naming-review (pending) |
-| REQ-INV-006 | QM | test | covered | wide-xioc-derivation-and-silicon (pending), xioc_test.v (pass) |
+| REQ-INV-006 | QM | test | covered | duo_wide_test.v (pass), wide-xioc-derivation-and-silicon (pending), xioc_test.v (pass) |
 | REQ-IO-001 | QM | test | verified | e2e_test.v (pass) |
 | REQ-IO-002 | QM | test | verified | e2e_test.v (pass) |
 | REQ-IO-003 | QM | review | uncovered | — |

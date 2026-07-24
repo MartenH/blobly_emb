@@ -147,7 +147,9 @@ static inline int xioc_read(const xioc_t *c, xioc_rd_t *rd)
 typedef struct __attribute__((aligned(32))) {
 	volatile uint32_t latest; /* last fully published seq; 0 = nothing yet */
 	uint32_t wseq;            /* WRITER-private publish counter */
-	uint32_t words;           /* payload words per slot (channel geometry, set once) */
+	volatile uint32_t words;  /* payload words per slot — VOLATILE: the reader validates it
+	                           * per poll and a re-initializing writer updates it; a cached
+	                           * read would defeat the exact-width check (codex #211 r7) */
 	uint32_t pad[5];
 	volatile uint32_t cell[]; /* XIOC_SLOTS x (1 seq + words payload) */
 } xioc_n_t;
@@ -163,14 +165,27 @@ static inline volatile uint32_t *xioc_n_slot(xioc_n_t *c, uint32_t n)
 	return &c->cell[(n % XIOC_SLOTS) * (1u + c->words)];
 }
 
-static inline void xioc_n_init(xioc_n_t *c, uint32_t words)
+/* Init order matters against a LIVE reader (a re-init while the owner polls — the
+ * partial-reflash case): latest is retracted first, the whole NEW extent is zeroed,
+ * and the geometry is published LAST — so a reader that observes the new `words` is
+ * guaranteed to find latest == 0 and zeroed seq words behind it, and a reader still
+ * holding the old geometry refuses on the width mismatch (codex #211 r5). */
+/* seq_seed partitions the SEQUENCE SPACE per writer boot (pass a boot-unique value,
+ * e.g. the writer's microsecond clock; 0 keeps the deterministic test behavior): a
+ * reader preempted across a writer RESTART holds a pre-restart seq, and with a
+ * zero-based restart the new wseq could eventually coincide with it — the ABA blend
+ * codex #211 r13 describes. Seeded, cross-boot coincidence is ~1/2^32 instead of
+ * inevitable-by-counting. */
+static inline void xioc_n_init(xioc_n_t *c, uint32_t words, uint32_t seq_seed)
 {
-	c->words = words;
-	c->latest = 0u;
-	c->wseq = 0u;
+	XIOC_ST(&c->latest, 0u);
+	XIOC_DMB();
 	for (uint32_t i = 0; i < XIOC_SLOTS * (1u + words); i++) {
-		c->cell[i] = 0u;
+		XIOC_ST(&c->cell[i], 0u);
 	}
+	c->wseq = seq_seed;
+	XIOC_DMB();
+	XIOC_ST(&c->words, words);
 }
 
 static inline void xioc_n_write(xioc_n_t *c, const uint32_t *src)
@@ -191,20 +206,34 @@ static inline void xioc_n_write(xioc_n_t *c, const uint32_t *src)
 	XIOC_ST(&c->latest, n); /* publish */
 }
 
-/* Reader: `dst` is the reader-private last-good buffer (>= words u32s, reused across
- * calls); `rd_seq` its seq. Returns 1 when dst now holds a NEWER complete value, 0
+/* Reader: `dst` is the reader-private last-good buffer holding `dst_words` u32s (the
+ * READER's build-time geometry — the shared channel's `words` must match or the read
+ * refuses); `rd_seq` its seq. Returns 1 when dst now holds a NEWER complete value, 0
  * otherwise — and on 0, dst is UNTOUCHED (the copy is staged through a stack temp and
  * committed only after the recheck), so the reader always holds a complete value.
  * Straight-line, bounded: never loops, never spins. */
-static inline int xioc_n_read(xioc_n_t *c, uint32_t *rd_seq, uint32_t *dst)
+static inline int xioc_n_read(xioc_n_t *c, uint32_t *rd_seq, uint32_t *dst, uint32_t dst_words)
 {
 	uint32_t n = XIOC_LD(&c->latest);
 	if (n == 0u || n == *rd_seq) {
 		return 0; /* nothing published yet, or nothing new */
 	}
-	volatile uint32_t *s = xioc_n_slot(c, n);
+	/* ONE geometry snapshot: xioc_n_slot() re-reads c->words, so a concurrent re-init
+	 * (the partial-reflash case this validation exists for) could compute the slot with
+	 * the OLD width while the check below sees the new one — validate w first and derive
+	 * the slot from the SAME value (codex #211 r4). */
+	uint32_t w = XIOC_LD(&c->words);
 	uint32_t tmp[XIOC_MAX_WORDS];
-	uint32_t w = c->words;
+	if (w != dst_words || w > XIOC_MAX_WORDS) {
+		return 0; /* not (yet) initialized, garbage geometry, or a WRITER whose build
+		           * disagrees with ours about this channel's width (a stale satellite
+		           * image after a partial reflash — codex #211): EXACT match required.
+		           * A wider writer would overrun the caller's buffer; a NARROWER one
+		           * (w < dst_words) would blend fresh low lanes with stale high lanes
+		           * into one "value" (codex #211 r3). Either way the honest result is
+		           * "no fresh data" — dst keeps the last complete same-geometry value. */
+	}
+	volatile uint32_t *s = &c->cell[(n % XIOC_SLOTS) * (1u + w)];
 	for (uint32_t i = 0; i < w; i++) {
 		tmp[i] = XIOC_LD(&s[1u + i]);
 	}

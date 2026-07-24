@@ -79,6 +79,8 @@ example's config; the satellite's gen step is "make gen in the owner dir".
 
 - Generating satellite Makefiles/glue C (examples own them, as everywhere).
 - >2-field or non-u32 cross-core signals (xioc cell = {a,b}; widen the cell later).
+  *Superseded 2026-07-23: the wide rung below shipped exactly this — the bullet stays
+  as phase history only.*
 - Satellite-owned buses (any core CAN own one per the directive; emission for it comes
   with a real use case).
 - SMP emission (recorded strategy; needs silicon that earns it).
@@ -99,3 +101,56 @@ the same signal declaration. Bench (NUCLEO-H755ZI-Q): M4Count +10 per 100 ms fra
 two-core trace dump streams core-1 blocks with the walk-assigned handler ids (4 = M4Load
 1689 µs @10 ms, 5 = M4Churn 659 µs @2 ms → the M4 sits at ~50%); h735_threadx and the host
 examples regenerate byte-identical. blobly_net needed zero changes.
+
+## Wide remote signals (2026-07-23, the xioc_n rung)
+
+> Design + increment log. Mechanism shipped first (`boards/common/xioc.h` `xioc_n_*`,
+> host-tear-tested); this section is the loom2v derivation on top. Motivation, verbatim
+> from review: signals over 8 B are NOT rare — moving a partition must change cost,
+> never the communication contract.
+
+**The lane model.** A remote signal's fields ride **one u32 lane each** in a wide xioc
+channel (`words = field count`, ≤ `XIOC_MAX_WORDS` 16 = one PDU). Field types up to 32
+bits (`u32`/`u16`/`u8`/`bool`) cast to/from their lane; 64-bit fields stay rejected until
+a signal earns them. `valid` is now an ordinary lane (the old ban traded location
+transparency for purity: a same-core signal with `valid` must survive its producer
+moving cores — transport freshness is still the slot stamp, `valid` is app data).
+Deterministic by construction: no V-struct layout mirroring in the generator, no
+packing drift — the same rule the {a,b} pair already followed, generalized.
+
+**Placement.** The pair pool (`DUO_IOC_ADDR`, bench-verified) is untouched; signals
+that fit it (1–2 u32-typed fields, no valid) keep generating byte-identical pair code.
+Wider signals get offsets in a **wide window** the board reserves (`DUO_XW_ADDR` /
+`DUO_XW_MAX` in `duo.h`), laid out by the generator in `duo_gen.h`
+(`DUO_XW_<SIG>_OFF`, `XIOC_N_BYTES`-sized, with a budget static-assert). Glue gains two
+thin wrappers (`duo_pub_n` / `duo_poll_n` over `xioc_n_write/read`); the pair fns stay.
+
+**Destinations.** Satellite → bus: the comm drain polls the wide channel (`duo_poll_n`,
+per-signal seq + lane buffer in the comm loop; the reader passes its OWN lane count, so
+a stale satellite image with different geometry reads as never-fresh instead of
+overrunning the buffer) and lean-encodes one u32 lane per 4 bytes, DLC = `4 × lanes`.
+**Reachable today up to 2 lanes** (classic DLC 8 — e.g. a `{u16, u16}` or `{u32, valid}`
+signal): 3+ lanes need an FD frame, and the ThreadX comm thread still rejects both FD
+buses and DLC > 8, so that emitter path is exercised by the generator tests only until
+the FD comm owner lands (ROADMAP "target multi-bus comm owner"). Satellite → local
+partition: the slot is allocated and the satellite publishes, but — exactly like the
+pair cells — no FB-facing consumer is generated yet; platform C reads it via
+`duo_gen.h`. Unpacking lanes into a consumer `In` struct is the next rung, not this one.
+
+**The matched-images contract (user decision, 2026-07-24).** Cross-build image skew is
+**out of contract**: one generator run owns every image of a node, and deploying images
+from different runs is a deployment error, exactly as two ECUs sharing a bus must share
+the DBC — if a signal touches two cores, they must speak the same language. The
+layout-id handshake (DUO_LAYOUT_ID, schema-hashed, satellite-republished, owner-retracted
+at boot) is **defense-in-depth for the accident** — a mismatched pair goes silent instead
+of cross-talking — not a supported operating mode, and no further skew scenarios are in
+scope here; enforcing matched images at update time is the boot chain's job when
+multi-image update lands. This line was drawn deliberately after review rounds kept
+finding ever-deeper skew hypotheticals: the mechanism hardening they surfaced was kept,
+the protocol arms race was stopped.
+
+**Verification honesty.** Host: generator-level tests + the committed example regen;
+the xioc_n mechanism itself is host-tear-tested (tools/xioc). Runtime on silicon —
+the H755 re-run of the tear harness at real widths — is a bench-queue item; until
+then the wide path is compile-verified only and no in-tree config enables it on
+the bench demo.

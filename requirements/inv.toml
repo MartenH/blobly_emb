@@ -52,6 +52,13 @@ asil = "QM"
 # the MECHANISM half only — the requirement closes when the loom2v wide derivation
 # lands (feat/wide-remote-signals) and the silicon tear re-run passes (bench queue);
 # until then the report's "verified" reads as mechanism-level evidence, status stays draft.
+# SCOPE NOTE (deliberate, tracked as issue #212 — a USER design decision, not an
+# oversight): the shipped lane derivation carries <=16 fields of u32/u16/u8/bool
+# (one u32 lane per field). The remaining legal 64-byte shapes — i32/f32, u64 split
+# across lanes, >16 narrow fields packed by width — plus unifying the local/remote
+# encode paths are one packing-rule decision, made once, not accreted per review
+# round. Until #212 is decided the generator REJECTS those shapes loudly; status
+# stays draft and the ledger stays 'covered' behind the pending silicon review.
 [[req]]
 id = "REQ-INV-006"
 title = "Signal capacity is placement-independent"

@@ -22,9 +22,9 @@ module main
 #flag -I @VMODROOT/boards/common
 #include "xioc.h"
 
-fn C.xioc_n_init(c voidptr, words u32)
+fn C.xioc_n_init(c voidptr, words u32, seq_seed u32)
 fn C.xioc_n_write(c voidptr, src &u32)
-fn C.xioc_n_read(c voidptr, rd_seq &u32, dst &u32) int
+fn C.xioc_n_read(c voidptr, rd_seq &u32, dst &u32, dst_words u32) int
 
 const words = u32(10) // 40 B — the size from the conversation that prompted the widening
 const publishes = u32(100_000) // fixed writer work: the test's end state is deterministic
@@ -44,7 +44,7 @@ fn writer() {
 }
 
 fn test_wide_channel_never_tears_under_concurrent_writer() {
-	C.xioc_n_init(&g_cell[0], words)
+	C.xioc_n_init(&g_cell[0], words, 0)
 	t := spawn writer()
 
 	mut rd_seq := u32(0)
@@ -54,7 +54,7 @@ fn test_wide_channel_never_tears_under_concurrent_writer() {
 	// race phase: poll while the writer runs. However the scheduler slices this, every
 	// committed value must be complete and ordering must only move forward.
 	for _ in 0 .. 300_000 {
-		if C.xioc_n_read(&g_cell[0], &rd_seq, &dst[0]) != 0 {
+		if C.xioc_n_read(&g_cell[0], &rd_seq, &dst[0], words) != 0 {
 			fresh++
 			for i in 1 .. int(words) {
 				assert dst[i] - dst[0] == u32(i), 'torn read: word ${i} of base ${dst[0]}'
@@ -68,7 +68,7 @@ fn test_wide_channel_never_tears_under_concurrent_writer() {
 	// deterministic end state: the writer has fully joined, so its LAST publish is the
 	// channel's latest — one more read must surface it (fresh, complete, final).
 	if last_base != publishes {
-		assert C.xioc_n_read(&g_cell[0], &rd_seq, &dst[0]) == 1, 'final value must be readable after the writer joined'
+		assert C.xioc_n_read(&g_cell[0], &rd_seq, &dst[0], words) == 1, 'final value must be readable after the writer joined'
 		fresh++ // this observation counts too (on a starved runner it may be the ONLY one)
 		for i in 1 .. int(words) {
 			assert dst[i] - dst[0] == u32(i), 'torn FINAL read: word ${i}'
@@ -79,7 +79,7 @@ fn test_wide_channel_never_tears_under_concurrent_writer() {
 	assert fresh >= 1 // at least the final observation is guaranteed on any scheduler
 
 	// last-good retention: nothing new published — not fresh, buffer untouched.
-	assert C.xioc_n_read(&g_cell[0], &rd_seq, &dst[0]) == 0
+	assert C.xioc_n_read(&g_cell[0], &rd_seq, &dst[0], words) == 0
 	assert dst[0] == publishes
 }
 
@@ -99,4 +99,28 @@ fn test_pair_api_compat() {
 	assert rd[1] == 7 && rd[2] == 11
 	assert C.xioc_read(&cell[0], &rd[0]) == 0 // consumed: not fresh twice
 	assert rd[1] == 7 && rd[2] == 11 // but the value is retained
+}
+
+fn test_geometry_mismatch_reads_as_never_fresh() {
+	// A writer whose build disagrees about the channel width (a stale satellite image
+	// after a partial reflash) must read as NO DATA, never as a copy past our buffer:
+	// the shared `words` is not a copy bound beyond the reader's own capacity.
+	C.xioc_n_init(&g_cell[0], words, 0)
+	mut src := [16]u32{}
+	for i in 0 .. int(words) {
+		src[i] = 100 + u32(i)
+	}
+	C.xioc_n_write(&g_cell[0], &src[0])
+	mut rd_seq := u32(0)
+	mut dst := [16]u32{}
+	// reader built for FEWER lanes than the writer publishes: refuse
+	assert C.xioc_n_read(&g_cell[0], &rd_seq, &dst[0], words - 1) == 0
+	assert dst[0] == 0, 'a refused read must leave dst untouched'
+	// reader expecting MORE lanes than the channel carries: refuse too — copying the
+	// narrower payload would blend fresh low lanes with stale high lanes (codex #211 r3)
+	assert C.xioc_n_read(&g_cell[0], &rd_seq, &dst[0], words + 1) == 0
+	assert dst[0] == 0, 'a refused read must leave dst untouched'
+	// matching geometry: the same publish is delivered
+	assert C.xioc_n_read(&g_cell[0], &rd_seq, &dst[0], words) == 1
+	assert dst[0] == 100
 }

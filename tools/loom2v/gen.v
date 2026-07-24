@@ -38,6 +38,10 @@ mut:
 	dbc_dlc   int    // the DBC message's DLC (if external)
 	dbc_ext   bool   // the DBC message is an extended (29-bit) frame (EFF flag) — id may be stripped
 	dbc_trivial bool // the DBC signal is a plain unsigned LE 32-bit value at bit 0 (factor 1, offset 0)
+	dbc_lane_issue string // '' or why this signal's DBC MESSAGE cannot carry the lane encode
+	// (every SG must sit alone in a 32-bit lane: start%32==0, <=32 bits, unsigned LE,
+	// factor 1/offset 0) — the lane writer fills WHOLE 4-byte lanes, so any other layout
+	// means an unrelated SG gets overwritten silently (codex #211 r5)
 	fields    []SigField // the signal's fields in declaration order (for the `sig` struct emit)
 	persist   string // '' | 'now' | 'shutdown' — restored + journaled by the platform
 	nvm_id    u16 // explicit schema-identity pin (0 = derive by hash); see gen_nvm.v
@@ -46,6 +50,9 @@ mut:
 	// a coherent single-image target would derive `false` here and use ordinary IOC.
 	io_in  bool // `from` is the io endpoint class (docs/io.md): the io thread publishes it
 	io_out bool // `to` is the io endpoint class: the io thread acquires + applies it
+	wide   bool // remote signal that outgrows the {a,b} pair cell (fields > 2, non-u32 types,
+	// or a `valid` field): rides a wide xioc_n channel, one u32 lane per field
+	// (docs/multi-image.md "Wide remote signals", REQ-INV-006)
 }
 
 // SigField is one field of a signal's payload struct (name + V type), in declaration order.
@@ -255,6 +262,17 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 			si.dbc_dlc = dbc_dlc_of(db, si.dbc_msg) or { 8 }
 			si.dbc_ext = dbc_ext_of(db, si.dbc_msg) or { false }
 			si.dbc_trivial = dbc_signal_trivial(db, sname) or { false }
+			mut fwidths := []int{}
+			for f in si.fields {
+				fwidths << match f.typ {
+					'u32' { 32 }
+					'u16' { 16 }
+					'u8' { 8 }
+					'bool' { 1 }
+					else { 32 }
+				}
+			}
+			si.dbc_lane_issue = dbc_msg_lane_issue(db, sname, si.fields.len, fwidths)
 			sig_of[sname] = si
 		}
 	}
@@ -1007,6 +1025,11 @@ mut:
 	// compile against). duo_names keeps the allocation order for stable emission.
 	duo_idx   map[string]int
 	duo_names []string
+	// WIDE remote signals (si.wide): byte offset of each signal's xioc_n channel inside the
+	// board's wide window (duo.h DUO_XW_ADDR), 32-aligned, allocation in declaration order;
+	// duo_xw_total is the window budget consumed (checked against DUO_XW_MAX in duo_gen.h).
+	duo_xw_off   map[string]int
+	duo_xw_total int
 	// [nvm] (gen_nvm.v): persistent-signal names in declaration order + their
 	// schema-identity block ids — all derived, never configured beyond intent.
 	nvm       NvmCfg
@@ -1046,6 +1069,9 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	// from the topology, never configured). The satellite side publishes, this image polls.
 	mut duo_idx := map[string]int{}
 	mut duo_names := []string{}
+	mut duo_xw_off := map[string]int{}
+	mut duo_xw_total := 0
+	mut duo_pair_n := 0
 	for sname in sig_names {
 		mut si := sig_of[sname] or { continue }
 		from_ext := part.external[si.from] or { false }
@@ -1058,25 +1084,84 @@ fn build_model(doc toml.Doc, dbc string) Model {
 			continue
 		}
 		si.remote = true
-		// The xioc cell is one {a, b} pair: 1..2 plain u32 fields, no `valid` (freshness IS the
-		// slot's seq stamp). Wider/typed payloads arrive when the cell grows.
-		if si.has_valid {
-			panic('loom2v: remote signal "${sname}" has a `valid` field — xioc freshness is the ' +
-				'slot stamp; drop the field')
-		}
-		if si.fields.len < 1 || si.fields.len > 2 {
-			panic('loom2v: remote signal "${sname}" has ${si.fields.len} fields — the xioc cell ' +
-				'carries 1..2 u32 fields (widen the cell when a signal earns it)')
+		// One u32 LANE per field (docs/multi-image.md "Wide remote signals", REQ-INV-006:
+		// capacity is placement-independent). A 1-2 x u32 signal without `valid` keeps the
+		// bench-verified {a,b} pair cell byte-identically; anything else rides a wide
+		// xioc_n channel (words = field count, <= one PDU). 64-bit fields stay rejected
+		// until a signal earns them; past one PDU it is not a signal on ANY transport —
+		// that is the bulk ring's job.
+		if si.fields.len < 1 || si.fields.len > 16 {
+			panic('loom2v: remote signal "${sname}" has ${si.fields.len} fields — lanes carry ' +
+				'1..16 u32 lanes (one PDU, 64 B); a bigger payload is bulk, not a signal ' +
+				'(docs/bulk-transport.md)')
 		}
 		for f in si.fields {
-			if f.typ != 'u32' {
-				panic('loom2v: remote signal "${sname}" field "${f.name}" is ${f.typ} — the xioc ' +
-					'cell carries u32 fields only')
+			if f.typ !in ['u32', 'u16', 'u8', 'bool'] {
+				panic('loom2v: remote signal "${sname}" field "${f.name}" is ${f.typ} — a lane ' +
+					'carries a <=32-bit field (u32/u16/u8/bool)')
 			}
 		}
-		duo_idx[sname] = duo_names.len
+		si.wide = si.has_valid || si.fields.len > 2 || si.fields.any(it.typ != 'u32')
+		if si.wide {
+			// xioc_n geometry: 32 B header + XIOC_SLOTS(4) x (1 seq + lanes) u32s, rounded up
+			// to the 32 B line so neighbouring channels never share one.
+			duo_xw_off[sname] = duo_xw_total
+			ch_bytes := 32 + 4 * 4 * (1 + si.fields.len)
+			duo_xw_total += (ch_bytes + 31) & ~31
+		} else {
+			duo_idx[sname] = duo_pair_n
+			duo_pair_n++
+		}
 		duo_names << sname
 		sig_of[sname] = si
+	}
+	// ONE satellite producer per model, counting BOTH generated (image =) and
+	// hand-written (external = true) satellites: every producer publishes the layout-id
+	// acknowledgement into the single DUO_LAYOUT_ADDR cell, so a second satellite of
+	// either kind would race it — a current one's id winning would open polling for a
+	// stale sibling's incompatible slots (codex #211 r8/r10). The per-satellite-cell
+	// design (cells at DUO_LAYOUT_ADDR + 4*i, each signal gated on its producer's cell)
+	// lands with the first real multi-satellite target.
+	mut duo_producers := []string{}
+	for sname in duo_names {
+		si := sig_of[sname] or { continue }
+		if si.from !in duo_producers {
+			duo_producers << si.from
+		}
+	}
+	// SPSC per remote channel, validated HERE (not only in the comm-thread walk, which a
+	// slot-only model without a comm thread never enters — codex #211 r11). The unit is
+	// the PRODUCER CONTEXT — the thread — not the handler: two handlers on one Loom
+	// thread run serially and are one valid producer (codex #211 r14, the same rule
+	// ecumodel's writer_threads uses).
+	mut remote_writer_ctx := map[string][]string{} // signal -> distinct writing threads
+	for fb in ecumodel.toml_arr(doc, 'fb') {
+		fbm := fb.as_map()
+		fbname := (fbm['name'] or { toml.Any('') }).string()
+		thr := part.fb_thread[fbname] or { fbname } // unassigned fb: itself as context
+		for h in (fbm['handler'] or { toml.Any([]toml.Any{}) }).array() {
+			for w in (h.as_map()['writes'] or { toml.Any([]toml.Any{}) }).array() {
+				wn := w.string()
+				if thr !in (remote_writer_ctx[wn] or { []string{} }) {
+					remote_writer_ctx[wn] << thr
+				}
+			}
+		}
+	}
+	for sname in duo_names {
+		mut ctxs := remote_writer_ctx[sname] or { []string{} }
+		if ctxs.len > 1 {
+			ctxs.sort()
+			panic('loom2v: remote signal "${sname}" is written from ${ctxs.len} threads ' +
+				'(${ctxs.join(', ')}) — an xioc channel has exactly ONE producer context ' +
+				'(SPSC); keep its writers on one thread or split the signal')
+		}
+	}
+	if duo_producers.len > 1 {
+		duo_producers.sort()
+		panic('loom2v: ${duo_producers.len} satellite partitions produce remote signals ' +
+			'(${duo_producers.join(', ')}) — the cross-core layout handshake carries ONE ' +
+			'satellite today (generated or hand-written); see the per-cell design note here')
 	}
 	m := Model{
 		buses:        buses
@@ -1103,6 +1188,8 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		nm:           parse_nm(doc, dbc)
 		duo_idx:      duo_idx
 		duo_names:    duo_names
+		duo_xw_off:   duo_xw_off
+		duo_xw_total: duo_xw_total
 		nvm:          parse_nvm(doc)
 	}
 	validate_signal_routes_model(m, doc)
@@ -2708,6 +2795,19 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 							}
 							glue << '\tC.ioc_pub(${ioc_idx[wn]}, ${f0}, ${f1}) // persist staging'
 						}
+					} else if xoff := m.duo_xw_off[wn] {
+						// wide remote signal (xioc_n): one u32 lane per field, lane order =
+						// field order = wire order — packed into the signal's channel in the
+						// board wide window (duo_gen.h DUO_XW_*_OFF; boot init'd this side).
+						glue << '\tmut xw_${snake(wn)} := [${si.fields.len}]u32{}'
+						for fi, f in si.fields {
+							if f.typ == 'bool' {
+								glue << '\txw_${snake(wn)}[${fi}] = if outp.${snake(wn)}.${snake(f.name)} { u32(1) } else { u32(0) }'
+							} else {
+								glue << '\txw_${snake(wn)}[${fi}] = u32(outp.${snake(wn)}.${snake(f.name)})'
+							}
+						}
+						glue << '\tC.duo_pub_n(u32(${xoff}), &xw_${snake(wn)}[0])'
 					} else if dslot := m.duo_idx[wn] {
 						// remote (cross-image) signal: publish the {a, b} pair into its xioc slot —
 						// the bus owner polls it (duo_produce_drain / platform C). Field order = wire
@@ -2973,6 +3073,8 @@ fn main() {
 			'target (the bus owner transmits them). Building WITHOUT the xioc slots.')
 		m.duo_idx.clear()
 		m.duo_names.clear()
+		m.duo_xw_off.clear()
+		m.duo_xw_total = 0
 	}
 	if m.trace.on && m.target.threadx {
 		validate_trace_threadx(m)
@@ -3180,6 +3282,13 @@ fn main() {
 				}
 			}
 		}
+		// EVERY remote signal is a single-writer xioc channel — including slot-only ones
+		// (to a local partition), which never reach the external-TX check below: two
+		// writing handlers would emit two duo_pub(_n) producers racing the channel's
+		// writer-private wseq, invalidating the tear-free algorithm (codex #211 r9).
+		// NOTE: the SPSC validation itself lives in build_model and counts producer
+		// CONTEXTS (threads) — a raw handler count here rejected two serial handlers
+		// on one thread, a valid single producer (codex #211 r14/r15).
 		// How many rx signals READ by FBs each DBC message carries (the lean whole-frame decode
 		// serves one per message; more need the per-signal codec).
 		mut msg_read_sigs := map[string]int{}
@@ -3210,7 +3319,10 @@ fn main() {
 					panic('loom2v: [target] kind="threadx" comm thread: external TX signal "${sname}" is ' +
 						'also read by an FB — a local consumer of a to-bus signal is not generated yet')
 				}
-				if !si.dbc_trivial {
+				if !si.remote && !si.dbc_trivial {
+					// LOCAL producer: the lean encode writes ONE u32 at bytes 0-3. A REMOTE
+					// signal is validated against the full lane contract instead
+					// (dbc_lane_issue below) — its first field may be sub-u32 (codex #211 r6).
 					panic('loom2v: [target] kind="threadx" comm thread: TX signal "${sname}" is not a plain ' +
 						'unsigned little-endian 32-bit value at bit 0 (factor 1, offset 0); other layouts ' +
 						'need the DBC codec on target — not generated yet')
@@ -3243,12 +3355,31 @@ fn main() {
 					// xioc slot; the comm producer polls it (duo_produce_drain) — no owner IOC cell.
 					// The lean encode packs the {a, b} pair LE at bytes 0/4, so the frame must be
 					// exactly the fields' width (field order = DBC layout order by convention).
+					if si.dbc_lane_issue != '' {
+						panic('loom2v: remote TX signal "${sname}": DBC message "${si.dbc_msg}" cannot ' +
+							'carry the lane encode — ${si.dbc_lane_issue}. The lane writer fills whole ' +
+							'4-byte lanes; every SG in the frame must own one (codex #211)')
+					}
 					if si.dbc_dlc != 4 * si.fields.len {
 						panic('loom2v: remote TX signal "${sname}" has ${si.fields.len} u32 field(s) ' +
 							'but DBC message "${si.dbc_msg}" DLC is ${si.dbc_dlc} — the xioc encode packs ' +
 							'4 bytes per field (expect DLC ${4 * si.fields.len})')
 					}
 					continue
+				}
+				// LOCAL external tx: the lean producer encodes ONLY the value field (tv_a,
+				// bytes 0-3) and the IOC cell publish carries only {val_field, 0} — a second
+				// field or `valid` would silently vanish from the wire, and the SAME signal
+				// would encode differently after moving to a satellite (the lane encode
+				// carries every field). Placement must never silently change bytes (codex
+				// #211 r4): multi-field external signals are REMOTE-ONLY until the local
+				// producer encodes through the same per-field contract.
+				if si.fields.len > 1 || si.has_valid {
+					panic('loom2v: [target] kind="threadx" comm thread: TX signal "${sname}" has ' +
+						'${si.fields.len} field(s)${if si.has_valid { ' (incl. valid)' } else { '' }} ' +
+						'but the LOCAL comm producer encodes only the value field — a moved-in ' +
+						'satellite producer would put DIFFERENT bytes on the wire. Keep the ' +
+						'producer remote, or use a single-field signal, until the encode paths unify')
 				}
 				ioc_idx[sname] = ioc_idx.len
 				continue
@@ -3616,6 +3747,63 @@ fn dbc_signal_trivial(db candb.Database, signame string) ?bool {
 		}
 	}
 	return none
+}
+
+// dbc_msg_lane_issue checks the whole MESSAGE carrying `signame` against the lane
+// encode's contract (one SG per 32-bit lane: start%32 == 0, length <= 32, unsigned,
+// factor 1 / offset 0, little-endian, one SG per lane). The lane writer stores whole
+// 4-byte lanes, so any other layout silently overwrites the co-resident SG. Returns ''
+// when clean, else the first violation (used in the remote-TX walk panic).
+fn dbc_msg_lane_issue(db candb.Database, signame string, nlanes int, widths []int) string {
+	for m in db.messages {
+		for s in m.signals {
+			if s.name != signame {
+				continue
+			}
+			// the [[signal]].name SG anchors the frame: the publisher writes field 0 to
+			// lane 0, and the named SG is the one the declaration binds — anywhere else
+			// and every field lands under the wrong DBC name (codex #211 r9; this is the
+			// binding the old 32-bit-at-bit-0 check gave, generalized)
+			if s.start_bit != 0 {
+				return 'signal "${signame}" (the [[signal]].name binding) sits at bit ${s.start_bit} — it must own lane 0 (bit 0)'
+			}
+			mut lanes_used := map[int]string{}
+			for sg in m.signals {
+				if sg.start_bit % 32 != 0 {
+					return 'signal "${sg.name}" starts at bit ${sg.start_bit} (not a 32-bit lane boundary)'
+				}
+				if sg.length > 32 {
+					return 'signal "${sg.name}" is ${sg.length} bits (a lane carries <= 32)'
+				}
+				if sg.is_signed || sg.factor != 1.0 || sg.offset != 0.0 {
+					return 'signal "${sg.name}" is signed/scaled — the lane encode writes raw u32 values'
+				}
+				if sg.byte_order != candb.ByteOrder.little_endian {
+					return 'signal "${sg.name}" is big-endian (Motorola) — lanes are LE'
+				}
+				lane := int(sg.start_bit / 32)
+				if prev := lanes_used[lane] {
+					return 'signals "${prev}" and "${sg.name}" share lane ${lane} — the lane writer fills whole lanes'
+				}
+				// the SG must be at least as wide as the field it carries: a u16 field over
+				// an 8-bit SG would leak its upper byte into bits the DBC calls reserved —
+				// moving the producer must never change the wire frame (codex #211 r7)
+				if lane < widths.len && sg.length < widths[lane] {
+					return 'signal "${sg.name}" is ${sg.length} bits but lane ${lane} carries a ${widths[lane]}-bit field — widen the SG or narrow the field'
+				}
+				lanes_used[lane] = sg.name
+			}
+			// every lane must be OWNED: a field written into a lane no SG declares is
+			// undecodable padding on every receiver (codex #211 r6)
+			for lane in 0 .. nlanes {
+				if lane !in lanes_used {
+					return 'lane ${lane} (bytes ${lane * 4}-${lane * 4 + 3}) has no DBC signal — the lane writer fills it, receivers cannot decode it'
+				}
+			}
+			return ''
+		}
+	}
+	return ''
 }
 
 // dbc_message_of returns snake(message name) of the DBC message carrying `sig`.

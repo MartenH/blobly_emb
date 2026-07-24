@@ -22,6 +22,8 @@ import toml
 // is relative to the OWNER's ecu.toml (loom2v itself runs from the repo root, so a bare
 // relative path would escape the example). ecu is the owner's ecu.toml path (banner).
 fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string) {
+	// The one-satellite-producer guard lives in build_model (it must count hand-written
+	// external satellites too, which never reach this emitter — codex #211 r10).
 	for part, rel in m.part.image {
 		img := os.norm_path(os.join_path(os.dir(ecu), rel))
 		if !m.target.threadx {
@@ -56,7 +58,30 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		g << 'fn C.duo_wait_clocks() // park until the owner signals clocks-ready (duo.h)'
 		g << 'fn C.board_timebase_init()'
 		g << 'fn C.duo_ioc_init() // the shared xioc pool (satellite is the writer side)'
+		// THIS partition's production decides the handshake role: only the PRODUCING
+		// satellite publishes the layout id — a non-producing image writing the cell
+		// would be a second writer, and could restore the id while the real producer
+		// is stopped, opening polling onto retained payloads (codex #211 r11).
+		mut produces := false
+		mut wide_writes := []string{}
+		for sname in m.duo_names {
+			si := m.sig_of[sname] or { continue }
+			if si.from == part {
+				produces = true
+				if si.wide {
+					wide_writes << sname
+				}
+			}
+		}
+		if produces {
+			g << 'fn C.duo_layout_retract() // boot FIRST act: close polling before touching channels'
+			g << 'fn C.duo_layout_publish() // layout-id handshake: owner polls nothing until this'
+		}
 		g << 'fn C.duo_pub(int, u32, u32) // xioc writer — slots from gen/duo_gen.h'
+		if wide_writes.len > 0 {
+			g << 'fn C.duo_xw_init(u32, u32) // wide xioc_n channel init (writer side, boot)'
+			g << 'fn C.duo_pub_n(u32, &u32) // wide xioc_n writer — offsets from gen/duo_gen.h'
+		}
 		g << 'fn C._tx_thread_sleep(u32) u32'
 		g << 'fn C._tx_initialize_kernel_enter()'
 		g << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
@@ -108,6 +133,11 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 			if ti == 0 && m.trace.on {
 				g << '\t\tC.duo_trace_service() // ~one poll per tick: plenty for the dump handshake'
 			}
+			if ti == 0 && produces {
+				g << '\t\tC.duo_layout_publish() // REPUBLISH per tick: the owner retracts the id at ITS'
+				g << '\t\t// boot (SRAM survives an owner-only reset — a retained id + retained channels'
+				g << '\t\t// would replay one stale frame); a live satellite restores it within a tick'
+			}
 			g << '\t\tC._tx_thread_sleep(u32(1))'
 			g << '\t}'
 			g << '}'
@@ -134,8 +164,19 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		g << '// boot: the whole image entry — the example\'s main.v is just `gen.boot()`.'
 		g << 'pub fn boot() {'
 		g << '\tC.duo_wait_clocks() // SysTick assumes the final HCLK: wait out the owner\'s PLL'
+		if produces {
+			g << '\tC.duo_layout_retract() // BEFORE any channel init: a satellite-only restart'
+			g << '\t// beside a live owner must close polling first (retained same-build id)'
+		}
 		g << '\tC.board_timebase_init()'
 		g << '\tC.duo_ioc_init()'
+		for sname in wide_writes {
+			si := m.sig_of[sname] or { continue }
+			g << '\tC.duo_xw_init(u32(${m.duo_xw_off[sname] or { 0 }}), u32(${si.fields.len})) // ${sname}'
+		}
+		if produces {
+			g << '\tC.duo_layout_publish() // AFTER every channel init: the owner may poll now'
+		}
 		if m.trace.on {
 			g << '\tC.trace_arm()'
 		}
