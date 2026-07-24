@@ -135,6 +135,18 @@ partition: the slot is allocated and the satellite publishes, but — exactly li
 pair cells — no FB-facing consumer is generated yet; platform C reads it via
 `duo_gen.h`. Unpacking lanes into a consumer `In` struct is the next rung, not this one.
 
+**The matched-images contract (user decision, 2026-07-24).** Cross-build image skew is
+**out of contract**: one generator run owns every image of a node, and deploying images
+from different runs is a deployment error, exactly as two ECUs sharing a bus must share
+the DBC — if a signal touches two cores, they must speak the same language. The
+layout-id handshake (DUO_LAYOUT_ID, schema-hashed, satellite-republished, owner-retracted
+at boot) is **defense-in-depth for the accident** — a mismatched pair goes silent instead
+of cross-talking — not a supported operating mode, and no further skew scenarios are in
+scope here; enforcing matched images at update time is the boot chain's job when
+multi-image update lands. This line was drawn deliberately after review rounds kept
+finding ever-deeper skew hypotheticals: the mechanism hardening they surfaced was kept,
+the protocol arms race was stopped.
+
 **Verification honesty.** Host: generator-level tests + the committed example regen;
 the xioc_n mechanism itself is host-tear-tested (tools/xioc). Runtime on silicon —
 the H755 re-run of the tear harness at real widths — is a bench-queue item; until
