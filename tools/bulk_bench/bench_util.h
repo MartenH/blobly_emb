@@ -45,17 +45,30 @@ static inline int core_id_of(int cpu)
 	return id;
 }
 
-/* Returns -1 when a distinct physical core CANNOT be verified (unreadable topology,
- * or a machine where every visible CPU shares cpu0's core): the bench REFUSES to run
- * rather than print "distinct physical cores" about siblings (codex #216 r5). */
-static inline int partner_cpu(void)
+/* pick_core_pair — two ALLOWED CPUs (the process affinity mask, so containers/
+ * taskset/cpusets that exclude cpu0/1 still work — codex #216 r6) on VERIFIED
+ * distinct physical cores. Returns 0 on success; -1 when no such pair exists or the
+ * topology is unreadable — the bench REFUSES to run rather than print "distinct
+ * physical cores" about siblings (codex #216 r5). */
+static inline int pick_core_pair(int *a, int *b)
 {
-	int base = core_id_of(0);
-	if (base < 0) return -1;
-	for (int c = 1; c < 64; c++) {
+	cpu_set_t allowed;
+	if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0) return -1;
+	int first = -1, first_core = -1;
+	for (int c = 0; c < CPU_SETSIZE && c < 1024; c++) {
+		if (!CPU_ISSET(c, &allowed)) continue;
 		int id = core_id_of(c);
-		if (id < 0) break;
-		if (id != base) return c;
+		if (id < 0) return -1; /* unreadable topology: cannot verify anything */
+		if (first < 0) {
+			first = c;
+			first_core = id;
+			continue;
+		}
+		if (id != first_core) {
+			*a = first;
+			*b = c;
+			return 0;
+		}
 	}
 	return -1;
 }

@@ -43,7 +43,7 @@ fn C._exit(code int)
 fn C.pin_cpu(cpu int) int
 fn C.cpu_ns() i64
 fn C.exited_ok(status int) int
-fn C.partner_cpu() int
+fn C.pick_core_pair(a &int, b &int) int
 fn C.stop_set(p voidptr)
 fn C.stop_get(p voidptr) u32
 
@@ -69,7 +69,7 @@ fn region_new() voidptr {
 
 // ---- 1. ring throughput ----------------------------------------------------------
 
-fn bench_ring_throughput(bufsz u32, fill bool) {
+fn bench_ring_throughput(bufsz u32, fill bool, cpu_a int, cpu_b int) {
 	b := region_new()
 	C.bulk_init(b, nbuf, bufsz)
 	// the stop flag lives at the region tail: the parent raises it when ITS window
@@ -77,10 +77,6 @@ fn bench_ring_throughput(bufsz u32, fill bool) {
 	// of guessed via slack — a delayed rendezvous can no longer leave the window
 	// half-empty while the child exits 'ok' (codex #216 r4)
 	stop := unsafe { voidptr(usize(b) + region_bytes - 4) }
-	partner := C.partner_cpu()
-	if partner < 0 {
-		panic('no distinct physical core verifiable (topology unreadable or all-sibling) — refusing to print cross-core numbers from one core')
-	}
 	pid := C.fork()
 	if pid < 0 {
 		panic('fork failed')
@@ -90,7 +86,7 @@ fn bench_ring_throughput(bufsz u32, fill bool) {
 		// (partner_cpu skips SMT siblings — logical 0/1 often share L1/L2, which would
 		// inflate a 'cross-core' number). Pump at max rate until the parent raises the
 		// stop flag; flag checked every 1024 payloads to stay out of the hot path.
-		if C.pin_cpu(partner) != 0 {
+		if C.pin_cpu(cpu_b) != 0 {
 			C._exit(9) // parent's exit check reports it — pinning is the measurement's premise
 		}
 		sw := time.new_stopwatch()
@@ -128,8 +124,8 @@ fn bench_ring_throughput(bufsz u32, fill bool) {
 		}
 		C._exit(0)
 	}
-	if C.pin_cpu(0) != 0 {
-		panic('cannot pin to cpu0 — run outside the restricted cpuset; unpinned numbers would be mislabeled')
+	if C.pin_cpu(cpu_a) != 0 {
+		panic('cannot pin to the selected cpu — affinity changed underfoot?')
 	}
 	// rendezvous: the window starts at the FIRST observed payload, so child scheduling
 	// delay is not counted as dead time
@@ -143,6 +139,10 @@ fn bench_ring_throughput(bufsz u32, fill bool) {
 		first = C.bulk_take(b, &len)
 	}
 	C.bulk_release(b, u32(first))
+	// overflow BASELINE at the rendezvous: the producer may have spun against the
+	// full pool for the whole startup interval — those failed loans belong to
+	// harness startup, not the measured window (codex #216 r6)
+	ovf0 := C.bulk_overflows(b)
 	mut got := u64(1)
 	mut sink := u64(0)
 	sw := time.new_stopwatch()
@@ -174,7 +174,7 @@ fn bench_ring_throughput(bufsz u32, fill bool) {
 	// pumping ~300 ms of pure failed loans during shutdown, which would otherwise
 	// dominate the printed number (codex #216 r2). One u32 volatile read of a
 	// producer-owned counter — a report, not a synchronized value.
-	ovf := C.bulk_overflows(b)
+	ovf := C.bulk_overflows(b) - ovf0
 	mut status := 0
 	C.waitpid(pid, &status, 0)
 	if C.exited_ok(status) == 0 {
@@ -194,13 +194,9 @@ fn bench_ring_throughput(bufsz u32, fill bool) {
 
 // ---- 2. ring latency -------------------------------------------------------------
 
-fn bench_ring_latency(bufsz u32) {
+fn bench_ring_latency(bufsz u32, cpu_a int, cpu_b int) {
 	b := region_new()
 	C.bulk_init(b, nbuf, bufsz)
-	partner := C.partner_cpu()
-	if partner < 0 {
-		panic('no distinct physical core verifiable — refusing to print cross-core latency from one core')
-	}
 	pid := C.fork()
 	if pid < 0 {
 		panic('fork failed')
@@ -209,7 +205,7 @@ fn bench_ring_latency(bufsz u32) {
 		// PACED producer (one payload per ~200 us), PINNED to a verified-distinct core: the pool never
 		// saturates, so the measured delay is the transport's, not queueing. The stamp
 		// is the child's monotonic clock; parent and child share the base on Linux.
-		if C.pin_cpu(partner) != 0 {
+		if C.pin_cpu(cpu_b) != 0 {
 			C._exit(9)
 		}
 		mut sent := 0
@@ -228,8 +224,8 @@ fn bench_ring_latency(bufsz u32) {
 		}
 		C._exit(0)
 	}
-	if C.pin_cpu(0) != 0 {
-		panic('cannot pin to cpu0 — run outside the restricted cpuset; unpinned numbers would be mislabeled')
+	if C.pin_cpu(cpu_a) != 0 {
+		panic('cannot pin to the selected cpu — affinity changed underfoot?')
 	}
 	mut lats := []i64{cap: lat_samples}
 	live := time.new_stopwatch()
@@ -333,17 +329,25 @@ fn bench_isotp(size u32) {
 }
 
 fn main() {
+	// the core pair is picked ONCE, before any pinning: the first bench pins this
+	// process to cpu_a, which shrinks the affinity mask every later pick would see
+	mut cpu_a := 0
+	mut cpu_b := 0
+	if C.pick_core_pair(&cpu_a, &cpu_b) != 0 {
+		panic('no two ALLOWED cpus on distinct physical cores (cpuset too narrow or topology unreadable) — refusing to print cross-core numbers from one core')
+	}
 	println('bulk_bench — the merged bulk ring (fork + MAP_SHARED) vs ISO-TP, per payload size')
+	println('cores: parent cpu${cpu_a}, producer cpu${cpu_b} (verified distinct physical cores)')
 	println('== ring throughput (max-rate producer, ${nbuf} buffers; ownership = the')
 	println('   transport alone, filled = every byte written by the producer and read by')
 	println('   the consumer — the honest bytes/s a real FB pair would see) ==')
 	for s in sizes {
-		bench_ring_throughput(s, false)
-		bench_ring_throughput(s, true)
+		bench_ring_throughput(s, false, cpu_a, cpu_b)
+		bench_ring_throughput(s, true, cpu_a, cpu_b)
 	}
 	println('== ring latency (paced producer; size-INDEPENDENT by construction — the ring')
 	println('   moves ownership, never bytes, so one measurement covers every size) ==')
-	bench_ring_latency(256)
+	bench_ring_latency(256, cpu_a, cpu_b)
 	println('== ISO-TP, same payload (host CPU + theoretical 500 kbit/s wire time) ==')
 	for s in sizes {
 		bench_isotp(s)
