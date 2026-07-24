@@ -175,8 +175,16 @@ void duo_clocks_ready(void) {
  * renumbered pair slot, moved wide offset, or resized channel — presents the wrong id
  * and every remote signal reads as never-fresh, instead of slot cross-talk transmitting
  * signal A's data as signal B (codex #211 r5). */
+/* ack encoding shared with the satellite: req ^ id, with 0 remapped — a (req, id) pair
+ * XORing to exactly 0 would equal the retraction sentinel and read absent-satellite as
+ * acked (codex #211 r16) */
+static uint32_t layout_ack_encode(uint32_t req) {
+    uint32_t a = req ^ DUO_LAYOUT_ID;
+    return a != 0u ? a : 0x4C594F31u; /* 'LYO1' */
+}
+
 int duo_layout_ok(void) {
-    if (*(volatile uint32_t *)DUO_LAYOUT_ACK_ADDR != (g_layout_req ^ DUO_LAYOUT_ID)) {
+    if (*(volatile uint32_t *)DUO_LAYOUT_ACK_ADDR != layout_ack_encode(g_layout_req)) {
         return 0; /* not acked for THIS owner boot + THIS build's layout */
     }
     /* acquire: pairs with the satellite's release dmb in duo_layout_publish — without

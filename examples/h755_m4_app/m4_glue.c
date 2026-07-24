@@ -107,7 +107,9 @@ void duo_layout_publish(void) {
 	 * boot (new req) is re-acked on the next tick; a stale-build satellite acks a
 	 * value the owner never accepts. One reader of req, one writer of ack. */
 	uint32_t req = *(volatile uint32_t *)DUO_LAYOUT_REQ_ADDR;
-	*(volatile uint32_t *)DUO_LAYOUT_ACK_ADDR = req ^ DUO_LAYOUT_ID;
+	uint32_t ack = req ^ DUO_LAYOUT_ID;
+	if (ack == 0u) ack = 0x4C594F31u; /* 'LYO1' — never the retraction sentinel (r16) */
+	*(volatile uint32_t *)DUO_LAYOUT_ACK_ADDR = ack;
 	__asm__ volatile("dmb" ::: "memory");
 }
 
