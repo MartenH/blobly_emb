@@ -231,10 +231,12 @@ into the module's frame loop, four obligations:
   the generated bridge filters) goes to `l.on_frame(now, pdu)`; without it nothing ever
   reassembles. Never feed the `tx_id` too: the link is id-agnostic, so with tx echo on
   it would parse the module's own responses as new inbound transfers.
-- **tick** — `l.tick(now)` every comm cycle; the N_Bs timeout (the FC wait on a send)
-  only advances here. Note the gap honestly: there is **no receive deadline** — a peer
-  that dies after its FirstFrame leaves the link `.receiving` until other traffic moves
-  it; do not design a consumer that depends on an N_Cr abort that does not exist.
+- **tick** — `l.tick(now)` every comm cycle; BOTH deadlines advance here — the N_Bs
+  timeout (the FC wait on a send) and the **N_Cr** receive deadline (the max gap between
+  consecutive frames of an in-flight receive). A peer that dies after its FirstFrame is
+  abandoned once N_Cr elapses instead of wedging the link `.receiving` forever. N_Cr is
+  armed when the CTS is actually emitted (not at FF reception), so a backpressured
+  consumer that hasn't sent flow control yet is never wrongly timed out.
 - **drain tx** — `l.poll(now, mut pdu)` under the channel's readiness gate, sending each
   frame it yields. This is also how the RECEIVING side emits its flow-control frames —
   a consumer that never polls stalls its peer's multi-frame send.
@@ -245,9 +247,9 @@ into the module's frame loop, four obligations:
   `take` copies whatever arrived through the raw pointer without a capacity check, so a
   smaller buffer is an out-of-bounds write waiting for a large message.
 
-And one mandatory line: call **`l.init_defaults()`** before first use. The N_Bs timeout
-and the WAIT-frame cap live there; a zero-valued link waits forever on a lost flow
-control. (On target there is no `_vinit`, so nothing runs it for you — the generated
+And one mandatory line: call **`l.init_defaults()`** before first use. The N_Bs and
+**N_Cr** timeouts and the WAIT-frame cap live there; a zero-valued link waits forever on
+a lost flow control or a stalled receive. (On target there is no `_vinit`, so nothing runs it for you — the generated
 bridge and both production modules call it explicitly.)
 
 **The cap is 520 B** (`isotp.max_payload`), sized to hold the largest thing the system

@@ -267,3 +267,147 @@ fn test_send_rejects_when_busy_or_too_long() {
 	mut l2 := Link{}
 	assert !l2.send(&buf[0], max_payload + 1) // too long
 }
+
+
+fn test_n_cr_times_out_stalled_receive() {
+	mut l := Link{}
+	l.init_defaults()
+	mut ff := Pdu{}
+	ff.data[0] = 0x10
+	ff.data[1] = 20 // 20-byte transfer: FF carries 6, needs CFs
+	for i in 0 .. 6 {
+		ff.data[2 + i] = u8(i)
+	}
+	l.on_frame(0, ff)
+	assert l.rx == .receiving
+	mut cts := Pdu{}
+	assert l.poll(0, mut cts) // emit the CTS — N_Cr is armed from HERE (codex #218)
+	// the sender dies; N_Cr (1 s default) elapses via tick — the reassembly is abandoned
+	l.tick(1_000_001)
+	assert l.rx == .idle
+	// a LATE CF must not resurrect the dead transfer
+	mut cf := Pdu{}
+	cf.data[0] = 0x21
+	l.on_frame(1_000_002, cf)
+	assert l.rx == .idle
+	mut dst := [max_payload]u8{}
+	assert l.take(&dst[0]) == 0
+}
+
+fn test_n_cr_refreshes_per_cf() {
+	mut l := Link{}
+	l.init_defaults()
+	mut ff := Pdu{}
+	ff.data[0] = 0x10
+	ff.data[1] = 20
+	for i in 0 .. 6 {
+		ff.data[2 + i] = u8(i)
+	}
+	l.on_frame(0, ff)
+	mut cts := Pdu{}
+	assert l.poll(0, mut cts) // CTS out -> N_Cr armed from t=0
+	// each CF lands just inside its own N_Cr window: the transfer completes even
+	// though total elapsed time exceeds one window (per-gap bound, not per-transfer)
+	mut cf1 := Pdu{}
+	cf1.data[0] = 0x21
+	for i in 0 .. 7 {
+		cf1.data[1 + i] = u8(6 + i)
+	}
+	l.on_frame(900_000, cf1)
+	assert l.rx == .receiving
+	mut cf2 := Pdu{}
+	cf2.data[0] = 0x22
+	for i in 0 .. 7 {
+		cf2.data[1 + i] = u8(13 + i)
+	}
+	l.on_frame(1_800_000, cf2)
+	mut dst := [max_payload]u8{}
+	assert l.take(&dst[0]) == 20
+	assert dst[6] == 6 && dst[19] == 19
+}
+
+
+fn test_n_cr_abort_clears_pending_fc() {
+	mut l := Link{}
+	l.init_defaults()
+	mut ff := Pdu{}
+	ff.data[0] = 0x10
+	ff.data[1] = 20
+	for i in 0 .. 6 {
+		ff.data[2 + i] = u8(i)
+	}
+	l.on_frame(0, ff) // fc_send pending, but the tx path is backpressured — CTS never
+	// polled out, so N_Cr is NOT armed (rx_deadline stays 0). A very late tick then
+	// finds a receive with no armed deadline (0): it must NOT abort a transfer whose
+	// CTS is still legitimately pending, and if it does clear rx, the stale CTS must go
+	// too. Here we assert the pending-CTS case survives the tick (deadline unarmed):
+	l.tick(1_000_001)
+	assert l.rx == .receiving // CTS never emitted -> N_Cr not started -> still waiting
+	mut out := Pdu{}
+	assert l.poll(1_000_002, mut out) // the pending CTS finally goes out (recovered)
+	assert out.data[0] == 0x30
+}
+
+
+fn test_new_ff_after_prior_ncr_expiry() {
+	mut l := Link{}
+	l.init_defaults()
+	// complete one small multi-frame transfer, leaving rx_deadline armed from its last CF
+	mut ff := Pdu{}
+	ff.data[0] = 0x10
+	ff.data[1] = 8
+	for i in 0 .. 6 {
+		ff.data[2 + i] = u8(i)
+	}
+	l.on_frame(0, ff)
+	mut cts := Pdu{}
+	assert l.poll(0, mut cts)
+	mut cf := Pdu{}
+	cf.data[0] = 0x21
+	cf.data[1] = 6
+	cf.data[2] = 7
+	l.on_frame(100_000, cf)
+	mut dst := [max_payload]u8{}
+	assert l.take(&dst[0]) == 8
+	// a NEW FF arrives long after that stale deadline; the generated bridge calls
+	// tick() before its readiness-gated poll — the fresh receive must survive it and
+	// still emit its CTS (codex #218)
+	mut ff2 := Pdu{}
+	ff2.data[0] = 0x10
+	ff2.data[1] = 8
+	l.on_frame(5_000_000, ff2)
+	l.tick(5_000_001) // bridge ticks before poll — must NOT abort the just-armed receive
+	assert l.rx == .receiving
+	mut cts2 := Pdu{}
+	assert l.poll(5_000_002, mut cts2)
+	assert cts2.data[0] == 0x30
+}
+
+fn test_block_boundary_backpressured_cts_not_aborted() {
+	mut l := Link{}
+	l.init_defaults()
+	l.bs = 1 // one CF per block -> a CTS is due after every CF
+	mut ff := Pdu{}
+	ff.data[0] = 0x10
+	ff.data[1] = 20
+	for i in 0 .. 6 {
+		ff.data[2 + i] = u8(i)
+	}
+	l.on_frame(0, ff)
+	mut cts := Pdu{}
+	assert l.poll(0, mut cts)
+	// one CF fills the block; the receiver owes a CTS but the tx path is backpressured
+	// (poll not called). tick() a full N_Cr later must NOT abort — the sender is
+	// correctly waiting for that next CTS (codex #218)
+	mut cf1 := Pdu{}
+	cf1.data[0] = 0x21
+	for i in 0 .. 7 {
+		cf1.data[1 + i] = u8(6 + i)
+	}
+	l.on_frame(100_000, cf1)
+	l.tick(1_200_000)
+	assert l.rx == .receiving
+	mut cts2 := Pdu{}
+	assert l.poll(1_200_001, mut cts2) // the block CTS finally goes out; N_Cr arms now
+	assert cts2.data[0] == 0x30
+}

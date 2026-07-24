@@ -16,6 +16,7 @@ const nrc_service_not_supported = u8(0x11)
 const nrc_incorrect_length = u8(0x13)
 const nrc_conditions_not_correct = u8(0x22)
 const nrc_request_out_of_range = u8(0x31)
+const nrc_subfunction_not_supported = u8(0x12)
 
 // Did is one Data Identifier: constant bytes, a RAM cell (writable), and/or kept
 // fresh from a live signal by the bridge.
@@ -57,13 +58,19 @@ fn (mut s Server) tester_present(req &u8, req_len int, resp &u8) int {
 	if req_len < 2 {
 		return negative(resp, 0x3E, nrc_incorrect_length)
 	}
-	sub := unsafe { req[1] }
-	if sub & 0x80 != 0 {
-		return 0 // suppressPosRspMsgIndicationBit set -> stay silent
+	sub := unsafe { req[1] } & 0x7F
+	// TesterPresent's only valid subfunction is 0x00 (ISO 14229): validate BEFORE
+	// honoring suppression — an invalid subfunction gets a negative response even with
+	// the suppress bit set (codex #218: '3E 81' was silently accepted)
+	if sub != 0x00 {
+		return negative(resp, 0x3E, nrc_subfunction_not_supported)
+	}
+	if unsafe { req[1] } & 0x80 != 0 {
+		return 0 // suppressPosRsp on the VALID subfunction: stay silent
 	}
 	unsafe {
 		resp[0] = 0x7E
-		resp[1] = sub & 0x7F
+		resp[1] = 0x00
 	}
 	return 2
 }
@@ -72,7 +79,17 @@ fn (mut s Server) session_control(req &u8, req_len int, resp &u8) int {
 	if req_len < 2 {
 		return negative(resp, 0x10, nrc_incorrect_length)
 	}
-	s.session = unsafe { req[1] }
+	sub := unsafe { req[1] } & 0x7F // suppressPosRspMsgIndicationBit (0x80) is not the session
+	// validate BEFORE mutating or suppressing: suppression applies only to a SUCCESSFUL
+	// positive response — an unsupported session must still get a negative response
+	// (REQ-DIAG-001; codex #218: '10 FF' stored 0x7F and stayed silent)
+	if sub != 0x01 && sub != 0x02 && sub != 0x03 && sub != 0x04 {
+		return negative(resp, 0x10, nrc_subfunction_not_supported)
+	}
+	s.session = sub
+	if unsafe { req[1] } & 0x80 != 0 {
+		return 0 // suppressPosRsp on a VALID session: action done, response withheld
+	}
 	unsafe {
 		resp[0] = 0x50
 		resp[1] = s.session
