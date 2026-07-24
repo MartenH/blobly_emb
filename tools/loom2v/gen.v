@@ -38,6 +38,10 @@ mut:
 	dbc_dlc   int    // the DBC message's DLC (if external)
 	dbc_ext   bool   // the DBC message is an extended (29-bit) frame (EFF flag) — id may be stripped
 	dbc_trivial bool // the DBC signal is a plain unsigned LE 32-bit value at bit 0 (factor 1, offset 0)
+	dbc_lane_issue string // '' or why this signal's DBC MESSAGE cannot carry the lane encode
+	// (every SG must sit alone in a 32-bit lane: start%32==0, <=32 bits, unsigned LE,
+	// factor 1/offset 0) — the lane writer fills WHOLE 4-byte lanes, so any other layout
+	// means an unrelated SG gets overwritten silently (codex #211 r5)
 	fields    []SigField // the signal's fields in declaration order (for the `sig` struct emit)
 	persist   string // '' | 'now' | 'shutdown' — restored + journaled by the platform
 	nvm_id    u16 // explicit schema-identity pin (0 = derive by hash); see gen_nvm.v
@@ -258,6 +262,7 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 			si.dbc_dlc = dbc_dlc_of(db, si.dbc_msg) or { 8 }
 			si.dbc_ext = dbc_ext_of(db, si.dbc_msg) or { false }
 			si.dbc_trivial = dbc_signal_trivial(db, sname) or { false }
+			si.dbc_lane_issue = dbc_msg_lane_issue(db, sname)
 			sig_of[sname] = si
 		}
 	}
@@ -3282,6 +3287,11 @@ fn main() {
 					// xioc slot; the comm producer polls it (duo_produce_drain) — no owner IOC cell.
 					// The lean encode packs the {a, b} pair LE at bytes 0/4, so the frame must be
 					// exactly the fields' width (field order = DBC layout order by convention).
+					if si.dbc_lane_issue != '' {
+						panic('loom2v: remote TX signal "${sname}": DBC message "${si.dbc_msg}" cannot ' +
+							'carry the lane encode — ${si.dbc_lane_issue}. The lane writer fills whole ' +
+							'4-byte lanes; every SG in the frame must own one (codex #211)')
+					}
 					if si.dbc_dlc != 4 * si.fields.len {
 						panic('loom2v: remote TX signal "${sname}" has ${si.fields.len} u32 field(s) ' +
 							'but DBC message "${si.dbc_msg}" DLC is ${si.dbc_dlc} — the xioc encode packs ' +
@@ -3669,6 +3679,43 @@ fn dbc_signal_trivial(db candb.Database, signame string) ?bool {
 		}
 	}
 	return none
+}
+
+// dbc_msg_lane_issue checks the whole MESSAGE carrying `signame` against the lane
+// encode's contract (one SG per 32-bit lane: start%32 == 0, length <= 32, unsigned,
+// factor 1 / offset 0, little-endian, one SG per lane). The lane writer stores whole
+// 4-byte lanes, so any other layout silently overwrites the co-resident SG. Returns ''
+// when clean, else the first violation (used in the remote-TX walk panic).
+fn dbc_msg_lane_issue(db candb.Database, signame string) string {
+	for m in db.messages {
+		for s in m.signals {
+			if s.name != signame {
+				continue
+			}
+			mut lanes_used := map[int]string{}
+			for sg in m.signals {
+				if sg.start_bit % 32 != 0 {
+					return 'signal "${sg.name}" starts at bit ${sg.start_bit} (not a 32-bit lane boundary)'
+				}
+				if sg.length > 32 {
+					return 'signal "${sg.name}" is ${sg.length} bits (a lane carries <= 32)'
+				}
+				if sg.is_signed || sg.factor != 1.0 || sg.offset != 0.0 {
+					return 'signal "${sg.name}" is signed/scaled — the lane encode writes raw u32 values'
+				}
+				if sg.byte_order != candb.ByteOrder.little_endian {
+					return 'signal "${sg.name}" is big-endian (Motorola) — lanes are LE'
+				}
+				lane := int(sg.start_bit / 32)
+				if prev := lanes_used[lane] {
+					return 'signals "${prev}" and "${sg.name}" share lane ${lane} — the lane writer fills whole lanes'
+				}
+				lanes_used[lane] = sg.name
+			}
+			return ''
+		}
+	}
+	return ''
 }
 
 // dbc_message_of returns snake(message name) of the DBC message carrying `sig`.

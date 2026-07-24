@@ -163,14 +163,21 @@ static inline volatile uint32_t *xioc_n_slot(xioc_n_t *c, uint32_t n)
 	return &c->cell[(n % XIOC_SLOTS) * (1u + c->words)];
 }
 
+/* Init order matters against a LIVE reader (a re-init while the owner polls — the
+ * partial-reflash case): latest is retracted first, the whole NEW extent is zeroed,
+ * and the geometry is published LAST — so a reader that observes the new `words` is
+ * guaranteed to find latest == 0 and zeroed seq words behind it, and a reader still
+ * holding the old geometry refuses on the width mismatch (codex #211 r5). */
 static inline void xioc_n_init(xioc_n_t *c, uint32_t words)
 {
-	c->words = words;
-	c->latest = 0u;
-	c->wseq = 0u;
+	XIOC_ST(&c->latest, 0u);
+	XIOC_DMB();
 	for (uint32_t i = 0; i < XIOC_SLOTS * (1u + words); i++) {
-		c->cell[i] = 0u;
+		XIOC_ST(&c->cell[i], 0u);
 	}
+	c->wseq = 0u;
+	XIOC_DMB();
+	XIOC_ST(&c->words, words);
 }
 
 static inline void xioc_n_write(xioc_n_t *c, const uint32_t *src)

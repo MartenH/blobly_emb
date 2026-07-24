@@ -35,6 +35,9 @@
 
 #define DUO_HB_ADDR    0x38000000u
 #define DUO_CLK_ADDR   0x38000008u
+#define DUO_LAYOUT_ADDR 0x38000010u /* the cross-image layout-id handshake cell (see
+                                     * gen/duo_gen.h DUO_LAYOUT_ID): satellite writes
+                                     * after init, owner gates every remote poll on it */
 #define DUO_IOC_ADDR   0x38000020u
 #define DUO_IOC_N      4
 

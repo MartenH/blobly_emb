@@ -72,6 +72,15 @@ void duo_pub_n(uint32_t off, const uint32_t *src) {
 	xioc_n_write((xioc_n_t *)(DUO_XW_ADDR + off), src);
 }
 
+/* duo_layout_publish — the satellite's half of the layout handshake: after every
+ * channel this image writes is initialized, publish the generated layout id; the owner
+ * refuses all remote signals until it matches (stale-image protection, codex #211 r5). */
+void duo_layout_publish(void) {
+	__asm__ volatile("dmb" ::: "memory"); /* channel inits land before the id */
+	*(volatile uint32_t *)DUO_LAYOUT_ADDR = DUO_LAYOUT_ID;
+	__asm__ volatile("dmb" ::: "memory");
+}
+
 /* --- dtrace: the two-core trace handoff (duo.h) -----------------------------------------
  * The recorder itself is trace_hooks.c (exec-change + FB hooks into this core's OWN ring,
  * DWT-timestamped). The bus owner never touches our ring: it posts a request in the SRAM4

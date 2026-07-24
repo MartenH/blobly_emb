@@ -88,14 +88,14 @@ fn test_wide_drain_polls_and_lean_encodes_every_lane() {
 	assert g.contains('C.duo_poll_n(u32(0), 3, &duo_m4_wide_seq, &duo_m4_wide_lanes[0])')
 	// freshness is consumed LAST: pacing + readiness precede the poll, else an
 	// off-cycle fresh value is eaten and never transmitted (codex #211 r3)
-	assert g.contains("if t1 - duo_m4_wide_last >= u64(100000) && ch.tx_ready()")
+	assert g.contains("C.duo_layout_ok() != 0 && t1 - duo_m4_wide_last >= u64(100000) && ch.tx_ready()")
 	assert g.contains('duo_txf.len = 12')
 	assert g.contains('duo_txf.data[0] = u8(duo_m4_wide_lanes[0])')
 	assert g.contains('duo_txf.data[7] = u8(duo_m4_wide_lanes[1] >> 24)')
 	assert g.contains('duo_txf.data[11] = u8(duo_m4_wide_lanes[2] >> 24)')
 	// pair emission rides along unchanged in the same drain
 	assert g.contains('C.duo_poll(0, &duo_m4_pair_a, &duo_m4_pair_b)')
-	assert g.contains("if t1 - duo_m4_pair_last >= u64(100000) && ch.tx_ready()")
+	assert g.contains("C.duo_layout_ok() != 0 && t1 - duo_m4_pair_last >= u64(100000) && ch.tx_ready()")
 }
 
 fn test_wide_comm_locals_declare_seq_and_lane_buffer() {
@@ -104,6 +104,20 @@ fn test_wide_comm_locals_declare_seq_and_lane_buffer() {
 	assert l.contains('mut duo_m4_wide_lanes := [3]u32{}')
 	// the pair keeps its {a,b} locals
 	assert l.contains('mut duo_m4_pair_a := u32(0)')
+}
+
+fn test_layout_id_covers_the_whole_map() {
+	m := wide_model()
+	h := duo_gen_h(m).join('\n')
+	assert h.contains('#define DUO_LAYOUT_ID 0x')
+	// the id must change when ANY slot moves — the stale-image cross-talk guard
+	mut m2 := wide_model()
+	m2.duo_xw_off = {
+		'M4Wide': 32
+	}
+	assert duo_layout_id(m) != duo_layout_id(m2)
+	// and be deterministic for the same map
+	assert duo_layout_id(m) == duo_layout_id(wide_model())
 }
 
 fn test_wide_c_decl_and_manifest_row() {

@@ -56,6 +56,7 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		g << 'fn C.duo_wait_clocks() // park until the owner signals clocks-ready (duo.h)'
 		g << 'fn C.board_timebase_init()'
 		g << 'fn C.duo_ioc_init() // the shared xioc pool (satellite is the writer side)'
+		g << 'fn C.duo_layout_publish() // layout-id handshake: owner polls nothing until this'
 		g << 'fn C.duo_pub(int, u32, u32) // xioc writer — slots from gen/duo_gen.h'
 		mut wide_writes := []string{}
 		for sname in m.duo_names {
@@ -151,6 +152,7 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 			si := m.sig_of[sname] or { continue }
 			g << '\tC.duo_xw_init(u32(${m.duo_xw_off[sname] or { 0 }}), u32(${si.fields.len})) // ${sname}'
 		}
+		g << '\tC.duo_layout_publish() // AFTER every channel init: the owner may poll now'
 		if m.trace.on {
 			g << '\tC.trace_arm()'
 		}

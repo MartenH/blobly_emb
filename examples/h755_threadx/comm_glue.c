@@ -150,16 +150,35 @@ int shell_bmc(unsigned char *out, int cap) {
  * latest == 0 -> "nothing published" — and xioc_n_read additionally clamps the bound.
  * Config-independent: the whole DUO_XW_MAX window, not the generated layout. */
 void duo_clocks_ready(void) {
-    volatile uint32_t *xw = (volatile uint32_t *)DUO_XW_ADDR;
-    for (uint32_t i = 0; i < DUO_XW_MAX / 4u; i++) xw[i] = 0u;
-    __asm__ volatile("dsb");
+    /* Zero ONLY on a true cold boot: if the CM4 heartbeat is already live, this is an
+     * OWNER restart with a running satellite — zeroing then would make the reader image
+     * a second writer over channels the CM4 is actively publishing (codex #211 r5).
+     * A live satellite's channels are already initialized (writer-owned init), and the
+     * layout handshake below rejects a stale-image satellite wholesale. */
+    if (*(volatile uint32_t *)DUO_HB_ADDR != DUO_HB_MAGIC) {
+        volatile uint32_t *xw = (volatile uint32_t *)DUO_XW_ADDR;
+        for (uint32_t i = 0; i < DUO_XW_MAX / 4u; i++) xw[i] = 0u;
+        *(volatile uint32_t *)DUO_LAYOUT_ADDR = 0u; /* no layout until the satellite publishes */
+        __asm__ volatile("dsb");
+    }
     *(volatile uint32_t *)DUO_CLK_ADDR = DUO_CLK_MAGIC;
     __asm__ volatile("dsb");
 }
 
+
 #include "xioc.h"
 #include "duo_gen.h" /* generated: the cross-core slot contract (gen/duo_gen.h) */
 #define DUO_POOL ((xioc_t *)DUO_IOC_ADDR)
+/* duo_layout_ok — the cross-image layout handshake: the satellite publishes the
+ * generated DUO_LAYOUT_ID (a hash of the whole slot/offset map) after initializing its
+ * channels; the owner polls nothing until the ids MATCH. A stale satellite image — any
+ * renumbered pair slot, moved wide offset, or resized channel — presents the wrong id
+ * and every remote signal reads as never-fresh, instead of slot cross-talk transmitting
+ * signal A's data as signal B (codex #211 r5). */
+int duo_layout_ok(void) {
+    return *(volatile uint32_t *)DUO_LAYOUT_ADDR == DUO_LAYOUT_ID;
+}
+
 
 /* duo_poll_n — the wide-channel (xioc_n) reader: rd_seq/dst are the CALLER's per-signal
  * state (the generated comm loop declares one seq + lane buffer per wide signal), so this

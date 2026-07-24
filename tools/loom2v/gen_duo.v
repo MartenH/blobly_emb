@@ -54,6 +54,10 @@ fn duo_gen_h(m Model) []string {
 		pairs++
 	}
 	g << '#define DUO_GEN_SLOTS ${pairs}'
+	g << '/* the layout id: an FNV-1a hash of the WHOLE slot/offset map. The satellite'
+	g << ' * publishes it (DUO_LAYOUT_ADDR) after init; the owner polls nothing until it'
+	g << ' * matches — two images from different generator runs never exchange slots. */'
+	g << '#define DUO_LAYOUT_ID 0x${duo_layout_id(m).hex()}u'
 	if m.duo_xw_total > 0 {
 		g << '/* wide (xioc_n) channels: byte offsets inside the board window (duo.h DUO_XW_ADDR);'
 		g << ' * words = u32 lanes, one per field. The satellite inits + writes, the owner polls. */'
@@ -80,11 +84,33 @@ fn duo_wide_on(m Model) bool {
 	return m.duo_xw_total > 0
 }
 
+// duo_layout_id hashes the complete cross-core map — pair slots, wide offsets, lane
+// counts, in declaration order — so ANY layout difference between two generator runs
+// (a renumbered slot after a signal changed shape, a moved or resized wide channel)
+// yields a different id. FNV-1a over the canonical map string.
+fn duo_layout_id(m Model) u32 {
+	mut desc := ''
+	for sname in m.duo_names {
+		si := m.sig_of[sname] or { continue }
+		if si.wide {
+			desc += '${sname}:xw+${m.duo_xw_off[sname] or { 0 }}:${si.fields.len}|'
+		} else {
+			desc += '${sname}:${m.duo_idx[sname] or { 0 }}|'
+		}
+	}
+	mut h := u32(2166136261)
+	for b in desc.bytes() {
+		h = (h ^ u32(b)) * 16777619
+	}
+	return h
+}
+
 fn duo_c_decls(m Model) []string {
 	if !duo_on(m) {
 		return []string{}
 	}
 	mut g := ['fn C.duo_poll(int, &u32, &u32) int // xioc reader (comm_glue.c): 1 = fresh value']
+	g << 'fn C.duo_layout_ok() int // layout-id handshake: 0 = satellite absent or a DIFFERENT build'
 	if duo_wide_on(m) {
 		g << 'fn C.duo_poll_n(u32, u32, &u32, &u32) int // wide xioc_n reader: (window off, OUR lane count, &rd seq, &lanes[0]) — a mismatched writer reads as never-fresh'
 	}
@@ -147,7 +173,7 @@ fn duo_produce_drain(m Model) []string {
 			// (DLC == 4 * lanes is validated in the comm-thread walk; > 8 needs FD and the
 			// classic comm thread rejects it there, loudly).
 			off := m.duo_xw_off[sname] or { 0 }
-			g << '\t\tif ${nm_gate(m)}t1 - duo_${n}_last >= u64(${cyc}) && ch.tx_ready()'
+			g << '\t\tif ${nm_gate(m)}C.duo_layout_ok() != 0 && t1 - duo_${n}_last >= u64(${cyc}) && ch.tx_ready()'
 			g << '\t\t\t&& C.duo_poll_n(u32(${off}), ${si.fields.len}, &duo_${n}_seq, &duo_${n}_lanes[0]) != 0 {' // REQ-COM-007
 			g << '\t\t\tduo_txf.id = u32(0x${si.dbc_id.hex()})'
 			g << '\t\t\tduo_txf.len = ${si.dbc_dlc}'
@@ -163,7 +189,7 @@ fn duo_produce_drain(m Model) []string {
 			continue
 		}
 		slot := m.duo_idx[sname] or { 0 }
-		g << '\t\tif ${nm_gate(m)}t1 - duo_${n}_last >= u64(${cyc}) && ch.tx_ready()'
+		g << '\t\tif ${nm_gate(m)}C.duo_layout_ok() != 0 && t1 - duo_${n}_last >= u64(${cyc}) && ch.tx_ready()'
 		g << '\t\t\t&& C.duo_poll(${slot}, &duo_${n}_a, &duo_${n}_b) != 0 {' // REQ-COM-007
 		g << '\t\t\tduo_txf.id = u32(0x${si.dbc_id.hex()})'
 		g << '\t\t\tduo_txf.len = ${si.dbc_dlc}'
