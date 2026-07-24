@@ -27,6 +27,36 @@ static inline int64_t cpu_ns(void)
 	return (int64_t)ts.tv_sec * 1000000000ll + ts.tv_nsec;
 }
 
+/* partner_cpu — a CPU on a DIFFERENT physical core than cpu 0: on SMT hosts logical
+ * 0/1 are often hyper-siblings sharing L1/L2, which would inflate a "cross-core"
+ * number (codex #216 r4). Scans core_id sysfs entries; falls back to 1 when the
+ * topology is unreadable (bare containers) — the caller labels honestly either way. */
+#include <stdio.h>
+static inline int core_id_of(int cpu)
+{
+	char path[96];
+	snprintf(path, sizeof(path),
+	         "/sys/devices/system/cpu/cpu%d/topology/core_id", cpu);
+	FILE *f = fopen(path, "r");
+	if (!f) return -1;
+	int id = -1;
+	if (fscanf(f, "%d", &id) != 1) id = -1;
+	fclose(f);
+	return id;
+}
+
+static inline int partner_cpu(void)
+{
+	int base = core_id_of(0);
+	if (base < 0) return 1;
+	for (int c = 1; c < 64; c++) {
+		int id = core_id_of(c);
+		if (id < 0) break;
+		if (id != base) return c;
+	}
+	return 1;
+}
+
 static inline int exited_ok(int status)
 {
 	return WIFEXITED(status) && WEXITSTATUS(status) == 0;
