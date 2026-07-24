@@ -79,6 +79,8 @@ example's config; the satellite's gen step is "make gen in the owner dir".
 
 - Generating satellite Makefiles/glue C (examples own them, as everywhere).
 - >2-field or non-u32 cross-core signals (xioc cell = {a,b}; widen the cell later).
+  *Superseded 2026-07-23: the wide rung below shipped exactly this — the bullet stays
+  as phase history only.*
 - Satellite-owned buses (any core CAN own one per the directive; emission for it comes
   with a real use case).
 - SMP emission (recorded strategy; needs silicon that earns it).

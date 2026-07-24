@@ -3234,6 +3234,17 @@ fn main() {
 				}
 			}
 		}
+		// EVERY remote signal is a single-writer xioc channel — including slot-only ones
+		// (to a local partition), which never reach the external-TX check below: two
+		// writing handlers would emit two duo_pub(_n) producers racing the channel's
+		// writer-private wseq, invalidating the tear-free algorithm (codex #211 r9).
+		for sn in m.sig_names {
+			rsi := m.sig_of[sn] or { continue }
+			if rsi.remote && written_count[sn] > 1 {
+				panic('loom2v: remote signal "${sn}" is written by ${written_count[sn]} FB handlers — ' +
+					'an xioc channel has exactly ONE producer (SPSC); merge the writers or split the signal')
+			}
+		}
 		// How many rx signals READ by FBs each DBC message carries (the lean whole-frame decode
 		// serves one per message; more need the per-signal codec).
 		mut msg_read_sigs := map[string]int{}
@@ -3704,6 +3715,13 @@ fn dbc_msg_lane_issue(db candb.Database, signame string, nlanes int, widths []in
 		for s in m.signals {
 			if s.name != signame {
 				continue
+			}
+			// the [[signal]].name SG anchors the frame: the publisher writes field 0 to
+			// lane 0, and the named SG is the one the declaration binds — anywhere else
+			// and every field lands under the wrong DBC name (codex #211 r9; this is the
+			// binding the old 32-bit-at-bit-0 check gave, generalized)
+			if s.start_bit != 0 {
+				return 'signal "${signame}" (the [[signal]].name binding) sits at bit ${s.start_bit} — it must own lane 0 (bit 0)'
 			}
 			mut lanes_used := map[int]string{}
 			for sg in m.signals {

@@ -109,6 +109,11 @@ fn duo_layout_id(m Model) u32 {
 	for b in desc.bytes() {
 		h = (h ^ u32(b)) * 16777619
 	}
+	if h == 0 {
+		// 0 is the RETRACTION sentinel duo_clocks_ready writes: a schema hashing to 0
+		// would open polling before the satellite ever published (codex #211 r9)
+		h = 0x4C594F31 // 'LYO1'
+	}
 	return h
 }
 
