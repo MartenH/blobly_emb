@@ -64,13 +64,13 @@ void duo_pub(int i, uint32_t a, uint32_t b) {
  * proportional xioc_n channels in the DUO_XW window; per-signal offsets are generated
  * (gen/duo_gen.h DUO_XW_<SIG>_OFF) and the generated boot inits each channel this image
  * writes. Same plain-store discipline as the pair pool. */
+static uint32_t g_boot_seed; /* set by duo_layout_retract, boot's first act */
+
 void duo_xw_init(uint32_t off, uint32_t words) {
-	/* seq space seeded per BOOT (DWT-derived, |1 so it is never the 0 sentinel): a
-	 * reader preempted across our restart can never meet a colliding sequence
-	 * number from the new boot (codex #211 r13) */
-	extern uint64_t board_now_us(void);
-	xioc_n_init((xioc_n_t *)(DUO_XW_ADDR + off), words,
-	            (uint32_t)board_now_us() | 1u);
+	/* seq space seeded per BOOT from the retained epoch (set in duo_layout_retract,
+	 * which boot runs first): a reader preempted across our restart can never meet a
+	 * colliding sequence number from the new boot (codex #211 r13/r14) */
+	xioc_n_init((xioc_n_t *)(DUO_XW_ADDR + off), words, g_boot_seed);
 }
 
 void duo_pub_n(uint32_t off, const uint32_t *src) {
@@ -85,6 +85,13 @@ void duo_pub_n(uint32_t off, const uint32_t *src) {
  * collision); latest-value semantics self-heal at the producer's next cadence. */
 void duo_layout_retract(void) {
 	*(volatile uint32_t *)DUO_LAYOUT_ADDR = 0u;
+	/* restart-UNIQUE epoch: SRAM4 retains the counter across resets, so ++ gives every
+	 * boot a distinct value (cold-boot garbage is as good as random) — the DWT clock
+	 * restarts at 0 each boot and could repeat (codex #211 r14). Knuth-mixed so
+	 * consecutive epochs land far apart in the sequence space; |1 avoids the 0 sentinel. */
+	uint32_t e = *(volatile uint32_t *)DUO_EPOCH_ADDR + 1u;
+	*(volatile uint32_t *)DUO_EPOCH_ADDR = e;
+	g_boot_seed = (e * 2654435761u) | 1u;
 	__asm__ volatile("dmb" ::: "memory");
 }
 

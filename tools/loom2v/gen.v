@@ -1130,21 +1130,31 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		}
 	}
 	// SPSC per remote channel, validated HERE (not only in the comm-thread walk, which a
-	// slot-only model without a comm thread never enters — codex #211 r11): two writing
-	// handlers would race the channel's writer-private wseq.
-	mut remote_writes := map[string]int{}
+	// slot-only model without a comm thread never enters — codex #211 r11). The unit is
+	// the PRODUCER CONTEXT — the thread — not the handler: two handlers on one Loom
+	// thread run serially and are one valid producer (codex #211 r14, the same rule
+	// ecumodel's writer_threads uses).
+	mut remote_writer_ctx := map[string][]string{} // signal -> distinct writing threads
 	for fb in ecumodel.toml_arr(doc, 'fb') {
-		for h in (fb.as_map()['handler'] or { toml.Any([]toml.Any{}) }).array() {
+		fbm := fb.as_map()
+		fbname := (fbm['name'] or { toml.Any('') }).string()
+		thr := part.fb_thread[fbname] or { fbname } // unassigned fb: itself as context
+		for h in (fbm['handler'] or { toml.Any([]toml.Any{}) }).array() {
 			for w in (h.as_map()['writes'] or { toml.Any([]toml.Any{}) }).array() {
-				remote_writes[w.string()]++
+				wn := w.string()
+				if thr !in (remote_writer_ctx[wn] or { []string{} }) {
+					remote_writer_ctx[wn] << thr
+				}
 			}
 		}
 	}
 	for sname in duo_names {
-		if remote_writes[sname] > 1 {
-			panic('loom2v: remote signal "${sname}" is written by ${remote_writes[sname]} FB ' +
-				'handlers — an xioc channel has exactly ONE producer (SPSC); merge the writers ' +
-				'or split the signal')
+		mut ctxs := remote_writer_ctx[sname] or { []string{} }
+		if ctxs.len > 1 {
+			ctxs.sort()
+			panic('loom2v: remote signal "${sname}" is written from ${ctxs.len} threads ' +
+				'(${ctxs.join(', ')}) — an xioc channel has exactly ONE producer context ' +
+				'(SPSC); keep its writers on one thread or split the signal')
 		}
 	}
 	if duo_producers.len > 1 {
