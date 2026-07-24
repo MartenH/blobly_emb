@@ -27,7 +27,7 @@ lock-free, no-alloc — and skips the rest.
 | Cross-core communication in one ECU | OS-Application partitioning + the OS **IOC** + per-core RTE config | an ordinary `[[signal]]` whose endpoints sit on different cores; the generator derives the transport (xioc) and emits an image per core from ONE config ([multi-image.md](multi-image.md)) | ✅ have |
 | Runtime observability — thread/ISR/handler trace, per-handler timing, CPU load | ARTI/ORTI + vendor tracing tools, DLT | per-core flight recorder → multi-core swimlane, `stat` (per-handler last/max/mean µs), CpuLoad telemetry — all config-wired, dumped over the bus | ✅ have |
 | Queued (event) sender-receiver — discrete events, none dropped | `Rte_Send`/`Rte_Receive`, `isQueued` | — (IOC is last-value) | 🔜 planned |
-| **Large / bulk data — a payload passed whole, not bit-packed into signals** | **LdCom** (transparent, no signal packing) + PduR + a TP for segmentation | ISO-TP exists, but only a **module** may own a link (`uds`, `trace`, `shell`) — an application has no bulk endpoint, and cross-core bulk has no generated path at all (8 B xioc cell) | 🔜 planned ([um/move-data.md](um/move-data.md)) |
+| **Large / bulk data — a payload passed whole, not bit-packed into signals** | **LdCom** (transparent, no signal packing) + PduR + a TP for segmentation | ISO-TP exists, but only a **module** may own a link (`uds`, `trace`, `shell`) — an application has no bulk endpoint; cross-core SIGNALS carry up to 16 u32 lanes (`xioc_n`, #211) but cross-core BULK still has no generated path (the merged `bulk.h` ring awaits its OSAL/config sanctioning) | 🔜 planned ([um/move-data.md](um/move-data.md)) |
 | React on reception, not on a clock | `DataReceivedEvent` | — (handlers are cyclic) | 🔜 planned |
 | Mode management (gate handlers / reconfigure by ECU state) | ModeDeclarationGroup, `ModeSwitchEvent` | — (only NM sleep/wake) | 🔜 planned |
 | End-to-end protection (CRC + alive counter) | E2E library / transformer | `comm/e2e` (CRC-8 J1850 + 4-bit counter + data id), per-frame `[[frame]].e2e` | ✅ have |
@@ -57,7 +57,8 @@ lock-free, no-alloc — and skips the rest.
   latency gap. Missing only because we built the cyclic path first.
 - **Large / bulk data (the LdCom shape).** COM here packs *signals* into a PDU, so
   everything an application sends is bit-packed and bounded — 64 B (`com.max_pdu`)
-  on a bus, 8 B across cores. AUTOSAR's answer to "this payload is not a set of
+  on a bus, and up to 16 u32 lanes (one PDU) across cores since the wide `xioc_n`
+  derivation (#211). AUTOSAR's answer to "this payload is not a set of
   signals" is **LdCom**: pass the buffer through **transparently**, no packing, and
   let PduR + a TP segment it. The pieces exist here (`comm/isotp` segments, the
   bootloader block-transfers an image, `comm/trace` streams a ring), but only a
