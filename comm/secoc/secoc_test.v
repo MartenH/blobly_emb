@@ -1,9 +1,16 @@
 module secoc
 
-// @verifies SYS-REQ-SEC-001 REQ-SEC-001 REQ-SEC-002 REQ-SEC-003
-// (verify-reject on tamper and wrong key; replay rejected via freshness; protect
-//  stamps freshness + CMAC per transmission — the roundtrip + replay pair proves
-//  the freshness advances.)
+// @verifies SYS-REQ-SEC-001 REQ-SEC-001
+// (verify-reject on tamper and wrong key — the authentication clause.)
+// NOT tagged, two GAPS the sweep surfaced (both in requirements/sec.toml):
+//  - REQ-SEC-002 (replay): live-state rejection is tested, but freshness restarts at
+//    zero across reset, so a captured frame replays after a reboot.
+//  - REQ-SEC-003 (protect-on-tx / freshness advances): freshness is a u8, so the 257th
+//    unchanged-payload frame repeats freshness 0 and the FIRST frame's CMAC — and at
+//    the 255->0 wrap a receiver accepts a captured first frame as the next value. The
+//    'consecutive frames are never byte-identical / monotone freshness' property the
+//    requirement needs wants a wider counter or resync. Both are the same design
+//    decision as SEC-002 (freshness scheme + NvM/resync).
 
 fn eq16(a [16]u8, b [16]u8) bool {
 	for i in 0 .. 16 {

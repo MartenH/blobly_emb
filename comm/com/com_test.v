@@ -1,10 +1,16 @@
 module com
 
-// @verifies SYS-REQ-COMMS-003 REQ-COM-003 REQ-COM-004 REQ-COM-005 REQ-COM-006
-// (REQ-COM-003/004: the cyclic/event/mixed/triggered should_send decisions incl. debounce
-//  and backpressure; REQ-COM-005: the rx deadline edge/latch/disable tests. NOT tagged
-//  REQ-E2E-002: its total-loss leg must live INSIDE the ASIL-B E2E mechanism per its own
-//  text — this COM deadline is the complementary QM monitor, not that evidence.)
+// @verifies SYS-REQ-COMMS-003 REQ-COM-003 REQ-COM-005 REQ-COM-006
+// (REQ-COM-003: cyclic/mixed period decisions; REQ-COM-005: the rx deadline edge/latch/
+//  disable tests; REQ-COM-006: backpressure retry.)
+// NOT tagged, both gaps recorded in requirements/com.toml:
+//  - REQ-COM-004: the EVENT leg (on-change, min-delay-debounced) is covered and
+//    generated, but the TRIGGERED leg is unwired — TxState.trigger() is called only in
+//    these unit tests; loom2v generates no application/diagnostic path that sets
+//    `pending`, so an FB cannot request a triggered send. The should_send decision is
+//    correct (incl. the min_delay fix); the missing piece is the generated trigger API.
+//  - REQ-E2E-002: its total-loss leg must live INSIDE the ASIL-B E2E mechanism per its
+//    own text — this COM rx deadline is the complementary QM monitor, not that evidence.
 
 fn payload(b u8) [max_pdu]u8 {
 	mut d := [max_pdu]u8{}
@@ -71,6 +77,19 @@ fn test_triggered_only_on_trigger() {
 // mark_sent), an event or triggered PDU retains its request and retries until accepted;
 // a cyclic PDU re-sends its current value at the next opportunity. should_send being a
 // pure decision is exactly what makes the retry safe — nothing is consumed on a drop.
+fn test_triggered_respects_min_delay() {
+	mut t := TxState{
+		mode:         .triggered
+		min_delay_us: 100
+	}
+	t.pending = true
+	assert t.should_send(0, payload(1), 1) // first ever: no previous tx to delay from
+	t.mark_sent(0, payload(1), 1)
+	t.pending = true // re-triggered immediately
+	assert !t.should_send(50, payload(1), 1) // inside min_delay: held (REQ-COM-004)
+	assert t.should_send(100, payload(1), 1) // window open: the retained trigger fires
+}
+
 fn test_backpressure_retries_until_accepted() {
 	// event: a change while the Tx path is full must not be lost
 	mut e := TxState{

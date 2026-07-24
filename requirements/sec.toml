@@ -12,6 +12,10 @@ method = "test"
 asil = "QM"
 derives = "SYS-REQ-SEC-001"
 
+# GAP (coverage sweep, 2026-07-24): live-state replay rejection is tested, but the
+# across-reset clause is unimplemented — TxState freshness and RxState both restart at
+# zero, so a captured frame replays cleanly after a reboot. Closing it needs persisted
+# freshness (NvM tie-in) or a resynchronization exchange: a design decision, not a tag.
 [[req]]
 id = "REQ-SEC-002"
 title = "Reject replay"
@@ -21,6 +25,11 @@ method = "test"
 asil = "QM"
 derives = "SYS-REQ-SEC-001"
 
+# GAP (coverage sweep, 2026-07-24): protect stamps freshness+CMAC per tx, but the
+# freshness is a u8 — the 257th unchanged-payload frame repeats freshness 0 (and the
+# first frame's MAC), and the 255->0 wrap lets a captured first frame pass as fresh.
+# 'Consecutive legitimate frames never byte-identical / monotone freshness' needs a
+# wider counter or resync (same freshness-scheme decision as REQ-SEC-002).
 [[req]]
 id = "REQ-SEC-003"
 title = "Protect on transmit"

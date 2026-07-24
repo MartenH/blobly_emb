@@ -386,3 +386,15 @@ context = "threadx/qemu-m7 + h755 bench"
 verifies = ["REQ-TRACE-008", "REQ-TRACE-010"]
 approved_by = ""
 date = ""
+
+# REQ-TRACE-009's cross-core GATHER half: the satellite's frozen window is fetched over
+# the dtrace req/ack handoff by the owning core (never a direct cross-core read) and
+# streamed as its own block — bench-verified on the H755 two-core dump sessions
+# (emb#186 era, walk-assigned handler ids from core 1). Pending the user's sign-off.
+[[review]]
+id = "h755-two-core-dump"
+method = "review"
+context = "h755/dual-core"
+verifies = ["REQ-TRACE-009"]
+approved_by = ""
+date = ""

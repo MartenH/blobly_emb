@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 187 | 107 | 18 | 62 | 0 |
+| 187 | 103 | 19 | 65 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -47,7 +47,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-001 | QM | test | uncovered | — |
 | REQ-COM-002 | QM | test | uncovered | — |
 | REQ-COM-003 | QM | test | verified | com_test.v (pass) |
-| REQ-COM-004 | QM | test | verified | com_test.v (pass) |
+| REQ-COM-004 | QM | test | uncovered | — |
 | REQ-COM-005 | QM | test | verified | com_test.v (pass) |
 | REQ-COM-006 | QM | test | verified | com_test.v (pass) |
 | REQ-COM-007 | QM | test | uncovered | — |
@@ -144,8 +144,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NVM-013 | QM | test | verified | journal_test.v (pass) |
 | REQ-NVM-014 | QM | test | uncovered | — |
 | REQ-SEC-001 | QM | test | verified | secoc_test.v (pass) |
-| REQ-SEC-002 | QM | test | verified | secoc_test.v (pass) |
-| REQ-SEC-003 | QM | test | verified | secoc_test.v (pass) |
+| REQ-SEC-002 | QM | test | uncovered | — |
+| REQ-SEC-003 | QM | test | uncovered | — |
 | REQ-SHELL-001 | QM | test | verified | shell_test.v (pass) |
 | REQ-SHELL-002 | QM | test | verified | shell_test.v (pass) |
 | REQ-SHELL-003 | QM | test | verified | shell_test.v (pass) |
@@ -182,7 +182,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TRACE-001 | QM | test | verified | h755-duo-trace (approved), h755-multiblock-dump (approved), loom_test.v (pass) |
 | REQ-TRACE-002 | QM | test | verified | h755-external-partitions (approved) |
 | REQ-TRACE-008 | QM | test | covered | threadx-exec-hooks-capture (pending) |
-| REQ-TRACE-009 | QM | test | verified | multicore_dump_test.v (pass) |
+| REQ-TRACE-009 | QM | test | covered | control_test.v (pass), h755-two-core-dump (pending), multicore_dump_test.v (pass) |
 | REQ-TRACE-011 | QM | test | covered | module_test.v (pass), trace-correlation-silicon (pending), trace_test.v (pass) |
 | REQ-TOPO-001 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-002 | QM | test | verified | model_test.v (pass) |
@@ -239,7 +239,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-001 | | | | | | | | | | | | | | | | | |
 | REQ-COM-002 | | | | | | | | | | | | | | | | | |
 | REQ-COM-003 | | | | | | | | | | | | | | ✓ | | | |
-| REQ-COM-004 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-COM-004 | | | | | | | | | | | | | | | | | |
 | REQ-COM-005 | | | | | | | | | | | | | | ✓ | | | |
 | REQ-COM-006 | | | | | | | | | | | | | | ✓ | | | |
 | REQ-COM-007 | | | | | | | | | | | | | | | | | |
@@ -336,8 +336,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NVM-013 | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NVM-014 | | | | | | | | | | | | | | | | | |
 | REQ-SEC-001 | | | | | | | | | | | | | | ✓ | | | |
-| REQ-SEC-002 | | | | | | | | | | | | | | ✓ | | | |
-| REQ-SEC-003 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-SEC-002 | | | | | | | | | | | | | | | | | |
+| REQ-SEC-003 | | | | | | | | | | | | | | | | | |
 | REQ-SHELL-001 | | | | | | | | | | | | | | ✓ | | | |
 | REQ-SHELL-002 | | | | | | | | | | | | | | ✓ | | | |
 | REQ-SHELL-003 | | | | | | | | | | | | | | ✓ | | | |
@@ -374,7 +374,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TRACE-001 | | | | | | | | | | ✓ | ✓ | | | ✓ | | | |
 | REQ-TRACE-002 | | | | | | | | | | | ✓ | | | | | | |
 | REQ-TRACE-008 | | | | | | | | | | | | | | | | | · |
-| REQ-TRACE-009 | | | | | | | | | | | | | | ✓ | | | |
+| REQ-TRACE-009 | | | | | | | | | | | · | | | ✓ | | | |
 | REQ-TRACE-011 | | | | | | | | | | | · | | | ✓ | | | |
 | REQ-TOPO-001 | | | | | | | | | | | | | | ✓ | | | |
 | REQ-TOPO-002 | | | | | | | | | | | | | | ✓ | | | |

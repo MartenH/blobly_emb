@@ -1,5 +1,10 @@
 module trace
 
+// @verifies REQ-TRACE-009
+// (the COMMAND half: the core bitmask selects cores and handle_cmd respects it —
+//  the streaming half is multicore_dump_test.v, the on-target gather is the pending
+//  h755-two-core-dump review.)
+
 // Cmd/Rsp round-trip through the wire codec.
 fn test_cmd_rsp_roundtrip() {
 	c := Cmd{
