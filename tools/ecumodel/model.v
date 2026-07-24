@@ -1426,6 +1426,16 @@ pub fn validate_bulk(doc toml.Doc, part_names map[string]bool, thread_part map[s
 			errs << 'bulk pool "${bname}" consumer "${cons}" is not a declared partition or thread'
 		}
 
+		if prod in thread_part || prod in part_names {
+			if cons in thread_part || cons in part_names {
+				prod_part := thread_part[prod] or { prod }
+				cons_part := thread_part[cons] or { cons }
+				if prod_part != cons_part {
+					errs << 'bulk pool "${bname}" producer "${prod}" (partition "${prod_part}") and consumer "${cons}" (partition "${cons_part}") cross partitions — single-image bulk pools require producer and consumer to share the same partition until OSAL shared-region transport is bound'
+				}
+			}
+		}
+
 		if 'bufsz' !in bm {
 			errs << 'bulk pool "${bname}" is missing `bufsz`'
 		} else if v := bm['bufsz'] {
