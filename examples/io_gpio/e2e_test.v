@@ -75,16 +75,19 @@ fn test_button_drives_led() {
 	os.write_file(tmp, '1\n')!
 	os.rename(tmp, os.join_path(work, 'io', 'UserButton'))!
 
-	// input -> signal -> FB -> signal -> output, within the io/app cadences
-	// bound = a handful of 10 ms cadences (input publish + handler + output
-	// apply), NOT seconds — a 1 Hz regression must fail REQ-IO-012/013
+	// input -> signal -> FB -> signal -> output, within the io/app cadences.
+	// The bound stays well under a second so a 1 Hz cadence regression MUST still
+	// fail (REQ-IO-012/013), but it is 500 ms rather than 100 ms: on a loaded
+	// 2-core CI runner two parallel test jobs plus this app share the machine, and
+	// the 100 ms budget starved often enough to flake (seen on emb#210's run — a
+	// docs-only diff). Scheduling slack is not a cadence regression.
 	mut lit := false
-	for _ in 0 .. 100 {
+	for _ in 0 .. 500 {
 		if (os.read_file(led) or { '' }).trim_space() == '1' {
 			lit = true
 			break
 		}
 		time.sleep(1 * time.millisecond)
 	}
-	assert lit, 'LedGreen did not follow UserButton within ~10 io/app cadences'
+	assert lit, 'LedGreen did not follow UserButton within 500ms of io/app cadences'
 }
