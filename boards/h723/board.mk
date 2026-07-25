@@ -27,7 +27,7 @@ IO_DEFS    = -DBLOB_IO_STM32
 
 # startup/vectors/systick glue + the board.h API are family-generic: boards/common
 BOARD_BSP_THREADX = $(BOARD_COMMON)/crt0.S $(BOARD_COMMON)/vectors.S \
-                    $(BOARD_COMMON)/tx_initialize_low_level.S $(BOARD_DIR)/board.c
+                    $(BOARD_COMMON)/tx_initialize_low_level.S $(BOARD_COMMON)/weak_irq.c $(BOARD_DIR)/board.c
 BOARD_BSP_BARE    = $(BOARD_COMMON)/startup.c $(BOARD_DIR)/board.c
 BOARD_LD_THREADX  = $(BOARD_DIR)/threadx.ld
 BOARD_LD_BARE     = $(BOARD_DIR)/bare.ld
