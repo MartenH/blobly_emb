@@ -132,8 +132,9 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		b << 'dbc = "${bus.dbc}"'
 		b << ''
 	}
-	b << '[bus.${bus.interface}]'
-	b << 'interface = "${bus.interface}"'
+	iface := if node.buses.len == 1 { 'can0' } else { bus.interface }
+	b << '[bus.${iface}]'
+	b << 'interface = "${iface}"'
 	b << 'fd        = ${bus.fd}'
 	b << 'core      = 0'
 	b << ''
@@ -177,7 +178,7 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		b << 'name   = "${sig.name}"'
 		b << 'fields = ${fields_inline(sig.fields)}'
 		b << 'from   = "${part}"'
-		b << 'to     = "${bus.interface}"'
+		b << 'to     = "${iface}"'
 		b << ''
 		// one [[frame]] per PDU: several signals may share a DBC message, but its
 		// tx cadence is configured once (validated to agree in check_signals_dissolved).
@@ -186,7 +187,7 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 			cyc := sysmodel.effective_cycle_ms(sig.cycle_ms)
 			b << '  [[frame]]'
 			b << '  name = "${sig.frame}"'
-			b << '  bus  = "${bus.interface}"'
+			b << '  bus  = "${iface}"'
 			b << '  tx   = { mode = "cyclic", cycle_ms = ${cyc} } # trailing comment terminates the nested [[frame]] parse (vlang/v#27684)'
 			b << ''
 		}
@@ -207,7 +208,7 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		b << '[[signal]]'
 		b << 'name   = "${sig.name}"'
 		b << 'fields = ${fields_inline(sig.fields)}'
-		b << 'from   = "${bus.interface}"'
+		b << 'from   = "${iface}"'
 		b << 'to     = "${part}"'
 		b << ''
 	}

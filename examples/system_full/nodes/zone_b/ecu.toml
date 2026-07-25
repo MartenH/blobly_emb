@@ -23,7 +23,7 @@ tick_ms = 1
 
 [telemetry]
 enabled   = true
-bus       = "can2"
+bus       = "can0"
 id        = 0x7E6
 detail_id = 0x7E7
 period_ms = 500
