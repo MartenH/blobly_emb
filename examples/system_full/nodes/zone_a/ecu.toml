@@ -1,0 +1,29 @@
+# zone_a (H723 #1) — Front Zone ECU.
+
+[[partition]]
+name = "front"
+core = 0
+
+  [[partition.thread]]
+  name = "front_thread"
+
+[[fb]]
+name   = "FrontZoneCtrl"
+thread = "front_thread"
+
+  [[fb.handler]]
+  name      = "on_50ms"
+  period_ms = 50
+  reads     = ["VehicleSpeed", "HeadlightCmd"]
+  writes    = ["SteeringAngle"] # trailing comment terminates nested block (vlang/v#27684)
+
+[target]
+kind    = "threadx"
+tick_ms = 1
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E4
+detail_id = 0x7E5
+period_ms = 500

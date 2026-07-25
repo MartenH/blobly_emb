@@ -1,0 +1,29 @@
+# zone_b (H723 #2) — Rear Body ECU.
+
+[[partition]]
+name = "body_zone"
+core = 0
+
+  [[partition.thread]]
+  name = "body_thread"
+
+[[fb]]
+name   = "RearBodyCtrl"
+thread = "body_thread"
+
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  reads     = ["BrakeState", "EngineRpm", "HVACCmd"]
+  writes    = ["TailgateStatus", "AmbientTemp"] # trailing comment terminates nested block (vlang/v#27684)
+
+[target]
+kind    = "threadx"
+tick_ms = 1
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E6
+detail_id = 0x7E7
+period_ms = 500
