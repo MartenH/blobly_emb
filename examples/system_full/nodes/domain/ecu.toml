@@ -1,0 +1,29 @@
+# domain (H755 dual-core) — Powertrain & Dynamics.
+
+[[partition]]
+name = "powertrain"
+core = 0
+
+  [[partition.thread]]
+  name = "fast"
+
+[[fb]]
+name   = "PowertrainCtrl"
+thread = "fast"
+
+  [[fb.handler]]
+  name      = "on_50ms"
+  period_ms = 50
+  reads     = ["SteeringAngle", "AmbientTemp", "TailgateStatus"]
+  writes    = ["VehicleSpeed", "EngineRpm", "BrakeState", "HeadlightCmd", "HVACCmd"] # trailing comment terminates nested block (vlang/v#27684)
+
+[target]
+kind    = "threadx"
+tick_ms = 1
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E2
+detail_id = 0x7E3
+period_ms = 500

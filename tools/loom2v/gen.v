@@ -3465,10 +3465,10 @@ fn main() {
 			ioc_idx[pt.name] = ioc_idx.len
 		}
 	}
-	if ioc_idx.len > 4 {
+	if ioc_idx.len > 16 {
 		panic('loom2v: [target] kind="threadx": ${ioc_idx.len} signals need target IOC ' +
 			'cells (rx-to-FB + persist staging + io points), but the pool (glue IOC_POOL_N) ' +
-			'has 4 — raise IOC_POOL_N or reduce signals')
+			'has 16 — raise IOC_POOL_N or reduce signals')
 	}
 	// Which m.buses run a COM bridge (an external signal, an ISO-TP conn, or a route touches them).
 	// P3b traces each bridge as a `comm_<bus>` thread; the DIFFERENT-bus case (trace rides a bus with
