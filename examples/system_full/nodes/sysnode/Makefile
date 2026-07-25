@@ -1,6 +1,6 @@
 # sysnode — the system_full Central Gateway, built as a real ThreadX image (like every other
 # node). The comm thread owns all three FDCAN buses and forwards the 8 resolved routes. The
-# gen step keeps dbcmerge (one merged.dbc across compute/edge/body, so both frames of every
+# gen step keeps dbcmerge (one merged.dbc across compute/edge, so both frames of every
 # route resolve in one DBC); the build is the same ThreadX cross-build the leaf nodes use.
 #
 # SILICON NOTE: the H735-DK is a 3-FDCAN part, so the driver opens FDCAN1/2/3 by index and
@@ -42,7 +42,7 @@ all: $(BUILD)/$(NAME).bin
 gen: gen/.stamp
 gen/.stamp: $(SYSDIR)/gen-$(NAME).toml
 	@mkdir -p gen ports sig
-	cd $(REPO) && tools/dbcmerge/dbcmerge $(GW)/gen/merged.dbc examples/system_full/compute.dbc examples/system_full/edge.dbc examples/system_full/body.dbc
+	cd $(REPO) && tools/dbcmerge/dbcmerge $(GW)/gen/merged.dbc examples/system_full/compute.dbc examples/system_full/edge.dbc
 	cd $(REPO) && tools/dbc2cfg/dbc2cfg $(GW)/gen/merged.dbc $(GW)/gen/dbc_gen.v
 	cd $(REPO) && tools/loom2v/loom2v examples/system_full/gen-$(NAME).toml $(GW)/gen/merged.dbc \
 	  $(GW)/sig/signals_gen.v $(GW)/ports/ports_gen.v $(GW)/gen/loom_gen.v $(GW)/gen/trace-manifest.csv
