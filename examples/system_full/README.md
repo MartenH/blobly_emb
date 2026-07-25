@@ -94,8 +94,7 @@ so no on-target decode/re-encode is needed (a route whose layouts differ is reje
 time and stays host-only). The forwarded-frame count is the exported `g_fwd_count`,
 SWD-observable at the bench.
 
-**Silicon status.** FDCAN1 (compute) is fully wired on `boards/h735dk`. Driving `edge` on
-silicon needs the board to also mux the **FDCAN2** pins in `board_can_clock_pins_init` — not
-yet done, pending the DK's FDCAN2 pin assignment (the usual `PB6`/`PB12` map collides with the
-DK's Ethernet RMII on `PB12`). Until then the image builds and its routing runs on host
-`vcan0`/`vcan1`.
+**Silicon status.** Both buses are wired on `boards/h735dk`: FDCAN1 (compute) on `PH13`/`PH14`
+and FDCAN2 (edge) on `PB6`/`PB5` (AF9) — the DK's two CAN-FD transceivers, clear of the
+Ethernet RMII pins. Flash with `make -C nodes/sysnode flash` (add `SERIAL=<st-link sn>` to
+pick a board when several ST-Links are attached).
