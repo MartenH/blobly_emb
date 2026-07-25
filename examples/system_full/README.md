@@ -66,26 +66,34 @@ make syscheck
 # 2. Dissolve system.toml into per-node gen-<node>.toml for all 4 nodes:
 make gen
 
-# 3. Cross-build the ThreadX images for the 3 leaf nodes (needs arm-none-eabi + `make -C ../.. deps`):
-make nodes           # -> nodes/{domain,zone_a,zone_b}/build/<node>.bin
+# 3. Cross-build the ThreadX images for ALL 4 nodes (needs arm-none-eabi + `make -C ../.. deps`):
+make nodes           # -> nodes/{sysnode,domain,zone_a,zone_b}/build/<node>.bin
 ```
 
 ### Node build status
 
-The three **leaf** nodes cross-build to real ThreadX images from `system.toml`:
+**All four** nodes — including the gateway — cross-build to real ThreadX images from
+`system.toml`:
 
-| Node | Board | Image |
-|---|---|---|
-| `domain` | `boards/h755zi` (H755 CM7) | `nodes/domain/build/domain.bin` |
-| `zone_a` | `boards/h723` (H723ZG) | `nodes/zone_a/build/zone_a.bin` |
-| `zone_b` | `boards/h723` (H723ZG) | `nodes/zone_b/build/zone_b.bin` |
+| Node | Board | Image | Role |
+|---|---|---|---|
+| `sysnode` | `boards/h735dk` (H735 M7) | `nodes/sysnode/build/sysnode.bin` | 3-bus gateway |
+| `domain` | `boards/h755zi` (H755 CM7) | `nodes/domain/build/domain.bin` | powertrain FBs |
+| `zone_a` | `boards/h723` (H723ZG) | `nodes/zone_a/build/zone_a.bin` | front-zone FBs |
+| `zone_b` | `boards/h723` (H723ZG) | `nodes/zone_b/build/zone_b.bin` | rear-body FBs |
 
-Each links the generated comm thread + FBs against the shared `boards/common/comm_glue.c`
-(the generic single-bus ThreadX comm glue: IOC pool, FDCAN1 Rx ISR, Loom-load telemetry)
-and `boards/common/trace_hooks.c`, and passes the `_vinit`-trap lint.
+Each links the generated comm thread against the shared `boards/common/comm_glue.c` (IOC
+pool, the FDCAN1/2/3 Rx ISRs, Loom-load telemetry) and `boards/common/trace_hooks.c`, and
+passes the `_vinit`-trap lint.
 
-`sysnode` is the **3-bus gateway**. It runs as a **host/sim** image today (`vcan0/1/2`) —
-loom2v does not yet emit a multi-bus ThreadX comm owner (the "target multi-bus comm owner"
-roadmap item: one comm thread owning three FDCAN channels + three Rx ISRs + on-target route
-forwarding). Its routing is fully generated and exercised on vcan; the ThreadX gateway image
-is the next rung.
+**The gateway on target.** `sysnode`'s comm thread owns all three FDCAN buses: it opens
+`can0/1/2`, arms each instance's Rx interrupt into one wake semaphore, and forwards the 8
+resolved routes as a **raw payload copy + id remap** (`if id==0x120 on can0 → send 0x130 on
+can1`). This works because every route here is *layout-identical* — the signal sits at the
+same bit position, scale, and DLC on both buses — so no on-target decode/re-encode is needed
+(a route whose layouts differ is rejected at gen time and stays host-only for now). The
+forwarded-frame count is the exported `g_fwd_count`, SWD-observable at the bench.
+
+Full 3-transceiver **silicon** on `sysnode` still needs `boards/h735dk` to mux the FDCAN2/3
+pins (only FDCAN1 is wired today) plus external transceivers — a bench bring-up step. The
+image builds and its routing runs on host `vcan0/1/2`.

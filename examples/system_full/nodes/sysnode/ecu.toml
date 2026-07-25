@@ -1,1 +1,32 @@
-# sysnode (H735-DK) — Central Gateway. Pure routing node.
+# sysnode (H735-DK) — Central Gateway. Pure routing node: the comm thread owns all three
+# FDCAN buses and forwards the 8 resolved routes (raw copy + id remap). It runs ThreadX like
+# every other node; sysgen prepends the buses/routes/nm from system.toml, this file adds the
+# on-target bits. The gateway carries no application FBs, but the ThreadX target emitter wants
+# exactly one local partition, so a single idle thread stands in — the real work is the comm
+# thread's cross-bus forwarding.
+#
+# ORDER MATTERS: the V TOML parser mishandles a dotted array-of-tables ([[partition.thread]])
+# immediately followed by a plain [table], so [target] is authored FIRST and the partition
+# LAST (sysgen appends this verbatim after the generated [[route]] tables — nothing may follow
+# [[partition.thread]]). See the vlang toml nested-block limitation.
+
+[target]
+kind    = "threadx"
+tick_ms = 1
+
+# The ThreadX target needs telemetry to name the comm thread's primary bus (can0 = FDCAN1);
+# CpuLoad/LoadDetail ride it. Ids sit clear of the routed frames (0x120..0x144), the diag
+# pair (0x7A0/0x7A8), and the other nodes' telemetry ids (0x7E2..0x7E5).
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E0
+detail_id = 0x7E1
+period_ms = 500
+
+[[partition]]
+name = "gateway"
+core = 0
+
+  [[partition.thread]]
+  name = "gw_idle"

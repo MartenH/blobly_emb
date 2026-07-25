@@ -78,8 +78,15 @@ unsigned load_1s(void)       { return g_ld_1s; }
 unsigned load_10s(void)      { return g_ld_10s; }
 unsigned load_overruns(void) { return g_ld_ovr; }
 
-/* ---- FDCAN1 Rx-FIFO0 ISR + comm-thread wake semaphore ---------------------------------- */
+/* ---- FDCAN Rx-FIFO0 ISRs + comm-thread wake semaphore ----------------------------------
+ * ONE wake semaphore, shared by every FDCAN instance a node owns: a single-bus leaf arms
+ * FDCAN1 only; a multi-bus gateway (system_full sysnode) arms FDCAN1/2/3 and the comm thread
+ * drains all of them each wake. The semaphore is a plain count, so N instances posting it
+ * just means "at least one FIFO has a frame" — the comm loop then drains every channel.
+ * FDCAN3 exists only on 3-FDCAN parts (H72x/H73x, e.g. the H735-DK); it is #ifdef-guarded so
+ * this one file still links on H74x/H75x (2 FDCAN). */
 static TX_SEMAPHORE g_comm_sem;
+static unsigned char g_comm_sem_made; /* create-once: several comm_rx_irq_enable_idx() calls */
 
 /* A C ISR isn't wrapped by the port's asm __tx_IntHandler; bracket it with the exec-change
  * hooks (trace_hooks.c) so it is traced — the same calls the asm SysTick handler makes.
@@ -87,26 +94,54 @@ static TX_SEMAPHORE g_comm_sem;
 extern void _tx_execution_isr_enter(void);
 extern void _tx_execution_isr_exit(void);
 
-/* FDCAN1 Rx-FIFO0 new-message ISR. Clears the flag, wakes the comm thread. No decode. */
-void FDCAN1_IT0_IRQHandler(void)
+/* Rx-FIFO0 new-message ISR body: clear THIS instance's flag, wake the comm thread. No decode. */
+static inline void comm_rx_isr(FDCAN_GlobalTypeDef *c)
 {
     _tx_execution_isr_enter();
-    FDCAN1->IR = FDCAN_IR_RF0N;     /* acknowledge the new-message interrupt (write-1-clear) */
+    c->IR = FDCAN_IR_RF0N;          /* acknowledge the new-message interrupt (write-1-clear) */
     tx_semaphore_put(&g_comm_sem);  /* wake comm; reschedule deferred to PendSV on exit */
     _tx_execution_isr_exit();
 }
 
-/* Create the wake semaphore and enable the FDCAN1 Rx-FIFO0 new-message interrupt on line 0,
- * at SysTick's priority (no nesting). The generated comm thread calls this once, after it
- * opens the channel. */
-void comm_rx_irq_enable(void)
+void FDCAN1_IT0_IRQHandler(void) { comm_rx_isr(FDCAN1); }
+void FDCAN2_IT0_IRQHandler(void) { comm_rx_isr(FDCAN2); }
+#ifdef FDCAN3
+void FDCAN3_IT0_IRQHandler(void) { comm_rx_isr(FDCAN3); }
+#endif
+
+/* Map a bus index (0..2) to its instance + IRQ number. Returns 0 if the part lacks it. */
+static FDCAN_GlobalTypeDef *comm_inst(int idx, IRQn_Type *irq)
 {
-    tx_semaphore_create(&g_comm_sem, "comm_sem", 0);
-    FDCAN1->IE  |= FDCAN_IE_RF0NE;          /* Rx FIFO0 new message -> interrupt */
-    FDCAN1->ILE |= FDCAN_ILE_EINT0;         /* route the group to interrupt line 0 */
-    NVIC_SetPriority(FDCAN1_IT0_IRQn, 4u);  /* 4<<4 = 0x40 == SysTick: no nesting */
-    NVIC_EnableIRQ(FDCAN1_IT0_IRQn);
+    switch (idx) {
+    case 0: *irq = FDCAN1_IT0_IRQn; return FDCAN1;
+    case 1: *irq = FDCAN2_IT0_IRQn; return FDCAN2;
+#ifdef FDCAN3
+    case 2: *irq = FDCAN3_IT0_IRQn; return FDCAN3;
+#endif
+    default: return 0;
+    }
 }
+
+/* Enable the Rx-FIFO0 new-message interrupt for FDCAN instance `idx` (0..2) on line 0, at
+ * SysTick's priority (no nesting). The wake semaphore is created on the first call. The
+ * generated comm thread calls this once per bus it owns, after opening each channel. */
+void comm_rx_irq_enable_idx(int idx)
+{
+    IRQn_Type irq;
+    FDCAN_GlobalTypeDef *c = comm_inst(idx, &irq);
+    if (!c) return;                         /* instance absent on this part — nothing to arm */
+    if (!g_comm_sem_made) {
+        tx_semaphore_create(&g_comm_sem, "comm_sem", 0);
+        g_comm_sem_made = 1u;
+    }
+    c->IE  |= FDCAN_IE_RF0NE;               /* Rx FIFO0 new message -> interrupt */
+    c->ILE |= FDCAN_ILE_EINT0;              /* route the group to interrupt line 0 */
+    NVIC_SetPriority(irq, 4u);              /* 4<<4 = 0x40 == SysTick: no nesting */
+    NVIC_EnableIRQ(irq);
+}
+
+/* Back-compat single-bus entry: arm FDCAN1 only. Every existing leaf node calls this. */
+void comm_rx_irq_enable(void) { comm_rx_irq_enable_idx(0); }
 
 /* Block up to `ticks` ThreadX ticks for the Rx ISR to post, or wake early when it does.
  * Returns the tx_semaphore_get status (0 = woken by rx); the caller drains the FIFO. */
