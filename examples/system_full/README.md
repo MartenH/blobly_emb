@@ -63,6 +63,29 @@ cd examples/system_full
 # 1. Validate cross-node invariants, single-writer rules, identity, and routing:
 make syscheck
 
-# 2. Perform dissolution and code generation for all 4 nodes:
+# 2. Dissolve system.toml into per-node gen-<node>.toml for all 4 nodes:
 make gen
+
+# 3. Cross-build the ThreadX images for the 3 leaf nodes (needs arm-none-eabi + `make -C ../.. deps`):
+make nodes           # -> nodes/{domain,zone_a,zone_b}/build/<node>.bin
 ```
+
+### Node build status
+
+The three **leaf** nodes cross-build to real ThreadX images from `system.toml`:
+
+| Node | Board | Image |
+|---|---|---|
+| `domain` | `boards/h755zi` (H755 CM7) | `nodes/domain/build/domain.bin` |
+| `zone_a` | `boards/h723` (H723ZG) | `nodes/zone_a/build/zone_a.bin` |
+| `zone_b` | `boards/h723` (H723ZG) | `nodes/zone_b/build/zone_b.bin` |
+
+Each links the generated comm thread + FBs against the shared `boards/common/comm_glue.c`
+(the generic single-bus ThreadX comm glue: IOC pool, FDCAN1 Rx ISR, Loom-load telemetry)
+and `boards/common/trace_hooks.c`, and passes the `_vinit`-trap lint.
+
+`sysnode` is the **3-bus gateway**. It runs as a **host/sim** image today (`vcan0/1/2`) —
+loom2v does not yet emit a multi-bus ThreadX comm owner (the "target multi-bus comm owner"
+roadmap item: one comm thread owning three FDCAN channels + three Rx ISRs + on-target route
+forwarding). Its routing is fully generated and exercised on vcan; the ThreadX gateway image
+is the next rung.

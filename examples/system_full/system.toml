@@ -52,11 +52,11 @@ frame    = "HeadlightCmdFrame"
 cycle_ms = 100
 
 [[signal]]
-name     = "HVACCmd"
+name     = "HvacCmd"
 fields   = { temp = "u32" }
 producer = "domain"
 bus      = "compute"
-frame    = "HVACCmdFrame"
+frame    = "HvacCmdFrame"
 cycle_ms = 200
 
 [[signal]]
@@ -110,7 +110,7 @@ to      = "body"
 
 [[route]]
 gateway = "sysnode"
-signal  = "HVACCmd"
+signal  = "HvacCmd"
 from    = "compute"
 to      = "body"
 

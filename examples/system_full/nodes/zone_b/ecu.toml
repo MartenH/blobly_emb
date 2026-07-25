@@ -14,7 +14,7 @@ thread = "body_thread"
   [[fb.handler]]
   name      = "on_100ms"
   period_ms = 100
-  reads     = ["BrakeState", "EngineRpm", "HVACCmd"]
+  reads     = ["BrakeState", "EngineRpm", "HvacCmd"]
   writes    = ["TailgateStatus", "AmbientTemp"] # trailing comment terminates nested block (vlang/v#27684)
 
 [target]

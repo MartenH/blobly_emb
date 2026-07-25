@@ -7,7 +7,7 @@ V       ?= v
 REPO     = ../../../..
 SYSDIR   = $(REPO)/examples/system_full
 NAME    := zone_a
-BOARD   := h735dk
+BOARD   := h723
 TX       = $(REPO)/third_party/threadx
 PORT     = $(TX)/ports/cortex_m7/gnu
 include $(REPO)/boards/$(BOARD)/board.mk
@@ -25,14 +25,15 @@ TX_ASM   = $(wildcard $(PORT)/src/*.S)
 TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
-BSP      = $(BOARD_BSP_THREADX)
+BSP      = $(BOARD_BSP_THREADX) $(REPO)/boards/common/comm_glue.c $(REPO)/boards/common/trace_hooks.c
 
-all: gen
+all: $(BUILD)/$(NAME).bin
 
 gen: gen/.stamp
-gen/.stamp: $(SYSDIR)/gen-$(NAME).toml $(wildcard app/*.v) $(wildcard $(REPO)/tools/loom2v/*.v)
+gen/.stamp: $(SYSDIR)/gen-$(NAME).toml $(wildcard app/*.v)
 	@mkdir -p gen ports sig
-	cd $(REPO) && $(V) run tools/loom2v examples/system_full/gen-$(NAME).toml examples/system_full/edge.dbc \
+	cd $(REPO) && tools/dbc2cfg/dbc2cfg examples/system_full/edge.dbc examples/system_full/nodes/zone_a/gen/dbc_gen.v
+	cd $(REPO) && tools/loom2v/loom2v examples/system_full/gen-$(NAME).toml examples/system_full/edge.dbc \
 	  examples/system_full/nodes/$(NAME)/sig/signals_gen.v examples/system_full/nodes/$(NAME)/ports/ports_gen.v \
 	  examples/system_full/nodes/$(NAME)/gen/loom_gen.v examples/system_full/nodes/$(NAME)/gen/trace-manifest.csv
 	@touch gen/.stamp

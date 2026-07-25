@@ -6,14 +6,14 @@ BS_:
 
 BU_: sysnode zone_b
 
-BO_ 320 BrakeStateFrame: 8 sysnode
+BO_ 320 BrakeStateFrame_B: 8 sysnode
  SG_ BrakeState : 0|32@1+ (1,0) [0|1] "" zone_b
 
-BO_ 321 EngineRpmFrame: 8 sysnode
+BO_ 321 EngineRpmFrame_B: 8 sysnode
  SG_ EngineRpm : 0|32@1+ (1,0) [0|4294967295] "rpm" zone_b
 
-BO_ 322 HVACCmdFrame: 8 sysnode
- SG_ HVACCmd : 0|32@1+ (1,0) [0|100] "%" zone_b
+BO_ 322 HvacCmdFrame_B: 8 sysnode
+ SG_ HvacCmd : 0|32@1+ (1,0) [0|100] "%" zone_b
 
 BO_ 323 TailgateFrame: 8 zone_b
  SG_ TailgateStatus : 0|32@1+ (1,0) [0|1] "" sysnode

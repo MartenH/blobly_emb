@@ -18,16 +18,16 @@ BO_ 290 BrakeStateFrame: 8 domain
 BO_ 291 HeadlightCmdFrame: 8 domain
  SG_ HeadlightCmd : 0|32@1+ (1,0) [0|3] "" sysnode
 
-BO_ 292 HVACCmdFrame: 8 domain
- SG_ HVACCmd : 0|32@1+ (1,0) [0|100] "%" sysnode
+BO_ 292 HvacCmdFrame: 8 domain
+ SG_ HvacCmd : 0|32@1+ (1,0) [0|100] "%" sysnode
 
-BO_ 293 SteeringFrame: 8 sysnode
+BO_ 293 SteeringFrame_C: 8 sysnode
  SG_ SteeringAngle : 0|32@1+ (1,0) [0|360] "deg" domain
 
-BO_ 294 TailgateFrame: 8 sysnode
+BO_ 294 TailgateFrame_C: 8 sysnode
  SG_ TailgateStatus : 0|32@1+ (1,0) [0|1] "" domain
 
-BO_ 295 TempFrame: 8 sysnode
+BO_ 295 TempFrame_C: 8 sysnode
  SG_ AmbientTemp : 0|32@1+ (1,0) [0|255] "C" domain
 
 BA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;
