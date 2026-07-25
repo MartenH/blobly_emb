@@ -103,7 +103,11 @@ uint64_t board_now_us(void) {
 void board_can_clock_pins_init(void) {
 	RCC->CR |= RCC_CR_HSEBYP;
 	RCC->CR |= RCC_CR_HSEON;
-	while ((RCC->CR & RCC_CR_HSERDY) == 0u) {
+	/* BOUNDED, like board_clock_init's HSE wait: if HSE never readies, return rather than hang
+	 * the whole ECU here (board_clock_init already fell back to HSI, and the comm thread's
+	 * can Channel.open() will park just that thread on the mistimed bus). */
+	for (uint32_t t = 0; (RCC->CR & RCC_CR_HSERDY) == 0u; t++) {
+		if (t >= 4000000u) return;
 	}
 	RCC->D2CCIP1R &= ~RCC_D2CCIP1R_FDCANSEL; /* 00 -> HSE (8 MHz) */
 

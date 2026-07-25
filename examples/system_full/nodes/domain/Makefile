@@ -30,10 +30,13 @@ BSP      = $(BOARD_BSP_THREADX) $(REPO)/boards/common/comm_glue.c $(REPO)/boards
 all: $(BUILD)/$(NAME).bin
 
 gen: gen/.stamp
-gen/.stamp: $(SYSDIR)/gen-$(NAME).toml $(wildcard app/*.v)
+# Generators via `$(V) run` (a clean checkout has the V sources, not prebuilt binaries); the
+# node's DBC is a prerequisite so a contract edit re-generates.
+gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/compute.dbc $(wildcard app/*.v)
 	@mkdir -p gen ports sig
-	cd $(REPO) && tools/dbc2cfg/dbc2cfg examples/system_full/compute.dbc examples/system_full/nodes/domain/gen/dbc_gen.v
-	cd $(REPO) && tools/loom2v/loom2v examples/system_full/gen-$(NAME).toml examples/system_full/compute.dbc \
+	$(MAKE) -C $(REPO) gen-system SYSTEM=examples/system_full/system.toml
+	cd $(REPO) && $(V) run tools/dbc2cfg/gen.v examples/system_full/compute.dbc examples/system_full/nodes/domain/gen/dbc_gen.v
+	cd $(REPO) && $(V) run tools/loom2v examples/system_full/gen-$(NAME).toml examples/system_full/compute.dbc \
 	  examples/system_full/nodes/$(NAME)/sig/signals_gen.v examples/system_full/nodes/$(NAME)/ports/ports_gen.v \
 	  examples/system_full/nodes/$(NAME)/gen/loom_gen.v examples/system_full/nodes/$(NAME)/gen/trace-manifest.csv
 	@touch gen/.stamp
@@ -58,6 +61,7 @@ $(BUILD)/app.o: $(BUILD)/app.c Makefile
 $(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(BOARD_LD_THREADX)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) -o $@
 	$(SIZE) $@
+	@$(REPO)/scripts/lint_vinit.sh $@   # the _vinit-trap gate (host CI can't cross-compile; run it here)
 
 $(BUILD)/$(NAME).bin: $(BUILD)/$(NAME).elf
 	$(OBJCOPY) -O binary $< $@

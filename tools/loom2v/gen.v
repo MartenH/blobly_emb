@@ -1320,6 +1320,44 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		}
 		frof := snake(r.from_frame)
 		tof := snake(r.to_frame)
+		if m.target.threadx {
+			// The comm thread opens each route bus by its single FDCAN index, and the shared
+			// vector table wires FDCAN1 (idx 0) + FDCAN2 (idx 1) only. Reject a route bus whose
+			// interface isn't exactly can0/can1: a name like "edge" or "can9" would silently map
+			// to the wrong (fdcan_index_of defaults to 0) or a nonexistent instance, and idx 2
+			// (FDCAN3) has no wired ISR in boards/common/vectors.S yet.
+			for b in [r.from_bus, r.to_bus] {
+				mut digits := ''
+				for c in b {
+					if c >= `0` && c <= `9` {
+						digits += c.ascii_str()
+					}
+				}
+				if digits.len != 1 || digits[0] < `0` || digits[0] > `1` {
+					panic('route: bus "${b}" on a [target] kind="threadx" gateway must name FDCAN ' +
+						'index 0 or 1 (can0/can1) — the comm thread opens buses by a one-digit index and ' +
+						'only FDCAN1/FDCAN2 have wired ISRs (FDCAN3/idx 2 needs its vector in ' +
+						'boards/common/vectors.S)')
+				}
+			}
+			// A raw target forward copies bytes verbatim: unlike the host signal-route path it
+			// cannot VERIFY a protected source or RE-STAMP a protected destination, so a bad frame
+			// forwards unverified and freshness/counter/MAC replay. Reject a protected endpoint.
+			if m.frames.e2e_here(frof, r.from_bus) || m.frames.secoc_here(frof, r.from_bus)
+				|| m.frames.e2e_here(tof, r.to_bus) || m.frames.secoc_here(tof, r.to_bus) {
+				panic('route: signal "${r.signal}" on a [target] kind="threadx" gateway touches an ' +
+					'E2E/SecOC-protected frame — the raw target forwarder copies bytes and cannot ' +
+					'verify/re-protect; route it on the host target')
+			}
+			// The raw forwarder re-emits on RECEIPT (source cadence). A differing destination
+			// cadence would mis-rate (a 10 ms source into a 100 ms dest sends 10x too often).
+			// raw_ident only checks layout, so enforce equal cadence here.
+			if r.from_cyc != r.to_cyc {
+				panic('route: signal "${r.signal}" on a [target] kind="threadx" gateway has source ' +
+					'cadence ${r.from_cyc} ms != destination ${r.to_cyc} ms — the raw forwarder re-emits ' +
+					'at the source rate; use matching cycle times or route on the host target')
+			}
+		}
 		// both endpoints must name a DECLARED [bus.*]; emit_bridges iterates declared
 		// buses only, so a misspelled endpoint silently drops the route.
 		if r.from_bus !in m.buses || r.to_bus !in m.buses {

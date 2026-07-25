@@ -5,9 +5,12 @@
  * clock_gettime; on target there is none), so we run the Cortex-M7 DWT cycle counter
  * and divide by the achieved CPU MHz.
  *
- * FDCAN1: PH13 = FDCAN1_TX, PH14 = FDCAN1_RX (AF9); FDCAN2: PB6 = FDCAN2_TX,
- * PB5 = FDCAN2_RX (AF9) — the DK's two CAN-FD transceivers (PB5/6 clear of the RMII
- * Ethernet pins). HSE is X1, a 25 MHz *oscillator* (NZ2520SH), so it runs in BYPASS.
+ * FDCAN1: PH13 = FDCAN1_TX, PH14 = FDCAN1_RX (AF9) — the onboard CAN-FD transceiver.
+ * FDCAN2: PB6 = FDCAN2_TX, PB5 = FDCAN2_RX (AF9), muxed for the system_full gateway's second
+ * (edge) bus; PB5/6 are clear of the RMII Ethernet pins. This pin pair drives raw CANH/CANL
+ * only through a transceiver — the FDCAN2 edge bus was bench-verified via the H735-DK, but
+ * confirm your wiring provides a transceiver on PB5/PB6 (onboard or external) for that bus.
+ * HSE is X1, a 25 MHz *oscillator* (NZ2520SH), so it runs in BYPASS.
  */
 #include <stm32h735xx.h>
 
@@ -119,7 +122,11 @@ void board_can_clock_pins_init(void) {
 	 *    while HSE is off — it is at reset (or already set by board_clock_init). */
 	RCC->CR |= RCC_CR_HSEBYP;
 	RCC->CR |= RCC_CR_HSEON;
-	while ((RCC->CR & RCC_CR_HSERDY) == 0u) {
+	/* BOUNDED, like board_clock_init's HSE wait: never hang the whole ECU here if HSE stalls
+	 * (board_clock_init already fell back to HSI; the comm thread's Channel.open() parks just
+	 * that thread on the mistimed bus). */
+	for (uint32_t t = 0; (RCC->CR & RCC_CR_HSERDY) == 0u; t++) {
+		if (t >= 4000000u) return;
 	}
 	RCC->D2CCIP1R &= ~RCC_D2CCIP1R_FDCANSEL; /* 00 -> HSE (25 MHz) */
 

@@ -40,11 +40,14 @@ BSP      = $(BOARD_BSP_THREADX) $(REPO)/boards/common/comm_glue.c $(REPO)/boards
 all: $(BUILD)/$(NAME).bin
 
 gen: gen/.stamp
-gen/.stamp: $(SYSDIR)/gen-$(NAME).toml
+# Generators run via `$(V) run tools/<t>/gen.v` — a clean checkout has the V sources, not the
+# prebuilt binaries. Both DBCs are prerequisites: an edit to either must re-merge and re-gen.
+gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/compute.dbc $(SYSDIR)/edge.dbc
 	@mkdir -p gen ports sig
-	cd $(REPO) && tools/dbcmerge/dbcmerge $(GW)/gen/merged.dbc examples/system_full/compute.dbc examples/system_full/edge.dbc
-	cd $(REPO) && tools/dbc2cfg/dbc2cfg $(GW)/gen/merged.dbc $(GW)/gen/dbc_gen.v
-	cd $(REPO) && tools/loom2v/loom2v examples/system_full/gen-$(NAME).toml $(GW)/gen/merged.dbc \
+	$(MAKE) -C $(REPO) gen-system SYSTEM=examples/system_full/system.toml
+	cd $(REPO) && $(V) run tools/dbcmerge/gen.v $(GW)/gen/merged.dbc examples/system_full/compute.dbc examples/system_full/edge.dbc
+	cd $(REPO) && $(V) run tools/dbc2cfg/gen.v $(GW)/gen/merged.dbc $(GW)/gen/dbc_gen.v
+	cd $(REPO) && $(V) run tools/loom2v examples/system_full/gen-$(NAME).toml $(GW)/gen/merged.dbc \
 	  $(GW)/sig/signals_gen.v $(GW)/ports/ports_gen.v $(GW)/gen/loom_gen.v $(GW)/gen/trace-manifest.csv
 	@touch gen/.stamp
 
@@ -68,6 +71,7 @@ $(BUILD)/app.o: $(BUILD)/app.c Makefile
 $(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(BOARD_LD_THREADX)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) -o $@
 	$(SIZE) $@
+	@$(REPO)/scripts/lint_vinit.sh $@   # the _vinit-trap gate (host CI can't cross-compile; run it here)
 
 $(BUILD)/$(NAME).bin: $(BUILD)/$(NAME).elf
 	$(OBJCOPY) -O binary $< $@
