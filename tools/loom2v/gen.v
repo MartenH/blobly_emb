@@ -1333,11 +1333,11 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 						digits += c.ascii_str()
 					}
 				}
-				if digits.len != 1 || digits[0] < `0` || digits[0] > `1` {
-					panic('route: bus "${b}" on a [target] kind="threadx" gateway must name FDCAN ' +
-						'index 0 or 1 (can0/can1) — the comm thread opens buses by a one-digit index and ' +
-						'only FDCAN1/FDCAN2 have wired ISRs (FDCAN3/idx 2 needs its vector in ' +
-						'boards/common/vectors.S)')
+				if digits.len != 1 || digits[0] < `0` || digits[0] > `1` || b != 'can${digits}' {
+					panic('route: bus "${b}" on a [target] kind="threadx" gateway must be named exactly ' +
+						'"can0" or "can1" — the comm thread opens buses by that one-digit FDCAN index ' +
+						'(a name like "aux0" would map to the wrong instance) and only FDCAN1/FDCAN2 have ' +
+						'wired ISRs (FDCAN3/idx 2 needs its vector in boards/common/vectors.S)')
 				}
 			}
 			// A raw target forward copies bytes verbatim: unlike the host signal-route path it

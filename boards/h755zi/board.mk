@@ -40,5 +40,5 @@ BOARD_DEFS_CM4 = -DSTM32H755xx -DCORE_CM4 -DTRACE_CPU_MHZ=200 -DSYSTEM_CLOCK=200
 BOARD_BSP_CM4_BARE    = $(BOARD_COMMON)/startup.c
 BOARD_LD_CM4_BARE     = $(BOARD_DIR)/cm4_bare.ld
 BOARD_BSP_CM4_THREADX = $(BOARD_COMMON)/crt0.S $(BOARD_COMMON)/vectors.S \
-                        $(BOARD_COMMON)/tx_initialize_low_level.S
+                        $(BOARD_COMMON)/weak_irq.c $(BOARD_COMMON)/tx_initialize_low_level.S
 BOARD_LD_CM4_THREADX  = $(BOARD_DIR)/cm4_threadx.ld

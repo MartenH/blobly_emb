@@ -64,17 +64,18 @@ _vectors:
    * spins the core in __tx_BadHandler (the FDCAN1 bench day, and the FDCAN2 one: 2026-07-26). */
   .word FDCAN2_IT0_IRQHandler // IRQ20
   .word __tx_BadHandler       // IRQ21
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
+  .word __tx_BadHandler       // IRQ22
+  .word __tx_BadHandler       // IRQ23
+  .word __tx_BadHandler       // IRQ24
+  .word __tx_BadHandler       // IRQ25
+  .word __tx_BadHandler       // IRQ26
+  .word __tx_BadHandler       // IRQ27
+  .word __tx_BadHandler       // IRQ28
+  .word __tx_BadHandler       // IRQ29
+  .word __tx_BadHandler       // IRQ30
+  .word __tx_BadHandler       // IRQ31
+  .word __tx_BadHandler       // IRQ32
+  .word __tx_BadHandler       // IRQ33
   .word __tx_BadHandler       // IRQ34
   .word __tx_BadHandler       // IRQ35
   .word __tx_BadHandler       // IRQ36
