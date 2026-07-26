@@ -109,6 +109,100 @@ _vectors:
    * object, so it never captures this .word's relocation the way a same-object
    * .weak+.set would (the --gc-sections trap the FDCAN note warns about). */
   .word ETH_IRQHandler        // IRQ61
+  .word __tx_BadHandler       // IRQ62
+  .word __tx_BadHandler       // IRQ63
+  .word __tx_BadHandler       // IRQ64
+  .word __tx_BadHandler       // IRQ65
+  .word __tx_BadHandler       // IRQ66
+  .word __tx_BadHandler       // IRQ67
+  .word __tx_BadHandler       // IRQ68
+  .word __tx_BadHandler       // IRQ69
+  .word __tx_BadHandler       // IRQ70
+  .word __tx_BadHandler       // IRQ71
+  .word __tx_BadHandler       // IRQ72
+  .word __tx_BadHandler       // IRQ73
+  .word __tx_BadHandler       // IRQ74
+  .word __tx_BadHandler       // IRQ75
+  .word __tx_BadHandler       // IRQ76
+  .word __tx_BadHandler       // IRQ77
+  .word __tx_BadHandler       // IRQ78
+  .word __tx_BadHandler       // IRQ79
+  .word __tx_BadHandler       // IRQ80
+  .word __tx_BadHandler       // IRQ81
+  .word __tx_BadHandler       // IRQ82
+  .word __tx_BadHandler       // IRQ83
+  .word __tx_BadHandler       // IRQ84
+  .word __tx_BadHandler       // IRQ85
+  .word __tx_BadHandler       // IRQ86
+  .word __tx_BadHandler       // IRQ87
+  .word __tx_BadHandler       // IRQ88
+  .word __tx_BadHandler       // IRQ89
+  .word __tx_BadHandler       // IRQ90
+  .word __tx_BadHandler       // IRQ91
+  .word __tx_BadHandler       // IRQ92
+  .word __tx_BadHandler       // IRQ93
+  .word __tx_BadHandler       // IRQ94
+  .word __tx_BadHandler       // IRQ95
+  .word __tx_BadHandler       // IRQ96
+  .word __tx_BadHandler       // IRQ97
+  .word __tx_BadHandler       // IRQ98
+  .word __tx_BadHandler       // IRQ99
+  .word __tx_BadHandler       // IRQ100
+  .word __tx_BadHandler       // IRQ101
+  .word __tx_BadHandler       // IRQ102
+  .word __tx_BadHandler       // IRQ103
+  .word __tx_BadHandler       // IRQ104
+  .word __tx_BadHandler       // IRQ105
+  .word __tx_BadHandler       // IRQ106
+  .word __tx_BadHandler       // IRQ107
+  .word __tx_BadHandler       // IRQ108
+  .word __tx_BadHandler       // IRQ109
+  .word __tx_BadHandler       // IRQ110
+  .word __tx_BadHandler       // IRQ111
+  .word __tx_BadHandler       // IRQ112
+  .word __tx_BadHandler       // IRQ113
+  .word __tx_BadHandler       // IRQ114
+  .word __tx_BadHandler       // IRQ115
+  .word __tx_BadHandler       // IRQ116
+  .word __tx_BadHandler       // IRQ117
+  .word __tx_BadHandler       // IRQ118
+  .word __tx_BadHandler       // IRQ119
+  .word __tx_BadHandler       // IRQ120
+  .word __tx_BadHandler       // IRQ121
+  .word __tx_BadHandler       // IRQ122
+  .word __tx_BadHandler       // IRQ123
+  .word __tx_BadHandler       // IRQ124
+  /* IRQ125 = HSEM1 global interrupt (RM0468 NVIC id 125) — the CM7 cross-core doorbell.
+   * Same weak-in-a-separate-object rule as ETH/FDCAN above: the image with a cross-core
+   * [[bulk]] consumer provides the strong HSEM1_IT_IRQHandler; others fall back to the
+   * weak default in weak_irq.c. */
+  .word HSEM1_IT_IRQHandler   // IRQ125
+  .word __tx_BadHandler       // IRQ126
+  .word __tx_BadHandler       // IRQ127
+  .word __tx_BadHandler       // IRQ128
+  .word __tx_BadHandler       // IRQ129
+  .word __tx_BadHandler       // IRQ130
+  .word __tx_BadHandler       // IRQ131
+  .word __tx_BadHandler       // IRQ132
+  .word __tx_BadHandler       // IRQ133
+  .word __tx_BadHandler       // IRQ134
+  .word __tx_BadHandler       // IRQ135
+  .word __tx_BadHandler       // IRQ136
+  .word __tx_BadHandler       // IRQ137
+  .word __tx_BadHandler       // IRQ138
+  .word __tx_BadHandler       // IRQ139
+  .word __tx_BadHandler       // IRQ140
+  .word __tx_BadHandler       // IRQ141
+  .word __tx_BadHandler       // IRQ142
+  .word __tx_BadHandler       // IRQ143
+  .word __tx_BadHandler       // IRQ144
+  .word __tx_BadHandler       // IRQ145
+  .word __tx_BadHandler       // IRQ146
+  .word __tx_BadHandler       // IRQ147
+  .word __tx_BadHandler       // IRQ148
+  .word __tx_BadHandler       // IRQ149
+  // IRQ149 (WAKEUP_PIN) is the H755's highest — the table now spans the FULL range, so
+  // every possible interrupt lands on __tx_BadHandler, never off the end of the table.
 
   .section .init, "ax"
   .thumb_func

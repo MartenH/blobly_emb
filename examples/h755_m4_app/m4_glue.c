@@ -3,6 +3,7 @@
  * IOC pool, and the boot handshake. */
 #include <stdint.h>
 #include <stddef.h>
+#include <stm32h7xx.h> /* HSEM registers for the cross-core bulk doorbell (CORE_CM4 build) */
 #include "duo.h"
 #include "xioc.h"
 #include "bulk.h" /* the portable SPSC pool (boards/common) — cross-core bulk lives in the window */
@@ -206,4 +207,19 @@ void duo_bulk_produce(void) {
 		b[i] = (uint8_t)(seq * DUO_STRESS_K + i);
 	}
 	bulk_publish(p, (uint32_t)idx, 256u);
+
+	/* Order the publication before the doorbell: bulk_publish()'s DMB sits BEFORE its ready-head
+	 * store, and the HSEM release below is a Device write with no implicit ordering against that
+	 * Normal-memory store. Without this barrier the release could raise IRQ125 before the new head
+	 * is visible to the CM7 — the woken consumer would see an empty ring and sleep again, defeating
+	 * the doorbell at high rates. The DMB makes the head (and payload) globally visible first. */
+	__asm__ volatile("dmb" ::: "memory");
+
+	/* Ring the cross-core doorbell: a 1-step fast-take then release of HSEM semaphore 0 raises
+	 * IRQ125 on the CM7 (which enabled C1IER for this semaphore), waking its comm thread to drain
+	 * us — no CM7 polling. Uncontended (only this core touches sem 0's lock, and we release it
+	 * immediately), so the take always succeeds; the release value carries our COREID from the
+	 * lock read-back, so we don't hardcode which core we are. */
+	uint32_t rl = HSEM->RLR[DUO_BULK_DOORBELL_SEM];          /* fast-take: lock for this core */
+	HSEM->R[DUO_BULK_DOORBELL_SEM] = rl & HSEM_R_COREID_Msk; /* release -> HSEM1 interrupt on the CM7 */
 }
