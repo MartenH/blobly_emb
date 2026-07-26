@@ -49,6 +49,22 @@ id        = 0x7E2
 detail_id = 0x7E3
 period_ms = 500
 
+# Two-core trace (docs/xcore.md, docs/trace-multicore.md): the exec-change-hook recorder
+# (trace_hooks.c) captures this node's REAL preemptive thread/ISR timeline. Because the domain owns
+# a CM4 satellite, the generated bus owner ALSO imports the CM4's ring over the xcore trace handoff
+# and dumps both cores on one timeline (each stamps its own clock; the owner derives the offset +
+# error bound). Ids are distinct from [telemetry]'s 0x7E2/0x7E3 above.
+[trace]
+enabled        = true
+bus            = "can0"
+level          = "all"
+buffer_records = 256
+mode           = "ring"
+cmd            = 0x7E8
+rsp            = 0x7E9
+record         = 0x7EA
+dump_fc        = 0x7EB
+
 # The CAN shell (comm/shell): bulkperf bursts the CM4 producer and reports the cross-core
 # [[bulk]] pool's raw throughput over ISO-TP. ps/bmc are built in.
 [shell]

@@ -13,7 +13,7 @@ PORT     = $(TX)/ports/cortex_m7/gnu
 include $(REPO)/boards/$(BOARD)/board.mk
 
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
-          $(BOARD_DEFS) -DBOARD_ENTRY=main__main $(CAN_DEFS) \
+          $(BOARD_DEFS) -DBOARD_ENTRY=main__main -DTX_ENABLE_EXECUTION_CHANGE_NOTIFY $(CAN_DEFS) \
           -I. -Igen $(BOARD_INCS) -I$(REPO)/driver/can \
           -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
