@@ -14,8 +14,8 @@ thread = "fast"
   [[fb.handler]]
   name      = "on_50ms"
   period_ms = 50
-  reads     = ["SteeringAngle", "AmbientTemp", "TailgateStatus"]
-  writes    = ["VehicleSpeed", "EngineRpm", "BrakeState", "HeadlightCmd", "HVACCmd"] # trailing comment terminates nested block (vlang/v#27684)
+  reads     = ["SteeringAngle"]
+  writes    = ["VehicleSpeed", "HeadlightCmd"] # trailing comment terminates nested block (vlang/v#27684)
 
 [target]
 kind    = "threadx"

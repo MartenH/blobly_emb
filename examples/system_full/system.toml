@@ -1,4 +1,9 @@
-# system_full — 4-ECU multi-node benchmark & integration test system.
+# system_full — 3-ECU multi-node benchmark & integration test system.
+#
+# Two buses on the H735-DK's own FDCAN transceivers (FDCAN1 = compute, FDCAN2 = edge), so the
+# whole system is observable on the bench with blobly_net tapping both. domain (H755) sits on
+# compute, zone_a (H723) on edge, and sysnode (H735) is the gateway routing between them.
+# (A third bus + zone_b is a later step once the 2-bus setup is proven on silicon.)
 
 [bus.compute]
 interface = "can0"
@@ -12,12 +17,6 @@ fd        = false
 bitrate   = 500000
 dbc       = "edge.dbc"
 
-[bus.body]
-interface = "can2"
-fd        = false
-bitrate   = 500000
-dbc       = "body.dbc"
-
 # --- Cross-node signals ---
 [[signal]]
 name     = "VehicleSpeed"
@@ -28,36 +27,12 @@ frame    = "VehSpeedFrame"
 cycle_ms = 100
 
 [[signal]]
-name     = "EngineRpm"
-fields   = { rpm = "u32" }
-producer = "domain"
-bus      = "compute"
-frame    = "EngineRpmFrame"
-cycle_ms = 100
-
-[[signal]]
-name     = "BrakeState"
-fields   = { pressed = "u32" }
-producer = "domain"
-bus      = "compute"
-frame    = "BrakeStateFrame"
-cycle_ms = 50
-
-[[signal]]
 name     = "HeadlightCmd"
 fields   = { mode = "u32" }
 producer = "domain"
 bus      = "compute"
 frame    = "HeadlightCmdFrame"
 cycle_ms = 100
-
-[[signal]]
-name     = "HVACCmd"
-fields   = { temp = "u32" }
-producer = "domain"
-bus      = "compute"
-frame    = "HVACCmdFrame"
-cycle_ms = 200
 
 [[signal]]
 name     = "SteeringAngle"
@@ -67,23 +42,7 @@ bus      = "edge"
 frame    = "SteeringFrame"
 cycle_ms = 50
 
-[[signal]]
-name     = "TailgateStatus"
-fields   = { open = "u32" }
-producer = "zone_b"
-bus      = "body"
-frame    = "TailgateFrame"
-cycle_ms = 200
-
-[[signal]]
-name     = "AmbientTemp"
-fields   = { celsius = "u32" }
-producer = "zone_b"
-bus      = "body"
-frame    = "TempFrame"
-cycle_ms = 500
-
-# --- Gateway routes on sysnode (H735-DK) ---
+# --- Gateway routes on sysnode (H735-DK): compute <-> edge ---
 [[route]]
 gateway = "sysnode"
 signal  = "VehicleSpeed"
@@ -98,45 +57,15 @@ to      = "edge"
 
 [[route]]
 gateway = "sysnode"
-signal  = "BrakeState"
-from    = "compute"
-to      = "body"
-
-[[route]]
-gateway = "sysnode"
-signal  = "EngineRpm"
-from    = "compute"
-to      = "body"
-
-[[route]]
-gateway = "sysnode"
-signal  = "HVACCmd"
-from    = "compute"
-to      = "body"
-
-[[route]]
-gateway = "sysnode"
 signal  = "SteeringAngle"
 from    = "edge"
-to      = "compute"
-
-[[route]]
-gateway = "sysnode"
-signal  = "TailgateStatus"
-from    = "body"
-to      = "compute"
-
-[[route]]
-gateway = "sysnode"
-signal  = "AmbientTemp"
-from    = "body"
 to      = "compute"
 
 # --- Node declarations ---
 [[node]]
 name  = "sysnode"
 ecu   = "nodes/sysnode/ecu.toml"
-buses = ["compute", "edge", "body"]
+buses = ["compute", "edge"]
 nm    = 0x11
 diag  = { req = 0x7A0, rsp = 0x7A8 }
 trace = 1
@@ -156,11 +85,3 @@ buses = ["edge"]
 nm    = 0x13
 diag  = { req = 0x7C0, rsp = 0x7C8 }
 trace = 3
-
-[[node]]
-name  = "zone_b"
-ecu   = "nodes/zone_b/ecu.toml"
-buses = ["body"]
-nm    = 0x14
-diag  = { req = 0x7D0, rsp = 0x7D8 }
-trace = 4

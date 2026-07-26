@@ -5,8 +5,12 @@
  * clock_gettime; on target there is none), so we run the Cortex-M7 DWT cycle counter
  * and divide by the achieved CPU MHz.
  *
- * FDCAN1: PH13 = FDCAN1_TX, PH14 = FDCAN1_RX (AF9), to the onboard 3.3 V CAN-FD
- * transceiver. HSE is X1, a 25 MHz *oscillator* (NZ2520SH), so it runs in BYPASS.
+ * FDCAN1: PH13 = FDCAN1_TX, PH14 = FDCAN1_RX (AF9) — the onboard CAN-FD transceiver.
+ * FDCAN2: PB6 = FDCAN2_TX, PB5 = FDCAN2_RX (AF9), muxed for the system_full gateway's second
+ * (edge) bus; PB5/6 are clear of the RMII Ethernet pins. This pin pair drives raw CANH/CANL
+ * only through a transceiver — the FDCAN2 edge bus was bench-verified via the H735-DK, but
+ * confirm your wiring provides a transceiver on PB5/PB6 (onboard or external) for that bus.
+ * HSE is X1, a 25 MHz *oscillator* (NZ2520SH), so it runs in BYPASS.
  */
 #include <stm32h735xx.h>
 
@@ -118,14 +122,20 @@ void board_can_clock_pins_init(void) {
 	 *    while HSE is off — it is at reset (or already set by board_clock_init). */
 	RCC->CR |= RCC_CR_HSEBYP;
 	RCC->CR |= RCC_CR_HSEON;
-	while ((RCC->CR & RCC_CR_HSERDY) == 0u) {
+	/* BOUNDED, like board_clock_init's HSE wait: never hang the whole ECU here if HSE stalls
+	 * (board_clock_init already fell back to HSI; the comm thread's Channel.open() parks just
+	 * that thread on the mistimed bus). */
+	for (uint32_t t = 0; (RCC->CR & RCC_CR_HSERDY) == 0u; t++) {
+		if (t >= 4000000u) return;
 	}
 	RCC->D2CCIP1R &= ~RCC_D2CCIP1R_FDCANSEL; /* 00 -> HSE (25 MHz) */
 
 	/* 2. FDCAN peripheral (APB1H) clock, for register access. */
 	RCC->APB1HENR |= RCC_APB1HENR_FDCANEN;
 
-	/* 3. GPIOH clock, then mux PH13/PH14 to AF9 (FDCAN1_TX/RX). */
+	/* One FDCANEN bit clocks all instances; each just needs its GPIO AF muxed. */
+
+	/* 3. FDCAN1 on GPIOH: PH13 = TX, PH14 = RX, AF9. */
 	RCC->AHB4ENR |= RCC_AHB4ENR_GPIOHEN;
 	(void)RCC->AHB4ENR; /* read-back: let the clock settle before touching GPIOH */
 
@@ -139,6 +149,23 @@ void board_can_clock_pins_init(void) {
 	/* AFR[1] holds the AF nibble for pins 8..15. AF9 = FDCAN1. */
 	GPIOH->AFR[1] &= ~((0xFu << ((13u - 8u) * 4u)) | (0xFu << ((14u - 8u) * 4u)));
 	GPIOH->AFR[1] |= ((9u << ((13u - 8u) * 4u)) | (9u << ((14u - 8u) * 4u)));
+
+	/* 4. FDCAN2 on GPIOB: PB6 = TX, PB5 = RX, AF9 (the DK's second CAN-FD transceiver;
+	 *    PB5/PB6 are clear of the RMII Ethernet pins, unlike the PB12 map other boards use).
+	 *    system_full's gateway routes the `edge` bus here. */
+	RCC->AHB4ENR |= RCC_AHB4ENR_GPIOBEN;
+	(void)RCC->AHB4ENR;
+
+	/* MODER: PB5, PB6 -> alternate function (0b10). */
+	GPIOB->MODER &= ~((3u << (5u * 2u)) | (3u << (6u * 2u)));
+	GPIOB->MODER |= ((2u << (5u * 2u)) | (2u << (6u * 2u)));
+
+	/* OSPEEDR: very high speed. */
+	GPIOB->OSPEEDR |= (3u << (5u * 2u)) | (3u << (6u * 2u));
+
+	/* AFR[0] holds the AF nibble for pins 0..7. AF9 = FDCAN2. */
+	GPIOB->AFR[0] &= ~((0xFu << (5u * 4u)) | (0xFu << (6u * 4u)));
+	GPIOB->AFR[0] |= ((9u << (5u * 4u)) | (9u << (6u * 4u)));
 }
 
 /* Platform pin-ownership table (board.h, docs/io.md "pins are exclusive"): pads this
@@ -149,6 +176,7 @@ int board_io_pin_reserved(int port, int pin) {
 	if (port == 1 && pin == 3) return 1;                 /* PB3: SWO */
 	if (port == 0 && (pin == 13 || pin == 14)) return 1;            /* PA13/PA14: SWD */
 	if (port == 7 && (pin == 13 || pin == 14)) return 1;            /* PH13/PH14: FDCAN1 TX/RX */
+	if (port == 1 && (pin == 5 || pin == 6)) return 1;             /* PB5/PB6: FDCAN2 RX/TX */
 	if (port == 0 && (pin == 1 || pin == 2 || pin == 7)) return 1;  /* PA1/2/7: RMII REF_CLK/MDIO/CRS_DV (eth.c) */
 	if (port == 1 && (pin == 11 || pin == 12 || pin == 13)) return 1; /* PB11/12/13: RMII TX_EN/TXD0/TXD1 */
 	if (port == 2 && (pin == 1 || pin == 4 || pin == 5)) return 1;  /* PC1/4/5: RMII MDC/RXD0/RXD1 */

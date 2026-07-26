@@ -7,7 +7,7 @@ V       ?= v
 REPO     = ../../../..
 SYSDIR   = $(REPO)/examples/system_full
 NAME    := zone_a
-BOARD   := h735dk
+BOARD   := h723
 TX       = $(REPO)/third_party/threadx
 PORT     = $(TX)/ports/cortex_m7/gnu
 include $(REPO)/boards/$(BOARD)/board.mk
@@ -25,13 +25,22 @@ TX_ASM   = $(wildcard $(PORT)/src/*.S)
 TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
-BSP      = $(BOARD_BSP_THREADX)
+BSP      = $(BOARD_BSP_THREADX) $(REPO)/boards/common/comm_glue.c $(REPO)/boards/common/trace_hooks.c
 
-all: gen
+all: $(BUILD)/$(NAME).bin
 
 gen: gen/.stamp
-gen/.stamp: $(SYSDIR)/gen-$(NAME).toml $(wildcard app/*.v) $(wildcard $(REPO)/tools/loom2v/*.v)
+# Regenerate when a GENERATOR changes too, not only the configs/DBCs/app: a stale-tool build
+# would silently re-validate code emitted by the old sysgen/dbc2cfg/loom2v (AGENTS.md target-
+# image verification path). Generators run via `$(V) run` (a clean checkout has the V sources).
+GENSRC = $(wildcard $(REPO)/tools/sysgen/*.v) $(wildcard $(REPO)/tools/dbcmerge/*.v) \
+         $(wildcard $(REPO)/tools/dbc2cfg/*.v) $(wildcard $(REPO)/tools/loom2v/*.v) \
+         $(wildcard $(REPO)/tools/ecumodel/*.v) \
+         $(wildcard $(REPO)/tools/candb/*.v) $(wildcard $(REPO)/tools/sysmodel/*.v)
+gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/edge.dbc $(wildcard app/*.v) $(GENSRC)
 	@mkdir -p gen ports sig
+	$(MAKE) -C $(REPO) gen-system SYSTEM=examples/system_full/system.toml
+	cd $(REPO) && $(V) run tools/dbc2cfg/gen.v examples/system_full/edge.dbc examples/system_full/nodes/zone_a/gen/dbc_gen.v
 	cd $(REPO) && $(V) run tools/loom2v examples/system_full/gen-$(NAME).toml examples/system_full/edge.dbc \
 	  examples/system_full/nodes/$(NAME)/sig/signals_gen.v examples/system_full/nodes/$(NAME)/ports/ports_gen.v \
 	  examples/system_full/nodes/$(NAME)/gen/loom_gen.v examples/system_full/nodes/$(NAME)/gen/trace-manifest.csv
@@ -57,6 +66,7 @@ $(BUILD)/app.o: $(BUILD)/app.c Makefile
 $(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(BOARD_LD_THREADX)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) -o $@
 	$(SIZE) $@
+	@$(REPO)/scripts/lint_vinit.sh $@   # the _vinit-trap gate (host CI can't cross-compile; run it here)
 
 $(BUILD)/$(NAME).bin: $(BUILD)/$(NAME).elf
 	$(OBJCOPY) -O binary $< $@

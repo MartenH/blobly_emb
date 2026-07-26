@@ -1,0 +1,67 @@
+# Watch the system_full 2-bus ThreadX gateway on REAL hardware, live in blobly_net.
+#
+# THE SYSTEM (3 boards, all generated from examples/system_full/system.toml):
+#   sysnode (STM32H735-DK)  — the gateway: owns both FDCAN buses, forwards 3 routes
+#   domain  (NUCLEO-H755ZI) — produces VehicleSpeed + HeadlightCmd on the compute bus
+#   zone_a  (NUCLEO-H723ZG) — produces SteeringAngle on the edge bus
+#
+# blobly_net just LISTENS (monitor mode, no simulation — the boards drive the traffic) and
+# decodes each bus with its DBC, so you can SEE the gateway forward: the same value appears
+# on the other bus under a new id.
+#
+#   compute bus (SocketCAN can0):
+#     0x120 VehSpeedFrame     (domain)   ─┐ gateway ┌─► 0x130 VehSpeedFrame_E     on edge
+#     0x123 HeadlightCmdFrame (domain)   ─┘  copies └─► 0x131 HeadlightCmdFrame_E on edge
+#     0x125 SteeringFrame_C   ◄── gateway forwards zone_a's steering here
+#     0x7E0/0x7E1 sysnode telemetry, 0x7E2/0x7E3 domain telemetry (raw — not in the DBC)
+#   edge bus (SocketCAN can1):
+#     0x132 SteeringFrame     (zone_a)   ──── gateway ───► 0x125 on compute
+#     0x130 / 0x131  ◄── gateway forwards domain's speed / headlight here
+#     0x7E4/0x7E5 zone_a telemetry (raw)
+#
+# The closed loop is visible: watch 0x125 (SteeringAngle on compute) climb past 90 and
+# 0x123 (HeadlightCmd) flip to 1 — domain reacting to steering that arrived via the gateway.
+#
+# WIRING (this bench, PCAN 2-channel): PCAN connector "can1" = SocketCAN can0 = the COMPUTE
+# bus; the second PCAN channel = SocketCAN can1 = the EDGE bus. Bring both up (classic
+# 500 kbit) before starting the measurement:
+#     sudo ip link set can0 up type can bitrate 500000
+#     sudo ip link set can1 up type can bitrate 500000
+#
+# FLASH the boards (in blobly_emb) — see boards/common/bench serials:
+#     make -C examples/system_full nodes
+#     make -C examples/system_full/nodes/sysnode flash SERIAL=001C002C3133510237363734   # H735
+#     make -C examples/system_full/nodes/domain  flash SERIAL=001E00243335510835383531   # H755
+#     make -C examples/system_full/nodes/zone_a  flash SERIAL=005500333233510739363634   # H723
+#
+# RUN (from the blobly_net repo — point BLOBLY_PROJECT at your blobly_emb checkout; the DBC
+# paths above are relative to THIS file, so any checkout works):
+#     BLOBLY_PROJECT=/path/to/blobly_emb/examples/system_full/system_full.blobnet ./scripts/run_gui.sh
+project:
+  name: system_full — 2-bus ThreadX gateway
+  version: 2
+
+buses:
+  # --- compute bus: domain (H755) <-> gateway (H735 FDCAN1) ---
+  - name: compute
+    network: system_full
+    adapter: socketcan
+    address: can0            # PCAN "can1" = SocketCAN can0 = compute bus
+    protocol: can
+    bitrate: 500000
+    mode: monitor            # listen + ACK the boards; no restbus sim — the ECUs drive it
+    enabled: true
+    databases:
+      - compute.dbc            # resolved against this .blobnet's own dir (blobly_net resolve_asset)
+
+  # --- edge bus: zone_a (H723) <-> gateway (H735 FDCAN2) ---
+  - name: edge
+    network: system_full
+    adapter: socketcan
+    address: can1            # second PCAN channel = SocketCAN can1 = edge bus
+    protocol: can
+    bitrate: 500000
+    mode: monitor
+    enabled: true
+    databases:
+      - edge.dbc               # resolved against this .blobnet's own dir (blobly_net resolve_asset)

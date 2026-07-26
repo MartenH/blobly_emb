@@ -56,20 +56,26 @@ _vectors:
    * relocation, the real handler goes unreferenced, --gc-sections deletes it, and every
    * received CAN frame spins the core in __tx_BadHandler (a full bench day, 2026-07-12). */
   .word FDCAN1_IT0_IRQHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
-  .word __tx_BadHandler
+  /* IRQ20 = FDCAN2 interrupt line 0 (Rx FIFO0) -> vector id 36. A multi-bus gateway
+   * (system_full sysnode) owns FDCAN2 as its second bus; comm_glue.c provides the strong
+   * handler. weak_irq.c gives a weak default so a single-bus / CAN-less image (which never
+   * arms FDCAN2) still links. Same rule as FDCAN1 above: the strong handler must be linked,
+   * NEVER weak-aliased in THIS object, or --gc-sections deletes it and every edge-bus frame
+   * spins the core in __tx_BadHandler (the FDCAN1 bench day, and the FDCAN2 one: 2026-07-26). */
+  .word FDCAN2_IT0_IRQHandler // IRQ20
+  .word __tx_BadHandler       // IRQ21
+  .word __tx_BadHandler       // IRQ22
+  .word __tx_BadHandler       // IRQ23
+  .word __tx_BadHandler       // IRQ24
+  .word __tx_BadHandler       // IRQ25
+  .word __tx_BadHandler       // IRQ26
+  .word __tx_BadHandler       // IRQ27
+  .word __tx_BadHandler       // IRQ28
+  .word __tx_BadHandler       // IRQ29
+  .word __tx_BadHandler       // IRQ30
+  .word __tx_BadHandler       // IRQ31
+  .word __tx_BadHandler       // IRQ32
+  .word __tx_BadHandler       // IRQ33
   .word __tx_BadHandler       // IRQ34
   .word __tx_BadHandler       // IRQ35
   .word __tx_BadHandler       // IRQ36

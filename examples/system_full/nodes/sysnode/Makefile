@@ -1,3 +1,12 @@
+# sysnode — the system_full Central Gateway, built as a real ThreadX image (like every other
+# node). The comm thread owns all three FDCAN buses and forwards the 8 resolved routes. The
+# gen step keeps dbcmerge (one merged.dbc across compute/edge, so both frames of every
+# route resolve in one DBC); the build is the same ThreadX cross-build the leaf nodes use.
+#
+# SILICON NOTE: the H735-DK is a 3-FDCAN part, so the driver opens FDCAN1/2/3 by index and
+# comm_glue.c arms all three Rx interrupts. boards/h735dk currently muxes FDCAN1 pins only —
+# a full 3-transceiver bench bring-up (FDCAN2/3 pin init + external transceivers) is the
+# remaining hardware step; the image builds and its routing is exercised on host vcan.
 CROSS   ?= arm-none-eabi-
 CC       = $(CROSS)gcc
 AR       = $(CROSS)ar
@@ -6,6 +15,7 @@ SIZE     = $(CROSS)size
 V       ?= v
 REPO     = ../../../..
 SYSDIR   = $(REPO)/examples/system_full
+GW       = examples/system_full/nodes/sysnode
 NAME    := sysnode
 BOARD   := h735dk
 TX       = $(REPO)/third_party/threadx
@@ -25,22 +35,32 @@ TX_ASM   = $(wildcard $(PORT)/src/*.S)
 TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
-BSP      = $(BOARD_BSP_THREADX)
+BSP      = $(BOARD_BSP_THREADX) $(REPO)/boards/common/comm_glue.c $(REPO)/boards/common/trace_hooks.c
 
-all: gen
+all: $(BUILD)/$(NAME).bin
 
 gen: gen/.stamp
-gen/.stamp: $(SYSDIR)/gen-$(NAME).toml $(wildcard app/*.v) $(wildcard $(REPO)/tools/loom2v/*.v)
+# Generators run via `$(V) run tools/<t>/gen.v` — a clean checkout has the V sources, not the
+# prebuilt binaries. Both DBCs are prerequisites: an edit to either must re-merge and re-gen.
+# The generator SOURCES are prerequisites too: a stale-tool build would silently re-validate
+# code emitted by the old sysgen/dbcmerge/dbc2cfg/loom2v (AGENTS.md target-verification path).
+GENSRC = $(wildcard $(REPO)/tools/sysgen/*.v) $(wildcard $(REPO)/tools/dbcmerge/*.v) \
+         $(wildcard $(REPO)/tools/dbc2cfg/*.v) $(wildcard $(REPO)/tools/loom2v/*.v) \
+         $(wildcard $(REPO)/tools/ecumodel/*.v) \
+         $(wildcard $(REPO)/tools/candb/*.v) $(wildcard $(REPO)/tools/sysmodel/*.v)
+gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/compute.dbc $(SYSDIR)/edge.dbc $(GENSRC)
 	@mkdir -p gen ports sig
-	cd $(REPO) && $(V) run tools/loom2v examples/system_full/gen-$(NAME).toml examples/system_full/compute.dbc \
-	  examples/system_full/nodes/$(NAME)/sig/signals_gen.v examples/system_full/nodes/$(NAME)/ports/ports_gen.v \
-	  examples/system_full/nodes/$(NAME)/gen/loom_gen.v examples/system_full/nodes/$(NAME)/gen/trace-manifest.csv
+	$(MAKE) -C $(REPO) gen-system SYSTEM=examples/system_full/system.toml
+	cd $(REPO) && $(V) run tools/dbcmerge/gen.v $(GW)/gen/merged.dbc examples/system_full/compute.dbc examples/system_full/edge.dbc
+	cd $(REPO) && $(V) run tools/dbc2cfg/gen.v $(GW)/gen/merged.dbc $(GW)/gen/dbc_gen.v
+	cd $(REPO) && $(V) run tools/loom2v examples/system_full/gen-$(NAME).toml $(GW)/gen/merged.dbc \
+	  $(GW)/sig/signals_gen.v $(GW)/ports/ports_gen.v $(GW)/gen/loom_gen.v $(GW)/gen/trace-manifest.csv
 	@touch gen/.stamp
 
-$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard app/*.v) | $(BUILD)
+$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
-	  -path "@vlib|@vmodules|.|examples/system_full/nodes/$(NAME)" \
-	  -o examples/system_full/nodes/$(NAME)/$(BUILD)/app.c examples/system_full/main.v
+	  -path "@vlib|@vmodules|.|$(GW)" \
+	  -o $(GW)/$(BUILD)/app.c examples/system_full/main.v
 
 $(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
 	@mkdir -p $(BUILD)/tx
@@ -57,6 +77,7 @@ $(BUILD)/app.o: $(BUILD)/app.c Makefile
 $(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(BOARD_LD_THREADX)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) -o $@
 	$(SIZE) $@
+	@$(REPO)/scripts/lint_vinit.sh $@   # the _vinit-trap gate (host CI can't cross-compile; run it here)
 
 $(BUILD)/$(NAME).bin: $(BUILD)/$(NAME).elf
 	$(OBJCOPY) -O binary $< $@
@@ -69,7 +90,7 @@ flash: $(BUILD)/$(NAME).bin
 	st-flash $(if $(SERIAL),--serial $(SERIAL),) reset
 
 clean:
-	rm -rf $(BUILD) gen ports sig
+	rm -rf $(BUILD) gen ports sig bin
 
 .PHONY: all gen flash clean
 .DELETE_ON_ERROR:
