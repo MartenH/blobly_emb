@@ -3462,6 +3462,17 @@ fn main() {
 		panic('loom2v: persistent signals need the comm thread (the journal service runs ' +
 			'there) — this config has no bus bridge; give the node a bus or drop persist')
 	}
+	owner_bulk_produces, owner_bulk_consumes := bulk_image_role(m.bulk, m.part, '')
+	if (owner_bulk_produces || owner_bulk_consumes) && m.target.threadx && !comm_thread_on {
+		// the owner-side cross-core bulk service (duo_bulk_produce/consume) is polled from the
+		// comm loop; without a bus bridge there is no comm thread, so the satellite would publish
+		// into a pool this image never drains (or vice versa). Fail loud rather than silently
+		// generate a dead endpoint — a busless/eth-only owner needs the declarable bulk service
+		// thread (docs/bulk-transport.md), not yet built.
+		panic('loom2v: a cross-core [[bulk]] endpoint on this owner needs the comm thread to ' +
+			'service it, but the node has no bus bridge (external signal / route / isotp) — give ' +
+			'it a bus, or wait for the declarable bulk service thread')
+	}
 	// rx signals an FB reads flow bus -> comm(decode) -> target IOC pool cell -> FB input (6b-2b).
 	// ioc_idx maps each such signal to its pool cell; visible to the comm emitter + handler glue.
 	mut ioc_idx := map[string]int{}

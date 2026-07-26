@@ -176,6 +176,11 @@ uint32_t g_bulk_tx_full = 0; /* loan failures: consumer slower than producer (RE
 static int s_xfer_inited = 0;
 
 void duo_bulk_produce(void) {
+	/* SINGLE-POOL DEMO: "xfer" is the only cross-core pool, so it sits at offset 0 =
+	 * DUO_BULK_ADDR and the geometry (4 x 256) matches ecu.toml [[bulk]] and the generated
+	 * bulk_xfer_* wrappers. A SECOND pool (or changed nbuf/bufsz) would move the offset /
+	 * geometry — a real multi-pool consumer must read them from the generated contract, not
+	 * hardcode. Kept literal here because the whole point is a minimal transport proof. */
 	bulk_t *p = (bulk_t *)DUO_BULK_ADDR;
 	/* the producer owns bring-up: init once, the consumer polls bulk_valid() before first use */
 	if (!s_xfer_inited) {

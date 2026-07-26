@@ -149,7 +149,8 @@ pub fn boot() {
 }
 
 // --- Bulk Transport Pools (docs/bulk-transport.md) ---
-#include "bulk.h" // boards/common — on the include path via BOARD_INCS, like xioc.h
+#flag -I @VMODROOT/boards/common
+#include "bulk.h"
 
 struct C.bulk_t {}
 fn C.bulk_init(b &C.bulk_t, nbuf u32, bufsz u32)

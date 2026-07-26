@@ -182,7 +182,11 @@ fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap, image_part string) []string
 	mut g := []string{}
 	g << ''
 	g << '// --- Bulk Transport Pools (docs/bulk-transport.md) ---'
-	g << '#include "bulk.h" // boards/common — on the include path via BOARD_INCS, like xioc.h'
+	// boards/common is on the target C path via BOARD_INCS, but a HOST/sim build compiles from
+	// the repo root without it — so anchor the include at the v.mod root (@VMODROOT), which
+	// resolves from either cwd.
+	g << '#flag -I @VMODROOT/boards/common'
+	g << '#include "bulk.h"'
 	g << ''
 	g << 'struct C.bulk_t {}'
 	g << 'fn C.bulk_init(b &C.bulk_t, nbuf u32, bufsz u32)'
