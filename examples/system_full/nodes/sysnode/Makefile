@@ -46,7 +46,8 @@ gen: gen/.stamp
 # code emitted by the old sysgen/dbcmerge/dbc2cfg/loom2v (AGENTS.md target-verification path).
 GENSRC = $(wildcard $(REPO)/tools/sysgen/*.v) $(wildcard $(REPO)/tools/dbcmerge/*.v) \
          $(wildcard $(REPO)/tools/dbc2cfg/*.v) $(wildcard $(REPO)/tools/loom2v/*.v) \
-         $(wildcard $(REPO)/tools/ecumodel/*.v)
+         $(wildcard $(REPO)/tools/ecumodel/*.v) \
+         $(wildcard $(REPO)/tools/candb/*.v) $(wildcard $(REPO)/tools/sysmodel/*.v)
 gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/compute.dbc $(SYSDIR)/edge.dbc $(GENSRC)
 	@mkdir -p gen ports sig
 	$(MAKE) -C $(REPO) gen-system SYSTEM=examples/system_full/system.toml

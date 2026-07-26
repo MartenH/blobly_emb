@@ -35,7 +35,8 @@ gen: gen/.stamp
 # image verification path). Generators run via `$(V) run` (a clean checkout has the V sources).
 GENSRC = $(wildcard $(REPO)/tools/sysgen/*.v) $(wildcard $(REPO)/tools/dbcmerge/*.v) \
          $(wildcard $(REPO)/tools/dbc2cfg/*.v) $(wildcard $(REPO)/tools/loom2v/*.v) \
-         $(wildcard $(REPO)/tools/ecumodel/*.v)
+         $(wildcard $(REPO)/tools/ecumodel/*.v) \
+         $(wildcard $(REPO)/tools/candb/*.v) $(wildcard $(REPO)/tools/sysmodel/*.v)
 gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/compute.dbc $(wildcard app/*.v) $(GENSRC)
 	@mkdir -p gen ports sig
 	$(MAKE) -C $(REPO) gen-system SYSTEM=examples/system_full/system.toml
