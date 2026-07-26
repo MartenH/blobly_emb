@@ -195,6 +195,26 @@ fn test_capability_split_by_role() {
 	assert full.contains('pub fn bulk_cam_take(')    // consumer op
 	assert full.contains('pub fn bulk_cam_publish(')
 	assert full.contains('pub fn bulk_cam_release(')
+
+	// MIRROR (the real demo's topology): producer on the SATELLITE, consumer on the OWNER.
+	// The roles must follow the endpoints, not the owner/satellite kind.
+	mir := [BulkPoolCfg{
+		name:     'up'
+		producer: 'cool' // satellite produces
+		consumer: 'hot'  // owner consumes
+		bufsz:    128
+		nbuf:     2
+	}]
+	o := emit_bulk_glue(mir, pm, '').join('\n') // owner = CONSUMER
+	assert o.contains('pub fn bulk_up_take(')
+	assert o.contains('pub fn bulk_up_valid()')
+	assert !o.contains('pub fn bulk_up_init()')
+	assert !o.contains('pub fn bulk_up_loan()')
+	s := emit_bulk_glue(mir, pm, 'cool').join('\n') // satellite = PRODUCER
+	assert s.contains('pub fn bulk_up_init()')
+	assert s.contains('pub fn bulk_up_loan()')
+	assert !s.contains('pub fn bulk_up_take(')
+	assert !s.contains('pub fn bulk_up_valid()')
 }
 
 fn test_satellite_local_intra_pool_stays_in_the_satellite() {
