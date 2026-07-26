@@ -38,9 +38,11 @@ fn bulk_bytes(nbuf int, bufsz int) int {
 }
 
 // bulk_ep_part resolves a [[bulk]] producer/consumer endpoint (a partition OR a thread name)
-// to its owning partition.
+// to its owning partition. THREAD-first, matching ecumodel.validate_bulk (`thread_part[ep] or
+// {ep}`): if a name were ever both a thread and a partition, both sites must classify it the
+// same way, or validation and codegen could disagree on cross- vs intra-core.
 fn bulk_ep_part(ep string, part PartMap) string {
-	return if ep in part.core_of { ep } else { part.thread_part[ep] or { ep } }
+	return part.thread_part[ep] or { ep }
 }
 
 // bulk_ep_core resolves an endpoint to its core, so a pool whose two ends sit on different

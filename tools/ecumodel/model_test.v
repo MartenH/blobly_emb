@@ -1795,9 +1795,12 @@ nbuf     = 0
 }
 
 fn test_bulk_cross_core_allowed() {
-	// CROSS-CORE (app core 0 -> part_b core 1): transported through the H755 shared window,
-	// so it is NO LONGER rejected — the pool lives at DUO_BULK_ADDR, both images address it.
+	// CROSS-CORE (app core 0 -> part_b core 1) on the ThreadX target: transported through the
+	// H755 shared window, so it is NO LONGER rejected — both images address DUO_BULK_ADDR.
 	e := errs_of('
+[target]
+kind = "threadx"
+
 [[partition]]
 name = "part_b"
 core = 1
@@ -1812,6 +1815,42 @@ bufsz    = 64
 nbuf     = 4
 ' + app)
 	assert !e.any(it.contains('cross partition'))
+	assert !e.any(it.contains('cross-core bulk needs'))
+}
+
+fn test_bulk_cross_core_needs_threadx_backend() {
+	// CROSS-CORE on a NON-ThreadX (host/sim) target: there is no duo_bulk_base() shared-window
+	// backend to link, so the pool must be rejected up front.
+	e := errs_of('
+[[partition]]
+name = "part_b"
+core = 1
+[[partition.thread]]
+name = "thread_b"
+
+[[bulk]]
+name     = "cross_bulk"
+producer = "app_main"
+consumer = "thread_b"
+bufsz    = 64
+nbuf     = 4
+' + app)
+	assert e.any(it.contains('cross-core bulk needs the shared-window backend'))
+}
+
+fn test_bulk_oversize_dimensions_rejected() {
+	// nbuf * bufsz must stay well inside 32-bit range so the footprint arithmetic can't overflow
+	// and silently pass the shared-window budget check.
+	e := errs_of('
+[[bulk]]
+name     = "huge"
+producer = "app_main"
+consumer = "app_main"
+bufsz    = 33554432
+nbuf     = 67108864
+' + app)
+	assert e.any(it.contains('bufsz') && it.contains('exceeds'))
+	assert e.any(it.contains('nbuf') && it.contains('exceeds'))
 }
 
 fn test_bulk_same_core_cross_partition_rejected() {
