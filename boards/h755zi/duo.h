@@ -67,16 +67,17 @@
 /* Cross-core BULK pools (docs/bulk-transport.md, ROADMAP "bulk ecu.toml surface"): a
  * [[bulk]] whose producer and consumer sit on DIFFERENT cores places its bulk_t pool in
  * this window instead of a per-image global, so both images address the SAME bytes. The
- * generator lays out per-pool offsets (gen/duo_gen.h DUO_BULK_<NAME>_ADDR, 32 B-aligned)
- * and static-checks the total against DUO_BULK_MAX. Starts after the wide-xioc window and
- * runs to the top of the 64 KB SRAM4 (0x38010000). */
+ * generator lays out per-pool offsets (32 B-aligned) and static-checks the total against
+ * DUO_BULK_MAX. Starts after the wide-xioc window and runs to the top of SRAM4 (0x38010000). */
 #define DUO_BULK_ADDR 0x38002000u
 #define DUO_BULK_MAX  0xE000u
 
-/* Base of the cross-core bulk region as a value both images can fetch from generated V
- * (loom2v emits `fn C.duo_bulk_addr()`); keeps DUO_BULK_ADDR the single source of truth
- * instead of baking the literal into generated code. */
-static inline uintptr_t duo_bulk_addr(void) { return (uintptr_t)DUO_BULK_ADDR; }
+/* Platform seam for the cross-core bulk base — generated code externs `duo_bulk_base()` and
+ * adds the per-pool offset, exactly as it externs duo_pub/duo_ioc_init for xioc. It NEVER
+ * includes this board header; the image's glue C provides the body. Defined here as the one
+ * source of DUO_BULK_ADDR (each glue TU that includes duo.h gets its own copy — the address
+ * is a constant, so the copies are identical). */
+static inline size_t duo_bulk_base(void) { return (size_t)DUO_BULK_ADDR; }
 
 /* Slot assignments are GENERATED — gen/duo_gen.h (loom2v [duo]) is the one source; both
  * images compile against it. Only the pool geometry lives here. */

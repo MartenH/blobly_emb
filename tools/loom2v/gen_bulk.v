@@ -102,9 +102,6 @@ fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap, image_part string) []string
 	g << ''
 	g << '// --- Bulk Transport Pools (docs/bulk-transport.md) ---'
 	g << '#include "boards/common/bulk.h"'
-	if has_shared {
-		g << '#include "duo.h" // DUO_BULK_ADDR: cross-core pools live in the H755 shared window'
-	}
 	g << ''
 	g << 'struct C.bulk_t {}'
 	g << 'fn C.bulk_init(b &C.bulk_t, nbuf u32, bufsz u32)'
@@ -117,21 +114,24 @@ fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap, image_part string) []string
 	g << 'fn C.bulk_buf(b &C.bulk_t, idx u32) &u8'
 	g << 'fn C.bulk_overflows(b &C.bulk_t) u32'
 	if has_shared {
-		g << 'fn C.duo_bulk_addr() usize // returns DUO_BULK_ADDR (boards/h755zi/duo.h)'
+		// The cross-core region base comes from a PLATFORM seam, exactly like duo_pub/duo_ioc_init:
+		// generated code externs it and the board's glue C provides it (from duo.h's DUO_BULK_ADDR
+		// on the H755). Generated code never includes a board header — it stays board-agnostic.
+		g << 'fn C.duo_bulk_base() usize // cross-core bulk region base (board glue; H755 = DUO_BULK_ADDR)'
 	}
 	g << ''
 
 	for p in scoped {
 		bytes := bulk_bytes(p.nbuf, p.bufsz)
 		cross := p.name in xcore_off
-		place := if cross { 'shared window @ DUO_BULK_ADDR+0x${xcore_off[p.name].hex()}' } else { 'local arena' }
+		place := if cross { 'shared window @ base+0x${xcore_off[p.name].hex()}' } else { 'local arena' }
 		g << '// --- Bulk pool: ${p.name} (${p.nbuf} x ${p.bufsz} B; ${p.producer} -> ${p.consumer}; ${place}) ---'
 		if cross {
-			// no per-image global — the pool IS the shared window bytes; both images derive
-			// the SAME pointer from duo.h. One side (the producer image) calls _init; the
+			// no per-image global — the pool IS the shared window bytes; both images derive the
+			// SAME pointer from the platform base. One side (the producer image) calls _init; the
 			// other polls _valid() before first use (bulk.h attach handshake).
 			g << 'fn bulk_${p.name}_ptr() &C.bulk_t {'
-			g << '\treturn &C.bulk_t(voidptr(C.duo_bulk_addr() + usize(${xcore_off[p.name]})))'
+			g << '\treturn &C.bulk_t(voidptr(C.duo_bulk_base() + usize(${xcore_off[p.name]})))'
 			g << '}'
 		} else {
 			g << '@[aligned: 32]'

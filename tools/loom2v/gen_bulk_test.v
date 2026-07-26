@@ -64,12 +64,13 @@ fn test_cross_core_pool_lives_in_shared_window() {
 	}]
 	assert bulk_cross_core(pools[0], pm)
 	a := emit_bulk_glue(pools, pm, '').join('\n')
-	// no per-image arena — the pool IS the shared window bytes, derived from duo.h
+	// no per-image arena — the pool IS the shared window bytes, derived from the platform base
 	assert !a.contains('g_bulk_lidar_arena')
-	assert a.contains('#include "duo.h"')
-	assert a.contains('fn C.duo_bulk_addr() usize')
+	// generated code stays board-agnostic: it externs the platform seam, never includes a board header
+	assert !a.contains('#include "duo.h"')
+	assert a.contains('fn C.duo_bulk_base() usize')
 	// first (and only) cross-core pool sits at offset 0 from the base
-	assert a.contains('voidptr(C.duo_bulk_addr() + usize(0))')
+	assert a.contains('voidptr(C.duo_bulk_base() + usize(0))')
 	// the public wrappers still exist and route through the shared ptr
 	assert a.contains('pub fn bulk_lidar_init()')
 	assert a.contains('C.bulk_init(bulk_lidar_ptr()')
@@ -98,8 +99,8 @@ fn test_cross_core_pools_pack_32b_aligned_in_order() {
 	off1 := (bulk_bytes(1, 50) + 31) & ~31
 	assert off1 % 32 == 0
 	a := emit_bulk_glue(pools, pm, '').join('\n')
-	assert a.contains('voidptr(C.duo_bulk_addr() + usize(${off0}))')
-	assert a.contains('voidptr(C.duo_bulk_addr() + usize(${off1}))')
+	assert a.contains('voidptr(C.duo_bulk_base() + usize(${off0}))')
+	assert a.contains('voidptr(C.duo_bulk_base() + usize(${off1}))')
 }
 
 fn test_satellite_emits_only_its_shared_pools_at_the_owner_offset() {
@@ -126,9 +127,10 @@ fn test_satellite_emits_only_its_shared_pools_at_the_owner_offset() {
 	sat := emit_bulk_glue(pools, pm, 'cool').join('\n')
 	// the satellite gets the shared pool...
 	assert sat.contains('pub fn bulk_shared_init()')
-	assert sat.contains('#include "duo.h"')
+	assert sat.contains('fn C.duo_bulk_base() usize')
+	assert !sat.contains('#include "duo.h"')
 	// ...at the SAME offset the owner computed (0 — 'local' is intra-core, not in the window)...
-	assert sat.contains('voidptr(C.duo_bulk_addr() + usize(0))')
+	assert sat.contains('voidptr(C.duo_bulk_base() + usize(0))')
 	// ...and NEVER the owner's intra-core global.
 	assert !sat.contains('g_bulk_local_arena')
 	assert !sat.contains('bulk_local_init')
