@@ -77,6 +77,13 @@
  * for both sides (m4_glue.c rings it, comm_glue.c enables/clears/handles it) so they can't drift. */
 #define DUO_BULK_DOORBELL_SEM 0u
 
+/* Bench-only control cell (NOT part of the transport): the CM7 sets it to 1 to ask the CM4
+ * producer to BURST — fill+publish flat-out, word-wise, no doorbell — so bulkperf can measure the
+ * pool's raw cross-core throughput unpaced by the M4 service loop; the CM7 clears it after its
+ * timing window. Lives in the unused SRAM4 gap (dtrace records end 0x38000A20, DUO_XW at
+ * 0x38001000), so it collides with nothing in the map above. */
+#define DUO_BULK_BURST_ADDR 0x38000C00u
+
 /* Platform seam for the cross-core bulk base: generated code externs `duo_bulk_base()` and adds
  * the per-pool offset, and NEVER includes this board header — so an image that declares a
  * cross-core [[bulk]] pool must DEFINE the seam in its glue C, exactly like duo_pub/duo_ioc_init:

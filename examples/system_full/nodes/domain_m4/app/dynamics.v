@@ -13,6 +13,5 @@ pub mut:
 }
 
 pub fn (mut fb DynamicsModel) on_5ms(inp ports.DynamicsModelIn, mut out ports.DynamicsModelOut) {
-	fb.ticks++
-	out.torque_estimate.nm = u32(100 + (fb.ticks % 50))
+	fb.ticks++ // self-contained co-processor "work"; the cross-core payload is the bulk stream
 }

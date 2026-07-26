@@ -35,7 +35,7 @@ thread = "fast"
   [[fb.handler]]
   name      = "on_50ms"
   period_ms = 50
-  reads     = ["SteeringAngle", "TorqueEstimate", "DriveMode"]
+  reads     = ["SteeringAngle", "DriveMode"]
   writes    = ["VehicleSpeed", "HeadlightCmd", "DriveMode"] # trailing comment terminates nested block (vlang/v#27684)
 
 [target]
@@ -77,9 +77,10 @@ bufsz    = 256
 nbuf     = 4
 
 # --- the CM4 co-processor (satellite image, docs/multi-image.md): an ORDINARY partition whose
-# image the generator emits into examples/system_full/nodes/domain_m4 (image = <dir>).
-# TorqueEstimate is an ordinary signal — from = "dynamics" derives an xioc slot (gen/duo_gen.h)
-# the CM7 PowertrainCtrl reads. Keep nested tables comment-free (vlang/v#27684).
+# image the generator emits into examples/system_full/nodes/domain_m4 (image = <dir>). For rung 1
+# it exists to run the platform BULK producer (m4_glue.c, the "model" pool) + a self-contained
+# co-processor FB. A cross-core SIGNAL into the CM7 control loop (xioc) is rung 2 — the owner-FB
+# read path (osal.ioc_acquire2) is host-only today. Keep nested tables comment-free (vlang/v#27684).
 [[partition]]
 name  = "dynamics"
 core  = 1
@@ -89,12 +90,6 @@ image = "nodes/domain_m4"
   name     = "model"
   priority = 11
 
-[[signal]]
-name   = "TorqueEstimate"
-fields = { nm = "u32" }
-from   = "dynamics"
-to     = "powertrain"
-
 [[fb]]
 name   = "DynamicsModel"
 thread = "model"
@@ -102,4 +97,3 @@ thread = "model"
   [[fb.handler]]
   name      = "on_5ms"
   period_ms = 5
-  writes    = ["TorqueEstimate"]

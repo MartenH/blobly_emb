@@ -109,7 +109,11 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		for ti, thr in threads {
 			g << ''
 			g << 'fn run_${thr}() {'
-			g << '\tmut st := Thread_${thr}_state{} // small + carries the FB field defaults: stack is right'
+			// match emit_handlers' state-struct naming (gen.v): a SINGLE-thread partition keeps the
+			// partition-wide name (Partition_<part>_state), only a multi-thread one is per-thread. A
+			// single-thread satellite (e.g. system_full's domain_m4) hit the mismatch otherwise.
+			sname := if threads.len > 1 { 'Thread_${thr}_state' } else { 'Partition_${part}_state' }
+			g << '\tmut st := ${sname}{} // small + carries the FB field defaults: stack is right'
 			g << '\tmut sched := &g_sched_${thr} // module-sized: lives in bss, not this lifetime frame'
 			for r in sat_regs['${part}/${thr}'] or { []string{} } {
 				g << r
