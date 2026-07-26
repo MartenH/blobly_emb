@@ -82,6 +82,64 @@ fn bulk_in_image(p BulkPoolCfg, part PartMap, image_part string) bool {
 	return bulk_part_local(pp, part) || bulk_part_local(cp, part)
 }
 
+// bulk_image_role reports whether the image `image_part` ('' = owner) is the PRODUCER and/or the
+// CONSUMER end of any CROSS-core pool. A platform service loop on that image polls the pool
+// accordingly (docs/bulk-transport.md "service threads for everything else"); the app never
+// touches it. Intra-core pools terminate within one image and need no cross-core service.
+fn bulk_image_role(bulk []BulkPoolCfg, part PartMap, image_part string) (bool, bool) {
+	mut produces := false
+	mut consumes := false
+	for p in bulk {
+		if !bulk_cross_core(p, part) {
+			continue
+		}
+		pp := bulk_ep_part(p.producer, part)
+		cp := bulk_ep_part(p.consumer, part)
+		here := fn (ptn string, part PartMap, image_part string) bool {
+			return if image_part == '' { bulk_part_local(ptn, part) } else { ptn == image_part }
+		}
+		if here(pp, part, image_part) {
+			produces = true
+		}
+		if here(cp, part, image_part) {
+			consumes = true
+		}
+	}
+	return produces, consumes
+}
+
+// emit_bulk_service_decls externs the platform bulk-service seams this image needs. The glue C
+// (the same TU that provides duo_bulk_base) implements them: the producer service loans a buffer,
+// fills it, and publishes; the consumer service polls valid/take, uses the buffer, and releases.
+// The app never sees the pool — this is the "platform module terminates bulk" rule (isolation
+// note in docs/bulk-transport.md) until an osal.bulk transport exists.
+fn emit_bulk_service_decls(bulk []BulkPoolCfg, part PartMap, image_part string) []string {
+	produces, consumes := bulk_image_role(bulk, part, image_part)
+	mut out := []string{}
+	if produces {
+		out << 'fn C.duo_bulk_produce() // platform producer service (glue): loan+fill+publish'
+	}
+	if consumes {
+		out << 'fn C.duo_bulk_consume() // platform consumer service (glue): poll+take+release'
+	}
+	return out
+}
+
+// emit_bulk_service_arm emits the per-loop service poll(s) for this image, `indent`-prefixed.
+// First cut is a POLL each service pass; the HSEM doorbell (block until the producer rings) is a
+// later rung (docs/bulk-transport.md).
+fn emit_bulk_service_arm(bulk []BulkPoolCfg, part PartMap, image_part string, indent string) []string {
+	produces, consumes := bulk_image_role(bulk, part, image_part)
+	mut out := []string{}
+	if produces {
+		out << '${indent}C.duo_bulk_produce() // cross-core bulk producer (platform-owned pool)'
+	}
+	if consumes {
+		out << '${indent}C.duo_bulk_consume() // cross-core bulk consumer (platform-owned pool)'
+	}
+	return out
+}
+
 // emit_bulk_glue generates V declarations and wrapper functions for bulk pools. An INTRA-core
 // pool gets a per-image global arena; a CROSS-CORE pool (producer/consumer on different cores)
 // is placed at a fixed address in the H755 shared window (duo.h DUO_BULK_ADDR) so both images
@@ -124,7 +182,7 @@ fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap, image_part string) []string
 	mut g := []string{}
 	g << ''
 	g << '// --- Bulk Transport Pools (docs/bulk-transport.md) ---'
-	g << '#include "boards/common/bulk.h"'
+	g << '#include "bulk.h" // boards/common — on the include path via BOARD_INCS, like xioc.h'
 	g << ''
 	g << 'struct C.bulk_t {}'
 	g << 'fn C.bulk_init(b &C.bulk_t, nbuf u32, bufsz u32)'

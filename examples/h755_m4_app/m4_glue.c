@@ -2,8 +2,10 @@
  * NO pins, NO peripherals (the CM7 brings those up); it gets a timebase, the shared-SRAM
  * IOC pool, and the boot handshake. */
 #include <stdint.h>
+#include <stddef.h>
 #include "duo.h"
 #include "xioc.h"
+#include "bulk.h" /* the portable SPSC pool (boards/common) — cross-core bulk lives in the window */
 #include "duo_gen.h" /* the GENERATED slot contract (../h755_threadx/gen — one generator run
                       * owns the cross-core map; this satellite image consumes it) */
 
@@ -159,4 +161,41 @@ void FDCAN1_IT0_IRQHandler(void) {
 void ETH_IRQHandler(void) {
 	for (;;) {
 	}
+}
+
+/* --- cross-core bulk PRODUCER (docs/bulk-transport.md, ecu.toml [[bulk]] "xfer") ------------
+ * The bulk pool lives in the H755 shared window; the generated code externs duo_bulk_base()
+ * and the platform (here) owns the pool — no FB ever touches it. This M4 side is the PRODUCER:
+ * once per service pass it loans a buffer, fills 256 B with a seq-derived pattern (seq in the
+ * first 4 bytes, DUO_STRESS_K*seq+i in the rest — tear/corruption detectable by the consumer),
+ * and publishes. The CM7 comm thread consumes and verifies. Counters are SWD-observable. */
+size_t duo_bulk_base(void) { return (size_t)DUO_BULK_ADDR; }
+
+uint32_t g_bulk_tx_seq  = 0; /* blocks published */
+uint32_t g_bulk_tx_full = 0; /* loan failures: consumer slower than producer (REQ-BULK-002) */
+static int s_xfer_inited = 0;
+
+void duo_bulk_produce(void) {
+	bulk_t *p = (bulk_t *)DUO_BULK_ADDR;
+	/* the producer owns bring-up: init once, the consumer polls bulk_valid() before first use */
+	if (!s_xfer_inited) {
+		bulk_init(p, 4u, 256u);
+		s_xfer_inited = 1;
+	}
+	int idx = bulk_loan(p);
+	if (idx < 0) {
+		g_bulk_tx_full++;
+		return;
+	}
+	uint8_t *b = bulk_buf(p, (uint32_t)idx);
+	uint32_t seq = g_bulk_tx_seq;
+	b[0] = (uint8_t)seq;
+	b[1] = (uint8_t)(seq >> 8);
+	b[2] = (uint8_t)(seq >> 16);
+	b[3] = (uint8_t)(seq >> 24);
+	for (uint32_t i = 4; i < 256u; i++) {
+		b[i] = (uint8_t)(seq * DUO_STRESS_K + i);
+	}
+	bulk_publish(p, (uint32_t)idx, 256u);
+	g_bulk_tx_seq++;
 }

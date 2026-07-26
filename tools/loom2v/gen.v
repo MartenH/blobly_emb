@@ -1953,6 +1953,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << duo_c_decls(m)
 			glue << nvm_c_decls(m)
 			glue << duo_trace_c_decls(m)
+			glue << emit_bulk_service_decls(m.bulk, m.part, '') // owner-side cross-core bulk service
 			glue << shell_cmd_fns(m)
 			glue << nm_shell_fns(m)
 			glue << stat_shell_fns(m, doc, app_threads, multi)
@@ -2518,6 +2519,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << shell_produce_drain(m)
 				glue << duo_trace_poll(m)
 				glue << duo_produce_drain(m)
+				glue << emit_bulk_service_arm(m.bulk, m.part, '', '\t\t') // owner cross-core bulk service (poll)
 				glue << nvm_service(m, ioc_idx)
 				glue << '\t}'
 				glue << '}'

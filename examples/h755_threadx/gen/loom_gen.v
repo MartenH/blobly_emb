@@ -97,6 +97,7 @@ fn C.duo_trace_ready() int
 fn C.duo_trace_count() u32
 fn C.duo_trace_buf() &u8
 fn C.duo_trace_offset(&i32, &u32) int // satellite clock - ours, + its error bound
+fn C.duo_bulk_consume() // platform consumer service (glue): poll+take+release
 
 fn shell_ps_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 	n := C.shell_ps(&rsp.buf[0], 520)
@@ -493,6 +494,7 @@ fn comm_thread_entry(input u32) {
 			ch.send(duo_txf)
 			duo_m4_count_last = t1
 		}
+		C.duo_bulk_consume() // cross-core bulk consumer (platform-owned pool)
 		{ // persist "now": LoadCmd
 			mut a := u32(0)
 			mut b := u32(0)
@@ -663,3 +665,71 @@ pub fn boot() {
 	}
 	C._tx_initialize_kernel_enter()
 }
+
+// --- Bulk Transport Pools (docs/bulk-transport.md) ---
+#include "bulk.h" // boards/common — on the include path via BOARD_INCS, like xioc.h
+
+struct C.bulk_t {}
+fn C.bulk_init(b &C.bulk_t, nbuf u32, bufsz u32)
+fn C.bulk_valid(b &C.bulk_t) int
+fn C.bulk_loan(b &C.bulk_t) int
+fn C.bulk_publish(b &C.bulk_t, idx u32, len u32)
+fn C.bulk_ready(b &C.bulk_t) u32
+fn C.bulk_take(b &C.bulk_t, len &u32) int
+fn C.bulk_release(b &C.bulk_t, idx u32)
+fn C.bulk_buf(b &C.bulk_t, idx u32) &u8
+fn C.bulk_overflows(b &C.bulk_t) u32
+fn C.duo_bulk_base() usize // cross-core bulk region base (board glue; H755 = DUO_BULK_ADDR)
+
+// --- Bulk pool: xfer (4 x 256 B; m4 -> app; shared window @ base+0x0) ---
+fn bulk_xfer_ptr() &C.bulk_t {
+	return &C.bulk_t(voidptr(C.duo_bulk_base() + usize(0)))
+}
+
+pub fn bulk_xfer_init() {
+	C.bulk_init(bulk_xfer_ptr(), u32(4), u32(256))
+}
+
+pub fn bulk_xfer_valid() bool {
+	return C.bulk_valid(bulk_xfer_ptr()) != 0
+}
+
+pub fn bulk_xfer_loan() int {
+	return int(C.bulk_loan(bulk_xfer_ptr()))
+}
+
+pub fn bulk_xfer_publish(idx int, len u32) bool {
+	if idx < 0 || idx >= 4 || len > u32(256) {
+		return false
+	}
+	C.bulk_publish(bulk_xfer_ptr(), u32(idx), len)
+	return true
+}
+
+pub fn bulk_xfer_ready() u32 {
+	return C.bulk_ready(bulk_xfer_ptr())
+}
+
+pub fn bulk_xfer_take(len &u32) int {
+	return int(C.bulk_take(bulk_xfer_ptr(), len))
+}
+
+pub fn bulk_xfer_release(idx int) bool {
+	if idx < 0 || idx >= 4 {
+		return false
+	}
+	C.bulk_release(bulk_xfer_ptr(), u32(idx))
+	return true
+}
+
+pub fn bulk_xfer_buf(idx int) &u8 {
+	if idx < 0 || idx >= 4 {
+		return unsafe { nil }
+	}
+	return C.bulk_buf(bulk_xfer_ptr(), u32(idx))
+}
+
+pub fn bulk_xfer_overflows() u32 {
+	return C.bulk_overflows(bulk_xfer_ptr())
+}
+

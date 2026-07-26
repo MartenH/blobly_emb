@@ -44,6 +44,7 @@ fn C.duo_pub(int, u32, u32) // xioc writer — slots from gen/duo_gen.h
 fn C._tx_thread_sleep(u32) u32
 fn C._tx_initialize_kernel_enter()
 fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32
+fn C.duo_bulk_produce() // platform producer service (glue): loan+fill+publish
 fn C.trace_arm() // this core's recorder free-runs; the owner re-arms per session
 fn C.trace_bind_thread(voidptr)
 fn C.duo_trace_service() // the dtrace handoff (owner posts, we snapshot/ack)
@@ -92,6 +93,7 @@ fn run_m4_app() {
 			sched.mark_overrun()
 		}
 		C.duo_trace_service() // ~one poll per tick: plenty for the dump handshake
+		C.duo_bulk_produce() // cross-core bulk producer (platform-owned pool)
 		C.duo_layout_publish() // REPUBLISH per tick: the owner retracts the id at ITS
 		// boot (SRAM survives an owner-only reset — a retained id + retained channels
 		// would replay one stale frame); a live satellite restores it within a tick
@@ -145,3 +147,71 @@ pub fn boot() {
 	C.trace_arm()
 	C._tx_initialize_kernel_enter() // never returns
 }
+
+// --- Bulk Transport Pools (docs/bulk-transport.md) ---
+#include "bulk.h" // boards/common — on the include path via BOARD_INCS, like xioc.h
+
+struct C.bulk_t {}
+fn C.bulk_init(b &C.bulk_t, nbuf u32, bufsz u32)
+fn C.bulk_valid(b &C.bulk_t) int
+fn C.bulk_loan(b &C.bulk_t) int
+fn C.bulk_publish(b &C.bulk_t, idx u32, len u32)
+fn C.bulk_ready(b &C.bulk_t) u32
+fn C.bulk_take(b &C.bulk_t, len &u32) int
+fn C.bulk_release(b &C.bulk_t, idx u32)
+fn C.bulk_buf(b &C.bulk_t, idx u32) &u8
+fn C.bulk_overflows(b &C.bulk_t) u32
+fn C.duo_bulk_base() usize // cross-core bulk region base (board glue; H755 = DUO_BULK_ADDR)
+
+// --- Bulk pool: xfer (4 x 256 B; m4 -> app; shared window @ base+0x0) ---
+fn bulk_xfer_ptr() &C.bulk_t {
+	return &C.bulk_t(voidptr(C.duo_bulk_base() + usize(0)))
+}
+
+pub fn bulk_xfer_init() {
+	C.bulk_init(bulk_xfer_ptr(), u32(4), u32(256))
+}
+
+pub fn bulk_xfer_valid() bool {
+	return C.bulk_valid(bulk_xfer_ptr()) != 0
+}
+
+pub fn bulk_xfer_loan() int {
+	return int(C.bulk_loan(bulk_xfer_ptr()))
+}
+
+pub fn bulk_xfer_publish(idx int, len u32) bool {
+	if idx < 0 || idx >= 4 || len > u32(256) {
+		return false
+	}
+	C.bulk_publish(bulk_xfer_ptr(), u32(idx), len)
+	return true
+}
+
+pub fn bulk_xfer_ready() u32 {
+	return C.bulk_ready(bulk_xfer_ptr())
+}
+
+pub fn bulk_xfer_take(len &u32) int {
+	return int(C.bulk_take(bulk_xfer_ptr(), len))
+}
+
+pub fn bulk_xfer_release(idx int) bool {
+	if idx < 0 || idx >= 4 {
+		return false
+	}
+	C.bulk_release(bulk_xfer_ptr(), u32(idx))
+	return true
+}
+
+pub fn bulk_xfer_buf(idx int) &u8 {
+	if idx < 0 || idx >= 4 {
+		return unsafe { nil }
+	}
+	return C.bulk_buf(bulk_xfer_ptr(), u32(idx))
+}
+
+pub fn bulk_xfer_overflows() u32 {
+	return C.bulk_overflows(bulk_xfer_ptr())
+}
+
