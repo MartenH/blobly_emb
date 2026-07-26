@@ -60,21 +60,41 @@ fn bulk_touches(p BulkPoolCfg, part PartMap, ptn string) bool {
 	return bulk_ep_part(p.producer, part) == ptn || bulk_ep_part(p.consumer, part) == ptn
 }
 
+// bulk_part_local: this partition's code is emitted by the OWNER image — i.e. it is NOT a
+// generated satellite (image =) and NOT a hand-written external partition.
+fn bulk_part_local(ptn string, part PartMap) bool {
+	return ptn !in part.image && !(part.external[ptn] or { false })
+}
+
+// bulk_in_image: does the image identified by `image_part` ('' = owner) emit this pool? The
+// rule is uniform for intra- and cross-core pools: an image emits a pool iff one of the pool's
+// endpoints lives in THAT image. So an intra-core pool sitting inside a satellite partition is
+// emitted by the satellite (where its FBs run), NOT dumped into the owner's BSS; and a satellite
+// only emits the shared pools it is actually an endpoint of.
+fn bulk_in_image(p BulkPoolCfg, part PartMap, image_part string) bool {
+	pp := bulk_ep_part(p.producer, part)
+	cp := bulk_ep_part(p.consumer, part)
+	if image_part != '' {
+		return pp == image_part || cp == image_part
+	}
+	return bulk_part_local(pp, part) || bulk_part_local(cp, part)
+}
+
 // emit_bulk_glue generates V declarations and wrapper functions for bulk pools. An INTRA-core
 // pool gets a per-image global arena; a CROSS-CORE pool (producer/consumer on different cores)
 // is placed at a fixed address in the H755 shared window (duo.h DUO_BULK_ADDR) so both images
 // address the SAME pool. Cross-core placement is deterministic (declaration order, 32 B-aligned)
 // and static-checked against DUO_BULK_MAX, so the two images agree without exchanging state.
 //
-// image_part selects WHICH image this is emitting for: '' = the bus OWNER (emits every pool —
-// its own intra-core globals and every shared window pool); a satellite partition name = that
-// SATELLITE image (emits only the cross-core pools with an endpoint on it, using the SAME
-// globally-computed offsets so both images derive an identical pointer).
+// image_part selects WHICH image this is emitting for: '' = the bus OWNER (emits pools whose
+// endpoints are its local partitions — intra-core globals for them plus the shared window pools
+// it is an endpoint of); a satellite partition name = that SATELLITE image (emits the pools it
+// is an endpoint of, using the SAME globally-computed offsets so both images derive an identical
+// pointer for any shared pool).
 fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap, image_part string) []string {
 	if pools.len == 0 {
 		return []string{}
 	}
-	owner := image_part == ''
 	// Lay cross-core pools out in the shared window, in declaration order, 32 B-aligned. This
 	// runs over ALL pools regardless of image_part, so the owner and a satellite agree on the
 	// offset of every shared pool.
@@ -92,8 +112,9 @@ fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap, image_part string) []string
 			'DUO_BULK_MAX is ${duo_bulk_max} B (boards/h755zi/duo.h) — shrink a pool (bufsz*nbuf) ' +
 			'or raise the window')
 	}
-	// The owner emits every pool; a satellite emits only the shared pools it is an endpoint of.
-	scoped := pools.filter(owner || (bulk_cross_core(it, part) && bulk_touches(it, part, image_part)))
+	// Each image emits the pools it owns an endpoint of (owner = its local partitions; a
+	// satellite = itself). This keeps an intra-core satellite-local pool in the satellite.
+	scoped := pools.filter(bulk_in_image(it, part, image_part))
 	if scoped.len == 0 {
 		return []string{}
 	}

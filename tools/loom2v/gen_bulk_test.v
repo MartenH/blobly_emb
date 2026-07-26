@@ -145,3 +145,69 @@ fn test_satellite_emits_only_its_shared_pools_at_the_owner_offset() {
 	empty := emit_bulk_glue([pools[0]], none_pm, 'x')
 	assert empty.len == 0
 }
+
+fn test_satellite_local_intra_pool_stays_in_the_satellite() {
+	// An INTRA-core pool whose endpoints both live in a SATELLITE partition must be emitted by
+	// the SATELLITE image (where its FBs run), not dumped into the owner's core-0 BSS.
+	pm := duo_partmap() // 'cool' is core 1 with image = "../h755_m4_app"
+	pools := [BulkPoolCfg{
+		name:     'satcam'
+		producer: 'cool'
+		consumer: 'cool_t' // both resolve to partition 'cool' (core 1) => intra-core, satellite-owned
+		bufsz:    32
+		nbuf:     1
+	}]
+	assert !bulk_cross_core(pools[0], pm)
+	// the OWNER must NOT emit it — neither endpoint is an owner-local partition
+	owner := emit_bulk_glue(pools, pm, '')
+	assert owner.len == 0
+	// the SATELLITE emits it as its own per-image arena (intra-core, no shared window)
+	sat := emit_bulk_glue(pools, pm, 'cool').join('\n')
+	assert sat.contains('g_bulk_satcam_arena')
+	assert sat.contains('pub fn bulk_satcam_init()')
+	assert !sat.contains('duo_bulk_base')
+}
+
+fn test_owner_and_satellite_agree_on_a_nonzero_shared_offset() {
+	// The strong form of the cross-image invariant: a satellite that is an endpoint of ONLY the
+	// second cross-core pool must still place it at the owner's NON-ZERO offset (behind the
+	// first). Needs a second satellite core so 'first' does not also touch 'cool'.
+	pm := PartMap{
+		core_of:     {
+			'hot':  0
+			'cool': 1
+			'cold': 2
+		}
+		thread_part: {}
+		image:       {
+			'cool': '../a'
+			'cold': '../b'
+		}
+	}
+	pools := [
+		BulkPoolCfg{
+			name:     'first'
+			producer: 'hot'
+			consumer: 'cold' // core 0 <-> core 2, offset 0 — 'cool' is NOT an endpoint
+			bufsz:    64
+			nbuf:     2
+		},
+		BulkPoolCfg{
+			name:     'second'
+			producer: 'hot'
+			consumer: 'cool' // core 0 <-> core 1, sits behind 'first'
+			bufsz:    32
+			nbuf:     1
+		},
+	]
+	off1 := (bulk_bytes(2, 64) + 31) & ~31
+	assert off1 > 0
+	owner := emit_bulk_glue(pools, pm, '').join('\n')
+	sat := emit_bulk_glue(pools, pm, 'cool').join('\n')
+	// owner and satellite derive 'second' at the SAME non-zero offset
+	assert owner.contains('voidptr(C.duo_bulk_base() + usize(${off1}))')
+	assert sat.contains('voidptr(C.duo_bulk_base() + usize(${off1}))')
+	// the satellite emits ONLY 'second' (it is not an endpoint of 'first')
+	assert sat.contains('bulk_second_ptr')
+	assert !sat.contains('bulk_first')
+}

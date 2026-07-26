@@ -72,12 +72,15 @@
 #define DUO_BULK_ADDR 0x38002000u
 #define DUO_BULK_MAX  0xE000u
 
-/* Platform seam for the cross-core bulk base — generated code externs `duo_bulk_base()` and
- * adds the per-pool offset, exactly as it externs duo_pub/duo_ioc_init for xioc. It NEVER
- * includes this board header; the image's glue C provides the body. Defined here as the one
- * source of DUO_BULK_ADDR (each glue TU that includes duo.h gets its own copy — the address
- * is a constant, so the copies are identical). */
-static inline size_t duo_bulk_base(void) { return (size_t)DUO_BULK_ADDR; }
+/* Platform seam for the cross-core bulk base: generated code externs `duo_bulk_base()` and adds
+ * the per-pool offset, and NEVER includes this board header — so an image that declares a
+ * cross-core [[bulk]] pool must DEFINE the seam in its glue C, exactly like duo_pub/duo_ioc_init:
+ *
+ *     #include "duo.h"
+ *     size_t duo_bulk_base(void) { return (size_t)DUO_BULK_ADDR; }   // owner AND satellite glue
+ *
+ * (A `static inline` here would NOT satisfy the generated TU's external reference — internal
+ * linkage — so the seam is deliberately left to the glue, not defined in this header.) */
 
 /* Slot assignments are GENERATED — gen/duo_gen.h (loom2v [duo]) is the one source; both
  * images compile against it. Only the pool geometry lives here. */
