@@ -51,6 +51,10 @@ buses:
     bitrate: 500000
     mode: monitor            # listen + ACK the boards; no restbus sim — the ECUs drive it
     enabled: true
+    manifest: nodes/domain/gen/trace-manifest.csv  # the domain node's CAN shell frames
+                                                    # (0x7F0/0x7F2/0x7F1) — WITHOUT this the shell
+                                                    # panel reports "shell not available". Type
+                                                    # `bulkperf` on this bus. resolve_asset -> here.
     databases:
       - compute.dbc            # resolved against this .blobnet's own dir (blobly_net resolve_asset)
 
