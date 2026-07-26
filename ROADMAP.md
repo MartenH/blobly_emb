@@ -8,6 +8,33 @@ Status keys: ✅ shipped · 🔨 in progress · ⏭️ next · 🧭 planned · �
 
 ---
 
+## Consolidation → one reference system  🔨
+
+The example count (~45 dirs) has outgrown its usefulness — most are single-feature demos and a
+maintenance burden. GOAL: grow **`examples/system_full`** into the ONE reference system that
+exercises every shipped feature across its three real nodes, and **retire the one-offs as each
+feature lands there**. Net fewer examples, and one integration test that actually means something.
+
+The three nodes (all on the bench, one `system.toml`):
+- **domain** (H755, dual-core) — AMP: a CM4 co-processor streaming into a cross-core `[[bulk]]`
+  pool the CM7 control loop consumes; cross-core signals (xioc); `[shell]` (bulkperf/ps/bmc);
+  two-core trace; nm; nvm/persist. *Absorbs* h755_threadx, h755_m4_app, gw_xcore, trace_multicore.
+- **sysnode** (H735, gateway) — 2-bus routing (done) + protected routes (E2E/SecOC), ext-id,
+  CAN-FD payloads, and the eth/SOME-IP stack on its Ethernet. *Absorbs* gw_*, h735_net/someip/doip.
+- **zone_a** (H723, edge) — a producer node + IO (GPIO/ADC/PWM). *Absorbs* io_*, h723_*.
+
+Rungs — each folds a feature-set AND retires the matching examples, one reviewable PR:
+1. 🔨 **domain dual-core** — CM4 co-processor + `[[bulk]]` + `[shell]` → retire h755_threadx, h755_m4_app
+2. 🧭 **domain two-core trace + xioc signals** → retire trace_multicore, gw_xcore
+3. 🧭 **domain nm + nvm/persist**
+4. 🧭 **zone_a IO** (GPIO/ADC/PWM) → retire io_*
+5. 🧭 **sysnode protected routes + ext-id + FD payloads** → retire gw_*
+6. 🧭 **sysnode eth + SOME/IP** → retire h735_net/someip/doip
+
+Kept standalone (not features of a running system): `bulk_bench` (host micro-bench), `minimal`.
+
+---
+
 ## Communication stack
 
 - ✅ **COM TX modes** — cyclic / on-change / on-write, DBC-driven codegen

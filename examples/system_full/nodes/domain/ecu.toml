@@ -1,4 +1,14 @@
-# domain (H755 dual-core) — Powertrain & Dynamics.
+# domain (H755 dual-core) — Powertrain & Dynamics + persistence.
+#
+#   CM7 (core 0, "powertrain") — PowertrainCtrl: reads SteeringAngle (from zone_a via the
+#     gateway) + the CM4's TorqueEstimate; writes VehicleSpeed + HeadlightCmd; owns DriveMode,
+#     a persisted calibration that survives resets (NvM journal, docs/nvm.md).
+#   CM4 (core 1, "dynamics")   — DynamicsModel co-processor: a high-rate torque estimate
+#     published cross-core (xioc) to the control loop, PLUS a bulk model-detail stream the CM7
+#     platform consumes. bulkperf (shell) bursts that stream to measure raw cross-core throughput.
+#
+# NOTE: no inline comments inside [[...]] tables — a comment in a nested table trips V's TOML
+# parser (drops the next key). See vlang/v#27684.
 
 [[partition]]
 name = "powertrain"
@@ -7,6 +17,17 @@ core = 0
   [[partition.thread]]
   name = "fast"
 
+# DriveMode: a persisted powertrain calibration ("now") — restored before the first control tick,
+# journaled change-gated on the comm thread, flushed + marked clean at the NM sleep edge
+# (docs/nvm.md). This node's demo persistence signal; PowertrainCtrl reads and updates it.
+[[signal]]
+name = "DriveMode"
+fields = { mode = "u32" }
+from = "powertrain"
+to   = "powertrain"
+transport = "double"
+persist = "now"
+
 [[fb]]
 name   = "PowertrainCtrl"
 thread = "fast"
@@ -14,8 +35,8 @@ thread = "fast"
   [[fb.handler]]
   name      = "on_50ms"
   period_ms = 50
-  reads     = ["SteeringAngle"]
-  writes    = ["VehicleSpeed", "HeadlightCmd"] # trailing comment terminates nested block (vlang/v#27684)
+  reads     = ["SteeringAngle", "TorqueEstimate", "DriveMode"]
+  writes    = ["VehicleSpeed", "HeadlightCmd", "DriveMode"] # trailing comment terminates nested block (vlang/v#27684)
 
 [target]
 kind    = "threadx"
@@ -27,3 +48,58 @@ bus       = "can0"
 id        = 0x7E2
 detail_id = 0x7E3
 period_ms = 500
+
+# The CAN shell (comm/shell): bulkperf bursts the CM4 producer and reports the cross-core
+# [[bulk]] pool's raw throughput over ISO-TP. ps/bmc are built in.
+[shell]
+commands = ["bulkperf"]
+bus = "can0"
+in  = 0x7F0
+out = 0x7F1
+fc  = 0x7F2
+
+# Persistence storage ([nvm], docs/nvm.md): the journal engine over a sector pair the node's comm
+# glue maps (nvm_map_* -> boards flash driver). DriveMode above is the persisted signal.
+[nvm]
+min_write_ms   = 10000
+sector_records = 4096
+endurance      = 10000
+min_years      = 10
+
+# Cross-core bulk (docs/bulk-transport.md): the CM4 co-processor streams fixed-size model-detail
+# blocks into a pool in the H755 shared window; the CM7 comm thread consumes them. Both ends are
+# PLATFORM services (glue C, duo_bulk_produce/consume) — the app never touches the pool.
+[[bulk]]
+name     = "model"
+producer = "dynamics"
+consumer = "powertrain"
+bufsz    = 256
+nbuf     = 4
+
+# --- the CM4 co-processor (satellite image, docs/multi-image.md): an ORDINARY partition whose
+# image the generator emits into examples/system_full/nodes/domain_m4 (image = <dir>).
+# TorqueEstimate is an ordinary signal — from = "dynamics" derives an xioc slot (gen/duo_gen.h)
+# the CM7 PowertrainCtrl reads. Keep nested tables comment-free (vlang/v#27684).
+[[partition]]
+name  = "dynamics"
+core  = 1
+image = "../domain_m4"
+
+  [[partition.thread]]
+  name     = "model"
+  priority = 11
+
+[[signal]]
+name   = "TorqueEstimate"
+fields = { nm = "u32" }
+from   = "dynamics"
+to     = "powertrain"
+
+[[fb]]
+name   = "DynamicsModel"
+thread = "model"
+
+  [[fb.handler]]
+  name      = "on_5ms"
+  period_ms = 5
+  writes    = ["TorqueEstimate"]
