@@ -486,12 +486,11 @@ void FDCAN1_IT0_IRQHandler(void)
  * each bulk publish (m4_glue.c), which raises this interrupt on the CM7, so the comm thread wakes
  * and drains the shared pool immediately instead of waiting out the comm_rx_wait timeout. Same
  * tiny-ISR shape as the FDCAN Rx one: clear the flag, post the wake semaphore, defer the work. */
-#define BULK_DOORBELL_SEM 0u
 volatile uint32_t g_bulk_doorbell_irqs = 0u; /* SWD-observable: proves the cross-core IRQ fires */
 void HSEM1_IT_IRQHandler(void)
 {
     _tx_execution_isr_enter();
-    HSEM->C1ICR = 1u << BULK_DOORBELL_SEM;  /* clear THIS core's pending flag for the semaphore */
+    HSEM->C1ICR = 1u << DUO_BULK_DOORBELL_SEM;  /* clear THIS core's pending flag for the semaphore */
     g_bulk_doorbell_irqs++;
     tx_semaphore_put(&g_comm_sem);          /* wake comm -> duo_bulk_consume drains the block(s) */
     _tx_execution_isr_exit();
@@ -512,8 +511,9 @@ void comm_rx_irq_enable(void)
      * IRQ125 at the comm priority (single trace level — never nests SysTick/the Rx ISR).
      * g_comm_sem exists above, so the ISR can post it. The HSEM clock is already on (enabled in
      * duo_clocks_ready, before the CM4 was released). */
-    HSEM->C1IER = 1u << BULK_DOORBELL_SEM;
+    HSEM->C1IER = 1u << DUO_BULK_DOORBELL_SEM;
     NVIC_SetPriority(HSEM1_IRQn, 4u);
+    NVIC_ClearPendingIRQ(HSEM1_IRQn); /* pristine start: drop any ring latched before arming */
     NVIC_EnableIRQ(HSEM1_IRQn);
 }
 

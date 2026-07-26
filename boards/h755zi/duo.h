@@ -72,6 +72,11 @@
 #define DUO_BULK_ADDR 0x38002000u
 #define DUO_BULK_MAX  0xE000u
 
+/* HSEM semaphore for the cross-core bulk doorbell: the CM4 releases it after each publish to
+ * raise IRQ125 (HSEM1) on the CM7, whose ISR wakes the comm thread to drain the pool. ONE source
+ * for both sides (m4_glue.c rings it, comm_glue.c enables/clears/handles it) so they can't drift. */
+#define DUO_BULK_DOORBELL_SEM 0u
+
 /* Platform seam for the cross-core bulk base: generated code externs `duo_bulk_base()` and adds
  * the per-pool offset, and NEVER includes this board header — so an image that declares a
  * cross-core [[bulk]] pool must DEFINE the seam in its glue C, exactly like duo_pub/duo_ioc_init:

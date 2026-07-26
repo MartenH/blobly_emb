@@ -10,8 +10,6 @@
 #include "duo_gen.h" /* the GENERATED slot contract (../h755_threadx/gen — one generator run
                       * owns the cross-core map; this satellite image consumes it) */
 
-#define BULK_DOORBELL_SEM 0u /* HSEM semaphore the CM4 rings to wake the CM7 (matches comm_glue.c) */
-
 /* --- boot handshake -------------------------------------------------------------------
  * Park until the CM7 signals clocks-ready (duo.h): the kernel's SysTick is configured
  * against SYSTEM_CLOCK = the FINAL 200 MHz HCLK, so starting before the PLL switch would
@@ -215,6 +213,6 @@ void duo_bulk_produce(void) {
 	 * us — no CM7 polling. Uncontended (only this core touches sem 0's lock, and we release it
 	 * immediately), so the take always succeeds; the release value carries our COREID from the
 	 * lock read-back, so we don't hardcode which core we are. */
-	uint32_t rl = HSEM->RLR[BULK_DOORBELL_SEM];          /* fast-take: lock for this core */
-	HSEM->R[BULK_DOORBELL_SEM] = rl & HSEM_R_COREID_Msk; /* release -> HSEM1 interrupt on the CM7 */
+	uint32_t rl = HSEM->RLR[DUO_BULK_DOORBELL_SEM];          /* fast-take: lock for this core */
+	HSEM->R[DUO_BULK_DOORBELL_SEM] = rl & HSEM_R_COREID_Msk; /* release -> HSEM1 interrupt on the CM7 */
 }
