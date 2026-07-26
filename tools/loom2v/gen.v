@@ -435,6 +435,14 @@ fn gateway_extra_buses(m Model) []string {
 // here (parse-time + emit-time guards), so a verbatim payload copy is exact on the wire.
 fn gateway_forward_arms(m Model, src_bus string) []string {
 	mut out := []string{}
+	// NM gate: a gateway with NM enabled must stay SILENT while asleep — a forward is a TX, so
+	// it obeys the same REQ-COM-007 rule as every cyclic producer. Forwards are REACTIVE (they
+	// fire only on an arriving source frame) and run inside the Rx drain, before this pass's
+	// g_nm.produce(); we gate on the COMMITTED state (g_nm.awake()) rather than restructure the
+	// drain into a post-tick forward FIFO. In a coordinated sleep the sources stop, so nothing
+	// arrives to forward anyway; the gate is defense-in-depth against a stray cross-domain frame
+	// reaching a sleeping bus. (Cyclic producers, which are timer-driven, still gate post-tick.)
+	nm_gate := if m.nm.on { 'g_nm.awake() && ' } else { '' }
 	for r in m.routes {
 		if r.from_bus != src_bus {
 			continue
@@ -447,9 +455,9 @@ fn gateway_forward_arms(m Model, src_bus string) []string {
 		out << '\t\t\t\t\text: ${r.to_ext}'
 		out << '\t\t\t\t}'
 		out << '\t\t\t\tff.data = rx.data // raw_ident: bytes are bit-identical, only the id/bus differ'
-		out << '\t\t\t\tif ${dst}.tx_ready() {'
+		out << '\t\t\t\tif ${nm_gate}${dst}.tx_ready() {'
 		out << '\t\t\t\t\t${dst}.send(ff)'
-		out << '\t\t\t\t\tg_fwd_count++ // count frames actually forwarded, not ones dropped on a full tx FIFO'
+		out << '\t\t\t\t\tg_fwd_count++ // count frames actually forwarded, not ones dropped on a full tx FIFO / NM sleep'
 		out << '\t\t\t\t}'
 		out << '\t\t\t}'
 	}

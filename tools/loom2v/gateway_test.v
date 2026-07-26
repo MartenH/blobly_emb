@@ -80,4 +80,34 @@ fn test_gateway_forward_arms_raw_copy_and_id_remap() {
 	// each source bus only emits ITS routes (no cross-contamination)
 	assert !a.contains('0x132')
 	assert !b.contains('0x120')
+	// NM OFF: no NM gate on the forward — only tx_ready
+	assert !a.contains('g_nm.awake()')
+}
+
+fn test_gateway_forward_arms_nm_gated_when_nm_on() {
+	// With NM enabled a forward is a TX and must stay silent while asleep (REQ-COM-007) — the
+	// send gates on the committed NM state, alongside tx_ready.
+	m := Model{
+		telem:  TelemetryCfg{
+			bus: 'can0'
+		}
+		nm:     NmCfg{
+			on: true
+		}
+		routes: [
+			Route{
+				from_bus:  'can0'
+				from_id:   0x120
+				from_dlc:  8
+				to_bus:    'can1'
+				to_id:     0x130
+				signal:    'VehicleSpeed'
+				raw_ident: true
+			},
+		]
+	}
+	a := gateway_forward_arms(m, 'can0').join('\n')
+	// the NM gate precedes tx_ready in the send condition
+	assert a.contains('if g_nm.awake() && ch_can1.tx_ready() {')
+	assert a.contains('ch_can1.send(ff)')
 }
