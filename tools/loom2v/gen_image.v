@@ -6,7 +6,7 @@
 // hand-written examples/h755_m4_app pioneered: park on clocks-ready, DWT timebase, xioc
 // pool init, this core's OWN trace recorder (trace_hooks.c, armed from boot), one kernel
 // thread + Loom scheduler per [[partition.thread]], handler wrappers whose remote writes
-// publish via duo_pub, and the dtrace handoff serviced from the first (highest-priority)
+// publish via xcore_pub, and the dtrace handoff serviced from the first (highest-priority)
 // thread's loop. The example keeps main.v (a gen.boot() shim), its app/ FBs, its glue C,
 // and its Makefile — exactly the split every example has.
 //
@@ -34,7 +34,7 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 			panic('loom2v: image partition "${part}" declares no threads')
 		}
 		// the satellite pass of the SAME handler emitter the owner uses: state structs,
-		// port structs, wrappers (remote writes -> duo_pub), registration lines.
+		// port structs, wrappers (remote writes -> xcore_pub), registration lines.
 		sat_ports, sat_glue, sat_regs := emit_handlers(m, producers, map[string]int{}, false,
 			part)
 
@@ -55,17 +55,17 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		g << ''
 		g << '// this image owns NO clocks, NO pins, NO bus — the owner core brings those up.'
 		g << 'fn C.board_now_us() u64 // DWT-based µs (this core\'s own counter, glue C)'
-		g << 'fn C.duo_wait_clocks() // park until the owner signals clocks-ready (duo.h)'
+		g << 'fn C.xcore_wait_clocks() // park until the owner signals clocks-ready (xcore.h)'
 		g << 'fn C.board_timebase_init()'
-		g << 'fn C.duo_ioc_init() // the shared xioc pool (satellite is the writer side)'
-		g << 'fn C.duo_load_pub(int, u16) // publish this core\'s per-mille load for the owner\'s CpuLoad (duo.h)'
+		g << 'fn C.xcore_ioc_init() // the shared xioc pool (satellite is the writer side)'
+		g << 'fn C.xcore_load_pub(int, u16) // publish this core\'s per-mille load for the owner\'s CpuLoad (xcore.h)'
 		// THIS partition's production decides the handshake role: only the PRODUCING
 		// satellite publishes the layout id — a non-producing image writing the cell
 		// would be a second writer, and could restore the id while the real producer
 		// is stopped, opening polling onto retained payloads (codex #211 r11).
 		mut produces := false
 		mut wide_writes := []string{}
-		for sname in m.duo_names {
+		for sname in m.xcore_names {
 			si := m.sig_of[sname] or { continue }
 			if si.from == part {
 				produces = true
@@ -75,13 +75,13 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 			}
 		}
 		if produces {
-			g << 'fn C.duo_layout_retract() // boot FIRST act: close polling before touching channels'
-			g << 'fn C.duo_layout_publish() // layout-id handshake: owner polls nothing until this'
+			g << 'fn C.xcore_layout_retract() // boot FIRST act: close polling before touching channels'
+			g << 'fn C.xcore_layout_publish() // layout-id handshake: owner polls nothing until this'
 		}
-		g << 'fn C.duo_pub(int, u32, u32) // xioc writer — slots from gen/duo_gen.h'
+		g << 'fn C.xcore_pub(int, u32, u32) // xioc writer — slots from gen/xcore_gen.h'
 		if wide_writes.len > 0 {
-			g << 'fn C.duo_xw_init(u32, u32) // wide xioc_n channel init (writer side, boot)'
-			g << 'fn C.duo_pub_n(u32, &u32) // wide xioc_n writer — offsets from gen/duo_gen.h'
+			g << 'fn C.xcore_xw_init(u32, u32) // wide xioc_n channel init (writer side, boot)'
+			g << 'fn C.xcore_pub_n(u32, &u32) // wide xioc_n writer — offsets from gen/xcore_gen.h'
 		}
 		g << 'fn C._tx_thread_sleep(u32) u32'
 		g << 'fn C._tx_initialize_kernel_enter()'
@@ -91,7 +91,7 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		if m.trace.on {
 			g << 'fn C.trace_arm() // this core\'s recorder free-runs; the owner re-arms per session'
 			g << 'fn C.trace_bind_thread(voidptr)'
-			g << 'fn C.duo_trace_service() // the dtrace handoff (owner posts, we snapshot/ack)'
+			g << 'fn C.xcore_trace_service() // the dtrace handoff (owner posts, we snapshot/ack)'
 		}
 		if fb_traced {
 			g << 'fn C.trace_fb(u32, u64, u32)'
@@ -142,7 +142,7 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 			g << '\t\t\tsched.mark_overrun()'
 			g << '\t\t}'
 			if ti == 0 && m.trace.on {
-				g << '\t\tC.duo_trace_service() // ~one poll per tick: plenty for the dump handshake'
+				g << '\t\tC.xcore_trace_service() // ~one poll per tick: plenty for the dump handshake'
 			}
 			if ti == 0 {
 				// publish this thread's per-mille load so the owner's CpuLoad frame reports this core
@@ -152,13 +152,13 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 				// be an unsynchronized cross-thread read (codex #235 r2); the correct fix is per-thread
 				// VOLATILE load slots (as the owner side already uses, C.load_pub_slot) summed here —
 				// deferred. Single-thread satellites (e.g. the domain) are exact.
-				g << '\t\tC.duo_load_pub(${m.part.core_of[part] or { 1 }}, sched.load_permille())'
+				g << '\t\tC.xcore_load_pub(${m.part.core_of[part] or { 1 }}, sched.load_permille())'
 			}
 			if ti == 0 {
 				g << emit_bulk_service_arm(m.bulk, m.part, part, '\t\t') // this satellite's cross-core bulk service (poll)
 			}
 			if ti == 0 && produces {
-				g << '\t\tC.duo_layout_publish() // REPUBLISH per tick: the owner retracts the id at ITS'
+				g << '\t\tC.xcore_layout_publish() // REPUBLISH per tick: the owner retracts the id at ITS'
 				g << '\t\t// boot (SRAM survives an owner-only reset — a retained id + retained channels'
 				g << '\t\t// would replay one stale frame); a live satellite restores it within a tick'
 			}
@@ -187,19 +187,19 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		g << ''
 		g << '// boot: the whole image entry — the example\'s main.v is just `gen.boot()`.'
 		g << 'pub fn boot() {'
-		g << '\tC.duo_wait_clocks() // SysTick assumes the final HCLK: wait out the owner\'s PLL'
+		g << '\tC.xcore_wait_clocks() // SysTick assumes the final HCLK: wait out the owner\'s PLL'
 		if produces {
-			g << '\tC.duo_layout_retract() // BEFORE any channel init: a satellite-only restart'
+			g << '\tC.xcore_layout_retract() // BEFORE any channel init: a satellite-only restart'
 			g << '\t// beside a live owner must close polling first (retained same-build id)'
 		}
 		g << '\tC.board_timebase_init()'
-		g << '\tC.duo_ioc_init()'
+		g << '\tC.xcore_ioc_init()'
 		for sname in wide_writes {
 			si := m.sig_of[sname] or { continue }
-			g << '\tC.duo_xw_init(u32(${m.duo_xw_off[sname] or { 0 }}), u32(${si.fields.len})) // ${sname}'
+			g << '\tC.xcore_xw_init(u32(${m.xcore_xw_off[sname] or { 0 }}), u32(${si.fields.len})) // ${sname}'
 		}
 		if produces {
-			g << '\tC.duo_layout_publish() // AFTER every channel init: the owner may poll now'
+			g << '\tC.xcore_layout_publish() // AFTER every channel init: the owner may poll now'
 		}
 		if m.trace.on {
 			g << '\tC.trace_arm()'

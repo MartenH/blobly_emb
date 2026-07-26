@@ -68,7 +68,7 @@ min_years      = 10
 
 # Cross-core bulk (docs/bulk-transport.md): the CM4 co-processor streams fixed-size model-detail
 # blocks into a pool in the H755 shared window; the CM7 comm thread consumes them. Both ends are
-# PLATFORM services (glue C, duo_bulk_produce/consume) — the app never touches the pool.
+# PLATFORM services (glue C, xcore_bulk_produce/consume) — the app never touches the pool.
 [[bulk]]
 name     = "model"
 producer = "dynamics"

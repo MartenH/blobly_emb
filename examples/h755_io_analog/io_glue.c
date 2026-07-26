@@ -9,7 +9,7 @@
  *
  * The PotLevel bus signal makes loom2v emit the bus-owning comm thread, so this file
  * also carries its board glue (the examples/h755_threadx comm_glue.c ISR/semaphore/load
- * scratch, minus shell/trace/duo — none are configured here): the FDCAN1 Rx-FIFO0 ISR
+ * scratch, minus shell/trace/xcore — none are configured here): the FDCAN1 Rx-FIFO0 ISR
  * posts a semaphore the comm thread blocks on, and the FB thread publishes its load
  * through volatile scalars for the CpuLoad producer.
  */

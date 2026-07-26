@@ -73,7 +73,7 @@ into the app is eliminated by construction, not managed by a deinit checklist.
 `boot_info` no-init cell (boot reason — normal / freshly-flashed / was-invalid,
 bootloader version) written by boot before the jump, exposed by the app over a
 DID/shell command without re-deriving anything. Both cells live in one board-owned
-header (the `duo.h` pattern) and are bound in `[boot]` so generator, app, and boot
+header (the `xcore.h` pattern) and are bound in `[boot]` so generator, app, and boot
 manager cannot disagree on the addresses.
 
 **Dual-bank caveat for P4:** a full-bank swap swaps the bootloader out with the app —

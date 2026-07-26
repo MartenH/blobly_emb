@@ -46,7 +46,7 @@ mut:
 	persist   string // '' | 'now' | 'shutdown' — restored + journaled by the platform
 	nvm_id    u16 // explicit schema-identity pin (0 = derive by hash); see gen_nvm.v
 	remote    bool // `from` is a partition on ANOTHER image (external/imaged) — the crossing
-	// rides an xioc slot (gen_duo.v); derived in build_model, never configured. SMP note:
+	// rides an xioc slot (gen_xcore.v); derived in build_model, never configured. SMP note:
 	// a coherent single-image target would derive `false` here and use ordinary IOC.
 	io_in  bool // `from` is the io endpoint class (docs/io.md): the io thread publishes it
 	io_out bool // `to` is the io endpoint class: the io thread acquires + applies it
@@ -1117,15 +1117,15 @@ mut:
 	nm           NmCfg
 	// Cross-core signal slots (derived, never configured): every REMOTE signal — one whose
 	// `from` partition lives in another image — gets an xioc slot, allocated in declaration
-	// order. Slot numbers surface ONLY in gen/duo_gen.h (the contract header both images
-	// compile against). duo_names keeps the allocation order for stable emission.
-	duo_idx   map[string]int
-	duo_names []string
+	// order. Slot numbers surface ONLY in gen/xcore_gen.h (the contract header both images
+	// compile against). xcore_names keeps the allocation order for stable emission.
+	xcore_idx   map[string]int
+	xcore_names []string
 	// WIDE remote signals (si.wide): byte offset of each signal's xioc_n channel inside the
-	// board's wide window (duo.h DUO_XW_ADDR), 32-aligned, allocation in declaration order;
-	// duo_xw_total is the window budget consumed (checked against DUO_XW_MAX in duo_gen.h).
-	duo_xw_off   map[string]int
-	duo_xw_total int
+	// board's wide window (xcore.h XCORE_XW_ADDR), 32-aligned, allocation in declaration order;
+	// xcore_xw_total is the window budget consumed (checked against XCORE_XW_MAX in xcore_gen.h).
+	xcore_xw_off   map[string]int
+	xcore_xw_total int
 	// [nvm] (gen_nvm.v): persistent-signal names in declaration order + their
 	// schema-identity block ids — all derived, never configured beyond intent.
 	nvm       NvmCfg
@@ -1164,11 +1164,11 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	// Derive the cross-image crossings: a signal FROM a partition whose code lives in another
 	// image is REMOTE — it rides an xioc slot (see docs/multi-image.md; the transport is derived
 	// from the topology, never configured). The satellite side publishes, this image polls.
-	mut duo_idx := map[string]int{}
-	mut duo_names := []string{}
-	mut duo_xw_off := map[string]int{}
-	mut duo_xw_total := 0
-	mut duo_pair_n := 0
+	mut xcore_idx := map[string]int{}
+	mut xcore_names := []string{}
+	mut xcore_xw_off := map[string]int{}
+	mut xcore_xw_total := 0
+	mut xcore_pair_n := 0
 	for sname in sig_names {
 		mut si := sig_of[sname] or { continue }
 		from_ext := part.external[si.from] or { false }
@@ -1202,28 +1202,28 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		if si.wide {
 			// xioc_n geometry: 32 B header + XIOC_SLOTS(4) x (1 seq + lanes) u32s, rounded up
 			// to the 32 B line so neighbouring channels never share one.
-			duo_xw_off[sname] = duo_xw_total
+			xcore_xw_off[sname] = xcore_xw_total
 			ch_bytes := 32 + 4 * 4 * (1 + si.fields.len)
-			duo_xw_total += (ch_bytes + 31) & ~31
+			xcore_xw_total += (ch_bytes + 31) & ~31
 		} else {
-			duo_idx[sname] = duo_pair_n
-			duo_pair_n++
+			xcore_idx[sname] = xcore_pair_n
+			xcore_pair_n++
 		}
-		duo_names << sname
+		xcore_names << sname
 		sig_of[sname] = si
 	}
 	// ONE satellite producer per model, counting BOTH generated (image =) and
 	// hand-written (external = true) satellites: every producer publishes the layout-id
-	// acknowledgement into the single DUO_LAYOUT_ADDR cell, so a second satellite of
+	// acknowledgement into the single XCORE_LAYOUT_ADDR cell, so a second satellite of
 	// either kind would race it — a current one's id winning would open polling for a
 	// stale sibling's incompatible slots (codex #211 r8/r10). The per-satellite-cell
-	// design (cells at DUO_LAYOUT_ADDR + 4*i, each signal gated on its producer's cell)
+	// design (cells at XCORE_LAYOUT_ADDR + 4*i, each signal gated on its producer's cell)
 	// lands with the first real multi-satellite target.
-	mut duo_producers := []string{}
-	for sname in duo_names {
+	mut xcore_producers := []string{}
+	for sname in xcore_names {
 		si := sig_of[sname] or { continue }
-		if si.from !in duo_producers {
-			duo_producers << si.from
+		if si.from !in xcore_producers {
+			xcore_producers << si.from
 		}
 	}
 	// SPSC per remote channel, validated HERE (not only in the comm-thread walk, which a
@@ -1245,7 +1245,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 			}
 		}
 	}
-	for sname in duo_names {
+	for sname in xcore_names {
 		mut ctxs := remote_writer_ctx[sname] or { []string{} }
 		if ctxs.len > 1 {
 			ctxs.sort()
@@ -1254,10 +1254,10 @@ fn build_model(doc toml.Doc, dbc string) Model {
 				'(SPSC); keep its writers on one thread or split the signal')
 		}
 	}
-	if duo_producers.len > 1 {
-		duo_producers.sort()
-		panic('loom2v: ${duo_producers.len} satellite partitions produce remote signals ' +
-			'(${duo_producers.join(', ')}) — the cross-core layout handshake carries ONE ' +
+	if xcore_producers.len > 1 {
+		xcore_producers.sort()
+		panic('loom2v: ${xcore_producers.len} satellite partitions produce remote signals ' +
+			'(${xcore_producers.join(', ')}) — the cross-core layout handshake carries ONE ' +
 			'satellite today (generated or hand-written); see the per-cell design note here')
 	}
 	m := Model{
@@ -1283,10 +1283,10 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		trace:        parse_trace(doc, dbc)
 		shell:        parse_shell(doc, dbc)
 		nm:           parse_nm(doc, dbc)
-		duo_idx:      duo_idx
-		duo_names:    duo_names
-		duo_xw_off:   duo_xw_off
-		duo_xw_total: duo_xw_total
+		xcore_idx:      xcore_idx
+		xcore_names:    xcore_names
+		xcore_xw_off:   xcore_xw_off
+		xcore_xw_total: xcore_xw_total
 		nvm:          parse_nvm(doc)
 		bulk:         parse_bulk(doc)
 	}
@@ -1773,7 +1773,7 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	man << trace_manifest_frames(m)
 	man << shell_manifest_frames(m)
 	man << nm_manifest_frames(m)
-	man << duo_manifest(m)
+	man << xcore_manifest(m)
 	man << nvm_manifest(m)
 	man << someip_manifest(m)
 	return man
@@ -1957,19 +1957,19 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
 			glue << trace_c_decls(m)
 			glue << shell_c_decls(m)
-			glue << duo_c_decls(m)
+			glue << xcore_c_decls(m)
 			if has_satellite(m) {
 				// boot() calls this to release the parked satellite. Keyed on has_satellite, NOT
-				// duo_on — a node can own a satellite for [[bulk]]/CpuLoad without any cross-core
-				// SIGNAL (the domain), and then duo_c_decls (duo_on-gated) emits nothing (codex #235).
-				glue << 'fn C.duo_clocks_ready() // release the parked satellite: final HCLK + HSEM en + DUO_CLK_MAGIC (duo.h)'
+				// xcore_on — a node can own a satellite for [[bulk]]/CpuLoad without any cross-core
+				// SIGNAL (the domain), and then xcore_c_decls (xcore_on-gated) emits nothing (codex #235).
+				glue << 'fn C.xcore_clocks_ready() // release the parked satellite: final HCLK + HSEM en + XCORE_CLK_MAGIC (xcore.h)'
 			}
 			glue << nvm_c_decls(m)
-			glue << duo_trace_c_decls(m)
+			glue << xcore_trace_c_decls(m)
 			glue << emit_bulk_service_decls(m.bulk, m.part, '') // owner-side cross-core bulk service
 			if comm_thread_on && m.part.image.len > 0 {
 				// cross-core CpuLoad: the comm thread reads each satellite core's published load
-				glue << "fn C.duo_load_get(int) u16 // a satellite core's per-mille load (duo.h; weak 0)"
+				glue << "fn C.xcore_load_get(int) u16 // a satellite core's per-mille load (xcore.h; weak 0)"
 			}
 			glue << shell_cmd_fns(m)
 			glue << nm_shell_fns(m)
@@ -2064,7 +2064,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << trace_scratch_fields(m, part)
 			glue << trace_module_globals(m)
 			glue << shell_module_globals(m)
-			glue << duo_trace_globals(m)
+			glue << xcore_trace_globals(m)
 			glue << nvm_globals(m)
 			glue << nm_module_globals(m)
 			if comm_thread_on {
@@ -2359,7 +2359,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					}
 				}
 				// external TX signals (FB writes -> IOC -> comm sends), a producer each. REMOTE
-				// tx signals (satellite -> bus) ride the xioc drain (duo_produce_drain) instead.
+				// tx signals (satellite -> bus) ride the xioc drain (xcore_produce_drain) instead.
 				mut tx_sigs := []SigInfo{}
 				for sn in m.sig_names {
 					s := m.sig_of[sn] or { continue }
@@ -2400,7 +2400,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				mut comm_ncores := 1
 				for spart, _ in m.part.image {
 					sc := m.part.core_of[spart] or { continue }
-					comm_load_line += '\n\t\t\tload[${sc}] = C.duo_load_get(${sc}) // ' + spart + ' satellite (cross-core)'
+					comm_load_line += '\n\t\t\tload[${sc}] = C.xcore_load_get(${sc}) // ' + spart + ' satellite (cross-core)'
 					if sc + 1 > comm_ncores {
 						comm_ncores = sc + 1
 					}
@@ -2441,9 +2441,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << nm_shell_register(m)
 				glue << stat_shell_register(m)
 				glue << nm_module_init(m)
-				glue << duo_comm_locals(m)
+				glue << xcore_comm_locals(m)
 				glue << nvm_comm_locals(m, ioc_idx)
-				glue << duo_trace_locals(m)
+				glue << xcore_trace_locals(m)
 				for si in tx_sigs {
 					glue << '\tmut last_tx_${snake(si.name)} := u64(0)'
 				}
@@ -2477,7 +2477,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << trace_rx_arms(m, part)
 			glue << shell_rx_arms(m)
 			glue << nm_rx_arms(m)
-			glue << duo_trace_rx_arm(m)
+			glue << xcore_trace_rx_arm(m)
 				// GATEWAY: forward routes whose SOURCE is the telem bus (`ch`) — raw copy +
 				// id remap onto the destination channel (tx_ready-gated).
 				glue << gateway_forward_arms(m, m.telem.bus)
@@ -2543,8 +2543,8 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << trace_produce_drain(m)
 				glue << shell_produce_drain(m)
-				glue << duo_trace_poll(m)
-				glue << duo_produce_drain(m)
+				glue << xcore_trace_poll(m)
+				glue << xcore_produce_drain(m)
 				glue << emit_bulk_service_arm(m.bulk, m.part, '', '\t\t') // owner cross-core bulk service (poll)
 				glue << nvm_service(m, ioc_idx)
 				glue << '\t}'
@@ -2672,11 +2672,11 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << nvm_flash_wrappers(m)
 			glue << 'pub fn boot() {'
 			if has_satellite(m) {
-				// release the parked satellite core BEFORE the kernel: it waits on DUO_CLK_MAGIC
-				// (duo_wait_clocks). main.v has already run board_clock_init, so the satellite's
+				// release the parked satellite core BEFORE the kernel: it waits on XCORE_CLK_MAGIC
+				// (xcore_wait_clocks). main.v has already run board_clock_init, so the satellite's
 				// SysTick is set against the final HCLK. Generator-owned so any owner — a shared
 				// main.v (system_full) or a hand-written one — releases its satellite (codex #235).
-				glue << '\tC.duo_clocks_ready()'
+				glue << '\tC.xcore_clocks_ready()'
 			}
 			if ioc_idx.len > 0 {
 				glue << '\tC.ioc_pool_init() // init the cross-thread signal IOC cells before any thread runs'
@@ -2830,7 +2830,7 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 //
 // image_part selects the pass: '' emits the OWNER image (every non-external partition);
 // a partition name emits ONLY that satellite partition (the multi-image pass, gen_image.v)
-// — same structs/wrappers, with remote writes going to duo_pub instead of an IOC cell.
+// — same structs/wrappers, with remote writes going to xcore_pub instead of an IOC cell.
 fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_host bool, image_part string) ([]string, []string, map[string][]string) {
 	mut ports := []string{}
 	mut glue := []string{}
@@ -3018,10 +3018,10 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 							}
 							glue << '\tC.ioc_pub(${ioc_idx[wn]}, ${f0}, ${f1}) // persist staging'
 						}
-					} else if xoff := m.duo_xw_off[wn] {
+					} else if xoff := m.xcore_xw_off[wn] {
 						// wide remote signal (xioc_n): one u32 lane per field, lane order =
 						// field order = wire order — packed into the signal's channel in the
-						// board wide window (duo_gen.h DUO_XW_*_OFF; boot init'd this side).
+						// board wide window (xcore_gen.h XCORE_XW_*_OFF; boot init'd this side).
 						glue << '\tmut xw_${snake(wn)} := [${si.fields.len}]u32{}'
 						for fi, f in si.fields {
 							if f.typ == 'bool' {
@@ -3030,17 +3030,17 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 								glue << '\txw_${snake(wn)}[${fi}] = u32(outp.${snake(wn)}.${snake(f.name)})'
 							}
 						}
-						glue << '\tC.duo_pub_n(u32(${xoff}), &xw_${snake(wn)}[0])'
-					} else if dslot := m.duo_idx[wn] {
+						glue << '\tC.xcore_pub_n(u32(${xoff}), &xw_${snake(wn)}[0])'
+					} else if dslot := m.xcore_idx[wn] {
 						// remote (cross-image) signal: publish the {a, b} pair into its xioc slot —
-						// the bus owner polls it (duo_produce_drain / platform C). Field order = wire
+						// the bus owner polls it (xcore_produce_drain / platform C). Field order = wire
 						// order (validated against the DBC in the comm-thread walk).
 						b_expr := if si.fields.len > 1 {
 							'u32(outp.${snake(wn)}.${snake(si.fields[1].name)})'
 						} else {
 							'u32(0)'
 						}
-						glue << '\tC.duo_pub(${dslot}, u32(outp.${snake(wn)}.${snake(si.fields[0].name)}), ${b_expr})'
+						glue << '\tC.xcore_pub(${dslot}, u32(outp.${snake(wn)}.${snake(si.fields[0].name)}), ${b_expr})'
 					} else if idx := ioc_idx[wn] {
 						// external TX (app -> bus) or io output (app -> pin): publish the value into its
 						// IOC cell; the consumer (comm thread / io thread) reads it each period. Value
@@ -3291,13 +3291,13 @@ fn main() {
 			'(the module lives on the bus owner). Building WITHOUT NM.')
 		m.nm.on = false
 	}
-	if m.duo_names.len > 0 && !(m.target.threadx) {
+	if m.xcore_names.len > 0 && !(m.target.threadx) {
 		eprintln('loom2v: WARNING: cross-core (remote) signals need the ThreadX comm-thread ' +
 			'target (the bus owner transmits them). Building WITHOUT the xioc slots.')
-		m.duo_idx.clear()
-		m.duo_names.clear()
-		m.duo_xw_off.clear()
-		m.duo_xw_total = 0
+		m.xcore_idx.clear()
+		m.xcore_names.clear()
+		m.xcore_xw_off.clear()
+		m.xcore_xw_total = 0
 	}
 	if m.trace.on && m.target.threadx {
 		validate_trace_threadx(m)
@@ -3497,7 +3497,7 @@ fn main() {
 	}
 	owner_bulk_produces, owner_bulk_consumes := bulk_image_role(m.bulk, m.part, '')
 	if (owner_bulk_produces || owner_bulk_consumes) && m.target.threadx && !comm_thread_on {
-		// the owner-side cross-core bulk service (duo_bulk_produce/consume) is polled from the
+		// the owner-side cross-core bulk service (xcore_bulk_produce/consume) is polled from the
 		// comm loop; without a bus bridge there is no comm thread, so the satellite would publish
 		// into a pool this image never drains (or vice versa). Fail loud rather than silently
 		// generate a dead endpoint — a busless/eth-only owner needs the declarable bulk service
@@ -3538,7 +3538,7 @@ fn main() {
 		}
 		// EVERY remote signal is a single-writer xioc channel — including slot-only ones
 		// (to a local partition), which never reach the external-TX check below: two
-		// writing handlers would emit two duo_pub(_n) producers racing the channel's
+		// writing handlers would emit two xcore_pub(_n) producers racing the channel's
 		// writer-private wseq, invalidating the tear-free algorithm (codex #211 r9).
 		// NOTE: the SPSC validation itself lives in build_model and counts producer
 		// CONTEXTS (threads) — a raw handler count here rejected two serial handlers
@@ -3606,7 +3606,7 @@ fn main() {
 				}
 				if si.remote {
 					// remote TX (satellite -> bus): the satellite image publishes into the signal's
-					// xioc slot; the comm producer polls it (duo_produce_drain) — no owner IOC cell.
+					// xioc slot; the comm producer polls it (xcore_produce_drain) — no owner IOC cell.
 					// The lean encode packs the {a, b} pair LE at bytes 0/4, so the frame must be
 					// exactly the fields' width (field order = DBC layout order by convention).
 					if si.dbc_lane_issue != '' {
@@ -3871,13 +3871,13 @@ fn main() {
 				slots = regs.len
 			}
 		}
-		if duo_on(m) || has_satellite(m) {
-			// duo_gen.h holds DUO_LAYOUT_ID, which the cross-core boot handshake (duo_layout_ok /
+		if xcore_on(m) || has_satellite(m) {
+			// xcore_gen.h holds XCORE_LAYOUT_ID, which the cross-core boot handshake (xcore_layout_ok /
 			// _publish) needs for EVERY satellite owner — even a bulk/CpuLoad-only node with no
-			// cross-core [[signal]] (duo_on false). Without this a clean `make nodes` fails on the
-			// glue's #include "duo_gen.h" (codex #235 r2); a stale header masks it on a used tree.
-			hpath := os.join_path(os.dir(args[5]), 'duo_gen.h')
-			os.write_file(hpath, duo_gen_h(m).join('\n') + '\n') or {
+			// cross-core [[signal]] (xcore_on false). Without this a clean `make nodes` fails on the
+			// glue's #include "xcore_gen.h" (codex #235 r2); a stale header masks it on a used tree.
+			hpath := os.join_path(os.dir(args[5]), 'xcore_gen.h')
+			os.write_file(hpath, xcore_gen_h(m).join('\n') + '\n') or {
 				panic('write ${hpath}: ${err}')
 			}
 		}

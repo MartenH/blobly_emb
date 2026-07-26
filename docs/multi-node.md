@@ -26,7 +26,7 @@ transmits and another receives is a CAN frame on the shared bus, defined in the
 shared DBC. Cross-node communication is already modelled; it is just spelled
 *manually* today (you write `to = "can0"`, author a `[[frame]]`, and put it in
 the DBC on both sides). Multi-node makes it **derived and validated**, exactly as
-cross-core went from hand-wired duo plumbing to `to = "m4"` → xioc.
+cross-core went from hand-wired xcore plumbing to `to = "m4"` → xioc.
 
 So the work is not a new transport. It is: a **system view** that lets the
 generator see all the nodes at once, so it can (a) derive each node's

@@ -80,7 +80,7 @@ Kept standalone (not features of a running system): `bulk_bench` (host micro-ben
   (fork+`MAP_SHARED`); `bulk-ring-silicon` closed on the H755 (`#228`, below).
 - ✅ **Bulk cross-core `ecu.toml` surface** (`#225`) — a `[[bulk]]` whose
   producer/consumer sit on different cores is placed in the H755 shared window (both
-  images derive the same pointer from a board seam `duo_bulk_base()`, deterministic
+  images derive the same pointer from a board seam `xcore_bulk_base()`, deterministic
   32 B-aligned offsets, static-checked vs the region budget); each image emits the
   pools it is an endpoint of; the cross-partition guard allows cross-**core** and
   rejects same-core cross-partition (host has no backend); `[[bulk]]` schema added.
@@ -89,7 +89,7 @@ Kept standalone (not features of a running system): `bulk_bench` (host micro-ben
   platform module and the app never touches the pool.
 - ✅ **Bulk on-silicon** (`#228`) — `examples/h755_threadx` `[[bulk]]` "xfer": the M4
   produces seq-tagged 256 B blocks, the CM7 comm thread consumes + verifies. loom2v
-  emits per-image service hooks (`duo_bulk_produce/consume`, like `duo_trace_service`);
+  emits per-image service hooks (`xcore_bulk_produce/consume`, like `xcore_trace_service`);
   the platform glue owns the pool. Bench: **rx_bad = 0** over 32k+ blocks (byte-exact,
   no tearing across the AXI fabric) and rx_ok + rx_gap == tx_seq (every attempt
   consumed or a counted backpressure drop). Closes `bulk-ring-silicon` / REQ-BULK-003.

@@ -22,7 +22,7 @@ fn handler_m4_m4_load_on_10ms(ctx voidptr) {
 	mut inp := ports.M4LoadIn{}
 	mut outp := ports.M4LoadOut{}
 	st.m4_load.on_10ms(inp, mut outp)
-	C.duo_pub(0, u32(outp.m4_count.n), u32(outp.m4_count.acc))
+	C.xcore_pub(0, u32(outp.m4_count.n), u32(outp.m4_count.acc))
 }
 
 fn handler_m4_m4_churn_on_2ms(ctx voidptr) {
@@ -30,25 +30,25 @@ fn handler_m4_m4_churn_on_2ms(ctx voidptr) {
 	mut inp := ports.M4ChurnIn{}
 	mut outp := ports.M4ChurnOut{}
 	st.m4_churn.on_2ms(inp, mut outp)
-	C.duo_pub(1, u32(outp.m4_stress.k), u32(outp.m4_stress.chk))
+	C.xcore_pub(1, u32(outp.m4_stress.k), u32(outp.m4_stress.chk))
 }
 
 // this image owns NO clocks, NO pins, NO bus — the owner core brings those up.
 fn C.board_now_us() u64 // DWT-based µs (this core's own counter, glue C)
-fn C.duo_wait_clocks() // park until the owner signals clocks-ready (duo.h)
+fn C.xcore_wait_clocks() // park until the owner signals clocks-ready (xcore.h)
 fn C.board_timebase_init()
-fn C.duo_ioc_init() // the shared xioc pool (satellite is the writer side)
-fn C.duo_load_pub(int, u16) // publish this core's per-mille load for the owner's CpuLoad (duo.h)
-fn C.duo_layout_retract() // boot FIRST act: close polling before touching channels
-fn C.duo_layout_publish() // layout-id handshake: owner polls nothing until this
-fn C.duo_pub(int, u32, u32) // xioc writer — slots from gen/duo_gen.h
+fn C.xcore_ioc_init() // the shared xioc pool (satellite is the writer side)
+fn C.xcore_load_pub(int, u16) // publish this core's per-mille load for the owner's CpuLoad (xcore.h)
+fn C.xcore_layout_retract() // boot FIRST act: close polling before touching channels
+fn C.xcore_layout_publish() // layout-id handshake: owner polls nothing until this
+fn C.xcore_pub(int, u32, u32) // xioc writer — slots from gen/xcore_gen.h
 fn C._tx_thread_sleep(u32) u32
 fn C._tx_initialize_kernel_enter()
 fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32
-fn C.duo_bulk_produce() // platform producer service (glue): loan+fill+publish
+fn C.xcore_bulk_produce() // platform producer service (glue): loan+fill+publish
 fn C.trace_arm() // this core's recorder free-runs; the owner re-arms per session
 fn C.trace_bind_thread(voidptr)
-fn C.duo_trace_service() // the dtrace handoff (owner posts, we snapshot/ack)
+fn C.xcore_trace_service() // the dtrace handoff (owner posts, we snapshot/ack)
 fn C.trace_fb(u32, u64, u32)
 
 fn trace_clock() u64 {
@@ -93,10 +93,10 @@ fn run_m4_app() {
 		if t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun
 			sched.mark_overrun()
 		}
-		C.duo_trace_service() // ~one poll per tick: plenty for the dump handshake
-		C.duo_load_pub(1, sched.load_permille())
-		C.duo_bulk_produce() // cross-core bulk producer (platform-owned pool)
-		C.duo_layout_publish() // REPUBLISH per tick: the owner retracts the id at ITS
+		C.xcore_trace_service() // ~one poll per tick: plenty for the dump handshake
+		C.xcore_load_pub(1, sched.load_permille())
+		C.xcore_bulk_produce() // cross-core bulk producer (platform-owned pool)
+		C.xcore_layout_publish() // REPUBLISH per tick: the owner retracts the id at ITS
 		// boot (SRAM survives an owner-only reset — a retained id + retained channels
 		// would replay one stale frame); a live satellite restores it within a tick
 		C._tx_thread_sleep(u32(1))
@@ -140,12 +140,12 @@ fn tx_application_define(first_unused voidptr) {
 
 // boot: the whole image entry — the example's main.v is just `gen.boot()`.
 pub fn boot() {
-	C.duo_wait_clocks() // SysTick assumes the final HCLK: wait out the owner's PLL
-	C.duo_layout_retract() // BEFORE any channel init: a satellite-only restart
+	C.xcore_wait_clocks() // SysTick assumes the final HCLK: wait out the owner's PLL
+	C.xcore_layout_retract() // BEFORE any channel init: a satellite-only restart
 	// beside a live owner must close polling first (retained same-build id)
 	C.board_timebase_init()
-	C.duo_ioc_init()
-	C.duo_layout_publish() // AFTER every channel init: the owner may poll now
+	C.xcore_ioc_init()
+	C.xcore_layout_publish() // AFTER every channel init: the owner may poll now
 	C.trace_arm()
 	C._tx_initialize_kernel_enter() // never returns
 }
@@ -164,11 +164,11 @@ fn C.bulk_take(b &C.bulk_t, len &u32) int
 fn C.bulk_release(b &C.bulk_t, idx u32)
 fn C.bulk_buf(b &C.bulk_t, idx u32) &u8
 fn C.bulk_overflows(b &C.bulk_t) u32
-fn C.duo_bulk_base() usize // cross-core bulk region base (board glue; H755 = DUO_BULK_ADDR)
+fn C.xcore_bulk_base() usize // cross-core bulk region base (board glue; H755 = XCORE_BULK_ADDR)
 
 // --- Bulk pool: xfer (4 x 256 B; m4 -> app; shared window @ base+0x0) ---
 fn bulk_xfer_ptr() &C.bulk_t {
-	return &C.bulk_t(voidptr(C.duo_bulk_base() + usize(0)))
+	return &C.bulk_t(voidptr(C.xcore_bulk_base() + usize(0)))
 }
 
 pub fn bulk_xfer_init() {

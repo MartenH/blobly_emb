@@ -149,7 +149,7 @@ tick_ms = 1
 
 # Cross-core bulk (docs/bulk-transport.md): the M4 produces fixed-size blocks into a pool in the
 # H755 shared window; the CM7 comm thread consumes them. Both ends are PLATFORM services (glue C,
-# duo_bulk_produce/consume) — the app never touches the pool. Proves the shared-window placement +
+# xcore_bulk_produce/consume) — the app never touches the pool. Proves the shared-window placement +
 # the SPSC ring on real dual-core silicon (REQ-BULK-003 / bulk-ring-silicon).
 [[bulk]]
 name     = "xfer"
@@ -160,7 +160,7 @@ nbuf     = 4
 
 # --- the satellite core (docs/multi-image.md): an ORDINARY partition whose image the
 # generator emits into examples/h755_m4_app (image = <dir>). Its signals are ordinary
-# signals — `from = "m4"` derives an xioc slot (gen/duo_gen.h); M4Count rides
+# signals — `from = "m4"` derives an xioc slot (gen/xcore_gen.h); M4Count rides
 # M4LoadFrame on this image's comm loop, M4Stress is slot-only (read by platform C,
 # the iocx health check). Keep [[blocks]] comment-free (vlang/v#27684).
 [[partition]]

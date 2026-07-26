@@ -33,7 +33,7 @@ pub mut:
 }
 
 // on_2ms is the stress lane: LCG churn for load realism, then a monotonic {k, k*K} pair
-// on the M4Stress slot. K matches DUO_STRESS_K (duo.h) — the owner's `iocx` command
+// on the M4Stress slot. K matches XCORE_STRESS_K (xcore.h) — the owner's `iocx` command
 // verifies every read satisfies chk == k*K (no tear) and k never decreases (no lap).
 pub fn (mut c M4Churn) on_2ms(inp ports.M4ChurnIn, mut outp ports.M4ChurnOut) {
 	mut a := c.acc

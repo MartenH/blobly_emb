@@ -1449,8 +1449,8 @@ pub fn validate_bulk(doc toml.Doc, part_names map[string]bool, thread_part map[s
 						errs << 'bulk pool "${bname}" producer "${prod}" (partition "${prod_part}") and consumer "${cons}" (partition "${cons_part}") cross partitions on the SAME core — same-core cross-partition bulk needs an intra-image shared region, which is not built (a CROSS-core pool is transported through the shared window)'
 					} else if target_kind != 'threadx' {
 						// A cross-CORE pool is transported through the H755 shared window
-						// (loom2v places it at DUO_BULK_ADDR), which only exists on the ThreadX
-						// target — a host/sim build has no `duo_bulk_base()` backend to link.
+						// (loom2v places it at XCORE_BULK_ADDR), which only exists on the ThreadX
+						// target — a host/sim build has no `xcore_bulk_base()` backend to link.
 						errs << 'bulk pool "${bname}" is cross-core (producer "${prod}" on core ${part_core[prod_part] or {
 							0
 						}}, consumer "${cons}" on core ${part_core[cons_part] or {

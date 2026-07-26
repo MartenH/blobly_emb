@@ -24,7 +24,7 @@
 #define APP_VECTORS (APP_BASE + 0x400u)
 
 /* Handshake cells in D3 SRAM4 (0x38000000, 16 KB) — survive NVIC_SystemReset,
- * garbage after POR (that's what the magics are for). Single-core: no duo.h
+ * garbage after POR (that's what the magics are for). Single-core: no xcore.h
  * map to dodge. Layout: [magic, arg] each. */
 #define BOOTCELL_REQ_ADDR 0x38000FE0u /* app -> boot: enter programming mode */
 #define BOOTCELL_REQ_MAGIC 0x544F4F42u /* 'BOOT' */

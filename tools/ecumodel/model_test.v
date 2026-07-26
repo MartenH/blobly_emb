@@ -1796,7 +1796,7 @@ nbuf     = 0
 
 fn test_bulk_cross_core_allowed() {
 	// CROSS-CORE (app core 0 -> part_b core 1) on the ThreadX target: transported through the
-	// H755 shared window, so it is NO LONGER rejected — both images address DUO_BULK_ADDR.
+	// H755 shared window, so it is NO LONGER rejected — both images address XCORE_BULK_ADDR.
 	e := errs_of('
 [target]
 kind = "threadx"
@@ -1819,7 +1819,7 @@ nbuf     = 4
 }
 
 fn test_bulk_cross_core_needs_threadx_backend() {
-	// CROSS-CORE on a NON-ThreadX (host/sim) target: there is no duo_bulk_base() shared-window
+	// CROSS-CORE on a NON-ThreadX (host/sim) target: there is no xcore_bulk_base() shared-window
 	// backend to link, so the pool must be rejected up front.
 	e := errs_of('
 [[partition]]
