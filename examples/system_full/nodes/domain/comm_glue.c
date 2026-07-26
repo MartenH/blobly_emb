@@ -526,6 +526,12 @@ uint32_t nvm_map_size(void) { return 0x00020000u; } /* 128 KB each */
  * A climbing g_bulk_rx_ok with g_bulk_rx_bad == 0 is the pass condition (REQ-BULK-003 on silicon). */
 size_t duo_bulk_base(void) { return (size_t)DUO_BULK_ADDR; }
 
+/* Cross-core CpuLoad (duo.h DUO_LOAD_ADDR): read a satellite core's per-mille load from its slot,
+ * for the CpuLoad frame's per-core byte. Strong override of the weak 0 default in weak_irq.c. */
+uint16_t duo_load_get(int core) {
+	return (core >= 0 && core < 8) ? ((volatile uint16_t *)DUO_LOAD_ADDR)[core] : 0u;
+}
+
 uint32_t g_bulk_rx_ok  = 0;
 uint32_t g_bulk_rx_bad = 0;
 uint32_t g_bulk_rx_gap = 0;

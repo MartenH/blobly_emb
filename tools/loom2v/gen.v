@@ -1556,6 +1556,7 @@ struct BusCtx {
 	period       string
 	gate         string
 	load         []string
+	ncores       int // cores in the CpuLoad frame (default 1); >1 when the owner aggregates satellites
 	det_ovr      string
 	det_lines    []string
 	frame        string
@@ -1598,7 +1599,7 @@ fn (t TelemProducer) bus_tick(ctx BusCtx) []string {
 	g << '\t\tif ${ctx.now} - last_telem >= ${ctx.period}${ctx.gate} {'
 	g << '\t\t\tlast_telem = ${ctx.now}'
 	g << ctx.load
-	g << '\t\t\tframe := telem.encode_cpuload(load, 1)'
+	g << '\t\t\tframe := telem.encode_cpuload(load, ${if ctx.ncores > 0 { ctx.ncores } else { 1 }})'
 	g << '\t\t\tmut ${ctx.frame} := can.Frame{'
 	g << '\t\t\t\tid:  u32(0x${t.id.hex()})'
 	g << '\t\t\t\tlen: 8'
@@ -1960,6 +1961,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << nvm_c_decls(m)
 			glue << duo_trace_c_decls(m)
 			glue << emit_bulk_service_decls(m.bulk, m.part, '') // owner-side cross-core bulk service
+			if comm_thread_on && m.part.image.len > 0 {
+				// cross-core CpuLoad: the comm thread reads each satellite core's published load
+				glue << "fn C.duo_load_get(int) u16 // a satellite core's per-mille load (duo.h; weak 0)"
+			}
 			glue << shell_cmd_fns(m)
 			glue << nm_shell_fns(m)
 			glue << stat_shell_fns(m, doc, app_threads, multi)
@@ -2381,10 +2386,18 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// the io thread publishes its own slot, so its presence flips the single-FB
 				// cut onto the summed reads too (io serve time counts like an FB thread's)
 				sum_load := multi || m.io_points.len > 0
-				comm_load_line := if sum_load {
+				mut comm_load_line := if sum_load {
 					'\t\t\tload[0] = u16(C.load_sum_permille()) // sum of the FB threads (one core)'
 				} else {
 					'\t\t\tload[0] = u16(C.load_permille())'
+				}
+				mut comm_ncores := 1
+				for spart, _ in m.part.image {
+					sc := m.part.core_of[spart] or { continue }
+					comm_load_line += '\n\t\t\tload[${sc}] = C.duo_load_get(${sc}) // ' + spart + ' satellite (cross-core)'
+					if sc + 1 > comm_ncores {
+						comm_ncores = sc + 1
+					}
 				}
 				comm_det_ovr := if sum_load { 'C.load_sum_overruns()' } else { 'C.load_overruns()' }
 				comm_det_line := if sum_load {
@@ -2489,6 +2502,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						period:       'telem_period_us'
 						gate:         if m.nm.on { ' && nm_up && ch.tx_ready()' } else { ' && ch.tx_ready()' }
 						load:         ['\t\t\tmut load := [8]u16{}', comm_load_line]
+						ncores:       comm_ncores
 						det_ovr:      comm_det_ovr
 						det_lines:    [comm_det_line]
 						frame:        'f'

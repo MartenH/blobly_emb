@@ -172,6 +172,16 @@ void ETH_IRQHandler(void) {
  * and publishes. The CM7 comm thread consumes and verifies. Counters are SWD-observable. */
 size_t duo_bulk_base(void) { return (size_t)DUO_BULK_ADDR; }
 
+/* Cross-core CpuLoad (duo.h DUO_LOAD_ADDR): publish THIS core's per-mille processor load into its
+ * slot; the CM7 owner's comm thread reads it into the CpuLoad frame so it reports both cores. The
+ * generated satellite loop calls this once per tick with sched.load_permille(). Strong override of
+ * the weak no-op in boards/common/weak_irq.c. */
+void duo_load_pub(int core, uint16_t pm) {
+	if (core >= 0 && core < 8) {
+		((volatile uint16_t *)DUO_LOAD_ADDR)[core] = pm;
+	}
+}
+
 uint32_t g_bulk_tx_seq  = 0; /* blocks published */
 uint32_t g_bulk_tx_full = 0; /* loan failures: consumer slower than producer (REQ-BULK-002) */
 static int s_xfer_inited = 0;

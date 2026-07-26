@@ -84,6 +84,12 @@
  * 0x38001000), so it collides with nothing in the map above. */
 #define DUO_BULK_BURST_ADDR 0x38000C00u
 
+/* Cross-core CpuLoad: each satellite image publishes its own core's per-mille processor load
+ * (loom sched.load_permille(), 0..1000) into its slot here; the owner's comm thread reads the
+ * satellite slots into the CpuLoad frame so it reports EVERY core, not just its own. u16[8],
+ * indexed by core (owner writes nothing — it has its own sched). In the SRAM4 gap. */
+#define DUO_LOAD_ADDR 0x38000C10u
+
 /* Platform seam for the cross-core bulk base: generated code externs `duo_bulk_base()` and adds
  * the per-pool offset, and NEVER includes this board header — so an image that declares a
  * cross-core [[bulk]] pool must DEFINE the seam in its glue C, exactly like duo_pub/duo_ioc_init:

@@ -20,3 +20,12 @@ __attribute__((weak)) void FDCAN2_IT0_IRQHandler(void) { }
  * other image (incl. the CM4 satellite, which never enables this NVIC line) gets this weak stub
  * so the shared vector's symbol resolves. Separate object, same reason as above. */
 __attribute__((weak)) void HSEM1_IT_IRQHandler(void) { }
+
+/* Cross-core CpuLoad (duo.h DUO_LOAD_ADDR): a satellite image publishes its per-mille load and the
+ * owner reads it, so the CpuLoad frame reports every core. Weak no-op/zero defaults so an image
+ * that does neither — a single-core node, or the retiring standalone dual-core examples — links
+ * without them; the H755 domain's glue overrides both strongly. Same weak-in-a-shared-object
+ * pattern as the IRQ stubs above (this object is on every image's BSP). */
+#include <stdint.h>
+__attribute__((weak)) void duo_load_pub(int core, uint16_t pm) { (void)core; (void)pm; }
+__attribute__((weak)) uint16_t duo_load_get(int core) { (void)core; return 0u; }
