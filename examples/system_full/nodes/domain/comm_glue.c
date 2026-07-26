@@ -236,6 +236,10 @@ void duo_clocks_ready(void) {
      * in the frame (codex #235 r2). A live satellite overwrites its slot each tick; an absent one
      * stays 0. */
     for (int c = 0; c < 8; c++) ((volatile uint16_t *)DUO_LOAD_ADDR)[c] = 0u;
+    /* Clear a retained bulkperf burst request too: if the CM7 reset while a burst was in flight,
+     * the CM4 would otherwise stay in its while(*burst) loop forever after this boot (no FB, no
+     * paced producer). SRAM4 is retained, so clear it before releasing the CM4 (codex #235 r3). */
+    *(volatile uint32_t *)DUO_BULK_BURST_ADDR = 0u;
     *(volatile uint32_t *)DUO_CLK_ADDR = DUO_CLK_MAGIC;
     __asm__ volatile("dsb");
 }
