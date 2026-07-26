@@ -15,14 +15,23 @@
 #include <stm32h735xx.h>
 
 /* Achieved CPU frequency in MHz, i.e. DWT cycles per microsecond. Starts at the HSI
- * reset value; board_clock_init() bumps it to 550 only once SYSCLK is confirmed on
- * PLL1, so board_now_us() stays correct even if the clock bring-up falls back. */
+ * reset value; board_clock_init() bumps it to 550 once SYSCLK is confirmed on PLL1 (and
+ * hangs otherwise), so board_now_us() only ever runs at the rated clock. */
 static volatile uint32_t g_cpu_mhz = 64;
+
+/* board_clock_fault — a clock we can't bring up is a HARD FAULT, not a limp (an ECU on the
+ * wrong clock violates its real-time timing). Hang deterministically; SWD reads the PC + the
+ * RCC/PWR registers to see which rail failed. Unreachable on healthy silicon. Same policy as
+ * boards/h755zi and boards/h723. */
+static void __attribute__((noreturn)) board_clock_fault(void) {
+	for (;;) {
+	}
+}
 
 /* board_clock_init: bring the Cortex-M7 to its full 550 MHz. Chain: Direct-SMPS
  * supply -> VOS0 -> flash wait-states -> PLL1 (25/5*220/2 = 550 MHz) -> switch
- * SYSCLK. Every wait is BOUNDED: if a rail never readies we return with SYSCLK still
- * on the safe HSI (64 MHz). FDCAN is unaffected — its kernel clock stays HSE 25 MHz.
+ * SYSCLK. Every wait is BOUNDED: a rail that never readies HANGS (board_clock_fault)
+ * rather than continue on a degraded clock. FDCAN kernel clock stays HSE 25 MHz.
  *
  * The supply write MUST match the board wiring (SB2/13/20/21 = Direct SMPS on this
  * DK); a mismatch browns out VCORE and locks the debugger — recover with
@@ -34,19 +43,19 @@ void board_clock_init(void) {
 	PWR->CR3 = (PWR->CR3 & ~(PWR_CR3_SMPSLEVEL | PWR_CR3_SMPSEXTHP | PWR_CR3_LDOEN | PWR_CR3_BYPASS))
 	         | PWR_CR3_SMPSEN;
 	for (t = 0; (PWR->CSR1 & PWR_CSR1_ACTVOSRDY) == 0u; t++) {
-		if (t >= 4000000u) return; /* supply not ready -> stay on HSI */
+		if (t >= 4000000u) board_clock_fault(); /* supply not ready -> hang (hard fault) */
 	}
 
 	/* 2. HSE (25 MHz bypass): PLL source (also the FDCAN kernel clock). */
 	RCC->CR |= RCC_CR_HSEBYP | RCC_CR_HSEON;
 	for (t = 0; (RCC->CR & RCC_CR_HSERDY) == 0u; t++) {
-		if (t >= 4000000u) return;
+		if (t >= 4000000u) board_clock_fault();
 	}
 
 	/* 3. VOS0 (highest VCORE) — required for 550 MHz. */
 	PWR->D3CR |= PWR_D3CR_VOS;
 	for (t = 0; (PWR->D3CR & PWR_D3CR_VOSRDY) == 0u; t++) {
-		if (t >= 4000000u) return; /* VOS0 not reached -> stay on HSI */
+		if (t >= 4000000u) board_clock_fault(); /* VOS0 not reached -> hang (hard fault) */
 	}
 
 	/* 4. Flash wait-states for 275 MHz AXI @ VOS0: 3 WS, WRHIGHFREQ = 0b10. */
@@ -66,13 +75,13 @@ void board_clock_init(void) {
 	              | ((2u - 1u) << RCC_PLL1DIVR_Q1_Pos) | ((2u - 1u) << RCC_PLL1DIVR_R1_Pos);
 	RCC->CR |= RCC_CR_PLL1ON;
 	for (t = 0; (RCC->CR & RCC_CR_PLL1RDY) == 0u; t++) {
-		if (t >= 4000000u) return; /* PLL didn't lock -> stay on HSI */
+		if (t >= 4000000u) board_clock_fault(); /* PLL didn't lock -> hang (hard fault) */
 	}
 
 	/* 7. Switch SYSCLK to PLL1 (550 MHz). */
 	RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_SW_PLL1;
 	for (t = 0; (RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL1; t++) {
-		if (t >= 4000000u) return;
+		if (t >= 4000000u) board_clock_fault();
 	}
 	g_cpu_mhz = 550; /* SYSCLK confirmed on PLL1 -> DWT ticks at 550 MHz */
 
@@ -122,11 +131,11 @@ void board_can_clock_pins_init(void) {
 	 *    while HSE is off — it is at reset (or already set by board_clock_init). */
 	RCC->CR |= RCC_CR_HSEBYP;
 	RCC->CR |= RCC_CR_HSEON;
-	/* BOUNDED, like board_clock_init's HSE wait: never hang the whole ECU here if HSE stalls
-	 * (board_clock_init already fell back to HSI; the comm thread's Channel.open() parks just
-	 * that thread on the mistimed bus). */
+	/* BOUNDED, like board_clock_init's HSE wait. Unreachable in practice — board_clock_init
+	 * already brought HSE up (or hung) — but a never-ready HSE hangs (board_clock_fault): FDCAN
+	 * off its 25 MHz kernel clock is unusable. */
 	for (uint32_t t = 0; (RCC->CR & RCC_CR_HSERDY) == 0u; t++) {
-		if (t >= 4000000u) return;
+		if (t >= 4000000u) board_clock_fault();
 	}
 	RCC->D2CCIP1R &= ~RCC_D2CCIP1R_FDCANSEL; /* 00 -> HSE (25 MHz) */
 
