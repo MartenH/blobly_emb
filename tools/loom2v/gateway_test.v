@@ -80,4 +80,48 @@ fn test_gateway_forward_arms_raw_copy_and_id_remap() {
 	// each source bus only emits ITS routes (no cross-contamination)
 	assert !a.contains('0x132')
 	assert !b.contains('0x120')
+	// NM OFF: no NM gate on the forward — only tx_ready
+	assert !a.contains('g_nm.awake()')
+}
+
+fn test_gateway_forward_arms_nm_gated_only_on_the_telem_bus() {
+	// NM runs on the comm channel `ch`, opened on telem.bus — that is the managed bus. A forward
+	// whose DESTINATION is telem.bus gates on NM; a forward to any other bus does not. The
+	// [nm].bus field is only a manifest LABEL and must NOT drive gating: here it is set to can2,
+	// yet the can2-destined route stays ungated while the telem-bus (can0) route is gated.
+	m := Model{
+		telem:  TelemetryCfg{
+			bus: 'can0' // NM's real channel `ch` opens here
+		}
+		nm:     NmCfg{
+			on:  true
+			bus: 'can2' // a manifest label only — deliberately NOT the telem bus
+		}
+		routes: [
+			Route{
+				from_bus:  'can1'
+				from_id:   0x132
+				from_dlc:  8
+				to_bus:    'can0' // -> telem/NM bus: GATED
+				to_id:     0x125
+				signal:    'SteeringAngle'
+				raw_ident: true
+			},
+			Route{
+				from_bus:  'can1'
+				from_id:   0x121
+				from_dlc:  8
+				to_bus:    'can2' // -> another bus (even though nm.bus=can2): NOT gated
+				to_id:     0x140
+				signal:    'Other'
+				raw_ident: true
+			},
+		]
+	}
+	a := gateway_forward_arms(m, 'can1').join('\n')
+	// the telem-bus forward gates on NM (gate precedes tx_ready); telem bus reuses `ch`
+	assert a.contains('if g_nm.awake() && ch.tx_ready() {')
+	// the other-bus forward does NOT gate on NM — nm.bus is just a label
+	assert a.contains('if ch_can2.tx_ready() {')
+	assert !a.contains('g_nm.awake() && ch_can2.tx_ready()')
 }

@@ -435,10 +435,21 @@ fn gateway_extra_buses(m Model) []string {
 // here (parse-time + emit-time guards), so a verbatim payload copy is exact on the wire.
 fn gateway_forward_arms(m Model, src_bus string) []string {
 	mut out := []string{}
+	// NM gate: a gateway with NM enabled must stay SILENT on its MANAGED bus while asleep — a
+	// forward is a TX, so it obeys the same REQ-COM-007 rule as every cyclic producer. NM runs on
+	// the comm thread's own channel `ch`, opened on m.telem.bus (the `[nm].bus` field is only a
+	// manifest label), so the gate applies ONLY to a forward whose DESTINATION is m.telem.bus; a
+	// route to any other bus is untouched (that bus is not in this node's NM cluster).
+	// Forwards are REACTIVE (they fire only on an arriving source frame) and run inside the Rx
+	// drain, before this pass's g_nm.produce(); we gate on the COMMITTED state (g_nm.awake())
+	// rather than restructure the drain into a post-tick forward FIFO. In a coordinated sleep the
+	// sources stop, so nothing arrives to forward anyway; the gate is defense-in-depth against a
+	// stray frame reaching a sleeping bus. (Cyclic producers, timer-driven, still gate post-tick.)
 	for r in m.routes {
 		if r.from_bus != src_bus {
 			continue
 		}
+		nm_gate := if m.nm.on && r.to_bus == m.telem.bus { 'g_nm.awake() && ' } else { '' }
 		dst := gw_var(r.to_bus, m.telem.bus)
 		out << '\t\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} && rx.ext == ${r.from_ext} { // route ${r.signal}: ${r.from_bus} -> ${r.to_bus} 0x${r.to_id.hex()}'
 		out << '\t\t\t\tmut ff := can.Frame{'
@@ -447,9 +458,9 @@ fn gateway_forward_arms(m Model, src_bus string) []string {
 		out << '\t\t\t\t\text: ${r.to_ext}'
 		out << '\t\t\t\t}'
 		out << '\t\t\t\tff.data = rx.data // raw_ident: bytes are bit-identical, only the id/bus differ'
-		out << '\t\t\t\tif ${dst}.tx_ready() {'
+		out << '\t\t\t\tif ${nm_gate}${dst}.tx_ready() {'
 		out << '\t\t\t\t\t${dst}.send(ff)'
-		out << '\t\t\t\t\tg_fwd_count++ // count frames actually forwarded, not ones dropped on a full tx FIFO'
+		out << '\t\t\t\t\tg_fwd_count++ // count frames actually forwarded, not ones dropped on a full tx FIFO / NM sleep'
 		out << '\t\t\t\t}'
 		out << '\t\t\t}'
 	}
