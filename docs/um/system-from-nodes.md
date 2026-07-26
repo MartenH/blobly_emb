@@ -17,6 +17,43 @@ make gen-system SYSTEM=examples/system_io/system.toml   # sysgen -> gen-<node>.t
 make syscheck   SYSTEM=examples/system_io/system.toml   # cross-node checks
 ```
 
+## Do I even need `system.toml`? (a single ECU doesn't)
+
+No. A **single ECU** is a *complete* `ecu.toml` that declares its own signals —
+`fields` and all — plus its buses and target, and builds with `loom2v` directly.
+No `system.toml`, no `sysgen`:
+
+```toml
+# examples/h735_app/ecu.toml — a standalone node owns its whole contract
+[[signal]]
+name   = "LoadCmd"
+fields = { iters = "u32" }
+from   = "app"
+to     = "app"
+```
+```sh
+v run tools/loom2v examples/h735_app/ecu.toml examples/h735_app/bus.dbc …   # no system.toml
+```
+
+`system.toml` earns its keep only once **two ECUs share a signal**. Then that
+signal's definition — `name`, `fields`, `cycle_ms` — is hoisted to `system.toml`
+so the producer and every consumer agree on it **once**, and each node's
+`ecu.toml` becomes *partial*: it authors only internals (partitions, FBs,
+`reads`/`writes` by name) and never re-declares the shared signal.
+
+| | single ECU (standalone) | multi-node system |
+|---|---|---|
+| `ecu.toml` | **complete** — owns its `[[signal]]` + `fields` | **partial** — internals only |
+| `system.toml` | none | the shared `[[signal]]` contract |
+| where a shared field name (`kph`) lives | in the `ecu.toml`, next to the code | in `system.toml` (it *is* shared) |
+| build | `loom2v` on the `ecu.toml` | `sysgen` → `gen-<node>.toml` → `loom2v` |
+
+So a field name only "lives at the system level" **because the signal is shared**:
+the moment two ECUs must agree on a value, someone has to own its name, and the
+dissolution puts that owner in `system.toml`. A node-local signal (io↔app, or
+app↔its own partition) keeps its name right next to the FB code that uses it —
+rename it and only that node's files move.
+
 ## Who owns what
 
 | | authored in **`system.toml`** | authored in a node's **`ecu.toml`** | generated into **`gen-<node>.toml`** |
