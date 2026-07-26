@@ -1,4 +1,10 @@
-# zone_a (H723 #1) — Front Zone ECU.
+# zone_a (H723) — Front Zone ECU.
+#
+# Demonstrates NODE-LOCAL (FB->FB) signalling alongside the cross-node routes: a steering
+# SENSOR fb produces a raw angle onto the local `RawSteer` signal, and a LIMITER fb reads it,
+# clamps it to a speed-dependent maximum, and puts the result on the wire as SteeringAngle.
+# RawSteer never leaves zone_a (from == to => a local cell on front_thread), so it stays here,
+# NOT in system.toml — only the bus-facing signals are the system's.
 
 [[partition]]
 name = "front"
@@ -7,14 +13,33 @@ core = 0
   [[partition.thread]]
   name = "front_thread"
 
+# node-local signal: raw steering, SteerSensor -> SteerLimiter (from == to => intra-node cell)
+[[signal]]
+name   = "RawSteer"
+fields = { deg = "u32" }
+from   = "front"
+to     = "front"
+
+# ORDER MATTERS: SteerSensor must stay declared BEFORE SteerLimiter. Same-thread, same-period
+# handlers run in declaration order, so the sensor writes RawSteer before the limiter reads it in
+# the SAME tick; swapping these two [[fb]] blocks would silently add a one-tick lag.
 [[fb]]
-name   = "FrontZoneCtrl"
+name   = "SteerSensor"
 thread = "front_thread"
 
   [[fb.handler]]
   name      = "on_50ms"
   period_ms = 50
-  reads     = ["VehicleSpeed", "HeadlightCmd"]
+  writes    = ["RawSteer"] # trailing comment terminates nested block (vlang/v#27684)
+
+[[fb]]
+name   = "SteerLimiter"
+thread = "front_thread"
+
+  [[fb.handler]]
+  name      = "on_50ms"
+  period_ms = 50
+  reads     = ["RawSteer", "VehicleSpeed", "HeadlightCmd"]
   writes    = ["SteeringAngle"] # trailing comment terminates nested block (vlang/v#27684)
 
 [target]

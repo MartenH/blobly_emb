@@ -37,7 +37,7 @@
 |---|---|---|---|---|---|
 | `sysnode` | **STM32H735G-DK** | Gateway: routes 3 signals `compute` ↔ `edge` | `compute` (can0/FDCAN1), `edge` (can1/FDCAN2) | `0x7A0` / `0x7A8` | `0x11` |
 | `domain` | **NUCLEO-H755ZI-Q** (CM7) | Powertrain: produces speed/headlight, reads steering | `compute` (can0) | `0x7B0` / `0x7B8` | `0x12` |
-| `zone_a` | **NUCLEO-H723ZG** | Front zone: reads speed/headlight, produces steering | `edge` (can1) | `0x7C0` / `0x7C8` | `0x13` |
+| `zone_a` | **NUCLEO-H723ZG** | Front zone: sensor→limiter FB pipeline over a node-local signal, produces steering | `edge` (can1) | `0x7C0` / `0x7C8` | `0x13` |
 
 ---
 
@@ -51,11 +51,21 @@ All three routes are **layout-identical** (same signal position/scale/DLC on bot
 | `HeadlightCmd` | `domain` (compute) | `compute` → `edge` | `zone_a` | `0x123` → `0x131` | 100 ms |
 | `SteeringAngle` | `zone_a` (edge) | `edge` → `compute` | `domain` | `0x132` → `0x125` | 50 ms |
 
-Routing goes both ways through the H735, and one leg closes a reaction: `domain` switches
-its headlights on `zone_a`'s routed steering (`powertrain.v` — `headlight_cmd = steering > 90`).
-The compute→edge routes (speed, headlight) are *received* by `zone_a` but not yet acted on here
-— its FB just sweeps steering. A speed-reactive zone limiter that consumes `VehicleSpeed` (making
-the loop bidirectional) is the node-local-signalling expansion, not this base bench.
+This closes a **bidirectional** loop through the H735: `domain` switches its headlights on
+`zone_a`'s routed steering (`powertrain.v` — `headlight_cmd = steering > 90`), and `zone_a`
+clamps its steering by the `VehicleSpeed` it receives from `domain` (`SteerLimiter`, below).
+Every cross-bus hop goes through the gateway's forwarder — a routed input on one side changes
+what the other side puts on the wire.
+
+### Node-local signalling (inside zone_a)
+
+Not everything crosses the wire. `zone_a` runs a **two-FB pipeline on one thread**: `SteerSensor`
+sweeps a raw angle onto a **node-local** signal `RawSteer`, and `SteerLimiter` reads it, clamps
+it to a speed-dependent maximum (using the `VehicleSpeed` it gets via the gateway), and emits
+the result as `SteeringAngle`. `RawSteer` has `from == to` (both the `front` partition), so it
+lowers to an intra-thread cell — it never touches a bus and is **not** in `system.toml`. This is
+the "if it never leaves the node, it is the node's" rule (see
+[`docs/um/system-from-nodes.md`](../../docs/um/system-from-nodes.md)) shown next to the cross-node routes.
 
 ---
 
