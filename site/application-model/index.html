@@ -1,0 +1,2033 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A V-language automotive software stack — no-alloc, sim-first, ThreadX, CAN-FD first.">
+      
+      
+      
+        <link rel="canonical" href="https://blobly.net/application-model/">
+      
+      
+        <link rel="prev" href="../architecture/">
+      
+      
+        <link rel="next" href="../configuration/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Application model - blobly</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#application-model-function-blocks-fb" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="blobly" class="md-header__button md-logo" aria-label="blobly" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            blobly
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Application model
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="blobly" class="md-nav__button md-logo" aria-label="blobly" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    blobly
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/build-and-flash/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build, flash & talk to the target
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/two-node-io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wire a signal across two ECUs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/record-a-trace/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Record and view a trace
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-signal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a signal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-frame/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a CAN frame
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-an-fb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a function block
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-thread/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a thread or partition
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-core/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a core
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-shell-command/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a shell command
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design & internals
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design & internals
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Application model
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Application model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-golden-rule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The golden rule
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#anatomy-of-an-fb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Anatomy of an FB
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-writing-signals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading &amp; writing signals
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Reading &amp; writing signals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#modules-per-example-no-cycle-clean-separation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Modules per example (no cycle, clean separation)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#signal-traceability-follow-a-signal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Signal traceability — "follow a signal"
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scaling-transformers-at-the-boundary-never-in-the-fb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scaling &amp; transformers — at the boundary, never in the FB
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#signal-validity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Signal validity
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#worked-example-fb-fb-chaining" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Worked example — FB → FB chaining
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#communication-topology-all-transparent-to-the-fb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Communication topology — all transparent to the FB
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decisions-resolved" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decisions (resolved)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#implemented" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implemented
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../no-alloc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    No-alloc discipline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory-protection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory protection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ways-of-working/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ways of working
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../autosar-comparison/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AUTOSAR comparison
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../communication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Communication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../com-modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    COM modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../someip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOME/IP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../net/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ethernet / NetX
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    IO
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nvm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NvM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../bootloader/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bootloader
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-image/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-image
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-node/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-node
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multicore-perf/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multicore performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../threadx-amp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ThreadX AMP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../porting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Porting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-codegen/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace codegen
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-manifest/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace manifest
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-multicore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace multicore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../traceability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirement traceability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-golden-rule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The golden rule
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#anatomy-of-an-fb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Anatomy of an FB
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-writing-signals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading &amp; writing signals
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Reading &amp; writing signals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#modules-per-example-no-cycle-clean-separation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Modules per example (no cycle, clean separation)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#signal-traceability-follow-a-signal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Signal traceability — "follow a signal"
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scaling-transformers-at-the-boundary-never-in-the-fb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scaling &amp; transformers — at the boundary, never in the FB
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#signal-validity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Signal validity
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#worked-example-fb-fb-chaining" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Worked example — FB → FB chaining
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#communication-topology-all-transparent-to-the-fb" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Communication topology — all transparent to the FB
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decisions-resolved" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decisions (resolved)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#implemented" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implemented
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="application-model-function-blocks-fb">Application model — Function Blocks (FB)<a class="headerlink" href="#application-model-function-blocks-fb" title="Permanent link">&para;</a></h1>
+<p>How application developers write code in blobly_emb.</p>
+<blockquote>
+<p>A <strong>Function Block (FB)</strong> is a unit of application logic with typed <strong>input
+signals</strong>, typed <strong>output signals</strong>, and private state, that runs on a
+schedule. (Term from IEC 61131-3 control engineering — <em>not</em> AUTOSAR. It names
+exactly this shape and composes natively.)</p>
+</blockquote>
+<h2 id="the-golden-rule">The golden rule<a class="headerlink" href="#the-golden-rule" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>An FB is a <strong>pure function of its input signals to its output signals</strong>, plus
+private state. It knows nothing about buses, cores, IOC, the other FBs, or where
+its signals come from. It never allocates.</p>
+</blockquote>
+<p>Everything else — routing a signal between FBs or to/from a bus, choosing a
+transport, scaling raw bus values — happens <strong>around</strong> the FB, in generated glue
+and config. That's what makes an FB trivially testable and portable.</p>
+<h2 id="anatomy-of-an-fb">Anatomy of an FB<a class="headerlink" href="#anatomy-of-an-fb" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>State</strong>: a value struct, private to the FB (no heap).</li>
+<li><strong>Handlers</strong>: methods the Loom calls. <code>on_init</code> once at startup; <code>on_&lt;period&gt;</code>
+  periodically (e.g. <code>on_10ms</code>); later, event handlers (<code>on_&lt;signal&gt;_received</code>).</li>
+<li><strong>Signals</strong>: typed values it reads (inputs) and writes (outputs). A signal type
+  is a value struct (e.g. <code>VehicleSpeed { kph u16; valid bool }</code>).</li>
+</ul>
+<p>FBs compose: a <em>composite</em> FB is wired from smaller FBs in config; the developer
+writes only <em>leaf</em> FBs (logic) and the wiring (<code>ecu.toml</code>).</p>
+<h2 id="reading-writing-signals">Reading &amp; writing signals<a class="headerlink" href="#reading-writing-signals" title="Permanent link">&para;</a></h2>
+<p>An FB's handler receives a generated <strong>Inputs</strong> snapshot and an <strong>Outputs</strong>
+struct; it reads/writes them as plain fields. The Loom snapshots all inputs before
+the call and publishes all outputs after — coherent snapshot, pure transform.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1">// app/speed_monitor.v — written by the developer</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="k">module</span><span class="w"> </span><span class="n">app</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kn">import</span> <span class="nn">sig</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="n">SpeedMonitor</span><span class="w"> </span><span class="p">{</span><span class="w">  </span><span class="c1">// private state only</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">pub</span><span class="w"> </span><span class="nl">mut:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="n">over_limit</span><span class="w"> </span><span class="n">bool</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="p">}</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="n">pub</span><span class="w"> </span><span class="n">fn</span><span class="w"> </span><span class="p">(</span><span class="n">mut</span><span class="w"> </span><span class="n">fb</span><span class="w"> </span><span class="n">SpeedMonitor</span><span class="p">)</span><span class="w"> </span><span class="n">on_10ms</span><span class="p">(</span><span class="n">inp</span><span class="w"> </span><span class="n">sig</span><span class="p">.</span><span class="n">SpeedMonitorIn</span><span class="p">,</span><span class="w"> </span><span class="n">mut</span><span class="w"> </span><span class="n">out</span><span class="w"> </span><span class="n">sig</span><span class="p">.</span><span class="n">SpeedMonitorOut</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">    </span><span class="n">fb</span><span class="p">.</span><span class="n">over_limit</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">inp</span><span class="p">.</span><span class="n">vehicle_speed</span><span class="p">.</span><span class="n">valid</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">inp</span><span class="p">.</span><span class="n">vehicle_speed</span><span class="p">.</span><span class="n">kph</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mh">120</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="n">out</span><span class="p">.</span><span class="n">warn_lamp</span><span class="p">.</span><span class="n">on</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fb</span><span class="p">.</span><span class="n">over_limit</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="p">}</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="c1">// (parameter is `inp`, not `in` — `in` is a V keyword)</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1">// sig/speedmonitor_ports.v — GENERATED from ecu.toml (do not edit)</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="k">module</span><span class="w"> </span><span class="n">sig</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="n">SpeedMonitorIn</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">pub</span><span class="w"> </span><span class="nl">mut:</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">    </span><span class="c1">// signal &quot;VehicleSpeed&quot; — physical km/h</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="c1">//   from: CAN can0 / DBC Powertrain.VehicleSpeed  frame 0x100  bits 16|12 (x0.1)</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="c1">//   path: COM -&gt; IOC(double) -&gt; app</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="n">vehicle_speed</span><span class="w"> </span><span class="n">VehicleSpeed</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="p">}</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="n">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="n">SpeedMonitorOut</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="n">pub</span><span class="w"> </span><span class="nl">mut:</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="c1">// signal &quot;WarnLamp&quot; -&gt; CAN can0 / LampFrame 0x101 (bit 0)</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">    </span><span class="n">warn_lamp</span><span class="w"> </span><span class="n">WarnLamp</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="p">}</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1">// gen/loom_gen.v — GENERATED glue (do not edit)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">fn</span><span class="w"> </span><span class="n">handler_app_speed_monitor_on_10ms</span><span class="p">(</span><span class="n">ctx</span><span class="w"> </span><span class="n">voidptr</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="n">mut</span><span class="w"> </span><span class="n">st</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="n">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">&amp;</span><span class="n">Partition_app_state</span><span class="p">(</span><span class="n">ctx</span><span class="p">)</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="n">mut</span><span class="w"> </span><span class="n">inp</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="n">sig</span><span class="p">.</span><span class="n">SpeedMonitorIn</span><span class="p">{}</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="n">osal</span><span class="p">.</span><span class="n">ioc_acquire2</span><span class="p">(</span><span class="n">vehicle_speed_ch</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">inp</span><span class="p">.</span><span class="n">vehicle_speed</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="p">(</span><span class="n">sizeof</span><span class="p">(</span><span class="n">inp</span><span class="p">.</span><span class="n">vehicle_speed</span><span class="p">)))</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="n">mut</span><span class="w"> </span><span class="n">outp</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="n">sig</span><span class="p">.</span><span class="n">SpeedMonitorOut</span><span class="p">{}</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="n">st</span><span class="p">.</span><span class="n">speed_monitor</span><span class="p">.</span><span class="n">on_10ms</span><span class="p">(</span><span class="n">inp</span><span class="p">,</span><span class="w"> </span><span class="n">mut</span><span class="w"> </span><span class="n">outp</span><span class="p">)</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="n">osal</span><span class="p">.</span><span class="n">ioc_publish2</span><span class="p">(</span><span class="n">warn_lamp_ch</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">outp</span><span class="p">.</span><span class="n">warn_lamp</span><span class="p">,</span><span class="w"> </span><span class="n">u8</span><span class="p">(</span><span class="n">sizeof</span><span class="p">(</span><span class="n">outp</span><span class="p">.</span><span class="n">warn_lamp</span><span class="p">)))</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="p">}</span>
+</code></pre></div>
+<p>Why grouped <code>In</code>/<code>Out</code> structs (not positional params): adding a signal is a
+config change + a new (annotated) field — <strong>the handler signature never changes</strong>,
+and an FB with many signals stays readable. Field access is as easy as it gets.</p>
+<h3 id="modules-per-example-no-cycle-clean-separation">Modules per example (no cycle, clean separation)<a class="headerlink" href="#modules-per-example-no-cycle-clean-separation" title="Permanent link">&para;</a></h3>
+<p>Each example (<code>examples/&lt;name&gt;/</code>) splits into modules so generated never mixes
+with hand-written, and app never mixes with platform:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>sig    (gen)   signal value types    ← from each [[signal]].fields
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>ports  (gen)   In/Out structs        ← imported by app, gen
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>app    (hand)  FBs                    ← imported by gen
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>gen    (gen)   glue/tables/codec + COM bus bridge + run()
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>main.v (platform) thin entry: open the CAN channel, call gen.run
+</code></pre></div>
+<p>The only hand-written code in an example is the <strong>FBs</strong> (<code>app/</code>) and a <strong>thin
+entry</strong> (<code>main.v</code>: open the CAN channel, then <code>gen.run</code>). Signal types, port
+structs, codec, tables, glue, <strong>and the COM bus bridge</strong> are generated from
+<code>ecu.toml</code> (+ the DBC). An endpoint that names a <code>[bus.*]</code> is <em>external</em> (the
+bridge rx-decodes / tx-encodes it); both-partition signals are <em>internal</em> —
+so internal-vs-external is explicit, not inferred.</p>
+<p>The dependency chain <code>sig ← ports ← app ← gen</code> has no cycle. Imports are short
+(<code>import sig</code>, <code>import ports</code>) and not coupled to the example name — V's <code>-path</code>
+resolves the example's own modules plus the shared framework. See
+<code>examples/README.md</code>.</p>
+<h2 id="signal-traceability-follow-a-signal">Signal traceability — "follow a signal"<a class="headerlink" href="#signal-traceability-follow-a-signal" title="Permanent link">&para;</a></h2>
+<p>The signal <strong>name</strong> is the single thread you pull. It is used identically in FB
+code, in <code>ecu.toml</code>, and is mapped to its DBC signal:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>in.vehicle_speed   (FB code)
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  └─ &quot;VehicleSpeed&quot; (ecu.toml signal + [[ioc]] channel)
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>       └─ DBC Powertrain.VehicleSpeed  (frame 0x100, bits 16|12, x0.1 km/h)
+</code></pre></div>
+<p>You follow it two ways, both <strong>generated</strong> (so always accurate):</p>
+<ol>
+<li><strong>Inline</strong> — go-to-definition on <code>in.vehicle_speed</code> lands on the generated
+   field, whose doc comment states the DBC signal, frame, bit layout, scaling and
+   path (see the <code>sig</code> struct above). One hop from FB code to DBC definition.</li>
+<li><strong>A signal map</strong> — <code>make trace</code> generates <code>docs/signal-map.md</code>:</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Signal</th>
+<th>Unit</th>
+<th>Source</th>
+<th>DBC signal</th>
+<th>Frame</th>
+<th>Layout</th>
+<th>Scaling</th>
+<th>Path</th>
+<th>Consumers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VehicleSpeed</td>
+<td>km/h</td>
+<td>CAN can0</td>
+<td>Powertrain.VehicleSpeed</td>
+<td>0x100</td>
+<td>16|12</td>
+<td>x0.1</td>
+<td>COM→IOC(double)→app</td>
+<td>SpeedMonitor</td>
+</tr>
+<tr>
+<td>WarnLamp</td>
+<td>bool</td>
+<td>app</td>
+<td>LampFrame</td>
+<td>0x101</td>
+<td>0|1</td>
+<td>—</td>
+<td>app→IOC→COM</td>
+<td>(CAN tx)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="scaling-transformers-at-the-boundary-never-in-the-fb">Scaling &amp; transformers — at the boundary, never in the FB<a class="headerlink" href="#scaling-transformers-at-the-boundary-never-in-the-fb" title="Permanent link">&para;</a></h2>
+<p><strong>Decision: FBs work in physical engineering units; raw↔physical scaling lives at
+the communication boundary (COM), and any other transform is a declared,
+generated step on the connection — not hand-written in the FB.</strong></p>
+<ul>
+<li><strong>Bus scaling (raw ↔ physical)</strong> is the DBC <code>factor</code>/<code>offset</code>, applied in the
+  generated COM codec (<code>dbc2cfg</code> emits <code>*_phys()</code>), so a signal read from CAN
+  arrives already in km/h, °C, … The FB never sees raw bits.</li>
+<li><strong>Other transforms</strong> (unit conversion, range clamp, end-to-end protection, rate
+  limit) are <strong>declared on the signal/connection</strong> in config and emitted into the
+  generated path. They run where the signal crosses a boundary, so every consumer
+  sees the transformed value and the FB stays a pure function.</li>
+</ul>
+<p>Rationale: keep FBs free of representation concerns — portable across ECUs and bus
+matrices, testable with plain physical values, unaffected when a DBC scaling or a
+transform changes.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">[[signal]]</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;VehicleSpeed&quot;</span><span class="w">   </span><span class="c1"># physical km/h after COM scaling</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">fields</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">kph</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;u16&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">valid</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;bool&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">from</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;can0&quot;</span><span class="w">           </span><span class="c1"># external: the bus</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">to</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;app&quot;</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="c1"># transform = &quot;clamp:0..350&quot;   # optional, generated; FB still just reads km/h</span>
+</code></pre></div>
+<h2 id="signal-validity">Signal validity<a class="headerlink" href="#signal-validity" title="Permanent link">&para;</a></h2>
+<p>A signal carries validity: an IOC channel never written reads back as "no value
+yet" (zero value with <code>valid = false</code> by convention). FBs must handle "not yet
+received" — as <code>SpeedMonitor</code> does with <code>in.vehicle_speed.valid</code>.</p>
+<h2 id="worked-example-fb-fb-chaining">Worked example — FB → FB chaining<a class="headerlink" href="#worked-example-fb-fb-chaining" title="Permanent link">&para;</a></h2>
+<p>A filter FB sits between the bus and the monitor. <code>SpeedMonitor</code> is <strong>unchanged</strong> —
+it doesn't know its input now comes from another FB instead of the bus.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1">// app/speed_filter.v</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="n">SpeedFilter</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">pub</span><span class="w"> </span><span class="nl">mut:</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="n">last</span><span class="w"> </span><span class="n">u16</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="p">}</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="n">pub</span><span class="w"> </span><span class="n">fn</span><span class="w"> </span><span class="p">(</span><span class="n">mut</span><span class="w"> </span><span class="n">fb</span><span class="w"> </span><span class="n">SpeedFilter</span><span class="p">)</span><span class="w"> </span><span class="n">on_10ms</span><span class="p">(</span><span class="n">inp</span><span class="w"> </span><span class="n">sig</span><span class="p">.</span><span class="n">SpeedFilterIn</span><span class="p">,</span><span class="w"> </span><span class="n">mut</span><span class="w"> </span><span class="n">out</span><span class="w"> </span><span class="n">sig</span><span class="p">.</span><span class="n">SpeedFilterOut</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span><span class="n">fb</span><span class="p">.</span><span class="n">last</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">fb</span><span class="p">.</span><span class="n">last</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mh">3</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">inp</span><span class="p">.</span><span class="n">vehicle_speed_raw</span><span class="p">.</span><span class="n">kph</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mh">4</span><span class="w"> </span><span class="c1">// simple IIR</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">    </span><span class="n">out</span><span class="p">.</span><span class="n">vehicle_speed</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">sig</span><span class="p">.</span><span class="n">VehicleSpeed</span><span class="p">{</span><span class="w"> </span><span class="nl">kph:</span><span class="w"> </span><span class="n">fb</span><span class="p">.</span><span class="n">last</span><span class="p">,</span><span class="w"> </span><span class="nl">valid:</span><span class="w"> </span><span class="n">inp</span><span class="p">.</span><span class="n">vehicle_speed_raw</span><span class="p">.</span><span class="n">valid</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="p">}</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># ecu.toml: chain bus -&gt; SpeedFilter -&gt; SpeedMonitor</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="k">[[signal]]</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;VehicleSpeedRaw&quot;</span><span class="err">;</span><span class="w"> </span><span class="n">fields</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">kph</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;u16&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">valid</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;bool&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="n">from</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;can0&quot;</span><span class="err">;</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;app&quot;</span><span class="err">;</span><span class="w"> </span><span class="n">transport</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;double&quot;</span><span class="w">     </span><span class="c1"># external (bus rx)</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="k">[[signal]]</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;VehicleSpeed&quot;</span><span class="err">;</span><span class="w">    </span><span class="n">fields</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">kph</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;u16&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">valid</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;bool&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="n">from</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;app&quot;</span><span class="err">;</span><span class="w">  </span><span class="n">to</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;app&quot;</span><span class="err">;</span><span class="w"> </span><span class="n">transport</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;double&quot;</span><span class="w">     </span><span class="c1"># internal FB-&gt;FB</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="k">[[signal]]</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;WarnLamp&quot;</span><span class="err">;</span><span class="w">        </span><span class="n">fields</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">on</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;bool&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="n">from</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;app&quot;</span><span class="err">;</span><span class="w">  </span><span class="n">to</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;can0&quot;</span><span class="err">;</span><span class="w"> </span><span class="n">transport</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;double&quot;</span><span class="w">    </span><span class="c1"># external (bus tx)</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="k">[[fb]]</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;SpeedFilter&quot;</span><span class="err">;</span><span class="w"> </span><span class="n">partition</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;app&quot;</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="w">  </span><span class="k">[[fb.handler]]</span>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="w">  </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;on_10ms&quot;</span><span class="err">;</span><span class="w"> </span><span class="n">period_ms</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span><span class="err">;</span><span class="w"> </span><span class="n">reads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;VehicleSpeedRaw&quot;</span><span class="p">]</span><span class="err">;</span><span class="w"> </span><span class="n">writes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;VehicleSpeed&quot;</span><span class="p">]</span>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="k">[[fb]]</span>
+<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;SpeedMonitor&quot;</span><span class="err">;</span><span class="w"> </span><span class="n">partition</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;app&quot;</span>
+<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a><span class="w">  </span><span class="k">[[fb.handler]]</span>
+<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="w">  </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;on_10ms&quot;</span><span class="err">;</span><span class="w"> </span><span class="n">period_ms</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span><span class="err">;</span><span class="w"> </span><span class="n">reads</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;VehicleSpeed&quot;</span><span class="p">]</span><span class="err">;</span><span class="w"> </span><span class="n">writes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;WarnLamp&quot;</span><span class="p">]</span>
+</code></pre></div>
+<p>Re-sourcing <code>VehicleSpeed</code> from the bus instead of <code>SpeedFilter</code> is a one-line
+config edit; neither FB changes.</p>
+<h2 id="communication-topology-all-transparent-to-the-fb">Communication topology — all transparent to the FB<a class="headerlink" href="#communication-topology-all-transparent-to-the-fb" title="Permanent link">&para;</a></h2>
+<p>The FB always just reads/writes a named signal. <strong>Where</strong> it lives is config,
+resolved in the generated glue:</p>
+<table>
+<thead>
+<tr>
+<th>Signal connects…</th>
+<th>Generated glue uses</th>
+<th>FB code</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FB → FB, same partition</td>
+<td>a local cell (direct memory, no sync)</td>
+<td>identical</td>
+</tr>
+<tr>
+<td>FB → FB, different cores</td>
+<td>IOC channel (transport per <code>[[ioc]]</code>)</td>
+<td>identical</td>
+</tr>
+<tr>
+<td>FB ↔ communication bus</td>
+<td>COM codec + driver (CAN/LIN/…)</td>
+<td>identical</td>
+</tr>
+</tbody>
+</table>
+<p>Because the FB code is identical in all three cases, you can move an FB to another
+core, or re-source a signal from the bus instead of another FB, <strong>without touching
+the FB</strong> — only <code>ecu.toml</code> changes.</p>
+<h2 id="decisions-resolved">Decisions (resolved)<a class="headerlink" href="#decisions-resolved" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Name</strong>: <strong>Function Block (FB)</strong> — config <code>[[fb]]</code>. Avoids the ISO 26262
+  unit/component overload and the AUTOSAR application-component connotation;
+  composes natively.</li>
+<li><strong>Signal API</strong>: grouped, annotated <code>In</code>/<code>Out</code> port structs (stable signatures,
+  field access, built-in traceability).</li>
+<li><strong>Scaling/transforms</strong>: at the COM/connection boundary, generated — never inside
+  an FB.</li>
+<li><strong>Traceability</strong>: signal name is the key; inline provenance on generated fields +
+  a generated <code>signal-map</code>.</li>
+</ul>
+<h2 id="implemented">Implemented<a class="headerlink" href="#implemented" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Done</strong>: FBs with grouped <code>In</code>/<code>Out</code> port structs; config <code>[[fb]]</code>; signal types</li>
+<li>generated <code>*In</code>/<code>*Out</code> in the <code>sig</code> module; the snapshot glue via <code>loom2v</code>;
+  scaling at the COM boundary (<code>dbc2cfg</code>); provenance comments on generated port
+  fields + the <code>make trace</code> signal map (<code>docs/signal-map.md</code>).</li>
+<li><strong>Still to come</strong>: queued (event) signals + <code>on_&lt;signal&gt;_received</code> triggering;
+  mode management; E2E protection; declared connection transforms (clamp/unit);
+  multiple signal-bearing handlers per FB (today one). See
+  <a href="../autosar-comparison/">autosar-comparison.md</a> for how these map to the AUTOSAR
+  RTE/COM patterns, what we keep, and what we deliberately skip.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.top", "navigation.tracking", "content.code.copy", "content.code.annotate", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

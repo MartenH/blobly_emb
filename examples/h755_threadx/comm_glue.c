@@ -143,6 +143,51 @@ int shell_bmc(unsigned char *out, int cap) {
     return (int)(p - (char *)out);
 }
 
+/* shell_bulkperf — the `bulkperf` command: measure the cross-core [[bulk]] pool's RAW throughput,
+ * unpaced by the M4 service loop that gates the demo to one block per ~1 ms tick. Raises the CM4
+ * burst flag (m4_glue.c then produces flat-out, word-wise, no doorbell), spin-drains take+release
+ * for a fixed window counting blocks, then lowers the flag. blocks*256 B / window = the pool's
+ * cross-core bandwidth. No payload verify here — integrity is the paced path's job (rx_bad==0);
+ * this isolates the transport+copy rate, bounded by the CM4's uncached D2->D3 SRAM4 writes. The
+ * comm thread is busy for the window (~0.2 s) — fine for an operator-invoked probe. */
+int shell_bulkperf(unsigned char *out, int cap) {
+    char *p = (char *)out, *end = (char *)out + cap;
+    bulk_t *bp = (bulk_t *)DUO_BULK_ADDR;
+    if (!bulk_valid(bp))
+        return (int)(ps_str(p, end, "bulkperf: pool not up (CM4 producer idle)\n") - (char *)out);
+
+    volatile uint32_t *burst = (volatile uint32_t *)DUO_BULK_BURST_ADDR;
+    *burst = 1u; /* ask the CM4 to burst */
+    __asm__ volatile("dmb" ::: "memory");
+    uint32_t blocks = 0u, blen = 0u;
+    int idx;
+    uint64_t t0 = board_now_us();
+    do { /* clock checked every iteration so a never-empty pool can't wedge the loop */
+        idx = bulk_take(bp, &blen);
+        if (idx >= 0) {
+            bulk_release(bp, (uint32_t)idx);
+            blocks++;
+        }
+    } while (board_now_us() - t0 < 200000u); /* 0.2 s window */
+    uint64_t us = board_now_us() - t0;
+    __asm__ volatile("dmb" ::: "memory");
+    *burst = 0u; /* stop the CM4 burst */
+
+    uint32_t blk_s  = us ? (uint32_t)((uint64_t)blocks * 1000000u / us) : 0u;
+    uint32_t kb_s   = us ? (uint32_t)((uint64_t)blocks * 256u * 1000u / us) : 0u;
+    uint32_t mib_s  = us ? (uint32_t)((uint64_t)blocks * 256u * 1000000u / us / 1048576u) : 0u;
+    uint32_t ns_blk = blocks ? (uint32_t)((uint64_t)us * 1000u / blocks) : 0u;
+
+    p = ps_str(p, end, "bulkperf: 256B cross-core CM4->CM7, burst\n");
+    p = ps_u32(p, end, blocks);       p = ps_str(p, end, " blk in ");
+    p = ps_u32(p, end, (uint32_t)us); p = ps_str(p, end, " us\n");
+    p = ps_u32(p, end, blk_s);        p = ps_str(p, end, " blk/s  ");
+    p = ps_u32(p, end, kb_s);         p = ps_str(p, end, " KB/s  ");
+    p = ps_u32(p, end, mib_s);        p = ps_str(p, end, " MiB/s\n");
+    p = ps_u32(p, end, ns_blk);       p = ps_str(p, end, " ns/blk\n");
+    return (int)(p - (char *)out);
+}
+
 /* duo_clocks_ready — the boot handshake's CM7 half: written once after board_clock_init,
  * releasing the parked CM4 (its SysTick assumes the final 200 MHz HCLK).
  *

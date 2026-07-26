@@ -1,0 +1,2122 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A V-language automotive software stack — no-alloc, sim-first, ThreadX, CAN-FD first.">
+      
+      
+      
+        <link rel="canonical" href="https://blobly.net/com-modules/">
+      
+      
+        <link rel="prev" href="../communication/">
+      
+      
+        <link rel="next" href="../nm/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>COM modules - blobly</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#com-modules-trace-nm-telemetry-as-routed-clients" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="blobly" class="md-header__button md-logo" aria-label="blobly" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            blobly
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              COM modules
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="blobly" class="md-nav__button md-logo" aria-label="blobly" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    blobly
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/build-and-flash/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build, flash & talk to the target
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/two-node-io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wire a signal across two ECUs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/record-a-trace/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Record and view a trace
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-signal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a signal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-frame/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a CAN frame
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-an-fb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a function block
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-thread/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a thread or partition
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-core/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a core
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-shell-command/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a shell command
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design & internals
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design & internals
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../application-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Application model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../no-alloc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    No-alloc discipline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory-protection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory protection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ways-of-working/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ways of working
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../autosar-comparison/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AUTOSAR comparison
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../communication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Communication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    COM modules
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    COM modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-one-generalisation-routes-terminate-at-a-signal-or-a-module" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The one generalisation: routes terminate at a signal or a module
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#endpoint-bindings-direction-is-declared-ids-appear-once" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoint bindings: direction is declared, ids appear once
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-endpoint-schema-looks-like" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the endpoint schema looks like
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#endpoints-carry-frames-not-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoints carry frames, not types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sizes-and-transports-what-must-match-and-where-its-checked" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sizes and transports: what must match, and where it's checked
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-com-module-interface-platform-written-once" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The COM-module interface (platform, written once)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-generic-comm-loop-platform-capability-agnostic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The generic comm loop (platform, capability-agnostic)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#trace-data-from-hooks-control-by-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trace = data from hooks + control by routing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-loom2v-generates-thin-vs-whats-platform-once" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What loom2v generates (thin) vs what's platform (once)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#module-module-calls-events-signals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module ↔ module: calls, events, signals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-is-the-fix-not-another-move" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why this is the fix, not another move
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../someip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOME/IP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../net/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ethernet / NetX
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    IO
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nvm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NvM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../bootloader/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bootloader
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-image/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-image
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-node/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-node
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multicore-perf/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multicore performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../threadx-amp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ThreadX AMP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../porting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Porting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-codegen/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace codegen
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-manifest/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace manifest
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-multicore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace multicore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../traceability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirement traceability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-one-generalisation-routes-terminate-at-a-signal-or-a-module" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The one generalisation: routes terminate at a signal or a module
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#endpoint-bindings-direction-is-declared-ids-appear-once" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoint bindings: direction is declared, ids appear once
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-endpoint-schema-looks-like" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the endpoint schema looks like
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#endpoints-carry-frames-not-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoints carry frames, not types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sizes-and-transports-what-must-match-and-where-its-checked" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sizes and transports: what must match, and where it's checked
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-com-module-interface-platform-written-once" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The COM-module interface (platform, written once)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-generic-comm-loop-platform-capability-agnostic" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The generic comm loop (platform, capability-agnostic)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#trace-data-from-hooks-control-by-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trace = data from hooks + control by routing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-loom2v-generates-thin-vs-whats-platform-once" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What loom2v generates (thin) vs what's platform (once)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#module-module-calls-events-signals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module ↔ module: calls, events, signals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-is-the-fix-not-another-move" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why this is the fix, not another move
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="com-modules-trace-nm-telemetry-as-routed-clients">COM modules — trace, NM, telemetry as routed clients<a class="headerlink" href="#com-modules-trace-nm-telemetry-as-routed-clients" title="Permanent link">&para;</a></h1>
+<p>How platform capabilities (trace, network management, telemetry) attach to the
+bus <strong>without any of them being special</strong>. The load-bearing idea: a frame id can
+route to a <strong>module</strong>, not just a signal. Once that's true, trace is a row in the
+routing table — the same as NM, the same as everything.</p>
+<blockquote>
+<p>This is the design that came out of stripping trace from the generator. Trace
+had grown to ~1000 lines smeared through 50% of <code>tools/loom2v/gen.v</code> because
+loom2v was <strong>generating a control protocol</strong> (TraceCmd/Rsp poll loop, ISO-TP
+dump, multi-core coordination) once per run-model. That protocol is really just
+<strong>routing + a producer</strong> — COM's job, done by hand. See
+<a href="../communication/">communication.md</a>, <a href="../nm/">nm.md</a>.</p>
+</blockquote>
+<h2 id="the-one-generalisation-routes-terminate-at-a-signal-or-a-module">The one generalisation: routes terminate at a signal <em>or</em> a module<a class="headerlink" href="#the-one-generalisation-routes-terminate-at-a-signal-or-a-module" title="Permanent link">&para;</a></h2>
+<p>Today <code>ecu.toml</code> routes <code>frame → signal → IOC cell</code>. We add <code>frame → module</code> as a
+first-class routing destination: an inbound id can be delivered to a platform
+module instead of decoded into a signal. Nothing about "trace" is special to the
+router — it wires any module the same way.</p>
+<p>But a module is not <em>one</em> id. Trace alone has five logical ports — <code>cmd</code> (rx),
+<code>dump_fc</code> (rx), <code>rsp</code> (tx), <code>record</code> (tx), <code>stat</code> (tx) — and a bare
+<code>0x712 → trace</code> route leaves two problems: the module would have to re-inspect
+ids to tell <code>cmd</code> from <code>dump_fc</code> (the hand-tailoring back through the back door),
+and the tx ids can't live in routes at all (a route is inherently bus→inward;
+<code>rsp</code>/<code>record</code> are outbound). So the authored form is a <strong>binding</strong>, below; the
+frame→module <em>routes</em> are generated from the rx bindings.</p>
+<h2 id="endpoint-bindings-direction-is-declared-ids-appear-once">Endpoint bindings: direction is declared, ids appear once<a class="headerlink" href="#endpoint-bindings-direction-is-declared-ids-appear-once" title="Permanent link">&para;</a></h2>
+<p>Each module's <strong>endpoint schema</strong> — its port names and their directions — is fixed
+in the platform, part of the module itself:</p>
+<table>
+<thead>
+<tr>
+<th>module</th>
+<th>endpoint</th>
+<th>dir</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>trace</td>
+<td><code>cmd</code></td>
+<td>rx</td>
+<td>TraceCmd control frame → <code>on_cmd</code></td>
+</tr>
+<tr>
+<td>trace</td>
+<td><code>dump_fc</code></td>
+<td>rx</td>
+<td>ISO-TP flow control for the dump</td>
+</tr>
+<tr>
+<td>trace</td>
+<td><code>rsp</code></td>
+<td>tx</td>
+<td>command response</td>
+</tr>
+<tr>
+<td>trace</td>
+<td><code>record</code></td>
+<td>tx</td>
+<td>raw records / dump stream</td>
+</tr>
+<tr>
+<td>trace</td>
+<td><code>stat</code></td>
+<td>tx</td>
+<td>HandlerStat heartbeat</td>
+</tr>
+<tr>
+<td>nm</td>
+<td><code>pdu</code></td>
+<td>rx+tx</td>
+<td>NM hears and sends on the same id</td>
+</tr>
+<tr>
+<td>telem</td>
+<td><code>cpuload</code></td>
+<td>tx</td>
+<td>CpuLoad</td>
+</tr>
+<tr>
+<td>telem</td>
+<td><code>detail</code></td>
+<td>tx</td>
+<td>LoadDetail</td>
+</tr>
+</tbody>
+</table>
+<p><code>ecu.toml</code> <strong>binds</strong> each endpoint to a frame — a <code>bus.dbc</code> message name (the id
+authority, same as signals) or a literal id — in the module's own block, so one
+module's whole wire footprint sits in one place:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">[trace]</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">bus</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;can0&quot;</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">cmd</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;TraceCmd&quot;</span><span class="w">   </span><span class="c1"># rx: becomes a generated router entry</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">dump_fc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;TraceFc&quot;</span><span class="w">    </span><span class="c1"># rx</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">rsp</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;TraceRsp&quot;</span><span class="w">   </span><span class="c1"># tx: the module stamps outbound frames with this id</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">record</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="mh">0x7E5</span><span class="w">        </span><span class="c1"># tx: literal id (the raw stream isn&#39;t a decodable DBC message)</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="k">[nm]</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="n">bus</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;can0&quot;</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="n">pdu</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x400</span><span class="w">            </span><span class="c1"># rx+tx per the schema — COM knows the direction from the endpoint</span>
+</code></pre></div>
+<p>The router loom2v generates is one match over <strong>all</strong> rx bindings — signals and
+module endpoints alike — dispatching straight to the endpoint handler:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">for</span><span class="w"> </span><span class="n">ch</span><span class="p">.</span><span class="n">recv</span><span class="p">(</span><span class="n">mut</span><span class="w"> </span><span class="n">rx</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="n">match</span><span class="w"> </span><span class="n">rx</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">        </span><span class="mh">0</span><span class="n">x123</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* signal Command -&gt; its IOC cell */</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">        </span><span class="mh">0</span><span class="n">x712</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">tm</span><span class="p">.</span><span class="n">on_cmd</span><span class="p">(</span><span class="n">rx</span><span class="p">)</span><span class="w"> </span><span class="p">}</span><span class="w">     </span><span class="c1">// trace.cmd</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">        </span><span class="mh">0</span><span class="n">x714</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">tm</span><span class="p">.</span><span class="n">on_dump_fc</span><span class="p">(</span><span class="n">rx</span><span class="p">)</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="c1">// trace.dump_fc</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">        </span><span class="mh">0</span><span class="n">x400</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">nm</span><span class="p">.</span><span class="n">on_pdu</span><span class="p">(</span><span class="n">rx</span><span class="p">)</span><span class="w"> </span><span class="p">}</span><span class="w">     </span><span class="c1">// nm.pdu</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">        </span><span class="k">else</span><span class="w"> </span><span class="p">{}</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="p">}</span>
+</code></pre></div>
+<p>What this buys, point by point:</p>
+<ul>
+<li><strong>Ids appear once</strong> — the binding. No <code>[[route]]</code> entry duplicating an id the
+  module also has to know.</li>
+<li><strong>Direction is declared, not hand-tailored</strong> — the schema says <code>cmd</code> is inbound
+  and <code>rsp</code> is outbound; COM acts on the declaration, the generator emits nothing
+  capability-specific.</li>
+<li><strong>The module never inspects ids</strong> — the generated match calls <code>on_cmd</code>/<code>on_fc</code>
+  directly (static dispatch, no-alloc, no interface table on target). The id → 
+  endpoint mapping the old code hand-wove is now a config-driven table entry.</li>
+<li><strong>The "one routing table" survives as a generated artifact</strong> — the manifest
+  lists every id with its destination (signal or <code>module.endpoint</code>), so the
+  at-a-glance view exists without the config duplicating itself.</li>
+</ul>
+<p><em>(Considered and rejected: endpoint-qualified routes — <code>[[route]] id=0x712
+to="trace.cmd"</code> — work for rx but strand the tx ids in the module block anyway,
+splitting one module's ids across two config shapes. And DBC-only naming, since
+the raw record stream isn't a decodable message.)</em></p>
+<h2 id="what-the-endpoint-schema-looks-like">What the endpoint schema looks like<a class="headerlink" href="#what-the-endpoint-schema-looks-like" title="Permanent link">&para;</a></h2>
+<p>The schema is <strong>data owned by the platform module itself</strong> — a <code>pub const</code> next
+to the code that serves it, which loom2v (a V program) imports. No generator-side
+table to drift from the module: the module <em>is</em> the table. One shared type
+(<code>comm/com</code>, since COM owns routing):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="n">Dir</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="n">rx</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="n">tx</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="n">rxtx</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="p">}</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="n">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="n">Endpoint</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="nl">pub:</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="n">name</span><span class="w"> </span><span class="k">string</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="n">dir</span><span class="w">  </span><span class="n">Dir</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">    </span><span class="n">dlc</span><span class="w">  </span><span class="n">u8</span><span class="w"> </span><span class="c1">// payload bytes this endpoint sends/expects (0 = flexible)</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">    </span><span class="n">doc</span><span class="w">  </span><span class="k">string</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="p">}</span>
+</code></pre></div>
+<p>Each module declares its ports:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1">// comm/trace/module.v</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">pub</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">endpoints</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="n">com</span><span class="p">.</span><span class="n">Endpoint</span><span class="p">{</span><span class="nl">name:</span><span class="w"> </span><span class="p">&#39;</span><span class="n">cmd</span><span class="p">&#39;,</span><span class="w">     </span><span class="nl">dir:</span><span class="w"> </span><span class="p">.</span><span class="n">rx</span><span class="p">,</span><span class="w"> </span><span class="nl">dlc:</span><span class="w"> </span><span class="mh">8</span><span class="p">,</span><span class="w"> </span><span class="nl">doc:</span><span class="w"> </span><span class="p">&#39;</span><span class="n">TraceCmd</span><span class="w"> </span><span class="n">control</span><span class="p">&#39;},</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="n">com</span><span class="p">.</span><span class="n">Endpoint</span><span class="p">{</span><span class="nl">name:</span><span class="w"> </span><span class="p">&#39;</span><span class="n">dump_fc</span><span class="p">&#39;,</span><span class="w"> </span><span class="nl">dir:</span><span class="w"> </span><span class="p">.</span><span class="n">rx</span><span class="p">,</span><span class="w"> </span><span class="nl">dlc:</span><span class="w"> </span><span class="mh">8</span><span class="p">,</span><span class="w"> </span><span class="nl">doc:</span><span class="w"> </span><span class="p">&#39;</span><span class="n">ISO</span><span class="o">-</span><span class="n">TP</span><span class="w"> </span><span class="n">flow</span><span class="w"> </span><span class="n">control</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">dump</span><span class="p">&#39;},</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="n">com</span><span class="p">.</span><span class="n">Endpoint</span><span class="p">{</span><span class="nl">name:</span><span class="w"> </span><span class="p">&#39;</span><span class="n">rsp</span><span class="p">&#39;,</span><span class="w">     </span><span class="nl">dir:</span><span class="w"> </span><span class="p">.</span><span class="n">tx</span><span class="p">,</span><span class="w"> </span><span class="nl">dlc:</span><span class="w"> </span><span class="mh">8</span><span class="p">,</span><span class="w"> </span><span class="nl">doc:</span><span class="w"> </span><span class="p">&#39;</span><span class="n">command</span><span class="w"> </span><span class="n">response</span><span class="p">&#39;},</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span><span class="n">com</span><span class="p">.</span><span class="n">Endpoint</span><span class="p">{</span><span class="nl">name:</span><span class="w"> </span><span class="p">&#39;</span><span class="n">record</span><span class="p">&#39;,</span><span class="w">  </span><span class="nl">dir:</span><span class="w"> </span><span class="p">.</span><span class="n">tx</span><span class="p">,</span><span class="w"> </span><span class="nl">dlc:</span><span class="w"> </span><span class="mh">8</span><span class="p">,</span><span class="w"> </span><span class="nl">doc:</span><span class="w"> </span><span class="p">&#39;</span><span class="n">raw</span><span class="w"> </span><span class="n">records</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">dump</span><span class="w"> </span><span class="n">stream</span><span class="p">&#39;},</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="n">com</span><span class="p">.</span><span class="n">Endpoint</span><span class="p">{</span><span class="nl">name:</span><span class="w"> </span><span class="p">&#39;</span><span class="n">stat</span><span class="p">&#39;,</span><span class="w">    </span><span class="nl">dir:</span><span class="w"> </span><span class="p">.</span><span class="n">tx</span><span class="p">,</span><span class="w"> </span><span class="nl">dlc:</span><span class="w"> </span><span class="mh">8</span><span class="p">,</span><span class="w"> </span><span class="nl">doc:</span><span class="w"> </span><span class="p">&#39;</span><span class="n">HandlerStat</span><span class="w"> </span><span class="n">heartbeat</span><span class="p">&#39;},</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="p">]</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="c1">// comm/nm — same shape, nothing module-specific in the mechanism</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="n">pub</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">endpoints</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">    </span><span class="n">com</span><span class="p">.</span><span class="n">Endpoint</span><span class="p">{</span><span class="nl">name:</span><span class="w"> </span><span class="p">&#39;</span><span class="n">pdu</span><span class="p">&#39;,</span><span class="w"> </span><span class="nl">dir:</span><span class="w"> </span><span class="p">.</span><span class="n">rxtx</span><span class="p">,</span><span class="w"> </span><span class="nl">dlc:</span><span class="w"> </span><span class="mh">8</span><span class="p">,</span><span class="w"> </span><span class="nl">doc:</span><span class="w"> </span><span class="p">&#39;</span><span class="n">NM</span><span class="w"> </span><span class="n">PDU</span><span class="w"> </span><span class="p">(</span><span class="n">hears</span><span class="w"> </span><span class="k">and</span><span class="w"> </span><span class="n">sends</span><span class="w"> </span><span class="n">on</span><span class="w"> </span><span class="n">one</span><span class="w"> </span><span class="n">id</span><span class="p">)&#39;},</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="p">]</span>
+</code></pre></div>
+<p>The rx convention is mechanical — endpoint <code>x</code> is served by method <code>on_x</code> — so
+loom2v, importing the const:</p>
+<ul>
+<li><strong>validates</strong> the <code>[trace]</code> block's keys against it (unknown endpoint or an
+  unbound rx endpoint is a clear generation error listing the valid names),</li>
+<li><strong>emits</strong> one match arm per bound rx endpoint (<code>0x714 { tm.on_dump_fc(rx) }</code>),</li>
+<li><strong>passes tx bindings into the constructor</strong> (<code>trace.new_module(rsp_id: ...,
+  record_id: ...)</code>) — tx endpoints are config the module stamps on its output;
+  an <code>rxtx</code> endpoint simply gets both.</li>
+</ul>
+<p>Runtime cost: zero — the const is generator input, the target never iterates it;
+dispatch stays the generated static match. And drift is self-catching twice:
+config↔schema drift fails generation, schema↔code drift (an endpoint without its
+<code>on_&lt;name&gt;</code> method) fails to V-compile in the generated output.</p>
+<h2 id="endpoints-carry-frames-not-types">Endpoints carry frames, not types<a class="headerlink" href="#endpoints-carry-frames-not-types" title="Permanent link">&para;</a></h2>
+<p>An endpoint's payload structure is entirely the module's business: the layout of
+a TraceCmd is defined by <code>decode_cmd</code> in <code>comm/trace</code> — plain V next to the state
+machine, unit-testable, no codegen — and neither the router, the schema, nor COM
+ever interprets a byte. So a module can put <em>any</em> structure on a port and the
+routing/binding/validation machinery just works, because it only touches <code>id</code>,
+<code>dir</code> and <code>dlc</code>. What the machinery deliberately does <strong>not</strong> do is marshal:
+<code>on_&lt;endpoint&gt;</code> hands the module a <code>can.Frame</code>, <code>produce</code> takes one back. Typed
+endpoint delivery would need a generated decoder per endpoint — the hand-tailored
+smear this design exists to kill.</p>
+<p>The typed path already exists — it's a <strong>signal</strong>. Rule of thumb:</p>
+<table>
+<thead>
+<tr>
+<th>your data is…</th>
+<th>use</th>
+<th>layout defined by</th>
+<th>delivered as</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>app data (sensor values, FB commands)</td>
+<td>signal</td>
+<td>DBC</td>
+<td>typed struct via IOC</td>
+</tr>
+<tr>
+<td>protocol data (trace cmd, NM PDU, dump)</td>
+<td>module endpoint</td>
+<td>the module's V code</td>
+<td><code>can.Frame</code>, module decodes</td>
+</tr>
+</tbody>
+</table>
+<p>App data is per-project (so its layout belongs in config/DBC); protocol data is
+fixed by the protocol's implementation (ecu.toml must not be able to redefine
+what a TraceCmd looks like — only <em>where</em> it rides). Structures bigger than a
+frame are the ISO-TP case above: the module segments internally, still just
+frames at the port.</p>
+<h2 id="sizes-and-transports-what-must-match-and-where-its-checked">Sizes and transports: what must match, and where it's checked<a class="headerlink" href="#sizes-and-transports-what-must-match-and-where-its-checked" title="Permanent link">&para;</a></h2>
+<p><strong>Segmented transports (ISO-TP) are seamless by construction</strong> — segmentation is
+<em>inside</em> the module, invisible to COM. The trace dump owns an <code>isotp.Link</code>:
+inbound flow control routes to <code>on_dump_fc</code> (just a frame), and <code>produce</code> hands
+out whatever the link yields next (just frames on <code>record</code>). COM moves frames;
+it never knows a "block" exists. Nothing transport-shaped is needed in the
+schema or the router — the wire-visible things are already ports.</p>
+<p><strong>Frame sizes must match, at three layers</strong> (the repo's existing pattern:
+validate at generation, guard at runtime):</p>
+<ol>
+<li><strong>Binding vs DBC</strong> — the endpoint's <code>dlc</code> is checked against the bound DBC
+   message's DLC at generation: <code>cmd = "TraceCmd"</code> with a 4-byte TraceCmd fails
+   with a clear error, not on the bench. (Literal-id bindings have no DBC to
+   check; the module stamps the schema's <code>dlc</code> on what it sends.)</li>
+<li><strong>Bus vs module</strong> — <code>[bus.canX] fd</code> already declares the MTU (8 / 64); the
+   generator passes it to the module constructor so ISO-TP framing and stream
+   <code>len</code> adapt. (Later, free win: an FD bus can batch 8 records per 64-byte
+   <code>record</code> frame.)</li>
+<li><strong>Wire vs handler</strong> — <code>recv</code> copies only the bytes that arrived, so rx
+   handlers keep their <code>f.len</code> guard regardless (same convention as signal
+   decode: never read stale bytes off a short frame).</li>
+</ol>
+<h2 id="the-com-module-interface-platform-written-once">The COM-module interface (platform, written once)<a class="headerlink" href="#the-com-module-interface-platform-written-once" title="Permanent link">&para;</a></h2>
+<p>Trace, NM and telemetry all implement the same tiny interface. The platform owns
+it; loom2v never generates its body.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">interface</span><span class="w"> </span><span class="n">ComModule</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span><span class="n">rx_ids</span><span class="p">()</span><span class="w"> </span><span class="p">[]</span><span class="n">u32</span><span class="w">                 </span><span class="c1">// ids this module claims (drives the routing table)</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="n">on_rx</span><span class="p">(</span><span class="n">f</span><span class="w"> </span><span class="n">can</span><span class="p">.</span><span class="n">Frame</span><span class="p">)</span><span class="w">             </span><span class="c1">// a routed frame arrived (trace: handle_cmd; NM: state machine)</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="n">produce</span><span class="p">(</span><span class="n">mut</span><span class="w"> </span><span class="n">out</span><span class="w"> </span><span class="p">[]</span><span class="n">can</span><span class="p">.</span><span class="n">Frame</span><span class="p">)</span><span class="w">   </span><span class="c1">// hand COM whatever it wants to send this pass (tx_ready-gated)</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="p">}</span>
+</code></pre></div>
+<ul>
+<li><strong><code>on_rx</code></strong> is the control plane. Trace: <code>trace.handle_cmd(mut ring, decode_cmd(f))</code>
+  (already in <code>comm/trace</code>). NM: its message handler. It's just "a frame came in."</li>
+<li><strong><code>produce</code></strong> is the data plane. Telemetry: CpuLoad every period. Trace: records
+  from the hooks, or a <strong>dump burst</strong> once a dump command armed it (an on-demand
+  producer — same category as telemetry's periodic one, different trigger). NM:
+  its periodic messages.</li>
+</ul>
+<h2 id="the-generic-comm-loop-platform-capability-agnostic">The generic comm loop (platform, capability-agnostic)<a class="headerlink" href="#the-generic-comm-loop-platform-capability-agnostic" title="Permanent link">&para;</a></h2>
+<p>The comm thread — the thing loom2v used to hand-generate ~700 lines of, per
+run-model — is now one loop that names no capability:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>for {
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    drain rx:  for each frame  -&gt;  module = route[frame.id];  module.on_rx(frame)
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    produce:   for each module -&gt;  module.produce(mut out);   send out (tx_ready-gated)
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    pace / sleep
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>}
+</code></pre></div>
+<p>Written once in the platform/comm. Host, ThreadX and bare-metal differ only in how
+the loop is <em>hosted</em> (spawned thread vs comm thread vs inline superloop) and how it
+reads the clock/channel — not in what it does.</p>
+<h2 id="trace-data-from-hooks-control-by-routing">Trace = data from hooks + control by routing<a class="headerlink" href="#trace-data-from-hooks-control-by-routing" title="Permanent link">&para;</a></h2>
+<p>Trace stops being a subsystem loom2v generates and becomes a <code>ComModule</code> plus three
+<strong>enter/exit hook families</strong> that feed its ring — the recording model, unchanged and
+already mostly present:</p>
+<table>
+<thead>
+<tr>
+<th>event</th>
+<th>enter/exit source</th>
+<th>record</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>ISR</strong></td>
+<td>Cortex-M / port exec-change hooks</td>
+<td><code>new_isr</code></td>
+</tr>
+<tr>
+<td><strong>thread</strong></td>
+<td>RTOS (ThreadX exec hooks) / Loom on host</td>
+<td><code>new_thread</code></td>
+</tr>
+<tr>
+<td><strong>FB</strong></td>
+<td>Loom scheduler brackets each handler dispatch (<code>sched.set_trace_hook</code>, exists)</td>
+<td><code>new_fb</code></td>
+</tr>
+</tbody>
+</table>
+<p>The hooks timestamp and push a <code>Record</code> into the ring. The trace module streams the
+ring out via <code>produce</code> when a routed command arms it. <code>comm/trace</code> already has the
+primitives: <code>handle_cmd</code>, <code>TraceBuffer</code>, <code>new_isr/new_thread/new_idle/new_fb</code>,
+<code>status_rsp</code>. The <strong>only</strong> missing platform piece is the module wrapper + the generic
+loop — neither of which is trace-specific.</p>
+<h2 id="what-loom2v-generates-thin-vs-whats-platform-once">What loom2v generates (thin) vs what's platform (once)<a class="headerlink" href="#what-loom2v-generates-thin-vs-whats-platform-once" title="Permanent link">&para;</a></h2>
+<p><strong>Platform library</strong> (<code>comm/</code>, written + unit-tested once, no codegen):
+- the generic comm loop (route + produce),
+- <code>ComModule</code> and the concrete modules: <code>TraceModule</code>, <code>NmModule</code>, <code>TelemModule</code>,
+- the trace owner logic (dump streaming, multi-core coordination) <em>inside</em> <code>TraceModule</code>.</p>
+<p><strong>loom2v generates</strong> (the same generation for every module):
+- the <strong>router match</strong> from the rx bindings (id → signal | <code>module.endpoint</code>),
+- entity-id / ring-size / scratch-cell <strong>assignment</strong>,
+- <strong>registration</strong>: instantiate each configured module, hand it its config, add it
+  to the comm thread's module list,
+- <strong>hook wiring</strong>: FB enter/exit via the Loom scheduler (thread/ISR are port/RTOS).</p>
+<p>That's it. <code>gen_trace.v</code> collapses from ~1000 lines of generated protocol to a
+handful of lines of config — "trace is a module routed at <code>0x712</code>, 64-entry ring,
+records on <code>0x7E5</code>." NM lands the same way with no new generator code.</p>
+<h2 id="module-module-calls-events-signals">Module ↔ module: calls, events, signals<a class="headerlink" href="#module-module-calls-events-signals" title="Permanent link">&para;</a></h2>
+<p>Endpoints cover the wire. When platform modules talk to <em>each other</em> on the ECU
+(the ECU manager driving NM, NM indicating "network down" back), the mechanism is
+picked by thread boundary and semantics — all three already exist in the
+architecture (see <a href="../architecture/">architecture.md</a>, "The management plane"):</p>
+<table>
+<thead>
+<tr>
+<th>interaction</th>
+<th>mechanism</th>
+<th>why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>same-thread module↔module (ecum ↔ nm)</td>
+<td><strong>direct call</strong></td>
+<td>both state machines run on the mode thread — <code>nm.request()</code> / <code>nm.release()</code>, no framework</td>
+</tr>
+<tr>
+<td>cross-thread event / request</td>
+<td><strong>mode mailbox</strong> (SPSC ring)</td>
+<td>requests must <em>queue</em>: a sleep-request burst must not overwrite a shutdown command</td>
+</tr>
+<tr>
+<td>cross-thread state (NmState for FBs/telem)</td>
+<td><strong>signal / IOC</strong></td>
+<td>latest-value is the semantics — and it can be a declared <code>[[signal]]</code></td>
+</tr>
+<tr>
+<td>anything over the wire</td>
+<td><strong>endpoint binding</strong></td>
+<td>frames, routed</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>ComModule</code> on the comm thread is a module's <strong>bus adapter</strong>, not its brain:
+NM's <code>pdu</code> rx posts an indication to the mode mailbox and <code>produce</code> sends what
+the state machine decided; the state machine itself runs on the mode tick next
+to ECU state. Same split trace has — hooks record, the module serves the bus.</p>
+<h2 id="why-this-is-the-fix-not-another-move">Why this is the fix, not another move<a class="headerlink" href="#why-this-is-the-fix-not-another-move" title="Permanent link">&para;</a></h2>
+<p>Every earlier attempt (extract emitters, a <code>Producer</code> interface, relocate to
+<code>gen_trace.v</code>) moved the <strong>generated owner-loop</strong> around. The loop shouldn't be
+generated at all — it's COM routing + a producer, and COM already owns routing.
+Delete the generation; let the platform own the loop; make trace a routed client.
+The strip (<code>gen.v</code> 3231 → 2192, trace fully removed, non-trace byte-identical) is
+the enabling baseline; this doc is the re-add.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.top", "navigation.tracking", "content.code.copy", "content.code.annotate", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

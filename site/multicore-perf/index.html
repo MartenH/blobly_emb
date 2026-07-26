@@ -1,0 +1,2125 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A V-language automotive software stack — no-alloc, sim-first, ThreadX, CAN-FD first.">
+      
+      
+      
+        <link rel="canonical" href="https://blobly.net/multicore-perf/">
+      
+      
+        <link rel="prev" href="../multi-node/">
+      
+      
+        <link rel="next" href="../threadx-amp/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Multicore performance - blobly</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#multicore-performance-lock-free-signal-exchange" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="blobly" class="md-header__button md-logo" aria-label="blobly" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            blobly
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Multicore performance
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="blobly" class="md-nav__button md-logo" aria-label="blobly" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    blobly
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/build-and-flash/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build, flash & talk to the target
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/two-node-io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wire a signal across two ECUs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/record-a-trace/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Record and view a trace
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-signal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a signal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-frame/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a CAN frame
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-an-fb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a function block
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-thread/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a thread or partition
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-core/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a core
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-shell-command/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a shell command
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design & internals
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design & internals
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../application-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Application model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../no-alloc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    No-alloc discipline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory-protection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory protection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ways-of-working/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ways of working
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../autosar-comparison/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AUTOSAR comparison
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../communication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Communication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../com-modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    COM modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../someip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOME/IP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../net/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ethernet / NetX
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    IO
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nvm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NvM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../bootloader/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bootloader
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-image/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-image
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-node/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-node
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multicore performance
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multicore performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#design-principles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design principles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ioc-is-a-per-channel-transport-not-one-fixed-scheme" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IOC is a per-channel transport, not one fixed scheme
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-each-transport-is-implemented" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How each transport is implemented
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How each transport is implemented">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#seqlock-1-one-buffer-a-version-counter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        seqlock (1×) — one buffer + a version counter
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#double-buffer-2-two-buffers-an-active-index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        double buffer (2×) — two buffers + an active index
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#triple-buffer-3-three-buffers-ownership-rotated-by-one-exchange" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        triple buffer (3×) — three buffers, ownership rotated by one exchange
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-the-atomics-require-of-the-memory-local-vs-global-monitor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the atomics require of the memory (local vs global monitor)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#measured-host-2-pinned-cores-64-byte-non-scalar-record-1-sside" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Measured (host, 2 pinned cores, 64-byte non-scalar record, 1 s/side)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-the-benchmarks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running the benchmarks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#real-stack-scale-benchmark-examplesscale-make-bench-scale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Real-stack scale benchmark (examples/scale + make bench-scale)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hardware-transports-target-backends-same-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardware transports (target backends, same API)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cache-coherency-placement-target-reality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache coherency &amp; placement (target reality)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../threadx-amp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ThreadX AMP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../porting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Porting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-codegen/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace codegen
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-manifest/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace manifest
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-multicore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace multicore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../traceability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirement traceability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#design-principles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design principles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ioc-is-a-per-channel-transport-not-one-fixed-scheme" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IOC is a per-channel transport, not one fixed scheme
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-each-transport-is-implemented" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How each transport is implemented
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How each transport is implemented">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#seqlock-1-one-buffer-a-version-counter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        seqlock (1×) — one buffer + a version counter
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#double-buffer-2-two-buffers-an-active-index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        double buffer (2×) — two buffers + an active index
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#triple-buffer-3-three-buffers-ownership-rotated-by-one-exchange" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        triple buffer (3×) — three buffers, ownership rotated by one exchange
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-the-atomics-require-of-the-memory-local-vs-global-monitor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the atomics require of the memory (local vs global monitor)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#measured-host-2-pinned-cores-64-byte-non-scalar-record-1-sside" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Measured (host, 2 pinned cores, 64-byte non-scalar record, 1 s/side)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-the-benchmarks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running the benchmarks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#real-stack-scale-benchmark-examplesscale-make-bench-scale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Real-stack scale benchmark (examples/scale + make bench-scale)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hardware-transports-target-backends-same-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardware transports (target backends, same API)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cache-coherency-placement-target-reality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache coherency &amp; placement (target reality)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="multicore-performance-lock-free-signal-exchange">Multicore performance: lock-free signal exchange<a class="headerlink" href="#multicore-performance-lock-free-signal-exchange" title="Permanent link">&para;</a></h1>
+<p>Goal: cross-core signal read/write must be <strong>VERY</strong> fast and must <strong>never degrade
+to spinning on a lock</strong>, including for <strong>non-scalar</strong> (multi-field) signals.</p>
+<h2 id="design-principles">Design principles<a class="headerlink" href="#design-principles" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Share almost nothing.</strong> Each partition has its own Loom scheduler and its own
+   driver channel. Intra-partition signals are plain local memory — zero
+   synchronization. Only signals that genuinely cross cores touch the IOC.</li>
+<li><strong>No locks, anywhere, in steady state.</strong> The IOC is lock-free. There is no
+   mutex in any runtime path.</li>
+<li><strong>No false sharing.</strong> Every IOC slot is cache-line aligned and padded to whole
+   cache lines, so a writer on one channel never invalidates another channel's
+   line. This is the difference between "lock-free" and "actually fast."</li>
+<li><strong>Single-writer per channel (SPSC).</strong> Each IOC channel has exactly one <code>from</code>
+   partition (enforced by config). This invariant is what makes the lock-free
+   algorithms valid.</li>
+</ol>
+<h2 id="ioc-is-a-per-channel-transport-not-one-fixed-scheme">IOC is a per-channel transport, not one fixed scheme<a class="headerlink" href="#ioc-is-a-per-channel-transport-not-one-fixed-scheme" title="Permanent link">&para;</a></h2>
+<p>The IOC API (<code>publish</code>/<code>acquire</code>) is uniform; each channel picks a <strong>transport</strong>
+by its timing needs, payload size, and memory budget. App/comm code never
+changes. Software shared-memory backends today:</p>
+<table>
+<thead>
+<tr>
+<th>transport</th>
+<th>writer</th>
+<th>reader</th>
+<th>non-scalar snapshot</th>
+<th>memory</th>
+<th>failure mode</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>seqlock</code> (1×)</td>
+<td>wait-free</td>
+<td>may retry</td>
+<td>yes</td>
+<td>1×</td>
+<td>reader starves if writer saturates</td>
+</tr>
+<tr>
+<td><code>double</code> (2×)</td>
+<td>wait-free</td>
+<td>wait-free</td>
+<td>yes <em>if reader keeps up</em></td>
+<td>2×</td>
+<td>torn if writer laps reader</td>
+</tr>
+<tr>
+<td><code>triple</code> (3×)</td>
+<td>wait-free</td>
+<td>wait-free</td>
+<td>always</td>
+<td>3×</td>
+<td>none† (bounded, constant)</td>
+</tr>
+</tbody>
+</table>
+<p>† triple's wait-free <code>exchange</code> needs a <strong>cross-core exclusive monitor</strong> for the
+IOC region — see <em>What the atomics require of the memory</em> below. seqlock and double
+do not.</p>
+<h2 id="how-each-transport-is-implemented">How each transport is implemented<a class="headerlink" href="#how-each-transport-is-implemented" title="Permanent link">&para;</a></h2>
+<p>All three live in <a href="../osal/osal_native.c"><code>osal/osal_native.c</code></a> and share one shape:
+a <strong>cache-line-aligned, cache-line-padded</strong> slot holding the payload (<code>[64]u8</code> +
+length) plus a small atomic index/counter. All three assume <strong>one writer per
+channel</strong> (SPSC) — that invariant is what makes them correct without locks. The
+payload copy is a <code>volatile</code> byte loop (<code>vcopy</code>) so the compiler can't hoist or
+reorder the data access across the atomic that guards it.</p>
+<h3 id="seqlock-1-one-buffer-a-version-counter">seqlock (1×) — one buffer + a version counter<a class="headerlink" href="#seqlock-1-one-buffer-a-version-counter" title="Permanent link">&para;</a></h3>
+<p>One buffer guarded by a sequence counter: <strong>even = stable, odd = write in
+progress, 0 = never written.</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1">// writer (blob_ioc_write)</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">seq</span><span class="o">++</span><span class="w">  </span><span class="p">(</span><span class="o">-&gt;</span><span class="w"> </span><span class="n">odd</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;in progress&quot;</span><span class="p">);</span><span class="w">  </span><span class="n">release</span><span class="o">-</span><span class="n">fence</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">write</span><span class="w"> </span><span class="n">len</span><span class="p">;</span><span class="w"> </span><span class="n">write</span><span class="w"> </span><span class="n">data</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">store</span><span class="w"> </span><span class="n">seq</span><span class="o">+</span><span class="mi">1</span><span class="w"> </span><span class="p">(</span><span class="n">RELEASE</span><span class="p">)</span><span class="w">            </span><span class="c1">// -&gt; even, &quot;published&quot;</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1">// reader (blob_ioc_read), retry loop</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">seq0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">load</span><span class="p">(</span><span class="n">ACQUIRE</span><span class="p">)</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="k">if</span><span class="w"> </span><span class="n">seq0</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="o">:</span><span class="w">   </span><span class="k">return</span><span class="w"> </span><span class="n">empty</span><span class="w">     </span><span class="c1">// never written</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="k">if</span><span class="w"> </span><span class="n">seq0</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">odd</span><span class="o">:</span><span class="w"> </span><span class="n">retry</span><span class="w">            </span><span class="c1">// writer mid-update</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="n">copy</span><span class="w"> </span><span class="n">len</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">;</span><span class="w">  </span><span class="n">acquire</span><span class="o">-</span><span class="n">fence</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">seq1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">load</span><span class="p">(</span><span class="n">ACQUIRE</span><span class="p">)</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="k">if</span><span class="w"> </span><span class="n">seq0</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">seq1</span><span class="o">:</span><span class="w"> </span><span class="n">done</span><span class="w">            </span><span class="c1">// counter unchanged across the copy -&gt; consistent</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="nl">else</span><span class="p">:</span><span class="w">            </span><span class="n">retry</span><span class="w">           </span><span class="c1">// a write landed mid-copy -&gt; torn, try again</span>
+</code></pre></div>
+<p>The reader never blocks the writer but <strong>may retry</strong> if a write lands during its
+copy — under a saturating writer that retry loop is the 4.6 µs worst case above.
+Cheapest memory (1×) and the only valid scheme for <strong>single-writer / many-readers</strong>
+fan-out (the <code>load_bench</code> fan-out reads use it).</p>
+<p><strong>It's optimistic retry, not a spinlock.</strong> No one takes a lock and no one owns
+anything. The writer is <strong>wait-free and oblivious to readers</strong> — it bumps the
+counter, copies, bumps again, never testing reader state (five readers or zero, it
+does identical work). The reader doesn't <em>lock</em> either; it reads, then checks
+whether the writer moved underneath it (<code>seq0 != seq1</code>, or <code>seq0</code> odd) and redoes
+the copy if so. Consistency is <strong>reader-detected, not writer-enforced</strong>: the writer
+may stomp the buffer mid-copy and the reader simply notices and copies again, so it
+never returns torn data (the only undetectable tear would need 2³² writes during one
+copy — never). One reader retrying never affects the writer or the other readers.</p>
+<p>That is what makes seqlock the <strong>fan-out</strong> transport (one writer, <em>N</em> readers): all
+readers share the one buffer (1× memory), and because they only <em>read</em> the shared
+counter and payload they coexist freely and cannot starve the writer. Triple can't
+do this — its reader <em>writes</em> the index via <code>exchange</code>, so it is strictly
+single-reader; seqlock's read-only readers scale to any number. Example: a CAN
+<strong>Speed</strong> signal written by the bus bridge and read by 5 FBs on 5 cores → one
+seqlock slot, each reader independent. At an interval rate (Speed every 10–20 ms)
+the writer is idle almost always, so the retry path is essentially never taken — the
+4.6 µs cost only appears under a saturating writer. Across the <em>N</em> cores the readers
+share one cache line, so each write invalidates it in every reader's cache and they
+re-fetch: inherent to fan-out, and cheap.</p>
+<h3 id="double-buffer-2-two-buffers-an-active-index">double buffer (2×) — two buffers + an active index<a class="headerlink" href="#double-buffer-2-two-buffers-an-active-index" title="Permanent link">&para;</a></h3>
+<p>Two buffers, one atomic <code>active</code> index. The writer always fills the <em>inactive</em>
+buffer, then flips:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1">// writer (blob_ioc_pub2)</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">w</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">active</span><span class="w"> </span><span class="o">^</span><span class="w"> </span><span class="mi">1</span><span class="w">                   </span><span class="c1">// the buffer the reader isn&#39;t on</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">write</span><span class="w"> </span><span class="n">buf</span><span class="p">[</span><span class="n">w</span><span class="p">]</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">store</span><span class="w"> </span><span class="n">active</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">w</span><span class="w"> </span><span class="p">(</span><span class="n">RELEASE</span><span class="p">)</span><span class="w">       </span><span class="c1">// publish the flip</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="c1">// reader (blob_ioc_acq2)</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">load</span><span class="w"> </span><span class="n">active</span><span class="w"> </span><span class="p">(</span><span class="n">ACQUIRE</span><span class="p">);</span><span class="w">  </span><span class="n">copy</span><span class="w"> </span><span class="n">buf</span><span class="p">[</span><span class="n">a</span><span class="p">]</span>
+</code></pre></div>
+<p>Both sides are <strong>wait-free</strong> — a load and a store, no retry, no exchange. The
+catch: if the writer <strong>laps</strong> the reader (flips twice during one copy), <code>buf[a]</code>
+is being overwritten → a torn read (the <code>torn=612686</code> under saturation). Tear-free
+whenever the reader keeps up — i.e. interval signals, the common case.</p>
+<h3 id="triple-buffer-3-three-buffers-ownership-rotated-by-one-exchange">triple buffer (3×) — three buffers, ownership rotated by one exchange<a class="headerlink" href="#triple-buffer-3-three-buffers-ownership-rotated-by-one-exchange" title="Permanent link">&para;</a></h3>
+<p>Three buffers and three indices — <code>{wb writer-back, shared published|DIRTY,
+rf reader-front}</code> — that are <strong>always a permutation of {0,1,2}</strong>. Each side owns a
+private buffer the other never touches; a single atomic exchange rotates ownership.
+The low 2 bits of <code>shared</code> are the index; bit 2 is a <strong>DIRTY</strong> flag ("published
+since the reader last took it").</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1">// writer (blob_ioc_pub)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">write</span><span class="w"> </span><span class="n">buf</span><span class="p">[</span><span class="n">wb</span><span class="p">]</span><span class="w">                              </span><span class="c1">// fill our private back-buffer</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">old</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exchange</span><span class="p">(</span><span class="n">shared</span><span class="p">,</span><span class="w"> </span><span class="n">wb</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">DIRTY</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="n">ACQ_REL</span><span class="p">)</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">wb</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="n">old</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">IDX</span><span class="w">                            </span><span class="c1">// old published buffer becomes our back-buffer</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="c1">// reader (blob_ioc_acq)</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="n">cur</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">load</span><span class="w"> </span><span class="n">shared</span><span class="w"> </span><span class="p">(</span><span class="n">ACQUIRE</span><span class="p">)</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="k">if</span><span class="w"> </span><span class="n">cur</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">DIRTY</span><span class="o">:</span><span class="w">                            </span><span class="c1">// new data since last time</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="n">old</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">exchange</span><span class="p">(</span><span class="n">shared</span><span class="p">,</span><span class="w"> </span><span class="n">rf</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="n">ACQ_REL</span><span class="p">)</span><span class="w">   </span><span class="c1">// swap our front in, take the published one</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span><span class="n">rf</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="n">old</span><span class="w"> </span><span class="o">&amp;</span><span class="w"> </span><span class="n">IDX</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="n">copy</span><span class="w"> </span><span class="n">buf</span><span class="p">[</span><span class="n">rf</span><span class="p">]</span><span class="w">                               </span><span class="c1">// always a private buffer -&gt; never torn</span>
+</code></pre></div>
+<p>Writer and reader each keep their own buffer and only ever swap the <em>third</em> one
+through <code>shared</code>, so neither waits and there is no shared payload to tear on —
+<strong>wait-free for a payload of any size or shape.</strong> The DIRTY bit lets a reader
+polling faster than the writer skip the exchange and just re-read its current
+front, so a fast poller costs a single atomic load. Costs 3× memory; reserve it
+for the few channels with a saturating writer that still need wait-free, tear-free
+reads. Indices start at the permutation <code>{wb=0, shared=1, rf=2}</code> (<code>init_db_indices</code>).</p>
+<p>The <code>ACQ_REL</code> on each exchange is the publish/observe barrier: <strong>release</strong> so the
+payload write is visible before the index that publishes it, <strong>acquire</strong> so the
+peer sees the payload of the buffer it just took.</p>
+<h3 id="what-the-atomics-require-of-the-memory-local-vs-global-monitor">What the atomics require of the memory (local vs global monitor)<a class="headerlink" href="#what-the-atomics-require-of-the-memory-local-vs-global-monitor" title="Permanent link">&para;</a></h3>
+<p>The three schemes don't make the same hardware demand. On Cortex-M7 the atomics
+compile to:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>load  (relaxed/acquire)  -&gt;  LDR        (+ DMB ish on acquire)      // seqlock, double
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>store (release)          -&gt;  DMB ish + STR                          // seqlock, double
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>exchange (acq_rel)       -&gt;  DMB + LDREX/STREX retry loop + DMB      // triple
+</code></pre></div>
+<p><strong>seqlock and double use only plain load/store.</strong> The memory just has to give
+single-copy atomicity for an aligned 32-bit access — architectural on any Normal
+memory — and honour the <code>DMB</code> barrier. No exclusive-access signalling at all. On a
+<strong>cache-coherent</strong> multicore that is everything you need; on a <strong>non-coherent</strong> one
+the region must additionally be <strong>non-cacheable or explicitly cache-maintained</strong> so
+the barrier's <em>ordering</em> turns into cross-core <em>visibility</em> (the coherency axis —
+see <em>Cache coherency &amp; placement</em> below). That is a separate concern from the
+monitor.</p>
+<p><strong>triple uses <code>LDREX</code>/<code>STREX</code></strong>, the load-/store-exclusive pair, which depend on the
+ARM <strong>exclusive monitor</strong>:</p>
+<ul>
+<li>the <strong>local monitor</strong> is per-CPU — it tags an address range on a <code>LDREX</code> and
+  clears it on any intervening write, so <code>STREX</code> can tell whether the read-modify-
+  write stayed exclusive. This alone is enough on a <strong>single-core</strong> part (the H735):
+  the one core both sets and checks the tag.</li>
+<li><strong>cross-core</strong> exclusivity needs a <strong>global monitor</strong> implemented in the
+  interconnect/memory for that region — the bus-level exclusive-access channel (AXI
+  <code>*LOCK</code>/exclusive transactions) that lets one core's <code>STREX</code> fail when another core
+  wrote the line in between. Without it — non-cacheable SRAM on many parts, Device
+  memory, or an interconnect with no exclusive support — <code>STREX</code> is <em>unpredictable</em>:
+  it typically livelocks (always fails) or silently isn't atomic.</li>
+</ul>
+<p>So the requirement ladder:</p>
+<table>
+<thead>
+<tr>
+<th>scheme</th>
+<th>what the IOC memory must provide</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>seqlock, double</td>
+<td>aligned word + <code>DMB</code>; on non-coherent multicore, non-cacheable / cache-maintained for visibility</td>
+</tr>
+<tr>
+<td>triple</td>
+<td>the above <strong>+ a cross-core global exclusive monitor</strong> for the region</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Rule of thumb:</strong> on a multicore target whose shared SRAM has no global monitor,
+keep saturating-writer channels on a <strong>HW transport</strong> (HW semaphore / mailbox — the
+interconnect <em>is</em> the arbiter; see below) rather than the triple buffer. seqlock and
+double stay valid because they never take an exclusive lock. This is one more reason
+the transport is per-channel config resolved by the OSAL, not baked into app code.</p>
+<h2 id="measured-host-2-pinned-cores-64-byte-non-scalar-record-1-sside">Measured (host, 2 pinned cores, 64-byte non-scalar record, 1 s/side)<a class="headerlink" href="#measured-host-2-pinned-cores-64-byte-non-scalar-record-1-sside" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a> saturated writer (worst case):
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  seqlock 1x  :   216200 reads  (4625.35 ns/op)  torn=0        &lt;- reader spins on retries
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>  double 2x   :  6404140 reads  ( 156.15 ns/op)  torn=612686   &lt;- laps reader -&gt; tears
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>  triple 3x   :  6701371 reads  ( 149.22 ns/op)  torn=0        &lt;- wait-free, always safe
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a> paced writer @100us (realistic &quot;signals at intervals&quot;):
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>  seqlock 1x  : 30073529 reads  (  33.25 ns/op)  torn=0
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>  double 2x   : 28127863 reads  (  35.55 ns/op)  torn=0
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>  triple 3x   : 29659307 reads  (  33.72 ns/op)  torn=0        &lt;- all three identical &amp; safe
+</code></pre></div>
+<p><strong>Takeaway: for interval signals, 1× and 2× are tear-free and just as fast as
+3×.</strong> Don't triple SRAM by default — reserve <code>triple</code> for the few channels with
+a saturating writer that also need wait-free reads.</p>
+<h2 id="running-the-benchmarks">Running the benchmarks<a class="headerlink" href="#running-the-benchmarks" title="Permanent link">&para;</a></h2>
+<p><code>make bench</code> runs all three:</p>
+<ul>
+<li><strong><code>ioc_bench</code></strong> — IOC transport cross-<strong>thread</strong> (2 pinned cores): the table above.</li>
+<li><strong><code>ioc_bench_mp</code></strong> — IOC transport cross-<strong>process</strong> (fork-per-core + <code>MAP_SHARED</code>):
+  the AMP model a per-core ThreadX instance sits on (see <code>threadx-amp.md</code>). Proves
+  the lock-free IOC works across processes, not just threads (~200 ns/op, tear-free).</li>
+<li><strong><code>loom_bench</code></strong> — the <strong>Loom scheduler</strong>'s dispatch tax: a static-table scan +
+  indirect call, ~<strong>0.7–0.95 ns per handler dispatch</strong> (32-handler tick ≈ 22 ns).
+  Negligible next to the IOC transfer — scheduling is not the cost, the data hop is.</li>
+<li><strong><code>load_bench</code></strong> — a whole-system load <em>micro-model</em>: 4 cores (fork-per-core,
+  shared IOC), <strong>8 CAN buses on core0</strong>, <strong>50 FBs per core</strong>, each FB reading 10 +
+  writing 10 signals (CAN-bridged + cross-core internal) every 10 ms. Fan-out reads
+  use the <strong>seqlock</strong> transport (single-writer / multi-reader — the valid transport
+  when many FBs read one signal). Reports per-core CPU load:</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>core  role              load    work/cycle
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a> 0    8 buses + 50 FBs  1.89%   192 us     &lt;- carries the 8 bridges&#39; codec + IOC
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a> 1    50 FBs            1.32%   134 us
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a> 2    50 FBs            1.22%   124 us
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a> 3    50 FBs            1.23%   125 us
+</code></pre></div>
+<p><strong>Takeaway:</strong> a busy ECU (8 buses, 200 FBs, ~4k signal ops/cycle) sits at <strong>~2%</strong>
+  per core at the 10 ms rate — the IO core (core0) ~40 % heavier from CAN codec, and
+  ~50× headroom before saturation. This is a hand-written model of the <em>work</em>; for
+  the same load through the real generated stack on real vcans, see below. The
+  constants at the top of the bench are tunable.</p>
+<h2 id="real-stack-scale-benchmark-examplesscale-make-bench-scale">Real-stack scale benchmark (<code>examples/scale</code> + <code>make bench-scale</code>)<a class="headerlink" href="#real-stack-scale-benchmark-examplesscale-make-bench-scale" title="Permanent link">&para;</a></h2>
+<p>The same shape, but through the <strong>actual generated stack</strong> on real SocketCAN: a
+4-core / 8-bus / <strong>200-FB</strong> example whose config <em>and</em> FB handlers are generated
+(<code>tools/scale_gen</code>), built by the normal generators, run on <code>vcan0..7</code> with
+<code>cangen</code> traffic. Each partition is a core-pinned thread (core0 also hosts the 8
+bus-bridge threads); CPU is sampled per-thread from <code>/proc</code> and summed by core:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>core  role              load
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a> 0    8 buses + 50 FBs  ~3.8%   &lt;- 8 real bridge threads (recv + codec) + 50 FBs
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a> 1    50 FBs            ~1.5%
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a> 2    50 FBs            ~1.4%
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a> 3    50 FBs            ~1.5%
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>RAM:  ~2.1 MB VmRSS  (~0.7 MB Pss), 13 threads
+</code></pre></div>
+<p>The IO core is ~2.5× the app cores here (vs ~1.4× in the micro-model) because core0
+runs <strong>eight real bridge threads</strong> polling SocketCAN, not inline codec.</p>
+<p><strong>Footprint</strong> (built <code>-gc none</code> — the runtime doesn't allocate, so no collector):
+448 KB binary (<code>.text</code> 378 KB, <code>.bss</code> 149 KB — most of it the IOC channel pool),
+~2.1 MB RSS / <strong>~0.7 MB Pss</strong> for 200 FBs across 8 buses. (The default Boehm GC
+would add ~180 KB code, ~255 KB <code>.bss</code>, ~1.6 MB Pss, and ~15 marker threads — none
+of which a no-alloc runtime needs.) <code>make cfile</code> keeps the generated C the compiler
+used (<code>bin/app.c</code>, ~32k lines / 1.4 MB) for inspection.</p>
+<h2 id="hardware-transports-target-backends-same-api">Hardware transports (target backends, same API)<a class="headerlink" href="#hardware-transports-target-backends-same-api" title="Permanent link">&para;</a></h2>
+<p>Real automotive MCUs provide dedicated IPC hardware that maps onto the same
+per-channel transport slot — so you get isolation/throughput <strong>without</strong> the
+software memory cost:</p>
+<table>
+<thead>
+<tr>
+<th>HW mechanism</th>
+<th>maps to</th>
+<th>why / when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>HW semaphore</strong> (NXP SEMA42, ST HSEM, AURIX)</td>
+<td>guards a <strong>1× single buffer</strong></td>
+<td>hardware-arbitrated mutual exclusion, a few cycles, bounded — no software spin, no 2×/3× SRAM. Best for memory-tight channels with low contention.</td>
+</tr>
+<tr>
+<td><strong>Inter-core DMA</strong></td>
+<td>fills the inactive <strong>2× double</strong> buffer, then flips</td>
+<td>the DMA engine moves the payload; cores spend ~0 cycles copying. Wins for <strong>large</strong> records and frees CPU.</td>
+</tr>
+<tr>
+<td><strong>HW mailbox / messaging unit</strong> (NXP MU, ST IPCC, TI IPC)</td>
+<td>small fixed message + <strong>doorbell IRQ</strong></td>
+<td>best for <strong>events/commands</strong> and as the <em>notify</em> half: replace a polling <code>acquire</code> with an interrupt when new data lands.</td>
+</tr>
+</tbody>
+</table>
+<p>These are selected per channel in <code>config/ecu.toml</code> (<code>[[ioc]] transport = ...</code>)
+and resolved by the OSAL's target backend; the seqlock/double/triple shared-
+memory backends above are the host/sim defaults and the fallback on parts
+without the peripheral.</p>
+<h2 id="cache-coherency-placement-target-reality">Cache coherency &amp; placement (target reality)<a class="headerlink" href="#cache-coherency-placement-target-reality" title="Permanent link">&para;</a></h2>
+<p>Many multicore automotive parts are <strong>not</strong> fully cache-coherent across cores.
+IOC shared memory must therefore live in a non-cached shared SRAM region (or be
+explicitly cache-maintained). HW mailbox/DMA transports sidestep this because the
+peripheral, not a shared cache line, carries the data. The OSAL backend owns this
+placement; app/comm code is unaffected.</p>
+<h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
+<p>The seqlock/double/triple algorithms above are the <strong>host/sim</strong> backends and the
+fallback on parts without IPC hardware; the per-channel transport choice is config
+(<code>[[ioc]] transport = …</code> in <code>config/ecu.toml</code>) and is resolved by the OSAL backend,
+so app/comm code never sees which scheme a channel uses. On a non-cache-coherent
+target the shared slots must live in non-cached shared SRAM (see <em>Cache coherency</em>
+above); the math (permutation of buffers, single atomic index) is unchanged.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.top", "navigation.tracking", "content.code.copy", "content.code.annotate", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

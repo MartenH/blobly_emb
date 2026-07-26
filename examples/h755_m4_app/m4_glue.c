@@ -188,6 +188,31 @@ void duo_bulk_produce(void) {
 		bulk_init(p, 4u, 256u);
 		s_xfer_inited = 1;
 	}
+
+	/* BENCH: while the CM7 raises the burst flag, produce flat-out so it can measure the pool's
+	 * raw cross-core throughput. Two deliberate differences from the paced path: (1) a WORD-wise
+	 * fill — a realistic bulk COPY, not the byte-wise seq*K integrity pattern whose per-byte
+	 * multiply would dominate the number; (2) NO doorbell — the CM7 spin-drains during the bench,
+	 * so ringing IRQ125 per block would only interrupt the very core doing the measuring. Spins
+	 * on a full pool until the consumer catches up; exits when the CM7 clears the flag. */
+	volatile uint32_t *burst = (volatile uint32_t *)DUO_BULK_BURST_ADDR;
+	if (*burst) {
+		while (*burst) {
+			int bidx = bulk_loan(p);
+			if (bidx < 0) {
+				continue; /* pool full: the consumer is draining */
+			}
+			uint32_t *w = (uint32_t *)bulk_buf(p, (uint32_t)bidx);
+			uint32_t bseq = g_bulk_tx_seq++;
+			w[0] = bseq;
+			for (uint32_t i = 1; i < 64u; i++) {
+				w[i] = bseq + i; /* 256 B = 64 words, word-wise */
+			}
+			bulk_publish(p, (uint32_t)bidx, 256u);
+		}
+		return;
+	}
+
 	/* Take the sequence number for THIS attempt up front, so a dropped loan leaves a hole in
 	 * the published sequence — that hole is exactly what the consumer's g_bulk_rx_gap counts.
 	 * (Advancing only on success would make the published seq contiguous, so rx_gap could never

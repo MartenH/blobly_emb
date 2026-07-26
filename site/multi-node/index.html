@@ -1,0 +1,2040 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A V-language automotive software stack — no-alloc, sim-first, ThreadX, CAN-FD first.">
+      
+      
+      
+        <link rel="canonical" href="https://blobly.net/multi-node/">
+      
+      
+        <link rel="prev" href="../multi-image/">
+      
+      
+        <link rel="next" href="../multicore-perf/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Multi-node - blobly</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#multi-node-a-system-of-ecus-from-one-description" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="blobly" class="md-header__button md-logo" aria-label="blobly" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            blobly
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Multi-node
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="blobly" class="md-nav__button md-logo" aria-label="blobly" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    blobly
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/build-and-flash/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build, flash & talk to the target
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/two-node-io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wire a signal across two ECUs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/record-a-trace/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Record and view a trace
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-signal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a signal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-frame/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a CAN frame
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-an-fb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a function block
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-thread/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a thread or partition
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-core/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a core
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-shell-command/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a shell command
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design & internals
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design & internals
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../application-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Application model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../no-alloc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    No-alloc discipline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory-protection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory protection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ways-of-working/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ways of working
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../autosar-comparison/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AUTOSAR comparison
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../communication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Communication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../com-modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    COM modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../someip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOME/IP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../net/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ethernet / NetX
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    IO
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nvm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NvM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../bootloader/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bootloader
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-image/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-image
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-node
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-node
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-thesis-one-more-rung-on-the-transport-ladder" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The thesis: one more rung on the transport ladder
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-already-the-fabric-reuse-not-invention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is already the fabric (reuse, not invention)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-new-artifact-systemtoml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The new artifact: system.toml
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-generated-vs-authored-the-dissolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is generated vs authored (the dissolution)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#multiple-buses-and-the-gateway" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multiple buses and the gateway
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#node-identity-three-ids-all-cluster-unique" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Node identity — three ids, all cluster-unique
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-real-value-system-level-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The real value: system-level validation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-payoffs-the-system-view-unlocks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The payoffs the system view unlocks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phasing-bench-rungs-on-the-hardware-to-hand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phasing (bench rungs, on the hardware to hand)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#open-questions-decisions-for-when-the-phase-starts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Open questions / decisions (for when the phase starts)
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multicore-perf/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multicore performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../threadx-amp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ThreadX AMP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../porting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Porting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-codegen/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace codegen
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-manifest/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace manifest
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-multicore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace multicore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../traceability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirement traceability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-thesis-one-more-rung-on-the-transport-ladder" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The thesis: one more rung on the transport ladder
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-already-the-fabric-reuse-not-invention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is already the fabric (reuse, not invention)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-new-artifact-systemtoml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The new artifact: system.toml
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-generated-vs-authored-the-dissolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is generated vs authored (the dissolution)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#multiple-buses-and-the-gateway" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multiple buses and the gateway
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#node-identity-three-ids-all-cluster-unique" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Node identity — three ids, all cluster-unique
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-real-value-system-level-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The real value: system-level validation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-payoffs-the-system-view-unlocks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The payoffs the system view unlocks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phasing-bench-rungs-on-the-hardware-to-hand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phasing (bench rungs, on the hardware to hand)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#open-questions-decisions-for-when-the-phase-starts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Open questions / decisions (for when the phase starts)
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="multi-node-a-system-of-ecus-from-one-description">Multi-node — a system of ECUs from one description<a class="headerlink" href="#multi-node-a-system-of-ecus-from-one-description" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>Design sketch (2026-07-16). The natural successor to the multi-image emitter
+(<a href="../multi-image/">multi-image.md</a>): that phase generates an image per <strong>core</strong>
+from one <code>ecu.toml</code>; this phase composes a <strong>system of nodes</strong> on shared buses
+from one <code>system.toml</code>, generating each node and validating the whole. Nothing
+here is new plumbing — the bus, the DBC, NM, and signed boot are already the
+fabric; multi-node is the <strong>composition + validation</strong> layer over them.</p>
+</blockquote>
+<h2 id="the-thesis-one-more-rung-on-the-transport-ladder">The thesis: one more rung on the transport ladder<a class="headerlink" href="#the-thesis-one-more-rung-on-the-transport-ladder" title="Permanent link">&para;</a></h2>
+<p>blobly already derives a signal's transport from where its endpoints sit — the
+config names <em>partitions and routing</em>, never a transport (the multi-image
+"SMP-open" directive). Today the ladder is:</p>
+<table>
+<thead>
+<tr>
+<th>endpoints</th>
+<th>derived transport</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>same thread</td>
+<td>a plain struct cell (fast path)</td>
+</tr>
+<tr>
+<td>different threads, same core</td>
+<td>an IOC cell (wait-free)</td>
+</tr>
+<tr>
+<td>different cores, same node</td>
+<td>an xioc slot (cross-core SPSC)</td>
+</tr>
+<tr>
+<td>a bus endpoint (<code>to = "can0"</code>)</td>
+<td>COM encode + a DBC frame</td>
+</tr>
+</tbody>
+</table>
+<p>Multi-node adds <strong>one rung at the bottom</strong> — endpoints on <em>different nodes</em> —
+and the honest observation is that <strong>that rung already exists</strong>: a signal a node
+transmits and another receives is a CAN frame on the shared bus, defined in the
+shared DBC. Cross-node communication is already modelled; it is just spelled
+<em>manually</em> today (you write <code>to = "can0"</code>, author a <code>[[frame]]</code>, and put it in
+the DBC on both sides). Multi-node makes it <strong>derived and validated</strong>, exactly as
+cross-core went from hand-wired duo plumbing to <code>to = "m4"</code> → xioc.</p>
+<p>So the work is not a new transport. It is: a <strong>system view</strong> that lets the
+generator see all the nodes at once, so it can (a) derive each node's
+cross-node wiring AND the gateway routing from where producers/consumers sit,
+(b) treat the DBC as the system contract every node conforms to, and (c) catch
+cross-node bugs at build time — the single-writer rule, id collisions, orphan
+receivers — the way it already catches them within a node.</p>
+<h2 id="what-is-already-the-fabric-reuse-not-invention">What is already the fabric (reuse, not invention)<a class="headerlink" href="#what-is-already-the-fabric-reuse-not-invention" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>The bus + DBC</strong> = the cross-node medium and its contract. A <code>[[signal]]</code>
+  with a bus endpoint is a frame; the DBC defines the frames once.</li>
+<li><strong>NM</strong> already speaks <em>cluster</em>: <code>node</code>, <code>alive</code>, and a <code>peers</code> id range —
+  coordinated sleep/wake across nodes is designed, and the bench already ran two
+  nodes with distinct NM ids (H735 = 0x12, H755 = 0x13).</li>
+<li><strong>Signed boot + UDS</strong> = per-node OTA: each node has diagnostic ids and a
+  bootloader; the OTA/diagnostic master addresses each node in turn
+  (<a href="../bootloader/">bootloader.md</a>).</li>
+<li><strong>The trace dump</strong> already aggregates <em>cores</em> on one node into one swimlane;
+  aggregating <em>nodes</em> is the same move one level up.</li>
+<li><strong>The multi-image emitter</strong> already emits N images from one config and derives
+  per-endpoint transport. Multi-node reuses its emission and extends its endpoint
+  resolver with the node rung.</li>
+</ul>
+<h2 id="the-new-artifact-systemtoml">The new artifact: <code>system.toml</code><a class="headerlink" href="#the-new-artifact-systemtoml" title="Permanent link">&para;</a></h2>
+<p>A thin top-level file that <strong>composes nodes</strong> — it does not replace each node's
+<code>ecu.toml</code> (a node still owns its partitions/threads/FBs internally); it names
+the <strong>buses</strong> (a real system has ≥2, each with its own DBC), the nodes and which
+buses each sits on, the cross-bus <strong>routes</strong>, and each node's identities:</p>
+<p>The concrete bench system: the <strong>H735-DK is the system node</strong> — its 3
+transceivers, storage, and display make it the gateway, OTA stager, and local
+HMI in one board — bridging three buses by purpose:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">[bus.compute]</span><span class="w">                </span><span class="c1"># H735 &lt;-&gt; H755 (the heavy domain controller)</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">interface</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;can0&quot;</span><span class="w">           </span><span class="c1"># H735 FDCAN1</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">fd</span><span class="w">        </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">bitrate</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="mi">500000</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">dbc</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;compute.dbc&quot;</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="k">[bus.edge]</span><span class="w">                   </span><span class="c1"># H735 &lt;-&gt; the H723 edge ECUs</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">interface</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;can1&quot;</span><span class="w">           </span><span class="c1"># H735 FDCAN2</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="n">fd</span><span class="w">        </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="n">bitrate</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="mi">500000</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">dbc</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;edge.dbc&quot;</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="k">[bus.diag]</span><span class="w">                   </span><span class="c1"># H735 &lt;-&gt; Linux — diagnostic/OTA, kept OFF the functional buses</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="n">interface</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;can2&quot;</span><span class="w">           </span><span class="c1"># H735 FDCAN3</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="n">fd</span><span class="w">        </span><span class="o">=</span><span class="w"> </span><span class="kc">false</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="n">bitrate</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="mi">500000</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="n">dbc</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;diag.dbc&quot;</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="k">[[node]]</span>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="n">name</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;sysnode&quot;</span><span class="w">            </span><span class="c1"># the H735-DK: gateway + OTA stager + HMI</span>
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="n">ecu</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;nodes/sysnode/ecu.toml&quot;</span>
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="n">buses</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;compute&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;edge&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;diag&quot;</span><span class="p">]</span><span class="w">    </span><span class="c1"># all three transceivers</span>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="n">nm</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="mh">0x11</span>
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="n">diag</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">req</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="mh">0x7A0</span><span class="p">,</span><span class="w"> </span><span class="n">rsp</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="mh">0x7A8</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="n">trace</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span>
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="k">[[node]]</span>
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="n">name</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;domain&quot;</span><span class="w">             </span><span class="c1"># the H755 dual-core domain controller</span>
+<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="n">ecu</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;nodes/domain/ecu.toml&quot;</span>
+<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a><span class="n">buses</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;compute&quot;</span><span class="p">]</span>
+<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="n">nm</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="mh">0x12</span>
+<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a><span class="n">diag</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">req</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="mh">0x7B0</span><span class="p">,</span><span class="w"> </span><span class="n">rsp</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="mh">0x7B8</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a><span class="n">trace</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span>
+<a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>
+<a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a><span class="k">[[node]]</span>
+<a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a><span class="n">name</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;zone_a&quot;</span><span class="w">             </span><span class="c1"># an H723 edge ECU</span>
+<a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a><span class="n">ecu</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;nodes/zone_a/ecu.toml&quot;</span>
+<a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a><span class="n">buses</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;edge&quot;</span><span class="p">]</span>
+<a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a><span class="n">nm</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="mh">0x13</span>
+<a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a><span class="n">diag</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">req</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="mh">0x7C0</span><span class="p">,</span><span class="w"> </span><span class="n">rsp</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="mh">0x7C8</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a><span class="n">trace</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span>
+<a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a>
+<a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a><span class="c1"># cross-bus routing lives on the gateway (sysnode). Two flavours:</span>
+<a id="__codelineno-0-44" name="__codelineno-0-44" href="#__codelineno-0-44"></a><span class="k">[[route]]</span><span class="w">                    </span><span class="c1"># FRAME route: forward a PDU unchanged</span>
+<a id="__codelineno-0-45" name="__codelineno-0-45" href="#__codelineno-0-45"></a><span class="n">gateway</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;sysnode&quot;</span>
+<a id="__codelineno-0-46" name="__codelineno-0-46" href="#__codelineno-0-46"></a><span class="n">frame</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;VehStatus&quot;</span><span class="w">        </span><span class="c1"># valid on both DBCs (1:1)</span>
+<a id="__codelineno-0-47" name="__codelineno-0-47" href="#__codelineno-0-47"></a><span class="n">from</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;compute&quot;</span>
+<a id="__codelineno-0-48" name="__codelineno-0-48" href="#__codelineno-0-48"></a><span class="n">to</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;edge&quot;</span>
+<a id="__codelineno-0-49" name="__codelineno-0-49" href="#__codelineno-0-49"></a>
+<a id="__codelineno-0-50" name="__codelineno-0-50" href="#__codelineno-0-50"></a><span class="k">[[route]]</span><span class="w">                    </span><span class="c1"># SIGNAL route: re-pack across differing DBCs</span>
+<a id="__codelineno-0-51" name="__codelineno-0-51" href="#__codelineno-0-51"></a><span class="n">gateway</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;sysnode&quot;</span>
+<a id="__codelineno-0-52" name="__codelineno-0-52" href="#__codelineno-0-52"></a><span class="n">signal</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;VehicleSpeed&quot;</span><span class="w">     </span><span class="c1"># decode per compute.dbc, re-encode per edge.dbc</span>
+<a id="__codelineno-0-53" name="__codelineno-0-53" href="#__codelineno-0-53"></a><span class="n">from</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;compute&quot;</span>
+<a id="__codelineno-0-54" name="__codelineno-0-54" href="#__codelineno-0-54"></a><span class="n">to</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;edge&quot;</span>
+</code></pre></div>
+<p>The Linux node (blobly_net) attaches on <code>diag</code> — the cloud/dev tier that pushes
+campaigns and observes; the H735 sysnode stages the images (its storage) and
+reflashes each functional node over its bus. The system runs standalone without
+Linux; Linux <em>adds</em> OTA + observability when present.</p>
+<p>Given this, <code>make gen</code> at the system level:</p>
+<ol>
+<li><strong>generates each node</strong> (as today, its own image(s) per core), <em>and</em></li>
+<li>runs the <strong>system-level checks</strong> below, <em>and</em></li>
+<li>emits a <strong>system manifest</strong> the tooling consumes (nodes, their trace/diag
+   ids, the shared DBC) — the observer and the OTA master read this instead of
+   being told each node by hand.</li>
+</ol>
+<h2 id="what-is-generated-vs-authored-the-dissolution">What is generated vs authored (the dissolution)<a class="headerlink" href="#what-is-generated-vs-authored-the-dissolution" title="Permanent link">&para;</a></h2>
+<p><code>system.toml</code> is the <strong>source</strong> — the generator derives each node's system-facing
+wiring <em>and the routing</em> from it. The per-node <code>ecu.toml</code>'s cross-node half
+<strong>dissolves</strong> into <code>system.toml</code> (declared once, emitted down), exactly as
+<code>[duo]</code> dissolved into ordinary signals in the multi-image phase and the
+hand-written satellite was absorbed by the emitter. What splits:</p>
+<p><strong>Generated (derived from <code>system.toml</code>):</strong>
+- each node's <strong>bus wiring</strong> — which signals it tx/rx, the COM encode/decode, the
+  DBC frames — declared once at system scope, emitted into each participating node
+  (no more "both ends declare the shared signal");
+- the <strong>routes</strong> — a cross-node signal whose producer and consumers sit on
+  <em>different buses</em> has its gateway route <strong>derived</strong> (frame forward if the ids
+  are 1:1, signal decode-re-encode if the DBCs differ). You declare the signal and
+  who produces/consumes it; the generator places the route on the gateway.
+  Explicit <code>[[route]]</code> remains only to pin raw-forward / firewall behaviour;
+- the <strong>identities</strong> (NM / diag / trace) and the <strong>system manifest</strong>.</p>
+<p><strong>Authored (cannot be derived — it is the logic):</strong>
+- each node's <strong>application</strong>: its FBs (the V code) and internal structure
+  (partitions, threads, and which FB <em>produces / consumes</em> which signal). A node
+  keeps a small local description of its own internals + its FB code, so it stays
+  developable and unit-testable on its own; it just no longer re-declares the
+  cross-node bus contract.</p>
+<p><strong>The generator merges</strong> <code>system.toml</code> (the system contract) with each node's
+authored internals → that node's complete generated output (ports, loom, the
+COM + route bridge). So a signal is declared where it belongs: cross-node ones
+once in <code>system.toml</code>, node-local ones in the node.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># in a node&#39;s local description: name what it produces/consumes; the SYSTEM</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1"># owns where that goes and how it crosses buses.</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="k">[[fb.handler]]</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">name</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;on_100ms&quot;</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">reads</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;VehicleSpeed&quot;</span><span class="p">]</span><span class="w">   </span><span class="c1"># a system signal -&gt; generator wires the rx (+ any route)</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">writes</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;BrakeCmd&quot;</span><span class="p">]</span><span class="w">       </span><span class="c1"># a system signal -&gt; generator wires the tx (+ frame)</span>
+</code></pre></div>
+<h2 id="multiple-buses-and-the-gateway">Multiple buses and the gateway<a class="headerlink" href="#multiple-buses-and-the-gateway" title="Permanent link">&para;</a></h2>
+<p>A real system is not one bus — it is ≥2 segments (control, body, diagnostic,
+zonal), each with <strong>its own DBC</strong>, split for bandwidth, fault isolation, and
+security/domain boundaries. That immediately implies a <strong>gateway</strong>: a node on
+two or more buses that routes between them. Two routing flavours, and the
+per-bus DBC is exactly what forces the distinction:</p>
+<ul>
+<li><strong>Frame (raw-PDU) routing</strong> — forward a CAN frame from bus A to bus B
+  unchanged (same id, same bytes). Transparent and cheap, but only valid when
+  the frame means the same thing on both DBCs (a 1:1 id). Also the natural place
+  for a <strong>firewall</strong>: route only the allow-listed frames across the boundary.</li>
+<li><strong>Signal (translating) routing</strong> — decode signals from a frame on bus A <em>per
+  A's DBC</em>, re-encode them into a <em>different</em> frame on bus B <em>per B's DBC</em>. This
+  is what production gateways do — the two networks have different frame layouts,
+  ids, and rates — and it is only expressible because each bus carries its own
+  contract. Rate adaptation (a 10 ms signal on A re-emitted at 100 ms on B) lives
+  here too.</li>
+</ul>
+<p>This is the recognised <code>route</code> module (raw-PDU routing / gateway, area ROUTE —
+planned). Multi-node gives it a home: a route is declared on the gateway node in
+<code>system.toml</code>, and the generator emits the forward (frame) or decode-re-encode
+(signal) logic into that node's comm loop, alongside its own COM. The gateway is
+just another node — the one with the transceivers, storage, and display (the
+H735-DK) is the natural gateway <em>and</em> OTA stager <em>and</em> local HMI, mirroring how a
+real in-vehicle system node sits between domains. Its storage stages a whole
+campaign's images; its display shows system status; the Linux tier supplies
+campaigns over a dedicated diagnostic bus, kept off the functional buses.</p>
+<p>Consequences the system view must handle (see the checks below): a signal's
+reach is now <strong>bus-scoped</strong> — a consumer only sees producers on <em>its</em> bus unless
+a route carries the signal across — and NM must decide whether the cluster spans
+buses (one sleep domain the gateway bridges) or each bus sleeps independently.</p>
+<h2 id="node-identity-three-ids-all-cluster-unique">Node identity — three ids, all cluster-unique<a class="headerlink" href="#node-identity-three-ids-all-cluster-unique" title="Permanent link">&para;</a></h2>
+<p>Multi-node's second job (after routing) is <strong>identity</strong>, allocated in
+<code>system.toml</code> and validated to not collide:</p>
+<ul>
+<li><strong>NM node id</strong> (+ derived <code>alive</code> id, within the cluster <code>peers</code> range) — who
+  the node is on the wire for coordinated sleep/wake.</li>
+<li><strong>Diagnostic / boot address</strong> (an ISO-TP req/rsp id pair) — how the OTA or
+  diagnostic master reaches <em>this</em> node's UDS/boot session to reflash it.</li>
+<li><strong>Trace node id</strong> — so the observer distinguishes nodes; the current trace id
+  is <code>(core, thread)</code> and grows a node prefix → <code>(node, core, thread)</code>.</li>
+</ul>
+<p>Today these are hand-set per <code>ecu.toml</code> (and we already hit "give the H735 and
+H755 distinct NM ids"). The system view <strong>allocates and cross-checks</strong> them —
+the first thing a system gets wrong is two nodes silently sharing an id.</p>
+<h2 id="the-real-value-system-level-validation">The real value: system-level validation<a class="headerlink" href="#the-real-value-system-level-validation" title="Permanent link">&para;</a></h2>
+<p>The blobly bet is that the generator catches integration bugs at build time. The
+same discipline, now <em>across nodes</em> — the checks a single <code>ecu.toml</code> cannot do
+because it cannot see its peers:</p>
+<ul>
+<li><strong>Single writer, per bus.</strong> On each bus, every signal is <em>transmitted by
+  exactly one node</em> and <em>received by at least one</em> — the IOC single-writer rule
+  lifted to the wire. Two transmitters, or none, is a build error.</li>
+<li><strong>Bus-scoped reachability + routes.</strong> A consumer's need is satisfied by a
+  producer <em>on its bus</em> OR by a <strong>route</strong> that carries the signal from a bus
+  where it is produced. A consumer on bus B with a producer only on bus A and no
+  route is a build error — the check that catches "we forgot the gateway rule."
+  Every route must reference frames/signals valid on <em>both</em> its DBCs.</li>
+<li><strong>DBC conformance, per bus.</strong> Every node's frame/signal layout matches <em>that
+  bus's</em> DBC — id, DLC, bit layout, endianness agree on both ends; a signal route
+  is checked against the source and destination DBCs independently.</li>
+<li><strong>Identity uniqueness.</strong> No two nodes share an NM id, a diagnostic address, or
+  a trace node id.</li>
+<li><strong>NM cluster coherence.</strong> All nodes agree on the cluster (<code>peers</code> range, the
+  sleep/wake parameters) — a node with a mismatched cluster silently never
+  sleeps with the others.</li>
+<li><strong>Reachability (warning).</strong> A produced signal no node consumes, or a rate/tx
+  mode mismatch between producer and consumers — surfaced, like unused-signal
+  lint, not fatal.</li>
+</ul>
+<h2 id="the-payoffs-the-system-view-unlocks">The payoffs the system view unlocks<a class="headerlink" href="#the-payoffs-the-system-view-unlocks" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>The observer</strong> (blobly_net): load <code>system.toml</code> → the tool knows every node,
+  its trace manifest, its diagnostic address. The swimlane aggregates <em>nodes</em>
+  (each dumps its rings; the observer merges by <code>(node, core, thread)</code>), turning
+  the per-node flight recorders into one system timeline.</li>
+<li><strong>OTA / diagnostics master</strong>: the same file tells the master which image goes
+  to which node's boot address, and the sequence/compatibility of a campaign —
+  the "central node" role from <a href="../bootloader/">bootloader.md</a>, now with a manifest
+  to drive it.</li>
+<li><strong>One source of truth</strong>: the DBC + <code>system.toml</code> describe the whole system; a
+  node added or a signal moved re-derives every node's wiring and re-runs every
+  cross-node check — the multi-image promise, at system scope.</li>
+</ul>
+<h2 id="phasing-bench-rungs-on-the-hardware-to-hand">Phasing (bench rungs, on the hardware to hand)<a class="headerlink" href="#phasing-bench-rungs-on-the-hardware-to-hand" title="Permanent link">&para;</a></h2>
+<p>The target system: the <strong>H735-DK system node</strong> (3 transceivers, storage,
+display) as gateway + OTA stager + HMI, bridging a <strong>compute</strong> bus to the <strong>H755</strong>
+dual-core domain controller, an <strong>edge</strong> bus to the <strong>2× H723</strong> ECUs, and a
+<strong>diag</strong> bus to a <strong>Linux node</strong> (blobly_net) — the cloud/dev/OTA tier. The
+functional mesh runs standalone; Linux <em>adds</em> campaigns + observability when present.</p>
+<ol>
+<li><strong>P1 — sysnode + one node, one bus.</strong> <code>system.toml</code> composes the H735 sysnode</li>
+<li>the H755 on the <strong>compute</strong> bus; the generator emits both and runs the
+   per-bus single-writer + id-uniqueness checks. Bench: they exchange a signal
+   and sleep together via NM. (Prove composition + checks before the second bus.)</li>
+<li><strong>P2 — the gateway across two buses.</strong> Add the <strong>edge</strong> bus (its own DBC) and
+   an H723; the H735 sysnode gateways compute&lt;-&gt;edge (FDCAN1/FDCAN2) with a frame
+   route + a signal route. Bench: a compute-bus signal reaches the H723 only via
+   the gateway; the reachability check fails if the route is removed. Real shape.</li>
+<li><strong>P3 — the observer.</strong> blobly_net attaches on the <strong>diag</strong> bus, loads
+   <code>system.toml</code>; the trace swimlane grows node lanes across all buses (aggregate
+   every node's dump). One system timeline spanning networks.</li>
+<li><strong>P4 — HMI + staged OTA.</strong> The H735 drives its display from routed signals and
+   stages images in its storage; Linux pushes a campaign over <code>diag</code>, the sysnode
+   reflashes each functional node over its bus by diagnostic address — the whole
+   in-vehicle-master OTA flow, on the desk.</li>
+</ol>
+<h2 id="open-questions-decisions-for-when-the-phase-starts">Open questions / decisions (for when the phase starts)<a class="headerlink" href="#open-questions-decisions-for-when-the-phase-starts" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Routing spelling.</strong> Keep cross-node signals <em>explicit</em> (author the DBC frame,
+  <code>to = "veh"</code>) as the ground truth, and add <code>to = "&lt;node&gt;"</code> as <strong>sugar the
+  generator lowers</strong> to a matched/auto-allocated DBC frame? Recommended: DBC
+  stays the authored contract (it already is); the sugar is optional and must
+  resolve to a real frame — never invent a wire format silently.</li>
+<li><strong>Node ecu.toml vs system.toml ownership.</strong> A node keeps its own <code>ecu.toml</code>
+  (internal partitions/threads); <code>system.toml</code> composes + allocates identity +
+  validates. It does <em>not</em> absorb the node files — that keeps a node buildable
+  and testable alone.</li>
+<li><strong>Requirements area.</strong> <code>requirements/topology.toml</code> (REQ-TOPO-001..006) under
+  <code>SYS-REQ-TOPO-001</code> — per-bus single-writer, identity-uniqueness, per-bus DBC
+  conformance, cluster-coherence, per-node independence, and cross-bus routing —
+  each verified by a system-check test the way REQ-COM/NM are.</li>
+<li><strong>Heterogeneous boards.</strong> Nodes are different parts (H755/H735/H723); the
+  boards layer already isolates arch — the system view must not leak board
+  assumptions (same rule as multi-image's "no Cortex-M in emission").</li>
+<li><strong>DBC generation.</strong> Today the DBC is authored and signals conform. For a
+  system, consider generating a DBC <em>skeleton</em> from the derived cross-node
+  signals (author fills scaling/comments), so the frame contract can start from
+  the routing instead of being hand-kept in sync. Deferred; conformance-check
+  first.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.top", "navigation.tracking", "content.code.copy", "content.code.annotate", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

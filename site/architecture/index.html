@@ -1,0 +1,2337 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A V-language automotive software stack — no-alloc, sim-first, ThreadX, CAN-FD first.">
+      
+      
+      
+        <link rel="canonical" href="https://blobly.net/architecture/">
+      
+      
+        <link rel="prev" href="../um/add-a-shell-command/">
+      
+      
+        <link rel="next" href="../application-model/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Architecture - blobly</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#architecture-overview" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="blobly" class="md-header__button md-logo" aria-label="blobly" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            blobly
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Architecture
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="blobly" class="md-nav__button md-logo" aria-label="blobly" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    blobly
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/build-and-flash/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build, flash & talk to the target
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/two-node-io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wire a signal across two ECUs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/record-a-trace/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Record and view a trace
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-signal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a signal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-frame/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a CAN frame
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-an-fb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a function block
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-thread/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a thread or partition
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-core/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a core
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-shell-command/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a shell command
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design & internals
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design & internals
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-runtime-picture-threads-first" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The runtime picture — threads first
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#who-talks-to-what" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Who talks to what
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#runtime-topology-who-runs-where" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime topology (who runs where)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-flow-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data-flow paths
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-management-plane-platform-services-scheduling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The management plane — platform services &amp; scheduling
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The management plane — platform services &amp; scheduling">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#where-each-runs-the-recommended-thread-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where each runs — the recommended thread model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#two-primitives-two-planes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two primitives, two planes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-canonical-interaction-going-to-sleep" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The canonical interaction — going to sleep
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#interrupts-and-the-generic-target-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interrupts and the generic ↔ target boundary
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-each-piece-lives" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where each piece lives
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#transport-scope-can-today-lin-ethernet-later" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transport scope — CAN today, LIN / Ethernet later
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Transport scope — CAN today, LIN / Ethernet later">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#one-com-one-router-a-bus-owner-per-transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One COM, one router, a bus owner per transport
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../application-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Application model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../no-alloc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    No-alloc discipline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory-protection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory protection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ways-of-working/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ways of working
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../autosar-comparison/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AUTOSAR comparison
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../communication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Communication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../com-modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    COM modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../someip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOME/IP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../net/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ethernet / NetX
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    IO
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nvm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NvM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../bootloader/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bootloader
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-image/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-image
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-node/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-node
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multicore-perf/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multicore performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../threadx-amp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ThreadX AMP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../porting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Porting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-codegen/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace codegen
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-manifest/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace manifest
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-multicore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace multicore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../traceability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirement traceability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-runtime-picture-threads-first" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The runtime picture — threads first
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#who-talks-to-what" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Who talks to what
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#runtime-topology-who-runs-where" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime topology (who runs where)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#data-flow-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data-flow paths
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-management-plane-platform-services-scheduling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The management plane — platform services &amp; scheduling
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The management plane — platform services &amp; scheduling">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#where-each-runs-the-recommended-thread-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where each runs — the recommended thread model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#two-primitives-two-planes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two primitives, two planes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-canonical-interaction-going-to-sleep" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The canonical interaction — going to sleep
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#interrupts-and-the-generic-target-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interrupts and the generic ↔ target boundary
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-each-piece-lives" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where each piece lives
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#transport-scope-can-today-lin-ethernet-later" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transport scope — CAN today, LIN / Ethernet later
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Transport scope — CAN today, LIN / Ethernet later">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#one-com-one-router-a-bus-owner-per-transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One COM, one router, a bus owner per transport
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="architecture-overview">Architecture overview<a class="headerlink" href="#architecture-overview" title="Permanent link">&para;</a></h1>
+<p>How the pieces fit: what a Function Block talks to, where COM / the Loom /
+diagnostics sit, and how a signal travels from the bus to an FB and back. For the
+<em>why</em> behind each piece see <code>application-model.md</code>, <code>communication.md</code>,
+<code>multicore-perf.md</code>; this is the map that ties them together.</p>
+<h2 id="the-runtime-picture-threads-first">The runtime picture — threads first<a class="headerlink" href="#the-runtime-picture-threads-first" title="Permanent link">&para;</a></h2>
+<p>Everything runs in one of a handful of thread kinds, and <strong>the only thing that
+ever crosses between two threads is an IOC channel</strong> — that one rule generates
+the whole picture:</p>
+<pre class="mermaid"><code>graph TB
+  subgraph APPTH["app thread(s) — one Loom each, pinned to a core"]
+    FB["Function Blocks (app/)&lt;br/&gt;pure: In ports -&gt; Out ports + private state"]
+    LOOM["Loom (loom/): static handler table&lt;br/&gt;fires each handler on its own period_ms&lt;br/&gt;(on_10ms / on_100ms are handlers here, NOT threads)&lt;br/&gt;snapshot In -&gt; call FB -&gt; publish Out"]
+  end
+
+  IOC[("IOC channels (osal/)&lt;br/&gt;lock-free latest-value: triple / double / seqlock / xioc&lt;br/&gt;the only cross-thread / cross-core crossing&lt;br/&gt;(same-thread FB -&gt; FB: local cell, no sync)")]
+
+  subgraph COMMTH["comm thread — one per core, owns its buses"]
+    COM["COM · DBC codec · E2E/SecOC&lt;br/&gt;router · ISO-TP/UDS · NM frames&lt;br/&gt;rx: CAN Rx IRQ -&gt; decode -&gt; publish&lt;br/&gt;tx: cyclic, TX modes"]
+  end
+
+  subgraph IOTH["io thread — one, platform-owned"]
+    IOSRV["samples due inputs / applies due outputs&lt;br/&gt;each io point at its period_ms&lt;br/&gt;the only pin-touching thread"]
+  end
+
+  MGMT["management plane (section below)&lt;br/&gt;mode thread · NvM background task · watchdog pet"]
+
+  DRV["driver/can&lt;br/&gt;SocketCAN (host) · ST FDCAN (target)"]
+  IODRV["driver/io&lt;br/&gt;file mirror (host) · GPIO/ADC/PWM registers (target)"]
+  BUS["CAN bus(es)"]
+  PINS["physical pins"]
+
+  FB &lt;--&gt; LOOM
+  LOOM &lt;--&gt; IOC
+  IOC &lt;--&gt; COM
+  IOC &lt;--&gt; IOSRV
+  COM &lt;--&gt; DRV
+  DRV &lt;--&gt; BUS
+  IOSRV &lt;--&gt; IODRV
+  IODRV &lt;--&gt; PINS
+  MGMT -. "mode events: quiesce / wake" .-&gt; COMMTH
+  MGMT -. "quiesce / outputs-to-init" .-&gt; IOTH</code></pre>
+<p>All of it sits on the <strong>OSAL</strong> (<code>osal/</code>: cores, time, the IOC pool, pinning —
+POSIX fork-per-core on host, ThreadX AMP on target).</p>
+<p><strong>The threads.</strong> A running ECU has exactly these:</p>
+<ul>
+<li><strong>app threads</strong> — one per configured thread (today loom2v generates one per
+  partition), each a <strong>Loom</strong> with a static handler table. <code>on_10ms</code>,
+  <code>on_100ms</code>, … are <strong>handler periods in that table, not threads or OS tasks</strong>:
+  one app thread happily hosts 1 ms, 10 ms and 100 ms handlers, each fired on
+  its own multiple. Which periods exist is config (<code>period_ms</code> per
+  <code>[[fb.handler]]</code>), not a fixed part of the design.</li>
+<li><strong>comm thread(s)</strong> — <strong>one per core, owning that core's buses</strong> end-to-end
+  (COM, codec, E2E/SecOC, router, ISO-TP/UDS, NM frames); the only thing
+  touching the CAN driver. On target a thread costs a stack, so buses share
+  their core's owner rather than each spawning one; a different <em>transport</em>
+  still brings its own owner (a LIN master, an Ethernet adapter — see the
+  transport section). Target: a first-class thread, rx driven by the CAN Rx
+  interrupt, tx cyclic. Host today: a polled loop per bridge bus
+  (<code>comm_&lt;bus&gt;</code> in the manifest/trace) — host threads are free, and the
+  per-bus lanes are an implementation detail, not the design.</li>
+<li><strong>io thread</strong> — one, platform-owned; the only thread touching <code>driver/io</code>.
+  Samples inputs and applies outputs, each io point at its own <code>period_ms</code>
+  (docs/io.md).</li>
+<li><strong>the management plane</strong> — mode thread (NM / ECU state / watchdog
+  supervision), the NvM background task, the watchdog pet: slower, event-driven,
+  covered in its own section below.</li>
+<li><strong>ISRs</strong> — the CAN Rx interrupt (wakes the comm thread) and the tick.
+  Interrupt-triggered FB handlers (<code>irq</code>) are a reserved seam, not yet
+  generated.</li>
+</ul>
+<p><strong>How an IO (pin) signal travels — never through COM.</strong> COM is the <em>bus</em>
+endpoint; the io thread is the <em>pin</em> endpoint. They are symmetric peers, and
+both talk to the app only through IOC:</p>
+<ul>
+<li><strong>in</strong>: pin → io thread samples it at the point's <code>period_ms</code> →
+  <code>ioc_publish</code> → the Loom snapshots it into the FB's In port.</li>
+<li><strong>out</strong>: the FB writes its Out port → the Loom publishes → the io thread
+  acquires and applies it to the pin (freshness-gated: the configured <code>init</code>
+  until the FB has published once).</li>
+</ul>
+<p>A bus signal takes the same shape through the comm thread instead — only the
+far endpoint differs. An FB cannot tell (and never needs to know) whether
+<code>inp.speed</code> came from a frame, a pin, or another FB.</p>
+<h2 id="who-talks-to-what">Who talks to what<a class="headerlink" href="#who-talks-to-what" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Talks to</th>
+<th>How / via</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Function Block</strong></td>
+<td>its <code>ports</code> In/Out only</td>
+<td>typed fields</td>
+<td>pure transform; knows nothing of buses, cores, or other FBs</td>
+</tr>
+<tr>
+<td><strong>Loom</strong></td>
+<td>FB handlers; IOC / local cells</td>
+<td>snapshot In → call handler → publish Out</td>
+<td>dispatch on a period; coherent input snapshot</td>
+</tr>
+<tr>
+<td><strong>IOC</strong></td>
+<td>the Loom (app side), the COM bridge (IO side)</td>
+<td><code>ioc_read/acquire</code> + <code>ioc_write/publish</code></td>
+<td>lock-free cross-core signal transport</td>
+</tr>
+<tr>
+<td><strong>local cell</strong></td>
+<td>the Loom only</td>
+<td>direct struct field</td>
+<td>same-core FB→FB, no sync</td>
+</tr>
+<tr>
+<td><strong>COM</strong></td>
+<td>IOC (signals), DBC codec, E2E/SecOC, driver</td>
+<td>encode/decode + send/recv</td>
+<td>signal⇄PDU, TX modes, RX deadline</td>
+</tr>
+<tr>
+<td><strong>DBC codec</strong></td>
+<td>COM</td>
+<td>generated <code>*_phys</code> / <code>*_set</code> over <code>[64]u8</code></td>
+<td>raw↔physical bit packing</td>
+</tr>
+<tr>
+<td><strong>E2E / SecOC</strong></td>
+<td>COM (the frame bytes)</td>
+<td><code>protect</code> on tx, <code>check</code>/<code>verify</code> on rx</td>
+<td>integrity (CRC) / authenticity (MAC)</td>
+</tr>
+<tr>
+<td><strong>Router</strong></td>
+<td>the driver of another bus</td>
+<td>forward the raw frame</td>
+<td>gateway, no decode</td>
+</tr>
+<tr>
+<td><strong>ISO-TP / UDS</strong></td>
+<td>IOC (read live signals), driver (the diag frames)</td>
+<td>reassemble → dispatch → segment</td>
+<td>diagnostics request/response</td>
+</tr>
+<tr>
+<td><strong>driver</strong></td>
+<td>the COM bridge; the bus</td>
+<td><code>open/send/recv</code> C shim</td>
+<td>the only bus-hardware layer</td>
+</tr>
+<tr>
+<td><strong>io thread</strong></td>
+<td>IOC (signals); <code>driver/io</code> (pins)</td>
+<td>sample-and-publish / acquire-and-apply per point</td>
+<td>physical IO as signal endpoints (docs/io.md); the only pin-touching thread</td>
+</tr>
+<tr>
+<td><strong>OSAL</strong></td>
+<td>Loom, bridge, IOC</td>
+<td>cores, time, the shared IOC region, pinning</td>
+<td>the platform line: POSIX or ThreadX AMP</td>
+</tr>
+</tbody>
+</table>
+<p>The hard boundaries: an <strong>FB never reaches past its ports</strong> (no driver, no IOC,
+no other FB); only the <strong>bridge + <code>main.v</code></strong> touch the <strong>bus driver</strong>; and only
+the generated <strong>io thread</strong> touches <code>driver/io</code> — application partitions have no
+peripheral access (docs/io.md, docs/memory-protection.md). Everything
+else is platform-independent V above the OSAL/driver line.</p>
+<h2 id="runtime-topology-who-runs-where">Runtime topology (who runs where)<a class="headerlink" href="#runtime-topology-who-runs-where" title="Permanent link">&para;</a></h2>
+<p>The picture above shows the threads; this section is where they land. Each <strong>partition</strong> is the unit of <strong>MPU isolation</strong>, pinned to a core; inside it runs one
+or more <strong>threads</strong> — the OS scheduling unit (a spawned loop on host, a ThreadX thread on
+target) — each a <strong>Loom</strong> dispatching the FBs mapped to it. An <strong>fb names a thread</strong> (thread
+names are globally unique, so the partition is <em>derived</em> — a thread belongs to one
+partition); a handler's trigger is a <strong>period</strong> (dispatched on its thread) or an <strong>interrupt</strong>
+(<code>irq</code>, ISR context). <em>(Today loom2v generates one thread per partition; multiple threads and
+<code>irq</code> handlers are the target, not yet generated. The MPU boundary is enforced on the ThreadX
+target and modeled by codegen convention on the host — see <code>memory-protection.md</code>.)</em></p>
+<p>Today the <strong>bus bridge</strong> runs as a <strong>polled</strong> per-bus loop on the IO core — it drains
+<code>recv</code>, DBC-decodes rx into IOC, encodes tx from IOC, and serves ISO-TP/UDS + routing. The
+<strong>target</strong> model makes it a first-class <strong>comm thread</strong> per core, owning that core's buses
+(rx driven by the CAN <strong>Rx interrupt</strong>, tx periodic) so that <em>every</em> thread — app <strong>and</strong> platform — appears in the
+runtime trace <strong>by name</strong> and the platform is never hidden (bridge / ISO-TP overhead is often
+where the time goes; see <code>telemetry.md</code>). <em>(The comm thread, its Rx-interrupt path, and its
+manifest entry are all target — today the bridge polls and the manifest names app threads
+only; NM is configured but not yet generated into the bridge.)</em> The only shared memory is the
+<strong>IOC region</strong> (<code>mmap MAP_SHARED</code> on host, shared SRAM on target); cross-core signals cross
+there and nowhere else (the basis for MPU isolation).</p>
+<h2 id="data-flow-paths">Data-flow paths<a class="headerlink" href="#data-flow-paths" title="Permanent link">&para;</a></h2>
+<p><strong>Bus → FB (rx).</strong> <code>driver.recv</code> a frame → COM matches the id → (E2E/SecOC verify)
+→ DBC-decode each signal → <code>ioc_publish</code> to the channel → next cycle the <strong>Loom</strong>
+snapshots it into the consumer FB's In port → the FB reads it in physical units.</p>
+<p><strong>FB → bus (tx).</strong> The FB writes its Out port → the <strong>Loom</strong> <code>ioc_publish</code>es it →
+the bridge <code>ioc_acquire</code>s it → DBC-encode into the frame → (E2E/SecOC stamp) → the
+PDU's <strong>TX mode</strong> decides whether to send → <code>driver.send</code>.</p>
+<p><strong>FB → FB.</strong> Same core → a <strong>local cell</strong> (direct copy in the partition state, no
+sync). Different cores → an <strong>IOC channel</strong> (the Loom publishes/acquires; the
+transport — seqlock/double/triple — is per-channel config).</p>
+<p><strong>Diagnostics.</strong> Frames on the diag id → <strong>ISO-TP</strong> reassembles a request → <strong>UDS</strong>
+dispatches it; a ReadDataByIdentifier mapped to a live signal <code>ioc_acquire</code>s it from
+the same IOC the FBs use → the response is re-segmented and sent. So a tester reads
+an FB's output straight off the IOC.</p>
+<p><strong>Gateway.</strong> A frame on bus A whose id matches a <code>[[route]]</code> is handed straight to
+bus B's channel and re-sent — never decoded to signals.</p>
+<pre class="mermaid"><code>sequenceDiagram
+  participant Bus
+  participant Drv as driver
+  participant Br as COM bridge (IO core)
+  participant IOC
+  participant Loom as Loom (app core)
+  participant FB
+  Bus-&gt;&gt;Drv: frame
+  Drv-&gt;&gt;Br: recv()
+  Br-&gt;&gt;Br: (E2E/SecOC check) + DBC decode
+  Br-&gt;&gt;IOC: ioc_publish(signal)
+  Loom-&gt;&gt;IOC: ioc_acquire(signal)
+  Loom-&gt;&gt;FB: on_10ms(In snapshot)
+  FB--&gt;&gt;Loom: Out
+  Loom-&gt;&gt;IOC: ioc_publish(Out)
+  IOC-&gt;&gt;Br: ioc_acquire(Out)
+  Br-&gt;&gt;Br: DBC encode + (E2E/SecOC stamp) + TX mode
+  Br-&gt;&gt;Drv: send()
+  Drv-&gt;&gt;Bus: frame</code></pre>
+<h2 id="the-management-plane-platform-services-scheduling">The management plane — platform services &amp; scheduling<a class="headerlink" href="#the-management-plane-platform-services-scheduling" title="Permanent link">&para;</a></h2>
+<p>Everything above is the <strong>data plane</strong>: the high-rate signal path, FB → IOC → COM → bus,
+cyclic and latest-value. Beside it runs the <strong>management plane</strong> — the services that decide
+<strong>mode</strong> (NM, ECU state), guard <strong>health</strong> (Watchdog), and hold <strong>state across power cycles</strong>
+(NvM). They run slower, are <strong>event- and mode-driven</strong>, and coordinate through <strong>mode events
+and requests, not signals</strong>. The data plane asks "what is the value now?"; the management
+plane asks "what should the ECU be <em>doing</em> now, and is it still healthy?".</p>
+<table>
+<thead>
+<tr>
+<th>Service</th>
+<th>Owns</th>
+<th>Scheduled</th>
+<th>Talks to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>COM / codec</strong></td>
+<td>signal⇄PDU packing</td>
+<td>in the comm thread (rx decode, tx encode)</td>
+<td>IOC (signals), driver (PDUs)</td>
+</tr>
+<tr>
+<td><strong>Router</strong></td>
+<td>PDU destination (the rx demux)</td>
+<td>in the comm thread, per received PDU</td>
+<td>COM, other buses' comm threads, diag, NM</td>
+</tr>
+<tr>
+<td><strong>NM</strong> (<code>comm/nm</code> + <code>nm_can</code>)</td>
+<td>per-network sleep/wake coordination</td>
+<td>frames in the comm thread; <strong>state machine on the mode tick</strong></td>
+<td>NM frames (comm), keep-awake requests, ECU state</td>
+</tr>
+<tr>
+<td><strong>ECU state</strong> (mode manager)</td>
+<td>ECU lifecycle: start → run → prep-sleep → sleep → shutdown</td>
+<td>the mode tick + events</td>
+<td>NM (sleep ind.), NvM (write-all), comm (quiesce), Watchdog</td>
+</tr>
+<tr>
+<td><strong>Watchdog</strong> (supervisor + HW)</td>
+<td>liveness: checkpoint supervision → HW pet</td>
+<td>supervision on the mode tick; <strong>HW pet at highest priority</strong></td>
+<td>every thread's checkpoints; the HW watchdog</td>
+</tr>
+<tr>
+<td><strong>NvM</strong> (persistent store)</td>
+<td>blocks of persistent data + the async job queue</td>
+<td>a <strong>low-priority background task</strong></td>
+<td>the memory driver (flash/EEPROM), ECU state</td>
+</tr>
+</tbody>
+</table>
+<h3 id="where-each-runs-the-recommended-thread-model">Where each runs — the recommended thread model<a class="headerlink" href="#where-each-runs-the-recommended-thread-model" title="Permanent link">&para;</a></h3>
+<p>Extending "one comm thread per core owns that core's buses", the recommendation is a
+<strong>dedicated mode thread</strong>, so each concern has a single owner and appears in the trace by name:</p>
+<pre class="mermaid"><code>graph TB
+  subgraph core["a core"]
+    FBT["app FB thread(s)&lt;br/&gt;compute · IOC signals · never touch CAN"]
+    COMMT["comm thread&lt;br/&gt;owns the bus: COM · router · NM frames · diag&lt;br/&gt;Rx-ISR driven + cyclic tx"]
+  end
+  MODET["mode thread (per ECU)&lt;br/&gt;NM state machines · ECU state · Watchdog supervision&lt;br/&gt;~10 ms mode tick + events"]
+  BGT["background task (low prio)&lt;br/&gt;NvM job queue → memory driver"]
+  WDG["Watchdog HW pet&lt;br/&gt;highest-priority tick, GATED by supervision"]
+
+  FBT -- "IOC (latest-value)" --&gt; COMMT
+  COMMT -- "NM frame ind / keep-awake" --&gt; MODET
+  MODET -- "quiesce / wake" --&gt; COMMT
+  MODET -- "write-all / read job" --&gt; BGT
+  MODET -- "supervision verdict" --&gt; WDG
+  MODET -- "checkpoints" --&gt; WDG</code></pre>
+<ul>
+<li><strong>app FB thread(s)</strong> — data plane, per partition/core (as today).</li>
+<li><strong>comm thread</strong> — per core, owns that core's buses. Runs the <em>data-plane</em> comm work <strong>and
+  the NM frame tx/rx</strong> (NM frames are just special PDUs). Rx-ISR driven + cyclic tx.</li>
+<li><strong>mode thread</strong> — one per ECU. The <em>state machines</em>: NM (per network), ECU state, and
+  Watchdog supervision, on a ~10 ms mode tick plus events.</li>
+<li><strong>background task</strong> — low priority, drains the NvM job queue to the memory driver so flash
+  latency never perturbs the data plane.</li>
+<li><strong>Watchdog HW pet</strong> — highest-priority tick (or the timer ISR), <strong>gated by</strong> the supervisor's
+  verdict: it only pets while every supervised thread is hitting its checkpoints.</li>
+</ul>
+<p><strong>Why a dedicated mode thread</strong> (over folding it into the comm thread): each plane keeps a
+single owner — the comm thread owns the <em>bus</em>, the mode thread owns the <em>ECU state</em> — matching
+the lock-free single-owner-per-core rule; the management plane stays <strong>visible by name in the
+trace</strong> (the "platform is never hidden" principle); and it generalises to multi-core /
+multi-network without entangling I/O with mode logic. The cost is one more thread and a second
+IPC primitive (below). Folding the mode tick into the primary core's comm thread is the valid
+smaller-footprint alternative for a single-core ECU, at the price of that separation.</p>
+<h3 id="two-primitives-two-planes">Two primitives, two planes<a class="headerlink" href="#two-primitives-two-planes" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>IOC</strong> (<code>osal/</code>) — the <strong>data-plane</strong> primitive: lock-free, <strong>latest-value</strong> (seqlock /
+  double / triple buffer). "What is signal X now?"</li>
+<li><strong>mode event / request channel</strong> — the <strong>management-plane</strong> primitive: lock-free, but
+  <strong>edge-triggered / queued</strong> ("sleep requested", "NvM write done", "wakeup on bus A"), because
+  a mode transition is an event, not a value to sample. Single-writer flags or a small SPSC
+  mailbox — <em>not</em> the IOC. This is the one new mechanism the management plane needs.</li>
+</ul>
+<h3 id="the-canonical-interaction-going-to-sleep">The canonical interaction — going to sleep<a class="headerlink" href="#the-canonical-interaction-going-to-sleep" title="Permanent link">&para;</a></h3>
+<p>The services are loosely coupled, but the <strong>shutdown/sleep</strong> path shows how they chain:</p>
+<ol>
+<li>All app keep-awake requests drop → <strong>NM</strong> reaches <em>ready-sleep</em> on every network → emits a
+   <strong>sleep indication</strong>.</li>
+<li><strong>ECU state</strong> takes it, transitions <em>run → prep-sleep</em>, and orchestrates: ask <strong>NvM</strong> to
+   <strong>write-all</strong>, tell the <strong>comm threads</strong> to quiesce (stop cyclic tx), <strong>arm the wakeup
+   sources</strong> (CAN wake, pin), then <em>prep-sleep → sleep</em> and halt the core.</li>
+<li><strong>Watchdog</strong> supervises the whole sequence — if any thread misses its checkpoints (a stuck
+   NvM write, a comm thread that won't quiesce), the supervisor stops petting and the HW
+   watchdog resets the ECU rather than hanging half-asleep.</li>
+</ol>
+<p>Wake is the reverse: a wakeup source fires → ECU state <em>sleep → run</em> → comm threads resume →
+NM <em>repeat-message → normal</em>.</p>
+<h3 id="interrupts-and-the-generic-target-boundary">Interrupts and the generic ↔ target boundary<a class="headerlink" href="#interrupts-and-the-generic-target-boundary" title="Permanent link">&para;</a></h3>
+<p>The comm thread is woken by a hardware interrupt (the CAN Rx-FIFO "new message" IRQ). <em>Which</em>
+interrupt, at what <em>priority</em>, and on which <em>core</em> it fires is ECU configuration — a bus
+declares it:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">[bus.can0]</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">core</span><span class="w">        </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="w">            </span><span class="c1"># the interrupt routes HERE — the comm thread on core 0 services it</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">rx</span><span class="w">          </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;interrupt&quot;</span><span class="w">  </span><span class="c1"># &quot;interrupt&quot; | &quot;polled&quot;</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">rx_priority</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x40</span><span class="w">         </span><span class="c1"># NVIC priority; default = SysTick&#39;s, so it can&#39;t nest with the tick</span>
+</code></pre></div>
+<p>"Which interrupt to enable" is <code>rx = "interrupt"</code>; "which core" is <code>[bus].core</code> — a bus's Rx
+IRQ can only sensibly fire on the core that owns the bus. Non-bus interrupts (a timer, a pin)
+would take a general <code>[[interrupt]]</code> table with an explicit core + priority.</p>
+<p><strong>The one hard rule — no silicon in the generic layers.</strong> The generic stack (the <code>ecu.toml</code>
+schema, <code>ecumodel</code>, the loom2v core) carries <strong>no</strong> Cortex-M / NVIC / vector-table /
+IRQ-number / peripheral-register knowledge. It expresses only <em>intent</em>. Everything
+silicon-specific — FDCAN1 → IRQ 19 → vector slot 35 → enable <code>IE.RF0NE | ILE.EINT0</code>, the
+NVIC, the vector table — lives <strong>below</strong> that line, and only there.</p>
+<p>Below the line there are <strong>two acceptable ways</strong> to satisfy the intent; the choice is a bloat
+trade-off, not an architectural one:</p>
+<ol>
+<li><strong>A target-specific generator</strong> (a ThreadX/Cortex-M backend + a small per-MCU descriptor)
+   emits <code>vectors.S</code>, the NVIC enable, and the peripheral <code>IE</code>/<code>ILE</code> poke from the intent —
+   fully config-driven, at the cost of the MCU-descriptor machinery.</li>
+<li><strong>Handcrafted target board glue</strong> — exactly what <code>examples/h735_threadx/comm_glue.c</code> +
+   <code>vectors.S</code> are today: a few lines of hand-written, per-target C/asm. <strong>If generating them
+   is more machinery than it earns, they stay hand-written, and that's fine</strong> — they are
+   already isolated to the target layer and never leak a Cortex-M detail upward.</li>
+</ol>
+<p>So the invariant is the <em>layering</em>, not that every line is generated: the generic stack stays
+MCU-agnostic either way, and MCU specifics live <strong>only</strong> in a target-specific generator or in
+handcrafted target glue. Only when a second MCU/peripheral makes the hand-written glue
+repetitive does option 1 earn its place.</p>
+<p>Status: not built — today the Rx IRQ is enabled by handcrafted <code>comm_glue.c</code> and routed by a
+handcrafted <code>vectors.S</code> (option 2). This note fixes the boundary so that stays a deliberate,
+isolated choice rather than an assumption that creeps into the generic stack.</p>
+<h2 id="where-each-piece-lives">Where each piece lives<a class="headerlink" href="#where-each-piece-lives" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Directory</th>
+<th>Hand / generated</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Application</td>
+<td><code>app/</code> (per example)</td>
+<td>hand (one file per FB)</td>
+</tr>
+<tr>
+<td>Signal types / ports</td>
+<td><code>sig/</code>, <code>ports/</code></td>
+<td>generated (<code>loom2v</code>)</td>
+</tr>
+<tr>
+<td>Codec / bridge / glue / tables</td>
+<td><code>gen/</code></td>
+<td>generated (<code>dbc2cfg</code>, <code>cfg2v</code>, <code>loom2v</code>)</td>
+</tr>
+<tr>
+<td>Scheduler</td>
+<td><code>loom/</code></td>
+<td>framework</td>
+</tr>
+<tr>
+<td>Comms</td>
+<td><code>comm/com</code>, <code>comm/e2e</code>, <code>comm/secoc</code>, <code>comm/isotp</code>, <code>comm/uds</code>, <code>comm/nm</code> (+ <code>comm/nm_can</code> binding)</td>
+<td>framework</td>
+</tr>
+<tr>
+<td>Observability</td>
+<td><code>comm/telem</code> (processor load), <code>comm/trace</code> (thread/handler trace)</td>
+<td>framework</td>
+</tr>
+<tr>
+<td>Platform line</td>
+<td><code>osal/</code> (cores/time/IOC), <code>driver/</code> (CAN)</td>
+<td>framework + C shims (see <code>porting.md</code>)</td>
+</tr>
+<tr>
+<td>Entry</td>
+<td><code>main.v</code></td>
+<td>hand (tiny: open channels, <code>gen.run</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>The build-time tools in <code>tools/</code> turn the config + DBC into the <code>sig/ports/gen</code> code.
+<strong><code>ecucheck</code></strong> validates <code>ecu.toml</code> — unknown keys with "did you mean", types, and the
+cross-field rules (via the shared <strong><code>ecumodel</code></strong>, the one place those rules live so the
+validator and the generator can't drift) — <strong>before the generators that consume the config</strong>
+(<code>cfg2v</code>, <code>loom2v</code>, <code>sigmap</code>), so no config error reaches codegen. (<code>dbc2cfg</code> reads the <em>DBC</em>,
+not <code>ecu.toml</code>, and runs independently.) <code>loom2v</code> also emits the trace <strong>manifest</strong> mapping
+thread/handler ids → names. See <code>ways-of-working.md</code> for how teams operate around that, and
+<code>configuration.md</code> for what each config section generates.</p>
+<h2 id="transport-scope-can-today-lin-ethernet-later">Transport scope — CAN today, LIN / Ethernet later<a class="headerlink" href="#transport-scope-can-today-lin-ethernet-later" title="Permanent link">&para;</a></h2>
+<p>blobly is <strong>CAN / CAN-FD first</strong>, but most of the stack is transport-agnostic by
+construction — only a few layers actually know about CAN:</p>
+<table>
+<thead>
+<tr>
+<th>layer</th>
+<th>CAN-coupled?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FBs, signals, ports</td>
+<td>no — pure transforms</td>
+</tr>
+<tr>
+<td>Loom, IOC, local cells</td>
+<td>no — dispatch + cross-core signal transport</td>
+</tr>
+<tr>
+<td>COM (signal⇄PDU, TX modes, RX deadline)</td>
+<td>no above the PDU — a PDU is just bytes</td>
+</tr>
+<tr>
+<td><strong>driver port</strong> (<code>driver/can</code>, <code>can_port.h</code>)</td>
+<td><strong>yes</strong> — id + dlc + data framing</td>
+</tr>
+<tr>
+<td><strong>codec</strong> (<code>gen/</code>, from DBC)</td>
+<td><strong>yes</strong> — DBC is a CAN/LIN description</td>
+</tr>
+<tr>
+<td><strong>diagnostics</strong> (<code>comm/isotp</code> + <code>comm/uds</code>)</td>
+<td><strong>yes</strong> — ISO-TP is CAN transport</td>
+</tr>
+<tr>
+<td><strong>NM</strong> (<code>comm/nm</code> + <code>comm/nm_can</code>)</td>
+<td>the state machine is <strong>not</strong>; the binding is</td>
+</tr>
+</tbody>
+</table>
+<p>Adding <strong>automotive Ethernet</strong> later is therefore not a rewrite — it slots in
+<strong>below the COM/PDU line</strong> as a second transport:</p>
+<ul>
+<li>a generic <strong>PDU transport</strong> port beside <code>can_port.h</code> (CAN one backend, UDP another) —
+  the role AUTOSAR splits into PduR/SoAd;</li>
+<li><strong>SOME/IP</strong> for data — designed (docs/someip.md, REQ-NET-013..017): a wire-format
+  subset over the eth-bus frame model, config from ecu.toml (the earlier
+  ARXML/FIBEX assumption is superseded — ARXML import would be host tooling, if ever);</li>
+<li><strong>DoIP</strong> for diagnostics (the Ethernet counterpart to ISO-TP/UDS);</li>
+<li>a sibling <strong><code>comm/nm_udp</code></strong> (UDP-NM) over the same NM state machine, if NM applies
+  on that link at all.</li>
+</ul>
+<p>The Ethernet side is now partially built (docs/net.md): the H735 ETH driver +
+NetX Duo carry link/ICMP/UDP/TCP on silicon (REQ-NET-001..006), and <strong>DoIP is
+implemented</strong> — <code>comm/doip</code> is the networked binding of the same <code>comm/uds</code>
+server the bus transport uses (REQ-NET-007, <code>examples/h735_doip</code>). SOME/IP,
+signal-over-UDP, and UDP-NM remain unbuilt; this section still marks that
+<strong>seam</strong> so new code doesn't deepen the CAN assumptions needlessly. The module
+naming already reflects it: <code>comm/nm</code> (transport-agnostic state machine) vs
+<code>comm/nm_can</code> (the CAN binding).</p>
+<h3 id="one-com-one-router-a-bus-owner-per-transport">One COM, one router, a bus owner per transport<a class="headerlink" href="#one-com-one-router-a-bus-owner-per-transport" title="Permanent link">&para;</a></h3>
+<p>A second transport is <strong>not a second COM</strong>. COM (signal⇄PDU packing) and the router (PDU
+destination) are transport-agnostic — a PDU is just bytes — so they are shared across CAN,
+LIN, and Ethernet. What each transport brings is its own <strong>bus-owner (comm) thread + driver</strong>,
+because their <em>timing models</em> differ:</p>
+<table>
+<thead>
+<tr>
+<th>transport</th>
+<th>bus owner (comm thread)</th>
+<th>driven by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>CAN / CAN-FD</strong></td>
+<td>FDCAN owner</td>
+<td><strong>Rx interrupt</strong> + cyclic tx (what we have)</td>
+</tr>
+<tr>
+<td><strong>LIN</strong></td>
+<td>LIN master</td>
+<td>a <strong>schedule table</strong> — the master clocks frame slots; not Rx-ISR</td>
+</tr>
+<tr>
+<td><strong>Ethernet</strong></td>
+<td>socket / SoAd adapter</td>
+<td><strong>packet/stream</strong> events, higher throughput</td>
+</tr>
+</tbody>
+</table>
+<p>So the picture generalises cleanly: <strong>COM + router + the NM state machine sit once, above the
+PDU line</strong>; below it there is <strong>one bus-owner thread per network</strong>, each with a transport-shaped
+driver, and NM gets a per-network binding (<code>nm_can</code>, <code>nm_udp</code>, …). Buses group by core (one comm
+thread per core owns that core's buses); a mixed-transport ECU is just several bus owners —
+some CAN, one LIN master, maybe an Ethernet adapter — fed by the same COM and router. LIN's
+schedule-table master and Ethernet's SoAd are the two new driver shapes to add; everything
+above the PDU line is reused, not duplicated.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.top", "navigation.tracking", "content.code.copy", "content.code.annotate", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

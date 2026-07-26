@@ -1,0 +1,2212 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A V-language automotive software stack — no-alloc, sim-first, ThreadX, CAN-FD first.">
+      
+      
+      
+        <link rel="canonical" href="https://blobly.net/nvm/">
+      
+      
+        <link rel="prev" href="../io/">
+      
+      
+        <link rel="next" href="../bootloader/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>NvM - blobly</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#persistence-non-volatile-storage-design" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="blobly" class="md-header__button md-logo" aria-label="blobly" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            blobly
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              NvM
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="blobly" class="md-nav__button md-logo" aria-label="blobly" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    blobly
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/build-and-flash/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build, flash & talk to the target
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/two-node-io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wire a signal across two ECUs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/record-a-trace/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Record and view a trace
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-signal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a signal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-frame/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a CAN frame
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-an-fb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a function block
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-thread/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a thread or partition
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-core/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a core
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-shell-command/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a shell command
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design & internals
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design & internals
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../application-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Application model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../no-alloc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    No-alloc discipline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory-protection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory protection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ways-of-working/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ways of working
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../autosar-comparison/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AUTOSAR comparison
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../communication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Communication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../com-modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    COM modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../telemetry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../someip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOME/IP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../net/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ethernet / NetX
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    IO
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NvM
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NvM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-one-idea-fbs-get-persistence-through-signals-not-an-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The one idea: FBs get persistence through SIGNALS, not an API
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-format-an-append-journal-over-a-flash-sector-pair" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage format: an append journal over a flash sector pair
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dynamic-data-without-a-clean-shutdown-position-odometer-hours" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dynamic data without a clean shutdown (position, odometer, hours)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shutdown-choreography-and-why-gc-cant-collide-with-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shutdown choreography (and why GC can't collide with it)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#flash-portability-what-the-32-byte-record-does-and-does-not-assume" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flash portability (what the 32-byte record does and does not assume)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#chained-values-v2-built-2026-07-15-iso-tp-shaped" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Chained values (v2 — BUILT 2026-07-15, ISO-TP-shaped)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v2-mount-sector-epoch-headers-designed-not-built" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2 mount: sector epoch headers (designed, not built)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-it-lives-in-flash-the-honest-part" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where it lives in flash (the honest part)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#diagnostics-fault-memory-freeze-frames-the-other-customer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diagnostics / fault memory (freeze frames) — the other customer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#under-the-hood-blocks-and-the-signal-journal-mechanics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Under the hood: blocks, and the signal ↔ journal mechanics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sim-story" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sim story
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phasing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phasing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#non-goals-v1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-goals (v1)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sleep-writes-and-the-clean-claim-req-nvm-014" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sleep writes and the clean claim (REQ-NVM-014)
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../bootloader/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bootloader
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-image/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-image
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-node/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-node
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multicore-perf/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multicore performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../threadx-amp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ThreadX AMP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../porting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Porting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-codegen/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace codegen
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-manifest/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace manifest
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-multicore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace multicore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../traceability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirement traceability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-one-idea-fbs-get-persistence-through-signals-not-an-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The one idea: FBs get persistence through SIGNALS, not an API
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-format-an-append-journal-over-a-flash-sector-pair" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage format: an append journal over a flash sector pair
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dynamic-data-without-a-clean-shutdown-position-odometer-hours" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dynamic data without a clean shutdown (position, odometer, hours)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shutdown-choreography-and-why-gc-cant-collide-with-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shutdown choreography (and why GC can't collide with it)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#flash-portability-what-the-32-byte-record-does-and-does-not-assume" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flash portability (what the 32-byte record does and does not assume)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#chained-values-v2-built-2026-07-15-iso-tp-shaped" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Chained values (v2 — BUILT 2026-07-15, ISO-TP-shaped)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v2-mount-sector-epoch-headers-designed-not-built" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v2 mount: sector epoch headers (designed, not built)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-it-lives-in-flash-the-honest-part" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where it lives in flash (the honest part)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#diagnostics-fault-memory-freeze-frames-the-other-customer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diagnostics / fault memory (freeze frames) — the other customer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#under-the-hood-blocks-and-the-signal-journal-mechanics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Under the hood: blocks, and the signal ↔ journal mechanics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sim-story" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sim story
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phasing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phasing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#non-goals-v1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-goals (v1)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sleep-writes-and-the-clean-claim-req-nvm-014" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sleep writes and the clean claim (REQ-NVM-014)
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="persistence-non-volatile-storage-design">Persistence (non-volatile storage) — design<a class="headerlink" href="#persistence-non-volatile-storage-design" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>Status: DESIGN (2026-07-14). Requirements: <code>requirements/nvm.toml</code> (draft, deriving
+from SYS-REQ-NVM-001). Nothing is built; this page is the shape to argue with.
+Companion decisions it leans on: the bootloader's flash driver
+(<a href="../bootloader/">bootloader.md</a> — same <code>FlashOps</code>/<code>flash.c</code>), NM's coordinated
+sleep (<a href="../nm/">nm.md</a> — the flush point), the signal model
+(<a href="../configuration/">configuration.md</a>).</p>
+</blockquote>
+<h2 id="the-one-idea-fbs-get-persistence-through-signals-not-an-api">The one idea: FBs get persistence through SIGNALS, not an API<a class="headerlink" href="#the-one-idea-fbs-get-persistence-through-signals-not-an-api" title="Permanent link">&para;</a></h2>
+<p>A signal marked persistent is restored before the application's first activation and
+journaled by the platform afterwards. The FB that owns it cannot tell it is
+persistent — it reads and writes ports, period:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">[[signal]]</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">name</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;OdoMeters&quot;</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">fields</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;u32&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">from</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;app&quot;</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">to</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;app&quot;</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">persist</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;now&quot;</span><span class="w">        </span><span class="c1"># or &quot;shutdown&quot; — INTENT, not a tuning number</span>
+</code></pre></div>
+<p>Two policies, declared as intent:</p>
+<ul>
+<li><code>persist = "shutdown"</code> — survives orderly shutdowns: flushed at the NM sleep
+  edges only. Settings, learned trims. Near-zero wear. After a CRASH (unclean
+  mount) shutdown signals restore their declared DEFAULTS — a partial final
+  flush must never masquerade as an orderly one, and marker-relative lookup
+  (restore the value from the last COMPLETE epoch) is an engine vNext if a
+  deployment needs crash-surviving shutdown values. That is the declared
+  meaning, not a defect.</li>
+<li><code>persist = "now"</code> — journaled on write, as fast as the system allows: staged
+  wait-free by the wrapper, appended on the comm thread's next idle pass, FLOORED
+  by the one global <code>[nvm] min_write_ms</code> (the system wear floor). Position,
+  counters — anything that must survive a crash. The honest loss window is
+  <code>floor + one comm pass</code> (milliseconds), and correctness never depends on a
+  clean shutdown.</li>
+</ul>
+<p>There is no per-signal interval knob: intent + one system floor. The generator
+KNOWS each writing handler's period, so every <code>now</code> signal gets a generation-time
+worst-case wear check (records/hour vs the sector budget) — binding <code>now</code> to an
+absurd writer fails generation with the math in the error message. Wear is a
+config-review fact, not a field surprise.</p>
+<p>There is deliberately NO <code>nvm_read</code>/<code>nvm_write</code> in application code. An API would
+break the pure In→Out handler contract and reproduce AUTOSAR's NvM surface
+(ReadBlock/WriteBlock/job callbacks/result polling — the same pattern-zoo we refuse
+at the port layer, <a href="../autosar-comparison/">autosar-comparison.md</a>). One pattern:
+declare it persistent, use it as a signal.</p>
+<p>Explicit "save now" flows (end-of-line calibration, configuration writes) are NOT
+FB work — they are the diagnostic path: a writable DID bound to the same storage
+(the <code>[[did]]</code> machinery exists; binding lands in a later phase).</p>
+<h2 id="lifecycle">Lifecycle<a class="headerlink" href="#lifecycle" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Restore</strong>: at boot, the generated thread init seeds each persistent signal's
+  cell from storage BEFORE the first dispatch — readers see the stored value from
+  activation one. Missing/corrupt record → the signal's declared default (a fresh
+  ECU behaves exactly like a config-default ECU).</li>
+<li><strong>Journal</strong>: on change, rate-limited (<code>[nvm] min_write_ms</code>, generous default).
+  A 32-byte record append costs microseconds — schedulable on the comm thread's
+  idle path without disturbing the bus.</li>
+<li><strong>Flush</strong>: NM's prepare-to-sleep is the natural quiet point — dirty values are
+  written while the system is already quiescing. (Power loss between journal
+  points loses AT MOST the newest values, never the store — see the format.)</li>
+</ul>
+<h2 id="storage-format-an-append-journal-over-a-flash-sector-pair">Storage format: an append journal over a flash sector pair<a class="headerlink" href="#storage-format-an-append-journal-over-a-flash-sector-pair" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>record (one 32-byte flash word — the program granularity, atomic by construction):
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  [block_id u16 | len u16 | seq u32 | data ...20 | crc32 u32]
+</code></pre></div>
+<ul>
+<li><strong>Append-only</strong>: a new value is a new record; the mount scan takes the
+  highest-seq record with a VALID CRC per block. A power cut mid-append leaves a
+  torn record whose CRC fails — it is simply ignored: the previous value wins.
+  Power-loss safety falls out of the format, exactly like the boot header's
+  valid-mark-last rule.</li>
+<li><strong>Compaction (= the garbage collection)</strong>: a superseded record is garbage the
+  moment a newer seq lands — nothing marks it (flash bits are one-way; tombstones
+  buy nothing), mount simply ignores it, and its only cost is sector space. When
+  the cursor hits the sector end (or opportunistically at sleep-entry past a fill
+  threshold), the latest value of every live block is copied into the partner
+  sector with BUMPED seq — the copies strictly outrank the originals — and the old
+  sector is erased. Crash mid-copy: mount unions both sectors, highest seq wins,
+  consistent. Crash before the erase: full duplicates, copies win, the stale
+  sector is detected (full + everywhere-outranked) and erased LAZILY at the next
+  quiet point — never at mount, where a seconds-long erase would stall boot.
+  Repeated crashes converge (idempotent). No sector headers, no state machine in
+  flash: which sector is active is DERIVED from content (erased space + freshest
+  records). Wear levels perfectly by construction (alternating erase); a wider
+  ring is the linear-life upgrade. Whether the live set fits after compaction is
+  a GENERATION-TIME check (the generator knows N) — never a runtime failure.
+  Values &gt; 20 bytes are REFUSED by v1 (put() at runtime; a
+  generation-time size gate in P2). Chained values are DESIGNED for the v2
+  engine slice — see "Chained values" below.</li>
+<li><strong>Wear math</strong> (H7: 128 KB sectors, 10k cycles): 4096 records/sector. Even one
+  record per second sustained = one erase per ~68 min ≈ 1.3 years of CONTINUOUS
+  max-rate writing per pair — and <code>min_write_ms</code> plus on-change gating keeps real
+  traffic orders below that. More sectors in the ring = linear life extension.</li>
+</ul>
+<h2 id="dynamic-data-without-a-clean-shutdown-position-odometer-hours">Dynamic data without a clean shutdown (position, odometer, hours)<a class="headerlink" href="#dynamic-data-without-a-clean-shutdown-position-odometer-hours" title="Permanent link">&para;</a></h2>
+<p>One persistent signal = one block, and a multi-field signal ({x, y, angle}) is ONE
+block — its fields restore coherently from one atomic record. Group values that
+must survive together into one signal.</p>
+<p>For a value that changes continuously on an ECU that may lose power at ANY moment,
+declare <code>persist = "now"</code> — the sleep-entry flush is irrelevant to it; the floored
+on-change journal is the mechanism, and the loss window is the global floor plus
+one comm pass. The escalation ladder when that window must shrink further:</p>
+<ol>
+<li><strong>Deadband in the FB</strong> — quantize before writing, so "changed" means
+   meaningfully changed (app logic, where it belongs).</li>
+<li><strong>Last-gasp write</strong> — the brown-out/PVD interrupt fires while bulk capacitance
+   still holds milliseconds; one 32-byte record append costs tens of µs. One ISR,
+   one append: exact at every power loss. Fits the format unchanged (a later
+   phase, needs board support).</li>
+<li><strong>Backend swap</strong> — the engine sees only FlashOps: FRAM/EEPROM (byte-write, no
+   wear limit) is a board-level backend for signals that write fast forever, not
+   a redesign.</li>
+<li><strong>Re-reference on unclean start</strong> — the sleep flush writes a clean-shutdown
+   marker record; a mount without one means the last session crashed, and the
+   platform can expose that so an FB re-homes instead of trusting a stale value.
+   Detection, not prevention — sometimes the correct system answer.</li>
+</ol>
+<p>Wear reality check at 5 records/s continuous: ~190 days of NONSTOP writing per
+sector pair (duty-cycled to 2 h/day ≈ 6 years); deadbands and the system floor
+keep real traffic far below that, the generation-time wear check (REQ-NVM-010)
+proves it per config, and rungs 2/3 exist for the outliers.</p>
+<h2 id="shutdown-choreography-and-why-gc-cant-collide-with-it">Shutdown choreography (and why GC can't collide with it)<a class="headerlink" href="#shutdown-choreography-and-why-gc-cant-collide-with-it" title="Permanent link">&para;</a></h2>
+<p>The classic journal deadlock — the flush needing space exactly when there is no
+time to make space — is closed structurally, not handled:</p>
+<ul>
+<li><strong>Reserved headroom, generation-sized.</strong> The worst-case shutdown write-out is a
+  KNOWN constant: N_live records + the clean marker (the generator knows N — the
+  same fact behind the capacity gate). The journal keeps that reserve untouchable,
+  and the compaction WATERMARK sits above it: free space below <code>reserve + margin</code>
+  makes compaction due during NORMAL runtime, on the comm thread's schedule, long
+  before shutdown needs the room. The sleep flush therefore never erases — it is
+  N microsecond-scale appends into space guaranteed to exist. GC-at-shutdown is
+  not a case to handle; it is a state that cannot be reached.</li>
+<li><strong>Quiesce ordering, storage holds the door.</strong> Dispatch stops → flush dirty →
+  clean marker → (compact now if the watermark says so — on same-bank boards this
+  IS the designated erase window; other-bank boards already compacted at runtime)
+  → storage-done → only then power down. NM coordinates the BUS sleep on its own
+  timeline; the LOCAL power-down waits on storage-done. A power cut anywhere in the
+  sequence converges by the format rules above.</li>
+<li><strong>Writes are never forbidden — including during shutdown.</strong> Appends are legal
+  whenever cursor space exists, and headroom guarantees it does. The wake-up race
+  (bus activity aborts the sleep after the flush) is benign: new records land
+  after the marker and life continues. Which gives crash detection its cleanest
+  form: <strong>a session was clean iff the newest record is a marker.</strong> A marker with
+  records after it means "slept, then woke" — the next sleep writes a new one.
+  No flags, no state machine; the journal's tail IS the shutdown state.</li>
+</ul>
+<p><strong>Writes DURING a compaction</strong> are equally unremarkable, by construction:</p>
+<ul>
+<li>All flash work is ONE thread (FBs stage to RAM; the comm thread appends and
+  compacts) — "concurrent" never means racing writers, only interleaved work.</li>
+<li>Compaction is incremental, not a critical section: the copy phase reads <strong>the
+  RAM mount table, never old flash</strong> — a write landing mid-GC either updates the
+  table before its block is copied (the copy takes the fresh value) or appends
+  after it with a newer seq. Both orders are correct; a stale copy can never
+  outrank a fresh write, because copies never see stale data.</li>
+<li>From GC start, appends target the NEW sector; the old one is read-only and
+  merely awaits erase.</li>
+<li>The erase itself is hardware-autonomous (start it, poll completion each comm
+  pass) — the CPU services the bus and new appends throughout; the seconds are
+  the flash controller's, not the thread's.</li>
+<li>The new sector cannot overflow mid-GC: it starts empty and absorbs live set +
+  margin — the same generation-time arithmetic as the headroom.</li>
+</ul>
+<p>One invariant, stated once: the journal accepts appends at ANY moment the ECU is
+alive — during compaction, during shutdown, during the wake race — because
+ordering is seq, sourcing is the RAM table, and the only slow operation runs in
+hardware.</p>
+<h2 id="flash-portability-what-the-32-byte-record-does-and-does-not-assume">Flash portability (what the 32-byte record does and does not assume)<a class="headerlink" href="#flash-portability-what-the-32-byte-record-does-and-does-not-assume" title="Permanent link">&para;</a></h2>
+<p>The record size is NOT an H7-ism. The engine's real requirements of a flash:</p>
+<ol>
+<li><strong>The program unit must DIVIDE 32</strong> (1/2/4/8/16/32) — a record programmed as
+   several smaller units is still power-cut safe, because ANY missing unit fails
+   the record CRC. That covers AURIX TriCore (PFLASH 32 B pages, DFLASH 8 B —
+   and DFLASH, built for EEPROM emulation at ~125k endurance, is the journal's
+   natural home there), NXP S32K (8 B phrases), RH850 data flash, classic STM32
+   (word program), external NOR (byte program), FRAM (byte, no erase at all —
+   the erase hook degenerates to a fill and wear stops being a topic).</li>
+<li><strong>Append-only satisfies ECC no-overwrite</strong> (H7/AURIX/S32K3/RH850 forbid
+   re-programming inside a word even with identical bits — we never do).</li>
+<li><strong>Blankness is the DRIVER's question.</strong> "Erased reads as 0xFF" is ST/NOR
+   folklore, not physics — Infineon DFLASH blankness is a hardware blank-check,
+   not a readable pattern. FlashOps carries an optional <code>blank(addr, len)</code> hook;
+   the engine prefers it and falls back to the FF pattern test.</li>
+<li><strong>Reads must be fault-tolerant on ECC parts</strong>: a power-cut-torn word can
+   raise an ECC double-error ON READ (H7) — the driver absorbs it and returns
+   garbage; the CRC layer rejects it. On the H7 bench checklist, explicitly.</li>
+</ol>
+<p>A flash whose program unit EXCEEDS 32 bytes would need a larger record — the
+size becomes a board profile constant at that point; no such internal flash is
+on the roadmap.</p>
+<h2 id="chained-values-v2-built-2026-07-15-iso-tp-shaped">Chained values (v2 — BUILT 2026-07-15, ISO-TP-shaped)<a class="headerlink" href="#chained-values-v2-built-2026-07-15-iso-tp-shaped" title="Permanent link">&para;</a></h2>
+<p>The 20-byte cell is right for signals and wrong as a hard wall. v2 chains
+records the way ISO-TP frames a message (no FC — storage has no flow to
+control):</p>
+<ul>
+<li>one logical write = ONE seq shared by all its parts (block_id identical);</li>
+<li>part index in len's high 5 bits, part length in the low bits →
+  up to 31 parts ≈ 570 B per value;</li>
+<li>part 0 (the FF) carries total_len in its first payload bytes;</li>
+<li>the LAST part's final 4 bytes = CRC32 over the ASSEMBLED value — written
+  last, the valid-mark-last rule one level up. Mount groups by (block, seq)
+  and takes the highest seq with ALL parts present and the whole-CRC valid;
+  a power cut mid-chain leaves an incomplete group and the previous complete
+  chain wins — the v1 fallback rule, unchanged in spirit.</li>
+</ul>
+<p>Built with the keyed table in the v2 engine slice (fuzzed: cuts at and inside
+every part; corrupt-part fallback; chains through compaction/re-homing;
+representation flips plain&lt;-&gt;chained). Engine consequences: the RAM table stores
+a REFERENCE (sector + offset + len) for chained blocks instead of inlining
+(no-alloc; get() assembles from flash — append-only flash is immutable, so
+the copy-from-table rule is not violated: it guarded against STALE flash, and
+a chain reference is by definition the newest). Compaction/re-homing copy
+part-by-part under one new seq; live/free/reserve math counts parts; the
+power-cut fuzz gains a dimension (cuts at and inside every part). Lands
+together with the keyed table (schema-identity hashes) — same Entry/mount
+rework, one review loop.</p>
+<p>Consequence for diagnostics: ~570 B chains likely dissolve the second
+wider-record journal — freeze frames chain in the same engine; a separate
+SectorCfg region remains available purely for wear isolation.</p>
+<h2 id="v2-mount-sector-epoch-headers-designed-not-built">v2 mount: sector epoch headers (designed, not built)<a class="headerlink" href="#v2-mount-sector-epoch-headers-designed-not-built" title="Permanent link">&para;</a></h2>
+<p>v1's mount FULL-SCANS both sectors — the only evidence a half-finished erase
+cannot forge (a partial erase wipes randomly, not front-to-back, so any single
+slot can lie). Cost: milliseconds of sequential reads at boot on a memory-mapped
+part; but per-slot hardware blank-checks (DFLASH) or external SPI flash would
+pay 4096 operations per sector, per boot.</p>
+<p>The upgrade (user-proposed, 2026-07-15): a SECTOR HEADER record at slot 0,
+written ONLY after its erase completes, carrying an erase EPOCH. Valid header =
+everything behind it is post-erase append-only territory = first-blank IS the
+frontier. The stale-survivor hole closes by protocol: only the PENDING (older-
+epoch) sector is ever erased, so a partial-erase survivor header is always the
+older one — classified pending, never appended into, re-erased at the quiet
+point. A torn header write = "unformatted" = one redundant erase, nothing lost.
+Strays stay consistent: erase runs only after re-homing (v1 rule), so a
+headerless sector holds nothing worth recovering. Costs: one slot per sector,
+one program per erase cycle, an epoch compare at mount. Motivated when a
+blank-check-per-slot or external-flash target lands — v1's full scan stays
+until then (it is the fuzz-proven code).</p>
+<h2 id="where-it-lives-in-flash-the-honest-part">Where it lives in flash (the honest part)<a class="headerlink" href="#where-it-lives-in-flash-the-honest-part" title="Permanent link">&para;</a></h2>
+<p>Erasing a sector STALLS same-bank execution (seconds for 128 KB) — the flash map
+must be drawn per board, next to the bootloader's:</p>
+<ul>
+<li><strong>Single-image parts (H735)</strong>: journal in the OTHER bank — H7 read-while-write
+  across banks makes erase invisible. Free lunch.</li>
+<li><strong>H755 with the M4 image in bank 2</strong>: bank 2's tail sectors collide with a live
+  M4 fetching from that bank. Options, decided at the board level: compact only at
+  NM sleep-entry (the M4 is quiescing too), or run the M4 from RAM (its image is
+  ~30 KB — a boot-time copy kills the constraint entirely). Record appends
+  (µs-scale) are a non-issue either way; only ERASE needs the quiet point.</li>
+<li>The boards layer owns the sector map (<code>bootmap.h</code> precedent); the journal engine
+  sees <code>FlashOps</code> — the SAME hooks the bootloader defined, and on target the SAME
+  <code>boards/&lt;b&gt;/flash.c</code> driver. One flash driver, two customers, one bench
+  validation.</li>
+</ul>
+<h2 id="diagnostics-fault-memory-freeze-frames-the-other-customer">Diagnostics / fault memory (freeze frames) — the other customer<a class="headerlink" href="#diagnostics-fault-memory-freeze-frames-the-other-customer" title="Permanent link">&para;</a></h2>
+<p>A freeze frame is a bundle of values captured at fault time — realistically
+30..150 bytes per fault-memory entry (snapshot DIDs + DTC + status + counters),
+times tens of faults. It does NOT fit the 20-byte signal cell, and it was never
+meant to: fault memory is a PLATFORM module (the <code>[[nvm.block]]</code> customer), not
+a persistent signal.</p>
+<p>Storage shape when diagnostics lands: a SECOND journal instance over its own
+sector pair with WIDER records — <code>rec_size</code> becomes a per-instance parameter
+(64 B -&gt; 52-byte payload, 128 B -&gt; 116) so one freeze frame is ONE atomic
+record: captured-at-fault coherence for free, every fuzz-proven invariant
+unchanged (nothing in the format depends on 32 specifically; program-unit-
+divides-rec_size still holds), diagnostic wear isolated from signal wear.
+Preferred over chained records, which buy the same capacity at the cost of an
+all-parts-or-previous mount rule and fresh crash-window analysis. The write
+pattern fits the engine as-is: event-driven appends at fault occurrence (the
+fault CAUSING the power loss is exactly what the append-CRC format survives),
+small counter updates, no cyclic traffic.</p>
+<h2 id="under-the-hood-blocks-and-the-signal-journal-mechanics">Under the hood: blocks, and the signal ↔ journal mechanics<a class="headerlink" href="#under-the-hood-blocks-and-the-signal-journal-mechanics" title="Permanent link">&para;</a></h2>
+<p>Persistent signals compile down to numbered blocks (generator-assigned ids in a
+<code>nvm_gen.h</code>-style contract — the duo/io pattern again). <code>[[nvm.block]]</code> stays for
+NON-signal platform data (diagnostic records later, bootloader metadata if it ever
+wants the journal) — owned by platform modules, still never by FBs.</p>
+<p>The full path for one signal:</p>
+<ol>
+<li><strong>Identity</strong>: the generator walks persistent signals (<code>persist = "now"</code>/<code>"shutdown"</code>) in declaration order
+   → block_id 1..N + packed size into the contract table (0/0xFFFF reserved;
+   all-0xFF can never parse as a record, so erased flash is self-marking).</li>
+<li><strong>Packing</strong>: fields little-endian in declaration order — the wire-encode
+   convention, deliberately NOT raw struct memory (stable across compilers and
+   firmware updates).</li>
+<li><strong>Schema identity (2026-07-15 design fix)</strong>: block_id is NOT declaration
+   order — inserting a persistent signal would shift every later id and
+   cross-restore old values into the wrong signals, and a same-length field
+   mutation would silently misinterpret old bytes. Identity = a 16-bit hash of
+   the signal's NAME + field names + field types: ANY layout change produces a
+   new identity → the old record never matches → the declared default, never a
+   lie. Reordering/inserting signals is safe by construction. Hash collisions
+   fail generation with an explicit pin (<code>nvm_id = 7</code>, the way frames pin CAN
+   ids). There is NO migration, ever: a value that must survive a schema change
+   is migrated by the APPLICATION (declare old + new signals for one release,
+   copy in a handler). Engine consequence (P2): records carry the full 16-bit
+   identity, so the RAM table keys by id (a linear scan over N &lt;= 63 entries)
+   instead of v1's direct index — a contained journal change that rides the
+   persist-codegen slice.</li>
+<li><strong>Mount</strong> (boot): scan both sectors; per block keep the highest-seq record with
+   a valid CRC into a fixed-size RAM table (generator-dimensioned); the write
+   cursor is the first erased word. Mount is strictly READ-ONLY (hardened in the
+   P1 review round): it never programs and never erases — strays from an
+   interrupted compaction stay where they are, served from the union table, and
+   <code>erase_pending()</code> re-homes them via a compact at the quiet point. A failed
+   program BURNS its slot (the driver may have pulsed the word — re-programming
+   a touched ECC word is illegal), and <code>put()</code> rolls the table back so a failed
+   value is neither served nor re-persisted. Clean is judged honestly: an
+   all-torn journal is unclean, and a torn write after the marker (the ECU woke,
+   then died mid-put) is unclean — old-sector debris doesn't poison it.</li>
+<li><strong>Restore</strong>: generated thread init unpacks the table entry into the signal's
+   cell BEFORE the first dispatch — a restored value is indistinguishable from a
+   computed one.</li>
+<li><strong>Write</strong>: the generated wrapper (which already routes every signal write)
+   additionally stages the new value into the block's RAM-table slot and marks it
+   dirty — a seq-stamped latest-value slot, the xioc pattern, because it is the
+   same problem (single writer thread, single journal reader, never block, latest
+   wins). The COMM THREAD polls dirty flags on its idle path and appends records,
+   rate-limited; the FB thread never touches flash.</li>
+<li><strong>Flush/compact</strong>: NM prepare-to-sleep journals all dirty blocks and is the
+   designated compaction window where erase would otherwise stall a live core.</li>
+</ol>
+<h2 id="sim-story">Sim story<a class="headerlink" href="#sim-story" title="Permanent link">&para;</a></h2>
+<p>The journal engine is pure V over <code>FlashOps</code> — unit-tested against RAM (mount,
+append, compact, torn-record power-cut fuzz: cut the "flash" at every byte offset
+and re-mount), and host examples back it with a file (the boot_sim precedent).
+The entire layer develops dry.</p>
+<h2 id="phasing">Phasing<a class="headerlink" href="#phasing" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>P1 — the journal engine</strong> (<code>nvm/</code> module): format, mount, append, compact
+   over FlashOps; power-cut fuzz tests. Pure host work.</li>
+<li><strong>P2 — <code>persist</code> codegen</strong>: BUILT 2026-07-15 ("the toml part"): [nvm] block +
+   <code>persist = "now"/"shutdown"</code> on signals; schema-identity hashes (+ <code>nvm_id</code>
+   pin), the generation-time WEAR CHECK (it fired on its first real config:
+   LoadCmd at a 1 s floor = 1.3 years — the error showed the math), capacity/
+   headroom gates; emitted wiring = pre-kernel mount+prune+restore (the
+   single-threaded window), per-thread cell restore, wrapper staging through
+   ioc cells (seeded with restored values — no phantom first put), comm-thread
+   change+floor-gated puts, NM prepare-bus-sleep edge flush + mark_clean +
+   deferred erase. P2 cut: local signals, 1..2 unsigned fields. Host sim
+   example (file-backed) = the next slice.</li>
+<li><strong>P3 — target</strong>: reuse <code>boards/h755zi/flash.c</code>; flash map decision per board;
+   NM sleep-entry flush + compaction window. (Bench: pull power mid-append, on a
+   loop, and count survivors.)</li>
+<li><strong>P4 — DID binding</strong>: writable DIDs backed by blocks (the explicit-write path);
+   <code>[nvm]</code> policy knobs (per-signal write-through for the rare value that earns it).</li>
+</ol>
+<h2 id="non-goals-v1">Non-goals (v1)<a class="headerlink" href="#non-goals-v1" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Large blobs / file semantics (records are signal-sized; chaining exists but is
+  not the design center).</li>
+<li>Cross-core persistent signals (the satellite's persistent state would journal
+  through the owner — needs a crossing design; defer until a real M4 use case).</li>
+<li>Redundant dual-copy storage per block (the journal's previous-record fallback
+  covers the power-cut case; true redundancy arrives with an ASIL owner).</li>
+</ul>
+<h2 id="sleep-writes-and-the-clean-claim-req-nvm-014">Sleep writes and the clean claim (REQ-NVM-014)<a class="headerlink" href="#sleep-writes-and-the-clean-claim-req-nvm-014" title="Permanent link">&para;</a></h2>
+<p>"Writes accepted at all times" (REQ-NVM-012) used to cost the clean claim: any
+put during <code>bus_sleep</code> appended after the marker, so a power-off then mounted
+unclean and shutdown-gated signals restored defaults even though the shutdown
+WAS orderly. Since REQ-NVM-014 the generated service pairs every in-sleep put
+with an immediate <code>mark_clean()</code> in the same pass — the tail is a marker again
+before the loop sleeps, so a power-off at ANY point during bus sleep mounts
+clean with the newest values. Costs and edges: an in-sleep write consumes two
+records (value + marker); a FAILED in-sleep put leaves the claim broken on
+purpose (the value is not durable — conservative wins); the prepare/entry
+edges were already covered by the flush choreography. Bench-verified on the
+H755: release → silence → puts land for 30 s → reset at an arbitrary moment →
+<code>clean = 1</code>, newest value restored.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.top", "navigation.tracking", "content.code.copy", "content.code.annotate", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

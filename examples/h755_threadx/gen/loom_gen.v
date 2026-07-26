@@ -82,6 +82,7 @@ fn C.shell_bmc(&u8, int) int
 fn C.shell_m4sig(&u8, int) int
 fn C.shell_iocx(&u8, int) int
 fn C.shell_boot(&u8, int) int
+fn C.shell_bulkperf(&u8, int) int
 fn C.duo_poll(int, &u32, &u32) int // xioc reader (comm_glue.c): 1 = fresh value
 fn C.duo_layout_ok() int // layout-id handshake: 0 = satellite absent or a DIFFERENT build
 // [nvm]: the journal storage map + flash driver (boards layer / example glue)
@@ -129,6 +130,13 @@ fn shell_iocx_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 
 fn shell_boot_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 	n := C.shell_boot(&rsp.buf[0], 520)
+	if n > 0 {
+		rsp.len = n
+	}
+}
+
+fn shell_bulkperf_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
+	n := C.shell_bulkperf(&rsp.buf[0], 520)
 	if n > 0 {
 		rsp.len = n
 	}
@@ -333,6 +341,7 @@ fn comm_thread_entry(input u32) {
 	g_sh.register('m4sig', 'target command (comm_glue.c)', shell_m4sig_cmd)
 	g_sh.register('iocx', 'target command (comm_glue.c)', shell_iocx_cmd)
 	g_sh.register('boot', 'target command (comm_glue.c)', shell_boot_cmd)
+	g_sh.register('bulkperf', 'target command (comm_glue.c)', shell_bulkperf_cmd)
 	mut shell_txf := can.Frame{}
 	g_sh.register('nm', 'NM state; nm req|rel', shell_nm_cmd)
 	g_sh.register('stat', 'per-handler us: last, max, mean, count', shell_stat_cmd)

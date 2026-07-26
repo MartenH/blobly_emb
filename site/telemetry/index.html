@@ -1,0 +1,2212 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A V-language automotive software stack — no-alloc, sim-first, ThreadX, CAN-FD first.">
+      
+      
+      
+        <link rel="canonical" href="https://blobly.net/telemetry/">
+      
+      
+        <link rel="prev" href="../nm/">
+      
+      
+        <link rel="next" href="../someip/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Telemetry - blobly</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#runtime-observability-processor-load-thread-tracing" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="blobly" class="md-header__button md-logo" aria-label="blobly" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            blobly
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Telemetry
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="blobly" class="md-nav__button md-logo" aria-label="blobly" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    blobly
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/build-and-flash/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build, flash & talk to the target
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/two-node-io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wire a signal across two ECUs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/record-a-trace/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Record and view a trace
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-signal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a signal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-frame/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a CAN frame
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-an-fb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a function block
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-thread/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a thread or partition
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-core/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a core
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../um/add-a-shell-command/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Add a shell command
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design & internals
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Design & internals
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../application-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Application model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../no-alloc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    No-alloc discipline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../memory-protection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory protection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ways-of-working/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ways of working
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../autosar-comparison/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AUTOSAR comparison
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../communication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Communication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../com-modules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    COM modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#threads-fbhandlers-interrupts-one-stream-selectable-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Threads, fb.handlers, interrupts — one stream, selectable levels
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../someip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SOME/IP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../net/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ethernet / NetX
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    IO
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nvm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NvM
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../bootloader/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bootloader
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-image/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-image
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-node/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-node
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multicore-perf/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multicore performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../threadx-amp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ThreadX AMP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../porting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Porting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-codegen/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace codegen
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-manifest/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace manifest
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trace-multicore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trace multicore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../traceability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Requirement traceability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#threads-fbhandlers-interrupts-one-stream-selectable-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Threads, fb.handlers, interrupts — one stream, selectable levels
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="runtime-observability-processor-load-thread-tracing">Runtime observability: processor load + thread tracing<a class="headerlink" href="#runtime-observability-processor-load-thread-tracing" title="Permanent link">&para;</a></h1>
+<p>The stack observes its <strong>own</strong> runtime and ships it over CAN, so a running ECU can be
+watched live in any CAN tool (candump, or the blobly_net GUI decoding it via DBC) — no
+<code>/proc</code>, no external profiler, no debug probe.</p>
+<p>Two layers, from cheap-and-always-on to detailed-and-on-demand:</p>
+<ol>
+<li><strong>Processor load</strong> — a small, continuous per-core load percentage (implemented).</li>
+<li><strong>Thread tracing</strong> — <em>which thread ran when</em> on each core, captured into a buffer and
+   read out on command, <strong>optionally</strong> with per-<code>fb.handler</code> detail <em>inside</em> each thread.</li>
+</ol>
+<h2 id="threads-fbhandlers-interrupts-one-stream-selectable-levels">Threads, fb.handlers, interrupts — one stream, selectable levels<a class="headerlink" href="#threads-fbhandlers-interrupts-one-stream-selectable-levels" title="Permanent link">&para;</a></h2>
+<p>A <strong>thread</strong> is the OS scheduling unit: on ThreadX a partition runs as one (or more) thread(s),
+and it is where the core's time is actually spent and where preemption happens. A thread runs
+many <strong>fb.handlers</strong> — each an <code>[[fb.handler]]</code>, the functions loom dispatches via
+<code>sched.every(...)</code> — the fine-grained work <em>inside</em> a thread. And <strong>interrupts</strong> steal time from
+whatever is running. The trace is <strong>one uniform event stream</strong> carrying all of them (§ <em>The
+record</em>); RAM is finite, so a configured <strong>level</strong> filters <em>which kinds</em> it records — trading
+history depth for detail:</p>
+<ul>
+<li><strong><code>thread</code></strong> — just who held the core (+ idle): fewest events, <strong>longest</strong> window.</li>
+<li><strong><code>thread+isr</code></strong> — adds every interrupt (by raw vector).</li>
+<li><strong><code>thread+fb</code></strong> — adds each fb.handler run inside a thread.</li>
+<li><strong><code>all</code></strong> — the full picture: most events, <strong>shortest</strong> window.</li>
+</ul>
+<p>The level is a <em>filter</em>, not a different record — one 8-byte format, one decoder, at every
+level. (On a fully-cooperative core a partition = one thread running its fb.handlers back-to-back,
+so <code>thread</code> alone is nearly flat there; the levels earn their keep on a <strong>preemptive</strong> target
+with several threads + real interrupts, where they show who actually held the core.)</p>
+<hr />
+<h1 id="part-1-processor-load-implemented">Part 1 — Processor load (implemented)<a class="headerlink" href="#part-1-processor-load-implemented" title="Permanent link">&para;</a></h1>
+<p>Each <code>Scheduler</code> brackets the time it spends in <code>run()</code> and rolls it into a duty cycle
+over several windows at once — <code>load_permille_100ms/1s/10s()</code>, 0..1000. This is
+<em>handler work / wall clock</em>: the useful-work fraction (it excludes poll/sleep overhead,
+so it reads a little lower than a <code>top</code>-style figure). <code>REQ-TELEM-001</code> (single window),
+<code>REQ-TELEM-003</code> (multiple concurrent windows).</p>
+<p>The generated telemetry tx reports it on the bus:</p>
+<ul>
+<li><strong><code>CpuLoad</code> (0x7E0)</strong> — one byte per core = load percent over the 1 s window
+  (<code>comm/telem.encode_cpuload</code>). <code>REQ-TELEM-002</code>.</li>
+<li><strong><code>LoadDetail</code> (0x7E1)</strong> — one core's load over the 100 ms / 1 s / 10 s windows plus
+  its per-period <strong>overrun</strong> count (<code>encode_loaddetail</code>). The 100 ms window surfaces
+  bursts the 1 s figure averages away; a non-zero overrun byte means commanded work
+  exceeded the core's capacity. The observable overrun <strong>count</strong> is <code>REQ-TELEM-004</code>; the
+  run loop <em>detects</em> an overrun (a pass over its tick) and increments it — that detection
+  is verified on target (the h735 LoadDetail pulse) and moves into loom per-handler in
+  P1. Reporting the detail frame is proposed <code>REQ-TELEM-005</code> (Part 2 — not yet tracked,
+  target-only today).</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">[telemetry]</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">enabled</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="kc">true</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">bus</span><span class="w">       </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;can0&quot;</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">id</span><span class="w">        </span><span class="o">=</span><span class="w"> </span><span class="mh">0x7E0</span><span class="w">    </span><span class="c1"># CpuLoad</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">detail_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mh">0x7E1</span><span class="w">    </span><span class="c1"># LoadDetail (optional; omit to send only CpuLoad)</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">period_ms</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">500</span>
+</code></pre></div>
+<p>On the host the tx is a spawned thread that sums each scheduler's <code>load_permille()</code> by
+core; on the bare-metal single-core target (<code>[target] baremetal</code>) it is sent inline from
+the generated <code>run()</code> loop, reading <code>load_permille*()</code> directly. The load is only valid
+when the loop yields <strong>genuine idle</strong> between passes (the fixed-tick pacing) — an unpaced
+free-running loop would read a bogus ~50 % floor.</p>
+<p><strong>Current limits.</strong>
+- <strong><code>LoadDetail</code> is target-only.</strong> The <code>[target] baremetal</code> emitter sends <code>0x7E1</code>; the
+  host <code>partition_telem()</code> sends <code>CpuLoad</code> only. On the host, <code>detail_id</code> is accepted but
+  no <code>0x7E1</code> is produced (host generation is a follow-up).
+- <strong>16 schedulers.</strong> The host telemetry sums load through a 16-slot shared scratch area
+  (<code>slot_core.len &lt; 16</code>); a config with more partitions + bus bridges than that reports
+  the first 16 and silently omits the rest.</p>
+<hr />
+<h1 id="part-2-thread-tracing-design">Part 2 — Thread tracing (design)<a class="headerlink" href="#part-2-thread-tracing-design" title="Permanent link">&para;</a></h1>
+<p>Processor load answers <em>"how busy is the core?"</em>. This layer answers <em>"where does the
+time go?"</em> — first at the <strong>thread</strong> level (who held the core, and the switches between),
+then, when you need it, drilling into the <strong>fb.handlers</strong> inside a thread (which one blew
+its budget, scheduling jitter, preemption). Nothing here is built config-driven yet; this
+is the shape before the requirements and code.</p>
+<h2 id="threads-are-declared-in-ecutoml">Threads are declared in <code>ecu.toml</code><a class="headerlink" href="#threads-are-declared-in-ecutoml" title="Permanent link">&para;</a></h2>
+<p>The trace needs threads to be first-class, so <code>ecu.toml</code> gains a thread level (today a
+partition is an <em>implicit</em> single thread). A <strong>partition</strong> (one MPU domain, pinned to a
+core) declares one or more <strong>threads</strong> (each a ThreadX thread with a priority). Thread names
+are <strong>globally unique</strong>, so an <strong>fb</strong> names the thread it runs on directly and its partition
+is <strong>derived</strong> — a thread belongs to exactly one partition, so naming the partition too would
+be redundant:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># priority is the ThreadX priority (lower = higher). Keep [[partition.thread]] / [[fb.handler]]</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1"># blocks comment-free — a V TOML parser bug (vlang/v#27684) drops the key after a comment there.</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="k">[[partition]]</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;ctrl&quot;</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span><span class="k">[[partition.thread]]</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="n">name</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;ctrl_main&quot;</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span><span class="n">priority</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="c1"># an fb names a globally-unique thread; its partition (ctrl) is derived</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="k">[[fb]]</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="n">name</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;SpeedMonitor&quot;</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="n">thread</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;ctrl_main&quot;</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">  </span><span class="k">[[fb.handler]]</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">  </span><span class="n">name</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;on_10ms&quot;</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">  </span><span class="n">period_ms</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span>
+</code></pre></div>
+<p>Every <strong>partition MUST declare at least one thread</strong> — there is no implicit default. An <strong>fb
+maps to a thread</strong> (thread names are globally unique, so the partition is derived), and a
+<strong>handler's trigger</strong> is either <code>period_ms</code> (periodic — the scheduler dispatches it on the fb's
+thread, producing an <strong>FB</strong> trace record) or <code>irq = "&lt;vector&gt;"</code> (interrupt-triggered — it runs
+in ISR context, producing an <strong>ISR</strong> record). loom2v rejects a partition with no thread, a
+duplicate thread/fb name, an fb whose <code>thread</code> doesn't resolve, or a handler with no trigger.
+Multiple threads per partition (preemption by priority → who actually held the core) is the
+<strong>target</strong>; today loom2v generates one thread per partition, and both <code>irq</code> handlers and &gt;1
+thread/partition are rejected until that codegen lands.</p>
+<h2 id="identity-a-generated-manifest-threads-fbhandlers">Identity: a generated manifest (threads + fb.handlers)<a class="headerlink" href="#identity-a-generated-manifest-threads-fbhandlers" title="Permanent link">&para;</a></h2>
+<p>loom2v emits a <strong>manifest</strong> with two tables — one for threads, one for fb.handlers — each
+with a <strong>globally unique</strong> id across all partitions (not a per-scheduler index, which would
+collide). For <code>overspeed</code> (partitions <code>sense</code> + <code>ctrl</code>, one thread each):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a># fb.handlers: id,partition,core,fb,handler,period_us,thread
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>#   id = the 14-bit id in a kind=FB entity_id; `thread` names the thread it runs on
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>0,sense,0,SpeedFilter,on_10ms,10000,main
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>1,sense,0,OverspeedDetector,on_10ms,10000,main
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>2,ctrl,1,EngineMonitor,on_10ms,10000,main
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>3,ctrl,1,LampController,on_10ms,10000,main
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a># threads: thread,id,name,core   (id 0 reserved = idle)
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>#   id = the 14-bit id in a kind=THREAD entity_id
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>thread,1,sense.main,0
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>thread,2,ctrl.main,1
+</code></pre></div>
+<p>Every record names its entity with one <code>entity_id</code> (<code>kind&lt;&lt;14 | id</code>); the manifest resolves the
+<strong>14-bit id within each kind</strong> to a name / core / period. Threads and fb.handlers are numbered
+here (thread_id 0 reserved for idle); <strong>ISRs need no manifest row — the id <em>is</em> the raw hardware
+vector</strong>, and blobly_net can label known vectors from a small optional table. blobly_net loads
+this manifest next to the DBC, so the target never sends strings and the map can't drift — one
+source of truth.</p>
+<blockquote>
+<p><strong>Decision — shared manifest over runtime announce.</strong> A self-describing target (send a
+handler-table frame at startup) is more robust to a host/target manifest mismatch and
+supports hot-attach, but costs bus traffic, a string protocol, and a second identity
+path. Recommendation: <strong>shared manifest</strong>; add an <em>optional</em> announce frame later only
+if field mismatches bite.</p>
+</blockquote>
+<h2 id="what-we-measure-two-clocks">What we measure: two clocks<a class="headerlink" href="#what-we-measure-two-clocks" title="Permanent link">&para;</a></h2>
+<p>Every handler invocation has two useful durations, equal only when nothing interrupts:</p>
+<ul>
+<li><strong>Response time</strong> (wall clock): <code>now</code> after the handler − <code>now</code> before — what a loom
+  bracket measures. It includes any time an <strong>ISR</strong> ran, or (on an RTOS) any time the
+  thread was <strong>preempted</strong>, during the handler.</li>
+<li><strong>CPU time</strong> (execution): response time <strong>minus</strong> interrupt/preempt time — the true
+  cost of the handler on the core.</li>
+</ul>
+<p>On the <strong>cooperative loom</strong> an FB handler runs to completion and is never preempted by
+<em>another FB</em>. But the bracket is <strong>not</strong> automatically exact CPU time: on bare-metal any
+ISR that fires mid-handler lands inside the bracket, and on an RTOS a higher-priority
+thread can preempt the partition thread. So the loom bracket is <strong>response time</strong>; it
+equals CPU time only when nothing interrupts — which <em>is</em> true for a fully-polled core
+with no enabled peripheral IRQs (the h735_app demo), but not in general. CPU time needs
+interrupt/preemption accounting (below).</p>
+<h2 id="mechanism">Mechanism<a class="headerlink" href="#mechanism" title="Permanent link">&para;</a></h2>
+<h3 id="loom-all-targets-per-handler-bracket-response-time">loom (all targets) — per-handler bracket → response time<a class="headerlink" href="#loom-all-targets-per-handler-bracket-response-time" title="Permanent link">&para;</a></h3>
+<p><code>loom.Scheduler.run()</code> already times the whole pass. Extend it to bracket <strong>each</strong>
+dispatched handler and fold the duration into a per-handler stat:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>for each due handler i:
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    t0 = now()
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    handlers[i](ctx[i])
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    dt = now() - t0
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    stat[i].last = dt; stat[i].max = max(max, dt); stat[i].count++; stat[i].total += dt
+</code></pre></div>
+<p>Fixed-memory (one <code>HandlerStat</code> per scheduler slot, no alloc); gives last/max/mean
+response time and invocation count per handler. Cost: two <code>now()</code> reads per dispatch —
+negligible with the DWT cycle counter. On a no-IRQ polled core this is also exact CPU
+time; where ISRs run, subtract the ISR time (an ISR-duration counter the OSAL exposes).</p>
+<h3 id="threadx-preemptive-the-execution-change-notify-hooks">ThreadX (preemptive) — the execution-change-notify hooks<a class="headerlink" href="#threadx-preemptive-the-execution-change-notify-hooks" title="Permanent link">&para;</a></h3>
+<p>Thread switches and ISRs are captured through ThreadX's <strong>execution-change-notify</strong> hooks —
+<strong>not</strong> <code>TX_THREAD_STATE_CHANGE</code>. That macro fires on block/unblock/sleep/terminate, <em>not</em> on
+the running↔preempted transition: a preempted thread stays <code>TX_READY</code> (the running thread is
+just the <code>TX_READY</code> one <code>_tx_thread_current_ptr</code> points at), so preemption changes no state
+field. The real swap point is the context-switch handler (<code>_tx_thread_schedule</code> / the port's
+PendSV <code>__tx_ts_handler</code>). Build the kernel with <strong><code>TX_ENABLE_EXECUTION_CHANGE_NOTIFY</code></strong> and
+the port assembly calls four functions at exactly the points we need — <strong>we supply them</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>we implement</th>
+<th>kernel calls it from</th>
+<th>we do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>_tx_execution_thread_enter()</code></td>
+<td>context switch, <strong>after</strong> <code>_tx_thread_current_ptr</code> is repointed to the new thread</td>
+<td>emit a thread record (<code>to_thread</code> = <code>current_ptr</code> id, time)</td>
+</tr>
+<tr>
+<td><code>_tx_execution_thread_exit()</code></td>
+<td>context switch, <strong>before</strong> <code>current_ptr</code> is repointed (still the outgoing thread)</td>
+<td>read <code>reason</code> off the outgoing thread; close its slot</td>
+</tr>
+<tr>
+<td><code>_tx_execution_isr_enter()</code></td>
+<td><code>_tx_thread_context_save</code> (ISR begins)</td>
+<td>pause thread accounting; opt. per-vector <code>u16 irq</code> record</td>
+</tr>
+<tr>
+<td><code>_tx_execution_isr_exit()</code></td>
+<td><code>_tx_thread_context_restore</code> (ISR ends)</td>
+<td>resume thread accounting</td>
+</tr>
+</tbody>
+</table>
+<p>Both switch hooks take <strong>no arguments</strong> — they read <code>_tx_thread_current_ptr</code> (the enter hook
+after it points at the incoming thread, the exit hook while it still points at the outgoing
+one), so no <code>from_thread</code> need be passed.</p>
+<blockquote>
+<p><strong>Verified at runtime (not just in source).</strong> Built the stock Cortex-M7 port
+(<code>ports/cortex_m7/gnu</code>) with <code>TX_ENABLE_EXECUTION_CHANGE_NOTIFY</code> + our four stub hooks and
+ran it under QEMU (<code>mps2-an500</code>, 3 threads + 100 Hz SysTick). <code>thread_enter</code>/<code>thread_exit</code>
+climbed <strong>balanced</strong> (276/276), <code>isr_enter</code>/<code>isr_exit</code> tracked the tick (90 over ~300 ms =
+100 Hz), and the enter hook read the correct incoming thread name each time. The exit hook
+firing <em>before</em> <code>current_ptr</code> is repointed (confirmed in <code>tx_thread_schedule.S</code>: the
+<code>BL _tx_execution_thread_exit</code> precedes the <code>_tx_thread_current_ptr</code> store) is what lets
+<code>reason</code> be read from the outgoing thread with no argument passing. The <strong>Linux/POSIX sim
+port does <em>not</em> call these hooks</strong> (pthread scheduler, hooks never wired in) — so this
+capture path is Cortex-target-only and must be seam-stubbed on the host.</p>
+</blockquote>
+<ul>
+<li><strong><code>reason</code></strong> comes from the <strong>outgoing</strong> thread's <code>tx_thread_state</code> at the switch:
+  <code>TX_READY</code> → <em>preempted</em>; a suspend state → <em>blocked/yielded</em> (the suspend kind
+  distinguishes); <code>TX_COMPLETED</code>/<code>TX_TERMINATED</code> → <em>exited</em>. No guessing.</li>
+<li><strong>System Timer Thread.</strong> With the default (non-<code>TX_TIMER_PROCESS_IN_ISR</code>) build, ThreadX
+  runs a hidden <strong>System Timer Thread</strong> that wakes to expire <code>tx_thread_sleep</code>/timers — it
+  showed up in the spike as a real scheduled thread. The generated thread manifest must
+  reserve an id for it (or the build must set <code>TX_TIMER_PROCESS_IN_ISR</code>), else swap records
+  reference an unlabelled thread.</li>
+<li><strong>ISRs</strong> are captured with no per-ISR instrumentation — <em>provided</em> the ISR routes through
+  <code>_tx_thread_context_save</code>/<code>_tx_thread_context_restore</code> (a per-Cortex requirement; the port's
+  ISR wrappers must be wired). CPU-vs-response time is then the thread's run time minus the
+  ISR bucket, computed in these same hooks.</li>
+<li>This needs <strong>only</strong> <code>TX_ENABLE_EXECUTION_CHANGE_NOTIFY</code> + our four functions — not the full
+  execution-profile kit. That kit is just an alternative <em>consumer</em> of the same hooks (it
+  <code>#define</code>s the notify flag and supplies its own versions); we supply ours instead.</li>
+</ul>
+<p>The OSAL exposes this behind a stable seam so the same loom/trace code is a no-op
+(response == CPU, no switches) on a polled bare-metal core.</p>
+<blockquote>
+<p>Granularity: with the thread model above a partition can run <strong>several</strong> threads, so the
+kernel's switch hook <em>is</em> the THREAD-level trace directly. fb.handler timing <em>within</em> a
+thread comes from the loom bracket (<code>run_profiled</code>); the kernel owns inter-thread + ISR,
+loom owns intra-thread fb.handler timing.</p>
+</blockquote>
+<h2 id="recording-per-core-spsc-buffers">Recording: per-core SPSC buffers<a class="headerlink" href="#recording-per-core-spsc-buffers" title="Permanent link">&para;</a></h2>
+<p>Two report styles, both fed by the per-handler stats:</p>
+<ol>
+<li><strong>Live stats</strong> (cheap, continuous) — periodically push a compact per-handler frame
+   (HandlerStat, below). A live gauge; aggregates, not every invocation.</li>
+<li><strong>Captured trace</strong> (detailed, on-demand) — a fixed buffer of per-invocation records.</li>
+</ol>
+<p>Each <code>Scheduler</code> owns its <strong>own</strong> trace buffer, written <strong>only</strong> by that core's loop —
+<strong>one writer per buffer</strong>, so it never violates the SPSC/IOC isolation invariant. There
+is <strong>no</strong> single shared buffer that multiple cores write (that would need locks and could
+corrupt record order). Read-out is <strong>IOC-mediated, never a direct cross-core read</strong>: the
+producing partition hands its stopped buffer (or successive chunks of it) to the bus core
+over an <code>osal.ioc_*</code> channel, and the bus core streams from that. This holds the "cross-
+core data flows only through IOC" invariant — on an MPU/ThreadX target the bus core has
+no mapping to another partition's RAM, and immutability-after-stop doesn't grant one.
+Records carry the global <code>handler_id</code>, so cores never need a shared index.</p>
+<p><strong>Capture modes</strong> — the per-core buffer depth is <strong>configured</strong> (<code>[trace] buffer_records</code>),
+emitted as a static array at build (no runtime alloc); the value trades RAM for trace
+depth (e.g. 4096 records × 8 B = 32 KB/core):</p>
+<ul>
+<li><strong>one-shot</strong> — fill then stop; "trigger, let it fill, read it out." The first cut.</li>
+<li><strong>ring / FIFO</strong> — record continuously, overwriting the oldest; on a <strong>trigger</strong> freeze
+  with a <strong>pre/post split</strong> (keep <code>pre</code> % of the ring from <em>before</em> the trigger plus the
+  rest from after, then stop). This is the flight recorder — see Triggers.</li>
+</ul>
+<h2 id="triggers-freeze-the-ring-software-hw-ready">Triggers — freeze the ring (software, HW-ready)<a class="headerlink" href="#triggers-freeze-the-ring-software-hw-ready" title="Permanent link">&para;</a></h2>
+<p>The ring's value is the <strong>trigger</strong>: record continuously, and when a configured condition
+fires, freeze with the history <em>around</em> it. Point it at a fault/DTC flag and you keep the
+last N handler invocations that led up to it — a black-box recorder read out over CAN
+with <strong>no debug probe attached</strong>.</p>
+<p><strong>Software trigger, no debug HW.</strong> The trigger is a software condition, <em>not</em> a DWT /
+CoreSight watchpoint. That keeps it portable (identical in sim and on any target), keeps
+the "no probe" property, and doesn't burn a scarce hardware comparator a live debugger
+wants. Because the stack is config-driven, the natural thing to watch is a <strong>signal</strong>,
+not a raw address:</p>
+<ul>
+<li><strong>signal</strong> (recommended) — loom2v generates every signal write, so it emits the trigger
+  check <strong>at the write site</strong>: event-driven, catches <em>every</em> change, zero polling cost,
+  portable host↔target.</li>
+<li><strong>address</strong> (advanced) — poll a <strong>partition-local</strong> address (a <code>volatile</code> variable in
+  the triggering partition's <em>own</em> memory) each cycle against the condition. Strictly
+  bounded to local/owned memory — <strong>never</strong> an arbitrary or cross-partition address,
+  which would break the IOC-only / memory-protection invariants (a partition can't read
+  another's RAM). Costs a poll and can miss a value set-and-cleared between checks.
+  Watching arbitrary or another partition's memory is <em>only</em> the reserved <code>hw</code> (DWT)
+  source, itself bounded by the target's memory protection.</li>
+</ul>
+<p><strong>One seam, pluggable sources.</strong> The ring exposes a single entry point —
+<code>trace_trigger()</code> (freeze after the post-trigger count). Whatever detects the condition
+just calls it, so a future <strong>hardware watchpoint</strong> source (target-only DWT comparator,
+zero-overhead, catches the exact access) drops in behind the same seam with <strong>no change</strong>
+to the ring, the capture state machine, or the CAN protocol. The config is forward-
+compatible for it:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">[trace.trigger]</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">source</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;signal&quot;</span><span class="w">    </span><span class="c1"># signal | address | hw   (hw reserved -&gt; DWT watchpoint, later)</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">signal</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;FaultFlag&quot;</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">when</span><span class="w">   </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;== 1&quot;</span><span class="w">      </span><span class="c1"># ==, !=, &gt;, &lt;, changed, &amp; mask</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="n">pre</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="mi">75</span><span class="w">          </span><span class="c1"># % of the ring kept before the trigger (rest is post-trigger)</span>
+</code></pre></div>
+<p><code>source = "hw"</code> is a <strong>reserved</strong> key in this design — nothing parses <code>[trace]</code> config
+yet (no trace codegen exists today); when the config is implemented, <code>hw</code> is accepted and
+routed to the DWT backend. The point is that the <em>seam and the config shape</em> are designed
+now, so adding it later is a backend, not a redesign — "preparing for" the hardware route
+without pulling debug HW into the build.</p>
+<p><strong>Prior art</strong> (this is a well-trodden pattern): ARM CoreSight <strong>ETB + trigger</strong> and the
+Cortex-M <strong>DWT watchpoint</strong> (the hardware route we're deliberately <em>not</em> taking yet);
+<strong>Percepio Tracealyzer</strong> snapshot mode and <strong>SEGGER SystemView</strong> (software RTOS-trace
+rings, freeze + dump); a <strong>logic analyzer / DSO</strong> pre/post-trigger buffer (the mental
+model); and — most domain-relevant — automotive <strong>XCP (ASAM MCD-1)</strong> event-triggered DAQ,
+which measures ECU memory over the bus on a condition. We're building the software,
+config-driven version of that, on the CAN the ECU already has.</p>
+<h2 id="wire-formats">Wire formats<a class="headerlink" href="#wire-formats" title="Permanent link">&para;</a></h2>
+<p>Fixed 8-byte frames on classic CAN; on CAN-FD one 64-byte frame packs up to 8 of the 8-byte
+HandlerStats / trace records (fewer with any header). Trace records are one uniform 8-byte
+format (§ <em>The record</em>). All little-endian.</p>
+<p><strong>HandlerStat</strong> — the unsolicited live-stats push (one fb.handler per classic frame). The
+<code>handler_id</code> is a <code>u16</code> here too; to keep the frame 8 bytes the live <code>count_delta</code> shrinks
+to a saturating <code>u8</code> (a rough live rate — the dump carries exact counts):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>b0-1  handler_id  (u16, LE, global)
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>b2    flags       (bit0 overran | bit1 preempted | bit2 saturated)
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>b3-4  last_us     (u16)          response time of the last invocation
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>b5-6  max_us      (u16)          max since last reset
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>b7    count_delta (u8, saturating)   invocations since the previous stat frame
+</code></pre></div>
+<p><strong>TraceCmd</strong> — host → target (<code>cmd_id</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>b0    opcode          1 arm | 2 start | 3 stop | 4 reset | 5 set_push | 6 dump | 7 status
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>b1    arg0            set_push kind (0 stats | 1 records) / capture mode
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>b2-3  period_ms       (u16) for set_push
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>b4-5  handler_filter  (u16) 0xFFFF = all, else a handler_id. handler_id now being a u16,
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>                      0xFFFF is reserved as the &quot;all&quot; sentinel — ids run 0..0xFFFE (65535
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>                      fb.handlers, still far more than any real ECU)
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>b6-7  core_mask       (u16) bit i = core i; one cmd addresses several cores at once
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>                      (arm/stop/dump/… fan out). 0 = the receiving/default core (core 0),
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>                      so existing single-core commands keep working unchanged.
+</code></pre></div>
+<p>A <strong>multi-core dump</strong> is one <code>dump</code> with several <code>core_mask</code> bits set. The bus core owns
+the fan-out: for each selected core it imports that core's frozen window over shared
+memory (never a direct cross-core ring read — the recording invariant), sends the
+TraceRsp, then streams that core's blocks. One command, all selected cores, ascending
+core order.</p>
+<p><strong>The block stream (multi-block dump).</strong> A core's window travels as a SEQUENCE of
+self-describing blocks, each one:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>[ block header ][ epoch ][ record ]…[ record ]
+</code></pre></div>
+<ul>
+<li><strong>block header</strong> (<code>CONTROL/ctl_block</code>): b2 = <code>core</code> in bits 0-6 and a <strong>more-flag in
+  bit 7</strong> — set on every block except the core's last. End-of-stream lives IN THE
+  FORMAT: the host reads blocks until every selected core's final (more = 0) block has
+  arrived — never inferred from a block count, payload size, or timeout. b3-6 = the
+  record count that follows (the leading epoch counts).</li>
+<li><strong>leading epoch</strong>: every block re-anchors its own timeline (the base applicable at its
+  first record), so blocks decode independently and in sequence alike.</li>
+<li><strong>block size</strong> is the transport binding's payload cap, not a format constant: over
+  ISO-TP a block is ≤ 520 bytes (64 records); a future Ethernet/DoIP binding carries the
+  identical block sequence with its own cap and neither the format nor the decoder
+  changes. This is why the ring depth (<code>buffer_records</code>, up to 4096) is decoupled from
+  any transport limit.</li>
+</ul>
+<p><strong>TraceRsp</strong> — target → host (<code>rsp_id</code>), one per cmd:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>b0    opcode_echo
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>b1    result          0 ok, else error code
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>b2    state (low nibble)  0 idle | 1 capturing | 2 full | 3 frozen
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>      cause (high nibble)  0 none | 1 stop | 2 trigger  — why capture stopped
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>b3-4  records_used    (u16)
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>b5-6  capacity        (u16)
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>b7    core
+</code></pre></div>
+<p><code>b2</code> packs both fields: <code>state = b2 &amp; 0x0F</code>, <code>cause = b2 &gt;&gt; 4</code>. A decoder that only wants the state
+must mask the low nibble — a stopped/triggered buffer reads <code>0x13</code>/<code>0x23</code>, not <code>3</code>. The cause lets a
+host tell a trigger-frozen dump from a manually-stopped one (the swimlane alone can't).</p>
+<p>Records are <strong>one uniform 8-byte format</strong> — a single event stream of threads, interrupts,
+fb.handlers, and idle. What varies is not the layout but <strong>which kinds you capture</strong> (the
+<em>level</em>, a filter — below). One record per event; a buffer is one no-alloc array; the dump
+ships the bytes verbatim.</p>
+<h3 id="the-record-a-merged-entity_id-interval">The record — a merged <code>entity_id</code> + interval<a class="headerlink" href="#the-record-a-merged-entity_id-interval" title="Permanent link">&para;</a></h3>
+<p>Every event names <strong>what ran</strong> with one 16-bit <code>entity_id</code> whose top 2 bits are the <strong>kind</strong>
+and low 14 bits the <strong>id</strong> — so an id is <em>never</em> a <code>u8</code> (16384 per kind, and an ISR carries its
+<strong>raw vector</strong> directly, no mapping, no 256 cap). The rest of the record is the interval it ran:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>b0-1  entity_id (u16, LE)   kind = bits 15-14 :  0 ISR | 1 THREAD | 2 FB | 3 CONTROL
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>                            id   = bits 13-0  :  ISR    = raw interrupt vector (0..16383)
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>                                                 THREAD = thread_id (id 0 = IDLE / no thread)
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>                                                 FB     = handler_id
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>                                                 CONTROL= subtype (tick/epoch, block-header, marker)
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>b2    info (u8)             THREAD: reason (0 preempt | 1 block | 2 yield | 3 exit)
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>                            FB:     flags  (bit0 overran | bit1 first-run | bit2 saturated)
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>                            ISR / CONTROL: 0
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>b3-5  start_us (u24, LE)    interval start, relative to the capture epoch (16.7 s; a CONTROL
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>                            tick/epoch record extends the base for longer captures)
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>b6-7  cpu_us (u16)          measured run time of the interval — excludes nested ISR/preempt
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>                            time — saturating (a longer interval sets `saturated`, caps 0xFFFF)
+</code></pre></div>
+<ul>
+<li><strong>Merged id (your scheme).</strong> <code>kind</code> in bits 15-14, a <strong>14-bit id</strong> below. Threads and fbs get
+  their 14-bit id from the manifest; <strong>ISRs use the hardware vector as-is</strong> — the raw
+  <code>isr_512</code>/<code>isr_128</code> are ids 512/128, no lookup table, no <code>u8</code> ceiling.</li>
+<li><strong>One interval per record.</strong> Each record = "entity ran <code>[start, start+cpu)</code>". There are <strong>no</strong>
+  separate switch / enter / exit / end records: the <em>kind</em> says what ran, and a preempting ISR or
+  higher-priority thread simply has its own record with a <code>start</code> nested inside the outer entity's
+  span. Emitted on the trailing edge (the exit hook, when the duration is known), so the buffer is
+  in completion order; the host sorts by <code>start_us</code> to lay out the timeline.</li>
+<li><strong>IDLE = THREAD id 0</strong> — "no thread ready" is just the null thread, same record shape.</li>
+<li><strong><code>reason</code></strong> (THREAD): the outgoing thread's fate — <code>preempted</code> (still ready, will resume) vs
+  <code>blocked</code>/<code>yielded</code>/<code>exited</code>. The preemption signal; the next THREAD record names who took over.</li>
+<li><strong>CONTROL (kind 3)</strong> carries non-entity events by <code>id</code> subtype: <strong>tick/epoch</strong> (advance the
+  16.7 s <code>start</code> base on long captures), <strong>block-header</strong> (multi-core framing, below), <strong>marker</strong>.</li>
+</ul>
+<h3 id="levels-are-a-capture-filter-not-a-format">Levels are a capture <em>filter</em>, not a format<a class="headerlink" href="#levels-are-a-capture-filter-not-a-format" title="Permanent link">&para;</a></h3>
+<p>The record never changes; the <strong>level</strong> picks which <code>kind</code>s the target writes — trading history
+depth for detail. One decoder handles every level (read <code>entity_id</code>, dispatch on <code>kind</code>); a
+dropped kind just means fewer records, the kept ones unchanged.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="k">[trace]</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">level</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;thread&quot;</span><span class="w">        </span><span class="c1"># thread | thread+isr | thread+fb | all</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>level</th>
+<th>kinds written</th>
+<th>you see</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>thread</code></td>
+<td>THREAD</td>
+<td>who held the core + idle — the longest history</td>
+</tr>
+<tr>
+<td><code>thread+isr</code></td>
+<td>THREAD, ISR</td>
+<td>+ every interrupt, by raw vector</td>
+</tr>
+<tr>
+<td><code>thread+fb</code></td>
+<td>THREAD, FB</td>
+<td>+ which fb.handler ran inside each thread</td>
+</tr>
+<tr>
+<td><code>all</code></td>
+<td>THREAD, ISR, FB</td>
+<td>the full picture — the shortest history</td>
+</tr>
+</tbody>
+</table>
+<h3 id="same-bytes-in-ram-and-on-the-wire">Same bytes in RAM and on the wire<a class="headerlink" href="#same-bytes-in-ram-and-on-the-wire" title="Permanent link">&para;</a></h3>
+<p>The ring stores these 8-byte records; the dump ships them <strong>verbatim</strong> — memory format <strong>==</strong>
+link format. The only wire-only addition is a <strong>CONTROL block-header</strong> record per core in a
+<em>multi-core</em> dump (so the host splits one ISO-TP stream by core); it precedes that core's records,
+never rewrites them. A single-core dump is byte-identical to the ring.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>block-header (CONTROL, only in a multi-core dump):
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>  b0-1  entity_id = kind 3 (CONTROL) | id = subtype BLOCK   →  0xC000 | BLOCK
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>  b2    core (u8)
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>  b3-6  count (u32, LE)   records that follow for this core
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>  b7    0
+</code></pre></div>
+<h3 id="buffer-depth-vs-iso-tp">Buffer depth vs ISO-TP<a class="headerlink" href="#buffer-depth-vs-iso-tp" title="Permanent link">&para;</a></h3>
+<p>Classic ISO-TP caps one transfer at <strong>4095 bytes</strong> (12-bit FF length). An 8 KB ring
+(1024 × 8 B) is bigger, so:</p>
+<ol>
+<li><strong>Default the ring to ≤ 4095 B</strong> (~500 records) → a dump is one ISO-TP transfer. Deeper <em>flat</em>
+   history rarely helps; the <strong>trigger / flight-recorder</strong> keeps the <em>relevant</em> window instead.</li>
+<li><strong>ISO-TP 32-bit escape</strong> — an FF with the 12-bit length = 0 carries a following 4-byte length
+   (up to 4 GB in one transfer). Use it for larger blocks <em>if</em> our isotp stack <strong>and</strong> the host
+   tool both support the escape (to verify).</li>
+<li><strong>App-layer paging</strong> — dump a page at a time (<code>records [offset, offset+N)</code>), one message each,
+   until the host has all <code>records_used</code> from the rsp. Universal (works over plain CAN), chattier.</li>
+</ol>
+<p>Default is #1; #3 is the mechanism when a config asks for a ring larger than one transfer.</p>
+<h3 id="worked-example">Worked example<a class="headerlink" href="#worked-example" title="Permanent link">&para;</a></h3>
+<p><code>task_1</code> runs, <code>isr_512</code> preempts it, it resumes then blocks; the core idles until the timer
+<code>isr_128</code> fires and readies <code>task_2</code>. Manifest: <code>task_1</code>→THREAD 1, <code>task_2</code>→THREAD 2; idle is
+THREAD 0; ISRs are the <strong>raw vectors</strong> 512 and 128. <code>entity_id = (kind&lt;&lt;14)|id</code>, so
+THREAD 1 = <code>0x4001</code>, ISR 512 = <code>0x0200</code>, THREAD 0 (idle) = <code>0x4000</code>, ISR 128 = <code>0x0080</code>.</p>
+<p>Sorted by <code>start_us</code> (the timeline the host draws; the buffer holds them in completion order):</p>
+<table>
+<thead>
+<tr>
+<th>entity</th>
+<th>bytes</th>
+<th>start</th>
+<th>cpu</th>
+<th>note</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>task_1 (THREAD 1)</td>
+<td><code>01 40 01 64 00 00 BC 02</code></td>
+<td>100</td>
+<td>700</td>
+<td>reason=block; wall [100,820), isr nested</td>
+</tr>
+<tr>
+<td>isr_512 (ISR 512)</td>
+<td><code>00 02 00 90 01 00 14 00</code></td>
+<td>400</td>
+<td>20</td>
+<td>preempts task_1</td>
+</tr>
+<tr>
+<td>idle (THREAD 0)</td>
+<td><code>00 40 00 34 03 00 E8 03</code></td>
+<td>820</td>
+<td>1000</td>
+<td>task_1 blocked, nothing ready</td>
+</tr>
+<tr>
+<td>isr_128 (ISR 128)</td>
+<td><code>80 00 00 1C 07 00 18 00</code></td>
+<td>1820</td>
+<td>24</td>
+<td>timer — wakes task_2</td>
+</tr>
+<tr>
+<td>task_2 (THREAD 2)</td>
+<td><code>02 40 00 34 07 00 F4 01</code></td>
+<td>1844</td>
+<td>500</td>
+<td>runs</td>
+</tr>
+</tbody>
+</table>
+<p>The host walks records in <code>start</code> order: each entity occupies <code>[start, start + cpu + nested)</code>,
+where a shorter record whose <code>start</code> falls <strong>inside</strong> that growing span is nested (it preempted),
+and one whose <code>start</code> lands exactly at the compute-end is sequential. That cleanly separates the
+two ISRs:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>[  100,  820)  task_1   wall 720, cpu 700   (isr_512 starts at 400, INSIDE → nested)
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>[  400,  420)  isr_512  cpu 20              (preempts task_1; task_1 resumes at 420)
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>[  820, 1820)  idle     wall 1000, cpu 1000 (isr_128 starts at 1820 = compute-end → sequential)
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>[ 1820, 1844)  isr_128  cpu 24              (timer; wakes task_2, which runs next — idle never resumes)
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>[ 1844,    …)  task_2
+</code></pre></div>
+<p><code>task_1</code>'s <code>cpu 700</code> &lt; <code>wall 720</code> is exactly the 20 µs <code>isr_512</code> stole — nested, so the split
+falls out of the records, not a guess. <code>idle</code>'s <code>cpu == wall</code> because <code>isr_128</code> fired at its
+compute-end and handed the core to <code>task_2</code>, so nothing was stolen <em>from</em> idle.</p>
+<h2 id="time-representation">Time representation<a class="headerlink" href="#time-representation" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Unit: microseconds</strong>, normalized at the measurement boundary, so the wire format is
+  identical across host (<code>CLOCK_MONOTONIC</code>), bare-metal (DWT cycles ÷ CPU-MHz), and
+  ThreadX (profile ticks → µs). Same number means the same thing everywhere (parity).</li>
+<li><strong>Durations (<code>cpu_us</code>): <code>u16</code> µs</strong> (0..65.535 ms), <strong>saturating</strong> — a handler taking longer is
+  pathological and sets the <code>saturated</code> flag rather than wrapping.</li>
+<li><strong>Capture-relative timestamps (<code>start_us</code>): <code>u24</code> µs</strong> (0..16.7 s per epoch); a CONTROL
+  tick/epoch record advances the base for captures longer than that, so the window is unbounded.</li>
+<li><strong>Resolution: 1 µs.</strong> A sub-µs handler reads 0 µs (negligible load); if finer is ever
+  needed, the manifest can carry a <code>time_unit</code> scale (e.g. 0.1 µs) both ends honour.</li>
+<li>The manifest carries each handler's <code>period_us</code> (for jitter/deadline analysis) and the
+  time unit, so the host needs nothing from the wire but the raw counts.</li>
+</ul>
+<h2 id="control-read-out-over-can">Control &amp; read-out over CAN<a class="headerlink" href="#control-read-out-over-can" title="Permanent link">&para;</a></h2>
+<p>Config-declared <strong>cmd/rsp</strong> for control (<strong>not</strong> UDS), <strong>unsolicited push</strong> for the live
+case, and <strong>ISO-TP</strong> — a given in the stack — as the raw transport for the bulk dump (no
+UDS service layer, DIDs, or RoutineControl).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">[trace]</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="n">bus</span><span class="w">            </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;can0&quot;</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="n">level</span><span class="w">          </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;thread&quot;</span><span class="w">  </span><span class="c1"># thread | thread+isr | thread+fb | all — the capture filter</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="n">cmd_id</span><span class="w">         </span><span class="o">=</span><span class="w"> </span><span class="mh">0x7E2</span><span class="w">   </span><span class="c1"># host -&gt; target: control</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="n">rsp_id</span><span class="w">         </span><span class="o">=</span><span class="w"> </span><span class="mh">0x7E3</span><span class="w">   </span><span class="c1"># target -&gt; host: ack + status</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="n">push_ms</span><span class="w">        </span><span class="o">=</span><span class="w"> </span><span class="mi">1000</span><span class="w">    </span><span class="c1"># optional: push HandlerStat every 1 s with no request (0 = off)</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="n">buffer_records</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4096</span><span class="w">    </span><span class="c1"># per-core capture depth, 1..65535 (see Recording) — RAM vs depth</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="w">                         </span><span class="c1"># capped at 65535: records_used/capacity are u16 in TraceRsp</span>
+</code></pre></div>
+<p>Push is enabled by a <code>set_push</code> cmd <em>or</em> from config at boot (so a target streams stats
+with no host present — handy on a bench). E2E/SecOC can wrap any of these frames exactly
+as COM does.</p>
+<h2 id="visualization-what-a-tool-draws">Visualization (what a tool draws)<a class="headerlink" href="#visualization-what-a-tool-draws" title="Permanent link">&para;</a></h2>
+<p>The record + manifest are shaped to feed these views (blobly_net, phase P4):</p>
+<ul>
+<li><strong>Swimlane / Gantt timeline</strong> — the primary view: one lane per core (or per thread), every
+  record a bar from <code>start_us</code> to the next record's start (wall), <code>cpu_us</code> the solid fill;
+  gaps are idle. <code>entity_id → manifest</code> gives the lane, colour, and name; nested-<code>start</code> ISRs
+  draw on top of the thread they preempted. This is <em>who ran when</em>.</li>
+<li><strong>Load reconstruction</strong> — sum <code>cpu_us</code> per core per window → re-derive the CpuLoad /
+  LoadDetail curves straight from the trace, a cross-check on the live figures.</li>
+<li><strong>Period / jitter histogram</strong> — per FB entity, the spread of actual period (Δ<code>start_us</code>)
+  vs the manifest <code>period_us</code> shows scheduling jitter; the spread of <code>cpu_us</code> shows
+  typical vs worst-case execution time.</li>
+<li><strong>Overrun / deadline markers</strong> — records with <code>cpu_us &gt; period_us</code> or the <code>overran</code>
+  flag get red marks; ties the timeline back to LoadDetail's overrun count.</li>
+<li><strong>Preemption / swimlane view (ThreadX)</strong> — THREAD records give the context-switch timeline;
+  <code>reason</code> on each (the outgoing thread's fate) colours it — <code>preempted</code> (still ready, resumes)
+  vs voluntary <code>block</code>/<code>yield</code>/<code>exit</code>. A <code>wall &gt; cpu</code> gap on a thread is time an ISR or a
+  higher-priority thread stole, shown exactly by the nested records, not inferred from a split.</li>
+</ul>
+<p>Live HandlerStat frames drive gauges/sparklines (last/max/count per handler); the
+captured trace drives the timeline and histograms.</p>
+<h2 id="phasing">Phasing<a class="headerlink" href="#phasing" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>P1 — loom per-handler timing + unsolicited HandlerStat push</strong> (bare-metal; response
+   time = CPU on the polled core). <strong>Develop and verify on host/vcan first</strong> (portable
+   FBs, host codegen), then cross-check on the H735. <code>REQ-TRACE-001/002</code>.</li>
+<li><strong>P2 — captured per-core buffer + cmd/rsp control + ISO-TP dump</strong> (one-shot).
+   <code>REQ-TRACE-003/004</code>.</li>
+<li><strong>P3 — ring/FIFO capture + software trigger</strong> (freeze-the-ring, pre/post split; signal
+   trigger event-driven at the write site, address poll optional; the pluggable
+   <code>trace_trigger()</code> seam with <code>source = "hw"</code> reserved). <code>REQ-TRACE-006/007</code>.</li>
+<li><strong>P4 — ThreadX preemption + thread-switch capture</strong> (<code>TX_ENABLE_EXECUTION_CHANGE_NOTIFY</code>;
+   our <code>_tx_execution_thread_enter/exit</code> emit thread-switch records at <code>_tx_thread_schedule</code>,
+   <code>reason</code> from the outgoing thread's state; ISR enter/exit for the ISR bucket).
+   <code>REQ-TRACE-005/008</code>.</li>
+<li><strong>P4b — multi-core dump-in-one-command</strong> (<code>core_mask</code> fan-out; per-core self-describing
+   ISO-TP blocks, gathered over IOC). <code>REQ-TRACE-009</code>.</li>
+<li><strong>P5 — blobly_net</strong>: load the manifest, decode records, render the timeline / jitter /
+   preemption / swimlane views above.</li>
+</ol>
+<blockquote>
+<p><strong>Host vs target.</strong> The record kinds, codecs, <code>core_mask</code> control, and multi-core dump
+fan-out are portable and verified on host/vcan (multi-core = several loom schedulers in
+one process, one bus loop). The <strong>source</strong> of thread-switch records is the ThreadX
+execution-change-notify hooks (<code>_tx_execution_thread_enter/exit</code> at <code>_tx_thread_schedule</code>),
+which have no equivalent on the cooperative host — so the host harness injects synthetic
+switch records to exercise the codec/dump end-to-end, as the DWT <code>hw</code> trigger is seam-only
+until silicon.</p>
+</blockquote>
+<h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
+<p>The <code>REQ-TRACE-*</code> here derive <code>SYS-REQ-OBS-002</code> "handler-level runtime observability";
+<code>REQ-TELEM-005</code> below derives <code>SYS-REQ-OBS-001</code> (processor <strong>load</strong> observability — it's a
+load frame, not handler runtime). All ASIL QM. <strong>REQ-TRACE-001</strong> (measurement) is agreed +
+verified and <strong>REQ-TRACE-002</strong> (identity) is draft — both now in
+<code>requirements/trace.toml</code>. The ones below are still <strong>proposed (draft in this doc)</strong> until
+their phase lands, so nothing is marked covered prematurely:</p>
+<ul>
+<li><strong>REQ-TELEM-005</strong> <em>(→ SYS-REQ-OBS-001, load)</em> — the ECU shall transmit the multi-window
+  load + overrun count as a CAN message (the LoadDetail frame). <em>(implemented target-only;
+  pending host support / sign-off, so not yet in <code>requirements/telemetry.toml</code>.)</em></li>
+<li><strong>REQ-TRACE-003</strong> — the ECU shall capture a time-ordered trace of handler invocations
+  into a per-core buffer whose depth is <strong>configured</strong> (<code>buffer_records</code>, 1..65535 to fit
+  the u16 status fields, a static array, no runtime alloc), single-writer, and stop when
+  the buffer is full.</li>
+<li><strong>REQ-TRACE-004</strong> — capture shall be controllable via a configurable command/response
+  protocol; trace data shall be readable over the bus (bulk via ISO-TP) and the target
+  shall optionally push trace data unsolicited at a configured rate. <em>(cmd/rsp + push +
+  ISO-TP; not UDS)</em></li>
+<li><strong>REQ-TRACE-005</strong> — where the kernel is preemptive, reported handler CPU time shall
+  exclude time the thread was preempted. <em>(ThreadX profile kit)</em></li>
+<li><strong>REQ-TRACE-006</strong> — the ECU shall support a ring/FIFO capture mode that records
+  continuously and, on a trigger, freezes with a configurable pre/post-trigger split.
+  <em>(flight recorder)</em></li>
+<li><strong>REQ-TRACE-007</strong> — capture shall be freezable by a configurable software trigger — a
+  signal condition, or an address condition on <strong>partition-local memory only</strong> — through
+  a single trigger seam that admits additional sources (incl. a future hardware
+  watchpoint for arbitrary memory) without redesign. <em>(no debug HW; no cross-partition
+  reads)</em></li>
+<li><strong>REQ-TRACE-008</strong> — where the kernel is preemptive, the ECU shall capture thread context
+  switches, each recording the thread now running, timestamp, and reason (the outgoing
+  thread's fate), so a dump yields the context-switch timeline. <em>(ThreadX
+  execution-change-notify hooks the source: <code>_tx_execution_thread_enter/exit</code>; no-op on a
+  cooperative core)</em></li>
+<li><strong>REQ-TRACE-009</strong> — a single control command shall address several cores at once (a core
+  bitmask); a multi-core dump shall stream one self-describing block per selected core,
+  each gathered from its owning core over IOC (no direct cross-core buffer read).</li>
+</ul>
+<h2 id="open-decisions">Open decisions<a class="headerlink" href="#open-decisions" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Identity</strong>: shared generated manifest (recommended) vs runtime announce.</li>
+<li><strong>Control/transport</strong>: <strong>decided</strong> — config cmd/rsp (not UDS), unsolicited push, ISO-TP
+   for the bulk dump.</li>
+<li><strong>Capture modes</strong>: <strong>decided</strong> — one-shot (P2) then ring/FIFO + trigger (P3), same
+   records feed both.</li>
+<li><strong>Buffer depth</strong>: <strong>decided</strong> — configured per core (<code>[trace] buffer_records</code>), a
+   static array at build; the value trades RAM for trace depth.</li>
+<li><strong>Trigger</strong>: <strong>decided</strong> — software, no debug HW: a signal condition checked at the
+   generated write site (recommended), or an address poll (advanced); one <code>trace_trigger()</code>
+   seam with <code>source = "hw"</code> (DWT) reserved for later.</li>
+<li><strong>Record format</strong>: <strong>decided</strong> — <strong>one</strong> uniform 8-byte record for all levels, keyed by a
+   merged <strong><code>entity_id</code></strong> (<code>kind</code>:2 bits — ISR/THREAD/FB/CONTROL — <code>id</code>:14 bits; ISR id = raw
+   vector, no <code>u8</code> cap, no mapping). One interval per record (<code>start_us</code> + <code>cpu_us</code>); idle =
+   THREAD id 0. The <strong>level</strong> (<code>thread</code> / <code>thread+isr</code> / <code>thread+fb</code> / <code>all</code>) is a <em>capture
+   filter</em> on <code>kind</code>, not a different format — one no-alloc array, one decoder, one dump format.</li>
+<li><strong>Multi-core dump framing</strong>: <strong>decided</strong> — <code>core_mask</code> in TraceCmd fans out; per-core
+   self-describing ISO-TP blocks (block-header record + records), in ascending core order,
+   each pulled over IOC by the bus core.</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.top", "navigation.tracking", "content.code.copy", "content.code.annotate", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
