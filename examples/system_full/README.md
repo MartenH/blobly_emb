@@ -1,57 +1,61 @@
-# `examples/system_full` — 4-ECU Multi-Node Automotive Benchmark
+# `examples/system_full` — 3-ECU Multi-Node Automotive Benchmark (2 buses)
 
-`system_full` is a comprehensive multi-node automotive system composed from a single [`system.toml`](file:///home/mahi/repos/blobly_emb/examples/system_full/system.toml). It exercises the full **blobly_emb** embedded stack across 4 hardware target nodes (H735-DK, H755 dual-core, and 2× H723 Nucleo boards) and the Linux host tester (`blobly_net`).
+`system_full` is a multi-node automotive system composed from a single [`system.toml`](file:///home/mahi/repos/blobly_emb/examples/system_full/system.toml). Every node is a real **ThreadX** image generated from that one file. It runs on three boards across **two CAN buses**, with `sysnode` (the H735-DK) routing signals between them — both buses come out on the DK's own FDCAN transceivers, so `blobly_net` on the Linux host can tap both and watch the gateway work.
+
+> Scope note: this is the deliberately-simple 2-bus starting point. A third bus (`body`) + a `zone_b` ECU, and the gateway's Ethernet/DoIP/SOME/IP edge, are later steps once the 2-bus loop is proven on silicon.
 
 ---
 
-## Topology & Hardware Architecture
+## Topology
 
 ```
-                  ┌─────────────────────────────────────────────────────────────┐
-                  │                    Linux Host (blobly_net)                  │
-                  └───────────────┬──────────────────────────────┬──────────────┘
-                                  │ Ethernet                     │ CAN (diag)
-                                  │ (DoIP / SOME-IP / TCP / UDP) │ (0x7A0-0x7C8)
-                                  ▼                              ▼
-                  ┌─────────────────────────────────────────────────────────────┐
-                  │           STM32H735G-DK (sysnode: Central Gateway)         │
-                  │  NetX Duo (ETH) + 3× FDCAN + SOME/IP Router + Bulk Gateway  │
-                  └────────┬──────────────────────┬──────────────────────┬──────┘
-                           │ FDCAN1 (compute)     │ FDCAN2 (edge)        │ FDCAN3 (body)
-                           ▼                      ▼                      ▼
-            ┌──────────────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-            │     NUCLEO-H755ZI-Q      │  │  NUCLEO-H723ZG   │  │  NUCLEO-H723ZG   │
-            │     (domain ECU)         │  │   (zone_a ECU)   │  │   (zone_b ECU)   │
-            │ CM7: Power / SecOC / E2E │  │ Front Actuators  │  │ Rear Body & HVAC │
-            │ CM4: High-rate ADC / IOC │  │ Bulk Consumer    │  │ Bulk Streamer    │
-            └──────────────────────────┘  └──────────────────┘  └──────────────────┘
+              ┌───────────────────────── Linux host (blobly_net) ─────────────────────────┐
+              │  taps BOTH buses (+ diag 0x7A0..0x7C8)                                     │
+              └───────────────┬───────────────────────────────────────────┬───────────────┘
+                              │ compute bus                                │ edge bus
+                              ▼                                            ▼
+        ┌─────────────────────────────┐        ┌───────────────────────────────────────────┐
+        │      NUCLEO-H755ZI-Q         │        │              NUCLEO-H723ZG                 │
+        │      domain (compute)        │        │               zone_a (edge)                │
+        │  writes VehicleSpeed,        │        │  reads VehicleSpeed, HeadlightCmd;         │
+        │  HeadlightCmd; reads         │        │  writes SteeringAngle                      │
+        │  SteeringAngle               │        │                                            │
+        └───────────────┬─────────────┘        └──────────────────────┬────────────────────┘
+                        │ FDCAN1 = compute                             │ FDCAN2 = edge
+                        ▼                                              ▼
+              ┌──────────────────────────── STM32H735G-DK ────────────────────────────┐
+              │  sysnode: ThreadX gateway. comm thread owns FDCAN1 + FDCAN2, forwards  │
+              │  3 routes (raw copy + id remap). compute<->edge.                       │
+              └───────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Target Nodes & Bus Mapping
+## Nodes & bus mapping
 
-| Node | Hardware Target | Role & Capabilities | Primary Bus(es) | Diagnostic ID | NM ID |
+| Node | Hardware | Role | Bus | Diag ID | NM ID |
 |---|---|---|---|---|---|
-| `sysnode` | **STM32H735G-DK** | Central Gateway, NetX Duo DoIP & SOME/IP edge, multi-bus route encoder | `compute` (can0), `edge` (can1), `body` (can2) | `0x7A0` / `0x7A8` | `0x11` |
-| `domain` | **NUCLEO-H755ZI-Q** | Dual-core (CM7+CM4 AMP) powertrain & vehicle dynamics, E2E & SecOC (AES-CMAC) | `compute` (can0) | `0x7B0` / `0x7B8` | `0x12` |
-| `zone_a` | **NUCLEO-H723ZG (#1)** | Front Zone ECU (steering angle, headlight driver, PWM actuators, bulk consumer) | `edge` (can1) | `0x7C0` / `0x7C8` | `0x13` |
-| `zone_b` | **NUCLEO-H723ZG (#2)** | Rear Body ECU (HVAC blower, tailgate status, ambient temp sensor, bulk log streamer) | `body` (can2) | `0x7D0` / `0x7D8` | `0x14` |
+| `sysnode` | **STM32H735G-DK** | Gateway: routes 3 signals `compute` ↔ `edge` | `compute` (can0/FDCAN1), `edge` (can1/FDCAN2) | `0x7A0` / `0x7A8` | `0x11` |
+| `domain` | **NUCLEO-H755ZI-Q** (CM7) | Powertrain: produces speed/headlight, reads steering | `compute` (can0) | `0x7B0` / `0x7B8` | `0x12` |
+| `zone_a` | **NUCLEO-H723ZG** | Front zone: reads speed/headlight, produces steering | `edge` (can1) | `0x7C0` / `0x7C8` | `0x13` |
 
 ---
 
-## Cross-Node Signals & Gateway Routes
+## Cross-node signals & gateway routes
 
-| Signal | Producer | Source Bus | Gateway Routes | Consumer(s) | Rate |
+All three routes are **layout-identical** (same signal position/scale/DLC on both buses), so the gateway forwards each as a raw payload copy with an id remap — no decode/re-encode on target.
+
+| Signal | Producer | Route (via `sysnode`) | Consumer | Frame ids | Rate |
 |---|---|---|---|---|---|
-| `VehicleSpeed` | `domain` | `compute` | `compute` → `edge` (sysnode) | `zone_a` | 100 ms |
-| `EngineRpm` | `domain` | `compute` | `compute` → `body` (sysnode) | `zone_b` | 100 ms |
-| `BrakeState` | `domain` | `compute` | `compute` → `body` (sysnode) | `zone_b` | 50 ms |
-| `HeadlightCmd` | `domain` | `compute` | `compute` → `edge` (sysnode) | `zone_a` | 100 ms |
-| `HVACCmd` | `domain` | `compute` | `compute` → `body` (sysnode) | `zone_b` | 200 ms |
-| `SteeringAngle` | `zone_a` | `edge` | `edge` → `compute` (sysnode) | `domain` | 50 ms |
-| `TailgateStatus` | `zone_b` | `body` | `body` → `compute` (sysnode) | `domain` | 200 ms |
-| `AmbientTemp` | `zone_b` | `body` | `body` → `compute` (sysnode) | `domain` | 500 ms |
+| `VehicleSpeed` | `domain` (compute) | `compute` → `edge` | `zone_a` | `0x120` → `0x130` | 100 ms |
+| `HeadlightCmd` | `domain` (compute) | `compute` → `edge` | `zone_a` | `0x123` → `0x131` | 100 ms |
+| `SteeringAngle` | `zone_a` (edge) | `edge` → `compute` | `domain` | `0x132` → `0x125` | 50 ms |
+
+Routing goes both ways through the H735, and one leg closes a reaction: `domain` switches
+its headlights on `zone_a`'s routed steering (`powertrain.v` — `headlight_cmd = steering > 90`).
+The compute→edge routes (speed, headlight) are *received* by `zone_a` but not yet acted on here
+— its FB just sweeps steering. A speed-reactive zone limiter that consumes `VehicleSpeed` (making
+the loop bidirectional) is the node-local-signalling expansion, not this base bench.
 
 ---
 
@@ -63,6 +67,46 @@ cd examples/system_full
 # 1. Validate cross-node invariants, single-writer rules, identity, and routing:
 make syscheck
 
-# 2. Perform dissolution and code generation for all 4 nodes:
+# 2. Dissolve system.toml into per-node gen-<node>.toml for all 3 nodes:
 make gen
+
+# 3. Cross-build the ThreadX images for ALL 3 nodes (needs arm-none-eabi + `make -C ../.. deps`):
+make nodes           # -> nodes/{sysnode,domain,zone_a}/build/<node>.bin
 ```
+
+### Node build status
+
+**All three** nodes — including the gateway — cross-build to real ThreadX images from
+`system.toml`:
+
+| Node | Board | Image | Role |
+|---|---|---|---|
+| `sysnode` | `boards/h735dk` (H735 M7) | `nodes/sysnode/build/sysnode.bin` | 2-bus gateway |
+| `domain` | `boards/h755zi` (H755 CM7) | `nodes/domain/build/domain.bin` | powertrain FBs |
+| `zone_a` | `boards/h723` (H723ZG) | `nodes/zone_a/build/zone_a.bin` | front-zone FBs |
+
+Each links the generated comm thread against the shared `boards/common/comm_glue.c` (IOC
+pool, the FDCAN1/2/3 Rx ISRs, Loom-load telemetry) and `boards/common/trace_hooks.c`, and
+passes the `_vinit`-trap lint.
+
+**The gateway on target.** `sysnode`'s comm thread owns both FDCAN buses: it opens `can0`
+(FDCAN1 = compute) and `can1` (FDCAN2 = edge), arms each instance's Rx interrupt into one
+wake semaphore, and forwards the 3 resolved routes as a **raw payload copy + id remap**
+(`if id==0x120 on can0 → send 0x130 on can1`). This works because every route is
+*layout-identical* — the signal sits at the same bit position, scale, and DLC on both buses —
+so no on-target decode/re-encode is needed (a route whose layouts differ is rejected at gen
+time and stays host-only). The forwarded-frame count is the exported `g_fwd_count`,
+SWD-observable at the bench.
+
+**Silicon status.** Both buses are wired on `boards/h735dk`: FDCAN1 (compute) on `PH13`/`PH14`
+and FDCAN2 (edge) on `PB6`/`PB5` (AF9) — the DK's two CAN-FD transceivers, clear of the
+Ethernet RMII pins. Flash with `make -C nodes/sysnode flash` (add `SERIAL=<st-link sn>` to
+pick a board when several ST-Links are attached).
+
+**Watch the traffic.** [`system_full.blobnet`](system_full.blobnet) is a
+[blobly_net](https://github.com/MartenH/blobly_net) monitor project for this bench — it listens
+on both buses (SocketCAN `can0` = compute, `can1` = edge) and decodes them with the DBCs, so you
+can see the gateway forward (the same value reappearing on the other bus under a new id). The
+DBC paths inside it are relative to the `.blobnet` itself, so any checkout works — run it from
+the blobly_net repo, pointing `BLOBLY_PROJECT` at your blobly_emb checkout:
+`BLOBLY_PROJECT=/path/to/blobly_emb/examples/system_full/system_full.blobnet ./scripts/run_gui.sh`.

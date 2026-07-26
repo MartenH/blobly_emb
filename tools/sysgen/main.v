@@ -83,8 +83,13 @@ fn main() {
 			exit(1)
 		}
 		if n.buses.len > 1 || (n.view.is_threadx && bus.interface != 'can0') {
-			tag := if n.buses.len > 1 { 'gateway' } else { 'threadx non-can0 node' }
-			println('sysgen: ${n.name} -> ${gen_path} (ok, ${tag} — loom2v target gate deferred to P2c)')
+			// The gateway (multi-bus) and a non-can0 leaf need DBC handling the single-dbc
+			// loom2v_errors() precheck can't do (the gateway builds a merged DBC), so skip the
+			// inline precheck — the node's own Makefile runs loom2v + the cross-build. Both are
+			// generated ThreadX targets now (the gateway's multi-bus comm owner forwards its
+			// layout-identical routes on-target).
+			tag := if n.buses.len > 1 { 'gateway, multi-bus ThreadX comm owner' } else { 'threadx non-can0 node' }
+			println('sysgen: ${n.name} -> ${gen_path} (ok, ${tag}; validated by the node build)')
 			continue
 		}
 		dbc_path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(sys.dir, bus.dbc) }

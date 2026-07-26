@@ -23,7 +23,7 @@ CAN_DEFS   = -DBLOB_CAN_FDCAN -DBLOB_FDCAN_KCLK_HZ=8000000 -DBLOB_FDCAN_TQ=16 \
 IO_DEFS    = -DBLOB_IO_STM32
 
 BOARD_BSP_THREADX = $(BOARD_COMMON)/crt0.S $(BOARD_COMMON)/vectors.S \
-                    $(BOARD_COMMON)/tx_initialize_low_level.S $(BOARD_DIR)/board.c
+                    $(BOARD_COMMON)/tx_initialize_low_level.S $(BOARD_COMMON)/weak_irq.c $(BOARD_DIR)/board.c
 BOARD_BSP_BARE    = $(BOARD_COMMON)/startup.c $(BOARD_DIR)/board.c
 BOARD_LD_THREADX  = $(BOARD_DIR)/threadx.ld
 BOARD_LD_BARE     = $(BOARD_DIR)/bare.ld
@@ -40,5 +40,5 @@ BOARD_DEFS_CM4 = -DSTM32H755xx -DCORE_CM4 -DTRACE_CPU_MHZ=200 -DSYSTEM_CLOCK=200
 BOARD_BSP_CM4_BARE    = $(BOARD_COMMON)/startup.c
 BOARD_LD_CM4_BARE     = $(BOARD_DIR)/cm4_bare.ld
 BOARD_BSP_CM4_THREADX = $(BOARD_COMMON)/crt0.S $(BOARD_COMMON)/vectors.S \
-                        $(BOARD_COMMON)/tx_initialize_low_level.S
+                        $(BOARD_COMMON)/weak_irq.c $(BOARD_COMMON)/tx_initialize_low_level.S
 BOARD_LD_CM4_THREADX  = $(BOARD_DIR)/cm4_threadx.ld

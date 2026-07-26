@@ -101,6 +101,9 @@ mut:
 	to_len     int // SIGNAL route: the routed signal's bit length in the destination frame
 	from_ext   bool // the source frame is an extended (29-bit) id — the rx match checks rx.ext
 	to_ext     bool // the destination on-wire id width (raw: = from_ext; signal: the dest frame)
+	raw_ident  bool // src/dst frames are byte-layout identical — forward by raw copy + id remap
+	// (the ThreadX gateway comm thread forwards these on the target without a decode/re-encode
+	//  codec; a route whose layouts DIFFER stays host-only until on-target transcode lands)
 }
 
 // TargetCfg is the parsed [target] block. kind selects the on-target emitter: 'baremetal' =
@@ -389,6 +392,70 @@ fn (r Route) xr_ch() string {
 	return 'xr_${snake(r.to_bus)}_${snake(r.to_frame)}_${snake(r.signal)}_ch'
 }
 
+// fdcan_index_of strips the single FDCAN index digit ("can0" -> "0") the driver's
+// blob_can_open reads (name[0]-'0'). loom2v already validated the telem bus this way; a
+// gateway's route buses are validated the same when the extra channels are opened.
+fn fdcan_index_of(bus string) string {
+	for c in bus {
+		if c >= `0` && c <= `9` {
+			return c.ascii_str()
+		}
+	}
+	return '0'
+}
+
+// gw_var names the comm thread's channel variable for a bus: the telem bus reuses the
+// existing `ch`; every other route bus gets `ch_<bus>` (opened alongside it).
+fn gw_var(bus string, telem_bus string) string {
+	return if bus == telem_bus { 'ch' } else { 'ch_${snake(bus)}' }
+}
+
+// gateway_extra_buses lists the route buses OTHER than the telem bus (which is already
+// `ch`), in first-seen order across the routes — deterministic, so the generated channel
+// set is stable across runs.
+fn gateway_extra_buses(m Model) []string {
+	mut out := []string{}
+	mut seen := map[string]bool{}
+	seen[m.telem.bus] = true
+	for r in m.routes {
+		for b in [r.from_bus, r.to_bus] {
+			if !seen[b] {
+				seen[b] = true
+				out << b
+			}
+		}
+	}
+	return out
+}
+
+// gateway_forward_arms emits the raw-copy + id-remap forwarders for every route whose
+// SOURCE is `src_bus`, to be injected into that channel's rx-drain loop. Each arm matches
+// the source frame (id + dlc + id-width) and re-sends the SAME payload under the
+// destination id on the destination channel, tx_ready-gated. Only raw_ident routes reach
+// here (parse-time + emit-time guards), so a verbatim payload copy is exact on the wire.
+fn gateway_forward_arms(m Model, src_bus string) []string {
+	mut out := []string{}
+	for r in m.routes {
+		if r.from_bus != src_bus {
+			continue
+		}
+		dst := gw_var(r.to_bus, m.telem.bus)
+		out << '\t\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} && rx.ext == ${r.from_ext} { // route ${r.signal}: ${r.from_bus} -> ${r.to_bus} 0x${r.to_id.hex()}'
+		out << '\t\t\t\tmut ff := can.Frame{'
+		out << '\t\t\t\t\tid:  u32(0x${r.to_id.hex()})'
+		out << '\t\t\t\t\tlen: ${r.to_dlc}'
+		out << '\t\t\t\t\text: ${r.to_ext}'
+		out << '\t\t\t\t}'
+		out << '\t\t\t\tff.data = rx.data // raw_ident: bytes are bit-identical, only the id/bus differ'
+		out << '\t\t\t\tif ${dst}.tx_ready() {'
+		out << '\t\t\t\t\t${dst}.send(ff)'
+		out << '\t\t\t\t\tg_fwd_count++ // count frames actually forwarded, not ones dropped on a full tx FIFO'
+		out << '\t\t\t\t}'
+		out << '\t\t\t}'
+	}
+	return out
+}
+
 fn parse_routes(doc toml.Doc, dbc string) []Route {
 	mut routes := []Route{}
 	for r in ecumodel.toml_arr(doc, 'route') {
@@ -505,6 +572,26 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 				if slo < dlo || shi > dhi {
 					panic('route: signal "${r.signal}" source range [${slo}, ${shi}] does not fit the destination range [${dlo}, ${dhi}] — the re-encode would overflow')
 				}
+				// A layout-IDENTICAL route — same DLC, same signal position/scale, and each
+				// frame carries ONLY this signal — forwards as a raw payload copy + id remap
+				// (the wire bytes are bit-identical, only the id/bus differ). The ThreadX
+				// gateway comm thread emits this cheap path (no on-target decode/re-encode
+				// codec); a route whose layouts differ keeps raw_ident = false and stays
+				// host-only until on-target transcode lands.
+				mut src_nsig := 0
+				mut dst_nsig := 0
+				for m2 in db.messages {
+					if snake(m2.name) == snake(r.from_frame) {
+						src_nsig = m2.signals.len
+					}
+					if snake(m2.name) == snake(r.to_frame) {
+						dst_nsig = m2.signals.len
+					}
+				}
+				routes[i].raw_ident = routes[i].from_dlc == routes[i].to_dlc
+					&& src_sg.start_bit == dst_sg.start_bit && src_sg.length == dst_sg.length
+					&& src_sg.factor == dst_sg.factor && src_sg.offset == dst_sg.offset
+					&& src_sg.byte_order == dst_sg.byte_order && src_nsig == 1 && dst_nsig == 1
 				// resolve the cadences: source bounds freshness, destination is the re-emit
 				// rate (the EFFECTIVE-cadence sub-tick check is in validate_signal_routes_model,
 				// which also sees an authored [[frame]].tx.cycle_ms).
@@ -1213,15 +1300,66 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		if r.signal == '' {
 			continue
 		}
-		// the ThreadX comm thread does not generate route forwarders yet (P2c) — the host
-		// emit_bridges is skipped when a comm thread owns the bus, so a route on a threadx
-		// target would produce no forwarding. Fail fast here with a route-specific message
-		// (a generic backstop also exists deeper in the threadx emitter).
-		if m.target.threadx {
-			panic('route: signal "${r.signal}" is on a [target] kind="threadx" node — the ThreadX comm thread does not generate route forwarders yet (P2c); routes run on the host target for now')
+		// On the ThreadX target the comm thread forwards LAYOUT-IDENTICAL routes directly
+		// (raw payload copy + id remap — see raw_ident in parse_routes). A route whose
+		// source and destination layouts DIFFER would need an on-target decode/re-encode
+		// codec the comm thread does not emit yet, so it stays host-only: fail fast with a
+		// route-specific message.
+		if m.target.threadx && !r.raw_ident {
+			panic('route: signal "${r.signal}" is on a [target] kind="threadx" node but its ' +
+				'source and destination frame layouts differ — the ThreadX comm thread forwards ' +
+				'layout-identical routes only (raw copy + id remap); on-target transcode is a ' +
+				'follow-up, so route this signal on the host target for now')
+		}
+		// The ThreadX gateway opens each route bus in CLASSIC mode (the comm thread's
+		// ch.open(idx, false)); a generated FD target bus is rejected for telemetry the same
+		// way (per-board FD data-phase timing is a follow-up). Reject an FD route bus here so
+		// the classic open never silently mistimes an FD bus.
+		if m.target.threadx && ((bus_fd[r.from_bus] or { false }) || (bus_fd[r.to_bus] or { false })) {
+			panic('route: signal "${r.signal}" crosses an fd = true bus on a [target] kind="threadx" ' +
+				'node — the gateway comm thread opens route buses in classic mode only (CAN-FD on a ' +
+				'generated target is a follow-up); set the route buses to fd = false')
 		}
 		frof := snake(r.from_frame)
 		tof := snake(r.to_frame)
+		if m.target.threadx {
+			// The comm thread opens each route bus by its single FDCAN index, and the shared
+			// vector table wires FDCAN1 (idx 0) + FDCAN2 (idx 1) only. Reject a route bus whose
+			// interface isn't exactly can0/can1: a name like "edge" or "can9" would silently map
+			// to the wrong (fdcan_index_of defaults to 0) or a nonexistent instance, and idx 2
+			// (FDCAN3) has no wired ISR in boards/common/vectors.S yet.
+			for b in [r.from_bus, r.to_bus] {
+				mut digits := ''
+				for c in b {
+					if c >= `0` && c <= `9` {
+						digits += c.ascii_str()
+					}
+				}
+				if digits.len != 1 || digits[0] < `0` || digits[0] > `1` || b != 'can${digits}' {
+					panic('route: bus "${b}" on a [target] kind="threadx" gateway must be named exactly ' +
+						'"can0" or "can1" — the comm thread opens buses by that one-digit FDCAN index ' +
+						'(a name like "aux0" would map to the wrong instance) and only FDCAN1/FDCAN2 have ' +
+						'wired ISRs (FDCAN3/idx 2 needs its vector in boards/common/vectors.S)')
+				}
+			}
+			// A raw target forward copies bytes verbatim: unlike the host signal-route path it
+			// cannot VERIFY a protected source or RE-STAMP a protected destination, so a bad frame
+			// forwards unverified and freshness/counter/MAC replay. Reject a protected endpoint.
+			if m.frames.e2e_here(frof, r.from_bus) || m.frames.secoc_here(frof, r.from_bus)
+				|| m.frames.e2e_here(tof, r.to_bus) || m.frames.secoc_here(tof, r.to_bus) {
+				panic('route: signal "${r.signal}" on a [target] kind="threadx" gateway touches an ' +
+					'E2E/SecOC-protected frame — the raw target forwarder copies bytes and cannot ' +
+					'verify/re-protect; route it on the host target')
+			}
+			// The raw forwarder re-emits on RECEIPT (source cadence). A differing destination
+			// cadence would mis-rate (a 10 ms source into a 100 ms dest sends 10x too often).
+			// raw_ident only checks layout, so enforce equal cadence here.
+			if r.from_cyc != r.to_cyc {
+				panic('route: signal "${r.signal}" on a [target] kind="threadx" gateway has source ' +
+					'cadence ${r.from_cyc} ms != destination ${r.to_cyc} ms — the raw forwarder re-emits ' +
+					'at the source rate; use matching cycle times or route on the host target')
+			}
+		}
 		// both endpoints must name a DECLARED [bus.*]; emit_bridges iterates declared
 		// buses only, so a misspelled endpoint silently drops the route.
 		if r.from_bus !in m.buses || r.to_bus !in m.buses {
@@ -1813,6 +1951,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// that comm_rx_wait blocks on, so the comm thread wakes on rx instead of polling.
 				// comm_rx_irq_enable arms the Rx interrupt (called once, after the channel opens).
 				glue << 'fn C.comm_rx_irq_enable()'
+				if m.routes.len > 0 {
+					// gateway: arm FDCAN1/2/3 Rx interrupts per route bus (all wake one semaphore)
+					glue << 'fn C.comm_rx_irq_enable_idx(int)'
+				}
 				glue << 'fn C.comm_rx_wait(u32) u32 // block up to N ticks; returns 0 if woken by rx'
 				// Load scratch: the FB thread and the comm thread run on different ThreadX threads,
 				// so the load cell is published/read through VOLATILE C accessors (comm_glue.c) — V
@@ -1909,6 +2051,11 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// host cansend is observable. The rx CONSUMER of the lean cut (comm-thread-local).
 				glue << '\tg_rx_count u32'
 				glue << '\tg_rx_last  u32'
+				if m.routes.len > 0 {
+					// gateway: frames forwarded bus->bus (raw copy + id remap). Exported so a
+					// bench can confirm the ThreadX gateway is routing (the SWD-observable rule).
+					glue << '\tg_fwd_count u32'
+				}
 			}
 			if eth_thread_on(m) {
 				glue << '\tg_eth_tcb   [32]u64  // the SOME/IP eth comm thread (docs/someip.md)'
@@ -1992,6 +2139,14 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << '}'
 				glue << ''
 			}
+		}
+		if !multi && part !in m.part.by_part {
+			// FB-less local partition (a pure gateway: the comm thread does all the work,
+			// the app thread just idles). emit_handlers only emits the state struct for
+			// FB-bearing partitions, but run() below still instantiates it — emit the empty
+			// struct here so the idle thread's run() compiles.
+			glue << 'struct Partition_${part}_state {}'
+			glue << ''
 		}
 		if !multi && (comm_thread_on || m.buses.len == 0 || eth_only_img(m)) {
 			// The FB thread stays OFF CAN: with a comm thread it owns the bus, a
@@ -2225,6 +2380,18 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << '\t\tfor { C._tx_thread_sleep(1000) } // dead channel — park, never own a bus we can\'t drive'
 				glue << '\t}'
 				glue << '\tC.comm_rx_irq_enable() // arm the FDCAN Rx-FIFO0 interrupt now the bus is open'
+				// GATEWAY: open a channel for every OTHER route bus (the telem bus is `ch`),
+				// and arm its FDCAN Rx interrupt into the SAME wake semaphore (comm_glue.c). The
+				// comm loop then drains all of them each wake and forwards raw_ident routes.
+				gw_extra := gateway_extra_buses(m)
+				for b in gw_extra {
+					bidx := fdcan_index_of(b)
+					glue << '\tmut ch_${snake(b)} := can.Channel{} // gateway route bus ${b}'
+					glue << "\tif !ch_${snake(b)}.open('${bidx}', false) { // board must init FDCAN${bidx.int() + 1} pins for silicon"
+					glue << '\t\tfor { C._tx_thread_sleep(1000) } // dead route bus — park'
+					glue << '\t}'
+					glue << '\tC.comm_rx_irq_enable_idx(${bidx}) // wake the comm thread on this bus too'
+				}
 				if m.telem.on && telem_iface != '' {
 					glue << '\tmut last_telem := u64(0)'
 					glue << '\ttelem_period_us := u64(${m.telem.period_us})'
@@ -2274,7 +2441,17 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << shell_rx_arms(m)
 			glue << nm_rx_arms(m)
 			glue << duo_trace_rx_arm(m)
+				// GATEWAY: forward routes whose SOURCE is the telem bus (`ch`) — raw copy +
+				// id remap onto the destination channel (tx_ready-gated).
+				glue << gateway_forward_arms(m, m.telem.bus)
 				glue << '\t\t}'
+				// GATEWAY: drain each OTHER route bus and forward its routes. Same wake
+				// semaphore, so one comm_rx_wait covers every bus; recv is non-blocking.
+				for b in gw_extra {
+					glue << '\t\tfor ch_${snake(b)}.recv(mut rx) { // route bus ${b}'
+					glue << gateway_forward_arms(m, b)
+					glue << '\t\t}'
+				}
 				glue << '\t\tt1 := C.board_now_us()'
 				// NM drains FIRST: produce() ticks the state machine, so the gate
 				// below reflects THIS pass's state — otherwise the producers get one
@@ -3277,9 +3454,14 @@ fn main() {
 	mut ioc_idx := map[string]int{}
 	mut msg_ioc_idx := map[int]int{} // DBC id -> its (single) rx-read signal's IOC cell
 	if comm_thread_on {
-		if has_routes || m.isotp_conns.len > 0 {
-			panic('loom2v: [target] kind="threadx" comm thread: routes / ISO-TP are not generated ' +
-				'yet (phase 6b-2 lean cut = external rx signals only)')
+		// LAYOUT-IDENTICAL routes forward on the target (raw copy + id remap, emitted in the
+		// comm loop below); ISO-TP and routes needing a decode/re-encode transcode are still
+		// deferred. parse-time already rejects a non-identical route on a threadx node, so a
+		// route reaching here is raw_ident — the guard is defence in depth.
+		if m.isotp_conns.len > 0 || m.routes.any(!it.raw_ident) {
+			panic('loom2v: [target] kind="threadx" comm thread: ISO-TP and non-layout-identical ' +
+				'routes are not generated yet (external rx signals + raw-identical route ' +
+				'forwarding are the supported cut)')
 		}
 		// Which signals FB handlers read vs write. An rx signal READ by an FB flows through the
 		// target IOC pool (6b-2b); an rx signal WRITTEN by an FB is a config error (an input isn't
