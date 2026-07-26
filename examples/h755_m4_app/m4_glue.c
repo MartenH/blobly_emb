@@ -208,6 +208,13 @@ void duo_bulk_produce(void) {
 	}
 	bulk_publish(p, (uint32_t)idx, 256u);
 
+	/* Order the publication before the doorbell: bulk_publish()'s DMB sits BEFORE its ready-head
+	 * store, and the HSEM release below is a Device write with no implicit ordering against that
+	 * Normal-memory store. Without this barrier the release could raise IRQ125 before the new head
+	 * is visible to the CM7 — the woken consumer would see an empty ring and sleep again, defeating
+	 * the doorbell at high rates. The DMB makes the head (and payload) globally visible first. */
+	__asm__ volatile("dmb" ::: "memory");
+
 	/* Ring the cross-core doorbell: a 1-step fast-take then release of HSEM semaphore 0 raises
 	 * IRQ125 on the CM7 (which enabled C1IER for this semaphore), waking its comm thread to drain
 	 * us — no CM7 polling. Uncontended (only this core touches sem 0's lock, and we release it
