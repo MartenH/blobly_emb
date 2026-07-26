@@ -231,6 +231,11 @@ void duo_clocks_ready(void) {
      * NVIC arming happens later in comm_rx_irq_enable; rings before that just don't wake anyone. */
     RCC->AHB4ENR |= RCC_AHB4ENR_HSEMEN;
     (void)RCC->AHB4ENR;
+    /* Zero the cross-core CpuLoad slots BEFORE releasing the CM4: SRAM4 is retained across resets,
+     * so an absent/never-started/hung satellite would otherwise leave a stale non-zero Core-N load
+     * in the frame (codex #235 r2). A live satellite overwrites its slot each tick; an absent one
+     * stays 0. */
+    for (int c = 0; c < 8; c++) ((volatile uint16_t *)DUO_LOAD_ADDR)[c] = 0u;
     *(volatile uint32_t *)DUO_CLK_ADDR = DUO_CLK_MAGIC;
     __asm__ volatile("dsb");
 }

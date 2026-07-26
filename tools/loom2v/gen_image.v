@@ -145,17 +145,14 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 				g << '\t\tC.duo_trace_service() // ~one poll per tick: plenty for the dump handshake'
 			}
 			if ti == 0 {
-				// publish this CORE's per-mille load so the owner's CpuLoad frame reports it (weak
-				// no-op default in weak_irq.c until an image aggregates cross-core load). SUM every
-				// thread on the core — each satellite thread has its own scheduler, and they timeshare
-				// the one core, so a single thread's load underreports a multi-thread satellite (codex #235).
-				mut load_terms := ['sched.load_permille()']
-				for j, other in threads {
-					if j > 0 {
-						load_terms << 'g_sched_${other}.load_permille()'
-					}
-				}
-				g << '\t\tC.duo_load_pub(${m.part.core_of[part] or { 1 }}, u16(${load_terms.join(' + ')}))'
+				// publish this thread's per-mille load so the owner's CpuLoad frame reports this core
+				// (weak no-op default in weak_irq.c until an image aggregates cross-core load).
+				// NOTE: a MULTI-thread satellite underreports — only this (highest-priority) thread's
+				// load is published. Reaching into another live thread's scheduler global to sum would
+				// be an unsynchronized cross-thread read (codex #235 r2); the correct fix is per-thread
+				// VOLATILE load slots (as the owner side already uses, C.load_pub_slot) summed here —
+				// deferred. Single-thread satellites (e.g. the domain) are exact.
+				g << '\t\tC.duo_load_pub(${m.part.core_of[part] or { 1 }}, sched.load_permille())'
 			}
 			if ti == 0 {
 				g << emit_bulk_service_arm(m.bulk, m.part, part, '\t\t') // this satellite's cross-core bulk service (poll)

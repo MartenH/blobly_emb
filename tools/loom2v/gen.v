@@ -3871,7 +3871,11 @@ fn main() {
 				slots = regs.len
 			}
 		}
-		if duo_on(m) {
+		if duo_on(m) || has_satellite(m) {
+			// duo_gen.h holds DUO_LAYOUT_ID, which the cross-core boot handshake (duo_layout_ok /
+			// _publish) needs for EVERY satellite owner — even a bulk/CpuLoad-only node with no
+			// cross-core [[signal]] (duo_on false). Without this a clean `make nodes` fails on the
+			// glue's #include "duo_gen.h" (codex #235 r2); a stale header masks it on a used tree.
 			hpath := os.join_path(os.dir(args[5]), 'duo_gen.h')
 			os.write_file(hpath, duo_gen_h(m).join('\n') + '\n') or {
 				panic('write ${hpath}: ${err}')

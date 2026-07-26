@@ -94,7 +94,7 @@ fn run_m4_app() {
 			sched.mark_overrun()
 		}
 		C.duo_trace_service() // ~one poll per tick: plenty for the dump handshake
-		C.duo_load_pub(1, u16(sched.load_permille() + g_sched_m4_stress.load_permille()))
+		C.duo_load_pub(1, sched.load_permille())
 		C.duo_bulk_produce() // cross-core bulk producer (platform-owned pool)
 		C.duo_layout_publish() // REPUBLISH per tick: the owner retracts the id at ITS
 		// boot (SRAM survives an owner-only reset — a retained id + retained channels
