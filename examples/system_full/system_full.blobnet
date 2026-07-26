@@ -34,8 +34,9 @@
 #     make -C examples/system_full/nodes/domain  flash SERIAL=001E00243335510835383531   # H755
 #     make -C examples/system_full/nodes/zone_a  flash SERIAL=005500333233510739363634   # H723
 #
-# RUN (from the blobly_net repo):
-#     BLOBLY_PROJECT=/home/mahi/repos/blobly_emb/examples/system_full/system_full.blobnet ./scripts/run_gui.sh
+# RUN (from the blobly_net repo — point BLOBLY_PROJECT at your blobly_emb checkout; the DBC
+# paths above are relative to THIS file, so any checkout works):
+#     BLOBLY_PROJECT=/path/to/blobly_emb/examples/system_full/system_full.blobnet ./scripts/run_gui.sh
 project:
   name: system_full — 2-bus ThreadX gateway
   version: 2
@@ -51,7 +52,7 @@ buses:
     mode: monitor            # listen + ACK the boards; no restbus sim — the ECUs drive it
     enabled: true
     databases:
-      - /home/mahi/repos/blobly_emb/examples/system_full/compute.dbc
+      - compute.dbc            # resolved against this .blobnet's own dir (blobly_net resolve_asset)
 
   # --- edge bus: zone_a (H723) <-> gateway (H735 FDCAN2) ---
   - name: edge
@@ -63,4 +64,4 @@ buses:
     mode: monitor
     enabled: true
     databases:
-      - /home/mahi/repos/blobly_emb/examples/system_full/edge.dbc
+      - edge.dbc               # resolved against this .blobnet's own dir (blobly_net resolve_asset)

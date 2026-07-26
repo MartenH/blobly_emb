@@ -51,7 +51,11 @@ All three routes are **layout-identical** (same signal position/scale/DLC on bot
 | `HeadlightCmd` | `domain` (compute) | `compute` → `edge` | `zone_a` | `0x123` → `0x131` | 100 ms |
 | `SteeringAngle` | `zone_a` (edge) | `edge` → `compute` | `domain` | `0x132` → `0x125` | 50 ms |
 
-The result is a closed bidirectional loop through the H735: `domain` reacts to `zone_a`'s steering (headlights) and `zone_a` reacts to `domain`'s speed — every cross-bus hop goes through the gateway's forwarder.
+Routing goes both ways through the H735, and one leg closes a reaction: `domain` switches
+its headlights on `zone_a`'s routed steering (`powertrain.v` — `headlight_cmd = steering > 90`).
+The compute→edge routes (speed, headlight) are *received* by `zone_a` but not yet acted on here
+— its FB just sweeps steering. A speed-reactive zone limiter that consumes `VehicleSpeed` (making
+the loop bidirectional) is the node-local-signalling expansion, not this base bench.
 
 ---
 
@@ -102,6 +106,7 @@ pick a board when several ST-Links are attached).
 **Watch the traffic.** [`system_full.blobnet`](system_full.blobnet) is a
 [blobly_net](https://github.com/MartenH/blobly_net) monitor project for this bench — it listens
 on both buses (SocketCAN `can0` = compute, `can1` = edge) and decodes them with the DBCs, so you
-can see the gateway forward (the same value reappearing on the other bus under a new id). Run it
-from the blobly_net repo:
-`BLOBLY_PROJECT=$(pwd)/examples/system_full/system_full.blobnet ./scripts/run_gui.sh`.
+can see the gateway forward (the same value reappearing on the other bus under a new id). The
+DBC paths inside it are relative to the `.blobnet` itself, so any checkout works — run it from
+the blobly_net repo, pointing `BLOBLY_PROJECT` at your blobly_emb checkout:
+`BLOBLY_PROJECT=/path/to/blobly_emb/examples/system_full/system_full.blobnet ./scripts/run_gui.sh`.

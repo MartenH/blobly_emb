@@ -30,9 +30,13 @@ BSP      = $(BOARD_BSP_THREADX) $(REPO)/boards/common/comm_glue.c $(REPO)/boards
 all: $(BUILD)/$(NAME).bin
 
 gen: gen/.stamp
-# Generators via `$(V) run` (a clean checkout has the V sources, not prebuilt binaries); the
-# node's DBC is a prerequisite so a contract edit re-generates.
-gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/compute.dbc $(wildcard app/*.v)
+# Regenerate when a GENERATOR changes too, not only the configs/DBCs/app: a stale-tool build
+# would silently re-validate code emitted by the old sysgen/dbc2cfg/loom2v (AGENTS.md target-
+# image verification path). Generators run via `$(V) run` (a clean checkout has the V sources).
+GENSRC = $(wildcard $(REPO)/tools/sysgen/*.v) $(wildcard $(REPO)/tools/dbcmerge/*.v) \
+         $(wildcard $(REPO)/tools/dbc2cfg/*.v) $(wildcard $(REPO)/tools/loom2v/*.v) \
+         $(wildcard $(REPO)/tools/ecumodel/*.v)
+gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/compute.dbc $(wildcard app/*.v) $(GENSRC)
 	@mkdir -p gen ports sig
 	$(MAKE) -C $(REPO) gen-system SYSTEM=examples/system_full/system.toml
 	cd $(REPO) && $(V) run tools/dbc2cfg/gen.v examples/system_full/compute.dbc examples/system_full/nodes/domain/gen/dbc_gen.v

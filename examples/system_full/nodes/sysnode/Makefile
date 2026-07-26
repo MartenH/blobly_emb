@@ -42,7 +42,12 @@ all: $(BUILD)/$(NAME).bin
 gen: gen/.stamp
 # Generators run via `$(V) run tools/<t>/gen.v` — a clean checkout has the V sources, not the
 # prebuilt binaries. Both DBCs are prerequisites: an edit to either must re-merge and re-gen.
-gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/compute.dbc $(SYSDIR)/edge.dbc
+# The generator SOURCES are prerequisites too: a stale-tool build would silently re-validate
+# code emitted by the old sysgen/dbcmerge/dbc2cfg/loom2v (AGENTS.md target-verification path).
+GENSRC = $(wildcard $(REPO)/tools/sysgen/*.v) $(wildcard $(REPO)/tools/dbcmerge/*.v) \
+         $(wildcard $(REPO)/tools/dbc2cfg/*.v) $(wildcard $(REPO)/tools/loom2v/*.v) \
+         $(wildcard $(REPO)/tools/ecumodel/*.v)
+gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/compute.dbc $(SYSDIR)/edge.dbc $(GENSRC)
 	@mkdir -p gen ports sig
 	$(MAKE) -C $(REPO) gen-system SYSTEM=examples/system_full/system.toml
 	cd $(REPO) && $(V) run tools/dbcmerge/gen.v $(GW)/gen/merged.dbc examples/system_full/compute.dbc examples/system_full/edge.dbc
