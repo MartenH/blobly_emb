@@ -42,9 +42,18 @@ Status keys: ✅ shipped · 🔨 in progress · ⏭️ next · 🧭 planned · �
   re-run at wide widths bench-queued (`wide-xioc-derivation-and-silicon`).
 - ✅ **Bulk P1 portable core** (`#213`, REQ-BULK-001..003) — `boards/common/bulk.h`
   pool + SPSC descriptor rings, fallible counted loans, host-proven cross-process
-  (fork+`MAP_SHARED`); `bulk-ring-silicon` review bench-queued. Next rungs: the
-  doorbell seam (H755 = **HSEM release-interrupt**, it has no IPCC), cache hooks,
-  the `ecu.toml` surface, OSAL/IOC sanctioning before any app touches a pool.
+  (fork+`MAP_SHARED`); `bulk-ring-silicon` review bench-queued.
+- 🔨 **Bulk cross-core `ecu.toml` surface** (branch `feat/bulk-amp`, host-proven,
+  not yet PR'd) — a `[[bulk]]` whose producer/consumer sit on different cores is
+  placed in the H755 shared window (both images derive the same pointer from a
+  board seam `duo_bulk_base()`, deterministic 32 B-aligned offsets, static-checked
+  vs the region budget); satellite image gets the same wrappers; the cross-partition
+  guard now allows cross-**core** and rejects same-core cross-partition; `[[bulk]]`
+  schema added. **Bulk is an OS-thread/platform job, never an FB** (settled) — so
+  the consumer is a service thread, no "app touches a pool" sanctioning needed.
+  Next rungs: the **on-silicon demo** (real loan/publish/take in a dual-core example),
+  the **doorbell seam** (H755 = **HSEM release-interrupt**, it has no IPCC), cache
+  hooks, off-chip mapping (ISO-TP / SOME/IP-TP).
 - ✅ **Bulk transport benchmark** (`#216`) — `tools/bulk_bench` in `make bench`:
   the ring moves ownership at ~5 M transfers/s (0.3 µs median publish→take,
   pinned cross-core) and ~0.9–6 GB/s payload filled+consumed, vs ~3–10 ms of
@@ -90,9 +99,17 @@ Status keys: ✅ shipped · 🔨 in progress · ⏭️ next · 🧭 planned · �
   cross-node validator; multi-DBC gateway runs on two vcans
 - ✅ **Multi-image (AMP)** — `[[partition]] image=` generates the satellite; cross-
   core signals as xioc slots; H755 CM4 bench-verified
-- ⏭️ **On-silicon multi-node** — domain (H755) + gateway (H735) + zone (H723) from
-  one `system.toml`, a signal across the real bus. **No longer gated:** all three
-  boards are on CAN and the H723 echo is silicon-validated (`#184`)
+- ✅ **On-silicon multi-node** (`examples/system_full`, `#224`) — domain (H755) +
+  gateway (H735) + zone (H723), all three real ThreadX images from one `system.toml`,
+  bench-verified: the H735 gateway forwards 3 layout-identical routes across two
+  FDCAN buses (raw copy + id remap), closed loop observed on both buses. A new
+  `boards/h723` + a `.blobnet` monitor project ride along.
+- 🧭 **Gateway/board hardening** (codex #224 re-review, real but dormant in
+  system_full — no `[nm]`/`[trace]`/`[io]` there): NM-gate the gateway forwards
+  (they bypass the post-tick `nm_up` gate every other TX path respects), set
+  `-DTX_ENABLE_EXECUTION_CHANGE_NOTIFY` when `trace_hooks.c` is linked, validate the
+  *effective* destination cadence (not just DBC `GenMsgCycleTime`), reprogram SysTick
+  on the H723/H755 HSE-fallback path, and give `boards/h723` a bonded-pad map for `[io]`.
 
 ## Observability
 
