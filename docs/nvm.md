@@ -299,7 +299,7 @@ small counter updates, no cyclic traffic.
 ## Under the hood: blocks, and the signal ↔ journal mechanics
 
 Persistent signals compile down to numbered blocks (generator-assigned ids in a
-`nvm_gen.h`-style contract — the duo/io pattern again). `[[nvm.block]]` stays for
+`nvm_gen.h`-style contract — the xcore/io pattern again). `[[nvm.block]]` stays for
 NON-signal platform data (diagnostic records later, bootloader metadata if it ever
 wants the journal) — owned by platform modules, still never by FBs.
 

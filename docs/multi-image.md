@@ -4,7 +4,7 @@
 
 > Design + phase log for the multi-image emitter (2026-07-13). Prereqs all shipped and
 > bench-proven: xioc (the cross-core SPSC channel, boards/common/xioc.h), external
-> partitions (identity without code), the generated duo contract header, the two-core
+> partitions (identity without code), the generated xcore contract header, the two-core
 > trace, and `examples/h755_m4_app` — the hand-written satellite image this emitter
 > absorbs, exactly as `threadx_h735` was absorbed by the generated `h735_threadx`.
 
@@ -54,24 +54,24 @@ The generator sees `from`-partition core ≠ bus-owner core and derives the tran
 | partitions on different cores  | **xioc slot** in the board's shared window   |
 | rx bus -> FB (owner core)      | comm decode -> IOC cell (today)              |
 
-- Satellite side: the generated handler wrapper publishes `C.duo_pub(slot, a, b)`.
-- Owner side: the EXISTING cyclic tx producer, reading `C.duo_poll(slot)` instead of
+- Satellite side: the generated handler wrapper publishes `C.xcore_pub(slot, a, b)`.
+- Owner side: the EXISTING cyclic tx producer, reading `C.xcore_poll(slot)` instead of
   `C.ioc_get(cell)` — same pacing, same encode, same frame path.
 - A cross-core signal `to = "<owner partition>"` allocates a slot with no generated
   consumer — platform C (shell m4sig/iocx) is a legitimate reader via the contract header.
-- Slot numbers appear ONLY in the generated `gen/duo_gen.h` (both images + glue C compile
+- Slot numbers appear ONLY in the generated `gen/xcore_gen.h` (both images + glue C compile
   against it), exactly as shipped — now derived from signals instead of `[[duo.signal]]`.
 
 ## The satellite image (what gets emitted)
 
 Into `<image>/`: `sig/signals_gen.v`, `ports/ports_gen.v`, `gen/loom_gen.v` containing:
 per-thread `__global` tcb/stack/scheduler (all the stack-discipline lessons baked in),
-state structs, handler wrappers (cross-core writes -> duo_pub), `run_<thr>` loops,
+state structs, handler wrappers (cross-core writes -> xcore_pub), `run_<thr>` loops,
 `tx_application_define` with deterministic `trace_bind_thread` order, trace FB hooks with
 WALK-ASSIGNED global handler ids, the dtrace service poll (highest-priority thread's
-loop), and `boot()` = clocks-ready park -> timebase -> duo pool init -> trace arm ->
+loop), and `boot()` = clocks-ready park -> timebase -> xcore pool init -> trace arm ->
 kernel enter. The example keeps: a thin `main.v` (calls `gen.boot()`), its `app/` FBs
-(ports-style handlers, same convention as every FB), its glue C (board/duo/dtrace — the
+(ports-style handlers, same convention as every FB), its glue C (board/xcore/dtrace — the
 `comm_glue.c` equivalent), and its Makefile. Generation runs ONCE from the owner
 example's config; the satellite's gen step is "make gen in the owner dir".
 
@@ -95,7 +95,7 @@ example's config; the satellite's gen step is "make gen in the owner dir".
 
 One `make gen` in examples/h755_threadx now emits BOTH images. h755_m4_app's main.v is a
 `gen.boot()` shim; its FBs (M4Load, M4Churn) are ports-convention app code; the generated
-wrappers publish `C.duo_pub(slot, ...)`; the owner's comm loop transmits M4LoadFrame from
+wrappers publish `C.xcore_pub(slot, ...)`; the owner's comm loop transmits M4LoadFrame from
 the same signal declaration. Bench (NUCLEO-H755ZI-Q): M4Count +10 per 100 ms frame exactly;
 `iocx` 200k reads / 0 tears / 0 regressions through the generated 500 Hz M4Stress channel;
 two-core trace dump streams core-1 blocks with the walk-assigned handler ids (4 = M4Load
@@ -118,14 +118,14 @@ moving cores — transport freshness is still the slot stamp, `valid` is app dat
 Deterministic by construction: no V-struct layout mirroring in the generator, no
 packing drift — the same rule the {a,b} pair already followed, generalized.
 
-**Placement.** The pair pool (`DUO_IOC_ADDR`, bench-verified) is untouched; signals
+**Placement.** The pair pool (`XCORE_IOC_ADDR`, bench-verified) is untouched; signals
 that fit it (1–2 u32-typed fields, no valid) keep generating byte-identical pair code.
-Wider signals get offsets in a **wide window** the board reserves (`DUO_XW_ADDR` /
-`DUO_XW_MAX` in `duo.h`), laid out by the generator in `duo_gen.h`
-(`DUO_XW_<SIG>_OFF`, `XIOC_N_BYTES`-sized, with a budget static-assert). Glue gains two
-thin wrappers (`duo_pub_n` / `duo_poll_n` over `xioc_n_write/read`); the pair fns stay.
+Wider signals get offsets in a **wide window** the board reserves (`XCORE_XW_ADDR` /
+`XCORE_XW_MAX` in `xcore.h`), laid out by the generator in `xcore_gen.h`
+(`XCORE_XW_<SIG>_OFF`, `XIOC_N_BYTES`-sized, with a budget static-assert). Glue gains two
+thin wrappers (`xcore_pub_n` / `xcore_poll_n` over `xioc_n_write/read`); the pair fns stay.
 
-**Destinations.** Satellite → bus: the comm drain polls the wide channel (`duo_poll_n`,
+**Destinations.** Satellite → bus: the comm drain polls the wide channel (`xcore_poll_n`,
 per-signal seq + lane buffer in the comm loop; the reader passes its OWN lane count, so
 a stale satellite image with different geometry reads as never-fresh instead of
 overrunning the buffer) and lean-encodes one u32 lane per 4 bytes, DLC = `4 × lanes`.
@@ -135,13 +135,13 @@ buses and DLC > 8, so that emitter path is exercised by the generator tests only
 the FD comm owner lands (ROADMAP "target multi-bus comm owner"). Satellite → local
 partition: the slot is allocated and the satellite publishes, but — exactly like the
 pair cells — no FB-facing consumer is generated yet; platform C reads it via
-`duo_gen.h`. Unpacking lanes into a consumer `In` struct is the next rung, not this one.
+`xcore_gen.h`. Unpacking lanes into a consumer `In` struct is the next rung, not this one.
 
 **The matched-images contract (user decision, 2026-07-24).** Cross-build image skew is
 **out of contract**: one generator run owns every image of a node, and deploying images
 from different runs is a deployment error, exactly as two ECUs sharing a bus must share
 the DBC — if a signal touches two cores, they must speak the same language. The
-layout-id handshake (DUO_LAYOUT_ID, schema-hashed, satellite-republished, owner-retracted
+layout-id handshake (XCORE_LAYOUT_ID, schema-hashed, satellite-republished, owner-retracted
 at boot) is **defense-in-depth for the accident** — a mismatched pair goes silent instead
 of cross-talking — not a supported operating mode, and no further skew scenarios are in
 scope here; enforcing matched images at update time is the boot chain's job when

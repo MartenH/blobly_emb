@@ -109,7 +109,7 @@ fn bulk_image_role(bulk []BulkPoolCfg, part PartMap, image_part string) (bool, b
 }
 
 // emit_bulk_service_decls externs the platform bulk-service seams this image needs. The glue C
-// (the same TU that provides duo_bulk_base) implements them: the producer service loans a buffer,
+// (the same TU that provides xcore_bulk_base) implements them: the producer service loans a buffer,
 // fills it, and publishes; the consumer service polls valid/take, uses the buffer, and releases.
 // The app never sees the pool — this is the "platform module terminates bulk" rule (isolation
 // note in docs/bulk-transport.md) until an osal.bulk transport exists.
@@ -117,10 +117,10 @@ fn emit_bulk_service_decls(bulk []BulkPoolCfg, part PartMap, image_part string) 
 	produces, consumes := bulk_image_role(bulk, part, image_part)
 	mut out := []string{}
 	if produces {
-		out << 'fn C.duo_bulk_produce() // platform producer service (glue): loan+fill+publish'
+		out << 'fn C.xcore_bulk_produce() // platform producer service (glue): loan+fill+publish'
 	}
 	if consumes {
-		out << 'fn C.duo_bulk_consume() // platform consumer service (glue): poll+take+release'
+		out << 'fn C.xcore_bulk_consume() // platform consumer service (glue): poll+take+release'
 	}
 	return out
 }
@@ -132,19 +132,19 @@ fn emit_bulk_service_arm(bulk []BulkPoolCfg, part PartMap, image_part string, in
 	produces, consumes := bulk_image_role(bulk, part, image_part)
 	mut out := []string{}
 	if produces {
-		out << '${indent}C.duo_bulk_produce() // cross-core bulk producer (platform-owned pool)'
+		out << '${indent}C.xcore_bulk_produce() // cross-core bulk producer (platform-owned pool)'
 	}
 	if consumes {
-		out << '${indent}C.duo_bulk_consume() // cross-core bulk consumer (platform-owned pool)'
+		out << '${indent}C.xcore_bulk_consume() // cross-core bulk consumer (platform-owned pool)'
 	}
 	return out
 }
 
 // emit_bulk_glue generates V declarations and wrapper functions for bulk pools. An INTRA-core
 // pool gets a per-image global arena; a CROSS-CORE pool (producer/consumer on different cores)
-// is placed at a fixed address in the H755 shared window (duo.h DUO_BULK_ADDR) so both images
+// is placed at a fixed address in the H755 shared window (xcore.h XCORE_BULK_ADDR) so both images
 // address the SAME pool. Cross-core placement is deterministic (declaration order, 32 B-aligned)
-// and static-checked against DUO_BULK_MAX, so the two images agree without exchanging state.
+// and static-checked against XCORE_BULK_MAX, so the two images agree without exchanging state.
 //
 // image_part selects WHICH image this is emitting for: '' = the bus OWNER (emits pools whose
 // endpoints are its local partitions — intra-core globals for them plus the shared window pools
@@ -158,7 +158,7 @@ fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap, image_part string) []string
 	// Lay cross-core pools out in the shared window, in declaration order, 32 B-aligned. This
 	// runs over ALL pools regardless of image_part, so the owner and a satellite agree on the
 	// offset of every shared pool.
-	duo_bulk_max := 0xE000 // keep in sync with boards/h755zi/duo.h DUO_BULK_MAX
+	xcore_bulk_max := 0xE000 // keep in sync with boards/h755zi/xcore.h XCORE_BULK_MAX
 	mut xcore_off := map[string]int{}
 	mut off := 0
 	for p in pools {
@@ -167,9 +167,9 @@ fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap, image_part string) []string
 			off += (bulk_bytes(p.nbuf, p.bufsz) + 31) & ~31
 		}
 	}
-	if off > duo_bulk_max {
+	if off > xcore_bulk_max {
 		panic('loom2v: cross-core [[bulk]] pools need ${off} B of the shared window but ' +
-			'DUO_BULK_MAX is ${duo_bulk_max} B (boards/h755zi/duo.h) — shrink a pool (bufsz*nbuf) ' +
+			'XCORE_BULK_MAX is ${xcore_bulk_max} B (boards/h755zi/xcore.h) — shrink a pool (bufsz*nbuf) ' +
 			'or raise the window')
 	}
 	// Each image emits the pools it owns an endpoint of (owner = its local partitions; a
@@ -199,10 +199,10 @@ fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap, image_part string) []string
 	g << 'fn C.bulk_buf(b &C.bulk_t, idx u32) &u8'
 	g << 'fn C.bulk_overflows(b &C.bulk_t) u32'
 	if has_shared {
-		// The cross-core region base comes from a PLATFORM seam, exactly like duo_pub/duo_ioc_init:
-		// generated code externs it and the board's glue C provides it (from duo.h's DUO_BULK_ADDR
+		// The cross-core region base comes from a PLATFORM seam, exactly like xcore_pub/xcore_ioc_init:
+		// generated code externs it and the board's glue C provides it (from xcore.h's XCORE_BULK_ADDR
 		// on the H755). Generated code never includes a board header — it stays board-agnostic.
-		g << 'fn C.duo_bulk_base() usize // cross-core bulk region base (board glue; H755 = DUO_BULK_ADDR)'
+		g << 'fn C.xcore_bulk_base() usize // cross-core bulk region base (board glue; H755 = XCORE_BULK_ADDR)'
 	}
 	g << ''
 
@@ -216,7 +216,7 @@ fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap, image_part string) []string
 			// SAME pointer from the platform base. One side (the producer image) calls _init; the
 			// other polls _valid() before first use (bulk.h attach handshake).
 			g << 'fn bulk_${p.name}_ptr() &C.bulk_t {'
-			g << '\treturn &C.bulk_t(voidptr(C.duo_bulk_base() + usize(${xcore_off[p.name]})))'
+			g << '\treturn &C.bulk_t(voidptr(C.xcore_bulk_base() + usize(${xcore_off[p.name]})))'
 			g << '}'
 		} else {
 			g << '@[aligned: 32]'

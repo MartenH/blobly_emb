@@ -194,7 +194,7 @@ approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
 date = "2026-07-12"
 
 # MULTICORE RUNGS 4+5: examples/h755_m4_app — ThreadX + a V Loom FB on the Cortex-M4,
-# publishing across cores via the shared-SRAM4 IOC (duo.h). Bench: the M4 FB dispatches
+# publishing across cores via the shared-SRAM4 IOC (xcore.h). Bench: the M4 FB dispatches
 # at exactly 100 Hz (m4sig: n 500 -> 644 in 1.44 s) read over CAN through the CM7 shell;
 # the iocx stress harness (200k reads vs a max-rate M4 writer) measured 0 regressions
 # BUT 162 torn reads: cross-core LDREXB/STREXB to D3 SRAM4 does NOT arbitrate between
@@ -228,7 +228,7 @@ approved_by = "Claude bench session — NUCLEO-H755ZI-Q vs PCAN-USB Pro FD"
 date = "2026-07-12"
 
 # THE FIRST DISTRIBUTED-ECU SIGNAL ([duo] codegen, multi-image slice 1): one ecu.toml
-# names the cross-core signals; loom2v assigns xioc slots, emits gen/duo_gen.h (the ONE
+# names the cross-core signals; loom2v assigns xioc slots, emits gen/xcore_gen.h (the ONE
 # contract header both images compile against — slot numbers appear nowhere else), and
 # generates the bus-owner's fresh-gated periodic tx. Bench: M4LoadFrame 0x201 at 10 Hz,
 # M4Count advancing exactly +10 per frame (the M4's 100 Hz Loom FB through xioc through

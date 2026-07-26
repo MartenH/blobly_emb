@@ -82,9 +82,9 @@ fn C.shell_bmc(&u8, int) int
 fn C.shell_m4sig(&u8, int) int
 fn C.shell_iocx(&u8, int) int
 fn C.shell_boot(&u8, int) int
-fn C.duo_poll(int, &u32, &u32) int // xioc reader (comm_glue.c): 1 = fresh value
-fn C.duo_layout_ok() int // layout-id handshake: 0 = satellite absent or a DIFFERENT build
-fn C.duo_clocks_ready() // release the parked satellite: final HCLK + HSEM en + DUO_CLK_MAGIC (duo.h)
+fn C.xcore_poll(int, &u32, &u32) int // xioc reader (comm_glue.c): 1 = fresh value
+fn C.xcore_layout_ok() int // layout-id handshake: 0 = satellite absent or a DIFFERENT build
+fn C.xcore_clocks_ready() // release the parked satellite: final HCLK + HSEM en + XCORE_CLK_MAGIC (xcore.h)
 // [nvm]: the journal storage map + flash driver (boards layer / example glue)
 fn C.nvm_map_a() u32
 fn C.nvm_map_b() u32
@@ -93,13 +93,13 @@ fn C.bflash_erase(addr u32, size u32) int
 fn C.bflash_program(addr u32, data &u8, len u32) int
 fn C.bflash_read(addr u32, out &u8, len u32) int
 fn C.bflash_blank(addr u32, len u32) int
-fn C.duo_trace_req(u32) // post arm(1)/snapshot(2) to the satellite (duo.h dtrace cell)
-fn C.duo_trace_ready() int
-fn C.duo_trace_count() u32
-fn C.duo_trace_buf() &u8
-fn C.duo_trace_offset(&i32, &u32) int // satellite clock - ours, + its error bound
-fn C.duo_bulk_consume() // platform consumer service (glue): poll+take+release
-fn C.duo_load_get(int) u16 // a satellite core's per-mille load (duo.h; weak 0)
+fn C.xcore_trace_req(u32) // post arm(1)/snapshot(2) to the satellite (xcore.h dtrace cell)
+fn C.xcore_trace_ready() int
+fn C.xcore_trace_count() u32
+fn C.xcore_trace_buf() &u8
+fn C.xcore_trace_offset(&i32, &u32) int // satellite clock - ours, + its error bound
+fn C.xcore_bulk_consume() // platform consumer service (glue): poll+take+release
+fn C.xcore_load_get(int) u16 // a satellite core's per-mille load (xcore.h; weak 0)
 
 fn shell_ps_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 	n := C.shell_ps(&rsp.buf[0], 520)
@@ -232,7 +232,7 @@ __global (
 	g_trace_ring [256]trace.Record
 	g_tm trace.TraceModule
 	g_sh shell.ShellModule
-	g_duo_trace_ring [257]trace.Record // the satellite core's imported dump window (+1 = its offset record)
+	g_xcore_trace_ring [257]trace.Record // the satellite core's imported dump window (+1 = its offset record)
 	g_nvm nvm.Journal // the persistence journal (mounted pre-kernel)
 	g_nvmres_load_cmd [12]u8 // restore staging (pre-kernel -> thread init; +headroom for the overlong check)
 	g_nvmres_load_cmd_n u16
@@ -346,11 +346,11 @@ fn comm_thread_entry(input u32) {
 	})
 	g_nm.request(C.board_now_us()) // this ECU's COM needs the bus from boot ([nm] request)
 	mut nm_txf := can.Frame{}
-	// cross-core signals (gen_duo): last tx time + latest polled value per signal
-	mut duo_m4_count_last := u64(0)
-	mut duo_m4_count_a := u32(0)
-	mut duo_m4_count_b := u32(0)
-	mut duo_txf := can.Frame{}
+	// cross-core signals (gen_xcore): last tx time + latest polled value per signal
+	mut xcore_m4_count_last := u64(0)
+	mut xcore_m4_count_a := u32(0)
+	mut xcore_m4_count_b := u32(0)
+	mut xcore_txf := can.Frame{}
 	// [nvm]: last-persisted values + pacing (change+floor-gated puts).
 	// Initialized from the staging cells, which boot() seeded with the
 	// RESTORED values — the first pass sees no phantom change.
@@ -360,10 +360,10 @@ fn comm_thread_entry(input u32) {
 	mut nvm_load_cmd_t := u64(0) // first change persists after ONE floor from boot: chosen pacing
 	mut nvm_prev_nm := g_nm.state()
 	mut nvm_pack := [8]u8{}
-	g_tm.set_remote(u8(1), &g_duo_trace_ring[0], 257) // satellite blocks ride our dump link
-	mut duo_trc_wait := false // a satellite snapshot was requested by op_dump
-	mut duo_trc_off := i32(0) // satellite clock - ours, µs (measured by the ack round trip)
-	mut duo_trc_bound := u32(0) // half round-trip: that measurement's uncertainty
+	g_tm.set_remote(u8(1), &g_xcore_trace_ring[0], 257) // satellite blocks ride our dump link
+	mut xcore_trc_wait := false // a satellite snapshot was requested by op_dump
+	mut xcore_trc_off := i32(0) // satellite clock - ours, µs (measured by the ack round trip)
+	mut xcore_trc_bound := u32(0) // half round-trip: that measurement's uncertainty
 	mut last_tx_workload := u64(0)
 	mut rx := can.Frame{}
 	for {
@@ -401,9 +401,9 @@ fn comm_thread_entry(input u32) {
 			}
 			if rx.id == u32(0x7e2) && rx.len == 8 && !rx.ext && rx.data[6] & 0x02 != 0 {
 				match rx.data[0] {
-					1, 2, 4 { C.duo_trace_req(1) } // arm/start/reset -> satellite arm
-					3 { C.duo_trace_req(2) } // stop -> satellite freeze+snapshot
-					6 { duo_trc_wait = true } // dump -> import the ack below
+					1, 2, 4 { C.xcore_trace_req(1) } // arm/start/reset -> satellite arm
+					3 { C.xcore_trace_req(2) } // stop -> satellite freeze+snapshot
+					6 { xcore_trc_wait = true } // dump -> import the ack below
 					else {}
 				}
 			}
@@ -418,7 +418,7 @@ fn comm_thread_entry(input u32) {
 			last_telem = t1
 			mut load := [8]u16{}
 			load[0] = u16(C.load_sum_permille()) // sum of the FB threads (one core)
-			load[1] = C.duo_load_get(1) // m4 satellite (cross-core)
+			load[1] = C.xcore_load_get(1) // m4 satellite (cross-core)
 			frame := telem.encode_cpuload(load, 2)
 			mut f := can.Frame{
 				id:  u32(0x7e0)
@@ -463,41 +463,41 @@ fn comm_thread_entry(input u32) {
 		for nm_up && ch.tx_ready() && g_sh.produce(t1, mut shell_txf) {
 			ch.send(shell_txf)
 		}
-		// latch t3 EVERY tick: duo_trace_ready() stamps t3 on the pass that first sees the
-		// ack. Gating it behind duo_trc_wait meant a Stop acked at T got its t3 at the LATER
+		// latch t3 EVERY tick: xcore_trace_ready() stamps t3 on the pass that first sees the
+		// ack. Gating it behind xcore_trc_wait meant a Stop acked at T got its t3 at the LATER
 		// dump press — a 50 ms gap biases the midpoint ~25 ms (codex #186). The call is two
 		// volatile reads when idle.
-		if C.duo_trace_ready() != 0 && duo_trc_wait {
+		if C.xcore_trace_ready() != 0 && xcore_trc_wait {
 			// The exchange we just completed IS the clock measurement — take it BEFORE
 			// load_remote, which prepends it to the satellite block so the host can put
 			// both cores on one timeline (REQ-TRACE-011).
 			// bound past the u16 wire field (a debugger pause, a >131 ms round trip): OMIT the
 			// correlation — clamping would understate the error and make a bad alignment look
 			// trustworthy (codex #186). Unmeasured stays visibly unmeasured.
-			if C.duo_trace_offset(&duo_trc_off, &duo_trc_bound) != 0 && duo_trc_bound <= 0xffff {
-				g_tm.set_core_offset(duo_trc_off, u16(duo_trc_bound))
+			if C.xcore_trace_offset(&xcore_trc_off, &xcore_trc_bound) != 0 && xcore_trc_bound <= 0xffff {
+				g_tm.set_core_offset(xcore_trc_off, u16(xcore_trc_bound))
 			} else {
 				g_tm.clear_core_offset() // a REJECTED measurement must not ship the previous dump's offset (codex #207)
 			}
-			g_tm.load_remote(C.duo_trace_buf(), C.duo_trace_count())
-			duo_trc_wait = false
+			g_tm.load_remote(C.xcore_trace_buf(), C.xcore_trace_count())
+			xcore_trc_wait = false
 		}
-		if nm_up && C.duo_layout_ok() != 0 && t1 - duo_m4_count_last >= u64(100000) && ch.tx_ready()
-			&& C.duo_poll(0, &duo_m4_count_a, &duo_m4_count_b) != 0 {
-			duo_txf.id = u32(0x201)
-			duo_txf.len = 8
-			duo_txf.data[0] = u8(duo_m4_count_a)
-			duo_txf.data[1] = u8(duo_m4_count_a >> 8)
-			duo_txf.data[2] = u8(duo_m4_count_a >> 16)
-			duo_txf.data[3] = u8(duo_m4_count_a >> 24)
-			duo_txf.data[4] = u8(duo_m4_count_b)
-			duo_txf.data[5] = u8(duo_m4_count_b >> 8)
-			duo_txf.data[6] = u8(duo_m4_count_b >> 16)
-			duo_txf.data[7] = u8(duo_m4_count_b >> 24)
-			ch.send(duo_txf)
-			duo_m4_count_last = t1
+		if nm_up && C.xcore_layout_ok() != 0 && t1 - xcore_m4_count_last >= u64(100000) && ch.tx_ready()
+			&& C.xcore_poll(0, &xcore_m4_count_a, &xcore_m4_count_b) != 0 {
+			xcore_txf.id = u32(0x201)
+			xcore_txf.len = 8
+			xcore_txf.data[0] = u8(xcore_m4_count_a)
+			xcore_txf.data[1] = u8(xcore_m4_count_a >> 8)
+			xcore_txf.data[2] = u8(xcore_m4_count_a >> 16)
+			xcore_txf.data[3] = u8(xcore_m4_count_a >> 24)
+			xcore_txf.data[4] = u8(xcore_m4_count_b)
+			xcore_txf.data[5] = u8(xcore_m4_count_b >> 8)
+			xcore_txf.data[6] = u8(xcore_m4_count_b >> 16)
+			xcore_txf.data[7] = u8(xcore_m4_count_b >> 24)
+			ch.send(xcore_txf)
+			xcore_m4_count_last = t1
 		}
-		C.duo_bulk_consume() // cross-core bulk consumer (platform-owned pool)
+		C.xcore_bulk_consume() // cross-core bulk consumer (platform-owned pool)
 		{ // persist "now": LoadCmd
 			mut a := u32(0)
 			mut b := u32(0)
@@ -635,7 +635,7 @@ fn nvm_fl_read(ctx voidptr, addr u32, out &u8, len u32) bool {
 	return C.bflash_read(addr, out, len) != 0
 }
 pub fn boot() {
-	C.duo_clocks_ready()
+	C.xcore_clocks_ready()
 	C.ioc_pool_init() // init the cross-thread signal IOC cells before any thread runs
 	// [nvm]: mount + restore BEFORE the kernel — the single-threaded window.
 	// Restored values seed both the thread-init staging AND the persist ioc
@@ -684,11 +684,11 @@ fn C.bulk_take(b &C.bulk_t, len &u32) int
 fn C.bulk_release(b &C.bulk_t, idx u32)
 fn C.bulk_buf(b &C.bulk_t, idx u32) &u8
 fn C.bulk_overflows(b &C.bulk_t) u32
-fn C.duo_bulk_base() usize // cross-core bulk region base (board glue; H755 = DUO_BULK_ADDR)
+fn C.xcore_bulk_base() usize // cross-core bulk region base (board glue; H755 = XCORE_BULK_ADDR)
 
 // --- Bulk pool: xfer (4 x 256 B; m4 -> app; shared window @ base+0x0) ---
 fn bulk_xfer_ptr() &C.bulk_t {
-	return &C.bulk_t(voidptr(C.duo_bulk_base() + usize(0)))
+	return &C.bulk_t(voidptr(C.xcore_bulk_base() + usize(0)))
 }
 
 pub fn bulk_xfer_valid() bool {

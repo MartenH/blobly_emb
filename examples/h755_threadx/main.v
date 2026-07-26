@@ -13,7 +13,7 @@ fn C.board_can_clock_pins_init() // FDCAN1 kernel clock + PD0/PD1 AF9
 fn main() {
 	C.board_clock_init()
 	C.board_can_clock_pins_init()
-	// gen.boot() releases the parked CM4 (C.duo_clocks_ready) itself now — the generator emits it
+	// gen.boot() releases the parked CM4 (C.xcore_clocks_ready) itself now — the generator emits it
 	// for any satellite-owner, so a shared main.v (system_full) gets it too (codex #235).
 	gen.boot() // hands off to ThreadX (tx_kernel_enter -> tx_application_define); never returns
 }

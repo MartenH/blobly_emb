@@ -7,70 +7,8 @@ import app
 import loom
 import osal
 import comm.telem
-import comm.trace
-import comm.isotp
 import driver.can
 import comm.com
-
-struct TraceCapture {
-mut:
-	buf       &trace.TraceBuffer = unsafe { nil } // this core's ring (owned by run())
-	start     u64 // wall-clock µs of the capture origin
-	base      u64 // elapsed µs at the last epoch re-anchor
-	id_base   u32 // GLOBAL fb id of this partition's first handler (+ local idx)
-	thread_id u16 // this partition's thread id (for the THREAD records)
-	busy_end  u64 // elapsed µs at the end of the last busy span (idle-gap start)
-	fb_count  u32 // handlers dispatched (the loop reads this to bracket a busy span)
-	trig_slot int // THIS core's freeze-request scratch cell (single-writer: only here)
-}
-
-fn trace_capture(ctx voidptr, idx int, start_us u64, dt_us u64) {
-	mut t := unsafe { &TraceCapture(ctx) }
-	t.fb_count++
-	elapsed := start_us - t.start
-	if elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor
-		t.base = elapsed
-		t.buf.push(trace.new_epoch(u32(elapsed)))
-	}
-	mut dt := dt_us
-	mut flags := u8(0)
-	if dt > 0xFFFF { // clamp to the u16 field, and mark it as saturated (F648)
-		dt = 0xFFFF
-		flags |= trace.flag_saturated
-	}
-	if dt_us > 500 {
-		flags |= trace.flag_overran
-	}
-	t.buf.push(trace.new_fb(u16(t.id_base + u32(idx)), flags, u32(elapsed - t.base), u16(dt)))
-	if dt_us > 500 && t.buf.state() == .capturing {
-		t.buf.trigger()
-		osal.scratch_set(t.trig_slot, osal.scratch_get(t.trig_slot) + 1) // bump the request counter (edge, not level)
-	}
-}
-
-fn trace_thread_span(mut t TraceCapture, t0_us u64, t1_us u64) {
-	e_start := t0_us - t.start // elapsed at the busy span start
-	e_end := t1_us - t.start   // elapsed at the busy span end
-	if e_start > t.base && e_start - t.base > 0x00ff_ffff {
-		t.base = e_start
-		t.buf.push(trace.new_epoch(u32(e_start)))
-	}
-	gap_from := if t.busy_end > t.base { t.busy_end } else { t.base }
-	if e_start > gap_from { // idle gap since the last busy span (within this epoch)
-		mut gap := e_start - gap_from
-		if gap > 0xFFFF {
-			gap = 0xFFFF
-		}
-		t.buf.push(trace.new_idle(trace.reason_yield, u32(gap_from - t.base), u16(gap)))
-	}
-	s_from := if e_start > t.base { e_start } else { t.base } // clamp across an epoch re-anchor (F708)
-	mut busy := if e_end > s_from { e_end - s_from } else { u64(0) }
-	if busy > 0xFFFF {
-		busy = 0xFFFF
-	}
-	t.buf.push(trace.new_thread(t.thread_id, trace.reason_yield, u32(s_from - t.base), u16(busy)))
-	t.busy_end = e_end
-}
 
 struct Partition_app_state {
 mut:
@@ -90,37 +28,11 @@ pub fn partition_app(core int, arg voidptr) {
 	mut st := Partition_app_state{}
 	mut sched := loom.Scheduler{}
 	sched.every(10000, handler_app_speed_work_on_10ms, &st)
-	mut cap := TraceCapture{
-		buf:       unsafe { &trace.TraceBuffer(arg) }
-		start:     osal.now_us()
-		id_base:   0
-		thread_id: 1
-		trig_slot: 6
-	}
-	sched.set_trace_hook(trace_capture, &cap)
-	mut last_cmd := osal.scratch_get(4)
 	for {
-		cmdv := osal.scratch_get(4)
-		if cmdv != last_cmd {
-			last_cmd = cmdv
-			op := u8(cmdv & 0xff)
-			if op == trace.op_arm || op == trace.op_start || op == trace.op_reset {
-				cap.buf.start()
-				cap.start = osal.now_us()
-				cap.base = 0
-				cap.busy_end = 0
-			} else if op == trace.op_stop {
-				cap.buf.stop()
-			} else if op == 0xf1 { // freeze: the owner fanned out another core's overrun
-				cap.buf.trigger()
-			}
-		}
-		t0 := osal.now_us()
-		before := cap.fb_count
-		sched.run_profiled(osal.now_us)
-		if cap.fb_count != before {
-			trace_thread_span(mut cap, t0, osal.now_us())
-		}
+		loom_t0 := osal.now_us()
+		sched.run(loom_t0)
+		loom_t1 := osal.now_us()
+		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
 		osal.scratch_set(0, u64(sched.load_permille()))
 		osal.sleep_us(1000)
 	}
@@ -137,7 +49,7 @@ fn io_can0_10ms(ctx voidptr) {
 	now := osal.now_us()
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
-		if rx.id == powertrain_id && rx.len == powertrain_dlc {
+		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false {
 			mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), valid: true }
 			osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 			st.rx_powertrain_st.on_receive(now)
@@ -149,7 +61,7 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 }
 
-pub fn partition_can0(ch can.Channel, commring voidptr) {
+pub fn partition_can0(ch can.Channel) {
 	osal.pin_to_core(0)
 	mut st := Bridge_can0_state{
 		chan: ch
@@ -159,40 +71,11 @@ pub fn partition_can0(ch can.Channel, commring voidptr) {
 	}
 	mut sched := loom.Scheduler{}
 	sched.every(10_000, io_can0_10ms, &st)
-	mut cap := TraceCapture{
-		buf:       unsafe { &trace.TraceBuffer(commring) }
-		start:     osal.now_us()
-		thread_id: 2
-		trig_slot: 5
-	}
-	mut last_cmd := osal.scratch_get(3)
 	for {
-		cmdv := osal.scratch_get(3)
-		if cmdv != last_cmd {
-			last_cmd = cmdv
-			op := u8(cmdv & 0xff)
-			if op == trace.op_arm || op == trace.op_start || op == trace.op_reset {
-				cap.buf.start()
-				cap.start = osal.now_us()
-				cap.base = 0
-				cap.busy_end = 0
-			} else if op == trace.op_stop {
-				cap.buf.stop()
-			} else if op == 0xf1 {
-				cap.buf.trigger()
-			}
-		}
 		loom_t0 := osal.now_us()
-		before := sched.handler_stat(0).count
-		sched.run_profiled(osal.now_us)
+		sched.run(loom_t0)
 		loom_t1 := osal.now_us()
-		if sched.handler_stat(0).count != before { // the COM drain ran -> a comm busy span
-			trace_thread_span(mut cap, loom_t0, loom_t1)
-			if loom_t1 - loom_t0 > 500 && cap.buf.state() == .capturing {
-				cap.buf.trigger()
-				osal.scratch_set(cap.trig_slot, osal.scratch_get(cap.trig_slot) + 1)
-			}
-		}
+		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
 		osal.scratch_set(1, u64(sched.load_permille()))
 		osal.sleep_us(1000)
 	}
@@ -221,136 +104,11 @@ fn partition_telem() {
 	}
 }
 
-fn partition_trace(chp can.Channel, base voidptr, ncores int) {
-	osal.pin_to_core(0)
-	mut ch := chp
-	mut rings := unsafe { &trace.TraceBuffer(base) } // rings[0 .. ncores]
-	mut link := isotp.Link{}
-	mut dumpbuf := [520]u8{} // one block: header + records
-	mut pending := u16(0) // cores whose frozen ring still needs streaming
-	mut seq := u64(0)     // command generation — the owner is the SOLE writer of cmd cells
-	mut froze := false    // whether the current session's freeze has been fanned out
-	mut last_trig := [16]u64{} // last freeze-request counter seen per core (edge detect)
-	for {
-		mut rx := can.Frame{}
-		if ch.recv(mut rx) {
-			if rx.id == u32(0x7e2) && rx.len >= 8 {
-				mut cb := [8]u8{}
-				for j in 0 .. 8 {
-					cb[j] = rx.data[j]
-				}
-				c := trace.decode_cmd(cb)
-				arm := c.opcode == trace.op_arm || c.opcode == trace.op_start || c.opcode == trace.op_reset
-				if arm { // new session: forget prior overruns, re-enable the freeze fan-out
-					froze = false
-					for cc in 0 .. ncores {
-						last_trig[cc] = osal.scratch_get(5 + cc)
-					}
-					pending = 0        // cancel any in-flight dump so a fresh capture isn't
-					link = isotp.Link{} // mixed with the previous session's blocks (F1281)
-				}
-				dump_busy := pending != 0 || link.busy()
-				for cc in 0 .. ncores {
-					if !c.targets(u8(cc)) {
-						continue
-					}
-					// Route the mutating ops to the OWNING partition (single-writer): the owner
-					// only posts a (generation | opcode) command + reads the ring for the ack.
-					if arm || c.opcode == trace.op_stop {
-						seq++
-						osal.scratch_set(3 + cc, (seq << 8) | u64(c.opcode))
-					}
-					tbv := unsafe { rings[cc] } // read-only snapshot for the status reply
-					mut result := trace.result_ok
-					if c.opcode == trace.op_dump {
-						if tbv.state() != .full && tbv.state() != .frozen {
-							result = trace.result_not_ready
-						} else if dump_busy {
-							result = trace.result_busy
-						} else {
-							pending |= u16(1) << cc
-						}
-					} else if c.opcode == trace.op_set_push {
-						result = trace.result_unsupported // push is config-driven, not runtime (F1297)
-					} else if !arm && c.opcode != trace.op_stop && c.opcode != trace.op_status {
-						result = trace.result_bad_opcode
-					}
-					rspb := trace.status_rsp(tbv, c.opcode, result, u8(cc))
-					mut rf := can.Frame{
-						id:  u32(0x7e3)
-						len: 8
-					}
-					for j in 0 .. 8 {
-						rf.data[j] = rspb[j]
-					}
-					ch.send(rf)
-				}
-			} else if rx.id == u32(0x7e6) {
-				mut p := isotp.Pdu{}
-				for j in 0 .. 8 {
-					p.data[j] = rx.data[j]
-				}
-				link.on_frame(osal.now_us(), p)
-			}
-		}
-		link.tick(osal.now_us()) // advance the N_Bs timeout even when tx_ready gates poll out
-		mut tp := isotp.Pdu{}
-		for ch.tx_ready() && link.poll(osal.now_us(), mut tp) {
-			mut pf := can.Frame{
-				id:  u32(0x7e5)
-				len: 8
-			}
-			for j in 0 .. 8 {
-				pf.data[j] = tp.data[j]
-			}
-			ch.send(pf)
-		}
-		mut newtrig := false
-		for cc in 0 .. ncores {
-			v := osal.scratch_get(5 + cc)
-			if v != last_trig[cc] {
-				last_trig[cc] = v
-				newtrig = true
-			}
-		}
-		if newtrig && !froze {
-			froze = true
-			for cc in 0 .. ncores {
-				seq++
-				osal.scratch_set(3 + cc, (seq << 8) | u64(0xf1)) // 0xf1 = freeze
-			}
-		}
-		if !link.busy() && pending != 0 { // previous block drained -> start the next core
-			mut cc := 0
-			for cc < ncores && (pending & (u16(1) << cc)) == 0 {
-				cc++
-			}
-			if cc < ncores {
-				pending &= ~(u16(1) << cc)
-				mut tb := unsafe { &rings[cc] }
-				n := tb.pack_block(&dumpbuf[0], 520, u8(cc))
-				if n > 0 {
-					link.send(&dumpbuf[0], n)
-				}
-			}
-		}
-		osal.sleep_us(1000)
-	}
-}
-
-pub fn run(can1 can.Channel, can0 can.Channel) {
-	mut backings := [2][64]trace.Record{}
-	mut rings := [2]trace.TraceBuffer{}
-	rings[1] = trace.new_buffer(&backings[1][0], 64, .ring, 50)
-	rings[1].start()
-	rings[0] = trace.new_buffer(&backings[0][0], 64, .ring, 50) // comm_can0
-	rings[0].start()
-	t_app := spawn partition_app(1, unsafe { voidptr(&rings[1]) })
-	t_can0 := spawn partition_can0(can0, unsafe { voidptr(&rings[0]) })
+pub fn run(can0 can.Channel) {
+	t_can0 := spawn partition_can0(can0)
+	t_app := spawn partition_app(1, unsafe { nil })
 	t_telem := spawn partition_telem()
-	t_trace := spawn partition_trace(can1, unsafe { voidptr(&rings[0]) }, 2)
-	t_app.wait()
 	t_can0.wait()
+	t_app.wait()
 	t_telem.wait()
-	t_trace.wait()
 }

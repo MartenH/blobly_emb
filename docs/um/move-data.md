@@ -24,7 +24,7 @@ cell."* Sending bulk as a signal is the mistake this page exists to prevent.
 | same thread | plain struct field | — | ✅ derived |
 | thread → thread, **same core** | IOC cell (`boards/common/ioc.h`) — the *crossing* is derived, the algorithm is the signal's `transport` (**default `double`**; `triple`/`seqlock` selectable) | **64 B** (`IOC_MAX`) | ✅ derived |
 | **core → core**, same chip | xioc slot or wide `xioc_n` channel (`boards/common/xioc.h`) — **satellite → owner image only**, and generated end-to-end **only when the destination is a bus** (the owner drain transmits it, layout-handshake-gated); a satellite → owner-*partition* signal allocates a slot/channel that platform C reads via the contract header — no FB consumer is generated. owner→satellite and satellite→satellite have no path | **≤16 fields of `u32`/`u16`/`u8`/`bool`** (one u32 lane each; to a bus: DLC = 4×lanes, >2 lanes needs FD — see below); the wider shapes (`u64`, signed ints, floats, >16 narrow fields) are the #212 packing decision | ✅ derived (to-bus) |
-| **core → core**, bulk | `duo.h` dtrace-style cell: shared-window owner buffer + req/ack handshake | RAM-bound (trace uses 2 KB) | ❌ **hand-written**; planned generated form = the loan/publish ring below |
+| **core → core**, bulk | `xcore.h` dtrace-style cell: shared-window owner buffer + req/ack handshake | RAM-bound (trace uses 2 KB) | ❌ **hand-written**; planned generated form = the loan/publish ring below |
 | ECU → ECU, one frame | CAN frame (`driver/can`) | 8 B classic / **64 B** FD | ✅ derived |
 | ECU → ECU, a PDU | COM (`comm/com`) | **64 B** (`com.max_pdu`) | ✅ derived |
 | ECU → ECU, bulk | ISO-TP (`comm/isotp`) — **host/sim; a `threadx` target rejects `[[isotp]]` at generation** | **520 B** (`isotp.max_payload`) | ✅ config |
@@ -104,7 +104,7 @@ placement must never *silently* change bytes, so it changes them loudly instead)
 
 **If it does not fit, there is no supported *application* path today — full stop.** The
 one worked example in the tree, the **cross-core trace handoff** in
-[`boards/h755zi/duo.h`](../../boards/h755zi/duo.h), is **platform instrumentation**: both
+[`boards/h755zi/xcore.h`](../../boards/h755zi/xcore.h), is **platform instrumentation**: both
 of its sides live in the platform's C glue (`comm_glue.c` / `m4_glue.c`), never in an FB.
 Copying its shape into FB-facing code would create exactly the cross-partition shared
 mutable state the isolation rule forbids — an FB's bulk path arrives only when the
