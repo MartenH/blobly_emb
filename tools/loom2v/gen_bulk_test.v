@@ -44,7 +44,7 @@ fn test_intra_core_pool_uses_local_global_arena() {
 		nbuf:     2
 	}]
 	assert !bulk_cross_core(pools[0], pm)
-	a := emit_bulk_glue(pools, pm).join('\n')
+	a := emit_bulk_glue(pools, pm, '').join('\n')
 	// a per-image arena + a ptr into it, NOT the shared window
 	assert a.contains('__global (')
 	assert a.contains('g_bulk_cam_arena')
@@ -63,7 +63,7 @@ fn test_cross_core_pool_lives_in_shared_window() {
 		nbuf:     4
 	}]
 	assert bulk_cross_core(pools[0], pm)
-	a := emit_bulk_glue(pools, pm).join('\n')
+	a := emit_bulk_glue(pools, pm, '').join('\n')
 	// no per-image arena — the pool IS the shared window bytes, derived from duo.h
 	assert !a.contains('g_bulk_lidar_arena')
 	assert a.contains('#include "duo.h"')
@@ -97,7 +97,49 @@ fn test_cross_core_pools_pack_32b_aligned_in_order() {
 	off0 := 0
 	off1 := (bulk_bytes(1, 50) + 31) & ~31
 	assert off1 % 32 == 0
-	a := emit_bulk_glue(pools, pm).join('\n')
+	a := emit_bulk_glue(pools, pm, '').join('\n')
 	assert a.contains('voidptr(C.duo_bulk_addr() + usize(${off0}))')
 	assert a.contains('voidptr(C.duo_bulk_addr() + usize(${off1}))')
+}
+
+fn test_satellite_emits_only_its_shared_pools_at_the_owner_offset() {
+	pm := duo_partmap()
+	pools := [
+		// an owner-local pool (both ends on core 0) — must NOT reach the satellite image
+		BulkPoolCfg{
+			name:     'local'
+			producer: 'hot'
+			consumer: 'hot_t'
+			bufsz:    32
+			nbuf:     1
+		},
+		// a shared pool the satellite is the consumer of — offset is AFTER 'local' is skipped?
+		// no: the offset map counts only CROSS-CORE pools, so 'shared' sits at offset 0.
+		BulkPoolCfg{
+			name:     'shared'
+			producer: 'hot'
+			consumer: 'cool'
+			bufsz:    64
+			nbuf:     2
+		},
+	]
+	sat := emit_bulk_glue(pools, pm, 'cool').join('\n')
+	// the satellite gets the shared pool...
+	assert sat.contains('pub fn bulk_shared_init()')
+	assert sat.contains('#include "duo.h"')
+	// ...at the SAME offset the owner computed (0 — 'local' is intra-core, not in the window)...
+	assert sat.contains('voidptr(C.duo_bulk_addr() + usize(0))')
+	// ...and NEVER the owner's intra-core global.
+	assert !sat.contains('g_bulk_local_arena')
+	assert !sat.contains('bulk_local_init')
+	// a satellite that touches no shared pool emits nothing at all.
+	none_pm := PartMap{
+		core_of:     {
+			'hot': 0
+			'x':   1
+		}
+		thread_part: {}
+	}
+	empty := emit_bulk_glue([pools[0]], none_pm, 'x')
+	assert empty.len == 0
 }

@@ -37,11 +37,16 @@ fn bulk_bytes(nbuf int, bufsz int) int {
 	return 96 + (((3 * 4 * nbuf) + 31) & ~31) + nbuf * bufsz
 }
 
-// bulk_ep_core resolves a [[bulk]] producer/consumer endpoint (a partition OR a thread name)
-// to its core, so a pool whose two ends sit on different cores is a CROSS-CORE pool.
+// bulk_ep_part resolves a [[bulk]] producer/consumer endpoint (a partition OR a thread name)
+// to its owning partition.
+fn bulk_ep_part(ep string, part PartMap) string {
+	return if ep in part.core_of { ep } else { part.thread_part[ep] or { ep } }
+}
+
+// bulk_ep_core resolves an endpoint to its core, so a pool whose two ends sit on different
+// cores is a CROSS-CORE pool.
 fn bulk_ep_core(ep string, part PartMap) int {
-	pn := if ep in part.core_of { ep } else { part.thread_part[ep] or { ep } }
-	return part.core_of[pn] or { 0 }
+	return part.core_of[bulk_ep_part(ep, part)] or { 0 }
 }
 
 // bulk_cross_core: producer and consumer are on different cores -> the pool must live in the
@@ -50,17 +55,29 @@ fn bulk_cross_core(p BulkPoolCfg, part PartMap) bool {
 	return bulk_ep_core(p.producer, part) != bulk_ep_core(p.consumer, part)
 }
 
-// emit_bulk_glue generates V declarations and wrapper functions for all bulk pools. An
-// INTRA-core pool gets a per-image global arena; a CROSS-CORE pool (producer/consumer on
-// different cores) is placed at a fixed address in the H755 shared window (duo.h DUO_BULK_ADDR)
-// so both images address the SAME pool. Cross-core placement is deterministic (declaration
-// order, 32 B-aligned) and static-checked against DUO_BULK_MAX, so the two images agree
-// without exchanging state.
-fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap) []string {
+// bulk_touches: this pool has an endpoint (producer or consumer) on partition `ptn`.
+fn bulk_touches(p BulkPoolCfg, part PartMap, ptn string) bool {
+	return bulk_ep_part(p.producer, part) == ptn || bulk_ep_part(p.consumer, part) == ptn
+}
+
+// emit_bulk_glue generates V declarations and wrapper functions for bulk pools. An INTRA-core
+// pool gets a per-image global arena; a CROSS-CORE pool (producer/consumer on different cores)
+// is placed at a fixed address in the H755 shared window (duo.h DUO_BULK_ADDR) so both images
+// address the SAME pool. Cross-core placement is deterministic (declaration order, 32 B-aligned)
+// and static-checked against DUO_BULK_MAX, so the two images agree without exchanging state.
+//
+// image_part selects WHICH image this is emitting for: '' = the bus OWNER (emits every pool —
+// its own intra-core globals and every shared window pool); a satellite partition name = that
+// SATELLITE image (emits only the cross-core pools with an endpoint on it, using the SAME
+// globally-computed offsets so both images derive an identical pointer).
+fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap, image_part string) []string {
 	if pools.len == 0 {
 		return []string{}
 	}
-	// Lay cross-core pools out in the shared window, in declaration order, 32 B-aligned.
+	owner := image_part == ''
+	// Lay cross-core pools out in the shared window, in declaration order, 32 B-aligned. This
+	// runs over ALL pools regardless of image_part, so the owner and a satellite agree on the
+	// offset of every shared pool.
 	duo_bulk_max := 0xE000 // keep in sync with boards/h755zi/duo.h DUO_BULK_MAX
 	mut xcore_off := map[string]int{}
 	mut off := 0
@@ -75,11 +92,17 @@ fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap) []string {
 			'DUO_BULK_MAX is ${duo_bulk_max} B (boards/h755zi/duo.h) — shrink a pool (bufsz*nbuf) ' +
 			'or raise the window')
 	}
+	// The owner emits every pool; a satellite emits only the shared pools it is an endpoint of.
+	scoped := pools.filter(owner || (bulk_cross_core(it, part) && bulk_touches(it, part, image_part)))
+	if scoped.len == 0 {
+		return []string{}
+	}
+	has_shared := scoped.any(it.name in xcore_off)
 	mut g := []string{}
 	g << ''
 	g << '// --- Bulk Transport Pools (docs/bulk-transport.md) ---'
 	g << '#include "boards/common/bulk.h"'
-	if xcore_off.len > 0 {
+	if has_shared {
 		g << '#include "duo.h" // DUO_BULK_ADDR: cross-core pools live in the H755 shared window'
 	}
 	g << ''
@@ -93,12 +116,12 @@ fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap) []string {
 	g << 'fn C.bulk_release(b &C.bulk_t, idx u32)'
 	g << 'fn C.bulk_buf(b &C.bulk_t, idx u32) &u8'
 	g << 'fn C.bulk_overflows(b &C.bulk_t) u32'
-	if xcore_off.len > 0 {
+	if has_shared {
 		g << 'fn C.duo_bulk_addr() usize // returns DUO_BULK_ADDR (boards/h755zi/duo.h)'
 	}
 	g << ''
 
-	for p in pools {
+	for p in scoped {
 		bytes := bulk_bytes(p.nbuf, p.bufsz)
 		cross := p.name in xcore_off
 		place := if cross { 'shared window @ DUO_BULK_ADDR+0x${xcore_off[p.name].hex()}' } else { 'local arena' }

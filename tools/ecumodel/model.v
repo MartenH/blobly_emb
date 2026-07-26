@@ -64,6 +64,7 @@ fn arr_of(m map[string]toml.Any, key string) []toml.Any {
 pub fn validate(doc toml.Doc) []string {
 	mut errs := []string{}
 	mut part_names := map[string]bool{}
+	mut part_core := map[string]int{} // partition -> core index (for cross-core transport rules)
 	mut thread_part := map[string]string{} // thread -> partition (globally unique)
 	mut fb_names := map[string]bool{}
 
@@ -78,6 +79,7 @@ pub fn validate(doc toml.Doc) []string {
 			errs << 'duplicate partition name "${pname}" — partition names must be unique'
 		} else {
 			part_names[pname] = true
+			part_core[pname] = int((pm['core'] or { toml.Any(0) }).int())
 		}
 		// core is required — omitting it would silently pin the partition to core 0 (loom2v
 		// and cfg2v default to 0), emitting the wrong partition table / manifest.
@@ -176,7 +178,7 @@ pub fn validate(doc toml.Doc) []string {
 	errs << validate_someip(doc, part_names, thread_part, bus_names)
 
 	// [bulk] — bulk transport pools (docs/bulk-transport.md). Must stay BEFORE [trace].
-	errs << validate_bulk(doc, part_names, thread_part)
+	errs << validate_bulk(doc, part_names, thread_part, part_core)
 
 	// [trace] — the runtime-observability block loom2v generates the trace wiring from. Validate
 	// the enums loom2v switches on (level, mode), the numeric ranges (pre_pct, buffer_records),
@@ -1397,7 +1399,7 @@ fn validate_io(doc toml.Doc, part_names map[string]bool, thread_part map[string]
 }
 
 // validate_bulk checks [[bulk]] pool definitions (docs/bulk-transport.md).
-pub fn validate_bulk(doc toml.Doc, part_names map[string]bool, thread_part map[string]string) []string {
+pub fn validate_bulk(doc toml.Doc, part_names map[string]bool, thread_part map[string]string, part_core map[string]int) []string {
 	mut errs := []string{}
 	mut bulk_names := map[string]bool{}
 
@@ -1432,8 +1434,13 @@ pub fn validate_bulk(doc toml.Doc, part_names map[string]bool, thread_part map[s
 			if cons in thread_part || cons in part_names {
 				prod_part := thread_part[prod] or { prod }
 				cons_part := thread_part[cons] or { cons }
-				if prod_part != cons_part {
-					errs << 'bulk pool "${bname}" producer "${prod}" (partition "${prod_part}") and consumer "${cons}" (partition "${cons_part}") cross partitions — single-image bulk pools require producer and consumer to share the same partition until OSAL shared-region transport is bound'
+				// A cross-CORE pool is transported through the shared window (loom2v places it
+				// at DUO_BULK_ADDR, both images derive the same pointer) — that is allowed. A
+				// cross-partition SAME-core pool would need an intra-image shared region, which
+				// isn't built, so it stays rejected.
+				if prod_part != cons_part
+					&& (part_core[prod_part] or { 0 }) == (part_core[cons_part] or { 0 }) {
+					errs << 'bulk pool "${bname}" producer "${prod}" (partition "${prod_part}") and consumer "${cons}" (partition "${cons_part}") cross partitions on the SAME core — same-core cross-partition bulk needs an intra-image shared region, which is not built (a CROSS-core pool is transported through the shared window)'
 				}
 			}
 		}
