@@ -84,30 +84,43 @@ fn test_gateway_forward_arms_raw_copy_and_id_remap() {
 	assert !a.contains('g_nm.awake()')
 }
 
-fn test_gateway_forward_arms_nm_gated_when_nm_on() {
-	// With NM enabled a forward is a TX and must stay silent while asleep (REQ-COM-007) — the
-	// send gates on the committed NM state, alongside tx_ready.
+fn test_gateway_forward_arms_nm_gated_only_on_the_managed_bus() {
+	// The single [nm] instance manages ONE bus (nm.bus). A forward whose DESTINATION is that
+	// bus must stay silent while asleep (REQ-COM-007); a forward to a bus NM does not manage is
+	// untouched. Here NM manages can1: the can0->can1 route is gated, the can0->can2 route is not.
 	m := Model{
 		telem:  TelemetryCfg{
 			bus: 'can0'
 		}
 		nm:     NmCfg{
-			on: true
+			on:  true
+			bus: 'can1' // NM manages the edge bus
 		}
 		routes: [
 			Route{
 				from_bus:  'can0'
 				from_id:   0x120
 				from_dlc:  8
-				to_bus:    'can1'
+				to_bus:    'can1' // -> managed bus: GATED
 				to_id:     0x130
 				signal:    'VehicleSpeed'
+				raw_ident: true
+			},
+			Route{
+				from_bus:  'can0'
+				from_id:   0x121
+				from_dlc:  8
+				to_bus:    'can2' // -> unmanaged bus: NOT gated
+				to_id:     0x140
+				signal:    'Other'
 				raw_ident: true
 			},
 		]
 	}
 	a := gateway_forward_arms(m, 'can0').join('\n')
-	// the NM gate precedes tx_ready in the send condition
+	// the managed-bus forward gates on NM (gate precedes tx_ready)...
 	assert a.contains('if g_nm.awake() && ch_can1.tx_ready() {')
-	assert a.contains('ch_can1.send(ff)')
+	// ...the unmanaged-bus forward does NOT gate on NM
+	assert a.contains('if ch_can2.tx_ready() {')
+	assert !a.contains('g_nm.awake() && ch_can2.tx_ready()')
 }
