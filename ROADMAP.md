@@ -42,18 +42,35 @@ Status keys: ✅ shipped · 🔨 in progress · ⏭️ next · 🧭 planned · �
   re-run at wide widths bench-queued (`wide-xioc-derivation-and-silicon`).
 - ✅ **Bulk P1 portable core** (`#213`, REQ-BULK-001..003) — `boards/common/bulk.h`
   pool + SPSC descriptor rings, fallible counted loans, host-proven cross-process
-  (fork+`MAP_SHARED`); `bulk-ring-silicon` review bench-queued.
-- 🔨 **Bulk cross-core `ecu.toml` surface** (branch `feat/bulk-amp`, host-proven,
-  not yet PR'd) — a `[[bulk]]` whose producer/consumer sit on different cores is
-  placed in the H755 shared window (both images derive the same pointer from a
-  board seam `duo_bulk_base()`, deterministic 32 B-aligned offsets, static-checked
-  vs the region budget); satellite image gets the same wrappers; the cross-partition
-  guard now allows cross-**core** and rejects same-core cross-partition; `[[bulk]]`
-  schema added. **Bulk is an OS-thread/platform job, never an FB** (settled) — so
-  the consumer is a service thread, no "app touches a pool" sanctioning needed.
-  Next rungs: the **on-silicon demo** (real loan/publish/take in a dual-core example),
-  the **doorbell seam** (H755 = **HSEM release-interrupt**, it has no IPCC), cache
-  hooks, off-chip mapping (ISO-TP / SOME/IP-TP).
+  (fork+`MAP_SHARED`); `bulk-ring-silicon` closed on the H755 (`#228`, below).
+- ✅ **Bulk cross-core `ecu.toml` surface** (`#225`) — a `[[bulk]]` whose
+  producer/consumer sit on different cores is placed in the H755 shared window (both
+  images derive the same pointer from a board seam `duo_bulk_base()`, deterministic
+  32 B-aligned offsets, static-checked vs the region budget); each image emits the
+  pools it is an endpoint of; the cross-partition guard allows cross-**core** and
+  rejects same-core cross-partition (host has no backend); `[[bulk]]` schema added.
+  **Bulk is an OS-thread/platform job, never an FB** (settled) — the consumer is a
+  service thread; until an `osal.bulk` transport exists, bulk termination stays in a
+  platform module and the app never touches the pool.
+- ✅ **Bulk on-silicon** (`#228`) — `examples/h755_threadx` `[[bulk]]` "xfer": the M4
+  produces seq-tagged 256 B blocks, the CM7 comm thread consumes + verifies. loom2v
+  emits per-image service hooks (`duo_bulk_produce/consume`, like `duo_trace_service`);
+  the platform glue owns the pool. Bench: **rx_bad = 0** over 32k+ blocks (byte-exact,
+  no tearing across the AXI fabric) and rx_ok + rx_gap == tx_seq (every attempt
+  consumed or a counted backpressure drop). Closes `bulk-ring-silicon` / REQ-BULK-003.
+- ✅ **Bulk HSEM doorbell** (`#230`) — the CM4 rings HSEM sem 0 after each publish →
+  IRQ125 on the CM7 → the ISR wakes the comm thread, so it drains on publish instead
+  of polling. (A plain SW interrupt can't cross cores; HSEM is the H755's inter-core
+  doorbell — no IPCC.) Bench: eliminated the backpressure drops (tx_full ~50% →
+  ~0.2%). Also extended the shared vector table to the full IRQ range (was truncated
+  at IRQ61 — an unexpected high IRQ jumped into `reset_handler`).
+- ✅ **Bulk capability split** (`#231`) — the generated cross-core wrappers are
+  role-restricted per image (producer: init/loan/publish; consumer: valid/take/
+  release), so a wrong-role call is a compile error.
+- 🧭 **Next bulk rungs** — warm-reset attach lifecycle (retract-retained-pool, the
+  M4-independent-reset race), `osal.bulk` (a declarable service thread so an *app*
+  partition can terminate bulk, in the region table with directional permissions),
+  cache hooks, off-chip mapping (ISO-TP / SOME/IP-TP).
 - ✅ **Bulk transport benchmark** (`#216`) — `tools/bulk_bench` in `make bench`:
   the ring moves ownership at ~5 M transfers/s (0.3 µs median publish→take,
   pinned cross-core) and ~0.9–6 GB/s payload filled+consumed, vs ~3–10 ms of
