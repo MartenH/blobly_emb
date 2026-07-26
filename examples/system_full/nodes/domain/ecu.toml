@@ -83,7 +83,7 @@ nbuf     = 4
 [[partition]]
 name  = "dynamics"
 core  = 1
-image = "../domain_m4"
+image = "nodes/domain_m4"
 
   [[partition.thread]]
   name     = "model"

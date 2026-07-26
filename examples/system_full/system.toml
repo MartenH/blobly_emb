@@ -11,6 +11,15 @@ fd        = false
 bitrate   = 500000
 dbc       = "compute.dbc"
 
+# Network management cluster on the compute bus: the domain node persists DriveMode ([nvm]),
+# and the NM prepare-bus-sleep edge is the flush/mark-clean quiet point (docs/nvm.md). Enabling
+# NM here gives every compute-bus node a coordinated sleep/wake + the NvM shutdown choreography.
+# Alive ids = 0x500 + node (sysnode 0x511, domain 0x512) — clear of the app/telemetry/shell ids.
+[bus.compute.nm]
+peers        = [0x500, 0x53F]
+msg_cycle_ms = 1000
+timeout_ms   = 3000
+
 [bus.edge]
 interface = "can1"
 fd        = false
