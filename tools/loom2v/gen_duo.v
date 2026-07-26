@@ -35,7 +35,10 @@ fn has_satellite(m Model) bool {
 
 // duo_gen_h: the generated cross-core contract header — slots appear ONLY here.
 fn duo_gen_h(m Model) []string {
-	if !duo_on(m) {
+	// A satellite owner with NO cross-core signal (duo_on false) — bulk/CpuLoad only — still needs
+	// the header: its boot handshake references DUO_LAYOUT_ID. Emit the contract (empty slot map,
+	// a layout id over the empty layout) so the glue's #include resolves on a clean build (codex #235 r2).
+	if !duo_on(m) && !has_satellite(m) {
 		return []string{}
 	}
 	mut g := []string{}

@@ -58,6 +58,7 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		g << 'fn C.duo_wait_clocks() // park until the owner signals clocks-ready (duo.h)'
 		g << 'fn C.board_timebase_init()'
 		g << 'fn C.duo_ioc_init() // the shared xioc pool (satellite is the writer side)'
+		g << 'fn C.duo_load_pub(int, u16) // publish this core\'s per-mille load for the owner\'s CpuLoad (duo.h)'
 		// THIS partition's production decides the handshake role: only the PRODUCING
 		// satellite publishes the layout id — a non-producing image writing the cell
 		// would be a second writer, and could restore the id while the real producer
@@ -109,9 +110,18 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		for ti, thr in threads {
 			g << ''
 			g << 'fn run_${thr}() {'
-			g << '\tmut st := Thread_${thr}_state{} // small + carries the FB field defaults: stack is right'
+			// match emit_handlers' state-struct naming (gen.v): a SINGLE-thread partition keeps the
+			// partition-wide name (Partition_<part>_state), only a multi-thread one is per-thread. A
+			// single-thread satellite (e.g. system_full's domain_m4) hit the mismatch otherwise.
+			sname := if threads.len > 1 { 'Thread_${thr}_state' } else { 'Partition_${part}_state' }
+			g << '\tmut st := ${sname}{} // small + carries the FB field defaults: stack is right'
 			g << '\tmut sched := &g_sched_${thr} // module-sized: lives in bss, not this lifetime frame'
-			for r in sat_regs['${part}/${thr}'] or { []string{} } {
+			// emit_handlers keys registrations by part/thread only for a MULTI-thread partition;
+			// a single-thread one stores them under the bare part (gen.v all_regs[part]). The owner
+			// looks up both — the satellite must too, or a single-thread satellite registers NOTHING
+			// and its FB never runs (silent no-op, then DCE'd).
+			reg_key := if threads.len > 1 { '${part}/${thr}' } else { part }
+			for r in sat_regs[reg_key] or { []string{} } {
 				g << r
 			}
 			g << '\ttick_us := u64(${m.target.tick_us})'
@@ -133,6 +143,16 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 			g << '\t\t}'
 			if ti == 0 && m.trace.on {
 				g << '\t\tC.duo_trace_service() // ~one poll per tick: plenty for the dump handshake'
+			}
+			if ti == 0 {
+				// publish this thread's per-mille load so the owner's CpuLoad frame reports this core
+				// (weak no-op default in weak_irq.c until an image aggregates cross-core load).
+				// NOTE: a MULTI-thread satellite underreports — only this (highest-priority) thread's
+				// load is published. Reaching into another live thread's scheduler global to sum would
+				// be an unsynchronized cross-thread read (codex #235 r2); the correct fix is per-thread
+				// VOLATILE load slots (as the owner side already uses, C.load_pub_slot) summed here —
+				// deferred. Single-thread satellites (e.g. the domain) are exact.
+				g << '\t\tC.duo_load_pub(${m.part.core_of[part] or { 1 }}, sched.load_permille())'
 			}
 			if ti == 0 {
 				g << emit_bulk_service_arm(m.bulk, m.part, part, '\t\t') // this satellite's cross-core bulk service (poll)

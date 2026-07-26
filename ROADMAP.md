@@ -8,6 +8,41 @@ Status keys: ✅ shipped · 🔨 in progress · ⏭️ next · 🧭 planned · �
 
 ---
 
+## Consolidation → one reference system  🔨
+
+The example count (~45 dirs) has outgrown its usefulness — most are single-feature demos and a
+maintenance burden. GOAL: grow **`examples/system_full`** into the ONE reference system that
+exercises every shipped feature across its three real nodes, and **retire the one-offs as each
+feature lands there**. Net fewer examples, and one integration test that actually means something.
+
+The three nodes (all on the bench, one `system.toml`):
+- **domain** (H755, dual-core) — AMP: a CM4 co-processor streaming into a cross-core `[[bulk]]`
+  pool the CM7 control loop consumes; cross-core signals (xioc); `[shell]` (bulkperf/ps/bmc);
+  two-core trace; nm; nvm/persist. *Absorbs* h755_threadx, h755_m4_app, gw_xcore, trace_multicore.
+- **sysnode** (H735, gateway) — 2-bus routing (done) + protected routes (E2E/SecOC), ext-id,
+  CAN-FD payloads, and the eth/SOME-IP stack on its Ethernet. *Absorbs* gw_*, h735_net/someip/doip.
+- **zone_a** (H723, edge) — a producer node + IO (GPIO/ADC/PWM). *Absorbs* io_*, h723_*.
+
+Rungs — each folds a feature-set AND retires the matching examples, one reviewable PR:
+1. 🔨 **domain dual-core** (`#235`, bench-verified) — CM4 co-processor satellite + cross-core
+   `[[bulk]]` "model" stream + `bulkperf` (28 MB/s over CAN) + cross-core **CpuLoad** (both cores
+   in the frame) + `[shell]` + nvm/persist `DriveMode` + the NM cluster it needs. Fixed two real
+   loom2v bugs: a single-thread satellite registered no FBs (ran an empty scheduler) and the
+   matching state-struct name mismatch. Retiring h755_threadx/h755_m4_app waits for rung 2.
+2. 🧭 **domain two-core trace + xioc signals** — incl. fixing the owner-FB cross-core-signal read
+   (emits host-only `osal.ioc_acquire2` for the target today) → retire trace_multicore, gw_xcore,
+   then h755_threadx + h755_m4_app
+3. 🧭 **domain nm + nvm/persist** (nm + persist already landed in rung 1)
+4. 🧭 **zone_a IO** (GPIO/ADC/PWM) → retire io_*
+5. 🧭 **sysnode protected routes + ext-id + FD payloads** → retire gw_*
+6. 🧭 **sysnode eth + SOME/IP + DoIP** — incl. a DoIP diagnostic over Ethernet that reads/writes
+   the persisted NvM data (e.g. `DriveMode`), tying the networking node to persistence → retire
+   h735_net/someip/doip
+
+Kept standalone (not features of a running system): `bulk_bench` (host micro-bench), `minimal`.
+
+---
+
 ## Communication stack
 
 - ✅ **COM TX modes** — cyclic / on-change / on-write, DBC-driven codegen
