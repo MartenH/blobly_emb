@@ -32,11 +32,95 @@ fn parse_bulk(doc toml.Doc) []BulkPoolCfg {
 	return pools
 }
 
-// emit_bulk_glue generates V declarations and wrapper functions for all bulk pools
-fn emit_bulk_glue(pools []BulkPoolCfg) []string {
+// bulk_bytes = BULK_BYTES(nbuf, bufsz): the exact pool footprint (header + rings + buffers).
+fn bulk_bytes(nbuf int, bufsz int) int {
+	return 96 + (((3 * 4 * nbuf) + 31) & ~31) + nbuf * bufsz
+}
+
+// bulk_ep_part resolves a [[bulk]] producer/consumer endpoint (a partition OR a thread name)
+// to its owning partition. THREAD-first, matching ecumodel.validate_bulk (`thread_part[ep] or
+// {ep}`): if a name were ever both a thread and a partition, both sites must classify it the
+// same way, or validation and codegen could disagree on cross- vs intra-core.
+fn bulk_ep_part(ep string, part PartMap) string {
+	return part.thread_part[ep] or { ep }
+}
+
+// bulk_ep_core resolves an endpoint to its core, so a pool whose two ends sit on different
+// cores is a CROSS-CORE pool.
+fn bulk_ep_core(ep string, part PartMap) int {
+	return part.core_of[bulk_ep_part(ep, part)] or { 0 }
+}
+
+// bulk_cross_core: producer and consumer are on different cores -> the pool must live in the
+// shared window (both images address the same bytes), not a per-image global.
+fn bulk_cross_core(p BulkPoolCfg, part PartMap) bool {
+	return bulk_ep_core(p.producer, part) != bulk_ep_core(p.consumer, part)
+}
+
+// bulk_touches: this pool has an endpoint (producer or consumer) on partition `ptn`.
+fn bulk_touches(p BulkPoolCfg, part PartMap, ptn string) bool {
+	return bulk_ep_part(p.producer, part) == ptn || bulk_ep_part(p.consumer, part) == ptn
+}
+
+// bulk_part_local: this partition's code is emitted by the OWNER image — i.e. it is NOT a
+// generated satellite (image =) and NOT a hand-written external partition.
+fn bulk_part_local(ptn string, part PartMap) bool {
+	return ptn !in part.image && !(part.external[ptn] or { false })
+}
+
+// bulk_in_image: does the image identified by `image_part` ('' = owner) emit this pool? The
+// rule is uniform for intra- and cross-core pools: an image emits a pool iff one of the pool's
+// endpoints lives in THAT image. So an intra-core pool sitting inside a satellite partition is
+// emitted by the satellite (where its FBs run), NOT dumped into the owner's BSS; and a satellite
+// only emits the shared pools it is actually an endpoint of.
+fn bulk_in_image(p BulkPoolCfg, part PartMap, image_part string) bool {
+	pp := bulk_ep_part(p.producer, part)
+	cp := bulk_ep_part(p.consumer, part)
+	if image_part != '' {
+		return pp == image_part || cp == image_part
+	}
+	return bulk_part_local(pp, part) || bulk_part_local(cp, part)
+}
+
+// emit_bulk_glue generates V declarations and wrapper functions for bulk pools. An INTRA-core
+// pool gets a per-image global arena; a CROSS-CORE pool (producer/consumer on different cores)
+// is placed at a fixed address in the H755 shared window (duo.h DUO_BULK_ADDR) so both images
+// address the SAME pool. Cross-core placement is deterministic (declaration order, 32 B-aligned)
+// and static-checked against DUO_BULK_MAX, so the two images agree without exchanging state.
+//
+// image_part selects WHICH image this is emitting for: '' = the bus OWNER (emits pools whose
+// endpoints are its local partitions — intra-core globals for them plus the shared window pools
+// it is an endpoint of); a satellite partition name = that SATELLITE image (emits the pools it
+// is an endpoint of, using the SAME globally-computed offsets so both images derive an identical
+// pointer for any shared pool).
+fn emit_bulk_glue(pools []BulkPoolCfg, part PartMap, image_part string) []string {
 	if pools.len == 0 {
 		return []string{}
 	}
+	// Lay cross-core pools out in the shared window, in declaration order, 32 B-aligned. This
+	// runs over ALL pools regardless of image_part, so the owner and a satellite agree on the
+	// offset of every shared pool.
+	duo_bulk_max := 0xE000 // keep in sync with boards/h755zi/duo.h DUO_BULK_MAX
+	mut xcore_off := map[string]int{}
+	mut off := 0
+	for p in pools {
+		if bulk_cross_core(p, part) {
+			xcore_off[p.name] = off
+			off += (bulk_bytes(p.nbuf, p.bufsz) + 31) & ~31
+		}
+	}
+	if off > duo_bulk_max {
+		panic('loom2v: cross-core [[bulk]] pools need ${off} B of the shared window but ' +
+			'DUO_BULK_MAX is ${duo_bulk_max} B (boards/h755zi/duo.h) — shrink a pool (bufsz*nbuf) ' +
+			'or raise the window')
+	}
+	// Each image emits the pools it owns an endpoint of (owner = its local partitions; a
+	// satellite = itself). This keeps an intra-core satellite-local pool in the satellite.
+	scoped := pools.filter(bulk_in_image(it, part, image_part))
+	if scoped.len == 0 {
+		return []string{}
+	}
+	has_shared := scoped.any(it.name in xcore_off)
 	mut g := []string{}
 	g << ''
 	g << '// --- Bulk Transport Pools (docs/bulk-transport.md) ---'
@@ -52,57 +136,69 @@ fn emit_bulk_glue(pools []BulkPoolCfg) []string {
 	g << 'fn C.bulk_release(b &C.bulk_t, idx u32)'
 	g << 'fn C.bulk_buf(b &C.bulk_t, idx u32) &u8'
 	g << 'fn C.bulk_overflows(b &C.bulk_t) u32'
+	if has_shared {
+		// The cross-core region base comes from a PLATFORM seam, exactly like duo_pub/duo_ioc_init:
+		// generated code externs it and the board's glue C provides it (from duo.h's DUO_BULK_ADDR
+		// on the H755). Generated code never includes a board header — it stays board-agnostic.
+		g << 'fn C.duo_bulk_base() usize // cross-core bulk region base (board glue; H755 = DUO_BULK_ADDR)'
+	}
 	g << ''
 
-	for p in pools {
-		// BULK_BYTES(nbuf, bufsz) = 96 + (((3 * 4 * nbuf) + 31) & ~31) + nbuf * bufsz
-		bytes := 96 + (((3 * 4 * p.nbuf) + 31) & ~31) + p.nbuf * p.bufsz
-		g << '// --- Bulk pool: ${p.name} (${p.nbuf} buffers x ${p.bufsz} bytes) ---'
-		g << '@[aligned: 32]'
-		g << '__global ('
-		g << '\tg_bulk_${p.name}_arena [${bytes}]u8'
-		g << ')'
+	for p in scoped {
+		bytes := bulk_bytes(p.nbuf, p.bufsz)
+		cross := p.name in xcore_off
+		place := if cross { 'shared window @ base+0x${xcore_off[p.name].hex()}' } else { 'local arena' }
+		g << '// --- Bulk pool: ${p.name} (${p.nbuf} x ${p.bufsz} B; ${p.producer} -> ${p.consumer}; ${place}) ---'
+		if cross {
+			// no per-image global — the pool IS the shared window bytes; both images derive the
+			// SAME pointer from the platform base. One side (the producer image) calls _init; the
+			// other polls _valid() before first use (bulk.h attach handshake).
+			g << 'fn bulk_${p.name}_ptr() &C.bulk_t {'
+			g << '\treturn &C.bulk_t(voidptr(C.duo_bulk_base() + usize(${xcore_off[p.name]})))'
+			g << '}'
+		} else {
+			g << '@[aligned: 32]'
+			g << '__global ('
+			g << '\tg_bulk_${p.name}_arena [${bytes}]u8'
+			g << ')'
+			g << 'fn bulk_${p.name}_ptr() &C.bulk_t {'
+			g << '\treturn &C.bulk_t(&g_bulk_${p.name}_arena[0])'
+			g << '}'
+		}
 		g << ''
 		g << 'pub fn bulk_${p.name}_init() {'
-		g << '\tptr := &C.bulk_t(&g_bulk_${p.name}_arena[0])'
-		g << '\tC.bulk_init(ptr, u32(${p.nbuf}), u32(${p.bufsz}))'
+		g << '\tC.bulk_init(bulk_${p.name}_ptr(), u32(${p.nbuf}), u32(${p.bufsz}))'
 		g << '}'
 		g << ''
 		g << 'pub fn bulk_${p.name}_valid() bool {'
-		g << '\tptr := &C.bulk_t(&g_bulk_${p.name}_arena[0])'
-		g << '\treturn C.bulk_valid(ptr) != 0'
+		g << '\treturn C.bulk_valid(bulk_${p.name}_ptr()) != 0'
 		g << '}'
 		g << ''
 		g << 'pub fn bulk_${p.name}_loan() int {'
-		g << '\tptr := &C.bulk_t(&g_bulk_${p.name}_arena[0])'
-		g << '\treturn int(C.bulk_loan(ptr))'
+		g << '\treturn int(C.bulk_loan(bulk_${p.name}_ptr()))'
 		g << '}'
 		g << ''
 		g << 'pub fn bulk_${p.name}_publish(idx int, len u32) bool {'
 		g << '\tif idx < 0 || idx >= ${p.nbuf} || len > u32(${p.bufsz}) {'
 		g << '\t\treturn false'
 		g << '\t}'
-		g << '\tptr := &C.bulk_t(&g_bulk_${p.name}_arena[0])'
-		g << '\tC.bulk_publish(ptr, u32(idx), len)'
+		g << '\tC.bulk_publish(bulk_${p.name}_ptr(), u32(idx), len)'
 		g << '\treturn true'
 		g << '}'
 		g << ''
 		g << 'pub fn bulk_${p.name}_ready() u32 {'
-		g << '\tptr := &C.bulk_t(&g_bulk_${p.name}_arena[0])'
-		g << '\treturn C.bulk_ready(ptr)'
+		g << '\treturn C.bulk_ready(bulk_${p.name}_ptr())'
 		g << '}'
 		g << ''
 		g << 'pub fn bulk_${p.name}_take(len &u32) int {'
-		g << '\tptr := &C.bulk_t(&g_bulk_${p.name}_arena[0])'
-		g << '\treturn int(C.bulk_take(ptr, len))'
+		g << '\treturn int(C.bulk_take(bulk_${p.name}_ptr(), len))'
 		g << '}'
 		g << ''
 		g << 'pub fn bulk_${p.name}_release(idx int) bool {'
 		g << '\tif idx < 0 || idx >= ${p.nbuf} {'
 		g << '\t\treturn false'
 		g << '\t}'
-		g << '\tptr := &C.bulk_t(&g_bulk_${p.name}_arena[0])'
-		g << '\tC.bulk_release(ptr, u32(idx))'
+		g << '\tC.bulk_release(bulk_${p.name}_ptr(), u32(idx))'
 		g << '\treturn true'
 		g << '}'
 		g << ''
@@ -110,13 +206,11 @@ fn emit_bulk_glue(pools []BulkPoolCfg) []string {
 		g << '\tif idx < 0 || idx >= ${p.nbuf} {'
 		g << '\t\treturn unsafe { nil }'
 		g << '\t}'
-		g << '\tptr := &C.bulk_t(&g_bulk_${p.name}_arena[0])'
-		g << '\treturn C.bulk_buf(ptr, u32(idx))'
+		g << '\treturn C.bulk_buf(bulk_${p.name}_ptr(), u32(idx))'
 		g << '}'
 		g << ''
 		g << 'pub fn bulk_${p.name}_overflows() u32 {'
-		g << '\tptr := &C.bulk_t(&g_bulk_${p.name}_arena[0])'
-		g << '\treturn C.bulk_overflows(ptr)'
+		g << '\treturn C.bulk_overflows(bulk_${p.name}_ptr())'
 		g << '}'
 		g << ''
 	}

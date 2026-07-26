@@ -78,6 +78,7 @@ fn specs() map[string]map[string]Key {
 			'did':       sub(.arr, false, 'did')
 			'route':     sub(.arr, false, 'route')
 			'io':        sub(.tbl, false, 'io')
+			'bulk':      sub(.arr, false, 'bulk')
 		}
 		'import':     {
 			'dbc': k(.str)
@@ -299,6 +300,15 @@ fn specs() map[string]map[string]Key {
 			'bus':   req(.str) // the destination bus
 			'frame': k(.str) // SIGNAL route: the destination DBC frame to re-encode into
 			'id':    k(.int) // FRAME route: optional; 0/absent keeps the source id
+		}
+		// bulk transport pools (docs/bulk-transport.md): a producer/consumer SPSC pool. Same
+		// partition => per-image arena; different cores => the H755 shared window.
+		'bulk':       {
+			'name':     req(.str)
+			'producer': req(.str) // a partition or thread name
+			'consumer': req(.str) // a partition or thread name
+			'bufsz':    req(.int) // per-buffer bytes (multiple of 32)
+			'nbuf':     req(.int) // ring depth (> 0)
 		}
 	}
 }

@@ -3774,7 +3774,7 @@ fn main() {
 	} else {
 		glue << emit_run_host(m, telem_iface, bus_names, bus_dests, extra_dest_buses)
 	}
-	glue << emit_bulk_glue(m.bulk)
+	glue << emit_bulk_glue(m.bulk, m.part, '') // '' = the bus owner image (emits every pool)
 
 	// The `module gen` header emits `import sig` whenever the config COULD reference
 	// sig.* (local cells / bus bridge / io), but some shapes don't actually — the
