@@ -1364,11 +1364,17 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 			}
 			// The raw forwarder re-emits on RECEIPT (source cadence). A differing destination
 			// cadence would mis-rate (a 10 ms source into a 100 ms dest sends 10x too often).
-			// raw_ident only checks layout, so enforce equal cadence here.
-			if r.from_cyc != r.to_cyc {
+			// raw_ident only checks layout, so enforce equal cadence here — against the EFFECTIVE
+			// destination cadence: an authored [[frame]].tx.cycle_ms OVERRIDES the DBC
+			// GenMsgCycleTime, so equal DBC cycles alone would miss a mis-rate (the forwarder
+			// ignores the authored cadence and the user's intended rate is silently dropped).
+			dest_authored_us := m.frames.tx_cycle_us[tof] or { 0 }
+			dest_eff_ms := if dest_authored_us > 0 { dest_authored_us / 1000 } else { r.to_cyc }
+			if r.from_cyc != dest_eff_ms {
 				panic('route: signal "${r.signal}" on a [target] kind="threadx" gateway has source ' +
-					'cadence ${r.from_cyc} ms != destination ${r.to_cyc} ms — the raw forwarder re-emits ' +
-					'at the source rate; use matching cycle times or route on the host target')
+					'cadence ${r.from_cyc} ms != effective destination cadence ${dest_eff_ms} ms ' +
+					'(an authored [[frame]].tx.cycle_ms overrides the DBC cycle) — the raw forwarder ' +
+					're-emits at the source rate; use matching cycle times or route on the host target')
 			}
 		}
 		// both endpoints must name a DECLARED [bus.*]; emit_bridges iterates declared

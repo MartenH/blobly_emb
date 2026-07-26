@@ -9,18 +9,28 @@
  * The H723 can run to 550 MHz (VOS0); this ships the same safe 400 MHz VOS1 point as the
  * -Q board (PLL 8/2*200/2). BENCH-VERIFIED on a NUCLEO-H723ZG as system_full's zone_a
  * (2026-07-26): SYSCLK reached 400 MHz and FDCAN1 carried the edge bus. The waits are all
- * bounded regardless, so a rail that never readies falls back to HSI 64 MHz rather than hang.
- * FDCAN kernel clock stays HSE 8 MHz (see board.mk timing).
+ * bounded regardless, so a rail that never readies HANGS (board_clock_fault) rather than run
+ * on a degraded clock. FDCAN kernel clock stays HSE 8 MHz (see board.mk timing).
  */
 #include <stm32h723xx.h>
 
 /* Achieved CPU frequency in MHz (DWT cycles per microsecond). HSI reset value until
- * board_clock_init() confirms SYSCLK on PLL1, so board_now_us() stays correct on a
- * degraded bring-up. */
+ * board_clock_init() confirms SYSCLK on PLL1 (and hangs otherwise), so board_now_us() only
+ * ever runs at the rated clock. */
 static volatile uint32_t g_cpu_mhz = 64;
 
+/* board_clock_fault — a clock we can't bring up is a HARD FAULT, not a limp (an ECU on the
+ * wrong clock violates its real-time timing, and the FDCAN kernel clock rides the same HSE).
+ * Hang deterministically; SWD reads the PC + the RCC/PWR registers to see which rail failed.
+ * Unreachable on healthy silicon. Same policy as boards/h755zi. */
+static void __attribute__((noreturn)) board_clock_fault(void) {
+	for (;;) {
+	}
+}
+
 /* board_clock_init: bring the M7 to 400 MHz. Chain: LDO supply -> VOS1 -> flash WS ->
- * PLL1 (8/2*200/2 = 400) -> switch SYSCLK. Every wait is BOUNDED (fall back to HSI). */
+ * PLL1 (8/2*200/2 = 400) -> switch SYSCLK. Every wait is BOUNDED: a rail that never readies
+ * HANGS (board_clock_fault) rather than continue on a degraded clock. */
 void board_clock_init(void) {
 	uint32_t t;
 
@@ -30,20 +40,20 @@ void board_clock_init(void) {
 	 *    debugger — recover with st-flash --connect-under-reset. */
 	PWR->CR3 = (PWR->CR3 & ~PWR_CR3_BYPASS) | PWR_CR3_LDOEN;
 	for (t = 0; (PWR->CSR1 & PWR_CSR1_ACTVOSRDY) == 0u; t++) {
-		if (t >= 4000000u) return; /* supply not ready -> stay on HSI */
+		if (t >= 4000000u) board_clock_fault(); /* supply not ready -> hang (hard fault) */
 	}
 
 	/* 2. HSE (8 MHz bypass from the ST-LINK MCO): PLL source + FDCAN kernel clock. */
 	RCC->CR |= RCC_CR_HSEBYP | RCC_CR_HSEON;
 	for (t = 0; (RCC->CR & RCC_CR_HSERDY) == 0u; t++) {
-		if (t >= 4000000u) return;
+		if (t >= 4000000u) board_clock_fault();
 	}
 
 	/* 3. VOS1 (400 MHz-capable VCORE). On the H72x/73x `D3CR |= VOS` (both bits) is the
 	 *    top level; we drive PLL to 400 to stay at the proven -Q point. */
 	PWR->D3CR |= PWR_D3CR_VOS;
 	for (t = 0; (PWR->D3CR & PWR_D3CR_VOSRDY) == 0u; t++) {
-		if (t >= 4000000u) return;
+		if (t >= 4000000u) board_clock_fault();
 	}
 
 	/* 4. Flash wait-states for 200 MHz AXI @ VOS1: 2 WS, WRHIGHFREQ = 0b10. */
@@ -62,13 +72,13 @@ void board_clock_init(void) {
 	              | ((2u - 1u) << RCC_PLL1DIVR_Q1_Pos) | ((2u - 1u) << RCC_PLL1DIVR_R1_Pos);
 	RCC->CR |= RCC_CR_PLL1ON;
 	for (t = 0; (RCC->CR & RCC_CR_PLL1RDY) == 0u; t++) {
-		if (t >= 4000000u) return; /* PLL didn't lock -> stay on HSI */
+		if (t >= 4000000u) board_clock_fault(); /* PLL didn't lock -> hang (hard fault) */
 	}
 
 	/* 7. Switch SYSCLK to PLL1 (400 MHz). */
 	RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_SW_PLL1;
 	for (t = 0; (RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL1; t++) {
-		if (t >= 4000000u) return;
+		if (t >= 4000000u) board_clock_fault();
 	}
 	g_cpu_mhz = 400; /* SYSCLK confirmed on PLL1 -> DWT ticks at 400 MHz */
 
@@ -104,11 +114,11 @@ uint64_t board_now_us(void) {
 void board_can_clock_pins_init(void) {
 	RCC->CR |= RCC_CR_HSEBYP;
 	RCC->CR |= RCC_CR_HSEON;
-	/* BOUNDED, like board_clock_init's HSE wait: if HSE never readies, return rather than hang
-	 * the whole ECU here (board_clock_init already fell back to HSI, and the comm thread's
-	 * can Channel.open() will park just that thread on the mistimed bus). */
+	/* BOUNDED, like board_clock_init's HSE wait. In practice unreachable — board_clock_init
+	 * already brought HSE up (or hung), so HSE is ready here — but a never-ready HSE hangs
+	 * (board_clock_fault) for the same reason: FDCAN off its 8 MHz kernel clock is unusable. */
 	for (uint32_t t = 0; (RCC->CR & RCC_CR_HSERDY) == 0u; t++) {
-		if (t >= 4000000u) return;
+		if (t >= 4000000u) board_clock_fault();
 	}
 	RCC->D2CCIP1R &= ~RCC_D2CCIP1R_FDCANSEL; /* 00 -> HSE (8 MHz) */
 
@@ -130,6 +140,16 @@ int board_io_pin_reserved(int port, int pin) {
 	if (port == 0 && (pin == 13 || pin == 14)) return 1; /* PA13/PA14: SWD */
 	if (port == 1 && pin == 3) return 1;                 /* PB3: SWO */
 	return 0;
+}
+
+/* Bonded pads on the NUCLEO-H723ZG's LQFP144 (same package as the -Q): ports A..G are fully
+ * bonded, PH0/PH1 are the HSE pair, nothing beyond exists. Without this override an [io] point
+ * on an unbonded pad (e.g. PI0) would pass the driver's legacy weak default (accepts any PA..PK)
+ * and a handler would drive a nonexistent pin instead of reporting the startup fault. */
+int board_io_pin_exists(int port, int pin) {
+	if (port >= 0 && port <= 6) return pin <= 15;    /* PA..PG complete */
+	if (port == 7) return pin <= 1;                  /* PH0/PH1 (osc pair) */
+	return 0;                                        /* PI/PJ/PK: not bonded */
 }
 
 /* Weak default for the shared ETH interrupt vector (boards/common/vectors.S IRQ61):

@@ -16,14 +16,25 @@
 #include <stm32h755xx.h>
 
 /* Achieved CPU frequency in MHz, i.e. DWT cycles per microsecond. Starts at the HSI
- * reset value; board_clock_init() bumps it to 400 only once SYSCLK is confirmed on
- * PLL1, so board_now_us() stays correct even if the clock bring-up falls back. */
+ * reset value; board_clock_init() bumps it to 400 once SYSCLK is confirmed on PLL1 (and
+ * hangs otherwise), so board_now_us() only ever runs at the rated clock. */
 static volatile uint32_t g_cpu_mhz = 64;
+
+/* board_clock_fault — a clock we can't bring up is a HARD FAULT, not a limp: an ECU on the
+ * wrong clock violates its real-time timing (ThreadX's SysTick assumes SYSTEM_CLOCK, so a
+ * downgraded core runs several times slow) and the FDCAN kernel clock rides the same HSE, so
+ * "stay alive to diagnose over CAN" doesn't even hold. Hang deterministically — SWD reads the
+ * PC (stuck here) and the RCC/PWR registers to see which rail failed. Unreachable on healthy
+ * silicon (a good board always locks PLL1). */
+static void __attribute__((noreturn)) board_clock_fault(void) {
+	for (;;) {
+	}
+}
 
 /* board_clock_init: bring the Cortex-M7 to 400 MHz (VOS1 ceiling on the SMPS-supplied
  * -Q board). Chain: Direct-SMPS supply -> VOS1 -> flash wait-states -> PLL1
  * (8/2*200/2 = 400 MHz) -> switch SYSCLK. Every wait is BOUNDED: if a rail never
- * readies we return with SYSCLK still on the safe HSI (64 MHz).
+ * readies we HANG (board_clock_fault) rather than continue on a degraded clock.
  *
  * The supply write MUST match the board wiring (Direct SMPS on the -Q Nucleo); a
  * mismatch browns out VCORE and locks the debugger — recover with
@@ -35,19 +46,19 @@ void board_clock_init(void) {
 	PWR->CR3 = (PWR->CR3 & ~(PWR_CR3_SMPSLEVEL | PWR_CR3_SMPSEXTHP | PWR_CR3_LDOEN | PWR_CR3_BYPASS))
 	         | PWR_CR3_SMPSEN;
 	for (t = 0; (PWR->CSR1 & PWR_CSR1_ACTVOSRDY) == 0u; t++) {
-		if (t >= 4000000u) return; /* supply not ready -> stay on HSI */
+		if (t >= 4000000u) board_clock_fault(); /* supply not ready -> hang (hard fault) */
 	}
 
 	/* 2. HSE (8 MHz bypass from the ST-LINK MCO): PLL source + FDCAN kernel clock. */
 	RCC->CR |= RCC_CR_HSEBYP | RCC_CR_HSEON;
 	for (t = 0; (RCC->CR & RCC_CR_HSERDY) == 0u; t++) {
-		if (t >= 4000000u) return;
+		if (t >= 4000000u) board_clock_fault();
 	}
 
 	/* 3. VOS1 (the highest SMPS-legal VCORE on this family) — required for 400 MHz. */
 	PWR->D3CR |= PWR_D3CR_VOS;
 	for (t = 0; (PWR->D3CR & PWR_D3CR_VOSRDY) == 0u; t++) {
-		if (t >= 4000000u) return; /* VOS1 not reached -> stay on HSI */
+		if (t >= 4000000u) board_clock_fault(); /* VOS1 not reached -> hang (hard fault) */
 	}
 
 	/* 4. Flash wait-states for 200 MHz AXI @ VOS1: 2 WS, WRHIGHFREQ = 0b10. */
@@ -66,13 +77,13 @@ void board_clock_init(void) {
 	              | ((2u - 1u) << RCC_PLL1DIVR_Q1_Pos) | ((2u - 1u) << RCC_PLL1DIVR_R1_Pos);
 	RCC->CR |= RCC_CR_PLL1ON;
 	for (t = 0; (RCC->CR & RCC_CR_PLL1RDY) == 0u; t++) {
-		if (t >= 4000000u) return; /* PLL didn't lock -> stay on HSI */
+		if (t >= 4000000u) board_clock_fault(); /* PLL didn't lock -> hang (hard fault) */
 	}
 
 	/* 7. Switch SYSCLK to PLL1 (400 MHz). */
 	RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_SW_PLL1;
 	for (t = 0; (RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL1; t++) {
-		if (t >= 4000000u) return;
+		if (t >= 4000000u) board_clock_fault();
 	}
 	g_cpu_mhz = 400; /* SYSCLK confirmed on PLL1 -> DWT ticks at 400 MHz */
 
