@@ -1556,6 +1556,7 @@ struct BusCtx {
 	period       string
 	gate         string
 	load         []string
+	ncores       int // cores in the CpuLoad frame (default 1); >1 when the owner aggregates satellites
 	det_ovr      string
 	det_lines    []string
 	frame        string
@@ -1598,7 +1599,7 @@ fn (t TelemProducer) bus_tick(ctx BusCtx) []string {
 	g << '\t\tif ${ctx.now} - last_telem >= ${ctx.period}${ctx.gate} {'
 	g << '\t\t\tlast_telem = ${ctx.now}'
 	g << ctx.load
-	g << '\t\t\tframe := telem.encode_cpuload(load, 1)'
+	g << '\t\t\tframe := telem.encode_cpuload(load, ${if ctx.ncores > 0 { ctx.ncores } else { 1 }})'
 	g << '\t\t\tmut ${ctx.frame} := can.Frame{'
 	g << '\t\t\t\tid:  u32(0x${t.id.hex()})'
 	g << '\t\t\t\tlen: 8'
@@ -1957,9 +1958,19 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << trace_c_decls(m)
 			glue << shell_c_decls(m)
 			glue << duo_c_decls(m)
+			if has_satellite(m) {
+				// boot() calls this to release the parked satellite. Keyed on has_satellite, NOT
+				// duo_on — a node can own a satellite for [[bulk]]/CpuLoad without any cross-core
+				// SIGNAL (the domain), and then duo_c_decls (duo_on-gated) emits nothing (codex #235).
+				glue << 'fn C.duo_clocks_ready() // release the parked satellite: final HCLK + HSEM en + DUO_CLK_MAGIC (duo.h)'
+			}
 			glue << nvm_c_decls(m)
 			glue << duo_trace_c_decls(m)
 			glue << emit_bulk_service_decls(m.bulk, m.part, '') // owner-side cross-core bulk service
+			if comm_thread_on && m.part.image.len > 0 {
+				// cross-core CpuLoad: the comm thread reads each satellite core's published load
+				glue << "fn C.duo_load_get(int) u16 // a satellite core's per-mille load (duo.h; weak 0)"
+			}
 			glue << shell_cmd_fns(m)
 			glue << nm_shell_fns(m)
 			glue << stat_shell_fns(m, doc, app_threads, multi)
@@ -2381,10 +2392,18 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// the io thread publishes its own slot, so its presence flips the single-FB
 				// cut onto the summed reads too (io serve time counts like an FB thread's)
 				sum_load := multi || m.io_points.len > 0
-				comm_load_line := if sum_load {
+				mut comm_load_line := if sum_load {
 					'\t\t\tload[0] = u16(C.load_sum_permille()) // sum of the FB threads (one core)'
 				} else {
 					'\t\t\tload[0] = u16(C.load_permille())'
+				}
+				mut comm_ncores := 1
+				for spart, _ in m.part.image {
+					sc := m.part.core_of[spart] or { continue }
+					comm_load_line += '\n\t\t\tload[${sc}] = C.duo_load_get(${sc}) // ' + spart + ' satellite (cross-core)'
+					if sc + 1 > comm_ncores {
+						comm_ncores = sc + 1
+					}
 				}
 				comm_det_ovr := if sum_load { 'C.load_sum_overruns()' } else { 'C.load_overruns()' }
 				comm_det_line := if sum_load {
@@ -2489,6 +2508,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						period:       'telem_period_us'
 						gate:         if m.nm.on { ' && nm_up && ch.tx_ready()' } else { ' && ch.tx_ready()' }
 						load:         ['\t\t\tmut load := [8]u16{}', comm_load_line]
+						ncores:       comm_ncores
 						det_ovr:      comm_det_ovr
 						det_lines:    [comm_det_line]
 						frame:        'f'
@@ -2651,6 +2671,13 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '// referencing it also forces this module (incl. tx_application_define) to link.'
 			glue << nvm_flash_wrappers(m)
 			glue << 'pub fn boot() {'
+			if has_satellite(m) {
+				// release the parked satellite core BEFORE the kernel: it waits on DUO_CLK_MAGIC
+				// (duo_wait_clocks). main.v has already run board_clock_init, so the satellite's
+				// SysTick is set against the final HCLK. Generator-owned so any owner — a shared
+				// main.v (system_full) or a hand-written one — releases its satellite (codex #235).
+				glue << '\tC.duo_clocks_ready()'
+			}
 			if ioc_idx.len > 0 {
 				glue << '\tC.ioc_pool_init() // init the cross-thread signal IOC cells before any thread runs'
 			}
@@ -3844,7 +3871,11 @@ fn main() {
 				slots = regs.len
 			}
 		}
-		if duo_on(m) {
+		if duo_on(m) || has_satellite(m) {
+			// duo_gen.h holds DUO_LAYOUT_ID, which the cross-core boot handshake (duo_layout_ok /
+			// _publish) needs for EVERY satellite owner — even a bulk/CpuLoad-only node with no
+			// cross-core [[signal]] (duo_on false). Without this a clean `make nodes` fails on the
+			// glue's #include "duo_gen.h" (codex #235 r2); a stale header masks it on a used tree.
 			hpath := os.join_path(os.dir(args[5]), 'duo_gen.h')
 			os.write_file(hpath, duo_gen_h(m).join('\n') + '\n') or {
 				panic('write ${hpath}: ${err}')

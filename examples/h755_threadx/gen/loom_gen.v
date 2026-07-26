@@ -84,6 +84,7 @@ fn C.shell_iocx(&u8, int) int
 fn C.shell_boot(&u8, int) int
 fn C.duo_poll(int, &u32, &u32) int // xioc reader (comm_glue.c): 1 = fresh value
 fn C.duo_layout_ok() int // layout-id handshake: 0 = satellite absent or a DIFFERENT build
+fn C.duo_clocks_ready() // release the parked satellite: final HCLK + HSEM en + DUO_CLK_MAGIC (duo.h)
 // [nvm]: the journal storage map + flash driver (boards layer / example glue)
 fn C.nvm_map_a() u32
 fn C.nvm_map_b() u32
@@ -98,6 +99,7 @@ fn C.duo_trace_count() u32
 fn C.duo_trace_buf() &u8
 fn C.duo_trace_offset(&i32, &u32) int // satellite clock - ours, + its error bound
 fn C.duo_bulk_consume() // platform consumer service (glue): poll+take+release
+fn C.duo_load_get(int) u16 // a satellite core's per-mille load (duo.h; weak 0)
 
 fn shell_ps_cmd(args &u8, args_len int, now u64, mut rsp shell.Rsp) {
 	n := C.shell_ps(&rsp.buf[0], 520)
@@ -416,7 +418,8 @@ fn comm_thread_entry(input u32) {
 			last_telem = t1
 			mut load := [8]u16{}
 			load[0] = u16(C.load_sum_permille()) // sum of the FB threads (one core)
-			frame := telem.encode_cpuload(load, 1)
+			load[1] = C.duo_load_get(1) // m4 satellite (cross-core)
+			frame := telem.encode_cpuload(load, 2)
 			mut f := can.Frame{
 				id:  u32(0x7e0)
 				len: 8
@@ -632,6 +635,7 @@ fn nvm_fl_read(ctx voidptr, addr u32, out &u8, len u32) bool {
 	return C.bflash_read(addr, out, len) != 0
 }
 pub fn boot() {
+	C.duo_clocks_ready()
 	C.ioc_pool_init() // init the cross-thread signal IOC cells before any thread runs
 	// [nvm]: mount + restore BEFORE the kernel — the single-threaded window.
 	// Restored values seed both the thread-init staging AND the persist ioc

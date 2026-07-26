@@ -30,9 +30,12 @@
 #
 # FLASH the boards (in blobly_emb) — see boards/common/bench serials:
 #     make -C examples/system_full nodes
-#     make -C examples/system_full/nodes/sysnode flash SERIAL=001C002C3133510237363734   # H735
-#     make -C examples/system_full/nodes/domain  flash SERIAL=001E00243335510835383531   # H755
-#     make -C examples/system_full/nodes/zone_a  flash SERIAL=005500333233510739363634   # H723
+#     make -C examples/system_full/nodes/sysnode   flash SERIAL=001C002C3133510237363734  # H735
+#     make -C examples/system_full/nodes/domain    flash SERIAL=001E00243335510835383531  # H755 CM7 (bank 1)
+#     make -C examples/system_full/nodes/domain_m4 flash SERIAL=001E00243335510835383531  # H755 CM4 (bank 2)
+#     make -C examples/system_full/nodes/zone_a    flash SERIAL=005500333233510739363634  # H723
+# (the H755 needs BOTH banks — without domain_m4 on bank 2 the CM4 is dead and no cross-core
+#  bulk / CpuLoad runs; a reset after flashing both starts the dual-core node.)
 #
 # RUN (from the blobly_net repo — point BLOBLY_PROJECT at your blobly_emb checkout; the DBC
 # paths above are relative to THIS file, so any checkout works):
@@ -51,6 +54,10 @@ buses:
     bitrate: 500000
     mode: monitor            # listen + ACK the boards; no restbus sim — the ECUs drive it
     enabled: true
+    manifest: nodes/domain/gen/trace-manifest.csv  # the domain node's CAN shell frames
+                                                    # (0x7F0/0x7F2/0x7F1) — WITHOUT this the shell
+                                                    # panel reports "shell not available". Type
+                                                    # `bulkperf` on this bus. resolve_asset -> here.
     databases:
       - compute.dbc            # resolved against this .blobnet's own dir (blobly_net resolve_asset)
 
