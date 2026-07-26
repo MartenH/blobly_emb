@@ -145,9 +145,17 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 				g << '\t\tC.duo_trace_service() // ~one poll per tick: plenty for the dump handshake'
 			}
 			if ti == 0 {
-				// publish this core's per-mille load so the owner's CpuLoad frame reports it
-				// (weak no-op default in weak_irq.c until an image aggregates cross-core load)
-				g << '\t\tC.duo_load_pub(${m.part.core_of[part] or { 1 }}, sched.load_permille())'
+				// publish this CORE's per-mille load so the owner's CpuLoad frame reports it (weak
+				// no-op default in weak_irq.c until an image aggregates cross-core load). SUM every
+				// thread on the core — each satellite thread has its own scheduler, and they timeshare
+				// the one core, so a single thread's load underreports a multi-thread satellite (codex #235).
+				mut load_terms := ['sched.load_permille()']
+				for j, other in threads {
+					if j > 0 {
+						load_terms << 'g_sched_${other}.load_permille()'
+					}
+				}
+				g << '\t\tC.duo_load_pub(${m.part.core_of[part] or { 1 }}, u16(${load_terms.join(' + ')}))'
 			}
 			if ti == 0 {
 				g << emit_bulk_service_arm(m.bulk, m.part, part, '\t\t') // this satellite's cross-core bulk service (poll)

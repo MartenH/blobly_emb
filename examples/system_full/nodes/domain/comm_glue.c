@@ -149,6 +149,7 @@ int shell_bmc(unsigned char *out, int cap) {
  * then lowers the flag. blocks*256 B / window = the pool's cross-core bandwidth. No payload verify
  * (integrity is the paced path's job); this isolates the transport+copy rate, bounded by the CM4's
  * uncached D2->D3 SRAM4 writes. The comm thread is busy for the window (~0.2 s) — operator probe. */
+void duo_bulk_resync(void); /* re-baseline the paced-demo integrity state (defined by duo_bulk_consume) */
 int shell_bulkperf(unsigned char *out, int cap) {
     char *p = (char *)out, *end = (char *)out + cap;
     bulk_t *bp = (bulk_t *)DUO_BULK_ADDR;
@@ -171,6 +172,22 @@ int shell_bulkperf(unsigned char *out, int cap) {
     uint64_t us = board_now_us() - t0;
     __asm__ volatile("dmb" ::: "memory");
     *burst = 0u; /* stop the CM4 burst */
+
+    /* Resync the shared integrity state before the paced demo resumes. bulkperf shares the pool +
+     * counters with duo_bulk_consume: the CM4 can publish one residual WORD-pattern block after it
+     * passes its while(*burst) check (duo_bulk_consume would count it rx_bad), and g_bulk_tx_seq
+     * jumped ~blocks during the burst (which would show as one huge rx_gap on the next paced block).
+     * Let the CM4 land its last block, drain the pool, and re-baseline the consumer (codex #235). */
+    uint64_t tq = board_now_us();
+    while (board_now_us() - tq < 2000u) { /* > one CM4 produce */ }
+    {
+        uint32_t rl = 0u;
+        int ri;
+        while ((ri = bulk_take(bp, &rl)) >= 0) {
+            bulk_release(bp, (uint32_t)ri);
+        }
+    }
+    duo_bulk_resync(); /* the next paced block re-baselines s_rx_last: no phantom gap or bad */
 
     uint32_t blk_s  = us ? (uint32_t)((uint64_t)blocks * 1000000u / us) : 0u;
     uint32_t kb_s   = us ? (uint32_t)((uint64_t)blocks * 256u * 1000u / us) : 0u;
@@ -537,6 +554,12 @@ uint32_t g_bulk_rx_bad = 0;
 uint32_t g_bulk_rx_gap = 0;
 static uint32_t s_rx_last = 0;
 static int s_rx_started = 0;
+
+/* bulkperf calls this after its burst to re-baseline the paced-demo integrity check: clearing
+ * s_rx_started makes the next taken block set s_rx_last afresh (no phantom rx_gap from the burst's
+ * ~N-block seq jump). bulkperf also drains the pool first, so no residual word-pattern block
+ * reaches the byte-pattern verify below (codex #235). */
+void duo_bulk_resync(void) { s_rx_started = 0; }
 
 void duo_bulk_consume(void) {
 	bulk_t *p = (bulk_t *)DUO_BULK_ADDR;

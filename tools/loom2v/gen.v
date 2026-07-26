@@ -1958,6 +1958,12 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << trace_c_decls(m)
 			glue << shell_c_decls(m)
 			glue << duo_c_decls(m)
+			if has_satellite(m) {
+				// boot() calls this to release the parked satellite. Keyed on has_satellite, NOT
+				// duo_on — a node can own a satellite for [[bulk]]/CpuLoad without any cross-core
+				// SIGNAL (the domain), and then duo_c_decls (duo_on-gated) emits nothing (codex #235).
+				glue << 'fn C.duo_clocks_ready() // release the parked satellite: final HCLK + HSEM en + DUO_CLK_MAGIC (duo.h)'
+			}
 			glue << nvm_c_decls(m)
 			glue << duo_trace_c_decls(m)
 			glue << emit_bulk_service_decls(m.bulk, m.part, '') // owner-side cross-core bulk service
@@ -2665,6 +2671,13 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '// referencing it also forces this module (incl. tx_application_define) to link.'
 			glue << nvm_flash_wrappers(m)
 			glue << 'pub fn boot() {'
+			if has_satellite(m) {
+				// release the parked satellite core BEFORE the kernel: it waits on DUO_CLK_MAGIC
+				// (duo_wait_clocks). main.v has already run board_clock_init, so the satellite's
+				// SysTick is set against the final HCLK. Generator-owned so any owner — a shared
+				// main.v (system_full) or a hand-written one — releases its satellite (codex #235).
+				glue << '\tC.duo_clocks_ready()'
+			}
 			if ioc_idx.len > 0 {
 				glue << '\tC.ioc_pool_init() // init the cross-thread signal IOC cells before any thread runs'
 			}

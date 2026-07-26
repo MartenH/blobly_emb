@@ -38,6 +38,7 @@ fn C.board_now_us() u64 // DWT-based µs (this core's own counter, glue C)
 fn C.duo_wait_clocks() // park until the owner signals clocks-ready (duo.h)
 fn C.board_timebase_init()
 fn C.duo_ioc_init() // the shared xioc pool (satellite is the writer side)
+fn C.duo_load_pub(int, u16) // publish this core's per-mille load for the owner's CpuLoad (duo.h)
 fn C.duo_layout_retract() // boot FIRST act: close polling before touching channels
 fn C.duo_layout_publish() // layout-id handshake: owner polls nothing until this
 fn C.duo_pub(int, u32, u32) // xioc writer — slots from gen/duo_gen.h
@@ -93,6 +94,7 @@ fn run_m4_app() {
 			sched.mark_overrun()
 		}
 		C.duo_trace_service() // ~one poll per tick: plenty for the dump handshake
+		C.duo_load_pub(1, u16(sched.load_permille() + g_sched_m4_stress.load_permille()))
 		C.duo_bulk_produce() // cross-core bulk producer (platform-owned pool)
 		C.duo_layout_publish() // REPUBLISH per tick: the owner retracts the id at ITS
 		// boot (SRAM survives an owner-only reset — a retained id + retained channels
