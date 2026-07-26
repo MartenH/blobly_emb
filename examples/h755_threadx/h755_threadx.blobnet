@@ -1,0 +1,52 @@
+# Watch the h755_threadx dual-core bulk demo on REAL hardware, live in blobly_net.
+#
+# THE SYSTEM (one NUCLEO-H755ZI-Q, both cores, generated from examples/h755_threadx):
+#   CM7 (0x08000000) — comm thread + FBs + the [shell]; consumes the cross-core [[bulk]] pool
+#   CM4 (0x08100000) — satellite image (examples/h755_m4_app); PRODUCES the bulk blocks
+# The CM4 fills 256 B blocks in D3 SRAM4, rings the HSEM doorbell (IRQ125), and the CM7 comm
+# thread drains + verifies them. blobly_net just LISTENS on the one bus and decodes with bus.dbc.
+#
+#   can0 (compute bus):
+#     0x200/0x201  telemetry (CpuLoad + the M4 FB signal)
+#     0x513        NM alive (node 0x13)
+#     0x7F0 / 0x7F1 / 0x7F2   the CAN shell: command in / ISO-TP response out / flow control
+#
+# DRIVE THE SHELL (blobly_net shell panel, bus = can0) — type a command, read the reply:
+#     bulkperf   cross-core [[bulk]] RAW throughput (bursts the CM4, spin-drains ~0.2 s, reports
+#                blk/s, KB/s, MiB/s, ns/blk). ~33 MB/s on this bench — 146x the paced demo rate,
+#                which is limited by the M4 service loop's ~1 ms tick, not the transport.
+#     m4sig      the M4 FB's signal off cross-core IOC slot 0
+#     iocx       cross-core xioc health check (tear detection on the stress channel)
+#     bmc        DWT core micro-benchmark (CPI / LSU / folds)
+#     ps         ThreadX threads: prio, state, stack high-water
+#     boot       reboot into the boot manager
+#
+# WIRING (this bench, PCAN): the H755's CAN FD Click = SocketCAN can0. Bring it up first:
+#     sudo ip link set can0 up type can bitrate 500000
+#
+# FLASH both cores (in blobly_emb) — CM7 to bank 1, CM4 to bank 2, then reset:
+#     make -C examples/h755_threadx        && make -C examples/h755_m4_app
+#     H755=001E00243335510835383531
+#     st-flash --serial $H755 write examples/h755_threadx/build/h755_threadx.bin 0x08000000
+#     st-flash --serial $H755 write examples/h755_m4_app/build/h755_m4_app.bin  0x08100000
+#     st-flash --serial $H755 reset
+#
+# RUN (from the blobly_net repo — point BLOBLY_PROJECT at your blobly_emb checkout; the DBC
+# path below is relative to THIS file, so any checkout works):
+#     BLOBLY_PROJECT=/path/to/blobly_emb/examples/h755_threadx/h755_threadx.blobnet ./scripts/run_gui.sh
+project:
+  name: h755_threadx — dual-core bulk + CAN shell
+  version: 2
+
+buses:
+  # --- compute bus: the H755 (CM7 comm thread) on FDCAN1 = SocketCAN can0 ---
+  - name: compute
+    network: h755_threadx
+    adapter: socketcan
+    address: can0
+    protocol: can
+    bitrate: 500000
+    mode: monitor            # listen + ACK the board; no restbus sim — the ECU drives it
+    enabled: true
+    databases:
+      - bus.dbc                # resolved against this .blobnet's own dir (blobly_net resolve_asset)
