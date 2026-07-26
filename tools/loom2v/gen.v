@@ -441,14 +441,16 @@ fn gateway_forward_arms(m Model, src_bus string) []string {
 		}
 		dst := gw_var(r.to_bus, m.telem.bus)
 		out << '\t\t\tif rx.id == u32(0x${r.from_id.hex()}) && rx.len == ${r.from_dlc} && rx.ext == ${r.from_ext} { // route ${r.signal}: ${r.from_bus} -> ${r.to_bus} 0x${r.to_id.hex()}'
-		out << '\t\t\t\tg_fwd_count++'
 		out << '\t\t\t\tmut ff := can.Frame{'
 		out << '\t\t\t\t\tid:  u32(0x${r.to_id.hex()})'
 		out << '\t\t\t\t\tlen: ${r.to_dlc}'
 		out << '\t\t\t\t\text: ${r.to_ext}'
 		out << '\t\t\t\t}'
 		out << '\t\t\t\tff.data = rx.data // raw_ident: bytes are bit-identical, only the id/bus differ'
-		out << '\t\t\t\tif ${dst}.tx_ready() { ${dst}.send(ff) }'
+		out << '\t\t\t\tif ${dst}.tx_ready() {'
+		out << '\t\t\t\t\t${dst}.send(ff)'
+		out << '\t\t\t\t\tg_fwd_count++ // count frames actually forwarded, not ones dropped on a full tx FIFO'
+		out << '\t\t\t\t}'
 		out << '\t\t\t}'
 	}
 	return out

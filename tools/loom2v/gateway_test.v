@@ -69,12 +69,14 @@ fn test_gateway_forward_arms_raw_copy_and_id_remap() {
 	assert a.contains('rx.id == u32(0x120) && rx.len == 8')
 	assert a.contains('id:  u32(0x130)')
 	assert a.contains('ff.data = rx.data') // raw copy — no decode/re-encode
-	assert a.contains('if ch_can1.tx_ready() { ch_can1.send(ff) }')
-	assert a.contains('g_fwd_count++')
+	assert a.contains('ch_can1.tx_ready()')
+	assert a.contains('ch_can1.send(ff)')
+	assert a.contains('g_fwd_count++') // counted inside the tx_ready gate (only frames actually sent)
 	// a can1-sourced route forwards back onto the telem bus, whose channel is `ch`
 	b := gateway_forward_arms(m, 'can1').join('\n')
 	assert b.contains('rx.id == u32(0x132)')
-	assert b.contains('if ch.tx_ready() { ch.send(ff) }')
+	assert b.contains('ch.tx_ready()')
+	assert b.contains('ch.send(ff)')
 	// each source bus only emits ITS routes (no cross-contamination)
 	assert !a.contains('0x132')
 	assert !b.contains('0x120')

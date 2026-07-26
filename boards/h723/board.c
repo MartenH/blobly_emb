@@ -7,9 +7,10 @@
  *  - Single core: no CM4, no dual-core RCC/PWR sharing to worry about.
  *
  * The H723 can run to 550 MHz (VOS0); this ships the same safe 400 MHz VOS1 point as the
- * -Q board (PLL 8/2*200/2). BENCH-UNVERIFIED like every board's first clock cut — the
- * waits are all bounded, so a rail that never readies falls back to HSI 64 MHz rather
- * than hang. FDCAN kernel clock stays HSE 8 MHz regardless (see board.mk timing).
+ * -Q board (PLL 8/2*200/2). BENCH-VERIFIED on a NUCLEO-H723ZG as system_full's zone_a
+ * (2026-07-26): SYSCLK reached 400 MHz and FDCAN1 carried the edge bus. The waits are all
+ * bounded regardless, so a rail that never readies falls back to HSI 64 MHz rather than hang.
+ * FDCAN kernel clock stays HSE 8 MHz (see board.mk timing).
  */
 #include <stm32h723xx.h>
 
