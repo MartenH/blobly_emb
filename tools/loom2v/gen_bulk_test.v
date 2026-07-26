@@ -125,8 +125,12 @@ fn test_satellite_emits_only_its_shared_pools_at_the_owner_offset() {
 		},
 	]
 	sat := emit_bulk_glue(pools, pm, 'cool').join('\n')
-	// the satellite gets the shared pool...
-	assert sat.contains('pub fn bulk_shared_init()')
+	// the satellite gets the shared pool — as the CONSUMER ('cool' is the consumer), so it emits
+	// the take side, NOT the producer's init/loan/publish (capability split).
+	assert sat.contains('pub fn bulk_shared_take(')
+	assert sat.contains('pub fn bulk_shared_valid()')
+	assert !sat.contains('pub fn bulk_shared_init()')
+	assert !sat.contains('pub fn bulk_shared_loan()')
 	assert sat.contains('fn C.duo_bulk_base() usize')
 	assert !sat.contains('#include "duo.h"')
 	// ...at the SAME offset the owner computed (0 — 'local' is intra-core, not in the window)...
@@ -144,6 +148,53 @@ fn test_satellite_emits_only_its_shared_pools_at_the_owner_offset() {
 	}
 	empty := emit_bulk_glue([pools[0]], none_pm, 'x')
 	assert empty.len == 0
+}
+
+fn test_capability_split_by_role() {
+	pm := duo_partmap()
+	// cross-core: producer on the owner (hot/core 0), consumer on the satellite (cool/core 1)
+	xfer := [BulkPoolCfg{
+		name:     'xfer'
+		producer: 'hot'
+		consumer: 'cool'
+		bufsz:    256
+		nbuf:     4
+	}]
+	owner := emit_bulk_glue(xfer, pm, '').join('\n')
+	// the OWNER is the producer: free/publish side only
+	assert owner.contains('pub fn bulk_xfer_init()')
+	assert owner.contains('pub fn bulk_xfer_loan()')
+	assert owner.contains('pub fn bulk_xfer_publish(')
+	assert owner.contains('pub fn bulk_xfer_overflows()')
+	assert owner.contains('pub fn bulk_xfer_buf(') // shared
+	assert !owner.contains('pub fn bulk_xfer_take(')
+	assert !owner.contains('pub fn bulk_xfer_release(')
+	assert !owner.contains('pub fn bulk_xfer_valid()')
+
+	sat := emit_bulk_glue(xfer, pm, 'cool').join('\n')
+	// the SATELLITE is the consumer: take/release side only
+	assert sat.contains('pub fn bulk_xfer_valid()')
+	assert sat.contains('pub fn bulk_xfer_ready()')
+	assert sat.contains('pub fn bulk_xfer_take(')
+	assert sat.contains('pub fn bulk_xfer_release(')
+	assert sat.contains('pub fn bulk_xfer_buf(') // shared
+	assert !sat.contains('pub fn bulk_xfer_init()')
+	assert !sat.contains('pub fn bulk_xfer_loan()')
+	assert !sat.contains('pub fn bulk_xfer_publish(')
+
+	// an INTRA-core pool has both ends in one image -> the FULL API (both roles).
+	intra := [BulkPoolCfg{
+		name:     'cam'
+		producer: 'hot'
+		consumer: 'hot_t'
+		bufsz:    64
+		nbuf:     2
+	}]
+	full := emit_bulk_glue(intra, pm, '').join('\n')
+	assert full.contains('pub fn bulk_cam_init()')   // producer op
+	assert full.contains('pub fn bulk_cam_take(')    // consumer op
+	assert full.contains('pub fn bulk_cam_publish(')
+	assert full.contains('pub fn bulk_cam_release(')
 }
 
 fn test_satellite_local_intra_pool_stays_in_the_satellite() {
