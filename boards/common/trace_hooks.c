@@ -83,7 +83,7 @@ static unsigned long now_us(void)
 /* trace_now_us(): the recorder's own clock, exported. This is the ONE timebase every record in
  * this core's ring is stamped from, so it is also the only correct thing to correlate against
  * another core's — reading a different timer (SysTick, an RTOS tick) would measure a skew the
- * records don't actually have. The cross-core handoff (duo.h) stamps this on both sides of its
+ * records don't actually have. The cross-core handoff (xcore.h) stamps this on both sides of its
  * request/ack exchange to place the two cores on one timeline (REQ-TRACE-011).
  *
  * Note the origin: now_us() counts from this core's FIRST call, and trace_arm() deliberately

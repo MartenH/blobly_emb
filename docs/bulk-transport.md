@@ -22,7 +22,7 @@ The payload is never copied through a channel — a *reference* moves. The diffe
 between DDS, RPMsg, iceoryx and dma-buf are mostly about who owns the pool and what the
 doorbell is, not about the shape.
 
-blobly's existing cross-core trace handoff (`boards/h755zi/duo.h`) is already a degenerate
+blobly's existing cross-core trace handoff (`boards/h755zi/xcore.h`) is already a degenerate
 instance of this: one buffer, a `{req_seq, op, ack_seq, count}` descriptor, and a polled
 doorbell. The generalisation is "more than one buffer, and an interrupt instead of a poll".
 
@@ -79,7 +79,7 @@ vrings**.
 Linux+M4 (STM32MP1), Zephyr+M4, TI, and NXP all ship this. **The H755 has no IPCC** — its
 inter-core notification is **HSEM's semaphore-release interrupt** (each core can take an
 interrupt when the other releases a semaphore; ST's own H7 OpenAMP port builds the RPMsg
-doorbell exactly this way). **`duo.h` uses none of it** — it polls. That is fine for one
+doorbell exactly this way). **`xcore.h` uses none of it** — it polls. That is fine for one
 2 KB trace snapshot per dump; it is not fine for a continuous bulk stream, because polling
 either burns cycles or adds latency.
 
@@ -195,7 +195,7 @@ The convergence is strong enough to just follow it. A generated bulk endpoint wo
    whole cross-core design.
 3. **A doorbell** — a mailbox interrupt where the hardware has one (HSEM release-interrupt
    on the H755; IPCC on parts that have it), falling back to the current poll. This is the
-   piece `duo.h` is missing entirely.
+   piece `xcore.h` is missing entirely.
 4. **A loan/publish API** on the producer and peek/release on the consumer, so an FB never
    holds a buffer it allocated. **`loan()` is fallible by contract**: when a slow consumer
    holds all N buffers, it returns an exhaustion value — it never blocks, never faults,

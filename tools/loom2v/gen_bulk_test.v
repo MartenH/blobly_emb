@@ -6,7 +6,7 @@ module main
 // codegen is checked here.
 
 // a PartMap with two partitions: `hot` on core 0 (CM7), `cool` on core 1 (CM4, a satellite image).
-fn duo_partmap() PartMap {
+fn xcore_partmap() PartMap {
 	return PartMap{
 		core_of:     {
 			'hot':  0
@@ -23,7 +23,7 @@ fn duo_partmap() PartMap {
 }
 
 fn test_bulk_ep_core_resolves_partition_or_thread() {
-	pm := duo_partmap()
+	pm := xcore_partmap()
 	// endpoint may be named by its partition...
 	assert bulk_ep_core('hot', pm) == 0
 	assert bulk_ep_core('cool', pm) == 1
@@ -35,7 +35,7 @@ fn test_bulk_ep_core_resolves_partition_or_thread() {
 }
 
 fn test_intra_core_pool_uses_local_global_arena() {
-	pm := duo_partmap()
+	pm := xcore_partmap()
 	pools := [BulkPoolCfg{
 		name:     'cam'
 		producer: 'hot'
@@ -49,12 +49,12 @@ fn test_intra_core_pool_uses_local_global_arena() {
 	assert a.contains('__global (')
 	assert a.contains('g_bulk_cam_arena')
 	assert a.contains('&C.bulk_t(&g_bulk_cam_arena[0])')
-	assert !a.contains('duo_bulk_addr')
-	assert !a.contains('#include "duo.h"')
+	assert !a.contains('xcore_bulk_addr')
+	assert !a.contains('#include "xcore.h"')
 }
 
 fn test_cross_core_pool_lives_in_shared_window() {
-	pm := duo_partmap()
+	pm := xcore_partmap()
 	pools := [BulkPoolCfg{
 		name:     'lidar'
 		producer: 'hot'  // core 0
@@ -67,17 +67,17 @@ fn test_cross_core_pool_lives_in_shared_window() {
 	// no per-image arena — the pool IS the shared window bytes, derived from the platform base
 	assert !a.contains('g_bulk_lidar_arena')
 	// generated code stays board-agnostic: it externs the platform seam, never includes a board header
-	assert !a.contains('#include "duo.h"')
-	assert a.contains('fn C.duo_bulk_base() usize')
+	assert !a.contains('#include "xcore.h"')
+	assert a.contains('fn C.xcore_bulk_base() usize')
 	// first (and only) cross-core pool sits at offset 0 from the base
-	assert a.contains('voidptr(C.duo_bulk_base() + usize(0))')
+	assert a.contains('voidptr(C.xcore_bulk_base() + usize(0))')
 	// the public wrappers still exist and route through the shared ptr
 	assert a.contains('pub fn bulk_lidar_init()')
 	assert a.contains('C.bulk_init(bulk_lidar_ptr()')
 }
 
 fn test_cross_core_pools_pack_32b_aligned_in_order() {
-	pm := duo_partmap()
+	pm := xcore_partmap()
 	// two cross-core pools: the second's offset = ceil(bulk_bytes(first)/32)*32
 	pools := [
 		BulkPoolCfg{
@@ -99,12 +99,12 @@ fn test_cross_core_pools_pack_32b_aligned_in_order() {
 	off1 := (bulk_bytes(1, 50) + 31) & ~31
 	assert off1 % 32 == 0
 	a := emit_bulk_glue(pools, pm, '').join('\n')
-	assert a.contains('voidptr(C.duo_bulk_base() + usize(${off0}))')
-	assert a.contains('voidptr(C.duo_bulk_base() + usize(${off1}))')
+	assert a.contains('voidptr(C.xcore_bulk_base() + usize(${off0}))')
+	assert a.contains('voidptr(C.xcore_bulk_base() + usize(${off1}))')
 }
 
 fn test_satellite_emits_only_its_shared_pools_at_the_owner_offset() {
-	pm := duo_partmap()
+	pm := xcore_partmap()
 	pools := [
 		// an owner-local pool (both ends on core 0) — must NOT reach the satellite image
 		BulkPoolCfg{
@@ -131,10 +131,10 @@ fn test_satellite_emits_only_its_shared_pools_at_the_owner_offset() {
 	assert sat.contains('pub fn bulk_shared_valid()')
 	assert !sat.contains('pub fn bulk_shared_init()')
 	assert !sat.contains('pub fn bulk_shared_loan()')
-	assert sat.contains('fn C.duo_bulk_base() usize')
-	assert !sat.contains('#include "duo.h"')
+	assert sat.contains('fn C.xcore_bulk_base() usize')
+	assert !sat.contains('#include "xcore.h"')
 	// ...at the SAME offset the owner computed (0 — 'local' is intra-core, not in the window)...
-	assert sat.contains('voidptr(C.duo_bulk_base() + usize(0))')
+	assert sat.contains('voidptr(C.xcore_bulk_base() + usize(0))')
 	// ...and NEVER the owner's intra-core global.
 	assert !sat.contains('g_bulk_local_arena')
 	assert !sat.contains('bulk_local_init')
@@ -151,7 +151,7 @@ fn test_satellite_emits_only_its_shared_pools_at_the_owner_offset() {
 }
 
 fn test_capability_split_by_role() {
-	pm := duo_partmap()
+	pm := xcore_partmap()
 	// cross-core: producer on the owner (hot/core 0), consumer on the satellite (cool/core 1)
 	xfer := [BulkPoolCfg{
 		name:     'xfer'
@@ -220,7 +220,7 @@ fn test_capability_split_by_role() {
 fn test_satellite_local_intra_pool_stays_in_the_satellite() {
 	// An INTRA-core pool whose endpoints both live in a SATELLITE partition must be emitted by
 	// the SATELLITE image (where its FBs run), not dumped into the owner's core-0 BSS.
-	pm := duo_partmap() // 'cool' is core 1 with image = "../h755_m4_app"
+	pm := xcore_partmap() // 'cool' is core 1 with image = "../h755_m4_app"
 	pools := [BulkPoolCfg{
 		name:     'satcam'
 		producer: 'cool'
@@ -236,7 +236,7 @@ fn test_satellite_local_intra_pool_stays_in_the_satellite() {
 	sat := emit_bulk_glue(pools, pm, 'cool').join('\n')
 	assert sat.contains('g_bulk_satcam_arena')
 	assert sat.contains('pub fn bulk_satcam_init()')
-	assert !sat.contains('duo_bulk_base')
+	assert !sat.contains('xcore_bulk_base')
 }
 
 fn test_owner_and_satellite_agree_on_a_nonzero_shared_offset() {
@@ -276,8 +276,8 @@ fn test_owner_and_satellite_agree_on_a_nonzero_shared_offset() {
 	owner := emit_bulk_glue(pools, pm, '').join('\n')
 	sat := emit_bulk_glue(pools, pm, 'cool').join('\n')
 	// owner and satellite derive 'second' at the SAME non-zero offset
-	assert owner.contains('voidptr(C.duo_bulk_base() + usize(${off1}))')
-	assert sat.contains('voidptr(C.duo_bulk_base() + usize(${off1}))')
+	assert owner.contains('voidptr(C.xcore_bulk_base() + usize(${off1}))')
+	assert sat.contains('voidptr(C.xcore_bulk_base() + usize(${off1}))')
 	// the satellite emits ONLY 'second' (it is not an endpoint of 'first')
 	assert sat.contains('bulk_second_ptr')
 	assert !sat.contains('bulk_first')

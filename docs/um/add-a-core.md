@@ -35,7 +35,7 @@ to     = "can0"
 ```
 
 `make gen` in the owner dir now also writes the satellite's `sig/`, `ports/`,
-`gen/loom_gen.v`, and `gen/loom_build.mk`, plus `gen/duo_gen.h` — the ONE cross-core
+`gen/loom_gen.v`, and `gen/loom_build.mk`, plus `gen/xcore_gen.h` — the ONE cross-core
 slot contract both images compile against. Cross-core signal rules are in
 [add-a-signal.md](add-a-signal.md).
 
@@ -48,14 +48,14 @@ identity only: manifest rows + handler ids, no generated code.)
 - **`app/`** — its FBs, ports convention, exactly like any FB
   ([add-an-fb.md](add-an-fb.md)).
 - **Glue C** (`m4_glue.c`) — the platform contract the generated code calls:
-  `duo_wait_clocks` (park until the owner's clocks-ready flag), `board_timebase_init` /
-  `board_now_us` (this core's DWT µs), `duo_ioc_init` + `duo_pub` (the xioc pool at the
-  board's shared-SRAM map, `boards/<board>/duo.h`), `duo_trace_service` (the dump
+  `xcore_wait_clocks` (park until the owner's clocks-ready flag), `board_timebase_init` /
+  `board_now_us` (this core's DWT µs), `xcore_ioc_init` + `xcore_pub` (the xioc pool at the
+  board's shared-SRAM map, `boards/<board>/xcore.h`), `xcore_trace_service` (the dump
   handoff), and an ISR stub for any vector the shared table names but this core never
   enables.
 - **`Makefile`** — the right kernel port + flags for the core's architecture
   (`MCU_CM4`, ThreadX `ports/cortex_m4/gnu`, `TX_ENABLE_EXECUTION_CHANGE_NOTIFY`),
-  `-I` the owner's `gen/` (for `duo_gen.h`), `boards/common/trace_hooks.c`, and a gen
+  `-I` the owner's `gen/` (for `xcore_gen.h`), `boards/common/trace_hooks.c`, and a gen
   dependency on the owner:
 
   ```make
@@ -65,7 +65,7 @@ identity only: manifest rows + handler ids, no generated code.)
   ```
 
 The boards layer owns everything silicon-specific: memory maps/linker scripts per core,
-the shared-SRAM `duo.h` map, boot handshake conventions. Nothing about the core's KIND
+the shared-SRAM `xcore.h` map, boot handshake conventions. Nothing about the core's KIND
 leaks into ecu.toml — a third core is another `[[partition]]` block.
 
 ## 3. Boot, flash, verify

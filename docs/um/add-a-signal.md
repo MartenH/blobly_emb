@@ -8,7 +8,7 @@ or a bus — and that's all you say; the generator derives the transport from th
 | same partition, same thread | struct cell in the thread state | `st.cell_<name> = outp...` |
 | bus → partition | COM decode → IOC cell | `C.ioc_get(n, ...)` in the wrapper |
 | partition → bus | IOC cell → cyclic tx in the comm loop | `C.ioc_pub(n, ...)` + a producer |
-| satellite partition → bus/partition | **xioc slot** (cross-core) | `C.duo_pub(slot, ...)` |
+| satellite partition → bus/partition | **xioc slot** (cross-core) | `C.xcore_pub(slot, ...)` |
 
 ## 1. Declare it
 

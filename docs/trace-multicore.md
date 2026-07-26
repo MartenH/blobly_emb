@@ -270,14 +270,14 @@ The rates do **not** drift apart — both cores run off the same HSE/PLL tree, a
 already normalises each to µs — so a single scalar offset is sufficient; there is no skew term to
 track.
 
-**The measurement rides the handoff that already exists.** The dtrace cell in `duo.h` is a
+**The measurement rides the handoff that already exists.** The dtrace cell in `xcore.h` is a
 request/ack exchange the bus owner performs on every snapshot, which is exactly the round trip a
 clock sync needs:
 
 | stamp | who | when |
 |---|---|---|
 | `t1` | CM7 | immediately before `req_seq++` releases the request |
-| `t2` | CM4 | in `duo_trace_service()`, just before it acks (cell word `DUO_TRC_SVC_IDX`) |
+| `t2` | CM4 | in `xcore_trace_service()`, just before it acks (cell word `XCORE_TRC_SVC_IDX`) |
 | `t3` | CM7 | on the polling pass that **first** observes the ack |
 
 `t2` lies somewhere in `[t1, t3]`, so `offset = t2 − (t1+t3)/2` and the error is bounded by
@@ -287,7 +287,7 @@ time — a CM4 that reset, or a debugger that halted one core, cannot leave a st
 
 Two deliberate choices:
 
-- **Never fabricate a zero.** If no exchange has completed, `duo_trace_offset()` returns 0 and the
+- **Never fabricate a zero.** If no exchange has completed, `xcore_trace_offset()` returns 0 and the
   record is omitted entirely. A 0 offset would assert perfect correlation — the exact false
   precision this record exists to remove — so "unknown" stays visibly unknown.
 - **Both stamps come from the recorder's own clock**, not SysTick or an RTOS tick. Correlating a

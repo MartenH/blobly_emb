@@ -140,7 +140,7 @@ path), docs/multi-node.md (the diag bus tier), docs/no-alloc.md (tier-1 pools).
 ## P1 implementation status (2026-07-17)
 
 **Vendored + build-wired.** NetX Duo is cloned + pinned under `third_party/netxduo`
-via `make deps` (`NETXDUO_PIN`, alongside ThreadX). Its Cortex-M7/GNU port
+via `make deps` (`NETXXCORE_PIN`, alongside ThreadX). Its Cortex-M7/GNU port
 (`ports/cortex_m7/gnu`) matches the H735, and `common/inc/nx_api.h` is the stack
 API. The structural reference for our driver is NetX's own RAM driver
 (`test/regression/test/nx_ram_network_driver_test_1500.c`) — it shows the exact

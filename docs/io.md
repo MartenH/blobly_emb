@@ -121,7 +121,7 @@ signal:
   share the prescaler/period registers, so a second carrier would silently
   retune the first actuator.
 
-## Derived glue (the duo_gen.h pattern, third use)
+## Derived glue (the xcore_gen.h pattern, third use)
 
 The generator assigns each io point a channel index and emits `gen/io_gen.h` — the
 contract header the example's/boards' C glue compiles against. The V side never sees

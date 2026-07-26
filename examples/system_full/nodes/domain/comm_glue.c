@@ -15,7 +15,7 @@
 #include <stddef.h>
 #include "ioc.h"
 #include "board.h" /* board_now_us for the cm4 rate window */
-#include "duo.h"  /* the dual-core shared-SRAM map (heartbeat, clocks-ready, IOC pool) */
+#include "xcore.h"  /* the dual-core shared-SRAM map (heartbeat, clocks-ready, IOC pool) */
 #include "bulk.h" /* the portable SPSC pool (boards/common) — cross-core bulk consumer side */
 
 /* Cross-thread signal IOC pool (wait-free triple-buffer, ioc.h). GENERIC target glue: a small
@@ -149,14 +149,14 @@ int shell_bmc(unsigned char *out, int cap) {
  * then lowers the flag. blocks*256 B / window = the pool's cross-core bandwidth. No payload verify
  * (integrity is the paced path's job); this isolates the transport+copy rate, bounded by the CM4's
  * uncached D2->D3 SRAM4 writes. The comm thread is busy for the window (~0.2 s) — operator probe. */
-void duo_bulk_resync(void); /* re-baseline the paced-demo integrity state (defined by duo_bulk_consume) */
+void xcore_bulk_resync(void); /* re-baseline the paced-demo integrity state (defined by xcore_bulk_consume) */
 int shell_bulkperf(unsigned char *out, int cap) {
     char *p = (char *)out, *end = (char *)out + cap;
-    bulk_t *bp = (bulk_t *)DUO_BULK_ADDR;
+    bulk_t *bp = (bulk_t *)XCORE_BULK_ADDR;
     if (!bulk_valid(bp))
         return (int)(ps_str(p, end, "bulkperf: pool not up (CM4 producer idle)\n") - (char *)out);
 
-    volatile uint32_t *burst = (volatile uint32_t *)DUO_BULK_BURST_ADDR;
+    volatile uint32_t *burst = (volatile uint32_t *)XCORE_BULK_BURST_ADDR;
     *burst = 1u; /* ask the CM4 to burst */
     __asm__ volatile("dmb" ::: "memory");
     uint32_t blocks = 0u, blen = 0u;
@@ -174,8 +174,8 @@ int shell_bulkperf(unsigned char *out, int cap) {
     *burst = 0u; /* stop the CM4 burst */
 
     /* Resync the shared integrity state before the paced demo resumes. bulkperf shares the pool +
-     * counters with duo_bulk_consume: the CM4 can publish one residual WORD-pattern block after it
-     * passes its while(*burst) check (duo_bulk_consume would count it rx_bad), and g_bulk_tx_seq
+     * counters with xcore_bulk_consume: the CM4 can publish one residual WORD-pattern block after it
+     * passes its while(*burst) check (xcore_bulk_consume would count it rx_bad), and g_bulk_tx_seq
      * jumped ~blocks during the burst (which would show as one huge rx_gap on the next paced block).
      * Let the CM4 land its last block, drain the pool, and re-baseline the consumer (codex #235). */
     uint64_t tq = board_now_us();
@@ -187,7 +187,7 @@ int shell_bulkperf(unsigned char *out, int cap) {
             bulk_release(bp, (uint32_t)ri);
         }
     }
-    duo_bulk_resync(); /* the next paced block re-baselines s_rx_last: no phantom gap or bad */
+    xcore_bulk_resync(); /* the next paced block re-baselines s_rx_last: no phantom gap or bad */
 
     uint32_t blk_s  = us ? (uint32_t)((uint64_t)blocks * 1000000u / us) : 0u;
     uint32_t kb_s   = us ? (uint32_t)((uint64_t)blocks * 256u * 1000u / us) : 0u;
@@ -204,25 +204,25 @@ int shell_bulkperf(unsigned char *out, int cap) {
     return (int)(p - (char *)out);
 }
 
-/* duo_clocks_ready — the boot handshake's CM7 half: written once after board_clock_init,
+/* xcore_clocks_ready — the boot handshake's CM7 half: written once after board_clock_init,
  * releasing the parked CM4 (its SysTick assumes the final 200 MHz HCLK).
  *
  * The wide window is zeroed FIRST: the comm thread may poll a wide channel before the
- * satellite's boot has run duo_xw_init, and an uninitialized SRAM `words` field would
+ * satellite's boot has run xcore_xw_init, and an uninitialized SRAM `words` field would
  * otherwise be trusted as a copy bound (codex #211). Zeroed, every pre-init poll reads
  * latest == 0 -> "nothing published" — and xioc_n_read additionally clamps the bound.
- * Config-independent: the whole DUO_XW_MAX window, not the generated layout. */
+ * Config-independent: the whole XCORE_XW_MAX window, not the generated layout. */
 static uint32_t g_layout_req; /* this owner boot's nonce (we also own the REQ cell) */
 
-void duo_clocks_ready(void) {
+void xcore_clocks_ready(void) {
     /* The owner NEVER touches the wide window — channel init is exclusively the
      * WRITER's (satellite) job, and the layout handshake is the owner's barrier
-     * (codex #211 r5-r7). The handshake is two SPSC cells (duo.h): the owner bumps
+     * (codex #211 r5-r7). The handshake is two SPSC cells (xcore.h): the owner bumps
      * its RETAINED req nonce here — one writer, this core — which instantly stales
      * every previous acknowledgement; a live same-build satellite re-acks within
      * ~one service tick, a stale or stopped one never does. */
-    g_layout_req = (*(volatile uint32_t *)DUO_LAYOUT_REQ_ADDR + 1u) | 1u;
-    *(volatile uint32_t *)DUO_LAYOUT_REQ_ADDR = g_layout_req;
+    g_layout_req = (*(volatile uint32_t *)XCORE_LAYOUT_REQ_ADDR + 1u) | 1u;
+    *(volatile uint32_t *)XCORE_LAYOUT_REQ_ADDR = g_layout_req;
     __asm__ volatile("dsb");
     /* Clock HSEM before releasing the CM4: the cross-core bulk doorbell (IRQ125) rides it, and
      * the CM4 rings it the moment it starts publishing. Enabling the peripheral clock here — from
@@ -235,21 +235,21 @@ void duo_clocks_ready(void) {
      * so an absent/never-started/hung satellite would otherwise leave a stale non-zero Core-N load
      * in the frame (codex #235 r2). A live satellite overwrites its slot each tick; an absent one
      * stays 0. */
-    for (int c = 0; c < 8; c++) ((volatile uint16_t *)DUO_LOAD_ADDR)[c] = 0u;
+    for (int c = 0; c < 8; c++) ((volatile uint16_t *)XCORE_LOAD_ADDR)[c] = 0u;
     /* Clear a retained bulkperf burst request too: if the CM7 reset while a burst was in flight,
      * the CM4 would otherwise stay in its while(*burst) loop forever after this boot (no FB, no
      * paced producer). SRAM4 is retained, so clear it before releasing the CM4 (codex #235 r3). */
-    *(volatile uint32_t *)DUO_BULK_BURST_ADDR = 0u;
-    *(volatile uint32_t *)DUO_CLK_ADDR = DUO_CLK_MAGIC;
+    *(volatile uint32_t *)XCORE_BULK_BURST_ADDR = 0u;
+    *(volatile uint32_t *)XCORE_CLK_ADDR = XCORE_CLK_MAGIC;
     __asm__ volatile("dsb");
 }
 
 
 #include "xioc.h"
-#include "duo_gen.h" /* generated: the cross-core slot contract (gen/duo_gen.h) */
-#define DUO_POOL ((xioc_t *)DUO_IOC_ADDR)
-/* duo_layout_ok — the cross-image layout handshake: the satellite publishes the
- * generated DUO_LAYOUT_ID (a hash of the whole slot/offset map) after initializing its
+#include "xcore_gen.h" /* generated: the cross-core slot contract (gen/xcore_gen.h) */
+#define XCORE_POOL ((xioc_t *)XCORE_IOC_ADDR)
+/* xcore_layout_ok — the cross-image layout handshake: the satellite publishes the
+ * generated XCORE_LAYOUT_ID (a hash of the whole slot/offset map) after initializing its
  * channels; the owner polls nothing until the ids MATCH. A stale satellite image — any
  * renumbered pair slot, moved wide offset, or resized channel — presents the wrong id
  * and every remote signal reads as never-fresh, instead of slot cross-talk transmitting
@@ -258,15 +258,15 @@ void duo_clocks_ready(void) {
  * XORing to exactly 0 would equal the retraction sentinel and read absent-satellite as
  * acked (codex #211 r16) */
 static uint32_t layout_ack_encode(uint32_t req) {
-    uint32_t a = req ^ DUO_LAYOUT_ID;
+    uint32_t a = req ^ XCORE_LAYOUT_ID;
     return a != 0u ? a : 0x4C594F31u; /* 'LYO1' */
 }
 
-int duo_layout_ok(void) {
-    if (*(volatile uint32_t *)DUO_LAYOUT_ACK_ADDR != layout_ack_encode(g_layout_req)) {
+int xcore_layout_ok(void) {
+    if (*(volatile uint32_t *)XCORE_LAYOUT_ACK_ADDR != layout_ack_encode(g_layout_req)) {
         return 0; /* not acked for THIS owner boot + THIS build's layout */
     }
-    /* acquire: pairs with the satellite's release dmb in duo_layout_publish — without
+    /* acquire: pairs with the satellite's release dmb in xcore_layout_publish — without
      * this the channel loads that follow a match could be satisfied ahead of the flag
      * read and observe pre-init state (codex #211 r6) */
     __asm__ volatile("dmb" ::: "memory");
@@ -274,18 +274,18 @@ int duo_layout_ok(void) {
 }
 
 
-/* duo_poll_n — the wide-channel (xioc_n) reader: rd_seq/dst are the CALLER's per-signal
+/* xcore_poll_n — the wide-channel (xioc_n) reader: rd_seq/dst are the CALLER's per-signal
  * state (the generated comm loop declares one seq + lane buffer per wide signal), so this
  * stays stateless — any number of wide channels, no static table to size. `words` is the
  * READER's build-time lane count: a channel whose shared geometry disagrees (a stale
  * satellite image after a partial reflash) reads as never-fresh instead of overrunning
  * the lane buffer (codex #211 r2). 1 = dst now holds a newer complete value; on 0 dst
  * is untouched (last-good retention). */
-int duo_poll_n(uint32_t off, uint32_t words, uint32_t *rd_seq, uint32_t *dst) {
-	return xioc_n_read((xioc_n_t *)(DUO_XW_ADDR + off), rd_seq, dst, words);
+int xcore_poll_n(uint32_t off, uint32_t words, uint32_t *rd_seq, uint32_t *dst) {
+	return xioc_n_read((xioc_n_t *)(XCORE_XW_ADDR + off), rd_seq, dst, words);
 }
 
-/* dtrace: the M7 half of the two-core trace handoff (duo.h). Single writer per field:
+/* dtrace: the M7 half of the two-core trace handoff (xcore.h). Single writer per field:
  * we own req_seq/op, the satellite owns ack_seq/count and the snapshot buffer.
  *
  * The exchange doubles as the cross-core clock measurement (REQ-TRACE-011). Both cores
@@ -302,8 +302,8 @@ static uint32_t g_trc_t1;    /* our clock when we released the request */
 static uint32_t g_trc_t3;    /* our clock when we first observed the ack */
 static int g_trc_have_t3;    /* a round trip completed since the last request */
 
-void duo_trace_req(uint32_t op) {
-    volatile uint32_t *c = (volatile uint32_t *)DUO_TRC_ADDR;
+void xcore_trace_req(uint32_t op) {
+    volatile uint32_t *c = (volatile uint32_t *)XCORE_TRC_ADDR;
     c[1] = op;
     g_trc_have_t3 = 0; /* this request's round trip has not closed yet */
     /* Sample as late as possible before releasing: time spent here is time the bound must
@@ -313,8 +313,8 @@ void duo_trace_req(uint32_t op) {
     c[0] = c[0] + 1u; /* req_seq++ releases the request */
 }
 
-int duo_trace_ready(void) {
-    volatile uint32_t *c = (volatile uint32_t *)DUO_TRC_ADDR;
+int xcore_trace_ready(void) {
+    volatile uint32_t *c = (volatile uint32_t *)XCORE_TRC_ADDR;
     if (c[2] != c[0])
         return 0; /* ack has not caught up */
     /* Stamp t3 on the polling pass that FIRST sees the ack — a later pass would charge our own
@@ -326,7 +326,7 @@ int duo_trace_ready(void) {
     return 1;
 }
 
-/* duo_trace_offset — the satellite's clock minus ours, in µs, from the round trip that just
+/* xcore_trace_offset — the satellite's clock minus ours, in µs, from the round trip that just
  * closed; *bound_us is half that round trip, the residual uncertainty the host should show
  * rather than round away. Returns 0 when no exchange has completed, so the caller emits no
  * correlation at all instead of claiming a 0 skew it never measured.
@@ -334,13 +334,13 @@ int duo_trace_ready(void) {
  * All three stamps come from one clock each, so the u32 subtractions are modular and stay
  * correct across the ~71-minute wrap as long as the true offset fits in an int32 (~35 min) —
  * far beyond any plausible core-release delay. */
-int duo_trace_offset(int32_t *off_us, uint32_t *bound_us) {
-    volatile uint32_t *c = (volatile uint32_t *)DUO_TRC_ADDR;
+int xcore_trace_offset(int32_t *off_us, uint32_t *bound_us) {
+    volatile uint32_t *c = (volatile uint32_t *)XCORE_TRC_ADDR;
     if (!g_trc_have_t3)
         return 0;
     uint32_t rtt = g_trc_t3 - g_trc_t1;
     uint32_t mid = g_trc_t1 + rtt / 2u; /* our clock at the satellite's best-estimate stamp */
-    uint32_t raw = c[DUO_TRC_SVC_IDX] - mid; /* modular u32 difference */
+    uint32_t raw = c[XCORE_TRC_SVC_IDX] - mid; /* modular u32 difference */
     /* The u32 us clocks wrap every ~71.6 min, so a satellite restart can alias ANY
      * modular difference back into range — a wide guard band still admits e.g. a 60-min
      * restart aliasing to +11.6 min (codex #207, round 2). Accept only offsets inside the
@@ -357,23 +357,23 @@ int duo_trace_offset(int32_t *off_us, uint32_t *bound_us) {
     return 1;
 }
 
-uint32_t duo_trace_count(void) {
-    volatile uint32_t *c = (volatile uint32_t *)DUO_TRC_ADDR;
+uint32_t xcore_trace_count(void) {
+    volatile uint32_t *c = (volatile uint32_t *)XCORE_TRC_ADDR;
     uint32_t n = c[3];
-    return n > DUO_TRC_MAX_REC ? DUO_TRC_MAX_REC : n;
+    return n > XCORE_TRC_MAX_REC ? XCORE_TRC_MAX_REC : n;
 }
 
-unsigned char *duo_trace_buf(void) {
-    return (unsigned char *)DUO_TRC_BUF_ADDR;
+unsigned char *xcore_trace_buf(void) {
+    return (unsigned char *)XCORE_TRC_BUF_ADDR;
 }
 
-/* duo_poll — the generated comm loop's reader: 1 if slot i has a value newer than the
+/* xcore_poll — the generated comm loop's reader: 1 if slot i has a value newer than the
  * last poll (out params always hold the best-known value). Reader state per slot lives
  * here (comm thread only). */
-int duo_poll(int i, uint32_t *a, uint32_t *b) {
-    static xioc_rd_t rd[DUO_IOC_N];
-    if (i < 0 || i >= DUO_IOC_N) return 0;
-    int fresh = xioc_read(&DUO_POOL[i], &rd[i]);
+int xcore_poll(int i, uint32_t *a, uint32_t *b) {
+    static xioc_rd_t rd[XCORE_IOC_N];
+    if (i < 0 || i >= XCORE_IOC_N) return 0;
+    int fresh = xioc_read(&XCORE_POOL[i], &rd[i]);
     *a = rd[i].a;
     *b = rd[i].b;
     return fresh;
@@ -486,9 +486,9 @@ volatile uint32_t g_bulk_doorbell_irqs = 0u; /* SWD-observable: proves the cross
 void HSEM1_IT_IRQHandler(void)
 {
     _tx_execution_isr_enter();
-    HSEM->C1ICR = 1u << DUO_BULK_DOORBELL_SEM;  /* clear THIS core's pending flag for the semaphore */
+    HSEM->C1ICR = 1u << XCORE_BULK_DOORBELL_SEM;  /* clear THIS core's pending flag for the semaphore */
     g_bulk_doorbell_irqs++;
-    tx_semaphore_put(&g_comm_sem);          /* wake comm -> duo_bulk_consume drains the block(s) */
+    tx_semaphore_put(&g_comm_sem);          /* wake comm -> xcore_bulk_consume drains the block(s) */
     _tx_execution_isr_exit();
 }
 
@@ -506,8 +506,8 @@ void comm_rx_irq_enable(void)
     /* Cross-core bulk doorbell: enable CM7 notification on the doorbell semaphore and route
      * IRQ125 at the comm priority (single trace level — never nests SysTick/the Rx ISR).
      * g_comm_sem exists above, so the ISR can post it. The HSEM clock is already on (enabled in
-     * duo_clocks_ready, before the CM4 was released). */
-    HSEM->C1IER = 1u << DUO_BULK_DOORBELL_SEM;
+     * xcore_clocks_ready, before the CM4 was released). */
+    HSEM->C1IER = 1u << XCORE_BULK_DOORBELL_SEM;
     NVIC_SetPriority(HSEM1_IRQn, 4u);
     NVIC_ClearPendingIRQ(HSEM1_IRQn); /* pristine start: drop any ring latched before arming */
     NVIC_EnableIRQ(HSEM1_IRQn);
@@ -533,7 +533,7 @@ unsigned comm_rx_wait(unsigned ticks)
  * stalled fetches) — accepted for the demo load on a node entering sleep.
  * A real M4 workload that must run through sleep windows takes the
  * documented out: copy its ~30 KB image to RAM at boot (docs/nvm.md), or
- * park it via a duo-cell handshake before the erase. Record APPENDS (32 B programs,
+ * park it via an xcore-cell handshake before the erase. Record APPENDS (32 B programs,
  * ~us) stall the M4 negligibly. DRY-CODED; the bench validates flash.c for
  * boot + NvM in one pass. Driver: boards/h755zi/flash.c (shared with the
  * bootloader — one driver, two customers). */
@@ -542,7 +542,7 @@ uint32_t nvm_map_b(void) { return 0x081E0000u; } /* bank 2, sector 7 */
 uint32_t nvm_map_size(void) { return 0x00020000u; } /* 128 KB each */
 
 /* --- cross-core bulk CONSUMER (docs/bulk-transport.md, ecu.toml [[bulk]] "xfer") -----------
- * The CM7 half of the platform-owned bulk pool: the generated comm loop calls duo_bulk_consume()
+ * The CM7 half of the platform-owned bulk pool: the generated comm loop calls xcore_bulk_consume()
  * each service pass. The M4 produces seq-tagged 256 B blocks into the shared window; here we
  * drain every published block, recompute the seq-derived pattern, and count. No FB touches the
  * pool. Counters are SWD-observable (find them in build/app.map):
@@ -550,12 +550,12 @@ uint32_t nvm_map_size(void) { return 0x00020000u; } /* 128 KB each */
  *   g_bulk_rx_bad — length/pattern mismatch (a torn or corrupt transfer — must stay 0)
  *   g_bulk_rx_gap — seq jumped (blocks dropped under backpressure; pairs with M4 g_bulk_tx_full)
  * A climbing g_bulk_rx_ok with g_bulk_rx_bad == 0 is the pass condition (REQ-BULK-003 on silicon). */
-size_t duo_bulk_base(void) { return (size_t)DUO_BULK_ADDR; }
+size_t xcore_bulk_base(void) { return (size_t)XCORE_BULK_ADDR; }
 
-/* Cross-core CpuLoad (duo.h DUO_LOAD_ADDR): read a satellite core's per-mille load from its slot,
+/* Cross-core CpuLoad (xcore.h XCORE_LOAD_ADDR): read a satellite core's per-mille load from its slot,
  * for the CpuLoad frame's per-core byte. Strong override of the weak 0 default in weak_irq.c. */
-uint16_t duo_load_get(int core) {
-	return (core >= 0 && core < 8) ? ((volatile uint16_t *)DUO_LOAD_ADDR)[core] : 0u;
+uint16_t xcore_load_get(int core) {
+	return (core >= 0 && core < 8) ? ((volatile uint16_t *)XCORE_LOAD_ADDR)[core] : 0u;
 }
 
 uint32_t g_bulk_rx_ok  = 0;
@@ -568,10 +568,10 @@ static int s_rx_started = 0;
  * s_rx_started makes the next taken block set s_rx_last afresh (no phantom rx_gap from the burst's
  * ~N-block seq jump). bulkperf also drains the pool first, so no residual word-pattern block
  * reaches the byte-pattern verify below (codex #235). */
-void duo_bulk_resync(void) { s_rx_started = 0; }
+void xcore_bulk_resync(void) { s_rx_started = 0; }
 
-void duo_bulk_consume(void) {
-	bulk_t *p = (bulk_t *)DUO_BULK_ADDR;
+void xcore_bulk_consume(void) {
+	bulk_t *p = (bulk_t *)XCORE_BULK_ADDR;
 	if (!bulk_valid(p)) {
 		return; /* producer hasn't initialized the pool yet (attach handshake) */
 	}
@@ -583,7 +583,7 @@ void duo_bulk_consume(void) {
 		               ((uint32_t)b[3] << 24);
 		int ok = (len == 256u);
 		for (uint32_t i = 4; ok && i < 256u; i++) {
-			if (b[i] != (uint8_t)(seq * DUO_STRESS_K + i)) {
+			if (b[i] != (uint8_t)(seq * XCORE_STRESS_K + i)) {
 				ok = 0;
 			}
 		}
