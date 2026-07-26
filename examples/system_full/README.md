@@ -98,3 +98,10 @@ SWD-observable at the bench.
 and FDCAN2 (edge) on `PB6`/`PB5` (AF9) — the DK's two CAN-FD transceivers, clear of the
 Ethernet RMII pins. Flash with `make -C nodes/sysnode flash` (add `SERIAL=<st-link sn>` to
 pick a board when several ST-Links are attached).
+
+**Watch the traffic.** [`system_full.blobnet`](system_full.blobnet) is a
+[blobly_net](https://github.com/MartenH/blobly_net) monitor project for this bench — it listens
+on both buses (SocketCAN `can0` = compute, `can1` = edge) and decodes them with the DBCs, so you
+can see the gateway forward (the same value reappearing on the other bus under a new id). Run it
+from the blobly_net repo:
+`BLOBLY_PROJECT=$(pwd)/examples/system_full/system_full.blobnet ./scripts/run_gui.sh`.
