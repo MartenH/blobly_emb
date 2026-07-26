@@ -14,3 +14,9 @@
  * cleanly by the strong definition (verified by objdump of the vector table). */
 
 __attribute__((weak)) void FDCAN2_IT0_IRQHandler(void) { }
+
+/* IRQ125 = HSEM1 (CM7 cross-core doorbell). The image whose comm thread consumes a cross-core
+ * [[bulk]] pool provides the strong HSEM1_IT_IRQHandler (posts the comm wake semaphore); every
+ * other image (incl. the CM4 satellite, which never enables this NVIC line) gets this weak stub
+ * so the shared vector's symbol resolves. Separate object, same reason as above. */
+__attribute__((weak)) void HSEM1_IT_IRQHandler(void) { }
