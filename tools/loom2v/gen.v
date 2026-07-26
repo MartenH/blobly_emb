@@ -1959,6 +1959,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << duo_c_decls(m)
 			glue << nvm_c_decls(m)
 			glue << duo_trace_c_decls(m)
+			glue << emit_bulk_service_decls(m.bulk, m.part, '') // owner-side cross-core bulk service
 			glue << shell_cmd_fns(m)
 			glue << nm_shell_fns(m)
 			glue << stat_shell_fns(m, doc, app_threads, multi)
@@ -2524,6 +2525,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << shell_produce_drain(m)
 				glue << duo_trace_poll(m)
 				glue << duo_produce_drain(m)
+				glue << emit_bulk_service_arm(m.bulk, m.part, '', '\t\t') // owner cross-core bulk service (poll)
 				glue << nvm_service(m, ioc_idx)
 				glue << '\t}'
 				glue << '}'
@@ -3465,6 +3467,17 @@ fn main() {
 	if m.nvm_names.len > 0 && m.target.threadx && !comm_thread_on {
 		panic('loom2v: persistent signals need the comm thread (the journal service runs ' +
 			'there) — this config has no bus bridge; give the node a bus or drop persist')
+	}
+	owner_bulk_produces, owner_bulk_consumes := bulk_image_role(m.bulk, m.part, '')
+	if (owner_bulk_produces || owner_bulk_consumes) && m.target.threadx && !comm_thread_on {
+		// the owner-side cross-core bulk service (duo_bulk_produce/consume) is polled from the
+		// comm loop; without a bus bridge there is no comm thread, so the satellite would publish
+		// into a pool this image never drains (or vice versa). Fail loud rather than silently
+		// generate a dead endpoint — a busless/eth-only owner needs the declarable bulk service
+		// thread (docs/bulk-transport.md), not yet built.
+		panic('loom2v: a cross-core [[bulk]] endpoint on this owner needs the comm thread to ' +
+			'service it, but the node has no bus bridge (external signal / route / isotp) — give ' +
+			'it a bus, or wait for the declarable bulk service thread')
 	}
 	// rx signals an FB reads flow bus -> comm(decode) -> target IOC pool cell -> FB input (6b-2b).
 	// ioc_idx maps each such signal to its pool cell; visible to the comm emitter + handler glue.

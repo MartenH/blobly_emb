@@ -85,6 +85,7 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		g << 'fn C._tx_thread_sleep(u32) u32'
 		g << 'fn C._tx_initialize_kernel_enter()'
 		g << 'fn C._tx_thread_create(voidptr, &char, fn (u32), u32, voidptr, u32, u32, u32, u32, u32) u32'
+		g << emit_bulk_service_decls(m.bulk, m.part, part) // this satellite's cross-core bulk service
 		fb_traced := m.trace.on && m.trace.level == 'all'
 		if m.trace.on {
 			g << 'fn C.trace_arm() // this core\'s recorder free-runs; the owner re-arms per session'
@@ -132,6 +133,9 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 			g << '\t\t}'
 			if ti == 0 && m.trace.on {
 				g << '\t\tC.duo_trace_service() // ~one poll per tick: plenty for the dump handshake'
+			}
+			if ti == 0 {
+				g << emit_bulk_service_arm(m.bulk, m.part, part, '\t\t') // this satellite's cross-core bulk service (poll)
 			}
 			if ti == 0 && produces {
 				g << '\t\tC.duo_layout_publish() // REPUBLISH per tick: the owner retracts the id at ITS'
