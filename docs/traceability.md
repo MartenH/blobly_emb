@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 187 | 103 | 20 | 64 | 0 |
+| 187 | 105 | 19 | 63 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -35,7 +35,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-018 | QM | analysis | uncovered | — |
 | REQ-BULK-001 | QM | test | verified | bulk_test.v (pass) |
 | REQ-BULK-002 | QM | test | verified | bulk_test.v (pass) |
-| REQ-BULK-003 | QM | test | covered | bulk-ring-silicon (pending), bulk_test.v (pass) |
+| REQ-BULK-003 | QM | test | verified | bulk-ring-silicon (approved), bulk_test.v (pass) |
 | REQ-CAN-DRV-001 | QM | test | covered | h735-fdcan-hardware (approved), h755-dualcore-heartbeat (approved), h755-fdcan-hardware (approved), route.lua (pending) |
 | REQ-CAN-DRV-002 | QM | test | covered | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved), route.lua (pending) |
 | REQ-CAN-DRV-003 | QM | test | verified | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
@@ -167,7 +167,7 @@ Generated from `requirements/*.toml` + verification links. See
 | SYS-REQ-LIFE-002 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-LIFE-003 | QM | test | uncovered | — |
 | SYS-REQ-RES-001 | QM | analysis | verified | noalloc-driver-lint (pass) |
-| SYS-REQ-MC-001 | QM | test | uncovered | — |
+| SYS-REQ-MC-001 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-OBS-001 | QM | test | verified | ↳ derived (all children verified) |
 | SYS-REQ-OBS-002 | QM | test | uncovered | — |
 | SYS-REQ-OBS-003 | QM | test | verified | ↳ derived (all children verified) |
@@ -227,7 +227,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BOOT-018 | | | | | | | | | | | | | | | | | |
 | REQ-BULK-001 | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BULK-002 | | | | | | | | | | | | | | ✓ | | | |
-| REQ-BULK-003 | | | | | | | | | | | · | | | ✓ | | | |
+| REQ-BULK-003 | | | | | | | | | | | ✓ | | | ✓ | | | |
 | REQ-CAN-DRV-001 | | | | | ✓ | | | ✓ | | | ✓ | | · | | | | |
 | REQ-CAN-DRV-002 | | | | | ✓ | | | ✓ | | | | | · | | | | |
 | REQ-CAN-DRV-003 | | | | | ✓ | | | ✓ | | | | | | | | | |

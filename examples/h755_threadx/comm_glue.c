@@ -12,9 +12,11 @@
  */
 #include "tx_api.h"
 #include <stm32h7xx.h>
+#include <stddef.h>
 #include "ioc.h"
 #include "board.h" /* board_now_us for the cm4 rate window */
 #include "duo.h"  /* the dual-core shared-SRAM map (heartbeat, clocks-ready, IOC pool) */
+#include "bulk.h" /* the portable SPSC pool (boards/common) — cross-core bulk consumer side */
 
 /* Cross-thread signal IOC pool (wait-free triple-buffer, ioc.h). GENERIC target glue: a small
  * indexed pool the generator assigns cells out of, so a bus->app rx signal decoded by the comm
@@ -512,3 +514,54 @@ unsigned comm_rx_wait(unsigned ticks)
 uint32_t nvm_map_a(void) { return 0x081C0000u; } /* bank 2, sector 6 */
 uint32_t nvm_map_b(void) { return 0x081E0000u; } /* bank 2, sector 7 */
 uint32_t nvm_map_size(void) { return 0x00020000u; } /* 128 KB each */
+
+/* --- cross-core bulk CONSUMER (docs/bulk-transport.md, ecu.toml [[bulk]] "xfer") -----------
+ * The CM7 half of the platform-owned bulk pool: the generated comm loop calls duo_bulk_consume()
+ * each service pass. The M4 produces seq-tagged 256 B blocks into the shared window; here we
+ * drain every published block, recompute the seq-derived pattern, and count. No FB touches the
+ * pool. Counters are SWD-observable (find them in build/app.map):
+ *   g_bulk_rx_ok  — blocks taken AND byte-exact (the shared-window ring works cross-core)
+ *   g_bulk_rx_bad — length/pattern mismatch (a torn or corrupt transfer — must stay 0)
+ *   g_bulk_rx_gap — seq jumped (blocks dropped under backpressure; pairs with M4 g_bulk_tx_full)
+ * A climbing g_bulk_rx_ok with g_bulk_rx_bad == 0 is the pass condition (REQ-BULK-003 on silicon). */
+size_t duo_bulk_base(void) { return (size_t)DUO_BULK_ADDR; }
+
+uint32_t g_bulk_rx_ok  = 0;
+uint32_t g_bulk_rx_bad = 0;
+uint32_t g_bulk_rx_gap = 0;
+static uint32_t s_rx_last = 0;
+static int s_rx_started = 0;
+
+void duo_bulk_consume(void) {
+	bulk_t *p = (bulk_t *)DUO_BULK_ADDR;
+	if (!bulk_valid(p)) {
+		return; /* producer hasn't initialized the pool yet (attach handshake) */
+	}
+	uint32_t len = 0;
+	int idx;
+	while ((idx = bulk_take(p, &len)) >= 0) { /* drain all published blocks this pass */
+		uint8_t *b = bulk_buf(p, (uint32_t)idx);
+		uint32_t seq = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) |
+		               ((uint32_t)b[3] << 24);
+		int ok = (len == 256u);
+		for (uint32_t i = 4; ok && i < 256u; i++) {
+			if (b[i] != (uint8_t)(seq * DUO_STRESS_K + i)) {
+				ok = 0;
+			}
+		}
+		if (ok) {
+			/* count the NUMBER of skipped sequence numbers (blocks the M4 dropped on a full
+			 * pool), not just the fact of a discontinuity — so g_bulk_rx_gap tracks the M4's
+			 * g_bulk_tx_full. Blocks arrive in publish order (FIFO ring), so seq is monotonic. */
+			if (s_rx_started && seq > s_rx_last + 1u) {
+				g_bulk_rx_gap += seq - s_rx_last - 1u;
+			}
+			s_rx_last = seq;
+			s_rx_started = 1;
+			g_bulk_rx_ok++;
+		} else {
+			g_bulk_rx_bad++;
+		}
+		bulk_release(p, (uint32_t)idx);
+	}
+}

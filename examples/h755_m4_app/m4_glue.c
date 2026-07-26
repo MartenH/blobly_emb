@@ -2,8 +2,10 @@
  * NO pins, NO peripherals (the CM7 brings those up); it gets a timebase, the shared-SRAM
  * IOC pool, and the boot handshake. */
 #include <stdint.h>
+#include <stddef.h>
 #include "duo.h"
 #include "xioc.h"
+#include "bulk.h" /* the portable SPSC pool (boards/common) — cross-core bulk lives in the window */
 #include "duo_gen.h" /* the GENERATED slot contract (../h755_threadx/gen — one generator run
                       * owns the cross-core map; this satellite image consumes it) */
 
@@ -159,4 +161,49 @@ void FDCAN1_IT0_IRQHandler(void) {
 void ETH_IRQHandler(void) {
 	for (;;) {
 	}
+}
+
+/* --- cross-core bulk PRODUCER (docs/bulk-transport.md, ecu.toml [[bulk]] "xfer") ------------
+ * The bulk pool lives in the H755 shared window; the generated code externs duo_bulk_base()
+ * and the platform (here) owns the pool — no FB ever touches it. This M4 side is the PRODUCER:
+ * once per service pass it loans a buffer, fills 256 B with a seq-derived pattern (seq in the
+ * first 4 bytes, DUO_STRESS_K*seq+i in the rest — tear/corruption detectable by the consumer),
+ * and publishes. The CM7 comm thread consumes and verifies. Counters are SWD-observable. */
+size_t duo_bulk_base(void) { return (size_t)DUO_BULK_ADDR; }
+
+uint32_t g_bulk_tx_seq  = 0; /* blocks published */
+uint32_t g_bulk_tx_full = 0; /* loan failures: consumer slower than producer (REQ-BULK-002) */
+static int s_xfer_inited = 0;
+
+void duo_bulk_produce(void) {
+	/* SINGLE-POOL DEMO: "xfer" is the only cross-core pool, so it sits at offset 0 =
+	 * DUO_BULK_ADDR and the geometry (4 x 256) matches ecu.toml [[bulk]] and the generated
+	 * bulk_xfer_* wrappers. A SECOND pool (or changed nbuf/bufsz) would move the offset /
+	 * geometry — a real multi-pool consumer must read them from the generated contract, not
+	 * hardcode. Kept literal here because the whole point is a minimal transport proof. */
+	bulk_t *p = (bulk_t *)DUO_BULK_ADDR;
+	/* the producer owns bring-up: init once, the consumer polls bulk_valid() before first use */
+	if (!s_xfer_inited) {
+		bulk_init(p, 4u, 256u);
+		s_xfer_inited = 1;
+	}
+	/* Take the sequence number for THIS attempt up front, so a dropped loan leaves a hole in
+	 * the published sequence — that hole is exactly what the consumer's g_bulk_rx_gap counts.
+	 * (Advancing only on success would make the published seq contiguous, so rx_gap could never
+	 * report a drop — the whole point of the backpressure metric.) */
+	uint32_t seq = g_bulk_tx_seq++;
+	int idx = bulk_loan(p);
+	if (idx < 0) {
+		g_bulk_tx_full++; /* seq is skipped (never published) -> the consumer sees a gap */
+		return;
+	}
+	uint8_t *b = bulk_buf(p, (uint32_t)idx);
+	b[0] = (uint8_t)seq;
+	b[1] = (uint8_t)(seq >> 8);
+	b[2] = (uint8_t)(seq >> 16);
+	b[3] = (uint8_t)(seq >> 24);
+	for (uint32_t i = 4; i < 256u; i++) {
+		b[i] = (uint8_t)(seq * DUO_STRESS_K + i);
+	}
+	bulk_publish(p, (uint32_t)idx, 256u);
 }
