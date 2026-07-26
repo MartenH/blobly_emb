@@ -187,13 +187,17 @@ void duo_bulk_produce(void) {
 		bulk_init(p, 4u, 256u);
 		s_xfer_inited = 1;
 	}
+	/* Take the sequence number for THIS attempt up front, so a dropped loan leaves a hole in
+	 * the published sequence — that hole is exactly what the consumer's g_bulk_rx_gap counts.
+	 * (Advancing only on success would make the published seq contiguous, so rx_gap could never
+	 * report a drop — the whole point of the backpressure metric.) */
+	uint32_t seq = g_bulk_tx_seq++;
 	int idx = bulk_loan(p);
 	if (idx < 0) {
-		g_bulk_tx_full++;
+		g_bulk_tx_full++; /* seq is skipped (never published) -> the consumer sees a gap */
 		return;
 	}
 	uint8_t *b = bulk_buf(p, (uint32_t)idx);
-	uint32_t seq = g_bulk_tx_seq;
 	b[0] = (uint8_t)seq;
 	b[1] = (uint8_t)(seq >> 8);
 	b[2] = (uint8_t)(seq >> 16);
@@ -202,5 +206,4 @@ void duo_bulk_produce(void) {
 		b[i] = (uint8_t)(seq * DUO_STRESS_K + i);
 	}
 	bulk_publish(p, (uint32_t)idx, 256u);
-	g_bulk_tx_seq++;
 }

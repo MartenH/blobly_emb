@@ -550,8 +550,11 @@ void duo_bulk_consume(void) {
 			}
 		}
 		if (ok) {
-			if (s_rx_started && seq != s_rx_last + 1u) {
-				g_bulk_rx_gap++;
+			/* count the NUMBER of skipped sequence numbers (blocks the M4 dropped on a full
+			 * pool), not just the fact of a discontinuity — so g_bulk_rx_gap tracks the M4's
+			 * g_bulk_tx_full. Blocks arrive in publish order (FIFO ring), so seq is monotonic. */
+			if (s_rx_started && seq > s_rx_last + 1u) {
+				g_bulk_rx_gap += seq - s_rx_last - 1u;
 			}
 			s_rx_last = seq;
 			s_rx_started = 1;

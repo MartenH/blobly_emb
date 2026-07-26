@@ -372,9 +372,11 @@ method = "review"
 context = "h755/dual-core"
 verifies = ["REQ-BULK-003"]
 # H755 NUCLEO dual-core, examples/h755_threadx [[bulk]] "xfer" (M4 producer -> CM7 comm-thread
-# consumer): ~17k 256 B blocks moved cross-core, rx_ok climbing in lockstep with the M4's tx_seq,
-# rx_bad = 0 AND rx_gap = 0 (byte-exact, no tearing across the AXI fabric). Counters SWD-read.
-approved_by = "H755 dual-core bench, 2026-07-26 (agent-run) — rx_bad=0/rx_gap=0 over ~17k transfers"
+# consumer): 32k+ 256 B blocks attempted cross-core. rx_bad = 0 (byte-exact, no tearing across the
+# AXI fabric) AND full accounting holds — rx_ok + rx_gap == tx_seq (every attempt is either
+# consumed intact or a detected backpressure drop) and rx_gap tracks the M4's tx_full. Counters
+# SWD-read.
+approved_by = "H755 dual-core bench, 2026-07-26 (agent-run) — rx_bad=0, rx_ok+rx_gap==tx_seq over 32k+ attempts"
 date = "2026-07-26"
 
 # REQ-TRACE-008/010 (context-switch + thread-run capture): the host tests exercise the
