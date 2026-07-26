@@ -687,24 +687,8 @@ fn bulk_xfer_ptr() &C.bulk_t {
 	return &C.bulk_t(voidptr(C.duo_bulk_base() + usize(0)))
 }
 
-pub fn bulk_xfer_init() {
-	C.bulk_init(bulk_xfer_ptr(), u32(4), u32(256))
-}
-
 pub fn bulk_xfer_valid() bool {
 	return C.bulk_valid(bulk_xfer_ptr()) != 0
-}
-
-pub fn bulk_xfer_loan() int {
-	return int(C.bulk_loan(bulk_xfer_ptr()))
-}
-
-pub fn bulk_xfer_publish(idx int, len u32) bool {
-	if idx < 0 || idx >= 4 || len > u32(256) {
-		return false
-	}
-	C.bulk_publish(bulk_xfer_ptr(), u32(idx), len)
-	return true
 }
 
 pub fn bulk_xfer_ready() u32 {
@@ -728,9 +712,5 @@ pub fn bulk_xfer_buf(idx int) &u8 {
 		return unsafe { nil }
 	}
 	return C.bulk_buf(bulk_xfer_ptr(), u32(idx))
-}
-
-pub fn bulk_xfer_overflows() u32 {
-	return C.bulk_overflows(bulk_xfer_ptr())
 }
 
