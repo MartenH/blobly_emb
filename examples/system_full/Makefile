@@ -3,6 +3,7 @@
 #   sysnode (H735-DK) : Central Gateway, compute<->edge router  [ThreadX, boards/h735dk]
 #   domain  (H755-ZI) : Powertrain & Dynamics (compute)         [ThreadX, boards/h755zi]
 #   zone_a  (H723)    : Front Zone ECU (edge)                   [ThreadX, boards/h723]
+#   tcu     (H723)    : Telematics/connectivity, SOME/IP-over-eth [ThreadX, boards/h723, eth]
 #
 # Usage:
 #   make syscheck          # validate system-wide invariants and signal routes
@@ -16,7 +17,7 @@
 # transceivers, so blobly_net can tap both. Driving edge on silicon needs the h735dk board to
 # mux the FDCAN2 pins (a bench step); the image builds and its routing runs on host vcan.
 
-NODES := sysnode domain zone_a
+NODES := sysnode domain zone_a tcu
 
 all: gen syscheck nodes
 
