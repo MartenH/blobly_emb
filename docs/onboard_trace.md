@@ -1,0 +1,113 @@
+# On-board trace — capture, gather, dump
+
+How the runtime trace is captured per core, gathered from every core to the bus owner, and
+streamed off the board. The short version: **each core keeps its own flight-recorder ring in its
+own memory; the owner asks each satellite to copy its ring into one shared buffer, aligns the two
+clocks, and the owner's comm thread is the only thing that ever puts trace on the bus.** For the
+capture *mechanism* (the ThreadX hooks + the Loom hook) see the first section; for the cross-core
+region this rides in see [xcore.md](xcore.md).
+
+## What gets captured, and how (not special — existing seams)
+
+Every record is 8 bytes in one wire format, from two sources:
+
+- **Thread & ISR swaps** — ThreadX's built-in **execution-change hooks**. Built with
+  `-DTX_ENABLE_EXECUTION_CHANGE_NOTIFY`, the M7/M4 port calls `_tx_execution_thread_enter/exit`
+  and `_tx_execution_isr_enter/exit` on *every* context switch and interrupt.
+  `boards/common/trace_hooks.c` just **implements those four callbacks** — no scheduler
+  instrumentation of our own; the kernel calls us on each swap.
+- **FB dispatch** — the Loom's own hook. The generated run loop calls `sched.run_profiled(clock)`
+  and sets `trace_fb_hook_<thread>`, so each due handler is bracketed (`t0`, `dt`) and pushed as a
+  record. A clean seam on the existing dispatch loop.
+
+Both push into the *same* ring on the *same* timebase (`trace_now_us()`), so a dump reads
+`thread A → FB X enter → FB X exit → ISR (comm rx) → … → swap to thread B` as one interleaved
+timeline. (Host caveat: the ThreadX **Linux** port doesn't call the execution-change hooks — they
+exist for the real M7/M4 ports only — so real context-switch capture is a *target* feature; the
+host relies on the FB hook + its polled model.)
+
+## Where the buffers live
+
+| Buffer | Where | What |
+|---|---|---|
+| the **ring** (per core) | `g_ring[256][8]` — a `static` in that image's `trace_hooks.c`, in **that core's own** bss/SRAM | the flight recorder each core fills; overwrites oldest |
+| the **handoff cell** | `XCORE_TRC_ADDR` in shared SRAM4 | `{req_seq, op, ack_seq, count, svc_us}` — the owner↔satellite control channel |
+| the **shared record buffer** | `XCORE_TRC_BUF_ADDR` (256×8) in shared SRAM4 | where a satellite copies a *snapshot* of its ring for the owner to read |
+
+So the rings themselves are **private** — the only cross-core trace memory is the small handoff
+cell and the one shared snapshot buffer. A satellite's ring is never mapped into the owner; it is
+*copied* into the shared buffer on demand.
+
+## Who sends it
+
+**The bus owner's comm thread — and only it.** A satellite never touches the bus for trace: it
+merely copies its own ring into the shared buffer when asked (in its normal app loop, via
+`xcore_trace_service`, ~one poll per tick). The owner freezes its own ring, imports each
+satellite's snapshot over the handoff, aligns the clocks, and streams every record out on the
+trace `record` id.
+
+## The dump sequence
+
+```mermaid
+sequenceDiagram
+    participant Host as blobly_net
+    participant Comm as Owner comm thread<br/>(trace module, CM7)
+    participant OwnRing as CM7 ring
+    participant Cell as handoff cell +<br/>shared buf (SRAM4)
+    participant Sat as Satellite loop<br/>(xcore_trace_service, CM4)
+    participant SatRing as CM4 ring
+
+    Host->>Comm: cmd ARM (cmd id)
+    Comm->>OwnRing: trace_arm() — clear
+    Comm->>Cell: op=ARM, req_seq++
+    Sat-->>Cell: poll: new req
+    Sat->>SatRing: trace_arm() — clear
+    Sat->>Cell: ack_seq = req_seq
+    Note over OwnRing,SatRing: both cores now capturing (from "now")
+
+    Host->>Comm: cmd DUMP (cmd id)
+    Comm->>OwnRing: trace_freeze()
+    Comm->>Cell: op=SNAP, req_seq++  (stamp t1)
+    Sat-->>Cell: poll: new req
+    Sat->>SatRing: trace_freeze()
+    Sat->>Cell: copy ≤256 recs → shared buf,<br/>write count + svc_us, ack_seq = req_seq
+    Comm-->>Cell: poll: ack caught up  (stamp t3)
+    Comm->>Comm: offset = svc_us − (t1 + rtt/2), bound = rtt/2
+    Comm->>Host: stream CM7 ring + CM4 snapshot on record id<br/>(ISO-TP multi-block, carrying the offset)
+    Note over Host: reassemble → both cores on one timeline<br/>(CM4 records shifted by the measured offset)
+```
+
+## The clock correlation (why the two cores line up)
+
+Each core counts `trace_now_us()` from its *own* first tick, so their zeros differ. The snapshot
+round trip measures the gap: the owner stamps **t1** as it releases the request, the satellite
+stamps **svc_us** as it services (the middle of the exchange), the owner stamps **t3** when it
+first sees the ack. Then
+
+    offset = svc_us − (t1 + rtt/2)     bound = rtt/2       (rtt = t3 − t1)
+
+is the satellite-minus-owner skew with a residual uncertainty the host *shows* rather than rounds
+away. If no round trip has closed — or the modular u32 math admits an implausible >60 s skew (a
+restart aliasing across the ~71-min wrap) — the owner emits **no** correlation, so the host shows
+"not measured" instead of a confident lie. (A 64-bit svc stamp is the real close-out, bench-queued.)
+
+## Config
+
+The `[trace]` block names the four CAN ids and the depth:
+
+```toml
+[trace]
+enabled        = true
+bus            = "can0"
+level          = "all"     # "all" uses run_profiled (per-FB brackets) on top of the swap hooks
+buffer_records = 256       # = the ring depth (trace_hooks.c RING_CAP)
+mode           = "ring"    # flight recorder: overwrite oldest
+cmd            = 0x7E8     # host -> owner: arm / dump (+ a core_mask selecting cores)
+rsp            = 0x7E9     # owner -> host: why capture stopped, counts
+record         = 0x7EA     # owner -> host: the record stream (ISO-TP, multi-block)
+dump_fc        = 0x7EB     # host -> owner: ISO-TP flow control for the stream
+```
+
+Nothing here is semihosting or a debug probe — the board dumps its own trace over CAN and runs
+standalone (see [xcore.md](xcore.md) for the region, [telemetry.md](telemetry.md) for the live
+CpuLoad path that shares the comm thread).
