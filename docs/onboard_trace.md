@@ -1,9 +1,11 @@
 # On-board trace — capture, gather, dump
 
-How the runtime trace is captured per core, gathered from every core to the bus owner, and
-streamed off the board. The short version: **each core keeps its own flight-recorder ring in its
-own memory; the owner asks each satellite to copy its ring into one shared buffer, aligns the two
-clocks, and the owner's comm thread is the only thing that ever puts trace on the bus.** For the
+How the runtime trace is captured per core, gathered to the bus owner, and streamed off the board.
+The short version: **each core keeps its own flight-recorder ring in its own memory; the owner asks
+the satellite to copy its ring into one shared buffer, aligns the two clocks, and the owner's comm
+thread is the only thing that ever puts trace on the bus.** (Today the gather path is owner + **one**
+satellite core — one remote buffer, one `XCORE_TRC_BUF_ADDR`; a second satellite's ring is not yet
+requested or streamed.) For the
 capture *mechanism* (the ThreadX hooks + the Loom hook) see the first section; for the cross-core
 region this rides in see [xcore.md](xcore.md).
 
@@ -96,14 +98,17 @@ sequenceDiagram
 
 ## Does the dump block the bus? No — it interleaves
 
-The comm loop calls each producer's `produce()` once per pass, and the trace `produce()` emits **at
-most one frame** then returns. The dump keeps a **cursor** that persists across passes (`dump_pos`
-for the raw stream; `local_from` / `remote_from` for the ISO-TP block dump), so a full dump streams
-**one frame at a time over many loop iterations**. On those same passes the comm thread still drains
-rx, sends telemetry, sends cyclic signals, and runs NM — all at their normal cadence; on a multi-bus
-owner the other buses keep forwarding too, because the loop **never blocks** inside the dump. Two
-further brakes: the ISO-TP dump only advances on the host's **flow-control** frames (`dump_fc`), so
-the host paces it, and every send is **`tx_ready`-gated**, so real traffic gets the tx slot first.
+Each trace `produce()` call emits **one frame** and advances a **cursor** that persists across passes
+(`dump_pos` for the raw stream; `local_from` / `remote_from` for the ISO-TP block dump). But the comm
+thread doesn't call it just once per pass — the generated `trace_produce_drain` is a
+`for ch.tx_ready() && g_tm.produce(...)` loop, so a pass enqueues frames **until the CAN TX FIFO
+pushes back** (`tx_ready()` goes false). So it's a *bounded burst per pass*, not one-frame-per-pass —
+but the bound is real: the moment the FIFO is full the loop yields, and on the next pass the comm
+thread still drains rx, sends telemetry, sends cyclic signals, and runs NM — all at their normal
+cadence; on a multi-bus owner the other buses keep forwarding too, because the loop **never blocks**
+inside the dump. Two further brakes: the ISO-TP dump only advances on the host's **flow-control**
+frames (`dump_fc`), so the host paces it, and the burst is **`tx_ready`-gated**, so real traffic
+that arrives between passes gets the tx slot first.
 The deliberate trade-off is that a dump takes *longer* (spread thin) rather than *freezing* the bus
 — the ECU keeps running its real traffic while it hands out a diagnostic capture.
 
@@ -142,9 +147,11 @@ dump_fc        = 0x7EB     # host -> owner: ISO-TP flow control for the stream
 **`core_mask` caveat.** Bit *i* of the mask (cmd `data[6..7]`; `0` defaults to core 0) selects which
 cores act. It gates the per-core *module* buffers (`Cmd.targets` in `control.v`) and which
 satellite is forwarded to (`data[6] & 0x02`). It does **not** gate the owner's exec-hook C ring:
-the generated owner (`trace_rx_arms`) arms/freezes/snapshots that ring on *any* trace cmd, before
-the masked `on_cmd`. So there is no way to re-arm just the satellite — an ARM addressed at the
-satellite alone still clears the owner's live capture.
+the generated owner (`trace_rx_arms`) arms/freezes/snapshots that ring on *any* trace cmd, *before*
+the masked `on_cmd` runs. Two consequences of that ordering: an ARM addressed at the satellite alone
+still clears the owner's live capture, and a satellite-only STOP (`core_mask = 0x2`) still freezes
+the owner's C ring **and** `load_snapshot`s it into the owner's module buffer — so tooling that
+targets only the satellite unexpectedly replaces the owner's snapshot too.
 
 Nothing here is semihosting or a debug probe — the board dumps its own trace over CAN and runs
 standalone (see [xcore.md](xcore.md) for the region, [telemetry.md](telemetry.md) for the live
