@@ -17,7 +17,9 @@ pub fn (mut fb PowertrainCtrl) on_50ms(inp ports.PowertrainCtrlIn, mut out ports
 		a = a * 1664525 + 1013904223
 	}
 	fb.acc = a
-	out.vehicle_speed.kph = u32(60 + (fb.ticks % 40))
+	// VehicleSpeed folds in the CM4 co-processor's TorqueEstimate — a value produced on the OTHER
+	// core, read here via the xioc seam (layout-gated). Before the satellite is up it reads 0.
+	out.vehicle_speed.kph = u32(60 + (fb.ticks % 40) + (inp.torque_estimate.nm % 20))
 	// headlights on when "steering hard" (a toy cross-bus reaction: SteeringAngle rides
 	// edge -> gateway -> compute, so this closes the loop through the H735 router)
 	out.headlight_cmd.mode = if inp.steering_angle.deg > 90 { u32(1) } else { u32(0) }
