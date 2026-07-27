@@ -1,0 +1,101 @@
+# tcu (H723 Telematics/connectivity node) — the system_full Ethernet node.
+#
+# The 4th system_full node (NUCLEO-H723ZG, added 2026-07-27): a connectivity unit
+# that publishes SOME/IP-over-Ethernet telemetry and answers a command round trip —
+# the eth counterpart of the CAN nodes. The whole thing is config + the H723 board
+# driver (boards/h723/eth.c): the generated loom_gen.v owns the eth comm thread, the
+# shared driver/eth/eth_netx.c owns NetX bring-up, boards/common/iocb.c the byte pool.
+# The wire is identical to examples/h735_someip / host_someip — SAME service id 0x0100 — so
+# the same blobly_net oracle / bench_test.sh verify it unchanged (the SOME/IP envelope gate
+# drops a foreign service, so the id must match). Static endpoint 192.168.0.51 (sysnode/eth = .50).
+#
+# NOTE: no inline comments inside [[...]] tables (vlang/v#27684).
+
+[target]
+kind    = "threadx"
+tick_ms = 1
+
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.51"
+core      = 0
+
+[someip]
+bus     = "eth0"
+service = 0x0100
+version = 1
+port    = 30490
+peer    = "192.168.0.190:30491"
+
+# The RPC form (docs/someip.md P3): the shell's command line rides method 0x0001 —
+# request in, dispatch on the eth thread, one response datagram out. allow_mutate
+# stays closed (read-class methods only, REQ-NET-018).
+[shell]
+bus    = "eth0"
+method = 0x0001
+
+[[partition]]
+name    = "app"
+core    = 0
+trusted = false
+  [[partition.thread]]
+  name     = "app_main"
+  priority = 10
+
+[[signal]]
+name = "BenchLoad"
+fields = { load = "u8" }
+from = "app"
+to   = "eth0"
+
+[[signal]]
+name = "BenchTicks"
+fields = { wraps = "u16", ticks = "u32" }
+from = "app"
+to   = "eth0"
+
+# the cyclic telemetry frame, byte for byte as host_someip: load u8@0, ticks u32@1 LE,
+# wraps u16@5, E2E trailer ctr@7/crc@8 (data_id 0x21)
+[[frame]]
+name    = "BenchTelem"
+bus     = "eth0"
+id      = 0x8001
+signals = ["BenchLoad", "BenchTicks"]
+tx      = { mode = "cyclic", cycle_ms = 300 }
+e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8 }
+
+# the rx round trip: the bench sends BenchCmd, the app mirrors the level back on
+# BenchEcho — filter -> gate -> route -> unpack -> IOC -> app -> event tx, on silicon.
+[[signal]]
+name = "LampCmd"
+fields = { level = "u8" }
+from = "eth0"
+to   = "app"
+
+[[frame]]
+name    = "BenchCmd"
+bus     = "eth0"
+id      = 0x8010
+signals = ["LampCmd"]
+
+[[signal]]
+name = "EchoVal"
+fields = { level = "u8" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "BenchEcho"
+bus     = "eth0"
+id      = 0x8004
+signals = ["EchoVal"]
+tx      = { mode = "event", min_delay_ms = 30 }
+
+[[fb]]
+name   = "Bench"
+thread = "app_main"
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  reads     = ["LampCmd"]
+  writes    = ["BenchLoad", "BenchTicks", "EchoVal"]
