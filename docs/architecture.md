@@ -91,13 +91,44 @@ A bus signal takes the same shape through the comm thread instead — only the
 far endpoint differs. An FB cannot tell (and never needs to know) whether
 `inp.speed` came from a frame, a pin, or another FB.
 
+## Signal transports — the crossing ladder
+
+"Everything that crosses between two threads is an IOC channel" is the rule; the *mechanism* of
+that channel, and where it keeps its buffers, depends on how far the value has to travel. Cheapest
+to widest:
+
+| Crossing | Mechanism | Where the buffers live |
+|---|---|---|
+| same thread, FB→FB | a **local cell** — a plain struct field | nowhere; it *is* a field, no sync |
+| same core, cross-thread | **IOC** — a wait-free multi-buffer, latest-value (`boards/common/ioc.h`) | a **size-proportional arena**, caller-owned in the comm glue (`g_ioc_arena[]`) |
+| cross-core | **xioc** — plain, sequence-stamped slots (`boards/common/xioc.h`) | the shared **xcore** SRAM region (`XCORE_IOC_ADDR`) |
+
+**Same-core IOC** is a set of buffers exchanged through one atomic index byte: the writer fills a
+private buffer, the reader always gets the latest COMPLETE value — no lock, no tearing. Each channel's
+arena is **3× (or 2×) the signal's own byte size**, allocated at the call site where the type is
+known (never the worst-case bound). Three variants, picked per signal by `transport =`, trading memory for tear-freedom:
+- `transport = "seqlock"` → one buffer, sequence-stamped → `osal.ioc_write` / `osal.ioc_read`
+  (the lightest; a reader that catches a write in flight simply retries).
+- `transport = "double"` (**the default**) → two buffers, wait-free → `osal.ioc_publish2` /
+  `osal.ioc_acquire2`.
+- `transport = "triple"` → three buffers, wait-free → `osal.ioc_publish` / `osal.ioc_acquire`
+  (plus `osal.ioc_acquire_fresh`, which returns true only on a *new* publication — the freshness
+  gate the io outputs use).
+
+**Why cross-core is different.** The triple/double buffer is **not** cross-core safe on the H7
+fabric — its index exchange uses LDREX/STREX, which don't arbitrate across cores (162/200k torn
+reads measured). So a signal whose two endpoints sit on **different cores** rides **xioc** instead:
+plain sequence-stamped stores, the reader retrying on a torn stamp. xioc slots live in the shared,
+uncached **xcore** region, not a per-core arena — that region, and everything else two cores share
+(bulk, trace, the boot handshakes), is the subject of the next section.
+
 ## Who talks to what
 
 | Part | Talks to | How / via | Purpose |
 |---|---|---|---|
 | **Function Block** | its `ports` In/Out only | typed fields | pure transform; knows nothing of buses, cores, or other FBs |
 | **Loom** | FB handlers; IOC / local cells | snapshot In → call handler → publish Out | dispatch on a period; coherent input snapshot |
-| **IOC** | the Loom (app side), the COM bridge (IO side) | `ioc_read/acquire` + `ioc_write/publish` | lock-free cross-core signal transport |
+| **IOC / xioc** | the Loom (app side), the COM/io bridge | `ioc_acquire/publish` same-core, or `xcore_poll/pub` cross-core | lock-free latest-value signal transport — see "the crossing ladder" |
 | **local cell** | the Loom only | direct struct field | same-core FB→FB, no sync |
 | **COM** | IOC (signals), DBC codec, E2E/SecOC, driver | encode/decode + send/recv | signal⇄PDU, TX modes, RX deadline |
 | **DBC codec** | COM | generated `*_phys` / `*_set` over `[64]u8` | raw↔physical bit packing |
@@ -133,8 +164,41 @@ runtime trace **by name** and the platform is never hidden (bridge / ISO-TP over
 where the time goes; see `telemetry.md`). *(The comm thread, its Rx-interrupt path, and its
 manifest entry are all target — today the bridge polls and the manifest names app threads
 only; NM is configured but not yet generated into the bridge.)* The only shared memory is the
-**IOC region** (`mmap MAP_SHARED` on host, shared SRAM on target); cross-core signals cross
+**xcore region** (`mmap MAP_SHARED` on host, shared SRAM4 on target); cross-core traffic crosses
 there and nowhere else (the basis for MPU isolation).
+
+## Multicore (AMP) & the xcore region
+
+More than one core means **AMP** — an independent kernel per core, coordinated through that one
+shared, uncached region. That region and its protocols are the **xcore** layer;
+[xcore.md](xcore.md) is its full design (the SRAM4 map, the handshakes, the primitives). The
+essentials:
+
+**One owner, N satellites.** One core (the H755's CM7) is the **owner**: it brings up the clocks,
+owns the buses, and arbitrates. The others are **satellites** — an ordinary `[[partition]]` with
+`image = <dir>`, which the generator emits as a separate image flashed to its own bank. Each extra
+core is just another satellite: its own xioc slots, its own CpuLoad slot (the load array is indexed
+by core), its own layout ack. Satellites are peers only *through* the owner. The H755 is a
+1-owner-1-satellite instance; the map and codegen generalize to N.
+
+**Boot — there is no boot thread.** Bring-up runs in bare `main()` / the generated `gen.boot()`,
+before any kernel:
+1. The **owner** boots from flash bank 1: `board_clock_init` (the PLL), then `gen.boot()`, whose
+   first act — when it owns a satellite — is `xcore_clocks_ready`: it enables the inter-core HSEM
+   and writes the clocks-ready marker, **releasing** the parked satellites. Then `tx_kernel_enter`.
+2. Each **satellite** auto-boots from its own bank and parks in `xcore_wait_clocks()` until that
+   marker appears (so its SysTick is set against the *final* HCLK, not the reset clock), then starts
+   its timebase, inits its xioc channels, publishes the layout ack, and enters its own kernel.
+   (Warm-reset caveat: SRAM4 is retained, so a lone-core restart is not yet safe — see xcore.md.)
+
+**Bulk buffers, and sizing them.** Yes, the xcore region holds the cross-core **bulk** pools, in a
+dedicated window (`XCORE_BULK_ADDR`, budget `XCORE_BULK_MAX` — ~56 KB to the top of SRAM4). A pool's
+size is `bufsz × nbuf` from its `[[bulk]]` block; the generator packs all pools 32-B-aligned and
+**static-checks the total against the budget** (overflow is a build error, not a silent stomp). To
+make a pool bigger, raise `bufsz`/`nbuf` in `ecu.toml`; to fit more than the window holds, grow
+`XCORE_BULK_MAX` in the board's `xcore.h` (it can extend down over the wide-signal window if unused,
+or SRAM4 can be enlarged in the linker). Bulk is a **platform** service — the app never touches the
+pool (docs/bulk-transport.md).
 
 ## Data-flow paths
 
