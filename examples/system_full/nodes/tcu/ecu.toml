@@ -5,8 +5,9 @@
 # the eth counterpart of the CAN nodes. The whole thing is config + the H723 board
 # driver (boards/h723/eth.c): the generated loom_gen.v owns the eth comm thread, the
 # shared driver/eth/eth_netx.c owns NetX bring-up, boards/common/iocb.c the byte pool.
-# The wire is identical to examples/h735_someip / host_someip, so the same blobly_net
-# oracle verifies it. Static endpoint 192.168.0.51 (H735 sysnode/eth = .50).
+# The wire is identical to examples/h735_someip / host_someip — SAME service id 0x0100 — so
+# the same blobly_net oracle / bench_test.sh verify it unchanged (the SOME/IP envelope gate
+# drops a foreign service, so the id must match). Static endpoint 192.168.0.51 (sysnode/eth = .50).
 #
 # NOTE: no inline comments inside [[...]] tables (vlang/v#27684).
 
@@ -21,7 +22,7 @@ core      = 0
 
 [someip]
 bus     = "eth0"
-service = 0x0200
+service = 0x0100
 version = 1
 port    = 30490
 peer    = "192.168.0.190:30491"

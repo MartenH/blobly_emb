@@ -18,7 +18,11 @@
 #include <stm32h7xx.h>
 #include "ioc.h"
 
-#define IOC_POOL_N 4
+/* MUST match loom2v's cross-thread cell ceiling (tools/loom2v/gen.v: panics above 16).
+ * A smaller pool silently drops any generated index >= IOC_POOL_N in ioc_pub/get — e.g.
+ * system_full zone_a uses slots 0..4 (2 CAN inputs + 2 IO points + steering out), so a
+ * pool of 4 left HeadlightLed (slot 4) permanently at its init level (codex, #247). */
+#define IOC_POOL_N 16
 static ioc_t g_ioc_pool[IOC_POOL_N];
 /* size-proportional arenas: 3 x the scalar sig_t per channel, line-rounded +
  * line-aligned so channels never share a cache line (ioc.h invariant) */

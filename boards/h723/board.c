@@ -139,6 +139,12 @@ int board_io_pin_reserved(int port, int pin) {
 	if (port == 7 && (pin == 0 || pin == 1)) return 1;   /* PH0/PH1: 8 MHz HSE pair — PLL1 AND the FDCAN kernel clock (re-muxing it kills both) */
 	if (port == 0 && (pin == 13 || pin == 14)) return 1; /* PA13/PA14: SWD */
 	if (port == 1 && pin == 3) return 1;                 /* PB3: SWO */
+	/* RMII Ethernet (boards/h723/eth.c, all AF11): an [io] point re-muxing any of these
+	 * pads after eth_pins_init would silently kill part of the MAC (codex, #247). */
+	if (port == 0 && (pin == 1 || pin == 2 || pin == 7)) return 1; /* PA1 REF_CLK / PA2 MDIO / PA7 CRS_DV */
+	if (port == 1 && pin == 13) return 1;                          /* PB13 TXD1 */
+	if (port == 2 && (pin == 1 || pin == 4 || pin == 5)) return 1; /* PC1 MDC / PC4 RXD0 / PC5 RXD1 */
+	if (port == 6 && (pin == 11 || pin == 13)) return 1;           /* PG11 TX_EN / PG13 TXD0 */
 	return 0;
 }
 

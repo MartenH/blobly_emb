@@ -63,7 +63,9 @@ $(TX_A): $(TX_OBJ)
 $(BUILD)/app.o: $(BUILD)/app.c Makefile
 	$(CC) $(CFLAGS) -w -c $< -o $@
 
-$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A) $(BOARD_LD_THREADX)
+# io_backend.c / can_backend.c #include their selected implementation — list those (+ headers)
+# as prereqs too, or a change to io_stm32.c/io_port.h won't relink (codex, #247).
+$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(REPO)/driver/io/io_stm32.c $(REPO)/driver/io/io_port.h $(TX_A) $(BOARD_LD_THREADX)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A) -o $@
 	$(SIZE) $@
 	@$(REPO)/scripts/lint_vinit.sh $@   # the _vinit-trap gate (host CI can't cross-compile; run it here)
