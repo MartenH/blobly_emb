@@ -45,7 +45,7 @@ NX_OBJ = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
 # board bring-up + ETH MAC + the NetX STM32H7 driver + the shared NetX eth
 # backend + this image's byte-IOC glue
 BSP = $(BOARD_BSP_THREADX) $(REPO)/boards/$(BOARD)/eth.c \
-      $(REPO)/net/nx_driver_stm32h7.c $(REPO)/driver/eth/eth_netx.c glue.c
+      $(REPO)/net/nx_driver_stm32h7.c $(REPO)/driver/eth/eth_netx.c $(REPO)/boards/common/iocb.c
 
 # a failed lint must not leave a linkable app.c behind (the vinit gate is mandatory)
 .DELETE_ON_ERROR:
@@ -90,9 +90,9 @@ $(BUILD)/nx/%.o: $(NX)/common/src/%.c Makefile
 $(NX_A): $(NX_OBJ)
 	$(AR) -rc $@ $^
 
-# 3) cross-compile + link. ioc.h is a PROTOCOL contract compiled into glue.c
-# and eth_netx.c — a header change must rebuild, or `make flash` ships stale
-# IOC code against fresh generated expectations.
+# 3) cross-compile + link. ioc.h is a PROTOCOL contract compiled into
+# boards/common/iocb.c and eth_netx.c — a header change must rebuild, or
+# `make flash` ships stale IOC code against fresh generated expectations.
 $(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(REPO)/boards/common/ioc.h
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) \
 	  -Wl,--start-group $(TX_A) $(NX_A) -Wl,--end-group -o $@
