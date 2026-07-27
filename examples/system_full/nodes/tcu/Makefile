@@ -1,24 +1,26 @@
-# examples/h735_someip — SOME/IP on the H735-DK through the FULL loom2v
-# pipeline (docs/someip.md target rung): ecu.toml -> generated FB thread + eth
-# comm thread over the NetX seam (driver/eth/eth_netx.c). Retires the
-# hand-wired netx_glue rung; the wire is byte-identical to examples/host_someip.
+# examples/system_full/nodes/tcu — the H723 telematics/Ethernet node through the
+# FULL loom2v pipeline (docs/someip.md target rung): ecu.toml -> generated FB thread
+# + SOME/IP eth comm thread over the NetX seam (driver/eth/eth_netx.c) + the H723
+# board driver (boards/h723/eth.c). Same build recipe as examples/h735_someip; only
+# the board (h723) and the node's path depth differ.
 #
-#   make -C ../.. deps      # once: ThreadX + NetX Duo + CMSIS
-#   make flash H735=<stlink-serial>
+#   make -C ../../../.. deps      # once: ThreadX + NetX Duo + CMSIS
+#   make flash H723=0029003E3233510639363634
 CROSS   ?= arm-none-eabi-
 CC       = $(CROSS)gcc
 AR       = $(CROSS)ar
 OBJCOPY  = $(CROSS)objcopy
 SIZE     = $(CROSS)size
 V       ?= v
-REPO     = ../..
-NAME    := $(notdir $(CURDIR))
+REPO     = ../../../..
+NAME    := tcu
+EX       = examples/system_full/nodes/$(NAME)
 TX       = $(REPO)/third_party/threadx
 TX_PORT  = $(TX)/ports/cortex_m7/gnu
 NX       = $(REPO)/third_party/netxduo
 NX_PORT  = $(NX)/ports/cortex_m7/gnu
 
-BOARD := h735dk
+BOARD := h723
 include $(REPO)/boards/$(BOARD)/board.mk
 
 INCS = $(CMSIS) $(BOARD_INCS) -I$(REPO)/boards/common \
@@ -42,8 +44,8 @@ NX_A   = $(BUILD)/nx.a
 NX_C   = $(wildcard $(NX)/common/src/*.c)
 NX_OBJ = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
 
-# board bring-up + ETH MAC + the NetX STM32H7 driver + the shared NetX eth
-# backend + this image's byte-IOC glue
+# board bring-up + ETH MAC (H723) + the NetX STM32H7 driver + the shared NetX eth
+# backend + the shared byte-IOC glue
 BSP = $(BOARD_BSP_THREADX) $(REPO)/boards/$(BOARD)/eth.c \
       $(REPO)/net/nx_driver_stm32h7.c $(REPO)/driver/eth/eth_netx.c $(REPO)/boards/common/iocb.c
 
@@ -56,23 +58,22 @@ all: $(BUILD)/$(NAME).bin
 gen: gen/.stamp
 gen/.stamp: ecu.toml $(REPO)/tools/ecucheck/gen.v $(wildcard $(REPO)/tools/loom2v/*.v) $(REPO)/tools/ecumodel/model.v
 	@mkdir -p gen ports sig
-	cd $(REPO) && $(V) run tools/ecucheck/gen.v examples/$(NAME)/ecu.toml
-	cd $(REPO) && $(V) run tools/loom2v examples/$(NAME)/ecu.toml examples/$(NAME)/bus.dbc \
-	  examples/$(NAME)/sig/signals_gen.v examples/$(NAME)/ports/ports_gen.v examples/$(NAME)/gen/loom_gen.v \
-	  examples/$(NAME)/gen/trace-manifest.csv
+	cd $(REPO) && $(V) run tools/ecucheck/gen.v $(EX)/ecu.toml
+	cd $(REPO) && $(V) run tools/loom2v $(EX)/ecu.toml $(EX)/bus.dbc \
+	  $(EX)/sig/signals_gen.v $(EX)/ports/ports_gen.v $(EX)/gen/loom_gen.v \
+	  $(EX)/gen/trace-manifest.csv
 	@touch gen/.stamp
 
 -include gen/loom_build.mk
-# remake rule: after `make clean`, regenerating via gen/.stamp must make GNU
-# make RESTART and reparse the include — without this rule LOOM_VDEFS stays
-# unset for the same run and Loom compiles its default 32-handler tables
+# remake rule: after `make clean`, regenerating via gen/.stamp must make GNU make
+# RESTART and reparse the include, or LOOM_VDEFS stays unset for the same run.
 gen/loom_build.mk: gen/.stamp ;
 
 # 1) transpile the V stack to freestanding C (-enable-globals: ThreadX TCB/stack statics).
 $(BUILD)/app.c: main.v gen/.stamp $(wildcard app/*.v) $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
-	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
-	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
+	  -path "@vlib|@vmodules|.|$(EX)" \
+	  -o $(EX)/$(BUILD)/app.c $(EX)/main.v
 	$(REPO)/scripts/lint_vinit.sh $@
 
 # 2) ThreadX + NetX kernel/stack objects.
@@ -90,10 +91,10 @@ $(BUILD)/nx/%.o: $(NX)/common/src/%.c Makefile
 $(NX_A): $(NX_OBJ)
 	$(AR) -rc $@ $^
 
-# 3) cross-compile + link. ioc.h is a PROTOCOL contract compiled into
-# boards/common/iocb.c and eth_netx.c — a header change must rebuild, or
-# `make flash` ships stale IOC code against fresh generated expectations.
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(REPO)/boards/common/ioc.h
+# 3) cross-compile + link.
+# eth.h is a driver-ABI header the BSP .c files include (descriptor counts, buffer sizes) —
+# list it as a prereq, or a change there won't relink (codex #247).
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(REPO)/boards/common/ioc.h $(REPO)/boards/$(BOARD)/eth.h
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) \
 	  -Wl,--start-group $(TX_A) $(NX_A) -Wl,--end-group -o $@
 	$(SIZE) $@
@@ -105,8 +106,8 @@ $(BUILD):
 	@mkdir -p $(BUILD)
 
 flash: $(BUILD)/$(NAME).bin
-	st-flash $(if $(H735),--serial $(H735),) write $(BUILD)/$(NAME).bin 0x08000000
-	st-flash $(if $(H735),--serial $(H735),) reset
+	st-flash $(if $(H723),--serial $(H723),) write $(BUILD)/$(NAME).bin 0x08000000
+	st-flash $(if $(H723),--serial $(H723),) reset
 
 clean:
 	rm -rf $(BUILD) gen ports sig
