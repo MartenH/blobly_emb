@@ -367,9 +367,10 @@ unsigned char *xcore_trace_buf(void) {
     return (unsigned char *)XCORE_TRC_BUF_ADDR;
 }
 
-/* xcore_poll — the generated comm loop's reader: 1 if slot i has a value newer than the
- * last poll (out params always hold the best-known value). Reader state per slot lives
- * here (comm thread only). */
+/* xcore_poll — the owner-side reader (comm loop tx and/or the owner FB read path): 1 if slot i
+ * has a value newer than the last poll (out params always hold the best-known value). Reader
+ * state per slot is ONE static here, so a given slot must have a SINGLE owner reader thread —
+ * loom2v's build_model rejects a 2nd owner reader (SPSC; per-FB reader state is rung 2c). */
 int xcore_poll(int i, uint32_t *a, uint32_t *b) {
     static xioc_rd_t rd[XCORE_IOC_N];
     if (i < 0 || i >= XCORE_IOC_N) return 0;

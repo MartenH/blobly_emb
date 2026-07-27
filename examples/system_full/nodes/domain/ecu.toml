@@ -28,6 +28,16 @@ to   = "powertrain"
 transport = "double"
 persist = "now"
 
+# TorqueEstimate: the CM4 "dynamics" co-processor's output, read by the CM7 control loop — a
+# CROSS-CORE signal into an owner FB. from = "dynamics" (core 1) derives an xioc slot; PowertrainCtrl
+# reads it via the xioc seam, layout-gated (docs/xcore.md). This is the cross-core signal FEEDING the
+# control loop (rung 1 deferred it: the owner-FB read emitted host-only osal — fixed in loom2v rung 2b).
+[[signal]]
+name   = "TorqueEstimate"
+fields = { nm = "u32" }
+from   = "dynamics"
+to     = "powertrain"
+
 [[fb]]
 name   = "PowertrainCtrl"
 thread = "fast"
@@ -35,7 +45,7 @@ thread = "fast"
   [[fb.handler]]
   name      = "on_50ms"
   period_ms = 50
-  reads     = ["SteeringAngle", "DriveMode"]
+  reads     = ["SteeringAngle", "TorqueEstimate", "DriveMode"]
   writes    = ["VehicleSpeed", "HeadlightCmd", "DriveMode"] # trailing comment terminates nested block (vlang/v#27684)
 
 [target]
@@ -113,3 +123,4 @@ thread = "model"
   [[fb.handler]]
   name      = "on_5ms"
   period_ms = 5
+  writes    = ["TorqueEstimate"]
