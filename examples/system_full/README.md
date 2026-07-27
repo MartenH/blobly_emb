@@ -1,47 +1,60 @@
-# `examples/system_full` — 3-ECU Multi-Node Automotive Benchmark (2 buses)
+# `examples/system_full` — the reference system (4 ECUs + a CM4 satellite; CAN + Ethernet)
 
-`system_full` is a multi-node automotive system composed from a single [`system.toml`](file:///home/mahi/repos/blobly_emb/examples/system_full/system.toml). Every node is a real **ThreadX** image generated from that one file. It runs on three boards across **two CAN buses**, with `sysnode` (the H735-DK) routing signals between them — both buses come out on the DK's own FDCAN transceivers, so `blobly_net` on the Linux host can tap both and watch the gateway work.
+`system_full` is **the one reference system** for the blobly stack: a multi-node automotive system meant to exercise *every* shipped feature on real silicon, so the ~45 single-feature one-off examples can be retired. Every node is a real **ThreadX** image — the CAN nodes are composed from a single [`system.toml`](system.toml), and the Ethernet node is a self-contained SOME/IP endpoint.
 
-> Scope note: this is the deliberately-simple 2-bus starting point. A third bus (`body`) + a `zone_b` ECU, and the gateway's Ethernet/DoIP/SOME/IP edge, are later steps once the 2-bus loop is proven on silicon.
+It runs on **four boards** across **two CAN buses + Ethernet**:
 
----
-
-## Topology
-
-```
-              ┌───────────────────────── Linux host (blobly_net) ─────────────────────────┐
-              │  taps BOTH buses (+ diag 0x7A0..0x7C8)                                     │
-              └───────────────┬───────────────────────────────────────────┬───────────────┘
-                              │ compute bus                                │ edge bus
-                              ▼                                            ▼
-        ┌─────────────────────────────┐        ┌───────────────────────────────────────────┐
-        │      NUCLEO-H755ZI-Q         │        │              NUCLEO-H723ZG                 │
-        │      domain (compute)        │        │               zone_a (edge)                │
-        │  writes VehicleSpeed,        │        │  reads VehicleSpeed, HeadlightCmd;         │
-        │  HeadlightCmd; reads         │        │  writes SteeringAngle                      │
-        │  SteeringAngle               │        │                                            │
-        └───────────────┬─────────────┘        └──────────────────────┬────────────────────┘
-                        │ FDCAN1 = compute                             │ FDCAN2 = edge
-                        ▼                                              ▼
-              ┌──────────────────────────── STM32H735G-DK ────────────────────────────┐
-              │  sysnode: ThreadX gateway. comm thread owns FDCAN1 + FDCAN2, forwards  │
-              │  3 routes (raw copy + id remap). compute<->edge.                       │
-              └───────────────────────────────────────────────────────────────────────┘
-```
+- **`sysnode`** (STM32H735G-DK) — the **gateway**, routing signals `compute` ↔ `edge`.
+- **`domain`** (NUCLEO-H755ZI-Q) — **dual-core** powertrain: a CM7 control loop + a **CM4 satellite** (`domain_m4`), with **NvM** persistence, cross-core **bulk** transfer, cross-core **CpuLoad**, a **two-core trace**, and a **CAN shell**.
+- **`zone_a`** (NUCLEO-H723ZG) — the edge zone ECU: a node-local FB pipeline **and physical GPIO**.
+- **`tcu`** (NUCLEO-H723ZG) — the telematics/connectivity node: **SOME/IP-over-Ethernet** (silicon-validated).
 
 ---
 
-## Nodes & bus mapping
+## Features exercised (the consolidation goal)
 
-| Node | Hardware | Role | Bus | Diag ID | NM ID |
-|---|---|---|---|---|---|
-| `sysnode` | **STM32H735G-DK** | Gateway: routes 3 signals `compute` ↔ `edge` | `compute` (can0/FDCAN1), `edge` (can1/FDCAN2) | `0x7A0` / `0x7A8` | `0x11` |
-| `domain` | **NUCLEO-H755ZI-Q** (CM7) | Powertrain: produces speed/headlight, reads steering | `compute` (can0) | `0x7B0` / `0x7B8` | `0x12` |
-| `zone_a` | **NUCLEO-H723ZG** | Front zone: sensor→limiter FB pipeline over a node-local signal, produces steering | `edge` (can1) | `0x7C0` / `0x7C8` | `0x13` |
+| Feature | Node(s) | Silicon status |
+|---|---|---|
+| 2-bus CAN gateway routing (raw copy + id remap) | `sysnode` | ✅ on-silicon |
+| NvM persistence (`DriveMode` survives resets) | `domain` | ✅ |
+| Cross-core **bulk** + **CpuLoad** (AMP, CM7↔CM4) | `domain` + `domain_m4` | ✅ (bulkperf ~28 MB/s over CAN) |
+| Two-core **trace** (thread/ISR/FB, one timeline) | `domain` | ✅ |
+| CAN **shell** (`bulkperf`, `ps`, `bmc`) | `domain` | ✅ |
+| Network Management (coordinated sleep/wake + NvM flush) | `compute` bus | ✅ |
+| Node-local FB→FB signalling (intra-thread cell) | `zone_a` | ✅ |
+| Physical **IO** (GPIO: button → signal, signal → LED) | `zone_a` | ⚙️ config-proven on silicon (re-flash after the #247 pool fix to see the LED) |
+| **SOME/IP-over-Ethernet** (cyclic events + E2E + RPC rx) | `tcu` | ✅ silicon-validated (ping, tx/rx, E2E) |
 
 ---
 
-## Cross-node signals & gateway routes
+## Nodes
+
+| Node | Hardware | Role | Bus | In `system.toml`? |
+|---|---|---|---|---|
+| `sysnode` | STM32H735G-DK | Gateway: routes 3 signals `compute` ↔ `edge` | `compute` (can0/FDCAN1), `edge` (can1/FDCAN2) | ✅ |
+| `domain` | NUCLEO-H755ZI-Q (CM7) | Powertrain + persistence + AMP owner; NvM, bulk, trace, shell | `compute` (can0) | ✅ |
+| `domain_m4` | …the H755's **CM4** | `domain`'s co-processor **satellite** (bulk producer + CpuLoad); a `[[partition]] image=`, flashed to flash **bank 2** (`0x08100000`) | — (built by `domain`'s gen) | — (a satellite, not a node) |
+| `zone_a` | NUCLEO-H723ZG | Front zone: sensor→limiter FB pipeline + **physical GPIO** | `edge` (can1) | ✅ |
+| `tcu` | NUCLEO-H723ZG | **Telematics/connectivity — SOME/IP-over-Ethernet** at `192.168.0.51` | `eth0` (Ethernet) | ❌ **see below** |
+
+---
+
+## The Ethernet node (`tcu`) — and why it's *not* in `system.toml`
+
+`tcu` publishes a cyclic, E2E-protected SOME/IP **telemetry event** and answers an RPC **command round trip**, all from config + the H723 Ethernet board driver (`boards/h723/eth.c`). It's **silicon-validated**: link + ARP + ICMP (`ping 192.168.0.51`, 0% loss), SOME/IP tx (service `0x0100`, event `0x8001`, E2E counter+CRC) and rx (`uptime` RPC → response, request-id mirrored). The wire is identical to `examples/h735_someip` / `host_someip`, so the same `blobly_net` oracle verifies it.
+
+**But `tcu` is deliberately not a `[[node]]` in `system.toml` — and that's a real boundary, not an oversight.** The system model (`tools/sysmodel`) is **CAN-only**: every `[bus.*]` carries a **DBC** frame contract, and `syscheck` (REQ-TOPO-001) *rejects* a node that opens a bus the model doesn't declare. There is no eth/SOME-IP bus type in the model yet. So `tcu`:
+
+- **is** in the build — it's in the Makefile `NODES` list, so `make nodes` cross-builds it with the others; and
+- **is not** in the cross-node *model* — its SOME/IP services aren't validated for writers/reachability/contract the way the CAN signals are.
+
+Teaching sysmodel to host an eth/SOME-IP bus (a `Bus.kind`, a SOME/IP service contract instead of a DBC, cross-network reachability) is tracked as **issue #245**. Until that lands, the Ethernet node is a **build member, not a model member** — which is why you won't find it in `system.toml`.
+
+*(The same is true of `domain_m4`: it's a CM4 **satellite image**, a `[[partition]] image=` inside `domain`'s own config, not a system-level node — so it isn't in `system.toml` either.)*
+
+---
+
+## Cross-node signals & gateway routes (the CAN system)
 
 All three routes are **layout-identical** (same signal position/scale/DLC on both buses), so the gateway forwards each as a raw payload copy with an id remap — no decode/re-encode on target.
 
@@ -51,72 +64,50 @@ All three routes are **layout-identical** (same signal position/scale/DLC on bot
 | `HeadlightCmd` | `domain` (compute) | `compute` → `edge` | `zone_a` | `0x123` → `0x131` | 100 ms |
 | `SteeringAngle` | `zone_a` (edge) | `edge` → `compute` | `domain` | `0x132` → `0x125` | 50 ms |
 
-This closes a **bidirectional** loop through the H735: `domain` switches its headlights on
-`zone_a`'s routed steering (`powertrain.v` — `headlight_cmd = steering > 90`), and `zone_a`
-clamps its steering by the `VehicleSpeed` it receives from `domain` (`SteerLimiter`, below).
-Every cross-bus hop goes through the gateway's forwarder — a routed input on one side changes
-what the other side puts on the wire.
+This closes a **bidirectional** loop through the H735: `domain` switches its headlights on `zone_a`'s routed steering (`headlight_cmd = steering > 90`), and `zone_a` clamps its steering by the `VehicleSpeed` it receives from `domain`. Every cross-bus hop goes through the gateway's forwarder.
 
-### Node-local signalling (inside zone_a)
+### Node-local signalling + physical IO (inside `zone_a`)
 
-Not everything crosses the wire. `zone_a` runs a **two-FB pipeline on one thread**: `SteerSensor`
-sweeps a raw angle onto a **node-local** signal `RawSteer`, and `SteerLimiter` reads it, clamps
-it to a speed-dependent maximum (using the `VehicleSpeed` it gets via the gateway), and emits
-the result as `SteeringAngle`. `RawSteer` has `from == to` (both the `front` partition), so it
-lowers to an intra-thread cell — it never touches a bus and is **not** in `system.toml`. This is
-the "if it never leaves the node, it is the node's" rule (see
-[`docs/um/system-from-nodes.md`](../../docs/um/system-from-nodes.md)) shown next to the cross-node routes.
+`zone_a` runs a **two-FB pipeline on one thread**: `SteerSensor` sweeps a raw angle onto a **node-local** signal `RawSteer` (`from == to` ⇒ an intra-thread cell, never on a bus, **not** in `system.toml`), and `SteerLimiter` reads it, clamps it by the received `VehicleSpeed`, and emits `SteeringAngle`.
+
+`SteerLimiter` also drives **physical IO** (`docs/io.md`), tying the cross-node signals to real pins on the NUCLEO-H723ZG:
+
+- the domain's **`HeadlightCmd`** (compute → gateway → here) lights **LD1 (PB0)** — a cross-node command reaching a physical pin;
+- the **user button (PC13)** forces a hard `SteeringAngle`, which rides back edge → gateway → compute — a physical input driving a cross-node signal.
+
+The `[[io.gpio]]` points bind to `[[signal]]`s with `from/to = "io"`; the boards layer (`boards/h723`, generic `driver/io/io_stm32.c`) owns the pins — adding an IO point is config, not code.
 
 ---
 
-## Build & Validation
+## Build
 
 ```sh
 cd examples/system_full
 
-# 1. Validate cross-node invariants, single-writer rules, identity, and routing:
-make syscheck
-
-# 2. Dissolve system.toml into per-node gen-<node>.toml for all 3 nodes:
-make gen
-
-# 3. Cross-build the ThreadX images for ALL 3 nodes (needs arm-none-eabi + `make -C ../.. deps`):
-make nodes           # -> nodes/{sysnode,domain,zone_a}/build/<node>.bin
+make syscheck   # validate cross-node invariants, single-writer rules, identity, routing (CAN model)
+make gen        # dissolve system.toml into per-node gen-<node>.toml
+make nodes      # cross-build ALL node images + the CM4 satellite (needs arm-none-eabi + `make -C ../.. deps`)
 ```
 
-### Node build status
+`make nodes` builds every `NODES` image **and** the `domain_m4` satellite (after `domain`, whose gen emits it):
 
-**All three** nodes — including the gateway — cross-build to real ThreadX images from
-`system.toml`:
+| Image | Board | What it is |
+|---|---|---|
+| `nodes/sysnode/build/sysnode.bin` | `boards/h735dk` (H735 M7) | 2-bus gateway |
+| `nodes/domain/build/domain.bin` | `boards/h755zi` (H755 CM7) | powertrain + NvM + bulk + trace + shell |
+| `nodes/domain_m4/build/domain_m4.bin` | `boards/h755zi` (H755 **CM4**) | the satellite (bulk producer + CpuLoad), flashed to bank 2 (`0x08100000`) |
+| `nodes/zone_a/build/zone_a.bin` | `boards/h723` (H723ZG) | front-zone FBs + physical IO |
+| `nodes/tcu/build/tcu.bin` | `boards/h723` (H723ZG) | SOME/IP-over-Ethernet |
 
-| Node | Board | Image | Role |
-|---|---|---|---|
-| `sysnode` | `boards/h735dk` (H735 M7) | `nodes/sysnode/build/sysnode.bin` | 2-bus gateway |
-| `domain` | `boards/h755zi` (H755 CM7) | `nodes/domain/build/domain.bin` | powertrain FBs |
-| `zone_a` | `boards/h723` (H723ZG) | `nodes/zone_a/build/zone_a.bin` | front-zone FBs |
+The CAN nodes link the generated comm thread against the shared `boards/common/comm_glue.c` (or `io_glue.c` when the node also has IO); the eth node links `driver/eth/eth_netx.c` + `boards/common/iocb.c` + the H723 eth driver. All pass the `_vinit`-trap lint.
 
-Each links the generated comm thread against the shared `boards/common/comm_glue.c` (IOC
-pool, the FDCAN1/2/3 Rx ISRs, Loom-load telemetry) and `boards/common/trace_hooks.c`, and
-passes the `_vinit`-trap lint.
+### The gateway on target
 
-**The gateway on target.** `sysnode`'s comm thread owns both FDCAN buses: it opens `can0`
-(FDCAN1 = compute) and `can1` (FDCAN2 = edge), arms each instance's Rx interrupt into one
-wake semaphore, and forwards the 3 resolved routes as a **raw payload copy + id remap**
-(`if id==0x120 on can0 → send 0x130 on can1`). This works because every route is
-*layout-identical* — the signal sits at the same bit position, scale, and DLC on both buses —
-so no on-target decode/re-encode is needed (a route whose layouts differ is rejected at gen
-time and stays host-only). The forwarded-frame count is the exported `g_fwd_count`,
-SWD-observable at the bench.
+`sysnode`'s comm thread owns both FDCAN buses — it opens `can0` (FDCAN1 = compute) and `can1` (FDCAN2 = edge), arms each instance's Rx interrupt into one wake semaphore, and forwards the 3 resolved routes as a **raw payload copy + id remap**. This works because every route is *layout-identical*; a route whose layouts differ is rejected at gen time (host-only). The forwarded-frame count is the exported `g_fwd_count`, SWD-observable at the bench. Both buses are on the DK's own transceivers: FDCAN1 on `PH13`/`PH14`, FDCAN2 on `PB6`/`PB5` (AF9), clear of the Ethernet RMII pins.
 
-**Silicon status.** Both buses are wired on `boards/h735dk`: FDCAN1 (compute) on `PH13`/`PH14`
-and FDCAN2 (edge) on `PB6`/`PB5` (AF9) — the DK's two CAN-FD transceivers, clear of the
-Ethernet RMII pins. Flash with `make -C nodes/sysnode flash` (add `SERIAL=<st-link sn>` to
-pick a board when several ST-Links are attached).
+### Bench notes
 
-**Watch the traffic.** [`system_full.blobnet`](system_full.blobnet) is a
-[blobly_net](https://github.com/MartenH/blobly_net) monitor project for this bench — it listens
-on both buses (SocketCAN `can0` = compute, `can1` = edge) and decodes them with the DBCs, so you
-can see the gateway forward (the same value reappearing on the other bus under a new id). The
-DBC paths inside it are relative to the `.blobnet` itself, so any checkout works — run it from
-the blobly_net repo, pointing `BLOBLY_PROJECT` at your blobly_emb checkout:
-`BLOBLY_PROJECT=/path/to/blobly_emb/examples/system_full/system_full.blobnet ./scripts/run_gui.sh`.
+- **Flash** a node: `make -C nodes/<node> flash SERIAL=<st-link sn>` (or `H723=<sn>` for the H723 nodes). ST-Link serials → boards are in the bench notes.
+- **Ethernet (`tcu`)**: on WSL, the board's UDP events land on the **Windows** side (mirrored networking), so validate SOME/IP with a `powershell.exe` listener (see `examples/h735_someip/bench_test.sh`), not a WSL socket. `ping` works from WSL because ICMP is shared.
+- **Watch the CAN traffic**: [`system_full.blobnet`](system_full.blobnet) is a [blobly_net](https://github.com/MartenH/blobly_net) monitor for this bench — it taps both buses (`can0` = compute, `can1` = edge) and decodes them with the DBCs, so you can see the gateway forward. Run it from the blobly_net repo:
+  `BLOBLY_PROJECT=/path/to/blobly_emb/examples/system_full/system_full.blobnet ./scripts/run_gui.sh`.
