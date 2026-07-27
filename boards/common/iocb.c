@@ -1,15 +1,12 @@
-/* h735_someip board glue (docs/someip.md target rung). The generated
- * gen/loom_gen.v owns everything protocol-shaped (FB thread, eth comm thread,
- * tx_application_define); the NetX transport is the shared driver backend
- * (driver/eth/eth_netx.c). This file is only what neither can express:
- *
- * The byte IOC pool — the struct-bearing twin of the comm_glue.c scalar pool:
- * a small indexed pool of wait-free triple-buffer channels (boards/common/
- * ioc.h) the generator assigns per eth signal, each arena carved out
- * SIZE-PROPORTIONALLY (3 x the signal's struct) at iocb_cfg time, so V —
- * which can't express the atomics/volatile — publishes and acquires whole
- * signal structs by cell index. loom2v wires which index carries which
- * signal; this file stays config-independent. */
+/* boards/common/iocb.c — the byte-IOC pool: the struct-bearing twin of comm_glue.c's scalar
+ * IOC pool, shared by every image that carries eth signals (SOME/IP and beyond). A small
+ * indexed pool of wait-free triple-buffer channels (boards/common/ioc.h) the generator assigns
+ * per eth signal, each arena carved out SIZE-PROPORTIONALLY (3 x the signal's struct) at
+ * iocb_cfg time, so V — which can't express the atomics/volatile — publishes and acquires whole
+ * signal structs by cell index. loom2v wires which index carries which signal (fn C.iocb_*);
+ * this file stays config-independent, so a new eth node reuses it verbatim rather than copying
+ * a per-example glue.c. (Previously examples/h735_someip/glue.c; promoted here so the eth path
+ * is board glue + config, not a per-node copy.) */
 #include <stdint.h>
 #include "ioc.h"
 
@@ -61,10 +58,4 @@ int iocb_get_ever(int i, void *dst) {
 		g_iocb_seen[i] = 1;
 	}
 	return g_iocb_seen[i];
-}
-
-/* shared vector table: this image has no CAN — parked stub. */
-void FDCAN1_IT0_IRQHandler(void) {
-	for (;;) {
-	}
 }
