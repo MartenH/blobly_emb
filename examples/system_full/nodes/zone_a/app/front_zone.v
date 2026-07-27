@@ -31,9 +31,12 @@ pub fn (mut fb SteerLimiter) on_50ms(inp ports.SteerLimiterIn, mut out ports.Ste
 		deg = max
 	}
 	// a physical button press (PC13) forces a hard steer — a real input on this zone ECU
-	// driving a cross-node signal (SteeringAngle rides edge -> gateway -> compute).
+	// driving a cross-node signal (SteeringAngle rides edge -> gateway -> compute). 180 is
+	// ABOVE the domain's headlight threshold (PowertrainCtrl asserts HeadlightCmd on
+	// steering > 90) and within the tighter speed clamp, so a press closes the loop and
+	// lights the LED via HeadlightCmd.
 	if inp.user_button.pressed {
-		deg = 90
+		deg = 180
 	}
 	out.steering_angle.deg = deg
 	// the domain's HeadlightCmd (compute -> gateway -> here) drives a real LED (PB0):

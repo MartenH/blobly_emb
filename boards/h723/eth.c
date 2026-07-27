@@ -13,9 +13,10 @@
  * D-cache is OFF on this board (docs/no-alloc.md), so DMA descriptors/buffers need
  * NO clean+invalidate. Descriptor format: the H7 "normal" 4-word descriptor.
  *
- * BENCH VALIDATION PENDING (2026-07-27): flash to ST-Link 0029003E3233510639363634,
- * expect link + ARP + ICMP at 192.168.0.51 (mirrors examples/h735_net's P1). Until
- * that passes on silicon, treat the pinout as the standard-NUCLEO assumption. */
+ * BENCH-VERIFIED 2026-07-27 (ST-Link 0029003E3233510639363634, running the tcu image):
+ * the LAN8742 negotiated 100M full-duplex (PSCSR 0x1058 => RMII pinout + MDIO divider
+ * correct), ping 192.168.0.51 was 0% loss (link + ARP + ICMP), and SOME/IP tx (E2E
+ * events) + rx (RPC round trip) ran on the wire. */
 #include "eth.h"
 #include <stm32h723xx.h>
 #include <string.h>

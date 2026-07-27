@@ -92,7 +92,9 @@ $(NX_A): $(NX_OBJ)
 	$(AR) -rc $@ $^
 
 # 3) cross-compile + link.
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(REPO)/boards/common/ioc.h
+# eth.h is a driver-ABI header the BSP .c files include (descriptor counts, buffer sizes) —
+# list it as a prereq, or a change there won't relink (codex #247).
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(REPO)/boards/common/ioc.h $(REPO)/boards/$(BOARD)/eth.h
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) \
 	  -Wl,--start-group $(TX_A) $(NX_A) -Wl,--end-group -o $@
 	$(SIZE) $@

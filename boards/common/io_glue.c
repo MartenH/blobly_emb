@@ -106,12 +106,21 @@ unsigned load_sum_overruns(void) {
 static TX_SEMAPHORE g_comm_sem;
 
 /* FDCAN1 Rx-FIFO0 new-message ISR (vectors.S references it unconditionally — never
- * weak-aliased, see the note there). Deliberately tiny: clear the flag, wake the comm
- * thread. No exec-change trace brackets: this image builds without
- * TX_ENABLE_EXECUTION_CHANGE_NOTIFY. */
+ * weak-aliased, see the note there). Tiny: clear the flag, wake the comm thread.
+ * Bracketed with the exec-change hooks (as comm_glue.c does) so a node that ALSO
+ * enables [trace] captures each CAN ISR in the two-core trace (codex #247). The
+ * hooks are guarded: a trace-less io node builds without the symbols. */
+extern void _tx_execution_isr_enter(void);
+extern void _tx_execution_isr_exit(void);
 void FDCAN1_IT0_IRQHandler(void) {
+#ifdef TX_ENABLE_EXECUTION_CHANGE_NOTIFY
+    _tx_execution_isr_enter();
+#endif
     FDCAN1->IR = FDCAN_IR_RF0N;    /* acknowledge the new-message interrupt (write-1-clear) */
     tx_semaphore_put(&g_comm_sem); /* wake comm; rescheduling is deferred to PendSV on exit */
+#ifdef TX_ENABLE_EXECUTION_CHANGE_NOTIFY
+    _tx_execution_isr_exit();
+#endif
 }
 
 /* Create the wake semaphore and enable the FDCAN1 Rx-FIFO0 new-message interrupt on
