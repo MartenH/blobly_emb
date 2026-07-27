@@ -77,6 +77,19 @@ sequenceDiagram
     Note over Host: reassemble → both cores on one timeline<br/>(CM4 records shifted by the measured offset)
 ```
 
+## Does the dump block the bus? No — it interleaves
+
+The comm loop calls each producer's `produce()` once per pass, and the trace `produce()` emits **at
+most one frame** then returns. The dump keeps a **cursor** that persists across passes (`dump_pos`
+for the raw stream; `local_from` / `remote_from` for the ISO-TP block dump), so a full dump streams
+**one frame at a time over many loop iterations**. On those same passes the comm thread still drains
+rx, sends telemetry, sends cyclic signals, and runs NM — all at their normal cadence; on a multi-bus
+owner the other buses keep forwarding too, because the loop **never blocks** inside the dump. Two
+further brakes: the ISO-TP dump only advances on the host's **flow-control** frames (`dump_fc`), so
+the host paces it, and every send is **`tx_ready`-gated**, so real traffic gets the tx slot first.
+The deliberate trade-off is that a dump takes *longer* (spread thin) rather than *freezing* the bus
+— the ECU keeps running its real traffic while it hands out a diagnostic capture.
+
 ## The clock correlation (why the two cores line up)
 
 Each core counts `trace_now_us()` from its *own* first tick, so their zeros differ. The snapshot
