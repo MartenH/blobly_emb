@@ -1254,6 +1254,38 @@ fn build_model(doc toml.Doc, dbc string) Model {
 				'(SPSC); keep its writers on one thread or split the signal')
 		}
 	}
+	// Symmetric SINGLE-CONSUMER guard (codex #238): the owner-FB read path emits C.xcore_poll,
+	// whose reader state (seq/a/b) is ONE static per slot in comm_glue. Two owner threads polling
+	// the same slot share that state — a preemption mid-update can tear or regress the last-good
+	// value. Count owner-side reader THREADS (external/image partitions read via their own image,
+	// not xcore_poll); >1 is the rung-2c (FB-held reader state) boundary, rejected until it lands.
+	mut remote_reader_ctx := map[string][]string{} // signal -> distinct owner reader threads
+	for fb in ecumodel.toml_arr(doc, 'fb') {
+		fbm := fb.as_map()
+		fbname := (fbm['name'] or { toml.Any('') }).string()
+		thr := part.fb_thread[fbname] or { fbname }
+		if part.external[part.thread_part[thr] or { '' }] {
+			continue // satellite/external reader: not an xcore_poll caller in this image
+		}
+		for h in (fbm['handler'] or { toml.Any([]toml.Any{}) }).array() {
+			for r in (h.as_map()['reads'] or { toml.Any([]toml.Any{}) }).array() {
+				rn := r.string()
+				if rn in xcore_idx && thr !in (remote_reader_ctx[rn] or { []string{} }) {
+					remote_reader_ctx[rn] << thr
+				}
+			}
+		}
+	}
+	for sname in xcore_names {
+		mut ctxs := remote_reader_ctx[sname] or { []string{} }
+		if ctxs.len > 1 {
+			ctxs.sort()
+			panic('loom: cross-core signal "${sname}" is read by ${ctxs.len} owner threads ' +
+				'(${ctxs.join(', ')}) — xcore_poll holds ONE shared reader state per slot, so ' +
+				'multiple owner readers would tear the last-good value; keep its readers on one ' +
+				'thread, or wait for FB-held reader state (rung 2c)')
+		}
+	}
 	if xcore_producers.len > 1 {
 		xcore_producers.sort()
 		panic('loom2v: ${xcore_producers.len} satellite partitions produce remote signals ' +
