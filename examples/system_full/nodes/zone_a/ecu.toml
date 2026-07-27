@@ -1,10 +1,17 @@
-# zone_a (H723) — Front Zone ECU.
+# zone_a (H723) — Front Zone ECU. Node-local FB->FB signalling + physical IO.
 #
 # Demonstrates NODE-LOCAL (FB->FB) signalling alongside the cross-node routes: a steering
 # SENSOR fb produces a raw angle onto the local `RawSteer` signal, and a LIMITER fb reads it,
 # clamps it to a speed-dependent maximum, and puts the result on the wire as SteeringAngle.
 # RawSteer never leaves zone_a (from == to => a local cell on front_thread), so it stays here,
 # NOT in system.toml — only the bus-facing signals are the system's.
+#
+# Physical IO (docs/io.md) ties the cross-node signals to real pins on the NUCLEO-H723ZG:
+#   - the domain's HeadlightCmd (compute -> gateway -> here) lights LD1 (PB0).
+#   - the user button (PC13) forces a hard SteeringAngle, which rides back edge -> gateway
+#     -> compute — a physical input driving a cross-node signal.
+#
+# NOTE: no inline comments inside a nested [[io.*]] / [[fb.handler]] block (vlang/v#27684).
 
 [[partition]]
 name = "front"
@@ -12,6 +19,34 @@ core = 0
 
   [[partition.thread]]
   name = "front_thread"
+
+# --- physical IO (boards/h723 owns the pins; io_stm32.c is the generic H7 backend) ---
+[io]
+core = 0
+
+  [[io.gpio]]
+  name      = "UserButton"
+  pin       = "PC13"
+  period_ms = 10
+  default   = false
+
+  [[io.gpio]]
+  name      = "HeadlightLed"
+  pin       = "PB0"
+  period_ms = 10
+  init      = false
+
+[[signal]]
+name = "UserButton"
+fields = { pressed = "bool" }
+from = "io"
+to   = "front"
+
+[[signal]]
+name = "HeadlightLed"
+fields = { on = "bool" }
+from = "front"
+to   = "io"
 
 # node-local signal: raw steering, SteerSensor -> SteerLimiter (from == to => intra-node cell)
 [[signal]]
@@ -39,8 +74,8 @@ thread = "front_thread"
   [[fb.handler]]
   name      = "on_50ms"
   period_ms = 50
-  reads     = ["RawSteer", "VehicleSpeed", "HeadlightCmd"]
-  writes    = ["SteeringAngle"] # trailing comment terminates nested block (vlang/v#27684)
+  reads     = ["RawSteer", "VehicleSpeed", "HeadlightCmd", "UserButton"]
+  writes    = ["SteeringAngle", "HeadlightLed"] # trailing comment terminates nested block (vlang/v#27684)
 
 [target]
 kind    = "threadx"

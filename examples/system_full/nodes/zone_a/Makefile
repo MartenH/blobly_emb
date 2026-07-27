@@ -13,8 +13,8 @@ PORT     = $(TX)/ports/cortex_m7/gnu
 include $(REPO)/boards/$(BOARD)/board.mk
 
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
-          $(BOARD_DEFS) -DBOARD_ENTRY=main__main $(CAN_DEFS) \
-          -I. -Igen $(BOARD_INCS) -I$(REPO)/driver/can \
+          $(BOARD_DEFS) -DBOARD_ENTRY=main__main $(CAN_DEFS) -DBLOB_IO_STM32 \
+          -I. -Igen $(BOARD_INCS) -I$(REPO)/driver/can -I$(REPO)/driver/io \
           -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
@@ -25,7 +25,7 @@ TX_ASM   = $(wildcard $(PORT)/src/*.S)
 TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
-BSP      = $(BOARD_BSP_THREADX) $(REPO)/boards/common/comm_glue.c $(REPO)/boards/common/trace_hooks.c
+BSP      = $(BOARD_BSP_THREADX) $(REPO)/boards/common/io_glue.c $(REPO)/boards/common/trace_hooks.c
 
 all: $(BUILD)/$(NAME).bin
 
@@ -46,7 +46,7 @@ gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/edge.dbc $(wildcard app/*.v
 	  examples/system_full/nodes/$(NAME)/gen/loom_gen.v examples/system_full/nodes/$(NAME)/gen/trace-manifest.csv
 	@touch gen/.stamp
 
-$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard app/*.v) | $(BUILD)
+$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/driver/io/*.v) $(wildcard app/*.v) | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
 	  -path "@vlib|@vmodules|.|examples/system_full/nodes/$(NAME)" \
 	  -o examples/system_full/nodes/$(NAME)/$(BUILD)/app.c examples/system_full/main.v
@@ -63,8 +63,8 @@ $(TX_A): $(TX_OBJ)
 $(BUILD)/app.o: $(BUILD)/app.c Makefile
 	$(CC) $(CFLAGS) -w -c $< -o $@
 
-$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(BOARD_LD_THREADX)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) -o $@
+$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A) $(BOARD_LD_THREADX)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(REPO)/driver/io/io_backend.c $(TX_A) -o $@
 	$(SIZE) $@
 	@$(REPO)/scripts/lint_vinit.sh $@   # the _vinit-trap gate (host CI can't cross-compile; run it here)
 
