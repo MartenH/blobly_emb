@@ -120,6 +120,11 @@ tear-freedom:
   route-staleness gate — **not** the io-output init gate (io "out" above), which is
   `ioc_get_ever` on target / an ordinary acquire on host).
 
+> **Target caveat:** `transport =` selects the buffer count on **host** today. The ThreadX emitter
+> wires *every* cross-thread cell to the fixed wait-free **triple** buffer (`C.ioc_pub/get`,
+> `boards/common/comm_glue.c`) regardless of the setting — so on target don't budget 1×/2× storage
+> or count on seqlock retry semantics; you get triple's footprint and behavior everywhere.
+
 **Why cross-core is different.** The triple/double buffer is **not** cross-core safe on the H7
 fabric — its index exchange uses LDREX/STREX, which don't arbitrate across cores (162/200k torn
 reads measured). So a signal whose two endpoints sit on **different cores** rides **xioc** instead:
@@ -179,7 +184,9 @@ addresses.
 ## Multicore (AMP) & the xcore region
 
 More than one core means **AMP** — an independent kernel per core, coordinated through that one
-shared, uncached region. That region and its protocols are the **xcore** layer;
+shared, uncached region for *data/state* plus an **HSEM** doorbell for *wake* (a bulk publish
+releases semaphore 0 → owner IRQ125, so the consumer needn't poll). That region and its protocols
+are the **xcore** layer;
 [xcore.md](xcore.md) is its full design (the SRAM4 map, the handshakes, the primitives). The
 essentials:
 
@@ -201,14 +208,18 @@ before any kernel:
    and writes the clocks-ready marker, **releasing** the parked satellites. Then `tx_kernel_enter`.
 2. Each **satellite** auto-boots from its own bank and parks in `xcore_wait_clocks()` until that
    marker appears (so its SysTick is set against the *final* HCLK, not the reset clock), then starts
-   its timebase, inits its xioc channels, publishes the layout ack, and enters its own kernel.
+   its timebase, inits its xioc channels, and enters its own kernel. It **publishes a layout ack
+   only if it produces a cross-core signal** — a bulk-only / CpuLoad-only satellite (like
+   `system_full`'s domain CM4) skips the layout handshake and relies on the bulk attach instead.
    (Warm-reset caveat: SRAM4 is retained, so a lone-core restart is not yet safe — see xcore.md.)
 
 **Bulk buffers, and sizing them.** Yes, the xcore region holds the cross-core **bulk** pools, in a
 dedicated window (`XCORE_BULK_ADDR`, budget `XCORE_BULK_MAX` — ~56 KB to the top of SRAM4). A pool's
-size is `bufsz × nbuf` from its `[[bulk]]` block; the generator packs all pools 32-B-aligned and
-**static-checks the total against the budget** (overflow is a build error, not a silent stomp). To
-make a pool bigger, raise `bufsz`/`nbuf` in `ecu.toml`. Growing the *window* is more than one knob:
+footprint is *more* than `bufsz × nbuf`: each pool adds a 96-B header + a `12 × nbuf` descriptor
+area, then rounds to 32 B (`bulk_bytes()` in `gen_bulk.v`) — so size against that `BULK_BYTES`, not
+payload alone, or a pool that looks like it fits can fail generation. The generator packs all pools
+32-B-aligned and **static-checks the total against the budget** (overflow is a build error, not a
+silent stomp). To make a pool bigger, raise `bufsz`/`nbuf` in `ecu.toml`. Growing the *window* is more than one knob:
 `XCORE_BULK_MAX` (`0xE000`) is defined in the board's `xcore.h`, but the generator's `emit_bulk_glue`
 currently **hard-codes the same `0xE000`**, so both must change together — and SRAM4 physically ends
 at `0x38010000`, so the window can only extend *down* over the wide-signal region (if unused) before
@@ -225,9 +236,11 @@ snapshots it into the consumer FB's In port → the FB reads it in physical unit
 the bridge `ioc_acquire`s it → DBC-encode into the frame → (E2E/SecOC stamp) → the
 PDU's **TX mode** decides whether to send → `driver.send`.
 
-**FB → FB.** Same thread → a **local cell** (direct copy, no sync). Same core / different threads →
-an **IOC channel** (the Loom publishes/acquires; `transport =` seqlock/double/triple per channel).
-Different cores → **xioc** in the shared region (see "the crossing ladder").
+**FB → FB.** Same thread → a **local cell** (direct copy, no sync). Same core, **different
+partition** → an **IOC channel** (the Loom publishes/acquires). Different cores → **xioc** in the
+shared region (see "the crossing ladder"). *(Two FBs on different threads of the **same** partition
+would abort generation today — one thread per partition is the current rule, so a cross-thread
+crossing is always cross-partition.)*
 
 **Diagnostics.** Frames on the diag id → **ISO-TP** reassembles a request → **UDS**
 dispatches it; a ReadDataByIdentifier mapped to a live signal `ioc_acquire`s it from
