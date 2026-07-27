@@ -1,4 +1,10 @@
-# zone_a (H723 #1) — Front Zone ECU.
+# zone_a (H723 #1) — Front Zone ECU. Now with physical IO (docs/io.md) tying the
+# cross-node signals to real pins on the NUCLEO-H723ZG:
+#   - the domain's HeadlightCmd (compute -> gateway -> here) lights LD1 (PB0).
+#   - the user button (PC13) jumps SteeringAngle, which rides back edge -> gateway
+#     -> compute — a physical input driving a cross-node signal.
+#
+# NOTE: no inline comments inside a nested [[io.*]] / [[fb.handler]] block (vlang/v#27684).
 
 [[partition]]
 name = "front"
@@ -7,6 +13,34 @@ core = 0
   [[partition.thread]]
   name = "front_thread"
 
+# --- physical IO (boards/h723 owns the pins; io_stm32.c is the generic H7 backend) ---
+[io]
+core = 0
+
+  [[io.gpio]]
+  name      = "UserButton"
+  pin       = "PC13"
+  period_ms = 10
+  default   = false
+
+  [[io.gpio]]
+  name      = "HeadlightLed"
+  pin       = "PB0"
+  period_ms = 10
+  init      = false
+
+[[signal]]
+name = "UserButton"
+fields = { pressed = "bool" }
+from = "io"
+to   = "front"
+
+[[signal]]
+name = "HeadlightLed"
+fields = { on = "bool" }
+from = "front"
+to   = "io"
+
 [[fb]]
 name   = "FrontZoneCtrl"
 thread = "front_thread"
@@ -14,8 +48,8 @@ thread = "front_thread"
   [[fb.handler]]
   name      = "on_50ms"
   period_ms = 50
-  reads     = ["VehicleSpeed", "HeadlightCmd"]
-  writes    = ["SteeringAngle"] # trailing comment terminates nested block (vlang/v#27684)
+  reads     = ["VehicleSpeed", "HeadlightCmd", "UserButton"]
+  writes    = ["SteeringAngle", "HeadlightLed"] # trailing comment terminates nested block (vlang/v#27684)
 
 [target]
 kind    = "threadx"
