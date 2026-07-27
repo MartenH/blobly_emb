@@ -141,6 +141,7 @@ SECTIONS
 
 .dma_buf (NOLOAD) :
   {
+    *(.eth_dma)              /* ETH MAC/DMA descriptor rings + buffers (eth image only) */
     *(.dma_buf .dma_buf.*)   /* ADC/DMA latest-value buffers: DMA cannot reach DTCM */
   } > D2SRAM
 }
