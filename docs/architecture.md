@@ -91,13 +91,55 @@ A bus signal takes the same shape through the comm thread instead — only the
 far endpoint differs. An FB cannot tell (and never needs to know) whether
 `inp.speed` came from a frame, a pin, or another FB.
 
+## Signal transports — the crossing ladder
+
+"Everything that crosses between two threads is an IOC channel" is the rule; the *mechanism* of
+that channel, and where it keeps its buffers, depends on how far the value has to travel. Cheapest
+to widest:
+
+| Crossing | Mechanism | Where the buffers live |
+|---|---|---|
+| same thread, FB→FB | a **local cell** — a plain struct field | nowhere; it *is* a field, no sync |
+| same core, cross-thread | **IOC** — a wait-free multi-buffer, latest-value (`boards/common/ioc.h`) | a **per-channel arena**, caller-owned in the comm glue (`g_ioc_arena[]`) |
+| cross-core | **xioc** — plain, sequence-stamped slots (`boards/common/xioc.h`) | the shared **xcore** SRAM region (`XCORE_IOC_ADDR`; **wide** signals at `XCORE_XW_ADDR`) |
+
+**Same-core IOC** is a set of buffers exchanged through one atomic index byte: the writer fills a
+private buffer, the reader gets the latest COMPLETE value — no lock. The arena size is
+**backend-specific**: on target each channel is `IOC_ARENA_BYTES(sizeof(sig))` — the buffers
+cache-line-rounded to the signal's own size (not the worst-case bound); on host it's a fixed
+`IOC_MAX` slab per channel. Three variants, picked per signal by `transport =`, trade memory for
+tear-freedom:
+- `transport = "seqlock"` → one buffer, sequence-stamped → `osal.ioc_write` / `osal.ioc_read`
+  (the lightest; a reader that catches a write in flight simply retries).
+- `transport = "double"` (**the default**) → two buffers → `osal.ioc_publish2` /
+  `osal.ioc_acquire2`. Tear-free **as long as the reader keeps up** — if a reader is preempted long
+  enough for the writer to lap it twice, the writer reclaims the held buffer; `triple` is what
+  removes that last window.
+- `transport = "triple"` → three buffers, wait-free → `osal.ioc_publish` / `osal.ioc_acquire`
+  (plus `osal.ioc_acquire_fresh`, which returns true only on a *new* publication — the
+  route-staleness gate — **not** the io-output init gate (io "out" above), which is
+  `ioc_get_ever` on target / an ordinary acquire on host).
+
+> **Target caveat:** `transport =` selects the buffer count on **host** today. The ThreadX emitter
+> wires *every* cross-thread cell to the fixed wait-free **triple** buffer (`C.ioc_pub/get`,
+> `boards/common/comm_glue.c`) regardless of the setting — so on target don't budget 1×/2× storage
+> or count on seqlock retry semantics; you get triple's footprint and behavior everywhere.
+
+**Why cross-core is different.** The triple/double buffer is **not** cross-core safe on the H7
+fabric — its index exchange uses LDREX/STREX, which don't arbitrate across cores (162/200k torn
+reads measured). So a signal whose two endpoints sit on **different cores** rides **xioc** instead:
+plain sequence-stamped stores; on a torn/not-yet-fresh stamp the reader **keeps its last-good
+value** (it does not spin). xioc slots live in the shared, uncached **xcore** region, not a per-core
+arena — that region, and everything else two cores share (bulk, trace, the boot handshakes), is the
+subject of the next section.
+
 ## Who talks to what
 
 | Part | Talks to | How / via | Purpose |
 |---|---|---|---|
 | **Function Block** | its `ports` In/Out only | typed fields | pure transform; knows nothing of buses, cores, or other FBs |
 | **Loom** | FB handlers; IOC / local cells | snapshot In → call handler → publish Out | dispatch on a period; coherent input snapshot |
-| **IOC** | the Loom (app side), the COM bridge (IO side) | `ioc_read/acquire` + `ioc_write/publish` | lock-free cross-core signal transport |
+| **IOC / xioc** | the Loom (app side), the COM/io bridge | `ioc_acquire/publish` same-core, or `xcore_poll/pub` cross-core | lock-free latest-value signal transport — see "the crossing ladder" |
 | **local cell** | the Loom only | direct struct field | same-core FB→FB, no sync |
 | **COM** | IOC (signals), DBC codec, E2E/SecOC, driver | encode/decode + send/recv | signal⇄PDU, TX modes, RX deadline |
 | **DBC codec** | COM | generated `*_phys` / `*_set` over `[64]u8` | raw↔physical bit packing |
@@ -132,9 +174,57 @@ Today the **bus bridge** runs as a **polled** per-bus loop on the IO core — it
 runtime trace **by name** and the platform is never hidden (bridge / ISO-TP overhead is often
 where the time goes; see `telemetry.md`). *(The comm thread, its Rx-interrupt path, and its
 manifest entry are all target — today the bridge polls and the manifest names app threads
-only; NM is configured but not yet generated into the bridge.)* The only shared memory is the
-**IOC region** (`mmap MAP_SHARED` on host, shared SRAM on target); cross-core signals cross
-there and nowhere else (the basis for MPU isolation).
+only; NM is configured but not yet generated into the bridge.)* Cross-core traffic crosses one
+shared region and nowhere else (the basis for MPU isolation) — but the **mechanism differs by
+backend**: on target it is the **xcore** SRAM4 map (`XCORE_*_ADDR`, uncached); on host the cores are
+processes sharing a POSIX segment (`ioc_shared_t` / `blob_ioc_shared_init`, `mmap MAP_SHARED`). The
+`XCORE_*` map is a **target-only** construct; the host sim reproduces the *semantics*, not the
+addresses.
+
+## Multicore (AMP) & the xcore region
+
+More than one core means **AMP** — an independent kernel per core, coordinated through that one
+shared, uncached region for *data/state* plus an **HSEM** doorbell for *wake* (a bulk publish
+releases semaphore 0 → owner IRQ125, so the consumer needn't poll). That region and its protocols
+are the **xcore** layer;
+[xcore.md](xcore.md) is its full design (the SRAM4 map, the handshakes, the primitives). The
+essentials:
+
+**One owner, one satellite — laid out for N.** One core (the H755's CM7) is the **owner**: it brings
+up the clocks, owns the buses, and arbitrates. The other is a **satellite** — an ordinary
+`[[partition]]` with `image = <dir>`, which the generator emits as a separate image flashed to its
+own bank. The SRAM4 *map* anticipates more (the CpuLoad array is indexed by core; the naming is
+"N satellites"), but **today it is exactly one**: the layout-ack and IOC cells are singular
+(`XCORE_LAYOUT_ACK_ADDR`, `XCORE_IOC_ADDR`), and the model validator rejects a second satellite
+producer. Direction is one-way too: cross-core signals flow **satellite → owner**; the owner→satellite
+direction is rejected, and even satellite→owner only reaches an owner *bus* today — a satellite
+signal consumed by an owner **FB** is the rung-2b generator path (still landing), so the storage
+exists but no owner-FB reads it yet. Satellites are peers only *through* the owner.
+
+**Boot — there is no boot thread.** Bring-up runs in bare `main()` / the generated `gen.boot()`,
+before any kernel:
+1. The **owner** boots from flash bank 1: `board_clock_init` (the PLL), then `gen.boot()`, whose
+   first act — when it owns a satellite — is `xcore_clocks_ready`: it enables the inter-core HSEM
+   and writes the clocks-ready marker, **releasing** the parked satellites. Then `tx_kernel_enter`.
+2. Each **satellite** auto-boots from its own bank and parks in `xcore_wait_clocks()` until that
+   marker appears (so its SysTick is set against the *final* HCLK, not the reset clock), then starts
+   its timebase, inits its xioc channels, and enters its own kernel. It **publishes a layout ack
+   only if it produces a cross-core signal** — a bulk-only / CpuLoad-only satellite (like
+   `system_full`'s domain CM4) skips the layout handshake and relies on the bulk attach instead.
+   (Warm-reset caveat: SRAM4 is retained, so a lone-core restart is not yet safe — see xcore.md.)
+
+**Bulk buffers, and sizing them.** Yes, the xcore region holds the cross-core **bulk** pools, in a
+dedicated window (`XCORE_BULK_ADDR`, budget `XCORE_BULK_MAX` — ~56 KB to the top of SRAM4). A pool's
+footprint is *more* than `bufsz × nbuf`: each pool adds a 96-B header + a `12 × nbuf` descriptor
+area, then rounds to 32 B (`bulk_bytes()` in `gen_bulk.v`) — so size against that `BULK_BYTES`, not
+payload alone, or a pool that looks like it fits can fail generation. The generator packs all pools
+32-B-aligned and **static-checks the total against the budget** (overflow is a build error, not a
+silent stomp). To make a pool bigger, raise `bufsz`/`nbuf` in `ecu.toml`. Growing the *window* is more than one knob:
+`XCORE_BULK_MAX` (`0xE000`) is defined in the board's `xcore.h`, but the generator's `emit_bulk_glue`
+currently **hard-codes the same `0xE000`**, so both must change together — and SRAM4 physically ends
+at `0x38010000`, so the window can only extend *down* over the wide-signal region (if unused) before
+the linker layout itself has to move. Bulk is a **platform** service — the app never touches the pool
+(docs/bulk-transport.md).
 
 ## Data-flow paths
 
@@ -146,9 +236,11 @@ snapshots it into the consumer FB's In port → the FB reads it in physical unit
 the bridge `ioc_acquire`s it → DBC-encode into the frame → (E2E/SecOC stamp) → the
 PDU's **TX mode** decides whether to send → `driver.send`.
 
-**FB → FB.** Same core → a **local cell** (direct copy in the partition state, no
-sync). Different cores → an **IOC channel** (the Loom publishes/acquires; the
-transport — seqlock/double/triple — is per-channel config).
+**FB → FB.** Same thread → a **local cell** (direct copy, no sync). Same core, **different
+partition** → an **IOC channel** (the Loom publishes/acquires). Different cores → **xioc** in the
+shared region (see "the crossing ladder"). *(Two FBs on different threads of the **same** partition
+would abort generation today — one thread per partition is the current rule, so a cross-thread
+crossing is always cross-partition.)*
 
 **Diagnostics.** Frames on the diag id → **ISO-TP** reassembles a request → **UDS**
 dispatches it; a ReadDataByIdentifier mapped to a live signal `ioc_acquire`s it from
