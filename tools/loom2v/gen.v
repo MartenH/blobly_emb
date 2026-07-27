@@ -2991,6 +2991,34 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 						// eth rx signal on the ThreadX target: the eth thread published
 						// the unpacked struct into its byte IOC channel (docs/someip.md)
 						glue << '\tC.iocb_get(${bidx}, &inp.${snake(rn)})'
+					} else if rn in m.xcore_names && image_part == '' && m.target.threadx {
+						// OWNER FB reads a CROSS-CORE signal (satellite -> owner) on the TARGET: read it
+						// through the same xioc seam the comm thread uses for tx (comm_glue's xcore_poll
+						// holds static per-slot state, so a/b carry the last-good value — latest-value
+						// semantics: a satellite that stops publishing keeps its last value). Gate on the
+						// layout handshake: until the satellite acks a MATCHED build, keep the port default
+						// rather than trust another build's slot bytes (same gate as the comm tx). Scalar
+						// (<=2 field) only — a wide cross-core FB read needs FB-held reader state (rung 2c).
+						if si.wide {
+							panic('loom2v: owner fb "${cname}" reads WIDE cross-core signal "${rn}" — not ' +
+								'wired (scalar xioc only); make it a scalar signal or transmit it on a bus')
+						}
+						glue << '\tif C.xcore_layout_ok() != 0 { // trust cross-core slots only once the satellite acks a matched build'
+						glue << '\t\tmut ${snake(rn)}_a := u32(0)'
+						glue << '\t\tmut ${snake(rn)}_b := u32(0)'
+						glue << '\t\tC.xcore_poll(${m.xcore_idx[rn] or { 0 }}, &${snake(rn)}_a, &${snake(rn)}_b) // xioc reader; comm_glue holds last-good'
+						for fi, f in si.fields {
+							if fi > 1 {
+								break
+							}
+							src := if fi == 0 { '${snake(rn)}_a' } else { '${snake(rn)}_b' }
+							if f.typ == 'bool' {
+								glue << '\t\tinp.${snake(rn)}.${snake(f.name)} = ${src} != 0'
+							} else {
+								glue << '\t\tinp.${snake(rn)}.${snake(f.name)} = ${f.typ}(${src})'
+							}
+						}
+						glue << '\t}'
 					} else {
 						if image_part != '' {
 							panic('loom2v: satellite partition "${part}" fb "${cname}" reads signal ' +
