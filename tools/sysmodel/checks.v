@@ -682,6 +682,23 @@ fn check_topology_wellformed(s System) []Issue {
 				msg:      'bus "${b.name}": kind = "someip" needs a `service` — it is the contract members are held to (a CAN bus has its `dbc`). 0x0000 is a legal id; the key must be PRESENT'
 			}
 		}
+		// the SOME/IP header carries service as u16 and interface version as u8, so an
+		// out-of-range value is not a big number, it is an impossible contract — and it
+		// must fail even on a bus no node has joined yet (the u32 cast would wrap -1).
+		if b.kind == 'someip' && !b.service_ok {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'bus "${b.name}": `service` is outside the SOME/IP service id range 0x0000..0xFFFF'
+			}
+		}
+		if b.kind == 'someip' && !b.version_ok {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'bus "${b.name}": `version` is outside the SOME/IP interface version range 0..255'
+			}
+		}
 		if b.kind == 'someip' && b.dbc != '' {
 			issues << Issue{
 				severity: .error
@@ -689,7 +706,7 @@ fn check_topology_wellformed(s System) []Issue {
 				msg:      'bus "${b.name}": kind = "someip" carries a service, not DBC frames — remove `dbc = "${b.dbc}"` (it is never loaded)'
 			}
 		}
-		if b.kind == 'can' && (b.has_service || b.version != 0) {
+		if b.kind == 'can' && (b.has_service || b.has_version) {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-003'
@@ -1020,14 +1037,14 @@ fn check_someip_bus(s System, bus Bus) []Issue {
 		if n.view.someip_iface == '' {
 			continue
 		}
-		if prev := addr_of[n.view.someip_iface] {
+		if prev := addr_of[canon_addr(n.view.someip_iface)] {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-005'
 				msg:      'bus "${bus.name}": nodes "${prev}" and "${n.name}" both use endpoint address "${n.view.someip_iface}" — one address per node on a segment'
 			}
 		} else {
-			addr_of[n.view.someip_iface] = n.name
+			addr_of[canon_addr(n.view.someip_iface)] = n.name
 		}
 	}
 	if members.len < 2 {
@@ -1047,8 +1064,8 @@ fn check_someip_bus(s System, bus Bus) []Issue {
 		b.name: a
 	} {
 		me := if x == a.name { a } else { b }
-		want := '${y.view.someip_iface}:${y.view.someip_port}'
-		if me.view.someip_peer != want {
+		want := '${canon_addr(y.view.someip_iface)}:${y.view.someip_port}'
+		if canon_endpoint(me.view.someip_peer) != want {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-005'
@@ -1087,11 +1104,72 @@ fn check_someip_bus(s System, bus Bus) []Issue {
 						req:      'REQ-TOPO-005'
 						msg:      'bus "${bus.name}": signal "${sig}" is event 0x${pid.hex()} on "${pn}" but 0x${cid.hex()} on "${cn}" — the receive bridge dispatches on the event id, so the value never arrives'
 					}
+					continue
+				}
+				// the same event id is not enough: the receiver enforces its OWN payload
+				// length and unpacks its OWN derived layout, so a difference in the
+				// signal's fields, the frame's signal list (= packing order), or its E2E
+				// parameters is a counted drop or silently misdecoded data. The layout is
+				// DERIVED from these inputs by one generator, so comparing the inputs is
+				// exact without duplicating the packing rules here.
+				pf := p.view.sig_fields['${p.view.someip_iface}|${sig}'] or { '' }
+				cf := c.view.sig_fields['${c.view.someip_iface}|${sig}'] or { '' }
+				if pf != cf {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-005'
+						msg:      'bus "${bus.name}": signal "${sig}" has fields {${pf}} on "${pn}" but {${cf}} on "${cn}" — the receiver unpacks its own layout, so the payload is misdecoded'
+					}
+				}
+				pp := p.view.sig_payload['${p.view.someip_iface}|${sig}'] or { '' }
+				cp := c.view.sig_payload['${c.view.someip_iface}|${sig}'] or { '' }
+				if pp != cp {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-005'
+						msg:      'bus "${bus.name}": event 0x${pid.hex()} carrying "${sig}" is "${pp}" on "${pn}" but "${cp}" on "${cn}" — one event, one payload contract (signal order sets the packing; E2E must match or every frame fails its check)'
+					}
 				}
 			}
 		}
 	}
 	return issues
+}
+
+// canon_addr canonicalizes a dotted-quad address so two spellings of ONE address
+// compare equal. ecucheck accepts "192.168.000.050" and "192.168.0.50" alike and the
+// generated endpoints resolve to the same numeric address, so a raw-string compare
+// would let the duplicate-address and reciprocal-peer checks pass a system whose two
+// members are actually the same host. Anything that is not a dotted quad is returned
+// unchanged (a hostname or an already-odd value stays comparable to itself).
+fn canon_addr(a string) string {
+	parts := a.split('.')
+	if parts.len != 4 {
+		return a
+	}
+	mut out := []string{cap: 4}
+	for p in parts {
+		if p == '' || p.len > 3 {
+			return a
+		}
+		for c in p {
+			if c < `0` || c > `9` {
+				return a
+			}
+		}
+		n := p.u32()
+		if n > 255 {
+			return a
+		}
+		out << n.str()
+	}
+	return out.join('.')
+}
+
+// canon_endpoint canonicalizes an "<address>:<port>" peer spelling the same way.
+fn canon_endpoint(e string) string {
+	i := e.last_index(':') or { return canon_addr(e) }
+	return '${canon_addr(e[..i])}:${e[i + 1..]}'
 }
 
 fn node_named(s System, name string) ?Node {

@@ -39,6 +39,12 @@ pub mut:
 	service     u32
 	has_service bool
 	version     u32
+	has_version bool
+	// the declared values fit the WIRE widths: a SOME/IP header carries service as u16
+	// and interface version as u8, so -1 / 0x10000 / 256 are not "large numbers", they
+	// are impossible contracts. Recorded at parse (before the u32 cast wraps them).
+	service_ok bool = true
+	version_ok bool = true
 	// the NM cluster on this bus (dissolution: the identity source the generator
 	// stamps into each node's [nm]). peers = the alive-id range; the timings are
 	// the shared sleep/wake config. 0/absent = the module defaults.
@@ -166,6 +172,15 @@ pub mut:
 	// that id IS the EVENT the receive bridge dispatches on, so two members can agree on
 	// a signal NAME and still never talk (docs/someip.md).
 	sig_frame_id map[string]u32
+	// the PAYLOAD contract each signal rides, same key. The generator derives the wire
+	// layout from these inputs, so two ends that agree on them derive the SAME layout —
+	// comparing the inputs is exact without duplicating the packing rules here.
+	//   sig_fields:  the signal's fields, "name:type,..." IN DECLARATION ORDER
+	//   sig_payload: the frame's own contract — its signal list (order = packing order)
+	//                and E2E parameters. The frame NAME is deliberately excluded: it is
+	//                node-local, and two peers may spell it differently on one wire.
+	sig_fields  map[string]string
+	sig_payload map[string]string
 	// the telemetry frames the threadx comm thread transmits on the telemetry bus
 	// (CpuLoad + its detail). REAL tx ids: unique across nodes, not colliding with
 	// an application frame or the NM range (REQ-TOPO-002). CpuLoad is always sent
@@ -348,6 +363,8 @@ pub fn parse_system(path string) !System {
 		for name, cfg in bv.as_map() {
 			m := cfg.as_map()
 			kind := if k := m['kind'] { k.string() } else { 'can' }
+			svc_raw := if v := m['service'] { v.i64() } else { i64(0) }
+			ver_raw := if v := m['version'] { v.i64() } else { i64(0) }
 			mut bus := Bus{
 				name:      name
 				interface: m_str(m, 'interface')
@@ -357,7 +374,10 @@ pub fn parse_system(path string) !System {
 				dbc:       m_str(m, 'dbc')
 				service:     u32(m_int(m, 'service'))
 				has_service: 'service' in m
+				service_ok:  svc_raw >= 0 && svc_raw <= 0xFFFF
 				version:     u32(m_int(m, 'version'))
+				has_version: 'version' in m
+				version_ok:  ver_raw >= 0 && ver_raw <= 0xFF
 			}
 			// [bus.<name>.nm] — the dissolution NM cluster (peers range + timings)
 			if nmv := m['nm'] {
@@ -685,11 +705,22 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 			if name == '' {
 				continue
 			}
+			// the signal's fields IN DECLARATION ORDER — half of the payload contract
+			// two ends of a someip event must share (the frame supplies the other half).
+			mut fields := []string{}
+			if fv2 := m['fields'] {
+				for fname, ftype in fv2.as_map() {
+					fields << '${fname}:${ftype.string()}'
+				}
+			}
+			flat := fields.join(',')
 			if iface := iface_of(to) {
 				v.produces[iface] << name
+				v.sig_fields['${iface}|${name}'] = flat
 			}
 			if iface := iface_of(from) {
 				v.consumes[iface] << name
+				v.sig_fields['${iface}|${name}'] = flat
 			}
 		}
 	}
@@ -711,8 +742,20 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 				if iface := iface_of(bus) {
 					fid := m_u32(m, 'id')
 					if sv := m['signals'] {
+						mut sigs := []string{}
 						for sg in sv.array() {
-							v.sig_frame_id['${iface}|${sg.string()}'] = fid
+							sigs << sg.string()
+						}
+						mut e2e := 'none'
+						if ev := m['e2e'] {
+							em := ev.as_map()
+							e2e = 'data_id=${m_u32(em, 'data_id')},ctr=${m_int(em, 'counter_pos')},crc=${m_int(em,
+								'crc_pos')}'
+						}
+						contract := 'signals=${sigs.join(',')};e2e=${e2e}'
+						for sg in sigs {
+							v.sig_frame_id['${iface}|${sg}'] = fid
+							v.sig_payload['${iface}|${sg}'] = contract
 						}
 					}
 				}

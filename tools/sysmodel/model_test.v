@@ -3787,6 +3787,14 @@ fn clean_someip() System {
 						'192.168.0.51|BenchLoad': u32(0x8001)
 						'192.168.0.51|LampCmd':   u32(0x8010)
 					}
+					sig_fields:     {
+						'192.168.0.51|BenchLoad': 'load:u8'
+						'192.168.0.51|LampCmd':   'level:u8'
+					}
+					sig_payload:    {
+						'192.168.0.51|BenchLoad': 'signals=BenchLoad;e2e=data_id=33,ctr=7,crc=8'
+						'192.168.0.51|LampCmd':   'signals=LampCmd;e2e=none'
+					}
 				}
 			},
 			Node{
@@ -3811,6 +3819,14 @@ fn clean_someip() System {
 					sig_frame_id:   {
 						'192.168.0.50|BenchLoad': u32(0x8001)
 						'192.168.0.50|LampCmd':   u32(0x8010)
+					}
+					sig_fields:     {
+						'192.168.0.50|BenchLoad': 'load:u8'
+						'192.168.0.50|LampCmd':   'level:u8'
+					}
+					sig_payload:    {
+						'192.168.0.50|BenchLoad': 'signals=BenchLoad;e2e=data_id=33,ctr=7,crc=8'
+						'192.168.0.50|LampCmd':   'signals=LampCmd;e2e=none'
 					}
 				}
 			},
@@ -4118,4 +4134,116 @@ signals = ["LampCmd"]
 	assert view.someip_port == 30490
 	assert view.sig_frame_id['192.168.0.51|BenchLoad'] or { 0 } == u32(0x8001)
 	assert view.sig_frame_id['192.168.0.51|LampCmd'] or { 0 } == u32(0x8010), 'a RECEIVE frame binds its event id too'
+}
+
+// --- one event, one payload contract (codex #248 r5) ---
+//
+// The same event id is not enough: the receiver enforces its own payload length and
+// unpacks its own DERIVED layout. That layout comes from the signal's fields, the
+// frame's signal list (packing order) and its E2E parameters — comparing those inputs
+// is exact, because one generator derives both ends from them.
+
+fn test_someip_field_mismatch_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.sig_fields['192.168.0.50|BenchLoad'] = 'load:u32'
+	e := errs(validate_system(s))
+	assert e.any(it.contains('fields {load:u8} on "tcu"') && it.contains('{load:u32} on "sysnode"')), e.str()
+}
+
+// signal ORDER inside the event sets the packing, so the same set in another order is
+// a different wire layout.
+fn test_someip_packing_order_mismatch_is_error() {
+	mut s := clean_someip()
+	s.nodes[0].view.sig_payload['192.168.0.51|BenchLoad'] = 'signals=BenchTicks,BenchLoad;e2e=data_id=33,ctr=7,crc=8'
+	e := errs(validate_system(s))
+	assert e.any(it.contains('one event, one payload contract')), e.str()
+}
+
+// E2E is part of the contract: a receiver checking a counter/CRC the sender never
+// wrote fails every frame.
+fn test_someip_e2e_mismatch_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.sig_payload['192.168.0.50|BenchLoad'] = 'signals=BenchLoad;e2e=none'
+	e := errs(validate_system(s))
+	assert e.any(it.contains('one event, one payload contract')), e.str()
+}
+
+// two spellings of ONE address are one host: ecucheck accepts both dotted quads and
+// they resolve identically, so the duplicate-address guard must not be bypassed.
+fn test_someip_duplicate_address_across_spellings_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.someip_iface = '192.168.000.051' // == tcu's .51
+	s.nodes[1].view.local_buses = ['192.168.000.051']
+	s.nodes[1].view.produces = {
+		'192.168.000.051': ['LampCmd']
+	}
+	s.nodes[1].view.consumes = {
+		'192.168.000.051': ['BenchLoad']
+	}
+	e := errs(validate_system(s))
+	assert e.any(it.contains('both use endpoint address')), e.str()
+}
+
+// the same normalization applies the other way: a peer spelled with padded octets
+// still points at its peer, and must NOT be reported as unreachable.
+fn test_someip_peer_spelling_is_normalized() {
+	mut s := clean_someip()
+	s.nodes[0].view.someip_peer = '192.168.000.050:30490'
+	e := errs(validate_system(s))
+	assert !e.any(it.contains('never exchange a datagram')), 'a padded dotted quad is the same peer: ${e}'
+}
+
+// the wire widths are part of the contract: service is u16, interface version u8 —
+// and an unused advertised bus must not be able to carry an impossible one.
+fn test_someip_contract_ranges_are_validated() {
+	mut s := clean_someip()
+	s.buses[0].service_ok = false
+	assert errs(validate_system(s)).any(it.contains('service id range')), 'out-of-range service must be rejected'
+	mut t := clean_someip()
+	t.buses[0].version_ok = false
+	assert errs(validate_system(t)).any(it.contains('interface version range')), 'out-of-range version must be rejected'
+}
+
+// version = 0 is a legal SOME/IP interface version, so a CAN bus declaring it is a
+// carrier mistake that presence — not the value — has to catch.
+fn test_can_bus_with_explicit_version_zero_is_error() {
+	mut c := clean_system()
+	c.buses[0].has_version = true
+	e := errs(validate_system(c))
+	assert e.any(it.contains('a CAN bus carries DBC frames')), e.str()
+}
+
+// the payload contract comes out of the node's own ecu.toml: field order, the frame's
+// signal list, and its E2E parameters.
+fn test_parse_node_view_extracts_the_payload_contract() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_someip_pl_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.51"
+[someip]
+bus     = "eth0"
+service = 0x0100
+[[signal]]
+name = "BenchLoad"
+fields = { load = "u8" }
+from = "app"
+to   = "eth0"
+[[frame]]
+name    = "BenchTelem"
+bus     = "eth0"
+id      = 0x8001
+signals = ["BenchLoad"]
+e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8 }
+') or {
+		panic(err)
+	}
+	doc := toml.parse_file(os.join_path(dir, 'n.toml')) or { panic(err) }
+	view := parse_node_view(doc)
+	assert view.sig_fields['192.168.0.51|BenchLoad'] or { '' } == 'load:u8'
+	assert (view.sig_payload['192.168.0.51|BenchLoad'] or { '' }).contains('data_id=33'), view.sig_payload.str()
 }

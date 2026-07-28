@@ -43,12 +43,14 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 
 `tcu` publishes a cyclic, E2E-protected SOME/IP **telemetry event** and answers an RPC **command round trip**, all from config + the H723 Ethernet board driver (`boards/h723/eth.c`). It's **silicon-validated**: link + ARP + ICMP (`ping 192.168.0.51`, 0% loss), SOME/IP tx (service `0x0100`, event `0x8001`, E2E counter+CRC) and rx (`uptime` RPC → response, request-id mirrored). The wire is identical to `examples/h735_someip` / `host_someip`, so the same `blobly_net` oracle verifies it.
 
-**But `tcu` is deliberately not a `[[node]]` in `system.toml` — and that's a real boundary, not an oversight.** The system model (`tools/sysmodel`) is **CAN-only**: every `[bus.*]` carries a **DBC** frame contract, and `syscheck` (REQ-TOPO-001) *rejects* a node that opens a bus the model doesn't declare. There is no eth/SOME-IP bus type in the model yet. So `tcu`:
+**But `tcu` is deliberately not a `[[node]]` in `system.toml` — and that's a real boundary, not an oversight.** The system model now *does* carry the Ethernet side: a `[bus.*]` declares its **carrier** (`kind = "someip"`, a `service` + `version` instead of a DBC), membership is **explicit** (a node names the bus, since each eth node has its own address), and `syscheck` validates the members' reciprocal peers, endpoint addresses, event ids and payload contracts. What blocks `tcu` is narrower and concrete:
+
+**its peer is off-system.** The tcu talks to the **bench tool at `192.168.0.190`**, not to another ECU. REQ-TOPO-001 requires every transmitted signal to be received by ≥1 *node*, and a SOME/IP link is point-to-point — so joining `tcu` to a system bus today would mean either inventing a peer node that doesn't exist or reporting its telemetry as unreceived. The model needs a way to say **"this endpoint is consumed off-system"** first. So `tcu`:
 
 - **is** in the build — it's in the Makefile `NODES` list, so `make nodes` cross-builds it with the others; and
-- **is not** in the cross-node *model* — its SOME/IP services aren't validated for writers/reachability/contract the way the CAN signals are.
+- **is not** in the cross-node *model* — its SOME/IP events aren't validated for writers/reachability the way the CAN signals are.
 
-Teaching sysmodel to host an eth/SOME-IP bus (a `Bus.kind`, a SOME/IP service contract instead of a DBC, cross-network reachability) is tracked as **issue #245**. Until that lands, the Ethernet node is a **build member, not a model member** — which is why you won't find it in `system.toml`.
+Until the off-system endpoint lands, the Ethernet node is a **build member, not a model member** — which is why you won't find it in `system.toml`.
 
 *(The same is true of `domain_m4`: it's a CM4 **satellite image**, a `[[partition]] image=` inside `domain`'s own config, not a system-level node — so it isn't in `system.toml` either.)*
 
