@@ -119,6 +119,33 @@ from    = "compute"
 to      = "edge"
 ```
 
+### The bus CARRIER (`kind`)
+
+A bus declares what it *is* — and with it, what its frame contract is:
+
+```toml
+[bus.backbone]               # the Ethernet segment
+kind    = "someip"           # default is "can"
+service = 0x0100             # the SERVICE its events/methods belong to
+version = 1
+```
+
+| `kind` | contract | membership |
+|---|---|---|
+| `can` (default) | `dbc` — the frames on the wire | by shared `interface`: every node spells the same `can0` |
+| `someip` | `service` + `version` — signals ride that service's **events** | **explicit**: the node names the bus in `buses` |
+
+Membership differs because the wire does. Every node on a CAN segment says
+`can0`, so interface equality *is* the segment. Each Ethernet node has its **own
+address** (`192.168.0.51` vs `.50`), so no shared interface name exists to match
+on — a node joins by **naming the bus**, and its local `[someip]` block is the
+endpoint that claim resolves to. syscheck then holds that endpoint to the
+system's contract: same `service`, same `version` (the receive envelope drops a
+foreign one, so mismatched members are silently deaf to each other), and its
+`produces`/`consumes` are checked for duplicate writers and orphaned consumers
+exactly like a CAN node's. Routing *across* a someip bus (the CAN↔SOME/IP
+gateway) is a later phase and is rejected today rather than half-generated.
+
 The Linux node (blobly_net) attaches on `diag` — the cloud/dev tier that pushes
 campaigns and observes; the H735 sysnode stages the images (its storage) and
 reflashes each functional node over its bus. The system runs standalone without

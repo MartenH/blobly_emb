@@ -641,6 +641,34 @@ fn check_topology_wellformed(s System) []Issue {
 	}
 	mut iface_seen := map[string]string{}
 	for b in s.buses {
+		// the CARRIER is an enum, not free text: every kind-aware check special-cases
+		// the exact string 'someip', so a typo ("somepi") would silently fall back to
+		// CAN behaviour — DBC required, membership by interface — instead of failing
+		// here where the mistake is (REQ-TOPO-001).
+		if b.kind !in ['can', 'someip'] {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'bus "${b.name}": unknown kind "${b.kind}" — the carrier is "can" (DBC frames) or "someip" (a service)'
+			}
+		}
+		// the contract fields follow the carrier: a `dbc` on a someip bus (or a
+		// service/version on a CAN one) is read by nothing and would be silently
+		// ignored — the same typo trap one level down.
+		if b.kind == 'someip' && b.dbc != '' {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'bus "${b.name}": kind = "someip" carries a service, not DBC frames — remove `dbc = "${b.dbc}"` (it is never loaded)'
+			}
+		}
+		if b.kind == 'can' && (b.service != 0 || b.version != 0) {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'bus "${b.name}": `service`/`version` describe a SOME/IP service — a CAN bus carries DBC frames (set kind = "someip" or remove them)'
+			}
+		}
 		if b.interface == '' {
 			continue
 		}
@@ -795,6 +823,10 @@ fn check_bus_membership(s System) []Issue {
 				}
 				continue
 			}
+			if b.kind == 'someip' {
+				issues << check_someip_membership(n, b)
+				continue
+			}
 			if b.interface !in n.view.local_buses {
 				issues << Issue{
 					severity: .error
@@ -817,21 +849,14 @@ fn check_bus_membership(s System) []Issue {
 		// the reverse: a local interface that matches a system bus must be CLAIMED
 		// in `buses`, or producers_on/consumers_on (which filter on `buses`) drop
 		// this node's traffic silently — its collisions vanish from the checks.
+		// EXPLICIT MEMBERSHIP (someip): the ONE interface a node joins a someip bus with
+		// is its own address, which no system bus's `interface` matches — that endpoint's
+		// contract is the membership claim (checked above), not an interface match. Scope
+		// the exemption to exactly that interface: a node on a someip bus that ALSO opens
+		// some other undeclared interface still has untracked traffic there.
+		someip_endpoint := someip_endpoint_of(s, n)
 		for iface in n.view.local_buses {
-			// EXPLICIT MEMBERSHIP (someip): CAN matches a node to a bus by shared interface
-			// ("can0" on every node), but each eth node has its OWN address (192.168.0.51 vs
-			// .50), so interface equality cannot express "same segment". A someip bus is
-			// joined by NAMING it in the node's `buses` — the system declares who is on what.
-			// Skip the interface-based contract check for those; the membership IS the claim.
-			mut someip_claimed := false
-			for bname2 in n.buses {
-				sb := s.bus_by_name(bname2) or { continue }
-				if sb.kind == 'someip' {
-					someip_claimed = true
-					break
-				}
-			}
-			if someip_claimed && s.bus_by_interface(iface) == none {
+			if iface != '' && iface == someip_endpoint && s.bus_by_interface(iface) == none {
 				continue
 			}
 			b := s.bus_by_interface(iface) or {
@@ -875,6 +900,80 @@ fn check_bus_membership(s System) []Issue {
 	return issues
 }
 
+// EXPLICIT MEMBERSHIP (someip). CAN matches a node to a bus by shared `interface`
+// — every node literally says "can0". Each eth node has its OWN address (tcu
+// 192.168.0.51, sysnode .50), so interface equality cannot express "on the same
+// segment": a someip bus is joined by NAMING it in `buses`, and the system declares
+// who is on what. What the node must then have is a local SOME/IP ENDPOINT
+// ([someip].bus -> one of its [bus.*]) whose service contract IS the one the system
+// bus declares: the generated receive envelope drops a foreign service/version, so
+// members that disagree are silently deaf to each other (REQ-TOPO-005).
+fn check_someip_membership(n Node, b Bus) []Issue {
+	mut issues := []Issue{}
+	if !n.view.has_someip {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-005'
+			msg:      'node "${n.name}": claims someip bus "${b.name}" but its ecu.toml declares no [someip] endpoint (bus + service)'
+		}
+		return issues
+	}
+	if n.view.someip_iface !in n.view.local_buses {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-005'
+			msg:      'node "${n.name}": [someip].bus resolves to "${n.view.someip_iface}", which is not one of its [bus.*] interfaces (declares ${n.view.local_buses})'
+		}
+	}
+	if n.view.someip_service != b.service {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-005'
+			msg:      'node "${n.name}": offers SOME/IP service 0x${n.view.someip_service.hex()} but system bus "${b.name}" declares 0x${b.service.hex()} — the receive envelope drops a foreign service'
+		}
+	}
+	if n.view.someip_version != b.version {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-005'
+			msg:      'node "${n.name}": offers SOME/IP interface version ${n.view.someip_version} but system bus "${b.name}" declares ${b.version} — one version per service contract'
+		}
+	}
+	return issues
+}
+
+// someip_endpoint_of returns the node's local SOME/IP endpoint interface IF it
+// claims a someip bus, else '' — an endpoint only earns its membership exemption
+// through an actual claim.
+fn someip_endpoint_of(s System, n Node) string {
+	for bname in n.buses {
+		b := s.bus_by_name(bname) or { continue }
+		if b.kind == 'someip' {
+			return n.view.someip_iface
+		}
+	}
+	return ''
+}
+
+// node_iface_on returns the LOCAL interface a node carries a system bus's traffic
+// on, or none if it is not a member. CAN: the bus's shared interface name, spelled
+// the same on every node. someip: the node's OWN [someip] endpoint address — under
+// explicit membership the system bus and the node's interface deliberately differ,
+// so ownership has to resolve through the endpoint or produces/consumes come back
+// empty and every duplicate writer and orphaned consumer on the bus passes silently.
+fn node_iface_on(n Node, bus Bus) ?string {
+	if bus.name !in n.buses {
+		return none
+	}
+	if bus.kind == 'someip' {
+		if n.view.someip_iface == '' {
+			return none
+		}
+		return n.view.someip_iface
+	}
+	return bus.interface
+}
+
 // REQ-TOPO-001: each CAN frame on a bus has exactly one transmitting node. Two
 // nodes writing different signals into the same DBC message still contend for
 // the same PDU on the wire and overwrite each other's fields — signal-level
@@ -894,10 +993,8 @@ fn check_bus_membership(s System) []Issue {
 fn producers_on(s System, bus Bus) map[string][]string {
 	mut prod := map[string][]string{}
 	for n in s.nodes {
-		if bus.name !in n.buses {
-			continue
-		}
-		for sig in n.view.produces[bus.interface] {
+		iface := node_iface_on(n, bus) or { continue }
+		for sig in n.view.produces[iface] {
 			prod[sig] << n.name
 		}
 	}
@@ -907,10 +1004,8 @@ fn producers_on(s System, bus Bus) map[string][]string {
 fn consumers_on(s System, bus Bus) map[string][]string {
 	mut cons := map[string][]string{}
 	for n in s.nodes {
-		if bus.name !in n.buses {
-			continue
-		}
-		for sig in n.view.consumes[bus.interface] {
+		iface := node_iface_on(n, bus) or { continue }
+		for sig in n.view.consumes[iface] {
 			cons[sig] << n.name
 		}
 	}
@@ -1313,6 +1408,20 @@ fn check_routes(s System, dissolved bool) []Issue {
 				severity: .error
 				req:      'REQ-TOPO-006'
 				msg:      'route on "${r.gateway}": from and to are the same bus ("${r.from}")'
+			}
+		}
+		// a route lowers to a CAN forwarder (raw PDU copy or DBC re-encode). Crossing a
+		// someip bus is the eth GATEWAY, which is a later phase (docs/someip.md P3) —
+		// say so here, or the route falls into the DBC checks and fails as "destination
+		// bus has no `dbc`", which reads like a missing file rather than a missing feature.
+		for b in [r.from, r.to] {
+			sb := s.bus_by_name(b) or { continue }
+			if sb.kind == 'someip' {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-006'
+					msg:      'route on "${r.gateway}": bus "${b}" is kind = "someip" — routing across a SOME/IP bus is not generated yet (the CAN<->SOME/IP gateway is a later phase)'
+				}
 			}
 		}
 		if (r.frame == '') == (r.signal == '') {

@@ -145,6 +145,15 @@ pub mut:
 	comm_thread_on bool
 	has_telemetry  bool   // a [telemetry] block with a bus (loom2v requires it for threadx)
 	telem_bus      string // [telemetry].bus resolved to its interface
+	// [someip] — the node's SOME/IP ENDPOINT: `bus` names one of its local [bus.*]
+	// tables (whose interface is this node's OWN address) and service/version are the
+	// contract it offers on it. A someip system bus is joined by NAMING it (explicit
+	// membership, see check_someip_membership), so this endpoint is what that claim
+	// resolves to — the local side of a bus whose interface deliberately differs.
+	has_someip     bool
+	someip_iface   string // [someip].bus resolved to its interface (this node's address)
+	someip_service u32
+	someip_version u32
 	// the telemetry frames the threadx comm thread transmits on the telemetry bus
 	// (CpuLoad + its detail). REAL tx ids: unique across nodes, not colliding with
 	// an application frame or the NM range (REQ-TOPO-002). CpuLoad is always sent
@@ -711,6 +720,18 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 		// so an omitted id still transmits at 0 — see check_telemetry_frames).
 		v.telem_id = m_u32(tm, 'id')
 		v.telem_detail_id = m_u32(tm, 'detail_id')
+	}
+	// [someip] — the node's endpoint on a SOME/IP bus. Its `bus` is a LOCAL key, so
+	// resolve it to the interface (the node's address) exactly like telemetry: that
+	// is the interface its bus-facing signals are keyed by, and the one the system's
+	// explicit membership claim has to line up with.
+	if sv := doc.value_opt('someip') {
+		sm := sv.as_map()
+		sbus := m_str(sm, 'bus')
+		v.has_someip = true
+		v.someip_iface = key_iface[sbus] or { sbus }
+		v.someip_service = m_u32(sm, 'service')
+		v.someip_version = m_u32(sm, 'version')
 	}
 	// [trace] — the TraceModule transmits its record frame (record_id, default
 	// 0x7e5) AND command responses (rsp_id, default 0x7e3) on the trace bus (the

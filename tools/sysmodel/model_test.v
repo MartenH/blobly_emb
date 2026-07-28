@@ -3741,3 +3741,205 @@ bus = "can0"
 	view := parse_node_view(doc)
 	assert !view.has_telemetry, 'omitted [telemetry].enabled must default to false (loom2v parse_telemetry)'
 }
+
+// ===== SOME/IP carrier (#248) =====
+//
+// A bus carries a KIND. `can` matches a node to a bus by shared `interface` — every
+// node literally says "can0". A `someip` bus carries a SERVICE, and each eth node has
+// its OWN address, so interface equality cannot express "on the same segment": a node
+// joins by NAMING the bus, and its local [someip] endpoint is what that claim resolves
+// to. These pin the rules that differ from CAN — and the ones that must NOT.
+
+// a clean someip system: tcu (.51) and sysnode (.50) on one service, each producing
+// what the other consumes. Their interfaces differ ON PURPOSE — that is the carrier.
+fn clean_someip() System {
+	return System{
+		buses: [
+			Bus{
+				name:    'backbone'
+				kind:    'someip'
+				service: 0x0100
+				version: 1
+			},
+		]
+		nodes: [
+			Node{
+				name:      'tcu'
+				buses:     ['backbone']
+				trace:     1
+				has_trace: true
+				view:      NodeView{
+					produces:       {
+						'192.168.0.51': ['BenchLoad']
+					}
+					consumes:       {
+						'192.168.0.51': ['LampCmd']
+					}
+					local_buses:    ['192.168.0.51']
+					has_someip:     true
+					someip_iface:   '192.168.0.51'
+					someip_service: 0x0100
+					someip_version: 1
+				}
+			},
+			Node{
+				name:      'sysnode'
+				buses:     ['backbone']
+				trace:     2
+				has_trace: true
+				view:      NodeView{
+					produces:       {
+						'192.168.0.50': ['LampCmd']
+					}
+					consumes:       {
+						'192.168.0.50': ['BenchLoad']
+					}
+					local_buses:    ['192.168.0.50']
+					has_someip:     true
+					someip_iface:   '192.168.0.50'
+					someip_service: 0x0100
+					someip_version: 1
+				}
+			},
+		]
+	}
+}
+
+fn test_someip_clean_system_has_no_errors() {
+	issues := validate_system(clean_someip())
+	assert errs(issues).len == 0, 'clean someip system flagged: ${errs(issues)}'
+}
+
+// the membership claim is only honoured against a real local endpoint: a node that
+// names a someip bus but has no [someip] block has nothing to join it with.
+fn test_someip_claim_without_endpoint_is_error() {
+	mut s := clean_someip()
+	s.nodes[0].view.has_someip = false
+	s.nodes[0].view.someip_iface = ''
+	e := errs(validate_system(s))
+	assert e.any(it.contains('claims someip bus "backbone"') && it.contains('no [someip] endpoint')), e.str()
+}
+
+// [someip].bus must name one of the node's OWN [bus.*] tables — otherwise the
+// endpoint the membership resolves to is not an interface the node ever opens.
+fn test_someip_endpoint_must_be_a_local_bus() {
+	mut s := clean_someip()
+	s.nodes[0].view.someip_iface = 'eth9'
+	e := errs(validate_system(s))
+	assert e.any(it.contains('[someip].bus resolves to "eth9"')), e.str()
+}
+
+// the service contract is the system's, not the node's: a member built for another
+// service is dropped by the receive envelope, so the two are silently deaf.
+fn test_someip_service_mismatch_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.someip_service = 0x0200
+	e := errs(validate_system(s))
+	assert e.any(it.contains('service 0x200') && it.contains('declares 0x100')), e.str()
+}
+
+fn test_someip_version_mismatch_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.someip_version = 2
+	e := errs(validate_system(s))
+	assert e.any(it.contains('interface version 2') && it.contains('declares 1')), e.str()
+}
+
+// the exemption is ENDPOINT-scoped, not node-scoped: claiming a someip bus must not
+// buy a node silence for every OTHER undeclared interface it opens (codex #248).
+fn test_someip_exemption_does_not_cover_other_interfaces() {
+	mut s := clean_someip()
+	s.nodes[0].view.local_buses << 'can9'
+	s.nodes[0].view.produces['can9'] = ['Stray']
+	e := errs(validate_system(s))
+	assert e.any(it.contains('[bus.can9]') && it.contains('not declared by any system bus')), e.str()
+}
+
+// ownership resolves THROUGH the endpoint: producers_on/consumers_on key on the
+// node's own address, not the bus's interface, or every collision on a someip bus
+// would pass silently (codex #248).
+fn test_someip_two_writers_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.produces['192.168.0.50'] = ['LampCmd', 'BenchLoad']
+	e := errs(validate_system(s))
+	assert e.any(it.contains('"BenchLoad" transmitted by 2 nodes')), e.str()
+}
+
+fn test_someip_producer_without_consumer_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.consumes['192.168.0.50'] = []
+	e := errs(validate_system(s))
+	assert e.any(it.contains('"BenchLoad"') && it.contains('no node receives it')), e.str()
+}
+
+// the carrier is an enum: a typo must fail here, not silently fall back to CAN.
+fn test_unknown_bus_kind_is_error() {
+	mut s := clean_someip()
+	s.buses[0].kind = 'somepi'
+	e := errs(validate_system(s))
+	assert e.any(it.contains('unknown kind "somepi"')), e.str()
+}
+
+// the contract fields follow the carrier — a `dbc` on a someip bus (or a service on
+// a CAN bus) is read by nothing and would be silently ignored.
+fn test_contract_fields_must_match_the_carrier() {
+	mut s := clean_someip()
+	s.buses[0].dbc = 'backbone.dbc'
+	assert errs(validate_system(s)).any(it.contains('carries a service, not DBC frames')), 'someip bus with a dbc must be rejected'
+	mut c := clean_system()
+	c.buses[0].service = 0x0100
+	assert errs(validate_system(c)).any(it.contains('a CAN bus carries DBC frames')), 'can bus with a service must be rejected'
+}
+
+// REQ-TOPO-003: a someip signal rides an EVENT of the service — there is no DBC
+// frame to conform to, so the DBC requirement must not reject it; the service is
+// what it needs instead (codex #248).
+fn test_someip_signal_bus_needs_a_service_not_a_dbc() {
+	mut s := System{
+		buses:   [
+			Bus{
+				name:    'backbone'
+				kind:    'someip'
+				service: 0x0100
+			},
+		]
+		signals: [
+			SysSignal{
+				name:     'BenchLoad'
+				producer: 'tcu'
+				bus:      'backbone'
+			},
+		]
+	}
+	assert errs(check_dbc_conformance(s)).len == 0, errs(check_dbc_conformance(s)).str()
+	s.buses[0].service = 0
+	e := errs(check_dbc_conformance(s))
+	assert e.any(it.contains('someip bus "backbone"') && it.contains('no `service`')), e.str()
+}
+
+// the node's [someip] endpoint is parsed from its ecu.toml with the bus key RESOLVED
+// to its interface — the node's address, which is what membership lines up against.
+fn test_parse_node_view_extracts_the_someip_endpoint() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_someip_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.51"
+[someip]
+bus     = "eth0"
+service = 0x0100
+version = 1
+') or {
+		panic(err)
+	}
+	doc := toml.parse_file(os.join_path(dir, 'n.toml')) or { panic(err) }
+	view := parse_node_view(doc)
+	assert view.has_someip
+	assert view.someip_iface == '192.168.0.51', 'the [someip].bus key must resolve to the interface, got "${view.someip_iface}"'
+	assert view.someip_service == 0x0100
+	assert view.someip_version == 1
+}

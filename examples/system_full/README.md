@@ -107,7 +107,8 @@ The CAN nodes link the generated comm thread against the shared `boards/common/c
 
 ### Bench notes
 
-- **Flash** a node: `make -C nodes/<node> flash SERIAL=<st-link sn>` (or `H723=<sn>` for the H723 nodes). ST-Link serials → boards are in the bench notes.
-- **Ethernet (`tcu`)**: on WSL, the board's UDP events land on the **Windows** side (mirrored networking), so validate SOME/IP with a `powershell.exe` listener (see `examples/h735_someip/bench_test.sh`), not a WSL socket. `ping` works from WSL because ICMP is shared.
+- **Flash** a node: `make -C nodes/<node> flash SERIAL=<st-link sn>` — every node takes the SAME selector, so the wrong board can't be written by using the wrong variable name. ST-Link serials → boards are in the bench notes.
+- **Ethernet (`tcu`)**: on WSL, the board's UDP events land on the **Windows** side (mirrored networking), so validate SOME/IP with a `powershell.exe` listener, not a WSL socket. `ping` works from WSL because ICMP is shared. The tcu offers the same service (0x0100) as `examples/h735_someip`, so that example's probe verifies it at **its own address** — the script takes the target from `BLOB_SOMEIP_IP`:
+  `BLOB_SOMEIP_IP=192.168.0.51 examples/h735_someip/bench_test.sh` (flash the tcu itself with `make -C nodes/tcu flash SERIAL=<sn>`; the script's `--flash` only builds its own H735 image).
 - **Watch the CAN traffic**: [`system_full.blobnet`](system_full.blobnet) is a [blobly_net](https://github.com/MartenH/blobly_net) monitor for this bench — it taps both buses (`can0` = compute, `can1` = edge) and decodes them with the DBCs, so you can see the gateway forward. Run it from the blobly_net repo:
   `BLOBLY_PROJECT=/path/to/blobly_emb/examples/system_full/system_full.blobnet ./scripts/run_gui.sh`.

@@ -5,7 +5,7 @@
 # the board (h723) and the node's path depth differ.
 #
 #   make -C ../../../.. deps      # once: ThreadX + NetX Duo + CMSIS
-#   make flash H723=0029003E3233510639363634
+#   make flash SERIAL=0029003E3233510639363634
 CROSS   ?= arm-none-eabi-
 CC       = $(CROSS)gcc
 AR       = $(CROSS)ar
@@ -106,8 +106,8 @@ $(BUILD):
 	@mkdir -p $(BUILD)
 
 flash: $(BUILD)/$(NAME).bin
-	st-flash $(if $(H723),--serial $(H723),) write $(BUILD)/$(NAME).bin 0x08000000
-	st-flash $(if $(H723),--serial $(H723),) reset
+	st-flash $(if $(SERIAL),--serial $(SERIAL),) write $(BUILD)/$(NAME).bin 0x08000000
+	st-flash $(if $(SERIAL),--serial $(SERIAL),) reset
 
 clean:
 	rm -rf $(BUILD) gen ports sig

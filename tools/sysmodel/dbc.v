@@ -607,8 +607,12 @@ pub fn check_dbc_conformance(s System) []Issue {
 	mut dbs := map[string]candb.Database{}
 	mut loaded := map[string]bool{}
 	mut has_dbc := map[string]bool{}
+	mut kind_of := map[string]string{}
+	mut has_service := map[string]bool{}
 	for bus in s.buses {
 		has_dbc[bus.name] = bus.dbc != ''
+		kind_of[bus.name] = bus.kind
+		has_service[bus.name] = bus.service != 0
 		if bus.dbc == '' {
 			continue
 		}
@@ -703,6 +707,20 @@ pub fn check_dbc_conformance(s System) []Issue {
 		}
 	}
 	for sig in s.signals {
+		// the CARRIER decides the contract a signal conforms to. A someip bus carries
+		// the signal on an EVENT of its service — there is no DBC frame to conform to,
+		// so requiring one here would reject every SOME/IP signal bus outright. What it
+		// needs instead is the service the events ride (REQ-TOPO-003).
+		if (kind_of[sig.bus] or { 'can' }) == 'someip' {
+			if !(has_service[sig.bus] or { false }) {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'signal "${sig.name}": someip bus "${sig.bus}" carries cross-node signals but declares no `service` — a SOME/IP event needs the service it belongs to'
+				}
+			}
+			continue
+		}
 		// loom2v MUST load a DBC for any bus carrying external (cross-node)
 		// signals, so a bus with signals but no `dbc` cannot be code-generated.
 		if !(has_dbc[sig.bus] or { false }) {
