@@ -24,9 +24,18 @@ pub struct Bus {
 pub mut:
 	name      string
 	interface string
+	// kind selects the CARRIER, and with it the frame contract: a CAN bus carries frames
+	// described by a `dbc`; a someip bus carries a SERVICE's events/methods, so it has a
+	// service id + version instead (docs/someip.md). Default 'can' — every existing
+	// [bus.*] keeps its meaning without touching a single system.toml.
+	kind      string = 'can'
 	fd        bool
 	bitrate   int
 	dbc       string
+	// someip only: the service this endpoint offers. A signal on a someip bus rides an
+	// EVENT of this service rather than a DBC frame; a method is a request/response.
+	service u32
+	version u32
 	// the NM cluster on this bus (dissolution: the identity source the generator
 	// stamps into each node's [nm]). peers = the alive-id range; the timings are
 	// the shared sleep/wake config. 0/absent = the module defaults.
@@ -317,12 +326,16 @@ pub fn parse_system(path string) !System {
 	if bv := doc.value_opt('bus') {
 		for name, cfg in bv.as_map() {
 			m := cfg.as_map()
+			kind := if k := m['kind'] { k.string() } else { 'can' }
 			mut bus := Bus{
 				name:      name
 				interface: m_str(m, 'interface')
+				kind:      if kind == '' { 'can' } else { kind }
 				fd:        m_bool(m, 'fd')
 				bitrate:   m_int(m, 'bitrate')
 				dbc:       m_str(m, 'dbc')
+				service:   u32(m_int(m, 'service'))
+				version:   u32(m_int(m, 'version'))
 			}
 			// [bus.<name>.nm] — the dissolution NM cluster (peers range + timings)
 			if nmv := m['nm'] {
