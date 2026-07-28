@@ -43,12 +43,14 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 
 `tcu` publishes a cyclic, E2E-protected SOME/IP **telemetry event** and answers an RPC **command round trip**, all from config + the H723 Ethernet board driver (`boards/h723/eth.c`). It's **silicon-validated**: link + ARP + ICMP (`ping 192.168.0.51`, 0% loss), SOME/IP tx (service `0x0100`, event `0x8001`, E2E counter+CRC) and rx (`uptime` RPC → response, request-id mirrored). The wire is identical to `examples/h735_someip` / `host_someip`, so the same `blobly_net` oracle verifies it.
 
-**But `tcu` is deliberately not a `[[node]]` in `system.toml` — and that's a real boundary, not an oversight.** The system model (`tools/sysmodel`) is **CAN-only**: every `[bus.*]` carries a **DBC** frame contract, and `syscheck` (REQ-TOPO-001) *rejects* a node that opens a bus the model doesn't declare. There is no eth/SOME-IP bus type in the model yet. So `tcu`:
+**But `tcu` is deliberately not a `[[node]]` in `system.toml` — and that's a real boundary, not an oversight.** The system model now *does* carry the Ethernet side: a `[bus.*]` declares its **carrier** (`kind = "someip"`, a `service` + `version` instead of a DBC), membership is **explicit** (a node names the bus, since each eth node has its own address), and `syscheck` validates the members' reciprocal peers, endpoint addresses, event ids and payload contracts. What blocks `tcu` is narrower and concrete:
+
+**its peer is off-system.** The tcu talks to the **bench tool at `192.168.0.190`**, not to another ECU. REQ-TOPO-001 requires every transmitted signal to be received by ≥1 *node*, and a SOME/IP link is point-to-point — so joining `tcu` to a system bus today would mean either inventing a peer node that doesn't exist or reporting its telemetry as unreceived. The model needs a way to say **"this endpoint is consumed off-system"** first. So `tcu`:
 
 - **is** in the build — it's in the Makefile `NODES` list, so `make nodes` cross-builds it with the others; and
-- **is not** in the cross-node *model* — its SOME/IP services aren't validated for writers/reachability/contract the way the CAN signals are.
+- **is not** in the cross-node *model* — its SOME/IP events aren't validated for writers/reachability the way the CAN signals are.
 
-Teaching sysmodel to host an eth/SOME-IP bus (a `Bus.kind`, a SOME/IP service contract instead of a DBC, cross-network reachability) is tracked as **issue #245**. Until that lands, the Ethernet node is a **build member, not a model member** — which is why you won't find it in `system.toml`.
+Until the off-system endpoint lands, the Ethernet node is a **build member, not a model member** — which is why you won't find it in `system.toml`.
 
 *(The same is true of `domain_m4`: it's a CM4 **satellite image**, a `[[partition]] image=` inside `domain`'s own config, not a system-level node — so it isn't in `system.toml` either.)*
 
@@ -107,7 +109,8 @@ The CAN nodes link the generated comm thread against the shared `boards/common/c
 
 ### Bench notes
 
-- **Flash** a node: `make -C nodes/<node> flash SERIAL=<st-link sn>` (or `H723=<sn>` for the H723 nodes). ST-Link serials → boards are in the bench notes.
-- **Ethernet (`tcu`)**: on WSL, the board's UDP events land on the **Windows** side (mirrored networking), so validate SOME/IP with a `powershell.exe` listener (see `examples/h735_someip/bench_test.sh`), not a WSL socket. `ping` works from WSL because ICMP is shared.
+- **Flash** a node: `make -C nodes/<node> flash SERIAL=<st-link sn>` — every node takes the SAME selector, so the wrong board can't be written by using the wrong variable name. ST-Link serials → boards are in the bench notes.
+- **Ethernet (`tcu`)**: on WSL, the board's UDP events land on the **Windows** side (mirrored networking), so validate SOME/IP with a `powershell.exe` listener, not a WSL socket. `ping` works from WSL because ICMP is shared. The tcu offers the same service (0x0100) as `examples/h735_someip`, so that example's probe verifies it at **its own address** — the script takes the target from `BLOB_SOMEIP_IP`:
+  `BLOB_SOMEIP_IP=192.168.0.51 examples/h735_someip/bench_test.sh` (flash the tcu itself with `make -C nodes/tcu flash SERIAL=<sn>`; the script's `--flash` only builds its own H735 image).
 - **Watch the CAN traffic**: [`system_full.blobnet`](system_full.blobnet) is a [blobly_net](https://github.com/MartenH/blobly_net) monitor for this bench — it taps both buses (`can0` = compute, `can1` = edge) and decodes them with the DBCs, so you can see the gateway forward. Run it from the blobly_net repo:
   `BLOBLY_PROJECT=/path/to/blobly_emb/examples/system_full/system_full.blobnet ./scripts/run_gui.sh`.

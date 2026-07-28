@@ -381,6 +381,23 @@ fn check_signals_dissolved(s System) []Issue {
 			sig_seen[sig.name] = true
 		}
 	}
+	// DISSOLUTION lowers a system-scope signal into CAN wiring: sysgen emits the
+	// node's [bus.canN] + [[signal]] + the DBC frame it rides. There is no SOME/IP
+	// lowering yet — a node's eth wiring is still AUTHORED in its ecu.toml ([someip]
+	// + [[frame]], as examples/system_full/nodes/tcu does). Reject the combination
+	// HERE: skipping the DBC contract for a someip bus (its signals ride service
+	// events, not frames) would otherwise let a dissolved someip signal pass the gate
+	// and be lowered as a CAN frame with no DBC (REQ-TOPO-003).
+	for sig in s.signals {
+		b := s.bus_by_name(sig.bus) or { continue }
+		if b.kind == 'someip' {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'signal "${sig.name}": bus "${sig.bus}" is kind = "someip" — SOME/IP wiring is not lowered from system.toml yet; author it in the node\'s ecu.toml ([someip] + [[frame]]) and declare the bus membership only'
+			}
+		}
+	}
 	mut frame_owner := map[string]string{} // (bus, frame) -> producer node
 	mut frame_cycle := map[string]int{}    // (bus, frame) -> cycle_ms
 	for sig in s.signals {
@@ -641,6 +658,71 @@ fn check_topology_wellformed(s System) []Issue {
 	}
 	mut iface_seen := map[string]string{}
 	for b in s.buses {
+		// the CARRIER is an enum, not free text: every kind-aware check special-cases
+		// the exact string 'someip', so a typo ("somepi") would silently fall back to
+		// CAN behaviour — DBC required, membership by interface — instead of failing
+		// here where the mistake is (REQ-TOPO-001).
+		if b.kind !in ['can', 'someip'] {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'bus "${b.name}": unknown kind "${b.kind}" — the carrier is "can" (DBC frames) or "someip" (a service)'
+			}
+		}
+		// the contract fields follow the carrier: a `dbc` on a someip bus (or a
+		// service/version on a CAN one) is read by nothing and would be silently
+		// ignored — the same typo trap one level down.
+		// the service IS a someip bus's contract — the id every member's receive
+		// envelope gates on. Without it there is nothing for members to agree about,
+		// and check_someip_membership would "match" them all at 0x0.
+		if b.kind == 'someip' && !b.has_service {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'bus "${b.name}": kind = "someip" needs a `service` — it is the contract members are held to (a CAN bus has its `dbc`). 0x0000 is a legal id; the key must be PRESENT'
+			}
+		}
+		// the SOME/IP header carries service as u16 and interface version as u8, so an
+		// out-of-range value is not a big number, it is an impossible contract — and it
+		// must fail even on a bus no node has joined yet (the u32 cast would wrap -1).
+		if b.kind == 'someip' && !b.service_ok {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'bus "${b.name}": `service` is outside the SOME/IP service id range 0x0000..0xFFFF'
+			}
+		}
+		if b.kind == 'someip' && !b.version_ok {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'bus "${b.name}": `version` is outside the SOME/IP interface version range 0..255'
+			}
+		}
+		// NM is the CAN alive-frame protocol (the node validator rejects [nm] on an eth
+		// bus). A cluster declared on a someip carrier configures nothing and would be
+		// silently ignored — the same typo trap as a `dbc` here.
+		if b.kind == 'someip' && b.has_nm_cluster {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-004'
+				msg:      'bus "${b.name}": kind = "someip" cannot carry an NM cluster — network management is the CAN alive-frame protocol; remove [bus.${b.name}.nm]'
+			}
+		}
+		if b.kind == 'someip' && b.dbc != '' {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'bus "${b.name}": kind = "someip" carries a service, not DBC frames — remove `dbc = "${b.dbc}"` (it is never loaded)'
+			}
+		}
+		if b.kind == 'can' && (b.has_service || b.has_version) {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'bus "${b.name}": `service`/`version` describe a SOME/IP service — a CAN bus carries DBC frames (set kind = "someip" or remove them)'
+			}
+		}
 		if b.interface == '' {
 			continue
 		}
@@ -786,6 +868,23 @@ fn node_has_bus_signal(n Node) bool {
 fn check_bus_membership(s System) []Issue {
 	mut issues := []Issue{}
 	for n in s.nodes {
+		// a node offers ONE SOME/IP service: its ecu.toml has a single [someip] block,
+		// so claiming two someip buses would validate both against the same endpoint
+		// and generate one service for two contracts (REQ-TOPO-005).
+		mut someip_claims := []string{}
+		for bname in n.buses {
+			b := s.bus_by_name(bname) or { continue }
+			if b.kind == 'someip' {
+				someip_claims << bname
+			}
+		}
+		if someip_claims.len > 1 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": claims ${someip_claims.len} someip buses (${someip_claims.join(', ')}) — a node has one [someip] endpoint, so it offers one service'
+			}
+		}
 		for bname in n.buses {
 			b := s.bus_by_name(bname) or {
 				issues << Issue{
@@ -793,6 +892,10 @@ fn check_bus_membership(s System) []Issue {
 					req:      'REQ-TOPO-001'
 					msg:      'node "${n.name}": bus "${bname}" is not declared in system.toml'
 				}
+				continue
+			}
+			if b.kind == 'someip' {
+				issues << check_someip_membership(n, b)
 				continue
 			}
 			if b.interface !in n.view.local_buses {
@@ -817,7 +920,16 @@ fn check_bus_membership(s System) []Issue {
 		// the reverse: a local interface that matches a system bus must be CLAIMED
 		// in `buses`, or producers_on/consumers_on (which filter on `buses`) drop
 		// this node's traffic silently — its collisions vanish from the checks.
+		// EXPLICIT MEMBERSHIP (someip): the ONE interface a node joins a someip bus with
+		// is its own address, which no system bus's `interface` matches — that endpoint's
+		// contract is the membership claim (checked above), not an interface match. Scope
+		// the exemption to exactly that interface: a node on a someip bus that ALSO opens
+		// some other undeclared interface still has untracked traffic there.
+		someip_endpoint := someip_endpoint_of(s, n)
 		for iface in n.view.local_buses {
+			if iface != '' && iface == someip_endpoint && s.bus_by_interface(iface) == none {
+				continue
+			}
 			b := s.bus_by_interface(iface) or {
 				// an interface no system bus declares has NO system contract. If it
 				// carries real traffic it is invisible to the writer/reachability, the
@@ -856,7 +968,270 @@ fn check_bus_membership(s System) []Issue {
 			}
 		}
 	}
+	// what the MEMBERS of a someip bus owe each other (reciprocal peers, one address
+	// each, agreed event ids) — membership alone does not connect two eth nodes.
+	for b in s.buses {
+		if b.kind == 'someip' {
+			issues << check_someip_bus(s, b)
+		}
+	}
 	return issues
+}
+
+// EXPLICIT MEMBERSHIP (someip). CAN matches a node to a bus by shared `interface`
+// — every node literally says "can0". Each eth node has its OWN address (tcu
+// 192.168.0.51, sysnode .50), so interface equality cannot express "on the same
+// segment": a someip bus is joined by NAMING it in `buses`, and the system declares
+// who is on what. What the node must then have is a local SOME/IP ENDPOINT
+// ([someip].bus -> one of its [bus.*]) whose service contract IS the one the system
+// bus declares: the generated receive envelope drops a foreign service/version, so
+// members that disagree are silently deaf to each other (REQ-TOPO-005).
+fn check_someip_membership(n Node, b Bus) []Issue {
+	mut issues := []Issue{}
+	if !n.view.has_someip {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-005'
+			msg:      'node "${n.name}": claims someip bus "${b.name}" but its ecu.toml declares no [someip] endpoint (bus + service)'
+		}
+		return issues
+	}
+	if n.view.someip_iface !in n.view.local_buses {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-005'
+			msg:      'node "${n.name}": [someip].bus resolves to "${n.view.someip_iface}", which is not one of its [bus.*] interfaces (declares ${n.view.local_buses})'
+		}
+	}
+	if n.view.someip_service != b.service {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-005'
+			msg:      'node "${n.name}": offers SOME/IP service 0x${n.view.someip_service.hex()} but system bus "${b.name}" declares 0x${b.service.hex()} — the receive envelope drops a foreign service'
+		}
+	}
+	if n.view.someip_version != b.version {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-005'
+			msg:      'node "${n.name}": offers SOME/IP interface version ${n.view.someip_version} but system bus "${b.name}" declares ${b.version} — one version per service contract'
+		}
+	}
+	return issues
+}
+
+// check_someip_bus enforces what a SOME/IP bus's MEMBERS owe each other — the part
+// a shared bus name does not give you. There is no service discovery on the target:
+// the generated bridge sends only TO its configured static peer and accepts only
+// FROM it, and it dispatches a received payload on the EVENT id. So membership alone
+// never means "connected", and syscheck must not credit reachability on it.
+//
+//   - one address per member: two endpoints resolving to the same IP bring up the
+//     same address on one segment (ARP conflict, nondeterministic delivery);
+//   - the peers must be RECIPROCAL: each member's `peer` is the other's
+//     `<address>:<port>`. A static peer is point-to-point, so a bus with >2 members
+//     cannot be wired at all today — say that instead of generating deaf nodes;
+//   - the EVENT ids must agree: a producer sending "BenchLoad" as 0x8001 and a
+//     consumer expecting 0x8002 match by NAME and never talk (REQ-TOPO-005).
+fn check_someip_bus(s System, bus Bus) []Issue {
+	mut issues := []Issue{}
+	mut members := []Node{}
+	for n in s.nodes {
+		if bus.name in n.buses && n.view.has_someip {
+			members << n
+		}
+	}
+	// one endpoint address per member
+	mut addr_of := map[string]string{} // iface -> the node that already claimed it
+	for n in members {
+		if n.view.someip_iface == '' {
+			continue
+		}
+		if prev := addr_of[canon_addr(n.view.someip_iface)] {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'bus "${bus.name}": nodes "${prev}" and "${n.name}" both use endpoint address "${n.view.someip_iface}" — one address per node on a segment'
+			}
+		} else {
+			addr_of[canon_addr(n.view.someip_iface)] = n.name
+		}
+	}
+	if members.len < 2 {
+		return issues // a single member has no peer on-system to be reciprocal with
+	}
+	if members.len > 2 {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-005'
+			msg:      'bus "${bus.name}": ${members.len} members (${members.map(it.name).join(', ')}) — a static SOME/IP peer is point-to-point, so a bus carries at most 2 members until service discovery exists'
+		}
+		return issues
+	}
+	a, b := members[0], members[1]
+	for x, y in {
+		a.name: b
+		b.name: a
+	} {
+		me := if x == a.name { a } else { b }
+		want := '${canon_addr(y.view.someip_iface)}:${y.view.someip_port}'
+		if canon_endpoint(me.view.someip_peer) != want {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${me.name}": [someip].peer is "${me.view.someip_peer}" but bus "${bus.name}" puts it with "${y.name}" at "${want}" — the bridge talks ONLY to its static peer, so these two never exchange a datagram'
+			}
+		}
+	}
+	// the EVENT each shared signal rides must be the same on both ends
+	prod := producers_on(s, bus)
+	cons := consumers_on(s, bus)
+	for sig, pnodes in prod {
+		cnodes := cons[sig] or { continue }
+		for pn in pnodes {
+			for cn in cnodes {
+				p := node_named(s, pn) or { continue }
+				c := node_named(s, cn) or { continue }
+				pid := p.view.sig_frame_id['${p.view.someip_iface}|${sig}'] or {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-005'
+						msg:      'bus "${bus.name}": node "${pn}" transmits signal "${sig}" but binds it to no [[frame]] id — a SOME/IP event needs the id the receiver dispatches on'
+					}
+					continue
+				}
+				cid := c.view.sig_frame_id['${c.view.someip_iface}|${sig}'] or {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-005'
+						msg:      'bus "${bus.name}": node "${cn}" receives signal "${sig}" but binds it to no [[frame]] id — a SOME/IP event needs the id the receiver dispatches on'
+					}
+					continue
+				}
+				if pid != cid {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-005'
+						msg:      'bus "${bus.name}": signal "${sig}" is event 0x${pid.hex()} on "${pn}" but 0x${cid.hex()} on "${cn}" — the receive bridge dispatches on the event id, so the value never arrives'
+					}
+					continue
+				}
+				// the same event id is not enough: the receiver enforces its OWN payload
+				// length and unpacks its OWN derived layout, so a difference in the
+				// signal's fields, the frame's signal list (= packing order), or its E2E
+				// parameters is a counted drop or silently misdecoded data. The layout is
+				// DERIVED from these inputs by one generator, so comparing the inputs is
+				// exact without duplicating the packing rules here.
+				pf := p.view.sig_fields['${p.view.someip_iface}|${sig}'] or { '' }
+				cf := c.view.sig_fields['${c.view.someip_iface}|${sig}'] or { '' }
+				if pf != cf {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-005'
+						msg:      'bus "${bus.name}": signal "${sig}" has fields {${pf}} on "${pn}" but {${cf}} on "${cn}" — the receiver unpacks its own layout, so the payload is misdecoded'
+					}
+				}
+				pp := p.view.sig_payload['${p.view.someip_iface}|${sig}'] or { '' }
+				cp := c.view.sig_payload['${c.view.someip_iface}|${sig}'] or { '' }
+				if pp != cp {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-005'
+						msg:      'bus "${bus.name}": event 0x${pid.hex()} carrying "${sig}" is "${pp}" on "${pn}" but "${cp}" on "${cn}" — one event, one payload contract (signal order sets the packing; E2E must match or every frame fails its check)'
+					}
+				}
+			}
+		}
+	}
+	return issues
+}
+
+// canon_addr canonicalizes a dotted-quad address so two spellings of ONE address
+// compare equal. ecucheck accepts "192.168.000.050" and "192.168.0.50" alike and the
+// generated endpoints resolve to the same numeric address, so a raw-string compare
+// would let the duplicate-address and reciprocal-peer checks pass a system whose two
+// members are actually the same host. Anything that is not a dotted quad is returned
+// unchanged (a hostname or an already-odd value stays comparable to itself).
+fn canon_addr(a string) string {
+	parts := a.split('.')
+	if parts.len != 4 {
+		return a
+	}
+	mut out := []string{cap: 4}
+	for p in parts {
+		if p == '' || p.len > 3 {
+			return a
+		}
+		for c in p {
+			if c < `0` || c > `9` {
+				return a
+			}
+		}
+		n := p.u32()
+		if n > 255 {
+			return a
+		}
+		out << n.str()
+	}
+	return out.join('.')
+}
+
+// canon_endpoint canonicalizes an "<address>:<port>" peer spelling the same way —
+// the PORT too: loom2v parses it numerically, so ":030490" and ":30490" are one
+// endpoint and must not be reported as two.
+fn canon_endpoint(e string) string {
+	i := e.last_index(':') or { return canon_addr(e) }
+	addr := canon_addr(e[..i])
+	port := e[i + 1..]
+	mut digits := port.len > 0
+	for c in port {
+		if c < `0` || c > `9` {
+			digits = false
+			break
+		}
+	}
+	return if digits { '${addr}:${port.u32()}' } else { '${addr}:${port}' }
+}
+
+fn node_named(s System, name string) ?Node {
+	for n in s.nodes {
+		if n.name == name {
+			return n
+		}
+	}
+	return none
+}
+
+// someip_endpoint_of returns the node's local SOME/IP endpoint interface IF it
+// claims a someip bus, else '' — an endpoint only earns its membership exemption
+// through an actual claim.
+fn someip_endpoint_of(s System, n Node) string {
+	for bname in n.buses {
+		b := s.bus_by_name(bname) or { continue }
+		if b.kind == 'someip' {
+			return n.view.someip_iface
+		}
+	}
+	return ''
+}
+
+// node_iface_on returns the LOCAL interface a node carries a system bus's traffic
+// on, or none if it is not a member. CAN: the bus's shared interface name, spelled
+// the same on every node. someip: the node's OWN [someip] endpoint address — under
+// explicit membership the system bus and the node's interface deliberately differ,
+// so ownership has to resolve through the endpoint or produces/consumes come back
+// empty and every duplicate writer and orphaned consumer on the bus passes silently.
+fn node_iface_on(n Node, bus Bus) ?string {
+	if bus.name !in n.buses {
+		return none
+	}
+	if bus.kind == 'someip' {
+		if n.view.someip_iface == '' {
+			return none
+		}
+		return n.view.someip_iface
+	}
+	return bus.interface
 }
 
 // REQ-TOPO-001: each CAN frame on a bus has exactly one transmitting node. Two
@@ -878,10 +1253,8 @@ fn check_bus_membership(s System) []Issue {
 fn producers_on(s System, bus Bus) map[string][]string {
 	mut prod := map[string][]string{}
 	for n in s.nodes {
-		if bus.name !in n.buses {
-			continue
-		}
-		for sig in n.view.produces[bus.interface] {
+		iface := node_iface_on(n, bus) or { continue }
+		for sig in n.view.produces[iface] {
 			prod[sig] << n.name
 		}
 	}
@@ -891,10 +1264,8 @@ fn producers_on(s System, bus Bus) map[string][]string {
 fn consumers_on(s System, bus Bus) map[string][]string {
 	mut cons := map[string][]string{}
 	for n in s.nodes {
-		if bus.name !in n.buses {
-			continue
-		}
-		for sig in n.view.consumes[bus.interface] {
+		iface := node_iface_on(n, bus) or { continue }
+		for sig in n.view.consumes[iface] {
 			cons[sig] << n.name
 		}
 	}
@@ -1297,6 +1668,20 @@ fn check_routes(s System, dissolved bool) []Issue {
 				severity: .error
 				req:      'REQ-TOPO-006'
 				msg:      'route on "${r.gateway}": from and to are the same bus ("${r.from}")'
+			}
+		}
+		// a route lowers to a CAN forwarder (raw PDU copy or DBC re-encode). Crossing a
+		// someip bus is the eth GATEWAY, which is a later phase (docs/someip.md P3) —
+		// say so here, or the route falls into the DBC checks and fails as "destination
+		// bus has no `dbc`", which reads like a missing file rather than a missing feature.
+		for b in [r.from, r.to] {
+			sb := s.bus_by_name(b) or { continue }
+			if sb.kind == 'someip' {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-006'
+					msg:      'route on "${r.gateway}": bus "${b}" is kind = "someip" — routing across a SOME/IP bus is not generated yet (the CAN<->SOME/IP gateway is a later phase)'
+				}
 			}
 		}
 		if (r.frame == '') == (r.signal == '') {

@@ -3741,3 +3741,565 @@ bus = "can0"
 	view := parse_node_view(doc)
 	assert !view.has_telemetry, 'omitted [telemetry].enabled must default to false (loom2v parse_telemetry)'
 }
+
+// ===== SOME/IP carrier (#248) =====
+//
+// A bus carries a KIND. `can` matches a node to a bus by shared `interface` — every
+// node literally says "can0". A `someip` bus carries a SERVICE, and each eth node has
+// its OWN address, so interface equality cannot express "on the same segment": a node
+// joins by NAMING the bus, and its local [someip] endpoint is what that claim resolves
+// to. These pin the rules that differ from CAN — and the ones that must NOT.
+
+// a clean someip system: tcu (.51) and sysnode (.50) on one service, each producing
+// what the other consumes. Their interfaces differ ON PURPOSE — that is the carrier.
+fn clean_someip() System {
+	return System{
+		buses: [
+			Bus{
+				name:        'backbone'
+				kind:        'someip'
+				service:     0x0100
+				has_service: true
+				version:     1
+			},
+		]
+		nodes: [
+			Node{
+				name:      'tcu'
+				buses:     ['backbone']
+				trace:     1
+				has_trace: true
+				view:      NodeView{
+					produces:       {
+						'192.168.0.51': ['BenchLoad']
+					}
+					consumes:       {
+						'192.168.0.51': ['LampCmd']
+					}
+					local_buses:    ['192.168.0.51']
+					has_someip:     true
+					someip_iface:   '192.168.0.51'
+					someip_service: 0x0100
+					someip_version: 1
+					someip_peer:    '192.168.0.50:30490'
+					someip_port:    30490
+					sig_frame_id:   {
+						'192.168.0.51|BenchLoad': u32(0x8001)
+						'192.168.0.51|LampCmd':   u32(0x8010)
+					}
+					sig_fields:     {
+						'192.168.0.51|BenchLoad': 'load:u8'
+						'192.168.0.51|LampCmd':   'level:u8'
+					}
+					sig_payload:    {
+						'192.168.0.51|BenchLoad': 'signals=BenchLoad;e2e=data_id=33,ctr=7,crc=8'
+						'192.168.0.51|LampCmd':   'signals=LampCmd;e2e=none'
+					}
+				}
+			},
+			Node{
+				name:      'sysnode'
+				buses:     ['backbone']
+				trace:     2
+				has_trace: true
+				view:      NodeView{
+					produces:       {
+						'192.168.0.50': ['LampCmd']
+					}
+					consumes:       {
+						'192.168.0.50': ['BenchLoad']
+					}
+					local_buses:    ['192.168.0.50']
+					has_someip:     true
+					someip_iface:   '192.168.0.50'
+					someip_service: 0x0100
+					someip_version: 1
+					someip_peer:    '192.168.0.51:30490'
+					someip_port:    30490
+					sig_frame_id:   {
+						'192.168.0.50|BenchLoad': u32(0x8001)
+						'192.168.0.50|LampCmd':   u32(0x8010)
+					}
+					sig_fields:     {
+						'192.168.0.50|BenchLoad': 'load:u8'
+						'192.168.0.50|LampCmd':   'level:u8'
+					}
+					sig_payload:    {
+						'192.168.0.50|BenchLoad': 'signals=BenchLoad;e2e=data_id=33,ctr=7,crc=8'
+						'192.168.0.50|LampCmd':   'signals=LampCmd;e2e=none'
+					}
+				}
+			},
+		]
+	}
+}
+
+fn test_someip_clean_system_has_no_errors() {
+	issues := validate_system(clean_someip())
+	assert errs(issues).len == 0, 'clean someip system flagged: ${errs(issues)}'
+}
+
+// the membership claim is only honoured against a real local endpoint: a node that
+// names a someip bus but has no [someip] block has nothing to join it with.
+fn test_someip_claim_without_endpoint_is_error() {
+	mut s := clean_someip()
+	s.nodes[0].view.has_someip = false
+	s.nodes[0].view.someip_iface = ''
+	e := errs(validate_system(s))
+	assert e.any(it.contains('claims someip bus "backbone"') && it.contains('no [someip] endpoint')), e.str()
+}
+
+// [someip].bus must name one of the node's OWN [bus.*] tables — otherwise the
+// endpoint the membership resolves to is not an interface the node ever opens.
+fn test_someip_endpoint_must_be_a_local_bus() {
+	mut s := clean_someip()
+	s.nodes[0].view.someip_iface = 'eth9'
+	e := errs(validate_system(s))
+	assert e.any(it.contains('[someip].bus resolves to "eth9"')), e.str()
+}
+
+// the service contract is the system's, not the node's: a member built for another
+// service is dropped by the receive envelope, so the two are silently deaf.
+fn test_someip_service_mismatch_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.someip_service = 0x0200
+	e := errs(validate_system(s))
+	assert e.any(it.contains('service 0x200') && it.contains('declares 0x100')), e.str()
+}
+
+fn test_someip_version_mismatch_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.someip_version = 2
+	e := errs(validate_system(s))
+	assert e.any(it.contains('interface version 2') && it.contains('declares 1')), e.str()
+}
+
+// the exemption is ENDPOINT-scoped, not node-scoped: claiming a someip bus must not
+// buy a node silence for every OTHER undeclared interface it opens (codex #248).
+fn test_someip_exemption_does_not_cover_other_interfaces() {
+	mut s := clean_someip()
+	s.nodes[0].view.local_buses << 'can9'
+	s.nodes[0].view.produces['can9'] = ['Stray']
+	e := errs(validate_system(s))
+	assert e.any(it.contains('[bus.can9]') && it.contains('not declared by any system bus')), e.str()
+}
+
+// ownership resolves THROUGH the endpoint: producers_on/consumers_on key on the
+// node's own address, not the bus's interface, or every collision on a someip bus
+// would pass silently (codex #248).
+fn test_someip_two_writers_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.produces['192.168.0.50'] = ['LampCmd', 'BenchLoad']
+	e := errs(validate_system(s))
+	assert e.any(it.contains('"BenchLoad" transmitted by 2 nodes')), e.str()
+}
+
+fn test_someip_producer_without_consumer_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.consumes['192.168.0.50'] = []
+	e := errs(validate_system(s))
+	assert e.any(it.contains('"BenchLoad"') && it.contains('no node receives it')), e.str()
+}
+
+// the carrier is an enum: a typo must fail here, not silently fall back to CAN.
+fn test_unknown_bus_kind_is_error() {
+	mut s := clean_someip()
+	s.buses[0].kind = 'somepi'
+	e := errs(validate_system(s))
+	assert e.any(it.contains('unknown kind "somepi"')), e.str()
+}
+
+// the contract fields follow the carrier — a `dbc` on a someip bus (or a service on
+// a CAN bus) is read by nothing and would be silently ignored.
+fn test_contract_fields_must_match_the_carrier() {
+	mut s := clean_someip()
+	s.buses[0].dbc = 'backbone.dbc'
+	assert errs(validate_system(s)).any(it.contains('carries a service, not DBC frames')), 'someip bus with a dbc must be rejected'
+	mut c := clean_system()
+	c.buses[0].has_service = true
+	assert errs(validate_system(c)).any(it.contains('a CAN bus carries DBC frames')), 'can bus with a service must be rejected'
+}
+
+// REQ-TOPO-003: a someip bus's contract is its SERVICE — the DBC requirement must
+// not reject it (the signal rides an event), and the service must be declared.
+fn test_someip_bus_contract_is_the_service() {
+	mut s := System{
+		buses:   [
+			Bus{
+				name:        'backbone'
+				kind:        'someip'
+				service:     0x0100
+				has_service: true
+			},
+		]
+		signals: [
+			SysSignal{
+				name:     'BenchLoad'
+				producer: 'tcu'
+				bus:      'backbone'
+			},
+		]
+	}
+	// no "bus has no `dbc`" error: a someip signal has no DBC frame to conform to
+	assert !errs(check_dbc_conformance(s)).any(it.contains('no `dbc`')), errs(check_dbc_conformance(s)).str()
+	s.buses[0].has_service = false
+	e := errs(check_topology_wellformed(s))
+	assert e.any(it.contains('kind = "someip" needs a `service`')), e.str()
+}
+
+// DISSOLUTION lowers a system-scope signal into CAN wiring; there is no SOME/IP
+// lowering yet, so the combination must fail the gate rather than be generated as a
+// frame with no DBC (the hole opened by skipping the DBC contract for someip).
+fn test_dissolved_signal_on_someip_bus_is_error() {
+	s := System{
+		buses:   [
+			Bus{
+				name:        'backbone'
+				kind:        'someip'
+				service:     0x0100
+				has_service: true
+			},
+		]
+		signals: [
+			SysSignal{
+				name:     'BenchLoad'
+				producer: 'tcu'
+				bus:      'backbone'
+				fields:   {
+					'load': 'u8'
+				}
+			},
+		]
+	}
+	e := errs(check_signals_dissolved(s))
+	assert e.any(it.contains('is kind = "someip"') && it.contains('not lowered')), e.str()
+}
+
+// a node has ONE [someip] block, so it offers ONE service — two claimed someip
+// buses would validate both contracts against the same endpoint.
+fn test_node_claiming_two_someip_buses_is_error() {
+	mut s := clean_someip()
+	s.buses << Bus{
+		name:        'backbone2'
+		kind:        'someip'
+		service:     0x0200
+		has_service: true
+	}
+	s.nodes[0].buses << 'backbone2'
+	e := errs(validate_system(s))
+	assert e.any(it.contains('claims 2 someip buses')), e.str()
+}
+
+// the node's [someip] endpoint is parsed from its ecu.toml with the bus key RESOLVED
+// to its interface — the node's address, which is what membership lines up against.
+fn test_parse_node_view_extracts_the_someip_endpoint() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_someip_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.51"
+[someip]
+bus     = "eth0"
+service = 0x0100
+version = 1
+') or {
+		panic(err)
+	}
+	doc := toml.parse_file(os.join_path(dir, 'n.toml')) or { panic(err) }
+	view := parse_node_view(doc)
+	assert view.has_someip
+	assert view.someip_iface == '192.168.0.51', 'the [someip].bus key must resolve to the interface, got "${view.someip_iface}"'
+	assert view.someip_service == 0x0100
+	assert view.someip_version == 1
+}
+
+// --- what MEMBERSHIP alone does not give you (codex #248 r4) ---
+//
+// There is no service discovery on the target: the generated bridge talks ONLY to
+// its static peer and dispatches a received payload on the EVENT id. So two nodes
+// naming the same bus are not thereby connected, and syscheck must not credit
+// reachability across them until the wiring actually lines up.
+
+// each member's peer must be the OTHER member's endpoint, or both send into the void
+// (e.g. both pointing at the off-system bench tool at .190).
+fn test_someip_peers_must_be_reciprocal() {
+	mut s := clean_someip()
+	s.nodes[0].view.someip_peer = '192.168.0.190:30491' // the bench tool, not the peer node
+	e := errs(validate_system(s))
+	assert e.any(it.contains('[someip].peer is "192.168.0.190:30491"')
+		&& it.contains('never exchange a datagram')), e.str()
+}
+
+fn test_someip_peer_port_mismatch_is_error() {
+	mut s := clean_someip()
+	s.nodes[0].view.someip_peer = '192.168.0.50:30999' // right node, wrong port
+	e := errs(validate_system(s))
+	assert e.any(it.contains('never exchange a datagram')), e.str()
+}
+
+// a static peer is point-to-point: a third member cannot be wired at all today.
+fn test_someip_third_member_is_error() {
+	mut s := clean_someip()
+	mut third := s.nodes[1]
+	third.name = 'hmi'
+	third.trace = 3
+	third.view.someip_iface = '192.168.0.52'
+	third.view.local_buses = ['192.168.0.52']
+	s.nodes << third
+	e := errs(validate_system(s))
+	assert e.any(it.contains('3 members') && it.contains('point-to-point')), e.str()
+}
+
+// two members bringing up the SAME address on one segment is an ARP conflict.
+fn test_someip_duplicate_endpoint_address_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.someip_iface = '192.168.0.51' // same as tcu
+	s.nodes[1].view.local_buses = ['192.168.0.51']
+	s.nodes[1].view.produces = {
+		'192.168.0.51': ['LampCmd']
+	}
+	s.nodes[1].view.consumes = {
+		'192.168.0.51': ['BenchLoad']
+	}
+	e := errs(validate_system(s))
+	assert e.any(it.contains('both use endpoint address "192.168.0.51"')), e.str()
+}
+
+// the receive bridge dispatches on the EVENT id — matching signal NAMES are not
+// enough, so a producer at 0x8001 and a consumer at 0x8002 must be rejected.
+fn test_someip_event_id_mismatch_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.sig_frame_id['192.168.0.50|BenchLoad'] = u32(0x8002)
+	e := errs(validate_system(s))
+	assert e.any(it.contains('event 0x8001 on "tcu"') && it.contains('0x8002 on "sysnode"')), e.str()
+}
+
+fn test_someip_signal_without_an_event_id_is_error() {
+	mut s := clean_someip()
+	s.nodes[0].view.sig_frame_id.delete('192.168.0.51|BenchLoad')
+	e := errs(validate_system(s))
+	assert e.any(it.contains('transmits signal "BenchLoad"') && it.contains('no [[frame]] id')), e.str()
+}
+
+// service 0x0000 is a legal id (the per-node schema takes the full u16 range), so
+// the bus check must reject an OMITTED key, not the value zero.
+fn test_someip_service_zero_is_a_legal_id() {
+	mut s := clean_someip()
+	s.buses[0].service = 0
+	s.buses[0].has_service = true
+	s.nodes[0].view.someip_service = 0
+	s.nodes[1].view.someip_service = 0
+	e := errs(validate_system(s))
+	assert !e.any(it.contains('needs a `service`')), 'service = 0x0000 is a declared id, not an omission: ${e}'
+}
+
+// the endpoint's peer/port and each signal's event id come from the node's ecu.toml
+// (a RECEIVE frame binds its event just as much as a transmit one).
+fn test_parse_node_view_extracts_peer_and_event_ids() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_someip_ev_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.51"
+[someip]
+bus     = "eth0"
+service = 0x0100
+port    = 30490
+peer    = "192.168.0.190:30491"
+[[frame]]
+name    = "BenchTelem"
+bus     = "eth0"
+id      = 0x8001
+signals = ["BenchLoad"]
+tx      = { mode = "cyclic", cycle_ms = 300 }
+[[frame]]
+name    = "BenchCmd"
+bus     = "eth0"
+id      = 0x8010
+signals = ["LampCmd"]
+') or {
+		panic(err)
+	}
+	doc := toml.parse_file(os.join_path(dir, 'n.toml')) or { panic(err) }
+	view := parse_node_view(doc)
+	assert view.someip_peer == '192.168.0.190:30491'
+	assert view.someip_port == 30490
+	assert view.sig_frame_id['192.168.0.51|BenchLoad'] or { 0 } == u32(0x8001)
+	assert view.sig_frame_id['192.168.0.51|LampCmd'] or { 0 } == u32(0x8010), 'a RECEIVE frame binds its event id too'
+}
+
+// --- one event, one payload contract (codex #248 r5) ---
+//
+// The same event id is not enough: the receiver enforces its own payload length and
+// unpacks its own DERIVED layout. That layout comes from the signal's fields, the
+// frame's signal list (packing order) and its E2E parameters — comparing those inputs
+// is exact, because one generator derives both ends from them.
+
+fn test_someip_field_mismatch_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.sig_fields['192.168.0.50|BenchLoad'] = 'load:u32'
+	e := errs(validate_system(s))
+	assert e.any(it.contains('fields {load:u8} on "tcu"') && it.contains('{load:u32} on "sysnode"')), e.str()
+}
+
+// signal ORDER inside the event sets the packing, so the same set in another order is
+// a different wire layout.
+fn test_someip_packing_order_mismatch_is_error() {
+	mut s := clean_someip()
+	s.nodes[0].view.sig_payload['192.168.0.51|BenchLoad'] = 'signals=BenchTicks,BenchLoad;e2e=data_id=33,ctr=7,crc=8'
+	e := errs(validate_system(s))
+	assert e.any(it.contains('one event, one payload contract')), e.str()
+}
+
+// E2E is part of the contract: a receiver checking a counter/CRC the sender never
+// wrote fails every frame.
+fn test_someip_e2e_mismatch_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.sig_payload['192.168.0.50|BenchLoad'] = 'signals=BenchLoad;e2e=none'
+	e := errs(validate_system(s))
+	assert e.any(it.contains('one event, one payload contract')), e.str()
+}
+
+// two spellings of ONE address are one host: ecucheck accepts both dotted quads and
+// they resolve identically, so the duplicate-address guard must not be bypassed.
+fn test_someip_duplicate_address_across_spellings_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.someip_iface = '192.168.000.051' // == tcu's .51
+	s.nodes[1].view.local_buses = ['192.168.000.051']
+	s.nodes[1].view.produces = {
+		'192.168.000.051': ['LampCmd']
+	}
+	s.nodes[1].view.consumes = {
+		'192.168.000.051': ['BenchLoad']
+	}
+	e := errs(validate_system(s))
+	assert e.any(it.contains('both use endpoint address')), e.str()
+}
+
+// the same normalization applies the other way: a peer spelled with padded octets
+// still points at its peer, and must NOT be reported as unreachable.
+fn test_someip_peer_spelling_is_normalized() {
+	mut s := clean_someip()
+	s.nodes[0].view.someip_peer = '192.168.000.050:30490'
+	e := errs(validate_system(s))
+	assert !e.any(it.contains('never exchange a datagram')), 'a padded dotted quad is the same peer: ${e}'
+}
+
+// the wire widths are part of the contract: service is u16, interface version u8 —
+// and an unused advertised bus must not be able to carry an impossible one.
+fn test_someip_contract_ranges_are_validated() {
+	mut s := clean_someip()
+	s.buses[0].service_ok = false
+	assert errs(validate_system(s)).any(it.contains('service id range')), 'out-of-range service must be rejected'
+	mut t := clean_someip()
+	t.buses[0].version_ok = false
+	assert errs(validate_system(t)).any(it.contains('interface version range')), 'out-of-range version must be rejected'
+}
+
+// version = 0 is a legal SOME/IP interface version, so a CAN bus declaring it is a
+// carrier mistake that presence — not the value — has to catch.
+fn test_can_bus_with_explicit_version_zero_is_error() {
+	mut c := clean_system()
+	c.buses[0].has_version = true
+	e := errs(validate_system(c))
+	assert e.any(it.contains('a CAN bus carries DBC frames')), e.str()
+}
+
+// the payload contract comes out of the node's own ecu.toml: field order, the frame's
+// signal list, and its E2E parameters.
+fn test_parse_node_view_extracts_the_payload_contract() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_someip_pl_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.51"
+[someip]
+bus     = "eth0"
+service = 0x0100
+[[signal]]
+name = "BenchLoad"
+fields = { load = "u8" }
+from = "app"
+to   = "eth0"
+[[frame]]
+name    = "BenchTelem"
+bus     = "eth0"
+id      = 0x8001
+signals = ["BenchLoad"]
+e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8 }
+') or {
+		panic(err)
+	}
+	doc := toml.parse_file(os.join_path(dir, 'n.toml')) or { panic(err) }
+	view := parse_node_view(doc)
+	assert view.sig_fields['192.168.0.51|BenchLoad'] or { '' } == 'load:u8'
+	assert (view.sig_payload['192.168.0.51|BenchLoad'] or { '' }).contains('data_id=33'), view.sig_payload.str()
+}
+
+// --- round 6: what is NOT data (codex #248 r6) ---
+
+// TOML table order is not data — ecumodel.eth_layouts sorts field names before
+// packing, so two nodes listing the same fields in different order build the
+// IDENTICAL wire and must not be reported as a payload mismatch.
+fn test_someip_field_order_is_not_a_mismatch() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_someip_ord_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	mk := fn (dir string, file string, fields string) NodeView {
+		os.write_file(os.join_path(dir, file), '
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.51"
+[someip]
+bus     = "eth0"
+service = 0x0100
+[[signal]]
+name = "Telem"
+fields = ${fields}
+from = "app"
+to   = "eth0"
+') or {
+			panic(err)
+		}
+		doc := toml.parse_file(os.join_path(dir, file)) or { panic(err) }
+		return parse_node_view(doc)
+	}
+	a := mk(dir, 'a.toml', '{ load = "u8", ticks = "u32" }')
+	b := mk(dir, 'b.toml', '{ ticks = "u32", load = "u8" }')
+	assert a.sig_fields['192.168.0.51|Telem'] or { 'a' } == b.sig_fields['192.168.0.51|Telem'] or { 'b' },
+		'field order is not data (eth_layouts sorts by name): ${a.sig_fields} vs ${b.sig_fields}'
+}
+
+// a port with leading zeroes is the same port: loom2v parses it numerically, so a
+// correctly wired pair must not be reported as unreachable.
+fn test_someip_peer_port_spelling_is_normalized() {
+	mut s := clean_someip()
+	s.nodes[0].view.someip_peer = '192.168.0.50:030490'
+	e := errs(validate_system(s))
+	assert !e.any(it.contains('never exchange a datagram')), 'a zero-padded port is the same port: ${e}'
+}
+
+// NM is the CAN alive-frame protocol — a cluster declared on a someip carrier
+// configures nothing and would be silently ignored.
+fn test_nm_cluster_on_a_someip_bus_is_error() {
+	mut s := clean_someip()
+	s.buses[0].has_nm_cluster = true
+	s.buses[0].nm_peers_lo = 0x500
+	s.buses[0].nm_peers_hi = 0x53f
+	e := errs(validate_system(s))
+	assert e.any(it.contains('cannot carry an NM cluster')), e.str()
+}

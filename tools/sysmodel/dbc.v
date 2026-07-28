@@ -607,8 +607,10 @@ pub fn check_dbc_conformance(s System) []Issue {
 	mut dbs := map[string]candb.Database{}
 	mut loaded := map[string]bool{}
 	mut has_dbc := map[string]bool{}
+	mut kind_of := map[string]string{}
 	for bus in s.buses {
 		has_dbc[bus.name] = bus.dbc != ''
+		kind_of[bus.name] = bus.kind
 		if bus.dbc == '' {
 			continue
 		}
@@ -703,6 +705,14 @@ pub fn check_dbc_conformance(s System) []Issue {
 		}
 	}
 	for sig in s.signals {
+		// the CARRIER decides the contract a signal conforms to. A someip signal rides
+		// an EVENT of the bus's service — there is no DBC frame to conform to, so the
+		// DBC requirement below does not apply to it (the bus's own contract is checked
+		// in check_topology_wellformed, and check_signals_dissolved rejects a system-
+		// scope someip signal outright until SOME/IP lowering exists).
+		if (kind_of[sig.bus] or { 'can' }) == 'someip' {
+			continue
+		}
 		// loom2v MUST load a DBC for any bus carrying external (cross-node)
 		// signals, so a bus with signals but no `dbc` cannot be code-generated.
 		if !(has_dbc[sig.bus] or { false }) {

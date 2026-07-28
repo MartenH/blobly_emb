@@ -18,6 +18,12 @@
 #
 # @verifies REQ-NET-016
 #
+# The probe targets BLOB_SOMEIP_IP (default 192.168.0.50 = this example on the
+# H735-DK). Any node offering the same service answers the same legs, so the
+# system_full TCU is verified with its own address:
+#
+#   BLOB_SOMEIP_IP=192.168.0.51 ./bench_test.sh
+#
 # Exit: 0 = pass, 1 = FAILED, 2 = SKIP (no board/probe host). Flashing
 # requires an explicit BLOB_H735_SERIAL (the H755 shares the bench).
 #
@@ -25,10 +31,15 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 FLASH=0; [ "${1:-}" = "--flash" ] && FLASH=1
+BOARD_IP="${BLOB_SOMEIP_IP:-192.168.0.50}"
 
 command -v powershell.exe >/dev/null 2>&1 || { echo "SKIP: no powershell.exe (not a WSL bench host)"; exit 2; }
 
 if [ "$FLASH" = 1 ]; then
+  # --flash builds and writes THIS example's image, which is the node at the default
+  # address. Flashing it while probing another node's address would report on an
+  # image this script never wrote (flash that node from its own directory instead).
+  [ "$BOARD_IP" = "192.168.0.50" ] || { echo "SKIP: --flash builds this example (192.168.0.50), not the node at $BOARD_IP"; exit 2; }
   [ -n "${BLOB_H735_SERIAL:-}" ] || { echo "SKIP: flash requested without BLOB_H735_SERIAL"; exit 2; }
   st-info --probe 2>/dev/null | grep -q "$BLOB_H735_SERIAL" || { echo "SKIP: probe $BLOB_H735_SERIAL not attached"; exit 2; }
   make >/dev/null || { echo "FAIL: build error"; exit 1; }
@@ -39,10 +50,11 @@ fi
 PS=$(mktemp --suffix=.ps1)
 trap 'rm -f "$PS"' EXIT
 cat > "$PS" <<'EOF'
+param([string]$BoardIp = '192.168.0.50')
 $ErrorActionPreference = 'Stop'
 try { $udp = New-Object System.Net.Sockets.UdpClient(30491) } catch { Write-Output 'SKIP: peer port busy'; exit }
 $udp.Client.ReceiveTimeout = 2000
-$board = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Parse('192.168.0.50'), 30490)
+$board = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Parse($BoardIp), 30490)
 $txt = [System.Text.Encoding]::ASCII
 function Req([byte[]]$mid, [byte[]]$rid, [byte[]]$p) {
   $len = 8 + $p.Length
@@ -98,9 +110,9 @@ if (-not $saw) { Write-Output 'FAIL: events stopped during rpc'; exit }
 Write-Output 'PASS'
 $udp.Close()
 EOF
-OUT=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w "$PS")" 2>&1 | tr -d '\r' | tail -1)
+OUT=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w "$PS")" -BoardIp "$BOARD_IP" 2>&1 | tr -d '\r' | tail -1)
 case "$OUT" in
-  PASS) echo "PASS: rpc correlation + error + gate + wide response + live events"; exit 0 ;;
+  PASS) echo "PASS ($BOARD_IP): rpc correlation + error + gate + wide response + live events"; exit 0 ;;
   SKIP*) echo "$OUT"; exit 2 ;;
   *) echo "${OUT:-FAIL: no probe output}"; exit 1 ;;
 esac

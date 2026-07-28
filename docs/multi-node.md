@@ -119,6 +119,46 @@ from    = "compute"
 to      = "edge"
 ```
 
+### The bus CARRIER (`kind`)
+
+A bus declares what it *is* — and with it, what its frame contract is:
+
+```toml
+[bus.backbone]               # the Ethernet segment
+kind    = "someip"           # default is "can"
+service = 0x0100             # the SERVICE its events/methods belong to
+version = 1
+```
+
+| `kind` | contract | membership |
+|---|---|---|
+| `can` (default) | `dbc` — the frames on the wire | by shared `interface`: every node spells the same `can0` |
+| `someip` | `service` + `version` — signals ride that service's **events** | **explicit**: the node names the bus in `buses` |
+
+Membership differs because the wire does. Every node on a CAN segment says
+`can0`, so interface equality *is* the segment. Each Ethernet node has its **own
+address** (`192.168.0.51` vs `.50`), so no shared interface name exists to match
+on — a node joins by **naming the bus**, and its local `[someip]` block is the
+endpoint that claim resolves to. syscheck then holds that endpoint to the
+system's contract: same `service`, same `version` (the receive envelope drops a
+foreign one, so mismatched members are silently deaf to each other), and its
+`produces`/`consumes` are checked for duplicate writers and orphaned consumers
+exactly like a CAN node's. Routing *across* a someip bus (the CAN↔SOME/IP
+gateway) is a later phase and is rejected today rather than half-generated.
+
+**Naming the same bus does not connect two nodes.** There is no service discovery
+on the target: the generated bridge sends only *to* its configured static `peer`,
+accepts only *from* it, and dispatches a received payload on the **event id**. A
+CAN wire connects whoever is on it; a SOME/IP link is wired point to point. So
+membership is credited as reachability only when the wiring agrees:
+
+| must hold | why |
+|---|---|
+| each member's `peer` is the other's `<address>:<port>` | the bridge talks to nobody else — two nodes both pointing at a bench tool never exchange a datagram |
+| at most **2** members per bus | a static peer is point-to-point; a third member cannot be wired at all until service discovery exists |
+| one endpoint address per member | two nodes at one IP bring up the same address on the segment (ARP conflict) |
+| a shared signal rides the **same event id** on both ends | the receive bridge dispatches on the id, so matching names alone never deliver |
+
 The Linux node (blobly_net) attaches on `diag` — the cloud/dev tier that pushes
 campaigns and observes; the H735 sysnode stages the images (its storage) and
 reflashes each functional node over its bus. The system runs standalone without
