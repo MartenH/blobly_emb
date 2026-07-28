@@ -818,6 +818,22 @@ fn check_bus_membership(s System) []Issue {
 		// in `buses`, or producers_on/consumers_on (which filter on `buses`) drop
 		// this node's traffic silently — its collisions vanish from the checks.
 		for iface in n.view.local_buses {
+			// EXPLICIT MEMBERSHIP (someip): CAN matches a node to a bus by shared interface
+			// ("can0" on every node), but each eth node has its OWN address (192.168.0.51 vs
+			// .50), so interface equality cannot express "same segment". A someip bus is
+			// joined by NAMING it in the node's `buses` — the system declares who is on what.
+			// Skip the interface-based contract check for those; the membership IS the claim.
+			mut someip_claimed := false
+			for bname2 in n.buses {
+				sb := s.bus_by_name(bname2) or { continue }
+				if sb.kind == 'someip' {
+					someip_claimed = true
+					break
+				}
+			}
+			if someip_claimed && s.bus_by_interface(iface) == none {
+				continue
+			}
 			b := s.bus_by_interface(iface) or {
 				// an interface no system bus declares has NO system contract. If it
 				// carries real traffic it is invisible to the writer/reachability, the
