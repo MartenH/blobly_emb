@@ -131,6 +131,18 @@ Kept standalone (not features of a running system): `bulk_bench` (host micro-ben
 ## Ethernet middleware
 
 - ✅ **SOME/IP P1** — codec/schema + codegen, E2E on silicon (H735 NetX)
+- ✅ **SOME/IP in the system model** (`#248`) — a `[bus.*]` declares its **carrier**:
+  `can` (frames, a `dbc`) or `someip` (a service's events, a `service` + `version`).
+  Membership follows the wire: CAN by shared `interface`, someip **explicit** (a node
+  names the bus, and its `[someip]` endpoint is held to the system's contract).
+  syscheck checks writers/reachability on a someip bus like any other.
+- 🧭 **`tcu` as a system node.** The model is ready; what is open is that the tcu's
+  peer is the **bench tool at .190, not an ECU** — REQ-TOPO-001 wants every
+  transmitted signal received by ≥1 node. A system needs a way to say "this endpoint
+  is consumed off-system" before the eth node joins `system.toml` as a member.
+- 🧭 **SOME/IP lowering.** system-scope `[[signal]]`s are lowered to CAN wiring only;
+  a someip node still AUTHORS its eth wiring (`[someip]` + `[[frame]]`). Rejected
+  explicitly today rather than half-generated.
 - 🧭 **SOME/IP P2 rx** · 🧭 **tx-mode harness** · 🧭 **loom2v eth integration**
 - ⏭️ **Ordinary networking from an application.** Today an FB can only emit a
   ≤64 B latest-value signal on an eth bus; everything else is platform glue
