@@ -34,8 +34,11 @@ pub mut:
 	dbc       string
 	// someip only: the service this endpoint offers. A signal on a someip bus rides an
 	// EVENT of this service rather than a DBC frame; a method is a request/response.
-	service u32
-	version u32
+	// has_service records PRESENCE, not a nonzero value: 0x0000 is a legal service id
+	// (the per-node schema takes the full u16 range), so an omitted key is the error.
+	service     u32
+	has_service bool
+	version     u32
 	// the NM cluster on this bus (dissolution: the identity source the generator
 	// stamps into each node's [nm]). peers = the alive-id range; the timings are
 	// the shared sleep/wake config. 0/absent = the module defaults.
@@ -154,6 +157,15 @@ pub mut:
 	someip_iface   string // [someip].bus resolved to its interface (this node's address)
 	someip_service u32
 	someip_version u32
+	// the STATIC peer this endpoint talks to: the generated bridge sends only TO it and
+	// accepts only FROM it (there is no service discovery), so two members of a bus are
+	// connected only if they point at each other — a shared bus name does not connect them.
+	someip_peer string // [someip].peer, "<address>:<port>"
+	someip_port int    // [someip].port — the port THIS endpoint listens on
+	// the on-wire id each signal rides, keyed "<iface>|<signal>". On a someip endpoint
+	// that id IS the EVENT the receive bridge dispatches on, so two members can agree on
+	// a signal NAME and still never talk (docs/someip.md).
+	sig_frame_id map[string]u32
 	// the telemetry frames the threadx comm thread transmits on the telemetry bus
 	// (CpuLoad + its detail). REAL tx ids: unique across nodes, not colliding with
 	// an application frame or the NM range (REQ-TOPO-002). CpuLoad is always sent
@@ -343,8 +355,9 @@ pub fn parse_system(path string) !System {
 				fd:        m_bool(m, 'fd')
 				bitrate:   m_int(m, 'bitrate')
 				dbc:       m_str(m, 'dbc')
-				service:   u32(m_int(m, 'service'))
-				version:   u32(m_int(m, 'version'))
+				service:     u32(m_int(m, 'service'))
+				has_service: 'service' in m
+				version:     u32(m_int(m, 'version'))
 			}
 			// [bus.<name>.nm] — the dissolution NM cluster (peers range + timings)
 			if nmv := m['nm'] {
@@ -691,6 +704,19 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 					v.tx_frames[iface] << name
 				}
 			}
+			// the id each signal in the frame rides. A RECEIVE frame binds it just as
+			// much as a transmit one (it is what the bridge dispatches on), so this is
+			// recorded regardless of `tx` — on a someip endpoint it is the EVENT id.
+			if name != '' && 'id' in m {
+				if iface := iface_of(bus) {
+					fid := m_u32(m, 'id')
+					if sv := m['signals'] {
+						for sg in sv.array() {
+							v.sig_frame_id['${iface}|${sg.string()}'] = fid
+						}
+					}
+				}
+			}
 		}
 	}
 	// [target].kind — loom2v generates NM only for the threadx target (it forces
@@ -732,6 +758,8 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 		v.someip_iface = key_iface[sbus] or { sbus }
 		v.someip_service = m_u32(sm, 'service')
 		v.someip_version = m_u32(sm, 'version')
+		v.someip_peer = m_str(sm, 'peer')
+		v.someip_port = m_int(sm, 'port')
 	}
 	// [trace] — the TraceModule transmits its record frame (record_id, default
 	// 0x7e5) AND command responses (rsp_id, default 0x7e3) on the trace bus (the

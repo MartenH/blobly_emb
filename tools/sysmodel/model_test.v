@@ -3756,10 +3756,11 @@ fn clean_someip() System {
 	return System{
 		buses: [
 			Bus{
-				name:    'backbone'
-				kind:    'someip'
-				service: 0x0100
-				version: 1
+				name:        'backbone'
+				kind:        'someip'
+				service:     0x0100
+				has_service: true
+				version:     1
 			},
 		]
 		nodes: [
@@ -3780,6 +3781,12 @@ fn clean_someip() System {
 					someip_iface:   '192.168.0.51'
 					someip_service: 0x0100
 					someip_version: 1
+					someip_peer:    '192.168.0.50:30490'
+					someip_port:    30490
+					sig_frame_id:   {
+						'192.168.0.51|BenchLoad': u32(0x8001)
+						'192.168.0.51|LampCmd':   u32(0x8010)
+					}
 				}
 			},
 			Node{
@@ -3799,6 +3806,12 @@ fn clean_someip() System {
 					someip_iface:   '192.168.0.50'
 					someip_service: 0x0100
 					someip_version: 1
+					someip_peer:    '192.168.0.51:30490'
+					someip_port:    30490
+					sig_frame_id:   {
+						'192.168.0.50|BenchLoad': u32(0x8001)
+						'192.168.0.50|LampCmd':   u32(0x8010)
+					}
 				}
 			},
 		]
@@ -3887,7 +3900,7 @@ fn test_contract_fields_must_match_the_carrier() {
 	s.buses[0].dbc = 'backbone.dbc'
 	assert errs(validate_system(s)).any(it.contains('carries a service, not DBC frames')), 'someip bus with a dbc must be rejected'
 	mut c := clean_system()
-	c.buses[0].service = 0x0100
+	c.buses[0].has_service = true
 	assert errs(validate_system(c)).any(it.contains('a CAN bus carries DBC frames')), 'can bus with a service must be rejected'
 }
 
@@ -3897,9 +3910,10 @@ fn test_someip_bus_contract_is_the_service() {
 	mut s := System{
 		buses:   [
 			Bus{
-				name:    'backbone'
-				kind:    'someip'
-				service: 0x0100
+				name:        'backbone'
+				kind:        'someip'
+				service:     0x0100
+				has_service: true
 			},
 		]
 		signals: [
@@ -3912,7 +3926,7 @@ fn test_someip_bus_contract_is_the_service() {
 	}
 	// no "bus has no `dbc`" error: a someip signal has no DBC frame to conform to
 	assert !errs(check_dbc_conformance(s)).any(it.contains('no `dbc`')), errs(check_dbc_conformance(s)).str()
-	s.buses[0].service = 0
+	s.buses[0].has_service = false
 	e := errs(check_topology_wellformed(s))
 	assert e.any(it.contains('kind = "someip" needs a `service`')), e.str()
 }
@@ -3924,9 +3938,10 @@ fn test_dissolved_signal_on_someip_bus_is_error() {
 	s := System{
 		buses:   [
 			Bus{
-				name:    'backbone'
-				kind:    'someip'
-				service: 0x0100
+				name:        'backbone'
+				kind:        'someip'
+				service:     0x0100
+				has_service: true
 			},
 		]
 		signals: [
@@ -3949,9 +3964,10 @@ fn test_dissolved_signal_on_someip_bus_is_error() {
 fn test_node_claiming_two_someip_buses_is_error() {
 	mut s := clean_someip()
 	s.buses << Bus{
-		name:    'backbone2'
-		kind:    'someip'
-		service: 0x0200
+		name:        'backbone2'
+		kind:        'someip'
+		service:     0x0200
+		has_service: true
 	}
 	s.nodes[0].buses << 'backbone2'
 	e := errs(validate_system(s))
@@ -3983,4 +3999,123 @@ version = 1
 	assert view.someip_iface == '192.168.0.51', 'the [someip].bus key must resolve to the interface, got "${view.someip_iface}"'
 	assert view.someip_service == 0x0100
 	assert view.someip_version == 1
+}
+
+// --- what MEMBERSHIP alone does not give you (codex #248 r4) ---
+//
+// There is no service discovery on the target: the generated bridge talks ONLY to
+// its static peer and dispatches a received payload on the EVENT id. So two nodes
+// naming the same bus are not thereby connected, and syscheck must not credit
+// reachability across them until the wiring actually lines up.
+
+// each member's peer must be the OTHER member's endpoint, or both send into the void
+// (e.g. both pointing at the off-system bench tool at .190).
+fn test_someip_peers_must_be_reciprocal() {
+	mut s := clean_someip()
+	s.nodes[0].view.someip_peer = '192.168.0.190:30491' // the bench tool, not the peer node
+	e := errs(validate_system(s))
+	assert e.any(it.contains('[someip].peer is "192.168.0.190:30491"')
+		&& it.contains('never exchange a datagram')), e.str()
+}
+
+fn test_someip_peer_port_mismatch_is_error() {
+	mut s := clean_someip()
+	s.nodes[0].view.someip_peer = '192.168.0.50:30999' // right node, wrong port
+	e := errs(validate_system(s))
+	assert e.any(it.contains('never exchange a datagram')), e.str()
+}
+
+// a static peer is point-to-point: a third member cannot be wired at all today.
+fn test_someip_third_member_is_error() {
+	mut s := clean_someip()
+	mut third := s.nodes[1]
+	third.name = 'hmi'
+	third.trace = 3
+	third.view.someip_iface = '192.168.0.52'
+	third.view.local_buses = ['192.168.0.52']
+	s.nodes << third
+	e := errs(validate_system(s))
+	assert e.any(it.contains('3 members') && it.contains('point-to-point')), e.str()
+}
+
+// two members bringing up the SAME address on one segment is an ARP conflict.
+fn test_someip_duplicate_endpoint_address_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.someip_iface = '192.168.0.51' // same as tcu
+	s.nodes[1].view.local_buses = ['192.168.0.51']
+	s.nodes[1].view.produces = {
+		'192.168.0.51': ['LampCmd']
+	}
+	s.nodes[1].view.consumes = {
+		'192.168.0.51': ['BenchLoad']
+	}
+	e := errs(validate_system(s))
+	assert e.any(it.contains('both use endpoint address "192.168.0.51"')), e.str()
+}
+
+// the receive bridge dispatches on the EVENT id — matching signal NAMES are not
+// enough, so a producer at 0x8001 and a consumer at 0x8002 must be rejected.
+fn test_someip_event_id_mismatch_is_error() {
+	mut s := clean_someip()
+	s.nodes[1].view.sig_frame_id['192.168.0.50|BenchLoad'] = u32(0x8002)
+	e := errs(validate_system(s))
+	assert e.any(it.contains('event 0x8001 on "tcu"') && it.contains('0x8002 on "sysnode"')), e.str()
+}
+
+fn test_someip_signal_without_an_event_id_is_error() {
+	mut s := clean_someip()
+	s.nodes[0].view.sig_frame_id.delete('192.168.0.51|BenchLoad')
+	e := errs(validate_system(s))
+	assert e.any(it.contains('transmits signal "BenchLoad"') && it.contains('no [[frame]] id')), e.str()
+}
+
+// service 0x0000 is a legal id (the per-node schema takes the full u16 range), so
+// the bus check must reject an OMITTED key, not the value zero.
+fn test_someip_service_zero_is_a_legal_id() {
+	mut s := clean_someip()
+	s.buses[0].service = 0
+	s.buses[0].has_service = true
+	s.nodes[0].view.someip_service = 0
+	s.nodes[1].view.someip_service = 0
+	e := errs(validate_system(s))
+	assert !e.any(it.contains('needs a `service`')), 'service = 0x0000 is a declared id, not an omission: ${e}'
+}
+
+// the endpoint's peer/port and each signal's event id come from the node's ecu.toml
+// (a RECEIVE frame binds its event just as much as a transmit one).
+fn test_parse_node_view_extracts_peer_and_event_ids() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_someip_ev_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.51"
+[someip]
+bus     = "eth0"
+service = 0x0100
+port    = 30490
+peer    = "192.168.0.190:30491"
+[[frame]]
+name    = "BenchTelem"
+bus     = "eth0"
+id      = 0x8001
+signals = ["BenchLoad"]
+tx      = { mode = "cyclic", cycle_ms = 300 }
+[[frame]]
+name    = "BenchCmd"
+bus     = "eth0"
+id      = 0x8010
+signals = ["LampCmd"]
+') or {
+		panic(err)
+	}
+	doc := toml.parse_file(os.join_path(dir, 'n.toml')) or { panic(err) }
+	view := parse_node_view(doc)
+	assert view.someip_peer == '192.168.0.190:30491'
+	assert view.someip_port == 30490
+	assert view.sig_frame_id['192.168.0.51|BenchLoad'] or { 0 } == u32(0x8001)
+	assert view.sig_frame_id['192.168.0.51|LampCmd'] or { 0 } == u32(0x8010), 'a RECEIVE frame binds its event id too'
 }

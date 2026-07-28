@@ -146,6 +146,19 @@ foreign one, so mismatched members are silently deaf to each other), and its
 exactly like a CAN node's. Routing *across* a someip bus (the CAN↔SOME/IP
 gateway) is a later phase and is rejected today rather than half-generated.
 
+**Naming the same bus does not connect two nodes.** There is no service discovery
+on the target: the generated bridge sends only *to* its configured static `peer`,
+accepts only *from* it, and dispatches a received payload on the **event id**. A
+CAN wire connects whoever is on it; a SOME/IP link is wired point to point. So
+membership is credited as reachability only when the wiring agrees:
+
+| must hold | why |
+|---|---|
+| each member's `peer` is the other's `<address>:<port>` | the bridge talks to nobody else — two nodes both pointing at a bench tool never exchange a datagram |
+| at most **2** members per bus | a static peer is point-to-point; a third member cannot be wired at all until service discovery exists |
+| one endpoint address per member | two nodes at one IP bring up the same address on the segment (ARP conflict) |
+| a shared signal rides the **same event id** on both ends | the receive bridge dispatches on the id, so matching names alone never deliver |
+
 The Linux node (blobly_net) attaches on `diag` — the cloud/dev tier that pushes
 campaigns and observes; the H735 sysnode stages the images (its storage) and
 reflashes each functional node over its bus. The system runs standalone without

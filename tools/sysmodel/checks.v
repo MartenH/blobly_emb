@@ -675,11 +675,11 @@ fn check_topology_wellformed(s System) []Issue {
 		// the service IS a someip bus's contract — the id every member's receive
 		// envelope gates on. Without it there is nothing for members to agree about,
 		// and check_someip_membership would "match" them all at 0x0.
-		if b.kind == 'someip' && b.service == 0 {
+		if b.kind == 'someip' && !b.has_service {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-003'
-				msg:      'bus "${b.name}": kind = "someip" needs a `service` — it is the contract members are held to (a CAN bus has its `dbc`)'
+				msg:      'bus "${b.name}": kind = "someip" needs a `service` — it is the contract members are held to (a CAN bus has its `dbc`). 0x0000 is a legal id; the key must be PRESENT'
 			}
 		}
 		if b.kind == 'someip' && b.dbc != '' {
@@ -689,7 +689,7 @@ fn check_topology_wellformed(s System) []Issue {
 				msg:      'bus "${b.name}": kind = "someip" carries a service, not DBC frames — remove `dbc = "${b.dbc}"` (it is never loaded)'
 			}
 		}
-		if b.kind == 'can' && (b.service != 0 || b.version != 0) {
+		if b.kind == 'can' && (b.has_service || b.version != 0) {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-003'
@@ -941,6 +941,13 @@ fn check_bus_membership(s System) []Issue {
 			}
 		}
 	}
+	// what the MEMBERS of a someip bus owe each other (reciprocal peers, one address
+	// each, agreed event ids) — membership alone does not connect two eth nodes.
+	for b in s.buses {
+		if b.kind == 'someip' {
+			issues << check_someip_bus(s, b)
+		}
+	}
 	return issues
 }
 
@@ -984,6 +991,116 @@ fn check_someip_membership(n Node, b Bus) []Issue {
 		}
 	}
 	return issues
+}
+
+// check_someip_bus enforces what a SOME/IP bus's MEMBERS owe each other — the part
+// a shared bus name does not give you. There is no service discovery on the target:
+// the generated bridge sends only TO its configured static peer and accepts only
+// FROM it, and it dispatches a received payload on the EVENT id. So membership alone
+// never means "connected", and syscheck must not credit reachability on it.
+//
+//   - one address per member: two endpoints resolving to the same IP bring up the
+//     same address on one segment (ARP conflict, nondeterministic delivery);
+//   - the peers must be RECIPROCAL: each member's `peer` is the other's
+//     `<address>:<port>`. A static peer is point-to-point, so a bus with >2 members
+//     cannot be wired at all today — say that instead of generating deaf nodes;
+//   - the EVENT ids must agree: a producer sending "BenchLoad" as 0x8001 and a
+//     consumer expecting 0x8002 match by NAME and never talk (REQ-TOPO-005).
+fn check_someip_bus(s System, bus Bus) []Issue {
+	mut issues := []Issue{}
+	mut members := []Node{}
+	for n in s.nodes {
+		if bus.name in n.buses && n.view.has_someip {
+			members << n
+		}
+	}
+	// one endpoint address per member
+	mut addr_of := map[string]string{} // iface -> the node that already claimed it
+	for n in members {
+		if n.view.someip_iface == '' {
+			continue
+		}
+		if prev := addr_of[n.view.someip_iface] {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'bus "${bus.name}": nodes "${prev}" and "${n.name}" both use endpoint address "${n.view.someip_iface}" — one address per node on a segment'
+			}
+		} else {
+			addr_of[n.view.someip_iface] = n.name
+		}
+	}
+	if members.len < 2 {
+		return issues // a single member has no peer on-system to be reciprocal with
+	}
+	if members.len > 2 {
+		issues << Issue{
+			severity: .error
+			req:      'REQ-TOPO-005'
+			msg:      'bus "${bus.name}": ${members.len} members (${members.map(it.name).join(', ')}) — a static SOME/IP peer is point-to-point, so a bus carries at most 2 members until service discovery exists'
+		}
+		return issues
+	}
+	a, b := members[0], members[1]
+	for x, y in {
+		a.name: b
+		b.name: a
+	} {
+		me := if x == a.name { a } else { b }
+		want := '${y.view.someip_iface}:${y.view.someip_port}'
+		if me.view.someip_peer != want {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${me.name}": [someip].peer is "${me.view.someip_peer}" but bus "${bus.name}" puts it with "${y.name}" at "${want}" — the bridge talks ONLY to its static peer, so these two never exchange a datagram'
+			}
+		}
+	}
+	// the EVENT each shared signal rides must be the same on both ends
+	prod := producers_on(s, bus)
+	cons := consumers_on(s, bus)
+	for sig, pnodes in prod {
+		cnodes := cons[sig] or { continue }
+		for pn in pnodes {
+			for cn in cnodes {
+				p := node_named(s, pn) or { continue }
+				c := node_named(s, cn) or { continue }
+				pid := p.view.sig_frame_id['${p.view.someip_iface}|${sig}'] or {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-005'
+						msg:      'bus "${bus.name}": node "${pn}" transmits signal "${sig}" but binds it to no [[frame]] id — a SOME/IP event needs the id the receiver dispatches on'
+					}
+					continue
+				}
+				cid := c.view.sig_frame_id['${c.view.someip_iface}|${sig}'] or {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-005'
+						msg:      'bus "${bus.name}": node "${cn}" receives signal "${sig}" but binds it to no [[frame]] id — a SOME/IP event needs the id the receiver dispatches on'
+					}
+					continue
+				}
+				if pid != cid {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-005'
+						msg:      'bus "${bus.name}": signal "${sig}" is event 0x${pid.hex()} on "${pn}" but 0x${cid.hex()} on "${cn}" — the receive bridge dispatches on the event id, so the value never arrives'
+					}
+				}
+			}
+		}
+	}
+	return issues
+}
+
+fn node_named(s System, name string) ?Node {
+	for n in s.nodes {
+		if n.name == name {
+			return n
+		}
+	}
+	return none
 }
 
 // someip_endpoint_of returns the node's local SOME/IP endpoint interface IF it
