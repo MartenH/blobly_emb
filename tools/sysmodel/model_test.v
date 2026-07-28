@@ -3891,10 +3891,9 @@ fn test_contract_fields_must_match_the_carrier() {
 	assert errs(validate_system(c)).any(it.contains('a CAN bus carries DBC frames')), 'can bus with a service must be rejected'
 }
 
-// REQ-TOPO-003: a someip signal rides an EVENT of the service — there is no DBC
-// frame to conform to, so the DBC requirement must not reject it; the service is
-// what it needs instead (codex #248).
-fn test_someip_signal_bus_needs_a_service_not_a_dbc() {
+// REQ-TOPO-003: a someip bus's contract is its SERVICE — the DBC requirement must
+// not reject it (the signal rides an event), and the service must be declared.
+fn test_someip_bus_contract_is_the_service() {
 	mut s := System{
 		buses:   [
 			Bus{
@@ -3911,10 +3910,52 @@ fn test_someip_signal_bus_needs_a_service_not_a_dbc() {
 			},
 		]
 	}
-	assert errs(check_dbc_conformance(s)).len == 0, errs(check_dbc_conformance(s)).str()
+	// no "bus has no `dbc`" error: a someip signal has no DBC frame to conform to
+	assert !errs(check_dbc_conformance(s)).any(it.contains('no `dbc`')), errs(check_dbc_conformance(s)).str()
 	s.buses[0].service = 0
-	e := errs(check_dbc_conformance(s))
-	assert e.any(it.contains('someip bus "backbone"') && it.contains('no `service`')), e.str()
+	e := errs(check_topology_wellformed(s))
+	assert e.any(it.contains('kind = "someip" needs a `service`')), e.str()
+}
+
+// DISSOLUTION lowers a system-scope signal into CAN wiring; there is no SOME/IP
+// lowering yet, so the combination must fail the gate rather than be generated as a
+// frame with no DBC (the hole opened by skipping the DBC contract for someip).
+fn test_dissolved_signal_on_someip_bus_is_error() {
+	s := System{
+		buses:   [
+			Bus{
+				name:    'backbone'
+				kind:    'someip'
+				service: 0x0100
+			},
+		]
+		signals: [
+			SysSignal{
+				name:     'BenchLoad'
+				producer: 'tcu'
+				bus:      'backbone'
+				fields:   {
+					'load': 'u8'
+				}
+			},
+		]
+	}
+	e := errs(check_signals_dissolved(s))
+	assert e.any(it.contains('is kind = "someip"') && it.contains('not lowered')), e.str()
+}
+
+// a node has ONE [someip] block, so it offers ONE service — two claimed someip
+// buses would validate both contracts against the same endpoint.
+fn test_node_claiming_two_someip_buses_is_error() {
+	mut s := clean_someip()
+	s.buses << Bus{
+		name:    'backbone2'
+		kind:    'someip'
+		service: 0x0200
+	}
+	s.nodes[0].buses << 'backbone2'
+	e := errs(validate_system(s))
+	assert e.any(it.contains('claims 2 someip buses')), e.str()
 }
 
 // the node's [someip] endpoint is parsed from its ecu.toml with the bus key RESOLVED

@@ -381,6 +381,23 @@ fn check_signals_dissolved(s System) []Issue {
 			sig_seen[sig.name] = true
 		}
 	}
+	// DISSOLUTION lowers a system-scope signal into CAN wiring: sysgen emits the
+	// node's [bus.canN] + [[signal]] + the DBC frame it rides. There is no SOME/IP
+	// lowering yet — a node's eth wiring is still AUTHORED in its ecu.toml ([someip]
+	// + [[frame]], as examples/system_full/nodes/tcu does). Reject the combination
+	// HERE: skipping the DBC contract for a someip bus (its signals ride service
+	// events, not frames) would otherwise let a dissolved someip signal pass the gate
+	// and be lowered as a CAN frame with no DBC (REQ-TOPO-003).
+	for sig in s.signals {
+		b := s.bus_by_name(sig.bus) or { continue }
+		if b.kind == 'someip' {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'signal "${sig.name}": bus "${sig.bus}" is kind = "someip" — SOME/IP wiring is not lowered from system.toml yet; author it in the node\'s ecu.toml ([someip] + [[frame]]) and declare the bus membership only'
+			}
+		}
+	}
 	mut frame_owner := map[string]string{} // (bus, frame) -> producer node
 	mut frame_cycle := map[string]int{}    // (bus, frame) -> cycle_ms
 	for sig in s.signals {
@@ -655,6 +672,16 @@ fn check_topology_wellformed(s System) []Issue {
 		// the contract fields follow the carrier: a `dbc` on a someip bus (or a
 		// service/version on a CAN one) is read by nothing and would be silently
 		// ignored — the same typo trap one level down.
+		// the service IS a someip bus's contract — the id every member's receive
+		// envelope gates on. Without it there is nothing for members to agree about,
+		// and check_someip_membership would "match" them all at 0x0.
+		if b.kind == 'someip' && b.service == 0 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'bus "${b.name}": kind = "someip" needs a `service` — it is the contract members are held to (a CAN bus has its `dbc`)'
+			}
+		}
 		if b.kind == 'someip' && b.dbc != '' {
 			issues << Issue{
 				severity: .error
@@ -814,6 +841,23 @@ fn node_has_bus_signal(n Node) bool {
 fn check_bus_membership(s System) []Issue {
 	mut issues := []Issue{}
 	for n in s.nodes {
+		// a node offers ONE SOME/IP service: its ecu.toml has a single [someip] block,
+		// so claiming two someip buses would validate both against the same endpoint
+		// and generate one service for two contracts (REQ-TOPO-005).
+		mut someip_claims := []string{}
+		for bname in n.buses {
+			b := s.bus_by_name(bname) or { continue }
+			if b.kind == 'someip' {
+				someip_claims << bname
+			}
+		}
+		if someip_claims.len > 1 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": claims ${someip_claims.len} someip buses (${someip_claims.join(', ')}) — a node has one [someip] endpoint, so it offers one service'
+			}
+		}
 		for bname in n.buses {
 			b := s.bus_by_name(bname) or {
 				issues << Issue{
