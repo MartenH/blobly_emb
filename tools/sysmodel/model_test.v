@@ -4247,3 +4247,59 @@ e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8 }
 	assert view.sig_fields['192.168.0.51|BenchLoad'] or { '' } == 'load:u8'
 	assert (view.sig_payload['192.168.0.51|BenchLoad'] or { '' }).contains('data_id=33'), view.sig_payload.str()
 }
+
+// --- round 6: what is NOT data (codex #248 r6) ---
+
+// TOML table order is not data — ecumodel.eth_layouts sorts field names before
+// packing, so two nodes listing the same fields in different order build the
+// IDENTICAL wire and must not be reported as a payload mismatch.
+fn test_someip_field_order_is_not_a_mismatch() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_someip_ord_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	mk := fn (dir string, file string, fields string) NodeView {
+		os.write_file(os.join_path(dir, file), '
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.51"
+[someip]
+bus     = "eth0"
+service = 0x0100
+[[signal]]
+name = "Telem"
+fields = ${fields}
+from = "app"
+to   = "eth0"
+') or {
+			panic(err)
+		}
+		doc := toml.parse_file(os.join_path(dir, file)) or { panic(err) }
+		return parse_node_view(doc)
+	}
+	a := mk(dir, 'a.toml', '{ load = "u8", ticks = "u32" }')
+	b := mk(dir, 'b.toml', '{ ticks = "u32", load = "u8" }')
+	assert a.sig_fields['192.168.0.51|Telem'] or { 'a' } == b.sig_fields['192.168.0.51|Telem'] or { 'b' },
+		'field order is not data (eth_layouts sorts by name): ${a.sig_fields} vs ${b.sig_fields}'
+}
+
+// a port with leading zeroes is the same port: loom2v parses it numerically, so a
+// correctly wired pair must not be reported as unreachable.
+fn test_someip_peer_port_spelling_is_normalized() {
+	mut s := clean_someip()
+	s.nodes[0].view.someip_peer = '192.168.0.50:030490'
+	e := errs(validate_system(s))
+	assert !e.any(it.contains('never exchange a datagram')), 'a zero-padded port is the same port: ${e}'
+}
+
+// NM is the CAN alive-frame protocol — a cluster declared on a someip carrier
+// configures nothing and would be silently ignored.
+fn test_nm_cluster_on_a_someip_bus_is_error() {
+	mut s := clean_someip()
+	s.buses[0].has_nm_cluster = true
+	s.buses[0].nm_peers_lo = 0x500
+	s.buses[0].nm_peers_hi = 0x53f
+	e := errs(validate_system(s))
+	assert e.any(it.contains('cannot carry an NM cluster')), e.str()
+}

@@ -175,7 +175,8 @@ pub mut:
 	// the PAYLOAD contract each signal rides, same key. The generator derives the wire
 	// layout from these inputs, so two ends that agree on them derive the SAME layout —
 	// comparing the inputs is exact without duplicating the packing rules here.
-	//   sig_fields:  the signal's fields, "name:type,..." IN DECLARATION ORDER
+	//   sig_fields:  the signal's fields, "name:type,..." SORTED BY NAME (the order the
+	//                generator packs them in — TOML table order is not data)
 	//   sig_payload: the frame's own contract — its signal list (order = packing order)
 	//                and E2E parameters. The frame NAME is deliberately excluded: it is
 	//                node-local, and two peers may spell it differently on one wire.
@@ -705,12 +706,18 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 			if name == '' {
 				continue
 			}
-			// the signal's fields IN DECLARATION ORDER — half of the payload contract
-			// two ends of a someip event must share (the frame supplies the other half).
+			// the signal's fields — half of the payload contract two ends of a someip
+			// event must share (the frame supplies the other half). Sorted BY NAME, as
+			// ecumodel.eth_layouts does when it derives the wire layout: TOML table order
+			// is not data, so two nodes listing the same fields in different order build
+			// the identical wire and must not be reported as a mismatch.
 			mut fields := []string{}
 			if fv2 := m['fields'] {
-				for fname, ftype in fv2.as_map() {
-					fields << '${fname}:${ftype.string()}'
+				mut fnames := fv2.as_map().keys()
+				fnames.sort()
+				fm2 := fv2.as_map()
+				for fname in fnames {
+					fields << '${fname}:${(fm2[fname] or { toml.Any('') }).string()}'
 				}
 			}
 			flat := fields.join(',')

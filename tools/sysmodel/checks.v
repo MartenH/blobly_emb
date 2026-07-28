@@ -699,6 +699,16 @@ fn check_topology_wellformed(s System) []Issue {
 				msg:      'bus "${b.name}": `version` is outside the SOME/IP interface version range 0..255'
 			}
 		}
+		// NM is the CAN alive-frame protocol (the node validator rejects [nm] on an eth
+		// bus). A cluster declared on a someip carrier configures nothing and would be
+		// silently ignored — the same typo trap as a `dbc` here.
+		if b.kind == 'someip' && b.has_nm_cluster {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-004'
+				msg:      'bus "${b.name}": kind = "someip" cannot carry an NM cluster — network management is the CAN alive-frame protocol; remove [bus.${b.name}.nm]'
+			}
+		}
 		if b.kind == 'someip' && b.dbc != '' {
 			issues << Issue{
 				severity: .error
@@ -1166,10 +1176,21 @@ fn canon_addr(a string) string {
 	return out.join('.')
 }
 
-// canon_endpoint canonicalizes an "<address>:<port>" peer spelling the same way.
+// canon_endpoint canonicalizes an "<address>:<port>" peer spelling the same way —
+// the PORT too: loom2v parses it numerically, so ":030490" and ":30490" are one
+// endpoint and must not be reported as two.
 fn canon_endpoint(e string) string {
 	i := e.last_index(':') or { return canon_addr(e) }
-	return '${canon_addr(e[..i])}:${e[i + 1..]}'
+	addr := canon_addr(e[..i])
+	port := e[i + 1..]
+	mut digits := port.len > 0
+	for c in port {
+		if c < `0` || c > `9` {
+			digits = false
+			break
+		}
+	}
+	return if digits { '${addr}:${port.u32()}' } else { '${addr}:${port}' }
 }
 
 fn node_named(s System, name string) ?Node {
