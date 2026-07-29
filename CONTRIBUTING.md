@@ -33,3 +33,11 @@ To catch it before it reaches CI, install the local hook:
 ```sh
 git config core.hooksPath .githooks
 ```
+
+## Commit messages
+
+The same rule applies to what a message **says**, not just who wrote it: a body may not contain
+an email address other than the maintainer's or a bot trailer
+(`Co-Authored-By: … <noreply@anthropic.com>`). Describe it instead — "rejects a non-maintainer
+work address". A message is permanent: it survives branch deletion, and removing one costs a
+rewrite of every branch that carries it.

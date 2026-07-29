@@ -617,7 +617,7 @@ The `REQ-TRACE-*` here derive `SYS-REQ-OBS-002` "handler-level runtime observabi
 `REQ-TELEM-005` below derives `SYS-REQ-OBS-001` (processor **load** observability — it's a
 load frame, not handler runtime). All ASIL QM. **REQ-TRACE-001** (measurement) is agreed +
 verified and **REQ-TRACE-002** (identity) is draft — both now in
-`requirements/trace.toml`. The ones below are still **proposed (draft in this doc)** until
+`requirements/telemetry.toml`. The ones below are still **proposed (draft in this doc)** until
 their phase lands, so nothing is marked covered prematurely:
 
 - **REQ-TELEM-005** *(→ SYS-REQ-OBS-001, load)* — the ECU shall transmit the multi-window

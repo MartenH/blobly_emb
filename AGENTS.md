@@ -77,8 +77,17 @@ what CI does.
 Every commit must be **authored** by `marten.hildell@gmail.com`; the committer may also be
 `noreply@github.com` (GitHub rewrites it on a web squash-merge). `.github/workflows/guard.yml`
 fails the build otherwise, and also auto-closes external PRs while the project is in its design
-phase (see `CONTRIBUTING.md`). Install the local hook so it fails in a second instead of after a
+phase (see `CONTRIBUTING.md`). Install the local hooks so it fails in a second instead of after a
 push: `git config core.hooksPath .githooks`.
+
+**Commit MESSAGES may not carry email addresses either.** The rule above covers *who* commits;
+the message body is checked separately, because an address written into one is permanent — it
+survives branch deletion, `git log` and code search index it, and removing it costs a rewrite of
+every branch that carries it (GitHub's PR refs keep it even then). Only the maintainer address
+and bot trailers (`Co-Authored-By: … <noreply@anthropic.com>`, `noreply@github.com`) are allowed.
+Describe an address instead of quoting it — "a non-maintainer work address". The hooks cover both
+the ordinary commit path (`commit-msg`) and cherry-pick/rebase (`pre-push`), which git does not
+route through `commit-msg`.
 
 ## Review guidelines
 
