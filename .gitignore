@@ -57,6 +57,8 @@ tools/syscheck/syscheck
 tools/sysgen/sysgen
 tools/ecucheck/ecucheck
 
-# Generated documentation site (mkdocs build output) — regenerable, was committed once.
-/site/
+# Compiled test binaries: `v -o <dir>/<name> <name>_test.v` drops the executable beside
+# its source. One (tools/bulk/bulk_test) reached a PR after the tool binaries above were
+# already ignored, so cover the shape rather than each name.
+tools/*/*_test
 
