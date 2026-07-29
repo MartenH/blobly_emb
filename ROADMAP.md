@@ -102,10 +102,12 @@ Kept standalone (not features of a running system): `bulk_bench` (host micro-ben
 - ✅ **Bulk capability split** (`#231`) — the generated cross-core wrappers are
   role-restricted per image (producer: init/loan/publish; consumer: valid/take/
   release), so a wrong-role call is a compile error.
-- 🧭 **Next bulk rungs** — warm-reset attach lifecycle (retract-retained-pool, the
-  M4-independent-reset race), `osal.bulk` (a declarable service thread so an *app*
+- 🧭 **Next bulk rungs** — `osal.bulk` (a declarable service thread so an *app*
   partition can terminate bulk, in the region table with directional permissions),
-  cache hooks, off-chip mapping (ISO-TP / SOME/IP-TP).
+  cache hooks, off-chip mapping (ISO-TP / SOME/IP-TP). **The M4-independent-reset race
+  is NOT recovered** — unlike a latest-value signal, a bulk pool transfers ownership,
+  so there is no safe partial state to re-attach to (decided 2026-07-26). A satellite
+  restart shuts the system down instead — see *Fault handling & shutdown*.
 - ✅ **Bulk transport benchmark** (`#216`) — `tools/bulk_bench` in `make bench`:
   the ring moves ownership at ~5 M transfers/s (0.3 µs median publish→take,
   pinned cross-core) and ~0.9–6 GB/s payload filled+consumed, vs ~3–10 ms of
@@ -168,12 +170,35 @@ Kept standalone (not features of a running system): `bulk_bench` (host micro-ben
   bench-verified: the H735 gateway forwards 3 layout-identical routes across two
   FDCAN buses (raw copy + id remap), closed loop observed on both buses. A new
   `boards/h723` + a `.blobnet` monitor project ride along.
-- 🧭 **Gateway/board hardening** (codex #224 re-review, real but dormant in
-  system_full — no `[nm]`/`[trace]`/`[io]` there): NM-gate the gateway forwards
-  (they bypass the post-tick `nm_up` gate every other TX path respects), set
-  `-DTX_ENABLE_EXECUTION_CHANGE_NOTIFY` when `trace_hooks.c` is linked, validate the
-  *effective* destination cadence (not just DBC `GenMsgCycleTime`), reprogram SysTick
-  on the H723/H755 HSE-fallback path, and give `boards/h723` a bonded-pad map for `[io]`.
+- ✅ **Gateway/board hardening** (codex #224 re-review) — mostly landed: NM-gate on the
+  gateway forwards (`#226`), effective destination-cadence validation + `boards/h723`
+  bonded-pad map (`#229`), and the HSE-fallback path now HANGS rather than reprogramming
+  SysTick (`#229`, see *Fault handling & shutdown*). Deliberately NOT done: the
+  `-DTX_ENABLE_EXECUTION_CHANGE_NOTIFY` define on the system_full nodes — they don't
+  enable `[trace]`, so the port never calls the hooks and gc-sections strips them;
+  adding it would only waste cycles firing into an undumped ring.
+
+## Fault handling & shutdown
+
+**Open — there is no unified fault/shutdown design yet.** Fault paths currently resolve
+independently, and *how an ECU should stop* (hang / reset / safe state) is undecided. Decisions
+made and questions still open:
+
+- ✅ **Clock bring-up fault** (`#229`) — `board_clock_fault()` HANGS deterministically (SWD reads
+  the PC + RCC/PWR). An ECU on the wrong clock has already violated its real-time timing, and the
+  FDCAN kernel clock rides the same HSE, so "limp to stay diagnosable" doesn't hold.
+- 🧭 **M4 (satellite) independent reset** (decided 2026-07-26: *no recovery*) — a bulk pool is an
+  ownership transport with no safe partial state to re-attach to (unlike a self-healing latest-
+  value signal), so a satellite restart should take the whole system down: a **system reset of
+  both cores**, cold-start. OPEN — the *mechanism*: (a) CM7-supervised (watch the CM4 boot-epoch/
+  heartbeat in SRAM4, issue `NVIC_SystemReset`), or (b) hardware reset-domain coupling (RCC /
+  option bytes route a CM4 reset to a system reset — needs an RM check). A watchdog catches a
+  HANGING M4, not a resetting one.
+- 🧭 **HSE-CSS** — arm the Clock Security System so a *runtime* crystal loss lands in the same
+  stop path (hang / system reset) instead of a silent HSI downgrade. Touches the shared NMI
+  vector; not bench-verifiable without physically killing the crystal.
+- 🧭 **The general question** — pick the ECU fault model (hang, reset-loop, latched safe state,
+  external watchdog) and make the above consistent with it, rather than per-path choices.
 
 ## Observability
 
