@@ -12,7 +12,7 @@ A **partition** (≈ AUTOSAR OS-Application) is one MPU protection domain. It ow
 - its code/rodata (RX),
 - a set of IOC channels it may read and/or write.
 
-Partitions are declared in [`config/ecu.toml`](../config/ecu.toml) (`[[partition]]`)
+Partitions are declared in `ecu.toml` (`[[partition]]`)
 and pinned to a core (AMP). A fault in an unprivileged partition stays local —
 it cannot corrupt another partition or the kernel.
 

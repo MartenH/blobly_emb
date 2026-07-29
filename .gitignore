@@ -42,3 +42,21 @@ examples/*/nodes/*/sig/
 # the CI's own V toolchain: vlang/setup-v builds V inside the workspace, and the
 # freshness gate reads any untracked file as generated-output drift
 vlang/
+
+# Agent working state — sessions, worktrees, scratch. Excluded here rather than only in
+# .git/info/exclude, which is local to one clone and silently absent from every other.
+.claude/
+
+# Compiled V tool binaries: `v -o tools/<t>/<t> ...` drops the executable beside its source.
+# Several of these (loom2v, cfg2v, dbc2cfg, dbcmerge — 5.8 MB) were committed once already.
+tools/loom2v/loom2v
+tools/cfg2v/cfg2v
+tools/dbc2cfg/dbc2cfg
+tools/dbcmerge/dbcmerge
+tools/syscheck/syscheck
+tools/sysgen/sysgen
+tools/ecucheck/ecucheck
+
+# Generated documentation site (mkdocs build output) — regenerable, was committed once.
+/site/
+
