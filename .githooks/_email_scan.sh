@@ -31,7 +31,7 @@ scan_message_text() {
 	# git drops it before storing, so scanning it would reject a clean message over some
 	# source line. But that cut is ONLY valid while the message is still a template: in a
 	# STORED message the same line is ordinary content, and truncating there let a message
-	# hide an address behind a scissors marker — bypassing every gate (codex #66). So the
+	# hide an address behind a scissors marker — bypassing every gate (codex #249). So the
 	# cut applies to templates only, and even then only when a real diff follows it.
 	if [ "$mode" = template ] && grep -q '^diff --git ' "$file" \
 		&& grep -qE -- '-{2,} *>8 *-{2,}' "$file"; then
@@ -68,7 +68,9 @@ scan_message_text() {
 	} \
 		| while IFS= read -r cand; do unwrap_candidate "$cand"; done \
 		| sed -E 's/(@[^[:space:]]*)[#/\\|?!$%^&*+={}]+.*/\1/' \
-		| grep -E '^("[^"]+"|[^@[:space:]]+)@(\[[^]]+\]|([^[:space:].]+\.)+[^[:space:].0-9]{2,})$' \
+		| sed -E 's/(@[^[:space:]]+)\.\..*/\1/' \
+		| grep -E '^("[^"]+"|[^@[:space:]]+)@(\[[^]]+\]|([^[:space:].]+\.)+[^[:space:].]{2,})$' \
+		| grep -vE '\.[0-9]+$' \
 		| sort -u \
 		| grep -viE "$ALLOWED_RE" \
 		| grep -viE "$DOC_RE" || true
@@ -80,7 +82,7 @@ scan_message_text() {
 # in — backtick, ' * _ { } ~ + - and more — is ALSO legal in an email local part, so
 # stripping it unconditionally maps a foreign address onto an allowlisted one: dropping
 # the leading underscore of an address that is otherwise the maintainer's turns it into
-# the maintainer's and it passes (codex #66 r3, reproduced).
+# the maintainer's and it passes (codex #249).
 #
 # So only BALANCED wrappers are removed — an opening delimiter with its matching close.
 # `addr`, [addr], <addr>, "addr", (addr) are unwrapped; a lone leading character is not,
@@ -88,7 +90,7 @@ scan_message_text() {
 # outright: ':' cannot appear in an unquoted local part, so it is never part of one.
 unwrap_candidate() {
 	local c="$1" prev=""
-	c=${c#mailto:}
+	c=${c#[Mm][Aa][Ii][Ll][Tt][Oo]:}
 	while [ "$c" != "$prev" ]; do
 		prev="$c"
 		# Trailing sentence punctuation FIRST, and again each pass. A wrapped address at the
@@ -102,6 +104,10 @@ unwrap_candidate() {
 			'<'*'>') c=${c#<}; c=${c%>} ;;
 			'('*')') c=${c#(}; c=${c%)} ;;
 			'{'*'}') c=${c#\{}; c=${c%\}} ;;
+			'*'*'*') c=${c#\*}; c=${c%\*} ;;
+			'_'*'_') c=${c#_}; c=${c%_} ;;
+			'~'*'~') c=${c#\~}; c=${c%\~} ;;
+			"'"*"'") c=${c#\'}; c=${c%\'} ;;
 			*) ;;
 		esac
 	done
@@ -125,7 +131,7 @@ unwrap_candidate() {
 # redact <address> -> a bounded stand-in, safe to print anywhere.
 # FAIL CLOSED: built by slicing, not by a substitution that can decline to match. A regex
 # that simply fails on a malformed candidate (e.g. "alice.smith@[") would echo the value
-# whole and recreate the disclosure this exists to prevent (codex #66). Output is at most
+# whole and recreate the disclosure this exists to prevent (codex #249). Output is at most
 # one leading character plus two trailing ones, whatever the input looks like.
 redact() {
 	local a="$1" lp dom
