@@ -139,7 +139,8 @@ static inline int bulk_loan(bulk_t *b)
 	uint32_t t = XIOC_LD(&b->f_tail); /* producer-owned */
 	uint32_t h = XIOC_LD(&b->f_head);
 	if (t == h) {
-		XIOC_ST(&b->overflows, XIOC_LD(&b->overflows) + 1u);
+		uint32_t ov = XIOC_LD(&b->overflows);
+		XIOC_ST(&b->overflows, ov + 1u);
 		return -1;
 	}
 	XIOC_DMB(); /* the entry write precedes the head we just observed */
