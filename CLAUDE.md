@@ -146,9 +146,12 @@ A watcher that reports "nothing" when something is waiting is worse than no watc
 here exists because a silent version of it lost a review. This repo keeps no status log; the
 incidents are written up in blobly_net's `docs/history.md` (2026-08-12).
 
-- **`--paginate` everything.** 30 per page, ascending, so an un-paginated read drops the
-  **newest** items. Applies to comments AND `commits/<sha>/check-runs`. `--paginate` emits one
-  array per page, so sum with `| awk '{s+=$1} END{print s+0}'` — not `bc` (absent in some agent
+- **`--paginate` everything**, but for two different reasons. Comments come back **ascending**,
+  30 per page, so an un-paginated read drops the **newest** — the ones you are waiting for.
+  `commits/<sha>/check-runs` is ordered by id **descending**, so there an un-paginated read keeps
+  the newest page and drops **older** runs — a long-running job from an earlier workflow can be
+  the one still pending. Either way the first page is not the answer. `--paginate` emits one
+  page per line, so sum with `| awk '{s+=$1} END{print s+0}'` — not `bc` (absent in some agent
   environments), and not `--slurp` (gh refuses it alongside `--jq`). **Capture gh's exit status
   before the pipe**: on an auth or API failure gh returns 1 or 4 and prints nothing, `awk` then
   prints `0` and exits 0, and the result reads exactly like "nothing is waiting". Assign first,
