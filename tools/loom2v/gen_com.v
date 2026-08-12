@@ -483,7 +483,25 @@ fn emit_eth_bridge(m Model) []string {
 	return glue
 }
 
-fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, []string, map[string][]string) {
+// bus_hosts_modules: does this bus carry PLATFORM MODULES rather than signals? The comm thread
+// is where trace and telemetry live (docs/com-modules.md), so a dedicated diagnostic bus needs a
+// partition to own it even though no [[signal]] mentions it.
+//
+// Without this a signal-less trace bus was dropped from the bridge set entirely, so it never
+// became a run() parameter and nothing owned the channel — which is how examples/trace_comm and
+// examples/trace_multicore ended up with a run() their own main.v could not call (#191). The
+// config still declared cmd/rsp/record ids; they simply went nowhere.
+// `trace_host` = the single-partition host runner is already the trace bus's owner, so that bus
+// needs no bridge; generating one anyway produced a partition nothing spawns.
+fn bus_hosts_modules(m Model, bname string, trace_host bool) bool {
+	if trace_host {
+		return false
+	}
+	tbus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
+	return (m.trace.on && tbus == bname) || (m.telem.on && m.telem.bus == bname)
+}
+
+fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Producer) ([]string, []string, map[string][]string) {
 	mut glue := []string{}
 	mut bus_names := []string{}
 	mut bus_dests := map[string][]string{}
@@ -549,8 +567,13 @@ fn emit_bridges(m Model, comm_thread_on bool, producers []Producer) ([]string, [
 				in_routes << r
 			}
 		}
+		// A bus with no signals of its own may still HOST PLATFORM MODULES: the comm thread is
+		// where trace/telemetry live (docs/com-modules.md), so a dedicated diagnostic bus needs
+		// a partition to own it. Skipping it silently is what broke examples/trace_comm and
+		// examples/trace_multicore (#191): the trace bus vanished from run(), taking the dump
+		// path with it, and the config still declared cmd/rsp/record ids that went nowhere.
 		if rx_by_msg.len == 0 && tx_by_msg.len == 0 && conns.len == 0 && my_routes.len == 0
-			&& in_routes.len == 0 {
+			&& in_routes.len == 0 && !bus_hosts_modules(m, bname, trace_host) {
 			continue
 		}
 		bus_names << bname

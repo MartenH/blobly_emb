@@ -10,9 +10,12 @@ module main
 //   sudo make vcan          # once, to bring up vcan0
 //   make run                # generate + build + run on vcan0
 //
-// Drive it from blobly_net (gen/trace-manifest.csv carries the frame ids + both cores' handlers;
-// blobly_net decodes the fixed protocol natively) — a TraceCmd `dump` with core mask 0x0003
-// streams one self-describing block per core out over ISO-TP on 0x7E5.
+// NOT YET, and the reason this example was skipped by CI: loom2v generates the trace ring +
+// dump for the SINGLE-partition host shape only, and warns when it drops it on any other. This
+// config is two partitions, so it builds and runs the two cores' FBs — but no `dump` answers on
+// 0x7E5 and gen/trace-manifest.csv carries no handler rows. comm/trace itself is ready (a module
+// carries one local core plus one imported remote, and multicore_dump_test proves two
+// self-describing blocks over ISO-TP); it is the generator wiring that is missing. See #191.
 import os
 import gen
 import driver.can

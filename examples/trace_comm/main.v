@@ -1,9 +1,13 @@
 module main
 
 // Comm-thread trace demo (P3b, different-bus) — fully generated from ecu.toml. The only hand-written
-// source: open the two channels and hand off to gen.run(). Everything else — the can0 COM bridge
-// (the comm thread), the app FB, the per-core rings, and the partition_trace owner on can1 — is
-// generated into gen/loom_gen.v. run()'s params are the trace bus first, then each bridge bus.
+// source: open the two channels and hand off to gen.run(). The can0 COM bridge (the comm thread)
+// and the app FB are generated into gen/loom_gen.v; can1 gets its own partition as the module
+// host. run()'s params are the buses in NAME order.
+//
+// NOT YET: the trace ring + dump on can1. loom2v generates trace only for the single-partition
+// host shape, and warns when it drops it — see #191. This example builds and runs the comm/app
+// halves; the swimlane it is named for needs that generator work first.
 //
 //   sudo make vcan      # brings up vcan0 (app) + vcan1 (trace)
 //   make run
@@ -28,5 +32,7 @@ fn main() {
 		return
 	}
 	println('trace_comm: app SpeedWork (core 1) + comm_can0 bridge (core 0); trace on ${trace_if}, VehicleSpeed on ${app_if}')
-	gen.run(trch, appch)
+	// Channels go in BUS-NAME order (can0, can1) — run()'s params are sorted so the signature
+	// stays stable as buses are added, not in the order this file happens to open them.
+	gen.run(appch, trch)
 }

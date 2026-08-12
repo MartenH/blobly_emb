@@ -3848,7 +3848,9 @@ fn main() {
 	glue << fb_glue
 
 	// --- generated COM bus bridge(s) — emitted by emit_bridges ---
-	bridge_glue, bnames, bus_dests := emit_bridges(m, comm_thread_on, producers)
+	// trace_host: that runner IS the trace bus's owner, so the bus must not also get a bridge —
+	// two owners on one channel, and the second one dead code nobody spawns.
+	bridge_glue, bnames, bus_dests := emit_bridges(m, comm_thread_on, trace_host, producers)
 	glue << bridge_glue
 
 	// --- SOME/IP eth frame table + derived-layout codec (docs/someip.md) ---
