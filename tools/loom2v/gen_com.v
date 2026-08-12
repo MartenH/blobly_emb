@@ -1262,25 +1262,31 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 		// module_host (above): no signal work, so no tick and no handler — it only has to DRAIN
 		// its channel, since an unread rx queue backs up on a real driver. The frames go nowhere
 		// until the trace module for this shape is generated again (#191).
+		// The scheduler stays even with nothing to schedule: gen.v reserves a CpuLoad scratch
+		// slot for EVERY bus, and partition_telem sums them, so a partition that skipped
+		// accounting would report 0% forever while draining a busy diagnostic bus — under-
+		// reporting the core it runs on. What a module-host bus does NOT get is a 10 ms tick
+		// and an empty handler: that was only an unused-variable warning on every build.
+		glue << '\tmut sched := loom.Scheduler{}'
 		if !module_host {
-			glue << '\tmut sched := loom.Scheduler{}'
 			glue << '\tsched.every(10_000, io_${bb}_10ms, &st)'
 		}
 		glue << '\tfor {'
+		glue << '\t\tloom_t0 := osal.now_us()'
 		if module_host {
 			glue << '\t\tmut rx := can.Frame{}'
 			glue << '\t\tfor st.chan.recv(mut rx) {'
 			glue << '\t\t\t// no consumer yet: the trace module that serves this bus is not'
-			glue << '\t\t\t// generated for this shape (#191). Draining keeps the queue clear.'
+			glue << '\t\t\t// generated for this shape (#191). Draining keeps the queue clear —'
+			glue << '\t\t\t// an unread rx queue backs up on a real driver.'
 			glue << '\t\t}'
 		} else {
-			glue << '\t\tloom_t0 := osal.now_us()'
 			glue << '\t\tsched.run(loom_t0)'
-			glue << '\t\tloom_t1 := osal.now_us()'
-			glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
-			for p in producers {
-				glue << p.partition_loop_body('b:${bname}')
-			}
+		}
+		glue << '\t\tloom_t1 := osal.now_us()'
+		glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
+		for p in producers {
+			glue << p.partition_loop_body('b:${bname}')
 		}
 		glue << '\t\tosal.sleep_us(1000)'
 		glue << '\t}'
