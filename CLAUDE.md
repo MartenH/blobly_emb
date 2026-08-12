@@ -1,12 +1,11 @@
 # blobly_emb — project guide for coding agents
 
-> `AGENTS.md` is a symlink to this file: one guide for **any** agent (Claude Code reads
-> `CLAUDE.md`, Codex and others read `AGENTS.md`). Edit only this file — the same arrangement
-> as blobly_net, and this way round on purpose: Claude Code loads `CLAUDE.md` and nothing else,
-> so the REAL file has to be the one it reads. A checkout without symlink support turns the link
-> into a 9-byte text file, and if that were `CLAUDE.md` the guide would silently not load — which
-> is exactly the failure this replaced, where a whole session worked here without ever reading
-> this file.
+> **This is the guide.** `AGENTS.md` is a one-line pointer here, and a real file rather than a
+> symlink: two agents look for two names — Claude Code reads `CLAUDE.md` and nothing else, Codex
+> and others read `AGENTS.md` — and a symlink either way round becomes a 9-byte text file on a
+> checkout without symlink support, so whichever tool follows the link silently gets a one-word
+> guide. That failure is not hypothetical: this repo had no `CLAUDE.md` at all, so a whole
+> Claude session worked here without ever reading these rules.
 
 Embedded automotive stack in V: sim-first, multicore (AMP), **no runtime heap**.
 A lean alternative to AUTOSAR Classic — app components with typed ports + periodic
@@ -71,6 +70,11 @@ examples`, per-example host builds with generation, and a repo-wide **"Generated
 fresh"** gate. The last one is the usual surprise: a stale committed `gen/` output passes every
 local command and fails CI. Re-run generation before opening the PR.
 
+**Two examples are NOT covered:** `examples/trace_comm` and `examples/trace_multicore` are
+skipped by that loop (`ci.yml`, `SKIPPED (#191)`) because loom2v no longer generates the
+multi-partition trace runner they were built with. Nothing regenerates or builds them, so a
+change there has no CI gate at all until #191 is fixed — build and run them by hand.
+
 **Not gated — verify these yourself:**
 
 - **Cross-compiling the STM32H7 examples.** Needs `arm-none-eabi`, `make deps` for the
@@ -125,9 +129,11 @@ Three things that make the loop work:
   session, once for over an hour. Match the verdict by the head SHA codex names, never by its
   wording: phrase-matching missed "Didn't find any major issues" more than once.
 - **Work in a worktree, never the main checkout.** `git worktree add .claude/worktrees/<name> -b
-  <branch> origin/main` — WITH the start point, or it branches from whatever the shared checkout
-  is on, which is the very state this bullet warns about (it is detached today, and local `main`
-  lags origin). Sessions run concurrently, and a second one that finds the shared checkout on a
+  <branch> origin/main` — **fetch first** (`git fetch -q origin`): naming a remote-tracking ref
+  does not contact the remote, so a checkout that has not fetched since `main` advanced branches
+  from a stale local value and silently omits landed work. And WITH the start point, or it
+  branches from whatever the shared checkout is on — the very state this bullet warns about (it
+  is detached today, and local `main` lags origin). Sessions run concurrently, and a second one that finds the shared checkout on a
   foreign branch, or mid-rebase, loses work that was not its own. The main checkout stays clean
   for reading and for merges. (It is also why `v test .` at the root misbehaves — see Build &
   test.) On hardware: never flash the bench from two sessions at once.
