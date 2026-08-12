@@ -1,6 +1,6 @@
 # blobly_emb — project guide for coding agents
 
-> **This is the guide.** `AGENTS.md` is a one-line pointer here, and a real file rather than a
+> **This is the guide.** `AGENTS.md` is a pointer FILE here, real rather than a
 > symlink: two agents look for two names — Claude Code reads `CLAUDE.md` and nothing else, Codex
 > and others read `AGENTS.md` — and a symlink either way round becomes a 9-byte text file on a
 > checkout without symlink support, so whichever tool follows the link silently gets a one-word
@@ -140,49 +140,58 @@ Three things that make the loop work:
 - **Update this file in the PR that lands the work**, especially new modules or a changed
   build/flash step. A guide that drifts is worse than none: it gets believed.
 
-### Polling a codex review — the traps
+### Polling a codex review
 
-Five ways a watcher missed a review in one session, the worst leaving six findings unread while
-reporting "no findings". Every failure was **silent**: a command that succeeds and returns
-nothing looks exactly like no news.
+A watcher that reports "nothing" when something is waiting is worse than no watcher. Every rule
+here exists because a silent version of it lost a review. This repo keeps no status log; the
+incidents are written up in blobly_net's `docs/history.md` (2026-08-12).
 
-- **`--paginate`, always.** The API returns **30 items per page in ASCENDING order**, so an
-  un-paginated read silently drops the **newest** comments — the ones you are waiting for. On a
-  PR with 38 review comments, the 8 most recent were invisible, which is how six findings sat
-  unread while a watcher reported zero. `--paginate` emits **one array per page**, so a bare
-  `length` gives a per-page count: sum them with `| awk '{s+=$1} END{print s+0}'`. Not `bc`,
-  which is absent from some agent environments, and not `--slurp`, which `gh` rejects when
-  `--jq` is also given.
-- **`gh api --jq` takes exactly one argument.** Passing jq's own flags (`--arg`, `--argjson`)
-  makes gh print `accepts 1 arg(s), received 4` on stderr and **exit 1** with no stdout — so a
-  filter written that way returns nothing and the channel looks empty. Interpolate the value
-  instead, and use `set -o pipefail` / check the exit code so this class fails loudly.
-- **Findings can arrive in any of three places**, and the first already includes the second:
-  1. `gh api --paginate repos/:owner/:repo/pulls/N/comments` — inline findings. Review-attached
-     ones appear here too (they carry `pull_request_review_id`), so this is the source of truth
-     and summing it with channel 2 double-counts.
-  2. `.../pulls/N/reviews` → latest codex review id → `.../reviews/<id>/comments` — a fallback,
-     and useful for reading one review's findings together. Narrowing to the *latest* review
-     alone hides earlier unhandled ones.
-  3. `gh api --paginate repos/:owner/:repo/issues/N/comments` — the verdict, or "Something went
-     wrong", which means the review FAILED and must be re-requested rather than waited on.
-- **Codex names a 10-char abbreviated SHA** (`b733417c2a`). Match by **prefix** — a full 40-char
-  comparison never fires, and matching the wording instead misses "Didn't find any major
-  issues". But the SHA alone is not enough: when a review FAILS and is re-requested without a
-  new commit — the recovery this section prescribes — the old failure and the retry name the
-  same SHA, so a watcher keyed only on it rediscovers the old comment and reports completion
-  while the retry is still running. Record the highest comment/review id before triggering a
-  review and require the match to be **newer than that baseline as well as** naming the head.
-- **Check CI with `gh api --paginate repos/:owner/:repo/commits/<sha>/check-runs`** — 30 per
-  page here too, so a pending or failed run past the first page is invisible and reproduces the
-  false green this section exists to prevent. (`gh pr checks` is *also* head-scoped — it queries
-  `commits(last: 1)` — so it is fine; the earlier claim here that it could show a stale pass from
-  an older commit was wrong.)
-- **Test the watcher against a state whose answer you already know** before trusting it, and
-  make it print its counts per channel. Every bug above was invisible from the outside; a
-  watcher that has never been shown to detect something is not evidence of anything.
-- Run it as a **tracked** background job, never a detached shell (`( ... & )`), or it fires into
-  nothing. A cron sweep re-checking every open PR is the backstop for when the watcher is wrong.
+- **`--paginate` everything**, but for two different reasons. Comments come back **ascending**,
+  30 per page, so an un-paginated read drops the **newest** — the ones you are waiting for.
+  `commits/<sha>/check-runs` is ordered by id **descending**, so there an un-paginated read keeps
+  the newest page and drops **older** runs — a long-running job from an earlier workflow can be
+  the one still pending. Either way the first page is not the answer. `--paginate` emits one
+  page per line, so sum with `| awk '{s+=$1} END{print s+0}'` — not `bc` (absent in some agent
+  environments), and not `--slurp` (gh refuses it alongside `--jq`). **Capture gh's exit status
+  before the pipe**: on an auth or API failure gh returns 1 or 4 and prints nothing, `awk` then
+  prints `0` and exits 0, and the result reads exactly like "nothing is waiting". Assign first,
+  check `$?`, report the failure instead of a count. And `commits/<sha>/check-runs` pages are
+  **objects**, not arrays — use `.check_runs | length` (or `.check_runs[]` to list); the array
+  recipe would count an object's keys.
+- **`gh api --jq` takes exactly one argument.** jq's own flags (`--arg`) make it exit 1 with no
+  stdout, so the filter returns nothing and the channel looks empty. Interpolate instead.
+- **Do NOT use the 👍 reaction as the verdict**, despite codex's footer saying "otherwise it
+  will react with 👍". It cannot be made reliable: the reaction payload carries **no reviewed
+  SHA**, so a fresh `+1` may belong to the previous head if the head moved while the review ran;
+  and GitHub will not create a second identical reaction from the same actor, so on a later
+  clean round the existing one keeps its ORIGINAL timestamp and no freshness test can ever pass.
+  Both directions are broken, in opposite ways. Observed on net#84: the clean result arrived as
+  a 👍 **and** as a comment naming the head, one second apart — the comment is the signal.
+- **Flatten a comment body before matching it.** `Reviewed commit:` sits in the MIDDLE of a
+  multi-line body, so piping it through `tail -1` matches against the footer and never fires.
+  `gsub("\n";" ")` it into one line, id-prefixed, and take the highest id.
+- **Never edit a watcher script while an instance is running.** bash reads a script
+  incrementally, so the running copy executes half of the new file and dies on a comment.
+  Write a new file instead.
+- **Three channels**, and the first already contains the second:
+  `pulls/N/comments` (source of truth — review-attached comments appear here too, so summing
+  both double-counts) · `pulls/N/reviews/<id>/comments` (fallback; narrowing to the latest
+  review hides earlier unhandled findings) · `issues/N/comments` (the verdict, or "Something
+  went wrong" = the review FAILED and must be re-requested, not waited on).
+- **Identify a result by head SHA prefix AND a freshness baseline.** Codex names a 10-char
+  abbreviated SHA, so a 40-char compare never matches; but a retry after a failed review names
+  the *same* SHA as the failure, so record the highest comment/review id first and require the
+  match to beat it. Never match on wording.
+- **A force-push during a pending review gets you a verdict for the OLD commit.** Codex answers
+  for the SHA it started on, so after an amend or rebase its "no major issues" names a commit
+  that is no longer on the branch. Observed on emb#255: clean on `a1d3c667` while the head was
+  `d052f77`. This is exactly why the verdict is matched by head SHA — re-request after any push
+  rather than accepting it.
+- **Test the watcher against a state whose answer you already know**, and print per-channel
+  counts. These failures are invisible from the outside — a command that succeeds and returns
+  nothing looks exactly like no news.
+- Run it as a **tracked** background job, never a detached shell (`( ... & )`). A cron sweep
+  over every open PR is the backstop for when the watcher itself is wrong.
 
 ## Review guidelines
 
