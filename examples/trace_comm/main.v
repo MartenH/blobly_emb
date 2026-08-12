@@ -5,9 +5,10 @@ module main
 // and the app FB are generated into gen/loom_gen.v; can1 gets its own partition as the module
 // host. run()'s params are the buses in NAME order.
 //
-// NOT YET: the trace ring + dump on can1. loom2v generates trace only for the single-partition
-// host shape, and warns when it drops it — see #191. This example builds and runs the comm/app
-// halves; the swimlane it is named for needs that generator work first.
+// REGRESSED: the trace ring + dump on can1. P3b shipped in #60; a later refactor left loom2v
+// generating trace for the single-partition host shape only, and it WARNS when it drops the rest.
+// The comm/app halves build and run; the swimlane this example is named for needs that generator
+// wiring back. See #191.
 //
 //   sudo make vcan      # brings up vcan0 (app) + vcan1 (trace)
 //   make run

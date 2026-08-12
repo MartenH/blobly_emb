@@ -85,23 +85,17 @@ mut:
 	chan can.Channel
 }
 
-fn io_can0_10ms(ctx voidptr) {
-	mut st := unsafe { &Bridge_can0_state(ctx) }
-}
-
 pub fn partition_can0(ch can.Channel) {
 	osal.pin_to_core(0)
 	mut st := Bridge_can0_state{
 		chan: ch
 	}
-	mut sched := loom.Scheduler{}
-	sched.every(10_000, io_can0_10ms, &st)
 	for {
-		loom_t0 := osal.now_us()
-		sched.run(loom_t0)
-		loom_t1 := osal.now_us()
-		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
-		osal.scratch_set(2, u64(sched.load_permille()))
+		mut rx := can.Frame{}
+		for st.chan.recv(mut rx) {
+			// no consumer yet: the trace module that serves this bus is not
+			// generated for this shape (#191). Draining keeps the queue clear.
+		}
 		osal.sleep_us(1000)
 	}
 }

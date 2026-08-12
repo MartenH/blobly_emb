@@ -2,6 +2,13 @@
 
 > **Status: P3a DONE + merged (single-writer, #57); P3b DONE + merged (different-bus, #60); P3c-0
 > DONE (bare-metal single-core trace); P3c-1 (real thread/ISR capture) next.**
+>
+> **REGRESSED IN GENERATION (#191).** Both host examples below still build and run their FBs, but
+> loom2v now emits the trace ring + dump for the SINGLE-partition host shape only and warns when
+> it drops the rest, so neither answers a `dump` today. The platform side never changed —
+> `comm/trace` still carries one local core plus one imported remote, and `multicore_dump_test`
+> proves the two-block read-out. What follows describes the design, not what generation currently
+> produces.
 > The design writeup for the multi-core trace-codegen phase, extending the inline single-core path
 > from #54/#55/#56. **P3a is shipped** — `examples/trace_multicore` (two partitions, cores 0+1): a
 > single dump command streams each core's window as self-describing blocks (multi-block with a

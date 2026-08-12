@@ -64,3 +64,19 @@ fn test_the_trace_host_runner_owns_its_bus_alone() {
 	}
 	assert !bus_hosts_modules(m, 'can0', true)
 }
+
+// A bare-metal/ThreadX target owns its bus from the superloop or the comm thread. Emitting a host
+// bridge there is not merely redundant: the generated file imports osal only on the host path, so
+// examples/h735_app ([telemetry] + [trace] on a signal-less bus) would not compile at all.
+fn test_a_target_owns_its_bus_without_a_host_bridge() {
+	m := Model{
+		trace:  TraceCfg{
+			on:  true
+			bus: 'can0'
+		}
+		target: TargetCfg{
+			on: true
+		}
+	}
+	assert !bus_hosts_modules(m, 'can0', false)
+}

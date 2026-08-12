@@ -70,10 +70,10 @@ examples`, per-example host builds with generation, and a repo-wide **"Generated
 fresh"** gate. The last one is the usual surprise: a stale committed `gen/` output passes every
 local command and fails CI. Re-run generation before opening the PR.
 
-**Two examples are NOT covered:** `examples/trace_comm` and `examples/trace_multicore` are
-skipped by that loop (`ci.yml`, `SKIPPED (#191)`) because loom2v no longer generates the
-multi-partition trace runner they were built with. Nothing regenerates or builds them, so a
-change there has no CI gate at all until #191 is fixed — build and run them by hand.
+**`examples/trace_comm` and `examples/trace_multicore` build again** and the loop covers them,
+but they are not yet the examples they claim to be: loom2v generates the trace ring + dump for the
+single-partition host shape only, and WARNS when it drops it, so both run their FBs with no dump
+answering. #191 is open for the generator wiring — the platform side (`comm/trace`) never lost it.
 
 **Not gated — verify these yourself:**
 

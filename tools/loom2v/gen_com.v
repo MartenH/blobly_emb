@@ -494,7 +494,10 @@ fn emit_eth_bridge(m Model) []string {
 // `trace_host` = the single-partition host runner is already the trace bus's owner, so that bus
 // needs no bridge; generating one anyway produced a partition nothing spawns.
 fn bus_hosts_modules(m Model, bname string, trace_host bool) bool {
-	if trace_host {
+	if trace_host || m.target.on {
+		// TARGET builds own their bus from the superloop / comm thread, and their generated file
+		// imports osal only on the host path — a bridge emitted there does not even compile
+		// (examples/h735_app is exactly this shape: [telemetry] + [trace] on a signal-less bus).
 		return false
 	}
 	tbus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
@@ -706,6 +709,12 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 		}
 		glue << '}'
 		glue << ''
+		// A module-host bus has no signal work, so it gets no tick handler at all — see the
+		// drain loop below. An empty one compiled to `mut st := …` and nothing else, which is a
+		// warning on every build of both trace examples.
+		module_host := rx_by_msg.len == 0 && tx_by_msg.len == 0 && conns.len == 0
+			&& my_routes.len == 0 && in_routes.len == 0
+		if !module_host {
 		glue << 'fn io_${bb}_10ms(ctx voidptr) {'
 		glue << '\tmut st := unsafe { &Bridge_${bb}_state(ctx) }'
 		if uses_now {
@@ -1124,6 +1133,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 		}
 		glue << '}'
 		glue << ''
+		} // end: no tick handler for a module-host bus
 		mut psig := 'ch can.Channel'
 		for d in dests {
 			psig += ', route_${snake(d)} can.Channel'
@@ -1249,9 +1259,21 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			}
 			glue << '\tst.uds_${tp}.ndid = ${m.dids.len}'
 		}
-		glue << '\tmut sched := loom.Scheduler{}'
-		glue << '\tsched.every(10_000, io_${bb}_10ms, &st)'
-			glue << '\tfor {'
+		// module_host (above): no signal work, so no tick and no handler — it only has to DRAIN
+		// its channel, since an unread rx queue backs up on a real driver. The frames go nowhere
+		// until the trace module for this shape is generated again (#191).
+		if !module_host {
+			glue << '\tmut sched := loom.Scheduler{}'
+			glue << '\tsched.every(10_000, io_${bb}_10ms, &st)'
+		}
+		glue << '\tfor {'
+		if module_host {
+			glue << '\t\tmut rx := can.Frame{}'
+			glue << '\t\tfor st.chan.recv(mut rx) {'
+			glue << '\t\t\t// no consumer yet: the trace module that serves this bus is not'
+			glue << '\t\t\t// generated for this shape (#191). Draining keeps the queue clear.'
+			glue << '\t\t}'
+		} else {
 			glue << '\t\tloom_t0 := osal.now_us()'
 			glue << '\t\tsched.run(loom_t0)'
 			glue << '\t\tloom_t1 := osal.now_us()'
@@ -1259,8 +1281,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			for p in producers {
 				glue << p.partition_loop_body('b:${bname}')
 			}
-			glue << '\t\tosal.sleep_us(1000)'
-			glue << '\t}'
+		}
+		glue << '\t\tosal.sleep_us(1000)'
+		glue << '\t}'
 		glue << '}'
 	}
 	return glue, bus_names, bus_dests
