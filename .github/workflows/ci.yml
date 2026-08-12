@@ -3,11 +3,15 @@ name: ci
 # The first automated gate for blobly_emb. Until now nothing ran the tests on a push — the
 # 36 V test files, `make check` and `make trace` were all hand-run, so a PR could merge red.
 #
-# Scope, deliberately: this gates the HOST/SIM side — unit tests, config validation, and the
-# requirement→verification trace. It does NOT cross-compile the STM32H7 examples: that needs the
-# arm-none-eabi toolchain, gitignored CMSIS headers (`make deps`), and a V master pin for the
-# freestanding build, none of which belong in a first, reliable gate. Target builds are verified
-# on the bench and are a tracked follow-up.
+# Scope: the HOST/SIM side — unit tests, config validation, the requirement→verification trace —
+# plus the BARE-METAL cross builds, which turned out to be cheap: gcc-arm-none-eabi from apt and
+# two shallow CMSIS clones (`make deps-cmsis`), then seven images in about ten seconds. That gate
+# is worth having, because a broken target build otherwise merges behind a green board — exactly
+# what happened to examples/trace_comm and trace_multicore (#191), and to h735_app during the fix
+# for them. It also runs scripts/lint_vinit.sh, which only exists on the freestanding path.
+#
+# Still NOT gated: the ThreadX/NetX Duo images. Those need full clones of two more repos at a
+# pin (minutes, not seconds), so they stay bench-verified.
 
 on:
   push:
@@ -132,3 +136,48 @@ jobs:
             git --no-pager diff | head -200
             exit 1
           fi
+
+  cross:
+    name: cross • bare-metal STM32H7 images (+ the _vinit gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The freestanding build needs V MASTER: 0.5.1 emits "impossible constraint in asm" for
+      # the bare-metal target (vlang/v#27564). check-latest keeps this in step with the host job.
+      - name: Install V (latest)
+        uses: vlang/setup-v@v1.4
+        with:
+          check-latest: true
+
+      - name: Install the ARM toolchain
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-arm-none-eabi
+
+      # CMSIS only — see the note at the top about ThreadX/NetX Duo.
+      - name: CMSIS headers
+        run: make deps-cmsis
+
+      # Every example whose image is bare-metal. Each build ends in scripts/lint_vinit.sh (wired
+      # into the example Makefiles): V compiles a __global's field defaults into _vinit(), which a
+      # freestanding image never calls, so those fields silently read 0 on target. Four bench
+      # casualties before that gate existed — and it can only run here, on generated C.
+      - name: Bare-metal cross builds
+        run: |
+          # `|| exit 1` on the build, NOT set -e: the `grep … && continue` skip below makes the
+          # loop body end in a non-zero && list every time it does NOT skip, and errexit's
+          # exemption for && lists then swallowed a failing make — the gate printed the compiler
+          # error and passed. Checked by breaking h735_app on purpose.
+          set -e
+          for d in examples/*/ examples/*/nodes/*/; do
+            [ -f "$d/Makefile" ] || continue
+            grep -rq arm-none-eabi "$d" --include='Makefile*' || continue
+            # ThreadX/NetX Duo images need `make deps` (two full clones at a pin) — bench-verified.
+            # RECURSIVE, like the selection above: a system example is a host Makefile whose NODES
+            # are ThreadX images, so matching only its own Makefile built them anyway.
+            if grep -rqi 'threadx\|netxduo' "$d" --include='Makefile*'; then
+              echo "== $d SKIPPED (ThreadX/NetX Duo — needs the full deps)"
+              continue
+            fi
+            echo "== $d"
+            make -C "$d" || exit 1
+          done
