@@ -1,6 +1,6 @@
 V ?= v
 
-.PHONY: example run-example list check deps trace trace-check lint vcan clean demo demo-threadx bench
+.PHONY: example run-example list check deps deps-cmsis trace trace-check lint vcan clean demo demo-threadx bench
 
 # ---- Examples ---------------------------------------------------------------
 # Each example is a self-contained app under examples/<NAME>/ with its own
@@ -32,7 +32,13 @@ check:
 # Header-only, gitignored under third_party/; needed ONLY by examples/h735_* cross
 # builds — the host/sim build never touches them. Include paths for an example:
 #   -Ithird_party/cmsis_device_h7/Include -Ithird_party/cmsis_core/CMSIS/Core/Include -DSTM32H735xx
-deps:
+deps: deps-cmsis
+	@mkdir -p third_party
+
+# Just the CMSIS headers — everything a BARE-METAL image needs. Split out so CI can gate the
+# bare-metal cross builds without cloning ThreadX and NetX Duo (minutes, and full clones because
+# both are checked out at a pin).
+deps-cmsis:
 	@mkdir -p third_party
 	@[ -d third_party/cmsis_device_h7 ] || git clone --depth 1 https://github.com/STMicroelectronics/cmsis_device_h7 third_party/cmsis_device_h7
 	@[ -d third_party/cmsis_core ]       || git clone --depth 1 https://github.com/STMicroelectronics/cmsis_core       third_party/cmsis_core
