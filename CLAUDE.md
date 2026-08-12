@@ -140,6 +140,50 @@ Three things that make the loop work:
 - **Update this file in the PR that lands the work**, especially new modules or a changed
   build/flash step. A guide that drifts is worse than none: it gets believed.
 
+### Polling a codex review — the traps
+
+Five ways a watcher missed a review in one session, the worst leaving six findings unread while
+reporting "no findings". Every failure was **silent**: a command that succeeds and returns
+nothing looks exactly like no news.
+
+- **`--paginate`, always.** The API returns **30 items per page in ASCENDING order**, so an
+  un-paginated read silently drops the **newest** comments — the ones you are waiting for. On a
+  PR with 38 review comments, the 8 most recent were invisible, which is how six findings sat
+  unread while a watcher reported zero. `--paginate` emits **one array per page**, so a bare
+  `length` gives a per-page count: sum them with `| awk '{s+=$1} END{print s+0}'`. Not `bc`,
+  which is absent from some agent environments, and not `--slurp`, which `gh` rejects when
+  `--jq` is also given.
+- **`gh api --jq` takes exactly one argument.** Passing jq's own flags (`--arg`, `--argjson`)
+  makes gh print `accepts 1 arg(s), received 4` on stderr and **exit 1** with no stdout — so a
+  filter written that way returns nothing and the channel looks empty. Interpolate the value
+  instead, and use `set -o pipefail` / check the exit code so this class fails loudly.
+- **Findings can arrive in any of three places**, and the first already includes the second:
+  1. `gh api --paginate repos/:owner/:repo/pulls/N/comments` — inline findings. Review-attached
+     ones appear here too (they carry `pull_request_review_id`), so this is the source of truth
+     and summing it with channel 2 double-counts.
+  2. `.../pulls/N/reviews` → latest codex review id → `.../reviews/<id>/comments` — a fallback,
+     and useful for reading one review's findings together. Narrowing to the *latest* review
+     alone hides earlier unhandled ones.
+  3. `gh api --paginate repos/:owner/:repo/issues/N/comments` — the verdict, or "Something went
+     wrong", which means the review FAILED and must be re-requested rather than waited on.
+- **Codex names a 10-char abbreviated SHA** (`b733417c2a`). Match by **prefix** — a full 40-char
+  comparison never fires, and matching the wording instead misses "Didn't find any major
+  issues". But the SHA alone is not enough: when a review FAILS and is re-requested without a
+  new commit — the recovery this section prescribes — the old failure and the retry name the
+  same SHA, so a watcher keyed only on it rediscovers the old comment and reports completion
+  while the retry is still running. Record the highest comment/review id before triggering a
+  review and require the match to be **newer than that baseline as well as** naming the head.
+- **Check CI with `gh api --paginate repos/:owner/:repo/commits/<sha>/check-runs`** — 30 per
+  page here too, so a pending or failed run past the first page is invisible and reproduces the
+  false green this section exists to prevent. (`gh pr checks` is *also* head-scoped — it queries
+  `commits(last: 1)` — so it is fine; the earlier claim here that it could show a stale pass from
+  an older commit was wrong.)
+- **Test the watcher against a state whose answer you already know** before trusting it, and
+  make it print its counts per channel. Every bug above was invisible from the outside; a
+  watcher that has never been shown to detect something is not evidence of anything.
+- Run it as a **tracked** background job, never a detached shell (`( ... & )`), or it fires into
+  nothing. A cron sweep re-checking every open PR is the backstop for when the watcher is wrong.
+
 ## Review guidelines
 
 Enforce these as high-priority (P0/P1); they are the project's hard invariants.
