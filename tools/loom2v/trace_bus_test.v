@@ -80,3 +80,20 @@ fn test_a_target_owns_its_bus_without_a_host_bridge() {
 	}
 	assert !bus_hosts_modules(m, 'can0', false)
 }
+
+// The module-host bridge is can.Channel/can.Frame with none of the things that normally pull in
+// the CAN driver: a multi-partition host with [trace] on a CAN bus and telemetry OFF has no
+// external signals, no ISO-TP and no routes. The import predicate missed exactly that shape, and
+// the generated file did not compile. Both shipped examples have telemetry on, so neither caught
+// it — this asserts the emitted header, not the helper.
+fn test_a_trace_only_module_host_still_imports_the_can_driver() {
+	mut m := Model{
+		trace: TraceCfg{
+			on:  true
+			bus: 'can0'
+		}
+	}
+	m.buses["can0"] = true
+	_, glue := emit_module_headers(m, "ecu", false, false)
+	assert glue.any(it.starts_with('import driver.can')), 'the generated file would not compile: ${glue}'
+}

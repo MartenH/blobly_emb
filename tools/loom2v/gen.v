@@ -3248,7 +3248,18 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 		glue << 'import nvm' // the persistence journal (docs/nvm.md)
 		glue << 'import boot as bootfl' // FlashOps — aliased: gen has its own boot()
 	}
-	if m.has_can_ext || m.isotp_conns.len > 0 || telem_on_can(m) || m.routes.len > 0 {
+	// ...and a MODULE-HOST bridge, which is can.Channel/can.Frame with none of the above: a
+	// multi-partition host with [trace] on a CAN bus and telemetry off has no external signals,
+	// no ISO-TP and no routes, so the import predicate missed it and the generated file did not
+	// compile. (Both examples happen to have telemetry on, which is why nothing caught it.)
+	mut module_host_bus := false
+	for bname, _ in m.buses {
+		if (m.bus_kind[bname] or { 'can' }) == 'can' && bus_hosts_modules(m, bname, trace_host) {
+			module_host_bus = true
+		}
+	}
+	if m.has_can_ext || m.isotp_conns.len > 0 || telem_on_can(m) || m.routes.len > 0
+		|| module_host_bus {
 		glue << 'import driver.can' // the generated bus bridge (+ gateway routes)
 	}
 	// eth: only a TX frame emits a pack fn referencing com.max_pdu — an
