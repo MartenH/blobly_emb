@@ -81,6 +81,32 @@ pub fn partition_can0(ch can.Channel) {
 	}
 }
 
+struct Bridge_can1_state {
+mut:
+	chan can.Channel
+}
+
+pub fn partition_can1(ch can.Channel) {
+	osal.pin_to_core(0)
+	mut st := Bridge_can1_state{
+		chan: ch
+	}
+	mut sched := loom.Scheduler{}
+	for {
+		loom_t0 := osal.now_us()
+		mut rx := can.Frame{}
+		for st.chan.recv(mut rx) {
+			// no consumer yet: the trace module that serves this bus is not
+			// generated for this shape (#191). Draining keeps the queue clear —
+			// an unread rx queue backs up on a real driver.
+		}
+		loom_t1 := osal.now_us()
+		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
+		osal.scratch_set(2, u64(sched.load_permille()))
+		osal.sleep_us(1000)
+	}
+}
+
 fn partition_telem() {
 	osal.pin_to_core(0)
 	mut c := can.Channel{}
@@ -104,11 +130,13 @@ fn partition_telem() {
 	}
 }
 
-pub fn run(can0 can.Channel) {
+pub fn run(can0 can.Channel, can1 can.Channel) {
 	t_can0 := spawn partition_can0(can0)
+	t_can1 := spawn partition_can1(can1)
 	t_app := spawn partition_app(1, unsafe { nil })
 	t_telem := spawn partition_telem()
 	t_can0.wait()
+	t_can1.wait()
 	t_app.wait()
 	t_telem.wait()
 }

@@ -100,13 +100,6 @@ jobs:
           # the host gateways (system_fw/nodes/gw, system_gw/nodes/sysnode) — codex #209 r2.
           for d in examples/*/ examples/*/nodes/*/; do
             [ -f "$d/Makefile" ] || continue
-            case "$d" in
-              # KNOWN BROKEN pending #191: loom2v stopped generating the multi-partition
-              # trace runner these two were built with, so regenerating produces a
-              # single-channel run() their main.v cannot call. This very gate found it —
-              # remove the skips when #191 restores the shape.
-              examples/trace_comm/|examples/trace_multicore/) echo "== $d SKIPPED (#191)"; continue ;;
-            esac
             if grep -rq arm-none-eabi "$d" --include='Makefile*'; then
               # Probe for a gen target STATICALLY: `make -n gen` is not side-effect-free
               # here — the Makefiles `-include gen/loom_build.mk` with a remake rule, and
