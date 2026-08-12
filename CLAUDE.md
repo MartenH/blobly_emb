@@ -60,10 +60,16 @@ each example's `test/` (blobly_net project + Lua), run by `make test`.
 
 ### CI — what is and is NOT gated
 
-`.github/workflows/ci.yml` runs on every push and PR: the host unit tests
+`.github/workflows/ci.yml` runs on **pushes to `main` and on pull requests** — a push to a
+feature branch runs only `guard`, so a green tick there is the identity check, NOT the test
+gate. Open the PR to get one.
+
+It runs more than the four you would run by hand: host unit tests
 (`v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot`), `make lint`,
-`make check` and `make trace`. Locally, run those four before opening a PR and nothing
-should surprise you.
+`make check`, `make trace-check` (not `make trace`), `syscheck`, `v -enable-globals test
+examples`, per-example host builds with generation, and a repo-wide **"Generated outputs are
+fresh"** gate. The last one is the usual surprise: a stale committed `gen/` output passes every
+local command and fails CI. Re-run generation before opening the PR.
 
 **Not gated — verify these yourself:**
 
@@ -119,7 +125,9 @@ Three things that make the loop work:
   session, once for over an hour. Match the verdict by the head SHA codex names, never by its
   wording: phrase-matching missed "Didn't find any major issues" more than once.
 - **Work in a worktree, never the main checkout.** `git worktree add .claude/worktrees/<name> -b
-  <branch>`. Sessions run concurrently, and a second one that finds the shared checkout on a
+  <branch> origin/main` — WITH the start point, or it branches from whatever the shared checkout
+  is on, which is the very state this bullet warns about (it is detached today, and local `main`
+  lags origin). Sessions run concurrently, and a second one that finds the shared checkout on a
   foreign branch, or mid-rebase, loses work that was not its own. The main checkout stays clean
   for reading and for merges. (It is also why `v test .` at the root misbehaves — see Build &
   test.) On hardware: never flash the bench from two sessions at once.
