@@ -179,6 +179,11 @@ incidents are written up in blobly_net's `docs/history.md` (2026-08-12).
   abbreviated SHA, so a 40-char compare never matches; but a retry after a failed review names
   the *same* SHA as the failure, so record the highest comment/review id first and require the
   match to beat it. Never match on wording.
+- **A force-push during a pending review gets you a verdict for the OLD commit.** Codex answers
+  for the SHA it started on, so after an amend or rebase its "no major issues" names a commit
+  that is no longer on the branch. Observed on emb#255: clean on `a1d3c667` while the head was
+  `d052f77`. This is exactly why the verdict is matched by head SHA — re-request after any push
+  rather than accepting it.
 - **Test the watcher against a state whose answer you already know**, and print per-channel
   counts. These failures are invisible from the outside — a command that succeeds and returns
   nothing looks exactly like no news.
