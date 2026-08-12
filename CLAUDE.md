@@ -75,14 +75,19 @@ but they are not yet the examples they claim to be: loom2v generates the trace r
 single-partition host shape only, and WARNS when it drops it, so both run their FBs with no dump
 answering. #191 is open for the generator wiring — the platform side (`comm/trace`) never lost it.
 
+**Also gated now:** the **bare-metal** STM32H7 cross builds, in their own CI job — apt's
+`gcc-arm-none-eabi` plus `make deps-cmsis` (the two shallow CMSIS clones, split out from `deps`
+for exactly this), then seven images in about ten seconds. Each one ends in
+**`scripts/lint_vinit.sh`**, which the example Makefiles invoke and which can only run on the
+freestanding path: V compiles a `__global`'s field defaults into `_vinit()`, a bare-metal image
+never calls it, and those fields then read 0 on target — four bench casualties before that
+script existed, and nothing in CI ran it until now.
+
 **Not gated — verify these yourself:**
 
-- **Cross-compiling the STM32H7 examples.** Needs `arm-none-eabi`, `make deps` for the
-  gitignored CMSIS headers, and a V master pin for the freestanding build. Target builds are
-  bench-verified by hand.
-- **`scripts/lint_vinit.sh`** — it takes a built ELF, so it runs from each example's Makefile
-  after a cross-build, not in host CI. It catches the `$d`-const/field-default `_vinit` trap,
-  which has cost four real casualties; do not skip it when you touch a target image.
+- **The ThreadX / NetX Duo images.** `make deps` clones two more repos in full at a pin (minutes,
+  not seconds), so those stay bench-verified. The CI job skips them by a recursive grep, because
+  a system example is a host Makefile whose *nodes* are ThreadX images.
 - **Anything on real silicon.** Bench results go in `requirements/verifications.toml`.
 
 Plain **`v test .` at the repo root looks broken** — it walks into `.claude/worktrees/` and runs
