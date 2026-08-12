@@ -142,34 +142,38 @@ Three things that make the loop work:
 
 ### Polling a codex review — the traps
 
-Every one of these cost a missed review; four of them in a single session, the worst hiding a
-review for 26 minutes while a watcher reported "no response".
+Five ways a watcher missed a review in one session, the worst leaving six findings unread while
+reporting "no findings". Every failure was **silent**: a command that succeeds and returns
+nothing looks exactly like no news.
 
-- **Poll all THREE channels.** Findings arrive in any of them, and one is invisible from the
-  others:
-  1. `gh api repos/:owner/:repo/pulls/N/comments` — standalone inline findings
-  2. `gh api repos/:owner/:repo/pulls/N/reviews` → take the latest codex review id →
-     `.../pulls/N/reviews/<id>/comments` — findings attached to a **review object**. These do
-     **not** appear in channel 1.
-  3. `gh api repos/:owner/:repo/issues/N/comments` — the verdict, or "Something went wrong",
-     which means the review FAILED and must be re-requested rather than waited on.
+- **`--paginate`, always.** The API returns **30 items per page in ASCENDING order**, so an
+  un-paginated read silently drops the **newest** comments — the ones you are waiting for. On a
+  PR with 38 review comments, the 8 most recent were invisible, which is how six findings sat
+  unread while a watcher reported zero. `--paginate` emits one array per page, so counts need
+  summing (`| paste -sd+ | bc`) rather than a bare `length`.
 - **`gh api --jq` takes exactly one argument.** Passing jq's own flags (`--arg`, `--argjson`)
-  makes gh print `accepts 1 arg(s), received 4` and **exit 0 with no output** — so a filter
-  written that way silently returns nothing and the channel it was reading looks empty forever.
-  Interpolate the value into the expression instead.
-- **A review counts if it names the CURRENT HEAD**, whenever it arrived. Scoping to "newer than
-  my last request" skips a review that already covers the head, and re-requesting will not
-  produce another one.
-- **Match a verdict by the head SHA it names, never by wording.** Phrase-matching missed
-  "Didn't find any major issues" repeatedly.
+  makes gh print `accepts 1 arg(s), received 4` on stderr and **exit 1** with no stdout — so a
+  filter written that way returns nothing and the channel looks empty. Interpolate the value
+  instead, and use `set -o pipefail` / check the exit code so this class fails loudly.
+- **Findings can arrive in any of three places**, and the first already includes the second:
+  1. `gh api --paginate repos/:owner/:repo/pulls/N/comments` — inline findings. Review-attached
+     ones appear here too (they carry `pull_request_review_id`), so this is the source of truth
+     and summing it with channel 2 double-counts.
+  2. `.../pulls/N/reviews` → latest codex review id → `.../reviews/<id>/comments` — a fallback,
+     and useful for reading one review's findings together. Narrowing to the *latest* review
+     alone hides earlier unhandled ones.
+  3. `gh api --paginate repos/:owner/:repo/issues/N/comments` — the verdict, or "Something went
+     wrong", which means the review FAILED and must be re-requested rather than waited on.
+- **Codex names a 10-char abbreviated SHA** (`b733417c2a`). Match by **prefix** — a full 40-char
+  comparison never fires, and matching the wording instead misses "Didn't find any major
+  issues". Prefix-match the SHA; do not fall back to phrases.
 - **Check CI by SHA**: `gh api repos/:owner/:repo/commits/<sha>/check-runs`. `gh pr checks`
   reports the latest run per check *name*, which can show a pass belonging to an older commit.
-- **Test the watcher against a state whose answer you already know** before trusting it. Every
-  bug above was silent — a command that succeeds and returns nothing looks exactly like "no
-  news". A watcher that has never been shown to detect something is not evidence of anything.
+- **Test the watcher against a state whose answer you already know** before trusting it, and
+  make it print its counts per channel. Every bug above was invisible from the outside; a
+  watcher that has never been shown to detect something is not evidence of anything.
 - Run it as a **tracked** background job, never a detached shell (`( ... & )`), or it fires into
-  nothing. A cron sweep that re-checks every open PR is a good backstop for the case where the
-  watcher itself is wrong.
+  nothing. A cron sweep re-checking every open PR is the backstop for when the watcher is wrong.
 
 ## Review guidelines
 
