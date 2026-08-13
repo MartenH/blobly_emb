@@ -4,14 +4,15 @@ name: ci
 # 36 V test files, `make check` and `make trace` were all hand-run, so a PR could merge red.
 #
 # Scope: the HOST/SIM side — unit tests, config validation, the requirement→verification trace —
-# plus the BARE-METAL cross builds, which turned out to be cheap: gcc-arm-none-eabi from apt and
-# two shallow CMSIS clones (`make deps-cmsis`), then seven images in about ten seconds. That gate
+# plus the STM32H7 cross builds: gcc-arm-none-eabi from apt and `make deps` (~10s of clones),
+# then every image — 26 of them, a few minutes from clean. That gate
 # is worth having, because a broken target build otherwise merges behind a green board — exactly
 # what happened to examples/trace_comm and trace_multicore (#191), and to h735_app during the fix
 # for them. It also runs scripts/lint_vinit.sh, which only exists on the freestanding path.
 #
-# Still NOT gated: the ThreadX/NetX Duo images. Those need full clones of two more repos at a
-# pin (minutes, not seconds), so they stay bench-verified.
+# Every STM32H7 image is gated, ThreadX and NetX Duo included: `make deps` turned out to take
+# about ten seconds, not the minutes this job was first scoped around. The full sweep costs a few
+# minutes of runner time and immediately found examples/threadx_h735 broken on main.
 
 on:
   push:
@@ -153,31 +154,38 @@ jobs:
       - name: Install the ARM toolchain
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-arm-none-eabi
 
-      # CMSIS only — see the note at the top about ThreadX/NetX Duo.
-      - name: CMSIS headers
-        run: make deps-cmsis
+      # ALL of them. `make deps` clones CMSIS, ThreadX and NetX Duo in about ten seconds
+      # together — the "minutes, not seconds" this job was originally scoped around was simply
+      # wrong, and it cost us: examples/threadx_h735 had not compiled since blob_can_recv gained
+      # a parameter, and nothing noticed because the gate skipped it.
+      - name: Third-party sources (CMSIS + ThreadX + NetX Duo, pinned)
+        run: make deps
 
       # Every example whose image is bare-metal. Each build ends in scripts/lint_vinit.sh (wired
       # into the example Makefiles): V compiles a __global's field defaults into _vinit(), which a
       # freestanding image never calls, so those fields silently read 0 on target. Four bench
       # casualties before that gate existed — and it can only run here, on generated C.
-      - name: Bare-metal cross builds
+      # TWO PASSES. A satellite image (h755_m4_app) has no gen target of its own — its OWNER's
+      # generation writes the xcore_gen.h it includes — so a from-clean build in directory order
+      # reaches the satellite first and fails. Generate everything, then build everything.
+      #
+      # `make … || exit 1`, not bare `set -e`: the `grep … && continue` skip makes the loop body
+      # end in a non-zero && list whenever it does NOT skip, and errexit's exemption for && lists
+      # swallowed a failing build — the first version of this job printed the compiler error and
+      # passed.
+      - name: Cross builds (every STM32H7 image, + the _vinit gate)
         run: |
-          # `|| exit 1` on the build, NOT set -e: the `grep … && continue` skip below makes the
-          # loop body end in a non-zero && list every time it does NOT skip, and errexit's
-          # exemption for && lists then swallowed a failing make — the gate printed the compiler
-          # error and passed. Checked by breaking h735_app on purpose.
           set -e
           for d in examples/*/ examples/*/nodes/*/; do
             [ -f "$d/Makefile" ] || continue
             grep -rq arm-none-eabi "$d" --include='Makefile*' || continue
-            # ThreadX/NetX Duo images need `make deps` (two full clones at a pin) — bench-verified.
-            # RECURSIVE, like the selection above: a system example is a host Makefile whose NODES
-            # are ThreadX images, so matching only its own Makefile built them anyway.
-            if grep -rqi 'threadx\|netxduo' "$d" --include='Makefile*'; then
-              echo "== $d SKIPPED (ThreadX/NetX Duo — needs the full deps)"
-              continue
-            fi
+            grep -qE '^gen:' "$d/Makefile" || continue
+            echo "== gen $d"
+            make -C "$d" gen || exit 1
+          done
+          for d in examples/*/ examples/*/nodes/*/; do
+            [ -f "$d/Makefile" ] || continue
+            grep -rq arm-none-eabi "$d" --include='Makefile*' || continue
             echo "== $d"
             make -C "$d" || exit 1
           done

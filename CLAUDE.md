@@ -75,9 +75,11 @@ but they are not yet the examples they claim to be: loom2v generates the trace r
 single-partition host shape only, and WARNS when it drops it, so both run their FBs with no dump
 answering. #191 is open for the generator wiring — the platform side (`comm/trace`) never lost it.
 
-**Also gated now:** the **bare-metal** STM32H7 cross builds, in their own CI job — apt's
-`gcc-arm-none-eabi` plus `make deps-cmsis` (the two shallow CMSIS clones, split out from `deps`
-for exactly this), then seven images in about ten seconds. Each one ends in
+**Also gated now:** the STM32H7 cross builds — **every image, ThreadX and NetX Duo included** —
+in their own CI job: apt's `gcc-arm-none-eabi` plus `make deps` (all three sources, about ten
+seconds of cloning), then 26 images in a few minutes. Two passes, generate-then-build: a
+satellite image like `h755_m4_app` has no `gen` target because its OWNER's generation writes the
+`xcore_gen.h` it includes, so a from-clean build in directory order reaches it first and fails. Each one ends in
 **`scripts/lint_vinit.sh`**, which the example Makefiles invoke and which can only run on the
 freestanding path: V compiles a `__global`'s field defaults into `_vinit()`, a bare-metal image
 never calls it, and those fields then read 0 on target — four bench casualties before that
@@ -85,10 +87,8 @@ script existed, and nothing in CI ran it until now.
 
 **Not gated — verify these yourself:**
 
-- **The ThreadX / NetX Duo images.** `make deps` clones two more repos in full at a pin (minutes,
-  not seconds), so those stay bench-verified. The CI job skips them by a recursive grep, because
-  a system example is a host Makefile whose *nodes* are ThreadX images.
-- **Anything on real silicon.** Bench results go in `requirements/verifications.toml`.
+- **Anything on real silicon.** Bench results go in `requirements/verifications.toml`. Everything
+  that can be *built* on a runner now is.
 
 Plain **`v test .` at the repo root looks broken** — it walks into `.claude/worktrees/` and runs
 duplicate copies of every example e2e test concurrently. Test the real tree instead
