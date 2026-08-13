@@ -99,7 +99,14 @@ void comm_thread(ULONG unused)
          * so a burst that posted the semaphore once is fully consumed (no loss). */
         uint32_t id;
         unsigned char data[8], len;
-        while (blob_can_recv(g_can, &id, data, &len) == 0) {
+        /* `flags` (bit0 = FD, bit1 = extended id) was added to the driver shim and this caller
+         * was never updated — the example has not compiled since. It is read and ignored here on
+         * purpose: this demo echoes classic 11-bit frames, and the fields below hold 8 bytes and
+         * an 11-bit id, so accepting an FD or extended frame would truncate it silently. */
+        int rx_flags = 0;
+        while (blob_can_recv(g_can, &id, data, &len, &rx_flags) == 0) {
+            if (rx_flags != 0)
+                continue; /* not classic 11-bit: skip rather than mis-report it */
             g_comm_rx.last_id = id;
             for (int i = 0; i < 8; i++)
                 g_comm_rx.last[i] = (i < len) ? data[i] : 0u;
