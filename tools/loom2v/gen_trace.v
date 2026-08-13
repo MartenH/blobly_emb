@@ -363,7 +363,10 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	g << '\t\t}'
 	if telem_on {
 		g << '\t\tnow := osal.now_us()'
-		g << '\t\tif now - last_telem >= ${m.telem.period_us} {'
+		// tx_ready-gated like every other send on this loop: the trace drain above can leave the
+		// Tx FIFO full for a whole burst, and an ungated send() there returns false and loses the
+		// frame silently. Not updating last_telem keeps it due, so the next pass retries (emb#252).
+		g << '\t\tif now - last_telem >= ${m.telem.period_us} && ch.tx_ready() {'
 		g << '\t\t\tlast_telem = now'
 		g << '\t\t\tmut load := [8]u16{}'
 		g << '\t\t\tload[0] = u16(sched.load_permille())'

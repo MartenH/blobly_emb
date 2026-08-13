@@ -72,7 +72,7 @@ pub fn run(chp can.Channel) {
 			ch.send(txf)
 		}
 		now := osal.now_us()
-		if now - last_telem >= 500000 {
+		if now - last_telem >= 500000 && ch.tx_ready() {
 			last_telem = now
 			mut load := [8]u16{}
 			load[0] = u16(sched.load_permille())

@@ -2295,6 +2295,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				telem_active: m.telem.on && telem_iface != '' && !comm_thread_on
 				now:          't1'
 				period:       'telem_period_us'
+				// gated like the comm-thread model above: a full Tx FIFO (a trace burst, a busy
+				// bus) makes an ungated send() drop the frame and say nothing. last_telem stays
+				// un-updated, so the frame is still due on the next pass (emb#252).
+				gate:         ' && ch.tx_ready()'
 				load:         [if m.io_points.len > 0 {
 				// the io thread publishes its slot to the scratch; run() publishes
 				// slot 0 — the sum is the core's whole truth (emb#150 r5)

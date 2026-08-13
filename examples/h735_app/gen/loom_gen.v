@@ -64,7 +64,7 @@ pub fn run(can0 can.Channel) {
 		if t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun
 			sched.mark_overrun()
 		}
-		if t1 - last_telem >= telem_period_us {
+		if t1 - last_telem >= telem_period_us && ch.tx_ready() {
 			last_telem = t1
 			load[0] = sched.load_permille() // single M7 -> core 0 only
 			frame := telem.encode_cpuload(load, 1)
