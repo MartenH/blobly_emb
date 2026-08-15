@@ -79,7 +79,6 @@ pub fn run(can0 can.Channel) {
 			ovr := sched.overruns()
 			detail := telem.encode_loaddetail(sched.load_permille_100ms(),
 				sched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)
-			last_overruns = ovr
 			mut d := can.Frame{
 				id:  u32(0x7e1)
 				len: 8
@@ -87,7 +86,9 @@ pub fn run(can0 can.Channel) {
 			for i in 0 .. 8 {
 				d.data[i] = detail[i]
 			}
-			ch.send(d)
+			if ch.send(d) {
+				last_overruns = ovr
+			}
 		}
 		for C.board_now_us() < next_tick {} // idle to the tick (real idle)
 		next_tick += tick_us

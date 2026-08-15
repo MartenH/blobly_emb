@@ -31,3 +31,31 @@ fn test_every_generated_telemetry_send_is_tx_ready_gated() {
 	}
 	assert checked > 0, 'found no generated telemetry sends to check — did the gen/ layout move?'
 }
+
+// The period gate is not enough on its own: CpuLoad and LoadDetail are two frames behind one
+// gate, so a FIFO with exactly one free slot lets the first through and fails the second. The
+// overrun counter is a DELTA — advancing last_overruns for a frame that never left deducts those
+// overruns from a report nobody received, and no later frame can recover them. So the counter may
+// only move on an accepted send (emb#259 r1).
+fn test_the_overrun_delta_advances_only_on_an_accepted_send() {
+	root := os.dir(os.dir(os.dir(@FILE)))
+	mut checked := 0
+	for d in os.ls(os.join_path(root, 'examples')) or { [] } {
+		f := os.join_path(root, 'examples', d, 'gen', 'loom_gen.v')
+		if !os.exists(f) {
+			continue
+		}
+		lines := os.read_lines(f) or { [] }
+		for i, line in lines {
+			if line.trim_space() != 'last_overruns = ovr' {
+				continue
+			}
+			checked++
+			prev := if i > 0 { lines[i - 1].trim_space() } else { '' }
+			assert prev.starts_with('if ch.send('), '${d}/gen/loom_gen.v:${i + 1} advances the ' +
+				'overrun delta without knowing the frame went out — the lost overruns are ' +
+				'unrecoverable:\n\t${prev}\n\t${line.trim_space()}'
+		}
+	}
+	assert checked > 0, 'found no generated overrun bookkeeping to check — did LoadDetail move?'
+}
