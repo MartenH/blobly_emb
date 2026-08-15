@@ -430,7 +430,6 @@ fn comm_thread_entry(input u32) {
 			ch.send(f)
 			ovr := C.load_sum_overruns()
 			detail := telem.encode_loaddetail(u16(C.load_sum_100ms()), u16(C.load_sum_1s()), u16(C.load_sum_10s()), ovr - last_overruns)
-			last_overruns = ovr
 			mut d := can.Frame{
 				id:  u32(0x7e1)
 				len: 8
@@ -438,7 +437,9 @@ fn comm_thread_entry(input u32) {
 			for i in 0 .. 8 {
 				d.data[i] = detail[i]
 			}
-			ch.send(d)
+			if ch.send(d) {
+				last_overruns = ovr
+			}
 		}
 		// PRODUCER: external tx signal "Workload" — read the FB-published IOC
 		// cell, encode the value (LE at byte 0), and send it cyclically (tx_ready-gated).

@@ -1643,7 +1643,6 @@ fn (t TelemProducer) bus_tick(ctx BusCtx) []string {
 	if t.detail_id != 0 {
 		g << '\t\t\tovr := ${ctx.det_ovr}'
 		g << ctx.det_lines
-		g << '\t\t\tlast_overruns = ovr'
 		g << '\t\t\tmut ${ctx.detframe} := can.Frame{'
 		g << '\t\t\t\tid:  u32(0x${t.detail_id.hex()})'
 		g << '\t\t\t\tlen: 8'
@@ -1651,7 +1650,13 @@ fn (t TelemProducer) bus_tick(ctx BusCtx) []string {
 		g << '\t\t\tfor ${ctx.idx} in 0 .. 8 {'
 		g << '\t\t\t\t${ctx.detframe}.data[${ctx.idx}] = detail[${ctx.idx}]'
 		g << '\t\t\t}'
-		g << '\t\t\tch.send(${ctx.detframe})'
+		// The CpuLoad send above may have taken the last free FIFO slot, so this one can still
+		// fail after the period gate passed. last_overruns advances ONLY on an accepted frame:
+		// the delta stays owed and the next detail frame carries both periods, rather than the
+		// overruns being deducted from a report that never left (emb#259 r1).
+		g << '\t\t\tif ch.send(${ctx.detframe}) {'
+		g << '\t\t\t\tlast_overruns = ovr'
+		g << '\t\t\t}'
 	}
 	g << '\t\t}'
 	return g
@@ -2295,6 +2300,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				telem_active: m.telem.on && telem_iface != '' && !comm_thread_on
 				now:          't1'
 				period:       'telem_period_us'
+				// gated like the comm-thread model above: a full Tx FIFO (a trace burst, a busy
+				// bus) makes an ungated send() drop the frame and say nothing. last_telem stays
+				// un-updated, so the frame is still due on the next pass (emb#252).
+				gate:         ' && ch.tx_ready()'
 				load:         [if m.io_points.len > 0 {
 				// the io thread publishes its slot to the scratch; run() publishes
 				// slot 0 — the sum is the core's whole truth (emb#150 r5)
