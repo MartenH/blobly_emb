@@ -17,6 +17,27 @@ core = 0
   [[partition.thread]]
   name = "fast"
 
+# --- physical IO (boards/h755zi owns the pins; io_stm32.c is the generic H7 backend) ---
+# HostLed: this Nucleo's red LD3 (PB14, TIM12_CH1) as PWM intensity, driven by HostLedLevel —
+# the system signal blobly_net's restbus simulation produces on the compute bus (system.toml's
+# external member "host", HostLedFrame 0x127). The mirror of zone_a's BreathLed: there the level
+# comes from this node through the gateway; here it comes from the host tool.
+[io]
+core = 0
+
+  [[io.pwm]]
+  name      = "HostLed"
+  pin       = "PB14"
+  period_ms = 10
+  freq_hz   = 1000
+  init      = 0
+
+[[signal]]
+name = "HostLed"
+fields = { duty = "u32" }
+from = "powertrain"
+to   = "io"
+
 # DriveMode: a persisted powertrain calibration ("now") — restored before the first control tick,
 # journaled change-gated on the comm thread, flushed + marked clean at the NM sleep edge
 # (docs/nvm.md). This node's demo persistence signal; PowertrainCtrl reads and updates it.
@@ -45,8 +66,8 @@ thread = "fast"
   [[fb.handler]]
   name      = "on_50ms"
   period_ms = 50
-  reads     = ["SteeringAngle", "TorqueEstimate", "DriveMode"]
-  writes    = ["VehicleSpeed", "HeadlightCmd", "LedLevel", "DriveMode"] # trailing comment terminates nested block (vlang/v#27684)
+  reads     = ["SteeringAngle", "TorqueEstimate", "DriveMode", "HostLedLevel"]
+  writes    = ["VehicleSpeed", "HeadlightCmd", "LedLevel", "HostLed", "DriveMode"] # trailing comment terminates nested block (vlang/v#27684)
 
 [target]
 kind    = "threadx"

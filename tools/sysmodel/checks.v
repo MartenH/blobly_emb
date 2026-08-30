@@ -119,6 +119,9 @@ fn check_partial_no_wiring(s System) []Issue {
 fn check_dissolved_nodes(s System) []Issue {
 	mut issues := []Issue{}
 	for n in s.nodes {
+		if n.external {
+			continue // off-system: nothing is generated for it, so nothing to allocate
+		}
 		if !n.has_nm_alloc {
 			issues << Issue{
 				severity: .error
@@ -492,6 +495,9 @@ fn check_signals_dissolved(s System) []Issue {
 				nwrite++
 			}
 		}
+		if p.external {
+			nwrite = 1 // the writer is off-system; single-writer still holds via frame_owner below
+		}
 		if nwrite == 0 {
 			issues << Issue{
 				severity: .error
@@ -541,7 +547,8 @@ fn check_signals_dissolved(s System) []Issue {
 		// wrong interface (the reader's sole bus, not sig.bus) (REQ-TOPO-001).
 		mut consumed := false
 		for n in s.nodes {
-			if n.name == sig.producer || sig.name !in n.view.fb_reads {
+			reads := if n.external { sig.name in n.consumes } else { sig.name in n.view.fb_reads }
+			if n.name == sig.producer || !reads {
 				continue
 			}
 			consumed = true
@@ -762,6 +769,9 @@ fn check_topology_wellformed(s System) []Issue {
 fn check_node_generatable(s System) []Issue {
 	mut issues := []Issue{}
 	for n in s.nodes {
+		if n.external {
+			continue
+		}
 		node_path := if os.is_abs_path(n.ecu) { n.ecu } else { os.join_path(s.dir, n.ecu) }
 		if !os.exists(node_path) {
 			continue // a missing/unloadable node is already reported by load_nodes
@@ -868,6 +878,35 @@ fn node_has_bus_signal(n Node) bool {
 fn check_bus_membership(s System) []Issue {
 	mut issues := []Issue{}
 	for n in s.nodes {
+		if n.external {
+			// REQ-TOPO-013: an off-system member is a name on buses, nothing more — anything that
+			// would make the generator emit for it is a contradiction, not an option.
+			if n.ecu != '' || n.has_nm_alloc || n.has_trace || n.diag.req != 0 || n.diag.rsp != 0 {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-013'
+					msg:      'node "${n.name}": external = true admits no ecu, nm, trace or diag — an off-system member is declared, never generated'
+				}
+			}
+			if n.buses.len == 0 {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-013'
+					msg:      'node "${n.name}": external = true but names no bus — a member that is on no bus cannot produce or consume anything'
+				}
+			}
+			for c in n.consumes {
+				if _ := s.signal_by_name(c) {
+				} else {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-013'
+						msg:      'node "${n.name}": consumes "${c}" which is not a system signal'
+					}
+				}
+			}
+			continue // no ecu.toml to hold interfaces: the checks below are about generated nodes
+		}
 		// a node offers ONE SOME/IP service: its ecu.toml has a single [someip] block,
 		// so claiming two someip buses would validate both against the same endpoint
 		// and generate one service for two contracts (REQ-TOPO-005).
@@ -1253,6 +1292,18 @@ fn node_iface_on(n Node, bus Bus) ?string {
 fn producers_on(s System, bus Bus) map[string][]string {
 	mut prod := map[string][]string{}
 	for n in s.nodes {
+		if n.external {
+			// an off-system member has no ecu.toml view: what it transmits on this bus is
+			// exactly the system signals that name it as producer (REQ-TOPO-013)
+			if bus.name in n.buses {
+				for sig in s.signals {
+					if sig.producer == n.name && sig.bus == bus.name {
+						prod[sig.name] << n.name
+					}
+				}
+			}
+			continue
+		}
 		iface := node_iface_on(n, bus) or { continue }
 		for sig in n.view.produces[iface] {
 			prod[sig] << n.name
@@ -1264,6 +1315,18 @@ fn producers_on(s System, bus Bus) map[string][]string {
 fn consumers_on(s System, bus Bus) map[string][]string {
 	mut cons := map[string][]string{}
 	for n in s.nodes {
+		if n.external {
+			if bus.name in n.buses {
+				for c in n.consumes {
+					if sig := s.signal_by_name(c) {
+						if sig.bus == bus.name {
+							cons[c] << n.name
+						}
+					}
+				}
+			}
+			continue
+		}
 		iface := node_iface_on(n, bus) or { continue }
 		for sig in n.view.consumes[iface] {
 			cons[sig] << n.name

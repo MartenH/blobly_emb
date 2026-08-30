@@ -47,7 +47,13 @@ fn main() {
 		exit(1)
 	}
 
+	mut generated := 0
 	for n in sys.nodes {
+		if n.external {
+			println('sysgen: ${n.name}: external (off-system member, nothing generated)')
+			continue
+		}
+		generated++
 		out := generate_node(sys, n) or {
 			eprintln('sysgen: node "${n.name}": ${err}')
 			exit(1)
@@ -102,7 +108,7 @@ fn main() {
 		}
 		println('sysgen: ${n.name} -> ${gen_path} (ok)')
 	}
-	println('sysgen: ${sys.nodes.len} node(s) generated + gated')
+	println('sysgen: ${generated} node(s) generated + gated')
 }
 
 // generate_node emits the complete ecu.toml text for one node: the derived

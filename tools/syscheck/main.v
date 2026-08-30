@@ -39,6 +39,10 @@ fn main() {
 		println('  bus ${b.name}: ${b.interface} ${b.bitrate} ${fd} (${b.dbc})')
 	}
 	for n in sys.nodes {
+		if n.external {
+			println('  node ${n.name}: external (off-system) buses=${n.buses} consumes=${n.consumes}')
+			continue
+		}
 		println('  node ${n.name}: nm=0x${n.nm.hex()} trace=${n.trace} buses=${n.buses}')
 	}
 

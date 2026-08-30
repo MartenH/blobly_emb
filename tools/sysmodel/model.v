@@ -79,6 +79,13 @@ pub mut:
 	diag         Diag
 	trace        int
 	has_trace    bool // whether [[node]] declared `trace` (0 is a valid trace id)
+	// An OFF-SYSTEM member (REQ-TOPO-013): a bench tool, a vehicle ECU we do not build, a
+	// SOME/IP peer. Declared so the single-writer / reachability rules can name it, never
+	// generated (no ecu.toml, no [nm], no image). A single ECU's peers are implicitly the
+	// restbus simulation; in a composed system they are declared, or the model cannot tell
+	// "off-system" from "forgotten".
+	external bool
+	consumes []string // external only: cross-node signals this member receives
 	// --- extracted from the node's ecu.toml (filled by load_node) ---
 	view NodeView
 }
@@ -429,9 +436,13 @@ pub fn parse_system(path string) !System {
 				has_trace:    'trace' in m
 				nm_alloc_ok:  nm_raw >= 0 && nm_raw <= 255
 				trace:        m_int(m, 'trace')
+				external:     (m['external'] or { toml.Any(false) }).bool()
 			}
 			for b in (m['buses'] or { toml.Any([]toml.Any{}) }).array() {
 				node.buses << b.string()
+			}
+			for c in (m['consumes'] or { toml.Any([]toml.Any{}) }).array() {
+				node.consumes << c.string()
 			}
 			if dm := m['diag'] {
 				d := dm.as_map()
@@ -488,6 +499,9 @@ pub fn (mut s System) load_nodes() []string {
 	mut errs := []string{}
 	mut dbc_cache := map[string]candb.Database{}
 	for i in 0 .. s.nodes.len {
+		if s.nodes[i].external {
+			continue // nothing to load: an off-system member has no ecu.toml (REQ-TOPO-013)
+		}
 		// node paths resolve against system.toml's dir, unless already absolute
 		path := if os.is_abs_path(s.nodes[i].ecu) {
 			s.nodes[i].ecu
@@ -558,6 +572,9 @@ pub fn (mut s System) load_nodes() []string {
 pub fn (mut s System) load_nodes_partial() []string {
 	mut errs := []string{}
 	for i in 0 .. s.nodes.len {
+		if s.nodes[i].external {
+			continue // nothing to load: an off-system member has no ecu.toml (REQ-TOPO-013)
+		}
 		path := if os.is_abs_path(s.nodes[i].ecu) {
 			s.nodes[i].ecu
 		} else {

@@ -4303,3 +4303,64 @@ fn test_nm_cluster_on_a_someip_bus_is_error() {
 	e := errs(validate_system(s))
 	assert e.any(it.contains('cannot carry an NM cluster')), e.str()
 }
+
+// @verifies REQ-TOPO-013
+fn test_external_producer_and_consumer_are_members() {
+	mut s := clean_system()
+	// a bench tool on `compute` produces Cmd, which sysnode reads; it also consumes Speed
+	s.nodes << Node{
+		name:     'host'
+		buses:    ['compute']
+		external: true
+	}
+	// ...and an off-system logger that is Cmd's ONLY reader
+	s.nodes << Node{
+		name:     'logger'
+		buses:    ['compute']
+		external: true
+		consumes: ['Cmd']
+	}
+	s.signals << SysSignal{
+		name:     'Cmd'
+		producer: 'host'
+		bus:      'compute'
+		frame:    'CmdFrame'
+		fields:   {
+			'v': 'u32'
+		}
+	}
+	issues := validate_system(s)
+	assert errs(issues) == [], errs(issues).str()
+	// an external producer needs no FB, no nm, no ecu — and is still the single writer
+	assert 'REQ-TOPO-005' !in reqs_of(issues, .error)
+	// Cmd, read by nobody but the external logger, is not "read by no other node"
+	for i in issues {
+		assert !i.msg.contains('read by no other node'), i.msg
+	}
+}
+
+// @verifies REQ-TOPO-013
+fn test_external_member_may_not_carry_generated_identity() {
+	mut s := clean_system()
+	s.nodes << Node{
+		name:         'host'
+		buses:        ['compute']
+		external:     true
+		ecu:          'nodes/host/ecu.toml'
+		has_nm_alloc: true
+		nm:           0x20
+		nm_alloc_ok:  true
+	}
+	issues := validate_system(s)
+	assert 'REQ-TOPO-013' in reqs_of(issues, .error), errs(issues).str()
+	// and one on no bus, or consuming a signal that does not exist, is refused too
+	s.nodes[s.nodes.len - 1] = Node{
+		name:     'host'
+		external: true
+		consumes: ['Nope']
+	}
+	issues2 := validate_system(s)
+	assert errs(issues2).filter(it.contains('names no bus')).len == 1, errs(issues2).str()
+	assert errs(issues2).filter(it.contains('not a system signal')).len == 1, errs(issues2).str()
+}
+

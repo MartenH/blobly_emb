@@ -24,6 +24,7 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 | Node-local FB→FB signalling (intra-thread cell) | `zone_a` | ✅ |
 | Physical **IO** (GPIO: button → signal, signal → LED) | `zone_a` | ⚙️ config-proven on silicon (re-flash after the #247 pool fix to see the LED) |
 | Physical **PWM** (cross-node `LedLevel` → LD3 intensity, 0.5 Hz breathing) | `domain` → `zone_a` | ✅ on-silicon (TIM12 at 1 kHz, CCR1 sweeping 0..49999 over SWD, LD3 fades) |
+| **Off-system member** (`[[node]] external = true`): blobly_net produces `HostLedLevel` → `domain`'s LD3 as PWM | `host` → `domain` | ⏳ model + build; bench-pending |
 | **SOME/IP-over-Ethernet** (cyclic events + E2E + RPC rx) | `tcu` | ✅ silicon-validated (ping, tx/rx, E2E) |
 
 ---
@@ -46,12 +47,12 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 
 **But `tcu` is deliberately not a `[[node]]` in `system.toml` — and that's a real boundary, not an oversight.** The system model now *does* carry the Ethernet side: a `[bus.*]` declares its **carrier** (`kind = "someip"`, a `service` + `version` instead of a DBC), membership is **explicit** (a node names the bus, since each eth node has its own address), and `syscheck` validates the members' reciprocal peers, endpoint addresses, event ids and payload contracts. What blocks `tcu` is narrower and concrete:
 
-**its peer is off-system.** The tcu talks to the **bench tool at `192.168.0.190`**, not to another ECU. REQ-TOPO-001 requires every transmitted signal to be received by ≥1 *node*, and a SOME/IP link is point-to-point — so joining `tcu` to a system bus today would mean either inventing a peer node that doesn't exist or reporting its telemetry as unreceived. The model needs a way to say **"this endpoint is consumed off-system"** first. So `tcu`:
+**its peer is off-system.** The tcu talks to the **bench tool at `192.168.0.190`**, not to another ECU. REQ-TOPO-001 requires every transmitted signal to be received by ≥1 *node*, and a SOME/IP link is point-to-point. The model can now say **"this member is off-system"** — `[[node]] external = true` (REQ-TOPO-013), which is how `host` (blobly_net) produces `HostLedLevel` on `compute` — but SOME/IP wiring is still not lowered from `system.toml` (REQ-TOPO-003), so `tcu` joining is a follow-up. So `tcu`:
 
 - **is** in the build — it's in the Makefile `NODES` list, so `make nodes` cross-builds it with the others; and
 - **is not** in the cross-node *model* — its SOME/IP events aren't validated for writers/reachability the way the CAN signals are.
 
-Until the off-system endpoint lands, the Ethernet node is a **build member, not a model member** — which is why you won't find it in `system.toml`.
+Until SOME/IP wiring is lowered from `system.toml`, the Ethernet node is a **build member, not a model member** — which is why you won't find it in `system.toml`.
 
 *(The same is true of `domain_m4`: it's a CM4 **satellite image**, a `[[partition]] image=` inside `domain`'s own config, not a system-level node — so it isn't in `system.toml` either.)*
 
@@ -66,6 +67,7 @@ All four routes are **layout-identical** (same signal position/scale/DLC on both
 | `VehicleSpeed` | `domain` (compute) | `compute` → `edge` | `zone_a` | `0x120` → `0x130` | 100 ms |
 | `HeadlightCmd` | `domain` (compute) | `compute` → `edge` | `zone_a` | `0x123` → `0x131` | 100 ms |
 | `LedLevel` | `domain` (compute) | `compute` → `edge` | `zone_a` | `0x126` → `0x133` | 100 ms |
+| `HostLedLevel` | **`host`** (blobly_net, off-system) | — (consumed on `compute`) | `domain` | `0x127` | 100 ms |
 | `SteeringAngle` | `zone_a` (edge) | `edge` → `compute` | `domain` | `0x132` → `0x125` | 50 ms |
 
 This closes a **bidirectional** loop through the H735: `domain` switches its headlights on `zone_a`'s routed steering (`headlight_cmd = steering > 90`), and `zone_a` clamps its steering by the `VehicleSpeed` it receives from `domain`. Every cross-bus hop goes through the gateway's forwarder.

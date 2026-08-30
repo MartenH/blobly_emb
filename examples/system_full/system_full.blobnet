@@ -2,7 +2,8 @@
 #
 # THE SYSTEM (3 boards, all generated from examples/system_full/system.toml):
 #   sysnode (STM32H735-DK)  — the gateway: owns both FDCAN buses, forwards 4 routes
-#   domain  (NUCLEO-H755ZI) — produces VehicleSpeed + HeadlightCmd + LedLevel on the compute bus
+#   domain  (NUCLEO-H755ZI) — produces VehicleSpeed + HeadlightCmd + LedLevel on the compute bus;
+#                             fades its red LD3 with HostLedLevel, which THIS TOOL produces (0x127)
 #   zone_a  (NUCLEO-H723ZG) — produces SteeringAngle on the edge bus
 #
 # blobly_net just LISTENS (monitor mode, no simulation — the boards drive the traffic) and
@@ -53,8 +54,15 @@ buses:
     address: can0            # PCAN "can1" = SocketCAN can0 = compute bus
     protocol: can
     bitrate: 500000
-    mode: monitor            # listen + ACK the boards; no restbus sim — the ECUs drive it
+    mode: normal             # this tool IS a member here: "host" (system.toml external node)
     enabled: true
+    # The off-system member: blobly_net breathes HostLedLevel (0..1000 permille, 0.5 Hz) and
+    # the H755 puts it on its own red LD3 as PWM — the mirror of LedLevel, which the H755
+    # breathes to the H723 through the gateway. "host" is the DBC transmitter of HostLedFrame.
+    simulation:
+      - name: host
+        signals:
+          - { name: HostLedLevel, type: sine, offset: 500, amplitude: 500, freq: 0.5 }
     manifest: nodes/domain/gen/trace-manifest.csv  # the domain node's CAN shell frames
                                                     # (0x7F0/0x7F2/0x7F1) — WITHOUT this the shell
                                                     # panel reports "shell not available". Type

@@ -110,3 +110,13 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-TOPO-001"
+
+[[req]]
+id = "REQ-TOPO-013"
+title = "Off-system members are declared, never generated"
+text = "A system composition MAY declare a member that is not built from it — a bench tool, a vehicle ECU outside the project, a SOME/IP peer — as a node with `external = true`. Such a member names the buses it sits on and, optionally, the cross-node signals it consumes; it may be the producer of a cross-node signal. It has no ecu.toml, no network-management or diagnostic identity and no image, and the generator shall emit nothing for it; declaring any of those on it shall be a generation-time error. Cross-node single-writer and reachability (REQ-TOPO-001) shall count an external member like any other node, so a signal produced or consumed off-system is neither unwritten nor unread. Rationale: a single ECU's peers are implicitly its restbus simulation; in a composed system every peer is declared, or the model cannot tell off-system from forgotten."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-TOPO-001"
+

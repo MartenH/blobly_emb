@@ -54,6 +54,18 @@ bus      = "compute"
 frame    = "LedLevelFrame"
 cycle_ms = 100
 
+# HostLedLevel comes from OFF-SYSTEM: blobly_net's restbus simulation ("host" in compute.dbc)
+# breathes it on the compute bus and the domain puts it on its own red LD3 as PWM — the mirror
+# of LedLevel above. `host` is an external member (REQ-TOPO-013): declared so single-writer and
+# reachability can name it, never generated.
+[[signal]]
+name     = "HostLedLevel"
+fields   = { permille = "u32" }
+producer = "host"
+bus      = "compute"
+frame    = "HostLedFrame"
+cycle_ms = 100
+
 [[signal]]
 name     = "SteeringAngle"
 fields   = { deg = "u32" }
@@ -103,6 +115,12 @@ buses = ["compute"]
 nm    = 0x12
 diag  = { req = 0x7B0, rsp = 0x7B8 }
 trace = 2
+
+# The bench tool. An off-system member: on the compute bus, produces HostLedLevel, builds nothing.
+[[node]]
+name     = "host"
+buses    = ["compute"]
+external = true
 
 [[node]]
 name  = "zone_a"
