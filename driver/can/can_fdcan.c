@@ -319,6 +319,7 @@ int blob_can_tx_idle(int h) {
 	FDCAN_GlobalTypeDef *c = inst(h);
 	if (!c)
 		return 1;
+	busoff_poll(h, c); /* a caller draining via tx_idle (the boot reset-wait) recovers too (codex #265 r3) */
 	return c->TXBRP == 0u;
 }
 

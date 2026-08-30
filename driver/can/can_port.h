@@ -4,7 +4,7 @@
 
 /* CAN / CAN-FD driver PORT — the narrow contract the COM bridge depends on.
  *
- * The V side (driver/can/can.v) calls exactly these four functions; each
+ * The V side (driver/can/can.v) calls the functions below; each
  * platform provides ONE implementation, selected at build time in can_backend.c:
  *
  *   (default)          host / sim    SocketCAN over vcan      (can_socket.c)

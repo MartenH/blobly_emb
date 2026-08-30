@@ -146,6 +146,7 @@ int blob_can_tx_idle(int h) {
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
 	if (!hf)
 		return 1;
+	hal_busoff_poll(h, hf); /* tx_idle drain path recovers too (codex #265 r3) */
 	return hf->Instance->TXBRP == 0u;
 }
 
