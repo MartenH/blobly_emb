@@ -3497,15 +3497,29 @@ fn test_dissolved_multifield_signal() {
 		&& it.contains('carries exactly one'))
 }
 
-// REQ-TOPO-004/005: a node with no NM allocation is simply not an NM node (a tester, a
-// host-side node) — no [nm] is generated for it and no NM check names it.
+// REQ-TOPO-004/005: a NON-GENERATED node with no NM allocation is simply not an NM node (a
+// tester, a declaration-only member) — no [nm] is generated for it and no NM check names it.
 fn test_dissolved_node_without_nm_alloc() {
 	mut s := clean_dissolved()
 	s.nodes[0].has_nm_alloc = false
 	s.nodes[0].view.has_nm = false
+	s.nodes[0].view.is_threadx = false // a declaration-only node, not a generated member
+	s.nodes[0].view.has_telemetry = false
 	for e in errs(validate_system_gen(s)) {
 		assert !e.contains('nm'), e
 	}
+}
+
+// REQ-TOPO-004: a GENERATED (threadx) member of an NM-managed bus may NOT skip `nm` — its
+// cyclic producers would be emitted without the nm_up gate (REQ-COM-007) and transmit into a
+// sleeping cluster (codex on #264).
+fn test_dissolved_threadx_node_without_nm_alloc_is_error() {
+	mut s := clean_dissolved()
+	s.nodes[0].has_nm_alloc = false
+	s.nodes[0].view.has_nm = false
+	issues := validate_system_gen(s)
+	assert errs(issues).any(it.contains('must allocate `nm`')), errs(issues).str()
+	assert 'REQ-TOPO-004' in reqs_of(issues, .error)
 }
 
 // REQ-TOPO-001: a signal field must be a fixed scalar type (no heap types).

@@ -173,15 +173,15 @@ fn test_run_profiled_trace_hook() {
 struct PreemptClock {
 mut:
 	t    u64 // wall µs
-	io   u64 // io exec µs (monotonic)
+	io   u32 // io exec µs (monotonic, wrapping — the real counter is u32)
 	step u64
-	iodt u64
+	iodt u32
 }
 
 fn preempted_handler(ctx voidptr) {
 	mut pc := unsafe { &PreemptClock(ctx) }
-	pc.t += pc.step + pc.iodt // wall time includes the io thread's run
-	pc.io += pc.iodt
+	pc.t += pc.step + u64(pc.iodt) // wall time includes the io thread's run
+	pc.io += pc.iodt // u32: wraps like the real counter
 }
 
 // @verifies REQ-TRACE-001
@@ -189,11 +189,12 @@ fn test_run_profiled_excl_subtracts_preemption() {
 	pc := &PreemptClock{
 		step: 50
 		iodt: 30
+		io:   0xffff_fff0 // 16 µs below the wrap: the 30 µs delta crosses it (u32 modulo must hold)
 	}
 	clock := fn [pc] () u64 {
 		return pc.t
 	}
-	preempt := fn [pc] () u64 {
+	preempt := fn [pc] () u32 {
 		return pc.io
 	}
 	mut cap := HookCapture{}

@@ -402,7 +402,7 @@ fn trace_fb_hooks(m Model, doc toml.Doc, app_threads []string, multi bool, io_he
 	mut g := ['', 'fn trace_clock() u64 {', '\treturn C.board_now_us()', '}']
 	if io_here {
 		// the io thread's exec counter as a clock: run_profiled_excl subtracts its delta per handler
-		g << ['', 'fn io_exec_clock() u64 {', '\treturn u64(C.io_exec_us())', '}']
+		g << ['', 'fn io_exec_clock() u32 {', '\treturn C.io_exec_us()', '}']
 	}
 	if !multi {
 		g << ''

@@ -228,6 +228,17 @@ fn check_dissolved_nodes(s System) []Issue {
 			}
 			continue
 		}
+		if bus.has_nm_cluster && !n.has_nm_alloc && n.view.is_threadx {
+			// The nm-less exemption is for nodes nothing is generated for (a tester, a
+			// declaration-only member). A GENERATED ThreadX member without [nm] would have its
+			// cyclic producers emitted without the nm_up gate (REQ-COM-007) and keep
+			// transmitting into a sleeping cluster (codex on #264).
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-004'
+				msg:      'node "${n.name}": a threadx member of NM-managed bus "${bus.name}" must allocate `nm` — generated without it, its cyclic tx would ignore coordinated sleep (REQ-COM-007)'
+			}
+		}
 		if bus.has_nm_cluster && n.has_nm_alloc {
 			alive := bus.nm_peers_lo + n.nm
 			if alive < bus.nm_peers_lo || alive > bus.nm_peers_hi {
