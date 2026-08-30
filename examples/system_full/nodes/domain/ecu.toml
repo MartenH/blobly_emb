@@ -19,8 +19,8 @@ core = 0
 
 # --- physical IO (boards/h755zi owns the pins; io_stm32.c is the generic H7 backend) ---
 # HostLed: this Nucleo's red LD3 (PB14, TIM12_CH1) as PWM intensity, driven by HostLedLevel —
-# the system signal the TESTER node produces on the compute bus (HostLedFrame 0x127; on the
-# bench blobly_net simulates that node). The mirror of zone_a's BreathLed: there the level comes
+# the system signal the TESTER node produces on the compute bus (HostLedFrame 0x127; blobly_net
+# simulates that node — nodes/tester is a declaration only). The mirror of zone_a's BreathLed: there the level comes
 # from this node through the gateway; here it comes from the tester.
 [io]
 core = 0

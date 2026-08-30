@@ -24,7 +24,7 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 | Node-local FB→FB signalling (intra-thread cell) | `zone_a` | ✅ |
 | Physical **IO** (GPIO: button → signal, signal → LED) | `zone_a` | ⚙️ config-proven on silicon (re-flash after the #247 pool fix to see the LED) |
 | Physical **PWM** (cross-node `LedLevel` → LD3 intensity, 0.5 Hz breathing) | `domain` → `zone_a` | ✅ on-silicon (TIM12 at 1 kHz, CCR1 sweeping 0..49999 over SWD, LD3 fades) |
-| **Tester as a node**: `tester` (host target) produces `HostLedLevel` → `domain`'s LD3 as PWM; blobly_net restbus-simulates it on the bench | `tester` → `domain` | ✅ on-silicon via the CANsub (`simulation: tester`, H755 TIM12 CCR1 follows the sine) |
+| **Tester as a node**: `tester` (declaration only) produces `HostLedLevel` → `domain`'s LD3 as PWM; blobly_net restbus-simulates it | `tester` → `domain` | ✅ on-silicon via the CANsub (`simulation: tester`, H755 TIM12 CCR1 follows the sine) |
 | **SOME/IP-over-Ethernet** (cyclic events + E2E + RPC rx) | `tcu` | ✅ silicon-validated (ping, tx/rx, E2E) |
 
 ---
@@ -56,7 +56,7 @@ Until SOME/IP wiring is lowered from `system.toml`, the Ethernet node is a **bui
 
 ### The tester is a node
 
-Every real system has a tester on the bus, so `system_full` declares one: `tester` (`nodes/tester`, a **host-target** node, one FB breathing `HostLedLevel` at 0.5 Hz). In the sim it runs (`make -C nodes/tester run` on `vcan0`); on the bench **blobly_net restbus-simulates it** (`simulation: tester` in the `.blobnet`, keyed on the DBC transmitter name) exactly as it would any absent ECU. Nothing in the model knows or cares that the node is "the tool" — no off-system concept, single-writer and reachability hold as for any node.
+Every real system has a tester on the bus, so `system_full` declares one: `tester` (`nodes/tester/ecu.toml` — a **declaration only**: one FB writing `HostLedLevel`, so the model's single-writer rule has its producer). Nothing is built for it: **blobly_net restbus-simulates it** (`simulation: tester` in the `.blobnet`, keyed on the DBC transmitter name — blobly_net reads `compute.dbc`, never the node) exactly as it would any absent ECU. Nothing in the model knows or cares that the node is "the tool" — no off-system concept, single-writer and reachability hold as for any node. It carries no `nm`: a tester is not an NM node.
 
 *(The same is true of `domain_m4`: it's a CM4 **satellite image**, a `[[partition]] image=` inside `domain`'s own config, not a system-level node — so it isn't in `system.toml` either.)*
 

@@ -1,11 +1,9 @@
-# tester — the bench tool as a NODE (authored internals only; the bus wiring + identity come
-# from ../../system.toml). A composed system has a tester on its bus like it has any other
-# ECU: here it is a host-target node that breathes HostLedLevel on the compute bus, which the
-# domain (H755) puts on its own red LD3 as PWM. In the sim (`make run`, vcan0) this node RUNS;
-# on the bench blobly_net's restbus simulation stands in for it (`simulation: tester` in the
-# .blobnet — the DBC transmitter is "tester" either way), exactly as it stands in for any other
-# absent ECU. Nothing is generated differently for "the tool" — it is a member.
-# NOTE: no inline comments inside [[...]] tables (vlang/v#27684).
+# tester — the bench tool as a NODE, declaration only. A composed system has a tester on its
+# bus like any other ECU, and the model wants the producer of HostLedLevel to be a node with one
+# FB writing it (single-writer, REQ-TOPO-005). Nothing here is built: blobly_net restbus-simulates
+# this node on the bench (system_full.blobnet `simulation: tester`, keyed on the DBC transmitter
+# name — blobly_net reads compute.dbc, never this file). No `nm` in system.toml: a tester is not
+# an NM node. NOTE: no inline comments inside [[...]] tables (vlang/v#27684).
 
 [[partition]]
 name = "bench"
@@ -22,9 +20,3 @@ thread = "gen"
   name      = "on_100ms"
   period_ms = 100
   writes    = ["HostLedLevel"] # trailing comment terminates the nested block (vlang/v#27684)
-
-[telemetry]
-enabled   = true
-bus       = "can0"
-id        = 0x7E6
-period_ms = 500
