@@ -294,8 +294,8 @@ int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int flag
  * new call in the generated loop. Clearing INIT starts the ISO 11898-1 recovery sequence
  * (129 x 11 recessive bits) in hardware; g_closed keeps close()'s deliberate INIT parked. */
 static void busoff_poll(int h, FDCAN_GlobalTypeDef *c) {
-	if (h < 0 || h >= 3 || g_closed[h])
-		return;
+	if (h < 0 || h >= 3 || !c || g_closed[h])
+		return; /* !c: an absent instance (e.g. FDCAN3 on a 2-FDCAN part) via the accessor path */
 	if (c->PSR & FDCAN_PSR_BO) {
 		/* Bus-off. If the core has (re-)latched INIT, clear it to (re-)start the ISO 11898-1
 		 * recovery — 129 x 11 recessive bits, hardware-timed. Do NOT count yet: recovery is only
@@ -311,6 +311,8 @@ static void busoff_poll(int h, FDCAN_GlobalTypeDef *c) {
 	}
 }
 uint32_t blob_can_busoff_recoveries(int h) {
+	busoff_poll(h, inst(h)); /* poll here too, so a caller reading only this still sees a completed
+	                          * recovery counted without an unrelated send/recv first (codex #265 r5) */
 	return (h >= 0 && h < 3) ? g_busoff_rec[h] : 0u;
 }
 

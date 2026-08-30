@@ -188,6 +188,7 @@ uint32_t blob_can_rx_overruns(int h) {
 }
 
 uint32_t blob_can_busoff_recoveries(int h) {
+	hal_busoff_poll(h, bus_handle(h)); /* poll here too (codex #265 r5) */
 	return (h >= 0 && h < 3) ? hal_busoff_rec[h] : 0u;
 }
 
