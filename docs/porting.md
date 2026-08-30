@@ -7,15 +7,17 @@ seam, how to pick a backend, and what each one has to provide.
 
 ## The CAN driver port
 
-The whole contract the COM bridge depends on is six C functions
+The whole contract the COM bridge depends on is eight C functions
 ([driver/can/can_port.h](../driver/can/can_port.h)):
 
 ```c
 int      blob_can_open (const char *name, int fd_mode);                 /* >=0 handle, -1 fail */
 int      blob_can_send (int h, uint32_t id, const uint8_t *d, uint8_t len, int flags);   /* flags: BLOB_CAN_FLAG_FD|EXT */
 int      blob_can_tx_ready(int h);                                      /* 1=Tx can accept now, 0=full */
+int      blob_can_tx_idle (int h);                                      /* 1=all handed-off frames transmitted */
 int      blob_can_recv (int h, uint32_t *id, uint8_t *d, uint8_t *len, int *flags); /* 0=frame (flags=FD|EXT), -1=none */
 uint32_t blob_can_rx_overruns(int h);   /* count of Rx-overrun events since open, each >=1 frame lost */
+uint32_t blob_can_busoff_recoveries(int h); /* count of bus-off recoveries since open; 0 where the platform owns it */
 void     blob_can_close(int h);
 ```
 
@@ -24,6 +26,10 @@ and `BLOB_CAN_FLAG_EXT` (29-bit extended vs 11-bit standard id). `send` reads th
 the caller's frame; `recv` reports them for the received frame. A backend must **drop
 REMOTE (RTR) frames** in `recv` (return "none") — the `Frame` has no RTR flag, so a
 forwarder would otherwise emit a data frame with meaningless bytes.
+
+`blob_can_busoff_recoveries` surfaces bus-off recovery (REQ-CAN-DRV-009): a backend that owns
+the controller re-initiates bus participation after bus-off and counts it; a backend where the
+platform owns recovery (SocketCAN's kernel `restart-ms`, a CanIf CDD above CanSM) returns 0.
 
 `blob_can_rx_overruns` surfaces receive-with-loss (REQ-CAN-DRV-008): when frames arrive
 faster than `recv` drains them and overflow the Rx buffer, the backend counts the overrun
@@ -49,7 +55,7 @@ generated `gen/loom_gen.v` only ever touches `can.Channel`.
 ```mermaid
 graph TB
   BR["COM bridge (generated)\nsend / recv frames"]
-  PORT["can_port.h — the 6-function contract"]
+  PORT["can_port.h — the 8-function contract"]
   SEL["can_backend.c — build-time selector (-D macro)"]
   SOCK["can_socket.c\nSocketCAN / vcan (host, default)"]
   HAL["can_sthal.c\nSTM32 H7 FDCAN via ST HAL"]
@@ -121,7 +127,7 @@ H755).
 
 ## What a new port actually costs
 
-1. `driver/can/can_<backend>.c` — implement the six `blob_can_*` functions.
+1. `driver/can/can_<backend>.c` — implement the eight `blob_can_*` functions.
 2. `osal/osal_<backend>.c` — cores, `now_us`, the shared IOC region.
 3. `main.v` — the platform init (HAL/CubeMX or `Can_Init`/`CanIf_Init`) + `gen.run`.
 

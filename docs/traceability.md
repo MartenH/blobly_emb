@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 187 | 105 | 19 | 63 | 0 |
+| 188 | 105 | 19 | 64 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -44,6 +44,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-DRV-006 | QM | review | uncovered | — |
 | REQ-CAN-DRV-007 | QM | test | uncovered | — |
 | REQ-CAN-DRV-008 | QM | test | uncovered | — |
+| REQ-CAN-DRV-009 | QM | test | uncovered | — |
 | REQ-COM-001 | QM | test | uncovered | — |
 | REQ-COM-002 | QM | test | uncovered | — |
 | REQ-COM-003 | QM | test | verified | com_test.v (pass) |
@@ -236,6 +237,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-DRV-006 | | | | | | | | | | | | | | | | | |
 | REQ-CAN-DRV-007 | | | | | | | | | | | | | | | | | |
 | REQ-CAN-DRV-008 | | | | | | | | | | | | | | | | | |
+| REQ-CAN-DRV-009 | | | | | | | | | | | | | | | | | |
 | REQ-COM-001 | | | | | | | | | | | | | | | | | |
 | REQ-COM-002 | | | | | | | | | | | | | | | | | |
 | REQ-COM-003 | | | | | | | | | | | | | | ✓ | | | |

@@ -192,6 +192,13 @@ uint32_t blob_can_rx_overruns(int sock) {
 	return 0u;
 }
 
+uint32_t blob_can_busoff_recoveries(int sock) {
+	(void)sock;
+	/* SocketCAN: bus-off handling belongs to the kernel driver (ip link ... restart-ms);
+	 * this backend never sees the controller, so it reports no recoveries of its own. */
+	return 0u;
+}
+
 void blob_can_close(int sock) {
 	ovfl_reset(sock);
 	close(sock);

@@ -59,7 +59,7 @@ derives = "SYS-REQ-COMMS-001"
 [[req]]
 id = "REQ-CAN-DRV-006"
 title = "Uniform backend contract"
-text = "Every CAN driver backend shall present the same open/send/tx_ready/recv/rx_overruns/close contract to the upper layer."
+text = "Every CAN driver backend shall present the same contract to the upper layer: open/send/tx_ready/tx_idle/recv/rx_overruns/busoff_recoveries/close. A backend that owns the controller implements bus-off recovery (REQ-CAN-DRV-009); one where the platform owns it returns 0 from busoff_recoveries and defers."
 status = "draft"
 method = "review"
 asil = "QM"
@@ -88,6 +88,25 @@ text = "When received frames arrive faster than they are drained and exceed the 
 # register-level FDCAN counts IR.RF0L, the ST HAL FDCAN_FLAG_RX_FIFO0_MESSAGE_LOST, the
 # CanIf CDD its SPSC-ring push failures, and host/SocketCAN the SO_RXQ_OVFL per-socket
 # drop count. Target (h735/FDCAN) hardware sign-off pending.
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-001"
+
+[[req]]
+id = "REQ-CAN-DRV-009"
+title = "Recover from bus-off"
+text = "When the CAN controller enters bus-off, a driver backend that owns the controller shall re-initiate bus participation (the ISO 11898-1 recovery sequence of 129 occurrences of 11 recessive bits) without requiring a device reset, and shall report the number of recoveries since open as a count. A deliberate close shall not be undone by recovery. Backends that do not own the controller (SocketCAN, a CanIf CDD) report zero and defer recovery to the platform."
+# Born on the bench (#261): closing a host tool's CAN adapter glitched the edge bus, the H723
+# hit bus-off (TEC 252), M_CAN set CCCR.INIT and the node stayed silent until a manual reset —
+# the LED demo froze with the timer still running. The register-level FDCAN backend polls
+# PSR.BO from tx_ready()/recv() (comm-thread cadence, no ISR) and clears INIT; the count is
+# blob_can_busoff_recoveries(), SWD-observable next to rx_overruns. Bench status (2026-08-30):
+# a mismatched-bitrate / high-rate jam on the edge bus drove the H723 to sustained ERROR-PASSIVE
+# (TEC saturated at 255, PSR EP|EW) and it self-recovered when the jam stopped — but the BUS-OFF
+# latch (TEC > 255, PSR.BO, CCCR.INIT set by hardware) could not be forced on this bench, so the
+# recovery path is correct-by-construction and register-reachability-checked, verification of the
+# actual BO->recover transition still pending (needs deterministic error injection).
 status = "draft"
 method = "test"
 asil = "QM"

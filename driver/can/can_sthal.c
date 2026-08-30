@@ -74,6 +74,31 @@ static uint8_t dlc_to_len(uint32_t dlc) {
 
 /* Rx-FIFO0 overrun events per instance (idx 0..2): each is >=1 frame lost (REQ-CAN-DRV-008). */
 static uint32_t rx_lost[3];
+static uint8_t  hal_closed[3];     /* close() Stopped it deliberately: recovery must not restart */
+static uint8_t  hal_recovering[3]; /* INIT cleared, waiting for PSR.BO to clear */
+static uint32_t hal_busoff_rec[3]; /* COMPLETED bus-off recoveries since open (REQ-CAN-DRV-009) */
+
+/* Bus-off recovery, ST-HAL backend (REQ-CAN-DRV-009). The HAL owns the controller but exposes
+ * the M_CAN registers through hf->Instance, so the recovery is the same as the register backend:
+ * on PSR.BO with CCCR.INIT latched, clear INIT to start the ISO 11898-1 sequence. Polled from
+ * send()/tx_ready()/recv() at comm-thread cadence, no ISR. A HAL-level restart (Stop/Start after
+ * ErrorStatusCallback) would re-run filter config and clear FIFOs for no gain here. */
+static void hal_busoff_poll(int h, FDCAN_HandleTypeDef *hf) {
+	if (h < 0 || h >= 3 || hal_closed[h] || !hf || !hf->Instance)
+		return;
+	FDCAN_GlobalTypeDef *c = hf->Instance;
+	if (c->PSR & FDCAN_PSR_BO) {
+		/* count only a COMPLETED recovery (when PSR.BO clears); clear INIT to (re-)start it, and
+		 * re-clear on a re-latch from a still-bad bus — one recovery either way (codex #265 r4). */
+		if (c->CCCR & FDCAN_CCCR_INIT) {
+			c->CCCR &= ~FDCAN_CCCR_INIT;
+		}
+		hal_recovering[h] = 1;
+	} else if (hal_recovering[h]) {
+		hal_recovering[h] = 0;
+		hal_busoff_rec[h]++;
+	}
+}
 
 int blob_can_open(const char *name, int fd_mode) {
 	int idx = (name && name[0]) ? (name[0] - '0') : 0;
@@ -87,12 +112,17 @@ int blob_can_open(const char *name, int fd_mode) {
 	/* Fresh session: clear a stale message-lost flag + the tally so a close/reopen of this
 	 * bus doesn't report the previous session's overruns ("since open"). */
 	__HAL_FDCAN_CLEAR_FLAG(hf, FDCAN_FLAG_RX_FIFO0_MESSAGE_LOST);
-	if (idx >= 0 && idx < 3)
+	if (idx >= 0 && idx < 3) {
 		rx_lost[idx] = 0;
+		hal_closed[idx] = 0;
+		hal_recovering[idx] = 0;
+		hal_busoff_rec[idx] = 0;
+	}
 	return idx;
 }
 
 int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int flags) {
+	hal_busoff_poll(h, bus_handle(h)); /* send-only callers recover too (codex #265) */
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
 	if (!hf) return -1;
 	if (!dlc_exact(len)) return -1; /* don't pad to a different on-wire length */
@@ -115,6 +145,7 @@ int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int flag
  * overruns the FIFO or blocks. */
 int blob_can_tx_ready(int h) {
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
+	hal_busoff_poll(h, hf);
 	return (hf && HAL_FDCAN_GetTxFifoFreeLevel(hf) > 0) ? 1 : 0;
 }
 
@@ -124,12 +155,14 @@ int blob_can_tx_idle(int h) {
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
 	if (!hf)
 		return 1;
+	hal_busoff_poll(h, hf); /* tx_idle drain path recovers too (codex #265 r3) */
 	return hf->Instance->TXBRP == 0u;
 }
 
 int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len, int *flags) {
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
 	if (!hf) return -1;
+	hal_busoff_poll(h, hf); /* receive-only callers recover too (codex #265 r2) */
 	/* Note + clear a FIFO0 message-lost since the last drain, before the empty-check, so a
 	 * loss that left the FIFO drained is still counted (REQ-CAN-DRV-008). */
 	if (__HAL_FDCAN_GET_FLAG(hf, FDCAN_FLAG_RX_FIFO0_MESSAGE_LOST) && h >= 0 && h < 3) {
@@ -154,7 +187,14 @@ uint32_t blob_can_rx_overruns(int h) {
 	return (h >= 0 && h < 3) ? rx_lost[h] : 0u;
 }
 
+uint32_t blob_can_busoff_recoveries(int h) {
+	hal_busoff_poll(h, bus_handle(h)); /* poll here too (codex #265 r5) */
+	return (h >= 0 && h < 3) ? hal_busoff_rec[h] : 0u;
+}
+
 void blob_can_close(int h) {
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
+	if (h >= 0 && h < 3)
+		hal_closed[h] = 1; /* deliberate: hal_busoff_poll must not restart it (codex #265 r2) */
 	if (hf) HAL_FDCAN_Stop(hf);
 }

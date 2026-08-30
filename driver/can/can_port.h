@@ -4,7 +4,7 @@
 
 /* CAN / CAN-FD driver PORT — the narrow contract the COM bridge depends on.
  *
- * The V side (driver/can/can.v) calls exactly these four functions; each
+ * The V side (driver/can/can.v) calls the functions below; each
  * platform provides ONE implementation, selected at build time in can_backend.c:
  *
  *   (default)          host / sim    SocketCAN over vcan      (can_socket.c)
@@ -31,6 +31,7 @@ int      blob_can_tx_ready(int h);                                        /* 1=T
 int      blob_can_tx_idle(int h);                                         /* 1=all handed-off frames transmitted */
 int      blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len, int *flags); /* 0=frame (flags=BLOB_CAN_FLAG_*), -1=none */
 uint32_t blob_can_rx_overruns(int h);  /* count of Rx-overrun events since open, each >=1 frame lost (REQ-CAN-DRV-008) */
+uint32_t blob_can_busoff_recoveries(int h); /* count of bus-off recoveries since open (REQ-CAN-DRV-009); 0 where the platform owns recovery */
 void     blob_can_close(int h);
 
 #endif

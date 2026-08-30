@@ -17,6 +17,7 @@ fn C.blob_can_recv(int, &u32, &u8, &u8, &int) int // last arg = flags out: bit0 
 fn C.blob_can_tx_ready(int) int
 fn C.blob_can_tx_idle(int) int
 fn C.blob_can_rx_overruns(int) u32
+fn C.blob_can_busoff_recoveries(int) u32
 fn C.blob_can_close(int)
 
 pub const max_dlc = u8(64)
@@ -86,6 +87,12 @@ pub fn (mut c Channel) recv(mut f Frame) bool {
 // can observe it (telemetry/trace) instead of it being silent (REQ-CAN-DRV-008). 0 = none.
 pub fn (c Channel) rx_overruns() u32 {
 	return C.blob_can_rx_overruns(c.sock)
+}
+
+// busoff_recoveries: bus-off events this channel recovered from since open (REQ-CAN-DRV-009).
+// 0 on backends where the platform owns recovery (SocketCAN kernel, CanSM above CanIf).
+pub fn (c Channel) busoff_recoveries() u32 {
+	return C.blob_can_busoff_recoveries(c.sock)
 }
 
 pub fn (mut c Channel) close() {
