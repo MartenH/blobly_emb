@@ -2179,17 +2179,19 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 						// per-handler brackets exclude the io thread's preemption via its exec
 						// counter (loom.run_profiled_excl) — the same correction as below, per handler
 						glue << '\t\tsched.run_profiled_excl(trace_clock, io_exec_clock)'
+						glue << '\t\tio_dt := u64(C.io_exec_us() - io0) // BEFORE t1: contained in the bracket (codex #264 r2)'
 						glue << '\t\tt1 := C.board_now_us()'
-						glue << '\t\tio_dt := u64(C.io_exec_us() - io0)'
 					} else {
 						glue << '\t\tsched.run_profiled(trace_clock)'
 						glue << '\t\tt1 := C.board_now_us()'
 					}
 				} else {
 					glue << '\t\tsched.run(t0)'
+					if io_here {
+						glue << '\t\tio_dt := u64(C.io_exec_us() - io0) // BEFORE t1 (codex #264 r2)'
+					}
 					glue << '\t\tt1 := C.board_now_us()'
 					if io_here {
-						glue << '\t\tio_dt := u64(C.io_exec_us() - io0)'
 						glue << '\t\tfb_busy := if t1 - t0 > io_dt { t1 - t0 - io_dt } else { u64(0) }'
 						glue << "\t\tsched.account(fb_busy, t1) // handler time (io preemption excluded)"
 					} else {
@@ -2275,17 +2277,19 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			// profiled dispatch: run_profiled accounts internally and fires the FB trace hook
 			if fb_io {
 				glue << '\t\tsched.run_profiled_excl(trace_clock, io_exec_clock)'
+				glue << '\t\tio_dt := u64(C.io_exec_us() - io0) // BEFORE t1: contained in the bracket (codex #264 r2)'
 				glue << '\t\tt1 := C.board_now_us()'
-				glue << '\t\tio_dt := u64(C.io_exec_us() - io0)'
 			} else {
 				glue << '\t\tsched.run_profiled(trace_clock)'
 				glue << '\t\tt1 := C.board_now_us()'
 			}
 		} else {
 			glue << '\t\tsched.run(t0)'
+			if fb_io {
+				glue << '\t\tio_dt := u64(C.io_exec_us() - io0) // BEFORE t1 (codex #264 r2)'
+			}
 			glue << '\t\tt1 := C.board_now_us()'
 			if fb_io {
-				glue << '\t\tio_dt := u64(C.io_exec_us() - io0)'
 				glue << '\t\tfb_busy := if t1 - t0 > io_dt { t1 - t0 - io_dt } else { u64(0) }'
 				glue << "\t\tsched.account(fb_busy, t1) // handler time, io preemption excluded (emb#150 r10)"
 			} else {

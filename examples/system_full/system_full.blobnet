@@ -7,7 +7,8 @@
 #                             which THIS TOOL simulates on the bench
 #   zone_a  (NUCLEO-H723ZG) — produces SteeringAngle on the edge bus
 #
-# blobly_net just LISTENS (monitor mode, no simulation — the boards drive the traffic) and
+# blobly_net LISTENS on edge (monitor) but is a MEMBER on compute: it restbus-simulates the
+# tester node there (mode normal — it TRANSMITS HostLedFrame 0x127, see `simulation:` below) and
 # decodes each bus with its DBC, so you can SEE the gateway forward: the same value appears
 # on the other bus under a new id.
 #
