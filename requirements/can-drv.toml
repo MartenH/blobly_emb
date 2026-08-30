@@ -59,7 +59,7 @@ derives = "SYS-REQ-COMMS-001"
 [[req]]
 id = "REQ-CAN-DRV-006"
 title = "Uniform backend contract"
-text = "Every CAN driver backend shall present the same open/send/tx_ready/recv/rx_overruns/close contract to the upper layer."
+text = "Every CAN driver backend shall present the same contract to the upper layer: open/send/tx_ready/tx_idle/recv/rx_overruns/busoff_recoveries/close. A backend that owns the controller implements bus-off recovery (REQ-CAN-DRV-009); one where the platform owns it returns 0 from busoff_recoveries and defers."
 status = "draft"
 method = "review"
 asil = "QM"
