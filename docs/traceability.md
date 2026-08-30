@@ -179,7 +179,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TELEM-003 | QM | test | verified | loom_test.v (pass) |
 | REQ-TELEM-004 | QM | test | verified | loom_test.v (pass) |
 | REQ-TRACE-010 | QM | test | covered | threadx-exec-hooks-capture (pending) |
-| REQ-TRACE-001 | QM | test | verified | h755-duo-trace (approved), h755-multiblock-dump (approved), loom_test.v (pass) |
+| REQ-TRACE-001 | QM | test | verified | h755-duo-trace (approved), h755-multiblock-dump (approved), loom_test.v (pass), loom_test.v (pass) |
 | REQ-TRACE-002 | QM | test | verified | h755-external-partitions (approved) |
 | REQ-TRACE-008 | QM | test | covered | threadx-exec-hooks-capture (pending) |
 | REQ-TRACE-009 | QM | test | covered | control_test.v (pass), h755-two-core-dump (pending), multicore_dump_test.v (pass) |

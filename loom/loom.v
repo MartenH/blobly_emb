@@ -117,13 +117,38 @@ fn next_due(due u64, period u64, now u64) u64 {
 // loom stays clock-free and unit-testable: pass osal.now_us on host, the DWT clock on
 // target. Cost is two clock reads per dispatched handler.
 pub fn (mut s Scheduler) run_profiled(clock fn () u64) {
+	s.run_profiled_excl(clock, no_preempt)
+}
+
+fn no_preempt() u32 {
+	return 0
+}
+
+// run_profiled_excl is run_profiled with a PREEMPTION clock: a monotonic counter of time a
+// higher-priority platform thread (the io thread) executed. Its delta across each handler is
+// excluded from that handler's dt, so per-handler load, the FB trace record and the thread's
+// load stop charging the FB for io preemption — the same correction the unprofiled dispatch
+// applies per pass (emb#150 r10), now per handler. Trace and io have nothing to do with each
+// other; only this bookkeeping did.
+//
+// The preemption clock is u32 ON PURPOSE: the backing counter (io_exec_us) is a wrapping
+// 32-bit accumulator, and modulo-32 subtraction BEFORE widening keeps the delta exact across
+// a wrap — u64(preempt()) - u64(p0) would underflow to ~2^64 and clamp the handler to zero
+// (codex on #264). And the END preemption sample is taken BEFORE the end wall sample, so the
+// measured preemption interval is CONTAINED in the wall bracket — sampled after, an io serve
+// landing between the two reads would be subtracted from a wall time that never included it
+// (codex on #264).
+pub fn (mut s Scheduler) run_profiled_excl(clock fn () u64, preempt fn () u32) {
 	now := clock()
 	mut busy := u64(0)
 	for i in 0 .. s.count {
 		if now >= s.due[i] {
 			t0 := clock()
+			p0 := preempt()
 			s.handlers[i](s.ctx[i])
-			dt := clock() - t0
+			pd := u64(preempt() - p0) // u32 modulo, then widen
+			wall := clock() - t0
+			dt := if wall > pd { wall - pd } else { u64(0) }
 			busy += dt
 			mut st := &s.stats[i]
 			st.last_us = u32(dt)

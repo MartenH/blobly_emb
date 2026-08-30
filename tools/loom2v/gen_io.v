@@ -183,6 +183,12 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int, with_load bool, load_sl
 	if m.io_points.len == 0 {
 		return g
 	}
+	// The exec counter (io_exec_add) is needed by TWO consumers: load telemetry (with_load) and
+	// the profiled FB dispatch, whose run_profiled_excl subtracts it per handler. With trace
+	// level="all" it must be published even when nothing ships CpuLoad — otherwise the
+	// preemption clock reads zero and io preemption is silently charged to the FBs again
+	// (codex on #264).
+	excl := m.trace.on && m.trace.level == 'all'
 	mut fastest := m.io_points[0].period_ms
 	for pt in m.io_points {
 		if pt.period_ms < fastest {
@@ -230,7 +236,7 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int, with_load bool, load_sl
 	}
 	g << '\t\ttick += missed'
 	g << '\t\tnext_us += missed * ${fastest * 1000}'
-	if with_load {
+	if with_load || excl {
 		g << '\t\tt0 := C.board_now_us()'
 	}
 	for pt in m.io_points {
@@ -269,12 +275,14 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int, with_load bool, load_sl
 			g << '\t\t}'
 		}
 	}
-	if with_load {
-		// io's serve time lands in CpuLoad through the SAME scratch seam as the FB
-		// threads: account the bracket, publish to io's slot; the comm thread sums.
+	if with_load || excl {
 		g << '\t\tt1 := C.board_now_us()'
 		g << '\t\tC.io_exec_add(u32(t1 - t0)) // publish exec so the FB thread can subtract'
 		g << '\t\t// this preemption from its wall bracket (no double-count, emb#150 r10)'
+	}
+	if with_load {
+		// io's serve time lands in CpuLoad through the SAME scratch seam as the FB
+		// threads: account the bracket, publish to io's slot; the comm thread sums.
 		g << "\t\tsched.account(t1 - t0, t1) // serve time -> the io thread's load slot"
 		g << '\t\tif t1 - t0 > ${fastest * 1000} {'
 		g << '\t\t\tsched.mark_overrun() // the SERVE exhausted its base-period budget'

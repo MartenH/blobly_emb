@@ -167,3 +167,51 @@ fn test_run_profiled_trace_hook() {
 	assert cap.last_start == 0, 'start=${cap.last_start}'
 	assert cap.last_dt == 50, 'dt=${cap.last_dt}'
 }
+
+// A handler that "runs" for `step` µs while a higher-priority io thread also ran: the
+// preemption clock advances inside the bracket and its delta must not be charged to the FB.
+struct PreemptClock {
+mut:
+	t    u64 // wall µs
+	io   u32 // io exec µs (monotonic, wrapping — the real counter is u32)
+	step u64
+	iodt u32
+}
+
+fn preempted_handler(ctx voidptr) {
+	mut pc := unsafe { &PreemptClock(ctx) }
+	pc.t += pc.step + u64(pc.iodt) // wall time includes the io thread's run
+	pc.io += pc.iodt // u32: wraps like the real counter
+}
+
+// @verifies REQ-TRACE-001
+fn test_run_profiled_excl_subtracts_preemption() {
+	pc := &PreemptClock{
+		step: 50
+		iodt: 30
+		io:   0xffff_fff0 // 16 µs below the wrap: the 30 µs delta crosses it (u32 modulo must hold)
+	}
+	clock := fn [pc] () u64 {
+		return pc.t
+	}
+	preempt := fn [pc] () u32 {
+		return pc.io
+	}
+	mut cap := HookCapture{}
+	mut s := Scheduler{}
+	s.every(1000, preempted_handler, pc)
+	s.set_trace_hook(capture_hook, &cap)
+	s.run_profiled_excl(clock, preempt)
+	st := s.handler_stat(0)
+	assert st.last_us == 50, 'last=${st.last_us} (wall 80 minus 30 io)'
+	assert st.total_us == 50, 'total=${st.total_us}'
+	// the trace record carries the same io-excluded duration
+	assert cap.calls == 1
+	assert cap.last_dt == 50, 'trace dur=${cap.last_dt}'
+	// and run_profiled (no preemption clock) still reports the plain wall bracket
+	mut p := unsafe { &PreemptClock(pc) }
+	p.t = 1000
+	p.io = 0
+	s.run_profiled(clock)
+	assert s.handler_stat(0).last_us == 80, 'wall=${s.handler_stat(0).last_us}'
+}

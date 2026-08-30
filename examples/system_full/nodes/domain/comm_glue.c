@@ -24,7 +24,12 @@
  * can't express the atomics/volatile — calls these scalar wrappers by cell index. loom2v wires
  * which index carries which signal; this file stays config-independent. (A generated per-MCU/
  * target C backend could emit this later; per docs/architecture.md it's fine as target glue now.) */
-#define IOC_POOL_N 4
+/* IOC_POOL_N: the local single-core IOC pool. MUST cover every index the generated glue
+ * hands ioc_pub/ioc_get (the generator numbers slots per signal endpoint): a smaller pool
+ * silently DROPS any index >= IOC_POOL_N — 4 here dropped HostLedLevel (slot 4) and HostLed
+ * (slot 6) with the timer happily running at duty 0, found on the bench. Same value and
+ * same lesson as boards/common/io_glue.c (#247). */
+#define IOC_POOL_N 16
 static ioc_t g_ioc_pool[IOC_POOL_N];
 /* size-proportional arenas: 3 x the scalar sig_t per channel, line-rounded +
  * line-aligned so channels never share a cache line (ioc.h invariant) */
@@ -433,6 +438,12 @@ static volatile unsigned short g_ld_pm[LOAD_SLOTS], g_ld_100[LOAD_SLOTS],
                                g_ld_1s[LOAD_SLOTS], g_ld_10s[LOAD_SLOTS];
 static volatile unsigned g_ld_ovr[LOAD_SLOTS];
 /* per-thread publisher: each FB thread owns ONE slot (single writer), comm sums them. */
+/* the generated io thread's exec-time counter (boards/common/io_glue.c has the same two lines;
+ * this node carries its own glue for nvm/bulk/xcore, so it carries these too). */
+static volatile unsigned g_io_exec_us;
+void io_exec_add(unsigned us) { g_io_exec_us += us; }
+unsigned io_exec_us(void) { return g_io_exec_us; }
+
 void load_pub_slot(int i, unsigned pm, unsigned p100, unsigned p1s, unsigned p10s, unsigned ovr) {
     if (i < 0 || i >= LOAD_SLOTS) return;
     g_ld_pm[i] = (unsigned short)pm; g_ld_100[i] = (unsigned short)p100;

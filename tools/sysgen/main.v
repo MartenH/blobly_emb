@@ -144,31 +144,34 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 	b << 'core      = 0'
 	b << ''
 	// identity, allocated by system.toml (REQ-TOPO-005): node id from [[node]],
+	// A node without `nm` is not an NM node (a tester, a host-side node): no [nm] at all.
 	// alive = the cluster's peers base + node, peers + timing from [bus.*.nm].
-	b << '[nm]'
-	b << 'node  = 0x${node.nm.hex()}'
-	if bus.has_nm_cluster {
-		b << 'alive = 0x${(bus.nm_peers_lo + node.nm).hex()}'
-		b << 'peers = [0x${bus.nm_peers_lo.hex()}, 0x${bus.nm_peers_hi.hex()}]'
-		if bus.nm_msg_cycle_ms > 0 {
-			b << 'msg_cycle_ms = ${bus.nm_msg_cycle_ms}'
+	if node.has_nm_alloc {
+		b << '[nm]'
+		b << 'node  = 0x${node.nm.hex()}'
+		if bus.has_nm_cluster {
+			b << 'alive = 0x${(bus.nm_peers_lo + node.nm).hex()}'
+			b << 'peers = [0x${bus.nm_peers_lo.hex()}, 0x${bus.nm_peers_hi.hex()}]'
+			if bus.nm_msg_cycle_ms > 0 {
+				b << 'msg_cycle_ms = ${bus.nm_msg_cycle_ms}'
+			}
+			if bus.nm_timeout_ms > 0 {
+				b << 'timeout_ms = ${bus.nm_timeout_ms}'
+			}
+			if bus.nm_repeat_ms > 0 {
+				b << 'repeat_ms = ${bus.nm_repeat_ms}'
+			}
+			if bus.nm_wait_sleep_ms > 0 {
+				b << 'wait_sleep_ms = ${bus.nm_wait_sleep_ms}'
+			}
+		} else {
+			// no [bus.*.nm] cluster declared -> NM must NOT run. loom2v defaults an
+			// [nm] with scalar keys (like `node`) to enabled = true with its default
+			// peer range 0x500..0x53f, so without this the node would transmit
+			// unvalidated default NM (syscheck skips NM checks when has_nm_cluster is
+			// false). Disable it explicitly.
+			b << 'enabled = false'
 		}
-		if bus.nm_timeout_ms > 0 {
-			b << 'timeout_ms = ${bus.nm_timeout_ms}'
-		}
-		if bus.nm_repeat_ms > 0 {
-			b << 'repeat_ms = ${bus.nm_repeat_ms}'
-		}
-		if bus.nm_wait_sleep_ms > 0 {
-			b << 'wait_sleep_ms = ${bus.nm_wait_sleep_ms}'
-		}
-	} else {
-		// no [bus.*.nm] cluster declared -> NM must NOT run. loom2v defaults an
-		// [nm] with scalar keys (like `node`) to enabled = true with its default
-		// peer range 0x500..0x53f, so without this the node would transmit
-		// unvalidated default NM (syscheck skips NM checks when has_nm_cluster is
-		// false). Disable it explicitly.
-		b << 'enabled = false'
 	}
 	b << ''
 
@@ -251,29 +254,31 @@ fn generate_gateway_node(sys sysmodel.System, node sysmodel.Node, authored strin
 	// identity: NM scoped to the PRIMARY bus buses[0] (multi-instance NM across a
 	// gateway's clusters is a later P2 item — docs/multi-node.md).
 	prim := sys.bus_by_name(node.buses[0]) or { return error('primary bus not declared') }
-	b << '[nm]'
-	b << 'node  = 0x${node.nm.hex()}'
-	if prim.has_nm_cluster {
-		// NM runs INSIDE the comm thread, on the telemetry bus — [nm].bus only labels
-		// the manifest, it does not move the tx (checks.v). So the gateway's telemetry
-		// bus MUST equal its primary NM bus; that is enforced in check_dissolved_nodes,
-		// and here we simply emit the cluster (no misleading [nm].bus).
-		b << 'alive = 0x${(prim.nm_peers_lo + node.nm).hex()}'
-		b << 'peers = [0x${prim.nm_peers_lo.hex()}, 0x${prim.nm_peers_hi.hex()}]'
-		if prim.nm_msg_cycle_ms > 0 {
-			b << 'msg_cycle_ms = ${prim.nm_msg_cycle_ms}'
+	if node.has_nm_alloc {
+		b << '[nm]'
+		b << 'node  = 0x${node.nm.hex()}'
+		if prim.has_nm_cluster {
+			// NM runs INSIDE the comm thread, on the telemetry bus — [nm].bus only labels
+			// the manifest, it does not move the tx (checks.v). So the gateway's telemetry
+			// bus MUST equal its primary NM bus; that is enforced in check_dissolved_nodes,
+			// and here we simply emit the cluster (no misleading [nm].bus).
+			b << 'alive = 0x${(prim.nm_peers_lo + node.nm).hex()}'
+			b << 'peers = [0x${prim.nm_peers_lo.hex()}, 0x${prim.nm_peers_hi.hex()}]'
+			if prim.nm_msg_cycle_ms > 0 {
+				b << 'msg_cycle_ms = ${prim.nm_msg_cycle_ms}'
+			}
+			if prim.nm_timeout_ms > 0 {
+				b << 'timeout_ms = ${prim.nm_timeout_ms}'
+			}
+			if prim.nm_repeat_ms > 0 {
+				b << 'repeat_ms = ${prim.nm_repeat_ms}'
+			}
+			if prim.nm_wait_sleep_ms > 0 {
+				b << 'wait_sleep_ms = ${prim.nm_wait_sleep_ms}'
+			}
+		} else {
+			b << 'enabled = false'
 		}
-		if prim.nm_timeout_ms > 0 {
-			b << 'timeout_ms = ${prim.nm_timeout_ms}'
-		}
-		if prim.nm_repeat_ms > 0 {
-			b << 'repeat_ms = ${prim.nm_repeat_ms}'
-		}
-		if prim.nm_wait_sleep_ms > 0 {
-			b << 'wait_sleep_ms = ${prim.nm_wait_sleep_ms}'
-		}
-	} else {
-		b << 'enabled = false'
 	}
 	b << ''
 	// the resolved routes this gateway carries.

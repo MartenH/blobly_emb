@@ -54,6 +54,18 @@ bus      = "compute"
 frame    = "LedLevelFrame"
 cycle_ms = 100
 
+# HostLedLevel: the TESTER breathes it on the compute bus and the domain puts it on its own red
+# LD3 as PWM — the mirror of LedLevel above. The tester is an ordinary node (nodes/tester, a
+# declaration only — nothing is built); blobly_net's restbus simulation stands in for it, as
+# it would for any absent ECU. No off-system concept needed: the tool is a member.
+[[signal]]
+name     = "HostLedLevel"
+fields   = { permille = "u32" }
+producer = "tester"
+bus      = "compute"
+frame    = "HostLedFrame"
+cycle_ms = 100
+
 [[signal]]
 name     = "SteeringAngle"
 fields   = { deg = "u32" }
@@ -103,6 +115,13 @@ buses = ["compute"]
 nm    = 0x12
 diag  = { req = 0x7B0, rsp = 0x7B8 }
 trace = 2
+
+# The tester: declared on the compute bus, never built (blobly_net stands in for it). No nm: not an NM node.
+[[node]]
+name  = "tester"
+ecu   = "nodes/tester/ecu.toml"
+buses = ["compute"]
+diag  = { req = 0x7D0, rsp = 0x7D8 }
 
 [[node]]
 name  = "zone_a"

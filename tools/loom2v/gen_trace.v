@@ -393,11 +393,17 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 // (manifest order: partition -> fb -> handler), but each thread's scheduler indexes its OWN
 // handlers 0..n — so multi-thread emits one id table per thread mapping the local idx back to
 // the global id (a thread's handlers need not be contiguous in the global numbering).
-fn trace_fb_hooks(m Model, doc toml.Doc, app_threads []string, multi bool) []string {
+// io_here: this IMAGE hosts the io thread (a satellite image never does), so only it gets the
+// preemption clock run_profiled_excl subtracts — the owner declares C.io_exec_us, a satellite not.
+fn trace_fb_hooks(m Model, doc toml.Doc, app_threads []string, multi bool, io_here bool) []string {
 	if !(m.trace.on && m.trace.level == 'all') {
 		return []string{}
 	}
 	mut g := ['', 'fn trace_clock() u64 {', '\treturn C.board_now_us()', '}']
+	if io_here {
+		// the io thread's exec counter as a clock: run_profiled_excl subtracts its delta per handler
+		g << ['', 'fn io_exec_clock() u32 {', '\treturn C.io_exec_us()', '}']
+	}
 	if !multi {
 		g << ''
 		g << 'fn trace_fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {'

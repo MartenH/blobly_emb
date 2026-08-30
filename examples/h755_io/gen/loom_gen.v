@@ -86,8 +86,8 @@ pub fn run() {
 		t0 := C.board_now_us()
 		io0 := C.io_exec_us() // io is higher priority: exclude its preemption
 		sched.run(t0)
+		io_dt := u64(C.io_exec_us() - io0) // BEFORE t1 (codex #264 r2)
 		t1 := C.board_now_us()
-		io_dt := u64(C.io_exec_us() - io0)
 		fb_busy := if t1 - t0 > io_dt { t1 - t0 - io_dt } else { u64(0) }
 		sched.account(fb_busy, t1) // handler time, io preemption excluded (emb#150 r10)
 		pass_us := if t1 - t0 > io_dt { t1 - t0 - io_dt } else { u64(0) }

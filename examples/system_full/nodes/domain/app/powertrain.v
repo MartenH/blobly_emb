@@ -27,6 +27,9 @@ pub fn (mut fb PowertrainCtrl) on_50ms(inp ports.PowertrainCtrlIn, mut out ports
 	// zone_a puts on its red LED as PWM intensity — a cross-node signal you can watch fade.
 	ph := fb.ticks % 40
 	out.led_level.permille = if ph < 20 { ph * 50 } else { (40 - ph) * 50 }
+	// HostLed: the level blobly_net generates on the compute bus drives THIS board's red LD3
+	// (PB14 PWM) — the host tool reaching a pin, the mirror of LedLevel above.
+	out.host_led.duty = inp.host_led_level.permille
 	// DriveMode: a persisted calibration — step it slowly so the NvM journal is exercised and
 	// the value survives resets. Restored before this first runs; FB just does "something".
 	mut m := inp.drive_mode.mode

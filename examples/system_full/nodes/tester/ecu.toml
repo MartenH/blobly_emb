@@ -1,0 +1,22 @@
+# tester — the bench tool as a NODE, declaration only. A composed system has a tester on its
+# bus like any other ECU, and the model wants the producer of HostLedLevel to be a node with one
+# FB writing it (single-writer, REQ-TOPO-005). Nothing here is built: blobly_net restbus-simulates
+# this node on the bench (system_full.blobnet `simulation: tester`, keyed on the DBC transmitter
+# name — blobly_net reads compute.dbc, never this file). No `nm` in system.toml: a tester is not
+# an NM node. NOTE: no inline comments inside [[...]] tables (vlang/v#27684).
+
+[[partition]]
+name = "bench"
+core = 0
+
+  [[partition.thread]]
+  name = "gen"
+
+[[fb]]
+name   = "HostBreather"
+thread = "gen"
+
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  writes    = ["HostLedLevel"] # trailing comment terminates the nested block (vlang/v#27684)
