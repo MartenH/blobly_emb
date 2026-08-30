@@ -1,6 +1,6 @@
 # `examples/system_full` — the reference system (4 ECUs + a CM4 satellite; CAN + Ethernet)
 
-`system_full` is **the one reference system** for the blobly stack: a multi-node automotive system meant to exercise *every* shipped feature on real silicon, so the ~45 single-feature one-off examples can be retired. Every node is a real **ThreadX** image — the CAN nodes are composed from a single [`system.toml`](system.toml), and the Ethernet node is a self-contained SOME/IP endpoint.
+`system_full` is **the one reference system** for the blobly stack: a multi-node automotive system meant to exercise *every* shipped feature on real silicon, so the ~45 single-feature one-off examples can be retired. Every built node is a real **ThreadX** image — the CAN nodes are composed from a single [`system.toml`](system.toml), the Ethernet node is a self-contained SOME/IP endpoint, and the one exception is deliberate: the `tester` is a **declaration-only** node (nothing is built; blobly_net stands in for it).
 
 It runs on **four boards** across **two CAN buses + Ethernet**:
 
@@ -38,6 +38,7 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 | `domain_m4` | …the H755's **CM4** | `domain`'s co-processor **satellite** (bulk producer + CpuLoad); a `[[partition]] image=`, flashed to flash **bank 2** (`0x08100000`) | — (built by `domain`'s gen) | — (a satellite, not a node) |
 | `zone_a` | NUCLEO-H723ZG | Front zone: sensor→limiter FB pipeline + **physical GPIO + PWM** | `edge` (can1) | ✅ |
 | `tcu` | NUCLEO-H723ZG | **Telematics/connectivity — SOME/IP-over-Ethernet** at `192.168.0.51` | `eth0` (Ethernet) | ❌ **see below** |
+| `tester` | — (nothing built) | **Declaration-only**: the bench tool as a node, produces `HostLedLevel`; blobly_net restbus-simulates it | `compute` (can0) | ✅ |
 
 ---
 

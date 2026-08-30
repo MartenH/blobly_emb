@@ -15,7 +15,8 @@
 #   make nodes             # cross-build all 3 ThreadX images (needs arm-none-eabi + make -C ../.. deps)
 #   make all               # gen + syscheck + nodes
 #
-# Every node — including the gateway — is a real ThreadX image generated from system.toml.
+# Every BUILT node — including the gateway — is a real ThreadX image generated from system.toml
+# (the tester is declaration-only: in the model, not in NODES; blobly_net stands in for it).
 # sysnode's comm thread owns both FDCAN buses (compute=FDCAN1, edge=FDCAN2) and forwards the
 # 4 resolved routes on target (raw copy + id remap). Both buses come out on the H735-DK's own
 # transceivers, so blobly_net can tap both. Driving edge on silicon needs the h735dk board to
