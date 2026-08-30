@@ -1,5 +1,5 @@
 # sysnode (H735-DK) — Central Gateway. Pure routing node: the comm thread owns all three
-# FDCAN buses and forwards the 8 resolved routes (raw copy + id remap). It runs ThreadX like
+# FDCAN buses and forwards the resolved routes (raw copy + id remap). It runs ThreadX like
 # every other node; sysgen prepends the buses/routes/nm from system.toml, this file adds the
 # on-target bits. The gateway carries no application FBs, but the ThreadX target emitter wants
 # exactly one local partition, so a single idle thread stands in — the real work is the comm

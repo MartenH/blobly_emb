@@ -42,4 +42,7 @@ pub fn (mut fb SteerLimiter) on_50ms(inp ports.SteerLimiterIn, mut out ports.Ste
 	// the domain's HeadlightCmd (compute -> gateway -> here) drives a real LED (PB0):
 	// a cross-node command reaching a physical pin.
 	out.headlight_led.on = inp.headlight_cmd.mode != 0
+	// the domain's LedLevel (0..1000 permille, a 0.5 Hz triangle) drives LD3 (PB14) as PWM
+	// duty: a cross-node signal you can watch fade on the pin.
+	out.breath_led.duty = inp.led_level.permille
 }

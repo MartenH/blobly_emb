@@ -23,6 +23,7 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 | Network Management (coordinated sleep/wake + NvM flush) | `compute` bus | ✅ |
 | Node-local FB→FB signalling (intra-thread cell) | `zone_a` | ✅ |
 | Physical **IO** (GPIO: button → signal, signal → LED) | `zone_a` | ⚙️ config-proven on silicon (re-flash after the #247 pool fix to see the LED) |
+| Physical **PWM** (cross-node `LedLevel` → LD3 intensity, 0.5 Hz breathing) | `domain` → `zone_a` | ⏳ builds; bench-pending (PB14/TIM12 map is dry-coded) |
 | **SOME/IP-over-Ethernet** (cyclic events + E2E + RPC rx) | `tcu` | ✅ silicon-validated (ping, tx/rx, E2E) |
 
 ---
@@ -31,10 +32,10 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 
 | Node | Hardware | Role | Bus | In `system.toml`? |
 |---|---|---|---|---|
-| `sysnode` | STM32H735G-DK | Gateway: routes 3 signals `compute` ↔ `edge` | `compute` (can0/FDCAN1), `edge` (can1/FDCAN2) | ✅ |
+| `sysnode` | STM32H735G-DK | Gateway: routes 4 signals `compute` ↔ `edge` | `compute` (can0/FDCAN1), `edge` (can1/FDCAN2) | ✅ |
 | `domain` | NUCLEO-H755ZI-Q (CM7) | Powertrain + persistence + AMP owner; NvM, bulk, trace, shell | `compute` (can0) | ✅ |
 | `domain_m4` | …the H755's **CM4** | `domain`'s co-processor **satellite** (bulk producer + CpuLoad); a `[[partition]] image=`, flashed to flash **bank 2** (`0x08100000`) | — (built by `domain`'s gen) | — (a satellite, not a node) |
-| `zone_a` | NUCLEO-H723ZG | Front zone: sensor→limiter FB pipeline + **physical GPIO** | `edge` (can1) | ✅ |
+| `zone_a` | NUCLEO-H723ZG | Front zone: sensor→limiter FB pipeline + **physical GPIO + PWM** | `edge` (can1) | ✅ |
 | `tcu` | NUCLEO-H723ZG | **Telematics/connectivity — SOME/IP-over-Ethernet** at `192.168.0.51` | `eth0` (Ethernet) | ❌ **see below** |
 
 ---
@@ -58,12 +59,13 @@ Until the off-system endpoint lands, the Ethernet node is a **build member, not 
 
 ## Cross-node signals & gateway routes (the CAN system)
 
-All three routes are **layout-identical** (same signal position/scale/DLC on both buses), so the gateway forwards each as a raw payload copy with an id remap — no decode/re-encode on target.
+All four routes are **layout-identical** (same signal position/scale/DLC on both buses), so the gateway forwards each as a raw payload copy with an id remap — no decode/re-encode on target.
 
 | Signal | Producer | Route (via `sysnode`) | Consumer | Frame ids | Rate |
 |---|---|---|---|---|---|
 | `VehicleSpeed` | `domain` (compute) | `compute` → `edge` | `zone_a` | `0x120` → `0x130` | 100 ms |
 | `HeadlightCmd` | `domain` (compute) | `compute` → `edge` | `zone_a` | `0x123` → `0x131` | 100 ms |
+| `LedLevel` | `domain` (compute) | `compute` → `edge` | `zone_a` | `0x126` → `0x133` | 100 ms |
 | `SteeringAngle` | `zone_a` (edge) | `edge` → `compute` | `domain` | `0x132` → `0x125` | 50 ms |
 
 This closes a **bidirectional** loop through the H735: `domain` switches its headlights on `zone_a`'s routed steering (`headlight_cmd = steering > 90`), and `zone_a` clamps its steering by the `VehicleSpeed` it receives from `domain`. Every cross-bus hop goes through the gateway's forwarder.
@@ -75,9 +77,10 @@ This closes a **bidirectional** loop through the H735: `domain` switches its hea
 `SteerLimiter` also drives **physical IO** (`docs/io.md`), tying the cross-node signals to real pins on the NUCLEO-H723ZG:
 
 - the domain's **`HeadlightCmd`** (compute → gateway → here) lights **LD1 (PB0)** — a cross-node command reaching a physical pin;
+- the domain's **`LedLevel`** (same path) — a 0.5 Hz triangle `PowertrainCtrl` breathes out (0..1000 permille) — is the duty of an **`[[io.pwm]]` point on LD3 (PB14, TIM12_CH1, 1 kHz)**, so the red LED visibly fades in and out. The DK's own LEDs (PC2/PC3) have no timer AF, which is why the fade lands on the Nucleo, not the gateway;
 - the **user button (PC13)** forces a hard `SteeringAngle`, which rides back edge → gateway → compute — a physical input driving a cross-node signal.
 
-The `[[io.gpio]]` points bind to `[[signal]]`s with `from/to = "io"`; the boards layer (`boards/h723`, generic `driver/io/io_stm32.c`) owns the pins — adding an IO point is config, not code.
+The `[[io.gpio]]` / `[[io.pwm]]` points bind to `[[signal]]`s with `from/to = "io"`; the boards layer (`boards/h723`, generic `driver/io/io_stm32.c`) owns the pins — adding an IO point is config, not code.
 
 ---
 
@@ -98,14 +101,14 @@ make nodes      # cross-build ALL node images + the CM4 satellite (needs arm-non
 | `nodes/sysnode/build/sysnode.bin` | `boards/h735dk` (H735 M7) | 2-bus gateway |
 | `nodes/domain/build/domain.bin` | `boards/h755zi` (H755 CM7) | powertrain + NvM + bulk + trace + shell |
 | `nodes/domain_m4/build/domain_m4.bin` | `boards/h755zi` (H755 **CM4**) | the satellite (bulk producer + CpuLoad), flashed to bank 2 (`0x08100000`) |
-| `nodes/zone_a/build/zone_a.bin` | `boards/h723` (H723ZG) | front-zone FBs + physical IO |
+| `nodes/zone_a/build/zone_a.bin` | `boards/h723` (H723ZG) | front-zone FBs + physical IO (GPIO + PWM) |
 | `nodes/tcu/build/tcu.bin` | `boards/h723` (H723ZG) | SOME/IP-over-Ethernet |
 
 The CAN nodes link the generated comm thread against the shared `boards/common/comm_glue.c` (or `io_glue.c` when the node also has IO); the eth node links `driver/eth/eth_netx.c` + `boards/common/iocb.c` + the H723 eth driver. All pass the `_vinit`-trap lint.
 
 ### The gateway on target
 
-`sysnode`'s comm thread owns both FDCAN buses — it opens `can0` (FDCAN1 = compute) and `can1` (FDCAN2 = edge), arms each instance's Rx interrupt into one wake semaphore, and forwards the 3 resolved routes as a **raw payload copy + id remap**. This works because every route is *layout-identical*; a route whose layouts differ is rejected at gen time (host-only). The forwarded-frame count is the exported `g_fwd_count`, SWD-observable at the bench. Both buses are on the DK's own transceivers: FDCAN1 on `PH13`/`PH14`, FDCAN2 on `PB6`/`PB5` (AF9), clear of the Ethernet RMII pins.
+`sysnode`'s comm thread owns both FDCAN buses — it opens `can0` (FDCAN1 = compute) and `can1` (FDCAN2 = edge), arms each instance's Rx interrupt into one wake semaphore, and forwards the 4 resolved routes as a **raw payload copy + id remap**. This works because every route is *layout-identical*; a route whose layouts differ is rejected at gen time (host-only). The forwarded-frame count is the exported `g_fwd_count`, SWD-observable at the bench. Both buses are on the DK's own transceivers: FDCAN1 on `PH13`/`PH14`, FDCAN2 on `PB6`/`PB5` (AF9), clear of the Ethernet RMII pins.
 
 ### Bench notes
 

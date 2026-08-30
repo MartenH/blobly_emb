@@ -15,7 +15,7 @@
 #
 # Every node — including the gateway — is a real ThreadX image generated from system.toml.
 # sysnode's comm thread owns both FDCAN buses (compute=FDCAN1, edge=FDCAN2) and forwards the
-# 3 resolved routes on target (raw copy + id remap). Both buses come out on the H735-DK's own
+# 4 resolved routes on target (raw copy + id remap). Both buses come out on the H735-DK's own
 # transceivers, so blobly_net can tap both. Driving edge on silicon needs the h735dk board to
 # mux the FDCAN2 pins (a bench step); the image builds and its routing runs on host vcan.
 
