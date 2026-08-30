@@ -123,6 +123,7 @@ static volatile uint32_t *ram_at(uint32_t word_off) {
  * blob_can_rx_overruns() so the loss is observable, not silent (REQ-CAN-DRV-008). */
 static uint32_t g_rx_lost[3];
 static uint8_t  g_closed[3];     /* close() parked INIT deliberately: recovery must not undo it */
+static void busoff_poll(int h, FDCAN_GlobalTypeDef *c); /* fwd: send() polls before the def */
 static uint32_t g_busoff_rec[3]; /* bus-off recoveries since open (REQ-CAN-DRV-009) */
 
 /* Per-instance CAN-FD capability, latched at open(): send() only emits an FD frame
@@ -220,6 +221,7 @@ int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int flag
 	FDCAN_GlobalTypeDef *c = inst(h);
 	if (!c)
 		return -1;
+	busoff_poll(h, c); /* a send-only caller (never tx_ready/recv) still recovers (codex #265) */
 	int fd = (flags & BLOB_CAN_FLAG_FD) ? 1 : 0;
 	if (fd && !(h >= 0 && h < 3 && g_fd[h]))
 		return -1; /* an FD frame was requested on a classic-configured bus */
