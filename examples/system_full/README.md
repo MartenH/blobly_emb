@@ -23,7 +23,7 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 | Network Management (coordinated sleep/wake + NvM flush) | `compute` bus | ✅ |
 | Node-local FB→FB signalling (intra-thread cell) | `zone_a` | ✅ |
 | Physical **IO** (GPIO: button → signal, signal → LED) | `zone_a` | ⚙️ config-proven on silicon (re-flash after the #247 pool fix to see the LED) |
-| Physical **PWM** (cross-node `LedLevel` → LD3 intensity, 0.5 Hz breathing) | `domain` → `zone_a` | ⏳ builds; bench-pending (PB14/TIM12 map is dry-coded) |
+| Physical **PWM** (cross-node `LedLevel` → LD3 intensity, 0.5 Hz breathing) | `domain` → `zone_a` | ✅ on-silicon (TIM12 at 1 kHz, CCR1 sweeping 0..49999 over SWD, LD3 fades) |
 | **SOME/IP-over-Ethernet** (cyclic events + E2E + RPC rx) | `tcu` | ✅ silicon-validated (ping, tx/rx, E2E) |
 
 ---

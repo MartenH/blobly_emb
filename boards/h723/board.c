@@ -167,7 +167,7 @@ __attribute__((weak)) void ETH_IRQHandler(void) {
  * contract as boards/h755zi (REQ-IO-022: a pad without a mapping fails cfg loudly). Timer
  * kernel clock on this tree: HPRE = /2 and both D2PPREx = /2, so every APB timer's kernel
  * clock is 2x APB = HCLK = SYSCLK/2. Only the LD3 pad is mapped so far — extend as points
- * need pads. Bench-pending. */
+ * need pads. LD3 bench-verified (system_full: 1 kHz carrier, duty follows the routed signal). */
 int board_io_pwm_map(int port, int pin, void **tim_base, int *chan, int *af, unsigned int *clk_hz) {
 	if (g_cpu_mhz <= 64u) return -1; /* HSI fallback: reject rather than emit a wrong carrier */
 	unsigned int tclk = g_cpu_mhz * 500000u; /* MHz/2 -> Hz */
