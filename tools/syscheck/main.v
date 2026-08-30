@@ -39,11 +39,8 @@ fn main() {
 		println('  bus ${b.name}: ${b.interface} ${b.bitrate} ${fd} (${b.dbc})')
 	}
 	for n in sys.nodes {
-		if n.external {
-			println('  node ${n.name}: external (off-system) buses=${n.buses} consumes=${n.consumes}')
-			continue
-		}
-		println('  node ${n.name}: nm=0x${n.nm.hex()} trace=${n.trace} buses=${n.buses}')
+		nm := if n.has_nm_alloc { '0x' + n.nm.hex() } else { '- (not an NM node)' }
+		println('  node ${n.name}: nm=${nm} trace=${n.trace} buses=${n.buses}')
 	}
 
 	issues := if dissolved { sysmodel.validate_system_gen(sys) } else { sysmodel.validate_system(sys) }

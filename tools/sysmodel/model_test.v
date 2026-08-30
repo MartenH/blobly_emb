@@ -3497,11 +3497,15 @@ fn test_dissolved_multifield_signal() {
 		&& it.contains('carries exactly one'))
 }
 
-// REQ-TOPO-005: a node with no NM allocation (the generator always emits [nm]).
+// REQ-TOPO-004/005: a node with no NM allocation is simply not an NM node (a tester, a
+// host-side node) — no [nm] is generated for it and no NM check names it.
 fn test_dissolved_node_without_nm_alloc() {
 	mut s := clean_dissolved()
 	s.nodes[0].has_nm_alloc = false
-	assert errs(validate_system_gen(s)).any(it.contains('must allocate an `nm`'))
+	s.nodes[0].view.has_nm = false
+	for e in errs(validate_system_gen(s)) {
+		assert !e.contains('nm'), e
+	}
 }
 
 // REQ-TOPO-001: a signal field must be a fixed scalar type (no heap types).
@@ -4303,64 +4307,3 @@ fn test_nm_cluster_on_a_someip_bus_is_error() {
 	e := errs(validate_system(s))
 	assert e.any(it.contains('cannot carry an NM cluster')), e.str()
 }
-
-// @verifies REQ-TOPO-013
-fn test_external_producer_and_consumer_are_members() {
-	mut s := clean_system()
-	// a bench tool on `compute` produces Cmd, which sysnode reads; it also consumes Speed
-	s.nodes << Node{
-		name:     'host'
-		buses:    ['compute']
-		external: true
-	}
-	// ...and an off-system logger that is Cmd's ONLY reader
-	s.nodes << Node{
-		name:     'logger'
-		buses:    ['compute']
-		external: true
-		consumes: ['Cmd']
-	}
-	s.signals << SysSignal{
-		name:     'Cmd'
-		producer: 'host'
-		bus:      'compute'
-		frame:    'CmdFrame'
-		fields:   {
-			'v': 'u32'
-		}
-	}
-	issues := validate_system(s)
-	assert errs(issues) == [], errs(issues).str()
-	// an external producer needs no FB, no nm, no ecu — and is still the single writer
-	assert 'REQ-TOPO-005' !in reqs_of(issues, .error)
-	// Cmd, read by nobody but the external logger, is not "read by no other node"
-	for i in issues {
-		assert !i.msg.contains('read by no other node'), i.msg
-	}
-}
-
-// @verifies REQ-TOPO-013
-fn test_external_member_may_not_carry_generated_identity() {
-	mut s := clean_system()
-	s.nodes << Node{
-		name:         'host'
-		buses:        ['compute']
-		external:     true
-		ecu:          'nodes/host/ecu.toml'
-		has_nm_alloc: true
-		nm:           0x20
-		nm_alloc_ok:  true
-	}
-	issues := validate_system(s)
-	assert 'REQ-TOPO-013' in reqs_of(issues, .error), errs(issues).str()
-	// and one on no bus, or consuming a signal that does not exist, is refused too
-	s.nodes[s.nodes.len - 1] = Node{
-		name:     'host'
-		external: true
-		consumes: ['Nope']
-	}
-	issues2 := validate_system(s)
-	assert errs(issues2).filter(it.contains('names no bus')).len == 1, errs(issues2).str()
-	assert errs(issues2).filter(it.contains('not a system signal')).len == 1, errs(issues2).str()
-}
-
