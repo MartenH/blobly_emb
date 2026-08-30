@@ -8,6 +8,7 @@
 #
 # Physical IO (docs/io.md) ties the cross-node signals to real pins on the NUCLEO-H723ZG:
 #   - the domain's HeadlightCmd (compute -> gateway -> here) lights LD1 (PB0).
+#   - the domain's LedLevel (same path), a 0.5 Hz triangle, fades LD3 (PB14) as PWM intensity.
 #   - the user button (PC13) forces a hard SteeringAngle, which rides back edge -> gateway
 #     -> compute — a physical input driving a cross-node signal.
 #
@@ -36,6 +37,13 @@ core = 0
   period_ms = 10
   init      = false
 
+  [[io.pwm]]
+  name      = "BreathLed"
+  pin       = "PB14"
+  period_ms = 10
+  freq_hz   = 1000
+  init      = 0
+
 [[signal]]
 name = "UserButton"
 fields = { pressed = "bool" }
@@ -45,6 +53,14 @@ to   = "front"
 [[signal]]
 name = "HeadlightLed"
 fields = { on = "bool" }
+from = "front"
+to   = "io"
+
+# BreathLed: the domain's LedLevel (compute -> gateway -> here) as PWM duty on LD3 (PB14,
+# TIM12_CH1) — the level breathes at 0.5 Hz, so the red LED visibly fades in and out.
+[[signal]]
+name = "BreathLed"
+fields = { duty = "u32" }
 from = "front"
 to   = "io"
 
@@ -74,8 +90,8 @@ thread = "front_thread"
   [[fb.handler]]
   name      = "on_50ms"
   period_ms = 50
-  reads     = ["RawSteer", "VehicleSpeed", "HeadlightCmd", "UserButton"]
-  writes    = ["SteeringAngle", "HeadlightLed"] # trailing comment terminates nested block (vlang/v#27684)
+  reads     = ["RawSteer", "VehicleSpeed", "HeadlightCmd", "LedLevel", "UserButton"]
+  writes    = ["SteeringAngle", "HeadlightLed", "BreathLed"] # trailing comment terminates nested block (vlang/v#27684)
 
 [target]
 kind    = "threadx"

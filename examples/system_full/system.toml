@@ -43,6 +43,17 @@ bus      = "compute"
 frame    = "HeadlightCmdFrame"
 cycle_ms = 100
 
+# LedLevel: a 0.5 Hz triangle the domain (H755) breathes out; routed to zone_a, where an
+# [[io.pwm]] point puts it on the H723's red LD3 (PB14) as LED intensity — a cross-node
+# signal you can SEE fade, not just count on the bus.
+[[signal]]
+name     = "LedLevel"
+fields   = { permille = "u32" }
+producer = "domain"
+bus      = "compute"
+frame    = "LedLevelFrame"
+cycle_ms = 100
+
 [[signal]]
 name     = "SteeringAngle"
 fields   = { deg = "u32" }
@@ -61,6 +72,12 @@ to      = "edge"
 [[route]]
 gateway = "sysnode"
 signal  = "HeadlightCmd"
+from    = "compute"
+to      = "edge"
+
+[[route]]
+gateway = "sysnode"
+signal  = "LedLevel"
 from    = "compute"
 to      = "edge"
 

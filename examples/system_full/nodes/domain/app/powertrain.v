@@ -23,6 +23,10 @@ pub fn (mut fb PowertrainCtrl) on_50ms(inp ports.PowertrainCtrlIn, mut out ports
 	// headlights on when "steering hard" (a toy cross-bus reaction: SteeringAngle rides
 	// edge -> gateway -> compute, so this closes the loop through the H735 router)
 	out.headlight_cmd.mode = if inp.steering_angle.deg > 90 { u32(1) } else { u32(0) }
+	// LedLevel: a 0.5 Hz triangle (40 ticks of 50 ms = 2 s period, 0..1000 permille) that
+	// zone_a puts on its red LED as PWM intensity — a cross-node signal you can watch fade.
+	ph := fb.ticks % 40
+	out.led_level.permille = if ph < 20 { ph * 50 } else { (40 - ph) * 50 }
 	// DriveMode: a persisted calibration — step it slowly so the NvM journal is exercised and
 	// the value survives resets. Restored before this first runs; FB just does "something".
 	mut m := inp.drive_mode.mode

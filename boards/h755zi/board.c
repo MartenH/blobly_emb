@@ -174,6 +174,9 @@ int board_io_pwm_map(int port, int pin, void **tim_base, int *chan, int *af, uns
 	if (port == 4 && pin == 11) { *tim_base = TIM1; *chan = 2; *af = 1; *clk_hz = tclk; return 0; } /* PE11 TIM1_CH2 */
 	if (port == 0 && pin == 8)  { *tim_base = TIM1; *chan = 1; *af = 1; *clk_hz = tclk; return 0; } /* PA8  TIM1_CH1 */
 	if (port == 0 && pin == 0)  { *tim_base = TIM2; *chan = 1; *af = 1; *clk_hz = tclk; return 0; } /* PA0  TIM2_CH1 */
+	/* the Nucleo's red LD3. TIM12 is on APB1 (D2PPRE1 = /2 -> timer kernel = 2x APB1 = HCLK),
+	 * the same tclk as the APB2 timers above on this tree. */
+	if (port == 1 && pin == 14) { *tim_base = TIM12; *chan = 1; *af = 2; *clk_hz = tclk; return 0; } /* PB14 TIM12_CH1 */
 	return -1; /* pad not in the PWM map */
 }
 

@@ -1,5 +1,5 @@
 # sysnode — the system_full Central Gateway, built as a real ThreadX image (like every other
-# node). The comm thread owns all three FDCAN buses and forwards the 8 resolved routes. The
+# node). The comm thread owns both FDCAN buses and forwards the resolved routes. The
 # gen step keeps dbcmerge (one merged.dbc across compute/edge, so both frames of every
 # route resolve in one DBC); the build is the same ThreadX cross-build the leaf nodes use.
 #

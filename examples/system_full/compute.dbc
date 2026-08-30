@@ -12,6 +12,9 @@ BO_ 288 VehSpeedFrame: 8 domain
 BO_ 291 HeadlightCmdFrame: 8 domain
  SG_ HeadlightCmd : 0|32@1+ (1,0) [0|3] "" sysnode
 
+BO_ 294 LedLevelFrame: 8 domain
+ SG_ LedLevel : 0|32@1+ (1,0) [0|1000] "permille" sysnode
+
 BO_ 293 SteeringFrame_C: 8 sysnode
  SG_ SteeringAngle : 0|32@1+ (1,0) [0|360] "deg" domain
 
@@ -19,4 +22,5 @@ BA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;
 BA_DEF_DEF_ "GenMsgCycleTime" 0;
 BA_ "GenMsgCycleTime" BO_ 288 100;
 BA_ "GenMsgCycleTime" BO_ 291 100;
+BA_ "GenMsgCycleTime" BO_ 294 100;
 BA_ "GenMsgCycleTime" BO_ 293 50;

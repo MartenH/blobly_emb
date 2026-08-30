@@ -1,8 +1,8 @@
 # Watch the system_full 2-bus ThreadX gateway on REAL hardware, live in blobly_net.
 #
 # THE SYSTEM (3 boards, all generated from examples/system_full/system.toml):
-#   sysnode (STM32H735-DK)  — the gateway: owns both FDCAN buses, forwards 3 routes
-#   domain  (NUCLEO-H755ZI) — produces VehicleSpeed + HeadlightCmd on the compute bus
+#   sysnode (STM32H735-DK)  — the gateway: owns both FDCAN buses, forwards 4 routes
+#   domain  (NUCLEO-H755ZI) — produces VehicleSpeed + HeadlightCmd + LedLevel on the compute bus
 #   zone_a  (NUCLEO-H723ZG) — produces SteeringAngle on the edge bus
 #
 # blobly_net just LISTENS (monitor mode, no simulation — the boards drive the traffic) and
@@ -11,12 +11,13 @@
 #
 #   compute bus (SocketCAN can0):
 #     0x120 VehSpeedFrame     (domain)   ─┐ gateway ┌─► 0x130 VehSpeedFrame_E     on edge
-#     0x123 HeadlightCmdFrame (domain)   ─┘  copies └─► 0x131 HeadlightCmdFrame_E on edge
+#     0x123 HeadlightCmdFrame (domain)   ─┤  copies ├─► 0x131 HeadlightCmdFrame_E on edge
+#     0x126 LedLevelFrame     (domain)   ─┘         └─► 0x133 LedLevelFrame_E     on edge
 #     0x125 SteeringFrame_C   ◄── gateway forwards zone_a's steering here
 #     0x7E0/0x7E1 sysnode telemetry, 0x7E2/0x7E3 domain telemetry (raw — not in the DBC)
 #   edge bus (SocketCAN can1):
 #     0x132 SteeringFrame     (zone_a)   ──── gateway ───► 0x125 on compute
-#     0x130 / 0x131  ◄── gateway forwards domain's speed / headlight here
+#     0x130 / 0x131 / 0x133  ◄── gateway forwards domain's speed / headlight / led level here
 #     0x7E4/0x7E5 zone_a telemetry (raw)
 #
 # The closed loop is visible: watch 0x125 (SteeringAngle on compute) climb past 90 and

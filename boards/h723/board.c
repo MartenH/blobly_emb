@@ -162,3 +162,15 @@ int board_io_pin_exists(int port, int pin) {
  * this node has no ETH driver, so absorb the vector's .word so the common table links. */
 __attribute__((weak)) void ETH_IRQHandler(void) {
 }
+
+/* board_io_pwm_map: pin -> (timer base, channel, AF number, timer kernel clock), same
+ * contract as boards/h755zi (REQ-IO-022: a pad without a mapping fails cfg loudly). Timer
+ * kernel clock on this tree: HPRE = /2 and both D2PPREx = /2, so every APB timer's kernel
+ * clock is 2x APB = HCLK = SYSCLK/2. Only the LD3 pad is mapped so far — extend as points
+ * need pads. LD3 bench-verified (system_full: 1 kHz carrier, duty follows the routed signal). */
+int board_io_pwm_map(int port, int pin, void **tim_base, int *chan, int *af, unsigned int *clk_hz) {
+	if (g_cpu_mhz <= 64u) return -1; /* HSI fallback: reject rather than emit a wrong carrier */
+	unsigned int tclk = g_cpu_mhz * 500000u; /* MHz/2 -> Hz */
+	if (port == 1 && pin == 14) { *tim_base = TIM12; *chan = 1; *af = 2; *clk_hz = tclk; return 0; } /* PB14 TIM12_CH1 (red LD3) */
+	return -1; /* pad not in the PWM map */
+}

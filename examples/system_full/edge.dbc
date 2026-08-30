@@ -12,6 +12,9 @@ BO_ 304 VehSpeedFrame_E: 8 sysnode
 BO_ 305 HeadlightCmdFrame_E: 8 sysnode
  SG_ HeadlightCmd : 0|32@1+ (1,0) [0|3] "" zone_a
 
+BO_ 307 LedLevelFrame_E: 8 sysnode
+ SG_ LedLevel : 0|32@1+ (1,0) [0|1000] "permille" zone_a
+
 BO_ 306 SteeringFrame: 8 zone_a
  SG_ SteeringAngle : 0|32@1+ (1,0) [0|360] "deg" sysnode
 
@@ -19,4 +22,5 @@ BA_DEF_ BO_ "GenMsgCycleTime" INT 0 100000;
 BA_DEF_DEF_ "GenMsgCycleTime" 0;
 BA_ "GenMsgCycleTime" BO_ 304 100;
 BA_ "GenMsgCycleTime" BO_ 305 100;
+BA_ "GenMsgCycleTime" BO_ 307 100;
 BA_ "GenMsgCycleTime" BO_ 306 50;

@@ -46,7 +46,7 @@ thread = "fast"
   name      = "on_50ms"
   period_ms = 50
   reads     = ["SteeringAngle", "TorqueEstimate", "DriveMode"]
-  writes    = ["VehicleSpeed", "HeadlightCmd", "DriveMode"] # trailing comment terminates nested block (vlang/v#27684)
+  writes    = ["VehicleSpeed", "HeadlightCmd", "LedLevel", "DriveMode"] # trailing comment terminates nested block (vlang/v#27684)
 
 [target]
 kind    = "threadx"
