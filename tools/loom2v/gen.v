@@ -2011,7 +2011,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << shell_cmd_fns(m)
 			glue << nm_shell_fns(m)
 			glue << stat_shell_fns(m, doc, app_threads, multi)
-			glue << trace_fb_hooks(m, doc, app_threads, multi)
+			glue << trace_fb_hooks(m, doc, app_threads, multi, m.io_points.len > 0)
 			if comm_thread_on {
 				// Board glue (examples/<x>/comm_glue.c): the FDCAN Rx-FIFO0 ISR posts a semaphore
 				// that comm_rx_wait blocks on, so the comm thread wakes on rx instead of polling.
@@ -2175,8 +2175,16 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\tio0 := C.io_exec_us()'
 				}
 				if m.trace.on && m.trace.level == 'all' {
-					glue << '\t\tsched.run_profiled(trace_clock)'
-					glue << '\t\tt1 := C.board_now_us()'
+					if io_here {
+						// per-handler brackets exclude the io thread's preemption via its exec
+						// counter (loom.run_profiled_excl) — the same correction as below, per handler
+						glue << '\t\tsched.run_profiled_excl(trace_clock, io_exec_clock)'
+						glue << '\t\tt1 := C.board_now_us()'
+						glue << '\t\tio_dt := u64(C.io_exec_us() - io0)'
+					} else {
+						glue << '\t\tsched.run_profiled(trace_clock)'
+						glue << '\t\tt1 := C.board_now_us()'
+					}
 				} else {
 					glue << '\t\tsched.run(t0)'
 					glue << '\t\tt1 := C.board_now_us()'
@@ -2265,8 +2273,14 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		}
 		if m.trace.on && m.trace.level == 'all' {
 			// profiled dispatch: run_profiled accounts internally and fires the FB trace hook
-			glue << '\t\tsched.run_profiled(trace_clock)'
-			glue << '\t\tt1 := C.board_now_us()'
+			if fb_io {
+				glue << '\t\tsched.run_profiled_excl(trace_clock, io_exec_clock)'
+				glue << '\t\tt1 := C.board_now_us()'
+				glue << '\t\tio_dt := u64(C.io_exec_us() - io0)'
+			} else {
+				glue << '\t\tsched.run_profiled(trace_clock)'
+				glue << '\t\tt1 := C.board_now_us()'
+			}
 		} else {
 			glue << '\t\tsched.run(t0)'
 			glue << '\t\tt1 := C.board_now_us()'
@@ -3540,15 +3554,9 @@ fn main() {
 	// the same. The lean first cut supports external RX signals (bus -> app), drained + counted
 	// by the comm thread; external TX signals, ISO-TP, and m.routes are not generated yet.
 	comm_thread_on := m.target.threadx && has_bridge
-	if m.target.threadx && m.trace.on && m.trace.level == 'all' && m.io_points.len > 0 {
-		// trace level="all" uses run_profiled (per-handler brackets that internally
-		// fold load); those brackets can't exclude higher-priority io preemption, so
-		// io + profiled load would double-count with no clean correction (codex emb#150
-		// r11). Unsupported until io is profiled too — use trace level="thread" or drop io.
-		panic('loom2v: [target] kind="threadx" with [[io.gpio]] AND [trace] level="all" is ' +
-			'not supported yet (per-handler profiled load cannot exclude io preemption) — ' +
-			'set [trace] level="thread" or remove the io points')
-	}
+	// trace level="all" + io points: run_profiled_excl subtracts the io thread's exec counter
+	// per handler, so the profiled load no longer double-counts io preemption (the emb#150 r11
+	// refusal). The io thread's OWN work is still not profiled per point (emb#263).
 	// the sole LOCAL partition (a satellite image = ... partition is external and
 	// makes single_part empty — the guard must count the local one, matching
 	// emit_run_target; codex on emb#150 r8)

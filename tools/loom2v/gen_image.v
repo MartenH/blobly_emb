@@ -97,7 +97,7 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 			g << 'fn C.trace_fb(u32, u64, u32)'
 			// the same GLOBAL handler-id tables the owner emits — the walk covers every
 			// partition, so satellite handlers land on their manifest ids.
-			g << trace_fb_hooks(m, doc, threads, true)
+			g << trace_fb_hooks(m, doc, threads, true, false)
 		}
 		g << ''
 		g << '__global ('
