@@ -74,8 +74,9 @@ static uint8_t dlc_to_len(uint32_t dlc) {
 
 /* Rx-FIFO0 overrun events per instance (idx 0..2): each is >=1 frame lost (REQ-CAN-DRV-008). */
 static uint32_t rx_lost[3];
-static uint8_t  hal_closed[3];    /* close() Stopped it deliberately: recovery must not restart */
-static uint32_t hal_busoff_rec[3]; /* bus-off recoveries since open (REQ-CAN-DRV-009) */
+static uint8_t  hal_closed[3];     /* close() Stopped it deliberately: recovery must not restart */
+static uint8_t  hal_recovering[3]; /* INIT cleared, waiting for PSR.BO to clear */
+static uint32_t hal_busoff_rec[3]; /* COMPLETED bus-off recoveries since open (REQ-CAN-DRV-009) */
 
 /* Bus-off recovery, ST-HAL backend (REQ-CAN-DRV-009). The HAL owns the controller but exposes
  * the M_CAN registers through hf->Instance, so the recovery is the same as the register backend:
@@ -86,8 +87,15 @@ static void hal_busoff_poll(int h, FDCAN_HandleTypeDef *hf) {
 	if (h < 0 || h >= 3 || hal_closed[h] || !hf || !hf->Instance)
 		return;
 	FDCAN_GlobalTypeDef *c = hf->Instance;
-	if ((c->PSR & FDCAN_PSR_BO) && (c->CCCR & FDCAN_CCCR_INIT)) {
-		c->CCCR &= ~FDCAN_CCCR_INIT;
+	if (c->PSR & FDCAN_PSR_BO) {
+		/* count only a COMPLETED recovery (when PSR.BO clears); clear INIT to (re-)start it, and
+		 * re-clear on a re-latch from a still-bad bus — one recovery either way (codex #265 r4). */
+		if (c->CCCR & FDCAN_CCCR_INIT) {
+			c->CCCR &= ~FDCAN_CCCR_INIT;
+		}
+		hal_recovering[h] = 1;
+	} else if (hal_recovering[h]) {
+		hal_recovering[h] = 0;
 		hal_busoff_rec[h]++;
 	}
 }
@@ -107,6 +115,7 @@ int blob_can_open(const char *name, int fd_mode) {
 	if (idx >= 0 && idx < 3) {
 		rx_lost[idx] = 0;
 		hal_closed[idx] = 0;
+		hal_recovering[idx] = 0;
 		hal_busoff_rec[idx] = 0;
 	}
 	return idx;

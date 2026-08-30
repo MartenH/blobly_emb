@@ -127,7 +127,7 @@ H755).
 
 ## What a new port actually costs
 
-1. `driver/can/can_<backend>.c` — implement the six `blob_can_*` functions.
+1. `driver/can/can_<backend>.c` — implement the eight `blob_can_*` functions.
 2. `osal/osal_<backend>.c` — cores, `now_us`, the shared IOC region.
 3. `main.v` — the platform init (HAL/CubeMX or `Can_Init`/`CanIf_Init`) + `gen.run`.
 
