@@ -154,6 +154,13 @@ uint32_t blob_can_rx_overruns(int h) {
 	return (h >= 0 && h < 3) ? rx_lost[h] : 0u;
 }
 
+uint32_t blob_can_busoff_recoveries(int h) {
+	(void)h;
+	/* ST HAL backend: recovery would go through HAL_FDCAN_Start after ErrorStatusCallback;
+	 * not wired yet — the register-level backend (can_fdcan.c) is the reference policy. */
+	return 0u;
+}
+
 void blob_can_close(int h) {
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
 	if (hf) HAL_FDCAN_Stop(hf);

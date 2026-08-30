@@ -157,6 +157,12 @@ uint32_t blob_can_rx_overruns(int h) {
 	return (h >= 0 && h < BLOB_CAN_BUSES) ? rx_lost[h] : 0u;
 }
 
+uint32_t blob_can_busoff_recoveries(int h) {
+	(void)h;
+	/* CanIf CDD: bus-off recovery is CanSM's job in the host stack; the CDD only rides it. */
+	return 0u;
+}
+
 void blob_can_close(int h) {
 	if (h >= 0 && h < BLOB_CAN_BUSES)
 		CanIf_SetControllerMode(bus_controller[h], CANIF_CS_STOPPED);

@@ -122,6 +122,8 @@ static volatile uint32_t *ram_at(uint32_t word_off) {
  * >=1 frame lost): a monotonic loss indicator, not an exact frame total. Surfaced via
  * blob_can_rx_overruns() so the loss is observable, not silent (REQ-CAN-DRV-008). */
 static uint32_t g_rx_lost[3];
+static uint8_t  g_closed[3];     /* close() parked INIT deliberately: recovery must not undo it */
+static uint32_t g_busoff_rec[3]; /* bus-off recoveries since open (REQ-CAN-DRV-009) */
 
 /* Per-instance CAN-FD capability, latched at open(): send() only emits an FD frame
  * (FDF/BRS + >8-byte payload) on a bus that was opened in FD mode. */
@@ -202,6 +204,10 @@ int blob_can_open(const char *name, int fd_mode) {
 		g_rx_lost[idx] = 0;
 
 	/* leave init -> CAN core synchronizes to the bus (bounded, same as above). */
+	if (idx >= 0 && idx < 3) {
+		g_closed[idx] = 0;
+		g_busoff_rec[idx] = 0; /* like g_rx_lost: monotonic within a session, reset by open() */
+	}
 	c->CCCR &= ~FDCAN_CCCR_INIT;
 	for (uint32_t t = 0; (c->CCCR & FDCAN_CCCR_INIT) != 0u; t++) {
 		if (t >= 1000000u)
@@ -276,10 +282,30 @@ int blob_can_send(int h, uint32_t id, const uint8_t *data, uint8_t len, int flag
 /* Non-blocking backpressure query: 1 if the Tx FIFO can accept a frame now, else 0.
  * A burst sender (the ISO-TP dump) gates on this so it never overruns the FIFO or
  * blocks — it sends up to a FIFO's worth per pass and resumes on the next. */
+/* Bus-off recovery (REQ-CAN-DRV-009). On bus-off the M_CAN core sets CCCR.INIT autonomously
+ * and stays OFF THE BUS until software clears it (RM0468: the cores does not recover on its
+ * own); before this, one bus glitch — a host tool closing its adapter, a loose wire — parked
+ * the node silent until a power cycle (seen live: H723 at TEC 252, LED demo frozen, #261).
+ * Polled from tx_ready() and recv(), which the comm thread hits every tick, so no ISR and no
+ * new call in the generated loop. Clearing INIT starts the ISO 11898-1 recovery sequence
+ * (129 x 11 recessive bits) in hardware; g_closed keeps close()'s deliberate INIT parked. */
+static void busoff_poll(int h, FDCAN_GlobalTypeDef *c) {
+	if (h < 0 || h >= 3 || g_closed[h])
+		return;
+	if ((c->PSR & FDCAN_PSR_BO) && (c->CCCR & FDCAN_CCCR_INIT)) {
+		c->CCCR &= ~FDCAN_CCCR_INIT; /* rejoin after 129 x 11 recessive bits (hardware-timed) */
+		g_busoff_rec[h]++;
+	}
+}
+uint32_t blob_can_busoff_recoveries(int h) {
+	return (h >= 0 && h < 3) ? g_busoff_rec[h] : 0u;
+}
+
 int blob_can_tx_ready(int h) {
 	FDCAN_GlobalTypeDef *c = inst(h);
 	if (!c)
 		return 0;
+	busoff_poll(h, c);
 	return (c->TXFQS & FDCAN_TXFQS_TFQF) ? 0 : 1;
 }
 
@@ -298,6 +324,7 @@ int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len, int *flags) 
 	FDCAN_GlobalTypeDef *c = inst(h);
 	if (!c)
 		return -1;
+	busoff_poll(h, c);
 	/* Note any FIFO0 overrun since the last drain, then acknowledge it (write-1-clear),
 	 * before the empty-check below so a loss that left the FIFO drained is still counted. */
 	if ((c->IR & FDCAN_IR_RF0L) && h >= 0 && h < 3) {
@@ -354,6 +381,9 @@ uint32_t blob_can_rx_overruns(int h) {
 
 void blob_can_close(int h) {
 	FDCAN_GlobalTypeDef *c = inst(h);
-	if (c)
+	if (c) {
+		if (h >= 0 && h < 3)
+			g_closed[h] = 1; /* deliberate: busoff_poll must not undo this INIT */
 		c->CCCR |= FDCAN_CCCR_INIT; /* stop participating on the bus */
+	}
 }
