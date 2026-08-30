@@ -152,6 +152,7 @@ int blob_can_tx_idle(int h) {
 int blob_can_recv(int h, uint32_t *id, uint8_t *data, uint8_t *len, int *flags) {
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
 	if (!hf) return -1;
+	hal_busoff_poll(h, hf); /* receive-only callers recover too (codex #265 r2) */
 	/* Note + clear a FIFO0 message-lost since the last drain, before the empty-check, so a
 	 * loss that left the FIFO drained is still counted (REQ-CAN-DRV-008). */
 	if (__HAL_FDCAN_GET_FLAG(hf, FDCAN_FLAG_RX_FIFO0_MESSAGE_LOST) && h >= 0 && h < 3) {
@@ -177,13 +178,12 @@ uint32_t blob_can_rx_overruns(int h) {
 }
 
 uint32_t blob_can_busoff_recoveries(int h) {
-	(void)h;
-	/* ST HAL backend: recovery would go through HAL_FDCAN_Start after ErrorStatusCallback;
-	 * not wired yet — the register-level backend (can_fdcan.c) is the reference policy. */
-	return 0u;
+	return (h >= 0 && h < 3) ? hal_busoff_rec[h] : 0u;
 }
 
 void blob_can_close(int h) {
 	FDCAN_HandleTypeDef *hf = bus_handle(h);
+	if (h >= 0 && h < 3)
+		hal_closed[h] = 1; /* deliberate: hal_busoff_poll must not restart it (codex #265 r2) */
 	if (hf) HAL_FDCAN_Stop(hf);
 }
