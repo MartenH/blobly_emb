@@ -404,21 +404,31 @@ verifies = ["REQ-TRACE-009"]
 approved_by = ""
 date = ""
 
-# system_full edge bus runs CAN-FD (500 kbit arbitration / 2 Mbit data phase, BRS), with the
-# gateway (sysnode H735 FDCAN2) forwarding classic⇄FD. Enabled by a common 80 MHz FDCAN kernel
-# clock from PLL2_Q on the FD boards (boards/h735dk + boards/h723 board.c), so nominal + data bit
-# timing and sample points are identical across nodes by construction. Bench verification (with
-# the CANsub FD tap): both edge nodes come up on the FD data phase with no bit errors, and the
-# routed signals (VehicleSpeed/HeadlightCmd/LedLevel classic→FD, SteeringAngle FD→classic) cross
-# the gateway intact. Generation + cross-build are CI-checked; the FD bit timing on silicon is
-# bench-only (the nodes are ThreadX images, no host build). #266.
-[[check]]
+# system_full's edge bus runs CAN-FD (500 kbit arbitration / 2 Mbit data phase with BRS) while
+# compute stays classic, so the sysnode gateway forwards classic<->FD. Enabled by a common 80 MHz
+# FDCAN kernel clock from PLL2_Q on all three ThreadX CAN boards, which makes the nominal and data
+# bit timing (and therefore the sample points) identical by construction.
+#
+# BENCH RUN 2026-08-31 (H735-DK + NUCLEO-H723ZG + NUCLEO-H755ZI, CANsub.4 tap, all four images
+# flashed from this branch). Measured over SWD and on the wire:
+#   - every board booted on PLL2: FDCAN NBTP = 0x00090b02 on all three (500 kbit, 16 tq, 81.25%);
+#     PLL1/SYSCLK untouched (g_cpu_mhz 550/400/400).
+#   - both edge controllers in FD+BRS with the expected data timing: CCCR = 0x300 (FDOE|BRSE),
+#     DBTP = 0x00010e33 (2 Mbit, 20 tq, DBRP 2, 80%) on H735 FDCAN2 and H723 FDCAN1.
+#   - the wire: blobly_net decoded edge frames 0x130/0x131/0x132/0x133 flagged FD-BRS while
+#     compute 0x120/0x123/0x125/0x126/0x127 stayed classic, at the configured cycle times.
+#   - forwarding: g_fwd_count climbed steadily (3061 -> 10030 over the run), i.e. classic->FD
+#     (0x120->0x130, 0x123->0x131, 0x126->0x133) and FD->classic (0x132->0x125) both live.
+#   - errors: H723 edge ECR = 0 (CEL/TEC/REC all zero — no error EVER on the FD bus); H735 edge
+#     TEC/REC = 0 with a CEL frozen at boot-sync value; counters unchanged across 30 s; no
+#     bus-off (blob_can_busoff_recoveries = 0). The 8 MHz/4-tq bus-off trap is gone.
+#   - end to end: zone_a's LD3 PWM followed LedLevel arriving over the FD bus, and the H755's LD3
+#     followed HostLedLevel from blobly_net's tester restbus sim on classic compute.
+# Not covered here: 12..64-byte FD payloads (every system_full frame is DLC 8; the 64-byte path
+# is examples/h755_canfd) — this signs off cross-bus routing over a mixed classic/FD backbone.
+[[review]]
 id = "system-full-edge-canfd"
-method = "test"
-context = "h735/h723 target"
-command = "sh -c 'exit 2'" # no automated harness yet -> always "not run" (skip_exit) = pending
-skip_exit = 2 # exit 2 = not run -> pending (like the h755 hwtest); replace with a real bench harness
-# REQ-TOPO-006 (cross-bus routing via a gateway): this validates the classic<->FD forward, NOT
-# 64-byte FD payloads (all system_full frames are DLC 8 — REQ-CAN-DRV-004's 64-byte path is
-# covered by examples/h755_canfd). codex emb#267.
+method = "review"
+context = "h735/h723 FDCAN" # specific boards/backend, not a generic "target"
 verifies = ["REQ-TOPO-006"]
+approved_by = "bench run 2026-08-31 by the agent session on the maintainer's bench — H735+H723+H755 on PLL2 80 MHz, edge FD-BRS clean (H723 ECR=0), gateway forwarding classic<->FD; countersign to confirm"

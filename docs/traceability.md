@@ -190,7 +190,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-003 | QM | test | verified | dbc_test.v (pass), model_test.v (pass) |
 | REQ-TOPO-004 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-005 | QM | analysis | verified | gen_test.v (pass) |
-| REQ-TOPO-006 | QM | test | covered | gen_test.v (pass), model_test.v (pass), route_dissolution.lua (pending), route_signal.lua (pending), system-full-edge-canfd (pending) |
+| REQ-TOPO-006 | QM | test | covered | gen_test.v (pass), model_test.v (pass), route_dissolution.lua (pending), route_signal.lua (pending), system-full-edge-canfd (approved) |
 | REQ-TOPO-007 | QM | test | covered | model_test.v (pass), route_extid.lua (pending), route_firewall.lua (pending) |
 | REQ-TOPO-008 | QM | test | covered | route_dissolution.lua (pending), route_e2e.lua (pending), route_signal.lua (pending), route_srcverify.lua (pending) |
 | REQ-TOPO-009 | QM | test | covered | route_firewall.lua (pending) |
@@ -206,7 +206,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 ## Matrix — requirement × execution context
 
-| req | h735/ETH | h735/ETH-DoIP | h735/ETH-TCP | h735/ETH-UDP | h735/FDCAN | h735/ThreadX | h735/h723 target | h735/target | h755/FDCAN | h755/IO-GPIO | h755/ThreadX | h755/dual-core | h755/target | host/SocketCAN | host/unit | review | static | threadx/qemu-m7 + h755 bench |
+| req | h735/ETH | h735/ETH-DoIP | h735/ETH-TCP | h735/ETH-UDP | h735/FDCAN | h735/ThreadX | h735/h723 FDCAN | h735/target | h755/FDCAN | h755/IO-GPIO | h755/ThreadX | h755/dual-core | h755/target | host/SocketCAN | host/unit | review | static | threadx/qemu-m7 + h755 bench |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | REQ-BOOT-001 | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BOOT-002 | | | | | | | | | | | | | | | ✓ | | | |
@@ -383,7 +383,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-003 | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-TOPO-004 | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-TOPO-005 | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TOPO-006 | | | | | | | · | | | | | | | · | ✓ | | | |
+| REQ-TOPO-006 | | | | | | | ✓ | | | | | | | · | ✓ | | | |
 | REQ-TOPO-007 | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-TOPO-008 | | | | | | | | | | | | | | · | | | | |
 | REQ-TOPO-009 | | | | | | | | | | | | | | · | | | | |
