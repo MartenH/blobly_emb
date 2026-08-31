@@ -416,4 +416,6 @@ date = ""
 id = "system-full-edge-canfd"
 method = "test"
 context = "h735/h723 target"
-command = "sh -c 'if [ -z \"$BLOB_HWTEST\" ]; then exit 2; fi; echo edge-canfd bench check is manual for now; exit 2'"
+command = "sh -c 'exit 2'" # no automated harness yet -> always "not run" (skip_exit) = pending
+skip_exit = 2 # exit 2 = not run -> pending (like the h755 hwtest); replace with a real bench harness
+verifies = ["REQ-CAN-DRV-004"]

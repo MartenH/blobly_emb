@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 188 | 105 | 19 | 64 | 0 |
+| 188 | 105 | 20 | 63 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -39,7 +39,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-DRV-001 | QM | test | covered | h735-fdcan-hardware (approved), h755-dualcore-heartbeat (approved), h755-fdcan-hardware (approved), route.lua (pending) |
 | REQ-CAN-DRV-002 | QM | test | covered | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved), route.lua (pending) |
 | REQ-CAN-DRV-003 | QM | test | verified | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
-| REQ-CAN-DRV-004 | QM | test | uncovered | — |
+| REQ-CAN-DRV-004 | QM | test | covered | system-full-edge-canfd (pending) |
 | REQ-CAN-DRV-005 | QM | test | uncovered | — |
 | REQ-CAN-DRV-006 | QM | review | uncovered | — |
 | REQ-CAN-DRV-007 | QM | test | uncovered | — |
@@ -232,7 +232,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-DRV-001 | | | | | ✓ | | | | ✓ | | | ✓ | | · | | | | |
 | REQ-CAN-DRV-002 | | | | | ✓ | | | | ✓ | | | | | · | | | | |
 | REQ-CAN-DRV-003 | | | | | ✓ | | | | ✓ | | | | | | | | | |
-| REQ-CAN-DRV-004 | | | | | | | | | | | | | | | | | | |
+| REQ-CAN-DRV-004 | | | | | | | · | | | | | | | | | | | |
 | REQ-CAN-DRV-005 | | | | | | | | | | | | | | | | | | |
 | REQ-CAN-DRV-006 | | | | | | | | | | | | | | | | | | |
 | REQ-CAN-DRV-007 | | | | | | | | | | | | | | | | | | |

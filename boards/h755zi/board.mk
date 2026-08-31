@@ -15,10 +15,14 @@ CMSIS      = -I$(REPO)/third_party/cmsis_device_h7/Include \
              -I$(REPO)/third_party/cmsis_core/CMSIS/Core/Include
 # CORE_CM7: the dual-core device header needs to know which core it is compiled for.
 BOARD_DEFS = -DSTM32H755xx -DCORE_CM7 -DTRACE_CPU_MHZ=400 -DSYSTEM_CLOCK=400000000
-# FDCAN timing for classic 500 kbit off the 8 MHz HSE kernel clock: prescaler 1,
+# FDCAN timing off the 8 MHz HSE kernel clock: nominal 500 kbit = 16 tq (NBRP 1, 81.25%). Also
+# FD-capable — data 2 Mbit = 4 tq (DBRP 1, 1+2+1, 75%) — so a fd=true node here opens rather than
+# parking (loom2v allows FD on any board now). NOTE 75% != the 80 MHz edge boards' 80%: this
+# board is not on the FD edge bus; harmonize to 80 MHz PLL2 before putting it on one.
 # 16 tq/bit (1 + 12 + 3), sample point 81.25%.
 CAN_DEFS   = -DBLOB_CAN_FDCAN -DBLOB_FDCAN_KCLK_HZ=8000000 -DBLOB_FDCAN_TQ=16 \
-             -DBLOB_FDCAN_NTSEG1=12 -DBLOB_FDCAN_NTSEG2=3
+             -DBLOB_FDCAN_NTSEG1=12 -DBLOB_FDCAN_NTSEG2=3 \
+             -DBLOB_FDCAN_DBITRATE=2000000 -DBLOB_FDCAN_DTQ=4 -DBLOB_FDCAN_DTSEG1=2 -DBLOB_FDCAN_DTSEG2=1 -DBLOB_FDCAN_DSJW=1
 # driver/io GPIO backend (register-level, io_stm32.c). On-board: LD1 = PB0, B1 = PC13.
 IO_DEFS    = -DBLOB_IO_STM32
 
