@@ -3719,10 +3719,18 @@ fn main() {
 						'"${tx_m}" is not generated — the comm producer sends purely cyclically (no ' +
 						'event/mixed/triggered or min_delay_ms); use mode = "cyclic"')
 				}
-				if si.dbc_dlc > 8 {
+				// >8 bytes needs CAN-FD. On a classic bus the backend rejects it; on an FD bus a
+				// canonical DLC (12..64) is fine (validate_signal_routes_model already rejected a
+				// non-canonical FD length). si.bus == m.telem.bus here (checked above). #267.
+				tx_sig_bus_fd := if bc := doc.value_opt('bus') {
+					(bc.as_map()[si.bus] or { toml.Any(map[string]toml.Any{}) }).as_map()['fd'] or { toml.Any(false) }
+				} else {
+					toml.Any(false)
+				}.bool()
+				if !tx_sig_bus_fd && si.dbc_dlc > 8 {
 					panic('loom2v: [target] kind="threadx" comm thread: TX message "${si.dbc_msg}" DLC ' +
-						'${si.dbc_dlc} > 8 (CAN-FD sized), but the classic FDCAN backend rejects len > 8; ' +
-						'use a <= 8-byte frame')
+						'${si.dbc_dlc} > 8 (CAN-FD sized) on classic bus "${si.bus}"; use a <= 8-byte ' +
+						'frame or set the bus fd = true')
 				}
 				if si.remote {
 					// remote TX (satellite -> bus): the satellite image publishes into the signal's
