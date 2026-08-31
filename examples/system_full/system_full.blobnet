@@ -27,10 +27,12 @@
 # 0x123 (HeadlightCmd) flip to 1 — domain reacting to steering that arrived via the gateway.
 #
 # WIRING (this bench, PCAN 2-channel): PCAN connector "can1" = SocketCAN can0 = the COMPUTE
-# bus; the second PCAN channel = SocketCAN can1 = the EDGE bus. Bring both up (classic
-# 500 kbit) before starting the measurement:
+# bus (classic 500 kbit); the second PCAN channel = SocketCAN can1 = the EDGE bus, now CAN-FD
+# (500 kbit arbitration / 2 Mbit data, BRS). Bring both up before the measurement:
 #     sudo ip link set can0 up type can bitrate 500000
-#     sudo ip link set can1 up type can bitrate 500000
+#     sudo ip link set can1 up type can bitrate 500000 dbitrate 2000000 fd on
+# (edge needs an FD-capable adapter — on this bench retarget it to the CANsub FD tap via
+#  Configure ▸ ↻; a classic can1 cannot ACK the 2 Mbit BRS frames.)
 #
 # FLASH the boards (in blobly_emb) — see boards/common/bench serials:
 #     make -C examples/system_full nodes

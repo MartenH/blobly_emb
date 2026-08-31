@@ -1577,6 +1577,17 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 			frame_src[key] = r.from_bus
 		}
 	}
+	// Every EXTERNAL signal (COM tx/rx, not just routes) on an FD bus must carry a representable
+	// CAN-FD length: the FDCAN receiver reports the canonical wire length (a 9-byte DBC arrives as
+	// 12), but the generated matcher compares rx.len to the literal dbc_dlc, so a non-canonical DLC
+	// on an FD bus is matched by nothing and every such frame is silently dropped (codex emb#267).
+	for _, si in m.sig_of {
+		if si.external && (bus_fd[si.bus] or { false }) && !fd_len_ok(si.dbc_dlc) {
+			panic('signal "${si.dbc_msg}" on FD bus "${si.bus}" has DLC ${si.dbc_dlc} — not a ' +
+				'representable CAN-FD length (0..8, 12, 16, 20, 24, 32, 48, 64); the rx matcher would ' +
+				'never match the canonical wire length')
+		}
+	}
 }
 
 // Producer is a platform capability that lives on a bus — telemetry and trace today, NM / COM-tx
