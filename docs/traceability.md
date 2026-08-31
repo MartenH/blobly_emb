@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 188 | 105 | 20 | 63 | 0 |
+| 188 | 105 | 19 | 64 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -39,7 +39,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-DRV-001 | QM | test | covered | h735-fdcan-hardware (approved), h755-dualcore-heartbeat (approved), h755-fdcan-hardware (approved), route.lua (pending) |
 | REQ-CAN-DRV-002 | QM | test | covered | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved), route.lua (pending) |
 | REQ-CAN-DRV-003 | QM | test | verified | h735-fdcan-hardware (approved), h755-fdcan-hardware (approved) |
-| REQ-CAN-DRV-004 | QM | test | covered | system-full-edge-canfd (pending) |
+| REQ-CAN-DRV-004 | QM | test | uncovered | — |
 | REQ-CAN-DRV-005 | QM | test | uncovered | — |
 | REQ-CAN-DRV-006 | QM | review | uncovered | — |
 | REQ-CAN-DRV-007 | QM | test | uncovered | — |
@@ -190,7 +190,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-003 | QM | test | verified | dbc_test.v (pass), model_test.v (pass) |
 | REQ-TOPO-004 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-005 | QM | analysis | verified | gen_test.v (pass) |
-| REQ-TOPO-006 | QM | test | covered | gen_test.v (pass), model_test.v (pass), route_dissolution.lua (pending), route_signal.lua (pending) |
+| REQ-TOPO-006 | QM | test | covered | gen_test.v (pass), model_test.v (pass), route_dissolution.lua (pending), route_signal.lua (pending), system-full-edge-canfd (pending) |
 | REQ-TOPO-007 | QM | test | covered | model_test.v (pass), route_extid.lua (pending), route_firewall.lua (pending) |
 | REQ-TOPO-008 | QM | test | covered | route_dissolution.lua (pending), route_e2e.lua (pending), route_signal.lua (pending), route_srcverify.lua (pending) |
 | REQ-TOPO-009 | QM | test | covered | route_firewall.lua (pending) |
@@ -232,7 +232,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-CAN-DRV-001 | | | | | ✓ | | | | ✓ | | | ✓ | | · | | | | |
 | REQ-CAN-DRV-002 | | | | | ✓ | | | | ✓ | | | | | · | | | | |
 | REQ-CAN-DRV-003 | | | | | ✓ | | | | ✓ | | | | | | | | | |
-| REQ-CAN-DRV-004 | | | | | | | · | | | | | | | | | | | |
+| REQ-CAN-DRV-004 | | | | | | | | | | | | | | | | | | |
 | REQ-CAN-DRV-005 | | | | | | | | | | | | | | | | | | |
 | REQ-CAN-DRV-006 | | | | | | | | | | | | | | | | | | |
 | REQ-CAN-DRV-007 | | | | | | | | | | | | | | | | | | |
@@ -383,7 +383,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-003 | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-TOPO-004 | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-TOPO-005 | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TOPO-006 | | | | | | | | | | | | | | · | ✓ | | | |
+| REQ-TOPO-006 | | | | | | | · | | | | | | | · | ✓ | | | |
 | REQ-TOPO-007 | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-TOPO-008 | | | | | | | | | | | | | | · | | | | |
 | REQ-TOPO-009 | | | | | | | | | | | | | | · | | | | |

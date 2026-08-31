@@ -418,4 +418,7 @@ method = "test"
 context = "h735/h723 target"
 command = "sh -c 'exit 2'" # no automated harness yet -> always "not run" (skip_exit) = pending
 skip_exit = 2 # exit 2 = not run -> pending (like the h755 hwtest); replace with a real bench harness
-verifies = ["REQ-CAN-DRV-004"]
+# REQ-TOPO-006 (cross-bus routing via a gateway): this validates the classic<->FD forward, NOT
+# 64-byte FD payloads (all system_full frames are DLC 8 — REQ-CAN-DRV-004's 64-byte path is
+# covered by examples/h755_canfd). codex emb#267.
+verifies = ["REQ-TOPO-006"]

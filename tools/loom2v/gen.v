@@ -395,6 +395,11 @@ fn (r Route) xr_ch() string {
 // fdcan_index_of strips the single FDCAN index digit ("can0" -> "0") the driver's
 // blob_can_open reads (name[0]-'0'). loom2v already validated the telem bus this way; a
 // gateway's route buses are validated the same when the extra channels are opened.
+// fd_len_ok: is `n` a length CAN-FD can carry (the DLC set the driver's len_to_dlc maps 1:1)?
+fn fd_len_ok(n int) bool {
+	return n <= 8 || n == 12 || n == 16 || n == 20 || n == 24 || n == 32 || n == 48 || n == 64
+}
+
 fn fdcan_index_of(bus string) string {
 	for c in bus {
 		if c >= `0` && c <= `9` {
@@ -1423,6 +1428,16 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		if !(bus_fd[r.to_bus] or { false }) && r.to_dlc > 8 {
 			panic('route: destination frame "${r.to_frame}" is ${r.to_dlc} bytes but bus "${r.to_bus}" is classic (fd = false, DLC <= 8)')
 		}
+		// A length the FD DLC set cannot represent (9..11, 13..15, 17..19, ... — the CAN-FD
+		// lengths are 0..8, 12, 16, 20, 24, 32, 48, 64) is rejected by blob_can_send at runtime;
+		// the forwarder would drop the frame yet still count it, a silent loss (codex emb#267). A
+		// classic bus (<=8) is already covered above; only an FD-length frame needs the check.
+		if (bus_fd[r.from_bus] or { false }) && !fd_len_ok(r.from_dlc) {
+			panic('route: source frame "${r.from_frame}" is ${r.from_dlc} bytes — not a representable CAN-FD length (0..8, 12, 16, 20, 24, 32, 48, 64)')
+		}
+		if (bus_fd[r.to_bus] or { false }) && !fd_len_ok(r.to_dlc) {
+			panic('route: destination frame "${r.to_frame}" is ${r.to_dlc} bytes — not a representable CAN-FD length (0..8, 12, 16, 20, 24, 32, 48, 64)')
+		}
 		// the destination frame must not ALSO be a COM tx frame ON THE SAME BUS — a
 		// [[signal]] to a bus makes its DBC message an implicit cyclic transmitter even
 		// with no [[frame]].tx (so it is not in m.frames.tx_mode). Two writers of one
@@ -1935,8 +1950,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			// channel FD (can.v flags every send from Channel.fd). The per-board data-phase timing
 			// (BLOB_FDCAN_D*) must be harmonized across every node on the bus — done by giving the
 			// FD boards a common PLL2-derived FDCAN kernel clock (boards/*/board.c), which makes the
-			// nominal + data timing and the sample points identical by construction. Bench-verified
-			// on silicon (requirements/verifications.toml). #266.
+			// nominal + data timing and the sample points identical by construction. The FD bit
+			// timing is BENCH-PENDING on silicon (requirements/verifications.toml
+			// system-full-edge-canfd is skip_exit=2 = not-run; CI only proves generate + build). #266.
 			_ = tx_bus_fd
 			// The driver opens the bus by a SINGLE-digit index "0".."2" (blob_can_open reads
 			// name[0]-'0'); derive it from the bus name (e.g. "can0" -> "0"). Require exactly one
