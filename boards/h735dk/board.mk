@@ -12,9 +12,12 @@ MCU        = -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb
 CMSIS      = -I$(REPO)/third_party/cmsis_device_h7/Include \
              -I$(REPO)/third_party/cmsis_core/CMSIS/Core/Include
 BOARD_DEFS = -DSTM32H735xx -DTRACE_CPU_MHZ=550 -DSYSTEM_CLOCK=550000000
-# FDCAN timing for classic 500 kbit off the 25 MHz HSE kernel clock (10 tq: 1+7+2)
-CAN_DEFS   = -DBLOB_CAN_FDCAN -DBLOB_FDCAN_KCLK_HZ=25000000 -DBLOB_FDCAN_TQ=10 \
-             -DBLOB_FDCAN_NTSEG1=7 -DBLOB_FDCAN_NTSEG2=2
+# FDCAN timing off the 80 MHz PLL2_Q kernel clock (see board.c): nominal 500 kbit = 16 tq
+# (NBRP 10, 1+12+3, 81.25%), data 2 Mbit = 20 tq (DBRP 2, 1+15+4, 80%). Common 80 MHz across
+# every FD node so sample points match by construction.
+CAN_DEFS   = -DBLOB_CAN_FDCAN -DBLOB_FDCAN_KCLK_HZ=80000000 -DBLOB_FDCAN_TQ=16 \
+             -DBLOB_FDCAN_NTSEG1=12 -DBLOB_FDCAN_NTSEG2=3 \
+             -DBLOB_FDCAN_DBITRATE=2000000 -DBLOB_FDCAN_DTQ=20 -DBLOB_FDCAN_DTSEG1=15 -DBLOB_FDCAN_DTSEG2=4 -DBLOB_FDCAN_DSJW=4
 # driver/io GPIO backend (register-level, io_stm32.c).
 IO_DEFS    = -DBLOB_IO_STM32
 

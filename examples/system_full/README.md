@@ -16,6 +16,7 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 | Feature | Node(s) | Silicon status |
 |---|---|---|
 | 2-bus CAN gateway routing (raw copy + id remap) | `sysnode` | ✅ on-silicon |
+| **Mixed classic↔CAN-FD backbone**: edge bus is CAN-FD (500k/2M), gateway forwards classic⇄FD | `sysnode` (H735 FDCAN2) + `zone_a` | ⏳ builds; **bench-pending** (PLL2 80 MHz FDCAN kernel + FD timing, #266) |
 | NvM persistence (`DriveMode` survives resets) | `domain` | ✅ |
 | Cross-core **bulk** + **CpuLoad** (AMP, CM7↔CM4) | `domain` + `domain_m4` | ✅ (bulkperf ~28 MB/s over CAN) |
 | Two-core **trace** (thread/ISR/FB, one timeline) | `domain` | ✅ |

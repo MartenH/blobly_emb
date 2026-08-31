@@ -5,7 +5,7 @@
 #   domain  (NUCLEO-H755ZI) — produces VehicleSpeed + HeadlightCmd + LedLevel on the compute bus;
 #                             fades its red LD3 with HostLedLevel from the tester node (0x127),
 #                             which THIS TOOL simulates on the bench
-#   zone_a  (NUCLEO-H723ZG) — produces SteeringAngle on the edge bus
+#   zone_a  (NUCLEO-H723ZG) — produces SteeringAngle on the edge bus (CAN-FD, 500k/2M)
 #
 # blobly_net LISTENS on edge (monitor) but is a MEMBER on compute: it restbus-simulates the
 # tester node there (mode normal — it TRANSMITS HostLedFrame 0x127, see `simulation:` below) and
@@ -76,10 +76,11 @@ buses:
   # --- edge bus: zone_a (H723) <-> gateway (H735 FDCAN2) ---
   - name: edge
     network: system_full
-    adapter: socketcan
-    address: can1            # second PCAN channel = SocketCAN can1 = edge bus
-    protocol: can
+    adapter: socketcan       # bench: retarget to the CANsub FD tap (Configure ▸ ↻ pick) — an
+    address: can1            # FD-capable adapter is required now that edge is CAN-FD
+    protocol: canfd          # edge runs CAN-FD: 500 kbit arbitration, 2 Mbit data phase (BRS)
     bitrate: 500000
+    data_bitrate: 2000000
     mode: monitor
     enabled: true
     databases:

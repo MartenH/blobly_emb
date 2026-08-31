@@ -22,7 +22,7 @@ timeout_ms   = 3000
 
 [bus.edge]
 interface = "can1"
-fd        = false
+fd        = true
 bitrate   = 500000
 dbc       = "edge.dbc"
 

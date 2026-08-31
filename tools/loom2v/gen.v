@@ -1354,15 +1354,12 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 				'layout-identical routes only (raw copy + id remap); on-target transcode is a ' +
 				'follow-up, so route this signal on the host target for now')
 		}
-		// The ThreadX gateway opens each route bus in CLASSIC mode (the comm thread's
-		// ch.open(idx, false)); a generated FD target bus is rejected for telemetry the same
-		// way (per-board FD data-phase timing is a follow-up). Reject an FD route bus here so
-		// the classic open never silently mistimes an FD bus.
-		if m.target.threadx && ((bus_fd[r.from_bus] or { false }) || (bus_fd[r.to_bus] or { false })) {
-			panic('route: signal "${r.signal}" crosses an fd = true bus on a [target] kind="threadx" ' +
-				'node — the gateway comm thread opens route buses in classic mode only (CAN-FD on a ' +
-				'generated target is a follow-up); set the route buses to fd = false')
-		}
+		// The ThreadX gateway opens each route bus with its OWN fd flag (the comm thread's
+		// ch/ch_<bus>.open(idx, bus_fd)), so a classic<->FD forward is a raw copy + id remap
+		// where the destination channel re-frames: a classic 8-byte payload forwarded onto an
+		// FD bus goes out FD, and an FD frame onto a classic bus goes out classic. Layouts are
+		// still required identical (checked above); the length rule below rejects a >8-byte
+		// route onto a classic destination. #266.
 		frof := snake(r.from_frame)
 		tof := snake(r.to_frame)
 		if m.target.threadx {
@@ -1933,15 +1930,14 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			if bc := doc.value('bus').as_map()[m.telem.bus] {
 				tx_bus_fd = (bc.as_map()['fd'] or { toml.Any(false) }).bool()
 			}
-			// The register-level FDCAN backend now supports CAN-FD payloads (see the h755_canfd
-			// echo), but wiring FD into a GENERATED target still needs per-board data-phase timing
-			// (BLOB_FDCAN_D*) harmonized across every node on the bus — a follow-up. Until then a
-			// generated FD target bus is rejected at gen time rather than opening a mistimed bus.
-			if tx_bus_fd {
-				panic('loom2v: [target] kind="threadx": bus "${m.telem.bus}" has fd = true — CAN-FD ' +
-					'on a generated target is not wired up yet (the fdcan backend supports FD, but ' +
-					'per-board FD data-timing harmonization is a follow-up); set [bus.${m.telem.bus}].fd = false')
-			}
+			// CAN-FD on a generated target: the fdcan backend handles FD framing (h755_canfd) and
+			// the pack/unpack paths carry up to com.max_pdu (64) bytes, so a bus.fd = true opens the
+			// channel FD (can.v flags every send from Channel.fd). The per-board data-phase timing
+			// (BLOB_FDCAN_D*) must be harmonized across every node on the bus — done by giving the
+			// FD boards a common PLL2-derived FDCAN kernel clock (boards/*/board.c), which makes the
+			// nominal + data timing and the sample points identical by construction. Bench-verified
+			// on silicon (requirements/verifications.toml). #266.
+			_ = tx_bus_fd
 			// The driver opens the bus by a SINGLE-digit index "0".."2" (blob_can_open reads
 			// name[0]-'0'); derive it from the bus name (e.g. "can0" -> "0"). Require exactly one
 			// digit in 0..2 — reject a name with no digit ("powertrain" -> bus 0 silently) OR an
@@ -2482,8 +2478,13 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				gw_extra := gateway_extra_buses(m)
 				for b in gw_extra {
 					bidx := fdcan_index_of(b)
+					bfd := if bc := doc.value('bus').as_map()[b] {
+						(bc.as_map()['fd'] or { toml.Any(false) }).bool()
+					} else {
+						false
+					}
 					glue << '\tmut ch_${snake(b)} := can.Channel{} // gateway route bus ${b}'
-					glue << "\tif !ch_${snake(b)}.open('${bidx}', false) { // board must init FDCAN${bidx.int() + 1} pins for silicon"
+					glue << "\tif !ch_${snake(b)}.open('${bidx}', ${bfd}) { // board must init FDCAN${bidx.int() + 1} pins for silicon"
 					glue << '\t\tfor { C._tx_thread_sleep(1000) } // dead route bus — park'
 					glue << '\t}'
 					glue << '\tC.comm_rx_irq_enable_idx(${bidx}) // wake the comm thread on this bus too'

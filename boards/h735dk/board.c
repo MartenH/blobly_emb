@@ -137,7 +137,22 @@ void board_can_clock_pins_init(void) {
 	for (uint32_t t = 0; (RCC->CR & RCC_CR_HSERDY) == 0u; t++) {
 		if (t >= 4000000u) board_clock_fault();
 	}
-	RCC->D2CCIP1R &= ~RCC_D2CCIP1R_FDCANSEL; /* 00 -> HSE (25 MHz) */
+	/* FDCAN kernel clock from PLL2_Q = 80 MHz (was HSE 25 MHz, which cannot make a 2 Mbit FD data
+	 * phase: 25 MHz / 2 Mbit needs DBRP*DTQ = 12.5, non-integer). PLL2 is otherwise unused. HSE 25
+	 * /DIVM2=5 = 5 MHz ref, xN2=64 = 320 MHz VCO (wide range), /Q2=4 = 80 MHz. A common 80 MHz FDCAN
+	 * kernel across every FD node makes the nominal + data bit timing (board.mk) identical, so
+	 * sample points match by construction. The H7 PLLs have no spread-spectrum modulator, and no
+	 * FRACN is needed (integer). P2/R2 are left at a valid value with their DIV disabled. */
+	RCC->PLLCKSELR = (RCC->PLLCKSELR & ~RCC_PLLCKSELR_DIVM2_Msk) | (5u << RCC_PLLCKSELR_DIVM2_Pos);
+	RCC->PLLCFGR = (RCC->PLLCFGR & ~(RCC_PLLCFGR_PLL2RGE_Msk | RCC_PLLCFGR_PLL2VCOSEL | RCC_PLLCFGR_PLL2FRACEN))
+	             | RCC_PLLCFGR_PLL2RGE_1 /* 0b10: 4-8 MHz ref */ | RCC_PLLCFGR_DIVQ2EN;
+	RCC->PLL2DIVR = ((64u - 1u) << RCC_PLL2DIVR_N2_Pos) | ((4u - 1u) << RCC_PLL2DIVR_Q2_Pos)
+	              | ((2u - 1u) << RCC_PLL2DIVR_P2_Pos) | ((2u - 1u) << RCC_PLL2DIVR_R2_Pos);
+	RCC->CR |= RCC_CR_PLL2ON;
+	for (uint32_t t = 0; (RCC->CR & RCC_CR_PLL2RDY) == 0u; t++) {
+		if (t >= 4000000u) board_clock_fault(); /* PLL2 didn't lock -> FDCAN kernel unusable */
+	}
+	RCC->D2CCIP1R = (RCC->D2CCIP1R & ~RCC_D2CCIP1R_FDCANSEL_Msk) | RCC_D2CCIP1R_FDCANSEL_1; /* 10 -> PLL2_Q (80 MHz) */
 
 	/* 2. FDCAN peripheral (APB1H) clock, for register access. */
 	RCC->APB1HENR |= RCC_APB1HENR_FDCANEN;

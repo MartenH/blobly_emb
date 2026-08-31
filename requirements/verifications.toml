@@ -403,3 +403,17 @@ context = "h755/dual-core"
 verifies = ["REQ-TRACE-009"]
 approved_by = ""
 date = ""
+
+# system_full edge bus runs CAN-FD (500 kbit arbitration / 2 Mbit data phase, BRS), with the
+# gateway (sysnode H735 FDCAN2) forwarding classic⇄FD. Enabled by a common 80 MHz FDCAN kernel
+# clock from PLL2_Q on the FD boards (boards/h735dk + boards/h723 board.c), so nominal + data bit
+# timing and sample points are identical across nodes by construction. Bench verification (with
+# the CANsub FD tap): both edge nodes come up on the FD data phase with no bit errors, and the
+# routed signals (VehicleSpeed/HeadlightCmd/LedLevel classic→FD, SteeringAngle FD→classic) cross
+# the gateway intact. Generation + cross-build are CI-checked; the FD bit timing on silicon is
+# bench-only (the nodes are ThreadX images, no host build). #266.
+[[check]]
+id = "system-full-edge-canfd"
+method = "test"
+context = "h735/h723 target"
+command = "sh -c 'if [ -z \"$BLOB_HWTEST\" ]; then exit 2; fi; echo edge-canfd bench check is manual for now; exit 2'"
