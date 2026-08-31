@@ -5,7 +5,7 @@
 #   domain  (NUCLEO-H755ZI) — produces VehicleSpeed + HeadlightCmd + LedLevel on the compute bus;
 #                             fades its red LD3 with HostLedLevel from the tester node (0x127),
 #                             which THIS TOOL simulates on the bench
-#   zone_a  (NUCLEO-H723ZG) — produces SteeringAngle on the edge bus
+#   zone_a  (NUCLEO-H723ZG) — produces SteeringAngle on the edge bus (CAN-FD, 500k/2M)
 #
 # blobly_net LISTENS on edge (monitor) but is a MEMBER on compute: it restbus-simulates the
 # tester node there (mode normal — it TRANSMITS HostLedFrame 0x127, see `simulation:` below) and
@@ -26,11 +26,15 @@
 # The closed loop is visible: watch 0x125 (SteeringAngle on compute) climb past 90 and
 # 0x123 (HeadlightCmd) flip to 1 — domain reacting to steering that arrived via the gateway.
 #
-# WIRING (this bench, PCAN 2-channel): PCAN connector "can1" = SocketCAN can0 = the COMPUTE
-# bus; the second PCAN channel = SocketCAN can1 = the EDGE bus. Bring both up (classic
-# 500 kbit) before starting the measurement:
+# WIRING (this bench): the CANsub.4 tap — channel 2 = COMPUTE (classic 500 kbit), channel 1 =
+# EDGE (CAN-FD, 500 kbit arbitration / 2 Mbit data with BRS). Nothing to bring up by hand: the
+# CANsub is reached by DEVICE ID over mDNS (e5a16adf-usb.local) and configured over REST by the
+# tool. Edge REQUIRES an FD-capable adapter — a classic one cannot ACK the 2 Mbit BRS frames.
+#
+# With a SocketCAN adapter instead (PCAN), swap both adapter/address pairs back to socketcan
+# can0/can1 and bring them up first:
 #     sudo ip link set can0 up type can bitrate 500000
-#     sudo ip link set can1 up type can bitrate 500000
+#     sudo ip link set can1 up type can bitrate 500000 dbitrate 2000000 fd on
 #
 # FLASH the boards (in blobly_emb) — see boards/common/bench serials:
 #     make -C examples/system_full nodes
@@ -52,8 +56,8 @@ buses:
   # --- compute bus: domain (H755) <-> gateway (H735 FDCAN1) ---
   - name: compute
     network: system_full
-    adapter: socketcan
-    address: can0            # PCAN "can1" = SocketCAN can0 = compute bus
+    adapter: cansub          # the bench tap: CSS Electronics CANsub.4, found by device id (mDNS)
+    address: e5a16adf/2      # CANsub channel 2 = the compute bus (classic 500 kbit)
     protocol: can
     bitrate: 500000
     mode: normal             # this tool stands in for the "tester" node here (restbus sim)
@@ -76,10 +80,11 @@ buses:
   # --- edge bus: zone_a (H723) <-> gateway (H735 FDCAN2) ---
   - name: edge
     network: system_full
-    adapter: socketcan
-    address: can1            # second PCAN channel = SocketCAN can1 = edge bus
-    protocol: can
+    adapter: cansub          # edge is CAN-FD now: this tap is FD-capable (HW-verified to 2 Mbit)
+    address: e5a16adf/1      # CANsub channel 1 = the edge bus
+    protocol: canfd          # edge runs CAN-FD: 500 kbit arbitration, 2 Mbit data phase (BRS)
     bitrate: 500000
+    data_bitrate: 2000000
     mode: monitor
     enabled: true
     databases:

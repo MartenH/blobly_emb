@@ -123,7 +123,21 @@ void board_can_clock_pins_init(void) {
 	RCC->CR |= RCC_CR_HSEON;
 	while ((RCC->CR & RCC_CR_HSERDY) == 0u) {
 	}
-	RCC->D2CCIP1R &= ~RCC_D2CCIP1R_FDCANSEL; /* 00 -> HSE (8 MHz) */
+	/* FDCAN kernel clock from PLL2_Q = 80 MHz (was HSE 8 MHz). 8 MHz + 2 Mbit BRS leaves only 4 tq
+	 * in the data phase and drives the node bus-off (documented on silicon, examples/h723_canecho);
+	 * BRS needs a PLL-derived clock. A common 80 MHz FDCAN kernel across the FD boards makes the
+	 * bit timing + sample points identical by construction. PLL2 otherwise unused. HSE 8 /DIVM2=2 =
+	 * 4 MHz ref, xN2=80 = 320 MHz VCO (wide), /Q2=4 = 80 MHz. No spread-spectrum, no FRACN. */
+	RCC->PLLCKSELR = (RCC->PLLCKSELR & ~RCC_PLLCKSELR_DIVM2_Msk) | (2u << RCC_PLLCKSELR_DIVM2_Pos);
+	RCC->PLLCFGR = (RCC->PLLCFGR & ~(RCC_PLLCFGR_PLL2RGE_Msk | RCC_PLLCFGR_PLL2VCOSEL | RCC_PLLCFGR_PLL2FRACEN))
+	             | RCC_PLLCFGR_PLL2RGE_1 /* 0b10: 4-8 MHz ref */ | RCC_PLLCFGR_DIVQ2EN;
+	RCC->PLL2DIVR = ((80u - 1u) << RCC_PLL2DIVR_N2_Pos) | ((4u - 1u) << RCC_PLL2DIVR_Q2_Pos)
+	              | ((2u - 1u) << RCC_PLL2DIVR_P2_Pos) | ((2u - 1u) << RCC_PLL2DIVR_R2_Pos);
+	RCC->CR |= RCC_CR_PLL2ON;
+	for (uint32_t t = 0; (RCC->CR & RCC_CR_PLL2RDY) == 0u; t++) {
+		if (t >= 4000000u) board_clock_fault();
+	}
+	RCC->D2CCIP1R = (RCC->D2CCIP1R & ~RCC_D2CCIP1R_FDCANSEL_Msk) | RCC_D2CCIP1R_FDCANSEL_1; /* 10 -> PLL2_Q (80 MHz) */
 
 	/* 2. FDCAN peripheral (APB1H) clock, for register access. */
 	RCC->APB1HENR |= RCC_APB1HENR_FDCANEN;

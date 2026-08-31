@@ -395,6 +395,11 @@ fn (r Route) xr_ch() string {
 // fdcan_index_of strips the single FDCAN index digit ("can0" -> "0") the driver's
 // blob_can_open reads (name[0]-'0'). loom2v already validated the telem bus this way; a
 // gateway's route buses are validated the same when the extra channels are opened.
+// fd_len_ok: is `n` a length CAN-FD can carry (the DLC set the driver's len_to_dlc maps 1:1)?
+fn fd_len_ok(n int) bool {
+	return n <= 8 || n == 12 || n == 16 || n == 20 || n == 24 || n == 32 || n == 48 || n == 64
+}
+
 fn fdcan_index_of(bus string) string {
 	for c in bus {
 		if c >= `0` && c <= `9` {
@@ -1354,15 +1359,12 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 				'layout-identical routes only (raw copy + id remap); on-target transcode is a ' +
 				'follow-up, so route this signal on the host target for now')
 		}
-		// The ThreadX gateway opens each route bus in CLASSIC mode (the comm thread's
-		// ch.open(idx, false)); a generated FD target bus is rejected for telemetry the same
-		// way (per-board FD data-phase timing is a follow-up). Reject an FD route bus here so
-		// the classic open never silently mistimes an FD bus.
-		if m.target.threadx && ((bus_fd[r.from_bus] or { false }) || (bus_fd[r.to_bus] or { false })) {
-			panic('route: signal "${r.signal}" crosses an fd = true bus on a [target] kind="threadx" ' +
-				'node — the gateway comm thread opens route buses in classic mode only (CAN-FD on a ' +
-				'generated target is a follow-up); set the route buses to fd = false')
-		}
+		// The ThreadX gateway opens each route bus with its OWN fd flag (the comm thread's
+		// ch/ch_<bus>.open(idx, bus_fd)), so a classic<->FD forward is a raw copy + id remap
+		// where the destination channel re-frames: a classic 8-byte payload forwarded onto an
+		// FD bus goes out FD, and an FD frame onto a classic bus goes out classic. Layouts are
+		// still required identical (checked above); the length rule below rejects a >8-byte
+		// route onto a classic destination. #266.
 		frof := snake(r.from_frame)
 		tof := snake(r.to_frame)
 		if m.target.threadx {
@@ -1425,6 +1427,16 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		}
 		if !(bus_fd[r.to_bus] or { false }) && r.to_dlc > 8 {
 			panic('route: destination frame "${r.to_frame}" is ${r.to_dlc} bytes but bus "${r.to_bus}" is classic (fd = false, DLC <= 8)')
+		}
+		// A length the FD DLC set cannot represent (9..11, 13..15, 17..19, ... — the CAN-FD
+		// lengths are 0..8, 12, 16, 20, 24, 32, 48, 64) is rejected by blob_can_send at runtime;
+		// the forwarder would drop the frame yet still count it, a silent loss (codex emb#267). A
+		// classic bus (<=8) is already covered above; only an FD-length frame needs the check.
+		if (bus_fd[r.from_bus] or { false }) && !fd_len_ok(r.from_dlc) {
+			panic('route: source frame "${r.from_frame}" is ${r.from_dlc} bytes — not a representable CAN-FD length (0..8, 12, 16, 20, 24, 32, 48, 64)')
+		}
+		if (bus_fd[r.to_bus] or { false }) && !fd_len_ok(r.to_dlc) {
+			panic('route: destination frame "${r.to_frame}" is ${r.to_dlc} bytes — not a representable CAN-FD length (0..8, 12, 16, 20, 24, 32, 48, 64)')
 		}
 		// the destination frame must not ALSO be a COM tx frame ON THE SAME BUS — a
 		// [[signal]] to a bus makes its DBC message an implicit cyclic transmitter even
@@ -1563,6 +1575,17 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 			}
 		} else {
 			frame_src[key] = r.from_bus
+		}
+	}
+	// Every EXTERNAL signal (COM tx/rx, not just routes) on an FD bus must carry a representable
+	// CAN-FD length: the FDCAN receiver reports the canonical wire length (a 9-byte DBC arrives as
+	// 12), but the generated matcher compares rx.len to the literal dbc_dlc, so a non-canonical DLC
+	// on an FD bus is matched by nothing and every such frame is silently dropped (codex emb#267).
+	for _, si in m.sig_of {
+		if si.external && (bus_fd[si.bus] or { false }) && !fd_len_ok(si.dbc_dlc) {
+			panic('signal "${si.dbc_msg}" on FD bus "${si.bus}" has DLC ${si.dbc_dlc} — not a ' +
+				'representable CAN-FD length (0..8, 12, 16, 20, 24, 32, 48, 64); the rx matcher would ' +
+				'never match the canonical wire length')
 		}
 	}
 }
@@ -1933,15 +1956,15 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			if bc := doc.value('bus').as_map()[m.telem.bus] {
 				tx_bus_fd = (bc.as_map()['fd'] or { toml.Any(false) }).bool()
 			}
-			// The register-level FDCAN backend now supports CAN-FD payloads (see the h755_canfd
-			// echo), but wiring FD into a GENERATED target still needs per-board data-phase timing
-			// (BLOB_FDCAN_D*) harmonized across every node on the bus — a follow-up. Until then a
-			// generated FD target bus is rejected at gen time rather than opening a mistimed bus.
-			if tx_bus_fd {
-				panic('loom2v: [target] kind="threadx": bus "${m.telem.bus}" has fd = true — CAN-FD ' +
-					'on a generated target is not wired up yet (the fdcan backend supports FD, but ' +
-					'per-board FD data-timing harmonization is a follow-up); set [bus.${m.telem.bus}].fd = false')
-			}
+			// CAN-FD on a generated target: the fdcan backend handles FD framing (h755_canfd) and
+			// the pack/unpack paths carry up to com.max_pdu (64) bytes, so a bus.fd = true opens the
+			// channel FD (can.v flags every send from Channel.fd). The per-board data-phase timing
+			// (BLOB_FDCAN_D*) must be harmonized across every node on the bus — done by giving the
+			// FD boards a common PLL2-derived FDCAN kernel clock (boards/*/board.c), which makes the
+			// nominal + data timing and the sample points identical by construction. The FD bit
+			// timing is BENCH-PENDING on silicon (requirements/verifications.toml
+			// system-full-edge-canfd is skip_exit=2 = not-run; CI only proves generate + build). #266.
+			_ = tx_bus_fd
 			// The driver opens the bus by a SINGLE-digit index "0".."2" (blob_can_open reads
 			// name[0]-'0'); derive it from the bus name (e.g. "can0" -> "0"). Require exactly one
 			// digit in 0..2 — reject a name with no digit ("powertrain" -> bus 0 silently) OR an
@@ -2482,8 +2505,13 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				gw_extra := gateway_extra_buses(m)
 				for b in gw_extra {
 					bidx := fdcan_index_of(b)
+					bfd := if bc := doc.value('bus').as_map()[b] {
+						(bc.as_map()['fd'] or { toml.Any(false) }).bool()
+					} else {
+						false
+					}
 					glue << '\tmut ch_${snake(b)} := can.Channel{} // gateway route bus ${b}'
-					glue << "\tif !ch_${snake(b)}.open('${bidx}', false) { // board must init FDCAN${bidx.int() + 1} pins for silicon"
+					glue << "\tif !ch_${snake(b)}.open('${bidx}', ${bfd}) { // board must init FDCAN${bidx.int() + 1} pins for silicon"
 					glue << '\t\tfor { C._tx_thread_sleep(1000) } // dead route bus — park'
 					glue << '\t}'
 					glue << '\tC.comm_rx_irq_enable_idx(${bidx}) // wake the comm thread on this bus too'
@@ -3691,10 +3719,18 @@ fn main() {
 						'"${tx_m}" is not generated — the comm producer sends purely cyclically (no ' +
 						'event/mixed/triggered or min_delay_ms); use mode = "cyclic"')
 				}
-				if si.dbc_dlc > 8 {
+				// >8 bytes needs CAN-FD. On a classic bus the backend rejects it; on an FD bus a
+				// canonical DLC (12..64) is fine (validate_signal_routes_model already rejected a
+				// non-canonical FD length). si.bus == m.telem.bus here (checked above). #267.
+				tx_sig_bus_fd := if bc := doc.value_opt('bus') {
+					(bc.as_map()[si.bus] or { toml.Any(map[string]toml.Any{}) }).as_map()['fd'] or { toml.Any(false) }
+				} else {
+					toml.Any(false)
+				}.bool()
+				if !tx_sig_bus_fd && si.dbc_dlc > 8 {
 					panic('loom2v: [target] kind="threadx" comm thread: TX message "${si.dbc_msg}" DLC ' +
-						'${si.dbc_dlc} > 8 (CAN-FD sized), but the classic FDCAN backend rejects len > 8; ' +
-						'use a <= 8-byte frame')
+						'${si.dbc_dlc} > 8 (CAN-FD sized) on classic bus "${si.bus}"; use a <= 8-byte ' +
+						'frame or set the bus fd = true')
 				}
 				if si.remote {
 					// remote TX (satellite -> bus): the satellite image publishes into the signal's
