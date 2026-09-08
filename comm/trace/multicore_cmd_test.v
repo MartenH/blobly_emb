@@ -210,3 +210,35 @@ fn test_a_both_core_command_keeps_the_owners_response() {
 	assert m.rsp_pending()
 	assert decode_rsp(m.rsp).core == 0, 'the satellite answer overwrote the owner\'s'
 }
+
+// A dump arriving in the IDLE GAP between continuation transfers must be refused. on_cmd's own
+// busy check only covers the ISO-TP link, not a queued local_due/remote_due block, so such a dump
+// used to be accepted: it reset the local cursor and re-sent the owner's blocks ahead of the
+// satellite block still queued behind them, corrupting the multi-core stream.
+fn test_a_dump_during_a_queued_stream_is_refused() {
+	mut own := [16]Record{}
+	mut satb := [16]Record{}
+	mut remote := [64]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	mut sat := new_buffer(&satb[0], 16, .ring, 50)
+	sat.start()
+	for i in 0 .. 3 {
+		m.push(new_fb(u16(100 + i), 0, u32(i), 1))
+		sat.push(new_fb(u16(200 + i), 0, u32(i), 1))
+	}
+	m.on_cmd_multicore(cmd_frame(op_stop, 0x0003), mut sat, 1, &remote[0], 64)
+	assert m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
+	assert m.is_streaming(), 'precondition: a dump is queued'
+	// drain the first dump's response the way the bus loop does each pass, so the busy answer
+	// below is not refused by queue_rsp's don't-overwrite rule
+	mut f := can.Frame{}
+	m.produce(1000, mut f)
+	assert !m.rsp_pending()
+
+	// second dump, while blocks are still queued
+	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
+
+	assert !imported, 'the satellite window was re-imported mid-stream'
+	assert m.rsp_pending(), 'the refused dump was not answered'
+	assert decode_rsp(m.rsp).result == result_busy, 'expected BUSY, got ${decode_rsp(m.rsp).result}'
+}

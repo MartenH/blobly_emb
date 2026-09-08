@@ -41,6 +41,19 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 		b[i] = f.data[i]
 	}
 	c := decode_cmd(b)
+	// A dump must not be accepted while ANY part of the previous one is still outstanding.
+	// on_cmd's own busy check only covers the ISO-TP link, not a queued local_due/remote_due
+	// block, so a dump arriving in the IDLE GAP between continuation transfers was accepted:
+	// it reset local_from and re-sent the owner's blocks ahead of the satellite block still
+	// queued behind them, corrupting the multi-core stream. Answer busy and delegate nothing.
+	if c.opcode == op_dump && m.is_streaming() {
+		if c.targets(m.core) {
+			m.queue_rsp(status_rsp(m.buf, c.opcode, result_busy, m.core))
+		} else if c.targets(sat_core) {
+			m.queue_rsp(status_rsp(sat, c.opcode, result_busy, sat_core))
+		}
+		return false
+	}
 	mut imported := false
 	// The satellite half first. Its core mask is checked the same way handle_cmd checks the
 	// owner's, so a command that does not select sat_core leaves the satellite untouched.
@@ -62,9 +75,7 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 				// Nor may a fresh import land on top of a transfer already in flight: it would
 				// reset the continuation cursor under the stream and re-send chunks the host had
 				// already taken. The host's own retry path is to wait for the transfer to finish.
-				if m.is_streaming() {
-					// leave it; on_cmd below answers BUSY for the owner
-				} else if (sat.state() == .full || sat.state() == .frozen) && sat.used() > 0 {
+				if (sat.state() == .full || sat.state() == .frozen) && sat.used() > 0 {
 					// used() == 0 emits NO block rather than one claiming an empty window: the
 					// host must be able to tell "this core captured nothing" from "this core was
 					// never asked", and a zero-record block reads as the latter.

@@ -533,7 +533,18 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	telem_on := m.telem.on && telem_iface != ''
 	// The shared cross-core freeze flag. Loads occupy one scratch slot per core from 0, so take
 	// the LAST slot: it cannot collide with a core index for any plausible core count.
+	// The shared cross-core freeze flag lives in the LAST scratch slot, while each core publishes
+	// its load to scratch_set(core, ...). Those alias if a partition runs on that core: every load
+	// update would overwrite the flag, so an ordinary non-zero load reads as a system trigger and
+	// spontaneously freezes both rings, while a zero load erases a real one. Reject the collision
+	// rather than pick a slot and hope — the core ids are config, and 16 slots is the platform's.
 	freeze_slot := 15 // osal.scratch_slots (16) - 1; loom2v cannot import osal, so mirror it here
+	if owner_core >= freeze_slot || sat_core >= freeze_slot {
+		panic('loom2v: [[partition]] core ${owner_core}/${sat_core} collides with the multi-core ' +
+			'trace freeze flag, which uses osal scratch slot ${freeze_slot} — each core also ' +
+			'publishes its load to its OWN slot, so a core >= ${freeze_slot} would overwrite the ' +
+			'flag and freeze or un-freeze both rings at random. Use cores 0..${freeze_slot - 1}.')
+	}
 	mut g := []string{}
 
 	// --- the satellite partition: its own ring, no bus ---
@@ -572,7 +583,7 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << ''
 	g << '// The dump owner: an ordinary app partition that also owns the trace bus. Its ring is'
 	g << '// the module\'s OWN buffer, so commands and status apply to a real producing ring.'
-	g << 'pub fn partition_${owner}(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record) {'
+	g << 'pub fn partition_${owner}(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64) {'
 	g << '	osal.pin_to_core(${owner_core})'
 	g << '	mut ch := chp'
 	g << '	mut sat := unsafe { sat_buf }'
@@ -584,7 +595,11 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '	mut ring := [${cap}]trace.Record{}'
 	g << '	mut tm := trace.new_module(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), ${owner_core}, ${m.trace.dump_fc_bound},'
 	g << '		trace.new_buffer(&ring[0], ${cap}, ${mode}, ${m.trace.pre_pct}))'
-	g << '	mut cap := tm.capture(${handler_id_base(m, doc, owner)}, ${m.trace.budget_us}, osal.now_us())'
+	// ONE origin for both cores, taken in run() before either thread starts. Sampling it inside
+	// each thread instead made every record relative to a different zero, so the two lanes were
+	// skewed by the nondeterministic thread-start delay — and nothing reported it, because
+	// load_remote_buffer emits no core-offset record when the clock is shared, which it is.
+	g << '	mut cap := tm.capture(${handler_id_base(m, doc, owner)}, ${m.trace.budget_us}, origin_us)'
 	g << '	sched.set_trace_hook(trace.fb_hook, &cap)'
 	g << '	// both rings record from startup, like the satellite\'s below — a flight recorder that'
 	g << '	// waits for a host to arm it has nothing to say about the boot it was installed to watch.'
@@ -629,10 +644,13 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 		g << '		now := osal.now_us()'
 		g << '		if now - last_telem >= ${m.telem.period_us} && ch.tx_ready() {'
 		g << '			last_telem = now'
+		// encode_cpuload indexes by the REAL core id, so a config with the owner on core 1 and
+		// the satellite on core 0 would report the two loads swapped if these were hardcoded 0/1.
+		ncores := if owner_core > sat_core { owner_core + 1 } else { sat_core + 1 }
 		g << '			mut load := [8]u16{}'
-		g << '			load[0] = u16(osal.scratch_get(${owner_core}))'
-		g << '			load[1] = u16(osal.scratch_get(${sat_core}))'
-		g << '			frame := telem.encode_cpuload(load, 2)'
+		g << '			load[${owner_core}] = u16(osal.scratch_get(${owner_core}))'
+		g << '			load[${sat_core}] = u16(osal.scratch_get(${sat_core}))'
+		g << '			frame := telem.encode_cpuload(load, ${ncores})'
 		g << '			mut cf := can.Frame{'
 		g << '				id:  u32(0x${m.telem.id.hex()})'
 		g << '				len: 8'
@@ -654,9 +672,12 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '	mut sat_ring := [${cap}]trace.Record{}'
 	g << '	mut sat_buf := trace.new_buffer(&sat_ring[0], ${cap}, ${mode}, ${m.trace.pre_pct})'
 	g << '	sat_buf.start()'
+	g << '	// one capture origin for BOTH cores: a per-thread origin would skew the two lanes by'
+	g << '	// the thread-start delay, invisibly (a shared clock emits no core-offset record).'
+	g << '	trace_origin := osal.now_us()'
 	g << '	mut sat_cap := trace.Capture{'
 	g << '		buf:       &sat_buf'
-	g << '		start:     osal.now_us()'
+	g << '		start:     trace_origin'
 	g << '		id_base:   ${handler_id_base(m, doc, sat)}'
 	g << '		budget_us: ${m.trace.budget_us}'
 	g << '	}'
@@ -664,7 +685,7 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '	// core-offset record load_remote_buffer may prepend.'
 	g << '	mut import_ring := [${cap + 1}]trace.Record{}'
 	g << '	t_${sat} := spawn partition_${sat}(&sat_cap)'
-	g << '	t_${owner} := spawn partition_${owner}(chp, &sat_buf, unsafe { &import_ring[0] })'
+	g << '	t_${owner} := spawn partition_${owner}(chp, &sat_buf, unsafe { &import_ring[0] }, trace_origin)'
 	g << '	t_${sat}.wait()'
 	g << '	t_${owner}.wait()'
 	g << '}'

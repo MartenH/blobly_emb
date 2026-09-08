@@ -80,7 +80,7 @@ pub fn partition_ctrl(cap_ptr &trace.Capture) {
 
 // The dump owner: an ordinary app partition that also owns the trace bus. Its ring is
 // the module's OWN buffer, so commands and status apply to a real producing ring.
-pub fn partition_sense(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record) {
+pub fn partition_sense(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64) {
 	osal.pin_to_core(0)
 	mut ch := chp
 	mut sat := unsafe { sat_buf }
@@ -91,7 +91,7 @@ pub fn partition_sense(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &
 	mut ring := [64]trace.Record{}
 	mut tm := trace.new_module(u32(0x7e3), u32(0x7e5), 0, true,
 		trace.new_buffer(&ring[0], 64, .ring, 50))
-	mut cap := tm.capture(0, 500, osal.now_us())
+	mut cap := tm.capture(0, 500, origin_us)
 	sched.set_trace_hook(trace.fb_hook, &cap)
 	// both rings record from startup, like the satellite's below — a flight recorder that
 	// waits for a host to arm it has nothing to say about the boot it was installed to watch.
@@ -153,9 +153,12 @@ pub fn run(chp can.Channel) {
 	mut sat_ring := [64]trace.Record{}
 	mut sat_buf := trace.new_buffer(&sat_ring[0], 64, .ring, 50)
 	sat_buf.start()
+	// one capture origin for BOTH cores: a per-thread origin would skew the two lanes by
+	// the thread-start delay, invisibly (a shared clock emits no core-offset record).
+	trace_origin := osal.now_us()
 	mut sat_cap := trace.Capture{
 		buf:       &sat_buf
-		start:     osal.now_us()
+		start:     trace_origin
 		id_base:   2
 		budget_us: 500
 	}
@@ -163,7 +166,7 @@ pub fn run(chp can.Channel) {
 	// core-offset record load_remote_buffer may prepend.
 	mut import_ring := [65]trace.Record{}
 	t_ctrl := spawn partition_ctrl(&sat_cap)
-	t_sense := spawn partition_sense(chp, &sat_buf, unsafe { &import_ring[0] })
+	t_sense := spawn partition_sense(chp, &sat_buf, unsafe { &import_ring[0] }, trace_origin)
 	t_ctrl.wait()
 	t_sense.wait()
 }
