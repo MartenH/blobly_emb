@@ -451,32 +451,20 @@ fn trace_fb_install(m Model) []string {
 	return ['\tsched.set_trace_hook(trace_fb_hook, unsafe { nil })']
 }
 
-// trace_shape_blocker names the ONE reason [trace] cannot be generated on this shape, or '' when
-// it can. The host command-driven protocol is served by comm/trace's TraceModule from the
-// single-partition module runner (`trace_host`); every other shape has no wiring yet (#191).
-//
-// This exists because the shapes below used to WARN and build on without trace: the ids stayed in
-// ecu.toml, `make all` succeeded, and the example answered nothing on the bus. A config that asks
-// for trace and gets none is a defect, not a warning — so the caller panics on a non-empty return.
-// Naming the single tripped condition matters: the old message listed all three as a maybe, which
-// is what made examples/trace_multicore hard to diagnose.
+// trace_shape_of projects the model onto ecumodel's TraceShape — the ONE definition of which ECUs
+// loom2v can generate [trace] for, shared with sysmodel's trace_generated so syscheck and loom2v
+// cannot disagree. `trace_host` in gen.v is derived from this too: a condition added here reaches
+// the predicate and the error message together.
+fn trace_shape_of(m Model, trace_bus string) ecumodel.TraceShape {
+	return ecumodel.TraceShape{
+		threadx:         m.target.threadx
+		baremetal:       m.target.on && !m.target.threadx
+		partition_count: m.part.by_part.keys().len
+		trace_bus_eth:   (m.bus_kind[trace_bus] or { 'can' }) == 'eth'
+		has_bridge:      m.has_can_ext || m.isotp_conns.len > 0 || m.routes.len > 0
+	}
+}
+
 fn trace_shape_blocker(m Model, trace_bus string) string {
-	if m.target.on && !m.target.threadx {
-		return 'the bare-metal superloop target has no module runner'
-	}
-	if m.part.by_part.keys().len != 1 {
-		return 'it declares ${m.part.by_part.keys().len} partitions — the module runner owns one ' +
-			'schedule and one bus, so the per-core rings and the single dump owner are still ungenerated'
-	}
-	if (m.bus_kind[trace_bus] or { 'can' }) == 'eth' {
-		return 'its trace bus "${trace_bus}" is eth — the dump runner speaks can.Channel'
-	}
-	if m.has_can_ext || m.isotp_conns.len > 0 || m.routes.len > 0 {
-		// NOT "a bridge owns the trace bus": the bridge may sit on a different bus entirely
-		// (examples/trace_comm traces on can1 and bridges on can0). The conflict is the RUNNER —
-		// the trace-host loop replaces the plain host run() that drives the bridge.
-		return 'it has a COM bridge (external signals, ISO-TP or routes), and the trace-host ' +
-			'runner replaces the plain run() that drives it — the two cannot coexist yet'
-	}
-	return ''
+	return ecumodel.trace_shape_blocker(trace_shape_of(m, trace_bus))
 }

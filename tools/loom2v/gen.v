@@ -3392,9 +3392,10 @@ fn main() {
 	// CAN (an eth trace binding is validator-rejected until the UDP rung, but
 	// this predicate must never route it into the can.Channel runner)
 	trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
-	trace_host := m.trace.on && !m.target.on && m.part.by_part.keys().len == 1
-		&& (m.bus_kind[trace_bus] or { 'can' }) != 'eth'
-		&& !(m.has_can_ext || m.isotp_conns.len > 0 || m.routes.len > 0)
+	// DERIVED from the one shape policy (ecumodel.trace_shape_blocker, shared with sysmodel) so the
+	// predicate and the failure message can never drift apart — a condition added there reaches
+	// both. Previously this expression and the message listing its conditions were separate copies.
+	trace_host := m.trace.on && trace_shape_blocker(m, trace_bus) == ''
 	// the trace-host runner has no eth spawn wiring — an eth tx frame there
 	// would generate a comm thread nothing starts (silently dead)
 	if trace_host && m.eth_frames.len > 0 {

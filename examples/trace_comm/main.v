@@ -6,9 +6,11 @@ module main
 // host. run()'s params are the buses in NAME order.
 //
 // REGRESSED: the trace ring + dump on can1. P3b shipped in #60; a later refactor left loom2v
-// generating trace for the single-partition host shape only, and it WARNS when it drops the rest.
-// The comm/app halves build and run; the swimlane this example is named for needs that generator
-// wiring back. See #191.
+// generating trace for the single-partition host shape only. `[trace]` is therefore `enabled =
+// false` in ecu.toml: loom2v REJECTS an enabled [trace] on this shape rather than build a silent
+// no-op, because this ECU has a COM bridge and the trace-host runner would replace the plain
+// run() that drives it. The comm/app halves build and run; the swimlane this example is named for
+// needs that generator wiring back. See #191.
 //
 //   sudo make vcan      # brings up vcan0 (app) + vcan1 (trace)
 //   make run

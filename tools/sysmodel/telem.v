@@ -12,6 +12,7 @@ module sysmodel
 
 import os
 import tools.candb
+import tools.ecumodel
 
 // ModuleFrame — one generated comm-module CAN frame: the bus interface it rides,
 // a human label, its effective CAN id, whether the id came from a DBC-NAME binding
@@ -56,8 +57,9 @@ fn module_frame(dbs map[string]candb.Database, s System, iface string, label str
 // is the threadx comm thread only. Trace rides [trace].bus (else the telemetry bus).
 // trace_generated reports whether loom2v actually emits the trace module for a
 // node: always for a threadx target, and for a HOST target only in the
-// single-partition shape with no COM bridge (trace_host) — a multi-partition or
-// bus-facing host node builds WITHOUT trace, so its trace ids never hit the wire.
+// single-partition shape with no COM bridge (trace_host). A multi-partition or
+// bus-facing host node with [trace] enabled no longer builds without trace — since
+// #191 loom2v REJECTS it — so such a node reaches here only with [trace] off.
 // effective_comm_thread: does this node actually get a comm thread at RUNTIME? A
 // DISSOLVED node's partial has no bus signals, so parse_node_view leaves
 // comm_thread_on = false — but sysgen adds its produced/consumed/route wiring, so a
@@ -77,12 +79,21 @@ fn trace_generated(n Node, s System) bool {
 		// threadx node has no comm thread, so no trace frame reaches the wire.
 		return effective_comm_thread(n, s)
 	}
-	host := !n.view.is_baremetal // no target / host runner
-	// loom2v's trace_host requires EXACTLY one partition (m.part.by_part.len == 1)
-	// and no bridge (COM signal / ISO-TP) and no node-local route — otherwise it
-	// warns and builds WITHOUT trace. Zero partitions also gets no trace.
-	return host && n.view.partition_count == 1 && !node_has_bus_signal(n) && !n.view.has_isotp
-		&& !n.view.has_route
+	// The SAME policy loom2v applies (ecumodel.trace_shape_blocker) rather than a second copy of
+	// it: this used to restate the conditions inline, which is how it came to omit the eth trace
+	// bus and to claim loom2v "warns and builds WITHOUT trace" — as of #191 loom2v REJECTS an
+	// enabled [trace] on a shape it cannot generate, so a node reaching here either gets trace or
+	// fails generation. Zero partitions also gets no trace.
+	return ecumodel.trace_shape_blocker(ecumodel.TraceShape{
+		baremetal:       n.view.is_baremetal
+		partition_count: n.view.partition_count
+		// KNOWN GAP: the node view carries `trace_bus` as an interface name but no node-local bus
+		// KIND, so syscheck cannot yet see an eth trace bus that loom2v would reject. Plumbing the
+		// kind through parse_node_view is a separate change; leaving it false keeps syscheck
+		// permissive (it never passes a node loom2v would reject for a DIFFERENT reason).
+		trace_bus_eth:   false
+		has_bridge:      node_has_bus_signal(n) || n.view.has_isotp || n.view.has_route
+	}) == ''
 }
 
 // is_trace_host reports the single-partition HOST trace-runner shape: loom2v's
