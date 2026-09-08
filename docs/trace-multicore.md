@@ -209,6 +209,13 @@ slice per drain cycle*, an interval, not a real context switch.
 
 ### 5.0 Bare-metal single-core trace — **P3c-0 (BUILT, then regressed in generation — #191)**
 
+> **This section is HISTORICAL/design text, not current behaviour.** It describes P3c-0 as it was
+> built and shipped. The emitter no longer generates it: a bare-metal `[target]` has no module
+> runner, and since #191 loom2v REJECTS an enabled `[trace]` there rather than build a silent
+> no-op. So do NOT follow the "add `[trace]` to its `ecu.toml`, regenerate, cross-compile"
+> instruction below — that now fails generation by design. `examples/h735_app` carries
+> `[trace] enabled = false`. What follows is the shape to restore.
+
 The smallest, provable-now slice: `[trace]` on a single-core `[target]` reuses the **inline** trace
 machinery verbatim — the same `trace_capture` hook, `TraceCmd`/`TraceRsp` handshake, ISO-TP dump of
 the frozen ring, HandlerStat heartbeat, and CpuLoad as the host `trace_demo`. The only substitutions
@@ -219,8 +226,7 @@ the emitter makes for the target (`trace_target := trace_on && target_on`, [gen.
 - **idle**: a busy-wait to a fixed `tick_us` boundary (real idle for load accounting — [[loom-load-baremetal-pacing]]), instead of `osal.sleep_us`.
 - **no `pin_to_core`** (single core).
 
-Shipped in `examples/h735_app` (add `[trace]` to its `ecu.toml`, regenerate, cross-compile): the
-generated `gen/loom_gen.v` builds V→C→`arm-none-eabi-gcc`→`app.bin` and links against the FDCAN
+Shipped, at the time, in `examples/h735_app`: the generated `gen/loom_gen.v` built V→C→`arm-none-eabi-gcc`→`app.bin` and links against the FDCAN
 backend (`blob_can_recv`) + board bring-up. It's the host-proven flight recorder, now on silicon,
 over the one FDCAN bus. It captures **fb + derived thread/idle** records only — there are still no
 real preemptive switches or ISRs on a polled superloop, so `level` stays `thread+fb`/`all`.
