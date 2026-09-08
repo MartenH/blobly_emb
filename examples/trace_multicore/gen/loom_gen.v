@@ -60,10 +60,12 @@ pub fn partition_ctrl(cap_ptr &trace.Capture) {
 	sched.set_trace_hook(trace.fb_hook, voidptr(cap_ptr))
 	mut ring := unsafe { cap_ptr.buf }
 	for {
-		loom_t0 := osal.now_us()
 		sched.run_profiled(osal.now_us)
 		loom_t1 := osal.now_us()
-		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
+		// NO sched.account() here: run_profiled() accounts the pass itself (via
+		// run_profiled_excl -> account(busy, clock())). Calling it again charged the same
+		// pass twice, so every traced core reported roughly double its real load and a
+		// busy one clamped at 100% (codex #270 r2).
 		osal.scratch_set(1, u64(sched.load_permille()))
 		// system-wide freeze (docs/trace-multicore.md §3): a trigger on EITHER core must
 		// freeze both, or the two windows do not overlap and the multi-core view is
@@ -100,10 +102,12 @@ pub fn partition_sense(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &
 	mut rx := can.Frame{}
 	mut txf := can.Frame{}
 	for {
-		loom_t0 := osal.now_us()
 		sched.run_profiled(osal.now_us)
 		loom_t1 := osal.now_us()
-		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
+		// NO sched.account() here: run_profiled() accounts the pass itself (via
+		// run_profiled_excl -> account(busy, clock())). Calling it again charged the same
+		// pass twice, so every traced core reported roughly double its real load and a
+		// busy one clamped at 100% (codex #270 r2).
 		osal.scratch_set(0, u64(sched.load_permille()))
 		// the owner half of the system-wide freeze (see the satellite loop above)
 		if tm.state() == .frozen {

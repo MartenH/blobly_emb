@@ -344,10 +344,12 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	g << '\tmut rx := can.Frame{}'
 	g << '\tmut txf := can.Frame{}'
 	g << '\tfor {'
-	g << '\t\tloom_t0 := osal.now_us()'
 	g << '\t\tsched.run_profiled(osal.now_us)'
 	g << '\t\tloom_t1 := osal.now_us()'
-	g << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
+	g << '		// NO sched.account() here: run_profiled() accounts the pass itself (via'
+	g << '		// run_profiled_excl -> account(busy, clock())). Calling it again charged the same'
+	g << '		// pass twice, so every traced core reported roughly double its real load and a'
+	g << '		// busy one clamped at 100% (codex #270 r2).'
 	g << '\t\t// the generated router match: each rx binding dispatches to its endpoint handler'
 	g << '\t\tfor ch.recv(mut rx) {'
 	g << '\t\t\tmatch rx.id {'
@@ -521,15 +523,28 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	}
 	// CpuLoad is sent from this runner on the TRACE channel — it owns the only bus here. A
 	// [telemetry] bus pointing somewhere else would be silently misrouted onto the trace bus.
-	if m.telem.on && telem_iface != '' && m.telem.bus != '' && m.telem.bus != m.trace.bus {
-		panic('loom2v: [telemetry].bus "${m.telem.bus}" differs from [trace].bus "${m.trace.bus}", ' +
-			'but the multi-core trace runner owns only the trace channel and would send CpuLoad ' +
-			'there — put both on one bus, or drop [telemetry]')
+	// Compare the RESOLVED trace bus: an omitted [trace].bus deliberately inherits the telemetry
+	// bus, and comparing the raw empty field rejected exactly that documented arrangement.
+	resolved_trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
+	if m.telem.on && telem_iface != '' && m.telem.bus != '' && m.telem.bus != resolved_trace_bus {
+		panic('loom2v: [telemetry].bus "${m.telem.bus}" differs from the trace bus ' +
+			'"${resolved_trace_bus}", but the multi-core trace runner owns only the trace channel ' +
+			'and would send CpuLoad there — put both on one bus, or drop [telemetry]')
 	}
 	mode := if m.trace.mode == 'oneshot' { '.oneshot' } else { '.ring' }
 	cap := m.trace.buffer_records
 	sat_core := m.part.core_of[sat] or { 0 }
 	owner_core := m.part.core_of[owner] or { 0 }
+	// produce() streams the LOCAL window before the imported one, so the owner's core must be the
+	// lower id for the dump to arrive in ascending core order as the protocol specifies. The
+	// owner is fixed by the trace bus's core, so this is a real (if narrow) config restriction —
+	// state it rather than emit a stream whose block order contradicts the documented contract.
+	if owner_core > sat_core {
+		panic('loom2v: the trace bus is on core ${owner_core}, which makes it the dump owner, but ' +
+			'the satellite sits on the lower core ${sat_core} — the owner streams its own window ' +
+			'first, so the blocks would arrive in descending core order. Put the trace bus on the ' +
+			'lower-numbered core (docs/trace-multicore.md §3)')
+	}
 	telem_on := m.telem.on && telem_iface != ''
 	// The shared cross-core freeze flag. Loads occupy one scratch slot per core from 0, so take
 	// the LAST slot: it cannot collide with a core index for any plausible core count.
@@ -561,10 +576,12 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '	sched.set_trace_hook(trace.fb_hook, voidptr(cap_ptr))'
 	g << '	mut ring := unsafe { cap_ptr.buf }'
 	g << '	for {'
-	g << '		loom_t0 := osal.now_us()'
 	g << '		sched.run_profiled(osal.now_us)'
 	g << '		loom_t1 := osal.now_us()'
-	g << '		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
+	g << '		// NO sched.account() here: run_profiled() accounts the pass itself (via'
+	g << '		// run_profiled_excl -> account(busy, clock())). Calling it again charged the same'
+	g << '		// pass twice, so every traced core reported roughly double its real load and a'
+	g << '		// busy one clamped at 100% (codex #270 r2).'
 	g << '		osal.scratch_set(${sat_core}, u64(sched.load_permille()))'
 	g << '		// system-wide freeze (docs/trace-multicore.md §3): a trigger on EITHER core must'
 	g << '		// freeze both, or the two windows do not overlap and the multi-core view is'
@@ -610,10 +627,12 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '	mut rx := can.Frame{}'
 	g << '	mut txf := can.Frame{}'
 	g << '	for {'
-	g << '		loom_t0 := osal.now_us()'
 	g << '		sched.run_profiled(osal.now_us)'
 	g << '		loom_t1 := osal.now_us()'
-	g << '		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
+	g << '		// NO sched.account() here: run_profiled() accounts the pass itself (via'
+	g << '		// run_profiled_excl -> account(busy, clock())). Calling it again charged the same'
+	g << '		// pass twice, so every traced core reported roughly double its real load and a'
+	g << '		// busy one clamped at 100% (codex #270 r2).'
 	g << '		osal.scratch_set(${owner_core}, u64(sched.load_permille()))'
 	g << '		// the owner half of the system-wide freeze (see the satellite loop above)'
 	g << '		if tm.state() == .frozen {'
