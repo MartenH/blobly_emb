@@ -4,8 +4,10 @@
 > DONE (bare-metal single-core trace); P3c-1 (real thread/ISR capture) next.**
 >
 > **REGRESSED IN GENERATION (#191).** Both host examples below still build and run their FBs, but
-> loom2v now emits the trace ring + dump for the SINGLE-partition host shape only and warns when
-> it drops the rest, so neither answers a `dump` today. The platform side never changed —
+> loom2v emits the trace ring + dump for the SINGLE-partition host shape only and, as of #191,
+> REJECTS an enabled `[trace]` on any other shape rather than warn and build a silent no-op — so
+> both examples now carry `[trace] enabled = false`, their manifests advertise no trace frame ids,
+> and neither answers a `dump` today. The platform side never changed —
 > `comm/trace` still carries one local core plus one imported remote, and `multicore_dump_test`
 > proves the two-block read-out. What follows describes the design, not what generation currently
 > produces.
