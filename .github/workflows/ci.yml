@@ -34,10 +34,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install V (latest)
+      # PINNED, not `check-latest: true`. CI used to install V from master HEAD, so an upstream
+      # commit that does not compile stopped every merge here: on 2026-09-08 vlang/v master
+      # (d030e424cf) failed its own build with `cmd/v/v.v:213: unknown module builder`, and both
+      # jobs died in this step with nothing to do with the PR under test. The pin also makes CI
+      # use the SAME compiler local verification runs on, and lets the action cache it.
+      # Bump .v-version deliberately (and re-run the full local gate on the new V).
+      - name: Install V (pinned, see .v-version)
         uses: vlang/setup-v@v1.4
         with:
-          check-latest: true
+          version-file: .v-version
 
       - name: V version
         run: v version
@@ -146,10 +152,16 @@ jobs:
 
       # The freestanding build needs V MASTER: 0.5.1 emits "impossible constraint in asm" for
       # the bare-metal target (vlang/v#27564). check-latest keeps this in step with the host job.
-      - name: Install V (latest)
+      # PINNED, not `check-latest: true`. CI used to install V from master HEAD, so an upstream
+      # commit that does not compile stopped every merge here: on 2026-09-08 vlang/v master
+      # (d030e424cf) failed its own build with `cmd/v/v.v:213: unknown module builder`, and both
+      # jobs died in this step with nothing to do with the PR under test. The pin also makes CI
+      # use the SAME compiler local verification runs on, and lets the action cache it.
+      # Bump .v-version deliberately (and re-run the full local gate on the new V).
+      - name: Install V (pinned, see .v-version)
         uses: vlang/setup-v@v1.4
         with:
-          check-latest: true
+          version-file: .v-version
 
       - name: Install the ARM toolchain
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-arm-none-eabi

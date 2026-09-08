@@ -85,6 +85,12 @@ freestanding path: V compiles a `__global`'s field defaults into `_vinit()`, a b
 never calls it, and those fields then read 0 on target — four bench casualties before that
 script existed, and nothing in CI ran it until now.
 
+**CI pins the V compiler** to the SHA in `.v-version` (both jobs, via `setup-v`'s `version-file`).
+It used to install master HEAD, which meant an upstream V commit that does not compile stopped every
+merge in this repo — that happened on 2026-09-08 (`unknown module builder`), failing both jobs in the
+*install* step with nothing to do with the PR under test. The pin also makes CI use the same compiler
+you run locally. Bump `.v-version` deliberately, and re-run the full local gate on the new V.
+
 **Not gated — verify these yourself:**
 
 - **Anything on real silicon.** Bench results go in `requirements/verifications.toml`. Everything
