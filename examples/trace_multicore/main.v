@@ -10,14 +10,10 @@ module main
 //   sudo make vcan          # once, to bring up vcan0
 //   make run                # generate + build + run on vcan0
 //
-// REGRESSED, which is why CI was skipping this: P3a shipped in #57 and a later refactor took the
-// multi-partition trace runner with it. loom2v generates the ring + dump for the single-partition
-// host shape only, and now REJECTS an enabled [trace] on any other shape rather than warn and
-// build a silent no-op — so `[trace]` is `enabled = false` in ecu.toml. This builds and runs both
-// cores' FBs, and gen/trace-manifest.csv still carries their handler + thread rows, but it no
-// longer advertises trace frame ids, and no `dump` is answered on 0x7E5. comm/trace is untouched
-// and still ready (one local core plus one imported remote; multicore_dump_test proves two
-// self-describing blocks over ISO-TP) — it is the generator wiring that has to come back. See #191.
+// The multi-core dump is GENERATED again (#191 P3a). loom2v emits one ring per core: `sense`
+// (core 0) owns the trace bus and the TraceModule, so its ring is the module's own; `ctrl`
+// (core 1) records into a ring run() owns, which the owner imports on dump. A `dump` with core
+// mask 0x0003 answers with each core's window as self-describing ISO-TP blocks on 0x7E5.
 import os
 import gen
 import driver.can
@@ -29,6 +25,6 @@ fn main() {
 		eprintln('trace_multicore: open "${ifname}" failed — is vcan up? (sudo make vcan)')
 		return
 	}
-	println('trace_multicore: core0 sense(5/10ms) + core1 ctrl(10/20ms) on ${ifname}; the `dump` this example is named for is NOT generated for this shape yet — see #191')
+	println('trace_multicore: core0 sense(5/10ms) + core1 ctrl(10/20ms) on ${ifname}; both rings record from startup — stop then dump core mask 0x0003 for one ISO-TP block stream per core on 0x7E5')
 	gen.run(ch)
 }

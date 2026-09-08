@@ -19,12 +19,8 @@ id        = 0x7E0     # CpuLoad (both cores' load, one frame)
 period_ms = 500
 
 [trace]
-# NOT GENERATED on this ECU (#191): two partitions. The per-core rings and the single
-# ISO-TP dump owner this config describes are ungenerated, so the ids below lead
-# nowhere. Off deliberately until the multi-partition host shape is generated.
-enabled        = false
 bus            = "can0"
-level          = "thread+fb"  # P3a captures FB records; thread/ISR are the target (P3c)
+level          = "fb"         # P3a captures FB records; thread/ISR are the target (P3c)
 buffer_records = 64           # per-core ring depth (static array, one per core)
 mode           = "ring"       # ring (flight recorder) | oneshot
 pre_pct        = 50           # ring pre/post split: 50 = centre the event (keep half before the
@@ -34,6 +30,7 @@ push_ms        = 0            # HandlerStat heartbeat fan-out across cores is a 
 cmd            = 0x7E2
 rsp            = 0x7E3
 record         = 0x7E5        # ISO-TP dump data (target -> host), one block per core
+dump_fc        = 0x7E6        # host -> target ISO-TP flow control (binding it selects the block dump)
 trigger        = { source = "overrun", budget_us = 500 }  # freeze both rings on a >500us handler
 
 # Core 0: the "sense" partition — fast periodic work. (No comments inside [[partition.thread]] —

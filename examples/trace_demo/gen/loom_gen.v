@@ -57,10 +57,12 @@ pub fn run(chp can.Channel) {
 	mut rx := can.Frame{}
 	mut txf := can.Frame{}
 	for {
-		loom_t0 := osal.now_us()
 		sched.run_profiled(osal.now_us)
 		loom_t1 := osal.now_us()
-		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
+		// NO sched.account() here: run_profiled() accounts the pass itself (via
+		// run_profiled_excl -> account(busy, clock())). Calling it again charged the same
+		// pass twice, so every traced core reported roughly double its real load and a
+		// busy one clamped at 100% (codex #270 r2).
 		// the generated router match: each rx binding dispatches to its endpoint handler
 		for ch.recv(mut rx) {
 			match rx.id {

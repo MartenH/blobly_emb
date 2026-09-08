@@ -218,6 +218,16 @@ pub fn (mut m TraceModule) push(r Record) {
 	m.buf.push(r)
 }
 
+// arm starts the module's own ring, the way an op_arm command would. A flight recorder that only
+// begins recording once a host has connected has nothing to say about the boot it was installed to
+// observe — so a generated runner arms at startup and the host's arm/stop/dump still work exactly
+// as before. Separate from new_module() deliberately: constructing a module and choosing to start
+// capturing are different decisions, and the target path builds the module in place long before it
+// wants records.
+pub fn (mut m TraceModule) arm() {
+	m.buf.start()
+}
+
 // set_remote wires the import buffer for ONE satellite core (caller-owned backing, like
 // new_buffer) — the single-dump-owner rule: remote cores never touch the bus themselves.
 pub fn (mut m TraceModule) set_remote(core u8, backing &Record, capacity u32) {
@@ -285,12 +295,39 @@ pub fn (mut m TraceModule) load_snapshot(src &u8, n u32) {
 // capture / state accessors --------------------------------------------------------------------
 
 // state / rsp_pending / dumping expose the module's control state (accessors for tests + produce()).
+// queue_rsp makes the module send a response frame the caller built — used by the multi-core path
+// to answer for a SATELLITE core, whose state the owner's own handle_cmd knows nothing about.
+// Returns false when a response is already pending, so a caller never silently overwrites one.
+pub fn (mut m TraceModule) queue_rsp(b [8]u8) bool {
+	if m.rsp_due {
+		return false
+	}
+	m.rsp = b
+	m.rsp_due = true
+	return true
+}
+
+// trigger freezes the module's own ring the way an overrun would. The host multi-core runner uses
+// it to propagate ANOTHER core's trigger onto this one, so both windows cover the same instant —
+// idempotent, because TraceBuffer.trigger() is a no-op once the ring is no longer capturing.
+pub fn (mut m TraceModule) trigger() {
+	m.buf.trigger()
+}
+
 pub fn (m TraceModule) state() State {
 	return m.buf.state()
 }
 
 pub fn (m TraceModule) rsp_pending() bool {
 	return m.rsp_due
+}
+
+// is_streaming reports whether ANY dump is still in flight — the raw record stream, an ISO-TP
+// transfer, or a queued block that produce() has not started yet. A multi-core caller needs this
+// before importing a satellite window: dropping a fresh window on top of a live transfer resets
+// the continuation cursor under it and re-sends chunks the host already took.
+pub fn (m TraceModule) is_streaming() bool {
+	return m.dumping || m.local_due || m.remote_due || m.link.busy()
 }
 
 pub fn (m TraceModule) is_dumping() bool {

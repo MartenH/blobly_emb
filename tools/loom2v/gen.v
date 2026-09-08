@@ -1844,8 +1844,8 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 // inline-trace modes send CpuLoad inline from run(). Returns the glue lines, or none when the
 // telemetry-tx thread doesn't apply. (slot_core / telem_iface / trace_inline are main's emit-time
 // derived state; everything else comes from the Model.)
-fn emit_partition_telem(m Model, telem_iface string, slot_core []int, trace_host bool) []string {
-	if !(telem_on_can(m) && telem_iface != '' && !m.target.on && !trace_host) {
+fn emit_partition_telem(m Model, telem_iface string, slot_core []int, trace_owns_run bool) []string {
+	if !(telem_on_can(m) && telem_iface != '' && !m.target.on && !trace_owns_run) {
 		return []string{}
 	}
 	mut ncores := 0
@@ -2918,7 +2918,7 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 // image_part selects the pass: '' emits the OWNER image (every non-external partition);
 // a partition name emits ONLY that satellite partition (the multi-image pass, gen_image.v)
 // — same structs/wrappers, with remote writes going to xcore_pub instead of an IOC cell.
-fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_host bool, image_part string) ([]string, []string, map[string][]string) {
+fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_owns_run bool, image_part string) ([]string, []string, map[string][]string) {
 	mut ports := []string{}
 	mut glue := []string{}
 	mut all_regs := map[string][]string{}
@@ -3194,7 +3194,7 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 		// into run(ch). The skeleton is one shape; producers inject preamble / loop-top / dispatch /
 		// loop-body (trace: capture ctx + command poll + profiled dispatch; telem: the load publish),
 		// so this emitter names no capability.
-		if !m.target.on && !trace_host {
+		if !m.target.on && !trace_owns_run {
 			glue << ''
 			glue << 'pub fn partition_${part}(core int, arg voidptr) {'
 			glue << '\tosal.pin_to_core(${m.part.core_of[part] or { 0 }})'
@@ -3239,7 +3239,7 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ho
 // emit_module_headers builds the `module ports` and `module gen` preambles: the code-gen banner,
 // module decl, and the conditional imports each generated module needs. Returns (ports, glue) seeded
 // with those header lines; reads the Model, with the trace-mode flags + comm_thread_on from main.
-fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool) ([]string, []string) {
+fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run bool) ([]string, []string) {
 	// m.frames is CAN-only (parse_frames skips eth frames — their E2E is the
 	// derived trailer, not the comm.e2e path), so these counts stay CAN-true
 	has_e2e := m.frames.e2e_on.len > 0
@@ -3289,7 +3289,7 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 	if telem_on_can(m) {
 		glue << 'import comm.telem' // CpuLoad packing
 	}
-	if trace_host || (m.trace.on && m.target.threadx) {
+	if trace_owns_run || (m.trace.on && m.target.threadx) {
 		glue << 'import comm.trace' // the TraceModule + ring + hooks (docs/com-modules.md)
 	}
 	if m.shell.on && m.target.threadx {
@@ -3309,7 +3309,7 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_host bool
 	// compile. (Both examples happen to have telemetry on, which is why nothing caught it.)
 	mut module_host_bus := false
 	for bname, _ in m.buses {
-		if (m.bus_kind[bname] or { 'can' }) == 'can' && bus_hosts_modules(m, bname, trace_host) {
+		if (m.bus_kind[bname] or { 'can' }) == 'can' && bus_hosts_modules(m, bname, trace_owns_run) {
 			module_host_bus = true
 		}
 	}
@@ -3394,17 +3394,23 @@ fn main() {
 	trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
 	// DERIVED from the one shape policy (ecumodel.trace_shape_blocker, shared with sysmodel) so the
 	// predicate and the failure message can never drift apart — a condition added there reaches
-	// both. Previously this expression and the message listing its conditions were separate copies.
-	trace_host := m.trace.on && trace_shape_blocker(m, trace_bus) == ''
+	// both. Two host trace runners sit behind it: ONE partition (the original single-core shape)
+	// and TWO (P3a — one dump owner plus one satellite core). Both own the schedule AND the bus in
+	// an app partition, so neither coexists with a COM bridge; two is today's ceiling because
+	// TraceModule holds exactly one satellite import slot (set_remote).
+	trace_owns_run := m.trace.on && trace_shape_blocker(m, trace_bus) == ''
+	trace_nparts := m.part.by_part.keys().len
+	trace_host := trace_owns_run && trace_nparts == 1
+	trace_multicore := trace_owns_run && trace_nparts == 2
 	// the trace-host runner has no eth spawn wiring — an eth tx frame there
 	// would generate a comm thread nothing starts (silently dead)
-	if trace_host && m.eth_frames.len > 0 {
+	if trace_owns_run && m.eth_frames.len > 0 {
 		panic('loom2v: eth frames + the trace-host runner are not wired yet — the eth comm thread is spawned by the plain host run() only (docs/someip.md)')
 	}
 	// io emits the platform io thread for the plain host run() (P1) and the ThreadX
 	// target (the bench phase). The bare-metal superloop / trace-host runner still
 	// spawn no io thread — there the pins would silently never move, so fail loudly.
-	if m.io_points.len > 0 && ((m.target.on && !m.target.threadx) || trace_host) {
+	if m.io_points.len > 0 && ((m.target.on && !m.target.threadx) || trace_owns_run) {
 		panic('loom2v: [[io.gpio]] is generated for the plain host run() and the ThreadX ' +
 			'target only — not the bare-metal superloop / trace-host runner (docs/io.md)')
 	}
@@ -3428,7 +3434,7 @@ fn main() {
 	}
 	if m.trace.on && m.target.threadx {
 		validate_trace_threadx(m)
-	} else if m.trace.on && !trace_host {
+	} else if m.trace.on && !trace_owns_run {
 		// Not a warning: a config that asks for trace and silently gets none looks identical to a
 		// working one until nothing answers on the bus (#191). Name the one condition that tripped.
 		panic('loom2v: [trace] is not generated for this ECU — ${trace_shape_blocker(m, trace_bus)} ' +
@@ -3911,7 +3917,7 @@ fn main() {
 	}
 
 
-	mp, mg := emit_module_headers(m, ecu, comm_thread_on, trace_host)
+	mp, mg := emit_module_headers(m, ecu, comm_thread_on, trace_owns_run)
 	mut ports := mp.clone()
 	mut glue := mg.clone()
 
@@ -3925,14 +3931,14 @@ fn main() {
 		detail_id: m.telem.detail_id
 	})]
 
-	fb_ports, fb_glue, all_regs := emit_handlers(m, producers, ioc_idx, trace_host, '')
+	fb_ports, fb_glue, all_regs := emit_handlers(m, producers, ioc_idx, trace_owns_run, '')
 	ports << fb_ports
 	glue << fb_glue
 
 	// --- generated COM bus bridge(s) — emitted by emit_bridges ---
 	// trace_host: that runner IS the trace bus's owner, so the bus must not also get a bridge —
 	// two owners on one channel, and the second one dead code nobody spawns.
-	bridge_glue, bnames, bus_dests := emit_bridges(m, comm_thread_on, trace_host, producers)
+	bridge_glue, bnames, bus_dests := emit_bridges(m, comm_thread_on, trace_owns_run, producers)
 	glue << bridge_glue
 
 	// --- SOME/IP eth frame table + derived-layout codec (docs/someip.md) ---
@@ -3948,7 +3954,7 @@ fn main() {
 	mut bus_names := bnames.clone()
 
 	// --- telemetry tx: sum per-partition load by core -> CpuLoad frame on the bus (emit_partition_telem) ---
-	glue << emit_partition_telem(m, telem_iface, slot_core, trace_host)
+	glue << emit_partition_telem(m, telem_iface, slot_core, trace_owns_run)
 
 	// --- io: the platform io thread (docs/io.md P1, host) ---
 	glue << emit_partition_io(m, producers)
@@ -3970,6 +3976,33 @@ fn main() {
 	extra_dest_buses.sort()
 	if m.target.on {
 		glue << emit_run_target(m, doc, all_regs, telem_iface, comm_thread_on, ioc_idx, msg_ioc_idx, producers)
+	} else if trace_multicore {
+		// The OWNER is the app partition on the trace bus's core: its ring is then genuinely local
+		// to the module, so handle_cmd's arm/stop/dump and the status counts act on a real
+		// producing ring instead of a staging copy (see emit_run_trace_multicore). The other
+		// partition is the satellite, imported on dump.
+		tb_core := m.bus_core[trace_bus] or { 0 }
+		mut parts := m.part.by_part.keys().clone()
+		parts.sort() // stable pick when both partitions sit on the bus core
+		mut owner := ''
+		for pn in parts {
+			if (m.part.core_of[pn] or { 0 }) == tb_core {
+				owner = pn
+				break
+			}
+		}
+		if owner == '' {
+			panic('loom2v: [trace] bus "${trace_bus}" is on core ${tb_core}, but neither partition ' +
+				'runs there — the dump owner is an app partition, so one of them must sit on the ' +
+				'trace bus\'s core (docs/trace-multicore.md §3)')
+		}
+		sat := if parts[0] == owner { parts[1] } else { parts[0] }
+		if (m.part.core_of[sat] or { 0 }) == tb_core {
+			panic('loom2v: [trace] both partitions run on core ${tb_core} — the multi-core runner ' +
+				'traces one core per partition, so give them distinct cores (or use the ' +
+				'single-partition shape)')
+		}
+		glue << emit_run_trace_multicore(m, doc, all_regs, telem_iface, owner, sat)
 	} else if trace_host {
 		glue << emit_run_trace_host(m, all_regs, telem_iface, single_part)
 	} else {
