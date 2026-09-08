@@ -509,11 +509,31 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 			'runner — a polled host superloop has no preemptive thread or ISR events to capture, ' +
 			'so it records FB dispatches (level = "fb")')
 	}
+	// Without dump_fc the dump is the RAW record stream, which streams m.buf only: it has no block
+	// framing, so it cannot say which core a record came from. The satellite's window would be
+	// imported and then never sent, leaving remote_due latched true forever. Multi-core needs the
+	// self-describing ISO-TP block dump.
+	if !m.trace.dump_fc_bound {
+		panic('loom2v: [trace] on two partitions needs `dump_fc` bound — the multi-core dump ' +
+			'streams one SELF-DESCRIBING block per core (ISO-TP), and the raw record stream that ' +
+			'an unbound dump_fc selects carries no core identity, so the second core could never ' +
+			'be read back (docs/trace-multicore.md §3)')
+	}
+	// CpuLoad is sent from this runner on the TRACE channel — it owns the only bus here. A
+	// [telemetry] bus pointing somewhere else would be silently misrouted onto the trace bus.
+	if m.telem.on && telem_iface != '' && m.telem.bus != '' && m.telem.bus != m.trace.bus {
+		panic('loom2v: [telemetry].bus "${m.telem.bus}" differs from [trace].bus "${m.trace.bus}", ' +
+			'but the multi-core trace runner owns only the trace channel and would send CpuLoad ' +
+			'there — put both on one bus, or drop [telemetry]')
+	}
 	mode := if m.trace.mode == 'oneshot' { '.oneshot' } else { '.ring' }
 	cap := m.trace.buffer_records
 	sat_core := m.part.core_of[sat] or { 0 }
 	owner_core := m.part.core_of[owner] or { 0 }
 	telem_on := m.telem.on && telem_iface != ''
+	// The shared cross-core freeze flag. Loads occupy one scratch slot per core from 0, so take
+	// the LAST slot: it cannot collide with a core index for any plausible core count.
+	freeze_slot := 15 // osal.scratch_slots (16) - 1; loom2v cannot import osal, so mirror it here
 	mut g := []string{}
 
 	// --- the satellite partition: its own ring, no bus ---
@@ -528,12 +548,22 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 		g << r
 	}
 	g << '	sched.set_trace_hook(trace.fb_hook, voidptr(cap_ptr))'
+	g << '	mut ring := unsafe { cap_ptr.buf }'
 	g << '	for {'
 	g << '		loom_t0 := osal.now_us()'
 	g << '		sched.run_profiled(osal.now_us)'
 	g << '		loom_t1 := osal.now_us()'
 	g << '		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
 	g << '		osal.scratch_set(${sat_core}, u64(sched.load_permille()))'
+	g << '		// system-wide freeze (docs/trace-multicore.md §3): a trigger on EITHER core must'
+	g << '		// freeze both, or the two windows do not overlap and the multi-core view is'
+	g << '		// incoherent — one lane has already rolled past the event the other froze on.'
+	g << '		// Idempotent both ways: trigger() is a no-op once a ring stopped capturing.'
+	g << '		if ring.state() == .frozen {'
+	g << '			osal.scratch_set(${freeze_slot}, 1)'
+	g << '		} else if osal.scratch_get(${freeze_slot}) != 0 {'
+	g << '			ring.trigger()'
+	g << '		}'
 	g << '		osal.sleep_us(1000)'
 	g << '	}'
 	g << '}'
@@ -570,10 +600,21 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '		loom_t1 := osal.now_us()'
 	g << '		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
 	g << '		osal.scratch_set(${owner_core}, u64(sched.load_permille()))'
+	g << '		// the owner half of the system-wide freeze (see the satellite loop above)'
+	g << '		if tm.state() == .frozen {'
+	g << '			osal.scratch_set(${freeze_slot}, 1)'
+	g << '		} else if osal.scratch_get(${freeze_slot}) != 0 {'
+	g << '			tm.trigger()'
+	g << '		}'
 	g << '		for ch.recv(mut rx) {'
 	g << '			match rx.id {'
 	g << '				u32(0x${m.trace.cmd_id.hex()}) { // trace.cmd — applied to BOTH cores'
 	g << '					tm.on_cmd_multicore(rx, mut sat, ${sat_core}, import_buf, ${cap + 1})'
+	g << '					// an arm/reset restarts the ring, which retires the shared freeze —'
+	g << '					// otherwise the next pass would re-freeze both cores immediately.'
+	g << '					if tm.state() == .capturing {'
+	g << '						osal.scratch_set(${freeze_slot}, 0)'
+	g << '					}'
 	g << '				}'
 	if m.trace.dump_fc_bound {
 		g << '				u32(0x${m.trace.dump_fc_id.hex()}) { tm.on_dump_fc(loom_t1, rx) } // trace.dump_fc'

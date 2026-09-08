@@ -26,10 +26,11 @@ fn cmd_frame(op u8, mask u16) can.Frame {
 // returned the TraceBuffer would hand back a buffer pointing at an array that died with the
 // helper — the first version of this file did exactly that and read 2888 out of a freed frame.
 
-// A dump must freeze the satellite before reading it. The owner cannot ask the host to send a
-// separate stop first: a window still being written by the other core would stream as a moving
-// target, which is exactly the incoherence the multi-core view exists to avoid.
-fn test_dump_freezes_a_capturing_satellite_before_importing() {
+// A dump must NOT touch a capturing satellite. It is refused, exactly as handle_cmd refuses one
+// against the owner's own capturing ring. An earlier version froze it here, so a dump the owner
+// then rejected (not_ready, or busy) still destroyed core 1's flight recorder and pushed out an
+// unsolicited block — a failed command must leave both rings as it found them.
+fn test_dump_does_not_freeze_or_read_a_capturing_satellite() {
 	mut own := [16]Record{}
 	mut satb := [16]Record{}
 	mut remote := [64]Record{}
@@ -40,13 +41,56 @@ fn test_dump_freezes_a_capturing_satellite_before_importing() {
 		m.push(new_fb(u16(100 + i), 0, u32(i), 1))
 		sat.push(new_fb(u16(200 + i), 0, u32(i), 1))
 	}
-	m.on_cmd(cmd_frame(op_stop, 0xffff)) // owner's own ring: stopped, so its dump is legal
+	m.on_cmd(cmd_frame(op_stop, 0xffff)) // owner's own ring: stopped, so ITS dump would be legal
 	assert sat.state() == .capturing, 'precondition: the satellite is still recording'
 
 	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
 
-	assert imported, 'the satellite window was not imported'
-	assert sat.state() == .frozen || sat.state() == .full, 'the satellite was read while capturing'
+	assert !imported, 'a capturing satellite window was read'
+	assert sat.state() == .capturing, 'the dump froze the satellite instead of refusing'
+	assert sat.used() == 3, 'the satellite window was disturbed'
+}
+
+// The normal sequence — stop, then dump — does import it.
+fn test_a_stopped_satellite_is_imported_on_dump() {
+	mut own := [16]Record{}
+	mut satb := [16]Record{}
+	mut remote := [64]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	mut sat := new_buffer(&satb[0], 16, .ring, 50)
+	sat.start()
+	for i in 0 .. 3 {
+		m.push(new_fb(u16(100 + i), 0, u32(i), 1))
+		sat.push(new_fb(u16(200 + i), 0, u32(i), 1))
+	}
+	m.on_cmd_multicore(cmd_frame(op_stop, 0x0003), mut sat, 1, &remote[0], 64)
+	assert sat.state() != .capturing, 'stop did not reach the satellite'
+
+	assert m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
+}
+
+// A ring that has wrapped past its oldest epoch keeps that epoch's base in prefix_base, and every
+// packed block anchors from it. Importing only the records left the satellite's window anchored at
+// 0, shifting its whole lane by however long that core had been running.
+fn test_the_import_carries_the_epoch_prefix() {
+	mut own := [16]Record{}
+	mut satb := [4]Record{}
+	mut remote := [64]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	mut sat := new_buffer(&satb[0], 4, .ring, 50)
+	sat.start()
+	sat.push(new_epoch(1_000_000)) // ages out as the ring wraps, leaving its base as the prefix
+	for i in 0 .. 6 {
+		sat.push(new_fb(u16(200 + i), 0, u32(i), 1))
+	}
+	sat.stop()
+	assert sat.has_prefix, 'precondition: the satellite ring wrapped past its epoch'
+
+	m.on_cmd(cmd_frame(op_stop, 0xffff))
+	assert m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
+
+	assert m.remote.has_prefix, 'the imported window lost the epoch prefix'
+	assert m.remote.prefix_base == sat.prefix_base
 }
 
 // arm/reset must reach BOTH cores, or the two windows cover different spans of time.
@@ -119,7 +163,8 @@ fn test_the_imported_block_is_the_satellites_records() {
 		m.push(new_fb(u16(100 + i), 0, u32(i), 1))
 		sat.push(new_fb(u16(200 + i), 0, u32(i), 1))
 	}
-	m.on_cmd(cmd_frame(op_stop, 0xffff))
+	// stop reaches BOTH rings, then dump reads them — the normal host sequence
+	m.on_cmd_multicore(cmd_frame(op_stop, 0x0003), mut sat, 1, &remote[0], 64)
 	assert m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
 
 	// the remote window holds core 1's ids (200..), not the owner's (100..)
@@ -128,4 +173,40 @@ fn test_the_imported_block_is_the_satellites_records() {
 	for i in 0 .. 3 {
 		assert m.remote.record_at(u32(i)).id() == u16(200 + i)
 	}
+}
+
+// A command addressed to the SATELLITE ONLY (mask 0x0002 selects core 1) does not select the
+// owner, so handle_cmd reports it unaddressed and answers nothing. The host would see silence and
+// be unable to tell a busy target from a wrong id — so the owner answers for the satellite.
+fn test_a_satellite_only_command_still_gets_a_response() {
+	mut own := [16]Record{}
+	mut satb := [16]Record{}
+	mut remote := [64]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	mut sat := new_buffer(&satb[0], 16, .ring, 50)
+	sat.start()
+	sat.push(new_fb(200, 0, 0, 1))
+
+	m.on_cmd_multicore(cmd_frame(op_status, 0x0002), mut sat, 1, &remote[0], 64)
+
+	assert m.rsp_pending(), 'a core-1-only command was answered with silence'
+	r := decode_rsp(m.rsp)
+	assert r.core == 1, 'the response claims core ${r.core}, not the satellite'
+	assert r.opcode_echo == op_status
+}
+
+// When the mask selects BOTH cores the owner's own response stands — queue_rsp must refuse rather
+// than overwrite it, or the host loses the answer for core 0.
+fn test_a_both_core_command_keeps_the_owners_response() {
+	mut own := [16]Record{}
+	mut satb := [16]Record{}
+	mut remote := [64]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	mut sat := new_buffer(&satb[0], 16, .ring, 50)
+	sat.start()
+
+	m.on_cmd_multicore(cmd_frame(op_status, 0x0003), mut sat, 1, &remote[0], 64)
+
+	assert m.rsp_pending()
+	assert decode_rsp(m.rsp).core == 0, 'the satellite answer overwrote the owner\'s'
 }

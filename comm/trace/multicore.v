@@ -6,8 +6,11 @@ import driver.can
 //
 // The owner is an ordinary app partition — it runs its own handlers, so its ring is genuinely
 // LOCAL (m.buf) and the existing single-core path serves it unchanged. A second partition on
-// another core writes its own ring; the owner never shares that ring's write path (capture stays
-// lock-free, one writer per ring) and only READS it, under the freeze the command itself applies.
+// another core writes its own ring. The owner READS that ring to import a frozen window, and
+// writes only its STATE field, and only when the host explicitly says so (arm/stop/reset) — never
+// on a dump. push() tests state first and self-quiesces, so a stop racing a push costs at most one
+// torn record, which docs/trace-multicore.md §7 accepts for a diagnostic ring on the sim host. The
+// ThreadX target freezes with real synchronisation; this is the host runner only.
 //
 // This lives here rather than in generated code because it is protocol: which cores a command
 // selects, when a satellite window may be read, and what the host is owed in reply. loom2v wires
@@ -21,9 +24,9 @@ import driver.can
 // (it already lives in __global on target, where every added array is bss).
 //
 // Ordering matters, and is why this is one function rather than two calls:
-//   1. the satellite is stopped and imported BEFORE the local dump is armed, so produce() finds
-//      the remote block already queued and streams local-then-remote as one uninterrupted
-//      sequence — the host reads one transfer per selected core, in core order;
+//   1. the satellite is imported BEFORE the local dump is armed, so produce() finds the remote
+//      block already queued and streams local-then-remote as one uninterrupted sequence — the
+//      host reads one transfer per selected core, in core order;
 //   2. arm/reset reach the satellite too, so "arm" means "both cores from now" rather than
 //      "core 0 now, core 1 whenever it is next addressed" — the coherent window the multi-core
 //      view exists to provide.
@@ -50,17 +53,21 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 				sat.stop()
 			}
 			op_dump {
-				// Only a stopped window is safe to read — a capturing ring is still being written
-				// by the other core. Freeze it here rather than requiring a separate stop: a dump
-				// that quietly returned a moving window would be the same class of lie as a trace
-				// that never answers at all.
-				if sat.state() == .capturing {
-					sat.stop()
-				}
-				// used() == 0 emits NO block rather than one claiming an empty window: the host
-				// must be able to tell "this core captured nothing" from "this core was never
-				// asked", and a zero-record block reads as the latter.
-				if (sat.state() == .full || sat.state() == .frozen) && sat.used() > 0 {
+				// Mirror handle_cmd EXACTLY: only a stopped window may be read, and a request
+				// against a capturing one is refused — it does NOT freeze it. The first version
+				// froze here, which meant a dump the owner then rejected (not_ready, or busy)
+				// still killed core 1's flight recorder and pushed out an unsolicited block. A
+				// command that fails must leave both rings exactly as it found them.
+				//
+				// Nor may a fresh import land on top of a transfer already in flight: it would
+				// reset the continuation cursor under the stream and re-send chunks the host had
+				// already taken. The host's own retry path is to wait for the transfer to finish.
+				if m.is_streaming() {
+					// leave it; on_cmd below answers BUSY for the owner
+				} else if (sat.state() == .full || sat.state() == .frozen) && sat.used() > 0 {
+					// used() == 0 emits NO block rather than one claiming an empty window: the
+					// host must be able to tell "this core captured nothing" from "this core was
+					// never asked", and a zero-record block reads as the latter.
 					m.set_remote(sat_core, remote_backing, remote_cap)
 					m.load_remote_buffer(sat)
 					imported = true
@@ -71,6 +78,14 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 	}
 	// The local half, unchanged: the owner's own ring, core id and response.
 	m.on_cmd(f)
+	// A command addressed to the SATELLITE ONLY (e.g. core mask 0x0002) does not select the owner,
+	// so handle_cmd reports it unaddressed and answers nothing at all — the host would see silence
+	// and could not tell a busy target from a wrong id. Answer for the satellite in that case.
+	// When the mask selects BOTH, the owner's response stands and the satellite's state reaches
+	// the host in its own block header; queue_rsp refuses rather than overwrite it.
+	if c.targets(sat_core) && !c.targets(m.core) {
+		m.queue_rsp(status_rsp(sat, c.opcode, result_ok, sat_core))
+	}
 	return imported
 }
 
@@ -81,6 +96,12 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 // producer's state is never touched.
 fn (mut m TraceModule) load_remote_buffer(sat TraceBuffer) {
 	m.remote.start()
+	// Carry the source's epoch PREFIX. A ring that has wrapped past its oldest epoch keeps that
+	// epoch's base in prefix_base, and pack_chunk anchors every block from it. Copying only the
+	// records left the imported window anchored at 0, which shifts the satellite's whole lane by
+	// however long it had been running — ~16.8 s once start_us has wrapped its u24 once.
+	m.remote.has_prefix = sat.has_prefix
+	m.remote.prefix_base = sat.prefix_base
 	// The offset leads the block so it is in hand before the first record it applies to. Same
 	// rule as load_remote: never measured means emit NOTHING, because a 0 offset would claim
 	// perfect correlation. Two host partitions read one clock (osal.now_us), so a generated

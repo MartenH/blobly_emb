@@ -58,12 +58,22 @@ pub fn partition_ctrl(cap_ptr &trace.Capture) {
 	sched.every(10000, handler_ctrl_ctrl_work_on_10ms, &st)
 	sched.every(20000, handler_ctrl_slow_ctrl_on_20ms, &st)
 	sched.set_trace_hook(trace.fb_hook, voidptr(cap_ptr))
+	mut ring := unsafe { cap_ptr.buf }
 	for {
 		loom_t0 := osal.now_us()
 		sched.run_profiled(osal.now_us)
 		loom_t1 := osal.now_us()
 		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
 		osal.scratch_set(1, u64(sched.load_permille()))
+		// system-wide freeze (docs/trace-multicore.md §3): a trigger on EITHER core must
+		// freeze both, or the two windows do not overlap and the multi-core view is
+		// incoherent — one lane has already rolled past the event the other froze on.
+		// Idempotent both ways: trigger() is a no-op once a ring stopped capturing.
+		if ring.state() == .frozen {
+			osal.scratch_set(15, 1)
+		} else if osal.scratch_get(15) != 0 {
+			ring.trigger()
+		}
 		osal.sleep_us(1000)
 	}
 }
@@ -95,10 +105,21 @@ pub fn partition_sense(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &
 		loom_t1 := osal.now_us()
 		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
 		osal.scratch_set(0, u64(sched.load_permille()))
+		// the owner half of the system-wide freeze (see the satellite loop above)
+		if tm.state() == .frozen {
+			osal.scratch_set(15, 1)
+		} else if osal.scratch_get(15) != 0 {
+			tm.trigger()
+		}
 		for ch.recv(mut rx) {
 			match rx.id {
 				u32(0x7e2) { // trace.cmd — applied to BOTH cores
 					tm.on_cmd_multicore(rx, mut sat, 1, import_buf, 65)
+					// an arm/reset restarts the ring, which retires the shared freeze —
+					// otherwise the next pass would re-freeze both cores immediately.
+					if tm.state() == .capturing {
+						osal.scratch_set(15, 0)
+					}
 				}
 				u32(0x7e6) { tm.on_dump_fc(loom_t1, rx) } // trace.dump_fc
 				else {}
