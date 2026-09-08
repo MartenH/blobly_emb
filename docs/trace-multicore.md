@@ -1,9 +1,12 @@
 # Multi-core + comm-thread trace — design draft
 
-> **Status: P3a DONE + merged (single-writer, #57); P3b DONE + merged (different-bus, #60); P3c-0
-> DONE (bare-metal single-core trace); P3c-1 (real thread/ISR capture) next.**
+> **Status: P3a (single-writer, #57), P3b (different-bus, #60) and P3c-0 (bare-metal single-core)
+> were all merged — but all three REGRESSED IN GENERATION and are `enabled = false` today (#191,
+> see the note below). P3c-1 (real thread/ISR capture) is next, and the ThreadX exec-hook stream
+> is the one trace path that still generates.**
 >
-> **REGRESSED IN GENERATION (#191).** Both host examples below still build and run their FBs, but
+> **REGRESSED IN GENERATION (#191).** The two host examples below and the bare-metal `h735_app`
+> still build and run their FBs, but
 > loom2v emits the trace ring + dump for the SINGLE-partition host shape only and, as of #191,
 > REJECTS an enabled `[trace]` on any other shape rather than warn and build a silent no-op — so
 > both examples now carry `[trace] enabled = false`, their manifests advertise no trace frame ids,
@@ -18,8 +21,10 @@
 > cross-core freeze, decoded natively by blobly_net. **P3b (comm thread visible) is shipped** — the
 > per-bus COM bridge is a traced `comm_<bus>` thread (`examples/trace_comm`), different-bus reusing
 > the P3a owner; same-bus (piggyback) is the remaining follow-up. **P3c-0 (bare-metal single-core
-> trace) is shipped** — `examples/h735_app` now enables `[trace]` and the target reuses the inline
-> machinery on the board's DWT clock (§5). P3c-1 (real preemptive thread/ISR capture via the TX
+> trace) is DESIGNED, not generated** — `examples/h735_app` describes the inline machinery on the
+> board's DWT clock (§5), but its `[trace]` is `enabled = false`: the bare-metal superloop has no
+> module runner, and since #191 loom2v rejects an enabled `[trace]` there rather than build a
+> silent no-op, so that example is telemetry-only today. P3c-1 (real preemptive thread/ISR capture via the TX
 > execution-change hooks) is the larger remaining slice. The P3 phases carry **no backward-compat
 > burden** (§4.4).
 
@@ -202,7 +207,7 @@ slice per drain cycle*, an interval, not a real context switch.
 
 ## 5. ThreadX target — **P3c**
 
-### 5.0 Bare-metal single-core trace — **P3c-0 (BUILT)**
+### 5.0 Bare-metal single-core trace — **P3c-0 (BUILT, then regressed in generation — #191)**
 
 The smallest, provable-now slice: `[trace]` on a single-core `[target]` reuses the **inline** trace
 machinery verbatim — the same `trace_capture` hook, `TraceCmd`/`TraceRsp` handshake, ISO-TP dump of

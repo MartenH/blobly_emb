@@ -69,11 +69,15 @@ id        = 0x7E0   # CpuLoad: per-core load @ 1 s window
 detail_id = 0x7E1   # LoadDetail: core-0 load @ 100 ms / 1 s / 10 s + overrun count
 period_ms = 500
 
-# P3c-0: trace on the bare-metal target. Reuses the single-core inline machinery (the same
-# capture hook + TraceCmd/Rsp handshake + ISO-TP dump of the frozen ring as the host
-# trace_demo), emitted on the board's DWT µs clock with no osal. It rides the one FDCAN bus
-# (can0), so the dump + CpuLoad share it. Real preemptive thread/ISR capture is the larger
-# P3c slice (the TX execution-change hooks); this is the flight recorder on the target.
+# P3c-0 as DESIGNED: trace on the bare-metal target — the single-core inline machinery (the
+# same capture hook + TraceCmd/Rsp handshake + ISO-TP dump of the frozen ring as the host
+# trace_demo), on the board's DWT µs clock with no osal, riding the one FDCAN bus (can0) so
+# the dump + CpuLoad share it. Real preemptive thread/ISR capture is the larger P3c slice
+# (the TX execution-change hooks).
+#
+# NOT GENERATED TODAY — see the block below. The bare-metal superloop has no module runner,
+# so this example is telemetry-only (CpuLoad) until that wiring exists (#191). The keys are
+# kept because they describe the intended shape, not because anything reads them.
 [trace]
 # NOT GENERATED on this ECU (#191): the bare-metal superloop target has no module
 # runner, so nothing serves the cmd/rsp/record ids below. Off deliberately — loom2v
