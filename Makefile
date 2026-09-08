@@ -24,7 +24,7 @@ list:
 # runs this first, so a bad config fails before codegen; this checks them all at once.
 # which V does CI use, and is it the one you are building with? advisory, never fails.
 v-pin:
-	@./scripts/v_pin.sh
+	@./scripts/v_pin.sh "$(V)"
 
 check:
 	@rc=0; for d in examples/*/; do \
