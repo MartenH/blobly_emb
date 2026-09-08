@@ -34,16 +34,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # PINNED, not `check-latest: true`. CI used to install V from master HEAD, so an upstream
-      # commit that does not compile stopped every merge here: on 2026-09-08 vlang/v master
-      # (d030e424cf) failed its own build with `cmd/v/v.v:213: unknown module builder`, and both
-      # jobs died in this step with nothing to do with the PR under test. The pin also makes CI
-      # use the SAME compiler local verification runs on, and lets the action cache it.
-      # Bump .v-version deliberately (and re-run the full local gate on the new V).
-      - name: Install V (pinned, see .v-version)
-        uses: vlang/setup-v@v1.4
-        with:
-          version-file: .v-version
+      # PINNED to a PREBUILT release, not `check-latest: true` and not vlang/setup-v.
+      #
+      # CI used to install V from master HEAD, so an upstream commit that does not compile stopped
+      # every merge in this repo. That happened on 2026-09-08: vlang/v master (d030e424cf) failed
+      # its own build with `cmd/v/v.v:213: unknown module builder`, and BOTH jobs died in this step,
+      # on a PR that had nothing to do with it.
+      #
+      # setup-v does not help by itself: given a tag or SHA it downloads the SOURCE and self-hosts
+      # it, which is exactly the step that breaks (0.5.2 from source fails with a duplicate `C.open`
+      # declaration; master commit 8631b280 fails with an empty `builder error:`). The release
+      # ASSET is a prebuilt binary, so there is no self-host build to break.
+      #
+      # Bump .v-version deliberately, and re-run the full local gate on the new compiler:
+      #   host  — v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples
+      #   cross — the 26 STM32H7 images (the loop in the cross job below)
+      - name: Install V (pinned prebuilt release, see .v-version)
+        run: |
+          set -euo pipefail
+          ver="$(tr -d '[:space:]' < .v-version)"
+          echo "pinned V: $ver"
+          curl -fsSL -o /tmp/v_linux.zip "https://github.com/vlang/v/releases/download/${ver}/v_linux.zip"
+          unzip -q /tmp/v_linux.zip -d "$HOME/vpin"
+          chmod +x "$HOME/vpin/v/v"
+          echo "$HOME/vpin/v" >> "$GITHUB_PATH"
 
       - name: V version
         run: v version
@@ -152,16 +166,30 @@ jobs:
 
       # The freestanding build needs V MASTER: 0.5.1 emits "impossible constraint in asm" for
       # the bare-metal target (vlang/v#27564). check-latest keeps this in step with the host job.
-      # PINNED, not `check-latest: true`. CI used to install V from master HEAD, so an upstream
-      # commit that does not compile stopped every merge here: on 2026-09-08 vlang/v master
-      # (d030e424cf) failed its own build with `cmd/v/v.v:213: unknown module builder`, and both
-      # jobs died in this step with nothing to do with the PR under test. The pin also makes CI
-      # use the SAME compiler local verification runs on, and lets the action cache it.
-      # Bump .v-version deliberately (and re-run the full local gate on the new V).
-      - name: Install V (pinned, see .v-version)
-        uses: vlang/setup-v@v1.4
-        with:
-          version-file: .v-version
+      # PINNED to a PREBUILT release, not `check-latest: true` and not vlang/setup-v.
+      #
+      # CI used to install V from master HEAD, so an upstream commit that does not compile stopped
+      # every merge in this repo. That happened on 2026-09-08: vlang/v master (d030e424cf) failed
+      # its own build with `cmd/v/v.v:213: unknown module builder`, and BOTH jobs died in this step,
+      # on a PR that had nothing to do with it.
+      #
+      # setup-v does not help by itself: given a tag or SHA it downloads the SOURCE and self-hosts
+      # it, which is exactly the step that breaks (0.5.2 from source fails with a duplicate `C.open`
+      # declaration; master commit 8631b280 fails with an empty `builder error:`). The release
+      # ASSET is a prebuilt binary, so there is no self-host build to break.
+      #
+      # Bump .v-version deliberately, and re-run the full local gate on the new compiler:
+      #   host  — v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples
+      #   cross — the 26 STM32H7 images (the loop in the cross job below)
+      - name: Install V (pinned prebuilt release, see .v-version)
+        run: |
+          set -euo pipefail
+          ver="$(tr -d '[:space:]' < .v-version)"
+          echo "pinned V: $ver"
+          curl -fsSL -o /tmp/v_linux.zip "https://github.com/vlang/v/releases/download/${ver}/v_linux.zip"
+          unzip -q /tmp/v_linux.zip -d "$HOME/vpin"
+          chmod +x "$HOME/vpin/v/v"
+          echo "$HOME/vpin/v" >> "$GITHUB_PATH"
 
       - name: Install the ARM toolchain
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-arm-none-eabi
