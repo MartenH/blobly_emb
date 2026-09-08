@@ -1,6 +1,6 @@
 V ?= v
 
-.PHONY: example run-example list check deps deps-cmsis trace trace-check lint vcan clean demo demo-threadx bench
+.PHONY: example run-example list check deps deps-cmsis trace trace-check lint vcan clean demo demo-threadx bench v-pin
 
 # ---- Examples ---------------------------------------------------------------
 # Each example is a self-contained app under examples/<NAME>/ with its own
@@ -22,6 +22,10 @@ list:
 # Validate every example's ecu.toml against the schema (allowed/required/typed keys, the
 # cross-field rules, and the nested-comment TOML-parser trap). Each example's `make gen` also
 # runs this first, so a bad config fails before codegen; this checks them all at once.
+# which V does CI use, and is it the one you are building with? advisory, never fails.
+v-pin:
+	@./scripts/v_pin.sh
+
 check:
 	@rc=0; for d in examples/*/; do \
 	  if [ -f "$$d/ecu.toml" ]; then $(V) run tools/ecucheck/gen.v "$$d/ecu.toml" || rc=1; fi; \
