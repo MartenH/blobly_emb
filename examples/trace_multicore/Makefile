@@ -3,11 +3,9 @@
 # examples); only the trace-specific vcan bring-up + watch helpers are here. Sim-first: `make
 # vcan` once, then `make run` on vcan0.
 #
-# NOTE: `[trace]` is `enabled = false` today (#191 — loom2v generates the ring + dump for the
-# single-partition host shape only, and rejects an enabled [trace] elsewhere rather than build a
-# silent no-op). So gen/trace-manifest.csv carries both cores' handler + thread rows but NO
-# `# trace frames` rows, and the `watch` target below sees no TraceRsp — nothing answers a dump
-# until that generator wiring returns. See README.md.
+# blobly_net decodes the fixed observability protocol natively from gen/trace-manifest.csv — both
+# cores' handler + thread rows AND the `# trace frames` rows (cmd/rsp/record/dump_fc). The `watch`
+# target below sees a TraceRsp per selected core.
 REPO ?= ../..
 include $(REPO)/examples/common.mk
 

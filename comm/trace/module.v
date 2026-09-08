@@ -314,6 +314,16 @@ pub fn (mut m TraceModule) trigger() {
 	m.buf.trigger()
 }
 
+// froze_cause reports WHY this module's ring stopped. The multi-core runner propagates on the
+// cause rather than on the state: TraceBuffer.trigger() sets freeze_trigger IMMEDIATELY, while a
+// ring with pre_pct < 100 stays `capturing` until its post-trigger window fills. Waiting for
+// `frozen` therefore told the other core up to a whole post-window late — long enough for it to
+// have rolled the very event out of its own ring, which is exactly the incoherence the shared
+// freeze exists to prevent (codex #271).
+pub fn (m TraceModule) froze_cause() u8 {
+	return m.buf.froze_cause()
+}
+
 pub fn (m TraceModule) state() State {
 	return m.buf.state()
 }

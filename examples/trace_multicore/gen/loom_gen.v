@@ -71,7 +71,10 @@ pub fn partition_ctrl(cap_ptr &trace.Capture) {
 		// freeze both, or the two windows do not overlap and the multi-core view is
 		// incoherent — one lane has already rolled past the event the other froze on.
 		// Idempotent both ways: trigger() is a no-op once a ring stopped capturing.
-		if ring.state() == .frozen {
+		// on the CAUSE, not the state: trigger() sets freeze_trigger at once, while a
+		// ring with pre_pct < 100 keeps capturing until its post-window fills — waiting
+		// for .frozen told the other core a whole post-window late (codex #271).
+		if ring.froze_cause() == trace.freeze_trigger {
 			osal.scratch_set(15, 1)
 		} else if osal.scratch_get(15) != 0 {
 			ring.trigger()
@@ -110,7 +113,10 @@ pub fn partition_sense(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &
 		// busy one clamped at 100% (codex #270 r2).
 		osal.scratch_set(0, u64(sched.load_permille()))
 		// the owner half of the system-wide freeze (see the satellite loop above)
-		if tm.state() == .frozen {
+		// on the CAUSE, not the state: trigger() sets freeze_trigger at once, while a
+		// ring with pre_pct < 100 keeps capturing until its post-window fills — waiting
+		// for .frozen told the other core a whole post-window late (codex #271).
+		if tm.froze_cause() == trace.freeze_trigger {
 			osal.scratch_set(15, 1)
 		} else if osal.scratch_get(15) != 0 {
 			tm.trigger()
