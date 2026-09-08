@@ -1,5 +1,15 @@
 # trace_multicore — two-core handler tracing, fully generated (P3a)
 
+> **STATUS: the trace half is NOT generated today — `[trace]` is `enabled = false` in
+> [`ecu.toml`](ecu.toml).** P3a shipped in #57 and a later refactor took the multi-partition trace
+> runner with it: loom2v generates the ring + dump for the single-partition host shape only, and
+> since #191 it *rejects* an enabled `[trace]` on any other shape rather than warn and build a
+> silent no-op. What follows describes the example as designed and as it will work again once the
+> generator wiring returns (**#191**). Both cores' FBs do build and run; nothing answers a `dump`
+> on `0x7E5`, and `gen/trace-manifest.csv` carries the handler + thread rows but no trace frame ids.
+> The platform side (`comm/trace`) never regressed — `multicore_dump_test` still proves two
+> self-describing blocks over ISO-TP.
+
 Two partitions on two cores (`sense` on core 0, `ctrl` on core 1), each a pure-compute Loom, both
 traced. Everything is generated from [`ecu.toml`](ecu.toml) by loom2v — the per-core capture rings,
 the single `partition_trace` owner (TraceCmd/TraceRsp + the per-core ISO-TP dump), and CpuLoad. The

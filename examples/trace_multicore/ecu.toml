@@ -19,6 +19,10 @@ id        = 0x7E0     # CpuLoad (both cores' load, one frame)
 period_ms = 500
 
 [trace]
+# NOT GENERATED on this ECU (#191): two partitions. The per-core rings and the single
+# ISO-TP dump owner this config describes are ungenerated, so the ids below lead
+# nowhere. Off deliberately until the multi-partition host shape is generated.
+enabled        = false
 bus            = "can0"
 level          = "thread+fb"  # P3a captures FB records; thread/ISR are the target (P3c)
 buffer_records = 64           # per-core ring depth (static array, one per core)

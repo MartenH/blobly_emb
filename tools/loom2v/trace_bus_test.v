@@ -1,5 +1,7 @@
 module main
 
+import toml
+
 // A bus can carry no signals at all and still need a partition: the comm thread is where the
 // platform modules live, so a dedicated diagnostic bus has to be owned by somebody. Dropping it
 // from the bridge set is what removed the trace bus from run() in examples/trace_comm and
@@ -96,4 +98,79 @@ fn test_a_trace_only_module_host_still_imports_the_can_driver() {
 	m.buses["can0"] = true
 	_, glue := emit_module_headers(m, "ecu", false, false)
 	assert glue.any(it.starts_with('import driver.can')), 'the generated file would not compile: ${glue}'
+}
+
+// --- the shape guard (#191) -------------------------------------------------------------------
+// [trace] on a shape loom2v cannot generate used to WARN and build on, so `make all` succeeded and
+// the example answered nothing on the bus. These pin the blocker down to ONE named condition each:
+// the old message offered all three as a maybe, which is what made trace_multicore hard to diagnose.
+
+fn test_the_supported_shape_has_no_blocker() {
+	m := Model{
+		trace: TraceCfg{
+			on:  true
+			bus: 'can0'
+		}
+		part: PartMap{
+			by_part: {
+				'app': []toml.Any{}
+			}
+		}
+	}
+	assert trace_shape_blocker(m, 'can0') == '', 'the single-partition host shape is generated'
+}
+
+fn test_a_second_partition_blocks_trace() {
+	m := Model{
+		trace: TraceCfg{
+			on:  true
+			bus: 'can0'
+		}
+		part: PartMap{
+			by_part: {
+				'sense': []toml.Any{}
+				'ctrl':  []toml.Any{}
+			}
+		}
+	}
+	b := trace_shape_blocker(m, 'can0')
+	assert b.contains('2 partitions'), 'the blocker must name the partition count, got: ${b}'
+}
+
+fn test_the_baremetal_superloop_blocks_trace() {
+	m := Model{
+		trace:  TraceCfg{
+			on:  true
+			bus: 'can0'
+		}
+		target: TargetCfg{
+			on: true
+		}
+		part:   PartMap{
+			by_part: {
+				'app': []toml.Any{}
+			}
+		}
+	}
+	assert trace_shape_blocker(m, 'can0').contains('bare-metal')
+}
+
+// The bridge conflict is about the RUNNER, not the bus: trace_comm traces on can1 and bridges on
+// can0, and is still blocked. A message claiming the bridge "owns the trace bus" would be a lie.
+fn test_a_bridge_on_another_bus_still_blocks_trace() {
+	m := Model{
+		trace:       TraceCfg{
+			on:  true
+			bus: 'can1'
+		}
+		has_can_ext: true
+		part:        PartMap{
+			by_part: {
+				'app': []toml.Any{}
+			}
+		}
+	}
+	b := trace_shape_blocker(m, 'can1')
+	assert b.contains('COM bridge'), 'got: ${b}'
+	assert !b.contains('owns the trace bus'), 'the bridge need not be on the trace bus at all'
 }

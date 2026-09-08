@@ -450,3 +450,21 @@ fn trace_fb_install(m Model) []string {
 	}
 	return ['\tsched.set_trace_hook(trace_fb_hook, unsafe { nil })']
 }
+
+// trace_shape_of projects the model onto ecumodel's TraceShape — the ONE definition of which ECUs
+// loom2v can generate [trace] for, shared with sysmodel's trace_generated so syscheck and loom2v
+// cannot disagree. `trace_host` in gen.v is derived from this too: a condition added here reaches
+// the predicate and the error message together.
+fn trace_shape_of(m Model, trace_bus string) ecumodel.TraceShape {
+	return ecumodel.TraceShape{
+		threadx:         m.target.threadx
+		baremetal:       m.target.on && !m.target.threadx
+		partition_count: m.part.by_part.keys().len
+		trace_bus_eth:   (m.bus_kind[trace_bus] or { 'can' }) == 'eth'
+		has_bridge:      m.has_can_ext || m.isotp_conns.len > 0 || m.routes.len > 0
+	}
+}
+
+fn trace_shape_blocker(m Model, trace_bus string) string {
+	return ecumodel.trace_shape_blocker(trace_shape_of(m, trace_bus))
+}

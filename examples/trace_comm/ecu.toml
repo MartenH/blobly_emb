@@ -31,6 +31,10 @@ id        = 0x7E0
 period_ms = 500
 
 [trace]
+# NOT GENERATED on this ECU (#191): this ECU has a COM bridge, and the trace-host
+# runner replaces the plain run() that drives it. The dedicated can1 trace bus below
+# is what the example is FOR — it comes back when that shape is generated.
+enabled        = false
 bus            = "can1"        # the dedicated trace bus (no bridge) — different-bus P3b
 level          = "thread+fb"
 buffer_records = 64

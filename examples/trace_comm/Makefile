@@ -1,8 +1,8 @@
 # Comm-thread trace demo (P3b) — fully generated from ecu.toml (loom2v). Generation + build + clean
 # come from examples/common.mk; only the vcan bring-up (TWO buses) + watch are here. Sim-first:
 # `make vcan` once, then `make run`. blobly_net decodes the fixed protocol natively from
-# gen/trace-manifest.csv — its handler/thread rows are
-# generated; the trace DUMP for this shape is not (#191).
+# gen/trace-manifest.csv — its handler/thread rows are generated; the trace DUMP for this shape is
+# not, so `[trace]` is `enabled = false` and the manifest carries no trace frame rows (#191).
 REPO ?= ../..
 include $(REPO)/examples/common.mk
 

@@ -3392,9 +3392,10 @@ fn main() {
 	// CAN (an eth trace binding is validator-rejected until the UDP rung, but
 	// this predicate must never route it into the can.Channel runner)
 	trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
-	trace_host := m.trace.on && !m.target.on && m.part.by_part.keys().len == 1
-		&& (m.bus_kind[trace_bus] or { 'can' }) != 'eth'
-		&& !(m.has_can_ext || m.isotp_conns.len > 0 || m.routes.len > 0)
+	// DERIVED from the one shape policy (ecumodel.trace_shape_blocker, shared with sysmodel) so the
+	// predicate and the failure message can never drift apart — a condition added there reaches
+	// both. Previously this expression and the message listing its conditions were separate copies.
+	trace_host := m.trace.on && trace_shape_blocker(m, trace_bus) == ''
 	// the trace-host runner has no eth spawn wiring — an eth tx frame there
 	// would generate a comm thread nothing starts (silently dead)
 	if trace_host && m.eth_frames.len > 0 {
@@ -3428,9 +3429,10 @@ fn main() {
 	if m.trace.on && m.target.threadx {
 		validate_trace_threadx(m)
 	} else if m.trace.on && !trace_host {
-		eprintln('loom2v: WARNING: [trace] on this shape (bare-metal target, multi-partition, or ' +
-			'a COM bridge on the trace bus) is not generated yet — the module runner covers the ' +
-			'single-core host shape (docs/com-modules.md). Building WITHOUT trace.')
+		// Not a warning: a config that asks for trace and silently gets none looks identical to a
+		// working one until nothing answers on the bus (#191). Name the one condition that tripped.
+		panic('loom2v: [trace] is not generated for this ECU — ${trace_shape_blocker(m, trace_bus)} ' +
+			'(docs/com-modules.md). Set [trace] enabled = false to build without it deliberately.')
 	}
 
 	// [[signal]] -> the model, then emit the `sig` module.
@@ -3586,6 +3588,18 @@ fn main() {
 	// the same. The lean first cut supports external RX signals (bus -> app), drained + counted
 	// by the comm thread; external TX signals, ISO-TP, and m.routes are not generated yet.
 	comm_thread_on := m.target.threadx && has_bridge
+	// The ThreadX half of this PR's rule. trace_module_init and trace_produce_drain are emitted
+	// INSIDE the `if comm_thread_on` branch, so a ThreadX ECU with [trace] on but no bridge (only
+	// partition-local signals, no ISO-TP, no routes) generates no trace machinery at all: nothing
+	// serves the commands, nothing transmits records, and the manifest still advertises the ids.
+	// That is exactly the silent degradation the host shapes now reject, so reject it here too —
+	// the ThreadX branch above validates OPTIONS, and would otherwise pass this straight through.
+	if m.trace.on && m.target.threadx && !comm_thread_on {
+		panic('loom2v: [trace] on a ThreadX ECU is served by the bus-owning comm thread, which is ' +
+			'generated only for an ECU with a COM bridge (an external CAN signal, an ISO-TP ' +
+			'connection, or a route). This ECU has none, so no thread would answer a TraceCmd or ' +
+			'transmit a record. Give it a bridge, or set [trace] enabled = false.')
+	}
 	// trace level="all" + io points: run_profiled_excl subtracts the io thread's exec counter
 	// per handler, so the profiled load no longer double-counts io preemption (the emb#150 r11
 	// refusal). The io thread's OWN work is still not profiled per point (emb#263).

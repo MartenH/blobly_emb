@@ -11,12 +11,13 @@ module main
 //   make run                # generate + build + run on vcan0
 //
 // REGRESSED, which is why CI was skipping this: P3a shipped in #57 and a later refactor took the
-// multi-partition trace runner with it. loom2v now generates the ring + dump for the
-// single-partition host shape only, and WARNS when it drops the rest — so this builds and runs
-// both cores' FBs, and gen/trace-manifest.csv still carries their handler + thread rows, but no
-// `dump` is answered on 0x7E5. comm/trace is untouched and still ready (one local core plus one
-// imported remote; multicore_dump_test proves two self-describing blocks over ISO-TP) — it is the
-// generator wiring that has to come back. See #191.
+// multi-partition trace runner with it. loom2v generates the ring + dump for the single-partition
+// host shape only, and now REJECTS an enabled [trace] on any other shape rather than warn and
+// build a silent no-op — so `[trace]` is `enabled = false` in ecu.toml. This builds and runs both
+// cores' FBs, and gen/trace-manifest.csv still carries their handler + thread rows, but it no
+// longer advertises trace frame ids, and no `dump` is answered on 0x7E5. comm/trace is untouched
+// and still ready (one local core plus one imported remote; multicore_dump_test proves two
+// self-describing blocks over ISO-TP) — it is the generator wiring that has to come back. See #191.
 import os
 import gen
 import driver.can
