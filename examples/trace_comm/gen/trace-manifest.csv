@@ -3,7 +3,3 @@
 0,app,1,SpeedWork,on_10ms,10000,app_main
 # threads: thread,id,name,core,prio  (id 0 reserved = idle; prio - = no RTOS prio)
 thread,1,app_main,1,10
-# trace frames: frame,id,bus
-cmd,0x7e2,can1
-rsp,0x7e3,can1
-record,0x7e5,can1

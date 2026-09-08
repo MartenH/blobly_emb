@@ -75,6 +75,10 @@ period_ms = 500
 # (can0), so the dump + CpuLoad share it. Real preemptive thread/ISR capture is the larger
 # P3c slice (the TX execution-change hooks); this is the flight recorder on the target.
 [trace]
+# NOT GENERATED on this ECU (#191): the bare-metal superloop target has no module
+# runner, so nothing serves the cmd/rsp/record ids below. Off deliberately — loom2v
+# rejects an enabled [trace] here rather than build a silent no-op.
+enabled        = false
 bus            = "can0"
 level          = "thread+fb"
 buffer_records = 64

@@ -3428,9 +3428,10 @@ fn main() {
 	if m.trace.on && m.target.threadx {
 		validate_trace_threadx(m)
 	} else if m.trace.on && !trace_host {
-		eprintln('loom2v: WARNING: [trace] on this shape (bare-metal target, multi-partition, or ' +
-			'a COM bridge on the trace bus) is not generated yet — the module runner covers the ' +
-			'single-core host shape (docs/com-modules.md). Building WITHOUT trace.')
+		// Not a warning: a config that asks for trace and silently gets none looks identical to a
+		// working one until nothing answers on the bus (#191). Name the one condition that tripped.
+		panic('loom2v: [trace] is not generated for this ECU — ${trace_shape_blocker(m, trace_bus)} ' +
+			'(docs/com-modules.md). Set [trace] enabled = false to build without it deliberately.')
 	}
 
 	// [[signal]] -> the model, then emit the `sig` module.

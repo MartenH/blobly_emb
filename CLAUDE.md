@@ -70,10 +70,16 @@ examples`, per-example host builds with generation, and a repo-wide **"Generated
 fresh"** gate. The last one is the usual surprise: a stale committed `gen/` output passes every
 local command and fails CI. Re-run generation before opening the PR.
 
-**`examples/trace_comm` and `examples/trace_multicore` build again** and the loop covers them,
-but they are not yet the examples they claim to be: loom2v generates the trace ring + dump for the
-single-partition host shape only, and WARNS when it drops it, so both run their FBs with no dump
-answering. #191 is open for the generator wiring — the platform side (`comm/trace`) never lost it.
+**`examples/trace_comm` and `examples/trace_multicore` build, but with `[trace] enabled = false`.**
+loom2v generates the trace ring + dump for the single-partition host shape only, and now **rejects**
+an enabled `[trace]` on any other shape instead of warning and building a silent no-op — the failure
+names the one condition that tripped (partition count, bare-metal target, eth trace bus, or a COM
+bridge whose plain `run()` the trace-host runner would replace). So a config that asks for trace
+either gets it or fails generation; those two examples (plus `h735_app`, bare-metal) say
+`enabled = false` with a comment, and their manifests no longer advertise ids nothing answers.
+#191 is open for the generator wiring — the platform side (`comm/trace`) never lost it. Note the
+host still fills absent manifest frame rows with 0x7E2..0x7E6 defaults (#252 item 2), so "no rows"
+does not yet read as "no trace" on the blobly_net side.
 
 **Also gated now:** the STM32H7 cross builds — **every image, ThreadX and NetX Duo included** —
 in their own CI job: apt's `gcc-arm-none-eabi` plus `make deps` (all three sources, about ten
