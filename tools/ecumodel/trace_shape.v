@@ -16,7 +16,7 @@ pub struct TraceShape {
 pub:
 	threadx         bool   // [target] kind = "threadx": the exec-hook stream, not the host runner
 	baremetal       bool   // a target that is not ThreadX: the inline superloop
-	partition_count int    // [[partition]] count; the module runner owns exactly one
+	partition_count int    // [[partition]] count; the host runners cover one or two
 	trace_bus_eth   bool   // the resolved trace bus is an eth bus
 	has_bridge      bool   // external CAN signals, ISO-TP connections or routes
 }
@@ -34,9 +34,14 @@ pub fn trace_shape_blocker(s TraceShape) string {
 	if s.baremetal {
 		return 'the bare-metal superloop target has no module runner'
 	}
-	if s.partition_count != 1 {
-		return 'it declares ${s.partition_count} partitions — the module runner owns one schedule ' +
-			'and one bus, so the per-core rings and the single dump owner are still ungenerated'
+	if s.partition_count < 1 || s.partition_count > 2 {
+		// One partition is the single-core host runner; two is P3a's multi-core runner (one dump
+		// owner plus one satellite). Three is the ceiling, not an oversight: TraceModule holds
+		// exactly ONE satellite import slot (set_remote), so a third core's window has nowhere to
+		// be staged and would be silently absent from the dump.
+		return 'it declares ${s.partition_count} partitions — the host trace runners cover one ' +
+			'(single-core) or two (one dump owner plus one satellite core); a third core has no ' +
+			'import slot in the module and its window would simply never be dumped'
 	}
 	if s.trace_bus_eth {
 		return 'its trace bus is eth — the dump runner speaks can.Channel'

@@ -1,19 +1,20 @@
 # Multi-core + comm-thread trace — design draft
 
-> **Status: P3a (single-writer, #57), P3b (different-bus, #60) and P3c-0 (bare-metal single-core)
-> were all merged — but all three REGRESSED IN GENERATION and are `enabled = false` today (#191,
-> see the note below). P3c-1 (real thread/ISR capture) is next, and the ThreadX exec-hook stream
-> is the one trace path that still generates.**
+> **Status: P3a is GENERATED again (#191) — `examples/trace_multicore` answers a two-core dump on
+> vcan, verified end to end (four ISO-TP transfers: core 0's window as 64+2 records in two
+> self-describing continuation blocks, then core 1's). P3b (different-bus, #60) and P3c-0
+> (bare-metal single-core) remain regressed in generation and are `enabled = false`. P3c-1 (real
+> thread/ISR capture) is the larger remaining slice.**
 >
-> **REGRESSED IN GENERATION (#191).** The two host examples below and the bare-metal `h735_app`
-> still build and run their FBs, but
-> loom2v emits the trace ring + dump for the SINGLE-partition host shape only and, as of #191,
-> REJECTS an enabled `[trace]` on any other shape rather than warn and build a silent no-op — so
-> both examples now carry `[trace] enabled = false`, their manifests advertise no trace frame ids,
-> and neither answers a `dump` today. The platform side never changed —
-> `comm/trace` still carries one local core plus one imported remote, and `multicore_dump_test`
-> proves the two-block read-out. What follows describes the design, not what generation currently
-> produces.
+> **WHAT GENERATES TODAY (#191).** loom2v emits the host trace runner for ONE partition
+> (single-core) and for TWO (P3a, this document's §3 — one dump owner plus one satellite core).
+> `examples/trace_multicore` is the two-core case and answers a dump again. Three partitions are
+> refused, and so are the shapes still ungenerated — `examples/trace_comm` (a COM bridge, whose
+> plain `run()` the trace-host runner would replace) and the bare-metal `h735_app` — which carry
+> `[trace] enabled = false`. Since #191 an enabled `[trace]` on a shape loom2v cannot generate
+> FAILS generation rather than warning and building a silent no-op, so a config either gets trace
+> or gets an error naming the one condition that tripped. Sections below that describe P3b and
+> P3c-0 are design text for shapes not currently generated; §3 is live.
 > The design writeup for the multi-core trace-codegen phase, extending the inline single-core path
 > from #54/#55/#56. **P3a is shipped** — `examples/trace_multicore` (two partitions, cores 0+1): a
 > single dump command streams each core's window as self-describing blocks (multi-block with a

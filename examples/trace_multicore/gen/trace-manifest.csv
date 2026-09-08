@@ -7,3 +7,11 @@
 # threads: thread,id,name,core,prio  (id 0 reserved = idle; prio - = no RTOS prio)
 thread,1,sense_main,0,10
 thread,2,ctrl_main,1,10
+<<<<<<< HEAD
+=======
+# trace frames: frame,id,bus
+cmd,0x7e2,can0
+rsp,0x7e3,can0
+record,0x7e5,can0
+dump_fc,0x7e6,can0
+>>>>>>> 57aa6cc (loom2v: generate the host multi-core trace runner — trace_multicore dumps again (#191 P3a))

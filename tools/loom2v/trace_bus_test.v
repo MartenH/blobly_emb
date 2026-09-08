@@ -120,21 +120,42 @@ fn test_the_supported_shape_has_no_blocker() {
 	assert trace_shape_blocker(m, 'can0') == '', 'the single-partition host shape is generated'
 }
 
-fn test_a_second_partition_blocks_trace() {
+// Two partitions ARE generated now (P3a: one dump owner plus one satellite core).
+fn test_two_partitions_are_the_multicore_shape() {
 	m := Model{
 		trace: TraceCfg{
 			on:  true
 			bus: 'can0'
 		}
-		part: PartMap{
+		part:  PartMap{
 			by_part: {
 				'sense': []toml.Any{}
 				'ctrl':  []toml.Any{}
 			}
 		}
 	}
+	assert trace_shape_blocker(m, 'can0') == '', 'the two-partition host shape is generated (P3a)'
+}
+
+// THREE is the ceiling, and not an oversight: TraceModule holds exactly one satellite import slot,
+// so a third core's window has nowhere to be staged and would be silently missing from the dump.
+fn test_a_third_partition_blocks_trace() {
+	m := Model{
+		trace: TraceCfg{
+			on:  true
+			bus: 'can0'
+		}
+		part:  PartMap{
+			by_part: {
+				'sense': []toml.Any{}
+				'ctrl':  []toml.Any{}
+				'aux':   []toml.Any{}
+			}
+		}
+	}
 	b := trace_shape_blocker(m, 'can0')
-	assert b.contains('2 partitions'), 'the blocker must name the partition count, got: ${b}'
+	assert b.contains('3 partitions'), 'the blocker must name the partition count, got: ${b}'
+	assert b.contains('import slot'), 'it must say WHY three is refused, got: ${b}'
 }
 
 fn test_the_baremetal_superloop_blocks_trace() {

@@ -218,6 +218,16 @@ pub fn (mut m TraceModule) push(r Record) {
 	m.buf.push(r)
 }
 
+// arm starts the module's own ring, the way an op_arm command would. A flight recorder that only
+// begins recording once a host has connected has nothing to say about the boot it was installed to
+// observe — so a generated runner arms at startup and the host's arm/stop/dump still work exactly
+// as before. Separate from new_module() deliberately: constructing a module and choosing to start
+// capturing are different decisions, and the target path builds the module in place long before it
+// wants records.
+pub fn (mut m TraceModule) arm() {
+	m.buf.start()
+}
+
 // set_remote wires the import buffer for ONE satellite core (caller-owned backing, like
 // new_buffer) — the single-dump-owner rule: remote cores never touch the bus themselves.
 pub fn (mut m TraceModule) set_remote(core u8, backing &Record, capacity u32) {

@@ -6,6 +6,7 @@ import app
 import loom
 import osal
 import comm.telem
+import comm.trace
 import driver.can
 
 struct Partition_sense_state {
@@ -28,22 +29,6 @@ fn handler_sense_med_sense_on_10ms(ctx voidptr) {
 	st.med_sense.on_10ms(inp, mut outp)
 }
 
-pub fn partition_sense(core int, arg voidptr) {
-	osal.pin_to_core(0)
-	mut st := Partition_sense_state{}
-	mut sched := loom.Scheduler{}
-	sched.every(5000, handler_sense_fast_sense_on_5ms, &st)
-	sched.every(10000, handler_sense_med_sense_on_10ms, &st)
-	for {
-		loom_t0 := osal.now_us()
-		sched.run(loom_t0)
-		loom_t1 := osal.now_us()
-		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
-		osal.scratch_set(1, u64(sched.load_permille()))
-		osal.sleep_us(1000)
-	}
-}
-
 struct Partition_ctrl_state {
 mut:
 	ctrl_work app.CtrlWork
@@ -64,78 +49,100 @@ fn handler_ctrl_slow_ctrl_on_20ms(ctx voidptr) {
 	st.slow_ctrl.on_20ms(inp, mut outp)
 }
 
-pub fn partition_ctrl(core int, arg voidptr) {
+// The satellite core: it pushes FB records into the ring run() handed it, and never
+// touches the bus. The owner reads that ring only while it is frozen.
+pub fn partition_ctrl(cap_ptr &trace.Capture) {
 	osal.pin_to_core(1)
 	mut st := Partition_ctrl_state{}
 	mut sched := loom.Scheduler{}
 	sched.every(10000, handler_ctrl_ctrl_work_on_10ms, &st)
 	sched.every(20000, handler_ctrl_slow_ctrl_on_20ms, &st)
+	sched.set_trace_hook(trace.fb_hook, voidptr(cap_ptr))
 	for {
 		loom_t0 := osal.now_us()
-		sched.run(loom_t0)
+		sched.run_profiled(osal.now_us)
+		loom_t1 := osal.now_us()
+		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
+		osal.scratch_set(1, u64(sched.load_permille()))
+		osal.sleep_us(1000)
+	}
+}
+
+// The dump owner: an ordinary app partition that also owns the trace bus. Its ring is
+// the module's OWN buffer, so commands and status apply to a real producing ring.
+pub fn partition_sense(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record) {
+	osal.pin_to_core(0)
+	mut ch := chp
+	mut sat := unsafe { sat_buf }
+	mut st := Partition_sense_state{}
+	mut sched := loom.Scheduler{}
+	sched.every(5000, handler_sense_fast_sense_on_5ms, &st)
+	sched.every(10000, handler_sense_med_sense_on_10ms, &st)
+	mut ring := [64]trace.Record{}
+	mut tm := trace.new_module(u32(0x7e3), u32(0x7e5), 0, true,
+		trace.new_buffer(&ring[0], 64, .ring, 50))
+	mut cap := tm.capture(0, 500, osal.now_us())
+	sched.set_trace_hook(trace.fb_hook, &cap)
+	// both rings record from startup, like the satellite's below — a flight recorder that
+	// waits for a host to arm it has nothing to say about the boot it was installed to watch.
+	tm.arm()
+	mut last_telem := u64(0)
+	mut rx := can.Frame{}
+	mut txf := can.Frame{}
+	for {
+		loom_t0 := osal.now_us()
+		sched.run_profiled(osal.now_us)
 		loom_t1 := osal.now_us()
 		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
 		osal.scratch_set(0, u64(sched.load_permille()))
+		for ch.recv(mut rx) {
+			match rx.id {
+				u32(0x7e2) { // trace.cmd — applied to BOTH cores
+					tm.on_cmd_multicore(rx, mut sat, 1, import_buf, 65)
+				}
+				u32(0x7e6) { tm.on_dump_fc(loom_t1, rx) } // trace.dump_fc
+				else {}
+			}
+		}
+		for ch.tx_ready() && tm.produce(loom_t1, mut txf) {
+			ch.send(txf)
+		}
+		now := osal.now_us()
+		if now - last_telem >= 500000 && ch.tx_ready() {
+			last_telem = now
+			mut load := [8]u16{}
+			load[0] = u16(osal.scratch_get(0))
+			load[1] = u16(osal.scratch_get(1))
+			frame := telem.encode_cpuload(load, 2)
+			mut cf := can.Frame{
+				id:  u32(0x7e0)
+				len: 8
+			}
+			for j in 0 .. 8 {
+				cf.data[j] = frame[j]
+			}
+			ch.send(cf)
+		}
 		osal.sleep_us(1000)
 	}
 }
 
-struct Bridge_can0_state {
-mut:
-	chan can.Channel
-}
-
-pub fn partition_can0(ch can.Channel) {
-	osal.pin_to_core(0)
-	mut st := Bridge_can0_state{
-		chan: ch
+pub fn run(chp can.Channel) {
+	// run() owns these and waits on both threads below, so they outlive every use.
+	mut sat_ring := [64]trace.Record{}
+	mut sat_buf := trace.new_buffer(&sat_ring[0], 64, .ring, 50)
+	sat_buf.start()
+	mut sat_cap := trace.Capture{
+		buf:       &sat_buf
+		start:     osal.now_us()
+		id_base:   2
+		budget_us: 500
 	}
-	mut sched := loom.Scheduler{}
-	for {
-		loom_t0 := osal.now_us()
-		mut rx := can.Frame{}
-		for st.chan.recv(mut rx) {
-			// no consumer yet: the trace module that serves this bus is not
-			// generated for this shape (#191). Draining keeps the queue clear —
-			// an unread rx queue backs up on a real driver.
-		}
-		loom_t1 := osal.now_us()
-		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
-		osal.scratch_set(2, u64(sched.load_permille()))
-		osal.sleep_us(1000)
-	}
-}
-
-fn partition_telem() {
-	osal.pin_to_core(0)
-	mut c := can.Channel{}
-	if !c.open('vcan0', false) {
-		return
-	}
-	for {
-		mut load := [8]u16{}
-		load[0] = u16(osal.scratch_get(1)) + u16(osal.scratch_get(2))
-		load[1] = u16(osal.scratch_get(0))
-		frame := telem.encode_cpuload(load, 2)
-		mut f := can.Frame{
-			id:  u32(0x7e0)
-			len: 8
-		}
-		for i in 0 .. 8 {
-			f.data[i] = frame[i]
-		}
-		c.send(f)
-		osal.sleep_us(500000)
-	}
-}
-
-pub fn run(can0 can.Channel) {
-	t_can0 := spawn partition_can0(can0)
-	t_sense := spawn partition_sense(0, unsafe { nil })
-	t_ctrl := spawn partition_ctrl(1, unsafe { nil })
-	t_telem := spawn partition_telem()
-	t_can0.wait()
-	t_sense.wait()
+	// staging for the imported window (caller-owned, per set_remote): +1 for the leading
+	// core-offset record load_remote_buffer may prepend.
+	mut import_ring := [65]trace.Record{}
+	t_ctrl := spawn partition_ctrl(&sat_cap)
+	t_sense := spawn partition_sense(chp, &sat_buf, unsafe { &import_ring[0] })
 	t_ctrl.wait()
-	t_telem.wait()
+	t_sense.wait()
 }

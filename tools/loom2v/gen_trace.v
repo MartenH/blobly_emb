@@ -468,3 +468,164 @@ fn trace_shape_of(m Model, trace_bus string) ecumodel.TraceShape {
 fn trace_shape_blocker(m Model, trace_bus string) string {
 	return ecumodel.trace_shape_blocker(trace_shape_of(m, trace_bus))
 }
+
+// handler_id_base returns the GLOBAL fb id of a partition's first handler — the same numbering
+// emit_manifest assigns (partition -> fb -> handler, in [[partition]] declaration order), so a
+// Capture's id_base makes its records resolve to the manifest rows the host already has.
+fn handler_id_base(m Model, doc toml.Doc, part string) u32 {
+	mut hid := u32(0)
+	for p in ecumodel.toml_arr(doc, 'partition') {
+		pname := (p.as_map()['name'] or { toml.Any('') }).string()
+		if pname == part {
+			return hid
+		}
+		for c in m.part.by_part[pname] {
+			cm := c.as_map()
+			hid += u32((cm['handler'] or { toml.Any([]toml.Any{}) }).array().len)
+		}
+	}
+	return hid
+}
+
+// emit_run_trace_multicore emits the P3a host multi-core runner (docs/trace-multicore.md §3):
+// TWO partitions on two cores, each capturing into its OWN ring, one dump owner.
+//
+// The owner is the app partition on the trace bus's core — NOT a separate bus thread. That is the
+// whole reason this shape works with the platform as it stands: the owner's ring is then genuinely
+// local (m.buf), so handle_cmd's arm/stop/dump and the status counts apply to a real producing
+// ring rather than to a staging copy, and only the SATELLITE needs importing. A separate owner
+// thread would make both cores remote and force the protocol's state reporting to be re-derived
+// here, in generated code — exactly what docs/com-modules.md keeps in the platform.
+//
+// run() OWNS the satellite's ring, its capture context and the import staging, and passes them in;
+// it then waits on both threads, so they outlive every use. Deliberately not __global: the host
+// examples build without -enable-globals, and a global would need runtime assignment anyway to
+// stay clear of the _vinit trap (scripts/lint_vinit.sh, emb#134). Two threads touch the ring —
+// the satellite writes, the owner reads under the freeze on_cmd_multicore applies — so it is one
+// writer and one reader, never a shared write path.
+fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string, telem_iface string, owner string, sat string) []string {
+	if m.trace.level != 'fb' {
+		panic('loom2v: [trace] level "${m.trace.level}" is not generated for the host multi-core ' +
+			'runner — a polled host superloop has no preemptive thread or ISR events to capture, ' +
+			'so it records FB dispatches (level = "fb")')
+	}
+	mode := if m.trace.mode == 'oneshot' { '.oneshot' } else { '.ring' }
+	cap := m.trace.buffer_records
+	sat_core := m.part.core_of[sat] or { 0 }
+	owner_core := m.part.core_of[owner] or { 0 }
+	telem_on := m.telem.on && telem_iface != ''
+	mut g := []string{}
+
+	// --- the satellite partition: its own ring, no bus ---
+	g << ''
+	g << '// The satellite core: it pushes FB records into the ring run() handed it, and never'
+	g << '// touches the bus. The owner reads that ring only while it is frozen.'
+	g << 'pub fn partition_${sat}(cap_ptr &trace.Capture) {'
+	g << '	osal.pin_to_core(${sat_core})'
+	g << '	mut st := Partition_${sat}_state{}'
+	g << '	mut sched := loom.Scheduler{}'
+	for r in all_regs[sat] or { []string{} } {
+		g << r
+	}
+	g << '	sched.set_trace_hook(trace.fb_hook, voidptr(cap_ptr))'
+	g << '	for {'
+	g << '		loom_t0 := osal.now_us()'
+	g << '		sched.run_profiled(osal.now_us)'
+	g << '		loom_t1 := osal.now_us()'
+	g << '		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
+	g << '		osal.scratch_set(${sat_core}, u64(sched.load_permille()))'
+	g << '		osal.sleep_us(1000)'
+	g << '	}'
+	g << '}'
+
+	// --- the owner partition: its own handlers, its own ring, and the bus ---
+	g << ''
+	g << '// The dump owner: an ordinary app partition that also owns the trace bus. Its ring is'
+	g << '// the module\'s OWN buffer, so commands and status apply to a real producing ring.'
+	g << 'pub fn partition_${owner}(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record) {'
+	g << '	osal.pin_to_core(${owner_core})'
+	g << '	mut ch := chp'
+	g << '	mut sat := unsafe { sat_buf }'
+	g << '	mut st := Partition_${owner}_state{}'
+	g << '	mut sched := loom.Scheduler{}'
+	for r in all_regs[owner] or { []string{} } {
+		g << r
+	}
+	g << '	mut ring := [${cap}]trace.Record{}'
+	g << '	mut tm := trace.new_module(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), ${owner_core}, ${m.trace.dump_fc_bound},'
+	g << '		trace.new_buffer(&ring[0], ${cap}, ${mode}, ${m.trace.pre_pct}))'
+	g << '	mut cap := tm.capture(${handler_id_base(m, doc, owner)}, ${m.trace.budget_us}, osal.now_us())'
+	g << '	sched.set_trace_hook(trace.fb_hook, &cap)'
+	g << '	// both rings record from startup, like the satellite\'s below — a flight recorder that'
+	g << '	// waits for a host to arm it has nothing to say about the boot it was installed to watch.'
+	g << '	tm.arm()'
+	if telem_on {
+		g << '	mut last_telem := u64(0)'
+	}
+	g << '	mut rx := can.Frame{}'
+	g << '	mut txf := can.Frame{}'
+	g << '	for {'
+	g << '		loom_t0 := osal.now_us()'
+	g << '		sched.run_profiled(osal.now_us)'
+	g << '		loom_t1 := osal.now_us()'
+	g << '		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
+	g << '		osal.scratch_set(${owner_core}, u64(sched.load_permille()))'
+	g << '		for ch.recv(mut rx) {'
+	g << '			match rx.id {'
+	g << '				u32(0x${m.trace.cmd_id.hex()}) { // trace.cmd — applied to BOTH cores'
+	g << '					tm.on_cmd_multicore(rx, mut sat, ${sat_core}, import_buf, ${cap + 1})'
+	g << '				}'
+	if m.trace.dump_fc_bound {
+		g << '				u32(0x${m.trace.dump_fc_id.hex()}) { tm.on_dump_fc(loom_t1, rx) } // trace.dump_fc'
+	}
+	g << '				else {}'
+	g << '			}'
+	g << '		}'
+	g << '		for ch.tx_ready() && tm.produce(loom_t1, mut txf) {'
+	g << '			ch.send(txf)'
+	g << '		}'
+	if telem_on {
+		g << '		now := osal.now_us()'
+		g << '		if now - last_telem >= ${m.telem.period_us} && ch.tx_ready() {'
+		g << '			last_telem = now'
+		g << '			mut load := [8]u16{}'
+		g << '			load[0] = u16(osal.scratch_get(${owner_core}))'
+		g << '			load[1] = u16(osal.scratch_get(${sat_core}))'
+		g << '			frame := telem.encode_cpuload(load, 2)'
+		g << '			mut cf := can.Frame{'
+		g << '				id:  u32(0x${m.telem.id.hex()})'
+		g << '				len: 8'
+		g << '			}'
+		g << '			for j in 0 .. 8 {'
+		g << '				cf.data[j] = frame[j]'
+		g << '			}'
+		g << '			ch.send(cf)'
+		g << '		}'
+	}
+	g << '		osal.sleep_us(1000)'
+	g << '	}'
+	g << '}'
+
+	// --- run(): own the shared ring, then spawn both cores ---
+	g << ''
+	g << 'pub fn run(chp can.Channel) {'
+	g << '	// run() owns these and waits on both threads below, so they outlive every use.'
+	g << '	mut sat_ring := [${cap}]trace.Record{}'
+	g << '	mut sat_buf := trace.new_buffer(&sat_ring[0], ${cap}, ${mode}, ${m.trace.pre_pct})'
+	g << '	sat_buf.start()'
+	g << '	mut sat_cap := trace.Capture{'
+	g << '		buf:       &sat_buf'
+	g << '		start:     osal.now_us()'
+	g << '		id_base:   ${handler_id_base(m, doc, sat)}'
+	g << '		budget_us: ${m.trace.budget_us}'
+	g << '	}'
+	g << '	// staging for the imported window (caller-owned, per set_remote): +1 for the leading'
+	g << '	// core-offset record load_remote_buffer may prepend.'
+	g << '	mut import_ring := [${cap + 1}]trace.Record{}'
+	g << '	t_${sat} := spawn partition_${sat}(&sat_cap)'
+	g << '	t_${owner} := spawn partition_${owner}(chp, &sat_buf, unsafe { &import_ring[0] })'
+	g << '	t_${sat}.wait()'
+	g << '	t_${owner}.wait()'
+	g << '}'
+	return g
+}
