@@ -113,3 +113,28 @@ fn (mut t Capture) sync_freeze(this_ring_tripped bool) {
 		t.buf.trigger()
 	}
 }
+
+// note_thread records ONE busy span of a thread that dispatches no FB handlers — the COM bridge
+// (P3b, docs/trace-multicore.md §4.1), whose work is codec/ISO-TP drain rather than handlers, so
+// fb_hook never fires for it and its lane would otherwise be empty.
+//
+// Same epoch discipline as fb_hook, and for the same reason: start_us is a u24 of elapsed µs, so
+// the ring must be re-anchored before it wraps or every later record decodes against a lost base.
+// Duplicated deliberately rather than factored — fb_hook is called from the Loom's hook signature
+// and this from a plain loop, and collapsing them would mean a shared mutable helper on the one
+// path that must stay allocation- and branch-free.
+pub fn (mut t Capture) note_thread(tid u16, reason u8, start_us u64, dt_us u64) {
+	elapsed := start_us - t.start
+	if elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor
+		t.base = elapsed
+		t.buf.push(new_epoch(u32(elapsed)))
+	}
+	mut dt := dt_us
+	if dt > 0xFFFF {
+		dt = 0xFFFF // clamp to the u16 field; a span this long is already an anomaly
+	}
+	t.buf.push(new_thread(tid, reason, u32(elapsed - t.base), u16(dt)))
+	if t.budget_us > 0 && dt_us > t.budget_us && t.buf.state() == .capturing {
+		t.buf.trigger() // a drain cycle over budget freezes this ring, like an overrunning handler
+	}
+}
