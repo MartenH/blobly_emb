@@ -53,6 +53,11 @@ pub fn (mut m TraceModule) capture(id_base u32, budget_us u32, now_us u64) Captu
 pub fn fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	mut t := unsafe { &Capture(ctx) }
 	t.fb_count++
+	// The capturing test is taken AT ENTRY — before EITHER push below. Both can retire the
+	// ring mid-hook: the FB record can fill a oneshot's final slot, and so can the epoch
+	// re-anchor a u24 wrap inserts first (codex #271 r4+r6) — judged after, the overrun that
+	// did it read as not-a-trip and the peer was never told.
+	was_capturing := t.buf.state() == .capturing
 	elapsed := start_us - t.start
 	if elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor
 		t.base = elapsed
@@ -70,11 +75,6 @@ pub fn fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	if over {
 		flags |= flag_overran
 	}
-	// The capturing test comes BEFORE the push: a oneshot whose final free slot this very
-	// record fills goes .full inside push(), and judged after, the overrun that filled it
-	// read as not-a-trip — the ring kept its own cause but the peer was never told (codex
-	// #271 r3). Judged before trigger() too, for the same reason in the other direction.
-	was_capturing := t.buf.state() == .capturing
 	t.buf.push(new_fb(u16(t.id_base + u32(idx)), flags, u32(elapsed - t.base), u16(dt)))
 	// A trip is an overrun ON A CAPTURING RING. A ring the host already stopped is not
 	// tripping: raising the shared freeze for it would hand a phantom freeze_trigger to a

@@ -11,7 +11,8 @@
 > A command selecting both cores also answers with ONE `TraceRsp` — the owner's (a per-core
 > response pair would need a response queue). The dump block header carries only (core, count,
 > more), so core 1's state is read by addressing it alone: mask `0x0002` answers with the
-> satellite's own `TraceRsp`.
+> satellite's own `TraceRsp`. And a dump serves only STOPPED windows: rings still capturing
+> answer `result_not_ready` — freeze them first, by the glitch trigger firing or by `stop`.
 
 Two partitions on two cores (`sense` on core 0, `ctrl` on core 1), each a pure-compute Loom, both
 traced. Everything is generated from [`ecu.toml`](ecu.toml) by loom2v — the per-core capture rings,

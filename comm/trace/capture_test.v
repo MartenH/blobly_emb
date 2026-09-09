@@ -108,3 +108,25 @@ fn test_an_overrun_filling_a_oneshots_final_slot_still_raises_the_cell() {
 	// its TraceRsp is how the host tells a triggered dump from a completed one
 	assert buf.froze_cause() == freeze_trigger
 }
+
+fn test_an_epoch_consuming_the_final_slot_does_not_hide_the_trip() {
+	// a u24 wrap makes the hook push an epoch BEFORE the FB record; on a oneshot with one
+	// slot left that epoch completes the ring mid-hook, the FB record is dropped — and the
+	// over-budget dispatch that arrived must still raise the cell and stamp the trigger
+	// (codex #271 r6: the capturing test is taken at hook ENTRY, before either push)
+	mut cell := u32(0)
+	mut ring := [4]Record{}
+	mut buf := new_buffer(&ring[0], 4, .oneshot, 100)
+	buf.start()
+	mut c := Capture{
+		buf: &buf
+		budget_us: 100
+		freeze: &cell
+	}
+	fb_hook(voidptr(&c), 0, 0, 10)
+	fb_hook(voidptr(&c), 1, 0, 10)
+	fb_hook(voidptr(&c), 2, 0, 10) // three records: one slot left
+	fb_hook(voidptr(&c), 3, 0x0100_0001, 500) // u24 wrap -> epoch fills the ring, and over budget
+	assert cell == 1
+	assert buf.froze_cause() == freeze_trigger
+}
