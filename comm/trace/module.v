@@ -242,7 +242,7 @@ pub fn (mut m TraceModule) set_freeze(cell &u32) {
 // host just armed — and an arm addressed to one core alone would never clear it at all.
 fn (mut m TraceModule) retire_freeze() {
 	if m.freeze != unsafe { nil } {
-		C.__atomic_store_4(m.freeze, 0, 5)
+		C.atomic_store_u32(voidptr(m.freeze), 0)
 	}
 }
 

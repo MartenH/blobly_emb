@@ -1,14 +1,14 @@
 module trace
 
 // The shared freeze cell is written by whichever core trips and cleared by the owner, so its
-// accesses go through the compiler's atomic builtins — a plain load can be hoisted out of the
-// hook by an optimising build and a plain store reordered past the ring trigger, and "aligned
-// is single-copy atomic" says nothing about either. 4-byte atomics are lock-free inline on
-// every target this compiles for (host and ARMv7-M), so this adds no dependency and no lock.
-// 5 = __ATOMIC_SEQ_CST: the cell is a once-per-dispatch flag, not a hot path.
-fn C.__atomic_load_4(&u32, int) u32
-
-fn C.__atomic_store_4(&u32, u32, int)
+// accesses go through atomics — a plain load can be hoisted out of the hook by an optimising
+// build and a plain store reordered past the ring trigger, and "aligned is single-copy atomic"
+// says nothing about either. The operations are V's OWN portable atomic ABI
+// (sync.stdatomic's C.atomic_load_u32 / C.atomic_store_u32, seq_cst — carried by V's
+// compiler-compat headers for every C backend V supports), not a compiler-private symbol, so
+// this layer stays platform-independent (codex #271 r5). Lock-free inline on host and
+// ARMv7-M; the import exists to bring that header in — nothing else of the module is used.
+import sync.stdatomic as _
 
 // The FB enter/exit hook — the platform side of "hooks record, the module serves the bus"
 // (docs/com-modules.md). The Loom's run_profiled calls fb_hook once per dispatched handler
@@ -104,10 +104,10 @@ fn (mut t Capture) sync_freeze(this_ring_tripped bool) {
 		return
 	}
 	if this_ring_tripped {
-		C.__atomic_store_4(t.freeze, 1, 5)
+		C.atomic_store_u32(voidptr(t.freeze), 1)
 		return
 	}
-	if C.__atomic_load_4(t.freeze, 5) != 0 {
+	if C.atomic_load_u32(voidptr(t.freeze)) != 0 {
 		t.buf.trigger()
 	}
 }
