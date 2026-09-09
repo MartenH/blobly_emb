@@ -1,13 +1,16 @@
 # Multi-core + comm-thread trace — design draft
 
-> **Status: P3a is GENERATED again (#191) — `examples/trace_multicore` answers a two-core dump on
-> vcan, verified end to end (four ISO-TP transfers: core 0's window as 64+2 records in two
-> self-describing continuation blocks, then core 1's). P3b (different-bus, #60) and P3c-0
-> (bare-metal single-core) remain regressed in generation and are `enabled = false`. P3c-1 (real
-> thread/ISR capture) is the larger remaining slice.**
+> **Status: P3a and P3b are GENERATED (#191).** `examples/trace_multicore` answers a two-core
+> dump on vcan, verified end to end (four ISO-TP transfers: core 0's window as 64+2 records in two
+> self-describing continuation blocks, then core 1's). `examples/trace_comm` answers the
+> BRIDGE-OWNER shape: core 0's block carries the `comm_can0` lane as THREAD spans, core 1's the
+> app partition's FB spans. P3c-0 (bare-metal single-core) is still regressed and `enabled =
+> false`; P3c-1 (real thread/ISR capture) is the larger remaining slice.
 >
-> **WHAT GENERATES TODAY (#191).** loom2v emits the host trace runner for ONE partition
-> (single-core) and for TWO (P3a, this document's §3 — one dump owner plus one satellite core).
+> **WHAT GENERATES TODAY (#191).** loom2v emits a host trace runner for ONE partition
+> (single-core), for TWO (P3a, this document's §3 — one dump owner plus one satellite core), and
+> for a COM BRIDGE plus one app partition (P3b, §4.2 — the bridge owns the trace bus and the
+> module, its drain spans recorded through `trace.thread_hook`).
 > `examples/trace_multicore` is the two-core case and answers a dump again. Three partitions are
 > refused, and so are the shapes still ungenerated — `examples/trace_comm` (a COM bridge, whose
 > plain `run()` the trace-host runner would replace) and the bare-metal `h735_app` — which carry
@@ -169,6 +172,15 @@ own trigger counter on an overrun (a comm cycle over budget), and it applies rou
 freeze commands to its OWN ring in its loop.
 
 ### 4.2 Core + ring model
+
+**SHIPPED (#191 P3b, the different-bus slice):** `examples/trace_comm` generates it — the COM
+bridge partition owns the trace bus and the module (`TraceHostCtx` in loom2v), its drain spans
+land through `trace.thread_hook`, and the app partition is the satellite imported on dump. The
+shape's limits are `ecumodel.trace_shape_blocker`'s, not prose: the bridge may not ride the trace
+bus itself (the same-bus piggyback below), there is one bridge bus and one app partition, and they
+sit on distinct cores because a dump block header carries a core id. A two-lane dump also requires
+`[trace].dump_fc` — only the ISO-TP block path carries a per-window header, so the raw record
+stream would dump the owner's ring and drop the satellite's silently.
 
 The per-core registry (`rings[ncores]`) now indexes **app partitions AND comm threads** by core.
 Keep the P3a invariant: **one traced entity per core, dense 0..N-1**. Typical layout — the comm

@@ -1,8 +1,9 @@
 # Comm-thread trace demo (P3b) — fully generated from ecu.toml (loom2v). Generation + build + clean
 # come from examples/common.mk; only the vcan bring-up (TWO buses) + watch are here. Sim-first:
 # `make vcan` once, then `make run`. blobly_net decodes the fixed protocol natively from
-# gen/trace-manifest.csv — its handler/thread rows are generated; the trace DUMP for this shape is
-# not, so `[trace]` is `enabled = false` and the manifest carries no trace frame rows (#191).
+# gen/trace-manifest.csv — handler rows, the `app_main` and `comm_can0` thread rows, and the trace
+# frame rows (cmd/rsp/record/dump_fc). A stop+dump on can1 answers TWO blocks: core 0 is the
+# bridge's own drain spans, core 1 the app partition's FB spans (#191 P3b).
 REPO ?= ../..
 include $(REPO)/examples/common.mk
 

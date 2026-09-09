@@ -12,6 +12,7 @@ fn test_a_signal_less_trace_bus_still_needs_an_owner() {
 		trace: TraceCfg{
 			on:  true
 			bus: 'can1'
+			dump_fc_bound: true
 		}
 	}
 	assert bus_hosts_modules(m, 'can1', false), 'the trace bus was left with nobody to own it'
@@ -62,6 +63,7 @@ fn test_the_trace_host_runner_owns_its_bus_alone() {
 		trace: TraceCfg{
 			on:  true
 			bus: 'can0'
+			dump_fc_bound: true
 		}
 	}
 	assert !bus_hosts_modules(m, 'can0', true)
@@ -75,6 +77,7 @@ fn test_a_target_owns_its_bus_without_a_host_bridge() {
 		trace:  TraceCfg{
 			on:  true
 			bus: 'can0'
+			dump_fc_bound: true
 		}
 		target: TargetCfg{
 			on: true
@@ -93,6 +96,7 @@ fn test_a_trace_only_module_host_still_imports_the_can_driver() {
 		trace: TraceCfg{
 			on:  true
 			bus: 'can0'
+			dump_fc_bound: true
 		}
 	}
 	m.buses["can0"] = true
@@ -110,6 +114,7 @@ fn test_the_supported_shape_has_no_blocker() {
 		trace: TraceCfg{
 			on:  true
 			bus: 'can0'
+			dump_fc_bound: true
 		}
 		part: PartMap{
 			by_part: {
@@ -126,6 +131,7 @@ fn test_two_partitions_are_the_multicore_shape() {
 		trace: TraceCfg{
 			on:  true
 			bus: 'can0'
+			dump_fc_bound: true
 		}
 		part:  PartMap{
 			by_part: {
@@ -144,6 +150,7 @@ fn test_a_third_partition_blocks_trace() {
 		trace: TraceCfg{
 			on:  true
 			bus: 'can0'
+			dump_fc_bound: true
 		}
 		part:  PartMap{
 			by_part: {
@@ -163,6 +170,7 @@ fn test_the_baremetal_superloop_blocks_trace() {
 		trace:  TraceCfg{
 			on:  true
 			bus: 'can0'
+			dump_fc_bound: true
 		}
 		target: TargetCfg{
 			on: true
@@ -185,6 +193,7 @@ fn test_a_bridge_on_another_bus_is_the_bridge_owner_shape() {
 		trace:       TraceCfg{
 			on:  true
 			bus: 'can1'
+			dump_fc_bound: true
 		}
 		has_can_ext: true
 		sig_of:      {
@@ -216,6 +225,7 @@ fn test_a_bridge_riding_the_trace_bus_blocks_trace() {
 		trace:       TraceCfg{
 			on:  true
 			bus: 'can0'
+			dump_fc_bound: true
 		}
 		has_can_ext: true
 		sig_of:      {
@@ -247,6 +257,7 @@ fn test_a_bridge_sharing_the_traced_apps_core_blocks_trace() {
 		trace:       TraceCfg{
 			on:  true
 			bus: 'can1'
+			dump_fc_bound: true
 		}
 		has_can_ext: true
 		sig_of:      {
@@ -279,6 +290,7 @@ fn test_a_bridge_off_the_trace_bus_core_blocks_trace() {
 		trace:       TraceCfg{
 			on:  true
 			bus: 'can1'
+			dump_fc_bound: true
 		}
 		has_can_ext: true
 		sig_of:      {

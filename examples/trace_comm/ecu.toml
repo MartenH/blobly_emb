@@ -31,10 +31,10 @@ id        = 0x7E0
 period_ms = 500
 
 [trace]
-# NOT GENERATED on this ECU (#191): this ECU has a COM bridge, and the trace-host
-# runner replaces the plain run() that drives it. The dedicated can1 trace bus below
-# is what the example is FOR — it comes back when that shape is generated.
-enabled        = false
+# The BRIDGE-OWNER shape (#191 P3b): the can0 bridge partition owns this bus and the
+# TraceModule, and records its own drain spans (thread_hook) — the comm_can0 lane this
+# example is named for. The app partition on core 1 is the satellite, imported on dump.
+enabled        = true
 bus            = "can1"        # the dedicated trace bus (no bridge) — different-bus P3b
 level          = "thread+fb"
 buffer_records = 64
@@ -44,6 +44,10 @@ push_ms        = 0
 cmd            = 0x7E2
 rsp            = 0x7E3
 record         = 0x7E5
+# A two-lane dump (the bridge owner + the app satellite) needs the ISO-TP block path: only its
+# block header carries the core each window came from, and the raw stream would dump the
+# owner's ring alone.
+dump_fc        = 0x7E6
 trigger        = { source = "overrun", budget_us = 500 }
 
 # One app partition on its own core (core 1); the comm thread (can0 bridge) sits on core 0.

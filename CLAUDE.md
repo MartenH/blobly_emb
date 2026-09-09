@@ -70,23 +70,29 @@ examples`, per-example host builds with generation, and a repo-wide **"Generated
 fresh"** gate. The last one is the usual surprise: a stale committed `gen/` output passes every
 local command and fails CI. Re-run generation before opening the PR.
 
-**Which `[trace]` shapes generate.** loom2v emits the host trace runner for **one** partition
-(single-core, `examples/trace_demo`) and for **two** (`examples/trace_multicore`, #270 — one dump
-owner plus one satellite core, with a system-wide freeze so both windows cover the same instant).
-An enabled `[trace]` on any other shape **fails generation** rather than warning and building a
-silent no-op, naming the one condition that tripped: partition count (three has no import slot —
-`TraceModule` holds exactly one satellite), a bare-metal target, an eth trace bus, or a COM bridge
-whose plain `run()` the trace-host runner would replace. So a config either gets trace or gets an
-error. Still `enabled = false` with a comment, both awaiting #191's remaining slices:
-`examples/trace_comm` (P3b, the COM-bridge shape) and `examples/h735_app` (P3c-0, bare-metal);
-their manifests advertise no ids nothing answers.
+**Which `[trace]` shapes generate.** loom2v emits a host trace runner for **one** partition
+(single-core, `examples/trace_demo`), for **two** (`examples/trace_multicore`, #270 — one dump
+owner plus one satellite core, with a system-wide freeze so both windows cover the same instant),
+and for a **COM bridge plus one app partition** (`examples/trace_comm`, #191 P3b — the bridge
+owns the trace bus and the module, the app partition is the satellite). An enabled `[trace]` on
+any other shape **fails generation** rather than warning and building a silent no-op, naming the
+one condition that tripped: partition count (three has no import slot — `TraceModule` holds
+exactly one satellite), a bare-metal target, an eth trace bus, a bridge riding the trace bus
+itself (the same-bus piggyback), a second bridge bus, a bridge sharing a core with the traced app
+partition (a dump block header carries a core id, so two lanes on one core are indistinguishable),
+or a two-lane trace with no `dump_fc` — only the ISO-TP block path carries a per-window header, so
+the raw record stream would dump the owner's ring and drop the satellite's in silence. So a config
+either gets trace or gets an error. `examples/h735_app` (P3c-0, bare-metal) is the slice still
+`enabled = false`.
 
-The dump owner is an **app partition**, never a separate bus thread — that is what keeps the
-protocol in the platform: the owner's ring is then `TraceModule`'s own buffer, so `handle_cmd`'s
-arm/stop/dump and the status counts act on a real producing ring and only the satellite is
-imported. And note `run_profiled()` **accounts the pass itself**; a generated loop that calls
+The dump owner is an **app partition — or the COM bridge that owns the trace bus** (P3b), never a
+separate bus thread — that is what keeps the protocol in the platform: the owner's ring is then
+`TraceModule`'s own buffer, so `handle_cmd`'s arm/stop/dump and the status counts act on a real
+producing ring and only the satellite is imported. A bridge owner's lane comes from
+`trace.thread_hook` (`note_thread`): it dispatches a COM drain, not FB handlers, so `fb_hook`
+never fires for it and its swimlane would otherwise be empty. And note `run_profiled()` **accounts the pass itself**; a generated loop that calls
 `sched.account()` after it charges every pass twice (that bug reached `trace_demo`, fixed in #270).
-#191 is open for the generator wiring — the platform side (`comm/trace`) never lost it. Note the
+Note the
 host still fills absent manifest frame rows with 0x7E2..0x7E6 defaults (#252 item 2), so "no rows"
 does not yet read as "no trace" on the blobly_net side.
 

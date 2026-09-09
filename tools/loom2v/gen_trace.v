@@ -460,8 +460,8 @@ fn trace_fb_install(m Model) []string {
 // the predicate and the error message together.
 fn trace_shape_of(m Model, trace_bus string) ecumodel.TraceShape {
 	bridged := bridge_can_buses(m)
-	mut clash := false
 	tb_core := m.bus_core[trace_bus] or { 0 }
+	mut clash := false // a bridge on a traced app partition's core
 	for pn in m.part.by_part.keys() {
 		for b in bridged {
 			if (m.part.core_of[pn] or { 0 }) == (m.bus_core[b] or { 0 }) {
@@ -469,11 +469,10 @@ fn trace_shape_of(m Model, trace_bus string) ecumodel.TraceShape {
 			}
 		}
 	}
-	// the bridge-owner loop also serves the trace bus, so the bridge's core must BE the trace
-	// bus's core — a bridge elsewhere would leave the trace bus with no loop to serve it
+	mut off_core := false // a bridge that is not on the trace bus's core
 	for b in bridged {
 		if (m.bus_core[b] or { 0 }) != tb_core {
-			clash = true // same refusal: the shape has no single owner core
+			off_core = true
 		}
 	}
 	return ecumodel.TraceShape{
@@ -484,7 +483,11 @@ fn trace_shape_of(m Model, trace_bus string) ecumodel.TraceShape {
 		has_bridge:          m.has_can_ext || m.isotp_conns.len > 0 || m.routes.len > 0
 		bridge_on_trace_bus: trace_bus in bridged
 		bridge_core_clash:   clash
+		bridge_off_trace_core: off_core
 		bridge_count:        bridged.len
+		multi_lane:          m.part.by_part.keys().len == 2 || (bridged.len == 1
+			&& m.part.by_part.keys().len == 1)
+		dump_fc_bound:       m.trace.dump_fc_bound
 	}
 }
 
@@ -755,4 +758,190 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '	t_${owner}.wait()'
 	g << '}'
 	return g
+}
+
+// TraceHostCtx carries the bridge-owner wiring through the emitters that must agree about it: the
+// bridge partition (which gains the trace bus and the module), the trace bus itself (a run()
+// parameter with NO partition of its own — the owner drains it) and the satellite app partition.
+// An empty owner_bus means this ECU is not the P3b shape and every use below is inert.
+struct TraceHostCtx {
+	owner_bus string
+	trace_bus string
+	sat       string
+	sat_core  int
+}
+
+fn (c TraceHostCtx) on() bool {
+	return c.owner_bus != ''
+}
+
+// --- P3b: the host bridge-owner runner ---------------------------------------------------------
+//
+// The COM bridge partition owns the trace bus AND the TraceModule; the single app partition is the
+// satellite whose ring is imported on dump. It is the multicore owner with different work in its
+// loop: the owner dispatches a COM drain rather than FB handlers, so its lane comes from
+// trace.thread_hook (note_thread) instead of fb_hook — the whole point of P3b, since fb_hook never
+// fires for a bridge and its lane would be empty (docs/trace-multicore.md §4.1).
+//
+// Which shapes reach here is ecumodel.trace_shape_blocker's answer, not a second opinion.
+
+// trace_owner_bus names the bridge bus that owns the module in this shape, or '' when the ECU is
+// not the bridge-owner shape at all.
+fn trace_owner_bus(m Model, trace_bus string) string {
+	if !m.trace.on || trace_shape_blocker(m, trace_bus) != '' {
+		return ''
+	}
+	buses := bridge_can_buses(m)
+	if buses.len != 1 {
+		return '' // no bridge (the app-partition runners) — or refused above
+	}
+	return buses[0]
+}
+
+// host_comm_tid is the manifest thread id of a host bridge's comm_<bb> lane — the id_base the
+// owner's capture stamps into its thread records, so the dump resolves to the row emit_manifest
+// wrote. MIRRORS that numbering for the shapes that reach the bridge-owner runner (never ThreadX,
+// so no comm / io / eth / kernel-timer rows precede the bridges; exactly one bridge bus): app
+// threads from 1, then the bridges. The HOST io row is written AFTER the bridge rows, so it does
+// not shift this one — trace_bridge_ids_test pins that against emit_manifest.
+fn host_comm_tid(m Model) int {
+	mut nthr := 0
+	for pn, thrs in m.part.threads_of {
+		if !m.part.external[pn] {
+			nthr += thrs.len
+		}
+	}
+	return nthr + 1
+}
+
+// validate_trace_bridge_owner: the two config keys this runner cannot honour. Both other host
+// runners reject exactly this rather than degrade in silence, which is the whole point of #191:
+// a config either gets the trace it asked for, or an error naming what tripped.
+fn validate_trace_bridge_owner(m Model) {
+	if m.trace.mode != 'ring' {
+		panic('loom2v: [trace] mode = "${m.trace.mode}" is not generated for the bridge-owner ' +
+			'runner — the owner and satellite rings are flight recorders frozen by a trigger or ' +
+			'a host stop (a completing oneshot freezes only itself, so the two lanes could not ' +
+			'be kept coherent) — use mode = "ring"')
+	}
+	if m.trace.level !in ['fb', 'thread+fb'] {
+		panic('loom2v: [trace] level = "${m.trace.level}" is not generated for the bridge-owner ' +
+			'runner — a polled host loop has no preemptive context switches or ISRs to capture: ' +
+			'it records the app partition\'s FB spans and the bridge\'s own drain spans — use ' +
+			'level = "fb" or "thread+fb"')
+	}
+}
+
+// trace_bridge_params: the owner partition's extra parameters — the trace bus channel it serves,
+// the satellite's ring + import staging, the shared capture origin and the freeze cell. Appended
+// to the bridge's own COM signature, so run() hands it both buses.
+fn trace_bridge_params() string {
+	return ', trace_ch can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &u32'
+}
+
+// trace_bridge_preamble: the owner's ring, module and capture, built once before its loop.
+fn trace_bridge_preamble(m Model, tctx TraceHostCtx) []string {
+	cap := m.trace.buffer_records
+	sat_core := tctx.sat_core
+	// The owner's core is the RESOLVED trace bus's core (tctx), not m.trace.bus — an omitted
+	// [trace].bus inherits the telemetry bus, and the raw key would miss the map and read 0,
+	// pinning the loop to one core while every core mask, TraceRsp and block header claimed
+	// another.
+	owner_core := m.bus_core[tctx.trace_bus] or { 0 }
+	mut g := []string{}
+	g << '\tmut sat := unsafe { sat_buf }'
+	g << '\tmut trace_ring := [${cap}]trace.Record{}'
+	g << '\tmut tm := trace.new_module(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), ${owner_core}, ${m.trace.dump_fc_bound},'
+	g << '\t\ttrace.new_buffer(&trace_ring[0], ${cap}, .ring, ${m.trace.pre_pct}))'
+	// The bridge's lane id is its manifest comm_<bb> row (host_comm_tid) — note_thread stamps
+	// id_base directly, where an FB capture adds the handler index to it.
+	g << '\tmut cap := tm.capture(${host_comm_tid(m)}, ${m.trace.budget_us}, origin_us)'
+	g << '\tunsafe {'
+	g << '\t\tcap.freeze = freeze // the system-wide freeze: this lane trips it, and honours it'
+	g << '\t}'
+	g << '\ttm.set_freeze(freeze) // ...and the module retires it on arm/start/reset'
+	// thread_hook, not fb_hook: every dispatch of this loop is the same entity (the bridge), so
+	// the record is a THREAD span carrying id_base, not an FB record indexed by handler.
+	g << '\tsched.set_trace_hook(trace.thread_hook, &cap)'
+	g << '\ttm.arm() // both rings record from startup — a recorder that waits to be armed has'
+	g << '\t// nothing to say about the boot it was installed to watch'
+	g << '\tmut trace_rx := can.Frame{}'
+	g << '\tmut trace_txf := can.Frame{}'
+	return g
+}
+
+// trace_bridge_loop_body: the owner's trace half, after its COM dispatch — serve the command on
+// the TRACE channel (never the COM one; the two buses are distinct in this shape) and drain
+// whatever the module has ready.
+fn trace_bridge_loop_body(m Model, sat_core int) []string {
+	cap := m.trace.buffer_records
+	mut g := []string{}
+	g << '\t\tfor trace_ch.recv(mut trace_rx) {'
+	g << '\t\t\tmatch trace_rx.id {'
+	g << '\t\t\t\tu32(0x${m.trace.cmd_id.hex()}) { // trace.cmd — the owner lane AND the satellite'
+	g << '\t\t\t\t\ttm.on_cmd_multicore(trace_rx, mut sat, ${sat_core}, import_buf, ${cap + 1})'
+	g << '\t\t\t\t}'
+	if m.trace.dump_fc_bound {
+		g << '\t\t\t\tu32(0x${m.trace.dump_fc_id.hex()}) { tm.on_dump_fc(loom_t1, trace_rx) } // ISO-TP FC'
+	}
+	g << '\t\t\t\telse {}'
+	g << '\t\t\t}'
+	g << '\t\t}'
+	g << '\t\tfor trace_ch.tx_ready() && tm.produce(loom_t1, mut trace_txf) {'
+	g << '\t\t\ttrace_ch.send(trace_txf)'
+	g << '\t\t}'
+	return g
+}
+
+// trace_sat_preamble: the satellite app partition's half — it receives its Capture through the
+// `arg voidptr` the plain host partition signature already carries, and records FB spans into the
+// ring run() gave it. Its loop dispatches profiled (trace_sat_dispatch).
+fn trace_sat_preamble() []string {
+	return [
+		// `arg` IS the Capture pointer run() passed — the hook takes a voidptr, so it goes
+		// straight through; casting it to a typed pointer first buys nothing and V reads
+		// `&trace.Capture(arg)` as the address of a conversion.
+		'\tsched.set_trace_hook(trace.fb_hook, arg)',
+	]
+}
+
+// trace_profiled_dispatch: run_profiled replaces run + account wherever a lane is traced — it
+// calls the hook per dispatch AND accounts the pass itself (a second sched.account() charged
+// every pass twice, emb#270 r2).
+fn trace_profiled_dispatch(needs_now bool) []string {
+	mut g := ['\t\tsched.run_profiled(osal.now_us)']
+	if needs_now {
+		// only the OWNER reads it afterwards (produce / on_dump_fc); emitting it in a satellite
+		// loop that has nothing after the dispatch is an unused variable.
+		g << '\t\tloom_t1 := osal.now_us()'
+	}
+	return g
+}
+
+// trace_run_setup: what run() builds before spawning either lane — one capture origin for BOTH
+// (a per-thread origin skews the lanes by the thread-start delay, invisibly), the satellite's
+// ring and capture, the import staging (+1 for the core-offset record load_remote_buffer may
+// prepend) and the shared freeze cell.
+fn trace_run_setup(m Model, sat string, doc toml.Doc) []string {
+	cap := m.trace.buffer_records
+	return [
+		'\ttrace_origin := osal.now_us()',
+		'\tmut trace_freeze := u32(0)',
+		'\tmut sat_ring := [${cap}]trace.Record{}',
+		'\tmut sat_buf := trace.new_buffer(&sat_ring[0], ${cap}, .ring, ${m.trace.pre_pct})',
+		'\tsat_buf.start()',
+		'\tmut sat_cap := trace.Capture{',
+		'\t\tbuf:       &sat_buf',
+		'\t\tstart:     trace_origin',
+		'\t\tid_base:   ${handler_id_base(m, doc, sat)}',
+		'\t\tbudget_us: ${m.trace.budget_us}',
+		'\t\tfreeze:    unsafe { &trace_freeze }',
+		'\t}',
+		'\tmut import_ring := [${cap + 1}]trace.Record{}',
+	]
+}
+
+// trace_bridge_spawn_args: what run() hands the owner beyond its own COM channels.
+fn trace_bridge_spawn_args(trace_bus string) string {
+	return ', ${snake(trace_bus)}, &sat_buf, unsafe { &import_ring[0] }, trace_origin, unsafe { &trace_freeze }'
 }

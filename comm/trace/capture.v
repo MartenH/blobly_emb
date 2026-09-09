@@ -124,6 +124,11 @@ fn (mut t Capture) sync_freeze(this_ring_tripped bool) {
 // and this from a plain loop, and collapsing them would mean a shared mutable helper on the one
 // path that must stay allocation- and branch-free.
 pub fn (mut t Capture) note_thread(tid u16, reason u8, start_us u64, dt_us u64) {
+	// The same discipline as fb_hook, span for record: the capturing test at ENTRY (either
+	// push below can retire the ring mid-call), one over-budget predicate, trip() for the
+	// stop-beats-trigger race, and the shared freeze raised/observed per span — the bridge is
+	// a first-class traced entity, so it participates in the system-wide freeze like any core.
+	was_capturing := t.buf.state() == .capturing
 	elapsed := start_us - t.start
 	if elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor
 		t.base = elapsed
@@ -134,7 +139,19 @@ pub fn (mut t Capture) note_thread(tid u16, reason u8, start_us u64, dt_us u64) 
 		dt = 0xFFFF // clamp to the u16 field; a span this long is already an anomaly
 	}
 	t.buf.push(new_thread(tid, reason, u32(elapsed - t.base), u16(dt)))
-	if t.budget_us > 0 && dt_us > t.budget_us && t.buf.state() == .capturing {
-		t.buf.trigger() // a drain cycle over budget freezes this ring, like an overrunning handler
+	over := t.budget_us > 0 && dt_us > t.budget_us
+	mut tripped := false
+	if over && was_capturing {
+		tripped = t.buf.trip() // a drain cycle over budget freezes this ring, like an overrunning handler
 	}
+	t.sync_freeze(tripped)
+}
+
+// thread_hook is note_thread as a Loom trace hook — installed by a partition whose scheduled
+// work is a platform drain rather than FB handlers (the COM bridge owner, #191 P3b). The hook's
+// idx is ignored: every dispatch is the same entity, the thread the capture's id_base names.
+pub fn thread_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
+	mut t := unsafe { &Capture(ctx) }
+	t.fb_count++
+	t.note_thread(u16(t.id_base), reason_yield, start_us, dt_us)
 }

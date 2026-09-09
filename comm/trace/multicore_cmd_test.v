@@ -228,7 +228,7 @@ fn test_a_dump_during_a_queued_stream_is_refused() {
 	}
 	m.on_cmd_multicore(cmd_frame(op_stop, 0x0003), mut sat, 1, &remote[0], 64)
 	assert m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
-	assert m.is_streaming(), 'precondition: a dump is queued'
+	assert m.is_dumping(), 'precondition: a dump is queued'
 	// drain the first dump's response the way the bus loop does each pass, so the busy answer
 	// below is not refused by queue_rsp's don't-overwrite rule
 	mut f := can.Frame{}
@@ -288,7 +288,7 @@ fn test_a_two_core_dump_with_one_ring_capturing_is_refused_whole() {
 	assert m.produce(0, mut drain) // the bus loop drains the stop's own response every pass
 	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
 	assert !imported
-	assert !m.is_streaming(), 'the owner half streamed alone — a partial two-core dump'
+	assert !m.is_dumping(), 'the owner half streamed alone — a partial two-core dump'
 	// ...and the refusal names the core that was not ready
 	mut f := can.Frame{}
 	assert m.produce(0, mut f)

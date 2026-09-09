@@ -74,6 +74,28 @@ static ioc_shared_t *g_shared = &g_static; /* single-process default; AMP swaps 
 #define g_db  (g_shared->db)
 #define g_db2 (g_shared->db2)
 
+/* GCC's memory-order macros, when nothing else supplied them. This file uses the __atomic_*
+ * builtins, whose orders normally arrive with the system <stdatomic.h>; TinyCC ships no
+ * __ATOMIC_* macros of its own (vlib/sync/stdatomic/tcc_compat_restore.h says so), so a
+ * translation unit that also pulls V's stdatomic compat headers — any image whose V code
+ * imports sync.stdatomic, e.g. a traced ECU — loses them and fails with '__ATOMIC_RELAXED'
+ * undeclared. The values are C11's memory_order numbering, which the builtins share. */
+#ifndef __ATOMIC_RELAXED
+#define __ATOMIC_RELAXED 0
+#endif
+#ifndef __ATOMIC_ACQUIRE
+#define __ATOMIC_ACQUIRE 2
+#endif
+#ifndef __ATOMIC_RELEASE
+#define __ATOMIC_RELEASE 3
+#endif
+#ifndef __ATOMIC_ACQ_REL
+#define __ATOMIC_ACQ_REL 4
+#endif
+#ifndef __ATOMIC_SEQ_CST
+#define __ATOMIC_SEQ_CST 5
+#endif
+
 /* Triple-buffer indices must start as a permutation of {0,1,2}, not zero. */
 static void init_db_indices(ioc_shared_t *s) {
 	for (int i = 0; i < DB_SLOTS; i++) {

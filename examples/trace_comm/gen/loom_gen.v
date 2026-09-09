@@ -7,6 +7,7 @@ import app
 import loom
 import osal
 import comm.telem
+import comm.trace
 import driver.can
 import comm.com
 
@@ -28,11 +29,9 @@ pub fn partition_app(core int, arg voidptr) {
 	mut st := Partition_app_state{}
 	mut sched := loom.Scheduler{}
 	sched.every(10000, handler_app_speed_work_on_10ms, &st)
+	sched.set_trace_hook(trace.fb_hook, arg)
 	for {
-		loom_t0 := osal.now_us()
-		sched.run(loom_t0)
-		loom_t1 := osal.now_us()
-		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
+		sched.run_profiled(osal.now_us)
 		osal.scratch_set(0, u64(sched.load_permille()))
 		osal.sleep_us(1000)
 	}
@@ -61,7 +60,7 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 }
 
-pub fn partition_can0(ch can.Channel) {
+pub fn partition_can0(ch can.Channel, trace_ch can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &u32) {
 	osal.pin_to_core(0)
 	mut st := Bridge_can0_state{
 		chan: ch
@@ -71,38 +70,36 @@ pub fn partition_can0(ch can.Channel) {
 	}
 	mut sched := loom.Scheduler{}
 	sched.every(10_000, io_can0_10ms, &st)
+	mut sat := unsafe { sat_buf }
+	mut trace_ring := [64]trace.Record{}
+	mut tm := trace.new_module(u32(0x7e3), u32(0x7e5), 0, true,
+		trace.new_buffer(&trace_ring[0], 64, .ring, 50))
+	mut cap := tm.capture(2, 500, origin_us)
+	unsafe {
+		cap.freeze = freeze // the system-wide freeze: this lane trips it, and honours it
+	}
+	tm.set_freeze(freeze) // ...and the module retires it on arm/start/reset
+	sched.set_trace_hook(trace.thread_hook, &cap)
+	tm.arm() // both rings record from startup — a recorder that waits to be armed has
+	// nothing to say about the boot it was installed to watch
+	mut trace_rx := can.Frame{}
+	mut trace_txf := can.Frame{}
 	for {
-		loom_t0 := osal.now_us()
-		sched.run(loom_t0)
+		sched.run_profiled(osal.now_us)
 		loom_t1 := osal.now_us()
-		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
-		osal.scratch_set(1, u64(sched.load_permille()))
-		osal.sleep_us(1000)
-	}
-}
-
-struct Bridge_can1_state {
-mut:
-	chan can.Channel
-}
-
-pub fn partition_can1(ch can.Channel) {
-	osal.pin_to_core(0)
-	mut st := Bridge_can1_state{
-		chan: ch
-	}
-	mut sched := loom.Scheduler{}
-	for {
-		loom_t0 := osal.now_us()
-		mut rx := can.Frame{}
-		for st.chan.recv(mut rx) {
-			// no consumer yet: the trace module that serves this bus is not
-			// generated for this shape (#191). Draining keeps the queue clear —
-			// an unread rx queue backs up on a real driver.
+		for trace_ch.recv(mut trace_rx) {
+			match trace_rx.id {
+				u32(0x7e2) { // trace.cmd — the owner lane AND the satellite
+					tm.on_cmd_multicore(trace_rx, mut sat, 1, import_buf, 65)
+				}
+				u32(0x7e6) { tm.on_dump_fc(loom_t1, trace_rx) } // ISO-TP FC
+				else {}
+			}
 		}
-		loom_t1 := osal.now_us()
-		sched.account(loom_t1 - loom_t0, loom_t1) // per-core load
-		osal.scratch_set(2, u64(sched.load_permille()))
+		for trace_ch.tx_ready() && tm.produce(loom_t1, mut trace_txf) {
+			trace_ch.send(trace_txf)
+		}
+		osal.scratch_set(1, u64(sched.load_permille()))
 		osal.sleep_us(1000)
 	}
 }
@@ -131,12 +128,23 @@ fn partition_telem() {
 }
 
 pub fn run(can0 can.Channel, can1 can.Channel) {
-	t_can0 := spawn partition_can0(can0)
-	t_can1 := spawn partition_can1(can1)
-	t_app := spawn partition_app(1, unsafe { nil })
+	trace_origin := osal.now_us()
+	mut trace_freeze := u32(0)
+	mut sat_ring := [64]trace.Record{}
+	mut sat_buf := trace.new_buffer(&sat_ring[0], 64, .ring, 50)
+	sat_buf.start()
+	mut sat_cap := trace.Capture{
+		buf:       &sat_buf
+		start:     trace_origin
+		id_base:   0
+		budget_us: 500
+		freeze:    unsafe { &trace_freeze }
+	}
+	mut import_ring := [65]trace.Record{}
+	t_can0 := spawn partition_can0(can0, can1, &sat_buf, unsafe { &import_ring[0] }, trace_origin, unsafe { &trace_freeze })
+	t_app := spawn partition_app(1, unsafe { voidptr(&sat_cap) })
 	t_telem := spawn partition_telem()
 	t_can0.wait()
-	t_can1.wait()
 	t_app.wait()
 	t_telem.wait()
 }

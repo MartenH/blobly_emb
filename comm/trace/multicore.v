@@ -62,7 +62,7 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 	// block, so a dump arriving in the IDLE GAP between continuation transfers was accepted:
 	// it reset local_from and re-sent the owner's blocks ahead of the satellite block still
 	// queued behind them, corrupting the multi-core stream. Answer busy and delegate nothing.
-	if c.opcode == op_dump && m.is_streaming() {
+	if c.opcode == op_dump && m.is_dumping() {
 		if c.targets(m.core) {
 			m.queue_rsp(status_rsp(m.buf, c.opcode, result_busy, m.core))
 		} else if c.targets(sat_core) {
