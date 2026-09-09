@@ -81,7 +81,7 @@ pub fn fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	// still-capturing peer after a per-core stop.
 	tripped := over && was_capturing
 	if tripped {
-		t.buf.trigger()
+		t.buf.trip() // trigger(), plus the cause when this record itself just filled a oneshot
 	}
 	t.sync_freeze(tripped)
 }

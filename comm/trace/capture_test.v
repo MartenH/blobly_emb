@@ -104,4 +104,7 @@ fn test_an_overrun_filling_a_oneshots_final_slot_still_raises_the_cell() {
 	assert cell == 0
 	fb_hook(voidptr(&c), 3, 0, 500) // over budget, and fills the last slot
 	assert cell == 1
+	// ...and the initiating core reports the TRIGGER, not the fill's default stop cause —
+	// its TraceRsp is how the host tells a triggered dump from a completed one
+	assert buf.froze_cause() == freeze_trigger
 }

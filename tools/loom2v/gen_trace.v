@@ -549,11 +549,18 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	// Each core publishes its load to osal.scratch_set(core, ...) — 16 slots is the platform's.
 	// A core id past them would not collide with anything, it would just be silently dropped by
 	// scratch_set's bounds check and report a permanent zero load in the telemetry frame, with
-	// nothing saying why. Refuse it at generation instead.
+	// nothing saying why. And with telemetry ON the ceiling is LOWER: the CpuLoad frame packs
+	// one byte per core (telem.cpuload_max_cores = 8), so a core past 7 indexes the generated
+	// [8]u16 load array out of bounds. Refuse both at generation instead.
 	if owner_core >= 16 || sat_core >= 16 {
 		panic('loom2v: [[partition]] core ${owner_core}/${sat_core} is outside the osal scratch ' +
 			'area (16 slots, one per core for load telemetry) — scratch_set would silently drop ' +
 			'that core\'s load and the telemetry frame would read 0 forever. Use cores 0..15.')
+	}
+	if telem_on && (owner_core >= 8 || sat_core >= 8) {
+		panic('loom2v: [[partition]] core ${owner_core}/${sat_core} does not fit the CpuLoad ' +
+			'frame — telem.cpuload_max_cores packs one byte per core for cores 0..7, and the ' +
+			'generated load array is indexed by core id. Use cores 0..7, or disable [telemetry].')
 	}
 	mut g := []string{}
 

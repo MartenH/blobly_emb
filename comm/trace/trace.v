@@ -379,6 +379,16 @@ pub fn (mut t TraceBuffer) stop() {
 	}
 }
 
+// trip is the hook's trigger: an over-budget dispatch on a ring that WAS capturing when it
+// entered the hook. trigger() covers the still-capturing ring; the assignment covers the one
+// record that both completed a oneshot and overran — push() flipped it to .full with the
+// fill's default cause (freeze_stop) before the judgement, and trigger() then no-ops, so the
+// initiating core reported an ordinary fill while its peer froze on a trigger (codex #271 r4).
+fn (mut t TraceBuffer) trip() {
+	t.trigger()
+	t.froze = freeze_trigger
+}
+
 // trigger freezes the capture. Ring: keep pre_pct % from before the trigger, capture the
 // remaining capacity after, then freeze. One-shot: stop now at the current fill.
 pub fn (mut t TraceBuffer) trigger() {
