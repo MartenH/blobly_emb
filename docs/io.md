@@ -233,6 +233,21 @@ Pins are named in ecu.toml because an example is already board-specific (it sele
 second board ever runs the same ecu.toml, pin mapping moves into the boards layer —
 a relocation, not a redesign.
 
+## Observability: the thread, and each point
+
+The io thread publishes its whole serve pass twice over. `io_exec_add` is the **thread-level
+sum**: `run_profiled_excl` subtracts it per FB handler, so io preemption is never charged to
+application code, and `load_pub_slot` carries the same bracket into the CpuLoad frame as the io
+thread's own load slot.
+
+With `[trace] level = "all"` each **point** is bracketed too and pushed as its own trace record
+(#263, REQ-IO-025). Ids continue the global handler numbering and `gen/trace-manifest.csv` gains
+a row per point, so a dump names the point that cost the time rather than showing one io block —
+a slow ADC conversion or a pin that has begun misbehaving is visible in the very trace it
+delays. The thread-level sum is unchanged by this, so the exclusion above stays exact.
+
+Not yet per point: the **load** figure, which remains one slot for the whole thread.
+
 ## The two classes of pins (do not mix them)
 
 **Application IO points** (above): pins whose *values* are the app's business.

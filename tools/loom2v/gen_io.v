@@ -178,7 +178,7 @@ fn adc_cast(typ string) string {
 	return if typ == 'u16' { 'u16' } else { 'u32' }
 }
 
-fn emit_io_target_entry(m Model, ioc_idx map[string]int, with_load bool, load_slot int) []string {
+fn emit_io_target_entry(m Model, doc toml.Doc, ioc_idx map[string]int, with_load bool, load_slot int) []string {
 	mut g := []string{}
 	if m.io_points.len == 0 {
 		return g
@@ -188,6 +188,9 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int, with_load bool, load_sl
 	// level="all" it must be published even when nothing ships CpuLoad — otherwise the
 	// preemption clock reads zero and io preemption is silently charged to the FBs again
 	// (codex on #264).
+	// One predicate for BOTH the thread-level exec bracket and the per-point records: the
+	// trace_fb calls sit inside that bracket, so a later edit to one alone would emit records
+	// with no t0 to bracket them.
 	excl := m.trace.on && m.trace.level == 'all'
 	mut fastest := m.io_points[0].period_ms
 	for pt in m.io_points {
@@ -239,7 +242,19 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int, with_load bool, load_sl
 	if with_load || excl {
 		g << '\t\tt0 := C.board_now_us()'
 	}
-	for pt in m.io_points {
+	// PER-POINT records (#263). The thread-level bracket below still publishes the whole pass
+	// through io_exec_add — the FB threads' preemption subtraction is unchanged — but with
+	// level="all" each point ALSO gets its own trace record, so a slow ADC read or a pin that
+	// starts misbehaving is visible in the very trace it delays instead of vanishing into one
+	// aggregate. Ids continue the global handler numbering (io_handler_id_base), and the
+	// manifest writes matching rows, so the dump resolves a point by name like any handler.
+	io_id_base := io_handler_id_base(m, doc)
+	for pi, pt in m.io_points {
+		// The id is the point's INDEX in m.io_points, not a running counter over the points
+		// that survive the `continue` below: emit_manifest writes a row for every point
+		// unconditionally, so a point without an IOC cell would otherwise shift every later
+		// point's records onto the wrong row — the one invariant this change exists to hold.
+		hid := io_id_base + u32(pi)
 		idx := ioc_idx[pt.name] or { continue }
 		fld := snake(pt.name)
 		mult := pt.period_ms / fastest
@@ -248,6 +263,9 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int, with_load bool, load_sl
 			// (tick+1): the first serve is one fastest-period after resume, so a
 			// sub-rated point must first fire on its OWN period, not the fastest one
 			g << '\t\tif (tick + 1) % ${mult} == 0 { // ${pt.period_ms} ms point on the ${fastest} ms tick'
+		}
+		if excl {
+			g << '${ind}p${hid}_t0 := C.board_now_us()'
 		}
 		if pt.output {
 			g << '${ind}mut ${fld}_a := u32(0)'
@@ -270,6 +288,12 @@ fn emit_io_target_entry(m Model, ioc_idx map[string]int, with_load bool, load_sl
 			g << '${ind}if ${fld}_v := io.gpio_read_checked(${pt.ch}) {'
 			g << '${ind}\tC.ioc_pub(${idx}, if ${fld}_v { u32(1) } else { u32(0) }, u32(0))'
 			g << '${ind}}'
+		}
+		if excl {
+			// trace_fb is the exec-hook recorder's thread-context entry (IRQ-masked inside),
+			// the same one the FB hooks use — an io point is a serviced unit of work, so it
+			// is an FB-kind record and needs no new record kind or decoder change.
+			g << '${ind}C.trace_fb(u32(${hid}), p${hid}_t0, u32(C.board_now_us() - p${hid}_t0))'
 		}
 		if mult > 1 {
 			g << '\t\t}'

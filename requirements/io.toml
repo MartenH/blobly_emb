@@ -239,3 +239,12 @@ status = "draft"
 method = "analysis"
 asil = "QM"
 derives = "SYS-REQ-IO-001"
+
+[[req]]
+id = "REQ-IO-025"
+title = "each io point's own service time is observable"
+text = "With [trace] level = \"all\", the io thread shall emit one trace record per POINT serviced, carrying that point's own service duration, in addition to publishing the whole pass as the thread-level exec sum the FB threads subtract as preemption. The point ids continue the global handler numbering and the trace manifest carries a matching row per point, so a dump resolves a point by its configured name. Before this, the io thread's work was a single aggregate: a slow ADC conversion or a pin that had begun misbehaving was invisible in the very trace it delayed, and its cost could only be inferred from the thread's total."
+status = "draft"
+method = "bench"
+asil = "QM"
+derives = "SYS-REQ-IO-001"

@@ -1730,6 +1730,16 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 			}
 		}
 	}
+	// IO POINTS continue the same global numbering, right after the FB handlers (#263): with
+	// [trace] level = "all" the io thread emits one record per point service, and these rows are
+	// what a dump resolves them through. Emitted whenever the node HAS io points, so a manifest
+	// never advertises an id it cannot name — a trace-less build simply has no records to match.
+	if m.io_points.len > 0 {
+		for pt in m.io_points {
+			man << '${hid},io,${m.io_core},io,${pt.name},${pt.period_ms * 1000},io'
+			hid++
+		}
+	}
 	man << '# threads: thread,id,name,core,prio  (id 0 reserved = idle; prio - = no RTOS prio)'
 	mut tid := 1
 	// ThreadX comm thread (phase 6b-2): AUTO_START at priority 1 — strictly higher than the FB
@@ -2395,7 +2405,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			// io load accounting runs whenever ANYONE ships CpuLoad — the comm thread
 			// (scratch sums) or the inline producer (no-comm telemetry, emb#150 r5);
 			// without it the io thread's serve time vanishes from telemetry.
-			glue << emit_io_target_entry(m, ioc_idx, comm_thread_on || m.telem.on, app_threads.len)
+			glue << emit_io_target_entry(m, doc, ioc_idx, comm_thread_on || m.telem.on, app_threads.len)
 			if comm_thread_on {
 				// The comm thread must be STRICTLY higher priority (lower number) than the FB thread
 				// so it preempts a long app pass to drain rx after the ISR posts (zero time slice

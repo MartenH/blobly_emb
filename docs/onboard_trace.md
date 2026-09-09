@@ -25,6 +25,13 @@ Records captured into the ring are 8 bytes in one wire format, from two sources:
   and sets `trace_fb_hook_<thread>`, so each due handler is bracketed (`t0`, `dt`) and pushed as a
   record. A clean seam on the existing dispatch loop.
 
+- **IO point service** — the same `trace_fb` seam, from the io thread. With `[trace] level =
+  "all"` the generated io loop brackets **each point** it services and pushes a record carrying
+  that point's own duration, so a slow ADC conversion or a pin that has begun misbehaving is
+  visible in the trace it delays rather than folded into the thread's aggregate. Point ids
+  continue the handler numbering and the manifest carries a row per point (#263, REQ-IO-025).
+  The whole-pass sum the FB threads subtract as preemption (`io_exec_add`) is unchanged.
+
 These push into the *same* ring on the *same* timebase (`trace_now_us()`), so a dump reads
 `thread A → FB X enter → FB X exit → ISR (comm rx) → … → swap to thread B` as one interleaved
 timeline. (Host caveat: the ThreadX **Linux** port doesn't call the execution-change hooks — they

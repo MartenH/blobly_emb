@@ -540,6 +540,14 @@ fn trace_shape_blocker(m Model, trace_bus string) string {
 	return ecumodel.trace_shape_blocker(trace_shape_of(m, trace_bus))
 }
 
+// io_handler_id_base is the global handler id the IO POINTS start at: one past every FB handler,
+// so an io point's trace records can never be read as some handler's. No partition is named '',
+// so handler_id_base walks them all and returns the total — the same count, from the one loop
+// that owns this numbering (#263).
+fn io_handler_id_base(m Model, doc toml.Doc) u32 {
+	return handler_id_base(m, doc, '')
+}
+
 // handler_id_base returns the GLOBAL fb id of a partition's first handler — the same numbering
 // emit_manifest assigns (partition -> fb -> handler, in [[partition]] declaration order), so a
 // Capture's id_base makes its records resolve to the manifest rows the host already has.

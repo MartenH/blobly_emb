@@ -24,7 +24,10 @@ grouped, deadline-aware timeline lanes. It is the interface a visualization tool
     "record_id":      2021,   // 0x7E5  captured-trace Record dump (ISO-TP data: target -> host)
     "dump_fc_id":     2022    // 0x7E6  ISO-TP flow control the host sends for the Record dump
   },
-  "handlers": [               // one entry per schedulable unit (an [[fb.handler]])
+  "handlers": [               // one entry per schedulable unit: an [[fb.handler]], and — with
+                              // [trace] level = "all" — one per [[io.*]] POINT, whose ids
+                              // continue this numbering and whose partition/fb/thread columns
+                              // read "io" (#263, REQ-IO-025)
     { "id": 0,                // global handler_id — the b0 in every HandlerStat/Record
       "partition": "app",
       "core": 0,              // lane grouping / per-core swimlanes
