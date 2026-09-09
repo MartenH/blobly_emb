@@ -3459,11 +3459,17 @@ fn main() {
 	// io emits the platform io thread for the plain host run() (P1) and the ThreadX
 	// target (the bench phase). The bare-metal superloop / trace-host runner still
 	// spawn no io thread — there the pins would silently never move, so fail loudly.
-	// (the P3b bridge-owner shape keeps the plain host run(), io thread included — the trace
-	// machinery rides the bridge's loop rather than replacing the runner.)
-	if m.io_points.len > 0 && ((m.target.on && !m.target.threadx) || (trace_owns_run && !tctx.on())) {
+	if m.io_points.len > 0 && ((m.target.on && !m.target.threadx) || trace_owns_run) {
+		// The bridge-owner shape keeps the plain host run(), io thread included — but the io
+		// thread is neither TRACED (it gets no capture or ring, so `thread+fb` would silently
+		// omit every io service) nor EXCLUDED from the traced lanes' wall time (run_profiled
+		// charges its preemption to whichever lane it interrupts, which can trip budget_us and
+		// freeze both rings for work they did not do). Giving it a lane is #263's shape, and
+		// exempting it here would ship exactly the silent degradation this runner exists to
+		// remove (codex #274 r3).
 		panic('loom2v: [[io.gpio]] is generated for the plain host run() and the ThreadX ' +
-			'target only — not the bare-metal superloop / trace-host runner (docs/io.md)')
+			'target only — not the bare-metal superloop, nor a host trace runner: the io thread ' +
+			'would be an untraced lane whose preemption is charged to the traced ones (docs/io.md)')
 	}
 	if m.shell.on && !(m.target.threadx) {
 		eprintln('loom2v: WARNING: [shell] is generated for the ThreadX comm-thread target only ' +

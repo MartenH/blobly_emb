@@ -1,10 +1,11 @@
 # trace_comm — the COMM THREAD visible in the trace (P3b, different-bus slice).
 #
 # VehicleSpeed arrives on can0; the generated COM bridge decodes it into the IOC region, and the
-# app FB (SpeedWork, its own core) reads it. Trace rides a DEDICATED bus, can1, so partition_trace
-# owns that channel and the can0 bridge is just another traced producer — its per-drain-cycle work
-# shows up as a `comm_can0` lane beside the app lanes in the dump. (Same-bus piggyback is a
-# follow-up; see docs/trace-multicore.md §4.3.)
+# app FB (SpeedWork, its own core) reads it. Trace rides a DEDICATED bus, can1, and the can0
+# BRIDGE owns it: one loop drains COM, serves the TraceModule on can1, and records its own
+# per-drain-cycle work as a `comm_can0` lane beside the app's. can1 gets no partition of its own.
+# (Same-bus piggyback — trace sharing the COM bus — is the follow-up; see
+# docs/trace-multicore.md §4.3.)
 #
 #   sudo make vcan      # brings up vcan0 + vcan1
 #   make run            # generate + build + run

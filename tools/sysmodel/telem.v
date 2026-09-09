@@ -93,11 +93,17 @@ fn trace_generated(n Node, s System) bool {
 		// permissive (it never passes a node loom2v would reject for a DIFFERENT reason).
 		trace_bus_eth:   false
 		has_bridge:      node_has_bus_signal(n) || n.view.has_isotp || n.view.has_route
-		// SAME GAP for the P3b bridge-owner fields: the view has no per-bus signal map or core
+		// The two the view DOES carry: a node whose trace would be two lanes (P3a's two
+		// partitions, or a bridged single one) with no dump_fc is rejected by loom2v, so
+		// syscheck must not reserve ids for a runner that will not exist.
+		multi_lane:      n.view.partition_count == 2 || (n.view.partition_count == 1
+			&& (node_has_bus_signal(n) || n.view.has_isotp || n.view.has_route))
+		dump_fc_bound:   n.view.trace_dump_fc_bound
+		// STILL A GAP for the rest of the P3b fields: the view has no per-bus signal map or core
 		// map, so which bus the bridge rides and whose core it shares are unknowable here — left
-		// at their zero values, which is the permissive direction again: a bridged node loom2v
-		// would reject (same-bus piggyback, core clash, second bridge) still reads as traced,
-		// and its ids stay reserved rather than colliding silently.
+		// at their zero values, which is the permissive direction: a bridged node loom2v would
+		// reject for one of THOSE reasons still reads as traced, and its ids stay reserved
+		// rather than colliding silently.
 	}) == ''
 }
 

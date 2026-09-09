@@ -190,12 +190,14 @@ pointer, exactly like a traced app partition.
 
 ### 4.3 Channel ownership — the one real fork
 
-- **Different-bus (do first — reuses P3a cleanly).** Trace rides a bus with **no** bridge, so
-  `partition_trace` owns that channel and runs the handshake + dump exactly as in P3a; the bridge on
-  its own bus is just another producer whose ring `partition_trace` reads. **Zero new handshake
-  code** — only §4.1/§4.2. First example: `trace_comm` — one app partition + one external signal
-  (→ a bridge on the IO core) + a dedicated trace bus; the dump shows a `comm_<bus>` lane beside the
-  app lanes.
+- **Different-bus — SHIPPED (#191 P3b).** Trace rides a bus with **no** bridge, and the BRIDGE
+  owns that channel: one loop drains COM, runs the handshake + dump, and records its own drain
+  spans, while the app partition is the satellite. (The draft above expected a separate
+  `partition_trace` to own the trace bus and read the bridge's ring; what shipped folds the two
+  together, because the owner must be the loop that already holds a `can.Channel` — the trace bus
+  gets no partition of its own and is simply passed to the bridge.) Example: `trace_comm` — one app
+  partition + one external signal (→ a bridge on the IO core) + a dedicated trace bus; the dump
+  answers two blocks, `comm_can0`'s THREAD spans and the app's FB spans.
 - **Same-bus (follow-up — the realistic piggyback case).** Trace shares the app bus, so the **bridge
   loop must be the trace owner**: its single `recv` on that channel dispatches by id —
   `id == cmd_id` → the TraceCmd handshake (route commands, status_rsp, freeze fan-in); `id == dump_fc`
