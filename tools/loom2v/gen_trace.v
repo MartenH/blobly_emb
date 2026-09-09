@@ -6,7 +6,7 @@
 // — parse [trace], validate what the target can honour, and emit the few config-shaped fragments.
 //
 // This file currently generates the ThreadX exec-hook RAW STREAM (the HW-verified h735_threadx path):
-// the comm thread snapshots the C ring (trace_hooks.c) ~1 s and streams raw 8-byte records on
+// the comm thread freezes + snapshots the C ring (trace_hooks.c) on a host stop and serves it on
 // record_id, tx_ready-gated. The host command-driven protocol (arm/stop/dump via routed TraceCmd)
 // is served by comm/trace's TraceModule and lands via frame->module routing — not generated here.
 module main
@@ -151,24 +151,25 @@ fn validate_trace_threadx(m Model) {
 				'the exec-change hooks always capture context switches AND ISRs, and "all" adds the ' +
 				'FB records via the Loom hook — use level = "thread+isr" or "all"')
 		}
-		// Only the overwrite ring is implemented (trace_hooks.c has no oneshot/stop-when-full ring),
-		// and the generated stream re-snapshots every ~1 s. A "oneshot" request would silently get
-		// continuous ring behaviour.
+		// Only the overwrite ring is implemented: trace_hooks.c records into a flight-recorder
+		// ring until a host stop freezes it (no oneshot / stop-when-full mode). A "oneshot"
+		// request would silently get overwrite-until-stopped behaviour.
 		if m.trace.mode != 'ring' {
 			panic('loom2v: [target] kind="threadx" [trace].mode "${m.trace.mode}" is not implemented — ' +
-				'the exec-hook recorder is an overwrite ring streamed continuously — use mode = "ring"')
+				'the exec-hook recorder is an overwrite ring frozen by a host stop — use mode = "ring"')
 		}
 		if m.trace.record_id > 0x7ff {
 			panic('loom2v: [target] kind="threadx" [trace].record_id 0x${m.trace.record_id.hex()} is an ' +
 				'extended (29-bit) id, but the classic FDCAN backend sends 11-bit frames — use a ' +
 				'standard id (<= 0x7FF)')
 		}
-		// The exec-hook path snapshots and streams the ring on a fixed ~1 s cadence; it has no
-		// overrun-triggered freeze (m.trace.budget_us is only wired into the software packer's inline
-		// hook). A [trace].trigger config would build but silently produce a continuous ring.
+		// The exec-hook recorder freezes only on a host stop; it has no overrun-triggered
+		// freeze (m.trace.budget_us is only wired into the software packer's inline hook). A
+		// [trace].trigger config would build, and then keep overwriting straight past every
+		// overrun it was asked to catch.
 		if m.trace.budget_us > 0 {
 			panic('loom2v: [target] kind="threadx" [trace].trigger (budget_us) is not implemented — ' +
-				'the exec-hook recorder streams the ring on a fixed cadence with no overrun freeze — ' +
+				'the exec-hook recorder records until a host stop, with no overrun freeze — ' +
 				'drop the trigger for threadx builds')
 		}
 		// The exec-hook recorder has no HandlerStat heartbeat and no pre-trigger split. These
