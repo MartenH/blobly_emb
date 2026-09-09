@@ -481,7 +481,7 @@ fn trace_shape_of(m Model, trace_bus string) ecumodel.TraceShape {
 		partition_count:     m.part.by_part.keys().len
 		trace_bus_eth:       (m.bus_kind[trace_bus] or { 'can' }) == 'eth'
 		has_bridge:          m.has_can_ext || m.isotp_conns.len > 0 || m.routes.len > 0
-		bridge_on_trace_bus: trace_bus in bridged
+		bridge_on_trace_bus: trace_bus in com_can_buses(m)
 		bridge_core_clash:   clash
 		bridge_off_trace_core: off_core
 		bridge_count:        bridged.len
@@ -491,9 +491,26 @@ fn trace_shape_of(m Model, trace_bus string) ecumodel.TraceShape {
 	}
 }
 
-// bridge_can_buses: the CAN buses that carry COM bridge work — external signals, an ISO-TP
-// endpoint, or a route endpoint. The per-bus mirror of the has_bridge model flags, sorted for
-// stable use in numbering.
+// com_can_buses: every CAN bus that carries COM traffic at ALL, loop-owning or not — a same-core
+// route's destination is composed and sent by the source's loop, so it never becomes a bridge of
+// its own, but COM frames still go out on it. That is the set the trace bus must stay clear of:
+// sharing a channel between COM and the trace handshake is the same-bus piggyback (§4.3).
+fn com_can_buses(m Model) []string {
+	mut set := map[string]bool{}
+	for b in bridge_can_buses(m) {
+		set[b] = true
+	}
+	for r in m.routes {
+		set[r.to_bus] = true
+	}
+	mut names := set.keys()
+	names.sort()
+	return names
+}
+
+// bridge_can_buses: the CAN buses that get a bridge LOOP of their own — external signals, an
+// ISO-TP endpoint, a route source, or a route destination on another core. Sorted, for stable
+// use in numbering.
 fn bridge_can_buses(m Model) []string {
 	mut set := map[string]bool{}
 	for _, si in m.sig_of {
@@ -505,8 +522,14 @@ fn bridge_can_buses(m Model) []string {
 		set[c.bus] = true
 	}
 	for r in m.routes {
+		// The SOURCE bus always gets a loop. The destination gets one of its own only when the
+		// route CROSSES cores; a same-core route is composed and sent by the source loop, which
+		// simply takes the destination channel as a parameter (gen_com.v). Counting it as a
+		// second bridge refused a valid single-owner shape (codex #274 r2).
 		set[r.from_bus] = true
-		set[r.to_bus] = true
+		if r.crossing(m.bus_core) {
+			set[r.to_bus] = true
+		}
 	}
 	mut names := set.keys()
 	names.sort()
@@ -769,6 +792,13 @@ struct TraceHostCtx {
 	trace_bus string
 	sat       string
 	sat_core  int
+	// Telemetry rides the OWNER'S OWN LOOP in this shape (trace_bridge_telem), not the separate
+	// partition_telem thread: that thread is pinned to the owner's core, and an encode+send
+	// preempting a drain is charged to the bridge's THREAD span by wall time — enough to trip
+	// budget_us and freeze both rings for work the COM drain never did (codex #274 r2). Same
+	// choice the P3a owner makes. `telem_chan` is the owner's variable for the telemetry bus.
+	telem_slots []int   // slot -> core, exactly emit_partition_telem's mapping
+	telem_chan  string  // 'trace_ch' or 'ch'; '' when telemetry is off
 }
 
 fn (c TraceHostCtx) on() bool {
@@ -837,6 +867,24 @@ fn validate_trace_bridge_owner(m Model, tctx TraceHostCtx) {
 			'partition\'s core ${tctx.sat_core} — the owner streams its own block first, so the ' +
 			'dump would arrive in descending core order. Put the trace bus on the lower core.')
 	}
+	if m.telem.on && (m.bus_kind[m.telem.bus] or { 'can' }) != 'eth' {
+		// The CpuLoad frame packs one byte per core (telem.cpuload_max_cores = 8) and the
+		// generated load array is indexed by core id.
+		if owner_core >= 8 || tctx.sat_core >= 8 {
+			panic('loom2v: [[partition]]/[bus] core ${owner_core}/${tctx.sat_core} does not fit the ' +
+				'CpuLoad frame — it packs one byte per core for cores 0..7 — use cores 0..7 or ' +
+				'disable [telemetry]')
+		}
+		// The owner sends telemetry from its OWN loop, so it must hold that bus's channel: its
+		// COM bus or the trace bus. A third bus would need the separate partition_telem thread
+		// back, pinned to this core, whose preemption is charged to the traced drain span.
+		if m.telem.bus !in [tctx.trace_bus, tctx.owner_bus] {
+			panic('loom2v: [telemetry] bus "${m.telem.bus}" is neither the trace bus nor the COM ' +
+				'bridge\'s bus — the bridge-owner runner sends CpuLoad from its own loop (a ' +
+				'separate telemetry thread on its core would be charged to the traced drain ' +
+				'span), so put telemetry on one of the two buses it owns')
+		}
+	}
 	if m.trace.mode != 'ring' {
 		panic('loom2v: [trace] mode = "${m.trace.mode}" is not generated for the bridge-owner ' +
 			'runner — the owner and satellite rings are flight recorders frozen by a trigger or ' +
@@ -866,7 +914,6 @@ fn trace_bridge_params() string {
 // trace_bridge_preamble: the owner's ring, module and capture, built once before its loop.
 fn trace_bridge_preamble(m Model, tctx TraceHostCtx) []string {
 	cap := m.trace.buffer_records
-	sat_core := tctx.sat_core
 	// The owner's core is the RESOLVED trace bus's core (tctx), not m.trace.bus — an omitted
 	// [trace].bus inherits the telemetry bus, and the raw key would miss the map and read 0,
 	// pinning the loop to one core while every core mask, TraceRsp and block header claimed
@@ -891,14 +938,60 @@ fn trace_bridge_preamble(m Model, tctx TraceHostCtx) []string {
 	g << '\t// nothing to say about the boot it was installed to watch'
 	g << '\tmut trace_rx := can.Frame{}'
 	g << '\tmut trace_txf := can.Frame{}'
+	if tctx.telem_chan != '' {
+		g << '\tmut last_telem := u64(0)'
+	}
+	return g
+}
+
+// trace_bridge_telem: the CpuLoad tick, emitted INSIDE the owner's loop. Per-core sums come from
+// the same slot->core mapping partition_telem would have used, so the frame is identical; what
+// changes is that no separate thread on this core can preempt a traced drain span.
+fn trace_bridge_telem(m Model, tctx TraceHostCtx) []string {
+	if tctx.telem_chan == '' {
+		return []string{}
+	}
+	mut ncores := 0
+	for sc in tctx.telem_slots {
+		if sc + 1 > ncores {
+			ncores = sc + 1
+		}
+	}
+	ch := tctx.telem_chan
+	mut g := []string{}
+	g << '\t\tif loom_t1 - last_telem >= ${m.telem.period_us} && ${ch}.tx_ready() {'
+	g << '\t\t\tlast_telem = loom_t1'
+	g << '\t\t\tmut load := [8]u16{}'
+	for cc in 0 .. ncores {
+		mut terms := []string{}
+		for slot, sc in tctx.telem_slots {
+			if sc == cc {
+				terms << 'u16(osal.scratch_get(${slot}))'
+			}
+		}
+		if terms.len > 0 {
+			g << '\t\t\tload[${cc}] = ${terms.join(' + ')}'
+		}
+	}
+	g << '\t\t\tframe := telem.encode_cpuload(load, ${ncores})'
+	g << '\t\t\tmut cf := can.Frame{'
+	g << '\t\t\t\tid:  u32(0x${m.telem.id.hex()})'
+	g << '\t\t\t\tlen: 8'
+	g << '\t\t\t}'
+	g << '\t\t\tfor j in 0 .. 8 {'
+	g << '\t\t\t\tcf.data[j] = frame[j]'
+	g << '\t\t\t}'
+	g << '\t\t\t${ch}.send(cf)'
+	g << '\t\t}'
 	return g
 }
 
 // trace_bridge_loop_body: the owner's trace half, after its COM dispatch — serve the command on
 // the TRACE channel (never the COM one; the two buses are distinct in this shape) and drain
 // whatever the module has ready.
-fn trace_bridge_loop_body(m Model, sat_core int) []string {
+fn trace_bridge_loop_body(m Model, tctx TraceHostCtx) []string {
 	cap := m.trace.buffer_records
+	sat_core := tctx.sat_core
 	mut g := []string{}
 	g << '\t\tfor trace_ch.recv(mut trace_rx) {'
 	g << '\t\t\tmatch trace_rx.id {'
@@ -914,6 +1007,7 @@ fn trace_bridge_loop_body(m Model, sat_core int) []string {
 	g << '\t\tfor trace_ch.tx_ready() && tm.produce(loom_t1, mut trace_txf) {'
 	g << '\t\t\ttrace_ch.send(trace_txf)'
 	g << '\t\t}'
+	g << trace_bridge_telem(m, tctx)
 	return g
 }
 

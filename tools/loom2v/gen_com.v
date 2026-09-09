@@ -1313,7 +1313,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
 		}
 		if owns_trace {
-			glue << trace_bridge_loop_body(m, tctx.sat_core)
+			glue << trace_bridge_loop_body(m, tctx)
 		}
 		for p in producers {
 			glue << p.partition_loop_body('b:${bname}')

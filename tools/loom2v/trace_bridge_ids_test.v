@@ -66,3 +66,58 @@ fn test_a_second_app_thread_shifts_the_owner_lane() {
 	m.part.threads_of['app'] = ['app_main', 'app_aux']
 	assert host_comm_tid(m) == 3
 }
+
+// A same-core route is composed and sent by its SOURCE loop, which takes the destination channel
+// as a parameter — it is not a second bridge thread, and counting it as one refused a valid
+// single-owner shape (codex #274 r2).
+fn test_a_same_core_route_is_one_bridge_loop() {
+	mut m := bridge_model()
+	m.sig_of = map[string]SigInfo{}
+	m.bus_core = {
+		'can0': 0
+		'can2': 0
+		'can1': 0
+	}
+	m.routes = [Route{
+		from_bus: 'can0'
+		to_bus:   'can2'
+		signal:   'VehicleSpeed'
+	}]
+	assert bridge_can_buses(m) == ['can0'], 'got ${bridge_can_buses(m)}'
+	assert trace_shape_blocker(m, 'can1') == '', 'got: ${trace_shape_blocker(m, 'can1')}'
+}
+
+// ...but a route whose destination CROSSES cores does get its own loop, and two loops is a
+// second traced lane the runner has no ring for.
+fn test_a_crossing_route_is_two_bridge_loops() {
+	mut m := bridge_model()
+	m.sig_of = map[string]SigInfo{}
+	m.bus_core = {
+		'can0': 0
+		'can2': 1
+		'can1': 0
+	}
+	m.routes = [Route{
+		from_bus: 'can0'
+		to_bus:   'can2'
+		signal:   'VehicleSpeed'
+	}]
+	assert trace_shape_blocker(m, 'can1').contains('COM bridge buses')
+}
+
+// A same-core route that TARGETS the trace bus is still refused: it is not a second loop, but
+// COM frames would share the channel with the trace handshake (the same-bus piggyback).
+fn test_a_route_onto_the_trace_bus_is_refused() {
+	mut m := bridge_model()
+	m.sig_of = map[string]SigInfo{}
+	m.bus_core = {
+		'can0': 0
+		'can1': 0
+	}
+	m.routes = [Route{
+		from_bus: 'can0'
+		to_bus:   'can1' // the trace bus
+		signal:   'VehicleSpeed'
+	}]
+	assert trace_shape_blocker(m, 'can1').contains('rides the trace bus')
+}

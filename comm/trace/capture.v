@@ -59,10 +59,7 @@ pub fn fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	// did it read as not-a-trip and the peer was never told.
 	was_capturing := t.buf.state() == .capturing
 	elapsed := start_us - t.start
-	if elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor
-		t.base = elapsed
-		t.buf.push(new_epoch(u32(elapsed)))
-	}
+	t.anchor(elapsed, was_capturing)
 	mut dt := dt_us
 	mut flags := u8(0)
 	if dt > 0xFFFF { // clamp to the u16 field, and mark it as saturated
@@ -86,6 +83,26 @@ pub fn fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 		tripped = t.buf.trip()
 	}
 	t.sync_freeze(tripped)
+}
+
+// anchor keeps the capture's u24 stamp window aligned with the RING, and is the one place
+// either hook re-anchors. Two cases, both of which left a lane misread:
+//   * the stamp would overflow the u24 field — the original wrap case;
+//   * the ring was re-armed under this capture. arm/start/reset empties the buffer and drops
+//     its carried epoch prefix, while `base` stayed where the last window left it, so the first
+//     record of the new window was written as `elapsed - base` with no epoch to anchor it and
+//     the decoder placed the lane at zero — a shift of ~16.7 s per elapsed wrap (codex #274 r2).
+// And never on a ring that is not capturing: push() discards the epoch there, so advancing the
+// base would silently desynchronise it from what the ring actually holds.
+@[inline]
+fn (mut t Capture) anchor(elapsed u64, capturing bool) {
+	if !capturing {
+		return
+	}
+	if elapsed - t.base > 0x00ff_ffff || (t.buf.used() == 0 && t.base != 0) {
+		t.base = elapsed
+		t.buf.push(new_epoch(u32(elapsed)))
+	}
 }
 
 // sync_freeze raises the shared cross-core freeze when THIS ring tripped, and honours a peer that
@@ -130,10 +147,7 @@ pub fn (mut t Capture) note_thread(tid u16, reason u8, start_us u64, dt_us u64) 
 	// a first-class traced entity, so it participates in the system-wide freeze like any core.
 	was_capturing := t.buf.state() == .capturing
 	elapsed := start_us - t.start
-	if elapsed - t.base > 0x00ff_ffff { // u24 start_us would wrap -> re-anchor
-		t.base = elapsed
-		t.buf.push(new_epoch(u32(elapsed)))
-	}
+	t.anchor(elapsed, was_capturing)
 	mut dt := dt_us
 	if dt > 0xFFFF {
 		dt = 0xFFFF // clamp to the u16 field; a span this long is already an anomaly

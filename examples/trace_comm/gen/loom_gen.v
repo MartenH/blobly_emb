@@ -84,6 +84,7 @@ pub fn partition_can0(ch can.Channel, trace_ch can.Channel, sat_buf &trace.Trace
 	// nothing to say about the boot it was installed to watch
 	mut trace_rx := can.Frame{}
 	mut trace_txf := can.Frame{}
+	mut last_telem := u64(0)
 	for {
 		sched.run_profiled(osal.now_us)
 		loom_t1 := osal.now_us()
@@ -99,31 +100,23 @@ pub fn partition_can0(ch can.Channel, trace_ch can.Channel, sat_buf &trace.Trace
 		for trace_ch.tx_ready() && tm.produce(loom_t1, mut trace_txf) {
 			trace_ch.send(trace_txf)
 		}
+		if loom_t1 - last_telem >= 500000 && trace_ch.tx_ready() {
+			last_telem = loom_t1
+			mut load := [8]u16{}
+			load[0] = u16(osal.scratch_get(1)) + u16(osal.scratch_get(2))
+			load[1] = u16(osal.scratch_get(0))
+			frame := telem.encode_cpuload(load, 2)
+			mut cf := can.Frame{
+				id:  u32(0x7e0)
+				len: 8
+			}
+			for j in 0 .. 8 {
+				cf.data[j] = frame[j]
+			}
+			trace_ch.send(cf)
+		}
 		osal.scratch_set(1, u64(sched.load_permille()))
 		osal.sleep_us(1000)
-	}
-}
-
-fn partition_telem() {
-	osal.pin_to_core(0)
-	mut c := can.Channel{}
-	if !c.open('vcan1', false) {
-		return
-	}
-	for {
-		mut load := [8]u16{}
-		load[0] = u16(osal.scratch_get(1)) + u16(osal.scratch_get(2))
-		load[1] = u16(osal.scratch_get(0))
-		frame := telem.encode_cpuload(load, 2)
-		mut f := can.Frame{
-			id:  u32(0x7e0)
-			len: 8
-		}
-		for i in 0 .. 8 {
-			f.data[i] = frame[i]
-		}
-		c.send(f)
-		osal.sleep_us(500000)
 	}
 }
 
@@ -143,8 +136,6 @@ pub fn run(can0 can.Channel, can1 can.Channel) {
 	mut import_ring := [65]trace.Record{}
 	t_can0 := spawn partition_can0(can0, can1, &sat_buf, unsafe { &import_ring[0] }, trace_origin, unsafe { &trace_freeze })
 	t_app := spawn partition_app(1, unsafe { voidptr(&sat_cap) })
-	t_telem := spawn partition_telem()
 	t_can0.wait()
 	t_app.wait()
-	t_telem.wait()
 }

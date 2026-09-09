@@ -2912,7 +2912,9 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 			glue << '\tt_${part} := spawn partition_${part}(${m.part.core_of[part] or { 0 }}, ${arg})'
 			waits << 't_${part}'
 		}
-		if telem_on_can(m) && telem_iface != '' {
+		// ...but not in the bridge-owner shape: the owner sends CpuLoad from its own loop, so
+		// no telemetry thread exists to spawn (and none preempts its traced drain spans).
+		if telem_on_can(m) && telem_iface != '' && !tctx.on() {
 			glue << '\tt_telem := spawn partition_telem()'
 			waits << 't_telem'
 		}
@@ -3994,6 +3996,15 @@ fn main() {
 	// --- generated COM bus bridge(s) — emitted by emit_bridges ---
 	// trace_host: that runner IS the trace bus's owner, so the bus must not also get a bridge —
 	// two owners on one channel, and the second one dead code nobody spawns.
+	if tctx.on() && telem_on_can(m) && telem_iface != '' {
+		// the owner holds exactly two channels; validate_trace_bridge_owner already refused a
+		// telemetry bus that is neither.
+		tctx = TraceHostCtx{
+			...tctx
+			telem_slots: slot_core.clone()
+			telem_chan:  if m.telem.bus == tctx.trace_bus { 'trace_ch' } else { 'ch' }
+		}
+	}
 	bridge_glue, bnames, bus_dests := emit_bridges(m, comm_thread_on, trace_owns_run, producers,
 		tctx)
 	glue << bridge_glue
@@ -4011,7 +4022,7 @@ fn main() {
 	mut bus_names := bnames.clone()
 
 	// --- telemetry tx: sum per-partition load by core -> CpuLoad frame on the bus (emit_partition_telem) ---
-	glue << emit_partition_telem(m, telem_iface, slot_core, trace_owns_run && !tctx.on())
+	glue << emit_partition_telem(m, telem_iface, slot_core, trace_owns_run || tctx.on())
 
 	// --- io: the platform io thread (docs/io.md P1, host) ---
 	glue << emit_partition_io(m, producers)
