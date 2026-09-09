@@ -1,5 +1,15 @@
 module trace
 
+// The shared freeze cell is written by whichever core trips and cleared by the owner, so its
+// accesses go through the compiler's atomic builtins — a plain load can be hoisted out of the
+// hook by an optimising build and a plain store reordered past the ring trigger, and "aligned
+// is single-copy atomic" says nothing about either. 4-byte atomics are lock-free inline on
+// every target this compiles for (host and ARMv7-M), so this adds no dependency and no lock.
+// 5 = __ATOMIC_SEQ_CST: the cell is a once-per-dispatch flag, not a hot path.
+fn C.__atomic_load_4(&u32, int) u32
+
+fn C.__atomic_store_4(&u32, u32, int)
+
 // The FB enter/exit hook — the platform side of "hooks record, the module serves the bus"
 // (docs/com-modules.md). The Loom's run_profiled calls fb_hook once per dispatched handler
 // (it matches loom.RunHook: fn (voidptr, int, u64, u64)); the hook timestamps and pushes a
@@ -60,11 +70,16 @@ pub fn fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	if over {
 		flags |= flag_overran
 	}
+	// The capturing test comes BEFORE the push: a oneshot whose final free slot this very
+	// record fills goes .full inside push(), and judged after, the overrun that filled it
+	// read as not-a-trip — the ring kept its own cause but the peer was never told (codex
+	// #271 r3). Judged before trigger() too, for the same reason in the other direction.
+	was_capturing := t.buf.state() == .capturing
 	t.buf.push(new_fb(u16(t.id_base + u32(idx)), flags, u32(elapsed - t.base), u16(dt)))
-	// A trip is an overrun ON A CAPTURING RING — judged before trigger() moves any state. A
-	// ring the host already stopped is not tripping: raising the shared freeze for it would
-	// hand a phantom freeze_trigger to a still-capturing peer after a per-core stop.
-	tripped := over && t.buf.state() == .capturing
+	// A trip is an overrun ON A CAPTURING RING. A ring the host already stopped is not
+	// tripping: raising the shared freeze for it would hand a phantom freeze_trigger to a
+	// still-capturing peer after a per-core stop.
+	tripped := over && was_capturing
 	if tripped {
 		t.buf.trigger()
 	}
@@ -89,12 +104,10 @@ fn (mut t Capture) sync_freeze(this_ring_tripped bool) {
 		return
 	}
 	if this_ring_tripped {
-		unsafe {
-			*t.freeze = 1
-		}
+		C.__atomic_store_4(t.freeze, 1, 5)
 		return
 	}
-	if unsafe { *t.freeze } != 0 {
+	if C.__atomic_load_4(t.freeze, 5) != 0 {
 		t.buf.trigger()
 	}
 }

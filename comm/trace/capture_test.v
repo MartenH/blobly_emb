@@ -84,3 +84,24 @@ fn test_a_retired_cell_freezes_nobody() {
 	assert buf.froze_cause() == freeze_none // still capturing: nothing stale froze it
 	assert cell == 0
 }
+
+fn test_an_overrun_filling_a_oneshots_final_slot_still_raises_the_cell() {
+	// judged AFTER the push, the record that fills a oneshot's last free slot flips the state
+	// to .full first, and the overrun that did it read as not-a-trip: the ring kept its own
+	// cause but the peer was never told (codex #271 r3)
+	mut cell := u32(0)
+	mut ring := [4]Record{}
+	mut buf := new_buffer(&ring[0], 4, .oneshot, 100)
+	buf.start()
+	mut c := Capture{
+		buf: &buf
+		budget_us: 100
+		freeze: &cell
+	}
+	fb_hook(voidptr(&c), 0, 0, 10)
+	fb_hook(voidptr(&c), 1, 0, 10)
+	fb_hook(voidptr(&c), 2, 0, 10)
+	assert cell == 0
+	fb_hook(voidptr(&c), 3, 0, 500) // over budget, and fills the last slot
+	assert cell == 1
+}

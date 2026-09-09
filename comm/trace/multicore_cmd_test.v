@@ -261,6 +261,8 @@ fn test_an_arm_retires_the_shared_freeze_for_any_mask() {
 	cell = 1
 	m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 65)
 	assert cell == 1 // a dump consumes nothing: the frozen system stays described by the cell
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0004), mut sat, 1, &remote[0], 65)
+	assert cell == 1 // a mask naming NEITHER core restarts nothing — the notification survives
 	m.on_cmd_multicore(cmd_frame(op_reset, 0x0003), mut sat, 1, &remote[0], 65)
 	assert cell == 0
 }

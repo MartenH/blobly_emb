@@ -41,10 +41,20 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 		b[i] = f.data[i]
 	}
 	c := decode_cmd(b)
-	// A (re)arm consumes the system freeze, whichever cores the mask names: the cell describes
-	// ONE past event, and restarting any window means that event has been read (or abandoned).
-	// Cleared before either ring restarts — see retire_freeze for why the order matters.
-	if c.opcode == op_arm || c.opcode == op_start || c.opcode == op_reset {
+	// A (re)arm consumes the system freeze — but only one that ADDRESSES a core this runner
+	// generated: a mask naming neither core restarts nothing, and clearing for it would erase
+	// a notification a tripped core had just raised for a peer that has not looked yet (codex
+	// #271 r3). Retired BEFORE any ring restarts (a stale cell would re-freeze the ring the
+	// host just armed) and AGAIN after them: a dispatch overlapping the restart can raise the
+	// cell for the window being erased, and that raise would freeze the fresh windows on
+	// their first record. The residual is symmetric and bounded to that same overlap: a
+	// GENUINE overrun landing inside the restart microwindow has its raise retired too, and
+	// is notified on its next over-budget dispatch instead (the record's flag_overran flies
+	// either way). The satellite is not quiesced for commands — the same P3a simplification
+	// as sat.start() itself, which restarts the peer's ring from this thread.
+	rearms := (c.opcode == op_arm || c.opcode == op_start || c.opcode == op_reset)
+		&& (c.targets(m.core) || c.targets(sat_core))
+	if rearms {
 		m.retire_freeze()
 	}
 	// A dump must not be accepted while ANY part of the previous one is still outstanding.
@@ -102,6 +112,9 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 	// the host in its own block header; queue_rsp refuses rather than overwrite it.
 	if c.targets(sat_core) && !c.targets(m.core) {
 		m.queue_rsp(status_rsp(sat, c.opcode, result_ok, sat_core))
+	}
+	if rearms {
+		m.retire_freeze() // the second half of the bracket above — after every restart
 	}
 	return imported
 }
