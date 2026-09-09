@@ -19,6 +19,10 @@ pub:
 	partition_count int    // [[partition]] count; the host runners cover one or two
 	trace_bus_eth   bool   // the resolved trace bus is an eth bus
 	has_bridge      bool   // external CAN signals, ISO-TP connections or routes
+	// P3b (the bridge-owner runner) relaxed the blanket bridge blocker to these two:
+	bridge_on_trace_bus bool // some bridge work rides the trace bus itself (same-bus piggyback)
+	bridge_core_clash   bool // a bridge shares its core with a traced app partition
+	bridge_count        int  // distinct CAN buses with bridge work; the owner loop drains one
 }
 
 // trace_shape_blocker names the ONE reason [trace] cannot be generated on this shape, or '' when it
@@ -47,11 +51,36 @@ pub fn trace_shape_blocker(s TraceShape) string {
 		return 'its trace bus is eth — the dump runner speaks can.Channel'
 	}
 	if s.has_bridge {
-		// NOT "a bridge owns the trace bus": the bridge may sit on a different bus entirely
-		// (examples/trace_comm traces on can1 and bridges on can0). The conflict is the RUNNER —
-		// the trace-host loop replaces the plain host run() that drives the bridge.
-		return 'it has a COM bridge (external signals, ISO-TP or routes), and the trace-host ' +
-			'runner replaces the plain run() that drives it — the two cannot coexist yet'
+		// P3b: the bridge-owner runner — ONE loop drains the COM bus, records its own drain
+		// spans (note_thread) and serves the TraceModule on the trace bus — covers the
+		// different-bus shape (examples/trace_comm: bridge on can0, trace on can1). What it
+		// cannot cover:
+		if s.bridge_on_trace_bus {
+			// the trace handshake and COM would share one channel's rx queue and tx window —
+			// the same-bus piggyback docs/trace-multicore.md §4.3 defers.
+			return 'its COM bridge rides the trace bus itself — the same-bus piggyback is not ' +
+				'generated yet (docs/trace-multicore.md §4.3); give trace a dedicated bus'
+		}
+		if s.bridge_count > 1 {
+			// one owner loop drains ONE com bus; a second bridge would need its own thread,
+			// whose spans have no ring (one traced entity per core, one ring per entity).
+			return 'it has ${s.bridge_count} COM bridge buses — the bridge-owner trace runner ' +
+				'drains one; a second bridge thread would have no traced lane'
+		}
+		if s.bridge_core_clash {
+			// the dump block header carries a CORE id: two traced entities on one core emit
+			// indistinguishable blocks (#191 P3b design note).
+			return 'its COM bridge shares a core with a traced app partition — the dump block ' +
+				'header carries a core id, so two traced entities on one core emit ' +
+				'indistinguishable blocks; give them distinct cores'
+		}
+		if s.partition_count != 1 {
+			// the module holds one satellite import slot, and the bridge-owner already IS the
+			// owner entity — one app partition (the satellite) is the ceiling.
+			return 'it has a COM bridge and ${s.partition_count} app partitions — the ' +
+				'bridge-owner runner traces the bridge plus ONE app partition (the module ' +
+				'holds one satellite import slot)'
+		}
 	}
 	return ''
 }

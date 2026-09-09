@@ -2277,7 +2277,7 @@ BO_ 288 FrameB: 8 b
 
 // REQ-TOPO-002: a host node with a node-local [[route]] builds WITHOUT trace
 // (loom2v trace_host needs routes.len == 0), so its trace ids are not reserved.
-fn test_host_route_disables_trace_reservation() {
+fn test_a_routed_node_is_the_bridge_owner_shape_and_reserves_its_ids() {
 	mut s := clean_system()
 	for i in 0 .. 2 {
 		s.nodes[i].view.is_threadx = false
@@ -2286,11 +2286,14 @@ fn test_host_route_disables_trace_reservation() {
 		s.nodes[i].view.trace_bus = 'can0'
 		s.nodes[i].view.trace_record_id = 0x7e5
 		s.nodes[i].view.partition_count = 1
-		s.nodes[i].view.has_route = true // a node-local route -> no host trace
+		s.nodes[i].view.has_route = true // a node-local route: the P3b bridge-owner shape
 		s.nodes[i].view.produces = map[string][]string{}
 		s.nodes[i].view.consumes = map[string][]string{}
 	}
-	assert !errs(validate_system(s)).any(it.contains('trace record id 0x7e5')), errs(validate_system(s)).str()
+	// P3b flipped this expectation: a routed single-partition node is the bridge-owner trace
+	// shape now (emb#191), so its record id IS reserved and two nodes claiming 0x7e5 on one
+	// interface collide — which is exactly what a reservation is for.
+	assert errs(validate_system(s)).any(it.contains('trace record id 0x7e5')), errs(validate_system(s)).str()
 }
 
 // --- codex #141 round-21 fixes ---

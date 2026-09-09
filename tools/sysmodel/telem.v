@@ -93,6 +93,11 @@ fn trace_generated(n Node, s System) bool {
 		// permissive (it never passes a node loom2v would reject for a DIFFERENT reason).
 		trace_bus_eth:   false
 		has_bridge:      node_has_bus_signal(n) || n.view.has_isotp || n.view.has_route
+		// SAME GAP for the P3b bridge-owner fields: the view has no per-bus signal map or core
+		// map, so which bus the bridge rides and whose core it shares are unknowable here — left
+		// at their zero values, which is the permissive direction again: a bridged node loom2v
+		// would reject (same-bus piggyback, core clash, second bridge) still reads as traced,
+		// and its ids stay reserved rather than colliding silently.
 	}) == ''
 }
 

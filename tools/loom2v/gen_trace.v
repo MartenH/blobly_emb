@@ -459,13 +459,55 @@ fn trace_fb_install(m Model) []string {
 // cannot disagree. `trace_host` in gen.v is derived from this too: a condition added here reaches
 // the predicate and the error message together.
 fn trace_shape_of(m Model, trace_bus string) ecumodel.TraceShape {
-	return ecumodel.TraceShape{
-		threadx:         m.target.threadx
-		baremetal:       m.target.on && !m.target.threadx
-		partition_count: m.part.by_part.keys().len
-		trace_bus_eth:   (m.bus_kind[trace_bus] or { 'can' }) == 'eth'
-		has_bridge:      m.has_can_ext || m.isotp_conns.len > 0 || m.routes.len > 0
+	bridged := bridge_can_buses(m)
+	mut clash := false
+	tb_core := m.bus_core[trace_bus] or { 0 }
+	for pn in m.part.by_part.keys() {
+		for b in bridged {
+			if (m.part.core_of[pn] or { 0 }) == (m.bus_core[b] or { 0 }) {
+				clash = true
+			}
+		}
 	}
+	// the bridge-owner loop also serves the trace bus, so the bridge's core must BE the trace
+	// bus's core — a bridge elsewhere would leave the trace bus with no loop to serve it
+	for b in bridged {
+		if (m.bus_core[b] or { 0 }) != tb_core {
+			clash = true // same refusal: the shape has no single owner core
+		}
+	}
+	return ecumodel.TraceShape{
+		threadx:             m.target.threadx
+		baremetal:           m.target.on && !m.target.threadx
+		partition_count:     m.part.by_part.keys().len
+		trace_bus_eth:       (m.bus_kind[trace_bus] or { 'can' }) == 'eth'
+		has_bridge:          m.has_can_ext || m.isotp_conns.len > 0 || m.routes.len > 0
+		bridge_on_trace_bus: trace_bus in bridged
+		bridge_core_clash:   clash
+		bridge_count:        bridged.len
+	}
+}
+
+// bridge_can_buses: the CAN buses that carry COM bridge work — external signals, an ISO-TP
+// endpoint, or a route endpoint. The per-bus mirror of the has_bridge model flags, sorted for
+// stable use in numbering.
+fn bridge_can_buses(m Model) []string {
+	mut set := map[string]bool{}
+	for _, si in m.sig_of {
+		if si.external && (m.bus_kind[si.bus] or { 'can' }) != 'eth' {
+			set[si.bus] = true
+		}
+	}
+	for c in m.isotp_conns {
+		set[c.bus] = true
+	}
+	for r in m.routes {
+		set[r.from_bus] = true
+		set[r.to_bus] = true
+	}
+	mut names := set.keys()
+	names.sort()
+	return names
 }
 
 fn trace_shape_blocker(m Model, trace_bus string) string {
