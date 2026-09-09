@@ -11,13 +11,12 @@
 > (single-core), for TWO (P3a, this document's §3 — one dump owner plus one satellite core), and
 > for a COM BRIDGE plus one app partition (P3b, §4.2 — the bridge owns the trace bus and the
 > module, its drain spans recorded through `trace.thread_hook`).
-> `examples/trace_multicore` is the two-core case and answers a dump again. Three partitions are
-> refused, and so are the shapes still ungenerated — `examples/trace_comm` (a COM bridge, whose
-> plain `run()` the trace-host runner would replace) and the bare-metal `h735_app` — which carry
-> `[trace] enabled = false`. Since #191 an enabled `[trace]` on a shape loom2v cannot generate
-> FAILS generation rather than warning and building a silent no-op, so a config either gets trace
-> or gets an error naming the one condition that tripped. Sections below that describe P3b and
-> P3c-0 are design text for shapes not currently generated; §3 is live.
+> `examples/trace_multicore` is the two-core case and `examples/trace_comm` the bridge-owner one;
+> both answer a dump. Three partitions are refused, and so is the one shape still ungenerated —
+> the bare-metal `h735_app`, which carries `[trace] enabled = false`. Since #191 an enabled
+> `[trace]` on a shape loom2v cannot generate FAILS generation rather than warning and building a
+> silent no-op, so a config either gets trace or gets an error naming the one condition that
+> tripped. §3 and §4.2 are live; §5's P3c-0 text is design for a shape not yet generated.
 > The design writeup for the multi-core trace-codegen phase, extending the inline single-core path
 > from #54/#55/#56. **P3a is shipped** — `examples/trace_multicore` (two partitions, cores 0+1): a
 > single dump command streams each core's window as self-describing blocks (multi-block with a

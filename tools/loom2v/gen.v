@@ -3445,7 +3445,7 @@ fn main() {
 		}
 	}
 	if tctx.on() {
-		validate_trace_bridge_owner(m)
+		validate_trace_bridge_owner(m, tctx)
 	}
 	trace_host := trace_owns_run && trace_nparts == 1 && !tctx.on()
 	trace_multicore := trace_owns_run && trace_nparts == 2 && !tctx.on()

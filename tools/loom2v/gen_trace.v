@@ -817,18 +817,42 @@ fn host_comm_tid(m Model) int {
 // validate_trace_bridge_owner: the two config keys this runner cannot honour. Both other host
 // runners reject exactly this rather than degrade in silence, which is the whole point of #191:
 // a config either gets the trace it asked for, or an error naming what tripped.
-fn validate_trace_bridge_owner(m Model) {
+fn validate_trace_bridge_owner(m Model, tctx TraceHostCtx) {
+	owner_core := m.bus_core[tctx.trace_bus] or { 0 }
+	// A TraceCmd's core_mask is 16 bits and Cmd.targets() answers false past core 15, so a lane
+	// on a higher core could never be stopped, statused or dumped — it would record forever and
+	// answer nothing. (Telemetry narrows this further, to the CpuLoad frame's 8; that guard
+	// lives with the frame it is about.)
+	if owner_core >= 16 || tctx.sat_core >= 16 {
+		panic('loom2v: [[partition]]/[bus] core ${owner_core}/${tctx.sat_core} cannot be addressed ' +
+			'by a TraceCmd — its core_mask is 16 bits, so a lane above core 15 never answers a ' +
+			'stop, status or dump. Use cores 0..15.')
+	}
+	// produce() streams the owner's own block before the imported one, and the protocol says
+	// ascending core order (docs/telemetry.md §"one command, all selected cores"). The P3a
+	// emitter refuses the same inversion; here the owner is the BRIDGE, so its bus is what has
+	// to sit on the lower core.
+	if owner_core > tctx.sat_core {
+		panic('loom2v: [trace] bus "${tctx.trace_bus}" is on core ${owner_core}, above the traced ' +
+			'partition\'s core ${tctx.sat_core} — the owner streams its own block first, so the ' +
+			'dump would arrive in descending core order. Put the trace bus on the lower core.')
+	}
 	if m.trace.mode != 'ring' {
 		panic('loom2v: [trace] mode = "${m.trace.mode}" is not generated for the bridge-owner ' +
 			'runner — the owner and satellite rings are flight recorders frozen by a trigger or ' +
 			'a host stop (a completing oneshot freezes only itself, so the two lanes could not ' +
 			'be kept coherent) — use mode = "ring"')
 	}
-	if m.trace.level !in ['fb', 'thread+fb'] {
+	// The levels are CAPTURE FILTERS (docs/telemetry.md), and this runner's two lanes are of
+	// two kinds by construction: the satellite's FB spans and the bridge's THREAD spans. "fb"
+	// would exclude the very lane the shape exists to produce, while the generator installs
+	// thread_hook regardless — the record kind would be spent on a ring that asked not to have
+	// it. Only the level that describes both lanes is honoured.
+	if m.trace.level != 'thread+fb' {
 		panic('loom2v: [trace] level = "${m.trace.level}" is not generated for the bridge-owner ' +
-			'runner — a polled host loop has no preemptive context switches or ISRs to capture: ' +
-			'it records the app partition\'s FB spans and the bridge\'s own drain spans — use ' +
-			'level = "fb" or "thread+fb"')
+			'runner — its two lanes are the app partition\'s FB spans and the bridge\'s own ' +
+			'THREAD drain spans, so "fb" would exclude the lane this shape exists to record ' +
+			'(and a polled host loop has no ISRs) — use level = "thread+fb"')
 	}
 }
 
