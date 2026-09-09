@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 188 | 105 | 19 | 64 | 0 |
+| 189 | 105 | 19 | 65 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -99,6 +99,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-IO-022 | QM | analysis | uncovered | — |
 | REQ-IO-023 | QM | test | verified | e2e_test.v (pass), io_test.v (pass) |
 | REQ-IO-024 | QM | analysis | uncovered | — |
+| REQ-IO-025 | QM | bench | uncovered | — |
 | REQ-NET-001 | QM | analysis | verified | h735-eth-hardware (approved) |
 | REQ-NET-002 | QM | analysis | verified | h735-eth-hardware (approved) |
 | REQ-NET-003 | QM | test | verified | h735-eth-hardware (approved) |
@@ -292,6 +293,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-IO-022 | | | | | | | | | | | | | | | | | | |
 | REQ-IO-023 | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-IO-024 | | | | | | | | | | | | | | | | | | |
+| REQ-IO-025 | | | | | | | | | | | | | | | | | | |
 | REQ-NET-001 | ✓ | | | | | | | | | | | | | | | | | |
 | REQ-NET-002 | ✓ | | | | | | | | | | | | | | | | | |
 | REQ-NET-003 | ✓ | | | | | | | | | | | | | | | | | |

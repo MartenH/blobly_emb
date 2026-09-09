@@ -87,7 +87,10 @@ Generated into the per-core loop loom2v already builds (`gen/loom_gen.v`), or a 
   per-core blocks + IOC read-out that `trace_multicore` does by hand).
 
 ### b) `gen/trace-manifest.csv` — the `_net` label interface
-One row per handler + one per thread, from the partitions/FBs (matches what loom2v emits):
+One row per handler, one per IO POINT, and one per thread, from the partitions/FBs/io points
+(matches what loom2v emits). An io point's row carries the literal `io` in the `partition`, `fb`
+and `thread` columns, and its id continues the handler numbering — with `[trace] level = "all"`
+the io thread emits one record per point service against that id (#263, REQ-IO-025):
 ```
 # id,partition,core,fb,handler,period_us,thread
 0,sense,0,SpeedFilter,on_10ms,10000,main
