@@ -58,34 +58,20 @@ pub fn partition_ctrl(cap_ptr &trace.Capture) {
 	sched.every(10000, handler_ctrl_ctrl_work_on_10ms, &st)
 	sched.every(20000, handler_ctrl_slow_ctrl_on_20ms, &st)
 	sched.set_trace_hook(trace.fb_hook, voidptr(cap_ptr))
-	mut ring := unsafe { cap_ptr.buf }
 	for {
 		sched.run_profiled(osal.now_us)
-		loom_t1 := osal.now_us()
 		// NO sched.account() here: run_profiled() accounts the pass itself (via
 		// run_profiled_excl -> account(busy, clock())). Calling it again charged the same
 		// pass twice, so every traced core reported roughly double its real load and a
 		// busy one clamped at 100% (codex #270 r2).
 		osal.scratch_set(1, u64(sched.load_permille()))
-		// system-wide freeze (docs/trace-multicore.md §3): a trigger on EITHER core must
-		// freeze both, or the two windows do not overlap and the multi-core view is
-		// incoherent — one lane has already rolled past the event the other froze on.
-		// Idempotent both ways: trigger() is a no-op once a ring stopped capturing.
-		// on the CAUSE, not the state: trigger() sets freeze_trigger at once, while a
-		// ring with pre_pct < 100 keeps capturing until its post-window fills — waiting
-		// for .frozen told the other core a whole post-window late (codex #271).
-		if ring.froze_cause() == trace.freeze_trigger {
-			osal.scratch_set(15, 1)
-		} else if osal.scratch_get(15) != 0 {
-			ring.trigger()
-		}
 		osal.sleep_us(1000)
 	}
 }
 
 // The dump owner: an ordinary app partition that also owns the trace bus. Its ring is
 // the module's OWN buffer, so commands and status apply to a real producing ring.
-pub fn partition_sense(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64) {
+pub fn partition_sense(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &u32) {
 	osal.pin_to_core(0)
 	mut ch := chp
 	mut sat := unsafe { sat_buf }
@@ -97,6 +83,10 @@ pub fn partition_sense(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &
 	mut tm := trace.new_module(u32(0x7e3), u32(0x7e5), 0, true,
 		trace.new_buffer(&ring[0], 64, .ring, 50))
 	mut cap := tm.capture(0, 500, origin_us)
+	unsafe {
+		cap.freeze = freeze // share the cross-core freeze cell with the satellite
+	}
+	tm.set_freeze(freeze) // ...and with the module, which retires it on arm/start/reset
 	sched.set_trace_hook(trace.fb_hook, &cap)
 	// both rings record from startup, like the satellite's below — a flight recorder that
 	// waits for a host to arm it has nothing to say about the boot it was installed to watch.
@@ -112,24 +102,13 @@ pub fn partition_sense(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &
 		// pass twice, so every traced core reported roughly double its real load and a
 		// busy one clamped at 100% (codex #270 r2).
 		osal.scratch_set(0, u64(sched.load_permille()))
-		// the owner half of the system-wide freeze (see the satellite loop above)
-		// on the CAUSE, not the state: trigger() sets freeze_trigger at once, while a
-		// ring with pre_pct < 100 keeps capturing until its post-window fills — waiting
-		// for .frozen told the other core a whole post-window late (codex #271).
-		if tm.froze_cause() == trace.freeze_trigger {
-			osal.scratch_set(15, 1)
-		} else if osal.scratch_get(15) != 0 {
-			tm.trigger()
-		}
 		for ch.recv(mut rx) {
 			match rx.id {
-				u32(0x7e2) { // trace.cmd — applied to BOTH cores
+				u32(0x7e2) { // trace.cmd — applied to BOTH cores;
+				// an arm/start/reset also retires the shared freeze (set_freeze above),
+				// BEFORE any ring restarts — retired after, a peer dispatch in the gap
+				// re-froze the just-armed ring from the stale cell.
 					tm.on_cmd_multicore(rx, mut sat, 1, import_buf, 65)
-					// an arm/reset restarts the ring, which retires the shared freeze —
-					// otherwise the next pass would re-freeze both cores immediately.
-					if tm.state() == .capturing {
-						osal.scratch_set(15, 0)
-					}
 				}
 				u32(0x7e6) { tm.on_dump_fc(loom_t1, rx) } // trace.dump_fc
 				else {}
@@ -166,17 +145,23 @@ pub fn run(chp can.Channel) {
 	// one capture origin for BOTH cores: a per-thread origin would skew the two lanes by
 	// the thread-start delay, invisibly (a shared clock emits no core-offset record).
 	trace_origin := osal.now_us()
+	// the shared cross-core freeze cell (docs/trace-multicore.md §3). Both captures point at
+	// it, so whichever ring trips its budget raises it and the peer observes it inside its
+	// capture hook — within one handler of the event, not at the end of a scheduler pass.
+	mut trace_freeze := u32(0)
 	mut sat_cap := trace.Capture{
 		buf:       &sat_buf
 		start:     trace_origin
 		id_base:   2
 		budget_us: 500
+		freeze:    unsafe { &trace_freeze }
 	}
 	// staging for the imported window (caller-owned, per set_remote): +1 for the leading
 	// core-offset record load_remote_buffer may prepend.
 	mut import_ring := [65]trace.Record{}
 	t_ctrl := spawn partition_ctrl(&sat_cap)
-	t_sense := spawn partition_sense(chp, &sat_buf, unsafe { &import_ring[0] }, trace_origin)
+	t_sense := spawn partition_sense(chp, &sat_buf, unsafe { &import_ring[0] }, trace_origin,
+		unsafe { &trace_freeze })
 	t_ctrl.wait()
 	t_sense.wait()
 }

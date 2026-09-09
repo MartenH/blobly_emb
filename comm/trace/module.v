@@ -61,6 +61,11 @@ mut:
 	// the host reads one ISO-TP transfer per core (mask_popcount blocks), decoder unchanged.
 	remote      TraceBuffer
 	remote_core u8
+	// The shared cross-core freeze cell (see Capture.freeze) — wired by the multicore runner so
+	// the module can RETIRE it at the one place a measurement restarts: a host arm/start/reset.
+	// Retiring anywhere later leaves a window where a freshly re-armed ring re-freezes from the
+	// stale cell before the owner loop gets to clear it (codex #271 r2 follow-up).
+	freeze &u32 = unsafe { nil }
 	remote_due  bool
 	remote_from u32 // continuation cursor into the remote window
 	// The satellite's trace clock measured against ours, re-measured per dump (REQ-TRACE-011)
@@ -224,6 +229,25 @@ pub fn (mut m TraceModule) push(r Record) {
 // as before. Separate from new_module() deliberately: constructing a module and choosing to start
 // capturing are different decisions, and the target path builds the module in place long before it
 // wants records.
+// set_freeze wires the shared cross-core freeze cell so arm/start/reset retire it (multicore
+// runner only; a single-core module has no peer and leaves it nil).
+pub fn (mut m TraceModule) set_freeze(cell &u32) {
+	unsafe {
+		m.freeze = cell
+	}
+}
+
+// retire_freeze clears the shared freeze BEFORE a re-arm restarts any ring: cleared after, a
+// peer dispatching in between observes the stale cell and instantly re-freezes the ring the
+// host just armed — and an arm addressed to one core alone would never clear it at all.
+fn (mut m TraceModule) retire_freeze() {
+	if m.freeze != unsafe { nil } {
+		unsafe {
+			*m.freeze = 0
+		}
+	}
+}
+
 pub fn (mut m TraceModule) arm() {
 	m.buf.start()
 }

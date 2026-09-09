@@ -242,3 +242,25 @@ fn test_a_dump_during_a_queued_stream_is_refused() {
 	assert m.rsp_pending(), 'the refused dump was not answered'
 	assert decode_rsp(m.rsp).result == result_busy, 'expected BUSY, got ${decode_rsp(m.rsp).result}'
 }
+
+// An arm/start/reset RETIRES the shared cross-core freeze, whichever cores the mask names, and
+// does so before any ring restarts — retired after (or keyed on the owner's state, as the runner
+// once did), a peer dispatching in the gap re-froze the just-armed ring from the stale cell, and
+// an arm addressed to the satellite alone never cleared it at all (codex #271 r2).
+fn test_an_arm_retires_the_shared_freeze_for_any_mask() {
+	mut ring := [64]Record{}
+	mut m := TraceModule{}
+	m.init(0x7e3, 0x7e5, 0, true, new_buffer(&ring[0], 64, .ring, 50))
+	mut cell := u32(1) // a trigger froze the system earlier
+	m.set_freeze(&cell)
+	mut sat_ring := [64]Record{}
+	mut sat := new_buffer(&sat_ring[0], 64, .ring, 50)
+	mut remote := [65]Record{}
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0002), mut sat, 1, &remote[0], 65) // satellite ALONE
+	assert cell == 0
+	cell = 1
+	m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 65)
+	assert cell == 1 // a dump consumes nothing: the frozen system stays described by the cell
+	m.on_cmd_multicore(cmd_frame(op_reset, 0x0003), mut sat, 1, &remote[0], 65)
+	assert cell == 0
+}

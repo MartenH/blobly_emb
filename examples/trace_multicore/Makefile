@@ -4,8 +4,12 @@
 # vcan` once, then `make run` on vcan0.
 #
 # blobly_net decodes the fixed observability protocol natively from gen/trace-manifest.csv — both
-# cores' handler + thread rows AND the `# trace frames` rows (cmd/rsp/record/dump_fc). The `watch`
-# target below sees a TraceRsp per selected core.
+# cores' handler + thread rows AND the `# trace frames` rows (cmd/rsp/record/dump_fc).
+#
+# NOTE for `watch`: a command selecting BOTH cores answers with ONE TraceRsp, the owner's — the
+# satellite's state travels in its own dump block header instead. A separate TraceRsp for core 1
+# appears only when a command selects core 1 alone (mask 0x0002). Two responses per stop/dump is
+# not the success criterion; two dump BLOCKS is.
 REPO ?= ../..
 include $(REPO)/examples/common.mk
 

@@ -41,6 +41,12 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 		b[i] = f.data[i]
 	}
 	c := decode_cmd(b)
+	// A (re)arm consumes the system freeze, whichever cores the mask names: the cell describes
+	// ONE past event, and restarting any window means that event has been read (or abandoned).
+	// Cleared before either ring restarts — see retire_freeze for why the order matters.
+	if c.opcode == op_arm || c.opcode == op_start || c.opcode == op_reset {
+		m.retire_freeze()
+	}
 	// A dump must not be accepted while ANY part of the previous one is still outstanding.
 	// on_cmd's own busy check only covers the ISO-TP link, not a queued local_due/remote_due
 	// block, so a dump arriving in the IDLE GAP between continuation transfers was accepted:

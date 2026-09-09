@@ -8,6 +8,8 @@
 >
 > Still a P3a slice, so: FB records only (a polled host loop has no thread/ISR events), two cores
 > maximum (the module holds one satellite import slot), and no `HandlerStat` fan-out (`push_ms = 0`).
+> A command selecting both cores also answers with ONE `TraceRsp` — the owner's; core 1's state
+> rides its own dump block header. A per-core response pair would need a response queue.
 
 Two partitions on two cores (`sense` on core 0, `ctrl` on core 1), each a pure-compute Loom, both
 traced. Everything is generated from [`ecu.toml`](ecu.toml) by loom2v — the per-core capture rings,
@@ -52,7 +54,8 @@ BLOBLY_PROJECT=examples/trace_multicore/trace-multicore.blobnet   # or blobly_ne
 Or raw with can-utils:
 
 ```sh
-candump vcan0,7E3:7FF &                    # TraceRsp — one per selected core (b7 = core)
+candump vcan0,7E3:7FF &                    # TraceRsp (b7 = core). A both-cores command answers
+                                           # ONCE, from the owner; core 1's state rides its block
 isotprecv -s 0x7E6 -d 0x7E5 vcan0 &        # ISO-TP receiver: answers each block's FF with flow
                                            # control on 0x7E6 and reassembles 0x7E5 (needs can-isotp)
 cansend vcan0 7E2#03000000FFFF0300         # stop cores 0+1 (freeze the rings)
