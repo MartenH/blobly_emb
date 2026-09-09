@@ -246,6 +246,21 @@ fn (mut m TraceModule) retire_freeze() {
 	}
 }
 
+// retire_freeze_unless_tripped is the second half of the re-arm bracket, AFTER the restarts:
+// a dispatch overlapping the restart can raise the cell for the window being erased, and left
+// standing it would freeze the fresh windows on their first record. But an overrun landing
+// just AFTER a restart is a legitimate trigger of the new measurement, and start() wiped both
+// rings' causes — so a trigger cause on either ring can only be the new window's, and the cell
+// is preserved for it (codex #271 r9). The check-then-clear is itself two atomic cells, which
+// is the P3a simplification the whole command path runs under (the restarts touch the peer's
+// ring cross-thread without quiescing it); the generation handshake that closes it is #273.
+fn (mut m TraceModule) retire_freeze_unless_tripped(sat &TraceBuffer) {
+	if m.froze_cause() == freeze_trigger || sat.froze_cause() == freeze_trigger {
+		return
+	}
+	m.retire_freeze()
+}
+
 pub fn (mut m TraceModule) arm() {
 	m.buf.start()
 }

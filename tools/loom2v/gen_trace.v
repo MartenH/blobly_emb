@@ -531,7 +531,17 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 			'"${resolved_trace_bus}", but the multi-core trace runner owns only the trace channel ' +
 			'and would send CpuLoad there — put both on one bus, or drop [telemetry]')
 	}
-	mode := if m.trace.mode == 'oneshot' { '.oneshot' } else { '.ring' }
+	// The multicore coherence contract is the flight recorder's: a TRIGGER on either core
+	// freezes both. A oneshot COMPLETING is not a trigger — it stops its own core silently,
+	// and no rule says whose completion should freeze whom — so a "coherent" two-core oneshot
+	// has no defined owner and the windows drift apart at different handler rates (codex #271
+	// r9). Reject it rather than generate a shape whose central promise cannot hold.
+	if m.trace.mode == 'oneshot' {
+		panic('loom2v: [trace] mode = "oneshot" is not generated for the multicore host runner — ' +
+			'the system-wide freeze contract is trigger-based (a oneshot completing freezes only ' +
+			'itself, so the two windows cannot be kept coherent) — use mode = "ring"')
+	}
+	mode := '.ring'
 	cap := m.trace.buffer_records
 	sat_core := m.part.core_of[sat] or { 0 }
 	owner_core := m.part.core_of[owner] or { 0 }

@@ -134,7 +134,8 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 		m.queue_rsp(status_rsp(sat, c.opcode, result_ok, sat_core))
 	}
 	if rearms {
-		m.retire_freeze() // the second half of the bracket above — after every restart
+		// the second half of the bracket above — after every restart, sparing a fresh trigger
+		m.retire_freeze_unless_tripped(sat)
 	}
 	return imported
 }

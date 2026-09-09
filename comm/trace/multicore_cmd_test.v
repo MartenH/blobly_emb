@@ -312,3 +312,24 @@ fn test_a_satellite_only_dump_of_a_capturing_ring_answers_not_ready() {
 	assert m.produce(0, mut f)
 	assert f.data[1] == result_not_ready
 }
+
+// The post-restart retirement spares a fresh trigger: an overrun landing just after the
+// restart is the NEW window's legitimate trigger, and start() wiped both rings' causes, so a
+// trigger cause on either ring can only be the new measurement's (codex #271 r9; #273 tracks
+// the generation handshake that closes the remaining check-then-act).
+fn test_the_post_restart_retire_spares_a_fresh_trigger() {
+	mut own := [16]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	m.arm()
+	mut cell := u32(1)
+	m.set_freeze(&cell)
+	mut sat_ring := [16]Record{}
+	mut sat := new_buffer(&sat_ring[0], 16, .ring, 50)
+	sat.start()
+	sat.trigger() // the new window tripped in the restart gap
+	m.retire_freeze_unless_tripped(&sat)
+	assert cell == 1 // preserved: the notification is the fresh window's
+	sat.start() // no trip in the gap
+	m.retire_freeze_unless_tripped(&sat)
+	assert cell == 0 // a stale raise for an erased window is retired
+}
