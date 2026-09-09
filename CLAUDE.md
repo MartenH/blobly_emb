@@ -70,13 +70,22 @@ examples`, per-example host builds with generation, and a repo-wide **"Generated
 fresh"** gate. The last one is the usual surprise: a stale committed `gen/` output passes every
 local command and fails CI. Re-run generation before opening the PR.
 
-**`examples/trace_comm` and `examples/trace_multicore` build, but with `[trace] enabled = false`.**
-loom2v generates the trace ring + dump for the single-partition host shape only, and now **rejects**
-an enabled `[trace]` on any other shape instead of warning and building a silent no-op — the failure
-names the one condition that tripped (partition count, bare-metal target, eth trace bus, or a COM
-bridge whose plain `run()` the trace-host runner would replace). So a config that asks for trace
-either gets it or fails generation; those two examples (plus `h735_app`, bare-metal) say
-`enabled = false` with a comment, and their manifests no longer advertise ids nothing answers.
+**Which `[trace]` shapes generate.** loom2v emits the host trace runner for **one** partition
+(single-core, `examples/trace_demo`) and for **two** (`examples/trace_multicore`, #270 — one dump
+owner plus one satellite core, with a system-wide freeze so both windows cover the same instant).
+An enabled `[trace]` on any other shape **fails generation** rather than warning and building a
+silent no-op, naming the one condition that tripped: partition count (three has no import slot —
+`TraceModule` holds exactly one satellite), a bare-metal target, an eth trace bus, or a COM bridge
+whose plain `run()` the trace-host runner would replace. So a config either gets trace or gets an
+error. Still `enabled = false` with a comment, both awaiting #191's remaining slices:
+`examples/trace_comm` (P3b, the COM-bridge shape) and `examples/h735_app` (P3c-0, bare-metal);
+their manifests advertise no ids nothing answers.
+
+The dump owner is an **app partition**, never a separate bus thread — that is what keeps the
+protocol in the platform: the owner's ring is then `TraceModule`'s own buffer, so `handle_cmd`'s
+arm/stop/dump and the status counts act on a real producing ring and only the satellite is
+imported. And note `run_profiled()` **accounts the pass itself**; a generated loop that calls
+`sched.account()` after it charges every pass twice (that bug reached `trace_demo`, fixed in #270).
 #191 is open for the generator wiring — the platform side (`comm/trace`) never lost it. Note the
 host still fills absent manifest frame rows with 0x7E2..0x7E6 defaults (#252 item 2), so "no rows"
 does not yet read as "no trace" on the blobly_net side.

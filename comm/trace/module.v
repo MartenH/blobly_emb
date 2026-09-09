@@ -61,6 +61,11 @@ mut:
 	// the host reads one ISO-TP transfer per core (mask_popcount blocks), decoder unchanged.
 	remote      TraceBuffer
 	remote_core u8
+	// The shared cross-core freeze cell (see Capture.freeze) — wired by the multicore runner so
+	// the module can RETIRE it at the one place a measurement restarts: a host arm/start/reset.
+	// Retiring anywhere later leaves a window where a freshly re-armed ring re-freezes from the
+	// stale cell before the owner loop gets to clear it (codex #271 r2 follow-up).
+	freeze &u32 = unsafe { nil }
 	remote_due  bool
 	remote_from u32 // continuation cursor into the remote window
 	// The satellite's trace clock measured against ours, re-measured per dump (REQ-TRACE-011)
@@ -224,6 +229,38 @@ pub fn (mut m TraceModule) push(r Record) {
 // as before. Separate from new_module() deliberately: constructing a module and choosing to start
 // capturing are different decisions, and the target path builds the module in place long before it
 // wants records.
+// set_freeze wires the shared cross-core freeze cell so arm/start/reset retire it (multicore
+// runner only; a single-core module has no peer and leaves it nil).
+pub fn (mut m TraceModule) set_freeze(cell &u32) {
+	unsafe {
+		m.freeze = cell
+	}
+}
+
+// retire_freeze clears the shared freeze BEFORE a re-arm restarts any ring: cleared after, a
+// peer dispatching in between observes the stale cell and instantly re-freezes the ring the
+// host just armed — and an arm addressed to one core alone would never clear it at all.
+fn (mut m TraceModule) retire_freeze() {
+	if m.freeze != unsafe { nil } {
+		C.atomic_store_u32(voidptr(m.freeze), 0)
+	}
+}
+
+// retire_freeze_unless_tripped is the second half of the re-arm bracket, AFTER the restarts:
+// a dispatch overlapping the restart can raise the cell for the window being erased, and left
+// standing it would freeze the fresh windows on their first record. But an overrun landing
+// just AFTER a restart is a legitimate trigger of the new measurement, and start() wiped both
+// rings' causes — so a trigger cause on either ring can only be the new window's, and the cell
+// is preserved for it (codex #271 r9). The check-then-clear is itself two atomic cells, which
+// is the P3a simplification the whole command path runs under (the restarts touch the peer's
+// ring cross-thread without quiescing it); the generation handshake that closes it is #273.
+fn (mut m TraceModule) retire_freeze_unless_tripped(sat &TraceBuffer) {
+	if m.froze_cause() == freeze_trigger || sat.froze_cause() == freeze_trigger {
+		return
+	}
+	m.retire_freeze()
+}
+
 pub fn (mut m TraceModule) arm() {
 	m.buf.start()
 }
@@ -312,6 +349,16 @@ pub fn (mut m TraceModule) queue_rsp(b [8]u8) bool {
 // idempotent, because TraceBuffer.trigger() is a no-op once the ring is no longer capturing.
 pub fn (mut m TraceModule) trigger() {
 	m.buf.trigger()
+}
+
+// froze_cause reports WHY this module's ring stopped. The multi-core runner propagates on the
+// cause rather than on the state: TraceBuffer.trigger() sets freeze_trigger IMMEDIATELY, while a
+// ring with pre_pct < 100 stays `capturing` until its post-trigger window fills. Waiting for
+// `frozen` therefore told the other core up to a whole post-window late — long enough for it to
+// have rolled the very event out of its own ring, which is exactly the incoherence the shared
+// freeze exists to prevent (codex #271).
+pub fn (m TraceModule) froze_cause() u8 {
+	return m.buf.froze_cause()
 }
 
 pub fn (m TraceModule) state() State {

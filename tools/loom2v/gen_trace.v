@@ -532,7 +532,17 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 			'"${resolved_trace_bus}", but the multi-core trace runner owns only the trace channel ' +
 			'and would send CpuLoad there — put both on one bus, or drop [telemetry]')
 	}
-	mode := if m.trace.mode == 'oneshot' { '.oneshot' } else { '.ring' }
+	// The multicore coherence contract is the flight recorder's: a TRIGGER on either core
+	// freezes both. A oneshot COMPLETING is not a trigger — it stops its own core silently,
+	// and no rule says whose completion should freeze whom — so a "coherent" two-core oneshot
+	// has no defined owner and the windows drift apart at different handler rates (codex #271
+	// r9). Reject it rather than generate a shape whose central promise cannot hold.
+	if m.trace.mode == 'oneshot' {
+		panic('loom2v: [trace] mode = "oneshot" is not generated for the multicore host runner — ' +
+			'the system-wide freeze contract is trigger-based (a oneshot completing freezes only ' +
+			'itself, so the two windows cannot be kept coherent) — use mode = "ring"')
+	}
+	mode := '.ring'
 	cap := m.trace.buffer_records
 	sat_core := m.part.core_of[sat] or { 0 }
 	owner_core := m.part.core_of[owner] or { 0 }
@@ -547,19 +557,21 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 			'lower-numbered core (docs/trace-multicore.md §3)')
 	}
 	telem_on := m.telem.on && telem_iface != ''
-	// The shared cross-core freeze flag. Loads occupy one scratch slot per core from 0, so take
-	// the LAST slot: it cannot collide with a core index for any plausible core count.
-	// The shared cross-core freeze flag lives in the LAST scratch slot, while each core publishes
-	// its load to scratch_set(core, ...). Those alias if a partition runs on that core: every load
-	// update would overwrite the flag, so an ordinary non-zero load reads as a system trigger and
-	// spontaneously freezes both rings, while a zero load erases a real one. Reject the collision
-	// rather than pick a slot and hope — the core ids are config, and 16 slots is the platform's.
-	freeze_slot := 15 // osal.scratch_slots (16) - 1; loom2v cannot import osal, so mirror it here
-	if owner_core >= freeze_slot || sat_core >= freeze_slot {
-		panic('loom2v: [[partition]] core ${owner_core}/${sat_core} collides with the multi-core ' +
-			'trace freeze flag, which uses osal scratch slot ${freeze_slot} — each core also ' +
-			'publishes its load to its OWN slot, so a core >= ${freeze_slot} would overwrite the ' +
-			'flag and freeze or un-freeze both rings at random. Use cores 0..${freeze_slot - 1}.')
+	// Each core publishes its load to osal.scratch_set(core, ...) — 16 slots is the platform's.
+	// A core id past them would not collide with anything, it would just be silently dropped by
+	// scratch_set's bounds check and report a permanent zero load in the telemetry frame, with
+	// nothing saying why. And with telemetry ON the ceiling is LOWER: the CpuLoad frame packs
+	// one byte per core (telem.cpuload_max_cores = 8), so a core past 7 indexes the generated
+	// [8]u16 load array out of bounds. Refuse both at generation instead.
+	if owner_core >= 16 || sat_core >= 16 {
+		panic('loom2v: [[partition]] core ${owner_core}/${sat_core} is outside the osal scratch ' +
+			'area (16 slots, one per core for load telemetry) — scratch_set would silently drop ' +
+			'that core\'s load and the telemetry frame would read 0 forever. Use cores 0..15.')
+	}
+	if telem_on && (owner_core >= 8 || sat_core >= 8) {
+		panic('loom2v: [[partition]] core ${owner_core}/${sat_core} does not fit the CpuLoad ' +
+			'frame — telem.cpuload_max_cores packs one byte per core for cores 0..7, and the ' +
+			'generated load array is indexed by core id. Use cores 0..7, or disable [telemetry].')
 	}
 	mut g := []string{}
 
@@ -575,24 +587,13 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 		g << r
 	}
 	g << '	sched.set_trace_hook(trace.fb_hook, voidptr(cap_ptr))'
-	g << '	mut ring := unsafe { cap_ptr.buf }'
 	g << '	for {'
 	g << '		sched.run_profiled(osal.now_us)'
-	g << '		loom_t1 := osal.now_us()'
 	g << '		// NO sched.account() here: run_profiled() accounts the pass itself (via'
 	g << '		// run_profiled_excl -> account(busy, clock())). Calling it again charged the same'
 	g << '		// pass twice, so every traced core reported roughly double its real load and a'
 	g << '		// busy one clamped at 100% (codex #270 r2).'
 	g << '		osal.scratch_set(${sat_core}, u64(sched.load_permille()))'
-	g << '		// system-wide freeze (docs/trace-multicore.md §3): a trigger on EITHER core must'
-	g << '		// freeze both, or the two windows do not overlap and the multi-core view is'
-	g << '		// incoherent — one lane has already rolled past the event the other froze on.'
-	g << '		// Idempotent both ways: trigger() is a no-op once a ring stopped capturing.'
-	g << '		if ring.state() == .frozen {'
-	g << '			osal.scratch_set(${freeze_slot}, 1)'
-	g << '		} else if osal.scratch_get(${freeze_slot}) != 0 {'
-	g << '			ring.trigger()'
-	g << '		}'
 	g << '		osal.sleep_us(1000)'
 	g << '	}'
 	g << '}'
@@ -601,7 +602,7 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << ''
 	g << '// The dump owner: an ordinary app partition that also owns the trace bus. Its ring is'
 	g << '// the module\'s OWN buffer, so commands and status apply to a real producing ring.'
-	g << 'pub fn partition_${owner}(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64) {'
+	g << 'pub fn partition_${owner}(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &u32) {'
 	g << '	osal.pin_to_core(${owner_core})'
 	g << '	mut ch := chp'
 	g << '	mut sat := unsafe { sat_buf }'
@@ -618,6 +619,10 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	// skewed by the nondeterministic thread-start delay — and nothing reported it, because
 	// load_remote_buffer emits no core-offset record when the clock is shared, which it is.
 	g << '	mut cap := tm.capture(${handler_id_base(m, doc, owner)}, ${m.trace.budget_us}, origin_us)'
+	g << '	unsafe {'
+	g << '		cap.freeze = freeze // share the cross-core freeze cell with the satellite'
+	g << '	}'
+	g << '	tm.set_freeze(freeze) // ...and with the module, which retires it on arm/start/reset'
 	g << '	sched.set_trace_hook(trace.fb_hook, &cap)'
 	g << '	// both rings record from startup, like the satellite\'s below — a flight recorder that'
 	g << '	// waits for a host to arm it has nothing to say about the boot it was installed to watch.'
@@ -635,21 +640,13 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '		// pass twice, so every traced core reported roughly double its real load and a'
 	g << '		// busy one clamped at 100% (codex #270 r2).'
 	g << '		osal.scratch_set(${owner_core}, u64(sched.load_permille()))'
-	g << '		// the owner half of the system-wide freeze (see the satellite loop above)'
-	g << '		if tm.state() == .frozen {'
-	g << '			osal.scratch_set(${freeze_slot}, 1)'
-	g << '		} else if osal.scratch_get(${freeze_slot}) != 0 {'
-	g << '			tm.trigger()'
-	g << '		}'
 	g << '		for ch.recv(mut rx) {'
 	g << '			match rx.id {'
-	g << '				u32(0x${m.trace.cmd_id.hex()}) { // trace.cmd — applied to BOTH cores'
+	g << '				u32(0x${m.trace.cmd_id.hex()}) { // trace.cmd — applied to BOTH cores;'
+	g << '				// an arm/start/reset also retires the shared freeze (set_freeze above),'
+	g << '				// BEFORE any ring restarts — retired after, a peer dispatch in the gap'
+	g << '				// re-froze the just-armed ring from the stale cell.'
 	g << '					tm.on_cmd_multicore(rx, mut sat, ${sat_core}, import_buf, ${cap + 1})'
-	g << '					// an arm/reset restarts the ring, which retires the shared freeze —'
-	g << '					// otherwise the next pass would re-freeze both cores immediately.'
-	g << '					if tm.state() == .capturing {'
-	g << '						osal.scratch_set(${freeze_slot}, 0)'
-	g << '					}'
 	g << '				}'
 	if m.trace.dump_fc_bound {
 		g << '				u32(0x${m.trace.dump_fc_id.hex()}) { tm.on_dump_fc(loom_t1, rx) } // trace.dump_fc'
@@ -695,17 +692,23 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '	// one capture origin for BOTH cores: a per-thread origin would skew the two lanes by'
 	g << '	// the thread-start delay, invisibly (a shared clock emits no core-offset record).'
 	g << '	trace_origin := osal.now_us()'
+	g << '	// the shared cross-core freeze cell (docs/trace-multicore.md §3). Both captures point at'
+	g << '	// it, so whichever ring trips its budget raises it and the peer observes it inside its'
+	g << '	// capture hook — within one handler of the event, not at the end of a scheduler pass.'
+	g << '	mut trace_freeze := u32(0)'
 	g << '	mut sat_cap := trace.Capture{'
 	g << '		buf:       &sat_buf'
 	g << '		start:     trace_origin'
 	g << '		id_base:   ${handler_id_base(m, doc, sat)}'
 	g << '		budget_us: ${m.trace.budget_us}'
+	g << '		freeze:    unsafe { &trace_freeze }'
 	g << '	}'
 	g << '	// staging for the imported window (caller-owned, per set_remote): +1 for the leading'
 	g << '	// core-offset record load_remote_buffer may prepend.'
 	g << '	mut import_ring := [${cap + 1}]trace.Record{}'
 	g << '	t_${sat} := spawn partition_${sat}(&sat_cap)'
-	g << '	t_${owner} := spawn partition_${owner}(chp, &sat_buf, unsafe { &import_ring[0] }, trace_origin)'
+	g << '	t_${owner} := spawn partition_${owner}(chp, &sat_buf, unsafe { &import_ring[0] }, trace_origin,'
+	g << '		unsafe { &trace_freeze })'
 	g << '	t_${sat}.wait()'
 	g << '	t_${owner}.wait()'
 	g << '}'

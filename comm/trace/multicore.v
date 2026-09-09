@@ -41,6 +41,22 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 		b[i] = f.data[i]
 	}
 	c := decode_cmd(b)
+	// A (re)arm consumes the system freeze — but only one that ADDRESSES a core this runner
+	// generated: a mask naming neither core restarts nothing, and clearing for it would erase
+	// a notification a tripped core had just raised for a peer that has not looked yet (codex
+	// #271 r3). Retired BEFORE any ring restarts (a stale cell would re-freeze the ring the
+	// host just armed) and AGAIN after them: a dispatch overlapping the restart can raise the
+	// cell for the window being erased, and that raise would freeze the fresh windows on
+	// their first record. The residual is symmetric and bounded to that same overlap: a
+	// GENUINE overrun landing inside the restart microwindow has its raise retired too, and
+	// is notified on its next over-budget dispatch instead (the record's flag_overran flies
+	// either way). The satellite is not quiesced for commands — the same P3a simplification
+	// as sat.start() itself, which restarts the peer's ring from this thread.
+	rearms := (c.opcode == op_arm || c.opcode == op_start || c.opcode == op_reset)
+		&& (c.targets(m.core) || c.targets(sat_core))
+	if rearms {
+		m.retire_freeze()
+	}
 	// A dump must not be accepted while ANY part of the previous one is still outstanding.
 	// on_cmd's own busy check only covers the ISO-TP link, not a queued local_due/remote_due
 	// block, so a dump arriving in the IDLE GAP between continuation transfers was accepted:
@@ -53,6 +69,26 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 			m.queue_rsp(status_rsp(sat, c.opcode, result_busy, sat_core))
 		}
 		return false
+	}
+	// A dump is served only when NO ring it addresses is still capturing. Importing the
+	// stopped half while the other still captures streams one block and strands the host
+	// waiting for the second — and the inverse order let the owner's block go out alone
+	// (codex #271 r7). Refused whole, with the still-capturing core's status, and both rings
+	// left exactly as found: the same leave-no-trace contract as the busy refusal above. An
+	// IDLE addressed ring does not block — it has no window in flight to strand anyone on,
+	// and its own half answers for it exactly as before.
+	if c.opcode == op_dump {
+		owner_blocked := c.targets(m.core) && m.state() == .capturing
+		sat_blocked := c.targets(sat_core) && sat.state() == .capturing
+		if owner_blocked || sat_blocked {
+			rsp := if sat_blocked {
+				status_rsp(sat, c.opcode, result_not_ready, sat_core)
+			} else {
+				status_rsp(m.buf, c.opcode, result_not_ready, m.core)
+			}
+			m.queue_rsp(rsp)
+			return false
+		}
 	}
 	mut imported := false
 	// The satellite half first. Its core mask is checked the same way handle_cmd checks the
@@ -96,6 +132,10 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 	// the host in its own block header; queue_rsp refuses rather than overwrite it.
 	if c.targets(sat_core) && !c.targets(m.core) {
 		m.queue_rsp(status_rsp(sat, c.opcode, result_ok, sat_core))
+	}
+	if rearms {
+		// the second half of the bracket above — after every restart, sparing a fresh trigger
+		m.retire_freeze_unless_tripped(sat)
 	}
 	return imported
 }

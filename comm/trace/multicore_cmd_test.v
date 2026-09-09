@@ -242,3 +242,94 @@ fn test_a_dump_during_a_queued_stream_is_refused() {
 	assert m.rsp_pending(), 'the refused dump was not answered'
 	assert decode_rsp(m.rsp).result == result_busy, 'expected BUSY, got ${decode_rsp(m.rsp).result}'
 }
+
+// An arm/start/reset RETIRES the shared cross-core freeze, whichever cores the mask names, and
+// does so before any ring restarts — retired after (or keyed on the owner's state, as the runner
+// once did), a peer dispatching in the gap re-froze the just-armed ring from the stale cell, and
+// an arm addressed to the satellite alone never cleared it at all (codex #271 r2).
+fn test_an_arm_retires_the_shared_freeze_for_any_mask() {
+	mut ring := [64]Record{}
+	mut m := TraceModule{}
+	m.init(0x7e3, 0x7e5, 0, true, new_buffer(&ring[0], 64, .ring, 50))
+	mut cell := u32(1) // a trigger froze the system earlier
+	m.set_freeze(&cell)
+	mut sat_ring := [64]Record{}
+	mut sat := new_buffer(&sat_ring[0], 64, .ring, 50)
+	mut remote := [65]Record{}
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0002), mut sat, 1, &remote[0], 65) // satellite ALONE
+	assert cell == 0
+	cell = 1
+	m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 65)
+	assert cell == 1 // a dump consumes nothing: the frozen system stays described by the cell
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0004), mut sat, 1, &remote[0], 65)
+	assert cell == 1 // a mask naming NEITHER core restarts nothing — the notification survives
+	m.on_cmd_multicore(cmd_frame(op_reset, 0x0003), mut sat, 1, &remote[0], 65)
+	assert cell == 0
+}
+
+// A dump addressing several cores is all-or-nothing: importing the stopped half while the
+// other still captures streams one block and strands the host waiting for the second, and
+// the inverse order let the owner's block go out alone (codex #271 r7).
+fn test_a_two_core_dump_with_one_ring_capturing_is_refused_whole() {
+	mut own := [16]Record{}
+	mut satb := [16]Record{}
+	mut remote := [64]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	m.arm()
+	mut sat := new_buffer(&satb[0], 16, .ring, 50)
+	sat.start()
+	for i in 0 .. 3 {
+		m.push(new_fb(u16(100 + i), 0, u32(i), 1))
+		sat.push(new_fb(u16(200 + i), 0, u32(i), 1))
+	}
+	m.on_cmd(cmd_frame(op_stop, 0x0001)) // the OWNER stops; the satellite keeps recording
+	assert sat.state() == .capturing
+	mut drain := can.Frame{}
+	assert m.produce(0, mut drain) // the bus loop drains the stop's own response every pass
+	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
+	assert !imported
+	assert !m.is_streaming(), 'the owner half streamed alone — a partial two-core dump'
+	// ...and the refusal names the core that was not ready
+	mut f := can.Frame{}
+	assert m.produce(0, mut f)
+	assert f.data[1] == result_not_ready
+	assert f.data[7] == 1 // the satellite's core id
+}
+
+// A satellite-only dump of a capturing ring answers not_ready — the tail's unconditional ok
+// told the host a block was coming when nothing would ever stream (codex #271 r7).
+fn test_a_satellite_only_dump_of_a_capturing_ring_answers_not_ready() {
+	mut own := [16]Record{}
+	mut satb := [16]Record{}
+	mut remote := [64]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	mut sat := new_buffer(&satb[0], 16, .ring, 50)
+	sat.start()
+	sat.push(new_fb(200, 0, 0, 1))
+	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0002), mut sat, 1, &remote[0], 64)
+	assert !imported
+	mut f := can.Frame{}
+	assert m.produce(0, mut f)
+	assert f.data[1] == result_not_ready
+}
+
+// The post-restart retirement spares a fresh trigger: an overrun landing just after the
+// restart is the NEW window's legitimate trigger, and start() wiped both rings' causes, so a
+// trigger cause on either ring can only be the new measurement's (codex #271 r9; #273 tracks
+// the generation handshake that closes the remaining check-then-act).
+fn test_the_post_restart_retire_spares_a_fresh_trigger() {
+	mut own := [16]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	m.arm()
+	mut cell := u32(1)
+	m.set_freeze(&cell)
+	mut sat_ring := [16]Record{}
+	mut sat := new_buffer(&sat_ring[0], 16, .ring, 50)
+	sat.start()
+	sat.trigger() // the new window tripped in the restart gap
+	m.retire_freeze_unless_tripped(&sat)
+	assert cell == 1 // preserved: the notification is the fresh window's
+	sat.start() // no trip in the gap
+	m.retire_freeze_unless_tripped(&sat)
+	assert cell == 0 // a stale raise for an erased window is retired
+}

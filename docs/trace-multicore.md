@@ -92,9 +92,13 @@ The first mergeable slice: N partitions on M cores, no bridge. This is the "sing
 **System-wide freeze (coherent snapshot).** Each core's ring is a flight recorder, but a trigger
 must freeze *every* core around the same instant — otherwise core A freezes at its anomaly while core
 B keeps recording until `Stop`, and their dump windows don't overlap (the first thing that looks
-wrong). So an overrun on any core sets a shared `osal.scratch` freeze flag, and every core's capture
-hook then `trigger()`s its own ring (idempotent via its pending/state guards). `partition_trace`
-clears the flag on re-arm. Result: all cores' windows cover the same moment.
+wrong). So an overrun on a still-capturing ring raises a shared freeze cell (a caller-owned `u32`
+both `Capture`s point at — same single-copy-atomic story as `osal.scratch`, without spending a
+slot), and every core's capture hook observes it **once per dispatched handler**, `trigger()`ing
+its own ring within one handler of the event (idempotent via the pending/state guards; observing
+only between whole scheduler passes let a core with more due handlers than its retained pre-window
+roll past the instant before it looked). The module retires the cell on a host arm/start/reset —
+before any ring restarts. Result: all cores' windows cover the same moment.
 
 **Derived thread + idle (honest `thread+fb`).** A polled host superloop is one *cooperative* thread —
 no preemptive switches or ISRs — so we synthesise the schedule it actually runs: an fb record per
@@ -169,7 +173,7 @@ freeze commands to its OWN ring in its loop.
 The per-core registry (`rings[ncores]`) now indexes **app partitions AND comm threads** by core.
 Keep the P3a invariant: **one traced entity per core, dense 0..N-1**. Typical layout — the comm
 thread(s) on the IO core(s), the app partition(s) on their cores. `trace_ncores`, `fb_id_base`,
-`thread_id_of`, and the dense-core / core≥16 / scratch-cell guards all extend to count comm threads.
+`thread_id_of`, and the dense-core / core≥16 (load-slot) guards all extend to count comm threads.
 `run()` creates + starts a ring per comm thread and spawns each `partition_<bb>` with its ring
 pointer, exactly like a traced app partition.
 
