@@ -325,7 +325,7 @@ pub fn (mut t TraceBuffer) push(r Record) {
 			if t.used >= t.cap {
 				t.state = .full
 				if t.froze == freeze_none { // completed on its own — report a cause, not freeze_none
-					t.froze = freeze_stop
+					t.froze = freeze_full
 				}
 			}
 		}
@@ -382,11 +382,18 @@ pub fn (mut t TraceBuffer) stop() {
 // trip is the hook's trigger: an over-budget dispatch on a ring that WAS capturing when it
 // entered the hook. trigger() covers the still-capturing ring; the assignment covers the one
 // record that both completed a oneshot and overran — push() flipped it to .full with the
-// fill's default cause (freeze_stop) before the judgement, and trigger() then no-ops, so the
+// fill's own cause (freeze_full) before the judgement, and trigger() then no-ops, so the
 // initiating core reported an ordinary fill while its peer froze on a trigger (codex #271 r4).
-fn (mut t TraceBuffer) trip() {
+// A HOST STOP that landed inside the same window is different: its cause stands, no trigger is
+// reported after it, and no peer is frozen for it — the report says whether the trip happened
+// (codex #271 r7). freeze_full is what makes the two distinguishable here.
+fn (mut t TraceBuffer) trip() bool {
+	if t.froze == freeze_stop {
+		return false
+	}
 	t.trigger()
 	t.froze = freeze_trigger
+	return true
 }
 
 // trigger freezes the capture. Ring: keep pre_pct % from before the trigger, capture the

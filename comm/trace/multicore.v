@@ -70,6 +70,26 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 		}
 		return false
 	}
+	// A dump is served only when NO ring it addresses is still capturing. Importing the
+	// stopped half while the other still captures streams one block and strands the host
+	// waiting for the second — and the inverse order let the owner's block go out alone
+	// (codex #271 r7). Refused whole, with the still-capturing core's status, and both rings
+	// left exactly as found: the same leave-no-trace contract as the busy refusal above. An
+	// IDLE addressed ring does not block — it has no window in flight to strand anyone on,
+	// and its own half answers for it exactly as before.
+	if c.opcode == op_dump {
+		owner_blocked := c.targets(m.core) && m.state() == .capturing
+		sat_blocked := c.targets(sat_core) && sat.state() == .capturing
+		if owner_blocked || sat_blocked {
+			rsp := if sat_blocked {
+				status_rsp(sat, c.opcode, result_not_ready, sat_core)
+			} else {
+				status_rsp(m.buf, c.opcode, result_not_ready, m.core)
+			}
+			m.queue_rsp(rsp)
+			return false
+		}
+	}
 	mut imported := false
 	// The satellite half first. Its core mask is checked the same way handle_cmd checks the
 	// owner's, so a command that does not select sat_core leaves the satellite untouched.

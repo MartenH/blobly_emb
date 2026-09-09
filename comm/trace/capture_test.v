@@ -130,3 +130,26 @@ fn test_an_epoch_consuming_the_final_slot_does_not_hide_the_trip() {
 	assert cell == 1
 	assert buf.froze_cause() == freeze_trigger
 }
+
+fn test_a_host_stop_racing_the_trip_wins() {
+	// the owner can stop a ring between the hook's entry snapshot and its trip: the stop's
+	// cause stands, no trigger is reported after it, and no peer freeze is raised for it —
+	// trip() reports false and sync_freeze never fires (codex #271 r7)
+	mut ring := [8]Record{}
+	mut buf := new_buffer(&ring[0], 8, .ring, 50)
+	buf.start()
+	buf.stop() // the host stop, landing "mid-hook"
+	assert buf.trip() == false
+	assert buf.froze_cause() == freeze_stop
+
+	// a oneshot that completed ON ITS OWN is the opposite case: freeze_full, and a trip
+	// racing that fill may claim it
+	mut ring2 := [2]Record{}
+	mut buf2 := new_buffer(&ring2[0], 2, .oneshot, 100)
+	buf2.start()
+	buf2.push(new_fb(1, 0, 0, 1))
+	buf2.push(new_fb(2, 0, 1, 1))
+	assert buf2.froze_cause() == freeze_full
+	assert buf2.trip() == true
+	assert buf2.froze_cause() == freeze_trigger
+}

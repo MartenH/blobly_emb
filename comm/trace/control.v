@@ -25,8 +25,11 @@ pub const result_busy = u8(4) // e.g. dump requested while a previous dump is st
 // trigger-frozen dump from a manually-stopped one; a propagated cross-core freeze reads as a
 // trigger too, since every core calls trigger() on the shared freeze).
 pub const freeze_none = u8(0) // still capturing / not frozen
-pub const freeze_stop = u8(1) // an explicit stop (or oneshot fill)
+pub const freeze_stop = u8(1) // an explicit host stop
 pub const freeze_trigger = u8(2) // the overrun trigger
+pub const freeze_full = u8(3) // a oneshot that completed on its own — distinct from a host stop,
+// because a trip racing the fill must be allowed to claim the cause, while one racing a host
+// STOP must not (codex #271 r7)
 
 // Cmd is the decoded 8-byte TraceCmd.
 pub struct Cmd {

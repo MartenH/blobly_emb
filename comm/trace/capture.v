@@ -79,9 +79,11 @@ pub fn fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	// A trip is an overrun ON A CAPTURING RING. A ring the host already stopped is not
 	// tripping: raising the shared freeze for it would hand a phantom freeze_trigger to a
 	// still-capturing peer after a per-core stop.
-	tripped := over && was_capturing
-	if tripped {
-		t.buf.trip() // trigger(), plus the cause when this record itself just filled a oneshot
+	mut tripped := false
+	if over && was_capturing {
+		// trip() reports whether the trigger actually claimed the ring — a host stop landing
+		// inside this very hook wins instead, and then no freeze is raised for it either.
+		tripped = t.buf.trip()
 	}
 	t.sync_freeze(tripped)
 }

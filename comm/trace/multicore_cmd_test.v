@@ -266,3 +266,49 @@ fn test_an_arm_retires_the_shared_freeze_for_any_mask() {
 	m.on_cmd_multicore(cmd_frame(op_reset, 0x0003), mut sat, 1, &remote[0], 65)
 	assert cell == 0
 }
+
+// A dump addressing several cores is all-or-nothing: importing the stopped half while the
+// other still captures streams one block and strands the host waiting for the second, and
+// the inverse order let the owner's block go out alone (codex #271 r7).
+fn test_a_two_core_dump_with_one_ring_capturing_is_refused_whole() {
+	mut own := [16]Record{}
+	mut satb := [16]Record{}
+	mut remote := [64]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	m.arm()
+	mut sat := new_buffer(&satb[0], 16, .ring, 50)
+	sat.start()
+	for i in 0 .. 3 {
+		m.push(new_fb(u16(100 + i), 0, u32(i), 1))
+		sat.push(new_fb(u16(200 + i), 0, u32(i), 1))
+	}
+	m.on_cmd(cmd_frame(op_stop, 0x0001)) // the OWNER stops; the satellite keeps recording
+	assert sat.state() == .capturing
+	mut drain := can.Frame{}
+	assert m.produce(0, mut drain) // the bus loop drains the stop's own response every pass
+	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
+	assert !imported
+	assert !m.is_streaming(), 'the owner half streamed alone — a partial two-core dump'
+	// ...and the refusal names the core that was not ready
+	mut f := can.Frame{}
+	assert m.produce(0, mut f)
+	assert f.data[1] == result_not_ready
+	assert f.data[7] == 1 // the satellite's core id
+}
+
+// A satellite-only dump of a capturing ring answers not_ready — the tail's unconditional ok
+// told the host a block was coming when nothing would ever stream (codex #271 r7).
+fn test_a_satellite_only_dump_of_a_capturing_ring_answers_not_ready() {
+	mut own := [16]Record{}
+	mut satb := [16]Record{}
+	mut remote := [64]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	mut sat := new_buffer(&satb[0], 16, .ring, 50)
+	sat.start()
+	sat.push(new_fb(200, 0, 0, 1))
+	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0002), mut sat, 1, &remote[0], 64)
+	assert !imported
+	mut f := can.Frame{}
+	assert m.produce(0, mut f)
+	assert f.data[1] == result_not_ready
+}
