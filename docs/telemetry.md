@@ -394,7 +394,7 @@ self-describing blocks, each one:
 b0    opcode_echo
 b1    result          0 ok, else error code
 b2    state (low nibble)  0 idle | 1 capturing | 2 full | 3 frozen
-      cause (high nibble)  0 none | 1 stop | 2 trigger  — why capture stopped
+      cause (high nibble)  0 none | 1 stop | 2 trigger | 3 full  — why capture stopped
 b3-4  records_used    (u16)
 b5-6  capacity        (u16)
 b7    core
@@ -402,7 +402,9 @@ b7    core
 
 `b2` packs both fields: `state = b2 & 0x0F`, `cause = b2 >> 4`. A decoder that only wants the state
 must mask the low nibble — a stopped/triggered buffer reads `0x13`/`0x23`, not `3`. The cause lets a
-host tell a trigger-frozen dump from a manually-stopped one (the swimlane alone can't).
+host tell a trigger-frozen dump from a manually-stopped one (the swimlane alone can't) — and `full`
+(a oneshot that completed on its own) from both, which is also what lets the target's trip logic
+give a host stop priority over an overrun racing it.
 
 Records are **one uniform 8-byte format** — a single event stream of threads, interrupts,
 fb.handlers, and idle. What varies is not the layout but **which kinds you capture** (the
