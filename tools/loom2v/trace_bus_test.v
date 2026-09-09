@@ -12,6 +12,7 @@ fn test_a_signal_less_trace_bus_still_needs_an_owner() {
 		trace: TraceCfg{
 			on:  true
 			bus: 'can1'
+			dump_fc_bound: true
 		}
 	}
 	assert bus_hosts_modules(m, 'can1', false), 'the trace bus was left with nobody to own it'
@@ -62,6 +63,7 @@ fn test_the_trace_host_runner_owns_its_bus_alone() {
 		trace: TraceCfg{
 			on:  true
 			bus: 'can0'
+			dump_fc_bound: true
 		}
 	}
 	assert !bus_hosts_modules(m, 'can0', true)
@@ -75,6 +77,7 @@ fn test_a_target_owns_its_bus_without_a_host_bridge() {
 		trace:  TraceCfg{
 			on:  true
 			bus: 'can0'
+			dump_fc_bound: true
 		}
 		target: TargetCfg{
 			on: true
@@ -93,6 +96,7 @@ fn test_a_trace_only_module_host_still_imports_the_can_driver() {
 		trace: TraceCfg{
 			on:  true
 			bus: 'can0'
+			dump_fc_bound: true
 		}
 	}
 	m.buses["can0"] = true
@@ -110,6 +114,7 @@ fn test_the_supported_shape_has_no_blocker() {
 		trace: TraceCfg{
 			on:  true
 			bus: 'can0'
+			dump_fc_bound: true
 		}
 		part: PartMap{
 			by_part: {
@@ -126,6 +131,7 @@ fn test_two_partitions_are_the_multicore_shape() {
 		trace: TraceCfg{
 			on:  true
 			bus: 'can0'
+			dump_fc_bound: true
 		}
 		part:  PartMap{
 			by_part: {
@@ -144,6 +150,7 @@ fn test_a_third_partition_blocks_trace() {
 		trace: TraceCfg{
 			on:  true
 			bus: 'can0'
+			dump_fc_bound: true
 		}
 		part:  PartMap{
 			by_part: {
@@ -163,6 +170,7 @@ fn test_the_baremetal_superloop_blocks_trace() {
 		trace:  TraceCfg{
 			on:  true
 			bus: 'can0'
+			dump_fc_bound: true
 		}
 		target: TargetCfg{
 			on: true
@@ -178,20 +186,131 @@ fn test_the_baremetal_superloop_blocks_trace() {
 
 // The bridge conflict is about the RUNNER, not the bus: trace_comm traces on can1 and bridges on
 // can0, and is still blocked. A message claiming the bridge "owns the trace bus" would be a lie.
-fn test_a_bridge_on_another_bus_still_blocks_trace() {
+fn test_a_bridge_on_another_bus_is_the_bridge_owner_shape() {
+	// P3b: the bridge-owner runner drains the COM bus and serves the trace bus in one loop —
+	// a bridge on ANOTHER bus (distinct core from the traced app) no longer blocks trace.
 	m := Model{
 		trace:       TraceCfg{
 			on:  true
 			bus: 'can1'
+			dump_fc_bound: true
 		}
 		has_can_ext: true
+		sig_of:      {
+			'v': SigInfo{
+				external: true
+				bus:      'can0'
+			}
+		}
+		bus_core:    {
+			'can0': 0
+			'can1': 0
+		}
 		part:        PartMap{
 			by_part: {
 				'app': []toml.Any{}
 			}
+			core_of: {
+				'app': 1
+			}
 		}
 	}
-	b := trace_shape_blocker(m, 'can1')
-	assert b.contains('COM bridge'), 'got: ${b}'
-	assert !b.contains('owns the trace bus'), 'the bridge need not be on the trace bus at all'
+	assert trace_shape_blocker(m, 'can1') == ''
+}
+
+fn test_a_bridge_riding_the_trace_bus_blocks_trace() {
+	// the same-bus piggyback (docs/trace-multicore.md §4.3) stays deferred: COM and the trace
+	// handshake would share one channel's rx queue and tx window
+	m := Model{
+		trace:       TraceCfg{
+			on:  true
+			bus: 'can0'
+			dump_fc_bound: true
+		}
+		has_can_ext: true
+		sig_of:      {
+			'v': SigInfo{
+				external: true
+				bus:      'can0'
+			}
+		}
+		bus_core:    {
+			'can0': 0
+		}
+		part:        PartMap{
+			by_part: {
+				'app': []toml.Any{}
+			}
+			core_of: {
+				'app': 1
+			}
+		}
+	}
+	assert trace_shape_blocker(m, 'can0').contains('rides the trace bus'), 'got: ${trace_shape_blocker(m,
+		'can0')}'
+}
+
+fn test_a_bridge_sharing_the_traced_apps_core_blocks_trace() {
+	// the dump block header carries a CORE id: two traced entities on one core emit
+	// indistinguishable blocks (#191 P3b)
+	m := Model{
+		trace:       TraceCfg{
+			on:  true
+			bus: 'can1'
+			dump_fc_bound: true
+		}
+		has_can_ext: true
+		sig_of:      {
+			'v': SigInfo{
+				external: true
+				bus:      'can0'
+			}
+		}
+		bus_core:    {
+			'can0': 0
+			'can1': 0
+		}
+		part:        PartMap{
+			by_part: {
+				'app': []toml.Any{}
+			}
+			core_of: {
+				'app': 0 // same core as the bridge
+			}
+		}
+	}
+	assert trace_shape_blocker(m, 'can1').contains('shares a core'), 'got: ${trace_shape_blocker(m,
+		'can1')}'
+}
+
+fn test_a_bridge_off_the_trace_bus_core_blocks_trace() {
+	// the owner loop serves BOTH buses, so the bridge's core must be the trace bus's core —
+	// a bridge elsewhere leaves the trace bus with no loop to serve it
+	m := Model{
+		trace:       TraceCfg{
+			on:  true
+			bus: 'can1'
+			dump_fc_bound: true
+		}
+		has_can_ext: true
+		sig_of:      {
+			'v': SigInfo{
+				external: true
+				bus:      'can0'
+			}
+		}
+		bus_core:    {
+			'can0': 2
+			'can1': 0
+		}
+		part:        PartMap{
+			by_part: {
+				'app': []toml.Any{}
+			}
+			core_of: {
+				'app': 1
+			}
+		}
+	}
+	assert trace_shape_blocker(m, 'can1') != ''
 }

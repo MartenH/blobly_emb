@@ -504,7 +504,7 @@ fn bus_hosts_modules(m Model, bname string, trace_host bool) bool {
 	return (m.trace.on && tbus == bname) || (m.telem.on && m.telem.bus == bname)
 }
 
-fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Producer) ([]string, []string, map[string][]string) {
+fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Producer, tctx TraceHostCtx) ([]string, []string, map[string][]string) {
 	mut glue := []string{}
 	mut bus_names := []string{}
 	mut bus_dests := map[string][]string{}
@@ -575,6 +575,14 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 		// a partition to own it. Skipping it silently is what broke examples/trace_comm and
 		// examples/trace_multicore (#191): the trace bus vanished from run(), taking the dump
 		// path with it, and the config still declared cmd/rsp/record ids that went nowhere.
+		if tctx.on() && bname == tctx.trace_bus {
+			// P3b: the dedicated trace bus is a run() PARAMETER (so main.v's call is unchanged
+			// and the channel is opened exactly once) but gets no partition — the bridge owner
+			// drains it, serves the module on it, and would otherwise race a second reader.
+			bus_names << bname
+			bus_dests[bname] = dests
+			continue
+		}
 		if rx_by_msg.len == 0 && tx_by_msg.len == 0 && conns.len == 0 && my_routes.len == 0
 			&& in_routes.len == 0 && !bus_hosts_modules(m, bname, trace_host) {
 			continue
@@ -1138,6 +1146,10 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 		for d in dests {
 			psig += ', route_${snake(d)} can.Channel'
 		}
+		owns_trace := tctx.on() && bname == tctx.owner_bus
+		if owns_trace {
+			psig += trace_bridge_params()
+		}
 		glue << 'pub fn partition_${bb}(${psig}) {'
 		glue << '\tosal.pin_to_core(${m.bus_core[bname] or { 0 }})'
 		glue << '\tmut st := Bridge_${bb}_state{'
@@ -1271,8 +1283,15 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 		if !module_host {
 			glue << '\tsched.every(10_000, io_${bb}_10ms, &st)'
 		}
+		if owns_trace {
+			glue << trace_bridge_preamble(m, tctx)
+		}
 		glue << '\tfor {'
-		glue << '\t\tloom_t0 := osal.now_us()'
+		if !owns_trace {
+			// run_profiled takes the clock itself and stamps its own pass, so the traced owner
+			// has no loom_t0 to open with — emitting one would be an unused variable.
+			glue << '\t\tloom_t0 := osal.now_us()'
+		}
 		if module_host {
 			glue << '\t\tmut rx := can.Frame{}'
 			glue << '\t\tfor st.chan.recv(mut rx) {'
@@ -1280,11 +1299,22 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\t\t\t// generated for this shape (#191). Draining keeps the queue clear —'
 			glue << '\t\t\t// an unread rx queue backs up on a real driver.'
 			glue << '\t\t}'
+		} else if owns_trace {
+			// PROFILED: run_profiled calls the trace hook once per dispatch — that is where the
+			// bridge's lane comes from (thread_hook -> note_thread) — and accounts the pass
+			// itself, so no sched.account() follows (a second one charged every pass twice,
+			// emb#270 r2).
+			glue << trace_profiled_dispatch(true)
 		} else {
 			glue << '\t\tsched.run(loom_t0)'
 		}
-		glue << '\t\tloom_t1 := osal.now_us()'
-		glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
+		if !owns_trace {
+			glue << '\t\tloom_t1 := osal.now_us()'
+			glue << '\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load'
+		}
+		if owns_trace {
+			glue << trace_bridge_loop_body(m, tctx)
+		}
 		for p in producers {
 			glue << p.partition_loop_body('b:${bname}')
 		}

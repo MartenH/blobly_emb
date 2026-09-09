@@ -1845,6 +1845,8 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 // telemetry-tx thread doesn't apply. (slot_core / telem_iface / trace_inline are main's emit-time
 // derived state; everything else comes from the Model.)
 fn emit_partition_telem(m Model, telem_iface string, slot_core []int, trace_owns_run bool) []string {
+	// trace_owns_run means an APP-PARTITION trace runner replaced run() and sends CpuLoad inline;
+	// the P3b bridge owner did not — gen.v passes false for it, keeping this thread.
 	if !(telem_on_can(m) && telem_iface != '' && !m.target.on && !trace_owns_run) {
 		return []string{}
 	}
@@ -2789,7 +2791,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 // emit_run_host emits the plain multi-core host run(): launch every bus bridge + app partition,
 // then wait. One Channel param per bus (sorted for a stable signature). Reads the Model; telem_iface
 // / bus_names / bus_dests / extra_dest_buses are main's emit-time state.
-fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[string][]string, extra_dest_buses []string) []string {
+fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[string][]string, extra_dest_buses []string, tctx TraceHostCtx, doc toml.Doc) []string {
 	mut glue := []string{}
 	mut has_io_input := false
 	for pt in m.io_points {
@@ -2880,20 +2882,39 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 			glue << '\tt_io := spawn partition_io()'
 			waits << 't_io'
 		}
+		if tctx.on() {
+			// P3b: ONE capture origin for both lanes (a per-thread origin skews them by the
+			// thread-start delay, invisibly — a shared clock emits no core-offset record), the
+			// satellite's ring, and the freeze cell they share.
+			glue << trace_run_setup(m, tctx.sat, doc)
+		}
 		for b in bus_names {
 			bb := snake(b)
+			if tctx.on() && b == tctx.trace_bus {
+				continue // a channel parameter only: the bridge owner drains this bus
+			}
 			mut spawn_args := bb
 			for d in bus_dests[b] or { []string{} } {
 				spawn_args += ', ${snake(d)}'
+			}
+			if tctx.on() && b == tctx.owner_bus {
+				spawn_args += trace_bridge_spawn_args(tctx.trace_bus)
 			}
 			glue << '\tt_${bb} := spawn partition_${bb}(${spawn_args})'
 			waits << 't_${bb}'
 		}
 		for part, _ in m.part.by_part {
-			glue << '\tt_${part} := spawn partition_${part}(${m.part.core_of[part] or { 0 }}, unsafe { nil })'
+			arg := if tctx.on() && part == tctx.sat {
+				'unsafe { voidptr(&sat_cap) }' // the satellite's capture: its ring is the owner's to dump
+			} else {
+				'unsafe { nil }'
+			}
+			glue << '\tt_${part} := spawn partition_${part}(${m.part.core_of[part] or { 0 }}, ${arg})'
 			waits << 't_${part}'
 		}
-		if telem_on_can(m) && telem_iface != '' {
+		// ...but not in the bridge-owner shape: the owner sends CpuLoad from its own loop, so
+		// no telemetry thread exists to spawn (and none preempts its traced drain spans).
+		if telem_on_can(m) && telem_iface != '' && !tctx.on() {
 			glue << '\tt_telem := spawn partition_telem()'
 			waits << 't_telem'
 		}
@@ -2918,7 +2939,7 @@ fn emit_run_host(m Model, telem_iface string, bus_names []string, bus_dests map[
 // image_part selects the pass: '' emits the OWNER image (every non-external partition);
 // a partition name emits ONLY that satellite partition (the multi-image pass, gen_image.v)
 // — same structs/wrappers, with remote writes going to xcore_pub instead of an IOC cell.
-fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_owns_run bool, image_part string) ([]string, []string, map[string][]string) {
+fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_owns_run bool, image_part string, tctx TraceHostCtx) ([]string, []string, map[string][]string) {
 	mut ports := []string{}
 	mut glue := []string{}
 	mut all_regs := map[string][]string{}
@@ -3194,7 +3215,7 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 		// into run(ch). The skeleton is one shape; producers inject preamble / loop-top / dispatch /
 		// loop-body (trace: capture ctx + command poll + profiled dispatch; telem: the load publish),
 		// so this emitter names no capability.
-		if !m.target.on && !trace_owns_run {
+		if !m.target.on && (!trace_owns_run || tctx.on()) {
 			glue << ''
 			glue << 'pub fn partition_${part}(core int, arg voidptr) {'
 			glue << '\tosal.pin_to_core(${m.part.core_of[part] or { 0 }})'
@@ -3203,6 +3224,12 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 			for r in regs {
 				glue << r
 			}
+			traced_sat := tctx.on() && part == tctx.sat
+			if traced_sat {
+				// P3b satellite: run() passes its Capture through the `arg` this signature
+				// already carries, so the ring lives with the owner that dumps it.
+				glue << trace_sat_preamble()
+			}
 			for p in producers {
 				glue << p.partition_preamble('p:${part}')
 			}
@@ -3210,12 +3237,16 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 			for p in producers {
 				glue << p.partition_loop_top('p:${part}')
 			}
-			mut disp := [
-				'\t\tloom_t0 := osal.now_us()',
-				'\t\tsched.run(loom_t0)',
-				'\t\tloom_t1 := osal.now_us()',
-				'\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load',
-			]
+			mut disp := if traced_sat {
+				trace_profiled_dispatch(false) // the hook fires per handler; run_profiled accounts the pass
+			} else {
+				[
+					'\t\tloom_t0 := osal.now_us()',
+					'\t\tsched.run(loom_t0)',
+					'\t\tloom_t1 := osal.now_us()',
+					'\t\tsched.account(loom_t1 - loom_t0, loom_t1) // per-core load',
+				]
+			}
 			for p in producers {
 				d := p.partition_dispatch('p:${part}')
 				if d.len > 0 {
@@ -3400,8 +3431,26 @@ fn main() {
 	// TraceModule holds exactly one satellite import slot (set_remote).
 	trace_owns_run := m.trace.on && trace_shape_blocker(m, trace_bus) == ''
 	trace_nparts := m.part.by_part.keys().len
-	trace_host := trace_owns_run && trace_nparts == 1
-	trace_multicore := trace_owns_run && trace_nparts == 2
+	// P3b: with a COM bridge, the OWNER is the bridge partition, not an app partition — the plain
+	// host run() still drives everything and the trace machinery rides the bridge's loop
+	// (TraceHostCtx). Without one, the app-partition runners own the run() outright: one
+	// partition (single-core) or two (P3a, owner + satellite).
+	trace_owner_b := trace_owner_bus(m, trace_bus)
+	mut tctx := TraceHostCtx{}
+	if trace_owns_run && trace_owner_b != '' {
+		sat := m.part.by_part.keys()[0]
+		tctx = TraceHostCtx{
+			owner_bus: trace_owner_b
+			trace_bus: trace_bus
+			sat:       sat
+			sat_core:  m.part.core_of[sat] or { 0 }
+		}
+	}
+	if tctx.on() {
+		validate_trace_bridge_owner(m, tctx)
+	}
+	trace_host := trace_owns_run && trace_nparts == 1 && !tctx.on()
+	trace_multicore := trace_owns_run && trace_nparts == 2 && !tctx.on()
 	// the trace-host runner has no eth spawn wiring — an eth tx frame there
 	// would generate a comm thread nothing starts (silently dead)
 	if trace_owns_run && m.eth_frames.len > 0 {
@@ -3411,8 +3460,16 @@ fn main() {
 	// target (the bench phase). The bare-metal superloop / trace-host runner still
 	// spawn no io thread — there the pins would silently never move, so fail loudly.
 	if m.io_points.len > 0 && ((m.target.on && !m.target.threadx) || trace_owns_run) {
+		// The bridge-owner shape keeps the plain host run(), io thread included — but the io
+		// thread is neither TRACED (it gets no capture or ring, so `thread+fb` would silently
+		// omit every io service) nor EXCLUDED from the traced lanes' wall time (run_profiled
+		// charges its preemption to whichever lane it interrupts, which can trip budget_us and
+		// freeze both rings for work they did not do). Giving it a lane is #263's shape, and
+		// exempting it here would ship exactly the silent degradation this runner exists to
+		// remove (codex #274 r3).
 		panic('loom2v: [[io.gpio]] is generated for the plain host run() and the ThreadX ' +
-			'target only — not the bare-metal superloop / trace-host runner (docs/io.md)')
+			'target only — not the bare-metal superloop, nor a host trace runner: the io thread ' +
+			'would be an untraced lane whose preemption is charged to the traced ones (docs/io.md)')
 	}
 	if m.shell.on && !(m.target.threadx) {
 		eprintln('loom2v: WARNING: [shell] is generated for the ThreadX comm-thread target only ' +
@@ -3881,7 +3938,14 @@ fn main() {
 	// The trace bus must carry NO COM at all for the different-bus path — not even route-forwarded
 	// tx (which would share its channel with the trace handshake). Flag a route dest too.
 	// P3a: each core's polled superloop is one cooperative thread — no preemptive context switches
-	bridge_bus_list := []string{} // sorted bridge m.buses — stable comm-thread numbering + ring order
+	// The bridge buses that own a TRACED lane, in the manifest's numbering order. Only the P3b
+	// bridge-owner shape has one today (its comm_<bb> row is where the owner's thread spans
+	// resolve); every other shape leaves this empty, exactly as before. host_comm_tid derives
+	// the same id the loop below stamps — trace_bridge_ids_test pins them together.
+	mut bridge_bus_list := []string{}
+	if tctx.on() {
+		bridge_bus_list << tctx.owner_bus
+	}
 
 	if m.telem.on {
 		if bc := doc.value('bus').as_map()[m.telem.bus] {
@@ -3931,14 +3995,24 @@ fn main() {
 		detail_id: m.telem.detail_id
 	})]
 
-	fb_ports, fb_glue, all_regs := emit_handlers(m, producers, ioc_idx, trace_owns_run, '')
+	fb_ports, fb_glue, all_regs := emit_handlers(m, producers, ioc_idx, trace_owns_run, '', tctx)
 	ports << fb_ports
 	glue << fb_glue
 
 	// --- generated COM bus bridge(s) — emitted by emit_bridges ---
 	// trace_host: that runner IS the trace bus's owner, so the bus must not also get a bridge —
 	// two owners on one channel, and the second one dead code nobody spawns.
-	bridge_glue, bnames, bus_dests := emit_bridges(m, comm_thread_on, trace_owns_run, producers)
+	if tctx.on() && telem_on_can(m) && telem_iface != '' {
+		// the owner holds exactly two channels; validate_trace_bridge_owner already refused a
+		// telemetry bus that is neither.
+		tctx = TraceHostCtx{
+			...tctx
+			telem_slots: slot_core.clone()
+			telem_chan:  if m.telem.bus == tctx.trace_bus { 'trace_ch' } else { 'ch' }
+		}
+	}
+	bridge_glue, bnames, bus_dests := emit_bridges(m, comm_thread_on, trace_owns_run, producers,
+		tctx)
 	glue << bridge_glue
 
 	// --- SOME/IP eth frame table + derived-layout codec (docs/someip.md) ---
@@ -3954,7 +4028,7 @@ fn main() {
 	mut bus_names := bnames.clone()
 
 	// --- telemetry tx: sum per-partition load by core -> CpuLoad frame on the bus (emit_partition_telem) ---
-	glue << emit_partition_telem(m, telem_iface, slot_core, trace_owns_run)
+	glue << emit_partition_telem(m, telem_iface, slot_core, trace_owns_run || tctx.on())
 
 	// --- io: the platform io thread (docs/io.md P1, host) ---
 	glue << emit_partition_io(m, producers)
@@ -4006,7 +4080,7 @@ fn main() {
 	} else if trace_host {
 		glue << emit_run_trace_host(m, all_regs, telem_iface, single_part)
 	} else {
-		glue << emit_run_host(m, telem_iface, bus_names, bus_dests, extra_dest_buses)
+		glue << emit_run_host(m, telem_iface, bus_names, bus_dests, extra_dest_buses, tctx, doc)
 	}
 	glue << emit_bulk_glue(m.bulk, m.part, '') // '' = the bus owner image (emits every pool)
 

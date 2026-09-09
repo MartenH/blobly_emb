@@ -369,14 +369,13 @@ pub fn (m TraceModule) rsp_pending() bool {
 	return m.rsp_due
 }
 
-// is_streaming reports whether ANY dump is still in flight — the raw record stream, an ISO-TP
+// is_dumping reports whether ANY dump is still in flight — the raw record stream, an ISO-TP
 // transfer, or a queued block that produce() has not started yet. A multi-core caller needs this
 // before importing a satellite window: dropping a fresh window on top of a live transfer resets
 // the continuation cursor under it and re-sends chunks the host already took.
-pub fn (m TraceModule) is_streaming() bool {
-	return m.dumping || m.local_due || m.remote_due || m.link.busy()
-}
-
+// ONE predicate, one name: this was also spelled `is_streaming()` with the same four terms in a
+// different order — two public names for one question, which is how a caller ends up believing
+// they differ (self-review on #191).
 pub fn (m TraceModule) is_dumping() bool {
-	return m.dumping || m.link.busy() || m.remote_due || m.local_due
+	return m.dumping || m.local_due || m.remote_due || m.link.busy()
 }

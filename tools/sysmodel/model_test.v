@@ -2277,7 +2277,7 @@ BO_ 288 FrameB: 8 b
 
 // REQ-TOPO-002: a host node with a node-local [[route]] builds WITHOUT trace
 // (loom2v trace_host needs routes.len == 0), so its trace ids are not reserved.
-fn test_host_route_disables_trace_reservation() {
+fn test_a_routed_node_without_dump_fc_reserves_nothing() {
 	mut s := clean_system()
 	for i in 0 .. 2 {
 		s.nodes[i].view.is_threadx = false
@@ -2286,11 +2286,33 @@ fn test_host_route_disables_trace_reservation() {
 		s.nodes[i].view.trace_bus = 'can0'
 		s.nodes[i].view.trace_record_id = 0x7e5
 		s.nodes[i].view.partition_count = 1
-		s.nodes[i].view.has_route = true // a node-local route -> no host trace
+		s.nodes[i].view.has_route = true // a node-local route: the P3b bridge-owner shape
 		s.nodes[i].view.produces = map[string][]string{}
 		s.nodes[i].view.consumes = map[string][]string{}
 	}
+	// A bridged node traces TWO lanes (the bridge and its app partition), and loom2v refuses
+	// that without dump_fc — only the ISO-TP block path carries a per-window header. So no
+	// runner exists and syscheck must not reserve ids for one (emb#191 P3b).
 	assert !errs(validate_system(s)).any(it.contains('trace record id 0x7e5')), errs(validate_system(s)).str()
+}
+
+// ...and WITH dump_fc it is a real bridge-owner runner, so the ids are reserved and two nodes
+// claiming 0x7e5 on one interface collide — which is what a reservation is for.
+fn test_a_routed_node_with_dump_fc_reserves_its_ids() {
+	mut s := clean_system()
+	for i in 0 .. 2 {
+		s.nodes[i].view.is_threadx = false
+		s.nodes[i].view.has_telemetry = false
+		s.nodes[i].view.trace_on = true
+		s.nodes[i].view.trace_bus = 'can0'
+		s.nodes[i].view.trace_record_id = 0x7e5
+		s.nodes[i].view.trace_dump_fc_bound = true
+		s.nodes[i].view.partition_count = 1
+		s.nodes[i].view.has_route = true
+		s.nodes[i].view.produces = map[string][]string{}
+		s.nodes[i].view.consumes = map[string][]string{}
+	}
+	assert errs(validate_system(s)).any(it.contains('trace record id 0x7e5')), errs(validate_system(s)).str()
 }
 
 // --- codex #141 round-21 fixes ---

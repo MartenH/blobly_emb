@@ -5,12 +5,13 @@ module main
 // and the app FB are generated into gen/loom_gen.v; can1 gets its own partition as the module
 // host. run()'s params are the buses in NAME order.
 //
-// REGRESSED: the trace ring + dump on can1. P3b shipped in #60; a later refactor left loom2v
-// generating trace for the single-partition host shape only. `[trace]` is therefore `enabled =
-// false` in ecu.toml: loom2v REJECTS an enabled [trace] on this shape rather than build a silent
-// no-op, because this ECU has a COM bridge and the trace-host runner would replace the plain
-// run() that drives it. The comm/app halves build and run; the swimlane this example is named for
-// needs that generator wiring back. See #191.
+// The BRIDGE-OWNER runner (#191 P3b): the can0 bridge partition owns the trace bus and the
+// TraceModule and records its OWN drain spans, so `comm_can0` is a lane in the dump beside the
+// app's. fb_hook never fires for a bridge — it dispatches a COM drain, not FB handlers — so its
+// lane comes from trace.thread_hook instead, which is what P3b is for.
+//
+// run()'s shape is unchanged (`run(can0, can1)`): can1 is still a parameter, it is simply handed
+// to the bridge rather than to a partition of its own. A dump answers TWO blocks, one per core.
 //
 //   sudo make vcan      # brings up vcan0 (app) + vcan1 (trace)
 //   make run
