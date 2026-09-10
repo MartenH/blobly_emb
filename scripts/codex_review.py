@@ -28,6 +28,11 @@ EXIT_FAILED = 30
 EXIT_STALE_HEAD = 40
 EXIT_USAGE = 64
 EXIT_API = 70
+
+# gh's own exit statuses that waiting cannot fix: 2 usage, 4 not authenticated,
+# 127 gh not on PATH. Everything else (notably 1, which covers a 502 and a
+# secondary rate limit) is worth another interval.
+HARD_API_CODES = frozenset({2, 4, 127})
 CODEX_ACTOR = "chatgpt-codex-connector[bot]"
 
 
@@ -512,6 +517,31 @@ def result_lines(result: dict[str, Any]) -> str:
     return "\n".join(f"{key}={value}" for key, value in result.items()) + "\n"
 
 
+def fresh_finding_count(config: WatchConfig, deadline: float | None = None) -> int:
+    """Inline findings by the reviewer, fresh for this round and naming this sha."""
+    pull_comments = gh_items(config.repo, f"pulls/{config.pr}/comments", timeout=remaining_timeout(deadline))
+    count = 0
+    for comment in pull_comments:
+        commit_id = str(comment.get("commit_id") or "")
+        original_commit_id = str(comment.get("original_commit_id") or "")
+        comment_body = body(comment)
+        if actor(comment) != config.actor or not is_fresh(
+            comment,
+            config.baseline_pull_comment_id,
+            config.requested_at,
+            "created_at",
+        ):
+            continue
+        if (
+            config.sha in comment_body
+            or config.sha[:10] in comment_body
+            or commit_id.startswith(config.sha[:10])
+            or original_commit_id.startswith(config.sha[:10])
+        ):
+            count += 1
+    return count
+
+
 def scan_once(config: WatchConfig, deadline: float | None = None) -> tuple[int, dict[str, Any]]:
     head = current_head(config.repo, config.pr, timeout=remaining_timeout(deadline))
     if head != config.sha:
@@ -527,26 +557,7 @@ def scan_once(config: WatchConfig, deadline: float | None = None) -> tuple[int, 
     ]
     review = max(matching_reviews, key=item_id, default=None)
     if review:
-        pull_comments = gh_items(config.repo, f"pulls/{config.pr}/comments", timeout=remaining_timeout(deadline))
-        count = 0
-        for comment in pull_comments:
-            commit_id = str(comment.get("commit_id") or "")
-            original_commit_id = str(comment.get("original_commit_id") or "")
-            comment_body = body(comment)
-            if actor(comment) != config.actor or not is_fresh(
-                comment,
-                config.baseline_pull_comment_id,
-                config.requested_at,
-                "created_at",
-            ):
-                continue
-            if (
-                config.sha in comment_body
-                or config.sha[:10] in comment_body
-                or commit_id.startswith(config.sha[:10])
-                or original_commit_id.startswith(config.sha[:10])
-            ):
-                count += 1
+        count = fresh_finding_count(config, deadline=deadline)
         head = current_head(config.repo, config.pr, timeout=remaining_timeout(deadline))
         if head != config.sha:
             return EXIT_STALE_HEAD, {"RESULT": "stale_head", "PR": config.pr, "SHA": config.sha, "CURRENT_SHA": head}
@@ -565,16 +576,23 @@ def scan_once(config: WatchConfig, deadline: float | None = None) -> tuple[int, 
     ]
     clean = max(clean_comments, key=item_id, default=None)
     if clean:
+        # Count the inline findings before believing it. The verdict and the findings arrive on
+        # DIFFERENT channels, so a summary posted as a PR-level comment while findings sit inline
+        # would otherwise report clean with the round outstanding -- the one direction that must
+        # never be loosened, since a false clean merges unreviewed code.
+        count = fresh_finding_count(config, deadline=deadline)
         head = current_head(config.repo, config.pr, timeout=remaining_timeout(deadline))
         if head != config.sha:
             return EXIT_STALE_HEAD, {"RESULT": "stale_head", "PR": config.pr, "SHA": config.sha, "CURRENT_SHA": head}
-        return EXIT_CLEAN, {
-            "RESULT": "clean",
+        base = {
             "PR": config.pr,
             "SHA": config.sha,
             "SHA_PREFIX": config.sha[:10],
             "ISSUE_COMMENT_ID": item_id(clean),
         }
+        if count > 0:
+            return EXIT_FINDINGS, {"RESULT": "findings", **base, "PULL_COMMENTS": count}
+        return EXIT_CLEAN, {"RESULT": "clean", **base}
 
     failed_comments = [
         item
@@ -684,8 +702,22 @@ def watch(argv: list[str]) -> int:
             print(f"codex-review: timed out after {config.timeout}s", file=sys.stderr)
             return EXIT_PENDING
         except GitHubError as exc:
-            print(str(exc), file=sys.stderr)
-            return EXIT_API
+            # A tracked watcher makes ~200 gh calls an hour; one 502 or secondary rate limit
+            # must not end the round unread -- that is the failure this tool exists to prevent.
+            # Retry on the next interval, but only while there IS one, and never for a hard
+            # failure that no amount of waiting fixes. GitHubError.code carries gh's OWN exit
+            # status, so classify on that -- and still report EXIT_API when giving up, which is
+            # the contract callers watch for.
+            if exc.code in HARD_API_CODES or config.once:
+                print(str(exc), file=sys.stderr)
+                return EXIT_API
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                print(str(exc), file=sys.stderr)
+                return EXIT_API
+            print(f"codex-review: transient API failure, retrying: {exc}", file=sys.stderr, flush=True)
+            time.sleep(min(config.interval, remaining))
+            continue
         print(result_lines(result), end="", flush=True)
         if rc in {EXIT_CLEAN, EXIT_FINDINGS, EXIT_FAILED, EXIT_STALE_HEAD}:
             return rc
@@ -803,8 +835,10 @@ def request(argv: list[str]) -> int:
 
         baseline_review_id = max_id(repo, f"pulls/{ns.pr}/reviews")
         baseline_pull_comment_id = max_id(repo, f"pulls/{ns.pr}/comments")
-        baseline_issue_comment_id = max_id(repo, f"issues/{ns.pr}/comments")
-
+        # NOTE: no issue-comment baseline sweep here. The request comment posted below is
+        # itself the baseline for both issue-comment id spaces (see values{} further down), so
+        # reading the PR's whole comment history first is a paginated round trip inside the lock
+        # whose result is discarded.
         latest_sha = gh_pr_head(repo, ns.pr)
         if latest_sha != sha:
             die(f"PR head changed from {sha} to {latest_sha} while preparing the request; retry")

@@ -76,7 +76,10 @@ jobs:
       - name: codex review watcher tests (scripts/codex_review_watch_test.sh)
         run: |
           chmod +x scripts/codex_review_watch_test.sh
-          python3 -m py_compile scripts/codex_review.py
+          # PYTHONPYCACHEPREFIX keeps the .pyc out of the tree: py_compile invalidates on
+          # source mtime and a fresh checkout always has a new one, so writing it in place
+          # dirties the worktree and fails the "Generated outputs are fresh" gate below.
+          PYTHONPYCACHEPREFIX="$RUNNER_TEMP/pycache" python3 -m py_compile scripts/codex_review.py
           ./scripts/codex_review_watch_test.sh
 
       # The no-alloc + isolation lint. AGENTS.md calls this MUST pass, and it guards the defining

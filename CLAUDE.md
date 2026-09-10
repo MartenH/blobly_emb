@@ -200,11 +200,15 @@ a gh/API failure (never silently "nothing waiting"). `scripts/review_preflight.s
 easy setup mistakes first — detached HEAD, the primary checkout, `main`, a dirty tree, a branch
 that does not contain `origin/main`, gh missing or unauthenticated.
 
-These are **copied verbatim from blobly_net** so the two stay diffable — resync with `diff
-scripts/codex_review*.py ../blobly_net/scripts/...`, and fix a bug in both. The fixtures in
-`scripts/codex_review_watch_test.sh` (79 cases) run in CI; the `MartenH/blobly_net` slug inside
-them is inert stub data, not a cross-repo dependency. Update the fixtures when the GitHub or
-Codex response shape changes.
+These came **from blobly_net**, and `diff` against that copy is how you resync — but they are
+**not identical any more**, so do not diff-and-overwrite. This repo's copy fixes four things net
+has not got, each pinned by a fixture: a review body that names its sha by permalink instead of
+the `Reviewed commit:` footer (`review_names_sha`), a clean verdict on the issues channel while
+findings sit inline (`fresh_finding_count`, the false-clean guard), a single transient gh failure
+killing an hour-long watch (`HARD_API_CODES`), and a discarded baseline sweep inside the request
+lock. Carry a fix in whichever direction it is missing; never replace one file wholesale. The
+`MartenH/blobly_net` slug inside the fixtures is inert stub data, not a cross-repo dependency.
+The suite (87 cases) runs in CI — update it when the GitHub or Codex response shape changes.
 
 The rules below are why the tool does what it does. Read them before changing it — each one is
 a review that was lost.

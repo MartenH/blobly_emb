@@ -80,6 +80,16 @@ for arg in "$@"; do
 	esac
 done
 
+if [ "${FAKE_GH_CASE:-}" = api_flaky ]; then
+	_n=$(cat "$(dirname "$0")/flaky" 2>/dev/null || echo 0)
+	_n=$((_n + 1))
+	printf '%s' "$_n" >"$(dirname "$0")/flaky"
+	if [ "$_n" -le 1 ]; then
+		echo "simulated 502 from the API" >&2
+		exit 1
+	fi
+fi
+
 if [ "$endpoint" = user ]; then
 	printf '{"login":"MartenH"}\n'
 	exit 0
@@ -110,6 +120,24 @@ case "${FAKE_GH_CASE:-}:$endpoint" in
 		printf '[]\n'
 		;;
 	clean:repos/MartenH/blobly_net/issues/123/comments)
+		printf '[{"id":41,"created_at":"2026-01-01T00:00:02Z","user":%s,"body":"Done. Didn'\''t find any major issues. **Reviewed commit:** `abcdef1234`"}]\n' "$bot"
+		;;
+	clean_with_findings:repos/MartenH/blobly_net/pulls/123/reviews)
+		printf '[{"id":10,"submitted_at":"2026-01-01T00:00:00Z","user":%s,"body":"old review **Reviewed commit:** `aaaaaaaaaa`"}]\n' "$bot"
+		;;
+	clean_with_findings:repos/MartenH/blobly_net/pulls/123/comments)
+		printf '[{"id":31,"created_at":"2026-01-01T00:00:02Z","user":%s,"body":"inline issue","commit_id":"abcdef1234567890abcdef1234567890abcdef12","original_commit_id":"abcdef1234567890abcdef1234567890abcdef12"}]\n' "$bot"
+		;;
+	clean_with_findings:repos/MartenH/blobly_net/issues/123/comments)
+		printf '[{"id":41,"created_at":"2026-01-01T00:00:02Z","user":%s,"body":"Done. Didn'\''t find any major issues. **Reviewed commit:** `abcdef1234`"}]\n' "$bot"
+		;;
+	api_flaky:repos/MartenH/blobly_net/pulls/123/reviews)
+		printf '[{"id":10,"submitted_at":"2026-01-01T00:00:00Z","user":%s,"body":"old review **Reviewed commit:** `aaaaaaaaaa`"}]\n' "$bot"
+		;;
+	api_flaky:repos/MartenH/blobly_net/pulls/123/comments)
+		printf '[]\n'
+		;;
+	api_flaky:repos/MartenH/blobly_net/issues/123/comments)
 		printf '[{"id":41,"created_at":"2026-01-01T00:00:02Z","user":%s,"body":"Done. Didn'\''t find any major issues. **Reviewed commit:** `abcdef1234`"}]\n' "$bot"
 		;;
 	clean_alt:repos/MartenH/blobly_net/pulls/123/reviews)
@@ -343,6 +371,28 @@ ok "review body citing the sha counts inline comments" "$(grep -c '^PULL_COMMENT
 rc=$(run_case stale_body_no_footer "$out")
 ok "review body citing another sha stays pending" "$rc" "1"
 ok "review body citing another sha result" "$(grep -c '^RESULT=pending$' "$out")" "1"
+
+# The verdict and the findings arrive on DIFFERENT channels, so a clean summary on the issues
+# channel proves nothing on its own -- inline findings outrank it. A false clean merges
+# unreviewed code, which is the one direction that must never be loosened.
+rc=$(run_case clean_with_findings "$out")
+ok "clean verdict with fresh inline findings exits 20" "$rc" "20"
+ok "clean verdict with fresh inline findings result" "$(grep -c '^RESULT=findings$' "$out")" "1"
+
+# One 502 in a ~200-call hour must not end the round unread.
+rm -f "$stub/flaky"
+FAKE_GH_CASE=api_flaky PATH="$stub:/usr/bin:/bin" \
+	bash scripts/codex_review_watch.sh --pr 123 --repo MartenH/blobly_net \
+	--sha abcdef1234567890abcdef1234567890abcdef12 \
+	--baseline-review-id 10 --baseline-pull-comment-id 30 \
+	--baseline-issue-comment-id 40 --baseline-failure-comment-id 40 \
+	--requested-at 2026-01-01T00:00:01Z --interval 1 --timeout 20 >"$out" 2>&1
+rc=$?
+ok "a transient API failure is retried, not fatal" "$rc" "0"
+ok "the retry is announced" "$(grep -c 'transient API failure, retrying' "$out")" "1"
+
+# ...but a hard failure is not retried: --once still reports EXIT_API rather than gh's status.
+rm -f "$stub/flaky"
 
 rc=$(run_case stale_inline_clean "$out")
 ok "old inline comments do not taint fresh clean review" "$rc" "0"
