@@ -209,7 +209,9 @@ findings sit inline (`fresh_finding_count`, the false-clean guard), a single tra
 killing an hour-long watch (`HARD_API_CODES`), and a discarded baseline sweep inside the request
 lock. Carry a fix in whichever direction it is missing; never replace one file wholesale. The
 `MartenH/blobly_net` slug inside the fixtures is inert stub data, not a cross-repo dependency.
-The suite (87 cases) runs in CI — update it when the GitHub or Codex response shape changes.
+The suite runs in CI — update it when the GitHub or Codex response shape changes. (Its case
+count is deliberately not quoted here: a literal that every fixture invalidates is a doc that is
+usually wrong, and a resync then looks like it gained or lost tests.)
 
 The rules below are why the tool does what it does. Read them before changing it — each one is
 a review that was lost.

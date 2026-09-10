@@ -71,8 +71,9 @@ jobs:
       # The review watcher is a real tool, not a shell fragment: it must page every channel,
       # match a verdict by the reviewed SHA, and preserve gh API failures instead of reporting
       # "nothing waiting" — the three failure modes that each lost a review here. The fixtures
-      # pin those behaviours, so a review round never depends on hand polling. Copied verbatim
-      # from blobly_net (`diff` the two to resync); the fixture repo slug is inert stub data.
+      # pin those behaviours, so a review round never depends on hand polling. These came from
+      # blobly_net but have DIVERGED -- carry individual fixes between the two, never overwrite
+      # one with the other (see CLAUDE.md); the fixture repo slug is inert stub data.
       - name: codex review watcher tests (scripts/codex_review_watch_test.sh)
         run: |
           chmod +x scripts/codex_review_watch_test.sh

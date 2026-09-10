@@ -487,8 +487,10 @@ FAKE_GH_CASE=hang PATH="$stub:/usr/bin:/bin" bash scripts/codex_review_watch.sh 
 	--baseline-failure-comment-id 0 \
 	--interval 1 \
 	--timeout 1 >"$out" 2>&1
-ok "watcher timeout bounds stalled gh API call" "$?" "1"
-ok "watcher timeout explains stalled gh API call" "$(grep -c 'timed out after 1s' "$out")" "1"
+# A gh call that stalls past the deadline is an API failure, NOT an uneventful poll: the
+# watcher never heard from GitHub. This fixture used to assert exit 1 -- it pinned the bug.
+ok "a stalled gh API call exits 70, not pending" "$?" "70"
+ok "a stalled gh API call says GitHub never answered" "$(grep -c 'stalled past the watch deadline' "$out")" "1"
 
 PATH="$nogh:$stub:/usr/bin:/bin" bash scripts/codex_review_watch.sh --once --pr 123 --repo MartenH/blobly_net \
 	--sha abcdef1234567890abcdef1234567890abcdef12 \
@@ -659,6 +661,32 @@ ok "unanswered names the open finding" "$(grep -c '^UNANSWERED 32 b.v:2$' "$out"
 ok "unanswered skips the replied-to finding" "$(grep -c '^UNANSWERED 31' "$out")" "0"
 ok "unanswered ignores non-reviewer comments" "$(grep -c '^UNANSWERED 34' "$out")" "0"
 ok "unanswered reports the tally" "$(grep -c '1 unanswered of 2 findings' "$out")" "1"
+
+# --force must clear the RETAINED LOCAL STATE too, not only the marker in the PR: a dropped
+# trigger leaves both behind, and the state check runs first.
+saved_state=$(mktemp -d)
+cat >"$saved_state/pr-123.env" <<'ENV'
+PR=123
+REPO=MartenH/blobly_net
+SHA=abcdef1234567890abcdef1234567890abcdef12
+BASELINE_REVIEW_ID=10
+BASELINE_PULL_COMMENT_ID=30
+BASELINE_ISSUE_COMMENT_ID=40
+BASELINE_FAILURE_COMMENT_ID=40
+REQUEST_COMMENT_ID=999
+REQUESTED_AT=2026-01-01T00:00:01Z
+ENV
+cp "$saved_state/pr-123.env" "$saved_state/pr-123.env.bak"
+FAKE_GH_CASE=request_success PATH="$stub:/usr/bin:/bin" \
+	bash scripts/request_codex_review.sh 123 --repo MartenH/blobly_net --post --state-dir "$saved_state" >"$out" 2>&1
+ok "a saved pending state blocks a plain re-request" "$?" "64"
+ok "the saved-state guard names the override" "$(grep -c 'pass --force to request again' "$out")" "1"
+
+cp "$saved_state/pr-123.env.bak" "$saved_state/pr-123.env"
+FAKE_GH_CASE=request_success PATH="$stub:/usr/bin:/bin" \
+	bash scripts/request_codex_review.sh 123 --repo MartenH/blobly_net --post --force --state-dir "$saved_state" >"$out" 2>&1
+ok "--force re-requests over a saved pending state" "$?" "0"
+ok "--force says it overrode the saved state" "$(grep -c 'force: re-requesting over the saved pending state' "$out")" "1"
 
 spoof_state=$(mktemp -d)
 FAKE_GH_CASE=remote_spoof PATH="$stub:/usr/bin:/bin" \

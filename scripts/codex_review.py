@@ -49,7 +49,17 @@ class GitHubError(Exception):
 
 
 class WatchDeadlineExpired(Exception):
-    pass
+    """The watch window ran out.
+
+    `command_timed_out` separates the two ways that happens, because they mean opposite things:
+    an uneventful poll really is PENDING, while a gh subprocess that stalled until the deadline
+    means the watcher never heard from GitHub at all -- which is EXIT_API. This path bypasses
+    GitHubError and the retry bookkeeping entirely, so `last_api_error` cannot see it.
+    """
+
+    def __init__(self, command_timed_out: bool = False) -> None:
+        super().__init__()
+        self.command_timed_out = command_timed_out
 
 
 class Parser(argparse.ArgumentParser):
@@ -92,7 +102,7 @@ def run(args: list[str], timeout: float | None = None) -> subprocess.CompletedPr
     except FileNotFoundError:
         return subprocess.CompletedProcess(args, 127, "", f"command not found: {args[0]}")
     except subprocess.TimeoutExpired as exc:
-        raise WatchDeadlineExpired() from exc
+        raise WatchDeadlineExpired(command_timed_out=True) from exc
 
 
 def run_checked(args: list[str], label: str, timeout: float | None = None) -> str:
@@ -375,7 +385,11 @@ def parse_state(path: Path) -> dict[str, str]:
 
 def write_state(path: Path, values: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    created_at = _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    # _dt.timezone.utc, not _dt.UTC: the latter is 3.11+, and this line runs AFTER the review
+    # comment is posted -- so on a 3.10 python (Ubuntu 22.04) it would trigger a review and then
+    # die without saving the state or printing the watch command. py_compile on a newer
+    # interpreter does not exercise an attribute lookup.
+    created_at = _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     keys = [
         "PR",
         "REPO",
@@ -704,7 +718,14 @@ def watch(argv: list[str]) -> int:
         try:
             rc, result = scan_once(config, deadline=deadline)
             last_api_error = None
-        except WatchDeadlineExpired:
+        except WatchDeadlineExpired as expiry:
+            if expiry.command_timed_out:
+                print(
+                    "codex-review: a gh call stalled past the watch deadline -- no response from "
+                    "GitHub",
+                    file=sys.stderr,
+                )
+                return EXIT_API
             if last_api_error is not None:
                 print(str(last_api_error), file=sys.stderr)
                 print(
@@ -748,7 +769,14 @@ def max_id(repo: str, path: str) -> int:
     return max((item_id(item) for item in gh_items(repo, path)), default=0)
 
 
-def check_existing_state(path: Path, requested_pr: str, requested_repo: str, current_sha: str, review_actor: str) -> None:
+def check_existing_state(
+    path: Path,
+    requested_pr: str,
+    requested_repo: str,
+    current_sha: str,
+    review_actor: str,
+    force: bool = False,
+) -> None:
     if not path.is_file():
         return
     state = parse_state(path)
@@ -778,8 +806,20 @@ def check_existing_state(path: Path, requested_pr: str, requested_repo: str, cur
         print(str(exc), file=sys.stderr)
         die("could not determine whether the same-SHA review is still pending", EXIT_API)
     if rc == EXIT_PENDING:
+        if force:
+            # The abandoned-request escape has to cover THIS path too. A dropped trigger leaves
+            # the local state file behind as well as the marker in the PR, and this check runs
+            # first -- so an override that only reached the remote check would have made
+            # "delete the state file by hand" an undocumented prerequisite for recovery.
+            print(
+                "codex-review: --force: re-requesting over the saved pending state",
+                file=sys.stderr,
+            )
+            return
         print(result_lines(result), end="", file=sys.stderr, flush=True)
-        die("same-SHA review is still pending; wait for it before requesting another round")
+        die(
+            "same-SHA review is still pending; wait for it, or pass --force to request again"
+        )
 
 
 def check_remote_pending(
@@ -860,7 +900,7 @@ def request(argv: list[str]) -> int:
     state_path = Path(ns.state_dir) / f"pr-{ns.pr}.env"
     with git_common_lock(f"codex-review-pr-{ns.pr}.lock", fallback_parent=state_path.parent / ".locks"):
         review_actor = os.environ.get("CODEX_REVIEW_ACTOR", CODEX_ACTOR)
-        check_existing_state(state_path, ns.pr, repo, sha, review_actor)
+        check_existing_state(state_path, ns.pr, repo, sha, review_actor, force=ns.force)
         requester = gh_user_login()
         check_remote_pending(repo, ns.pr, sha, requester, review_actor, force=ns.force)
 
