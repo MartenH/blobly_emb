@@ -394,3 +394,19 @@ fn test_a_gateway_that_is_also_a_someip_member_is_refused() {
 	sys.nodes[0].buses << 'pt'
 	assert seg_errs(sys).any(it.contains('multi-bus gateway')), seg_errs(sys).str()
 }
+
+// The service and the version are the segment's IDENTITY, and .i64() coerces a non-integer to
+// 0 — a legal id and a legal version. Lowering would write an explicit numeric 0 that the node
+// gate cannot tell from a declared one, so the type has to be caught while the evidence exists
+// (codex on #245 round 6, in the review BODY rather than inline).
+fn test_a_non_integer_service_is_refused() {
+	mut sys := tel_system()
+	sys.buses[0].service_int = false
+	assert seg_errs(sys).any(it.contains('`service` must be an integer')), seg_errs(sys).str()
+}
+
+fn test_a_non_integer_version_is_refused() {
+	mut sys := tel_system()
+	sys.buses[0].version_int = false
+	assert seg_errs(sys).any(it.contains('`version` must be an integer')), seg_errs(sys).str()
+}

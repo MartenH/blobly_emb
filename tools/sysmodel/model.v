@@ -45,6 +45,11 @@ pub mut:
 	// are impossible contracts. Recorded at parse (before the u32 cast wraps them).
 	service_ok bool = true
 	version_ok bool = true
+	// ...and they must be INTEGERS. .i64() coerces a string to 0, which is a legal service
+	// id and a legal interface version, so a type error would lower into an explicit numeric
+	// 0 that the node gate cannot tell from a declared one (codex on #245 round 6).
+	service_int bool = true
+	version_int bool = true
 	// the NM cluster on this bus (dissolution: the identity source the generator
 	// stamps into each node's [nm]). peers = the alive-id range; the timings are
 	// the shared sleep/wake config. 0/absent = the module defaults.
@@ -431,9 +436,11 @@ pub fn parse_system(path string) !System {
 				service:     u32(m_int(m, 'service'))
 				has_service: 'service' in m
 				service_ok:  svc_raw >= 0 && svc_raw <= 0xFFFF
+				service_int: if v := m['service'] { v is i64 } else { true }
 				version:     u32(m_int(m, 'version'))
 				has_version: 'version' in m
 				version_ok:  ver_raw >= 0 && ver_raw <= 0xFF
+				version_int: if v := m['version'] { v is i64 } else { true }
 			}
 			// [bus.<name>.nm] — the dissolution NM cluster (peers range + timings)
 			if nmv := m['nm'] {

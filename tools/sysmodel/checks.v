@@ -700,6 +700,20 @@ fn check_topology_wellformed(s System) []Issue {
 		// the SOME/IP header carries service as u16 and interface version as u8, so an
 		// out-of-range value is not a big number, it is an impossible contract — and it
 		// must fail even on a bus no node has joined yet (the u32 cast would wrap -1).
+		if b.kind == 'someip' && !b.service_int {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'bus "${b.name}": `service` must be an integer — a non-integer coerces to 0, which is a legal service id, so the error would lower into a real wire contract'
+			}
+		}
+		if b.kind == 'someip' && !b.version_int {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'bus "${b.name}": `version` must be an integer — a non-integer coerces to 0, which is a legal interface version, so the error would lower into a real wire contract'
+			}
+		}
 		if b.kind == 'someip' && !b.service_ok {
 			issues << Issue{
 				severity: .error
