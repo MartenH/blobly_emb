@@ -158,14 +158,19 @@ The loop, in this order — not two of the three, and not a different order:
    a policy centralised and then duplicated a round later, an unlocked read of state another
    thread replaces — were all visible in the diff without running anything. Look for exactly
    those, plus any claim in a doc the change just made false.
-3. **`@codex review`**, iterated until clean before merging.
+3. **`@codex review`**, iterated until clean before merging. Before the first request run
+   `scripts/review_preflight.sh`; start every round with `scripts/request_codex_review.sh <pr>
+   --post` and watch it with the command that prints. Do not hand-roll the polling.
+4. **React 👍/👎 on every finding, and answer every thread** — see below. A round is not handled
+   until each of its findings carries a reaction and a reply.
 
 Three things that make the loop work:
 
 - **Watch each round with a TRACKED background job**, never a detached shell (`( ... & )`). A
   detached watcher fires into nothing and the round sits unread — that happened twice in one
-  session, once for over an hour. Match the verdict by the head SHA codex names, never by its
-  wording: phrase-matching missed "Didn't find any major issues" more than once.
+  session, once for over an hour. Run the `scripts/codex_review_watch.sh --state ...` line that
+  `request_codex_review.sh` prints; it already matches the verdict by the head SHA codex names
+  rather than by wording (phrase-matching missed "Didn't find any major issues" more than once).
 - **Work in a worktree, never the main checkout.** `git worktree add .claude/worktrees/<name> -b
   <branch> origin/main` — **fetch first** (`git fetch -q origin`): naming a remote-tracking ref
   does not contact the remote, so a checkout that has not fetched since `main` advanced branches
@@ -183,6 +188,26 @@ Three things that make the loop work:
 A watcher that reports "nothing" when something is waiting is worse than no watcher. Every rule
 here exists because a silent version of it lost a review. This repo keeps no status log; the
 incidents are written up in blobly_net's `docs/history.md` (2026-08-12).
+
+**Do not hand-roll the polling in a shell fragment.** `scripts/request_codex_review.sh <pr>
+--post` is a thin wrapper over `scripts/codex_review.py`: it posts the request, records the PR
+head SHA, records the request-comment marker and fresh baselines for each GitHub id space, and
+prints the `scripts/codex_review_watch.sh --state .claude/reviews/pr-<pr>.env` line to run as a
+tracked background job. The watcher reads the verdict channels as GitHub JSON rather than
+shell-scraped text, and classifies the outcome in its exit code: `0` clean · `1` pending · `20`
+findings · `30` the review FAILED and must be re-requested · `40` the head moved under it · `70`
+a gh/API failure (never silently "nothing waiting"). `scripts/review_preflight.sh` refuses the
+easy setup mistakes first — detached HEAD, the primary checkout, `main`, a dirty tree, a branch
+that does not contain `origin/main`, gh missing or unauthenticated.
+
+These are **copied verbatim from blobly_net** so the two stay diffable — resync with `diff
+scripts/codex_review*.py ../blobly_net/scripts/...`, and fix a bug in both. The fixtures in
+`scripts/codex_review_watch_test.sh` (79 cases) run in CI; the `MartenH/blobly_net` slug inside
+them is inert stub data, not a cross-repo dependency. Update the fixtures when the GitHub or
+Codex response shape changes.
+
+The rules below are why the tool does what it does. Read them before changing it — each one is
+a review that was lost.
 
 - **`--paginate` everything**, but for two different reasons. Comments come back **ascending**,
   30 per page, so an un-paginated read drops the **newest** — the ones you are waiting for.
@@ -220,6 +245,15 @@ incidents are written up in blobly_net's `docs/history.md` (2026-08-12).
   abbreviated SHA, so a 40-char compare never matches; but a retry after a failed review names
   the *same* SHA as the failure, so record the highest comment/review id first and require the
   match to beat it. Never match on wording.
+- **A review body may omit `Reviewed commit:` entirely.** On #276 round 6 the body opened with
+  a `/blob/<sha>` permalink and a P1 finding and carried no footer at all — so a watcher gated on
+  the footer reported `pending` while five findings sat waiting. Accept EITHER the footer or a
+  permalink naming the sha; both are sha-anchored, so neither matches a stale review. The
+  **clean** path deliberately still requires the footer: loosening a "findings" match costs a
+  wait, loosening a "clean" match merges unreviewed code.
+- **A finding can live in the review BODY, not only inline.** Counting `pulls/N/comments` alone
+  missed the round-6 P1 on service/version type coercion, because it was written into the review
+  summary. Read both.
 - **A force-push during a pending review gets you a verdict for the OLD commit.** Codex answers
   for the SHA it started on, so after an amend or rebase its "no major issues" names a commit
   that is no longer on the branch. Observed on emb#255: clean on `a1d3c667` while the head was
@@ -230,6 +264,59 @@ incidents are written up in blobly_net's `docs/history.md` (2026-08-12).
   nothing looks exactly like no news.
 - Run it as a **tracked** background job, never a detached shell (`( ... & )`). A cron sweep
   over every open PR is the backstop for when the watcher itself is wrong.
+
+### Answering a round
+
+**React 👍/👎 on every finding, and reply in its thread.** Codex's footer asks "Useful? React
+with 👍 / 👎", and that is the only channel the review has for learning what it got right;
+leaving it empty tells it nothing, round after round. Note the two endpoints have different
+shapes:
+
+```sh
+gh api -X POST repos/<o>/<r>/pulls/comments/<id>/reactions -f content='+1'   # or '-1'
+gh api -X POST repos/<o>/<r>/pulls/<pr>/comments/<id>/replies -f body='…'
+```
+
+**A PR-level summary is not an answer.** On #276 rounds 1–4 were answered in-thread and rounds
+5–6 were written up as one PR comment instead — ten findings left with no reply and no reaction,
+which is what the maintainer sees on opening the PR (user: "You have 0 responses to codex").
+Before calling a round handled, ask for findings nothing replies to:
+
+```sh
+gh api --paginate repos/<o>/<r>/pulls/<pr>/comments --jq \
+  '[.[]|select(.user.login|startswith("chatgpt"))] as $f
+   | [.[]|select(.in_reply_to_id!=null)|.in_reply_to_id] as $r
+   | ($f|map(select(.id as $i|($r|index($i))==null))|.[]|"UNANSWERED \(.id) \(.path)")'
+```
+
+**What the reaction rates is whether the FINDING is true** — not whether you liked the remedy,
+and not whether you are going to act on it here:
+
+| the finding is… | react | and |
+|---|---|---|
+| a real defect you reproduced, or one plainly derivable from the code | 👍 | fix it |
+| real, but **pre-existing** — not this PR's doing | 👍 | file an issue; say which, so it is not lost when the branch is |
+| real, but the suggested **fix** is wrong or too narrow | 👍 | fix it your way and say why the shape differs |
+| real, and caused by **your own previous round's fix** | 👍 | the strongest signal you get — go after the class, not the instance |
+| a claim you **checked and it does not hold** | 👎 | one line of evidence; never a silent dismissal |
+| an artifact of the review's own checkout (see the commit-identity note below) | 👎 | run that note's tests first |
+| style with no defect behind it | 👎 | say so plainly |
+| something you **cannot yet tell** | *wait* | investigate, then react — a reaction you have to take back is worse than a late one |
+
+Then reply once at PR level with the round's disposition (finding · reaction · what happened),
+**in addition to** the per-thread replies, so the maintainer can read it without opening each
+one.
+
+**When findings repeat in one path, write the test — do not stop the review.** A round count is
+the wrong instrument: net#84's nine rounds were nine rounds of real findings. But when
+consecutive rounds keep landing in the same uncovered place, the loop is designing an untested
+path one repair at a time — cover it with a test, which ends the repeats at their source. When
+instead a round restates rules another gate already owns, the answer is to share the rule, not
+to copy it again (#276 rounds 4–6 → #277).
+
+**This is the opposite direction from the reaction rule above.** WRITING a reaction is feedback
+to codex and is expected of you. READING codex's 👍 as the verdict is what cannot be made to
+work.
 
 ## Review guidelines
 
