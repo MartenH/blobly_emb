@@ -82,7 +82,11 @@ fn main() {
 			eprintln('sysgen: node "${n.name}": ${err}')
 			exit(1)
 		}
-		if n.buses.len > 1 || (n.view.is_threadx && bus.interface != 'can0') {
+		// A someip node is NOT one of those cases: it has no DBC at all, so the single-dbc
+		// precheck has nothing to trip over and every reason to run — skipping it printed "ok"
+		// for target-invalid configs (a ThreadX priority out of range, say) that only the node
+		// build would have caught (codex on #245).
+		if n.buses.len > 1 || (n.view.is_threadx && bus.kind != 'someip' && bus.interface != 'can0') {
 			// The gateway (multi-bus) and a non-can0 leaf need DBC handling the single-dbc
 			// loom2v_errors() precheck can't do (the gateway builds a merged DBC), so skip the
 			// inline precheck — the node's own Makefile runs loom2v + the cross-build. Both are
@@ -539,15 +543,22 @@ fn someip_frame_lines(fr sysmodel.SysFrame, iface string, tx bool) []string {
 		q << '"${sg}"'
 	}
 	b << 'signals = [${q.join(', ')}]'
-	if tx && fr.tx_mode != '' {
-		mut txcfg := 'mode = "${fr.tx_mode}"'
-		if fr.cycle_ms > 0 {
-			txcfg += ', cycle_ms = ${fr.cycle_ms}'
+	// PRESENCE, not a non-empty mode: `tx = { cycle_ms = 300 }` is valid shorthand, and gating
+	// on the mode string dropped the whole table — the node then ran on loom2v's 100 ms default
+	// instead of the declared 300, silently (codex on #245). Every supplied key is carried
+	// through, so an invalid one is rejected downstream rather than defaulted away.
+	if tx && fr.has_tx {
+		mut parts := []string{}
+		if fr.tx_mode != '' {
+			parts << 'mode = "${fr.tx_mode}"'
 		}
-		if fr.min_delay_ms > 0 {
-			txcfg += ', min_delay_ms = ${fr.min_delay_ms}'
+		if fr.has_cycle_ms {
+			parts << 'cycle_ms = ${fr.cycle_ms}'
 		}
-		b << 'tx      = { ${txcfg} }'
+		if fr.has_min_delay_ms {
+			parts << 'min_delay_ms = ${fr.min_delay_ms}'
+		}
+		b << 'tx      = { ${parts.join(', ')} }'
 	}
 	if fr.has_e2e {
 		b << 'e2e     = { data_id = 0x${fr.e2e_data_id.hex().to_upper()}, counter_pos = ${fr.e2e_counter}, crc_pos = ${fr.e2e_crc} }'

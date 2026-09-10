@@ -60,8 +60,10 @@ fn tel_system() sysmodel.System {
 				id:          0x8001
 				has_id:      true
 				signals:     ['BenchLoad']
-				tx_mode:     'cyclic'
-				cycle_ms:    300
+				tx_mode:      'cyclic'
+				cycle_ms:     300
+				has_tx:       true
+				has_cycle_ms: true
 				has_e2e:     true
 				e2e_data_id: 0x21
 				e2e_counter: 7
@@ -157,9 +159,30 @@ fn test_nm_on_a_someip_member_is_refused() {
 	assert e.any(it.contains('has no NM')), e.str()
 }
 
-// An event is received WHOLE: a node reading ONE signal of a two-signal event still declares
-// both, or the payload offsets would shift under it.
-fn test_a_subscriber_declares_every_signal_of_the_event_it_reads() {
+// An event is received WHOLE — one datagram at fixed offsets — so a partial subscriber is
+// REFUSED rather than lowered: dropping the unread signals would shift the offsets of the ones
+// it does read, and declaring them anyway creates rx channels with no reading handler, which
+// the generated-config gate rejects (codex on #245).
+fn test_a_partial_subscriber_is_refused() {
+	mut sys := tel_system()
+	sys.signals << sysmodel.SysSignal{
+		name:     'BenchTicks'
+		producer: 'tcu'
+		bus:      'tel'
+		frame:    'BenchTelem'
+		fields:   {
+			'ticks': 'u32'
+		}
+	}
+	sys.frames[0].signals = ['BenchLoad', 'BenchTicks']
+	sys.nodes[1].view.fb_reads = ['BenchLoad'] // reads ONE of the two
+	e := sysmodel.validate_system_gen(sys).filter(it.severity == .error).map(it.msg)
+	assert e.any(it.contains('no FB reads "BenchTicks"')), e.str()
+}
+
+// ...and a whole-event subscriber gets every signal of it declared, so the payload offsets the
+// producer packed are the offsets it decodes.
+fn test_a_whole_event_subscriber_declares_every_signal() {
 	mut sys := tel_system()
 	sys.signals << sysmodel.SysSignal{
 		name:     'BenchTicks'
@@ -172,7 +195,7 @@ fn test_a_subscriber_declares_every_signal_of_the_event_it_reads() {
 	}
 	sys.frames[0].signals = ['BenchLoad', 'BenchTicks']
 	view := sysmodel.NodeView{
-		fb_reads: ['BenchLoad'] // reads ONE of the two
+		fb_reads: ['BenchLoad', 'BenchTicks']
 	}
 	out := generate_someip_node(sys, sys.nodes[1], sys.buses[0], view, {
 		'BenchLoad':  'bench'
@@ -180,5 +203,38 @@ fn test_a_subscriber_declares_every_signal_of_the_event_it_reads() {
 		'LampCmd':    'bench'
 	}, '') or { panic(err) }
 	assert out.contains('name   = "BenchLoad"')
-	assert out.contains('name   = "BenchTicks"'), 'the unread half of the event was dropped:\n${out}'
+	assert out.contains('name   = "BenchTicks"'), out
+}
+
+// `tx = { cycle_ms = 300 }` is valid shorthand: gating on a non-empty mode dropped the whole
+// table and the node silently ran on loom2v's 100 ms default (codex on #245).
+fn test_a_tx_table_without_a_mode_survives_lowering() {
+	mut sys := tel_system()
+	sys.frames[0].tx_mode = ''
+	out := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, {
+		'BenchLoad': 'app'
+	}, '') or { panic(err) }
+	assert out.contains('tx      = { cycle_ms = 300 }'), out
+}
+
+// An event carrying no signals is lowered into no node at all — a system-declared contract that
+// silently does not exist.
+fn test_an_event_with_no_signals_is_refused() {
+	mut sys := tel_system()
+	sys.frames << sysmodel.SysFrame{
+		name:   'Empty'
+		bus:    'tel'
+		id:     0x8020
+		has_id: true
+	}
+	e := sysmodel.validate_system_gen(sys).filter(it.severity == .error).map(it.msg)
+	assert e.any(it.contains('declares no `signals`')), e.str()
+}
+
+// Two members spelling one address differently still collide on the wire.
+fn test_endpoints_are_compared_canonically() {
+	mut sys := tel_system()
+	sys.nodes[1].endpoint = '192.168.000.051'
+	e := sysmodel.validate_system_gen(sys).filter(it.severity == .error).map(it.msg)
+	assert e.any(it.contains('both answer at')), e.str()
 }
