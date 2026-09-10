@@ -432,11 +432,11 @@ fn check_signals_dissolved(s System) []Issue {
 					req:      'REQ-TOPO-001'
 					msg:      'signal "${sig.name}": field "${fname}" has unsupported type "${ftype}" (use a fixed scalar: bool/u8/i8/u16/i16/u32/i32/f32/f64)'
 				}
-			} else if ftype == 'u64' || ftype == 'i64' {
+			} else if (ftype == 'u64' || ftype == 'i64') && !carries_struct(s, sig) {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-001'
-					msg:      'signal "${sig.name}": field "${fname}" is ${ftype} — 64-bit integers are lossy through the f64 bridge; use <=32-bit widths'
+					msg:      'signal "${sig.name}": field "${fname}" is ${ftype} — 64-bit integers are lossy through the CAN f64 bridge; use <=32-bit widths (a SOME/IP event packs fixed widths directly, so it has no such limit)'
 				}
 			}
 		}
@@ -2117,6 +2117,16 @@ fn check_someip_signal_frames(s System) []Issue {
 				msg:      'frame "${fr.name}": a someip event needs an `id` — it is what the receive envelope dispatches on'
 			}
 		}
+		if fr.signals.len == 0 {
+			// Generation only discovers a frame while walking its member signals, so a frame
+			// carrying none is emitted into NO node — a system-declared event that silently
+			// does not exist, rather than a contract anything holds (codex on #245).
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": declares no `signals` — an event with an empty payload is lowered into no node at all'
+			}
+		}
 		for sg in fr.signals {
 			sig := s.signal_by_name(sg) or {
 				issues << Issue{
@@ -2228,6 +2238,37 @@ fn check_someip_segment(s System) []Issue {
 			}
 			continue
 		}
+		// An event arrives WHOLE — one datagram, one payload, its signals at fixed offsets — so
+		// the receiving member must read ALL of them. A partial subscriber cannot be lowered:
+		// dropping the unread signals would shift the offsets of the ones it does read, and
+		// declaring them anyway creates rx channels with no reading handler, which the
+		// generated-config gate rejects (codex on #245).
+		for fr in s.frames {
+			if fr.bus != b.name || fr.signals.len == 0 {
+				continue
+			}
+			mut producer := ''
+			for sg in fr.signals {
+				if sig := s.signal_by_name(sg) {
+					producer = sig.producer
+					break
+				}
+			}
+			for n in members {
+				if n.name == producer {
+					continue
+				}
+				for sg in fr.signals {
+					if sg !in n.view.fb_reads {
+						issues << Issue{
+							severity: .error
+							req:      'REQ-TOPO-001'
+							msg:      'node "${n.name}": receives event "${fr.name}" but no FB reads "${sg}" — a someip event arrives whole, at fixed offsets, so every signal it carries must be consumed'
+						}
+					}
+				}
+			}
+		}
 		mut addr_of := map[string]string{}
 		for n in members {
 			if !n.has_endpoint || n.endpoint == '' {
@@ -2238,14 +2279,14 @@ fn check_someip_segment(s System) []Issue {
 				}
 				continue
 			}
-			if prev := addr_of[n.endpoint] {
+			if prev := addr_of[canon_addr(n.endpoint)] {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-005'
 					msg:      'bus "${b.name}": nodes "${prev}" and "${n.name}" both answer at "${n.endpoint}" — one address per node on a segment'
 				}
 			} else {
-				addr_of[n.endpoint] = n.name
+				addr_of[canon_addr(n.endpoint)] = n.name
 			}
 			// NM is a CAN cluster protocol; there is no someip NM, and the generated config
 			// would carry an [nm] nothing serves.

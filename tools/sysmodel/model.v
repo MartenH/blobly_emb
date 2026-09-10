@@ -127,6 +127,12 @@ pub mut:
 	tx_mode      string // 'cyclic' | 'event' | '' (unset -> the producer's default)
 	cycle_ms     int
 	min_delay_ms int
+	// PRESENCE of the tx table and its keys: `tx = { cycle_ms = 300 }` is valid shorthand, so
+	// "no mode" does not mean "no tx", and a supplied 0 is a value to reject downstream rather
+	// than a key to drop.
+	has_tx           bool
+	has_cycle_ms     bool
+	has_min_delay_ms bool
 	has_e2e      bool
 	e2e_data_id  u32
 	e2e_counter  int
@@ -493,9 +499,12 @@ pub fn parse_system(path string) !System {
 			}
 			if tv := m['tx'] {
 				tm := tv.as_map()
+				fr.has_tx = true
 				fr.tx_mode = m_str(tm, 'mode')
 				fr.cycle_ms = m_int(tm, 'cycle_ms')
 				fr.min_delay_ms = m_int(tm, 'min_delay_ms')
+				fr.has_cycle_ms = 'cycle_ms' in tm
+				fr.has_min_delay_ms = 'min_delay_ms' in tm
 			}
 			if ev := m['e2e'] {
 				em := ev.as_map()
