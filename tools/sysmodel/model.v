@@ -85,6 +85,7 @@ pub mut:
 	// reciprocity check possible and what sysgen lowers into the node's [someip].
 	endpoint     string // "192.168.0.51" — the address this node answers at
 	port         u32
+	port_raw     i64 // pre-narrowing, so an out-of-range port is rejected not truncated
 	has_endpoint bool
 	// --- extracted from the node's ecu.toml (filled by load_node) ---
 	view NodeView
@@ -137,6 +138,15 @@ pub mut:
 	e2e_data_id  u32
 	e2e_counter  int
 	e2e_crc      int
+	// LOWERING IS RE-SERIALIZATION: whatever this parser normalizes away is a wire contract the
+	// system declared and the target never sees. So the RAW values are kept for the range
+	// checks (u32() truncation turned an id of 0x100008001 into a legal-looking 0x8001), and so
+	// is key PRESENCE, because a defaulted 0 is indistinguishable from a declared one once
+	// written out (codex on #245).
+	id_raw          i64
+	e2e_data_id_raw i64
+	has_e2e_data_id bool
+	unknown_keys    []string
 }
 
 // Route — a cross-bus forward on a gateway node. Exactly one of `frame`
@@ -469,6 +479,7 @@ pub fn parse_system(path string) !System {
 				em := ev.as_map()
 				node.endpoint = m_str(em, 'address')
 				node.port = m_u32(em, 'port')
+				node.port_raw = (em['port'] or { toml.Any(0) }).i64()
 				node.has_endpoint = true
 			}
 			for b in (m['buses'] or { toml.Any([]toml.Any{}) }).array() {
@@ -492,7 +503,30 @@ pub fn parse_system(path string) !System {
 				name:   m_str(m, 'name')
 				bus:    m_str(m, 'bus')
 				id:     m_u32(m, 'id')
+				id_raw: (m['id'] or { toml.Any(0) }).i64()
 				has_id: 'id' in m
+			}
+			// A typo is DISCARDED by a parser that copies only what it recognises — `e2ee`
+			// would silently mean "no E2E", and the generated file no longer carries the
+			// misspelling for ecucheck to reject. Record them instead.
+			for k, _ in m {
+				if k !in ['name', 'bus', 'id', 'signals', 'tx', 'e2e'] {
+					fr.unknown_keys << k
+				}
+			}
+			if tv := m['tx'] {
+				for k, _ in tv.as_map() {
+					if k !in ['mode', 'cycle_ms', 'min_delay_ms'] {
+						fr.unknown_keys << 'tx.${k}'
+					}
+				}
+			}
+			if ev := m['e2e'] {
+				for k, _ in ev.as_map() {
+					if k !in ['data_id', 'counter_pos', 'crc_pos'] {
+						fr.unknown_keys << 'e2e.${k}'
+					}
+				}
 			}
 			for sg in (m['signals'] or { toml.Any([]toml.Any{}) }).array() {
 				fr.signals << sg.string()
@@ -510,6 +544,8 @@ pub fn parse_system(path string) !System {
 				em := ev.as_map()
 				fr.has_e2e = true
 				fr.e2e_data_id = m_u32(em, 'data_id')
+				fr.e2e_data_id_raw = (em['data_id'] or { toml.Any(0) }).i64()
+				fr.has_e2e_data_id = 'data_id' in em
 				fr.e2e_counter = m_int(em, 'counter_pos')
 				fr.e2e_crc = m_int(em, 'crc_pos')
 			}

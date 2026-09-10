@@ -238,3 +238,48 @@ fn test_endpoints_are_compared_canonically() {
 	e := sysmodel.validate_system_gen(sys).filter(it.severity == .error).map(it.msg)
 	assert e.any(it.contains('both answer at')), e.str()
 }
+
+// LOWERING IS RE-SERIALIZATION, so whatever the parser normalizes away is a wire contract the
+// target never sees. These pin the four ways that bit (codex on #245 r2).
+
+fn seg_errs(sys sysmodel.System) []string {
+	return sysmodel.validate_system_gen(sys).filter(it.severity == .error).map(it.msg)
+}
+
+// u32() turned an out-of-range id into a legal-looking one, which then passed the generated
+// config's own 16-bit check and transmitted under an id nobody declared.
+fn test_an_event_id_wider_than_the_header_is_refused() {
+	mut sys := tel_system()
+	sys.frames[0].id_raw = 0x100008001
+	assert seg_errs(sys).any(it.contains('does not fit the SOME/IP header')), seg_errs(sys).str()
+}
+
+fn test_an_out_of_range_endpoint_port_is_refused() {
+	mut sys := tel_system()
+	sys.nodes[0].port_raw = 70000
+	assert seg_errs(sys).any(it.contains("does not fit a UDP port")), seg_errs(sys).str()
+}
+
+// A typo is DISCARDED by a parser that copies only what it recognises: `e2ee` would silently
+// mean "no E2E", and the generated file no longer carries the misspelling for ecucheck to see.
+fn test_an_unknown_frame_key_is_refused() {
+	mut sys := tel_system()
+	sys.frames[0].unknown_keys = ['e2ee']
+	assert seg_errs(sys).any(it.contains('unknown key "e2ee"')), seg_errs(sys).str()
+}
+
+// 0 is a legal E2E data id, so a defaulted one is indistinguishable from a declared one once
+// written out — the authored form rejects the omission, and so must this.
+fn test_an_e2e_table_without_a_data_id_is_refused() {
+	mut sys := tel_system()
+	sys.frames[0].has_e2e_data_id = false
+	assert seg_errs(sys).any(it.contains('no `data_id`')), seg_errs(sys).str()
+}
+
+// The EVENT transmits, and several signals share one, so a signal-level cadence would be
+// accepted by the CAN-shaped checks and then lowered nowhere.
+fn test_a_signal_level_cadence_on_someip_is_refused() {
+	mut sys := tel_system()
+	sys.signals[0].cycle_ms = 300
+	assert seg_errs(sys).any(it.contains('the EVENT is what transmits')), seg_errs(sys).str()
+}
