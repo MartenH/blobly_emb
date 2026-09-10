@@ -2117,6 +2117,52 @@ fn check_someip_signal_frames(s System) []Issue {
 				msg:      'frame "${fr.name}": a someip event needs an `id` — it is what the receive envelope dispatches on'
 			}
 		}
+		// RANGE BEFORE NARROWING. A SOME/IP header carries the event id as u16 and the E2E
+		// data id likewise; u32() had already truncated an out-of-range value into a
+		// legal-looking one, which then passed the generated config's own 16-bit check and
+		// transmitted under an id the system never declared (codex on #245).
+		if fr.has_id && (fr.id_raw < 0 || fr.id_raw > 0xFFFF) {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": event id ${fr.id_raw} does not fit the SOME/IP header\'s 16 bits'
+			}
+		}
+		for k in fr.unknown_keys {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": unknown key "${k}" — lowering copies only what it recognises, so a typo here would silently mean the feature is absent (an "e2ee" table = no E2E)'
+			}
+		}
+		if fr.has_e2e {
+			if !fr.has_e2e_data_id {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": its `e2e` table has no `data_id` — 0 is a legal id, so a defaulted one is indistinguishable from a declared one once lowered'
+				}
+			} else if fr.e2e_data_id_raw < 0 || fr.e2e_data_id_raw > 0xFFFF {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": e2e data_id ${fr.e2e_data_id_raw} does not fit 16 bits'
+				}
+			}
+		}
+		// The EVENT owns the cadence on a someip bus: it is the unit that goes on the wire, and
+		// several signals share one. A signal-level cycle_ms would be accepted by the CAN-shaped
+		// checks and then lowered nowhere, leaving loom2v's default in its place.
+		for sg in fr.signals {
+			sig := s.signal_by_name(sg) or { continue }
+			if sig.cycle_ms > 0 {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'signal "${sg}": carries cycle_ms on a someip bus — the EVENT is what transmits, so declare the cadence in frame "${fr.name}"\'s `tx` table'
+				}
+			}
+		}
 		if fr.signals.len == 0 {
 			// Generation only discovers a frame while walking its member signals, so a frame
 			// carrying none is emitted into NO node — a system-declared event that silently
@@ -2271,6 +2317,13 @@ fn check_someip_segment(s System) []Issue {
 		}
 		mut addr_of := map[string]string{}
 		for n in members {
+			if n.has_endpoint && (n.port_raw < 0 || n.port_raw > 0xFFFF) {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": endpoint port ${n.port_raw} does not fit a UDP port\'s 16 bits'
+				}
+			}
 			if !n.has_endpoint || n.endpoint == '' {
 				issues << Issue{
 					severity: .error
