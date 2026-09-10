@@ -2122,11 +2122,14 @@ fn check_someip_signal_frames(s System) []Issue {
 		// data id likewise; u32() had already truncated an out-of-range value into a
 		// legal-looking one, which then passed the generated config's own 16-bit check and
 		// transmitted under an id the system never declared (codex on #245).
-		if fr.has_id && (fr.id_raw < 0 || fr.id_raw > 0xFFFF) {
+		if fr.has_id && (fr.id_raw < 0x8000 || fr.id_raw > 0xFFFF) {
+			// The class bit, not just the width: a signal frame is an EVENT (bit 15 set), and
+			// the generated gate says so too — checking only 16 bits let syscheck report OK on
+			// a config sysgen then refused (codex on #245).
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-003'
-				msg:      'frame "${fr.name}": event id ${fr.id_raw} does not fit the SOME/IP header\'s 16 bits'
+				msg:      'frame "${fr.name}": id ${fr.id_raw} is not a SOME/IP event id — a signal frame is an event, so bit 15 is set (0x8000..0xFFFF); methods own 0x0001..0x7FFF'
 			}
 		}
 		for k in fr.unknown_keys {
@@ -2148,6 +2151,22 @@ fn check_someip_signal_frames(s System) []Issue {
 					severity: .error
 					req:      'REQ-TOPO-003'
 					msg:      'frame "${fr.name}": e2e data_id ${fr.e2e_data_id_raw} does not fit 16 bits'
+				}
+			}
+			// The TRAILER POSITIONS narrow the same way: 4294967303 became 7, a legal offset
+			// for the reference payload, silently relocating the counter.
+			if fr.e2e_counter_raw < 0 || fr.e2e_counter_raw > 0xFFFF {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": e2e counter_pos ${fr.e2e_counter_raw} is not a byte offset in the payload'
+				}
+			}
+			if fr.e2e_crc_raw < 0 || fr.e2e_crc_raw > 0xFFFF {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": e2e crc_pos ${fr.e2e_crc_raw} is not a byte offset in the payload'
 				}
 			}
 		}
@@ -2293,6 +2312,34 @@ fn check_someip_segment(s System) []Issue {
 				members << n
 			}
 		}
+		if !b.has_version {
+			// 0 is a legal interface version, so an omitted one is indistinguishable from a
+			// declared one the moment it is written into the generated [someip] (codex #245).
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'bus "${b.name}": kind = "someip" needs a `version` — it is half the contract members are held to, and 0 is a legal value, so an omitted one becomes a real wire version once lowered'
+			}
+		}
+		mut fname_of := map[string]string{}
+		for fr in s.frames {
+			if fr.bus != b.name {
+				continue
+			}
+			key := snake(fr.name)
+			if prev := fname_of[key] {
+				// Lowering keys emitted frames by NAME, so a duplicate is suppressed while its
+				// signals are still emitted — the signal then rides no frame and only the
+				// generated gate notices. Identifiers are snake()d, so the collision is there.
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'bus "${b.name}": frames "${prev}" and "${fr.name}" have the same generated name "${key}" — one of them would be lowered into nothing while its signals still are'
+				}
+			} else {
+				fname_of[key] = fr.name
+			}
+		}
 		if members.len != 2 {
 			issues << Issue{
 				severity: .error
@@ -2334,11 +2381,17 @@ fn check_someip_segment(s System) []Issue {
 		}
 		mut addr_of := map[string]string{}
 		for n in members {
-			if n.has_endpoint && (n.port_raw < 0 || n.port_raw > 0xFFFF) {
+			if n.has_endpoint && !n.has_port {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-005'
-					msg:      'node "${n.name}": endpoint port ${n.port_raw} does not fit a UDP port\'s 16 bits'
+					msg:      'node "${n.name}": its `endpoint` has no `port` — the generated [someip] needs one, and 0 is not a UDP port'
+				}
+			} else if n.has_endpoint && (n.port_raw < 1 || n.port_raw > 0xFFFF) {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": endpoint port ${n.port_raw} is outside 1..65535'
 				}
 			}
 			if !n.has_endpoint || n.endpoint == '' {
