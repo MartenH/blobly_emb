@@ -79,6 +79,13 @@ pub mut:
 	diag         Diag
 	trace        int
 	has_trace    bool // whether [[node]] declared `trace` (0 is a valid trace id)
+	// A someip segment has no shared wire: every member answers at its OWN address, so the
+	// endpoint is the NODE's identity, not the bus's (#245). `port` is where this node
+	// listens; each member's peer is the other member's endpoint, which is what makes the
+	// reciprocity check possible and what sysgen lowers into the node's [someip].
+	endpoint     string // "192.168.0.51" — the address this node answers at
+	port         u32
+	has_endpoint bool
 	// --- extracted from the node's ecu.toml (filled by load_node) ---
 	view NodeView
 }
@@ -105,6 +112,25 @@ pub mut:
 	bus      string            // the system bus name it rides
 	frame    string            // the authored DBC frame it maps to
 	cycle_ms int               // the producer's tx cadence (0 = event/default)
+}
+
+// SysFrame — a PDU the SYSTEM owns. On a CAN bus the layout comes from the DBC, so a signal
+// only names its frame; a someip bus has no DBC, so the event's id, its signal set, its tx mode
+// and its E2E trailer are declared here and lowered into each member (#245).
+pub struct SysFrame {
+pub mut:
+	name         string
+	bus          string
+	id           u32
+	has_id       bool
+	signals      []string
+	tx_mode      string // 'cyclic' | 'event' | '' (unset -> the producer's default)
+	cycle_ms     int
+	min_delay_ms int
+	has_e2e      bool
+	e2e_data_id  u32
+	e2e_counter  int
+	e2e_crc      int
 }
 
 // Route — a cross-bus forward on a gateway node. Exactly one of `frame`
@@ -274,6 +300,7 @@ pub mut:
 	buses        []Bus
 	nodes        []Node
 	signals      []SysSignal // cross-node signals declared at system scope (dissolution)
+	frames       []SysFrame  // system-owned PDUs — someip events, whose layout has no DBC
 	routes       []Route
 	unknown_keys []string // top-level sections that aren't part of the schema (typos)
 	dir          string   // directory of system.toml (node/dbc paths resolve against it)
@@ -353,7 +380,9 @@ pub fn parse_system(path string) !System {
 	// flag unknown top-level sections (a misspelled [[nodes]] would otherwise
 	// parse to zero nodes and pass silently). `signal` is the dissolution's
 	// system-scope signal section (forward-compatible with the composed model).
-	allowed := ['bus', 'node', 'route', 'signal']
+	// 'frame' is the system-owned PDU section: a someip event's id, signal set, tx mode and
+	// E2E trailer, which have no DBC to come from (#245).
+	allowed := ['bus', 'node', 'route', 'signal', 'frame']
 	for key, _ in doc.to_any().as_map() {
 		if key !in allowed {
 			sys.unknown_keys << key
@@ -430,6 +459,12 @@ pub fn parse_system(path string) !System {
 				nm_alloc_ok:  nm_raw >= 0 && nm_raw <= 255
 				trace:        m_int(m, 'trace')
 			}
+			if ev := m['endpoint'] {
+				em := ev.as_map()
+				node.endpoint = m_str(em, 'address')
+				node.port = m_u32(em, 'port')
+				node.has_endpoint = true
+			}
 			for b in (m['buses'] or { toml.Any([]toml.Any{}) }).array() {
 				node.buses << b.string()
 			}
@@ -444,6 +479,34 @@ pub fn parse_system(path string) !System {
 		}
 	}
 	// [[route]]
+	if fv := doc.value_opt('frame') {
+		for f in fv.array() {
+			m := f.as_map()
+			mut fr := SysFrame{
+				name:   m_str(m, 'name')
+				bus:    m_str(m, 'bus')
+				id:     m_u32(m, 'id')
+				has_id: 'id' in m
+			}
+			for sg in (m['signals'] or { toml.Any([]toml.Any{}) }).array() {
+				fr.signals << sg.string()
+			}
+			if tv := m['tx'] {
+				tm := tv.as_map()
+				fr.tx_mode = m_str(tm, 'mode')
+				fr.cycle_ms = m_int(tm, 'cycle_ms')
+				fr.min_delay_ms = m_int(tm, 'min_delay_ms')
+			}
+			if ev := m['e2e'] {
+				em := ev.as_map()
+				fr.has_e2e = true
+				fr.e2e_data_id = m_u32(em, 'data_id')
+				fr.e2e_counter = m_int(em, 'counter_pos')
+				fr.e2e_crc = m_int(em, 'crc_pos')
+			}
+			sys.frames << fr
+		}
+	}
 	if rv := doc.value_opt('route') {
 		for r in rv.array() {
 			m := r.as_map()

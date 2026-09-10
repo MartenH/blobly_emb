@@ -65,6 +65,11 @@ pub fn validate_system_gen(s System) []Issue {
 	issues << check_partial_no_wiring(s)
 	issues << check_routes(s, true)
 	issues << check_signals_dissolved(s)
+	// The someip SEGMENT rules. check_someip_bus / check_someip_membership belong to the
+	// composed model and are not reached from here, which was harmless while any someip signal
+	// was refused outright — lowering them (#245) makes the segment's shape load-bearing, so
+	// the dissolution path states its own rules rather than inheriting nothing.
+	issues << check_someip_segment(s)
 	issues << check_dbc_conformance(s)
 	issues << check_route_dbc(s)
 	issues << check_telemetry_frames(s)
@@ -390,23 +395,12 @@ fn check_signals_dissolved(s System) []Issue {
 			sig_seen[sig.name] = true
 		}
 	}
-	// DISSOLUTION lowers a system-scope signal into CAN wiring: sysgen emits the
-	// node's [bus.canN] + [[signal]] + the DBC frame it rides. There is no SOME/IP
-	// lowering yet — a node's eth wiring is still AUTHORED in its ecu.toml ([someip]
-	// + [[frame]], as examples/system_full/nodes/tcu does). Reject the combination
-	// HERE: skipping the DBC contract for a someip bus (its signals ride service
-	// events, not frames) would otherwise let a dissolved someip signal pass the gate
-	// and be lowered as a CAN frame with no DBC (REQ-TOPO-003).
-	for sig in s.signals {
-		b := s.bus_by_name(sig.bus) or { continue }
-		if b.kind == 'someip' {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-003'
-				msg:      'signal "${sig.name}": bus "${sig.bus}" is kind = "someip" — SOME/IP wiring is not lowered from system.toml yet; author it in the node\'s ecu.toml ([someip] + [[frame]]) and declare the bus membership only'
-			}
-		}
-	}
+	// DISSOLUTION lowers a system-scope signal into wiring the node never authors. On a CAN
+	// bus that is [bus.canN] + [[signal]] + the DBC frame it rides; on a someip bus there is
+	// no DBC, so the event carrying the signal is declared by the system too — a [[frame]]
+	// with its id, signal set, tx mode and E2E trailer (#245). A someip signal therefore
+	// needs a system frame naming it, or nothing would say which event it rides.
+	issues << check_someip_signal_frames(s)
 	mut frame_owner := map[string]string{} // (bus, frame) -> producer node
 	mut frame_cycle := map[string]int{}    // (bus, frame) -> cycle_ms
 	for sig in s.signals {
@@ -452,11 +446,16 @@ fn check_signals_dissolved(s System) []Issue {
 				req:      'REQ-TOPO-001'
 				msg:      'signal "${sig.name}": has no value field (a `valid` field alone is not serializable) — declare exactly one non-`valid` field'
 			}
-		} else if n_value > 1 {
+		} else if n_value > 1 && !carries_struct(s, sig) {
+			// The one-value rule is the DBC's: a CAN signal IS a scalar on the wire, so a
+			// second value field would have nowhere to go. A SOME/IP event's payload is a
+			// STRUCT — its fields are packed in canonical order (signals-list order, then
+			// name-sorted fields) — so a multi-field signal there is the ordinary case, not
+			// an error (#245).
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-001'
-				msg:      'signal "${sig.name}": has ${n_value} value fields — a cross-node signal carries exactly one (plus an optional `valid`)'
+				msg:      'signal "${sig.name}": has ${n_value} value fields — a cross-node signal on a CAN bus carries exactly one (plus an optional `valid`), because a DBC signal is a scalar'
 			}
 		}
 		// the producer must be a declared node on the signal's bus
@@ -2084,4 +2083,180 @@ pub fn error_count(issues []Issue) int {
 		}
 	}
 	return n
+}
+
+// check_someip_signal_frames: on a someip bus the SYSTEM owns the event layout, because there is
+// no DBC to own it. Every signal on such a bus must be carried by exactly one system [[frame]],
+// every frame must name only declared signals of its own bus, and event ids must be unique per
+// service — the receive envelope dispatches on the id, so two events sharing one is a silent
+// mis-delivery rather than a decode error (#245, REQ-TOPO-003).
+fn check_someip_signal_frames(s System) []Issue {
+	mut issues := []Issue{}
+	mut carrier := map[string]string{} // signal -> the frame carrying it
+	for fr in s.frames {
+		b := s.bus_by_name(fr.bus) or {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": bus "${fr.bus}" is not a declared [bus.*]'
+			}
+			continue
+		}
+		if b.kind != 'someip' {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": bus "${fr.bus}" is kind = "${b.kind}" — a system [[frame]] declares a SOME/IP event; a CAN frame\'s layout comes from that bus\'s dbc'
+			}
+			continue
+		}
+		if !fr.has_id {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": a someip event needs an `id` — it is what the receive envelope dispatches on'
+			}
+		}
+		for sg in fr.signals {
+			sig := s.signal_by_name(sg) or {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": names signal "${sg}", which is not declared at system scope'
+				}
+				continue
+			}
+			if sig.bus != fr.bus {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}" (bus "${fr.bus}") carries signal "${sg}", which rides bus "${sig.bus}"'
+				}
+				continue
+			}
+			if prev := carrier[sg] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'signal "${sg}" is carried by both "${prev}" and "${fr.name}" — one event per signal, or the producer would transmit it twice'
+				}
+			} else {
+				carrier[sg] = fr.name
+			}
+		}
+	}
+	// id uniqueness, per bus
+	mut id_of := map[string]string{}
+	for fr in s.frames {
+		if !fr.has_id {
+			continue
+		}
+		key := '${fr.bus}|0x${fr.id.hex()}'
+		if prev := id_of[key] {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frames "${prev}" and "${fr.name}" both use event id 0x${fr.id.hex()} on bus "${fr.bus}" — the envelope dispatches on the id'
+			}
+		} else {
+			id_of[key] = fr.name
+		}
+	}
+	// every someip signal must have a carrier, and must NAME it: the one-owner-per-frame and
+	// one-cadence-per-frame checks are keyed on sig.frame, so a someip signal that omits it
+	// would slip past them and let two producers share an event (self-review on #245).
+	for sig in s.signals {
+		b := s.bus_by_name(sig.bus) or { continue }
+		if b.kind != 'someip' {
+			continue
+		}
+		if own := carrier[sig.name] {
+			if sig.frame == '' {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'signal "${sig.name}": rides event "${own}" but declares no `frame` — the single-writer and cadence checks are keyed on it'
+				}
+			} else if sig.frame != own {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'signal "${sig.name}": declares frame "${sig.frame}" but event "${own}" is the one carrying it'
+				}
+			}
+		}
+		if sig.name !in carrier {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'signal "${sig.name}" rides someip bus "${sig.bus}" but no [[frame]] carries it — a service event is what puts it on the wire (a CAN signal names its dbc frame instead)'
+			}
+		}
+	}
+	return issues
+}
+
+// carries_struct: does this signal ride a carrier whose payload is a struct rather than a scalar?
+// True for a someip event, false for a DBC frame's signal — which is what decides whether more
+// than one value field is legal (#245).
+fn carries_struct(s System, sig SysSignal) bool {
+	b := s.bus_by_name(sig.bus) or { return false }
+	return b.kind == 'someip'
+}
+
+// check_someip_segment: what a LOWERED someip bus must look like. The generated bridge has no
+// service discovery — it sends to one configured static `peer` — so the segment is strictly
+// point-to-point: exactly two members, each with its own endpoint, each the other's peer. That
+// is not a simplification of the model, it is what the target can express (#245).
+fn check_someip_segment(s System) []Issue {
+	mut issues := []Issue{}
+	for b in s.buses {
+		if b.kind != 'someip' {
+			continue
+		}
+		mut members := []Node{}
+		for n in s.nodes {
+			if b.name in n.buses {
+				members << n
+			}
+		}
+		if members.len != 2 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'bus "${b.name}": kind = "someip" has ${members.len} member(s) — the generated bridge sends to ONE static peer (no service discovery), so a lowered segment is point-to-point: exactly two nodes, each the other\'s peer. Declare the far end as a node (the bench tool is one, like `tester` on a CAN bus)'
+			}
+			continue
+		}
+		mut addr_of := map[string]string{}
+		for n in members {
+			if !n.has_endpoint || n.endpoint == '' {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": is on someip bus "${b.name}" but declares no `endpoint` — a someip segment has no shared wire, so the address is the NODE\'s identity and the peer is derived from it'
+				}
+				continue
+			}
+			if prev := addr_of[n.endpoint] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'bus "${b.name}": nodes "${prev}" and "${n.name}" both answer at "${n.endpoint}" — one address per node on a segment'
+				}
+			} else {
+				addr_of[n.endpoint] = n.name
+			}
+			// NM is a CAN cluster protocol; there is no someip NM, and the generated config
+			// would carry an [nm] nothing serves.
+			if n.has_nm_alloc {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": is on someip bus "${b.name}" and declares `nm` — network management is a CAN cluster protocol; a someip member has no NM'
+				}
+			}
+		}
+	}
+	return issues
 }
