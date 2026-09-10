@@ -26,7 +26,10 @@ fn main() {
 	// their bus signals. A system-scope [[signal]] OR a [[route]] (both need sysgen to
 	// lower them) picks the dissolution model — a pure frame-route firewall has routes
 	// but no cross-node signals.
-	dissolved := sys.signals.len > 0 || sys.routes.len > 0
+	// frames too: a system.toml carrying only [[frame]]s is still the DISSOLVED model, and the
+	// composed validator never looks at System.frames — it would report OK for an event nothing
+	// carries (codex on #245).
+	dissolved := sys.signals.len > 0 || sys.routes.len > 0 || sys.frames.len > 0
 	load_errs := if dissolved { sys.load_nodes_partial() } else { sys.load_nodes() }
 	for e in load_errs {
 		eprintln('syscheck: could not load ${e}')

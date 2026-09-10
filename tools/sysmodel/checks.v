@@ -70,6 +70,7 @@ pub fn validate_system_gen(s System) []Issue {
 	// was refused outright — lowering them (#245) makes the segment's shape load-bearing, so
 	// the dissolution path states its own rules rather than inheriting nothing.
 	issues << check_someip_segment(s)
+	issues << check_endpoint_carrier(s)
 	issues << check_dbc_conformance(s)
 	issues << check_route_dbc(s)
 	issues << check_telemetry_frames(s)
@@ -2155,12 +2156,28 @@ fn check_someip_signal_frames(s System) []Issue {
 		// checks and then lowered nowhere, leaving loom2v's default in its place.
 		for sg in fr.signals {
 			sig := s.signal_by_name(sg) or { continue }
-			if sig.cycle_ms > 0 {
+			if sig.has_cycle_ms {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-003'
 					msg:      'signal "${sg}": carries cycle_ms on a someip bus — the EVENT is what transmits, so declare the cadence in frame "${fr.name}"\'s `tx` table'
 				}
+			}
+		}
+		// Timings narrow through int() too: 4294967396 wrapped to 100 and silently became the
+		// cadence, inside the generated gate's own 1..1_000_000 ms bounds (codex on #245).
+		if fr.has_cycle_ms && (fr.cycle_ms_raw < 1 || fr.cycle_ms_raw > 1_000_000) {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": tx cycle_ms ${fr.cycle_ms_raw} is outside 1..1000000'
+			}
+		}
+		if fr.has_min_delay_ms && (fr.min_delay_ms_raw < 0 || fr.min_delay_ms_raw > 1_000_000) {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": tx min_delay_ms ${fr.min_delay_ms_raw} is outside 0..1000000'
 			}
 		}
 		if fr.signals.len == 0 {
@@ -2349,6 +2366,35 @@ fn check_someip_segment(s System) []Issue {
 					req:      'REQ-TOPO-005'
 					msg:      'node "${n.name}": is on someip bus "${b.name}" and declares `nm` — network management is a CAN cluster protocol; a someip member has no NM'
 				}
+			}
+		}
+	}
+	return issues
+}
+
+// check_endpoint_carrier: an `endpoint` is a someip identity. On a node that names only CAN
+// buses the CAN lowering drops it entirely, so an authored network identity — a node given the
+// wrong bus, or a SOME/IP block copied onto a CAN member — would look effective and be dead
+// (codex on #245).
+fn check_endpoint_carrier(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		if !n.has_endpoint {
+			continue
+		}
+		mut on_someip := false
+		for bn in n.buses {
+			if b := s.bus_by_name(bn) {
+				if b.kind == 'someip' {
+					on_someip = true
+				}
+			}
+		}
+		if !on_someip {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": declares an `endpoint` but is on no someip bus — an endpoint is a SOME/IP identity, and the CAN lowering drops it, so it would be dead configuration that looks effective'
 			}
 		}
 	}

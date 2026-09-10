@@ -64,7 +64,11 @@ all: $(BUILD)/$(NAME).bin
 #    appended, and loom2v reads THAT — the same shape as nodes/zone_a. The eth bus has no DBC,
 #    so the dbc argument names a file that does not exist and loom2v skips it.
 gen: gen/.stamp
-gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(wildcard app/*.v) $(GENSRC)
+# EVERY member's config, not just this node's: gen-system reads them all, and the segment rules
+# are cross-node (a peer that stops reading one signal of an event this node sends makes the
+# system invalid). Depending only on our own file left a stale image passing a gate that would
+# now reject it (codex on #245).
+gen/.stamp: $(SYSDIR)/system.toml $(wildcard $(SYSDIR)/nodes/*/ecu.toml) $(wildcard app/*.v) $(GENSRC)
 	@mkdir -p gen ports sig
 	$(MAKE) -C $(REPO) gen-system SYSTEM=examples/system_full/system.toml
 	cd $(REPO) && $(V) run tools/loom2v examples/system_full/gen-$(NAME).toml $(EX)/bus.dbc \
