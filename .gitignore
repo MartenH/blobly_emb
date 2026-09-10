@@ -62,3 +62,7 @@ tools/ecucheck/ecucheck
 # already ignored, so cover the shape rather than each name.
 tools/*/*_test
 
+
+# python bytecode from the review tooling
+__pycache__/
+*.pyc
