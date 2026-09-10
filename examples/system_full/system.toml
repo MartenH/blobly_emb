@@ -26,6 +26,15 @@ fd        = true
 bitrate   = 500000
 dbc       = "edge.dbc"
 
+# The telematics segment: SOME/IP over Ethernet. Its contract is a SERVICE (id + interface
+# version) the way a CAN bus's is a DBC, and — because there is no DBC — the EVENTS are declared
+# here too, as [[frame]]s further down (#245). Members answer at their own addresses, so each
+# node carries its `endpoint` rather than the bus carrying one interface.
+[bus.tel]
+kind    = "someip"
+service = 0x0100
+version = 1
+
 # --- Cross-node signals ---
 [[signal]]
 name     = "VehicleSpeed"
@@ -99,6 +108,61 @@ signal  = "SteeringAngle"
 from    = "edge"
 to      = "compute"
 
+
+# --- The telematics segment's signals + the events that carry them (#245) ---
+# Byte for byte as examples/h735_someip / host_someip: load u8@0, ticks u32@1 LE, wraps u16@5,
+# with the E2E trailer at ctr@7 / crc@8 (data_id 0x21). The wire is unchanged by moving the
+# declaration here — the same blobly_net oracle verifies it.
+[[signal]]
+name   = "BenchLoad"
+fields = { load = "u8" }
+producer = "tcu"
+bus    = "tel"
+frame  = "BenchTelem"
+
+[[signal]]
+name   = "BenchTicks"
+fields = { wraps = "u16", ticks = "u32" }
+producer = "tcu"
+bus    = "tel"
+frame  = "BenchTelem"
+
+[[signal]]
+name   = "EchoVal"
+fields = { level = "u8" }
+producer = "tcu"
+bus    = "tel"
+frame  = "BenchEcho"
+
+# the rx round trip: the bench sends BenchCmd, the app mirrors the level back on BenchEcho
+[[signal]]
+name   = "LampCmd"
+fields = { level = "u8" }
+producer = "tel_bench"
+bus    = "tel"
+frame  = "BenchCmd"
+
+[[frame]]
+name    = "BenchTelem"
+bus     = "tel"
+id      = 0x8001
+signals = ["BenchLoad", "BenchTicks"]
+tx      = { mode = "cyclic", cycle_ms = 300 }
+e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8 }
+
+[[frame]]
+name    = "BenchCmd"
+bus     = "tel"
+id      = 0x8010
+signals = ["LampCmd"]
+
+[[frame]]
+name    = "BenchEcho"
+bus     = "tel"
+id      = 0x8004
+signals = ["EchoVal"]
+tx      = { mode = "event", min_delay_ms = 30 }
+
 # --- Node declarations ---
 [[node]]
 name  = "sysnode"
@@ -130,3 +194,22 @@ buses = ["edge"]
 nm    = 0x13
 diag  = { req = 0x7C0, rsp = 0x7C8 }
 trace = 3
+
+# The telematics node: SOME/IP-over-Ethernet (#244, #245). No `nm` (not an NM cluster member)
+# and no `trace` (its observability is the eth rung's). Its endpoint is its identity on the
+# segment — the address it answers at, and the port it listens on.
+[[node]]
+name     = "tcu"
+ecu      = "nodes/tcu/ecu.toml"
+buses    = ["tel"]
+endpoint = { address = "192.168.0.51", port = 30490 }
+
+# The bench tool as a node on that segment, declaration-only — the same shape as `tester` on the
+# compute bus: nothing is built, blobly_net stands in for it. It is what makes tcu's telemetry
+# RECEIVED by somebody (REQ-TOPO-001) and what gives tcu a peer to be reciprocal with, instead
+# of the model having to special-case an endpoint that lives off-system.
+[[node]]
+name     = "tel_bench"
+ecu      = "nodes/tel_bench/ecu.toml"
+buses    = ["tel"]
+endpoint = { address = "192.168.0.190", port = 30491 }
