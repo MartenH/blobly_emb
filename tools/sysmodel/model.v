@@ -85,7 +85,8 @@ pub mut:
 	// reciprocity check possible and what sysgen lowers into the node's [someip].
 	endpoint     string // "192.168.0.51" — the address this node answers at
 	port         u32
-	port_raw     i64 // pre-narrowing, so an out-of-range port is rejected not truncated
+	port_raw     i64  // pre-narrowing, so an out-of-range port is rejected not truncated
+	has_port     bool // an omitted port is diagnosed as omitted, not as a zero
 	has_endpoint bool
 	// --- extracted from the node's ecu.toml (filled by load_node) ---
 	view NodeView
@@ -151,6 +152,8 @@ pub mut:
 	cycle_ms_raw     i64
 	min_delay_ms_raw i64
 	e2e_data_id_raw  i64
+	e2e_counter_raw  i64
+	e2e_crc_raw      i64
 	has_e2e_data_id bool
 	unknown_keys    []string
 }
@@ -487,6 +490,7 @@ pub fn parse_system(path string) !System {
 				node.endpoint = m_str(em, 'address')
 				node.port = m_u32(em, 'port')
 				node.port_raw = (em['port'] or { toml.Any(0) }).i64()
+				node.has_port = 'port' in em
 				node.has_endpoint = true
 			}
 			for b in (m['buses'] or { toml.Any([]toml.Any{}) }).array() {
@@ -557,6 +561,8 @@ pub fn parse_system(path string) !System {
 				fr.has_e2e_data_id = 'data_id' in em
 				fr.e2e_counter = m_int(em, 'counter_pos')
 				fr.e2e_crc = m_int(em, 'crc_pos')
+				fr.e2e_counter_raw = (em['counter_pos'] or { toml.Any(0) }).i64()
+				fr.e2e_crc_raw = (em['crc_pos'] or { toml.Any(0) }).i64()
 			}
 			sys.frames << fr
 		}

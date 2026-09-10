@@ -4028,6 +4028,7 @@ fn test_someip_signal_with_its_event_is_accepted() {
 			name:    'BenchTelem'
 			bus:     'backbone'
 			id:      0x8001
+			id_raw:  0x8001
 			has_id:  true
 			signals: ['BenchLoad']
 		},
@@ -4040,16 +4041,20 @@ fn test_two_someip_events_sharing_an_id_is_error() {
 	mut s := clean_someip()
 	s.frames = [
 		SysFrame{
-			name:   'A'
-			bus:    'backbone'
-			id:     0x8001
-			has_id: true
+			name:    'A'
+			bus:     'backbone'
+			id:      0x8001
+			id_raw:  0x8001
+			has_id:  true
+			signals: ['BenchLoad']
 		},
 		SysFrame{
-			name:   'B'
-			bus:    'backbone'
-			id:     0x8001
-			has_id: true
+			name:    'B'
+			bus:     'backbone'
+			id:      0x8001
+			id_raw:  0x8001
+			has_id:  true
+			signals: ['BenchLoad']
 		},
 	]
 	e := errs(check_signals_dissolved(s))
@@ -4065,10 +4070,12 @@ fn test_a_system_frame_on_a_can_bus_is_error() {
 	}
 	s.frames = [
 		SysFrame{
-			name:   'VehSpeedFrame'
-			bus:    'compute'
-			id:     0x120
-			has_id: true
+			name:    'VehSpeedFrame'
+			bus:     'compute'
+			id:      0x120
+			id_raw:  0x120
+			has_id:  true
+			signals: ['BenchLoad']
 		},
 	]
 	e := errs(check_signals_dissolved(s))

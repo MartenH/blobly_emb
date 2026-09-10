@@ -15,6 +15,7 @@ fn tel_system() sysmodel.System {
 				service:     0x0100
 				has_service: true
 				version:     1
+				has_version: true
 			},
 		]
 		nodes:   [
@@ -25,6 +26,7 @@ fn tel_system() sysmodel.System {
 				endpoint:     '192.168.0.51'
 				port:         30490
 				port_raw:     30490
+				has_port:     true
 				has_endpoint: true
 				view:         sysmodel.NodeView{
 					fb_writes: ['BenchLoad']
@@ -38,6 +40,7 @@ fn tel_system() sysmodel.System {
 				endpoint:     '192.168.0.190'
 				port:         30491
 				port_raw:     30491
+				has_port:     true
 				has_endpoint: true
 				view:         sysmodel.NodeView{
 					fb_writes: ['LampCmd']
@@ -274,13 +277,13 @@ fn seg_errs(sys sysmodel.System) []string {
 fn test_an_event_id_wider_than_the_header_is_refused() {
 	mut sys := tel_system()
 	sys.frames[0].id_raw = 0x100008001
-	assert seg_errs(sys).any(it.contains('does not fit the SOME/IP header')), seg_errs(sys).str()
+	assert seg_errs(sys).any(it.contains('is not a SOME/IP event id')), seg_errs(sys).str()
 }
 
 fn test_an_out_of_range_endpoint_port_is_refused() {
 	mut sys := tel_system()
 	sys.nodes[0].port_raw = 70000
-	assert seg_errs(sys).any(it.contains("does not fit a UDP port")), seg_errs(sys).str()
+	assert seg_errs(sys).any(it.contains("is outside 1..65535")), seg_errs(sys).str()
 }
 
 // A typo is DISCARDED by a parser that copies only what it recognises: `e2ee` would silently
@@ -306,4 +309,49 @@ fn test_a_signal_level_cadence_on_someip_is_refused() {
 	sys.signals[0].cycle_ms = 300
 	sys.signals[0].has_cycle_ms = true // presence is what is rejected: an explicit -1 counts too
 	assert seg_errs(sys).any(it.contains('the EVENT is what transmits')), seg_errs(sys).str()
+}
+
+// An event id must carry the EVENT CLASS bit, not merely fit 16 bits: a signal frame is an
+// event, and the generated gate says so — checking only the width let syscheck report OK on a
+// config sysgen then refused (codex on #245 r4).
+fn test_a_method_class_id_is_refused_for_a_signal_frame() {
+	mut sys := tel_system()
+	sys.frames[0].id_raw = 0x1234
+	assert seg_errs(sys).any(it.contains('is not a SOME/IP event id')), seg_errs(sys).str()
+}
+
+// The E2E TRAILER POSITIONS narrow like every other number: 4294967303 became 7, a legal offset
+// for the reference payload, silently relocating the counter.
+fn test_an_out_of_range_e2e_position_is_refused() {
+	mut sys := tel_system()
+	sys.frames[0].e2e_counter_raw = 4294967303
+	assert seg_errs(sys).any(it.contains('counter_pos')), seg_errs(sys).str()
+}
+
+// 0 is a legal interface version, so an omitted one becomes a real wire version once lowered.
+fn test_a_someip_bus_without_a_version_is_refused() {
+	mut sys := tel_system()
+	sys.buses[0].has_version = false
+	assert seg_errs(sys).any(it.contains('needs a `version`')), seg_errs(sys).str()
+}
+
+fn test_an_endpoint_without_a_port_is_refused() {
+	mut sys := tel_system()
+	sys.nodes[0].has_port = false
+	assert seg_errs(sys).any(it.contains('has no `port`')), seg_errs(sys).str()
+}
+
+// Lowering keys emitted frames by NAME, so a duplicate is suppressed while its signals are
+// still emitted — the signal then rides no frame and only the generated gate notices.
+fn test_two_frames_with_one_generated_name_are_refused() {
+	mut sys := tel_system()
+	sys.frames << sysmodel.SysFrame{
+		name:    'Bench_Telem' // snake()s to the same identifier as BenchTelem
+		bus:     'tel'
+		id:      0x8002
+		id_raw:  0x8002
+		has_id:  true
+		signals: ['LampCmd']
+	}
+	assert seg_errs(sys).any(it.contains('same generated name')), seg_errs(sys).str()
 }
