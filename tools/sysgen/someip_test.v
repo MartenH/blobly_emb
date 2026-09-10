@@ -24,7 +24,12 @@ fn tel_system() sysmodel.System {
 				buses:        ['tel']
 				endpoint:     '192.168.0.51'
 				port:         30490
+				port_raw:     30490
 				has_endpoint: true
+				view:         sysmodel.NodeView{
+					fb_writes: ['BenchLoad']
+					fb_reads:  ['LampCmd']
+				}
 			},
 			sysmodel.Node{
 				name:         'bench'
@@ -32,7 +37,12 @@ fn tel_system() sysmodel.System {
 				buses:        ['tel']
 				endpoint:     '192.168.0.190'
 				port:         30491
+				port_raw:     30491
 				has_endpoint: true
+				view:         sysmodel.NodeView{
+					fb_writes: ['LampCmd']
+					fb_reads:  ['BenchLoad']
+				}
 			},
 		]
 		signals: [
@@ -40,6 +50,7 @@ fn tel_system() sysmodel.System {
 				name:     'BenchLoad'
 				producer: 'tcu'
 				bus:      'tel'
+				frame:    'BenchTelem'
 				fields:   {
 					'load': 'u8'
 				}
@@ -48,6 +59,7 @@ fn tel_system() sysmodel.System {
 				name:     'LampCmd'
 				producer: 'bench'
 				bus:      'tel'
+				frame:    'BenchCmd'
 				fields:   {
 					'level': 'u8'
 				}
@@ -55,29 +67,40 @@ fn tel_system() sysmodel.System {
 		]
 		frames:  [
 			sysmodel.SysFrame{
-				name:        'BenchTelem'
-				bus:         'tel'
-				id:          0x8001
-				has_id:      true
-				signals:     ['BenchLoad']
-				tx_mode:      'cyclic'
-				cycle_ms:     300
-				has_tx:       true
-				has_cycle_ms: true
-				has_e2e:     true
-				e2e_data_id: 0x21
-				e2e_counter: 7
-				e2e_crc:     8
+				name:            'BenchTelem'
+				bus:             'tel'
+				id:              0x8001
+				id_raw:          0x8001
+				has_id:          true
+				signals:         ['BenchLoad']
+				tx_mode:         'cyclic'
+				cycle_ms:        300
+				cycle_ms_raw:    300
+				has_tx:          true
+				has_cycle_ms:    true
+				has_e2e:         true
+				has_e2e_data_id: true
+				e2e_data_id:     0x21
+				e2e_data_id_raw: 0x21
+				e2e_counter:     7
+				e2e_crc:         8
 			},
 			sysmodel.SysFrame{
 				name:    'BenchCmd'
 				bus:     'tel'
 				id:      0x8010
+				id_raw:  0x8010
 				has_id:  true
 				signals: ['LampCmd']
 			},
 		]
 	}
+}
+
+// The fixture above is a VALID system: each refusal test below perturbs exactly one thing, so a
+// failure names the rule that fired rather than the fixture's own gaps.
+fn test_the_fixture_is_a_valid_segment() {
+	assert seg_errs(tel_system()).len == 0, seg_errs(tel_system()).str()
 }
 
 fn test_the_producer_gets_its_endpoint_service_and_event() {
@@ -281,5 +304,6 @@ fn test_an_e2e_table_without_a_data_id_is_refused() {
 fn test_a_signal_level_cadence_on_someip_is_refused() {
 	mut sys := tel_system()
 	sys.signals[0].cycle_ms = 300
+	sys.signals[0].has_cycle_ms = true // presence is what is rejected: an explicit -1 counts too
 	assert seg_errs(sys).any(it.contains('the EVENT is what transmits')), seg_errs(sys).str()
 }

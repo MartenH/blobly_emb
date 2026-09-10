@@ -113,6 +113,10 @@ pub mut:
 	bus      string            // the system bus name it rides
 	frame    string            // the authored DBC frame it maps to
 	cycle_ms int               // the producer's tx cadence (0 = event/default)
+	// PRESENCE, not value: on a someip bus any signal-level cadence is wrong (the event
+	// transmits), and testing `> 0` let an explicit `cycle_ms = -1` through to be discarded
+	// silently by a lowering that never emits the field (codex on #245).
+	has_cycle_ms bool
 }
 
 // SysFrame — a PDU the SYSTEM owns. On a CAN bus the layout comes from the DBC, so a signal
@@ -143,8 +147,10 @@ pub mut:
 	// checks (u32() truncation turned an id of 0x100008001 into a legal-looking 0x8001), and so
 	// is key PRESENCE, because a defaulted 0 is indistinguishable from a declared one once
 	// written out (codex on #245).
-	id_raw          i64
-	e2e_data_id_raw i64
+	id_raw           i64
+	cycle_ms_raw     i64
+	min_delay_ms_raw i64
+	e2e_data_id_raw  i64
 	has_e2e_data_id bool
 	unknown_keys    []string
 }
@@ -451,7 +457,8 @@ pub fn parse_system(path string) !System {
 				producer: m_str(m, 'producer')
 				bus:      m_str(m, 'bus')
 				frame:    m_str(m, 'frame')
-				cycle_ms: m_int(m, 'cycle_ms')
+				cycle_ms:     m_int(m, 'cycle_ms')
+				has_cycle_ms: 'cycle_ms' in m
 			}
 			if fm := m['fields'] {
 				for fname, ftype in fm.as_map() {
@@ -539,6 +546,8 @@ pub fn parse_system(path string) !System {
 				fr.min_delay_ms = m_int(tm, 'min_delay_ms')
 				fr.has_cycle_ms = 'cycle_ms' in tm
 				fr.has_min_delay_ms = 'min_delay_ms' in tm
+				fr.cycle_ms_raw = (tm['cycle_ms'] or { toml.Any(0) }).i64()
+				fr.min_delay_ms_raw = (tm['min_delay_ms'] or { toml.Any(0) }).i64()
 			}
 			if ev := m['e2e'] {
 				em := ev.as_map()
