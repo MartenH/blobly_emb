@@ -695,10 +695,23 @@ def watch(argv: list[str]) -> int:
     config = watch_config(argv)
     start = time.monotonic()
     deadline = start + config.timeout
+    # The last API failure, held so a persistent outage cannot masquerade as an ordinary
+    # pending review: retrying consumes the window, and the expiry that follows would
+    # otherwise report EXIT_PENDING -- "still waiting" -- for a watcher that never once
+    # reached GitHub.
+    last_api_error: GitHubError | None = None
     while True:
         try:
             rc, result = scan_once(config, deadline=deadline)
+            last_api_error = None
         except WatchDeadlineExpired:
+            if last_api_error is not None:
+                print(str(last_api_error), file=sys.stderr)
+                print(
+                    f"codex-review: API failures consumed the whole {config.timeout}s window",
+                    file=sys.stderr,
+                )
+                return EXIT_API
             print(f"codex-review: timed out after {config.timeout}s", file=sys.stderr)
             return EXIT_PENDING
         except GitHubError as exc:
@@ -715,6 +728,7 @@ def watch(argv: list[str]) -> int:
             if remaining <= 0:
                 print(str(exc), file=sys.stderr)
                 return EXIT_API
+            last_api_error = exc
             print(f"codex-review: transient API failure, retrying: {exc}", file=sys.stderr, flush=True)
             time.sleep(min(config.interval, remaining))
             continue
@@ -768,7 +782,9 @@ def check_existing_state(path: Path, requested_pr: str, requested_repo: str, cur
         die("same-SHA review is still pending; wait for it before requesting another round")
 
 
-def check_remote_pending(repo: str, pr: str, sha: str, requester: str, review_actor: str) -> None:
+def check_remote_pending(
+    repo: str, pr: str, sha: str, requester: str, review_actor: str, force: bool = False
+) -> None:
     comments = gh_items(repo, f"issues/{pr}/comments")
     marker = max(
         (item for item in comments if has_exact_request_marker(item, sha, requester)),
@@ -795,8 +811,22 @@ def check_remote_pending(repo: str, pr: str, sha: str, requester: str, review_ac
         print(str(exc), file=sys.stderr)
         die(f"could not determine whether remote same-SHA request {marker_id} is still pending", EXIT_API)
     if rc == EXIT_PENDING:
+        if force:
+            # Deliberate recovery, NOT an age heuristic. Codex sometimes drops a trigger and
+            # never posts a verdict or a failure, and the marker lives in the PR -- so deleting
+            # the local state file does not clear it and the guard would wedge the PR forever.
+            # A clock-based override would instead re-request over a review that is merely
+            # slow, doubling it; this way the operator says so.
+            print(
+                f"codex-review: --force: re-requesting over pending request comment {marker_id}",
+                file=sys.stderr,
+            )
+            return
         print(result_lines(result), end="", file=sys.stderr, flush=True)
-        die(f"same-SHA review is already pending from request comment {marker_id}")
+        die(
+            f"same-SHA review is already pending from request comment {marker_id}; "
+            "wait for it, or pass --force to request again"
+        )
 
 
 def request(argv: list[str]) -> int:
@@ -804,6 +834,7 @@ def request(argv: list[str]) -> int:
     parser.add_argument("pr", nargs="?")
     parser.add_argument("--repo")
     parser.add_argument("--post", action="store_true")
+    parser.add_argument("--force", action="store_true")
     parser.add_argument("--state-dir", default=".claude/reviews")
     ns = parser.parse_args(argv)
     if not ns.pr:
@@ -831,7 +862,7 @@ def request(argv: list[str]) -> int:
         review_actor = os.environ.get("CODEX_REVIEW_ACTOR", CODEX_ACTOR)
         check_existing_state(state_path, ns.pr, repo, sha, review_actor)
         requester = gh_user_login()
-        check_remote_pending(repo, ns.pr, sha, requester, review_actor)
+        check_remote_pending(repo, ns.pr, sha, requester, review_actor, force=ns.force)
 
         baseline_review_id = max_id(repo, f"pulls/{ns.pr}/reviews")
         baseline_pull_comment_id = max_id(repo, f"pulls/{ns.pr}/comments")
@@ -880,9 +911,45 @@ def request(argv: list[str]) -> int:
     return 0
 
 
+def unanswered(argv: list[str]) -> int:
+    """List review findings that nothing replies to.
+
+    A round is not handled until every finding carries a reply -- a PR-level summary is not an
+    answer, and on #276 that left ten findings looking ignored. Doing this in the tool rather
+    than as a shell one-liner is not tidiness: comparing findings against replies has to happen
+    across ALL pages (`--paginate` hands back one array per page, so a per-page filter reports a
+    finding as unanswered whenever its reply landed on a later page), and the obvious `jq -s`
+    fix needs a standalone `jq`, which is absent from some agent environments -- the same trap
+    this repo already records for `bc`.
+    """
+    parser = Parser(prog="scripts/codex_review.py unanswered")
+    parser.add_argument("pr", nargs="?")
+    parser.add_argument("--repo")
+    parser.add_argument("--actor", default=CODEX_ACTOR)
+    ns = parser.parse_args(argv)
+    if not ns.pr:
+        parser.print_usage(sys.stderr)
+        return EXIT_USAGE
+    repo = ns.repo or repo_slug()
+    comments = gh_items(repo, f"pulls/{ns.pr}/comments")
+    replied_to = {int(c["in_reply_to_id"]) for c in comments if c.get("in_reply_to_id")}
+    open_findings = [
+        c for c in comments if actor(c) == ns.actor and item_id(c) not in replied_to
+    ]
+    for c in open_findings:
+        line = c.get("line") or c.get("original_line") or 0
+        print(f"UNANSWERED {item_id(c)} {c.get('path')}:{line}")
+    print(
+        f"codex-review: {len(open_findings)} unanswered of "
+        f"{sum(1 for c in comments if actor(c) == ns.actor)} findings",
+        file=sys.stderr,
+    )
+    return EXIT_FINDINGS if open_findings else EXIT_CLEAN
+
+
 def main(argv: list[str]) -> int:
     if not argv or argv[0] in {"-h", "--help"}:
-        print("usage: scripts/codex_review.py {request,watch} ...")
+        print("usage: scripts/codex_review.py {request,watch,unanswered} ...")
         return 0 if argv else EXIT_USAGE
     command, rest = argv[0], argv[1:]
     try:
@@ -890,6 +957,8 @@ def main(argv: list[str]) -> int:
             return watch(rest)
         if command == "request":
             return request(rest)
+        if command == "unanswered":
+            return unanswered(rest)
         die(f"unknown command: {command}")
     except CodexReviewError as exc:
         print(f"codex-review: {exc}", file=sys.stderr)

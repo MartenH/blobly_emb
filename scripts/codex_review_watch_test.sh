@@ -56,7 +56,8 @@ fi
 
 if [ "$1" = pr ] && [ "$2" = comment ]; then
 	if [ "${FAKE_GH_CASE:-}" = request_success ] || [ "${FAKE_GH_CASE:-}" = request_timestamp_fail ] ||
-		[ "${FAKE_GH_CASE:-}" = remote_spoof ] || [ "${FAKE_GH_CASE:-}" = alt_actor_clean ]; then
+		[ "${FAKE_GH_CASE:-}" = remote_spoof ] || [ "${FAKE_GH_CASE:-}" = alt_actor_clean ] ||
+		[ "${FAKE_GH_CASE:-}" = remote_pending ]; then
 		repo=
 		while [ "$#" -gt 0 ]; do
 			case "$1" in
@@ -265,6 +266,9 @@ case "${FAKE_GH_CASE:-}:$endpoint" in
 		;;
 	remote_pending:repos/MartenH/blobly_net/issues/123/comments)
 		printf '[{"id":998,"created_at":"2026-01-01T00:00:02Z","user":{"login":"MartenH"},"body":"@codex review\\n\\ncodex-review-state: abcdef1234567890abcdef1234567890abcdef12"}]\n'
+		;;
+	unanswered:repos/MartenH/blobly_net/pulls/123/comments)
+		printf '[{"id":31,"path":"a.v","line":1,"user":%s,"body":"answered finding"},{"id":32,"path":"b.v","line":2,"user":%s,"body":"open finding"},{"id":33,"user":{"login":"MartenH"},"in_reply_to_id":31,"body":"my reply"},{"id":34,"path":"c.v","line":3,"user":%s,"body":"a human comment"}]\n' "$bot" "$bot" "$human"
 		;;
 	remote_spoof:repos/MartenH/blobly_net/pulls/123/reviews)
 		printf '[]\n'
@@ -615,6 +619,46 @@ FAKE_GH_CASE=remote_pending PATH="$stub:/usr/bin:/bin" \
 	bash scripts/request_codex_review.sh 123 --repo MartenH/blobly_net --post --state-dir "$remote_state" >"$out" 2>&1
 ok "remote same-SHA pending request is rejected" "$?" "64"
 ok "remote same-SHA pending request is explained" "$(grep -c 'same-SHA review is already pending from request comment 998' "$out")" "1"
+
+# ...and a dropped trigger must be recoverable: the marker lives in the PR, so removing the
+# local state file cannot clear it, and without an override the PR wedges forever.
+force_state=$(mktemp -d)
+FAKE_GH_CASE=remote_pending PATH="$stub:/usr/bin:/bin" \
+	bash scripts/request_codex_review.sh 123 --repo MartenH/blobly_net --post --force --state-dir "$force_state" >"$out" 2>&1
+ok "--force re-requests over a pending marker" "$?" "0"
+ok "--force says it overrode the marker" "$(grep -c 'force: re-requesting over pending request comment 998' "$out")" "1"
+ok "the pending guard names the override" "$(grep -c 'pass --force to request again' "$out")" "0"
+
+# A persistent outage must not read as an ordinary pending review: retries consume the window,
+# and the expiry that follows would otherwise report EXIT_PENDING for a watcher that never once
+# reached GitHub.
+cat >"$stub/gh_always_fail" <<'GHF'
+#!/usr/bin/env bash
+echo "simulated persistent 502" >&2
+exit 1
+GHF
+chmod +x "$stub/gh_always_fail"
+fail_dir=$(mktemp -d)
+cp "$stub/git" "$fail_dir/git"
+cp "$stub/gh_always_fail" "$fail_dir/gh"
+PATH="$fail_dir:/usr/bin:/bin" \
+	bash scripts/codex_review_watch.sh --pr 123 --repo MartenH/blobly_net \
+	--sha abcdef1234567890abcdef1234567890abcdef12 \
+	--baseline-review-id 10 --baseline-pull-comment-id 30 \
+	--baseline-issue-comment-id 40 --baseline-failure-comment-id 40 \
+	--requested-at 2026-01-01T00:00:01Z --interval 1 --timeout 3 >"$out" 2>&1
+ok "a persistent API failure exits 70, not pending" "$?" "70"
+ok "a persistent API failure says the window was consumed" "$(grep -c 'consumed the whole' "$out")" "1"
+
+# A round is not handled until every finding has a reply. Only the bot's own findings count,
+# and a reply on any page clears the one it points at.
+FAKE_GH_CASE=unanswered PATH="$stub:/usr/bin:/bin" \
+	bash scripts/codex_review_unanswered.sh 123 --repo MartenH/blobly_net >"$out" 2>&1
+ok "unanswered exits 20 while a finding has no reply" "$?" "20"
+ok "unanswered names the open finding" "$(grep -c '^UNANSWERED 32 b.v:2$' "$out")" "1"
+ok "unanswered skips the replied-to finding" "$(grep -c '^UNANSWERED 31' "$out")" "0"
+ok "unanswered ignores non-reviewer comments" "$(grep -c '^UNANSWERED 34' "$out")" "0"
+ok "unanswered reports the tally" "$(grep -c '1 unanswered of 2 findings' "$out")" "1"
 
 spoof_state=$(mktemp -d)
 FAKE_GH_CASE=remote_spoof PATH="$stub:/usr/bin:/bin" \

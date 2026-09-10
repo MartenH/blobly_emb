@@ -193,7 +193,8 @@ incidents are written up in blobly_net's `docs/history.md` (2026-08-12).
 --post` is a thin wrapper over `scripts/codex_review.py`: it posts the request, records the PR
 head SHA, records the request-comment marker and fresh baselines for each GitHub id space, and
 prints the `scripts/codex_review_watch.sh --state .claude/reviews/pr-<pr>.env` line to run as a
-tracked background job. The watcher reads the verdict channels as GitHub JSON rather than
+tracked background job. `scripts/codex_review_unanswered.sh <pr>` closes the round out by listing
+findings nothing replies to. The watcher reads the verdict channels as GitHub JSON rather than
 shell-scraped text, and classifies the outcome in its exit code: `0` clean · `1` pending · `20`
 findings · `30` the review FAILED and must be re-requested · `40` the head moved under it · `70`
 a gh/API failure (never silently "nothing waiting"). `scripts/review_preflight.sh` refuses the
@@ -284,14 +285,18 @@ gh api -X POST repos/<o>/<r>/pulls/<pr>/comments/<id>/replies -f body='…'
 **A PR-level summary is not an answer.** On #276 rounds 1–4 were answered in-thread and rounds
 5–6 were written up as one PR comment instead — ten findings left with no reply and no reaction,
 which is what the maintainer sees on opening the PR (user: "You have 0 responses to codex").
-Before calling a round handled, ask for findings nothing replies to:
+Before calling a round handled, ask which findings nothing replies to:
 
 ```sh
-gh api --paginate repos/<o>/<r>/pulls/<pr>/comments --jq \
-  '[.[]|select(.user.login|startswith("chatgpt"))] as $f
-   | [.[]|select(.in_reply_to_id!=null)|.in_reply_to_id] as $r
-   | ($f|map(select(.id as $i|($r|index($i))==null))|.[]|"UNANSWERED \(.id) \(.path)")'
+scripts/codex_review_unanswered.sh <pr>     # exit 0 = every finding answered, 20 = some are not
 ```
+
+That is a subcommand rather than a one-liner for two reasons, both of which bit the version of
+this paragraph that shipped first: `--paginate` hands back **one array per page**, so a `--jq`
+filter comparing findings against replies runs per page and calls a finding unanswered whenever
+its reply landed on a later page — and the obvious `jq -s` repair needs a standalone `jq`, which
+is **not installed in every agent environment** here (the same trap this file already records
+for `bc`).
 
 **What the reaction rates is whether the FINDING is true** — not whether you liked the remedy,
 and not whether you are going to act on it here:
