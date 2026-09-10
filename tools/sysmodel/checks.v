@@ -101,6 +101,12 @@ fn check_partial_no_wiring(s System) []Issue {
 		if n.view.has_nm {
 			authored << 'a [nm]'
 		}
+		// The lowering emits its own [someip], and the authored file is appended VERBATIM
+		// after it — two tables of the same name, which sysgen only discovers after syscheck
+		// has called the system valid. This is the migration path #245 itself creates.
+		if n.view.has_someip {
+			authored << 'a [someip]'
+		}
 		// a [[route]] in a partial is copied verbatim but never enters System.routes,
 		// so check_routes never verifies its gateway/buses — an unchecked forward.
 		if n.view.authored_routes {
@@ -2146,6 +2152,15 @@ fn check_someip_signal_frames(s System) []Issue {
 					req:      'REQ-TOPO-003'
 					msg:      'frame "${fr.name}": its `e2e` table has no `data_id` — 0 is a legal id, so a defaulted one is indistinguishable from a declared one once lowered'
 				}
+			} else if !fr.e2e_data_id_int {
+				// .i64() coerces a string to 0 — a legal identity — so the type error would
+				// survive lowering as an explicit numeric 0 that nothing downstream can
+				// recognise as a mistake (codex on #245).
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": e2e data_id must be an integer'
+				}
 			} else if fr.e2e_data_id_raw < 0 || fr.e2e_data_id_raw > 0xFFFF {
 				issues << Issue{
 					severity: .error
@@ -2197,6 +2212,46 @@ fn check_someip_signal_frames(s System) []Issue {
 				severity: .error
 				req:      'REQ-TOPO-003'
 				msg:      'frame "${fr.name}": tx min_delay_ms ${fr.min_delay_ms_raw} is outside 0..1000000'
+			}
+		}
+		// THE DERIVED PAYLOAD. The system owns the event's signal set now, so it can and must
+		// catch what the node build would: comm/e2e writes THROUGH the configured positions, so
+		// a trailer anywhere but immediately after the layout overwrites signal bytes, and the
+		// whole thing shares the 64-byte PDU/IOC slot. The authority for both rules is
+		// ecumodel.validate_someip (the generated-config gate); they are restated here so
+		// syscheck cannot report OK on a contract the build refuses.
+		mut size := 0
+		mut sized := true
+		for sg in fr.signals {
+			sig := s.signal_by_name(sg) or {
+				sized = false
+				continue
+			}
+			for _, ftype in sig.fields {
+				size += scalar_width(ftype) or {
+					sized = false
+					0
+				}
+			}
+		}
+		pos_in_range := fr.e2e_counter_raw >= 0 && fr.e2e_counter_raw <= 0xFFFF
+			&& fr.e2e_crc_raw >= 0 && fr.e2e_crc_raw <= 0xFFFF
+		if sized && fr.has_e2e {
+			if pos_in_range && (fr.e2e_counter_raw != size || fr.e2e_crc_raw != size + 1) {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": E2E is an APPENDED trailer — counter_pos must be the derived layout size (${size}) and crc_pos ${
+						size + 1}, got ${fr.e2e_counter_raw}/${fr.e2e_crc_raw}; other positions overwrite signal bytes'
+				}
+			}
+			size += 2
+		}
+		if sized && size > 64 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": derived payload is ${size} bytes (E2E trailer included) — the shared PDU/IOC slot is 64'
 			}
 		}
 		if fr.signals.len == 0 {
@@ -2340,6 +2395,18 @@ fn check_someip_segment(s System) []Issue {
 				fname_of[key] = fr.name
 			}
 		}
+		for n in members {
+			if n.buses.len > 1 {
+				// generate_gateway_node takes every multi-bus node and emits each bus in the
+				// CAN/DBC shape, with no [someip] at all — so the declared membership would be
+				// dropped on the floor. The SOME/IP<->CAN gateway is its own rung (#245 step 3).
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": is a multi-bus gateway AND a member of someip bus "${b.name}" — the eth gateway is not lowered yet (the CAN gateway lowering emits no [someip] at all); keep the someip segment on a single-bus node'
+				}
+			}
+		}
 		if members.len != 2 {
 			issues << Issue{
 				severity: .error
@@ -2452,4 +2519,17 @@ fn check_endpoint_carrier(s System) []Issue {
 		}
 	}
 	return issues
+}
+
+// scalar_width: the wire width of a signal field type — the same table as
+// ecumodel.scalar_width, which is what the node build measures the derived payload with.
+// `none` for anything the field-type check already rejects, so a bad type is reported once.
+fn scalar_width(t string) ?int {
+	return match t {
+		'bool', 'u8', 'i8' { 1 }
+		'u16', 'i16' { 2 }
+		'u32', 'i32', 'f32' { 4 }
+		'u64', 'i64', 'f64' { 8 }
+		else { none }
+	}
 }
