@@ -1082,6 +1082,28 @@ fn run_capture(exe string, args []string) (string, int) {
 // keeps this the EXACT validation loom2v builds behind — no re-implementation to
 // drift. ecucheck prints "<file>: <msg>" per error and a "ecucheck: N …"
 // summary, then exits non-zero; we keep the messages, drop the summary/prefix.
+// v_compiler_noise reports whether a captured line is the V COMPILER talking about our own
+// source, not the tool talking about the config. `v run` compiles first, and a notice or
+// warning in any transitively-compiled file lands on the same stream as the tool's output --
+// so an unrelated `notice: shifting a value from a signed type` in ecumodel.v was being
+// reported as a config error, four lines of source echo and carets with it. Harmless while
+// only sysgen surfaced them; syscheck now reports the same lines as system errors (#277).
+fn v_compiler_noise(t string) bool {
+	if t.contains('.v:') && (t.contains(': notice:') || t.contains(': warning:')
+		|| t.contains(': error:')) {
+		return true
+	}
+	// the source echo the compiler prints under a diagnostic: "1468 |         code"
+	if t.len > 0 && t[0].is_digit() && t.contains(' | ') {
+		return true
+	}
+	// ...and the caret/tilde underline beneath it
+	if t.starts_with('|') || t.starts_with('~') || t.starts_with('^') {
+		return true
+	}
+	return false
+}
+
 pub fn ecucheck_errors(node_path string) []string {
 	output, code := run_capture(@VEXE, ['run', '${@VMODROOT}/tools/ecucheck/gen.v', node_path])
 	if code == 0 {
@@ -1094,6 +1116,9 @@ pub fn ecucheck_errors(node_path string) []string {
 		if t == '' || t.starts_with('ecucheck:') {
 			continue // the count summary, not an error
 		}
+		if v_compiler_noise(t) {
+			continue
+		}
 		// strip the leading "<fname>: " ecucheck prepends
 		out << t.trim_string_left('${fname}: ')
 	}
@@ -1101,6 +1126,45 @@ pub fn ecucheck_errors(node_path string) []string {
 		// ecucheck failed for a reason it didn't print as a schema error (a
 		// build/parse failure) — surface something rather than swallow it.
 		out << 'ecucheck failed (exit ${code})'
+	}
+	return out
+}
+
+// sysgen_errors LOWERS the system with the real tools/sysgen into a scratch directory and
+// returns what the node gate says about the result (empty = clean).
+//
+// This is the same trick loom2v_errors plays one level down, and for the same reason. The
+// dissolved model is only half a contract: system.toml declares wiring that becomes a node
+// config, and every rule about that config is owned by ecucheck and loom2v -- the derived
+// SOME/IP payload's size and alignment, the E2E trailer's exact offsets, the tx-mode enum,
+// the byte-IOC channel ceiling, a bindable interface address. Restating any of them here
+// produces a SECOND, partial copy that drifts (blobly_emb#276 rounds 4-6 were a dozen
+// findings of exactly that shape, each one "syscheck says OK, the node build refuses").
+// Lowering for real means there is one gate, not two that agree until they do not.
+//
+// `out_dir` is a scratch directory: sysgen --out writes the generated configs and copies each
+// referenced DBC there, so nothing touches the source tree.
+pub fn sysgen_errors(system_path string, out_dir string) []string {
+	output, code := run_capture(@VEXE, ['-enable-globals', 'run', '${@VMODROOT}/tools/sysgen',
+		system_path, '--out', out_dir])
+	if code == 0 {
+		return []string{}
+	}
+	mut out := []string{}
+	for line in output.split_into_lines() {
+		t := line.trim_space()
+		if t == '' || !t.starts_with('sysgen:') {
+			continue
+		}
+		body := t.all_after('sysgen:').trim_space()
+		// the per-node "-> path (ok)" progress lines are not errors
+		if body.contains(' -> ') || body.starts_with('refusing to generate') {
+			continue
+		}
+		out << body
+	}
+	if out.len == 0 {
+		out << 'lowering failed (exit ${code})'
 	}
 	return out
 }

@@ -2214,46 +2214,13 @@ fn check_someip_signal_frames(s System) []Issue {
 				msg:      'frame "${fr.name}": tx min_delay_ms ${fr.min_delay_ms_raw} is outside 0..1000000'
 			}
 		}
-		// THE DERIVED PAYLOAD. The system owns the event's signal set now, so it can and must
-		// catch what the node build would: comm/e2e writes THROUGH the configured positions, so
-		// a trailer anywhere but immediately after the layout overwrites signal bytes, and the
-		// whole thing shares the 64-byte PDU/IOC slot. The authority for both rules is
-		// ecumodel.validate_someip (the generated-config gate); they are restated here so
-		// syscheck cannot report OK on a contract the build refuses.
-		mut size := 0
-		mut sized := true
-		for sg in fr.signals {
-			sig := s.signal_by_name(sg) or {
-				sized = false
-				continue
-			}
-			for _, ftype in sig.fields {
-				size += scalar_width(ftype) or {
-					sized = false
-					0
-				}
-			}
-		}
-		pos_in_range := fr.e2e_counter_raw >= 0 && fr.e2e_counter_raw <= 0xFFFF
-			&& fr.e2e_crc_raw >= 0 && fr.e2e_crc_raw <= 0xFFFF
-		if sized && fr.has_e2e {
-			if pos_in_range && (fr.e2e_counter_raw != size || fr.e2e_crc_raw != size + 1) {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-003'
-					msg:      'frame "${fr.name}": E2E is an APPENDED trailer — counter_pos must be the derived layout size (${size}) and crc_pos ${
-						size + 1}, got ${fr.e2e_counter_raw}/${fr.e2e_crc_raw}; other positions overwrite signal bytes'
-				}
-			}
-			size += 2
-		}
-		if sized && size > 64 {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-003'
-				msg:      'frame "${fr.name}": derived payload is ${size} bytes (E2E trailer included) — the shared PDU/IOC slot is 64'
-			}
-		}
+		// NOTE: the derived payload is NOT measured here. Its size, its alignment and the E2E
+		// trailer's exact offsets are lowered VERBATIM into the node config, where
+		// ecumodel.validate owns them (and measures more than this layer could -- it checks the
+		// ALIGNED in-memory struct against the IOC slot, not just the packed wire sum). syscheck
+		// lowers and runs that gate, so restating those rules here only built a second, partial
+		// copy to drift (#277). What stays below is what lowering DESTROYS: the raw authored
+		// values, which narrowing turns into legal-looking ones the node gate can never question.
 		if fr.signals.len == 0 {
 			// Generation only discovers a frame while walking its member signals, so a frame
 			// carrying none is emitted into NO node — a system-declared event that silently
@@ -2521,15 +2488,3 @@ fn check_endpoint_carrier(s System) []Issue {
 	return issues
 }
 
-// scalar_width: the wire width of a signal field type — the same table as
-// ecumodel.scalar_width, which is what the node build measures the derived payload with.
-// `none` for anything the field-type check already rejects, so a bad type is reported once.
-fn scalar_width(t string) ?int {
-	return match t {
-		'bool', 'u8', 'i8' { 1 }
-		'u16', 'i16' { 2 }
-		'u32', 'i32', 'f32' { 4 }
-		'u64', 'i64', 'f64' { 8 }
-		else { none }
-	}
-}

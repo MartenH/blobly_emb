@@ -80,6 +80,26 @@ fn main() {
 	if load_errs.len > 0 {
 		nerr += load_errs.len
 	}
+
+	// LOWER IT AND GATE THE RESULT. The model checks above only see what system.toml says;
+	// half the contract is what the lowered node config MEANS, and every rule about that is
+	// owned by ecucheck and loom2v. Restating those here builds a second, partial copy that
+	// drifts -- so syscheck runs the real sysgen instead, and a clean syscheck means the
+	// nodes actually generate (#277, the #245 rounds 4-6 family). Skipped when the model is
+	// already broken: lowering an inconsistent system reports the same faults a second time,
+	// in the generator's words.
+	if dissolved && nerr == 0 {
+		tmp := os.join_path(os.temp_dir(), 'syscheck_lower_${os.getpid()}')
+		defer {
+			os.rmdir_all(tmp) or {}
+		}
+		gerrs := sysmodel.sysgen_errors(path, tmp)
+		for e in gerrs {
+			eprintln('  ERROR [REQ-TOPO-005] lowered: ${e}')
+			nerr++
+		}
+	}
+
 	if nerr == 0 {
 		println('syscheck: OK (${nwarn} warning(s))')
 		exit(0)

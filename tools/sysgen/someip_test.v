@@ -371,34 +371,6 @@ fn test_a_non_integer_e2e_data_id_is_refused() {
 	assert seg_errs(sys).any(it.contains('data_id must be an integer')), seg_errs(sys).str()
 }
 
-// The trailer is APPENDED: comm/e2e writes THROUGH the configured positions, so a counter
-// anywhere but at the derived layout size overwrites a signal byte.
-fn test_an_e2e_trailer_that_is_not_appended_is_refused() {
-	mut sys := tel_system()
-	sys.frames[0].e2e_counter_raw = 0
-	sys.frames[0].e2e_crc_raw = 1
-	assert seg_errs(sys).any(it.contains('APPENDED trailer')), seg_errs(sys).str()
-}
-
-// ...and it moves with the payload: widening the event's signal moves the trailer too, so
-// positions that were right for a u8 are wrong for a u64.
-fn test_the_trailer_position_follows_the_derived_layout() {
-	mut sys := tel_system()
-	sys.signals[0].fields['load'] = 'u64'
-	assert seg_errs(sys).any(it.contains('size (8)')), seg_errs(sys).str()
-}
-
-// The event shares the 64-byte PDU/IOC slot. Nine u64 fields is 72 — accepted here, it would
-// fail only in the node build, after syscheck had called the system valid.
-fn test_an_event_wider_than_the_pdu_bound_is_refused() {
-	mut sys := tel_system()
-	for i in 0 .. 9 {
-		sys.signals[0].fields['w${i}'] = 'u64'
-	}
-	sys.frames[0].has_e2e = false
-	assert seg_errs(sys).any(it.contains('the shared PDU/IOC slot is 64')), seg_errs(sys).str()
-}
-
 // A node that keeps its authored [someip] through the migration gets TWO of them: the lowering
 // emits one and appends the authored file verbatim after it. syscheck must say so, because
 // sysgen only discovers it while writing the output.

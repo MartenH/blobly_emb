@@ -19,10 +19,24 @@ import tools.candb
 
 fn main() {
 	if os.args.len < 2 {
-		eprintln('usage: sysgen <system.toml>')
+		eprintln('usage: sysgen <system.toml> [--out <dir>]')
 		exit(2)
 	}
 	path := os.args[1]
+	// --out lowers into a SCRATCH directory instead of beside system.toml, so a caller can
+	// gate the lowered configs without writing into the source tree (syscheck does exactly
+	// that -- see sysmodel.sysgen_errors). The generated [import] dbc path stays relative to
+	// the system dir, so every referenced DBC is copied across and resolves unchanged.
+	mut out_dir := ''
+	for i := 2; i < os.args.len; i++ {
+		if os.args[i] == '--out' && i + 1 < os.args.len {
+			out_dir = os.args[i + 1]
+			i++
+		} else {
+			eprintln('sysgen: unknown argument "${os.args[i]}"')
+			exit(2)
+		}
+	}
 	mut sys := sysmodel.parse_system(path) or {
 		eprintln('sysgen: ${err}')
 		exit(2)
@@ -47,6 +61,19 @@ fn main() {
 		exit(1)
 	}
 
+	mut gen_dir := sys.dir
+	if out_dir != '' {
+		gen_dir = out_dir
+		os.mkdir_all(gen_dir) or {
+			eprintln('sysgen: mkdir ${gen_dir}: ${err}')
+			exit(1)
+		}
+		copy_dbcs(sys, gen_dir) or {
+			eprintln('sysgen: ${err}')
+			exit(1)
+		}
+	}
+
 	for n in sys.nodes {
 		out := generate_node(sys, n) or {
 			eprintln('sysgen: node "${n.name}": ${err}')
@@ -54,7 +81,7 @@ fn main() {
 		}
 		// generated files live beside system.toml, so [import] dbc resolves the
 		// same as the bus's dbc path (relative to the system dir).
-		gen_path := os.join_path(sys.dir, 'gen-${n.name}.toml')
+		gen_path := os.join_path(gen_dir, 'gen-${n.name}.toml')
 		os.write_file(gen_path, out) or {
 			eprintln('sysgen: write ${gen_path}: ${err}')
 			exit(1)
@@ -96,7 +123,7 @@ fn main() {
 			println('sysgen: ${n.name} -> ${gen_path} (ok, ${tag}; validated by the node build)')
 			continue
 		}
-		dbc_path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(sys.dir, bus.dbc) }
+		dbc_path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(gen_dir, bus.dbc) }
 		lerrs := sysmodel.loom2v_errors(gen_path, dbc_path)
 		if lerrs.len > 0 {
 			for e in lerrs {
@@ -107,6 +134,27 @@ fn main() {
 		println('sysgen: ${n.name} -> ${gen_path} (ok)')
 	}
 	println('sysgen: ${sys.nodes.len} node(s) generated + gated')
+}
+
+// copy_dbcs mirrors every relative DBC a bus names into `dst`, keeping its sub-path. The
+// lowered config writes `dbc = "<the authored relative path>"`, so a generated file only
+// resolves it if the DBC sits at the same offset from the generated file as it does from
+// system.toml. Absolute paths already resolve from anywhere and are left alone.
+fn copy_dbcs(sys sysmodel.System, dst string) ! {
+	mut done := map[string]bool{}
+	for b in sys.buses {
+		if b.dbc == '' || os.is_abs_path(b.dbc) || b.dbc in done {
+			continue
+		}
+		done[b.dbc] = true
+		src := os.join_path(sys.dir, b.dbc)
+		if !os.exists(src) {
+			continue // a missing DBC is the model checks' error to report, not this copy's
+		}
+		target := os.join_path(dst, b.dbc)
+		os.mkdir_all(os.dir(target)) or { return error('mkdir ${os.dir(target)}: ${err}') }
+		os.cp(src, target) or { return error('copy DBC ${b.dbc}: ${err}') }
+	}
 }
 
 // generate_node emits the complete ecu.toml text for one node: the derived
