@@ -155,6 +155,7 @@ pub mut:
 	e2e_counter_raw  i64
 	e2e_crc_raw      i64
 	has_e2e_data_id bool
+	e2e_data_id_int bool // the authored value was actually an integer, not a coerced string
 	unknown_keys    []string
 }
 
@@ -559,6 +560,9 @@ pub fn parse_system(path string) !System {
 				fr.e2e_data_id = m_u32(em, 'data_id')
 				fr.e2e_data_id_raw = (em['data_id'] or { toml.Any(0) }).i64()
 				fr.has_e2e_data_id = 'data_id' in em
+				if dv := em['data_id'] {
+					fr.e2e_data_id_int = dv is i64
+				}
 				fr.e2e_counter = m_int(em, 'counter_pos')
 				fr.e2e_crc = m_int(em, 'crc_pos')
 				fr.e2e_counter_raw = (em['counter_pos'] or { toml.Any(0) }).i64()

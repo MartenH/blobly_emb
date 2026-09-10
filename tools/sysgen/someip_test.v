@@ -83,10 +83,13 @@ fn tel_system() sysmodel.System {
 				has_cycle_ms:    true
 				has_e2e:         true
 				has_e2e_data_id: true
+				e2e_data_id_int: true
 				e2e_data_id:     0x21
 				e2e_data_id_raw: 0x21
-				e2e_counter:     7
-				e2e_crc:         8
+				e2e_counter:     1
+				e2e_counter_raw: 1
+				e2e_crc:         2
+				e2e_crc_raw:     2
 			},
 			sysmodel.SysFrame{
 				name:    'BenchCmd'
@@ -120,7 +123,7 @@ fn test_the_producer_gets_its_endpoint_service_and_event() {
 	// the event it produces, with the layout the system declared
 	assert out.contains('id      = 0x8001')
 	assert out.contains('tx      = { mode = "cyclic", cycle_ms = 300 }')
-	assert out.contains('e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8 }')
+	assert out.contains('e2e     = { data_id = 0x21, counter_pos = 1, crc_pos = 2 }')
 	// and the authored internals, appended verbatim
 	assert out.contains('[target]')
 }
@@ -354,4 +357,68 @@ fn test_two_frames_with_one_generated_name_are_refused() {
 		signals: ['LampCmd']
 	}
 	assert seg_errs(sys).any(it.contains('same generated name')), seg_errs(sys).str()
+}
+
+// ROUND 5. Each of these is a rule the NODE build already enforces (ecumodel.validate_someip) or
+// a shape the lowering cannot express — caught here so syscheck cannot report OK on a system
+// that sysgen or the node build then refuses.
+
+// .i64() coerces a non-integer to 0, and 0 is a legal E2E identity: the type error would survive
+// lowering as an explicit `data_id = 0` that reads exactly like a declared one.
+fn test_a_non_integer_e2e_data_id_is_refused() {
+	mut sys := tel_system()
+	sys.frames[0].e2e_data_id_int = false
+	assert seg_errs(sys).any(it.contains('data_id must be an integer')), seg_errs(sys).str()
+}
+
+// The trailer is APPENDED: comm/e2e writes THROUGH the configured positions, so a counter
+// anywhere but at the derived layout size overwrites a signal byte.
+fn test_an_e2e_trailer_that_is_not_appended_is_refused() {
+	mut sys := tel_system()
+	sys.frames[0].e2e_counter_raw = 0
+	sys.frames[0].e2e_crc_raw = 1
+	assert seg_errs(sys).any(it.contains('APPENDED trailer')), seg_errs(sys).str()
+}
+
+// ...and it moves with the payload: widening the event's signal moves the trailer too, so
+// positions that were right for a u8 are wrong for a u64.
+fn test_the_trailer_position_follows_the_derived_layout() {
+	mut sys := tel_system()
+	sys.signals[0].fields['load'] = 'u64'
+	assert seg_errs(sys).any(it.contains('size (8)')), seg_errs(sys).str()
+}
+
+// The event shares the 64-byte PDU/IOC slot. Nine u64 fields is 72 — accepted here, it would
+// fail only in the node build, after syscheck had called the system valid.
+fn test_an_event_wider_than_the_pdu_bound_is_refused() {
+	mut sys := tel_system()
+	for i in 0 .. 9 {
+		sys.signals[0].fields['w${i}'] = 'u64'
+	}
+	sys.frames[0].has_e2e = false
+	assert seg_errs(sys).any(it.contains('the shared PDU/IOC slot is 64')), seg_errs(sys).str()
+}
+
+// A node that keeps its authored [someip] through the migration gets TWO of them: the lowering
+// emits one and appends the authored file verbatim after it. syscheck must say so, because
+// sysgen only discovers it while writing the output.
+fn test_a_node_that_kept_its_authored_someip_table_is_refused() {
+	mut sys := tel_system()
+	sys.nodes[0].view.has_someip = true
+	errs := sysmodel.validate_system_gen(sys).filter(it.severity == .error).map(it.msg)
+	assert errs.any(it.contains('[someip]')), errs.str()
+}
+
+// A multi-bus node goes down generate_gateway_node, which emits every bus in the CAN/DBC shape
+// and no [someip] at all — so a gateway that also names a someip bus would lose the membership
+// silently. The eth gateway is its own rung.
+fn test_a_gateway_that_is_also_a_someip_member_is_refused() {
+	mut sys := tel_system()
+	sys.buses << sysmodel.Bus{
+		name:      'pt'
+		kind:      'can'
+		interface: 'can0'
+	}
+	sys.nodes[0].buses << 'pt'
+	assert seg_errs(sys).any(it.contains('multi-bus gateway')), seg_errs(sys).str()
 }

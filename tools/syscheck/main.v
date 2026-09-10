@@ -29,7 +29,22 @@ fn main() {
 	// frames too: a system.toml carrying only [[frame]]s is still the DISSOLVED model, and the
 	// composed validator never looks at System.frames — it would report OK for an event nothing
 	// carries (codex on #245).
-	dissolved := sys.signals.len > 0 || sys.routes.len > 0 || sys.frames.len > 0
+	// ...and a SOME/IP segment: its service, version and the members' endpoints are
+	// system-owned wiring that sysgen lowers, so an RPC-only system with endpoints but no
+	// signals is dissolved too — loaded as composed, its internals-only ECU files read as
+	// incomplete configs (codex on #245).
+	mut someip_owned := false
+	for b in sys.buses {
+		if b.kind == 'someip' {
+			someip_owned = true
+		}
+	}
+	for n in sys.nodes {
+		if n.has_endpoint {
+			someip_owned = true
+		}
+	}
+	dissolved := sys.signals.len > 0 || sys.routes.len > 0 || sys.frames.len > 0 || someip_owned
 	load_errs := if dissolved { sys.load_nodes_partial() } else { sys.load_nodes() }
 	for e in load_errs {
 		eprintln('syscheck: could not load ${e}')
