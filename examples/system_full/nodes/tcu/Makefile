@@ -16,7 +16,7 @@ REPO     = ../../../..
 NAME    := tcu
 SYSDIR  = $(REPO)/examples/system_full
 # the generators whose output this node's config depends on (mirrors nodes/zone_a)
-GENSRC  = $(wildcard $(REPO)/tools/sysgen/*.v) $(wildcard $(REPO)/tools/loom2v/*.v) \
+GENSRC  = $(wildcard $(REPO)/tools/ecucheck/*.v) $(wildcard $(REPO)/tools/sysgen/*.v) $(wildcard $(REPO)/tools/loom2v/*.v) \
           $(wildcard $(REPO)/tools/ecumodel/*.v) $(wildcard $(REPO)/tools/sysmodel/*.v)
 EX       = examples/system_full/nodes/$(NAME)
 TX       = $(REPO)/third_party/threadx

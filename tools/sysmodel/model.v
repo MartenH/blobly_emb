@@ -156,6 +156,11 @@ pub mut:
 	id_raw           i64
 	cycle_ms_raw     i64
 	min_delay_ms_raw i64
+	// ...and they must be INTEGERS. .i64() drops the type AND the fraction: 300.5 becomes an
+	// in-range 300, which someip_frame_lines then writes as an integer, so ecumodel's own
+	// `!is i64` check sees nothing wrong and the cadence silently differs from the authored one.
+	cycle_ms_int     bool = true
+	min_delay_ms_int bool = true
 	e2e_data_id_raw  i64
 	e2e_counter_raw  i64
 	e2e_crc_raw      i64
@@ -560,6 +565,12 @@ pub fn parse_system(path string) !System {
 				fr.has_min_delay_ms = 'min_delay_ms' in tm
 				fr.cycle_ms_raw = (tm['cycle_ms'] or { toml.Any(0) }).i64()
 				fr.min_delay_ms_raw = (tm['min_delay_ms'] or { toml.Any(0) }).i64()
+				if v := tm['cycle_ms'] {
+					fr.cycle_ms_int = v is i64
+				}
+				if v := tm['min_delay_ms'] {
+					fr.min_delay_ms_int = v is i64
+				}
 			}
 			if ev := m['e2e'] {
 				em := ev.as_map()

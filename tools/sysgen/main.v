@@ -153,7 +153,15 @@ fn copy_dbcs(sys sysmodel.System, dst string) ! {
 		if !os.exists(src) {
 			continue // a missing DBC is the model checks' error to report, not this copy's
 		}
-		target := os.join_path(dst, b.dbc)
+		target := os.norm_path(os.join_path(dst, b.dbc))
+		// A relative path may still climb: `dbc = "../shared.dbc"` joined to the scratch dir
+		// resolves OUTSIDE it, and this then mkdir -p's and copies there — overwriting whatever
+		// sits at that name, and for a system under the temp root it can land back on the source
+		// DBC itself. Refuse instead of writing: the caller asked for a self-contained tree.
+		root := os.norm_path(dst)
+		if target != root && !target.starts_with(root + os.path_separator) {
+			return error('DBC "${b.dbc}" resolves outside the output directory (${target}) — a staged tree must be self-contained; use a path inside the system dir or an absolute one')
+		}
 		os.mkdir_all(os.dir(target)) or { return error('mkdir ${os.dir(target)}: ${err}') }
 		os.cp(src, target) or { return error('copy DBC ${b.dbc}: ${err}') }
 	}

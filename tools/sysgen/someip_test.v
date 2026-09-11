@@ -1,5 +1,6 @@
 module main
 
+import os
 import tools.sysmodel
 
 // Lowering a someip member (#245). The system owns the segment's contract — the service and its
@@ -444,4 +445,52 @@ fn test_a_non_integer_version_is_refused() {
 	mut sys := tel_system()
 	sys.buses[0].version_int = false
 	assert seg_errs(sys).any(it.contains('`version` must be an integer')), seg_errs(sys).str()
+}
+
+// A cadence is an INTEGER. .i64() drops the type and the fraction together, so 300.5 would
+// lower as a perfectly legal 300 — and ecumodel's own `!is i64` check sees only the lowered
+// integer, so nothing downstream could tell the wire contract from the authored one.
+fn test_a_non_integer_cadence_is_refused() {
+	mut sys := tel_system()
+	sys.frames[0].cycle_ms_int = false
+	assert seg_errs(sys).any(it.contains('cycle_ms must be an integer')), seg_errs(sys).str()
+}
+
+fn test_a_non_integer_min_delay_is_refused() {
+	mut sys := tel_system()
+	sys.frames[1].has_min_delay_ms = true
+	sys.frames[1].min_delay_ms_int = false
+	assert seg_errs(sys).any(it.contains('min_delay_ms must be an integer')), seg_errs(sys).str()
+}
+
+// --out stages a self-contained tree, so a DBC path that CLIMBS out of it must be refused
+// rather than copied: `../shared.dbc` joined to the scratch dir resolves outside it, and the
+// copy would then overwrite whatever sits at that name (codex on #279).
+fn test_a_dbc_path_escaping_the_output_dir_is_refused() {
+	// the system dir is a SUBDIRECTORY of temp, so "../escape.dbc" resolves to a real file
+	// one level up — otherwise copy_dbcs skips it as missing and never reaches the check
+	sysdir := os.join_path(os.temp_dir(), 'syscheck_traversal_src')
+	dst := os.join_path(os.temp_dir(), 'syscheck_traversal_out')
+	src := os.join_path(os.temp_dir(), 'escape.dbc')
+	os.mkdir_all(sysdir) or { panic('mkdir: ${err}') }
+	os.mkdir_all(dst) or { panic('mkdir: ${err}') }
+	os.write_file(src, '') or { panic('seed: ${err}') }
+	defer {
+		os.rmdir_all(sysdir) or {}
+		os.rmdir_all(dst) or {}
+		os.rm(src) or {}
+	}
+	mut sys := tel_system()
+	sys.dir = sysdir
+	sys.buses << sysmodel.Bus{
+		name:      'pt'
+		kind:      'can'
+		interface: 'can0'
+		dbc:       '../escape.dbc'
+	}
+	copy_dbcs(sys, dst) or {
+		assert err.msg().contains('resolves outside the output directory'), err.msg()
+		return
+	}
+	assert false, 'a DBC path climbing out of the output directory must be refused'
 }

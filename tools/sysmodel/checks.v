@@ -2224,6 +2224,20 @@ fn check_someip_signal_frames(s System) []Issue {
 		}
 		// Timings narrow through int() too: 4294967396 wrapped to 100 and silently became the
 		// cadence, inside the generated gate's own 1..1_000_000 ms bounds (codex on #245).
+		if fr.has_cycle_ms && !fr.cycle_ms_int {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": tx cycle_ms must be an integer — .i64() drops the fraction, so 300.5 would lower as a perfectly legal 300 and nothing downstream could tell'
+			}
+		}
+		if fr.has_min_delay_ms && !fr.min_delay_ms_int {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": tx min_delay_ms must be an integer — .i64() drops the fraction, so the lowered value would differ from the authored one'
+			}
+		}
 		if fr.has_cycle_ms && (fr.cycle_ms_raw < 1 || fr.cycle_ms_raw > 1_000_000) {
 			issues << Issue{
 				severity: .error
