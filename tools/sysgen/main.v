@@ -166,8 +166,18 @@ fn copy_dbcs(sys sysmodel.System, dst string) ! {
 		// resolves OUTSIDE it, and this then mkdir -p's and copies there — overwriting whatever
 		// sits at that name, and for a system under the temp root it can land back on the source
 		// DBC itself. Refuse instead of writing: the caller asked for a self-contained tree.
+		// Containment FIRST. The self-copy skip below must not run before this: an escaping
+		// path whose target happens to BE its own source (--out into a subdirectory of the
+		// system dir, with `dbc = "../x.dbc"`) would then be waved through, defeating the check
+		// even though the staged tree is not self-contained.
 		if !inside(dst, target) {
 			return error('DBC "${b.dbc}" resolves outside the output directory (${os.abs_path(target)}) — a staged tree must be self-contained; use a path inside the system dir or an absolute one')
+		}
+		if os.norm_path(os.abs_path(src)) == os.norm_path(os.abs_path(target)) {
+			// --out IS the system dir: the DBC is already where it needs to be, and copying a
+			// file onto itself either fails its same-file check or truncates the authored
+			// contract. Reached only after containment passed, so the tree is still valid.
+			continue
 		}
 		os.mkdir_all(os.dir(target)) or { return error('mkdir ${os.dir(target)}: ${err}') }
 		os.cp(src, target) or { return error('copy DBC ${b.dbc}: ${err}') }

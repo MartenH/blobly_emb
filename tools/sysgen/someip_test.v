@@ -1,6 +1,7 @@
 module main
 
 import os
+import rand
 import tools.sysmodel
 
 // Lowering a someip member (#245). The system owns the segment's contract — the service and its
@@ -469,16 +470,17 @@ fn test_a_non_integer_min_delay_is_refused() {
 fn test_a_dbc_path_escaping_the_output_dir_is_refused() {
 	// the system dir is a SUBDIRECTORY of temp, so "../escape.dbc" resolves to a real file
 	// one level up — otherwise copy_dbcs skips it as missing and never reaches the check
-	sysdir := os.join_path(os.temp_dir(), 'syscheck_traversal_src')
-	dst := os.join_path(os.temp_dir(), 'syscheck_traversal_out')
-	src := os.join_path(os.temp_dir(), 'escape.dbc')
+	// ONE unique root per run, everything beneath it. Shared /tmp names would collide between
+	// overlapping runs and — worse — the cleanup would delete another process's files.
+	root := os.join_path(os.temp_dir(), 'syscheck_trav_${os.getpid()}_${rand.u32()}')
+	sysdir := os.join_path(root, 'sys')
+	dst := os.join_path(root, 'out')
+	src := os.join_path(root, 'escape.dbc') // what "../escape.dbc" resolves to from sysdir
 	os.mkdir_all(sysdir) or { panic('mkdir: ${err}') }
 	os.mkdir_all(dst) or { panic('mkdir: ${err}') }
 	os.write_file(src, '') or { panic('seed: ${err}') }
 	defer {
-		os.rmdir_all(sysdir) or {}
-		os.rmdir_all(dst) or {}
-		os.rm(src) or {}
+		os.rmdir_all(root) or {}
 	}
 	mut sys := tel_system()
 	sys.dir = sysdir
@@ -633,4 +635,28 @@ fn test_a_relative_output_directory_is_inside_itself() {
 	assert !inside('.', '../gen-node.toml')
 	assert !inside('out', 'gen-node.toml')
 	assert !inside('/tmp/a', '/tmp/ab/gen-node.toml')
+}
+
+// --out INTO the system directory: src and target are the same file, so the copy must be
+// skipped rather than attempted (os.cp onto itself either fails or truncates the authored
+// contract). Containment still runs first, so this cannot become a way past it.
+fn test_out_into_the_system_dir_skips_the_self_copy() {
+	root := os.join_path(os.temp_dir(), 'syscheck_selfcopy_${os.getpid()}_${rand.u32()}')
+	os.mkdir_all(root) or { panic('mkdir: ${err}') }
+	defer {
+		os.rmdir_all(root) or {}
+	}
+	dbc := os.join_path(root, 'bus.dbc')
+	os.write_file(dbc, 'BO_ 1 X: 8 Y\n') or { panic('seed: ${err}') }
+	mut sys := tel_system()
+	sys.dir = root
+	sys.buses << sysmodel.Bus{
+		name:      'pt'
+		kind:      'can'
+		interface: 'can0'
+		dbc:       'bus.dbc'
+	}
+	copy_dbcs(sys, root) or { assert false, 'a self-copy must be skipped, not attempted: ${err}' }
+	// the authored contract is intact, not truncated
+	assert os.read_file(dbc) or { '' } == 'BO_ 1 X: 8 Y\n'
 }

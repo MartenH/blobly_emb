@@ -29,16 +29,18 @@ fn main() {
 	// frames too: a system.toml carrying only [[frame]]s is still the DISSOLVED model, and the
 	// composed validator never looks at System.frames — it would report OK for an event nothing
 	// carries (codex on #245).
-	// ...and a SOME/IP segment: its service, version and the members' endpoints are
-	// system-owned wiring that sysgen lowers, so an RPC-only system with endpoints but no
-	// signals is dissolved too — loaded as composed, its internals-only ECU files read as
-	// incomplete configs (codex on #245).
+	// ...and an ENDPOINT: a member's address and port are system-owned identity that only the
+	// dissolution lowers, so an RPC-only segment — endpoints, no signals or frames — is
+	// dissolved too; read as composed, its internals-only ECU files look like incomplete
+	// configs (codex on #245).
+	//
+	// The CARRIER KIND is deliberately NOT a trigger. A composed system declares its buses in
+	// system.toml as well, someip ones included, and authors the wiring in complete per-node ECU
+	// files — so selecting on `kind == "someip"` forced dissolution on it and then rejected its
+	// authored [bus]/[someip]/signals as forbidden wiring. Every composed someip system would
+	// have stopped validating (codex on #279). What marks the DISSOLVED model is the presence of
+	// system-owned artifacts, never the kind of carrier the system happens to name.
 	mut someip_owned := false
-	for b in sys.buses {
-		if b.kind == 'someip' {
-			someip_owned = true
-		}
-	}
 	for n in sys.nodes {
 		if n.has_endpoint {
 			someip_owned = true
