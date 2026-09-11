@@ -91,7 +91,12 @@ fn main() {
 	// already broken: lowering an inconsistent system reports the same faults a second time,
 	// in the generator's words.
 	if dissolved && nerr == 0 {
-		tmp := os.join_path(os.temp_dir(), 'syscheck_lower_${os.getpid()}')
+		// A private, unpredictable, atomically-created directory — see
+		// sysmodel.private_temp_dir for why a PID-derived name is not safe on a shared /tmp.
+		tmp := sysmodel.private_temp_dir('syscheck_lower') or {
+			eprintln('syscheck: ${err}')
+			exit(1)
+		}
 		gerrs := sysmodel.sysgen_errors(path, tmp)
 		// Cleaned up HERE, not in a defer: both exits below go through exit(), which does not
 		// unwind deferred blocks, so a deferred rmdir never ran and every run left a tree of

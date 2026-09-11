@@ -14,6 +14,7 @@
 module sysmodel
 
 import os
+import rand
 import toml
 import tools.candb
 
@@ -372,6 +373,21 @@ fn m_u32(m map[string]toml.Any, key string) u32 {
 	return u32((m[key] or { toml.Any(0) }).int())
 }
 
+// as_top_array: a top-level `[[section]]`'s entries, refusing the single-bracket form.
+//
+// `.array()` answers an EMPTY array for anything that is not one, so `[frame]` written instead
+// of `[[frame]]` silently discards the whole section — and if the rest of the system is composed,
+// syscheck then reports OK on a system whose event contract was never checked. `[signal]` would
+// drop every signal the same way. This repo has already lost a requirement to the identical trap
+// ([[requirement]] vs [[req]], silently ignored until the count was noticed), so it is refused
+// here rather than tolerated (codex on #279).
+fn as_top_array(v toml.Any, key string) ![]toml.Any {
+	if v !is []toml.Any {
+		return error('`${key}` must be written as [[${key}]] (an array of tables) — a single [${key}] table is silently ignored, so every entry in it would vanish')
+	}
+	return v.array()
+}
+
 // m_is_int: was this key authored as an INTEGER?
 //
 // Every narrowing helper above destroys evidence. `.int()`/`.i64()` truncate a float and coerce
@@ -491,7 +507,7 @@ pub fn parse_system(path string) !System {
 	}
 	// [[signal]] — cross-node signals declared once at system scope (dissolution)
 	if sv := doc.value_opt('signal') {
-		for sg in sv.array() {
+		for sg in as_top_array(sv, 'signal')! {
 			m := sg.as_map()
 			mut sig := SysSignal{
 				name:     m_str(m, 'name')
@@ -511,7 +527,7 @@ pub fn parse_system(path string) !System {
 	}
 	// [[node]]
 	if nv := doc.value_opt('node') {
-		for n in nv.array() {
+		for n in as_top_array(nv, 'node')! {
 			m := n.as_map()
 			nm_raw := (m['nm'] or { toml.Any(0) }).int() // signed, to range-check
 			mut node := Node{
@@ -547,7 +563,7 @@ pub fn parse_system(path string) !System {
 	}
 	// [[route]]
 	if fv := doc.value_opt('frame') {
-		for f in fv.array() {
+		for f in as_top_array(fv, 'frame')! {
 			m := f.as_map()
 			mut fr := SysFrame{
 				name:   m_str(m, 'name')
@@ -614,7 +630,7 @@ pub fn parse_system(path string) !System {
 		}
 	}
 	if rv := doc.value_opt('route') {
-		for r in rv.array() {
+		for r in as_top_array(rv, 'route')! {
 			m := r.as_map()
 			sys.routes << Route{
 				gateway: m_str(m, 'gateway')
@@ -1194,6 +1210,26 @@ pub fn ecucheck_errors(node_path string) []string {
 	return out
 }
 
+// private_temp_dir creates a scratch directory that nobody else can have pre-staged.
+//
+// A name derived from the PID is PREDICTABLE, so on a shared temp directory another process can
+// create it first and fill it with symlinks -- `gen-<node>.toml`, or a staged DBC path. sysgen
+// then accepts the existing directory, every lexical containment check still passes because the
+// paths themselves are fine, and write_file/cp FOLLOW the symlinks: anything writable by this
+// user gets overwritten outside the scratch tree (codex on #279).
+//
+// os.mkdir wraps mkdir(2), which fails with EEXIST -- so creating the directory IS the check.
+// 0o700 keeps it private afterwards, and an unpredictable name means there is nothing to
+// pre-create. Used for every scratch tree here, not only the one that was reported.
+pub fn private_temp_dir(prefix string) !string {
+	for _ in 0 .. 16 {
+		cand := os.join_path(os.temp_dir(), '${prefix}_${rand.u64().hex()}${rand.u32().hex()}')
+		os.mkdir(cand, os.MkdirParams{ mode: 0o700 }) or { continue }
+		return cand
+	}
+	return error('could not create a private scratch directory under ${os.temp_dir()}')
+}
+
 // sysgen_errors LOWERS the system with the real tools/sysgen into a scratch directory and
 // returns what the node gate says about the result (empty = clean).
 //
@@ -1243,8 +1279,7 @@ pub fn sysgen_errors(system_path string, out_dir string) []string {
 // to drift. `dbc_path` is the node's bus DBC (loom2v resolves external signals
 // against it); '' when the bus declares none. Outputs go to a temp dir, discarded.
 pub fn loom2v_errors(node_path string, dbc_path string) []string {
-	tmp := os.join_path(os.temp_dir(), 'syscheck_loom_${os.getpid()}_${os.file_name(node_path)}')
-	os.mkdir_all(tmp) or { return ['loom2v: cannot create temp dir: ${err}'] }
+	tmp := private_temp_dir('syscheck_loom') or { return ['loom2v: cannot create temp dir: ${err}'] }
 	defer {
 		os.rmdir_all(tmp) or {}
 	}

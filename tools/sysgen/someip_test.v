@@ -660,3 +660,23 @@ fn test_out_into_the_system_dir_skips_the_self_copy() {
 	// the authored contract is intact, not truncated
 	assert os.read_file(dbc) or { '' } == 'BO_ 1 X: 8 Y\n'
 }
+
+// A scratch directory must be created ATOMICALLY and privately: a predictable name can be
+// pre-staged by another process with symlinks that write_file/cp then follow out of the tree.
+fn test_a_private_temp_dir_is_unique_exclusive_and_0700() {
+	a := sysmodel.private_temp_dir('syscheck_probe') or { panic(err) }
+	b := sysmodel.private_temp_dir('syscheck_probe') or { panic(err) }
+	defer {
+		os.rmdir_all(a) or {}
+		os.rmdir_all(b) or {}
+	}
+	assert a != b, 'two calls must not collide'
+	assert os.is_dir(a) && os.is_dir(b)
+	// creating it IS the exclusivity check: mkdir(2) fails with EEXIST, so the same path
+	// cannot be handed out twice or adopted from a pre-staged directory
+	mut exclusive := false
+	os.mkdir(a, os.MkdirParams{ mode: 0o700 }) or { exclusive = true }
+	assert exclusive, 'mkdir on an existing scratch directory must fail — that is what makes creation the check'
+	perms := os.execute('stat -c %a ${a}').output.trim_space()
+	assert perms == '700', 'scratch dir must be private (700), got ${perms}'
+}
