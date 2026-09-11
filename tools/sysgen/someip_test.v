@@ -576,3 +576,47 @@ fn test_a_segment_only_member_may_not_allocate_nm() {
 	sys.nodes[0].nm = 0x11
 	assert seg_errs(sys).any(it.contains('has no NM')), seg_errs(sys).str()
 }
+
+// `tx` as a scalar reads as an EMPTY table, which lowers to `tx = { }` and the node gate then
+// applies its own default cyclic 100ms — a cadence nobody authored.
+fn test_a_tx_that_is_not_a_table_is_refused() {
+	mut sys := tel_system()
+	sys.frames[0].tx_is_table = false
+	assert seg_errs(sys).any(it.contains('`tx` must be a table')), seg_errs(sys).str()
+}
+
+// A generated ThreadX member of an NM-managed CAN bus must allocate `nm`, and being a someip
+// LEAF must not exempt it: the leaf exemption is for the GATEWAY-only rules. It was a bare
+// `continue` for one round, which skipped every CAN-side check for the node.
+fn test_a_someip_leaf_on_an_nm_bus_must_still_allocate_nm() {
+	mut sys := tel_system()
+	sys.buses << sysmodel.Bus{
+		name:            'pt'
+		kind:            'can'
+		interface:       'can0'
+		has_nm_cluster:  true
+		nm_peers_lo:     0x500
+		nm_peers_hi:     0x53f
+	}
+	sys.nodes[0].buses << 'pt'
+	sys.nodes[0].view.is_threadx = true
+	assert sys.is_someip_leaf(sys.nodes[0])
+	assert seg_errs(sys).any(it.contains('must allocate `nm`')), seg_errs(sys).str()
+}
+
+// ...and the CAN-side rules are judged against the CAN bus whatever order the buses came in.
+fn test_the_can_side_rules_find_the_can_bus_in_either_order() {
+	mut sys := tel_system()
+	sys.buses << sysmodel.Bus{
+		name:           'pt'
+		kind:           'can'
+		interface:      'can0'
+		has_nm_cluster: true
+		nm_peers_lo:    0x500
+		nm_peers_hi:    0x53f
+	}
+	// the segment FIRST, so buses[0] is the someip bus and a naive primary-bus lookup misses
+	sys.nodes[0].buses = ['tel', 'pt']
+	sys.nodes[0].view.is_threadx = true
+	assert seg_errs(sys).any(it.contains('must allocate `nm`')), seg_errs(sys).str()
+}

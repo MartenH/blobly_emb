@@ -90,10 +90,11 @@ fn main() {
 	// in the generator's words.
 	if dissolved && nerr == 0 {
 		tmp := os.join_path(os.temp_dir(), 'syscheck_lower_${os.getpid()}')
-		defer {
-			os.rmdir_all(tmp) or {}
-		}
 		gerrs := sysmodel.sysgen_errors(path, tmp)
+		// Cleaned up HERE, not in a defer: both exits below go through exit(), which does not
+		// unwind deferred blocks, so a deferred rmdir never ran and every run left a tree of
+		// generated configs and copied DBCs behind (codex on #279).
+		os.rmdir_all(tmp) or {}
 		for e in gerrs {
 			eprintln('  ERROR [REQ-TOPO-005] lowered: ${e}')
 			nerr++

@@ -145,13 +145,13 @@ fn check_dissolved_nodes(s System) []Issue {
 				msg:      'node "${n.name}": nm 0x${n.nm.hex()} exceeds 0xff — the NM node id is 0..255'
 			}
 		}
+		someip_leaf := s.is_someip_leaf(n)
 		if n.buses.len != 1 {
 			// a multi-bus node is legal as a route GATEWAY (P2) — its extra buses exist to
 			// carry routes — or as a LEAF that is a member of a someip segment as well as one
 			// CAN bus, which the lowering carries as both halves of one file (nodes/tester:
 			// an LED on compute, tcu's peer on tel; #245 step 3). Anything else would have its
 			// non-primary buses silently unwired, so still reject that.
-			someip_leaf := s.is_someip_leaf(n)
 			if n.buses.len == 0 || !(is_route_gateway(s, n.name) || someip_leaf) {
 				issues << Issue{
 					severity: .error
@@ -190,12 +190,17 @@ fn check_dissolved_nodes(s System) []Issue {
 			// gateway-local signal emission lands — the routes themselves ARE generated.
 			// (Node-LOCAL io signals are fine; only system signals need the wiring.)
 			//
-			// A someip LEAF is exempt: it is not lowered by the gateway path at all. It goes
-			// through generate_node, which emits its own signals on both halves — which is the
-			// whole point of nodes/tester having FBs on compute AND tel.
-			if someip_leaf {
-				continue
-			}
+			// A someip LEAF is exempt from the GATEWAY-ONLY rules below: it is not lowered by
+			// the gateway path at all. It goes through generate_node, which emits its own
+			// signals on both halves — the whole point of nodes/tester having FBs on compute
+			// AND tel.
+			//
+			// Exempt, NOT skipped. This was a bare `continue` for one round, which jumped to the
+			// next NODE and so bypassed every CAN-side check below as well — including the rule
+			// that a generated ThreadX member of an NM-managed bus must allocate `nm`. A leaf on
+			// such a bus would then have been lowered with no [nm] at all, transmitting into a
+			// sleeping cluster (codex on #279).
+			if !someip_leaf {
 			for sig in s.signals {
 				if sig.name in n.view.fb_reads || sig.name in n.view.fb_writes {
 					issues << Issue{
@@ -243,12 +248,17 @@ fn check_dissolved_nodes(s System) []Issue {
 					}
 				}
 			}
+			}
 		}
-		bus := s.bus_by_name(n.buses[0]) or {
+		// The bus the COMMON checks below judge. For a leaf that is its CAN bus, whatever order
+		// the buses were declared in — the NM cluster, the telemetry bridge and the comm thread
+		// are all CAN concepts, and a segment has none of them.
+		prim := if someip_leaf { can_bus_name(s, n) } else { n.buses[0] }
+		bus := s.bus_by_name(prim) or {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-001'
-				msg:      'node "${n.name}": bus "${n.buses[0]}" is not declared in system.toml'
+				msg:      'node "${n.name}": bus "${prim}" is not declared in system.toml'
 			}
 			continue
 		}
@@ -329,6 +339,19 @@ fn node_has_external(s System, n Node) bool {
 }
 
 // is_route_gateway reports whether `name` is the gateway of any declared route.
+// can_bus_name: the node's first non-someip bus, or buses[0] if it has none. A segment carries
+// no NM, no telemetry and no comm thread, so every CAN-side rule must be judged against the CAN
+// bus regardless of the order the buses were declared in.
+fn can_bus_name(s System, n Node) string {
+	for bn in n.buses {
+		bus := s.bus_by_name(bn) or { continue }
+		if bus.kind != 'someip' {
+			return bn
+		}
+	}
+	return if n.buses.len > 0 { n.buses[0] } else { '' }
+}
+
 fn is_route_gateway(s System, name string) bool {
 	for r in s.routes {
 		if r.gateway == name {
@@ -2239,6 +2262,13 @@ fn check_someip_signal_frames(s System) []Issue {
 		}
 		// Timings narrow through int() too: 4294967396 wrapped to 100 and silently became the
 		// cadence, inside the generated gate's own 1..1_000_000 ms bounds (codex on #245).
+		if fr.has_tx && !fr.tx_is_table {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": `tx` must be a table — a scalar or array reads as an EMPTY one, which lowers to `tx = { }` and the node gate then applies its default cyclic 100ms, a cadence nobody authored'
+			}
+		}
 		if fr.has_cycle_ms && !fr.cycle_ms_int {
 			issues << Issue{
 				severity: .error

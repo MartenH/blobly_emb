@@ -143,6 +143,10 @@ pub mut:
 	// "no mode" does not mean "no tx", and a supplied 0 is a value to reject downstream rather
 	// than a key to drop.
 	has_tx           bool
+	// ...and `tx` must actually be a TABLE. as_map() answers an empty map for a scalar or an
+	// array, so `tx = "cyclic"` sets has_tx with nothing in it and lowers as `tx = { }` — which
+	// the node gate reads as its DEFAULT cyclic mode at 100 ms, a cadence nobody authored.
+	tx_is_table      bool = true
 	has_cycle_ms     bool
 	has_min_delay_ms bool
 	has_e2e      bool
@@ -581,6 +585,7 @@ pub fn parse_system(path string) !System {
 			if tv := m['tx'] {
 				tm := tv.as_map()
 				fr.has_tx = true
+				fr.tx_is_table = tv is map[string]toml.Any
 				fr.tx_mode = m_str(tm, 'mode')
 				fr.cycle_ms = m_int(tm, 'cycle_ms')
 				fr.min_delay_ms = m_int(tm, 'min_delay_ms')
