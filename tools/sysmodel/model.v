@@ -92,6 +92,7 @@ pub mut:
 	port         u32
 	port_raw     i64  // pre-narrowing, so an out-of-range port is rejected not truncated
 	has_port     bool // an omitted port is diagnosed as omitted, not as a zero
+	port_int     bool = true // ...and 30490.5 truncates to a legal, different port
 	has_endpoint bool
 	// --- extracted from the node's ecu.toml (filled by load_node) ---
 	view NodeView
@@ -154,6 +155,7 @@ pub mut:
 	// is key PRESENCE, because a defaulted 0 is indistinguishable from a declared one once
 	// written out (codex on #245).
 	id_raw           i64
+	id_int           bool = true
 	cycle_ms_raw     i64
 	min_delay_ms_raw i64
 	// ...and they must be INTEGERS. .i64() drops the type AND the fraction: 300.5 becomes an
@@ -164,6 +166,8 @@ pub mut:
 	e2e_data_id_raw  i64
 	e2e_counter_raw  i64
 	e2e_crc_raw      i64
+	e2e_counter_int  bool = true
+	e2e_crc_int      bool = true
 	has_e2e_data_id bool
 	e2e_data_id_int bool // the authored value was actually an integer, not a coerced string
 	unknown_keys    []string
@@ -364,6 +368,23 @@ fn m_u32(m map[string]toml.Any, key string) u32 {
 	return u32((m[key] or { toml.Any(0) }).int())
 }
 
+// m_is_int: was this key authored as an INTEGER?
+//
+// Every narrowing helper above destroys evidence. `.int()`/`.i64()` truncate a float and coerce
+// a string, and what comes out is always a LEGAL value of the field — 300.5 becomes a valid
+// cadence, "wrong" becomes the valid identity 0, 32769.5 becomes the valid event id 0x8001. The
+// lowering then re-serialises that as an integer, so the node gate's own `!is i64` check sees
+// nothing wrong: the evidence only exists HERE. An absent key is not an error of this kind, so
+// it answers true and presence is tracked separately.
+//
+// Adding a numeric field without calling this is the recurring defect on #245: it took three
+// review rounds and nine fields, one at a time. someip_test.v'"'"'s comptime test over SysFrame is
+// the guard — a new `*_raw` field with no `*_int` sibling fails the build.
+fn m_is_int(m map[string]toml.Any, key string) bool {
+	v := m[key] or { return true }
+	return v is i64
+}
+
 fn m_bool(m map[string]toml.Any, key string) bool {
 	return (m[key] or { toml.Any(false) }).bool()
 }
@@ -441,11 +462,11 @@ pub fn parse_system(path string) !System {
 				service:     u32(m_int(m, 'service'))
 				has_service: 'service' in m
 				service_ok:  svc_raw >= 0 && svc_raw <= 0xFFFF
-				service_int: if v := m['service'] { v is i64 } else { true }
+				service_int: m_is_int(m, 'service')
 				version:     u32(m_int(m, 'version'))
 				has_version: 'version' in m
 				version_ok:  ver_raw >= 0 && ver_raw <= 0xFF
-				version_int: if v := m['version'] { v is i64 } else { true }
+				version_int: m_is_int(m, 'version')
 			}
 			// [bus.<name>.nm] — the dissolution NM cluster (peers range + timings)
 			if nmv := m['nm'] {
@@ -504,6 +525,7 @@ pub fn parse_system(path string) !System {
 				node.port = m_u32(em, 'port')
 				node.port_raw = (em['port'] or { toml.Any(0) }).i64()
 				node.has_port = 'port' in em
+				node.port_int = m_is_int(em, 'port')
 				node.has_endpoint = true
 			}
 			for b in (m['buses'] or { toml.Any([]toml.Any{}) }).array() {
@@ -528,6 +550,7 @@ pub fn parse_system(path string) !System {
 				bus:    m_str(m, 'bus')
 				id:     m_u32(m, 'id')
 				id_raw: (m['id'] or { toml.Any(0) }).i64()
+				id_int: m_is_int(m, 'id')
 				has_id: 'id' in m
 			}
 			// A typo is DISCARDED by a parser that copies only what it recognises — `e2ee`
@@ -565,12 +588,8 @@ pub fn parse_system(path string) !System {
 				fr.has_min_delay_ms = 'min_delay_ms' in tm
 				fr.cycle_ms_raw = (tm['cycle_ms'] or { toml.Any(0) }).i64()
 				fr.min_delay_ms_raw = (tm['min_delay_ms'] or { toml.Any(0) }).i64()
-				if v := tm['cycle_ms'] {
-					fr.cycle_ms_int = v is i64
-				}
-				if v := tm['min_delay_ms'] {
-					fr.min_delay_ms_int = v is i64
-				}
+				fr.cycle_ms_int = m_is_int(tm, 'cycle_ms')
+				fr.min_delay_ms_int = m_is_int(tm, 'min_delay_ms')
 			}
 			if ev := m['e2e'] {
 				em := ev.as_map()
@@ -578,11 +597,11 @@ pub fn parse_system(path string) !System {
 				fr.e2e_data_id = m_u32(em, 'data_id')
 				fr.e2e_data_id_raw = (em['data_id'] or { toml.Any(0) }).i64()
 				fr.has_e2e_data_id = 'data_id' in em
-				if dv := em['data_id'] {
-					fr.e2e_data_id_int = dv is i64
-				}
+				fr.e2e_data_id_int = m_is_int(em, 'data_id')
 				fr.e2e_counter = m_int(em, 'counter_pos')
 				fr.e2e_crc = m_int(em, 'crc_pos')
+				fr.e2e_counter_int = m_is_int(em, 'counter_pos')
+				fr.e2e_crc_int = m_is_int(em, 'crc_pos')
 				fr.e2e_counter_raw = (em['counter_pos'] or { toml.Any(0) }).i64()
 				fr.e2e_crc_raw = (em['crc_pos'] or { toml.Any(0) }).i64()
 			}

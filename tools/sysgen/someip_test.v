@@ -494,3 +494,85 @@ fn test_a_dbc_path_escaping_the_output_dir_is_refused() {
 	}
 	assert false, 'a DBC path climbing out of the output directory must be refused'
 }
+
+// THE GUARD FOR THE WHOLE CLASS. Three review rounds found the same defect in nine separate
+// numeric fields, one at a time: a narrowing conversion (.int()/.i64()) turns a float or a
+// string into a LEGAL value of that field, the lowering re-serialises it as an integer, and the
+// node gate's own type check then sees nothing wrong — the evidence exists only in the parser.
+//
+// So rather than wait for round four to name the tenth field: every `*_raw` field on SysFrame
+// keeps a pre-narrowing value, and every one of them must have an `*_int` sibling recording
+// whether the author actually wrote an integer. Adding a raw field without one fails HERE, at
+// compile time, instead of on the wire.
+fn test_every_raw_field_has_an_integer_type_flag() {
+	mut raws := []string{}
+	mut ints := []string{}
+	$for f in sysmodel.SysFrame.fields {
+		if f.name.ends_with('_raw') {
+			raws << f.name#[..-4]
+		}
+		if f.name.ends_with('_int') {
+			ints << f.name#[..-4]
+		}
+	}
+	mut missing := []string{}
+	for r in raws {
+		if r !in ints {
+			missing << r + '_raw'
+		}
+	}
+	assert missing.len == 0, 'SysFrame fields with no *_int sibling: ${missing} — a narrowed value is always a LEGAL value, so the authored type must be recorded beside it'
+	assert raws.len >= 5, 'the guard found only ${raws.len} raw fields — comptime field iteration is not doing what this test assumes'
+}
+
+// An endpoint port is narrowed too: 30490.5 truncates to a valid, DIFFERENT port.
+fn test_a_non_integer_port_is_refused() {
+	mut sys := tel_system()
+	sys.nodes[0].port_int = false
+	assert seg_errs(sys).any(it.contains('`port` must be an integer')), seg_errs(sys).str()
+}
+
+// ...and so is an event id: 32769.5 truncates to the perfectly valid 0x8001.
+fn test_a_non_integer_event_id_is_refused() {
+	mut sys := tel_system()
+	sys.frames[0].id_int = false
+	assert seg_errs(sys).any(it.contains('`id` must be an integer')), seg_errs(sys).str()
+}
+
+// ...and the trailer offsets: 1.5 truncates to the valid offset 1.
+fn test_non_integer_trailer_offsets_are_refused() {
+	mut sys := tel_system()
+	sys.frames[0].e2e_counter_int = false
+	assert seg_errs(sys).any(it.contains('counter_pos/crc_pos must be integers')), seg_errs(sys).str()
+}
+
+// A node name becomes gen-<name>.toml, so it must be an identifier — otherwise the write escapes
+// the output directory entirely.
+fn test_a_node_name_that_is_a_path_is_refused() {
+	mut sys := tel_system()
+	sys.nodes[0].name = '../../../victim'
+	assert seg_errs(sys).any(it.contains('is not an identifier')), seg_errs(sys).str()
+}
+
+// A LEAF on one CAN bus and one segment MAY allocate nm: its CAN traffic must observe
+// coordinated sleep like any other member's, and the lowering emits the [nm] against that bus.
+fn test_a_someip_leaf_may_allocate_nm_for_its_can_bus() {
+	mut sys := tel_system()
+	sys.buses << sysmodel.Bus{
+		name:      'pt'
+		kind:      'can'
+		interface: 'can0'
+	}
+	sys.nodes[0].buses << 'pt'
+	sys.nodes[0].has_nm_alloc = true
+	sys.nodes[0].nm = 0x11
+	assert seg_errs(sys).len == 0, seg_errs(sys).str()
+}
+
+// ...but a segment-ONLY member still may not: there is no SOME/IP network management.
+fn test_a_segment_only_member_may_not_allocate_nm() {
+	mut sys := tel_system()
+	sys.nodes[0].has_nm_alloc = true
+	sys.nodes[0].nm = 0x11
+	assert seg_errs(sys).any(it.contains('has no NM')), seg_errs(sys).str()
+}

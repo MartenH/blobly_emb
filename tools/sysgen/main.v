@@ -81,7 +81,16 @@ fn main() {
 		}
 		// generated files live beside system.toml, so [import] dbc resolves the
 		// same as the bus's dbc path (relative to the system dir).
-		gen_path := os.join_path(gen_dir, 'gen-${n.name}.toml')
+		gen_path := os.norm_path(os.join_path(gen_dir, 'gen-${n.name}.toml'))
+		// Belt and braces behind check_node_name_is_an_identifier: a name is a FILE NAME here,
+		// and `gen-` does not stop a traversal (`gen-..` is one component, then real `..`s
+		// follow). The model check is the real fix; this refuses to WRITE outside the tree even
+		// if some future path reaches here without it.
+		gen_root := os.norm_path(gen_dir)
+		if !gen_path.starts_with(gen_root + os.path_separator) {
+			eprintln('sysgen: node "${n.name}": resolves to ${gen_path}, outside the output directory — a node name must be an identifier')
+			exit(1)
+		}
 		os.write_file(gen_path, out) or {
 			eprintln('sysgen: write ${gen_path}: ${err}')
 			exit(1)

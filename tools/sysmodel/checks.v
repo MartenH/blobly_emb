@@ -38,6 +38,7 @@ pub:
 pub fn validate_system(s System) []Issue {
 	mut issues := []Issue{}
 	issues << check_topology_wellformed(s)
+	issues << check_node_name_is_an_identifier(s)
 	issues << check_node_configs(s)
 	issues << check_node_generatable(s)
 	issues << check_bus_membership(s)
@@ -60,6 +61,7 @@ pub fn validate_system(s System) []Issue {
 pub fn validate_system_gen(s System) []Issue {
 	mut issues := []Issue{}
 	issues << check_topology_wellformed(s)
+	issues << check_node_name_is_an_identifier(s)
 	issues << check_identity_alloc(s)
 	issues << check_dissolved_nodes(s)
 	issues << check_partial_no_wiring(s)
@@ -2141,6 +2143,13 @@ fn check_someip_signal_frames(s System) []Issue {
 			}
 			continue
 		}
+		if fr.has_id && !fr.id_int {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": `id` must be an integer — 32769.5 truncates to the perfectly valid event id 0x8001, silently changing the identity on the wire'
+			}
+		}
 		if !fr.has_id {
 			issues << Issue{
 				severity: .error
@@ -2184,6 +2193,12 @@ fn check_someip_signal_frames(s System) []Issue {
 					severity: .error
 					req:      'REQ-TOPO-003'
 					msg:      'frame "${fr.name}": e2e data_id must be an integer'
+				}
+			} else if !fr.e2e_counter_int || !fr.e2e_crc_int {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": e2e counter_pos/crc_pos must be integers — a fraction truncates to a VALID offset (1.5 -> 1), and the lowered integer is then indistinguishable from an authored one'
 				}
 			} else if fr.e2e_data_id_raw < 0 || fr.e2e_data_id_raw > 0xFFFF {
 				issues << Issue{
@@ -2502,13 +2517,31 @@ fn check_someip_segment(s System) []Issue {
 			} else {
 				addr_of[canon_addr(n.endpoint)] = n.name
 			}
-			// NM is a CAN cluster protocol; there is no someip NM, and the generated config
-			// would carry an [nm] nothing serves.
-			if n.has_nm_alloc {
+			if n.has_port && !n.port_int {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-005'
-					msg:      'node "${n.name}": is on someip bus "${b.name}" and declares `nm` — network management is a CAN cluster protocol; a someip member has no NM'
+					msg:      'node "${n.name}": endpoint `port` must be an integer — 30490.5 truncates to a valid, DIFFERENT port, and the lowered integer reads as authored'
+				}
+			}
+			// NM is a CAN cluster protocol: there is no someip NM. But a LEAF that also sits on
+			// a CAN bus needs its cluster allocation — its CAN traffic must observe coordinated
+			// sleep like any other member's, and the lowering emits the [nm] against that CAN
+			// bus. So refuse `nm` only for a member with no CAN carrier at all; otherwise the
+			// mixed-carrier topology would be impossible on an NM-managed CAN network.
+			mut can_carrier := false
+			for bn in n.buses {
+				if bb := s.bus_by_name(bn) {
+					if bb.kind != 'someip' {
+						can_carrier = true
+					}
+				}
+			}
+			if n.has_nm_alloc && !can_carrier {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": is on someip bus "${b.name}" only, and declares `nm` — network management is a CAN cluster protocol; a segment-only member has no NM'
 				}
 			}
 		}
@@ -2520,6 +2553,34 @@ fn check_someip_segment(s System) []Issue {
 // buses the CAN lowering drops it entirely, so an authored network identity — a node given the
 // wrong bus, or a SOME/IP block copied onto a CAN member — would look effective and be dead
 // (codex on #245).
+// check_node_name_is_an_identifier: a node's name becomes a FILE PATH -- sysgen writes
+// gen-<name>.toml -- so a name carrying path separators or `..` escapes the output directory
+// and overwrites whatever sits at the resolved name. That was always true of the in-tree
+// output; syscheck's scratch lowering made it easy to reach (codex on #279). Names also become
+// generated identifiers, so this is the right shape to demand anyway.
+fn check_node_name_is_an_identifier(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		mut ok := n.name.len > 0
+		for i, c in n.name {
+			is_alpha := (c >= `a` && c <= `z`) || (c >= `A` && c <= `Z`) || c == `_`
+			is_digit := c >= `0` && c <= `9`
+			if !(is_alpha || (is_digit && i > 0)) {
+				ok = false
+				break
+			}
+		}
+		if !ok {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'node name "${n.name}" is not an identifier ([A-Za-z_][A-Za-z0-9_]*) — it becomes a generated file name (gen-<name>.toml) and generated code identifiers, so a path separator or ".." would write outside the output directory'
+			}
+		}
+	}
+	return issues
+}
+
 fn check_endpoint_carrier(s System) []Issue {
 	mut issues := []Issue{}
 	for n in s.nodes {
