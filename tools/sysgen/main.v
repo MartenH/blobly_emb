@@ -86,9 +86,8 @@ fn main() {
 		// and `gen-` does not stop a traversal (`gen-..` is one component, then real `..`s
 		// follow). The model check is the real fix; this refuses to WRITE outside the tree even
 		// if some future path reaches here without it.
-		gen_root := os.norm_path(gen_dir)
-		if !gen_path.starts_with(gen_root + os.path_separator) {
-			eprintln('sysgen: node "${n.name}": resolves to ${gen_path}, outside the output directory — a node name must be an identifier')
+		if !inside(gen_dir, gen_path) {
+			eprintln('sysgen: node "${n.name}": its generated file resolves to ${os.abs_path(gen_path)}, outside the output directory — a node name must be an identifier')
 			exit(1)
 		}
 		os.write_file(gen_path, out) or {
@@ -162,14 +161,13 @@ fn copy_dbcs(sys sysmodel.System, dst string) ! {
 		if !os.exists(src) {
 			continue // a missing DBC is the model checks' error to report, not this copy's
 		}
-		target := os.norm_path(os.join_path(dst, b.dbc))
+		target := os.join_path(dst, b.dbc)
 		// A relative path may still climb: `dbc = "../shared.dbc"` joined to the scratch dir
 		// resolves OUTSIDE it, and this then mkdir -p's and copies there — overwriting whatever
 		// sits at that name, and for a system under the temp root it can land back on the source
 		// DBC itself. Refuse instead of writing: the caller asked for a self-contained tree.
-		root := os.norm_path(dst)
-		if target != root && !target.starts_with(root + os.path_separator) {
-			return error('DBC "${b.dbc}" resolves outside the output directory (${target}) — a staged tree must be self-contained; use a path inside the system dir or an absolute one')
+		if !inside(dst, target) {
+			return error('DBC "${b.dbc}" resolves outside the output directory (${os.abs_path(target)}) — a staged tree must be self-contained; use a path inside the system dir or an absolute one')
 		}
 		os.mkdir_all(os.dir(target)) or { return error('mkdir ${os.dir(target)}: ${err}') }
 		os.cp(src, target) or { return error('copy DBC ${b.dbc}: ${err}') }
@@ -524,6 +522,23 @@ fn fields_inline(fields map[string]string) string {
 }
 
 // node_bus returns the single system bus a P1 node sits on (its signals ride it).
+// inside: does `target` land within `root`?
+//
+// Both sides are made ABSOLUTE first. Normalising alone is not enough: invoked from the system
+// directory as `sysgen system.toml`, sys.dir is "." — so the root normalises to "." while the
+// target normalises to a bare "gen-node.toml", and a prefix test on "./" rejects the ordinary
+// in-directory output. `--out .` has the same shape, and a root of "/" would compare against a
+// doubled separator. Equality counts as inside so a root-relative target is not refused either.
+fn inside(root string, target string) bool {
+	r := os.norm_path(os.abs_path(root))
+	t := os.norm_path(os.abs_path(target))
+	if r == t {
+		return true
+	}
+	sep := if r.ends_with(os.path_separator) { '' } else { os.path_separator }
+	return t.starts_with(r + sep)
+}
+
 // can_bus_of: the bus whose DBC the loom2v precheck needs. For a someip LEAF that is its CAN
 // bus, not buses[0] — which may be either, and handing over the someip bus would look for a DBC
 // that a segment does not have.

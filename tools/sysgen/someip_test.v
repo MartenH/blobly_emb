@@ -620,3 +620,17 @@ fn test_the_can_side_rules_find_the_can_bus_in_either_order() {
 	sys.nodes[0].view.is_threadx = true
 	assert seg_errs(sys).any(it.contains('must allocate `nm`')), seg_errs(sys).str()
 }
+
+// The containment check must not reject the ORDINARY case. Invoked from the system directory,
+// sys.dir is "." — normalising alone leaves the root as "." and the target as a bare filename,
+// so a prefix test on "./" refuses the in-directory output that has always worked.
+fn test_a_relative_output_directory_is_inside_itself() {
+	assert inside('.', 'gen-node.toml')
+	assert inside('.', './gen-node.toml')
+	assert inside('out', 'out/gen-node.toml')
+	assert inside('out', 'out')
+	assert inside('/', '/gen-node.toml')
+	assert !inside('.', '../gen-node.toml')
+	assert !inside('out', 'gen-node.toml')
+	assert !inside('/tmp/a', '/tmp/ab/gen-node.toml')
+}
