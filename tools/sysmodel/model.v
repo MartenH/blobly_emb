@@ -14,6 +14,7 @@
 module sysmodel
 
 import os
+import rand
 import toml
 import tools.candb
 
@@ -45,6 +46,11 @@ pub mut:
 	// are impossible contracts. Recorded at parse (before the u32 cast wraps them).
 	service_ok bool = true
 	version_ok bool = true
+	// ...and they must be INTEGERS. .i64() coerces a string to 0, which is a legal service
+	// id and a legal interface version, so a type error would lower into an explicit numeric
+	// 0 that the node gate cannot tell from a declared one (codex on #245 round 6).
+	service_int bool = true
+	version_int bool = true
 	// the NM cluster on this bus (dissolution: the identity source the generator
 	// stamps into each node's [nm]). peers = the alive-id range; the timings are
 	// the shared sleep/wake config. 0/absent = the module defaults.
@@ -79,6 +85,16 @@ pub mut:
 	diag         Diag
 	trace        int
 	has_trace    bool // whether [[node]] declared `trace` (0 is a valid trace id)
+	// A someip segment has no shared wire: every member answers at its OWN address, so the
+	// endpoint is the NODE's identity, not the bus's (#245). `port` is where this node
+	// listens; each member's peer is the other member's endpoint, which is what makes the
+	// reciprocity check possible and what sysgen lowers into the node's [someip].
+	endpoint     string // "192.168.0.51" — the address this node answers at
+	port         u32
+	port_raw     i64  // pre-narrowing, so an out-of-range port is rejected not truncated
+	has_port     bool // an omitted port is diagnosed as omitted, not as a zero
+	port_int     bool = true // ...and 30490.5 truncates to a legal, different port
+	has_endpoint bool
 	// --- extracted from the node's ecu.toml (filled by load_node) ---
 	view NodeView
 }
@@ -105,6 +121,61 @@ pub mut:
 	bus      string            // the system bus name it rides
 	frame    string            // the authored DBC frame it maps to
 	cycle_ms int               // the producer's tx cadence (0 = event/default)
+	// PRESENCE, not value: on a someip bus any signal-level cadence is wrong (the event
+	// transmits), and testing `> 0` let an explicit `cycle_ms = -1` through to be discarded
+	// silently by a lowering that never emits the field (codex on #245).
+	has_cycle_ms bool
+}
+
+// SysFrame — a PDU the SYSTEM owns. On a CAN bus the layout comes from the DBC, so a signal
+// only names its frame; a someip bus has no DBC, so the event's id, its signal set, its tx mode
+// and its E2E trailer are declared here and lowered into each member (#245).
+pub struct SysFrame {
+pub mut:
+	name         string
+	bus          string
+	id           u32
+	has_id       bool
+	signals      []string
+	tx_mode      string // 'cyclic' | 'event' | '' (unset -> the producer's default)
+	cycle_ms     int
+	min_delay_ms int
+	// PRESENCE of the tx table and its keys: `tx = { cycle_ms = 300 }` is valid shorthand, so
+	// "no mode" does not mean "no tx", and a supplied 0 is a value to reject downstream rather
+	// than a key to drop.
+	has_tx           bool
+	// ...and `tx` must actually be a TABLE. as_map() answers an empty map for a scalar or an
+	// array, so `tx = "cyclic"` sets has_tx with nothing in it and lowers as `tx = { }` — which
+	// the node gate reads as its DEFAULT cyclic mode at 100 ms, a cadence nobody authored.
+	tx_is_table      bool = true
+	has_cycle_ms     bool
+	has_min_delay_ms bool
+	has_e2e      bool
+	e2e_data_id  u32
+	e2e_counter  int
+	e2e_crc      int
+	// LOWERING IS RE-SERIALIZATION: whatever this parser normalizes away is a wire contract the
+	// system declared and the target never sees. So the RAW values are kept for the range
+	// checks (u32() truncation turned an id of 0x100008001 into a legal-looking 0x8001), and so
+	// is key PRESENCE, because a defaulted 0 is indistinguishable from a declared one once
+	// written out (codex on #245).
+	id_raw           i64
+	id_int           bool = true
+	cycle_ms_raw     i64
+	min_delay_ms_raw i64
+	// ...and they must be INTEGERS. .i64() drops the type AND the fraction: 300.5 becomes an
+	// in-range 300, which someip_frame_lines then writes as an integer, so ecumodel's own
+	// `!is i64` check sees nothing wrong and the cadence silently differs from the authored one.
+	cycle_ms_int     bool = true
+	min_delay_ms_int bool = true
+	e2e_data_id_raw  i64
+	e2e_counter_raw  i64
+	e2e_crc_raw      i64
+	e2e_counter_int  bool = true
+	e2e_crc_int      bool = true
+	has_e2e_data_id bool
+	e2e_data_id_int bool // the authored value was actually an integer, not a coerced string
+	unknown_keys    []string
 }
 
 // Route — a cross-bus forward on a gateway node. Exactly one of `frame`
@@ -274,6 +345,7 @@ pub mut:
 	buses        []Bus
 	nodes        []Node
 	signals      []SysSignal // cross-node signals declared at system scope (dissolution)
+	frames       []SysFrame  // system-owned PDUs — someip events, whose layout has no DBC
 	routes       []Route
 	unknown_keys []string // top-level sections that aren't part of the schema (typos)
 	dir          string   // directory of system.toml (node/dbc paths resolve against it)
@@ -299,6 +371,38 @@ fn m_int(m map[string]toml.Any, key string) int {
 
 fn m_u32(m map[string]toml.Any, key string) u32 {
 	return u32((m[key] or { toml.Any(0) }).int())
+}
+
+// as_top_array: a top-level `[[section]]`'s entries, refusing the single-bracket form.
+//
+// `.array()` answers an EMPTY array for anything that is not one, so `[frame]` written instead
+// of `[[frame]]` silently discards the whole section — and if the rest of the system is composed,
+// syscheck then reports OK on a system whose event contract was never checked. `[signal]` would
+// drop every signal the same way. This repo has already lost a requirement to the identical trap
+// ([[requirement]] vs [[req]], silently ignored until the count was noticed), so it is refused
+// here rather than tolerated (codex on #279).
+fn as_top_array(v toml.Any, key string) ![]toml.Any {
+	if v !is []toml.Any {
+		return error('`${key}` must be written as [[${key}]] (an array of tables) — a single [${key}] table is silently ignored, so every entry in it would vanish')
+	}
+	return v.array()
+}
+
+// m_is_int: was this key authored as an INTEGER?
+//
+// Every narrowing helper above destroys evidence. `.int()`/`.i64()` truncate a float and coerce
+// a string, and what comes out is always a LEGAL value of the field — 300.5 becomes a valid
+// cadence, "wrong" becomes the valid identity 0, 32769.5 becomes the valid event id 0x8001. The
+// lowering then re-serialises that as an integer, so the node gate's own `!is i64` check sees
+// nothing wrong: the evidence only exists HERE. An absent key is not an error of this kind, so
+// it answers true and presence is tracked separately.
+//
+// Adding a numeric field without calling this is the recurring defect on #245: it took three
+// review rounds and nine fields, one at a time. someip_test.v'"'"'s comptime test over SysFrame is
+// the guard — a new `*_raw` field with no `*_int` sibling fails the build.
+fn m_is_int(m map[string]toml.Any, key string) bool {
+	v := m[key] or { return true }
+	return v is i64
 }
 
 fn m_bool(m map[string]toml.Any, key string) bool {
@@ -353,7 +457,9 @@ pub fn parse_system(path string) !System {
 	// flag unknown top-level sections (a misspelled [[nodes]] would otherwise
 	// parse to zero nodes and pass silently). `signal` is the dissolution's
 	// system-scope signal section (forward-compatible with the composed model).
-	allowed := ['bus', 'node', 'route', 'signal']
+	// 'frame' is the system-owned PDU section: a someip event's id, signal set, tx mode and
+	// E2E trailer, which have no DBC to come from (#245).
+	allowed := ['bus', 'node', 'route', 'signal', 'frame']
 	for key, _ in doc.to_any().as_map() {
 		if key !in allowed {
 			sys.unknown_keys << key
@@ -376,9 +482,11 @@ pub fn parse_system(path string) !System {
 				service:     u32(m_int(m, 'service'))
 				has_service: 'service' in m
 				service_ok:  svc_raw >= 0 && svc_raw <= 0xFFFF
+				service_int: m_is_int(m, 'service')
 				version:     u32(m_int(m, 'version'))
 				has_version: 'version' in m
 				version_ok:  ver_raw >= 0 && ver_raw <= 0xFF
+				version_int: m_is_int(m, 'version')
 			}
 			// [bus.<name>.nm] — the dissolution NM cluster (peers range + timings)
 			if nmv := m['nm'] {
@@ -399,14 +507,15 @@ pub fn parse_system(path string) !System {
 	}
 	// [[signal]] — cross-node signals declared once at system scope (dissolution)
 	if sv := doc.value_opt('signal') {
-		for sg in sv.array() {
+		for sg in as_top_array(sv, 'signal')! {
 			m := sg.as_map()
 			mut sig := SysSignal{
 				name:     m_str(m, 'name')
 				producer: m_str(m, 'producer')
 				bus:      m_str(m, 'bus')
 				frame:    m_str(m, 'frame')
-				cycle_ms: m_int(m, 'cycle_ms')
+				cycle_ms:     m_int(m, 'cycle_ms')
+				has_cycle_ms: 'cycle_ms' in m
 			}
 			if fm := m['fields'] {
 				for fname, ftype in fm.as_map() {
@@ -418,7 +527,7 @@ pub fn parse_system(path string) !System {
 	}
 	// [[node]]
 	if nv := doc.value_opt('node') {
-		for n in nv.array() {
+		for n in as_top_array(nv, 'node')! {
 			m := n.as_map()
 			nm_raw := (m['nm'] or { toml.Any(0) }).int() // signed, to range-check
 			mut node := Node{
@@ -429,6 +538,15 @@ pub fn parse_system(path string) !System {
 				has_trace:    'trace' in m
 				nm_alloc_ok:  nm_raw >= 0 && nm_raw <= 255
 				trace:        m_int(m, 'trace')
+			}
+			if ev := m['endpoint'] {
+				em := ev.as_map()
+				node.endpoint = m_str(em, 'address')
+				node.port = m_u32(em, 'port')
+				node.port_raw = (em['port'] or { toml.Any(0) }).i64()
+				node.has_port = 'port' in em
+				node.port_int = m_is_int(em, 'port')
+				node.has_endpoint = true
 			}
 			for b in (m['buses'] or { toml.Any([]toml.Any{}) }).array() {
 				node.buses << b.string()
@@ -444,8 +562,75 @@ pub fn parse_system(path string) !System {
 		}
 	}
 	// [[route]]
+	if fv := doc.value_opt('frame') {
+		for f in as_top_array(fv, 'frame')! {
+			m := f.as_map()
+			mut fr := SysFrame{
+				name:   m_str(m, 'name')
+				bus:    m_str(m, 'bus')
+				id:     m_u32(m, 'id')
+				id_raw: (m['id'] or { toml.Any(0) }).i64()
+				id_int: m_is_int(m, 'id')
+				has_id: 'id' in m
+			}
+			// A typo is DISCARDED by a parser that copies only what it recognises — `e2ee`
+			// would silently mean "no E2E", and the generated file no longer carries the
+			// misspelling for ecucheck to reject. Record them instead.
+			for k, _ in m {
+				if k !in ['name', 'bus', 'id', 'signals', 'tx', 'e2e'] {
+					fr.unknown_keys << k
+				}
+			}
+			if tv := m['tx'] {
+				for k, _ in tv.as_map() {
+					if k !in ['mode', 'cycle_ms', 'min_delay_ms'] {
+						fr.unknown_keys << 'tx.${k}'
+					}
+				}
+			}
+			if ev := m['e2e'] {
+				for k, _ in ev.as_map() {
+					if k !in ['data_id', 'counter_pos', 'crc_pos'] {
+						fr.unknown_keys << 'e2e.${k}'
+					}
+				}
+			}
+			for sg in (m['signals'] or { toml.Any([]toml.Any{}) }).array() {
+				fr.signals << sg.string()
+			}
+			if tv := m['tx'] {
+				tm := tv.as_map()
+				fr.has_tx = true
+				fr.tx_is_table = tv is map[string]toml.Any
+				fr.tx_mode = m_str(tm, 'mode')
+				fr.cycle_ms = m_int(tm, 'cycle_ms')
+				fr.min_delay_ms = m_int(tm, 'min_delay_ms')
+				fr.has_cycle_ms = 'cycle_ms' in tm
+				fr.has_min_delay_ms = 'min_delay_ms' in tm
+				fr.cycle_ms_raw = (tm['cycle_ms'] or { toml.Any(0) }).i64()
+				fr.min_delay_ms_raw = (tm['min_delay_ms'] or { toml.Any(0) }).i64()
+				fr.cycle_ms_int = m_is_int(tm, 'cycle_ms')
+				fr.min_delay_ms_int = m_is_int(tm, 'min_delay_ms')
+			}
+			if ev := m['e2e'] {
+				em := ev.as_map()
+				fr.has_e2e = true
+				fr.e2e_data_id = m_u32(em, 'data_id')
+				fr.e2e_data_id_raw = (em['data_id'] or { toml.Any(0) }).i64()
+				fr.has_e2e_data_id = 'data_id' in em
+				fr.e2e_data_id_int = m_is_int(em, 'data_id')
+				fr.e2e_counter = m_int(em, 'counter_pos')
+				fr.e2e_crc = m_int(em, 'crc_pos')
+				fr.e2e_counter_int = m_is_int(em, 'counter_pos')
+				fr.e2e_crc_int = m_is_int(em, 'crc_pos')
+				fr.e2e_counter_raw = (em['counter_pos'] or { toml.Any(0) }).i64()
+				fr.e2e_crc_raw = (em['crc_pos'] or { toml.Any(0) }).i64()
+			}
+			sys.frames << fr
+		}
+	}
 	if rv := doc.value_opt('route') {
-		for r in rv.array() {
+		for r in as_top_array(rv, 'route')! {
 			m := r.as_map()
 			sys.routes << Route{
 				gateway: m_str(m, 'gateway')
@@ -955,6 +1140,50 @@ fn run_capture(exe string, args []string) (string, int) {
 // keeps this the EXACT validation loom2v builds behind — no re-implementation to
 // drift. ecucheck prints "<file>: <msg>" per error and a "ecucheck: N …"
 // summary, then exits non-zero; we keep the messages, drop the summary/prefix.
+// v_compiler_noise reports whether a captured line is the V COMPILER talking about our own
+// source, not the tool talking about the config. `v run` compiles first, and a notice or
+// warning in any transitively-compiled file lands on the same stream as the tool's output --
+// so an unrelated `notice: shifting a value from a signed type` in ecumodel.v was being
+// reported as a config error, four lines of source echo and carets with it. Harmless while
+// only sysgen surfaced them; syscheck now reports the same lines as system errors (#277).
+fn v_compiler_noise(t string) bool {
+	if t.contains('.v:') && (t.contains(': notice:') || t.contains(': warning:')
+		|| t.contains(': error:')) {
+		return true
+	}
+	// the source echo the compiler prints under a diagnostic: "1468 |         code"
+	if t.len > 0 && t[0].is_digit() && t.contains(' | ') {
+		return true
+	}
+	// ...and the caret/tilde underline beneath it
+	if t.starts_with('|') || t.starts_with('~') || t.starts_with('^') {
+		return true
+	}
+	return false
+}
+
+// is_someip_leaf reports whether a node is a member of a someip segment AND sits on exactly one
+// CAN bus, routing nothing between them — nodes/tester: an LED on compute, tcu's peer on tel.
+//
+// It exists because that shape has to be recognised in FOUR places and they must agree: two
+// dissolution checks (a multi-bus node must otherwise be a route gateway, and a gateway may not
+// carry its own signals), the lowering that emits both halves, and the loom2v precheck that
+// would otherwise skip the node as a "gateway". The first version of this change spelled the
+// rule out at each site; tester then lowered as a gateway and silently lost its loom2v gate.
+pub fn (s System) is_someip_leaf(n Node) bool {
+	mut someip := 0
+	mut can := 0
+	for bn in n.buses {
+		bus := s.bus_by_name(bn) or { return false }
+		if bus.kind == 'someip' {
+			someip++
+		} else {
+			can++
+		}
+	}
+	return someip == 1 && can == 1 && !is_route_gateway(s, n.name)
+}
+
 pub fn ecucheck_errors(node_path string) []string {
 	output, code := run_capture(@VEXE, ['run', '${@VMODROOT}/tools/ecucheck/gen.v', node_path])
 	if code == 0 {
@@ -967,6 +1196,9 @@ pub fn ecucheck_errors(node_path string) []string {
 		if t == '' || t.starts_with('ecucheck:') {
 			continue // the count summary, not an error
 		}
+		if v_compiler_noise(t) {
+			continue
+		}
 		// strip the leading "<fname>: " ecucheck prepends
 		out << t.trim_string_left('${fname}: ')
 	}
@@ -974,6 +1206,65 @@ pub fn ecucheck_errors(node_path string) []string {
 		// ecucheck failed for a reason it didn't print as a schema error (a
 		// build/parse failure) — surface something rather than swallow it.
 		out << 'ecucheck failed (exit ${code})'
+	}
+	return out
+}
+
+// private_temp_dir creates a scratch directory that nobody else can have pre-staged.
+//
+// A name derived from the PID is PREDICTABLE, so on a shared temp directory another process can
+// create it first and fill it with symlinks -- `gen-<node>.toml`, or a staged DBC path. sysgen
+// then accepts the existing directory, every lexical containment check still passes because the
+// paths themselves are fine, and write_file/cp FOLLOW the symlinks: anything writable by this
+// user gets overwritten outside the scratch tree (codex on #279).
+//
+// os.mkdir wraps mkdir(2), which fails with EEXIST -- so creating the directory IS the check.
+// 0o700 keeps it private afterwards, and an unpredictable name means there is nothing to
+// pre-create. Used for every scratch tree here, not only the one that was reported.
+pub fn private_temp_dir(prefix string) !string {
+	for _ in 0 .. 16 {
+		cand := os.join_path(os.temp_dir(), '${prefix}_${rand.u64().hex()}${rand.u32().hex()}')
+		os.mkdir(cand, os.MkdirParams{ mode: 0o700 }) or { continue }
+		return cand
+	}
+	return error('could not create a private scratch directory under ${os.temp_dir()}')
+}
+
+// sysgen_errors LOWERS the system with the real tools/sysgen into a scratch directory and
+// returns what the node gate says about the result (empty = clean).
+//
+// This is the same trick loom2v_errors plays one level down, and for the same reason. The
+// dissolved model is only half a contract: system.toml declares wiring that becomes a node
+// config, and every rule about that config is owned by ecucheck and loom2v -- the derived
+// SOME/IP payload's size and alignment, the E2E trailer's exact offsets, the tx-mode enum,
+// the byte-IOC channel ceiling, a bindable interface address. Restating any of them here
+// produces a SECOND, partial copy that drifts (blobly_emb#276 rounds 4-6 were a dozen
+// findings of exactly that shape, each one "syscheck says OK, the node build refuses").
+// Lowering for real means there is one gate, not two that agree until they do not.
+//
+// `out_dir` is a scratch directory: sysgen --out writes the generated configs and copies each
+// referenced DBC there, so nothing touches the source tree.
+pub fn sysgen_errors(system_path string, out_dir string) []string {
+	output, code := run_capture(@VEXE, ['-enable-globals', 'run', '${@VMODROOT}/tools/sysgen',
+		system_path, '--out', out_dir])
+	if code == 0 {
+		return []string{}
+	}
+	mut out := []string{}
+	for line in output.split_into_lines() {
+		t := line.trim_space()
+		if t == '' || !t.starts_with('sysgen:') {
+			continue
+		}
+		body := t.all_after('sysgen:').trim_space()
+		// the per-node "-> path (ok)" progress lines are not errors
+		if body.contains(' -> ') || body.starts_with('refusing to generate') {
+			continue
+		}
+		out << body
+	}
+	if out.len == 0 {
+		out << 'lowering failed (exit ${code})'
 	}
 	return out
 }
@@ -988,8 +1279,7 @@ pub fn ecucheck_errors(node_path string) []string {
 // to drift. `dbc_path` is the node's bus DBC (loom2v resolves external signals
 // against it); '' when the bus declares none. Outputs go to a temp dir, discarded.
 pub fn loom2v_errors(node_path string, dbc_path string) []string {
-	tmp := os.join_path(os.temp_dir(), 'syscheck_loom_${os.getpid()}_${os.file_name(node_path)}')
-	os.mkdir_all(tmp) or { return ['loom2v: cannot create temp dir: ${err}'] }
+	tmp := private_temp_dir('syscheck_loom') or { return ['loom2v: cannot create temp dir: ${err}'] }
 	defer {
 		os.rmdir_all(tmp) or {}
 	}

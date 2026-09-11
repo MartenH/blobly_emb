@@ -19,10 +19,24 @@ import tools.candb
 
 fn main() {
 	if os.args.len < 2 {
-		eprintln('usage: sysgen <system.toml>')
+		eprintln('usage: sysgen <system.toml> [--out <dir>]')
 		exit(2)
 	}
 	path := os.args[1]
+	// --out lowers into a SCRATCH directory instead of beside system.toml, so a caller can
+	// gate the lowered configs without writing into the source tree (syscheck does exactly
+	// that -- see sysmodel.sysgen_errors). The generated [import] dbc path stays relative to
+	// the system dir, so every referenced DBC is copied across and resolves unchanged.
+	mut out_dir := ''
+	for i := 2; i < os.args.len; i++ {
+		if os.args[i] == '--out' && i + 1 < os.args.len {
+			out_dir = os.args[i + 1]
+			i++
+		} else {
+			eprintln('sysgen: unknown argument "${os.args[i]}"')
+			exit(2)
+		}
+	}
 	mut sys := sysmodel.parse_system(path) or {
 		eprintln('sysgen: ${err}')
 		exit(2)
@@ -47,6 +61,19 @@ fn main() {
 		exit(1)
 	}
 
+	mut gen_dir := sys.dir
+	if out_dir != '' {
+		gen_dir = out_dir
+		os.mkdir_all(gen_dir) or {
+			eprintln('sysgen: mkdir ${gen_dir}: ${err}')
+			exit(1)
+		}
+		copy_dbcs(sys, gen_dir) or {
+			eprintln('sysgen: ${err}')
+			exit(1)
+		}
+	}
+
 	for n in sys.nodes {
 		out := generate_node(sys, n) or {
 			eprintln('sysgen: node "${n.name}": ${err}')
@@ -54,7 +81,15 @@ fn main() {
 		}
 		// generated files live beside system.toml, so [import] dbc resolves the
 		// same as the bus's dbc path (relative to the system dir).
-		gen_path := os.join_path(sys.dir, 'gen-${n.name}.toml')
+		gen_path := os.norm_path(os.join_path(gen_dir, 'gen-${n.name}.toml'))
+		// Belt and braces behind check_node_name_is_an_identifier: a name is a FILE NAME here,
+		// and `gen-` does not stop a traversal (`gen-..` is one component, then real `..`s
+		// follow). The model check is the real fix; this refuses to WRITE outside the tree even
+		// if some future path reaches here without it.
+		if !inside(gen_dir, gen_path) {
+			eprintln('sysgen: node "${n.name}": its generated file resolves to ${os.abs_path(gen_path)}, outside the output directory — a node name must be an identifier')
+			exit(1)
+		}
 		os.write_file(gen_path, out) or {
 			eprintln('sysgen: write ${gen_path}: ${err}')
 			exit(1)
@@ -78,11 +113,17 @@ fn main() {
 		// HOST / bare-metal node on a secondary bus is STILL gated — loom2v's
 		// non-threadx checks (e.g. bare-metal external signals) must not be masked, and
 		// the host emitter already handles multiple buses (docs/multi-node.md, P2c).
-		bus := node_bus(sys, n) or {
+		bus := can_bus_of(sys, n) or {
 			eprintln('sysgen: node "${n.name}": ${err}')
 			exit(1)
 		}
-		if n.buses.len > 1 || (n.view.is_threadx && bus.interface != 'can0') {
+		// A someip node is NOT one of those cases: it has no DBC at all, so the single-dbc
+		// precheck has nothing to trip over and every reason to run — skipping it printed "ok"
+		// for target-invalid configs (a ThreadX priority out of range, say) that only the node
+		// build would have caught (codex on #245).
+		leaf := sys.is_someip_leaf(n)
+		if (n.buses.len > 1 && !leaf) || (n.view.is_threadx && bus.kind != 'someip'
+			&& bus.interface != 'can0') {
 			// The gateway (multi-bus) and a non-can0 leaf need DBC handling the single-dbc
 			// loom2v_errors() precheck can't do (the gateway builds a merged DBC), so skip the
 			// inline precheck — the node's own Makefile runs loom2v + the cross-build. Both are
@@ -92,7 +133,7 @@ fn main() {
 			println('sysgen: ${n.name} -> ${gen_path} (ok, ${tag}; validated by the node build)')
 			continue
 		}
-		dbc_path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(sys.dir, bus.dbc) }
+		dbc_path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(gen_dir, bus.dbc) }
 		lerrs := sysmodel.loom2v_errors(gen_path, dbc_path)
 		if lerrs.len > 0 {
 			for e in lerrs {
@@ -103,6 +144,44 @@ fn main() {
 		println('sysgen: ${n.name} -> ${gen_path} (ok)')
 	}
 	println('sysgen: ${sys.nodes.len} node(s) generated + gated')
+}
+
+// copy_dbcs mirrors every relative DBC a bus names into `dst`, keeping its sub-path. The
+// lowered config writes `dbc = "<the authored relative path>"`, so a generated file only
+// resolves it if the DBC sits at the same offset from the generated file as it does from
+// system.toml. Absolute paths already resolve from anywhere and are left alone.
+fn copy_dbcs(sys sysmodel.System, dst string) ! {
+	mut done := map[string]bool{}
+	for b in sys.buses {
+		if b.dbc == '' || os.is_abs_path(b.dbc) || b.dbc in done {
+			continue
+		}
+		done[b.dbc] = true
+		src := os.join_path(sys.dir, b.dbc)
+		if !os.exists(src) {
+			continue // a missing DBC is the model checks' error to report, not this copy's
+		}
+		target := os.join_path(dst, b.dbc)
+		// A relative path may still climb: `dbc = "../shared.dbc"` joined to the scratch dir
+		// resolves OUTSIDE it, and this then mkdir -p's and copies there — overwriting whatever
+		// sits at that name, and for a system under the temp root it can land back on the source
+		// DBC itself. Refuse instead of writing: the caller asked for a self-contained tree.
+		// Containment FIRST. The self-copy skip below must not run before this: an escaping
+		// path whose target happens to BE its own source (--out into a subdirectory of the
+		// system dir, with `dbc = "../x.dbc"`) would then be waved through, defeating the check
+		// even though the staged tree is not self-contained.
+		if !inside(dst, target) {
+			return error('DBC "${b.dbc}" resolves outside the output directory (${os.abs_path(target)}) — a staged tree must be self-contained; use a path inside the system dir or an absolute one')
+		}
+		if os.norm_path(os.abs_path(src)) == os.norm_path(os.abs_path(target)) {
+			// --out IS the system dir: the DBC is already where it needs to be, and copying a
+			// file onto itself either fails its same-file check or truncates the authored
+			// contract. Reached only after containment passed, so the tree is still valid.
+			continue
+		}
+		os.mkdir_all(os.dir(target)) or { return error('mkdir ${os.dir(target)}: ${err}') }
+		os.cp(src, target) or { return error('copy DBC ${b.dbc}: ${err}') }
+	}
 }
 
 // generate_node emits the complete ecu.toml text for one node: the derived
@@ -119,14 +198,31 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 	// in a thread that lives in a partition) — the [[signal]] from/to endpoint.
 	sig_part := signal_partitions(doc)
 
-	// a GATEWAY (multi-bus) node lowers differently: one [bus.*] per bus (each
-	// with its own DBC) + the resolved [[route]]s (P2, docs/multi-node.md).
-	if node.buses.len > 1 {
+	// A multi-bus node is a ROUTER — its [[route]]s are the whole point — UNLESS it is a plain
+	// LEAF that happens to sit on a CAN bus and a someip segment at once. nodes/tester is
+	// exactly that: it breathes an LED on compute and answers tcu's telemetry on tel, routing
+	// nothing between them. The router lowering emits every bus in the CAN/DBC shape and no
+	// [someip] at all, so a leaf like that needs both halves in one file instead (#245 step 3).
+	someip_leaf := sys.is_someip_leaf(node)
+	mut someip_bus := sysmodel.Bus{}
+	mut can_buses := []sysmodel.Bus{}
+	for bn in node.buses {
+		bb := sys.bus_by_name(bn) or { return error('bus "${bn}" not declared') }
+		if bb.kind == 'someip' {
+			someip_bus = bb
+		} else {
+			can_buses << bb
+		}
+	}
+	if node.buses.len > 1 && !someip_leaf {
 		return generate_gateway_node(sys, node, authored)
 	}
 
-	// the node sits on one bus in P1 — the bus carrying its signals.
-	bus := node_bus(sys, node) or { return err }
+	// the bus carrying this node's CAN signals (for a someip leaf, its one CAN bus).
+	bus := if someip_leaf { can_buses[0] } else { node_bus(sys, node) or { return err } }
+	if bus.kind == 'someip' {
+		return generate_someip_node(sys, node, bus, view, sig_part, authored)
+	}
 
 	mut b := []string{}
 	b << '# GENERATED by tools/sysgen from system.toml — DO NOT EDIT.'
@@ -181,6 +277,9 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		if sig.producer != node.name {
 			continue
 		}
+		if someip_leaf && sig.bus == someip_bus.name {
+			continue // the segment's own traffic — someip_sections below emits it
+		}
 		part := sig_part[sig.name] or { return error('signal "${sig.name}" is produced here but no FB writes it') }
 		b << '[[signal]]'
 		b << 'name   = "${sig.name}"'
@@ -212,6 +311,13 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		if sig.producer == node.name {
 			continue // locally produced (or self-loop) — not a bus rx
 		}
+		if someip_leaf && sig.bus == someip_bus.name {
+			continue // the segment's own traffic — someip_sections below emits it
+		}
+		// NOTE: no filter on sig.bus otherwise. A CONSUMER receives on ITS OWN bus, which for a
+		// ROUTED signal is not the bus it was declared on — SteeringAngle originates on edge and
+		// reaches domain on compute through sysnode. Filtering rx by origin dropped exactly
+		// those three cross-bus reads (caught by diffing the regenerated tree).
 		part := sig_part[name] or { continue }
 		b << '[[signal]]'
 		b << 'name   = "${sig.name}"'
@@ -219,6 +325,11 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		b << 'from   = "${iface}"'
 		b << 'to     = "${part}"'
 		b << ''
+	}
+
+	// the someip half of a leaf that is also a segment member (tester: compute + tel).
+	if someip_leaf {
+		b << someip_sections(sys, node, someip_bus, view, sig_part)!
 	}
 
 	// the authored internals, verbatim and LAST.
@@ -421,6 +532,38 @@ fn fields_inline(fields map[string]string) string {
 }
 
 // node_bus returns the single system bus a P1 node sits on (its signals ride it).
+// inside: does `target` land within `root`?
+//
+// Both sides are made ABSOLUTE first. Normalising alone is not enough: invoked from the system
+// directory as `sysgen system.toml`, sys.dir is "." — so the root normalises to "." while the
+// target normalises to a bare "gen-node.toml", and a prefix test on "./" rejects the ordinary
+// in-directory output. `--out .` has the same shape, and a root of "/" would compare against a
+// doubled separator. Equality counts as inside so a root-relative target is not refused either.
+fn inside(root string, target string) bool {
+	r := os.norm_path(os.abs_path(root))
+	t := os.norm_path(os.abs_path(target))
+	if r == t {
+		return true
+	}
+	sep := if r.ends_with(os.path_separator) { '' } else { os.path_separator }
+	return t.starts_with(r + sep)
+}
+
+// can_bus_of: the bus whose DBC the loom2v precheck needs. For a someip LEAF that is its CAN
+// bus, not buses[0] — which may be either, and handing over the someip bus would look for a DBC
+// that a segment does not have.
+fn can_bus_of(sys sysmodel.System, node sysmodel.Node) !sysmodel.Bus {
+	if sys.is_someip_leaf(node) {
+		for bn in node.buses {
+			bus := sys.bus_by_name(bn) or { continue }
+			if bus.kind != 'someip' {
+				return bus
+			}
+		}
+	}
+	return node_bus(sys, node)
+}
+
 fn node_bus(sys sysmodel.System, node sysmodel.Node) !sysmodel.Bus {
 	if node.buses.len == 0 {
 		return error('node is on no bus')
@@ -428,3 +571,159 @@ fn node_bus(sys sysmodel.System, node sysmodel.Node) !sysmodel.Bus {
 	return sys.bus_by_name(node.buses[0]) or { error('bus "${node.buses[0]}" not declared') }
 }
 
+
+// generate_someip_node lowers an ETH member: its endpoint and the service contract it is held
+// to, then the events the system declared for it. The CAN path's shape, with the DBC's job done
+// by system [[frame]]s — a someip bus has no DBC, so the event id, signal set, tx mode and E2E
+// trailer are the system's to own (#245).
+//
+// The local bus is named `eth0` by the same convention the CAN path names its bus `can0`: the
+// node's authored internals ([shell], [telemetry]) refer to it by that name, and the address
+// itself rides `interface`, which is what an eth bus's interface IS.
+fn generate_someip_node(sys sysmodel.System, node sysmodel.Node, bus sysmodel.Bus, view sysmodel.NodeView, sig_part map[string]string, authored string) !string {
+	mut b := []string{}
+	b << '# GENERATED by tools/sysgen from system.toml — DO NOT EDIT.'
+	b << '# Node "${node.name}": authored internals + system-owned wiring/identity.'
+	b << ''
+	b << someip_sections(sys, node, bus, view, sig_part)!
+	b << '# --- authored internals (${os.file_name(node.ecu)}) ---'
+	b << authored.trim_space()
+	b << ''
+	return b.join('\n')
+}
+
+// someip_sections: the SOME/IP half of a node's wiring — its eth bus, the service contract and
+// the events it produces or consumes. Split out of generate_someip_node because a node can be a
+// member of a someip segment AND sit on a CAN bus: nodes/tester breathes an LED on compute and
+// answers tcu's telemetry on tel, so one generated file carries both halves (#245 step 3, leaf).
+fn someip_sections(sys sysmodel.System, node sysmodel.Node, bus sysmodel.Bus, view sysmodel.NodeView, sig_part map[string]string) ![]string {
+	iface := 'eth0'
+	mut b := []string{}
+	b << '[bus.${iface}]'
+	b << 'kind      = "eth"'
+	b << 'interface = "${node.endpoint}"'
+	b << 'core      = 0'
+	b << ''
+	// The service contract comes from the BUS (every member is held to one service+version);
+	// the port is this node's own, and the peer is the other member's endpoint — which is why
+	// a segment's reciprocity is checkable at all (check_someip_bus).
+	b << '[someip]'
+	b << 'bus     = "${iface}"'
+	b << 'service = 0x${bus.service.hex()}'
+	b << 'version = ${bus.version}'
+	b << 'port    = ${node.port}'
+	if peer := someip_peer_of(sys, node, bus) {
+		b << 'peer    = "${peer}"'
+	}
+	b << ''
+	// produced signals, then the events carrying them; consumed signals follow, so the file
+	// reads the way the CAN path's does (tx first, then rx).
+	mut emitted := map[string]bool{}
+	for sig in sys.signals {
+		if sig.bus != bus.name || sig.producer != node.name {
+			continue
+		}
+		part := sig_part[sig.name] or { return error('signal "${sig.name}" is produced here but no FB writes it') }
+		b << '[[signal]]'
+		b << 'name   = "${sig.name}"'
+		b << 'fields = ${fields_inline(sig.fields)}'
+		b << 'from   = "${part}"'
+		b << 'to     = "${iface}"'
+		b << ''
+		for fr in sys.frames {
+			if fr.bus != bus.name || sig.name !in fr.signals || fr.name in emitted {
+				continue
+			}
+			emitted[fr.name] = true
+			b << someip_frame_lines(fr, iface, true)
+		}
+	}
+	// RX: an event is received WHOLE. Its payload layout is the offsets of all its signals, so
+	// a node that reads one signal of a two-signal event still declares both — declaring only
+	// the read one would either shift the offsets or leave loom2v with a frame naming a signal
+	// the config never declared (self-review on #245). The unread cell simply goes unused.
+	mut rx_seen := map[string]bool{}
+	for name in view.fb_reads {
+		sig := sys.signal_by_name(name) or { continue }
+		if sig.bus != bus.name || sig.producer == node.name {
+			continue
+		}
+		for fr in sys.frames {
+			if fr.bus != bus.name || name !in fr.signals || fr.name in emitted {
+				continue
+			}
+			emitted[fr.name] = true
+			for sg in fr.signals {
+				if sg in rx_seen {
+					continue
+				}
+				rx_seen[sg] = true
+				s2 := sys.signal_by_name(sg) or { continue }
+				part := sig_part[sg] or { 'app' }
+				b << '[[signal]]'
+				b << 'name   = "${s2.name}"'
+				b << 'fields = ${fields_inline(s2.fields)}'
+				b << 'from   = "${iface}"'
+				b << 'to     = "${part}"'
+				b << ''
+			}
+			// RX side: no `tx`. The mode belongs to the PRODUCER — declared on a receiving
+			// node it would never publish, and loom2v refuses it for exactly that reason.
+			b << someip_frame_lines(fr, iface, false)
+		}
+	}
+	return b
+}
+
+// someip_frame_lines: one service event, as loom2v reads it. Every nested table here is written
+// INLINE on one line ({ ... }), so the vlang/v#27684 dropped-key trap — a comment inside a
+// nested table — cannot arise, and no trailing-comment guard is needed.
+fn someip_frame_lines(fr sysmodel.SysFrame, iface string, tx bool) []string {
+	mut b := []string{}
+	b << '[[frame]]'
+	b << 'name    = "${fr.name}"'
+	b << 'bus     = "${iface}"'
+	b << 'id      = 0x${fr.id.hex().to_upper()}'
+	mut q := []string{}
+	for sg in fr.signals {
+		q << '"${sg}"'
+	}
+	b << 'signals = [${q.join(', ')}]'
+	// PRESENCE, not a non-empty mode: `tx = { cycle_ms = 300 }` is valid shorthand, and gating
+	// on the mode string dropped the whole table — the node then ran on loom2v's 100 ms default
+	// instead of the declared 300, silently (codex on #245). Every supplied key is carried
+	// through, so an invalid one is rejected downstream rather than defaulted away.
+	if tx && fr.has_tx {
+		mut parts := []string{}
+		if fr.tx_mode != '' {
+			parts << 'mode = "${fr.tx_mode}"'
+		}
+		if fr.has_cycle_ms {
+			parts << 'cycle_ms = ${fr.cycle_ms}'
+		}
+		if fr.has_min_delay_ms {
+			parts << 'min_delay_ms = ${fr.min_delay_ms}'
+		}
+		b << 'tx      = { ${parts.join(', ')} }'
+	}
+	if fr.has_e2e {
+		b << 'e2e     = { data_id = 0x${fr.e2e_data_id.hex().to_upper()}, counter_pos = ${fr.e2e_counter}, crc_pos = ${fr.e2e_crc} }'
+	}
+	b << ''
+	return b
+}
+
+// someip_peer_of: the OTHER member's endpoint. check_someip_segment has already established
+// that a lowered segment has EXACTLY two members with distinct endpoints — the generated bridge
+// sends to one static peer, with no service discovery to find a second — so this resolves for
+// every config that reaches generation, and a lone member is refused with that reason rather
+// than generating an image loom2v would reject for a missing `peer`.
+fn someip_peer_of(sys sysmodel.System, node sysmodel.Node, bus sysmodel.Bus) ?string {
+	for n in sys.nodes {
+		if n.name == node.name || bus.name !in n.buses || !n.has_endpoint {
+			continue
+		}
+		return '${n.endpoint}:${n.port}'
+	}
+	return none
+}

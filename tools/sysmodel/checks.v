@@ -38,6 +38,7 @@ pub:
 pub fn validate_system(s System) []Issue {
 	mut issues := []Issue{}
 	issues << check_topology_wellformed(s)
+	issues << check_node_name_is_an_identifier(s)
 	issues << check_node_configs(s)
 	issues << check_node_generatable(s)
 	issues << check_bus_membership(s)
@@ -60,11 +61,18 @@ pub fn validate_system(s System) []Issue {
 pub fn validate_system_gen(s System) []Issue {
 	mut issues := []Issue{}
 	issues << check_topology_wellformed(s)
+	issues << check_node_name_is_an_identifier(s)
 	issues << check_identity_alloc(s)
 	issues << check_dissolved_nodes(s)
 	issues << check_partial_no_wiring(s)
 	issues << check_routes(s, true)
 	issues << check_signals_dissolved(s)
+	// The someip SEGMENT rules. check_someip_bus / check_someip_membership belong to the
+	// composed model and are not reached from here, which was harmless while any someip signal
+	// was refused outright — lowering them (#245) makes the segment's shape load-bearing, so
+	// the dissolution path states its own rules rather than inheriting nothing.
+	issues << check_someip_segment(s)
+	issues << check_endpoint_carrier(s)
 	issues << check_dbc_conformance(s)
 	issues << check_route_dbc(s)
 	issues << check_telemetry_frames(s)
@@ -94,6 +102,12 @@ fn check_partial_no_wiring(s System) []Issue {
 		}
 		if n.view.has_nm {
 			authored << 'a [nm]'
+		}
+		// The lowering emits its own [someip], and the authored file is appended VERBATIM
+		// after it — two tables of the same name, which sysgen only discovers after syscheck
+		// has called the system valid. This is the migration path #245 itself creates.
+		if n.view.has_someip {
+			authored << 'a [someip]'
 		}
 		// a [[route]] in a partial is copied verbatim but never enters System.routes,
 		// so check_routes never verifies its gateway/buses — an unchecked forward.
@@ -131,11 +145,14 @@ fn check_dissolved_nodes(s System) []Issue {
 				msg:      'node "${n.name}": nm 0x${n.nm.hex()} exceeds 0xff — the NM node id is 0..255'
 			}
 		}
+		someip_leaf := s.is_someip_leaf(n)
 		if n.buses.len != 1 {
-			// a multi-bus node is only legal as a route GATEWAY (P2): its extra buses
-			// exist to carry routes. A multi-bus node that gateways nothing would have
-			// its non-primary buses silently unwired, so still reject that.
-			if n.buses.len == 0 || !is_route_gateway(s, n.name) {
+			// a multi-bus node is legal as a route GATEWAY (P2) — its extra buses exist to
+			// carry routes — or as a LEAF that is a member of a someip segment as well as one
+			// CAN bus, which the lowering carries as both halves of one file (nodes/tester:
+			// an LED on compute, tcu's peer on tel; #245 step 3). Anything else would have its
+			// non-primary buses silently unwired, so still reject that.
+			if n.buses.len == 0 || !(is_route_gateway(s, n.name) || someip_leaf) {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-006'
@@ -172,6 +189,18 @@ fn check_dissolved_nodes(s System) []Issue {
 			// such an FB would reference undeclared sig.*/port types. Reject until
 			// gateway-local signal emission lands — the routes themselves ARE generated.
 			// (Node-LOCAL io signals are fine; only system signals need the wiring.)
+			//
+			// A someip LEAF is exempt from the GATEWAY-ONLY rules below: it is not lowered by
+			// the gateway path at all. It goes through generate_node, which emits its own
+			// signals on both halves — the whole point of nodes/tester having FBs on compute
+			// AND tel.
+			//
+			// Exempt, NOT skipped. This was a bare `continue` for one round, which jumped to the
+			// next NODE and so bypassed every CAN-side check below as well — including the rule
+			// that a generated ThreadX member of an NM-managed bus must allocate `nm`. A leaf on
+			// such a bus would then have been lowered with no [nm] at all, transmitting into a
+			// sleeping cluster (codex on #279).
+			if !someip_leaf {
 			for sig in s.signals {
 				if sig.name in n.view.fb_reads || sig.name in n.view.fb_writes {
 					issues << Issue{
@@ -219,12 +248,17 @@ fn check_dissolved_nodes(s System) []Issue {
 					}
 				}
 			}
+			}
 		}
-		bus := s.bus_by_name(n.buses[0]) or {
+		// The bus the COMMON checks below judge. For a leaf that is its CAN bus, whatever order
+		// the buses were declared in — the NM cluster, the telemetry bridge and the comm thread
+		// are all CAN concepts, and a segment has none of them.
+		prim := if someip_leaf { can_bus_name(s, n) } else { n.buses[0] }
+		bus := s.bus_by_name(prim) or {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-001'
-				msg:      'node "${n.name}": bus "${n.buses[0]}" is not declared in system.toml'
+				msg:      'node "${n.name}": bus "${prim}" is not declared in system.toml'
 			}
 			continue
 		}
@@ -305,6 +339,19 @@ fn node_has_external(s System, n Node) bool {
 }
 
 // is_route_gateway reports whether `name` is the gateway of any declared route.
+// can_bus_name: the node's first non-someip bus, or buses[0] if it has none. A segment carries
+// no NM, no telemetry and no comm thread, so every CAN-side rule must be judged against the CAN
+// bus regardless of the order the buses were declared in.
+fn can_bus_name(s System, n Node) string {
+	for bn in n.buses {
+		bus := s.bus_by_name(bn) or { continue }
+		if bus.kind != 'someip' {
+			return bn
+		}
+	}
+	return if n.buses.len > 0 { n.buses[0] } else { '' }
+}
+
 fn is_route_gateway(s System, name string) bool {
 	for r in s.routes {
 		if r.gateway == name {
@@ -390,23 +437,12 @@ fn check_signals_dissolved(s System) []Issue {
 			sig_seen[sig.name] = true
 		}
 	}
-	// DISSOLUTION lowers a system-scope signal into CAN wiring: sysgen emits the
-	// node's [bus.canN] + [[signal]] + the DBC frame it rides. There is no SOME/IP
-	// lowering yet — a node's eth wiring is still AUTHORED in its ecu.toml ([someip]
-	// + [[frame]], as examples/system_full/nodes/tcu does). Reject the combination
-	// HERE: skipping the DBC contract for a someip bus (its signals ride service
-	// events, not frames) would otherwise let a dissolved someip signal pass the gate
-	// and be lowered as a CAN frame with no DBC (REQ-TOPO-003).
-	for sig in s.signals {
-		b := s.bus_by_name(sig.bus) or { continue }
-		if b.kind == 'someip' {
-			issues << Issue{
-				severity: .error
-				req:      'REQ-TOPO-003'
-				msg:      'signal "${sig.name}": bus "${sig.bus}" is kind = "someip" — SOME/IP wiring is not lowered from system.toml yet; author it in the node\'s ecu.toml ([someip] + [[frame]]) and declare the bus membership only'
-			}
-		}
-	}
+	// DISSOLUTION lowers a system-scope signal into wiring the node never authors. On a CAN
+	// bus that is [bus.canN] + [[signal]] + the DBC frame it rides; on a someip bus there is
+	// no DBC, so the event carrying the signal is declared by the system too — a [[frame]]
+	// with its id, signal set, tx mode and E2E trailer (#245). A someip signal therefore
+	// needs a system frame naming it, or nothing would say which event it rides.
+	issues << check_someip_signal_frames(s)
 	mut frame_owner := map[string]string{} // (bus, frame) -> producer node
 	mut frame_cycle := map[string]int{}    // (bus, frame) -> cycle_ms
 	for sig in s.signals {
@@ -438,11 +474,11 @@ fn check_signals_dissolved(s System) []Issue {
 					req:      'REQ-TOPO-001'
 					msg:      'signal "${sig.name}": field "${fname}" has unsupported type "${ftype}" (use a fixed scalar: bool/u8/i8/u16/i16/u32/i32/f32/f64)'
 				}
-			} else if ftype == 'u64' || ftype == 'i64' {
+			} else if (ftype == 'u64' || ftype == 'i64') && !carries_struct(s, sig) {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-001'
-					msg:      'signal "${sig.name}": field "${fname}" is ${ftype} — 64-bit integers are lossy through the f64 bridge; use <=32-bit widths'
+					msg:      'signal "${sig.name}": field "${fname}" is ${ftype} — 64-bit integers are lossy through the CAN f64 bridge; use <=32-bit widths (a SOME/IP event packs fixed widths directly, so it has no such limit)'
 				}
 			}
 		}
@@ -452,11 +488,16 @@ fn check_signals_dissolved(s System) []Issue {
 				req:      'REQ-TOPO-001'
 				msg:      'signal "${sig.name}": has no value field (a `valid` field alone is not serializable) — declare exactly one non-`valid` field'
 			}
-		} else if n_value > 1 {
+		} else if n_value > 1 && !carries_struct(s, sig) {
+			// The one-value rule is the DBC's: a CAN signal IS a scalar on the wire, so a
+			// second value field would have nowhere to go. A SOME/IP event's payload is a
+			// STRUCT — its fields are packed in canonical order (signals-list order, then
+			// name-sorted fields) — so a multi-field signal there is the ordinary case, not
+			// an error (#245).
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-001'
-				msg:      'signal "${sig.name}": has ${n_value} value fields — a cross-node signal carries exactly one (plus an optional `valid`)'
+				msg:      'signal "${sig.name}": has ${n_value} value fields — a cross-node signal on a CAN bus carries exactly one (plus an optional `valid`), because a DBC signal is a scalar'
 			}
 		}
 		// the producer must be a declared node on the signal's bus
@@ -694,6 +735,20 @@ fn check_topology_wellformed(s System) []Issue {
 		// the SOME/IP header carries service as u16 and interface version as u8, so an
 		// out-of-range value is not a big number, it is an impossible contract — and it
 		// must fail even on a bus no node has joined yet (the u32 cast would wrap -1).
+		if b.kind == 'someip' && !b.service_int {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'bus "${b.name}": `service` must be an integer — a non-integer coerces to 0, which is a legal service id, so the error would lower into a real wire contract'
+			}
+		}
+		if b.kind == 'someip' && !b.version_int {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'bus "${b.name}": `version` must be an integer — a non-integer coerces to 0, which is a legal interface version, so the error would lower into a real wire contract'
+			}
+		}
 		if b.kind == 'someip' && !b.service_ok {
 			issues << Issue{
 				severity: .error
@@ -2085,3 +2140,499 @@ pub fn error_count(issues []Issue) int {
 	}
 	return n
 }
+
+// check_someip_signal_frames: on a someip bus the SYSTEM owns the event layout, because there is
+// no DBC to own it. Every signal on such a bus must be carried by exactly one system [[frame]],
+// every frame must name only declared signals of its own bus, and event ids must be unique per
+// service — the receive envelope dispatches on the id, so two events sharing one is a silent
+// mis-delivery rather than a decode error (#245, REQ-TOPO-003).
+fn check_someip_signal_frames(s System) []Issue {
+	mut issues := []Issue{}
+	mut carrier := map[string]string{} // signal -> the frame carrying it
+	for fr in s.frames {
+		b := s.bus_by_name(fr.bus) or {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": bus "${fr.bus}" is not a declared [bus.*]'
+			}
+			continue
+		}
+		if b.kind != 'someip' {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": bus "${fr.bus}" is kind = "${b.kind}" — a system [[frame]] declares a SOME/IP event; a CAN frame\'s layout comes from that bus\'s dbc'
+			}
+			continue
+		}
+		if fr.has_id && !fr.id_int {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": `id` must be an integer — 32769.5 truncates to the perfectly valid event id 0x8001, silently changing the identity on the wire'
+			}
+		}
+		if !fr.has_id {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": a someip event needs an `id` — it is what the receive envelope dispatches on'
+			}
+		}
+		// RANGE BEFORE NARROWING. A SOME/IP header carries the event id as u16 and the E2E
+		// data id likewise; u32() had already truncated an out-of-range value into a
+		// legal-looking one, which then passed the generated config's own 16-bit check and
+		// transmitted under an id the system never declared (codex on #245).
+		if fr.has_id && (fr.id_raw < 0x8000 || fr.id_raw > 0xFFFF) {
+			// The class bit, not just the width: a signal frame is an EVENT (bit 15 set), and
+			// the generated gate says so too — checking only 16 bits let syscheck report OK on
+			// a config sysgen then refused (codex on #245).
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": id ${fr.id_raw} is not a SOME/IP event id — a signal frame is an event, so bit 15 is set (0x8000..0xFFFF); methods own 0x0001..0x7FFF'
+			}
+		}
+		for k in fr.unknown_keys {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": unknown key "${k}" — lowering copies only what it recognises, so a typo here would silently mean the feature is absent (an "e2ee" table = no E2E)'
+			}
+		}
+		if fr.has_e2e {
+			if !fr.has_e2e_data_id {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": its `e2e` table has no `data_id` — 0 is a legal id, so a defaulted one is indistinguishable from a declared one once lowered'
+				}
+			} else if !fr.e2e_data_id_int {
+				// .i64() coerces a string to 0 — a legal identity — so the type error would
+				// survive lowering as an explicit numeric 0 that nothing downstream can
+				// recognise as a mistake (codex on #245).
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": e2e data_id must be an integer'
+				}
+			} else if !fr.e2e_counter_int || !fr.e2e_crc_int {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": e2e counter_pos/crc_pos must be integers — a fraction truncates to a VALID offset (1.5 -> 1), and the lowered integer is then indistinguishable from an authored one'
+				}
+			} else if fr.e2e_data_id_raw < 0 || fr.e2e_data_id_raw > 0xFFFF {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": e2e data_id ${fr.e2e_data_id_raw} does not fit 16 bits'
+				}
+			}
+			// The TRAILER POSITIONS narrow the same way: 4294967303 became 7, a legal offset
+			// for the reference payload, silently relocating the counter.
+			if fr.e2e_counter_raw < 0 || fr.e2e_counter_raw > 0xFFFF {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": e2e counter_pos ${fr.e2e_counter_raw} is not a byte offset in the payload'
+				}
+			}
+			if fr.e2e_crc_raw < 0 || fr.e2e_crc_raw > 0xFFFF {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": e2e crc_pos ${fr.e2e_crc_raw} is not a byte offset in the payload'
+				}
+			}
+		}
+		// The EVENT owns the cadence on a someip bus: it is the unit that goes on the wire, and
+		// several signals share one. A signal-level cycle_ms would be accepted by the CAN-shaped
+		// checks and then lowered nowhere, leaving loom2v's default in its place.
+		for sg in fr.signals {
+			sig := s.signal_by_name(sg) or { continue }
+			if sig.has_cycle_ms {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'signal "${sg}": carries cycle_ms on a someip bus — the EVENT is what transmits, so declare the cadence in frame "${fr.name}"\'s `tx` table'
+				}
+			}
+		}
+		// Timings narrow through int() too: 4294967396 wrapped to 100 and silently became the
+		// cadence, inside the generated gate's own 1..1_000_000 ms bounds (codex on #245).
+		if fr.has_tx && !fr.tx_is_table {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": `tx` must be a table — a scalar or array reads as an EMPTY one, which lowers to `tx = { }` and the node gate then applies its default cyclic 100ms, a cadence nobody authored'
+			}
+		}
+		if fr.has_cycle_ms && !fr.cycle_ms_int {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": tx cycle_ms must be an integer — .i64() drops the fraction, so 300.5 would lower as a perfectly legal 300 and nothing downstream could tell'
+			}
+		}
+		if fr.has_min_delay_ms && !fr.min_delay_ms_int {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": tx min_delay_ms must be an integer — .i64() drops the fraction, so the lowered value would differ from the authored one'
+			}
+		}
+		if fr.has_cycle_ms && (fr.cycle_ms_raw < 1 || fr.cycle_ms_raw > 1_000_000) {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": tx cycle_ms ${fr.cycle_ms_raw} is outside 1..1000000'
+			}
+		}
+		if fr.has_min_delay_ms && (fr.min_delay_ms_raw < 0 || fr.min_delay_ms_raw > 1_000_000) {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": tx min_delay_ms ${fr.min_delay_ms_raw} is outside 0..1000000'
+			}
+		}
+		// NOTE: the derived payload is NOT measured here. Its size, its alignment and the E2E
+		// trailer's exact offsets are lowered VERBATIM into the node config, where
+		// ecumodel.validate owns them (and measures more than this layer could -- it checks the
+		// ALIGNED in-memory struct against the IOC slot, not just the packed wire sum). syscheck
+		// lowers and runs that gate, so restating those rules here only built a second, partial
+		// copy to drift (#277). What stays below is what lowering DESTROYS: the raw authored
+		// values, which narrowing turns into legal-looking ones the node gate can never question.
+		if fr.signals.len == 0 {
+			// Generation only discovers a frame while walking its member signals, so a frame
+			// carrying none is emitted into NO node — a system-declared event that silently
+			// does not exist, rather than a contract anything holds (codex on #245).
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frame "${fr.name}": declares no `signals` — an event with an empty payload is lowered into no node at all'
+			}
+		}
+		for sg in fr.signals {
+			sig := s.signal_by_name(sg) or {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": names signal "${sg}", which is not declared at system scope'
+				}
+				continue
+			}
+			if sig.bus != fr.bus {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}" (bus "${fr.bus}") carries signal "${sg}", which rides bus "${sig.bus}"'
+				}
+				continue
+			}
+			if prev := carrier[sg] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'signal "${sg}" is carried by both "${prev}" and "${fr.name}" — one event per signal, or the producer would transmit it twice'
+				}
+			} else {
+				carrier[sg] = fr.name
+			}
+		}
+	}
+	// id uniqueness, per bus
+	mut id_of := map[string]string{}
+	for fr in s.frames {
+		if !fr.has_id {
+			continue
+		}
+		key := '${fr.bus}|0x${fr.id.hex()}'
+		if prev := id_of[key] {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'frames "${prev}" and "${fr.name}" both use event id 0x${fr.id.hex()} on bus "${fr.bus}" — the envelope dispatches on the id'
+			}
+		} else {
+			id_of[key] = fr.name
+		}
+	}
+	// every someip signal must have a carrier, and must NAME it: the one-owner-per-frame and
+	// one-cadence-per-frame checks are keyed on sig.frame, so a someip signal that omits it
+	// would slip past them and let two producers share an event (self-review on #245).
+	for sig in s.signals {
+		b := s.bus_by_name(sig.bus) or { continue }
+		if b.kind != 'someip' {
+			continue
+		}
+		if own := carrier[sig.name] {
+			if sig.frame == '' {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'signal "${sig.name}": rides event "${own}" but declares no `frame` — the single-writer and cadence checks are keyed on it'
+				}
+			} else if sig.frame != own {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'signal "${sig.name}": declares frame "${sig.frame}" but event "${own}" is the one carrying it'
+				}
+			}
+		}
+		if sig.name !in carrier {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-003'
+				msg:      'signal "${sig.name}" rides someip bus "${sig.bus}" but no [[frame]] carries it — a service event is what puts it on the wire (a CAN signal names its dbc frame instead)'
+			}
+		}
+	}
+	return issues
+}
+
+// carries_struct: does this signal ride a carrier whose payload is a struct rather than a scalar?
+// True for a someip event, false for a DBC frame's signal — which is what decides whether more
+// than one value field is legal (#245).
+fn carries_struct(s System, sig SysSignal) bool {
+	b := s.bus_by_name(sig.bus) or { return false }
+	return b.kind == 'someip'
+}
+
+// check_someip_segment: what a LOWERED someip bus must look like. The generated bridge has no
+// service discovery — it sends to one configured static `peer` — so the segment is strictly
+// point-to-point: exactly two members, each with its own endpoint, each the other's peer. That
+// is not a simplification of the model, it is what the target can express (#245).
+fn check_someip_segment(s System) []Issue {
+	mut issues := []Issue{}
+	for b in s.buses {
+		if b.kind != 'someip' {
+			continue
+		}
+		mut members := []Node{}
+		for n in s.nodes {
+			if b.name in n.buses {
+				members << n
+			}
+		}
+		if !b.has_version {
+			// 0 is a legal interface version, so an omitted one is indistinguishable from a
+			// declared one the moment it is written into the generated [someip] (codex #245).
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'bus "${b.name}": kind = "someip" needs a `version` — it is half the contract members are held to, and 0 is a legal value, so an omitted one becomes a real wire version once lowered'
+			}
+		}
+		mut fname_of := map[string]string{}
+		for fr in s.frames {
+			if fr.bus != b.name {
+				continue
+			}
+			key := snake(fr.name)
+			if prev := fname_of[key] {
+				// Lowering keys emitted frames by NAME, so a duplicate is suppressed while its
+				// signals are still emitted — the signal then rides no frame and only the
+				// generated gate notices. Identifiers are snake()d, so the collision is there.
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'bus "${b.name}": frames "${prev}" and "${fr.name}" have the same generated name "${key}" — one of them would be lowered into nothing while its signals still are'
+				}
+			} else {
+				fname_of[key] = fr.name
+			}
+		}
+		for n in members {
+			// A segment member MAY also sit on a CAN bus — a leaf on both is lowered with both
+			// halves (nodes/tester: an LED on compute, tcu's telemetry on tel). What is still
+			// refused is a member that ROUTES, or one carrying several CAN buses: both go down
+			// generate_gateway_node, which emits every bus in the CAN/DBC shape and no [someip]
+			// at all, so the membership would be dropped on the floor. A SOME/IP<->CAN gateway
+			// is its own rung — routing between the two needs a translating bridge, not wiring.
+			mut can_buses := 0
+			for bn in n.buses {
+				if bb := s.bus_by_name(bn) {
+					if bb.kind != 'someip' {
+						can_buses++
+					}
+				}
+			}
+			routes_here := !s.is_someip_leaf(n) && is_route_gateway(s, n.name)
+			if routes_here {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": is a route gateway AND a member of someip bus "${b.name}" — a SOME/IP<->CAN gateway needs a translating bridge, which is its own rung; a segment member may be a leaf on one CAN bus, not a router'
+				}
+			}
+			if can_buses > 1 {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": is a member of someip bus "${b.name}" and sits on ${can_buses} CAN buses — the lowering carries one CAN bus alongside a segment (a multi-DBC node is a gateway, which emits no [someip])'
+				}
+			}
+		}
+		if members.len != 2 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'bus "${b.name}": kind = "someip" has ${members.len} member(s) — the generated bridge sends to ONE static peer (no service discovery), so a lowered segment is point-to-point: exactly two nodes, each the other\'s peer. Declare the far end as a node (the bench tool is one, like `tester` on a CAN bus)'
+			}
+			continue
+		}
+		// An event arrives WHOLE — one datagram, one payload, its signals at fixed offsets — so
+		// the receiving member must read ALL of them. A partial subscriber cannot be lowered:
+		// dropping the unread signals would shift the offsets of the ones it does read, and
+		// declaring them anyway creates rx channels with no reading handler, which the
+		// generated-config gate rejects (codex on #245).
+		for fr in s.frames {
+			if fr.bus != b.name || fr.signals.len == 0 {
+				continue
+			}
+			mut producer := ''
+			for sg in fr.signals {
+				if sig := s.signal_by_name(sg) {
+					producer = sig.producer
+					break
+				}
+			}
+			for n in members {
+				if n.name == producer {
+					continue
+				}
+				for sg in fr.signals {
+					if sg !in n.view.fb_reads {
+						issues << Issue{
+							severity: .error
+							req:      'REQ-TOPO-001'
+							msg:      'node "${n.name}": receives event "${fr.name}" but no FB reads "${sg}" — a someip event arrives whole, at fixed offsets, so every signal it carries must be consumed'
+						}
+					}
+				}
+			}
+		}
+		mut addr_of := map[string]string{}
+		for n in members {
+			if n.has_endpoint && !n.has_port {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": its `endpoint` has no `port` — the generated [someip] needs one, and 0 is not a UDP port'
+				}
+			} else if n.has_endpoint && (n.port_raw < 1 || n.port_raw > 0xFFFF) {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": endpoint port ${n.port_raw} is outside 1..65535'
+				}
+			}
+			if !n.has_endpoint || n.endpoint == '' {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": is on someip bus "${b.name}" but declares no `endpoint` — a someip segment has no shared wire, so the address is the NODE\'s identity and the peer is derived from it'
+				}
+				continue
+			}
+			if prev := addr_of[canon_addr(n.endpoint)] {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'bus "${b.name}": nodes "${prev}" and "${n.name}" both answer at "${n.endpoint}" — one address per node on a segment'
+				}
+			} else {
+				addr_of[canon_addr(n.endpoint)] = n.name
+			}
+			if n.has_port && !n.port_int {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": endpoint `port` must be an integer — 30490.5 truncates to a valid, DIFFERENT port, and the lowered integer reads as authored'
+				}
+			}
+			// NM is a CAN cluster protocol: there is no someip NM. But a LEAF that also sits on
+			// a CAN bus needs its cluster allocation — its CAN traffic must observe coordinated
+			// sleep like any other member's, and the lowering emits the [nm] against that CAN
+			// bus. So refuse `nm` only for a member with no CAN carrier at all; otherwise the
+			// mixed-carrier topology would be impossible on an NM-managed CAN network.
+			mut can_carrier := false
+			for bn in n.buses {
+				if bb := s.bus_by_name(bn) {
+					if bb.kind != 'someip' {
+						can_carrier = true
+					}
+				}
+			}
+			if n.has_nm_alloc && !can_carrier {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": is on someip bus "${b.name}" only, and declares `nm` — network management is a CAN cluster protocol; a segment-only member has no NM'
+				}
+			}
+		}
+	}
+	return issues
+}
+
+// check_endpoint_carrier: an `endpoint` is a someip identity. On a node that names only CAN
+// buses the CAN lowering drops it entirely, so an authored network identity — a node given the
+// wrong bus, or a SOME/IP block copied onto a CAN member — would look effective and be dead
+// (codex on #245).
+// check_node_name_is_an_identifier: a node's name becomes a FILE PATH -- sysgen writes
+// gen-<name>.toml -- so a name carrying path separators or `..` escapes the output directory
+// and overwrites whatever sits at the resolved name. That was always true of the in-tree
+// output; syscheck's scratch lowering made it easy to reach (codex on #279). Names also become
+// generated identifiers, so this is the right shape to demand anyway.
+fn check_node_name_is_an_identifier(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		mut ok := n.name.len > 0
+		for i, c in n.name {
+			is_alpha := (c >= `a` && c <= `z`) || (c >= `A` && c <= `Z`) || c == `_`
+			is_digit := c >= `0` && c <= `9`
+			if !(is_alpha || (is_digit && i > 0)) {
+				ok = false
+				break
+			}
+		}
+		if !ok {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'node name "${n.name}" is not an identifier ([A-Za-z_][A-Za-z0-9_]*) — it becomes a generated file name (gen-<name>.toml) and generated code identifiers, so a path separator or ".." would write outside the output directory'
+			}
+		}
+	}
+	return issues
+}
+
+fn check_endpoint_carrier(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		if !n.has_endpoint {
+			continue
+		}
+		mut on_someip := false
+		for bn in n.buses {
+			if b := s.bus_by_name(bn) {
+				if b.kind == 'someip' {
+					on_someip = true
+				}
+			}
+		}
+		if !on_someip {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": declares an `endpoint` but is on no someip bus — an endpoint is a SOME/IP identity, and the CAN lowering drops it, so it would be dead configuration that looks effective'
+			}
+		}
+	}
+	return issues
+}
+

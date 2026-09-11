@@ -3989,30 +3989,97 @@ fn test_someip_bus_contract_is_the_service() {
 
 // DISSOLUTION lowers a system-scope signal into CAN wiring; there is no SOME/IP
 // lowering yet, so the combination must fail the gate rather than be generated as a
-// frame with no DBC (the hole opened by skipping the DBC contract for someip).
-fn test_dissolved_signal_on_someip_bus_is_error() {
-	s := System{
-		buses:   [
-			Bus{
-				name:        'backbone'
-				kind:        'someip'
-				service:     0x0100
-				has_service: true
-			},
-		]
-		signals: [
-			SysSignal{
-				name:     'BenchLoad'
-				producer: 'tcu'
-				bus:      'backbone'
-				fields:   {
-					'load': 'u8'
-				}
-			},
-		]
-	}
+// A someip signal must name the EVENT that carries it: the system owns that layout, because a
+// someip bus has no DBC to own it (#245). Before, any signal on a someip bus was refused
+// outright ("not lowered from system.toml yet") — the lowering exists now, so what is checked
+// is the contract, not the carrier.
+fn test_someip_signal_without_a_frame_is_error() {
+	mut s := clean_someip()
+	s.signals = [
+		SysSignal{
+			name:     'BenchLoad'
+			producer: 'tcu'
+			bus:      'backbone'
+			fields:   {
+				'load': 'u8'
+			}
+		},
+	]
 	e := errs(check_signals_dissolved(s))
-	assert e.any(it.contains('is kind = "someip"') && it.contains('not lowered')), e.str()
+	assert e.any(it.contains('no [[frame]] carries it')), e.str()
+}
+
+fn test_someip_signal_with_its_event_is_accepted() {
+	mut s := clean_someip()
+	s.nodes[0].view.fb_writes = ['BenchLoad'] // the producing FB, as a real node has
+	s.signals = [
+		SysSignal{
+			name:     'BenchLoad'
+			producer: 'tcu'
+			bus:      'backbone'
+			fields:   {
+				'load': 'u8'
+			}
+		},
+	]
+	s.signals[0].frame = 'BenchTelem' // a someip signal names its event, like a CAN one names its frame
+	s.frames = [
+		SysFrame{
+			name:    'BenchTelem'
+			bus:     'backbone'
+			id:      0x8001
+			id_raw:  0x8001
+			has_id:  true
+			signals: ['BenchLoad']
+		},
+	]
+	assert errs(check_signals_dissolved(s)).len == 0, errs(check_signals_dissolved(s)).str()
+}
+
+// two events sharing an id is a SILENT mis-delivery: the receive envelope dispatches on the id.
+fn test_two_someip_events_sharing_an_id_is_error() {
+	mut s := clean_someip()
+	s.frames = [
+		SysFrame{
+			name:    'A'
+			bus:     'backbone'
+			id:      0x8001
+			id_raw:  0x8001
+			has_id:  true
+			signals: ['BenchLoad']
+		},
+		SysFrame{
+			name:    'B'
+			bus:     'backbone'
+			id:      0x8001
+			id_raw:  0x8001
+			has_id:  true
+			signals: ['BenchLoad']
+		},
+	]
+	e := errs(check_signals_dissolved(s))
+	assert e.any(it.contains('both use event id 0x8001')), e.str()
+}
+
+// a system [[frame]] declares a SOME/IP event; a CAN frame's layout comes from its bus's dbc.
+fn test_a_system_frame_on_a_can_bus_is_error() {
+	mut s := clean_someip()
+	s.buses << Bus{
+		name: 'compute'
+		kind: 'can'
+	}
+	s.frames = [
+		SysFrame{
+			name:    'VehSpeedFrame'
+			bus:     'compute'
+			id:      0x120
+			id_raw:  0x120
+			has_id:  true
+			signals: ['BenchLoad']
+		},
+	]
+	e := errs(check_signals_dissolved(s))
+	assert e.any(it.contains('is kind = "can"')), e.str()
 }
 
 // a node has ONE [someip] block, so it offers ONE service — two claimed someip

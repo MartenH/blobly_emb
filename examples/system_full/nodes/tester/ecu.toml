@@ -3,7 +3,15 @@
 # FB writing it (single-writer, REQ-TOPO-005). Nothing here is built: blobly_net restbus-simulates
 # this node on the bench (system_full.blobnet `simulation: tester`, keyed on the DBC transmitter
 # name — blobly_net reads compute.dbc, never this file). No `nm` in system.toml: a tester is not
-# an NM node. NOTE: no inline comments inside [[...]] tables (vlang/v#27684).
+# an NM node.
+#
+# It sits on TWO buses: compute (CAN) and tel (SOME/IP), as a LEAF on each — it routes nothing
+# between them. HostBreather drives the io lane's LED on compute; BenchPeer is tcu's peer on the
+# telematics segment, receiving its telemetry and producing the command it answers. These were
+# two separate host nodes until the lowering could carry both halves in one file; one bench tool
+# is one node.
+#
+# NOTE: no inline comments inside [[...]] tables (vlang/v#27684).
 
 [[partition]]
 name = "bench"
@@ -20,3 +28,13 @@ thread = "gen"
   name      = "on_100ms"
   period_ms = 100
   writes    = ["HostLedLevel"] # trailing comment terminates the nested block (vlang/v#27684)
+
+[[fb]]
+name   = "BenchPeer"
+thread = "gen"
+
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  reads     = ["BenchLoad", "BenchTicks", "EchoVal"]
+  writes    = ["LampCmd"] # trailing comment terminates the nested block (vlang/v#27684)

@@ -138,12 +138,23 @@ version = 1
 Membership differs because the wire does. Every node on a CAN segment says
 `can0`, so interface equality *is* the segment. Each Ethernet node has its **own
 address** (`192.168.0.51` vs `.50`), so no shared interface name exists to match
-on — a node joins by **naming the bus**, and its local `[someip]` block is the
-endpoint that claim resolves to. syscheck then holds that endpoint to the
+on — a node joins by **naming the bus** and carrying its own
+`endpoint = { address, port }` on the `[[node]]`. syscheck then holds that endpoint to the
 system's contract: same `service`, same `version` (the receive envelope drops a
 foreign one, so mismatched members are silently deaf to each other), and its
 `produces`/`consumes` are checked for duplicate writers and orphaned consumers
-exactly like a CAN node's. Routing *across* a someip bus (the CAN↔SOME/IP
+exactly like a CAN node's. Each member's `peer` is DERIVED as the other member's
+endpoint, which is what makes reciprocity checkable rather than asserted.
+
+**The system owns the events, because there is no DBC to own them** (#245). A CAN
+signal names a frame whose layout the bus's `dbc` describes; a someip signal names
+a system `[[frame]]` that declares the event's `id`, its signal set, its `tx` mode
+and its `e2e` trailer. `tools/sysgen` lowers that into each member's generated
+config — its `[bus.eth0]`, `[someip]` endpoint, signals and events — so an eth node
+is dissolved exactly like a CAN one and its `ecu.toml` is internals only. One rule
+bends for the carrier: a cross-node CAN signal carries exactly one value field
+because a DBC signal *is* a scalar, while a SOME/IP event's payload is a **struct**,
+so a multi-field signal there is ordinary. Routing *across* a someip bus (the CAN↔SOME/IP
 gateway) is a later phase and is rejected today rather than half-generated.
 
 **Naming the same bus does not connect two nodes.** There is no service discovery

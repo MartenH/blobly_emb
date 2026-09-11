@@ -33,7 +33,7 @@ gen: gen/.stamp
 # Regenerate when a GENERATOR changes too, not only the configs/DBCs/app: a stale-tool build
 # would silently re-validate code emitted by the old sysgen/dbc2cfg/loom2v (AGENTS.md target-
 # image verification path). Generators run via `$(V) run` (a clean checkout has the V sources).
-GENSRC = $(wildcard $(REPO)/tools/sysgen/*.v) $(wildcard $(REPO)/tools/dbcmerge/*.v) \
+GENSRC = $(wildcard $(REPO)/tools/ecucheck/*.v) $(wildcard $(REPO)/tools/sysgen/*.v) $(wildcard $(REPO)/tools/dbcmerge/*.v) \
          $(wildcard $(REPO)/tools/dbc2cfg/*.v) $(wildcard $(REPO)/tools/loom2v/*.v) \
          $(wildcard $(REPO)/tools/ecumodel/*.v) \
          $(wildcard $(REPO)/tools/candb/*.v) $(wildcard $(REPO)/tools/sysmodel/*.v)

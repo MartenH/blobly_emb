@@ -44,7 +44,7 @@ gen: gen/.stamp
 # prebuilt binaries. Both DBCs are prerequisites: an edit to either must re-merge and re-gen.
 # The generator SOURCES are prerequisites too: a stale-tool build would silently re-validate
 # code emitted by the old sysgen/dbcmerge/dbc2cfg/loom2v (AGENTS.md target-verification path).
-GENSRC = $(wildcard $(REPO)/tools/sysgen/*.v) $(wildcard $(REPO)/tools/dbcmerge/*.v) \
+GENSRC = $(wildcard $(REPO)/tools/ecucheck/*.v) $(wildcard $(REPO)/tools/sysgen/*.v) $(wildcard $(REPO)/tools/dbcmerge/*.v) \
          $(wildcard $(REPO)/tools/dbc2cfg/*.v) $(wildcard $(REPO)/tools/loom2v/*.v) \
          $(wildcard $(REPO)/tools/ecumodel/*.v) \
          $(wildcard $(REPO)/tools/candb/*.v) $(wildcard $(REPO)/tools/sysmodel/*.v)

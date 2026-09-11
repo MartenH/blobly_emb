@@ -14,6 +14,11 @@ SIZE     = $(CROSS)size
 V       ?= v
 REPO     = ../../../..
 NAME    := tcu
+SYSDIR  = $(REPO)/examples/system_full
+# the generators whose output this node's config depends on (mirrors nodes/zone_a)
+GENSRC  = $(wildcard $(REPO)/tools/ecucheck/*.v) $(wildcard $(REPO)/tools/sysgen/*.v) $(wildcard $(REPO)/tools/loom2v/*.v) \
+          $(wildcard $(REPO)/tools/ecumodel/*.v) $(wildcard $(REPO)/tools/sysmodel/*.v) \
+          $(wildcard $(REPO)/tools/candb/*.v)
 EX       = examples/system_full/nodes/$(NAME)
 TX       = $(REPO)/third_party/threadx
 TX_PORT  = $(TX)/ports/cortex_m7/gnu
@@ -54,12 +59,20 @@ BSP = $(BOARD_BSP_THREADX) $(REPO)/boards/$(BOARD)/eth.c \
 
 all: $(BUILD)/$(NAME).bin
 
-# 0) generate the ThreadX target (gen/ports/sig) from ecu.toml via loom2v.
+# 0) generate the ThreadX target (gen/ports/sig) from the SYSTEM's lowered config. tcu is a
+#    dissolved node like every other (#245): system.toml owns its bus, endpoint, signals and
+#    service events, tools/sysgen lowers them into gen-tcu.toml with the authored internals
+#    appended, and loom2v reads THAT — the same shape as nodes/zone_a. The eth bus has no DBC,
+#    so the dbc argument names a file that does not exist and loom2v skips it.
 gen: gen/.stamp
-gen/.stamp: ecu.toml $(REPO)/tools/ecucheck/gen.v $(wildcard $(REPO)/tools/loom2v/*.v) $(REPO)/tools/ecumodel/model.v
+# EVERY member's config, not just this node's: gen-system reads them all, and the segment rules
+# are cross-node (a peer that stops reading one signal of an event this node sends makes the
+# system invalid). Depending only on our own file left a stale image passing a gate that would
+# now reject it (codex on #245).
+gen/.stamp: $(SYSDIR)/system.toml $(wildcard $(SYSDIR)/nodes/*/ecu.toml) $(wildcard app/*.v) $(GENSRC)
 	@mkdir -p gen ports sig
-	cd $(REPO) && $(V) run tools/ecucheck/gen.v $(EX)/ecu.toml
-	cd $(REPO) && $(V) run tools/loom2v $(EX)/ecu.toml $(EX)/bus.dbc \
+	$(MAKE) -C $(REPO) gen-system SYSTEM=examples/system_full/system.toml
+	cd $(REPO) && $(V) run tools/loom2v examples/system_full/gen-$(NAME).toml $(EX)/bus.dbc \
 	  $(EX)/sig/signals_gen.v $(EX)/ports/ports_gen.v $(EX)/gen/loom_gen.v \
 	  $(EX)/gen/trace-manifest.csv
 	@touch gen/.stamp

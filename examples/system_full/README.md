@@ -38,23 +38,29 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 | `domain` | NUCLEO-H755ZI-Q (CM7) | Powertrain + persistence + AMP owner; NvM, bulk, trace, shell | `compute` (can0) | ✅ |
 | `domain_m4` | …the H755's **CM4** | `domain`'s co-processor **satellite** (bulk producer + CpuLoad); a `[[partition]] image=`, flashed to flash **bank 2** (`0x08100000`) | — (built by `domain`'s gen) | — (a satellite, not a node) |
 | `zone_a` | NUCLEO-H723ZG | Front zone: sensor→limiter FB pipeline + **physical GPIO + PWM** | `edge` (can1) | ✅ |
-| `tcu` | NUCLEO-H723ZG | **Telematics/connectivity — SOME/IP-over-Ethernet** at `192.168.0.51` | `eth0` (Ethernet) | ❌ **see below** |
-| `tester` | — (nothing built) | **Declaration-only**: the bench tool as a node, produces `HostLedLevel`; blobly_net restbus-simulates it | `compute` (can0) | ✅ |
+| `tcu` | NUCLEO-H723ZG | **Telematics/connectivity — SOME/IP-over-Ethernet** at `192.168.0.51` | `tel` (Ethernet) | ✅ |
+| `tester` | — (nothing built) | **Declaration-only**: the bench tool as ONE node on BOTH buses — produces `HostLedLevel` on CAN, and is tcu's SOME/IP peer (`LampCmd`) at `192.168.0.190`; blobly_net restbus-simulates it | `compute` (can0), `tel` (Ethernet) | ✅ |
 
 ---
 
-## The Ethernet node (`tcu`) — and why it's *not* in `system.toml`
+## The Ethernet node (`tcu`) — a member like any other
 
 `tcu` publishes a cyclic, E2E-protected SOME/IP **telemetry event** and answers an RPC **command round trip**, all from config + the H723 Ethernet board driver (`boards/h723/eth.c`). It's **silicon-validated**: link + ARP + ICMP (`ping 192.168.0.51`, 0% loss), SOME/IP tx (service `0x0100`, event `0x8001`, E2E counter+CRC) and rx (`uptime` RPC → response, request-id mirrored). The wire is identical to `examples/h735_someip` / `host_someip`, so the same `blobly_net` oracle verifies it.
 
-**But `tcu` is deliberately not a `[[node]]` in `system.toml` — and that's a real boundary, not an oversight.** The system model now *does* carry the Ethernet side: a `[bus.*]` declares its **carrier** (`kind = "someip"`, a `service` + `version` instead of a DBC), membership is **explicit** (a node names the bus, since each eth node has its own address), and `syscheck` validates the members' reciprocal peers, endpoint addresses, event ids and payload contracts. What blocks `tcu` is narrower and concrete:
+**Since #245 it is a full `system.toml` member, dissolved like every CAN node.** The segment is a `[bus.tel]` whose carrier is a SERVICE (`kind = "someip"`, a `service` + `version` where a CAN bus has its `dbc`), and — because there is no DBC to own the layout — the **events are declared by the system too**, as `[[frame]]`s carrying id, signal set, tx mode and E2E trailer. `tools/sysgen` lowers all of it into `gen-tcu.toml`, and `nodes/tcu/ecu.toml` is internals only: its target, its shell method binding, its partition and its FB.
 
-**its peer is off-system.** The tcu talks to the **bench tool at `192.168.0.190`**, not to another ECU. REQ-TOPO-001 requires every transmitted signal to be received by ≥1 *node*, and a SOME/IP link is point-to-point. The CAN side answers this by making the tool a **node** (`tester`, below) that blobly_net simulates on the bench — the same could be done for the eth peer, but SOME/IP wiring is not lowered from `system.toml` yet (REQ-TOPO-003), so `tcu` joining is a follow-up. So `tcu`:
+Two things made that possible, and both are worth knowing:
 
-- **is** in the build — it's in the Makefile `NODES` list, so `make nodes` cross-builds it with the others; and
-- **is not** in the cross-node *model* — its SOME/IP events aren't validated for writers/reachability the way the CAN signals are.
+- **A someip segment has no shared wire**, so the endpoint is the NODE's identity, not the bus's: each `[[node]]` carries `endpoint = { address, port }`, and each member's `peer` is *derived* as the other member's endpoint — which is what makes reciprocity checkable rather than asserted.
+- **The far end is declared as a node** — and it is the *same* node as the CAN-side tester. `tester` sits on `compute` **and** `tel`: it produces `HostLedLevel` on one and is tcu's peer at `192.168.0.190` on the other. That is what makes tcu's telemetry *received* by somebody under REQ-TOPO-001, instead of the model needing an "off-system" concept. One bench tool is one node: it was briefly two (`tel_bench` alongside `tester`) only because the lowering could not yet carry a CAN bus and a segment in one file.
 
-Until SOME/IP wiring is lowered from `system.toml`, the Ethernet node is a **build member, not a model member** — which is why you won't find it in `system.toml`.
+  It is a **leaf on both, not a gateway.** Nothing routes between CAN and SOME/IP — that needs a translating bridge and is refused until its own rung. The distinction matters to the generator: a multi-bus node used to mean "router", which emits every bus in the CAN/DBC shape and no `[someip]` at all. `System.is_someip_leaf()` now owns the shape, because four places have to agree on it (two dissolution checks, the lowering, and the loom2v precheck — which silently skipped `tester` as a "gateway" the first time round, dropping the gate it used to have).
+
+One model rule bends for the carrier, deliberately: a cross-node signal on a CAN bus carries **exactly one** value field, because a DBC signal *is* a scalar. A SOME/IP event's payload is a **struct** — its fields packed in canonical order — so `BenchTicks` carrying `{wraps, ticks}` is the ordinary case there, not an error.
+
+The lowering is behaviour-preserving by construction: `tcu.bin` built from the system-lowered config is **byte-identical** to the image built when the wiring was authored in its own `ecu.toml`.
+
+What is still a follow-up is the *deeper* half of #245: a signal crossing **eth↔CAN** needs a SOME/IP⇄CAN gateway path on `sysnode`. Nothing crosses today — the telematics segment is self-contained — so that remains its own rung.
 
 ### The tester is a node
 
