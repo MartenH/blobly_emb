@@ -105,7 +105,7 @@ fn main() {
 		// HOST / bare-metal node on a secondary bus is STILL gated — loom2v's
 		// non-threadx checks (e.g. bare-metal external signals) must not be masked, and
 		// the host emitter already handles multiple buses (docs/multi-node.md, P2c).
-		bus := node_bus(sys, n) or {
+		bus := can_bus_of(sys, n) or {
 			eprintln('sysgen: node "${n.name}": ${err}')
 			exit(1)
 		}
@@ -113,7 +113,9 @@ fn main() {
 		// precheck has nothing to trip over and every reason to run — skipping it printed "ok"
 		// for target-invalid configs (a ThreadX priority out of range, say) that only the node
 		// build would have caught (codex on #245).
-		if n.buses.len > 1 || (n.view.is_threadx && bus.kind != 'someip' && bus.interface != 'can0') {
+		leaf := sys.is_someip_leaf(n)
+		if (n.buses.len > 1 && !leaf) || (n.view.is_threadx && bus.kind != 'someip'
+			&& bus.interface != 'can0') {
 			// The gateway (multi-bus) and a non-can0 leaf need DBC handling the single-dbc
 			// loom2v_errors() precheck can't do (the gateway builds a merged DBC), so skip the
 			// inline precheck — the node's own Makefile runs loom2v + the cross-build. Both are
@@ -171,14 +173,28 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 	// in a thread that lives in a partition) — the [[signal]] from/to endpoint.
 	sig_part := signal_partitions(doc)
 
-	// a GATEWAY (multi-bus) node lowers differently: one [bus.*] per bus (each
-	// with its own DBC) + the resolved [[route]]s (P2, docs/multi-node.md).
-	if node.buses.len > 1 {
+	// A multi-bus node is a ROUTER — its [[route]]s are the whole point — UNLESS it is a plain
+	// LEAF that happens to sit on a CAN bus and a someip segment at once. nodes/tester is
+	// exactly that: it breathes an LED on compute and answers tcu's telemetry on tel, routing
+	// nothing between them. The router lowering emits every bus in the CAN/DBC shape and no
+	// [someip] at all, so a leaf like that needs both halves in one file instead (#245 step 3).
+	someip_leaf := sys.is_someip_leaf(node)
+	mut someip_bus := sysmodel.Bus{}
+	mut can_buses := []sysmodel.Bus{}
+	for bn in node.buses {
+		bb := sys.bus_by_name(bn) or { return error('bus "${bn}" not declared') }
+		if bb.kind == 'someip' {
+			someip_bus = bb
+		} else {
+			can_buses << bb
+		}
+	}
+	if node.buses.len > 1 && !someip_leaf {
 		return generate_gateway_node(sys, node, authored)
 	}
 
-	// the node sits on one bus in P1 — the bus carrying its signals.
-	bus := node_bus(sys, node) or { return err }
+	// the bus carrying this node's CAN signals (for a someip leaf, its one CAN bus).
+	bus := if someip_leaf { can_buses[0] } else { node_bus(sys, node) or { return err } }
 	if bus.kind == 'someip' {
 		return generate_someip_node(sys, node, bus, view, sig_part, authored)
 	}
@@ -236,6 +252,9 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		if sig.producer != node.name {
 			continue
 		}
+		if someip_leaf && sig.bus == someip_bus.name {
+			continue // the segment's own traffic — someip_sections below emits it
+		}
 		part := sig_part[sig.name] or { return error('signal "${sig.name}" is produced here but no FB writes it') }
 		b << '[[signal]]'
 		b << 'name   = "${sig.name}"'
@@ -267,6 +286,13 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		if sig.producer == node.name {
 			continue // locally produced (or self-loop) — not a bus rx
 		}
+		if someip_leaf && sig.bus == someip_bus.name {
+			continue // the segment's own traffic — someip_sections below emits it
+		}
+		// NOTE: no filter on sig.bus otherwise. A CONSUMER receives on ITS OWN bus, which for a
+		// ROUTED signal is not the bus it was declared on — SteeringAngle originates on edge and
+		// reaches domain on compute through sysnode. Filtering rx by origin dropped exactly
+		// those three cross-bus reads (caught by diffing the regenerated tree).
 		part := sig_part[name] or { continue }
 		b << '[[signal]]'
 		b << 'name   = "${sig.name}"'
@@ -274,6 +300,11 @@ fn generate_node(sys sysmodel.System, node sysmodel.Node) !string {
 		b << 'from   = "${iface}"'
 		b << 'to     = "${part}"'
 		b << ''
+	}
+
+	// the someip half of a leaf that is also a segment member (tester: compute + tel).
+	if someip_leaf {
+		b << someip_sections(sys, node, someip_bus, view, sig_part)!
 	}
 
 	// the authored internals, verbatim and LAST.
@@ -476,6 +507,21 @@ fn fields_inline(fields map[string]string) string {
 }
 
 // node_bus returns the single system bus a P1 node sits on (its signals ride it).
+// can_bus_of: the bus whose DBC the loom2v precheck needs. For a someip LEAF that is its CAN
+// bus, not buses[0] — which may be either, and handing over the someip bus would look for a DBC
+// that a segment does not have.
+fn can_bus_of(sys sysmodel.System, node sysmodel.Node) !sysmodel.Bus {
+	if sys.is_someip_leaf(node) {
+		for bn in node.buses {
+			bus := sys.bus_by_name(bn) or { continue }
+			if bus.kind != 'someip' {
+				return bus
+			}
+		}
+	}
+	return node_bus(sys, node)
+}
+
 fn node_bus(sys sysmodel.System, node sysmodel.Node) !sysmodel.Bus {
 	if node.buses.len == 0 {
 		return error('node is on no bus')
@@ -493,11 +539,24 @@ fn node_bus(sys sysmodel.System, node sysmodel.Node) !sysmodel.Bus {
 // node's authored internals ([shell], [telemetry]) refer to it by that name, and the address
 // itself rides `interface`, which is what an eth bus's interface IS.
 fn generate_someip_node(sys sysmodel.System, node sysmodel.Node, bus sysmodel.Bus, view sysmodel.NodeView, sig_part map[string]string, authored string) !string {
-	iface := 'eth0'
 	mut b := []string{}
 	b << '# GENERATED by tools/sysgen from system.toml — DO NOT EDIT.'
 	b << '# Node "${node.name}": authored internals + system-owned wiring/identity.'
 	b << ''
+	b << someip_sections(sys, node, bus, view, sig_part)!
+	b << '# --- authored internals (${os.file_name(node.ecu)}) ---'
+	b << authored.trim_space()
+	b << ''
+	return b.join('\n')
+}
+
+// someip_sections: the SOME/IP half of a node's wiring — its eth bus, the service contract and
+// the events it produces or consumes. Split out of generate_someip_node because a node can be a
+// member of a someip segment AND sit on a CAN bus: nodes/tester breathes an LED on compute and
+// answers tcu's telemetry on tel, so one generated file carries both halves (#245 step 3, leaf).
+fn someip_sections(sys sysmodel.System, node sysmodel.Node, bus sysmodel.Bus, view sysmodel.NodeView, sig_part map[string]string) ![]string {
+	iface := 'eth0'
+	mut b := []string{}
 	b << '[bus.${iface}]'
 	b << 'kind      = "eth"'
 	b << 'interface = "${node.endpoint}"'
@@ -571,10 +630,7 @@ fn generate_someip_node(sys sysmodel.System, node sysmodel.Node, bus sysmodel.Bu
 			b << someip_frame_lines(fr, iface, false)
 		}
 	}
-	b << '# --- authored internals (${os.file_name(node.ecu)}) ---'
-	b << authored.trim_space()
-	b << ''
-	return b.join('\n')
+	return b
 }
 
 // someip_frame_lines: one service event, as loom2v reads it. Every nested table here is written

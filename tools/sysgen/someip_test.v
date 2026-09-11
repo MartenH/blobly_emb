@@ -381,10 +381,9 @@ fn test_a_node_that_kept_its_authored_someip_table_is_refused() {
 	assert errs.any(it.contains('[someip]')), errs.str()
 }
 
-// A multi-bus node goes down generate_gateway_node, which emits every bus in the CAN/DBC shape
-// and no [someip] at all — so a gateway that also names a someip bus would lose the membership
-// silently. The eth gateway is its own rung.
-fn test_a_gateway_that_is_also_a_someip_member_is_refused() {
+// A segment member MAY also sit on one CAN bus: it is a LEAF on both and the lowering carries
+// both halves in one file (nodes/tester — an LED on compute, tcu's peer on tel).
+fn test_a_someip_member_may_be_a_leaf_on_one_can_bus() {
 	mut sys := tel_system()
 	sys.buses << sysmodel.Bus{
 		name:      'pt'
@@ -392,7 +391,43 @@ fn test_a_gateway_that_is_also_a_someip_member_is_refused() {
 		interface: 'can0'
 	}
 	sys.nodes[0].buses << 'pt'
-	assert seg_errs(sys).any(it.contains('multi-bus gateway')), seg_errs(sys).str()
+	assert sys.is_someip_leaf(sys.nodes[0])
+	assert seg_errs(sys).len == 0, seg_errs(sys).str()
+}
+
+// ...but a ROUTER is still refused. Routing between CAN and SOME/IP needs a translating bridge,
+// and generate_gateway_node emits every bus in the CAN/DBC shape with no [someip] at all — so
+// the membership would be dropped on the floor.
+fn test_a_route_gateway_that_is_also_a_someip_member_is_refused() {
+	mut sys := tel_system()
+	sys.buses << sysmodel.Bus{
+		name:      'pt'
+		kind:      'can'
+		interface: 'can0'
+	}
+	sys.nodes[0].buses << 'pt'
+	sys.routes << sysmodel.Route{
+		gateway: 'tcu'
+		signal:  'BenchLoad'
+		from:    'pt'
+		to:      'tel'
+	}
+	assert !sys.is_someip_leaf(sys.nodes[0])
+	assert seg_errs(sys).any(it.contains('is a route gateway AND a member of someip bus')), seg_errs(sys).str()
+}
+
+// ...and so is a member carrying SEVERAL CAN buses: that is a multi-DBC gateway.
+fn test_a_someip_member_on_two_can_buses_is_refused() {
+	mut sys := tel_system()
+	for nm in ['pt', 'body'] {
+		sys.buses << sysmodel.Bus{
+			name:      nm
+			kind:      'can'
+			interface: 'can0'
+		}
+		sys.nodes[0].buses << nm
+	}
+	assert seg_errs(sys).any(it.contains('sits on 2 CAN buses')), seg_errs(sys).str()
 }
 
 // The service and the version are the segment's IDENTITY, and .i64() coerces a non-integer to

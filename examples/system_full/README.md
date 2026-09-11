@@ -39,8 +39,7 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 | `domain_m4` | …the H755's **CM4** | `domain`'s co-processor **satellite** (bulk producer + CpuLoad); a `[[partition]] image=`, flashed to flash **bank 2** (`0x08100000`) | — (built by `domain`'s gen) | — (a satellite, not a node) |
 | `zone_a` | NUCLEO-H723ZG | Front zone: sensor→limiter FB pipeline + **physical GPIO + PWM** | `edge` (can1) | ✅ |
 | `tcu` | NUCLEO-H723ZG | **Telematics/connectivity — SOME/IP-over-Ethernet** at `192.168.0.51` | `tel` (Ethernet) | ✅ |
-| `tel_bench` | — (nothing built) | **Declaration-only**: the bench tool as a node on the telematics segment, produces `LampCmd` | `tel` (Ethernet) | ✅ |
-| `tester` | — (nothing built) | **Declaration-only**: the bench tool as a node, produces `HostLedLevel`; blobly_net restbus-simulates it | `compute` (can0) | ✅ |
+| `tester` | — (nothing built) | **Declaration-only**: the bench tool as ONE node on BOTH buses — produces `HostLedLevel` on CAN, and is tcu's SOME/IP peer (`LampCmd`) at `192.168.0.190`; blobly_net restbus-simulates it | `compute` (can0), `tel` (Ethernet) | ✅ |
 
 ---
 
@@ -53,7 +52,9 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 Two things made that possible, and both are worth knowing:
 
 - **A someip segment has no shared wire**, so the endpoint is the NODE's identity, not the bus's: each `[[node]]` carries `endpoint = { address, port }`, and each member's `peer` is *derived* as the other member's endpoint — which is what makes reciprocity checkable rather than asserted.
-- **The far end is declared as a node.** `tel_bench` is the bench tool at `192.168.0.190`, declaration-only, exactly as `tester` is on the compute bus (below). That is what makes tcu's telemetry *received* by somebody under REQ-TOPO-001, instead of the model needing an "off-system" concept.
+- **The far end is declared as a node** — and it is the *same* node as the CAN-side tester. `tester` sits on `compute` **and** `tel`: it produces `HostLedLevel` on one and is tcu's peer at `192.168.0.190` on the other. That is what makes tcu's telemetry *received* by somebody under REQ-TOPO-001, instead of the model needing an "off-system" concept. One bench tool is one node: it was briefly two (`tel_bench` alongside `tester`) only because the lowering could not yet carry a CAN bus and a segment in one file.
+
+  It is a **leaf on both, not a gateway.** Nothing routes between CAN and SOME/IP — that needs a translating bridge and is refused until its own rung. The distinction matters to the generator: a multi-bus node used to mean "router", which emits every bus in the CAN/DBC shape and no `[someip]` at all. `System.is_someip_leaf()` now owns the shape, because four places have to agree on it (two dissolution checks, the lowering, and the loom2v precheck — which silently skipped `tester` as a "gateway" the first time round, dropping the gate it used to have).
 
 One model rule bends for the carrier, deliberately: a cross-node signal on a CAN bus carries **exactly one** value field, because a DBC signal *is* a scalar. A SOME/IP event's payload is a **struct** — its fields packed in canonical order — so `BenchTicks` carrying `{wraps, ticks}` is the ordinary case there, not an error.
 

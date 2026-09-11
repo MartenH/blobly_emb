@@ -1111,6 +1111,28 @@ fn v_compiler_noise(t string) bool {
 	return false
 }
 
+// is_someip_leaf reports whether a node is a member of a someip segment AND sits on exactly one
+// CAN bus, routing nothing between them — nodes/tester: an LED on compute, tcu's peer on tel.
+//
+// It exists because that shape has to be recognised in FOUR places and they must agree: two
+// dissolution checks (a multi-bus node must otherwise be a route gateway, and a gateway may not
+// carry its own signals), the lowering that emits both halves, and the loom2v precheck that
+// would otherwise skip the node as a "gateway". The first version of this change spelled the
+// rule out at each site; tester then lowered as a gateway and silently lost its loom2v gate.
+pub fn (s System) is_someip_leaf(n Node) bool {
+	mut someip := 0
+	mut can := 0
+	for bn in n.buses {
+		bus := s.bus_by_name(bn) or { return false }
+		if bus.kind == 'someip' {
+			someip++
+		} else {
+			can++
+		}
+	}
+	return someip == 1 && can == 1 && !is_route_gateway(s, n.name)
+}
+
 pub fn ecucheck_errors(node_path string) []string {
 	output, code := run_capture(@VEXE, ['run', '${@VMODROOT}/tools/ecucheck/gen.v', node_path])
 	if code == 0 {

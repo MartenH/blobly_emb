@@ -138,7 +138,7 @@ frame  = "BenchEcho"
 [[signal]]
 name   = "LampCmd"
 fields = { level = "u8" }
-producer = "tel_bench"
+producer = "tester"
 bus    = "tel"
 frame  = "BenchCmd"
 
@@ -180,12 +180,18 @@ nm    = 0x12
 diag  = { req = 0x7B0, rsp = 0x7B8 }
 trace = 2
 
-# The tester: declared on the compute bus, never built (blobly_net stands in for it). No nm: not an NM node.
+# The tester: ONE host node on BOTH buses, never built (blobly_net stands in for it). No nm: not
+# an NM node. On compute it produces HostLedLevel; on the tel segment it is tcu's peer — which is
+# what makes tcu's telemetry RECEIVED by somebody (REQ-TOPO-001) and gives tcu an endpoint to be
+# reciprocal with, instead of the model special-casing something that lives off-system. It is a
+# LEAF on both, not a gateway: nothing routes between CAN and SOME/IP (that needs a translating
+# bridge, and is refused until its own rung).
 [[node]]
-name  = "tester"
-ecu   = "nodes/tester/ecu.toml"
-buses = ["compute"]
-diag  = { req = 0x7D0, rsp = 0x7D8 }
+name     = "tester"
+ecu      = "nodes/tester/ecu.toml"
+buses    = ["compute", "tel"]
+diag     = { req = 0x7D0, rsp = 0x7D8 }
+endpoint = { address = "192.168.0.190", port = 30491 }
 
 [[node]]
 name  = "zone_a"
@@ -203,13 +209,3 @@ name     = "tcu"
 ecu      = "nodes/tcu/ecu.toml"
 buses    = ["tel"]
 endpoint = { address = "192.168.0.51", port = 30490 }
-
-# The bench tool as a node on that segment, declaration-only — the same shape as `tester` on the
-# compute bus: nothing is built, blobly_net stands in for it. It is what makes tcu's telemetry
-# RECEIVED by somebody (REQ-TOPO-001) and what gives tcu a peer to be reciprocal with, instead
-# of the model having to special-case an endpoint that lives off-system.
-[[node]]
-name     = "tel_bench"
-ecu      = "nodes/tel_bench/ecu.toml"
-buses    = ["tel"]
-endpoint = { address = "192.168.0.190", port = 30491 }

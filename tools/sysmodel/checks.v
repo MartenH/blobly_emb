@@ -144,10 +144,13 @@ fn check_dissolved_nodes(s System) []Issue {
 			}
 		}
 		if n.buses.len != 1 {
-			// a multi-bus node is only legal as a route GATEWAY (P2): its extra buses
-			// exist to carry routes. A multi-bus node that gateways nothing would have
-			// its non-primary buses silently unwired, so still reject that.
-			if n.buses.len == 0 || !is_route_gateway(s, n.name) {
+			// a multi-bus node is legal as a route GATEWAY (P2) — its extra buses exist to
+			// carry routes — or as a LEAF that is a member of a someip segment as well as one
+			// CAN bus, which the lowering carries as both halves of one file (nodes/tester:
+			// an LED on compute, tcu's peer on tel; #245 step 3). Anything else would have its
+			// non-primary buses silently unwired, so still reject that.
+			someip_leaf := s.is_someip_leaf(n)
+			if n.buses.len == 0 || !(is_route_gateway(s, n.name) || someip_leaf) {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-006'
@@ -184,6 +187,13 @@ fn check_dissolved_nodes(s System) []Issue {
 			// such an FB would reference undeclared sig.*/port types. Reject until
 			// gateway-local signal emission lands — the routes themselves ARE generated.
 			// (Node-LOCAL io signals are fine; only system signals need the wiring.)
+			//
+			// A someip LEAF is exempt: it is not lowered by the gateway path at all. It goes
+			// through generate_node, which emits its own signals on both halves — which is the
+			// whole point of nodes/tester having FBs on compute AND tel.
+			if someip_leaf {
+				continue
+			}
 			for sig in s.signals {
 				if sig.name in n.view.fb_reads || sig.name in n.view.fb_writes {
 					issues << Issue{
@@ -2377,14 +2387,33 @@ fn check_someip_segment(s System) []Issue {
 			}
 		}
 		for n in members {
-			if n.buses.len > 1 {
-				// generate_gateway_node takes every multi-bus node and emits each bus in the
-				// CAN/DBC shape, with no [someip] at all — so the declared membership would be
-				// dropped on the floor. The SOME/IP<->CAN gateway is its own rung (#245 step 3).
+			// A segment member MAY also sit on a CAN bus — a leaf on both is lowered with both
+			// halves (nodes/tester: an LED on compute, tcu's telemetry on tel). What is still
+			// refused is a member that ROUTES, or one carrying several CAN buses: both go down
+			// generate_gateway_node, which emits every bus in the CAN/DBC shape and no [someip]
+			// at all, so the membership would be dropped on the floor. A SOME/IP<->CAN gateway
+			// is its own rung — routing between the two needs a translating bridge, not wiring.
+			mut can_buses := 0
+			for bn in n.buses {
+				if bb := s.bus_by_name(bn) {
+					if bb.kind != 'someip' {
+						can_buses++
+					}
+				}
+			}
+			routes_here := !s.is_someip_leaf(n) && is_route_gateway(s, n.name)
+			if routes_here {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-005'
-					msg:      'node "${n.name}": is a multi-bus gateway AND a member of someip bus "${b.name}" — the eth gateway is not lowered yet (the CAN gateway lowering emits no [someip] at all); keep the someip segment on a single-bus node'
+					msg:      'node "${n.name}": is a route gateway AND a member of someip bus "${b.name}" — a SOME/IP<->CAN gateway needs a translating bridge, which is its own rung; a segment member may be a leaf on one CAN bus, not a router'
+				}
+			}
+			if can_buses > 1 {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": is a member of someip bus "${b.name}" and sits on ${can_buses} CAN buses — the lowering carries one CAN bus alongside a segment (a multi-DBC node is a gateway, which emits no [someip])'
 				}
 			}
 		}
