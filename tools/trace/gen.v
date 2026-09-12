@@ -57,7 +57,8 @@ fn main() {
 			// The METHOD VOCABULARY is closed: test | analysis | review
 			// (requirements/README.md — "every requirement declares ONE method" and
 			// fulfilment means THAT method's evidence is green). Nothing validated it, so
-			// REQ-IO-025 sat on method = "bench" — the only one of 219 — and a check linked
+			// REQ-IO-025 sat on method = "bench", the only requirement in the tree with a value
+			// outside the vocabulary — and a check linked
 			// to it would have marked it verified on evidence of a method the taxonomy does
 			// not have. A typo in this field is silent everywhere else, so refuse it here.
 			meth := s(m, 'method')

@@ -498,6 +498,10 @@ fn test_the_recorder_forwards_the_duration_it_is_given() {
 
 	// trace_fb's third parameter must reach push_rec, from INSIDE trace_fb's own body — an
 	// unbounded search would borrow a later function's push_rec once this one was removed.
+	// Nothing may return before the record: trace_fb has no legitimate early exit, so any is a
+	// path on which a point service records nothing.
+	fb_exits := returns_before(lines, 'void trace_fb(', 'push_rec(')
+	assert fb_exits.len == 0, '${path}: trace_fb returns before its push_rec — a point service on that path records NOTHING: ${fb_exits}'
 	fb_calls := lines_in_body(lines, 'void trace_fb(', 'push_rec(')
 	assert fb_calls.len == 1, '${path}: trace_fb makes ${fb_calls.len} push_rec calls, want exactly 1 — a second one records every point service twice and corrupts every count a dump derives: ${fb_calls}'
 	fb_call := fb_calls[0]
@@ -511,6 +515,24 @@ fn test_the_recorder_forwards_the_duration_it_is_given() {
 
 	// ...and push_rec must ENCODE it into the record's duration bytes, from inside PUSH_REC's body:
 	// a whole-file scan accepted assignments sitting anywhere, commented-out blocks included.
+	// push_rec has exactly ONE legitimate early exit — the frozen-for-dump guard. Any other is a
+	// path that drops the record, and naming the allowed one is the only way to tell them apart.
+	pr_exits := returns_before(lines, 'static void push_rec(', 'r[6]')
+	assert pr_exits.len == 1 && pr_exits[0] == 'return;', '${path}: push_rec has ${pr_exits.len} return(s) before writing the record, want exactly the g_capturing guard: ${pr_exits}'
+	// ...and the ENTITY ID must be built from the forwarded id and encoded. trace_fb passing `id`
+	// to push_rec proves nothing if push_rec then serialises a constant: every point would record
+	// under one entity, unresolvable by name — and the silicon fixture would stay green because its
+	// only point happens to be id 2 (codex on #280).
+	eids := lines_in_body(lines, 'static void push_rec(', 'unsigned eid =')
+	assert eids.len == 1, '${path}: push_rec computes eid ${eids.len} times, want exactly 1: ${eids}'
+	want_eid := 'unsigned eid = ((kind & 0x3u) << 14) | (id & 0x3FFFu);'
+	assert eids[0] == want_eid, '${path}: push_rec builds `${eids[0]}`, want `${want_eid}` — kind in the top two bits and the forwarded id in the low 14'
+	e_los := lines_in_body(lines, 'static void push_rec(', 'r[0]')
+	e_his := lines_in_body(lines, 'static void push_rec(', 'r[1]')
+	assert e_los.len == 1 && e_his.len == 1, '${path}: the eid bytes r[0]/r[1] are written ${e_los.len}/${e_his.len} times, want once each'
+	assert e_los[0] == 'r[0] = (unsigned char)(eid & 0xFF);', '${path}: eid byte 0 is `${e_los[0]}`'
+	assert e_his[0] == 'r[1] = (unsigned char)((eid >> 8) & 0xFF);', '${path}: eid byte 1 is `${e_his[0]}`'
+
 	los := lines_in_body(lines, 'static void push_rec(', 'r[6]')
 	his := lines_in_body(lines, 'static void push_rec(', 'r[7]')
 	// EXACTLY one write each: a later statement overwriting either byte would leave the correct
@@ -537,6 +559,31 @@ fn test_the_recorder_forwards_the_duration_it_is_given() {
 //
 // Scoping matters in two directions as well: an unbounded search borrows a LATER function's code
 // once the expected line is removed, and a whole-file search accepts a line sitting anywhere.
+// returns_before returns every `return` statement inside `signature`'s body that appears BEFORE
+// the first line containing `needle`. Indentation proves a statement is not NESTED; it cannot prove
+// the statement is REACHED. A top-level `if (dur_us == 0) return;` earlier in trace_fb leaves the
+// push_rec call at four spaces, so every assertion passed while a correctly quantized 0us service
+// recorded nothing — and the hardware fixture, whose observed durations are nonzero, stayed green
+// (codex on #280).
+fn returns_before(lines []string, signature string, needle string) []string {
+	mut found := []string{}
+	for i, l in lines {
+		if !l.contains(signature) {
+			continue
+		}
+		for k in i + 1 .. lines.len {
+			if lines[k].starts_with('}') || lines[k].contains(needle) {
+				break
+			}
+			if lines[k].contains('return') {
+				found << lines[k].trim_space()
+			}
+		}
+		break
+	}
+	return found
+}
+
 fn lines_in_body(lines []string, signature string, needle string) []string {
 	mut found := []string{}
 	for i, l in lines {
