@@ -479,6 +479,61 @@ fn test_the_recorder_forwards_the_duration_it_is_given() {
 		}
 	}
 	assert lo != '' && hi != '', '${path}: the record duration bytes r[6]/r[7] are not assigned where this test can see them'
-	assert lo.contains('dur_us'), '${path}: record byte 6 does not come from dur_us: ${lo}'
-	assert hi.contains('dur_us'), '${path}: record byte 7 does not come from dur_us: ${hi}'
+	// The COMPLETE assignments, not `contains("dur_us")`: a byte SWAP —
+	// `r[6] = dur_us >> 8; r[7] = dur_us & 0xFF;` — contains dur_us on both lines and corrupts
+	// every multi-byte duration, while the silicon check only sees record presence and accepts any
+	// value. That is the same substring mistake as four earlier checks in this file
+	// (codex on #280), so this compares the whole statement.
+	want_lo := 'r[6] = (unsigned char)(dur_us & 0xFF);'
+	want_hi := 'r[7] = (unsigned char)((dur_us >> 8) & 0xFF);'
+	assert lo == want_lo, '${path}: record byte 6 is `${lo}`, want `${want_lo}` — the duration is little-endian in the 8-byte record'
+	assert hi == want_hi, '${path}: record byte 7 is `${hi}`, want `${want_hi}` — the duration is little-endian in the 8-byte record'
+}
+
+// A PWM OUTPUT's ordering. traced_io_model() carries a gpio input and an adc input, so the `pwm`
+// arm of the operation match in test_the_manifest_rows_and_the_emitted_records_agree was never
+// reached — while the hardware fixture this PR verifies (system_full/nodes/domain) is a PWM output
+// and nothing else. A regression emitting the record before io.pwm_write would have left every host
+// assertion green, and the silicon script sees only record presence (codex on #280).
+fn pwm_io_model() Model {
+	mut m := Model{}
+	m.trace.on = true
+	m.trace.level = 'all'
+	m.io_points = [
+		IoPoint{
+			name:      'Lamp'
+			kind:      'pwm'
+			output:    true
+			period_ms: 10
+			ch:        0
+		},
+	]
+	return m
+}
+
+fn test_a_pwm_output_records_after_its_write() {
+	m := pwm_io_model()
+	doc := empty_doc()
+	g := emit_io_target_entry(m, doc, {
+		'Lamp': 0
+	}, true, 0).join('\n')
+	lines := g.split('\n')
+	hid := io_handler_id_base(m, doc)
+	mut i_start := -1
+	mut i_write := -1
+	mut i_rec := -1
+	for k, l in lines {
+		if l.contains('p${hid}_t0 := C.board_now_us()') {
+			i_start = k
+		}
+		if l.contains('io.pwm_write(') {
+			i_write = k
+		}
+		if l.contains('C.trace_fb(u32(${hid}),') {
+			i_rec = k
+		}
+	}
+	assert i_start >= 0, 'no per-point bracket for the pwm point'
+	assert i_write > i_start, 'io.pwm_write is not inside the point\'s bracket'
+	assert i_rec > i_write, 'the pwm point records at line ${i_rec}, BEFORE its io.pwm_write at ${i_write} — the duration would exclude the write'
 }
