@@ -411,7 +411,7 @@ fn squeeze_call(line string, name string) string {
 fn check_accumulator(path string) int {
 	src := os.read_file(path) or { return 0 }
 	mut n := 0
-	for line in src.split_into_lines() {
+	for line in strip_comments(src) {
 		// Discovery is on the IDENTIFIER, not on `void io_exec_add(`. Requiring the return type on
 		// the same line is a FORMATTING assumption: a backend writing `void` on its own line was
 		// skipped silently, and `found >= 6` stayed satisfied by the other copies while that one
@@ -422,10 +422,15 @@ fn check_accumulator(path string) int {
 		// normalising exactly one `" ("` — so `io_exec_add  (` and a tab still slipped past while
 		// `found >= 6` stayed satisfied by the other copies (codex on #280). squeeze_call() is the
 		// last version of this: it answers for any C spacing.
-		t := squeeze_call(line.trim_space(), 'io_exec_add')
-		if !t.contains('io_exec_add(') {
+		if !line.contains('io_exec_add') {
 			continue
 		}
+		t := squeeze_call(line.trim_space(), 'io_exec_add')
+		// The identifier is here but this scan cannot see its `(` on this line: a multiline
+		// signature (`void io_exec_add` then `(unsigned us)`) was SKIPPED, and with six one-line
+		// copies keeping `found >= 6` a seventh backend could accumulate the wrong value and stay
+		// invisible. An occurrence that cannot be parsed fails instead (codex on #280).
+		assert t.contains('io_exec_add('), '${path}: io_exec_add appears in a form this scan cannot read — the identifier and its `(` must be on one line so the accumulation can be checked, or this scan silently stops covering that backend: ${line.trim_space()}'
 		// a CALL or a PROTOTYPE: statement-terminated, no body. Neither is a definition to judge.
 		if t.ends_with(';') && !t.contains('{') {
 			continue
@@ -485,134 +490,90 @@ fn check_accumulator(path string) int {
 //
 // Text again, for the same reason as the accumulator scan: the file needs tx_api.h and a device
 // header, so the host cannot execute it.
-fn test_the_recorder_forwards_the_duration_it_is_given() {
+// THE RECORDER, PINNED WHOLE. trace_fb and push_rec's record write are compared against their
+// exact expected code, comment-free and whitespace-normalised — not probed property by property.
+//
+// This replaced ten rounds of per-line assertions, each answering one more way that matching text
+// differs from meaning: substring vs exact, unscoped vs body-scoped, comments-as-code, first-match
+// vs all-matches, nested-under-a-conditional, a preceding early exit, a later reassignment, a
+// guard whose condition changed. Every fix was right and every one invited the next, because a text
+// scan cannot decide semantics and there is always one more shape (codex on #280, rounds 20-31).
+//
+// A whole-body comparison is terminal instead: ANY deviation fails, so there is no looser question
+// left to ask. The cost is that a legitimate edit to these functions fails this test — which is the
+// intent. trace_hooks.c is not host-compilable (tx_api.h, a device header), so nothing here can
+// execute it; changing what it records is a decision that should be made deliberately, with the
+// expected text updated in the same commit.
+fn test_the_recorder_records_exactly_what_it_is_given() {
 	path := os.join_path(@VMODROOT, 'boards', 'common', 'trace_hooks.c')
 	src := os.read_file(path) or {
 		assert false, 'cannot read ${path}: ${err}'
 		return
 	}
-	// Comment-free and line-preserving. A per-line stripper cannot see a multiline `/* ... */`, so
-	// a call or an assignment disabled inside one was captured as executable code and every
-	// assertion about it passed while the compiled function did nothing (codex on #280).
 	lines := strip_comments(src)
 
-	// trace_fb's third parameter must reach push_rec, from INSIDE trace_fb's own body — an
-	// unbounded search would borrow a later function's push_rec once this one was removed.
-	// Nothing may return before the record: trace_fb has no legitimate early exit, so any is a
-	// path on which a point service records nothing.
-	fb_exits := returns_before(lines, 'void trace_fb(', 'push_rec(')
-	assert fb_exits.len == 0, '${path}: trace_fb returns before its push_rec — a point service on that path records NOTHING: ${fb_exits}'
-	fb_calls := lines_in_body(lines, 'void trace_fb(', 'push_rec(')
-	assert fb_calls.len == 1, '${path}: trace_fb makes ${fb_calls.len} push_rec calls, want exactly 1 — a second one records every point service twice and corrupts every count a dump derives: ${fb_calls}'
-	fb_call := fb_calls[0]
-	// The COMPLETE CALL, every argument. Checking only the last one let `id` be replaced by a
-	// constant — `push_rec(KIND_FB, 2u, ...)` — which records every point under one entity while
-	// the duration argument stayed correct and every assertion passed. The silicon fixture's only
-	// point happens to have manifest id 2, so that run would have stayed green too, and any other
-	// point would have been recorded under the wrong id and been unresolvable (codex on #280).
-	want_call := 'push_rec(KIND_FB, id, 0u, (unsigned long)start_us, dur_us > 0xFFFFu ? 0xFFFFu : dur_us);'
-	assert fb_call == want_call, '${path}: trace_fb calls `${fb_call}`, want `${want_call}` — the id, the start and the saturated duration must all be forwarded'
+	want_fb := [
+		'unsigned pm;',
+		'__asm volatile("mrs %0, primask" : "=r"(pm));',
+		'__asm volatile("cpsid i" ::: "memory");',
+		'push_rec(KIND_FB, id, 0u, (unsigned long)start_us, dur_us > 0xFFFFu ? 0xFFFFu : dur_us);',
+		'__asm volatile("msr primask, %0" :: "r"(pm) : "memory");',
+	]
+	got_fb := body_of(lines, 'void trace_fb(')
+	assert got_fb == want_fb, 'trace_fb\'s body changed.\n got: ${got_fb}\nwant: ${want_fb}\nIt must forward the point id, the start and the SATURATED measured duration to push_rec, on every call, with no early exit and nothing between. If this change is intended, update want_fb in the same commit — the point of pinning it is that what the ring records cannot drift silently (REQ-IO-025).'
 
-	// ...and push_rec must ENCODE it into the record's duration bytes, from inside PUSH_REC's body:
-	// a whole-file scan accepted assignments sitting anywhere, commented-out blocks included.
-	// push_rec has exactly ONE legitimate early exit — the frozen-for-dump guard. Any other is a
-	// path that drops the record, and naming the allowed one is the only way to tell them apart.
-	pr_exits := returns_before(lines, 'static void push_rec(', 'r[6]')
-	assert pr_exits.len == 1 && pr_exits[0] == 'return;', '${path}: push_rec has ${pr_exits.len} return(s) before writing the record, want exactly the g_capturing guard: ${pr_exits}'
-	// ...and the ENTITY ID must be built from the forwarded id and encoded. trace_fb passing `id`
-	// to push_rec proves nothing if push_rec then serialises a constant: every point would record
-	// under one entity, unresolvable by name — and the silicon fixture would stay green because its
-	// only point happens to be id 2 (codex on #280).
-	eids := lines_in_body(lines, 'static void push_rec(', 'unsigned eid =')
-	assert eids.len == 1, '${path}: push_rec computes eid ${eids.len} times, want exactly 1: ${eids}'
-	want_eid := 'unsigned eid = ((kind & 0x3u) << 14) | (id & 0x3FFFu);'
-	assert eids[0] == want_eid, '${path}: push_rec builds `${eids[0]}`, want `${want_eid}` — kind in the top two bits and the forwarded id in the low 14'
-	e_los := lines_in_body(lines, 'static void push_rec(', 'r[0]')
-	e_his := lines_in_body(lines, 'static void push_rec(', 'r[1]')
-	assert e_los.len == 1 && e_his.len == 1, '${path}: the eid bytes r[0]/r[1] are written ${e_los.len}/${e_his.len} times, want once each'
-	assert e_los[0] == 'r[0] = (unsigned char)(eid & 0xFF);', '${path}: eid byte 0 is `${e_los[0]}`'
-	assert e_his[0] == 'r[1] = (unsigned char)((eid >> 8) & 0xFF);', '${path}: eid byte 1 is `${e_his[0]}`'
+	// push_rec: the record write, from the eid through the duration bytes. The PRIMASK/asm framing
+	// around it is the ISR-race guard, not part of what is recorded, so it is not pinned here.
+	want_write := [
+		'unsigned eid = ((kind & 0x3u) << 14) | (id & 0x3FFFu);',
+		'unsigned char *r = g_ring[g_head & (RING_CAP - 1u)];',
+		'r[0] = (unsigned char)(eid & 0xFF);',
+		'r[1] = (unsigned char)((eid >> 8) & 0xFF);',
+		'r[2] = info;',
+		'r[3] = (unsigned char)(start_us & 0xFF);',
+		'r[4] = (unsigned char)((start_us >> 8) & 0xFF);',
+		'r[5] = (unsigned char)((start_us >> 16) & 0xFF);',
+		'r[6] = (unsigned char)(dur_us & 0xFF);',
+		'r[7] = (unsigned char)((dur_us >> 8) & 0xFF);',
+		'g_head++;',
+	]
+	body := body_of(lines, 'static void push_rec(')
+	i := body.index('unsigned eid = ((kind & 0x3u) << 14) | (id & 0x3FFFu);')
+	assert i >= 0, 'push_rec does not compute the eid from kind and the forwarded id: ${body}'
+	end_i := i + want_write.len
+	assert end_i <= body.len, 'push_rec\'s record write is shorter than expected: ${body[i..]}'
+	got_write := body[i..end_i]
+	assert got_write == want_write, 'push_rec\'s record write changed.\n got: ${got_write}\nwant: ${want_write}\nThe 8-byte record is the wire format a dump decodes: the eid carries kind and the point id, and bytes 6-7 the duration, little-endian. If this change is intended, update want_write in the same commit.'
 
-	los := lines_in_body(lines, 'static void push_rec(', 'r[6]')
-	his := lines_in_body(lines, 'static void push_rec(', 'r[7]')
-	// EXACTLY one write each: a later statement overwriting either byte would leave the correct
-	// assignment in place for this check to find and still corrupt the recorded duration.
-	assert los.len == 1, '${path}: push_rec writes r[6] ${los.len} times, want exactly 1 — a later write overwrites the duration: ${los}'
-	assert his.len == 1, '${path}: push_rec writes r[7] ${his.len} times, want exactly 1 — a later write overwrites the duration: ${his}'
-	lo := los[0]
-	hi := his[0]
-	// The COMPLETE assignments: a byte SWAP mentions dur_us on both lines and corrupts every
-	// multi-byte duration, while the silicon check accepts any value.
-	want_lo := 'r[6] = (unsigned char)(dur_us & 0xFF);'
-	want_hi := 'r[7] = (unsigned char)((dur_us >> 8) & 0xFF);'
-	assert lo == want_lo, '${path}: record byte 6 is `${lo}`, want `${want_lo}` — the duration is little-endian in the 8-byte record'
-	assert hi == want_hi, '${path}: record byte 7 is `${hi}`, want `${want_hi}` — the duration is little-endian in the 8-byte record'
+	// and the ONLY early exit before the write is the frozen-for-dump guard, with its condition —
+	// a guard changed to `if (dur_us == 0)` keeps the count and drops every sub-microsecond record
+	guard := body[..i].filter(it.contains('return'))
+	assert guard.len == 1, 'push_rec has ${guard.len} early exits before the record write, want exactly the capture guard: ${guard}'
+	gi := body.index(guard[0])
+	assert gi > 0 && body[gi - 1] == 'if (!g_capturing)', 'push_rec\'s early exit is guarded by `${body[gi - 1]}`, want `if (!g_capturing)` — any other condition drops records the requirement says must exist'
 }
 
-// lines_in_body returns EVERY line containing `needle` between a line matching `signature` and the
-// closing brace in column 0 that ends that function.
-//
-// All of them, not the first. Returning the first match validated one statement and ignored the
-// rest, so a SECOND push_rec in trace_fb (duplicate records for every point service) or a later
-// overwrite of a duration byte both passed while the first, correct statement was the only one
-// examined (codex on #280). Cardinality is part of the contract, so the caller asserts it.
-//
-// Scoping matters in two directions as well: an unbounded search borrows a LATER function's code
-// once the expected line is removed, and a whole-file search accepts a line sitting anywhere.
-// returns_before returns every `return` statement inside `signature`'s body that appears BEFORE
-// the first line containing `needle`. Indentation proves a statement is not NESTED; it cannot prove
-// the statement is REACHED. A top-level `if (dur_us == 0) return;` earlier in trace_fb leaves the
-// push_rec call at four spaces, so every assertion passed while a correctly quantized 0us service
-// recorded nothing — and the hardware fixture, whose observed durations are nonzero, stayed green
-// (codex on #280).
-fn returns_before(lines []string, signature string, needle string) []string {
-	mut found := []string{}
-	for i, l in lines {
-		if !l.contains(signature) {
-			continue
-		}
-		for k in i + 1 .. lines.len {
-			if lines[k].starts_with('}') || lines[k].contains(needle) {
-				break
-			}
-			if lines[k].contains('return') {
-				found << lines[k].trim_space()
-			}
-		}
-		break
-	}
-	return found
-}
-
-fn lines_in_body(lines []string, signature string, needle string) []string {
-	mut found := []string{}
+// body_of returns a function's body as trimmed, comment-free, non-empty lines: from the line
+// matching `signature` to the closing brace in column 0. The opening brace line is skipped.
+fn body_of(lines []string, signature string) []string {
+	mut out := []string{}
 	for i, l in lines {
 		if !l.contains(signature) {
 			continue
 		}
 		for k in i + 1 .. lines.len {
 			if lines[k].starts_with('}') {
-				break
+				return out
 			}
-			if !lines[k].contains(needle) {
+			t := lines[k].trim_space()
+			if t == '' || t == '{' {
 				continue
 			}
-			// TOP LEVEL of the body only — one indent, not nested. `if (dur_us != 0) push_rec(...)`
-			// satisfies every cardinality and exact-text assertion while a correctly quantized 0us
-			// service records NOTHING, and the same guard around the duration bytes leaves stale
-			// ones behind. The silicon check cannot see either: it accepts any duration, 0 included
-			// (codex on #280).
-			//
-			// Indentation is the test because it is the property meant — "this statement always
-			// runs when the function does". It rests on the file's 4-space style, which is the
-			// formatting constraint this scan already documents rather than a new assumption.
-			indent := lines[k].len - lines[k].trim_left(' \t').len
-			assert indent == 4, 'a `${needle}` in ${signature} is indented ${indent}, not 4 — a nested statement does not always run, so it cannot be evidence that the recorder always does this: ${lines[k].trim_space()}'
-			found << lines[k].trim_space()
+			out << t
 		}
-		break
+		return out
 	}
-	return found
+	return out
 }
 
 // A PWM OUTPUT's ordering. traced_io_model() carries a gpio input and an adc input, so the `pwm`
@@ -802,17 +763,21 @@ fn test_the_fb_loop_subtracts_the_io_counter() {
 		return
 	}
 	lines := strip_comments(src)
-	mut dispatch := ''
+	// EVERY dispatch, not the last. Overwriting a single variable validated only the final match, so
+	// an extra `sched.run_profiled(...)` before the expected call left the last value correct and
+	// the test passing — while that dispatch still charged io preemption, and an extra call services
+	// handlers twice (codex on #280).
+	mut dispatches := []string{}
 	mut clock_fn := false
 	for l in lines {
 		if l.contains('sched.run_profiled') {
-			dispatch = l.trim_space()
+			dispatches << l.trim_space()
 		}
 		if l.contains('return C.io_exec_us()') {
 			clock_fn = true
 		}
 	}
-	assert dispatch != '', 'no sched.run_profiled* dispatch in the emitted loop'
-	assert dispatch == 'sched.run_profiled_excl(trace_clock, io_exec_clock)', 'the FB dispatch is `${dispatch}` — with io points and trace level="all" it must be run_profiled_excl(trace_clock, io_exec_clock), or handler load charges io preemption again'
+	assert dispatches.len == 1, 'the emitted loop has ${dispatches.len} profiled dispatches, want exactly 1 — a second services handlers twice: ${dispatches}'
+	assert dispatches[0] == 'sched.run_profiled_excl(trace_clock, io_exec_clock)', 'the FB dispatch is `${dispatches[0]}` — with io points and trace level="all" it must be run_profiled_excl(trace_clock, io_exec_clock), or handler load charges io preemption again'
 	assert clock_fn, 'io_exec_clock() does not read C.io_exec_us() — the dispatch would subtract something else'
 }
