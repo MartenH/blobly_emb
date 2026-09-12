@@ -498,8 +498,9 @@ fn test_the_recorder_forwards_the_duration_it_is_given() {
 
 	// trace_fb's third parameter must reach push_rec, from INSIDE trace_fb's own body — an
 	// unbounded search would borrow a later function's push_rec once this one was removed.
-	fb_call := call_in_body(lines, 'void trace_fb(', 'push_rec(')
-	assert fb_call != '', '${path}: no push_rec( call in trace_fb\'s body'
+	fb_calls := lines_in_body(lines, 'void trace_fb(', 'push_rec(')
+	assert fb_calls.len == 1, '${path}: trace_fb makes ${fb_calls.len} push_rec calls, want exactly 1 — a second one records every point service twice and corrupts every count a dump derives: ${fb_calls}'
+	fb_call := fb_calls[0]
 	// The COMPLETE argument: contains('dur_us') accepts `dur_us + 1`, which names the parameter,
 	// passes the byte checks below (push_rec's own parameter is also called dur_us) and inflates
 	// every recorded duration. The silicon check sees record presence, not values.
@@ -509,9 +510,14 @@ fn test_the_recorder_forwards_the_duration_it_is_given() {
 
 	// ...and push_rec must ENCODE it into the record's duration bytes, from inside PUSH_REC's body:
 	// a whole-file scan accepted assignments sitting anywhere, commented-out blocks included.
-	lo := call_in_body(lines, 'static void push_rec(', 'r[6]')
-	hi := call_in_body(lines, 'static void push_rec(', 'r[7]')
-	assert lo != '' && hi != '', '${path}: the duration bytes r[6]/r[7] are not assigned inside push_rec\'s body'
+	los := lines_in_body(lines, 'static void push_rec(', 'r[6]')
+	his := lines_in_body(lines, 'static void push_rec(', 'r[7]')
+	// EXACTLY one write each: a later statement overwriting either byte would leave the correct
+	// assignment in place for this check to find and still corrupt the recorded duration.
+	assert los.len == 1, '${path}: push_rec writes r[6] ${los.len} times, want exactly 1 — a later write overwrites the duration: ${los}'
+	assert his.len == 1, '${path}: push_rec writes r[7] ${his.len} times, want exactly 1 — a later write overwrites the duration: ${his}'
+	lo := los[0]
+	hi := his[0]
 	// The COMPLETE assignments: a byte SWAP mentions dur_us on both lines and corrupts every
 	// multi-byte duration, while the silicon check accepts any value.
 	want_lo := 'r[6] = (unsigned char)(dur_us & 0xFF);'
@@ -520,26 +526,33 @@ fn test_the_recorder_forwards_the_duration_it_is_given() {
 	assert hi == want_hi, '${path}: record byte 7 is `${hi}`, want `${want_hi}` — the duration is little-endian in the 8-byte record'
 }
 
-// call_in_body finds the first line containing `needle` between a line matching `signature` and the
-// closing brace in column 0 that ends that function. Scoping matters twice over: an unbounded
-// search borrows a LATER function's code once the expected line is removed, and a whole-file search
-// accepts a line sitting anywhere at all.
-fn call_in_body(lines []string, signature string, needle string) string {
+// lines_in_body returns EVERY line containing `needle` between a line matching `signature` and the
+// closing brace in column 0 that ends that function.
+//
+// All of them, not the first. Returning the first match validated one statement and ignored the
+// rest, so a SECOND push_rec in trace_fb (duplicate records for every point service) or a later
+// overwrite of a duration byte both passed while the first, correct statement was the only one
+// examined (codex on #280). Cardinality is part of the contract, so the caller asserts it.
+//
+// Scoping matters in two directions as well: an unbounded search borrows a LATER function's code
+// once the expected line is removed, and a whole-file search accepts a line sitting anywhere.
+fn lines_in_body(lines []string, signature string, needle string) []string {
+	mut found := []string{}
 	for i, l in lines {
 		if !l.contains(signature) {
 			continue
 		}
 		for k in i + 1 .. lines.len {
-			if lines[k].contains(needle) {
-				return lines[k].trim_space()
-			}
 			if lines[k].starts_with('}') {
-				return ''
+				break
+			}
+			if lines[k].contains(needle) {
+				found << lines[k].trim_space()
 			}
 		}
-		return ''
+		break
 	}
-	return ''
+	return found
 }
 
 // A PWM OUTPUT's ordering. traced_io_model() carries a gpio input and an adc input, so the `pwm`
