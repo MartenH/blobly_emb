@@ -147,11 +147,14 @@ fn main() {
 			if meth == '' {
 				meth = 'analysis'
 			}
-			// The same CLOSED vocabulary the requirements are held to. Validating only the
-			// requirement side left a typo here silently producing evidence of a method the
-			// taxonomy does not have (codex on #280).
-			if meth !in ['test', 'analysis', 'review'] {
-				eprintln('trace: check "${s(m, 'id')}": method "${meth}" is not one of test|analysis|review (requirements/README.md)')
+			// A [[check]] RUNS A COMMAND, so it can only ever be `test` or `analysis` evidence.
+			// Accepting `review` here — as the first version of this gate did, by reusing the
+			// requirement side's allowlist — let a command's exit status be recorded as review
+			// evidence and mark a review-method requirement verified with NO approved_by
+			// sign-off, bypassing the [[review]] path that exists for exactly that
+			// (codex on #280). Review evidence is a logged human approval, not a green command.
+			if meth !in ['test', 'analysis'] {
+				eprintln('trace: check "${s(m, 'id')}": method "${meth}" — a [[check]] runs a command, so it is `test` or `analysis` evidence; a review is a signed-off [[review]] entry, not a command')
 				bad_method = true
 			}
 			// skip_exit (opt-in, per check): the exit code that means "not run" -> pending,

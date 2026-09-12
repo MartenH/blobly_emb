@@ -305,9 +305,17 @@ fn test_the_manifest_rows_and_the_emitted_records_agree() {
 		}
 		assert i_op > i_start, 'point "${pt.name}" (${pt.kind}): no ${op} between its bracket start and its record — the duration would exclude the service'
 		// ...and the record's DURATION must come from this point's own bracket. Matching the
-		// `C.trace_fb(u32(<hid>),` prefix accepts any third argument: a constant, or the
-		// whole-pass elapsed time, would satisfy every check here and the hardware test only
-		// requires a nonzero duration, so neither could be told from the point's own interval.
+		// `C.trace_fb(u32(<hid>),` prefix accepts any third argument, so a constant or the
+		// whole-pass elapsed time would satisfy every other check here.
+		//
+		// This assertion is the ONLY evidence for that. The hardware test observes record
+		// PRESENCE and reports whatever duration it finds — it does not, and cannot, judge the
+		// expression the value came from: a value is just a value on the wire, and a legitimate
+		// sub-microsecond service reads 0us, so no observed number distinguishes a real bracket
+		// from a fabricated one. (The rationale here said "the hardware test requires a nonzero
+		// duration" for a round after that requirement was dropped — describing the sibling
+		// check's assertions is how these comments keep going stale; describe what this one
+		// establishes instead.)
 		want := 'C.trace_fb(u32(${hid}), p${hid}_t0, u32(C.board_now_us() - p${hid}_t0))'
 		got_rec := stmt_of(lines[i_rec])
 		assert got_rec == want, 'point "${pt.name}": record is `${got_rec}`, want `${want}` — the duration must be this point\'s own measured interval'
