@@ -60,10 +60,17 @@ verifies = ["REQ-IO-018", "REQ-IO-021"]
 #   * a quantitative "the sum equals the whole pass" bound. Five shapes of one were each wrong in
 #     one direction or the other; the ring wraps in ~50ms and is sampled outside the interval
 #     being bounded, so there is no matched (work, interval) pair to calibrate against.
-# Both of those live in tools/loom2v/io_points_trace_test.v instead, which is linked to this same
-# requirement: it asserts the emitted shape (t0 before the first point, t1 after the last point's
-# record, io_exec_add publishing exactly t1 - t0, one record per point, each after its own
-# operation) and that every board glue's accumulator adds its argument.
+# Of those two, only the WHOLE-PASS ACCOUNTING has evidence elsewhere:
+# tools/loom2v/io_points_trace_test.v, linked to this same requirement, asserts the emitted shape
+# (t0 before the first point, t1 after the last point's record, io_exec_add publishing exactly
+# `u32(t1 - t0)` and exactly once, on both the load and trace-only paths, one record per point and
+# each after its own operation) and that every board glue's accumulator adds its own argument with
+# a getter returning that same variable.
+#
+# The PERIOD BOUND has no evidence anywhere, by choice: nothing here compares a measured duration
+# against a point's period, because an overrun is the requirement working rather than failing. A
+# timing budget for io service is a requirement this repo has not written. Saying "both live in the
+# host test" advertised timing evidence that does not exist (codex on #280).
 #
 # The point id and name are read from gen/trace-manifest.csv, never hard-coded: the ids
 # continue the global handler numbering, so adding an FB handler shifts them and a

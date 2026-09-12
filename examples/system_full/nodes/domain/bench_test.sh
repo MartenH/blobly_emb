@@ -101,17 +101,20 @@ H1=$(u32 "$HEAD"); sleep 1; H2=$(u32 "$HEAD")
 [ "$H2" -gt "$H1" ] && ok "g_head advancing ($H1 -> $H2)" \
   || fail "g_head stuck at $H1 — the exec-hook recorder is not capturing"
 
-# --- 3. the thread-level aggregate: advancing, and ACCOUNTING for the work ---------
-# Monotonicity alone proves only liveness — a counter that added a constant would advance too
-# (codex on #280). The io serve loop runs at a fixed period, so over a measured window the sum
-# must account for at least the points' own time: passes x the smallest per-point duration seen.
-# That catches a counter that stopped accumulating, or accumulates less than the work it brackets.
+# --- 3. the thread-level aggregate: it is still being published ---------------------
+# LIVENESS ONLY, and deliberately so. This samples g_io_exec_us across a measured interval and
+# asserts it moved and did not claim more time than the interval held. It does NOT establish that
+# the sum equals the whole pass: a counter adding a constant would also advance, and five attempts
+# at a quantitative floor for that were each wrong in one direction or the other (the reasons are
+# at the ceiling check below). This description said otherwise for a round after the floor was
+# removed — the script claiming more than it checks (codex on #280).
 #
-# What this CANNOT distinguish on this node: a whole-pass sum from "only the last point's
-# duration" — with ONE io point they are the same number. That discrimination is in the emitted
-# SHAPE instead, asserted host-side by tools/loom2v/io_points_trace_test.v
-# (test_the_exec_sum_brackets_the_whole_pass_not_a_point): t0 before the first point, t1 after the
-# last, io_exec_add publishing exactly t1 - t0.
+# The whole-pass claim is evidence from elsewhere, and all of it host-side in
+# tools/loom2v/io_points_trace_test.v: t0 before the first point and t1 after the last point's
+# record, io_exec_add publishing exactly `u32(t1 - t0)` and exactly once, on BOTH the load and
+# trace-only paths, and every board glue's accumulator adding its own argument with a getter
+# returning that same variable. Nothing on this node could separate a whole-pass sum from "only
+# the last point's duration" anyway — with ONE io point they are the same number.
 WIN_S=2
 # The interval is MEASURED, not assumed. The nominal sleep is not the elapsed time: two SWD reads
 # plus shell startup sit inside it, so a system legitimately spending nearly all its wall time in
@@ -120,7 +123,12 @@ WIN_S=2
 # have inverted the requirement (codex on #280).
 T1=$(date +%s%N); A1=$(u32 "$IOEXEC"); sleep "$WIN_S"; A2=$(u32 "$IOEXEC"); T2=$(date +%s%N)
 ELAPSED_US=$(( (T2 - T1) / 1000 ))
-[ "$A2" -gt "$A1" ] || fail "g_io_exec_us stuck at $A1 — the io serve loop is not running"
+# MODULO 2^32: g_io_exec_us is an `unsigned` C counter, so on a long-running target A2 < A1 is a
+# perfectly healthy observation — it wrapped between the reads (~72 minutes of accumulated io time
+# when a point consumes most of its period). Comparing the raw values would report a wrap as a
+# stuck serve loop and never reach a valid delta (codex on #280).
+DELTA=$(( (A2 - A1 + 4294967296) % 4294967296 ))
+[ "$DELTA" -gt 0 ] || fail "g_io_exec_us did not move from $A1 across ${ELAPSED_US}us — the io serve loop is not running"
 
 # --- 4. PER-POINT records in the ring, for EVERY point (the REQ-IO-025 claim) ------
 # record (trace_hooks.c): eid u16 LE (kind<<14|id) | info u8 | start_us u24 LE | dur_us u16 LE.
@@ -218,8 +226,7 @@ done
 # follows the last point's RECORD, and io_exec_add publishes exactly t1 - t0. Below that there is
 # only the C one-liner `io_exec_add(us) { g_io_exec_us += us; }` in the board glue, which no
 # instrument here reaches.
-if [ "$A2" -gt "$A1" ]; then
-  DELTA=$(( A2 - A1 ))
+if [ "$DELTA" -gt 0 ]; then
   [ "$DELTA" -le "$ELAPSED_US" ] && ok "g_io_exec_us +${DELTA}us within the ${ELAPSED_US}us actually elapsed between the two reads" \
     || fail "g_io_exec_us advanced ${DELTA}us across a measured ${ELAPSED_US}us interval — more execution than wall time, which is impossible"
 fi
