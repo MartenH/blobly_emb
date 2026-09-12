@@ -571,12 +571,23 @@ fn body_of(lines []string, signature string) []string {
 		}
 		// Skip to the OPENING BRACE first: a signature may span lines (push_rec's does), and
 		// starting at signature+1 collected its continuation as the first body line.
+		//
+		// The scan starts at the SIGNATURE LINE, not after it. C puts the brace on its own line, V
+		// puts it on the signature — so beginning at signature+1 skipped past a V function's brace
+		// entirely and collected the NEXT function's body instead, silently: the first V caller of
+		// this helper got trace_fb_hook's body when it asked for io_exec_clock's, and would have
+		// pinned it happily had the expected value matched.
 		mut started := false
-		for k in i + 1 .. lines.len {
+		for k in i .. lines.len {
 			t := lines[k].trim_space()
 			if !started {
 				if t.ends_with('{') || t == '{' {
 					started = true
+				}
+				// a closing brace in column 0 before any opening one means the signature's own body
+				// was never found — return nothing rather than walk into the next function
+				if k > i && lines[k].starts_with('}') {
+					return []string{}
 				}
 				continue
 			}
@@ -593,127 +604,55 @@ fn body_of(lines []string, signature string) []string {
 	return out
 }
 
-// A PWM OUTPUT's ordering. traced_io_model() carries a gpio input and an adc input, so the `pwm`
-// arm of the operation match in test_the_manifest_rows_and_the_emitted_records_agree was never
-// reached — while the hardware fixture this PR verifies (system_full/nodes/domain) is a PWM output
-// and nothing else. A regression emitting the record before io.pwm_write would have left every host
-// assertion green, and the silicon script sees only record presence (codex on #280).
-fn pwm_io_model() Model {
-	mut m := Model{}
-	m.trace.on = true
-	m.trace.level = 'all'
-	m.io_points = [
-		IoPoint{
-			name:      'Lamp'
-			kind:      'pwm'
-			output:    true
-			period_ms: 10
-			ch:        0
-		},
-	]
-	return m
-}
-
-fn test_a_pwm_output_records_after_its_write() {
-	m := pwm_io_model()
-	doc := empty_doc()
-	g := emit_io_target_entry(m, doc, {
-		'Lamp': 0
-	}, true, 0).join('\n')
-	lines := strip_comments(g)
-	hid := io_handler_id_base(m, doc)
-	mut i_start := -1
-	mut i_write := -1
-	mut i_rec := -1
-	for k, l in lines {
-		if l.contains('p${hid}_t0 := C.board_now_us()') {
-			i_start = k
-		}
-		if l.contains('io.pwm_write(') {
-			i_write = k
-		}
-		if l.contains('C.trace_fb(u32(${hid}),') {
-			i_rec = k
-		}
-	}
-	assert i_start >= 0, 'no per-point bracket for the pwm point'
-	assert i_write > i_start, 'io.pwm_write is not inside the point\'s bracket'
-	assert i_rec > i_write, 'the pwm point records at line ${i_rec}, BEFORE its io.pwm_write at ${i_write} — the duration would exclude the write'
-}
-
-// A GPIO OUTPUT's ordering. After the pwm fixture, `io.gpio_write(` was STILL an unreached arm of
-// the operation match: traced_io_model() has a gpio INPUT and an adc input, pwm_io_model() has only
-// pwm. An output-gpio regression recording before its write would have left every host assertion
-// green (codex on #280). Every arm of that match is now exercised by some test — see
-// test_every_operation_arm_is_exercised below, which is the guard against this recurring.
-fn gpio_out_io_model() Model {
-	mut m := Model{}
-	m.trace.on = true
-	m.trace.level = 'all'
-	m.io_points = [
-		IoPoint{
-			name:      'Relay'
-			kind:      'gpio'
-			output:    true
-			period_ms: 10
-			ch:        0
-		},
-	]
-	return m
-}
-
-fn test_a_gpio_output_records_after_its_write() {
-	m := gpio_out_io_model()
-	doc := empty_doc()
-	g := emit_io_target_entry(m, doc, {
-		'Relay': 0
-	}, true, 0).join('\n')
-	lines := strip_comments(g)
-	hid := io_handler_id_base(m, doc)
-	mut i_start := -1
-	mut i_write := -1
-	mut i_rec := -1
-	for k, l in lines {
-		if l.contains('p${hid}_t0 := C.board_now_us()') {
-			i_start = k
-		}
-		if l.contains('io.gpio_write(') {
-			i_write = k
-		}
-		if l.contains('C.trace_fb(u32(${hid}),') {
-			i_rec = k
-		}
-	}
-	assert i_start >= 0, 'no per-point bracket for the gpio output'
-	assert i_write > i_start, 'io.gpio_write is not inside the point\'s bracket'
-	assert i_rec > i_write, 'the gpio output records at line ${i_rec}, BEFORE its io.gpio_write at ${i_write} — the duration would exclude the write'
-}
-
-// THE GUARD AGAINST A DEAD ARM. Twice now an arm of the operation match went unexercised — pwm,
-// then gpio_write — each time leaving a point shape whose ordering nothing checked, and the pwm one
-// was the shape the hardware fixture actually uses. Rather than claim the arms are covered, prove
-// it: emit every kind/direction combination and assert each produces its own primitive, so a new
-// arm with no fixture fails here instead of silently never running (codex on #280).
-// THE EMITTED POINT BLOCK, PINNED WHOLE — the same move that ended the C-side sequence, applied
-// here before this side repeats it. Indentation ruled out nesting but not a preceding `continue`,
-// and the next shapes after that are predictable: a guard, a reordering, an extra statement. Pinning
-// the block makes all of them one failure (codex on #280).
+// THE EMITTED BLOCK, PINNED VERBATIM — bracket through record, indentation included. Every looser
+// form of this test was defeated by an edit that preserved exactly the loose property it checked:
+// `stmt_of` discarded indentation, so the record could be nested inside the freshness guard; an
+// indent compare admitted a preceding `continue`; a keyword-PREFIX scan admitted the same transfer
+// written inline as `if !ready { continue }`. That sequence has no end while the test states
+// properties, so state the block instead — the move that ended the identical sequence on the C side
+// (test_the_recorder_records_exactly_what_it_is_given). A guard, a reordering, an extra statement,
+// an inline transfer, a nested record and a changed primitive are now one failure (codex on #280).
 //
-// One expectation per kind/direction, which is also the arm-coverage guard: a kind whose block is
-// not pinned here has no test, and a new arm fails the case list below rather than silently never
-// running.
+// It is also the ORDERING guard, which is why the two dedicated pwm/gpio-output ordering tests are
+// gone rather than kept beside it: each case names its own primitive with the record as the last
+// line, so a record emitted before its write cannot match.
 fn test_the_emitted_point_block_is_exact() {
 	doc := empty_doc()
 	cases := {
-		'gpio/in':  ['mut p_v := u32(0)', 'if p_v2 := io.gpio_read_checked(0) {']
-		'gpio/out': ['mut p_a := u32(0)']
-		'adc/in':   ['if p_v := io.adc_read_checked(0) {']
-		'pwm/out':  ['mut p_a := u32(0)']
+		'gpio/in':  [
+			'\t\tp0_t0 := C.board_now_us()',
+			'\t\tif p_v := io.gpio_read_checked(0) {',
+			'\t\t\tC.ioc_pub(0, if p_v { u32(1) } else { u32(0) }, u32(0))',
+			'\t\t}',
+			'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
+		]
+		'gpio/out': [
+			'\t\tp0_t0 := C.board_now_us()',
+			'\t\tmut p_a := u32(0)',
+			'\t\tmut p_b := u32(0)',
+			'\t\tif C.ioc_get_ever(0, &p_a, &p_b) != 0 {',
+			'\t\t\tio.gpio_write(0, p_a != 0)',
+			'\t\t}',
+			'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
+		]
+		'adc/in':   [
+			'\t\tp0_t0 := C.board_now_us()',
+			'\t\tif p_v := io.adc_read_checked(0) {',
+			'\t\t\tC.ioc_pub(0, p_v, u32(0))',
+			'\t\t}',
+			'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
+		]
+		'pwm/out':  [
+			'\t\tp0_t0 := C.board_now_us()',
+			'\t\tmut p_a := u32(0)',
+			'\t\tmut p_b := u32(0)',
+			'\t\tif C.ioc_get_ever(0, &p_a, &p_b) != 0 {',
+			'\t\t\tio.pwm_write(0, p_a)',
+			'\t\t}',
+			'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
+		]
 	}
-	// the shapes differ per kind, so rather than duplicate every line, assert the INVARIANTS that
-	// the C-side pin gave us: the block starts with the point's bracket, ends with its record, and
-	// contains NO control transfer in between.
-	for kind_dir, _ in cases {
+	for kind_dir, want in cases {
 		parts := kind_dir.split('/')
 		mut m := Model{}
 		m.trace.on = true
@@ -730,41 +669,44 @@ fn test_the_emitted_point_block_is_exact() {
 		g := emit_io_target_entry(m, doc, {
 			'P': 0
 		}, true, 0).join('\n')
-		lines := strip_comments(g)
 		hid := io_handler_id_base(m, doc)
-		mut i_start := -1
-		mut i_rec := -1
-		for k, l in lines {
-			if l.contains('p${hid}_t0 := C.board_now_us()') {
-				i_start = k
-			}
-			if l.contains('C.trace_fb(u32(${hid}),') {
-				i_rec = k
-			}
-		}
-		assert i_start >= 0 && i_rec > i_start, '${kind_dir}: no point bracket and record in the emitted loop'
-		// TOP-LEVEL in the point's block, for EVERY kind — not only the two the manifest test
-		// covers. The record's indent must equal the bracket's: moving `C.trace_fb(...)` inside the
-		// `if C.ioc_get_ever(...)` a write already sits in leaves the ordering tests and the
-		// control-transfer check below green, while a service that has not yet published records
-		// nothing — and the silicon fixture samples after HostLed has begun publishing, so it would
-		// not show it either (codex on #280).
-		ind_start := lines[i_start].len - lines[i_start].trim_left(' \t').len
-		ind_rec := lines[i_rec].len - lines[i_rec].trim_left(' \t').len
-		assert ind_rec == ind_start, '${kind_dir}: its record is indented ${ind_rec} against a bracket at ${ind_start} — it sits inside a conditional, so a service that does not take that branch records nothing'
-		// NO control transfer between the bracket and the record. Equal indentation rules out
-		// nesting; it does not rule out `continue`, `return` or `break` earlier in the block, any of
-		// which skips the record for a service that took that path — and the silicon fixture, whose
-		// producer eventually publishes, would not show it.
-		for k in i_start + 1 .. i_rec {
-			t := lines[k].trim_space()
-			for kw in ['continue', 'return', 'break'] {
-				assert !t.starts_with(kw), '${kind_dir}: `${t}` sits between the point bracket and its record — a service taking that path records nothing and skips the pass accounting'
-			}
-		}
+		// the blocks above name a literal id: these fixtures declare no FB handlers, so the point id
+		// base is 0. That the base CONTINUES the handler numbering is
+		// test_io_ids_start_past_every_fb_handler's claim, not this one.
+		assert hid == 0, '${kind_dir}: the point id base is ${hid}, not 0 — the pinned blocks name p0 and u32(0), and this fixture declares no FB handlers'
+		got := point_block(g)
+		assert got == want, '${kind_dir}: the emitted point block changed.\n got: ${got}\nwant: ${want}\nThe bracket must open the block, the record must close it at the SAME indentation, and nothing else may sit between them. If this change is intended, update the case above in the same commit — the point of pinning the block is that what a point measures cannot drift silently (REQ-IO-025).'
 	}
 }
 
+// point_block: point 0's emitted block — its `p0_t0` bracket line through its `C.trace_fb` record
+// line, comments removed and trailing space normalised, INDENTATION KEPT. Indentation is half the
+// evidence: a record moved inside the freshness guard must not compare equal to one at the block's
+// own level. A missing record, or one emitted before the bracket, runs the slice to the end of the
+// emitted loop — which does not match either.
+fn point_block(src string) []string {
+	mut out := []string{}
+	mut on := false
+	for l in strip_comments(src) {
+		if l.contains('p0_t0 := C.board_now_us()') {
+			on = true
+		}
+		if !on {
+			continue
+		}
+		out << l.trim_right(' \t')
+		if l.contains('C.trace_fb(u32(0),') {
+			break
+		}
+	}
+	return out
+}
+
+// THE GUARD AGAINST A DEAD ARM. Twice an arm of the operation match went unexercised — pwm, then
+// gpio_write — each time leaving a point shape whose ordering nothing checked, and the pwm one is
+// the shape the hardware fixture actually uses. The pinned blocks above name each primitive; this
+// proves the emitter reaches it as CODE for every kind/direction, so an arm with no case there
+// fails here instead of silently never running (codex on #280).
 fn test_every_operation_arm_is_exercised() {
 	doc := empty_doc()
 	cases := [
@@ -850,10 +792,11 @@ fn test_the_fb_loop_subtracts_the_io_counter() {
 		assert false, 'loom2v wrote no glue at ${glue}: ${err}'
 		return
 	}
-	dispatches, clock_fn := dispatches_of(src)
+	dispatches := dispatches_of(src)
 	assert dispatches.len == 1, 'the emitted loop has ${dispatches.len} profiled dispatches, want exactly 1 — a second services handlers twice: ${dispatches}'
 	assert dispatches[0] == 'sched.run_profiled_excl(trace_clock, io_exec_clock)', 'the FB dispatch is `${dispatches[0]}` — with io points and trace level="all" it must be run_profiled_excl(trace_clock, io_exec_clock), or handler load charges io preemption again'
-	assert clock_fn, 'io_exec_clock() does not read C.io_exec_us() — the dispatch would subtract something else'
+	clock_body := io_clock_body(src)
+	assert clock_body == ['return C.io_exec_us()'], 'io_exec_clock\'s body is ${clock_body} — it must be nothing but `return C.io_exec_us()`, because the dispatch subtracts whatever this returns and a guarded or constant return disables the exclusion while every other check stays green'
 
 	// THE OTHER BRANCH. emit_run_target dispatches from two places — one for a partition with a
 	// single local thread and one for several — and the config above only ever reaches the first,
@@ -878,12 +821,13 @@ fn test_the_fb_loop_subtracts_the_io_counter() {
 	// to take effect — a mis-inserted thread block, or the toml comment trap (vlang/v#27684) eating
 	// the key — and the assertions below would pass against the single-thread emitter again.
 	assert src_m.contains('fn run_fast()') && src_m.contains('fn run_aux()'), 'the two-thread variant did not reach the multi-thread emitter (no per-thread run_*() in the glue) — the fixture did not take effect'
-	dispatches_m, clock_fn_m := dispatches_of(src_m)
+	dispatches_m := dispatches_of(src_m)
 	assert dispatches_m.len == 2, 'the two-thread variant emits ${dispatches_m.len} profiled dispatches, want one per thread: ${dispatches_m}'
 	for d in dispatches_m {
 		assert d == 'sched.run_profiled_excl(trace_clock, io_exec_clock)', 'a multi-thread dispatch is `${d}` — with io points and trace level="all" every thread must exclude the io exec counter, or its handlers charge io preemption'
 	}
-	assert clock_fn_m, 'io_exec_clock() does not read C.io_exec_us() in the two-thread variant'
+	clock_body_m := io_clock_body(src_m)
+	assert clock_body_m == ['return C.io_exec_us()'], 'io_exec_clock\'s body in the two-thread variant is ${clock_body_m} — every thread subtracts whatever it returns'
 }
 
 // The profiled dispatches of an emitted glue, and whether io_exec_clock() reads the io counter.
@@ -891,18 +835,24 @@ fn test_the_fb_loop_subtracts_the_io_counter() {
 // extra `sched.run_profiled(...)` before the expected call left the last value correct and the test
 // passing — while that dispatch still charged io preemption, and an extra call services handlers
 // twice (codex on #280).
-fn dispatches_of(src string) ([]string, bool) {
+fn dispatches_of(src string) []string {
 	mut dispatches := []string{}
-	mut clock_fn := false
 	for l in strip_comments(src) {
 		if l.contains('sched.run_profiled') {
 			dispatches << l.trim_space()
 		}
-		if l.contains('return C.io_exec_us()') {
-			clock_fn = true
-		}
 	}
-	return dispatches, clock_fn
+	return dispatches
+}
+
+// io_exec_clock's body, which is what the dispatch above actually subtracts. A whole-file lookup for
+// `return C.io_exec_us()` was the previous form and proved only that the text appears SOMEWHERE:
+// wrapping it in `if false { ... }` with a `return 0` after left that check and the exact
+// run_profiled_excl(..., io_exec_clock) assertion both green, while every handler subtracted zero
+// and charged io preemption again (codex on #280). Pin the body instead — the same body_of the C-side
+// recorder pin uses.
+fn io_clock_body(src string) []string {
+	return body_of(strip_comments(src), 'fn io_exec_clock(')
 }
 
 // The lowered domain config plus a SECOND thread in its CM7 partition, written beside it. Derived
