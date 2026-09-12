@@ -48,10 +48,19 @@ verifies = ["REQ-IO-018", "REQ-IO-021"]
 # (trace_hooks.c g_capturing = 1), so the records are in the ring without an arm command.
 #
 #   REQ-IO-025: for EVERY io point the trace manifest names, the ring carries kind=FB records
-#               under that point's id, at least one of them carrying a real (nonzero) measured
-#               duration — and g_io_exec_us keeps advancing without claiming more time than the
-#               window held, so the thread-level sum the FB threads subtract as preemption is
-#               still being published alongside the per-point records.
+#               under that point's id — the point's own service is a distinct, resolvable entry
+#               rather than part of one aggregate — and the thread-level sum the FB threads
+#               subtract as preemption is still being published alongside those records.
+#
+# Note what that does NOT say: nothing about the VALUE of a duration. A point whose whole service
+# fits inside one microsecond tick records 0us correctly, so requiring a nonzero sample would fail
+# a healthy fast point. That the duration is the point's OWN measured interval is established
+# host-side instead, by comparing the emitted call against its exact expression — deterministic,
+# where waiting for a timer tick to be crossed is not.
+#
+# This description is deliberately about what the check ESTABLISHES rather than a list of its
+# assertions: enumerating them is how this record went stale twice while the assertions moved
+# (codex on #280).
 #
 # Deliberately NOT claimed here, because the linked command deliberately does not check it:
 #   * a duration bound against the point's period. An overrun is the requirement WORKING — its
