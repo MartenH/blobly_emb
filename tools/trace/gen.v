@@ -176,6 +176,16 @@ fn main() {
 		for r in arr(doc.value('review')) {
 			m := r.as_map()
 			ctx := s(m, 'context')
+			// A [[review]] entry's Verif.method is HARD-CODED to 'review' below, so a `method`
+			// key here is either redundant or a lie. It was not read at all, which meant a typo
+			// (`method = "rewiew"`) passed the gate while the comment above claimed every
+			// verification was checked — the gap and the overstatement together (codex on #280).
+			if rm := m['method'] {
+				if rm.string() != 'review' {
+					eprintln('trace: review "${s(m, 'id')}": method "${rm.string()}" — a [[review]] entry is evidence of method `review` by construction; drop the key or make it a [[check]]')
+					bad_method = true
+				}
+			}
 			result := if s(m, 'approved_by') != '' { 'approved' } else { 'pending' }
 			ctxset[ctx] = true
 			for v in arr(m['verifies'] or { toml.Any([]toml.Any{}) }) {
@@ -192,8 +202,9 @@ fn main() {
 	mut contexts := ctxset.keys()
 	contexts.sort()
 
-	// The method gate, after BOTH sides are read: a requirement's declared method and a
-	// verification's must each be one of test|analysis|review. Placed here because it was
+	// The method gate, after BOTH sides are read. A requirement's declared method must be one of
+	// test|analysis|review; a [[check]]'s likewise; a [[review]]'s, if it declares one at all,
+	// must be `review`, since that is what the entry produces by construction. Placed here because it was
 	// originally before the verifications were parsed, so a bad method there printed its
 	// diagnostic and then built the table anyway (codex on #280).
 	if bad_method {
