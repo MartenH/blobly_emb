@@ -351,16 +351,25 @@ fn test_every_io_exec_accumulator_adds_its_argument() {
 	assert found >= 6, 'found ${found} io_exec_add definitions, expected at least the 6 board glue copies — did the search path or the file layout change?'
 }
 
-// code_of strips a trailing `// comment` from an emitted line, so a match asks whether the
-// generator emits an OPERATION rather than whether the text appears anywhere. Without it a
-// regression leaving `// io.pwm_write(...)` behind satisfied every ordering assertion while the
-// point's bracket performed no io at all — and the ordering scan then measured to the comment
-// (codex on #280).
+// code_of strips comments from an emitted line, so a match asks whether the generator emits an
+// OPERATION rather than whether the text appears anywhere. Without it a regression leaving
+// `// io.pwm_write(...)` behind satisfied every ordering assertion while the point's bracket
+// performed no io at all — and the ordering scan then measured to the comment (codex on #280).
+//
+// BOTH comment forms. The first version handled `//` only, and `/* io.pwm_write(...) */` is equally
+// valid V: the emitters do not produce block comments today (zero in any generated output), so that
+// is a narrower hole than the `//` one it followed — but "the generator happens not to do this" is
+// the assumption that has been wrong repeatedly in this file, so it is handled rather than argued
+// about. Single-line block comments only, which is all a `g << '...'` line can carry.
 fn code_of(line string) string {
-	if line.contains('//') {
-		return line.all_before('//')
+	mut t := line
+	for t.contains('/*') && t.contains('*/') {
+		t = t.all_before('/*') + t.all_after('*/')
 	}
-	return line
+	if t.contains('//') {
+		t = t.all_before('//')
+	}
+	return t
 }
 
 // squeeze_call removes any whitespace between `name` and the `(` that follows it, so a scan can
