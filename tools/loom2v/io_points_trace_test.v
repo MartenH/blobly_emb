@@ -465,7 +465,14 @@ fn test_the_recorder_forwards_the_duration_it_is_given() {
 		}
 	}
 	assert fb_call != '', '${path}: no push_rec( call found in trace_fb'
-	assert fb_call.contains('dur_us'), '${path}: trace_fb does not pass its dur_us to push_rec — the caller measures a duration the recorder then discards: ${fb_call}'
+	// The COMPLETE argument. contains('dur_us') accepts `dur_us + 1` — which names the parameter,
+	// passes the byte-assignment checks below (push_rec's own parameter is still called dur_us),
+	// and inflates every recorded duration. The silicon check sees record presence, not values.
+	// Sixth instance of substring-vs-exact in this file, one round after I claimed the class was
+	// closed (codex on #280).
+	want_arg := 'dur_us > 0xFFFFu ? 0xFFFFu : dur_us'
+	fb_arg := fb_call.all_after_last(',').trim_space().trim_right(');').trim_space()
+	assert fb_arg == want_arg, '${path}: trace_fb passes `${fb_arg}` to push_rec, want `${want_arg}` — the recorder must receive the measured duration, saturated, and nothing else: ${fb_call}'
 	// ...and push_rec must ENCODE it into the record's duration bytes (6 and 7, LE)
 	mut lo := ''
 	mut hi := ''
@@ -536,4 +543,98 @@ fn test_a_pwm_output_records_after_its_write() {
 	assert i_start >= 0, 'no per-point bracket for the pwm point'
 	assert i_write > i_start, 'io.pwm_write is not inside the point\'s bracket'
 	assert i_rec > i_write, 'the pwm point records at line ${i_rec}, BEFORE its io.pwm_write at ${i_write} — the duration would exclude the write'
+}
+
+// A GPIO OUTPUT's ordering. After the pwm fixture, `io.gpio_write(` was STILL an unreached arm of
+// the operation match: traced_io_model() has a gpio INPUT and an adc input, pwm_io_model() has only
+// pwm. An output-gpio regression recording before its write would have left every host assertion
+// green (codex on #280). Every arm of that match is now exercised by some test — see
+// test_every_operation_arm_is_exercised below, which is the guard against this recurring.
+fn gpio_out_io_model() Model {
+	mut m := Model{}
+	m.trace.on = true
+	m.trace.level = 'all'
+	m.io_points = [
+		IoPoint{
+			name:      'Relay'
+			kind:      'gpio'
+			output:    true
+			period_ms: 10
+			ch:        0
+		},
+	]
+	return m
+}
+
+fn test_a_gpio_output_records_after_its_write() {
+	m := gpio_out_io_model()
+	doc := empty_doc()
+	g := emit_io_target_entry(m, doc, {
+		'Relay': 0
+	}, true, 0).join('\n')
+	lines := g.split('\n')
+	hid := io_handler_id_base(m, doc)
+	mut i_start := -1
+	mut i_write := -1
+	mut i_rec := -1
+	for k, l in lines {
+		if l.contains('p${hid}_t0 := C.board_now_us()') {
+			i_start = k
+		}
+		if l.contains('io.gpio_write(') {
+			i_write = k
+		}
+		if l.contains('C.trace_fb(u32(${hid}),') {
+			i_rec = k
+		}
+	}
+	assert i_start >= 0, 'no per-point bracket for the gpio output'
+	assert i_write > i_start, 'io.gpio_write is not inside the point\'s bracket'
+	assert i_rec > i_write, 'the gpio output records at line ${i_rec}, BEFORE its io.gpio_write at ${i_write} — the duration would exclude the write'
+}
+
+// THE GUARD AGAINST A DEAD ARM. Twice now an arm of the operation match went unexercised — pwm,
+// then gpio_write — each time leaving a point shape whose ordering nothing checked, and the pwm one
+// was the shape the hardware fixture actually uses. Rather than claim the arms are covered, prove
+// it: emit every kind/direction combination and assert each produces its own primitive, so a new
+// arm with no fixture fails here instead of silently never running (codex on #280).
+fn test_every_operation_arm_is_exercised() {
+	doc := empty_doc()
+	cases := [
+		['gpio', 'in', 'io.gpio_read_checked('],
+		['gpio', 'out', 'io.gpio_write('],
+		['adc', 'in', 'io.adc_read_checked('],
+		['pwm', 'out', 'io.pwm_write('],
+	]
+	for c in cases {
+		mut m := Model{}
+		m.trace.on = true
+		m.trace.level = 'all'
+		m.io_points = [
+			IoPoint{
+				name:      'P'
+				kind:      c[0]
+				output:    c[1] == 'out'
+				period_ms: 10
+				ch:        0
+			},
+		]
+		g := emit_io_target_entry(m, doc, {
+			'P': 0
+		}, true, 0).join('\n')
+		hid := io_handler_id_base(m, doc)
+		assert g.contains(c[2]), 'a ${c[0]} ${c[1]} point emits no ${c[2]} — the operation match has an arm no fixture reaches'
+		lines := g.split('\n')
+		mut i_op := -1
+		mut i_rec := -1
+		for k, l in lines {
+			if l.contains(c[2]) {
+				i_op = k
+			}
+			if l.contains('C.trace_fb(u32(${hid}),') {
+				i_rec = k
+			}
+		}
+		assert i_rec > i_op, '${c[0]} ${c[1]}: records at ${i_rec}, before its ${c[2]} at ${i_op}'
+	}
 }
