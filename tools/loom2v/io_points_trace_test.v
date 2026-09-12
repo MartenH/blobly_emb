@@ -743,6 +743,15 @@ fn test_the_emitted_point_block_is_exact() {
 			}
 		}
 		assert i_start >= 0 && i_rec > i_start, '${kind_dir}: no point bracket and record in the emitted loop'
+		// TOP-LEVEL in the point's block, for EVERY kind — not only the two the manifest test
+		// covers. The record's indent must equal the bracket's: moving `C.trace_fb(...)` inside the
+		// `if C.ioc_get_ever(...)` a write already sits in leaves the ordering tests and the
+		// control-transfer check below green, while a service that has not yet published records
+		// nothing — and the silicon fixture samples after HostLed has begun publishing, so it would
+		// not show it either (codex on #280).
+		ind_start := lines[i_start].len - lines[i_start].trim_left(' \t').len
+		ind_rec := lines[i_rec].len - lines[i_rec].trim_left(' \t').len
+		assert ind_rec == ind_start, '${kind_dir}: its record is indented ${ind_rec} against a bracket at ${ind_start} — it sits inside a conditional, so a service that does not take that branch records nothing'
 		// NO control transfer between the bracket and the record. Equal indentation rules out
 		// nesting; it does not rule out `continue`, `return` or `break` earlier in the block, any of
 		// which skips the record for a service that took that path — and the silicon fixture, whose
@@ -841,14 +850,51 @@ fn test_the_fb_loop_subtracts_the_io_counter() {
 		assert false, 'loom2v wrote no glue at ${glue}: ${err}'
 		return
 	}
-	lines := strip_comments(src)
-	// EVERY dispatch, not the last. Overwriting a single variable validated only the final match, so
-	// an extra `sched.run_profiled(...)` before the expected call left the last value correct and
-	// the test passing — while that dispatch still charged io preemption, and an extra call services
-	// handlers twice (codex on #280).
+	dispatches, clock_fn := dispatches_of(src)
+	assert dispatches.len == 1, 'the emitted loop has ${dispatches.len} profiled dispatches, want exactly 1 — a second services handlers twice: ${dispatches}'
+	assert dispatches[0] == 'sched.run_profiled_excl(trace_clock, io_exec_clock)', 'the FB dispatch is `${dispatches[0]}` — with io points and trace level="all" it must be run_profiled_excl(trace_clock, io_exec_clock), or handler load charges io preemption again'
+	assert clock_fn, 'io_exec_clock() does not read C.io_exec_us() — the dispatch would subtract something else'
+
+	// THE OTHER BRANCH. emit_run_target dispatches from two places — one for a partition with a
+	// single local thread and one for several — and the config above only ever reaches the first,
+	// because domain's CM7 partition has one thread (`fast`; the second partition is the external
+	// CM4 image). Counting the call literals in gen.v was the previous form of this check, and it
+	// could not tell which branch emits them: flipping the multi-thread branch's io predicate to
+	// false leaves both counts unchanged while every handler on a multi-thread io node charges io
+	// preemption to itself (codex on #280). So lower a second time with a two-thread partition and
+	// read the dispatch it actually emits.
+	multi_toml := two_thread_variant(tmp)
+	glue_m := os.join_path(tmp, 'glue_multi.v')
+	gen_m := os.execute('${@VEXE} -enable-globals run ${os.join_path(root, 'tools', 'loom2v')} ${multi_toml} ${os.join_path(tmp,
+		'compute.dbc')} ${os.join_path(tmp, 'sig_m.v')} ${os.join_path(tmp, 'ports_m.v')} ${glue_m} ${os.join_path(tmp,
+		'manifest_multi.csv')}')
+	assert gen_m.exit_code == 0, 'loom2v failed on the two-thread variant: ${gen_m.output.trim_space()}'
+	src_m := os.read_file(glue_m) or {
+		assert false, 'loom2v wrote no glue at ${glue_m}: ${err}'
+		return
+	}
+	// PROOF the multi-thread branch was reached, not merely that two dispatches appeared: only that
+	// branch emits a `run_<thread>()` per [[partition.thread]]. Without this the variant could fail
+	// to take effect — a mis-inserted thread block, or the toml comment trap (vlang/v#27684) eating
+	// the key — and the assertions below would pass against the single-thread emitter again.
+	assert src_m.contains('fn run_fast()') && src_m.contains('fn run_aux()'), 'the two-thread variant did not reach the multi-thread emitter (no per-thread run_*() in the glue) — the fixture did not take effect'
+	dispatches_m, clock_fn_m := dispatches_of(src_m)
+	assert dispatches_m.len == 2, 'the two-thread variant emits ${dispatches_m.len} profiled dispatches, want one per thread: ${dispatches_m}'
+	for d in dispatches_m {
+		assert d == 'sched.run_profiled_excl(trace_clock, io_exec_clock)', 'a multi-thread dispatch is `${d}` — with io points and trace level="all" every thread must exclude the io exec counter, or its handlers charge io preemption'
+	}
+	assert clock_fn_m, 'io_exec_clock() does not read C.io_exec_us() in the two-thread variant'
+}
+
+// The profiled dispatches of an emitted glue, and whether io_exec_clock() reads the io counter.
+// EVERY dispatch, not the last: overwriting a single variable validated only the final match, so an
+// extra `sched.run_profiled(...)` before the expected call left the last value correct and the test
+// passing — while that dispatch still charged io preemption, and an extra call services handlers
+// twice (codex on #280).
+fn dispatches_of(src string) ([]string, bool) {
 	mut dispatches := []string{}
 	mut clock_fn := false
-	for l in lines {
+	for l in strip_comments(src) {
 		if l.contains('sched.run_profiled') {
 			dispatches << l.trim_space()
 		}
@@ -856,40 +902,30 @@ fn test_the_fb_loop_subtracts_the_io_counter() {
 			clock_fn = true
 		}
 	}
-	assert dispatches.len == 1, 'the emitted loop has ${dispatches.len} profiled dispatches, want exactly 1 — a second services handlers twice: ${dispatches}'
-	assert dispatches[0] == 'sched.run_profiled_excl(trace_clock, io_exec_clock)', 'the FB dispatch is `${dispatches[0]}` — with io points and trace level="all" it must be run_profiled_excl(trace_clock, io_exec_clock), or handler load charges io preemption again'
-	assert clock_fn, 'io_exec_clock() does not read C.io_exec_us() — the dispatch would subtract something else'
+	return dispatches, clock_fn
 }
 
-// THE OTHER DISPATCH SITE. gen.v emits the profiled dispatch from two branches — one for a single
-// local thread and one for several — and lowering system_full/domain only ever reaches the first,
-// because its CM7 partition has one thread (`fast`; the second partition is the external CM4
-// image). So changing the MULTI-THREAD site back to run_profiled left the linked verification green
-// while every handler in that supported configuration charged io preemption (codex on #280).
-//
-// Asserted on the generator's source rather than by lowering a second node: building a two-thread
-// io-enabled system.toml to reach that branch would be a fixture whose representativeness is the
-// very thing in question, and both sites are one line each.
-fn test_both_dispatch_sites_exclude_io() {
-	path := os.join_path(@VMODROOT, 'tools', 'loom2v', 'gen.v')
+// The lowered domain config plus a SECOND thread in its CM7 partition, written beside it. Derived
+// from the real lowering rather than hand-built, so the only difference from the verified config is
+// the thread count — the representativeness the branch check needs is inherited, not invented. The
+// added FB's handler reads and writes nothing: a local signal cannot cross threads (loom2v rejects
+// it, the IOC fan-out is not generated), and the dispatch shape does not depend on its ports.
+fn two_thread_variant(tmp string) string {
+	path := os.join_path(tmp, 'gen-domain.toml')
 	src := os.read_file(path) or {
-		assert false, 'cannot read ${path}: ${err}'
-		return
+		assert false, 'cannot read the lowered config at ${path}: ${err}'
+		return ''
 	}
-	mut excl := 0
-	mut plain := 0
-	for l in strip_comments(src) {
-		t := l.trim_space()
-		if !t.contains('sched.run_profiled') {
-			continue
-		}
-		if t.contains('run_profiled_excl(trace_clock, io_exec_clock)') {
-			excl++
-		} else if t.contains('run_profiled(trace_clock)') {
-			plain++
-		}
+	anchor := '  [[partition.thread]]\n  name = "fast"\n'
+	assert src.count(anchor) == 1, 'the lowered domain config no longer declares exactly one `fast` thread the way this fixture inserts after — the variant would not become multi-thread'
+	// the trailing comment is not decoration: a nested [[ ]] block's last key needs one or V's toml
+	// parser drops the next key (vlang/v#27684, see the header of the lowered file)
+	out := src.replace(anchor, anchor + '\n  [[partition.thread]]\n  name = "aux"\n') +
+		'\n[[fb]]\nname   = "AuxCtrl"\nthread = "aux"\n\n  [[fb.handler]]\n  name      = "on_100ms"\n  period_ms = 100 # terminates the nested block (vlang/v#27684)\n'
+	dst := os.join_path(tmp, 'gen-domain-multi.toml')
+	os.write_file(dst, out) or {
+		assert false, 'cannot write the two-thread variant to ${dst}: ${err}'
+		return ''
 	}
-	// two io-aware emit sites (single-thread and multi-thread), each with its non-io counterpart
-	assert excl == 2, '${path}: ${excl} emit sites use run_profiled_excl(trace_clock, io_exec_clock), want 2 — the single-thread and multi-thread branches both need the io exclusion, and lowering domain only reaches the single-thread one'
-	assert plain == 2, '${path}: ${plain} emit sites use run_profiled(trace_clock), want 2 — the no-io counterparts of those two branches'
+	return dst
 }
