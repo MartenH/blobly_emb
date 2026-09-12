@@ -604,8 +604,8 @@ fn body_of(lines []string, signature string) []string {
 	return out
 }
 
-// THE SERVICED PASS, PINNED VERBATIM — from the pass bracket `t0 :=` through the publish
-// `C.io_exec_add(...)`, every executable line, indentation included. Every looser form of this test
+// THE WHOLE EMITTED IO THREAD, PINNED VERBATIM — every executable line of the function, from its
+// signature to its closing brace, indentation included. Every looser form of this test
 // was defeated by an edit that preserved exactly the loose property it checked: `stmt_of` discarded
 // indentation, so the record could be nested inside the freshness guard; an indent compare admitted
 // a preceding `continue`; a keyword-PREFIX scan admitted the same transfer written inline as
@@ -615,6 +615,17 @@ fn body_of(lines []string, signature string) []string {
 // the measurement mean anything: the pass bracket opens it and the publish closes it. A guard, a
 // reordering, an extra statement anywhere in the pass, an inline transfer, a nested record, a
 // changed primitive and work appended after the record or after `t1` are one failure (codex #280).
+//
+// It is the WHOLE FUNCTION rather than a region because choosing a region is choosing an anchor, and
+// each anchor was then the hole: bounding it at the pass bracket left work inserted immediately
+// BEFORE that bracket invisible — an extra point operation excluded from the sum, or an
+// `if !ready { continue }` suppressing every record (codex on #280). There is no anchor left to
+// argue about now. Note the pacing that precedes the bracket is pinned WITH it and must be: the
+// deadline sleep is deliberately outside the measured pass (sleeping is not execution), so `t0` is
+// the first statement of the SERVICE and not of the loop, and the only way to state that is to show
+// what comes before it. The expected text is assembled from a shared prologue and epilogue plus the
+// case's own pass so the pacing is written once — the COMPARISON is still against the whole
+// function, line for line.
 //
 // It is also the ORDERING guard, which is why the two dedicated pwm/gpio-output ordering tests are
 // gone rather than kept beside it: each case names its own primitive with its record after it.
@@ -639,8 +650,11 @@ fn test_the_emitted_point_block_is_exact() {
 			// id base is 0. That the base CONTINUES the handler numbering is
 			// test_io_ids_start_past_every_fb_handler's claim, not this one.
 			assert hid == 0, '${c.name}: the point id base is ${hid}, not 0 — the pinned regions name p0/p1 and u32(0)/u32(1), and this fixture declares no FB handlers'
-			got := pass_region(g)
-			assert got == c.want, '${c.name} (with_load=${with_load}): the emitted pass changed.\n got: ${got}\nwant: ${c.want}\nThe pass bracket must open the region and the exec publish must close it, each point\'s record must sit at its own block\'s level with nothing between it and the point\'s work, and nothing else may appear. If this change is intended, update the case in pin_cases() in the same commit — the point of pinning the pass is that what a point measures, and what the aggregate publishes, cannot drift silently (REQ-IO-025).'
+			mut want := io_prologue(with_load)
+			want << c.want
+			want << io_epilogue(with_load)
+			got := executable_lines(g)
+			assert got == want, '${c.name} (with_load=${with_load}): the emitted io thread changed.\n got: ${got}\nwant: ${want}\nEvery executable line is pinned: the pacing that precedes the pass, the pass bracket, each point\'s work with its record at that block\'s own level and nothing between them, the exec publish, and the load accounting after it. If this change is intended, update pin_cases() or io_prologue/io_epilogue in the same commit — the point of pinning the whole function is that what a point measures, and what the aggregate publishes, cannot drift silently (REQ-IO-025).'
 		}
 	}
 }
@@ -768,34 +782,67 @@ fn pin_cases() []PinCase {
 	]
 }
 
-// pass_region: the emitted io pass — its `t0 :=` bracket line through the `C.io_exec_add(...)` that
-// publishes the sum, comment-free, blank lines dropped, trailing space normalised, INDENTATION KEPT.
-// Indentation is half the evidence: a record moved inside a freshness guard, or a point moved inside
-// another point's gate, must not compare equal.
-//
-// The bounds are the measurement's own bounds, and that is deliberate. Pinning to the record left
-// work after it unpinned; pinning to `t1` left work between `t1` and the publish unpinned — and both
-// escape the point's duration AND the pass sum while every marker-ordering check stays green. A
-// missing record, or one emitted before its bracket, does not match either.
-fn pass_region(src string) []string {
+// executable_lines: the emitted function reduced to its executable lines — comments removed, blank
+// and comment-only lines dropped, trailing space normalised, INDENTATION KEPT. Indentation is half
+// the evidence: a record moved inside a freshness guard, or a point moved inside another point's
+// gate, must not compare equal.
+fn executable_lines(src string) []string {
 	mut out := []string{}
-	mut on := false
 	for l in strip_comments(src) {
-		if l.trim_space().starts_with('t0 := C.board_now_us()') {
-			on = true
-		}
-		if !on {
-			continue
-		}
 		t := l.trim_right(' \t')
 		if t.trim_space() == '' {
 			continue // a comment-only line is not executable work
 		}
 		out << t
-		if l.contains('C.io_exec_add(') {
-			break
-		}
 	}
+	return out
+}
+
+// The pacing ahead of every pass, shared by every case: a monotonic deadline, a bounded sleep to it,
+// and the missed-whole-periods skip. It is pinned because `t0` being the first statement of the
+// SERVICE — rather than of the loop — is only observable by showing what precedes it: the sleep must
+// NOT be inside the measured pass. `sched` and the overrun mark appear only with load telemetry.
+fn io_prologue(with_load bool) []string {
+	mut out := ['fn io_thread_entry(input u32) {', '\tmut tick := u64(0)']
+	if with_load {
+		out << '\tmut sched := &g_sched_io'
+	}
+	out << [
+		'\tmut next_us := C.board_now_us()',
+		'\tfor {',
+		'\t\tnext_us += 10000',
+		'\t\tmut now := C.board_now_us()',
+		'\t\tfor {',
+		'\t\t\tif next_us > now + 10000 { next_us = now + 10000 }',
+		'\t\t\tif next_us <= now { break }',
+		'\t\t\tC._tx_thread_sleep(u32((next_us - now + 999) / 1000))',
+		'\t\t\tnow = C.board_now_us()',
+		'\t\t}',
+		'\t\tmissed := (now - next_us) / 10000',
+	]
+	if with_load {
+		out << ['\t\tif missed > 0 {', '\t\t\tsched.mark_overrun()', '\t\t}']
+	}
+	out << ['\t\ttick += missed', '\t\tnext_us += missed * 10000']
+	return out
+}
+
+// After the exec publish: the load accounting (which consumes the same t1 - t0 the publish does),
+// the tick advance, and the two closing braces. Pinned for the same reason as the prologue — work
+// inserted here is work the pass sum has already been published without.
+fn io_epilogue(with_load bool) []string {
+	mut out := []string{}
+	if with_load {
+		out << [
+			'\t\tsched.account(t1 - t0, t1)',
+			'\t\tif t1 - t0 > 10000 {',
+			'\t\t\tsched.mark_overrun()',
+			'\t\t}',
+			'\t\tC.load_pub_slot(0, u32(sched.load_permille()), u32(sched.load_permille_100ms()),',
+			'\t\t\tu32(sched.load_permille_1s()), u32(sched.load_permille_10s()), sched.overruns())',
+		]
+	}
+	out << ['\t\ttick++', '\t}', '}']
 	return out
 }
 
