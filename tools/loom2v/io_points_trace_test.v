@@ -417,6 +417,21 @@ fn squeeze_call(line string, name string) string {
 	return line[..i + name.len] + line[j..]
 }
 
+// names_getter: does this line name `io_exec_us` ITSELF, rather than containing it as the tail of
+// another identifier? `g_io_exec_us` — the accumulator the getter returns — ends in the getter's
+// whole name, so a plain `contains` cannot tell the variable from the function.
+fn names_getter(line string) bool {
+	mut i := 0
+	for {
+		j := line.index_after('io_exec_us', i) or { break }
+		if j == 0 || !(line[j - 1].is_letter() || line[j - 1].is_digit() || line[j - 1] == `_`) {
+			return true
+		}
+		i = j + 1
+	}
+	return false
+}
+
 fn check_accumulator(path string) int {
 	src := os.read_file(path) or { return 0 }
 	mut n := 0
@@ -468,8 +483,30 @@ fn check_accumulator(path string) int {
 		// (codex on #280).
 		assert acc != '', '${path}: cannot read the accumulated variable from: ${line.trim_space()}'
 		mut saw_getter := false
-		for gl in src.split_into_lines() {
-			gt := squeeze_call(gl.trim_space(), 'io_exec_us')
+		// COMMENT-STRIPPED, and every occurrence classified — the same two rules the adder scan
+		// above already follows, and this loop followed neither. It read the RAW source, so a
+		// backend keeping the expected one-liner inside a block comment while formatting the live
+		// definition across lines satisfied this scan from the comment and never looked at the
+		// active getter, which could then return 0 (codex on #280). And it SKIPPED any occurrence it
+		// could not parse, so the same multiline definition would have been passed over even without
+		// a commented decoy, leaving `saw_getter` satisfied by another backend's copy.
+		for gl in strip_comments(src) {
+			if !gl.contains('io_exec_us') {
+				continue
+			}
+			bare := gl.trim_space()
+			gt := squeeze_call(bare, 'io_exec_us')
+			if !gt.contains('io_exec_us(') {
+				// the identifier with no `(` after it: either the accumulator VARIABLE
+				// (`g_io_exec_us`, whose name ends in the getter's) or a definition whose `(void)`
+				// sits on the next line. Only the second is a problem, and what precedes the name
+				// tells them apart. Without this the split-signature case fell through to
+				// `saw_getter` and reported "no accessor" for a file that has one — a true failure
+				// with a diagnosis that sends the reader looking for a missing function.
+				assert !names_getter(bare), '${path}: io_exec_us is defined in a form this scan cannot read — the identifier and its `(void)` must be on one line so the returned variable can be checked, or the scan silently stops covering this backend: ${bare}'
+				continue
+			}
+			// a CALL of the getter — not a definition to judge
 			if !gt.contains('io_exec_us(void)') {
 				continue
 			}
@@ -479,11 +516,12 @@ fn check_accumulator(path string) int {
 			if gt.ends_with(';') && !gt.contains('{') {
 				continue
 			}
+			assert gt.contains('{') && gt.contains('}'), '${path}: io_exec_us(void) is defined in a form this scan cannot read on one line — the body must be `{ return <acc>; }` so the returned variable can be checked, or the scan silently stops covering that backend: ${gt}'
 			saw_getter = true
 			// EXACTLY the accumulator, not a name containing it: `return g_io_exec_us_shadow;`
 			// contains `g_io_exec_us` and would have passed (codex on #280).
 			ret := gt.all_after('{').all_before('}').trim_space().trim_string_left('return').trim_space().trim_right(';').trim_space()
-			assert ret == acc, '${path}: io_exec_us() returns "${ret}", not the "${acc}" that io_exec_add updates — the FB loops would subtract the wrong value: ${gl.trim_space()}'
+			assert ret == acc, '${path}: io_exec_us() returns "${ret}", not the "${acc}" that io_exec_add updates — the FB loops would subtract the wrong value: ${gt}'
 		}
 		assert saw_getter, '${path}: io_exec_add is defined with no io_exec_us() accessor beside it — the FB loops read the sum through that getter'
 	}
