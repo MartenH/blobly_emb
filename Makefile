@@ -123,13 +123,17 @@ bench-scale:
 	./scripts/scale-bench.sh
 
 # On-target regression tests — the "special tests run on target" group. Each
-# examples/*/bench_test.sh flashes its image to the attached board and asserts the
+# bench_test.sh flashes its image to the attached board and asserts the
 # driver behaviour over SWD (no scope, no manual wiring). Requires the board(s) on
 # the bench; a script exits 2 (SKIP) when its board is absent, so a partial bench
 # still passes for what IS attached. `BLOB_HWTEST=1 make trace` records the results
 # into the h755/target column of docs/traceability.md.
+#
+# The glob covers examples/*/nodes/*/ too: a SYSTEM example's nodes are standalone build
+# dirs with no Makefile above them, so `examples/*/` alone never reached domain's test —
+# the same blind spot the CI example loop had to fix (codex #209 r2).
 hwtest:
-	@rc=0; n=0; for t in examples/*/bench_test.sh; do \
+	@rc=0; n=0; for t in examples/*/bench_test.sh examples/*/nodes/*/bench_test.sh; do \
 	  [ -x "$$t" ] || continue; n=1; echo "== $$t =="; \
 	  "$$t" --flash; ec=$$?; \
 	  case $$ec in 0) ;; 2) echo "  (skipped)";; *) echo "  (FAILED, exit $$ec)"; rc=1;; esac; \
