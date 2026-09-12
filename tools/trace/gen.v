@@ -40,6 +40,7 @@ fn main() {
 	check_mode := '--check' in os.args
 
 	// 1) requirements
+	mut bad_method := false
 	mut reqs := []Req{}
 	mut rfiles := os.walk_ext('requirements', '.toml')
 	rfiles.sort()
@@ -53,15 +54,31 @@ fn main() {
 			if s(m, 'id') == '' {
 				continue
 			}
+			// The METHOD VOCABULARY is closed: test | analysis | review
+			// (requirements/README.md — "every requirement declares ONE method" and
+			// fulfilment means THAT method's evidence is green). Nothing validated it, so
+			// REQ-IO-025 sat on method = "bench" — the only one of 219 — and a check linked
+			// to it would have marked it verified on evidence of a method the taxonomy does
+			// not have. A typo in this field is silent everywhere else, so refuse it here.
+			meth := s(m, 'method')
+			if meth !in ['test', 'analysis', 'review'] {
+				eprintln('trace: requirement ${s(m, 'id')}: method "${meth}" is not one of test|analysis|review (requirements/README.md)')
+				bad_method = true
+			}
 			reqs << Req{
 				id:      s(m, 'id')
 				title:   s(m, 'title')
 				status:  s(m, 'status')
-				method:  s(m, 'method')
+				method:  meth
 				asil:    s(m, 'asil')
 				derives: s(m, 'derives')
 			}
 		}
+	}
+
+	if bad_method {
+		eprintln('trace: refusing to build traceability from requirements with an unknown method')
+		exit(1)
 	}
 
 	mut vmap := map[string][]Verif{}

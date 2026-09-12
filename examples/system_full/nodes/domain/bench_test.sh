@@ -107,15 +107,22 @@ A1=$(u32 "$IOEXEC"); sleep 1; A2=$(u32 "$IOEXEC")
 # eid and dur are both u16-aligned (offsets 0 and 6), so -tu2 gives w0=eid .. w3=dur.
 RB=$(mktemp)
 st-flash --serial "$SERIAL" read "$RB" "$RING" 2048 >/dev/null 2>&1 || { echo "FAIL: SWD ring read failed"; rm -f "$RB"; exit 1; }
-read -r NREC DMIN DMAX < <(od -An -tu2 -v "$RB" | tr -s ' ' '\n' | awk -v want=$(( (2 << 14) | IO_ID )) '
-  NF { w[n++ % 4] = $1; if (n % 4 == 0) { if (w[0] == want) { c++; d = w[3];
+read -r NREC DMIN DMAX NNZ < <(od -An -tu2 -v "$RB" | tr -s ' ' '\n' | awk -v want=$(( (2 << 14) | IO_ID )) '
+  NF { w[n++ % 4] = $1; if (n % 4 == 0) { if (w[0] == want) { c++; d = w[3]; if (d > 0) nz++;
         if (mn == "" || d < mn) mn = d; if (d > mx) mx = d } } }
-  END { print c + 0, (mn == "" ? 0 : mn), mx + 0 }')
+  END { print c + 0, (mn == "" ? 0 : mn), mx + 0, nz + 0 }')
 rm -f "$RB"
 [ "${NREC:-0}" -gt 0 ] && ok "$NREC record(s) for io point id $IO_ID ($IO_NAME), dur ${DMIN}..${DMAX}us" \
   || fail "no kind=FB records with id $IO_ID in the ring — the io point's own service time is NOT observable"
-# its own duration, and bounded by the point's period (a point cannot take longer than its slot)
+# Its OWN duration, so the records must carry a real measurement — not merely a number that
+# happens to satisfy an upper bound. If the generated bracket regressed to pass zero for every
+# point, NREC would still be positive and DMAX=0 would pass a bound-only check, and this test
+# would report the service time "observable" while containing no timing at all (codex on #280).
+# At least one nonzero, not all: the DWT gives microsecond resolution and a single register
+# write can genuinely round to 0, so requiring every sample to be nonzero would be flaky.
 if [ "${NREC:-0}" -gt 0 ]; then
+  [ "${NNZ:-0}" -gt 0 ] && ok "${NNZ}/${NREC} record(s) carry a measured duration (max ${DMAX}us)" \
+    || fail "all ${NREC} records for id $IO_ID have dur_us = 0 — the bracket is recording no time, so the point's own service duration is NOT observable"
   [ "$DMAX" -lt "$IO_PERIOD_US" ] && ok "durations within the point's ${IO_PERIOD_US}us period" \
     || fail "a point service took ${DMAX}us, its period is ${IO_PERIOD_US}us"
 fi
