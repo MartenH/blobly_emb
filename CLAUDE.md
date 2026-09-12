@@ -140,8 +140,14 @@ Know two things before running it on the bench:
   order — which is the right resting state for a system_full bench, but it means the group is not
   idempotent with respect to what is on the board.
 
-Neither needs a CAN adapter: the exec-hook recorder captures from reset, so the trace ring is read
-straight out of RAM over SWD (`st-flash read`), the same way the bench serial map reads `g_cpu_mhz`.
+Neither needs a CAN adapter, but they need DIFFERENT SWD tooling, so install both:
+
+- **domain** reads the trace ring straight out of RAM with `st-flash read` — the exec-hook recorder
+  captures from reset, so there is no arm command to send and no bus involved. Same technique the
+  bench serial map uses for `g_cpu_mhz`.
+- **h755_io_analog** uses **OpenOCD** (`bench_test.sh:95`) to halt the target and read TIM1 / ADC1 /
+  DMA1 registers and the IOC cells. A missing OpenOCD fails that half of `make hwtest` with nothing
+  to do with the board.
 
 Plain **`v test .` at the repo root looks broken** — it walks into `.claude/worktrees/` and runs
 duplicate copies of every example e2e test concurrently. Test the real tree instead

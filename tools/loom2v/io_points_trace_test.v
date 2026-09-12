@@ -316,6 +316,15 @@ fn test_the_manifest_rows_and_the_emitted_records_agree() {
 		// duration" for a round after that requirement was dropped — describing the sibling
 		// check's assertions is how these comments keep going stale; describe what this one
 		// establishes instead.)
+		// UNCONDITIONAL within the point's service. stmt_of discards indentation, so moving this
+		// exact call inside the existing `if C.ioc_get_ever(...)` publish gate satisfied the text
+		// and the ordering while an output whose producer has never published is serviced at every
+		// cadence and records NOTHING — and the HostLed fixture eventually publishes, so silicon
+		// would not show it either (codex on #280). The record must sit at the same indent as the
+		// point's own bracket start.
+		ind_start := lines[i_start].len - lines[i_start].trim_left(' \t').len
+		ind_rec := lines[i_rec].len - lines[i_rec].trim_left(' \t').len
+		assert ind_rec == ind_start, 'point "${pt.name}": its record is indented ${ind_rec} against a bracket at ${ind_start} — it sits inside a conditional, so a service that does not take that branch records nothing'
 		want := 'C.trace_fb(u32(${hid}), p${hid}_t0, u32(C.board_now_us() - p${hid}_t0))'
 		got_rec := stmt_of(lines[i_rec])
 		assert got_rec == want, 'point "${pt.name}": record is `${got_rec}`, want `${want}` — the duration must be this point\'s own measured interval'
@@ -524,7 +533,17 @@ fn test_the_recorder_records_exactly_what_it_is_given() {
 
 	// push_rec: the record write, from the eid through the duration bytes. The PRIMASK/asm framing
 	// around it is the ISR-race guard, not part of what is recorded, so it is not pinned here.
+	// push_rec: the WHOLE body, not a slice. Pinning only the eid-through-duration region ignored
+	// executable statements before and after it — `id = 2u;` ahead of the initialiser, or
+	// `r[6] = 0;` after `g_head++` — leaving the slice and the guard assertions unchanged while the
+	// record was wrong. "Whole" has to mean whole, or it is first-match looseness in a larger
+	// costume (codex on #280). The only early exit, and its condition, are pinned with everything
+	// else: a guard changed to `if (dur_us == 0)` drops every sub-microsecond record.
 	want_write := [
+		'if (!g_capturing)',
+		'return;',
+		'unsigned prim;',
+		'__asm__ volatile("mrs %0, primask; cpsid i" : "=r"(prim) : : "memory");',
 		'unsigned eid = ((kind & 0x3u) << 14) | (id & 0x3FFFu);',
 		'unsigned char *r = g_ring[g_head & (RING_CAP - 1u)];',
 		'r[0] = (unsigned char)(eid & 0xFF);',
@@ -536,21 +555,10 @@ fn test_the_recorder_records_exactly_what_it_is_given() {
 		'r[6] = (unsigned char)(dur_us & 0xFF);',
 		'r[7] = (unsigned char)((dur_us >> 8) & 0xFF);',
 		'g_head++;',
+		'__asm__ volatile("msr primask, %0" : : "r"(prim) : "memory");',
 	]
-	body := body_of(lines, 'static void push_rec(')
-	i := body.index('unsigned eid = ((kind & 0x3u) << 14) | (id & 0x3FFFu);')
-	assert i >= 0, 'push_rec does not compute the eid from kind and the forwarded id: ${body}'
-	end_i := i + want_write.len
-	assert end_i <= body.len, 'push_rec\'s record write is shorter than expected: ${body[i..]}'
-	got_write := body[i..end_i]
-	assert got_write == want_write, 'push_rec\'s record write changed.\n got: ${got_write}\nwant: ${want_write}\nThe 8-byte record is the wire format a dump decodes: the eid carries kind and the point id, and bytes 6-7 the duration, little-endian. If this change is intended, update want_write in the same commit.'
-
-	// and the ONLY early exit before the write is the frozen-for-dump guard, with its condition —
-	// a guard changed to `if (dur_us == 0)` keeps the count and drops every sub-microsecond record
-	guard := body[..i].filter(it.contains('return'))
-	assert guard.len == 1, 'push_rec has ${guard.len} early exits before the record write, want exactly the capture guard: ${guard}'
-	gi := body.index(guard[0])
-	assert gi > 0 && body[gi - 1] == 'if (!g_capturing)', 'push_rec\'s early exit is guarded by `${body[gi - 1]}`, want `if (!g_capturing)` — any other condition drops records the requirement says must exist'
+	got_write := body_of(lines, 'static void push_rec(')
+	assert got_write == want_write, 'push_rec\'s body changed.\n got: ${got_write}\nwant: ${want_write}\nThe 8-byte record is the wire format a dump decodes: the eid carries kind and the forwarded point id, bytes 6-7 the duration little-endian, and the only early exit is the frozen-for-dump `if (!g_capturing)` guard. If this change is intended, update want_write in the same commit.'
 }
 
 // body_of returns a function's body as trimmed, comment-free, non-empty lines: from the line
@@ -561,12 +569,21 @@ fn body_of(lines []string, signature string) []string {
 		if !l.contains(signature) {
 			continue
 		}
+		// Skip to the OPENING BRACE first: a signature may span lines (push_rec's does), and
+		// starting at signature+1 collected its continuation as the first body line.
+		mut started := false
 		for k in i + 1 .. lines.len {
+			t := lines[k].trim_space()
+			if !started {
+				if t.ends_with('{') || t == '{' {
+					started = true
+				}
+				continue
+			}
 			if lines[k].starts_with('}') {
 				return out
 			}
-			t := lines[k].trim_space()
-			if t == '' || t == '{' {
+			if t == '' {
 				continue
 			}
 			out << t
