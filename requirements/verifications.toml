@@ -66,15 +66,22 @@ verifies = ["REQ-IO-018", "REQ-IO-021"]
 #   * a duration bound against the point's period. An overrun is the requirement WORKING — its
 #     text is that a slow point becomes visible — so failing on it would invert the requirement.
 #     The script reports the overrun as a note. A timing budget is its own requirement.
-#   * a quantitative "the sum equals the whole pass" bound. Five shapes of one were each wrong in
-#     one direction or the other; the ring wraps in ~50ms and is sampled outside the interval
-#     being bounded, so there is no matched (work, interval) pair to calibrate against.
+#   * a quantitative "the sum equals the whole pass" bound, in EITHER direction. Six shapes of one
+#     were each wrong; the ring wraps in ~50ms and is sampled outside the interval being bounded,
+#     so there is no matched (work, interval) pair to calibrate against. The last of the six was a
+#     ceiling — the counter cannot claim more time than the window held — which looks sound and is
+#     not: the counter advances by a WHOLE PASS when that pass ends, the SWD reads are not
+#     synchronised to pass boundaries, and a pass straddling the first read contributes execution
+#     from before it. It would have failed a healthy board precisely when a slow point was being
+#     made observable, and the slack cannot be sized because a pass has no calibrated ceiling
+#     (codex on #280).
 # Of those two, only the WHOLE-PASS ACCOUNTING has evidence elsewhere:
-# tools/loom2v/io_points_trace_test.v, linked to this same requirement, asserts the emitted shape
-# (t0 before the first point, t1 after the last point's record, io_exec_add publishing exactly
-# `u32(t1 - t0)` and exactly once, on both the load and trace-only paths, one record per point and
-# each after its own operation) and that every board glue's accumulator adds its own argument with
-# a getter returning that same variable.
+# tools/loom2v/io_points_trace_test.v, linked to this same requirement, pins the whole serviced
+# pass verbatim — from the `t0` bracket through the `C.io_exec_add(u32(t1 - t0))` that publishes it,
+# every executable line and its indentation, on both the load and trace-only paths, for each point
+# shape including a sub-rated one — and asserts that every board glue's accumulator adds its own
+# argument with a getter returning that same variable. Pinning the region rather than listing
+# properties is why: each property this file used to name was defeated by an edit that preserved it.
 #
 # The PERIOD BOUND has no evidence anywhere, by choice: nothing here compares a measured duration
 # against a point's period, because an overrun is the requirement working rather than failing. A

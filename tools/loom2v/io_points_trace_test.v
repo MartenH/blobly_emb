@@ -604,111 +604,195 @@ fn body_of(lines []string, signature string) []string {
 	return out
 }
 
-// THE EMITTED BLOCK, PINNED VERBATIM — bracket through record, indentation included. Every looser
-// form of this test was defeated by an edit that preserved exactly the loose property it checked:
-// `stmt_of` discarded indentation, so the record could be nested inside the freshness guard; an
-// indent compare admitted a preceding `continue`; a keyword-PREFIX scan admitted the same transfer
-// written inline as `if !ready { continue }`. That sequence has no end while the test states
-// properties, so state the block instead — the move that ended the identical sequence on the C side
-// (test_the_recorder_records_exactly_what_it_is_given). A guard, a reordering, an extra statement,
-// an inline transfer, a nested record, a changed primitive and point work appended AFTER the
-// record are now one failure (codex on #280).
+// THE SERVICED PASS, PINNED VERBATIM — from the pass bracket `t0 :=` through the publish
+// `C.io_exec_add(...)`, every executable line, indentation included. Every looser form of this test
+// was defeated by an edit that preserved exactly the loose property it checked: `stmt_of` discarded
+// indentation, so the record could be nested inside the freshness guard; an indent compare admitted
+// a preceding `continue`; a keyword-PREFIX scan admitted the same transfer written inline as
+// `if !ready { continue }`; and two rounds of pinning a SLICE — first ending at the record, then at
+// `t1` — left appended point work outside the pin while it stayed outside the duration the record
+// carries, and outside the `t1 - t0` sum. So the region is now bounded by the two things that make
+// the measurement mean anything: the pass bracket opens it and the publish closes it. A guard, a
+// reordering, an extra statement anywhere in the pass, an inline transfer, a nested record, a
+// changed primitive and work appended after the record or after `t1` are one failure (codex #280).
 //
 // It is also the ORDERING guard, which is why the two dedicated pwm/gpio-output ordering tests are
-// gone rather than kept beside it: each case names its own primitive with the record as the last
-// line, so a record emitted before its write cannot match.
+// gone rather than kept beside it: each case names its own primitive with its record after it.
 fn test_the_emitted_point_block_is_exact() {
 	doc := empty_doc()
-	cases := {
-		'gpio/in':  [
-			'\t\tp0_t0 := C.board_now_us()',
-			'\t\tif p_v := io.gpio_read_checked(0) {',
-			'\t\t\tC.ioc_pub(0, if p_v { u32(1) } else { u32(0) }, u32(0))',
-			'\t\t}',
-			'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
-			'\t\tt1 := C.board_now_us()',
-		]
-		'gpio/out': [
-			'\t\tp0_t0 := C.board_now_us()',
-			'\t\tmut p_a := u32(0)',
-			'\t\tmut p_b := u32(0)',
-			'\t\tif C.ioc_get_ever(0, &p_a, &p_b) != 0 {',
-			'\t\t\tio.gpio_write(0, p_a != 0)',
-			'\t\t}',
-			'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
-			'\t\tt1 := C.board_now_us()',
-		]
-		'adc/in':   [
-			'\t\tp0_t0 := C.board_now_us()',
-			'\t\tif p_v := io.adc_read_checked(0) {',
-			'\t\t\tC.ioc_pub(0, p_v, u32(0))',
-			'\t\t}',
-			'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
-			'\t\tt1 := C.board_now_us()',
-		]
-		'pwm/out':  [
-			'\t\tp0_t0 := C.board_now_us()',
-			'\t\tmut p_a := u32(0)',
-			'\t\tmut p_b := u32(0)',
-			'\t\tif C.ioc_get_ever(0, &p_a, &p_b) != 0 {',
-			'\t\t\tio.pwm_write(0, p_a)',
-			'\t\t}',
-			'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
-			'\t\tt1 := C.board_now_us()',
-		]
+	for c in pin_cases() {
+		// BOTH values of with_load. The region up to the publish must not depend on load telemetry:
+		// a trace-only io image is a supported shape, and the hardware fixture has telemetry ENABLED,
+		// so a regression that only appears without it would be invisible from every direction.
+		for with_load in [true, false] {
+			mut m := Model{}
+			m.trace.on = true
+			m.trace.level = 'all'
+			m.io_points = c.points
+			mut cells := map[string]int{}
+			for i, pt in c.points {
+				cells[pt.name] = i
+			}
+			g := emit_io_target_entry(m, doc, cells, with_load, 0).join('\n')
+			hid := io_handler_id_base(m, doc)
+			// the regions below name literal ids: these fixtures declare no FB handlers, so the point
+			// id base is 0. That the base CONTINUES the handler numbering is
+			// test_io_ids_start_past_every_fb_handler's claim, not this one.
+			assert hid == 0, '${c.name}: the point id base is ${hid}, not 0 — the pinned regions name p0/p1 and u32(0)/u32(1), and this fixture declares no FB handlers'
+			got := pass_region(g)
+			assert got == c.want, '${c.name} (with_load=${with_load}): the emitted pass changed.\n got: ${got}\nwant: ${c.want}\nThe pass bracket must open the region and the exec publish must close it, each point\'s record must sit at its own block\'s level with nothing between it and the point\'s work, and nothing else may appear. If this change is intended, update the case in pin_cases() in the same commit — the point of pinning the pass is that what a point measures, and what the aggregate publishes, cannot drift silently (REQ-IO-025).'
+		}
 	}
-	for kind_dir, want in cases {
-		parts := kind_dir.split('/')
-		mut m := Model{}
-		m.trace.on = true
-		m.trace.level = 'all'
-		m.io_points = [
+}
+
+struct PinCase {
+	name   string
+	points []IoPoint
+	want   []string
+}
+
+// One case per emitted point shape. A kind/direction with no case here has no test at all, and the
+// LAST case is the sub-rated one: every other fixture runs its point at the base tick, so the
+// `mult > 1` gate that wraps a slower point stayed unexecuted — an early transfer added ahead of a
+// gated point's bracket would have lost its records on every slower point while all four
+// base-rate cases and the silicon fixture (one 10 ms point) stayed green (codex on #280).
+fn pin_cases() []PinCase {
+	one := fn (kind string, output bool) []IoPoint {
+		return [
 			IoPoint{
 				name:      'P'
-				kind:      parts[0]
-				output:    parts[1] == 'out'
+				kind:      kind
+				output:    output
 				period_ms: 10
 				ch:        0
 			},
 		]
-		g := emit_io_target_entry(m, doc, {
-			'P': 0
-		}, true, 0).join('\n')
-		hid := io_handler_id_base(m, doc)
-		// the blocks above name a literal id: these fixtures declare no FB handlers, so the point id
-		// base is 0. That the base CONTINUES the handler numbering is
-		// test_io_ids_start_past_every_fb_handler's claim, not this one.
-		assert hid == 0, '${kind_dir}: the point id base is ${hid}, not 0 — the pinned blocks name p0 and u32(0), and this fixture declares no FB handlers'
-		got := point_block(g)
-		assert got == want, '${kind_dir}: the emitted point block changed.\n got: ${got}\nwant: ${want}\nThe bracket must open the block, the record must close it at the SAME indentation, and nothing else may sit between them. If this change is intended, update the case above in the same commit — the point of pinning the block is that what a point measures cannot drift silently (REQ-IO-025).'
 	}
+	return [
+		PinCase{
+			name:   'gpio/in'
+			points: one('gpio', false)
+			want:   [
+				'\t\tt0 := C.board_now_us()',
+				'\t\tp0_t0 := C.board_now_us()',
+				'\t\tif p_v := io.gpio_read_checked(0) {',
+				'\t\t\tC.ioc_pub(0, if p_v { u32(1) } else { u32(0) }, u32(0))',
+				'\t\t}',
+				'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
+				'\t\tt1 := C.board_now_us()',
+				'\t\tC.io_exec_add(u32(t1 - t0))',
+			]
+		},
+		PinCase{
+			name:   'gpio/out'
+			points: one('gpio', true)
+			want:   [
+				'\t\tt0 := C.board_now_us()',
+				'\t\tp0_t0 := C.board_now_us()',
+				'\t\tmut p_a := u32(0)',
+				'\t\tmut p_b := u32(0)',
+				'\t\tif C.ioc_get_ever(0, &p_a, &p_b) != 0 {',
+				'\t\t\tio.gpio_write(0, p_a != 0)',
+				'\t\t}',
+				'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
+				'\t\tt1 := C.board_now_us()',
+				'\t\tC.io_exec_add(u32(t1 - t0))',
+			]
+		},
+		PinCase{
+			name:   'adc/in'
+			points: one('adc', false)
+			want:   [
+				'\t\tt0 := C.board_now_us()',
+				'\t\tp0_t0 := C.board_now_us()',
+				'\t\tif p_v := io.adc_read_checked(0) {',
+				'\t\t\tC.ioc_pub(0, p_v, u32(0))',
+				'\t\t}',
+				'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
+				'\t\tt1 := C.board_now_us()',
+				'\t\tC.io_exec_add(u32(t1 - t0))',
+			]
+		},
+		PinCase{
+			name:   'pwm/out'
+			points: one('pwm', true)
+			want:   [
+				'\t\tt0 := C.board_now_us()',
+				'\t\tp0_t0 := C.board_now_us()',
+				'\t\tmut p_a := u32(0)',
+				'\t\tmut p_b := u32(0)',
+				'\t\tif C.ioc_get_ever(0, &p_a, &p_b) != 0 {',
+				'\t\t\tio.pwm_write(0, p_a)',
+				'\t\t}',
+				'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
+				'\t\tt1 := C.board_now_us()',
+				'\t\tC.io_exec_add(u32(t1 - t0))',
+			]
+		},
+		PinCase{
+			name:   'a sub-rated point beside a base-rate one'
+			points: [
+				IoPoint{
+					name:      'Fast'
+					kind:      'gpio'
+					output:    false
+					period_ms: 10
+					ch:        0
+				},
+				IoPoint{
+					name:      'Slow'
+					kind:      'adc'
+					output:    false
+					period_ms: 100
+					ch:        1
+				},
+			]
+			want: [
+				'\t\tt0 := C.board_now_us()',
+				'\t\tp0_t0 := C.board_now_us()',
+				'\t\tif fast_v := io.gpio_read_checked(0) {',
+				'\t\t\tC.ioc_pub(0, if fast_v { u32(1) } else { u32(0) }, u32(0))',
+				'\t\t}',
+				'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
+				'\t\tif (tick + 1) % 10 == 0 {',
+				'\t\t\tp1_t0 := C.board_now_us()',
+				'\t\t\tif slow_v := io.adc_read_checked(1) {',
+				'\t\t\t\tC.ioc_pub(1, slow_v, u32(0))',
+				'\t\t\t}',
+				'\t\t\tC.trace_fb(u32(1), p1_t0, u32(C.board_now_us() - p1_t0))',
+				'\t\t}',
+				'\t\tt1 := C.board_now_us()',
+				'\t\tC.io_exec_add(u32(t1 - t0))',
+			]
+		},
+	]
 }
 
-// point_block: point 0's emitted block — its `p0_t0` bracket line through the PASS END (`t1 :=
-// …`), comments removed and trailing space normalised, INDENTATION KEPT. Indentation is half the
-// evidence: a record moved inside the freshness guard must not compare equal to one at the block's
-// own level. A missing record, or one emitted before the bracket, does not match either.
+// pass_region: the emitted io pass — its `t0 :=` bracket line through the `C.io_exec_add(...)` that
+// publishes the sum, comment-free, blank lines dropped, trailing space normalised, INDENTATION KEPT.
+// Indentation is half the evidence: a record moved inside a freshness guard, or a point moved inside
+// another point's gate, must not compare equal.
 //
-// It ends at the pass end rather than at the record because stopping AT the record is a slice again,
-// and a slice is not whole — the same mistake the C-side pin made once: point work appended after
-// the unchanged `C.trace_fb(...)` (a second `C.ioc_pub`, say) is still part of the service and is
-// still excluded from the duration the record carries, and a pin that stops at the record cannot see
-// it (codex on #280). These fixtures declare ONE point, so "bracket through pass end" is exactly
-// that point's own block plus the terminator, and the terminator is in the expected lists: the
-// record must be the last thing before it. Work appended after `t1` escapes the whole-pass sum too,
-// which is test_the_exec_sum_brackets_the_whole_pass_not_a_point's claim.
-fn point_block(src string) []string {
+// The bounds are the measurement's own bounds, and that is deliberate. Pinning to the record left
+// work after it unpinned; pinning to `t1` left work between `t1` and the publish unpinned — and both
+// escape the point's duration AND the pass sum while every marker-ordering check stays green. A
+// missing record, or one emitted before its bracket, does not match either.
+fn pass_region(src string) []string {
 	mut out := []string{}
 	mut on := false
 	for l in strip_comments(src) {
-		if l.contains('p0_t0 := C.board_now_us()') {
+		if l.trim_space().starts_with('t0 := C.board_now_us()') {
 			on = true
 		}
 		if !on {
 			continue
 		}
-		out << l.trim_right(' \t')
-		if l.contains('t1 := C.board_now_us()') {
+		t := l.trim_right(' \t')
+		if t.trim_space() == '' {
+			continue // a comment-only line is not executable work
+		}
+		out << t
+		if l.contains('C.io_exec_add(') {
 			break
 		}
 	}
@@ -833,12 +917,30 @@ fn test_the_fb_loop_subtracts_the_io_counter() {
 	// branch emits a `run_<thread>()` per [[partition.thread]]. Without this the variant could fail
 	// to take effect — a mis-inserted thread block, or the toml comment trap (vlang/v#27684) eating
 	// the key — and the assertions below would pass against the single-thread emitter again.
-	assert src_m.contains('fn run_fast()') && src_m.contains('fn run_aux()'), 'the two-thread variant did not reach the multi-thread emitter (no per-thread run_*() in the glue) — the fixture did not take effect'
-	dispatches_m := dispatches_of(src_m)
-	assert dispatches_m.len == 2, 'the two-thread variant emits ${dispatches_m.len} profiled dispatches, want one per thread: ${dispatches_m}'
-	for d in dispatches_m {
-		assert d == 'sched.run_profiled_excl(trace_clock, io_exec_clock)', 'a multi-thread dispatch is `${d}` — with io points and trace level="all" every thread must exclude the io exec counter, or its handlers charge io preemption'
+	// PER THREAD, inside its own run function — not a count over the file. Counting admits
+	// `run_fast()` emitting two correct dispatches while `run_aux()` emits none: both functions
+	// exist, the total is still two, every per-call equality still passes, and the fast handlers are
+	// serviced twice while the aux handlers are never serviced at all (codex on #280).
+	m_lines := strip_comments(src_m)
+	for thr in ['fast', 'aux'] {
+		body := body_of(m_lines, 'fn run_${thr}()')
+		// also the proof the multi-thread branch was REACHED, not merely that two dispatches
+		// appeared: only that branch emits a run_<thread>() per [[partition.thread]]. Without it the
+		// variant could fail to take effect — a mis-inserted thread block, or the toml comment trap
+		// (vlang/v#27684) eating the key — and this would re-test the single-thread emitter.
+		assert body.len > 0, 'the two-thread variant emits no `fn run_${thr}()` — the multi-thread emitter was not reached, so the fixture did not take effect'
+		mut per_thread := []string{}
+		for l in body {
+			if l.contains('sched.run_profiled') {
+				per_thread << l
+			}
+		}
+		assert per_thread.len == 1, 'run_${thr}() has ${per_thread.len} profiled dispatches, want exactly 1 — none leaves that thread\'s handlers unserviced and two services them twice: ${per_thread}'
+		assert per_thread[0] == 'sched.run_profiled_excl(trace_clock, io_exec_clock)', 'run_${thr}() dispatches `${per_thread[0]}` — with io points and trace level="all" every thread must exclude the io exec counter, or its handlers charge io preemption'
 	}
+	// and none anywhere else in the file: two threads, two dispatches, both inside their own loops
+	dispatches_m := dispatches_of(src_m)
+	assert dispatches_m.len == 2, 'the two-thread variant emits ${dispatches_m.len} profiled dispatches in total, want the two inside run_fast() and run_aux(): ${dispatches_m}'
 	clock_body_m := io_clock_body(src_m)
 	assert clock_body_m == ['return C.io_exec_us()'], 'io_exec_clock\'s body in the two-thread variant is ${clock_body_m} — every thread subtracts whatever it returns'
 }

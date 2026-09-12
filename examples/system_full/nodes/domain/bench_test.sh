@@ -171,7 +171,12 @@ ELAPSED_US=$(( T2 - T1 ))
 # when a point consumes most of its period). Comparing the raw values would report a wrap as a
 # stuck serve loop and never reach a valid delta (codex on #280).
 DELTA=$(( (A2 - A1 + 4294967296) % 4294967296 ))
-[ "$DELTA" -gt 0 ] || fail "g_io_exec_us did not move from $A1 across ${ELAPSED_US}us — the io serve loop is not running"
+# Reported, not bounded: the delta is the OBSERVATION, and the only assertion on it is that it
+# moved. Every quantitative bound tried here was wrong in one direction or the other — see step 5,
+# which is where the reasoning lives. Printing it keeps the aggregate half of REQ-IO-025 visible in
+# a passing run; asserting more than "it moved" is what kept failing healthy boards.
+[ "$DELTA" -gt 0 ] && ok "g_io_exec_us advancing (+${DELTA}us observed across ${ELAPSED_US}us; reported, not bounded — see step 5)" \
+  || fail "g_io_exec_us did not move from $A1 across ${ELAPSED_US}us — the io serve loop is not running"
 
 # --- 4. PER-POINT records in the ring, for EVERY point (the REQ-IO-025 claim) ------
 # record (trace_hooks.c): eid u16 LE (kind<<14|id) | info u8 | start_us u24 LE | dur_us u16 LE.
@@ -270,31 +275,34 @@ for row in "${IO_ROWS[@]}"; do
   fi
 done
 
-# --- 5. the aggregate does not claim more than the wall clock allowed -----------------
-# A ceiling, and deliberately NO quantitative floor. Five successive shapes of one were each
+# --- 5. what the aggregate is NOT asserted to be --------------------------------------
+# Deliberately no quantitative bound in either direction. Six successive shapes of one were each
 # wrong, alternating between admitting a regression and failing a healthy board:
 #   passes x DMIN        vacuous — collapses to 0 when one sample rounds down
 #   flat 0.5us/pass      admits an io_exec_add that ignores its argument and adds 1
 #   >= passes x DMAX     admits that same adder by equality
 #   >  passes x DMAX     fails a good board on a single quantized outlier
 #   >  passes x DNZMIN   charges a nonzero duration to samples that legitimately measured 0
+#   <= ELAPSED_US        fails a healthy board, and worst exactly when a point is slow: the counter
+#                        advances by a WHOLE PASS when that pass ends, and these SWD reads are not
+#                        synchronised to pass boundaries, so a pass that began before the first read
+#                        and finished inside the window contributes execution from before it. The
+#                        overshoot is bounded by one pass's duration and a pass has no calibrated
+#                        ceiling (an overrun is a supported state, which is what mark_overrun is
+#                        for), so the slack cannot be sized either.
 # The instrument cannot support one: the ring is a 256-record flight recorder that wraps in ~50ms
 # and is sampled OUTSIDE the window being bounded, so there is no matched (work, interval) pair to
 # calibrate against — and estimating the zero/nonzero split from five samples is calibration on
 # noise. A bound that mis-fires in either direction is worse than an honest gap (codex on #280,
 # five rounds on this one assertion).
 #
-# So what remains is what the bench can actually witness: the counter ADVANCES, and it cannot
-# claim more time than the window held. The requirement's other half — that the sum brackets the
-# WHOLE PASS rather than one point or a constant — is decided where it is decidable, in the
-# emitted shape: tools/loom2v/io_points_trace_test.v asserts t0 precedes the first point, t1
-# follows the last point's RECORD, and io_exec_add publishes exactly t1 - t0. Below that there is
-# only the C one-liner `io_exec_add(us) { g_io_exec_us += us; }` in the board glue, which no
-# instrument here reaches.
-if [ "$DELTA" -gt 0 ]; then
-  [ "$DELTA" -le "$ELAPSED_US" ] && ok "g_io_exec_us +${DELTA}us within the ${ELAPSED_US}us actually elapsed between the two reads" \
-    || fail "g_io_exec_us advanced ${DELTA}us across a measured ${ELAPSED_US}us interval — more execution than wall time, which is impossible"
-fi
+# So what remains is what the bench can actually witness, asserted at step 3: the counter ADVANCES.
+# The requirement's other half — that the sum brackets the WHOLE PASS rather than one point or a
+# constant — is decided where it is decidable, in the emitted shape:
+# tools/loom2v/io_points_trace_test.v pins the whole serviced pass verbatim, from the t0 bracket
+# through the `C.io_exec_add(u32(t1 - t0))` that publishes it, so nothing can sit outside either
+# bound. Below that there is only the C one-liner `io_exec_add(us) { g_io_exec_us += us; }` in the
+# board glue, which no instrument here reaches.
 
 [ "$rc" = 0 ] && echo "PASS: REQ-IO-025 — per-point io records observable on silicon" \
   || echo "FAILED"
