@@ -2,6 +2,13 @@ module main
 
 import toml
 
+// @verifies REQ-IO-025
+//
+// The tag matters, and its absence was not cosmetic: tools/trace/gen.v skips a V test file with
+// no @verifies before recording it, so this file's evidence was never counted and REQ-IO-025 could
+// be marked verified by the silicon check ALONE — which, on a one-point node, cannot tell a
+// whole-pass sum from the last point's duration. That discrimination is here (codex on #280).
+//
 // IO point trace records (#263, REQ-IO-025). Their ids continue the GLOBAL handler numbering, so
 // a point's records can never be read as some FB handler's — and emit_manifest writes its rows in
 // the same order, one per point, which is what a dump resolves them through. The id is computed

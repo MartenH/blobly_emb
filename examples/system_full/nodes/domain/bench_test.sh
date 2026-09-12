@@ -63,13 +63,17 @@ fi
 [ -f "$ELF" ] || { echo "FAIL: $ELF missing (build first, or pass --flash)"; exit 1; }
 [ -f "$MAN" ] || { echo "FAIL: $MAN missing (run make gen)"; exit 1; }
 
-# --- the io point the manifest names (id + name), never hard-coded ----------------
+# --- EVERY io point the manifest names, never hard-coded --------------------------
 # manifest io row: <id>,io,<core>,io,<point name>,<period_us>,io
-IO_ROW=$(awk -F, '$2=="io" && $4=="io" {print; exit}' "$MAN")
-[ -n "$IO_ROW" ] && IO_ID=$(cut -d, -f1 <<<"$IO_ROW") && IO_NAME=$(cut -d, -f5 <<<"$IO_ROW") \
-  && IO_PERIOD_US=$(cut -d, -f6 <<<"$IO_ROW") \
+# All of them, not the first: REQ-IO-025 is a per-POINT guarantee, so checking one row would
+# silently under-verify the moment a second point is configured (codex on #280).
+mapfile -t IO_ROWS < <(awk -F, '$2=="io" && $4=="io"' "$MAN")
+[ "${#IO_ROWS[@]}" -gt 0 ] \
   || { echo "FAIL: no io point row in $MAN — REQ-IO-025 requires a manifest row per point"; exit 1; }
-echo "io point from manifest: id=$IO_ID name=$IO_NAME period=${IO_PERIOD_US}us"
+echo "io points from manifest: ${#IO_ROWS[@]}"
+for row in "${IO_ROWS[@]}"; do
+  echo "  id=$(cut -d, -f1 <<<"$row") name=$(cut -d, -f5 <<<"$row") period=$(cut -d, -f6 <<<"$row")us"
+done
 
 # --- symbol addresses, resolved from the ELF -------------------------------------
 sym() { arm-none-eabi-nm "$ELF" | awk -v s="$1" '$3==s {print "0x"$1; exit}'; }
@@ -112,43 +116,42 @@ WIN_S=2
 A1=$(u32 "$IOEXEC"); sleep "$WIN_S"; A2=$(u32 "$IOEXEC")
 [ "$A2" -gt "$A1" ] || fail "g_io_exec_us stuck at $A1 — the io serve loop is not running"
 
-# --- 4. PER-POINT records in the ring (the REQ-IO-025 claim) -----------------------
+# --- 4. PER-POINT records in the ring, for EVERY point (the REQ-IO-025 claim) ------
 # record (trace_hooks.c): eid u16 LE (kind<<14|id) | info u8 | start_us u24 LE | dur_us u16 LE.
 # eid and dur are both u16-aligned (offsets 0 and 6), so -tu2 gives w0=eid .. w3=dur.
 RB=$(mktemp)
 st-flash --serial "$SERIAL" read "$RB" "$RING" 2048 >/dev/null 2>&1 || { echo "FAIL: SWD ring read failed"; rm -f "$RB"; exit 1; }
-read -r NREC DMIN DMAX NNZ < <(od -An -tu2 -v "$RB" | tr -s ' ' '\n' | awk -v want=$(( (2 << 14) | IO_ID )) '
-  NF { w[n++ % 4] = $1; if (n % 4 == 0) { if (w[0] == want) { c++; d = w[3]; if (d > 0) nz++;
-        if (mn == "" || d < mn) mn = d; if (d > mx) mx = d } } }
-  END { print c + 0, (mn == "" ? 0 : mn), mx + 0, nz + 0 }')
-rm -f "$RB"
-[ "${NREC:-0}" -gt 0 ] && ok "$NREC record(s) for io point id $IO_ID ($IO_NAME), dur ${DMIN}..${DMAX}us" \
-  || fail "no kind=FB records with id $IO_ID in the ring — the io point's own service time is NOT observable"
-# Its OWN duration, so the records must carry a real measurement — not merely a number that
-# happens to satisfy an upper bound. If the generated bracket regressed to pass zero for every
-# point, NREC would still be positive and DMAX=0 would pass a bound-only check, and this test
-# would report the service time "observable" while containing no timing at all (codex on #280).
-# At least one nonzero, not all: the DWT gives microsecond resolution and a single register
-# write can genuinely round to 0, so requiring every sample to be nonzero would be flaky.
-if [ "${NREC:-0}" -gt 0 ]; then
-  [ "${NNZ:-0}" -gt 0 ] && ok "${NNZ}/${NREC} record(s) carry a measured duration (max ${DMAX}us)" \
-    || fail "all ${NREC} records for id $IO_ID have dur_us = 0 — the bracket is recording no time, so the point's own service duration is NOT observable"
-  [ "$DMAX" -lt "$IO_PERIOD_US" ] && ok "durations within the point's ${IO_PERIOD_US}us period" \
-    || fail "a point service took ${DMAX}us, its period is ${IO_PERIOD_US}us"
-fi
-
-# the accounting bound, now that the per-point durations are known
-if [ "${NREC:-0}" -gt 0 ] && [ "$A2" -gt "$A1" ]; then
+WORDS=$(od -An -tu2 -v "$RB" | tr -s ' ' '\n'); rm -f "$RB"
+decode() { # decode <eid> -> "count min max nonzero"
+  awk -v want="$1" '
+    NF { w[n++ % 4] = $1; if (n % 4 == 0) { if (w[0] == want) { c++; d = w[3]; if (d > 0) nz++;
+          if (mn == "" || d < mn) mn = d; if (d > mx) mx = d } } }
+    END { print c + 0, (mn == "" ? 0 : mn), mx + 0, nz + 0 }' <<<"$WORDS"
+}
+FLOOR=0 # accumulated over the points: each pass of each point must account for >= 0.5us
+for row in "${IO_ROWS[@]}"; do
+  ID=$(cut -d, -f1 <<<"$row"); NAME=$(cut -d, -f5 <<<"$row"); PER=$(cut -d, -f6 <<<"$row")
+  read -r NREC DMIN DMAX NNZ < <(decode $(( (2 << 14) | ID )))
+  if [ "${NREC:-0}" -gt 0 ]; then
+    ok "$NREC record(s) for io point id $ID ($NAME), dur ${DMIN}..${DMAX}us"
+    [ "${NNZ:-0}" -gt 0 ] && ok "  ${NNZ}/${NREC} carry a measured duration" \
+      || fail "all $NREC records for id $ID ($NAME) have dur_us = 0 — the bracket records no time, so that point's own service duration is NOT observable"
+    [ "$DMAX" -lt "$PER" ] && ok "  within the point's ${PER}us period" \
+      || fail "id $ID ($NAME) took ${DMAX}us, its period is ${PER}us"
+    FLOOR=$(( FLOOR + (WIN_S * 1000000 / PER) / 2 ))
+  else
+    fail "no kind=FB records with id $ID ($NAME) in the ring — that point's own service time is NOT observable"
+  fi
+done
+# The accounting bound. FLOOR accumulated above: 0.5us per pass per point — deliberately NOT
+# scaled by the smallest observed duration, because a single sample genuinely rounds to 0 at
+# microsecond resolution and the first version of this bound did exactly that, making the floor 0
+# and the check vacuous (the same emptiness this round fixed elsewhere).
+if [ "$FLOOR" -gt 0 ] && [ "$A2" -gt "$A1" ]; then
   DELTA=$(( A2 - A1 ))
-  PASSES=$(( WIN_S * 1000000 / IO_PERIOD_US ))
-  # NOT scaled by DMIN: a single sample can genuinely round to 0 at microsecond resolution, and
-  # the first version of this bound did exactly that — DMIN=0 made the floor 0 and the check
-  # vacuous, the same emptiness this round is fixing elsewhere. A pass that services a point
-  # cannot average zero, so require at least 0.5us per pass, well under the ~1.5us observed.
-  FLOOR=$(( PASSES / 2 ))
   CEIL=$(( WIN_S * 1000000 ))
-  [ "$DELTA" -ge "$FLOOR" ] && ok "g_io_exec_us +${DELTA}us over ${WIN_S}s, >= the ${FLOOR}us that ~${PASSES} passes of real work require" \
-    || fail "g_io_exec_us advanced only ${DELTA}us over ${WIN_S}s; ~${PASSES} passes need >= ${FLOOR}us (0.5us each) — the sum is not accounting for the work it brackets"
+  [ "$DELTA" -ge "$FLOOR" ] && ok "g_io_exec_us +${DELTA}us over ${WIN_S}s, >= the ${FLOOR}us that the configured points' passes require" \
+    || fail "g_io_exec_us advanced only ${DELTA}us over ${WIN_S}s; the configured points' passes need >= ${FLOOR}us — the sum is not accounting for the work it brackets"
   [ "$DELTA" -le "$CEIL" ] && ok "and does not exceed the ${CEIL}us of wall time in the window" \
     || fail "g_io_exec_us advanced ${DELTA}us in ${WIN_S}s of wall time — impossible"
 fi
