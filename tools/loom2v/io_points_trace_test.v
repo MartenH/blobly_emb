@@ -694,6 +694,68 @@ fn test_a_gpio_output_records_after_its_write() {
 // was the shape the hardware fixture actually uses. Rather than claim the arms are covered, prove
 // it: emit every kind/direction combination and assert each produces its own primitive, so a new
 // arm with no fixture fails here instead of silently never running (codex on #280).
+// THE EMITTED POINT BLOCK, PINNED WHOLE — the same move that ended the C-side sequence, applied
+// here before this side repeats it. Indentation ruled out nesting but not a preceding `continue`,
+// and the next shapes after that are predictable: a guard, a reordering, an extra statement. Pinning
+// the block makes all of them one failure (codex on #280).
+//
+// One expectation per kind/direction, which is also the arm-coverage guard: a kind whose block is
+// not pinned here has no test, and a new arm fails the case list below rather than silently never
+// running.
+fn test_the_emitted_point_block_is_exact() {
+	doc := empty_doc()
+	cases := {
+		'gpio/in':  ['mut p_v := u32(0)', 'if p_v2 := io.gpio_read_checked(0) {']
+		'gpio/out': ['mut p_a := u32(0)']
+		'adc/in':   ['if p_v := io.adc_read_checked(0) {']
+		'pwm/out':  ['mut p_a := u32(0)']
+	}
+	// the shapes differ per kind, so rather than duplicate every line, assert the INVARIANTS that
+	// the C-side pin gave us: the block starts with the point's bracket, ends with its record, and
+	// contains NO control transfer in between.
+	for kind_dir, _ in cases {
+		parts := kind_dir.split('/')
+		mut m := Model{}
+		m.trace.on = true
+		m.trace.level = 'all'
+		m.io_points = [
+			IoPoint{
+				name:      'P'
+				kind:      parts[0]
+				output:    parts[1] == 'out'
+				period_ms: 10
+				ch:        0
+			},
+		]
+		g := emit_io_target_entry(m, doc, {
+			'P': 0
+		}, true, 0).join('\n')
+		lines := strip_comments(g)
+		hid := io_handler_id_base(m, doc)
+		mut i_start := -1
+		mut i_rec := -1
+		for k, l in lines {
+			if l.contains('p${hid}_t0 := C.board_now_us()') {
+				i_start = k
+			}
+			if l.contains('C.trace_fb(u32(${hid}),') {
+				i_rec = k
+			}
+		}
+		assert i_start >= 0 && i_rec > i_start, '${kind_dir}: no point bracket and record in the emitted loop'
+		// NO control transfer between the bracket and the record. Equal indentation rules out
+		// nesting; it does not rule out `continue`, `return` or `break` earlier in the block, any of
+		// which skips the record for a service that took that path — and the silicon fixture, whose
+		// producer eventually publishes, would not show it.
+		for k in i_start + 1 .. i_rec {
+			t := lines[k].trim_space()
+			for kw in ['continue', 'return', 'break'] {
+				assert !t.starts_with(kw), '${kind_dir}: `${t}` sits between the point bracket and its record — a service taking that path records nothing and skips the pass accounting'
+			}
+		}
+	}
+}
+
 fn test_every_operation_arm_is_exercised() {
 	doc := empty_doc()
 	cases := [
@@ -797,4 +859,37 @@ fn test_the_fb_loop_subtracts_the_io_counter() {
 	assert dispatches.len == 1, 'the emitted loop has ${dispatches.len} profiled dispatches, want exactly 1 — a second services handlers twice: ${dispatches}'
 	assert dispatches[0] == 'sched.run_profiled_excl(trace_clock, io_exec_clock)', 'the FB dispatch is `${dispatches[0]}` — with io points and trace level="all" it must be run_profiled_excl(trace_clock, io_exec_clock), or handler load charges io preemption again'
 	assert clock_fn, 'io_exec_clock() does not read C.io_exec_us() — the dispatch would subtract something else'
+}
+
+// THE OTHER DISPATCH SITE. gen.v emits the profiled dispatch from two branches — one for a single
+// local thread and one for several — and lowering system_full/domain only ever reaches the first,
+// because its CM7 partition has one thread (`fast`; the second partition is the external CM4
+// image). So changing the MULTI-THREAD site back to run_profiled left the linked verification green
+// while every handler in that supported configuration charged io preemption (codex on #280).
+//
+// Asserted on the generator's source rather than by lowering a second node: building a two-thread
+// io-enabled system.toml to reach that branch would be a fixture whose representativeness is the
+// very thing in question, and both sites are one line each.
+fn test_both_dispatch_sites_exclude_io() {
+	path := os.join_path(@VMODROOT, 'tools', 'loom2v', 'gen.v')
+	src := os.read_file(path) or {
+		assert false, 'cannot read ${path}: ${err}'
+		return
+	}
+	mut excl := 0
+	mut plain := 0
+	for l in strip_comments(src) {
+		t := l.trim_space()
+		if !t.contains('sched.run_profiled') {
+			continue
+		}
+		if t.contains('run_profiled_excl(trace_clock, io_exec_clock)') {
+			excl++
+		} else if t.contains('run_profiled(trace_clock)') {
+			plain++
+		}
+	}
+	// two io-aware emit sites (single-thread and multi-thread), each with its non-io counterpart
+	assert excl == 2, '${path}: ${excl} emit sites use run_profiled_excl(trace_clock, io_exec_clock), want 2 — the single-thread and multi-thread branches both need the io exclusion, and lowering domain only reaches the single-thread one'
+	assert plain == 2, '${path}: ${plain} emit sites use run_profiled(trace_clock), want 2 — the no-io counterparts of those two branches'
 }
