@@ -473,17 +473,28 @@ fn test_the_recorder_forwards_the_duration_it_is_given() {
 	}
 	lines := src.split_into_lines()
 	// trace_fb's third parameter must reach push_rec
+	// CODE only, and INSIDE trace_fb's body. Two holes here, both already fixed on the emitted-V
+	// side and not carried over: a commented-out `// push_rec(...)` was captured as the call (the
+	// exact-argument and byte-assignment checks then all passed while trace_fb recorded nothing),
+	// and the search ran to end-of-file, so with trace_fb's own call removed it would have matched
+	// some LATER function's push_rec (codex on #280).
 	mut fb_call := ''
 	for i, l in lines {
-		if l.contains('void trace_fb(') {
-			for k in i .. lines.len {
-								if lines[k].contains('push_rec(') {
-					fb_call = lines[k].trim_space()
-					break
-				}
-			}
-			break
+		if !code_of(l).contains('void trace_fb(') {
+			continue
 		}
+		for k in i + 1 .. lines.len {
+			c := code_of(lines[k])
+			if c.contains('push_rec(') {
+				fb_call = c.trim_space()
+				break
+			}
+			// end of trace_fb's body: a closing brace in column 0
+			if lines[k].starts_with('}') {
+				break
+			}
+		}
+		break
 	}
 	assert fb_call != '', '${path}: no push_rec( call found in trace_fb'
 	// The COMPLETE argument. contains('dur_us') accepts `dur_us + 1` — which names the parameter,

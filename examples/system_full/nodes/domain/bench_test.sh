@@ -67,7 +67,12 @@ if [ "$FLASH" = 1 ]; then
   make -C ../domain_m4 >/dev/null 2>&1 || { echo "FAIL: build error (domain_m4)"; exit 1; }
   st-flash --serial "$SERIAL" write ../domain_m4/build/domain_m4.bin 0x08100000 >/dev/null 2>&1 || { echo "FAIL: flash error (bank 2)"; exit 1; }
   st-flash --serial "$SERIAL" write build/domain.bin 0x08000000 >/dev/null 2>&1 || { echo "FAIL: flash error (bank 1)"; exit 1; }
-  st-flash --serial "$SERIAL" reset >/dev/null 2>&1
+  # A FAILED reset is infrastructure, not something to sleep through. Unchecked, the script would
+  # then inspect whatever is still executing — and if the board happened to be running a compatible
+  # earlier image, its counters keep advancing and the run reports PASS without ever booting the
+  # binaries just flashed (codex on #280).
+  st-flash --serial "$SERIAL" reset >/dev/null 2>&1 \
+    || { echo "FAIL: st-flash reset failed after programming — the board may still be running the previous image (infrastructure)"; exit 1; }
   sleep 3
 fi
 [ -f "$ELF" ] || { echo "FAIL: $ELF missing (build first, or pass --flash)"; exit 1; }
