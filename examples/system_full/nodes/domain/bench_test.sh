@@ -81,10 +81,33 @@ RING=$(sym g_ring); HEAD=$(sym g_head); IOEXEC=$(sym g_io_exec_us); GCPU=$(sym g
 [ -n "$RING" ] && [ -n "$HEAD" ] && [ -n "$IOEXEC" ] && [ -n "$GCPU" ] \
   || { echo "FAIL: could not resolve a required symbol (g_ring/g_head/g_io_exec_us/g_cpu_mhz)"; exit 1; }
 
-u32() { # u32() <addr> -> decimal, over SWD
-  local t; t=$(mktemp)
+u32() { # u32() <addr> -> decimal on stdout, over SWD; nonzero status on ANY failure
+  local t v; t=$(mktemp)
   st-flash --serial "$SERIAL" read "$t" "$1" 4 >/dev/null 2>&1 || { rm -f "$t"; return 1; }
-  od -An -tu4 "$t" | tr -d ' \n'; rm -f "$t"
+  v=$(od -An -tu4 "$t" | tr -d ' \n'); rm -f "$t"
+  # EMPTY is a failure too: st-flash can exit 0 having written nothing, and an empty value
+  # becomes 0 in bash arithmetic — indistinguishable from a real reading of zero.
+  [ -n "$v" ] || return 1
+  printf '%s' "$v"
+}
+# MONOTONIC time source: `date` is wall clock and can be stepped backwards by NTP or by hand
+# mid-run, which shrinks a computed interval — or makes it negative — so a correctly advancing
+# accumulator reads as impossible execution time; a forward step cuts an observation budget short.
+# /proc/uptime is monotonic on Linux, and its 10ms granularity is irrelevant at these margins.
+mono_us() { awk '{ printf "%d", $1 * 1000000 }' /proc/uptime; }
+
+# read_u32 <addr> — a CHECKED counter read, into REPLY. A failed read is infrastructure, never a
+# silent 0: bash treats an empty value as zero in arithmetic, so an unchecked baseline read that
+# failed followed by a good second read yields a plausible positive delta and the liveness checks
+# pass with no baseline at all (codex on #280).
+#
+# It assigns to REPLY rather than printing, because `exit` inside $( ) exits the SUBSHELL and not
+# the script: the first version of this guard was INERT — the caller received the string
+# "FAIL: SWD read ..." as its value, and bash then parsed `FAIL` as a variable name in arithmetic
+# (`line 119: FAIL: unbound variable`). Found by stubbing st-flash to fail after the identity read.
+read_u32() {
+  REPLY=$(u32 "$1") || { echo "FAIL: SWD read of $1 failed (infrastructure)"; exit 1; }
+  [ -n "$REPLY" ] || { echo "FAIL: SWD read of $1 returned nothing (infrastructure)"; exit 1; }
 }
 
 rc=0
@@ -92,7 +115,7 @@ fail() { echo "  FAIL: $*"; rc=1; }
 ok()   { echo "  ok: $*"; }
 
 # --- 1. the right board, running the right image ---------------------------------
-MHZ=$(u32 "$GCPU") || { echo "FAIL: SWD read failed (infrastructure)"; exit 1; }
+read_u32 "$GCPU"; MHZ=$REPLY
 [ "$MHZ" = 400 ] && ok "g_cpu_mhz = 400 (H755 on its 8 MHz HSE)" \
   || fail "g_cpu_mhz = $MHZ, want 400 — wrong board or mis-clocked image"
 
@@ -100,7 +123,7 @@ MHZ=$(u32 "$GCPU") || { echo "FAIL: SWD read failed (infrastructure)"; exit 1; }
 # MODULO 2^32, for the same reason as g_io_exec_us below: g_head is an `unsigned` record counter
 # and at ~4900 records/s it wraps about every ten days, so H2 < H1 is a healthy observation on a
 # long-running board. I fixed this for the aggregate and left it here (codex on #280).
-H1=$(u32 "$HEAD"); sleep 1; H2=$(u32 "$HEAD")
+read_u32 "$HEAD"; H1=$REPLY; sleep 1; read_u32 "$HEAD"; H2=$REPLY
 HDELTA=$(( (H2 - H1 + 4294967296) % 4294967296 ))
 [ "$HDELTA" -gt 0 ] && ok "g_head advancing (+${HDELTA} records)" \
   || fail "g_head did not move from $H1 — the exec-hook recorder is not capturing"
@@ -125,12 +148,8 @@ WIN_S=2
 # io service would exceed a ceiling built from the sleep alone — a false failure in exactly the
 # slow-point case REQ-IO-025 exists to expose, which is the second time a nominal bound here would
 # have inverted the requirement (codex on #280).
-# MONOTONIC, not wall clock: `date` can be stepped backwards by NTP or by hand mid-run, which
-# shrinks the computed interval — or makes it negative — and a correctly advancing accumulator then
-# looks like impossible execution time. /proc/uptime is monotonic; its 10ms granularity is
-# irrelevant here, where the measured delta is ~400us against a ~2s interval (codex on #280).
-mono_us() { awk '{ printf "%d", $1 * 1000000 }' /proc/uptime; }
-T1=$(mono_us); A1=$(u32 "$IOEXEC"); sleep "$WIN_S"; A2=$(u32 "$IOEXEC"); T2=$(mono_us)
+# MONOTONIC, not wall clock (mono_us, defined above the first check that needs it).
+T1=$(mono_us); read_u32 "$IOEXEC"; A1=$REPLY; sleep "$WIN_S"; read_u32 "$IOEXEC"; A2=$REPLY; T2=$(mono_us)
 ELAPSED_US=$(( T2 - T1 ))
 # MODULO 2^32: g_io_exec_us is an `unsigned` C counter, so on a long-running target A2 < A1 is a
 # perfectly healthy observation — it wrapped between the reads (~72 minutes of accumulated io time
@@ -157,7 +176,10 @@ BUDGET_S=$(( (4 * MAXPER / 1000000) + 2 ))
 declare -A CNT MINNZ MAXD
 for row in "${IO_ROWS[@]}"; do ID=$(cut -d, -f1 <<<"$row"); CNT[$ID]=0; MINNZ[$ID]=0; MAXD[$ID]=0; done
 SAMPLES=0
-DEADLINE=$(( $(date +%s) + BUDGET_S ))
+# MONOTONIC here too. I fixed the aggregate interval last round and left this deadline on the wall
+# clock: a forward step exhausts the budget before a slow point has completed a period and reports
+# its records missing, a backward step runs the bench far past its budget (codex on #280).
+DEADLINE_US=$(( $(mono_us) + BUDGET_S * 1000000 ))
 while :; do
   RB=$(mktemp)
   st-flash --serial "$SERIAL" read "$RB" "$RING" 2048 >/dev/null 2>&1 \
@@ -175,18 +197,19 @@ while :; do
     [ "$mx" -gt "${MAXD[$ID]}" ] && MAXD[$ID]=$mx
     if [ "$nzmn" -gt 0 ] && { [ "${MINNZ[$ID]}" = 0 ] || [ "$nzmn" -lt "${MINNZ[$ID]}" ]; }; then MINNZ[$ID]=$nzmn; fi
   done
-  # Stop only when every point has a record AND at least one with a MEASURED duration. Stopping
-  # on the record alone spends none of the remaining budget when a first sample legitimately
-  # quantizes to 0us — and the assertion below then reports that point as all-zero, a flake for
-  # exactly the 0/1 mix this script permits (a `dur 0..1us` window really does occur on this
-  # board). The termination condition has to match what is actually asserted (codex on #280).
+  # Stop when every point has a record — which is exactly what is asserted below. This condition
+  # has been both tighter and looser than the assertion at different points: it once required a
+  # NONZERO duration too, which was right while a nonzero sample was demanded and wrong once 0us
+  # became a valid duration (a sub-microsecond service records 0 correctly). Keep the two in step
+  # — a loop that stops before its assertion can pass, or keeps sampling for something nothing
+  # asserts, is wrong either way (codex on #280).
   MISSING=0
   for row in "${IO_ROWS[@]}"; do
     ID=$(cut -d, -f1 <<<"$row")
     [ "${CNT[$ID]}" -eq 0 ] && MISSING=1
   done
   [ "$MISSING" = 0 ] && break
-  [ "$(date +%s)" -ge "$DEADLINE" ] && break
+  [ "$(mono_us)" -ge "$DEADLINE_US" ] && break
   sleep 0.05
 done
 echo "  (sampled the ring ${SAMPLES}x over up to ${BUDGET_S}s; longest configured period ${MAXPER}us)"
@@ -220,8 +243,7 @@ for row in "${IO_ROWS[@]}"; do
     fi
   else
     fail "no kind=FB records with id $ID ($NAME) in ${SAMPLES} ring sample(s) over ${BUDGET_S}s — that point's own service time is NOT observable"
-    # (a point seen but never with a nonzero duration falls to the MINNZ check above, which the
-    # sampling loop has by then given the whole budget to)
+
   fi
 done
 

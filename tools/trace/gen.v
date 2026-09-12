@@ -76,11 +76,6 @@ fn main() {
 		}
 	}
 
-	if bad_method {
-		eprintln('trace: refusing to build traceability from requirements with an unknown method')
-		exit(1)
-	}
-
 	mut vmap := map[string][]Verif{}
 	mut ctxset := map[string]bool{}
 
@@ -152,6 +147,13 @@ fn main() {
 			if meth == '' {
 				meth = 'analysis'
 			}
+			// The same CLOSED vocabulary the requirements are held to. Validating only the
+			// requirement side left a typo here silently producing evidence of a method the
+			// taxonomy does not have (codex on #280).
+			if meth !in ['test', 'analysis', 'review'] {
+				eprintln('trace: check "${s(m, 'id')}": method "${meth}" is not one of test|analysis|review (requirements/README.md)')
+				bad_method = true
+			}
 			// skip_exit (opt-in, per check): the exit code that means "not run" -> pending,
 			// e.g. an on-target test with no board attached. NOT global: `make lint` exits 2
 			// on a real invariant violation, which must stay 'fail' (GNU make: 2 = errors).
@@ -189,6 +191,15 @@ fn main() {
 
 	mut contexts := ctxset.keys()
 	contexts.sort()
+
+	// The method gate, after BOTH sides are read: a requirement's declared method and a
+	// verification's must each be one of test|analysis|review. Placed here because it was
+	// originally before the verifications were parsed, so a bad method there printed its
+	// diagnostic and then built the table anyway (codex on #280).
+	if bad_method {
+		eprintln('trace: refusing to build traceability with an unknown verification method')
+		exit(1)
+	}
 
 	// 3) direct coverage status per requirement
 	// A requirement is verified only when EVERY linked verification has passed; a
