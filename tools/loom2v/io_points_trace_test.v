@@ -355,20 +355,21 @@ fn check_accumulator(path string) int {
 	src := os.read_file(path) or { return 0 }
 	mut n := 0
 	for line in src.split_into_lines() {
-		if !line.contains('void io_exec_add(') {
+		// Discovery is on the IDENTIFIER, not on `void io_exec_add(`. Requiring the return type on
+		// the same line is a FORMATTING assumption: a backend writing `void` on its own line was
+		// skipped silently, and `found >= 6` stayed satisfied by the other copies while that one
+		// went unchecked (codex on #280). Every occurrence is now classified, and anything this
+		// scanner cannot classify FAILS rather than being passed over.
+		if !line.contains('io_exec_add(') {
+			continue
+		}
+		t := line.trim_space()
+		// a CALL or a PROTOTYPE: statement-terminated, no body. Neither is a definition to judge.
+		if t.ends_with(';') && !t.contains('{') {
 			continue
 		}
 		n++
-		// A PROTOTYPE carries no body and is nothing to judge; anything else that this scanner
-		// cannot parse — a multiline body, say — must FAIL rather than be skipped. Skipping it
-		// left the `found >= 6` minimum satisfied by the other copies while a seventh backend went
-		// unchecked, so the test would stay green over a regression it claims to cover
-		// (codex on #280).
-		if line.trim_space().ends_with(';') && !line.contains('{') {
-			n-- // a declaration, not a definition: not one of the copies this test counts
-			continue
-		}
-		assert line.contains('{') && line.contains('}'), '${path}: io_exec_add is defined with a body this test cannot read on one line — it must be `{ <acc> += <param>; }` so the accumulation can be checked, or this scan silently stops covering that backend: ${line.trim_space()}'
+		assert t.contains('{') && t.contains('}'), '${path}: io_exec_add appears in a form this scan cannot read on one line — a definition must be `{ <acc> += <param>; }` so the accumulation can be checked, or the scan silently stops covering that backend: ${t}'
 		param := line.all_after('(').all_before(')').trim_space().all_after_last(' ')
 		assert param != '', '${path}: cannot read the parameter name from: ${line}'
 		// `+= <param>`, as a PATTERN. A bare `body.contains(param)` is useless here: the parameter
@@ -393,6 +394,13 @@ fn check_accumulator(path string) int {
 		mut saw_getter := false
 		for gl in src.split_into_lines() {
 			if !gl.contains('io_exec_us(void)') {
+				continue
+			}
+			gt := gl.trim_space()
+			// a forward declaration carries no body to read: skip it, as the adder scan does,
+			// rather than trying to extract a return expression from absent braces and failing
+			// the whole run while the real definition below is correct (codex on #280).
+			if gt.ends_with(';') && !gt.contains('{') {
 				continue
 			}
 			saw_getter = true

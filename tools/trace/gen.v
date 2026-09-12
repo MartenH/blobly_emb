@@ -79,6 +79,43 @@ fn main() {
 	mut vmap := map[string][]Verif{}
 	mut ctxset := map[string]bool{}
 
+	// METHOD VALIDATION FIRST, side-effect free, BEFORE anything is executed. This gate used to sit
+	// after the verifications were parsed — but parsing them RUNS every [[check]] command, so under
+	// BLOB_HWTEST a metadata typo would build and flash every configured hardware target and only
+	// then refuse to write the table. Read the methods, abort, then do the work (codex on #280).
+	if os.exists('requirements/verifications.toml') {
+		vdoc := toml.parse_file('requirements/verifications.toml') or { panic(err) }
+		for c in arr(vdoc.value('check')) {
+			m := c.as_map()
+			mut meth := s(m, 'method')
+			if meth == '' {
+				meth = 'analysis'
+			}
+			// A [[check]] RUNS A COMMAND, so it is `test` or `analysis` evidence and never
+			// `review`: review evidence is a logged human approval, and accepting it here let a
+			// green exit status mark a review-method requirement verified with no approved_by.
+			if meth !in ['test', 'analysis'] {
+				eprintln('trace: check "${s(m, 'id')}": method "${meth}" — a [[check]] runs a command, so it is `test` or `analysis` evidence; a review is a signed-off [[review]] entry, not a command')
+				bad_method = true
+			}
+		}
+		for r in arr(vdoc.value('review')) {
+			m := r.as_map()
+			// A [[review]] produces method `review` by construction, so any other value is a lie
+			// rather than merely an unknown one.
+			if rm := m['method'] {
+				if rm.string() != 'review' {
+					eprintln('trace: review "${s(m, 'id')}": method "${rm.string()}" — a [[review]] entry is evidence of method `review` by construction; drop the key or make it a [[check]]')
+					bad_method = true
+				}
+			}
+		}
+	}
+	if bad_method {
+		eprintln('trace: refusing to build traceability with an unknown verification method (nothing was run)')
+		exit(1)
+	}
+
 	// 2a) inline @verifies tags in tests
 	mut tfiles := os.walk_ext('examples', '.lua')
 	// examples too: they carry V e2e tests (e.g. io_gpio) beside their lua ones
@@ -147,16 +184,6 @@ fn main() {
 			if meth == '' {
 				meth = 'analysis'
 			}
-			// A [[check]] RUNS A COMMAND, so it can only ever be `test` or `analysis` evidence.
-			// Accepting `review` here — as the first version of this gate did, by reusing the
-			// requirement side's allowlist — let a command's exit status be recorded as review
-			// evidence and mark a review-method requirement verified with NO approved_by
-			// sign-off, bypassing the [[review]] path that exists for exactly that
-			// (codex on #280). Review evidence is a logged human approval, not a green command.
-			if meth !in ['test', 'analysis'] {
-				eprintln('trace: check "${s(m, 'id')}": method "${meth}" — a [[check]] runs a command, so it is `test` or `analysis` evidence; a review is a signed-off [[review]] entry, not a command')
-				bad_method = true
-			}
 			// skip_exit (opt-in, per check): the exit code that means "not run" -> pending,
 			// e.g. an on-target test with no board attached. NOT global: `make lint` exits 2
 			// on a real invariant violation, which must stay 'fail' (GNU make: 2 = errors).
@@ -179,16 +206,6 @@ fn main() {
 		for r in arr(doc.value('review')) {
 			m := r.as_map()
 			ctx := s(m, 'context')
-			// A [[review]] entry's Verif.method is HARD-CODED to 'review' below, so a `method`
-			// key here is either redundant or a lie. It was not read at all, which meant a typo
-			// (`method = "rewiew"`) passed the gate while the comment above claimed every
-			// verification was checked — the gap and the overstatement together (codex on #280).
-			if rm := m['method'] {
-				if rm.string() != 'review' {
-					eprintln('trace: review "${s(m, 'id')}": method "${rm.string()}" — a [[review]] entry is evidence of method `review` by construction; drop the key or make it a [[check]]')
-					bad_method = true
-				}
-			}
 			result := if s(m, 'approved_by') != '' { 'approved' } else { 'pending' }
 			ctxset[ctx] = true
 			for v in arr(m['verifies'] or { toml.Any([]toml.Any{}) }) {
@@ -204,16 +221,6 @@ fn main() {
 
 	mut contexts := ctxset.keys()
 	contexts.sort()
-
-	// The method gate, after BOTH sides are read. A requirement's declared method must be one of
-	// test|analysis|review; a [[check]]'s likewise; a [[review]]'s, if it declares one at all,
-	// must be `review`, since that is what the entry produces by construction. Placed here because it was
-	// originally before the verifications were parsed, so a bad method there printed its
-	// diagnostic and then built the table anyway (codex on #280).
-	if bad_method {
-		eprintln('trace: refusing to build traceability with an unknown verification method')
-		exit(1)
-	}
 
 	// 3) direct coverage status per requirement
 	// A requirement is verified only when EVERY linked verification has passed; a
