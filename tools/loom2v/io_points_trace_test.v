@@ -156,7 +156,7 @@ fn check_whole_pass_bracket(with_load bool) {
 		'Fast': 0
 		'Slow': 1
 	}, with_load, 0).join('\n')
-	lines := g.split('\n')
+	lines := strip_comments(g)
 	mut i_t0 := -1
 	mut i_t1 := -1
 	mut i_add := -1
@@ -271,7 +271,7 @@ fn test_the_manifest_rows_and_the_emitted_records_agree() {
 	//    record as the point's completion; that anchor is only sound if the record actually comes
 	//    after the work. Emitted before it, every ordering assertion would still pass while the
 	//    recorded duration measured the clock call and not the service (codex on #280).
-	lines := loop.split('\n')
+	lines := strip_comments(loop)
 	for i, pt in m.io_points {
 		op := match pt.kind {
 			'pwm' { 'io.pwm_write(' }
@@ -298,7 +298,7 @@ fn test_the_manifest_rows_and_the_emitted_records_agree() {
 		assert i_rec > i_start, 'point "${pt.name}": its record precedes its own bracket start'
 		mut i_op := -1
 		for k := i_start; k < i_rec; k++ {
-			if code_of(lines[k]).contains(op) {
+			if lines[k].contains(op) {
 				i_op = k
 				break
 			}
@@ -351,25 +351,45 @@ fn test_every_io_exec_accumulator_adds_its_argument() {
 	assert found >= 6, 'found ${found} io_exec_add definitions, expected at least the 6 board glue copies — did the search path or the file layout change?'
 }
 
-// code_of strips comments from an emitted line, so a match asks whether the generator emits an
-// OPERATION rather than whether the text appears anywhere. Without it a regression leaving
-// `// io.pwm_write(...)` behind satisfied every ordering assertion while the point's bracket
-// performed no io at all — and the ordering scan then measured to the comment (codex on #280).
+// strip_comments returns `src`'s lines with all comment text removed and the LINE COUNT preserved,
+// so index comparisons in the ordering tests stay valid. It tracks `/* ... */` across lines, which
+// per-line stripping cannot: a call disabled inside a normal multiline block comment was still
+// captured as executable code, and every assertion about it then passed while the compiled function
+// did nothing (codex on #280).
 //
-// BOTH comment forms. The first version handled `//` only, and `/* io.pwm_write(...) */` is equally
-// valid V: the emitters do not produce block comments today (zero in any generated output), so that
-// is a narrower hole than the `//` one it followed — but "the generator happens not to do this" is
-// the assumption that has been wrong repeatedly in this file, so it is handled rather than argued
-// about. Single-line block comments only, which is all a `g << '...'` line can carry.
-fn code_of(line string) string {
-	mut t := line
-	for t.contains('/*') && t.contains('*/') {
-		t = t.all_before('/*') + t.all_after('*/')
+// This replaced a per-line code_of() that handled `//` and same-line `/* */` only — three rounds of
+// findings walked that from "no stripping" to "// only" to "same-line block" to here. State is the
+// thing a per-line view cannot have, so the per-line version could never have been finished.
+fn strip_comments(src string) []string {
+	mut out := []string{}
+	mut in_block := false
+	for line in src.split_into_lines() {
+		mut kept := ''
+		mut i := 0
+		for i < line.len {
+			if in_block {
+				if i + 1 < line.len && line[i] == `*` && line[i + 1] == `/` {
+					in_block = false
+					i += 2
+					continue
+				}
+				i++
+				continue
+			}
+			if i + 1 < line.len && line[i] == `/` && line[i + 1] == `*` {
+				in_block = true
+				i += 2
+				continue
+			}
+			if i + 1 < line.len && line[i] == `/` && line[i + 1] == `/` {
+				break // line comment: the rest is not code
+			}
+			kept += line[i].ascii_str()
+			i++
+		}
+		out << kept
 	}
-	if t.contains('//') {
-		t = t.all_before('//')
-	}
-	return t
+	return out
 }
 
 // squeeze_call removes any whitespace between `name` and the `(` that follows it, so a scan can
@@ -471,62 +491,55 @@ fn test_the_recorder_forwards_the_duration_it_is_given() {
 		assert false, 'cannot read ${path}: ${err}'
 		return
 	}
-	lines := src.split_into_lines()
-	// trace_fb's third parameter must reach push_rec
-	// CODE only, and INSIDE trace_fb's body. Two holes here, both already fixed on the emitted-V
-	// side and not carried over: a commented-out `// push_rec(...)` was captured as the call (the
-	// exact-argument and byte-assignment checks then all passed while trace_fb recorded nothing),
-	// and the search ran to end-of-file, so with trace_fb's own call removed it would have matched
-	// some LATER function's push_rec (codex on #280).
-	mut fb_call := ''
-	for i, l in lines {
-		if !code_of(l).contains('void trace_fb(') {
-			continue
-		}
-		for k in i + 1 .. lines.len {
-			c := code_of(lines[k])
-			if c.contains('push_rec(') {
-				fb_call = c.trim_space()
-				break
-			}
-			// end of trace_fb's body: a closing brace in column 0
-			if lines[k].starts_with('}') {
-				break
-			}
-		}
-		break
-	}
-	assert fb_call != '', '${path}: no push_rec( call found in trace_fb'
-	// The COMPLETE argument. contains('dur_us') accepts `dur_us + 1` — which names the parameter,
-	// passes the byte-assignment checks below (push_rec's own parameter is still called dur_us),
-	// and inflates every recorded duration. The silicon check sees record presence, not values.
-	// Sixth instance of substring-vs-exact in this file, one round after I claimed the class was
-	// closed (codex on #280).
+	// Comment-free and line-preserving. A per-line stripper cannot see a multiline `/* ... */`, so
+	// a call or an assignment disabled inside one was captured as executable code and every
+	// assertion about it passed while the compiled function did nothing (codex on #280).
+	lines := strip_comments(src)
+
+	// trace_fb's third parameter must reach push_rec, from INSIDE trace_fb's own body — an
+	// unbounded search would borrow a later function's push_rec once this one was removed.
+	fb_call := call_in_body(lines, 'void trace_fb(', 'push_rec(')
+	assert fb_call != '', '${path}: no push_rec( call in trace_fb\'s body'
+	// The COMPLETE argument: contains('dur_us') accepts `dur_us + 1`, which names the parameter,
+	// passes the byte checks below (push_rec's own parameter is also called dur_us) and inflates
+	// every recorded duration. The silicon check sees record presence, not values.
 	want_arg := 'dur_us > 0xFFFFu ? 0xFFFFu : dur_us'
 	fb_arg := fb_call.all_after_last(',').trim_space().trim_right(');').trim_space()
 	assert fb_arg == want_arg, '${path}: trace_fb passes `${fb_arg}` to push_rec, want `${want_arg}` — the recorder must receive the measured duration, saturated, and nothing else: ${fb_call}'
-	// ...and push_rec must ENCODE it into the record's duration bytes (6 and 7, LE)
-	mut lo := ''
-	mut hi := ''
-	for l in lines {
-		t := l.trim_space()
-		if t.starts_with('r[6]') {
-			lo = t
-		}
-		if t.starts_with('r[7]') {
-			hi = t
-		}
-	}
-	assert lo != '' && hi != '', '${path}: the record duration bytes r[6]/r[7] are not assigned where this test can see them'
-	// The COMPLETE assignments, not `contains("dur_us")`: a byte SWAP —
-	// `r[6] = dur_us >> 8; r[7] = dur_us & 0xFF;` — contains dur_us on both lines and corrupts
-	// every multi-byte duration, while the silicon check only sees record presence and accepts any
-	// value. That is the same substring mistake as four earlier checks in this file
-	// (codex on #280), so this compares the whole statement.
+
+	// ...and push_rec must ENCODE it into the record's duration bytes, from inside PUSH_REC's body:
+	// a whole-file scan accepted assignments sitting anywhere, commented-out blocks included.
+	lo := call_in_body(lines, 'static void push_rec(', 'r[6]')
+	hi := call_in_body(lines, 'static void push_rec(', 'r[7]')
+	assert lo != '' && hi != '', '${path}: the duration bytes r[6]/r[7] are not assigned inside push_rec\'s body'
+	// The COMPLETE assignments: a byte SWAP mentions dur_us on both lines and corrupts every
+	// multi-byte duration, while the silicon check accepts any value.
 	want_lo := 'r[6] = (unsigned char)(dur_us & 0xFF);'
 	want_hi := 'r[7] = (unsigned char)((dur_us >> 8) & 0xFF);'
 	assert lo == want_lo, '${path}: record byte 6 is `${lo}`, want `${want_lo}` — the duration is little-endian in the 8-byte record'
 	assert hi == want_hi, '${path}: record byte 7 is `${hi}`, want `${want_hi}` — the duration is little-endian in the 8-byte record'
+}
+
+// call_in_body finds the first line containing `needle` between a line matching `signature` and the
+// closing brace in column 0 that ends that function. Scoping matters twice over: an unbounded
+// search borrows a LATER function's code once the expected line is removed, and a whole-file search
+// accepts a line sitting anywhere at all.
+fn call_in_body(lines []string, signature string, needle string) string {
+	for i, l in lines {
+		if !l.contains(signature) {
+			continue
+		}
+		for k in i + 1 .. lines.len {
+			if lines[k].contains(needle) {
+				return lines[k].trim_space()
+			}
+			if lines[k].starts_with('}') {
+				return ''
+			}
+		}
+		return ''
+	}
+	return ''
 }
 
 // A PWM OUTPUT's ordering. traced_io_model() carries a gpio input and an adc input, so the `pwm`
@@ -556,7 +569,7 @@ fn test_a_pwm_output_records_after_its_write() {
 	g := emit_io_target_entry(m, doc, {
 		'Lamp': 0
 	}, true, 0).join('\n')
-	lines := g.split('\n')
+	lines := strip_comments(g)
 	hid := io_handler_id_base(m, doc)
 	mut i_start := -1
 	mut i_write := -1
@@ -565,7 +578,7 @@ fn test_a_pwm_output_records_after_its_write() {
 		if l.contains('p${hid}_t0 := C.board_now_us()') {
 			i_start = k
 		}
-		if code_of(l).contains('io.pwm_write(') {
+		if l.contains('io.pwm_write(') {
 			i_write = k
 		}
 		if l.contains('C.trace_fb(u32(${hid}),') {
@@ -604,7 +617,7 @@ fn test_a_gpio_output_records_after_its_write() {
 	g := emit_io_target_entry(m, doc, {
 		'Relay': 0
 	}, true, 0).join('\n')
-	lines := g.split('\n')
+	lines := strip_comments(g)
 	hid := io_handler_id_base(m, doc)
 	mut i_start := -1
 	mut i_write := -1
@@ -613,7 +626,7 @@ fn test_a_gpio_output_records_after_its_write() {
 		if l.contains('p${hid}_t0 := C.board_now_us()') {
 			i_start = k
 		}
-		if code_of(l).contains('io.gpio_write(') {
+		if l.contains('io.gpio_write(') {
 			i_write = k
 		}
 		if l.contains('C.trace_fb(u32(${hid}),') {
@@ -656,17 +669,17 @@ fn test_every_operation_arm_is_exercised() {
 		}, true, 0).join('\n')
 		hid := io_handler_id_base(m, doc)
 		mut emits := false
-		for l in g.split('\n') {
-			if code_of(l).contains(c[2]) {
+		for l in strip_comments(g) {
+			if l.contains(c[2]) {
 				emits = true
 			}
 		}
 		assert emits, 'a ${c[0]} ${c[1]} point emits no ${c[2]} as CODE — the operation match has an arm no fixture reaches, or the operation survives only as a comment'
-		lines := g.split('\n')
+		lines := strip_comments(g)
 		mut i_op := -1
 		mut i_rec := -1
 		for k, l in lines {
-			if code_of(l).contains(c[2]) {
+			if l.contains(c[2]) {
 				i_op = k
 			}
 			if l.contains('C.trace_fb(u32(${hid}),') {
