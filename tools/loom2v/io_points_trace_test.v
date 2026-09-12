@@ -611,7 +611,8 @@ fn body_of(lines []string, signature string) []string {
 // written inline as `if !ready { continue }`. That sequence has no end while the test states
 // properties, so state the block instead — the move that ended the identical sequence on the C side
 // (test_the_recorder_records_exactly_what_it_is_given). A guard, a reordering, an extra statement,
-// an inline transfer, a nested record and a changed primitive are now one failure (codex on #280).
+// an inline transfer, a nested record, a changed primitive and point work appended AFTER the
+// record are now one failure (codex on #280).
 //
 // It is also the ORDERING guard, which is why the two dedicated pwm/gpio-output ordering tests are
 // gone rather than kept beside it: each case names its own primitive with the record as the last
@@ -625,6 +626,7 @@ fn test_the_emitted_point_block_is_exact() {
 			'\t\t\tC.ioc_pub(0, if p_v { u32(1) } else { u32(0) }, u32(0))',
 			'\t\t}',
 			'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
+			'\t\tt1 := C.board_now_us()',
 		]
 		'gpio/out': [
 			'\t\tp0_t0 := C.board_now_us()',
@@ -634,6 +636,7 @@ fn test_the_emitted_point_block_is_exact() {
 			'\t\t\tio.gpio_write(0, p_a != 0)',
 			'\t\t}',
 			'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
+			'\t\tt1 := C.board_now_us()',
 		]
 		'adc/in':   [
 			'\t\tp0_t0 := C.board_now_us()',
@@ -641,6 +644,7 @@ fn test_the_emitted_point_block_is_exact() {
 			'\t\t\tC.ioc_pub(0, p_v, u32(0))',
 			'\t\t}',
 			'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
+			'\t\tt1 := C.board_now_us()',
 		]
 		'pwm/out':  [
 			'\t\tp0_t0 := C.board_now_us()',
@@ -650,6 +654,7 @@ fn test_the_emitted_point_block_is_exact() {
 			'\t\t\tio.pwm_write(0, p_a)',
 			'\t\t}',
 			'\t\tC.trace_fb(u32(0), p0_t0, u32(C.board_now_us() - p0_t0))',
+			'\t\tt1 := C.board_now_us()',
 		]
 	}
 	for kind_dir, want in cases {
@@ -679,11 +684,19 @@ fn test_the_emitted_point_block_is_exact() {
 	}
 }
 
-// point_block: point 0's emitted block — its `p0_t0` bracket line through its `C.trace_fb` record
-// line, comments removed and trailing space normalised, INDENTATION KEPT. Indentation is half the
+// point_block: point 0's emitted block — its `p0_t0` bracket line through the PASS END (`t1 :=
+// …`), comments removed and trailing space normalised, INDENTATION KEPT. Indentation is half the
 // evidence: a record moved inside the freshness guard must not compare equal to one at the block's
-// own level. A missing record, or one emitted before the bracket, runs the slice to the end of the
-// emitted loop — which does not match either.
+// own level. A missing record, or one emitted before the bracket, does not match either.
+//
+// It ends at the pass end rather than at the record because stopping AT the record is a slice again,
+// and a slice is not whole — the same mistake the C-side pin made once: point work appended after
+// the unchanged `C.trace_fb(...)` (a second `C.ioc_pub`, say) is still part of the service and is
+// still excluded from the duration the record carries, and a pin that stops at the record cannot see
+// it (codex on #280). These fixtures declare ONE point, so "bracket through pass end" is exactly
+// that point's own block plus the terminator, and the terminator is in the expected lists: the
+// record must be the last thing before it. Work appended after `t1` escapes the whole-pass sum too,
+// which is test_the_exec_sum_brackets_the_whole_pass_not_a_point's claim.
 fn point_block(src string) []string {
 	mut out := []string{}
 	mut on := false
@@ -695,7 +708,7 @@ fn point_block(src string) []string {
 			continue
 		}
 		out << l.trim_right(' \t')
-		if l.contains('C.trace_fb(u32(0),') {
+		if l.contains('t1 := C.board_now_us()') {
 			break
 		}
 	}
