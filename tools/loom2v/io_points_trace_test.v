@@ -360,18 +360,22 @@ fn check_accumulator(path string) int {
 		// skipped silently, and `found >= 6` stayed satisfied by the other copies while that one
 		// went unchecked (codex on #280). Every occurrence is now classified, and anything this
 		// scanner cannot classify FAILS rather than being passed over.
-		if !line.contains('io_exec_add(') {
+		// `io_exec_add (unsigned us)` is valid C, and matching the no-space spelling skipped it —
+		// discovery tied to a formatting habit again, one round after the return-type version of
+		// the same mistake (codex on #280). Normalise the space away, once, and work on that form
+		// so the parsing below is not fooled either.
+		t := line.trim_space().replace(' (', '(')
+		if !t.contains('io_exec_add(') {
 			continue
 		}
-		t := line.trim_space()
 		// a CALL or a PROTOTYPE: statement-terminated, no body. Neither is a definition to judge.
 		if t.ends_with(';') && !t.contains('{') {
 			continue
 		}
 		n++
 		assert t.contains('{') && t.contains('}'), '${path}: io_exec_add appears in a form this scan cannot read on one line — a definition must be `{ <acc> += <param>; }` so the accumulation can be checked, or the scan silently stops covering that backend: ${t}'
-		param := line.all_after('(').all_before(')').trim_space().all_after_last(' ')
-		assert param != '', '${path}: cannot read the parameter name from: ${line}'
+		param := t.all_after('(').all_before(')').trim_space().all_after_last(' ')
+		assert param != '', '${path}: cannot read the parameter name from: ${t}'
 		// `+= <param>`, as a PATTERN. A bare `body.contains(param)` is useless here: the parameter
 		// is `us` and the accumulator it writes to is `g_io_exec_us`, so the substring matches even
 		// when the body ignores the argument entirely — `g_io_exec_us += 1;` passed that check.
@@ -379,7 +383,7 @@ fn check_accumulator(path string) int {
 		// inflates every pass while the counter still advances under its ceiling. Same class as
 		// the earlier `contains(param)` bug, where the parameter `us` matched the global
 		// `g_io_exec_us` (codex on #280, twice on this one check).
-		stmt := line.all_after('{').all_before('}').trim_space().trim_right(';').trim_space()
+		stmt := t.all_after('{').all_before('}').trim_space().trim_right(';').trim_space()
 		parts := stmt.split('+=')
 		assert parts.len == 2, '${path}: io_exec_add body is not a single `X += ${param};` accumulation: ${line.trim_space()}'
 		acc := parts[0].trim_space()
@@ -393,10 +397,10 @@ fn check_accumulator(path string) int {
 		assert acc != '', '${path}: cannot read the accumulated variable from: ${line.trim_space()}'
 		mut saw_getter := false
 		for gl in src.split_into_lines() {
-			if !gl.contains('io_exec_us(void)') {
+			gt := gl.trim_space().replace(' (', '(')
+			if !gt.contains('io_exec_us(void)') {
 				continue
 			}
-			gt := gl.trim_space()
 			// a forward declaration carries no body to read: skip it, as the adder scan does,
 			// rather than trying to extract a return expression from absent braces and failing
 			// the whole run while the real definition below is correct (codex on #280).
@@ -406,7 +410,7 @@ fn check_accumulator(path string) int {
 			saw_getter = true
 			// EXACTLY the accumulator, not a name containing it: `return g_io_exec_us_shadow;`
 			// contains `g_io_exec_us` and would have passed (codex on #280).
-			ret := gl.all_after('{').all_before('}').trim_space().trim_string_left('return').trim_space().trim_right(';').trim_space()
+			ret := gt.all_after('{').all_before('}').trim_space().trim_string_left('return').trim_space().trim_right(';').trim_space()
 			assert ret == acc, '${path}: io_exec_us() returns "${ret}", not the "${acc}" that io_exec_add updates — the FB loops would subtract the wrong value: ${gl.trim_space()}'
 		}
 		assert saw_getter, '${path}: io_exec_add is defined with no io_exec_us() accessor beside it — the FB loops read the sum through that getter'

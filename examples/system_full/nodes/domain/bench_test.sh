@@ -181,6 +181,13 @@ SAMPLES=0
 # its records missing, a backward step runs the bench far past its budget (codex on #280).
 DEADLINE_US=$(( $(mono_us) + BUDGET_S * 1000000 ))
 while :; do
+  # The VALID window only. trace_arm() resets g_head WITHOUT clearing g_ring
+  # (boards/common/trace_hooks.c), so on a read-only run after an arm the slots past the head still
+  # hold records from the PREVIOUS capture, and counting them makes a point look serviced when this
+  # capture has emitted nothing for it. trace_snapshot() bounds itself the same way:
+  # n = min(g_head, RING_CAP), and for head < RING_CAP the writes started at slot 0 (codex on #280).
+  read_u32 "$HEAD"; RH=$REPLY
+  VALID=$(( RH < 256 ? RH : 256 ))
   RB=$(mktemp)
   st-flash --serial "$SERIAL" read "$RB" "$RING" 2048 >/dev/null 2>&1 \
     || { echo "FAIL: SWD ring read failed"; rm -f "$RB"; exit 1; }
@@ -188,8 +195,9 @@ while :; do
   SAMPLES=$(( SAMPLES + 1 ))
   for row in "${IO_ROWS[@]}"; do
     ID=$(cut -d, -f1 <<<"$row")
-    read -r n _ mx _ nzmn < <(awk -v want=$(( (2 << 14) | ID )) '
-      NF { w[i++ % 4] = $1; if (i % 4 == 0) { if (w[0] == want) { c++; d = w[3]
+    read -r n _ mx _ nzmn < <(awk -v want=$(( (2 << 14) | ID )) -v valid="$VALID" '
+      NF { w[i++ % 4] = $1; if (i % 4 == 0) { rec++; if (rec > valid) next
+            if (w[0] == want) { c++; d = w[3]
             if (d > 0) { nz++; if (nzmn == "" || d < nzmn) nzmn = d }
             if (mn == "" || d < mn) mn = d; if (d > mx) mx = d } } }
       END { print c + 0, (mn == "" ? 0 : mn), mx + 0, nz + 0, (nzmn == "" ? 0 : nzmn) }' <<<"$WORDS")
