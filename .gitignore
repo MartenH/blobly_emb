@@ -25,6 +25,11 @@ tools/*/gen
 
 # vendored CMSIS headers for the bare-metal STM32 examples (fetch via `make deps`)
 third_party/
+/third_party
+# ...the bare name too, ANCHORED at the root: a WORKTREE usually symlinks the main checkout's deps
+# instead of re-cloning hundreds of MB, and `third_party/` matches a directory only —
+# so the symlink showed as untracked and tripped scripts/review_preflight.sh. Unanchored it would
+# also hide any nested file or symlink that happens to be named third_party (codex on #280).
 
 # bare-metal example build output
 examples/**/build/

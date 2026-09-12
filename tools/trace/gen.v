@@ -40,6 +40,7 @@ fn main() {
 	check_mode := '--check' in os.args
 
 	// 1) requirements
+	mut bad_method := false
 	mut reqs := []Req{}
 	mut rfiles := os.walk_ext('requirements', '.toml')
 	rfiles.sort()
@@ -53,11 +54,22 @@ fn main() {
 			if s(m, 'id') == '' {
 				continue
 			}
+			// The METHOD VOCABULARY is closed: test | analysis | review
+			// (requirements/README.md — "every requirement declares ONE method" and
+			// fulfilment means THAT method's evidence is green). Nothing validated it, so
+			// REQ-IO-025 sat on method = "bench" — the only one of 219 — and a check linked
+			// to it would have marked it verified on evidence of a method the taxonomy does
+			// not have. A typo in this field is silent everywhere else, so refuse it here.
+			meth := s(m, 'method')
+			if meth !in ['test', 'analysis', 'review'] {
+				eprintln('trace: requirement ${s(m, 'id')}: method "${meth}" is not one of test|analysis|review (requirements/README.md)')
+				bad_method = true
+			}
 			reqs << Req{
 				id:      s(m, 'id')
 				title:   s(m, 'title')
 				status:  s(m, 'status')
-				method:  s(m, 'method')
+				method:  meth
 				asil:    s(m, 'asil')
 				derives: s(m, 'derives')
 			}
@@ -66,6 +78,43 @@ fn main() {
 
 	mut vmap := map[string][]Verif{}
 	mut ctxset := map[string]bool{}
+
+	// METHOD VALIDATION FIRST, side-effect free, BEFORE anything is executed. This gate used to sit
+	// after the verifications were parsed — but parsing them RUNS every [[check]] command, so under
+	// BLOB_HWTEST a metadata typo would build and flash every configured hardware target and only
+	// then refuse to write the table. Read the methods, abort, then do the work (codex on #280).
+	if os.exists('requirements/verifications.toml') {
+		vdoc := toml.parse_file('requirements/verifications.toml') or { panic(err) }
+		for c in arr(vdoc.value('check')) {
+			m := c.as_map()
+			mut meth := s(m, 'method')
+			if meth == '' {
+				meth = 'analysis'
+			}
+			// A [[check]] RUNS A COMMAND, so it is `test` or `analysis` evidence and never
+			// `review`: review evidence is a logged human approval, and accepting it here let a
+			// green exit status mark a review-method requirement verified with no approved_by.
+			if meth !in ['test', 'analysis'] {
+				eprintln('trace: check "${s(m, 'id')}": method "${meth}" — a [[check]] runs a command, so it is `test` or `analysis` evidence; a review is a signed-off [[review]] entry, not a command')
+				bad_method = true
+			}
+		}
+		for r in arr(vdoc.value('review')) {
+			m := r.as_map()
+			// A [[review]] produces method `review` by construction, so any other value is a lie
+			// rather than merely an unknown one.
+			if rm := m['method'] {
+				if rm.string() != 'review' {
+					eprintln('trace: review "${s(m, 'id')}": method "${rm.string()}" — a [[review]] entry is evidence of method `review` by construction; drop the key or make it a [[check]]')
+					bad_method = true
+				}
+			}
+		}
+	}
+	if bad_method {
+		eprintln('trace: refusing to build traceability with an unknown verification method (nothing was run)')
+		exit(1)
+	}
 
 	// 2a) inline @verifies tags in tests
 	mut tfiles := os.walk_ext('examples', '.lua')

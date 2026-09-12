@@ -41,6 +41,60 @@ command = "sh -c 'if [ -z \"$BLOB_HWTEST\" ]; then exit 2; fi; exec examples/h75
 skip_exit = 2 # exit 2 = disabled/no-board -> pending; 1 = a real hardware FAIL
 verifies = ["REQ-IO-018", "REQ-IO-021"]
 
+# On-target REGRESSION TEST for the io thread's PER-POINT trace records (#263).
+# examples/system_full/nodes/domain/bench_test.sh flashes the system_full `domain` node —
+# CM7 bank 1 plus its CM4 satellite in bank 2 — and reads RAM over SWD on a live
+# NUCLEO-H755ZI-Q. No CAN adapter is involved: the exec-hook recorder captures from reset
+# (trace_hooks.c g_capturing = 1), so the records are in the ring without an arm command.
+#
+#   REQ-IO-025: for EVERY io point the trace manifest names, the ring carries kind=FB records
+#               under that point's id — the point's own service is a distinct, resolvable entry
+#               rather than part of one aggregate — and the thread-level sum the FB threads
+#               subtract as preemption is still being published alongside those records.
+#
+# Note what that does NOT say: nothing about the VALUE of a duration. A point whose whole service
+# fits inside one microsecond tick records 0us correctly, so requiring a nonzero sample would fail
+# a healthy fast point. That the duration is the point's OWN measured interval is established
+# host-side instead, by comparing the emitted call against its exact expression — deterministic,
+# where waiting for a timer tick to be crossed is not.
+#
+# This description is deliberately about what the check ESTABLISHES rather than a list of its
+# assertions: enumerating them is how this record went stale twice while the assertions moved
+# (codex on #280).
+#
+# Deliberately NOT claimed here, because the linked command deliberately does not check it:
+#   * a duration bound against the point's period. An overrun is the requirement WORKING — its
+#     text is that a slow point becomes visible — so failing on it would invert the requirement.
+#     The script reports the overrun as a note. A timing budget is its own requirement.
+#   * a quantitative "the sum equals the whole pass" bound. Five shapes of one were each wrong in
+#     one direction or the other; the ring wraps in ~50ms and is sampled outside the interval
+#     being bounded, so there is no matched (work, interval) pair to calibrate against.
+# Of those two, only the WHOLE-PASS ACCOUNTING has evidence elsewhere:
+# tools/loom2v/io_points_trace_test.v, linked to this same requirement, asserts the emitted shape
+# (t0 before the first point, t1 after the last point's record, io_exec_add publishing exactly
+# `u32(t1 - t0)` and exactly once, on both the load and trace-only paths, one record per point and
+# each after its own operation) and that every board glue's accumulator adds its own argument with
+# a getter returning that same variable.
+#
+# The PERIOD BOUND has no evidence anywhere, by choice: nothing here compares a measured duration
+# against a point's period, because an overrun is the requirement working rather than failing. A
+# timing budget for io service is a requirement this repo has not written. Saying "both live in the
+# host test" advertised timing evidence that does not exist (codex on #280).
+#
+# The point id and name are read from gen/trace-manifest.csv, never hard-coded: the ids
+# continue the global handler numbering, so adding an FB handler shifts them and a
+# hard-coded id would silently assert against the wrong row.
+#
+# Verified 2026-09-12 on the bench (ST-LINK 001E0024..., g_cpu_mhz = 400): id 2 = HostLed,
+# 5-6 records per 256-record window at 1us each, g_io_exec_us advancing ~150us/s.
+[[check]]
+id = "domain-io-point-trace-hwtest"
+method = "test"
+context = "h755/target"
+command = "sh -c 'if [ -z \"$BLOB_HWTEST\" ]; then exit 2; fi; exec examples/system_full/nodes/domain/bench_test.sh --flash'"
+skip_exit = 2 # exit 2 = disabled/no-board -> pending; 1 = a real hardware FAIL
+verifies = ["REQ-IO-025"]
+
 [[review]]
 id = "naming-review"
 method = "review"
