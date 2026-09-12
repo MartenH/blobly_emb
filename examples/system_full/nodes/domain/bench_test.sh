@@ -138,20 +138,33 @@ for row in "${IO_ROWS[@]}"; do
       || fail "all $NREC records for id $ID ($NAME) have dur_us = 0 — the bracket records no time, so that point's own service duration is NOT observable"
     [ "$DMAX" -lt "$PER" ] && ok "  within the point's ${PER}us period" \
       || fail "id $ID ($NAME) took ${DMAX}us, its period is ${PER}us"
-    FLOOR=$(( FLOOR + (WIN_S * 1000000 / PER) / 2 ))
+    # The pass must cost STRICTLY MORE than its points' own durations: the bracket spans two
+    # clock reads and the loop around them, which the per-point records do not include. That is
+    # the discriminator for an accumulator that ignores its argument and adds a constant — such a
+    # backend yields exactly passes x 1us, while the real bracket measured ~1.7us/pass. A floor of
+    # passes x DMAX (the largest duration this point actually reported) sits between the two.
+    FLOOR=$(( FLOOR + (WIN_S * 1000000 / PER) * DMAX ))
   else
     fail "no kind=FB records with id $ID ($NAME) in the ring — that point's own service time is NOT observable"
   fi
 done
-# The accounting bound. FLOOR accumulated above: 0.5us per pass per point — deliberately NOT
-# scaled by the smallest observed duration, because a single sample genuinely rounds to 0 at
-# microsecond resolution and the first version of this bound did exactly that, making the floor 0
-# and the check vacuous (the same emptiness this round fixed elsewhere).
+# The accounting bound. FLOOR accumulated above as passes x the point's LARGEST observed duration:
+# the whole pass must exceed the sum of its points' own service times, because it also spans the
+# bracket's clock reads and the loop. Two earlier shapes of this bound were both too weak, and the
+# reason is worth keeping: scaled by the SMALLEST duration it collapsed to 0 whenever one sample
+# rounded down, and at a flat 0.5us/pass it still admitted an io_exec_add that ignores its argument
+# and adds a constant 1 (200 passes x 1us = 200us cleared a 100us floor). DMAX is the value that
+# separates a real bracket from a constant adder (codex on #280, three rounds on this one bound).
+#
+# If DMAX is 0 for every point — every sample rounded down — the floor degenerates and this bound
+# says nothing; the nonzero-duration assertion above has already failed in that case.
 if [ "$FLOOR" -gt 0 ] && [ "$A2" -gt "$A1" ]; then
   DELTA=$(( A2 - A1 ))
   CEIL=$(( WIN_S * 1000000 ))
-  [ "$DELTA" -ge "$FLOOR" ] && ok "g_io_exec_us +${DELTA}us over ${WIN_S}s, >= the ${FLOOR}us that the configured points' passes require" \
-    || fail "g_io_exec_us advanced only ${DELTA}us over ${WIN_S}s; the configured points' passes need >= ${FLOOR}us — the sum is not accounting for the work it brackets"
+  # STRICTLY greater: a constant-1 accumulator produces exactly passes x 1us, which equals FLOOR
+  # when DMAX is 1 — so -ge would have admitted the very regression this bound exists to catch.
+  [ "$DELTA" -gt "$FLOOR" ] && ok "g_io_exec_us +${DELTA}us over ${WIN_S}s, above the ${FLOOR}us the points' own durations account for — the sum spans the whole pass" \
+    || fail "g_io_exec_us advanced only ${DELTA}us over ${WIN_S}s; the points' own service times alone account for ${FLOOR}us, and the pass also spans its bracket — the sum is not measuring the whole pass (an accumulator adding a constant looks like this)"
   [ "$DELTA" -le "$CEIL" ] && ok "and does not exceed the ${CEIL}us of wall time in the window" \
     || fail "g_io_exec_us advanced ${DELTA}us in ${WIN_S}s of wall time — impossible"
 fi

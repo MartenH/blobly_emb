@@ -4,10 +4,14 @@ import toml
 
 // @verifies REQ-IO-025
 //
-// The tag matters, and its absence was not cosmetic: tools/trace/gen.v skips a V test file with
-// no @verifies before recording it, so this file's evidence was never counted and REQ-IO-025 could
-// be marked verified by the silicon check ALONE — which, on a one-point node, cannot tell a
-// whole-pass sum from the last point's duration. That discrimination is here (codex on #280).
+// The tag above matters, and its absence was not cosmetic: tools/trace/gen.v skips a V test file
+// carrying no verification tag before recording it, so this file's evidence was never counted and
+// REQ-IO-025 could be marked verified by the silicon check ALONE — which, on a one-point node,
+// cannot tell a whole-pass sum from the last point's duration. That discrimination is here.
+//
+// This prose deliberately says "verification tag" rather than spelling the marker: the scanner
+// treats ANY line containing it as metadata, so an explanatory mention registers a second,
+// phantom link and the requirement's evidence list showed this file twice (codex on #280).
 //
 // IO point trace records (#263, REQ-IO-025). Their ids continue the GLOBAL handler numbering, so
 // a point's records can never be read as some FB handler's — and emit_manifest writes its rows in
@@ -149,13 +153,20 @@ fn test_the_exec_sum_brackets_the_whole_pass_not_a_point() {
 			if first_point < 0 {
 				first_point = i
 			}
+		}
+		// ...and the point's COMPLETION is its record, emitted after its io operation. Anchoring
+		// on the start marker was not enough: t1 could sit between the last point's p_t0 and its
+		// actual work, and both this and the t1 - t0 assertion would still pass while the
+		// aggregate excluded that point's service time (codex on #280).
+		if l.contains('C.trace_fb(') {
 			last_point = i
 		}
 	}
 	assert i_t0 >= 0 && i_t1 >= 0 && i_add >= 0, 'the pass bracket or the exec publish is missing'
-	assert first_point > 0 && last_point > first_point, 'expected two per-point brackets in the fixture'
+	assert first_point > 0, 'expected a per-point bracket in the fixture'
+	assert last_point > first_point, 'expected a per-point RECORD after the first bracket in the fixture'
 	assert i_t0 < first_point, 'the exec sum starts AFTER the first point — it would miss that point'
-	assert i_t1 > last_point, 'the exec sum ends BEFORE the last point — it would miss that point'
+	assert i_t1 > last_point, 'the exec sum ends BEFORE the last point\'s record — it would miss that point\'s service time'
 	// and it publishes the bracket itself, not a point's duration or a constant
 	assert lines[i_add].contains('u32(t1 - t0)'), 'io_exec_add does not publish t1 - t0: ${lines[i_add]}'
 }

@@ -99,7 +99,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-IO-022 | QM | analysis | uncovered | — |
 | REQ-IO-023 | QM | test | verified | e2e_test.v (pass), io_test.v (pass) |
 | REQ-IO-024 | QM | analysis | uncovered | — |
-| REQ-IO-025 | QM | test | covered | domain-io-point-trace-hwtest (pending), io_points_trace_test.v (pass), io_points_trace_test.v (pass) |
+| REQ-IO-025 | QM | test | covered | domain-io-point-trace-hwtest (pending), io_points_trace_test.v (pass) |
 | REQ-NET-001 | QM | analysis | verified | h735-eth-hardware (approved) |
 | REQ-NET-002 | QM | analysis | verified | h735-eth-hardware (approved) |
 | REQ-NET-003 | QM | test | verified | h735-eth-hardware (approved) |
