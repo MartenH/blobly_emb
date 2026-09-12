@@ -41,6 +41,32 @@ command = "sh -c 'if [ -z \"$BLOB_HWTEST\" ]; then exit 2; fi; exec examples/h75
 skip_exit = 2 # exit 2 = disabled/no-board -> pending; 1 = a real hardware FAIL
 verifies = ["REQ-IO-018", "REQ-IO-021"]
 
+# On-target REGRESSION TEST for the io thread's PER-POINT trace records (#263).
+# examples/system_full/nodes/domain/bench_test.sh flashes the system_full `domain` node —
+# CM7 bank 1 plus its CM4 satellite in bank 2 — and reads RAM over SWD on a live
+# NUCLEO-H755ZI-Q. No CAN adapter is involved: the exec-hook recorder captures from reset
+# (trace_hooks.c g_capturing = 1), so the records are in the ring without an arm command.
+#
+#   REQ-IO-025: the ring carries kind=FB records for the io point id the TRACE MANIFEST
+#               names, each with its own duration and bounded by the point's period, AND
+#               g_io_exec_us keeps advancing — the thread-level sum the FB threads subtract
+#               as preemption is unchanged, so the per-point records are IN ADDITION to it,
+#               which is exactly what the requirement asks.
+#
+# The point id and name are read from gen/trace-manifest.csv, never hard-coded: the ids
+# continue the global handler numbering, so adding an FB handler shifts them and a
+# hard-coded id would silently assert against the wrong row.
+#
+# Verified 2026-09-12 on the bench (ST-LINK 001E0024..., g_cpu_mhz = 400): id 2 = HostLed,
+# 5-6 records per 256-record window at 1us each, g_io_exec_us advancing ~150us/s.
+[[check]]
+id = "domain-io-point-trace-hwtest"
+method = "test"
+context = "h755/target"
+command = "sh -c 'if [ -z \"$BLOB_HWTEST\" ]; then exit 2; fi; exec examples/system_full/nodes/domain/bench_test.sh --flash'"
+skip_exit = 2 # exit 2 = disabled/no-board -> pending; 1 = a real hardware FAIL
+verifies = ["REQ-IO-025"]
+
 [[review]]
 id = "naming-review"
 method = "review"
