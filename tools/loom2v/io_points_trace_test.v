@@ -350,12 +350,17 @@ fn check_accumulator(path string) int {
 		if !line.contains('void io_exec_add(') {
 			continue
 		}
-		// a DEFINITION, not a prototype: the body has to be on this line for the check below to
-		// mean anything, and a declaration carries no body to judge
-		if !line.contains('{') || !line.contains('}') {
+		n++
+		// A PROTOTYPE carries no body and is nothing to judge; anything else that this scanner
+		// cannot parse — a multiline body, say — must FAIL rather than be skipped. Skipping it
+		// left the `found >= 6` minimum satisfied by the other copies while a seventh backend went
+		// unchecked, so the test would stay green over a regression it claims to cover
+		// (codex on #280).
+		if line.trim_space().ends_with(';') && !line.contains('{') {
+			n-- // a declaration, not a definition: not one of the copies this test counts
 			continue
 		}
-		n++
+		assert line.contains('{') && line.contains('}'), '${path}: io_exec_add is defined with a body this test cannot read on one line — it must be `{ <acc> += <param>; }` so the accumulation can be checked, or this scan silently stops covering that backend: ${line.trim_space()}'
 		param := line.all_after('(').all_before(')').trim_space().all_after_last(' ')
 		assert param != '', '${path}: cannot read the parameter name from: ${line}'
 		// `+= <param>`, as a PATTERN. A bare `body.contains(param)` is useless here: the parameter

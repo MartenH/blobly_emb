@@ -97,9 +97,13 @@ MHZ=$(u32 "$GCPU") || { echo "FAIL: SWD read failed (infrastructure)"; exit 1; }
   || fail "g_cpu_mhz = $MHZ, want 400 — wrong board or mis-clocked image"
 
 # --- 2. the recorder is live -------------------------------------------------------
+# MODULO 2^32, for the same reason as g_io_exec_us below: g_head is an `unsigned` record counter
+# and at ~4900 records/s it wraps about every ten days, so H2 < H1 is a healthy observation on a
+# long-running board. I fixed this for the aggregate and left it here (codex on #280).
 H1=$(u32 "$HEAD"); sleep 1; H2=$(u32 "$HEAD")
-[ "$H2" -gt "$H1" ] && ok "g_head advancing ($H1 -> $H2)" \
-  || fail "g_head stuck at $H1 — the exec-hook recorder is not capturing"
+HDELTA=$(( (H2 - H1 + 4294967296) % 4294967296 ))
+[ "$HDELTA" -gt 0 ] && ok "g_head advancing (+${HDELTA} records)" \
+  || fail "g_head did not move from $H1 — the exec-hook recorder is not capturing"
 
 # --- 3. the thread-level aggregate: it is still being published ---------------------
 # LIVENESS ONLY, and deliberately so. This samples g_io_exec_us across a measured interval and
@@ -121,8 +125,13 @@ WIN_S=2
 # io service would exceed a ceiling built from the sleep alone — a false failure in exactly the
 # slow-point case REQ-IO-025 exists to expose, which is the second time a nominal bound here would
 # have inverted the requirement (codex on #280).
-T1=$(date +%s%N); A1=$(u32 "$IOEXEC"); sleep "$WIN_S"; A2=$(u32 "$IOEXEC"); T2=$(date +%s%N)
-ELAPSED_US=$(( (T2 - T1) / 1000 ))
+# MONOTONIC, not wall clock: `date` can be stepped backwards by NTP or by hand mid-run, which
+# shrinks the computed interval — or makes it negative — and a correctly advancing accumulator then
+# looks like impossible execution time. /proc/uptime is monotonic; its 10ms granularity is
+# irrelevant here, where the measured delta is ~400us against a ~2s interval (codex on #280).
+mono_us() { awk '{ printf "%d", $1 * 1000000 }' /proc/uptime; }
+T1=$(mono_us); A1=$(u32 "$IOEXEC"); sleep "$WIN_S"; A2=$(u32 "$IOEXEC"); T2=$(mono_us)
+ELAPSED_US=$(( T2 - T1 ))
 # MODULO 2^32: g_io_exec_us is an `unsigned` C counter, so on a long-running target A2 < A1 is a
 # perfectly healthy observation — it wrapped between the reads (~72 minutes of accumulated io time
 # when a point consumes most of its period). Comparing the raw values would report a wrap as a
@@ -174,7 +183,7 @@ while :; do
   MISSING=0
   for row in "${IO_ROWS[@]}"; do
     ID=$(cut -d, -f1 <<<"$row")
-    { [ "${CNT[$ID]}" -eq 0 ] || [ "${MINNZ[$ID]}" -eq 0 ]; } && MISSING=1
+    [ "${CNT[$ID]}" -eq 0 ] && MISSING=1
   done
   [ "$MISSING" = 0 ] && break
   [ "$(date +%s)" -ge "$DEADLINE" ] && break
@@ -186,10 +195,21 @@ for row in "${IO_ROWS[@]}"; do
   ID=$(cut -d, -f1 <<<"$row"); NAME=$(cut -d, -f5 <<<"$row"); PER=$(cut -d, -f6 <<<"$row")
   if [ "${CNT[$ID]}" -gt 0 ]; then
     ok "${CNT[$ID]} record(s) for io point id $ID ($NAME) across ${SAMPLES} sample(s), max dur ${MAXD[$ID]}us"
-    # A real MEASUREMENT, not merely a number satisfying a bound: if the bracket regressed to
-    # recording zero, the count would still be positive and nothing else here would notice.
-    [ "${MINNZ[$ID]}" -gt 0 ] && ok "  at least one carries a measured duration (min nonzero ${MINNZ[$ID]}us)" \
-      || fail "every record for id $ID ($NAME) has dur_us = 0 — the bracket records no time, so that point's own service duration is NOT observable"
+    # A duration of 0 is NOT a failure. If a point's whole service begins and ends inside one
+    # microsecond tick, every correctly bracketed record reads 0 — and REQ-IO-025 asks for the
+    # point's own service duration, not for that service to be slow enough to measure. Requiring a
+    # nonzero sample would fail a healthy fast point after exhausting the budget, which is the
+    # fourth bound in this script that would have failed a good board (codex on #280).
+    #
+    # What rules out "the bracket records nothing" is stronger and deterministic: the host test
+    # compares the emitted call against `u32(C.board_now_us() - p<hid>_t0)` exactly, so the
+    # duration provably comes from that point's own bracket whatever value it takes.
+    if [ "${MINNZ[$ID]}" -gt 0 ]; then
+      ok "  durations measured (min nonzero ${MINNZ[$ID]}us, max ${MAXD[$ID]}us)"
+    else
+      echo "  note: every sampled duration for id $ID ($NAME) read 0us — a sub-microsecond service,"
+      echo "        not a fault: the bracket itself is asserted host-side against the exact expression."
+    fi
     # NO upper bound against the period here. A point that overruns its period is exactly what
     # REQ-IO-025 exists to make VISIBLE, so failing on it would invert the requirement — that is a
     # scheduling/timing concern belonging to its own requirement, not to observability
