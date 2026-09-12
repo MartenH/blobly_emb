@@ -128,15 +128,27 @@ fn test_a_skipped_point_does_not_shift_the_others() {
 // t0 is taken before the first point, t1 after the last, and io_exec_add gets exactly t1 - t0
 // (codex on #280).
 fn test_the_exec_sum_brackets_the_whole_pass_not_a_point() {
+	// BOTH values of with_load. With load telemetry on, load accounting independently forces the
+	// t0/t1 bracket and the io_exec_add call, so this assertion cannot tell whether the trace-only
+	// (excl) path still publishes the sum. A [trace] level="all" io image with telemetry disabled
+	// is a supported shape, and the hardware fixture has telemetry ENABLED — so that regression
+	// would have been invisible from every direction (codex on #280).
+	for with_load in [true, false] {
+		check_whole_pass_bracket(with_load)
+	}
+}
+
+fn check_whole_pass_bracket(with_load bool) {
 	m := traced_io_model()
 	g := emit_io_target_entry(m, empty_doc(), {
 		'Fast': 0
 		'Slow': 1
-	}, true, 0).join('\n')
+	}, with_load, 0).join('\n')
 	lines := g.split('\n')
 	mut i_t0 := -1
 	mut i_t1 := -1
 	mut i_add := -1
+	mut n_add := 0
 	mut first_point := -1
 	mut last_point := -1
 	for i, l in lines {
@@ -148,6 +160,7 @@ fn test_the_exec_sum_brackets_the_whole_pass_not_a_point() {
 		}
 		if l.contains('C.io_exec_add(') {
 			i_add = i
+			n_add++
 		}
 		// a per-point bracket is p<id>_t0; the pass bracket is the bare t0
 		if l.contains('_t0 := C.board_now_us()') {
@@ -163,7 +176,11 @@ fn test_the_exec_sum_brackets_the_whole_pass_not_a_point() {
 			last_point = i
 		}
 	}
-	assert i_t0 >= 0 && i_t1 >= 0 && i_add >= 0, 'the pass bracket or the exec publish is missing'
+	assert i_t0 >= 0 && i_t1 >= 0 && i_add >= 0, 'with_load=${with_load}: the pass bracket or the exec publish is missing'
+	// EXACTLY one. Two publications double the sum, so the FB threads over-subtract io preemption
+	// — and the bench test's wall-clock ceiling admits it easily, since io execution is a tiny
+	// fraction of the window (codex on #280).
+	assert n_add == 1, 'with_load=${with_load}: the whole pass is published ${n_add} times — g_io_exec_us would be inflated and FB preemption over-subtracted'
 	assert first_point > 0, 'expected a per-point bracket in the fixture'
 	assert last_point > first_point, 'expected a per-point RECORD after the first bracket in the fixture'
 	assert i_t0 < first_point, 'the exec sum starts AFTER the first point — it would miss that point'
@@ -290,6 +307,13 @@ fn test_every_io_exec_accumulator_adds_its_argument() {
 	mut found := 0
 	for root in ['boards', 'examples'] {
 		for f in os.walk_ext(os.join_path(@VMODROOT, root), '.c') {
+			// AUTHORED glue only. build/ holds V-generated C, which today carries calls and no
+			// definition — but scanning generated output for a source invariant is the wrong
+			// shape regardless, and a prototype appearing there later would trip the body check
+			// below and fail `make trace` purely because someone had built an example first.
+			if f.contains('/build/') {
+				continue
+			}
 			found += check_accumulator(f)
 		}
 	}
@@ -303,6 +327,11 @@ fn check_accumulator(path string) int {
 		if !line.contains('void io_exec_add(') {
 			continue
 		}
+		// a DEFINITION, not a prototype: the body has to be on this line for the check below to
+		// mean anything, and a declaration carries no body to judge
+		if !line.contains('{') || !line.contains('}') {
+			continue
+		}
 		n++
 		param := line.all_after('(').all_before(')').trim_space().all_after_last(' ')
 		assert param != '', '${path}: cannot read the parameter name from: ${line}'
@@ -311,6 +340,23 @@ fn check_accumulator(path string) int {
 		// when the body ignores the argument entirely — `g_io_exec_us += 1;` passed that check.
 		body := line.all_after('{')
 		assert body.contains('+= ${param}'), '${path}: io_exec_add does not accumulate its argument (want "+= ${param}"): ${line.trim_space()}'
+		// ...and the GETTER must return that same variable. The generated FB loops consume
+		// C.io_exec_us() to subtract io preemption, so a getter returning 0 or a different global
+		// stops the subtraction while every other check here stays green — and the bench script
+		// reads g_io_exec_us straight out of the ELF, bypassing the accessor entirely
+		// (codex on #280).
+		acc := body.all_before('+=').trim_space()
+		assert acc != '', '${path}: cannot read the accumulated variable from: ${line.trim_space()}'
+		mut saw_getter := false
+		for gl in src.split_into_lines() {
+			if !gl.contains('io_exec_us(void)') {
+				continue
+			}
+			saw_getter = true
+			gbody := gl.all_after('{')
+			assert gbody.contains(acc), '${path}: io_exec_us() does not return ${acc}, the variable io_exec_add updates — the FB loops would stop subtracting io preemption: ${gl.trim_space()}'
+		}
+		assert saw_getter, '${path}: io_exec_add is defined with no io_exec_us() accessor beside it — the FB loops read the sum through that getter'
 	}
 	return n
 }
