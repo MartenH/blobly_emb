@@ -97,10 +97,20 @@ H1=$(u32 "$HEAD"); sleep 1; H2=$(u32 "$HEAD")
 [ "$H2" -gt "$H1" ] && ok "g_head advancing ($H1 -> $H2)" \
   || fail "g_head stuck at $H1 — the exec-hook recorder is not capturing"
 
-# --- 3. the thread-level aggregate still advances (the exclusion sum) --------------
-A1=$(u32 "$IOEXEC"); sleep 1; A2=$(u32 "$IOEXEC")
-[ "$A2" -gt "$A1" ] && ok "g_io_exec_us advancing ($A1 -> $A2) — the pass is still summed for preemption exclusion" \
-  || fail "g_io_exec_us stuck at $A1 — the io serve loop is not running"
+# --- 3. the thread-level aggregate: advancing, and ACCOUNTING for the work ---------
+# Monotonicity alone proves only liveness — a counter that added a constant would advance too
+# (codex on #280). The io serve loop runs at a fixed period, so over a measured window the sum
+# must account for at least the points' own time: passes x the smallest per-point duration seen.
+# That catches a counter that stopped accumulating, or accumulates less than the work it brackets.
+#
+# What this CANNOT distinguish on this node: a whole-pass sum from "only the last point's
+# duration" — with ONE io point they are the same number. That discrimination is in the emitted
+# SHAPE instead, asserted host-side by tools/loom2v/io_points_trace_test.v
+# (test_the_exec_sum_brackets_the_whole_pass_not_a_point): t0 before the first point, t1 after the
+# last, io_exec_add publishing exactly t1 - t0.
+WIN_S=2
+A1=$(u32 "$IOEXEC"); sleep "$WIN_S"; A2=$(u32 "$IOEXEC")
+[ "$A2" -gt "$A1" ] || fail "g_io_exec_us stuck at $A1 — the io serve loop is not running"
 
 # --- 4. PER-POINT records in the ring (the REQ-IO-025 claim) -----------------------
 # record (trace_hooks.c): eid u16 LE (kind<<14|id) | info u8 | start_us u24 LE | dur_us u16 LE.
@@ -125,6 +135,22 @@ if [ "${NREC:-0}" -gt 0 ]; then
     || fail "all ${NREC} records for id $IO_ID have dur_us = 0 — the bracket is recording no time, so the point's own service duration is NOT observable"
   [ "$DMAX" -lt "$IO_PERIOD_US" ] && ok "durations within the point's ${IO_PERIOD_US}us period" \
     || fail "a point service took ${DMAX}us, its period is ${IO_PERIOD_US}us"
+fi
+
+# the accounting bound, now that the per-point durations are known
+if [ "${NREC:-0}" -gt 0 ] && [ "$A2" -gt "$A1" ]; then
+  DELTA=$(( A2 - A1 ))
+  PASSES=$(( WIN_S * 1000000 / IO_PERIOD_US ))
+  # NOT scaled by DMIN: a single sample can genuinely round to 0 at microsecond resolution, and
+  # the first version of this bound did exactly that — DMIN=0 made the floor 0 and the check
+  # vacuous, the same emptiness this round is fixing elsewhere. A pass that services a point
+  # cannot average zero, so require at least 0.5us per pass, well under the ~1.5us observed.
+  FLOOR=$(( PASSES / 2 ))
+  CEIL=$(( WIN_S * 1000000 ))
+  [ "$DELTA" -ge "$FLOOR" ] && ok "g_io_exec_us +${DELTA}us over ${WIN_S}s, >= the ${FLOOR}us that ~${PASSES} passes of real work require" \
+    || fail "g_io_exec_us advanced only ${DELTA}us over ${WIN_S}s; ~${PASSES} passes need >= ${FLOOR}us (0.5us each) — the sum is not accounting for the work it brackets"
+  [ "$DELTA" -le "$CEIL" ] && ok "and does not exceed the ${CEIL}us of wall time in the window" \
+    || fail "g_io_exec_us advanced ${DELTA}us in ${WIN_S}s of wall time — impossible"
 fi
 
 [ "$rc" = 0 ] && echo "PASS: REQ-IO-025 — per-point io records observable on silicon" \

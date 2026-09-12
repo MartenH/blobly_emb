@@ -106,3 +106,49 @@ fn test_a_skipped_point_does_not_shift_the_others() {
 	assert !g.contains('trace_fb(u32(0)')
 	assert g.contains('C.trace_fb(u32(1), p1_t0,'), 'the surviving point took the skipped id'
 }
+
+// The thread-level sum must bracket the WHOLE PASS, not a point. REQ-IO-025 is two claims: each
+// point gets its own record, AND g_io_exec_us still publishes the whole-pass execution the FB
+// threads subtract as preemption. On silicon the second claim is only observable as "the counter
+// advances" — a regression to adding a constant, or only the last point's duration, would still
+// advance and still pass. With ONE io point (system_full's domain) the two are numerically
+// indistinguishable on hardware, so the discrimination belongs HERE, in the emitted shape:
+// t0 is taken before the first point, t1 after the last, and io_exec_add gets exactly t1 - t0
+// (codex on #280).
+fn test_the_exec_sum_brackets_the_whole_pass_not_a_point() {
+	m := traced_io_model()
+	g := emit_io_target_entry(m, empty_doc(), {
+		'Fast': 0
+		'Slow': 1
+	}, true, 0).join('\n')
+	lines := g.split('\n')
+	mut i_t0 := -1
+	mut i_t1 := -1
+	mut i_add := -1
+	mut first_point := -1
+	mut last_point := -1
+	for i, l in lines {
+		if l.contains('t0 := C.board_now_us()') && i_t0 < 0 {
+			i_t0 = i
+		}
+		if l.contains('t1 := C.board_now_us()') {
+			i_t1 = i
+		}
+		if l.contains('C.io_exec_add(') {
+			i_add = i
+		}
+		// a per-point bracket is p<id>_t0; the pass bracket is the bare t0
+		if l.contains('_t0 := C.board_now_us()') {
+			if first_point < 0 {
+				first_point = i
+			}
+			last_point = i
+		}
+	}
+	assert i_t0 >= 0 && i_t1 >= 0 && i_add >= 0, 'the pass bracket or the exec publish is missing'
+	assert first_point > 0 && last_point > first_point, 'expected two per-point brackets in the fixture'
+	assert i_t0 < first_point, 'the exec sum starts AFTER the first point — it would miss that point'
+	assert i_t1 > last_point, 'the exec sum ends BEFORE the last point — it would miss that point'
+	// and it publishes the bracket itself, not a point's duration or a constant
+	assert lines[i_add].contains('u32(t1 - t0)'), 'io_exec_add does not publish t1 - t0: ${lines[i_add]}'
+}
