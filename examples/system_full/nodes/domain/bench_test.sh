@@ -122,47 +122,59 @@ A1=$(u32 "$IOEXEC"); sleep "$WIN_S"; A2=$(u32 "$IOEXEC")
 RB=$(mktemp)
 st-flash --serial "$SERIAL" read "$RB" "$RING" 2048 >/dev/null 2>&1 || { echo "FAIL: SWD ring read failed"; rm -f "$RB"; exit 1; }
 WORDS=$(od -An -tu2 -v "$RB" | tr -s ' ' '\n'); rm -f "$RB"
-decode() { # decode <eid> -> "count min max nonzero"
+decode() { # decode <eid> -> "count min max nonzero min_nonzero"
   awk -v want="$1" '
-    NF { w[n++ % 4] = $1; if (n % 4 == 0) { if (w[0] == want) { c++; d = w[3]; if (d > 0) nz++;
+    NF { w[n++ % 4] = $1; if (n % 4 == 0) { if (w[0] == want) { c++; d = w[3]
+          if (d > 0) { nz++; if (nzmn == "" || d < nzmn) nzmn = d }
           if (mn == "" || d < mn) mn = d; if (d > mx) mx = d } } }
-    END { print c + 0, (mn == "" ? 0 : mn), mx + 0, nz + 0 }' <<<"$WORDS"
+    END { print c + 0, (mn == "" ? 0 : mn), mx + 0, nz + 0, (nzmn == "" ? 0 : nzmn) }' <<<"$WORDS"
 }
 FLOOR=0 # accumulated over the points: each pass of each point must account for >= 0.5us
 for row in "${IO_ROWS[@]}"; do
   ID=$(cut -d, -f1 <<<"$row"); NAME=$(cut -d, -f5 <<<"$row"); PER=$(cut -d, -f6 <<<"$row")
-  read -r NREC DMIN DMAX NNZ < <(decode $(( (2 << 14) | ID )))
+  read -r NREC DMIN DMAX NNZ DNZMIN < <(decode $(( (2 << 14) | ID )))
   if [ "${NREC:-0}" -gt 0 ]; then
     ok "$NREC record(s) for io point id $ID ($NAME), dur ${DMIN}..${DMAX}us"
     [ "${NNZ:-0}" -gt 0 ] && ok "  ${NNZ}/${NREC} carry a measured duration" \
       || fail "all $NREC records for id $ID ($NAME) have dur_us = 0 — the bracket records no time, so that point's own service duration is NOT observable"
     [ "$DMAX" -lt "$PER" ] && ok "  within the point's ${PER}us period" \
       || fail "id $ID ($NAME) took ${DMAX}us, its period is ${PER}us"
-    # The pass must cost STRICTLY MORE than its points' own durations: the bracket spans two
-    # clock reads and the loop around them, which the per-point records do not include. That is
-    # the discriminator for an accumulator that ignores its argument and adds a constant — such a
-    # backend yields exactly passes x 1us, while the real bracket measured ~1.7us/pass. A floor of
-    # passes x DMAX (the largest duration this point actually reported) sits between the two.
-    FLOOR=$(( FLOOR + (WIN_S * 1000000 / PER) * DMAX ))
+    # The pass must cost STRICTLY MORE than its points' own durations: the bracket spans two clock
+    # reads and the loop around them, which the per-point records do not include.
+    #
+    # Scaled by the SMALLEST NONZERO duration, not the largest. DMAX overstates the work whenever
+    # durations quantize: one 2us sample among 1us services would demand 400us of aggregate over
+    # 200 passes when the true figure is ~330us, failing a perfectly good board — and the ring is
+    # sampled outside the A1..A2 window anyway, so its maximum need not even have occurred during
+    # the interval being bounded (codex on #280). The quantization FLOOR is stable across windows,
+    # which is what makes it safe to apply to every pass.
+    FLOOR=$(( FLOOR + (WIN_S * 1000000 / PER) * DNZMIN ))
   else
     fail "no kind=FB records with id $ID ($NAME) in the ring — that point's own service time is NOT observable"
   fi
 done
-# The accounting bound. FLOOR accumulated above as passes x the point's LARGEST observed duration:
-# the whole pass must exceed the sum of its points' own service times, because it also spans the
-# bracket's clock reads and the loop. Two earlier shapes of this bound were both too weak, and the
-# reason is worth keeping: scaled by the SMALLEST duration it collapsed to 0 whenever one sample
-# rounded down, and at a flat 0.5us/pass it still admitted an io_exec_add that ignores its argument
-# and adds a constant 1 (200 passes x 1us = 200us cleared a 100us floor). DMAX is the value that
-# separates a real bracket from a constant adder (codex on #280, three rounds on this one bound).
+# The accounting bound: the whole pass must cost more than the sum of its points' own service
+# times, because it also spans the bracket's clock reads and the loop.
 #
-# If DMAX is 0 for every point — every sample rounded down — the floor degenerates and this bound
-# says nothing; the nonzero-duration assertion above has already failed in that case.
+# FOUR shapes of this bound have been wrong, which is worth recording so it is not re-broken:
+#   * passes x DMIN            — collapsed to 0 the moment one sample rounded down: vacuous.
+#   * a flat 0.5us per pass    — admitted an io_exec_add adding a constant 1 (200 x 1us > 100us).
+#   * >= passes x DMAX         — admitted that same constant adder BY EQUALITY (200us >= 200us).
+#   * >  passes x DMAX         — too strict: one 2us sample among 1us services demands 400us where
+#                                the true aggregate is ~330us, failing a healthy board.
+# What survives: > passes x the smallest NONZERO duration. That is the quantization floor, stable
+# across windows, so applying it to every pass cannot overstate the work.
+#
+# RESIDUAL, stated rather than chased: a rate bound cannot distinguish a real bracket from an
+# accumulator adding a constant LARGER than the per-point cost — no instrument here can. What
+# covers that is the emitted shape (io_points_trace_test.v), and below it only the C one-liner
+# `io_exec_add(us) { g_io_exec_us += us; }` in the board glue.
 if [ "$FLOOR" -gt 0 ] && [ "$A2" -gt "$A1" ]; then
   DELTA=$(( A2 - A1 ))
   CEIL=$(( WIN_S * 1000000 ))
   # STRICTLY greater: a constant-1 accumulator produces exactly passes x 1us, which equals FLOOR
-  # when DMAX is 1 — so -ge would have admitted the very regression this bound exists to catch.
+  # when the smallest nonzero duration is 1 — so -ge would admit the regression this bound exists
+  # to catch.
   [ "$DELTA" -gt "$FLOOR" ] && ok "g_io_exec_us +${DELTA}us over ${WIN_S}s, above the ${FLOOR}us the points' own durations account for — the sum spans the whole pass" \
     || fail "g_io_exec_us advanced only ${DELTA}us over ${WIN_S}s; the points' own service times alone account for ${FLOOR}us, and the pass also spans its bracket — the sum is not measuring the whole pass (an accumulator adding a constant looks like this)"
   [ "$DELTA" -le "$CEIL" ] && ok "and does not exceed the ${CEIL}us of wall time in the window" \

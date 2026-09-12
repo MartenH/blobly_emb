@@ -170,3 +170,64 @@ fn test_the_exec_sum_brackets_the_whole_pass_not_a_point() {
 	// and it publishes the bracket itself, not a point's duration or a constant
 	assert lines[i_add].contains('u32(t1 - t0)'), 'io_exec_add does not publish t1 - t0: ${lines[i_add]}'
 }
+
+// BOTH SIDES OF THE MAPPING. The bench test reads gen/trace-manifest.csv as its oracle — it can
+// only ask "does the ring hold records for the ids the manifest advertises". So a manifest that
+// emitted a wrong id, or swapped two rows, would be believed: io points and FB handlers share
+// kind=FB, so an id colliding with a handler could even make the silicon check pass against that
+// handler's records while a dump resolved the wrong configured name. Nothing compared the two
+// emitters until now — the loop test exercises the loop, and never called emit_manifest
+// (codex on #280).
+fn test_the_manifest_rows_and_the_emitted_records_agree() {
+	// WITH FB handlers, deliberately: the collision assertion below is dead without them, which
+	// is how my first version of this test passed a perturbation that set the io ids to 0,1 —
+	// an empty-handler fixture has nothing for them to collide WITH.
+	mut m := two_fbs_two_handlers()
+	m.trace.on = true
+	m.trace.level = 'all'
+	m.io_points = traced_io_model().io_points
+	doc := app_doc()
+	rows := emit_manifest(m, doc, 'ecu.toml', false, '', [])
+	loop := emit_io_target_entry(m, doc, {
+		'Fast': 0
+		'Slow': 1
+	}, true, 0).join('\n')
+
+	// the io rows, in order: <id>,io,<core>,io,<name>,<period_us>,io
+	mut io_ids := []string{}
+	mut io_names := []string{}
+	mut handler_ids := []string{}
+	for r in rows {
+		f := r.split(',')
+		if f.len < 7 || r.starts_with('#') {
+			continue
+		}
+		if f[1] == 'io' && f[3] == 'io' {
+			io_ids << f[0]
+			io_names << f[4]
+		} else if f[0].len > 0 && f[0][0].is_digit() {
+			handler_ids << f[0] // an fb.handler row: id,partition,core,fb,handler,period,thread
+		}
+	}
+	assert io_ids.len == m.io_points.len, 'manifest has ${io_ids.len} io rows for ${m.io_points.len} points'
+
+	// 1) the NAMES are the configured points, in the configured order — a swap is a wrong name
+	for i, pt in m.io_points {
+		assert io_names[i] == pt.name, 'manifest io row ${i} names "${io_names[i]}", configured point is "${pt.name}"'
+	}
+	// 2) every advertised id is one the LOOP actually records, so the oracle cannot point at an id
+	//    nothing emits (which is what the bench test would then look for in the ring)
+	for i, id in io_ids {
+		assert loop.contains('C.trace_fb(u32(${id}),'), 'manifest advertises id ${id} for "${io_names[i]}" but the emitted loop records no such id'
+	}
+	// 3) and no io id collides with an FB HANDLER id — they share kind=FB in the ring, so a
+	//    collision makes the two indistinguishable to any decoder
+	for id in io_ids {
+		assert id !in handler_ids, 'io point id ${id} collides with an fb.handler id — both are kind=FB in the ring'
+	}
+	// 4) the ids are contiguous from the base, so a point is not silently skipped in the manifest
+	base := io_handler_id_base(m, doc)
+	for i, id in io_ids {
+		assert id == (base + u32(i)).str(), 'manifest io row ${i} has id ${id}, expected ${base + u32(i)}'
+	}
+}
