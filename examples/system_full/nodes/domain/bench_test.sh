@@ -158,8 +158,16 @@ while :; do
     [ "$mx" -gt "${MAXD[$ID]}" ] && MAXD[$ID]=$mx
     if [ "$nzmn" -gt 0 ] && { [ "${MINNZ[$ID]}" = 0 ] || [ "$nzmn" -lt "${MINNZ[$ID]}" ]; }; then MINNZ[$ID]=$nzmn; fi
   done
+  # Stop only when every point has a record AND at least one with a MEASURED duration. Stopping
+  # on the record alone spends none of the remaining budget when a first sample legitimately
+  # quantizes to 0us — and the assertion below then reports that point as all-zero, a flake for
+  # exactly the 0/1 mix this script permits (a `dur 0..1us` window really does occur on this
+  # board). The termination condition has to match what is actually asserted (codex on #280).
   MISSING=0
-  for row in "${IO_ROWS[@]}"; do ID=$(cut -d, -f1 <<<"$row"); [ "${CNT[$ID]}" -eq 0 ] && MISSING=1; done
+  for row in "${IO_ROWS[@]}"; do
+    ID=$(cut -d, -f1 <<<"$row")
+    { [ "${CNT[$ID]}" -eq 0 ] || [ "${MINNZ[$ID]}" -eq 0 ]; } && MISSING=1
+  done
   [ "$MISSING" = 0 ] && break
   [ "$(date +%s)" -ge "$DEADLINE" ] && break
   sleep 0.05
@@ -184,6 +192,8 @@ for row in "${IO_ROWS[@]}"; do
     fi
   else
     fail "no kind=FB records with id $ID ($NAME) in ${SAMPLES} ring sample(s) over ${BUDGET_S}s — that point's own service time is NOT observable"
+    # (a point seen but never with a nonzero duration falls to the MINNZ check above, which the
+    # sampling loop has by then given the whole budget to)
   fi
 done
 
