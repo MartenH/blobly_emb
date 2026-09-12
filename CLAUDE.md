@@ -123,6 +123,26 @@ usually explains a local/CI disagreement — `make v-pin` prints both and says w
 - **Anything on real silicon.** Bench results go in `requirements/verifications.toml`. Everything
   that can be *built* on a runner now is.
 
+**`make hwtest` FLASHES BOARDS.** It runs every `examples/*/bench_test.sh` **and, since #280, every
+`examples/*/nodes/*/bench_test.sh`** — a system example's nodes are standalone build dirs with no
+Makefile above them, so the old glob never reached them. Each script flashes its own image before
+asserting over SWD, so running the group reflashes whatever is attached; a script exits 2 (SKIP)
+when its board is absent, so a partial bench still passes for what IS present.
+
+Know two things before running it on the bench:
+
+- **`examples/system_full/nodes/domain` flashes TWO banks** — the CM7 image at `0x08000000` and its
+  CM4 satellite at `0x08100000` — and needs `BLOB_H755_SERIAL` to do so. Neither H755 script will
+  flash without that serial: the ST-LINK dev-type (`STM32H74x_H75x`) cannot tell an H755 from an
+  H743/745/753, and these tests are destructive.
+- **Both H755 scripts target the SAME physical board** (`h755_io_analog` and `system_full/nodes/domain`),
+  each flashing its own image. The board is left holding whichever ran last — `domain`, by glob
+  order — which is the right resting state for a system_full bench, but it means the group is not
+  idempotent with respect to what is on the board.
+
+Neither needs a CAN adapter: the exec-hook recorder captures from reset, so the trace ring is read
+straight out of RAM over SWD (`st-flash read`), the same way the bench serial map reads `g_cpu_mhz`.
+
 Plain **`v test .` at the repo root looks broken** — it walks into `.claude/worktrees/` and runs
 duplicate copies of every example e2e test concurrently. Test the real tree instead
 (`v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples`), which is

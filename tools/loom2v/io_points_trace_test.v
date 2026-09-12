@@ -351,6 +351,22 @@ fn test_every_io_exec_accumulator_adds_its_argument() {
 	assert found >= 6, 'found ${found} io_exec_add definitions, expected at least the 6 board glue copies — did the search path or the file layout change?'
 }
 
+// squeeze_call removes any whitespace between `name` and the `(` that follows it, so a scan can
+// key on the IDENTIFIER rather than on one spelling of the call. `name  (x)` and `name\t(x)` are
+// valid C; three successive versions of the scan below assumed otherwise and silently skipped a
+// definition each time.
+fn squeeze_call(line string, name string) string {
+	i := line.index(name) or { return line }
+	mut j := i + name.len
+	for j < line.len && (line[j] == ` ` || line[j] == `\t`) {
+		j++
+	}
+	if j >= line.len || line[j] != `(` {
+		return line // not a call or definition of `name` at all
+	}
+	return line[..i + name.len] + line[j..]
+}
+
 fn check_accumulator(path string) int {
 	src := os.read_file(path) or { return 0 }
 	mut n := 0
@@ -360,11 +376,12 @@ fn check_accumulator(path string) int {
 		// skipped silently, and `found >= 6` stayed satisfied by the other copies while that one
 		// went unchecked (codex on #280). Every occurrence is now classified, and anything this
 		// scanner cannot classify FAILS rather than being passed over.
-		// `io_exec_add (unsigned us)` is valid C, and matching the no-space spelling skipped it —
-		// discovery tied to a formatting habit again, one round after the return-type version of
-		// the same mistake (codex on #280). Normalise the space away, once, and work on that form
-		// so the parsing below is not fooled either.
-		t := line.trim_space().replace(' (', '(')
+		// Identifier, then ARBITRARY whitespace, then `(`. Three spellings of one mistake got here:
+		// requiring `void` on the same line, then requiring no space before the paren, then
+		// normalising exactly one `" ("` — so `io_exec_add  (` and a tab still slipped past while
+		// `found >= 6` stayed satisfied by the other copies (codex on #280). squeeze_call() is the
+		// last version of this: it answers for any C spacing.
+		t := squeeze_call(line.trim_space(), 'io_exec_add')
 		if !t.contains('io_exec_add(') {
 			continue
 		}
@@ -397,7 +414,7 @@ fn check_accumulator(path string) int {
 		assert acc != '', '${path}: cannot read the accumulated variable from: ${line.trim_space()}'
 		mut saw_getter := false
 		for gl in src.split_into_lines() {
-			gt := gl.trim_space().replace(' (', '(')
+			gt := squeeze_call(gl.trim_space(), 'io_exec_us')
 			if !gt.contains('io_exec_us(void)') {
 				continue
 			}
@@ -416,4 +433,52 @@ fn check_accumulator(path string) int {
 		assert saw_getter, '${path}: io_exec_add is defined with no io_exec_us() accessor beside it — the FB loops read the sum through that getter'
 	}
 	return n
+}
+
+// The RECORDER side of the duration. The caller assertion above pins the emitted
+// `C.trace_fb(u32(<hid>), p<hid>_t0, u32(C.board_now_us() - p<hid>_t0))`, but nothing there can see
+// what boards/common/trace_hooks.c then does with that third argument: a push_rec that wrote a
+// constant would leave the call site perfect, and the silicon script accepts an all-zero record set
+// as valid (a sub-microsecond service reads 0us), so the ring could carry no measured duration at
+// all with every other check green (codex on #280).
+//
+// Text again, for the same reason as the accumulator scan: the file needs tx_api.h and a device
+// header, so the host cannot execute it.
+fn test_the_recorder_forwards_the_duration_it_is_given() {
+	path := os.join_path(@VMODROOT, 'boards', 'common', 'trace_hooks.c')
+	src := os.read_file(path) or {
+		assert false, 'cannot read ${path}: ${err}'
+		return
+	}
+	lines := src.split_into_lines()
+	// trace_fb's third parameter must reach push_rec
+	mut fb_call := ''
+	for i, l in lines {
+		if l.contains('void trace_fb(') {
+			for k in i .. lines.len {
+								if lines[k].contains('push_rec(') {
+					fb_call = lines[k].trim_space()
+					break
+				}
+			}
+			break
+		}
+	}
+	assert fb_call != '', '${path}: no push_rec( call found in trace_fb'
+	assert fb_call.contains('dur_us'), '${path}: trace_fb does not pass its dur_us to push_rec — the caller measures a duration the recorder then discards: ${fb_call}'
+	// ...and push_rec must ENCODE it into the record's duration bytes (6 and 7, LE)
+	mut lo := ''
+	mut hi := ''
+	for l in lines {
+		t := l.trim_space()
+		if t.starts_with('r[6]') {
+			lo = t
+		}
+		if t.starts_with('r[7]') {
+			hi = t
+		}
+	}
+	assert lo != '' && hi != '', '${path}: the record duration bytes r[6]/r[7] are not assigned where this test can see them'
+	assert lo.contains('dur_us'), '${path}: record byte 6 does not come from dur_us: ${lo}'
+	assert hi.contains('dur_us'), '${path}: record byte 7 does not come from dur_us: ${hi}'
 }
