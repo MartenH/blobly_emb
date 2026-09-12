@@ -138,6 +138,18 @@ fn test_the_exec_sum_brackets_the_whole_pass_not_a_point() {
 	}
 }
 
+// stmt_of: an emitted line reduced to its statement — indentation and any trailing `// comment`
+// removed — so a test can compare the WHOLE call instead of a prefix. Prefix matching is how this
+// file was wrong four times: `+= us` admitted `+= us + 1`, `contains(acc)` admitted a shadowed
+// global, and `C.io_exec_add(` / `C.trace_fb(u32(id),` admit any argument list at all.
+fn stmt_of(line string) string {
+	mut t := line.trim_space()
+	if t.contains('//') {
+		t = t.all_before('//').trim_space()
+	}
+	return t
+}
+
 fn check_whole_pass_bracket(with_load bool) {
 	m := traced_io_model()
 	g := emit_io_target_entry(m, empty_doc(), {
@@ -186,7 +198,11 @@ fn check_whole_pass_bracket(with_load bool) {
 	assert i_t0 < first_point, 'the exec sum starts AFTER the first point — it would miss that point'
 	assert i_t1 > last_point, 'the exec sum ends BEFORE the last point\'s record — it would miss that point\'s service time'
 	// and it publishes the bracket itself, not a point's duration or a constant
-	assert lines[i_add].contains('u32(t1 - t0)'), 'io_exec_add does not publish t1 - t0: ${lines[i_add]}'
+	// The COMPLETE call: `C.io_exec_add(u32(t1 - t0) + 1)` contains `u32(t1 - t0)` and would have
+	// passed, inflating every pass while the C-side check faithfully accumulated the inflated
+	// argument and the silicon ceiling admitted it (codex on #280).
+	got_add := stmt_of(lines[i_add])
+	assert got_add == 'C.io_exec_add(u32(t1 - t0))', 'with_load=${with_load}: the whole pass is published as `${got_add}`, not exactly `C.io_exec_add(u32(t1 - t0))` — anything else is not the pass duration'
 }
 
 // BOTH SIDES OF THE MAPPING. The bench test reads gen/trace-manifest.csv as its oracle — it can
@@ -288,6 +304,13 @@ fn test_the_manifest_rows_and_the_emitted_records_agree() {
 			}
 		}
 		assert i_op > i_start, 'point "${pt.name}" (${pt.kind}): no ${op} between its bracket start and its record — the duration would exclude the service'
+		// ...and the record's DURATION must come from this point's own bracket. Matching the
+		// `C.trace_fb(u32(<hid>),` prefix accepts any third argument: a constant, or the
+		// whole-pass elapsed time, would satisfy every check here and the hardware test only
+		// requires a nonzero duration, so neither could be told from the point's own interval.
+		want := 'C.trace_fb(u32(${hid}), p${hid}_t0, u32(C.board_now_us() - p${hid}_t0))'
+		got_rec := stmt_of(lines[i_rec])
+		assert got_rec == want, 'point "${pt.name}": record is `${got_rec}`, want `${want}` — the duration must be this point\'s own measured interval'
 	}
 }
 
