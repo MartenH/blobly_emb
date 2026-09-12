@@ -119,29 +119,68 @@ A1=$(u32 "$IOEXEC"); sleep "$WIN_S"; A2=$(u32 "$IOEXEC")
 # --- 4. PER-POINT records in the ring, for EVERY point (the REQ-IO-025 claim) ------
 # record (trace_hooks.c): eid u16 LE (kind<<14|id) | info u8 | start_us u24 LE | dur_us u16 LE.
 # eid and dur are both u16-aligned (offsets 0 and 6), so -tu2 gives w0=eid .. w3=dur.
-RB=$(mktemp)
-st-flash --serial "$SERIAL" read "$RB" "$RING" 2048 >/dev/null 2>&1 || { echo "FAIL: SWD ring read failed"; rm -f "$RB"; exit 1; }
-WORDS=$(od -An -tu2 -v "$RB" | tr -s ' ' '\n'); rm -f "$RB"
-decode() { # decode <eid> -> "count min max nonzero min_nonzero"
-  awk -v want="$1" '
-    NF { w[n++ % 4] = $1; if (n % 4 == 0) { if (w[0] == want) { c++; d = w[3]
-          if (d > 0) { nz++; if (nzmn == "" || d < nzmn) nzmn = d }
-          if (mn == "" || d < mn) mn = d; if (d > mx) mx = d } } }
-    END { print c + 0, (mn == "" ? 0 : mn), mx + 0, nz + 0, (nzmn == "" ? 0 : nzmn) }' <<<"$WORDS"
-}
+# The ring is a 256-record FLIGHT RECORDER: at ~4900 records/s it wraps in about 50ms, so a single
+# snapshot is a ~50ms window. A point whose period exceeds that is simply absent from most
+# snapshots — a 100ms point would be missing from roughly half of them — and asserting on one read
+# would report a regression for a perfectly serviced point (codex on #280). So sample REPEATEDLY
+# until every configured point has been seen, bounded by a deadline derived from the longest
+# configured period. Only then is "no records for this point" evidence of anything.
+MAXPER=0
+for row in "${IO_ROWS[@]}"; do
+  p=$(cut -d, -f6 <<<"$row"); [ "$p" -gt "$MAXPER" ] && MAXPER=$p
+done
+# 4 x the longest period, floor 2s: enough for several services of the slowest point
+BUDGET_S=$(( (4 * MAXPER / 1000000) + 2 ))
+declare -A CNT MINNZ MAXD
+for row in "${IO_ROWS[@]}"; do ID=$(cut -d, -f1 <<<"$row"); CNT[$ID]=0; MINNZ[$ID]=0; MAXD[$ID]=0; done
+SAMPLES=0
+DEADLINE=$(( $(date +%s) + BUDGET_S ))
+while :; do
+  RB=$(mktemp)
+  st-flash --serial "$SERIAL" read "$RB" "$RING" 2048 >/dev/null 2>&1 \
+    || { echo "FAIL: SWD ring read failed"; rm -f "$RB"; exit 1; }
+  WORDS=$(od -An -tu2 -v "$RB" | tr -s ' ' '\n'); rm -f "$RB"
+  SAMPLES=$(( SAMPLES + 1 ))
+  for row in "${IO_ROWS[@]}"; do
+    ID=$(cut -d, -f1 <<<"$row")
+    read -r n _ mx _ nzmn < <(awk -v want=$(( (2 << 14) | ID )) '
+      NF { w[i++ % 4] = $1; if (i % 4 == 0) { if (w[0] == want) { c++; d = w[3]
+            if (d > 0) { nz++; if (nzmn == "" || d < nzmn) nzmn = d }
+            if (mn == "" || d < mn) mn = d; if (d > mx) mx = d } } }
+      END { print c + 0, (mn == "" ? 0 : mn), mx + 0, nz + 0, (nzmn == "" ? 0 : nzmn) }' <<<"$WORDS")
+    CNT[$ID]=$(( CNT[$ID] + n ))
+    [ "$mx" -gt "${MAXD[$ID]}" ] && MAXD[$ID]=$mx
+    if [ "$nzmn" -gt 0 ] && { [ "${MINNZ[$ID]}" = 0 ] || [ "$nzmn" -lt "${MINNZ[$ID]}" ]; }; then MINNZ[$ID]=$nzmn; fi
+  done
+  MISSING=0
+  for row in "${IO_ROWS[@]}"; do ID=$(cut -d, -f1 <<<"$row"); [ "${CNT[$ID]}" -eq 0 ] && MISSING=1; done
+  [ "$MISSING" = 0 ] && break
+  [ "$(date +%s)" -ge "$DEADLINE" ] && break
+  sleep 0.05
+done
+echo "  (sampled the ring ${SAMPLES}x over up to ${BUDGET_S}s; longest configured period ${MAXPER}us)"
+
 for row in "${IO_ROWS[@]}"; do
   ID=$(cut -d, -f1 <<<"$row"); NAME=$(cut -d, -f5 <<<"$row"); PER=$(cut -d, -f6 <<<"$row")
-  read -r NREC DMIN DMAX NNZ DNZMIN < <(decode $(( (2 << 14) | ID )))
-  if [ "${NREC:-0}" -gt 0 ]; then
-    ok "$NREC record(s) for io point id $ID ($NAME), dur ${DMIN}..${DMAX}us"
-    [ "${NNZ:-0}" -gt 0 ] && ok "  ${NNZ}/${NREC} carry a measured duration" \
-      || fail "all $NREC records for id $ID ($NAME) have dur_us = 0 — the bracket records no time, so that point's own service duration is NOT observable"
-    [ "$DMAX" -lt "$PER" ] && ok "  within the point's ${PER}us period" \
-      || fail "id $ID ($NAME) took ${DMAX}us, its period is ${PER}us"
+  if [ "${CNT[$ID]}" -gt 0 ]; then
+    ok "${CNT[$ID]} record(s) for io point id $ID ($NAME) across ${SAMPLES} sample(s), max dur ${MAXD[$ID]}us"
+    # A real MEASUREMENT, not merely a number satisfying a bound: if the bracket regressed to
+    # recording zero, the count would still be positive and nothing else here would notice.
+    [ "${MINNZ[$ID]}" -gt 0 ] && ok "  at least one carries a measured duration (min nonzero ${MINNZ[$ID]}us)" \
+      || fail "every record for id $ID ($NAME) has dur_us = 0 — the bracket records no time, so that point's own service duration is NOT observable"
+    # NO upper bound against the period here. A point that overruns its period is exactly what
+    # REQ-IO-025 exists to make VISIBLE, so failing on it would invert the requirement — that is a
+    # scheduling/timing concern belonging to its own requirement, not to observability
+    # (codex on #280). The duration is reported above so an overrun is still evident in the log.
+    if [ "${MAXD[$ID]}" -ge "$PER" ]; then
+      echo "  note: id $ID ($NAME) recorded ${MAXD[$ID]}us against a ${PER}us period — an overrun, and"
+      echo "        visible precisely because the per-point record exists. Not a failure of this check."
+    fi
   else
-    fail "no kind=FB records with id $ID ($NAME) in the ring — that point's own service time is NOT observable"
+    fail "no kind=FB records with id $ID ($NAME) in ${SAMPLES} ring sample(s) over ${BUDGET_S}s — that point's own service time is NOT observable"
   fi
 done
+
 # --- 5. the aggregate does not claim more than the wall clock allowed -----------------
 # A ceiling, and deliberately NO quantitative floor. Five successive shapes of one were each
 # wrong, alternating between admitting a regression and failing a healthy board:

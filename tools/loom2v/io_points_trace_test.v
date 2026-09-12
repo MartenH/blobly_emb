@@ -215,10 +215,13 @@ fn test_the_manifest_rows_and_the_emitted_records_agree() {
 	for i, pt in m.io_points {
 		assert io_names[i] == pt.name, 'manifest io row ${i} names "${io_names[i]}", configured point is "${pt.name}"'
 	}
-	// 2) every advertised id is one the LOOP actually records, so the oracle cannot point at an id
-	//    nothing emits (which is what the bench test would then look for in the ring)
+	// 2) every advertised id is one the LOOP actually records — EXACTLY ONCE. Containment alone
+	//    would accept a duplicated call, and REQ-IO-025 is one record per point SERVICED: two
+	//    would corrupt every count a dump derives, while the hardware check (NREC > 0) and the
+	//    containment check both still passed (codex on #280).
 	for i, id in io_ids {
-		assert loop.contains('C.trace_fb(u32(${id}),'), 'manifest advertises id ${id} for "${io_names[i]}" but the emitted loop records no such id'
+		n := loop.count('C.trace_fb(u32(${id}),')
+		assert n == 1, 'the emitted loop records id ${id} ("${io_names[i]}") ${n} times — REQ-IO-025 is one record per point serviced'
 	}
 	// 3) and no io id collides with an FB HANDLER id — they share kind=FB in the ring, so a
 	//    collision makes the two indistinguishable to any decoder
@@ -229,5 +232,29 @@ fn test_the_manifest_rows_and_the_emitted_records_agree() {
 	base := io_handler_id_base(m, doc)
 	for i, id in io_ids {
 		assert id == (base + u32(i)).str(), 'manifest io row ${i} has id ${id}, expected ${base + u32(i)}'
+	}
+	// 5) and each point's record follows ITS OWN OPERATION. The whole-pass test anchors on the
+	//    record as the point's completion; that anchor is only sound if the record actually comes
+	//    after the work. Emitted before it, every ordering assertion would still pass while the
+	//    recorded duration measured the clock call and not the service (codex on #280).
+	lines := loop.split('\n')
+	for i, pt in m.io_points {
+		op := match pt.kind {
+			'pwm' { 'io.pwm_write(' }
+			'adc' { 'io.adc_read_checked(' }
+			else { if pt.output { 'io.gpio_write(' } else { 'io.gpio_read_checked(' } }
+		}
+		mut i_op := -1
+		mut i_rec := -1
+		for k, l in lines {
+			if l.contains(op) && i_op < 0 {
+				i_op = k
+			}
+			if l.contains('C.trace_fb(u32(${base + u32(i)}),') {
+				i_rec = k
+			}
+		}
+		assert i_op >= 0, 'no ${op} emitted for point "${pt.name}" (${pt.kind})'
+		assert i_rec > i_op, 'point "${pt.name}": its record is emitted at line ${i_rec}, before its ${op} at ${i_op} — the duration would exclude the service'
 	}
 }
