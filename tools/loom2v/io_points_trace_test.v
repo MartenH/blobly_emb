@@ -298,7 +298,7 @@ fn test_the_manifest_rows_and_the_emitted_records_agree() {
 		assert i_rec > i_start, 'point "${pt.name}": its record precedes its own bracket start'
 		mut i_op := -1
 		for k := i_start; k < i_rec; k++ {
-			if lines[k].contains(op) {
+			if code_of(lines[k]).contains(op) {
 				i_op = k
 				break
 			}
@@ -349,6 +349,18 @@ fn test_every_io_exec_accumulator_adds_its_argument() {
 		}
 	}
 	assert found >= 6, 'found ${found} io_exec_add definitions, expected at least the 6 board glue copies — did the search path or the file layout change?'
+}
+
+// code_of strips a trailing `// comment` from an emitted line, so a match asks whether the
+// generator emits an OPERATION rather than whether the text appears anywhere. Without it a
+// regression leaving `// io.pwm_write(...)` behind satisfied every ordering assertion while the
+// point's bracket performed no io at all — and the ordering scan then measured to the comment
+// (codex on #280).
+fn code_of(line string) string {
+	if line.contains('//') {
+		return line.all_before('//')
+	}
+	return line
 }
 
 // squeeze_call removes any whitespace between `name` and the `(` that follows it, so a scan can
@@ -533,7 +545,7 @@ fn test_a_pwm_output_records_after_its_write() {
 		if l.contains('p${hid}_t0 := C.board_now_us()') {
 			i_start = k
 		}
-		if l.contains('io.pwm_write(') {
+		if code_of(l).contains('io.pwm_write(') {
 			i_write = k
 		}
 		if l.contains('C.trace_fb(u32(${hid}),') {
@@ -581,7 +593,7 @@ fn test_a_gpio_output_records_after_its_write() {
 		if l.contains('p${hid}_t0 := C.board_now_us()') {
 			i_start = k
 		}
-		if l.contains('io.gpio_write(') {
+		if code_of(l).contains('io.gpio_write(') {
 			i_write = k
 		}
 		if l.contains('C.trace_fb(u32(${hid}),') {
@@ -623,12 +635,18 @@ fn test_every_operation_arm_is_exercised() {
 			'P': 0
 		}, true, 0).join('\n')
 		hid := io_handler_id_base(m, doc)
-		assert g.contains(c[2]), 'a ${c[0]} ${c[1]} point emits no ${c[2]} — the operation match has an arm no fixture reaches'
+		mut emits := false
+		for l in g.split('\n') {
+			if code_of(l).contains(c[2]) {
+				emits = true
+			}
+		}
+		assert emits, 'a ${c[0]} ${c[1]} point emits no ${c[2]} as CODE — the operation match has an arm no fixture reaches, or the operation survives only as a comment'
 		lines := g.split('\n')
 		mut i_op := -1
 		mut i_rec := -1
 		for k, l in lines {
-			if l.contains(c[2]) {
+			if code_of(l).contains(c[2]) {
 				i_op = k
 			}
 			if l.contains('C.trace_fb(u32(${hid}),') {

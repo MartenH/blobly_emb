@@ -7,10 +7,20 @@
 # that has begun misbehaving is visible in the very trace it delays. This asserts that on
 # silicon:
 #
-#   REQ-IO-025: the exec-hook ring carries kind=FB records for the io point id the trace
-#               manifest names, each with its OWN duration, AND the thread-level exec sum
-#               (g_io_exec_us) keeps advancing — the aggregate the FB threads subtract as
-#               preemption is unchanged, the per-point records are IN ADDITION to it.
+#   REQ-IO-025, the part SILICON can show: the exec-hook ring carries kind=FB records under the
+#               io point id the trace manifest names — the point's service is a distinct,
+#               resolvable entry and not part of one aggregate — AND the thread-level exec sum
+#               (g_io_exec_us) keeps advancing, so the aggregate the FB threads subtract as
+#               preemption is unchanged and the per-point records are IN ADDITION to it.
+#
+#               NOT that a record's duration is that point's own measured interval. This script
+#               reports whatever duration it finds and accepts any value, including 0us for a
+#               sub-microsecond service, so a target recording constants under the right ids would
+#               still pass here. Duration PROVENANCE is host-side only:
+#               tools/loom2v/io_points_trace_test.v compares the emitted call against
+#               `u32(C.board_now_us() - p<hid>_t0)` exactly, and checks that trace_fb forwards it
+#               and push_rec encodes it little-endian. This header claimed otherwise for several
+#               rounds after the duration assertion was dropped (codex on #280).
 #
 # The point id and name come from gen/trace-manifest.csv, never hard-coded: the ids
 # continue the global handler numbering, so a new handler shifts them.
