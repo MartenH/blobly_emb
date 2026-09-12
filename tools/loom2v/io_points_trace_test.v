@@ -1,5 +1,6 @@
 module main
 
+import os
 import toml
 
 // @verifies REQ-IO-025
@@ -244,17 +245,72 @@ fn test_the_manifest_rows_and_the_emitted_records_agree() {
 			'adc' { 'io.adc_read_checked(' }
 			else { if pt.output { 'io.gpio_write(' } else { 'io.gpio_read_checked(' } }
 		}
-		mut i_op := -1
+		hid := base + u32(i)
+		// Search THIS POINT'S BRACKET only — from its own p<hid>_t0 to its own record. A bare
+		// first-match on the primitive is wrong the moment two points share one: with three GPIO
+		// points (examples/h755_io has exactly that) the match would stay on the FIRST gpio call,
+		// so a later point's record could precede its own operation and still look ordered. The
+		// one-gpio/one-adc fixture masked that (codex on #280).
+		mut i_start := -1
 		mut i_rec := -1
 		for k, l in lines {
-			if l.contains(op) && i_op < 0 {
-				i_op = k
+			if l.contains('p${hid}_t0 := C.board_now_us()') {
+				i_start = k
 			}
-			if l.contains('C.trace_fb(u32(${base + u32(i)}),') {
+			if l.contains('C.trace_fb(u32(${hid}),') {
 				i_rec = k
 			}
 		}
-		assert i_op >= 0, 'no ${op} emitted for point "${pt.name}" (${pt.kind})'
-		assert i_rec > i_op, 'point "${pt.name}": its record is emitted at line ${i_rec}, before its ${op} at ${i_op} — the duration would exclude the service'
+		assert i_start >= 0, 'no per-point bracket start for "${pt.name}" (id ${hid})'
+		assert i_rec > i_start, 'point "${pt.name}": its record precedes its own bracket start'
+		mut i_op := -1
+		for k := i_start; k < i_rec; k++ {
+			if lines[k].contains(op) {
+				i_op = k
+				break
+			}
+		}
+		assert i_op > i_start, 'point "${pt.name}" (${pt.kind}): no ${op} between its bracket start and its record — the duration would exclude the service'
 	}
+}
+
+// THE C SIDE (covered by this file's verification tag at the top — a SECOND tag would register a
+// second link and list the file twice in the requirement's evidence, which is the duplicate this
+// file already had to fix once). Everything above asserts what the GENERATOR emits, and the emitted call is
+// `C.io_exec_add(u32(t1 - t0))` — what it lands on is a one-line accumulator in each board glue.
+// A copy that ignored its argument and added a constant would leave the generated code perfect,
+// the silicon check still seeing the counter advance inside its ceiling, and the whole-pass claim
+// false. That was the residual the bench test documented rather than covered (codex on #280).
+//
+// The glue is not host-compilable (tx_api.h, stm32h7xx.h), so this asserts its TEXT — the same
+// thing scripts/lint_vinit.sh does for an invariant the host cannot execute. Narrow on purpose:
+// that the accumulator ADDS ITS PARAMETER, which is precisely the regression invisible from every
+// other direction.
+fn test_every_io_exec_accumulator_adds_its_argument() {
+	mut found := 0
+	for root in ['boards', 'examples'] {
+		for f in os.walk_ext(os.join_path(@VMODROOT, root), '.c') {
+			found += check_accumulator(f)
+		}
+	}
+	assert found >= 6, 'found ${found} io_exec_add definitions, expected at least the 6 board glue copies — did the search path or the file layout change?'
+}
+
+fn check_accumulator(path string) int {
+	src := os.read_file(path) or { return 0 }
+	mut n := 0
+	for line in src.split_into_lines() {
+		if !line.contains('void io_exec_add(') {
+			continue
+		}
+		n++
+		param := line.all_after('(').all_before(')').trim_space().all_after_last(' ')
+		assert param != '', '${path}: cannot read the parameter name from: ${line}'
+		// `+= <param>`, as a PATTERN. A bare `body.contains(param)` is useless here: the parameter
+		// is `us` and the accumulator it writes to is `g_io_exec_us`, so the substring matches even
+		// when the body ignores the argument entirely — `g_io_exec_us += 1;` passed that check.
+		body := line.all_after('{')
+		assert body.contains('+= ${param}'), '${path}: io_exec_add does not accumulate its argument (want "+= ${param}"): ${line.trim_space()}'
+	}
+	return n
 }

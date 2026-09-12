@@ -47,11 +47,23 @@ verifies = ["REQ-IO-018", "REQ-IO-021"]
 # NUCLEO-H755ZI-Q. No CAN adapter is involved: the exec-hook recorder captures from reset
 # (trace_hooks.c g_capturing = 1), so the records are in the ring without an arm command.
 #
-#   REQ-IO-025: the ring carries kind=FB records for the io point id the TRACE MANIFEST
-#               names, each with its own duration and bounded by the point's period, AND
-#               g_io_exec_us keeps advancing — the thread-level sum the FB threads subtract
-#               as preemption is unchanged, so the per-point records are IN ADDITION to it,
-#               which is exactly what the requirement asks.
+#   REQ-IO-025: for EVERY io point the trace manifest names, the ring carries kind=FB records
+#               under that point's id, at least one of them carrying a real (nonzero) measured
+#               duration — and g_io_exec_us keeps advancing without claiming more time than the
+#               window held, so the thread-level sum the FB threads subtract as preemption is
+#               still being published alongside the per-point records.
+#
+# Deliberately NOT claimed here, because the linked command deliberately does not check it:
+#   * a duration bound against the point's period. An overrun is the requirement WORKING — its
+#     text is that a slow point becomes visible — so failing on it would invert the requirement.
+#     The script reports the overrun as a note. A timing budget is its own requirement.
+#   * a quantitative "the sum equals the whole pass" bound. Five shapes of one were each wrong in
+#     one direction or the other; the ring wraps in ~50ms and is sampled outside the interval
+#     being bounded, so there is no matched (work, interval) pair to calibrate against.
+# Both of those live in tools/loom2v/io_points_trace_test.v instead, which is linked to this same
+# requirement: it asserts the emitted shape (t0 before the first point, t1 after the last point's
+# record, io_exec_add publishing exactly t1 - t0, one record per point, each after its own
+# operation) and that every board glue's accumulator adds its argument.
 #
 # The point id and name are read from gen/trace-manifest.csv, never hard-coded: the ids
 # continue the global handler numbering, so adding an FB handler shifts them and a
