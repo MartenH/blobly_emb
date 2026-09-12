@@ -338,14 +338,21 @@ fn check_accumulator(path string) int {
 		// `+= <param>`, as a PATTERN. A bare `body.contains(param)` is useless here: the parameter
 		// is `us` and the accumulator it writes to is `g_io_exec_us`, so the substring matches even
 		// when the body ignores the argument entirely — `g_io_exec_us += 1;` passed that check.
-		body := line.all_after('{')
-		assert body.contains('+= ${param}'), '${path}: io_exec_add does not accumulate its argument (want "+= ${param}"): ${line.trim_space()}'
+		// The WHOLE update expression, not a prefix: `+= us` also matches `+= us + 1`, which
+		// inflates every pass while the counter still advances under its ceiling. Same class as
+		// the earlier `contains(param)` bug, where the parameter `us` matched the global
+		// `g_io_exec_us` (codex on #280, twice on this one check).
+		stmt := line.all_after('{').all_before('}').trim_space().trim_right(';').trim_space()
+		parts := stmt.split('+=')
+		assert parts.len == 2, '${path}: io_exec_add body is not a single `X += ${param};` accumulation: ${line.trim_space()}'
+		acc := parts[0].trim_space()
+		rhs := parts[1].trim_space()
+		assert rhs == param, '${path}: io_exec_add accumulates "${rhs}", not exactly its argument "${param}" — anything else publishes a value that is not the pass duration: ${line.trim_space()}'
 		// ...and the GETTER must return that same variable. The generated FB loops consume
 		// C.io_exec_us() to subtract io preemption, so a getter returning 0 or a different global
 		// stops the subtraction while every other check here stays green — and the bench script
 		// reads g_io_exec_us straight out of the ELF, bypassing the accessor entirely
 		// (codex on #280).
-		acc := body.all_before('+=').trim_space()
 		assert acc != '', '${path}: cannot read the accumulated variable from: ${line.trim_space()}'
 		mut saw_getter := false
 		for gl in src.split_into_lines() {
@@ -353,8 +360,10 @@ fn check_accumulator(path string) int {
 				continue
 			}
 			saw_getter = true
-			gbody := gl.all_after('{')
-			assert gbody.contains(acc), '${path}: io_exec_us() does not return ${acc}, the variable io_exec_add updates — the FB loops would stop subtracting io preemption: ${gl.trim_space()}'
+			// EXACTLY the accumulator, not a name containing it: `return g_io_exec_us_shadow;`
+			// contains `g_io_exec_us` and would have passed (codex on #280).
+			ret := gl.all_after('{').all_before('}').trim_space().trim_string_left('return').trim_space().trim_right(';').trim_space()
+			assert ret == acc, '${path}: io_exec_us() returns "${ret}", not the "${acc}" that io_exec_add updates — the FB loops would subtract the wrong value: ${gl.trim_space()}'
 		}
 		assert saw_getter, '${path}: io_exec_add is defined with no io_exec_us() accessor beside it — the FB loops read the sum through that getter'
 	}

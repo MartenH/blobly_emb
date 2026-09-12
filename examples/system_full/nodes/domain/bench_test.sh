@@ -113,7 +113,13 @@ H1=$(u32 "$HEAD"); sleep 1; H2=$(u32 "$HEAD")
 # (test_the_exec_sum_brackets_the_whole_pass_not_a_point): t0 before the first point, t1 after the
 # last, io_exec_add publishing exactly t1 - t0.
 WIN_S=2
-A1=$(u32 "$IOEXEC"); sleep "$WIN_S"; A2=$(u32 "$IOEXEC")
+# The interval is MEASURED, not assumed. The nominal sleep is not the elapsed time: two SWD reads
+# plus shell startup sit inside it, so a system legitimately spending nearly all its wall time in
+# io service would exceed a ceiling built from the sleep alone — a false failure in exactly the
+# slow-point case REQ-IO-025 exists to expose, which is the second time a nominal bound here would
+# have inverted the requirement (codex on #280).
+T1=$(date +%s%N); A1=$(u32 "$IOEXEC"); sleep "$WIN_S"; A2=$(u32 "$IOEXEC"); T2=$(date +%s%N)
+ELAPSED_US=$(( (T2 - T1) / 1000 ))
 [ "$A2" -gt "$A1" ] || fail "g_io_exec_us stuck at $A1 — the io serve loop is not running"
 
 # --- 4. PER-POINT records in the ring, for EVERY point (the REQ-IO-025 claim) ------
@@ -204,9 +210,8 @@ done
 # instrument here reaches.
 if [ "$A2" -gt "$A1" ]; then
   DELTA=$(( A2 - A1 ))
-  CEIL=$(( WIN_S * 1000000 ))
-  [ "$DELTA" -le "$CEIL" ] && ok "g_io_exec_us +${DELTA}us over ${WIN_S}s, within the ${CEIL}us the window held" \
-    || fail "g_io_exec_us advanced ${DELTA}us in ${WIN_S}s of wall time — impossible"
+  [ "$DELTA" -le "$ELAPSED_US" ] && ok "g_io_exec_us +${DELTA}us within the ${ELAPSED_US}us actually elapsed between the two reads" \
+    || fail "g_io_exec_us advanced ${DELTA}us across a measured ${ELAPSED_US}us interval — more execution than wall time, which is impossible"
 fi
 
 [ "$rc" = 0 ] && echo "PASS: REQ-IO-025 — per-point io records observable on silicon" \
