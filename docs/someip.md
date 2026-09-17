@@ -193,6 +193,10 @@ enters the shared routing/codec path.
 - **No client/subscriber management.** One configured peer. Multicast
   eventgroups (one send, N listeners) are the natural first relaxation and the
   header doesn't change — an open question below, not a P1 feature.
+- **Nothing tester-shaped.** Listening to a foreign service, decoding SD,
+  subscribing, driving a SUT — that is blobly_net's half, and it stays there.
+  The split of one protocol across the two repos, with what the tester does and
+  does not do (2026-09-17), is blobly_net's `docs/ethernet_architecture.md`.
 
 ## Sim story (sim-first, as always)
 

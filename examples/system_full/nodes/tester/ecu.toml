@@ -11,6 +11,12 @@
 # two separate host nodes until the lowering could carry both halves in one file; one bench tool
 # is one node.
 #
+# What blobly_net can stand in for TODAY is the compute half: restbus simulation is keyed on the
+# DBC, and the tel segment has no DBC. BenchPeer's SOME/IP half — receiving tcu's events and
+# producing LampCmd from this node's layouts — is declaration only until blobly_net decodes and
+# produces events from the system's config (its docs/ethernet_architecture.md, the roles table).
+# Its passive listener (`someip.listen`) already hears tcu's events; it does not yet read them.
+#
 # NOTE: no inline comments inside [[...]] tables (vlang/v#27684).
 
 [[partition]]
