@@ -399,3 +399,65 @@ fn test_a_bridge_off_the_trace_bus_core_blocks_trace() {
 	}
 	assert trace_shape_blocker(m, 'can1') != ''
 }
+
+// codex #282 r1: every runner speaks standard frames, so a 29-bit binding is refused at parse
+// rather than silently ignored (cmd, dump_fc) or truncated on the wire (rsp, record).
+fn test_an_extended_trace_binding_is_named() {
+	mut t := TraceCfg{}
+	assert trace_extended_binding(t) == '', 'the 0x7E2..0x7E6 defaults are standard'
+	t.dump_fc_id = 0x18DA00F1
+	assert trace_extended_binding(t) == 'dump_fc 0x18da00f1'
+	t.rsp_id = 0x800
+	assert trace_extended_binding(t).starts_with('rsp '), 'the first offender, in endpoint order'
+}
+
+// codex #282 r1: the module reports the traced partition's configured core, not a literal 0 —
+// the manifest puts every handler on that core and a TraceCmd mask selects by it.
+fn test_a_single_core_runner_reports_its_partitions_core() {
+	m := Model{
+		trace:  TraceCfg{
+			on:    true
+			level: 'fb'
+		}
+		target: TargetCfg{
+			on: true
+		}
+		part:   PartMap{
+			by_part: {
+				'app': []toml.Any{}
+			}
+			core_of: {
+				'app': 1
+			}
+		}
+	}
+	assert single_trace_core(m) == 1
+	assert baremetal_trace_init(m).join('\n').contains('u32(0x7e5), 1, false,')
+}
+
+// codex #282 r1: LoadDetail is its own pending frame, retried every pass until the FIFO takes it —
+// not a second send inside the CpuLoad block that a full FIFO drops for a whole period.
+fn test_load_detail_is_retried_until_accepted() {
+	p := TelemProducer{
+		on:        true
+		id:        0x7E0
+		detail_id: 0x7E1
+	}
+	g := p.bus_tick(BusCtx{
+		telem_active: true
+		now:          't1'
+		period:       'telem_period_us'
+		gate:         ' && ch.tx_ready()'
+		load:         ['\t\t\tload[0] = 1']
+		det_ovr:      'sched.overruns()'
+		det_lines:    ['\t\t\tdetail := [8]u8{}']
+		frame:        'f'
+		detframe:     'd'
+		idx:          'i'
+	}).join('\n')
+	cpu_at := g.index('ch.send(f)') or { -1 }
+	due_at := g.index('detail_due = true') or { -1 }
+	retry_at := g.index('if detail_due && ch.tx_ready() {') or { -1 }
+	assert cpu_at >= 0 && due_at > cpu_at && retry_at > due_at, g
+	assert g.contains('last_overruns = ovr\n\t\t\t\tdetail_due = false'), 'cleared only on an accepted send'
+}

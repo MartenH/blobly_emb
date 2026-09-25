@@ -1664,6 +1664,16 @@ fn (t TelemProducer) bus_tick(ctx BusCtx) []string {
 	g << '\t\t\t}'
 	g << '\t\t\tch.send(${ctx.frame})'
 	if t.detail_id != 0 {
+		g << '\t\t\tdetail_due = true'
+	}
+	g << '\t\t}'
+	if t.detail_id != 0 {
+		// LoadDetail is its OWN pending frame, not a second send inside the CpuLoad block: the
+		// CpuLoad send may take the last free FIFO slot (a trace dump or a busy bus keeps it
+		// nearly full), and a detail that failed there waited a whole period. It is retried every
+		// pass, under the same gate, until accepted. last_overruns advances ONLY on an accepted
+		// frame, so the overrun delta is never deducted from a report that never left (emb#259 r1).
+		g << '\t\tif detail_due${ctx.gate} {'
 		g << '\t\t\tovr := ${ctx.det_ovr}'
 		g << ctx.det_lines
 		g << '\t\t\tmut ${ctx.detframe} := can.Frame{'
@@ -1673,15 +1683,12 @@ fn (t TelemProducer) bus_tick(ctx BusCtx) []string {
 		g << '\t\t\tfor ${ctx.idx} in 0 .. 8 {'
 		g << '\t\t\t\t${ctx.detframe}.data[${ctx.idx}] = detail[${ctx.idx}]'
 		g << '\t\t\t}'
-		// The CpuLoad send above may have taken the last free FIFO slot, so this one can still
-		// fail after the period gate passed. last_overruns advances ONLY on an accepted frame:
-		// the delta stays owed and the next detail frame carries both periods, rather than the
-		// overruns being deducted from a report that never left (emb#259 r1).
 		g << '\t\t\tif ch.send(${ctx.detframe}) {'
 		g << '\t\t\t\tlast_overruns = ovr'
+		g << '\t\t\t\tdetail_due = false'
 		g << '\t\t\t}'
+		g << '\t\t}'
 	}
-	g << '\t\t}'
 	return g
 }
 
@@ -2291,6 +2298,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '\tmut last_telem := u64(0)'
 			if m.telem.detail_id != 0 {
 				glue << '\tmut last_overruns := u32(0) // for the per-period overrun count'
+				glue << '\tmut detail_due := false // LoadDetail owed until the FIFO accepts it'
 			}
 		}
 		glue << '\ttick_us := u64(${m.target.tick_us})'
@@ -2538,6 +2546,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\ttelem_period_us := u64(${m.telem.period_us})'
 					if m.telem.detail_id != 0 {
 						glue << '\tmut last_overruns := u32(0)'
+						glue << '\tmut detail_due := false // LoadDetail owed until the FIFO accepts it'
 					}
 				}
 				glue << trace_module_init(m)

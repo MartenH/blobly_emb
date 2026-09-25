@@ -64,6 +64,7 @@ pub fn run(can0 can.Channel) {
 	telem_period_us := u64(500000)
 	mut last_telem := u64(0)
 	mut last_overruns := u32(0) // for the per-period overrun count
+	mut detail_due := false // LoadDetail owed until the FIFO accepts it
 	tick_us := u64(1000)
 	mut next_tick := C.board_now_us() + tick_us
 	// trace (comm/trace): this loop is the module runner — fb_hook records each dispatched
@@ -94,6 +95,9 @@ pub fn run(can0 can.Channel) {
 				f.data[i] = frame[i]
 			}
 			ch.send(f)
+			detail_due = true
+		}
+		if detail_due && ch.tx_ready() {
 			ovr := sched.overruns()
 			detail := telem.encode_loaddetail(sched.load_permille_100ms(),
 				sched.load_permille_1s(), sched.load_permille_10s(), ovr - last_overruns)
@@ -106,6 +110,7 @@ pub fn run(can0 can.Channel) {
 			}
 			if ch.send(d) {
 				last_overruns = ovr
+				detail_due = false
 			}
 		}
 		for ch.recv(mut rx) {

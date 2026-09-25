@@ -79,6 +79,16 @@ fn parse_trace(doc toml.Doc, dbc string) TraceCfg {
 					else { panic('loom2v: comm.trace endpoint "${e.name}" has no TraceCfg field — teach parse_trace about it') }
 				}
 			}
+			// Every trace runner speaks STANDARD frames: the routers match `!rx.ext`, the module
+			// fills rsp/record frames with ext = false, and TraceCfg keeps no width to say
+			// otherwise. A 29-bit binding would be silently ignored (cmd, dump_fc) or truncated by
+			// the classic FDCAN backend (rsp, record) — refuse it here, once, for every runner;
+			// syscheck applies the same 11-bit rule to module frames.
+			ext := trace_extended_binding(t)
+			if ext != '' {
+				panic('loom2v: [trace] ${ext} is an extended (29-bit) id — the trace endpoints are ' +
+					'standard frames, use an id <= 0x7FF')
+			}
 		}
 		t.level = (trm['level'] or { toml.Any(t.level) }).string()
 		t.mode = (trm['mode'] or { toml.Any(t.mode) }).string()
@@ -102,6 +112,21 @@ fn parse_trace(doc toml.Doc, dbc string) TraceCfg {
 		}
 	}
 	return t
+}
+
+// trace_extended_binding names the first endpoint bound to a 29-bit id ("cmd 0x18DA00F1"), or ''.
+fn trace_extended_binding(t TraceCfg) string {
+	for name, id in {
+		'cmd':     t.cmd_id
+		'rsp':     t.rsp_id
+		'record':  t.record_id
+		'dump_fc': t.dump_fc_id
+	} {
+		if id > 0x7ff {
+			return '${name} 0x${id.hex()}'
+		}
+	}
+	return ''
 }
 
 // trace_binding resolves one endpoint binding: a literal number is the CAN id (used as-is —
@@ -157,11 +182,6 @@ fn validate_trace_threadx(m Model) {
 		if m.trace.mode != 'ring' {
 			panic('loom2v: [target] kind="threadx" [trace].mode "${m.trace.mode}" is not implemented — ' +
 				'the exec-hook recorder is an overwrite ring frozen by a host stop — use mode = "ring"')
-		}
-		if m.trace.record_id > 0x7ff {
-			panic('loom2v: [target] kind="threadx" [trace].record_id 0x${m.trace.record_id.hex()} is an ' +
-				'extended (29-bit) id, but the classic FDCAN backend sends 11-bit frames — use a ' +
-				'standard id (<= 0x7FF)')
 		}
 		// The exec-hook recorder freezes only on a host stop; it has no overrun-triggered
 		// freeze (m.trace.budget_us is only wired into the software packer's inline hook). A
@@ -335,7 +355,7 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	g << '\t// only feeds it: fb_hook records each dispatched handler, on_cmd applies routed commands,'
 	g << '\t// produce yields the response + dump stream.'
 	g << '\tmut ring := [${m.trace.buffer_records}]trace.Record{}'
-	g << '\tmut tm := trace.new_module(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), 0, ${m.trace.dump_fc_bound},'
+	g << '\tmut tm := trace.new_module(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), ${single_trace_core(m)}, ${m.trace.dump_fc_bound},'
 	g << '\t\ttrace.new_buffer(&ring[0], ${m.trace.buffer_records}, ${mode}, ${m.trace.pre_pct}))'
 	g << '\tmut cap := tm.capture(0, ${m.trace.budget_us}, osal.now_us())'
 	g << '\tsched.set_trace_hook(trace.fb_hook, &cap)'
@@ -413,10 +433,11 @@ fn baremetal_trace_init(m Model) []string {
 		return []string{}
 	}
 	mode := if m.trace.mode == 'oneshot' { '.oneshot' } else { '.ring' }
+	core := single_trace_core(m)
 	return [
 		'\t// trace (comm/trace): this loop is the module runner — fb_hook records each dispatched',
 		'\t// handler, the rx router feeds on_cmd / on_dump_fc, produce() drains the response + dump.',
-		'\tg_tm.init(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), 0, ${m.trace.dump_fc_bound},',
+		'\tg_tm.init(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), ${core}, ${m.trace.dump_fc_bound},',
 		'\t\ttrace.new_buffer(&g_trace_ring[0], ${m.trace.buffer_records}, ${mode}, ${m.trace.pre_pct}))',
 		'\tmut cap := g_tm.capture(0, ${m.trace.budget_us}, C.board_now_us())',
 		'\tsched.set_trace_hook(trace.fb_hook, &cap)',
@@ -424,6 +445,15 @@ fn baremetal_trace_init(m Model) []string {
 		'\tmut rx := can.Frame{}',
 		'\tmut txf := can.Frame{}',
 	]
+}
+
+// single_trace_core: the core id a single-core runner's module reports — the traced partition's
+// configured core, which the manifest assigns every handler to and a TraceCmd mask selects
+// (handle_cmd ignores a mask that does not name its core). Not a literal 0: that answered for the
+// wrong core, or not at all, on any partition declared elsewhere.
+fn single_trace_core(m Model) int {
+	parts := m.part.by_part.keys()
+	return if parts.len > 0 { m.part.core_of[parts[0]] or { 0 } } else { 0 }
 }
 
 // trace_single_serve: the single-core runners' per-pass bus side (host emit_run_trace_host and
