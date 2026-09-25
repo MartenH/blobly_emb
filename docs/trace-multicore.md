@@ -235,9 +235,10 @@ The smallest slice: on a bare-metal `[target]` the superloop IS the module runne
   The image builds with `-enable-globals`; nothing depends on `_vinit` (`lint_vinit.sh` gates it).
 - **clock**: `C.board_now_us()` (the DWT µs counter) as `trace_clock()` for `run_profiled` and the
   capture origin — no osal.
-- **per pass**, after the profiled dispatch and outside the load bracket: a width-exact rx router
+- **per pass**, after the profiled dispatch and outside the load bracket: CpuLoad + LoadDetail
+  FIRST (they get the Tx FIFO before a dump burst can fill it), then a width-exact rx router
   (`cmd` → `on_cmd`, `dump_fc` → `on_dump_fc`; an extended frame never matches), then the
-  `tx_ready`-gated `produce()` drain, then CpuLoad.
+  `tx_ready`-gated `produce()` drain.
 - **idle**: the existing busy-wait to the `tick_us` boundary ([[loom-load-baremetal-pacing]]).
 
 What it refuses (loom2v fails generation): a second partition (there is no satellite to import on

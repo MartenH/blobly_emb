@@ -1,5 +1,6 @@
 module main
 
+import os
 import toml
 
 // A bus can carry no signals at all and still need a partition: the comm thread is where the
@@ -460,4 +461,65 @@ fn test_load_detail_is_retried_until_accepted() {
 	retry_at := g.index('if detail_due && ch.tx_ready() {') or { -1 }
 	assert cpu_at >= 0 && due_at > cpu_at && retry_at > due_at, g
 	assert g.contains('last_overruns = ovr\n\t\t\t\tdetail_due = false'), 'cleared only on an accepted send'
+}
+
+// codex #282 r2 (caused by the r1 core fix): the host runner must RUN on the core it reports — the
+// pin and the module's core come from one source, not the trace bus's core.
+fn test_the_host_runner_runs_on_the_core_it_reports() {
+	m := Model{
+		trace:    TraceCfg{
+			on:    true
+			bus:   'can0'
+			level: 'fb'
+		}
+		bus_core: {
+			'can0': 0
+		}
+		part:     PartMap{
+			by_part: {
+				'app': []toml.Any{}
+			}
+			core_of: {
+				'app': 1
+			}
+		}
+	}
+	g := emit_run_trace_host(m, map[string][]string{}, '', 'app').join('\n')
+	assert g.contains('osal.pin_to_core(1)'), g
+	assert g.contains('u32(0x7e5), 1, false,'), 'the module reports the same core it runs on'
+}
+
+// codex #282 r2: a DBC NAME binding carries its width in the message's ext flag, separate from
+// the id — an EFF message with a small id (0x100) passes the numeric 0x7FF rule, and would then be
+// matched/sent as a standard frame. loom2v must refuse it by the flag. Runs the real generator on
+// trace_demo's config with `cmd` bound to such a message (a panic cannot be caught in-process).
+fn test_an_extended_dbc_binding_is_refused_by_its_flag() {
+	root := @VMODROOT
+	tmp := os.join_path(os.temp_dir(), 'trace_ext_bind_${os.getpid()}')
+	os.mkdir_all(tmp) or {
+		assert false, 'mkdir ${tmp}: ${err}'
+		return
+	}
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	src := os.read_file(os.join_path(root, 'examples', 'trace_demo', 'ecu.toml')) or {
+		assert false, '${err}'
+		return
+	}
+	assert src.contains('cmd            = 0x7E2'), 'trace_demo changed shape — update this test'
+	ecu := os.join_path(tmp, 'ecu.toml')
+	os.write_file(ecu, src.replace('cmd            = 0x7E2', 'cmd            = "TraceCmdX"')) or {
+		panic(err)
+	}
+	dbc := os.join_path(tmp, 'bus.dbc')
+	// bit 31 of a DBC BO_ id marks an extended frame: 0x80000100 = EFF id 0x100
+	os.write_file(dbc, 'VERSION ""\n\nNS_ :\n\nBS_:\n\nBU_: N\n\nBO_ 2147483904 TraceCmdX: 8 N\n') or {
+		panic(err)
+	}
+	r := os.execute('${@VEXE} -enable-globals run ${os.join_path(root, 'tools', 'loom2v')} ${ecu} ${dbc} ' +
+		'${os.join_path(tmp, 'sig.v')} ${os.join_path(tmp, 'ports.v')} ${os.join_path(tmp, 'gen.v')} ' +
+		'${os.join_path(tmp, 'manifest.csv')}')
+	assert r.exit_code != 0, 'loom2v accepted an extended DBC binding: ${r.output}'
+	assert r.output.contains('extended (29-bit) message'), r.output
 }

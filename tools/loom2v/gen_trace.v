@@ -142,6 +142,13 @@ fn trace_binding(trm map[string]toml.Any, key string, want_dlc u8, def u32, dbc 
 		id := dbc_id_of(db, snake(v)) or {
 			panic('loom2v: [trace] ${key} = "${v}" is not a message in ${os.file_name(dbc)}')
 		}
+		// The width lives beside the id in the DBC (candb keeps `ext` separately), so an EFF
+		// message with a small id would pass the numeric 0x7FF rule in parse_trace and then be
+		// matched/sent as a STANDARD frame. Refuse it by its flag, not its value.
+		if dbc_ext_of(db, snake(v)) or { false } {
+			panic('loom2v: [trace] ${key} = "${v}" is an extended (29-bit) message in ' +
+				'${os.file_name(dbc)} — the trace endpoints are standard frames')
+		}
 		if want_dlc > 0 {
 			dlc := dbc_dlc_of(db, snake(v)) or { 0 }
 			if dlc != int(want_dlc) {
@@ -344,7 +351,10 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	mut g := []string{}
 	g << ''
 	g << 'pub fn run(chp can.Channel) {'
-	g << '\tosal.pin_to_core(${m.bus_core[m.trace.bus] or { 0 }})'
+	// ONE loop runs the handlers AND serves the bus, so it runs where the handlers are declared —
+	// the same core the module reports (single_trace_core). Pinning to the trace bus's core
+	// instead let the label, the manifest and the actual execution core disagree (codex #282 r2).
+	g << '\tosal.pin_to_core(${single_trace_core(m)})'
 	g << '\tmut ch := chp'
 	g << '\tmut st := Partition_${part}_state{}'
 	g << '\tmut sched := loom.Scheduler{}'
