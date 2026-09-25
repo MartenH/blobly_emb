@@ -390,6 +390,93 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	return g
 }
 
+// baremetal_trace_on: P3c-0 — the bare-metal superloop is the single-core module runner. The shape
+// itself was already cleared by trace_shape_blocker; this only picks the emitter.
+fn baremetal_trace_on(m Model) bool {
+	return m.trace.on && m.target.on && !m.target.threadx
+}
+
+// validate_trace_baremetal rejects what the superloop cannot honour — the parts of a [trace] block
+// the SHAPE policy does not see. The loop receives ONE channel (the telemetry bus, opened by
+// main.v), so the trace must ride it; and there are no threads, so FB records are the whole trace.
+fn validate_trace_baremetal(m Model) {
+	if m.trace.level != 'fb' {
+		panic('loom2v: [target] kind="baremetal" [trace] level "${m.trace.level}" is not generated — ' +
+			'the superloop has no threads or ISR hooks, so it captures FB records only (level = "fb")')
+	}
+	tbus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
+	if !m.telem.on || m.telem.bus == '' || tbus != m.telem.bus {
+		panic('loom2v: [target] kind="baremetal" [trace] must ride the [telemetry] bus — the ' +
+			'superloop owns exactly one channel, the one run() is handed (got trace bus "${tbus}", ' +
+			'telemetry bus "${m.telem.bus}")')
+	}
+}
+
+// baremetal_trace_globals: the module and its ring in __global, never run()'s frame — the module
+// carries an ISO-TP link and a full-payload scratch (stack-copy-boot-hang). Zero-filled bss; the
+// module is built IN PLACE by init() (baremetal_trace_init), so nothing depends on _vinit.
+fn baremetal_trace_globals(m Model) []string {
+	if !baremetal_trace_on(m) {
+		return []string{}
+	}
+	return [
+		'',
+		'__global (',
+		'\tg_trace_ring [${m.trace.buffer_records}]trace.Record',
+		'\tg_tm         trace.TraceModule',
+		')',
+		'',
+		'fn trace_clock() u64 {',
+		'\treturn C.board_now_us()',
+		'}',
+	]
+}
+
+// baremetal_trace_init: build the module in place, wire the FB capture, install the Loom hook.
+// The capture is small and run() never returns, so it lives in the frame.
+fn baremetal_trace_init(m Model) []string {
+	if !baremetal_trace_on(m) {
+		return []string{}
+	}
+	mode := if m.trace.mode == 'oneshot' { '.oneshot' } else { '.ring' }
+	return [
+		'\t// trace (comm/trace): this loop is the module runner — fb_hook records each dispatched',
+		'\t// handler, the rx router feeds on_cmd / on_dump_fc, produce() drains the response + dump.',
+		'\tg_tm.init(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), 0, ${m.trace.dump_fc_bound},',
+		'\t\ttrace.new_buffer(&g_trace_ring[0], ${m.trace.buffer_records}, ${mode}, ${m.trace.pre_pct}))',
+		'\tmut cap := g_tm.capture(0, ${m.trace.budget_us}, C.board_now_us())',
+		'\tsched.set_trace_hook(trace.fb_hook, &cap)',
+		'\tmut rx := can.Frame{}',
+		'\tmut txf := can.Frame{}',
+	]
+}
+
+// baremetal_trace_bus: the per-pass bus side — the generated router match (width-exact: an
+// extended frame sharing a numeric id is not a trace command), then the tx_ready-gated drain so a
+// stuck bus never wedges the loop. Runs after the dispatch, outside the load bracket.
+fn baremetal_trace_bus(m Model) []string {
+	if !baremetal_trace_on(m) {
+		return []string{}
+	}
+	mut g := []string{}
+	g << '\t\tfor ch.recv(mut rx) {'
+	g << '\t\t\tif rx.ext {'
+	g << '\t\t\t\tcontinue'
+	g << '\t\t\t}'
+	g << '\t\t\tmatch rx.id {'
+	g << '\t\t\t\tu32(0x${m.trace.cmd_id.hex()}) { g_tm.on_cmd(rx) } // trace.cmd'
+	if m.trace.dump_fc_bound {
+		g << '\t\t\t\tu32(0x${m.trace.dump_fc_id.hex()}) { g_tm.on_dump_fc(t1, rx) } // trace.dump_fc'
+	}
+	g << '\t\t\t\telse {}'
+	g << '\t\t\t}'
+	g << '\t\t}'
+	g << '\t\tfor ch.tx_ready() && g_tm.produce(t1, mut txf) {'
+	g << '\t\t\tch.send(txf)'
+	g << '\t\t}'
+	return g
+}
+
 // trace_fb_hooks: the FB enter/exit family on the ThreadX target — a Loom trace hook per FB
 // thread that hands each dispatched handler to the exec-hook recorder (trace_fb, IRQ-safe) so FB
 // bars appear inside the thread lanes. Emitted only for level = "all". Handler ids are GLOBAL

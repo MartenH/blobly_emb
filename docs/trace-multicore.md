@@ -4,19 +4,19 @@
 > dump on vcan, verified end to end (four ISO-TP transfers: core 0's window as 64+2 records in two
 > self-describing continuation blocks, then core 1's). `examples/trace_comm` answers the
 > BRIDGE-OWNER shape: core 0's block carries the `comm_can0` lane as THREAD spans, core 1's the
-> app partition's FB spans. P3c-0 (bare-metal single-core) is still regressed and `enabled =
-> false`; P3c-1 (real thread/ISR capture) is the larger remaining slice.
+> app partition's FB spans. P3c-0 (bare-metal single-core, `examples/h735_app`) is generated
+> again (§5.0); P3c-1 (real thread/ISR capture) is the larger remaining slice.
 >
 > **WHAT GENERATES TODAY (#191).** loom2v emits a host trace runner for ONE partition
 > (single-core), for TWO (P3a, this document's §3 — one dump owner plus one satellite core), and
 > for a COM BRIDGE plus one app partition (P3b, §4.2 — the bridge owns the trace bus and the
 > module, its drain spans recorded through `trace.thread_hook`).
 > `examples/trace_multicore` is the two-core case and `examples/trace_comm` the bridge-owner one;
-> both answer a dump. Three partitions are refused, and so is the one shape still ungenerated —
-> the bare-metal `h735_app`, which carries `[trace] enabled = false`. Since #191 an enabled
+> both answer a dump. On a bare-metal `[target]` the superloop itself is the single-core module
+> runner (P3c-0, `examples/h735_app`, §5.0). Three partitions are refused. Since #191 an enabled
 > `[trace]` on a shape loom2v cannot generate FAILS generation rather than warning and building a
 > silent no-op, so a config either gets trace or gets an error naming the one condition that
-> tripped. §3 and §4.2 are live; §5's P3c-0 text is design for a shape not yet generated.
+> tripped. §3, §4.2 and §5.0 are live.
 > The design writeup for the multi-core trace-codegen phase, extending the inline single-core path
 > from #54/#55/#56. **P3a is shipped** — `examples/trace_multicore` (two partitions, cores 0+1): a
 > single dump command streams each core's window as self-describing blocks (multi-block with a
@@ -24,10 +24,8 @@
 > cross-core freeze, decoded natively by blobly_net. **P3b (comm thread visible) is shipped** — the
 > per-bus COM bridge is a traced `comm_<bus>` thread (`examples/trace_comm`), different-bus reusing
 > the P3a owner; same-bus (piggyback) is the remaining follow-up. **P3c-0 (bare-metal single-core
-> trace) is DESIGNED, not generated** — `examples/h735_app` describes the inline machinery on the
-> board's DWT clock (§5), but its `[trace]` is `enabled = false`: the bare-metal superloop has no
-> module runner, and since #191 loom2v rejects an enabled `[trace]` there rather than build a
-> silent no-op, so that example is telemetry-only today. P3c-1 (real preemptive thread/ISR capture via the TX
+> trace) is generated** — `examples/h735_app`'s superloop serves the TraceModule on the board's
+> DWT clock (§5.0). P3c-1 (real preemptive thread/ISR capture via the TX
 > execution-change hooks) is the larger remaining slice. The P3 phases carry **no backward-compat
 > burden** (§4.4).
 
@@ -71,7 +69,7 @@ The panics that mark the boundary (all in `gen.v` around 458–475, 1126, 1133):
 | `trace codegen currently supports a single partition on core 0 only` | [§3 (P3a)](#p3a--host-multi-core-fb-only) |
 | `level "…" needs thread/ISR events … single-core host capture does not have` | [§4 (P3b)](#p3b--comm-thread-visible) / [§5 (P3c)](#p3c--threadx-target) |
 | `cross-bus telemetry with inline trace is not generated yet` | [§3 (P3a)](#p3a--host-multi-core-fb-only) |
-| `[trace] on a bare-metal [target] supports exactly one partition` (single-core is BUILT; multi-partition target) | [§5.1 (P3c-1)](#51-real-threads--isrs--p3c-1) |
+| `the bare-metal superloop traces exactly one partition` (single-core is generated; multi-partition target) | [§5.1 (P3c-1)](#51-real-threads--isrs--p3c-1) |
 
 ## 2. What "the comm thread visible in the trace" means
 
@@ -225,29 +223,27 @@ slice per drain cycle*, an interval, not a real context switch.
 
 ## 5. ThreadX target — **P3c**
 
-### 5.0 Bare-metal single-core trace — **P3c-0 (BUILT, then regressed in generation — #191)**
+### 5.0 Bare-metal single-core trace — **P3c-0 (generated, `examples/h735_app`)**
 
-> **This section is HISTORICAL/design text, not current behaviour.** It describes P3c-0 as it was
-> built and shipped. The emitter no longer generates it: a bare-metal `[target]` has no module
-> runner, and since #191 loom2v REJECTS an enabled `[trace]` there rather than build a silent
-> no-op. So do NOT follow the "add `[trace]` to its `ecu.toml`, regenerate, cross-compile"
-> instruction below — that now fails generation by design. `examples/h735_app` carries
-> `[trace] enabled = false`. What follows is the shape to restore.
+The smallest slice: on a bare-metal `[target]` the superloop IS the module runner — the host
+`trace_demo` shape, with one loop owning the schedule and the one channel. loom2v wires comm/trace's
+`TraceModule` into the existing superloop (`baremetal_trace_*` in
+[gen_trace.v](../tools/loom2v/gen_trace.v)) rather than emitting a second runner:
 
-The smallest, provable-now slice: `[trace]` on a single-core `[target]` reuses the **inline** trace
-machinery verbatim — the same `trace_capture` hook, `TraceCmd`/`TraceRsp` handshake, ISO-TP dump of
-the frozen ring, HandlerStat heartbeat, and CpuLoad as the host `trace_demo`. The only substitutions
-the emitter makes for the target (`trace_target := trace_on && target_on`, [gen.v](../tools/loom2v/gen.v)):
+- **module + ring in `__global`**, built in place with `init()` — the module carries an ISO-TP link
+  and a full-payload scratch, which must not be a stack copy on target ([[stack-copy-boot-hang]]).
+  The image builds with `-enable-globals`; nothing depends on `_vinit` (`lint_vinit.sh` gates it).
+- **clock**: `C.board_now_us()` (the DWT µs counter) as `trace_clock()` for `run_profiled` and the
+  capture origin — no osal.
+- **per pass**, after the profiled dispatch and outside the load bracket: a width-exact rx router
+  (`cmd` → `on_cmd`, `dump_fc` → `on_dump_fc`; an extended frame never matches), then the
+  `tx_ready`-gated `produce()` drain, then CpuLoad.
+- **idle**: the existing busy-wait to the `tick_us` boundary ([[loom-load-baremetal-pacing]]).
 
-- **clock**: `C.board_now_us()` (the board's DWT µs counter) instead of `osal.now_us()`, via a small
-  `board_clock()` V wrapper passed to `run_profiled`/`account`. No osal is imported or referenced.
-- **idle**: a busy-wait to a fixed `tick_us` boundary (real idle for load accounting — [[loom-load-baremetal-pacing]]), instead of `osal.sleep_us`.
-- **no `pin_to_core`** (single core).
-
-Shipped, at the time, in `examples/h735_app`: the generated `gen/loom_gen.v` built V→C→`arm-none-eabi-gcc`→`app.bin` and links against the FDCAN
-backend (`blob_can_recv`) + board bring-up. It's the host-proven flight recorder, now on silicon,
-over the one FDCAN bus. It captures **fb + derived thread/idle** records only — there are still no
-real preemptive switches or ISRs on a polled superloop, so `level` stays `thread+fb`/`all`.
+What it refuses (loom2v fails generation): a second partition (there is no satellite to import on
+one core — that is the ThreadX multi-image shape), any COM bridge, a `level` other than `"fb"` (a
+polled superloop has no threads or ISRs to record), and a trace bus other than the `[telemetry]`
+bus, since `run()` is handed exactly that one channel.
 
 ### 5.1 Real threads + ISRs — **P3c-1**
 

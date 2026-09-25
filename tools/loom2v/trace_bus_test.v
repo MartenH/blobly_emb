@@ -165,12 +165,14 @@ fn test_a_third_partition_blocks_trace() {
 	assert b.contains('import slot'), 'it must say WHY three is refused, got: ${b}'
 }
 
-fn test_the_baremetal_superloop_blocks_trace() {
+// P3c-0: the superloop is the single-core module runner, so one partition with no bridge is a
+// generated shape — the blocker this replaced said "no module runner" for every bare-metal ECU.
+fn test_the_baremetal_superloop_traces_one_partition() {
 	m := Model{
 		trace:  TraceCfg{
-			on:  true
-			bus: 'can0'
-			dump_fc_bound: true
+			on:    true
+			bus:   'can0'
+			level: 'fb'
 		}
 		target: TargetCfg{
 			on: true
@@ -181,7 +183,53 @@ fn test_the_baremetal_superloop_blocks_trace() {
 			}
 		}
 	}
-	assert trace_shape_blocker(m, 'can0').contains('bare-metal')
+	assert trace_shape_blocker(m, 'can0') == ''
+	assert baremetal_trace_on(m)
+}
+
+// ...but it has one loop and one core: a second partition is not a satellite it can import.
+fn test_a_second_baremetal_partition_blocks_trace() {
+	m := Model{
+		trace:  TraceCfg{
+			on:            true
+			bus:           'can0'
+			dump_fc_bound: true
+		}
+		target: TargetCfg{
+			on: true
+		}
+		part:   PartMap{
+			by_part: {
+				'app':  []toml.Any{}
+				'app2': []toml.Any{}
+			}
+		}
+	}
+	b := trace_shape_blocker(m, 'can0')
+	assert b.contains('bare-metal') && b.contains('2'), b
+}
+
+// The superloop's router must be id-width-exact (an extended frame sharing 0x7E2 is not a trace
+// command), and the flow-control arm exists only when dump_fc is bound.
+fn test_the_baremetal_router_is_width_exact() {
+	mut m := Model{
+		trace:  TraceCfg{
+			on:     true
+			cmd_id: 0x7E2
+		}
+		target: TargetCfg{
+			on: true
+		}
+	}
+	raw := baremetal_trace_bus(m).join('\n')
+	assert raw.contains('if rx.ext {')
+	assert raw.contains('u32(0x7e2) { g_tm.on_cmd(rx) }')
+	assert !raw.contains('on_dump_fc')
+	m.trace.dump_fc_bound = true
+	assert baremetal_trace_bus(m).join('\n').contains('u32(0x7e6) { g_tm.on_dump_fc(t1, rx) }')
+	// ThreadX is its own path: none of this is emitted there
+	m.target.threadx = true
+	assert baremetal_trace_bus(m) == []string{}
 }
 
 // The bridge conflict is about the RUNNER, not the bus: trace_comm traces on can1 and bridges on

@@ -1996,6 +1996,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		tx_sleep_ticks := if m.target.tick_us / 1000 > 1 { m.target.tick_us / 1000 } else { u64(1) }
 		glue << ''
 		glue << 'fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)'
+		glue << baremetal_trace_globals(m)
 		if m.io_points.len > 0 {
 			glue << 'fn C.io_exec_add(u32)  // io serve-exec µs, single writer (io thread)'
 			glue << 'fn C.io_exec_us() u32 // FB thread reads to subtract io preemption'
@@ -2297,6 +2298,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '\tmut next_tick := C.board_now_us() + tick_us'
 		}
 		glue << trace_fb_install(m)
+		glue << baremetal_trace_init(m)
 		fb_io := m.io_points.len > 0 // subtract higher-prio io preemption from the wall bracket
 		glue << '\tfor {'
 		glue << '\t\tt0 := C.board_now_us()'
@@ -2308,7 +2310,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			// source (an idle accountant thread) — the eventual clean model (codex emb#150 r11).
 			glue << '\t\tio0 := C.io_exec_us() // io is higher priority: exclude its preemption'
 		}
-		if m.trace.on && m.trace.level == 'all' {
+		if m.trace.on && (m.trace.level == 'all' || baremetal_trace_on(m)) {
 			// profiled dispatch: run_profiled accounts internally and fires the FB trace hook
 			if fb_io {
 				glue << '\t\tsched.run_profiled_excl(trace_clock, io_exec_clock)'
@@ -2341,6 +2343,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '\t\t\tsched.mark_overrun()'
 			glue << '\t\t}'
 		}
+		glue << baremetal_trace_bus(m)
 		if comm_thread_on || (m.target.threadx && m.io_points.len > 0) {
 			// Publish this core's load to the volatile scratch (single writer) — for the
 			// comm thread's CpuLoad producer, or (no-comm + io, emb#150 r5) so the inline
@@ -3459,8 +3462,10 @@ fn main() {
 	if tctx.on() {
 		validate_trace_bridge_owner(m, tctx)
 	}
-	trace_host := trace_owns_run && trace_nparts == 1 && !tctx.on()
-	trace_multicore := trace_owns_run && trace_nparts == 2 && !tctx.on()
+	// The host runners replace run(); a target keeps its own run() and the bare-metal superloop
+	// wires the module into it (P3c-0, baremetal_trace_*), so neither host runner applies there.
+	trace_host := trace_owns_run && trace_nparts == 1 && !tctx.on() && !m.target.on
+	trace_multicore := trace_owns_run && trace_nparts == 2 && !tctx.on() && !m.target.on
 	// the trace-host runner has no eth spawn wiring — an eth tx frame there
 	// would generate a comm thread nothing starts (silently dead)
 	if trace_owns_run && m.eth_frames.len > 0 {
@@ -3506,6 +3511,8 @@ fn main() {
 		// working one until nothing answers on the bus (#191). Name the one condition that tripped.
 		panic('loom2v: [trace] is not generated for this ECU — ${trace_shape_blocker(m, trace_bus)} ' +
 			'(docs/com-modules.md). Set [trace] enabled = false to build without it deliberately.')
+	} else if baremetal_trace_on(m) {
+		validate_trace_baremetal(m)
 	}
 
 	// [[signal]] -> the model, then emit the `sig` module.

@@ -6,6 +6,7 @@ import ports
 import app
 import loom
 import comm.telem
+import comm.trace
 import driver.can
 
 struct Partition_app_state {
@@ -43,6 +44,15 @@ fn handler_app_heartbeat_on_100ms(ctx voidptr) {
 
 fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)
 
+__global (
+	g_trace_ring [64]trace.Record
+	g_tm         trace.TraceModule
+)
+
+fn trace_clock() u64 {
+	return C.board_now_us()
+}
+
 pub fn run(can0 can.Channel) {
 	mut ch := can0
 	mut st := Partition_app_state{}
@@ -56,13 +66,33 @@ pub fn run(can0 can.Channel) {
 	mut last_overruns := u32(0) // for the per-period overrun count
 	tick_us := u64(1000)
 	mut next_tick := C.board_now_us() + tick_us
+	// trace (comm/trace): this loop is the module runner — fb_hook records each dispatched
+	// handler, the rx router feeds on_cmd / on_dump_fc, produce() drains the response + dump.
+	g_tm.init(u32(0x7e3), u32(0x7e5), 0, true,
+		trace.new_buffer(&g_trace_ring[0], 64, .ring, 50))
+	mut cap := g_tm.capture(0, 500, C.board_now_us())
+	sched.set_trace_hook(trace.fb_hook, &cap)
+	mut rx := can.Frame{}
+	mut txf := can.Frame{}
 	for {
 		t0 := C.board_now_us()
-		sched.run(t0)
+		sched.run_profiled(trace_clock)
 		t1 := C.board_now_us()
-		sched.account(t1 - t0, t1) // handler time -> this core's load
 		if t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun
 			sched.mark_overrun()
+		}
+		for ch.recv(mut rx) {
+			if rx.ext {
+				continue
+			}
+			match rx.id {
+				u32(0x7e2) { g_tm.on_cmd(rx) } // trace.cmd
+				u32(0x7e6) { g_tm.on_dump_fc(t1, rx) } // trace.dump_fc
+				else {}
+			}
+		}
+		for ch.tx_ready() && g_tm.produce(t1, mut txf) {
+			ch.send(txf)
 		}
 		if t1 - last_telem >= telem_period_us && ch.tx_ready() {
 			last_telem = t1
