@@ -53,6 +53,8 @@ pub fn run(chp can.Channel) {
 		trace.new_buffer(&ring[0], 64, .ring, 50))
 	mut cap := tm.capture(0, 500, osal.now_us())
 	sched.set_trace_hook(trace.fb_hook, &cap)
+	tm.arm() // record from startup, like every other runner: a flight recorder that waits
+	// to be armed misses the boot it was installed to catch
 	mut last_telem := u64(0)
 	mut rx := can.Frame{}
 	mut txf := can.Frame{}
@@ -63,8 +65,10 @@ pub fn run(chp can.Channel) {
 		// run_profiled_excl -> account(busy, clock())). Calling it again charged the same
 		// pass twice, so every traced core reported roughly double its real load and a
 		// busy one clamped at 100% (codex #270 r2).
-		// the generated router match: each rx binding dispatches to its endpoint handler
 		for ch.recv(mut rx) {
+			if rx.ext {
+				continue
+			}
 			match rx.id {
 				u32(0x7e2) { tm.on_cmd(rx) } // trace.cmd
 				else {}

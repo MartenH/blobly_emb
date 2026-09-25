@@ -256,7 +256,8 @@ Real threads + ISRs, bare-metal. This is the largest slice and genuinely differe
   generated here.
 - The comm thread becomes a real ThreadX thread (rx driven by the Rx ISR, tx periodic) rather than a
   polled loop.
-- `thread+isr` / `all` levels light up fully. Bare-metal + trace panic lifts.
+- `thread+isr` / `all` levels light up fully. (Bare-metal FB-only trace no longer waits on this:
+  P3c-0, §5.0.)
 
 This depends on the ThreadX port work and is the natural place to stop for now — P3a/P3b deliver the
 "comm thread visible" goal on the sim-first host, which is where everything is proven before target.

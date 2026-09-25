@@ -27,6 +27,10 @@ pub:
 	bridge_count        int  // distinct CAN buses with bridge work; the owner loop drains one
 	multi_lane          bool // two traced entities (owner + satellite): P3a's two cores, or P3b
 	dump_fc_bound       bool // [trace].dump_fc is bound -> the ISO-TP block dump
+	// The bare-metal superloop's own limits (P3c-0); ignored for every other shape:
+	level         string // [trace].level — a polled superloop records FB dispatches only ("fb")
+	off_telem_bus bool   // the trace bus is not the enabled [telemetry] bus run() is handed
+	push_ms_set   bool   // [trace].push_ms asks for the HandlerStat heartbeat no runner emits here
 }
 
 // trace_shape_blocker names the ONE reason [trace] cannot be generated on this shape, or '' when it
@@ -49,6 +53,17 @@ pub fn trace_shape_blocker(s TraceShape) string {
 		}
 		if s.has_bridge {
 			return 'the bare-metal superloop has no COM bridge to share its trace loop with'
+		}
+		if s.level != 'fb' {
+			return 'the bare-metal superloop records FB dispatches only — it has no threads or ' +
+				'ISR hooks, so [trace].level must be "fb" (got "${s.level}")'
+		}
+		if s.off_telem_bus {
+			return 'the bare-metal superloop owns one channel, the [telemetry] bus run() is ' +
+				'handed — [trace] must ride it, with telemetry enabled'
+		}
+		if s.push_ms_set {
+			return 'the bare-metal superloop sends no HandlerStat heartbeat — remove [trace].push_ms'
 		}
 	}
 	if s.partition_count < 1 || s.partition_count > 2 {

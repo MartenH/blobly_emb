@@ -72,6 +72,7 @@ pub fn run(can0 can.Channel) {
 		trace.new_buffer(&g_trace_ring[0], 64, .ring, 50))
 	mut cap := g_tm.capture(0, 500, C.board_now_us())
 	sched.set_trace_hook(trace.fb_hook, &cap)
+	g_tm.arm() // record from boot: the overrun a flight recorder exists for may be the first
 	mut rx := can.Frame{}
 	mut txf := can.Frame{}
 	for {
@@ -80,19 +81,6 @@ pub fn run(can0 can.Channel) {
 		t1 := C.board_now_us()
 		if t1 - t0 > tick_us { // pass exceeded its tick budget -> overrun
 			sched.mark_overrun()
-		}
-		for ch.recv(mut rx) {
-			if rx.ext {
-				continue
-			}
-			match rx.id {
-				u32(0x7e2) { g_tm.on_cmd(rx) } // trace.cmd
-				u32(0x7e6) { g_tm.on_dump_fc(t1, rx) } // trace.dump_fc
-				else {}
-			}
-		}
-		for ch.tx_ready() && g_tm.produce(t1, mut txf) {
-			ch.send(txf)
 		}
 		if t1 - last_telem >= telem_period_us && ch.tx_ready() {
 			last_telem = t1
@@ -119,6 +107,19 @@ pub fn run(can0 can.Channel) {
 			if ch.send(d) {
 				last_overruns = ovr
 			}
+		}
+		for ch.recv(mut rx) {
+			if rx.ext {
+				continue
+			}
+			match rx.id {
+				u32(0x7e2) { g_tm.on_cmd(rx) } // trace.cmd
+				u32(0x7e6) { g_tm.on_dump_fc(t1, rx) } // trace.dump_fc
+				else {}
+			}
+		}
+		for ch.tx_ready() && g_tm.produce(t1, mut txf) {
+			ch.send(txf)
 		}
 		for C.board_now_us() < next_tick {} // idle to the tick (real idle)
 		next_tick += tick_us

@@ -268,6 +268,8 @@ pub mut:
 	// cmd/rsp/dump_fc protocol is host-only, not emitted on the threadx target.)
 	trace_on          bool
 	trace_bus         string // [trace].bus resolved to its interface (else the telemetry bus)
+	trace_level       string // [trace].level (parse_trace's default "thread+fb")
+	trace_push_ms_set bool   // [trace].push_ms present (the bare-metal superloop refuses it)
 	trace_record_id   u32
 	trace_record_name string // a DBC message NAME binding (resolved against the bus DBC)
 	trace_rsp_id      u32    // the TraceModule also transmits command RESPONSES (default 0x7e3)
@@ -1005,6 +1007,8 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 		v.trace_on = (trm['enabled'] or { toml.Any(true) }).bool()
 		tb := m_str(trm, 'bus')
 		v.trace_bus = key_iface[tb] or { tb }
+		v.trace_level = (trm['level'] or { toml.Any('thread+fb') }).string()
+		v.trace_push_ms_set = 'push_ms' in trm
 		if v.trace_on {
 			v.trace_record_id, v.trace_record_name = binding_id(trm, 'record', 0x7e5)
 			v.trace_rsp_id, v.trace_rsp_name = binding_id(trm, 'rsp', 0x7e3)

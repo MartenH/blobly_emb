@@ -2119,6 +2119,53 @@ fn test_host_trace_detail_not_counted() {
 	assert !errs(validate_system(s)).any(it.contains('0x7a1')), errs(validate_system(s)).str()
 }
 
+// P3c-0: a traced BARE-METAL node keeps its own superloop, LoadDetail included — unlike the
+// host runner above, its detail id IS on the wire and a peer reusing it collides.
+fn test_baremetal_trace_detail_is_counted() {
+	mut s := clean_system()
+	s.nodes[0].view.is_threadx = false
+	s.nodes[0].view.is_baremetal = true
+	s.nodes[0].view.has_telemetry = true
+	s.nodes[0].view.telem_bus = 'can0'
+	s.nodes[0].view.telem_id = 0x7a0
+	s.nodes[0].view.telem_detail_id = 0x7a1 // SENT by the superloop
+	s.nodes[0].view.trace_on = true
+	s.nodes[0].view.trace_level = 'fb'
+	s.nodes[0].view.trace_bus = 'can0'
+	s.nodes[0].view.trace_record_id = 0x7a2
+	s.nodes[0].view.trace_rsp_id = 0x7a3
+	s.nodes[0].view.partition_count = 1
+	s.nodes[0].view.produces = map[string][]string{}
+	s.nodes[0].view.consumes = map[string][]string{}
+	assert trace_generated(s.nodes[0], s), 'the one-partition bare-metal shape is generated'
+	assert !is_trace_host(s.nodes[0], s)
+	s.nodes[1].view.telem_id = 0x7a1 // == node 0's detail id -> a real collision
+	s.nodes[1].view.is_threadx = false
+	s.nodes[1].view.has_telemetry = true
+	s.nodes[1].view.telem_bus = 'can0'
+	assert errs(validate_system(s)).any(it.contains('0x7a1')), errs(validate_system(s)).str()
+}
+
+// ...and syscheck agrees with loom2v about what the superloop refuses (the shared shape policy):
+// a level it cannot record, or a trace bus other than the one channel it owns, reserves nothing.
+fn test_baremetal_trace_refusals_match_loom2v() {
+	mut s := clean_system()
+	s.nodes[0].view.is_threadx = false
+	s.nodes[0].view.is_baremetal = true
+	s.nodes[0].view.has_telemetry = true
+	s.nodes[0].view.telem_bus = 'can0'
+	s.nodes[0].view.trace_on = true
+	s.nodes[0].view.trace_level = 'thread+fb'
+	s.nodes[0].view.partition_count = 1
+	s.nodes[0].view.produces = map[string][]string{}
+	s.nodes[0].view.consumes = map[string][]string{}
+	assert !trace_generated(s.nodes[0], s), 'level thread+fb is refused on bare metal'
+	s.nodes[0].view.trace_level = 'fb'
+	assert trace_generated(s.nodes[0], s)
+	s.nodes[0].view.trace_bus = 'can1'
+	assert !trace_generated(s.nodes[0], s), 'the trace must ride the telemetry bus'
+}
+
 // REQ-TOPO-002: a DBC application frame in an active NM peer range is misread as
 // an alive frame by the NM receiver.
 fn test_app_frame_in_nm_range_is_error() {

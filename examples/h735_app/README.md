@@ -44,6 +44,13 @@ The Governor peaks the command **past a full 1 ms slot**, so the demo also exerc
 the load recedes. (Drop `iters_max` in `app/fbs.v` to ~120k for a pure in-budget
 breathing curve that never overruns.)
 
+The superloop is also the **trace runner** (`[trace]`, P3c-0 — docs/trace-multicore.md §5.0):
+every FB dispatch is a record in a 64-entry ring, armed from boot, and a handler over 500 µs
+freezes it (the flight-recorder trigger — the Governor's peak trips it). A host drives it on
+the same bus: **`0x7E2`** TraceCmd in, **`0x7E3`** TraceRsp out, the frozen window as an
+ISO-TP block dump on **`0x7E5`** with flow control on **`0x7E6`** — the same protocol as the
+host `trace_demo`. Handlers only: a polled superloop has no threads or ISRs to record.
+
 ## How it's generated
 
 `loom2v` reads `ecu.toml`. The `[target] kind = "baremetal"` block selects a

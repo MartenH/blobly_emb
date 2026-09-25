@@ -339,6 +339,8 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	g << '\t\ttrace.new_buffer(&ring[0], ${m.trace.buffer_records}, ${mode}, ${m.trace.pre_pct}))'
 	g << '\tmut cap := tm.capture(0, ${m.trace.budget_us}, osal.now_us())'
 	g << '\tsched.set_trace_hook(trace.fb_hook, &cap)'
+	g << '\ttm.arm() // record from startup, like every other runner: a flight recorder that waits'
+	g << '\t// to be armed misses the boot it was installed to catch'
 	if telem_on {
 		g << '\tmut last_telem := u64(0)'
 	}
@@ -351,19 +353,7 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	g << '		// run_profiled_excl -> account(busy, clock())). Calling it again charged the same'
 	g << '		// pass twice, so every traced core reported roughly double its real load and a'
 	g << '		// busy one clamped at 100% (codex #270 r2).'
-	g << '\t\t// the generated router match: each rx binding dispatches to its endpoint handler'
-	g << '\t\tfor ch.recv(mut rx) {'
-	g << '\t\t\tmatch rx.id {'
-	g << '\t\t\t\tu32(0x${m.trace.cmd_id.hex()}) { tm.on_cmd(rx) } // trace.cmd'
-	if m.trace.dump_fc_bound {
-		g << '\t\t\t\tu32(0x${m.trace.dump_fc_id.hex()}) { tm.on_dump_fc(loom_t1, rx) } // trace.dump_fc'
-	}
-	g << '\t\t\t\telse {}'
-	g << '\t\t\t}'
-	g << '\t\t}'
-	g << '\t\tfor ch.tx_ready() && tm.produce(loom_t1, mut txf) {'
-	g << '\t\t\tch.send(txf)'
-	g << '\t\t}'
+	g << trace_single_serve(m, 'tm', 'loom_t1')
 	if telem_on {
 		g << '\t\tnow := osal.now_us()'
 		// tx_ready-gated like every other send on this loop: the trace drain above can leave the
@@ -394,22 +384,6 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 // itself was already cleared by trace_shape_blocker; this only picks the emitter.
 fn baremetal_trace_on(m Model) bool {
 	return m.trace.on && m.target.on && !m.target.threadx
-}
-
-// validate_trace_baremetal rejects what the superloop cannot honour — the parts of a [trace] block
-// the SHAPE policy does not see. The loop receives ONE channel (the telemetry bus, opened by
-// main.v), so the trace must ride it; and there are no threads, so FB records are the whole trace.
-fn validate_trace_baremetal(m Model) {
-	if m.trace.level != 'fb' {
-		panic('loom2v: [target] kind="baremetal" [trace] level "${m.trace.level}" is not generated — ' +
-			'the superloop has no threads or ISR hooks, so it captures FB records only (level = "fb")')
-	}
-	tbus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
-	if !m.telem.on || m.telem.bus == '' || tbus != m.telem.bus {
-		panic('loom2v: [target] kind="baremetal" [trace] must ride the [telemetry] bus — the ' +
-			'superloop owns exactly one channel, the one run() is handed (got trace bus "${tbus}", ' +
-			'telemetry bus "${m.telem.bus}")')
-	}
 }
 
 // baremetal_trace_globals: the module and its ring in __global, never run()'s frame — the module
@@ -446,35 +420,42 @@ fn baremetal_trace_init(m Model) []string {
 		'\t\ttrace.new_buffer(&g_trace_ring[0], ${m.trace.buffer_records}, ${mode}, ${m.trace.pre_pct}))',
 		'\tmut cap := g_tm.capture(0, ${m.trace.budget_us}, C.board_now_us())',
 		'\tsched.set_trace_hook(trace.fb_hook, &cap)',
+		'\tg_tm.arm() // record from boot: the overrun a flight recorder exists for may be the first',
 		'\tmut rx := can.Frame{}',
 		'\tmut txf := can.Frame{}',
 	]
 }
 
-// baremetal_trace_bus: the per-pass bus side — the generated router match (width-exact: an
-// extended frame sharing a numeric id is not a trace command), then the tx_ready-gated drain so a
-// stuck bus never wedges the loop. Runs after the dispatch, outside the load bracket.
-fn baremetal_trace_bus(m Model) []string {
-	if !baremetal_trace_on(m) {
-		return []string{}
-	}
+// trace_single_serve: the single-core runners' per-pass bus side (host emit_run_trace_host and
+// the bare-metal superloop, which differ only in where the module lives) — the generated router
+// match, then the tx_ready-gated drain so a stuck bus never wedges the loop. The match is
+// id-width-exact: an extended frame that shares a numeric id is not a trace command.
+fn trace_single_serve(m Model, tm string, now string) []string {
 	mut g := []string{}
 	g << '\t\tfor ch.recv(mut rx) {'
 	g << '\t\t\tif rx.ext {'
 	g << '\t\t\t\tcontinue'
 	g << '\t\t\t}'
 	g << '\t\t\tmatch rx.id {'
-	g << '\t\t\t\tu32(0x${m.trace.cmd_id.hex()}) { g_tm.on_cmd(rx) } // trace.cmd'
+	g << '\t\t\t\tu32(0x${m.trace.cmd_id.hex()}) { ${tm}.on_cmd(rx) } // trace.cmd'
 	if m.trace.dump_fc_bound {
-		g << '\t\t\t\tu32(0x${m.trace.dump_fc_id.hex()}) { g_tm.on_dump_fc(t1, rx) } // trace.dump_fc'
+		g << '\t\t\t\tu32(0x${m.trace.dump_fc_id.hex()}) { ${tm}.on_dump_fc(${now}, rx) } // trace.dump_fc'
 	}
 	g << '\t\t\t\telse {}'
 	g << '\t\t\t}'
 	g << '\t\t}'
-	g << '\t\tfor ch.tx_ready() && g_tm.produce(t1, mut txf) {'
+	g << '\t\tfor ch.tx_ready() && ${tm}.produce(${now}, mut txf) {'
 	g << '\t\t\tch.send(txf)'
 	g << '\t\t}'
 	return g
+}
+
+// baremetal_trace_bus: the superloop's serve step, after the dispatch.
+fn baremetal_trace_bus(m Model) []string {
+	if !baremetal_trace_on(m) {
+		return []string{}
+	}
+	return trace_single_serve(m, 'g_tm', 't1')
 }
 
 // trace_fb_hooks: the FB enter/exit family on the ThreadX target — a Loom trace hook per FB
@@ -575,6 +556,9 @@ fn trace_shape_of(m Model, trace_bus string) ecumodel.TraceShape {
 		multi_lane:          m.part.by_part.keys().len == 2 || (bridged.len == 1
 			&& m.part.by_part.keys().len == 1)
 		dump_fc_bound:       m.trace.dump_fc_bound
+		level:               m.trace.level
+		off_telem_bus:       !m.telem.on || m.telem.bus == '' || trace_bus != m.telem.bus
+		push_ms_set:         'push_ms' in m.trace.sw_keys
 	}
 }
 

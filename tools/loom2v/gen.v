@@ -2343,7 +2343,6 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '\t\t\tsched.mark_overrun()'
 			glue << '\t\t}'
 		}
-		glue << baremetal_trace_bus(m)
 		if comm_thread_on || (m.target.threadx && m.io_points.len > 0) {
 			// Publish this core's load to the volatile scratch (single writer) — for the
 			// comm thread's CpuLoad producer, or (no-comm + io, emb#150 r5) so the inline
@@ -2383,6 +2382,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				idx:          'i'
 			})
 		}
+		// AFTER telemetry: the CpuLoad + LoadDetail pair takes the Tx FIFO first, so a dump
+		// burst filling it cannot starve the second of the two frames.
+		glue << baremetal_trace_bus(m)
 		if m.target.threadx {
 			// Yield to the RTOS between passes: sleep the configured tick (in 1 ms ThreadX
 			// ticks), so lower-priority threads run and the Loom's load = run-time / wall-clock
@@ -3425,10 +3427,9 @@ fn main() {
 	mut m := build_model(doc, dbc)
 	m.nvm_names, m.nvm_ids = derive_nvm(mut m, doc)
 
-	// [trace]: the ThreadX exec-hook stream is the generated path (gen_trace.v); validate what it
-	// can honour. The host/bare-metal command-driven protocol moved to the platform (comm/trace
-	// TraceModule, docs/com-modules.md) and lands via frame->module routing — warn, don't silently
-	// drop, until that wiring exists.
+	// [trace]: ThreadX streams the exec hooks (gen_trace.v); every other shape serves comm/trace's
+	// TraceModule from the loop that owns the bus — a host runner, or the bare-metal superloop
+	// itself (P3c-0). A shape none of them covers fails generation (trace_shape_blocker).
 	// trace_host: the single-core host module runner (one partition, no COM bridge) — ONE loop
 	// owns the schedule and the bus, serving comm/trace's TraceModule via the endpoint bindings.
 	// eth signals create no CAN bridge, so only CAN externals conflict with
@@ -3511,8 +3512,6 @@ fn main() {
 		// working one until nothing answers on the bus (#191). Name the one condition that tripped.
 		panic('loom2v: [trace] is not generated for this ECU — ${trace_shape_blocker(m, trace_bus)} ' +
 			'(docs/com-modules.md). Set [trace] enabled = false to build without it deliberately.')
-	} else if baremetal_trace_on(m) {
-		validate_trace_baremetal(m)
 	}
 
 	// [[signal]] -> the model, then emit the `sig` module.

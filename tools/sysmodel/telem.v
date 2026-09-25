@@ -99,6 +99,10 @@ fn trace_generated(n Node, s System) bool {
 		multi_lane:      n.view.partition_count == 2 || (n.view.partition_count == 1
 			&& (node_has_bus_signal(n) || n.view.has_isotp || n.view.has_route))
 		dump_fc_bound:   n.view.trace_dump_fc_bound
+		level:           n.view.trace_level
+		off_telem_bus:   !n.view.has_telemetry || n.view.telem_bus == ''
+			|| (if n.view.trace_bus != '' { n.view.trace_bus } else { n.view.telem_bus }) != n.view.telem_bus
+		push_ms_set:     n.view.trace_push_ms_set
 		// STILL A GAP for the rest of the P3b fields: the view has no per-bus signal map or core
 		// map, so which bus the bridge rides and whose core it shares are unknowable here — left
 		// at their zero values, which is the permissive direction: a bridged node loom2v would
@@ -107,11 +111,12 @@ fn trace_generated(n Node, s System) bool {
 	}) == ''
 }
 
-// is_trace_host reports the single-partition HOST trace-runner shape: loom2v's
-// emit_run_trace_host sends only the inline CpuLoad frame and never emits the
-// LoadDetail frame, so a trace-host node's telemetry detail_id is NOT on the wire.
+// is_trace_host reports the HOST trace-runner shapes: loom2v's emit_run_trace_host sends only
+// the inline CpuLoad frame and never emits the LoadDetail frame, so a trace-host node's
+// telemetry detail_id is NOT on the wire. A traced BARE-METAL node is not one: its superloop
+// keeps its own run(), LoadDetail included (P3c-0).
 fn is_trace_host(n Node, s System) bool {
-	return !n.view.is_threadx && trace_generated(n, s)
+	return !n.view.is_threadx && !n.view.is_baremetal && trace_generated(n, s)
 }
 
 fn module_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame {

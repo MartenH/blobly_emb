@@ -174,6 +174,10 @@ fn test_the_baremetal_superloop_traces_one_partition() {
 			bus:   'can0'
 			level: 'fb'
 		}
+		telem:  TelemetryCfg{
+			on:  true
+			bus: 'can0'
+		}
 		target: TargetCfg{
 			on: true
 		}
@@ -207,6 +211,39 @@ fn test_a_second_baremetal_partition_blocks_trace() {
 	}
 	b := trace_shape_blocker(m, 'can0')
 	assert b.contains('bare-metal') && b.contains('2'), b
+}
+
+// The superloop's own limits live in the SHARED policy (so syscheck sees them too): FB records
+// only, one channel (the telemetry bus), and no heartbeat.
+fn test_the_baremetal_superloop_refusals() {
+	mut m := Model{
+		trace:  TraceCfg{
+			on:    true
+			bus:   'can0'
+			level: 'thread+fb'
+		}
+		telem:  TelemetryCfg{
+			on:  true
+			bus: 'can0'
+		}
+		target: TargetCfg{
+			on: true
+		}
+		part:   PartMap{
+			by_part: {
+				'app': []toml.Any{}
+			}
+		}
+	}
+	assert trace_shape_blocker(m, 'can0').contains('"fb"')
+	m.trace.level = 'fb'
+	assert trace_shape_blocker(m, 'can0') == ''
+	assert trace_shape_blocker(m, 'can1').contains('[telemetry] bus'), 'trace off the one channel'
+	m.telem.on = false
+	assert trace_shape_blocker(m, 'can0').contains('[telemetry] bus'), 'telemetry off: no channel'
+	m.telem.on = true
+	m.trace.sw_keys = ['push_ms']
+	assert trace_shape_blocker(m, 'can0').contains('push_ms')
 }
 
 // The superloop's router must be id-width-exact (an extended frame sharing 0x7E2 is not a trace
