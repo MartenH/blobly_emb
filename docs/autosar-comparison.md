@@ -20,9 +20,12 @@ lock-free, no-alloc — and skips the rest.
 | Periodic trigger | `TimingEvent` | `[[fb.handler]] period_ms` (the `on_<period>` name is convention, not syntax) | ✅ have |
 | Per-runnable private state | Inter-Runnable Variables (IRV) | the FB's private struct | ✅ have |
 | Deadline / alive timeout, init value, invalidation | COM rx monitoring | COM rx deadline → `valid = false` | ✅ have[^host] |
+| Why a read is not usable — never received vs. timed out vs. failed integrity | `Rte_Read` status (`RTE_E_NEVER_RECEIVED` / `MAX_AGE_EXCEEDED` / transformer error) | — (one `valid` bool; an E2E/SecOC failure shows up only later, as the deadline's `valid = false`) | 🔜 planned (#286) |
 | Transmission modes (cyclic / on-change / mixed, min-delay) | COM tx modes + filters | `[[frame]].tx` | ✅ have[^host] |
 | Raw↔physical scaling at the boundary | RTE/COM data conversion | DBC codec in the bridge | ✅ have[^host] |
-| Diagnostics request/response | DCM/DEM over the RTE | ISO-TP + UDS at the bus | ✅ have |
+| Diagnostics request/response | DCM over the RTE | ISO-TP + UDS at the bus (0x10 / 0x22 / 0x2E / 0x3E) | ✅ have |
+| Fault memory — debounced diagnostic events → DTCs, freeze frames, 0x19 / 0x14 | DEM (`SetEventStatus` over a client-server port) | — | 🔜 planned (#287) |
+| Variant coding — per-vehicle parameters an FB reads, set at end-of-line | ParameterInterface (`Rte_Prm`), written via DCM | — | 🔜 planned (#288) |
 | Network management — coordinated bus sleep/wake | CanNm / NmIf | `comm/nm` + `[nm]` endpoint bindings (request/release, cluster listen, bench-verified) | ✅ have |
 | Cross-core communication in one ECU | OS-Application partitioning + the OS **IOC** + per-core RTE config | an ordinary `[[signal]]` whose endpoints sit on different cores; the generator derives the transport (xioc) and emits an image per core from ONE config ([multi-image.md](multi-image.md)) | ✅ have |
 | Runtime observability — thread/ISR/handler trace, per-handler timing, CPU load | ARTI/ORTI + vendor tracing tools, DLT | per-core flight recorder → multi-core swimlane, `stat` (per-handler last/max/mean µs), CpuLoad telemetry — all config-wired, dumped over the bus | ✅ have |
@@ -36,7 +39,7 @@ lock-free, no-alloc — and skips the rest.
 | RTE-managed critical sections | ExclusiveArea | — | 🚫 skip (by design) |
 | Multiple instantiation, connector remap, port-defined arg values | RTE config surface | — | 🚫 skip |
 | Atomic multi-signal update | COM signal groups / shadow buffers | per-PDU pack | 🚫 skip (PDU pack already atomic) |
-| Measurement & calibration | MCD / XCP | — | 🚫 skip (separate concern) |
+| Measurement & calibration (development-time tuning; not variant coding, above) | MCD / XCP | — | 🚫 skip (separate concern) |
 
 ## Why the planned ones are missing (and what they'd take)
 
@@ -73,6 +76,14 @@ lock-free, no-alloc — and skips the rest.
   only). It's lean to add — a *mode* is just a signal the Loom consults before
   dispatch, gating which handlers run and which TX modes apply. Missing because no
   example has needed state-dependent behaviour yet.
+- **Rx status, fault memory, variant coding** (#286, #287, #288). The three things a
+  production ECU needs that request/response UDS does not give it. AUTOSAR reaches them
+  through service ports the component *calls* (`Rte_Call` to DEM, `Rte_Prm`, status return
+  codes); here each is a port the FB *reads or writes* and the platform serves — a fault is
+  an Out port the fault service debounces, a parameter is a read-only In field backed by
+  persistence and a DID, and the read status is one generated enum field instead of a
+  return code. Same principle as persistence ([nvm.md](nvm.md)): declare it, use it as a
+  port. Missing because no example has shipped to a workshop yet.
 - **E2E protection.** ✅ **done.** Signals had validity but no integrity; `comm/e2e`
   adds a CRC + alive counter so a receiver detects corruption (CRC), repetition / a
   stuck sender (counter `delta == 0`), individual lost frames (counter skip,

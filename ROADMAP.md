@@ -122,6 +122,25 @@ Kept standalone (not features of a running system): `bulk_bench` (host micro-ben
   signed images, TRNG-gated 0x29), bench-verified on H755
 - 🧭 **Boot P4 dual-bank** · 🧭 **P6 RDP2 lock**
 
+## Diagnostics & variant coding
+
+What a production ECU needs beyond request/response UDS. Each lands the blobly way — declared
+in `ecu.toml`, seen by the FB as a port, done by the platform — never as a service API the FB
+calls. Suggested order: rx status first (small, and it is the fault service's input), then
+faults and parameters.
+
+- 🧭 **Rx status** (`#286`) — replace the `valid` bool with a generated
+  `never_received / timeout / integrity` status, so "not yet", "gone" and "corrupt" stop
+  looking alike (today an E2E/SecOC failure only surfaces later, as the deadline's
+  `valid = false`)
+- 🧭 **Fault reporting → DTCs** (`#287`) — FBs write a pre-debounce result to a fault Out
+  port; a platform fault service debounces, keeps the ISO 14229 status byte, captures freeze
+  frames from named signals into the fault-memory journal already designed in
+  [docs/nvm.md](docs/nvm.md); UDS gains 0x19 / 0x14
+- 🧭 **Parameters / variant coding** (`#288`) — `[[param]]`: a read-only In field with a
+  compiled default, persisted, written via a DID (builds on nvm P4 DID binding), so one build
+  serves every variant
+
 ## Drivers & IO
 
 - ✅ **CAN port ABI** — socket (host), fdcan (M_CAN bare-metal), ST-HAL, CanIf
