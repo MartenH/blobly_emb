@@ -283,7 +283,7 @@ fn comm_thread_entry(input u32) {
 	telem_period_us := u64(500000)
 	mut last_overruns := u32(0)
 	mut detail_due := false // LoadDetail owed until the FIFO accepts it
-	g_tm.init(u32(0x7e3), u32(0x7e5), 0, true, // in place: no module-sized stack copy
+	g_tm.init(u32(0x7ed), u32(0x7ee), 0, true, // in place: no module-sized stack copy
 		trace.new_buffer(&g_trace_ring[0], 64, .ring, 0))
 	mut trace_txf := can.Frame{}
 	g_sh.init(u32(0x7f1)) // in place: no module-sized stack copies
@@ -313,7 +313,7 @@ fn comm_thread_entry(input u32) {
 				g_rx_last = u32(rx.data[0]) | (u32(rx.data[1]) << 8) | (u32(rx.data[2]) << 16) | (u32(rx.data[3]) << 24)
 				C.ioc_pub(1, g_rx_last, u32(0))
 			}
-			if rx.id == u32(0x7e2) && rx.len == 8 && !rx.ext { // trace.cmd -> the module
+			if rx.id == u32(0x7ec) && rx.len == 8 && !rx.ext { // trace.cmd -> the module
 				op := rx.data[0]
 				if op == trace.op_arm || op == trace.op_start || op == trace.op_reset {
 					C.trace_arm() // fresh window in the exec-hook recorder
@@ -324,7 +324,7 @@ fn comm_thread_entry(input u32) {
 				}
 				g_tm.on_cmd(rx)
 			}
-			if rx.id == u32(0x7e6) && !rx.ext { // trace.dump_fc -> ISO-TP FC
+			if rx.id == u32(0x7ef) && !rx.ext { // trace.dump_fc -> ISO-TP FC
 				g_tm.on_dump_fc(C.board_now_us(), rx)
 			}
 			if rx.id == u32(0x7f0) && !rx.ext { // shell.in -> one command line

@@ -101,16 +101,18 @@ period_ms = 500
 # generated bus owner streams the ring on record_id. This is the REAL preemptive thread/ISR
 # capture (not the bare-metal polled trace), and the FB thread being a real ThreadX thread
 # means the hooks capture it for free.
+# Ids 0x7EC..0x7EF, not the docs' defaults: this board is system_full's sysnode, and on its
+# compute bus domain's CpuLoad/LoadDetail ride 0x7E2/0x7E3 (see examples/h735_app/ecu.toml).
 [trace]
 enabled        = true
 bus            = "can0"
 level          = "all"
 buffer_records = 64
 mode           = "ring"
-cmd            = 0x7E2
-rsp            = 0x7E3
-record         = 0x7E5
-dump_fc        = 0x7E6
+cmd            = 0x7EC
+rsp            = 0x7ED
+record         = 0x7EE
+dump_fc        = 0x7EF
 
 # The CAN shell (comm/shell): type `help`/`ps` from blobly_net's shell panel — one raw frame in,
 # an ISO-TP text block out, served by the comm thread like every other module.

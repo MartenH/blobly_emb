@@ -69,7 +69,7 @@ pub fn run(can0 can.Channel) {
 	mut next_tick := C.board_now_us() + tick_us
 	// trace (comm/trace): this loop is the module runner — fb_hook records each dispatched
 	// handler, the rx router feeds on_cmd / on_dump_fc, produce() drains the response + dump.
-	g_tm.init(u32(0x7e3), u32(0x7e5), 0, true,
+	g_tm.init(u32(0x7ed), u32(0x7ee), 0, true,
 		trace.new_buffer(&g_trace_ring[0], 64, .ring, 50))
 	mut cap := g_tm.capture(0, 500, C.board_now_us())
 	sched.set_trace_hook(trace.fb_hook, &cap)
@@ -118,8 +118,8 @@ pub fn run(can0 can.Channel) {
 				continue
 			}
 			match rx.id {
-				u32(0x7e2) { g_tm.on_cmd(rx) } // trace.cmd
-				u32(0x7e6) { g_tm.on_dump_fc(t1, rx) } // trace.dump_fc
+				u32(0x7ec) { g_tm.on_cmd(rx) } // trace.cmd
+				u32(0x7ef) { g_tm.on_dump_fc(t1, rx) } // trace.dump_fc
 				else {}
 			}
 		}
