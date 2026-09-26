@@ -130,7 +130,7 @@ Makefile above them, so the old glob never reached them. Each script flashes its
 asserting over SWD, so running the group reflashes whatever is attached; a script exits 2 (SKIP)
 when its board is absent, so a partial bench still passes for what IS present.
 
-Know two things before running it on the bench:
+Know three things before running it on the bench:
 
 - **`examples/system_full/nodes/domain` flashes TWO banks** — the CM7 image at `0x08000000` and its
   CM4 satellite at `0x08100000` — and needs `BLOB_H755_SERIAL` to do so. Neither H755 script will
@@ -141,13 +141,14 @@ Know two things before running it on the bench:
   order — which is the right resting state for a system_full bench, but it means the group is not
   idempotent with respect to what is on the board.
 - **Both H735 scripts target the SAME board too** (`h735_app` and `h735_someip`), and it is
-  system_full's **sysnode** — neither script flashes it back. Both need `BLOB_H735_SERIAL` (an H735
-  and an H723 report the same chip id). `h735_app` reads its frozen trace ring straight out of RAM
-  (no CAN, no OpenOCD — the ring arms at boot and the overrun trigger freezes it); a read-only run
-  first compares the board's flash with `build/app.bin` and SKIPs on any other image. Reflash
-  sysnode (`examples/system_full/nodes/sysnode`) afterwards for a system_full bench.
+  system_full's **sysnode** — neither flashes it back, so reflash sysnode
+  (`examples/system_full/nodes/sysnode`) afterwards for a system_full bench. Flashing needs
+  `BLOB_H735_SERIAL` in both (an H735 and an H723 report the same chip id). `h735_app` always
+  flashes and reads its frozen trace ring straight out of RAM — the ring arms at boot and the
+  overrun trigger freezes it, so it needs only st-flash, no CAN and no OpenOCD. `h735_someip` is
+  different again: it probes over UDP from the Windows host (powershell.exe, an Ethernet link).
 
-Neither needs a CAN adapter, but they need DIFFERENT SWD tooling, so install both:
+The two H755 scripts need no CAN adapter, but they need DIFFERENT SWD tooling, so install both:
 
 - **domain** reads the trace ring straight out of RAM with `st-flash read` — the exec-hook recorder
   captures from reset, so there is no arm command to send and no bus involved. Same technique the

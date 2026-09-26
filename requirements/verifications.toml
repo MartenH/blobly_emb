@@ -506,9 +506,13 @@ approved_by = "bench run 2026-08-31 by the agent session on the maintainer's ben
 # alongside the running H755 domain froze 13 ms after boot — domain's CpuLoad rides 0x7E2 and its
 # byte0 0x03 reads as op_stop (stop reply cause 1). h735_app now uses 0x7EC..0x7EF, and the same
 # result above reproduced WITH domain running (cause 2, 64/64, trip at 511 ms).
-# Repeatable without CAN: examples/h735_app/bench_test.sh --flash reads the frozen ring from RAM
-# over SWD (FB records, frozen with no command sent, an OVERRAN record) — and was mutation-checked:
-# an image that never arms fails, as does one whose budget never trips.
+# Repeatable without CAN: examples/h735_app/bench_test.sh --flash (run by make hwtest) reads the
+# frozen ring from RAM over SWD — FB records with manifest ids, frozen across reads with no command
+# sent while the core stays in thread mode (ICSR.VECTACTIVE = 0), and an OVERRAN record.
+# Mutation-checked on silicon 2026-09-26: an image that never arms FAILS, one whose budget never
+# trips FAILS, and one that HardFaults right after the freeze FAILS (exception 3). It is NOT a
+# [[check]] here: disabled in CI it reports pending, and a pending check un-verifies an AGREED
+# requirement in trace-check (the existing hwtest checks all verify draft ones).
 [[review]]
 id = "h735-app-baremetal-trace"
 method = "review"
