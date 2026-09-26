@@ -493,3 +493,21 @@ method = "review"
 context = "h735/h723 FDCAN" # specific boards/backend, not a generic "target"
 verifies = ["REQ-TOPO-006"]
 approved_by = "bench run 2026-08-31 by the agent session on the maintainer's bench — H735+H723+H755 on PLL2 80 MHz, edge FD-BRS clean (H723 ECR=0), gateway forwarding classic<->FD; countersign to confirm"
+
+# P3c-0 (#191, emb#282): the BARE-METAL superloop as the single-core trace runner, on silicon.
+# examples/h735_app on the STM32H735G-DK, FDCAN1 on system_full's compute bus, driven from a
+# CANsub (ch2) with the H755 domain HALTED — its CpuLoad/LoadDetail ride 0x7E2/0x7E3, the same
+# ids as h735_app's trace cmd/rsp, and a first run was frozen 13 ms after boot by domain's CpuLoad
+# (byte0 0x03 = op_stop; stop reply cause 1). Clean run, no arm sent: reset, wait 6 s, stop, dump.
+# Stop reply 03 00 23 40 00 40 00 00 = frozen, cause 2 (the overrun trigger), 64/64, core 0 —
+# the ring armed itself at boot and Load (handler 1) tripped it at 511 ms at 720 us against the
+# 500 us budget, flagged OVERRAN. The window straddles the trip at pre_pct 50 (482..543 ms) and
+# streamed as two chained ISO-TP blocks (520 B + 24 B continuation) on 0x7E5/0x7E6; CpuLoad kept
+# flowing on 0x7E0/0x7E1 while frozen. Clock cross-checked: DWT 1.10e9 cycles / 2 s = 550 MHz.
+[[review]]
+id = "h735-app-baremetal-trace"
+method = "review"
+context = "h735/bare-metal"
+verifies = ["REQ-TRACE-001"]
+approved_by = "Claude bench session — STM32H735G-DK vs CANsub.4 ch2 (H755 halted)"
+date = "2026-09-26"

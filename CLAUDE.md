@@ -73,17 +73,18 @@ local command and fails CI. Re-run generation before opening the PR.
 **Which `[trace]` shapes generate.** loom2v emits a host trace runner for **one** partition
 (single-core, `examples/trace_demo`), for **two** (`examples/trace_multicore`, #270 — one dump
 owner plus one satellite core, with a system-wide freeze so both windows cover the same instant),
-and for a **COM bridge plus one app partition** (`examples/trace_comm`, #191 P3b — the bridge
-owns the trace bus and the module, the app partition is the satellite). An enabled `[trace]` on
+for a **COM bridge plus one app partition** (`examples/trace_comm`, #191 P3b — the bridge
+owns the trace bus and the module, the app partition is the satellite), and on a **bare-metal
+target** the superloop itself is the single-core runner (`examples/h735_app`, P3c-0 — one
+partition, no bridge, `level = "fb"`, on the telemetry bus). An enabled `[trace]` on
 any other shape **fails generation** rather than warning and building a silent no-op, naming the
 one condition that tripped: partition count (three has no import slot — `TraceModule` holds
-exactly one satellite), a bare-metal target, an eth trace bus, a bridge riding the trace bus
+exactly one satellite), a bare-metal target with a second partition or a bridge, an eth trace bus, a bridge riding the trace bus
 itself (the same-bus piggyback), a second bridge bus, a bridge sharing a core with the traced app
 partition (a dump block header carries a core id, so two lanes on one core are indistinguishable),
 or a two-lane trace with no `dump_fc` — only the ISO-TP block path carries a per-window header, so
 the raw record stream would dump the owner's ring and drop the satellite's in silence. So a config
-either gets trace or gets an error. `examples/h735_app` (P3c-0, bare-metal) is the slice still
-`enabled = false`.
+either gets trace or gets an error.
 
 The dump owner is an **app partition — or the COM bridge that owns the trace bus** (P3b), never a
 separate bus thread — that is what keeps the protocol in the platform: the owner's ring is then

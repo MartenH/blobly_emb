@@ -1664,6 +1664,16 @@ fn (t TelemProducer) bus_tick(ctx BusCtx) []string {
 	g << '\t\t\t}'
 	g << '\t\t\tch.send(${ctx.frame})'
 	if t.detail_id != 0 {
+		g << '\t\t\tdetail_due = true'
+	}
+	g << '\t\t}'
+	if t.detail_id != 0 {
+		// LoadDetail is its OWN pending frame, not a second send inside the CpuLoad block: the
+		// CpuLoad send may take the last free FIFO slot (a trace dump or a busy bus keeps it
+		// nearly full), and a detail that failed there waited a whole period. It is retried every
+		// pass, under the same gate, until accepted. last_overruns advances ONLY on an accepted
+		// frame, so the overrun delta is never deducted from a report that never left (emb#259 r1).
+		g << '\t\tif detail_due${ctx.gate} {'
 		g << '\t\t\tovr := ${ctx.det_ovr}'
 		g << ctx.det_lines
 		g << '\t\t\tmut ${ctx.detframe} := can.Frame{'
@@ -1673,15 +1683,12 @@ fn (t TelemProducer) bus_tick(ctx BusCtx) []string {
 		g << '\t\t\tfor ${ctx.idx} in 0 .. 8 {'
 		g << '\t\t\t\t${ctx.detframe}.data[${ctx.idx}] = detail[${ctx.idx}]'
 		g << '\t\t\t}'
-		// The CpuLoad send above may have taken the last free FIFO slot, so this one can still
-		// fail after the period gate passed. last_overruns advances ONLY on an accepted frame:
-		// the delta stays owed and the next detail frame carries both periods, rather than the
-		// overruns being deducted from a report that never left (emb#259 r1).
 		g << '\t\t\tif ch.send(${ctx.detframe}) {'
 		g << '\t\t\t\tlast_overruns = ovr'
+		g << '\t\t\t\tdetail_due = false'
 		g << '\t\t\t}'
+		g << '\t\t}'
 	}
-	g << '\t\t}'
 	return g
 }
 
@@ -1996,6 +2003,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		tx_sleep_ticks := if m.target.tick_us / 1000 > 1 { m.target.tick_us / 1000 } else { u64(1) }
 		glue << ''
 		glue << 'fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)'
+		glue << baremetal_trace_globals(m)
 		if m.io_points.len > 0 {
 			glue << 'fn C.io_exec_add(u32)  // io serve-exec µs, single writer (io thread)'
 			glue << 'fn C.io_exec_us() u32 // FB thread reads to subtract io preemption'
@@ -2290,6 +2298,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '\tmut last_telem := u64(0)'
 			if m.telem.detail_id != 0 {
 				glue << '\tmut last_overruns := u32(0) // for the per-period overrun count'
+				glue << '\tmut detail_due := false // LoadDetail owed until the FIFO accepts it'
 			}
 		}
 		glue << '\ttick_us := u64(${m.target.tick_us})'
@@ -2297,6 +2306,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << '\tmut next_tick := C.board_now_us() + tick_us'
 		}
 		glue << trace_fb_install(m)
+		glue << baremetal_trace_init(m)
 		fb_io := m.io_points.len > 0 // subtract higher-prio io preemption from the wall bracket
 		glue << '\tfor {'
 		glue << '\t\tt0 := C.board_now_us()'
@@ -2308,7 +2318,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			// source (an idle accountant thread) — the eventual clean model (codex emb#150 r11).
 			glue << '\t\tio0 := C.io_exec_us() // io is higher priority: exclude its preemption'
 		}
-		if m.trace.on && m.trace.level == 'all' {
+		if m.trace.on && (m.trace.level == 'all' || baremetal_trace_on(m)) {
 			// profiled dispatch: run_profiled accounts internally and fires the FB trace hook
 			if fb_io {
 				glue << '\t\tsched.run_profiled_excl(trace_clock, io_exec_clock)'
@@ -2362,8 +2372,15 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// slot 0 — the sum is the core's whole truth (emb#150 r5)
 				'\t\t\tload[0] = u16(C.load_sum_permille())'
 			} else {
-				'\t\t\tload[0] = sched.load_permille() // single M7 -> core 0 only'
+				if baremetal_trace_on(m) {
+					// traced: the slot the trace module reports (single_trace_core), so CpuLoad
+					// and the dump name the same core
+					'\t\t\tload[${single_trace_core(m)}] = sched.load_permille() // this partition\'s core'
+				} else {
+					'\t\t\tload[0] = sched.load_permille() // single M7 -> core 0 only'
+				}
 			}]
+				ncores:       if baremetal_trace_on(m) { single_trace_core(m) + 1 } else { 0 }
 				det_ovr:      if m.io_points.len > 0 {
 					'C.load_sum_overruns()' // io overruns count too (emb#150 r6)
 				} else {
@@ -2380,6 +2397,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				idx:          'i'
 			})
 		}
+		// AFTER telemetry: the CpuLoad + LoadDetail pair takes the Tx FIFO first, so a dump
+		// burst filling it cannot starve the second of the two frames.
+		glue << baremetal_trace_bus(m)
 		if m.target.threadx {
 			// Yield to the RTOS between passes: sleep the configured tick (in 1 ms ThreadX
 			// ticks), so lower-priority threads run and the Loom's load = run-time / wall-clock
@@ -2533,6 +2553,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\ttelem_period_us := u64(${m.telem.period_us})'
 					if m.telem.detail_id != 0 {
 						glue << '\tmut last_overruns := u32(0)'
+						glue << '\tmut detail_due := false // LoadDetail owed until the FIFO accepts it'
 					}
 				}
 				glue << trace_module_init(m)
@@ -3422,10 +3443,9 @@ fn main() {
 	mut m := build_model(doc, dbc)
 	m.nvm_names, m.nvm_ids = derive_nvm(mut m, doc)
 
-	// [trace]: the ThreadX exec-hook stream is the generated path (gen_trace.v); validate what it
-	// can honour. The host/bare-metal command-driven protocol moved to the platform (comm/trace
-	// TraceModule, docs/com-modules.md) and lands via frame->module routing — warn, don't silently
-	// drop, until that wiring exists.
+	// [trace]: ThreadX streams the exec hooks (gen_trace.v); every other shape serves comm/trace's
+	// TraceModule from the loop that owns the bus — a host runner, or the bare-metal superloop
+	// itself (P3c-0). A shape none of them covers fails generation (trace_shape_blocker).
 	// trace_host: the single-core host module runner (one partition, no COM bridge) — ONE loop
 	// owns the schedule and the bus, serving comm/trace's TraceModule via the endpoint bindings.
 	// eth signals create no CAN bridge, so only CAN externals conflict with
@@ -3459,8 +3479,10 @@ fn main() {
 	if tctx.on() {
 		validate_trace_bridge_owner(m, tctx)
 	}
-	trace_host := trace_owns_run && trace_nparts == 1 && !tctx.on()
-	trace_multicore := trace_owns_run && trace_nparts == 2 && !tctx.on()
+	// The host runners replace run(); a target keeps its own run() and the bare-metal superloop
+	// wires the module into it (P3c-0, baremetal_trace_*), so neither host runner applies there.
+	trace_host := trace_owns_run && trace_nparts == 1 && !tctx.on() && !m.target.on
+	trace_multicore := trace_owns_run && trace_nparts == 2 && !tctx.on() && !m.target.on
 	// the trace-host runner has no eth spawn wiring — an eth tx frame there
 	// would generate a comm thread nothing starts (silently dead)
 	if trace_owns_run && m.eth_frames.len > 0 {

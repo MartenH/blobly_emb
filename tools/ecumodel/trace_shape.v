@@ -2,8 +2,9 @@ module ecumodel
 
 // The ONE definition of "can loom2v generate [trace] for this ECU?".
 //
-// loom2v emits the host trace runner (comm/trace's TraceModule driven by the module runner) for the
-// single-partition host shape only; the ThreadX target has its own exec-hook stream instead. The
+// loom2v emits a trace runner (comm/trace's TraceModule driven by the loop that owns the bus) for the
+// host shapes and the single-partition bare-metal superloop; the ThreadX target has its own
+// exec-hook stream instead. The
 // predicate used to exist three times — loom2v's `trace_host`, loom2v's panic message, and
 // sysmodel's `trace_generated` — which is how syscheck and loom2v came to disagree about the eth
 // trace bus, and how the panic could have printed an empty reason had one copy gained a condition.
@@ -26,6 +27,10 @@ pub:
 	bridge_count        int  // distinct CAN buses with bridge work; the owner loop drains one
 	multi_lane          bool // two traced entities (owner + satellite): P3a's two cores, or P3b
 	dump_fc_bound       bool // [trace].dump_fc is bound -> the ISO-TP block dump
+	// The bare-metal superloop's own limits (P3c-0); ignored for every other shape:
+	level         string // [trace].level — a polled superloop records FB dispatches only ("fb")
+	off_telem_bus bool   // the trace bus is not the enabled [telemetry] bus run() is handed
+	push_ms_set   bool   // [trace].push_ms asks for the HandlerStat heartbeat no runner emits here
 }
 
 // trace_shape_blocker names the ONE reason [trace] cannot be generated on this shape, or '' when it
@@ -39,7 +44,27 @@ pub fn trace_shape_blocker(s TraceShape) string {
 		return 'the ThreadX target streams the exec hooks, not the host module runner'
 	}
 	if s.baremetal {
-		return 'the bare-metal superloop target has no module runner'
+		// P3c-0: the superloop IS the module runner — one loop owns the schedule and the one
+		// channel, exactly the single-core host shape on the board's DWT clock. What it cannot
+		// be is anything with a second lane: there is no second core to import and no bridge.
+		if s.partition_count != 1 {
+			return 'the bare-metal superloop traces exactly one partition (it declares ' +
+				'${s.partition_count}) — a second core is the ThreadX multi-image shape'
+		}
+		if s.has_bridge {
+			return 'the bare-metal superloop has no COM bridge to share its trace loop with'
+		}
+		if s.level != 'fb' {
+			return 'the bare-metal superloop records FB dispatches only — it has no threads or ' +
+				'ISR hooks, so [trace].level must be "fb" (got "${s.level}")'
+		}
+		if s.off_telem_bus {
+			return 'the bare-metal superloop owns one channel, the [telemetry] bus run() is ' +
+				'handed — [trace] must ride it, with telemetry enabled'
+		}
+		if s.push_ms_set {
+			return 'the bare-metal superloop sends no HandlerStat heartbeat — remove [trace].push_ms'
+		}
 	}
 	if s.partition_count < 1 || s.partition_count > 2 {
 		// One partition is the single-core host runner; two is P3a's multi-core runner (one dump

@@ -2,9 +2,9 @@
 #
 # Three FBs on one partition/core. All signals are partition-local (FB -> FB on the
 # same core), so there is no COM bus bridge — the only bus traffic is the generated
-# CpuLoad telemetry frame. The [target] block selects loom2v's bare-metal single-core
-# emitter: one inline superloop (no spawn, no osal), a DWT timebase, a fixed 1 ms tick,
-# and inline CpuLoad tx — the generated form of examples/h735_app's hand-wired main.v.
+# CpuLoad telemetry frames and the [trace] handshake + dump. The [target] block selects
+# loom2v's bare-metal single-core emitter: one inline superloop (no spawn, no osal), a DWT
+# timebase, a fixed 1 ms tick, and inline CpuLoad tx — the generated form of examples/h735_app's hand-wired main.v.
 
 [import]
 dbc = "bus.dbc" # only the CpuLoad frame; no external signals reference it
@@ -69,29 +69,21 @@ id        = 0x7E0   # CpuLoad: per-core load @ 1 s window
 detail_id = 0x7E1   # LoadDetail: core-0 load @ 100 ms / 1 s / 10 s + overrun count
 period_ms = 500
 
-# P3c-0 as DESIGNED: trace on the bare-metal target — the single-core inline machinery (the
-# same capture hook + TraceCmd/Rsp handshake + ISO-TP dump of the frozen ring as the host
-# trace_demo), on the board's DWT µs clock with no osal, riding the one FDCAN bus (can0) so
-# the dump + CpuLoad share it. Real preemptive thread/ISR capture is the larger P3c slice
-# (the TX execution-change hooks).
-#
-# NOT GENERATED TODAY — see the block below. The bare-metal superloop has no module runner,
-# so this example is telemetry-only (CpuLoad) until that wiring exists (#191). The keys are
-# kept because they describe the intended shape, not because anything reads them.
+# P3c-0: trace on the bare-metal target. The superloop IS the module runner — the same FB capture
+# hook, TraceCmd/Rsp handshake and ISO-TP block dump as the host trace_demo, on the board's DWT µs
+# clock with no osal, riding the one FDCAN bus (can0) so the dump and CpuLoad share it. There are
+# no threads here, so FB records are the whole trace (level = "fb"); real preemptive thread/ISR
+# capture is the ThreadX shape (h735_threadx).
 [trace]
-# NOT GENERATED on this ECU (#191): the bare-metal superloop target has no module
-# runner, so nothing serves the cmd/rsp/record ids below. Off deliberately — loom2v
-# rejects an enabled [trace] here rather than build a silent no-op.
-enabled        = false
 bus            = "can0"
-level          = "thread+fb"
+level          = "fb"
 buffer_records = 64
 mode           = "ring"
 pre_pct        = 50
-push_ms        = 1000        # live HandlerStat heartbeat
 cmd            = 0x7E2
 rsp            = 0x7E3
 record         = 0x7E5       # ISO-TP dump data (target -> host)
+dump_fc        = 0x7E6       # ISO-TP flow control (host -> target)
 trigger        = { source = "overrun", budget_us = 500 }
 
 [target]

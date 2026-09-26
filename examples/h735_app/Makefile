@@ -54,11 +54,12 @@ gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(REPO)/tools/ecucheck/gen.v $(
 	  examples/$(NAME)/gen/trace-manifest.csv
 	@touch gen/.stamp
 
-# 1) transpile the V stack (main + generated gen/ports/sig + app + loom/telem/can) to
-#    freestanding C. Run from the repo root so `import loom/comm.telem/driver.can`
-#    resolve via `.` and the local `import gen/app/ports/sig` via examples/$(NAME).
+# 1) transpile the V stack (main + generated gen/ports/sig + app + loom/telem/trace/can) to
+#    freestanding C (-enable-globals: the trace module + ring live in __global). Run from
+#    the repo root so `import loom/comm.telem/driver.can` resolve via `.` and the local
+#    `import gen/app/ports/sig` via examples/$(NAME).
 $(BUILD)/app.c: main.v gen/.stamp | $(BUILD)
-	cd $(REPO) && $(V) $(VDBG) -freestanding -gc none -no-bounds-checking \
+	cd $(REPO) && $(V) $(VDBG) -freestanding -gc none -no-bounds-checking -enable-globals \
 	  -path "@vlib|@vmodules|.|examples/$(NAME)" \
 	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
 	$(REPO)/scripts/lint_vinit.sh $@

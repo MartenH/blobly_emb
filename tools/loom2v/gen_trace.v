@@ -79,6 +79,16 @@ fn parse_trace(doc toml.Doc, dbc string) TraceCfg {
 					else { panic('loom2v: comm.trace endpoint "${e.name}" has no TraceCfg field — teach parse_trace about it') }
 				}
 			}
+			// Every trace runner speaks STANDARD frames: the routers match `!rx.ext`, the module
+			// fills rsp/record frames with ext = false, and TraceCfg keeps no width to say
+			// otherwise. A 29-bit binding would be silently ignored (cmd, dump_fc) or truncated by
+			// the classic FDCAN backend (rsp, record) — refuse it here, once, for every runner;
+			// syscheck applies the same 11-bit rule to module frames.
+			ext := trace_extended_binding(t)
+			if ext != '' {
+				panic('loom2v: [trace] ${ext} is an extended (29-bit) id — the trace endpoints are ' +
+					'standard frames, use an id <= 0x7FF')
+			}
 		}
 		t.level = (trm['level'] or { toml.Any(t.level) }).string()
 		t.mode = (trm['mode'] or { toml.Any(t.mode) }).string()
@@ -104,6 +114,21 @@ fn parse_trace(doc toml.Doc, dbc string) TraceCfg {
 	return t
 }
 
+// trace_extended_binding names the first endpoint bound to a 29-bit id ("cmd 0x18DA00F1"), or ''.
+fn trace_extended_binding(t TraceCfg) string {
+	for name, id in {
+		'cmd':     t.cmd_id
+		'rsp':     t.rsp_id
+		'record':  t.record_id
+		'dump_fc': t.dump_fc_id
+	} {
+		if id > 0x7ff {
+			return '${name} 0x${id.hex()}'
+		}
+	}
+	return ''
+}
+
 // trace_binding resolves one endpoint binding: a literal number is the CAN id (used as-is —
 // a colliding id is the author's problem); a string is a bus.dbc message name that must exist,
 // its id is used, and its DLC must match the endpoint's declared dlc (validate at generation,
@@ -116,6 +141,13 @@ fn trace_binding(trm map[string]toml.Any, key string, want_dlc u8, def u32, dbc 
 		}
 		id := dbc_id_of(db, snake(v)) or {
 			panic('loom2v: [trace] ${key} = "${v}" is not a message in ${os.file_name(dbc)}')
+		}
+		// The width lives beside the id in the DBC (candb keeps `ext` separately), so an EFF
+		// message with a small id would pass the numeric 0x7FF rule in parse_trace and then be
+		// matched/sent as a STANDARD frame. Refuse it by its flag, not its value.
+		if dbc_ext_of(db, snake(v)) or { false } {
+			panic('loom2v: [trace] ${key} = "${v}" is an extended (29-bit) message in ' +
+				'${os.file_name(dbc)} — the trace endpoints are standard frames')
 		}
 		if want_dlc > 0 {
 			dlc := dbc_dlc_of(db, snake(v)) or { 0 }
@@ -157,11 +189,6 @@ fn validate_trace_threadx(m Model) {
 		if m.trace.mode != 'ring' {
 			panic('loom2v: [target] kind="threadx" [trace].mode "${m.trace.mode}" is not implemented — ' +
 				'the exec-hook recorder is an overwrite ring frozen by a host stop — use mode = "ring"')
-		}
-		if m.trace.record_id > 0x7ff {
-			panic('loom2v: [target] kind="threadx" [trace].record_id 0x${m.trace.record_id.hex()} is an ' +
-				'extended (29-bit) id, but the classic FDCAN backend sends 11-bit frames — use a ' +
-				'standard id (<= 0x7FF)')
 		}
 		// The exec-hook recorder freezes only on a host stop; it has no overrun-triggered
 		// freeze (m.trace.budget_us is only wired into the software packer's inline hook). A
@@ -324,7 +351,10 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	mut g := []string{}
 	g << ''
 	g << 'pub fn run(chp can.Channel) {'
-	g << '\tosal.pin_to_core(${m.bus_core[m.trace.bus] or { 0 }})'
+	// ONE loop runs the handlers AND serves the bus, so it runs where the handlers are declared —
+	// the same core the module reports (single_trace_core). Pinning to the trace bus's core
+	// instead let the label, the manifest and the actual execution core disagree (codex #282 r2).
+	g << '\tosal.pin_to_core(${single_trace_core(m)})'
 	g << '\tmut ch := chp'
 	g << '\tmut st := Partition_${part}_state{}'
 	g << '\tmut sched := loom.Scheduler{}'
@@ -335,10 +365,12 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	g << '\t// only feeds it: fb_hook records each dispatched handler, on_cmd applies routed commands,'
 	g << '\t// produce yields the response + dump stream.'
 	g << '\tmut ring := [${m.trace.buffer_records}]trace.Record{}'
-	g << '\tmut tm := trace.new_module(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), 0, ${m.trace.dump_fc_bound},'
+	g << '\tmut tm := trace.new_module(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), ${single_trace_core(m)}, ${m.trace.dump_fc_bound},'
 	g << '\t\ttrace.new_buffer(&ring[0], ${m.trace.buffer_records}, ${mode}, ${m.trace.pre_pct}))'
 	g << '\tmut cap := tm.capture(0, ${m.trace.budget_us}, osal.now_us())'
 	g << '\tsched.set_trace_hook(trace.fb_hook, &cap)'
+	g << '\ttm.arm() // record from startup, like every other runner: a flight recorder that waits'
+	g << '\t// to be armed misses the boot it was installed to catch'
 	if telem_on {
 		g << '\tmut last_telem := u64(0)'
 	}
@@ -351,19 +383,7 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	g << '		// run_profiled_excl -> account(busy, clock())). Calling it again charged the same'
 	g << '		// pass twice, so every traced core reported roughly double its real load and a'
 	g << '		// busy one clamped at 100% (codex #270 r2).'
-	g << '\t\t// the generated router match: each rx binding dispatches to its endpoint handler'
-	g << '\t\tfor ch.recv(mut rx) {'
-	g << '\t\t\tmatch rx.id {'
-	g << '\t\t\t\tu32(0x${m.trace.cmd_id.hex()}) { tm.on_cmd(rx) } // trace.cmd'
-	if m.trace.dump_fc_bound {
-		g << '\t\t\t\tu32(0x${m.trace.dump_fc_id.hex()}) { tm.on_dump_fc(loom_t1, rx) } // trace.dump_fc'
-	}
-	g << '\t\t\t\telse {}'
-	g << '\t\t\t}'
-	g << '\t\t}'
-	g << '\t\tfor ch.tx_ready() && tm.produce(loom_t1, mut txf) {'
-	g << '\t\t\tch.send(txf)'
-	g << '\t\t}'
+	g << trace_single_serve(m, 'tm', 'loom_t1')
 	if telem_on {
 		g << '\t\tnow := osal.now_us()'
 		// tx_ready-gated like every other send on this loop: the trace drain above can leave the
@@ -372,8 +392,10 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 		g << '\t\tif now - last_telem >= ${m.telem.period_us} && ch.tx_ready() {'
 		g << '\t\t\tlast_telem = now'
 		g << '\t\t\tmut load := [8]u16{}'
-		g << '\t\t\tload[0] = u16(sched.load_permille())'
-		g << '\t\t\tframe := telem.encode_cpuload(load, 1)'
+		// the partition's own core slot — the one the module and the pin report
+		core := single_trace_core(m)
+		g << '\t\t\tload[${core}] = u16(sched.load_permille())'
+		g << '\t\t\tframe := telem.encode_cpuload(load, ${core + 1})'
 		g << '\t\t\tmut cf := can.Frame{'
 		g << '\t\t\t\tid:  u32(0x${m.telem.id.hex()})'
 		g << '\t\t\t\tlen: 8'
@@ -388,6 +410,109 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 	g << '\t}'
 	g << '}'
 	return g
+}
+
+// baremetal_trace_on: P3c-0 — the bare-metal superloop is the single-core module runner. The shape
+// itself was already cleared by trace_shape_blocker; this only picks the emitter.
+fn baremetal_trace_on(m Model) bool {
+	return m.trace.on && m.target.on && !m.target.threadx
+}
+
+// baremetal_trace_globals: the module and its ring in __global, never run()'s frame — the module
+// carries an ISO-TP link and a full-payload scratch (stack-copy-boot-hang). Zero-filled bss; the
+// module is built IN PLACE by init() (baremetal_trace_init), so nothing depends on _vinit.
+fn baremetal_trace_globals(m Model) []string {
+	if !baremetal_trace_on(m) {
+		return []string{}
+	}
+	return [
+		'',
+		'__global (',
+		'\tg_trace_ring [${m.trace.buffer_records}]trace.Record',
+		'\tg_tm         trace.TraceModule',
+		')',
+		'',
+		'fn trace_clock() u64 {',
+		'\treturn C.board_now_us()',
+		'}',
+	]
+}
+
+// baremetal_trace_init: build the module in place, wire the FB capture, install the Loom hook.
+// The capture is small and run() never returns, so it lives in the frame.
+fn baremetal_trace_init(m Model) []string {
+	if !baremetal_trace_on(m) {
+		return []string{}
+	}
+	mode := if m.trace.mode == 'oneshot' { '.oneshot' } else { '.ring' }
+	core := single_trace_core(m)
+	return [
+		'\t// trace (comm/trace): this loop is the module runner — fb_hook records each dispatched',
+		'\t// handler, the rx router feeds on_cmd / on_dump_fc, produce() drains the response + dump.',
+		'\tg_tm.init(u32(0x${m.trace.rsp_id.hex()}), u32(0x${m.trace.record_id.hex()}), ${core}, ${m.trace.dump_fc_bound},',
+		'\t\ttrace.new_buffer(&g_trace_ring[0], ${m.trace.buffer_records}, ${mode}, ${m.trace.pre_pct}))',
+		'\tmut cap := g_tm.capture(0, ${m.trace.budget_us}, C.board_now_us())',
+		'\tsched.set_trace_hook(trace.fb_hook, &cap)',
+		'\tg_tm.arm() // record from boot: the overrun a flight recorder exists for may be the first',
+		'\tmut rx := can.Frame{}',
+		'\tmut txf := can.Frame{}',
+	]
+}
+
+// single_trace_core: the core id a single-core runner's module reports — the traced partition's
+// configured core, which the manifest assigns every handler to and a TraceCmd mask selects
+// (handle_cmd ignores a mask that does not name its core). Not a literal 0: that answered for the
+// wrong core, or not at all, on any partition declared elsewhere.
+//
+// It also OWNS the range rule, so every consumer (the module, the pin, the CpuLoad slot) gets a
+// core that fits all of them — the same limits the multi-core runner enforces: a TraceCmd mask is
+// 16 bits (a core past 15 ignores every command), and CpuLoad packs one byte per core for cores
+// 0..7 (telem.cpuload_max_cores), so with telemetry on a core past 7 has no slot.
+fn single_trace_core(m Model) int {
+	parts := m.part.by_part.keys()
+	core := if parts.len > 0 { m.part.core_of[parts[0]] or { 0 } } else { 0 }
+	if core < 0 || core > 15 {
+		panic('loom2v: [trace] partition core ${core} is not addressable — a TraceCmd core mask ' +
+			'is 16 bits, so every arm/stop/status/dump would be ignored. Use cores 0..15.')
+	}
+	if m.telem.on && core > 7 {
+		panic('loom2v: [trace] partition core ${core} does not fit the CpuLoad frame — ' +
+			'telem.cpuload_max_cores packs one byte per core for cores 0..7. Use cores 0..7, ' +
+			'or disable [telemetry].')
+	}
+	return core
+}
+
+// trace_single_serve: the single-core runners' per-pass bus side (host emit_run_trace_host and
+// the bare-metal superloop, which differ only in where the module lives) — the generated router
+// match, then the tx_ready-gated drain so a stuck bus never wedges the loop. The match is
+// id-width-exact: an extended frame that shares a numeric id is not a trace command.
+fn trace_single_serve(m Model, tm string, now string) []string {
+	mut g := []string{}
+	g << '\t\tfor ch.recv(mut rx) {'
+	g << '\t\t\tif rx.ext {'
+	g << '\t\t\t\tcontinue'
+	g << '\t\t\t}'
+	g << '\t\t\tmatch rx.id {'
+	g << '\t\t\t\tu32(0x${m.trace.cmd_id.hex()}) { ${tm}.on_cmd(rx) } // trace.cmd'
+	if m.trace.dump_fc_bound {
+		g << '\t\t\t\tu32(0x${m.trace.dump_fc_id.hex()}) { ${tm}.on_dump_fc(${now}, rx) } // trace.dump_fc'
+	}
+	g << '\t\t\t\telse {}'
+	g << '\t\t\t}'
+	g << '\t\t}'
+	g << '\t\tfor ch.tx_ready() && ${tm}.produce(${now}, mut txf) {'
+	g << '\t\t\tch.send(txf)'
+	g << '\t\t}'
+	return g
+}
+
+// baremetal_trace_bus: the superloop's serve step, after the dispatch.
+fn baremetal_trace_bus(m Model) []string {
+	if !baremetal_trace_on(m) {
+		return []string{}
+	}
+	return trace_single_serve(m, 'g_tm', 't1')
 }
 
 // trace_fb_hooks: the FB enter/exit family on the ThreadX target — a Loom trace hook per FB
@@ -488,6 +613,9 @@ fn trace_shape_of(m Model, trace_bus string) ecumodel.TraceShape {
 		multi_lane:          m.part.by_part.keys().len == 2 || (bridged.len == 1
 			&& m.part.by_part.keys().len == 1)
 		dump_fc_bound:       m.trace.dump_fc_bound
+		level:               m.trace.level
+		off_telem_bus:       !m.telem.on || m.telem.bus == '' || trace_bus != m.telem.bus
+		push_ms_set:         'push_ms' in m.trace.sw_keys
 	}
 }
 

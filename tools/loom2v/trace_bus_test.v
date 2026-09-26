@@ -1,5 +1,6 @@
 module main
 
+import os
 import toml
 
 // A bus can carry no signals at all and still need a partition: the comm thread is where the
@@ -165,12 +166,18 @@ fn test_a_third_partition_blocks_trace() {
 	assert b.contains('import slot'), 'it must say WHY three is refused, got: ${b}'
 }
 
-fn test_the_baremetal_superloop_blocks_trace() {
+// P3c-0: the superloop is the single-core module runner, so one partition with no bridge is a
+// generated shape — the blocker this replaced said "no module runner" for every bare-metal ECU.
+fn test_the_baremetal_superloop_traces_one_partition() {
 	m := Model{
 		trace:  TraceCfg{
+			on:    true
+			bus:   'can0'
+			level: 'fb'
+		}
+		telem:  TelemetryCfg{
 			on:  true
 			bus: 'can0'
-			dump_fc_bound: true
 		}
 		target: TargetCfg{
 			on: true
@@ -181,7 +188,86 @@ fn test_the_baremetal_superloop_blocks_trace() {
 			}
 		}
 	}
-	assert trace_shape_blocker(m, 'can0').contains('bare-metal')
+	assert trace_shape_blocker(m, 'can0') == ''
+	assert baremetal_trace_on(m)
+}
+
+// ...but it has one loop and one core: a second partition is not a satellite it can import.
+fn test_a_second_baremetal_partition_blocks_trace() {
+	m := Model{
+		trace:  TraceCfg{
+			on:            true
+			bus:           'can0'
+			dump_fc_bound: true
+		}
+		target: TargetCfg{
+			on: true
+		}
+		part:   PartMap{
+			by_part: {
+				'app':  []toml.Any{}
+				'app2': []toml.Any{}
+			}
+		}
+	}
+	b := trace_shape_blocker(m, 'can0')
+	assert b.contains('bare-metal') && b.contains('2'), b
+}
+
+// The superloop's own limits live in the SHARED policy (so syscheck sees them too): FB records
+// only, one channel (the telemetry bus), and no heartbeat.
+fn test_the_baremetal_superloop_refusals() {
+	mut m := Model{
+		trace:  TraceCfg{
+			on:    true
+			bus:   'can0'
+			level: 'thread+fb'
+		}
+		telem:  TelemetryCfg{
+			on:  true
+			bus: 'can0'
+		}
+		target: TargetCfg{
+			on: true
+		}
+		part:   PartMap{
+			by_part: {
+				'app': []toml.Any{}
+			}
+		}
+	}
+	assert trace_shape_blocker(m, 'can0').contains('"fb"')
+	m.trace.level = 'fb'
+	assert trace_shape_blocker(m, 'can0') == ''
+	assert trace_shape_blocker(m, 'can1').contains('[telemetry] bus'), 'trace off the one channel'
+	m.telem.on = false
+	assert trace_shape_blocker(m, 'can0').contains('[telemetry] bus'), 'telemetry off: no channel'
+	m.telem.on = true
+	m.trace.sw_keys = ['push_ms']
+	assert trace_shape_blocker(m, 'can0').contains('push_ms')
+}
+
+// The superloop's router must be id-width-exact (an extended frame sharing 0x7E2 is not a trace
+// command), and the flow-control arm exists only when dump_fc is bound.
+fn test_the_baremetal_router_is_width_exact() {
+	mut m := Model{
+		trace:  TraceCfg{
+			on:     true
+			cmd_id: 0x7E2
+		}
+		target: TargetCfg{
+			on: true
+		}
+	}
+	raw := baremetal_trace_bus(m).join('\n')
+	assert raw.contains('if rx.ext {')
+	assert raw.contains('u32(0x7e2) { g_tm.on_cmd(rx) }')
+	assert !raw.contains('on_dump_fc')
+	m.trace.dump_fc_bound = true
+	assert baremetal_trace_bus(m).join('\n').contains('u32(0x7e6) { g_tm.on_dump_fc(t1, rx) }')
+	// ThreadX is its own path: none of this is emitted there
+	m.target.threadx = true
+	assert baremetal_trace_bus(m) == []string{}
 }
 
 // The bridge conflict is about the RUNNER, not the bus: trace_comm traces on can1 and bridges on
@@ -313,4 +399,160 @@ fn test_a_bridge_off_the_trace_bus_core_blocks_trace() {
 		}
 	}
 	assert trace_shape_blocker(m, 'can1') != ''
+}
+
+// codex #282 r1: every runner speaks standard frames, so a 29-bit binding is refused at parse
+// rather than silently ignored (cmd, dump_fc) or truncated on the wire (rsp, record).
+fn test_an_extended_trace_binding_is_named() {
+	mut t := TraceCfg{}
+	assert trace_extended_binding(t) == '', 'the 0x7E2..0x7E6 defaults are standard'
+	t.dump_fc_id = 0x18DA00F1
+	assert trace_extended_binding(t) == 'dump_fc 0x18da00f1'
+	t.rsp_id = 0x800
+	assert trace_extended_binding(t).starts_with('rsp '), 'the first offender, in endpoint order'
+}
+
+// codex #282 r1: the module reports the traced partition's configured core, not a literal 0 —
+// the manifest puts every handler on that core and a TraceCmd mask selects by it.
+fn test_a_single_core_runner_reports_its_partitions_core() {
+	m := Model{
+		trace:  TraceCfg{
+			on:    true
+			level: 'fb'
+		}
+		target: TargetCfg{
+			on: true
+		}
+		part:   PartMap{
+			by_part: {
+				'app': []toml.Any{}
+			}
+			core_of: {
+				'app': 1
+			}
+		}
+	}
+	assert single_trace_core(m) == 1
+	assert baremetal_trace_init(m).join('\n').contains('u32(0x7e5), 1, false,')
+}
+
+// codex #282 r1: LoadDetail is its own pending frame, retried every pass until the FIFO takes it —
+// not a second send inside the CpuLoad block that a full FIFO drops for a whole period.
+fn test_load_detail_is_retried_until_accepted() {
+	p := TelemProducer{
+		on:        true
+		id:        0x7E0
+		detail_id: 0x7E1
+	}
+	g := p.bus_tick(BusCtx{
+		telem_active: true
+		now:          't1'
+		period:       'telem_period_us'
+		gate:         ' && ch.tx_ready()'
+		load:         ['\t\t\tload[0] = 1']
+		det_ovr:      'sched.overruns()'
+		det_lines:    ['\t\t\tdetail := [8]u8{}']
+		frame:        'f'
+		detframe:     'd'
+		idx:          'i'
+	}).join('\n')
+	cpu_at := g.index('ch.send(f)') or { -1 }
+	due_at := g.index('detail_due = true') or { -1 }
+	retry_at := g.index('if detail_due && ch.tx_ready() {') or { -1 }
+	assert cpu_at >= 0 && due_at > cpu_at && retry_at > due_at, g
+	assert g.contains('last_overruns = ovr\n\t\t\t\tdetail_due = false'), 'cleared only on an accepted send'
+}
+
+// codex #282 r2 (caused by the r1 core fix): the host runner must RUN on the core it reports — the
+// pin and the module's core come from one source, not the trace bus's core.
+fn test_the_host_runner_runs_on_the_core_it_reports() {
+	m := Model{
+		trace:    TraceCfg{
+			on:    true
+			bus:   'can0'
+			level: 'fb'
+		}
+		bus_core: {
+			'can0': 0
+		}
+		part:     PartMap{
+			by_part: {
+				'app': []toml.Any{}
+			}
+			core_of: {
+				'app': 1
+			}
+		}
+	}
+	g := emit_run_trace_host(m, map[string][]string{}, '', 'app').join('\n')
+	assert g.contains('osal.pin_to_core(1)'), g
+	assert g.contains('u32(0x7e5), 1, false,'), 'the module reports the same core it runs on'
+}
+
+// codex #282 r2: a DBC NAME binding carries its width in the message's ext flag, separate from
+// the id — an EFF message with a small id (0x100) passes the numeric 0x7FF rule, and would then be
+// matched/sent as a standard frame. loom2v must refuse it by the flag. Runs the real generator on
+// trace_demo's config with `cmd` bound to such a message (a panic cannot be caught in-process).
+fn test_an_extended_dbc_binding_is_refused_by_its_flag() {
+	root := @VMODROOT
+	tmp := os.join_path(os.temp_dir(), 'trace_ext_bind_${os.getpid()}')
+	os.mkdir_all(tmp) or {
+		assert false, 'mkdir ${tmp}: ${err}'
+		return
+	}
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	src := os.read_file(os.join_path(root, 'examples', 'trace_demo', 'ecu.toml')) or {
+		assert false, '${err}'
+		return
+	}
+	assert src.contains('cmd            = 0x7E2'), 'trace_demo changed shape — update this test'
+	ecu := os.join_path(tmp, 'ecu.toml')
+	os.write_file(ecu, src.replace('cmd            = 0x7E2', 'cmd            = "TraceCmdX"')) or {
+		panic(err)
+	}
+	dbc := os.join_path(tmp, 'bus.dbc')
+	// bit 31 of a DBC BO_ id marks an extended frame: 0x80000100 = EFF id 0x100
+	os.write_file(dbc, 'VERSION ""\n\nNS_ :\n\nBS_:\n\nBU_: N\n\nBO_ 2147483904 TraceCmdX: 8 N\n') or {
+		panic(err)
+	}
+	r := os.execute('${@VEXE} -enable-globals run ${os.join_path(root, 'tools', 'loom2v')} ${ecu} ${dbc} ' +
+		'${os.join_path(tmp, 'sig.v')} ${os.join_path(tmp, 'ports.v')} ${os.join_path(tmp, 'gen.v')} ' +
+		'${os.join_path(tmp, 'manifest.csv')}')
+	assert r.exit_code != 0, 'loom2v accepted an extended DBC binding: ${r.output}'
+	assert r.output.contains('extended (29-bit) message'), r.output
+}
+
+// codex #282 r4 (the r1 core fix, one consumer further): CpuLoad must report the load in the
+// slot of the core the runner reports — not core 0 — or the telemetry and the dump disagree.
+fn test_the_host_runner_reports_load_on_its_core() {
+	m := Model{
+		trace:    TraceCfg{
+			on:    true
+			bus:   'can0'
+			level: 'fb'
+		}
+		telem:    TelemetryCfg{
+			on:        true
+			bus:       'can0'
+			id:        0x7E0
+			period_us: 500000
+		}
+		bus_core: {
+			'can0': 0
+		}
+		part:     PartMap{
+			by_part: {
+				'app': []toml.Any{}
+			}
+			core_of: {
+				'app': 3
+			}
+		}
+	}
+	g := emit_run_trace_host(m, map[string][]string{}, 'can0', 'app').join('\n')
+	assert g.contains('load[3] = u16(sched.load_permille())'), g
+	assert g.contains('telem.encode_cpuload(load, 4)'), g
+	assert !g.contains('load[0]'), g
 }

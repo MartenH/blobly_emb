@@ -326,6 +326,7 @@ fn comm_thread_entry(input u32) {
 	mut last_telem := u64(0)
 	telem_period_us := u64(500000)
 	mut last_overruns := u32(0)
+	mut detail_due := false // LoadDetail owed until the FIFO accepts it
 	g_tm.init(u32(0x7e3), u32(0x7e5), 0, true, // in place: no module-sized stack copy
 		trace.new_buffer(&g_trace_ring[0], 256, .ring, 0))
 	mut trace_txf := can.Frame{}
@@ -428,6 +429,9 @@ fn comm_thread_entry(input u32) {
 				f.data[i] = frame[i]
 			}
 			ch.send(f)
+			detail_due = true
+		}
+		if detail_due && nm_up && ch.tx_ready() {
 			ovr := C.load_sum_overruns()
 			detail := telem.encode_loaddetail(u16(C.load_sum_100ms()), u16(C.load_sum_1s()), u16(C.load_sum_10s()), ovr - last_overruns)
 			mut d := can.Frame{
@@ -439,6 +443,7 @@ fn comm_thread_entry(input u32) {
 			}
 			if ch.send(d) {
 				last_overruns = ovr
+				detail_due = false
 			}
 		}
 		// PRODUCER: external tx signal "Workload" — read the FB-published IOC
