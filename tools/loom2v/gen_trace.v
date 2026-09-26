@@ -489,7 +489,10 @@ fn single_trace_core(m Model) int {
 // id-width-exact: an extended frame that shares a numeric id is not a trace command.
 fn trace_single_serve(m Model, tm string, now string) []string {
 	mut g := []string{}
-	g << '\t\tfor ch.recv(mut rx) {'
+	// ONE command per response: a command read while the previous response is still queued would
+	// overwrite it (on_cmd) or lose its own (queue_rsp refuses) — the rest wait in the socket and
+	// are served next pass, after produce() has sent the pending one (codex #285 r1)
+	g << '\t\tfor !${tm}.rsp_pending() && ch.recv(mut rx) {'
 	g << '\t\t\tif rx.ext {'
 	g << '\t\t\t\tcontinue'
 	g << '\t\t\t}'
@@ -844,7 +847,9 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '		// pass twice, so every traced core reported roughly double its real load and a'
 	g << '		// busy one clamped at 100% (codex #270 r2).'
 	g << '		osal.scratch_set(${owner_core}, u64(sched.load_permille()))'
-	g << '		for ch.recv(mut rx) {'
+	// one command per response: a second command read while the first one's response is still
+	// queued would find nowhere to put its own (queue_rsp refuses) — the rest wait in the socket
+	g << '		for !tm.rsp_pending() && ch.recv(mut rx) {'
 	g << '			match rx.id {'
 	g << '				u32(0x${m.trace.cmd_id.hex()}) { // trace.cmd — applied to BOTH cores;'
 	g << '				// an arm/start/reset starts a new freeze generation (set_freeze above) and'
@@ -1125,7 +1130,7 @@ fn trace_bridge_loop_body(m Model, tctx TraceHostCtx) []string {
 	cap := m.trace.buffer_records
 	sat_core := tctx.sat_core
 	mut g := []string{}
-	g << '\t\tfor trace_ch.recv(mut trace_rx) {'
+	g << '\t\tfor !tm.rsp_pending() && trace_ch.recv(mut trace_rx) { // one command per response'
 	g << '\t\t\tmatch trace_rx.id {'
 	g << '\t\t\t\tu32(0x${m.trace.cmd_id.hex()}) { // trace.cmd — the owner lane AND the satellite'
 	g << '\t\t\t\t\ttm.on_cmd_multicore(trace_rx, mut sat, ${sat_core}, import_buf, ${cap + 1}, osal.now_us)'

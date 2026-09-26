@@ -26,11 +26,13 @@ import sync.stdatomic as _
 //          ring cross-thread; that overlap was where a stale raise came from.)
 //   ack    the newest generation the satellite has adopted. rearm after ack = a restart the
 //          satellite has not performed yet, and the owner answers for the window it will open.
-//   since  when the current generation began (low 32 bits of the µs trace clock), written BEFORE
-//          `word`. A hook runs AFTER its handler, so the one dispatch whose hook adopts a new
-//          generation may have STARTED in the window that generation ended; `since` is how that
-//          hook tells (Capture.stale_dispatch). Written first so a racing reader can only err
-//          towards "stale" — never judge an old-window dispatch as new.
+//   since  when each generation began (low 32 bits of the µs trace clock), in the slot of its
+//          parity, written BEFORE `word`. A hook runs AFTER its handler, so the one dispatch whose
+//          hook adopts a new generation may have STARTED in the window that generation ended;
+//          `since` is how that hook tells (Capture.stale_dispatch). Two slots so a generation and
+//          its OWN stamp are read as a pair (adopt): the next bump writes the other slot, and the
+//          one after that cannot land before the word has moved past — which the reader checks
+//          (codex #285 r1: one shared stamp could hand a hook g1 with g2's boundary).
 //
 // Generations are 31 bits (they ride `word` above the raised bit) and are compared wrap-safely
 // (gen_after), so a long-running bench wraps cleanly rather than stalling.
@@ -39,7 +41,7 @@ mut:
 	word  u32
 	rearm u32
 	ack   u32
-	since u32
+	since [2]u32
 }
 
 const gen_mask = u32(0x7fff_ffff)
@@ -80,6 +82,8 @@ pub mut:
 	// the owner's ring is restarted by the owner's own command path, on its own thread. Set through
 	// satellite_capture(), so the role is named where the runner wires it.
 	satellite bool
+	// when the ADOPTED generation began — read with it, as a pair (FreezeSync.since)
+	since u32
 }
 
 // satellite_capture builds the capture for the SATELLITE core of a multi-core trace: the peer that
@@ -118,7 +122,10 @@ pub fn fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	// FIRST: a pending re-arm restarts this ring before anything is recorded into it
 	stale := t.stale_dispatch(start_us, t.adopt())
 	if stale == .discarded {
-		return // the dispatch belongs to the window the host just discarded
+		// the dispatch belongs to the window the host just discarded: record nothing — but the
+		// FRESH ring still honours a freeze its generation already raised (codex #285 r1)
+		t.sync_freeze(false)
+		return
 	}
 	// The capturing test is taken AT ENTRY — before EITHER push below. Both can retire the
 	// ring mid-hook: the FB record can fill a oneshot's final slot, and so can the epoch
@@ -149,10 +156,8 @@ pub fn fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 		// inside this very hook wins instead, and then no freeze is raised for it either.
 		tripped = t.buf.trip()
 	}
-	if stale == .predates {
-		return // its window continues, but its trip predates the generation: raise nothing for it
-	}
-	t.sync_freeze(tripped)
+	// a trip that predates the generation raises nothing for it — but observing still applies
+	t.sync_freeze(tripped && stale != .predates)
 }
 
 // anchor keeps the capture's u24 stamp window aligned with the RING, and is the one place
@@ -199,7 +204,17 @@ fn (mut t Capture) adopt() Adoption {
 	if t.freeze == unsafe { nil } {
 		return .none
 	}
-	g := C.atomic_load_u32(voidptr(&t.freeze.word)) >> 1
+	mut g := u32(0)
+	mut since := u32(0)
+	for {
+		// the generation and ITS stamp as a pair: re-read the word, and retry if a bump moved it
+		// between the two loads (then the slot may already hold the next-but-one's stamp)
+		g = C.atomic_load_u32(voidptr(&t.freeze.word)) >> 1
+		since = C.atomic_load_u32(voidptr(&t.freeze.since[g & 1]))
+		if C.atomic_load_u32(voidptr(&t.freeze.word)) >> 1 == g {
+			break
+		}
+	}
 	if g == t.gen {
 		return .none
 	}
@@ -211,6 +226,7 @@ fn (mut t Capture) adopt() Adoption {
 		res = .restarted
 	}
 	t.gen = g
+	t.since = since
 	if t.satellite {
 		C.atomic_store_u32(voidptr(&t.freeze.ack), g)
 	}
@@ -227,8 +243,7 @@ fn (t Capture) stale_dispatch(start_us u64, adoption Adoption) Staleness {
 	if adoption == .none {
 		return .current
 	}
-	since := C.atomic_load_u32(voidptr(&t.freeze.since))
-	if i32(u32(start_us) - since) >= 0 {
+	if i32(u32(start_us) - t.since) >= 0 {
 		return .current
 	}
 	return if adoption == .restarted { Staleness.discarded } else { Staleness.predates }
@@ -275,6 +290,7 @@ pub fn (mut t Capture) note_thread(tid u16, reason u8, start_us u64, dt_us u64) 
 	// a first-class traced entity, so it participates in the system-wide freeze like any core.
 	stale := t.stale_dispatch(start_us, t.adopt())
 	if stale == .discarded {
+		t.sync_freeze(false) // record nothing, but honour a freeze already raised
 		return
 	}
 	was_capturing := t.buf.state() == .capturing
@@ -290,10 +306,7 @@ pub fn (mut t Capture) note_thread(tid u16, reason u8, start_us u64, dt_us u64) 
 	if over && was_capturing {
 		tripped = t.buf.trip() // a drain cycle over budget freezes this ring, like an overrunning handler
 	}
-	if stale == .predates {
-		return
-	}
-	t.sync_freeze(tripped)
+	t.sync_freeze(tripped && stale != .predates)
 }
 
 // thread_hook is note_thread as a Loom trace hook — installed by a partition whose scheduled

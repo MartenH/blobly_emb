@@ -102,7 +102,7 @@ pub fn partition_sense(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &
 		// pass twice, so every traced core reported roughly double its real load and a
 		// busy one clamped at 100% (codex #270 r2).
 		osal.scratch_set(0, u64(sched.load_permille()))
-		for ch.recv(mut rx) {
+		for !tm.rsp_pending() && ch.recv(mut rx) {
 			match rx.id {
 				u32(0x7e2) { // trace.cmd — applied to BOTH cores;
 				// an arm/start/reset starts a new freeze generation (set_freeze above) and

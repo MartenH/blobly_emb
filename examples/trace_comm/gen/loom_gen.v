@@ -88,7 +88,7 @@ pub fn partition_can0(ch can.Channel, trace_ch can.Channel, sat_buf &trace.Trace
 	for {
 		sched.run_profiled(osal.now_us)
 		loom_t1 := osal.now_us()
-		for trace_ch.recv(mut trace_rx) {
+		for !tm.rsp_pending() && trace_ch.recv(mut trace_rx) { // one command per response
 			match trace_rx.id {
 				u32(0x7e2) { // trace.cmd — the owner lane AND the satellite
 					tm.on_cmd_multicore(trace_rx, mut sat, 1, import_buf, 65, osal.now_us)

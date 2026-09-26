@@ -503,3 +503,45 @@ fn test_generations_compare_across_the_wrap() {
 	cell.ack = 0
 	assert !m.sat_restart_pending()
 }
+
+// codex #285 r1: a stale dispatch raises nothing — but the ring it now records into still honours a
+// freeze its adopted generation ALREADY raised (the owner tripped the fresh window meanwhile).
+// Returning early skipped that, leaving the satellite capturing past a system freeze.
+fn test_a_stale_dispatch_still_honours_a_freeze_already_raised() {
+	mut own := [16]Record{}
+	mut satb := [16]Record{}
+	mut remote := [64]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	mut cell := FreezeSync{}
+	m.set_freeze(&cell)
+	mut sat := new_buffer(&satb[0], 16, .ring, 50)
+	sat.start()
+	mut sc := satellite_capture(&sat, 0, 10, 100, &cell)
+	fb_hook(voidptr(&sc), 0, 100, 10)
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0003), mut sat, 1, &remote[0], 64, clock_1000)
+	cell.word = (1 << 1) | 1 // the owner's fresh window tripped before the satellite's hook ran
+	fb_hook(voidptr(&sc), 0, 500, 10) // straddler: discarded, but the restarted ring must freeze
+	assert sat.used() == 0
+	assert sat.froze_cause() == freeze_trigger, 'the fresh satellite ring ignored the raised freeze'
+}
+
+// codex #285 r1: a generation is adopted WITH its own stamp. The bump writes the stamp into the
+// slot of the generation's parity before the word, so a hook that loaded g1 cannot be handed the
+// next generation's boundary (here: g2's stamp already written, g2 not yet published).
+fn test_a_generation_is_adopted_with_its_own_stamp() {
+	mut cell := FreezeSync{}
+	cell.word = 1 << 1 // generation 1 published...
+	cell.since[1] = 1000 // ...with its stamp
+	cell.since[0] = 5000 // generation 2's stamp already written, its word not yet
+	mut ring := [8]Record{}
+	mut buf := new_buffer(&ring[0], 8, .ring, 50)
+	buf.start()
+	mut c := Capture{
+		buf:    &buf
+		freeze: &cell
+	}
+	assert c.adopt() == .adopted
+	assert c.gen == 1 && c.since == 1000, 'adopted g${c.gen} with stamp ${c.since}'
+	// a dispatch that began at 2000 is in g1's window — not "before" it by g2's stamp
+	assert c.stale_dispatch(2000, .adopted) == .current
+}

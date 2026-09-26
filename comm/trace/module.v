@@ -253,7 +253,7 @@ fn (mut m TraceModule) bump(restart_sat bool, clock fn () u64) {
 		return
 	}
 	m.freeze_gen = (m.freeze_gen + 1) & gen_mask
-	C.atomic_store_u32(voidptr(&m.freeze.since), u32(clock()))
+	C.atomic_store_u32(voidptr(&m.freeze.since[m.freeze_gen & 1]), u32(clock()))
 	if restart_sat {
 		C.atomic_store_u32(voidptr(&m.freeze.rearm), m.freeze_gen)
 	}
