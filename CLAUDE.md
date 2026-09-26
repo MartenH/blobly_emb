@@ -140,6 +140,12 @@ Know two things before running it on the bench:
   each flashing its own image. The board is left holding whichever ran last — `domain`, by glob
   order — which is the right resting state for a system_full bench, but it means the group is not
   idempotent with respect to what is on the board.
+- **Both H735 scripts target the SAME board too** (`h735_app` and `h735_someip`), and it is
+  system_full's **sysnode** — neither script flashes it back. Both need `BLOB_H735_SERIAL` (an H735
+  and an H723 report the same chip id). `h735_app` reads its frozen trace ring straight out of RAM
+  (no CAN, no OpenOCD — the ring arms at boot and the overrun trigger freezes it); a read-only run
+  first compares the board's flash with `build/app.bin` and SKIPs on any other image. Reflash
+  sysnode (`examples/system_full/nodes/sysnode`) afterwards for a system_full bench.
 
 Neither needs a CAN adapter, but they need DIFFERENT SWD tooling, so install both:
 

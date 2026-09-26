@@ -506,6 +506,9 @@ approved_by = "bench run 2026-08-31 by the agent session on the maintainer's ben
 # alongside the running H755 domain froze 13 ms after boot — domain's CpuLoad rides 0x7E2 and its
 # byte0 0x03 reads as op_stop (stop reply cause 1). h735_app now uses 0x7EC..0x7EF, and the same
 # result above reproduced WITH domain running (cause 2, 64/64, trip at 511 ms).
+# Repeatable without CAN: examples/h735_app/bench_test.sh --flash reads the frozen ring from RAM
+# over SWD (FB records, frozen with no command sent, an OVERRAN record) — and was mutation-checked:
+# an image that never arms fails, as does one whose budget never trips.
 [[review]]
 id = "h735-app-baremetal-trace"
 method = "review"
