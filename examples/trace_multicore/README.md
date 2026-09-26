@@ -13,6 +13,9 @@
 > more), so core 1's state is read by addressing it alone: mask `0x0002` answers with the
 > satellite's own `TraceRsp`. And a dump serves only STOPPED windows: rings still capturing
 > answer `result_not_ready` — freeze them first, by the glitch trigger firing or by `stop`.
+> One exception to "the owner's `TraceRsp`": an `arm`/`reset` reaching core 1 is performed by core 1
+> itself at its next dispatch (#273), and until then a `stop` or `dump` that selects it is refused
+> whole with core 1's `result_busy` — retry it; the wait is one core-1 dispatch.
 
 Two partitions on two cores (`sense` on core 0, `ctrl` on core 1), each a pure-compute Loom, both
 traced. Everything is generated from [`ecu.toml`](ecu.toml) by loom2v — the per-core capture rings,

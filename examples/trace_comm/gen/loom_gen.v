@@ -60,7 +60,7 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 }
 
-pub fn partition_can0(ch can.Channel, trace_ch can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &u32) {
+pub fn partition_can0(ch can.Channel, trace_ch can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &trace.FreezeSync) {
 	osal.pin_to_core(0)
 	mut st := Bridge_can0_state{
 		chan: ch
@@ -78,7 +78,7 @@ pub fn partition_can0(ch can.Channel, trace_ch can.Channel, sat_buf &trace.Trace
 	unsafe {
 		cap.freeze = freeze // the system-wide freeze: this lane trips it, and honours it
 	}
-	tm.set_freeze(freeze) // ...and the module retires it on arm/start/reset
+	tm.set_freeze(freeze) // ...and the module starts a new generation on arm/start/reset
 	sched.set_trace_hook(trace.thread_hook, &cap)
 	tm.arm() // both rings record from startup — a recorder that waits to be armed has
 	// nothing to say about the boot it was installed to watch
@@ -88,10 +88,10 @@ pub fn partition_can0(ch can.Channel, trace_ch can.Channel, sat_buf &trace.Trace
 	for {
 		sched.run_profiled(osal.now_us)
 		loom_t1 := osal.now_us()
-		for trace_ch.recv(mut trace_rx) {
+		for !tm.rsp_pending() && trace_ch.recv(mut trace_rx) { // one command per response
 			match trace_rx.id {
 				u32(0x7e2) { // trace.cmd — the owner lane AND the satellite
-					tm.on_cmd_multicore(trace_rx, mut sat, 1, import_buf, 65)
+					tm.on_cmd_multicore(trace_rx, mut sat, 1, import_buf, 65, osal.now_us)
 				}
 				u32(0x7e6) { tm.on_dump_fc(loom_t1, trace_rx) } // ISO-TP FC
 				else {}
@@ -122,17 +122,13 @@ pub fn partition_can0(ch can.Channel, trace_ch can.Channel, sat_buf &trace.Trace
 
 pub fn run(can0 can.Channel, can1 can.Channel) {
 	trace_origin := osal.now_us()
-	mut trace_freeze := u32(0)
+	mut trace_freeze := trace.FreezeSync{} // generation-aware (#273)
 	mut sat_ring := [64]trace.Record{}
 	mut sat_buf := trace.new_buffer(&sat_ring[0], 64, .ring, 50)
 	sat_buf.start()
-	mut sat_cap := trace.Capture{
-		buf:       &sat_buf
-		start:     trace_origin
-		id_base:   0
-		budget_us: 500
-		freeze:    unsafe { &trace_freeze }
-	}
+	// the satellite restarts its own ring when the owner posts a re-arm (#273)
+	mut sat_cap := trace.satellite_capture(&sat_buf, trace_origin, 0, 500,
+		unsafe { &trace_freeze })
 	mut import_ring := [65]trace.Record{}
 	t_can0 := spawn partition_can0(can0, can1, &sat_buf, unsafe { &import_ring[0] }, trace_origin, unsafe { &trace_freeze })
 	t_app := spawn partition_app(1, unsafe { voidptr(&sat_cap) })

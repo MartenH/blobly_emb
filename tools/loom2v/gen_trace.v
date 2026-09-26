@@ -489,7 +489,10 @@ fn single_trace_core(m Model) int {
 // id-width-exact: an extended frame that shares a numeric id is not a trace command.
 fn trace_single_serve(m Model, tm string, now string) []string {
 	mut g := []string{}
-	g << '\t\tfor ch.recv(mut rx) {'
+	// ONE command per response: a command read while the previous response is still queued would
+	// overwrite it (on_cmd) or lose its own (queue_rsp refuses) — the rest wait in the socket and
+	// are served next pass, after produce() has sent the pending one (codex #285 r1)
+	g << '\t\tfor !${tm}.rsp_pending() && ch.recv(mut rx) {'
 	g << '\t\t\tif rx.ext {'
 	g << '\t\t\t\tcontinue'
 	g << '\t\t\t}'
@@ -806,7 +809,7 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << ''
 	g << '// The dump owner: an ordinary app partition that also owns the trace bus. Its ring is'
 	g << '// the module\'s OWN buffer, so commands and status apply to a real producing ring.'
-	g << 'pub fn partition_${owner}(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &u32) {'
+	g << 'pub fn partition_${owner}(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &trace.FreezeSync) {'
 	g << '	osal.pin_to_core(${owner_core})'
 	g << '	mut ch := chp'
 	g << '	mut sat := unsafe { sat_buf }'
@@ -826,7 +829,7 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '	unsafe {'
 	g << '		cap.freeze = freeze // share the cross-core freeze cell with the satellite'
 	g << '	}'
-	g << '	tm.set_freeze(freeze) // ...and with the module, which retires it on arm/start/reset'
+	g << '	tm.set_freeze(freeze) // ...and with the module, which starts a new generation on arm/start/reset'
 	g << '	sched.set_trace_hook(trace.fb_hook, &cap)'
 	g << '	// both rings record from startup, like the satellite\'s below — a flight recorder that'
 	g << '	// waits for a host to arm it has nothing to say about the boot it was installed to watch.'
@@ -844,13 +847,14 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '		// pass twice, so every traced core reported roughly double its real load and a'
 	g << '		// busy one clamped at 100% (codex #270 r2).'
 	g << '		osal.scratch_set(${owner_core}, u64(sched.load_permille()))'
-	g << '		for ch.recv(mut rx) {'
+	// one command per response: a second command read while the first one's response is still
+	// queued would find nowhere to put its own (queue_rsp refuses) — the rest wait in the socket
+	g << '		for !tm.rsp_pending() && ch.recv(mut rx) {'
 	g << '			match rx.id {'
 	g << '				u32(0x${m.trace.cmd_id.hex()}) { // trace.cmd — applied to BOTH cores;'
-	g << '				// an arm/start/reset also retires the shared freeze (set_freeze above),'
-	g << '				// BEFORE any ring restarts — retired after, a peer dispatch in the gap'
-	g << '				// re-froze the just-armed ring from the stale cell.'
-	g << '					tm.on_cmd_multicore(rx, mut sat, ${sat_core}, import_buf, ${cap + 1})'
+	g << '				// an arm/start/reset starts a new freeze generation (set_freeze above) and'
+	g << '				// POSTS the satellite\'s restart — its own hook performs it (#273).'
+	g << '					tm.on_cmd_multicore(rx, mut sat, ${sat_core}, import_buf, ${cap + 1}, osal.now_us)'
 	g << '				}'
 	if m.trace.dump_fc_bound {
 		g << '				u32(0x${m.trace.dump_fc_id.hex()}) { tm.on_dump_fc(loom_t1, rx) } // trace.dump_fc'
@@ -896,17 +900,14 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '	// one capture origin for BOTH cores: a per-thread origin would skew the two lanes by'
 	g << '	// the thread-start delay, invisibly (a shared clock emits no core-offset record).'
 	g << '	trace_origin := osal.now_us()'
-	g << '	// the shared cross-core freeze cell (docs/trace-multicore.md §3). Both captures point at'
-	g << '	// it, so whichever ring trips its budget raises it and the peer observes it inside its'
-	g << '	// capture hook — within one handler of the event, not at the end of a scheduler pass.'
-	g << '	mut trace_freeze := u32(0)'
-	g << '	mut sat_cap := trace.Capture{'
-	g << '		buf:       &sat_buf'
-	g << '		start:     trace_origin'
-	g << '		id_base:   ${handler_id_base(m, doc, sat)}'
-	g << '		budget_us: ${m.trace.budget_us}'
-	g << '		freeze:    unsafe { &trace_freeze }'
-	g << '	}'
+	g << '	// the system-wide freeze (docs/trace-multicore.md §3). Both captures point at it, so'
+	g << '	// whichever ring trips its budget raises it and the peer observes it inside its capture'
+	g << '	// hook — within one handler of the event. Generation-aware (#273): a raise counts only'
+	g << '	// for the window it was made in, and the satellite restarts its own ring on a re-arm.'
+	g << '	mut trace_freeze := trace.FreezeSync{}'
+	g << '	// the satellite restarts its own ring when the owner posts a re-arm (#273)'
+	g << '	mut sat_cap := trace.satellite_capture(&sat_buf, trace_origin, ${handler_id_base(m, doc, sat)}, ${m.trace.budget_us},'
+	g << '		unsafe { &trace_freeze })'
 	g << '	// staging for the imported window (caller-owned, per set_remote): +1 for the leading'
 	g << '	// core-offset record load_remote_buffer may prepend.'
 	g << '	mut import_ring := [${cap + 1}]trace.Record{}'
@@ -1044,7 +1045,7 @@ fn validate_trace_bridge_owner(m Model, tctx TraceHostCtx) {
 // the satellite's ring + import staging, the shared capture origin and the freeze cell. Appended
 // to the bridge's own COM signature, so run() hands it both buses.
 fn trace_bridge_params() string {
-	return ', trace_ch can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &u32'
+	return ', trace_ch can.Channel, sat_buf &trace.TraceBuffer, import_buf &trace.Record, origin_us u64, freeze &trace.FreezeSync'
 }
 
 // trace_bridge_preamble: the owner's ring, module and capture, built once before its loop.
@@ -1066,7 +1067,7 @@ fn trace_bridge_preamble(m Model, tctx TraceHostCtx) []string {
 	g << '\tunsafe {'
 	g << '\t\tcap.freeze = freeze // the system-wide freeze: this lane trips it, and honours it'
 	g << '\t}'
-	g << '\ttm.set_freeze(freeze) // ...and the module retires it on arm/start/reset'
+	g << '\ttm.set_freeze(freeze) // ...and the module starts a new generation on arm/start/reset'
 	// thread_hook, not fb_hook: every dispatch of this loop is the same entity (the bridge), so
 	// the record is a THREAD span carrying id_base, not an FB record indexed by handler.
 	g << '\tsched.set_trace_hook(trace.thread_hook, &cap)'
@@ -1129,10 +1130,10 @@ fn trace_bridge_loop_body(m Model, tctx TraceHostCtx) []string {
 	cap := m.trace.buffer_records
 	sat_core := tctx.sat_core
 	mut g := []string{}
-	g << '\t\tfor trace_ch.recv(mut trace_rx) {'
+	g << '\t\tfor !tm.rsp_pending() && trace_ch.recv(mut trace_rx) { // one command per response'
 	g << '\t\t\tmatch trace_rx.id {'
 	g << '\t\t\t\tu32(0x${m.trace.cmd_id.hex()}) { // trace.cmd — the owner lane AND the satellite'
-	g << '\t\t\t\t\ttm.on_cmd_multicore(trace_rx, mut sat, ${sat_core}, import_buf, ${cap + 1})'
+	g << '\t\t\t\t\ttm.on_cmd_multicore(trace_rx, mut sat, ${sat_core}, import_buf, ${cap + 1}, osal.now_us)'
 	g << '\t\t\t\t}'
 	if m.trace.dump_fc_bound {
 		g << '\t\t\t\tu32(0x${m.trace.dump_fc_id.hex()}) { tm.on_dump_fc(loom_t1, trace_rx) } // ISO-TP FC'
@@ -1180,17 +1181,13 @@ fn trace_run_setup(m Model, sat string, doc toml.Doc) []string {
 	cap := m.trace.buffer_records
 	return [
 		'\ttrace_origin := osal.now_us()',
-		'\tmut trace_freeze := u32(0)',
+		'\tmut trace_freeze := trace.FreezeSync{} // generation-aware (#273)',
 		'\tmut sat_ring := [${cap}]trace.Record{}',
 		'\tmut sat_buf := trace.new_buffer(&sat_ring[0], ${cap}, .ring, ${m.trace.pre_pct})',
 		'\tsat_buf.start()',
-		'\tmut sat_cap := trace.Capture{',
-		'\t\tbuf:       &sat_buf',
-		'\t\tstart:     trace_origin',
-		'\t\tid_base:   ${handler_id_base(m, doc, sat)}',
-		'\t\tbudget_us: ${m.trace.budget_us}',
-		'\t\tfreeze:    unsafe { &trace_freeze }',
-		'\t}',
+		'\t// the satellite restarts its own ring when the owner posts a re-arm (#273)',
+		'\tmut sat_cap := trace.satellite_capture(&sat_buf, trace_origin, ${handler_id_base(m, doc, sat)}, ${m.trace.budget_us},',
+		'\t\tunsafe { &trace_freeze })',
 		'\tmut import_ring := [${cap + 1}]trace.Record{}',
 	]
 }

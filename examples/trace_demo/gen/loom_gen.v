@@ -65,7 +65,7 @@ pub fn run(chp can.Channel) {
 		// run_profiled_excl -> account(busy, clock())). Calling it again charged the same
 		// pass twice, so every traced core reported roughly double its real load and a
 		// busy one clamped at 100% (codex #270 r2).
-		for ch.recv(mut rx) {
+		for !tm.rsp_pending() && ch.recv(mut rx) {
 			if rx.ext {
 				continue
 			}

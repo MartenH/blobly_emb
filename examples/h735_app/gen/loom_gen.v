@@ -113,7 +113,7 @@ pub fn run(can0 can.Channel) {
 				detail_due = false
 			}
 		}
-		for ch.recv(mut rx) {
+		for !g_tm.rsp_pending() && ch.recv(mut rx) {
 			if rx.ext {
 				continue
 			}

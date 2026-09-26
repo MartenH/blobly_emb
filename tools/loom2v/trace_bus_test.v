@@ -260,6 +260,9 @@ fn test_the_baremetal_router_is_width_exact() {
 		}
 	}
 	raw := baremetal_trace_bus(m).join('\n')
+	// one command per response (codex #285 r1): a second command read while the first one's
+	// response is queued would overwrite it — the rest wait in the socket for the next pass
+	assert raw.contains('for !g_tm.rsp_pending() && ch.recv(mut rx) {'), raw
 	assert raw.contains('if rx.ext {')
 	assert raw.contains('u32(0x7e2) { g_tm.on_cmd(rx) }')
 	assert !raw.contains('on_dump_fc')
