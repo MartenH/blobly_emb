@@ -50,6 +50,17 @@ grep -q "$SERIAL" <<<"$PROBE" || { echo "SKIP: ST-LINK $SERIAL not attached — 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 echo "building + flashing h735_app ..."
 make all >"$TMP/build.log" 2>&1 || { echo "FAIL: build error:"; tail -15 "$TMP/build.log"; exit 1; }
+# the ring's address AND size from the ELF about to be flashed — never from ecu.toml, which can
+# drift from what was compiled in — resolved BEFORE flashing, so a failure here costs no reflash.
+# The size is converted by the shell: strtonum() is gawk-only, and mawk has no such function
+# (codex on #284).
+read -r RING RSIZE_HEX < <(arm-none-eabi-nm -S "$ELF" | awk '$4 == "g_trace_ring" {print "0x"$1, $2; exit}')
+GCPU=$(arm-none-eabi-nm "$ELF" | awk '$3 == "g_cpu_mhz" {print "0x"$1; exit}')
+[ -n "${RING:-}" ] && [ -n "$GCPU" ] && [[ "${RSIZE_HEX:-}" =~ ^[0-9a-fA-F]+$ ]] \
+  || { echo "FAIL: could not resolve g_trace_ring / g_cpu_mhz in $ELF"; exit 1; }
+RSIZE=$(( 16#$RSIZE_HEX ))
+NREC=$(( RSIZE / 8 ))
+[ "$NREC" -gt 0 ] || { echo "FAIL: g_trace_ring has size 0 in $ELF"; exit 1; }
 st-flash --serial "$SERIAL" write "$BIN" 0x08000000 >/dev/null 2>&1 || { echo "FAIL: flash error"; exit 1; }
 # a failed reset leaves the PREVIOUS image running; inspecting it would test the wrong binary
 st-flash --serial "$SERIAL" reset >/dev/null 2>&1 \
@@ -65,13 +76,6 @@ words() {
 }
 mono_ms() { awk '{ printf "%d", $1 * 1000 }' /proc/uptime; }
 
-# the ring's address AND size from the ELF that was just flashed — never from ecu.toml, which
-# can drift from what was compiled in
-read -r RING RSIZE < <(arm-none-eabi-nm -S "$ELF" | awk '$4 == "g_trace_ring" {print "0x"$1, strtonum("0x"$2); exit}')
-GCPU=$(arm-none-eabi-nm "$ELF" | awk '$3 == "g_cpu_mhz" {print "0x"$1; exit}')
-[ -n "${RING:-}" ] && [ -n "$GCPU" ] && [ "${RSIZE:-0}" -gt 0 ] \
-  || { echo "FAIL: could not resolve g_trace_ring / g_cpu_mhz in $ELF"; exit 1; }
-NREC=$(( RSIZE / 8 ))
 
 rc=0
 fail() { echo "  FAIL: $*"; rc=1; }
