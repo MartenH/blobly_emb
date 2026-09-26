@@ -92,13 +92,24 @@ The first mergeable slice: N partitions on M cores, no bridge. This is the "sing
 **System-wide freeze (coherent snapshot).** Each core's ring is a flight recorder, but a trigger
 must freeze *every* core around the same instant — otherwise core A freezes at its anomaly while core
 B keeps recording until `Stop`, and their dump windows don't overlap (the first thing that looks
-wrong). So an overrun on a still-capturing ring raises a shared freeze cell (a caller-owned `u32`
-both `Capture`s point at — same single-copy-atomic story as `osal.scratch`, without spending a
-slot), and every core's capture hook observes it **once per dispatched handler**, `trigger()`ing
-its own ring within one handler of the event (idempotent via the pending/state guards; observing
-only between whole scheduler passes let a core with more due handlers than its retained pre-window
-roll past the instant before it looked). The module retires the cell on a host arm/start/reset —
-before any ring restarts. Result: all cores' windows cover the same moment.
+wrong). So an overrun on a still-capturing ring raises a shared freeze (`trace.FreezeSync`,
+caller-owned, both `Capture`s and the module point at it), and every core's capture hook observes it
+**once per dispatched handler**, `trigger()`ing its own ring within one handler of the event
+(idempotent via the pending/state guards; observing only between whole scheduler passes let a core
+with more due handlers than its retained pre-window roll past the instant before it looked). Result:
+all cores' windows cover the same moment.
+
+The freeze is **generation-aware** (#273). Its word is `generation << 1 | raised`, and the dump owner
+is the generation's only writer: a host arm/start/reset that addresses a core starts the next
+generation *before* any ring restarts, which is the whole retirement. Each hook adopts the current
+generation at entry and raises by compare-and-swap against its own window's generation, so a trip in
+a window the re-arm just ended cannot freeze the fresh one, and there is no clear left to race a
+fresh raise — the two orderings a plain flag could not close. The satellite's ring is no longer
+restarted from the owner's thread either: the re-arm is *posted* (`rearm`), the satellite's own hook
+performs it at its next dispatch and acknowledges (`ack`), and until then a stop or dump addressed to
+the satellite is answered `busy` and touches nothing — the ring still holds the window the host asked
+to discard. (A satellite-only arm is answered for the window it is about to open: capturing, empty.)
+A stop still reaches the satellite's ring cross-thread; that is the remaining P3a simplification.
 
 **Derived thread + idle (honest `thread+fb`).** A polled host superloop is one *cooperative* thread —
 no preemptive switches or ISRs — so we synthesise the schedule it actually runs: an fb record per

@@ -1,14 +1,39 @@
 module trace
 
-// The shared freeze cell is written by whichever core trips and cleared by the owner, so its
-// accesses go through atomics — a plain load can be hoisted out of the hook by an optimising
-// build and a plain store reordered past the ring trigger, and "aligned is single-copy atomic"
-// says nothing about either. The operations are V's OWN portable atomic ABI
-// (sync.stdatomic's C.atomic_load_u32 / C.atomic_store_u32, seq_cst — carried by V's
-// compiler-compat headers for every C backend V supports), not a compiler-private symbol, so
-// this layer stays platform-independent (codex #271 r5). Lock-free inline on host and
-// ARMv7-M; the import exists to bring that header in — nothing else of the module is used.
+// The shared freeze cells are written from more than one thread, so every access goes through
+// atomics — a plain load can be hoisted out of the hook by an optimising build and a plain store
+// reordered past the ring trigger, and "aligned is single-copy atomic" says nothing about either.
+// The operations are V's OWN portable atomic ABI (sync.stdatomic's C.atomic_load_u32 /
+// C.atomic_store_u32 / C.atomic_compare_exchange_strong_u32, seq_cst — carried by V's
+// compiler-compat headers for every C backend V supports), not a compiler-private symbol, so this
+// layer stays platform-independent (codex #271 r5). Lock-free inline on host and ARMv7-M; the
+// import exists to bring that header in — nothing else of the module is used.
 import sync.stdatomic as _
+
+// FreezeSync is the system-wide freeze of a multi-core trace (docs/trace-multicore.md §3), made
+// GENERATION-AWARE (#273). Caller-owned (the generated runner keeps it in run(), which outlives
+// both threads); every traced core's Capture and the dump owner's TraceModule point at it.
+//
+//   word   generation << 1 | raised. ONE writer of the generation: the owner, on a host re-arm
+//          (TraceModule.bump). A hook RAISES by compare-and-swap from `gen << 1` to `gen << 1 | 1`
+//          with its OWN window's generation, so a trip in a window a re-arm just ended fails the
+//          swap instead of freezing the fresh one; and a re-arm RETIRES by storing the next
+//          generation, so no check-then-clear is left to race a raise. Those were the two
+//          orderings the flag cell of #271 could not close.
+//   rearm  the newest generation whose re-arm ADDRESSED the satellite. The satellite restarts its
+//          OWN ring when it adopts a generation at or past this — on its own thread, at hook
+//          entry, so no dispatch can overlap the restart. (The owner used to restart the peer's
+//          ring cross-thread; that overlap was where a stale raise came from.)
+//   ack    the newest generation the satellite has adopted. rearm > ack = a restart the satellite
+//          has not performed yet, and the owner refuses stop/dump against it until it has.
+//
+// Generations are u32 and only ever grow by one per re-arm; wrap needs 2^31 re-arms.
+pub struct FreezeSync {
+mut:
+	word  u32
+	rearm u32
+	ack   u32
+}
 
 // The FB enter/exit hook — the platform side of "hooks record, the module serves the bus"
 // (docs/com-modules.md). The Loom's run_profiled calls fb_hook once per dispatched handler
@@ -26,13 +51,18 @@ pub mut:
 	id_base   u32 // GLOBAL fb id of this partition's first handler (+ local idx)
 	budget_us u32 // overrun trigger threshold; 0 = no trigger
 	fb_count  u32 // handlers dispatched (a loop can read this to bracket a busy span)
-	// Cross-core freeze (docs/trace-multicore.md §3), caller-owned like `buf`: a shared cell every
+	// Cross-core freeze (docs/trace-multicore.md §3), caller-owned like `buf`: the FreezeSync every
 	// traced core points at. Whichever ring trips its budget RAISES it, and every hook OBSERVES it
 	// per dispatch, so the peer stops within one handler of the event rather than at the end of a
 	// scheduler pass — a peer with more due handlers than its retained pre-window would otherwise
 	// overwrite the triggering instant before it ever looked (codex #271 r2). nil = no peer.
-	// Retired by TraceModule on a host arm/start/reset (set_freeze), never here.
-	freeze &u32 = unsafe { nil }
+	freeze &FreezeSync = unsafe { nil }
+	// The generation of the window this ring is recording — adopted at hook entry (adopt), so every
+	// raise and every observation is judged against the window it actually belongs to.
+	gen u32
+	// The SATELLITE's capture restarts its own ring when a re-arm addresses it (FreezeSync.rearm);
+	// the owner's ring is restarted by the owner's own command path, on its own thread.
+	satellite bool
 }
 
 // capture wires a Capture to this module's ring — install it with
@@ -53,6 +83,7 @@ pub fn (mut m TraceModule) capture(id_base u32, budget_us u32, now_us u64) Captu
 pub fn fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	mut t := unsafe { &Capture(ctx) }
 	t.fb_count++
+	t.adopt() // FIRST: a pending re-arm restarts this ring before anything is recorded into it
 	// The capturing test is taken AT ENTRY — before EITHER push below. Both can retire the
 	// ring mid-hook: the FB record can fill a oneshot's final slot, and so can the epoch
 	// re-anchor a u24 wrap inserts first (codex #271 r4+r6) — judged after, the overrun that
@@ -105,28 +136,54 @@ fn (mut t Capture) anchor(elapsed u64, capturing bool) {
 	}
 }
 
-// sync_freeze raises the shared cross-core freeze when THIS ring tripped, and honours a peer that
-// already did. Called from the hook — once per dispatch — because that is the resolution the
-// coherence claim needs: observing between whole scheduler passes lets a busy peer overwrite the
-// triggering instant before it looks. Idempotent in both directions (trigger() is a no-op once a
-// ring stops capturing), and a no-op entirely when no peer cell was wired.
+// adopt brings this capture onto the system's current generation, at hook ENTRY — before the
+// capturing test and before any record — so everything the hook then does belongs to one window.
+// A satellite whose re-arm is pending restarts its OWN ring here: the restart runs on the thread
+// that writes the ring, so no dispatch can straddle it. It acknowledges every generation it adopts;
+// the owner reads that to know the restart has happened (FreezeSync.ack).
+@[inline]
+fn (mut t Capture) adopt() {
+	if t.freeze == unsafe { nil } {
+		return
+	}
+	g := C.atomic_load_u32(voidptr(&t.freeze.word)) >> 1
+	if g == t.gen {
+		return
+	}
+	if t.satellite {
+		// `>` not `==`: a later re-arm that did not address the satellite must not swallow an
+		// earlier one that did and was never performed.
+		if C.atomic_load_u32(voidptr(&t.freeze.rearm)) > t.gen {
+			t.buf.start()
+		}
+	}
+	t.gen = g
+	if t.satellite {
+		C.atomic_store_u32(voidptr(&t.freeze.ack), g)
+	}
+}
+
+// sync_freeze raises the system freeze when THIS ring tripped, and honours a peer that already did
+// — both in THIS capture's generation. Called from the hook, once per dispatch: observing between
+// whole scheduler passes lets a busy peer overwrite the triggering instant before it looks.
 //
-// Memory model: the same story as osal.scratch — an aligned 32-bit store/load is single-copy
-// atomic, the values are single flags (0/1), and a torn read is impossible; raising is done only
-// by a ring that actually tripped and clearing only by the module on a host re-arm, so the one
-// race that exists (a clear crossing a fresh trip) resolves to one of the two legitimate orders.
-// This capture shape is the HOST multicore runner's (threads on one address space); the ThreadX
-// two-core path shares state through the board's xcore window instead, not through this cell.
+// The raise is a compare-and-swap from `gen << 1` to `gen << 1 | 1`, so it lands only while the
+// system is still in this window's generation. A re-arm that bumped the generation between this
+// hook's adopt() and here — the window being ended by the host — makes the swap fail, and the
+// trip freezes only the ring it happened in (whose record carries flag_overran either way). An
+// observation likewise honours only a raise of this capture's own generation. A no-op entirely
+// when no peer was wired.
 @[inline]
 fn (mut t Capture) sync_freeze(this_ring_tripped bool) {
 	if t.freeze == unsafe { nil } {
 		return
 	}
 	if this_ring_tripped {
-		C.atomic_store_u32(voidptr(t.freeze), 1)
+		mut expected := t.gen << 1
+		C.atomic_compare_exchange_strong_u32(voidptr(&t.freeze.word), &expected, (t.gen << 1) | 1)
 		return
 	}
-	if C.atomic_load_u32(voidptr(t.freeze)) != 0 {
+	if C.atomic_load_u32(voidptr(&t.freeze.word)) == ((t.gen << 1) | 1) {
 		t.buf.trigger()
 	}
 }
@@ -145,6 +202,7 @@ pub fn (mut t Capture) note_thread(tid u16, reason u8, start_us u64, dt_us u64) 
 	// push below can retire the ring mid-call), one over-budget predicate, trip() for the
 	// stop-beats-trigger race, and the shared freeze raised/observed per span — the bridge is
 	// a first-class traced entity, so it participates in the system-wide freeze like any core.
+	t.adopt()
 	was_capturing := t.buf.state() == .capturing
 	elapsed := start_us - t.start
 	t.anchor(elapsed, was_capturing)

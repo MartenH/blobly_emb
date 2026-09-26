@@ -243,28 +243,121 @@ fn test_a_dump_during_a_queued_stream_is_refused() {
 	assert decode_rsp(m.rsp).result == result_busy, 'expected BUSY, got ${decode_rsp(m.rsp).result}'
 }
 
-// An arm/start/reset RETIRES the shared cross-core freeze, whichever cores the mask names, and
-// does so before any ring restarts — retired after (or keyed on the owner's state, as the runner
-// once did), a peer dispatching in the gap re-froze the just-armed ring from the stale cell, and
-// an arm addressed to the satellite alone never cleared it at all (codex #271 r2).
-fn test_an_arm_retires_the_shared_freeze_for_any_mask() {
+// An arm/start/reset starts a new freeze GENERATION, whichever cores the mask names, BEFORE any
+// ring restarts — the retirement of whatever the last window raised (#273; the flag cell of #271
+// r2 cleared instead). A dump consumes nothing, and a mask naming neither core restarts nothing.
+fn test_an_arm_starts_a_new_generation_for_any_mask() {
 	mut ring := [64]Record{}
 	mut m := TraceModule{}
 	m.init(0x7e3, 0x7e5, 0, true, new_buffer(&ring[0], 64, .ring, 50))
-	mut cell := u32(1) // a trigger froze the system earlier
+	mut cell := FreezeSync{}
+	cell.word = 1 // a trigger froze the system in generation 0
 	m.set_freeze(&cell)
 	mut sat_ring := [64]Record{}
 	mut sat := new_buffer(&sat_ring[0], 64, .ring, 50)
 	mut remote := [65]Record{}
 	m.on_cmd_multicore(cmd_frame(op_arm, 0x0002), mut sat, 1, &remote[0], 65) // satellite ALONE
-	assert cell == 0
-	cell = 1
+	assert cell.word == 1 << 1 // generation 1, unraised
+	assert cell.rearm == 1 // ...and the satellite's restart posted with it
+	cell.word = (1 << 1) | 1
+	cell.ack = 1 // (the satellite performed it)
 	m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 65)
-	assert cell == 1 // a dump consumes nothing: the frozen system stays described by the cell
+	assert cell.word == (1 << 1) | 1 // a dump consumes nothing
 	m.on_cmd_multicore(cmd_frame(op_arm, 0x0004), mut sat, 1, &remote[0], 65)
-	assert cell == 1 // a mask naming NEITHER core restarts nothing — the notification survives
-	m.on_cmd_multicore(cmd_frame(op_reset, 0x0003), mut sat, 1, &remote[0], 65)
-	assert cell == 0
+	assert cell.word == (1 << 1) | 1 // a mask naming NEITHER core restarts nothing
+	m.on_cmd_multicore(cmd_frame(op_reset, 0x0001), mut sat, 1, &remote[0], 65) // owner ALONE
+	assert cell.word == 2 << 1
+	assert cell.rearm == 1, 'an owner-only re-arm posted a satellite restart'
+}
+
+// Until the satellite performs a posted re-arm its ring still holds the window the host asked to
+// discard: a stop or dump addressed to it is refused BUSY and touches nothing — a stop would be
+// undone by the restart, a dump would stream the discarded window.
+fn test_a_satellite_with_a_pending_rearm_refuses_stop_and_dump() {
+	mut own := [16]Record{}
+	mut satb := [16]Record{}
+	mut remote := [64]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	mut cell := FreezeSync{}
+	m.set_freeze(&cell)
+	mut sat := new_buffer(&satb[0], 16, .ring, 50)
+	sat.start()
+	for i in 0 .. 4 {
+		sat.push(new_fb(u16(200 + i), 0, u32(i), 1))
+	}
+	sat.stop() // a frozen window, about to be discarded
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0003), mut sat, 1, &remote[0], 64)
+	assert sat.used() == 4, 'the owner restarted the satellite ring cross-thread'
+	mut f := can.Frame{}
+	for m.produce(0, mut f) {} // drain the arm's response
+	for op in [op_stop, op_dump] {
+		imported := m.on_cmd_multicore(cmd_frame(op, 0x0002), mut sat, 1, &remote[0], 64)
+		assert !imported
+		assert m.produce(0, mut f)
+		assert f.data[1] == result_busy, 'op ${op} against a pending re-arm answered ${f.data[1]}'
+		assert f.data[7] == 1
+		assert sat.used() == 4 && sat.state() == .frozen // left exactly as found
+	}
+	// the satellite's next dispatch performs the restart; then the stop goes through
+	mut sc := Capture{
+		buf:       &sat
+		freeze:    &cell
+		satellite: true
+	}
+	fb_hook(voidptr(&sc), 0, 0, 1)
+	assert sat.state() == .capturing && sat.used() == 1
+	m.on_cmd_multicore(cmd_frame(op_stop, 0x0002), mut sat, 1, &remote[0], 64)
+	assert sat.state() == .frozen
+}
+
+// A satellite-only arm answers with the window the satellite is ABOUT to open — capturing, empty —
+// not the frozen one it is discarding, even though the restart is still only posted.
+fn test_a_satellite_only_arm_answers_for_the_window_it_opens() {
+	mut own := [16]Record{}
+	mut satb := [16]Record{}
+	mut remote := [64]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	mut cell := FreezeSync{}
+	m.set_freeze(&cell)
+	mut sat := new_buffer(&satb[0], 16, .ring, 50)
+	sat.start()
+	sat.push(new_fb(200, 0, 0, 1))
+	sat.stop()
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0002), mut sat, 1, &remote[0], 64)
+	mut f := can.Frame{}
+	assert m.produce(0, mut f)
+	r := decode_rsp([f.data[0], f.data[1], f.data[2], f.data[3], f.data[4], f.data[5], f.data[6],
+		f.data[7]]!)
+	assert r.result == result_ok
+	assert r.state == state_code(.capturing)
+	assert r.records_used == 0
+	assert r.core == 1
+	assert sat.state() == .frozen // the shared ring itself is untouched until the satellite runs
+}
+
+// Two re-arms before the satellite runs: the first addressed it, the second did not. The posted
+// restart must survive the second — the satellite restarts on ANY posted generation past its own.
+fn test_a_later_owner_only_rearm_does_not_swallow_a_posted_one() {
+	mut own := [16]Record{}
+	mut satb := [16]Record{}
+	mut remote := [64]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	mut cell := FreezeSync{}
+	m.set_freeze(&cell)
+	mut sat := new_buffer(&satb[0], 16, .ring, 50)
+	sat.start()
+	sat.push(new_fb(200, 0, 0, 1))
+	sat.stop()
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0002), mut sat, 1, &remote[0], 64) // posts gen 1
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0001), mut sat, 1, &remote[0], 64) // gen 2, owner only
+	mut sc := Capture{
+		buf:       &sat
+		freeze:    &cell
+		satellite: true
+	}
+	fb_hook(voidptr(&sc), 0, 0, 1)
+	assert sat.state() == .capturing && sat.used() == 1, 'the posted restart was swallowed'
+	assert cell.ack == 2
 }
 
 // A dump addressing several cores is all-or-nothing: importing the stopped half while the
@@ -311,25 +404,4 @@ fn test_a_satellite_only_dump_of_a_capturing_ring_answers_not_ready() {
 	mut f := can.Frame{}
 	assert m.produce(0, mut f)
 	assert f.data[1] == result_not_ready
-}
-
-// The post-restart retirement spares a fresh trigger: an overrun landing just after the
-// restart is the NEW window's legitimate trigger, and start() wiped both rings' causes, so a
-// trigger cause on either ring can only be the new measurement's (codex #271 r9; #273 tracks
-// the generation handshake that closes the remaining check-then-act).
-fn test_the_post_restart_retire_spares_a_fresh_trigger() {
-	mut own := [16]Record{}
-	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
-	m.arm()
-	mut cell := u32(1)
-	m.set_freeze(&cell)
-	mut sat_ring := [16]Record{}
-	mut sat := new_buffer(&sat_ring[0], 16, .ring, 50)
-	sat.start()
-	sat.trigger() // the new window tripped in the restart gap
-	m.retire_freeze_unless_tripped(&sat)
-	assert cell == 1 // preserved: the notification is the fresh window's
-	sat.start() // no trip in the gap
-	m.retire_freeze_unless_tripped(&sat)
-	assert cell == 0 // a stale raise for an erased window is retired
 }

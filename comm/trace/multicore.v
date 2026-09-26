@@ -7,8 +7,9 @@ import driver.can
 // The owner is an ordinary app partition — it runs its own handlers, so its ring is genuinely
 // LOCAL (m.buf) and the existing single-core path serves it unchanged. A second partition on
 // another core writes its own ring. The owner READS that ring to import a frozen window, and
-// writes only its STATE field, and only when the host explicitly says so (arm/stop/reset) — never
-// on a dump. push() tests state first and self-quiesces, so a stop racing a push costs at most one
+// writes only its STATE field, and only when the host says STOP — never on a dump, and never to
+// restart it: a re-arm is POSTED (FreezeSync.rearm) and the satellite restarts its own ring on its
+// own thread (#273). push() tests state first and self-quiesces, so a stop racing a push costs at most one
 // torn record, which docs/trace-multicore.md §7 accepts for a diagnostic ring on the sim host. The
 // ThreadX target freezes with real synchronisation; this is the host runner only.
 //
@@ -41,21 +42,25 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 		b[i] = f.data[i]
 	}
 	c := decode_cmd(b)
-	// A (re)arm consumes the system freeze — but only one that ADDRESSES a core this runner
-	// generated: a mask naming neither core restarts nothing, and clearing for it would erase
-	// a notification a tripped core had just raised for a peer that has not looked yet (codex
-	// #271 r3). Retired BEFORE any ring restarts (a stale cell would re-freeze the ring the
-	// host just armed) and AGAIN after them: a dispatch overlapping the restart can raise the
-	// cell for the window being erased, and that raise would freeze the fresh windows on
-	// their first record. The residual is symmetric and bounded to that same overlap: a
-	// GENUINE overrun landing inside the restart microwindow has its raise retired too, and
-	// is notified on its next over-budget dispatch instead (the record's flag_overran flies
-	// either way). The satellite is not quiesced for commands — the same P3a simplification
-	// as sat.start() itself, which restarts the peer's ring from this thread.
+	// A (re)arm starts a new freeze GENERATION — but only one that ADDRESSES a core this runner
+	// generated: a mask naming neither core restarts nothing, and bumping for it would retire a
+	// notification a tripped core had just raised for a peer that has not looked yet (codex #271
+	// r3). The bump comes BEFORE any ring restarts and is the whole retirement (#273): a raise
+	// still in flight from the ending window carries the old generation and fails its swap, and a
+	// trip in the new window raises the new one. A re-arm that addresses the satellite is POSTED
+	// with the bump; the satellite restarts its own ring when it adopts the generation.
 	rearms := (c.opcode == op_arm || c.opcode == op_start || c.opcode == op_reset)
 		&& (c.targets(m.core) || c.targets(sat_core))
+	// Nothing may stop or read a satellite ring whose posted re-arm it has not performed yet: it
+	// still holds the window the host asked to discard, and the restart would then undo a stop.
+	// Refused whole, like the busy dump below — the satellite adopts within one of its dispatches.
+	if !rearms && c.targets(sat_core) && (c.opcode == op_stop || c.opcode == op_dump)
+		&& m.sat_restart_pending() {
+		m.queue_rsp(status_rsp(sat, c.opcode, result_busy, sat_core))
+		return false
+	}
 	if rearms {
-		m.retire_freeze()
+		m.bump(c.targets(sat_core))
 	}
 	// A dump must not be accepted while ANY part of the previous one is still outstanding.
 	// on_cmd's own busy check only covers the ISO-TP link, not a queued local_due/remote_due
@@ -96,7 +101,13 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 	if c.targets(sat_core) {
 		match c.opcode {
 			op_arm, op_start, op_reset {
-				sat.start()
+				// Posted with the bump above; the satellite restarts itself (Capture.adopt). With NO
+				// FreezeSync wired there is nothing to post to — a caller with no peer thread (the
+				// single-threaded tests) — and restarting here is then race-free by construction.
+				// The generated runners always wire it.
+				if m.freeze == unsafe { nil } {
+					sat.start()
+				}
 			}
 			op_stop {
 				sat.stop()
@@ -131,11 +142,15 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 	// When the mask selects BOTH, the owner's response stands and the satellite's state reaches
 	// the host in its own block header; queue_rsp refuses rather than overwrite it.
 	if c.targets(sat_core) && !c.targets(m.core) {
-		m.queue_rsp(status_rsp(sat, c.opcode, result_ok, sat_core))
-	}
-	if rearms {
-		// the second half of the bracket above — after every restart, sparing a fresh trigger
-		m.retire_freeze_unless_tripped(sat)
+		if rearms && m.freeze != unsafe { nil } {
+			// the restart is posted, not yet performed — answer with the window the satellite is
+			// about to open (a fresh copy's status: capturing, empty), not the one being discarded
+			mut fresh := sat
+			fresh.start()
+			m.queue_rsp(status_rsp(fresh, c.opcode, result_ok, sat_core))
+		} else {
+			m.queue_rsp(status_rsp(sat, c.opcode, result_ok, sat_core))
+		}
 	}
 	return imported
 }

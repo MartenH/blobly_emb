@@ -61,11 +61,11 @@ mut:
 	// the host reads one ISO-TP transfer per core (mask_popcount blocks), decoder unchanged.
 	remote      TraceBuffer
 	remote_core u8
-	// The shared cross-core freeze cell (see Capture.freeze) — wired by the multicore runner so
-	// the module can RETIRE it at the one place a measurement restarts: a host arm/start/reset.
-	// Retiring anywhere later leaves a window where a freshly re-armed ring re-freezes from the
-	// stale cell before the owner loop gets to clear it (codex #271 r2 follow-up).
-	freeze &u32 = unsafe { nil }
+	// The system-wide freeze (FreezeSync, see capture.v) — wired by the multicore runner so the
+	// module can start a new GENERATION at the one place a measurement restarts: a host
+	// arm/start/reset. The module is the generation's only writer; `freeze_gen` is its copy.
+	freeze     &FreezeSync = unsafe { nil }
+	freeze_gen u32
 	remote_due  bool
 	remote_from u32 // continuation cursor into the remote window
 	// The satellite's trace clock measured against ours, re-measured per dump (REQ-TRACE-011)
@@ -229,36 +229,37 @@ pub fn (mut m TraceModule) push(r Record) {
 // as before. Separate from new_module() deliberately: constructing a module and choosing to start
 // capturing are different decisions, and the target path builds the module in place long before it
 // wants records.
-// set_freeze wires the shared cross-core freeze cell so arm/start/reset retire it (multicore
+// set_freeze wires the system-wide freeze so arm/start/reset start a new generation (multicore
 // runner only; a single-core module has no peer and leaves it nil).
-pub fn (mut m TraceModule) set_freeze(cell &u32) {
+pub fn (mut m TraceModule) set_freeze(cell &FreezeSync) {
 	unsafe {
 		m.freeze = cell
 	}
 }
 
-// retire_freeze clears the shared freeze BEFORE a re-arm restarts any ring: cleared after, a
-// peer dispatching in between observes the stale cell and instantly re-freezes the ring the
-// host just armed — and an arm addressed to one core alone would never clear it at all.
-fn (mut m TraceModule) retire_freeze() {
-	if m.freeze != unsafe { nil } {
-		C.atomic_store_u32(voidptr(m.freeze), 0)
-	}
-}
-
-// retire_freeze_unless_tripped is the second half of the re-arm bracket, AFTER the restarts:
-// a dispatch overlapping the restart can raise the cell for the window being erased, and left
-// standing it would freeze the fresh windows on their first record. But an overrun landing
-// just AFTER a restart is a legitimate trigger of the new measurement, and start() wiped both
-// rings' causes — so a trigger cause on either ring can only be the new window's, and the cell
-// is preserved for it (codex #271 r9). The check-then-clear is itself two atomic cells, which
-// is the P3a simplification the whole command path runs under (the restarts touch the peer's
-// ring cross-thread without quiescing it); the generation handshake that closes it is #273.
-fn (mut m TraceModule) retire_freeze_unless_tripped(sat &TraceBuffer) {
-	if m.froze_cause() == freeze_trigger || sat.froze_cause() == freeze_trigger {
+// bump starts the next freeze generation — the retirement of whatever the previous window raised.
+// Called BEFORE any ring restarts. `restart_sat` posts the satellite's re-arm for the new
+// generation FIRST, so a satellite that adopts it always finds its request (FreezeSync). A raise
+// still in flight from the ending window then fails its compare-and-swap, and a trip in the new
+// window raises against the new generation: nothing is left to check-then-clear (#273).
+fn (mut m TraceModule) bump(restart_sat bool) {
+	if m.freeze == unsafe { nil } {
 		return
 	}
-	m.retire_freeze()
+	m.freeze_gen++
+	if restart_sat {
+		C.atomic_store_u32(voidptr(&m.freeze.rearm), m.freeze_gen)
+	}
+	C.atomic_store_u32(voidptr(&m.freeze.word), m.freeze_gen << 1)
+}
+
+// sat_restart_pending: a re-arm addressed the satellite and it has not adopted it yet — its ring
+// still holds the window the host asked to discard, so nothing may stop or read it until it has.
+fn (m TraceModule) sat_restart_pending() bool {
+	if m.freeze == unsafe { nil } {
+		return false
+	}
+	return C.atomic_load_u32(voidptr(&m.freeze.rearm)) > C.atomic_load_u32(voidptr(&m.freeze.ack))
 }
 
 pub fn (mut m TraceModule) arm() {
