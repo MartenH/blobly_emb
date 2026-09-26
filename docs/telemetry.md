@@ -559,6 +559,14 @@ buffer_records = 4096    # per-core capture depth, 1..65535 (see Recording) — 
                          # capped at 65535: records_used/capacity are u16 in TraceRsp
 ```
 
+**The default trace ids are not free on the reference bench.** `examples/system_full` gives each
+node its own `0x7Ex` slots — sysnode telemetry `0x7E0/0x7E1`, domain telemetry `0x7E2/0x7E3` and
+trace `0x7E8..0x7EB` on the compute bus, zone_a telemetry `0x7E4/0x7E5` on edge — and syscheck
+validates only those nodes. A standalone image flashed onto one of its boards is outside that
+gate, so it must pick ids clear of the others on its bus: `h735_app` and `h735_threadx` (the
+sysnode board, compute bus) use `0x7EC..0x7EF`, since domain's CpuLoad on `0x7E2` would otherwise
+arrive as a trace command (its byte 0, `0x03`, is `op_stop`).
+
 Push is enabled by a `set_push` cmd *or* from config at boot (so a target streams stats
 with no host present — handy on a bench). E2E/SecOC can wrap any of these frames exactly
 as COM does.

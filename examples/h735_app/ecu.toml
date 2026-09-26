@@ -74,16 +74,22 @@ period_ms = 500
 # clock with no osal, riding the one FDCAN bus (can0) so the dump and CpuLoad share it. There are
 # no threads here, so FB records are the whole trace (level = "fb"); real preemptive thread/ISR
 # capture is the ThreadX shape (h735_threadx).
+#
+# The ids are NOT the docs/telemetry.md defaults (0x7E2..0x7E6): this image runs on the H735-DK,
+# which is system_full's sysnode board, on its compute bus. There the defaults collide: domain
+# sends CpuLoad/LoadDetail on 0x7E2/0x7E3, and its CpuLoad byte0 0x03 reads as op_stop — a bench
+# run froze 13 ms after boot on it. 0x7EC..0x7EF is the free block after domain's trace
+# (0x7E8..0x7EB); telemetry keeps sysnode's own 0x7E0/0x7E1.
 [trace]
 bus            = "can0"
 level          = "fb"
 buffer_records = 64
 mode           = "ring"
 pre_pct        = 50
-cmd            = 0x7E2
-rsp            = 0x7E3
-record         = 0x7E5       # ISO-TP dump data (target -> host)
-dump_fc        = 0x7E6       # ISO-TP flow control (host -> target)
+cmd            = 0x7EC
+rsp            = 0x7ED
+record         = 0x7EE       # ISO-TP dump data (target -> host)
+dump_fc        = 0x7EF       # ISO-TP flow control (host -> target)
 trigger        = { source = "overrun", budget_us = 500 }
 
 [target]

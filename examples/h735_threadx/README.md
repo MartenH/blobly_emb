@@ -9,7 +9,7 @@ as [`h735_app`](../h735_app) — only `[target] kind` is `"threadx"`, so loom2v 
 ```
 make -C ../.. deps      # once: ThreadX + CMSIS
 make flash              # st-flash the generated .bin
-candump can0            # CpuLoad (0x7E0) + LoadDetail (0x7E1) + trace (0x7E5)
+candump can0            # CpuLoad (0x7E0) + LoadDetail (0x7E1) + trace (0x7EE)
 ```
 
 ## Four threads, one bus owner — rate-monotonic preemption
@@ -39,8 +39,8 @@ bindings: `arm` clears the recorder, `stop` imports the frozen window, `dump` st
 one **ISO-TP block** on `record` (flow control on `dump_fc`) — blobly_net's native format:
 
 ```
-cansend can0 7E2#0100000000000000     # arm (fresh window)
-cansend can0 7E2#0300000000000000     # stop -> rsp shows used=64, frozen
+cansend can0 7EC#0100000000000000     # arm (fresh window)
+cansend can0 7EC#0300000000000000     # stop -> rsp (0x7ED) shows used=64, frozen
 # blobly_net does the rest (its trace_dump tool or the GUI's Trace Chart):
 v run cmd/trace_dump/dump.v can0 0 .../h735_threadx/gen/trace-manifest.csv
 ```
@@ -93,7 +93,7 @@ triple-buffer, reused from `threadx_h735`), `vectors.S` (routes IRQ19 → the Rx
 ## Verified on the board
 
 `make flash`, `candump can0`: CpuLoad `0x7E0` + LoadDetail `0x7E1` stream from the comm
-thread; the trace `0x7E5` shows comm/app/timer + the Rx ISR (id 35); `0x200` carries the
+thread; the trace `0x7EE` shows comm/app/timer + the Rx ISR (id 35); `0x200` carries the
 `Workload` signal (Load's live output, FB → IOC → bus); and `cansend 0x123` drives the load
 via the IOC (pins CpuLoad, releases back to the sweep). The generated counterpart of the
 hand-written `threadx_h735` (the golden reference).
