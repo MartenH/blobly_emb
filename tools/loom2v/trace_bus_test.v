@@ -523,3 +523,36 @@ fn test_an_extended_dbc_binding_is_refused_by_its_flag() {
 	assert r.exit_code != 0, 'loom2v accepted an extended DBC binding: ${r.output}'
 	assert r.output.contains('extended (29-bit) message'), r.output
 }
+
+// codex #282 r4 (the r1 core fix, one consumer further): CpuLoad must report the load in the
+// slot of the core the runner reports — not core 0 — or the telemetry and the dump disagree.
+fn test_the_host_runner_reports_load_on_its_core() {
+	m := Model{
+		trace:    TraceCfg{
+			on:    true
+			bus:   'can0'
+			level: 'fb'
+		}
+		telem:    TelemetryCfg{
+			on:        true
+			bus:       'can0'
+			id:        0x7E0
+			period_us: 500000
+		}
+		bus_core: {
+			'can0': 0
+		}
+		part:     PartMap{
+			by_part: {
+				'app': []toml.Any{}
+			}
+			core_of: {
+				'app': 3
+			}
+		}
+	}
+	g := emit_run_trace_host(m, map[string][]string{}, 'can0', 'app').join('\n')
+	assert g.contains('load[3] = u16(sched.load_permille())'), g
+	assert g.contains('telem.encode_cpuload(load, 4)'), g
+	assert !g.contains('load[0]'), g
+}

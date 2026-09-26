@@ -85,7 +85,7 @@ pub fn run(can0 can.Channel) {
 		}
 		if t1 - last_telem >= telem_period_us && ch.tx_ready() {
 			last_telem = t1
-			load[0] = sched.load_permille() // single M7 -> core 0 only
+			load[0] = sched.load_permille() // this partition's core
 			frame := telem.encode_cpuload(load, 1)
 			mut f := can.Frame{
 				id:  u32(0x7e0)

@@ -2372,8 +2372,15 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// slot 0 — the sum is the core's whole truth (emb#150 r5)
 				'\t\t\tload[0] = u16(C.load_sum_permille())'
 			} else {
-				'\t\t\tload[0] = sched.load_permille() // single M7 -> core 0 only'
+				if baremetal_trace_on(m) {
+					// traced: the slot the trace module reports (single_trace_core), so CpuLoad
+					// and the dump name the same core
+					'\t\t\tload[${single_trace_core(m)}] = sched.load_permille() // this partition\'s core'
+				} else {
+					'\t\t\tload[0] = sched.load_permille() // single M7 -> core 0 only'
+				}
 			}]
+				ncores:       if baremetal_trace_on(m) { single_trace_core(m) + 1 } else { 0 }
 				det_ovr:      if m.io_points.len > 0 {
 					'C.load_sum_overruns()' // io overruns count too (emb#150 r6)
 				} else {

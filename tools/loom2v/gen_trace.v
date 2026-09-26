@@ -392,8 +392,10 @@ fn emit_run_trace_host(m Model, all_regs map[string][]string, telem_iface string
 		g << '\t\tif now - last_telem >= ${m.telem.period_us} && ch.tx_ready() {'
 		g << '\t\t\tlast_telem = now'
 		g << '\t\t\tmut load := [8]u16{}'
-		g << '\t\t\tload[0] = u16(sched.load_permille())'
-		g << '\t\t\tframe := telem.encode_cpuload(load, 1)'
+		// the partition's own core slot — the one the module and the pin report
+		core := single_trace_core(m)
+		g << '\t\t\tload[${core}] = u16(sched.load_permille())'
+		g << '\t\t\tframe := telem.encode_cpuload(load, ${core + 1})'
 		g << '\t\t\tmut cf := can.Frame{'
 		g << '\t\t\t\tid:  u32(0x${m.telem.id.hex()})'
 		g << '\t\t\t\tlen: 8'
@@ -461,9 +463,24 @@ fn baremetal_trace_init(m Model) []string {
 // configured core, which the manifest assigns every handler to and a TraceCmd mask selects
 // (handle_cmd ignores a mask that does not name its core). Not a literal 0: that answered for the
 // wrong core, or not at all, on any partition declared elsewhere.
+//
+// It also OWNS the range rule, so every consumer (the module, the pin, the CpuLoad slot) gets a
+// core that fits all of them — the same limits the multi-core runner enforces: a TraceCmd mask is
+// 16 bits (a core past 15 ignores every command), and CpuLoad packs one byte per core for cores
+// 0..7 (telem.cpuload_max_cores), so with telemetry on a core past 7 has no slot.
 fn single_trace_core(m Model) int {
 	parts := m.part.by_part.keys()
-	return if parts.len > 0 { m.part.core_of[parts[0]] or { 0 } } else { 0 }
+	core := if parts.len > 0 { m.part.core_of[parts[0]] or { 0 } } else { 0 }
+	if core < 0 || core > 15 {
+		panic('loom2v: [trace] partition core ${core} is not addressable — a TraceCmd core mask ' +
+			'is 16 bits, so every arm/stop/status/dump would be ignored. Use cores 0..15.')
+	}
+	if m.telem.on && core > 7 {
+		panic('loom2v: [trace] partition core ${core} does not fit the CpuLoad frame — ' +
+			'telem.cpuload_max_cores packs one byte per core for cores 0..7. Use cores 0..7, ' +
+			'or disable [telemetry].')
+	}
+	return core
 }
 
 // trace_single_serve: the single-core runners' per-pass bus side (host emit_run_trace_host and
