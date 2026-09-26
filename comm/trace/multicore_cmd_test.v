@@ -44,7 +44,7 @@ fn test_dump_does_not_freeze_or_read_a_capturing_satellite() {
 	m.on_cmd(cmd_frame(op_stop, 0xffff)) // owner's own ring: stopped, so ITS dump would be legal
 	assert sat.state() == .capturing, 'precondition: the satellite is still recording'
 
-	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
+	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64, zero_clock)
 
 	assert !imported, 'a capturing satellite window was read'
 	assert sat.state() == .capturing, 'the dump froze the satellite instead of refusing'
@@ -63,10 +63,10 @@ fn test_a_stopped_satellite_is_imported_on_dump() {
 		m.push(new_fb(u16(100 + i), 0, u32(i), 1))
 		sat.push(new_fb(u16(200 + i), 0, u32(i), 1))
 	}
-	m.on_cmd_multicore(cmd_frame(op_stop, 0x0003), mut sat, 1, &remote[0], 64)
+	m.on_cmd_multicore(cmd_frame(op_stop, 0x0003), mut sat, 1, &remote[0], 64, zero_clock)
 	assert sat.state() != .capturing, 'stop did not reach the satellite'
 
-	assert m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
+	assert m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64, zero_clock)
 }
 
 // A ring that has wrapped past its oldest epoch keeps that epoch's base in prefix_base, and every
@@ -87,7 +87,7 @@ fn test_the_import_carries_the_epoch_prefix() {
 	assert sat.has_prefix, 'precondition: the satellite ring wrapped past its epoch'
 
 	m.on_cmd(cmd_frame(op_stop, 0xffff))
-	assert m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
+	assert m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64, zero_clock)
 
 	assert m.remote.has_prefix, 'the imported window lost the epoch prefix'
 	assert m.remote.prefix_base == sat.prefix_base
@@ -107,7 +107,7 @@ fn test_arm_reaches_the_satellite_too() {
 	sat.stop()
 	assert sat.used() == 4
 
-	m.on_cmd_multicore(cmd_frame(op_arm, 0xffff), mut sat, 1, &remote[0], 64)
+	m.on_cmd_multicore(cmd_frame(op_arm, 0xffff), mut sat, 1, &remote[0], 64, zero_clock)
 
 	assert sat.state() == .capturing, 'arm did not restart the satellite'
 	assert sat.used() == 0, 'arm did not clear the satellite window'
@@ -127,7 +127,7 @@ fn test_a_command_that_excludes_the_satellite_leaves_it_alone() {
 	}
 	before := sat.used()
 
-	m.on_cmd_multicore(cmd_frame(op_stop, 0x0001), mut sat, 1, &remote[0], 64)
+	m.on_cmd_multicore(cmd_frame(op_stop, 0x0001), mut sat, 1, &remote[0], 64, zero_clock)
 
 	assert sat.state() == .capturing, 'a core-0 command stopped core 1'
 	assert sat.used() == before
@@ -145,7 +145,7 @@ fn test_an_empty_satellite_imports_nothing() {
 	sat.stop() // stopped with nothing captured
 	m.on_cmd(cmd_frame(op_stop, 0xffff))
 
-	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
+	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64, zero_clock)
 
 	assert !imported, 'an empty satellite window was imported as a block'
 }
@@ -164,8 +164,8 @@ fn test_the_imported_block_is_the_satellites_records() {
 		sat.push(new_fb(u16(200 + i), 0, u32(i), 1))
 	}
 	// stop reaches BOTH rings, then dump reads them — the normal host sequence
-	m.on_cmd_multicore(cmd_frame(op_stop, 0x0003), mut sat, 1, &remote[0], 64)
-	assert m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
+	m.on_cmd_multicore(cmd_frame(op_stop, 0x0003), mut sat, 1, &remote[0], 64, zero_clock)
+	assert m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64, zero_clock)
 
 	// the remote window holds core 1's ids (200..), not the owner's (100..)
 	assert m.remote.used() == 3, 'expected 3 imported records, got ${m.remote.used()}'
@@ -187,7 +187,7 @@ fn test_a_satellite_only_command_still_gets_a_response() {
 	sat.start()
 	sat.push(new_fb(200, 0, 0, 1))
 
-	m.on_cmd_multicore(cmd_frame(op_status, 0x0002), mut sat, 1, &remote[0], 64)
+	m.on_cmd_multicore(cmd_frame(op_status, 0x0002), mut sat, 1, &remote[0], 64, zero_clock)
 
 	assert m.rsp_pending(), 'a core-1-only command was answered with silence'
 	r := decode_rsp(m.rsp)
@@ -205,7 +205,7 @@ fn test_a_both_core_command_keeps_the_owners_response() {
 	mut sat := new_buffer(&satb[0], 16, .ring, 50)
 	sat.start()
 
-	m.on_cmd_multicore(cmd_frame(op_status, 0x0003), mut sat, 1, &remote[0], 64)
+	m.on_cmd_multicore(cmd_frame(op_status, 0x0003), mut sat, 1, &remote[0], 64, zero_clock)
 
 	assert m.rsp_pending()
 	assert decode_rsp(m.rsp).core == 0, 'the satellite answer overwrote the owner\'s'
@@ -226,8 +226,8 @@ fn test_a_dump_during_a_queued_stream_is_refused() {
 		m.push(new_fb(u16(100 + i), 0, u32(i), 1))
 		sat.push(new_fb(u16(200 + i), 0, u32(i), 1))
 	}
-	m.on_cmd_multicore(cmd_frame(op_stop, 0x0003), mut sat, 1, &remote[0], 64)
-	assert m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
+	m.on_cmd_multicore(cmd_frame(op_stop, 0x0003), mut sat, 1, &remote[0], 64, zero_clock)
+	assert m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64, zero_clock)
 	assert m.is_dumping(), 'precondition: a dump is queued'
 	// drain the first dump's response the way the bus loop does each pass, so the busy answer
 	// below is not refused by queue_rsp's don't-overwrite rule
@@ -236,7 +236,7 @@ fn test_a_dump_during_a_queued_stream_is_refused() {
 	assert !m.rsp_pending()
 
 	// second dump, while blocks are still queued
-	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
+	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64, zero_clock)
 
 	assert !imported, 'the satellite window was re-imported mid-stream'
 	assert m.rsp_pending(), 'the refused dump was not answered'
@@ -256,16 +256,16 @@ fn test_an_arm_starts_a_new_generation_for_any_mask() {
 	mut sat_ring := [64]Record{}
 	mut sat := new_buffer(&sat_ring[0], 64, .ring, 50)
 	mut remote := [65]Record{}
-	m.on_cmd_multicore(cmd_frame(op_arm, 0x0002), mut sat, 1, &remote[0], 65) // satellite ALONE
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0002), mut sat, 1, &remote[0], 65, zero_clock) // satellite ALONE
 	assert cell.word == 1 << 1 // generation 1, unraised
 	assert cell.rearm == 1 // ...and the satellite's restart posted with it
 	cell.word = (1 << 1) | 1
 	cell.ack = 1 // (the satellite performed it)
-	m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 65)
+	m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 65, zero_clock)
 	assert cell.word == (1 << 1) | 1 // a dump consumes nothing
-	m.on_cmd_multicore(cmd_frame(op_arm, 0x0004), mut sat, 1, &remote[0], 65)
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0004), mut sat, 1, &remote[0], 65, zero_clock)
 	assert cell.word == (1 << 1) | 1 // a mask naming NEITHER core restarts nothing
-	m.on_cmd_multicore(cmd_frame(op_reset, 0x0001), mut sat, 1, &remote[0], 65) // owner ALONE
+	m.on_cmd_multicore(cmd_frame(op_reset, 0x0001), mut sat, 1, &remote[0], 65, zero_clock) // owner ALONE
 	assert cell.word == 2 << 1
 	assert cell.rearm == 1, 'an owner-only re-arm posted a satellite restart'
 }
@@ -286,12 +286,12 @@ fn test_a_satellite_with_a_pending_rearm_refuses_stop_and_dump() {
 		sat.push(new_fb(u16(200 + i), 0, u32(i), 1))
 	}
 	sat.stop() // a frozen window, about to be discarded
-	m.on_cmd_multicore(cmd_frame(op_arm, 0x0003), mut sat, 1, &remote[0], 64)
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0003), mut sat, 1, &remote[0], 64, zero_clock)
 	assert sat.used() == 4, 'the owner restarted the satellite ring cross-thread'
 	mut f := can.Frame{}
 	for m.produce(0, mut f) {} // drain the arm's response
 	for op in [op_stop, op_dump] {
-		imported := m.on_cmd_multicore(cmd_frame(op, 0x0002), mut sat, 1, &remote[0], 64)
+		imported := m.on_cmd_multicore(cmd_frame(op, 0x0002), mut sat, 1, &remote[0], 64, zero_clock)
 		assert !imported
 		assert m.produce(0, mut f)
 		assert f.data[1] == result_busy, 'op ${op} against a pending re-arm answered ${f.data[1]}'
@@ -306,7 +306,7 @@ fn test_a_satellite_with_a_pending_rearm_refuses_stop_and_dump() {
 	}
 	fb_hook(voidptr(&sc), 0, 0, 1)
 	assert sat.state() == .capturing && sat.used() == 1
-	m.on_cmd_multicore(cmd_frame(op_stop, 0x0002), mut sat, 1, &remote[0], 64)
+	m.on_cmd_multicore(cmd_frame(op_stop, 0x0002), mut sat, 1, &remote[0], 64, zero_clock)
 	assert sat.state() == .frozen
 }
 
@@ -323,7 +323,7 @@ fn test_a_satellite_only_arm_answers_for_the_window_it_opens() {
 	sat.start()
 	sat.push(new_fb(200, 0, 0, 1))
 	sat.stop()
-	m.on_cmd_multicore(cmd_frame(op_arm, 0x0002), mut sat, 1, &remote[0], 64)
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0002), mut sat, 1, &remote[0], 64, zero_clock)
 	mut f := can.Frame{}
 	assert m.produce(0, mut f)
 	r := decode_rsp([f.data[0], f.data[1], f.data[2], f.data[3], f.data[4], f.data[5], f.data[6],
@@ -348,8 +348,8 @@ fn test_a_later_owner_only_rearm_does_not_swallow_a_posted_one() {
 	sat.start()
 	sat.push(new_fb(200, 0, 0, 1))
 	sat.stop()
-	m.on_cmd_multicore(cmd_frame(op_arm, 0x0002), mut sat, 1, &remote[0], 64) // posts gen 1
-	m.on_cmd_multicore(cmd_frame(op_arm, 0x0001), mut sat, 1, &remote[0], 64) // gen 2, owner only
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0002), mut sat, 1, &remote[0], 64, zero_clock) // posts gen 1
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0001), mut sat, 1, &remote[0], 64, zero_clock) // gen 2, owner only
 	mut sc := Capture{
 		buf:       &sat
 		freeze:    &cell
@@ -379,7 +379,7 @@ fn test_a_two_core_dump_with_one_ring_capturing_is_refused_whole() {
 	assert sat.state() == .capturing
 	mut drain := can.Frame{}
 	assert m.produce(0, mut drain) // the bus loop drains the stop's own response every pass
-	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64)
+	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0003), mut sat, 1, &remote[0], 64, zero_clock)
 	assert !imported
 	assert !m.is_dumping(), 'the owner half streamed alone — a partial two-core dump'
 	// ...and the refusal names the core that was not ready
@@ -399,9 +399,107 @@ fn test_a_satellite_only_dump_of_a_capturing_ring_answers_not_ready() {
 	mut sat := new_buffer(&satb[0], 16, .ring, 50)
 	sat.start()
 	sat.push(new_fb(200, 0, 0, 1))
-	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0002), mut sat, 1, &remote[0], 64)
+	imported := m.on_cmd_multicore(cmd_frame(op_dump, 0x0002), mut sat, 1, &remote[0], 64, zero_clock)
 	assert !imported
 	mut f := can.Frame{}
 	assert m.produce(0, mut f)
 	assert f.data[1] == result_not_ready
+}
+
+fn zero_clock() u64 {
+	return 0
+}
+
+fn clock_1000() u64 {
+	return 1000
+}
+
+// Self-review on #273: the hook runs AFTER its handler, so a satellite handler that STARTED in the
+// window a re-arm ended (start 500) and returned after the re-arm (since 1000) is adopted into the
+// new generation by its own hook. When that re-arm restarted the satellite's ring, the dispatch is
+// the discarded window's: nothing is recorded into the fresh ring and nothing is raised — the
+// over-budget straddler used to freeze the fresh windows on arrival.
+fn test_a_dispatch_straddling_a_rearm_that_restarted_its_ring_is_discarded() {
+	mut own := [16]Record{}
+	mut satb := [16]Record{}
+	mut remote := [64]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	mut cell := FreezeSync{}
+	m.set_freeze(&cell)
+	mut sat := new_buffer(&satb[0], 16, .ring, 50)
+	sat.start()
+	mut sc := satellite_capture(&sat, 0, 10, 100, &cell)
+	fb_hook(voidptr(&sc), 0, 100, 10) // one ordinary record in generation 0
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0003), mut sat, 1, &remote[0], 64, clock_1000)
+	fb_hook(voidptr(&sc), 0, 500, 900) // started at 500, before the re-arm; 900 us over budget
+	assert sat.state() == .capturing && sat.used() == 0, 'the straddler was recorded into the fresh ring'
+	assert cell.word == 1 << 1, 'the straddler raised the new generation: ${cell.word}'
+	assert cell.ack == 1 // the restart itself was performed and acknowledged
+	fb_hook(voidptr(&sc), 0, 1100, 900) // a dispatch that STARTED in the new window trips it
+	assert cell.word == (1 << 1) | 1
+}
+
+// ...and when the re-arm did NOT address the satellite (owner only), its window continues: the
+// straddling dispatch is recorded there and may trip its own ring, but raises nothing — the trip
+// predates the generation the owner's fresh window belongs to.
+fn test_a_dispatch_straddling_an_owner_only_rearm_is_kept_but_raises_nothing() {
+	mut own := [16]Record{}
+	mut satb := [16]Record{}
+	mut remote := [64]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	mut cell := FreezeSync{}
+	m.set_freeze(&cell)
+	mut sat := new_buffer(&satb[0], 16, .ring, 50)
+	sat.start()
+	mut sc := satellite_capture(&sat, 0, 10, 100, &cell)
+	fb_hook(voidptr(&sc), 0, 100, 10)
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0001), mut sat, 1, &remote[0], 64, clock_1000) // owner only
+	fb_hook(voidptr(&sc), 0, 500, 900)
+	assert sat.used() >= 2, 'the continuing window lost the straddler'
+	assert sat.froze_cause() == freeze_trigger // its own ring may trip
+	assert cell.word == 1 << 1, 'the straddler raised the owner-only generation: ${cell.word}'
+}
+
+// The satellite's answers while a re-arm is pending describe the window it is about to open —
+// status too, not only arm — built without reading the ring the satellite may be restarting.
+fn test_status_during_a_pending_rearm_answers_for_the_window_it_opens() {
+	mut own := [16]Record{}
+	mut satb := [16]Record{}
+	mut remote := [64]Record{}
+	mut m := new_module(0x7e3, 0x7e5, 0, true, new_buffer(&own[0], 16, .ring, 50))
+	mut cell := FreezeSync{}
+	m.set_freeze(&cell)
+	mut sat := new_buffer(&satb[0], 16, .ring, 50)
+	sat.start()
+	sat.push(new_fb(200, 0, 0, 1))
+	sat.trigger()
+	m.on_cmd_multicore(cmd_frame(op_arm, 0x0002), mut sat, 1, &remote[0], 64, zero_clock)
+	mut f := can.Frame{}
+	for m.produce(0, mut f) {}
+	m.on_cmd_multicore(cmd_frame(op_status, 0x0002), mut sat, 1, &remote[0], 64, zero_clock)
+	assert m.produce(0, mut f)
+	assert f.data[2] & 0x0f == state_code(.capturing), 'status reported the discarded window'
+	assert f.data[3] == 0 && f.data[4] == 0
+}
+
+// Generations are 31 bits and compared on the circle: across the wrap, a posted re-arm is still
+// "after" the satellite's generation, and a performed one is no longer pending.
+fn test_generations_compare_across_the_wrap() {
+	assert gen_after(0, gen_mask)
+	assert gen_after(5, 3)
+	assert !gen_after(3, 5)
+	assert !gen_after(7, 7)
+	mut cell := FreezeSync{}
+	mut m := TraceModule{}
+	mut ring := [4]Record{}
+	m.init(0x7e3, 0x7e5, 0, true, new_buffer(&ring[0], 4, .ring, 50))
+	m.set_freeze(&cell)
+	m.freeze_gen = gen_mask // the last generation before the wrap
+	cell.ack = gen_mask
+	cell.rearm = gen_mask
+	m.bump(true, zero_clock)
+	assert m.freeze_gen == 0 && cell.word == 0 && cell.rearm == 0
+	assert m.sat_restart_pending(), 'a re-arm posted across the wrap reads as already performed'
+	cell.ack = 0
+	assert !m.sat_restart_pending()
 }

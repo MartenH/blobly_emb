@@ -33,7 +33,10 @@ import driver.can
 //      view exists to provide.
 //
 // Returns whether a satellite window was imported on this call.
-pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sat_core u8, remote_backing &Record, remote_cap u32) bool {
+//
+// `clock` is the trace clock the hooks stamp dispatches with; a re-arm reads it at the instant it
+// starts the new generation (FreezeSync.since), which the satellite's hook compares against.
+pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sat_core u8, remote_backing &Record, remote_cap u32, clock fn () u64) bool {
 	if f.len < 8 {
 		return false // short frame on the wire — never decode stale bytes
 	}
@@ -53,14 +56,14 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 		&& (c.targets(m.core) || c.targets(sat_core))
 	// Nothing may stop or read a satellite ring whose posted re-arm it has not performed yet: it
 	// still holds the window the host asked to discard, and the restart would then undo a stop.
-	// Refused whole, like the busy dump below — the satellite adopts within one of its dispatches.
-	if !rearms && c.targets(sat_core) && (c.opcode == op_stop || c.opcode == op_dump)
-		&& m.sat_restart_pending() {
-		m.queue_rsp(status_rsp(sat, c.opcode, result_busy, sat_core))
+	// Refused whole — a two-core stop too, so the two windows stay one measurement — like the busy
+	// dump below; the satellite adopts within one of its own dispatches, and the host retries.
+	if c.targets(sat_core) && (c.opcode == op_stop || c.opcode == op_dump) && m.sat_restart_pending() {
+		m.queue_rsp(m.sat_rsp(sat, c.opcode, result_busy, sat_core))
 		return false
 	}
 	if rearms {
-		m.bump(c.targets(sat_core))
+		m.bump(c.targets(sat_core), clock)
 	}
 	// A dump must not be accepted while ANY part of the previous one is still outstanding.
 	// on_cmd's own busy check only covers the ISO-TP link, not a queued local_due/remote_due
@@ -142,17 +145,28 @@ pub fn (mut m TraceModule) on_cmd_multicore(f can.Frame, mut sat TraceBuffer, sa
 	// When the mask selects BOTH, the owner's response stands and the satellite's state reaches
 	// the host in its own block header; queue_rsp refuses rather than overwrite it.
 	if c.targets(sat_core) && !c.targets(m.core) {
-		if rearms && m.freeze != unsafe { nil } {
-			// the restart is posted, not yet performed — answer with the window the satellite is
-			// about to open (a fresh copy's status: capturing, empty), not the one being discarded
-			mut fresh := sat
-			fresh.start()
-			m.queue_rsp(status_rsp(fresh, c.opcode, result_ok, sat_core))
-		} else {
-			m.queue_rsp(status_rsp(sat, c.opcode, result_ok, sat_core))
-		}
+		m.queue_rsp(m.sat_rsp(sat, c.opcode, result_ok, sat_core))
 	}
 	return imported
+}
+
+// sat_rsp answers for the satellite. While a posted re-arm is pending, it answers for the window
+// the satellite is about to open — capturing, empty — built from the ring's capacity alone: the
+// live ring still describes the discarded window, and it may be mid-restart on the satellite's
+// own thread, so reading its state/used/cause here could return a mix of neither.
+fn (m TraceModule) sat_rsp(sat TraceBuffer, opcode u8, result u8, sat_core u8) [8]u8 {
+	if !m.sat_restart_pending() {
+		return status_rsp(sat, opcode, result, sat_core)
+	}
+	return encode_rsp(Rsp{
+		opcode_echo:  opcode
+		result:       result
+		state:        state_code(.capturing)
+		cause:        freeze_none
+		records_used: 0
+		capacity:     u16(sat.capacity())
+		core:         sat_core
+	})
 }
 
 // load_remote_buffer imports a frozen satellite ring that lives in THIS address space (the host

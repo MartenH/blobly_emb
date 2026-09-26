@@ -849,7 +849,7 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '				u32(0x${m.trace.cmd_id.hex()}) { // trace.cmd — applied to BOTH cores;'
 	g << '				// an arm/start/reset starts a new freeze generation (set_freeze above) and'
 	g << '				// POSTS the satellite\'s restart — its own hook performs it (#273).'
-	g << '					tm.on_cmd_multicore(rx, mut sat, ${sat_core}, import_buf, ${cap + 1})'
+	g << '					tm.on_cmd_multicore(rx, mut sat, ${sat_core}, import_buf, ${cap + 1}, osal.now_us)'
 	g << '				}'
 	if m.trace.dump_fc_bound {
 		g << '				u32(0x${m.trace.dump_fc_id.hex()}) { tm.on_dump_fc(loom_t1, rx) } // trace.dump_fc'
@@ -900,14 +900,9 @@ fn emit_run_trace_multicore(m Model, doc toml.Doc, all_regs map[string][]string,
 	g << '	// hook — within one handler of the event. Generation-aware (#273): a raise counts only'
 	g << '	// for the window it was made in, and the satellite restarts its own ring on a re-arm.'
 	g << '	mut trace_freeze := trace.FreezeSync{}'
-	g << '	mut sat_cap := trace.Capture{'
-	g << '		buf:       &sat_buf'
-	g << '		start:     trace_origin'
-	g << '		id_base:   ${handler_id_base(m, doc, sat)}'
-	g << '		budget_us: ${m.trace.budget_us}'
-	g << '		freeze:    unsafe { &trace_freeze }'
-	g << '		satellite: true // restarts its own ring on a posted re-arm'
-	g << '	}'
+	g << '	// the satellite restarts its own ring when the owner posts a re-arm (#273)'
+	g << '	mut sat_cap := trace.satellite_capture(&sat_buf, trace_origin, ${handler_id_base(m, doc, sat)}, ${m.trace.budget_us},'
+	g << '		unsafe { &trace_freeze })'
 	g << '	// staging for the imported window (caller-owned, per set_remote): +1 for the leading'
 	g << '	// core-offset record load_remote_buffer may prepend.'
 	g << '	mut import_ring := [${cap + 1}]trace.Record{}'
@@ -1133,7 +1128,7 @@ fn trace_bridge_loop_body(m Model, tctx TraceHostCtx) []string {
 	g << '\t\tfor trace_ch.recv(mut trace_rx) {'
 	g << '\t\t\tmatch trace_rx.id {'
 	g << '\t\t\t\tu32(0x${m.trace.cmd_id.hex()}) { // trace.cmd — the owner lane AND the satellite'
-	g << '\t\t\t\t\ttm.on_cmd_multicore(trace_rx, mut sat, ${sat_core}, import_buf, ${cap + 1})'
+	g << '\t\t\t\t\ttm.on_cmd_multicore(trace_rx, mut sat, ${sat_core}, import_buf, ${cap + 1}, osal.now_us)'
 	g << '\t\t\t\t}'
 	if m.trace.dump_fc_bound {
 		g << '\t\t\t\tu32(0x${m.trace.dump_fc_id.hex()}) { tm.on_dump_fc(loom_t1, trace_rx) } // ISO-TP FC'
@@ -1185,14 +1180,9 @@ fn trace_run_setup(m Model, sat string, doc toml.Doc) []string {
 		'\tmut sat_ring := [${cap}]trace.Record{}',
 		'\tmut sat_buf := trace.new_buffer(&sat_ring[0], ${cap}, .ring, ${m.trace.pre_pct})',
 		'\tsat_buf.start()',
-		'\tmut sat_cap := trace.Capture{',
-		'\t\tbuf:       &sat_buf',
-		'\t\tstart:     trace_origin',
-		'\t\tid_base:   ${handler_id_base(m, doc, sat)}',
-		'\t\tbudget_us: ${m.trace.budget_us}',
-		'\t\tfreeze:    unsafe { &trace_freeze }',
-		'\t\tsatellite: true // restarts its own ring on a posted re-arm',
-		'\t}',
+		'\t// the satellite restarts its own ring when the owner posts a re-arm (#273)',
+		'\tmut sat_cap := trace.satellite_capture(&sat_buf, trace_origin, ${handler_id_base(m, doc, sat)}, ${m.trace.budget_us},',
+		'\t\tunsafe { &trace_freeze })',
 		'\tmut import_ring := [${cap + 1}]trace.Record{}',
 	]
 }

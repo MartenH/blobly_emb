@@ -24,15 +24,31 @@ import sync.stdatomic as _
 //          OWN ring when it adopts a generation at or past this — on its own thread, at hook
 //          entry, so no dispatch can overlap the restart. (The owner used to restart the peer's
 //          ring cross-thread; that overlap was where a stale raise came from.)
-//   ack    the newest generation the satellite has adopted. rearm > ack = a restart the satellite
-//          has not performed yet, and the owner refuses stop/dump against it until it has.
+//   ack    the newest generation the satellite has adopted. rearm after ack = a restart the
+//          satellite has not performed yet, and the owner answers for the window it will open.
+//   since  when the current generation began (low 32 bits of the µs trace clock), written BEFORE
+//          `word`. A hook runs AFTER its handler, so the one dispatch whose hook adopts a new
+//          generation may have STARTED in the window that generation ended; `since` is how that
+//          hook tells (Capture.stale_dispatch). Written first so a racing reader can only err
+//          towards "stale" — never judge an old-window dispatch as new.
 //
-// Generations are u32 and only ever grow by one per re-arm; wrap needs 2^31 re-arms.
+// Generations are 31 bits (they ride `word` above the raised bit) and are compared wrap-safely
+// (gen_after), so a long-running bench wraps cleanly rather than stalling.
 pub struct FreezeSync {
 mut:
 	word  u32
 	rearm u32
 	ack   u32
+	since u32
+}
+
+const gen_mask = u32(0x7fff_ffff)
+
+// gen_after: generation `a` is strictly newer than `b`, on the 31-bit circle (half-range rule).
+@[inline]
+fn gen_after(a u32, b u32) bool {
+	d := (a - b) & gen_mask
+	return d != 0 && d < 0x4000_0000
 }
 
 // The FB enter/exit hook — the platform side of "hooks record, the module serves the bus"
@@ -61,8 +77,24 @@ pub mut:
 	// raise and every observation is judged against the window it actually belongs to.
 	gen u32
 	// The SATELLITE's capture restarts its own ring when a re-arm addresses it (FreezeSync.rearm);
-	// the owner's ring is restarted by the owner's own command path, on its own thread.
+	// the owner's ring is restarted by the owner's own command path, on its own thread. Set through
+	// satellite_capture(), so the role is named where the runner wires it.
 	satellite bool
+}
+
+// satellite_capture builds the capture for the SATELLITE core of a multi-core trace: the peer that
+// restarts its own ring when the owner posts a re-arm. The owner's capture comes from
+// TraceModule.capture; a satellite built any other way would never perform a posted re-arm, and
+// its stop/dump would answer for a window it never opens.
+pub fn satellite_capture(buf &TraceBuffer, origin_us u64, id_base u32, budget_us u32, sync &FreezeSync) Capture {
+	return Capture{
+		buf:       unsafe { buf }
+		start:     origin_us
+		id_base:   id_base
+		budget_us: budget_us
+		freeze:    unsafe { sync }
+		satellite: true
+	}
 }
 
 // capture wires a Capture to this module's ring — install it with
@@ -83,7 +115,11 @@ pub fn (mut m TraceModule) capture(id_base u32, budget_us u32, now_us u64) Captu
 pub fn fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 	mut t := unsafe { &Capture(ctx) }
 	t.fb_count++
-	t.adopt() // FIRST: a pending re-arm restarts this ring before anything is recorded into it
+	// FIRST: a pending re-arm restarts this ring before anything is recorded into it
+	stale := t.stale_dispatch(start_us, t.adopt())
+	if stale == .discarded {
+		return // the dispatch belongs to the window the host just discarded
+	}
 	// The capturing test is taken AT ENTRY — before EITHER push below. Both can retire the
 	// ring mid-hook: the FB record can fill a oneshot's final slot, and so can the epoch
 	// re-anchor a u24 wrap inserts first (codex #271 r4+r6) — judged after, the overrun that
@@ -113,6 +149,9 @@ pub fn fb_hook(ctx voidptr, idx int, start_us u64, dt_us u64) {
 		// inside this very hook wins instead, and then no freeze is raised for it either.
 		tripped = t.buf.trip()
 	}
+	if stale == .predates {
+		return // its window continues, but its trip predates the generation: raise nothing for it
+	}
 	t.sync_freeze(tripped)
 }
 
@@ -136,31 +175,63 @@ fn (mut t Capture) anchor(elapsed u64, capturing bool) {
 	}
 }
 
+// Adoption is what adopt() did at hook entry.
+enum Adoption {
+	none      // same generation as the last dispatch
+	adopted   // a new generation; this ring's window continues
+	restarted // a new generation that re-armed THIS ring (a posted satellite restart)
+}
+
+// Staleness is how the dispatch being recorded relates to the generation now in force.
+enum Staleness {
+	current   // started in the current generation's window
+	predates  // started before it, and its window continues: record it, raise nothing for it
+	discarded // started before it, and its window was just restarted: record nothing
+}
+
 // adopt brings this capture onto the system's current generation, at hook ENTRY — before the
 // capturing test and before any record — so everything the hook then does belongs to one window.
 // A satellite whose re-arm is pending restarts its OWN ring here: the restart runs on the thread
-// that writes the ring, so no dispatch can straddle it. It acknowledges every generation it adopts;
-// the owner reads that to know the restart has happened (FreezeSync.ack).
+// that writes the ring, so no two writers ever touch it. It acknowledges every generation it
+// adopts; the owner reads that to know the restart has happened (FreezeSync.ack).
 @[inline]
-fn (mut t Capture) adopt() {
+fn (mut t Capture) adopt() Adoption {
 	if t.freeze == unsafe { nil } {
-		return
+		return .none
 	}
 	g := C.atomic_load_u32(voidptr(&t.freeze.word)) >> 1
 	if g == t.gen {
-		return
+		return .none
 	}
-	if t.satellite {
-		// `>` not `==`: a later re-arm that did not address the satellite must not swallow an
-		// earlier one that did and was never performed.
-		if C.atomic_load_u32(voidptr(&t.freeze.rearm)) > t.gen {
-			t.buf.start()
-		}
+	mut res := Adoption.adopted
+	// "after", not "equal": a later re-arm that did not address the satellite must not swallow an
+	// earlier one that did and was never performed.
+	if t.satellite && gen_after(C.atomic_load_u32(voidptr(&t.freeze.rearm)), t.gen) {
+		t.buf.start()
+		res = .restarted
 	}
 	t.gen = g
 	if t.satellite {
 		C.atomic_store_u32(voidptr(&t.freeze.ack), g)
 	}
+	return res
+}
+
+// stale_dispatch: the hook runs AFTER its handler, so the one dispatch whose hook adopts a new
+// generation may have begun before the host's re-arm (a long handler straddling the command). Only
+// that dispatch can: every later one starts after this hook, which is after the adoption. Judged
+// against FreezeSync.since as a wrap-safe signed difference, which is sound because the two stamps
+// are at most one dispatch apart.
+@[inline]
+fn (t Capture) stale_dispatch(start_us u64, adoption Adoption) Staleness {
+	if adoption == .none {
+		return .current
+	}
+	since := C.atomic_load_u32(voidptr(&t.freeze.since))
+	if i32(u32(start_us) - since) >= 0 {
+		return .current
+	}
+	return if adoption == .restarted { Staleness.discarded } else { Staleness.predates }
 }
 
 // sync_freeze raises the system freeze when THIS ring tripped, and honours a peer that already did
@@ -202,7 +273,10 @@ pub fn (mut t Capture) note_thread(tid u16, reason u8, start_us u64, dt_us u64) 
 	// push below can retire the ring mid-call), one over-budget predicate, trip() for the
 	// stop-beats-trigger race, and the shared freeze raised/observed per span — the bridge is
 	// a first-class traced entity, so it participates in the system-wide freeze like any core.
-	t.adopt()
+	stale := t.stale_dispatch(start_us, t.adopt())
+	if stale == .discarded {
+		return
+	}
 	was_capturing := t.buf.state() == .capturing
 	elapsed := start_us - t.start
 	t.anchor(elapsed, was_capturing)
@@ -215,6 +289,9 @@ pub fn (mut t Capture) note_thread(tid u16, reason u8, start_us u64, dt_us u64) 
 	mut tripped := false
 	if over && was_capturing {
 		tripped = t.buf.trip() // a drain cycle over budget freezes this ring, like an overrunning handler
+	}
+	if stale == .predates {
+		return
 	}
 	t.sync_freeze(tripped)
 }

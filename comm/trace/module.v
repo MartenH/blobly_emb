@@ -242,11 +242,18 @@ pub fn (mut m TraceModule) set_freeze(cell &FreezeSync) {
 // generation FIRST, so a satellite that adopts it always finds its request (FreezeSync). A raise
 // still in flight from the ending window then fails its compare-and-swap, and a trip in the new
 // window raises against the new generation: nothing is left to check-then-clear (#273).
-fn (mut m TraceModule) bump(restart_sat bool) {
+//
+// `clock` stamps when the generation began (FreezeSync.since), read HERE, immediately before the
+// stores: a stamp taken earlier (the loop's pass time) would let a dispatch starting between the
+// stamp and the bump pass as new-window. Written BEFORE the word, so a hook that sees the new
+// generation always finds a stamp at least this new. What remains is one clock read and two
+// stores wide.
+fn (mut m TraceModule) bump(restart_sat bool, clock fn () u64) {
 	if m.freeze == unsafe { nil } {
 		return
 	}
-	m.freeze_gen++
+	m.freeze_gen = (m.freeze_gen + 1) & gen_mask
+	C.atomic_store_u32(voidptr(&m.freeze.since), u32(clock()))
 	if restart_sat {
 		C.atomic_store_u32(voidptr(&m.freeze.rearm), m.freeze_gen)
 	}
@@ -259,7 +266,8 @@ fn (m TraceModule) sat_restart_pending() bool {
 	if m.freeze == unsafe { nil } {
 		return false
 	}
-	return C.atomic_load_u32(voidptr(&m.freeze.rearm)) > C.atomic_load_u32(voidptr(&m.freeze.ack))
+	return gen_after(C.atomic_load_u32(voidptr(&m.freeze.rearm)),
+		C.atomic_load_u32(voidptr(&m.freeze.ack)))
 }
 
 pub fn (mut m TraceModule) arm() {

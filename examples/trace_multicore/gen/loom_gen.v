@@ -107,7 +107,7 @@ pub fn partition_sense(chp can.Channel, sat_buf &trace.TraceBuffer, import_buf &
 				u32(0x7e2) { // trace.cmd — applied to BOTH cores;
 				// an arm/start/reset starts a new freeze generation (set_freeze above) and
 				// POSTS the satellite's restart — its own hook performs it (#273).
-					tm.on_cmd_multicore(rx, mut sat, 1, import_buf, 65)
+					tm.on_cmd_multicore(rx, mut sat, 1, import_buf, 65, osal.now_us)
 				}
 				u32(0x7e6) { tm.on_dump_fc(loom_t1, rx) } // trace.dump_fc
 				else {}
@@ -149,14 +149,9 @@ pub fn run(chp can.Channel) {
 	// hook — within one handler of the event. Generation-aware (#273): a raise counts only
 	// for the window it was made in, and the satellite restarts its own ring on a re-arm.
 	mut trace_freeze := trace.FreezeSync{}
-	mut sat_cap := trace.Capture{
-		buf:       &sat_buf
-		start:     trace_origin
-		id_base:   2
-		budget_us: 500
-		freeze:    unsafe { &trace_freeze }
-		satellite: true // restarts its own ring on a posted re-arm
-	}
+	// the satellite restarts its own ring when the owner posts a re-arm (#273)
+	mut sat_cap := trace.satellite_capture(&sat_buf, trace_origin, 2, 500,
+		unsafe { &trace_freeze })
 	// staging for the imported window (caller-owned, per set_remote): +1 for the leading
 	// core-offset record load_remote_buffer may prepend.
 	mut import_ring := [65]trace.Record{}
