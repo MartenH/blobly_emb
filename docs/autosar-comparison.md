@@ -20,12 +20,12 @@ lock-free, no-alloc — and skips the rest.
 | Periodic trigger | `TimingEvent` | `[[fb.handler]] period_ms` (the `on_<period>` name is convention, not syntax) | ✅ have |
 | Per-runnable private state | Inter-Runnable Variables (IRV) | the FB's private struct | ✅ have |
 | Deadline / alive timeout, init value, invalidation | COM rx monitoring | COM rx deadline → `valid = false` | ✅ have[^host] |
-| Why a read is not usable — never received vs. timed out vs. failed integrity | `Rte_Read` status (`RTE_E_NEVER_RECEIVED` / `MAX_AGE_EXCEEDED` / transformer error) | — (one `valid` bool; an E2E/SecOC failure shows up only later, as the deadline's `valid = false`) | 🔜 planned (#286) |
+| Why a read is not usable — never received vs. timed out vs. failed integrity | `Rte_Read` status (`RTE_E_NEVER_RECEIVED` / `RTE_E_MAX_AGE_EXCEEDED` / `RTE_E_SOFT_TRANSFORMER_ERROR`) | — one `valid` bool; a frame failing E2E/SecOC is dropped, so the FB learns of it only through the rx deadline — and with no `timeout_ms` on the frame, never (it keeps the last good value)[^host] | 🔜 planned (#286) |
 | Transmission modes (cyclic / on-change / mixed, min-delay) | COM tx modes + filters | `[[frame]].tx` | ✅ have[^host] |
 | Raw↔physical scaling at the boundary | RTE/COM data conversion | DBC codec in the bridge | ✅ have[^host] |
-| Diagnostics request/response | DCM over the RTE | ISO-TP + UDS at the bus (0x10 / 0x22 / 0x2E / 0x3E) | ✅ have |
+| Diagnostics request/response | DCM over the RTE | ISO-TP + UDS at the bus — the application server (`comm/uds`: 0x10 / 0x22 / 0x2E / 0x3E); the bootloader adds the programming services (`boot/`: 0x11 / 0x29 / 0x31 / 0x34 / 0x36 / 0x37) | ✅ have |
 | Fault memory — debounced diagnostic events → DTCs, freeze frames, 0x19 / 0x14 | DEM (`SetEventStatus` over a client-server port) | — | 🔜 planned (#287) |
-| Variant coding — per-vehicle parameters an FB reads, set at end-of-line | ParameterInterface (`Rte_Prm`), written via DCM | — | 🔜 planned (#288) |
+| Variant coding — per-vehicle parameters an FB reads, set at end-of-line | NvM-backed data (NvBlockSwComponent) written by a DCM 0x2E; some stacks carry it on parameter ports (`Rte_Prm`), which the standard defines for calibration | — | 🔜 planned (#288) |
 | Network management — coordinated bus sleep/wake | CanNm / NmIf | `comm/nm` + `[nm]` endpoint bindings (request/release, cluster listen, bench-verified) | ✅ have |
 | Cross-core communication in one ECU | OS-Application partitioning + the OS **IOC** + per-core RTE config | an ordinary `[[signal]]` whose endpoints sit on different cores; the generator derives the transport (xioc) and emits an image per core from ONE config ([multi-image.md](multi-image.md)) | ✅ have |
 | Runtime observability — thread/ISR/handler trace, per-handler timing, CPU load | ARTI/ORTI + vendor tracing tools, DLT | per-core flight recorder → multi-core swimlane, `stat` (per-handler last/max/mean µs), CpuLoad telemetry — all config-wired, dumped over the bus | ✅ have |
@@ -83,7 +83,12 @@ lock-free, no-alloc — and skips the rest.
   an Out port the fault service debounces, a parameter is a read-only In field backed by
   persistence and a DID, and the read status is one generated enum field instead of a
   return code. Same principle as persistence ([nvm.md](nvm.md)): declare it, use it as a
-  port. Missing because no example has shipped to a workshop yet.
+  port. What they would take: rx status is bridge-local (a status field instead of the
+  bool, and the E2E/SecOC drop path publishing it). Faults need the debounce to run on
+  the **producing** thread — a pre-debounce result written to a last-value cell is exactly
+  the lost-occurrence case above, so only the debounced state may cross to the fault
+  service — plus the fault-memory journal ([nvm.md](nvm.md)) and UDS 0x19 / 0x14.
+  Parameters need the unbuilt nvm P4 (writable DIDs backed by blocks) first.
 - **E2E protection.** ✅ **done.** Signals had validity but no integrity; `comm/e2e`
   adds a CRC + alive counter so a receiver detects corruption (CRC), repetition / a
   stuck sender (counter `delta == 0`), individual lost frames (counter skip,

@@ -131,15 +131,17 @@ faults and parameters.
 
 - 🧭 **Rx status** (`#286`) — replace the `valid` bool with a generated
   `never_received / timeout / integrity` status, so "not yet", "gone" and "corrupt" stop
-  looking alike (today an E2E/SecOC failure only surfaces later, as the deadline's
-  `valid = false`)
+  looking alike (today a frame failing E2E/SecOC is dropped, so the FB sees it only via
+  the rx deadline — and on a frame with no `timeout_ms`, never)
 - 🧭 **Fault reporting → DTCs** (`#287`) — FBs write a pre-debounce result to a fault Out
-  port; a platform fault service debounces, keeps the ISO 14229 status byte, captures freeze
-  frames from named signals into the fault-memory journal already designed in
-  [docs/nvm.md](docs/nvm.md); UDS gains 0x19 / 0x14
+  port, debounced on the producing thread (a last-value cell would drop results between
+  reads) so only the debounced state crosses; a platform fault service keeps the ISO 14229
+  status byte and captures freeze frames from named signals into the fault-memory journal
+  already designed in [docs/nvm.md](docs/nvm.md); UDS gains 0x19 / 0x14
 - 🧭 **Parameters / variant coding** (`#288`) — `[[param]]`: a read-only In field with a
-  compiled default, persisted, written via a DID (builds on nvm P4 DID binding), so one build
-  serves every variant
+  compiled default, persisted, written via a DID, so one build serves every variant.
+  **Prerequisite:** nvm P4 DID binding (writable DIDs backed by blocks, [docs/nvm.md](docs/nvm.md)),
+  which is not built yet — it lands first, as part of this item
 
 ## Drivers & IO
 
