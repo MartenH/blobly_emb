@@ -658,10 +658,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\ttp_${tp}_buf [isotp.max_payload]u8'
 			glue << '\tuds_${tp} uds.Server'
 			glue << '\tuds_${tp}_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity'
-			if c.functional_id != 0 {
-				glue << '\tfn_${tp}_req [7]u8 // a functional request waiting for the link (one slot)'
-				glue << '\tfn_${tp}_len int'
-			}
 		}
 		if conns.len > 0 && rx_by_msg.keys().any((m.frames.rx_timeout_us[it] or { 0 }) > 0) {
 			glue << '\tdiag_rx_was_off bool // 0x28 had rx off last pass: restart the deadlines on return'
@@ -760,7 +756,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			for c in conns {
 				glue << '\tst.uds_${snake(c.name)}.tick(now)'
 			}
-			glue << '\tdiag_rx_ok := ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
+			glue << '\tmut diag_rx_ok := ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
 		}
 		if rx_by_msg.len > 0 || conns.len > 0 || my_routes.len > 0 {
 			glue << '\tmut rx := can.Frame{}'
@@ -923,51 +919,23 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\t}'
 				if c.functional_id != 0 {
 					// A FUNCTIONAL request is one single frame (ISO 15765-2: PCI 0x0N, N = 1..7 data
-					// bytes). It is only STORED here: the physical path below goes first, and the
-					// functional request is served once the link is free, so its answer never takes the
-					// link from a physical response in the same pass. One slot — a newer functional
-					// request replaces one still waiting.
+					// bytes), served ON ARRIVAL — in bus order, so a functional 0x28 gates the very next
+					// frame of this drain (the receive gate is re-sampled right after). Nothing queues:
+					// when the link is not quiet both ways, or a reset is pending, it is DROPPED, as a
+					// busy server does; a functional TesterPresent is periodic and simply comes again.
 					glue << '\t\tif rx.id == u32(0x${c.functional_id.hex()}) && !rx.ext && rx.len >= 2 && rx.data[0] >> 4 == 0 {'
 					glue << '\t\t\tfl_${tp} := int(rx.data[0] & 0x0F)'
-					glue << '\t\t\tif fl_${tp} >= 1 && fl_${tp} <= 7 && fl_${tp} < int(rx.len) { // <= 7: a CAN-FD frame may claim more than the slot holds'
-					glue << '\t\t\t\tfor i in 0 .. fl_${tp} {'
-					glue << '\t\t\t\t\tst.fn_${tp}_req[i] = rx.data[1 + i]'
+					glue << '\t\t\tif fl_${tp} >= 1 && fl_${tp} <= 7 && fl_${tp} < int(rx.len) && st.tp_${tp}.idle() && st.uds_${tp}.reset_req == 0 { // <= 7: a CAN-FD frame may claim more'
+					glue << '\t\t\t\tfn_${tp} := st.uds_${tp}.handle_functional(&rx.data[1], fl_${tp}, &st.uds_${tp}_resp[0])'
+					glue << '\t\t\t\tif fn_${tp} > 0 && !st.tp_${tp}.send(&st.uds_${tp}_resp[0], fn_${tp}) {'
+					glue << '\t\t\t\t\tst.uds_${tp}.reset_req = 0 // never reset unanswered'
 					glue << '\t\t\t\t}'
-					glue << '\t\t\t\tst.fn_${tp}_len = fl_${tp}'
-					glue << '\t\t\t\tst.uds_${tp}.tick(now)'
-					glue << '\t\t\t\tst.uds_${tp}.note_request() // accepted now: a queued TesterPresent still keeps S3 alive'
-					glue << '\t\t\t\tbreak // served before the frames behind it, like a physical request'
+					glue << '\t\t\t\tdiag_rx_ok = ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
 					glue << '\t\t\t}'
 					glue << '\t\t}'
 				}
 			}
 			glue << '\t}'
-			// rx deadline crossed -> publish invalid (valid=false) signals, once. While 0x28 has rx
-			// off, silence is commanded, not a fault: no deadline fires, and every deadline restarts
-			// when rx comes back (below), so a diagnostic command never fakes a comms timeout.
-			if conns.len > 0 && rx_by_msg.keys().any((m.frames.rx_timeout_us[it] or { 0 }) > 0) {
-				glue << '\tif diag_rx_ok && st.diag_rx_was_off {'
-				for msg, _ in rx_by_msg {
-					if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
-						glue << '\t\tst.rx_${msg}_st.on_receive(now)'
-					}
-				}
-				glue << '\t}'
-				glue << '\tst.diag_rx_was_off = !diag_rx_ok'
-			}
-			for msg, list in rx_by_msg {
-				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
-					dl_gate := if conns.len > 0 { 'diag_rx_ok && ' } else { '' }
-					glue << '\tif ${dl_gate}st.rx_${msg}_st.expired(now) {'
-					for sname in list {
-						si := m.sig_of[sname] or { continue }
-						fld := snake(sname)
-						glue << '\t\tmut ${fld} := sig.${sname}{}'
-						glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
-					}
-					glue << '\t}'
-				}
-			}
 			// ISO-TP + UDS: refresh live-signal DIDs, dispatch a reassembled
 			// request, drain the segmented response.
 			for c in conns {
@@ -989,9 +957,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				// the target's controller-drained reset is R2 (docs/diagnostics.md §3.1).
 				glue << '\tif st.uds_${tp}.reset_req != 0 && !st.tp_${tp}.busy() { // the answer has left'
 				glue << '\t\tst.uds_${tp}.reset_state()'
-				if c.functional_id != 0 {
-					glue << '\t\tst.fn_${tp}_len = 0 // a request that arrived before the reset is not served after it'
-				}
 				glue << '\t}'
 				// ONE request at a time: a new request is taken only when the previous answer has left
 				// the link, so a pending ECUReset always belongs to the response in flight (the next
@@ -1030,15 +995,35 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\t\tbreak'
 				glue << '\t\t}'
 				glue << '\t}'
-				if c.functional_id != 0 {
-					glue << '\tif st.fn_${tp}_len > 0 && st.tp_${tp}.idle() && st.uds_${tp}.reset_req == 0 { // the waiting functional request: only on a quiet link, never ahead of a pending reset'
-					glue << '\t\tfn_${tp} := st.uds_${tp}.handle_functional_noted(&st.fn_${tp}_req[0], st.fn_${tp}_len, &st.uds_${tp}_resp[0]) // arrival already stamped'
-					glue << '\t\tst.fn_${tp}_len = 0'
-					glue << '\t\tif fn_${tp} > 0 {'
-					glue << '\t\t\tst.tp_${tp}.send(&st.uds_${tp}_resp[0], fn_${tp})'
-					glue << '\t\t}'
-					glue << '\t}'
+			}
+		}
+		// rx deadline crossed -> publish invalid (valid=false) signals, once. While 0x28 has rx
+		// off, silence is commanded, not a fault: no deadline fires, and every deadline restarts
+		// when rx comes back (below), so a diagnostic command never fakes a comms timeout.
+		if conns.len > 0 && rx_by_msg.keys().any((m.frames.rx_timeout_us[it] or { 0 }) > 0) {
+			// re-sampled AFTER this pass's requests were served: a 0x28 disabling rx now suspends
+			// the deadlines before any of them can fire
+			glue << '\tdiag_rx_ok = ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
+			glue << '\tif diag_rx_ok && st.diag_rx_was_off {'
+			for msg, _ in rx_by_msg {
+				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
+					glue << '\t\tst.rx_${msg}_st.on_receive(now)'
 				}
+			}
+			glue << '\t}'
+			glue << '\tst.diag_rx_was_off = !diag_rx_ok'
+		}
+		for msg, list in rx_by_msg {
+			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
+				dl_gate := if conns.len > 0 { 'diag_rx_ok && ' } else { '' }
+				glue << '\tif ${dl_gate}st.rx_${msg}_st.expired(now) {'
+				for sname in list {
+					si := m.sig_of[sname] or { continue }
+					fld := snake(sname)
+					glue << '\t\tmut ${fld} := sig.${sname}{}'
+					glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+				}
+				glue << '\t}'
 			}
 		}
 		if conns.len > 0 {

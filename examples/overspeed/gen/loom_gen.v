@@ -108,8 +108,6 @@ mut:
 	tp_diag_buf [isotp.max_payload]u8
 	uds_diag uds.Server
 	uds_diag_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity
-	fn_diag_req [7]u8 // a functional request waiting for the link (one slot)
-	fn_diag_len int
 	diag_rx_was_off bool // 0x28 had rx off last pass: restart the deadlines on return
 }
 
@@ -117,7 +115,7 @@ fn io_can0_10ms(ctx voidptr) {
 	mut st := unsafe { &Bridge_can0_state(ctx) }
 	now := osal.now_us()
 	st.uds_diag.tick(now)
-	diag_rx_ok := st.uds_diag.rx_enabled()
+	mut diag_rx_ok := st.uds_diag.rx_enabled()
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
 		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false && diag_rx_ok {
@@ -139,26 +137,14 @@ fn io_can0_10ms(ctx voidptr) {
 		}
 		if rx.id == u32(0x7df) && !rx.ext && rx.len >= 2 && rx.data[0] >> 4 == 0 {
 			fl_diag := int(rx.data[0] & 0x0F)
-			if fl_diag >= 1 && fl_diag <= 7 && fl_diag < int(rx.len) { // <= 7: a CAN-FD frame may claim more than the slot holds
-				for i in 0 .. fl_diag {
-					st.fn_diag_req[i] = rx.data[1 + i]
+			if fl_diag >= 1 && fl_diag <= 7 && fl_diag < int(rx.len) && st.tp_diag.idle() && st.uds_diag.reset_req == 0 { // <= 7: a CAN-FD frame may claim more
+				fn_diag := st.uds_diag.handle_functional(&rx.data[1], fl_diag, &st.uds_diag_resp[0])
+				if fn_diag > 0 && !st.tp_diag.send(&st.uds_diag_resp[0], fn_diag) {
+					st.uds_diag.reset_req = 0 // never reset unanswered
 				}
-				st.fn_diag_len = fl_diag
-				st.uds_diag.tick(now)
-				st.uds_diag.note_request() // accepted now: a queued TesterPresent still keeps S3 alive
-				break // served before the frames behind it, like a physical request
+				diag_rx_ok = st.uds_diag.rx_enabled()
 			}
 		}
-	}
-	if diag_rx_ok && st.diag_rx_was_off {
-		st.rx_powertrain_st.on_receive(now)
-	}
-	st.diag_rx_was_off = !diag_rx_ok
-	if diag_rx_ok && st.rx_powertrain_st.expired(now) {
-		mut vehicle_speed := sig.VehicleSpeed{}
-		osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
-		mut engine_speed := sig.EngineSpeed{}
-		osal.ioc_publish2(engine_speed_ch, &engine_speed, u8(sizeof(engine_speed)))
 	}
 	mut vehicle_speed_did := sig.VehicleSpeed{}
 	if osal.ioc_acquire2(vehicle_speed_ch, &vehicle_speed_did, u8(sizeof(vehicle_speed_did))) {
@@ -168,7 +154,6 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 	if st.uds_diag.reset_req != 0 && !st.tp_diag.busy() { // the answer has left
 		st.uds_diag.reset_state()
-		st.fn_diag_len = 0 // a request that arrived before the reset is not served after it
 	}
 	diag_got := st.tp_diag.take(&st.tp_diag_buf[0])
 	diag_n := if st.tp_diag.busy() { 0 } else { diag_got }
@@ -194,12 +179,16 @@ fn io_can0_10ms(ctx voidptr) {
 			break
 		}
 	}
-	if st.fn_diag_len > 0 && st.tp_diag.idle() && st.uds_diag.reset_req == 0 { // the waiting functional request: only on a quiet link, never ahead of a pending reset
-		fn_diag := st.uds_diag.handle_functional_noted(&st.fn_diag_req[0], st.fn_diag_len, &st.uds_diag_resp[0]) // arrival already stamped
-		st.fn_diag_len = 0
-		if fn_diag > 0 {
-			st.tp_diag.send(&st.uds_diag_resp[0], fn_diag)
-		}
+	diag_rx_ok = st.uds_diag.rx_enabled()
+	if diag_rx_ok && st.diag_rx_was_off {
+		st.rx_powertrain_st.on_receive(now)
+	}
+	st.diag_rx_was_off = !diag_rx_ok
+	if diag_rx_ok && st.rx_powertrain_st.expired(now) {
+		mut vehicle_speed := sig.VehicleSpeed{}
+		osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
+		mut engine_speed := sig.EngineSpeed{}
+		osal.ioc_publish2(engine_speed_ch, &engine_speed, u8(sizeof(engine_speed)))
 	}
 	diag_tx_ok := st.uds_diag.tx_enabled()
 	mut tx_lamp_frame := can.Frame{

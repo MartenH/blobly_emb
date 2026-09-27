@@ -331,29 +331,3 @@ fn test_a_too_small_buffer_silences_the_server() {
 	s.init(min_resp_cap)
 	assert call(mut s, [u8(0x10), 0x03]).len == 6
 }
-
-// A request accepted now and served later still keeps the session alive.
-fn test_note_request_keeps_s3_alive() {
-	mut s := started()
-	s.tick(1_000_000)
-	call(mut s, [u8(0x10), 0x03])
-	s.tick(1_000_000 + default_s3_us - 1)
-	s.note_request()
-	s.tick(1_000_000 + default_s3_us + 10)
-	assert s.session == session_extended
-}
-
-// A queued functional request keeps its ARRIVAL time: serving it later does not stretch S3.
-fn test_a_queued_functional_request_keeps_its_arrival_time() {
-	mut s := started()
-	s.tick(1_000_000)
-	call(mut s, [u8(0x10), 0x03])
-	s.tick(2_000_000)
-	s.note_request() // a functional TesterPresent arrives and is queued
-	s.tick(2_000_000 + default_s3_us - 10) // served much later, still inside S3 of its arrival
-	mut resp := [16]u8{}
-	req := [u8(0x3E), 0x00]
-	assert s.handle_functional_noted(&req[0], 2, &resp[0]) == 2
-	s.tick(2_000_000 + default_s3_us + 1)
-	assert s.session == session_default, 'serving a queued request re-stamped S3'
-}
