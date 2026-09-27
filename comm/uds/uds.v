@@ -20,6 +20,11 @@ module uds
 pub const max_dids = 16
 pub const max_did_data = 32 // bytes stored per DID
 
+// The smallest response buffer init() accepts: the longest FIXED response (0x50 with its P2/P2*
+// timing, 6 bytes). A smaller buffer could not hold even that, so the server refuses to run at all
+// rather than write past it.
+pub const min_resp_cap = 6
+
 // The response capacity a caller that never called init() gets: the longest response the
 // single-DID server could produce (3 + max_did_data), so every pre-existing caller's buffer
 // (DoIP's 40 B, the generated bridge's 64 B) stays within bounds.
@@ -111,8 +116,18 @@ pub mut:
 // records the response capacity of the buffer the owner passes to handle(). Owners call it
 // once at start; an ECUReset re-runs reset_state().
 pub fn (mut s Server) init(resp_cap int) {
-	s.resp_cap = resp_cap
+	// below the minimum the server stays silent (handle returns 0) instead of overrunning a
+	// buffer too small for its fixed responses
+	s.resp_cap = if resp_cap >= min_resp_cap { resp_cap } else { -1 }
 	s.reset_state()
+}
+
+// note_request records diagnostic activity at the current tick without serving anything — for
+// an owner that accepts a request now and serves it later (a queued functional request), so the
+// wait cannot let S3 expire the session the request was meant to keep alive.
+pub fn (mut s Server) note_request() {
+	s.last_rx_us = s.now_us
+	s.rx_seen = true
 }
 
 // reset_state returns the diagnostic state to power-on: default session, security locked,
@@ -172,7 +187,7 @@ pub fn (mut s Server) handle_functional(req &u8, req_len int, resp &u8) int {
 }
 
 fn (mut s Server) dispatch(req &u8, req_len int, resp &u8) int {
-	if req_len < 1 {
+	if req_len < 1 || s.resp_cap < 0 {
 		return 0
 	}
 	s.last_rx_us = s.now_us // any request keeps the session alive (S3)

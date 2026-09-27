@@ -320,3 +320,25 @@ fn test_write_security_precedes_record_length() {
 	}
 	assert call(mut s, long) == [u8(0x7F), 0x2E, 0x33]
 }
+
+// A response buffer too small for the fixed responses: the server stays silent rather than
+// write past it (every response, not only multi-DID reads, is bounded).
+fn test_a_too_small_buffer_silences_the_server() {
+	mut s := fixture()
+	s.init(min_resp_cap - 1)
+	assert call(mut s, [u8(0x10), 0x03]).len == 0
+	assert call(mut s, [u8(0x19)]).len == 0
+	s.init(min_resp_cap)
+	assert call(mut s, [u8(0x10), 0x03]).len == 6
+}
+
+// A request accepted now and served later still keeps the session alive.
+fn test_note_request_keeps_s3_alive() {
+	mut s := started()
+	s.tick(1_000_000)
+	call(mut s, [u8(0x10), 0x03])
+	s.tick(1_000_000 + default_s3_us - 1)
+	s.note_request()
+	s.tick(1_000_000 + default_s3_us + 10)
+	assert s.session == session_extended
+}

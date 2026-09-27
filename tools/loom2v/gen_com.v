@@ -926,6 +926,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					glue << '\t\t\t\t\tst.fn_${tp}_req[i] = rx.data[1 + i]'
 					glue << '\t\t\t\t}'
 					glue << '\t\t\t\tst.fn_${tp}_len = fl_${tp}'
+					glue << '\t\t\t\tst.uds_${tp}.tick(now)'
+					glue << '\t\t\t\tst.uds_${tp}.note_request() // accepted now: a queued TesterPresent still keeps S3 alive'
 					glue << '\t\t\t}'
 					glue << '\t\t}'
 				}
@@ -1007,6 +1009,12 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				// happens once the answer has left the link. On the host there is no platform reset,
 				// so it is the DIAGNOSTIC state that returns to power-on (session, security, 0x28);
 				// the target's controller-drained reset is R2 (docs/diagnostics.md §3.1).
+				glue << '\tif st.uds_${tp}.reset_req != 0 && !st.tp_${tp}.busy() && !st.tp_${tp}_held_set { // the answer has left'
+				glue << '\t\tst.uds_${tp}.reset_state()'
+				if c.functional_id != 0 {
+					glue << '\t\tst.fn_${tp}_len = 0 // a request that arrived before the reset is not served after it'
+				}
+				glue << '\t}'
 				if c.functional_id != 0 {
 					glue << '\tif st.fn_${tp}_len > 0 && st.tp_${tp}.idle() && !st.tp_${tp}_held_set { // the waiting functional request: only on a link quiet both ways'
 					glue << '\t\tfn_${tp} := st.uds_${tp}.handle_functional(&st.fn_${tp}_req[0], st.fn_${tp}_len, &st.uds_${tp}_resp[0])'
@@ -1016,9 +1024,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					glue << '\t\t}'
 					glue << '\t}'
 				}
-				glue << '\tif st.uds_${tp}.reset_req != 0 && !st.tp_${tp}.busy() && !st.tp_${tp}_held_set { // the answer has left'
-				glue << '\t\tst.uds_${tp}.reset_state()'
-				glue << '\t}'
 			}
 		}
 		if conns.len > 0 {

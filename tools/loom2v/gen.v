@@ -3624,19 +3624,33 @@ fn main() {
 			continue
 		}
 		fid := u32(c.functional_id)
+		// only what is handled on THIS bus can collide (CAN ids are bus-local): the DBC messages
+		// its signals ride, the frames routed onto or off it, and the module frames that use it
+		mut on_bus := map[string]bool{}
+		for _, si in m.sig_of {
+			if si.external && si.bus == c.bus && si.dbc_msg != '' {
+				on_bus[si.dbc_msg] = true
+			}
+		}
 		if db := candb.load_dbc_file(dbc) {
 			for msg in db.messages {
-				if u32(msg.id) == fid && !msg.ext {
-					panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also DBC message "${msg.name}"')
+				if on_bus[snake(msg.name)] && u32(msg.id) == fid && !msg.ext {
+					panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also DBC message "${msg.name}" on bus "${c.bus}"')
 				}
 			}
 		}
-		if m.telem.on && (fid == m.telem.id || (m.telem.detail_id != 0 && fid == m.telem.detail_id)) {
-			panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a [telemetry] frame id')
+		for r in m.routes {
+			if (r.from_bus == c.bus && u32(r.from_id) == fid) || (r.to_bus == c.bus && u32(r.to_id) == fid) {
+				panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a routed frame on bus "${c.bus}"')
+			}
 		}
-		if m.trace.on && (fid == m.trace.cmd_id || fid == m.trace.rsp_id || fid == m.trace.record_id
-			|| (m.trace.dump_fc_bound && fid == m.trace.dump_fc_id)) {
-			panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a [trace] endpoint id')
+		if m.telem.on && m.telem.bus == c.bus && (fid == m.telem.id || (m.telem.detail_id != 0 && fid == m.telem.detail_id)) {
+			panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a [telemetry] frame id on bus "${c.bus}"')
+		}
+		fn_trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
+		if m.trace.on && fn_trace_bus == c.bus && (fid == m.trace.cmd_id || fid == m.trace.rsp_id
+			|| fid == m.trace.record_id || (m.trace.dump_fc_bound && fid == m.trace.dump_fc_id)) {
+			panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a [trace] endpoint id on bus "${c.bus}"')
 		}
 	}
 

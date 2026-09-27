@@ -142,6 +142,8 @@ fn io_can0_10ms(ctx voidptr) {
 					st.fn_diag_req[i] = rx.data[1 + i]
 				}
 				st.fn_diag_len = fl_diag
+				st.uds_diag.tick(now)
+				st.uds_diag.note_request() // accepted now: a queued TesterPresent still keeps S3 alive
 			}
 		}
 	}
@@ -187,15 +189,16 @@ fn io_can0_10ms(ctx voidptr) {
 			st.tp_diag_held_set = true
 		}
 	}
+	if st.uds_diag.reset_req != 0 && !st.tp_diag.busy() && !st.tp_diag_held_set { // the answer has left
+		st.uds_diag.reset_state()
+		st.fn_diag_len = 0 // a request that arrived before the reset is not served after it
+	}
 	if st.fn_diag_len > 0 && st.tp_diag.idle() && !st.tp_diag_held_set { // the waiting functional request: only on a link quiet both ways
 		fn_diag := st.uds_diag.handle_functional(&st.fn_diag_req[0], st.fn_diag_len, &st.uds_diag_resp[0])
 		st.fn_diag_len = 0
 		if fn_diag > 0 {
 			st.tp_diag.send(&st.uds_diag_resp[0], fn_diag)
 		}
-	}
-	if st.uds_diag.reset_req != 0 && !st.tp_diag.busy() && !st.tp_diag_held_set { // the answer has left
-		st.uds_diag.reset_state()
 	}
 	diag_tx_ok := st.uds_diag.tx_enabled()
 	mut tx_lamp_frame := can.Frame{
