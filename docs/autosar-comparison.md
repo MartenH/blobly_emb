@@ -22,7 +22,7 @@ lock-free, no-alloc — and skips the rest.
 | Deadline / alive timeout, init value, invalidation | COM rx monitoring | COM rx deadline → `valid = false` | ✅ have[^host] |
 | Transmission modes (cyclic / on-change / mixed, min-delay) | COM tx modes + filters | `[[frame]].tx` | ✅ have[^host] |
 | Raw↔physical scaling at the boundary | RTE/COM data conversion | DBC codec in the bridge | ✅ have[^host] |
-| Diagnostics request/response | DCM over the RTE | ISO-TP + the UDS server at the bus (`comm/uds`): sessions, DIDs, the request/response services | ✅ have[^host] — host only; UDS on the target is rung R2 of [diagnostics.md](diagnostics.md) |
+| Diagnostics request/response | DCM over the RTE | ISO-TP + the UDS server at the bus (`comm/uds`; the services it serves are listed in [communication.md](communication.md) §4) | ✅ have — generated for an application on the host; on the target only the bootloader serves it today, application UDS on the target is rung R2 of [diagnostics.md](diagnostics.md) |
 | Fault memory — DTCs, debouncing, status byte, freeze frames, 0x19 / 0x14 | DEM, applications calling `Dem_SetEventStatus` | a test result on an FB Out port, debounced on the producing thread, kept by a fault memory on the comm thread | 🔜 planned ([diagnostics.md](diagnostics.md)) |
 | Network management — coordinated bus sleep/wake | CanNm / NmIf | `comm/nm` + `[nm]` endpoint bindings (request/release, cluster listen, bench-verified) | ✅ have |
 | Cross-core communication in one ECU | OS-Application partitioning + the OS **IOC** + per-core RTE config | an ordinary `[[signal]]` whose endpoints sit on different cores; the generator derives the transport (xioc) and emits an image per core from ONE config ([multi-image.md](multi-image.md)) | ✅ have |
