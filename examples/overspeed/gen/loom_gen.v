@@ -108,7 +108,6 @@ mut:
 	tp_diag_buf [isotp.max_payload]u8
 	uds_diag uds.Server
 	uds_diag_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity
-	req_diag_len int // a request copied out of the link, waiting for the previous answer to leave
 	fn_diag_req [7]u8 // a functional request waiting for the link (one slot)
 	fn_diag_len int
 	diag_rx_was_off bool // 0x28 had rx off last pass: restart the deadlines on return
@@ -171,12 +170,9 @@ fn io_can0_10ms(ctx voidptr) {
 		st.uds_diag.reset_state()
 		st.fn_diag_len = 0 // a request that arrived before the reset is not served after it
 	}
-	if st.req_diag_len == 0 {
-		st.req_diag_len = st.tp_diag.take(&st.tp_diag_buf[0])
-	}
-	diag_n := if st.tp_diag.busy() { 0 } else { st.req_diag_len }
+	diag_got := st.tp_diag.take(&st.tp_diag_buf[0])
+	diag_n := if st.tp_diag.busy() { 0 } else { diag_got }
 	if diag_n > 0 {
-		st.req_diag_len = 0
 		diag_rlen := st.uds_diag.handle(&st.tp_diag_buf[0], diag_n, &st.uds_diag_resp[0])
 		if diag_rlen > 0 && !st.tp_diag.send(&st.uds_diag_resp[0], diag_rlen) {
 			st.uds_diag.reset_req = 0 // the answer could not be queued: never reset unanswered
@@ -199,7 +195,7 @@ fn io_can0_10ms(ctx voidptr) {
 		}
 	}
 	if st.fn_diag_len > 0 && st.tp_diag.idle() && st.uds_diag.reset_req == 0 { // the waiting functional request: only on a quiet link, never ahead of a pending reset
-		fn_diag := st.uds_diag.handle_functional(&st.fn_diag_req[0], st.fn_diag_len, &st.uds_diag_resp[0])
+		fn_diag := st.uds_diag.handle_functional_noted(&st.fn_diag_req[0], st.fn_diag_len, &st.uds_diag_resp[0]) // arrival already stamped
 		st.fn_diag_len = 0
 		if fn_diag > 0 {
 			st.tp_diag.send(&st.uds_diag_resp[0], fn_diag)

@@ -658,7 +658,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\ttp_${tp}_buf [isotp.max_payload]u8'
 			glue << '\tuds_${tp} uds.Server'
 			glue << '\tuds_${tp}_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity'
-			glue << '\treq_${tp}_len int // a request copied out of the link, waiting for the previous answer to leave'
 			if c.functional_id != 0 {
 				glue << '\tfn_${tp}_req [7]u8 // a functional request waiting for the link (one slot)'
 				glue << '\tfn_${tp}_len int'
@@ -997,15 +996,13 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				// ONE request at a time: a new request is taken only when the previous answer has left
 				// the link, so a pending ECUReset always belongs to the response in flight (the next
 				// request waits, reassembled, in the link — a tester waits for the answer anyway)
-				// A completed request is COPIED OUT of the link at once (into tp_buf), so a later frame
-				// cannot overwrite it while it waits, and the link keeps processing the flow control of
-				// the response still in flight (pausing reception instead would starve that transfer).
-				glue << '\tif st.req_${tp}_len == 0 {'
-				glue << '\t\tst.req_${tp}_len = st.tp_${tp}.take(&st.tp_${tp}_buf[0])'
-				glue << '\t}'
-				glue << '\t${tp}_n := if st.tp_${tp}.busy() { 0 } else { st.req_${tp}_len }'
+				// ISO-TP is half-duplex per connection: a physical request that completes while the
+				// previous answer is still being sent is a tester protocol violation, and it is DROPPED
+				// (taken out of the link and discarded) — the tester times out and retries. Nothing
+				// ever waits, so nothing can be reordered behind it or overwrite it.
+				glue << '\t${tp}_got := st.tp_${tp}.take(&st.tp_${tp}_buf[0])'
+				glue << '\t${tp}_n := if st.tp_${tp}.busy() { 0 } else { ${tp}_got }'
 				glue << '\tif ${tp}_n > 0 {'
-				glue << '\t\tst.req_${tp}_len = 0'
 				glue << '\t\t${tp}_rlen := st.uds_${tp}.handle(&st.tp_${tp}_buf[0], ${tp}_n, &st.uds_${tp}_resp[0])'
 				glue << '\t\tif ${tp}_rlen > 0 && !st.tp_${tp}.send(&st.uds_${tp}_resp[0], ${tp}_rlen) {'
 				glue << '\t\t\tst.uds_${tp}.reset_req = 0 // the answer could not be queued: never reset unanswered'
@@ -1035,7 +1032,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t}'
 				if c.functional_id != 0 {
 					glue << '\tif st.fn_${tp}_len > 0 && st.tp_${tp}.idle() && st.uds_${tp}.reset_req == 0 { // the waiting functional request: only on a quiet link, never ahead of a pending reset'
-					glue << '\t\tfn_${tp} := st.uds_${tp}.handle_functional(&st.fn_${tp}_req[0], st.fn_${tp}_len, &st.uds_${tp}_resp[0])'
+					glue << '\t\tfn_${tp} := st.uds_${tp}.handle_functional_noted(&st.fn_${tp}_req[0], st.fn_${tp}_len, &st.uds_${tp}_resp[0]) // arrival already stamped'
 					glue << '\t\tst.fn_${tp}_len = 0'
 					glue << '\t\tif fn_${tp} > 0 {'
 					glue << '\t\t\tst.tp_${tp}.send(&st.uds_${tp}_resp[0], fn_${tp})'

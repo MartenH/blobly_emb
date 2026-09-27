@@ -168,13 +168,24 @@ pub fn (s Server) rx_enabled() bool {
 // handle dispatches one PHYSICALLY addressed UDS request (req[0..req_len]) and writes the
 // response into resp, returning its length (0 = no response, e.g. suppressed).
 pub fn (mut s Server) handle(req &u8, req_len int, resp &u8) int {
-	return s.dispatch(req, req_len, resp)
+	return s.dispatch(req, req_len, resp, true)
 }
 
 // handle_functional dispatches a FUNCTIONALLY addressed request: identical, except the
 // negative responses ISO 14229-1 forbids for functional requests are withheld.
 pub fn (mut s Server) handle_functional(req &u8, req_len int, resp &u8) int {
-	n := s.dispatch(req, req_len, resp)
+	return s.functional(req, req_len, resp, true)
+}
+
+// handle_functional_noted serves a functional request whose ARRIVAL was already recorded with
+// note_request() — an owner that queued it. S3 keeps that arrival time: stamping again at serve
+// time would stretch the session by however long the request waited.
+pub fn (mut s Server) handle_functional_noted(req &u8, req_len int, resp &u8) int {
+	return s.functional(req, req_len, resp, false)
+}
+
+fn (mut s Server) functional(req &u8, req_len int, resp &u8, stamp bool) int {
+	n := s.dispatch(req, req_len, resp, stamp)
 	if n == 3 && unsafe { resp[0] } == 0x7F {
 		nrc := unsafe { resp[2] }
 		if nrc == nrc_service_not_supported || nrc == nrc_subfunction_not_supported
@@ -186,12 +197,14 @@ pub fn (mut s Server) handle_functional(req &u8, req_len int, resp &u8) int {
 	return n
 }
 
-fn (mut s Server) dispatch(req &u8, req_len int, resp &u8) int {
+fn (mut s Server) dispatch(req &u8, req_len int, resp &u8, stamp bool) int {
 	if req_len < 1 || s.resp_cap < 0 {
 		return 0
 	}
-	s.last_rx_us = s.now_us // any request keeps the session alive (S3)
-	s.rx_seen = true
+	if stamp {
+		s.last_rx_us = s.now_us // any request keeps the session alive (S3)
+		s.rx_seen = true
+	}
 	sid := unsafe { req[0] }
 	if !s.service_supported(sid) {
 		return negative(resp, sid, nrc_service_not_supported)
