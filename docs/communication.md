@@ -137,9 +137,22 @@ already carries `Request`/`Response`).
 
 A table-driven, no-alloc `Server` sits above each ISO-TP connection. The bridge
 hands it a reassembled request and ships the response it builds. Services:
-`0x10` DiagnosticSessionControl, `0x22` ReadDataByIdentifier, `0x2E`
-WriteDataByIdentifier, `0x3E` TesterPresent; anything else → negative
-(`0x7F sid nrc`).
+`0x10` DiagnosticSessionControl, `0x11` ECUReset, `0x22` ReadDataByIdentifier
+(several DIDs per request), `0x28` CommunicationControl, `0x2E`
+WriteDataByIdentifier, `0x3E` TesterPresent; anything else → `0x7F sid 0x11`.
+Negative responses follow ISO 14229-1's evaluation order.
+
+The server starts in the **default session** and returns to it after `s3_ms` (default
+5 s) without a request; every session change relocks security, and returning to default
+re-enables communication. An application server refuses the programming session — erase
+and download live in the bootloader, and the handoff into it is not built yet. `0x11` is
+answered first and performed once the response has left (on the host that resets the
+*diagnostic* state; the target's controller-drained reset is its own rung). `0x28` —
+extended session only — stops sending and/or decoding this bus's application frames;
+diagnostic traffic is never gated. A connection with a `functional_id` also serves
+functional requests (one single frame), answered on `tx_id`, with the negative responses a
+functional request must not send withheld. The plan these belong to is
+[diagnostics.md](diagnostics.md).
 
 DataIdentifiers come from `[[did]]` — a constant, a **live signal** (read from the
 IOC each tick and encoded big-endian), or a writable RAM cell:
@@ -151,7 +164,15 @@ id = 0xF190; ascii = "BLOBLY-OVERSPEED-01"   # constant (19 B -> multi-frame rea
 id = 0xF1A0; signal = "VehicleSpeed"          # live: current km/h via the IOC
 [[did]]
 id = 0xF1AA; writable = true; bytes = "00 00" # RAM (write then read back)
+[[did]]
+id = 0xF1AB; bytes = "00"; write = { session = ["extended"] }   # gated write
 ```
+
+`read` / `write` take `{ session = [...], security = N }`: the sessions the access is
+allowed in (default / extended / programming / safety; absent = every session) and the
+0x27 level it needs (absent = none; 0x27 itself is not served yet). A DID not allowed in
+the active session is answered as unsupported (`0x31`). A server holds at most 16 DIDs of
+at most 32 bytes each, checked at generation.
 
 The protocol logic lives in `comm/uds` (unit-tested); the generated bridge fills
 the DID table and refreshes signal-backed DIDs. So a tester can read a live bus
@@ -235,13 +256,15 @@ bus-bridge partition; signals still cross to app partitions via the IOC.
    forwards a frame bus→bus untouched (the same example forwards `WheelSpeeds`).
 3. **ISO-TP** — ✅ **done**. `[[isotp]]` connections; the bridge holds an
    `isotp.Link` per connection (SF / FF+CF / FC, BlockSize + STmin) in `comm/isotp`
-   (unit-tested both directions). Reassembled requests go to a diag handler — for
-   now a positive-response echo — and responses are re-segmented. blobly_net's UDS
+   (unit-tested both directions). Reassembled requests go to the UDS server (§4)
+   and responses are re-segmented. blobly_net's UDS
    client (`:raw`) asserts single- and multi-frame round-trips on the bus.
-4. **Diagnostics (UDS)** — ✅ **done**. `comm/uds` table-driven server (session /
-   read-DID / write-DID / tester-present + negatives) above each ISO-TP connection;
-   `[[did]]` sources (constant / live signal / RAM). blobly_net's `uds` client
-   asserts service dispatch + multi-frame DIDs, incl. reading a live signal.
+4. **Diagnostics (UDS)** — the request/response half, on the **host**. `comm/uds`
+   table-driven server (sessions + S3, ISO NRC order, per-DID session/security gating,
+   multi-DID reads, functional requests, 0x11, 0x28) above each ISO-TP connection;
+   `[[did]]` sources (constant / live signal / RAM). blobly_net's `uds` client asserts
+   all of it on vcan (`examples/overspeed/test/diag.lua`). Not yet: UDS on the target,
+   0x27, fault memory (0x19/0x14/0x85) — the rungs in [diagnostics.md](diagnostics.md).
 
 ## Testing
 

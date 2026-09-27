@@ -107,15 +107,17 @@ mut:
 	tp_diag isotp.Link
 	tp_diag_buf [isotp.max_payload]u8
 	uds_diag uds.Server
-	uds_diag_resp [64]u8
+	uds_diag_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity
 }
 
 fn io_can0_10ms(ctx voidptr) {
 	mut st := unsafe { &Bridge_can0_state(ctx) }
 	now := osal.now_us()
+	diag_tx_ok := st.uds_diag.tx_enabled()
+	diag_rx_ok := st.uds_diag.rx_enabled()
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
-		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false {
+		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false && diag_rx_ok {
 			mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), valid: true }
 			osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 			mut engine_speed := sig.EngineSpeed{ rpm: u16(powertrain_engine_speed_phys(rx.data)), valid: true }
@@ -128,6 +130,16 @@ fn io_can0_10ms(ctx voidptr) {
 				p_diag.data[i] = rx.data[i]
 			}
 			st.tp_diag.on_frame(now, p_diag)
+		}
+		if rx.id == u32(0x7df) && !rx.ext && rx.len >= 2 && rx.data[0] >> 4 == 0 {
+			fl_diag := int(rx.data[0] & 0x0F)
+			if fl_diag >= 1 && fl_diag < int(rx.len) {
+				st.uds_diag.tick(now)
+				fn_diag := st.uds_diag.handle_functional(&rx.data[1], fl_diag, &st.uds_diag_resp[0])
+				if fn_diag > 0 && !st.tp_diag.busy() {
+					st.tp_diag.send(&st.uds_diag_resp[0], fn_diag)
+				}
+			}
 		}
 	}
 	if st.rx_powertrain_st.expired(now) {
@@ -142,6 +154,7 @@ fn io_can0_10ms(ctx voidptr) {
 		st.uds_diag.dids[1].data[1] = u8(vehicle_speed_did.kph)
 		st.uds_diag.dids[1].len = 2
 	}
+	st.uds_diag.tick(now) // S3: a non-default session with no request returns to default
 	diag_n := st.tp_diag.take(&st.tp_diag_buf[0])
 	if diag_n > 0 {
 		diag_rlen := st.uds_diag.handle(&st.tp_diag_buf[0], diag_n, &st.uds_diag_resp[0])
@@ -161,6 +174,9 @@ fn io_can0_10ms(ctx voidptr) {
 		}
 		st.chan.send(cf_diag)
 	}
+	if st.uds_diag.reset_req != 0 && !st.tp_diag.busy() {
+		st.uds_diag.reset_state()
+	}
 	mut tx_lamp_frame := can.Frame{
 		id:  lamp_frame_id
 		len: lamp_frame_dlc
@@ -171,7 +187,7 @@ fn io_can0_10ms(ctx voidptr) {
 		lamp_frame_warn_lamp_set(mut tx_lamp_frame.data, if warn_lamp.on { f64(1) } else { f64(0) })
 		tx_lamp_frame_any = true
 	}
-	if tx_lamp_frame_any && st.chan.tx_ready() && st.tx_lamp_frame_st.should_send(now, tx_lamp_frame.data, lamp_frame_dlc) {
+	if tx_lamp_frame_any && diag_tx_ok && st.chan.tx_ready() && st.tx_lamp_frame_st.should_send(now, tx_lamp_frame.data, lamp_frame_dlc) {
 		tx_lamp_frame_pre := tx_lamp_frame.data // pre-E2E/SecOC payload, for change detection
 		e2e_save_lamp_frame := st.e2e_tx_lamp_frame
 		st.e2e_tx_lamp_frame.protect(&tx_lamp_frame.data[0], int(lamp_frame_dlc), u16(0x10), 1, 2)
@@ -191,7 +207,7 @@ fn io_can0_10ms(ctx voidptr) {
 		secure_frame_secure_status_set(mut tx_secure_frame.data, f64(secure_status.level))
 		tx_secure_frame_any = true
 	}
-	if tx_secure_frame_any && st.chan.tx_ready() && st.tx_secure_frame_st.should_send(now, tx_secure_frame.data, secure_frame_dlc) {
+	if tx_secure_frame_any && diag_tx_ok && st.chan.tx_ready() && st.tx_secure_frame_st.should_send(now, tx_secure_frame.data, secure_frame_dlc) {
 		tx_secure_frame_pre := tx_secure_frame.data // pre-E2E/SecOC payload, for change detection
 		secoc_save_secure_frame := st.secoc_tx_secure_frame
 		st.secoc_tx_secure_frame.protect(&st.secoc_key_secure_frame, &tx_secure_frame.data[0], int(secure_frame_dlc), u16(0x20), 1, 2, 4)
@@ -228,6 +244,10 @@ pub fn partition_can0(ch can.Channel) {
 	}
 	st.tp_diag.init_defaults()
 	st.uds_diag = uds.Server{}
+	st.uds_diag.init(isotp.max_payload) // default session; the response buffer's capacity
+	st.uds_diag.no_programming = true // programming is the bootloader's (handoff: R2)
+	st.uds_diag.single_network = true // 0x28 "all networks" = this one
+	st.uds_diag.s3_us = u64(2000) * 1000
 	st.uds_diag.dids[0] = uds.Did{
 		id: u16(0xf190)
 	}
@@ -261,7 +281,14 @@ pub fn partition_can0(ch can.Channel) {
 	st.uds_diag.dids[2].data[0] = u8(0x00)
 	st.uds_diag.dids[2].data[1] = u8(0x00)
 	st.uds_diag.dids[2].len = 2
-	st.uds_diag.ndid = 3
+	st.uds_diag.dids[3] = uds.Did{
+		id: u16(0xf1ab)
+		writable: true
+		write_sessions: u8(0x04)
+	}
+	st.uds_diag.dids[3].data[0] = u8(0x00)
+	st.uds_diag.dids[3].len = 1
+	st.uds_diag.ndid = 4
 	mut sched := loom.Scheduler{}
 	sched.every(10_000, io_can0_10ms, &st)
 	for {

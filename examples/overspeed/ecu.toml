@@ -117,7 +117,9 @@ secoc = { key = "10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f", data_id = 0x2
 # --- Diagnostics transport (ISO-TP) ------------------------------------------
 # A diag connection on can0: requests arrive on rx_id, responses go on tx_id
 # (segmented per ISO 15765-2). The bridge reassembles a request and hands it to
-# diag; for now diag is a positive-response echo (real UDS lands next).
+# the UDS server (comm/uds, docs/diagnostics.md). Functional requests (one single
+# frame on functional_id) are served too, answered on tx_id. s3_ms is the session
+# timeout (default 5 s); 2 s here keeps the S3 e2e test short.
 [[isotp]]
 name     = "diag"
 bus      = "can0"
@@ -125,6 +127,8 @@ rx_id    = 0x101   # Request  (DBC)
 tx_id    = 0x102   # Response (DBC)
 bs       = 8       # flow-control block size we grant
 stmin_ms = 0
+functional_id = 0x7DF
+s3_ms    = 2000
 
 # --- Diagnostics services (UDS DataIdentifiers) ------------------------------
 # ReadDataByIdentifier (0x22) / WriteDataByIdentifier (0x2E) sources. A DID is a
@@ -142,6 +146,11 @@ signal = "VehicleSpeed"         # live: current km/h (u16, big-endian)
 id       = 0xF1AA
 writable = true
 bytes    = "00 00"              # RAM cell (write then read back)
+
+[[did]]
+id    = 0xF1AB
+bytes = "00"                    # a RAM cell writable ONLY in the extended session
+write = { session = ["extended"] }
 
 # --- Function Blocks ---------------------------------------------------------
 # (within a partition, list producers before consumers for same-cycle local data)

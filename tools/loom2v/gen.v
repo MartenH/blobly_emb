@@ -19,6 +19,7 @@ import os
 import toml
 import tools.candb
 import tools.ecumodel
+import comm.uds
 
 struct SigInfo {
 mut:
@@ -63,20 +64,26 @@ struct SigField {
 
 // IsotpConn is one [[isotp]] diagnostic connection on a bus.
 struct IsotpConn {
-	name  string
-	bus   string
-	rx_id int
-	tx_id int
-	bs    int
-	stmin int
+	name          string
+	bus           string
+	rx_id         int
+	tx_id         int
+	bs            int
+	stmin         int
+	functional_id int // 0 = no functional requests on this connection
+	s3_ms         int // 0 = the server's default (5 s)
 }
 
 // DidCfg is one [[did]]: constant bytes, a writable RAM cell, and/or a live signal.
 struct DidCfg {
-	id       int
-	bytes    []u8
-	writable bool
-	signal   string
+	id             int
+	bytes          []u8
+	writable       bool
+	signal         string
+	read_sessions  u8 // uds.in_* mask; 0 = every session
+	write_sessions u8
+	read_security  u8 // the 0x27 level required; 0 = none
+	write_security u8
 }
 
 // Route is one [[route]] on a gateway. A RAW (frame) route forwards a PDU unchanged
@@ -865,6 +872,22 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 			tx_id: int((m['tx_id'] or { toml.Any(0) }).int())
 			bs:    int((m['bs'] or { toml.Any(0) }).int())
 			stmin: int((m['stmin_ms'] or { toml.Any(0) }).int())
+			functional_id: int((m['functional_id'] or { toml.Any(0) }).int())
+			s3_ms: int((m['s3_ms'] or { toml.Any(0) }).int())
+		}
+	}
+	for c in isotp_conns {
+		if c.functional_id == 0 {
+			continue
+		}
+		// the bridge matches it as a standard frame, and it must not be anyone's physical id
+		if c.functional_id < 0 || c.functional_id > 0x7FF {
+			panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${c.functional_id.hex()} must be a standard 11-bit id (<= 0x7FF)')
+		}
+		for o in isotp_conns {
+			if c.functional_id == o.rx_id || c.functional_id == o.tx_id {
+				panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${c.functional_id.hex()} is also "${o.name}"\'s physical rx/tx id')
+			}
 		}
 	}
 	return isotp_conns
@@ -887,14 +910,54 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 		} else if 'bytes' in m {
 			bytes = parse_hex((m['bytes'] or { toml.Any('') }).string())
 		}
+		// the server's tables are fixed arrays: an oversized config would index past them
+		if bytes.len > uds.max_did_data {
+			panic('loom2v: [[did]] 0x${id.hex()} holds ${bytes.len} bytes — a DID stores at most ${uds.max_did_data} (comm/uds max_did_data)')
+		}
+		rd_s, rd_sec := parse_did_access(m, 'read', id)
+		wr_s, wr_sec := parse_did_access(m, 'write', id)
 		dids << DidCfg{
-			id:       id
-			bytes:    bytes
-			writable: (m['writable'] or { toml.Any(false) }).bool()
-			signal:   (m['signal'] or { toml.Any('') }).string()
+			id:             id
+			bytes:          bytes
+			// a `write = {...}` gate implies the DID is writable
+			writable:       (m['writable'] or { toml.Any(false) }).bool() || 'write' in m
+			signal:         (m['signal'] or { toml.Any('') }).string()
+			read_sessions:  rd_s
+			write_sessions: wr_s
+			read_security:  rd_sec
+			write_security: wr_sec
 		}
 	}
+	if dids.len > uds.max_dids {
+		panic('loom2v: ${dids.len} [[did]]s — a diagnostic server holds at most ${uds.max_dids} (comm/uds max_dids)')
+	}
 	return dids
+}
+
+// parse_did_access reads a [[did]] `read = { session = [...], security = N }` (or `write`) gate
+// into the server's session mask (uds.in_*: default 0x01, programming 0x02, extended 0x04,
+// safety 0x08) and security level. Absent = every session, no security.
+fn parse_did_access(m map[string]toml.Any, key string, id int) (u8, u8) {
+	acc := m[key] or { return u8(0), u8(0) }
+	am := acc.as_map()
+	mut mask := u8(0)
+	for sv in (am['session'] or { toml.Any([]toml.Any{}) }).array() {
+		mask |= match sv.string() {
+			'default' { u8(0x01) }
+			'programming' { u8(0x02) }
+			'extended' { u8(0x04) }
+			'safety' { u8(0x08) }
+			else { panic('loom2v: [[did]] 0x${id.hex()} ${key}.session "${sv.string()}" is not a session (default / extended / programming / safety)') }
+		}
+	}
+	if 'session' in am && mask == 0 {
+		panic('loom2v: [[did]] 0x${id.hex()} ${key}.session is empty — omit it for "every session"')
+	}
+	sec := (am['security'] or { toml.Any(0) }).int()
+	if sec < 0 || sec > 0x7F {
+		panic('loom2v: [[did]] 0x${id.hex()} ${key}.security ${sec} is not a 0x27 level (1..0x7F)')
+	}
+	return mask, u8(sec)
 }
 
 fn parse_buses(doc toml.Doc) (map[string]bool, map[string]int, map[string]string) {

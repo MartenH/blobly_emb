@@ -279,6 +279,8 @@ fn specs() map[string]map[string]Key {
 			'tx_id':    req(.int)
 			'bs':       k(.int)
 			'stmin_ms': k(.int)
+			'functional_id': k(.int) // functional request id (e.g. 0x7DF), single frame
+			's3_ms':    k(.int) // session timeout; default 5000 (ISO 14229-2)
 		}
 		'did':        {
 			'id':       req(.int)
@@ -286,6 +288,12 @@ fn specs() map[string]map[string]Key {
 			'bytes':    k(.str)
 			'writable': k(.boolean)
 			'signal':   k(.str)
+			'read':     sub(.tbl, false, 'did_access') // { session = [...], security = N }
+			'write':    sub(.tbl, false, 'did_access')
+		}
+		'did_access': {
+			'session':  k(.str_arr) // default / extended / programming / safety
+			'security': k(.int) // the 0x27 level this access needs; 0 = none
 		}
 		'route':      {
 			'signal': k(.str) // SIGNAL route (P2): decode on `from`, re-encode into `to`
@@ -326,6 +334,7 @@ fn label(ctx string) string {
 		'tx', 'rx', 'e2e', 'secoc' { 'inline ${ctx}' }
 		'route_from' { '[[route]] from' }
 		'route_to' { '[[route]] to' }
+		'did_access' { '[[did]] read/write' }
 		'import', 'telemetry', 'trace', 'target', 'someip' { '[${ctx}]' }
 		else { '[[${ctx}]]' }
 	}
