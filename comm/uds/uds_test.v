@@ -110,7 +110,32 @@ fn test_unknown_service_rejected() {
 fn started() Server {
 	mut s := fixture()
 	s.init(256)
+	s.serves_reset = true
+	s.serves_comm_control = true
 	return s
+}
+
+// Every SID service_supported() admits must reach a handler: a SID listed there but missing
+// from dispatch()'s match would answer serviceNotSupported with no compile error.
+fn test_every_supported_service_dispatches() {
+	mut s := started()
+	call(mut s, [u8(0x10), 0x03])
+	for sid in 0 .. 256 {
+		if !s.service_supported(u8(sid)) {
+			continue
+		}
+		r := call(mut s, [u8(sid), 0x00, 0x00, 0x00])
+		assert !(r.len == 3 && r[0] == 0x7F && r[2] == 0x11), 'SID 0x${u8(sid).hex()} is supported but not dispatched'
+	}
+}
+
+// An owner that does not act on 0x11 / 0x28 must not acknowledge them.
+fn test_reset_and_comm_control_are_opt_in_per_owner() {
+	mut s := fixture()
+	s.init(256)
+	assert call(mut s, [u8(0x11), 0x01]) == [u8(0x7F), 0x11, 0x11]
+	s.session = session_extended
+	assert call(mut s, [u8(0x28), 0x01, 0xF1]) == [u8(0x7F), 0x28, 0x11]
 }
 
 // REQ-DIAG-003: a server starts in the default session and S3 returns it there.
@@ -170,6 +195,7 @@ fn test_nrc_evaluation_order() {
 	assert call(mut s, [u8(0x3E), 0x00, 0x00]) == [u8(0x7F), 0x3E, 0x13]
 	// a never-initialised server is in no session: gated services are refused (fail-closed)
 	mut raw := fixture()
+	raw.serves_comm_control = true
 	assert call(mut raw, [u8(0x28), 0x00, 0x01]) == [u8(0x7F), 0x28, 0x7F]
 }
 
@@ -267,7 +293,10 @@ fn test_communication_control() {
 	s.single_network = true
 	assert call(mut s, [u8(0x28), 0x00, 0x01]) == [u8(0x68), 0x00]
 	assert s.tx_enabled() && s.rx_enabled()
-	assert call(mut s, [u8(0x28), 0x03, 0x02]) == [u8(0x68), 0x03] // NM only
-	assert s.tx_enabled() && s.nm_tx_off && s.nm_rx_off
+	// NM (2) and normal+NM (3) are refused until NM is gated by 0x28 — no acknowledging a
+	// silence that never happens
+	assert call(mut s, [u8(0x28), 0x03, 0x02]) == [u8(0x7F), 0x28, 0x31]
+	assert call(mut s, [u8(0x28), 0x03, 0x03]) == [u8(0x7F), 0x28, 0x31]
+	assert s.tx_enabled()
 	assert call(mut s, [u8(0x28), 0x00, 0x05]) == [u8(0x7F), 0x28, 0x31] // reserved type bits
 }

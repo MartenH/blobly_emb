@@ -91,9 +91,13 @@ pub mut:
 	// server's node has a single network (so "all networks" and "this network" are the same).
 	normal_tx_off  bool
 	normal_rx_off  bool
-	nm_tx_off      bool
-	nm_rx_off      bool
 	single_network bool
+	// ECUReset and CommunicationControl only mean something where the OWNER acts on them — it
+	// performs reset_req and gates its frames on tx_enabled/rx_enabled. An owner opts in; one that
+	// does not (DoIP today; the bootloader serves 0x11 itself) keeps answering serviceNotSupported
+	// rather than acknowledge a reset or a silence that never happens.
+	serves_reset        bool
+	serves_comm_control bool
 	// An APPLICATION server has no erase/download services: those live in the bootloader
 	// (boot.Prog), reached by a handoff (boot cell + reset) that is not built yet — so it refuses
 	// 0x10 02 rather than enter a session that cannot program. The bootloader leaves it false.
@@ -115,8 +119,6 @@ pub fn (mut s Server) reset_state() {
 	s.unlocked = 0
 	s.normal_tx_off = false
 	s.normal_rx_off = false
-	s.nm_tx_off = false
-	s.nm_rx_off = false
 	s.reset_req = 0
 	s.last_rx_us = 0
 }
@@ -173,7 +175,7 @@ fn (mut s Server) dispatch(req &u8, req_len int, resp &u8) int {
 		s.last_rx_us = s.now_us // any request keeps the session alive (S3)
 	}
 	sid := unsafe { req[0] }
-	if !service_supported(sid) {
+	if !s.service_supported(sid) {
 		return negative(resp, sid, nrc_service_not_supported)
 	}
 	if !in_mask(service_sessions(sid), s.session) {
@@ -190,8 +192,15 @@ fn (mut s Server) dispatch(req &u8, req_len int, resp &u8) int {
 	}
 }
 
-fn service_supported(sid u8) bool {
-	return sid == 0x10 || sid == 0x11 || sid == 0x22 || sid == 0x28 || sid == 0x2E || sid == 0x3E
+// service_supported: the SIDs dispatch() serves — kept in step with its match by
+// test_every_supported_service_dispatches, which fails if a SID is listed here and not handled.
+fn (s Server) service_supported(sid u8) bool {
+	return match sid {
+		0x10, 0x22, 0x2E, 0x3E { true }
+		0x11 { s.serves_reset }
+		0x28 { s.serves_comm_control }
+		else { false }
+	}
 }
 
 // service_sessions: where each service may run. CommunicationControl is a non-default-session
@@ -227,8 +236,6 @@ fn (mut s Server) enter_session(session u8) {
 	if session == session_default {
 		s.normal_tx_off = false
 		s.normal_rx_off = false
-		s.nm_tx_off = false
-		s.nm_rx_off = false
 	}
 }
 
@@ -319,10 +326,12 @@ fn (mut s Server) ecu_reset(req &u8, req_len int, resp &u8) int {
 }
 
 // communication_control: enableRxAndTx (00), enableRxAndDisableTx (01), disableRxAndEnableTx
-// (02), disableRxAndTx (03), for communicationType normal (1), network management (2) or both
-// (3), on "all networks" (subnet 0) or "the network this request arrived on" (subnet 0xF). A
-// node with several networks cannot act on all of them from one bridge, so subnet 0 is
-// accepted only where there is one network; a specific subnet number is out of range.
+// (02), disableRxAndTx (03), for communicationType NORMAL messages (1) — network management (2,
+// 3) is refused until NM is gated by it — on "all networks" (subnet 0) or "the network this
+// request arrived on" (subnet 0xF). A node with several networks cannot act on all of them from
+// one bridge, so subnet 0 is accepted only where there is one network; a specific subnet number
+// is out of range. It governs the ECU's OWN application messages: frames a gateway forwards
+// between buses are routed traffic, not this server's communication, and keep flowing.
 fn (mut s Server) communication_control(req &u8, req_len int, resp &u8) int {
 	if req_len < 2 {
 		return negative(resp, 0x28, nrc_incorrect_length)
@@ -337,7 +346,7 @@ fn (mut s Server) communication_control(req &u8, req_len int, resp &u8) int {
 	ctype := unsafe { req[2] }
 	kind := ctype & 0x03
 	subnet := ctype >> 4
-	if kind == 0 || ctype & 0x0C != 0 {
+	if kind != 0x01 || ctype & 0x0C != 0 {
 		return negative(resp, 0x28, nrc_request_out_of_range)
 	}
 	if subnet != 0x0F && !(subnet == 0 && s.single_network) {
@@ -345,14 +354,8 @@ fn (mut s Server) communication_control(req &u8, req_len int, resp &u8) int {
 	}
 	rx_off := sub == 0x02 || sub == 0x03
 	tx_off := sub == 0x01 || sub == 0x03
-	if kind & 0x01 != 0 {
-		s.normal_rx_off = rx_off
-		s.normal_tx_off = tx_off
-	}
-	if kind & 0x02 != 0 {
-		s.nm_rx_off = rx_off
-		s.nm_tx_off = tx_off
-	}
+	s.normal_rx_off = rx_off
+	s.normal_tx_off = tx_off
 	if unsafe { req[1] } & 0x80 != 0 {
 		return 0
 	}

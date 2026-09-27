@@ -148,8 +148,13 @@ re-enables communication. An application server refuses the programming session 
 and download live in the bootloader, and the handoff into it is not built yet. `0x11` is
 answered first and performed once the response has left (on the host that resets the
 *diagnostic* state; the target's controller-drained reset is its own rung). `0x28` —
-extended session only — stops sending and/or decoding this bus's application frames;
-diagnostic traffic is never gated. A connection with a `functional_id` also serves
+non-default sessions only (extended or programming), normal messages only (network
+management is refused until NM is gated by it) — stops sending and/or decoding this bus's
+application frames, and suspends their rx deadlines while reception is off so a
+diagnostic command never looks like a comms timeout. Diagnostic traffic is never gated,
+and neither is traffic a gateway routes between buses — that is not this ECU's own
+communication. Only an owner that acts on `0x11` / `0x28` offers them (the generated
+bridge does; DoIP and the bootloader's delegate answer serviceNotSupported). A connection with a `functional_id` also serves
 functional requests (one single frame), answered on `tx_id`, with the negative responses a
 functional request must not send withheld. The plan these belong to is
 [diagnostics.md](diagnostics.md).

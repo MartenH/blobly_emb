@@ -108,6 +108,9 @@ mut:
 	tp_diag_buf [isotp.max_payload]u8
 	uds_diag uds.Server
 	uds_diag_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity
+	fn_diag_req [7]u8 // a functional request waiting for the link (one slot)
+	fn_diag_len int
+	diag_rx_was_off bool // 0x28 had rx off last pass: restart the deadlines on return
 }
 
 fn io_can0_10ms(ctx voidptr) {
@@ -134,15 +137,18 @@ fn io_can0_10ms(ctx voidptr) {
 		if rx.id == u32(0x7df) && !rx.ext && rx.len >= 2 && rx.data[0] >> 4 == 0 {
 			fl_diag := int(rx.data[0] & 0x0F)
 			if fl_diag >= 1 && fl_diag < int(rx.len) {
-				st.uds_diag.tick(now)
-				fn_diag := st.uds_diag.handle_functional(&rx.data[1], fl_diag, &st.uds_diag_resp[0])
-				if fn_diag > 0 && !st.tp_diag.busy() {
-					st.tp_diag.send(&st.uds_diag_resp[0], fn_diag)
+				for i in 0 .. fl_diag {
+					st.fn_diag_req[i] = rx.data[1 + i]
 				}
+				st.fn_diag_len = fl_diag
 			}
 		}
 	}
-	if st.rx_powertrain_st.expired(now) {
+	if diag_rx_ok && st.diag_rx_was_off {
+		st.rx_powertrain_st.on_receive(now)
+	}
+	st.diag_rx_was_off = !diag_rx_ok
+	if diag_rx_ok && st.rx_powertrain_st.expired(now) {
 		mut vehicle_speed := sig.VehicleSpeed{}
 		osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 		mut engine_speed := sig.EngineSpeed{}
@@ -173,6 +179,13 @@ fn io_can0_10ms(ctx voidptr) {
 			cf_diag.data[i] = pdu_diag.data[i]
 		}
 		st.chan.send(cf_diag)
+	}
+	if st.fn_diag_len > 0 && !st.tp_diag.busy() { // the waiting functional request
+		fn_diag := st.uds_diag.handle_functional(&st.fn_diag_req[0], st.fn_diag_len, &st.uds_diag_resp[0])
+		st.fn_diag_len = 0
+		if fn_diag > 0 {
+			st.tp_diag.send(&st.uds_diag_resp[0], fn_diag)
+		}
 	}
 	if st.uds_diag.reset_req != 0 && !st.tp_diag.busy() {
 		st.uds_diag.reset_state()
@@ -246,6 +259,8 @@ pub fn partition_can0(ch can.Channel) {
 	st.uds_diag = uds.Server{}
 	st.uds_diag.init(isotp.max_payload) // default session; the response buffer's capacity
 	st.uds_diag.no_programming = true // programming is the bootloader's (handoff: R2)
+	st.uds_diag.serves_reset = true // this bridge performs reset_req (below)
+	st.uds_diag.serves_comm_control = true // and gates its frames on 0x28
 	st.uds_diag.single_network = true // 0x28 "all networks" = this one
 	st.uds_diag.s3_us = u64(2000) * 1000
 	st.uds_diag.dids[0] = uds.Did{

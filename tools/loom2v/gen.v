@@ -916,6 +916,9 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 		}
 		rd_s, rd_sec := parse_did_access(m, 'read', id)
 		wr_s, wr_sec := parse_did_access(m, 'write', id)
+		if 'write' in m && 'writable' in m && !(m['writable'] or { toml.Any(false) }).bool() {
+			panic('loom2v: [[did]] 0x${id.hex()} has writable = false AND a write = {...} gate — say which')
+		}
 		dids << DidCfg{
 			id:             id
 			bytes:          bytes
@@ -935,18 +938,18 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 }
 
 // parse_did_access reads a [[did]] `read = { session = [...], security = N }` (or `write`) gate
-// into the server's session mask (uds.in_*: default 0x01, programming 0x02, extended 0x04,
-// safety 0x08) and security level. Absent = every session, no security.
+// into the server's session mask (uds.in_*) and security level. Absent = every session, no
+// security.
 fn parse_did_access(m map[string]toml.Any, key string, id int) (u8, u8) {
 	acc := m[key] or { return u8(0), u8(0) }
 	am := acc.as_map()
 	mut mask := u8(0)
 	for sv in (am['session'] or { toml.Any([]toml.Any{}) }).array() {
 		mask |= match sv.string() {
-			'default' { u8(0x01) }
-			'programming' { u8(0x02) }
-			'extended' { u8(0x04) }
-			'safety' { u8(0x08) }
+			'default' { uds.in_default }
+			'programming' { uds.in_programming }
+			'extended' { uds.in_extended }
+			'safety' { uds.in_safety }
 			else { panic('loom2v: [[did]] 0x${id.hex()} ${key}.session "${sv.string()}" is not a session (default / extended / programming / safety)') }
 		}
 	}
@@ -3603,6 +3606,31 @@ fn main() {
 	has_secoc := m.frames.secoc_on.len > 0
 
 	has_routes := m.routes.len > 0
+
+	// A functional request id is matched in the bridge's rx loop next to everything else on its
+	// bus: an application frame or a module frame with the same id would ALSO be dispatched as a
+	// diagnostic request (a cyclic frame whose first byte looks like a single-frame PCI could
+	// switch sessions). Refuse the collision here.
+	for c in m.isotp_conns {
+		if c.functional_id == 0 {
+			continue
+		}
+		fid := u32(c.functional_id)
+		if db := candb.load_dbc_file(dbc) {
+			for msg in db.messages {
+				if u32(msg.id) == fid && !msg.ext {
+					panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also DBC message "${msg.name}"')
+				}
+			}
+		}
+		if m.telem.on && (fid == m.telem.id || (m.telem.detail_id != 0 && fid == m.telem.detail_id)) {
+			panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a [telemetry] frame id')
+		}
+		if m.trace.on && (fid == m.trace.cmd_id || fid == m.trace.rsp_id || fid == m.trace.record_id
+			|| (m.trace.dump_fc_bound && fid == m.trace.dump_fc_id)) {
+			panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a [trace] endpoint id')
+		}
+	}
 
 	// Validate E2E byte positions against each frame's DLC (they index unsafe into
 	// the frame's [64]u8 in the generated bridge).

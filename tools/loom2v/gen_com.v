@@ -658,6 +658,13 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\ttp_${tp}_buf [isotp.max_payload]u8'
 			glue << '\tuds_${tp} uds.Server'
 			glue << '\tuds_${tp}_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity'
+			if c.functional_id != 0 {
+				glue << '\tfn_${tp}_req [7]u8 // a functional request waiting for the link (one slot)'
+				glue << '\tfn_${tp}_len int'
+			}
+		}
+		if conns.len > 0 && rx_by_msg.keys().any((m.frames.rx_timeout_us[it] or { 0 }) > 0) {
+			glue << '\tdiag_rx_was_off bool // 0x28 had rx off last pass: restart the deadlines on return'
 		}
 		for d in dests {
 			glue << '\troute_${snake(d)} can.Channel // gateway: forward to ${d}'
@@ -907,27 +914,39 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\t}'
 				if c.functional_id != 0 {
 					// A FUNCTIONAL request is one single frame (ISO 15765-2: PCI 0x0N, N = 1..7 data
-					// bytes). It is served by the same server, with the negative responses a functional
-					// request must not send withheld, and answered on the physical response id. A
-					// physical transfer still in flight has the link; the functional answer is then
-					// dropped rather than interleaved (the tester retries).
+					// bytes). It is only STORED here: the physical path below goes first, and the
+					// functional request is served once the link is free, so its answer never takes the
+					// link from a physical response in the same pass. One slot — a newer functional
+					// request replaces one still waiting.
 					glue << '\t\tif rx.id == u32(0x${c.functional_id.hex()}) && !rx.ext && rx.len >= 2 && rx.data[0] >> 4 == 0 {'
 					glue << '\t\t\tfl_${tp} := int(rx.data[0] & 0x0F)'
 					glue << '\t\t\tif fl_${tp} >= 1 && fl_${tp} < int(rx.len) {'
-					glue << '\t\t\t\tst.uds_${tp}.tick(now)'
-					glue << '\t\t\t\tfn_${tp} := st.uds_${tp}.handle_functional(&rx.data[1], fl_${tp}, &st.uds_${tp}_resp[0])'
-					glue << '\t\t\t\tif fn_${tp} > 0 && !st.tp_${tp}.busy() {'
-					glue << '\t\t\t\t\tst.tp_${tp}.send(&st.uds_${tp}_resp[0], fn_${tp})'
+					glue << '\t\t\t\tfor i in 0 .. fl_${tp} {'
+					glue << '\t\t\t\t\tst.fn_${tp}_req[i] = rx.data[1 + i]'
 					glue << '\t\t\t\t}'
+					glue << '\t\t\t\tst.fn_${tp}_len = fl_${tp}'
 					glue << '\t\t\t}'
 					glue << '\t\t}'
 				}
 			}
 			glue << '\t}'
-			// rx deadline crossed -> publish invalid (valid=false) signals, once
+			// rx deadline crossed -> publish invalid (valid=false) signals, once. While 0x28 has rx
+			// off, silence is commanded, not a fault: no deadline fires, and every deadline restarts
+			// when rx comes back (below), so a diagnostic command never fakes a comms timeout.
+			if conns.len > 0 && rx_by_msg.keys().any((m.frames.rx_timeout_us[it] or { 0 }) > 0) {
+				glue << '\tif diag_rx_ok && st.diag_rx_was_off {'
+				for msg, _ in rx_by_msg {
+					if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
+						glue << '\t\tst.rx_${msg}_st.on_receive(now)'
+					}
+				}
+				glue << '\t}'
+				glue << '\tst.diag_rx_was_off = !diag_rx_ok'
+			}
 			for msg, list in rx_by_msg {
 				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
-					glue << '\tif st.rx_${msg}_st.expired(now) {'
+					dl_gate := if conns.len > 0 { 'diag_rx_ok && ' } else { '' }
+					glue << '\tif ${dl_gate}st.rx_${msg}_st.expired(now) {'
 					for sname in list {
 						si := m.sig_of[sname] or { continue }
 						fld := snake(sname)
@@ -978,6 +997,15 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				// happens once the answer has left the link. On the host there is no platform reset,
 				// so it is the DIAGNOSTIC state that returns to power-on (session, security, 0x28);
 				// the target's controller-drained reset is R2 (docs/diagnostics.md §3.1).
+				if c.functional_id != 0 {
+					glue << '\tif st.fn_${tp}_len > 0 && !st.tp_${tp}.busy() { // the waiting functional request'
+					glue << '\t\tfn_${tp} := st.uds_${tp}.handle_functional(&st.fn_${tp}_req[0], st.fn_${tp}_len, &st.uds_${tp}_resp[0])'
+					glue << '\t\tst.fn_${tp}_len = 0'
+					glue << '\t\tif fn_${tp} > 0 {'
+					glue << '\t\t\tst.tp_${tp}.send(&st.uds_${tp}_resp[0], fn_${tp})'
+					glue << '\t\t}'
+					glue << '\t}'
+				}
 				glue << '\tif st.uds_${tp}.reset_req != 0 && !st.tp_${tp}.busy() {'
 				glue << '\t\tst.uds_${tp}.reset_state()'
 				glue << '\t}'
@@ -1291,6 +1319,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\tst.uds_${tp} = uds.Server{}'
 			glue << '\tst.uds_${tp}.init(isotp.max_payload) // default session; the response buffer\'s capacity'
 			glue << '\tst.uds_${tp}.no_programming = true // programming is the bootloader\'s (handoff: R2)'
+			glue << '\tst.uds_${tp}.serves_reset = true // this bridge performs reset_req (below)'
+			glue << '\tst.uds_${tp}.serves_comm_control = true // and gates its frames on 0x28'
 			if m.buses.len == 1 {
 				glue << '\tst.uds_${tp}.single_network = true // 0x28 "all networks" = this one'
 			}
