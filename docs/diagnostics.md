@@ -26,7 +26,7 @@ page is the plan to close that, in rungs that each ship and verify on their own.
 | DIDs | 16 × ≤32 B static table; 0x22 reads the FIRST DID of a request only | `comm/uds/uds.v` |
 | NRCs | 0x11 0x12 0x13 0x22 0x31 (no 0x7E/0x7F/0x78/0x33/0x24) | `comm/uds/uds.v` |
 | Security access 0x27 | absent (the bootloader uses 0x29 authentication instead) | `boot/prog.v` |
-| UDS on the **target** | **none** — loom2v refuses `[[isotp]]` on a ThreadX node; only the bootloader serves UDS on silicon (hand-wired) | `tools/loom2v/gen.v` |
+| UDS on the **target** | **none** — loom2v refuses `[[isotp]]` on a ThreadX node; on silicon UDS runs only hand-wired — the bootloader over ISO-TP and the `h735_doip` example over DoIP | `tools/loom2v/gen.v` |
 | UDS config | `[[isotp]]` + `[[did]]` (ascii / bytes / signal / writable) | `tools/ecucheck/gen.v` |
 | Rx signal status | one `valid` bool, host bridge only; E2E/SecOC failures drop the frame silently; target rejects rx deadlines, E2E and `valid` ("phase 6b-2b") | `tools/loom2v/gen_com.v`, `gen.v` |
 | Fault memory / DTCs | **nothing** — no events, debouncing, status byte, 0x19, 0x14, 0x85 | — |
