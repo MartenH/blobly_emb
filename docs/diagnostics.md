@@ -45,8 +45,10 @@ built" while P1/P2 and chains are.
    writer of the fault memory and, on the target, already the owner of the journal. Every other
    detector — a bridge on another bus, an FB thread, the satellite core — reaches it through ordinary
    IOC / xioc cells it alone reads, so the single-writer rule holds without a lock.
-3. **Everything is declared in `ecu.toml`, validated at generation, and cross-checked by syscheck**
-   (DTC numbers, DIDs and diagnostic addresses unique per system).
+3. **Everything is declared in `ecu.toml`, validated at generation, and cross-checked by syscheck.**
+   Diagnostic *addresses* are unique per system; DIDs and DTC numbers are unique per *server* — every
+   ECU may expose the VIN DID 0xF190, and the same DTC value can mean something on two separately
+   addressed servers. The manifest keys them by node plus identifier.
 4. **No heap, fixed tables sized at generation**, the same as every runtime layer.
 5. **Sim first, then silicon, and a tester to prove it.** Each rung has a host proof, and the target
    rungs end on `examples/system_full` driven from blobly_net over the CANsub. blobly_net is the
@@ -84,8 +86,10 @@ write   = { session = ["extended"], security = 1 }
 
 What it adds, all table-driven so an unsupported path answers the right NRC rather than a guess:
 
-- **Sessions** default (01) / extended (03) / programming (02, handed to the bootloader), **starting
-  in default**, S3 return-to-default, and per-service, per-subfunction and per-DID session and
+- **Sessions** default (01) / extended (03) / programming (02), **starting in default**. An
+  application server does not accept programming until the bootloader handoff exists — the boot cell
+  plus a reset into `boot.Prog`, which alone serves erase / download (R2); until then 0x10 02 is
+  refused rather than answered with a session that cannot program. Then S3 return-to-default, and per-service, per-subfunction and per-DID session and
   security gating, answered in ISO 14229-1's NRC-evaluation order: 0x11 / 0x7F, 0x12 / 0x7E, 0x13,
   0x22, 0x24 (requestSequenceError), 0x31, 0x33 (securityAccessDenied).
 - **Multi-DID 0x22** (several DIDs per request, response-size checked → 0x14 responseTooLong).
@@ -95,11 +99,16 @@ What it adds, all table-driven so an unsupported path answers the right NRC rath
 - **Response pending (0x78)** for anything that waits on flash (0x2E of a persisted DID, 0x14): the
   server answers 0x78 inside P2 and completes within P2*; the comm thread never blocks.
 - **0x27 SecurityAccess** with seed from the board TRNG, attempt counter + delay (0x35/0x36/0x37,
-  0x24 for a key sent before its seed), and the key check behind a **board/OEM seam** (a C function
+  0x24 for a key sent before its seed) that **survives a reset** — the failed-attempt state is
+  persisted, or the delay is imposed at every boot until a successful unlock, since an in-RAM counter
+  is bypassed by power-cycling between guesses — and the key check behind a **board/OEM seam** (a C function
   the board glue provides). The sim and bench use the reference key blobly_net's client already
   implements (seed XOR 0xFF), so the two sides unlock with ONE algorithm. 0x29 stays the
   bootloader's programming authentication.
-- **0x11 ECUReset** (hard / soft) through the platform reset path, **0x28 CommunicationControl**
+- **0x11 ECUReset** (hard / soft), **two-phase**: the server records the request and answers; the
+  owner resets only once the response has left the CAN controller, with a bounded drain — the
+  bootloader's `reset_pending` path, where REQ-BOOT-012 records that waiting for ISO-TP idle alone
+  still lost the response on the H755 bench. It is proven on the target (R2), not just the host; **0x28 CommunicationControl**
   (gates COM tx the way NM already does), **0x85 ControlDTCSetting** (§3.3).
 - The bootloader's `Prog` keeps composing `uds.Server`, so it inherits session/NRC fixes for free.
 
@@ -113,10 +122,12 @@ The reserved `valid` bool becomes a status the bridge owns and publishes with th
 field, still no API:
 
 ```v
-pub enum RxStatus { ok never_received timeout integrity }
+pub enum RxStatus { never_received ok timeout integrity }
 ```
 
-`never_received` until the first good decode, `timeout` past the deadline, `integrity` on an E2E or
+`never_received` — deliberately the ZERO value, so a signal nobody has published yet (and a
+freestanding image, where no field initialiser runs) reads as not-yet-received rather than healthy —
+until the first good decode, `timeout` past the deadline, `integrity` on an E2E or
 SecOC failure (latched until the next good frame), and E2E `lost` counted rather than hidden. It is
 both an FB input (substitute vs. safety reaction are different responses) and a **fault source**: a
 signal can declare its own DTCs for timeout and integrity with no FB code (§3.3), because the bridge
@@ -154,16 +165,22 @@ the *pre-debounce* result.
 dispatch — a pre-debounce result must never cross a last-value cell, because a consumer that reads
 slower than the FB writes would miss results and an alternating fail/pass would never reach its
 threshold. What crosses to the fault memory is the **debounced state plus monotonic counters** in an
-ordinary IOC cell: `{ test_failed, qualified_fail_count, qualified_pass_count, tested }`. The
-consumer turns counter deltas into occurrences, so nothing is lost across a slow read and **no queued
-transport is needed** (the alternative, a per-thread event FIFO on the `bulk` rings, is the fallback
+ordinary IOC cell: `{ applied_gen, test_failed, qualified_fail_count, qualified_pass_count, tested }`.
+The consumer turns counter deltas into occurrences — taken only between two readings that carry the
+same `applied_gen`, the clear generation the producer has acted on (below), so a counter reset by a
+clear is never read as a negative delta or a phantom occurrence. Nothing is lost across a slow read and
+**no queued transport is needed** (the alternative, a per-thread event FIFO on the `bulk` rings, is the fallback
 if a use case needs the exact order of qualifications — decision D1).
 
 **The way back.** Debouncing lives on the producer, so everything that must restart or pause it has
 to reach the producer too — or a 0x14 clear is undone by the next read of a still-failed cell. The
-fault memory publishes one **control cell** (single writer: its comm thread) that every generated
-debounce reads each dispatch: a *clear generation* (0x14 and cycle start reset the counters and the
-debounced state), and a *suppressed* flag (0x85 off). Enable conditions are evaluated on the producer
+fault memory publishes a **control cell per producing thread** (single writer: its comm thread;
+single reader: that thread's generated debounce — the IOC is SPSC, so one shared cell with several
+readers is not an option): a *clear generation* (0x14 and cycle start reset the counters and the
+debounced state; the producer echoes it as `applied_gen`), and a *suppressed* flag (0x85 off). A
+producer on a **satellite core** needs the same cell to flow owner → satellite, which the target does
+not support today (loom2v rejects any signal INTO a satellite partition); R6 adds that reverse xioc
+path, or faults are declared owner-core-only until it exists. Enable conditions are evaluated on the producer
 itself — they are signals, readable there like any input — so a fault whose condition is false stops
 counting instead of qualifying the moment the condition returns.
 
@@ -177,7 +194,8 @@ counting instead of qualifying the moment the condition returns.
   declared signal (e.g. an ignition input) (decision D3); cycle boundaries age and qualify entries. A
   node with neither NM nor a declared cycle signal **fails generation** when it declares a fault that
   needs cycles (`confirm`, `aging`) — otherwise pending would never confirm and nothing would age;
-- **entries**: DTC, status, occurrence counter, aging counter, first/last failure cycle, and the
+- **entries**: DTC, status, occurrence counter, **failed-cycle counter** (what `confirm` counts —
+  occurrences are not cycles), aging counter, first/last failure cycle, and the
   **freeze frame** — the named signals captured when the fault qualifies as failed (within one comm-
   thread pass of the qualifying dispatch; the latency is stated, not hidden);
 - **extended data records** (occurrence and aging counters) and **displacement** by priority, then
@@ -186,7 +204,12 @@ counting instead of qualifying the moment the condition returns.
   signal mechanism — under-voltage.
 
 **Storage** is the existing journal (decision D4): small status/counter records per DTC, freeze
-frames as **chained records** (built, up to 634 B), in the same engine; a separate sector region stays
+frames as **chained records** (built, up to 634 B), in the same engine. The diagnostic block ids join
+the generated schema keep-set — today mount **prunes** every id that is not a persisted signal, so
+without that every restored DTC would be discarded before the fault memory reads it — and the
+capacity/wear checks. A freeze frame's size is bounded by what the tester can receive, not by the
+chain: generation rejects a snapshot whose 0x19 04 response (SID, subfunction, DTC, status, record
+headers + data) exceeds the transport's message limit (ISO-TP 520 B today); a separate sector region stays
 available purely for wear isolation. This resolves the contradiction inside `docs/nvm.md`, which both
 prefers a second wide-record journal and says chains dissolve it — chains exist now, so the second
 journal is not needed. Writes are event-driven (qualification, cycle end, clear), never cyclic, and
@@ -230,11 +253,11 @@ and — from R2 on — a bench verification on `examples/system_full` recorded i
 | **R0** | Requirements for everything below (REQ-DIAG-*); correct the three over-claiming docs; decide D1–D6 | `make trace-check` | — |
 | **R1** | Server core on the host: `[diag]`, sessions from default + S3, gating tables, NRC set + evaluation order, multi-DID 0x22, functional addressing, 0x78 plumbing, 0x11, 0x28 | unit tests + `examples/overspeed` e2e vs the blobly_net client | R0, N1 |
 | **R1b** | 0x27 SecurityAccess with the board key seam + blobly_net's reference key | unit tests; e2e with the existing net 0x27 client | R1 |
-| **R2** | UDS on the **target**: `[[isotp]]` on the ThreadX comm thread | bench: sessions, DIDs, 0x27 on `system_full` domain via CANsub | R1 |
+| **R2** | UDS on the **target**: `[[isotp]]` on the ThreadX comm thread; 0x11 with the bounded controller drain; the programming-session handoff into the bootloader | bench: sessions, DIDs, 0x27 (incl. reset between failed attempts), 0x11 answered then reset, app → boot handoff, on `system_full` domain via CANsub | R1 |
 | **R3** | Rx status (#286) on the host: `RxStatus`, bridge-owned, integrity latch, E2E `lost` counter; `valid` migrated | host e2e (timeout / integrity / never_received) | R0 |
 | **R4** | Faults on the host: `[[fault]]`, FB fault port, generated debounce, fault memory in RAM, status byte, operation cycle, enable conditions, 0x19 01/02/0A, 0x14, 0x85; signal-status faults from R3; syscheck DTC uniqueness | host e2e: fail → pending → confirmed → cleared → aged | R1, R3, N2 |
 | **R5** | Target COM checks ("phase 6b-2b"): rx deadlines + E2E/SecOC on the comm thread, so R3's status and signal-status faults exist on silicon | bench: pull a sender, corrupt a frame | R2, R3 |
-| **R6** | Fault memory persisted + freeze frames + extended data + displacement; 0x19 03/04/06; faults on the target | bench: fault, power-cycle, read back with snapshot; clear with 0x78 | R2, R4, N3 |
+| **R6** | Fault memory persisted (diagnostic ids in the prune keep-set) + freeze frames (size-checked against the response limit) + extended data + displacement; 0x19 03/04/06; faults on the target, incl. the owner → satellite control path | bench: fault, power-cycle, read back with snapshot; clear with 0x78 | R2, R4, N3 |
 | **R7** | Parameters (#288): NvM P4 DID write path, `[[param]]`, range check, `apply` | bench: code a variant, reset, FB sees it | R1b, R2 |
 
 R3 and R1 can run in parallel; R5 and R6 can run in parallel after R2.
