@@ -123,8 +123,10 @@ What it adds, all table-driven so an unsupported path answers the right NRC rath
 - **0x27 SecurityAccess** with seed from the board TRNG, attempt counter + delay (0x35/0x36/0x37,
   0x24 for a key sent before its seed) that **survives a reset** — the failed-attempt state is
   persisted, or the delay is imposed at every boot until a successful unlock, since an in-RAM counter
-  is bypassed by power-cycling between guesses — and the key check behind a **board/OEM seam** (a C function
-  the board glue provides). The sim and bench use the reference key blobly_net's client already
+  is bypassed by power-cycling between guesses — and the key check behind an **injected,
+  platform-neutral interface** (a fixed function-pointer ops struct handed to the server, the shape
+  `boot.Prog.rng` already uses), so `comm/uds` stays free of any `fn C` — the OEM algorithm and any
+  board code live in the target glue, below the backend line. The sim and bench use the reference key blobly_net's client already
   implements (seed XOR 0xFF), so the two sides unlock with ONE algorithm. 0x29 stays the
   bootloader's programming authentication.
 - **0x11 ECUReset** (hard / soft), **two-phase**: the server records the request and answers; the
@@ -285,12 +287,12 @@ name    = "TrailerBrakeFitted"
 type    = "bool"             # or fields, like [[signal]]
 default = false              # compiled in; used until coded
 to      = ["BrakeCtrl"]
-did     = 0x0100             # the [[did]] above names it with `param =`
 range   = { min = 0, max = 1 }   # validated at 0x2E → NRC 0x31 before storage
 apply   = "next_dispatch"    # or "reset" for parameters that shape start-up
 ```
 
-The consumer sees a **read-only In field**, indistinguishable from a signal that never changes. The
+The DID binding has ONE source: the `[[did]]` that names the parameter (`param = ...`, §3.1);
+`[[param]]` does not repeat it. The consumer sees a **read-only In field**, indistinguishable from a signal that never changes. The
 value is a persisted record with a compiled default; the write path is the DID binding NvM calls P4
 ("writable DIDs backed by blocks"), which is **built first** in this rung — it does not exist yet.
 Parameters are runtime-only: generation stays one binary for all variants.
@@ -374,3 +376,6 @@ done until its obligations hold under their tests. §3 fixes the shape; this tab
 | R4 | The tested state is lossless like the occurrences: a monotonic tested-count per fault (not a last-value `tested` flag), so a fast producer's single evaluation followed by `.not_tested` is never lost to the test-not-completed bits or aging. | unit: one evaluation then `.not_tested`, read once late |
 | R4 / R6 | Every list-producing 0x19 response fits the transport: generation bounds 0x19 02 / 0A (all DTCs × 4 B) and 03 (all snapshot ids) against the message limit with its header, and refuses a fault table that could exceed it. | generation test at the boundary |
 | R6 | Snapshot and extended-data records carry stable on-wire record numbers — snapshot record 0x01 per DTC (one snapshot per fault), extended data 0x01 occurrence counter, 0x02 aging counter — with 0xFF (all) supported, and the numbering carried in the manifest for the tester. | unit: 0x19 03 / 04 / 06 with explicit and 0xFF record numbers; N3 decodes them |
+| R0 | A functional id may be shared with OTHER functional ids on its bus, never with a physical request or response id there — checked in syscheck across the whole bus (loom2v checks the node's own ids). | syscheck test: a functional id equal to another node's physical id on the same bus fails |
+| R6 | The clear epoch has a stable block identity like the entries (fixed / schema-derived, collision-handled, in the prune keep-set), so a firmware update can never prune it and resurrect cleared entries. | power-cycle test across a firmware update that reorders faults |
+| R6 / R7 | Persistent writes never block the comm thread: `nvm.Journal.put` is synchronous (a full chain, or a compaction), so persisted 0x2E / 0x14 / fault-memory writes go through a bounded incremental flash path, with 0x78 covering the wait. | bench: CAN rx/tx, NM and 0x78 timing continue during a worst-case chain write and a compaction |
