@@ -114,6 +114,13 @@ mut:
 fn io_can0_10ms(ctx voidptr) {
 	mut st := unsafe { &Bridge_can0_state(ctx) }
 	now := osal.now_us()
+	st.tp_diag.tick(now)
+	if st.uds_diag.reset_req != 0 && !st.tp_diag.busy() { // the answer has left
+		st.uds_diag.reset_state()
+	}
+	if !st.tp_diag.idle() {
+		st.uds_diag.hold_s3(now)
+	}
 	st.uds_diag.tick(now)
 	mut diag_rx_ok := st.uds_diag.rx_enabled()
 	mut rx := can.Frame{}
@@ -160,9 +167,6 @@ fn io_can0_10ms(ctx voidptr) {
 		st.uds_diag.dids[1].data[1] = u8(vehicle_speed_did.kph)
 		st.uds_diag.dids[1].len = 2
 	}
-	if st.uds_diag.reset_req != 0 && !st.tp_diag.busy() { // the answer has left
-		st.uds_diag.reset_state()
-	}
 	diag_got := st.tp_diag.take(&st.tp_diag_buf[0])
 	diag_n := if st.tp_diag.busy() { 0 } else { diag_got }
 	if diag_n > 0 {
@@ -171,7 +175,6 @@ fn io_can0_10ms(ctx voidptr) {
 			st.uds_diag.reset_req = 0 // the answer could not be queued: never reset unanswered
 		}
 	}
-	st.tp_diag.tick(now) // advance the ISO-TP timeout even when tx_ready gates poll out
 	mut pdu_diag := isotp.Pdu{}
 	for st.chan.tx_ready() && st.tp_diag.poll(now, mut pdu_diag) {
 		mut cf_diag := can.Frame{
@@ -186,9 +189,6 @@ fn io_can0_10ms(ctx voidptr) {
 			st.uds_diag.reset_req = 0 // its answer is lost: never reset unanswered
 			break
 		}
-	}
-	if !st.tp_diag.idle() {
-		st.uds_diag.hold_s3() // S3 runs only once the exchange is over (ISO 14229-2)
 	}
 	diag_rx_ok = st.uds_diag.rx_enabled()
 	if diag_rx_ok && st.diag_rx_was_off {

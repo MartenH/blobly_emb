@@ -316,11 +316,12 @@ fn test_hold_s3_keeps_the_session_through_a_long_transfer() {
 	mut s := started()
 	s.tick(0)
 	assert call(mut s, [u8(0x10), 0x03])[0] == 0x50
-	s.tick(default_s3_us)
-	s.hold_s3() // still sending the answer
+	s.hold_s3(2 * default_s3_us) // a pass later than S3, the answer still going out
 	s.tick(2 * default_s3_us)
 	assert s.session == session_extended, 'S3 ran during a busy transfer'
-	s.tick(2 * default_s3_us + 1)
+	s.tick(3 * default_s3_us)
+	assert s.session == session_extended
+	s.tick(3 * default_s3_us + 1)
 	assert s.session == session_default, 'S3 did not restart from the end of the transfer'
 }
 

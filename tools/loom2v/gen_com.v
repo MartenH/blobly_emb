@@ -751,10 +751,24 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			// CommunicationControl (0x28): normal application messages on this bus stop being
 			// sent / decoded while any of its diagnostic servers says so. Diagnostic traffic itself
 			// is never gated (docs/diagnostics.md §3.1).
-			// S3 first: an expired session returns to default (and re-enables reception) BEFORE this
-			// pass's frames are judged against the receive gate below
+			// Housekeeping FIRST, all of it, so the receive gate below and the functional path in
+			// the drain see this instant's state: ISO-TP timeouts expire (a stale transfer does not
+			// make the link look busy); a reset whose answer has left is applied (ECUReset is
+			// two-phase — on the host there is no platform reset, so the DIAGNOSTIC state returns
+			// to power-on; the target's controller-drained reset is R2, docs/diagnostics.md §3.1);
+			// S3 is held while the link is busy (ISO 14229-2 starts it once the exchange is over)
+			// and only then checked, so an expired session returns to default before frames are
+			// judged.
 			for c in conns {
-				glue << '\tst.uds_${snake(c.name)}.tick(now)'
+				tp := snake(c.name)
+				glue << '\tst.tp_${tp}.tick(now)'
+				glue << '\tif st.uds_${tp}.reset_req != 0 && !st.tp_${tp}.busy() { // the answer has left'
+				glue << '\t\tst.uds_${tp}.reset_state()'
+				glue << '\t}'
+				glue << '\tif !st.tp_${tp}.idle() {'
+				glue << '\t\tst.uds_${tp}.hold_s3(now)'
+				glue << '\t}'
+				glue << '\tst.uds_${tp}.tick(now)'
 			}
 			glue << '\tmut diag_rx_ok := ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
 		}
@@ -951,13 +965,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			for c in conns {
 				tp := snake(c.name)
 				glue << did_refresh(m, tp, '\t')
-				// ECUReset (0x11) is two-phase: the server answered and recorded it; the reset
-				// happens once the answer has left the link. On the host there is no platform reset,
-				// so it is the DIAGNOSTIC state that returns to power-on (session, security, 0x28);
-				// the target's controller-drained reset is R2 (docs/diagnostics.md §3.1).
-				glue << '\tif st.uds_${tp}.reset_req != 0 && !st.tp_${tp}.busy() { // the answer has left'
-				glue << '\t\tst.uds_${tp}.reset_state()'
-				glue << '\t}'
 				// ONE request at a time: a new request is taken only when the previous answer has left
 				// the link, so a pending ECUReset always belongs to the response in flight (the next
 				// request waits, reassembled, in the link — a tester waits for the answer anyway)
@@ -973,7 +980,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\t\tst.uds_${tp}.reset_req = 0 // the answer could not be queued: never reset unanswered'
 				glue << '\t\t}'
 				glue << '\t}'
-				glue << '\tst.tp_${tp}.tick(now) // advance the ISO-TP timeout even when tx_ready gates poll out'
 				glue << '\tmut pdu_${tp} := isotp.Pdu{}'
 				// Gate on tx_ready so a UDS response burst never overruns the Tx FIFO or blocks — send at
 				// most a FIFO\'s worth per pass, resume next pass (poll advances tx state).
@@ -994,9 +1000,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\t\tst.uds_${tp}.reset_req = 0 // its answer is lost: never reset unanswered'
 				glue << '\t\t\tbreak'
 				glue << '\t\t}'
-				glue << '\t}'
-				glue << '\tif !st.tp_${tp}.idle() {'
-				glue << '\t\tst.uds_${tp}.hold_s3() // S3 runs only once the exchange is over (ISO 14229-2)'
 				glue << '\t}'
 			}
 		}

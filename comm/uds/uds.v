@@ -152,8 +152,10 @@ pub fn (mut s Server) tick(now_us u64) {
 // still being received or an answer still being sent. ISO 14229-2 starts S3 only once the
 // exchange is over, so a long transfer (a large STmin) cannot time the session out mid-response,
 // and a TesterPresent that arrives meanwhile and cannot be served is not needed to keep it.
-pub fn (mut s Server) hold_s3() {
-	s.last_rx_us = s.now_us
+// Call it before tick() in the same pass, with the same time, so the expiry check sees the hold.
+pub fn (mut s Server) hold_s3(now_us u64) {
+	s.now_us = now_us
+	s.last_rx_us = now_us
 }
 
 // tx_enabled / rx_enabled: CommunicationControl's effect on normal communication messages, for

@@ -884,6 +884,9 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 		panic('loom2v: ${isotp_conns.len} [[isotp]] connections — a node has ONE diagnostic server (docs/diagnostics.md); declare one connection')
 	}
 	for c in isotp_conns {
+		if c.s3_ms < 0 {
+			panic('loom2v: [[isotp]] "${c.name}" s3_ms ${c.s3_ms} is negative (0 = the default ${uds.default_s3_us / 1000} ms)')
+		}
 		if c.functional_id == 0 {
 			continue
 		}
