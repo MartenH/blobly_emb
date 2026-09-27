@@ -755,6 +755,11 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			// CommunicationControl (0x28): normal application messages on this bus stop being
 			// sent / decoded while any of its diagnostic servers says so. Diagnostic traffic itself
 			// is never gated (docs/diagnostics.md §3.1).
+			// S3 first: an expired session returns to default (and re-enables reception) BEFORE this
+			// pass's frames are judged against the receive gate below
+			for c in conns {
+				glue << '\tst.uds_${snake(c.name)}.tick(now)'
+			}
 			glue << '\tdiag_rx_ok := ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
 		}
 		if rx_by_msg.len > 0 || conns.len > 0 || my_routes.len > 0 {
@@ -972,8 +977,10 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					glue << did_signal_encode(tp, idx, '${f}_did.${si.val_field}', si.val_type)
 					glue << '\t}'
 				}
-				glue << '\tst.uds_${tp}.tick(now) // S3: a non-default session with no request returns to default'
-				glue << '\t${tp}_n := st.tp_${tp}.take(&st.tp_${tp}_buf[0])'
+				// ONE request at a time: a new request is taken only when the previous answer has left
+				// the link, so a pending ECUReset always belongs to the response in flight (the next
+				// request waits, reassembled, in the link — a tester waits for the answer anyway)
+				glue << '\t${tp}_n := if st.tp_${tp}.busy() { 0 } else { st.tp_${tp}.take(&st.tp_${tp}_buf[0]) }'
 				glue << '\tif ${tp}_n > 0 {'
 				glue << '\t\t${tp}_rlen := st.uds_${tp}.handle(&st.tp_${tp}_buf[0], ${tp}_n, &st.uds_${tp}_resp[0])'
 				glue << '\t\tif ${tp}_rlen > 0 && !st.tp_${tp}.send(&st.uds_${tp}_resp[0], ${tp}_rlen) {'

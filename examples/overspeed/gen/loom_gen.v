@@ -116,6 +116,7 @@ mut:
 fn io_can0_10ms(ctx voidptr) {
 	mut st := unsafe { &Bridge_can0_state(ctx) }
 	now := osal.now_us()
+	st.uds_diag.tick(now)
 	diag_rx_ok := st.uds_diag.rx_enabled()
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
@@ -161,8 +162,7 @@ fn io_can0_10ms(ctx voidptr) {
 		st.uds_diag.dids[1].data[1] = u8(vehicle_speed_did.kph)
 		st.uds_diag.dids[1].len = 2
 	}
-	st.uds_diag.tick(now) // S3: a non-default session with no request returns to default
-	diag_n := st.tp_diag.take(&st.tp_diag_buf[0])
+	diag_n := if st.tp_diag.busy() { 0 } else { st.tp_diag.take(&st.tp_diag_buf[0]) }
 	if diag_n > 0 {
 		diag_rlen := st.uds_diag.handle(&st.tp_diag_buf[0], diag_n, &st.uds_diag_resp[0])
 		if diag_rlen > 0 && !st.tp_diag.send(&st.uds_diag_resp[0], diag_rlen) {
