@@ -3640,7 +3640,9 @@ fn main() {
 			}
 		}
 		for r in m.routes {
-			if (r.from_bus == c.bus && u32(r.from_id) == fid) || (r.to_bus == c.bus && u32(r.to_id) == fid) {
+			// the functional id is a STANDARD frame: only a standard-width route can collide
+			if (r.from_bus == c.bus && !r.from_ext && u32(r.from_id) == fid)
+				|| (r.to_bus == c.bus && !r.to_ext && u32(r.to_id) == fid) {
 				panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a routed frame on bus "${c.bus}"')
 			}
 		}

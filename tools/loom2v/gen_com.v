@@ -658,8 +658,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\ttp_${tp}_buf [isotp.max_payload]u8'
 			glue << '\tuds_${tp} uds.Server'
 			glue << '\tuds_${tp}_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity'
-			glue << '\ttp_${tp}_held can.Frame // a response frame the channel refused: retried before any new one'
-			glue << '\ttp_${tp}_held_set bool'
 			if c.functional_id != 0 {
 				glue << '\tfn_${tp}_req [7]u8 // a functional request waiting for the link (one slot)'
 				glue << '\tfn_${tp}_len int'
@@ -978,21 +976,19 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t${tp}_n := st.tp_${tp}.take(&st.tp_${tp}_buf[0])'
 				glue << '\tif ${tp}_n > 0 {'
 				glue << '\t\t${tp}_rlen := st.uds_${tp}.handle(&st.tp_${tp}_buf[0], ${tp}_n, &st.uds_${tp}_resp[0])'
-				glue << '\t\tif ${tp}_rlen > 0 {'
-				glue << '\t\t\tst.tp_${tp}.send(&st.uds_${tp}_resp[0], ${tp}_rlen)'
+				glue << '\t\tif ${tp}_rlen > 0 && !st.tp_${tp}.send(&st.uds_${tp}_resp[0], ${tp}_rlen) {'
+				glue << '\t\t\tst.uds_${tp}.reset_req = 0 // the answer could not be queued: never reset unanswered'
 				glue << '\t\t}'
 				glue << '\t}'
 				glue << '\tst.tp_${tp}.tick(now) // advance the ISO-TP timeout even when tx_ready gates poll out'
 				glue << '\tmut pdu_${tp} := isotp.Pdu{}'
 				// Gate on tx_ready so a UDS response burst never overruns the Tx FIFO or blocks — send at
 				// most a FIFO\'s worth per pass, resume next pass (poll advances tx state).
-				// A frame the channel refuses after tx_ready() said yes is HELD and retried first:
-				// poll() has already advanced the link past it, so dropping it would lose part of a
-				// response — and an ECUReset below would then reset without having answered.
-				glue << '\tif st.tp_${tp}_held_set && st.chan.tx_ready() && st.chan.send(st.tp_${tp}_held) {'
-				glue << '\t\tst.tp_${tp}_held_set = false'
-				glue << '\t}'
-				glue << '\tfor !st.tp_${tp}_held_set && st.chan.tx_ready() && st.tp_${tp}.poll(now, mut pdu_${tp}) {'
+				// A frame the channel refuses after tx_ready() said yes has already been counted as
+				// sent by poll(): the rest of that message could not be reassembled, so the transfer is
+				// ABORTED (the tester times out and retries, as on any bus error) — and a reset whose
+				// answer was lost is abandoned rather than performed unanswered.
+				glue << '\tfor st.chan.tx_ready() && st.tp_${tp}.poll(now, mut pdu_${tp}) {'
 				glue << '\t\tmut cf_${tp} := can.Frame{'
 				glue << '\t\t\tid:  u32(0x${c.tx_id.hex()})'
 				glue << '\t\t\tlen: 8'
@@ -1001,22 +997,23 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\t\tcf_${tp}.data[i] = pdu_${tp}.data[i]'
 				glue << '\t\t}'
 				glue << '\t\tif !st.chan.send(cf_${tp}) {'
-				glue << '\t\t\tst.tp_${tp}_held = cf_${tp}'
-				glue << '\t\t\tst.tp_${tp}_held_set = true'
+				glue << '\t\t\tst.tp_${tp}.abort_tx()'
+				glue << '\t\t\tst.uds_${tp}.reset_req = 0 // its answer is lost: never reset unanswered'
+				glue << '\t\t\tbreak'
 				glue << '\t\t}'
 				glue << '\t}'
 				// ECUReset (0x11) is two-phase: the server answered and recorded it; the reset
 				// happens once the answer has left the link. On the host there is no platform reset,
 				// so it is the DIAGNOSTIC state that returns to power-on (session, security, 0x28);
 				// the target's controller-drained reset is R2 (docs/diagnostics.md §3.1).
-				glue << '\tif st.uds_${tp}.reset_req != 0 && !st.tp_${tp}.busy() && !st.tp_${tp}_held_set { // the answer has left'
+				glue << '\tif st.uds_${tp}.reset_req != 0 && !st.tp_${tp}.busy() { // the answer has left'
 				glue << '\t\tst.uds_${tp}.reset_state()'
 				if c.functional_id != 0 {
 					glue << '\t\tst.fn_${tp}_len = 0 // a request that arrived before the reset is not served after it'
 				}
 				glue << '\t}'
 				if c.functional_id != 0 {
-					glue << '\tif st.fn_${tp}_len > 0 && st.tp_${tp}.idle() && !st.tp_${tp}_held_set { // the waiting functional request: only on a link quiet both ways'
+					glue << '\tif st.fn_${tp}_len > 0 && st.tp_${tp}.idle() { // the waiting functional request: only on a link quiet both ways'
 					glue << '\t\tfn_${tp} := st.uds_${tp}.handle_functional(&st.fn_${tp}_req[0], st.fn_${tp}_len, &st.uds_${tp}_resp[0])'
 					glue << '\t\tst.fn_${tp}_len = 0'
 					glue << '\t\tif fn_${tp} > 0 {'

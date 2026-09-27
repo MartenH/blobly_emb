@@ -108,8 +108,6 @@ mut:
 	tp_diag_buf [isotp.max_payload]u8
 	uds_diag uds.Server
 	uds_diag_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity
-	tp_diag_held can.Frame // a response frame the channel refused: retried before any new one
-	tp_diag_held_set bool
 	fn_diag_req [7]u8 // a functional request waiting for the link (one slot)
 	fn_diag_len int
 	diag_rx_was_off bool // 0x28 had rx off last pass: restart the deadlines on return
@@ -167,16 +165,13 @@ fn io_can0_10ms(ctx voidptr) {
 	diag_n := st.tp_diag.take(&st.tp_diag_buf[0])
 	if diag_n > 0 {
 		diag_rlen := st.uds_diag.handle(&st.tp_diag_buf[0], diag_n, &st.uds_diag_resp[0])
-		if diag_rlen > 0 {
-			st.tp_diag.send(&st.uds_diag_resp[0], diag_rlen)
+		if diag_rlen > 0 && !st.tp_diag.send(&st.uds_diag_resp[0], diag_rlen) {
+			st.uds_diag.reset_req = 0 // the answer could not be queued: never reset unanswered
 		}
 	}
 	st.tp_diag.tick(now) // advance the ISO-TP timeout even when tx_ready gates poll out
 	mut pdu_diag := isotp.Pdu{}
-	if st.tp_diag_held_set && st.chan.tx_ready() && st.chan.send(st.tp_diag_held) {
-		st.tp_diag_held_set = false
-	}
-	for !st.tp_diag_held_set && st.chan.tx_ready() && st.tp_diag.poll(now, mut pdu_diag) {
+	for st.chan.tx_ready() && st.tp_diag.poll(now, mut pdu_diag) {
 		mut cf_diag := can.Frame{
 			id:  u32(0x102)
 			len: 8
@@ -185,15 +180,16 @@ fn io_can0_10ms(ctx voidptr) {
 			cf_diag.data[i] = pdu_diag.data[i]
 		}
 		if !st.chan.send(cf_diag) {
-			st.tp_diag_held = cf_diag
-			st.tp_diag_held_set = true
+			st.tp_diag.abort_tx()
+			st.uds_diag.reset_req = 0 // its answer is lost: never reset unanswered
+			break
 		}
 	}
-	if st.uds_diag.reset_req != 0 && !st.tp_diag.busy() && !st.tp_diag_held_set { // the answer has left
+	if st.uds_diag.reset_req != 0 && !st.tp_diag.busy() { // the answer has left
 		st.uds_diag.reset_state()
 		st.fn_diag_len = 0 // a request that arrived before the reset is not served after it
 	}
-	if st.fn_diag_len > 0 && st.tp_diag.idle() && !st.tp_diag_held_set { // the waiting functional request: only on a link quiet both ways
+	if st.fn_diag_len > 0 && st.tp_diag.idle() { // the waiting functional request: only on a link quiet both ways
 		fn_diag := st.uds_diag.handle_functional(&st.fn_diag_req[0], st.fn_diag_len, &st.uds_diag_resp[0])
 		st.fn_diag_len = 0
 		if fn_diag > 0 {

@@ -69,6 +69,9 @@ fn blobly_doip_run() {
 		g_srv.uds.tick(C.board_now_us()) // S3: an idle non-default session returns to default
 		n := C.net_stream_recv(&inb[0], 256 - g_srv.buf_len, 100) // ~100 ms slice
 		if n > 0 {
+			// again AFTER the blocking receive: S3 may have expired while it waited, and the
+			// request must be judged in the session that is current NOW, not 100 ms ago
+			g_srv.uds.tick(C.board_now_us())
 			mut fed := n
 			// feed stops consuming when the response buffer fills; drain the
 			// retained messages with len-0 feeds until quiet

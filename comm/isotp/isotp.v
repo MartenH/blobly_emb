@@ -114,6 +114,13 @@ pub fn (l Link) busy() bool {
 	return l.tx != .idle
 }
 
+// abort_tx abandons the transmission in flight — for an owner whose channel refused a frame the
+// link had already counted as sent: continuing would send the rest of a message the receiver can
+// no longer reassemble, and retrying the refused frame later could land after N_Bs expired.
+pub fn (mut l Link) abort_tx() {
+	l.tx = .idle
+}
+
 // idle reports that nothing is in flight in EITHER direction: no tx segmenting or awaiting flow
 // control, no multi-frame reception in progress or flow control owed, and no completed message
 // waiting to be taken. A caller that interleaves a second kind of traffic on the link (functional
