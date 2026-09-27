@@ -54,11 +54,12 @@ built" while P1/P2 and chains are.
 3. **Everything is declared in `ecu.toml`, validated at generation, and cross-checked by syscheck.**
    A connection's *physical* request / response ids are unique per bus (reuse on electrically
    separate buses is fine), while a *functional* id is deliberately SHARED by every server on its bus;
-   DIDs and DTC numbers are unique per *server* — every
-   ECU may expose the VIN DID 0xF190, and the same DTC value can mean something on two separately
-   addressed servers. A node has one server per `[[isotp]]` connection, so every `[[did]]` and
-   `[[fault]]` names its server (`server = "<connection>"`, implied when the node has only one); the
-   manifest and the checks key them by node, server and identifier.
+   DIDs and DTC numbers are unique per *node* — every ECU may expose the VIN DID 0xF190, and the
+   same DTC value can mean something on two ECUs. **One diagnostic server per node** (one
+   `[[isotp]]` connection carrying its DIDs and faults — R1 already refuses more): that is how ECUs
+   are addressed in practice, and it keeps the fault memory, its clear epoch and 0x85 with a single
+   owner. A second server on another bus is out of scope (§6). The manifest keys DIDs and DTCs by
+   node plus identifier.
 4. **No heap, fixed tables sized at generation**, the same as every runtime layer.
 5. **Sim first, then silicon, and a tester to prove it.** Each rung has a host proof, and the target
    rungs end on `examples/system_full` driven from blobly_net over the CANsub. blobly_net is the
@@ -73,7 +74,7 @@ built" while P1/P2 and chains are.
 
 `comm/uds` grows from a request echo into a server with a **service table generated from config**:
 
-One server per `[[isotp]]` connection, so its settings live there (as built in R1):
+The node's one server is its `[[isotp]]` connection, so its settings live there (as built in R1):
 
 ```toml
 [[isotp]]
@@ -338,7 +339,8 @@ R3 and R1 can run in parallel; R5 and R6 can run in parallel after R2.
 
 ## 6. Out of scope (said so that nobody assumes it)
 
-OBD / emissions services (0x01–0x0A modes, readiness monitors) and J1939 DM1 — declared separately if
+A second diagnostic server on one node (a separate physical address on another bus — the per-server
+epoch, suppression and response forwarding it needs are not designed); OBD / emissions services (0x01–0x0A modes, readiness monitors) and J1939 DM1 — declared separately if
 an application needs them; ODX/PDX import (the manifest carries what the tester needs); 0x2F
 InputOutputControl, 0x23/0x3D memory access, and generic 0x31 RoutineControl (the bootloader keeps
 its own erase / check routines); DoIP diagnostics beyond what `comm/doip` already
@@ -357,13 +359,18 @@ done until its obligations hold under their tests. §3 fixes the shape; this tab
 | R2 | The programming handoff is offered only by a server whose bus and addresses the bootloader serves (today: CAN 0, 0x7B0 / 0x7B8 in the boot images), validated at generation; any other server refuses 0x10 02. | generation test on a mismatched config; bench: handoff reaches `boot.Prog` |
 | R3 | A signal that never receives a good frame still reaches `timeout`: an initial reception deadline is armed at bridge start (and on NM wake), since today's monitor only runs after a first frame (`comm/com/com.v`). | host e2e: sender absent from boot → `timeout` after the grace period |
 | R4 | A clear makes the prior generation obsolete: readings carrying a generation older than the one the clear requested are ignored until the producer acknowledges it, so an old-generation failure cannot recreate a cleared DTC. The old-generation drain applies to cycle transitions only. | unit: clear with a failed producer that publishes once more before observing the control |
-| R4 | Fault-memory ownership on a node with several servers: one fault memory per node, owned by one designated comm thread; every other server reaches it through request / result cells (0x19 / 0x14 forwarded), never by writing it. | host e2e with two connections on two buses reading and clearing the same DTC |
+| R4 | One diagnostic server per node, enforced at generation (R1 refuses several connections with DIDs; faults get the same gate), so the fault memory, the clear epoch and 0x85 each have exactly one owner. *(Replaces a multi-server ownership design that review showed widening the surface round after round.)* | generation test: a second connection with faults is refused |
 | R4 | 0x85 DTC-setting-off is restored to on when the session ends (explicit, S3, reset), like 0x28. | unit + e2e: set off, disconnect, faults record again after S3 |
 | R6 | Displacement is atomic across its two journal writes: the replacement is written first, and recovery resolves a temporary over-capacity set deterministically (lowest priority, then oldest, is the one dropped), so an interrupted displacement never loses both entries. | power-cut fuzz over the displacement sequence |
 | R6 | A freeze frame never becomes a side door around DID access: a snapshot may only name DIDs readable in every session 0x19 is served in without security, or 0x19 04 applies the strictest gate of the DIDs it contains — decided in R6, enforced at generation. | generation test: a gated DID in `freeze` is rejected (or the gate applies) |
 | R2 | A non-default diagnostic session holds NM awake (REQ-ECU-003): active sessions across the node's servers aggregate into a keep-awake request, released on return to default, S3 expiry and reset — diagnostic traffic is not an NM message and does not refresh NM on its own. | bench: extended session held across the NM timeout with application demand released |
 | R2 | The programming handoff is gated on application safety conditions (REQ-BOOT-015) — declared condition signals (e.g. stationary, supply stable) evaluated before the boot cell is written; failing → 0x22. | host + bench: denied while moving / under-voltage |
 | R2 | The session survives the handoff: `boot.Prog` starts in programming (not default) when the boot request cell caused its entry, so a tester that received 0x50 02 can proceed to 0x29 without a second 0x10 02. | bench: 0x10 02 → reset → 0x29 accepted |
-| R3 | An E2E sequence gap (`lost`) is visible to the application, not only counted: a published loss counter (or a degraded status) and a `[[fault]] on = "lost"` source (REQ-E2E-002). | host e2e: a single skipped counter reaches the FB and a DTC |
+| R3 | An E2E sequence gap (`lost`) is visible to the application, not only counted: a published loss counter (or a degraded status) (REQ-E2E-002). | host e2e: a single skipped counter reaches the FB |
+| R4 | … and it is a fault source: `[[fault]] on = "lost"`. | host e2e: a single skipped counter raises its DTC |
 | R4 | 0x85 has its own generation / acknowledgement like a clear, so the fault memory knows whether a counter delta happened before or during suppression — nothing recorded after the positive "off", no suppressed occurrence replayed after "on". | unit: off/on racing a producer faster than the reader |
 | R6 / R7 | Live state changes only after durability: a persisted 0x2E (parameters, `apply = "next_dispatch"`) and a persisted 0x14 stage their RAM change until the journal accepts the write; on refusal (0x72) both live and durable state are unchanged. | fault-injection tests asserting the current-run value, not only the stored one |
+| R0 | Physical diagnostic ids are unique per BUS, not per system: REQ-TOPO-002 and `tools/sysmodel/checks.v` (which today put every allocation and `[[isotp]]` id in one global map) are revised to key physical ids by bus and to allow a shared functional id. | syscheck tests: the same physical id on two separate buses passes; twice on one bus fails |
+| R4 | The tested state is lossless like the occurrences: a monotonic tested-count per fault (not a last-value `tested` flag), so a fast producer's single evaluation followed by `.not_tested` is never lost to the test-not-completed bits or aging. | unit: one evaluation then `.not_tested`, read once late |
+| R4 / R6 | Every list-producing 0x19 response fits the transport: generation bounds 0x19 02 / 0A (all DTCs × 4 B) and 03 (all snapshot ids) against the message limit with its header, and refuses a fault table that could exceed it. | generation test at the boundary |
+| R6 | Snapshot and extended-data records carry stable on-wire record numbers — snapshot record 0x01 per DTC (one snapshot per fault), extended data 0x01 occurrence counter, 0x02 aging counter — with 0xFF (all) supported, and the numbering carried in the manifest for the tester. | unit: 0x19 03 / 04 / 06 with explicit and 0xFF record numbers; N3 decodes them |
