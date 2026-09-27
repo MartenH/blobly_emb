@@ -915,6 +915,11 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\t\t\tp_${tp}.data[i] = rx.data[i]'
 				glue << '\t\t\t}'
 				glue << '\t\t\tst.tp_${tp}.on_frame(now, p_${tp})'
+				// a completed request is served BEFORE the frames queued behind it are judged: a 0x28
+				// in the FIFO must gate the application frames that follow it, not only the next pass's
+				glue << '\t\t\tif st.tp_${tp}.has_request() {'
+				glue << '\t\t\t\tbreak'
+				glue << '\t\t\t}'
 				glue << '\t\t}'
 				if c.functional_id != 0 {
 					// A FUNCTIONAL request is one single frame (ISO 15765-2: PCI 0x0N, N = 1..7 data
@@ -931,6 +936,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					glue << '\t\t\t\tst.fn_${tp}_len = fl_${tp}'
 					glue << '\t\t\t\tst.uds_${tp}.tick(now)'
 					glue << '\t\t\t\tst.uds_${tp}.note_request() // accepted now: a queued TesterPresent still keeps S3 alive'
+					glue << '\t\t\t\tbreak // served before the frames behind it, like a physical request'
 					glue << '\t\t\t}'
 					glue << '\t\t}'
 				}
@@ -977,6 +983,16 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					glue << did_signal_encode(tp, idx, '${f}_did.${si.val_field}', si.val_type)
 					glue << '\t}'
 				}
+				// ECUReset (0x11) is two-phase: the server answered and recorded it; the reset
+				// happens once the answer has left the link. On the host there is no platform reset,
+				// so it is the DIAGNOSTIC state that returns to power-on (session, security, 0x28);
+				// the target's controller-drained reset is R2 (docs/diagnostics.md §3.1).
+				glue << '\tif st.uds_${tp}.reset_req != 0 && !st.tp_${tp}.busy() { // the answer has left'
+				glue << '\t\tst.uds_${tp}.reset_state()'
+				if c.functional_id != 0 {
+					glue << '\t\tst.fn_${tp}_len = 0 // a request that arrived before the reset is not served after it'
+				}
+				glue << '\t}'
 				// ONE request at a time: a new request is taken only when the previous answer has left
 				// the link, so a pending ECUReset always belongs to the response in flight (the next
 				// request waits, reassembled, in the link — a tester waits for the answer anyway)
@@ -1009,18 +1025,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\t\tbreak'
 				glue << '\t\t}'
 				glue << '\t}'
-				// ECUReset (0x11) is two-phase: the server answered and recorded it; the reset
-				// happens once the answer has left the link. On the host there is no platform reset,
-				// so it is the DIAGNOSTIC state that returns to power-on (session, security, 0x28);
-				// the target's controller-drained reset is R2 (docs/diagnostics.md §3.1).
-				glue << '\tif st.uds_${tp}.reset_req != 0 && !st.tp_${tp}.busy() { // the answer has left'
-				glue << '\t\tst.uds_${tp}.reset_state()'
 				if c.functional_id != 0 {
-					glue << '\t\tst.fn_${tp}_len = 0 // a request that arrived before the reset is not served after it'
-				}
-				glue << '\t}'
-				if c.functional_id != 0 {
-					glue << '\tif st.fn_${tp}_len > 0 && st.tp_${tp}.idle() { // the waiting functional request: only on a link quiet both ways'
+					glue << '\tif st.fn_${tp}_len > 0 && st.tp_${tp}.idle() && st.uds_${tp}.reset_req == 0 { // the waiting functional request: only on a quiet link, never ahead of a pending reset'
 					glue << '\t\tfn_${tp} := st.uds_${tp}.handle_functional(&st.fn_${tp}_req[0], st.fn_${tp}_len, &st.uds_${tp}_resp[0])'
 					glue << '\t\tst.fn_${tp}_len = 0'
 					glue << '\t\tif fn_${tp} > 0 {'

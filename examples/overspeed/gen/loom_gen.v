@@ -133,6 +133,9 @@ fn io_can0_10ms(ctx voidptr) {
 				p_diag.data[i] = rx.data[i]
 			}
 			st.tp_diag.on_frame(now, p_diag)
+			if st.tp_diag.has_request() {
+				break
+			}
 		}
 		if rx.id == u32(0x7df) && !rx.ext && rx.len >= 2 && rx.data[0] >> 4 == 0 {
 			fl_diag := int(rx.data[0] & 0x0F)
@@ -143,6 +146,7 @@ fn io_can0_10ms(ctx voidptr) {
 				st.fn_diag_len = fl_diag
 				st.uds_diag.tick(now)
 				st.uds_diag.note_request() // accepted now: a queued TesterPresent still keeps S3 alive
+				break // served before the frames behind it, like a physical request
 			}
 		}
 	}
@@ -161,6 +165,10 @@ fn io_can0_10ms(ctx voidptr) {
 		st.uds_diag.dids[1].data[0] = u8(vehicle_speed_did.kph >> 8)
 		st.uds_diag.dids[1].data[1] = u8(vehicle_speed_did.kph)
 		st.uds_diag.dids[1].len = 2
+	}
+	if st.uds_diag.reset_req != 0 && !st.tp_diag.busy() { // the answer has left
+		st.uds_diag.reset_state()
+		st.fn_diag_len = 0 // a request that arrived before the reset is not served after it
 	}
 	diag_n := if st.tp_diag.busy() { 0 } else { st.tp_diag.take(&st.tp_diag_buf[0]) }
 	if diag_n > 0 {
@@ -185,11 +193,7 @@ fn io_can0_10ms(ctx voidptr) {
 			break
 		}
 	}
-	if st.uds_diag.reset_req != 0 && !st.tp_diag.busy() { // the answer has left
-		st.uds_diag.reset_state()
-		st.fn_diag_len = 0 // a request that arrived before the reset is not served after it
-	}
-	if st.fn_diag_len > 0 && st.tp_diag.idle() { // the waiting functional request: only on a link quiet both ways
+	if st.fn_diag_len > 0 && st.tp_diag.idle() && st.uds_diag.reset_req == 0 { // the waiting functional request: only on a quiet link, never ahead of a pending reset
 		fn_diag := st.uds_diag.handle_functional(&st.fn_diag_req[0], st.fn_diag_len, &st.uds_diag_resp[0])
 		st.fn_diag_len = 0
 		if fn_diag > 0 {

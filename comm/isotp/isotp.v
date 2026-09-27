@@ -129,6 +129,11 @@ pub fn (l Link) idle() bool {
 	return l.tx == .idle && l.rx != .receiving && !l.fc_send && !l.ready
 }
 
+// has_request reports that a completed message is waiting to be taken.
+pub fn (l Link) has_request() bool {
+	return l.ready
+}
+
 // take copies a completed message to `dst` and returns its length (0 if none).
 pub fn (mut l Link) take(dst &u8) int {
 	if !l.ready {
