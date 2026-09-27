@@ -1,0 +1,250 @@
+# Diagnostics — fault memory, the diagnostic server, parameters (plan)
+
+> Status: PLAN (2026-09-27), nothing below is built unless it says so. It joins three issues that
+> are one feature seen from three sides — #286 (rx status), #287 (faults → DTCs), #288 (parameters /
+> variant coding) — and the prerequisites none of them names. Requirements are derived from
+> SYS-REQ-DIAG-001 (agreed) in rung R0; until then this page is the shape to argue with.
+
+A production ECU is serviced through its diagnostic interface: the workshop reads what went wrong
+(DTCs with a snapshot of the conditions), clears it after the repair, and codes the vehicle variant.
+blobly_emb has the request/response plumbing for a handful of services and none of the rest. This
+page is the plan to close that, in rungs that each ship and verify on their own.
+
+## 1. Where we actually are
+
+| Piece | State | Where |
+|---|---|---|
+| UDS services | 0x10, 0x22, 0x2E, 0x3E only; everything else answers 0x11 | `comm/uds/uds.v` |
+| Session model | stored, never enforced; starts at 0 (never initialised) in generated code | `comm/uds/uds.v`, `tools/loom2v/gen_com.v` |
+| DIDs | 16 × ≤32 B static table; 0x22 reads the FIRST DID of a request only | `comm/uds/uds.v` |
+| NRCs | 0x11 0x12 0x13 0x22 0x31 (no 0x7E/0x7F/0x78/0x33/0x24) | `comm/uds/uds.v` |
+| Security access 0x27 | absent (the bootloader uses 0x29 authentication instead) | `boot/prog.v` |
+| UDS on the **target** | **none** — loom2v refuses `[[isotp]]` on a ThreadX node; only the bootloader serves UDS on silicon (hand-wired) | `tools/loom2v/gen.v` |
+| UDS config | `[[isotp]]` + `[[did]]` (ascii / bytes / signal / writable) | `tools/ecucheck/gen.v` |
+| Rx signal status | one `valid` bool, host bridge only; E2E/SecOC failures drop the frame silently; target rejects rx deadlines, E2E and `valid` ("phase 6b-2b") | `tools/loom2v/gen_com.v`, `gen.v` |
+| Fault memory / DTCs | **nothing** — no events, debouncing, status byte, 0x19, 0x14, 0x85 | — |
+| Persistence | journal engine + `persist = "now" / "shutdown"` signals, ThreadX only, one journal per node, 20 B records with 634 B chains; DID write path (NvM "P4") not built | `nvm/`, `tools/loom2v/gen_nvm.v` |
+| Operation cycle / ECU state | none wired; `ecu/` (lifecycle, mode arbiter) is an unused library; NM states exist | `ecu/`, `comm/nm/` |
+| Cross-thread transports | last-value cells only (seqlock / double / triple, xioc); `bulk` is the one FIFO | `osal/`, `boards/common/` |
+| Tester (blobly_net) | client: 0x19 sub 0x02 as raw bytes, no 0x14, no DTC model, no DTC view; its UDS sim answers 0x19/0x02 from a static list | `blobly_net modules/uds` |
+
+Three doc claims are ahead of the code and are corrected in R0: `docs/autosar-comparison.md` marks
+diagnostics "✅ have" (only the request/response half exists), `docs/communication.md` still calls the
+ISO-TP handler a positive-response echo next to "UDS ✅", and `docs/nvm.md` opens with "Nothing is
+built" while P1/P2 and chains are.
+
+## 2. Principles (the ones every rung is checked against)
+
+1. **Faults and parameters reach an FB through ports, not an API.** An FB writes a test result to an
+   Out field and reads a parameter from an In field — the same rule persistence follows
+   (`docs/nvm.md`: "persistence through signals, not an API"). No `SetEventStatus`, no return codes.
+2. **Diagnostics is a platform service, not an FB.** Like NM, trace and NvM, the diagnostic server
+   and the fault memory are modules the generator splices into the **comm thread** — the one owner of
+   the bus, the journal and (now) the fault memory, so none of them needs a lock.
+3. **Everything is declared in `ecu.toml`, validated at generation, and cross-checked by syscheck**
+   (DTC numbers, DIDs and diagnostic addresses unique per system).
+4. **No heap, fixed tables sized at generation**, the same as every runtime layer.
+5. **Sim first, then silicon, and a tester to prove it.** Each rung has a host proof, and the target
+   rungs end on `examples/system_full` driven from blobly_net over the CANsub. blobly_net is the
+   *oracle*, not shared code (`blobly_net docs/blobly_emb_synergies.md`), so the plan carries tester
+   rungs of its own (§5).
+6. **Our own words.** "diagnostic server", "fault", "fault memory", "test result", "operation cycle"
+   — not DCM/DEM/monitor/event names as ours.
+
+## 3. Design
+
+### 3.1 The diagnostic server (UDS, ISO 14229-1)
+
+`comm/uds` grows from a request echo into a server with a **service table generated from config**:
+
+```toml
+[diag]
+bus        = "compute"          # the ISO-TP connection(s) it serves ([[isotp]] stays)
+functional = 0x7DF              # optional functional request id
+s3_ms      = 5000
+p2_ms      = 50
+p2x_ms     = 5000
+
+[[did]]
+id      = 0xF190
+ascii   = "BLOBLY0000000001"
+read    = { session = ["default", "extended"] }
+[[did]]
+id      = 0xF1A0
+signal  = "VehicleSpeed"
+[[did]]
+id      = 0x0100
+param   = "TrailerBrakeFitted"  # §3.4
+write   = { session = ["extended"], security = 1 }
+```
+
+What it adds, all table-driven so an unsupported path answers the right NRC rather than a guess:
+
+- **Sessions** default (01) / extended (03) / programming (02, handed to the bootloader), **starting
+  in default**, S3 return-to-default, and per-service and per-DID session gating → NRC 0x7F / 0x7E /
+  0x31 / 0x22 per ISO 14229-1's NRC-evaluation order.
+- **Multi-DID 0x22** (several DIDs per request, response-size checked → 0x14 responseTooLong).
+- **Functional addressing**, with the suppress-positive-response rules and NRC 0x11/0x12/0x31
+  suppression that functional requests require.
+- **Response pending (0x78)** for anything that waits on flash (0x2E of a persisted DID, 0x14): the
+  server answers 0x78 inside P2 and completes within P2*; the comm thread never blocks.
+- **0x27 SecurityAccess** with seed from the board TRNG, attempt counter + delay (0x35/0x36/0x37), and
+  the key check behind a **board/OEM seam** (a C function the board glue provides), with a documented
+  reference algorithm for the sim. 0x29 stays the bootloader's programming authentication.
+- **0x11 ECUReset** (hard / soft) through the platform reset path, **0x28 CommunicationControl**
+  (gates COM tx the way NM already does), **0x85 ControlDTCSetting** (§3.3), **0x31 RoutineControl**
+  for declared routines.
+- The bootloader's `Prog` keeps composing `uds.Server`, so it inherits session/NRC fixes for free.
+
+It runs on the **target** as a comm-thread module — which first means lifting the ThreadX refusal of
+`[[isotp]]` (R2): ISO-TP links in the comm thread, rx by id, tx `tx_ready`-gated, exactly as the trace
+dump already streams ISO-TP from that thread.
+
+### 3.2 Rx status (#286)
+
+The reserved `valid` bool becomes a status the bridge owns and publishes with the value — still one
+field, still no API:
+
+```v
+pub enum RxStatus { ok never_received timeout integrity }
+```
+
+`never_received` until the first good decode, `timeout` past the deadline, `integrity` on an E2E or
+SecOC failure (latched until the next good frame), and E2E `lost` counted rather than hidden. It is
+both an FB input (substitute vs. safety reaction are different responses) and a **fault source**: a
+signal can declare its own DTCs for timeout and integrity with no FB code (§3.3), because the bridge
+is the detector. The target half needs the comm thread to run rx deadlines and E2E/SecOC — the
+"phase 6b-2b" gap loom2v names today — so #286 lands host first and target in its own rung (R5).
+
+### 3.3 Faults and fault memory (#287)
+
+**Declaration.**
+
+```toml
+[[fault]]
+name     = "BrakePressureImplausible"
+dtc      = 0x512300                                 # C1230-00: 3-byte DTC, ISO 14229-1 D.1
+from     = "BrakeCtrl"                              # the FB that tests it
+debounce = { kind = "counter", fail = 3, pass = 5 } # or { kind = "time", fail_ms, pass_ms }
+enable   = ["SupplyOk.ok"]                          # enable conditions = bool signal fields
+freeze   = ["VehicleSpeed", "BrakePressure"]        # snapshot = signals
+confirm  = 1                                        # failed operation cycles to confirm
+aging    = 40                                       # passing cycles before a confirmed DTC ages out
+priority = 2                                        # for displacement when memory is full
+
+[[fault]]
+name     = "SpeedMsgTimeout"
+dtc      = 0xC10000             # U0100-00 (lost communication)
+signal   = "VehicleSpeed"   # detector = the bridge: rx status timeout (§3.2), no FB code
+on       = "timeout"        # or "integrity"
+```
+
+**The FB side** is one generated Out field per fault it owns:
+`outp.fault.brake_pressure_implausible = .failed` (or `.passed`; untouched = `.not_tested`). That is
+the *pre-debounce* result.
+
+**Debounce runs on the producing thread**, generated into the Loom right after the handler, every
+dispatch — a pre-debounce result must never cross a last-value cell, because a consumer that reads
+slower than the FB writes would miss results and an alternating fail/pass would never reach its
+threshold. What crosses to the fault memory is the **debounced state plus monotonic counters** in an
+ordinary IOC cell: `{ test_failed, qualified_fail_count, qualified_pass_count, tested }`. The
+consumer turns counter deltas into occurrences, so nothing is lost across a slow read and **no queued
+transport is needed** (the alternative, a per-thread event FIFO on the `bulk` rings, is the fallback
+if a use case needs the exact order of qualifications — decision D1).
+
+**The fault memory** is a comm-thread module (decision D2), the single writer of:
+
+- the **ISO 14229-1 status byte** per DTC — bit 0 testFailed, 1 testFailedThisOperationCycle,
+  2 pendingDTC, 3 confirmedDTC, 4 testNotCompletedSinceLastClear, 5 testFailedSinceLastClear,
+  6 testNotCompletedThisOperationCycle, 7 warningIndicatorRequested — with the availability mask
+  generated from what the ECU supports;
+- the **operation cycle** — begins on NM wake and ends on bus-sleep by default, or on an explicit
+  declared signal (e.g. an ignition input) (decision D3); cycle boundaries age and qualify entries;
+- **entries**: DTC, status, occurrence counter, aging counter, first/last failure cycle, and the
+  **freeze frame** — the named signals captured when the fault qualifies as failed (within one comm-
+  thread pass of the qualifying dispatch; the latency is stated, not hidden);
+- **extended data records** (occurrence and aging counters) and **displacement** by priority, then
+  age, when the memory is full;
+- **suppression**: enable conditions (signals), 0x85 DTCSettingType off, and — through the same
+  signal mechanism — under-voltage.
+
+**Storage** is the existing journal (decision D4): small status/counter records per DTC, freeze
+frames as **chained records** (built, up to 634 B), in the same engine; a separate sector region stays
+available purely for wear isolation. This resolves the contradiction inside `docs/nvm.md`, which both
+prefers a second wide-record journal and says chains dissolve it — chains exist now, so the second
+journal is not needed. Writes are event-driven (qualification, cycle end, clear), never cyclic, and
+ride the same bus-sleep flush choreography as persisted signals.
+
+**UDS side:** 0x19 subfunctions **0x01** (count by mask), **0x02** (DTCs by mask), **0x03** (snapshot
+identification), **0x04** (snapshot by DTC), **0x06** (extended data by DTC), **0x0A** (supported
+DTCs); **0x14** ClearDiagnosticInformation (group 0xFFFFFF and per-DTC, 0x78 while the journal
+writes); **0x85** ControlDTCSetting on/off.
+
+**System level:** syscheck rejects a DTC number used twice in a system and a freeze-frame signal the
+node cannot read; the `.blobnet` manifest carries the DTC table so the tester names DTCs without a
+separate description file.
+
+### 3.4 Parameters / variant coding (#288)
+
+```toml
+[[param]]
+name    = "TrailerBrakeFitted"
+type    = "bool"             # or fields, like [[signal]]
+default = false              # compiled in; used until coded
+to      = ["BrakeCtrl"]
+did     = 0x0100             # the [[did]] above names it with `param =`
+range   = { min = 0, max = 1 }   # validated at 0x2E → NRC 0x31 before storage
+apply   = "next_dispatch"    # or "reset" for parameters that shape start-up
+```
+
+The consumer sees a **read-only In field**, indistinguishable from a signal that never changes. The
+value is a persisted record with a compiled default; the write path is the DID binding NvM calls P4
+("writable DIDs backed by blocks"), which is **built first** in this rung — it does not exist yet.
+Parameters are runtime-only: generation stays one binary for all variants.
+
+## 4. Rungs
+
+Each rung ships as its own PR(s), with requirements first (`requirements/diag.toml`), a host proof,
+and — from R2 on — a bench verification on `examples/system_full` recorded in
+`requirements/verifications.toml`.
+
+| Rung | Scope | Proof | Depends on |
+|---|---|---|---|
+| **R0** | Requirements for everything below (REQ-DIAG-*); correct the three over-claiming docs; decide D1–D6 | `make trace-check` | — |
+| **R1** | Server core on the host: `[diag]`, sessions from default + S3, gating tables, NRC set + evaluation order, multi-DID 0x22, functional addressing, 0x78 plumbing, 0x11, 0x28 | unit tests + `examples/overspeed` e2e vs the blobly_net client | R0 |
+| **R1b** | 0x27 SecurityAccess with the board key seam + reference algorithm | unit tests; e2e | R1 |
+| **R2** | UDS on the **target**: `[[isotp]]` on the ThreadX comm thread | bench: sessions, DIDs, 0x27 on `system_full` domain via CANsub | R1 |
+| **R3** | Rx status (#286) on the host: `RxStatus`, bridge-owned, integrity latch, E2E `lost` counter; `valid` migrated | host e2e (timeout / integrity / never_received) | R0 |
+| **R4** | Faults on the host: `[[fault]]`, FB fault port, generated debounce, fault memory in RAM, status byte, operation cycle, enable conditions, 0x19 01/02/0A, 0x14, 0x85; signal-status faults from R3; syscheck DTC uniqueness | host e2e: fail → pending → confirmed → cleared → aged | R1, R3 |
+| **R5** | Target COM checks ("phase 6b-2b"): rx deadlines + E2E/SecOC on the comm thread, so R3's status and signal-status faults exist on silicon | bench: pull a sender, corrupt a frame | R2, R3 |
+| **R6** | Fault memory persisted + freeze frames + extended data + displacement; 0x19 03/04/06; faults on the target | bench: fault, power-cycle, read back with snapshot; clear with 0x78 | R2, R4 |
+| **R7** | Parameters (#288): NvM P4 DID write path, `[[param]]`, range check, `apply` | bench: code a variant, reset, FB sees it | R1b, R2 |
+
+R3 and R1 can run in parallel; R5 and R6 can run in parallel after R2.
+
+**blobly_net rungs** (in blobly_net, sequenced to land just before the emb rung that needs them):
+
+| Rung | Scope | Needed by |
+|---|---|---|
+| N1 | Client: 0x19 01/02/0A decoded into a DTC model with named status bits, 0x14, 0x85, 0x11, 0x28, NRC names completed; Lua `uds.read_dtcs/clear_dtcs`; `check.dtc(...)` | R4 |
+| N2 | 0x19 03/04/06 (snapshot + extended data) decoded against the manifest's DTC table | R6 |
+| N3 | GUI: a DTC view in the Diagnostics panel (read, clear, snapshot) | R6 (not blocking) |
+| N4 | 0x27 client with the reference key algorithm; functional addressing | R1b |
+
+## 5. Decisions to make in R0
+
+| # | Decision | Recommendation | Why |
+|---|---|---|---|
+| D1 | How debounced results cross threads | monotonic counters in a last-value IOC cell | no new transport; lossless for occurrences; the `bulk` FIFO remains the fallback |
+| D2 | Where the fault memory runs | the comm thread | it already owns the journal and the bus; one writer, no lock |
+| D3 | Operation cycle source | NM wake → bus-sleep by default; an explicit signal when declared | works on every NM node with no config; ignition-driven ECUs name their input |
+| D4 | Freeze-frame storage | chained records in the existing journal | built and fuzz-proven; resolves the `docs/nvm.md` contradiction |
+| D5 | Security-access key | a board/OEM C seam + a reference algorithm for sim and bench | real keys are OEM secrets; the stack must not bake one in |
+| D6 | First 0x19 subfunctions | 01, 02, 0A in R4; 03, 04, 06 with persistence in R6 | what a workshop reads first; snapshots need storage to mean anything |
+
+## 6. Out of scope (said so that nobody assumes it)
+
+OBD / emissions services (0x01–0x0A modes, readiness monitors) and J1939 DM1 — declared separately if
+an application needs them; ODX/PDX import (the manifest carries what the tester needs); 0x2F
+InputOutputControl and 0x23/0x3D memory access; DoIP diagnostics beyond what `comm/doip` already
+carries (the server in §3.1 is transport-independent, so DoIP inherits it later).

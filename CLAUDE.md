@@ -12,7 +12,8 @@ A lean alternative to AUTOSAR Classic — app components with typed ports + peri
 handlers, wired by the **Loom**, over a comms stack we own. **Start with
 `docs/architecture.md`** for how the pieces fit. See `docs/` for the deeper
 rationale (`no-alloc.md`, `memory-protection.md`, `multicore-perf.md`,
-`threadx-amp.md`, `communication.md`, `autosar-comparison.md` — which RTE/COM
+`threadx-amp.md`, `communication.md`, `diagnostics.md` — the fault-memory / diagnostic-server
+plan (#286–#288) — `autosar-comparison.md` — which RTE/COM
 patterns we keep, plan, or skip — `ways-of-working.md` — how many teams + a
 weekly DBC stay in sync via the signal-name contract — and `porting.md` — the
 CAN/OSAL backend seam for a new target).
