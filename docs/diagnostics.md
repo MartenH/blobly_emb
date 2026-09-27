@@ -56,7 +56,9 @@ built" while P1/P2 and chains are.
    separate buses is fine), while a *functional* id is deliberately SHARED by every server on its bus;
    DIDs and DTC numbers are unique per *server* — every
    ECU may expose the VIN DID 0xF190, and the same DTC value can mean something on two separately
-   addressed servers. The manifest keys them by node plus identifier.
+   addressed servers. A node has one server per `[[isotp]]` connection, so every `[[did]]` and
+   `[[fault]]` names its server (`server = "<connection>"`, implied when the node has only one); the
+   manifest and the checks key them by node, server and identifier.
 4. **No heap, fixed tables sized at generation**, the same as every runtime layer.
 5. **Sim first, then silicon, and a tester to prove it.** Each rung has a host proof, and the target
    rungs end on `examples/system_full` driven from blobly_net over the CANsub. blobly_net is the
@@ -165,7 +167,7 @@ is the detector. The target half needs the comm thread to run rx deadlines and E
 [[fault]]
 name     = "BrakePressureImplausible"
 dtc      = 0x523000                                 # C1230-00: 3-byte DTC, ISO 14229-1 D.1
-from     = "BrakeCtrl"                              # the FB that tests it
+from     = "BrakeCtrl.on_10ms"                      # the HANDLER that tests it (an FB may have several)
 debounce = { kind = "counter", fail = 3, pass = 5 } # or { kind = "time", fail_ms, pass_ms }
 enable   = ["SupplyOk.ok"]                          # enable conditions = bool signal fields
 freeze   = [0xF1A0, 0xF1A1]                          # snapshot = declared [[did]]s (DID/data pairs in 0x19 04)
@@ -209,9 +211,10 @@ readers is not an option): a *clear generation* **per fault** (a per-DTC 0x14 bu
 generations, 0x14 FFFFFF and cycle start bump them all; a bump resets that fault's counters and
 debounced state, and the producer echoes it as `applied_gen`), and a *suppressed* flag (0x85 off).
 A cycle start must not lose the old cycle's tail: before applying a new generation the producer
-**publishes a final snapshot of the old one**, and only the next publication carries the new
-`applied_gen`. The fault memory attributes whatever the old-generation reading holds to the cycle
-that is ending, so a failure right at the boundary is counted once, in the right cycle. The
+**keeps publishing the old generation until the fault memory has acknowledged reading it** (the
+control cell echoes the last old-generation reading consumed), and only then applies the new one —
+a last-value cell can overwrite a single final publication before it is read, so a handshake, not a
+one-shot, closes the boundary. A failure at the edge is counted once, in the cycle that is ending. The
 per-fault generations are bounded by the cell too, which caps the faults one thread may own. A
 producer on a **satellite core** needs the same cell to flow owner → satellite, which the target does
 not support today (loom2v rejects any signal INTO a satellite partition); R6 adds that reverse xioc
@@ -234,7 +237,9 @@ counting instead of qualifying the moment the condition returns.
   **freeze frame** — the `snapshot` the producer captured at qualification (above), serialised as the
   declared DIDs' records, which is what 0x19 04 returns and what the tester decodes;
 - **extended data records** (occurrence and aging counters) and **displacement** by priority, then
-  age, when the memory is full;
+  age, when the memory is full — persisted as a **tombstone** of the evicted entry written before its
+  replacement (the journal has no delete, so an evicted entry would otherwise come back at the next
+  mount); on recovery a tombstone wins over the entry it names;
 - **suppression**: enable conditions (signals), 0x85 DTCSettingType off, and — through the same
   signal mechanism — under-voltage.
 
@@ -243,7 +248,10 @@ freeze frame — is ONE value, a **chained record** (built, up to 634 B) replace
 journal is power-loss-atomic per value, so an entry is always one coherent version; splitting status
 and snapshot into separate values would let a power loss between the two writes restore new status
 with an old or missing snapshot. Writes happen at qualification, cycle end and clear, so rewriting the
-entry whole costs little wear. Each entry's block id is **derived, not assigned by declaration
+entry whole costs little wear. A group clear (0x14 FFFFFF) must not be half-visible after a failed
+write, so it is ONE value: a persisted **clear epoch**, which every entry records when written; on
+restore an entry older than the epoch counts as cleared, and the stale rows are compacted away later.
+A per-DTC clear is a single entry write, atomic already. Each entry's block id is **derived, not assigned by declaration
 order**: from the server, the DTC and a hash of the entry's serialized schema, with collision
 handling — the rule `docs/nvm.md` already applies to persisted signals, so a firmware update that
 reorders faults or changes a snapshot cannot restore one DTC's evidence into another. The entry also
