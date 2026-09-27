@@ -310,6 +310,20 @@ fn test_s3_runs_from_a_request_at_time_zero() {
 	assert s.session == session_default, 'a request at t=0 left S3 unarmed'
 }
 
+// S3 does not run while the owner's link is busy: a long answer (a large STmin) holds it, and it
+// counts from the last busy tick, not from the request.
+fn test_hold_s3_keeps_the_session_through_a_long_transfer() {
+	mut s := started()
+	s.tick(0)
+	assert call(mut s, [u8(0x10), 0x03])[0] == 0x50
+	s.tick(default_s3_us)
+	s.hold_s3() // still sending the answer
+	s.tick(2 * default_s3_us)
+	assert s.session == session_extended, 'S3 ran during a busy transfer'
+	s.tick(2 * default_s3_us + 1)
+	assert s.session == session_default, 'S3 did not restart from the end of the transfer'
+}
+
 // 0x2E follows its own ISO flow: security is checked before the record length.
 fn test_write_security_precedes_record_length() {
 	mut s := started()

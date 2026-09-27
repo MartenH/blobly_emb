@@ -118,12 +118,14 @@ fn io_can0_10ms(ctx voidptr) {
 	mut diag_rx_ok := st.uds_diag.rx_enabled()
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
-		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false && diag_rx_ok {
-			mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), valid: true }
-			osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
-			mut engine_speed := sig.EngineSpeed{ rpm: u16(powertrain_engine_speed_phys(rx.data)), valid: true }
-			osal.ioc_publish2(engine_speed_ch, &engine_speed, u8(sizeof(engine_speed)))
-			st.rx_powertrain_st.on_receive(now)
+		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false {
+			if diag_rx_ok {
+				mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), valid: true }
+				osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
+				mut engine_speed := sig.EngineSpeed{ rpm: u16(powertrain_engine_speed_phys(rx.data)), valid: true }
+				osal.ioc_publish2(engine_speed_ch, &engine_speed, u8(sizeof(engine_speed)))
+				st.rx_powertrain_st.on_receive(now)
+			}
 		}
 		if rx.id == u32(0x101) && !rx.ext {
 			mut p_diag := isotp.Pdu{}
@@ -138,6 +140,12 @@ fn io_can0_10ms(ctx voidptr) {
 		if rx.id == u32(0x7df) && !rx.ext && rx.len >= 2 && rx.data[0] >> 4 == 0 {
 			fl_diag := int(rx.data[0] & 0x0F)
 			if fl_diag >= 1 && fl_diag <= 7 && fl_diag < int(rx.len) && st.tp_diag.idle() && st.uds_diag.reset_req == 0 { // <= 7: a CAN-FD frame may claim more
+				mut vehicle_speed_did := sig.VehicleSpeed{}
+				if osal.ioc_acquire2(vehicle_speed_ch, &vehicle_speed_did, u8(sizeof(vehicle_speed_did))) {
+					st.uds_diag.dids[1].data[0] = u8(vehicle_speed_did.kph >> 8)
+					st.uds_diag.dids[1].data[1] = u8(vehicle_speed_did.kph)
+					st.uds_diag.dids[1].len = 2
+				}
 				fn_diag := st.uds_diag.handle_functional(&rx.data[1], fl_diag, &st.uds_diag_resp[0])
 				if fn_diag > 0 && !st.tp_diag.send(&st.uds_diag_resp[0], fn_diag) {
 					st.uds_diag.reset_req = 0 // never reset unanswered
@@ -178,6 +186,9 @@ fn io_can0_10ms(ctx voidptr) {
 			st.uds_diag.reset_req = 0 // its answer is lost: never reset unanswered
 			break
 		}
+	}
+	if !st.tp_diag.idle() {
+		st.uds_diag.hold_s3() // S3 runs only once the exchange is over (ISO 14229-2)
 	}
 	diag_rx_ok = st.uds_diag.rx_enabled()
 	if diag_rx_ok && st.diag_rx_was_off {

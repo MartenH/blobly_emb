@@ -845,8 +845,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				// require the received length to match the PDU DLC — recv copies only
 				// the actual bytes into the reused frame, so a short same-id frame
 				// would otherwise be decoded over stale trailing bytes.
-				rx_gate := if conns.len > 0 { ' && diag_rx_ok' } else { '' }
-				glue << '\t\tif rx.id == ${msg}_id && rx.len == ${msg}_dlc && rx.ext == ${msg_ext[msg]}${rx_gate} {'
+				glue << '\t\tif rx.id == ${msg}_id && rx.len == ${msg}_dlc && rx.ext == ${msg_ext[msg]} {'
 				e2e := m.frames.e2e_here(msg, bname)
 				secoc := m.frames.secoc_here(msg, bname)
 				// protected frames are decoded only if the check passes; a bad frame
@@ -879,6 +878,13 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					}).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }}).usable() {'
 					ind = '\t\t\t\t'
 				}
+				// 0x28 gates only what the application SEES: the protection checks above still run
+				// on every frame, so SecOC freshness and the E2E counter keep tracking the sender and
+				// the first frame after rx is re-enabled is not judged a replay or a loss burst.
+				if conns.len > 0 {
+					glue << '${ind}if diag_rx_ok {'
+					ind += '\t'
+				}
 				for sname in list {
 					si := m.sig_of[sname] or { continue }
 					fld := snake(sname)
@@ -894,6 +900,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				}
 				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 					glue << '${ind}st.rx_${msg}_st.on_receive(now)'
+				}
+				if conns.len > 0 {
+					glue << '${ind[1..]}}'
 				}
 				if secoc || e2e {
 					glue << '\t\t\t}'
@@ -926,6 +935,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					glue << '\t\tif rx.id == u32(0x${c.functional_id.hex()}) && !rx.ext && rx.len >= 2 && rx.data[0] >> 4 == 0 {'
 					glue << '\t\t\tfl_${tp} := int(rx.data[0] & 0x0F)'
 					glue << '\t\t\tif fl_${tp} >= 1 && fl_${tp} <= 7 && fl_${tp} < int(rx.len) && st.tp_${tp}.idle() && st.uds_${tp}.reset_req == 0 { // <= 7: a CAN-FD frame may claim more'
+					glue << did_refresh(m, tp, '\t\t\t\t') // current values, as a physical read gets
 					glue << '\t\t\t\tfn_${tp} := st.uds_${tp}.handle_functional(&rx.data[1], fl_${tp}, &st.uds_${tp}_resp[0])'
 					glue << '\t\t\t\tif fn_${tp} > 0 && !st.tp_${tp}.send(&st.uds_${tp}_resp[0], fn_${tp}) {'
 					glue << '\t\t\t\t\tst.uds_${tp}.reset_req = 0 // never reset unanswered'
@@ -940,17 +950,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			// request, drain the segmented response.
 			for c in conns {
 				tp := snake(c.name)
-				for idx, did in m.dids {
-					if did.signal == '' {
-						continue
-					}
-					si := m.sig_of[did.signal] or { continue }
-					f := snake(did.signal)
-					glue << '\tmut ${f}_did := sig.${did.signal}{}'
-					glue << '\tif osal.${acquire_fn(si.transport)}(${f}_ch, &${f}_did, u8(sizeof(${f}_did))) {'
-					glue << did_signal_encode(tp, idx, '${f}_did.${si.val_field}', si.val_type)
-					glue << '\t}'
-				}
+				glue << did_refresh(m, tp, '\t')
 				// ECUReset (0x11) is two-phase: the server answered and recorded it; the reset
 				// happens once the answer has left the link. On the host there is no platform reset,
 				// so it is the DIAGNOSTIC state that returns to power-on (session, security, 0x28);
@@ -994,6 +994,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\t\tst.uds_${tp}.reset_req = 0 // its answer is lost: never reset unanswered'
 				glue << '\t\t\tbreak'
 				glue << '\t\t}'
+				glue << '\t}'
+				glue << '\tif !st.tp_${tp}.idle() {'
+				glue << '\t\tst.uds_${tp}.hold_s3() // S3 runs only once the exchange is over (ISO 14229-2)'
 				glue << '\t}'
 			}
 		}
@@ -1732,4 +1735,24 @@ fn emit_eth_rpc_branch(m Model) []string {
 	glue << '\t\t\t\tcontinue'
 	glue << '\t\t\t}'
 	return glue
+}
+
+// did_refresh emits the live-signal DID refresh for connection `tp`, at indent `ind`: every read
+// of a signal-backed DID — physical or functional — answers with the value current at dispatch.
+fn did_refresh(m Model, tp string, ind string) []string {
+	mut out := []string{}
+	for idx, did in m.dids {
+		if did.signal == '' {
+			continue
+		}
+		si := m.sig_of[did.signal] or { continue }
+		f := snake(did.signal)
+		out << '${ind}mut ${f}_did := sig.${did.signal}{}'
+		out << '${ind}if osal.${acquire_fn(si.transport)}(${f}_ch, &${f}_did, u8(sizeof(${f}_did))) {'
+		for l in did_signal_encode(tp, idx, '${f}_did.${si.val_field}', si.val_type).split('\n') {
+			out << ind + '\t' + l.trim_left('\t')
+		}
+		out << '${ind}}'
+	}
+	return out
 }
