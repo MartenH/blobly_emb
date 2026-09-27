@@ -47,7 +47,7 @@ built" while P1/P2 and chains are.
    (`docs/nvm.md`: "persistence through signals, not an API"). No `SetEventStatus`, no return codes.
 2. **Diagnostics is a platform service, not an FB.** Like NM, trace and NvM, the diagnostic server
    and the fault memory are modules the generator splices into a comm thread — **one** of them: the
-   comm thread of the image that serves `[diag].bus` (on the host, that bus's bridge). It is the single
+   comm thread of the image that serves the node's one `[[isotp]]` connection's bus (on the host, that bus's bridge). It is the single
    writer of the fault memory and, on the target, already the owner of the journal. Every other
    detector — a bridge on another bus, an FB thread, the satellite core — reaches it through ordinary
    IOC / xioc cells it alone reads, so the single-writer rule holds without a lock.
@@ -307,7 +307,7 @@ and — from R2 on — a bench verification on `examples/system_full` recorded i
 | Rung | Scope | Proof | Depends on |
 |---|---|---|---|
 | **R0** | Requirements for everything below (REQ-DIAG-*); correct the three over-claiming docs; decide D1–D6 | `make trace-check` | — |
-| **R1** | Server core on the host: `[diag]`, sessions from default + S3, gating tables, NRC set + evaluation order, multi-DID 0x22, functional addressing, 0x78 plumbing, 0x11, 0x28 | unit tests + `examples/overspeed` e2e vs the blobly_net client | R0, N1 |
+| **R1** | Server core on the host: `[[isotp]]` server settings (`functional_id`, `s3_ms`), sessions from default + S3, gating tables, NRC set + evaluation order, multi-DID 0x22, functional addressing, 0x11, 0x28 (0x78 arrives with the first service that waits on flash, R6/R7) | unit tests + `examples/overspeed` e2e vs the blobly_net client | R0, N1 |
 | **R1b** | 0x27 SecurityAccess with the board key seam + blobly_net's reference key | unit tests; e2e with the existing net 0x27 client | R1 |
 | **R2** | UDS on the **target**: `[[isotp]]` on the ThreadX comm thread; 0x11 with the bounded controller drain; the programming-session handoff into the bootloader | bench: sessions, DIDs, 0x27 (incl. reset between failed attempts), 0x11 answered then reset, app → boot handoff, on `system_full` domain via CANsub | R1, R1b |
 | **R3** | Rx status (#286) on the host: `RxStatus`, bridge-owned, integrity latch, E2E `lost` counter; `valid` migrated | host e2e (timeout / integrity / never_received) | R0 |
@@ -384,3 +384,7 @@ done until its obligations hold under their tests. §3 fixes the shape; this tab
 | R7 | Parameters get the entries' identity rules: a stable, schema-derived, collision-handled block id in the prune keep-set, so a firmware update that reorders or adds parameters never restores one parameter's bytes into another. | power-cycle across a reordering update |
 | R7 | A restored parameter is revalidated against the CURRENT range before the FB first sees it; out of range → the compiled default (and a flag the tester can read), so a range narrowed by an update is never bypassed. | update test narrowing a range below a stored value |
 | R6 | Signal-status faults (timeout / integrity / lost) raise their DTCs on silicon — moved here from R5, which proves only the FB-visible status. | bench: pull a sender → its DTC reads back over 0x19 |
+| R2 | NM stays awake for a diagnostic exchange in ANY session: a request-scoped keep-awake vote from the first frame of a request until its final response has drained (diagnostic frames do not refresh NM), in addition to the session-scoped vote. | bench: a multi-frame 0x22 in the default session started near the NM timeout completes |
+| R3 / R5 | An E2E-protected signal detects total sender loss inside the E2E mechanism itself (REQ-E2E-002): `e2e.RxState` gains its own deadline (`on_valid` / `expired`) and publishes the loss, independent of the QM COM deadline. | host (R3) and bench (R5): sender removed, loss seen with the COM deadline disabled |
+| R6 | The operation-cycle END is a barrier too: before the sleep flush marks the journal clean, the fault memory waits for every producer to acknowledge the ending generation and persists what it read — power can be removed with no next cycle to drain the tail. | power-off right after bus sleep with a qualification in the last dispatch |
+| R6 | Persistent diagnostic counters have fixed serialized widths and SATURATE (occurrence, failed-cycle, aging); they never wrap to a small value. | unit: increment at the maximum |
