@@ -343,3 +343,21 @@ an application needs them; ODX/PDX import (the manifest carries what the tester 
 InputOutputControl, 0x23/0x3D memory access, and generic 0x31 RoutineControl (the bootloader keeps
 its own erase / check routines); DoIP diagnostics beyond what `comm/doip` already
 carries (the server in §3.1 is transport-independent, so DoIP inherits it later).
+
+## 7. Obligations carried into the rungs
+
+Review of this plan kept finding real holes at the *mechanism* level — handshakes across threads,
+crash windows between journal writes, edge-of-time cases. They are recorded here, each against the
+rung that must meet it and the test that proves it, rather than solved in prose above: a rung is not
+done until its obligations hold under their tests. §3 fixes the shape; this table is its checklist.
+
+| Rung | Obligation | Proved by |
+|---|---|---|
+| R1 | Leaving a non-default session — explicitly, by S3, or by ECU reset — restores communication (0x28) to enabled. *Met in R1.* | unit + vcan: disable tx, return to default / let S3 expire / reset, frames resume |
+| R2 | The programming handoff is offered only by a server whose bus and addresses the bootloader serves (today: CAN 0, 0x7B0 / 0x7B8 in the boot images), validated at generation; any other server refuses 0x10 02. | generation test on a mismatched config; bench: handoff reaches `boot.Prog` |
+| R3 | A signal that never receives a good frame still reaches `timeout`: an initial reception deadline is armed at bridge start (and on NM wake), since today's monitor only runs after a first frame (`comm/com/com.v`). | host e2e: sender absent from boot → `timeout` after the grace period |
+| R4 | A clear makes the prior generation obsolete: readings carrying a generation older than the one the clear requested are ignored until the producer acknowledges it, so an old-generation failure cannot recreate a cleared DTC. The old-generation drain applies to cycle transitions only. | unit: clear with a failed producer that publishes once more before observing the control |
+| R4 | Fault-memory ownership on a node with several servers: one fault memory per node, owned by one designated comm thread; every other server reaches it through request / result cells (0x19 / 0x14 forwarded), never by writing it. | host e2e with two connections on two buses reading and clearing the same DTC |
+| R4 | 0x85 DTC-setting-off is restored to on when the session ends (explicit, S3, reset), like 0x28. | unit + e2e: set off, disconnect, faults record again after S3 |
+| R6 | Displacement is atomic across its two journal writes: the replacement is written first, and recovery resolves a temporary over-capacity set deterministically (lowest priority, then oldest, is the one dropped), so an interrupted displacement never loses both entries. | power-cut fuzz over the displacement sequence |
+| R6 | A freeze frame never becomes a side door around DID access: a snapshot may only name DIDs readable in every session 0x19 is served in without security, or 0x19 04 applies the strictest gate of the DIDs it contains — decided in R6, enforced at generation. | generation test: a gated DID in `freeze` is rejected (or the gate applies) |
