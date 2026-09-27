@@ -145,7 +145,7 @@ dtc      = 0x523000                                 # C1230-00: 3-byte DTC, ISO 
 from     = "BrakeCtrl"                              # the FB that tests it
 debounce = { kind = "counter", fail = 3, pass = 5 } # or { kind = "time", fail_ms, pass_ms }
 enable   = ["SupplyOk.ok"]                          # enable conditions = bool signal fields
-freeze   = ["VehicleSpeed", "BrakePressure"]        # snapshot = signals
+freeze   = [0xF1A0, 0xF1A1]                          # snapshot = declared [[did]]s (DID/data pairs in 0x19 04)
 confirm  = 1                                        # failed operation cycles to confirm
 aging    = 40                                       # passing cycles before a confirmed DTC ages out
 priority = 2                                        # for displacement when memory is full
@@ -165,10 +165,16 @@ the *pre-debounce* result.
 dispatch — a pre-debounce result must never cross a last-value cell, because a consumer that reads
 slower than the FB writes would miss results and an alternating fail/pass would never reach its
 threshold. What crosses to the fault memory is the **debounced state plus monotonic counters** in an
-ordinary IOC cell: `{ applied_gen, test_failed, qualified_fail_count, qualified_pass_count, tested }`.
-The consumer turns counter deltas into occurrences — taken only between two readings that carry the
-same `applied_gen`, the clear generation the producer has acted on (below), so a counter reset by a
-clear is never read as a negative delta or a phantom occurrence. Nothing is lost across a slow read and
+ordinary IOC cell: `{ applied_gen, test_failed, qualified_fail_count, qualified_pass_count, tested,
+snapshot }`. The consumer turns counter deltas into occurrences, per fault, keyed by `applied_gen` —
+the clear generation the producer has acted on (below): between two readings of the same generation
+the delta is the difference; the FIRST reading of a new generation counts from zero, because the
+producer reset its counters when it applied that generation. A reset is never read as a negative
+delta or a phantom occurrence, and occurrences between the reset and the first read are not lost.
+`snapshot` is the **freeze frame**, copied by the generated debounce at the qualifying dispatch from
+the values its thread reads — so it describes the instant of qualification, not a later pass of the
+consumer. Its size is bounded by the cell (the IOC payload limit, minus the fields above); a larger
+snapshot needs the `bulk` path and is refused by generation until then. Nothing is lost across a slow read and
 **no queued transport is needed** (the alternative, a per-thread event FIFO on the `bulk` rings, is the fallback
 if a use case needs the exact order of qualifications — decision D1).
 
@@ -176,8 +182,10 @@ if a use case needs the exact order of qualifications — decision D1).
 to reach the producer too — or a 0x14 clear is undone by the next read of a still-failed cell. The
 fault memory publishes a **control cell per producing thread** (single writer: its comm thread;
 single reader: that thread's generated debounce — the IOC is SPSC, so one shared cell with several
-readers is not an option): a *clear generation* (0x14 and cycle start reset the counters and the
-debounced state; the producer echoes it as `applied_gen`), and a *suppressed* flag (0x85 off). A
+readers is not an option): a *clear generation* **per fault** (a per-DTC 0x14 bumps only its faults'
+generations, 0x14 FFFFFF and cycle start bump them all; a bump resets that fault's counters and
+debounced state, and the producer echoes it as `applied_gen`), and a *suppressed* flag (0x85 off). The
+per-fault generations are bounded by the cell too, which caps the faults one thread may own. A
 producer on a **satellite core** needs the same cell to flow owner → satellite, which the target does
 not support today (loom2v rejects any signal INTO a satellite partition); R6 adds that reverse xioc
 path, or faults are declared owner-core-only until it exists. Enable conditions are evaluated on the producer
@@ -196,15 +204,19 @@ counting instead of qualifying the moment the condition returns.
   needs cycles (`confirm`, `aging`) — otherwise pending would never confirm and nothing would age;
 - **entries**: DTC, status, occurrence counter, **failed-cycle counter** (what `confirm` counts —
   occurrences are not cycles), aging counter, first/last failure cycle, and the
-  **freeze frame** — the named signals captured when the fault qualifies as failed (within one comm-
-  thread pass of the qualifying dispatch; the latency is stated, not hidden);
+  **freeze frame** — the `snapshot` the producer captured at qualification (above), serialised as the
+  declared DIDs' records, which is what 0x19 04 returns and what the tester decodes;
 - **extended data records** (occurrence and aging counters) and **displacement** by priority, then
   age, when the memory is full;
 - **suppression**: enable conditions (signals), 0x85 DTCSettingType off, and — through the same
   signal mechanism — under-voltage.
 
-**Storage** is the existing journal (decision D4): small status/counter records per DTC, freeze
-frames as **chained records** (built, up to 634 B), in the same engine. The diagnostic block ids join
+**Storage** is the existing journal (decision D4): each DTC's **whole entry** — status, counters and
+freeze frame — is ONE value, a **chained record** (built, up to 634 B) replaced as a unit. The
+journal is power-loss-atomic per value, so an entry is always one coherent version; splitting status
+and snapshot into separate values would let a power loss between the two writes restore new status
+with an old or missing snapshot. Writes happen at qualification, cycle end and clear, so rewriting the
+entry whole costs little wear. The diagnostic block ids join
 the generated schema keep-set — today mount **prunes** every id that is not a persisted signal, so
 without that every restored DTC would be discarded before the fault memory reads it — and the
 capacity/wear checks. A freeze frame's size is bounded by what the tester can receive, not by the
@@ -220,8 +232,9 @@ identification), **0x04** (snapshot by DTC), **0x06** (extended data by DTC), **
 DTCs); **0x14** ClearDiagnosticInformation (group 0xFFFFFF and per-DTC, 0x78 while the journal
 writes); **0x85** ControlDTCSetting on/off.
 
-**System level:** syscheck rejects a DTC number used twice in a system and a freeze-frame signal the
-node cannot read; the `.blobnet` manifest carries the DTC table so the tester names DTCs without a
+**System level:** syscheck rejects a DTC number used twice **within one diagnostic server** (never
+across servers — the same value is legitimate on two ECUs) and a freeze-frame DID the producing thread
+cannot read; the `.blobnet` manifest carries the DTC table so the tester names DTCs without a
 separate description file.
 
 ### 3.4 Parameters / variant coding (#288)
@@ -253,7 +266,7 @@ and — from R2 on — a bench verification on `examples/system_full` recorded i
 | **R0** | Requirements for everything below (REQ-DIAG-*); correct the three over-claiming docs; decide D1–D6 | `make trace-check` | — |
 | **R1** | Server core on the host: `[diag]`, sessions from default + S3, gating tables, NRC set + evaluation order, multi-DID 0x22, functional addressing, 0x78 plumbing, 0x11, 0x28 | unit tests + `examples/overspeed` e2e vs the blobly_net client | R0, N1 |
 | **R1b** | 0x27 SecurityAccess with the board key seam + blobly_net's reference key | unit tests; e2e with the existing net 0x27 client | R1 |
-| **R2** | UDS on the **target**: `[[isotp]]` on the ThreadX comm thread; 0x11 with the bounded controller drain; the programming-session handoff into the bootloader | bench: sessions, DIDs, 0x27 (incl. reset between failed attempts), 0x11 answered then reset, app → boot handoff, on `system_full` domain via CANsub | R1 |
+| **R2** | UDS on the **target**: `[[isotp]]` on the ThreadX comm thread; 0x11 with the bounded controller drain; the programming-session handoff into the bootloader | bench: sessions, DIDs, 0x27 (incl. reset between failed attempts), 0x11 answered then reset, app → boot handoff, on `system_full` domain via CANsub | R1, R1b |
 | **R3** | Rx status (#286) on the host: `RxStatus`, bridge-owned, integrity latch, E2E `lost` counter; `valid` migrated | host e2e (timeout / integrity / never_received) | R0 |
 | **R4** | Faults on the host: `[[fault]]`, FB fault port, generated debounce, fault memory in RAM, status byte, operation cycle, enable conditions, 0x19 01/02/0A, 0x14, 0x85; signal-status faults from R3; syscheck DTC uniqueness | host e2e: fail → pending → confirmed → cleared → aged | R1, R3, N2 |
 | **R5** | Target COM checks ("phase 6b-2b"): rx deadlines + E2E/SecOC on the comm thread, so R3's status and signal-status faults exist on silicon | bench: pull a sender, corrupt a frame | R2, R3 |
