@@ -7,8 +7,9 @@ import os
 // queued behind it). This pins the order in the committed generated glue of examples/overspeed —
 // which CI's "Generated outputs are fresh" gate keeps identical to what loom2v emits today:
 //
-//   S3 tick → receive gate sampled → rx drain, stopping at a completed request →
-//   pending reset applied → one request taken (never while a response is in flight) →
+//   S3 tick → receive gate sampled → rx drain, stopping at a request that completes during it →
+//   the request copied out of the link (so nothing overwrites it while it waits) →
+//   pending reset applied → one request served (never while a response is in flight) →
 //   response transmitted → a queued functional request (only on a quiet link, no reset pending)
 //   → the 0x28 tx gate sampled → application tx.
 fn test_the_generated_diagnostic_pass_runs_in_order() {
@@ -21,7 +22,8 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 		'diag_rx_ok :=',
 		'if st.tp_diag.has_request() {',
 		'st.uds_diag.reset_state()',
-		'diag_n := if st.tp_diag.busy() { 0 } else { st.tp_diag.take(',
+		'st.req_diag_len = st.tp_diag.take(',
+		'diag_n := if st.tp_diag.busy() { 0 } else { st.req_diag_len }',
 		'st.tp_diag.poll(now, mut pdu_diag)',
 		'st.tp_diag.idle() && st.uds_diag.reset_req == 0',
 		'diag_tx_ok :=',
