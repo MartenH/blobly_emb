@@ -876,12 +876,12 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 			s3_ms: int((m['s3_ms'] or { toml.Any(0) }).int())
 		}
 	}
-	// One diagnostic server per connection, but [[did]] cannot yet name its server
-	// (docs/diagnostics.md: `server = "<connection>"`), so the same table would be installed into
-	// every connection — exposing each DID on endpoints it was not meant for. Refuse until the
-	// binding exists; with one connection the server is implied.
-	if isotp_conns.len > 1 && ecumodel.toml_arr(doc, 'did').len > 0 {
-		panic('loom2v: ${isotp_conns.len} [[isotp]] connections with [[did]]s — a DID cannot name its diagnostic server yet, so it would appear on every connection; use one connection')
+	// ONE diagnostic server per node (docs/diagnostics.md): every [[isotp]] connection is a UDS
+	// server with its own session, 0x28, reset and (later) programming controls, and the fault
+	// memory, NM keep-awake and bootloader handoff assume a single owner. A second connection —
+	// even one with no DIDs — would be a second server the rest of the design cannot see.
+	if isotp_conns.len > 1 {
+		panic('loom2v: ${isotp_conns.len} [[isotp]] connections — a node has ONE diagnostic server (docs/diagnostics.md); declare one connection')
 	}
 	for c in isotp_conns {
 		if c.functional_id == 0 {
