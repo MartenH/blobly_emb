@@ -658,6 +658,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\ttp_${tp}_buf [isotp.max_payload]u8'
 			glue << '\tuds_${tp} uds.Server'
 			glue << '\tuds_${tp}_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity'
+			glue << '\ttp_${tp}_held can.Frame // a response frame the channel refused: retried before any new one'
+			glue << '\ttp_${tp}_held_set bool'
 			if c.functional_id != 0 {
 				glue << '\tfn_${tp}_req [7]u8 // a functional request waiting for the link (one slot)'
 				glue << '\tfn_${tp}_len int'
@@ -755,7 +757,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			// CommunicationControl (0x28): normal application messages on this bus stop being
 			// sent / decoded while any of its diagnostic servers says so. Diagnostic traffic itself
 			// is never gated (docs/diagnostics.md §3.1).
-			glue << '\tdiag_tx_ok := ${conns.map('st.uds_${snake(it.name)}.tx_enabled()').join(' && ')}'
 			glue << '\tdiag_rx_ok := ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
 		}
 		if rx_by_msg.len > 0 || conns.len > 0 || my_routes.len > 0 {
@@ -920,7 +921,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					// request replaces one still waiting.
 					glue << '\t\tif rx.id == u32(0x${c.functional_id.hex()}) && !rx.ext && rx.len >= 2 && rx.data[0] >> 4 == 0 {'
 					glue << '\t\t\tfl_${tp} := int(rx.data[0] & 0x0F)'
-					glue << '\t\t\tif fl_${tp} >= 1 && fl_${tp} < int(rx.len) {'
+					glue << '\t\t\tif fl_${tp} >= 1 && fl_${tp} <= 7 && fl_${tp} < int(rx.len) { // <= 7: a CAN-FD frame may claim more than the slot holds'
 					glue << '\t\t\t\tfor i in 0 .. fl_${tp} {'
 					glue << '\t\t\t\t\tst.fn_${tp}_req[i] = rx.data[1 + i]'
 					glue << '\t\t\t\t}'
@@ -983,7 +984,13 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\tmut pdu_${tp} := isotp.Pdu{}'
 				// Gate on tx_ready so a UDS response burst never overruns the Tx FIFO or blocks — send at
 				// most a FIFO\'s worth per pass, resume next pass (poll advances tx state).
-				glue << '\tfor st.chan.tx_ready() && st.tp_${tp}.poll(now, mut pdu_${tp}) {'
+				// A frame the channel refuses after tx_ready() said yes is HELD and retried first:
+				// poll() has already advanced the link past it, so dropping it would lose part of a
+				// response — and an ECUReset below would then reset without having answered.
+				glue << '\tif st.tp_${tp}_held_set && st.chan.tx_ready() && st.chan.send(st.tp_${tp}_held) {'
+				glue << '\t\tst.tp_${tp}_held_set = false'
+				glue << '\t}'
+				glue << '\tfor !st.tp_${tp}_held_set && st.chan.tx_ready() && st.tp_${tp}.poll(now, mut pdu_${tp}) {'
 				glue << '\t\tmut cf_${tp} := can.Frame{'
 				glue << '\t\t\tid:  u32(0x${c.tx_id.hex()})'
 				glue << '\t\t\tlen: 8'
@@ -991,14 +998,17 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\tfor i in 0 .. 8 {'
 				glue << '\t\t\tcf_${tp}.data[i] = pdu_${tp}.data[i]'
 				glue << '\t\t}'
-				glue << '\t\tst.chan.send(cf_${tp})'
+				glue << '\t\tif !st.chan.send(cf_${tp}) {'
+				glue << '\t\t\tst.tp_${tp}_held = cf_${tp}'
+				glue << '\t\t\tst.tp_${tp}_held_set = true'
+				glue << '\t\t}'
 				glue << '\t}'
 				// ECUReset (0x11) is two-phase: the server answered and recorded it; the reset
 				// happens once the answer has left the link. On the host there is no platform reset,
 				// so it is the DIAGNOSTIC state that returns to power-on (session, security, 0x28);
 				// the target's controller-drained reset is R2 (docs/diagnostics.md §3.1).
 				if c.functional_id != 0 {
-					glue << '\tif st.fn_${tp}_len > 0 && !st.tp_${tp}.busy() { // the waiting functional request'
+					glue << '\tif st.fn_${tp}_len > 0 && st.tp_${tp}.idle() && !st.tp_${tp}_held_set { // the waiting functional request: only on a link quiet both ways'
 					glue << '\t\tfn_${tp} := st.uds_${tp}.handle_functional(&st.fn_${tp}_req[0], st.fn_${tp}_len, &st.uds_${tp}_resp[0])'
 					glue << '\t\tst.fn_${tp}_len = 0'
 					glue << '\t\tif fn_${tp} > 0 {'
@@ -1006,10 +1016,15 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					glue << '\t\t}'
 					glue << '\t}'
 				}
-				glue << '\tif st.uds_${tp}.reset_req != 0 && !st.tp_${tp}.busy() {'
+				glue << '\tif st.uds_${tp}.reset_req != 0 && !st.tp_${tp}.busy() && !st.tp_${tp}_held_set { // the answer has left'
 				glue << '\t\tst.uds_${tp}.reset_state()'
 				glue << '\t}'
 			}
+		}
+		if conns.len > 0 {
+			// evaluated AFTER the requests of this pass were served, so a 0x28 answered just
+			// above already gates this pass's application frames
+			glue << '\tdiag_tx_ok := ${conns.map('st.uds_${snake(it.name)}.tx_enabled()').join(' && ')}'
 		}
 		for msg, list in tx_by_msg {
 			glue << '\tmut tx_${msg} := can.Frame{'

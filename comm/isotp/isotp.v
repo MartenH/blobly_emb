@@ -114,6 +114,14 @@ pub fn (l Link) busy() bool {
 	return l.tx != .idle
 }
 
+// idle reports that nothing is in flight in EITHER direction: no tx segmenting or awaiting flow
+// control, no multi-frame reception in progress or flow control owed, and no completed message
+// waiting to be taken. A caller that interleaves a second kind of traffic on the link (functional
+// requests answered on the physical id) starts only when the physical exchange is fully quiet.
+pub fn (l Link) idle() bool {
+	return l.tx == .idle && l.rx != .receiving && !l.fc_send && !l.ready
+}
+
 // take copies a completed message to `dst` and returns its length (0 if none).
 pub fn (mut l Link) take(dst &u8) int {
 	if !l.ready {

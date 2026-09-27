@@ -108,6 +108,8 @@ mut:
 	tp_diag_buf [isotp.max_payload]u8
 	uds_diag uds.Server
 	uds_diag_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity
+	tp_diag_held can.Frame // a response frame the channel refused: retried before any new one
+	tp_diag_held_set bool
 	fn_diag_req [7]u8 // a functional request waiting for the link (one slot)
 	fn_diag_len int
 	diag_rx_was_off bool // 0x28 had rx off last pass: restart the deadlines on return
@@ -116,7 +118,6 @@ mut:
 fn io_can0_10ms(ctx voidptr) {
 	mut st := unsafe { &Bridge_can0_state(ctx) }
 	now := osal.now_us()
-	diag_tx_ok := st.uds_diag.tx_enabled()
 	diag_rx_ok := st.uds_diag.rx_enabled()
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
@@ -136,7 +137,7 @@ fn io_can0_10ms(ctx voidptr) {
 		}
 		if rx.id == u32(0x7df) && !rx.ext && rx.len >= 2 && rx.data[0] >> 4 == 0 {
 			fl_diag := int(rx.data[0] & 0x0F)
-			if fl_diag >= 1 && fl_diag < int(rx.len) {
+			if fl_diag >= 1 && fl_diag <= 7 && fl_diag < int(rx.len) { // <= 7: a CAN-FD frame may claim more than the slot holds
 				for i in 0 .. fl_diag {
 					st.fn_diag_req[i] = rx.data[1 + i]
 				}
@@ -170,7 +171,10 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 	st.tp_diag.tick(now) // advance the ISO-TP timeout even when tx_ready gates poll out
 	mut pdu_diag := isotp.Pdu{}
-	for st.chan.tx_ready() && st.tp_diag.poll(now, mut pdu_diag) {
+	if st.tp_diag_held_set && st.chan.tx_ready() && st.chan.send(st.tp_diag_held) {
+		st.tp_diag_held_set = false
+	}
+	for !st.tp_diag_held_set && st.chan.tx_ready() && st.tp_diag.poll(now, mut pdu_diag) {
 		mut cf_diag := can.Frame{
 			id:  u32(0x102)
 			len: 8
@@ -178,18 +182,22 @@ fn io_can0_10ms(ctx voidptr) {
 		for i in 0 .. 8 {
 			cf_diag.data[i] = pdu_diag.data[i]
 		}
-		st.chan.send(cf_diag)
+		if !st.chan.send(cf_diag) {
+			st.tp_diag_held = cf_diag
+			st.tp_diag_held_set = true
+		}
 	}
-	if st.fn_diag_len > 0 && !st.tp_diag.busy() { // the waiting functional request
+	if st.fn_diag_len > 0 && st.tp_diag.idle() && !st.tp_diag_held_set { // the waiting functional request: only on a link quiet both ways
 		fn_diag := st.uds_diag.handle_functional(&st.fn_diag_req[0], st.fn_diag_len, &st.uds_diag_resp[0])
 		st.fn_diag_len = 0
 		if fn_diag > 0 {
 			st.tp_diag.send(&st.uds_diag_resp[0], fn_diag)
 		}
 	}
-	if st.uds_diag.reset_req != 0 && !st.tp_diag.busy() {
+	if st.uds_diag.reset_req != 0 && !st.tp_diag.busy() && !st.tp_diag_held_set { // the answer has left
 		st.uds_diag.reset_state()
 	}
+	diag_tx_ok := st.uds_diag.tx_enabled()
 	mut tx_lamp_frame := can.Frame{
 		id:  lamp_frame_id
 		len: lamp_frame_dlc

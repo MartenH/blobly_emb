@@ -892,7 +892,8 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 			panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${c.functional_id.hex()} must be a standard 11-bit id (<= 0x7FF)')
 		}
 		for o in isotp_conns {
-			if c.functional_id == o.rx_id || c.functional_id == o.tx_id {
+			// CAN ids are bus-local: only a connection on the SAME bus can collide
+			if o.bus == c.bus && (c.functional_id == o.rx_id || c.functional_id == o.tx_id) {
 				panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${c.functional_id.hex()} is also "${o.name}"\'s physical rx/tx id')
 			}
 		}

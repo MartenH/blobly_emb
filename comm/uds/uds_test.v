@@ -300,3 +300,23 @@ fn test_communication_control() {
 	assert s.tx_enabled()
 	assert call(mut s, [u8(0x28), 0x00, 0x05]) == [u8(0x7F), 0x28, 0x31] // reserved type bits
 }
+
+// A request handled when the owner's clock reads 0 still starts S3 — 0 is a valid time.
+fn test_s3_runs_from_a_request_at_time_zero() {
+	mut s := started()
+	s.tick(0)
+	assert call(mut s, [u8(0x10), 0x03])[0] == 0x50
+	s.tick(default_s3_us + 1)
+	assert s.session == session_default, 'a request at t=0 left S3 unarmed'
+}
+
+// 0x2E follows its own ISO flow: security is checked before the record length.
+fn test_write_security_precedes_record_length() {
+	mut s := started()
+	s.dids[1].write_security = 1
+	mut long := [u8(0x2E), 0xF1, 0xAA]
+	for _ in 0 .. max_did_data + 1 {
+		long << 0x55
+	}
+	assert call(mut s, long) == [u8(0x7F), 0x2E, 0x33]
+}

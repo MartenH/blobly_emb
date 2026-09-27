@@ -9,10 +9,12 @@ module uds
 // DIDs per request), 0x28 CommunicationControl, 0x2E WriteDataByIdentifier, 0x3E TesterPresent.
 // Anything else -> 0x11 serviceNotSupported.
 //
-// Negative responses follow ISO 14229-1's evaluation order: service supported (0x11) → service
-// in active session (0x7F) → minimum length (0x13) → subfunction supported (0x12) → subfunction
-// in active session (0x7E) → exact length (0x13) → conditions (0x22) → sequence (0x24) → range
-// (0x31) → security (0x33). A FUNCTIONAL request never answers 0x11, 0x12, 0x31, 0x7E or 0x7F
+// Negative responses follow ISO 14229-1's evaluation order. Every service: supported (0x11) →
+// allowed in the active session (0x7F) → minimum length (0x13); then, for a subfunction service:
+// subfunction supported (0x12) → exact length (0x13) → conditions / range. The DID services follow
+// their own flow: 0x22 — length, then each DID's support and session (0x31 when none answers),
+// then security (0x33), then the response size (0x14); 0x2E — length, then the DID's support,
+// writability and session (0x31), then security (0x33), then the record length (0x13). A FUNCTIONAL request never answers 0x11, 0x12, 0x31, 0x7E or 0x7F
 // (handle_functional) — a broadcast into an unsupported or gated service stays silent.
 
 pub const max_dids = 16
@@ -83,6 +85,7 @@ pub mut:
 	// S3: the owner calls tick(now) each pass; a request stamps last_rx_us.
 	now_us     u64
 	last_rx_us u64
+	rx_seen    bool // last_rx_us holds a real request time (0 is a valid clock value)
 	s3_us      u64 // 0 = default_s3_us
 	// ECUReset requested (the 0x11 subfunction), for the owner to perform once the response
 	// has left; 0 = none.
@@ -121,13 +124,14 @@ pub fn (mut s Server) reset_state() {
 	s.normal_rx_off = false
 	s.reset_req = 0
 	s.last_rx_us = 0
+	s.rx_seen = false
 }
 
 // tick advances the server's clock and applies S3: a non-default session with no request for
 // S3 returns to default (ISO 14229-2). Call once per owner pass, before handling requests.
 pub fn (mut s Server) tick(now_us u64) {
 	s.now_us = now_us
-	if s.session == session_default || s.session == 0 || s.last_rx_us == 0 {
+	if s.session == session_default || s.session == 0 || !s.rx_seen {
 		return
 	}
 	s3 := if s.s3_us == 0 { default_s3_us } else { s.s3_us }
@@ -171,9 +175,8 @@ fn (mut s Server) dispatch(req &u8, req_len int, resp &u8) int {
 	if req_len < 1 {
 		return 0
 	}
-	if s.now_us != 0 {
-		s.last_rx_us = s.now_us // any request keeps the session alive (S3)
-	}
+	s.last_rx_us = s.now_us // any request keeps the session alive (S3)
+	s.rx_seen = true
 	sid := unsafe { req[0] }
 	if !s.service_supported(sid) {
 		return negative(resp, sid, nrc_service_not_supported)
