@@ -184,6 +184,11 @@ fn module_rx_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFra
 	for c in n.view.isotp_conns {
 		if c.iface != '' {
 			out << ModuleFrame{c.iface, 'isotp rx (rx) id', c.rx_id, false, ''}
+			// the functional id is received too — reserved against transmitters, while several
+			// servers listening on it is what functional addressing is for
+			if c.functional_id != 0 {
+				out << ModuleFrame{c.iface, 'isotp functional (rx) id', c.functional_id, false, ''}
+			}
 		}
 	}
 	return out

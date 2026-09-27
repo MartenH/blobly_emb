@@ -103,9 +103,10 @@ pub mut:
 // rides and its on-wire rx/tx CAN ids (0 is a valid id loom2v emits as configured).
 pub struct IsotpConn {
 pub mut:
-	iface string
-	rx_id u32
-	tx_id u32
+	iface         string
+	rx_id         u32
+	tx_id         u32
+	functional_id u32 // 0 = none; a SHARED receive id (every server on the bus may listen)
 }
 
 // SysSignal — a cross-node signal declared ONCE at system scope (the full
@@ -1026,8 +1027,9 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 			bus := m_str(cm, 'bus')
 			v.isotp_conns << IsotpConn{
 				iface: key_iface[bus] or { bus }
-				rx_id: m_u32(cm, 'rx_id')
-				tx_id: m_u32(cm, 'tx_id')
+				rx_id:         m_u32(cm, 'rx_id')
+				tx_id:         m_u32(cm, 'tx_id')
+				functional_id: m_u32(cm, 'functional_id')
 			}
 		}
 	}

@@ -136,3 +136,21 @@ test("UDS: S3 returns an idle extended session to default", function()
   -- frames buffered for the next script (secoc.lua reads the oldest SecureFrames it finds)
   drain()
 end)
+
+test("UDS: a suppressed functional ECUReset applies before the next request in the FIFO", function()
+  local d = diag()
+  d:session(0x03)
+  drain()
+  -- back to back, so both sit in the ECU's rx FIFO for one bridge pass: 11 81 (reset, no answer)
+  -- functionally, then a physical 0x28 that is only allowed outside the default session
+  bus.send("CAN1", 0x7DF, fromhex("02 11 81 00 00 00 00 00"))
+  bus.send("CAN1", 0x101, fromhex("03 28 00 01 00 00 00 00"))
+  local r, t = nil, 0
+  while t < 300 and not r do
+    local f = bus.recv("CAN1", 20)
+    if f and f.id == 0x102 then r = f.data end
+    t = t + 20
+  end
+  check.truthy(r ~= nil, "no answer to the physical request")
+  check.equal(tohex(r:sub(1, 4)), "03 7F 28 7F", "served under the pre-reset session")
+end)

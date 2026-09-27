@@ -157,6 +157,9 @@ fn io_can0_10ms(ctx voidptr) {
 				if fn_diag > 0 && !st.tp_diag.send(&st.uds_diag_resp[0], fn_diag) {
 					st.uds_diag.reset_req = 0 // never reset unanswered
 				}
+				if st.uds_diag.reset_req != 0 && !st.tp_diag.busy() {
+					st.uds_diag.reset_state()
+				}
 				diag_rx_ok = st.uds_diag.rx_enabled()
 			}
 		}

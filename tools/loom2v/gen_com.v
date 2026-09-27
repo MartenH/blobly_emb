@@ -954,6 +954,11 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					glue << '\t\t\t\tif fn_${tp} > 0 && !st.tp_${tp}.send(&st.uds_${tp}_resp[0], fn_${tp}) {'
 					glue << '\t\t\t\t\tst.uds_${tp}.reset_req = 0 // never reset unanswered'
 					glue << '\t\t\t\t}'
+					// a SUPPRESSED reset (0x11 with bit 7) leaves the link idle: apply it now, before the
+					// next frame of this drain is served under the pre-reset state
+					glue << '\t\t\t\tif st.uds_${tp}.reset_req != 0 && !st.tp_${tp}.busy() {'
+					glue << '\t\t\t\t\tst.uds_${tp}.reset_state()'
+					glue << '\t\t\t\t}'
 					glue << '\t\t\t\tdiag_rx_ok = ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
 					glue << '\t\t\t}'
 					glue << '\t\t}'
