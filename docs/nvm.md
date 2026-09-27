@@ -1,7 +1,14 @@
 # Persistence (non-volatile storage) — design
 
-> Status: DESIGN (2026-07-14). Requirements: `requirements/nvm.toml` (draft, deriving
-> from SYS-REQ-NVM-001). Nothing is built; this page is the shape to argue with.
+> Status (2026-09-27): **P1 and P2 are built** — the journal engine (`nvm/`, with the
+> power-cut fuzz) incl. chained values, and the `persist` codegen, generated for the ThreadX
+> comm-thread target and used by `examples/h755_threadx` and `system_full/nodes/domain`. **P4
+> (writable DIDs backed by blocks) is not built** — it is the first step of parameters in
+> [diagnostics.md](diagnostics.md) (R7). Requirements: `requirements/nvm.toml` (draft,
+> deriving from SYS-REQ-NVM-001). This page began as the design (2026-07-14); the phasing
+> below records what landed. Fault-memory storage (freeze frames) is now designed in
+> [diagnostics.md](diagnostics.md) §3.3 — chained values in this journal — which supersedes
+> the "second wide-record journal" sketch in §"Diagnostics / fault memory" below.
 > Companion decisions it leans on: the bootloader's flash driver
 > ([bootloader.md](bootloader.md) — same `FlashOps`/`flash.c`), NM's coordinated
 > sleep ([nm.md](nm.md) — the flush point), the signal model
