@@ -39,7 +39,7 @@ pub fn (mut fb EngineMonitor) on_10ms(inp ports.EngineMonitorIn, mut out ports.E
 
 | ... | in `ecu.toml` | in the FB | host | ThreadX target |
 |---|---|---|---|---|
-| use another FB's value | `[[signal]] from = "<its partition>"`, `to = "<mine>"`; list it in `reads` | `inp.x.field` | ✅ | ✅ |
+| use another FB's value | `[[signal]] from = "<its partition>"`, `to = "<mine>"`; list it in `reads` | `inp.x.field` | ✅ | ✅ — but not INTO a satellite core's partition yet (satellite → owner only) |
 | give a value to another FB | the same signal, in my `writes` | `out.x.field = v` | ✅ | ✅ |
 | send a value on CAN | `to = "can0"`; the signal name is the DBC signal; `[[frame]]` sets timing / E2E / SecOC | `out.x.field = v` (physical units) | ✅ | cyclic tx, plain u32 layouts, no E2E / SecOC yet |
 | receive a value from CAN | `from = "can0"` | `inp.x.field` | ✅ | plain u32 layouts only |
@@ -56,7 +56,7 @@ the ThreadX comm thread's lean codec; generation names the exact rule when a con
 
 A signal received from a bus can carry `status = "RxStatus"`, filled by the platform:
 `never_received` (nothing yet), `ok`, `timeout` or `integrity` (the newest frame failed its SecOC
-MAC or its E2E CRC — an E2E *repeat*, a stuck or replaying counter, publishes nothing, so such a
+check — a wrong MAC, or a replayed / stale freshness value — or its E2E CRC; an E2E *repeat*, a stuck or replaying counter, publishes nothing, so such a
 sender reaches `timeout` instead). **`timeout` needs a deadline on the frame** — `[[frame]] rx = { timeout_ms }`, or
 `e2e = { ..., timeout_ms }` (required on a received E2E frame); without one a silent sender keeps
 reading `ok` with its last value. An E2E frame can also carry a `lost` counter. The details are in
@@ -68,7 +68,7 @@ published value is **zero**, so a last good value has to live in the FB's own st
 pub struct SpeedMonitor {
 pub mut:
 	last_good u16 // the newest trustworthy speed
-	stale_ms  u32 // how long we have been running on it
+	stale     u32 // activations we have been running on it (saturating)
 }
 
 pub fn (mut fb SpeedMonitor) on_10ms(inp ports.SpeedMonitorIn, mut out ports.SpeedMonitorOut) {
@@ -76,7 +76,7 @@ pub fn (mut fb SpeedMonitor) on_10ms(inp ports.SpeedMonitorIn, mut out ports.Spe
 		.ok {
 			// a good frame: use it, and remember it
 			fb.last_good = inp.vehicle_speed.kph
-			fb.stale_ms = 0
+			fb.stale = 0
 			out.warn_lamp.on = fb.last_good > 120
 		}
 		.never_received {
@@ -86,8 +86,12 @@ pub fn (mut fb SpeedMonitor) on_10ms(inp ports.SpeedMonitorIn, mut out ports.Spe
 		.timeout {
 			// the sender went quiet (the value is 0): ride on the last good value for a grace
 			// period, then give up on it and fail safe
-			fb.stale_ms += 10
-			out.warn_lamp.on = fb.stale_ms > 500 || fb.last_good > 120
+			// activations, not time: the Loom skips missed periods under overload, so 50 of them
+			// is 500 ms of a 10 ms handler only when nothing overran
+			if fb.stale < 50 {
+				fb.stale++
+			}
+			out.warn_lamp.on = fb.stale >= 50 || fb.last_good > 120
 		}
 		.integrity {
 			// the newest frame was corrupt or forged (the value is 0): never trust it, not even
@@ -153,8 +157,8 @@ e2e  = { data_id = 0x44, crc_pos = 4, counter_pos = 5, timeout_ms = 300 }
 
 Sending, the bridge stamps the E2E counter and CRC, then SecOC's freshness and MAC. Receiving, it
 verifies SecOC first, then E2E, and delivers the value only if both pass. What reaches the FB is the
-verdict: `status` becomes `integrity` on a failed MAC or CRC (an E2E repeat is dropped, not
-flagged), `timeout` when E2E's own timeout runs out,
+verdict: `status` becomes `integrity` on a failed SecOC check (MAC or freshness / replay) or E2E CRC
+(an E2E repeat is dropped, not flagged), `timeout` when E2E's own timeout runs out,
 and `lost` counts the frames the sequence showed missing. The FB never sees a CRC, a counter, a
 MAC or a key — it decides what a bad status means (a substitute value, a safe state). Host only
 today; the keys are plain config, fine for test keys, not for production. See
@@ -211,8 +215,9 @@ out.odo_meters.m = inp.odo_meters.m + delta   // reads = ["OdoMeters"], writes =
 
 It needs `[nvm]` **and** `[nm]` (bus sleep is the flush point), a signal local to one thread with
 one writer, and 1–2 unsigned fields. A **target** build refuses anything else, and checks flash
-wear for `"now"` against the writing handler's period (`"shutdown"` wear is not modelled: it
-depends on how often the bus sleeps). A **host** build checks none of this — it warns, builds,
+wear for `"now"` against the writing handler's period and the write floor. Writes at the bus-sleep
+flush — every dirty value, `"now"` and `"shutdown"` alike — are not in that model: they depend on
+how often the bus sleeps. A **host** build checks none of this — it warns, builds,
 and stores nothing — so a persistence config is only validated by building for the target.
 See [../nvm.md](../nvm.md).
 
@@ -257,8 +262,9 @@ Host only today. See [../communication.md](../communication.md) and
 ## What an FB never does
 
 - Call a platform service. Sending, storing and raising a DTC are port fields plus config
-  (above). Reading a clock and logging are **not available to an FB at all**: time is the
-  handler's period (count dispatches), and there is no FB logging path.
+  (above). Reading a clock and logging are **not available to an FB at all**: an FB can count
+  its own activations, but that is not elapsed time — the Loom skips missed periods under
+  overload rather than catching up — and there is no FB logging path.
 - Read its own DTC status, or latch a fault itself.
 - Know where a signal comes from — another FB, a bus, a pin or another core are all the same
   field ([../application-model.md](../application-model.md)).

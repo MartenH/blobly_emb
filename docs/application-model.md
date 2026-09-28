@@ -139,7 +139,7 @@ You follow it two ways, both **generated** (so always accurate):
    | VehicleSpeed | km/h | CAN can0 | Powertrain.VehicleSpeed | 0x100 | 16\|12 | x0.1 | COM→IOC(double)→app | SpeedMonitor |
    | WarnLamp | bool | app | LampFrame | 0x101 | 0\|1 | — | app→IOC→COM | (CAN tx) |
 
-## Scaling & transformers — at the boundary, never in the FB
+## Scaling & transformers — scaling at the boundary; other transforms FB code until declared
 
 **Decision: FBs work in physical engineering units; raw↔physical scaling lives at
 the communication boundary (COM). Other transforms are meant to become declared,
