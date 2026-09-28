@@ -4690,6 +4690,9 @@ struct FaultCfg {
 	time_based bool
 	fail_thr   int // counter: results; time: µs
 	pass_thr   int
+	inc        int  // counter: step per failed result (AUTOSAR-shaped; default 1)
+	dec        int  // counter: step per passed result (default 1)
+	jump       bool // counter: reset to 0 on a reversal ("N in a row"); default accumulates
 	enable     []string // "Signal.field" (bool) the handler reads
 	confirm    int
 	aging      int
@@ -4735,7 +4738,7 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 		time_based := kind == 'time'
 		// each kind has its own keys, and a time threshold has no sane default: a missing fail_ms
 		// would mean 0 µs — no debounce at all — so both are required
-		other_keys := if time_based { ['fail', 'pass'] } else { ['fail_ms', 'pass_ms'] }
+		other_keys := if time_based { ['fail', 'pass', 'inc', 'dec', 'jump'] } else { ['fail_ms', 'pass_ms'] }
 		for key in other_keys {
 			if key in db {
 				panic('loom2v: [[fault]] "${name}": debounce.${key} does not belong to kind = "${kind}"')
@@ -4754,6 +4757,12 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 		} else {
 			counter_thr((db['pass'] or { toml.Any(1) }).i64(), name, 'pass')
 		}
+		inc := if time_based { 1 } else { counter_thr((db['inc'] or { toml.Any(1) }).i64(), name, 'inc') }
+		dec := if time_based { 1 } else { counter_thr((db['dec'] or { toml.Any(1) }).i64(), name, 'dec') }
+		// fail = 1 says one failed result IS the verdict (AUTOSAR's monitor-internal debouncing), so
+		// it jumps by default: accumulating, a healed counter at -pass would need pass+1 failures to
+		// reach +1, and a one-shot event could never qualify. Real fail thresholds accumulate.
+		jump := (db['jump'] or { toml.Any(!time_based && fail_thr == 1) }).bool()
 		if fail_thr < 1 || pass_thr < 1 || (!time_based && (fail_thr > 0xFFFF || pass_thr > 0xFFFF)) {
 			panic('loom2v: [[fault]] "${name}": debounce thresholds must be at least 1 (counter: 1..65535 results; time: >= 1 ms)')
 		}
@@ -4779,6 +4788,9 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 			time_based: time_based
 			fail_thr:   fail_thr
 			pass_thr:   pass_thr
+			inc:        inc
+			dec:        dec
+			jump:       jump
 			enable:     enable
 			confirm:    int(confirm)
 			aging:      int(aging)
@@ -4931,7 +4943,23 @@ fn fault_init_lines(m Model, fb string) []string {
 		}
 		out << '\t\tfail_thr: ${f.fail_thr}'
 		out << '\t\tpass_thr: ${f.pass_thr}'
+		out << debounce_step_lines(f, '\t\t')
 		out << '\t}'
+	}
+	return out
+}
+
+// debounce_step_lines: the AUTOSAR-shaped counter's non-default settings, for any debouncer init.
+fn debounce_step_lines(f FaultCfg, ind string) []string {
+	mut out := []string{}
+	if f.inc != 1 {
+		out << '${ind}inc: ${f.inc}'
+	}
+	if f.dec != 1 {
+		out << '${ind}dec: ${f.dec}'
+	}
+	if f.jump {
+		out << '${ind}jump: true'
 	}
 	return out
 }
@@ -4980,9 +5008,10 @@ fn validate_signal_fault(m Model, f FaultCfg) {
 		panic('loom2v: [[fault]] "${f.name}": ${f.signal} needs `status = "RxStatus"` — the bridge watches its status')
 	}
 	// `lost` is an EVENT: one failed result per gap, and the next good frame passes — a time
-	// debounce or a counter needing several consecutive failures could never qualify it
-	if f.on == 'lost' && (f.time_based || f.fail_thr > 1) {
-		panic('loom2v: [[fault]] "${f.name}": a lost-frames fault fails once per gap — it needs a counter debounce with fail = 1')
+	// debounce, a counter needing several failures, or one that accumulates up from a healed
+	// -pass could never qualify it
+	if f.on == 'lost' && (f.time_based || f.fail_thr > 1 || !f.jump) {
+		panic('loom2v: [[fault]] "${f.name}": a lost-frames fault fails once per gap — it needs a counter debounce with fail = 1 that jumps (the default for fail = 1)')
 	}
 	match f.on {
 		'timeout' {

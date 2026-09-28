@@ -219,7 +219,7 @@ names the DTC, the handler that tests it, and how its results are debounced:
 name     = "EngineOverRev"
 dtc      = 0x021900                    # 3-byte DTC
 from     = "EngineMonitor.on_10ms"     # the handler that tests it
-debounce = { kind = "counter", fail = 3, pass = 3 }   # or { kind = "time", fail_ms, pass_ms }
+debounce = { kind = "counter", fail = 6, pass = 3, inc = 2, dec = 1 }  # or { kind = "time", fail_ms, pass_ms }
 enable   = ["IgnitionOn.on"]           # bool fields the handler reads: false = not counted
 confirm  = 1                           # failed operation cycles to confirm (default 1)
 aging    = 2                           # passing cycles to age out (default 0 = never)
@@ -227,6 +227,15 @@ aging    = 2                           # passing cycles to age out (default 0 = 
 [fault_memory]
 cycle = "IgnitionOn.on"                # the operation cycle (bool, received on the diag bus)
 ```
+
+The **counter** debounce is shaped like AUTOSAR DEM's: one counter rises by `inc` per failed
+result and falls by `dec` per passed one (both default 1), qualifying failed at `+fail` and passed
+at `-pass`. It **accumulates** across reversals by default, so an intermittent fault — failing two
+dispatches in three — still drifts up and qualifies; `jump = true` resets it on a reversal instead
+("`fail` in a row"). `fail = 1` means one failed result is the verdict, so it jumps by default:
+an accumulating counter healed down to −`pass` would need `pass + 1` failures to reach +1, and an
+event like a lost gap could never qualify. The **time** debounce needs `fail_ms` / `pass_ms` of
+continuous results.
 
 The FB gets a `fault` field on its Out port and writes the **current** result every dispatch —
 `out.fault.engine_over_rev = .failed` / `.passed` (untouched = `.not_tested`) — and keeps no latch:

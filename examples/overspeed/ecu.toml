@@ -210,7 +210,7 @@ write = { session = ["extended"], security = 1 }
 name     = "EngineOverRev"
 dtc      = 0x021900                    # P0219-00: engine overspeed condition
 from     = "EngineMonitor.on_10ms"
-debounce = { kind = "counter", fail = 3, pass = 3 }
+debounce = { kind = "counter", fail = 6, pass = 3, inc = 2, dec = 1 }  # fails in 3, heals in 9
 enable   = ["IgnitionOn.on"]
 confirm  = 1
 aging    = 2

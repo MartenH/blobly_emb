@@ -81,15 +81,23 @@ pub mut:
 	gen [max_per_producer]u16
 }
 
-// Debounce runs on the producing thread, once per dispatch, right after the handler. Counter-based
-// (time_based = false): fail_thr failed results in a row-ish (the counter moves +1 per failed, -1
-// per passed) qualify failed, pass_thr qualify passed. Time-based: fail_thr / pass_thr µs of
-// continuous failed / passed results. Disabled (an enable condition is false): nothing counts.
+// Debounce runs on the producing thread, once per dispatch, right after the handler.
+//
+// Counter-based (time_based = false), shaped like AUTOSAR DEM's counter debounce: one counter moves
+// up by `inc` per failed result and down by `dec` per passed one, and qualifies failed at +fail_thr,
+// passed at -pass_thr. By default it ACCUMULATES across reversals, so an intermittent fault (failing
+// 2 of every 3 dispatches) still drifts up and qualifies; `jump` resets it to 0 on a reversal
+// instead ("fail_thr in a row"). Asymmetric steps (inc 2, dec 1) fail fast and heal slowly.
+// Time-based: fail_thr / pass_thr µs of continuous failed / passed results.
+// Disabled (an enable condition is false) or not tested: nothing counts.
 pub struct Debounce {
 pub mut:
 	time_based bool
 	fail_thr   u32
 	pass_thr   u32
+	inc        u32  // counter step per failed result (0 = 1)
+	dec        u32  // counter step per passed result (0 = 1)
+	jump       bool // reset to 0 when the direction reverses
 	count      i32 // counter-based position, -pass_thr .. +fail_thr
 	since      u64 // time-based: when the current run of equal results began
 	run        TestResult
@@ -116,13 +124,27 @@ pub fn (mut d Debounce) step(r TestResult, now u64, enabled bool) {
 		at_fail = r == .failed && held >= u64(d.fail_thr)
 		at_pass = r == .passed && held >= u64(d.pass_thr)
 	} else {
-		fthr := thr(d.fail_thr)
-		pthr := -thr(d.pass_thr)
+		fthr := i64(thr(d.fail_thr))
+		pthr := -i64(thr(d.pass_thr))
+		mut c := i64(d.count)
 		if r == .failed {
-			d.count = if d.count < 0 { 1 } else if d.count < fthr { d.count + 1 } else { fthr }
+			if d.jump && c < 0 {
+				c = 0
+			}
+			c += i64(thr(d.inc))
+			if c > fthr {
+				c = fthr
+			}
 		} else {
-			d.count = if d.count > 0 { -1 } else if d.count > pthr { d.count - 1 } else { pthr }
+			if d.jump && c > 0 {
+				c = 0
+			}
+			c -= i64(thr(d.dec))
+			if c < pthr {
+				c = pthr
+			}
 		}
+		d.count = i32(c)
 		at_fail = d.count >= fthr
 		at_pass = d.count <= pthr
 	}

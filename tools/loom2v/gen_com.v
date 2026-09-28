@@ -1537,6 +1537,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					}
 					glue << '\t\tfail_thr: ${f.fail_thr}'
 					glue << '\t\tpass_thr: ${f.pass_thr}'
+					glue << debounce_step_lines(f, '\t\t')
 					glue << '\t}'
 				}
 				glue << '\tst.fmem.n = ${m.faults.len}'
