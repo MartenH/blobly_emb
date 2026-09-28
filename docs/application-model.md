@@ -20,10 +20,13 @@ and config. That's what makes an FB trivially testable and portable.
 ## Anatomy of an FB
 
 - **State**: a value struct, private to the FB (no heap).
-- **Handlers**: methods the Loom calls. `on_init` once at startup; `on_<period>`
-  periodically (e.g. `on_10ms`); later, event handlers (`on_<signal>_received`).
+- **Handlers**: methods the Loom calls, periodically (`period_ms`; `on_10ms` is a naming
+  convention). There is no init handler yet; later, event handlers (`on_<signal>_received`).
 - **Signals**: typed values it reads (inputs) and writes (outputs). A signal type
-  is a value struct (e.g. `VehicleSpeed { kph u16; valid bool }`).
+  is a value struct (e.g. `VehicleSpeed { kph u16; status RxStatus }`).
+
+The FB's whole view — signals, bus, pins, persistence, faults — on one page:
+[um/fb-programming-model.md](um/fb-programming-model.md).
 
 FBs compose: a *composite* FB is wired from smaller FBs in config; the developer
 writes only *leaf* FBs (logic) and the wiring (`ecu.toml`).
@@ -37,14 +40,14 @@ the call and publishes all outputs after — coherent snapshot, pure transform.
 ```v
 // app/speed_monitor.v — written by the developer
 module app
-import sig
+import ports
 
 pub struct SpeedMonitor {  // private state only
 pub mut:
 	over_limit bool
 }
 
-pub fn (mut fb SpeedMonitor) on_10ms(inp sig.SpeedMonitorIn, mut out sig.SpeedMonitorOut) {
+pub fn (mut fb SpeedMonitor) on_10ms(inp ports.SpeedMonitorIn, mut out ports.SpeedMonitorOut) {
 	fb.over_limit = inp.vehicle_speed.status == .ok && inp.vehicle_speed.kph > 120
 	out.warn_lamp.on = fb.over_limit
 }
@@ -52,20 +55,20 @@ pub fn (mut fb SpeedMonitor) on_10ms(inp sig.SpeedMonitorIn, mut out sig.SpeedMo
 ```
 
 ```v
-// sig/speedmonitor_ports.v — GENERATED from ecu.toml (do not edit)
-module sig
+// ports/ports_gen.v — GENERATED from ecu.toml (do not edit)
+module ports
 
 pub struct SpeedMonitorIn {
 pub mut:
 	// signal "VehicleSpeed" — physical km/h
 	//   from: CAN can0 / DBC Powertrain.VehicleSpeed  frame 0x100  bits 16|12 (x0.1)
 	//   path: COM -> IOC(double) -> app
-	vehicle_speed VehicleSpeed
+	vehicle_speed sig.VehicleSpeed
 }
 pub struct SpeedMonitorOut {
 pub mut:
 	// signal "WarnLamp" -> CAN can0 / LampFrame 0x101 (bit 0)
-	warn_lamp WarnLamp
+	warn_lamp sig.WarnLamp
 }
 ```
 
@@ -73,9 +76,9 @@ pub mut:
 // gen/loom_gen.v — GENERATED glue (do not edit)
 fn handler_app_speed_monitor_on_10ms(ctx voidptr) {
 	mut st := unsafe { &Partition_app_state(ctx) }
-	mut inp := sig.SpeedMonitorIn{}
+	mut inp := ports.SpeedMonitorIn{}
 	osal.ioc_acquire2(vehicle_speed_ch, &inp.vehicle_speed, u8(sizeof(inp.vehicle_speed)))
-	mut outp := sig.SpeedMonitorOut{}
+	mut outp := ports.SpeedMonitorOut{}
 	st.speed_monitor.on_10ms(inp, mut outp)
 	osal.ioc_publish2(warn_lamp_ch, &outp.warn_lamp, u8(sizeof(outp.warn_lamp)))
 }
