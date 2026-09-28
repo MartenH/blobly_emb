@@ -954,6 +954,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 						fld := snake(sname)
 						glue << '${ind}\tmut ${fld} := sig.${sname}{ ${rx_status_fields(si, '.timeout', lost)[2..]} }'
 						glue << '${ind}\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+						glue << cycle_edge(m, sname, fld, ind + '\t')
 					}
 					glue << '${ind}} else {'
 					ind += '\t'
@@ -969,17 +970,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					}
 					glue << '${ind}mut ${fld} := sig.${sname}{ ${valassign}${rx_status_fields(si, '.ok', lost)} }'
 					glue << '${ind}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
-					if m.faults.len > 0 && sname == m.fault_cycle.all_before('.') {
-						// the operation cycle follows every decoded value, in bus order — an off/on
-						// pair drained in one pass is two edges, not a read of the last value
-						cf := m.fault_cycle.all_after('.')
-						glue << '${ind}if ${fld}.${cf} && !st.fcycle_on {'
-						glue << '${ind}\tst.fmem.cycle_start()'
-						glue << '${ind}} else if !${fld}.${cf} && st.fcycle_on {'
-						glue << '${ind}\tst.fmem.cycle_end()'
-						glue << '${ind}}'
-						glue << '${ind}st.fcycle_on = ${fld}.${cf}'
-					}
+					glue << cycle_edge(m, sname, fld, ind)
 				}
 				if e2e && e2e_timeout(m, msg, bname) > 0 {
 					ind = ind[1..]
@@ -1128,6 +1119,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					sf := rx_status_fields(si, '.timeout', lost)
 					glue << '\t\tmut ${fld} := sig.${sname}{${if sf == '' { '' } else { ' ' + sf[2..] + ' ' }}}'
 					glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+					glue << cycle_edge(m, sname, fld, '\t\t')
 				}
 				glue << '\t}'
 			}
@@ -1962,6 +1954,7 @@ fn rx_integrity(m Model, list []string, msg string, lost string, gate string, in
 		fld := snake(sname)
 		out << '${i}mut ${fld} := sig.${sname}{ ${rx_status_fields(si, '.integrity', lost)[2..]} }'
 		out << '${i}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+		out << cycle_edge(m, sname, fld, i)
 	}
 	if i != ind {
 		out << '${ind}}'
@@ -2049,4 +2042,23 @@ fn fault_pass_lines(m Model) []string {
 		out << '\tosal.${publish_fn('triple')}(fault_ctl_${f}_ch, &st.fctl_${f}, u8(sizeof(st.fctl_${f})))'
 	}
 	return out
+}
+
+// cycle_edge: after EVERY publication of the operation-cycle signal — a good decode, a deadline or
+// E2E timeout, an integrity failure, a late frame — the fault memory's cycle follows the value just
+// published, in bus order (an off/on pair in one pass is two edges). One place, so no publish path
+// can leave the fault memory in a cycle the published signal has already left.
+fn cycle_edge(m Model, sname string, fld string, ind string) []string {
+	if m.faults.len == 0 || sname != m.fault_cycle.all_before('.') {
+		return []string{}
+	}
+	cf := m.fault_cycle.all_after('.')
+	return [
+		'${ind}if ${fld}.${cf} && !st.fcycle_on {',
+		'${ind}\tst.fmem.cycle_start()',
+		'${ind}} else if !${fld}.${cf} && st.fcycle_on {',
+		'${ind}\tst.fmem.cycle_end()',
+		'${ind}}',
+		'${ind}st.fcycle_on = ${fld}.${cf}',
+	]
 }

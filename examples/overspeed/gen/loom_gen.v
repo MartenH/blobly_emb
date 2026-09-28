@@ -139,6 +139,7 @@ mut:
 	secoc_key_secure_frame secoc.Key
 	secoc_tx_secure_frame secoc.TxState
 	rx_powertrain_st com.RxState
+	rx_ignition_st com.RxState
 	e2e_rx_brake_status e2e.RxState
 	e2e_hidden_brake_status u32 // lost frames counted while 0x28 had rx off
 	e2e_quiet_brake_status bool // 0x28 had rx off since the last fresh frame
@@ -197,6 +198,7 @@ fn io_can0_10ms(ctx voidptr) {
 					st.fmem.cycle_end()
 				}
 				st.fcycle_on = ignition_on.on
+				st.rx_ignition_st.on_receive(now)
 			}
 		}
 		if rx.id == brake_status_id && rx.len == brake_status_dlc && rx.ext == false {
@@ -300,6 +302,7 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 	if diag_rx_ok && st.diag_rx_was_off {
 		st.rx_powertrain_st.on_receive(now)
+		st.rx_ignition_st.on_receive(now)
 		st.e2e_rx_brake_status.arm(now)
 	}
 	st.diag_rx_was_off = !diag_rx_ok
@@ -308,6 +311,16 @@ fn io_can0_10ms(ctx voidptr) {
 		osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 		mut engine_speed := sig.EngineSpeed{ status: .timeout }
 		osal.ioc_publish2(engine_speed_ch, &engine_speed, u8(sizeof(engine_speed)))
+	}
+	if diag_rx_ok && st.rx_ignition_st.expired(now) {
+		mut ignition_on := sig.IgnitionOn{}
+		osal.ioc_publish2(ignition_on_ch, &ignition_on, u8(sizeof(ignition_on)))
+		if ignition_on.on && !st.fcycle_on {
+			st.fmem.cycle_start()
+		} else if !ignition_on.on && st.fcycle_on {
+			st.fmem.cycle_end()
+		}
+		st.fcycle_on = ignition_on.on
 	}
 	if diag_rx_ok && st.e2e_rx_brake_status.expired(now) {
 		mut brake_pressure := sig.BrakePressure{ status: .timeout, lost: u16(st.e2e_rx_brake_status.lost_frames - st.e2e_hidden_brake_status) }
@@ -401,6 +414,10 @@ pub fn partition_can0(ch can.Channel) {
 		timeout_us: 200000
 	}
 	st.rx_powertrain_st.arm(osal.now_us())
+	st.rx_ignition_st = com.RxState{
+		timeout_us: 500000
+	}
+	st.rx_ignition_st.arm(osal.now_us())
 	st.e2e_rx_brake_status.timeout_us = 300000
 	st.e2e_rx_brake_status.arm(osal.now_us()) // from start, like the COM deadline
 	st.tp_diag = isotp.Link{

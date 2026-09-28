@@ -4842,9 +4842,6 @@ fn validate_faults(m Model, doc toml.Doc) {
 	}
 	bool_field_of(m, m.fault_cycle, '[fault_memory] cycle')
 	cs := m.sig_of[m.fault_cycle.all_before('.')] or { SigInfo{} }
-	if cs.transport == 'triple' {
-		panic('loom2v: [fault_memory] cycle "${m.fault_cycle}": its signal uses the triple transport, whose one reader is its consumer — the bridge cannot read it too; use double or seqlock')
-	}
 	if !(cs.external && cs.rx && cs.bus == m.isotp_conns[0].bus) {
 		panic('loom2v: [fault_memory] cycle "${m.fault_cycle}" must be a signal received on the diagnostic bus "${m.isotp_conns[0].bus}" — the bridge that owns the fault memory reads it')
 	}

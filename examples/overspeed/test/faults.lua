@@ -4,11 +4,19 @@
 -- / 0x85. The operation cycle is IgnitionOn (frame 0x302), also the fault's enable condition.
 -- (REQ-DIAG-009 / 010 are verified by comm/fault's unit tests; this proves the generated wiring end to end.)
 local function diag() return uds.open("CAN1", { tx = 0x101, rx = 0x102 }) end
-local function ignition(on) bus.send("CAN1", 0x302, string.char(on and 1 or 0)); sleep_ms(40) end
-local function rpm(v, ms)
+-- Ignition is cyclic (500 ms deadline): every helper keeps sending the current state
+local ign = false
+local function ign_frame() bus.send("CAN1", 0x302, string.char(ign and 1 or 0)) end
+local function ignition(on) ign = on; ign_frame(); sleep_ms(40) end
+local function rpm(v, ms, quiet_ignition)
   local t = 0
-  while t < ms do bus.send_message("CAN1", "Powertrain", { EngineSpeed = v }); sleep_ms(10); t = t + 10 end
+  while t < ms do
+    bus.send_message("CAN1", "Powertrain", { EngineSpeed = v })
+    if not quiet_ignition then ign_frame() end
+    sleep_ms(10); t = t + 10
+  end
   sleep_ms(40) -- the FB, the debounce and the bridge each run every 10 ms
+  if not quiet_ignition then ign_frame() end
 end
 -- 0x19 02 with mask 0x09 (testFailed | confirmed): the hex of the DTC records, or "" for none.
 -- EngineOverRev (0x021900) is declared first; EngineIdleLow (0x050600, < 400 rpm, no enable
@@ -80,6 +88,18 @@ test("Faults: an ignition off/on pair drained in one pass is two cycle edges", f
   sleep_ms(40)
   check.equal(status(d) & 0x02, 0, "the new cycle did not start: testFailedThisOperationCycle carried over")
   d:raw(fromhex("14 FF FF FF"))
+  rpm(3000, 60)
+end)
+
+test("Faults: the ignition frame going silent ends the operation cycle (its deadline)", function()
+  local d = diag()
+  ignition(true)
+  d:raw(fromhex("14 FF FF FF"))
+  rpm(3000, 60)
+  rpm(3000, 700, true) -- no Ignition frames: the 500 ms deadline publishes it off
+  rpm(100, 100, true)  -- EngineIdleLow fails (no enable condition): outside a cycle, not recorded
+  check.equal(failing(d), "", "recorded after the cycle signal timed out")
+  ignition(true)
   rpm(3000, 60)
 end)
 

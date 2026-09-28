@@ -135,6 +135,11 @@ bus  = "can0"                   # E2E alone drives BrakePressure's timeout (REQ-
 e2e  = { data_id = 0x44, crc_pos = 4, counter_pos = 5, timeout_ms = 300 }
 
 [[frame]]
+name = "Ignition"               # rx: cyclic from its sender — silence ends the operation cycle
+bus  = "can0"
+rx   = { timeout_ms = 500 }
+
+[[frame]]
 name = "BrakeReport"            # tx: BrakeMonitor's view of that status, for the tester
 bus  = "can0"
 tx   = { mode = "cyclic", cycle_ms = 50 }
