@@ -148,6 +148,8 @@ the FB never calls a service API.
   0x19 03/04/06, faults on the target
 - 🧭 **R7 parameters / variant coding** (#288) — `[[param]]` over the nvm P4 DID write path
 
+## Drivers & IO
+
 
 - ✅ **CAN port ABI** — socket (host), fdcan (M_CAN bare-metal), ST-HAL, CanIf
   (AUTOSAR); format flags for FD + extended id
