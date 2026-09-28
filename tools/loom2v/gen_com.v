@@ -648,6 +648,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\te2e_rx_${msg} e2e.RxState'
 				if lost_expr(m, msg, bname, conns.len > 0).contains('e2e_hidden') {
 					glue << '\te2e_hidden_${msg} u32 // lost frames counted while 0x28 had rx off'
+					glue << '\te2e_quiet_${msg} bool // 0x28 had rx off since the last fresh frame'
 				}
 			}
 			if m.frames.secoc_here(msg, bname) {
@@ -777,6 +778,13 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\tst.uds_${tp}.tick(now)'
 			}
 			glue << '\tmut diag_rx_ok := ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
+			for msg, _ in rx_by_msg {
+				if lost_expr(m, msg, bname, true).contains('e2e_hidden') {
+					glue << '\tif !diag_rx_ok {'
+					glue << '\t\tst.e2e_quiet_${msg} = true // silence commanded this pass, frame or not'
+					glue << '\t}'
+				}
+			}
 		}
 		if rx_by_msg.len > 0 || conns.len > 0 || my_routes.len > 0 {
 			glue << '\tmut rx := can.Frame{}'
@@ -902,9 +910,17 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					glue << '${ind}e2e_${msg} := st.e2e_rx_${msg}.${chk}'
 					if hide {
 						// frames missed while 0x28 has reception off were COMMANDED silence, not loss:
-						// the sequence state keeps tracking them, but the FB never sees them counted
+						// the sequence state keeps tracking them, but the FB never sees them counted —
+						// including the gap the first fresh frame after re-enable closes, which spans
+						// the silence (e2e_quiet is also set every pass rx is off, frame or not)
 						glue << '${ind}if !diag_rx_ok {'
+						glue << '${ind}\tst.e2e_quiet_${msg} = true'
+						glue << '${ind}}'
+						glue << '${ind}if st.e2e_quiet_${msg} {'
 						glue << '${ind}\tst.e2e_hidden_${msg} += st.e2e_rx_${msg}.lost_frames - lf_${msg}'
+						glue << '${ind}}'
+						glue << '${ind}if diag_rx_ok && e2e_${msg}.usable() {'
+						glue << '${ind}\tst.e2e_quiet_${msg} = false'
 						glue << '${ind}}'
 					}
 					glue << '${ind}if e2e_${msg}.usable() {'

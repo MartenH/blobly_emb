@@ -245,6 +245,9 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 				panic('ecu.toml: signal "${name}" field `status` is "${typ}" — on a received signal it is the bridge-owned "RxStatus"')
 			}
 			if from_bus && fname == 'lost' {
+				if eth != '' && from == eth {
+					panic('ecu.toml: signal "${name}" is received from eth bus "${from}": the `lost` count is a CAN bridge feature — the SOME/IP codec would unpack it from the wire instead')
+				}
 				if typ != 'u16' && typ != 'u32' {
 					panic('ecu.toml: signal "${name}" field `lost` is "${typ}" — the E2E lost-frame counter is u16 or u32')
 				}

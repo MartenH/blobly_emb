@@ -120,6 +120,7 @@ mut:
 	rx_brake_status_st com.RxState
 	e2e_rx_brake_status e2e.RxState
 	e2e_hidden_brake_status u32 // lost frames counted while 0x28 had rx off
+	e2e_quiet_brake_status bool // 0x28 had rx off since the last fresh frame
 	tp_diag isotp.Link
 	tp_diag_buf [isotp.max_payload]u8
 	uds_diag uds.Server
@@ -140,6 +141,9 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 	st.uds_diag.tick(now)
 	mut diag_rx_ok := st.uds_diag.rx_enabled()
+	if !diag_rx_ok {
+		st.e2e_quiet_brake_status = true // silence commanded this pass, frame or not
+	}
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
 		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false {
@@ -155,7 +159,13 @@ fn io_can0_10ms(ctx voidptr) {
 			lf_brake_status := st.e2e_rx_brake_status.lost_frames
 			e2e_brake_status := st.e2e_rx_brake_status.check(&rx.data[0], int(brake_status_dlc), u16(0x44), 4, 5)
 			if !diag_rx_ok {
+				st.e2e_quiet_brake_status = true
+			}
+			if st.e2e_quiet_brake_status {
 				st.e2e_hidden_brake_status += st.e2e_rx_brake_status.lost_frames - lf_brake_status
+			}
+			if diag_rx_ok && e2e_brake_status.usable() {
+				st.e2e_quiet_brake_status = false
 			}
 			if e2e_brake_status.usable() {
 				if diag_rx_ok {

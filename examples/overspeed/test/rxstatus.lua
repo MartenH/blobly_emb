@@ -85,3 +85,20 @@ test("RxStatus: frames missed while 0x28 has reception off are not counted as lo
   check.equal(lost1, lost0, "commanded silence was counted as lost frames")
   d:session(0x01)
 end)
+
+test("RxStatus: a gap spanning 0x28 rx-off with no frame during it is not counted as lost", function()
+  local d = uds.open("CAN1", { tx = 0x101, rx = 0x102 })
+  for _ = 1, 3 do brake(1000); sleep_ms(10) end
+  local _, lost0 = report(150)
+  d:session(0x03)
+  check.equal(tohex(d:raw(fromhex("28 02 F1"))), "68 02")
+  sleep_ms(50) -- nothing sent while reception is off
+  check.equal(tohex(d:raw(fromhex("28 00 F1"))), "68 00")
+  brake(1000, 4) -- the first frame after re-enable closes a gap of four
+  local st, lost1 = report(150)
+  check.equal(st, OK)
+  check.equal(lost1, lost0, "the gap spanning commanded silence was counted as lost")
+  brake(1000, 1) -- a real gap after that still counts
+  check.equal(select(2, report(150)), lost0 + 1)
+  d:session(0x01)
+end)

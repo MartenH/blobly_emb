@@ -63,9 +63,9 @@ fn test_loss_detected() {
 	assert s.usable() // but the frame itself is valid + fresh, so still consumed
 }
 
-// The lost-frame count: each gap adds delta - 1; a frame that arrived CORRUPT is not also
-// counted as missing (it was reported as crc_error).
-fn test_lost_frames_are_counted_and_crc_errors_are_not() {
+// The lost-frame count: each gap adds delta - 1, and a frame that arrived CORRUPT counts as not
+// received intact (its counter cannot be trusted) — AUTOSAR E2E's rule.
+fn test_lost_frames_count_every_frame_not_received_intact() {
 	mut tx := TxState{}
 	mut rx := RxState{}
 	mut f := [8]u8{}
@@ -80,25 +80,9 @@ fn test_lost_frames_are_counted_and_crc_errors_are_not() {
 	f[0] ^= 0xFF
 	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .crc_error
 	f[0] ^= 0xFF
-	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 5 good: delta 2, but frame 4 was not missing
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 5 good
 	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .lost
-	assert rx.lost_frames == 2
-	// a repeat between the corrupt frame and the next fresh one keeps the CRC error counted
-	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 6 good
-	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .ok
-	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 7 arrives corrupt
-	f[0] ^= 0xFF
-	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .crc_error
-	f[0] ^= 0xFF
-	mut six := f
-	six[ctr_pos] = (f[ctr_pos] & 0xF0) | 6 // frame 6 again, re-stamped
-	mut t6 := TxState{}
-	t6.counter = 6
-	t6.protect(&six[0], 8, id, crc_pos, ctr_pos)
-	assert rx.check(&six[0], 8, id, crc_pos, ctr_pos) == .repeated
-	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 8 good: delta 2, frame 7 was not missing
-	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .lost
-	assert rx.lost_frames == 2
+	assert rx.lost_frames == 3
 }
 
 fn test_wrong_data_id_fails() {

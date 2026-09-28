@@ -78,7 +78,8 @@ gives the FB what the bridge last learned — `never_received` (the zero value: 
 yet), `ok` (a good frame), `timeout` (the deadline passed), or `integrity` (the newest
 frame failed its E2E CRC or SecOC check; value zero). An E2E repeat is a duplicate, not a
 fault, and publishes nothing. On an E2E-protected frame, `lost = "u16"` (or `u32`) adds
-the count of frames the sequence counter showed missing — monotonic, wrapping; diff it.
+the count of frames the sequence counter showed not received intact (a CRC-failed frame
+counts, as in AUTOSAR E2E) — monotonic, wrapping; diff it.
 The bridge owns `status` and `lost` on a received signal (a `valid` field there fails
 generation); on an internal signal they are ordinary fields an FB may forward. See
 [diagnostics.md](diagnostics.md) §3.2.
