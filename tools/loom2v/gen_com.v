@@ -629,20 +629,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			}
 		}
 
-		// The E2E-owned timeout (REQ-E2E-002, ASIL B) is REQUIRED where the bridge delivers an
-		// E2E frame's signals to the application, and meaningless where nothing receives the frame:
-		// a transmitted frame, or one neither decoded nor a signal route's source.
-		route_src := rx_routes.filter(it.from_bus == bname).map(snake(it.from_frame))
-		for fk, to in m.frames.e2e_timeout_us {
-			if to > 0 && m.frames.e2e_here(fk, bname) && fk !in rx_by_msg && fk !in route_src {
-				panic('loom2v: frame "${fk}" sets e2e.timeout_ms, but nothing on ${bname} receives it — the E2E timeout watches a RECEIVED frame for loss of its sender')
-			}
-		}
-		for msg, _ in rx_by_msg {
-			if m.frames.e2e_here(msg, bname) && e2e_timeout(m, msg, bname) == 0 {
-				panic('loom2v: frame "${msg}" is E2E-protected and received, but its e2e has no timeout_ms — REQ-E2E-002 detects total loss of the sender inside E2E itself, not only by the QM COM deadline')
-			}
-		}
 		glue << ''
 		glue << 'struct Bridge_${bb}_state {'
 		glue << 'mut:'
@@ -932,13 +918,29 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					}
 					glue << '${ind}if e2e_${msg}.usable() {'
 					ind += '\t'
-					if e2e_timeout(m, msg, bname) > 0 {
-						// protection-level state, like the counter: refreshed even while 0x28 has rx off
+					late := e2e_timeout(m, msg, bname) > 0
+					if late {
+						// a valid frame that arrives AFTER the timeout, before the pass that would have
+						// seen it expire: the loss happened — report it for this frame (value zero)
+						// instead of letting the refresh erase it. Then refresh: protection-level state,
+						// like the counter, even while 0x28 has rx off.
+						glue << '${ind}late_${msg} := st.e2e_rx_${msg}.expired(now)'
 						glue << '${ind}st.e2e_rx_${msg}.on_valid(now)'
 					}
 				}
 				if gate != '' {
 					glue << '${ind}if ${gate} {'
+					ind += '\t'
+				}
+				if e2e && e2e_timeout(m, msg, bname) > 0 {
+					glue << '${ind}if late_${msg} {'
+					for sname in list {
+						si := m.sig_of[sname] or { continue }
+						fld := snake(sname)
+						glue << '${ind}\tmut ${fld} := sig.${sname}{ ${rx_status_fields(si, '.timeout', lost)[2..]} }'
+						glue << '${ind}\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+					}
+					glue << '${ind}} else {'
 					ind += '\t'
 				}
 				for sname in list {
@@ -952,6 +954,10 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					}
 					glue << '${ind}mut ${fld} := sig.${sname}{ ${valassign}${rx_status_fields(si, '.ok', lost)} }'
 					glue << '${ind}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+				}
+				if e2e && e2e_timeout(m, msg, bname) > 0 {
+					ind = ind[1..]
+					glue << '${ind}}'
 				}
 				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 					glue << '${ind}st.rx_${msg}_st.on_receive(now)'

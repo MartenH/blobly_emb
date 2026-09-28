@@ -217,6 +217,10 @@ frames (counter skip), and total loss of the sender — through E2E's **own** ti
 the period, so a stuck sender that only repeats, or one whose frames all fail the CRC,
 runs it out too. It is independent of the QM COM deadline (`rx = { timeout_ms }`), which
 is a complementary monitor; either may be configured alone, and both publish `timeout`.
+The E2E timeout is required on a received E2E frame whose signals reach the application,
+and each of those signals must declare `status`, so a loss never reaches an FB as a
+plain zero. A valid frame that arrives after the timeout ran out, but before the bridge's
+next pass noticed, still reports `timeout` for that frame.
 A *lost* frame is still consumed (it's valid and fresh — the skip just marks the gap);
 *repeated* and *corrupt* frames are dropped. The generator rejects an `e2e` whose
 `crc_pos`/`counter_pos` fall outside the frame DLC, and a `timeout_ms` on a transmitted

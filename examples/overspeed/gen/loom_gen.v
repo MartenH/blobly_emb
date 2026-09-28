@@ -165,10 +165,16 @@ fn io_can0_10ms(ctx voidptr) {
 				st.e2e_quiet_brake_status = false
 			}
 			if e2e_brake_status.usable() {
+				late_brake_status := st.e2e_rx_brake_status.expired(now)
 				st.e2e_rx_brake_status.on_valid(now)
 				if diag_rx_ok {
-					mut brake_pressure := sig.BrakePressure{ kpa: u16(brake_status_brake_pressure_phys(rx.data)), status: .ok, lost: u16(st.e2e_rx_brake_status.lost_frames - st.e2e_hidden_brake_status) }
-					osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
+					if late_brake_status {
+						mut brake_pressure := sig.BrakePressure{ status: .timeout, lost: u16(st.e2e_rx_brake_status.lost_frames - st.e2e_hidden_brake_status) }
+						osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
+					} else {
+						mut brake_pressure := sig.BrakePressure{ kpa: u16(brake_status_brake_pressure_phys(rx.data)), status: .ok, lost: u16(st.e2e_rx_brake_status.lost_frames - st.e2e_hidden_brake_status) }
+						osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
+					}
 				}
 			} else if e2e_brake_status == .crc_error {
 				if st.e2e_rx_brake_status.timedout {
