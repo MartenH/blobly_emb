@@ -19,7 +19,7 @@ page is the plan to close that, in rungs that each ship and verify on their own.
 
 ## 1. Where we actually are
 
-As of R3a — the rows R0, R1, R1b and R3a changed say so; the rest is the state the plan started from.
+As of R4a — the rows R0 through R4a changed say so; the rest is the state the plan started from.
 
 | Piece | State | Where |
 |---|---|---|
@@ -31,7 +31,7 @@ As of R3a — the rows R0, R1, R1b and R3a changed say so; the rest is the state
 | UDS on the **target** | **none** — loom2v refuses `[[isotp]]` on a ThreadX node; on silicon UDS runs only hand-wired — the bootloader over ISO-TP and the `h735_doip` example over DoIP | `tools/loom2v/gen.v` |
 | UDS config | `[[isotp]]` (one per node; `functional_id`, `s3_ms` since R1; `security_attempts`, `security_delay_ms` since R1b) + `[[did]]` (ascii / bytes / signal / writable, `read` / `write` gates) | `tools/ecucheck/gen.v` |
 | Rx signal status | `status = "RxStatus"` (never_received / ok / timeout / integrity) and the E2E `lost` count, bridge-owned, host only (R3a); the COM deadline runs from bridge start (re-arming it on NM wake is R5's: the host bridge has no NM) and from a frame that failed its check; E2E has its own sender-loss timeout on CAN, required on every received E2E frame, refreshed only by a valid message and independent of the COM deadline (R3b; the SOME/IP receive path still lacks it, #299); the target rejects status, rx deadlines and E2E ("phase 6b-2b", R5) | `tools/loom2v/gen_com.v`, `gen.v` |
-| Fault memory / DTCs | **nothing** — no events, debouncing, status byte, 0x19, 0x14, 0x85 | — |
+| Fault memory / DTCs | R4a: the library — producer debounce with monotonic counters, the status byte through operation cycles (confirm, pending, aging), clears by generation, 0x85 suppression — and 0x19 01/02/0A, 0x14, 0x85 in the server through `FaultOps`; RAM only. Not yet generated from `[[fault]]` (R4b) | `comm/fault/fault.v`, `comm/uds/uds.v` |
 | Persistence | journal engine + `persist = "now" / "shutdown"` signals, ThreadX only, one journal per node, 20 B records with 634 B chains; DID write path (NvM "P4") not built | `nvm/`, `tools/loom2v/gen_nvm.v` |
 | Operation cycle / ECU state | none wired; `ecu/` (lifecycle, mode arbiter) is an unused library; NM states exist | `ecu/`, `comm/nm/` |
 | Cross-thread transports | last-value cells only (seqlock / double / triple, xioc); `bulk` is the one FIFO | `osal/`, `boards/common/` |
@@ -229,13 +229,18 @@ to reach the producer too — or a 0x14 clear is undone by the next read of a st
 fault memory publishes a **control cell per producing thread** (single writer: its comm thread;
 single reader: that thread's generated debounce — the IOC is SPSC, so one shared cell with several
 readers is not an option): a *clear generation* **per fault** (a per-DTC 0x14 bumps only its faults'
-generations, 0x14 FFFFFF and cycle start bump them all; a bump resets that fault's counters and
-debounced state, and the producer echoes it as `applied_gen`), and a *suppressed* flag (0x85 off).
-A cycle start must not lose the old cycle's tail: before applying a new generation the producer
-**keeps publishing the old generation until the fault memory has acknowledged reading it** (the
-control cell echoes the last old-generation reading consumed), and only then applies the new one —
-a last-value cell can overwrite a single final publication before it is read, so a handshake, not a
-one-shot, closes the boundary. A failure at the edge is counted once, in the cycle that is ending. The
+generations, 0x14 FFFFFF bumps them all; every clear is a FRESH 16-bit generation, so no report made
+before it can count, and a clear that could not get one — its producer silent for 32767 clears — is
+refused with 0x22 rather than reuse a generation; a bump resets that fault's counters and debounced state, and the producer echoes
+it as `applied_gen`). *As built in R4a* (`comm/fault`), two things stay on the
+consumer side and need no producer involvement: **0x85 suppression** — while off, the fault memory
+lets its baselines follow the counters and changes no status, and the first reading after "on" is a
+baseline only — so nothing is recorded after the positive "off" and nothing produced during
+suppression is applied after "on" (a qualification in the pass on either side of the boundary is not
+recorded; a cycle begun while off gets fresh cycle bits at "on") — and **operation-cycle boundaries**,
+which change status bits only and bump no generation, so no old-generation drain is needed on the
+host (a qualification at a boundary can land one pass late). The persistence-grade cycle-END barrier
+remains R6's (§7). The
 per-fault generations are bounded by the cell too, which caps the faults one thread may own. A
 producer on a **satellite core** needs the same cell to flow owner → satellite, which the target does
 not support today (loom2v rejects any signal INTO a satellite partition); R6 adds that reverse xioc
@@ -381,7 +386,7 @@ done until its obligations hold under their tests. §3 fixes the shape; this tab
 | R1 | Leaving a non-default session — explicitly, by S3, or by ECU reset — restores communication (0x28) to enabled. *Met in R1.* | unit + vcan: disable tx, return to default / let S3 expire / reset, frames resume |
 | R2 | The programming handoff is offered only by a server whose bus and addresses the bootloader serves (today: CAN 0, 0x7B0 / 0x7B8 in the boot images), validated at generation; any other server refuses 0x10 02. | generation test on a mismatched config; bench: handoff reaches `boot.Prog` |
 | R3 | A signal that never receives a good frame still reaches `timeout`: an initial reception deadline is armed at bridge start (and on NM wake), since today's monitor only runs after a first frame (`comm/com/com.v`). | host e2e: sender absent from boot → `timeout` after the grace period |
-| R4 | A clear makes the prior generation obsolete: readings carrying a generation older than the one the clear requested are ignored until the producer acknowledges it, so an old-generation failure cannot recreate a cleared DTC. The old-generation drain applies to cycle transitions only. | unit: clear with a failed producer that publishes once more before observing the control |
+| R4 | A clear makes the prior generation obsolete: readings carrying a generation older than the one the clear requested are ignored until the producer acknowledges it, so an old-generation failure cannot recreate a cleared DTC. (Cycle transitions bump no generation — §3.3 as built in R4a.) | unit: clear with a failed producer that publishes once more before observing the control |
 | R1 | One diagnostic server per node, enforced at generation: a second `[[isotp]]` connection is refused outright (a bare one still exposes sessions, 0x28, reset), so the fault memory, the clear epoch, 0x85, NM keep-awake and the handoff each have exactly one owner. *(Replaces a multi-server design that review showed widening the surface round after round.)* | generation test: a second connection is refused |
 | R4 | 0x85 DTC-setting-off is restored to on when the session ends (explicit, S3, reset), like 0x28. | unit + e2e: set off, disconnect, faults record again after S3 |
 | R6 | Displacement is atomic across its two journal writes: the replacement is written first, and recovery resolves a temporary over-capacity set deterministically (lowest priority, then oldest, is the one dropped), so an interrupted displacement never loses both entries. | power-cut fuzz over the displacement sequence |
@@ -391,7 +396,7 @@ done until its obligations hold under their tests. §3 fixes the shape; this tab
 | R2 | The session survives the handoff: `boot.Prog` starts in programming (not default) when the boot request cell caused its entry, so a tester that received 0x50 02 can proceed to 0x29 without a second 0x10 02. | bench: 0x10 02 → reset → 0x29 accepted |
 | R3 | An E2E sequence gap (`lost`) is visible to the application, not only counted: a published loss counter (or a degraded status) (REQ-E2E-002). | host e2e: a single skipped counter reaches the FB |
 | R4 | … and it is a fault source: `[[fault]] on = "lost"`. | host e2e: a single skipped counter raises its DTC |
-| R4 | 0x85 has its own generation / acknowledgement like a clear, so the fault memory knows whether a counter delta happened before or during suppression — nothing recorded after the positive "off", no suppressed occurrence replayed after "on". | unit: off/on racing a producer faster than the reader |
+| R4 | 0x85 suppression records nothing after the positive "off" and replays no suppressed occurrence after "on". *Met in R4a without a producer handshake:* suppression is applied where readings are consumed (§3.3); the accepted cost is that a qualification published before "off" but not yet read (≤ one owner pass) is not recorded. | unit: off, fail, on — nothing recorded, nothing replayed |
 | R6 / R7 | Live state changes only after durability: a persisted 0x2E (parameters, `apply = "next_dispatch"`) and a persisted 0x14 stage their RAM change until the journal accepts the write; on refusal (0x72) both live and durable state are unchanged. | fault-injection tests asserting the current-run value, not only the stored one |
 | R0 | Physical diagnostic ids are unique per BUS, not per system: REQ-TOPO-002 and `tools/sysmodel/checks.v` (which today put every allocation and `[[isotp]]` id in one global map) are revised to key physical ids by bus and to allow a shared functional id. | syscheck tests: the same physical id on two separate buses passes; twice on one bus fails |
 | R4 | The tested state is lossless like the occurrences: a monotonic tested-count per fault (not a last-value `tested` flag), so a fast producer's single evaluation followed by `.not_tested` is never lost to the test-not-completed bits or aging. | unit: one evaluation then `.not_tested`, read once late |

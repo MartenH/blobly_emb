@@ -7,6 +7,7 @@ module uds
 //
 // Services: 0x10 DiagnosticSessionControl, 0x11 ECUReset, 0x22 ReadDataByIdentifier (several
 // DIDs per request), 0x27 SecurityAccess (with injected SecurityOps), 0x28 CommunicationControl,
+// 0x14 / 0x19 / 0x85 over an injected FaultOps (comm/fault),
 // 0x2E WriteDataByIdentifier, 0x3E TesterPresent. Anything else -> 0x11 serviceNotSupported.
 //
 // Negative responses follow ISO 14229-1's evaluation order. Every service: supported (0x11) →
@@ -84,6 +85,19 @@ pub mut:
 	key_ok fn (ctx voidptr, level u8, seed &u8, key &u8, n int) bool
 }
 
+// FaultOps is the fault-memory seam 0x19 / 0x14 / 0x85 are answered through (comm/fault builds
+// it; docs/diagnostics.md §3.3). Nil `entry` = 0x19 and 0x14 are not supported; nil `set_setting`
+// = 0x85 is not. `entry(i)` returns DTC (3 bytes) << 8 | status for i in 0 .. count().
+pub struct FaultOps {
+pub mut:
+	ctx         voidptr
+	count       fn (ctx voidptr) int
+	entry       fn (ctx voidptr, i int) u32
+	clear       fn (ctx voidptr, group u32) u8 // the NRC, 0 = cleared
+	set_setting fn (ctx voidptr, on bool)
+	avail       u8 // the status availability mask; 0 = not wired (the services stay unsupported)
+}
+
 // Did is one Data Identifier: constant bytes, a RAM cell (writable), and/or kept fresh from a
 // live signal by the bridge. Access is gated per DID: the session masks (0 = every session) and
 // the security level a write needs (0 = none).
@@ -146,6 +160,9 @@ pub mut:
 	sa_failed       [max_security_level]u8 // wrong keys per level: one level's unlock never clears another's
 	sa_delay_until  u64
 	sa_arm_delay    bool // start the delay at the next tick (boot / reset: the clock is not known yet)
+	// Fault memory (0x19 / 0x14 / 0x85). 0x85's on/off state lives in the memory alone; the server
+	// turns it back on whenever the session returns to default (like 0x28).
+	faults FaultOps
 }
 
 // init puts the server in the default session with everything unlocked-state cleared, and
@@ -171,6 +188,7 @@ pub fn (mut s Server) reset_state() {
 	s.sa_arm_delay = s.sa_failed.any(it > 0)
 	s.normal_tx_off = false
 	s.normal_rx_off = false
+	s.restore_dtc_setting()
 	s.reset_req = 0
 	s.last_rx_us = 0
 	s.rx_seen = false
@@ -260,6 +278,9 @@ fn (mut s Server) dispatch(req &u8, req_len int, resp &u8) int {
 		0x11 { return s.ecu_reset(req, req_len, resp) }
 		0x22 { return s.read_did(req, req_len, resp) }
 		0x27 { return s.security_access(req, req_len, resp) }
+		0x14 { return s.clear_dtcs(req, req_len, resp) }
+		0x19 { return s.read_dtcs(req, req_len, resp) }
+		0x85 { return s.dtc_setting(req, req_len, resp) }
 		0x28 { return s.communication_control(req, req_len, resp) }
 		0x2E { return s.write_did(req, req_len, resp) }
 		else { return negative(resp, sid, nrc_service_not_supported) }
@@ -272,19 +293,22 @@ fn (s Server) service_supported(sid u8) bool {
 	return match sid {
 		0x10, 0x22, 0x2E, 0x3E { true }
 		0x11 { s.serves_reset }
+		0x14, 0x19 { s.faults.avail != 0 && s.faults.entry != unsafe { nil } && s.faults.count != unsafe { nil } && s.faults.clear != unsafe { nil } }
+		0x85 { s.faults.avail != 0 && s.faults.set_setting != unsafe { nil } }
 		0x27 { s.security.seed != unsafe { nil } && s.security.key_ok != unsafe { nil } && s.security_levels != 0 }
 		0x28 { s.serves_comm_control }
 		else { false }
 	}
 }
 
-// service_sessions: where each service may run. CommunicationControl and SecurityAccess are
-// non-default-session services (a tester must enter extended first, so a stray request on a quiet
-// bus cannot silence an ECU or spend its key attempts); everything else runs in every session,
+// service_sessions: where each service may run. CommunicationControl, SecurityAccess and
+// ControlDTCSetting are non-default-session services (a tester must enter extended first, so a
+// stray request on a quiet bus cannot silence an ECU, spend its key attempts or freeze its fault
+// memory); everything else runs in every session,
 // with per-DID gating on top for 0x22/0x2E.
 fn service_sessions(sid u8) u8 {
 	return match sid {
-		0x27, 0x28 { in_extended | in_programming }
+		0x27, 0x28, 0x85 { in_extended | in_programming }
 		else { u8(0) }
 	}
 }
@@ -313,6 +337,16 @@ fn (mut s Server) enter_session(session u8) {
 	if session == session_default {
 		s.normal_tx_off = false
 		s.normal_rx_off = false
+		s.restore_dtc_setting()
+	}
+}
+
+// restore_dtc_setting turns DTC setting back on when a session ends (explicitly, by S3, or by a
+// reset) — ISO 14229-1 ControlDTCSetting: DTC status updating resumes on the transition to the
+// default session (and on reset); a switch between non-default sessions keeps it off (§7, R4).
+fn (mut s Server) restore_dtc_setting() {
+	if s.faults.set_setting != unsafe { nil } {
+		s.faults.set_setting(s.faults.ctx, true)
 	}
 }
 
@@ -676,6 +710,108 @@ fn (mut s Server) write_did(req &u8, req_len int, resp &u8) int {
 		resp[2] = req[2]
 	}
 	return 3
+}
+
+// read_dtcs (0x19) — the subfunctions R4 serves (D6): 0x01 reportNumberOfDTCByStatusMask, 0x02
+// reportDTCByStatusMask, 0x0A reportSupportedDTC. A DTC matches a mask when (status & mask &
+// availability) != 0. The response must fit the owner's buffer (0x14 otherwise), checked before
+// anything is written. 0x19 has no suppressPosRsp: bit 7 makes the subfunction unsupported.
+fn (mut s Server) read_dtcs(req &u8, req_len int, resp &u8) int {
+	if req_len < 2 {
+		return negative(resp, 0x19, nrc_incorrect_length)
+	}
+	sub := unsafe { req[1] }
+	if sub != 0x01 && sub != 0x02 && sub != 0x0A {
+		return negative(resp, 0x19, nrc_subfunction_not_supported)
+	}
+	want := if sub == 0x0A { 2 } else { 3 }
+	if req_len != want {
+		return negative(resp, 0x19, nrc_incorrect_length)
+	}
+	avail := s.faults.avail
+	mask := if sub == 0x0A { u8(0xFF) } else { unsafe { req[2] } & avail }
+	n := s.faults.count(s.faults.ctx)
+	mut hits := 0
+	for i in 0 .. n {
+		e := s.faults.entry(s.faults.ctx, i)
+		if sub == 0x0A || u8(e) & mask != 0 {
+			hits++
+		}
+	}
+	if sub == 0x01 {
+		unsafe {
+			resp[0] = 0x59
+			resp[1] = 0x01
+			resp[2] = avail
+			resp[3] = 0x01 // DTCFormatIdentifier: ISO_14229-1_DTCFormat
+			resp[4] = u8(hits >> 8)
+			resp[5] = u8(hits)
+		}
+		return 6
+	}
+	total := 3 + 4 * hits
+	if total > s.cap() {
+		return negative(resp, 0x19, nrc_response_too_long)
+	}
+	unsafe {
+		resp[0] = 0x59
+		resp[1] = sub
+		resp[2] = avail
+	}
+	mut o := 3
+	for i in 0 .. n {
+		e := s.faults.entry(s.faults.ctx, i)
+		if sub != 0x0A && u8(e) & mask == 0 {
+			continue
+		}
+		unsafe {
+			resp[o] = u8(e >> 24)
+			resp[o + 1] = u8(e >> 16)
+			resp[o + 2] = u8(e >> 8)
+			resp[o + 3] = u8(e) // the status (for 0x0A, all bits as maintained)
+		}
+		o += 4
+	}
+	return o
+}
+
+// clear_dtcs (0x14) — ClearDiagnosticInformation: the 3-byte groupOfDTC, 0xFFFFFF for all or one
+// DTC; an unknown DTC is out of range (0x31). No subfunction, so no suppression.
+fn (mut s Server) clear_dtcs(req &u8, req_len int, resp &u8) int {
+	if req_len != 4 {
+		return negative(resp, 0x14, nrc_incorrect_length)
+	}
+	group := unsafe { u32(req[1]) << 16 | u32(req[2]) << 8 | u32(req[3]) }
+	nrc := s.faults.clear(s.faults.ctx, group)
+	if nrc != 0 {
+		return negative(resp, 0x14, nrc) // 0x31 unknown DTC, 0x22 not clearable right now
+	}
+	unsafe {
+		resp[0] = 0x54
+	}
+	return 1
+}
+
+// dtc_setting (0x85) — ControlDTCSetting on (01) / off (02), extended or programming session only;
+// an optional DTCSettingControlOptionRecord after the subfunction is accepted and ignored. "Off"
+// stops the fault memory updating any status until "on", or until the session ends.
+fn (mut s Server) dtc_setting(req &u8, req_len int, resp &u8) int {
+	if req_len < 2 {
+		return negative(resp, 0x85, nrc_incorrect_length)
+	}
+	sub := unsafe { req[1] } & 0x7F
+	if sub != 0x01 && sub != 0x02 {
+		return negative(resp, 0x85, nrc_subfunction_not_supported)
+	}
+	s.faults.set_setting(s.faults.ctx, sub == 0x01)
+	if unsafe { req[1] } & 0x80 != 0 {
+		return 0
+	}
+	unsafe {
+		resp[0] = 0xC5
+		resp[1] = sub
+	}
+	return 2
 }
 
 fn negative(resp &u8, sid u8, nrc u8) int {

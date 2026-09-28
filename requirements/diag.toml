@@ -73,3 +73,21 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-009"
+title = "Fault memory status"
+text = "The fault memory shall maintain, per configured DTC, the ISO 14229-1 status bits testFailed through testNotCompletedThisOperationCycle from debounced test results: a test result shall reach it as monotonic counters so that no qualification or completed test is lost to a reader slower than the producer; a DTC shall become confirmed after its configured number of failed operation cycles and age out after its configured number of passing ones; a clear shall ignore results produced before the producer applied it; and while DTC setting is off no status shall change, nor shall a result produced meanwhile be applied afterwards."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-010"
+title = "Reading and clearing DTCs"
+text = "The diagnostic server shall report DTCs by status mask (count and list) and all supported DTCs with their status, clear all DTCs or a single one (refusing an unknown DTC), and switch DTC setting off and on in a non-default session only, restoring it to on on the transition to the default session (explicit or by S3) and on a reset."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
