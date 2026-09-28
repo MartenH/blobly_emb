@@ -103,6 +103,9 @@ fn parse_eth_frames(doc toml.Doc, eth string, sig_of map[string]SigInfo) []EthFr
 		}
 		if ev := fm['e2e'] {
 			evm := ev.as_map()
+			if 'timeout_ms' in evm {
+				panic('loom2v: eth frame "${fname}": e2e.timeout_ms is not generated on the SOME/IP receive path yet — only the CAN bridge carries the E2E-owned timeout (REQ-E2E-002 gap for eth, tracked in requirements/e2e.toml)')
+			}
 			fr.e2e_on = true
 			fr.e2e_id = int((evm['data_id'] or { toml.Any(0) }).int())
 			off += 2 // the appended counter + CRC trailer (docs/someip.md)
@@ -1221,11 +1224,16 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				frof := snake(r2.from_frame)
 				// an authored [[frame]].rx with no timeout_ms inserts 0; treat 0 as absent and
 				// fall back to 3x the DBC cadence (0 = no deadline info at all).
-				// the E2E-owned timeout counts as an authored deadline for the source too
-				authored_to := if (m.frames.rx_timeout_us[frof] or { 0 }) > 0 {
-					m.frames.rx_timeout_us[frof] or { 0 }
+				// the E2E-owned timeout is an authored deadline for the source too — and the SHORTER
+				// of the two wins, so either monitor stops forwarding a dead sender's value
+				com_to := m.frames.rx_timeout_us[frof] or { 0 }
+				e2e_to := e2e_timeout(m, frof, r2.from_bus)
+				authored_to := if com_to > 0 && e2e_to > 0 {
+					if com_to < e2e_to { com_to } else { e2e_to }
+				} else if com_to > 0 {
+					com_to
 				} else {
-					e2e_timeout(m, frof, r2.from_bus)
+					e2e_to
 				}
 				timeout := if authored_to > 0 {
 					authored_to

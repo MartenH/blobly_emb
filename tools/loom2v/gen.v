@@ -1172,7 +1172,7 @@ fn parse_frames(doc toml.Doc, eth string, buses map[string]bool) FrameCfg {
 		}
 		if 'rx' in fm {
 			rxm := (fm['rx'] or { toml.Any('') }).as_map()
-			f.rx_timeout_us[fk] = int((rxm['timeout_ms'] or { toml.Any(0) }).int()) * 1000
+			f.rx_timeout_us[fk] = ms_to_us((rxm['timeout_ms'] or { toml.Any(0) }).i64(), 'frame "${fk}": rx.timeout_ms')
 		}
 		if 'e2e' in fm {
 			em := (fm['e2e'] or { toml.Any('') }).as_map()
@@ -1185,11 +1185,7 @@ fn parse_frames(doc toml.Doc, eth string, buses map[string]bool) FrameCfg {
 			}
 			f.e2e_crc[fk] = int((em['crc_pos'] or { toml.Any(0) }).int())
 			f.e2e_ctr[fk] = int((em['counter_pos'] or { toml.Any(0) }).int())
-			e2e_to := int((em['timeout_ms'] or { toml.Any(0) }).int())
-			if e2e_to < 0 {
-				panic('frame "${fk}": e2e timeout_ms ${e2e_to} is negative (0 = no E2E timeout)')
-			}
-			f.e2e_timeout_us[fk] = e2e_to * 1000
+			f.e2e_timeout_us[fk] = ms_to_us((em['timeout_ms'] or { toml.Any(0) }).i64(), 'frame "${fk}": e2e.timeout_ms')
 		}
 		if 'secoc' in fm {
 			sm := (fm['secoc'] or { toml.Any('') }).as_map()
@@ -4599,4 +4595,17 @@ fn snake(name string) string {
 	// single source: ecumodel.snake_name — the validator's collision checks
 	// and this generator's emitted identifiers must agree byte-for-byte
 	return ecumodel.snake_name(name)
+}
+
+// ms_to_us converts an authored timeout to the µs the generated code holds in an int, refusing a
+// negative value and one whose µs would not fit (a wrap would turn a long timeout negative, and a
+// non-positive timeout silently switches the monitor off).
+fn ms_to_us(ms i64, what string) int {
+	if ms < 0 {
+		panic('loom2v: ${what} ${ms} is negative (0 = none)')
+	}
+	if ms * 1000 > i64(max_i32) {
+		panic('loom2v: ${what} ${ms} is too long (at most ${i64(max_i32) / 1000} ms)')
+	}
+	return int(ms * 1000)
 }

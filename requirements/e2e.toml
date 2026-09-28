@@ -15,7 +15,10 @@ derives = "SYS-REQ-SAFE-001"
 # The total-loss leg is e2e.RxState's own timeout (arm / on_valid / expired), independent
 # of comm/com's QM deadline, and REQUIRED on every E2E frame whose signals the bridge
 # delivers to the application (loom2v refuses one without `e2e.timeout_ms`) — rung R3b of
-# docs/diagnostics.md. Gap closed 2026-09-28; it was open since the 2026-07-24 sweep.
+# docs/diagnostics.md. Gap closed for CAN 2026-09-28 (open since the 2026-07-24 sweep).
+# STILL OPEN on the SOME/IP receive path: the eth codec checks the E2E trailer but has no
+# timeout (loom2v refuses e2e.timeout_ms on an eth frame rather than drop it) — see the
+# tracking issue #299.
 [[req]]
 id = "REQ-E2E-002"
 title = "Detect repetition and loss"
