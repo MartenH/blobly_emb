@@ -87,6 +87,13 @@ to   = "can0"        # EXTERNAL: tx to the bus
 transport = "double"
 
 [[signal]]
+name = "IgnitionOn"
+fields = { on = "bool" }
+from = "can0"        # EXTERNAL: rx — the operation cycle, and EngineOverRev's enable condition
+to   = "ctrl"
+transport = "double"
+
+[[signal]]
 name = "BrakePressure"
 fields = { kpa = "u16", status = "RxStatus", lost = "u16" }
 from = "can0"        # EXTERNAL: rx, E2E-protected — the bridge owns status + lost
@@ -191,6 +198,21 @@ id    = 0xF1AC
 bytes = "00"                    # writable only in extended AND with security level 1
 write = { session = ["extended"], security = 1 }
 
+# --- Faults (docs/diagnostics.md §3.3) --------------------------------------
+# EngineMonitor reports the test result each dispatch; the Loom debounces it on the ctrl thread,
+# and the fault memory on the diagnostic bridge keeps the DTC status (0x19 / 0x14 / 0x85).
+[[fault]]
+name     = "EngineOverRev"
+dtc      = 0x021900                    # P0219-00: engine overspeed condition
+from     = "EngineMonitor.on_10ms"
+debounce = { kind = "counter", fail = 3, pass = 3 }
+enable   = ["IgnitionOn.on"]
+confirm  = 1
+aging    = 2
+
+[fault_memory]
+cycle = "IgnitionOn.on"                # the operation cycle: ignition on -> off
+
 # --- Function Blocks ---------------------------------------------------------
 # (within a partition, list producers before consumers for same-cycle local data)
 [[fb]]
@@ -217,7 +239,7 @@ thread    = "ctrl_main"
   [[fb.handler]]
   name      = "on_10ms"
   period_ms = 10
-  reads     = ["EngineSpeed"]
+  reads     = ["EngineSpeed", "IgnitionOn"]
   writes    = ["HighRev"]
 
 [[fb]]

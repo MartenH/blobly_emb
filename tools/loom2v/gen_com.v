@@ -664,6 +664,14 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\ttp_${tp} isotp.Link'
 			glue << '\ttp_${tp}_buf [isotp.max_payload]u8'
 			glue << '\tuds_${tp} uds.Server'
+			if m.faults.len > 0 {
+				glue << '\tfmem fault.Memory // the node\'s fault memory: this bridge is its one writer (D2)'
+				glue << '\tfcycle_on bool // the operation-cycle signal as last seen'
+				for fb in fault_fbs(m) {
+					glue << '\tfrep_${snake(fb)} fault.Reports // from ${fb}\'s thread'
+					glue << '\tfctl_${snake(fb)} fault.Control // to ${fb}\'s thread'
+				}
+			}
 			if security_levels(m.dids) != 0 {
 				glue << '\tsa_${tp} uds.ReferenceSecurity // 0x27 on the host: the SIM key (not a secret, decision D5)'
 			}
@@ -1029,6 +1037,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			// request, drain the segmented response.
 			for c in conns {
 				tp := snake(c.name)
+				glue << fault_pass_lines(m)
 				glue << did_refresh(m, tp, '\t')
 				// ONE request at a time: a new request is taken only when the previous answer has left
 				// the link, so a pending ECUReset always belongs to the response in flight (the next
@@ -1491,6 +1500,18 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				}
 			}
 			glue << '\tst.uds_${tp}.ndid = ${m.dids.len}'
+			if m.faults.len > 0 {
+				for i, f in m.faults {
+					glue << '\tst.fmem.slots[${i}].dtc = u32(0x${f.dtc.hex()}) // ${f.name}'
+					glue << '\tst.fmem.slots[${i}].confirm = u8(${f.confirm})'
+					if f.aging > 0 {
+						glue << '\tst.fmem.slots[${i}].aging = u8(${f.aging})'
+					}
+				}
+				glue << '\tst.fmem.n = ${m.faults.len}'
+				glue << '\tst.fmem.init()'
+				glue << '\tst.uds_${tp}.faults = st.fmem.uds_ops() // 0x19 / 0x14 / 0x85'
+			}
 		}
 		// module_host (above): no signal work, so no tick and no handler — it only has to DRAIN
 		// its channel, since an unread rx queue backs up on a real driver. The frames go nowhere
@@ -1990,4 +2011,42 @@ fn e2e_timeout(m Model, msg string, bname string) int {
 // has_deadline: the frame is monitored for silence — by the COM deadline, the E2E one, or both.
 fn has_deadline(m Model, msg string, bname string) bool {
 	return (m.frames.rx_timeout_us[msg] or { 0 }) > 0 || e2e_timeout(m, msg, bname) > 0
+}
+
+// fault_pass_lines: the fault memory's share of the bridge pass, before this pass's requests are
+// served (so 0x19 reads the newest state): the operation cycle follows its signal's edges (D3; the
+// host runs no NM), each fault-owning FB's report cell is consumed slot by slot, and the clear
+// generations go back in its control cell.
+fn fault_pass_lines(m Model) []string {
+	if m.faults.len == 0 {
+		return []string{}
+	}
+	mut out := []string{}
+	cs := m.fault_cycle.all_before('.')
+	cf := m.fault_cycle.all_after('.')
+	si := m.sig_of[cs] or { SigInfo{} }
+	out << '\tmut fault_cycle := sig.${cs}{}'
+	out << '\tif osal.${acquire_fn(si.transport)}(${snake(cs)}_ch, &fault_cycle, u8(sizeof(fault_cycle))) {'
+	out << '\t\tif fault_cycle.${cf} && !st.fcycle_on {'
+	out << '\t\t\tst.fmem.cycle_start()'
+	out << '\t\t} else if !fault_cycle.${cf} && st.fcycle_on {'
+	out << '\t\t\tst.fmem.cycle_end()'
+	out << '\t\t}'
+	out << '\t\tst.fcycle_on = fault_cycle.${cf}'
+	out << '\t}'
+	for fb in fault_fbs(m) {
+		f := snake(fb)
+		out << '\tosal.${acquire_fn('triple')}(fault_rep_${f}_ch, &st.frep_${f}, u8(sizeof(st.frep_${f})))'
+		mut k := 0
+		for i, fc in m.faults {
+			if fc.fb != fb {
+				continue
+			}
+			out << '\tst.fmem.consume(${i}, st.frep_${f}.r[${k}])'
+			out << '\tst.fctl_${f}.gen[${k}] = st.fmem.control_gen(${i})'
+			k++
+		}
+		out << '\tosal.${publish_fn('triple')}(fault_ctl_${f}_ch, &st.fctl_${f}, u8(sizeof(st.fctl_${f})))'
+	}
+	return out
 }

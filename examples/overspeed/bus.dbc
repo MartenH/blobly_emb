@@ -59,6 +59,9 @@ BO_ 769 BrakeStatus: 6 ChassisECU
  SG_ BrakeCrc : 32|8@1+ (1,0) [0|255] "" Tester
  SG_ BrakeCounter : 40|4@1+ (1,0) [0|15] "" Tester
 
+BO_ 770 Ignition: 1 Tester
+ SG_ IgnitionOn : 0|1@1+ (1,0) [0|1] "" SUT
+
 BO_ 305 BrakeReport: 3 SUT
  SG_ BrakeRxStatus : 0|8@1+ (1,0) [0|255] "" Tester
  SG_ BrakeLost : 8|16@1+ (1,0) [0|65535] "" Tester

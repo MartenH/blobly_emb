@@ -11,6 +11,7 @@ DO NOT EDIT — follow a signal here, or via the provenance comments in `sig/por
 | Overspeed | — | sense | — | — | — | — | sense→IOC(double)→ctrl | OverspeedDetector | LampController |
 | HighRev | — | ctrl | — | — | — | — | ctrl (local cell) | EngineMonitor | LampController |
 | WarnLamp | — | can0 | LampFrame.WarnLamp | 0x110 | 0|1 | — | ctrl→IOC(double)→can0 | LampController | (can0) |
+| IgnitionOn | — | can0 | Ignition.IgnitionOn | 0x302 | 0|1 | — | can0→IOC(double)→ctrl | (can0) | EngineMonitor |
 | BrakePressure | kPa | can0 | BrakeStatus.BrakePressure | 0x301 | 0|16 | x0.1 | can0→IOC(double)→ctrl | (can0) | BrakeMonitor |
 | BrakeRxStatus | — | can0 | BrakeReport.BrakeRxStatus | 0x131 | 0|8 | — | ctrl→IOC(double)→can0 | BrakeMonitor | (can0) |
 | BrakeLost | — | can0 | BrakeReport.BrakeLost | 0x131 | 8|16 | — | ctrl→IOC(double)→can0 | BrakeMonitor | (can0) |
