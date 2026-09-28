@@ -24,9 +24,9 @@ As of R1 (#291) — the rows R0 and R1 changed say so; the rest is the state the
 | Piece | State | Where |
 |---|---|---|
 | UDS services | 0x10, 0x11 (two-phase: answered, then reset), 0x22, 0x28, 0x2E, 0x3E; everything else answers 0x11. On the host 0x11 resets the DIAGNOSTIC state only (R1); a real reset is R2 | `comm/uds/uds.v` |
-| Session model | enforced (R1): starts in default, S3 returns to it (`s3_ms`), leaving a non-default session relocks security and re-enables 0x28; the programming session is refused until the R2 handoff | `comm/uds/uds.v`, `tools/loom2v/gen_com.v` |
+| Session model | enforced (R1): starts in default, S3 returns to it (`s3_ms`), every session change relocks security, and returning to default re-enables the communication 0x28 disabled; the programming session is refused until the R2 handoff | `comm/uds/uds.v`, `tools/loom2v/gen_com.v` |
 | DIDs | 16 × ≤32 B static table; 0x22 reads several DIDs per request (R1); per-DID `read` / `write` session and security gates | `comm/uds/uds.v` |
-| NRCs | 0x11 0x12 0x13 0x14 0x31 0x33 0x7E 0x7F in ISO 14229-1's evaluation order (R1); functional requests withhold 0x11/0x12/0x31/0x7E/0x7F; no 0x78 yet (R6/R7) | `comm/uds/uds.v` |
+| NRCs | 0x11 0x12 0x13 0x14 0x31 0x33 0x7F in ISO 14229-1's evaluation order (R1); functional requests withhold 0x11/0x12/0x31/0x7E/0x7F; no 0x7E (no subfunction is session-gated yet) and no 0x78 (R6/R7) | `comm/uds/uds.v` |
 | Security access 0x27 | absent (the bootloader uses 0x29 authentication instead) | `boot/prog.v` |
 | UDS on the **target** | **none** — loom2v refuses `[[isotp]]` on a ThreadX node; on silicon UDS runs only hand-wired — the bootloader over ISO-TP and the `h735_doip` example over DoIP | `tools/loom2v/gen.v` |
 | UDS config | `[[isotp]]` (one per node; `functional_id`, `s3_ms` since R1) + `[[did]]` (ascii / bytes / signal / writable, `read` / `write` gates) | `tools/ecucheck/gen.v` |
