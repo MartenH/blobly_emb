@@ -65,8 +65,8 @@ Kept standalone (not features of a running system): `bulk_bench` (host micro-ben
 - 🧭 **Target multi-bus comm owner** — per-bus channel + Rx-ISR multiplexed into
   one core's comm thread, so routes run on real silicon (today the ThreadX comm
   thread rejects routes)
-- 🧭 **ISO-TP / UDS** — beyond the boot-loader's request path into a general
-  diagnostic service layer
+- ✅ **ISO-TP / UDS** — beyond the boot-loader's request path: the generated diagnostic
+  server, on the host so far (see *Diagnostics & variant coding*)
 - ✅ **Wide cross-core signals** (`#211` — the derivation rung; **REQ-INV-006
   itself stays draft/covered**, closing only when the #212 shapes land and the
   silicon review signs off) — a remote signal carries ≤16 fields of
@@ -122,7 +122,34 @@ Kept standalone (not features of a running system): `bulk_bench` (host micro-ben
   signed images, TRNG-gated 0x29), bench-verified on H755
 - 🧭 **Boot P4 dual-bank** · 🧭 **P6 RDP2 lock**
 
+## Diagnostics & variant coding
+
+The plan is [docs/diagnostics.md](docs/diagnostics.md) (#286–#288): rungs R0–R7 plus blobly_net
+tester rungs N1–N4, decisions D1–D6 made. The FB sees a port, and the platform does the work;
+the FB never calls a service API.
+
+- ✅ **R1 diagnostic server** (#291) — sessions + S3, ISO NRC order, per-DID session /
+  security gates, multi-DID 0x22, functional addressing, 0x11, 0x28; one server per node.
+  Host only
+- ✅ **R1b 0x27 SecurityAccess** (#296) — key via an injected seam (reference key on the sim),
+  per-level attempt limit + lockout
+- ✅ **R3 receive status** (#297, #298) — `status = "RxStatus"` (never_received / ok /
+  timeout / integrity) and the E2E lost count per received signal; E2E's own sender-loss
+  timeout, independent of the COM deadline (REQ-E2E-002). Gap: the SOME/IP receive path has
+  no E2E timeout yet (#299)
+- 🧭 **R4 faults → DTCs** (#287) — `[[fault]]`, an FB fault port, debounce on the producing
+  thread, fault memory + ISO 14229 status byte on the comm thread, operation cycle, 0x19
+  01/02/0A, 0x14, 0x85 — on the host; tester rung N2 in blobly_net
+- 🧭 **R2 UDS on the target** — `[[isotp]]` on the ThreadX comm thread, 0x11 with the
+  bounded controller drain, the programming-session handoff into the bootloader (bench)
+- 🧭 **R5 target COM checks** — rx deadlines + E2E/SecOC on the comm thread, so receive
+  status reaches FBs on silicon
+- 🧭 **R6 persistent fault memory** — entries + freeze frames as chained journal records,
+  0x19 03/04/06, faults on the target
+- 🧭 **R7 parameters / variant coding** (#288) — `[[param]]` over the nvm P4 DID write path
+
 ## Drivers & IO
+
 
 - ✅ **CAN port ABI** — socket (host), fdcan (M_CAN bare-metal), ST-HAL, CanIf
   (AUTOSAR); format flags for FD + extended id
