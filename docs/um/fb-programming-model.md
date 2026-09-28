@@ -61,11 +61,46 @@ sender reaches `timeout` instead). **`timeout` needs a deadline on the frame** �
 `e2e = { ..., timeout_ms }` (required on a received E2E frame); without one a silent sender keeps
 reading `ok` with its last value. An E2E frame can also carry a `lost` counter. The details are in
 [../communication.md](../communication.md). **What each status means is your decision** — a
-substitute value and a safety reaction are different responses:
+substitute value and a safety reaction are different responses. On `timeout` and `integrity` the
+published value is **zero**, so a last good value has to live in the FB's own state:
 
 ```v
-speed := if inp.vehicle_speed.status == .ok { inp.vehicle_speed.kph } else { fb.last_good }
+pub struct SpeedMonitor {
+pub mut:
+	last_good u16 // the newest trustworthy speed
+	stale_ms  u32 // how long we have been running on it
+}
+
+pub fn (mut fb SpeedMonitor) on_10ms(inp ports.SpeedMonitorIn, mut out ports.SpeedMonitorOut) {
+	match inp.vehicle_speed.status {
+		.ok {
+			// a good frame: use it, and remember it
+			fb.last_good = inp.vehicle_speed.kph
+			fb.stale_ms = 0
+			out.warn_lamp.on = fb.last_good > 120
+		}
+		.never_received {
+			// start-up, nothing heard yet: no verdict — hold the safe default
+			out.warn_lamp.on = false
+		}
+		.timeout {
+			// the sender went quiet (the value is 0): ride on the last good value for a grace
+			// period, then give up on it and fail safe
+			fb.stale_ms += 10
+			out.warn_lamp.on = fb.stale_ms > 500 || fb.last_good > 120
+		}
+		.integrity {
+			// the newest frame was corrupt or forged (the value is 0): never trust it, not even
+			// for a grace period — fail safe now
+			out.warn_lamp.on = true
+		}
+	}
+}
 ```
+
+`match` makes you handle all four: add a status later and the compiler asks where it goes. A
+running example is `examples/overspeed`: `BrakeMonitor` reports the status it sees on a bus frame,
+and `test/rxstatus.lua` walks it through all four.
 
 Scaling is done before you see it: `kph` is km/h, whatever the DBC's factor and offset — see
 *Units and scaling* below for what the field type does to it.
