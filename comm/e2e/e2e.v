@@ -83,6 +83,11 @@ pub struct RxState {
 pub mut:
 	last    u8
 	started bool
+	// frames the counter showed not received INTACT, summed over every `lost` gap (delta - 1 each;
+	// a gap of 16 or more aliases on the 4-bit counter). A frame that failed its CRC counts here
+	// too, as in AUTOSAR E2E: its counter byte cannot be trusted, so no rule can tell which gap
+	// positions it filled. Monotonic and wrapping: a reader diffs it.
+	lost_frames u32
 }
 
 // check verifies the CRC and the counter progression (delta 0 = repeated,
@@ -103,6 +108,9 @@ pub fn (mut r RxState) check_ex(data &u8, dlc int, data_id u16, crc_pos int, cou
 	if r.started {
 		delta := (ctr - r.last) & 0x0F
 		st = if delta == 0 { Status.repeated } else if delta > 1 { Status.lost } else { Status.ok }
+		if delta > 1 {
+			r.lost_frames += u32(delta - 1)
+		}
 	}
 	r.last = ctr
 	r.started = true

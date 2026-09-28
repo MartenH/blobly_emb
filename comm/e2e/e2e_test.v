@@ -63,6 +63,28 @@ fn test_loss_detected() {
 	assert s.usable() // but the frame itself is valid + fresh, so still consumed
 }
 
+// The lost-frame count: each gap adds delta - 1, and a frame that arrived CORRUPT counts as not
+// received intact (its counter cannot be trusted) — AUTOSAR E2E's rule.
+fn test_lost_frames_count_every_frame_not_received_intact() {
+	mut tx := TxState{}
+	mut rx := RxState{}
+	mut f := [8]u8{}
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 0
+	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .ok
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 1 lost
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 2 lost
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 3 arrives
+	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .lost
+	assert rx.lost_frames == 2
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 4 arrives corrupt
+	f[0] ^= 0xFF
+	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .crc_error
+	f[0] ^= 0xFF
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 5 good
+	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .lost
+	assert rx.lost_frames == 3
+}
+
 fn test_wrong_data_id_fails() {
 	mut tx := TxState{}
 	mut rx := RxState{}

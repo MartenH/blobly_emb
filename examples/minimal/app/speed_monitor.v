@@ -9,6 +9,6 @@ pub mut:
 }
 
 pub fn (mut fb SpeedMonitor) on_10ms(inp ports.SpeedMonitorIn, mut out ports.SpeedMonitorOut) {
-	fb.over_limit = inp.vehicle_speed.valid && inp.vehicle_speed.kph > 120
+	fb.over_limit = inp.vehicle_speed.status == .ok && inp.vehicle_speed.kph > 120
 	out.warn_lamp.on = fb.over_limit
 }

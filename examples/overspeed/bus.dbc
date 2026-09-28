@@ -52,10 +52,16 @@ BO_ 768 WheelSpeeds: 8 ChassisECU
  SG_ WheelRL : 32|16@1+ (0.01,0) [0|655.35] "km/h" Tester
  SG_ WheelRR : 48|16@1+ (0.01,0) [0|655.35] "km/h" Tester
 
-BO_ 769 BrakeStatus: 4 ChassisECU
+BO_ 769 BrakeStatus: 6 ChassisECU
  SG_ BrakePressure : 0|16@1+ (0.1,0) [0|6553.5] "kPa" Tester
  SG_ ABSActive : 16|1@1+ (1,0) [0|1] "" Tester
  SG_ BrakePedal : 17|7@1+ (1,0) [0|100] "%" Tester
+ SG_ BrakeCrc : 32|8@1+ (1,0) [0|255] "" Tester
+ SG_ BrakeCounter : 40|4@1+ (1,0) [0|15] "" Tester
+
+BO_ 305 BrakeReport: 3 SUT
+ SG_ BrakeRxStatus : 0|8@1+ (1,0) [0|255] "" Tester
+ SG_ BrakeLost : 8|16@1+ (1,0) [0|65535] "" Tester
 
 BO_ 1024 BatteryStatus: 8 BatteryECU
  SG_ PackVoltage : 0|16@1+ (0.01,0) [0|655.35] "V" Tester

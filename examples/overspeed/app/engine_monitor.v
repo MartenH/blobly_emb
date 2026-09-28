@@ -10,7 +10,7 @@ pub mut:
 }
 
 pub fn (mut fb EngineMonitor) on_10ms(inp ports.EngineMonitorIn, mut out ports.EngineMonitorOut) {
-	fb.high = inp.engine_speed.valid && inp.engine_speed.rpm > 4000
+	fb.high = inp.engine_speed.status == .ok && inp.engine_speed.rpm > 4000
 	out.high_rev = sig.HighRev{
 		active: fb.high
 	}

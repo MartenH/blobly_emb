@@ -62,7 +62,7 @@ trusted = false
 
 [[signal]]
 name = "VehicleSpeed"
-fields = { kph = "u16", valid = "bool" }
+fields = { kph = "u16", status = "RxStatus" }
 from = "can0"        # EXTERNAL: in on can0 -> the comm bridge decodes it
 to   = "app"
 transport = "double"

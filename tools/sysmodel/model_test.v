@@ -3719,13 +3719,19 @@ fn test_dissolved_signalless_cluster_member_is_error() {
 		&& it.contains('produces/consumes no system signal')), errs(validate_system_gen(s)).str()
 }
 
-// REQ-TOPO-001: a lone `valid` field has no value for the bridge to serialize.
-fn test_dissolved_sole_valid_field_rejected() {
+// REQ-TOPO-001: receive metadata alone has no value for the bridge to serialize, and a `valid`
+// field is refused (loom2v refuses it on a received signal).
+fn test_dissolved_metadata_only_and_valid_rejected() {
 	mut s := clean_dissolved()
 	s.signals[0].fields = {
-		'valid': 'bool'
+		'status': 'RxStatus'
 	}
 	assert errs(validate_system_gen(s)).any(it.contains('has no value field'))
+	s.signals[0].fields = {
+		'kph':   'u16'
+		'valid': 'bool'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('`valid` field is not carried'))
 }
 
 // REQ-TOPO-002: a telemetry id equal to a DBC application frame aliases two
@@ -3800,15 +3806,17 @@ fn test_dissolved_unread_signal_is_warning() {
 		&& it.msg.contains('read by no other node'))
 }
 
-// REQ-TOPO-001: a value field ALONGSIDE `valid` is the supported shape (valid is
-// metadata, excluded from the wire) — it must NOT be rejected.
-fn test_dissolved_value_plus_valid_ok() {
+// REQ-TOPO-001: receive metadata (status / lost) is not lowered from system.toml — the node
+// declares it — so a system signal carrying either is refused, whatever its bus or endpoints.
+fn test_dissolved_receive_metadata_refused() {
 	mut s := clean_dissolved()
-	s.signals[0].fields = {
-		'kph':   'u16'
-		'valid': 'bool'
+	for meta in ['status', 'lost'] {
+		s.signals[0].fields = {
+			'kph': 'u16'
+			meta:  if meta == 'status' { 'RxStatus' } else { 'u16' }
+		}
+		assert errs(validate_system_gen(s)).any(it.contains('is not lowered from system.toml yet')), errs(validate_system_gen(s)).str()
 	}
-	assert !errs(validate_system_gen(s)).any(it.contains('field') || it.contains('bits')), 'value+valid is valid: ${errs(validate_system_gen(s))}'
 }
 
 // codex #142 round 10: loom2v spawns partition_telem() on the HOST target too
@@ -4478,4 +4486,31 @@ fn test_nm_cluster_on_a_someip_bus_is_error() {
 	s.buses[0].nm_peers_hi = 0x53f
 	e := errs(validate_system(s))
 	assert e.any(it.contains('cannot carry an NM cluster')), e.str()
+}
+
+// REQ-TOPO-001: receive metadata on a SOME/IP signal is not generated (the codec would read it off
+// the wire), so syscheck refuses it rather than report a system that fails generation.
+fn test_someip_signal_receive_metadata_is_refused() {
+	mut s := System{
+		buses:   [
+			Bus{
+				name:        'backbone'
+				kind:        'someip'
+				service:     0x0100
+				has_service: true
+			},
+		]
+		signals: [
+			SysSignal{
+				name:     'BenchLoad'
+				producer: 'tcu'
+				bus:      'backbone'
+				fields:   {
+					'load':   'u16'
+					'status': 'u8' // any type: the reserved name is the problem
+				}
+			},
+		]
+	}
+	assert errs(check_signals_dissolved(s)).any(it.contains('is not lowered from system.toml yet')), errs(check_signals_dissolved(s)).str()
 }

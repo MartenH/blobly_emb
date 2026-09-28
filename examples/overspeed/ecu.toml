@@ -48,21 +48,21 @@ trusted = false
 #       from != to  -> IOC channel (cross-partition; `transport` applies)
 [[signal]]
 name = "VehicleSpeed"
-fields = { kph = "u16", valid = "bool" }
+fields = { kph = "u16", status = "RxStatus" }
 from = "can0"        # EXTERNAL: rx from the bus
 to   = "sense"
 transport = "double"
 
 [[signal]]
 name = "EngineSpeed"
-fields = { rpm = "u16", valid = "bool" }
+fields = { rpm = "u16", status = "RxStatus" }
 from = "can0"        # EXTERNAL: rx from the bus
 to   = "ctrl"
 transport = "double"
 
 [[signal]]
 name = "FilteredSpeed"
-fields = { kph = "u16", valid = "bool" }
+fields = { kph = "u16", status = "RxStatus" }
 from = "sense"
 to   = "sense" # local (same core)
 
@@ -87,6 +87,27 @@ to   = "can0"        # EXTERNAL: tx to the bus
 transport = "double"
 
 [[signal]]
+name = "BrakePressure"
+fields = { kpa = "u16", status = "RxStatus", lost = "u16" }
+from = "can0"        # EXTERNAL: rx, E2E-protected — the bridge owns status + lost
+to   = "ctrl"
+transport = "double"
+
+[[signal]]
+name = "BrakeRxStatus"
+fields = { code = "u8" }
+from = "ctrl"
+to   = "can0"        # EXTERNAL: tx — what BrakeMonitor sees of BrakePressure's status
+transport = "double"
+
+[[signal]]
+name = "BrakeLost"
+fields = { count = "u16" }
+from = "ctrl"
+to   = "can0"        # EXTERNAL: tx — BrakePressure's E2E lost-frame count
+transport = "double"
+
+[[signal]]
 name = "SecureStatus"
 fields = { level = "u8" }
 from = "ctrl"
@@ -99,7 +120,18 @@ transport = "double"
 [[frame]]
 name = "Powertrain"             # rx: monitor a deadline
 bus  = "can0"
-rx   = { timeout_ms = 200 }     # no frame in 200ms -> signals' valid=false
+rx   = { timeout_ms = 200 }     # no frame in 200ms -> signals' status = timeout
+
+[[frame]]
+name = "BrakeStatus"            # rx: deadline + E2E — drives BrakePressure's RxStatus
+bus  = "can0"
+rx   = { timeout_ms = 300 }
+e2e  = { data_id = 0x44, crc_pos = 4, counter_pos = 5 }
+
+[[frame]]
+name = "BrakeReport"            # tx: BrakeMonitor's view of that status, for the tester
+bus  = "can0"
+tx   = { mode = "cyclic", cycle_ms = 50 }
 
 [[frame]]
 name = "LampFrame"              # tx: heartbeat + immediate on change, E2E-protected
@@ -188,6 +220,15 @@ thread    = "ctrl_main"
   period_ms = 10
   reads     = ["EngineSpeed"]
   writes    = ["HighRev"]
+
+[[fb]]
+name      = "BrakeMonitor"
+thread    = "ctrl_main"
+  [[fb.handler]]
+  name      = "on_10ms"
+  period_ms = 10
+  reads     = ["BrakePressure"]
+  writes    = ["BrakeRxStatus", "BrakeLost"]
 
 [[fb]]
 name      = "LampController"

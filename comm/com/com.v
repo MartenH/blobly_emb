@@ -78,7 +78,7 @@ pub struct RxState {
 pub mut:
 	timeout_us u64
 	last_us    u64
-	received   bool
+	received   bool // monitoring: a frame arrived, or the deadline was armed without one
 	timedout   bool
 }
 
@@ -87,6 +87,14 @@ pub fn (mut r RxState) on_receive(now u64) {
 	r.last_us = now
 	r.received = true
 	r.timedout = false
+}
+
+// arm starts the deadline without a reception — at bridge start, so a sender that has been absent
+// since boot still times out; the first frame then restarts it (on_receive).
+// It is also what a frame that fails its protection check does: the deadline then runs from that
+// frame, so `integrity` is followed by `timeout` once silence is the newer fact.
+pub fn (mut r RxState) arm(now u64) {
+	r.on_receive(now)
 }
 
 // expired returns true exactly once, on the edge where the deadline passes — the

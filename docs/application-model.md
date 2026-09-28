@@ -45,7 +45,7 @@ pub mut:
 }
 
 pub fn (mut fb SpeedMonitor) on_10ms(inp sig.SpeedMonitorIn, mut out sig.SpeedMonitorOut) {
-	fb.over_limit = inp.vehicle_speed.valid && inp.vehicle_speed.kph > 120
+	fb.over_limit = inp.vehicle_speed.status == .ok && inp.vehicle_speed.kph > 120
 	out.warn_lamp.on = fb.over_limit
 }
 // (parameter is `inp`, not `in` — `in` is a V keyword)
@@ -154,7 +154,7 @@ transform changes.
 ```toml
 [[signal]]
 name = "VehicleSpeed"   # physical km/h after COM scaling
-fields = { kph = "u16", valid = "bool" }
+fields = { kph = "u16", status = "RxStatus" }
 from = "can0"           # external: the bus
 to   = "app"
 # transform = "clamp:0..350"   # optional, generated; FB still just reads km/h
@@ -162,9 +162,11 @@ to   = "app"
 
 ## Signal validity
 
-A signal carries validity: an IOC channel never written reads back as "no value
-yet" (zero value with `valid = false` by convention). FBs must handle "not yet
-received" — as `SpeedMonitor` does with `in.vehicle_speed.valid`.
+A received signal can carry its receive status: `status = "RxStatus"`, owned by the
+bridge — `never_received`, `ok`, `timeout` or `integrity`. An IOC channel never written
+reads back as the zero value, which is `never_received`, so "not yet received" is never
+mistaken for healthy. FBs decide what each status means for them — as `SpeedMonitor` does
+by acting only on `.ok` (a substitute value and a safety reaction are different responses).
 
 ## Worked example — FB → FB chaining
 
@@ -179,17 +181,17 @@ pub mut:
 }
 pub fn (mut fb SpeedFilter) on_10ms(inp sig.SpeedFilterIn, mut out sig.SpeedFilterOut) {
 	fb.last = (fb.last * 3 + inp.vehicle_speed_raw.kph) / 4 // simple IIR
-	out.vehicle_speed = sig.VehicleSpeed{ kph: fb.last, valid: inp.vehicle_speed_raw.valid }
+	out.vehicle_speed = sig.VehicleSpeed{ kph: fb.last, status: inp.vehicle_speed_raw.status } // forwarded
 }
 ```
 
 ```toml
 # ecu.toml: chain bus -> SpeedFilter -> SpeedMonitor
 [[signal]]
-name = "VehicleSpeedRaw"; fields = { kph = "u16", valid = "bool" }
+name = "VehicleSpeedRaw"; fields = { kph = "u16", status = "RxStatus" }
 from = "can0"; to = "app"; transport = "double"     # external (bus rx)
 [[signal]]
-name = "VehicleSpeed";    fields = { kph = "u16", valid = "bool" }
+name = "VehicleSpeed";    fields = { kph = "u16", status = "RxStatus" }
 from = "app";  to = "app"; transport = "double"     # internal FB->FB
 [[signal]]
 name = "WarnLamp";        fields = { on = "bool" }

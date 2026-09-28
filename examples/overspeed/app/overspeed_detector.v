@@ -10,7 +10,7 @@ pub mut:
 }
 
 pub fn (mut fb OverspeedDetector) on_10ms(inp ports.OverspeedDetectorIn, mut out ports.OverspeedDetectorOut) {
-	fb.active = inp.filtered_speed.valid && inp.filtered_speed.kph > 120
+	fb.active = inp.filtered_speed.status == .ok && inp.filtered_speed.kph > 120
 	out.overspeed = sig.Overspeed{
 		active: fb.active
 	}

@@ -64,13 +64,13 @@ fn io_can0_10ms(ctx voidptr) {
 			}
 		}
 		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false {
-			mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), valid: true }
+			mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), status: .ok }
 			osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 			st.rx_powertrain_st.on_receive(now)
 		}
 	}
 	if st.rx_powertrain_st.expired(now) {
-		mut vehicle_speed := sig.VehicleSpeed{}
+		mut vehicle_speed := sig.VehicleSpeed{ status: .timeout }
 		osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 	}
 }
@@ -84,6 +84,7 @@ pub fn partition_can0(ch can.Channel, route_can1 can.Channel) {
 	st.rx_powertrain_st = com.RxState{
 		timeout_us: 200000
 	}
+	st.rx_powertrain_st.arm(osal.now_us())
 	mut sched := loom.Scheduler{}
 	sched.every(10_000, io_can0_10ms, &st)
 	for {
