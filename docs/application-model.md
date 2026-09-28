@@ -146,10 +146,13 @@ generated step on the connection — not hand-written in the FB.**
 - **Bus scaling (raw ↔ physical)** is the DBC `factor`/`offset`, applied in the
   generated COM codec (`dbc2cfg` emits `*_phys()`), so a signal read from CAN
   arrives already in km/h, °C, … The FB never sees raw bits.
-- **Other transforms** (unit conversion, range clamp, end-to-end protection, rate
-  limit) are **declared on the signal/connection** in config and emitted into the
-  generated path. They run where the signal crosses a boundary, so every consumer
-  sees the transformed value and the FB stays a pure function.
+- **Other transforms** (unit conversion, range clamp, rate limit) are **planned** as
+  declared steps on the signal/connection, emitted into the generated path where the
+  signal crosses a boundary, so every consumer sees the transformed value. None is
+  built yet: today such a conversion is FB code. (End-to-end protection, the one that
+  exists, is declared on the frame — `[[frame]] e2e`.) What the field type does to a
+  decoded value, and that sent values are rounded but not clamped:
+  [um/fb-programming-model.md](um/fb-programming-model.md).
 
 Rationale: keep FBs free of representation concerns — portable across ECUs and bus
 matrices, testable with plain physical values, unaffected when a DBC scaling or a
@@ -161,7 +164,7 @@ name = "VehicleSpeed"   # physical km/h after COM scaling
 fields = { kph = "u16", status = "RxStatus" }
 from = "can0"           # external: the bus
 to   = "app"
-# transform = "clamp:0..350"   # optional, generated; FB still just reads km/h
+# transform = "clamp:0..350"   # PLANNED, not built: declared, generated; FB still just reads km/h
 ```
 
 ## Signal validity

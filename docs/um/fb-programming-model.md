@@ -66,9 +66,26 @@ substitute value and a safety reaction are different responses:
 speed := if inp.vehicle_speed.status == .ok { inp.vehicle_speed.kph } else { fb.last_good }
 ```
 
-Scaling is done before you see it: `kph` is km/h, whatever the DBC's factor and offset
-([../application-model.md](../application-model.md)) — on the host; the target's lean codec takes
-plain u32 layouts only (see the table).
+Scaling is done before you see it: `kph` is km/h, whatever the DBC's factor and offset — see
+*Units and scaling* below for what the field type does to it.
+
+### Units and scaling
+
+An FB works in **physical units**; it never sees raw bits. The DBC's factor and offset are applied
+at the bus, in the generated codec, both ways. Two things are yours to get right:
+
+- **Receiving: the field type decides the precision.** The bridge converts raw → physical in
+  `f64` and casts it to your field's type. `kph = "u16"` truncates 57.9 km/h to 57; for 0.1 km/h
+  resolution declare `kph = "f32"`. A signal whose physical range goes negative (°C, a signed
+  torque) needs a signed type (`i16`, `f32`) — a negative value cast into an unsigned field is
+  meaningless.
+- **Sending: rounded, not clamped.** Your value is rounded to the nearest raw step
+  (`(phys - offset) / factor`), and a value **outside the DBC signal's range is not clamped — it
+  wraps into the signal's bits**. Clamp in the FB if your output can exceed the range.
+
+Any other conversion — unit changes, clamping, filtering, rate limits — is ordinary FB code today;
+declared transforms on a connection are planned, not built. On the ThreadX target the lean codec
+does no scaling at all (plain u32 layouts, factor 1, offset 0 — see the table).
 
 ### Send a value on CAN
 
@@ -179,6 +196,7 @@ Host only today. See [../communication.md](../communication.md) and
 
 - **Parameters / variant coding** — a `[[param]]` read as an In field, written by a tester over a
   DID and persisted (rung R7, [../diagnostics.md](../diagnostics.md)).
+- **Declared transforms** on a connection (clamp, unit conversion, rate limit) — for now, FB code.
 - **Event-triggered handlers** (`on_<signal>_received`) and **queued events** (every occurrence,
   not the latest value) — [../autosar-comparison.md](../autosar-comparison.md).
 - Faults on the target, freeze frames, and faults raised by a signal's receive status (R4c, R6).
