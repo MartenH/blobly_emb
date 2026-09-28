@@ -19,17 +19,17 @@ page is the plan to close that, in rungs that each ship and verify on their own.
 
 ## 1. Where we actually are
 
-As of R1 (#291) — the rows R0 and R1 changed say so; the rest is the state the plan started from.
+As of R1b — the rows R0, R1 and R1b changed say so; the rest is the state the plan started from.
 
 | Piece | State | Where |
 |---|---|---|
-| UDS services | 0x10, 0x11 (two-phase: answered, then reset), 0x22, 0x28, 0x2E, 0x3E; everything else answers 0x11. On the host 0x11 resets the DIAGNOSTIC state only (R1); a real reset is R2 | `comm/uds/uds.v` |
-| Session model | enforced (R1): starts in default, S3 returns to it (`s3_ms`), every session change relocks security, and returning to default re-enables the communication 0x28 disabled; the programming session is refused until the R2 handoff | `comm/uds/uds.v`, `tools/loom2v/gen_com.v` |
+| UDS services | 0x10, 0x11 (two-phase: answered, then reset), 0x22, 0x27 (R1b), 0x28, 0x2E, 0x3E; everything else answers 0x11. On the host 0x11 resets the DIAGNOSTIC state only (R1); a real reset is R2 | `comm/uds/uds.v` |
+| Session model | enforced (R1): starts in default, S3 returns to it (`s3_ms`), every session request relocks security (re-entry included, R1b), and returning to default re-enables the communication 0x28 disabled; the programming session is refused until the R2 handoff | `comm/uds/uds.v`, `tools/loom2v/gen_com.v` |
 | DIDs | 16 × ≤32 B static table; 0x22 reads several DIDs per request (R1); per-DID `read` / `write` session and security gates | `comm/uds/uds.v` |
-| NRCs | 0x11 0x12 0x13 0x14 0x31 0x33 0x7F in ISO 14229-1's evaluation order (R1); functional requests withhold 0x11/0x12/0x31/0x7E/0x7F; no 0x7E (no subfunction is session-gated yet) and no 0x78 (R6/R7) | `comm/uds/uds.v` |
-| Security access 0x27 | absent (the bootloader uses 0x29 authentication instead) | `boot/prog.v` |
+| NRCs | 0x11 0x12 0x13 0x14 0x22 0x24 0x31 0x33 0x35 0x36 0x37 0x7F in ISO 14229-1's evaluation order (R1; the 0x27 ones R1b); functional requests withhold 0x11/0x12/0x31/0x7E/0x7F; no 0x7E (no subfunction is session-gated yet) and no 0x78 (R6/R7) | `comm/uds/uds.v` |
+| Security access 0x27 | served on the host (R1b): levels from the DID gates, one key per seed, attempt limit + lockout delay (the count survives an ECU reset), keys through the injected `SecurityOps` (the host bridge injects the reference key); the bootloader keeps 0x29 | `comm/uds/uds.v` |
 | UDS on the **target** | **none** — loom2v refuses `[[isotp]]` on a ThreadX node; on silicon UDS runs only hand-wired — the bootloader over ISO-TP and the `h735_doip` example over DoIP | `tools/loom2v/gen.v` |
-| UDS config | `[[isotp]]` (one per node; `functional_id`, `s3_ms` since R1) + `[[did]]` (ascii / bytes / signal / writable, `read` / `write` gates) | `tools/ecucheck/gen.v` |
+| UDS config | `[[isotp]]` (one per node; `functional_id`, `s3_ms` since R1; `security_attempts`, `security_delay_ms` since R1b) + `[[did]]` (ascii / bytes / signal / writable, `read` / `write` gates) | `tools/ecucheck/gen.v` |
 | Rx signal status | one `valid` bool, host bridge only; E2E/SecOC failures drop the frame silently; target rejects rx deadlines, E2E and `valid` ("phase 6b-2b") | `tools/loom2v/gen_com.v`, `gen.v` |
 | Fault memory / DTCs | **nothing** — no events, debouncing, status byte, 0x19, 0x14, 0x85 | — |
 | Persistence | journal engine + `persist = "now" / "shutdown"` signals, ThreadX only, one journal per node, 20 B records with 634 B chains; DID write path (NvM "P4") not built | `nvm/`, `tools/loom2v/gen_nvm.v` |
@@ -124,9 +124,10 @@ What it adds, all table-driven so an unsupported path answers the right NRC rath
   generalProgrammingFailure**, never a positive response for data that was not stored. Both services
   get a fault-injection test.
 - **0x27 SecurityAccess** with seed from the board TRNG, attempt counter + delay (0x35/0x36/0x37,
-  0x24 for a key sent before its seed) that **survives a reset** — the failed-attempt state is
-  persisted, or the delay is imposed at every boot until a successful unlock, since an in-RAM counter
-  is bypassed by power-cycling between guesses — and the key check behind an **injected,
+  0x24 for a key sent before its seed) that **survives a reset** — the failed-key count is kept
+  across an ECU reset (R1b) and persisted across a power cycle on the target (R2), with the lockout
+  applied at boot only while it is non-zero, since an in-RAM counter alone is bypassed by
+  power-cycling between guesses; a clean reset or boot never waits — and the key check behind an **injected,
   platform-neutral interface** (a fixed function-pointer ops struct handed to the server, the shape
   `boot.Prog.rng` already uses), so `comm/uds` stays free of any `fn C` — the OEM algorithm and any
   board code live in the target glue, below the backend line. The sim and bench use the reference key blobly_net's client already
@@ -406,4 +407,5 @@ done until its obligations hold under their tests. §3 fixes the shape; this tab
 | R2 | NM stays awake for a diagnostic exchange in ANY session: a request-scoped keep-awake vote from the first frame of a request until its final response has drained (diagnostic frames do not refresh NM), in addition to the session-scoped vote. | bench: a multi-frame 0x22 in the default session started near the NM timeout completes |
 | R3 / R5 | An E2E-protected signal detects total sender loss inside the E2E mechanism itself (REQ-E2E-002): `e2e.RxState` gains its own deadline (`on_valid` / `expired`) and publishes the loss, independent of the QM COM deadline. | host (R3) and bench (R5): sender removed, loss seen with the COM deadline disabled |
 | R6 | The operation-cycle END is a barrier too: before the sleep flush marks the journal clean, the fault memory waits for every producer to acknowledge the ending generation and persists what it read — power can be removed with no next cycle to drain the tail. | power-off right after bus sleep with a qualification in the last dispatch |
+| R2 | 0x27's failed-key count survives a POWER CYCLE: persisted, with the boot lockout applied only while it is non-zero. R1b keeps it across an ECU reset (RAM) but not across a power-up, which a simulator need not defend. | bench: fail twice, power-cycle, the third wrong key locks out; a clean power-up unlocks at once |
 | R6 | Persistent diagnostic counters have fixed serialized widths and SATURATE (occurrence, failed-cycle, aging); they never wrap to a small value. | unit: increment at the maximum |

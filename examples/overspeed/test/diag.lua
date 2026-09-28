@@ -1,7 +1,7 @@
 -- UDS (ISO 14229) over ISO-TP on vcan0: drive the diag connection (Request 0x101
 -- -> Response 0x102) with blobly_net's UDS client. Exercises the service dispatch
 -- AND multi-frame segmentation (the 19-byte and 20-byte DIDs span several frames).
--- @verifies REQ-DIAG-002 REQ-DIAG-003 REQ-DIAG-004 REQ-DIAG-005 REQ-DIAG-006 REQ-DIAG-007
+-- @verifies REQ-DIAG-002 REQ-DIAG-003 REQ-DIAG-004 REQ-DIAG-005 REQ-DIAG-006 REQ-DIAG-007 REQ-DIAG-008
 -- (the 0xF1A0 test injects VehicleSpeed=100 on the bus then reads the live DID back
 --  through UDS and asserts ~100 — the DID returns the current signal value from the
 --  same source the application sees. NOT REQ-NVM-008: 0xF1AA is a plain RAM cell, not
@@ -135,6 +135,46 @@ test("UDS: S3 returns an idle extended session to default", function()
   -- 2.6 s with no VehicleSpeed let the rx deadline expire and the lamp go out: leave no such
   -- frames buffered for the next script (secoc.lua reads the oldest SecureFrames it finds)
   drain()
+end)
+
+-- the reference key (blobly_net's uds.security_key, decision D5): each seed byte XOR 0xFF, which
+-- for a byte is 255 - b (no bit operators needed)
+local function unlock_key(seed)
+  local k = {}
+  for i = 1, #seed do k[i] = string.char(255 - string.byte(seed, i)) end
+  return table.concat(k)
+end
+
+test("UDS: 0x27 unlocks level 1 with the reference key and opens the gated write", function()
+  local d = diag()
+  d:session(0x03) -- no wait: a boot or a clean ECUReset starts no lockout
+  check.nrc(0x33, function() d:write_did(0xF1AC, fromhex("5A")) end)
+  local r = d:raw(fromhex("27 01"))
+  check.equal(tohex(r:sub(1, 2)), "67 01")
+  local seed = r:sub(3)
+  check.equal(#seed, 4)
+  check.equal(tohex(d:raw(fromhex("27 02") .. unlock_key(seed))), "67 02")
+  d:write_did(0xF1AC, fromhex("5A"))
+  check.equal(tohex(d:read_did(0xF1AC)), "5A")
+  d:session(0x01) -- a session change relocks
+  d:session(0x03)
+  check.nrc(0x33, function() d:write_did(0xF1AC, fromhex("5B")) end)
+  d:session(0x01)
+end)
+
+test("UDS: 0x27 locks out after three wrong keys until the delay has passed", function()
+  local d = diag()
+  d:session(0x03)
+  for attempt = 1, 3 do
+    local key = unlock_key(d:raw(fromhex("27 01")):sub(3))
+    local bad = key:sub(1, 3) .. string.char((string.byte(key, 4) + 1) % 256)
+    check.nrc(attempt < 3 and 0x35 or 0x36, function() d:raw(fromhex("27 02") .. bad) end)
+  end
+  check.nrc(0x37, function() d:raw(fromhex("27 01")) end)
+  sleep_ms(1100) -- security_delay_ms = 1000
+  local seed = d:raw(fromhex("27 01")):sub(3)
+  check.equal(tohex(d:raw(fromhex("27 02") .. unlock_key(seed))), "67 02")
+  d:session(0x01)
 end)
 
 test("UDS: a suppressed functional ECUReset applies before the next request in the FIFO", function()

@@ -72,6 +72,9 @@ struct IsotpConn {
 	stmin         int
 	functional_id int // 0 = no functional requests on this connection
 	s3_ms         int // 0 = the server's default (5 s)
+	// 0x27: failed keys before the lockout, and the lockout delay (0 = the server's defaults)
+	security_attempts int
+	security_delay_ms int
 }
 
 // DidCfg is one [[did]]: constant bytes, a writable RAM cell, and/or a live signal.
@@ -874,6 +877,8 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 			stmin: int((m['stmin_ms'] or { toml.Any(0) }).int())
 			functional_id: int((m['functional_id'] or { toml.Any(0) }).int())
 			s3_ms: int((m['s3_ms'] or { toml.Any(0) }).int())
+			security_attempts: int((m['security_attempts'] or { toml.Any(0) }).int())
+			security_delay_ms: int((m['security_delay_ms'] or { toml.Any(0) }).int())
 		}
 	}
 	// ONE diagnostic server per node (docs/diagnostics.md): every [[isotp]] connection is a UDS
@@ -886,6 +891,12 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 	for c in isotp_conns {
 		if c.s3_ms < 0 {
 			panic('loom2v: [[isotp]] "${c.name}" s3_ms ${c.s3_ms} is negative (0 = the default ${uds.default_s3_us / 1000} ms)')
+		}
+		if c.security_attempts < 0 || c.security_attempts > 255 {
+			panic('loom2v: [[isotp]] "${c.name}" security_attempts ${c.security_attempts} is out of range (1..255; 0 = the default ${uds.default_sa_attempts})')
+		}
+		if c.security_delay_ms < 0 {
+			panic('loom2v: [[isotp]] "${c.name}" security_delay_ms ${c.security_delay_ms} is negative (0 = the default ${uds.default_sa_delay_us / 1000} ms)')
 		}
 		if c.functional_id == 0 {
 			continue
@@ -968,8 +979,14 @@ fn parse_did_access(m map[string]toml.Any, key string, id int) (u8, u8) {
 		panic('loom2v: [[did]] 0x${id.hex()} ${key}.session is empty — omit it for "every session"')
 	}
 	sec := (am['security'] or { toml.Any(0) }).int()
-	if sec < 0 || sec > 0x7F {
-		panic('loom2v: [[did]] 0x${id.hex()} ${key}.security ${sec} is not a 0x27 level (1..0x7F)')
+	if sec < 0 || sec > uds.max_security_level {
+		panic('loom2v: [[did]] 0x${id.hex()} ${key}.security ${sec} is not a 0x27 level the server serves (1..${uds.max_security_level})')
+	}
+	// 0x27 unlocks in extended (programming too, but an application server refuses that session
+	// until the bootloader handoff, R2), and every session change relocks: a gate whose sessions
+	// leave out extended could never be opened
+	if sec != 0 && mask != 0 && mask & uds.in_extended == 0 {
+		panic('loom2v: [[did]] 0x${id.hex()} ${key} needs security ${sec} but is not allowed in the extended session, the only one an application server unlocks in — it could never be opened')
 	}
 	return mask, u8(sec)
 }
@@ -1405,7 +1422,22 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		bulk:         parse_bulk(doc)
 	}
 	validate_signal_routes_model(m, doc)
+	validate_security(m.isotp_conns, m.dids)
 	return m
+}
+
+// validate_security: the 0x27 settings mean something only where a [[did]] gate names a level —
+// the levels the server serves are exactly those (security_levels) — so tuning the lockout of a
+// server with nothing to unlock is a config error, not a silent no-op.
+fn validate_security(conns []IsotpConn, dids []DidCfg) {
+	if security_levels(dids) != 0 {
+		return
+	}
+	for c in conns {
+		if c.security_attempts != 0 || c.security_delay_ms != 0 {
+			panic('loom2v: [[isotp]] "${c.name}" configures security_attempts / security_delay_ms, but no [[did]] gate names a security level — there is nothing to unlock')
+		}
+	}
 }
 
 // validate_signal_routes_model checks a SIGNAL route against the rest of the model
