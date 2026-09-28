@@ -151,6 +151,7 @@ mut:
 	e2e_id        map[string]int
 	e2e_crc       map[string]int
 	e2e_ctr       map[string]int
+	e2e_timeout_us map[string]int // the E2E-owned reception timeout (REQ-E2E-002); rx frames only
 	secoc_on      map[string]bool
 	secoc_id      map[string]int
 	secoc_fresh   map[string]int
@@ -1171,7 +1172,7 @@ fn parse_frames(doc toml.Doc, eth string, buses map[string]bool) FrameCfg {
 		}
 		if 'rx' in fm {
 			rxm := (fm['rx'] or { toml.Any('') }).as_map()
-			f.rx_timeout_us[fk] = int((rxm['timeout_ms'] or { toml.Any(0) }).int()) * 1000
+			f.rx_timeout_us[fk] = ms_to_us((rxm['timeout_ms'] or { toml.Any(0) }).i64(), 'frame "${fk}": rx.timeout_ms')
 		}
 		if 'e2e' in fm {
 			em := (fm['e2e'] or { toml.Any('') }).as_map()
@@ -1184,6 +1185,7 @@ fn parse_frames(doc toml.Doc, eth string, buses map[string]bool) FrameCfg {
 			}
 			f.e2e_crc[fk] = int((em['crc_pos'] or { toml.Any(0) }).int())
 			f.e2e_ctr[fk] = int((em['counter_pos'] or { toml.Any(0) }).int())
+			f.e2e_timeout_us[fk] = ms_to_us((em['timeout_ms'] or { toml.Any(0) }).i64(), 'frame "${fk}": e2e.timeout_ms')
 		}
 		if 'secoc' in fm {
 			sm := (fm['secoc'] or { toml.Any('') }).as_map()
@@ -1470,6 +1472,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	}
 	validate_signal_routes_model(m, doc)
 	validate_security(m.isotp_conns, m.dids)
+	validate_e2e_timeouts(m)
 	for sname in m.sig_names {
 		si := m.sig_of[sname] or { continue }
 		// the lost counter is what the E2E sequence check counts: without E2E on the frame it
@@ -4593,4 +4596,48 @@ fn snake(name string) string {
 	// single source: ecumodel.snake_name — the validator's collision checks
 	// and this generator's emitted identifiers must agree byte-for-byte
 	return ecumodel.snake_name(name)
+}
+
+// ms_to_us converts an authored timeout to the µs the generated code holds in an int, refusing a
+// negative value and one whose µs would not fit (a wrap would turn a long timeout negative, and a
+// non-positive timeout silently switches the monitor off).
+fn ms_to_us(ms i64, what string) int {
+	if ms < 0 {
+		panic('loom2v: ${what} ${ms} is negative (0 = none)')
+	}
+	if ms > i64(max_i32) / 1000 { // compared in ms: `ms * 1000` itself could overflow i64
+		panic('loom2v: ${what} ${ms} is too long (at most ${i64(max_i32) / 1000} ms)')
+	}
+	return int(ms * 1000)
+}
+
+// validate_e2e_timeouts: the E2E-owned timeout (REQ-E2E-002, ASIL B), checked ONCE against the whole
+// model — every bus, used or not. It is REQUIRED on an E2E frame whose signals the bridge delivers
+// to the application, and each of those signals must carry `status`, or its expiry would publish
+// a zero value indistinguishable from a healthy one; and it is refused where nothing receives the
+// frame (transmitted, or neither decoded nor a signal route's source).
+fn validate_e2e_timeouts(m Model) {
+	mut delivered := map[string][]string{} // frame -> the received signals decoded from it
+	for sname in m.sig_names {
+		si := m.sig_of[sname] or { continue }
+		if si.external && si.rx && m.frames.e2e_here(si.dbc_msg, si.bus) {
+			delivered[si.dbc_msg] << sname
+		}
+	}
+	route_src := m.routes.filter(it.signal != '' && m.frames.e2e_here(snake(it.from_frame), it.from_bus)).map(snake(it.from_frame))
+	for fk, to in m.frames.e2e_timeout_us {
+		if to > 0 && fk !in delivered && fk !in route_src {
+			panic('loom2v: frame "${fk}" sets e2e.timeout_ms, but nothing receives it — the E2E timeout watches a RECEIVED frame for loss of its sender')
+		}
+	}
+	for fk, sigs in delivered {
+		if (m.frames.e2e_timeout_us[fk] or { 0 }) == 0 {
+			panic('loom2v: frame "${fk}" is E2E-protected and received, but its e2e has no timeout_ms — REQ-E2E-002 detects total loss of the sender inside E2E itself, not only by the QM COM deadline')
+		}
+		for sname in sigs {
+			if !(m.sig_of[sname] or { SigInfo{} }).has_status {
+				panic('loom2v: signal "${sname}" comes from the E2E-protected frame "${fk}" but has no `status = "RxStatus"` — without it an E2E timeout reaches the FB as a zero value that looks healthy')
+			}
+		}
+	}
 }

@@ -1,12 +1,9 @@
 module e2e
 
-// @verifies SYS-REQ-SAFE-001 REQ-E2E-001 REQ-E2E-003
-// (corruption -> not delivered; protect-on-transmit incl. counter advance and 15->0
-//  wrap. REQ-E2E-002 is NOT tagged although the repeat/skip counter legs are covered
-//  here: its total-loss leg requires a reception timeout INSIDE the E2E mechanism
-//  (ASIL B, per the requirement text) and e2e.RxState has none — the COM deadline is
-//  explicitly only the complementary QM monitor. Implementing the E2E-owned timeout
-//  is an open gap, recorded in requirements/e2e.toml.)
+// @verifies SYS-REQ-SAFE-001 REQ-E2E-001 REQ-E2E-002 REQ-E2E-003
+// (corruption -> not delivered; repeat / skip / lost-frame counting and the E2E-owned
+//  reception timeout, independent of the QM COM deadline (002); protect-on-transmit incl.
+//  counter advance and 15->0 wrap.)
 
 const id = u16(0x0123)
 const crc_pos = 1
@@ -102,4 +99,29 @@ fn test_counter_wraps_15_to_0() {
 		tx.protect(&f[0], 8, id, crc_pos, ctr_pos)
 		assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .ok
 	}
+}
+
+// REQ-E2E-002: total loss of the sender, detected by E2E's OWN timeout — armed at start, refreshed
+// only by a VALID message (a repeat or a CRC error is not one), firing once.
+fn test_own_timeout_detects_sender_loss() {
+	mut tx := TxState{}
+	mut rx := RxState{
+		timeout_us: 1000
+	}
+	assert !rx.expired(50_000), 'an unarmed timeout must not fire'
+	rx.arm(0)
+	assert !rx.expired(1000)
+	assert rx.expired(1001), 'sender absent since start'
+	assert !rx.expired(5000), 'fires once'
+	mut f := [8]u8{}
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos)
+	if rx.check(&f[0], 8, id, crc_pos, ctr_pos).usable() {
+		rx.on_valid(10_000)
+	}
+	assert !rx.expired(10_500)
+	// a stuck sender: the same frame again is a repeat, which does not refresh the timeout
+	if rx.check(&f[0], 8, id, crc_pos, ctr_pos).usable() {
+		rx.on_valid(10_900)
+	}
+	assert rx.expired(11_001), 'a repeat kept the sender alive'
 }

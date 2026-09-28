@@ -63,7 +63,7 @@ end)
 test("RxStatus: a bad CRC reads integrity, silence then timeout, and a good frame ok again", function()
   brake(1000)
   brake(1000, 0, true)
-  check.equal((report(150)), INTEGRITY) -- the deadline now runs from the bad frame (300 ms)
+  check.equal((report(150)), INTEGRITY) -- the E2E timeout still counts from the last VALID frame
   sleep_ms(300) -- silence is now the newer fact
   check.equal((report(150)), TIMEOUT)
   brake(1000)
@@ -123,12 +123,48 @@ test("RxStatus: rx switched off and on inside one drain restarts the deadline", 
   local d = uds.open("CAN1", { tx = 0x101, rx = 0x102 })
   d:session(0x03)
   for _ = 1, 3 do brake(1000); sleep_ms(10) end
-  sleep_ms(220) -- most of the 300 ms deadline gone
-  -- rx off, a frame the application must not see, rx on — one bridge drain
+  sleep_ms(250) -- most of the 300 ms deadline gone
+  -- rx off and on again in one bridge drain, with NO frame between (a valid one would refresh
+  -- the E2E timeout by itself and hide a missing restart)
   bus.send("CAN1", 0x7DF, fromhex("03 28 82 F1 00 00 00 00"))
-  brake(1000)
   bus.send("CAN1", 0x7DF, fromhex("03 28 80 F1 00 00 00 00"))
-  -- without a restart the old deadline fires at 300 ms; restarted, it runs until ~520 ms
-  check.equal((report(150)), OK, "the deadline was not restarted when reception returned")
+  -- without a restart the old deadline fires at ~300 ms and is reported by ~360 ms; restarted
+  -- at ~255 ms, it runs to ~555 ms — so read between ~375 and ~475 ms
+  sleep_ms(120)
+  check.equal((report(100)), OK, "the deadline was not restarted when reception returned")
+  d:session(0x01)
+end)
+
+test("RxStatus: a stuck sender repeating one frame runs out E2E's own timeout (REQ-E2E-002)", function()
+  brake(1000)
+  check.equal((report(150)), OK)
+  for _ = 1, 20 do brake(1000, -1); sleep_ms(20) end -- the SAME counter again: repeats, not valid
+  check.equal((report(100)), TIMEOUT, "repeated frames kept a stuck sender alive")
+  brake(1000)
+  check.equal((report(150)), OK)
+end)
+
+test("RxStatus: integrity after the timeout has fired gives way to timeout again", function()
+  brake(1000)
+  sleep_ms(400) -- the E2E timeout fires
+  check.equal((report(100)), TIMEOUT)
+  brake(1000, 0, true) -- one corrupt frame
+  check.equal((report(100)), INTEGRITY)
+  sleep_ms(300) -- silence after it is the newer fact again
+  check.equal((report(150)), TIMEOUT, "integrity stuck after an already-fired timeout")
+  brake(1000)
+  check.equal((report(150)), OK)
+end)
+
+test("RxStatus: a valid frame right after rx is re-enabled is not judged late by the stale deadline", function()
+  local d = uds.open("CAN1", { tx = 0x101, rx = 0x102 })
+  brake(1000)
+  d:session(0x03)
+  check.equal(tohex(d:raw(fromhex("28 02 F1"))), "68 02") -- rx off
+  sleep_ms(400) -- longer than the 300 ms timeout, silence commanded
+  -- rx on (suppressed functional request) and a valid frame, in one bridge drain
+  bus.send("CAN1", 0x7DF, fromhex("03 28 80 F1 00 00 00 00"))
+  brake(1000)
+  check.equal((report(100)), OK, "commanded silence reported as a sender timeout")
   d:session(0x01)
 end)

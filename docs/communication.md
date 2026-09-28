@@ -212,16 +212,29 @@ signal — or any FB output — straight over diagnostics.
 A `[[frame]]` can be **end-to-end protected**: `comm/e2e` stamps an alive counter
 and a CRC into the frame on tx and verifies them on rx, so the receiver detects
 corruption (CRC), repetition / a stuck sender (counter unchanged), individual lost
-frames (counter skip), and loss-of-communication (the rx deadline). A *lost* frame
-is still consumed (it's valid and fresh — the skip just marks the gap); *repeated*
-and *corrupt* frames are dropped. The generator rejects an `e2e` whose `crc_pos`/
-`counter_pos` fall outside the frame DLC.
+frames (counter skip), and total loss of the sender — through E2E's **own** timeout,
+`timeout_ms` on an rx frame's `e2e` (REQ-E2E-002): no *valid* message (ok or lost) within
+the period, so a stuck sender that only repeats, or one whose frames all fail the CRC,
+runs it out too. It is independent of the QM COM deadline (`rx = { timeout_ms }`), which
+is a complementary monitor; either may be configured alone, and both publish `timeout`.
+The E2E timeout is required on a received E2E frame whose signals reach the application,
+and each of those signals must declare `status`, so a loss never reaches an FB as a
+plain zero. A valid frame that arrives after the timeout ran out, but before the bridge's
+next pass noticed, still reports `timeout` for that frame.
+A *lost* frame is still consumed (it's valid and fresh — the skip just marks the gap);
+*repeated* and *corrupt* frames are dropped. The generator rejects an `e2e` whose
+`crc_pos`/`counter_pos` fall outside the frame DLC, and a `timeout_ms` on a transmitted
+frame.
 
 ```toml
 [[frame]]
 name = "LampFrame"; bus = "can0"
 tx   = { mode = "mixed", cycle_ms = 100 }
 e2e  = { data_id = 0x10, crc_pos = 1, counter_pos = 2 }  # CRC-8 J1850 + 4-bit counter
+
+[[frame]]
+name = "BrakeStatus"; bus = "can0"                        # rx: E2E owns the loss check
+e2e  = { data_id = 0x44, crc_pos = 4, counter_pos = 5, timeout_ms = 300 }
 ```
 
 The bridge stamps **after** the on-change decision (so the ever-changing counter

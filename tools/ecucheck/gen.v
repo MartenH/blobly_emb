@@ -264,6 +264,7 @@ fn specs() map[string]map[string]Key {
 			'data_id':     k(.int)
 			'crc_pos':     k(.int)
 			'counter_pos': k(.int)
+			'timeout_ms':  k(.int) // rx: the E2E-owned sender-loss timeout (REQ-E2E-002)
 		}
 		'secoc':      {
 			'key':       k(.str)

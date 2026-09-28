@@ -88,6 +88,41 @@ pub mut:
 	// too, as in AUTOSAR E2E: its counter byte cannot be trusted, so no rule can tell which gap
 	// positions it filled. Monotonic and wrapping: a reader diffs it.
 	lost_frames u32
+	// The E2E-owned reception timeout (REQ-E2E-002): no VALID message — ok or lost; a repeat or a
+	// CRC error does not count — within timeout_us is total loss of the sender, detected inside
+	// the E2E mechanism rather than by the QM COM deadline. 0 = off. The owner arms it at start
+	// (arm), reports each usable frame (on_valid) and polls expired. It deliberately mirrors
+	// com.RxState's deadline rather than sharing it: REQ-E2E-002 keeps the ASIL-B loss check
+	// inside the E2E mechanism, independent of the QM COM monitor.
+	timeout_us  u64
+	valid_us    u64
+	armed       bool
+	timedout    bool
+}
+
+// arm starts the timeout with no valid message yet — at start, so a sender absent since then
+// times out too — and restarts it (after a commanded reception pause).
+pub fn (mut r RxState) arm(now u64) {
+	r.valid_us = now
+	r.armed = true
+	r.timedout = false
+}
+
+// on_valid records a usable (ok / lost) message at `now`.
+pub fn (mut r RxState) on_valid(now u64) {
+	r.arm(now)
+}
+
+// expired returns true exactly once, when no valid message arrived for timeout_us.
+pub fn (mut r RxState) expired(now u64) bool {
+	if r.timeout_us == 0 || !r.armed || r.timedout {
+		return false
+	}
+	if now - r.valid_us > r.timeout_us {
+		r.timedout = true
+		return true
+	}
+	return false
 }
 
 // check verifies the CRC and the counter progression (delta 0 = repeated,
