@@ -646,6 +646,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			}
 			if m.frames.e2e_here(msg, bname) {
 				glue << '\te2e_rx_${msg} e2e.RxState'
+				if lost_expr(m, msg, bname, conns.len > 0).contains('e2e_hidden') {
+					glue << '\te2e_hidden_${msg} u32 // lost frames counted while 0x28 had rx off'
+				}
 			}
 			if m.frames.secoc_here(msg, bname) {
 				glue << '\tsecoc_key_${msg} secoc.Key'
@@ -872,7 +875,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				// 0x28 gates only what the application SEES: the checks themselves run on every frame,
 				// so SecOC freshness and the E2E counter keep tracking the sender and the first frame
 				// after rx is re-enabled is not judged a replay or a loss burst.
-				lost := if e2e { 'st.e2e_rx_${msg}.lost_frames' } else { '' }
+				lost := lost_expr(m, msg, bname, conns.len > 0)
 				gate := if conns.len > 0 { 'diag_rx_ok' } else { '' }
 				mut ind := '\t\t\t'
 				if secoc {
@@ -892,7 +895,18 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					} else {
 						'check(&rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or { 0 }).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }})'
 					}
+					hide := lost != '' && conns.len > 0
+					if hide {
+						glue << '${ind}lf_${msg} := st.e2e_rx_${msg}.lost_frames'
+					}
 					glue << '${ind}e2e_${msg} := st.e2e_rx_${msg}.${chk}'
+					if hide {
+						// frames missed while 0x28 has reception off were COMMANDED silence, not loss:
+						// the sequence state keeps tracking them, but the FB never sees them counted
+						glue << '${ind}if !diag_rx_ok {'
+						glue << '${ind}\tst.e2e_hidden_${msg} += st.e2e_rx_${msg}.lost_frames - lf_${msg}'
+						glue << '${ind}}'
+					}
 					glue << '${ind}if e2e_${msg}.usable() {'
 					ind += '\t'
 				}
@@ -1035,7 +1049,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 				dl_gate := if conns.len > 0 { 'diag_rx_ok && ' } else { '' }
 				glue << '\tif ${dl_gate}st.rx_${msg}_st.expired(now) {'
-				lost := if m.frames.e2e_here(msg, bname) { 'st.e2e_rx_${msg}.lost_frames' } else { '' }
+				lost := lost_expr(m, msg, bname, conns.len > 0)
 				for sname in list {
 					si := m.sig_of[sname] or { continue }
 					fld := snake(sname)
@@ -1826,9 +1840,8 @@ fn rx_status_fields(si SigInfo, status string, lost string) string {
 // Behind the 0x28 gate like any other publish.
 fn rx_integrity(m Model, list []string, msg string, lost string, gate string, ind string) []string {
 	mut out := []string{}
-	if list.any((m.sig_of[it] or { SigInfo{} }).has_status)
-		&& (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
-		out << '${ind}st.rx_${msg}_st.arm(now)'
+	if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
+		out << '${ind}st.rx_${msg}_st.arm(now)' // every deadline, status or not
 	}
 	mut i := ind
 	if gate != '' && list.any((m.sig_of[it] or { SigInfo{} }).has_status) {
@@ -1848,4 +1861,21 @@ fn rx_integrity(m Model, list []string, msg string, lost string, gate string, in
 		out << '${ind}}'
 	}
 	return out
+}
+
+// lost_expr: the E2E lost-frame count a received signal publishes — '' when the frame has no E2E
+// or none of its signals declares `lost`. Where a diagnostic server can switch reception off
+// (0x28), the frames missed meanwhile are subtracted (e2e_hidden): commanded silence is not loss.
+fn lost_expr(m Model, msg string, bname string, has_diag bool) string {
+	if !m.frames.e2e_here(msg, bname) {
+		return ''
+	}
+	if !m.sig_names.any((m.sig_of[it] or { SigInfo{} }).lost_type != ''
+		&& (m.sig_of[it] or { SigInfo{} }).dbc_msg == msg) {
+		return ''
+	}
+	if has_diag {
+		return 'st.e2e_rx_${msg}.lost_frames - st.e2e_hidden_${msg}'
+	}
+	return 'st.e2e_rx_${msg}.lost_frames'
 }

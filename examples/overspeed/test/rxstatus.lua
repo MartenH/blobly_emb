@@ -69,3 +69,19 @@ test("RxStatus: a bad CRC reads integrity, silence then timeout, and a good fram
   brake(1000)
   check.equal((report(150)), OK)
 end)
+
+test("RxStatus: frames missed while 0x28 has reception off are not counted as lost", function()
+  local d = uds.open("CAN1", { tx = 0x101, rx = 0x102 })
+  for _ = 1, 3 do brake(1000); sleep_ms(10) end
+  local _, lost0 = report(150)
+  d:session(0x03)
+  check.equal(tohex(d:raw(fromhex("28 02 F1"))), "68 02") -- normal msgs: rx off, tx on
+  brake(1000, 3) -- a gap of three while reception is off
+  sleep_ms(20)
+  check.equal(tohex(d:raw(fromhex("28 00 F1"))), "68 00")
+  brake(1000)
+  local st, lost1 = report(150)
+  check.equal(st, OK)
+  check.equal(lost1, lost0, "commanded silence was counted as lost frames")
+  d:session(0x01)
+end)

@@ -229,6 +229,9 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 			}
 			if typ == 'RxStatus' {
 				has_status = true
+				if from_bus && eth != '' && from == eth {
+					panic('ecu.toml: signal "${name}" is received from eth bus "${from}": receive status is a CAN bridge feature — the SOME/IP path does not synthesize it yet')
+				}
 				if from_bus && fname != 'status' {
 					panic('ecu.toml: signal "${name}" is received from ${from}: its RxStatus field must be named `status` (the bridge fills it)')
 				}

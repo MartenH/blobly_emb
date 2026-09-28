@@ -119,6 +119,7 @@ mut:
 	rx_powertrain_st com.RxState
 	rx_brake_status_st com.RxState
 	e2e_rx_brake_status e2e.RxState
+	e2e_hidden_brake_status u32 // lost frames counted while 0x28 had rx off
 	tp_diag isotp.Link
 	tp_diag_buf [isotp.max_payload]u8
 	uds_diag uds.Server
@@ -151,17 +152,21 @@ fn io_can0_10ms(ctx voidptr) {
 			}
 		}
 		if rx.id == brake_status_id && rx.len == brake_status_dlc && rx.ext == false {
+			lf_brake_status := st.e2e_rx_brake_status.lost_frames
 			e2e_brake_status := st.e2e_rx_brake_status.check(&rx.data[0], int(brake_status_dlc), u16(0x44), 4, 5)
+			if !diag_rx_ok {
+				st.e2e_hidden_brake_status += st.e2e_rx_brake_status.lost_frames - lf_brake_status
+			}
 			if e2e_brake_status.usable() {
 				if diag_rx_ok {
-					mut brake_pressure := sig.BrakePressure{ kpa: u16(brake_status_brake_pressure_phys(rx.data)), status: .ok, lost: u16(st.e2e_rx_brake_status.lost_frames) }
+					mut brake_pressure := sig.BrakePressure{ kpa: u16(brake_status_brake_pressure_phys(rx.data)), status: .ok, lost: u16(st.e2e_rx_brake_status.lost_frames - st.e2e_hidden_brake_status) }
 					osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
 					st.rx_brake_status_st.on_receive(now)
 				}
 			} else if e2e_brake_status == .crc_error {
 				st.rx_brake_status_st.arm(now)
 				if diag_rx_ok {
-					mut brake_pressure := sig.BrakePressure{ status: .integrity, lost: u16(st.e2e_rx_brake_status.lost_frames) }
+					mut brake_pressure := sig.BrakePressure{ status: .integrity, lost: u16(st.e2e_rx_brake_status.lost_frames - st.e2e_hidden_brake_status) }
 					osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
 				}
 			}
@@ -238,7 +243,7 @@ fn io_can0_10ms(ctx voidptr) {
 		osal.ioc_publish2(engine_speed_ch, &engine_speed, u8(sizeof(engine_speed)))
 	}
 	if diag_rx_ok && st.rx_brake_status_st.expired(now) {
-		mut brake_pressure := sig.BrakePressure{ status: .timeout, lost: u16(st.e2e_rx_brake_status.lost_frames) }
+		mut brake_pressure := sig.BrakePressure{ status: .timeout, lost: u16(st.e2e_rx_brake_status.lost_frames - st.e2e_hidden_brake_status) }
 		osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
 	}
 	diag_tx_ok := st.uds_diag.tx_enabled()

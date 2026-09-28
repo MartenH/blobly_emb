@@ -88,7 +88,7 @@ pub mut:
 	// that ARRIVED but failed its CRC is not missing — it was reported as corrupt — so the gap
 	// that follows it is shortened by the CRC errors since the last good frame.
 	lost_frames u32
-	crc_errors  u8 // CRC errors since the last good frame (saturating)
+	crc_errors  u8 // CRC errors since the last FRESH frame (saturating)
 }
 
 // check verifies the CRC and the counter progression (delta 0 = repeated,
@@ -116,7 +116,9 @@ pub fn (mut r RxState) check_ex(data &u8, dlc int, data_id u16, crc_pos int, cou
 			r.lost_frames += u32(delta - 1 - r.crc_errors)
 		}
 	}
-	r.crc_errors = 0
+	if st != .repeated {
+		r.crc_errors = 0 // a FRESH frame closes the gap the CRC errors were part of; a repeat does not
+	}
 	r.last = ctr
 	r.started = true
 	return st
