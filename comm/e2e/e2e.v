@@ -84,8 +84,11 @@ pub mut:
 	last    u8
 	started bool
 	// frames the counter showed missing, summed over every `lost` gap (delta - 1 each; a gap of
-	// 16 or more aliases on the 4-bit counter). Monotonic and wrapping: a reader diffs it.
+	// 16 or more aliases on the 4-bit counter). Monotonic and wrapping: a reader diffs it. A frame
+	// that ARRIVED but failed its CRC is not missing — it was reported as corrupt — so the gap
+	// that follows it is shortened by the CRC errors since the last good frame.
 	lost_frames u32
+	crc_errors  u8 // CRC errors since the last good frame (saturating)
 }
 
 // check verifies the CRC and the counter progression (delta 0 = repeated,
@@ -99,6 +102,9 @@ pub fn (mut r RxState) check(data &u8, dlc int, data_id u16, crc_pos int, counte
 // symmetric order REQ-E2E-004 defines).
 pub fn (mut r RxState) check_ex(data &u8, dlc int, data_id u16, crc_pos int, counter_pos int, ex1_pos int, ex1_len int, ex2_pos int, ex2_len int) Status {
 	if unsafe { data[crc_pos] } != compute(data, dlc, data_id, crc_pos, ex1_pos, ex1_len, ex2_pos, ex2_len) {
+		if r.crc_errors < 255 {
+			r.crc_errors++
+		}
 		return .crc_error
 	}
 	ctr := unsafe { data[counter_pos] } & 0x0F
@@ -106,10 +112,11 @@ pub fn (mut r RxState) check_ex(data &u8, dlc int, data_id u16, crc_pos int, cou
 	if r.started {
 		delta := (ctr - r.last) & 0x0F
 		st = if delta == 0 { Status.repeated } else if delta > 1 { Status.lost } else { Status.ok }
-		if delta > 1 {
-			r.lost_frames += u32(delta - 1)
+		if delta > 1 && delta - 1 > r.crc_errors {
+			r.lost_frames += u32(delta - 1 - r.crc_errors)
 		}
 	}
+	r.crc_errors = 0
 	r.last = ctr
 	r.started = true
 	return st

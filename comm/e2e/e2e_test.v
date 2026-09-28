@@ -63,6 +63,28 @@ fn test_loss_detected() {
 	assert s.usable() // but the frame itself is valid + fresh, so still consumed
 }
 
+// The lost-frame count: each gap adds delta - 1; a frame that arrived CORRUPT is not also
+// counted as missing (it was reported as crc_error).
+fn test_lost_frames_are_counted_and_crc_errors_are_not() {
+	mut tx := TxState{}
+	mut rx := RxState{}
+	mut f := [8]u8{}
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 0
+	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .ok
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 1 lost
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 2 lost
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 3 arrives
+	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .lost
+	assert rx.lost_frames == 2
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 4 arrives corrupt
+	f[0] ^= 0xFF
+	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .crc_error
+	f[0] ^= 0xFF
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos) // 5 good: delta 2, but frame 4 was not missing
+	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .lost
+	assert rx.lost_frames == 2
+}
+
 fn test_wrong_data_id_fails() {
 	mut tx := TxState{}
 	mut rx := RxState{}

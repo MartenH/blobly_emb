@@ -145,3 +145,18 @@ fn test_rx_timeout_zero_disables() {
 	r.on_receive(0)
 	assert !r.expired(1_000_000)
 }
+
+// REQ-COM-008: arm() starts the deadline with no frame, so a sender absent since start times out;
+// a first frame restarts it.
+fn test_arm_starts_the_deadline_without_a_frame() {
+	mut r := RxState{
+		timeout_us: 1000
+	}
+	assert !r.expired(5000), 'an unarmed deadline must not fire'
+	r.arm(10_000)
+	assert !r.expired(11_000)
+	assert r.expired(11_001)
+	assert !r.expired(12_000), 'fires once'
+	r.arm(20_000) // e.g. a frame that failed its protection check
+	assert r.expired(21_001), 'a re-arm lets the deadline fire again'
+}

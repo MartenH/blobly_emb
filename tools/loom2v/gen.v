@@ -31,7 +31,7 @@ mut:
 	external  bool   // an endpoint is a bus
 	bus       string // the bus name (if external)
 	rx        bool   // external && bus is the `from` endpoint (bus -> app)
-	val_field string // the signal's value field (its first field other than status / lost)
+	val_field string // the signal's value field (its first field that is not RxStatus / `valid`, nor a received signal's `lost`)
 	val_type  string // its V type
 	// Receive status (docs/diagnostics.md §3.2): a field of type RxStatus — on a bus-rx signal
 	// it must be named `status`, and the bridge owns it — and, on a bus-rx signal whose frame is
@@ -252,6 +252,9 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 				val_field = fname
 				val_type = typ
 			}
+		}
+		if from_bus && val_field == '' {
+			panic('ecu.toml: signal "${name}" is received from ${from} but has no value field — `status` and `lost` describe a value; add one (e.g. kph = "u16")')
 		}
 
 		sig_of[name] = SigInfo{
@@ -1335,7 +1338,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 					'carries a <=32-bit field (u32/u16/u8/bool)')
 			}
 		}
-		si.wide = si.has_status || si.fields.len > 2 || si.fields.any(it.typ != 'u32')
+		si.wide = si.fields.len > 2 || si.fields.any(it.typ != 'u32')
 		if si.wide {
 			// xioc_n geometry: 32 B header + XIOC_SLOTS(4) x (1 seq + lanes) u32s, rounded up
 			// to the 32 B line so neighbouring channels never share one.

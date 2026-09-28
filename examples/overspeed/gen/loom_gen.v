@@ -159,6 +159,7 @@ fn io_can0_10ms(ctx voidptr) {
 					st.rx_brake_status_st.on_receive(now)
 				}
 			} else if e2e_brake_status == .crc_error {
+				st.rx_brake_status_st.arm(now)
 				if diag_rx_ok {
 					mut brake_pressure := sig.BrakePressure{ status: .integrity, lost: u16(st.e2e_rx_brake_status.lost_frames) }
 					osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
@@ -315,7 +316,7 @@ pub fn partition_can0(ch can.Channel) {
 	}
 	st.tx_brake_report_st = com.TxState{
 		mode: com.TxMode.cyclic
-		cycle_us: 20000
+		cycle_us: 50000
 		min_delay_us: 0
 	}
 	st.tx_secure_frame_st = com.TxState{

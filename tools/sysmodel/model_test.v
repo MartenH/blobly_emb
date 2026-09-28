@@ -3719,13 +3719,19 @@ fn test_dissolved_signalless_cluster_member_is_error() {
 		&& it.contains('produces/consumes no system signal')), errs(validate_system_gen(s)).str()
 }
 
-// REQ-TOPO-001: a lone `valid` field has no value for the bridge to serialize.
-fn test_dissolved_sole_valid_field_rejected() {
+// REQ-TOPO-001: receive metadata alone has no value for the bridge to serialize, and a `valid`
+// field is refused (loom2v refuses it on a received signal).
+fn test_dissolved_metadata_only_and_valid_rejected() {
 	mut s := clean_dissolved()
 	s.signals[0].fields = {
-		'valid': 'bool'
+		'status': 'RxStatus'
 	}
 	assert errs(validate_system_gen(s)).any(it.contains('has no value field'))
+	s.signals[0].fields = {
+		'kph':   'u16'
+		'valid': 'bool'
+	}
+	assert errs(validate_system_gen(s)).any(it.contains('`valid` field is not carried'))
 }
 
 // REQ-TOPO-002: a telemetry id equal to a DBC application frame aliases two
@@ -3800,15 +3806,16 @@ fn test_dissolved_unread_signal_is_warning() {
 		&& it.msg.contains('read by no other node'))
 }
 
-// REQ-TOPO-001: a value field ALONGSIDE `valid` is the supported shape (valid is
-// metadata, excluded from the wire) — it must NOT be rejected.
-fn test_dissolved_value_plus_valid_ok() {
+// REQ-TOPO-001: a value field ALONGSIDE the receive metadata is the supported shape (status and
+// lost are filled by the receiving bridge, excluded from the wire) — it must NOT be rejected.
+fn test_dissolved_value_plus_status_ok() {
 	mut s := clean_dissolved()
 	s.signals[0].fields = {
-		'kph':   'u16'
-		'valid': 'bool'
+		'kph':    'u16'
+		'status': 'RxStatus'
+		'lost':   'u16'
 	}
-	assert !errs(validate_system_gen(s)).any(it.contains('field') || it.contains('bits')), 'value+valid is valid: ${errs(validate_system_gen(s))}'
+	assert !errs(validate_system_gen(s)).any(it.contains('field') || it.contains('bits')), 'value+status is valid: ${errs(validate_system_gen(s))}'
 }
 
 // codex #142 round 10: loom2v spawns partition_telem() on the HOST target too

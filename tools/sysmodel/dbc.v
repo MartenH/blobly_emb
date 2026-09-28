@@ -840,13 +840,13 @@ pub fn check_dbc_conformance(s System) []Issue {
 	return issues
 }
 
-// field_bits sums a signal's field widths (the [[signal]].fields types).
-// field_bits is the wire width of a signal's VALUE field — the `valid` metadata
-// field is not serialized, so it doesn't count toward the DBC SG_ width.
+// field_bits is the wire width of a signal's VALUE field — the receive metadata (a
+// `status` RxStatus and a `lost` counter, which the receiving bridge fills) is not
+// serialized, so it doesn't count toward the DBC SG_ width.
 fn field_bits(fields map[string]string) int {
 	mut total := 0
 	for name, typ in fields {
-		if name == 'valid' {
+		if is_rx_meta(name, typ) {
 			continue
 		}
 		total += type_bits(typ)
@@ -855,11 +855,11 @@ fn field_bits(fields map[string]string) int {
 }
 
 // field_signed reports the declared signedness of a signal's single VALUE
-// integer field (the `valid` metadata field is not on the wire), or none for a
+// integer field (the receive metadata is not on the wire), or none for a
 // non-integer (bool/float — DBC signedness doesn't apply).
 fn field_signed(fields map[string]string) ?bool {
 	for name, typ in fields {
-		if name == 'valid' {
+		if is_rx_meta(name, typ) {
 			continue
 		}
 		return match typ {
@@ -869,6 +869,12 @@ fn field_signed(fields map[string]string) ?bool {
 		}
 	}
 	return none
+}
+
+// is_rx_meta: a field the RECEIVING bridge fills rather than the wire carries — the signal's
+// receive status and its E2E lost-frame counter (docs/communication.md, loom2v's rule).
+fn is_rx_meta(name string, typ string) bool {
+	return (name == 'status' && typ == 'RxStatus') || name == 'lost'
 }
 
 fn type_bits(typ string) int {

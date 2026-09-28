@@ -89,7 +89,7 @@ platform. Imports are short (`import sig`, `import ports`, `import osal`) — V'
 
 1. `cp -r examples/minimal examples/<name>` (then `rm -rf <name>/gen <name>/ports <name>/sig <name>/bin`).
 2. Edit `ecu.toml` (each `[[signal]]` declares its `fields`, e.g.
-   `fields = { kph = "u16", valid = "bool" }`), then write your `app/` FBs and `main.v`.
+   `fields = { kph = "u16", status = "RxStatus" }` on a received signal), then write your `app/` FBs and `main.v`.
 3. `cd examples/<name> && make all`.
 
 Imports are not coupled to the example name, so copying needs no rewrites.

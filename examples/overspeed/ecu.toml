@@ -131,7 +131,7 @@ e2e  = { data_id = 0x44, crc_pos = 4, counter_pos = 5 }
 [[frame]]
 name = "BrakeReport"            # tx: BrakeMonitor's view of that status, for the tester
 bus  = "can0"
-tx   = { mode = "cyclic", cycle_ms = 20 }
+tx   = { mode = "cyclic", cycle_ms = 50 }
 
 [[frame]]
 name = "LampFrame"              # tx: heartbeat + immediate on change, E2E-protected

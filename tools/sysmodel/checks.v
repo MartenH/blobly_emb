@@ -450,19 +450,27 @@ fn check_signals_dissolved(s System) []Issue {
 		// so a cross-node signal carries EXACTLY ONE field (a multi-field codec is
 		// future work) of a KNOWN fixed scalar type (an unknown/heap type like
 		// "string" would violate the no-runtime-heap invariant). REQ-TOPO-001.
-		// loom2v serializes ONE value field per DBC signal and treats a `valid`
-		// field as metadata (excluded from the wire, set true on RX). So the
-		// supported shape is exactly one NON-`valid` value field of a fixed scalar
-		// type (no u64/i64 — lossy through the f64 bridge), plus an optional
-		// `valid` bool. REQ-TOPO-001.
+		// loom2v serializes ONE value field per DBC signal; the receiving bridge fills the
+		// receive metadata — `status = "RxStatus"` and an E2E `lost` counter — which is not
+		// on the wire. So the supported shape is exactly one value field of a fixed scalar
+		// type (no u64/i64 — lossy through the f64 bridge), plus optional metadata. A `valid`
+		// field is refused as loom2v refuses it on a received signal. REQ-TOPO-001.
 		mut n_value := 0
 		for fname, ftype in sig.fields {
 			if fname == 'valid' {
-				if ftype != 'bool' {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'signal "${sig.name}": a `valid` field is not carried — a received signal declares `status = "RxStatus"` instead (loom2v refuses `valid` on it)'
+				}
+				continue
+			}
+			if is_rx_meta(fname, ftype) {
+				if fname == 'lost' && ftype != 'u16' && ftype != 'u32' {
 					issues << Issue{
 						severity: .error
 						req:      'REQ-TOPO-001'
-						msg:      'signal "${sig.name}": the `valid` field must be bool, not "${ftype}"'
+						msg:      'signal "${sig.name}": the `lost` counter is u16 or u32, not "${ftype}"'
 					}
 				}
 				continue
@@ -486,7 +494,7 @@ fn check_signals_dissolved(s System) []Issue {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-001'
-				msg:      'signal "${sig.name}": has no value field (a `valid` field alone is not serializable) — declare exactly one non-`valid` field'
+				msg:      'signal "${sig.name}": has no value field (`status` / `lost` alone are not serializable) — declare exactly one value field'
 			}
 		} else if n_value > 1 && !carries_struct(s, sig) {
 			// The one-value rule is the DBC's: a CAN signal IS a scalar on the wire, so a
@@ -497,7 +505,7 @@ fn check_signals_dissolved(s System) []Issue {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-001'
-				msg:      'signal "${sig.name}": has ${n_value} value fields — a cross-node signal on a CAN bus carries exactly one (plus an optional `valid`), because a DBC signal is a scalar'
+				msg:      'signal "${sig.name}": has ${n_value} value fields — a cross-node signal on a CAN bus carries exactly one (plus optional `status` / `lost`), because a DBC signal is a scalar'
 			}
 		}
 		// the producer must be a declared node on the signal's bus

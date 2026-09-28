@@ -922,13 +922,13 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				if e2e {
 					ind = ind[1..]
 					glue << '${ind}} else if e2e_${msg} == .crc_error {'
-					glue << rx_integrity(m, list, lost, gate, ind + '\t')
+					glue << rx_integrity(m, list, msg, lost, gate, ind + '\t')
 					glue << '${ind}}'
 				}
 				if secoc {
 					ind = ind[1..]
 					glue << '${ind}} else {'
-					glue << rx_integrity(m, list, lost, gate, ind + '\t')
+					glue << rx_integrity(m, list, msg, lost, gate, ind + '\t')
 					glue << '${ind}}'
 				}
 				glue << '\t\t}'
@@ -1820,10 +1820,16 @@ fn rx_status_fields(si SigInfo, status string, lost string) string {
 }
 
 // rx_integrity: the publish of a frame that failed its protection check — status `integrity`
-// (value zero: nothing in the frame can be trusted) to each of its signals that carries a status.
+// (value zero: nothing in the frame can be trusted) to each of its signals that carries a status —
+// and a re-arm of the frame's deadline, which then runs from this frame: `integrity` holds until a
+// good frame, or until the deadline passes with none (`timeout` — silence is the newer fact).
 // Behind the 0x28 gate like any other publish.
-fn rx_integrity(m Model, list []string, lost string, gate string, ind string) []string {
+fn rx_integrity(m Model, list []string, msg string, lost string, gate string, ind string) []string {
 	mut out := []string{}
+	if list.any((m.sig_of[it] or { SigInfo{} }).has_status)
+		&& (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
+		out << '${ind}st.rx_${msg}_st.arm(now)'
+	}
 	mut i := ind
 	if gate != '' && list.any((m.sig_of[it] or { SigInfo{} }).has_status) {
 		out << '${i}if ${gate} {'
