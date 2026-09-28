@@ -9,6 +9,8 @@
 import comm.doip
 
 fn C.board_clock_init()
+fn C.board_timebase_init()
+fn C.board_now_us() u64
 fn C.glue_kernel_enter()
 fn C.net_stream_recv(buf &u8, max int, timeout_ticks u32) int
 fn C.net_stream_send(buf &u8, len int) int
@@ -31,8 +33,11 @@ fn blobly_doip_run() {
 	for i in 0 .. 17 {
 		g_srv.vin[i] = vin[i]
 	}
-	// UDS: default session, one identification DID (0xF190) the bench reads
-	g_srv.uds.session = 0x01
+	// UDS: the application policy (no programming session — erase/download are the
+	// bootloader's), default session, one identification DID (0xF190) the bench reads. init()
+	// is NOT called: its response buffer (doip.v, max_did_data + 8) keeps the single-DID bound.
+	g_srv.uds.no_programming = true
+	g_srv.uds.reset_state()
 	g_srv.uds.dids[0].id = 0xF190
 	name := 'H735-DK'
 	for i in 0 .. name.len {
@@ -61,8 +66,12 @@ fn blobly_doip_run() {
 	for {
 		// only ask for what the assembly buffer can still take: a buffered
 		// fragment plus a full chunk must not trip the too-large NACK
+		g_srv.uds.tick(C.board_now_us()) // S3: an idle non-default session returns to default
 		n := C.net_stream_recv(&inb[0], 256 - g_srv.buf_len, 100) // ~100 ms slice
 		if n > 0 {
+			// again AFTER the blocking receive: S3 may have expired while it waited, and the
+			// request must be judged in the session that is current NOW, not 100 ms ago
+			g_srv.uds.tick(C.board_now_us())
 			mut fed := n
 			// feed stops consuming when the response buffer fills; drain the
 			// retained messages with len-0 feeds until quiet
@@ -110,11 +119,12 @@ fn session_reset() {
 	g_srv.activated = false
 	g_srv.fatal = false
 	g_srv.buf_len = 0
-	g_srv.uds.session = 0x01
+	g_srv.uds.reset_state() // default session, security relocked
 	C.net_stream_notify_activated(0)
 }
 
 fn main() {
 	C.board_clock_init() // 550 MHz PLL1 + I-cache
+	C.board_timebase_init() // DWT: board_now_us() for the UDS server's S3
 	C.glue_kernel_enter() // ThreadX -> netx_glue tx_application_define; no return
 }

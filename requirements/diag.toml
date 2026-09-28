@@ -19,3 +19,48 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-003"
+title = "Diagnostic sessions"
+text = "The diagnostic server shall start in the default session, return to the default session when a non-default session receives no request for the session timeout (S3), relock security on every session transition, restore communication on returning to the default session, and refuse a session it cannot serve (an application server refuses the programming session until a bootloader handoff exists)."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-004"
+title = "Negative-response order and access gating"
+text = "The diagnostic server shall evaluate a request in the ISO 14229-1 order — service supported, service allowed in the active session, length, subfunction, conditions, range, security — returning the first failing check's negative response code, and shall gate each data identifier's read and write by session and by the unlocked security level."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-005"
+title = "Several identifiers per read"
+text = "A ReadDataByIdentifier request naming several identifiers shall be answered with each supported identifier's record in request order, skipping unsupported ones, with requestOutOfRange only when none is supported and responseTooLong when the answer would exceed the response capacity."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-006"
+title = "Functional requests"
+text = "The ECU shall serve diagnostic requests sent to a functional address, answering on its physical response address and withholding the negative responses serviceNotSupported, subFunctionNotSupported, requestOutOfRange, and the two not-supported-in-active-session codes."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-007"
+title = "ECU reset and communication control"
+text = "The diagnostic server shall answer an ECU reset request before the reset takes effect, and shall enable or disable the transmission and reception of normal application messages on request, in a non-default session only, without affecting diagnostic communication."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"

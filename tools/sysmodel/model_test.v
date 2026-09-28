@@ -2488,6 +2488,28 @@ fn test_isotp_rx_reserved_vs_telemetry() {
 		&& it.contains('isotp rx (rx) id of "sysnode"')), errs(validate_system(s)).str()
 }
 
+// REQ-TOPO-002: an ISO-TP FUNCTIONAL id is reserved against transmitters too (a frame there
+// is read as a UDS request), while two servers listening on it is not a collision.
+fn test_isotp_functional_id_reserved_but_shared() {
+	mut s := clean_system()
+	for i in 0 .. 2 {
+		s.nodes[i].view.isotp_conns = [
+			IsotpConn{
+				iface:         'can0'
+				rx_id:         u32(0x700 + 2 * i)
+				tx_id:         u32(0x701 + 2 * i)
+				functional_id: 0x7df
+			},
+		]
+	}
+	assert !errs(validate_system(s)).any(it.contains('0x7df')), errs(validate_system(s)).str()
+	s.nodes[1].view.has_telemetry = true
+	s.nodes[1].view.telem_bus = 'can0'
+	s.nodes[1].view.telem_id = 0x7df
+	assert errs(validate_system(s)).any(it.contains('telemetry id 0x7df')
+		&& it.contains('isotp functional (rx) id')), errs(validate_system(s)).str()
+}
+
 // REQ-TOPO-002: two nodes explicitly allocated trace = 0 share a trace id (0 is a
 // valid, declared trace node id — tracked by presence, not != 0).
 fn test_trace_id_zero_collides() {

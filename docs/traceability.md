@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 189 | 105 | 20 | 64 | 0 |
+| 194 | 105 | 25 | 64 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -54,6 +54,11 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-007 | QM | test | uncovered | — |
 | REQ-DIAG-001 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-002 | QM | test | covered | diag.lua (pending) |
+| REQ-DIAG-003 | QM | test | covered | diag.lua (pending), uds_test.v (pass) |
+| REQ-DIAG-004 | QM | test | covered | diag.lua (pending), uds_test.v (pass) |
+| REQ-DIAG-005 | QM | test | covered | diag.lua (pending), uds_test.v (pass) |
+| REQ-DIAG-006 | QM | test | covered | diag.lua (pending), uds_test.v (pass) |
+| REQ-DIAG-007 | QM | test | covered | diag.lua (pending), uds_test.v (pass) |
 | REQ-E2E-001 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-002 | B | test | uncovered | — |
 | REQ-E2E-003 | B | test | verified | e2e_test.v (pass) |
@@ -248,6 +253,11 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-007 | | | | | | | | | | | | | | | | | | | |
 | REQ-DIAG-001 | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-002 | | | | | | | | | | | | | | | · | | | | |
+| REQ-DIAG-003 | | | | | | | | | | | | | | | · | ✓ | | | |
+| REQ-DIAG-004 | | | | | | | | | | | | | | | · | ✓ | | | |
+| REQ-DIAG-005 | | | | | | | | | | | | | | | · | ✓ | | | |
+| REQ-DIAG-006 | | | | | | | | | | | | | | | · | ✓ | | | |
+| REQ-DIAG-007 | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-E2E-001 | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-002 | | | | | | | | | | | | | | | | | | | |
 | REQ-E2E-003 | | | | | | | | | | | | | | | | ✓ | | | |

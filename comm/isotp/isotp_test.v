@@ -411,3 +411,19 @@ fn test_block_boundary_backpressured_cts_not_aborted() {
 	assert l.poll(1_200_001, mut cts2) // the block CTS finally goes out; N_Cr arms now
 	assert cts2.data[0] == 0x30
 }
+
+// abort_tx abandons a multi-frame send mid-flight: nothing more is polled out, and the link
+// accepts a new message (an owner whose channel refused a frame must not keep sending the rest).
+fn test_abort_tx_stops_a_transfer_in_flight() {
+	mut l := Link{}
+	l.init_defaults()
+	mut msg := [20]u8{}
+	assert l.send(&msg[0], 20)
+	mut p := Pdu{}
+	assert l.poll(0, mut p) // the First Frame
+	assert l.busy()
+	l.abort_tx()
+	assert !l.busy()
+	assert !l.poll(1, mut p), 'an aborted transfer kept sending'
+	assert l.send(&msg[0], 3)
+}

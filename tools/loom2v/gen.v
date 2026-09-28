@@ -19,6 +19,7 @@ import os
 import toml
 import tools.candb
 import tools.ecumodel
+import comm.uds
 
 struct SigInfo {
 mut:
@@ -63,20 +64,26 @@ struct SigField {
 
 // IsotpConn is one [[isotp]] diagnostic connection on a bus.
 struct IsotpConn {
-	name  string
-	bus   string
-	rx_id int
-	tx_id int
-	bs    int
-	stmin int
+	name          string
+	bus           string
+	rx_id         int
+	tx_id         int
+	bs            int
+	stmin         int
+	functional_id int // 0 = no functional requests on this connection
+	s3_ms         int // 0 = the server's default (5 s)
 }
 
 // DidCfg is one [[did]]: constant bytes, a writable RAM cell, and/or a live signal.
 struct DidCfg {
-	id       int
-	bytes    []u8
-	writable bool
-	signal   string
+	id             int
+	bytes          []u8
+	writable       bool
+	signal         string
+	read_sessions  u8 // uds.in_* mask; 0 = every session
+	write_sessions u8
+	read_security  u8 // the 0x27 level required; 0 = none
+	write_security u8
 }
 
 // Route is one [[route]] on a gateway. A RAW (frame) route forwards a PDU unchanged
@@ -865,6 +872,33 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 			tx_id: int((m['tx_id'] or { toml.Any(0) }).int())
 			bs:    int((m['bs'] or { toml.Any(0) }).int())
 			stmin: int((m['stmin_ms'] or { toml.Any(0) }).int())
+			functional_id: int((m['functional_id'] or { toml.Any(0) }).int())
+			s3_ms: int((m['s3_ms'] or { toml.Any(0) }).int())
+		}
+	}
+	// ONE diagnostic server per node (docs/diagnostics.md): every [[isotp]] connection is a UDS
+	// server with its own session, 0x28, reset and (later) programming controls, and the fault
+	// memory, NM keep-awake and bootloader handoff assume a single owner. A second connection —
+	// even one with no DIDs — would be a second server the rest of the design cannot see.
+	if isotp_conns.len > 1 {
+		panic('loom2v: ${isotp_conns.len} [[isotp]] connections — a node has ONE diagnostic server (docs/diagnostics.md); declare one connection')
+	}
+	for c in isotp_conns {
+		if c.s3_ms < 0 {
+			panic('loom2v: [[isotp]] "${c.name}" s3_ms ${c.s3_ms} is negative (0 = the default ${uds.default_s3_us / 1000} ms)')
+		}
+		if c.functional_id == 0 {
+			continue
+		}
+		// the bridge matches it as a standard frame, and it must not be anyone's physical id
+		if c.functional_id < 0 || c.functional_id > 0x7FF {
+			panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${c.functional_id.hex()} must be a standard 11-bit id (<= 0x7FF)')
+		}
+		for o in isotp_conns {
+			// CAN ids are bus-local: only a connection on the SAME bus can collide
+			if o.bus == c.bus && (c.functional_id == o.rx_id || c.functional_id == o.tx_id) {
+				panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${c.functional_id.hex()} is also "${o.name}"\'s physical rx/tx id')
+			}
 		}
 	}
 	return isotp_conns
@@ -887,14 +921,57 @@ fn parse_dids(doc toml.Doc) []DidCfg {
 		} else if 'bytes' in m {
 			bytes = parse_hex((m['bytes'] or { toml.Any('') }).string())
 		}
+		// the server's tables are fixed arrays: an oversized config would index past them
+		if bytes.len > uds.max_did_data {
+			panic('loom2v: [[did]] 0x${id.hex()} holds ${bytes.len} bytes — a DID stores at most ${uds.max_did_data} (comm/uds max_did_data)')
+		}
+		rd_s, rd_sec := parse_did_access(m, 'read', id)
+		wr_s, wr_sec := parse_did_access(m, 'write', id)
+		if 'write' in m && 'writable' in m && !(m['writable'] or { toml.Any(false) }).bool() {
+			panic('loom2v: [[did]] 0x${id.hex()} has writable = false AND a write = {...} gate — say which')
+		}
 		dids << DidCfg{
-			id:       id
-			bytes:    bytes
-			writable: (m['writable'] or { toml.Any(false) }).bool()
-			signal:   (m['signal'] or { toml.Any('') }).string()
+			id:             id
+			bytes:          bytes
+			// a `write = {...}` gate implies the DID is writable
+			writable:       (m['writable'] or { toml.Any(false) }).bool() || 'write' in m
+			signal:         (m['signal'] or { toml.Any('') }).string()
+			read_sessions:  rd_s
+			write_sessions: wr_s
+			read_security:  rd_sec
+			write_security: wr_sec
 		}
 	}
+	if dids.len > uds.max_dids {
+		panic('loom2v: ${dids.len} [[did]]s — a diagnostic server holds at most ${uds.max_dids} (comm/uds max_dids)')
+	}
 	return dids
+}
+
+// parse_did_access reads a [[did]] `read = { session = [...], security = N }` (or `write`) gate
+// into the server's session mask (uds.in_*) and security level. Absent = every session, no
+// security.
+fn parse_did_access(m map[string]toml.Any, key string, id int) (u8, u8) {
+	acc := m[key] or { return u8(0), u8(0) }
+	am := acc.as_map()
+	mut mask := u8(0)
+	for sv in (am['session'] or { toml.Any([]toml.Any{}) }).array() {
+		mask |= match sv.string() {
+			'default' { uds.in_default }
+			'programming' { uds.in_programming }
+			'extended' { uds.in_extended }
+			'safety' { uds.in_safety }
+			else { panic('loom2v: [[did]] 0x${id.hex()} ${key}.session "${sv.string()}" is not a session (default / extended / programming / safety)') }
+		}
+	}
+	if 'session' in am && mask == 0 {
+		panic('loom2v: [[did]] 0x${id.hex()} ${key}.session is empty — omit it for "every session"')
+	}
+	sec := (am['security'] or { toml.Any(0) }).int()
+	if sec < 0 || sec > 0x7F {
+		panic('loom2v: [[did]] 0x${id.hex()} ${key}.security ${sec} is not a 0x27 level (1..0x7F)')
+	}
+	return mask, u8(sec)
 }
 
 fn parse_buses(doc toml.Doc) (map[string]bool, map[string]int, map[string]string) {
@@ -3540,6 +3617,47 @@ fn main() {
 	has_secoc := m.frames.secoc_on.len > 0
 
 	has_routes := m.routes.len > 0
+
+	// A functional request id is matched in the bridge's rx loop next to everything else on its
+	// bus: an application frame or a module frame with the same id would ALSO be dispatched as a
+	// diagnostic request (a cyclic frame whose first byte looks like a single-frame PCI could
+	// switch sessions). Refuse the collision here.
+	for c in m.isotp_conns {
+		if c.functional_id == 0 {
+			continue
+		}
+		fid := u32(c.functional_id)
+		// only what is handled on THIS bus can collide (CAN ids are bus-local): the DBC messages
+		// its signals ride, the frames routed onto or off it, and the module frames that use it
+		mut on_bus := map[string]bool{}
+		for _, si in m.sig_of {
+			if si.external && si.bus == c.bus && si.dbc_msg != '' {
+				on_bus[si.dbc_msg] = true
+			}
+		}
+		if db := candb.load_dbc_file(dbc) {
+			for msg in db.messages {
+				if on_bus[snake(msg.name)] && u32(msg.id) == fid && !msg.ext {
+					panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also DBC message "${msg.name}" on bus "${c.bus}"')
+				}
+			}
+		}
+		for r in m.routes {
+			// the functional id is a STANDARD frame: only a standard-width route can collide
+			if (r.from_bus == c.bus && !r.from_ext && u32(r.from_id) == fid)
+				|| (r.to_bus == c.bus && !r.to_ext && u32(r.to_id) == fid) {
+				panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a routed frame on bus "${c.bus}"')
+			}
+		}
+		if m.telem.on && m.telem.bus == c.bus && (fid == m.telem.id || (m.telem.detail_id != 0 && fid == m.telem.detail_id)) {
+			panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a [telemetry] frame id on bus "${c.bus}"')
+		}
+		fn_trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
+		if m.trace.on && fn_trace_bus == c.bus && (fid == m.trace.cmd_id || fid == m.trace.rsp_id
+			|| fid == m.trace.record_id || (m.trace.dump_fc_bound && fid == m.trace.dump_fc_id)) {
+			panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a [trace] endpoint id on bus "${c.bus}"')
+		}
+	}
 
 	// Validate E2E byte positions against each frame's DLC (they index unsafe into
 	// the frame's [64]u8 in the generated bridge).

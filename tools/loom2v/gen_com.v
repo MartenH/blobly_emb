@@ -657,7 +657,10 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\ttp_${tp} isotp.Link'
 			glue << '\ttp_${tp}_buf [isotp.max_payload]u8'
 			glue << '\tuds_${tp} uds.Server'
-			glue << '\tuds_${tp}_resp [64]u8'
+			glue << '\tuds_${tp}_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity'
+		}
+		if conns.len > 0 && rx_by_msg.keys().any((m.frames.rx_timeout_us[it] or { 0 }) > 0) {
+			glue << '\tdiag_rx_was_off bool // 0x28 had rx off last pass: restart the deadlines on return'
 		}
 		for d in dests {
 			glue << '\troute_${snake(d)} can.Channel // gateway: forward to ${d}'
@@ -743,6 +746,31 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\tst.${rf}_set = false'
 				glue << '\t}'
 			}
+		}
+		if conns.len > 0 {
+			// CommunicationControl (0x28): normal application messages on this bus stop being
+			// sent / decoded while any of its diagnostic servers says so. Diagnostic traffic itself
+			// is never gated (docs/diagnostics.md §3.1).
+			// Housekeeping FIRST, all of it, so the receive gate below and the functional path in
+			// the drain see this instant's state: ISO-TP timeouts expire (a stale transfer does not
+			// make the link look busy); a reset whose answer has left is applied (ECUReset is
+			// two-phase — on the host there is no platform reset, so the DIAGNOSTIC state returns
+			// to power-on; the target's controller-drained reset is R2, docs/diagnostics.md §3.1);
+			// S3 is held while the link is busy (ISO 14229-2 starts it once the exchange is over)
+			// and only then checked, so an expired session returns to default before frames are
+			// judged.
+			for c in conns {
+				tp := snake(c.name)
+				glue << '\tst.tp_${tp}.tick(now)'
+				glue << '\tif st.uds_${tp}.reset_req != 0 && !st.tp_${tp}.busy() { // the answer has left'
+				glue << '\t\tst.uds_${tp}.reset_state()'
+				glue << '\t}'
+				glue << '\tif !st.tp_${tp}.idle() {'
+				glue << '\t\tst.uds_${tp}.hold_s3(now)'
+				glue << '\t}'
+				glue << '\tst.uds_${tp}.tick(now)'
+			}
+			glue << '\tmut diag_rx_ok := ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
 		}
 		if rx_by_msg.len > 0 || conns.len > 0 || my_routes.len > 0 {
 			glue << '\tmut rx := can.Frame{}'
@@ -864,6 +892,13 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					}).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }}).usable() {'
 					ind = '\t\t\t\t'
 				}
+				// 0x28 gates only what the application SEES: the protection checks above still run
+				// on every frame, so SecOC freshness and the E2E counter keep tracking the sender and
+				// the first frame after rx is re-enabled is not judged a replay or a loss burst.
+				if conns.len > 0 {
+					glue << '${ind}if diag_rx_ok {'
+					ind += '\t'
+				}
 				for sname in list {
 					si := m.sig_of[sname] or { continue }
 					fld := snake(sname)
@@ -879,6 +914,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				}
 				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 					glue << '${ind}st.rx_${msg}_st.on_receive(now)'
+				}
+				if conns.len > 0 {
+					glue << '${ind[1..]}}'
 				}
 				if secoc || e2e {
 					glue << '\t\t\t}'
@@ -896,48 +934,64 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\t\t\tp_${tp}.data[i] = rx.data[i]'
 				glue << '\t\t\t}'
 				glue << '\t\t\tst.tp_${tp}.on_frame(now, p_${tp})'
+				// a completed request is served BEFORE the frames queued behind it are judged: a 0x28
+				// in the FIFO must gate the application frames that follow it, not only the next pass's
+				glue << '\t\t\tif st.tp_${tp}.has_request() {'
+				glue << '\t\t\t\tbreak'
+				glue << '\t\t\t}'
 				glue << '\t\t}'
-			}
-			glue << '\t}'
-			// rx deadline crossed -> publish invalid (valid=false) signals, once
-			for msg, list in rx_by_msg {
-				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
-					glue << '\tif st.rx_${msg}_st.expired(now) {'
-					for sname in list {
-						si := m.sig_of[sname] or { continue }
-						fld := snake(sname)
-						glue << '\t\tmut ${fld} := sig.${sname}{}'
-						glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
-					}
-					glue << '\t}'
+				if c.functional_id != 0 {
+					// A FUNCTIONAL request is one single frame (ISO 15765-2: PCI 0x0N, N = 1..7 data
+					// bytes), served ON ARRIVAL — in bus order, so a functional 0x28 gates the very next
+					// frame of this drain (the receive gate is re-sampled right after). Nothing queues:
+					// when the link is not quiet both ways, or a reset is pending, it is DROPPED, as a
+					// busy server does; a functional TesterPresent is periodic and simply comes again.
+					glue << '\t\tif rx.id == u32(0x${c.functional_id.hex()}) && !rx.ext && rx.len >= 2 && rx.data[0] >> 4 == 0 {'
+					glue << '\t\t\tfl_${tp} := int(rx.data[0] & 0x0F)'
+					glue << '\t\t\tif fl_${tp} >= 1 && fl_${tp} <= 7 && fl_${tp} < int(rx.len) && st.tp_${tp}.idle() && st.uds_${tp}.reset_req == 0 { // <= 7: a CAN-FD frame may claim more'
+					glue << did_refresh(m, tp, '\t\t\t\t') // current values, as a physical read gets
+					glue << '\t\t\t\tfn_${tp} := st.uds_${tp}.handle_functional(&rx.data[1], fl_${tp}, &st.uds_${tp}_resp[0])'
+					glue << '\t\t\t\tif fn_${tp} > 0 && !st.tp_${tp}.send(&st.uds_${tp}_resp[0], fn_${tp}) {'
+					glue << '\t\t\t\t\tst.uds_${tp}.reset_req = 0 // never reset unanswered'
+					glue << '\t\t\t\t}'
+					// a SUPPRESSED reset (0x11 with bit 7) leaves the link idle: apply it now, before the
+					// next frame of this drain is served under the pre-reset state
+					glue << '\t\t\t\tif st.uds_${tp}.reset_req != 0 && !st.tp_${tp}.busy() {'
+					glue << '\t\t\t\t\tst.uds_${tp}.reset_state()'
+					glue << '\t\t\t\t}'
+					glue << '\t\t\t\tdiag_rx_ok = ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
+					glue << '\t\t\t}'
+					glue << '\t\t}'
 				}
 			}
+			glue << '\t}'
 			// ISO-TP + UDS: refresh live-signal DIDs, dispatch a reassembled
 			// request, drain the segmented response.
 			for c in conns {
 				tp := snake(c.name)
-				for idx, did in m.dids {
-					if did.signal == '' {
-						continue
-					}
-					si := m.sig_of[did.signal] or { continue }
-					f := snake(did.signal)
-					glue << '\tmut ${f}_did := sig.${did.signal}{}'
-					glue << '\tif osal.${acquire_fn(si.transport)}(${f}_ch, &${f}_did, u8(sizeof(${f}_did))) {'
-					glue << did_signal_encode(tp, idx, '${f}_did.${si.val_field}', si.val_type)
-					glue << '\t}'
-				}
-				glue << '\t${tp}_n := st.tp_${tp}.take(&st.tp_${tp}_buf[0])'
+				glue << did_refresh(m, tp, '\t')
+				// ONE request at a time: a new request is taken only when the previous answer has left
+				// the link, so a pending ECUReset always belongs to the response in flight (the next
+				// request waits, reassembled, in the link — a tester waits for the answer anyway)
+				// ISO-TP is half-duplex per connection: a physical request that completes while the
+				// previous answer is still being sent is a tester protocol violation, and it is DROPPED
+				// (taken out of the link and discarded) — the tester times out and retries. Nothing
+				// ever waits, so nothing can be reordered behind it or overwrite it.
+				glue << '\t${tp}_got := st.tp_${tp}.take(&st.tp_${tp}_buf[0])'
+				glue << '\t${tp}_n := if st.tp_${tp}.busy() { 0 } else { ${tp}_got }'
 				glue << '\tif ${tp}_n > 0 {'
 				glue << '\t\t${tp}_rlen := st.uds_${tp}.handle(&st.tp_${tp}_buf[0], ${tp}_n, &st.uds_${tp}_resp[0])'
-				glue << '\t\tif ${tp}_rlen > 0 {'
-				glue << '\t\t\tst.tp_${tp}.send(&st.uds_${tp}_resp[0], ${tp}_rlen)'
+				glue << '\t\tif ${tp}_rlen > 0 && !st.tp_${tp}.send(&st.uds_${tp}_resp[0], ${tp}_rlen) {'
+				glue << '\t\t\tst.uds_${tp}.reset_req = 0 // the answer could not be queued: never reset unanswered'
 				glue << '\t\t}'
 				glue << '\t}'
-				glue << '\tst.tp_${tp}.tick(now) // advance the ISO-TP timeout even when tx_ready gates poll out'
 				glue << '\tmut pdu_${tp} := isotp.Pdu{}'
 				// Gate on tx_ready so a UDS response burst never overruns the Tx FIFO or blocks — send at
 				// most a FIFO\'s worth per pass, resume next pass (poll advances tx state).
+				// A frame the channel refuses after tx_ready() said yes has already been counted as
+				// sent by poll(): the rest of that message could not be reassembled, so the transfer is
+				// ABORTED (the tester times out and retries, as on any bus error) — and a reset whose
+				// answer was lost is abandoned rather than performed unanswered.
 				glue << '\tfor st.chan.tx_ready() && st.tp_${tp}.poll(now, mut pdu_${tp}) {'
 				glue << '\t\tmut cf_${tp} := can.Frame{'
 				glue << '\t\t\tid:  u32(0x${c.tx_id.hex()})'
@@ -946,9 +1000,47 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\tfor i in 0 .. 8 {'
 				glue << '\t\t\tcf_${tp}.data[i] = pdu_${tp}.data[i]'
 				glue << '\t\t}'
-				glue << '\t\tst.chan.send(cf_${tp})'
+				glue << '\t\tif !st.chan.send(cf_${tp}) {'
+				glue << '\t\t\tst.tp_${tp}.abort_tx()'
+				glue << '\t\t\tst.uds_${tp}.reset_req = 0 // its answer is lost: never reset unanswered'
+				glue << '\t\t\tbreak'
+				glue << '\t\t}'
 				glue << '\t}'
 			}
+		}
+		// rx deadline crossed -> publish invalid (valid=false) signals, once. While 0x28 has rx
+		// off, silence is commanded, not a fault: no deadline fires, and every deadline restarts
+		// when rx comes back (below), so a diagnostic command never fakes a comms timeout.
+		if conns.len > 0 && rx_by_msg.keys().any((m.frames.rx_timeout_us[it] or { 0 }) > 0) {
+			// re-sampled AFTER this pass's requests were served: a 0x28 disabling rx now suspends
+			// the deadlines before any of them can fire
+			glue << '\tdiag_rx_ok = ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
+			glue << '\tif diag_rx_ok && st.diag_rx_was_off {'
+			for msg, _ in rx_by_msg {
+				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
+					glue << '\t\tst.rx_${msg}_st.on_receive(now)'
+				}
+			}
+			glue << '\t}'
+			glue << '\tst.diag_rx_was_off = !diag_rx_ok'
+		}
+		for msg, list in rx_by_msg {
+			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
+				dl_gate := if conns.len > 0 { 'diag_rx_ok && ' } else { '' }
+				glue << '\tif ${dl_gate}st.rx_${msg}_st.expired(now) {'
+				for sname in list {
+					si := m.sig_of[sname] or { continue }
+					fld := snake(sname)
+					glue << '\t\tmut ${fld} := sig.${sname}{}'
+					glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+				}
+				glue << '\t}'
+			}
+		}
+		if conns.len > 0 {
+			// evaluated AFTER the requests of this pass were served, so a 0x28 answered just
+			// above already gates this pass's application frames
+			glue << '\tdiag_tx_ok := ${conns.map('st.uds_${snake(it.name)}.tx_enabled()').join(' && ')}'
 		}
 		for msg, list in tx_by_msg {
 			glue << '\tmut tx_${msg} := can.Frame{'
@@ -977,7 +1069,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			e2e_here := m.frames.e2e_here(msg, bname)
 			secoc_here := m.frames.secoc_here(msg, bname)
 			needs_pre := e2e_here || secoc_here
-			glue << '\tif tx_${msg}_any && st.chan.tx_ready() && st.tx_${msg}_st.should_send(now, tx_${msg}.data, ${msg}_dlc) {'
+			tx_gate := if conns.len > 0 { ' && diag_tx_ok' } else { '' }
+			glue << '\tif tx_${msg}_any${tx_gate} && st.chan.tx_ready() && st.tx_${msg}_st.should_send(now, tx_${msg}.data, ${msg}_dlc) {'
 			if needs_pre {
 				glue << '\t\ttx_${msg}_pre := tx_${msg}.data // pre-E2E/SecOC payload, for change detection'
 			}
@@ -1255,11 +1348,33 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			// timeouts are set explicitly or a lost FC wedges the bridge
 			glue << '\tst.tp_${tp}.init_defaults()'
 			glue << '\tst.uds_${tp} = uds.Server{}'
+			glue << '\tst.uds_${tp}.init(isotp.max_payload) // default session; the response buffer\'s capacity'
+			glue << '\tst.uds_${tp}.no_programming = true // programming is the bootloader\'s (handoff: R2)'
+			glue << '\tst.uds_${tp}.serves_reset = true // this bridge performs reset_req (below)'
+			glue << '\tst.uds_${tp}.serves_comm_control = true // and gates its frames on 0x28'
+			if m.buses.len == 1 {
+				glue << '\tst.uds_${tp}.single_network = true // 0x28 "all networks" = this one'
+			}
+			if c.s3_ms > 0 {
+				glue << '\tst.uds_${tp}.s3_us = u64(${c.s3_ms}) * 1000'
+			}
 			for idx, did in m.dids {
 				glue << '\tst.uds_${tp}.dids[${idx}] = uds.Did{'
 				glue << '\t\tid: u16(0x${did.id.hex()})'
 				if did.writable {
 					glue << '\t\twritable: true'
+				}
+				if did.read_sessions != 0 {
+					glue << '\t\tread_sessions: u8(0x${did.read_sessions.hex()})'
+				}
+				if did.write_sessions != 0 {
+					glue << '\t\twrite_sessions: u8(0x${did.write_sessions.hex()})'
+				}
+				if did.read_security != 0 {
+					glue << '\t\tread_security: u8(${did.read_security})'
+				}
+				if did.write_security != 0 {
+					glue << '\t\twrite_security: u8(${did.write_security})'
 				}
 				glue << '\t}'
 				for bi, b in did.bytes {
@@ -1628,4 +1743,24 @@ fn emit_eth_rpc_branch(m Model) []string {
 	glue << '\t\t\t\tcontinue'
 	glue << '\t\t\t}'
 	return glue
+}
+
+// did_refresh emits the live-signal DID refresh for connection `tp`, at indent `ind`: every read
+// of a signal-backed DID — physical or functional — answers with the value current at dispatch.
+fn did_refresh(m Model, tp string, ind string) []string {
+	mut out := []string{}
+	for idx, did in m.dids {
+		if did.signal == '' {
+			continue
+		}
+		si := m.sig_of[did.signal] or { continue }
+		f := snake(did.signal)
+		out << '${ind}mut ${f}_did := sig.${did.signal}{}'
+		out << '${ind}if osal.${acquire_fn(si.transport)}(${f}_ch, &${f}_did, u8(sizeof(${f}_did))) {'
+		for l in did_signal_encode(tp, idx, '${f}_did.${si.val_field}', si.val_type).split('\n') {
+			out << ind + '\t' + l.trim_left('\t')
+		}
+		out << '${ind}}'
+	}
+	return out
 }
