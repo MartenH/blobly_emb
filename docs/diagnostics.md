@@ -308,7 +308,7 @@ and — from R2 on — a bench verification on `examples/system_full` recorded i
 
 | Rung | Scope | Proof | Depends on |
 |---|---|---|---|
-| **R0** | Requirements for everything below (REQ-DIAG-*); correct the three over-claiming docs; decide D1–D6 | `make trace-check` | — |
+| **R0** | Requirements for everything below (REQ-DIAG-*); correct the three over-claiming docs; decide D1–D6 (done: §5) | `make trace-check` | — |
 | **R1** | Server core on the host: `[[isotp]]` server settings (`functional_id`, `s3_ms`), sessions from default + S3, gating tables, NRC set + evaluation order, multi-DID 0x22, functional addressing, 0x11, 0x28 (0x78 arrives with the first service that waits on flash, R6/R7) | unit tests + `examples/overspeed` e2e vs the blobly_net client | R0, N1 |
 | **R1b** | 0x27 SecurityAccess with the board key seam + blobly_net's reference key | unit tests; e2e with the existing net 0x27 client | R1 |
 | **R2** | UDS on the **target**: `[[isotp]]` on the ThreadX comm thread; 0x11 with the bounded controller drain; the programming-session handoff into the bootloader | bench: sessions, DIDs, 0x27 (incl. reset between failed attempts), 0x11 answered then reset, app → boot handoff, on `system_full` domain via CANsub | R1, R1b |
@@ -331,9 +331,11 @@ R3 and R1 can run in parallel; R5 and R6 can run in parallel after R2.
 
 (0x27 needs no tester rung: net's client and its reference key already exist.)
 
-## 5. Decisions to make in R0
+## 5. Decisions (made in R0)
 
-| # | Decision | Recommendation | Why |
+Decided by the maintainer on 2026-09-28: each one as recommended here.
+
+| # | Question | Decision | Why |
 |---|---|---|---|
 | D1 | How debounced results cross threads | monotonic counters in a last-value IOC cell | no new transport; lossless for occurrences; the `bulk` FIFO remains the fallback |
 | D2 | Where the fault memory runs | the comm thread | it already owns the journal and the bus; one writer, no lock |
