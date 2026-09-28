@@ -4979,10 +4979,10 @@ fn validate_signal_fault(m Model, f FaultCfg) {
 	if !si.has_status {
 		panic('loom2v: [[fault]] "${f.name}": ${f.signal} needs `status = "RxStatus"` — the bridge watches its status')
 	}
-	// `lost` is an EVENT: it fails the one pass that sees a gap — a time debounce or a counter
-	// needing several consecutive failures could never qualify it
+	// `lost` is an EVENT: one failed result per gap, and the next good frame passes — a time
+	// debounce or a counter needing several consecutive failures could never qualify it
 	if f.on == 'lost' && (f.time_based || f.fail_thr > 1) {
-		panic('loom2v: [[fault]] "${f.name}": a lost-frames fault fails one pass per gap — it needs a counter debounce with fail = 1')
+		panic('loom2v: [[fault]] "${f.name}": a lost-frames fault fails once per gap — it needs a counter debounce with fail = 1')
 	}
 	match f.on {
 		'timeout' {

@@ -267,3 +267,55 @@ test("Signal faults: a clear served between an event and a good frame in one dra
   d:raw(fromhex("14 FF FF FF"))
   rpm(3000, 60)
 end)
+
+test("Signal faults: a cycle starting and an event in one drain record the event in the new cycle", function()
+  local d = diag()
+  ignition(false)
+  brakes(5)
+  d:raw(fromhex("14 FF FF FF"))
+  ign = true; ign_frame()                          -- the cycle starts ...
+  brake(0, true)                                   -- ... and a corrupt frame: one drain
+  brake()
+  sleep_ms(40)
+  check.equal(dtc(d, "C4 18 00") & 0x28, 0x28, "an event right after the cycle started was dropped")
+  brakes(5)
+  d:raw(fromhex("14 FF FF FF"))
+  rpm(3000, 60)
+end)
+
+test("Signal faults: an event drained before 0x28 switches reception off is still recorded", function()
+  local d = diag()
+  ignition(true)
+  brakes(5)
+  d:session(0x03)
+  d:raw(fromhex("14 FF FF FF"))
+  brakes(3)
+  brake(0, true)                                          -- a corrupt frame ...
+  check.equal(tohex(d:raw(fromhex("28 02 F1"))), "68 02") -- ... then rx off, the same drain
+  check.equal(tohex(d:raw(fromhex("28 00 F1"))), "68 00")
+  brakes(5)
+  check.equal(dtc(d, "C4 18 00") & 0x28, 0x28, "an event from before the disable was discarded")
+  d:session(0x01)
+  d:raw(fromhex("14 FF FF FF"))
+  rpm(3000, 60)
+end)
+
+test("Signal faults: a frame right after an in-drain re-enable is not overwritten as stale", function()
+  local d = diag()
+  ignition(true)
+  brakes(5)
+  d:session(0x03)
+  d:raw(fromhex("14 FF FF FF"))
+  brake(0, true); sleep_ms(40)                            -- integrity failed
+  check.equal(dtc(d, "C4 18 00") & 0x01, 0x01)
+  check.equal(tohex(d:raw(fromhex("28 02 F1"))), "68 02") -- rx off
+  -- a suppressed FUNCTIONAL re-enable (served inline) and ONE good frame, back to back
+  bus.send("CAN1", 0x7DF, fromhex("03 28 80 F1 00 00 00 00"))
+  brake()
+  sleep_ms(60)                                            -- well inside the 300 ms E2E timeout
+  check.equal(dtc(d, "C4 18 00") & 0x01, 0, "the good frame after the re-enable was not a pass")
+  d:session(0x01)
+  brakes(5)
+  d:raw(fromhex("14 FF FF FF"))
+  rpm(3000, 60)
+end)

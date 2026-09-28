@@ -250,11 +250,17 @@ on     = "timeout"                     # or "integrity" / "lost"
 ```
 
 The watched signal needs `status`; `timeout` also needs a deadline on its frame, `integrity` E2E
-or SecOC, `lost` the E2E `lost` counter — each refused at generation when missing. The bridge
-counts every event as it publishes (a corrupt frame followed by a good one in the same pass is
-still one integrity event) and steps the debounce once per pass (10 ms); `never_received` is not
-tested, and nothing is tested while 0x28 has reception off. A `lost` gap fails the one pass that
-sees it — so a `lost` fault takes `fail = 1` — and the DTC confirms without staying testFailed.
+or SecOC, `lost` the E2E `lost` counter — each refused at generation when missing.
+
+- **An event** (a frame that fails E2E or SecOC, a deadline running out, a counter gap) is a
+  failed result, stepped where the frame is published. That places it on the right side of an
+  operation-cycle edge, a clear or a 0x28 switch in the same 10 ms pass. A corrupt frame followed
+  by a good one is still one integrity event.
+- **The level** (the condition still holding, a good status, or not known) is stepped once per
+  pass, and only in a pass that had no event.
+- `never_received` is not tested, and nothing is tested while 0x28 has reception off.
+- A `lost` gap is one failed result, and the next good frame passes. So a `lost` fault takes
+  `fail = 1`, and its DTC confirms without staying testFailed.
 
 ## E2E protection (ISO 26262)
 
