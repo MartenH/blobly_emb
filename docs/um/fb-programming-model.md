@@ -55,8 +55,9 @@ the ThreadX comm thread's lean codec; generation names the exact rule when a con
 ### Receive a value — and know whether to trust it
 
 A signal received from a bus can carry `status = "RxStatus"`, filled by the platform:
-`never_received` (nothing yet), `ok`, `timeout` or `integrity` (the newest frame failed its E2E or
-SecOC check). **`timeout` needs a deadline on the frame** — `[[frame]] rx = { timeout_ms }`, or
+`never_received` (nothing yet), `ok`, `timeout` or `integrity` (the newest frame failed its SecOC
+MAC or its E2E CRC — an E2E *repeat*, a stuck or replaying counter, publishes nothing, so such a
+sender reaches `timeout` instead). **`timeout` needs a deadline on the frame** — `[[frame]] rx = { timeout_ms }`, or
 `e2e = { ..., timeout_ms }` (required on a received E2E frame); without one a silent sender keeps
 reading `ok` with its last value. An E2E frame can also carry a `lost` counter. The details are in
 [../communication.md](../communication.md). **What each status means is your decision** — a
@@ -79,9 +80,11 @@ at the bus, in the generated codec, both ways. Two things are yours to get right
   resolution declare `kph = "f32"`. A signal whose physical range goes negative (°C, a signed
   torque) needs a signed type (`i16`, `f32`) — a negative value cast into an unsigned field is
   meaningless.
-- **Sending: rounded, not clamped.** Your value is rounded to the nearest raw step
-  (`(phys - offset) / factor`), and a value **outside the DBC signal's range is not clamped — it
-  wraps into the signal's bits**. Clamp in the FB if your output can exceed the range.
+- **Sending: rounded, not range-checked.** Your value is rounded to the nearest raw step
+  (`(phys - offset) / factor`). The DBC's declared min/max are **not enforced**: a value outside
+  them is encoded as is while it fits the signal's bit width (150 on an 8-bit `[0|100]` signal goes
+  out as 150), and one that does not fit **wraps** into those bits. Clamp in the FB if your output
+  can leave the declared range.
 
 Any other conversion — unit changes, clamping, filtering, rate limits — is ordinary FB code today;
 declared transforms on a connection are planned, not built. On the ThreadX target the lean codec
@@ -113,7 +116,8 @@ e2e  = { data_id = 0x44, crc_pos = 4, counter_pos = 5, timeout_ms = 300 }
 
 Sending, the bridge stamps the E2E counter and CRC, then SecOC's freshness and MAC. Receiving, it
 verifies SecOC first, then E2E, and delivers the value only if both pass. What reaches the FB is the
-verdict: `status` becomes `integrity` on a failed check, `timeout` when E2E's own timeout runs out,
+verdict: `status` becomes `integrity` on a failed MAC or CRC (an E2E repeat is dropped, not
+flagged), `timeout` when E2E's own timeout runs out,
 and `lost` counts the frames the sequence showed missing. The FB never sees a CRC, a counter, a
 MAC or a key — it decides what a bad status means (a substitute value, a safe state). Host only
 today; the keys are plain config, fine for test keys, not for production. See
@@ -160,7 +164,8 @@ persist = "now"          # journaled on write (crash-safe) — or "shutdown": fl
 
 The platform restores it **before your first dispatch** (a fresh ECU, with nothing stored, starts
 from the signal's zero value). `"now"` journals a change at most once per `[nvm] min_write_ms`
-(default 1000 ms), so a power cut loses at most that window; `"shutdown"` is flushed only at bus
+(default 1000 ms) on the comm thread's next pass, so a power cut loses at most that floor plus one
+comm pass; `"shutdown"` is flushed only at bus
 sleep. To keep a running total, read the signal and write it back:
 
 ```v
@@ -203,8 +208,10 @@ The handler must also `read` each `enable` signal, and the node needs its diagno
 Debouncing runs on your thread after the handler; the fault memory keeps the DTC's ISO 14229 status
 (pending, confirmed, aging over operation cycles, in RAM for now) and a tester reads it with 0x19
 and clears it with 0x14. **Reporting is one-way:** you never read your DTC's status, and you keep
-no latch — "failed once, stay failed" is debounce config, and a self-latching FB would bring a
-cleared DTC straight back. React to what you *detect*, not to what the fault memory recorded.
+no latch. The DTC's *history* — failed since the last clear, confirmed — is the fault memory's to
+keep; your result is the current one, and it can pass again after the debounce's pass threshold
+(neither debounce kind latches a failure). A self-latching FB would bring a cleared DTC straight
+back. React to what you *detect*, not to what the fault memory recorded.
 Host only today. See [../communication.md](../communication.md) and
 [../diagnostics.md](../diagnostics.md) §3.3.
 

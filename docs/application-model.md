@@ -59,6 +59,8 @@ pub fn (mut fb SpeedMonitor) on_10ms(inp ports.SpeedMonitorIn, mut out ports.Spe
 // ports/ports_gen.v — GENERATED from ecu.toml (do not edit)
 module ports
 
+import sig
+
 pub struct SpeedMonitorIn {
 pub mut:
 	// signal "VehicleSpeed" — physical km/h
@@ -140,8 +142,8 @@ You follow it two ways, both **generated** (so always accurate):
 ## Scaling & transformers — at the boundary, never in the FB
 
 **Decision: FBs work in physical engineering units; raw↔physical scaling lives at
-the communication boundary (COM), and any other transform is a declared,
-generated step on the connection — not hand-written in the FB.**
+the communication boundary (COM). Other transforms are meant to become declared,
+generated steps on the connection — until they exist (below), they are FB code.**
 
 - **Bus scaling (raw ↔ physical)** is the DBC `factor`/`offset`, applied in the
   generated COM codec (`dbc2cfg` emits `*_phys()`), so a signal read from CAN
@@ -240,8 +242,8 @@ the FB** — only `ecu.toml` changes.
   composes natively.
 - **Signal API**: grouped, annotated `In`/`Out` port structs (stable signatures,
   field access, built-in traceability).
-- **Scaling/transforms**: at the COM/connection boundary, generated — never inside
-  an FB.
+- **Scaling/transforms**: scaling at the COM boundary, generated; other transforms
+  planned as declared connection steps, FB code until then.
 - **Traceability**: signal name is the key; inline provenance on generated fields +
   a generated `signal-map`.
 
