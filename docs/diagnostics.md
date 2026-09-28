@@ -19,15 +19,17 @@ page is the plan to close that, in rungs that each ship and verify on their own.
 
 ## 1. Where we actually are
 
+As of R1 (#291) — the rows R0 and R1 changed say so; the rest is the state the plan started from.
+
 | Piece | State | Where |
 |---|---|---|
-| UDS services | 0x10, 0x22, 0x2E, 0x3E only; everything else answers 0x11 | `comm/uds/uds.v` |
-| Session model | stored, never enforced; starts at 0 (never initialised) in generated code | `comm/uds/uds.v`, `tools/loom2v/gen_com.v` |
-| DIDs | 16 × ≤32 B static table; 0x22 reads the FIRST DID of a request only | `comm/uds/uds.v` |
-| NRCs | 0x11 0x12 0x13 0x22 0x31 (no 0x7E/0x7F/0x78/0x33/0x24) | `comm/uds/uds.v` |
+| UDS services | 0x10, 0x11 (two-phase: answered, then reset), 0x22, 0x28, 0x2E, 0x3E; everything else answers 0x11. On the host 0x11 resets the DIAGNOSTIC state only (R1); a real reset is R2 | `comm/uds/uds.v` |
+| Session model | enforced (R1): starts in default, S3 returns to it (`s3_ms`), leaving a non-default session relocks security and re-enables 0x28; the programming session is refused until the R2 handoff | `comm/uds/uds.v`, `tools/loom2v/gen_com.v` |
+| DIDs | 16 × ≤32 B static table; 0x22 reads several DIDs per request (R1); per-DID `read` / `write` session and security gates | `comm/uds/uds.v` |
+| NRCs | 0x11 0x12 0x13 0x14 0x31 0x33 0x7E 0x7F in ISO 14229-1's evaluation order (R1); functional requests withhold 0x11/0x12/0x31/0x7E/0x7F; no 0x78 yet (R6/R7) | `comm/uds/uds.v` |
 | Security access 0x27 | absent (the bootloader uses 0x29 authentication instead) | `boot/prog.v` |
 | UDS on the **target** | **none** — loom2v refuses `[[isotp]]` on a ThreadX node; on silicon UDS runs only hand-wired — the bootloader over ISO-TP and the `h735_doip` example over DoIP | `tools/loom2v/gen.v` |
-| UDS config | `[[isotp]]` + `[[did]]` (ascii / bytes / signal / writable) | `tools/ecucheck/gen.v` |
+| UDS config | `[[isotp]]` (one per node; `functional_id`, `s3_ms` since R1) + `[[did]]` (ascii / bytes / signal / writable, `read` / `write` gates) | `tools/ecucheck/gen.v` |
 | Rx signal status | one `valid` bool, host bridge only; E2E/SecOC failures drop the frame silently; target rejects rx deadlines, E2E and `valid` ("phase 6b-2b") | `tools/loom2v/gen_com.v`, `gen.v` |
 | Fault memory / DTCs | **nothing** — no events, debouncing, status byte, 0x19, 0x14, 0x85 | — |
 | Persistence | journal engine + `persist = "now" / "shutdown"` signals, ThreadX only, one journal per node, 20 B records with 634 B chains; DID write path (NvM "P4") not built | `nvm/`, `tools/loom2v/gen_nvm.v` |
@@ -35,10 +37,10 @@ page is the plan to close that, in rungs that each ship and verify on their own.
 | Cross-thread transports | last-value cells only (seqlock / double / triple, xioc); `bulk` is the one FIFO | `osal/`, `boards/common/` |
 | Tester (blobly_net) | client: 0x10 0x22 0x2E 0x3E, **0x27 with a reference key (seed XOR 0xFF)**, 0x19 sub 0x02 as raw bytes; no 0x14 / 0x11 / 0x28 / 0x85, no functional addressing, no DTC model or view; its UDS sim answers 0x19/0x02 from a static list | `blobly_net modules/uds` |
 
-Three doc claims are ahead of the code and are corrected in R0: `docs/autosar-comparison.md` marks
-diagnostics "✅ have" (only the request/response half exists), `docs/communication.md` still calls the
-ISO-TP handler a positive-response echo next to "UDS ✅", and `docs/nvm.md` opens with "Nothing is
-built" while P1/P2 and chains are.
+Three doc claims were ahead of the code; R0 (#292) and R1 (#291) corrected them: `docs/autosar-comparison.md`
+marked diagnostics "✅ have" (only the request/response half exists), `docs/communication.md` called
+the ISO-TP handler a positive-response echo next to "UDS ✅", and `docs/nvm.md` opened with "Nothing
+is built" while P1/P2 and chains were.
 
 ## 2. Principles (the ones every rung is checked against)
 
