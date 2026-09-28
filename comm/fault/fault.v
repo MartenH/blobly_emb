@@ -157,7 +157,11 @@ pub mut:
 	failed_cycles u8  // saturating
 	aging_count   u8
 	failed_cycle  bool // failed in the current cycle (already counted)
-	gen           u8   // the clear generation the producer must apply
+	tested_cycle  bool // a test completed in the current cycle — runtime state, so a status byte
+	// frozen by 0x85 across a boundary is never read as this cycle's result
+	gen         u8   // the clear generation the producer must apply
+	pending_gen bool // a clear bumped `gen` and the producer has not applied it yet: a further
+	// clear reuses it, so the u8 can never wrap back to the generation of a stale report
 	base_seen     bool // a Report of `gen` has been consumed: the baselines are valid
 	base_fails    u16
 	base_tests    u16
@@ -181,6 +185,8 @@ pub fn (mut m Memory) init() {
 		m.slots[i].failed_cycles = 0
 		m.slots[i].aging_count = 0
 		m.slots[i].failed_cycle = false
+		m.slots[i].tested_cycle = false
+		m.slots[i].pending_gen = false
 		m.slots[i].gen = 0
 		m.slots[i].base_seen = false
 	}
@@ -202,10 +208,12 @@ pub fn (mut m Memory) consume(i int, r Report) {
 	s.base_fails = r.fails
 	s.base_tests = r.tests
 	s.base_seen = true
+	s.pending_gen = false // the producer has applied the latest clear
 	if m.setting_off || !m.cycle_active || (df == 0 && dt == 0) {
 		return // suppressed, or outside an operation cycle: the baselines follow, the status does not
 	}
 	if dt > 0 {
+		s.tested_cycle = true
 		s.status &= ~(not_completed_since_clear | not_completed_this_cycle)
 		if r.failed {
 			s.status |= test_failed
@@ -243,6 +251,7 @@ pub fn (mut m Memory) cycle_start() {
 			m.slots[i].status = (m.slots[i].status & ~test_failed_this_cycle) | not_completed_this_cycle
 		}
 		m.slots[i].failed_cycle = false
+		m.slots[i].tested_cycle = false
 	}
 	m.cycle_active = true
 }
@@ -259,8 +268,7 @@ pub fn (mut m Memory) cycle_end() {
 	}
 	for i in 0 .. m.n {
 		mut s := &m.slots[i]
-		tested := s.status & not_completed_this_cycle == 0
-		if tested && !s.failed_cycle {
+		if s.tested_cycle && !s.failed_cycle {
 			s.status &= ~pending
 			if s.status & confirmed == 0 {
 				s.failed_cycles = 0 // a passing cycle breaks a run toward confirmation
@@ -292,7 +300,11 @@ pub fn (mut m Memory) clear(group u32) bool {
 		s.failed_cycles = 0
 		s.aging_count = 0
 		s.failed_cycle = false
-		s.gen++
+		s.tested_cycle = false
+		if !s.pending_gen {
+			s.gen++
+			s.pending_gen = true
+		}
 		s.base_seen = false
 	}
 	return hit

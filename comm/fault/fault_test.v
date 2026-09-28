@@ -331,3 +331,44 @@ fn test_unwired_availability_leaves_services_unsupported() {
 	s.faults.avail = 0
 	assert call(mut s, [u8(0x19), 0x0A]) == [u8(0x7F), 0x19, 0x11]
 }
+
+// §7 R4 / codex #301: a cycle begun while 0x85 froze the status keeps its OWN tested state — the
+// stale not-completed bit from the previous cycle never counts as a test in this one.
+fn test_a_frozen_status_is_not_read_as_this_cycles_test() {
+	mut m := memory([u32(1)])
+	m.slots[0].aging = 1
+	mut d := counter(1, 1)
+	m.cycle_start()
+	d.step(.failed, 0, true)
+	m.consume(0, d.rep)
+	m.cycle_end()
+	m.cycle_start()
+	d.step(.passed, 0, true)
+	m.consume(0, d.rep) // tested, so TNCTOC is clear
+	m.setting_off = true
+	m.cycle_end()
+	m.cycle_start() // frozen: TNCTOC stays clear, but this cycle has tested nothing
+	m.setting_off = false
+	m.cycle_end()
+	assert m.slots[0].status & confirmed != 0, 'an untested cycle aged the DTC out'
+	assert m.slots[0].status & pending != 0, 'an untested cycle cleared pending'
+}
+
+// codex #301: 256 clears while the producer is stalled never wrap the generation back to the one
+// its stale report carries.
+fn test_clears_against_a_stalled_producer_never_reuse_a_generation() {
+	mut m := memory([u32(1)])
+	mut d := counter(1, 1)
+	m.cycle_start()
+	d.step(.failed, 0, true)
+	stale := d.rep // produced before any clear, never re-published
+	for _ in 0 .. 256 { // exactly one u8 wrap: without the guard the gen returns to the stale 0
+		assert m.clear(0xFFFFFF)
+	}
+	m.consume(0, stale)
+	assert m.slots[0].status == status_cleared, 'a stale report was accepted after the generation wrapped'
+	d.apply(m.control_gen(0))
+	m.consume(0, d.rep)
+	assert m.clear(1) // acknowledged: the next clear moves on
+	assert m.control_gen(0) != d.rep.gen
+}
