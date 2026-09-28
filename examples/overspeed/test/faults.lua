@@ -3,6 +3,7 @@
 -- diagnostic bridge keeps DTC 0x021900's ISO 14229-1 status, read and cleared with raw 0x19 / 0x14
 -- / 0x85. The operation cycle is IgnitionOn (frame 0x302), also the fault's enable condition.
 -- (REQ-DIAG-009 / 010 are verified by comm/fault's unit tests; this proves the generated wiring end to end.)
+-- @verifies REQ-DIAG-011
 local function diag() return uds.open("CAN1", { tx = 0x101, rx = 0x102 }) end
 -- Ignition is cyclic (500 ms deadline): every helper keeps sending the current state
 local ign = false
@@ -53,8 +54,11 @@ test("Faults: an over-rev in a cycle confirms the DTC; passing clears testFailed
   ignition(true)
   rpm(7000, 100)
   check.equal(failing(d), "02 19 00 2F") -- TF | TFTOC | pending | confirmed | TFSLC
-  -- two: the over-rev, and BrakeMsgTimeout (the brake sender is silent during these tests)
-  check.equal(tohex(d:raw(fromhex("19 01 09"))), "59 01 7F 01 00 02")
+  -- 0x19 01 counts every DTC matching the mask — the brake signal faults' DTCs included (their
+  -- sender is silent here), so only the shape and a lower bound are this test's to check
+  local cnt = d:raw(fromhex("19 01 09"))
+  check.equal(tohex(cnt:sub(1, 4)), "59 01 7F 01")
+  check.truthy(string.byte(cnt, 5) * 256 + string.byte(cnt, 6) >= 1)
   rpm(3000, 100)
   check.equal(status(d), 0x2E, "testFailed should drop once the test passes")
 end)
@@ -172,10 +176,28 @@ test("Signal faults: brake frame silence, corruption and a gap each raise their 
   brake(0, true); sleep_ms(40) -- one corrupt frame
   check.equal(dtc(d, "C4 18 00") & 0x09, 0x09, "no integrity DTC for a corrupt frame")
   brakes(3)
+  d:raw(fromhex("14 C4 18 01")) -- the corrupt frame also counted as lost: start the gap check clean
+  brakes(3)
+  check.equal(dtc(d, "C4 18 01") & 0x28, 0, "lost DTC set before any gap")
   brake(2); sleep_ms(40) -- two frames missing
   -- a gap is an event: it fails the one pass that sees it, and the next good frame passes again —
   -- so the DTC is confirmed (and failed since clear), not currently failed
   check.equal(dtc(d, "C4 18 01") & 0x28, 0x28, "no lost DTC for a gap")
+  brakes(5)
+  d:raw(fromhex("14 FF FF FF"))
+  rpm(3000, 60)
+end)
+
+test("Signal faults: a corrupt frame followed by a good one in the same pass is still an integrity event", function()
+  local d = diag()
+  ignition(true)
+  brakes(5)
+  d:raw(fromhex("14 C4 18 00"))
+  brakes(3)
+  brake(0, true) -- corrupt ...
+  brake()        -- ... and good, back to back: one bridge drain, the good status is the last one
+  sleep_ms(40)
+  check.equal(dtc(d, "C4 18 00") & 0x28, 0x28, "an integrity event overwritten within one pass was lost")
   brakes(5)
   d:raw(fromhex("14 FF FF FF"))
   rpm(3000, 60)

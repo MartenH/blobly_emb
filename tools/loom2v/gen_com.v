@@ -669,6 +669,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\tfcycle_on bool // the operation-cycle signal as last seen'
 				for src in fault_sources(m) {
 					glue << '\tfsrc_${snake(src)} sig.RxStatus // ${src}\'s latest published status (signal-status faults)'
+					glue << '\tfsrc_${snake(src)}_integrity u32 // integrity events published, monotonic'
+					glue << '\tfsrc_${snake(src)}_timeout u32 // timeout events published, monotonic'
 					if m.faults.any(it.signal == src && it.on == 'lost') {
 						glue << '\tfsrc_${snake(src)}_lost u32'
 					}
@@ -676,9 +678,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				for i, f in m.faults {
 					if f.signal != '' {
 						glue << '\tsdeb_${i} fault.Debounce // ${f.name}: ${f.signal} ${f.on}, debounced here'
-						if f.on == 'lost' {
-							glue << '\tslost_${i} u32 // the lost count last stepped'
-						}
+						glue << '\tsseen_${i} u32 // the event count (${f.on}) last stepped'
 					}
 				}
 				for fb in fault_fbs(m) {
@@ -2060,22 +2060,27 @@ fn fault_pass_lines(m Model) []string {
 			continue
 		}
 		src := 'st.fsrc_${snake(f.signal)}'
+		// failed: an event since the last step, or the condition still holding; passed: a good
+		// frame and no event; otherwise (never received, or the other condition) not tested — a
+		// corrupt-only sender is no pass for the timeout test
+		ev := '${src}_${f.on}'
 		res := match f.on {
 			'timeout' {
-				'if ${src} == .timeout { fault.TestResult.failed } else if ${src} == .never_received { fault.TestResult.not_tested } else { fault.TestResult.passed }'
+				'if ${ev} != st.sseen_${i} || ${src} == .timeout { fault.TestResult.failed } else if ${src} == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
 			}
 			'integrity' {
-				'if ${src} == .integrity { fault.TestResult.failed } else if ${src} == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
+				'if ${ev} != st.sseen_${i} || ${src} == .integrity { fault.TestResult.failed } else if ${src} == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
 			}
 			else {
-				'if ${src}_lost != st.slost_${i} { fault.TestResult.failed } else if ${src} == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
+				'if ${ev} != st.sseen_${i} { fault.TestResult.failed } else if ${src} == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
 			}
 		}
+		// while 0x28 has reception off (or its silence is still latched) nothing is received:
+		// the watched signal's status is stale, so the test is disabled, not passed or failed
+		en := if rx_msgs_have_deadline(m) { 'diag_rx_ok && !st.diag_rx_was_off' } else { 'diag_rx_ok' }
 		out << '\tst.sdeb_${i}.apply(st.fmem.control_gen(${i}))'
-		out << '\tst.sdeb_${i}.step(${res}, now, true)'
-		if f.on == 'lost' {
-			out << '\tst.slost_${i} = ${src}_lost'
-		}
+		out << '\tst.sdeb_${i}.step(${res}, now, ${en})'
+		out << '\tst.sseen_${i} = ${ev}'
 		out << '\tst.fmem.consume(${i}, st.sdeb_${i}.rep)'
 	}
 	for fb in fault_fbs(m) {
@@ -2117,11 +2122,31 @@ fn rx_publish_hooks(m Model, sname string, fld string, ind string) []string {
 		out << '${ind}st.fcycle_on = ${fld}.${cf}'
 	}
 	if sname in fault_sources(m) {
+		// the level AND every event: a corrupt frame followed by a good one in the same drain is
+		// still one integrity event for the pass's step (a level alone would be overwritten)
 		src := snake(sname)
 		out << '${ind}st.fsrc_${src} = ${fld}.status'
+		out << '${ind}if ${fld}.status == .integrity {'
+		out << '${ind}\tst.fsrc_${src}_integrity++'
+		out << '${ind}} else if ${fld}.status == .timeout {'
+		out << '${ind}\tst.fsrc_${src}_timeout++'
+		out << '${ind}}'
 		if m.faults.any(it.signal == sname && it.on == 'lost') {
 			out << '${ind}st.fsrc_${src}_lost = u32(${fld}.lost)'
 		}
 	}
 	return out
+}
+
+// rx_msgs_have_deadline: the diagnostic bridge keeps the 0x28 silence latch (diag_rx_was_off) —
+// the same condition its state-field emission uses.
+fn rx_msgs_have_deadline(m Model) bool {
+	bus := m.isotp_conns[0].bus
+	for sname in m.sig_names {
+		si := m.sig_of[sname] or { continue }
+		if si.external && si.rx && si.bus == bus && has_deadline(m, si.dbc_msg, bus) {
+			return true
+		}
+	}
+	return false
 }

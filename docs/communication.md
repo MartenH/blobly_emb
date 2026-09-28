@@ -249,10 +249,12 @@ signal = "BrakePressure"               # received on the diagnostic bus
 on     = "timeout"                     # or "integrity" / "lost"
 ```
 
-`timeout` needs the signal's `status` and a deadline on its frame, `integrity` needs `status` and
-E2E or SecOC on the frame, `lost` needs the E2E `lost` counter — each refused at generation when
-missing. The debounce counts bridge passes (10 ms); `never_received` is not tested. A `lost` gap
-is an event: it fails the pass that sees it, so the DTC confirms without staying testFailed.
+The watched signal needs `status`; `timeout` also needs a deadline on its frame, `integrity` E2E
+or SecOC, `lost` the E2E `lost` counter — each refused at generation when missing. The bridge
+counts every event as it publishes (a corrupt frame followed by a good one in the same pass is
+still one integrity event) and steps the debounce once per pass (10 ms); `never_received` is not
+tested, and nothing is tested while 0x28 has reception off. A `lost` gap fails the one pass that
+sees it — so a `lost` fault takes `fail = 1` — and the DTC confirms without staying testFailed.
 
 ## E2E protection (ISO 26262)
 

@@ -4976,20 +4976,21 @@ fn validate_signal_fault(m Model, f FaultCfg) {
 		panic('loom2v: [[fault]] "${f.name}": signal "${f.signal}" must be received on the diagnostic bus "${bus}" — its bridge is the detector')
 	}
 	msg := si.dbc_msg
+	if !si.has_status {
+		panic('loom2v: [[fault]] "${f.name}": ${f.signal} needs `status = "RxStatus"` — the bridge watches its status')
+	}
+	// `lost` is an EVENT: it fails the one pass that sees a gap — a time debounce or a counter
+	// needing several consecutive failures could never qualify it
+	if f.on == 'lost' && (f.time_based || f.fail_thr > 1) {
+		panic('loom2v: [[fault]] "${f.name}": a lost-frames fault fails one pass per gap — it needs a counter debounce with fail = 1')
+	}
 	match f.on {
 		'timeout' {
-			if !si.has_status {
-				panic('loom2v: [[fault]] "${f.name}": ${f.signal} needs `status = "RxStatus"` to be watched for a timeout')
-			}
-			if (m.frames.rx_timeout_us[msg] or { 0 }) == 0 && !(m.frames.e2e_here(msg, bus)
-				&& (m.frames.e2e_timeout_us[msg] or { 0 }) > 0) {
+			if !has_deadline(m, msg, bus) {
 				panic('loom2v: [[fault]] "${f.name}": frame "${msg}" has no deadline (rx.timeout_ms or e2e.timeout_ms) — a timeout could never be seen')
 			}
 		}
 		'integrity' {
-			if !si.has_status {
-				panic('loom2v: [[fault]] "${f.name}": ${f.signal} needs `status = "RxStatus"` to be watched for integrity')
-			}
 			if !m.frames.e2e_here(msg, bus) && !m.frames.secoc_here(msg, bus) {
 				panic('loom2v: [[fault]] "${f.name}": frame "${msg}" carries no E2E or SecOC — an integrity failure could never be seen')
 			}

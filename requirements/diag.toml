@@ -91,3 +91,12 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-011"
+title = "Faults from a signal's receive status"
+text = "A DTC may be declared on a received signal's reception deadline passing, its protection check failing, or its E2E sequence showing lost frames, and shall then be raised by the receiving side without application code; each such event shall be counted even when a later frame in the same processing pass overwrites the signal's status, and no result shall be recorded while reception is switched off by CommunicationControl."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"
