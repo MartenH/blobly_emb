@@ -40,7 +40,7 @@ pub fn (mut fb EngineMonitor) on_10ms(inp ports.EngineMonitorIn, mut out ports.E
 | ... | in `ecu.toml` | in the FB | host | ThreadX target |
 |---|---|---|---|---|
 | use another FB's value | `[[signal]] from = "<its partition>"`, `to = "<mine>"`; list it in `reads` | `inp.x.field` | ✅ | ✅ — but not INTO a satellite core's partition yet (satellite → owner only) |
-| give a value to another FB | the same signal, in my `writes` | `out.x.field = v` | ✅ | ✅ |
+| give a value to another FB | the same signal, in my `writes` | `out.x.field = v` | ✅ | ✅ — but not INTO a satellite core's partition yet (satellite → owner only) |
 | send a value on CAN | `to = "can0"`; the signal name is the DBC signal; `[[frame]]` sets timing / E2E / SecOC | `out.x.field = v` (physical units) | ✅ | cyclic tx, plain u32 layouts, no E2E / SecOC yet |
 | receive a value from CAN | `from = "can0"` | `inp.x.field` | ✅ | plain u32 layouts only |
 | … and know if it is fresh | add `status = "RxStatus"`, and give its frame a deadline | `inp.x.status` | ✅ | not yet (R5) |
@@ -125,7 +125,8 @@ at the bus, in the generated codec, both ways. Two things are yours to get right
   (`(phys - offset) / factor`). The DBC's declared min/max are **not enforced**: a value outside
   them is encoded as is while it fits the signal's bit width (150 on an 8-bit `[0|100]` signal goes
   out as 150), and one that does not fit **wraps** into those bits. Clamp in the FB if your output
-  can leave the declared range.
+  can leave the declared range. Values pass through `f64` both ways, so an integer is exact only up
+  to 2^53 — a 64-bit counter or identifier on the wire needs care.
 
 Any other conversion — unit changes, clamping, filtering, rate limits — is ordinary FB code today;
 declared transforms on a connection are planned, not built. On the ThreadX target the lean codec
@@ -200,26 +201,23 @@ name    = "OdoMeters"
 fields  = { m = "u32" }
 from    = "app"
 to      = "app"
-persist = "now"          # journaled on write (crash-safe) — or "shutdown": flushed at bus sleep
+persist = "now"          # survives a crash — or "shutdown": survives an ORDERLY shutdown only
 ```
 
 The platform restores it **before your first dispatch** (a fresh ECU, with nothing stored, starts
-from the signal's zero value). `"now"` journals a change at most once per `[nvm] min_write_ms`
-(default 1000 ms) on the comm thread's next pass, so a power cut loses at most that floor plus one
-comm pass; `"shutdown"` is flushed only at bus
-sleep. To keep a running total, read the signal and write it back:
+from the signal's zero value). `"now"` survives a crash, losing at most the last write window;
+`"shutdown"` survives an orderly shutdown only — after a crash it starts from zero. To keep a
+running total, read the signal and write it back:
 
 ```v
 out.odo_meters.m = inp.odo_meters.m + delta   // reads = ["OdoMeters"], writes = ["OdoMeters"]
 ```
 
-It needs `[nvm]` **and** `[nm]` (bus sleep is the flush point), a signal local to one thread with
-one writer, and 1–2 unsigned fields. A **target** build refuses anything else, and checks flash
-wear for `"now"` against the writing handler's period and the write floor. Writes at the bus-sleep
-flush — every dirty value, `"now"` and `"shutdown"` alike — are not in that model: they depend on
-how often the bus sleeps. A **host** build checks none of this — it warns, builds,
-and stores nothing — so a persistence config is only validated by building for the target.
-See [../nvm.md](../nvm.md).
+It has prerequisites (`[nvm]` and `[nm]`, a one-writer thread-local signal, a small set of field
+types) and a generation-time flash-wear check; a **target** build names whichever rule a config
+breaks. A **host** build checks none of it — it warns, builds, and stores nothing — so validate a
+persistence config by building for the target. The write pacing, the crash semantics and the wear
+model are in [../nvm.md](../nvm.md).
 
 ### Report a fault (set a DTC)
 
