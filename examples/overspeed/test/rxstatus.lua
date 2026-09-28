@@ -118,3 +118,17 @@ test("RxStatus: rx switched off and on inside one drain still hides the gap span
   check.equal(lost1, lost0, "a gap spanning an in-drain rx-off was counted as lost")
   d:session(0x01)
 end)
+
+test("RxStatus: rx switched off and on inside one drain restarts the deadline", function()
+  local d = uds.open("CAN1", { tx = 0x101, rx = 0x102 })
+  d:session(0x03)
+  for _ = 1, 3 do brake(1000); sleep_ms(10) end
+  sleep_ms(220) -- most of the 300 ms deadline gone
+  -- rx off, a frame the application must not see, rx on — one bridge drain
+  bus.send("CAN1", 0x7DF, fromhex("03 28 82 F1 00 00 00 00"))
+  brake(1000)
+  bus.send("CAN1", 0x7DF, fromhex("03 28 80 F1 00 00 00 00"))
+  -- without a restart the old deadline fires at 300 ms; restarted, it runs until ~520 ms
+  check.equal((report(150)), OK, "the deadline was not restarted when reception returned")
+  d:session(0x01)
+end)

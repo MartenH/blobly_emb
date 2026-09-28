@@ -3806,18 +3806,17 @@ fn test_dissolved_unread_signal_is_warning() {
 		&& it.msg.contains('read by no other node'))
 }
 
-// REQ-TOPO-001: a value field ALONGSIDE the receive metadata is the supported shape (status and
-// lost are filled by the receiving bridge, excluded from the wire) — it must NOT be rejected.
-fn test_dissolved_value_plus_status_ok() {
+// REQ-TOPO-001: receive metadata (status / lost) is not lowered from system.toml — the node
+// declares it — so a system signal carrying either is refused, whatever its bus or endpoints.
+fn test_dissolved_receive_metadata_refused() {
 	mut s := clean_dissolved()
-	s.signals[0].fields = {
-		'kph':    'u16'
-		'status': 'RxStatus'
+	for meta in ['status', 'lost'] {
+		s.signals[0].fields = {
+			'kph': 'u16'
+			meta:  if meta == 'status' { 'RxStatus' } else { 'u16' }
+		}
+		assert errs(validate_system_gen(s)).any(it.contains('is not lowered from system.toml yet')), errs(validate_system_gen(s)).str()
 	}
-	assert !errs(validate_system_gen(s)).any(it.contains('field') || it.contains('bits')), 'value+status is valid: ${errs(validate_system_gen(s))}'
-	// `lost` cannot be lowered: a generated system frame carries no E2E
-	s.signals[0].fields['lost'] = 'u16'
-	assert errs(validate_system_gen(s)).any(it.contains('`lost` needs E2E')), errs(validate_system_gen(s)).str()
 }
 
 // codex #142 round 10: loom2v spawns partition_telem() on the HOST target too
@@ -4508,10 +4507,10 @@ fn test_someip_signal_receive_metadata_is_refused() {
 				bus:      'backbone'
 				fields:   {
 					'load':   'u16'
-					'status': 'RxStatus'
+					'status': 'u8' // any type: the reserved name is the problem
 				}
 			},
 		]
 	}
-	assert errs(check_signals_dissolved(s)).any(it.contains('`status` on a SOME/IP bus is not generated')), errs(check_signals_dissolved(s)).str()
+	assert errs(check_signals_dissolved(s)).any(it.contains('is not lowered from system.toml yet')), errs(check_signals_dissolved(s)).str()
 }

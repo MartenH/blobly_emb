@@ -126,7 +126,7 @@ mut:
 	uds_diag uds.Server
 	sa_diag uds.ReferenceSecurity // 0x27 on the host: the SIM key (not a secret, decision D5)
 	uds_diag_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity
-	diag_rx_was_off bool // 0x28 had rx off last pass: restart the deadlines on return
+	diag_rx_was_off bool // 0x28 had rx off (any sampling since the last restart): restart the deadlines on return
 }
 
 fn io_can0_10ms(ctx voidptr) {
@@ -141,8 +141,9 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 	st.uds_diag.tick(now)
 	mut diag_rx_ok := st.uds_diag.rx_enabled()
-	if !diag_rx_ok {
-		st.e2e_quiet_brake_status = true // silence commanded, frame or not
+	if !diag_rx_ok { // silence commanded: latch it, frame or not
+		st.diag_rx_was_off = true
+		st.e2e_quiet_brake_status = true
 	}
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
@@ -205,8 +206,9 @@ fn io_can0_10ms(ctx voidptr) {
 					st.uds_diag.reset_state()
 				}
 				diag_rx_ok = st.uds_diag.rx_enabled()
-				if !diag_rx_ok {
-					st.e2e_quiet_brake_status = true // silence commanded, frame or not
+				if !diag_rx_ok { // silence commanded: latch it, frame or not
+					st.diag_rx_was_off = true
+					st.e2e_quiet_brake_status = true
 				}
 			}
 		}
@@ -241,8 +243,9 @@ fn io_can0_10ms(ctx voidptr) {
 		}
 	}
 	diag_rx_ok = st.uds_diag.rx_enabled()
-	if !diag_rx_ok {
-		st.e2e_quiet_brake_status = true // silence commanded, frame or not
+	if !diag_rx_ok { // silence commanded: latch it, frame or not
+		st.diag_rx_was_off = true
+		st.e2e_quiet_brake_status = true
 	}
 	if diag_rx_ok && st.diag_rx_was_off {
 		st.rx_powertrain_st.on_receive(now)

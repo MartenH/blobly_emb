@@ -667,7 +667,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\tuds_${tp}_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity'
 		}
 		if conns.len > 0 && rx_by_msg.keys().any((m.frames.rx_timeout_us[it] or { 0 }) > 0) {
-			glue << '\tdiag_rx_was_off bool // 0x28 had rx off last pass: restart the deadlines on return'
+			glue << '\tdiag_rx_was_off bool // 0x28 had rx off (any sampling since the last restart): restart the deadlines on return'
 		}
 		for d in dests {
 			glue << '\troute_${snake(d)} can.Channel // gateway: forward to ${d}'
@@ -1888,18 +1888,23 @@ fn lost_expr(m Model, msg string, bname string, has_diag bool) string {
 
 // rx_gate_sample: every sampling of the 0x28 receive gate — at the top of a pass, after a
 // functional request served inside the drain, after the pass's requests — in ONE place, with the
-// rule that rides on it: whenever reception is found off, each E2E frame whose loss count hides
-// commanded silence is marked quiet, frame or not. So a disable and re-enable inside one drain (two
-// suppressed functional requests) still leaves the silence marked for the gap that spans it.
+// rule that rides on it: whenever reception is found off, the silence is LATCHED — for the rx
+// deadlines (restarted when reception returns) and for each E2E frame whose loss count hides
+// commanded silence. So a disable and re-enable inside one drain (two suppressed functional
+// requests) is remembered like one that spans passes.
 fn rx_gate_sample(m Model, conns []IsotpConn, rx_msgs []string, bname string, ind string, decl bool) []string {
 	mut out := []string{}
 	lhs := if decl { 'mut diag_rx_ok :=' } else { 'diag_rx_ok =' }
 	out << '${ind}${lhs} ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
 	quiet := rx_msgs.filter(lost_expr(m, it, bname, true).contains('e2e_hidden'))
-	if quiet.len > 0 {
-		out << '${ind}if !diag_rx_ok {'
+	deadlines := rx_msgs.any((m.frames.rx_timeout_us[it] or { 0 }) > 0)
+	if quiet.len > 0 || deadlines {
+		out << '${ind}if !diag_rx_ok { // silence commanded: latch it, frame or not'
+		if deadlines {
+			out << '${ind}\tst.diag_rx_was_off = true'
+		}
 		for msg in quiet {
-			out << '${ind}\tst.e2e_quiet_${msg} = true // silence commanded, frame or not'
+			out << '${ind}\tst.e2e_quiet_${msg} = true'
 		}
 		out << '${ind}}'
 	}

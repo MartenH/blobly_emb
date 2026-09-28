@@ -465,22 +465,15 @@ fn check_signals_dissolved(s System) []Issue {
 				}
 				continue
 			}
-			if is_rx_meta(fname, ftype) {
-				// only what the lowering can produce: the receiving CAN bridge fills `status`;
-				// `lost` needs E2E on the frame, which a generated system frame does not carry;
-				// and the SOME/IP codec fills neither (it would read them off the wire)
-				if carries_struct(s, sig) {
-					issues << Issue{
-						severity: .error
-						req:      'REQ-TOPO-001'
-						msg:      'signal "${sig.name}": `${fname}` on a SOME/IP bus is not generated — receive status and the lost count are CAN bridge features'
-					}
-				} else if fname == 'lost' {
-					issues << Issue{
-						severity: .error
-						req:      'REQ-TOPO-001'
-						msg:      'signal "${sig.name}": `lost` needs E2E on its frame, and a system-generated frame carries none — declare the signal in a node with an E2E-protected [[frame]] instead'
-					}
+			if fname == 'status' || fname == 'lost' {
+				// receive metadata is not lowered from system.toml: the producer's generated tx
+				// signal, a ThreadX endpoint (R5), the SOME/IP codec and a generated frame without
+				// E2E would each reject or mis-carry it. Declare it in the consuming node's ecu.toml
+				// until the lowering supports it — one rule instead of a list of carriers.
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'signal "${sig.name}": `${fname}` (receive status / lost count) is not lowered from system.toml yet — declare it on the received signal in the consuming node\'s ecu.toml'
 				}
 				continue
 			}
