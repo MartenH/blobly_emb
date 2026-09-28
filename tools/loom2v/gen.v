@@ -4804,17 +4804,19 @@ fn validate_faults(m Model, doc toml.Doc) {
 	mut names := map[string]bool{}
 	mut dtcs := map[int]string{}
 	mut per_fb := map[string]int{}
+	// the snake form becomes a field of the FB's Faults struct: one scope per FB
+	mut scopes := map[string]ecumodel.SnakeScope{}
 	for f in m.faults {
-		if !ecumodel.ident_ok(f.name) || f.name in names {
-			panic('loom2v: [[fault]] name "${f.name}" is not an identifier, or is declared twice')
+		if !ecumodel.pascal_ok(f.name) || f.name in names {
+			panic('loom2v: [[fault]] name "${f.name}" is not PascalCase ([A-Z][A-Za-z0-9]*), or is declared twice')
 		}
 		names[f.name] = true
-		// the snake form becomes a field of the FB's Faults struct: two names must not collide there
-		key := '${f.fb}/${snake(f.name)}'
-		if key in names {
-			panic('loom2v: [[fault]] "${f.name}" collides with another fault of ${f.fb} as field ${snake(f.name)}')
+		if f.fb !in scopes {
+			scopes[f.fb] = ecumodel.snake_scope('fault of ${f.fb}')
 		}
-		names[key] = true
+		if e := scopes[f.fb].add(f.name) {
+			panic('loom2v: [[fault]] ${e}')
+		}
 		thr := m.part.fb_thread[f.fb] or { '' }
 		if m.part.external[m.part.thread_part[thr] or { '' }] or { false } {
 			panic('loom2v: [[fault]] "${f.name}": ${f.fb} lives in a partition this image does not generate — its debounce and report cell would never be emitted')

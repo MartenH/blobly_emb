@@ -15,6 +15,7 @@
 module main
 
 import os
+import tools.ecumodel
 
 const sig_per_msg = 8 // signals per CAN message (8x 8-bit = one 8-byte frame)
 const pool = 64 // internal cells per partition (shared, single-writer = the core)
@@ -76,10 +77,10 @@ fn fb_reads(p int, j int, parts int, buses int) []string {
 	}
 	// the rest from the internal cell pool (written by earlier FBs)
 	for k in 0 .. reads_per_fb - 4 {
-		r << 'Int_${p}_${(j * 7 + k) % pool}'
+		r << 'Int${p}N${(j * 7 + k) % pool}'
 	}
 	if j == 0 {
-		r << 'Xc_${(p + 1) % parts}' // cross-core hand-off from the next partition
+		r << 'Xc${(p + 1) % parts}' // cross-core hand-off from the next partition
 	}
 	return r
 }
@@ -89,7 +90,7 @@ fn fb_writes(p int, j int, parts int, buses int, fbs int) []string {
 	mut w := []string{}
 	// most writes go to the internal cell pool (consumed by later FBs)
 	for k in 0 .. writes_per_fb - 1 {
-		w << 'Int_${p}_${(j * 10 + k) % pool}'
+		w << 'Int${p}N${(j * 10 + k) % pool}'
 	}
 	// one CAN tx for the first few FBs, else another internal write
 	tx_slots := rb.len * sig_per_msg
@@ -97,9 +98,9 @@ fn fb_writes(p int, j int, parts int, buses int, fbs int) []string {
 		bus := rb[j / sig_per_msg]
 		w << 'Tx_${bus}_${j % sig_per_msg}'
 	} else if j == fbs - 1 {
-		w << 'Xc_${p}' // last FB produces this partition's cross-core signal
+		w << 'Xc${p}' // last FB produces this partition's cross-core signal
 	} else {
-		w << 'Int_${p}_${(j * 10 + writes_per_fb - 1) % pool}'
+		w << 'Int${p}N${(j * 10 + writes_per_fb - 1) % pool}'
 	}
 	return w
 }
@@ -167,7 +168,7 @@ fn gen_toml(parts int, buses int, fbs int) string {
 	for p in 0 .. parts {
 		for k in 0 .. pool {
 			b << '[[signal]]'
-			b << 'name = "Int_${p}_${k}"'
+			b << 'name = "Int${p}N${k}"'
 			b << 'fields = { v = "u8" }'
 			b << 'from = "p${p}"'
 			b << 'to   = "p${p}"'
@@ -177,7 +178,7 @@ fn gen_toml(parts int, buses int, fbs int) string {
 	// cross-core hand-off: partition p -> partition (p-1)
 	for p in 0 .. parts {
 		b << '[[signal]]'
-		b << 'name = "Xc_${p}"'
+		b << 'name = "Xc${p}"'
 		b << 'fields = { v = "u8" }'
 		b << 'from = "p${p}"'
 		b << 'to   = "p${(p + parts - 1) % parts}"'
@@ -205,7 +206,7 @@ fn gen_toml(parts int, buses int, fbs int) string {
 			reads := fb_reads(p, j, parts, buses)
 			writes := fb_writes(p, j, parts, buses, fbs)
 			b << '[[fb]]'
-			b << 'name      = "Fb_${p}_${j}"'
+			b << 'name      = "Fb${p}N${j}"'
 			b << 'thread    = "p${p}_main"' // fb -> thread (partition p${p} derived)
 			b << '  [[fb.handler]]'
 			b << '  name      = "on_10ms"'
@@ -229,12 +230,12 @@ fn gen_fbs(parts int, buses int, fbs int) string {
 			reads := fb_reads(p, j, parts, buses)
 			writes := fb_writes(p, j, parts, buses, fbs)
 			b << ''
-			b << 'pub struct Fb_${p}_${j} {'
+			b << 'pub struct Fb${p}N${j} {'
 			b << 'pub mut:'
 			b << '\tstate u32'
 			b << '}'
 			b << ''
-			b << 'pub fn (mut fb Fb_${p}_${j}) on_10ms(inp ports.Fb_${p}_${j}In, mut out ports.Fb_${p}_${j}Out) {'
+			b << 'pub fn (mut fb Fb${p}N${j}) on_10ms(inp ports.Fb${p}N${j}In, mut out ports.Fb${p}N${j}Out) {'
 			b << '\tmut acc := fb.state'
 			for r in reads {
 				b << '\tacc = acc * 1664525 + 1013904223 + u32(inp.${snake(r)}.v)'
@@ -286,22 +287,5 @@ fn quoted(xs []string) string {
 }
 
 fn snake(name string) string {
-	mut out := []u8{}
-	for i, c in name {
-		is_upper := c >= `A` && c <= `Z`
-		if is_upper && i > 0 {
-			prev := name[i - 1]
-			if (prev >= `a` && prev <= `z`) || (prev >= `0` && prev <= `9`) {
-				out << `_`
-			}
-		}
-		if (c >= `a` && c <= `z`) || (c >= `0` && c <= `9`) {
-			out << c
-		} else if is_upper {
-			out << c + 32
-		} else {
-			out << `_`
-		}
-	}
-	return out.bytestr()
+	return ecumodel.snake_name(name) // THE rule: generators must agree byte-for-byte
 }
