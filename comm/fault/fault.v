@@ -18,10 +18,16 @@ module fault
 // resets its debounce and counters and echoes it in `gen`. A Report of any other generation is
 // ignored — an old-generation failure can never recreate a cleared DTC (§7, R4).
 //
+// Every clear gets a FRESH generation (u16), so no report produced before it can ever count. It
+// wraps only if 32767 clears pass without one report from the producer — a producer that silent is
+// dead, and the generation then stops advancing rather than come round to a stale report's.
+//
 // Suppression (0x85 off) is enforced HERE, where readings are consumed: while off, the baselines
-// follow the counters and nothing changes status — so nothing is recorded after a positive "off"
-// and nothing suppressed is replayed after "on". A qualification published before "off" but not
-// yet consumed (at most one owner pass) is not recorded either (§7, R4).
+// follow the counters and nothing changes status; the first reading after "on" is a baseline only.
+// So nothing is recorded after a positive "off" and nothing produced during suppression is applied
+// after "on" — the accepted cost being that a qualification in the pass on either side of the
+// boundary is not recorded either (§7, R4). If an operation cycle began while off, "on" resets that
+// cycle's status bits, which the frozen byte still carried from the previous one.
 //
 // No field defaults anywhere (the _vinit rule): the owner calls init / configures explicitly.
 
@@ -57,7 +63,7 @@ pub enum TestResult as u8 {
 // Report crosses the producer -> comm-thread cell, one per fault. Counters wrap; the Memory diffs.
 pub struct Report {
 pub mut:
-	gen    u8   // the clear generation the producer has applied
+	gen    u16  // the clear generation the producer has applied
 	failed bool // the debounced state
 	fails  u16  // qualifications into failed (occurrences)
 	tests  u16  // results that left the debounce at a threshold (the test "completed")
@@ -72,7 +78,7 @@ pub mut:
 // Control is the comm-thread -> producer cell: the clear generation each fault must apply.
 pub struct Control {
 pub mut:
-	gen [max_per_producer]u8
+	gen [max_per_producer]u16
 }
 
 // Debounce runs on the producing thread, once per dispatch, right after the handler. Counter-based
@@ -133,7 +139,7 @@ pub fn (mut d Debounce) step(r TestResult, now u64, enabled bool) {
 }
 
 // apply resets the debounce for a new clear generation and echoes it (a no-op for the current one).
-pub fn (mut d Debounce) apply(gen u8) {
+pub fn (mut d Debounce) apply(gen u16) {
 	if gen == d.rep.gen {
 		return
 	}
@@ -159,9 +165,9 @@ pub mut:
 	failed_cycle  bool // failed in the current cycle (already counted)
 	tested_cycle  bool // a test completed in the current cycle — runtime state, so a status byte
 	// frozen by 0x85 across a boundary is never read as this cycle's result
-	gen         u8   // the clear generation the producer must apply
-	pending_gen bool // a clear bumped `gen` and the producer has not applied it yet: a further
-	// clear reuses it, so the u8 can never wrap back to the generation of a stale report
+	gen      u16  // the clear generation the producer must apply — fresh for every clear
+	seen_gen u16  // the generation of the producer's latest report, whatever it was (wrap guard)
+	rebase   bool // the next report only sets the baselines (0x85 just turned on)
 	base_seen     bool // a Report of `gen` has been consumed: the baselines are valid
 	base_fails    u16
 	base_tests    u16
@@ -175,6 +181,7 @@ pub mut:
 	n            int
 	setting_off  bool // 0x85 off
 	cycle_active bool
+	boundary_off bool // an operation cycle began while 0x85 was off
 }
 
 // init sets every configured slot to the power-on status. Call after filling dtc / confirm / aging.
@@ -186,12 +193,14 @@ pub fn (mut m Memory) init() {
 		m.slots[i].aging_count = 0
 		m.slots[i].failed_cycle = false
 		m.slots[i].tested_cycle = false
-		m.slots[i].pending_gen = false
+		m.slots[i].seen_gen = 0
+		m.slots[i].rebase = false
 		m.slots[i].gen = 0
 		m.slots[i].base_seen = false
 	}
 	m.setting_off = false
 	m.cycle_active = false
+	m.boundary_off = false
 }
 
 // consume applies slot i's latest Report. Call every owner pass for every fault.
@@ -200,6 +209,7 @@ pub fn (mut m Memory) consume(i int, r Report) {
 		return
 	}
 	mut s := &m.slots[i]
+	s.seen_gen = r.gen
 	if r.gen != s.gen {
 		return // the producer has not applied the latest clear yet: an older generation counts for nothing
 	}
@@ -208,7 +218,10 @@ pub fn (mut m Memory) consume(i int, r Report) {
 	s.base_fails = r.fails
 	s.base_tests = r.tests
 	s.base_seen = true
-	s.pending_gen = false // the producer has applied the latest clear
+	if s.rebase {
+		s.rebase = false
+		return // the first reading after 0x85 on: whatever it carries was produced while off
+	}
 	if m.setting_off || !m.cycle_active || (df == 0 && dt == 0) {
 		return // suppressed, or outside an operation cycle: the baselines follow, the status does not
 	}
@@ -245,6 +258,9 @@ pub fn (mut m Memory) consume(i int, r Report) {
 pub fn (mut m Memory) cycle_start() {
 	if m.cycle_active {
 		m.cycle_end()
+	}
+	if m.setting_off {
+		m.boundary_off = true
 	}
 	for i in 0 .. m.n {
 		if !m.setting_off {
@@ -301,9 +317,8 @@ pub fn (mut m Memory) clear(group u32) bool {
 		s.aging_count = 0
 		s.failed_cycle = false
 		s.tested_cycle = false
-		if !s.pending_gen {
-			s.gen++
-			s.pending_gen = true
+		if u16(s.gen - s.seen_gen) < 0x7FFF {
+			s.gen++ // fresh: no report produced before this clear can carry it
 		}
 		s.base_seen = false
 	}
@@ -312,7 +327,7 @@ pub fn (mut m Memory) clear(group u32) bool {
 
 // control_gen is the generation fault i's producer must apply (the owner copies it into the
 // producer's Control cell).
-pub fn (m Memory) control_gen(i int) u8 {
+pub fn (m Memory) control_gen(i int) u16 {
 	return m.slots[i].gen
 }
 
@@ -356,5 +371,21 @@ fn ops_clear(ctx voidptr, group u32) bool {
 
 fn ops_setting(ctx voidptr, on bool) {
 	mut m := unsafe { &Memory(ctx) }
+	m.set_setting(on)
+}
+
+// set_setting is 0x85. Turning it back on makes each slot's next reading a baseline only (it may
+// carry results produced while off), and — when an operation cycle began while off — resets that
+// cycle's status bits, which the frozen byte still carried from the previous cycle.
+pub fn (mut m Memory) set_setting(on bool) {
+	if on && m.setting_off {
+		for i in 0 .. m.n {
+			m.slots[i].rebase = true
+			if m.boundary_off && m.cycle_active {
+				m.slots[i].status = (m.slots[i].status & ~test_failed_this_cycle) | not_completed_this_cycle
+			}
+		}
+		m.boundary_off = false
+	}
 	m.setting_off = !on
 }

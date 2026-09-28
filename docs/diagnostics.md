@@ -229,12 +229,14 @@ to reach the producer too — or a 0x14 clear is undone by the next read of a st
 fault memory publishes a **control cell per producing thread** (single writer: its comm thread;
 single reader: that thread's generated debounce — the IOC is SPSC, so one shared cell with several
 readers is not an option): a *clear generation* **per fault** (a per-DTC 0x14 bumps only its faults'
-generations, 0x14 FFFFFF bumps them all; a bump resets that fault's counters and debounced state, and
-the producer echoes it as `applied_gen`). *As built in R4a* (`comm/fault`), two things stay on the
+generations, 0x14 FFFFFF bumps them all; every clear is a FRESH 16-bit generation, so no report made
+before it can count; a bump resets that fault's counters and debounced state, and the producer echoes
+it as `applied_gen`). *As built in R4a* (`comm/fault`), two things stay on the
 consumer side and need no producer involvement: **0x85 suppression** — while off, the fault memory
-lets its baselines follow the counters and changes no status, so nothing is recorded after the
-positive "off" and nothing suppressed is replayed after "on" (a qualification published before "off"
-but not yet consumed, at most one owner pass, is not recorded) — and **operation-cycle boundaries**,
+lets its baselines follow the counters and changes no status, and the first reading after "on" is a
+baseline only — so nothing is recorded after the positive "off" and nothing produced during
+suppression is applied after "on" (a qualification in the pass on either side of the boundary is not
+recorded; a cycle begun while off gets fresh cycle bits at "on") — and **operation-cycle boundaries**,
 which change status bits only and bump no generation, so no old-generation drain is needed on the
 host (a qualification at a boundary can land one pass late). The persistence-grade cycle-END barrier
 remains R6's (§7). The

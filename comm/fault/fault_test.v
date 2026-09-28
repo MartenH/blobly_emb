@@ -154,11 +154,11 @@ fn test_setting_off_records_nothing_and_replays_nothing() {
 	mut d := counter(1, 1)
 	m.cycle_start()
 	m.consume(0, d.rep)
-	m.setting_off = true
+	m.set_setting(false)
 	d.step(.failed, 0, true)
 	m.consume(0, d.rep)
 	assert m.slots[0].status == status_cleared
-	m.setting_off = false
+	m.set_setting(true)
 	m.consume(0, d.rep)
 	assert m.slots[0].status == status_cleared, 'a suppressed failure was replayed'
 	d.step(.passed, 0, true)
@@ -273,7 +273,7 @@ fn test_setting_off_freezes_cycle_bits() {
 	d.step(.passed, 0, true)
 	m.consume(0, d.rep)
 	before := m.slots[0].status
-	m.setting_off = true
+	m.set_setting(false)
 	m.cycle_end()
 	m.cycle_start()
 	assert m.slots[0].status == before, 'a cycle boundary changed the status while DTC setting was off'
@@ -345,30 +345,72 @@ fn test_a_frozen_status_is_not_read_as_this_cycles_test() {
 	m.cycle_start()
 	d.step(.passed, 0, true)
 	m.consume(0, d.rep) // tested, so TNCTOC is clear
-	m.setting_off = true
+	m.set_setting(false)
 	m.cycle_end()
 	m.cycle_start() // frozen: TNCTOC stays clear, but this cycle has tested nothing
-	m.setting_off = false
+	m.set_setting(true)
 	m.cycle_end()
 	assert m.slots[0].status & confirmed != 0, 'an untested cycle aged the DTC out'
 	assert m.slots[0].status & pending != 0, 'an untested cycle cleared pending'
 }
 
-// codex #301: 256 clears while the producer is stalled never wrap the generation back to the one
-// its stale report carries.
-fn test_clears_against_a_stalled_producer_never_reuse_a_generation() {
+// codex #301: every clear is a FRESH generation — a report the producer made after applying clear 1
+// but before clear 2 must not count after clear 2; and a stalled producer's stale report never
+// comes round again, however many clears pass.
+fn test_every_clear_invalidates_all_earlier_reports() {
+	mut m := memory([u32(1)])
+	mut d := counter(1, 1)
+	m.cycle_start()
+	assert m.clear(1)
+	d.apply(m.control_gen(0)) // producer applies clear 1 ...
+	d.step(.failed, 0, true) // ... and fails before the consumer reads it
+	between := d.rep
+	assert m.clear(1) // clear 2
+	m.consume(0, between)
+	assert m.slots[0].status == status_cleared, 'a report made before clear 2 counted after it'
+	stale := between
+	for _ in 0 .. 70_000 { // far past a u16 wrap, with the producer silent
+		m.clear(0xFFFFFF)
+	}
+	m.consume(0, stale)
+	assert m.slots[0].status == status_cleared, 'the generation came round to a stale report'
+}
+
+// codex #301: a result the producer publishes during suppression, read only after "on", is not
+// applied — the first reading after "on" is a baseline.
+fn test_a_result_published_during_suppression_is_not_applied_after_on() {
+	mut m := memory([u32(1)])
+	mut d := counter(1, 1)
+	m.cycle_start()
+	m.consume(0, d.rep)
+	m.set_setting(false)
+	m.consume(0, d.rep) // the last reading while off
+	d.step(.failed, 0, true) // published while still off, not yet read
+	m.set_setting(true)
+	m.consume(0, d.rep)
+	assert m.slots[0].status == status_cleared, 'a suppressed result was applied after on'
+	d.step(.passed, 0, true)
+	d.step(.failed, 0, true)
+	m.consume(0, d.rep)
+	assert m.slots[0].status & test_failed != 0
+}
+
+// codex #301: "on" inside a cycle that began while off resets that cycle's bits in the status.
+fn test_on_resets_the_cycle_bits_of_a_cycle_begun_while_off() {
 	mut m := memory([u32(1)])
 	mut d := counter(1, 1)
 	m.cycle_start()
 	d.step(.failed, 0, true)
-	stale := d.rep // produced before any clear, never re-published
-	for _ in 0 .. 256 { // exactly one u8 wrap: without the guard the gen returns to the stale 0
-		assert m.clear(0xFFFFFF)
-	}
-	m.consume(0, stale)
-	assert m.slots[0].status == status_cleared, 'a stale report was accepted after the generation wrapped'
-	d.apply(m.control_gen(0))
 	m.consume(0, d.rep)
-	assert m.clear(1) // acknowledged: the next clear moves on
-	assert m.control_gen(0) != d.rep.gen
+	assert m.slots[0].status & test_failed_this_cycle != 0
+	m.set_setting(false)
+	m.cycle_start() // a new cycle, status frozen
+	m.set_setting(true)
+	assert m.slots[0].status & test_failed_this_cycle == 0, 'the previous cycle still showed as failed this cycle'
+	assert m.slots[0].status & not_completed_this_cycle != 0
+}
+
+fn test_report_cell_fits_the_ioc_payload() {
+	assert sizeof(Reports) <= 64
+	assert sizeof(Control) <= 64
 }
