@@ -999,7 +999,7 @@ pub fn brake_status_brake_pressure_set(mut data [64]u8, phys f64) {
 }
 
 // ABSActive: 16|1 @1 (Intel) unsigned (1.0,0.0) ""
-pub fn brake_status_absactive_raw(data [64]u8) u64 {
+pub fn brake_status_abs_active_raw(data [64]u8) u64 {
 	mut raw := u64(0)
 	for i in 0 .. 1 {
 		g := 16 + i
@@ -1012,11 +1012,11 @@ pub fn brake_status_absactive_raw(data [64]u8) u64 {
 	}
 	return raw
 }
-pub fn brake_status_absactive_phys(data [64]u8) f64 {
-	raw := brake_status_absactive_raw(data)
+pub fn brake_status_abs_active_phys(data [64]u8) f64 {
+	raw := brake_status_abs_active_raw(data)
 	return f64(raw) * 1.0 + 0.0
 }
-pub fn brake_status_absactive_set_raw(mut data [64]u8, raw u64) {
+pub fn brake_status_abs_active_set_raw(mut data [64]u8, raw u64) {
 	for i in 0 .. 1 {
 		g := 16 + i
 		byte_idx := g / 8
@@ -1029,13 +1029,13 @@ pub fn brake_status_absactive_set_raw(mut data [64]u8, raw u64) {
 		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
 	}
 }
-pub fn brake_status_absactive_set(mut data [64]u8, phys f64) {
+pub fn brake_status_abs_active_set(mut data [64]u8, phys f64) {
 	x := (phys - 0.0) / 1.0
 	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
 	if raw < 0 {
 		raw += i64(u64(1) << 1)
 	}
-	brake_status_absactive_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
+	brake_status_abs_active_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
 }
 
 // BrakePedal: 17|7 @1 (Intel) unsigned (1.0,0.0) "%"

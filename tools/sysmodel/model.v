@@ -17,6 +17,7 @@ import os
 import rand
 import toml
 import tools.candb
+import tools.ecumodel
 
 // Bus — one CAN segment with its own contract. `name` is the system-scope key
 // ([bus.compute]); `interface` is the SocketCAN/driver name a node's ecu.toml
@@ -429,24 +430,7 @@ fn binding_id(m map[string]toml.Any, key string, def u32) (u32, string) {
 // a named endpoint binding resolves the same way the generator does (record =
 // "trace_record" matches a DBC message "TraceRecord").
 fn snake(name string) string {
-	mut out := []u8{}
-	for i, c in name {
-		is_upper := c >= `A` && c <= `Z`
-		if is_upper && i > 0 {
-			prev := name[i - 1]
-			if (prev >= `a` && prev <= `z`) || (prev >= `0` && prev <= `9`) {
-				out << `_`
-			}
-		}
-		if (c >= `a` && c <= `z`) || (c >= `0` && c <= `9`) {
-			out << c
-		} else if is_upper {
-			out << c + 32
-		} else {
-			out << `_`
-		}
-	}
-	return out.bytestr()
+	return ecumodel.snake_name(name) // THE rule: generators must agree byte-for-byte
 }
 
 // parse_system reads a system.toml into a System (nodes not yet loaded — call

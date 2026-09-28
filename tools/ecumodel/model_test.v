@@ -1256,7 +1256,7 @@ id      = 0x8001
 signals = ["S"]
 ' +
 		app)
-	assert e.any(it.contains('eth frame name "Bench,Telem" is not a valid identifier'))
+	assert e.any(it.contains('eth frame name "Bench,Telem" is not PascalCase'))
 }
 
 fn test_someip_ioc_slot_bound_counts_padding() {
@@ -1355,7 +1355,7 @@ id      = 0x8001
 signals = ["A"]
 
 [[frame]]
-name    = "Foo_Bar"
+name    = "FOOBar"
 bus     = "eth0"
 id      = 0x8002
 signals = ["B"]
@@ -1365,7 +1365,7 @@ id     = 0xF1A0
 signal = "A"
 ' +
 		app)
-	assert e.any(it.contains('collides with "FooBar" after snake-case normalization'))
+	assert e.any(it.contains('eth frame "FOOBar" collides with "FooBar": both generate `foo_bar`'))
 	assert e.any(it.contains('diagnostic DID reads eth signal "A"'))
 }
 
@@ -1874,3 +1874,42 @@ nbuf     = 4
 }
 
 
+
+// The rule applied to a config: our names take the one spelling; a bus signal keeps its DBC name
+// but still shares the signal scope.
+fn test_validate_applies_the_naming_rule() {
+	e := errs_of('
+[bus.can0]
+dbc = "bus.dbc"
+
+[[signal]]
+name   = "ABS_Active"
+from   = "can0"
+to     = "app"
+fields = { on = "bool" }
+
+[[signal]]
+name   = "AbsActive"
+from   = "app"
+to     = "app"
+fields = { on = "bool" }
+
+[[signal]]
+name   = "abs_on"
+from   = "app"
+to     = "app"
+fields = { on = "bool" }
+
+[[fb]]
+name   = "Brake_Monitor"
+thread = "app_main"
+  [[fb.handler]]
+  name = "on_10ms"
+  period_ms = 10
+' +
+		app)
+	assert !e.any(it.contains('"ABS_Active" is not')), 'a DBC-named bus signal was held to PascalCase'
+	assert e.any(it.contains('signal "AbsActive" collides with "ABS_Active": both generate `abs_active`'))
+	assert e.any(it.contains('signal name "abs_on" is not PascalCase'))
+	assert e.any(it.contains('fb name "Brake_Monitor" is not PascalCase'))
+}

@@ -35,6 +35,24 @@ pub fn (mut fb EngineMonitor) on_10ms(inp ports.EngineMonitorIn, mut out ports.E
 - The only trigger is the period (`[[fb.handler]] period_ms`); the method name is free
   ([add-an-fb.md](add-an-fb.md)). No heap, no strings, bounded work ([../no-alloc.md](../no-alloc.md)).
 
+### Names
+
+A name in config becomes a snake_case field in the FB: `EngineOverRev` is `out.fault.engine_over_rev`.
+An acronym is a word of its own, so `ABSActive` is `abs_active` and `LED5State` is `led5_state`.
+
+- **Names we own are PascalCase** (`[A-Z][A-Za-z0-9]*`, no `_`): FBs, signals no bus carries,
+  faults and eth frames. That leaves one way to spell each of them. Partition and thread names
+  are exempt: they never become FB fields.
+- **Names a DBC owns keep the DBC's spelling.** That covers a bus signal (whose name *is* the
+  DBC signal name) and CAN frames.
+- **Generation refuses two names that give one field**, in every place a generated name lands:
+  signals, FBs, buses, one FB's faults, one DBC's frames and frame signals.
+  `AbsActive` next to `ABSActive` fails with both names quoted.
+- **Names say what a value is, not where it comes from.** There is no `io_` or `can_` prefix,
+  because an FB must not care whether `LedGreen` is a pin, a CAN frame or another FB. Moving it
+  is a config change. Where a kind of port has different rules, it gets its own sub-struct
+  instead (`out.fault.x`).
+
 ## I want to ...
 
 | ... | in `ecu.toml` | in the FB | host | ThreadX target |

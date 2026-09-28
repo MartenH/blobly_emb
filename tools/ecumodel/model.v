@@ -67,6 +67,7 @@ pub fn validate(doc toml.Doc) []string {
 	mut part_core := map[string]int{} // partition -> core index (for cross-core transport rules)
 	mut thread_part := map[string]string{} // thread -> partition (globally unique)
 	mut fb_names := map[string]bool{}
+	mut fb_scope := snake_scope('fb')
 
 	for p in toml_arr(doc, 'partition') {
 		pm := p.as_map()
@@ -113,10 +114,10 @@ pub fn validate(doc toml.Doc) []string {
 		fbname := str_of(cm, 'name')
 		if 'name' !in cm {
 			errs << 'a [[fb]] is missing `name`'
-		} else if !ident_ok(fbname) {
-			errs << 'fb name "${fbname}" is not a valid identifier'
-		} else if fbname in fb_names {
-			errs << 'duplicate fb name "${fbname}" — fb names must be unique'
+		} else if !pascal_ok(fbname) {
+			errs << 'fb name "${fbname}" is not PascalCase ([A-Z][A-Za-z0-9]*) — the one spelling a config name takes'
+		} else if e := fb_scope.add(fbname) {
+			errs << e
 		} else {
 			fb_names[fbname] = true
 		}
@@ -156,11 +157,16 @@ pub fn validate(doc toml.Doc) []string {
 	// generator, so "io" must be impossible to shadow. NOTE: this section must stay
 	// BEFORE [trace] — trace's disabled-path returns early.
 	mut bus_names := map[string]bool{}
+	mut bus_scope := snake_scope('bus')
 	if bv := doc.value_opt('bus') {
 		for bname, _ in bv.as_map() {
 			bus_names[bname] = true
+			if e := bus_scope.add(bname) {
+				errs << e
+			}
 		}
 	}
+	errs << validate_signal_names(doc, bus_names)
 	for reserved_holder in ['partition', 'thread', 'bus'] {
 		names := match reserved_holder {
 			'partition' { part_names.keys() }
@@ -358,30 +364,6 @@ pub:
 	typ    string
 }
 
-// snake_name is THE snake-case normalization generated identifiers use —
-// loom2v delegates here, so the validator's collision check and the
-// generator's emission cannot drift.
-pub fn snake_name(name string) string {
-	mut out := []u8{}
-	for i, c in name {
-		is_upper := c >= `A` && c <= `Z`
-		if is_upper && i > 0 {
-			prev := name[i - 1]
-			if (prev >= `a` && prev <= `z`) || (prev >= `0` && prev <= `9`) {
-				out << `_`
-			}
-		}
-		if (c >= `a` && c <= `z`) || (c >= `0` && c <= `9`) {
-			out << c
-		} else if is_upper {
-			out << c + 32
-		} else {
-			out << `_`
-		}
-	}
-	return out.bytestr()
-}
-
 // eth_bus_of returns the (single, ecucheck-enforced) kind = "eth" bus, or ''.
 pub fn eth_bus_of(doc toml.Doc) string {
 	if bv := doc.value_opt('bus') {
@@ -533,7 +515,7 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		}
 	}
 
-	mut seen_frame_snakes := map[string]string{} // snake(name) -> original
+	mut frame_scope := snake_scope('eth frame') // names become generated consts/pack fns
 	mut seen_ids := map[i64]string{} // event id -> frame (unique across bindings)
 	mut sig_frame := map[string]string{} // signal -> frame (a signal rides one frame)
 	mut n_eth_frames := 0
@@ -549,19 +531,16 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		}
 		n_eth_frames++
 		fname := str_of(fm, 'name')
-		// the name reaches generated identifiers AND unquoted manifest CSV rows
-		if !ident_ok(fname) {
-			errs << 'eth frame name "${fname}" is not a valid identifier ([A-Za-z_][A-Za-z0-9_]*) — it becomes generated code names and manifest CSV cells'
+		// the name reaches generated identifiers AND unquoted manifest CSV rows; an eth frame
+		// has no DBC, so the name is ours and takes the one spelling
+		if !pascal_ok(fname) {
+			errs << 'eth frame name "${fname}" is not PascalCase ([A-Z][A-Za-z0-9]*) — it becomes generated code names and manifest CSV cells'
 			continue
 		}
-		// uniqueness AFTER snake normalization: "FooBar" and "foo_bar" would
-		// emit duplicate generated consts/pack fns (uncompilable image)
-		fsnake := snake_name(fname)
-		if fsnake in seen_frame_snakes {
-			errs << 'eth frame "${fname}" collides with "${seen_frame_snakes[fsnake]}" after snake-case normalization ("${fsnake}") — generated names must be unique'
+		if e := frame_scope.add(fname) {
+			errs << e
 			continue
 		}
-		seen_frame_snakes[fsnake] = fname
 		if v := fm['id'] {
 			if v is i64 {
 				if v < 0x8000 || v > 0xFFFF {

@@ -8,6 +8,7 @@
 module main
 
 import os
+import tools.ecumodel
 
 fn main() {
 	if os.args.len < 4 {
@@ -207,24 +208,5 @@ fn canon_nums(s string) string {
 // snake mirrors dbc2cfg's frame/signal name -> identifier normalization, so a name
 // collision is caught here on the exact namespace dbc2cfg will generate into.
 fn snake(name string) string {
-	mut out := []u8{}
-	for i, c in name {
-		is_upper := c >= `A` && c <= `Z`
-		if is_upper && i > 0 {
-			prev := name[i - 1]
-			prev_lower := prev >= `a` && prev <= `z`
-			prev_digit := prev >= `0` && prev <= `9`
-			if prev_lower || prev_digit {
-				out << `_`
-			}
-		}
-		if (c >= `a` && c <= `z`) || (c >= `0` && c <= `9`) {
-			out << c
-		} else if is_upper {
-			out << c + 32 // to lowercase
-		} else {
-			out << `_`
-		}
-	}
-	return out.bytestr()
+	return ecumodel.snake_name(name) // THE rule: generators must agree byte-for-byte
 }
