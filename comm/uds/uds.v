@@ -79,9 +79,9 @@ pub const default_sa_delay_us = u64(10_000_000)
 // implementation holding a real secret should compare in constant time.
 pub struct SecurityOps {
 pub mut:
-	ctx    voidptr = unsafe { nil }
-	seed   fn (ctx voidptr, out &u8, n int) bool = unsafe { nil }
-	key_ok fn (ctx voidptr, level u8, seed &u8, key &u8, n int) bool = unsafe { nil }
+	ctx    voidptr
+	seed   fn (ctx voidptr, out &u8, n int) bool
+	key_ok fn (ctx voidptr, level u8, seed &u8, key &u8, n int) bool
 }
 
 // Did is one Data Identifier: constant bytes, a RAM cell (writable), and/or kept fresh from a
@@ -222,8 +222,12 @@ pub fn (mut s Server) handle(req &u8, req_len int, resp &u8) int {
 // handle_functional dispatches a FUNCTIONALLY addressed request: identical, except the
 // negative responses ISO 14229-1 forbids for functional requests are withheld.
 pub fn (mut s Server) handle_functional(req &u8, req_len int, resp &u8) int {
-	if req_len >= 1 && unsafe { req[0] } == 0x27 {
-		return 0 // SecurityAccess is physical-only: a broadcast key would spend a guess on every ECU
+	if req_len >= 1 && unsafe { req[0] } == 0x27 && s.resp_cap >= 0 {
+		// SecurityAccess is physical-only: a broadcast key would spend a guess on every ECU. It is
+		// still a request, so it keeps the session alive like any other (S3).
+		s.last_rx_us = s.now_us
+		s.rx_seen = true
+		return 0
 	}
 	n := s.dispatch(req, req_len, resp)
 	if n == 3 && unsafe { resp[0] } == 0x7F {
@@ -297,14 +301,14 @@ fn in_mask(mask u8, session u8) bool {
 	return mask & (u8(1) << (session - 1)) != 0
 }
 
-// enter_session changes the active session. Any transition relocks security (ISO 14229-1
-// 0x27), and a return to the default session re-enables communication (0x28 state does not
-// survive leaving the non-default session).
+// enter_session changes the active session. EVERY entry relocks security and voids an
+// outstanding seed — re-entering the session already active included (ISO 14229-1: security is
+// per session instance, and the plan's "every transition, explicit or by S3") — and a return to
+// the default session re-enables communication (0x28 state does not survive leaving the
+// non-default session).
 fn (mut s Server) enter_session(session u8) {
-	if session != s.session {
-		s.unlocked = 0
-		s.sa_level = 0 // a seed does not outlive its session
-	}
+	s.unlocked = 0
+	s.sa_level = 0
 	s.session = session
 	if session == session_default {
 		s.normal_tx_off = false

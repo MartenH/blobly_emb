@@ -165,8 +165,10 @@ fn test_session_transitions_relock_and_restore_communication() {
 	s.unlocked = 1
 	assert call(mut s, [u8(0x28), 0x03, 0xF1]) == [u8(0x68), 0x03]
 	assert !s.tx_enabled() && !s.rx_enabled()
-	call(mut s, [u8(0x10), 0x03]) // same session: security survives
-	assert s.unlocked == 1
+	call(mut s, [u8(0x10), 0x03]) // re-entering the SAME session relocks too
+	assert s.unlocked == 0
+	assert !s.tx_enabled(), '0x28 state survives a non-default re-entry; only default restores it'
+	s.unlocked = 1
 	call(mut s, [u8(0x10), 0x01])
 	assert s.unlocked == 0
 	assert s.tx_enabled() && s.rx_enabled()
@@ -446,6 +448,31 @@ fn test_security_access_suppression_and_functional() {
 	req << key_for(r[2..])
 	assert call(mut s, req).len == 0
 	assert s.unlocked == 1
+}
+
+fn seed_fails(ctx voidptr, out &u8, n int) bool {
+	return false
+}
+
+fn seed_zero(ctx voidptr, out &u8, n int) bool {
+	for i in 0 .. n {
+		unsafe {
+			out[i] = 0
+		}
+	}
+	return true
+}
+
+// REQ-DIAG-008: a seed source that fails, or that returns the all-zero "already unlocked" marker,
+// gets conditionsNotCorrect — and no seed is left outstanding for a key to match.
+fn test_a_failed_or_zero_seed_is_refused() {
+	mut s := secured()
+	s.security.seed = seed_fails
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x22]
+	s.security.seed = seed_zero
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x22]
+	assert s.sa_level == 0
+	assert send_key(mut s, [u8(0xFF), 0xFF, 0xFF, 0xFF]) == [u8(0x7F), 0x27, 0x24]
 }
 
 // A response buffer too small for the fixed responses: the server stays silent rather than

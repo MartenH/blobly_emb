@@ -143,7 +143,8 @@ WriteDataByIdentifier, `0x3E` TesterPresent; anything else → `0x7F sid 0x11`.
 Negative responses follow ISO 14229-1's evaluation order.
 
 The server starts in the **default session** and returns to it after `s3_ms` (default
-5 s) without a request; every session change relocks security, and returning to default
+5 s) without a request; every session request relocks security (re-entering the active one
+included), and returning to default
 re-enables communication. An application server refuses the programming session — erase
 and download live in the bootloader, and the handoff into it is not built yet. `0x11` is
 answered first and performed once the response has left (on the host that resets the

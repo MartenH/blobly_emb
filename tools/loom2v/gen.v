@@ -982,6 +982,11 @@ fn parse_did_access(m map[string]toml.Any, key string, id int) (u8, u8) {
 	if sec < 0 || sec > uds.max_security_level {
 		panic('loom2v: [[did]] 0x${id.hex()} ${key}.security ${sec} is not a 0x27 level the server serves (1..${uds.max_security_level})')
 	}
+	// 0x27 unlocks only in extended / programming, and every session change relocks: a gate whose
+	// sessions include neither could never be opened
+	if sec != 0 && mask != 0 && mask & (uds.in_extended | uds.in_programming) == 0 {
+		panic('loom2v: [[did]] 0x${id.hex()} ${key} needs security ${sec} but is allowed only in sessions where 0x27 is not served (extended / programming) — it could never be opened')
+	}
 	return mask, u8(sec)
 }
 
@@ -1416,7 +1421,22 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		bulk:         parse_bulk(doc)
 	}
 	validate_signal_routes_model(m, doc)
+	validate_security(m.isotp_conns, m.dids)
 	return m
+}
+
+// validate_security: the 0x27 settings mean something only where a [[did]] gate names a level —
+// the levels the server serves are exactly those (security_levels) — so tuning the lockout of a
+// server with nothing to unlock is a config error, not a silent no-op.
+fn validate_security(conns []IsotpConn, dids []DidCfg) {
+	if security_levels(dids) != 0 {
+		return
+	}
+	for c in conns {
+		if c.security_attempts != 0 || c.security_delay_ms != 0 {
+			panic('loom2v: [[isotp]] "${c.name}" configures security_attempts / security_delay_ms, but no [[did]] gate names a security level — there is nothing to unlock')
+		}
+	}
 }
 
 // validate_signal_routes_model checks a SIGNAL route against the rest of the model

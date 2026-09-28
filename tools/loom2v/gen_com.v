@@ -1364,10 +1364,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			// 0x27 serves exactly the levels some DID gate names; the host bridge injects the
 			// reference key (blobly_net's), seeded from the clock. A target injects the board's
 			// SecurityOps instead (R2).
-			levels := security_levels(m.dids)
-			if levels == 0 && (c.security_attempts != 0 || c.security_delay_ms != 0) {
-				panic('loom2v: [[isotp]] "${c.name}" configures security_attempts / security_delay_ms, but no [[did]] gate names a security level — there is nothing to unlock')
-			}
+			levels := security_levels(m.dids) // validate_security vetted the settings
 			if levels != 0 {
 				glue << '\tst.uds_${tp}.security = st.sa_${tp}.ops(u32(osal.now_us()))'
 				glue << '\tst.uds_${tp}.security_levels = u8(0x${levels.hex()})'
