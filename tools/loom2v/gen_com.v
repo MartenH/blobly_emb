@@ -626,9 +626,18 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			}
 		}
 
-		for msg, _ in tx_by_msg {
-			if msg !in rx_by_msg && e2e_timeout(m, msg, bname) > 0 {
-				panic('loom2v: frame "${msg}" is transmitted, but its e2e sets timeout_ms — the E2E timeout watches a RECEIVED frame for loss of its sender')
+		// The E2E-owned timeout (REQ-E2E-002, ASIL B) is REQUIRED where the bridge delivers an
+		// E2E frame's signals to the application, and meaningless where nothing receives the frame:
+		// a transmitted frame, or one neither decoded nor a signal route's source.
+		route_src := rx_routes.filter(it.from_bus == bname).map(snake(it.from_frame))
+		for fk, to in m.frames.e2e_timeout_us {
+			if to > 0 && m.frames.e2e_here(fk, bname) && fk !in rx_by_msg && fk !in route_src {
+				panic('loom2v: frame "${fk}" sets e2e.timeout_ms, but nothing on ${bname} receives it — the E2E timeout watches a RECEIVED frame for loss of its sender')
+			}
+		}
+		for msg, _ in rx_by_msg {
+			if m.frames.e2e_here(msg, bname) && e2e_timeout(m, msg, bname) == 0 {
+				panic('loom2v: frame "${msg}" is E2E-protected and received, but its e2e has no timeout_ms — REQ-E2E-002 detects total loss of the sender inside E2E itself, not only by the QM COM deadline')
 			}
 		}
 		glue << ''
@@ -1212,7 +1221,12 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				frof := snake(r2.from_frame)
 				// an authored [[frame]].rx with no timeout_ms inserts 0; treat 0 as absent and
 				// fall back to 3x the DBC cadence (0 = no deadline info at all).
-				authored_to := m.frames.rx_timeout_us[frof] or { 0 }
+				// the E2E-owned timeout counts as an authored deadline for the source too
+				authored_to := if (m.frames.rx_timeout_us[frof] or { 0 }) > 0 {
+					m.frames.rx_timeout_us[frof] or { 0 }
+				} else {
+					e2e_timeout(m, frof, r2.from_bus)
+				}
 				timeout := if authored_to > 0 {
 					authored_to
 				} else if r2.from_cyc > 0 {
@@ -1874,6 +1888,14 @@ fn rx_integrity(m Model, list []string, msg string, lost string, gate string, in
 	mut out := []string{}
 	if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 		out << '${ind}st.rx_${msg}_st.arm(now)' // every deadline, status or not
+	}
+	// The E2E timeout counts VALID messages only, so a corrupt frame does not refresh it — a
+	// corrupt-only sender runs it out from the last valid one. But once it HAS fired, this
+	// integrity is the newer fact, and silence after it must reach `timeout` again: re-arm then.
+	if e2e_timeout(m, msg, m.frames.frame_bus[msg] or { '' }) > 0 {
+		out << '${ind}if st.e2e_rx_${msg}.timedout {'
+		out << '${ind}\tst.e2e_rx_${msg}.arm(now)'
+		out << '${ind}}'
 	}
 	mut i := ind
 	if gate != '' && list.any((m.sig_of[it] or { SigInfo{} }).has_status) {

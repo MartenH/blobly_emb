@@ -12,12 +12,10 @@ method = "test"
 asil = "B" # inherits the ASIL B of the parent SYS-REQ-SAFE-001 (no decomposition)
 derives = "SYS-REQ-SAFE-001"
 
-# GAP (coverage sweep, 2026-07-24): the repeat/skip counter legs are tested
-# (comm/e2e/e2e_test.v), but the total-loss leg requires a reception timeout INSIDE
-# the E2E mechanism (this requirement's own ASIL-B wording) and e2e.RxState has none —
-# comm/com's rx deadline is the complementary QM monitor only. Stays uncovered until
-# the E2E-owned timeout is implemented (small: an on_valid(now)/expired(now) pair on
-# RxState + generator wiring) or the requirement is consciously re-scoped.
+# The total-loss leg is e2e.RxState's own timeout (arm / on_valid / expired), independent
+# of comm/com's QM deadline, and REQUIRED on every E2E frame whose signals the bridge
+# delivers to the application (loom2v refuses one without `e2e.timeout_ms`) — rung R3b of
+# docs/diagnostics.md. Gap closed 2026-09-28; it was open since the 2026-07-24 sweep.
 [[req]]
 id = "REQ-E2E-002"
 title = "Detect repetition and loss"

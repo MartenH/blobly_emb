@@ -593,7 +593,7 @@ pub fn parse_system(path string) !System {
 			}
 			if ev := m['e2e'] {
 				for k, _ in ev.as_map() {
-					if k !in ['data_id', 'counter_pos', 'crc_pos'] {
+					if k !in ['data_id', 'counter_pos', 'crc_pos', 'timeout_ms'] {
 						fr.unknown_keys << 'e2e.${k}'
 					}
 				}

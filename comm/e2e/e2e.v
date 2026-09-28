@@ -91,7 +91,9 @@ pub mut:
 	// The E2E-owned reception timeout (REQ-E2E-002): no VALID message — ok or lost; a repeat or a
 	// CRC error does not count — within timeout_us is total loss of the sender, detected inside
 	// the E2E mechanism rather than by the QM COM deadline. 0 = off. The owner arms it at start
-	// (arm), reports each usable frame (on_valid) and polls expired.
+	// (arm), reports each usable frame (on_valid) and polls expired. It deliberately mirrors
+	// com.RxState's deadline rather than sharing it: REQ-E2E-002 keeps the ASIL-B loss check
+	// inside the E2E mechanism, independent of the QM COM monitor.
 	timeout_us  u64
 	valid_us    u64
 	armed       bool

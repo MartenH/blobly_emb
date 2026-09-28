@@ -171,6 +171,9 @@ fn io_can0_10ms(ctx voidptr) {
 					osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
 				}
 			} else if e2e_brake_status == .crc_error {
+				if st.e2e_rx_brake_status.timedout {
+					st.e2e_rx_brake_status.arm(now)
+				}
 				if diag_rx_ok {
 					mut brake_pressure := sig.BrakePressure{ status: .integrity, lost: u16(st.e2e_rx_brake_status.lost_frames - st.e2e_hidden_brake_status) }
 					osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
