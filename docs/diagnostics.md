@@ -200,8 +200,9 @@ memory is diagnostic bookkeeping that a tester may erase (0x14) or freeze (0x85)
 off it would switch off at a workshop clear while the fault is still present. **An FB reacts to what
 it detects** — a degraded mode keys off its own detection, or off a signal, like any other input —
 never to what the fault memory recorded. It follows that **an FB reports the current result on
-every dispatch and keeps no latch of its own**: "failed once, stay failed" is debounce
-configuration. A self-latching FB would report `.failed` again right after a 0x14 and bring the DTC
+every dispatch and keeps no latch of its own**: the fault's *history* (failed since clear,
+confirmed) is the fault memory's to keep, and neither debounce kind latches a failure. A
+self-latching FB would report `.failed` again right after a 0x14 and bring the DTC
 straight back, and no hook exists to reset it — none is needed as long as FBs report without memory.
 The one status that may leave the fault memory is the warning-indicator request (bit 7): published
 as an ordinary signal, for whatever drives a lamp to read as an input, and added only when a lamp

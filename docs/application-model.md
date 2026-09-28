@@ -20,10 +20,13 @@ and config. That's what makes an FB trivially testable and portable.
 ## Anatomy of an FB
 
 - **State**: a value struct, private to the FB (no heap).
-- **Handlers**: methods the Loom calls. `on_init` once at startup; `on_<period>`
-  periodically (e.g. `on_10ms`); later, event handlers (`on_<signal>_received`).
+- **Handlers**: methods the Loom calls, periodically (`period_ms`; `on_10ms` is a naming
+  convention). There is no init handler yet; later, event handlers (`on_<signal>_received`).
 - **Signals**: typed values it reads (inputs) and writes (outputs). A signal type
-  is a value struct (e.g. `VehicleSpeed { kph u16; valid bool }`).
+  is a value struct (e.g. `VehicleSpeed { kph u16; status RxStatus }`).
+
+The FB's whole view — signals, bus, pins, persistence, faults — on one page:
+[um/fb-programming-model.md](um/fb-programming-model.md).
 
 FBs compose: a *composite* FB is wired from smaller FBs in config; the developer
 writes only *leaf* FBs (logic) and the wiring (`ecu.toml`).
@@ -32,19 +35,20 @@ writes only *leaf* FBs (logic) and the wiring (`ecu.toml`).
 
 An FB's handler receives a generated **Inputs** snapshot and an **Outputs**
 struct; it reads/writes them as plain fields. The Loom snapshots all inputs before
-the call and publishes all outputs after — coherent snapshot, pure transform.
+the call and publishes all outputs after — inputs do not change while the handler runs
+(each is read whole; values that must belong together go in one multi-field signal).
 
 ```v
 // app/speed_monitor.v — written by the developer
 module app
-import sig
+import ports
 
 pub struct SpeedMonitor {  // private state only
 pub mut:
 	over_limit bool
 }
 
-pub fn (mut fb SpeedMonitor) on_10ms(inp sig.SpeedMonitorIn, mut out sig.SpeedMonitorOut) {
+pub fn (mut fb SpeedMonitor) on_10ms(inp ports.SpeedMonitorIn, mut out ports.SpeedMonitorOut) {
 	fb.over_limit = inp.vehicle_speed.status == .ok && inp.vehicle_speed.kph > 120
 	out.warn_lamp.on = fb.over_limit
 }
@@ -52,20 +56,22 @@ pub fn (mut fb SpeedMonitor) on_10ms(inp sig.SpeedMonitorIn, mut out sig.SpeedMo
 ```
 
 ```v
-// sig/speedmonitor_ports.v — GENERATED from ecu.toml (do not edit)
-module sig
+// ports/ports_gen.v — GENERATED from ecu.toml (do not edit)
+module ports
+
+import sig
 
 pub struct SpeedMonitorIn {
 pub mut:
 	// signal "VehicleSpeed" — physical km/h
 	//   from: CAN can0 / DBC Powertrain.VehicleSpeed  frame 0x100  bits 16|12 (x0.1)
 	//   path: COM -> IOC(double) -> app
-	vehicle_speed VehicleSpeed
+	vehicle_speed sig.VehicleSpeed
 }
 pub struct SpeedMonitorOut {
 pub mut:
 	// signal "WarnLamp" -> CAN can0 / LampFrame 0x101 (bit 0)
-	warn_lamp WarnLamp
+	warn_lamp sig.WarnLamp
 }
 ```
 
@@ -73,9 +79,9 @@ pub mut:
 // gen/loom_gen.v — GENERATED glue (do not edit)
 fn handler_app_speed_monitor_on_10ms(ctx voidptr) {
 	mut st := unsafe { &Partition_app_state(ctx) }
-	mut inp := sig.SpeedMonitorIn{}
+	mut inp := ports.SpeedMonitorIn{}
 	osal.ioc_acquire2(vehicle_speed_ch, &inp.vehicle_speed, u8(sizeof(inp.vehicle_speed)))
-	mut outp := sig.SpeedMonitorOut{}
+	mut outp := ports.SpeedMonitorOut{}
 	st.speed_monitor.on_10ms(inp, mut outp)
 	osal.ioc_publish2(warn_lamp_ch, &outp.warn_lamp, u8(sizeof(outp.warn_lamp)))
 }
@@ -133,23 +139,27 @@ You follow it two ways, both **generated** (so always accurate):
    | VehicleSpeed | km/h | CAN can0 | Powertrain.VehicleSpeed | 0x100 | 16\|12 | x0.1 | COM→IOC(double)→app | SpeedMonitor |
    | WarnLamp | bool | app | LampFrame | 0x101 | 0\|1 | — | app→IOC→COM | (CAN tx) |
 
-## Scaling & transformers — at the boundary, never in the FB
+## Scaling & transformers — scaling at the boundary; other transforms FB code until declared
 
 **Decision: FBs work in physical engineering units; raw↔physical scaling lives at
-the communication boundary (COM), and any other transform is a declared,
-generated step on the connection — not hand-written in the FB.**
+the communication boundary (COM). Other transforms are meant to become declared,
+generated steps on the connection — until they exist (below), they are FB code.**
 
 - **Bus scaling (raw ↔ physical)** is the DBC `factor`/`offset`, applied in the
   generated COM codec (`dbc2cfg` emits `*_phys()`), so a signal read from CAN
   arrives already in km/h, °C, … The FB never sees raw bits.
-- **Other transforms** (unit conversion, range clamp, end-to-end protection, rate
-  limit) are **declared on the signal/connection** in config and emitted into the
-  generated path. They run where the signal crosses a boundary, so every consumer
-  sees the transformed value and the FB stays a pure function.
+- **Other transforms** (unit conversion, range clamp, rate limit) are **planned** as
+  declared steps on the signal/connection, emitted into the generated path where the
+  signal crosses a boundary, so every consumer sees the transformed value. None is
+  built yet: today such a conversion is FB code. (End-to-end protection, the one that
+  exists, is declared on the frame — `[[frame]] e2e`.) What the field type does to a
+  decoded value, and that sent values are rounded but not clamped:
+  [um/fb-programming-model.md](um/fb-programming-model.md).
 
 Rationale: keep FBs free of representation concerns — portable across ECUs and bus
-matrices, testable with plain physical values, unaffected when a DBC scaling or a
-transform changes.
+matrices, testable with plain physical values, unaffected when a DBC scaling changes
+(and, once declared transforms exist, when a transform changes — today a transform is
+FB code, so changing one changes the FB).
 
 ```toml
 [[signal]]
@@ -157,7 +167,7 @@ name = "VehicleSpeed"   # physical km/h after COM scaling
 fields = { kph = "u16", status = "RxStatus" }
 from = "can0"           # external: the bus
 to   = "app"
-# transform = "clamp:0..350"   # optional, generated; FB still just reads km/h
+# transform = "clamp:0..350"   # PLANNED, not built: declared, generated; FB still just reads km/h
 ```
 
 ## Signal validity
@@ -179,7 +189,7 @@ pub struct SpeedFilter {
 pub mut:
 	last u16
 }
-pub fn (mut fb SpeedFilter) on_10ms(inp sig.SpeedFilterIn, mut out sig.SpeedFilterOut) {
+pub fn (mut fb SpeedFilter) on_10ms(inp ports.SpeedFilterIn, mut out ports.SpeedFilterOut) {
 	fb.last = (fb.last * 3 + inp.vehicle_speed_raw.kph) / 4 // simple IIR
 	out.vehicle_speed = sig.VehicleSpeed{ kph: fb.last, status: inp.vehicle_speed_raw.status } // forwarded
 }
@@ -233,19 +243,20 @@ the FB** — only `ecu.toml` changes.
   composes natively.
 - **Signal API**: grouped, annotated `In`/`Out` port structs (stable signatures,
   field access, built-in traceability).
-- **Scaling/transforms**: at the COM/connection boundary, generated — never inside
-  an FB.
+- **Scaling/transforms**: scaling at the COM boundary, generated; other transforms
+  planned as declared connection steps, FB code until then.
 - **Traceability**: signal name is the key; inline provenance on generated fields +
   a generated `signal-map`.
 
 ## Implemented
 
 - **Done**: FBs with grouped `In`/`Out` port structs; config `[[fb]]`; signal types
-  + generated `*In`/`*Out` in the `sig` module; the snapshot glue via `loom2v`;
+  + generated `*In`/`*Out` in the `ports` module; the snapshot glue via `loom2v`;
   scaling at the COM boundary (`dbc2cfg`); provenance comments on generated port
   fields + the `make trace` signal map (`docs/signal-map.md`).
 - **Still to come**: queued (event) signals + `on_<signal>_received` triggering;
-  mode management; E2E protection; declared connection transforms (clamp/unit);
+  mode management; E2E / SecOC on the ThreadX target (the host has both, per frame);
+  declared connection transforms (clamp/unit);
   multiple signal-bearing handlers per FB (today one). See
   [autosar-comparison.md](autosar-comparison.md) for how these map to the AUTOSAR
   RTE/COM patterns, what we keep, and what we deliberately skip.

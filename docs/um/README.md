@@ -11,6 +11,7 @@ lives in the sibling `docs/*.md` files and is linked, not repeated.
 | **gateway a frame or a signal between two buses** | [gateway-a-frame.md](gateway-a-frame.md) |
 | add a CAN frame / change tx timing | [add-a-frame.md](add-a-frame.md) |
 | add a function block (component + handler) | [add-an-fb.md](add-an-fb.md) |
+| **write an FB: read / write signals, send on CAN, drive a pin, persist a value, set a DTC** | [fb-programming-model.md](fb-programming-model.md) |
 | add a thread or partition | [add-a-thread.md](add-a-thread.md) |
 | add another core (a satellite image) | [add-a-core.md](add-a-core.md) |
 | add a shell command | [add-a-shell-command.md](add-a-shell-command.md) |
