@@ -143,7 +143,7 @@ pub mut:
 	sa_delay_us     u64
 	sa_level        u8 // the level whose seed is outstanding (0 = none)
 	sa_seed         [seed_len]u8
-	sa_failed       u8
+	sa_failed       [max_security_level]u8 // wrong keys per level: one level's unlock never clears another's
 	sa_delay_until  u64
 	sa_arm_delay    bool // start the delay at the next tick (boot / reset: the clock is not known yet)
 }
@@ -160,15 +160,15 @@ pub fn (mut s Server) init(resp_cap int) {
 
 
 // reset_state returns the diagnostic state to power-on: default session, security locked,
-// communication enabled, no pending reset. DIDs are untouched. It also starts the 0x27 lockout
-// delay: the failed-key count is not persisted, so a reset between guesses must cost the delay
-// or power-cycling would bypass the limit (docs/diagnostics.md §3.1).
+// communication enabled, no pending reset. DIDs are untouched. The 0x27 failed-key count and a
+// running lockout SURVIVE it: a reset between guesses must not buy fresh attempts, so a reset
+// with wrong keys already counted costs the lockout delay — and a clean reset costs nothing.
+// (Across a power cycle the count is lost until the target persists it — R2, docs/diagnostics.md §7.)
 pub fn (mut s Server) reset_state() {
 	s.session = session_default
 	s.unlocked = 0
 	s.sa_level = 0
-	s.sa_failed = 0
-	s.sa_arm_delay = true
+	s.sa_arm_delay = s.sa_failed.any(it > 0)
 	s.normal_tx_off = false
 	s.normal_rx_off = false
 	s.reset_req = 0
@@ -455,7 +455,7 @@ fn (s Server) sa_max_attempts() u8 {
 // all zeros when L is already unlocked (ISO 14229-1) — and sendKey (2L) checks a key against the
 // OUTSTANDING seed of that same level, once: a wrong key spends the seed. After sa_attempts wrong
 // keys the answer is exceededNumberOfAttempts and no seed is issued until the lockout delay has
-// passed (requiredTimeDelayNotExpired); the delay also runs after every reset (reset_state).
+// passed (requiredTimeDelayNotExpired); a reset with wrong keys counted costs the delay too (reset_state).
 // requestSeed always answers, since the seed IS the answer; sendKey honours the suppress bit.
 fn (mut s Server) security_access(req &u8, req_len int, resp &u8) int {
 	if req_len < 2 {
@@ -521,15 +521,15 @@ fn (mut s Server) send_key(level u8, req &u8, req_len int, resp &u8) int {
 	}
 	s.sa_level = 0 // one key per seed
 	if !s.security.key_ok(s.security.ctx, level, &s.sa_seed[0], unsafe { req + 2 }, seed_len) {
-		s.sa_failed++
-		if s.sa_failed >= s.sa_max_attempts() {
-			s.sa_failed = 0
+		s.sa_failed[level - 1]++
+		if s.sa_failed[level - 1] >= s.sa_max_attempts() {
+			s.sa_failed[level - 1] = 0
 			s.sa_delay_until = s.now_us + s.sa_delay()
 			return negative(resp, 0x27, nrc_exceeded_attempts)
 		}
 		return negative(resp, 0x27, nrc_invalid_key)
 	}
-	s.sa_failed = 0
+	s.sa_failed[level - 1] = 0
 	s.unlocked = level
 	if unsafe { req[1] } & 0x80 != 0 {
 		return 0

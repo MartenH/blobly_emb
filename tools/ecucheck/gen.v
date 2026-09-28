@@ -282,7 +282,7 @@ fn specs() map[string]map[string]Key {
 			'functional_id': k(.int) // functional request id (e.g. 0x7DF), single frame
 			's3_ms':    k(.int) // session timeout; default 5000 (ISO 14229-2)
 			'security_attempts': k(.int) // 0x27 failed keys before the lockout; default 3
-			'security_delay_ms': k(.int) // 0x27 lockout delay, also run at boot/reset; default 10000
+			'security_delay_ms': k(.int) // 0x27 lockout delay after too many wrong keys; default 10000
 		}
 		'did':        {
 			'id':       req(.int)

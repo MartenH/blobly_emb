@@ -120,8 +120,8 @@ secoc = { key = "10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f", data_id = 0x2
 # the UDS server (comm/uds, docs/diagnostics.md). Functional requests (one single
 # frame on functional_id) are served too, answered on tx_id. s3_ms is the session
 # timeout (default 5 s); 2 s here keeps the S3 e2e test short. security_delay_ms is
-# the 0x27 lockout after too many wrong keys, and after every boot/reset (default
-# 10 s); 1 s here keeps the SecurityAccess e2e test short.
+# the 0x27 lockout after too many wrong keys (default 10 s); 1 s here keeps the
+# SecurityAccess e2e test short.
 [[isotp]]
 name     = "diag"
 bus      = "can0"

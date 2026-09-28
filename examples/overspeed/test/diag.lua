@@ -147,8 +147,7 @@ end
 
 test("UDS: 0x27 unlocks level 1 with the reference key and opens the gated write", function()
   local d = diag()
-  sleep_ms(1100) -- security_delay_ms = 1000: the lockout every boot and ECUReset starts has passed
-  d:session(0x03)
+  d:session(0x03) -- no wait: a boot or a clean ECUReset starts no lockout
   check.nrc(0x33, function() d:write_did(0xF1AC, fromhex("5A")) end)
   local r = d:raw(fromhex("27 01"))
   check.equal(tohex(r:sub(1, 2)), "67 01")

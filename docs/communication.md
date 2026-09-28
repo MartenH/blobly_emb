@@ -164,8 +164,9 @@ functional request must not send withheld. The plan these belong to is
 gates name: requestSeed `27 2L-1` returns a 4-byte seed, sendKey `27 2L` checks the key
 against that one seed, which a wrong key spends. After `security_attempts` wrong keys
 (default 3) the answer is `0x36` and no seed is issued for `security_delay_ms` (default
-10 s, `0x37`) — and the same delay runs after every boot and reset, because the failed-key
-count is not persisted and a power cycle must not buy fresh guesses. Seeds and keys come
+10 s, `0x37`). The failed-key count survives an ECU reset, so a reset between guesses costs
+the delay too, while a clean reset or a boot unlocks at once (persisting the count across
+power cycles is the target's, rung R2). Seeds and keys come
 from an injected `uds.SecurityOps`, so the stack fixes no key algorithm; the generated host
 bridge injects `uds.ReferenceSecurity`, blobly_net's reference key (each seed byte XOR
 0xFF) — a SIM key, not a secret. A target image injects the board's (with UDS on the

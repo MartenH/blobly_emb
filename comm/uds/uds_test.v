@@ -339,16 +339,15 @@ fn test_write_security_precedes_record_length() {
 	assert call(mut s, long) == [u8(0x7F), 0x2E, 0x33]
 }
 
-// A server serving security level 1 with the reference key, 1 s lockout delay, past its boot
-// delay, in the extended session at t = 1 s.
+// A server serving security level 1 with the reference key, 1 s lockout delay, in the extended
+// session at t = 1 s.
 fn secured() Server {
 	mut s := started()
 	mut r := &ReferenceSecurity{}
 	s.security = r.ops(0x1234_5678)
 	s.security_levels = 0x01
 	s.sa_delay_us = 1_000_000
-	s.tick(0) // arms the boot delay
-	s.tick(1_000_000) // ... and lets it pass
+	s.tick(1_000_000)
 	call(mut s, [u8(0x10), 0x03])
 	return s
 }
@@ -414,17 +413,54 @@ fn test_wrong_keys_spend_the_seed_and_lock_out() {
 	assert send_key(mut s, key_for(r[2..])) == [u8(0x67), 0x02]
 }
 
-// REQ-DIAG-008: the failed-key count lives in RAM, so a reset must not buy fresh attempts — the
-// lockout delay runs from every reset (and boot) before a seed is issued.
-fn test_a_reset_imposes_the_lockout_delay() {
+// REQ-DIAG-008: a reset must not buy fresh attempts — with wrong keys counted it costs the lockout
+// delay — while a clean reset (and a boot) unlocks at once.
+fn test_only_a_reset_after_wrong_keys_imposes_the_lockout() {
 	mut s := secured()
+	s.reset_state()
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x27), 0x01])[0] == 0x67, 'a clean reset delayed the unlock'
+	assert send_key(mut s, [u8(0), 0, 0, 1]) == [u8(0x7F), 0x27, 0x35]
 	s.reset_state()
 	call(mut s, [u8(0x10), 0x03])
 	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37], 'no tick yet: the delay is still pending'
 	s.tick(1_500_000)
 	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37]
 	s.tick(2_500_000)
+	r := call(mut s, [u8(0x27), 0x01])
+	assert r[0] == 0x67
+	// the count survived the reset: one more wrong key is the second of three, not the first
+	assert send_key(mut s, [u8(0), 0, 0, 1]) == [u8(0x7F), 0x27, 0x35]
+	call(mut s, [u8(0x27), 0x01])
+	assert send_key(mut s, [u8(0), 0, 0, 1]) == [u8(0x7F), 0x27, 0x36]
+}
+
+// A boot (init) with no history unlocks at once.
+fn test_boot_imposes_no_lockout() {
+	mut s := started()
+	mut r := &ReferenceSecurity{}
+	s.security = r.ops(7)
+	s.security_levels = 0x01
+	s.tick(0)
+	call(mut s, [u8(0x10), 0x03])
 	assert call(mut s, [u8(0x27), 0x01])[0] == 0x67
+}
+
+// REQ-DIAG-008: failures are counted per level — unlocking a level whose key is known must not
+// reset the count of wrong keys for another (codex #296: brute force through a known level).
+fn test_failed_keys_are_counted_per_level() {
+	mut s := secured()
+	s.security_levels = 0x03 // levels 1 and 2
+	for attempt in 1 .. 4 {
+		call(mut s, [u8(0x27), 0x03])
+		want := if attempt < 3 { nrc_invalid_key } else { nrc_exceeded_attempts }
+		assert call(mut s, [u8(0x27), 0x04, 0, 0, 0, 1]) == [u8(0x7F), 0x27, want]
+		if attempt < 3 {
+			call(mut s, [u8(0x10), 0x03]) // relock, so level 1 needs a real unlock each round
+			r := call(mut s, [u8(0x27), 0x01]) // level 1, whose key the tester knows
+			assert send_key(mut s, key_for(r[2..])) == [u8(0x67), 0x02]
+		}
+	}
 }
 
 // REQ-DIAG-008 / REQ-DIAG-003: a session transition relocks and voids an outstanding seed.

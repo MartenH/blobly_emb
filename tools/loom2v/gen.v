@@ -982,10 +982,11 @@ fn parse_did_access(m map[string]toml.Any, key string, id int) (u8, u8) {
 	if sec < 0 || sec > uds.max_security_level {
 		panic('loom2v: [[did]] 0x${id.hex()} ${key}.security ${sec} is not a 0x27 level the server serves (1..${uds.max_security_level})')
 	}
-	// 0x27 unlocks only in extended / programming, and every session change relocks: a gate whose
-	// sessions include neither could never be opened
-	if sec != 0 && mask != 0 && mask & (uds.in_extended | uds.in_programming) == 0 {
-		panic('loom2v: [[did]] 0x${id.hex()} ${key} needs security ${sec} but is allowed only in sessions where 0x27 is not served (extended / programming) — it could never be opened')
+	// 0x27 unlocks in extended (programming too, but an application server refuses that session
+	// until the bootloader handoff, R2), and every session change relocks: a gate whose sessions
+	// leave out extended could never be opened
+	if sec != 0 && mask != 0 && mask & uds.in_extended == 0 {
+		panic('loom2v: [[did]] 0x${id.hex()} ${key} needs security ${sec} but is not allowed in the extended session, the only one an application server unlocks in — it could never be opened')
 	}
 	return mask, u8(sec)
 }
