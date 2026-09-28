@@ -21,10 +21,17 @@ end
 -- 0x19 02 with mask 0x09 (testFailed | confirmed): the hex of the DTC records, or "" for none.
 -- EngineOverRev (0x021900) is declared first; EngineIdleLow (0x050600, < 400 rpm, no enable
 -- condition — only the operation cycle gates it) second.
+-- Only the two ENGINE DTCs count here: the brake signal faults further down watch a sender these
+-- tests leave silent, so their DTCs are legitimately set meanwhile.
 local function failing(d)
   local r = d:raw(fromhex("19 02 09"))
   check.equal(tohex(r:sub(1, 3)), "59 02 7F")
-  return tohex(r:sub(4))
+  local out = {}
+  for i = 4, #r - 3, 4 do
+    local rec = tohex(r:sub(i, i + 3))
+    if rec:sub(1, 8) == "02 19 00" or rec:sub(1, 8) == "05 06 00" then out[#out + 1] = rec end
+  end
+  return table.concat(out, " ")
 end
 local function status(d)
   local r = d:raw(fromhex("19 0A"))
@@ -46,7 +53,8 @@ test("Faults: an over-rev in a cycle confirms the DTC; passing clears testFailed
   ignition(true)
   rpm(7000, 100)
   check.equal(failing(d), "02 19 00 2F") -- TF | TFTOC | pending | confirmed | TFSLC
-  check.equal(tohex(d:raw(fromhex("19 01 09"))), "59 01 7F 01 00 01")
+  -- two: the over-rev, and BrakeMsgTimeout (the brake sender is silent during these tests)
+  check.equal(tohex(d:raw(fromhex("19 01 09"))), "59 01 7F 01 00 02")
   rpm(3000, 100)
   check.equal(status(d), 0x2E, "testFailed should drop once the test passes")
 end)
@@ -114,4 +122,61 @@ test("Faults: a confirmed DTC ages out after two passing operation cycles", func
   end
   ignition(false) -- the second passing cycle ends: aging = 2
   check.equal(status(d) & 0x0C, 0, "pending / confirmed survived two passing cycles")
+end)
+
+-- Signal-status faults on BrakePressure (frame 0x301, E2E: data_id 0x44, CRC byte 4, counter low
+-- nibble of byte 5, its own 300 ms timeout) — raised by the bridge, no FB code.
+local function crc8(bytes)
+  local crc = 0xFF
+  for _, b in ipairs(bytes) do
+    crc = crc ~ b
+    for _ = 1, 8 do
+      if crc & 0x80 ~= 0 then crc = ((crc << 1) ~ 0x1D) & 0xFF else crc = (crc << 1) & 0xFF end
+    end
+  end
+  return crc ~ 0xFF
+end
+local ctr = 0
+local function brake(skip, corrupt)
+  ctr = (ctr + 1 + (skip or 0)) & 0x0F
+  local d = { 0xE8, 0x03, 0, 0, 0, ctr }
+  local b = { 0x44, 0x00 }
+  for i = 0, 5 do if i ~= 4 then b[#b + 1] = d[i + 1] end end
+  d[5] = crc8(b)
+  if corrupt then d[5] = d[5] ~ 0xFF end
+  bus.send("CAN1", 0x301, string.char(table.unpack(d)))
+end
+local function brakes(n) for _ = 1, n do brake(); ign_frame(); sleep_ms(10) end; sleep_ms(30) end
+-- the status byte of `dtc` (3-byte hex string) from 0x19 0A
+local function dtc(d, hex)
+  local r = d:raw(fromhex("19 0A"))
+  for i = 4, #r - 3, 4 do
+    if tohex(r:sub(i, i + 2)) == hex then return string.byte(r, i + 3) end
+  end
+  error("DTC " .. hex .. " not listed")
+end
+
+test("Signal faults: brake frame silence, corruption and a gap each raise their own DTC", function()
+  local d = diag()
+  ignition(true)
+  brakes(10) -- a healthy sender
+  d:raw(fromhex("14 FF FF FF"))
+  brakes(10)
+  check.equal(dtc(d, "C1 21 00") & 0x09, 0, "timeout DTC set while frames flowed")
+  check.equal(dtc(d, "C4 18 00") & 0x09, 0)
+  check.equal(dtc(d, "C4 18 01") & 0x09, 0)
+  rpm(3000, 400) -- no brake frames: E2E's own 300 ms timeout runs out
+  check.equal(dtc(d, "C1 21 00") & 0x09, 0x09, "no timeout DTC after the brake frames stopped")
+  brakes(10)
+  check.equal(dtc(d, "C1 21 00") & 0x01, 0, "testFailed stayed after the sender came back")
+  brake(0, true); sleep_ms(40) -- one corrupt frame
+  check.equal(dtc(d, "C4 18 00") & 0x09, 0x09, "no integrity DTC for a corrupt frame")
+  brakes(3)
+  brake(2); sleep_ms(40) -- two frames missing
+  -- a gap is an event: it fails the one pass that sees it, and the next good frame passes again —
+  -- so the DTC is confirmed (and failed since clear), not currently failed
+  check.equal(dtc(d, "C4 18 01") & 0x28, 0x28, "no lost DTC for a gap")
+  brakes(5)
+  d:raw(fromhex("14 FF FF FF"))
+  rpm(3000, 60)
 end)

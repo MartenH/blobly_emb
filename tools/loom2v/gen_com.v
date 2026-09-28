@@ -667,6 +667,20 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			if m.faults.len > 0 {
 				glue << '\tfmem fault.Memory // the node\'s fault memory: this bridge is its one writer (D2)'
 				glue << '\tfcycle_on bool // the operation-cycle signal as last seen'
+				for src in fault_sources(m) {
+					glue << '\tfsrc_${snake(src)} sig.RxStatus // ${src}\'s latest published status (signal-status faults)'
+					if m.faults.any(it.signal == src && it.on == 'lost') {
+						glue << '\tfsrc_${snake(src)}_lost u32'
+					}
+				}
+				for i, f in m.faults {
+					if f.signal != '' {
+						glue << '\tsdeb_${i} fault.Debounce // ${f.name}: ${f.signal} ${f.on}, debounced here'
+						if f.on == 'lost' {
+							glue << '\tslost_${i} u32 // the lost count last stepped'
+						}
+					}
+				}
 				for fb in fault_fbs(m) {
 					glue << '\tfrep_${snake(fb)} fault.Reports // from ${fb}\'s thread'
 					glue << '\tfctl_${snake(fb)} fault.Control // to ${fb}\'s thread'
@@ -954,7 +968,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 						fld := snake(sname)
 						glue << '${ind}\tmut ${fld} := sig.${sname}{ ${rx_status_fields(si, '.timeout', lost)[2..]} }'
 						glue << '${ind}\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
-						glue << cycle_edge(m, sname, fld, ind + '\t')
+						glue << rx_publish_hooks(m, sname, fld, ind + '\t')
 					}
 					glue << '${ind}} else {'
 					ind += '\t'
@@ -970,7 +984,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					}
 					glue << '${ind}mut ${fld} := sig.${sname}{ ${valassign}${rx_status_fields(si, '.ok', lost)} }'
 					glue << '${ind}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
-					glue << cycle_edge(m, sname, fld, ind)
+					glue << rx_publish_hooks(m, sname, fld, ind)
 				}
 				if e2e && e2e_timeout(m, msg, bname) > 0 {
 					ind = ind[1..]
@@ -1119,7 +1133,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					sf := rx_status_fields(si, '.timeout', lost)
 					glue << '\t\tmut ${fld} := sig.${sname}{${if sf == '' { '' } else { ' ' + sf[2..] + ' ' }}}'
 					glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
-					glue << cycle_edge(m, sname, fld, '\t\t')
+					glue << rx_publish_hooks(m, sname, fld, '\t\t')
 				}
 				glue << '\t}'
 			}
@@ -1510,6 +1524,18 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					if f.aging > 0 {
 						glue << '\tst.fmem.slots[${i}].aging = u8(${f.aging})'
 					}
+				}
+				for i, f in m.faults {
+					if f.signal == '' {
+						continue
+					}
+					glue << '\tst.sdeb_${i} = fault.Debounce{'
+					if f.time_based {
+						glue << '\t\ttime_based: true'
+					}
+					glue << '\t\tfail_thr: ${f.fail_thr}'
+					glue << '\t\tpass_thr: ${f.pass_thr}'
+					glue << '\t}'
 				}
 				glue << '\tst.fmem.n = ${m.faults.len}'
 				glue << '\tst.fmem.init()'
@@ -1954,7 +1980,7 @@ fn rx_integrity(m Model, list []string, msg string, lost string, gate string, in
 		fld := snake(sname)
 		out << '${i}mut ${fld} := sig.${sname}{ ${rx_status_fields(si, '.integrity', lost)[2..]} }'
 		out << '${i}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
-		out << cycle_edge(m, sname, fld, i)
+		out << rx_publish_hooks(m, sname, fld, i)
 	}
 	if i != ind {
 		out << '${ind}}'
@@ -2027,6 +2053,31 @@ fn fault_pass_lines(m Model) []string {
 		return []string{}
 	}
 	mut out := []string{}
+	// signal-status faults: the bridge is the detector — each pass turns the watched signal's latest
+	// status into a test result (never_received = not tested), debounced here in bridge passes
+	for i, f in m.faults {
+		if f.signal == '' {
+			continue
+		}
+		src := 'st.fsrc_${snake(f.signal)}'
+		res := match f.on {
+			'timeout' {
+				'if ${src} == .timeout { fault.TestResult.failed } else if ${src} == .never_received { fault.TestResult.not_tested } else { fault.TestResult.passed }'
+			}
+			'integrity' {
+				'if ${src} == .integrity { fault.TestResult.failed } else if ${src} == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
+			}
+			else {
+				'if ${src}_lost != st.slost_${i} { fault.TestResult.failed } else if ${src} == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
+			}
+		}
+		out << '\tst.sdeb_${i}.apply(st.fmem.control_gen(${i}))'
+		out << '\tst.sdeb_${i}.step(${res}, now, true)'
+		if f.on == 'lost' {
+			out << '\tst.slost_${i} = ${src}_lost'
+		}
+		out << '\tst.fmem.consume(${i}, st.sdeb_${i}.rep)'
+	}
 	for fb in fault_fbs(m) {
 		f := snake(fb)
 		out << '\tosal.${acquire_fn('triple')}(fault_rep_${f}_ch, &st.frep_${f}, u8(sizeof(st.frep_${f})))'
@@ -2044,21 +2095,33 @@ fn fault_pass_lines(m Model) []string {
 	return out
 }
 
-// cycle_edge: after EVERY publication of the operation-cycle signal — a good decode, a deadline or
-// E2E timeout, an integrity failure, a late frame — the fault memory's cycle follows the value just
-// published, in bus order (an off/on pair in one pass is two edges). One place, so no publish path
-// can leave the fault memory in a cycle the published signal has already left.
-fn cycle_edge(m Model, sname string, fld string, ind string) []string {
-	if m.faults.len == 0 || sname != m.fault_cycle.all_before('.') {
+// rx_publish_hooks: what the fault memory needs from EVERY publication of a received signal — a
+// good decode, a deadline or E2E timeout, an integrity failure, a late frame — in one place, so no
+// publish path can be missed:
+//   - the operation-cycle signal moves the cycle, in bus order (an off/on pair in one pass is two
+//     edges, and the fault memory never stays in a cycle the published signal has left);
+//   - a signal a signal-status fault watches records its status (and lost count) for the pass's
+//     fault step.
+fn rx_publish_hooks(m Model, sname string, fld string, ind string) []string {
+	if m.faults.len == 0 {
 		return []string{}
 	}
-	cf := m.fault_cycle.all_after('.')
-	return [
-		'${ind}if ${fld}.${cf} && !st.fcycle_on {',
-		'${ind}\tst.fmem.cycle_start()',
-		'${ind}} else if !${fld}.${cf} && st.fcycle_on {',
-		'${ind}\tst.fmem.cycle_end()',
-		'${ind}}',
-		'${ind}st.fcycle_on = ${fld}.${cf}',
-	]
+	mut out := []string{}
+	if sname == m.fault_cycle.all_before('.') {
+		cf := m.fault_cycle.all_after('.')
+		out << '${ind}if ${fld}.${cf} && !st.fcycle_on {'
+		out << '${ind}\tst.fmem.cycle_start()'
+		out << '${ind}} else if !${fld}.${cf} && st.fcycle_on {'
+		out << '${ind}\tst.fmem.cycle_end()'
+		out << '${ind}}'
+		out << '${ind}st.fcycle_on = ${fld}.${cf}'
+	}
+	if sname in fault_sources(m) {
+		src := snake(sname)
+		out << '${ind}st.fsrc_${src} = ${fld}.status'
+		if m.faults.any(it.signal == sname && it.on == 'lost') {
+			out << '${ind}st.fsrc_${src}_lost = u32(${fld}.lost)'
+		}
+	}
+	return out
 }

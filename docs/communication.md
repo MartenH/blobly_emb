@@ -236,7 +236,23 @@ owns the fault memory (`comm/fault`), keeps each DTC's ISO 14229-1 status throug
 (confirmation, pending, aging), and answers `0x19` 01/02/0A, `0x14` and `0x85`. A clear reaches the
 FB's thread as a new generation in a control cell, so its debounce restarts. Host only for now:
 faults on the target, persistence and freeze frames are rungs R6 (`freeze` / `priority` fail
-generation until then), and faults raised by a signal's receive status are R4c.
+generation until then).
+
+A fault can also be raised by a received signal's **status** — no FB code, the diagnostic bridge
+is the detector:
+
+```toml
+[[fault]]
+name   = "BrakeMsgTimeout"
+dtc    = 0xC12100                      # U0121-00
+signal = "BrakePressure"               # received on the diagnostic bus
+on     = "timeout"                     # or "integrity" / "lost"
+```
+
+`timeout` needs the signal's `status` and a deadline on its frame, `integrity` needs `status` and
+E2E or SecOC on the frame, `lost` needs the E2E `lost` counter — each refused at generation when
+missing. The debounce counts bridge passes (10 ms); `never_received` is not tested. A `lost` gap
+is an event: it fails the pass that sees it, so the DTC confirms without staying testFailed.
 
 ## E2E protection (ISO 26262)
 
