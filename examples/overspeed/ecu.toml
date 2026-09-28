@@ -210,6 +210,12 @@ enable   = ["IgnitionOn.on"]
 confirm  = 1
 aging    = 2
 
+[[fault]]
+name     = "EngineIdleLow"
+dtc      = 0x050600                    # P0506-00: idle rpm lower than expected
+from     = "EngineMonitor.on_10ms"
+debounce = { kind = "counter", fail = 3, pass = 3 }   # no enable condition: only the cycle gates it
+
 [fault_memory]
 cycle = "IgnitionOn.on"                # the operation cycle: ignition on -> off
 

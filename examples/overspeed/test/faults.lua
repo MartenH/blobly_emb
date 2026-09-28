@@ -10,7 +10,9 @@ local function rpm(v, ms)
   while t < ms do bus.send_message("CAN1", "Powertrain", { EngineSpeed = v }); sleep_ms(10); t = t + 10 end
   sleep_ms(40) -- the FB, the debounce and the bridge each run every 10 ms
 end
--- 0x19 02 with mask 0x09 (testFailed | confirmed): the hex of the DTC records, or "" for none
+-- 0x19 02 with mask 0x09 (testFailed | confirmed): the hex of the DTC records, or "" for none.
+-- EngineOverRev (0x021900) is declared first; EngineIdleLow (0x050600, < 400 rpm, no enable
+-- condition — only the operation cycle gates it) second.
 local function failing(d)
   local r = d:raw(fromhex("19 02 09"))
   check.equal(tohex(r:sub(1, 3)), "59 02 7F")
@@ -26,8 +28,9 @@ test("Faults: outside an operation cycle nothing is recorded", function()
   local d = diag()
   ignition(false)
   d:raw(fromhex("14 FF FF FF"))
-  rpm(7000, 100)
+  rpm(100, 100) -- EngineIdleLow fails and has no enable condition: only the cycle can stop it
   check.equal(failing(d), "")
+  rpm(3000, 60)
 end)
 
 test("Faults: an over-rev in a cycle confirms the DTC; passing clears testFailed", function()
@@ -63,6 +66,19 @@ test("Faults: 0x85 off records nothing; the session ending turns it back on", fu
   rpm(3000, 60)
   rpm(7000, 100)
   check.equal(failing(d), "02 19 00 2F")
+  d:raw(fromhex("14 FF FF FF"))
+  rpm(3000, 60)
+end)
+
+test("Faults: an ignition off/on pair drained in one pass is two cycle edges", function()
+  local d = diag()
+  rpm(7000, 100)
+  check.equal(status(d) & 0x02, 0x02) -- failed this cycle
+  rpm(3000, 60)
+  bus.send("CAN1", 0x302, string.char(0)) -- off and on back to back: one bridge pass
+  bus.send("CAN1", 0x302, string.char(1))
+  sleep_ms(40)
+  check.equal(status(d) & 0x02, 0, "the new cycle did not start: testFailedThisOperationCycle carried over")
   d:raw(fromhex("14 FF FF FF"))
   rpm(3000, 60)
 end)

@@ -789,6 +789,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\tst.uds_${tp}.tick(now)'
 			}
 			glue << rx_gate_sample(m, conns, rx_by_msg.keys(), bname, '\t', true)
+			glue << fault_pass_lines(m)
 		}
 		if rx_by_msg.len > 0 || conns.len > 0 || my_routes.len > 0 {
 			glue << '\tmut rx := can.Frame{}'
@@ -968,6 +969,17 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					}
 					glue << '${ind}mut ${fld} := sig.${sname}{ ${valassign}${rx_status_fields(si, '.ok', lost)} }'
 					glue << '${ind}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+					if m.faults.len > 0 && sname == m.fault_cycle.all_before('.') {
+						// the operation cycle follows every decoded value, in bus order — an off/on
+						// pair drained in one pass is two edges, not a read of the last value
+						cf := m.fault_cycle.all_after('.')
+						glue << '${ind}if ${fld}.${cf} && !st.fcycle_on {'
+						glue << '${ind}\tst.fmem.cycle_start()'
+						glue << '${ind}} else if !${fld}.${cf} && st.fcycle_on {'
+						glue << '${ind}\tst.fmem.cycle_end()'
+						glue << '${ind}}'
+						glue << '${ind}st.fcycle_on = ${fld}.${cf}'
+					}
 				}
 				if e2e && e2e_timeout(m, msg, bname) > 0 {
 					ind = ind[1..]
@@ -1037,7 +1049,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			// request, drain the segmented response.
 			for c in conns {
 				tp := snake(c.name)
-				glue << fault_pass_lines(m)
 				glue << did_refresh(m, tp, '\t')
 				// ONE request at a time: a new request is taken only when the previous answer has left
 				// the link, so a pending ECUReset always belongs to the response in flight (the next
@@ -2013,27 +2024,16 @@ fn has_deadline(m Model, msg string, bname string) bool {
 	return (m.frames.rx_timeout_us[msg] or { 0 }) > 0 || e2e_timeout(m, msg, bname) > 0
 }
 
-// fault_pass_lines: the fault memory's share of the bridge pass, before this pass's requests are
-// served (so 0x19 reads the newest state): the operation cycle follows its signal's edges (D3; the
-// host runs no NM), each fault-owning FB's report cell is consumed slot by slot, and the clear
-// generations go back in its control cell.
+// fault_pass_lines: the fault memory's share of the bridge pass, at its TOP — before the rx drain,
+// where functional requests are served inline, and before the physical dispatch — so every 0x19
+// reads the newest consumed state: each fault-owning FB's report cell is consumed slot by slot and
+// the clear generations go back in its control cell. (The operation cycle follows its signal where
+// the frame is decoded, in bus order.)
 fn fault_pass_lines(m Model) []string {
 	if m.faults.len == 0 {
 		return []string{}
 	}
 	mut out := []string{}
-	cs := m.fault_cycle.all_before('.')
-	cf := m.fault_cycle.all_after('.')
-	si := m.sig_of[cs] or { SigInfo{} }
-	out << '\tmut fault_cycle := sig.${cs}{}'
-	out << '\tif osal.${acquire_fn(si.transport)}(${snake(cs)}_ch, &fault_cycle, u8(sizeof(fault_cycle))) {'
-	out << '\t\tif fault_cycle.${cf} && !st.fcycle_on {'
-	out << '\t\t\tst.fmem.cycle_start()'
-	out << '\t\t} else if !fault_cycle.${cf} && st.fcycle_on {'
-	out << '\t\t\tst.fmem.cycle_end()'
-	out << '\t\t}'
-	out << '\t\tst.fcycle_on = fault_cycle.${cf}'
-	out << '\t}'
 	for fb in fault_fbs(m) {
 		f := snake(fb)
 		out << '\tosal.${acquire_fn('triple')}(fault_rep_${f}_ch, &st.frep_${f}, u8(sizeof(st.frep_${f})))'

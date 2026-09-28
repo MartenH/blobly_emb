@@ -4719,6 +4719,17 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 			panic('loom2v: [[fault]] "${name}": debounce kind "${kind}" is not counter / time')
 		}
 		time_based := kind == 'time'
+		// each kind has its own keys, and a time threshold has no sane default: a missing fail_ms
+		// would mean 0 µs — no debounce at all — so both are required
+		other_keys := if time_based { ['fail', 'pass'] } else { ['fail_ms', 'pass_ms'] }
+		for key in other_keys {
+			if key in db {
+				panic('loom2v: [[fault]] "${name}": debounce.${key} does not belong to kind = "${kind}"')
+			}
+		}
+		if time_based && (!('fail_ms' in db) || !('pass_ms' in db)) {
+			panic('loom2v: [[fault]] "${name}": a time debounce needs fail_ms and pass_ms')
+		}
 		fail_thr := if time_based {
 			ms_to_us((db['fail_ms'] or { toml.Any(0) }).i64(), '[[fault]] "${name}" debounce.fail_ms')
 		} else {
@@ -4729,29 +4740,34 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 		} else {
 			int((db['pass'] or { toml.Any(1) }).int())
 		}
-		if !time_based && (fail_thr < 1 || pass_thr < 1 || fail_thr > 0xFFFF || pass_thr > 0xFFFF) {
-			panic('loom2v: [[fault]] "${name}": counter debounce fail / pass must be 1..65535')
+		if fail_thr < 1 || pass_thr < 1 || (!time_based && (fail_thr > 0xFFFF || pass_thr > 0xFFFF)) {
+			panic('loom2v: [[fault]] "${name}": debounce thresholds must be at least 1 (counter: 1..65535 results; time: >= 1 ms)')
 		}
 		mut enable := []string{}
 		for e in (m['enable'] or { toml.Any([]toml.Any{}) }).array() {
 			enable << e.string()
 		}
-		confirm := int((m['confirm'] or { toml.Any(1) }).int())
-		aging := int((m['aging'] or { toml.Any(0) }).int())
+		// read wide and range-check before narrowing: a truncating read could wrap a typo into range
+		confirm := (m['confirm'] or { toml.Any(1) }).i64()
+		aging := (m['aging'] or { toml.Any(0) }).i64()
+		dtc := (m['dtc'] or { toml.Any(0) }).i64()
+		if dtc < 1 || dtc > 0xFFFFFF {
+			panic('loom2v: [[fault]] "${name}": dtc 0x${dtc.hex()} is not a 3-byte DTC (1..0xFFFFFF)')
+		}
 		if confirm < 1 || confirm > 255 || aging < 0 || aging > 255 {
 			panic('loom2v: [[fault]] "${name}": confirm must be 1..255 and aging 0..255 (0 = never ages)')
 		}
 		out << FaultCfg{
 			name:       name
-			dtc:        int((m['dtc'] or { toml.Any(0) }).int())
+			dtc:        int(dtc)
 			fb:         parts[0]
 			handler:    parts[1]
 			time_based: time_based
 			fail_thr:   fail_thr
 			pass_thr:   pass_thr
 			enable:     enable
-			confirm:    confirm
-			aging:      aging
+			confirm:    int(confirm)
+			aging:      int(aging)
 		}
 	}
 	return out
@@ -4765,13 +4781,7 @@ fn parse_fault_cycle(doc toml.Doc) string {
 // fault_fbs: the FBs that own faults, in first-declaration order — each gets one report cell (its
 // thread writes) and one control cell (the diagnostic bridge writes); cfg2v allocates both.
 fn fault_fbs(m Model) []string {
-	mut out := []string{}
-	for f in m.faults {
-		if f.fb !in out {
-			out << f.fb
-		}
-	}
-	return out
+	return ecumodel.fault_fbs(m.faults.map('${it.fb}.${it.handler}'))
 }
 
 // validate_faults: everything a [[fault]] needs, refused at generation when missing.
@@ -4795,12 +4805,19 @@ fn validate_faults(m Model, doc toml.Doc) {
 	mut dtcs := map[int]string{}
 	mut per_fb := map[string]int{}
 	for f in m.faults {
-		if f.name == '' || f.name in names {
-			panic('loom2v: [[fault]] name "${f.name}" is empty or declared twice')
+		if !ecumodel.ident_ok(f.name) || f.name in names {
+			panic('loom2v: [[fault]] name "${f.name}" is not an identifier, or is declared twice')
 		}
 		names[f.name] = true
-		if f.dtc < 1 || f.dtc > 0xFFFFFF {
-			panic('loom2v: [[fault]] "${f.name}": dtc 0x${f.dtc.hex()} is not a 3-byte DTC (1..0xFFFFFF)')
+		// the snake form becomes a field of the FB's Faults struct: two names must not collide there
+		key := '${f.fb}/${snake(f.name)}'
+		if key in names {
+			panic('loom2v: [[fault]] "${f.name}" collides with another fault of ${f.fb} as field ${snake(f.name)}')
+		}
+		names[key] = true
+		thr := m.part.fb_thread[f.fb] or { '' }
+		if m.part.external[m.part.thread_part[thr] or { '' }] or { false } {
+			panic('loom2v: [[fault]] "${f.name}": ${f.fb} lives in a partition this image does not generate — its debounce and report cell would never be emitted')
 		}
 		if prev := dtcs[f.dtc] {
 			panic('loom2v: [[fault]] "${f.name}": dtc 0x${f.dtc.hex()} is already "${prev}" — a DTC is unique per diagnostic server')

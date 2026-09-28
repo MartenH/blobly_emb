@@ -226,9 +226,9 @@ if a use case needs the exact order of qualifications — decision D1).
 
 **The way back.** Debouncing lives on the producer, so everything that must restart or pause it has
 to reach the producer too — or a 0x14 clear is undone by the next read of a still-failed cell. The
-fault memory publishes a **control cell per producing thread** (single writer: its comm thread;
-single reader: that thread's generated debounce — the IOC is SPSC, so one shared cell with several
-readers is not an option): a *clear generation* **per fault** (a per-DTC 0x14 bumps only its faults'
+fault memory publishes a **control cell per fault-owning FB** — as built in R4b, one report cell and
+one control cell per FB (single writer each: that FB's thread / the diagnostic bridge — the IOC is
+SPSC, so one shared cell with several readers is not an option): a *clear generation* **per fault** (a per-DTC 0x14 bumps only its faults'
 generations, 0x14 FFFFFF bumps them all; every clear is a FRESH 16-bit generation, so no report made
 before it can count, and a clear that could not get one — its producer silent for 32767 clears — is
 refused with 0x22 rather than reuse a generation; a bump resets that fault's counters and debounced state, and the producer echoes
@@ -241,7 +241,7 @@ recorded; a cycle begun while off gets fresh cycle bits at "on") — and **opera
 which change status bits only and bump no generation, so no old-generation drain is needed on the
 host (a qualification at a boundary can land one pass late). The persistence-grade cycle-END barrier
 remains R6's (§7). The
-per-fault generations are bounded by the cell too, which caps the faults one thread may own. A
+per-fault generations are bounded by the cell too, which caps the faults one FB may own (8). A
 producer on a **satellite core** needs the same cell to flow owner → satellite, which the target does
 not support today (loom2v rejects any signal INTO a satellite partition); R6 adds that reverse xioc
 path, or faults are declared owner-core-only until it exists. Enable conditions are evaluated on the producer

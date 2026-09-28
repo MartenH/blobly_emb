@@ -8,6 +8,7 @@ module main
 
 import os
 import toml
+import tools.ecumodel
 
 fn main() {
 	args := os.args
@@ -86,15 +87,8 @@ fn main() {
 	//     (its thread writes the debounced state + counters, the diagnostic bridge reads) and a
 	//     CONTROL channel (the bridge writes the clear generations, that thread reads). Triple:
 	//     wait-free and tear-free at any rate, one writer each (SPSC). In first-declaration order.
-	mut fault_fbs := []string{}
-	for f in doc.value('fault').array() {
-		from := ((f.as_map())['from'] or { toml.Any('') }).string()
-		fb := from.all_before('.')
-		if fb != '' && fb !in fault_fbs {
-			fault_fbs << fb
-		}
-	}
-	for fb in fault_fbs {
+	froms := doc.value('fault').array().map(((it.as_map())['from'] or { toml.Any('') }).string())
+	for fb in ecumodel.fault_fbs(froms) {
 		b << 'pub const fault_rep_${snake(fb)}_ch = ${chcount}'
 		transports << transport_variant('triple')
 		chcount++

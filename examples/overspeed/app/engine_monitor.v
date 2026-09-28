@@ -22,4 +22,11 @@ pub fn (mut fb EngineMonitor) on_10ms(inp ports.EngineMonitorIn, mut out ports.E
 	} else {
 		.passed
 	}
+	out.fault.engine_idle_low = if inp.engine_speed.status != .ok {
+		.not_tested
+	} else if inp.engine_speed.rpm < 400 {
+		.failed
+	} else {
+		.passed
+	}
 }

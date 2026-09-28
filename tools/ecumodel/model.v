@@ -1499,3 +1499,17 @@ pub fn validate_bulk(doc toml.Doc, part_names map[string]bool, thread_part map[s
 	}
 	return errs
 }
+
+// fault_fbs is THE rule for which FBs own [[fault]]s, shared by cfg2v (which numbers their report /
+// control channels) and loom2v (which names and wires them): the FB part of each `from =
+// "Fb.handler"`, in first-declaration order.
+pub fn fault_fbs(froms []string) []string {
+	mut out := []string{}
+	for from in froms {
+		fb := from.all_before('.')
+		if fb != '' && fb !in out {
+			out << fb
+		}
+	}
+	return out
+}
