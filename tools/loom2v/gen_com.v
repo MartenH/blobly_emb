@@ -673,9 +673,10 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				for i, f in m.faults {
 					if f.signal != '' {
 						glue << '\tsdeb_${i} fault.Debounce // ${f.name}: ${f.signal} ${f.on}, debounced here'
-						glue << '\tsev_${i} bool // an event stepped it since the last pass top: skip the level step'
+						glue << '\tsev_${i} bool // a publication stepped it since the last pass top: skip the level step'
 						if f.on == 'lost' {
-							glue << '\tslost_${i} u32 // the lost-frame count last seen'
+							lt := (m.sig_of[f.signal] or { SigInfo{} }).lost_type
+							glue << '\tslost_${i} ${lt} // the lost-frame count last seen (wrapping)'
 						}
 					}
 				}
@@ -2083,10 +2084,11 @@ fn fault_pass_lines(m Model) []string {
 
 // rx_publish_hooks: what a signal-status fault needs from EVERY publication of a signal it
 // watches — a good decode, a deadline or E2E timeout, an integrity failure, a late frame — in one
-// place, so no publish path can be missed. The level is recorded for the pass-top step; an EVENT
-// (the status it watches, or the lost count rising) is a failed result stepped and consumed right
-// here, so it lands on the correct side of every boundary inside the drain: a cycle edge, a clear,
-// a 0x28 switching reception. rx_cycle_hooks follows, after the whole publication group.
+// place, so no publish path can be missed. Each publication IS a test result (failed, passed, or
+// not tested), stepped and consumed right here, so it lands on the correct side of every boundary
+// inside the drain: a cycle edge, a clear, a 0x28 switching reception. The pass top only steps
+// the level for a pass with no publication (a timeout holding, a sender gone quiet).
+// rx_cycle_hooks follows, after the whole publication group.
 fn rx_publish_hooks(m Model, sname string, fld string, ind string) []string {
 	if sname !in fault_sources(m) {
 		return []string{}
@@ -2097,19 +2099,28 @@ fn rx_publish_hooks(m Model, sname string, fld string, ind string) []string {
 		if f.signal != sname {
 			continue
 		}
-		cond := match f.on {
-			'timeout' { '${fld}.status == .timeout' }
-			'integrity' { '${fld}.status == .integrity' }
-			else { 'u32(${fld}.lost) > st.slost_${i}' }
+		res := match f.on {
+			'timeout', 'integrity' {
+				'if ${fld}.status == .${f.on} { fault.TestResult.failed } else if ${fld}.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
+			}
+			else {
+				// the count wraps in its own type: a gap is a small forward step, modulo
+				lt := (m.sig_of[f.signal] or { SigInfo{} }).lost_type
+				half := match lt {
+					'u8' { '0x80' }
+					'u16' { '0x8000' }
+					else { '0x8000_0000' }
+				}
+				d := '${lt}(${fld}.lost - st.slost_${i})'
+				'if ${d} != 0 && ${d} < ${half} { fault.TestResult.failed } else if ${fld}.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
+			}
 		}
-		out << '${ind}if ${cond} {'
-		out << '${ind}\tst.sdeb_${i}.apply(st.fmem.control_gen(${i}))'
-		out << '${ind}\tst.sdeb_${i}.step(fault.TestResult.failed, now, diag_rx_ok)'
-		out << '${ind}\tst.fmem.consume(${i}, st.sdeb_${i}.rep)'
-		out << '${ind}\tst.sev_${i} = true'
-		out << '${ind}}'
+		out << '${ind}st.sdeb_${i}.apply(st.fmem.control_gen(${i}))'
+		out << '${ind}st.sdeb_${i}.step(${res}, now, diag_rx_ok)'
+		out << '${ind}st.fmem.consume(${i}, st.sdeb_${i}.rep)'
+		out << '${ind}st.sev_${i} = true'
 		if f.on == 'lost' {
-			out << '${ind}st.slost_${i} = u32(${fld}.lost)'
+			out << '${ind}st.slost_${i} = ${fld}.lost'
 		}
 	}
 	return out
@@ -2140,8 +2151,9 @@ fn rx_cycle_hooks(m Model, list []string, ind string) []string {
 }
 
 // signal_fault_step_lines: the pass-top step of each signal-status fault — its watched signal's
-// LEVEL (the condition still holding, a good status, or not known), once per pass. A pass whose
-// drain already stepped an event (rx_publish_hooks) skips it: one condition, one result.
+// LEVEL (the condition still holding, a good status, or not known) — for a pass whose drain
+// published nothing (rx_publish_hooks stepped those). While the test is disabled it always steps,
+// disabled, so a time-based run never survives a 0x28 pause.
 fn signal_fault_step_lines(m Model, ind string) []string {
 	mut out := []string{}
 	for i, f in m.faults {
@@ -2161,9 +2173,10 @@ fn signal_fault_step_lines(m Model, ind string) []string {
 		// while 0x28 has reception off (or its silence is still latched) nothing is received: the
 		// level is not known, so the test is disabled, not passed or failed
 		en := if rx_off_latched(m, []string{}, m.isotp_conns[0].bus) { 'diag_rx_ok && !st.diag_rx_was_off' } else { 'diag_rx_ok' }
-		out << '${ind}if st.sev_${i} {'
+		out << '${ind}if st.sev_${i} && ${en} {'
 		out << '${ind}\tst.sev_${i} = false'
 		out << '${ind}} else {'
+		out << '${ind}\tst.sev_${i} = false'
 		out << '${ind}\tst.sdeb_${i}.apply(st.fmem.control_gen(${i}))'
 		out << '${ind}\tst.sdeb_${i}.step(${res}, now, ${en})'
 		out << '${ind}\tst.fmem.consume(${i}, st.sdeb_${i}.rep)'

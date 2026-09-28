@@ -252,12 +252,13 @@ on     = "timeout"                     # or "integrity" / "lost"
 The watched signal needs `status`; `timeout` also needs a deadline on its frame, `integrity` E2E
 or SecOC, `lost` the E2E `lost` counter — each refused at generation when missing.
 
-- **An event** (a frame that fails E2E or SecOC, a deadline running out, a counter gap) is a
-  failed result, stepped where the frame is published. That places it on the right side of an
-  operation-cycle edge, a clear or a 0x28 switch in the same 10 ms pass. A corrupt frame followed
-  by a good one is still one integrity event.
-- **The level** (the condition still holding, a good status, or not known) is stepped once per
-  pass, and only in a pass that had no event.
+- **Every publication of the watched signal is a result**, stepped where the frame is published.
+  A frame that fails E2E or SecOC, a deadline running out, or a counter gap is failed; a good
+  frame is passed. That places each one on the right side of an operation-cycle edge, a clear or
+  a 0x28 switch in the same 10 ms pass. A corrupt frame followed by a good one is still one
+  integrity failure.
+- **The level** (a timeout still holding, a sender gone quiet) is stepped once per pass, and only
+  in a pass that published nothing.
 - `never_received` is not tested, and nothing is tested while 0x28 has reception off.
 - A `lost` gap is one failed result, and the next good frame passes. So a `lost` fault takes
   `fail = 1`, and its DTC confirms without staying testFailed.

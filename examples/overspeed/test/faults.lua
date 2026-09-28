@@ -319,3 +319,23 @@ test("Signal faults: a frame right after an in-drain re-enable is not overwritte
   d:raw(fromhex("14 FF FF FF"))
   rpm(3000, 60)
 end)
+
+test("Signal faults: a good frame drained before 0x28 switches reception off still passes the test", function()
+  local d = diag()
+  ignition(true)
+  brakes(5)
+  d:session(0x03)
+  d:raw(fromhex("14 FF FF FF"))
+  brake(0, true); sleep_ms(40)                            -- integrity failed
+  check.equal(dtc(d, "C4 18 00") & 0x01, 0x01)
+  -- ONE good frame and a suppressed FUNCTIONAL rx-off (served inline), back to back
+  brake()
+  bus.send("CAN1", 0x7DF, fromhex("03 28 82 F1 00 00 00 00"))
+  sleep_ms(60)
+  check.equal(dtc(d, "C4 18 00") & 0x01, 0, "the good frame before the disable was not a pass")
+  check.equal(tohex(d:raw(fromhex("28 00 F1"))), "68 00")
+  d:session(0x01)
+  brakes(5)
+  d:raw(fromhex("14 FF FF FF"))
+  rpm(3000, 60)
+end)
