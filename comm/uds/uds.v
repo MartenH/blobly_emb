@@ -6,16 +6,19 @@ module uds
 // filled in by the generated bridge (docs/diagnostics.md §3.1).
 //
 // Services: 0x10 DiagnosticSessionControl, 0x11 ECUReset, 0x22 ReadDataByIdentifier (several
-// DIDs per request), 0x28 CommunicationControl, 0x2E WriteDataByIdentifier, 0x3E TesterPresent.
-// Anything else -> 0x11 serviceNotSupported.
+// DIDs per request), 0x27 SecurityAccess (with injected SecurityOps), 0x28 CommunicationControl,
+// 0x2E WriteDataByIdentifier, 0x3E TesterPresent. Anything else -> 0x11 serviceNotSupported.
 //
 // Negative responses follow ISO 14229-1's evaluation order. Every service: supported (0x11) →
 // allowed in the active session (0x7F) → minimum length (0x13); then, for a subfunction service:
 // subfunction supported (0x12) → exact length (0x13) → conditions / range. The DID services follow
 // their own flow: 0x22 — length, then each DID's support and session (0x31 when none answers),
 // then security (0x33), then the response size (0x14); 0x2E — length, then the DID's support,
-// writability and session (0x31), then security (0x33), then the record length (0x13). A FUNCTIONAL request never answers 0x11, 0x12, 0x31, 0x7E or 0x7F
-// (handle_functional) — a broadcast into an unsupported or gated service stays silent.
+// writability and session (0x31), then security (0x33), then the record length (0x13). 0x27 —
+// subfunction (0x12), then requestSeed: the lockout delay (0x37); sendKey: length (0x13), a seed
+// of that level outstanding (0x24), the key (0x35, or 0x36 on the last allowed attempt). A
+// FUNCTIONAL request never answers 0x11, 0x12, 0x31, 0x7E or 0x7F (handle_functional) — a broadcast
+// into an unsupported or gated service stays silent — and a functional 0x27 is ignored outright.
 
 pub const max_dids = 16
 pub const max_did_data = 32 // bytes stored per DID
@@ -56,8 +59,30 @@ pub const nrc_conditions_not_correct = u8(0x22)
 pub const nrc_request_sequence_error = u8(0x24)
 pub const nrc_request_out_of_range = u8(0x31)
 pub const nrc_security_access_denied = u8(0x33)
+pub const nrc_invalid_key = u8(0x35)
+pub const nrc_exceeded_attempts = u8(0x36)
+pub const nrc_time_delay_not_expired = u8(0x37)
 pub const nrc_subfunction_not_in_session = u8(0x7E)
 pub const nrc_service_not_in_session = u8(0x7F)
+
+// SecurityAccess (0x27). Level L is requested with subfunction 2L-1 (requestSeed) and unlocked
+// with 2L (sendKey); a DID's `security` gate names L.
+pub const seed_len = 4
+pub const max_security_level = 8
+pub const default_sa_attempts = u8(3)
+pub const default_sa_delay_us = u64(10_000_000)
+
+// SecurityOps is the 0x27 seam (docs/diagnostics.md §3.1, decision D5): where a seed comes from
+// and whether a key is right for it. Function pointers, the shape boot.Prog.rng already uses, so
+// comm/uds carries no C and no key: an OEM algorithm (or an HSM) lives in the board glue below
+// the backend line. Nil `seed` or `key_ok` = 0x27 is not supported. `key_ok` compares; an
+// implementation holding a real secret should compare in constant time.
+pub struct SecurityOps {
+pub mut:
+	ctx    voidptr = unsafe { nil }
+	seed   fn (ctx voidptr, out &u8, n int) bool = unsafe { nil }
+	key_ok fn (ctx voidptr, level u8, seed &u8, key &u8, n int) bool = unsafe { nil }
+}
 
 // Did is one Data Identifier: constant bytes, a RAM cell (writable), and/or kept fresh from a
 // live signal by the bridge. Access is gated per DID: the session masks (0 = every session) and
@@ -110,6 +135,17 @@ pub mut:
 	// (boot.Prog), reached by a handoff (boot cell + reset) that is not built yet — so it refuses
 	// 0x10 02 rather than enter a session that cannot program. The bootloader leaves it false.
 	no_programming bool
+	// SecurityAccess (0x27): the seam, the levels served (bit L-1 for level L), the failed-key
+	// limit and the lockout delay (0 = the defaults). sa_* below is the exchange in progress.
+	security        SecurityOps
+	security_levels u8
+	sa_attempts     u8
+	sa_delay_us     u64
+	sa_level        u8 // the level whose seed is outstanding (0 = none)
+	sa_seed         [seed_len]u8
+	sa_failed       u8
+	sa_delay_until  u64
+	sa_arm_delay    bool // start the delay at the next tick (boot / reset: the clock is not known yet)
 }
 
 // init puts the server in the default session with everything unlocked-state cleared, and
@@ -124,10 +160,15 @@ pub fn (mut s Server) init(resp_cap int) {
 
 
 // reset_state returns the diagnostic state to power-on: default session, security locked,
-// communication enabled, no pending reset. DIDs are untouched.
+// communication enabled, no pending reset. DIDs are untouched. It also starts the 0x27 lockout
+// delay: the failed-key count is not persisted, so a reset between guesses must cost the delay
+// or power-cycling would bypass the limit (docs/diagnostics.md §3.1).
 pub fn (mut s Server) reset_state() {
 	s.session = session_default
 	s.unlocked = 0
+	s.sa_level = 0
+	s.sa_failed = 0
+	s.sa_arm_delay = true
 	s.normal_tx_off = false
 	s.normal_rx_off = false
 	s.reset_req = 0
@@ -139,6 +180,10 @@ pub fn (mut s Server) reset_state() {
 // S3 returns to default (ISO 14229-2). Call once per owner pass, before handling requests.
 pub fn (mut s Server) tick(now_us u64) {
 	s.now_us = now_us
+	if s.sa_arm_delay {
+		s.sa_arm_delay = false
+		s.sa_delay_until = now_us + s.sa_delay()
+	}
 	if s.session == session_default || s.session == 0 || !s.rx_seen {
 		return
 	}
@@ -177,6 +222,9 @@ pub fn (mut s Server) handle(req &u8, req_len int, resp &u8) int {
 // handle_functional dispatches a FUNCTIONALLY addressed request: identical, except the
 // negative responses ISO 14229-1 forbids for functional requests are withheld.
 pub fn (mut s Server) handle_functional(req &u8, req_len int, resp &u8) int {
+	if req_len >= 1 && unsafe { req[0] } == 0x27 {
+		return 0 // SecurityAccess is physical-only: a broadcast key would spend a guess on every ECU
+	}
 	n := s.dispatch(req, req_len, resp)
 	if n == 3 && unsafe { resp[0] } == 0x7F {
 		nrc := unsafe { resp[2] }
@@ -207,6 +255,7 @@ fn (mut s Server) dispatch(req &u8, req_len int, resp &u8) int {
 		0x10 { return s.session_control(req, req_len, resp) }
 		0x11 { return s.ecu_reset(req, req_len, resp) }
 		0x22 { return s.read_did(req, req_len, resp) }
+		0x27 { return s.security_access(req, req_len, resp) }
 		0x28 { return s.communication_control(req, req_len, resp) }
 		0x2E { return s.write_did(req, req_len, resp) }
 		else { return negative(resp, sid, nrc_service_not_supported) }
@@ -219,17 +268,19 @@ fn (s Server) service_supported(sid u8) bool {
 	return match sid {
 		0x10, 0x22, 0x2E, 0x3E { true }
 		0x11 { s.serves_reset }
+		0x27 { s.security.seed != unsafe { nil } && s.security.key_ok != unsafe { nil } && s.security_levels != 0 }
 		0x28 { s.serves_comm_control }
 		else { false }
 	}
 }
 
-// service_sessions: where each service may run. CommunicationControl is a non-default-session
-// service (a tester must enter extended first, so a stray request on a quiet bus cannot silence
-// an ECU); everything else runs in every session, with per-DID gating on top for 0x22/0x2E.
+// service_sessions: where each service may run. CommunicationControl and SecurityAccess are
+// non-default-session services (a tester must enter extended first, so a stray request on a quiet
+// bus cannot silence an ECU or spend its key attempts); everything else runs in every session,
+// with per-DID gating on top for 0x22/0x2E.
 fn service_sessions(sid u8) u8 {
 	return match sid {
-		0x28 { in_extended | in_programming }
+		0x27, 0x28 { in_extended | in_programming }
 		else { u8(0) }
 	}
 }
@@ -252,6 +303,7 @@ fn in_mask(mask u8, session u8) bool {
 fn (mut s Server) enter_session(session u8) {
 	if session != s.session {
 		s.unlocked = 0
+		s.sa_level = 0 // a seed does not outlive its session
 	}
 	s.session = session
 	if session == session_default {
@@ -385,6 +437,146 @@ fn (mut s Server) communication_control(req &u8, req_len int, resp &u8) int {
 		resp[1] = sub
 	}
 	return 2
+}
+
+fn (s Server) sa_delay() u64 {
+	return if s.sa_delay_us == 0 { default_sa_delay_us } else { s.sa_delay_us }
+}
+
+fn (s Server) sa_max_attempts() u8 {
+	return if s.sa_attempts == 0 { default_sa_attempts } else { s.sa_attempts }
+}
+
+// security_access (0x27). requestSeed (odd subfunction 2L-1) hands out a fresh seed for level L —
+// all zeros when L is already unlocked (ISO 14229-1) — and sendKey (2L) checks a key against the
+// OUTSTANDING seed of that same level, once: a wrong key spends the seed. After sa_attempts wrong
+// keys the answer is exceededNumberOfAttempts and no seed is issued until the lockout delay has
+// passed (requiredTimeDelayNotExpired); the delay also runs after every reset (reset_state).
+// requestSeed always answers, since the seed IS the answer; sendKey honours the suppress bit.
+fn (mut s Server) security_access(req &u8, req_len int, resp &u8) int {
+	if req_len < 2 {
+		return negative(resp, 0x27, nrc_incorrect_length)
+	}
+	sub := unsafe { req[1] } & 0x7F
+	level := (sub + 1) / 2
+	if sub == 0 || level > max_security_level || s.security_levels & (u8(1) << (level - 1)) == 0 {
+		return negative(resp, 0x27, nrc_subfunction_not_supported)
+	}
+	if sub & 1 == 1 {
+		return s.request_seed(level, sub, resp)
+	}
+	return s.send_key(level, req, req_len, resp)
+}
+
+fn (mut s Server) request_seed(level u8, sub u8, resp &u8) int {
+	// an optional securityAccessDataRecord after the subfunction is accepted and ignored
+	if s.sa_arm_delay || s.now_us < s.sa_delay_until {
+		return negative(resp, 0x27, nrc_time_delay_not_expired)
+	}
+	s.sa_level = 0
+	if s.unlocked == level {
+		unsafe {
+			resp[0] = 0x67
+			resp[1] = sub
+			for i in 0 .. seed_len {
+				resp[2 + i] = 0
+			}
+		}
+		return 2 + seed_len
+	}
+	if !s.security.seed(s.security.ctx, &s.sa_seed[0], seed_len) {
+		return negative(resp, 0x27, nrc_conditions_not_correct)
+	}
+	mut zero := true
+	for b in s.sa_seed {
+		if b != 0 {
+			zero = false
+		}
+	}
+	if zero {
+		// all zeros means "already unlocked" on the wire: never hand it out as a real seed
+		return negative(resp, 0x27, nrc_conditions_not_correct)
+	}
+	s.sa_level = level
+	unsafe {
+		resp[0] = 0x67
+		resp[1] = sub
+		for i in 0 .. seed_len {
+			resp[2 + i] = s.sa_seed[i]
+		}
+	}
+	return 2 + seed_len
+}
+
+fn (mut s Server) send_key(level u8, req &u8, req_len int, resp &u8) int {
+	if req_len != 2 + seed_len {
+		return negative(resp, 0x27, nrc_incorrect_length)
+	}
+	if s.sa_level != level {
+		return negative(resp, 0x27, nrc_request_sequence_error) // no seed of this level outstanding
+	}
+	s.sa_level = 0 // one key per seed
+	if !s.security.key_ok(s.security.ctx, level, &s.sa_seed[0], unsafe { req + 2 }, seed_len) {
+		s.sa_failed++
+		if s.sa_failed >= s.sa_max_attempts() {
+			s.sa_failed = 0
+			s.sa_delay_until = s.now_us + s.sa_delay()
+			return negative(resp, 0x27, nrc_exceeded_attempts)
+		}
+		return negative(resp, 0x27, nrc_invalid_key)
+	}
+	s.sa_failed = 0
+	s.unlocked = level
+	if unsafe { req[1] } & 0x80 != 0 {
+		return 0
+	}
+	unsafe {
+		resp[0] = 0x67
+		resp[1] = req[1]
+	}
+	return 2
+}
+
+// ReferenceSecurity is the SIM / BENCH key, NOT a secret: key[i] = seed[i] XOR 0xFF, the reference
+// algorithm blobly_net's client already implements (uds.security_key), so tester and server unlock
+// with ONE algorithm (decision D5). Its seeds come from a xorshift generator — unpredictable enough
+// for a test, not for a vehicle. A production image injects its own SecurityOps.
+pub struct ReferenceSecurity {
+pub mut:
+	state u32
+}
+
+// ops returns the SecurityOps backed by `r`, whose generator starts from `entropy` (any value; 0 is
+// replaced, since xorshift never leaves zero). `r` must outlive the server that holds the ops.
+pub fn (mut r ReferenceSecurity) ops(entropy u32) SecurityOps {
+	r.state = if entropy == 0 { u32(0x9E3779B9) } else { entropy }
+	return SecurityOps{
+		ctx:    unsafe { voidptr(&r) }
+		seed:   reference_seed
+		key_ok: reference_key_ok
+	}
+}
+
+fn reference_seed(ctx voidptr, out &u8, n int) bool {
+	mut r := unsafe { &ReferenceSecurity(ctx) }
+	for i in 0 .. n {
+		r.state ^= r.state << 13
+		r.state ^= r.state >> 17
+		r.state ^= r.state << 5
+		unsafe {
+			out[i] = u8(r.state >> 24)
+		}
+	}
+	return true
+}
+
+fn reference_key_ok(ctx voidptr, level u8, seed &u8, key &u8, n int) bool {
+	for i in 0 .. n {
+		if unsafe { key[i] != seed[i] ^ 0xFF } {
+			return false
+		}
+	}
+	return true
 }
 
 // find_did: the table index of `id`, or -1.

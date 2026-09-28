@@ -107,6 +107,7 @@ mut:
 	tp_diag isotp.Link
 	tp_diag_buf [isotp.max_payload]u8
 	uds_diag uds.Server
+	sa_diag uds.ReferenceSecurity // 0x27 on the host: the SIM key (not a secret, decision D5)
 	uds_diag_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity
 	diag_rx_was_off bool // 0x28 had rx off last pass: restart the deadlines on return
 }
@@ -278,6 +279,9 @@ pub fn partition_can0(ch can.Channel) {
 	st.uds_diag.serves_comm_control = true // and gates its frames on 0x28
 	st.uds_diag.single_network = true // 0x28 "all networks" = this one
 	st.uds_diag.s3_us = u64(2000) * 1000
+	st.uds_diag.security = st.sa_diag.ops(u32(osal.now_us()))
+	st.uds_diag.security_levels = u8(0x01)
+	st.uds_diag.sa_delay_us = u64(1000) * 1000
 	st.uds_diag.dids[0] = uds.Did{
 		id: u16(0xf190)
 	}
@@ -318,7 +322,15 @@ pub fn partition_can0(ch can.Channel) {
 	}
 	st.uds_diag.dids[3].data[0] = u8(0x00)
 	st.uds_diag.dids[3].len = 1
-	st.uds_diag.ndid = 4
+	st.uds_diag.dids[4] = uds.Did{
+		id: u16(0xf1ac)
+		writable: true
+		write_sessions: u8(0x04)
+		write_security: u8(1)
+	}
+	st.uds_diag.dids[4].data[0] = u8(0x00)
+	st.uds_diag.dids[4].len = 1
+	st.uds_diag.ndid = 5
 	mut sched := loom.Scheduler{}
 	sched.every(10_000, io_can0_10ms, &st)
 	for {

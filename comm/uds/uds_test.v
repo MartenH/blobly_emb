@@ -1,9 +1,10 @@
 module uds
 
-// @verifies SYS-REQ-DIAG-001 REQ-DIAG-001 REQ-DIAG-003 REQ-DIAG-004 REQ-DIAG-005 REQ-DIAG-006 REQ-DIAG-007
+// @verifies SYS-REQ-DIAG-001 REQ-DIAG-001 REQ-DIAG-003 REQ-DIAG-004 REQ-DIAG-005 REQ-DIAG-006 REQ-DIAG-007 REQ-DIAG-008
 // (service dispatch with positive/negative responses, unknown-service/DID NRCs, the
 //  suppressPosRspMsgIndicationBit silence; sessions + S3 (003), NRC order + session/security
-//  gating (004), multi-DID reads (005), functional-request silence (006), 0x11/0x28 (007).)
+//  gating (004), multi-DID reads (005), functional-request silence (006), 0x11/0x28 (007),
+//  0x27 seed/key with attempt limit and lockout delay (008).)
 
 fn call(mut s Server, req []u8) []u8 {
 	mut resp := [256]u8{}
@@ -118,7 +119,7 @@ fn started() Server {
 // Every SID service_supported() admits must reach a handler: a SID listed there but missing
 // from dispatch()'s match would answer serviceNotSupported with no compile error.
 fn test_every_supported_service_dispatches() {
-	mut s := started()
+	mut s := secured() // 0x27 is supported only with its ops injected
 	call(mut s, [u8(0x10), 0x03])
 	for sid in 0 .. 256 {
 		if !s.service_supported(u8(sid)) {
@@ -334,6 +335,117 @@ fn test_write_security_precedes_record_length() {
 		long << 0x55
 	}
 	assert call(mut s, long) == [u8(0x7F), 0x2E, 0x33]
+}
+
+// A server serving security level 1 with the reference key, 1 s lockout delay, past its boot
+// delay, in the extended session at t = 1 s.
+fn secured() Server {
+	mut s := started()
+	mut r := &ReferenceSecurity{}
+	s.security = r.ops(0x1234_5678)
+	s.security_levels = 0x01
+	s.sa_delay_us = 1_000_000
+	s.tick(0) // arms the boot delay
+	s.tick(1_000_000) // ... and lets it pass
+	call(mut s, [u8(0x10), 0x03])
+	return s
+}
+
+fn key_for(seed []u8) []u8 {
+	return seed.map(it ^ 0xFF)
+}
+
+fn send_key(mut s Server, key []u8) []u8 {
+	mut req := [u8(0x27), 0x02]
+	req << key
+	return call(mut s, req)
+}
+
+// REQ-DIAG-008: requestSeed → sendKey with the reference key unlocks the level, which then opens
+// the DID gates naming it; an unlocked level's seed is all zeros.
+fn test_security_access_unlocks_with_the_reference_key() {
+	mut s := secured()
+	s.dids[1].write_security = 1
+	assert call(mut s, [u8(0x2E), 0xF1, 0xAA, 0x01]) == [u8(0x7F), 0x2E, 0x33]
+	r := call(mut s, [u8(0x27), 0x01])
+	assert r.len == 2 + seed_len && r[0] == 0x67 && r[1] == 0x01
+	assert r[2..] != [u8(0), 0, 0, 0]
+	assert send_key(mut s, key_for(r[2..])) == [u8(0x67), 0x02]
+	assert s.unlocked == 1
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x67), 0x01, 0, 0, 0, 0]
+	assert call(mut s, [u8(0x2E), 0xF1, 0xAA, 0x01]) == [u8(0x6E), 0xF1, 0xAA]
+}
+
+// REQ-DIAG-008 / REQ-DIAG-004: 0x27's own order — session, length, subfunction, then for sendKey
+// length and sequence; a server with no ops injected does not serve 0x27 at all.
+fn test_security_access_nrc_order() {
+	mut s := secured()
+	assert call(mut s, [u8(0x27)]) == [u8(0x7F), 0x27, 0x13]
+	assert call(mut s, [u8(0x27), 0x00]) == [u8(0x7F), 0x27, 0x12]
+	assert call(mut s, [u8(0x27), 0x03]) == [u8(0x7F), 0x27, 0x12] // level 2 is not served
+	assert call(mut s, [u8(0x27), 0x7F]) == [u8(0x7F), 0x27, 0x12]
+	assert call(mut s, [u8(0x27), 0x02, 1, 2, 3]) == [u8(0x7F), 0x27, 0x13]
+	assert send_key(mut s, [u8(1), 2, 3, 4]) == [u8(0x7F), 0x27, 0x24] // no seed requested
+	call(mut s, [u8(0x10), 0x01])
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x7F]
+	mut plain := started()
+	call(mut plain, [u8(0x10), 0x03])
+	assert call(mut plain, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x11]
+}
+
+// REQ-DIAG-008: a wrong key spends its seed; the last allowed attempt answers
+// exceededNumberOfAttempts, and no seed is issued until the lockout delay has passed.
+fn test_wrong_keys_spend_the_seed_and_lock_out() {
+	mut s := secured()
+	for attempt in 1 .. 4 {
+		r := call(mut s, [u8(0x27), 0x01])
+		want := if attempt < 3 { nrc_invalid_key } else { nrc_exceeded_attempts }
+		assert send_key(mut s, key_for(r[2..]).map(it ^ 0x01)) == [u8(0x7F), 0x27, want]
+		assert send_key(mut s, key_for(r[2..])) == [u8(0x7F), 0x27, 0x24], 'a spent seed was accepted'
+	}
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37]
+	s.tick(2_000_000 - 1)
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37]
+	s.tick(2_000_000)
+	r := call(mut s, [u8(0x27), 0x01])
+	assert r[0] == 0x67
+	assert send_key(mut s, key_for(r[2..])) == [u8(0x67), 0x02]
+}
+
+// REQ-DIAG-008: the failed-key count lives in RAM, so a reset must not buy fresh attempts — the
+// lockout delay runs from every reset (and boot) before a seed is issued.
+fn test_a_reset_imposes_the_lockout_delay() {
+	mut s := secured()
+	s.reset_state()
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37], 'no tick yet: the delay is still pending'
+	s.tick(1_500_000)
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x37]
+	s.tick(2_500_000)
+	assert call(mut s, [u8(0x27), 0x01])[0] == 0x67
+}
+
+// REQ-DIAG-008 / REQ-DIAG-003: a session transition relocks and voids an outstanding seed.
+fn test_a_session_change_voids_the_seed() {
+	mut s := secured()
+	r := call(mut s, [u8(0x27), 0x01])
+	call(mut s, [u8(0x10), 0x01])
+	call(mut s, [u8(0x10), 0x03])
+	assert send_key(mut s, key_for(r[2..])) == [u8(0x7F), 0x27, 0x24]
+	assert s.unlocked == 0
+}
+
+// REQ-DIAG-008: sendKey honours suppressPosRsp; a FUNCTIONAL 0x27 is ignored outright, so a
+// broadcast can neither hand out seeds nor spend key attempts.
+fn test_security_access_suppression_and_functional() {
+	mut s := secured()
+	assert call_functional(mut s, [u8(0x27), 0x01]).len == 0
+	assert s.sa_level == 0
+	r := call(mut s, [u8(0x27), 0x01])
+	mut req := [u8(0x27), 0x82]
+	req << key_for(r[2..])
+	assert call(mut s, req).len == 0
+	assert s.unlocked == 1
 }
 
 // A response buffer too small for the fixed responses: the server stays silent rather than

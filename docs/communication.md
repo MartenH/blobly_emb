@@ -138,7 +138,7 @@ already carries `Request`/`Response`).
 A table-driven, no-alloc `Server` sits above each ISO-TP connection. The bridge
 hands it a reassembled request and ships the response it builds. Services:
 `0x10` DiagnosticSessionControl, `0x11` ECUReset, `0x22` ReadDataByIdentifier
-(several DIDs per request), `0x28` CommunicationControl, `0x2E`
+(several DIDs per request), `0x27` SecurityAccess, `0x28` CommunicationControl, `0x2E`
 WriteDataByIdentifier, `0x3E` TesterPresent; anything else → `0x7F sid 0x11`.
 Negative responses follow ISO 14229-1's evaluation order.
 
@@ -159,6 +159,17 @@ functional requests (one single frame), answered on `tx_id`, with the negative r
 functional request must not send withheld. The plan these belong to is
 [diagnostics.md](diagnostics.md).
 
+`0x27` (extended or programming session, physical requests only) unlocks the levels the `[[did]]`
+gates name: requestSeed `27 2L-1` returns a 4-byte seed, sendKey `27 2L` checks the key
+against that one seed, which a wrong key spends. After `security_attempts` wrong keys
+(default 3) the answer is `0x36` and no seed is issued for `security_delay_ms` (default
+10 s, `0x37`) — and the same delay runs after every boot and reset, because the failed-key
+count is not persisted and a power cycle must not buy fresh guesses. Seeds and keys come
+from an injected `uds.SecurityOps`, so the stack fixes no key algorithm; the generated host
+bridge injects `uds.ReferenceSecurity`, blobly_net's reference key (each seed byte XOR
+0xFF) — a SIM key, not a secret. A target image injects the board's (with UDS on the
+target, rung R2).
+
 DataIdentifiers come from `[[did]]` — a constant, a **live signal** (read from the
 IOC each tick and encoded big-endian), or a writable RAM cell:
 
@@ -175,7 +186,7 @@ id = 0xF1AB; bytes = "00"; write = { session = ["extended"] }   # gated write
 
 `read` / `write` take `{ session = [...], security = N }`: the sessions the access is
 allowed in (default / extended / programming / safety; absent = every session) and the
-0x27 level it needs (absent = none; 0x27 itself is not served yet). A DID not allowed in
+0x27 level it needs (1..8; absent = none). A DID not allowed in
 the active session is answered as unsupported (`0x31`). A server holds at most 16 DIDs of
 at most 32 bytes each, checked at generation.
 
@@ -266,10 +277,10 @@ bus-bridge partition; signals still cross to app partitions via the IOC.
    client (`:raw`) asserts single- and multi-frame round-trips on the bus.
 4. **Diagnostics (UDS)** — the request/response half, on the **host**. `comm/uds`
    table-driven server (sessions + S3, ISO NRC order, per-DID session/security gating,
-   multi-DID reads, functional requests, 0x11, 0x28) above each ISO-TP connection;
+   multi-DID reads, functional requests, 0x11, 0x27, 0x28) above each ISO-TP connection;
    `[[did]]` sources (constant / live signal / RAM). blobly_net's `uds` client asserts
    all of it on vcan (`examples/overspeed/test/diag.lua`). Not yet: UDS on the target,
-   0x27, fault memory (0x19/0x14/0x85) — the rungs in [diagnostics.md](diagnostics.md).
+   fault memory (0x19/0x14/0x85) — the rungs in [diagnostics.md](diagnostics.md).
 
 ## Testing
 

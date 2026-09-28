@@ -64,3 +64,12 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-008"
+title = "Security access"
+text = "The diagnostic server shall unlock a security level only for a key that matches the seed it most recently issued for that level, in a non-default session, with each seed usable for one key; shall refuse further seeds for a lockout delay after a configured number of wrong keys and after every reset or power-up; shall ignore security access requests sent to a functional address; and shall obtain seeds and check keys through an injected interface, so that no key algorithm is fixed by the stack."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"

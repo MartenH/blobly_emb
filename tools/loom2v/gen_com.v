@@ -657,6 +657,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\ttp_${tp} isotp.Link'
 			glue << '\ttp_${tp}_buf [isotp.max_payload]u8'
 			glue << '\tuds_${tp} uds.Server'
+			if security_levels(m.dids) != 0 {
+				glue << '\tsa_${tp} uds.ReferenceSecurity // 0x27 on the host: the SIM key (not a secret, decision D5)'
+			}
 			glue << '\tuds_${tp}_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity'
 		}
 		if conns.len > 0 && rx_by_msg.keys().any((m.frames.rx_timeout_us[it] or { 0 }) > 0) {
@@ -1358,6 +1361,23 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			if c.s3_ms > 0 {
 				glue << '\tst.uds_${tp}.s3_us = u64(${c.s3_ms}) * 1000'
 			}
+			// 0x27 serves exactly the levels some DID gate names; the host bridge injects the
+			// reference key (blobly_net's), seeded from the clock. A target injects the board's
+			// SecurityOps instead (R2).
+			levels := security_levels(m.dids)
+			if levels == 0 && (c.security_attempts != 0 || c.security_delay_ms != 0) {
+				panic('loom2v: [[isotp]] "${c.name}" configures security_attempts / security_delay_ms, but no [[did]] gate names a security level — there is nothing to unlock')
+			}
+			if levels != 0 {
+				glue << '\tst.uds_${tp}.security = st.sa_${tp}.ops(u32(osal.now_us()))'
+				glue << '\tst.uds_${tp}.security_levels = u8(0x${levels.hex()})'
+				if c.security_attempts != 0 {
+					glue << '\tst.uds_${tp}.sa_attempts = u8(${c.security_attempts})'
+				}
+				if c.security_delay_ms != 0 {
+					glue << '\tst.uds_${tp}.sa_delay_us = u64(${c.security_delay_ms}) * 1000'
+				}
+			}
 			for idx, did in m.dids {
 				glue << '\tst.uds_${tp}.dids[${idx}] = uds.Did{'
 				glue << '\t\tid: u16(0x${did.id.hex()})'
@@ -1763,4 +1783,18 @@ fn did_refresh(m Model, tp string, ind string) []string {
 		out << '${ind}}'
 	}
 	return out
+}
+
+// security_levels: the 0x27 levels a server must serve — every level some [[did]] read or write gate
+// names (bit L-1 for level L). A level nothing is gated on is not offered: unlocking it opens nothing.
+fn security_levels(dids []DidCfg) u8 {
+	mut mask := u8(0)
+	for d in dids {
+		for l in [d.read_security, d.write_security] {
+			if l != 0 {
+				mask |= u8(1) << (l - 1)
+			}
+		}
+	}
+	return mask
 }
