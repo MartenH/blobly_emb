@@ -35,7 +35,8 @@ writes only *leaf* FBs (logic) and the wiring (`ecu.toml`).
 
 An FB's handler receives a generated **Inputs** snapshot and an **Outputs**
 struct; it reads/writes them as plain fields. The Loom snapshots all inputs before
-the call and publishes all outputs after — coherent snapshot, pure transform.
+the call and publishes all outputs after — inputs do not change while the handler runs
+(each is read whole; values that must belong together go in one multi-field signal).
 
 ```v
 // app/speed_monitor.v — written by the developer
@@ -182,7 +183,7 @@ pub struct SpeedFilter {
 pub mut:
 	last u16
 }
-pub fn (mut fb SpeedFilter) on_10ms(inp sig.SpeedFilterIn, mut out sig.SpeedFilterOut) {
+pub fn (mut fb SpeedFilter) on_10ms(inp ports.SpeedFilterIn, mut out ports.SpeedFilterOut) {
 	fb.last = (fb.last * 3 + inp.vehicle_speed_raw.kph) / 4 // simple IIR
 	out.vehicle_speed = sig.VehicleSpeed{ kph: fb.last, status: inp.vehicle_speed_raw.status } // forwarded
 }
@@ -244,7 +245,7 @@ the FB** — only `ecu.toml` changes.
 ## Implemented
 
 - **Done**: FBs with grouped `In`/`Out` port structs; config `[[fb]]`; signal types
-  + generated `*In`/`*Out` in the `sig` module; the snapshot glue via `loom2v`;
+  + generated `*In`/`*Out` in the `ports` module; the snapshot glue via `loom2v`;
   scaling at the COM boundary (`dbc2cfg`); provenance comments on generated port
   fields + the `make trace` signal map (`docs/signal-map.md`).
 - **Still to come**: queued (event) signals + `on_<signal>_received` triggering;
