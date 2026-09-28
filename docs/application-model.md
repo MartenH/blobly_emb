@@ -157,8 +157,9 @@ generated steps on the connection — until they exist (below), they are FB code
   [um/fb-programming-model.md](um/fb-programming-model.md).
 
 Rationale: keep FBs free of representation concerns — portable across ECUs and bus
-matrices, testable with plain physical values, unaffected when a DBC scaling or a
-transform changes.
+matrices, testable with plain physical values, unaffected when a DBC scaling changes
+(and, once declared transforms exist, when a transform changes — today a transform is
+FB code, so changing one changes the FB).
 
 ```toml
 [[signal]]
