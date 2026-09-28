@@ -4733,12 +4733,12 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 		fail_thr := if time_based {
 			ms_to_us((db['fail_ms'] or { toml.Any(0) }).i64(), '[[fault]] "${name}" debounce.fail_ms')
 		} else {
-			int((db['fail'] or { toml.Any(1) }).int())
+			counter_thr((db['fail'] or { toml.Any(1) }).i64(), name, 'fail')
 		}
 		pass_thr := if time_based {
 			ms_to_us((db['pass_ms'] or { toml.Any(0) }).i64(), '[[fault]] "${name}" debounce.pass_ms')
 		} else {
-			int((db['pass'] or { toml.Any(1) }).int())
+			counter_thr((db['pass'] or { toml.Any(1) }).i64(), name, 'pass')
 		}
 		if fail_thr < 1 || pass_thr < 1 || (!time_based && (fail_thr > 0xFFFF || pass_thr > 0xFFFF)) {
 			panic('loom2v: [[fault]] "${name}": debounce thresholds must be at least 1 (counter: 1..65535 results; time: >= 1 ms)')
@@ -4850,13 +4850,27 @@ fn validate_faults(m Model, doc toml.Doc) {
 	}
 }
 
-// bool_field_of checks "Signal.field" names a bool field of a declared signal.
+// counter_thr reads a counter-debounce threshold wide and range-checks it BEFORE narrowing, so a
+// huge value can never wrap into a valid (tiny) one.
+fn counter_thr(v i64, name string, key string) int {
+	if v < 1 || v > 0xFFFF {
+		panic('loom2v: [[fault]] "${name}": debounce.${key} ${v} must be 1..65535')
+	}
+	return int(v)
+}
+
+// bool_field_of checks "Signal.field" names a bool field of a declared signal — and, on a signal
+// received from a bus, its VALUE field: the bridge decodes only that one, so any other field of a
+// received signal reads false forever.
 fn bool_field_of(m Model, ref string, what string) {
 	sname := ref.all_before('.')
 	field := ref.all_after('.')
 	si := m.sig_of[sname] or { panic('loom2v: ${what} "${ref}" names no signal') }
 	if !si.fields.any(it.name == field && it.typ == 'bool') {
 		panic('loom2v: ${what} "${ref}" is not a bool field of signal ${sname}')
+	}
+	if si.external && si.rx && field != si.val_field {
+		panic('loom2v: ${what} "${ref}": ${sname} is received from ${si.from}, which fills only its value field `${si.val_field}` — `${field}` would read false forever')
 	}
 }
 
