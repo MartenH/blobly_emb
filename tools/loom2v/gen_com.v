@@ -777,14 +777,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t}'
 				glue << '\tst.uds_${tp}.tick(now)'
 			}
-			glue << '\tmut diag_rx_ok := ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
-			for msg, _ in rx_by_msg {
-				if lost_expr(m, msg, bname, true).contains('e2e_hidden') {
-					glue << '\tif !diag_rx_ok {'
-					glue << '\t\tst.e2e_quiet_${msg} = true // silence commanded this pass, frame or not'
-					glue << '\t}'
-				}
-			}
+			glue << rx_gate_sample(m, conns, rx_by_msg.keys(), bname, '\t', true)
 		}
 		if rx_by_msg.len > 0 || conns.len > 0 || my_routes.len > 0 {
 			glue << '\tmut rx := can.Frame{}'
@@ -912,11 +905,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 						// frames missed while 0x28 has reception off were COMMANDED silence, not loss:
 						// the sequence state keeps tracking them, but the FB never sees them counted —
 						// including the gap the first fresh frame after re-enable closes, which spans
-						// the silence (e2e_quiet is also set every pass rx is off, frame or not)
-						glue << '${ind}if !diag_rx_ok {'
-						glue << '${ind}\tst.e2e_quiet_${msg} = true'
-						glue << '${ind}}'
-						glue << '${ind}if st.e2e_quiet_${msg} {'
+						// the silence (rx_gate_sample marks e2e_quiet whenever it finds rx off)
+						glue << '${ind}if st.e2e_quiet_${msg} { // set by every sampling that found rx off'
 						glue << '${ind}\tst.e2e_hidden_${msg} += st.e2e_rx_${msg}.lost_frames - lf_${msg}'
 						glue << '${ind}}'
 						glue << '${ind}if diag_rx_ok && e2e_${msg}.usable() {'
@@ -996,7 +986,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					glue << '\t\t\t\tif st.uds_${tp}.reset_req != 0 && !st.tp_${tp}.busy() {'
 					glue << '\t\t\t\t\tst.uds_${tp}.reset_state()'
 					glue << '\t\t\t\t}'
-					glue << '\t\t\t\tdiag_rx_ok = ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
+					glue << rx_gate_sample(m, conns, rx_by_msg.keys(), bname, '\t\t\t\t', false)
 					glue << '\t\t\t}'
 					glue << '\t\t}'
 				}
@@ -1051,7 +1041,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 		if conns.len > 0 && rx_by_msg.keys().any((m.frames.rx_timeout_us[it] or { 0 }) > 0) {
 			// re-sampled AFTER this pass's requests were served: a 0x28 disabling rx now suspends
 			// the deadlines before any of them can fire
-			glue << '\tdiag_rx_ok = ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
+			glue << rx_gate_sample(m, conns, rx_by_msg.keys(), bname, '\t', false)
 			glue << '\tif diag_rx_ok && st.diag_rx_was_off {'
 			for msg, _ in rx_by_msg {
 				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
@@ -1894,4 +1884,24 @@ fn lost_expr(m Model, msg string, bname string, has_diag bool) string {
 		return 'st.e2e_rx_${msg}.lost_frames - st.e2e_hidden_${msg}'
 	}
 	return 'st.e2e_rx_${msg}.lost_frames'
+}
+
+// rx_gate_sample: every sampling of the 0x28 receive gate — at the top of a pass, after a
+// functional request served inside the drain, after the pass's requests — in ONE place, with the
+// rule that rides on it: whenever reception is found off, each E2E frame whose loss count hides
+// commanded silence is marked quiet, frame or not. So a disable and re-enable inside one drain (two
+// suppressed functional requests) still leaves the silence marked for the gap that spans it.
+fn rx_gate_sample(m Model, conns []IsotpConn, rx_msgs []string, bname string, ind string, decl bool) []string {
+	mut out := []string{}
+	lhs := if decl { 'mut diag_rx_ok :=' } else { 'diag_rx_ok =' }
+	out << '${ind}${lhs} ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
+	quiet := rx_msgs.filter(lost_expr(m, it, bname, true).contains('e2e_hidden'))
+	if quiet.len > 0 {
+		out << '${ind}if !diag_rx_ok {'
+		for msg in quiet {
+			out << '${ind}\tst.e2e_quiet_${msg} = true // silence commanded, frame or not'
+		}
+		out << '${ind}}'
+	}
+	return out
 }

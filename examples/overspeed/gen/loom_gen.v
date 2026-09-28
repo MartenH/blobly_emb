@@ -142,7 +142,7 @@ fn io_can0_10ms(ctx voidptr) {
 	st.uds_diag.tick(now)
 	mut diag_rx_ok := st.uds_diag.rx_enabled()
 	if !diag_rx_ok {
-		st.e2e_quiet_brake_status = true // silence commanded this pass, frame or not
+		st.e2e_quiet_brake_status = true // silence commanded, frame or not
 	}
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
@@ -158,10 +158,7 @@ fn io_can0_10ms(ctx voidptr) {
 		if rx.id == brake_status_id && rx.len == brake_status_dlc && rx.ext == false {
 			lf_brake_status := st.e2e_rx_brake_status.lost_frames
 			e2e_brake_status := st.e2e_rx_brake_status.check(&rx.data[0], int(brake_status_dlc), u16(0x44), 4, 5)
-			if !diag_rx_ok {
-				st.e2e_quiet_brake_status = true
-			}
-			if st.e2e_quiet_brake_status {
+			if st.e2e_quiet_brake_status { // set by every sampling that found rx off
 				st.e2e_hidden_brake_status += st.e2e_rx_brake_status.lost_frames - lf_brake_status
 			}
 			if diag_rx_ok && e2e_brake_status.usable() {
@@ -208,6 +205,9 @@ fn io_can0_10ms(ctx voidptr) {
 					st.uds_diag.reset_state()
 				}
 				diag_rx_ok = st.uds_diag.rx_enabled()
+				if !diag_rx_ok {
+					st.e2e_quiet_brake_status = true // silence commanded, frame or not
+				}
 			}
 		}
 	}
@@ -241,6 +241,9 @@ fn io_can0_10ms(ctx voidptr) {
 		}
 	}
 	diag_rx_ok = st.uds_diag.rx_enabled()
+	if !diag_rx_ok {
+		st.e2e_quiet_brake_status = true // silence commanded, frame or not
+	}
 	if diag_rx_ok && st.diag_rx_was_off {
 		st.rx_powertrain_st.on_receive(now)
 		st.rx_brake_status_st.on_receive(now)

@@ -102,3 +102,19 @@ test("RxStatus: a gap spanning 0x28 rx-off with no frame during it is not counte
   check.equal(select(2, report(150)), lost0 + 1)
   d:session(0x01)
 end)
+
+test("RxStatus: rx switched off and on inside one drain still hides the gap spanning it", function()
+  local d = uds.open("CAN1", { tx = 0x101, rx = 0x102 })
+  for _ = 1, 3 do brake(1000); sleep_ms(10) end
+  local _, lost0 = report(150)
+  d:session(0x03)
+  -- two suppressed FUNCTIONAL 0x28s back to back: rx off, then on again, in one bridge drain
+  bus.send("CAN1", 0x7DF, fromhex("03 28 82 F1 00 00 00 00"))
+  bus.send("CAN1", 0x7DF, fromhex("03 28 80 F1 00 00 00 00"))
+  sleep_ms(30)
+  brake(1000, 3)
+  local st, lost1 = report(150)
+  check.equal(st, OK)
+  check.equal(lost1, lost0, "a gap spanning an in-drain rx-off was counted as lost")
+  d:session(0x01)
+end)

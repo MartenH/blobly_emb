@@ -3813,9 +3813,11 @@ fn test_dissolved_value_plus_status_ok() {
 	s.signals[0].fields = {
 		'kph':    'u16'
 		'status': 'RxStatus'
-		'lost':   'u16'
 	}
 	assert !errs(validate_system_gen(s)).any(it.contains('field') || it.contains('bits')), 'value+status is valid: ${errs(validate_system_gen(s))}'
+	// `lost` cannot be lowered: a generated system frame carries no E2E
+	s.signals[0].fields['lost'] = 'u16'
+	assert errs(validate_system_gen(s)).any(it.contains('`lost` needs E2E')), errs(validate_system_gen(s)).str()
 }
 
 // codex #142 round 10: loom2v spawns partition_telem() on the HOST target too
@@ -4485,4 +4487,31 @@ fn test_nm_cluster_on_a_someip_bus_is_error() {
 	s.buses[0].nm_peers_hi = 0x53f
 	e := errs(validate_system(s))
 	assert e.any(it.contains('cannot carry an NM cluster')), e.str()
+}
+
+// REQ-TOPO-001: receive metadata on a SOME/IP signal is not generated (the codec would read it off
+// the wire), so syscheck refuses it rather than report a system that fails generation.
+fn test_someip_signal_receive_metadata_is_refused() {
+	mut s := System{
+		buses:   [
+			Bus{
+				name:        'backbone'
+				kind:        'someip'
+				service:     0x0100
+				has_service: true
+			},
+		]
+		signals: [
+			SysSignal{
+				name:     'BenchLoad'
+				producer: 'tcu'
+				bus:      'backbone'
+				fields:   {
+					'load':   'u16'
+					'status': 'RxStatus'
+				}
+			},
+		]
+	}
+	assert errs(check_signals_dissolved(s)).any(it.contains('`status` on a SOME/IP bus is not generated')), errs(check_signals_dissolved(s)).str()
 }

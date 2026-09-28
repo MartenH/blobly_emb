@@ -31,7 +31,8 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 		'diag_got := st.tp_diag.take(',
 		'diag_n := if st.tp_diag.busy() { 0 } else { diag_got }',
 		'st.tp_diag.poll(now, mut pdu_diag)',
-		'diag_rx_ok = st.uds_diag.rx_enabled()\n\tif diag_rx_ok && st.diag_rx_was_off',
+		'diag_rx_ok = st.uds_diag.rx_enabled()',
+		'if diag_rx_ok && st.diag_rx_was_off',
 		'diag_tx_ok :=',
 		'if tx_lamp_frame_any && diag_tx_ok',
 	]
