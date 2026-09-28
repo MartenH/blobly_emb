@@ -49,8 +49,11 @@ pub fn (mut fb EngineMonitor) on_10ms(inp ports.EngineMonitorIn, mut out ports.E
 | keep a value across power cycles | `persist = "now"` / `"shutdown"` on the signal, plus `[nvm]` and `[nm]` | read it and write it like any signal | builds, not stored | ✅ |
 | report a fault (DTC) | `[[fault]]` naming my handler | `out.fault.x = .failed` / `.passed` | ✅ | not yet (R6) |
 
-"sim" = the host's file-mirror stand-in for pins ([../io.md](../io.md)). The target limits are
-the ThreadX comm thread's lean codec; generation names the exact rule when a config crosses one.
+"sim" = the host's file-mirror stand-in for pins ([../io.md](../io.md)). **The table shows the
+common case, not every combination** — generation refuses one it cannot build and names the rule.
+The ones you are most likely to meet: FBs on two *threads* of one partition cannot exchange a
+signal yet (endpoints are partitions or buses — keep them on one thread, or use two partitions),
+and an I/O point must be on the same core as the FB that reads or writes it ([../io.md](../io.md)).
 
 ### Receive a value — and know whether to trust it
 
