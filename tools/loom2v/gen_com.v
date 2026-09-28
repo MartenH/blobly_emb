@@ -691,7 +691,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			}
 			glue << '\tuds_${tp}_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity'
 		}
-		if conns.len > 0 && rx_by_msg.keys().any(has_deadline(m, it, bname)) {
+		if conns.len > 0 && rx_off_latched(m, rx_by_msg.keys(), bname) {
 			glue << '\tdiag_rx_was_off bool // 0x28 had rx off (any sampling since the last restart): restart the deadlines on return'
 		}
 		for d in dests {
@@ -1096,7 +1096,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 		// rx deadline crossed -> publish invalid (valid=false) signals, once. While 0x28 has rx
 		// off, silence is commanded, not a fault: no deadline fires, and every deadline restarts
 		// when rx comes back (below), so a diagnostic command never fakes a comms timeout.
-		if conns.len > 0 && rx_by_msg.keys().any(has_deadline(m, it, bname)) {
+		if conns.len > 0 && rx_off_latched(m, rx_by_msg.keys(), bname) {
 			// re-sampled AFTER this pass's requests were served: a 0x28 disabling rx now suspends
 			// the deadlines before any of them can fire
 			glue << rx_gate_sample(m, conns, rx_by_msg.keys(), bname, '\t', false)
@@ -1108,6 +1108,11 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				if e2e_timeout(m, msg, bname) > 0 {
 					glue << '\t\tst.e2e_rx_${msg}.arm(now)'
 				}
+			}
+			// a watched signal's status from before the pause is stale: not known again until a
+			// frame (or a restarted deadline) publishes it
+			for src in fault_sources(m) {
+				glue << '\t\tst.fsrc_${snake(src)} = .never_received'
 			}
 			glue << '\t}'
 			glue << '\tst.diag_rx_was_off = !diag_rx_ok'
@@ -2016,7 +2021,7 @@ fn rx_gate_sample(m Model, conns []IsotpConn, rx_msgs []string, bname string, in
 	lhs := if decl { 'mut diag_rx_ok :=' } else { 'diag_rx_ok =' }
 	out << '${ind}${lhs} ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
 	quiet := rx_msgs.filter(lost_expr(m, it, bname, true).contains('e2e_hidden'))
-	deadlines := rx_msgs.any(has_deadline(m, it, bname))
+	deadlines := rx_off_latched(m, rx_msgs, bname)
 	if quiet.len > 0 || deadlines {
 		out << '${ind}if !diag_rx_ok { // silence commanded: latch it, frame or not'
 		if deadlines {
@@ -2053,36 +2058,7 @@ fn fault_pass_lines(m Model) []string {
 		return []string{}
 	}
 	mut out := []string{}
-	// signal-status faults: the bridge is the detector — each pass turns the watched signal's latest
-	// status into a test result (never_received = not tested), debounced here in bridge passes
-	for i, f in m.faults {
-		if f.signal == '' {
-			continue
-		}
-		src := 'st.fsrc_${snake(f.signal)}'
-		// failed: an event since the last step, or the condition still holding; passed: a good
-		// frame and no event; otherwise (never received, or the other condition) not tested — a
-		// corrupt-only sender is no pass for the timeout test
-		ev := '${src}_${f.on}'
-		res := match f.on {
-			'timeout' {
-				'if ${ev} != st.sseen_${i} || ${src} == .timeout { fault.TestResult.failed } else if ${src} == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
-			}
-			'integrity' {
-				'if ${ev} != st.sseen_${i} || ${src} == .integrity { fault.TestResult.failed } else if ${src} == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
-			}
-			else {
-				'if ${ev} != st.sseen_${i} { fault.TestResult.failed } else if ${src} == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
-			}
-		}
-		// while 0x28 has reception off (or its silence is still latched) nothing is received:
-		// the watched signal's status is stale, so the test is disabled, not passed or failed
-		en := if rx_msgs_have_deadline(m) { 'diag_rx_ok && !st.diag_rx_was_off' } else { 'diag_rx_ok' }
-		out << '\tst.sdeb_${i}.apply(st.fmem.control_gen(${i}))'
-		out << '\tst.sdeb_${i}.step(${res}, now, ${en})'
-		out << '\tst.sseen_${i} = ${ev}'
-		out << '\tst.fmem.consume(${i}, st.sdeb_${i}.rep)'
-	}
+	out << signal_fault_step_lines(m, '\t')
 	for fb in fault_fbs(m) {
 		f := snake(fb)
 		out << '\tosal.${acquire_fn('triple')}(fault_rep_${f}_ch, &st.frep_${f}, u8(sizeof(st.frep_${f})))'
@@ -2114,6 +2090,10 @@ fn rx_publish_hooks(m Model, sname string, fld string, ind string) []string {
 	mut out := []string{}
 	if sname == m.fault_cycle.all_before('.') {
 		cf := m.fault_cycle.all_after('.')
+		out << '${ind}if ${fld}.${cf} != st.fcycle_on {'
+		// an edge: first consume the signal-status events of the cycle that is ending
+		out << signal_fault_step_lines(m, ind + '\t')
+		out << '${ind}}'
 		out << '${ind}if ${fld}.${cf} && !st.fcycle_on {'
 		out << '${ind}\tst.fmem.cycle_start()'
 		out << '${ind}} else if !${fld}.${cf} && st.fcycle_on {'
@@ -2138,14 +2118,63 @@ fn rx_publish_hooks(m Model, sname string, fld string, ind string) []string {
 	return out
 }
 
-// rx_msgs_have_deadline: the diagnostic bridge keeps the 0x28 silence latch (diag_rx_was_off) —
-// the same condition its state-field emission uses.
-fn rx_msgs_have_deadline(m Model) bool {
-	bus := m.isotp_conns[0].bus
-	for sname in m.sig_names {
-		si := m.sig_of[sname] or { continue }
-		if si.external && si.rx && si.bus == bus && has_deadline(m, si.dbc_msg, bus) {
-			return true
+
+// signal_fault_step_lines: turn each watched signal's latest status and event counts into a test
+// result, debounce it on the bridge and consume it. Emitted at the top of every pass AND right
+// before an operation-cycle edge, so events of the cycle that is ending are consumed while it is
+// still active.
+fn signal_fault_step_lines(m Model, ind string) []string {
+	mut out := []string{}
+	// signal-status faults: the bridge is the detector — each pass turns the watched signal's latest
+	// status into a test result (never_received = not tested), debounced here in bridge passes
+	for i, f in m.faults {
+		if f.signal == '' {
+			continue
+		}
+		src := 'st.fsrc_${snake(f.signal)}'
+		// failed: an event since the last step, or the condition still holding; passed: a good
+		// frame and no event; otherwise (never received, or the other condition) not tested — a
+		// corrupt-only sender is no pass for the timeout test
+		ev := '${src}_${f.on}'
+		res := match f.on {
+			'timeout' {
+				'if ${ev} != st.sseen_${i} || ${src} == .timeout { fault.TestResult.failed } else if ${src} == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
+			}
+			'integrity' {
+				'if ${ev} != st.sseen_${i} || ${src} == .integrity { fault.TestResult.failed } else if ${src} == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
+			}
+			else {
+				'if ${ev} != st.sseen_${i} { fault.TestResult.failed } else if ${src} == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
+			}
+		}
+		// while 0x28 has reception off (or its silence is still latched) nothing is received:
+		// the watched signal's status is stale, so the test is disabled, not passed or failed
+		en := if rx_off_latched(m, []string{}, m.isotp_conns[0].bus) { 'diag_rx_ok && !st.diag_rx_was_off' } else { 'diag_rx_ok' }
+		out << '${ind}st.sdeb_${i}.apply(st.fmem.control_gen(${i}))'
+		out << '${ind}st.sdeb_${i}.step(${res}, now, ${en})'
+		out << '${ind}st.sseen_${i} = ${ev}'
+		out << '${ind}st.fmem.consume(${i}, st.sdeb_${i}.rep)'
+	}
+	return out
+}
+
+// rx_off_latched: the diagnostic bridge keeps the 0x28 silence latch (diag_rx_was_off) — when a
+// received frame has a deadline to restart, or a signal-status fault watches a status that goes
+// stale during the pause. ONE predicate for the state field, the sampler and the restart block.
+fn rx_off_latched(m Model, rx_msgs []string, bname string) bool {
+	if m.isotp_conns.len > 0 && bname == m.isotp_conns[0].bus && m.faults.any(it.signal != '') {
+		return true
+	}
+	if rx_msgs.any(has_deadline(m, it, bname)) {
+		return true
+	}
+	bus := if m.isotp_conns.len > 0 { m.isotp_conns[0].bus } else { '' }
+	if rx_msgs.len == 0 && bus == bname {
+		for sname in m.sig_names {
+			si := m.sig_of[sname] or { continue }
+			if si.external && si.rx && si.bus == bus && has_deadline(m, si.dbc_msg, bus) {
+				return true
+			}
 		}
 	}
 	return false

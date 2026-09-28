@@ -202,3 +202,36 @@ test("Signal faults: a corrupt frame followed by a good one in the same pass is 
   d:raw(fromhex("14 FF FF FF"))
   rpm(3000, 60)
 end)
+
+test("Signal faults: an event and the cycle ending in the same pass is recorded in that cycle", function()
+  local d = diag()
+  ignition(true)
+  brakes(5)
+  d:raw(fromhex("14 C4 18 00"))
+  brakes(3)
+  brake(0, true)                                   -- a corrupt frame ...
+  ign = false; ign_frame()                         -- ... and the ignition going off, one drain
+  sleep_ms(40)
+  check.equal(dtc(d, "C4 18 00") & 0x20, 0x20, "an event in the pass that ended the cycle was lost")
+  ignition(true)
+  brakes(5)
+  d:raw(fromhex("14 FF FF FF"))
+  rpm(3000, 60)
+end)
+
+test("Signal faults: a status that went stale during 0x28 rx-off does not re-qualify at re-enable", function()
+  local d = diag()
+  ignition(true)
+  brakes(5)
+  rpm(3000, 400) -- the brake frames stop: timeout
+  check.equal(dtc(d, "C1 21 00") & 0x01, 0x01)
+  d:session(0x03)
+  check.equal(tohex(d:raw(fromhex("28 02 F1"))), "68 02") -- rx off
+  d:raw(fromhex("14 C1 21 00"))
+  check.equal(tohex(d:raw(fromhex("28 00 F1"))), "68 00") -- rx on: the sender is back at once
+  brakes(5)
+  check.equal(dtc(d, "C1 21 00") & 0x09, 0, "a timeout from before the pause re-qualified")
+  d:session(0x01)
+  d:raw(fromhex("14 FF FF FF"))
+  rpm(3000, 60)
+end)

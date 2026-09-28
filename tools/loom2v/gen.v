@@ -3513,8 +3513,8 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 	if m.sig_names.len > 0 {
 		ports << 'import sig'
 	}
-	if m.faults.len > 0 {
-		ports << 'import comm.fault' // the fault port's TestResult
+	if m.faults.any(it.signal == '') {
+		ports << 'import comm.fault' // the fault port's TestResult (signal-status faults have no port)
 	}
 
 	// glue references sig.* only for local-cell types; import it only if needed.

@@ -214,6 +214,20 @@ fn io_can0_10ms(ctx voidptr) {
 			if diag_rx_ok {
 				mut ignition_on := sig.IgnitionOn{ on: ignition_ignition_on_phys(rx.data) != 0.0 }
 				osal.ioc_publish2(ignition_on_ch, &ignition_on, u8(sizeof(ignition_on)))
+				if ignition_on.on != st.fcycle_on {
+					st.sdeb_2.apply(st.fmem.control_gen(2))
+					st.sdeb_2.step(if st.fsrc_brake_pressure_timeout != st.sseen_2 || st.fsrc_brake_pressure == .timeout { fault.TestResult.failed } else if st.fsrc_brake_pressure == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok && !st.diag_rx_was_off)
+					st.sseen_2 = st.fsrc_brake_pressure_timeout
+					st.fmem.consume(2, st.sdeb_2.rep)
+					st.sdeb_3.apply(st.fmem.control_gen(3))
+					st.sdeb_3.step(if st.fsrc_brake_pressure_integrity != st.sseen_3 || st.fsrc_brake_pressure == .integrity { fault.TestResult.failed } else if st.fsrc_brake_pressure == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok && !st.diag_rx_was_off)
+					st.sseen_3 = st.fsrc_brake_pressure_integrity
+					st.fmem.consume(3, st.sdeb_3.rep)
+					st.sdeb_4.apply(st.fmem.control_gen(4))
+					st.sdeb_4.step(if st.fsrc_brake_pressure_lost != st.sseen_4 { fault.TestResult.failed } else if st.fsrc_brake_pressure == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok && !st.diag_rx_was_off)
+					st.sseen_4 = st.fsrc_brake_pressure_lost
+					st.fmem.consume(4, st.sdeb_4.rep)
+				}
 				if ignition_on.on && !st.fcycle_on {
 					st.fmem.cycle_start()
 				} else if !ignition_on.on && st.fcycle_on {
@@ -347,6 +361,7 @@ fn io_can0_10ms(ctx voidptr) {
 		st.rx_powertrain_st.on_receive(now)
 		st.rx_ignition_st.on_receive(now)
 		st.e2e_rx_brake_status.arm(now)
+		st.fsrc_brake_pressure = .never_received
 	}
 	st.diag_rx_was_off = !diag_rx_ok
 	if diag_rx_ok && st.rx_powertrain_st.expired(now) {
@@ -358,6 +373,20 @@ fn io_can0_10ms(ctx voidptr) {
 	if diag_rx_ok && st.rx_ignition_st.expired(now) {
 		mut ignition_on := sig.IgnitionOn{}
 		osal.ioc_publish2(ignition_on_ch, &ignition_on, u8(sizeof(ignition_on)))
+		if ignition_on.on != st.fcycle_on {
+			st.sdeb_2.apply(st.fmem.control_gen(2))
+			st.sdeb_2.step(if st.fsrc_brake_pressure_timeout != st.sseen_2 || st.fsrc_brake_pressure == .timeout { fault.TestResult.failed } else if st.fsrc_brake_pressure == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok && !st.diag_rx_was_off)
+			st.sseen_2 = st.fsrc_brake_pressure_timeout
+			st.fmem.consume(2, st.sdeb_2.rep)
+			st.sdeb_3.apply(st.fmem.control_gen(3))
+			st.sdeb_3.step(if st.fsrc_brake_pressure_integrity != st.sseen_3 || st.fsrc_brake_pressure == .integrity { fault.TestResult.failed } else if st.fsrc_brake_pressure == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok && !st.diag_rx_was_off)
+			st.sseen_3 = st.fsrc_brake_pressure_integrity
+			st.fmem.consume(3, st.sdeb_3.rep)
+			st.sdeb_4.apply(st.fmem.control_gen(4))
+			st.sdeb_4.step(if st.fsrc_brake_pressure_lost != st.sseen_4 { fault.TestResult.failed } else if st.fsrc_brake_pressure == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok && !st.diag_rx_was_off)
+			st.sseen_4 = st.fsrc_brake_pressure_lost
+			st.fmem.consume(4, st.sdeb_4.rep)
+		}
 		if ignition_on.on && !st.fcycle_on {
 			st.fmem.cycle_start()
 		} else if !ignition_on.on && st.fcycle_on {
