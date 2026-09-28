@@ -292,6 +292,9 @@ fn specs() map[string]map[string]Key {
 			'pass':    k(.int)
 			'fail_ms': k(.int)
 			'pass_ms': k(.int)
+			'inc':     k(.int) // counter: step per failed result (default 1)
+			'dec':     k(.int) // counter: step per passed result (default 1)
+			'jump':    k(.boolean) // counter: reset on a reversal ("N in a row"); default accumulates
 		}
 		'fault_memory': {
 			'cycle': k(.str) // "Signal.field" (bool): the operation cycle

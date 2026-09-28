@@ -249,7 +249,7 @@ Declare the fault, then write the **current** test result every dispatch:
 name     = "EngineOverRev"
 dtc      = 0x021900
 from     = "EngineMonitor.on_10ms"
-debounce = { kind = "counter", fail = 3, pass = 3 }
+debounce = { kind = "counter", fail = 3, pass = 3 }   # + inc / dec / jump: ../communication.md
 enable   = ["IgnitionOn.on"]
 
 [fault_memory]

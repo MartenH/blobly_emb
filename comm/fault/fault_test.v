@@ -11,6 +11,7 @@ fn counter(fail u32, pass u32) Debounce {
 	return Debounce{
 		fail_thr: fail
 		pass_thr: pass
+		jump:     true // most tests below want "N in a row"; the accumulating default has its own
 	}
 }
 
@@ -471,4 +472,68 @@ fn test_dtc_setting_off_survives_non_default_transitions() {
 	assert m.setting_off, 'a non-default transition turned DTC setting back on'
 	call(mut s, [u8(0x10), 0x01])
 	assert !m.setting_off
+}
+
+// AUTOSAR-shaped counter: by default it ACCUMULATES across reversals, so an intermittent fault that
+// fails 2 of every 3 dispatches still qualifies — with `jump` ("N in a row") it never would.
+fn test_accumulating_counter_catches_an_intermittent_fault() {
+	mut acc := Debounce{
+		fail_thr: 3
+		pass_thr: 3
+	}
+	mut row := Debounce{
+		fail_thr: 3
+		pass_thr: 3
+		jump:     true
+	}
+	for _ in 0 .. 10 {
+		for r in [TestResult.failed, .failed, .passed] {
+			acc.step(r, 0, true)
+			row.step(r, 0, true)
+		}
+	}
+	assert acc.rep.failed && acc.rep.fails == 1, 'the accumulating counter missed an intermittent fault'
+	assert !row.rep.failed, 'jump = true should need 3 failures in a row'
+}
+
+// Asymmetric steps: inc 2 / dec 1 fails fast and heals slowly.
+fn test_asymmetric_steps() {
+	mut d := Debounce{
+		fail_thr: 4
+		pass_thr: 4
+		inc:      2
+		dec:      1
+	}
+	d.step(.failed, 0, true)
+	assert !d.rep.failed
+	d.step(.failed, 0, true)
+	assert d.rep.failed, 'two failures at inc 2 reach 4'
+	for _ in 0 .. 7 {
+		d.step(.passed, 0, true)
+	}
+	assert d.rep.failed, 'healing from +4 to -4 at dec 1 takes 8 passes'
+	d.step(.passed, 0, true)
+	assert !d.rep.failed
+}
+
+// fail = 1 with jump (the generator's default for it, whatever `pass` is): a single failed result
+// after a healed run qualifies at once — accumulating from -pass would need pass+1 of them.
+fn test_undebounced_counter_needs_jump_for_one_pass_events() {
+	mut acc := Debounce{
+		fail_thr: 1
+		pass_thr: 3
+	}
+	mut jmp := Debounce{
+		fail_thr: 1
+		pass_thr: 3
+		jump:     true
+	}
+	for _ in 0 .. 3 {
+		acc.step(.passed, 0, true)
+		jmp.step(.passed, 0, true)
+	}
+	acc.step(.failed, 0, true)
+	jmp.step(.failed, 0, true)
+	assert !acc.rep.failed, 'accumulating from -3 reaches only -2'
+	assert jmp.rep.failed, 'with jump a one-pass failure qualifies'
 }

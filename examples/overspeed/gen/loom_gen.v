@@ -109,8 +109,9 @@ pub fn partition_ctrl(core int, arg voidptr) {
 	osal.pin_to_core(1)
 	mut st := Partition_ctrl_state{}
 	st.fdeb_engine_monitor[0] = fault.Debounce{
-		fail_thr: 3
+		fail_thr: 6
 		pass_thr: 3
+		inc: 2
 	}
 	st.fdeb_engine_monitor[1] = fault.Debounce{
 		fail_thr: 3
@@ -596,14 +597,17 @@ pub fn partition_can0(ch can.Channel) {
 	st.sdeb_2 = fault.Debounce{
 		fail_thr: 1
 		pass_thr: 1
+		jump: true
 	}
 	st.sdeb_3 = fault.Debounce{
 		fail_thr: 1
 		pass_thr: 1
+		jump: true
 	}
 	st.sdeb_4 = fault.Debounce{
 		fail_thr: 1
 		pass_thr: 1
+		jump: true
 	}
 	st.fmem.n = 5
 	st.fmem.init()
