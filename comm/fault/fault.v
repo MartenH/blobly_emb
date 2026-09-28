@@ -168,6 +168,10 @@ pub mut:
 	gen      u16  // the clear generation the producer must apply — fresh for every clear
 	seen_gen u16  // the generation of the producer's latest report, whatever it was (wrap guard)
 	rebase   bool // the next report only sets the baselines (0x85 just turned on)
+	// config: reported on the memory's own thread and consumed at every report (a signal-status
+	// fault), so its baselines are always current and 0x85 on needs no rebase — a rebase would
+	// swallow the first genuinely post-enable report instead
+	local         bool
 	base_seen     bool // a Report of `gen` has been consumed: the baselines are valid
 	base_fails    u16
 	base_tests    u16
@@ -393,7 +397,7 @@ fn ops_setting(ctx voidptr, on bool) {
 pub fn (mut m Memory) set_setting(on bool) {
 	if on && m.setting_off {
 		for i in 0 .. m.n {
-			m.slots[i].rebase = true
+			m.slots[i].rebase = !m.slots[i].local
 			if m.boundary_off && m.cycle_active {
 				m.slots[i].status = (m.slots[i].status & ~test_failed_this_cycle) | not_completed_this_cycle
 			}

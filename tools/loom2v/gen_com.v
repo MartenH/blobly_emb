@@ -967,9 +967,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 						fld := snake(sname)
 						glue << '${ind}\tmut ${fld} := sig.${sname}{ ${rx_status_fields(si, '.timeout', lost)[2..]} }'
 						glue << '${ind}\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
-						glue << rx_publish_hooks(m, sname, fld, ind + '\t')
 					}
-					glue << rx_cycle_hooks(m, list, ind + '\t')
+					glue << rx_group_hooks(m, list, ind + '\t')
 					glue << '${ind}} else {'
 					ind += '\t'
 				}
@@ -984,9 +983,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					}
 					glue << '${ind}mut ${fld} := sig.${sname}{ ${valassign}${rx_status_fields(si, '.ok', lost)} }'
 					glue << '${ind}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
-					glue << rx_publish_hooks(m, sname, fld, ind)
 				}
-				glue << rx_cycle_hooks(m, list, ind)
+				glue << rx_group_hooks(m, list, ind)
 				if e2e && e2e_timeout(m, msg, bname) > 0 {
 					ind = ind[1..]
 					glue << '${ind}}'
@@ -1134,9 +1132,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					sf := rx_status_fields(si, '.timeout', lost)
 					glue << '\t\tmut ${fld} := sig.${sname}{${if sf == '' { '' } else { ' ' + sf[2..] + ' ' }}}'
 					glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
-					glue << rx_publish_hooks(m, sname, fld, '\t\t')
 				}
-				glue << rx_cycle_hooks(m, list, '\t\t')
+				glue << rx_group_hooks(m, list, '\t\t')
 				glue << '\t}'
 			}
 		}
@@ -1523,6 +1520,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				for i, f in m.faults {
 					glue << '\tst.fmem.slots[${i}].dtc = u32(0x${f.dtc.hex()}) // ${f.name}'
 					glue << '\tst.fmem.slots[${i}].confirm = u8(${f.confirm})'
+					if f.signal != '' {
+						glue << '\tst.fmem.slots[${i}].local = true // stepped and consumed on this thread'
+					}
 					if f.aging > 0 {
 						glue << '\tst.fmem.slots[${i}].aging = u8(${f.aging})'
 					}
@@ -1982,9 +1982,8 @@ fn rx_integrity(m Model, list []string, msg string, lost string, gate string, in
 		fld := snake(sname)
 		out << '${i}mut ${fld} := sig.${sname}{ ${rx_status_fields(si, '.integrity', lost)[2..]} }'
 		out << '${i}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
-		out << rx_publish_hooks(m, sname, fld, i)
 	}
-	out << rx_cycle_hooks(m, list.filter((m.sig_of[it] or { SigInfo{} }).has_status), i)
+	out << rx_group_hooks(m, list.filter((m.sig_of[it] or { SigInfo{} }).has_status), i)
 	if i != ind {
 		out << '${ind}}'
 	}
@@ -2088,7 +2087,7 @@ fn fault_pass_lines(m Model) []string {
 // not tested), stepped and consumed right here, so it lands on the correct side of every boundary
 // inside the drain: a cycle edge, a clear, a 0x28 switching reception. The pass top only steps
 // the level for a pass with no publication (a timeout holding, a sender gone quiet).
-// rx_cycle_hooks follows, after the whole publication group.
+// Called from rx_group_hooks, which also moves the operation cycle.
 fn rx_publish_hooks(m Model, sname string, fld string, ind string) []string {
 	if sname !in fault_sources(m) {
 		return []string{}
@@ -2126,27 +2125,35 @@ fn rx_publish_hooks(m Model, sname string, fld string, ind string) []string {
 	return out
 }
 
-// rx_cycle_hooks: the operation-cycle signal moves the cycle where it is published, in bus order
-// (an off/on pair in one drain is two edges) — AFTER the publication group's events, so a frame
-// that both ends the cycle and carries an event (a gap, its own timeout) records the event in the
-// cycle it happened in.
-fn rx_cycle_hooks(m Model, list []string, ind string) []string {
+// rx_group_hooks: the fault memory's share of one publication group (the signals one frame, one
+// deadline or one integrity failure publishes together), after all of them are published. The
+// operation cycle moves where its signal is published, in bus order (an off/on pair in one drain
+// is two edges): a RISING edge before the group's results and a FALLING one after them, so a
+// frame that starts or ends the cycle and also carries a result (a gap, its own timeout) records
+// that result inside the cycle either way.
+fn rx_group_hooks(m Model, list []string, ind string) []string {
 	mut out := []string{}
-	if m.fault_cycle == '' {
+	if m.faults.len == 0 {
 		return out
 	}
-	sname := m.fault_cycle.all_before('.')
-	if sname !in list {
-		return out
-	}
-	fld := snake(sname)
+	cyc := m.fault_cycle.all_before('.')
 	cf := m.fault_cycle.all_after('.')
-	out << '${ind}if ${fld}.${cf} && !st.fcycle_on {'
-	out << '${ind}\tst.fmem.cycle_start()'
-	out << '${ind}} else if !${fld}.${cf} && st.fcycle_on {'
-	out << '${ind}\tst.fmem.cycle_end()'
-	out << '${ind}}'
-	out << '${ind}st.fcycle_on = ${fld}.${cf}'
+	has_cycle := m.fault_cycle != '' && cyc in list
+	if has_cycle {
+		out << '${ind}if ${snake(cyc)}.${cf} && !st.fcycle_on {'
+		out << '${ind}\tst.fmem.cycle_start()'
+		out << '${ind}\tst.fcycle_on = true'
+		out << '${ind}}'
+	}
+	for sname in list {
+		out << rx_publish_hooks(m, sname, snake(sname), ind)
+	}
+	if has_cycle {
+		out << '${ind}if !${snake(cyc)}.${cf} && st.fcycle_on {'
+		out << '${ind}\tst.fmem.cycle_end()'
+		out << '${ind}\tst.fcycle_on = false'
+		out << '${ind}}'
+	}
 	return out
 }
 

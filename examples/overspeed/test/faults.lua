@@ -339,3 +339,24 @@ test("Signal faults: a good frame drained before 0x28 switches reception off sti
   d:raw(fromhex("14 FF FF FF"))
   rpm(3000, 60)
 end)
+
+test("Signal faults: an event drained right after a functional 0x85 on is recorded", function()
+  local d = diag()
+  ignition(true)
+  brakes(5)
+  d:session(0x03)
+  d:raw(fromhex("14 FF FF FF"))
+  check.equal(tohex(d:raw(fromhex("85 02"))), "C5 02")    -- DTC setting off
+  brakes(3)
+  -- a suppressed FUNCTIONAL "on" (served inline), a corrupt frame and a good one, back to back —
+  -- the good one last, so only the event itself can record the failure
+  bus.send("CAN1", 0x7DF, fromhex("02 85 81 00 00 00 00 00"))
+  brake(0, true)
+  brake()
+  sleep_ms(40)
+  check.equal(dtc(d, "C4 18 00") & 0x28, 0x28, "an event right after 0x85 on was swallowed")
+  d:session(0x01)
+  brakes(5)
+  d:raw(fromhex("14 FF FF FF"))
+  rpm(3000, 60)
+end)

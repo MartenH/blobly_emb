@@ -419,6 +419,27 @@ fn test_a_result_published_during_suppression_is_not_applied_after_on() {
 	assert m.slots[0].status & test_failed != 0
 }
 
+// A local slot (stepped and consumed on the memory's own thread, every report) has current
+// baselines, so the first report after "on" is genuinely post-enable and is applied — a rebase
+// would swallow it.
+fn test_a_local_slot_applies_the_first_report_after_on() {
+	mut m := memory([u32(1)])
+	m.slots[0].local = true
+	mut d := counter(1, 1)
+	m.cycle_start()
+	m.consume(0, d.rep)
+	m.set_setting(false)
+	d.step(.failed, 0, true)
+	m.consume(0, d.rep) // consumed while off: suppressed, the baselines follow
+	d.step(.passed, 0, true)
+	m.consume(0, d.rep)
+	assert m.slots[0].status == status_cleared, 'a result while off was applied'
+	m.set_setting(true)
+	d.step(.failed, 0, true) // after on
+	m.consume(0, d.rep)
+	assert m.slots[0].status & test_failed != 0, 'the first post-enable report was swallowed'
+}
+
 // codex #301: "on" inside a cycle that began while off resets that cycle's bits in the status.
 fn test_on_resets_the_cycle_bits_of_a_cycle_begun_while_off() {
 	mut m := memory([u32(1)])
