@@ -165,7 +165,7 @@ fn io_can0_10ms(ctx voidptr) {
 				st.e2e_quiet_brake_status = false
 			}
 			if e2e_brake_status.usable() {
-				late_brake_status := st.e2e_rx_brake_status.expired(now)
+				late_brake_status := !st.diag_rx_was_off && st.e2e_rx_brake_status.expired(now)
 				st.e2e_rx_brake_status.on_valid(now)
 				if diag_rx_ok {
 					if late_brake_status {

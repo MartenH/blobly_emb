@@ -155,3 +155,16 @@ test("RxStatus: integrity after the timeout has fired gives way to timeout again
   brake(1000)
   check.equal((report(150)), OK)
 end)
+
+test("RxStatus: a valid frame right after rx is re-enabled is not judged late by the stale deadline", function()
+  local d = uds.open("CAN1", { tx = 0x101, rx = 0x102 })
+  brake(1000)
+  d:session(0x03)
+  check.equal(tohex(d:raw(fromhex("28 02 F1"))), "68 02") -- rx off
+  sleep_ms(400) -- longer than the 300 ms timeout, silence commanded
+  -- rx on (suppressed functional request) and a valid frame, in one bridge drain
+  bus.send("CAN1", 0x7DF, fromhex("03 28 80 F1 00 00 00 00"))
+  brake(1000)
+  check.equal((report(100)), OK, "commanded silence reported as a sender timeout")
+  d:session(0x01)
+end)

@@ -924,7 +924,13 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 						// seen it expire: the loss happened — report it for this frame (value zero)
 						// instead of letting the refresh erase it. Then refresh: protection-level state,
 						// like the counter, even while 0x28 has rx off.
-						glue << '${ind}late_${msg} := st.e2e_rx_${msg}.expired(now)'
+						// not while a 0x28 silence is still latched: its restart (after the drain) has
+						// not run yet, and the deadline it would test is the stale pre-silence one
+						if conns.len > 0 && rx_by_msg.keys().any(has_deadline(m, it, bname)) {
+							glue << '${ind}late_${msg} := !st.diag_rx_was_off && st.e2e_rx_${msg}.expired(now)'
+						} else {
+							glue << '${ind}late_${msg} := st.e2e_rx_${msg}.expired(now)'
+						}
 						glue << '${ind}st.e2e_rx_${msg}.on_valid(now)'
 					}
 				}
