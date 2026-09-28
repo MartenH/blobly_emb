@@ -100,7 +100,9 @@ pub fn (mut fb SpeedMonitor) on_10ms(inp ports.SpeedMonitorIn, mut out ports.Spe
 
 `match` makes you handle all four: add a status later and the compiler asks where it goes. A
 running example is `examples/overspeed`: `BrakeMonitor` reports the status it sees on a bus frame,
-and `test/rxstatus.lua` walks it through all four.
+and `test/rxstatus.lua` walks it through `timeout`, `ok` and `integrity`. `never_received` exists
+only in the first 300 ms after start, before any script of the suite runs — it is the enum's zero
+value, pinned by a generator test and checked on the wire by hand (candump), not by the suite.
 
 Scaling is done before you see it: `kph` is km/h, whatever the DBC's factor and offset — see
 *Units and scaling* below for what the field type does to it.
@@ -208,8 +210,10 @@ out.odo_meters.m = inp.odo_meters.m + delta   // reads = ["OdoMeters"], writes =
 ```
 
 It needs `[nvm]` **and** `[nm]` (bus sleep is the flush point), a signal local to one thread with
-one writer, and 1–2 unsigned fields; generation refuses anything else and checks flash wear
-against the writing handler's period. On the host it builds with a warning and stores nothing.
+one writer, and 1–2 unsigned fields. A **target** build refuses anything else, and checks flash
+wear for `"now"` against the writing handler's period (`"shutdown"` wear is not modelled: it
+depends on how often the bus sleeps). A **host** build checks none of this — it warns, builds,
+and stores nothing — so a persistence config is only validated by building for the target.
 See [../nvm.md](../nvm.md).
 
 ### Report a fault (set a DTC)
@@ -252,8 +256,9 @@ Host only today. See [../communication.md](../communication.md) and
 
 ## What an FB never does
 
-- Call a platform service — send, store, log, read a clock, raise a DTC. Every one of those is a
-  port field plus config.
+- Call a platform service. Sending, storing and raising a DTC are port fields plus config
+  (above). Reading a clock and logging are **not available to an FB at all**: time is the
+  handler's period (count dispatches), and there is no FB logging path.
 - Read its own DTC status, or latch a fault itself.
 - Know where a signal comes from — another FB, a bus, a pin or another core are all the same
   field ([../application-model.md](../application-model.md)).
