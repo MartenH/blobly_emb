@@ -667,6 +667,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			if m.faults.len > 0 {
 				glue << '\tfmem fault.Memory // the node\'s fault memory: this bridge is its one writer (D2)'
 				glue << '\tfcycle_on bool // the operation-cycle signal as last seen'
+				glue << '\tfcycle_mem bool // the fault memory\'s cycle, as last replayed'
+				glue << '\tfcycle_edges u32 // cycle edges seen in the drain, replayed at the next pass top'
 				for src in fault_sources(m) {
 					glue << '\tfsrc_${snake(src)} sig.RxStatus // ${src}\'s latest published status (signal-status faults)'
 					glue << '\tfsrc_${snake(src)}_integrity u32 // integrity events published, monotonic'
@@ -679,6 +681,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					if f.signal != '' {
 						glue << '\tsdeb_${i} fault.Debounce // ${f.name}: ${f.signal} ${f.on}, debounced here'
 						glue << '\tsseen_${i} u32 // the event count (${f.on}) last stepped'
+						glue << '\tsgen_${i} u16 // the clear generation sseen_${i} counts from'
 					}
 				}
 				for fb in fault_fbs(m) {
@@ -2073,38 +2076,47 @@ fn fault_pass_lines(m Model) []string {
 		}
 		out << '\tosal.${publish_fn('triple')}(fault_ctl_${f}_ch, &st.fctl_${f}, u8(sizeof(st.fctl_${f})))'
 	}
+	if m.fault_cycle != '' {
+		// the operation-cycle edges the last drain saw, in bus order, AFTER the results that pass
+		// produced were consumed above — so no result is attributed to a cycle it was not in
+		out << '\tfor st.fcycle_edges > 0 {'
+		out << '\t\tif st.fcycle_mem {'
+		out << '\t\t\tst.fmem.cycle_end()'
+		out << '\t\t} else {'
+		out << '\t\t\tst.fmem.cycle_start()'
+		out << '\t\t}'
+		out << '\t\tst.fcycle_mem = !st.fcycle_mem'
+		out << '\t\tst.fcycle_edges--'
+		out << '\t}'
+	}
 	return out
 }
 
 // rx_publish_hooks: what the fault memory needs from EVERY publication of a received signal — a
 // good decode, a deadline or E2E timeout, an integrity failure, a late frame — in one place, so no
-// publish path can be missed:
-//   - the operation-cycle signal moves the cycle, in bus order (an off/on pair in one pass is two
-//     edges, and the fault memory never stays in a cycle the published signal has left);
-//   - a signal a signal-status fault watches records its status (and lost count) for the pass's
-//     fault step.
+// publish path can be missed. Nothing here steps or consumes: the drain only RECORDS, and the top
+// of the next pass (fault_pass_lines) consumes the results and then replays the cycle edges, so
+// the order signals take inside a frame or a drain cannot end a cycle before its results land.
+//   - a signal a signal-status fault watches records its status and events; the first event after
+//     a clear first rebases that fault's cursor, so only post-clear events count against it;
+//   - the operation-cycle signal counts its edges (an off/on pair in one drain is two).
 fn rx_publish_hooks(m Model, sname string, fld string, ind string) []string {
 	if m.faults.len == 0 {
 		return []string{}
 	}
 	mut out := []string{}
-	if sname == m.fault_cycle.all_before('.') {
-		cf := m.fault_cycle.all_after('.')
-		out << '${ind}if ${fld}.${cf} != st.fcycle_on {'
-		// an edge: first consume the signal-status events of the cycle that is ending
-		out << signal_fault_step_lines(m, ind + '\t')
-		out << '${ind}}'
-		out << '${ind}if ${fld}.${cf} && !st.fcycle_on {'
-		out << '${ind}\tst.fmem.cycle_start()'
-		out << '${ind}} else if !${fld}.${cf} && st.fcycle_on {'
-		out << '${ind}\tst.fmem.cycle_end()'
-		out << '${ind}}'
-		out << '${ind}st.fcycle_on = ${fld}.${cf}'
-	}
 	if sname in fault_sources(m) {
+		src := snake(sname)
+		for i, f in m.faults {
+			if f.signal == sname {
+				out << '${ind}if st.fmem.control_gen(${i}) != st.sgen_${i} { // cleared since: count from here'
+				out << '${ind}\tst.sseen_${i} = st.fsrc_${src}_${f.on}'
+				out << '${ind}\tst.sgen_${i} = st.fmem.control_gen(${i})'
+				out << '${ind}}'
+			}
+		}
 		// the level AND every event: a corrupt frame followed by a good one in the same drain is
 		// still one integrity event for the pass's step (a level alone would be overwritten)
-		src := snake(sname)
 		out << '${ind}st.fsrc_${src} = ${fld}.status'
 		out << '${ind}if ${fld}.status == .integrity {'
 		out << '${ind}\tst.fsrc_${src}_integrity++'
@@ -2115,14 +2127,18 @@ fn rx_publish_hooks(m Model, sname string, fld string, ind string) []string {
 			out << '${ind}st.fsrc_${src}_lost = u32(${fld}.lost)'
 		}
 	}
+	if sname == m.fault_cycle.all_before('.') {
+		cf := m.fault_cycle.all_after('.')
+		out << '${ind}if ${fld}.${cf} != st.fcycle_on {'
+		out << '${ind}\tst.fcycle_edges++'
+		out << '${ind}\tst.fcycle_on = ${fld}.${cf}'
+		out << '${ind}}'
+	}
 	return out
 }
 
-
 // signal_fault_step_lines: turn each watched signal's latest status and event counts into a test
-// result, debounce it on the bridge and consume it. Emitted at the top of every pass AND right
-// before an operation-cycle edge, so events of the cycle that is ending are consumed while it is
-// still active.
+// result, debounce it on the bridge and consume it — once per pass, at its top.
 fn signal_fault_step_lines(m Model, ind string) []string {
 	mut out := []string{}
 	// signal-status faults: the bridge is the detector — each pass turns the watched signal's latest
@@ -2150,6 +2166,11 @@ fn signal_fault_step_lines(m Model, ind string) []string {
 		// while 0x28 has reception off (or its silence is still latched) nothing is received:
 		// the watched signal's status is stale, so the test is disabled, not passed or failed
 		en := if rx_off_latched(m, []string{}, m.isotp_conns[0].bus) { 'diag_rx_ok && !st.diag_rx_was_off' } else { 'diag_rx_ok' }
+		// a clear with no event since: nothing counted before it is fresh any more
+		out << '${ind}if st.fmem.control_gen(${i}) != st.sgen_${i} {'
+		out << '${ind}\tst.sseen_${i} = ${ev}'
+		out << '${ind}\tst.sgen_${i} = st.fmem.control_gen(${i})'
+		out << '${ind}}'
 		out << '${ind}st.sdeb_${i}.apply(st.fmem.control_gen(${i}))'
 		out << '${ind}st.sdeb_${i}.step(${res}, now, ${en})'
 		out << '${ind}st.sseen_${i} = ${ev}'

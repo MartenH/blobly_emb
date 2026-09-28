@@ -235,3 +235,35 @@ test("Signal faults: a status that went stale during 0x28 rx-off does not re-qua
   d:raw(fromhex("14 FF FF FF"))
   rpm(3000, 60)
 end)
+
+test("Signal faults: a clear served between an event and a good frame in one drain stays cleared", function()
+  local d = diag()
+  ignition(true)
+  brakes(5)
+  d:raw(fromhex("14 FF FF FF"))
+  brakes(3)
+  check.equal(dtc(d, "C4 18 00") & 0x09, 0)
+  -- a corrupt frame, a FUNCTIONAL clear (served inline, mid-drain) and a good frame, back to back:
+  -- the event is older than the clear, and the level after it is ok
+  while bus.recv("CAN1", 30) do end -- bus.recv replays everything since the script opened
+  brake(0, true)
+  bus.send("CAN1", 0x7DF, fromhex("04 14 C4 18 00 00 00 00"))
+  brake()
+  local t, answered = 0, false
+  while t < 300 and not answered do
+    local f = bus.recv("CAN1", 20)
+    if f and f.id == 0x102 then
+      check.equal(tohex(f.data:sub(1, 2)), "01 54")
+      answered = true
+    end
+    t = t + 20
+  end
+  check.truthy(answered, "no answer to the functional clear")
+  -- every open client buffers 0x102, so `d` holds that answer too: read on a fresh one
+  sleep_ms(20)
+  d = diag()
+  brakes(3)
+  check.equal(dtc(d, "C4 18 00") & 0x09, 0, "an event from before the clear re-raised the DTC")
+  d:raw(fromhex("14 FF FF FF"))
+  rpm(3000, 60)
+end)
