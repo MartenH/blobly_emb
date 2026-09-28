@@ -151,6 +151,7 @@ mut:
 	e2e_id        map[string]int
 	e2e_crc       map[string]int
 	e2e_ctr       map[string]int
+	e2e_timeout_us map[string]int // the E2E-owned reception timeout (REQ-E2E-002); rx frames only
 	secoc_on      map[string]bool
 	secoc_id      map[string]int
 	secoc_fresh   map[string]int
@@ -1184,6 +1185,11 @@ fn parse_frames(doc toml.Doc, eth string, buses map[string]bool) FrameCfg {
 			}
 			f.e2e_crc[fk] = int((em['crc_pos'] or { toml.Any(0) }).int())
 			f.e2e_ctr[fk] = int((em['counter_pos'] or { toml.Any(0) }).int())
+			e2e_to := int((em['timeout_ms'] or { toml.Any(0) }).int())
+			if e2e_to < 0 {
+				panic('frame "${fk}": e2e timeout_ms ${e2e_to} is negative (0 = no E2E timeout)')
+			}
+			f.e2e_timeout_us[fk] = e2e_to * 1000
 		}
 		if 'secoc' in fm {
 			sm := (fm['secoc'] or { toml.Any('') }).as_map()

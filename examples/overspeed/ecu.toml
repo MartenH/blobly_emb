@@ -123,10 +123,9 @@ bus  = "can0"
 rx   = { timeout_ms = 200 }     # no frame in 200ms -> signals' status = timeout
 
 [[frame]]
-name = "BrakeStatus"            # rx: deadline + E2E — drives BrakePressure's RxStatus
-bus  = "can0"
-rx   = { timeout_ms = 300 }
-e2e  = { data_id = 0x44, crc_pos = 4, counter_pos = 5 }
+name = "BrakeStatus"            # rx: E2E with its OWN sender-loss timeout, no COM deadline —
+bus  = "can0"                   # E2E alone drives BrakePressure's timeout (REQ-E2E-002)
+e2e  = { data_id = 0x44, crc_pos = 4, counter_pos = 5, timeout_ms = 300 }
 
 [[frame]]
 name = "BrakeReport"            # tx: BrakeMonitor's view of that status, for the tester

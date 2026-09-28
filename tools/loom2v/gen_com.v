@@ -621,11 +621,16 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 		// io fn needs a timestamp to gate tx, monitor rx deadlines, or pace ISO-TP
 		mut uses_now := tx_by_msg.len > 0 || conns.len > 0 || sig_routes.len > 0
 		for msg, _ in rx_by_msg {
-			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
+			if has_deadline(m, msg, bname) {
 				uses_now = true
 			}
 		}
 
+		for msg, _ in tx_by_msg {
+			if msg !in rx_by_msg && e2e_timeout(m, msg, bname) > 0 {
+				panic('loom2v: frame "${msg}" is transmitted, but its e2e sets timeout_ms — the E2E timeout watches a RECEIVED frame for loss of its sender')
+			}
+		}
 		glue << ''
 		glue << 'struct Bridge_${bb}_state {'
 		glue << 'mut:'
@@ -666,7 +671,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			}
 			glue << '\tuds_${tp}_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity'
 		}
-		if conns.len > 0 && rx_by_msg.keys().any((m.frames.rx_timeout_us[it] or { 0 }) > 0) {
+		if conns.len > 0 && rx_by_msg.keys().any(has_deadline(m, it, bname)) {
 			glue << '\tdiag_rx_was_off bool // 0x28 had rx off (any sampling since the last restart): restart the deadlines on return'
 		}
 		for d in dests {
@@ -915,6 +920,10 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					}
 					glue << '${ind}if e2e_${msg}.usable() {'
 					ind += '\t'
+					if e2e_timeout(m, msg, bname) > 0 {
+						// protection-level state, like the counter: refreshed even while 0x28 has rx off
+						glue << '${ind}st.e2e_rx_${msg}.on_valid(now)'
+					}
 				}
 				if gate != '' {
 					glue << '${ind}if ${gate} {'
@@ -1038,7 +1047,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 		// rx deadline crossed -> publish invalid (valid=false) signals, once. While 0x28 has rx
 		// off, silence is commanded, not a fault: no deadline fires, and every deadline restarts
 		// when rx comes back (below), so a diagnostic command never fakes a comms timeout.
-		if conns.len > 0 && rx_by_msg.keys().any((m.frames.rx_timeout_us[it] or { 0 }) > 0) {
+		if conns.len > 0 && rx_by_msg.keys().any(has_deadline(m, it, bname)) {
 			// re-sampled AFTER this pass's requests were served: a 0x28 disabling rx now suspends
 			// the deadlines before any of them can fire
 			glue << rx_gate_sample(m, conns, rx_by_msg.keys(), bname, '\t', false)
@@ -1047,14 +1056,27 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 					glue << '\t\tst.rx_${msg}_st.on_receive(now)'
 				}
+				if e2e_timeout(m, msg, bname) > 0 {
+					glue << '\t\tst.e2e_rx_${msg}.arm(now)'
+				}
 			}
 			glue << '\t}'
 			glue << '\tst.diag_rx_was_off = !diag_rx_ok'
 		}
+		// Two deadlines publish the same `timeout`: the QM COM one (REQ-COM-005) and the E2E-owned
+		// one (REQ-E2E-002) — no VALID message for its period, so a stuck or corrupt-only sender
+		// runs it out too. Either may be configured alone; both suspend under 0x28 alike.
 		for msg, list in rx_by_msg {
+			dl_gate := if conns.len > 0 { 'diag_rx_ok && ' } else { '' }
+			mut expiries := []string{}
 			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
-				dl_gate := if conns.len > 0 { 'diag_rx_ok && ' } else { '' }
-				glue << '\tif ${dl_gate}st.rx_${msg}_st.expired(now) {'
+				expiries << 'st.rx_${msg}_st.expired(now)'
+			}
+			if e2e_timeout(m, msg, bname) > 0 {
+				expiries << 'st.e2e_rx_${msg}.expired(now)'
+			}
+			for exp in expiries {
+				glue << '\tif ${dl_gate}${exp} {'
 				lost := lost_expr(m, msg, bname, conns.len > 0)
 				for sname in list {
 					si := m.sig_of[sname] or { continue }
@@ -1346,6 +1368,10 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				// armed from bridge start, not from a first frame: a sender absent since boot
 				// still reaches `timeout` (docs/diagnostics.md §7, R3)
 				glue << '\tst.rx_${msg}_st.arm(osal.now_us())'
+			}
+			if e2e_timeout(m, msg, bname) > 0 {
+				glue << '\tst.e2e_rx_${msg}.timeout_us = ${e2e_timeout(m, msg, bname)}'
+				glue << '\tst.e2e_rx_${msg}.arm(osal.now_us()) // from start, like the COM deadline'
 			}
 			if m.frames.secoc_here(msg, bname) {
 				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(m.frames.secoc_key[msg] or {
@@ -1897,7 +1923,7 @@ fn rx_gate_sample(m Model, conns []IsotpConn, rx_msgs []string, bname string, in
 	lhs := if decl { 'mut diag_rx_ok :=' } else { 'diag_rx_ok =' }
 	out << '${ind}${lhs} ${conns.map('st.uds_${snake(it.name)}.rx_enabled()').join(' && ')}'
 	quiet := rx_msgs.filter(lost_expr(m, it, bname, true).contains('e2e_hidden'))
-	deadlines := rx_msgs.any((m.frames.rx_timeout_us[it] or { 0 }) > 0)
+	deadlines := rx_msgs.any(has_deadline(m, it, bname))
 	if quiet.len > 0 || deadlines {
 		out << '${ind}if !diag_rx_ok { // silence commanded: latch it, frame or not'
 		if deadlines {
@@ -1909,4 +1935,17 @@ fn rx_gate_sample(m Model, conns []IsotpConn, rx_msgs []string, bname string, in
 		out << '${ind}}'
 	}
 	return out
+}
+
+// e2e_timeout: the E2E-owned reception timeout of an rx frame on this bus, in µs (0 = none).
+fn e2e_timeout(m Model, msg string, bname string) int {
+	if !m.frames.e2e_here(msg, bname) {
+		return 0
+	}
+	return m.frames.e2e_timeout_us[msg] or { 0 }
+}
+
+// has_deadline: the frame is monitored for silence — by the COM deadline, the E2E one, or both.
+fn has_deadline(m Model, msg string, bname string) bool {
+	return (m.frames.rx_timeout_us[msg] or { 0 }) > 0 || e2e_timeout(m, msg, bname) > 0
 }

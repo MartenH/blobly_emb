@@ -132,3 +132,12 @@ test("RxStatus: rx switched off and on inside one drain restarts the deadline", 
   check.equal((report(150)), OK, "the deadline was not restarted when reception returned")
   d:session(0x01)
 end)
+
+test("RxStatus: a stuck sender repeating one frame runs out E2E's own timeout (REQ-E2E-002)", function()
+  brake(1000)
+  check.equal((report(150)), OK)
+  for _ = 1, 20 do brake(1000, -1); sleep_ms(20) end -- the SAME counter again: repeats, not valid
+  check.equal((report(100)), TIMEOUT, "repeated frames kept a stuck sender alive")
+  brake(1000)
+  check.equal((report(150)), OK)
+end)

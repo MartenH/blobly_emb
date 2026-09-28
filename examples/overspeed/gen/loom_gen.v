@@ -117,7 +117,6 @@ mut:
 	secoc_key_secure_frame secoc.Key
 	secoc_tx_secure_frame secoc.TxState
 	rx_powertrain_st com.RxState
-	rx_brake_status_st com.RxState
 	e2e_rx_brake_status e2e.RxState
 	e2e_hidden_brake_status u32 // lost frames counted while 0x28 had rx off
 	e2e_quiet_brake_status bool // 0x28 had rx off since the last fresh frame
@@ -166,13 +165,12 @@ fn io_can0_10ms(ctx voidptr) {
 				st.e2e_quiet_brake_status = false
 			}
 			if e2e_brake_status.usable() {
+				st.e2e_rx_brake_status.on_valid(now)
 				if diag_rx_ok {
 					mut brake_pressure := sig.BrakePressure{ kpa: u16(brake_status_brake_pressure_phys(rx.data)), status: .ok, lost: u16(st.e2e_rx_brake_status.lost_frames - st.e2e_hidden_brake_status) }
 					osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
-					st.rx_brake_status_st.on_receive(now)
 				}
 			} else if e2e_brake_status == .crc_error {
-				st.rx_brake_status_st.arm(now)
 				if diag_rx_ok {
 					mut brake_pressure := sig.BrakePressure{ status: .integrity, lost: u16(st.e2e_rx_brake_status.lost_frames - st.e2e_hidden_brake_status) }
 					osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
@@ -249,7 +247,7 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 	if diag_rx_ok && st.diag_rx_was_off {
 		st.rx_powertrain_st.on_receive(now)
-		st.rx_brake_status_st.on_receive(now)
+		st.e2e_rx_brake_status.arm(now)
 	}
 	st.diag_rx_was_off = !diag_rx_ok
 	if diag_rx_ok && st.rx_powertrain_st.expired(now) {
@@ -258,7 +256,7 @@ fn io_can0_10ms(ctx voidptr) {
 		mut engine_speed := sig.EngineSpeed{ status: .timeout }
 		osal.ioc_publish2(engine_speed_ch, &engine_speed, u8(sizeof(engine_speed)))
 	}
-	if diag_rx_ok && st.rx_brake_status_st.expired(now) {
+	if diag_rx_ok && st.e2e_rx_brake_status.expired(now) {
 		mut brake_pressure := sig.BrakePressure{ status: .timeout, lost: u16(st.e2e_rx_brake_status.lost_frames - st.e2e_hidden_brake_status) }
 		osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
 	}
@@ -350,10 +348,8 @@ pub fn partition_can0(ch can.Channel) {
 		timeout_us: 200000
 	}
 	st.rx_powertrain_st.arm(osal.now_us())
-	st.rx_brake_status_st = com.RxState{
-		timeout_us: 300000
-	}
-	st.rx_brake_status_st.arm(osal.now_us())
+	st.e2e_rx_brake_status.timeout_us = 300000
+	st.e2e_rx_brake_status.arm(osal.now_us()) // from start, like the COM deadline
 	st.tp_diag = isotp.Link{
 		bs:    8
 		stmin: 0
