@@ -1,7 +1,15 @@
 # Persistence (non-volatile storage) — design
 
-> Status: DESIGN (2026-07-14). Requirements: `requirements/nvm.toml` (draft, deriving
-> from SYS-REQ-NVM-001). Nothing is built; this page is the shape to argue with.
+> Status (2026-09-27): **P1 and P2 are built** — the journal engine (`nvm/`, with the
+> power-cut fuzz) incl. chained values, and the `persist` codegen — and **P3 is in use** on the
+> ThreadX target (`examples/h755_threadx`, `system_full/nodes/domain`), its power-pull bench
+> loop not yet recorded. **P4
+> (writable DIDs backed by blocks) is not built** — it is the first step of parameters in
+> [diagnostics.md](diagnostics.md) (R7). Requirements: `requirements/nvm.toml` (draft,
+> deriving from SYS-REQ-NVM-001). This page began as the design (2026-07-14); the phasing
+> below records what landed. Fault-memory storage (freeze frames) is now designed in
+> [diagnostics.md](diagnostics.md) §3.3 — chained values in this journal — which supersedes
+> the "second wide-record journal" sketch in §"Diagnostics / fault memory" below.
 > Companion decisions it leans on: the bootloader's flash driver
 > ([bootloader.md](bootloader.md) — same `FlashOps`/`flash.c`), NM's coordinated
 > sleep ([nm.md](nm.md) — the flush point), the signal model
@@ -94,9 +102,9 @@ record (one 32-byte flash word — the program granularity, atomic by constructi
   records). Wear levels perfectly by construction (alternating erase); a wider
   ring is the linear-life upgrade. Whether the live set fits after compaction is
   a GENERATION-TIME check (the generator knows N) — never a runtime failure.
-  Values > 20 bytes are REFUSED by v1 (put() at runtime; a
-  generation-time size gate in P2). Chained values are DESIGNED for the v2
-  engine slice — see "Chained values" below.
+  Values > 20 bytes span CHAINED records (built — see "Chained values" below), up
+  to `nvm.chain_data_max` = 634 B; larger values are refused by put() at runtime.
+  (The persisted-SIGNAL codegen still takes only 1..2 unsigned fields — its own gate.)
 - **Wear math** (H7: 128 KB sectors, 10k cycles): 4096 records/sector. Even one
   record per second sustained = one erase per ~68 min ≈ 1.3 years of CONTINUOUS
   max-rate writing per pair — and `min_write_ms` plus on-change gating keeps real
@@ -214,7 +222,8 @@ control):
 
 - one logical write = ONE seq shared by all its parts (block_id identical);
 - part index in len's high 5 bits, part length in the low bits →
-  up to 31 parts ≈ 570 B per value;
+  up to 32 parts: 32 × 20 B − 2 (total prefix) − 4 (CRC) = 634 B per value
+  (`nvm.chain_data_max`);
 - part 0 (the FF) carries total_len in its first payload bytes;
 - the LAST part's final 4 bytes = CRC32 over the ASSEMBLED value — written
   last, the valid-mark-last rule one level up. Mount groups by (block, seq)
@@ -234,9 +243,10 @@ power-cut fuzz gains a dimension (cuts at and inside every part). Lands
 together with the keyed table (schema-identity hashes) — same Entry/mount
 rework, one review loop.
 
-Consequence for diagnostics: ~570 B chains likely dissolve the second
-wider-record journal — freeze frames chain in the same engine; a separate
-SectorCfg region remains available purely for wear isolation.
+Consequence for diagnostics: 634 B chains dissolve the second wider-record
+journal — freeze frames chain in the same engine (decided in
+[diagnostics.md](diagnostics.md) §3.3); a separate SectorCfg region remains
+available purely for wear isolation.
 
 ## v2 mount: sector epoch headers (designed, not built)
 
@@ -284,14 +294,12 @@ times tens of faults. It does NOT fit the 20-byte signal cell, and it was never
 meant to: fault memory is a PLATFORM module (the `[[nvm.block]]` customer), not
 a persistent signal.
 
-Storage shape when diagnostics lands: a SECOND journal instance over its own
-sector pair with WIDER records — `rec_size` becomes a per-instance parameter
-(64 B -> 52-byte payload, 128 B -> 116) so one freeze frame is ONE atomic
-record: captured-at-fault coherence for free, every fuzz-proven invariant
-unchanged (nothing in the format depends on 32 specifically; program-unit-
-divides-rec_size still holds), diagnostic wear isolated from signal wear.
-Preferred over chained records, which buy the same capacity at the cost of an
-all-parts-or-previous mount rule and fresh crash-window analysis. The write
+Storage shape — SUPERSEDED. This section first proposed a SECOND journal
+instance with wider records (`rec_size` per instance) so one freeze frame is one
+atomic record, preferring it over chains. Chains have since been built, with the
+all-parts-or-previous mount rule that proposal worried about, so the decided shape
+is each DTC's whole entry as ONE chained value in this journal — atomic per value,
+so coherent — in [diagnostics.md](diagnostics.md) §3.3. The write
 pattern fits the engine as-is: event-driven appends at fault occurrence (the
 fault CAUSING the power loss is exactly what the append-CRC format survives),
 small counter updates, no cyclic traffic.
@@ -357,8 +365,8 @@ The entire layer develops dry.
 
 ## Phasing
 
-1. **P1 — the journal engine** (`nvm/` module): format, mount, append, compact
-   over FlashOps; power-cut fuzz tests. Pure host work.
+1. **P1 — the journal engine** (`nvm/` module): BUILT — format, mount, append,
+   compact over FlashOps, chained values; power-cut fuzz tests. Pure host work.
 2. **P2 — `persist` codegen**: BUILT 2026-07-15 ("the toml part"): [nvm] block +
    `persist = "now"/"shutdown"` on signals; schema-identity hashes (+ `nvm_id`
    pin), the generation-time WEAR CHECK (it fired on its first real config:
@@ -369,9 +377,10 @@ The entire layer develops dry.
    change+floor-gated puts, NM prepare-bus-sleep edge flush + mark_clean +
    deferred erase. P2 cut: local signals, 1..2 unsigned fields. Host sim
    example (file-backed) = the next slice.
-3. **P3 — target**: reuse `boards/h755zi/flash.c`; flash map decision per board;
-   NM sleep-entry flush + compaction window. (Bench: pull power mid-append, on a
-   loop, and count survivors.)
+3. **P3 — target**: IN USE — the ThreadX target generates it, and
+   `examples/h755_threadx` and `system_full/nodes/domain` persist signals on the
+   H755. NOT yet recorded: the bench loop that pulls power mid-append and counts
+   survivors has no entry in `requirements/verifications.toml`.
 4. **P4 — DID binding**: writable DIDs backed by blocks (the explicit-write path);
    `[nvm]` policy knobs (per-signal write-through for the rare value that earns it).
 
