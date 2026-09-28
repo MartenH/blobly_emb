@@ -19,7 +19,7 @@ page is the plan to close that, in rungs that each ship and verify on their own.
 
 ## 1. Where we actually are
 
-As of R4b — the rows R0 through R4b changed say so; the rest is the state the plan started from.
+As of R4c — the rows R0 through R4c changed say so; the rest is the state the plan started from.
 
 | Piece | State | Where |
 |---|---|---|
@@ -31,7 +31,7 @@ As of R4b — the rows R0 through R4b changed say so; the rest is the state the 
 | UDS on the **target** | **none** — loom2v refuses `[[isotp]]` on a ThreadX node; on silicon UDS runs only hand-wired — the bootloader over ISO-TP and the `h735_doip` example over DoIP | `tools/loom2v/gen.v` |
 | UDS config | `[[isotp]]` (one per node; `functional_id`, `s3_ms` since R1; `security_attempts`, `security_delay_ms` since R1b) + `[[did]]` (ascii / bytes / signal / writable, `read` / `write` gates) | `tools/ecucheck/gen.v` |
 | Rx signal status | `status = "RxStatus"` (never_received / ok / timeout / integrity) and the E2E `lost` count, bridge-owned, host only (R3a); the COM deadline runs from bridge start (re-arming it on NM wake is R5's: the host bridge has no NM) and from a frame that failed its check; E2E has its own sender-loss timeout on CAN, required on every received E2E frame, refreshed only by a valid message and independent of the COM deadline (R3b; the SOME/IP receive path still lacks it, #299); the target rejects status, rx deadlines and E2E ("phase 6b-2b", R5) | `tools/loom2v/gen_com.v`, `gen.v` |
-| Fault memory / DTCs | R4a + R4b: `[[fault]]` generated on the host — the FB's fault port, debounce on its thread with monotonic counters, the fault memory on the diagnostic bridge (status byte through operation cycles from `[fault_memory] cycle`, confirmation, aging, clears by generation, 0x85 suppression), 0x19 01/02/0A, 0x14, 0x85; RAM only. Not yet: signal-status faults (R4c), target + persistence + freeze frames (R6) | `comm/fault/fault.v`, `tools/loom2v/gen.v`, `gen_com.v` |
+| Fault memory / DTCs | R4a + R4b: `[[fault]]` generated on the host — the FB's fault port, debounce on its thread with monotonic counters, the fault memory on the diagnostic bridge (status byte through operation cycles from `[fault_memory] cycle`, confirmation, aging, clears by generation, 0x85 suppression), 0x19 01/02/0A, 0x14, 0x85; RAM only. R4c: signal-status faults (`signal` / `on` = timeout, integrity, lost), the bridge as detector. Not yet: target + persistence + freeze frames (R6) | `comm/fault/fault.v`, `tools/loom2v/gen.v`, `gen_com.v` |
 | Persistence | journal engine + `persist = "now" / "shutdown"` signals, ThreadX only, one journal per node, 20 B records with 634 B chains; DID write path (NvM "P4") not built | `nvm/`, `tools/loom2v/gen_nvm.v` |
 | Operation cycle / ECU state | the fault memory's operation cycle follows a declared bool signal on the host (`[fault_memory] cycle`, R4b); NM-driven cycles (D3's default) come with faults on the target (R6); `ecu/` (lifecycle, mode arbiter) is still an unused library; NM states exist | `tools/loom2v/gen_com.v`, `ecu/`, `comm/nm/` |
 | Cross-thread transports | last-value cells only (seqlock / double / triple, xioc); `bulk` is the one FIFO | `osal/`, `boards/common/` |

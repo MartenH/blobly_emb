@@ -3513,8 +3513,8 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 	if m.sig_names.len > 0 {
 		ports << 'import sig'
 	}
-	if m.faults.len > 0 {
-		ports << 'import comm.fault' // the fault port's TestResult
+	if m.faults.any(it.signal == '') {
+		ports << 'import comm.fault' // the fault port's TestResult (signal-status faults have no port)
 	}
 
 	// glue references sig.* only for local-cell types; import it only if needed.
@@ -4693,6 +4693,10 @@ struct FaultCfg {
 	enable     []string // "Signal.field" (bool) the handler reads
 	confirm    int
 	aging      int
+	// a SIGNAL-STATUS fault (R4c): no FB tests it — the diagnostic bridge is the detector, from the
+	// named received signal's status: on = "timeout" | "integrity" | "lost"
+	signal string
+	on     string
 }
 
 fn parse_faults(doc toml.Doc) []FaultCfg {
@@ -4705,13 +4709,23 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 				panic('loom2v: [[fault]] "${name}": `${later}` needs the persistent fault memory (rung R6, docs/diagnostics.md) — not generated yet')
 			}
 		}
-		if 'signal' in m || 'on' in m {
-			panic('loom2v: [[fault]] "${name}": a signal-status fault (signal / on) is rung R4c — not generated yet')
-		}
+		signal := (m['signal'] or { toml.Any('') }).string()
+		on := (m['on'] or { toml.Any('') }).string()
 		from := (m['from'] or { toml.Any('') }).string()
-		parts := from.split('.')
-		if parts.len != 2 || parts[0] == '' || parts[1] == '' {
-			panic('loom2v: [[fault]] "${name}": from = "${from}" must name the testing handler as "Fb.handler"')
+		mut parts := ['', '']
+		if signal != '' || on != '' {
+			// a signal-status fault: the bridge tests it, so there is no handler and no enable
+			if from != '' || 'enable' in m {
+				panic('loom2v: [[fault]] "${name}": a signal-status fault (signal / on) is tested by the bridge — it takes no `from` or `enable`')
+			}
+			if signal == '' || on !in ['timeout', 'integrity', 'lost'] {
+				panic('loom2v: [[fault]] "${name}": a signal-status fault needs signal = "<received signal>" and on = "timeout" | "integrity" | "lost"')
+			}
+		} else {
+			parts = from.split('.')
+			if parts.len != 2 || parts[0] == '' || parts[1] == '' {
+				panic('loom2v: [[fault]] "${name}": from = "${from}" must name the testing handler as "Fb.handler" (or use signal / on for a signal-status fault)')
+			}
 		}
 		db := (m['debounce'] or { toml.Any(map[string]toml.Any{}) }).as_map()
 		kind := (db['kind'] or { toml.Any('counter') }).string()
@@ -4768,6 +4782,8 @@ fn parse_faults(doc toml.Doc) []FaultCfg {
 			enable:     enable
 			confirm:    int(confirm)
 			aging:      int(aging)
+			signal:     signal
+			on:         on
 		}
 	}
 	return out
@@ -4781,7 +4797,18 @@ fn parse_fault_cycle(doc toml.Doc) string {
 // fault_fbs: the FBs that own faults, in first-declaration order — each gets one report cell (its
 // thread writes) and one control cell (the diagnostic bridge writes); cfg2v allocates both.
 fn fault_fbs(m Model) []string {
-	return ecumodel.fault_fbs(m.faults.map('${it.fb}.${it.handler}'))
+	return ecumodel.fault_fbs(m.faults.filter(it.signal == '').map('${it.fb}.${it.handler}'))
+}
+
+// fault_sources: the received signals signal-status faults watch, in first-declaration order.
+fn fault_sources(m Model) []string {
+	mut out := []string{}
+	for f in m.faults {
+		if f.signal != '' && f.signal !in out {
+			out << f.signal
+		}
+	}
+	return out
 }
 
 // validate_faults: everything a [[fault]] needs, refused at generation when missing.
@@ -4825,6 +4852,10 @@ fn validate_faults(m Model, doc toml.Doc) {
 			panic('loom2v: [[fault]] "${f.name}": dtc 0x${f.dtc.hex()} is already "${prev}" — a DTC is unique per diagnostic server')
 		}
 		dtcs[f.dtc] = f.name
+		if f.signal != '' {
+			validate_signal_fault(m, f)
+			continue
+		}
 		per_fb[f.fb]++
 		if per_fb[f.fb] > fault.max_per_producer {
 			panic('loom2v: fb "${f.fb}" owns more than ${fault.max_per_producer} faults — its report cell (one IOC payload) holds that many')
@@ -4933,4 +4964,41 @@ fn fault_step_lines(m Model, fb string, handler string) []string {
 	}
 	out << '\tosal.${publish_fn('triple')}(fault_rep_${f}_ch, &st.frep_${f}, u8(sizeof(st.frep_${f})))'
 	return out
+}
+
+// validate_signal_fault: a signal-status fault's source must be received on the diagnostic bus
+// (the bridge that owns the fault memory is the detector) and must be able to show the condition:
+// a timeout needs a deadline on its frame, integrity a protection check, lost the E2E counter.
+fn validate_signal_fault(m Model, f FaultCfg) {
+	si := m.sig_of[f.signal] or { panic('loom2v: [[fault]] "${f.name}": signal "${f.signal}" is not declared') }
+	bus := m.isotp_conns[0].bus
+	if !(si.external && si.rx && si.bus == bus) {
+		panic('loom2v: [[fault]] "${f.name}": signal "${f.signal}" must be received on the diagnostic bus "${bus}" — its bridge is the detector')
+	}
+	msg := si.dbc_msg
+	if !si.has_status {
+		panic('loom2v: [[fault]] "${f.name}": ${f.signal} needs `status = "RxStatus"` — the bridge watches its status')
+	}
+	// `lost` is an EVENT: one failed result per gap, and the next good frame passes — a time
+	// debounce or a counter needing several consecutive failures could never qualify it
+	if f.on == 'lost' && (f.time_based || f.fail_thr > 1) {
+		panic('loom2v: [[fault]] "${f.name}": a lost-frames fault fails once per gap — it needs a counter debounce with fail = 1')
+	}
+	match f.on {
+		'timeout' {
+			if !has_deadline(m, msg, bus) {
+				panic('loom2v: [[fault]] "${f.name}": frame "${msg}" has no deadline (rx.timeout_ms or e2e.timeout_ms) — a timeout could never be seen')
+			}
+		}
+		'integrity' {
+			if !m.frames.e2e_here(msg, bus) && !m.frames.secoc_here(msg, bus) {
+				panic('loom2v: [[fault]] "${f.name}": frame "${msg}" carries no E2E or SecOC — an integrity failure could never be seen')
+			}
+		}
+		else { // lost
+			if si.lost_type == '' {
+				panic('loom2v: [[fault]] "${f.name}": ${f.signal} needs a `lost` counter (an E2E-protected frame) to be watched for lost frames')
+			}
+		}
+	}
 }

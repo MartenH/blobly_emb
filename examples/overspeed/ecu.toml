@@ -221,6 +221,27 @@ dtc      = 0x050600                    # P0506-00: idle rpm lower than expected
 from     = "EngineMonitor.on_10ms"
 debounce = { kind = "counter", fail = 3, pass = 3 }   # no enable condition: only the cycle gates it
 
+# Signal-status faults: no FB code — the diagnostic bridge is the detector, from BrakePressure's
+# receive status (its frame is E2E-protected, with its own 300 ms timeout). Debounce counts bridge
+# passes (10 ms).
+[[fault]]
+name   = "BrakeMsgTimeout"
+dtc    = 0xC12100                      # U0121-00: lost communication with the brake system
+signal = "BrakePressure"
+on     = "timeout"
+
+[[fault]]
+name   = "BrakeMsgIntegrity"
+dtc    = 0xC41800                      # U0418-00: invalid data received from the brake system
+signal = "BrakePressure"
+on     = "integrity"
+
+[[fault]]
+name   = "BrakeMsgLost"
+dtc    = 0xC41801                      # frames missing from the brake system's E2E sequence
+signal = "BrakePressure"
+on     = "lost"
+
 [fault_memory]
 cycle = "IgnitionOn.on"                # the operation cycle: ignition on -> off
 

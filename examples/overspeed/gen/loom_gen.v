@@ -148,6 +148,14 @@ mut:
 	uds_diag uds.Server
 	fmem fault.Memory // the node's fault memory: this bridge is its one writer (D2)
 	fcycle_on bool // the operation-cycle signal as last seen
+	fsrc_brake_pressure sig.RxStatus // BrakePressure's latest published status (signal-status faults)
+	sdeb_2 fault.Debounce // BrakeMsgTimeout: BrakePressure timeout, debounced here
+	sev_2 bool // a publication stepped it since the last pass top: skip the level step
+	sdeb_3 fault.Debounce // BrakeMsgIntegrity: BrakePressure integrity, debounced here
+	sev_3 bool // a publication stepped it since the last pass top: skip the level step
+	sdeb_4 fault.Debounce // BrakeMsgLost: BrakePressure lost, debounced here
+	sev_4 bool // a publication stepped it since the last pass top: skip the level step
+	slost_4 u16 // the lost-frame count last seen (wrapping)
 	frep_engine_monitor fault.Reports // from EngineMonitor's thread
 	fctl_engine_monitor fault.Control // to EngineMonitor's thread
 	sa_diag uds.ReferenceSecurity // 0x27 on the host: the SIM key (not a secret, decision D5)
@@ -170,6 +178,31 @@ fn io_can0_10ms(ctx voidptr) {
 	if !diag_rx_ok { // silence commanded: latch it, frame or not
 		st.diag_rx_was_off = true
 		st.e2e_quiet_brake_status = true
+		st.fsrc_brake_pressure = .never_received
+	}
+	if st.sev_2 && diag_rx_ok && !st.diag_rx_was_off {
+		st.sev_2 = false
+	} else {
+		st.sev_2 = false
+		st.sdeb_2.apply(st.fmem.control_gen(2))
+		st.sdeb_2.step(if st.fsrc_brake_pressure == .timeout { fault.TestResult.failed } else if st.fsrc_brake_pressure == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok && !st.diag_rx_was_off)
+		st.fmem.consume(2, st.sdeb_2.rep)
+	}
+	if st.sev_3 && diag_rx_ok && !st.diag_rx_was_off {
+		st.sev_3 = false
+	} else {
+		st.sev_3 = false
+		st.sdeb_3.apply(st.fmem.control_gen(3))
+		st.sdeb_3.step(if st.fsrc_brake_pressure == .integrity { fault.TestResult.failed } else if st.fsrc_brake_pressure == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok && !st.diag_rx_was_off)
+		st.fmem.consume(3, st.sdeb_3.rep)
+	}
+	if st.sev_4 && diag_rx_ok && !st.diag_rx_was_off {
+		st.sev_4 = false
+	} else {
+		st.sev_4 = false
+		st.sdeb_4.apply(st.fmem.control_gen(4))
+		st.sdeb_4.step(if st.fsrc_brake_pressure == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok && !st.diag_rx_was_off)
+		st.fmem.consume(4, st.sdeb_4.rep)
 	}
 	osal.ioc_acquire(fault_rep_engine_monitor_ch, &st.frep_engine_monitor, u8(sizeof(st.frep_engine_monitor)))
 	st.fmem.consume(0, st.frep_engine_monitor.r[0])
@@ -194,10 +227,12 @@ fn io_can0_10ms(ctx voidptr) {
 				osal.ioc_publish2(ignition_on_ch, &ignition_on, u8(sizeof(ignition_on)))
 				if ignition_on.on && !st.fcycle_on {
 					st.fmem.cycle_start()
-				} else if !ignition_on.on && st.fcycle_on {
-					st.fmem.cycle_end()
+					st.fcycle_on = true
 				}
-				st.fcycle_on = ignition_on.on
+				if !ignition_on.on && st.fcycle_on {
+					st.fmem.cycle_end()
+					st.fcycle_on = false
+				}
 				st.rx_ignition_st.on_receive(now)
 			}
 		}
@@ -217,9 +252,37 @@ fn io_can0_10ms(ctx voidptr) {
 					if late_brake_status {
 						mut brake_pressure := sig.BrakePressure{ status: .timeout, lost: u16(st.e2e_rx_brake_status.lost_frames - st.e2e_hidden_brake_status) }
 						osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
+						st.fsrc_brake_pressure = brake_pressure.status
+						st.sdeb_2.apply(st.fmem.control_gen(2))
+						st.sdeb_2.step(if brake_pressure.status == .timeout { fault.TestResult.failed } else if brake_pressure.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok)
+						st.fmem.consume(2, st.sdeb_2.rep)
+						st.sev_2 = true
+						st.sdeb_3.apply(st.fmem.control_gen(3))
+						st.sdeb_3.step(if brake_pressure.status == .integrity { fault.TestResult.failed } else if brake_pressure.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok)
+						st.fmem.consume(3, st.sdeb_3.rep)
+						st.sev_3 = true
+						st.sdeb_4.apply(st.fmem.control_gen(4))
+						st.sdeb_4.step(if u16(brake_pressure.lost - st.slost_4) != 0 && u16(brake_pressure.lost - st.slost_4) < 0x8000 { fault.TestResult.failed } else if brake_pressure.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok)
+						st.fmem.consume(4, st.sdeb_4.rep)
+						st.sev_4 = true
+						st.slost_4 = brake_pressure.lost
 					} else {
 						mut brake_pressure := sig.BrakePressure{ kpa: u16(brake_status_brake_pressure_phys(rx.data)), status: .ok, lost: u16(st.e2e_rx_brake_status.lost_frames - st.e2e_hidden_brake_status) }
 						osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
+						st.fsrc_brake_pressure = brake_pressure.status
+						st.sdeb_2.apply(st.fmem.control_gen(2))
+						st.sdeb_2.step(if brake_pressure.status == .timeout { fault.TestResult.failed } else if brake_pressure.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok)
+						st.fmem.consume(2, st.sdeb_2.rep)
+						st.sev_2 = true
+						st.sdeb_3.apply(st.fmem.control_gen(3))
+						st.sdeb_3.step(if brake_pressure.status == .integrity { fault.TestResult.failed } else if brake_pressure.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok)
+						st.fmem.consume(3, st.sdeb_3.rep)
+						st.sev_3 = true
+						st.sdeb_4.apply(st.fmem.control_gen(4))
+						st.sdeb_4.step(if u16(brake_pressure.lost - st.slost_4) != 0 && u16(brake_pressure.lost - st.slost_4) < 0x8000 { fault.TestResult.failed } else if brake_pressure.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok)
+						st.fmem.consume(4, st.sdeb_4.rep)
+						st.sev_4 = true
+						st.slost_4 = brake_pressure.lost
 					}
 				}
 			} else if e2e_brake_status == .crc_error {
@@ -229,6 +292,20 @@ fn io_can0_10ms(ctx voidptr) {
 				if diag_rx_ok {
 					mut brake_pressure := sig.BrakePressure{ status: .integrity, lost: u16(st.e2e_rx_brake_status.lost_frames - st.e2e_hidden_brake_status) }
 					osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
+					st.fsrc_brake_pressure = brake_pressure.status
+					st.sdeb_2.apply(st.fmem.control_gen(2))
+					st.sdeb_2.step(if brake_pressure.status == .timeout { fault.TestResult.failed } else if brake_pressure.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok)
+					st.fmem.consume(2, st.sdeb_2.rep)
+					st.sev_2 = true
+					st.sdeb_3.apply(st.fmem.control_gen(3))
+					st.sdeb_3.step(if brake_pressure.status == .integrity { fault.TestResult.failed } else if brake_pressure.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok)
+					st.fmem.consume(3, st.sdeb_3.rep)
+					st.sev_3 = true
+					st.sdeb_4.apply(st.fmem.control_gen(4))
+					st.sdeb_4.step(if u16(brake_pressure.lost - st.slost_4) != 0 && u16(brake_pressure.lost - st.slost_4) < 0x8000 { fault.TestResult.failed } else if brake_pressure.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok)
+					st.fmem.consume(4, st.sdeb_4.rep)
+					st.sev_4 = true
+					st.slost_4 = brake_pressure.lost
 				}
 			}
 		}
@@ -262,6 +339,7 @@ fn io_can0_10ms(ctx voidptr) {
 				if !diag_rx_ok { // silence commanded: latch it, frame or not
 					st.diag_rx_was_off = true
 					st.e2e_quiet_brake_status = true
+					st.fsrc_brake_pressure = .never_received
 				}
 			}
 		}
@@ -299,6 +377,7 @@ fn io_can0_10ms(ctx voidptr) {
 	if !diag_rx_ok { // silence commanded: latch it, frame or not
 		st.diag_rx_was_off = true
 		st.e2e_quiet_brake_status = true
+		st.fsrc_brake_pressure = .never_received
 	}
 	if diag_rx_ok && st.diag_rx_was_off {
 		st.rx_powertrain_st.on_receive(now)
@@ -317,14 +396,30 @@ fn io_can0_10ms(ctx voidptr) {
 		osal.ioc_publish2(ignition_on_ch, &ignition_on, u8(sizeof(ignition_on)))
 		if ignition_on.on && !st.fcycle_on {
 			st.fmem.cycle_start()
-		} else if !ignition_on.on && st.fcycle_on {
-			st.fmem.cycle_end()
+			st.fcycle_on = true
 		}
-		st.fcycle_on = ignition_on.on
+		if !ignition_on.on && st.fcycle_on {
+			st.fmem.cycle_end()
+			st.fcycle_on = false
+		}
 	}
 	if diag_rx_ok && st.e2e_rx_brake_status.expired(now) {
 		mut brake_pressure := sig.BrakePressure{ status: .timeout, lost: u16(st.e2e_rx_brake_status.lost_frames - st.e2e_hidden_brake_status) }
 		osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
+		st.fsrc_brake_pressure = brake_pressure.status
+		st.sdeb_2.apply(st.fmem.control_gen(2))
+		st.sdeb_2.step(if brake_pressure.status == .timeout { fault.TestResult.failed } else if brake_pressure.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok)
+		st.fmem.consume(2, st.sdeb_2.rep)
+		st.sev_2 = true
+		st.sdeb_3.apply(st.fmem.control_gen(3))
+		st.sdeb_3.step(if brake_pressure.status == .integrity { fault.TestResult.failed } else if brake_pressure.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok)
+		st.fmem.consume(3, st.sdeb_3.rep)
+		st.sev_3 = true
+		st.sdeb_4.apply(st.fmem.control_gen(4))
+		st.sdeb_4.step(if u16(brake_pressure.lost - st.slost_4) != 0 && u16(brake_pressure.lost - st.slost_4) < 0x8000 { fault.TestResult.failed } else if brake_pressure.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }, now, diag_rx_ok)
+		st.fmem.consume(4, st.sdeb_4.rep)
+		st.sev_4 = true
+		st.slost_4 = brake_pressure.lost
 	}
 	diag_tx_ok := st.uds_diag.tx_enabled()
 	mut tx_lamp_frame := can.Frame{
@@ -489,7 +584,28 @@ pub fn partition_can0(ch can.Channel) {
 	st.fmem.slots[0].aging = u8(2)
 	st.fmem.slots[1].dtc = u32(0x50600) // EngineIdleLow
 	st.fmem.slots[1].confirm = u8(1)
-	st.fmem.n = 2
+	st.fmem.slots[2].dtc = u32(0xc12100) // BrakeMsgTimeout
+	st.fmem.slots[2].confirm = u8(1)
+	st.fmem.slots[2].local = true // stepped and consumed on this thread
+	st.fmem.slots[3].dtc = u32(0xc41800) // BrakeMsgIntegrity
+	st.fmem.slots[3].confirm = u8(1)
+	st.fmem.slots[3].local = true // stepped and consumed on this thread
+	st.fmem.slots[4].dtc = u32(0xc41801) // BrakeMsgLost
+	st.fmem.slots[4].confirm = u8(1)
+	st.fmem.slots[4].local = true // stepped and consumed on this thread
+	st.sdeb_2 = fault.Debounce{
+		fail_thr: 1
+		pass_thr: 1
+	}
+	st.sdeb_3 = fault.Debounce{
+		fail_thr: 1
+		pass_thr: 1
+	}
+	st.sdeb_4 = fault.Debounce{
+		fail_thr: 1
+		pass_thr: 1
+	}
+	st.fmem.n = 5
 	st.fmem.init()
 	st.uds_diag.faults = st.fmem.uds_ops() // 0x19 / 0x14 / 0x85
 	mut sched := loom.Scheduler{}

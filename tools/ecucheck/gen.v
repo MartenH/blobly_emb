@@ -278,7 +278,9 @@ fn specs() map[string]map[string]Key {
 		'fault':      {
 			'name':     req(.str)
 			'dtc':      req(.int) // 3-byte DTC
-			'from':     req(.str) // "Fb.handler" — the handler that tests it
+			'from':     k(.str) // "Fb.handler" — the handler that tests it (or signal / on)
+			'signal':   k(.str) // a signal-status fault: the received signal the bridge watches
+			'on':       k(.str) // timeout | integrity | lost
 			'debounce': sub(.tbl, false, 'fault_debounce')
 			'enable':   k(.str_arr) // "Signal.field" bool conditions the handler reads
 			'confirm':  k(.int) // failed operation cycles to confirm (default 1)
