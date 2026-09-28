@@ -4604,7 +4604,7 @@ fn ms_to_us(ms i64, what string) int {
 	if ms < 0 {
 		panic('loom2v: ${what} ${ms} is negative (0 = none)')
 	}
-	if ms * 1000 > i64(max_i32) {
+	if ms > i64(max_i32) / 1000 { // compared in ms: `ms * 1000` itself could overflow i64
 		panic('loom2v: ${what} ${ms} is too long (at most ${i64(max_i32) / 1000} ms)')
 	}
 	return int(ms * 1000)
