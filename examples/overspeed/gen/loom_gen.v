@@ -56,6 +56,7 @@ pub fn partition_sense(core int, arg voidptr) {
 struct Partition_ctrl_state {
 mut:
 	engine_monitor app.EngineMonitor
+	brake_monitor app.BrakeMonitor
 	lamp_controller app.LampController
 	cell_high_rev sig.HighRev // local FB->FB signal
 }
@@ -67,6 +68,16 @@ fn handler_ctrl_engine_monitor_on_10ms(ctx voidptr) {
 	mut outp := ports.EngineMonitorOut{}
 	st.engine_monitor.on_10ms(inp, mut outp)
 	st.cell_high_rev = outp.high_rev // local
+}
+
+fn handler_ctrl_brake_monitor_on_10ms(ctx voidptr) {
+	mut st := unsafe { &Partition_ctrl_state(ctx) }
+	mut inp := ports.BrakeMonitorIn{}
+	osal.ioc_acquire2(brake_pressure_ch, &inp.brake_pressure, u8(sizeof(inp.brake_pressure)))
+	mut outp := ports.BrakeMonitorOut{}
+	st.brake_monitor.on_10ms(inp, mut outp)
+	osal.ioc_publish2(brake_rx_status_ch, &outp.brake_rx_status, u8(sizeof(outp.brake_rx_status)))
+	osal.ioc_publish2(brake_lost_ch, &outp.brake_lost, u8(sizeof(outp.brake_lost)))
 }
 
 fn handler_ctrl_lamp_controller_on_10ms(ctx voidptr) {
@@ -85,6 +96,7 @@ pub fn partition_ctrl(core int, arg voidptr) {
 	mut st := Partition_ctrl_state{}
 	mut sched := loom.Scheduler{}
 	sched.every(10000, handler_ctrl_engine_monitor_on_10ms, &st)
+	sched.every(10000, handler_ctrl_brake_monitor_on_10ms, &st)
 	sched.every(10000, handler_ctrl_lamp_controller_on_10ms, &st)
 	for {
 		loom_t0 := osal.now_us()
@@ -100,10 +112,13 @@ mut:
 	chan can.Channel
 	tx_lamp_frame_st com.TxState
 	e2e_tx_lamp_frame e2e.TxState
+	tx_brake_report_st com.TxState
 	tx_secure_frame_st com.TxState
 	secoc_key_secure_frame secoc.Key
 	secoc_tx_secure_frame secoc.TxState
 	rx_powertrain_st com.RxState
+	rx_brake_status_st com.RxState
+	e2e_rx_brake_status e2e.RxState
 	tp_diag isotp.Link
 	tp_diag_buf [isotp.max_payload]u8
 	uds_diag uds.Server
@@ -128,11 +143,26 @@ fn io_can0_10ms(ctx voidptr) {
 	for st.chan.recv(mut rx) {
 		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false {
 			if diag_rx_ok {
-				mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), valid: true }
+				mut vehicle_speed := sig.VehicleSpeed{ kph: u16(powertrain_vehicle_speed_phys(rx.data)), status: .ok }
 				osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
-				mut engine_speed := sig.EngineSpeed{ rpm: u16(powertrain_engine_speed_phys(rx.data)), valid: true }
+				mut engine_speed := sig.EngineSpeed{ rpm: u16(powertrain_engine_speed_phys(rx.data)), status: .ok }
 				osal.ioc_publish2(engine_speed_ch, &engine_speed, u8(sizeof(engine_speed)))
 				st.rx_powertrain_st.on_receive(now)
+			}
+		}
+		if rx.id == brake_status_id && rx.len == brake_status_dlc && rx.ext == false {
+			e2e_brake_status := st.e2e_rx_brake_status.check(&rx.data[0], int(brake_status_dlc), u16(0x44), 4, 5)
+			if e2e_brake_status.usable() {
+				if diag_rx_ok {
+					mut brake_pressure := sig.BrakePressure{ kpa: u16(brake_status_brake_pressure_phys(rx.data)), status: .ok, lost: u16(st.e2e_rx_brake_status.lost_frames) }
+					osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
+					st.rx_brake_status_st.on_receive(now)
+				}
+			} else if e2e_brake_status == .crc_error {
+				if diag_rx_ok {
+					mut brake_pressure := sig.BrakePressure{ status: .integrity, lost: u16(st.e2e_rx_brake_status.lost_frames) }
+					osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
+				}
 			}
 		}
 		if rx.id == u32(0x101) && !rx.ext {
@@ -197,13 +227,18 @@ fn io_can0_10ms(ctx voidptr) {
 	diag_rx_ok = st.uds_diag.rx_enabled()
 	if diag_rx_ok && st.diag_rx_was_off {
 		st.rx_powertrain_st.on_receive(now)
+		st.rx_brake_status_st.on_receive(now)
 	}
 	st.diag_rx_was_off = !diag_rx_ok
 	if diag_rx_ok && st.rx_powertrain_st.expired(now) {
-		mut vehicle_speed := sig.VehicleSpeed{}
+		mut vehicle_speed := sig.VehicleSpeed{ status: .timeout }
 		osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
-		mut engine_speed := sig.EngineSpeed{}
+		mut engine_speed := sig.EngineSpeed{ status: .timeout }
 		osal.ioc_publish2(engine_speed_ch, &engine_speed, u8(sizeof(engine_speed)))
+	}
+	if diag_rx_ok && st.rx_brake_status_st.expired(now) {
+		mut brake_pressure := sig.BrakePressure{ status: .timeout, lost: u16(st.e2e_rx_brake_status.lost_frames) }
+		osal.ioc_publish2(brake_pressure_ch, &brake_pressure, u8(sizeof(brake_pressure)))
 	}
 	diag_tx_ok := st.uds_diag.tx_enabled()
 	mut tx_lamp_frame := can.Frame{
@@ -224,6 +259,26 @@ fn io_can0_10ms(ctx voidptr) {
 			st.tx_lamp_frame_st.mark_sent(now, tx_lamp_frame_pre, lamp_frame_dlc)
 		} else {
 			st.e2e_tx_lamp_frame = e2e_save_lamp_frame
+		}
+	}
+	mut tx_brake_report := can.Frame{
+		id:  brake_report_id
+		len: brake_report_dlc
+	}
+	mut tx_brake_report_any := false
+	mut brake_rx_status := sig.BrakeRxStatus{}
+	if osal.ioc_acquire2(brake_rx_status_ch, &brake_rx_status, u8(sizeof(brake_rx_status))) {
+		brake_report_brake_rx_status_set(mut tx_brake_report.data, f64(brake_rx_status.code))
+		tx_brake_report_any = true
+	}
+	mut brake_lost := sig.BrakeLost{}
+	if osal.ioc_acquire2(brake_lost_ch, &brake_lost, u8(sizeof(brake_lost))) {
+		brake_report_brake_lost_set(mut tx_brake_report.data, f64(brake_lost.count))
+		tx_brake_report_any = true
+	}
+	if tx_brake_report_any && diag_tx_ok && st.chan.tx_ready() && st.tx_brake_report_st.should_send(now, tx_brake_report.data, brake_report_dlc) {
+		if st.chan.send(tx_brake_report) {
+			st.tx_brake_report_st.mark_sent(now, tx_brake_report.data, brake_report_dlc)
 		}
 	}
 	mut tx_secure_frame := can.Frame{
@@ -258,6 +313,11 @@ pub fn partition_can0(ch can.Channel) {
 		cycle_us: 100000
 		min_delay_us: 20000
 	}
+	st.tx_brake_report_st = com.TxState{
+		mode: com.TxMode.cyclic
+		cycle_us: 20000
+		min_delay_us: 0
+	}
 	st.tx_secure_frame_st = com.TxState{
 		mode: com.TxMode.cyclic
 		cycle_us: 50000
@@ -267,6 +327,11 @@ pub fn partition_can0(ch can.Channel) {
 	st.rx_powertrain_st = com.RxState{
 		timeout_us: 200000
 	}
+	st.rx_powertrain_st.arm(osal.now_us())
+	st.rx_brake_status_st = com.RxState{
+		timeout_us: 300000
+	}
+	st.rx_brake_status_st.arm(osal.now_us())
 	st.tp_diag = isotp.Link{
 		bs:    8
 		stmin: 0

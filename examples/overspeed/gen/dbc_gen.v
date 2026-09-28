@@ -954,9 +954,9 @@ pub fn wheel_speeds_wheel_rr_set(mut data [64]u8, phys f64) {
 	wheel_speeds_wheel_rr_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
 }
 
-// ===== BrakeStatus  id=0x301  dlc=4 =====
+// ===== BrakeStatus  id=0x301  dlc=6 =====
 pub const brake_status_id = u32(0x301)
-pub const brake_status_dlc = u8(4)
+pub const brake_status_dlc = u8(6)
 
 // BrakePressure: 0|16 @1 (Intel) unsigned (0.1,0.0) "kPa"
 pub fn brake_status_brake_pressure_raw(data [64]u8) u64 {
@@ -1076,6 +1076,170 @@ pub fn brake_status_brake_pedal_set(mut data [64]u8, phys f64) {
 		raw += i64(u64(1) << 7)
 	}
 	brake_status_brake_pedal_set_raw(mut data, u64(raw) & ((u64(1) << 7) - 1))
+}
+
+// BrakeCrc: 32|8 @1 (Intel) unsigned (1.0,0.0) ""
+pub fn brake_status_brake_crc_raw(data [64]u8) u64 {
+	mut raw := u64(0)
+	for i in 0 .. 8 {
+		g := 32 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit := (data[byte_idx] >> (g % 8)) & 1
+		raw |= u64(bit) << i
+	}
+	return raw
+}
+pub fn brake_status_brake_crc_phys(data [64]u8) f64 {
+	raw := brake_status_brake_crc_raw(data)
+	return f64(raw) * 1.0 + 0.0
+}
+pub fn brake_status_brake_crc_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 8 {
+		g := 32 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn brake_status_brake_crc_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 8)
+	}
+	brake_status_brake_crc_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
+}
+
+// BrakeCounter: 40|4 @1 (Intel) unsigned (1.0,0.0) ""
+pub fn brake_status_brake_counter_raw(data [64]u8) u64 {
+	mut raw := u64(0)
+	for i in 0 .. 4 {
+		g := 40 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit := (data[byte_idx] >> (g % 8)) & 1
+		raw |= u64(bit) << i
+	}
+	return raw
+}
+pub fn brake_status_brake_counter_phys(data [64]u8) f64 {
+	raw := brake_status_brake_counter_raw(data)
+	return f64(raw) * 1.0 + 0.0
+}
+pub fn brake_status_brake_counter_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 4 {
+		g := 40 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn brake_status_brake_counter_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 4)
+	}
+	brake_status_brake_counter_set_raw(mut data, u64(raw) & ((u64(1) << 4) - 1))
+}
+
+// ===== BrakeReport  id=0x131  dlc=3 =====
+pub const brake_report_id = u32(0x131)
+pub const brake_report_dlc = u8(3)
+
+// BrakeRxStatus: 0|8 @1 (Intel) unsigned (1.0,0.0) ""
+pub fn brake_report_brake_rx_status_raw(data [64]u8) u64 {
+	mut raw := u64(0)
+	for i in 0 .. 8 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit := (data[byte_idx] >> (g % 8)) & 1
+		raw |= u64(bit) << i
+	}
+	return raw
+}
+pub fn brake_report_brake_rx_status_phys(data [64]u8) f64 {
+	raw := brake_report_brake_rx_status_raw(data)
+	return f64(raw) * 1.0 + 0.0
+}
+pub fn brake_report_brake_rx_status_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 8 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn brake_report_brake_rx_status_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 8)
+	}
+	brake_report_brake_rx_status_set_raw(mut data, u64(raw) & ((u64(1) << 8) - 1))
+}
+
+// BrakeLost: 8|16 @1 (Intel) unsigned (1.0,0.0) ""
+pub fn brake_report_brake_lost_raw(data [64]u8) u64 {
+	mut raw := u64(0)
+	for i in 0 .. 16 {
+		g := 8 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit := (data[byte_idx] >> (g % 8)) & 1
+		raw |= u64(bit) << i
+	}
+	return raw
+}
+pub fn brake_report_brake_lost_phys(data [64]u8) f64 {
+	raw := brake_report_brake_lost_raw(data)
+	return f64(raw) * 1.0 + 0.0
+}
+pub fn brake_report_brake_lost_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 16 {
+		g := 8 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn brake_report_brake_lost_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 16)
+	}
+	brake_report_brake_lost_set_raw(mut data, u64(raw) & ((u64(1) << 16) - 1))
 }
 
 // ===== BatteryStatus  id=0x400  dlc=8 =====

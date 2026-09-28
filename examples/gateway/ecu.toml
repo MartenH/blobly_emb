@@ -30,7 +30,7 @@ trusted = false
 
 [[signal]]
 name = "VehicleSpeed"
-fields = { kph = "u16", valid = "bool" }
+fields = { kph = "u16", status = "RxStatus" }
 from = "can0"        # EXTERNAL: in on can0
 to   = "mon"
 transport = "double"

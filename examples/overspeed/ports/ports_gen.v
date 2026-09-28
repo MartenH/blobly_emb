@@ -36,6 +36,19 @@ pub mut:
 	high_rev sig.HighRev
 }
 
+pub struct BrakeMonitorIn {
+pub mut:
+	// signal "BrakePressure" — ch, transport double, can0 -> ctrl
+	brake_pressure sig.BrakePressure
+}
+pub struct BrakeMonitorOut {
+pub mut:
+	// signal "BrakeRxStatus" — ch, transport double, ctrl -> can0
+	brake_rx_status sig.BrakeRxStatus
+	// signal "BrakeLost" — ch, transport double, ctrl -> can0
+	brake_lost sig.BrakeLost
+}
+
 pub struct LampControllerIn {
 pub mut:
 	// signal "Overspeed" — ch, transport double, sense -> ctrl

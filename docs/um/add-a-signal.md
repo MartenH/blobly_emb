@@ -36,7 +36,9 @@ pub mut:
 
 A signal with `fields = { n = "u32", acc = "u32" }` is a two-field struct
 (`outp.m4_count.n`, `.acc`). Prefer a descriptive name over `v` (`speed_kph = "u16"`).
-The name `valid` is reserved — a freshness flag some host transports carry.
+On a signal received from a bus, `status = "RxStatus"` and `lost` are the bridge's — its
+receive status and E2E lost-frame count ([communication.md](../communication.md)) — and a
+`valid` field is refused there.
 
 The **wire layout is the DBC's job**, matched by NAME: when an endpoint is a bus, the
 signal name must be a DBC signal, and the DBC says where its bits live. In DBC terms a

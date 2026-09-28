@@ -79,3 +79,12 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-COMMS-001"
+
+[[req]]
+id = "REQ-COM-008"
+title = "Receive status"
+text = "COM shall publish, with each received signal that declares one, a status stating what it last learned of that signal: not yet received, received from a good frame, reception deadline passed, or newest frame failed its E2E or SecOC check. The deadline shall run from COM start, so a sender absent since start is reported as a deadline loss; for an E2E-protected frame, COM shall also publish the count of frames the sequence counter showed missing."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-COMMS-003"

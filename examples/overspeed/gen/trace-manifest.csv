@@ -3,7 +3,8 @@
 0,sense,0,SpeedFilter,on_10ms,10000,sense_main
 1,sense,0,OverspeedDetector,on_10ms,10000,sense_main
 2,ctrl,1,EngineMonitor,on_10ms,10000,ctrl_main
-3,ctrl,1,LampController,on_10ms,10000,ctrl_main
+3,ctrl,1,BrakeMonitor,on_10ms,10000,ctrl_main
+4,ctrl,1,LampController,on_10ms,10000,ctrl_main
 # threads: thread,id,name,core,prio  (id 0 reserved = idle; prio - = no RTOS prio)
 thread,1,sense_main,0,10
 thread,2,ctrl_main,1,10

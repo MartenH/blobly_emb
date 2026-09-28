@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 195 | 105 | 26 | 64 | 0 |
+| 196 | 105 | 27 | 64 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -52,6 +52,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-005 | QM | test | verified | com_test.v (pass) |
 | REQ-COM-006 | QM | test | verified | com_test.v (pass) |
 | REQ-COM-007 | QM | test | uncovered | — |
+| REQ-COM-008 | QM | test | covered | rxstatus.lua (pending) |
 | REQ-DIAG-001 | QM | test | verified | uds_test.v (pass) |
 | REQ-DIAG-002 | QM | test | covered | diag.lua (pending) |
 | REQ-DIAG-003 | QM | test | covered | diag.lua (pending), uds_test.v (pass) |
@@ -252,6 +253,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-005 | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-COM-006 | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-COM-007 | | | | | | | | | | | | | | | | | | | |
+| REQ-COM-008 | | | | | | | | | | | | | | | · | | | | |
 | REQ-DIAG-001 | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-002 | | | | | | | | | | | | | | | · | | | | |
 | REQ-DIAG-003 | | | | | | | | | | | | | | | · | ✓ | | | |

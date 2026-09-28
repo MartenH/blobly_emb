@@ -69,9 +69,19 @@ tx   = { mode = "mixed", cycle_ms = 100, min_delay_ms = 20 }
 | `mixed` | both: cyclic heartbeat + immediate on change |
 | `triggered` | only on an explicit `trigger` (e.g. from an FB or diag) |
 
-**RX deadline monitoring** (per rx PDU): if no frame arrives within `timeout_ms`,
-the unpacked signals are marked invalid (the `valid` field) and/or replaced with an
-init value — so an FB's existing `inp.x.valid` check already covers a dropped bus.
+**RX deadline monitoring** (per rx PDU): if no frame arrives within `timeout_ms` — counted
+from bridge start, so a sender absent since boot times out too — the signals are published
+once with value zero and, where the signal declares one, `status = .timeout`.
+
+**Receive status** (per rx signal, opt-in): `fields = { kph = "u16", status = "RxStatus" }`
+gives the FB what the bridge last learned — `never_received` (the zero value: nothing
+yet), `ok` (a good frame), `timeout` (the deadline passed), or `integrity` (the newest
+frame failed its E2E CRC or SecOC check; value zero). An E2E repeat is a duplicate, not a
+fault, and publishes nothing. On an E2E-protected frame, `lost = "u16"` (or `u32`) adds
+the count of frames the sequence counter showed missing — monotonic, wrapping; diff it.
+The bridge owns `status` and `lost` on a received signal (a `valid` field there fails
+generation); on an internal signal they are ordinary fields an FB may forward. See
+[diagnostics.md](diagnostics.md) §3.2.
 
 This replaces the bridge's unconditional 10 ms send: each PDU runs its own little
 TX state machine (last-sent timestamp, change detection, repeat counter), all

@@ -865,41 +865,39 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\t\tif rx.id == ${msg}_id && rx.len == ${msg}_dlc && rx.ext == ${msg_ext[msg]} {'
 				e2e := m.frames.e2e_here(msg, bname)
 				secoc := m.frames.secoc_here(msg, bname)
-				// protected frames are decoded only if the check passes; a bad frame
-				// is ignored (the rx deadline then invalidates).
+				// protected frames are decoded only if the check passes. A frame that FAILS it — an
+				// E2E CRC error, or any SecOC failure — publishes status `integrity` to the signals that
+				// carry one (docs/diagnostics.md §3.2); an E2E REPEAT is a duplicate, not a fault, and
+				// publishes nothing (a stuck sender then reaches `timeout` through the deadline).
+				// 0x28 gates only what the application SEES: the checks themselves run on every frame,
+				// so SecOC freshness and the E2E counter keep tracking the sender and the first frame
+				// after rx is re-enabled is not judged a replay or a loss burst.
+				lost := if e2e { 'st.e2e_rx_${msg}.lost_frames' } else { '' }
+				gate := if conns.len > 0 { 'diag_rx_ok' } else { '' }
 				mut ind := '\t\t\t'
 				if secoc {
-					glue << '\t\t\tif st.secoc_rx_${msg}.verify(&st.secoc_key_${msg}, &rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.secoc_id[msg] or {
+					glue << '${ind}if st.secoc_rx_${msg}.verify(&st.secoc_key_${msg}, &rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.secoc_id[msg] or {
 						0
 					}).hex()}), ${m.frames.secoc_fresh[msg] or { 0 }}, ${m.frames.secoc_mac[msg] or { 0 }}, ${m.frames.secoc_maclen[msg] or {
 						0
 					}}).usable() {'
-					ind = '\t\t\t\t'
-					if e2e {
-						// composed frame: only an AUTHENTIC message reaches the E2E check
-						// (REQ-E2E-004 order), and the check excludes SecOC's bytes. Without
-						// this nested check, SecOC silently masked E2E's repeat/loss
-						// detection — the exact fault-masking the requirement forbids.
-						// STATE COUPLING: secoc's freshness window has already advanced by
-						// the time E2E rejects (verify precedes) — monotonic-only today,
-						// but any future freshness resync must account for frames the
-						// inner gate discarded.
-						glue << '${ind}if st.e2e_rx_${msg}.check_ex(&rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or {
-							0
-						}).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }}, ${m.frames.secoc_fresh[msg] or { 0 }}, 1, ${m.frames.secoc_mac[msg] or { 0 }}, ${m.frames.secoc_maclen[msg] or { 0 }}).usable() {'
-						ind = '\t\t\t\t\t'
-					}
-				} else if e2e {
-					glue << '\t\t\tif st.e2e_rx_${msg}.check(&rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or {
-						0
-					}).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }}).usable() {'
-					ind = '\t\t\t\t'
+					ind += '\t'
 				}
-				// 0x28 gates only what the application SEES: the protection checks above still run
-				// on every frame, so SecOC freshness and the E2E counter keep tracking the sender and
-				// the first frame after rx is re-enabled is not judged a replay or a loss burst.
-				if conns.len > 0 {
-					glue << '${ind}if diag_rx_ok {'
+				if e2e {
+					// composed frame: only an AUTHENTIC message reaches the E2E check (REQ-E2E-004
+					// order), and the check excludes SecOC's bytes. STATE COUPLING: secoc's freshness
+					// window has already advanced by the time E2E rejects (verify precedes).
+					chk := if secoc {
+						'check_ex(&rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or { 0 }).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }}, ${m.frames.secoc_fresh[msg] or { 0 }}, 1, ${m.frames.secoc_mac[msg] or { 0 }}, ${m.frames.secoc_maclen[msg] or { 0 }})'
+					} else {
+						'check(&rx.data[0], int(${msg}_dlc), u16(0x${(m.frames.e2e_id[msg] or { 0 }).hex()}), ${m.frames.e2e_crc[msg] or { 0 }}, ${m.frames.e2e_ctr[msg] or { 0 }})'
+					}
+					glue << '${ind}e2e_${msg} := st.e2e_rx_${msg}.${chk}'
+					glue << '${ind}if e2e_${msg}.usable() {'
+					ind += '\t'
+				}
+				if gate != '' {
+					glue << '${ind}if ${gate} {'
 					ind += '\t'
 				}
 				for sname in list {
@@ -911,21 +909,27 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					} else {
 						'${si.val_field}: ${si.val_type}(${dec})'
 					}
-					validassign := if si.has_valid { ', valid: true' } else { '' }
-					glue << '${ind}mut ${fld} := sig.${sname}{ ${valassign}${validassign} }'
+					glue << '${ind}mut ${fld} := sig.${sname}{ ${valassign}${rx_status_fields(si, '.ok', lost)} }'
 					glue << '${ind}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
 				}
 				if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 					glue << '${ind}st.rx_${msg}_st.on_receive(now)'
 				}
-				if conns.len > 0 {
-					glue << '${ind[1..]}}'
+				if gate != '' {
+					ind = ind[1..]
+					glue << '${ind}}'
 				}
-				if secoc || e2e {
-					glue << '\t\t\t}'
-					if secoc && e2e {
-						glue << '\t\t\t}' // the nested composed E2E check (REQ-E2E-004)
-					}
+				if e2e {
+					ind = ind[1..]
+					glue << '${ind}} else if e2e_${msg} == .crc_error {'
+					glue << rx_integrity(m, list, lost, gate, ind + '\t')
+					glue << '${ind}}'
+				}
+				if secoc {
+					ind = ind[1..]
+					glue << '${ind}} else {'
+					glue << rx_integrity(m, list, lost, gate, ind + '\t')
+					glue << '${ind}}'
 				}
 				glue << '\t\t}'
 			}
@@ -1031,10 +1035,12 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 				dl_gate := if conns.len > 0 { 'diag_rx_ok && ' } else { '' }
 				glue << '\tif ${dl_gate}st.rx_${msg}_st.expired(now) {'
+				lost := if m.frames.e2e_here(msg, bname) { 'st.e2e_rx_${msg}.lost_frames' } else { '' }
 				for sname in list {
 					si := m.sig_of[sname] or { continue }
 					fld := snake(sname)
-					glue << '\t\tmut ${fld} := sig.${sname}{}'
+					sf := rx_status_fields(si, '.timeout', lost)
+					glue << '\t\tmut ${fld} := sig.${sname}{${if sf == '' { '' } else { ' ' + sf[2..] + ' ' }}}'
 					glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
 				}
 				glue << '\t}'
@@ -1317,6 +1323,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\tst.rx_${msg}_st = com.RxState{'
 				glue << '\t\ttimeout_us: ${m.frames.rx_timeout_us[msg]}'
 				glue << '\t}'
+				// armed from bridge start, not from a first frame: a sender absent since boot
+				// still reaches `timeout` (docs/diagnostics.md §7, R3)
+				glue << '\tst.rx_${msg}_st.arm(osal.now_us())'
 			}
 			if m.frames.secoc_here(msg, bname) {
 				glue << '\tst.secoc_key_${msg} = secoc.new_key(${byte16_lit(m.frames.secoc_key[msg] or {
@@ -1794,4 +1803,43 @@ fn security_levels(dids []DidCfg) u8 {
 		}
 	}
 	return mask
+}
+
+// rx_status_fields: the bridge-owned fields of a received signal's publish — `status` and, on an
+// E2E-protected frame, `lost` (the frames the sequence showed missing, wrapping) — or '' for a
+// signal that declares neither.
+fn rx_status_fields(si SigInfo, status string, lost string) string {
+	mut f := ''
+	if si.has_status {
+		f += ', status: ${status}'
+	}
+	if si.lost_type != '' && lost != '' {
+		f += ', lost: ${si.lost_type}(${lost})'
+	}
+	return f
+}
+
+// rx_integrity: the publish of a frame that failed its protection check — status `integrity`
+// (value zero: nothing in the frame can be trusted) to each of its signals that carries a status.
+// Behind the 0x28 gate like any other publish.
+fn rx_integrity(m Model, list []string, lost string, gate string, ind string) []string {
+	mut out := []string{}
+	mut i := ind
+	if gate != '' && list.any((m.sig_of[it] or { SigInfo{} }).has_status) {
+		out << '${i}if ${gate} {'
+		i += '\t'
+	}
+	for sname in list {
+		si := m.sig_of[sname] or { continue }
+		if !si.has_status {
+			continue
+		}
+		fld := snake(sname)
+		out << '${i}mut ${fld} := sig.${sname}{ ${rx_status_fields(si, '.integrity', lost)[2..]} }'
+		out << '${i}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+	}
+	if i != ind {
+		out << '${ind}}'
+	}
+	return out
 }

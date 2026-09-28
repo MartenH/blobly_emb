@@ -152,8 +152,8 @@ fn derive_nvm(mut m Model, doc toml.Doc) ([]string, map[string]u16) {
 				'generated flush/mark-clean/erase quiet point (docs/nvm.md shutdown choreography); ' +
 				'without it values would never flush and every boot would read unclean')
 		}
-		if si.has_valid {
-			panic('loom2v: persistent signal "${sname}" has a `valid` field — persistence ' +
+		if si.has_status || si.fields.any(it.name == 'valid') {
+			panic('loom2v: persistent signal "${sname}" has a status / `valid` field — persistence ' +
 				'restores VALUES; freshness is not a stored property')
 		}
 		if si.fields.len < 1 || si.fields.len > 2 {

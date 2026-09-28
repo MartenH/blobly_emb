@@ -89,6 +89,14 @@ pub fn (mut r RxState) on_receive(now u64) {
 	r.timedout = false
 }
 
+// arm starts the deadline without a reception — at bridge start, so a sender that has been absent
+// since boot still times out; the first frame then restarts it (on_receive).
+pub fn (mut r RxState) arm(now u64) {
+	r.last_us = now
+	r.received = true
+	r.timedout = false
+}
+
 // expired returns true exactly once, on the edge where the deadline passes — the
 // bridge then invalidates the PDU's signals. timeout_us == 0 disables monitoring.
 pub fn (mut r RxState) expired(now u64) bool {

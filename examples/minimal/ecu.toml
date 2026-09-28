@@ -19,7 +19,7 @@ trusted = false
 # EXTERNAL = a bus endpoint (can0); INTERNAL = partition-to-partition.
 [[signal]]
 name = "VehicleSpeed"
-fields = { kph = "u16", valid = "bool" }
+fields = { kph = "u16", status = "RxStatus" }
 from = "can0"        # EXTERNAL: rx from the bus
 to   = "app"
 transport = "double"

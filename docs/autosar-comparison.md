@@ -19,7 +19,7 @@ lock-free, no-alloc — and skips the rest.
 | Typed ports | PortInterface / data elements | generated `In`/`Out` port structs | ✅ have |
 | Periodic trigger | `TimingEvent` | `[[fb.handler]] period_ms` (the `on_<period>` name is convention, not syntax) | ✅ have |
 | Per-runnable private state | Inter-Runnable Variables (IRV) | the FB's private struct | ✅ have |
-| Deadline / alive timeout, init value, invalidation | COM rx monitoring | COM rx deadline → `valid = false` | ✅ have[^host] |
+| Deadline / alive timeout, init value, invalidation | COM rx monitoring | COM rx deadline from start → `status = .timeout`; E2E/SecOC failure → `.integrity`; E2E lost-frame count | ✅ have[^host] |
 | Transmission modes (cyclic / on-change / mixed, min-delay) | COM tx modes + filters | `[[frame]].tx` | ✅ have[^host] |
 | Raw↔physical scaling at the boundary | RTE/COM data conversion | DBC codec in the bridge | ✅ have[^host] |
 | Diagnostics request/response | DCM over the RTE | ISO-TP + the UDS server at the bus (`comm/uds`; the services it serves are listed in [communication.md](communication.md) §4) | ✅ have — GENERATED for an application on the host; on the target it runs only HAND-WIRED today (the bootloader over ISO-TP, the `h735_doip` example over DoIP); generated application UDS on the target is rung R2 of [diagnostics.md](diagnostics.md) |
