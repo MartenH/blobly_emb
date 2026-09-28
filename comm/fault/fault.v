@@ -94,6 +94,9 @@ pub mut:
 // publishes.
 pub fn (mut d Debounce) step(r TestResult, now u64, enabled bool) {
 	if !enabled || r == .not_tested {
+		// a gap: the counter holds where it is, and a time-based run restarts — a condition that
+		// returns never qualifies on the time held before it went away (docs/diagnostics.md §3.3)
+		d.run = .not_tested
 		return
 	}
 	mut at_fail := false
@@ -107,8 +110,8 @@ pub fn (mut d Debounce) step(r TestResult, now u64, enabled bool) {
 		at_fail = r == .failed && held >= u64(d.fail_thr)
 		at_pass = r == .passed && held >= u64(d.pass_thr)
 	} else {
-		fthr := i32(if d.fail_thr == 0 { u32(1) } else { d.fail_thr })
-		pthr := -i32(if d.pass_thr == 0 { u32(1) } else { d.pass_thr })
+		fthr := thr(d.fail_thr)
+		pthr := -thr(d.pass_thr)
 		if r == .failed {
 			d.count = if d.count < 0 { 1 } else if d.count < fthr { d.count + 1 } else { fthr }
 		} else {
@@ -228,10 +231,17 @@ pub fn (mut m Memory) consume(i int, r Report) {
 	}
 }
 
-// cycle_start begins an operation cycle (D3: NM wake, or the declared cycle signal rising).
+// cycle_start begins an operation cycle (D3: NM wake, or the declared cycle signal rising). One
+// still open is ended first, so its pending / aging bookkeeping is never skipped. While 0x85 has
+// DTC setting off no status bit changes — the cycle's own bits included.
 pub fn (mut m Memory) cycle_start() {
+	if m.cycle_active {
+		m.cycle_end()
+	}
 	for i in 0 .. m.n {
-		m.slots[i].status = (m.slots[i].status & ~test_failed_this_cycle) | not_completed_this_cycle
+		if !m.setting_off {
+			m.slots[i].status = (m.slots[i].status & ~test_failed_this_cycle) | not_completed_this_cycle
+		}
 		m.slots[i].failed_cycle = false
 	}
 	m.cycle_active = true
@@ -243,21 +253,27 @@ pub fn (mut m Memory) cycle_end() {
 	if !m.cycle_active {
 		return
 	}
+	m.cycle_active = false
+	if m.setting_off {
+		return // 0x85 off: the status is frozen, the cycle still ends
+	}
 	for i in 0 .. m.n {
 		mut s := &m.slots[i]
 		tested := s.status & not_completed_this_cycle == 0
 		if tested && !s.failed_cycle {
 			s.status &= ~pending
-			if s.status & confirmed != 0 && s.aging > 0 {
+			if s.status & confirmed == 0 {
+				s.failed_cycles = 0 // a passing cycle breaks a run toward confirmation
+			} else if s.aging > 0 {
 				s.aging_count++
 				if s.aging_count >= s.aging {
-					s.status &= ~confirmed // aged out
+					s.status &= ~confirmed // aged out: confirmation starts over
 					s.aging_count = 0
+					s.failed_cycles = 0
 				}
 			}
 		}
 	}
-	m.cycle_active = false
 }
 
 // clear is 0x14: group 0xFFFFFF clears every DTC, anything else the one DTC it names. Returns false
@@ -286,6 +302,11 @@ pub fn (mut m Memory) clear(group u32) bool {
 // producer's Control cell).
 pub fn (m Memory) control_gen(i int) u8 {
 	return m.slots[i].gen
+}
+
+// thr: a counter threshold as i32, at least 1 and at most i32's range (a wrap would qualify at once).
+fn thr(t u32) i32 {
+	return if t == 0 { 1 } else if t > u32(max_i32) { max_i32 } else { i32(t) }
 }
 
 fn sat16(a u16, b u16) u16 {

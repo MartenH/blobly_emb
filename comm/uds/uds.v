@@ -95,7 +95,7 @@ pub mut:
 	entry       fn (ctx voidptr, i int) u32
 	clear       fn (ctx voidptr, group u32) bool
 	set_setting fn (ctx voidptr, on bool)
-	avail       u8 // the status availability mask
+	avail       u8 // the status availability mask; 0 = not wired (the services stay unsupported)
 }
 
 // Did is one Data Identifier: constant bytes, a RAM cell (writable), and/or kept fresh from a
@@ -160,10 +160,9 @@ pub mut:
 	sa_failed       [max_security_level]u8 // wrong keys per level: one level's unlock never clears another's
 	sa_delay_until  u64
 	sa_arm_delay    bool // start the delay at the next tick (boot / reset: the clock is not known yet)
-	// Fault memory (0x19 / 0x14 / 0x85) and 0x85's state: off until set on again, and on again
-	// whenever the session returns to default (like 0x28).
-	faults          FaultOps
-	dtc_setting_off bool
+	// Fault memory (0x19 / 0x14 / 0x85). 0x85's on/off state lives in the memory alone; the server
+	// turns it back on whenever the session returns to default (like 0x28).
+	faults FaultOps
 }
 
 // init puts the server in the default session with everything unlocked-state cleared, and
@@ -294,17 +293,18 @@ fn (s Server) service_supported(sid u8) bool {
 	return match sid {
 		0x10, 0x22, 0x2E, 0x3E { true }
 		0x11 { s.serves_reset }
-		0x14, 0x19 { s.faults.entry != unsafe { nil } && s.faults.count != unsafe { nil } && s.faults.clear != unsafe { nil } }
-		0x85 { s.faults.set_setting != unsafe { nil } }
+		0x14, 0x19 { s.faults.avail != 0 && s.faults.entry != unsafe { nil } && s.faults.count != unsafe { nil } && s.faults.clear != unsafe { nil } }
+		0x85 { s.faults.avail != 0 && s.faults.set_setting != unsafe { nil } }
 		0x27 { s.security.seed != unsafe { nil } && s.security.key_ok != unsafe { nil } && s.security_levels != 0 }
 		0x28 { s.serves_comm_control }
 		else { false }
 	}
 }
 
-// service_sessions: where each service may run. CommunicationControl and SecurityAccess are
-// non-default-session services (a tester must enter extended first, so a stray request on a quiet
-// bus cannot silence an ECU or spend its key attempts); everything else runs in every session,
+// service_sessions: where each service may run. CommunicationControl, SecurityAccess and
+// ControlDTCSetting are non-default-session services (a tester must enter extended first, so a
+// stray request on a quiet bus cannot silence an ECU, spend its key attempts or freeze its fault
+// memory); everything else runs in every session,
 // with per-DID gating on top for 0x22/0x2E.
 fn service_sessions(sid u8) u8 {
 	return match sid {
@@ -344,10 +344,9 @@ fn (mut s Server) enter_session(session u8) {
 // restore_dtc_setting turns DTC setting back on when a session ends (explicitly, by S3, or by a
 // reset) — 0x85's "off" lives only inside the non-default session that asked for it (§7, R4).
 fn (mut s Server) restore_dtc_setting() {
-	if s.dtc_setting_off && s.faults.set_setting != unsafe { nil } {
+	if s.faults.set_setting != unsafe { nil } {
 		s.faults.set_setting(s.faults.ctx, true)
 	}
-	s.dtc_setting_off = false
 }
 
 fn (s Server) cap() int {
@@ -802,7 +801,6 @@ fn (mut s Server) dtc_setting(req &u8, req_len int, resp &u8) int {
 	if sub != 0x01 && sub != 0x02 {
 		return negative(resp, 0x85, nrc_subfunction_not_supported)
 	}
-	s.dtc_setting_off = sub == 0x02
 	s.faults.set_setting(s.faults.ctx, sub == 0x01)
 	if unsafe { req[1] } & 0x80 != 0 {
 		return 0

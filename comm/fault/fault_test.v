@@ -244,3 +244,90 @@ fn test_without_a_fault_memory_the_services_are_unsupported() {
 	assert call(mut s, [u8(0x19), 0x0A]) == [u8(0x7F), 0x19, 0x11]
 	assert call(mut s, [u8(0x14), 0xFF, 0xFF, 0xFF]) == [u8(0x7F), 0x14, 0x11]
 }
+
+// A gap (disabled / not tested) restarts a time-based run: the time held before it never counts.
+fn test_time_debounce_restarts_after_a_gap() {
+	mut d := Debounce{
+		time_based: true
+		fail_thr:   1000
+		pass_thr:   1000
+	}
+	d.step(.failed, 0, true)
+	d.step(.failed, 10_000_000, false) // enable condition false for 10 s
+	d.step(.failed, 10_000_001, true)
+	assert !d.rep.failed, 'qualified on time held before the enable condition went away'
+	d.step(.failed, 10_001_001, true)
+	assert d.rep.failed
+}
+
+// 0x85 off freezes the status through operation-cycle boundaries too.
+fn test_setting_off_freezes_cycle_bits() {
+	mut m := memory([u32(1)])
+	m.slots[0].aging = 1
+	mut d := counter(1, 1)
+	m.cycle_start()
+	d.step(.failed, 0, true)
+	m.consume(0, d.rep)
+	m.cycle_end()
+	m.cycle_start()
+	d.step(.passed, 0, true)
+	m.consume(0, d.rep)
+	before := m.slots[0].status
+	m.setting_off = true
+	m.cycle_end()
+	m.cycle_start()
+	assert m.slots[0].status == before, 'a cycle boundary changed the status while DTC setting was off'
+}
+
+// A passing cycle before confirmation, and aging out after it, both start confirmation over.
+fn test_confirmation_starts_over_after_a_pass_or_aging() {
+	mut m := memory([u32(1)])
+	m.slots[0].confirm = 2
+	m.slots[0].aging = 1
+	mut d := counter(1, 1)
+	cycle := fn (mut m Memory, mut d Debounce, r TestResult) {
+		m.cycle_start()
+		d.step(r, 0, true)
+		m.consume(0, d.rep)
+		m.cycle_end()
+	}
+	cycle(mut m, mut d, .failed)
+	cycle(mut m, mut d, .passed) // breaks the run
+	cycle(mut m, mut d, .failed)
+	assert m.slots[0].status & confirmed == 0, 'two NON-consecutive failed cycles confirmed'
+	cycle(mut m, mut d, .failed)
+	assert m.slots[0].status & confirmed != 0
+	cycle(mut m, mut d, .passed) // ages out (aging = 1)
+	assert m.slots[0].status & confirmed == 0
+	cycle(mut m, mut d, .failed)
+	assert m.slots[0].status & confirmed == 0, 'one failed cycle after aging re-confirmed'
+}
+
+// A second cycle_start closes the open cycle first.
+fn test_a_restart_closes_the_open_cycle() {
+	mut m := memory([u32(1)])
+	mut d := counter(1, 1)
+	m.cycle_start()
+	d.step(.failed, 0, true)
+	m.consume(0, d.rep)
+	m.cycle_start()
+	d.step(.passed, 0, true)
+	m.consume(0, d.rep)
+	m.cycle_start() // no end in between: the passing cycle still clears pending
+	assert m.slots[0].status & pending == 0
+}
+
+// A huge counter threshold is clamped, never wrapped into an instant qualification.
+fn test_huge_threshold_does_not_wrap() {
+	mut d := counter(0x8000_0000, 1)
+	d.step(.failed, 0, true)
+	assert !d.rep.failed
+}
+
+// FaultOps with no availability mask counts as not wired.
+fn test_unwired_availability_leaves_services_unsupported() {
+	mut m := memory([u32(1)])
+	mut s := server(mut m)
+	s.faults.avail = 0
+	assert call(mut s, [u8(0x19), 0x0A]) == [u8(0x7F), 0x19, 0x11]
+}

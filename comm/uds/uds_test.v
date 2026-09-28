@@ -118,8 +118,30 @@ fn started() Server {
 
 // Every SID service_supported() admits must reach a handler: a SID listed there but missing
 // from dispatch()'s match would answer serviceNotSupported with no compile error.
+fn stub_count(ctx voidptr) int {
+	return 0
+}
+
+fn stub_entry(ctx voidptr, i int) u32 {
+	return 0
+}
+
+fn stub_clear(ctx voidptr, group u32) bool {
+	return true
+}
+
+fn stub_setting(ctx voidptr, on bool) {}
+
 fn test_every_supported_service_dispatches() {
 	mut s := secured() // 0x27 is supported only with its ops injected
+	s.faults = FaultOps{ // and 0x14 / 0x19 / 0x85 only with a fault memory's
+		count:       stub_count
+		entry:       stub_entry
+		clear:       stub_clear
+		set_setting: stub_setting
+		avail:       0x7F
+	}
+	assert s.service_supported(0x19) && s.service_supported(0x14) && s.service_supported(0x85)
 	call(mut s, [u8(0x10), 0x03])
 	for sid in 0 .. 256 {
 		if !s.service_supported(u8(sid)) {
