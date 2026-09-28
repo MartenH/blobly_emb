@@ -94,6 +94,31 @@ Write the output; the bridge encodes it into its frame and sends it on the frame
 the frame is protected (host; see the table for the target). You never build a frame. See [add-a-signal.md](add-a-signal.md),
 [add-a-frame.md](add-a-frame.md).
 
+### Protected frames (E2E, SecOC) — nothing to do in the FB
+
+End-to-end protection and SecOC are declared on the **frame** and done by the bus bridge; the FB
+reads and writes plain values either way:
+
+```toml
+[[frame]]
+name  = "SecureFrame"
+bus   = "can0"
+secoc = { key = "10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f", data_id = 0x20, fresh_pos = 1, mac_pos = 2, mac_len = 4 }
+
+[[frame]]
+name = "BrakeStatus"
+bus  = "can0"
+e2e  = { data_id = 0x44, crc_pos = 4, counter_pos = 5, timeout_ms = 300 }
+```
+
+Sending, the bridge stamps the E2E counter and CRC, then SecOC's freshness and MAC. Receiving, it
+verifies SecOC first, then E2E, and delivers the value only if both pass. What reaches the FB is the
+verdict: `status` becomes `integrity` on a failed check, `timeout` when E2E's own timeout runs out,
+and `lost` counts the frames the sequence showed missing. The FB never sees a CRC, a counter, a
+MAC or a key — it decides what a bad status means (a substitute value, a safe state). Host only
+today; the keys are plain config, fine for test keys, not for production. See
+[../communication.md](../communication.md).
+
 ### Drive or read a pin
 
 An IO point is just another endpoint: `to = "io"` for an output an FB writes, `from = "io"` for an
