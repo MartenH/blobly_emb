@@ -230,7 +230,8 @@ fault memory publishes a **control cell per producing thread** (single writer: i
 single reader: that thread's generated debounce — the IOC is SPSC, so one shared cell with several
 readers is not an option): a *clear generation* **per fault** (a per-DTC 0x14 bumps only its faults'
 generations, 0x14 FFFFFF bumps them all; every clear is a FRESH 16-bit generation, so no report made
-before it can count; a bump resets that fault's counters and debounced state, and the producer echoes
+before it can count, and a clear that could not get one — its producer silent for 32767 clears — is
+refused with 0x22 rather than reuse a generation; a bump resets that fault's counters and debounced state, and the producer echoes
 it as `applied_gen`). *As built in R4a* (`comm/fault`), two things stay on the
 consumer side and need no producer involvement: **0x85 suppression** — while off, the fault memory
 lets its baselines follow the counters and changes no status, and the first reading after "on" is a

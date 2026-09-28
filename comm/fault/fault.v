@@ -19,8 +19,8 @@ module fault
 // ignored — an old-generation failure can never recreate a cleared DTC (§7, R4).
 //
 // Every clear gets a FRESH generation (u16), so no report produced before it can ever count. It
-// wraps only if 32767 clears pass without one report from the producer — a producer that silent is
-// dead, and the generation then stops advancing rather than come round to a stale report's.
+// could wrap only after 32767 clears without one report from the producer — a producer that silent
+// is dead — and there a clear is REFUSED (0x22) rather than reuse a generation.
 //
 // Suppression (0x85 off) is enforced HERE, where readings are consumed: while off, the baselines
 // follow the counters and nothing changes status; the first reading after "on" is a baseline only.
@@ -303,13 +303,27 @@ pub fn (mut m Memory) cycle_end() {
 // clear is 0x14: group 0xFFFFFF clears every DTC, anything else the one DTC it names. Returns false
 // for an unknown DTC (the server answers 0x31). Each cleared slot's generation moves on, so the
 // producer resets and its older reports are ignored.
-pub fn (mut m Memory) clear(group u32) bool {
+// Returns the negative response code, 0 = cleared: 0x31 for an unknown DTC, 0x22 when a slot's
+// producer has left so many clears unacknowledged that no fresh generation can be assigned — then
+// NOTHING is cleared, since a clear that reused a generation could let a pre-clear report count.
+pub fn (mut m Memory) clear(group u32) u8 {
 	mut hit := false
 	for i in 0 .. m.n {
 		if group != 0xFFFFFF && m.slots[i].dtc != group {
 			continue
 		}
 		hit = true
+		if u16(m.slots[i].gen - m.slots[i].seen_gen) >= 0x7FFF {
+			return 0x22 // conditionsNotCorrect: the producer has been silent for 32767 clears
+		}
+	}
+	if !hit {
+		return 0x31 // requestOutOfRange: no such DTC
+	}
+	for i in 0 .. m.n {
+		if group != 0xFFFFFF && m.slots[i].dtc != group {
+			continue
+		}
 		mut s := &m.slots[i]
 		s.status = status_cleared
 		s.occurrence = 0
@@ -317,12 +331,11 @@ pub fn (mut m Memory) clear(group u32) bool {
 		s.aging_count = 0
 		s.failed_cycle = false
 		s.tested_cycle = false
-		if u16(s.gen - s.seen_gen) < 0x7FFF {
-			s.gen++ // fresh: no report produced before this clear can carry it
-		}
+		s.gen++ // fresh: no report produced before this clear can carry it
 		s.base_seen = false
+		s.rebase = false // the fresh generation already excludes everything before it
 	}
-	return hit
+	return 0
 }
 
 // control_gen is the generation fault i's producer must apply (the owner copies it into the
@@ -364,7 +377,7 @@ fn ops_entry(ctx voidptr, i int) u32 {
 	return (m.slots[i].dtc & 0xFFFFFF) << 8 | u32(m.slots[i].status & availability_mask)
 }
 
-fn ops_clear(ctx voidptr, group u32) bool {
+fn ops_clear(ctx voidptr, group u32) u8 {
 	mut m := unsafe { &Memory(ctx) }
 	return m.clear(group)
 }

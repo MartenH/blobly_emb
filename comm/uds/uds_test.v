@@ -126,8 +126,8 @@ fn stub_entry(ctx voidptr, i int) u32 {
 	return 0
 }
 
-fn stub_clear(ctx voidptr, group u32) bool {
-	return true
+fn stub_clear(ctx voidptr, group u32) u8 {
+	return 0
 }
 
 fn stub_setting(ctx voidptr, on bool) {}

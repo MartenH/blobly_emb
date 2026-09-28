@@ -132,7 +132,7 @@ fn test_clear_ignores_old_generation_until_applied() {
 	d.step(.failed, 0, true)
 	m.consume(0, d.rep)
 	assert m.slots[0].status & confirmed != 0
-	assert m.clear(0x100)
+	assert m.clear(0x100) == 0
 	assert m.slots[0].status == status_cleared && m.slots[0].occurrence == 0
 	d.step(.failed, 0, true) // still the old generation
 	m.consume(0, d.rep)
@@ -143,8 +143,8 @@ fn test_clear_ignores_old_generation_until_applied() {
 	d.step(.failed, 0, true) // a NEW failure after the clear is recorded again
 	m.consume(0, d.rep)
 	assert m.slots[0].status & confirmed != 0 && m.slots[0].occurrence == 1
-	assert !m.clear(0x300), 'unknown DTC'
-	assert m.clear(0xFFFFFF)
+	assert m.clear(0x300) == 0x31, 'unknown DTC'
+	assert m.clear(0xFFFFFF) == 0
 	assert m.slots[0].status == status_cleared && m.slots[1].status == status_cleared
 }
 
@@ -361,19 +361,43 @@ fn test_every_clear_invalidates_all_earlier_reports() {
 	mut m := memory([u32(1)])
 	mut d := counter(1, 1)
 	m.cycle_start()
-	assert m.clear(1)
+	assert m.clear(1) == 0
 	d.apply(m.control_gen(0)) // producer applies clear 1 ...
 	d.step(.failed, 0, true) // ... and fails before the consumer reads it
 	between := d.rep
-	assert m.clear(1) // clear 2
+	assert m.clear(1) == 0 // clear 2
 	m.consume(0, between)
 	assert m.slots[0].status == status_cleared, 'a report made before clear 2 counted after it'
 	stale := between
+	mut refused := 0
 	for _ in 0 .. 70_000 { // far past a u16 wrap, with the producer silent
-		m.clear(0xFFFFFF)
+		if m.clear(0xFFFFFF) == 0x22 {
+			refused++
+		}
 	}
+	assert refused > 0, 'clears kept succeeding with no fresh generation to give'
 	m.consume(0, stale)
 	assert m.slots[0].status == status_cleared, 'the generation came round to a stale report'
+	// once the producer reports again, clears are accepted again
+	d.apply(m.control_gen(0))
+	m.consume(0, d.rep)
+	assert m.clear(1) == 0
+}
+
+// codex #301: a clear right after 0x85 on cancels the pending rebase — the first post-clear
+// failure is recorded, not swallowed as a baseline.
+fn test_a_clear_after_on_cancels_the_rebase() {
+	mut m := memory([u32(1)])
+	mut d := counter(1, 1)
+	m.cycle_start()
+	m.consume(0, d.rep)
+	m.set_setting(false)
+	m.set_setting(true)
+	assert m.clear(1) == 0
+	d.apply(m.control_gen(0))
+	d.step(.failed, 0, true)
+	m.consume(0, d.rep)
+	assert m.slots[0].status & test_failed != 0, 'the first failure after a clear was swallowed'
 }
 
 // codex #301: a result the producer publishes during suppression, read only after "on", is not
@@ -413,4 +437,17 @@ fn test_on_resets_the_cycle_bits_of_a_cycle_begun_while_off() {
 fn test_report_cell_fits_the_ioc_payload() {
 	assert sizeof(Reports) <= 64
 	assert sizeof(Control) <= 64
+}
+
+// ISO 14229-1 ControlDTCSetting: "off" survives a switch between non-default sessions and ends on
+// the transition to the default session.
+fn test_dtc_setting_off_survives_non_default_transitions() {
+	mut m := memory([u32(1)])
+	mut s := server(mut m)
+	call(mut s, [u8(0x10), 0x03])
+	call(mut s, [u8(0x85), 0x02])
+	call(mut s, [u8(0x10), 0x03]) // re-enter extended
+	assert m.setting_off, 'a non-default transition turned DTC setting back on'
+	call(mut s, [u8(0x10), 0x01])
+	assert !m.setting_off
 }

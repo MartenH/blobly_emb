@@ -93,7 +93,7 @@ pub mut:
 	ctx         voidptr
 	count       fn (ctx voidptr) int
 	entry       fn (ctx voidptr, i int) u32
-	clear       fn (ctx voidptr, group u32) bool
+	clear       fn (ctx voidptr, group u32) u8 // the NRC, 0 = cleared
 	set_setting fn (ctx voidptr, on bool)
 	avail       u8 // the status availability mask; 0 = not wired (the services stay unsupported)
 }
@@ -342,7 +342,8 @@ fn (mut s Server) enter_session(session u8) {
 }
 
 // restore_dtc_setting turns DTC setting back on when a session ends (explicitly, by S3, or by a
-// reset) — 0x85's "off" lives only inside the non-default session that asked for it (§7, R4).
+// reset) — ISO 14229-1 ControlDTCSetting: DTC status updating resumes on the transition to the
+// default session (and on reset); a switch between non-default sessions keeps it off (§7, R4).
 fn (mut s Server) restore_dtc_setting() {
 	if s.faults.set_setting != unsafe { nil } {
 		s.faults.set_setting(s.faults.ctx, true)
@@ -781,8 +782,9 @@ fn (mut s Server) clear_dtcs(req &u8, req_len int, resp &u8) int {
 		return negative(resp, 0x14, nrc_incorrect_length)
 	}
 	group := unsafe { u32(req[1]) << 16 | u32(req[2]) << 8 | u32(req[3]) }
-	if !s.faults.clear(s.faults.ctx, group) {
-		return negative(resp, 0x14, nrc_request_out_of_range)
+	nrc := s.faults.clear(s.faults.ctx, group)
+	if nrc != 0 {
+		return negative(resp, 0x14, nrc) // 0x31 unknown DTC, 0x22 not clearable right now
 	}
 	unsafe {
 		resp[0] = 0x54
