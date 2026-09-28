@@ -10,6 +10,7 @@ import driver.can
 import comm.com
 import comm.e2e
 import comm.secoc
+import comm.fault
 import comm.isotp
 import comm.uds
 
@@ -56,6 +57,9 @@ pub fn partition_sense(core int, arg voidptr) {
 struct Partition_ctrl_state {
 mut:
 	engine_monitor app.EngineMonitor
+	fdeb_engine_monitor [2]fault.Debounce // its faults, debounced on this thread
+	fctl_engine_monitor fault.Control // clear generations, from the diagnostic bridge
+	frep_engine_monitor fault.Reports // debounced state + counters, to the bridge
 	brake_monitor app.BrakeMonitor
 	lamp_controller app.LampController
 	cell_high_rev sig.HighRev // local FB->FB signal
@@ -65,8 +69,18 @@ fn handler_ctrl_engine_monitor_on_10ms(ctx voidptr) {
 	mut st := unsafe { &Partition_ctrl_state(ctx) }
 	mut inp := ports.EngineMonitorIn{}
 	osal.ioc_acquire2(engine_speed_ch, &inp.engine_speed, u8(sizeof(inp.engine_speed)))
+	osal.ioc_acquire2(ignition_on_ch, &inp.ignition_on, u8(sizeof(inp.ignition_on)))
 	mut outp := ports.EngineMonitorOut{}
 	st.engine_monitor.on_10ms(inp, mut outp)
+	fault_now := osal.now_us()
+	osal.ioc_acquire(fault_ctl_engine_monitor_ch, &st.fctl_engine_monitor, u8(sizeof(st.fctl_engine_monitor)))
+	st.fdeb_engine_monitor[0].apply(st.fctl_engine_monitor.gen[0])
+	st.fdeb_engine_monitor[0].step(outp.fault.engine_over_rev, fault_now, inp.ignition_on.on)
+	st.frep_engine_monitor.r[0] = st.fdeb_engine_monitor[0].rep
+	st.fdeb_engine_monitor[1].apply(st.fctl_engine_monitor.gen[1])
+	st.fdeb_engine_monitor[1].step(outp.fault.engine_idle_low, fault_now, true)
+	st.frep_engine_monitor.r[1] = st.fdeb_engine_monitor[1].rep
+	osal.ioc_publish(fault_rep_engine_monitor_ch, &st.frep_engine_monitor, u8(sizeof(st.frep_engine_monitor)))
 	st.cell_high_rev = outp.high_rev // local
 }
 
@@ -94,6 +108,14 @@ fn handler_ctrl_lamp_controller_on_10ms(ctx voidptr) {
 pub fn partition_ctrl(core int, arg voidptr) {
 	osal.pin_to_core(1)
 	mut st := Partition_ctrl_state{}
+	st.fdeb_engine_monitor[0] = fault.Debounce{
+		fail_thr: 3
+		pass_thr: 3
+	}
+	st.fdeb_engine_monitor[1] = fault.Debounce{
+		fail_thr: 3
+		pass_thr: 3
+	}
 	mut sched := loom.Scheduler{}
 	sched.every(10000, handler_ctrl_engine_monitor_on_10ms, &st)
 	sched.every(10000, handler_ctrl_brake_monitor_on_10ms, &st)
@@ -117,12 +139,17 @@ mut:
 	secoc_key_secure_frame secoc.Key
 	secoc_tx_secure_frame secoc.TxState
 	rx_powertrain_st com.RxState
+	rx_ignition_st com.RxState
 	e2e_rx_brake_status e2e.RxState
 	e2e_hidden_brake_status u32 // lost frames counted while 0x28 had rx off
 	e2e_quiet_brake_status bool // 0x28 had rx off since the last fresh frame
 	tp_diag isotp.Link
 	tp_diag_buf [isotp.max_payload]u8
 	uds_diag uds.Server
+	fmem fault.Memory // the node's fault memory: this bridge is its one writer (D2)
+	fcycle_on bool // the operation-cycle signal as last seen
+	frep_engine_monitor fault.Reports // from EngineMonitor's thread
+	fctl_engine_monitor fault.Control // to EngineMonitor's thread
 	sa_diag uds.ReferenceSecurity // 0x27 on the host: the SIM key (not a secret, decision D5)
 	uds_diag_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity
 	diag_rx_was_off bool // 0x28 had rx off (any sampling since the last restart): restart the deadlines on return
@@ -144,6 +171,12 @@ fn io_can0_10ms(ctx voidptr) {
 		st.diag_rx_was_off = true
 		st.e2e_quiet_brake_status = true
 	}
+	osal.ioc_acquire(fault_rep_engine_monitor_ch, &st.frep_engine_monitor, u8(sizeof(st.frep_engine_monitor)))
+	st.fmem.consume(0, st.frep_engine_monitor.r[0])
+	st.fctl_engine_monitor.gen[0] = st.fmem.control_gen(0)
+	st.fmem.consume(1, st.frep_engine_monitor.r[1])
+	st.fctl_engine_monitor.gen[1] = st.fmem.control_gen(1)
+	osal.ioc_publish(fault_ctl_engine_monitor_ch, &st.fctl_engine_monitor, u8(sizeof(st.fctl_engine_monitor)))
 	mut rx := can.Frame{}
 	for st.chan.recv(mut rx) {
 		if rx.id == powertrain_id && rx.len == powertrain_dlc && rx.ext == false {
@@ -153,6 +186,19 @@ fn io_can0_10ms(ctx voidptr) {
 				mut engine_speed := sig.EngineSpeed{ rpm: u16(powertrain_engine_speed_phys(rx.data)), status: .ok }
 				osal.ioc_publish2(engine_speed_ch, &engine_speed, u8(sizeof(engine_speed)))
 				st.rx_powertrain_st.on_receive(now)
+			}
+		}
+		if rx.id == ignition_id && rx.len == ignition_dlc && rx.ext == false {
+			if diag_rx_ok {
+				mut ignition_on := sig.IgnitionOn{ on: ignition_ignition_on_phys(rx.data) != 0.0 }
+				osal.ioc_publish2(ignition_on_ch, &ignition_on, u8(sizeof(ignition_on)))
+				if ignition_on.on && !st.fcycle_on {
+					st.fmem.cycle_start()
+				} else if !ignition_on.on && st.fcycle_on {
+					st.fmem.cycle_end()
+				}
+				st.fcycle_on = ignition_on.on
+				st.rx_ignition_st.on_receive(now)
 			}
 		}
 		if rx.id == brake_status_id && rx.len == brake_status_dlc && rx.ext == false {
@@ -256,6 +302,7 @@ fn io_can0_10ms(ctx voidptr) {
 	}
 	if diag_rx_ok && st.diag_rx_was_off {
 		st.rx_powertrain_st.on_receive(now)
+		st.rx_ignition_st.on_receive(now)
 		st.e2e_rx_brake_status.arm(now)
 	}
 	st.diag_rx_was_off = !diag_rx_ok
@@ -264,6 +311,16 @@ fn io_can0_10ms(ctx voidptr) {
 		osal.ioc_publish2(vehicle_speed_ch, &vehicle_speed, u8(sizeof(vehicle_speed)))
 		mut engine_speed := sig.EngineSpeed{ status: .timeout }
 		osal.ioc_publish2(engine_speed_ch, &engine_speed, u8(sizeof(engine_speed)))
+	}
+	if diag_rx_ok && st.rx_ignition_st.expired(now) {
+		mut ignition_on := sig.IgnitionOn{}
+		osal.ioc_publish2(ignition_on_ch, &ignition_on, u8(sizeof(ignition_on)))
+		if ignition_on.on && !st.fcycle_on {
+			st.fmem.cycle_start()
+		} else if !ignition_on.on && st.fcycle_on {
+			st.fmem.cycle_end()
+		}
+		st.fcycle_on = ignition_on.on
 	}
 	if diag_rx_ok && st.e2e_rx_brake_status.expired(now) {
 		mut brake_pressure := sig.BrakePressure{ status: .timeout, lost: u16(st.e2e_rx_brake_status.lost_frames - st.e2e_hidden_brake_status) }
@@ -357,6 +414,10 @@ pub fn partition_can0(ch can.Channel) {
 		timeout_us: 200000
 	}
 	st.rx_powertrain_st.arm(osal.now_us())
+	st.rx_ignition_st = com.RxState{
+		timeout_us: 500000
+	}
+	st.rx_ignition_st.arm(osal.now_us())
 	st.e2e_rx_brake_status.timeout_us = 300000
 	st.e2e_rx_brake_status.arm(osal.now_us()) // from start, like the COM deadline
 	st.tp_diag = isotp.Link{
@@ -423,6 +484,14 @@ pub fn partition_can0(ch can.Channel) {
 	st.uds_diag.dids[4].data[0] = u8(0x00)
 	st.uds_diag.dids[4].len = 1
 	st.uds_diag.ndid = 5
+	st.fmem.slots[0].dtc = u32(0x21900) // EngineOverRev
+	st.fmem.slots[0].confirm = u8(1)
+	st.fmem.slots[0].aging = u8(2)
+	st.fmem.slots[1].dtc = u32(0x50600) // EngineIdleLow
+	st.fmem.slots[1].confirm = u8(1)
+	st.fmem.n = 2
+	st.fmem.init()
+	st.uds_diag.faults = st.fmem.uds_ops() // 0x19 / 0x14 / 0x85
 	mut sched := loom.Scheduler{}
 	sched.every(10_000, io_can0_10ms, &st)
 	for {

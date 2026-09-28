@@ -20,6 +20,7 @@ import toml
 import tools.candb
 import tools.ecumodel
 import comm.uds
+import comm.fault
 
 struct SigInfo {
 mut:
@@ -1255,6 +1256,8 @@ mut:
 	routes       []Route
 	isotp_conns  []IsotpConn
 	dids         []DidCfg
+	faults       []FaultCfg // [[fault]] in declaration order = the fault memory's slot order
+	fault_cycle  string     // [fault_memory] cycle = "Signal.field" (bool) — the operation cycle
 	part         PartMap
 	telem        TelemetryCfg
 	target       TargetCfg
@@ -1455,6 +1458,8 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		routes:       validate_route_cores(parse_routes(doc, dbc), bus_core, bus_kind)
 		isotp_conns:  parse_isotp(doc)
 		dids:         parse_dids(doc)
+		faults:       parse_faults(doc)
+		fault_cycle:  parse_fault_cycle(doc)
 		part:         part
 		telem:        parse_telemetry(doc)
 		target:       parse_target(doc)
@@ -1472,6 +1477,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	}
 	validate_signal_routes_model(m, doc)
 	validate_security(m.isotp_conns, m.dids)
+	validate_faults(m, doc)
 	validate_e2e_timeouts(m)
 	for sname in m.sig_names {
 		si := m.sig_of[sname] or { continue }
@@ -3199,6 +3205,15 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 					continue
 				}
 				glue << '\t${snake(cname)} app.${cname}'
+				nf := m.faults.filter(it.fb == cname).len
+				if nf > 0 {
+					if multi {
+						panic('loom2v: fb "${cname}" owns [[fault]]s in a multi-thread partition — not generated yet; put it in a single-thread partition')
+					}
+					glue << '\tfdeb_${snake(cname)} [${nf}]fault.Debounce // its faults, debounced on this thread'
+					glue << '\tfctl_${snake(cname)} fault.Control // clear generations, from the diagnostic bridge'
+					glue << '\tfrep_${snake(cname)} fault.Reports // debounced state + counters, to the bridge'
+				}
 			}
 			for sname in m.sig_names {
 				si := m.sig_of[sname] or { continue }
@@ -3245,11 +3260,23 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 					ports << '\t${snake(r.string())} sig.${r.string()}${dflt}'
 				}
 				ports << '}'
+				hfaults := m.faults.filter(it.fb == cname && it.handler == hname)
+				if hfaults.len > 0 {
+					ports << 'pub struct ${cname}Faults {'
+					ports << 'pub mut:'
+					for f in hfaults {
+						ports << '\t${snake(f.name)} fault.TestResult // DTC 0x${f.dtc.hex()}: write the CURRENT result each dispatch, no latch (docs/diagnostics.md §3.3)'
+					}
+					ports << '}'
+				}
 				ports << 'pub struct ${cname}Out {'
 				ports << 'pub mut:'
 				for w in writes {
 					ports << provenance(w.string(), m.sig_of)
 					ports << '\t${snake(w.string())} sig.${w.string()}'
+				}
+				if hfaults.len > 0 {
+					ports << '\tfault ${cname}Faults'
 				}
 				ports << '}'
 
@@ -3336,6 +3363,7 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 				}
 				glue << '\tmut outp := ports.${cname}Out{}'
 				glue << '\tst.${field}.${hname}(inp, mut outp)'
+				glue << fault_step_lines(m, cname, hname)
 				for w in writes {
 					wn := w.string()
 					si := m.sig_of[wn] or { SigInfo{} }
@@ -3418,6 +3446,9 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 			glue << 'pub fn partition_${part}(core int, arg voidptr) {'
 			glue << '\tosal.pin_to_core(${m.part.core_of[part] or { 0 }})'
 			glue << '\tmut st := Partition_${part}_state{}'
+			for c in clist {
+				glue << fault_init_lines(m, (c.as_map()['name'] or { toml.Any('') }).string())
+			}
 			glue << '\tmut sched := loom.Scheduler{}'
 			for r in regs {
 				glue << r
@@ -3481,6 +3512,9 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 	// trace demo) has none, so skip the import rather than emit an unused-import warning.
 	if m.sig_names.len > 0 {
 		ports << 'import sig'
+	}
+	if m.faults.len > 0 {
+		ports << 'import comm.fault' // the fault port's TestResult
 	}
 
 	// glue references sig.* only for local-cell types; import it only if needed.
@@ -3578,6 +3612,9 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 	}
 	if has_secoc {
 		glue << 'import comm.secoc' // SecOC authentication (AES-CMAC + freshness)
+	}
+	if m.faults.len > 0 {
+		glue << 'import comm.fault' // debounce + the fault memory (docs/diagnostics.md §3.3)
 	}
 	if m.isotp_conns.len > 0 {
 		glue << 'import comm.isotp' // ISO-TP diagnostic transport
@@ -4640,4 +4677,258 @@ fn validate_e2e_timeouts(m Model) {
 			}
 		}
 	}
+}
+
+// FaultCfg is one [[fault]] (docs/diagnostics.md §3.3): a DTC, the FB handler that tests it, how its
+// results are debounced (on that handler's thread), the enable conditions, and the confirmation /
+// aging thresholds the fault memory applies.
+struct FaultCfg {
+	name       string
+	dtc        int
+	fb         string
+	handler    string
+	time_based bool
+	fail_thr   int // counter: results; time: µs
+	pass_thr   int
+	enable     []string // "Signal.field" (bool) the handler reads
+	confirm    int
+	aging      int
+}
+
+fn parse_faults(doc toml.Doc) []FaultCfg {
+	mut out := []FaultCfg{}
+	for f in ecumodel.toml_arr(doc, 'fault') {
+		m := f.as_map()
+		name := (m['name'] or { toml.Any('') }).string()
+		for later in ['freeze', 'priority'] {
+			if later in m {
+				panic('loom2v: [[fault]] "${name}": `${later}` needs the persistent fault memory (rung R6, docs/diagnostics.md) — not generated yet')
+			}
+		}
+		if 'signal' in m || 'on' in m {
+			panic('loom2v: [[fault]] "${name}": a signal-status fault (signal / on) is rung R4c — not generated yet')
+		}
+		from := (m['from'] or { toml.Any('') }).string()
+		parts := from.split('.')
+		if parts.len != 2 || parts[0] == '' || parts[1] == '' {
+			panic('loom2v: [[fault]] "${name}": from = "${from}" must name the testing handler as "Fb.handler"')
+		}
+		db := (m['debounce'] or { toml.Any(map[string]toml.Any{}) }).as_map()
+		kind := (db['kind'] or { toml.Any('counter') }).string()
+		if kind != 'counter' && kind != 'time' {
+			panic('loom2v: [[fault]] "${name}": debounce kind "${kind}" is not counter / time')
+		}
+		time_based := kind == 'time'
+		// each kind has its own keys, and a time threshold has no sane default: a missing fail_ms
+		// would mean 0 µs — no debounce at all — so both are required
+		other_keys := if time_based { ['fail', 'pass'] } else { ['fail_ms', 'pass_ms'] }
+		for key in other_keys {
+			if key in db {
+				panic('loom2v: [[fault]] "${name}": debounce.${key} does not belong to kind = "${kind}"')
+			}
+		}
+		if time_based && (!('fail_ms' in db) || !('pass_ms' in db)) {
+			panic('loom2v: [[fault]] "${name}": a time debounce needs fail_ms and pass_ms')
+		}
+		fail_thr := if time_based {
+			ms_to_us((db['fail_ms'] or { toml.Any(0) }).i64(), '[[fault]] "${name}" debounce.fail_ms')
+		} else {
+			counter_thr((db['fail'] or { toml.Any(1) }).i64(), name, 'fail')
+		}
+		pass_thr := if time_based {
+			ms_to_us((db['pass_ms'] or { toml.Any(0) }).i64(), '[[fault]] "${name}" debounce.pass_ms')
+		} else {
+			counter_thr((db['pass'] or { toml.Any(1) }).i64(), name, 'pass')
+		}
+		if fail_thr < 1 || pass_thr < 1 || (!time_based && (fail_thr > 0xFFFF || pass_thr > 0xFFFF)) {
+			panic('loom2v: [[fault]] "${name}": debounce thresholds must be at least 1 (counter: 1..65535 results; time: >= 1 ms)')
+		}
+		mut enable := []string{}
+		for e in (m['enable'] or { toml.Any([]toml.Any{}) }).array() {
+			enable << e.string()
+		}
+		// read wide and range-check before narrowing: a truncating read could wrap a typo into range
+		confirm := (m['confirm'] or { toml.Any(1) }).i64()
+		aging := (m['aging'] or { toml.Any(0) }).i64()
+		dtc := (m['dtc'] or { toml.Any(0) }).i64()
+		if dtc < 1 || dtc > 0xFFFFFF {
+			panic('loom2v: [[fault]] "${name}": dtc 0x${dtc.hex()} is not a 3-byte DTC (1..0xFFFFFF)')
+		}
+		if confirm < 1 || confirm > 255 || aging < 0 || aging > 255 {
+			panic('loom2v: [[fault]] "${name}": confirm must be 1..255 and aging 0..255 (0 = never ages)')
+		}
+		out << FaultCfg{
+			name:       name
+			dtc:        int(dtc)
+			fb:         parts[0]
+			handler:    parts[1]
+			time_based: time_based
+			fail_thr:   fail_thr
+			pass_thr:   pass_thr
+			enable:     enable
+			confirm:    int(confirm)
+			aging:      int(aging)
+		}
+	}
+	return out
+}
+
+fn parse_fault_cycle(doc toml.Doc) string {
+	fm := doc.value_opt('fault_memory') or { return '' }
+	return (fm.as_map()['cycle'] or { toml.Any('') }).string()
+}
+
+// fault_fbs: the FBs that own faults, in first-declaration order — each gets one report cell (its
+// thread writes) and one control cell (the diagnostic bridge writes); cfg2v allocates both.
+fn fault_fbs(m Model) []string {
+	return ecumodel.fault_fbs(m.faults.map('${it.fb}.${it.handler}'))
+}
+
+// validate_faults: everything a [[fault]] needs, refused at generation when missing.
+fn validate_faults(m Model, doc toml.Doc) {
+	if m.faults.len == 0 {
+		if m.fault_cycle != '' {
+			panic('loom2v: [fault_memory] is declared but there is no [[fault]]')
+		}
+		return
+	}
+	if m.target.on {
+		panic('loom2v: [[fault]] on a [target] image — faults on the target are rung R6 (docs/diagnostics.md); host only for now')
+	}
+	if m.isotp_conns.len != 1 {
+		panic('loom2v: [[fault]] needs the node\'s diagnostic server — one [[isotp]] connection — to serve 0x19 / 0x14 / 0x85')
+	}
+	if m.faults.len > fault.max_faults {
+		panic('loom2v: ${m.faults.len} [[fault]]s exceed the fault memory (${fault.max_faults})')
+	}
+	mut names := map[string]bool{}
+	mut dtcs := map[int]string{}
+	mut per_fb := map[string]int{}
+	for f in m.faults {
+		if !ecumodel.ident_ok(f.name) || f.name in names {
+			panic('loom2v: [[fault]] name "${f.name}" is not an identifier, or is declared twice')
+		}
+		names[f.name] = true
+		// the snake form becomes a field of the FB's Faults struct: two names must not collide there
+		key := '${f.fb}/${snake(f.name)}'
+		if key in names {
+			panic('loom2v: [[fault]] "${f.name}" collides with another fault of ${f.fb} as field ${snake(f.name)}')
+		}
+		names[key] = true
+		thr := m.part.fb_thread[f.fb] or { '' }
+		if m.part.external[m.part.thread_part[thr] or { '' }] or { false } {
+			panic('loom2v: [[fault]] "${f.name}": ${f.fb} lives in a partition this image does not generate — its debounce and report cell would never be emitted')
+		}
+		if prev := dtcs[f.dtc] {
+			panic('loom2v: [[fault]] "${f.name}": dtc 0x${f.dtc.hex()} is already "${prev}" — a DTC is unique per diagnostic server')
+		}
+		dtcs[f.dtc] = f.name
+		per_fb[f.fb]++
+		if per_fb[f.fb] > fault.max_per_producer {
+			panic('loom2v: fb "${f.fb}" owns more than ${fault.max_per_producer} faults — its report cell (one IOC payload) holds that many')
+		}
+		reads := handler_reads(doc, f.fb, f.handler) or {
+			panic('loom2v: [[fault]] "${f.name}": from = "${f.fb}.${f.handler}" names no FB handler')
+		}
+		for e in f.enable {
+			bool_field_of(m, e, 'enable condition of [[fault]] "${f.name}"')
+			if e.all_before('.') !in reads {
+				panic('loom2v: [[fault]] "${f.name}": enable condition "${e}" — the handler ${f.fb}.${f.handler} does not read ${e.all_before('.')}; the condition is evaluated on the testing thread, so it must be one of its inputs')
+			}
+		}
+	}
+	if m.fault_cycle == '' {
+		panic('loom2v: [[fault]] needs an operation cycle: [fault_memory] cycle = "Signal.field" (a bool) — the host bridge runs no NM, so nothing else starts and ends a cycle (decision D3)')
+	}
+	bool_field_of(m, m.fault_cycle, '[fault_memory] cycle')
+	cs := m.sig_of[m.fault_cycle.all_before('.')] or { SigInfo{} }
+	if !(cs.external && cs.rx && cs.bus == m.isotp_conns[0].bus) {
+		panic('loom2v: [fault_memory] cycle "${m.fault_cycle}" must be a signal received on the diagnostic bus "${m.isotp_conns[0].bus}" — the bridge that owns the fault memory reads it')
+	}
+}
+
+// counter_thr reads a counter-debounce threshold wide and range-checks it BEFORE narrowing, so a
+// huge value can never wrap into a valid (tiny) one.
+fn counter_thr(v i64, name string, key string) int {
+	if v < 1 || v > 0xFFFF {
+		panic('loom2v: [[fault]] "${name}": debounce.${key} ${v} must be 1..65535')
+	}
+	return int(v)
+}
+
+// bool_field_of checks "Signal.field" names a bool field of a declared signal — and, on a signal
+// received from a bus, its VALUE field: the bridge decodes only that one, so any other field of a
+// received signal reads false forever.
+fn bool_field_of(m Model, ref string, what string) {
+	sname := ref.all_before('.')
+	field := ref.all_after('.')
+	si := m.sig_of[sname] or { panic('loom2v: ${what} "${ref}" names no signal') }
+	if !si.fields.any(it.name == field && it.typ == 'bool') {
+		panic('loom2v: ${what} "${ref}" is not a bool field of signal ${sname}')
+	}
+	if si.external && si.rx && field != si.val_field {
+		panic('loom2v: ${what} "${ref}": ${sname} is received from ${si.from}, which fills only its value field `${si.val_field}` — `${field}` would read false forever')
+	}
+}
+
+// handler_reads: the signals the named FB handler reads, or none if there is no such handler.
+fn handler_reads(doc toml.Doc, fb string, handler string) ?[]string {
+	for c in ecumodel.toml_arr(doc, 'fb') {
+		cm := c.as_map()
+		if (cm['name'] or { toml.Any('') }).string() != fb {
+			continue
+		}
+		for h in (cm['handler'] or { toml.Any([]toml.Any{}) }).array() {
+			hm := h.as_map()
+			if (hm['name'] or { toml.Any('') }).string() == handler {
+				return (hm['reads'] or { toml.Any([]toml.Any{}) }).array().map(it.string())
+			}
+		}
+	}
+	return none
+}
+
+// fault_init_lines: the debouncers of `fb`'s faults, configured when the partition starts.
+fn fault_init_lines(m Model, fb string) []string {
+	mut out := []string{}
+	for k, f in m.faults.filter(it.fb == fb) {
+		out << '\tst.fdeb_${snake(fb)}[${k}] = fault.Debounce{'
+		if f.time_based {
+			out << '\t\ttime_based: true'
+		}
+		out << '\t\tfail_thr: ${f.fail_thr}'
+		out << '\t\tpass_thr: ${f.pass_thr}'
+		out << '\t}'
+	}
+	return out
+}
+
+// fault_step_lines: right after `fb.handler` returns, on its thread (docs/diagnostics.md §3.3):
+// apply any clear the bridge requested, debounce each fault this handler tests (under its enable
+// conditions), and publish the fb's report cell. The index k is the fault's position among the FB's
+// faults — the same order the bridge and the fault memory use.
+fn fault_step_lines(m Model, fb string, handler string) []string {
+	fbf := m.faults.filter(it.fb == fb)
+	if !fbf.any(it.handler == handler) {
+		return []string{}
+	}
+	f := snake(fb)
+	mut out := []string{}
+	out << '\tfault_now := osal.now_us()'
+	out << '\tosal.${acquire_fn('triple')}(fault_ctl_${f}_ch, &st.fctl_${f}, u8(sizeof(st.fctl_${f})))'
+	for k, fc in fbf {
+		if fc.handler != handler {
+			continue
+		}
+		en := if fc.enable.len == 0 {
+			'true'
+		} else {
+			fc.enable.map('inp.${snake(it.all_before('.'))}.${it.all_after('.')}').join(' && ')
+		}
+		out << '\tst.fdeb_${f}[${k}].apply(st.fctl_${f}.gen[${k}])'
+		out << '\tst.fdeb_${f}[${k}].step(outp.fault.${snake(fc.name)}, fault_now, ${en})'
+		out << '\tst.frep_${f}.r[${k}] = st.fdeb_${f}[${k}].rep'
+	}
+	out << '\tosal.${publish_fn('triple')}(fault_rep_${f}_ch, &st.frep_${f}, u8(sizeof(st.frep_${f})))'
+	return out
 }

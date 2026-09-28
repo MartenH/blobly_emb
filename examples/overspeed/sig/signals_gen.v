@@ -44,6 +44,11 @@ pub mut:
 	on bool
 }
 
+pub struct IgnitionOn {
+pub mut:
+	on bool
+}
+
 pub struct BrakePressure {
 pub mut:
 	kpa u16

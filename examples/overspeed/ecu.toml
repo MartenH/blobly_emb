@@ -87,6 +87,13 @@ to   = "can0"        # EXTERNAL: tx to the bus
 transport = "double"
 
 [[signal]]
+name = "IgnitionOn"
+fields = { on = "bool" }
+from = "can0"        # EXTERNAL: rx — the operation cycle, and EngineOverRev's enable condition
+to   = "ctrl"
+transport = "double"
+
+[[signal]]
 name = "BrakePressure"
 fields = { kpa = "u16", status = "RxStatus", lost = "u16" }
 from = "can0"        # EXTERNAL: rx, E2E-protected — the bridge owns status + lost
@@ -126,6 +133,11 @@ rx   = { timeout_ms = 200 }     # no frame in 200ms -> signals' status = timeout
 name = "BrakeStatus"            # rx: E2E with its OWN sender-loss timeout, no COM deadline —
 bus  = "can0"                   # E2E alone drives BrakePressure's timeout (REQ-E2E-002)
 e2e  = { data_id = 0x44, crc_pos = 4, counter_pos = 5, timeout_ms = 300 }
+
+[[frame]]
+name = "Ignition"               # rx: cyclic from its sender — silence ends the operation cycle
+bus  = "can0"
+rx   = { timeout_ms = 500 }
 
 [[frame]]
 name = "BrakeReport"            # tx: BrakeMonitor's view of that status, for the tester
@@ -191,6 +203,27 @@ id    = 0xF1AC
 bytes = "00"                    # writable only in extended AND with security level 1
 write = { session = ["extended"], security = 1 }
 
+# --- Faults (docs/diagnostics.md §3.3) --------------------------------------
+# EngineMonitor reports the test result each dispatch; the Loom debounces it on the ctrl thread,
+# and the fault memory on the diagnostic bridge keeps the DTC status (0x19 / 0x14 / 0x85).
+[[fault]]
+name     = "EngineOverRev"
+dtc      = 0x021900                    # P0219-00: engine overspeed condition
+from     = "EngineMonitor.on_10ms"
+debounce = { kind = "counter", fail = 3, pass = 3 }
+enable   = ["IgnitionOn.on"]
+confirm  = 1
+aging    = 2
+
+[[fault]]
+name     = "EngineIdleLow"
+dtc      = 0x050600                    # P0506-00: idle rpm lower than expected
+from     = "EngineMonitor.on_10ms"
+debounce = { kind = "counter", fail = 3, pass = 3 }   # no enable condition: only the cycle gates it
+
+[fault_memory]
+cycle = "IgnitionOn.on"                # the operation cycle: ignition on -> off
+
 # --- Function Blocks ---------------------------------------------------------
 # (within a partition, list producers before consumers for same-cycle local data)
 [[fb]]
@@ -217,7 +250,7 @@ thread    = "ctrl_main"
   [[fb.handler]]
   name      = "on_10ms"
   period_ms = 10
-  reads     = ["EngineSpeed"]
+  reads     = ["EngineSpeed", "IgnitionOn"]
   writes    = ["HighRev"]
 
 [[fb]]

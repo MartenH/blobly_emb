@@ -2,6 +2,7 @@
 module ports
 
 import sig
+import comm.fault
 
 pub struct SpeedFilterIn {
 pub mut:
@@ -29,11 +30,19 @@ pub struct EngineMonitorIn {
 pub mut:
 	// signal "EngineSpeed" — ch, transport double, can0 -> ctrl
 	engine_speed sig.EngineSpeed
+	// signal "IgnitionOn" — ch, transport double, can0 -> ctrl
+	ignition_on sig.IgnitionOn
+}
+pub struct EngineMonitorFaults {
+pub mut:
+	engine_over_rev fault.TestResult // DTC 0x21900: write the CURRENT result each dispatch, no latch (docs/diagnostics.md §3.3)
+	engine_idle_low fault.TestResult // DTC 0x50600: write the CURRENT result each dispatch, no latch (docs/diagnostics.md §3.3)
 }
 pub struct EngineMonitorOut {
 pub mut:
 	// signal "HighRev" — local cell in partition "ctrl"
 	high_rev sig.HighRev
+	fault EngineMonitorFaults
 }
 
 pub struct BrakeMonitorIn {

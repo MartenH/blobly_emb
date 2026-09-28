@@ -8,6 +8,7 @@ module main
 
 import os
 import toml
+import tools.ecumodel
 
 fn main() {
 	args := os.args
@@ -79,6 +80,19 @@ fn main() {
 		// triple, not double: an rx burst (source cadence < the 10 ms bridge tick) laps the
 		// consumer, and the double buffer tears exactly then; the triple buffer's exchange
 		// hands over whole-buffer ownership, tear-free at any rate (codex #200).
+		transports << transport_variant('triple')
+		chcount++
+	}
+	// --- fault cells (docs/diagnostics.md §3.3): per FB that owns a [[fault]], a REPORT channel
+	//     (its thread writes the debounced state + counters, the diagnostic bridge reads) and a
+	//     CONTROL channel (the bridge writes the clear generations, that thread reads). Triple:
+	//     wait-free and tear-free at any rate, one writer each (SPSC). In first-declaration order.
+	froms := doc.value('fault').array().map(((it.as_map())['from'] or { toml.Any('') }).string())
+	for fb in ecumodel.fault_fbs(froms) {
+		b << 'pub const fault_rep_${snake(fb)}_ch = ${chcount}'
+		transports << transport_variant('triple')
+		chcount++
+		b << 'pub const fault_ctl_${snake(fb)}_ch = ${chcount}'
 		transports << transport_variant('triple')
 		chcount++
 	}

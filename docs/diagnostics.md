@@ -19,7 +19,7 @@ page is the plan to close that, in rungs that each ship and verify on their own.
 
 ## 1. Where we actually are
 
-As of R4a — the rows R0 through R4a changed say so; the rest is the state the plan started from.
+As of R4b — the rows R0 through R4b changed say so; the rest is the state the plan started from.
 
 | Piece | State | Where |
 |---|---|---|
@@ -31,9 +31,9 @@ As of R4a — the rows R0 through R4a changed say so; the rest is the state the 
 | UDS on the **target** | **none** — loom2v refuses `[[isotp]]` on a ThreadX node; on silicon UDS runs only hand-wired — the bootloader over ISO-TP and the `h735_doip` example over DoIP | `tools/loom2v/gen.v` |
 | UDS config | `[[isotp]]` (one per node; `functional_id`, `s3_ms` since R1; `security_attempts`, `security_delay_ms` since R1b) + `[[did]]` (ascii / bytes / signal / writable, `read` / `write` gates) | `tools/ecucheck/gen.v` |
 | Rx signal status | `status = "RxStatus"` (never_received / ok / timeout / integrity) and the E2E `lost` count, bridge-owned, host only (R3a); the COM deadline runs from bridge start (re-arming it on NM wake is R5's: the host bridge has no NM) and from a frame that failed its check; E2E has its own sender-loss timeout on CAN, required on every received E2E frame, refreshed only by a valid message and independent of the COM deadline (R3b; the SOME/IP receive path still lacks it, #299); the target rejects status, rx deadlines and E2E ("phase 6b-2b", R5) | `tools/loom2v/gen_com.v`, `gen.v` |
-| Fault memory / DTCs | R4a: the library — producer debounce with monotonic counters, the status byte through operation cycles (confirm, pending, aging), clears by generation, 0x85 suppression — and 0x19 01/02/0A, 0x14, 0x85 in the server through `FaultOps`; RAM only. Not yet generated from `[[fault]]` (R4b) | `comm/fault/fault.v`, `comm/uds/uds.v` |
+| Fault memory / DTCs | R4a + R4b: `[[fault]]` generated on the host — the FB's fault port, debounce on its thread with monotonic counters, the fault memory on the diagnostic bridge (status byte through operation cycles from `[fault_memory] cycle`, confirmation, aging, clears by generation, 0x85 suppression), 0x19 01/02/0A, 0x14, 0x85; RAM only. Not yet: signal-status faults (R4c), target + persistence + freeze frames (R6) | `comm/fault/fault.v`, `tools/loom2v/gen.v`, `gen_com.v` |
 | Persistence | journal engine + `persist = "now" / "shutdown"` signals, ThreadX only, one journal per node, 20 B records with 634 B chains; DID write path (NvM "P4") not built | `nvm/`, `tools/loom2v/gen_nvm.v` |
-| Operation cycle / ECU state | none wired; `ecu/` (lifecycle, mode arbiter) is an unused library; NM states exist | `ecu/`, `comm/nm/` |
+| Operation cycle / ECU state | the fault memory's operation cycle follows a declared bool signal on the host (`[fault_memory] cycle`, R4b); NM-driven cycles (D3's default) come with faults on the target (R6); `ecu/` (lifecycle, mode arbiter) is still an unused library; NM states exist | `tools/loom2v/gen_com.v`, `ecu/`, `comm/nm/` |
 | Cross-thread transports | last-value cells only (seqlock / double / triple, xioc); `bulk` is the one FIFO | `osal/`, `boards/common/` |
 | Tester (blobly_net) | client: 0x10 0x22 0x2E 0x3E, **0x27 with a reference key (seed XOR 0xFF)**, 0x19 sub 0x02 as raw bytes; no 0x14 / 0x11 / 0x28 / 0x85, no functional addressing, no DTC model or view; its UDS sim answers 0x19/0x02 from a static list | `blobly_net modules/uds` |
 
@@ -226,9 +226,9 @@ if a use case needs the exact order of qualifications — decision D1).
 
 **The way back.** Debouncing lives on the producer, so everything that must restart or pause it has
 to reach the producer too — or a 0x14 clear is undone by the next read of a still-failed cell. The
-fault memory publishes a **control cell per producing thread** (single writer: its comm thread;
-single reader: that thread's generated debounce — the IOC is SPSC, so one shared cell with several
-readers is not an option): a *clear generation* **per fault** (a per-DTC 0x14 bumps only its faults'
+fault memory publishes a **control cell per fault-owning FB** — as built in R4b, one report cell and
+one control cell per FB (single writer each: that FB's thread / the diagnostic bridge — the IOC is
+SPSC, so one shared cell with several readers is not an option): a *clear generation* **per fault** (a per-DTC 0x14 bumps only its faults'
 generations, 0x14 FFFFFF bumps them all; every clear is a FRESH 16-bit generation, so no report made
 before it can count, and a clear that could not get one — its producer silent for 32767 clears — is
 refused with 0x22 rather than reuse a generation; a bump resets that fault's counters and debounced state, and the producer echoes
@@ -241,7 +241,7 @@ recorded; a cycle begun while off gets fresh cycle bits at "on") — and **opera
 which change status bits only and bump no generation, so no old-generation drain is needed on the
 host (a qualification at a boundary can land one pass late). The persistence-grade cycle-END barrier
 remains R6's (§7). The
-per-fault generations are bounded by the cell too, which caps the faults one thread may own. A
+per-fault generations are bounded by the cell too, which caps the faults one FB may own (8). A
 producer on a **satellite core** needs the same cell to flow owner → satellite, which the target does
 not support today (loom2v rejects any signal INTO a satellite partition); R6 adds that reverse xioc
 path, or faults are declared owner-core-only until it exists. Enable conditions are evaluated on the producer

@@ -209,6 +209,35 @@ The protocol logic lives in `comm/uds` (unit-tested); the generated bridge fills
 the DID table and refreshes signal-backed DIDs. So a tester can read a live bus
 signal — or any FB output — straight over diagnostics.
 
+## Faults and DTCs
+
+An FB tests; the platform keeps the DTC ([diagnostics.md](diagnostics.md) §3.3). A `[[fault]]`
+names the DTC, the handler that tests it, and how its results are debounced:
+
+```toml
+[[fault]]
+name     = "EngineOverRev"
+dtc      = 0x021900                    # 3-byte DTC
+from     = "EngineMonitor.on_10ms"     # the handler that tests it
+debounce = { kind = "counter", fail = 3, pass = 3 }   # or { kind = "time", fail_ms, pass_ms }
+enable   = ["IgnitionOn.on"]           # bool fields the handler reads: false = not counted
+confirm  = 1                           # failed operation cycles to confirm (default 1)
+aging    = 2                           # passing cycles to age out (default 0 = never)
+
+[fault_memory]
+cycle = "IgnitionOn.on"                # the operation cycle (bool, received on the diag bus)
+```
+
+The FB gets a `fault` field on its Out port and writes the **current** result every dispatch —
+`out.fault.engine_over_rev = .failed` / `.passed` (untouched = `.not_tested`) — and keeps no latch:
+reporting is one-way. The generated Loom debounces it on the FB's own thread right after the
+handler and publishes the debounced state and counters in a cell per FB; the diagnostic bridge
+owns the fault memory (`comm/fault`), keeps each DTC's ISO 14229-1 status through operation cycles
+(confirmation, pending, aging), and answers `0x19` 01/02/0A, `0x14` and `0x85`. A clear reaches the
+FB's thread as a new generation in a control cell, so its debounce restarts. Host only for now:
+faults on the target, persistence and freeze frames are rungs R6 (`freeze` / `priority` fail
+generation until then), and faults raised by a signal's receive status are R4c.
+
 ## E2E protection (ISO 26262)
 
 A `[[frame]]` can be **end-to-end protected**: `comm/e2e` stamps an alive counter

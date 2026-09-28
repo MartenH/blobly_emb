@@ -664,6 +664,14 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			glue << '\ttp_${tp} isotp.Link'
 			glue << '\ttp_${tp}_buf [isotp.max_payload]u8'
 			glue << '\tuds_${tp} uds.Server'
+			if m.faults.len > 0 {
+				glue << '\tfmem fault.Memory // the node\'s fault memory: this bridge is its one writer (D2)'
+				glue << '\tfcycle_on bool // the operation-cycle signal as last seen'
+				for fb in fault_fbs(m) {
+					glue << '\tfrep_${snake(fb)} fault.Reports // from ${fb}\'s thread'
+					glue << '\tfctl_${snake(fb)} fault.Control // to ${fb}\'s thread'
+				}
+			}
 			if security_levels(m.dids) != 0 {
 				glue << '\tsa_${tp} uds.ReferenceSecurity // 0x27 on the host: the SIM key (not a secret, decision D5)'
 			}
@@ -781,6 +789,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				glue << '\tst.uds_${tp}.tick(now)'
 			}
 			glue << rx_gate_sample(m, conns, rx_by_msg.keys(), bname, '\t', true)
+			glue << fault_pass_lines(m)
 		}
 		if rx_by_msg.len > 0 || conns.len > 0 || my_routes.len > 0 {
 			glue << '\tmut rx := can.Frame{}'
@@ -945,6 +954,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 						fld := snake(sname)
 						glue << '${ind}\tmut ${fld} := sig.${sname}{ ${rx_status_fields(si, '.timeout', lost)[2..]} }'
 						glue << '${ind}\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+						glue << cycle_edge(m, sname, fld, ind + '\t')
 					}
 					glue << '${ind}} else {'
 					ind += '\t'
@@ -960,6 +970,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					}
 					glue << '${ind}mut ${fld} := sig.${sname}{ ${valassign}${rx_status_fields(si, '.ok', lost)} }'
 					glue << '${ind}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+					glue << cycle_edge(m, sname, fld, ind)
 				}
 				if e2e && e2e_timeout(m, msg, bname) > 0 {
 					ind = ind[1..]
@@ -1108,6 +1119,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					sf := rx_status_fields(si, '.timeout', lost)
 					glue << '\t\tmut ${fld} := sig.${sname}{${if sf == '' { '' } else { ' ' + sf[2..] + ' ' }}}'
 					glue << '\t\tosal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+					glue << cycle_edge(m, sname, fld, '\t\t')
 				}
 				glue << '\t}'
 			}
@@ -1491,6 +1503,18 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				}
 			}
 			glue << '\tst.uds_${tp}.ndid = ${m.dids.len}'
+			if m.faults.len > 0 {
+				for i, f in m.faults {
+					glue << '\tst.fmem.slots[${i}].dtc = u32(0x${f.dtc.hex()}) // ${f.name}'
+					glue << '\tst.fmem.slots[${i}].confirm = u8(${f.confirm})'
+					if f.aging > 0 {
+						glue << '\tst.fmem.slots[${i}].aging = u8(${f.aging})'
+					}
+				}
+				glue << '\tst.fmem.n = ${m.faults.len}'
+				glue << '\tst.fmem.init()'
+				glue << '\tst.uds_${tp}.faults = st.fmem.uds_ops() // 0x19 / 0x14 / 0x85'
+			}
 		}
 		// module_host (above): no signal work, so no tick and no handler — it only has to DRAIN
 		// its channel, since an unread rx queue backs up on a real driver. The frames go nowhere
@@ -1930,6 +1954,7 @@ fn rx_integrity(m Model, list []string, msg string, lost string, gate string, in
 		fld := snake(sname)
 		out << '${i}mut ${fld} := sig.${sname}{ ${rx_status_fields(si, '.integrity', lost)[2..]} }'
 		out << '${i}osal.${publish_fn(si.transport)}(${fld}_ch, &${fld}, u8(sizeof(${fld})))'
+		out << cycle_edge(m, sname, fld, i)
 	}
 	if i != ind {
 		out << '${ind}}'
@@ -1990,4 +2015,50 @@ fn e2e_timeout(m Model, msg string, bname string) int {
 // has_deadline: the frame is monitored for silence — by the COM deadline, the E2E one, or both.
 fn has_deadline(m Model, msg string, bname string) bool {
 	return (m.frames.rx_timeout_us[msg] or { 0 }) > 0 || e2e_timeout(m, msg, bname) > 0
+}
+
+// fault_pass_lines: the fault memory's share of the bridge pass, at its TOP — before the rx drain,
+// where functional requests are served inline, and before the physical dispatch — so every 0x19
+// reads the newest consumed state: each fault-owning FB's report cell is consumed slot by slot and
+// the clear generations go back in its control cell. (The operation cycle follows its signal where
+// the frame is decoded, in bus order.)
+fn fault_pass_lines(m Model) []string {
+	if m.faults.len == 0 {
+		return []string{}
+	}
+	mut out := []string{}
+	for fb in fault_fbs(m) {
+		f := snake(fb)
+		out << '\tosal.${acquire_fn('triple')}(fault_rep_${f}_ch, &st.frep_${f}, u8(sizeof(st.frep_${f})))'
+		mut k := 0
+		for i, fc in m.faults {
+			if fc.fb != fb {
+				continue
+			}
+			out << '\tst.fmem.consume(${i}, st.frep_${f}.r[${k}])'
+			out << '\tst.fctl_${f}.gen[${k}] = st.fmem.control_gen(${i})'
+			k++
+		}
+		out << '\tosal.${publish_fn('triple')}(fault_ctl_${f}_ch, &st.fctl_${f}, u8(sizeof(st.fctl_${f})))'
+	}
+	return out
+}
+
+// cycle_edge: after EVERY publication of the operation-cycle signal — a good decode, a deadline or
+// E2E timeout, an integrity failure, a late frame — the fault memory's cycle follows the value just
+// published, in bus order (an off/on pair in one pass is two edges). One place, so no publish path
+// can leave the fault memory in a cycle the published signal has already left.
+fn cycle_edge(m Model, sname string, fld string, ind string) []string {
+	if m.faults.len == 0 || sname != m.fault_cycle.all_before('.') {
+		return []string{}
+	}
+	cf := m.fault_cycle.all_after('.')
+	return [
+		'${ind}if ${fld}.${cf} && !st.fcycle_on {',
+		'${ind}\tst.fmem.cycle_start()',
+		'${ind}} else if !${fld}.${cf} && st.fcycle_on {',
+		'${ind}\tst.fmem.cycle_end()',
+		'${ind}}',
+		'${ind}st.fcycle_on = ${fld}.${cf}',
+	]
 }

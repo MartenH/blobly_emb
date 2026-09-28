@@ -1158,6 +1158,50 @@ pub fn brake_status_brake_counter_set(mut data [64]u8, phys f64) {
 	brake_status_brake_counter_set_raw(mut data, u64(raw) & ((u64(1) << 4) - 1))
 }
 
+// ===== Ignition  id=0x302  dlc=1 =====
+pub const ignition_id = u32(0x302)
+pub const ignition_dlc = u8(1)
+
+// IgnitionOn: 0|1 @1 (Intel) unsigned (1.0,0.0) ""
+pub fn ignition_ignition_on_raw(data [64]u8) u64 {
+	mut raw := u64(0)
+	for i in 0 .. 1 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit := (data[byte_idx] >> (g % 8)) & 1
+		raw |= u64(bit) << i
+	}
+	return raw
+}
+pub fn ignition_ignition_on_phys(data [64]u8) f64 {
+	raw := ignition_ignition_on_raw(data)
+	return f64(raw) * 1.0 + 0.0
+}
+pub fn ignition_ignition_on_set_raw(mut data [64]u8, raw u64) {
+	for i in 0 .. 1 {
+		g := 0 + i
+		byte_idx := g / 8
+		if byte_idx >= 64 {
+			continue
+		}
+		bit_idx := g % 8
+		mask := u8(1) << bit_idx
+		bit := u8((raw >> i) & 1)
+		data[byte_idx] = (data[byte_idx] & ~mask) | (bit << bit_idx)
+	}
+}
+pub fn ignition_ignition_on_set(mut data [64]u8, phys f64) {
+	x := (phys - 0.0) / 1.0
+	mut raw := i64(if x >= 0.0 { x + 0.5 } else { x - 0.5 })
+	if raw < 0 {
+		raw += i64(u64(1) << 1)
+	}
+	ignition_ignition_on_set_raw(mut data, u64(raw) & ((u64(1) << 1) - 1))
+}
+
 // ===== BrakeReport  id=0x131  dlc=3 =====
 pub const brake_report_id = u32(0x131)
 pub const brake_report_dlc = u8(3)

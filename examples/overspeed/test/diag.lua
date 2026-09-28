@@ -110,7 +110,7 @@ test("UDS: functional TesterPresent is answered; a functional unsupported servic
   local r = functional("3E 00", 300)
   check.truthy(r ~= nil, "no answer to a functional TesterPresent")
   check.equal(tohex(r:sub(1, 3)), "02 7E 00")
-  check.equal(functional("19 02 FF", 300), nil, "a functional request answered 0x11")
+  check.equal(functional("31 01 FF 00", 300), nil, "a functional request answered 0x11") -- RoutineControl: unsupported
 end)
 
 test("UDS: ECUReset answers first, then the diagnostic state is back at power-on", function()

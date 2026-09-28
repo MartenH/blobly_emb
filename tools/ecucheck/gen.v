@@ -76,6 +76,8 @@ fn specs() map[string]map[string]Key {
 			'frame':     sub(.arr, false, 'frame')
 			'isotp':     sub(.arr, false, 'isotp')
 			'did':       sub(.arr, false, 'did')
+			'fault':        sub(.arr, false, 'fault') // docs/diagnostics.md §3.3
+			'fault_memory': sub(.tbl, false, 'fault_memory')
 			'route':     sub(.arr, false, 'route')
 			'io':        sub(.tbl, false, 'io')
 			'bulk':      sub(.arr, false, 'bulk')
@@ -272,6 +274,25 @@ fn specs() map[string]map[string]Key {
 			'fresh_pos': k(.int)
 			'mac_pos':   k(.int)
 			'mac_len':   k(.int)
+		}
+		'fault':      {
+			'name':     req(.str)
+			'dtc':      req(.int) // 3-byte DTC
+			'from':     req(.str) // "Fb.handler" — the handler that tests it
+			'debounce': sub(.tbl, false, 'fault_debounce')
+			'enable':   k(.str_arr) // "Signal.field" bool conditions the handler reads
+			'confirm':  k(.int) // failed operation cycles to confirm (default 1)
+			'aging':    k(.int) // passing cycles to age out (default 0 = never)
+		}
+		'fault_debounce': {
+			'kind':    k(.str) // counter (default) | time
+			'fail':    k(.int)
+			'pass':    k(.int)
+			'fail_ms': k(.int)
+			'pass_ms': k(.int)
+		}
+		'fault_memory': {
+			'cycle': k(.str) // "Signal.field" (bool): the operation cycle
 		}
 		'isotp':      {
 			'name':     req(.str)
