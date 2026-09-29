@@ -66,10 +66,19 @@ fn validate_diag_threadx(m Model) {
 // has no cell on this thread.
 fn validate_diag_live_dids(m Model, tx_cells map[string]bool) {
 	for d in m.dids {
-		if d.signal != '' && d.signal !in tx_cells {
+		if d.signal == '' {
+			continue
+		}
+		if d.signal !in tx_cells {
 			panic('loom2v: [target] kind="threadx": [[did]] 0x${d.id.hex()} reads signal "${d.signal}", ' +
 				'but on the target a live DID reads only what this node TRANSMITS on CAN from a local FB ' +
 				'(its IOC cell is the comm thread\'s to read; an input\'s cell is its FB\'s, and a cell has one reader)')
+		}
+		// the cell carries one 32-bit word (the lean encode's), so a wider value has no home in it
+		vt := (m.sig_of[d.signal] or { SigInfo{} }).val_type
+		if vt in ['u64', 'i64'] {
+			panic('loom2v: [target] kind="threadx": [[did]] 0x${d.id.hex()} reads "${d.signal}", a ${vt}, but ' +
+				'its IOC cell on the target carries 32 bits — a live DID there is at most 32 bits wide')
 		}
 	}
 }

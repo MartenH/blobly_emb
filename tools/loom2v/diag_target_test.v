@@ -175,3 +175,18 @@ fn test_a_live_did_is_encoded_in_its_values_width() {
 	assert did_signal_encode('srv', 0, 'v', 'u64').ends_with('.len = 8')
 	assert did_signal_encode('srv', 0, 'v', 'u8').ends_with('.len = 1')
 }
+
+// a target cell carries one 32-bit word, so a wider output cannot be a live DID there
+fn test_a_live_did_wider_than_the_cell_is_refused() {
+	field := 'fields = { v = "u32" }'
+	code, out, _ := generate_edited('wide_did', fn [field] (src string) string {
+		assert src.contains(field), 'h735_threadx Workload changed shape — update this test'
+		return src.replace(field, 'fields = { v = "u64" }')
+	}, diag_conn + '
+[[did]]
+id     = 0xF1A0
+signal = "Workload"
+')
+	assert code != 0, 'loom2v accepted a 64-bit live DID on the target'
+	assert out.contains('at most 32 bits wide'), out
+}
