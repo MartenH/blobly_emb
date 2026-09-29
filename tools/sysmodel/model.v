@@ -1001,7 +1001,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 		}
 	}
 	// [[isotp]] — diagnostic/ISO-TP connections. rx_id/tx_id are on-wire diagnostic
-	// CAN ids; loom2v also can't emit ISO-TP on the threadx comm thread.
+	// CAN ids.
 	if iv := doc.value_opt('isotp') {
 		for c in iv.array() {
 			cm := c.as_map()

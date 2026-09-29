@@ -70,6 +70,7 @@ test("domain: requests back to back while the node keeps its cadence", function(
     return n
   end
   drain()
+  -- __now_ms is the prelude's own clock (expect() waits on it); it has no public name yet
   local t0 = __now_ms()
   local seen, reads = 0, 0
   while __now_ms() - t0 < 3000 do

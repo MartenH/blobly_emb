@@ -2327,7 +2327,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// [nvm] — the journal put path into the real flash driver. 4 KB was
 				// measured paper-thin on the H755 bench (the v4 image faulted with PSP
 				// 40 B below the DTCM floor mid-put): 8 KB with [nvm], 4 KB without.
-				comm_stack := if m.nvm.on { 8192 } else { 4096 }
+				// the diagnostic server's dispatch copies its ISO-TP link / UDS server by value into
+				// several frames (~1 KB each): 8 KB with [[isotp]] too
+				comm_stack := if m.nvm.on || m.isotp_conns.len > 0 { 8192 } else { 4096 }
 				glue << '\tg_comm_stack [${comm_stack}]u8'
 				// (The load cell is the volatile C scratch in comm_glue.c, via load_pub/load_*.)
 				// Rx accounting: the comm thread counts received frames + keeps the last value, so a
@@ -2733,9 +2735,6 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << trace_module_init(m)
 				glue << shell_module_init(m)
 				glue << diag_target_init(m)
-				if m.isotp_conns.len > 0 {
-					glue << '\tmut diag_txf := can.Frame{}'
-				}
 				glue << nm_shell_register(m)
 				glue << stat_shell_register(m)
 				glue << nm_module_init(m)
@@ -2848,9 +2847,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t\tch.send(tf)'
 					glue << '\t\t}'
 				}
+				glue << diag_target_produce(m)
 				glue << trace_produce_drain(m)
 				glue << shell_produce_drain(m)
-				glue << diag_target_produce(m)
 				glue << xcore_trace_poll(m)
 				glue << xcore_produce_drain(m)
 				glue << emit_bulk_service_arm(m.bulk, m.part, '', '\t\t') // owner cross-core bulk service (poll)

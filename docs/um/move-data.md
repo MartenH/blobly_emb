@@ -27,7 +27,7 @@ cell."* Sending bulk as a signal is the mistake this page exists to prevent.
 | **core → core**, bulk | `xcore.h` dtrace-style cell: shared-window owner buffer + req/ack handshake | RAM-bound (trace uses 2 KB) | ❌ **hand-written**; planned generated form = the loan/publish ring below |
 | ECU → ECU, one frame | CAN frame (`driver/can`) | 8 B classic / **64 B** FD | ✅ derived |
 | ECU → ECU, a PDU | COM (`comm/com`) | **64 B** (`com.max_pdu`) | ✅ derived |
-| ECU → ECU, bulk | ISO-TP (`comm/isotp`) — **host/sim; a `threadx` target rejects `[[isotp]]` at generation** | **520 B** (`isotp.max_payload`) | ✅ config |
+| ECU → ECU, bulk | ISO-TP (`comm/isotp`) — host/sim, and a `threadx` target's comm thread (constant DIDs only there so far) | **520 B** (`isotp.max_payload`) | ✅ config |
 | ECU → ECU, firmware | UDS `0x34`/`0x36`×N/`0x37` over **ISO-TP** (the DoIP endpoint serves diagnostics only today — `boot.Prog` has no DoIP binding yet) | image-sized, block-paced | ✅ bootloader |
 | Ethernet event | SOME/IP notification (`comm/someip`) over UDP — **NetX Duo** on target, POSIX socket on host | **64 B** | ✅ config |
 | Ethernet RPC reply | SOME/IP response, same UDP path | **1024 B** (`max_rpc`) | ✅ config |

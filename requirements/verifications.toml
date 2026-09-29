@@ -532,10 +532,12 @@ date = "2026-09-26"
 # subFunctionNotSupported (nothing on the target performs a reset, holds a key or hands off to a
 # bootloader yet — refused, not faked); an unknown DID 0x31. Under load: 943 multi-frame reads
 # back to back in 3.0 s while VehSpeedFrame (0x120, 100 ms) kept 29 of 30 periods.
+# REQ-DIAG-001 only: the run also exercised most of REQ-DIAG-003/004 (default start, S3, per-DID
+# session gates, NRC order), but their security clauses cannot run until 0x27 reaches the target.
 [[review]]
 id = "uds-on-target-domain"
 method = "review"
 context = "h755/threadx"
-verifies = ["REQ-DIAG-001", "REQ-DIAG-003", "REQ-DIAG-004"]
+verifies = ["REQ-DIAG-001"]
 approved_by = "Claude bench session — NUCLEO-H755ZI-Q (system_full domain) vs CANsub.4 ch2"
 date = "2026-09-29"

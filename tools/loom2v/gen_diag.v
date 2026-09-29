@@ -80,7 +80,9 @@ fn diag_target_init(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
 	}
-	return conn_init_lines(m, m.isotp_conns[0], 'g_diag')
+	mut g := conn_init_lines(m, m.isotp_conns[0], 'g_diag')
+	g << '\tmut diag_txf := can.Frame{}'
+	return g
 }
 
 // diag_target_housekeep: the top of every pass, before the drain.
@@ -105,18 +107,26 @@ fn diag_target_rx_arm(m Model) []string {
 	]
 }
 
-// diag_target_produce: the answer in flight, tx_ready-gated like every producer (silent in NM
-// sleep, REQ-COM-007). A frame the channel refuses aborts the transfer; the tester retries.
+// diag_target_produce: the answer in flight, tx_ready-gated like every producer, and ahead of the
+// trace and shell streams — an answer is a few frames a tester is timing, a dump is many. A frame
+// the channel refuses aborts the transfer; the tester retries. Silent in NM sleep (REQ-COM-007):
+// an answer that cannot leave is abandoned rather than held, so it neither keeps the thread on its
+// 1-tick wake nor goes out stale after the wake.
 fn diag_target_produce(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
 	}
-	return [
-		'\t\tfor ${nm_gate(m)}ch.tx_ready() && g_diag.produce(t1, mut diag_txf) {',
-		'\t\t\tif !ch.send(diag_txf) {',
-		'\t\t\t\tg_diag.abort_tx()',
-		'\t\t\t\tbreak',
-		'\t\t\t}',
-		'\t\t}',
-	]
+	mut g := []string{}
+	if m.nm.on {
+		g << '\t\tif !nm_up && g_diag.link.busy() {'
+		g << '\t\t\tg_diag.abort_tx()'
+		g << '\t\t}'
+	}
+	g << '\t\tfor ${nm_gate(m)}ch.tx_ready() && g_diag.produce(t1, mut diag_txf) {'
+	g << '\t\t\tif !ch.send(diag_txf) {'
+	g << '\t\t\t\tg_diag.abort_tx()'
+	g << '\t\t\t\tbreak'
+	g << '\t\t\t}'
+	g << '\t\t}'
+	return g
 }
