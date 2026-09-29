@@ -55,7 +55,7 @@ pub fn (n Nm) build_frame(node_id u8, pn_local u64) Frame {
 			cbv |= cbv_repeat_msg_request // active waker asks the cluster to re-sync
 		}
 	}
-	if !n.requested {
+	if !n.wanted() {
 		cbv |= cbv_ready_to_sleep
 	}
 	if pn_local != 0 {

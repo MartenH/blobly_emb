@@ -1393,18 +1393,14 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 		for c in conns {
 			tp := snake(c.name)
 			srv := 'st.conn_${tp}.server'
-			glue << '\tst.conn_${tp}.init(u32(0x${c.rx_id.hex()}), u32(0x${c.tx_id.hex()}), u32(0x${c.functional_id.hex()}), ${c.bs}, ${c.stmin})'
+			glue << conn_init_lines(m, c, 'st.conn_${tp}')
 			if m.dids.any(it.signal != '') {
 				glue << '\tst.conn_${tp}.refresh = diag_refresh_${tp}'
 			}
-			glue << '\t${srv}.no_programming = true // programming is the bootloader\'s (handoff: R2)'
 			glue << '\t${srv}.serves_reset = true // housekeep performs reset_req once answered'
 			glue << '\t${srv}.serves_comm_control = true // and this bridge gates its frames on 0x28'
 			if m.buses.len == 1 {
 				glue << '\t${srv}.single_network = true // 0x28 "all networks" = this one'
-			}
-			if c.s3_ms > 0 {
-				glue << '\t${srv}.s3_us = u64(${c.s3_ms}) * 1000'
 			}
 			// 0x27 serves exactly the levels some DID gate names; the host bridge injects the
 			// reference key (blobly_net's), seeded from the clock. A target injects the board's
@@ -1420,33 +1416,6 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					glue << '\t${srv}.sa_delay_us = u64(${c.security_delay_ms}) * 1000'
 				}
 			}
-			for idx, did in m.dids {
-				glue << '\t${srv}.dids[${idx}] = uds.Did{'
-				glue << '\t\tid: u16(0x${did.id.hex()})'
-				if did.writable {
-					glue << '\t\twritable: true'
-				}
-				if did.read_sessions != 0 {
-					glue << '\t\tread_sessions: u8(0x${did.read_sessions.hex()})'
-				}
-				if did.write_sessions != 0 {
-					glue << '\t\twrite_sessions: u8(0x${did.write_sessions.hex()})'
-				}
-				if did.read_security != 0 {
-					glue << '\t\tread_security: u8(${did.read_security})'
-				}
-				if did.write_security != 0 {
-					glue << '\t\twrite_security: u8(${did.write_security})'
-				}
-				glue << '\t}'
-				for bi, b in did.bytes {
-					glue << '\t${srv}.dids[${idx}].data[${bi}] = u8(0x${b.hex()})'
-				}
-				if did.bytes.len > 0 {
-					glue << '\t${srv}.dids[${idx}].len = ${did.bytes.len}'
-				}
-			}
-			glue << '\t${srv}.ndid = ${m.dids.len}'
 			if m.faults.len > 0 {
 				for i, f in m.faults {
 					glue << '\tst.fmem.slots[${i}].dtc = u32(0x${f.dtc.hex()}) // ${f.name}'

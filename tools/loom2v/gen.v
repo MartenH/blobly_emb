@@ -947,6 +947,16 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 		if c.security_delay_ms < 0 {
 			panic('loom2v: [[isotp]] "${c.name}" security_delay_ms ${c.security_delay_ms} is negative (0 = the default ${uds.default_sa_delay_us / 1000} ms)')
 		}
+		// the connection matches and sends its ids as standard frames: a wider value never matches
+		// on receive and goes out masked on transmit
+		for field, v in {
+			'rx_id': c.rx_id
+			'tx_id': c.tx_id
+		} {
+			if v < 0 || v > 0x7FF {
+				panic('loom2v: [[isotp]] "${c.name}" ${field} 0x${v.hex()} must be a standard 11-bit id (<= 0x7FF)')
+			}
+		}
 		if c.functional_id == 0 {
 			continue
 		}
@@ -2317,6 +2327,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << trace_scratch_fields(m, part)
 			glue << trace_module_globals(m)
 			glue << shell_module_globals(m)
+			glue << diag_target_globals(m)
 			glue << xcore_trace_globals(m)
 			glue << nvm_globals(m)
 			glue << nm_module_globals(m)
@@ -2326,7 +2337,9 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// [nvm] — the journal put path into the real flash driver. 4 KB was
 				// measured paper-thin on the H755 bench (the v4 image faulted with PSP
 				// 40 B below the DTCM floor mid-put): 8 KB with [nvm], 4 KB without.
-				comm_stack := if m.nvm.on { 8192 } else { 4096 }
+				// the diagnostic server's dispatch copies its ISO-TP link / UDS server by value into
+				// several frames (~1 KB each): 8 KB with [[isotp]] too
+				comm_stack := if m.nvm.on || m.isotp_conns.len > 0 { 8192 } else { 4096 }
 				glue << '\tg_comm_stack [${comm_stack}]u8'
 				// (The load cell is the volatile C scratch in comm_glue.c, via load_pub/load_*.)
 				// Rx accounting: the comm thread counts received frames + keeps the last value, so a
@@ -2731,6 +2744,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << trace_module_init(m)
 				glue << shell_module_init(m)
+				glue << diag_target_init(m)
 				glue << nm_shell_register(m)
 				glue << stat_shell_register(m)
 				glue << nm_module_init(m)
@@ -2742,15 +2756,23 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << '\tmut rx := can.Frame{}'
 				glue << '\tfor {'
+				// While a stream is in flight — a trace dump, a diagnostic answer — wake every tick:
+				// the Tx FIFO holds ~3 frames, so a 10-tick pace stretches a 75-frame block to
+				// ~300 ms (blowing host budgets); at 1 tick it drains in ~25 ms.
+				mut streaming := []string{}
 				if m.trace.on {
-					// While a dump stream is in flight, wake every tick: the Tx FIFO holds ~3
-					// frames, so a 10-tick pace stretches a 75-frame block to ~300 ms (blowing
-					// host budgets); at 1 tick it drains in ~25 ms.
-					glue << '\t\twait_ticks := if g_tm.is_dumping() { u32(1) } else { u32(10) }'
+					streaming << 'g_tm.is_dumping()'
+				}
+				if m.isotp_conns.len > 0 {
+					streaming << 'g_diag.link.busy()'
+				}
+				if streaming.len > 0 {
+					glue << '\t\twait_ticks := if ${streaming.join(' || ')} { u32(1) } else { u32(10) }'
 					glue << '\t\tC.comm_rx_wait(wait_ticks) // the FDCAN Rx ISR wakes us early on a new frame'
 				} else {
 					glue << '\t\tC.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame'
 				}
+				glue << diag_target_housekeep(m)
 				glue << '\t\t// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame'
 				glue << '\t\tfor ch.recv(mut rx) {'
 				for si in rx_sigs {
@@ -2769,6 +2791,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << trace_rx_arms(m, part)
 			glue << shell_rx_arms(m)
+			glue << diag_target_rx_arm(m)
 			glue << nm_rx_arms(m)
 			glue << xcore_trace_rx_arm(m)
 				// GATEWAY: forward routes whose SOURCE is the telem bus (`ch`) — raw copy +
@@ -2786,6 +2809,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// NM drains FIRST: produce() ticks the state machine, so the gate
 				// below reflects THIS pass's state — otherwise the producers get one
 				// free frame past the sleep boundary (codex on emb#135).
+				glue << diag_target_nm_hold(m)
 				glue << nm_produce_drain(m)
 				if m.nm.on {
 					// REQ-COM-007: every producer below gates on this — the bus is
@@ -2793,6 +2817,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					// owns its wire behaviour, and the wake announcement must out).
 					glue << '\t\tnm_up := g_nm.awake() // NM-gated COM tx (REQ-COM-007, post-tick)'
 				}
+				glue << diag_target_produce(m) // ahead of every periodic producer: a tester is timing it
 				for p in producers {
 					glue << p.bus_tick(BusCtx{
 						telem_active: m.telem.on && telem_iface != ''
@@ -3748,15 +3773,12 @@ fn main() {
 
 	has_routes := m.routes.len > 0
 
-	// A functional request id is matched in the bridge's rx loop next to everything else on its
-	// bus: an application frame or a module frame with the same id would ALSO be dispatched as a
-	// diagnostic request (a cyclic frame whose first byte looks like a single-frame PCI could
-	// switch sessions). Refuse the collision here.
+	// A connection's ids are matched in the owner's rx loop, and sent on, next to everything else on
+	// its bus: an application or module frame with the same id would ALSO be dispatched as a
+	// diagnostic request (a cyclic frame whose first byte looks like a single-frame PCI could switch
+	// sessions), or two producers would transmit one id. Refuse the collision here — standalone
+	// images get no syscheck.
 	for c in m.isotp_conns {
-		if c.functional_id == 0 {
-			continue
-		}
-		fid := u32(c.functional_id)
 		// only what is handled on THIS bus can collide (CAN ids are bus-local): the DBC messages
 		// its signals ride, the frames routed onto or off it, and the module frames that use it
 		mut on_bus := map[string]bool{}
@@ -3765,27 +3787,48 @@ fn main() {
 				on_bus[si.dbc_msg] = true
 			}
 		}
-		if db := candb.load_dbc_file(dbc) {
+		db := candb.load_dbc_file(dbc) or { candb.Database{} }
+		fn_trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
+		shell_bus := if m.shell.bus != '' { m.shell.bus } else { m.telem.bus }
+		// on a ThreadX owner NM runs on the comm thread's channel whatever [nm].bus says (a manifest
+		// label there, gateway_test.v)
+		nm_bus := if m.target.threadx || m.nm.bus == '' { m.telem.bus } else { m.nm.bus }
+		mut ids := [][]string{} // [field, id]
+		ids << ['rx_id', c.rx_id.str()]
+		ids << ['tx_id', c.tx_id.str()]
+		if c.functional_id != 0 {
+			ids << ['functional_id', c.functional_id.str()]
+		}
+		for e in ids {
+			field := e[0]
+			id := u32(e[1].int())
+			what := 'loom2v: [[isotp]] "${c.name}" ${field} 0x${id.hex()} is also'
 			for msg in db.messages {
-				if on_bus[snake(msg.name)] && u32(msg.id) == fid && !msg.ext {
-					panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also DBC message "${msg.name}" on bus "${c.bus}"')
+				if on_bus[snake(msg.name)] && u32(msg.id) == id && !msg.ext {
+					panic('${what} DBC message "${msg.name}" on bus "${c.bus}"')
 				}
 			}
-		}
-		for r in m.routes {
-			// the functional id is a STANDARD frame: only a standard-width route can collide
-			if (r.from_bus == c.bus && !r.from_ext && u32(r.from_id) == fid)
-				|| (r.to_bus == c.bus && !r.to_ext && u32(r.to_id) == fid) {
-				panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a routed frame on bus "${c.bus}"')
+			for r in m.routes {
+				// the diagnostic ids are STANDARD frames: only a standard-width route can collide
+				if (r.from_bus == c.bus && !r.from_ext && u32(r.from_id) == id)
+					|| (r.to_bus == c.bus && !r.to_ext && u32(r.to_id) == id) {
+					panic('${what} a routed frame on bus "${c.bus}"')
+				}
 			}
-		}
-		if m.telem.on && m.telem.bus == c.bus && (fid == m.telem.id || (m.telem.detail_id != 0 && fid == m.telem.detail_id)) {
-			panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a [telemetry] frame id on bus "${c.bus}"')
-		}
-		fn_trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
-		if m.trace.on && fn_trace_bus == c.bus && (fid == m.trace.cmd_id || fid == m.trace.rsp_id
-			|| fid == m.trace.record_id || (m.trace.dump_fc_bound && fid == m.trace.dump_fc_id)) {
-			panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a [trace] endpoint id on bus "${c.bus}"')
+			if m.telem.on && m.telem.bus == c.bus && (id == m.telem.id || (m.telem.detail_id != 0 && id == m.telem.detail_id)) {
+				panic('${what} a [telemetry] frame id on bus "${c.bus}"')
+			}
+			if m.trace.on && fn_trace_bus == c.bus && (id == m.trace.cmd_id || id == m.trace.rsp_id
+				|| id == m.trace.record_id || (m.trace.dump_fc_bound && id == m.trace.dump_fc_id)) {
+				panic('${what} a [trace] endpoint id on bus "${c.bus}"')
+			}
+			if m.nm.on && nm_bus == c.bus && ((id >= m.nm.peers_lo && id <= m.nm.peers_hi) || id == m.nm.alive_id) {
+				panic('${what} in the [nm] peer range / alive id on bus "${c.bus}"')
+			}
+			if m.shell.on && !shell_on_eth(m) && shell_bus == c.bus
+				&& (id == m.shell.in_id || id == m.shell.fc_id || id == m.shell.out_id) {
+				panic('${what} a [shell] endpoint id on bus "${c.bus}"')
+			}
 		}
 	}
 
@@ -3989,14 +4032,14 @@ fn main() {
 	mut msg_ioc_idx := map[int]int{} // DBC id -> its (single) rx-read signal's IOC cell
 	if comm_thread_on {
 		// LAYOUT-IDENTICAL routes forward on the target (raw copy + id remap, emitted in the
-		// comm loop below); ISO-TP and routes needing a decode/re-encode transcode are still
+		// comm loop below); routes needing a decode/re-encode transcode are still
 		// deferred. parse-time already rejects a non-identical route on a threadx node, so a
 		// route reaching here is raw_ident — the guard is defence in depth.
-		if m.isotp_conns.len > 0 || m.routes.any(!it.raw_ident) {
-			panic('loom2v: [target] kind="threadx" comm thread: ISO-TP and non-layout-identical ' +
-				'routes are not generated yet (external rx signals + raw-identical route ' +
-				'forwarding are the supported cut)')
+		if m.routes.any(!it.raw_ident) {
+			panic('loom2v: [target] kind="threadx" comm thread: non-layout-identical routes are ' +
+				'not generated yet (raw-identical route forwarding is the supported cut)')
 		}
+		validate_diag_threadx(m)
 		// Which signals FB handlers read vs write. An rx signal READ by an FB flows through the
 		// target IOC pool (6b-2b); an rx signal WRITTEN by an FB is a config error (an input isn't
 		// written). Everything else external is still deferred (rejected below).

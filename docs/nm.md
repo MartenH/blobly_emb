@@ -30,7 +30,9 @@ prepare_bus_sleep ◀──(timeout, no rx)── ready_sleep ◀─────
 ```
 
 `tick(now)` advances the machine and returns `true` when an NM frame should be
-sent; `request`/`release`/`on_rx` are the inputs.
+sent; `request`/`release`/`on_rx` are the inputs. `hold` is a second, independent request for a platform
+service: the diagnostic server holds the network while an exchange is in flight or a non-default
+session is open, so the application's `release` (or `nm rel`) cannot put it to sleep under a tester.
 
 | state / transition | realises |
 |---|---|

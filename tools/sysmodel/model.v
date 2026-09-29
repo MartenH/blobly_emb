@@ -286,8 +286,6 @@ pub mut:
 	trace_dump_fc_bound bool // dump_fc reserves a RX id ONLY when explicitly bound
 	// [[isotp]] diagnostic connections: their rx_id/tx_id are on-wire diagnostic CAN
 	// ids (0 is valid — loom2v emits them as configured), reserved on the isotp bus.
-	// loom2v ALSO cannot emit ISO-TP on the threadx comm thread (it panics), so a
-	// threadx node with any isotp can't build.
 	has_isotp   bool
 	isotp_conns []IsotpConn
 	// [shell]: a threadx node transmits shell.out responses (default 0x7f1) on the
@@ -1003,7 +1001,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 		}
 	}
 	// [[isotp]] — diagnostic/ISO-TP connections. rx_id/tx_id are on-wire diagnostic
-	// CAN ids; loom2v also can't emit ISO-TP on the threadx comm thread.
+	// CAN ids.
 	if iv := doc.value_opt('isotp') {
 		for c in iv.array() {
 			cm := c.as_map()

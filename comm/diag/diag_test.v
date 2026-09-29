@@ -264,3 +264,57 @@ fn test_frames_that_are_not_this_connections_are_left_alone() {
 	ff.data[0] = 0x10
 	assert c.on_frame(0, ff) == .taken
 }
+
+// a consecutive frame is full unless it carries the last bytes; a truncated final one must not
+// complete the request with bytes that never arrived
+fn test_a_truncated_final_consecutive_frame_is_dropped() {
+	mut c := new_conn()
+	mut ff := sf(rx, [u8(0x2E), 0x01, 0x00, 0xAA, 0xBB, 0xCC])
+	ff.data[0] = 0x10 // first frame of a 10-byte request: 6 bytes here, 4 to follow
+	ff.data[1] = 10
+	assert c.on_frame(0, ff) == .taken
+	mut fc := can.Frame{}
+	assert c.produce(0, mut fc) // our flow control
+	mut cf := sf(rx, [u8(0xDD), 0xEE, 0xFF, 0x11])
+	cf.data[0] = 0x21
+	cf.len = 3 // 2 of the 4 remaining bytes arrived
+	assert c.on_frame(1000, cf) == .taken
+	assert !c.link.has_request()
+	cf.len = 5
+	assert c.on_frame(2000, cf) == .request
+}
+
+// the owner keeps its network awake while a connection is active
+fn test_active_while_an_exchange_or_a_session_is_open() {
+	mut c := new_conn()
+	assert !c.active()
+	c.on_frame(0, sf(rx, [u8(0x10), 0x03]))
+	assert c.active() // a request waiting
+	c.serve()
+	mut f := can.Frame{}
+	assert c.produce(0, mut f)
+	assert c.active() // the extended session stays open
+	c.on_frame(0, sf(rx, [u8(0x10), 0x01]))
+	c.serve()
+	assert c.produce(0, mut f)
+	assert !c.active()
+}
+
+// a short frame's tail is whatever the owner's reused frame held last: never read as request bytes
+fn test_a_short_physical_frame_is_never_read_past_its_length() {
+	mut c := new_conn()
+	mut stale := sf(rx, [u8(0x10), 0x03])
+	stale.len = 2 // PCI claims 2 bytes, only 1 arrived: the 0x03 is a leftover
+	assert c.on_frame(0, stale) == .taken
+	assert !c.link.has_request()
+	mut short_ff := sf(rx, [u8(0x2E), 0x01, 0x00])
+	short_ff.data[0] = 0x10
+	short_ff.data[1] = 20
+	short_ff.len = 5
+	assert c.on_frame(0, short_ff) == .taken
+	assert c.link.idle()
+	// a single frame of exactly its length is a request
+	mut exact := sf(rx, [u8(0x3E), 0x00])
+	exact.len = 3
+	assert c.on_frame(0, exact) == .request
+}
