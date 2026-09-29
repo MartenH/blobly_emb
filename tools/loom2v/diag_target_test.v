@@ -94,14 +94,24 @@ fn test_the_comm_thread_serves_the_connection_in_order() {
 	assert !glue.contains('g_diag.server.serves_comm_control = true')
 }
 
-fn test_a_live_did_is_refused_on_the_target() {
-	code, out, _ := generate('live', diag_conn + '
+// a live DID reads what the node transmits, from the cell the comm thread already reads; an input's
+// cell is its FB's (one reader per cell) and an internal signal has no cell on the comm thread
+fn test_a_live_did_reads_only_the_nodes_own_outputs() {
+	live := '
 [[did]]
 id     = 0xF1A0
 signal = "Workload"
-')
-	assert code != 0, 'loom2v accepted a live DID on ThreadX'
-	assert out.contains('live DIDs on the target'), out
+'
+	code, out, glue := generate('live', diag_conn + live)
+	assert code == 0, out
+	assert glue.contains('fn diag_refresh_diag(mut srv uds.Server) {')
+	assert glue.contains('g_diag.refresh = diag_refresh_diag')
+	assert glue.contains('C.ioc_get(0, &v_1, &v_1_b) // Workload')
+	for sig in ['Command', 'LoadCmd'] {
+		c2, o2, _ := generate('live_${sig}', diag_conn + live.replace('Workload', sig))
+		assert c2 != 0, 'loom2v accepted a live DID on ${sig}'
+		assert o2.contains('reads only what this node TRANSMITS'), o2
+	}
 }
 
 fn test_a_security_gate_is_refused_on_the_target() {
@@ -154,4 +164,53 @@ fn test_the_nm_range_is_checked_on_the_comm_threads_channel() {
 		'\n[bus.can1]\ninterface = "vcan1"\n')
 	assert code != 0, 'loom2v accepted an rx_id in the NM range under a [nm].bus label'
 	assert out.contains('[nm] peer range'), out
+}
+
+// a live DID is written in its value's own width, big-endian — never truncated to a byte
+fn test_a_live_did_is_encoded_in_its_values_width() {
+	assert did_signal_encode('srv', 2, 'v', 'i32') == '\t\tsrv.dids[2].data[0] = u8(v >> 24)\n' +
+		'\t\tsrv.dids[2].data[1] = u8(v >> 16)\n\t\tsrv.dids[2].data[2] = u8(v >> 8)\n' +
+		'\t\tsrv.dids[2].data[3] = u8(v)\n\t\tsrv.dids[2].len = 4'
+	assert did_signal_encode('srv', 0, 'v', 'i16').ends_with('.len = 2')
+	assert did_signal_encode('srv', 0, 'v', 'u64').ends_with('.len = 8')
+	assert did_signal_encode('srv', 0, 'v', 'u8').ends_with('.len = 1')
+}
+
+// a target cell carries one 32-bit word, so a wider output cannot be a live DID there
+fn test_a_live_did_wider_than_the_cell_is_refused() {
+	field := 'fields = { v = "u32" }'
+	code, out, _ := generate_edited('wide_did', fn [field] (src string) string {
+		assert src.contains(field), 'h735_threadx Workload changed shape — update this test'
+		return src.replace(field, 'fields = { v = "u64" }')
+	}, diag_conn + '
+[[did]]
+id     = 0xF1A0
+signal = "Workload"
+')
+	assert code != 0, 'loom2v accepted a 64-bit live DID on the target'
+	assert out.contains('at most 32 bits wide'), out
+}
+
+// a live DID is read-only, and carries an integer or a bool — refused at validation, for every owner
+fn test_a_live_did_that_cannot_be_one_is_refused() {
+	code, out, _ := generate('live_w', diag_conn + '
+[[did]]
+id       = 0xF1A0
+signal   = "Workload"
+writable = true
+')
+	assert code != 0, 'loom2v accepted a writable live DID'
+	assert out.contains('a live DID is read-only'), out
+	field := 'fields = { v = "u32" }'
+	code2, out2, _ := generate_edited('live_f', fn [field] (src string) string {
+		return src.replace(field, 'fields = { v = "f32" }')
+	}, diag_conn + '
+[[did]]
+id     = 0xF1A0
+signal = "Workload"
+')
+	assert code2 != 0, 'loom2v accepted a float live DID'
+	assert out2.contains('carries an integer or a bool'), out2
+	assert did_value_width('f32') == none
+	assert did_value_width('i32') or { 0 } == 4
 }

@@ -1487,6 +1487,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 	}
 	validate_signal_routes_model(m, doc)
 	validate_security(m.isotp_conns, m.dids)
+	validate_live_dids(m)
 	validate_faults(m, doc)
 	validate_e2e_timeouts(m)
 	for sname in m.sig_names {
@@ -2235,6 +2236,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << "fn C.xcore_load_get(int) u16 // a satellite core's per-mille load (xcore.h; weak 0)"
 			}
 			glue << shell_cmd_fns(m)
+			glue << diag_target_fns(m, ioc_idx)
 			glue << nm_shell_fns(m)
 			glue << stat_shell_fns(m, doc, app_threads, multi)
 			glue << trace_fb_hooks(m, doc, app_threads, multi, m.io_points.len > 0)
@@ -4029,6 +4031,7 @@ fn main() {
 	// rx signals an FB reads flow bus -> comm(decode) -> target IOC pool cell -> FB input (6b-2b).
 	// ioc_idx maps each such signal to its pool cell; visible to the comm emitter + handler glue.
 	mut ioc_idx := map[string]int{}
+	mut tx_cells := map[string]bool{} // the cells the comm thread reads to transmit: a live DID's source
 	mut msg_ioc_idx := map[int]int{} // DBC id -> its (single) rx-read signal's IOC cell
 	if comm_thread_on {
 		// LAYOUT-IDENTICAL routes forward on the target (raw copy + id remap, emitted in the
@@ -4164,6 +4167,7 @@ fn main() {
 						'producer remote, or use a single-field signal, until the encode paths unify')
 				}
 				ioc_idx[sname] = ioc_idx.len
+				tx_cells[sname] = true
 				continue
 			}
 			if !si.rx {
@@ -4217,6 +4221,7 @@ fn main() {
 				msg_ioc_idx[si.dbc_id] = ioc_idx[sname]
 			}
 		}
+		validate_diag_live_dids(m, tx_cells)
 		// [nvm]: each persistent signal stages through its own intra-core IOC
 		// cell (single-writer wait-free — the proven transport, reused).
 		for sname in m.nvm_names {
@@ -4476,24 +4481,53 @@ fn main() {
 	eprintln('loom2v: ${m.sig_names.len} signals (${bus_names.len} bus bridge), ${m.isotp_conns.len} isotp, ${m.part.by_part.len} partition(s)')
 }
 
-// did_signal_encode emits the big-endian write of a live signal value into a
-// DID's data buffer (per the signal's value-field type); `srv` is the uds.Server expression.
-fn did_signal_encode(srv string, idx int, expr string, val_type string) string {
-	d := '${srv}.dids[${idx}]'
+// did_value_width is how many bytes a live DID of value type `val_type` carries — none for a type
+// with no integer encoding. The one width rule: the encoder writes it, the validators ask it.
+fn did_value_width(val_type string) ?int {
 	return match val_type {
-		'u16' {
-			'\t\t${d}.data[0] = u8(${expr} >> 8)\n\t\t${d}.data[1] = u8(${expr})\n\t\t${d}.len = 2'
+		'bool', 'u8', 'i8' { 1 }
+		'u16', 'i16' { 2 }
+		'u32', 'i32' { 4 }
+		'u64', 'i64' { 8 }
+		else { none }
+	}
+}
+
+// validate_live_dids refuses, for every owner, a signal-backed DID that cannot be one: a value type
+// with no integer encoding, or a write gate — the refresh before every dispatch would put the
+// signal's value back over a write the server had just acknowledged.
+fn validate_live_dids(m Model) {
+	for d in m.dids {
+		if d.signal == '' {
+			continue
 		}
-		'u32' {
-			'\t\t${d}.data[0] = u8(${expr} >> 24)\n\t\t${d}.data[1] = u8(${expr} >> 16)\n\t\t${d}.data[2] = u8(${expr} >> 8)\n\t\t${d}.data[3] = u8(${expr})\n\t\t${d}.len = 4'
+		if d.writable || d.write_sessions != 0 || d.write_security != 0 {
+			panic('loom2v: [[did]] 0x${d.id.hex()} reads signal "${d.signal}" and is writable — a write would be ' +
+				'acknowledged and then overwritten by the next refresh; a live DID is read-only')
 		}
-		'bool' {
-			'\t\t${d}.data[0] = if ${expr} { u8(1) } else { u8(0) }\n\t\t${d}.len = 1'
-		}
-		else {
-			'\t\t${d}.data[0] = u8(${expr})\n\t\t${d}.len = 1'
+		si := m.sig_of[d.signal] or { continue }
+		if _ := did_value_width(si.val_type) {
+		} else {
+			panic('loom2v: [[did]] 0x${d.id.hex()} reads "${d.signal}", a ${si.val_type} — a live DID carries an integer or a bool')
 		}
 	}
+}
+
+// did_signal_encode emits the big-endian write of a live signal value into a DID's data buffer,
+// in the width of the signal's value-field type; `srv` is the uds.Server expression.
+fn did_signal_encode(srv string, idx int, expr string, val_type string) string {
+	d := '${srv}.dids[${idx}]'
+	if val_type == 'bool' {
+		return '\t\t${d}.data[0] = if ${expr} { u8(1) } else { u8(0) }\n\t\t${d}.len = 1'
+	}
+	width := did_value_width(val_type) or { panic('loom2v: no live-DID encoding for ${val_type}') }
+	mut lines := []string{}
+	for i in 0 .. width {
+		shift := 8 * (width - 1 - i)
+		lines << if shift == 0 { '\t\t${d}.data[${i}] = u8(${expr})' } else { '\t\t${d}.data[${i}] = u8(${expr} >> ${shift})' }
+	}
+	lines << '\t\t${d}.len = ${width}'
+	return lines.join('\n')
 }
 
 // byte16_lit renders 16 bytes as a V fixed-array literal `[u8(0x..), 0x.., ...]!`

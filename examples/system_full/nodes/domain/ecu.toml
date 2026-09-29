@@ -107,7 +107,7 @@ fc  = 0x7F2
 
 # The diagnostic server (docs/diagnostics.md, R2): UDS over ISO-TP on the ids system.toml
 # allocates this node (diag = { req = 0x7B0, rsp = 0x7B8 }), plus the compute bus's functional id.
-# Constant DIDs only on the target so far — live signals and 0x27 are the next R2 steps.
+# 0x27 on the target is the next R2 step.
 [[isotp]]
 name          = "diag"
 bus           = "can0"
@@ -126,6 +126,15 @@ ascii = "BLOBLY-DOMAIN-H755"
 [[did]]
 id    = 0xF189
 ascii = "system_full"
+
+# live: what this node transmits (u32, big-endian) — its own outputs, read from the comm thread's cells
+[[did]]
+id     = 0xF1A0
+signal = "VehicleSpeed"
+
+[[did]]
+id     = 0xF1A1
+signal = "LedLevel"
 
 # a RAM cell: write it, read it back
 [[did]]

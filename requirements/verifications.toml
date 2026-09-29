@@ -541,3 +541,16 @@ context = "h755/threadx"
 verifies = ["REQ-DIAG-001"]
 approved_by = "Claude bench session — NUCLEO-H755ZI-Q (system_full domain) vs CANsub.4 ch2"
 date = "2026-09-29"
+
+# R2, second step: a live DID on the TARGET. system_full's domain serves 0xF1A0 = VehicleSpeed and
+# 0xF1A1 = LedLevel — its own outputs, read from the IOC cells its comm thread already reads to
+# transmit them — and examples/system_full/test/diag_domain.lua reads each between two of the
+# node's own frames (0x120, 0x126) and finds it between them: VehicleSpeed wire 66 / DID 66 /
+# wire 80, LedLevel 150 / 150 / 250. 8/8 on the H755 via CANsub.4 ch2.
+[[review]]
+id = "uds-on-target-live-did"
+method = "review"
+context = "h755/threadx"
+verifies = ["REQ-DIAG-002"]
+approved_by = "Claude bench session — NUCLEO-H755ZI-Q (system_full domain) vs CANsub.4 ch2"
+date = "2026-09-29"

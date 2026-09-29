@@ -1820,9 +1820,7 @@ fn did_refresh_fn(m Model, tp string) []string {
 		f := snake(did.signal)
 		out << '\tmut ${f}_did := sig.${did.signal}{}'
 		out << '\tif osal.${acquire_fn(si.transport)}(${f}_ch, &${f}_did, u8(sizeof(${f}_did))) {'
-		for l in did_signal_encode('srv', idx, '${f}_did.${si.val_field}', si.val_type).split('\n') {
-			out << '\t\t' + l.trim_left('\t')
-		}
+		out << did_encode_lines(idx, '${f}_did.${si.val_field}', si.val_type, '\t\t')
 		out << '\t}'
 	}
 	out << '}'

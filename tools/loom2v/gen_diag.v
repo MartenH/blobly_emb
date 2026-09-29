@@ -53,16 +53,66 @@ fn validate_diag_threadx(m Model) {
 				'comm thread owns only [telemetry].bus "${m.telem.bus}" — put the connection there')
 		}
 	}
-	for d in m.dids {
-		if d.signal != '' {
-			panic('loom2v: [target] kind="threadx": [[did]] 0x${d.id.hex()} reads signal "${d.signal}" — ' +
-				'live DIDs on the target are the next R2 step (docs/diagnostics.md); use a constant')
-		}
-	}
 	if security_levels(m.dids) != 0 {
 		panic('loom2v: [target] kind="threadx": a [[did]] gate names a security level, but 0x27 on the ' +
 			'target needs the board key seam — the next R2 step (docs/diagnostics.md)')
 	}
+}
+
+// validate_diag_live_dids: on the target a live DID reads what the node TRANSMITS from a local
+// FB — the cells the comm thread already reads (`tx_cells`, recorded where they are allocated, so
+// this is that rule and not a second copy of it). A cell has ONE reader (its slot is reader-private,
+// boards/common/ioc.h): an input's cell is read by the FB it feeds, and an eth or satellite signal
+// has no cell on this thread.
+fn validate_diag_live_dids(m Model, tx_cells map[string]bool) {
+	for d in m.dids {
+		if d.signal == '' {
+			continue
+		}
+		if d.signal !in tx_cells {
+			panic('loom2v: [target] kind="threadx": [[did]] 0x${d.id.hex()} reads signal "${d.signal}", ' +
+				'but on the target a live DID reads only what this node TRANSMITS on CAN from a local FB ' +
+				'(its IOC cell is the comm thread\'s to read; an input\'s cell is its FB\'s, and a cell has one reader)')
+		}
+		// the cell carries one 32-bit word (the lean encode's), so a wider value has no home in it
+		vt := (m.sig_of[d.signal] or { SigInfo{} }).val_type
+		if (did_value_width(vt) or { 0 }) > 4 {
+			panic('loom2v: [target] kind="threadx": [[did]] 0x${d.id.hex()} reads "${d.signal}", a ${vt}, but ' +
+				'its IOC cell on the target carries 32 bits — a live DID there is at most 32 bits wide')
+		}
+	}
+}
+
+// diag_target_fns: the live-DID refresh the connection calls before every dispatch — each
+// signal-backed DID takes its cell's current value, the value the comm thread transmits (zero until
+// the FB first publishes, as on the bus).
+fn diag_target_fns(m Model, ioc_idx map[string]int) []string {
+	if m.isotp_conns.len == 0 || !m.dids.any(it.signal != '') {
+		return []string{}
+	}
+	mut g := ['', 'fn diag_refresh_${snake(m.isotp_conns[0].name)}(mut srv uds.Server) {']
+	for idx, did in m.dids {
+		if did.signal == '' {
+			continue
+		}
+		si := m.sig_of[did.signal] or { panic('loom2v: [[did]] 0x${did.id.hex()}: no signal "${did.signal}"') }
+		cell := ioc_idx[did.signal] or {
+			panic('loom2v: [[did]] 0x${did.id.hex()}: signal "${did.signal}" has no IOC cell on the comm thread')
+		}
+		v := 'v_${idx}'
+		g << '\tmut ${v} := u32(0)'
+		g << '\tmut ${v}_b := u32(0)'
+		g << '\tC.ioc_get(${cell}, &${v}, &${v}_b) // ${did.signal}'
+		g << did_encode_lines(idx, if si.val_type == 'bool' { '${v} != 0' } else { v }, si.val_type, '\t')
+	}
+	g << '}'
+	return g
+}
+
+// did_encode_lines: a live value `expr` into DID `idx` of the server `srv` in a refresh fn — the
+// one encode both owners' refreshes emit.
+fn did_encode_lines(idx int, expr string, val_type string, ind string) []string {
+	return did_signal_encode('srv', idx, expr, val_type).split('\n').map(ind + it.trim_left('\t'))
 }
 
 // diag_target_globals: the connection lives in __global (its link and buffers are ~2 KB — too
@@ -81,6 +131,9 @@ fn diag_target_init(m Model) []string {
 		return []string{}
 	}
 	mut g := conn_init_lines(m, m.isotp_conns[0], 'g_diag')
+	if m.dids.any(it.signal != '') {
+		g << '\tg_diag.refresh = diag_refresh_${snake(m.isotp_conns[0].name)}'
+	}
 	g << '\tmut diag_txf := can.Frame{}'
 	return g
 }
