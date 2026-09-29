@@ -8,7 +8,7 @@ the dispatch wrapper, the schedule registration, and the trace/stat identity.
 
 ```toml
 [[fb]]
-name   = "Governor"            # unique identifier == the app struct's type name
+name   = "Governor"            # unique, PascalCase == the app struct's type name
 thread = "ctrl_slow"           # a [[partition.thread]] name (globally unique)
 
 [[fb.handler]]
@@ -30,7 +30,9 @@ running at `period_ms = 10` would mislabel itself to every human reader. Keep th
 convention honest.
 
 Rules ecucheck/loom2v enforce: every FB needs ≥ 1 handler; every handler needs
-`period_ms`; the thread must exist. Comments above blocks, never inside.
+`period_ms`; the thread must exist; the FB name is PascalCase and must not collide with
+another FB's after snake-casing (the naming rule: [fb-programming-model.md](fb-programming-model.md#names)).
+Comments above blocks, never inside.
 
 ## 2. Write the app code
 

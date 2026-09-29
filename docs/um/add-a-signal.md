@@ -14,13 +14,18 @@ or a bus — and that's all you say; the generator derives the transport from th
 
 ```toml
 [[signal]]
-name   = "Workload"            # a valid identifier; becomes `sig.Workload`
+name   = "Workload"            # PascalCase (a bus signal: the DBC name); becomes `sig.Workload`
 fields = { v = "u32" }         # the APP-facing struct: field NAME = V type
 from   = "app"                 # partition or bus name
 to     = "can0"
 ```
 
 Comments go ABOVE the block, never inside it (vlang/v#27684).
+
+The name is PascalCase for a signal no bus carries. A signal on a bus is named exactly as in
+the DBC, whatever its spelling. Either way the FB sees it snake-cased (`Workload` → `inp.workload`),
+and two names that snake to the same field are refused
+([fb-programming-model.md](fb-programming-model.md#names)).
 
 ### What `fields` is (and isn't)
 
