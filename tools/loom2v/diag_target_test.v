@@ -77,6 +77,9 @@ fn test_the_comm_thread_serves_the_connection_in_order() {
 		'g_nm.hold(t1, g_diag.active())',
 		'nm_up := g_nm.awake()',
 		'g_diag.produce(t1, mut diag_txf)',
+		'if g_diag.reset_due() != 0 {',
+		'for !ch.tx_idle() && C.board_now_us() - diag_t0 < 20000 {}',
+		'C.diag_sys_reset()',
 		'// PRODUCER: CpuLoad telemetry',
 		'g_tm.produce(t1, mut trace_txf)',
 		'g_sh.produce(t1, mut shell_txf)',
@@ -89,8 +92,9 @@ fn test_the_comm_thread_serves_the_connection_in_order() {
 		}
 		at = at + 1 + i
 	}
-	// nothing on the target performs a reset or gates its frames on 0x28 yet
-	assert !glue.contains('g_diag.server.serves_reset = true')
+	// the comm thread performs an answered reset; nothing gates its frames on 0x28 yet
+	assert glue.contains('g_diag.server.serves_reset = true')
+	assert glue.contains('g_diag.owner_resets = true')
 	assert !glue.contains('g_diag.server.serves_comm_control = true')
 }
 
@@ -132,7 +136,10 @@ write = { session = ["extended"], security = 1 }
 		'return C.diag_sa_key_ok(level, seed, key, n) != 0', 'C.diag_sa_init()',
 		'g_diag.server.security = uds.SecurityOps{', 'seed:   diag_sa_seed_v', 'key_ok: diag_sa_key_v',
 		'g_diag.server.security_levels = u8(0x01)', 'g_diag.server.sa_attempts = u8(2)',
-		'g_diag.server.sa_delay_us = u64(3000) * 1000'] {
+		'g_diag.server.sa_delay_us = u64(3000) * 1000',
+		// the failed-key counts kept across the node's own reset, saved before it
+		'if C.diag_keep_load(&g_diag.server.sa_failed[0], uds.max_security_level) != 0 {',
+		'g_diag.server.sa_arm_delay = true', 'C.diag_keep_save(&g_diag.server.sa_failed[0], uds.max_security_level)'] {
 		assert glue.contains(want), 'missing: ${want}'
 	}
 	// the bench key, by name: V's own, and no C key declared at all

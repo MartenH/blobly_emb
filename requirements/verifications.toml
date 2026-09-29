@@ -556,7 +556,7 @@ approved_by = "Claude bench session — NUCLEO-H755ZI-Q (system_full domain) vs 
 date = "2026-09-29"
 
 # R2, third step: 0x27 SecurityAccess on the TARGET: the seed from the STM32H7 TRNG
-# (boards/common/diag_sa.c) and, on this bench node, blobly_net's reference key (seed XOR 0xFF)
+# (boards/common/diag_board.c) and, on this bench node, blobly_net's reference key (seed XOR 0xFF)
 # opted into by name (`security_key = "reference"`; without it the OEM's diag_sa_key_ok must be
 # linked — checked: the image fails to link naming it). system_full domain gates DID 0x0102's write on level 1 (attempts 3, delay 3 s):
 # a locked write is refused 0x33; two seeds differ; the reference key unlocks and the write
@@ -570,5 +570,24 @@ id = "uds-on-target-security"
 method = "review"
 context = "h755/threadx"
 verifies = []
+approved_by = "Claude bench session — NUCLEO-H755ZI-Q (system_full domain) vs CANsub.4 ch2"
+date = "2026-09-30"
+
+# R2, fourth step: 0x11 ECUReset on the TARGET, answered and THEN performed — the comm thread waits
+# for the controller to send the answer (tx_idle, bounded 20 ms: REQ-BOOT-012) and restarts the MCU
+# — with the 0x27 failed-key counts carried across it in a keep cell that survives a system reset
+# (boards/common/diag_board.c, D3 SRAM4 below the boot cells). On the H755 via CANsub.4 ch2
+# (examples/system_full/test/diag_domain.lua, 13/13 twice): `51 01` arrives, then a RAM DID written
+# before reads its initial 00 00 00 00 and the session is default again (a real restart); two wrong
+# keys, a reset, and a seed request answers 0x37 from boot, the next wrong key 0x36 (the THIRD, not
+# a first); one key per seed (0x35 then 0x24); a functional 0x27 goes unanswered. With the lockout
+# and unlock of uds-on-target-security that is every clause of REQ-DIAG-008 on the target.
+# REQ-DIAG-007's reset half ran; its communication-control half did not (0x28 is not served on the
+# target), so it is evidence for 007, not a verification.
+[[review]]
+id = "uds-on-target-reset"
+method = "review"
+context = "h755/threadx"
+verifies = ["REQ-DIAG-008"]
 approved_by = "Claude bench session — NUCLEO-H755ZI-Q (system_full domain) vs CANsub.4 ch2"
 date = "2026-09-30"

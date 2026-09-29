@@ -26,6 +26,10 @@ pub mut:
 	// dispatch, physical or functional, so a read answers with the value current then. nil = the
 	// node has no live DIDs.
 	refresh fn (mut srv uds.Server)
+	// owner_resets: the owner performs an answered ECUReset itself (reset_due) — a target restarts
+	// the MCU once its controller has sent the answer. Otherwise the diagnostic state returns to
+	// power-on here, which is all a host bridge can do.
+	owner_resets bool
 mut:
 	req  [isotp.max_payload]u8
 	resp [isotp.max_payload]u8
@@ -174,10 +178,20 @@ fn truncated(pci u8, n int, left int) bool {
 	}
 }
 
-// apply_answered_reset: ECUReset is two-phase — once its answer has left, the diagnostic state
-// returns to power-on.
-fn (mut c Connection) apply_answered_reset() {
+// reset_due is the ECUReset kind whose answer has left the link (0 = none) — for an owner that
+// performs the reset itself (`owner_resets`). The link being done is not the wire being done: the
+// owner still waits for its controller to transmit the answer (REQ-BOOT-012).
+pub fn (c Connection) reset_due() u8 {
 	if c.server.reset_req != 0 && !c.link.busy() {
+		return c.server.reset_req
+	}
+	return 0
+}
+
+// apply_answered_reset: ECUReset is two-phase — once its answer has left, the diagnostic state
+// returns to power-on. An owner that resets itself does it instead (reset_due).
+fn (mut c Connection) apply_answered_reset() {
+	if !c.owner_resets && c.server.reset_req != 0 && !c.link.busy() {
 		c.server.reset_state()
 	}
 }

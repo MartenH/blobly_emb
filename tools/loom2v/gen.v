@@ -2245,6 +2245,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << shell_cmd_fns(m)
 			glue << diag_target_fns(m, ioc_idx)
 			glue << diag_target_sa_fns(m)
+			glue << diag_target_c_decls(m)
 			glue << nm_shell_fns(m)
 			glue << stat_shell_fns(m, doc, app_threads, multi)
 			glue << trace_fb_hooks(m, doc, app_threads, multi, m.io_points.len > 0)
@@ -2828,6 +2829,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\tnm_up := g_nm.awake() // NM-gated COM tx (REQ-COM-007, post-tick)'
 				}
 				glue << diag_target_produce(m) // ahead of every periodic producer: a tester is timing it
+				glue << diag_target_reset(m)
 				for p in producers {
 					glue << p.bus_tick(BusCtx{
 						telem_active: m.telem.on && telem_iface != ''
