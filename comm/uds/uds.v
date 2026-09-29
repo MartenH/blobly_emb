@@ -608,7 +608,9 @@ fn reference_seed(ctx voidptr, out &u8, n int) bool {
 	return true
 }
 
-fn reference_key_ok(ctx voidptr, level u8, seed &u8, key &u8, n int) bool {
+// reference_key_ok is blobly_net's reference key check (key[i] = seed[i] ^ 0xFF) — public for a
+// target that opts into the bench key by name (`[[isotp]] security_key = "reference"`).
+pub fn reference_key_ok(ctx voidptr, level u8, seed &u8, key &u8, n int) bool {
 	for i in 0 .. n {
 		if unsafe { key[i] != seed[i] ^ 0xFF } {
 			return false

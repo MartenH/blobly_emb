@@ -129,25 +129,32 @@ fn security_init_lines(m Model, c IsotpConn, srv string, ops string) []string {
 	return g
 }
 
-// diag_target_sa_fns: the target's 0x27 seam — V adapters onto the board's C (boards/common/
-// diag_sa.c: a TRNG seed and the reference key, both weak so an OEM replaces them).
+// diag_target_sa_fns: the target's 0x27 seam (boards/common/diag_sa.c). The seed is the board's
+// TRNG (weak, replaceable); the key check is the OEM's `diag_sa_key_ok`, which has NO default —
+// a node that gates a DID and forgets it fails to link, naming the symbol — unless the connection
+// opts into blobly_net's public reference key by name, which is then V's own (comm/uds).
 fn diag_target_sa_fns(m Model) []string {
 	if m.isotp_conns.len == 0 || security_levels(m.dids) == 0 {
 		return []string{}
 	}
-	return [
+	mut g := [
 		'',
+		'fn C.diag_sa_init() int',
 		'fn C.diag_sa_seed(&u8, int) int',
-		'fn C.diag_sa_key_ok(u8, &u8, &u8, int) int',
 		'',
 		'fn diag_sa_seed_v(ctx voidptr, out &u8, n int) bool {',
 		'\treturn C.diag_sa_seed(out, n) != 0',
 		'}',
-		'',
-		'fn diag_sa_key_v(ctx voidptr, level u8, seed &u8, key &u8, n int) bool {',
-		'\treturn C.diag_sa_key_ok(level, seed, key, n) != 0',
-		'}',
 	]
+	if m.isotp_conns[0].security_key != 'reference' {
+		g << ''
+		g << 'fn C.diag_sa_key_ok(u8, &u8, &u8, int) int'
+		g << ''
+		g << 'fn diag_sa_key_v(ctx voidptr, level u8, seed &u8, key &u8, n int) bool {'
+		g << '\treturn C.diag_sa_key_ok(level, seed, key, n) != 0'
+		g << '}'
+	}
+	return g
 }
 
 // diag_target_globals: the connection lives in __global (its link and buffers are ~2 KB — too
@@ -169,7 +176,13 @@ fn diag_target_init(m Model) []string {
 	if m.dids.any(it.signal != '') {
 		g << '\tg_diag.refresh = diag_refresh_${snake(m.isotp_conns[0].name)}'
 	}
-	g << security_init_lines(m, m.isotp_conns[0], 'g_diag.server', 'uds.SecurityOps{\n\t\tseed:   diag_sa_seed_v\n\t\tkey_ok: diag_sa_key_v\n\t}')
+	if security_levels(m.dids) != 0 {
+		c := m.isotp_conns[0]
+		key := if c.security_key == 'reference' { 'uds.reference_key_ok' } else { 'diag_sa_key_v' }
+		// the RNG's clock is set up here, once, before the loop — never inside a request
+		g << '\tC.diag_sa_init() // 0 = no RNG: every seed request is then refused'
+		g << security_init_lines(m, c, 'g_diag.server', 'uds.SecurityOps{\n\t\tseed:   diag_sa_seed_v\n\t\tkey_ok: ${key}\n\t}')
+	}
 	g << '\tmut diag_txf := can.Frame{}'
 	return g
 }

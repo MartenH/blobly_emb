@@ -5,7 +5,8 @@
 -- it needs the flashed board on the CANsub (system_full.blobnet), so it is not in CI.
 --   BLOBLY_NET=/path/to/blobly_net; v -enable-globals -path "@vlib|@vmodules|$BLOBLY_NET/modules" \
 --     run $BLOBLY_NET/cmd/script/run.v examples/system_full/test/diag_domain.lua
--- Recorded in requirements/verifications.toml (uds-on-target-domain, uds-on-target-live-did), not
+-- Recorded in requirements/verifications.toml (uds-on-target-domain, uds-on-target-live-did,
+-- uds-on-target-security), not
 -- tagged here: a bench
 -- script never runs in trace-check, so a tag would only ever read pending.
 
@@ -89,19 +90,17 @@ test("domain: S3 returns an idle extended session to default", function()
   check.nrc(0x31, function() d:write_did(0x0101, "\x00") end)
 end)
 
-test("domain: what the target does not serve yet is refused, not faked", function()
+test("domain: what the target does not serve is refused, not faked", function()
   local d = diag()
   check.nrc(0x11, function() d:raw("\x11\x01") end) -- no reset performed on the target yet
-  check.nrc(0x7F, function() d:raw("\x27\x01") end) -- 0x27 is not a default-session service
   check.nrc(0x12, function() d:session(0x02) end)   -- programming: the bootloader handoff
   check.nrc(0x31, function() d:read_did(0xABCD) end)
 end)
 
--- The server shares the comm thread with the node's application traffic: a burst of multi-frame
--- answers must not starve VehSpeedFrame (0x120, every 100 ms).
 -- 0x27 through the board's key seam (boards/common/diag_sa.c): a TRNG seed, the reference key
 test("domain: 0x27 unlocks a gated DID", function()
   local d = diag()
+  check.nrc(0x7F, function() d:raw("\x27\x01") end) -- not a default-session service
   d:session(0x03)
   check.nrc(0x33, function() d:write_did(0x0102, "\x11") end) -- locked
   local s1 = d:raw("\x27\x01"):sub(3)
@@ -132,6 +131,8 @@ test("domain: wrong keys lock 0x27 out for the delay", function()
   d:session(0x01)
 end)
 
+-- The server shares the comm thread with the node's application traffic: a burst of multi-frame
+-- answers must not starve VehSpeedFrame (0x120, every 100 ms).
 test("domain: requests back to back while the node keeps its cadence", function()
   local d = diag()
   local function drain()

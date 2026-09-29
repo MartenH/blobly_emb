@@ -114,22 +114,37 @@ signal = "Workload"
 	}
 }
 
-// 0x27 on the target: the levels a DID gate names, the connection's limits, and the board's key
-// seam (boards/common/diag_sa.c) through V adapters
+// 0x27 on the target: the levels a DID gate names, the connection's limits, the board's TRNG seed
+// set up once before the loop — and the OEM's key check, with no default linked, unless the
+// connection opts into blobly_net's reference key by name
 fn test_a_security_gate_is_served_through_the_board_seam() {
-	code, out, glue := generate('sec', diag_conn.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\nsecurity_attempts = 2\nsecurity_delay_ms = 3000') + '
+	gated := '
 [[did]]
 id    = 0xF1AC
 bytes = "00"
 write = { session = ["extended"], security = 1 }
-')
+'
+	limits := 'functional_id = 0x7DF\nsecurity_attempts = 2\nsecurity_delay_ms = 3000'
+	code, out, glue := generate('sec', diag_conn.replace('functional_id = 0x7DF', limits) + gated)
 	assert code == 0, out
-	for want in ['fn C.diag_sa_seed(&u8, int) int', 'fn diag_sa_key_v(ctx voidptr, level u8, seed &u8, key &u8, n int) bool {',
+	for want in ['fn C.diag_sa_seed(&u8, int) int', 'fn diag_sa_seed_v(ctx voidptr, out &u8, n int) bool {',
+		'return C.diag_sa_seed(out, n) != 0', 'fn C.diag_sa_key_ok(u8, &u8, &u8, int) int',
+		'return C.diag_sa_key_ok(level, seed, key, n) != 0', 'C.diag_sa_init()',
 		'g_diag.server.security = uds.SecurityOps{', 'seed:   diag_sa_seed_v', 'key_ok: diag_sa_key_v',
 		'g_diag.server.security_levels = u8(0x01)', 'g_diag.server.sa_attempts = u8(2)',
 		'g_diag.server.sa_delay_us = u64(3000) * 1000'] {
 		assert glue.contains(want), 'missing: ${want}'
 	}
+	// the bench key, by name: V's own, and no C key declared at all
+	c2, o2, g2 := generate('sec_ref', diag_conn.replace('functional_id = 0x7DF', limits +
+		'\nsecurity_key = "reference"') + gated)
+	assert c2 == 0, o2
+	assert g2.contains('key_ok: uds.reference_key_ok')
+	assert !g2.contains('diag_sa_key_ok')
+	c3, o3, _ := generate('sec_bad', diag_conn.replace('functional_id = 0x7DF', limits +
+		'\nsecurity_key = "oem"') + gated)
+	assert c3 != 0, 'loom2v accepted an unknown security_key'
+	assert o3.contains('the one named key is "reference"'), o3
 }
 
 fn test_a_connection_off_the_comm_threads_bus_is_refused() {
