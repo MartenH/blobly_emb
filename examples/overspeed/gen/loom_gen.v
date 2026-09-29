@@ -11,7 +11,7 @@ import comm.com
 import comm.e2e
 import comm.secoc
 import comm.fault
-import comm.isotp
+import comm.diag
 import comm.uds
 
 struct Partition_sense_state {
@@ -144,9 +144,7 @@ mut:
 	e2e_rx_brake_status e2e.RxState
 	e2e_hidden_brake_status u32 // lost frames counted while 0x28 had rx off
 	e2e_quiet_brake_status bool // 0x28 had rx off since the last fresh frame
-	tp_diag isotp.Link
-	tp_diag_buf [isotp.max_payload]u8
-	uds_diag uds.Server
+	conn_diag diag.Connection // the node's diagnostic server on its ISO-TP connection
 	fmem fault.Memory // the node's fault memory: this bridge is its one writer (D2)
 	fcycle_on bool // the operation-cycle signal as last seen
 	fsrc_brake_pressure sig.RxStatus // BrakePressure's latest published status (signal-status faults)
@@ -160,22 +158,23 @@ mut:
 	frep_engine_monitor fault.Reports // from EngineMonitor's thread
 	fctl_engine_monitor fault.Control // to EngineMonitor's thread
 	sa_diag uds.ReferenceSecurity // 0x27 on the host: the SIM key (not a secret, decision D5)
-	uds_diag_resp [isotp.max_payload]u8 // multi-DID responses: the server is told this capacity
 	diag_rx_was_off bool // 0x28 had rx off (any sampling since the last restart): restart the deadlines on return
+}
+
+fn diag_refresh_diag(mut srv uds.Server) {
+	mut vehicle_speed_did := sig.VehicleSpeed{}
+	if osal.ioc_acquire2(vehicle_speed_ch, &vehicle_speed_did, u8(sizeof(vehicle_speed_did))) {
+		srv.dids[1].data[0] = u8(vehicle_speed_did.kph >> 8)
+		srv.dids[1].data[1] = u8(vehicle_speed_did.kph)
+		srv.dids[1].len = 2
+	}
 }
 
 fn io_can0_10ms(ctx voidptr) {
 	mut st := unsafe { &Bridge_can0_state(ctx) }
 	now := osal.now_us()
-	st.tp_diag.tick(now)
-	if st.uds_diag.reset_req != 0 && !st.tp_diag.busy() { // the answer has left
-		st.uds_diag.reset_state()
-	}
-	if !st.tp_diag.idle() {
-		st.uds_diag.hold_s3(now)
-	}
-	st.uds_diag.tick(now)
-	mut diag_rx_ok := st.uds_diag.rx_enabled()
+	st.conn_diag.housekeep(now)
+	mut diag_rx_ok := st.conn_diag.server.rx_enabled()
 	if !diag_rx_ok { // silence commanded: latch it, frame or not
 		st.diag_rx_was_off = true
 		st.e2e_quiet_brake_status = true
@@ -310,71 +309,28 @@ fn io_can0_10ms(ctx voidptr) {
 				}
 			}
 		}
-		if rx.id == u32(0x101) && !rx.ext {
-			mut p_diag := isotp.Pdu{}
-			for i in 0 .. 8 {
-				p_diag.data[i] = rx.data[i]
-			}
-			st.tp_diag.on_frame(now, p_diag)
-			if st.tp_diag.has_request() {
-				break
-			}
-		}
-		if rx.id == u32(0x7df) && !rx.ext && rx.len >= 2 && rx.data[0] >> 4 == 0 {
-			fl_diag := int(rx.data[0] & 0x0F)
-			if fl_diag >= 1 && fl_diag <= 7 && fl_diag < int(rx.len) && st.tp_diag.idle() && st.uds_diag.reset_req == 0 { // <= 7: a CAN-FD frame may claim more
-				mut vehicle_speed_did := sig.VehicleSpeed{}
-				if osal.ioc_acquire2(vehicle_speed_ch, &vehicle_speed_did, u8(sizeof(vehicle_speed_did))) {
-					st.uds_diag.dids[1].data[0] = u8(vehicle_speed_did.kph >> 8)
-					st.uds_diag.dids[1].data[1] = u8(vehicle_speed_did.kph)
-					st.uds_diag.dids[1].len = 2
-				}
-				fn_diag := st.uds_diag.handle_functional(&rx.data[1], fl_diag, &st.uds_diag_resp[0])
-				if fn_diag > 0 && !st.tp_diag.send(&st.uds_diag_resp[0], fn_diag) {
-					st.uds_diag.reset_req = 0 // never reset unanswered
-				}
-				if st.uds_diag.reset_req != 0 && !st.tp_diag.busy() {
-					st.uds_diag.reset_state()
-				}
-				diag_rx_ok = st.uds_diag.rx_enabled()
+		match st.conn_diag.on_frame(now, &rx) {
+			.request { break }
+			.served {
+				diag_rx_ok = st.conn_diag.server.rx_enabled()
 				if !diag_rx_ok { // silence commanded: latch it, frame or not
 					st.diag_rx_was_off = true
 					st.e2e_quiet_brake_status = true
 					st.fsrc_brake_pressure = .never_received
 				}
 			}
+			else {}
 		}
 	}
-	mut vehicle_speed_did := sig.VehicleSpeed{}
-	if osal.ioc_acquire2(vehicle_speed_ch, &vehicle_speed_did, u8(sizeof(vehicle_speed_did))) {
-		st.uds_diag.dids[1].data[0] = u8(vehicle_speed_did.kph >> 8)
-		st.uds_diag.dids[1].data[1] = u8(vehicle_speed_did.kph)
-		st.uds_diag.dids[1].len = 2
-	}
-	diag_got := st.tp_diag.take(&st.tp_diag_buf[0])
-	diag_n := if st.tp_diag.busy() { 0 } else { diag_got }
-	if diag_n > 0 {
-		diag_rlen := st.uds_diag.handle(&st.tp_diag_buf[0], diag_n, &st.uds_diag_resp[0])
-		if diag_rlen > 0 && !st.tp_diag.send(&st.uds_diag_resp[0], diag_rlen) {
-			st.uds_diag.reset_req = 0 // the answer could not be queued: never reset unanswered
-		}
-	}
-	mut pdu_diag := isotp.Pdu{}
-	for st.chan.tx_ready() && st.tp_diag.poll(now, mut pdu_diag) {
-		mut cf_diag := can.Frame{
-			id:  u32(0x102)
-			len: 8
-		}
-		for i in 0 .. 8 {
-			cf_diag.data[i] = pdu_diag.data[i]
-		}
+	st.conn_diag.serve()
+	mut cf_diag := can.Frame{}
+	for st.chan.tx_ready() && st.conn_diag.produce(now, mut cf_diag) {
 		if !st.chan.send(cf_diag) {
-			st.tp_diag.abort_tx()
-			st.uds_diag.reset_req = 0 // its answer is lost: never reset unanswered
+			st.conn_diag.abort_tx()
 			break
 		}
 	}
-	diag_rx_ok = st.uds_diag.rx_enabled()
+	diag_rx_ok = st.conn_diag.server.rx_enabled()
 	if !diag_rx_ok { // silence commanded: latch it, frame or not
 		st.diag_rx_was_off = true
 		st.e2e_quiet_brake_status = true
@@ -422,7 +378,7 @@ fn io_can0_10ms(ctx voidptr) {
 		st.sev_4 = true
 		st.slost_4 = brake_pressure.lost
 	}
-	diag_tx_ok := st.uds_diag.tx_enabled()
+	diag_tx_ok := st.conn_diag.server.tx_enabled()
 	mut tx_lamp_frame := can.Frame{
 		id:  lamp_frame_id
 		len: lamp_frame_dlc
@@ -516,70 +472,65 @@ pub fn partition_can0(ch can.Channel) {
 	st.rx_ignition_st.arm(osal.now_us())
 	st.e2e_rx_brake_status.timeout_us = 300000
 	st.e2e_rx_brake_status.arm(osal.now_us()) // from start, like the COM deadline
-	st.tp_diag = isotp.Link{
-		bs:    8
-		stmin: 0
-	}
-	st.tp_diag.init_defaults()
-	st.uds_diag = uds.Server{}
-	st.uds_diag.init(isotp.max_payload) // default session; the response buffer's capacity
-	st.uds_diag.no_programming = true // programming is the bootloader's (handoff: R2)
-	st.uds_diag.serves_reset = true // this bridge performs reset_req (below)
-	st.uds_diag.serves_comm_control = true // and gates its frames on 0x28
-	st.uds_diag.single_network = true // 0x28 "all networks" = this one
-	st.uds_diag.s3_us = u64(2000) * 1000
-	st.uds_diag.security = st.sa_diag.ops(u32(osal.now_us()))
-	st.uds_diag.security_levels = u8(0x01)
-	st.uds_diag.sa_delay_us = u64(1000) * 1000
-	st.uds_diag.dids[0] = uds.Did{
+	st.conn_diag.init(u32(0x101), u32(0x102), u32(0x7df), 8, 0)
+	st.conn_diag.refresh = diag_refresh_diag
+	st.conn_diag.server.no_programming = true // programming is the bootloader's (handoff: R2)
+	st.conn_diag.server.serves_reset = true // housekeep performs reset_req once answered
+	st.conn_diag.server.serves_comm_control = true // and this bridge gates its frames on 0x28
+	st.conn_diag.server.single_network = true // 0x28 "all networks" = this one
+	st.conn_diag.server.s3_us = u64(2000) * 1000
+	st.conn_diag.server.security = st.sa_diag.ops(u32(osal.now_us()))
+	st.conn_diag.server.security_levels = u8(0x01)
+	st.conn_diag.server.sa_delay_us = u64(1000) * 1000
+	st.conn_diag.server.dids[0] = uds.Did{
 		id: u16(0xf190)
 	}
-	st.uds_diag.dids[0].data[0] = u8(0x42)
-	st.uds_diag.dids[0].data[1] = u8(0x4c)
-	st.uds_diag.dids[0].data[2] = u8(0x4f)
-	st.uds_diag.dids[0].data[3] = u8(0x42)
-	st.uds_diag.dids[0].data[4] = u8(0x4c)
-	st.uds_diag.dids[0].data[5] = u8(0x59)
-	st.uds_diag.dids[0].data[6] = u8(0x2d)
-	st.uds_diag.dids[0].data[7] = u8(0x4f)
-	st.uds_diag.dids[0].data[8] = u8(0x56)
-	st.uds_diag.dids[0].data[9] = u8(0x45)
-	st.uds_diag.dids[0].data[10] = u8(0x52)
-	st.uds_diag.dids[0].data[11] = u8(0x53)
-	st.uds_diag.dids[0].data[12] = u8(0x50)
-	st.uds_diag.dids[0].data[13] = u8(0x45)
-	st.uds_diag.dids[0].data[14] = u8(0x45)
-	st.uds_diag.dids[0].data[15] = u8(0x44)
-	st.uds_diag.dids[0].data[16] = u8(0x2d)
-	st.uds_diag.dids[0].data[17] = u8(0x30)
-	st.uds_diag.dids[0].data[18] = u8(0x31)
-	st.uds_diag.dids[0].len = 19
-	st.uds_diag.dids[1] = uds.Did{
+	st.conn_diag.server.dids[0].data[0] = u8(0x42)
+	st.conn_diag.server.dids[0].data[1] = u8(0x4c)
+	st.conn_diag.server.dids[0].data[2] = u8(0x4f)
+	st.conn_diag.server.dids[0].data[3] = u8(0x42)
+	st.conn_diag.server.dids[0].data[4] = u8(0x4c)
+	st.conn_diag.server.dids[0].data[5] = u8(0x59)
+	st.conn_diag.server.dids[0].data[6] = u8(0x2d)
+	st.conn_diag.server.dids[0].data[7] = u8(0x4f)
+	st.conn_diag.server.dids[0].data[8] = u8(0x56)
+	st.conn_diag.server.dids[0].data[9] = u8(0x45)
+	st.conn_diag.server.dids[0].data[10] = u8(0x52)
+	st.conn_diag.server.dids[0].data[11] = u8(0x53)
+	st.conn_diag.server.dids[0].data[12] = u8(0x50)
+	st.conn_diag.server.dids[0].data[13] = u8(0x45)
+	st.conn_diag.server.dids[0].data[14] = u8(0x45)
+	st.conn_diag.server.dids[0].data[15] = u8(0x44)
+	st.conn_diag.server.dids[0].data[16] = u8(0x2d)
+	st.conn_diag.server.dids[0].data[17] = u8(0x30)
+	st.conn_diag.server.dids[0].data[18] = u8(0x31)
+	st.conn_diag.server.dids[0].len = 19
+	st.conn_diag.server.dids[1] = uds.Did{
 		id: u16(0xf1a0)
 	}
-	st.uds_diag.dids[2] = uds.Did{
+	st.conn_diag.server.dids[2] = uds.Did{
 		id: u16(0xf1aa)
 		writable: true
 	}
-	st.uds_diag.dids[2].data[0] = u8(0x00)
-	st.uds_diag.dids[2].data[1] = u8(0x00)
-	st.uds_diag.dids[2].len = 2
-	st.uds_diag.dids[3] = uds.Did{
+	st.conn_diag.server.dids[2].data[0] = u8(0x00)
+	st.conn_diag.server.dids[2].data[1] = u8(0x00)
+	st.conn_diag.server.dids[2].len = 2
+	st.conn_diag.server.dids[3] = uds.Did{
 		id: u16(0xf1ab)
 		writable: true
 		write_sessions: u8(0x04)
 	}
-	st.uds_diag.dids[3].data[0] = u8(0x00)
-	st.uds_diag.dids[3].len = 1
-	st.uds_diag.dids[4] = uds.Did{
+	st.conn_diag.server.dids[3].data[0] = u8(0x00)
+	st.conn_diag.server.dids[3].len = 1
+	st.conn_diag.server.dids[4] = uds.Did{
 		id: u16(0xf1ac)
 		writable: true
 		write_sessions: u8(0x04)
 		write_security: u8(1)
 	}
-	st.uds_diag.dids[4].data[0] = u8(0x00)
-	st.uds_diag.dids[4].len = 1
-	st.uds_diag.ndid = 5
+	st.conn_diag.server.dids[4].data[0] = u8(0x00)
+	st.conn_diag.server.dids[4].len = 1
+	st.conn_diag.server.ndid = 5
 	st.fmem.slots[0].dtc = u32(0x21900) // EngineOverRev
 	st.fmem.slots[0].confirm = u8(1)
 	st.fmem.slots[0].aging = u8(2)
@@ -611,7 +562,7 @@ pub fn partition_can0(ch can.Channel) {
 	}
 	st.fmem.n = 5
 	st.fmem.init()
-	st.uds_diag.faults = st.fmem.uds_ops() // 0x19 / 0x14 / 0x85
+	st.conn_diag.server.faults = st.fmem.uds_ops() // 0x19 / 0x14 / 0x85
 	mut sched := loom.Scheduler{}
 	sched.every(10_000, io_can0_10ms, &st)
 	for {

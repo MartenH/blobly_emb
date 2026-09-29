@@ -20,18 +20,19 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 		assert false, '${err}'
 		return
 	}
+	// the connection's own steps (housekeeping, one request at a time, the drop while busy) are
+	// comm/diag's and tested there; this pins where the bridge calls them
 	steps := [
-		'st.tp_diag.tick(now)',
-		'st.uds_diag.reset_state()',
-		'st.uds_diag.hold_s3(now)',
-		'st.uds_diag.tick(now)',
+		'st.conn_diag.housekeep(now)',
 		'diag_rx_ok :=',
-		'if st.tp_diag.has_request() {',
-		'st.tp_diag.idle() && st.uds_diag.reset_req == 0 {',
-		'diag_got := st.tp_diag.take(',
-		'diag_n := if st.tp_diag.busy() { 0 } else { diag_got }',
-		'st.tp_diag.poll(now, mut pdu_diag)',
-		'diag_rx_ok = st.uds_diag.rx_enabled()',
+		'match st.conn_diag.on_frame(now, &rx) {',
+		'.request { break }',
+		'.served {',
+		'diag_rx_ok = st.conn_diag.server.rx_enabled()',
+		'st.conn_diag.serve()',
+		'st.conn_diag.produce(now, mut cf_diag)',
+		'st.conn_diag.abort_tx()',
+		'diag_rx_ok = st.conn_diag.server.rx_enabled()',
 		'if diag_rx_ok && st.diag_rx_was_off',
 		'diag_tx_ok :=',
 		'if tx_lamp_frame_any && diag_tx_ok',
@@ -44,4 +45,22 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 		}
 		at = at + 1 + i
 	}
+}
+
+// a connection with no [[did]] names nothing from comm.uds: importing it would warn on every build
+fn test_the_uds_import_follows_the_dids() {
+	mut m := Model{
+		isotp_conns: [IsotpConn{
+			name: 'diag'
+			bus:  'can0'
+		}]
+	}
+	_, bare := emit_module_headers(m, 'ecu', false, false)
+	assert 'import comm.diag' in bare
+	assert 'import comm.uds' !in bare
+	m.dids = [DidCfg{
+		id: 0xF190
+	}]
+	_, with_dids := emit_module_headers(m, 'ecu', false, false)
+	assert 'import comm.uds' in with_dids
 }

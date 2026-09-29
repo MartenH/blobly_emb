@@ -202,8 +202,8 @@ bs       = 8          # flow-control block size we grant
 stmin_ms = 0          # min separation we ask the sender for
 ```
 
-The generator emits an `isotp.Link` plus a `[max_payload]u8` buffer into the ECU state and
-wires the comm loop to it — you do not write the segmentation. Two scoping facts before
+The generator emits a `diag.Connection` (`comm/diag`: the `isotp.Link`, the UDS server and their
+buffers) into the ECU state and wires the comm loop to it — you do not write the segmentation. Two scoping facts before
 you plan around it:
 
 - **Host/sim only.** A `[target] kind = "threadx"` image rejects any `[[isotp]]` at
@@ -219,8 +219,8 @@ you plan around it:
 A **new bulk consumer** therefore owns its *own* `isotp.Link` inside a ComModule.
 `comm/trace` and `comm/shell` are the module-owned-link examples — but note both are
 **outbound** streamers (their FC handlers feed a send in flight; neither ever calls
-`take()`). For the complete **inbound** consume-and-dispatch loop, read the generated
-UDS bridge (`gen/loom_gen.v`: `on_frame` → `take` → handle → `send`) or the three
+`take()`). For the complete **inbound** consume-and-dispatch loop, read
+`comm/diag` (`Connection.on_frame` → `serve`: `take` → handle → `send` → `produce`) or the three
 hand-written bootloader loops (`examples/boot_sim`, `examples/h735_boot`,
 `examples/h755_boot` — each `main.v` runs the full loop into `boot.Prog.handle`, and
 they are the closest match for a bulk-transfer consumer). Whichever

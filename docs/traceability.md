@@ -53,13 +53,13 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-006 | QM | test | verified | com_test.v (pass) |
 | REQ-COM-007 | QM | test | uncovered | — |
 | REQ-COM-008 | QM | test | covered | rxstatus.lua (pending) |
-| REQ-DIAG-001 | QM | test | verified | uds_test.v (pass) |
-| REQ-DIAG-002 | QM | test | covered | diag.lua (pending) |
-| REQ-DIAG-003 | QM | test | covered | diag.lua (pending), uds_test.v (pass) |
+| REQ-DIAG-001 | QM | test | verified | diag_test.v (pass), uds_test.v (pass) |
+| REQ-DIAG-002 | QM | test | covered | diag.lua (pending), diag_test.v (pass) |
+| REQ-DIAG-003 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds_test.v (pass) |
 | REQ-DIAG-004 | QM | test | covered | diag.lua (pending), uds_test.v (pass) |
 | REQ-DIAG-005 | QM | test | covered | diag.lua (pending), uds_test.v (pass) |
-| REQ-DIAG-006 | QM | test | covered | diag.lua (pending), uds_test.v (pass) |
-| REQ-DIAG-007 | QM | test | covered | diag.lua (pending), uds_test.v (pass) |
+| REQ-DIAG-006 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds_test.v (pass) |
+| REQ-DIAG-007 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds_test.v (pass) |
 | REQ-DIAG-008 | QM | test | covered | diag.lua (pending), uds_test.v (pass) |
 | REQ-DIAG-009 | QM | test | verified | fault_test.v (pass) |
 | REQ-DIAG-010 | QM | test | verified | fault_test.v (pass) |
@@ -258,7 +258,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-007 | | | | | | | | | | | | | | | | | | | |
 | REQ-COM-008 | | | | | | | | | | | | | | | · | | | | |
 | REQ-DIAG-001 | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-DIAG-002 | | | | | | | | | | | | | | | · | | | | |
+| REQ-DIAG-002 | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-DIAG-003 | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-DIAG-004 | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-DIAG-005 | | | | | | | | | | | | | | | · | ✓ | | | |
