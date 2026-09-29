@@ -76,7 +76,7 @@ fn validate_diag_live_dids(m Model, tx_cells map[string]bool) {
 		}
 		// the cell carries one 32-bit word (the lean encode's), so a wider value has no home in it
 		vt := (m.sig_of[d.signal] or { SigInfo{} }).val_type
-		if vt in ['u64', 'i64'] {
+		if (did_value_width(vt) or { 0 }) > 4 {
 			panic('loom2v: [target] kind="threadx": [[did]] 0x${d.id.hex()} reads "${d.signal}", a ${vt}, but ' +
 				'its IOC cell on the target carries 32 bits — a live DID there is at most 32 bits wide')
 		}

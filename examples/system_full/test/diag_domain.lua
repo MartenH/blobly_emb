@@ -27,11 +27,15 @@ test("domain: a constant DID answers multi-frame", function()
 end)
 
 -- a live DID answers what the node transmits: VehicleSpeed on 0x120, LedLevel on 0x126 (u32 LE on
--- the wire, u32 big-endian in the DID). Read between two frames it lies between them, give or take
--- the step the frames themselves show (a turning point may fall inside the window) — so a DID
--- stuck at 0, or reading another cell, cannot pass unless the wire says the same.
+-- the wire, u32 big-endian in the DID). Read between two fresh frames it lies between them, give or
+-- take the step those frames show (a turning point may fall inside the window). A window whose step
+-- is larger than one period's worth is sampled again, so the slack stays small enough that a DID
+-- stuck at 0, or reading another cell, cannot pass.
 test("domain: a live DID answers what the node transmits", function()
   local d = diag()
+  local function drain()
+    while bus.recv("compute", 0) do end
+  end
   local function wire(id)
     local f = expect("compute", id, 500)
     local b = { string.byte(f.data, 1, 4) }
@@ -44,11 +48,17 @@ test("domain: a live DID answers what the node transmits", function()
     return ((b[1] * 256 + b[2]) * 256 + b[3]) * 256 + b[4]
   end
   for _, p in ipairs({ { 0xF1A0, 0x120, "VehicleSpeed" }, { 0xF1A1, 0x126, "LedLevel" } }) do
-    local before = wire(p[2])
-    local now = did(p[1])
-    local after = wire(p[2])
-    log(string.format("%s: wire %d, DID %d, wire %d", p[3], before, now, after))
+    local before, now, after
+    for _ = 1, 5 do
+      drain()
+      before = wire(p[2])
+      now = did(p[1])
+      after = wire(p[2])
+      if math.abs(after - before) <= 150 then break end
+    end
     local step = math.abs(after - before)
+    log(string.format("%s: wire %d, DID %d, wire %d", p[3], before, now, after))
+    check.truthy(step <= 150, p[3] .. " never held still enough to bracket")
     check.between(now, math.min(before, after) - step, math.max(before, after) + step,
       p[3] .. " DID follows the transmitted value")
   end

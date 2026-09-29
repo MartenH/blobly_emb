@@ -190,3 +190,27 @@ signal = "Workload"
 	assert code != 0, 'loom2v accepted a 64-bit live DID on the target'
 	assert out.contains('at most 32 bits wide'), out
 }
+
+// a live DID is read-only, and carries an integer or a bool — refused at validation, for every owner
+fn test_a_live_did_that_cannot_be_one_is_refused() {
+	code, out, _ := generate('live_w', diag_conn + '
+[[did]]
+id       = 0xF1A0
+signal   = "Workload"
+writable = true
+')
+	assert code != 0, 'loom2v accepted a writable live DID'
+	assert out.contains('a live DID is read-only'), out
+	field := 'fields = { v = "u32" }'
+	code2, out2, _ := generate_edited('live_f', fn [field] (src string) string {
+		return src.replace(field, 'fields = { v = "f32" }')
+	}, diag_conn + '
+[[did]]
+id     = 0xF1A0
+signal = "Workload"
+')
+	assert code2 != 0, 'loom2v accepted a float live DID'
+	assert out2.contains('carries an integer or a bool'), out2
+	assert did_value_width('f32') == none
+	assert did_value_width('i32') or { 0 } == 4
+}
