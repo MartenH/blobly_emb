@@ -43,8 +43,9 @@ An acronym is a word of its own, so `ABSActive` is `abs_active` and `LED5State` 
 - **Names we own are PascalCase** (`[A-Z][A-Za-z0-9]*`, no `_`): FBs, signals no bus carries,
   faults and eth frames. That leaves one way to spell each of them. Partition and thread names
   are exempt: they never become FB fields.
-- **Names a DBC owns keep the DBC's spelling.** That covers a bus signal (whose name *is* the
-  DBC signal name) and CAN frames.
+- **Names a DBC owns keep the DBC's spelling.** That covers a CAN bus signal (whose name *is*
+  the DBC signal name) and CAN frames. A signal on an eth bus is listed in its `[[frame]]
+  signals` instead; it is not held to PascalCase either, but should follow it.
 - **Generation refuses two names that give one field**, in every place a generated name lands:
   signals, FBs, buses, one FB's faults, one DBC's frames and frame signals.
   `AbsActive` next to `ABSActive` fails with both names quoted.
