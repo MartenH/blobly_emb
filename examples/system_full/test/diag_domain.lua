@@ -5,7 +5,8 @@
 -- it needs the flashed board on the CANsub (system_full.blobnet), so it is not in CI.
 --   BLOBLY_NET=/path/to/blobly_net; v -enable-globals -path "@vlib|@vmodules|$BLOBLY_NET/modules" \
 --     run $BLOBLY_NET/cmd/script/run.v examples/system_full/test/diag_domain.lua
--- Recorded in requirements/verifications.toml (uds-on-target-domain), not tagged here: a bench
+-- Recorded in requirements/verifications.toml (uds-on-target-domain, uds-on-target-live-did), not
+-- tagged here: a bench
 -- script never runs in trace-check, so a tag would only ever read pending.
 
 local function diag()
@@ -26,8 +27,9 @@ test("domain: a constant DID answers multi-frame", function()
 end)
 
 -- a live DID answers what the node transmits: VehicleSpeed on 0x120, LedLevel on 0x126 (u32 LE on
--- the wire, u32 big-endian in the DID); read between two frames, it lies between them — give or
--- take one 100 ms step of LedLevel's triangle (0..1000 permille at 0.5 Hz)
+-- the wire, u32 big-endian in the DID). Read between two frames it lies between them, give or take
+-- the step the frames themselves show (a turning point may fall inside the window) — so a DID
+-- stuck at 0, or reading another cell, cannot pass unless the wire says the same.
 test("domain: a live DID answers what the node transmits", function()
   local d = diag()
   local function wire(id)
@@ -46,7 +48,8 @@ test("domain: a live DID answers what the node transmits", function()
     local now = did(p[1])
     local after = wire(p[2])
     log(string.format("%s: wire %d, DID %d, wire %d", p[3], before, now, after))
-    check.truthy(now >= math.min(before, after) - 400 and now <= math.max(before, after) + 400,
+    local step = math.abs(after - before)
+    check.between(now, math.min(before, after) - step, math.max(before, after) + step,
       p[3] .. " DID follows the transmitted value")
   end
 end)

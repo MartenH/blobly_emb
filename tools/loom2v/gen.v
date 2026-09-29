@@ -4030,6 +4030,7 @@ fn main() {
 	// rx signals an FB reads flow bus -> comm(decode) -> target IOC pool cell -> FB input (6b-2b).
 	// ioc_idx maps each such signal to its pool cell; visible to the comm emitter + handler glue.
 	mut ioc_idx := map[string]int{}
+	mut tx_cells := map[string]bool{} // the cells the comm thread reads to transmit: a live DID's source
 	mut msg_ioc_idx := map[int]int{} // DBC id -> its (single) rx-read signal's IOC cell
 	if comm_thread_on {
 		// LAYOUT-IDENTICAL routes forward on the target (raw copy + id remap, emitted in the
@@ -4165,6 +4166,7 @@ fn main() {
 						'producer remote, or use a single-field signal, until the encode paths unify')
 				}
 				ioc_idx[sname] = ioc_idx.len
+				tx_cells[sname] = true
 				continue
 			}
 			if !si.rx {
@@ -4218,6 +4220,7 @@ fn main() {
 				msg_ioc_idx[si.dbc_id] = ioc_idx[sname]
 			}
 		}
+		validate_diag_live_dids(m, tx_cells)
 		// [nvm]: each persistent signal stages through its own intra-core IOC
 		// cell (single-writer wait-free — the proven transport, reused).
 		for sname in m.nvm_names {
