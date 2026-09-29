@@ -118,8 +118,9 @@ fn diag_target_nm_hold(m Model) []string {
 	return ['\t\tg_nm.hold(t1, g_diag.active()) // a diagnostic exchange or session keeps the bus up']
 }
 
-// diag_target_produce: the answer in flight, tx_ready-gated like every producer, and ahead of the
-// trace and shell streams — an answer is a few frames a tester is timing, a dump is many. A frame
+// diag_target_produce: the answer in flight, tx_ready-gated like every producer, and ahead of all of
+// them (telemetry, COM, trace, shell) — an answer is a few frames a tester is timing, and a Tx FIFO
+// kept full by periodic traffic must not strand it. A frame
 // the channel refuses aborts the transfer; the tester retries. NM cannot sleep under it: the
 // connection holds the network while active (diag_target_nm_hold).
 fn diag_target_produce(m Model) []string {

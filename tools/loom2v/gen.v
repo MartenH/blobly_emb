@@ -2817,6 +2817,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					// owns its wire behaviour, and the wake announcement must out).
 					glue << '\t\tnm_up := g_nm.awake() // NM-gated COM tx (REQ-COM-007, post-tick)'
 				}
+				glue << diag_target_produce(m) // ahead of every periodic producer: a tester is timing it
 				for p in producers {
 					glue << p.bus_tick(BusCtx{
 						telem_active: m.telem.on && telem_iface != ''
@@ -2858,7 +2859,6 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\t\tch.send(tf)'
 					glue << '\t\t}'
 				}
-				glue << diag_target_produce(m)
 				glue << trace_produce_drain(m)
 				glue << shell_produce_drain(m)
 				glue << xcore_trace_poll(m)
@@ -3790,7 +3790,9 @@ fn main() {
 		db := candb.load_dbc_file(dbc) or { candb.Database{} }
 		fn_trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
 		shell_bus := if m.shell.bus != '' { m.shell.bus } else { m.telem.bus }
-		nm_bus := if m.nm.bus != '' { m.nm.bus } else { m.telem.bus }
+		// on a ThreadX owner NM runs on the comm thread's channel whatever [nm].bus says (a manifest
+		// label there, gateway_test.v)
+		nm_bus := if m.target.threadx || m.nm.bus == '' { m.telem.bus } else { m.nm.bus }
 		mut ids := [][]string{} // [field, id]
 		ids << ['rx_id', c.rx_id.str()]
 		ids << ['tx_id', c.tx_id.str()]

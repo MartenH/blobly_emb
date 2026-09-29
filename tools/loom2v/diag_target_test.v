@@ -33,6 +33,13 @@ fn loom2v_bin() string {
 // generate runs loom2v on h735_threadx's config with `extra` appended; returns the exit code, the
 // output and the generated glue.
 fn generate(name string, extra string) (int, string, string) {
+	return generate_edited(name, fn (src string) string {
+		return src
+	}, extra)
+}
+
+// generate_edited is generate with h735_threadx's config edited first.
+fn generate_edited(name string, edit fn (string) string, extra string) (int, string, string) {
 	root := @VMODROOT
 	ex := os.join_path(root, 'examples', 'h735_threadx')
 	tmp := os.join_path(os.temp_dir(), 'diag_target_${name}_${os.getpid()}')
@@ -42,7 +49,7 @@ fn generate(name string, extra string) (int, string, string) {
 	}
 	src := os.read_file(os.join_path(ex, 'ecu.toml')) or { panic(err) }
 	ecu := os.join_path(ex, 'ecu_diag_${name}_${os.getpid()}.toml') // beside its imports
-	os.write_file(ecu, src + extra) or { panic(err) }
+	os.write_file(ecu, edit(src) + extra) or { panic(err) }
 	defer {
 		os.rm(ecu) or {}
 	}
@@ -70,6 +77,7 @@ fn test_the_comm_thread_serves_the_connection_in_order() {
 		'g_nm.hold(t1, g_diag.active())',
 		'nm_up := g_nm.awake()',
 		'g_diag.produce(t1, mut diag_txf)',
+		'// PRODUCER: CpuLoad telemetry',
 		'g_tm.produce(t1, mut trace_txf)',
 		'g_sh.produce(t1, mut shell_txf)',
 	]
@@ -134,4 +142,16 @@ fn test_a_diagnostic_id_in_the_nm_range_or_wider_than_11_bits_is_refused() {
 	code2, out2, _ := generate('wide', diag_conn.replace('tx_id         = 0x7B8', 'tx_id         = 0x8100'))
 	assert code2 != 0, 'loom2v accepted a 16-bit tx_id'
 	assert out2.contains('tx_id 0x8100 must be a standard 11-bit id'), out2
+}
+
+// on ThreadX, [nm].bus is a label: NM runs on the comm thread's channel, so that is the bus checked
+fn test_the_nm_range_is_checked_on_the_comm_threads_channel() {
+	peers := 'peers = [0x500, 0x53F]'
+	code, out, _ := generate_edited('nmlabel', fn [peers] (src string) string {
+		assert src.contains(peers), 'h735_threadx [nm] changed shape — update this test'
+		return src.replace(peers, peers + '\nbus   = "can1"')
+	}, diag_conn.replace('rx_id         = 0x7B0', 'rx_id         = 0x510') +
+		'\n[bus.can1]\ninterface = "vcan1"\n')
+	assert code != 0, 'loom2v accepted an rx_id in the NM range under a [nm].bus label'
+	assert out.contains('[nm] peer range'), out
 }
