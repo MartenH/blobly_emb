@@ -33,8 +33,8 @@ fn new_tester() isotp.Link {
 	return t
 }
 
-fn frame_of(id u32, p isotp.Pdu) can.Frame {
-	mut f := can.Frame{
+fn frame_of(id u32, p isotp.Pdu) &can.Frame {
+	mut f := &can.Frame{
 		id:  id
 		len: 8
 	}
@@ -53,8 +53,8 @@ fn pdu_of(f can.Frame) isotp.Pdu {
 }
 
 // single frame on `id`, as a tester puts one on the wire
-fn sf(id u32, req []u8) can.Frame {
-	mut f := can.Frame{
+fn sf(id u32, req []u8) &can.Frame {
+	mut f := &can.Frame{
 		id:  id
 		len: 8
 	}
@@ -120,8 +120,7 @@ fn test_a_live_did_is_refreshed_before_every_dispatch() {
 	mut c := new_conn()
 	mut t := new_tester()
 	mut now := u64(0)
-	c.refresh = fn (p voidptr) {
-		mut s := unsafe { &uds.Server(p) }
+	c.refresh = fn (mut s uds.Server) {
 		s.dids[1].data[0] = 0x42
 		s.dids[1].len = 1
 	}
@@ -234,14 +233,34 @@ fn test_s3_does_not_run_while_the_link_is_busy() {
 	assert c.server.session == uds.session_default
 }
 
+// housekeep expires the link BEFORE it asks whether the link is busy: a transfer that dies in this
+// pass does not hold S3 for it
+fn test_a_link_expiring_in_the_pass_does_not_hold_s3() {
+	mut c := new_conn()
+	c.server.s3_us = 5000
+	mut t := new_tester()
+	mut now := u64(0)
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	c.link.n_bs_us = 10_000
+	c.on_frame(now, sf(rx, [u8(0x22), 0xF1, 0x90]))
+	c.serve()
+	mut f := can.Frame{}
+	assert c.produce(now, mut f) // first frame out; flow control never comes
+	c.housekeep(now + 8000) // still waiting: S3 held
+	assert c.server.session == uds.session_extended
+	c.housekeep(now + 16_000) // N_Bs expires in this pass: S3 runs from the last hold
+	assert c.link.idle()
+	assert c.server.session == uds.session_default
+}
+
 fn test_frames_that_are_not_this_connections_are_left_alone() {
 	mut c := new_conn()
 	mut ext := sf(rx, [u8(0x3E), 0x00])
 	ext.ext = true
 	assert c.on_frame(0, ext) == .other
 	assert c.on_frame(0, sf(0x123, [u8(0x3E), 0x00])) == .other
-	// a functional id carrying a first frame is not a functional request
+	// a first frame on the functional id is this connection's, and no request: dropped
 	mut ff := sf(fid, [u8(0x3E), 0x00])
 	ff.data[0] = 0x10
-	assert c.on_frame(0, ff) == .other
+	assert c.on_frame(0, ff) == .taken
 }

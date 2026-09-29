@@ -1002,7 +1002,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				// in the FIFO must gate the application frames that follow it, not only the next
 				// pass's. A functional request is served on arrival, so the receive gate is re-sampled
 				// right after it.
-				glue << '\t\tmatch st.conn_${snake(c.name)}.on_frame(now, rx) {'
+				glue << '\t\tmatch st.conn_${snake(c.name)}.on_frame(now, &rx) {'
 				glue << '\t\t\t.request { break }'
 				if c.functional_id != 0 {
 					glue << '\t\t\t.served {'
@@ -1842,7 +1842,7 @@ fn did_refresh_fn(m Model, tp string) []string {
 	if !m.dids.any(it.signal != '') {
 		return []string{}
 	}
-	mut out := ['', 'fn diag_refresh_${tp}(p voidptr) {', '\tmut srv := unsafe { &uds.Server(p) }']
+	mut out := ['', 'fn diag_refresh_${tp}(mut srv uds.Server) {']
 	for idx, did in m.dids {
 		if did.signal == '' {
 			continue

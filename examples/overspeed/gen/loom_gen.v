@@ -161,8 +161,7 @@ mut:
 	diag_rx_was_off bool // 0x28 had rx off (any sampling since the last restart): restart the deadlines on return
 }
 
-fn diag_refresh_diag(p voidptr) {
-	mut srv := unsafe { &uds.Server(p) }
+fn diag_refresh_diag(mut srv uds.Server) {
 	mut vehicle_speed_did := sig.VehicleSpeed{}
 	if osal.ioc_acquire2(vehicle_speed_ch, &vehicle_speed_did, u8(sizeof(vehicle_speed_did))) {
 		srv.dids[1].data[0] = u8(vehicle_speed_did.kph >> 8)
@@ -310,7 +309,7 @@ fn io_can0_10ms(ctx voidptr) {
 				}
 			}
 		}
-		match st.conn_diag.on_frame(now, rx) {
+		match st.conn_diag.on_frame(now, &rx) {
 			.request { break }
 			.served {
 				diag_rx_ok = st.conn_diag.server.rx_enabled()

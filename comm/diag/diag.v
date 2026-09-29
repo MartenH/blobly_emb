@@ -6,7 +6,7 @@ import driver.can
 
 // Connection is a node's diagnostic server on its one ISO-TP connection (docs/diagnostics.md §2):
 // the link, the UDS server, their buffers, and the ORDER a pass runs them in — protocol behaviour,
-// the same on every owner. The owner (a bus bridge on the host, the comm thread on the target)
+// the same on every owner. The owner (a bus bridge on the host; the ThreadX comm thread from R2)
 // brings the clock, the channel and the 0x28 gating of its own application frames.
 //
 // A pass, in this order: housekeep → the owner samples its receive gate → the rx drain hands every
@@ -22,10 +22,10 @@ pub mut:
 	rx_id         u32 // physical requests (standard id)
 	tx_id         u32 // responses
 	functional_id u32 // functional requests, shared by every server on the bus; 0 = none
-	// refresh writes the live-signal DIDs into the server it is handed (a &uds.Server). It runs
-	// before every dispatch, physical or functional, so a read answers with the value current then.
-	// nil = the node has no live DIDs.
-	refresh fn (srv voidptr)
+	// refresh writes the live-signal DIDs into the server it is handed. It runs right before every
+	// dispatch, physical or functional, so a read answers with the value current then. nil = the
+	// node has no live DIDs.
+	refresh fn (mut srv uds.Server)
 mut:
 	req  [isotp.max_payload]u8
 	resp [isotp.max_payload]u8
@@ -67,7 +67,7 @@ pub fn (mut c Connection) housekeep(now u64) {
 
 // on_frame takes one received frame. A physical frame feeds the link; a functional request is
 // served at once, in bus order, so a functional 0x28 gates the very next frame of the drain.
-pub fn (mut c Connection) on_frame(now u64, f can.Frame) Rx {
+pub fn (mut c Connection) on_frame(now u64, f &can.Frame) Rx {
 	if f.ext {
 		return .other
 	}
@@ -88,9 +88,9 @@ pub fn (mut c Connection) on_frame(now u64, f can.Frame) Rx {
 // functional serves one functional request — a single frame (ISO 15765-2: PCI 0x0N, N = 1..7).
 // Nothing queues: while the link is not quiet both ways, or a reset is pending, it is dropped, as a
 // busy server does; a functional TesterPresent is periodic and simply comes again.
-fn (mut c Connection) functional(f can.Frame) Rx {
+fn (mut c Connection) functional(f &can.Frame) Rx {
 	if f.len < 2 || f.data[0] >> 4 != 0 {
-		return .other
+		return .taken // not a single frame: nothing a functional request may be
 	}
 	n := int(f.data[0] & 0x0F)
 	// <= 7: a CAN-FD frame may claim more
@@ -114,10 +114,10 @@ fn (mut c Connection) functional(f can.Frame) Rx {
 // sent is a tester protocol violation and is DROPPED — the tester times out and retries; nothing
 // waits, so nothing can be reordered behind it.
 pub fn (mut c Connection) serve() {
-	c.refresh_dids()
 	got := c.link.take(&c.req[0])
 	n := if c.link.busy() { 0 } else { got }
 	if n > 0 {
+		c.refresh_dids()
 		rlen := c.server.handle(&c.req[0], n, &c.resp[0])
 		if rlen > 0 && !c.link.send(&c.resp[0], rlen) {
 			c.server.reset_req = 0 // the answer could not be queued: never reset unanswered
@@ -159,6 +159,6 @@ fn (mut c Connection) apply_answered_reset() {
 
 fn (mut c Connection) refresh_dids() {
 	if c.refresh != unsafe { nil } {
-		c.refresh(voidptr(&c.server))
+		c.refresh(mut c.server)
 	}
 }

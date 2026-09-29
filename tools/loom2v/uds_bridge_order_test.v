@@ -25,7 +25,7 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 	steps := [
 		'st.conn_diag.housekeep(now)',
 		'diag_rx_ok :=',
-		'match st.conn_diag.on_frame(now, rx) {',
+		'match st.conn_diag.on_frame(now, &rx) {',
 		'.request { break }',
 		'.served {',
 		'diag_rx_ok = st.conn_diag.server.rx_enabled()',
