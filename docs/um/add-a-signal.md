@@ -46,8 +46,10 @@ On a signal received from a bus, `status = "RxStatus"` and `lost` are the bridge
 receive status and E2E lost-frame count ([communication.md](../communication.md)) — and a
 `valid` field is refused there.
 
-The **wire layout is the DBC's job**, matched by NAME: when an endpoint is a bus, the
-signal name must be a DBC signal, and the DBC says where its bits live. In DBC terms a
+The **wire layout is the DBC's job**, matched by NAME: when an endpoint is a CAN bus, the
+signal name must be a DBC signal, and the DBC says where its bits live. (On an eth bus there
+is no DBC: the signal is listed in an eth `[[frame]] signals`, which derives the layout —
+[../someip.md](../someip.md), `examples/host_someip`.) In DBC terms a
 signal may start at any bit, span byte borders, and scale — the host bridge codec
 handles that generally. The lean ThreadX target codec does NOT yet: it generates only
 the trivial layout (unsigned little-endian u32 at bit 0, factor 1, offset 0) and
@@ -83,10 +85,11 @@ pub fn (mut l LoadSlow) on_100ms(inp ports.LoadSlowIn, mut outp ports.LoadSlowOu
 
 `make gen` regenerates `sig/`, `ports/`, and the wrapper glue. Nothing else to write.
 
-## Bus endpoints need the DBC
+## CAN bus endpoints need the DBC
 
-If `from` or `to` is a bus, the signal is on the wire: its **name must be a signal in
-the example's `bus.dbc`**, which supplies the CAN id, DLC, and layout. Add the DBC
+If `from` or `to` is a CAN bus, the signal is on the wire: its **name must be a signal in
+the example's `bus.dbc`**, which supplies the CAN id, DLC, and layout. (An eth bus takes
+the signal from its `[[frame]] signals` instead — [../someip.md](../someip.md).) Add the DBC
 message first (see [add-a-frame.md](add-a-frame.md)).
 
 The lean ThreadX target codec has rules (loom2v enforces them loudly):
