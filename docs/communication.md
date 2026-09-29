@@ -361,8 +361,8 @@ bus-bridge partition; signals still cross to app partitions via the IOC.
    bus and out another (the `gateway` example: `can0` → FB → `can1`), one generated
    bridge per bus, `gen.run` taking a channel per bus. Raw-PDU **gateway**: `[[route]]`
    forwards a frame bus→bus untouched (the same example forwards `WheelSpeeds`).
-3. **ISO-TP** — ✅ **done**. `[[isotp]]` connections; the bridge holds an
-   `isotp.Link` per connection (SF / FF+CF / FC, BlockSize + STmin) in `comm/isotp`
+3. **ISO-TP** — ✅ **done**. `[[isotp]]` connections; the bridge holds a
+   `diag.Connection` (`comm/diag`) wrapping an `isotp.Link` (SF / FF+CF / FC, BlockSize + STmin) in `comm/isotp`
    (unit-tested both directions). Reassembled requests go to the UDS server (§4)
    and responses are re-segmented. blobly_net's UDS
    client (`:raw`) asserts single- and multi-frame round-trips on the bus.

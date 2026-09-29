@@ -24,7 +24,7 @@ As of R4c — the rows R0 through R4c changed say so; the rest is the state the 
 | Piece | State | Where |
 |---|---|---|
 | UDS services | 0x10, 0x11 (two-phase: answered, then reset), 0x22, 0x27 (R1b), 0x28, 0x2E, 0x3E; everything else answers 0x11. On the host 0x11 resets the DIAGNOSTIC state only (R1); a real reset is R2 | `comm/uds/uds.v` |
-| Session model | enforced (R1): starts in default, S3 returns to it (`s3_ms`), every session request relocks security (re-entry included, R1b), and returning to default re-enables the communication 0x28 disabled; the programming session is refused until the R2 handoff | `comm/uds/uds.v`, `tools/loom2v/gen_com.v` |
+| Session model | enforced (R1): starts in default, S3 returns to it (`s3_ms`), every session request relocks security (re-entry included, R1b), and returning to default re-enables the communication 0x28 disabled; the programming session is refused until the R2 handoff | `comm/uds/uds.v`, `comm/diag/diag.v` |
 | DIDs | 16 × ≤32 B static table; 0x22 reads several DIDs per request (R1); per-DID `read` / `write` session and security gates | `comm/uds/uds.v` |
 | NRCs | 0x11 0x12 0x13 0x14 0x22 0x24 0x31 0x33 0x35 0x36 0x37 0x7F in ISO 14229-1's evaluation order (R1; the 0x27 ones R1b); functional requests withhold 0x11/0x12/0x31/0x7E/0x7F; no 0x7E (no subfunction is session-gated yet) and no 0x78 (R6/R7) | `comm/uds/uds.v` |
 | Security access 0x27 | served on the host (R1b): levels from the DID gates, one key per seed, attempt limit + lockout delay (the count survives an ECU reset), keys through the injected `SecurityOps` (the host bridge injects the reference key); the bootloader keeps 0x29 | `comm/uds/uds.v` |

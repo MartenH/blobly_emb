@@ -31,7 +31,8 @@ examples/<name>/   a FREESTANDING app (own Makefile, `make all`):
                        COM bus bridge + run() ┘   bus endpoints -> rx/tx codec)
 loom/   the Loom: scheduler (the de-AUTOSAR'd "RTE")
 comm/   comms stack: com, e2e (CRC), secoc (AES-CMAC), isotp (15765-2), uds (14229), nm,
-        fault (debounce + fault memory behind 0x19/0x14/0x85)
+        fault (debounce + fault memory behind 0x19/0x14/0x85), diag (the UDS server on its ISO-TP
+        connection and the order a pass runs it — the one copy every comm-thread owner calls)
 driver/ driver port: can — SocketCAN (host) / ST FDCAN HAL / AUTOSAR CanIf (CDD); see docs/porting.md
 osal/   OS abstraction: time, cores, IOC (sim=POSIX, target=ThreadX AMP)
 tools/  BUILD-TIME only (heap OK): dbc2cfg, cfg2v, loom2v, sigmap, benches, candb

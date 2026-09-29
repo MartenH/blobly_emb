@@ -3617,7 +3617,7 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 		glue << 'import comm.fault' // debounce + the fault memory (docs/diagnostics.md §3.3)
 	}
 	if m.isotp_conns.len > 0 {
-		glue << 'import comm.isotp' // ISO-TP diagnostic transport
+		glue << 'import comm.diag' // the diagnostic server on its ISO-TP connection
 		glue << 'import comm.uds' // UDS diagnostic services
 	}
 	return ports, glue
@@ -4431,9 +4431,9 @@ fn main() {
 }
 
 // did_signal_encode emits the big-endian write of a live signal value into a
-// DID's data buffer (per the signal's value-field type).
-fn did_signal_encode(tp string, idx int, expr string, val_type string) string {
-	d := 'st.uds_${tp}.dids[${idx}]'
+// DID's data buffer (per the signal's value-field type); `srv` is the uds.Server expression.
+fn did_signal_encode(srv string, idx int, expr string, val_type string) string {
+	d := '${srv}.dids[${idx}]'
 	return match val_type {
 		'u16' {
 			'\t\t${d}.data[0] = u8(${expr} >> 8)\n\t\t${d}.data[1] = u8(${expr})\n\t\t${d}.len = 2'
