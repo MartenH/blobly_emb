@@ -84,6 +84,12 @@ pub fn (mut m NmModule) release() {
 	m.sm.release()
 }
 
+// hold: a platform service (the diagnostic server) keeps the network up while `on`, independently
+// of the application's request and release.
+pub fn (mut m NmModule) hold(now u64, on bool) {
+	m.sm.hold(now, on)
+}
+
 // awake reports whether the network is up (anything but bus_sleep) — the
 // producer gate for NM-gated COM tx (REQ-COM-007).
 pub fn (m &NmModule) awake() bool {

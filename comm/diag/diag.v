@@ -73,11 +73,9 @@ pub fn (mut c Connection) on_frame(now u64, f &can.Frame) Rx {
 	}
 	if f.id == c.rx_id {
 		// only the bytes that arrived: the owner may reuse one frame, so the tail of a short one
-		// holds the previous frame's bytes. A single frame claiming more than it carries, or a
-		// first frame that is not full (ISO 15765-2 requires it), is dropped.
+		// holds the previous frame's bytes; a frame too short for what its PCI says is dropped
 		n := if f.len > 8 { 8 } else { int(f.len) }
-		if n < 1 || (f.data[0] >> 4 == 0 && int(f.data[0] & 0x0F) >= n)
-			|| (f.data[0] >> 4 == 1 && n < 8) {
+		if n < 1 || truncated(f.data[0], n, c.link.rx_len - c.link.rx_pos) {
 			return .taken
 		}
 		mut p := isotp.Pdu{}
@@ -157,13 +155,23 @@ pub fn (mut c Connection) abort_tx() {
 	c.server.reset_req = 0
 }
 
-// abandon drops everything in flight in both directions — for an owner that may not transmit
-// (NM sleep): nothing is answered late, nothing is reassembled across the silence, and the tester
-// retries. A reset whose answer is dropped is never performed.
-pub fn (mut c Connection) abandon() {
-	c.link.abort_tx()
-	c.link.abort_rx()
-	c.server.reset_req = 0
+// active: an exchange is in flight or a non-default session is open — while it is, the owner keeps
+// its network awake (a session must not sleep under the tester, nor an answer be stranded).
+pub fn (c Connection) active() bool {
+	return !c.link.idle() || c.server.session != uds.session_default
+}
+
+// truncated: the frame (PCI byte `pci`, `n` bytes arrived) is too short for what its PCI says. A
+// consecutive frame is full unless it carries the last `left` bytes of the reception; a first frame
+// is always full (ISO 15765-2); a flow control needs its block size and STmin.
+fn truncated(pci u8, n int, left int) bool {
+	return match pci >> 4 {
+		0 { int(pci & 0x0F) >= n }
+		1 { n < 8 }
+		2 { n < 8 && n - 1 < left }
+		3 { n < 3 }
+		else { false }
+	}
 }
 
 // apply_answered_reset: ECUReset is two-phase — once its answer has left, the diagnostic state

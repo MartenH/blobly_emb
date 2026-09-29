@@ -95,8 +95,8 @@ fn diag_target_housekeep(m Model) []string {
 
 // diag_target_rx_arm: the connection's share of the drain. With no 0x28 on the target a request
 // gates nothing behind it, so it is served where it completes and the drain goes on — frames the
-// gateway forwards are not held a pass for a diagnostic request. In NM sleep nothing reaches the
-// server: a request served then would change the session or a DID with no answer ever sent.
+// gateway forwards are not held a pass for a diagnostic request. In bus sleep nothing reaches the
+// server: it could not answer; once served, a request holds the network up (diag_target_nm_hold).
 fn diag_target_rx_arm(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
@@ -109,27 +109,29 @@ fn diag_target_rx_arm(m Model) []string {
 	]
 }
 
+// diag_target_nm_hold: before the NM tick, so a request served this pass keeps the network up
+// before NM can decide to sleep — including out of prepare_bus_sleep.
+fn diag_target_nm_hold(m Model) []string {
+	if m.isotp_conns.len == 0 || !m.nm.on {
+		return []string{}
+	}
+	return ['\t\tg_nm.hold(t1, g_diag.active()) // a diagnostic exchange or session keeps the bus up']
+}
+
 // diag_target_produce: the answer in flight, tx_ready-gated like every producer, and ahead of the
 // trace and shell streams — an answer is a few frames a tester is timing, a dump is many. A frame
-// the channel refuses aborts the transfer; the tester retries. Silent in NM sleep (REQ-COM-007):
-// an answer that cannot leave is abandoned rather than held, so it neither keeps the thread on its
-// 1-tick wake nor goes out stale after the wake — and so is a request mid-reception, whose flow
-// control could not be sent.
+// the channel refuses aborts the transfer; the tester retries. NM cannot sleep under it: the
+// connection holds the network while active (diag_target_nm_hold).
 fn diag_target_produce(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
 	}
-	mut g := []string{}
-	if m.nm.on {
-		g << '\t\tif !nm_up && !g_diag.link.idle() {'
-		g << '\t\t\tg_diag.abandon()'
-		g << '\t\t}'
-	}
-	g << '\t\tfor ${nm_gate(m)}ch.tx_ready() && g_diag.produce(t1, mut diag_txf) {'
-	g << '\t\t\tif !ch.send(diag_txf) {'
-	g << '\t\t\t\tg_diag.abort_tx()'
-	g << '\t\t\t\tbreak'
-	g << '\t\t\t}'
-	g << '\t\t}'
-	return g
+	return [
+		'\t\tfor ${nm_gate(m)}ch.tx_ready() && g_diag.produce(t1, mut diag_txf) {',
+		'\t\t\tif !ch.send(diag_txf) {',
+		'\t\t\t\tg_diag.abort_tx()',
+		'\t\t\t\tbreak',
+		'\t\t\t}',
+		'\t\t}',
+	]
 }

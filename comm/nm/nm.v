@@ -30,6 +30,9 @@ pub:
 pub mut:
 	state          State = .bus_sleep
 	requested      bool // local "I need the bus awake" flag
+	// a platform service needs the bus (the diagnostic server mid-exchange): a request of its own,
+	// so neither the application's request nor its release touches it
+	held bool
 	active_woke    bool // did WE wake the network (local request) vs passively (rx)?
 	// per remote node, its latest partial-network request (replaced, not OR-ed,
 	// and expired when the node goes silent) — see frame.v.
@@ -65,6 +68,26 @@ fn (mut n Nm) enter(s State, now u64) {
 // request: the application needs the bus awake.
 pub fn (mut n Nm) request(now u64) {
 	n.requested = true
+	n.wake_for_request(now)
+}
+
+// hold: a platform service needs the bus awake while `on` — the diagnostic server with an
+// exchange in flight or a non-default session, as a diagnostic session keeps an ECU's network up.
+pub fn (mut n Nm) hold(now u64, on bool) {
+	if on && !n.held {
+		n.held = true
+		n.wake_for_request(now)
+	} else if !on {
+		n.held = false
+	}
+}
+
+// wanted: somebody on this node needs the bus.
+fn (n Nm) wanted() bool {
+	return n.requested || n.held
+}
+
+fn (mut n Nm) wake_for_request(now u64) {
 	match n.state {
 		.bus_sleep, .prepare_bus_sleep {
 			n.active_woke = true // we are the active waker
@@ -98,26 +121,26 @@ pub fn (mut n Nm) tick(now u64) bool {
 		.repeat_message {
 			tx = n.tx_due(now)
 			if now - n.state_since_us >= n.cfg.repeat_us {
-				n.enter(if n.requested { State.normal_operation } else { State.ready_sleep },
+				n.enter(if n.wanted() { State.normal_operation } else { State.ready_sleep },
 					now)
 			}
 		}
 		.normal_operation {
 			tx = n.tx_due(now)
-			if !n.requested {
+			if !n.wanted() {
 				n.enter(.ready_sleep, now)
 			}
 		}
 		.ready_sleep {
 			// silent: kept awake only by others' NM traffic
-			if n.requested {
+			if n.wanted() {
 				n.enter(.normal_operation, now)
 			} else if now - n.last_activity_us >= n.cfg.timeout_us {
 				n.enter(.prepare_bus_sleep, now)
 			}
 		}
 		.prepare_bus_sleep {
-			if n.requested {
+			if n.wanted() {
 				n.enter(.repeat_message, now)
 			} else if now - n.state_since_us >= n.cfg.wait_sleep_us {
 				n.enter(.bus_sleep, now)

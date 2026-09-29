@@ -2809,6 +2809,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// NM drains FIRST: produce() ticks the state machine, so the gate
 				// below reflects THIS pass's state — otherwise the producers get one
 				// free frame past the sleep boundary (codex on emb#135).
+				glue << diag_target_nm_hold(m)
 				glue << nm_produce_drain(m)
 				if m.nm.on {
 					// REQ-COM-007: every producer below gates on this — the bus is

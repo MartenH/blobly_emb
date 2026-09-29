@@ -117,3 +117,26 @@ fn test_request_during_prepare_sleep_rewakes() {
 	assert n.state == .repeat_message
 	assert n.awake()
 }
+
+// a platform service's hold is a request of its own: it keeps the network up through the
+// application's release, and wakes it out of prepare_bus_sleep
+fn test_a_hold_keeps_the_network_up_independently_of_the_request() {
+	mut n := Nm{
+		cfg: timings()
+	}
+	n.request(0)
+	n.tick(200)
+	assert n.state == .normal_operation
+	n.hold(250, true)
+	n.release()
+	n.tick(300)
+	assert n.state == .normal_operation, 'the release dropped a held network'
+	n.hold(350, false)
+	n.tick(400)
+	assert n.state == .ready_sleep
+	n.tick(800) // timeout_us without NM traffic
+	assert n.state == .prepare_bus_sleep
+	n.hold(850, true) // a request served on the way to sleep
+	assert n.state == .repeat_message
+	assert n.awake()
+}
