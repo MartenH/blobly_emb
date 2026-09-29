@@ -1402,20 +1402,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			if m.buses.len == 1 {
 				glue << '\t${srv}.single_network = true // 0x28 "all networks" = this one'
 			}
-			// 0x27 serves exactly the levels some DID gate names; the host bridge injects the
-			// reference key (blobly_net's), seeded from the clock. A target injects the board's
-			// SecurityOps instead (R2).
-			levels := security_levels(m.dids) // validate_security vetted the settings
-			if levels != 0 {
-				glue << '\t${srv}.security = st.sa_${tp}.ops(u32(osal.now_us()))'
-				glue << '\t${srv}.security_levels = u8(0x${levels.hex()})'
-				if c.security_attempts != 0 {
-					glue << '\t${srv}.sa_attempts = u8(${c.security_attempts})'
-				}
-				if c.security_delay_ms != 0 {
-					glue << '\t${srv}.sa_delay_us = u64(${c.security_delay_ms}) * 1000'
-				}
-			}
+			// the host bridge injects the reference key (blobly_net's), seeded from the clock
+			glue << security_init_lines(m, c, srv, 'st.sa_${tp}.ops(u32(osal.now_us()))')
 			if m.faults.len > 0 {
 				for i, f in m.faults {
 					glue << '\tst.fmem.slots[${i}].dtc = u32(0x${f.dtc.hex()}) // ${f.name}'

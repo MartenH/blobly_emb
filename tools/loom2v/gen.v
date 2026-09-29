@@ -80,6 +80,9 @@ struct IsotpConn {
 	// 0x27: failed keys before the lockout, and the lockout delay (0 = the server's defaults)
 	security_attempts int
 	security_delay_ms int
+	// the 0x27 key on a target: 'reference' = blobly_net's public bench key, opted into by name;
+	// '' = the OEM's diag_sa_key_ok, which the node's glue must supply (no default is linked)
+	security_key string
 }
 
 // DidCfg is one [[did]]: constant bytes, a writable RAM cell, and/or a live signal.
@@ -928,6 +931,7 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 			s3_ms: int((m['s3_ms'] or { toml.Any(0) }).int())
 			security_attempts: int((m['security_attempts'] or { toml.Any(0) }).int())
 			security_delay_ms: int((m['security_delay_ms'] or { toml.Any(0) }).int())
+			security_key: (m['security_key'] or { toml.Any('') }).string()
 		}
 	}
 	// ONE diagnostic server per node (docs/diagnostics.md): every [[isotp]] connection is a UDS
@@ -943,6 +947,9 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 		}
 		if c.security_attempts < 0 || c.security_attempts > 255 {
 			panic('loom2v: [[isotp]] "${c.name}" security_attempts ${c.security_attempts} is out of range (1..255; 0 = the default ${uds.default_sa_attempts})')
+		}
+		if c.security_key !in ['', 'reference'] {
+			panic('loom2v: [[isotp]] "${c.name}" security_key "${c.security_key}" — the one named key is "reference" (blobly_net\'s bench key); leave it out for the OEM\'s diag_sa_key_ok')
 		}
 		if c.security_delay_ms < 0 {
 			panic('loom2v: [[isotp]] "${c.name}" security_delay_ms ${c.security_delay_ms} is negative (0 = the default ${uds.default_sa_delay_us / 1000} ms)')
@@ -1509,8 +1516,8 @@ fn validate_security(conns []IsotpConn, dids []DidCfg) {
 		return
 	}
 	for c in conns {
-		if c.security_attempts != 0 || c.security_delay_ms != 0 {
-			panic('loom2v: [[isotp]] "${c.name}" configures security_attempts / security_delay_ms, but no [[did]] gate names a security level — there is nothing to unlock')
+		if c.security_attempts != 0 || c.security_delay_ms != 0 || c.security_key != '' {
+			panic('loom2v: [[isotp]] "${c.name}" configures security_attempts / security_delay_ms / security_key, but no [[did]] gate names a security level — there is nothing to unlock')
 		}
 	}
 }
@@ -2237,6 +2244,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			}
 			glue << shell_cmd_fns(m)
 			glue << diag_target_fns(m, ioc_idx)
+			glue << diag_target_sa_fns(m)
 			glue << nm_shell_fns(m)
 			glue << stat_shell_fns(m, doc, app_threads, multi)
 			glue << trace_fb_hooks(m, doc, app_threads, multi, m.io_points.len > 0)

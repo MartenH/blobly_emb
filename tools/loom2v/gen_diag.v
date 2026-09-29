@@ -53,10 +53,6 @@ fn validate_diag_threadx(m Model) {
 				'comm thread owns only [telemetry].bus "${m.telem.bus}" — put the connection there')
 		}
 	}
-	if security_levels(m.dids) != 0 {
-		panic('loom2v: [target] kind="threadx": a [[did]] gate names a security level, but 0x27 on the ' +
-			'target needs the board key seam — the next R2 step (docs/diagnostics.md)')
-	}
 }
 
 // validate_diag_live_dids: on the target a live DID reads what the node TRANSMITS from a local
@@ -115,6 +111,52 @@ fn did_encode_lines(idx int, expr string, val_type string, ind string) []string 
 	return did_signal_encode('srv', idx, expr, val_type).split('\n').map(ind + it.trim_left('\t'))
 }
 
+// security_init_lines: 0x27 on `srv`, serving exactly the levels some DID gate names, with the
+// connection's attempt limit and lockout delay — every owner's; only the key seam differs
+// (`ops`: the host's reference key object, the target's board C seam).
+fn security_init_lines(m Model, c IsotpConn, srv string, ops string) []string {
+	levels := security_levels(m.dids) // validate_security vetted the settings
+	if levels == 0 {
+		return []string{}
+	}
+	mut g := ['\t${srv}.security = ${ops}', '\t${srv}.security_levels = u8(0x${levels.hex()})']
+	if c.security_attempts != 0 {
+		g << '\t${srv}.sa_attempts = u8(${c.security_attempts})'
+	}
+	if c.security_delay_ms != 0 {
+		g << '\t${srv}.sa_delay_us = u64(${c.security_delay_ms}) * 1000'
+	}
+	return g
+}
+
+// diag_target_sa_fns: the target's 0x27 seam (boards/common/diag_sa.c). The seed is the board's
+// TRNG (weak, replaceable); the key check is the OEM's `diag_sa_key_ok`, which has NO default —
+// a node that gates a DID and forgets it fails to link, naming the symbol — unless the connection
+// opts into blobly_net's public reference key by name, which is then V's own (comm/uds).
+fn diag_target_sa_fns(m Model) []string {
+	if m.isotp_conns.len == 0 || security_levels(m.dids) == 0 {
+		return []string{}
+	}
+	mut g := [
+		'',
+		'fn C.diag_sa_init() int',
+		'fn C.diag_sa_seed(&u8, int) int',
+		'',
+		'fn diag_sa_seed_v(ctx voidptr, out &u8, n int) bool {',
+		'\treturn C.diag_sa_seed(out, n) != 0',
+		'}',
+	]
+	if m.isotp_conns[0].security_key != 'reference' {
+		g << ''
+		g << 'fn C.diag_sa_key_ok(u8, &u8, &u8, int) int'
+		g << ''
+		g << 'fn diag_sa_key_v(ctx voidptr, level u8, seed &u8, key &u8, n int) bool {'
+		g << '\treturn C.diag_sa_key_ok(level, seed, key, n) != 0'
+		g << '}'
+	}
+	return g
+}
+
 // diag_target_globals: the connection lives in __global (its link and buffers are ~2 KB — too
 // much for the comm thread's stack), bss-zero until diag_target_init.
 fn diag_target_globals(m Model) []string {
@@ -133,6 +175,13 @@ fn diag_target_init(m Model) []string {
 	mut g := conn_init_lines(m, m.isotp_conns[0], 'g_diag')
 	if m.dids.any(it.signal != '') {
 		g << '\tg_diag.refresh = diag_refresh_${snake(m.isotp_conns[0].name)}'
+	}
+	if security_levels(m.dids) != 0 {
+		c := m.isotp_conns[0]
+		key := if c.security_key == 'reference' { 'uds.reference_key_ok' } else { 'diag_sa_key_v' }
+		// the RNG's clock is set up here, once, before the loop — never inside a request
+		g << '\tC.diag_sa_init() // 0 = no RNG: every seed request is then refused'
+		g << security_init_lines(m, c, 'g_diag.server', 'uds.SecurityOps{\n\t\tseed:   diag_sa_seed_v\n\t\tkey_ok: ${key}\n\t}')
 	}
 	g << '\tmut diag_txf := can.Frame{}'
 	return g

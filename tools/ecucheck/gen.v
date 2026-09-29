@@ -310,6 +310,7 @@ fn specs() map[string]map[string]Key {
 			's3_ms':    k(.int) // session timeout; default 5000 (ISO 14229-2)
 			'security_attempts': k(.int) // 0x27 failed keys before the lockout; default 3
 			'security_delay_ms': k(.int) // 0x27 lockout delay after too many wrong keys; default 10000
+			'security_key': k(.str) // "reference" = blobly_net's public bench key (a target); absent = the OEM's diag_sa_key_ok
 		}
 		'did':        {
 			'id':       req(.int)
