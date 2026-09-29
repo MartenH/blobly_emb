@@ -4481,23 +4481,27 @@ fn main() {
 }
 
 // did_signal_encode emits the big-endian write of a live signal value into a
-// DID's data buffer (per the signal's value-field type); `srv` is the uds.Server expression.
+// DID's data buffer, in the width of the signal's value-field type; `srv` is the uds.Server
+// expression. A type with no integer encoding is refused rather than written short.
 fn did_signal_encode(srv string, idx int, expr string, val_type string) string {
 	d := '${srv}.dids[${idx}]'
-	return match val_type {
-		'u16' {
-			'\t\t${d}.data[0] = u8(${expr} >> 8)\n\t\t${d}.data[1] = u8(${expr})\n\t\t${d}.len = 2'
-		}
-		'u32' {
-			'\t\t${d}.data[0] = u8(${expr} >> 24)\n\t\t${d}.data[1] = u8(${expr} >> 16)\n\t\t${d}.data[2] = u8(${expr} >> 8)\n\t\t${d}.data[3] = u8(${expr})\n\t\t${d}.len = 4'
-		}
-		'bool' {
-			'\t\t${d}.data[0] = if ${expr} { u8(1) } else { u8(0) }\n\t\t${d}.len = 1'
-		}
-		else {
-			'\t\t${d}.data[0] = u8(${expr})\n\t\t${d}.len = 1'
-		}
+	if val_type == 'bool' {
+		return '\t\t${d}.data[0] = if ${expr} { u8(1) } else { u8(0) }\n\t\t${d}.len = 1'
 	}
+	width := match val_type {
+		'u8', 'i8' { 1 }
+		'u16', 'i16' { 2 }
+		'u32', 'i32' { 4 }
+		'u64', 'i64' { 8 }
+		else { panic('loom2v: a live [[did]] cannot carry a ${val_type} value — its signal must be an integer or a bool') }
+	}
+	mut lines := []string{}
+	for i in 0 .. width {
+		shift := 8 * (width - 1 - i)
+		lines << if shift == 0 { '\t\t${d}.data[${i}] = u8(${expr})' } else { '\t\t${d}.data[${i}] = u8(${expr} >> ${shift})' }
+	}
+	lines << '\t\t${d}.len = ${width}'
+	return lines.join('\n')
 }
 
 // byte16_lit renders 16 bytes as a V fixed-array literal `[u8(0x..), 0x.., ...]!`

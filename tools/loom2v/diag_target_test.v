@@ -165,3 +165,13 @@ fn test_the_nm_range_is_checked_on_the_comm_threads_channel() {
 	assert code != 0, 'loom2v accepted an rx_id in the NM range under a [nm].bus label'
 	assert out.contains('[nm] peer range'), out
 }
+
+// a live DID is written in its value's own width, big-endian — never truncated to a byte
+fn test_a_live_did_is_encoded_in_its_values_width() {
+	assert did_signal_encode('srv', 2, 'v', 'i32') == '\t\tsrv.dids[2].data[0] = u8(v >> 24)\n' +
+		'\t\tsrv.dids[2].data[1] = u8(v >> 16)\n\t\tsrv.dids[2].data[2] = u8(v >> 8)\n' +
+		'\t\tsrv.dids[2].data[3] = u8(v)\n\t\tsrv.dids[2].len = 4'
+	assert did_signal_encode('srv', 0, 'v', 'i16').ends_with('.len = 2')
+	assert did_signal_encode('srv', 0, 'v', 'u64').ends_with('.len = 8')
+	assert did_signal_encode('srv', 0, 'v', 'u8').ends_with('.len = 1')
+}
