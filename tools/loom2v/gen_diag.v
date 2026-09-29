@@ -54,15 +54,52 @@ fn validate_diag_threadx(m Model) {
 		}
 	}
 	for d in m.dids {
-		if d.signal != '' {
-			panic('loom2v: [target] kind="threadx": [[did]] 0x${d.id.hex()} reads signal "${d.signal}" — ' +
-				'live DIDs on the target are the next R2 step (docs/diagnostics.md); use a constant')
+		if d.signal != '' && !target_live_did_ok(m, d.signal) {
+			panic('loom2v: [target] kind="threadx": [[did]] 0x${d.id.hex()} reads signal "${d.signal}", ' +
+				'but on the target a live DID reads only what this node TRANSMITS from a local FB (its ' +
+				'IOC cell is the comm thread\'s to read; an input\'s cell is its FB\'s, and a cell has one reader)')
 		}
 	}
 	if security_levels(m.dids) != 0 {
 		panic('loom2v: [target] kind="threadx": a [[did]] gate names a security level, but 0x27 on the ' +
 			'target needs the board key seam — the next R2 step (docs/diagnostics.md)')
 	}
+}
+
+// target_live_did_ok: `signal` is one this node's comm thread already reads from its IOC cell — an
+// external signal a local FB writes and the comm thread transmits. A cell has ONE reader (its slot
+// is reader-private, boards/common/ioc.h): an input's cell is read by the FB it feeds, and a
+// satellite's output rides xioc, not a cell.
+fn target_live_did_ok(m Model, signal string) bool {
+	si := m.sig_of[signal] or { return false }
+	return si.external && !si.rx && !si.remote && si.fields.len == 1
+}
+
+// diag_target_fns: the live-DID refresh the connection calls before every dispatch — each
+// signal-backed DID takes its cell's current value, the value the comm thread transmits (zero until
+// the FB first publishes, as on the bus).
+fn diag_target_fns(m Model, ioc_idx map[string]int) []string {
+	if m.isotp_conns.len == 0 || !m.dids.any(it.signal != '') {
+		return []string{}
+	}
+	mut g := ['', 'fn diag_refresh_${snake(m.isotp_conns[0].name)}(mut srv uds.Server) {']
+	for idx, did in m.dids {
+		if did.signal == '' {
+			continue
+		}
+		si := m.sig_of[did.signal] or { continue }
+		cell := ioc_idx[did.signal] or { continue }
+		v := 'v_${idx}'
+		g << '\tmut ${v} := u32(0)'
+		g << '\tmut ${v}_b := u32(0)'
+		g << '\tC.ioc_get(${cell}, &${v}, &${v}_b) // ${did.signal}'
+		expr := if si.val_type == 'bool' { '${v} != 0' } else { v }
+		for l in did_signal_encode('srv', idx, expr, si.val_type).split('\n') {
+			g << '\t' + l.trim_left('\t')
+		}
+	}
+	g << '}'
+	return g
 }
 
 // diag_target_globals: the connection lives in __global (its link and buffers are ~2 KB — too
@@ -81,6 +118,9 @@ fn diag_target_init(m Model) []string {
 		return []string{}
 	}
 	mut g := conn_init_lines(m, m.isotp_conns[0], 'g_diag')
+	if m.dids.any(it.signal != '') {
+		g << '\tg_diag.refresh = diag_refresh_${snake(m.isotp_conns[0].name)}'
+	}
 	g << '\tmut diag_txf := can.Frame{}'
 	return g
 }

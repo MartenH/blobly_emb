@@ -25,6 +25,32 @@ test("domain: a constant DID answers multi-frame", function()
   check.equal(diag():read_did(0xF189), "system_full")
 end)
 
+-- a live DID answers what the node transmits: VehicleSpeed on 0x120, LedLevel on 0x126 (u32 LE on
+-- the wire, u32 big-endian in the DID); read between two frames, it lies between them — give or
+-- take one 100 ms step of LedLevel's triangle (0..1000 permille at 0.5 Hz)
+test("domain: a live DID answers what the node transmits", function()
+  local d = diag()
+  local function wire(id)
+    local f = expect("compute", id, 500)
+    local b = { string.byte(f.data, 1, 4) }
+    return b[1] + b[2] * 256 + b[3] * 65536 + b[4] * 16777216
+  end
+  local function did(id)
+    local v = d:read_did(id)
+    check.equal(#v, 4)
+    local b = { string.byte(v, 1, 4) }
+    return ((b[1] * 256 + b[2]) * 256 + b[3]) * 256 + b[4]
+  end
+  for _, p in ipairs({ { 0xF1A0, 0x120, "VehicleSpeed" }, { 0xF1A1, 0x126, "LedLevel" } }) do
+    local before = wire(p[2])
+    local now = did(p[1])
+    local after = wire(p[2])
+    log(string.format("%s: wire %d, DID %d, wire %d", p[3], before, now, after))
+    check.truthy(now >= math.min(before, after) - 400 and now <= math.max(before, after) + 400,
+      p[3] .. " DID follows the transmitted value")
+  end
+end)
+
 test("domain: a RAM DID written reads back", function()
   local d = diag()
   d:write_did(0x0100, "\x12\x34\x56\x78")

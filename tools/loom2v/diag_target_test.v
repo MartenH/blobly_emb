@@ -94,14 +94,24 @@ fn test_the_comm_thread_serves_the_connection_in_order() {
 	assert !glue.contains('g_diag.server.serves_comm_control = true')
 }
 
-fn test_a_live_did_is_refused_on_the_target() {
-	code, out, _ := generate('live', diag_conn + '
+// a live DID reads what the node transmits, from the cell the comm thread already reads; an input's
+// cell is its FB's (one reader per cell) and an internal signal has no cell on the comm thread
+fn test_a_live_did_reads_only_the_nodes_own_outputs() {
+	live := '
 [[did]]
 id     = 0xF1A0
 signal = "Workload"
-')
-	assert code != 0, 'loom2v accepted a live DID on ThreadX'
-	assert out.contains('live DIDs on the target'), out
+'
+	code, out, glue := generate('live', diag_conn + live)
+	assert code == 0, out
+	assert glue.contains('fn diag_refresh_diag(mut srv uds.Server) {')
+	assert glue.contains('g_diag.refresh = diag_refresh_diag')
+	assert glue.contains('C.ioc_get(0, &v_1, &v_1_b) // Workload')
+	for sig in ['Command', 'LoadCmd'] {
+		c2, o2, _ := generate('live_${sig}', diag_conn + live.replace('Workload', sig))
+		assert c2 != 0, 'loom2v accepted a live DID on ${sig}'
+		assert o2.contains('reads only what this node TRANSMITS'), o2
+	}
 }
 
 fn test_a_security_gate_is_refused_on_the_target() {

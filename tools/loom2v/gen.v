@@ -2235,6 +2235,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << "fn C.xcore_load_get(int) u16 // a satellite core's per-mille load (xcore.h; weak 0)"
 			}
 			glue << shell_cmd_fns(m)
+			glue << diag_target_fns(m, ioc_idx)
 			glue << nm_shell_fns(m)
 			glue << stat_shell_fns(m, doc, app_threads, multi)
 			glue << trace_fb_hooks(m, doc, app_threads, multi, m.io_points.len > 0)
