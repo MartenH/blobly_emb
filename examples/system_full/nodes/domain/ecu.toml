@@ -107,7 +107,7 @@ fc  = 0x7F2
 
 # The diagnostic server (docs/diagnostics.md, R2): UDS over ISO-TP on the ids system.toml
 # allocates this node (diag = { req = 0x7B0, rsp = 0x7B8 }), plus the compute bus's functional id.
-# 0x27 on the target is the next R2 step.
+# 0x27 is served through the board's key seam (boards/common/diag_sa.c).
 [[isotp]]
 name          = "diag"
 bus           = "can0"
@@ -117,6 +117,8 @@ functional_id = 0x7DF
 bs            = 8
 stmin_ms      = 0
 s3_ms         = 5000
+security_attempts = 3
+security_delay_ms = 3000
 
 # 18 bytes: the read answer is multi-frame
 [[did]]
@@ -147,6 +149,12 @@ bytes    = "00 00 00 00"
 id    = 0x0101
 bytes = "00"
 write = { session = ["extended"] }
+
+# writable only in extended AND with security level 1 unlocked (0x27, the board's key seam)
+[[did]]
+id    = 0x0102
+bytes = "00"
+write = { session = ["extended"], security = 1 }
 
 # Persistence storage ([nvm], docs/nvm.md): the journal engine over a sector pair the node's comm
 # glue maps (nvm_map_* -> boards flash driver). DriveMode above is the persisted signal.

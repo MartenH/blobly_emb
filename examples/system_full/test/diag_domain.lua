@@ -27,10 +27,11 @@ test("domain: a constant DID answers multi-frame", function()
 end)
 
 -- a live DID answers what the node transmits: VehicleSpeed on 0x120, LedLevel on 0x126 (u32 LE on
--- the wire, u32 big-endian in the DID). Read between two fresh frames it lies between them, give or
--- take the step those frames show (a turning point may fall inside the window). A window whose step
--- is larger than one period's worth is sampled again, so the slack stays small enough that a DID
--- stuck at 0, or reading another cell, cannot pass.
+-- the wire, u32 big-endian in the DID). The FB publishes every 50 ms and the node transmits every
+-- 100 ms, so the DID may hold a value between two frames that never reaches the wire: it lies
+-- within the frames around it, give or take the signal's own step per frame — measured from the
+-- frames themselves. A window moving more than one period's worth is sampled again, so the slack
+-- stays small enough that a DID stuck at 0, or reading another cell, cannot pass.
 test("domain: a live DID answers what the node transmits", function()
   local d = diag()
   local function drain()
@@ -48,15 +49,16 @@ test("domain: a live DID answers what the node transmits", function()
     return ((b[1] * 256 + b[2]) * 256 + b[3]) * 256 + b[4]
   end
   for _, p in ipairs({ { 0xF1A0, 0x120, "VehicleSpeed" }, { 0xF1A1, 0x126, "LedLevel" } }) do
-    local before, now, after
+    local before, now, after, step
     for _ = 1, 5 do
       drain()
+      local prev = wire(p[2])
       before = wire(p[2])
       now = did(p[1])
       after = wire(p[2])
-      if math.abs(after - before) <= 150 then break end
+      step = math.max(math.abs(before - prev), math.abs(after - before))
+      if step <= 150 then break end
     end
-    local step = math.abs(after - before)
     log(string.format("%s: wire %d, DID %d, wire %d", p[3], before, now, after))
     check.truthy(step <= 150, p[3] .. " never held still enough to bracket")
     check.between(now, math.min(before, after) - step, math.max(before, after) + step,
@@ -90,13 +92,46 @@ end)
 test("domain: what the target does not serve yet is refused, not faked", function()
   local d = diag()
   check.nrc(0x11, function() d:raw("\x11\x01") end) -- no reset performed on the target yet
-  check.nrc(0x11, function() d:raw("\x27\x01") end) -- no key seam yet
+  check.nrc(0x7F, function() d:raw("\x27\x01") end) -- 0x27 is not a default-session service
   check.nrc(0x12, function() d:session(0x02) end)   -- programming: the bootloader handoff
   check.nrc(0x31, function() d:read_did(0xABCD) end)
 end)
 
 -- The server shares the comm thread with the node's application traffic: a burst of multi-frame
 -- answers must not starve VehSpeedFrame (0x120, every 100 ms).
+-- 0x27 through the board's key seam (boards/common/diag_sa.c): a TRNG seed, the reference key
+test("domain: 0x27 unlocks a gated DID", function()
+  local d = diag()
+  d:session(0x03)
+  check.nrc(0x33, function() d:write_did(0x0102, "\x11") end) -- locked
+  local s1 = d:raw("\x27\x01"):sub(3)
+  local s2 = d:raw("\x27\x01"):sub(3)
+  check.equal(#s1, 4)
+  check.truthy(s1 ~= s2, "two seeds differ: " .. tohex(s1) .. " / " .. tohex(s2))
+  d:security_access(0x01) -- seed, then key = seed XOR 0xFF
+  d:write_did(0x0102, "\x11")
+  check.equal(tohex(d:read_did(0x0102)), "11")
+  d:session(0x01) -- relocks
+  d:session(0x03)
+  check.nrc(0x33, function() d:write_did(0x0102, "\x22") end)
+  d:session(0x01)
+end)
+
+-- security_attempts = 3, security_delay_ms = 3000
+test("domain: wrong keys lock 0x27 out for the delay", function()
+  local d = diag()
+  d:session(0x03)
+  local wrong = function(seed) return seed end
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end)
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end)
+  check.nrc(0x36, function() d:security_access(0x01, wrong) end)
+  check.nrc(0x37, function() d:raw("\x27\x01") end) -- the delay runs
+  sleep_ms(3200)
+  d:tester_present()
+  d:security_access(0x01) -- and after it, the right key unlocks
+  d:session(0x01)
+end)
+
 test("domain: requests back to back while the node keeps its cadence", function()
   local d = diag()
   local function drain()

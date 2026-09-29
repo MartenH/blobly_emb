@@ -554,3 +554,20 @@ context = "h755/threadx"
 verifies = ["REQ-DIAG-002"]
 approved_by = "Claude bench session — NUCLEO-H755ZI-Q (system_full domain) vs CANsub.4 ch2"
 date = "2026-09-29"
+
+# R2, third step: 0x27 SecurityAccess on the TARGET, through the board's key seam
+# (boards/common/diag_sa.c — the STM32H7 TRNG for the seed, the reference key seed XOR 0xFF,
+# both weak). system_full domain gates DID 0x0102's write on level 1 (attempts 3, delay 3 s):
+# a locked write is refused 0x33; two seeds differ; the reference key unlocks and the write
+# lands; a session change relocks; wrong keys answer 0x35, 0x35, then 0x36 with the delay
+# armed, a seed during it 0x37, and after 3 s the right key unlocks. 10/10, three runs, on the
+# H755 via CANsub.4 ch2. EVIDENCE, NOT A VERIFICATION of REQ-DIAG-008 yet: its clauses on the
+# failed-key count surviving an ECU reset (0x11 is not served on the target yet, E3) and on a
+# functional 0x27 being ignored did not run on the target — recorded when they do.
+[[review]]
+id = "uds-on-target-security"
+method = "review"
+context = "h755/threadx"
+verifies = []
+approved_by = "Claude bench session — NUCLEO-H755ZI-Q (system_full domain) vs CANsub.4 ch2"
+date = "2026-09-30"

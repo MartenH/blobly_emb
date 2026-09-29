@@ -114,15 +114,22 @@ signal = "Workload"
 	}
 }
 
-fn test_a_security_gate_is_refused_on_the_target() {
-	code, out, _ := generate('sec', diag_conn + '
+// 0x27 on the target: the levels a DID gate names, the connection's limits, and the board's key
+// seam (boards/common/diag_sa.c) through V adapters
+fn test_a_security_gate_is_served_through_the_board_seam() {
+	code, out, glue := generate('sec', diag_conn.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\nsecurity_attempts = 2\nsecurity_delay_ms = 3000') + '
 [[did]]
 id    = 0xF1AC
 bytes = "00"
 write = { session = ["extended"], security = 1 }
 ')
-	assert code != 0, 'loom2v accepted a security gate on ThreadX'
-	assert out.contains('0x27 on the target'), out
+	assert code == 0, out
+	for want in ['fn C.diag_sa_seed(&u8, int) int', 'fn diag_sa_key_v(ctx voidptr, level u8, seed &u8, key &u8, n int) bool {',
+		'g_diag.server.security = uds.SecurityOps{', 'seed:   diag_sa_seed_v', 'key_ok: diag_sa_key_v',
+		'g_diag.server.security_levels = u8(0x01)', 'g_diag.server.sa_attempts = u8(2)',
+		'g_diag.server.sa_delay_us = u64(3000) * 1000'] {
+		assert glue.contains(want), 'missing: ${want}'
+	}
 }
 
 fn test_a_connection_off_the_comm_threads_bus_is_refused() {
