@@ -206,9 +206,9 @@ The generator emits a `diag.Connection` (`comm/diag`: the `isotp.Link`, the UDS 
 buffers) into the ECU state and wires the comm loop to it — you do not write the segmentation. Two scoping facts before
 you plan around it:
 
-- **Host/sim only.** A `[target] kind = "threadx"` image rejects any `[[isotp]]` at
-  generation — the target comm thread has no ISO-TP integration yet. (The bootloader has
-  its own hand-bound transport; that does not make this recipe target-capable.)
+- **On a ThreadX target, constant DIDs only so far.** The comm thread serves the connection
+  (on its `[telemetry].bus`), but a signal-backed DID or a security gate is refused at
+  generation until the next R2 steps (docs/diagnostics.md).
 - **The generated link is a UDS endpoint, not an API.** It lives in private bridge state
   and every completed message is fed straight to the plain **UDS server** — `0x10`/`0x22`/
   `0x2E`/`0x3E` only. The firmware block transfer (`0x34`/`0x36`×N/`0x37`) is **not** in

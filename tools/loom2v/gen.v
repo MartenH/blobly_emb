@@ -2317,6 +2317,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << trace_scratch_fields(m, part)
 			glue << trace_module_globals(m)
 			glue << shell_module_globals(m)
+			glue << diag_target_globals(m)
 			glue << xcore_trace_globals(m)
 			glue << nvm_globals(m)
 			glue << nm_module_globals(m)
@@ -2731,6 +2732,10 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << trace_module_init(m)
 				glue << shell_module_init(m)
+				glue << diag_target_init(m)
+				if m.isotp_conns.len > 0 {
+					glue << '\tmut diag_txf := can.Frame{}'
+				}
 				glue << nm_shell_register(m)
 				glue << stat_shell_register(m)
 				glue << nm_module_init(m)
@@ -2742,15 +2747,23 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << '\tmut rx := can.Frame{}'
 				glue << '\tfor {'
+				// While a stream is in flight — a trace dump, a diagnostic answer — wake every tick:
+				// the Tx FIFO holds ~3 frames, so a 10-tick pace stretches a 75-frame block to
+				// ~300 ms (blowing host budgets); at 1 tick it drains in ~25 ms.
+				mut streaming := []string{}
 				if m.trace.on {
-					// While a dump stream is in flight, wake every tick: the Tx FIFO holds ~3
-					// frames, so a 10-tick pace stretches a 75-frame block to ~300 ms (blowing
-					// host budgets); at 1 tick it drains in ~25 ms.
-					glue << '\t\twait_ticks := if g_tm.is_dumping() { u32(1) } else { u32(10) }'
+					streaming << 'g_tm.is_dumping()'
+				}
+				if m.isotp_conns.len > 0 {
+					streaming << 'g_diag.link.busy()'
+				}
+				if streaming.len > 0 {
+					glue << '\t\twait_ticks := if ${streaming.join(' || ')} { u32(1) } else { u32(10) }'
 					glue << '\t\tC.comm_rx_wait(wait_ticks) // the FDCAN Rx ISR wakes us early on a new frame'
 				} else {
 					glue << '\t\tC.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame'
 				}
+				glue << diag_target_housekeep(m)
 				glue << '\t\t// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame'
 				glue << '\t\tfor ch.recv(mut rx) {'
 				for si in rx_sigs {
@@ -2769,6 +2782,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << trace_rx_arms(m, part)
 			glue << shell_rx_arms(m)
+			glue << diag_target_rx_arm(m)
 			glue << nm_rx_arms(m)
 			glue << xcore_trace_rx_arm(m)
 				// GATEWAY: forward routes whose SOURCE is the telem bus (`ch`) — raw copy +
@@ -2836,6 +2850,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				}
 				glue << trace_produce_drain(m)
 				glue << shell_produce_drain(m)
+				glue << diag_target_produce(m)
 				glue << xcore_trace_poll(m)
 				glue << xcore_produce_drain(m)
 				glue << emit_bulk_service_arm(m.bulk, m.part, '', '\t\t') // owner cross-core bulk service (poll)
@@ -3989,14 +4004,14 @@ fn main() {
 	mut msg_ioc_idx := map[int]int{} // DBC id -> its (single) rx-read signal's IOC cell
 	if comm_thread_on {
 		// LAYOUT-IDENTICAL routes forward on the target (raw copy + id remap, emitted in the
-		// comm loop below); ISO-TP and routes needing a decode/re-encode transcode are still
+		// comm loop below); routes needing a decode/re-encode transcode are still
 		// deferred. parse-time already rejects a non-identical route on a threadx node, so a
 		// route reaching here is raw_ident — the guard is defence in depth.
-		if m.isotp_conns.len > 0 || m.routes.any(!it.raw_ident) {
-			panic('loom2v: [target] kind="threadx" comm thread: ISO-TP and non-layout-identical ' +
-				'routes are not generated yet (external rx signals + raw-identical route ' +
-				'forwarding are the supported cut)')
+		if m.routes.any(!it.raw_ident) {
+			panic('loom2v: [target] kind="threadx" comm thread: non-layout-identical routes are ' +
+				'not generated yet (raw-identical route forwarding is the supported cut)')
 		}
+		validate_diag_threadx(m)
 		// Which signals FB handlers read vs write. An rx signal READ by an FB flows through the
 		// target IOC pool (6b-2b); an rx signal WRITTEN by an FB is a config error (an input isn't
 		// written). Everything else external is still deferred (rejected below).

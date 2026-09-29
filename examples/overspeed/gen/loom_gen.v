@@ -473,15 +473,8 @@ pub fn partition_can0(ch can.Channel) {
 	st.e2e_rx_brake_status.timeout_us = 300000
 	st.e2e_rx_brake_status.arm(osal.now_us()) // from start, like the COM deadline
 	st.conn_diag.init(u32(0x101), u32(0x102), u32(0x7df), 8, 0)
-	st.conn_diag.refresh = diag_refresh_diag
 	st.conn_diag.server.no_programming = true // programming is the bootloader's (handoff: R2)
-	st.conn_diag.server.serves_reset = true // housekeep performs reset_req once answered
-	st.conn_diag.server.serves_comm_control = true // and this bridge gates its frames on 0x28
-	st.conn_diag.server.single_network = true // 0x28 "all networks" = this one
 	st.conn_diag.server.s3_us = u64(2000) * 1000
-	st.conn_diag.server.security = st.sa_diag.ops(u32(osal.now_us()))
-	st.conn_diag.server.security_levels = u8(0x01)
-	st.conn_diag.server.sa_delay_us = u64(1000) * 1000
 	st.conn_diag.server.dids[0] = uds.Did{
 		id: u16(0xf190)
 	}
@@ -531,6 +524,13 @@ pub fn partition_can0(ch can.Channel) {
 	st.conn_diag.server.dids[4].data[0] = u8(0x00)
 	st.conn_diag.server.dids[4].len = 1
 	st.conn_diag.server.ndid = 5
+	st.conn_diag.refresh = diag_refresh_diag
+	st.conn_diag.server.serves_reset = true // housekeep performs reset_req once answered
+	st.conn_diag.server.serves_comm_control = true // and this bridge gates its frames on 0x28
+	st.conn_diag.server.single_network = true // 0x28 "all networks" = this one
+	st.conn_diag.server.security = st.sa_diag.ops(u32(osal.now_us()))
+	st.conn_diag.server.security_levels = u8(0x01)
+	st.conn_diag.server.sa_delay_us = u64(1000) * 1000
 	st.fmem.slots[0].dtc = u32(0x21900) // EngineOverRev
 	st.fmem.slots[0].confirm = u8(1)
 	st.fmem.slots[0].aging = u8(2)

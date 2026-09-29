@@ -520,3 +520,22 @@ context = "h735/bare-metal"
 verifies = ["REQ-TRACE-001"]
 approved_by = "Claude bench session — STM32H735G-DK vs CANsub.4 ch2 (H755 domain running)"
 date = "2026-09-26"
+
+# R2, first step: UDS on the TARGET. system_full's domain node (NUCLEO-H755ZI-Q CM7, ThreadX)
+# serves ISO 14229 over ISO-TP from its comm thread — comm/diag.Connection, the same module the
+# host bridge calls — on the ids system.toml allocates it (0x7B0/0x7B8, functional 0x7DF), driven
+# from blobly_net's headless runner through CANsub.4 ch2 with the tester rest-bus simulation
+# running. examples/system_full/test/diag_domain.lua, 7/7: tester present + extended session with
+# its P2/P2* record; constant DIDs multi-frame (18 B); a RAM DID written and read back; a DID
+# writable only in extended refused (0x31) in default and accepted in extended; S3 (5 s) returning
+# an idle extended session to default; 0x11 and 0x27 answered serviceNotSupported and 0x10 02
+# subFunctionNotSupported (nothing on the target performs a reset, holds a key or hands off to a
+# bootloader yet — refused, not faked); an unknown DID 0x31. Under load: 943 multi-frame reads
+# back to back in 3.0 s while VehSpeedFrame (0x120, 100 ms) kept 29 of 30 periods.
+[[review]]
+id = "uds-on-target-domain"
+method = "review"
+context = "h755/threadx"
+verifies = ["REQ-DIAG-001", "REQ-DIAG-003", "REQ-DIAG-004"]
+approved_by = "Claude bench session — NUCLEO-H755ZI-Q (system_full domain) vs CANsub.4 ch2"
+date = "2026-09-29"
