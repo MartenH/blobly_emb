@@ -121,6 +121,15 @@ pub fn (mut l Link) abort_tx() {
 	l.tx = .idle
 }
 
+// abort_rx abandons the reception in progress, the flow control owed for it and a completed
+// message not yet taken — for an owner that may not transmit (NM sleep): the FC would go out
+// stale later, and N_Cr cannot expire a reception whose FC was never sent.
+pub fn (mut l Link) abort_rx() {
+	l.rx = .idle
+	l.fc_send = false
+	l.ready = false
+}
+
 // idle reports that nothing is in flight in EITHER direction: no tx segmenting or awaiting flow
 // control, no multi-frame reception in progress or flow control owed, and no completed message
 // waiting to be taken. A caller that interleaves a second kind of traffic on the link (functional

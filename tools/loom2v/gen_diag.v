@@ -111,15 +111,16 @@ fn diag_target_rx_arm(m Model) []string {
 // trace and shell streams — an answer is a few frames a tester is timing, a dump is many. A frame
 // the channel refuses aborts the transfer; the tester retries. Silent in NM sleep (REQ-COM-007):
 // an answer that cannot leave is abandoned rather than held, so it neither keeps the thread on its
-// 1-tick wake nor goes out stale after the wake.
+// 1-tick wake nor goes out stale after the wake — and so is a request mid-reception, whose flow
+// control could not be sent.
 fn diag_target_produce(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
 	}
 	mut g := []string{}
 	if m.nm.on {
-		g << '\t\tif !nm_up && g_diag.link.busy() {'
-		g << '\t\t\tg_diag.abort_tx()'
+		g << '\t\tif !nm_up && !g_diag.link.idle() {'
+		g << '\t\t\tg_diag.abandon()'
 		g << '\t\t}'
 	}
 	g << '\t\tfor ${nm_gate(m)}ch.tx_ready() && g_diag.produce(t1, mut diag_txf) {'

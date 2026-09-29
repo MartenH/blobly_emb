@@ -3762,15 +3762,12 @@ fn main() {
 
 	has_routes := m.routes.len > 0
 
-	// A functional request id is matched in the bridge's rx loop next to everything else on its
-	// bus: an application frame or a module frame with the same id would ALSO be dispatched as a
-	// diagnostic request (a cyclic frame whose first byte looks like a single-frame PCI could
-	// switch sessions). Refuse the collision here.
+	// A connection's ids are matched in the owner's rx loop, and sent on, next to everything else on
+	// its bus: an application or module frame with the same id would ALSO be dispatched as a
+	// diagnostic request (a cyclic frame whose first byte looks like a single-frame PCI could switch
+	// sessions), or two producers would transmit one id. Refuse the collision here — standalone
+	// images get no syscheck.
 	for c in m.isotp_conns {
-		if c.functional_id == 0 {
-			continue
-		}
-		fid := u32(c.functional_id)
 		// only what is handled on THIS bus can collide (CAN ids are bus-local): the DBC messages
 		// its signals ride, the frames routed onto or off it, and the module frames that use it
 		mut on_bus := map[string]bool{}
@@ -3779,27 +3776,42 @@ fn main() {
 				on_bus[si.dbc_msg] = true
 			}
 		}
-		if db := candb.load_dbc_file(dbc) {
+		db := candb.load_dbc_file(dbc) or { candb.Database{} }
+		fn_trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
+		shell_bus := if m.shell.bus != '' { m.shell.bus } else { m.telem.bus }
+		mut ids := [][]string{} // [field, id]
+		ids << ['rx_id', c.rx_id.str()]
+		ids << ['tx_id', c.tx_id.str()]
+		if c.functional_id != 0 {
+			ids << ['functional_id', c.functional_id.str()]
+		}
+		for e in ids {
+			field := e[0]
+			id := u32(e[1].int())
+			what := 'loom2v: [[isotp]] "${c.name}" ${field} 0x${id.hex()} is also'
 			for msg in db.messages {
-				if on_bus[snake(msg.name)] && u32(msg.id) == fid && !msg.ext {
-					panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also DBC message "${msg.name}" on bus "${c.bus}"')
+				if on_bus[snake(msg.name)] && u32(msg.id) == id && !msg.ext {
+					panic('${what} DBC message "${msg.name}" on bus "${c.bus}"')
 				}
 			}
-		}
-		for r in m.routes {
-			// the functional id is a STANDARD frame: only a standard-width route can collide
-			if (r.from_bus == c.bus && !r.from_ext && u32(r.from_id) == fid)
-				|| (r.to_bus == c.bus && !r.to_ext && u32(r.to_id) == fid) {
-				panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a routed frame on bus "${c.bus}"')
+			for r in m.routes {
+				// the diagnostic ids are STANDARD frames: only a standard-width route can collide
+				if (r.from_bus == c.bus && !r.from_ext && u32(r.from_id) == id)
+					|| (r.to_bus == c.bus && !r.to_ext && u32(r.to_id) == id) {
+					panic('${what} a routed frame on bus "${c.bus}"')
+				}
 			}
-		}
-		if m.telem.on && m.telem.bus == c.bus && (fid == m.telem.id || (m.telem.detail_id != 0 && fid == m.telem.detail_id)) {
-			panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a [telemetry] frame id on bus "${c.bus}"')
-		}
-		fn_trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
-		if m.trace.on && fn_trace_bus == c.bus && (fid == m.trace.cmd_id || fid == m.trace.rsp_id
-			|| fid == m.trace.record_id || (m.trace.dump_fc_bound && fid == m.trace.dump_fc_id)) {
-			panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${fid.hex()} is also a [trace] endpoint id on bus "${c.bus}"')
+			if m.telem.on && m.telem.bus == c.bus && (id == m.telem.id || (m.telem.detail_id != 0 && id == m.telem.detail_id)) {
+				panic('${what} a [telemetry] frame id on bus "${c.bus}"')
+			}
+			if m.trace.on && fn_trace_bus == c.bus && (id == m.trace.cmd_id || id == m.trace.rsp_id
+				|| id == m.trace.record_id || (m.trace.dump_fc_bound && id == m.trace.dump_fc_id)) {
+				panic('${what} a [trace] endpoint id on bus "${c.bus}"')
+			}
+			if m.shell.on && !shell_on_eth(m) && shell_bus == c.bus
+				&& (id == m.shell.in_id || id == m.shell.fc_id || id == m.shell.out_id) {
+				panic('${what} a [shell] endpoint id on bus "${c.bus}"')
+			}
 		}
 	}
 

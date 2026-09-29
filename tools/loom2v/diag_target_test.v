@@ -68,7 +68,8 @@ fn test_the_comm_thread_serves_the_connection_in_order() {
 		'if g_diag.on_frame(',
 		'g_diag.serve()',
 		'nm_up := g_nm.awake()',
-		'if !nm_up && g_diag.link.busy() {',
+		'if !nm_up && !g_diag.link.idle() {',
+		'g_diag.abandon()',
 		'g_diag.produce(t1, mut diag_txf)',
 		'g_tm.produce(t1, mut trace_txf)',
 		'g_sh.produce(t1, mut shell_txf)',
@@ -115,4 +116,14 @@ interface = "vcan1"
 ')
 	assert code != 0, 'loom2v accepted a connection the comm thread does not own'
 	assert out.contains('comm thread owns only'), out
+}
+
+// the physical ids are matched and sent beside the node's other traffic, like the functional one
+fn test_a_diagnostic_id_on_another_frames_id_is_refused() {
+	code, out, _ := generate('rx', diag_conn.replace('rx_id         = 0x7B0', 'rx_id         = 0x7E0'))
+	assert code != 0, 'loom2v accepted an rx_id on the telemetry id'
+	assert out.contains('rx_id 0x7e0 is also a [telemetry] frame id'), out
+	code2, out2, _ := generate('tx', diag_conn.replace('tx_id         = 0x7B8', 'tx_id         = 0x7F1'))
+	assert code2 != 0, 'loom2v accepted a tx_id on the shell out id'
+	assert out2.contains('tx_id 0x7f1 is also a [shell] endpoint id'), out2
 }

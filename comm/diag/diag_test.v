@@ -264,3 +264,20 @@ fn test_frames_that_are_not_this_connections_are_left_alone() {
 	ff.data[0] = 0x10
 	assert c.on_frame(0, ff) == .taken
 }
+
+// an owner that may not transmit abandons both directions: a first frame received meanwhile owes a
+// flow control that must never go out late, and N_Cr cannot expire a reception it never armed
+fn test_abandon_drops_a_reception_and_its_owed_flow_control() {
+	mut c := new_conn()
+	mut ff := sf(rx, [u8(0x2E), 0x01, 0x00])
+	ff.data[0] = 0x10 // first frame of a 20-byte request
+	ff.data[1] = 20
+	assert c.on_frame(0, ff) == .taken
+	assert !c.link.idle()
+	c.abandon()
+	assert c.link.idle()
+	mut f := can.Frame{}
+	assert !c.produce(1000, mut f), 'a stale flow control went out after the abandon'
+	// the link takes the next request as new
+	assert c.on_frame(2000, sf(rx, [u8(0x3E), 0x00])) == .request
+}

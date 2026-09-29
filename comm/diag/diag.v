@@ -149,6 +149,15 @@ pub fn (mut c Connection) abort_tx() {
 	c.server.reset_req = 0
 }
 
+// abandon drops everything in flight in both directions — for an owner that may not transmit
+// (NM sleep): nothing is answered late, nothing is reassembled across the silence, and the tester
+// retries. A reset whose answer is dropped is never performed.
+pub fn (mut c Connection) abandon() {
+	c.link.abort_tx()
+	c.link.abort_rx()
+	c.server.reset_req = 0
+}
+
 // apply_answered_reset: ECUReset is two-phase — once its answer has left, the diagnostic state
 // returns to power-on.
 fn (mut c Connection) apply_answered_reset() {
