@@ -65,7 +65,7 @@ fn test_the_comm_thread_serves_the_connection_in_order() {
 		'wait_ticks := if g_tm.is_dumping() || g_diag.link.busy() {',
 		'g_diag.housekeep(',
 		'for ch.recv(mut rx) {',
-		'if g_diag.on_frame(',
+		'if g_nm.awake() && g_diag.on_frame(',
 		'g_diag.serve()',
 		'nm_up := g_nm.awake()',
 		'if !nm_up && !g_diag.link.idle() {',
@@ -126,4 +126,13 @@ fn test_a_diagnostic_id_on_another_frames_id_is_refused() {
 	code2, out2, _ := generate('tx', diag_conn.replace('tx_id         = 0x7B8', 'tx_id         = 0x7F1'))
 	assert code2 != 0, 'loom2v accepted a tx_id on the shell out id'
 	assert out2.contains('tx_id 0x7f1 is also a [shell] endpoint id'), out2
+}
+
+fn test_a_diagnostic_id_in_the_nm_range_or_wider_than_11_bits_is_refused() {
+	code, out, _ := generate('nm', diag_conn.replace('rx_id         = 0x7B0', 'rx_id         = 0x510'))
+	assert code != 0, 'loom2v accepted an rx_id in the NM peer range'
+	assert out.contains('[nm] peer range'), out
+	code2, out2, _ := generate('wide', diag_conn.replace('tx_id         = 0x7B8', 'tx_id         = 0x8100'))
+	assert code2 != 0, 'loom2v accepted a 16-bit tx_id'
+	assert out2.contains('tx_id 0x8100 must be a standard 11-bit id'), out2
 }

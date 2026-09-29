@@ -95,13 +95,15 @@ fn diag_target_housekeep(m Model) []string {
 
 // diag_target_rx_arm: the connection's share of the drain. With no 0x28 on the target a request
 // gates nothing behind it, so it is served where it completes and the drain goes on — frames the
-// gateway forwards are not held a pass for a diagnostic request.
+// gateway forwards are not held a pass for a diagnostic request. In NM sleep nothing reaches the
+// server: a request served then would change the session or a DID with no answer ever sent.
 fn diag_target_rx_arm(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
 	}
+	awake := if m.nm.on { 'g_nm.awake() && ' } else { '' }
 	return [
-		'\t\t\tif g_diag.on_frame(C.board_now_us(), &rx) == .request {',
+		'\t\t\tif ${awake}g_diag.on_frame(C.board_now_us(), &rx) == .request {',
 		'\t\t\t\tg_diag.serve()',
 		'\t\t\t}',
 	]

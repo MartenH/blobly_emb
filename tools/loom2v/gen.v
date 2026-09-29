@@ -947,6 +947,16 @@ fn parse_isotp(doc toml.Doc) []IsotpConn {
 		if c.security_delay_ms < 0 {
 			panic('loom2v: [[isotp]] "${c.name}" security_delay_ms ${c.security_delay_ms} is negative (0 = the default ${uds.default_sa_delay_us / 1000} ms)')
 		}
+		// the connection matches and sends its ids as standard frames: a wider value never matches
+		// on receive and goes out masked on transmit
+		for field, v in {
+			'rx_id': c.rx_id
+			'tx_id': c.tx_id
+		} {
+			if v < 0 || v > 0x7FF {
+				panic('loom2v: [[isotp]] "${c.name}" ${field} 0x${v.hex()} must be a standard 11-bit id (<= 0x7FF)')
+			}
+		}
 		if c.functional_id == 0 {
 			continue
 		}
@@ -3779,6 +3789,7 @@ fn main() {
 		db := candb.load_dbc_file(dbc) or { candb.Database{} }
 		fn_trace_bus := if m.trace.bus != '' { m.trace.bus } else { m.telem.bus }
 		shell_bus := if m.shell.bus != '' { m.shell.bus } else { m.telem.bus }
+		nm_bus := if m.nm.bus != '' { m.nm.bus } else { m.telem.bus }
 		mut ids := [][]string{} // [field, id]
 		ids << ['rx_id', c.rx_id.str()]
 		ids << ['tx_id', c.tx_id.str()]
@@ -3807,6 +3818,9 @@ fn main() {
 			if m.trace.on && fn_trace_bus == c.bus && (id == m.trace.cmd_id || id == m.trace.rsp_id
 				|| id == m.trace.record_id || (m.trace.dump_fc_bound && id == m.trace.dump_fc_id)) {
 				panic('${what} a [trace] endpoint id on bus "${c.bus}"')
+			}
+			if m.nm.on && nm_bus == c.bus && ((id >= m.nm.peers_lo && id <= m.nm.peers_hi) || id == m.nm.alive_id) {
+				panic('${what} in the [nm] peer range / alive id on bus "${c.bus}"')
 			}
 			if m.shell.on && !shell_on_eth(m) && shell_bus == c.bus
 				&& (id == m.shell.in_id || id == m.shell.fc_id || id == m.shell.out_id) {

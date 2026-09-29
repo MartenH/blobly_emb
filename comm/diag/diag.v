@@ -72,8 +72,16 @@ pub fn (mut c Connection) on_frame(now u64, f &can.Frame) Rx {
 		return .other
 	}
 	if f.id == c.rx_id {
+		// only the bytes that arrived: the owner may reuse one frame, so the tail of a short one
+		// holds the previous frame's bytes. A single frame claiming more than it carries, or a
+		// first frame that is not full (ISO 15765-2 requires it), is dropped.
+		n := if f.len > 8 { 8 } else { int(f.len) }
+		if n < 1 || (f.data[0] >> 4 == 0 && int(f.data[0] & 0x0F) >= n)
+			|| (f.data[0] >> 4 == 1 && n < 8) {
+			return .taken
+		}
 		mut p := isotp.Pdu{}
-		for i in 0 .. 8 {
+		for i in 0 .. n {
 			p.data[i] = f.data[i]
 		}
 		c.link.on_frame(now, p)

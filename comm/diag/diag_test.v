@@ -281,3 +281,22 @@ fn test_abandon_drops_a_reception_and_its_owed_flow_control() {
 	// the link takes the next request as new
 	assert c.on_frame(2000, sf(rx, [u8(0x3E), 0x00])) == .request
 }
+
+// a short frame's tail is whatever the owner's reused frame held last: never read as request bytes
+fn test_a_short_physical_frame_is_never_read_past_its_length() {
+	mut c := new_conn()
+	mut stale := sf(rx, [u8(0x10), 0x03])
+	stale.len = 2 // PCI claims 2 bytes, only 1 arrived: the 0x03 is a leftover
+	assert c.on_frame(0, stale) == .taken
+	assert !c.link.has_request()
+	mut short_ff := sf(rx, [u8(0x2E), 0x01, 0x00])
+	short_ff.data[0] = 0x10
+	short_ff.data[1] = 20
+	short_ff.len = 5
+	assert c.on_frame(0, short_ff) == .taken
+	assert c.link.idle()
+	// a single frame of exactly its length is a request
+	mut exact := sf(rx, [u8(0x3E), 0x00])
+	exact.len = 3
+	assert c.on_frame(0, exact) == .request
+}
