@@ -46,3 +46,21 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 		at = at + 1 + i
 	}
 }
+
+// a connection with no [[did]] names nothing from comm.uds: importing it would warn on every build
+fn test_the_uds_import_follows_the_dids() {
+	mut m := Model{
+		isotp_conns: [IsotpConn{
+			name: 'diag'
+			bus:  'can0'
+		}]
+	}
+	_, bare := emit_module_headers(m, 'ecu', false, false)
+	assert 'import comm.diag' in bare
+	assert 'import comm.uds' !in bare
+	m.dids = [DidCfg{
+		id: 0xF190
+	}]
+	_, with_dids := emit_module_headers(m, 'ecu', false, false)
+	assert 'import comm.uds' in with_dids
+}

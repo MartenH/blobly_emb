@@ -3618,7 +3618,10 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 	}
 	if m.isotp_conns.len > 0 {
 		glue << 'import comm.diag' // the diagnostic server on its ISO-TP connection
-		glue << 'import comm.uds' // UDS diagnostic services
+		// the glue names uds only for [[did]]s — their tables, the live refresh, 0x27 (a DID gate)
+		if m.dids.len > 0 {
+			glue << 'import comm.uds' // UDS diagnostic services
+		}
 	}
 	return ports, glue
 }
