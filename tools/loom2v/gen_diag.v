@@ -171,8 +171,15 @@ fn diag_target_reset(m Model, ioc_idx map[string]int) []string {
 	]
 	if nvm_on(m) {
 		// an orderly shutdown, as a sleep edge is: every persisted value durable and the journal
-		// marked clean — a tester's reset must not cost calibration the way a power cut would
+		// marked clean — a tester's reset must not cost calibration the way a power cut would. A
+		// flush or marker that fails holds the reset and retries on the following passes; past the
+		// bound the reset goes ahead (its answer promised one), leaving the journal exactly as a
+		// power cut would — which it is built to survive.
 		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t')
+		g << '\t\t\tif !nvm_flush_ok && diag_reset_tries < 20 {'
+		g << '\t\t\t\tdiag_reset_tries++'
+		g << '\t\t\t\tcontinue'
+		g << '\t\t\t}'
 	}
 	if security_levels(m.dids) != 0 {
 		g << '\t\t\tdiag_keep_now := g_diag.server.kept_security()'
@@ -217,6 +224,9 @@ fn diag_target_init(m Model) []string {
 	mut g := conn_init_lines(m, m.isotp_conns[0], 'g_diag')
 	g << '\tg_diag.server.serves_reset = true'
 	g << '\tg_diag.owner_resets = true // the comm thread restarts the MCU (diag_target_reset)'
+	if nvm_on(m) {
+		g << '\tmut diag_reset_tries := 0 // passes a failed NvM flush has held a due reset'
+	}
 	if m.dids.any(it.signal != '') {
 		g << '\tg_diag.refresh = diag_refresh_${snake(m.isotp_conns[0].name)}'
 	}

@@ -584,8 +584,9 @@ fn nvm_flush_choreo(m Model, ioc_idx map[string]int, ind string) []string {
 	g << '${ind}\tg_nvm.erase_pending()'
 	g << '${ind}}'
 	g << '${ind}if nvm_flush_ok {'
-	g << '${ind}\tg_nvm.mark_clean() // clean ONLY when every value is durable (a failed'
-	g << '${ind}\t// mark stays unclean: retried on the next in-sleep write or edge)'
+	g << '${ind}\t// clean ONLY when every value is durable (a failed mark stays unclean: retried on'
+	g << '${ind}\t// the next in-sleep write or edge); nvm_flush_ok then says values AND marker'
+	g << '${ind}\tnvm_flush_ok = g_nvm.mark_clean()'
 	g << '${ind}}'
 	g << '${ind}g_nvm.erase_pending() // cleanup AFTER values + marker are durable'
 	return g
