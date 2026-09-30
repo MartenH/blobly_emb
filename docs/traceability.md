@@ -63,7 +63,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-008 | QM | test | covered | diag.lua (pending), uds-on-target-reset (approved), uds_test.v (pass) |
 | REQ-DIAG-009 | QM | test | verified | fault_test.v (pass) |
 | REQ-DIAG-010 | QM | test | verified | fault_test.v (pass) |
-| REQ-DIAG-011 | QM | test | covered | faults.lua (pending) |
+| REQ-DIAG-011 | QM | test | covered | faults.lua (pending), net_faults.lua (pending) |
 | REQ-E2E-001 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-002 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-003 | B | test | verified | e2e_test.v (pass) |

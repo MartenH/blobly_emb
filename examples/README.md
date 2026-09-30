@@ -30,7 +30,11 @@ brings up both. Such an example opens each bus by its `[bus.*] interface` and
 `make test` runs the built app on `vcan0` (the app *is* the ECU — the blobly_net
 project has no simulation) and runs every `test/*.lua` against it; it exits
 non-zero if any assertion fails. Each example provides `test/vcan.yml` (the
-blobly_net project pointing at `vcan0` + `bus.dbc`) and `test/<name>.lua`, e.g.:
+blobly_net project pointing at `vcan0` + `bus.dbc`) and `test/<name>.lua`. A script that
+needs blobly_net to SIMULATE a peer declares its own project in its leading comment
+(`-- @project netsim.blobnet`) and runs against that one, in a run of its own — never put a
+simulated peer into `vcan.yml`, which the other scripts assume is silent (overspeed's
+`net_faults.lua` is the example). E.g.:
 
 ```lua
 bus.send_message("CAN1", "Powertrain", { VehicleSpeed = 150 })  -- DBC-encode + send

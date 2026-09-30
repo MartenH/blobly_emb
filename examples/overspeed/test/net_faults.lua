@@ -1,4 +1,7 @@
 -- @project netsim.blobnet
+-- @verifies REQ-DIAG-011
+-- (REQ-E2E-001/002 are verified by comm/e2e's unit tests; a bench-run suite tagged here would
+--  read as pending and demote them — this is their on-bus evidence across two implementations.)
 -- The brake faults, driven by blobly_net: ChassisECU is SIMULATED by blobly_net and its
 -- BrakeStatus stamped with AUTOSAR E2E Profile 1 (netsim.blobnet), which the overspeed app
 -- checks with its own Profile 1 — two implementations, one profile. Each fault is blobly_net's
@@ -41,11 +44,11 @@ end)
 test("net sim: a corrupt CRC is an integrity fault, confirmed and then passing again", function()
   local d = diag()
   clean(d)
-  fault("bad_crc", 150) -- shorter than E2E's 300 ms timeout (see the next test)
-  hold(100)
-  check.dtc(d, "U0418-00", { testFailed = true, confirmedDTC = true, testFailedThisOperationCycle = true })
-  hold(400) -- the injection has ended: good frames again
-  check.dtc(d, "U0418-00", { testFailed = false, confirmedDTC = true })
+  -- two corrupt frames: the gap between VALID frames stays ~100 ms inside E2E's 300 ms timeout
+  -- (see the next test), and the status is read once good frames are back rather than raced
+  fault("bad_crc", 100)
+  hold(400)
+  check.dtc(d, "U0418-00", { testFailed = false, confirmedDTC = true, testFailedThisOperationCycle = true })
   check.dtc(d, "U0121-00", { confirmedDTC = false })
 end)
 
@@ -64,7 +67,7 @@ end)
 test("net sim: a short silence is a counter gap, not a timeout", function()
   local d = diag()
   clean(d)
-  fault("drop", 120) -- two or three frames
+  fault("drop", 80) -- one or two frames: a gap well inside E2E's 300 ms timeout
   hold(300)
   check.dtc(d, "U0418-01", { confirmedDTC = true })
   check.dtc(d, "U0121-00", { confirmedDTC = false })
