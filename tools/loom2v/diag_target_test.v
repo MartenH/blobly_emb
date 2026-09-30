@@ -252,15 +252,18 @@ fn test_the_reset_flushes_the_journal_first() {
 	assert src.contains('[nvm]'), 'h755_threadx lost its [nvm] — update this test'
 	ex := os.join_path(@VMODROOT, 'examples', 'h755_threadx')
 	tmp := os.join_path(os.temp_dir(), 'diag_target_nvm_${os.getpid()}')
-	os.mkdir_all(tmp) or { panic(err) }
+	// the ecu.toml goes into a SCRATCH sibling layout, not the example's own directory: its
+	// cross-core partition's `image = "../h755_m4_app"` resolves against the file, and resolved
+	// against the real example it regenerated the real examples/h755_m4_app's tracked files
+	// with this test's temporary name and path in their headers (#320)
+	scratch_ex := os.join_path(tmp, 'h755_threadx')
+	os.mkdir_all(scratch_ex) or { panic(err) }
+	os.mkdir_all(os.join_path(tmp, 'h755_m4_app')) or { panic(err) }
 	defer {
 		os.rmdir_all(tmp) or {}
 	}
-	ecu := os.join_path(ex, 'ecu_diag_nvm_${os.getpid()}.toml')
+	ecu := os.join_path(scratch_ex, 'ecu.toml')
 	os.write_file(ecu, src + diag_conn) or { panic(err) }
-	defer {
-		os.rm(ecu) or {}
-	}
 	glue := os.join_path(tmp, 'gen.v')
 	r := os.execute('${loom2v_bin()} ${ecu} ${os.join_path(ex, 'bus.dbc')} ${os.join_path(tmp,
 		'sig.v')} ${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
