@@ -68,6 +68,12 @@ jobs:
         run: |
           v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot
 
+      # a test that writes into the tracked tree regenerates real files with its own temp names
+      - name: Unit tests leave the tree clean
+        run: |
+          git status --porcelain
+          test -z "$(git status --porcelain)"
+
       # The review watcher is a real tool, not a shell fragment: it must page every channel,
       # match a verdict by the reviewed SHA, and preserve gh API failures instead of reporting
       # "nothing waiting" — the three failure modes that each lost a review here. The fixtures
