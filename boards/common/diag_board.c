@@ -47,9 +47,23 @@ int diag_sa_init(void) {
 }
 
 /* the reference manual's recovery: clear the interrupt flags, restart the generator; the samples
- * of the failed period are discarded with it */
+ * of the failed period are discarded with it. The H72x/H73x and H7Ax/H7Bx RNG (DEV_ID 0x483,
+ * 0x480) restarts through CONDRST — toggling RNGEN leaves SECS set there, so one transient seed
+ * error answered every later 0x27 with "no seed" until the next reset (measured on an H723). The
+ * H74x/H75x RNG has no CONDRST (reserved bit) and restarts through RNGEN. */
+#define DBGMCU_IDCODE_R (*(volatile uint32_t *)0x5C001000u)
+#define RNG_CR_CONDRST  (1u << 30)
+
 static void sa_rng_recover(void) {
 	RNG_SR_R = 0;
+	uint32_t dev = DBGMCU_IDCODE_R & 0xFFFu;
+	if (dev == 0x483u || dev == 0x480u) {
+		RNG_CR_R |= RNG_CR_CONDRST;
+		RNG_CR_R &= ~RNG_CR_CONDRST;
+		for (uint32_t t = 0; (RNG_CR_R & RNG_CR_CONDRST) && t < 200000u; t++) {
+		}
+		return;
+	}
 	RNG_CR_R &= ~RNG_CR_RNGEN;
 	RNG_CR_R |= RNG_CR_RNGEN;
 }

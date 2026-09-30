@@ -7,7 +7,8 @@
 #                             which THIS TOOL simulates on the bench
 #   zone_a  (NUCLEO-H723ZG) — produces SteeringAngle on the edge bus (CAN-FD, 500k/2M)
 #
-# blobly_net LISTENS on edge (monitor) but is a MEMBER on compute: it restbus-simulates the
+# blobly_net is a MEMBER on both buses: on edge only as a diagnostic tester (zone_a, 0x7C0/0x7C8);
+# on compute it also restbus-simulates the
 # tester node there (mode normal — it TRANSMITS HostLedFrame 0x127, see `simulation:` below) and
 # decodes each bus with its DBC, so you can SEE the gateway forward: the same value appears
 # on the other bus under a new id.
@@ -85,7 +86,7 @@ buses:
     protocol: canfd          # edge runs CAN-FD: 500 kbit arbitration, 2 Mbit data phase (BRS)
     bitrate: 500000
     data_bitrate: 2000000
-    mode: monitor
+    mode: normal             # a tester on edge too: UDS to zone_a (0x7C0/0x7C8) transmits here
     enabled: true
     databases:
       - edge.dbc               # resolved against this .blobnet's own dir (blobly_net resolve_asset)
