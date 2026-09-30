@@ -2,7 +2,6 @@
 -- byte0 WarnLamp, byte1 CRC, byte2 counter). The CRC is recomputed by blobly_net's own AUTOSAR E2E
 -- Profile 1 (e2e.p01_crc, pinned to an independent implementation) and the counter must advance.
 
-
 test("E2E: LampFrame carries a valid CRC + advancing alive counter", function()
   for _ = 1, 20 do bus.send_message("CAN1", "Powertrain", { VehicleSpeed = 150 }); sleep_ms(10) end
   local frames, tries = {}, 80
@@ -14,7 +13,7 @@ test("E2E: LampFrame carries a valid CRC + advancing alive counter", function()
   check.truthy(#frames >= 3, "received E2E lamp frames, got " .. #frames)
   -- every frame's CRC (byte1) matches an independent recompute
   for _, d in ipairs(frames) do
-    check.equal(string.byte(d, 2), e2e.p01_crc(d, 0x10, 1, 2))
+    check.equal(string.byte(d, 2), e2e.p01_crc(d:sub(1, 3), 0x10, 1, 2))
   end
   -- the alive counter (low nibble of byte2) advances frame-to-frame
   for i = 2, #frames do

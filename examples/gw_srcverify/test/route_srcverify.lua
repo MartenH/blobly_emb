@@ -5,12 +5,11 @@
 -- CAN1 = vcan0 (inject SrcFrame), CAN2 = vcan1 (read DstFrame).
 -- @verifies REQ-TOPO-008
 
-
 -- an 8-byte SrcFrame carrying `speed_raw` (bit0, x0.1) with a valid E2E trailer
 -- (data_id 0x33, CRC byte6, counter low-nibble byte7); `corrupt` flips the CRC.
 local function mkframe(speed_raw, ctr, corrupt)
   local f = e2e.p01_protect(string.char(speed_raw & 0xFF, (speed_raw >> 8) & 0xFF, 0, 0, 0, 0, 0, 0),
-    0x33, 6, 7, ctr)
+    0x33, 6, 7, ctr % 15)
   if corrupt then -- break the CRC -> the source E2E check fails
     f = f:sub(1, 6) .. string.char(string.byte(f, 7) ~ 0xFF) .. f:sub(8)
   end

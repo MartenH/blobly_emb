@@ -7,8 +7,6 @@
 -- CAN1 = vcan0 (inject source), CAN2 = vcan1 (read protected dest).
 -- @verifies REQ-TOPO-008
 
--- ---- E2E: recomputed by blobly_net's AUTOSAR E2E Profile 1 (e2e.p01_crc) ----
-
 -- ---- SecOC: AES-128 + CMAC (RFC 4493), pure Lua, to independently verify the MAC ----
 local SBOX = (function()
   local h = "637c777bf26b6fc53001672bfed7ab76ca82c97dfa5947f0add4a2af9ca472c0" ..
@@ -125,7 +123,7 @@ test("routed DstFrame carries the re-encoded value + a valid, fresh E2E trailer"
   check.equal(string.byte(frames[1], 2), 0x0A) -- Speed raw 10 at bit8
   check.equal(string.byte(frames[1], 3), 0x00)
   for _, d in ipairs(frames) do -- CRC (byte7, crc_pos=6) matches an independent recompute
-    check.equal(string.byte(d, 7), e2e.p01_crc(d, 0x2A, 6, 7))
+    check.equal(string.byte(d, 7), e2e.p01_crc(d:sub(1, 8), 0x2A, 6, 7))
   end
   -- the alive counter (low nibble of byte8, counter_pos=7) advances by EXACTLY ONE per
   -- frame — a delta > 1 is what e2e.RxState.check reports as a lost frame.

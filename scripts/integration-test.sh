@@ -16,6 +16,11 @@ IFACE="${IFACE:-vcan0}"
 : "${BLOBLY_NET:?set BLOBLY_NET=/path/to/blobly_net (https://github.com/MartenH/blobly_net)}"
 
 [ -x "$EX/bin/app" ] || { echo "build the example first (make all in $EX)"; exit 1; }
+# The suites stamp and check E2E with blobly_net's AUTOSAR Profile 1 helpers (e2e.p01_protect,
+# MartenH/blobly_net#374): an older checkout fails every E2E test with a nil global, which reads as
+# a firmware regression. Say what it is instead.
+grep -q 'function e2e.p01_protect' "$BLOBLY_NET/modules/script/prelude.v" 2>/dev/null || {
+    echo "BLOBLY_NET=$BLOBLY_NET predates blobly_net#374 (e2e.p01_protect): update it"; exit 1; }
 ip link show "$IFACE" >/dev/null 2>&1 || { echo "bring up $IFACE: sudo make vcan"; exit 1; }
 
 # Run the example ECU in the background; always clean it up.

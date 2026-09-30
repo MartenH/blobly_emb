@@ -7,7 +7,6 @@
 -- @verifies REQ-COM-008
 local OK, TIMEOUT, INTEGRITY = 1, 2, 3
 
-
 local ctr = 0
 -- the next BrakeStatus in sequence; `skip` frames are left out first (a gap), `corrupt` breaks the CRC.
 -- Stamped with blobly_net's AUTOSAR E2E Profile 1 (e2e.p01_protect), the profile the app checks.
