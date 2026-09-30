@@ -130,25 +130,13 @@ end)
 
 -- Signal-status faults on BrakePressure (frame 0x301, E2E: data_id 0x44, CRC byte 4, counter low
 -- nibble of byte 5, its own 300 ms timeout) — raised by the bridge, no FB code.
-local function crc8(bytes)
-  local crc = 0x00 -- AUTOSAR E2E Profile 1: start 0x00, no final XOR
-  for _, b in ipairs(bytes) do
-    crc = crc ~ b
-    for _ = 1, 8 do
-      if crc & 0x80 ~= 0 then crc = ((crc << 1) ~ 0x1D) & 0xFF else crc = (crc << 1) & 0xFF end
-    end
-  end
-  return crc
-end
+-- stamped with blobly_net's AUTOSAR E2E Profile 1 (e2e.p01_protect), the same profile the app checks
 local ctr = 0
 local function brake(skip, corrupt)
   ctr = (ctr + 1 + (skip or 0)) % 15 -- Profile 1 counts 0..14
-  local d = { 0xE8, 0x03, 0, 0, 0, ctr }
-  local b = { 0x44, 0x00 }
-  for i = 0, 5 do if i ~= 4 then b[#b + 1] = d[i + 1] end end
-  d[5] = crc8(b)
-  if corrupt then d[5] = d[5] ~ 0xFF end
-  bus.send("CAN1", 0x301, string.char(table.unpack(d)))
+  local f = e2e.p01_protect(fromhex("E8 03 00 00 00 00"), 0x44, 4, 5, ctr)
+  if corrupt then f = f:sub(1, 4) .. string.char(string.byte(f, 5) ~ 0xFF) .. f:sub(6) end
+  bus.send("CAN1", 0x301, f)
 end
 local function brakes(n) for _ = 1, n do brake(); ign_frame(); sleep_ms(10) end; sleep_ms(30) end
 -- the status byte of `dtc` (3-byte hex string) from 0x19 0A

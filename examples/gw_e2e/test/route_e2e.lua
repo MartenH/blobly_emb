@@ -7,25 +7,6 @@
 -- CAN1 = vcan0 (inject source), CAN2 = vcan1 (read protected dest).
 -- @verifies REQ-TOPO-008
 
--- ---- E2E: AUTOSAR Profile 1 CRC-8 (poly 0x1D, start 0x00, no final XOR) ----
-local function crc8(bytes)
-  local crc = 0x00 -- AUTOSAR E2E Profile 1: start 0x00, no final XOR
-  for _, b in ipairs(bytes) do
-    crc = crc ~ b
-    for _ = 1, 8 do
-      if crc & 0x80 ~= 0 then crc = ((crc << 1) ~ 0x1D) & 0xFF else crc = (crc << 1) & 0xFF end
-    end
-  end
-  return crc
-end
-local function expected_crc(data, data_id, dlc, crc_pos) -- over data_id (lo,hi) + bytes except crc_pos
-  local b = { data_id & 0xFF, (data_id >> 8) & 0xFF }
-  for i = 0, dlc - 1 do
-    if i ~= crc_pos then b[#b + 1] = string.byte(data, i + 1) end
-  end
-  return crc8(b)
-end
-
 -- ---- SecOC: AES-128 + CMAC (RFC 4493), pure Lua, to independently verify the MAC ----
 local SBOX = (function()
   local h = "637c777bf26b6fc53001672bfed7ab76ca82c97dfa5947f0add4a2af9ca472c0" ..
@@ -142,7 +123,7 @@ test("routed DstFrame carries the re-encoded value + a valid, fresh E2E trailer"
   check.equal(string.byte(frames[1], 2), 0x0A) -- Speed raw 10 at bit8
   check.equal(string.byte(frames[1], 3), 0x00)
   for _, d in ipairs(frames) do -- CRC (byte7, crc_pos=6) matches an independent recompute
-    check.equal(string.byte(d, 7), expected_crc(d, 0x2A, 8, 6))
+    check.equal(string.byte(d, 7), e2e.p01_crc(d:sub(1, 8), 0x2A, 6, 7))
   end
   -- the alive counter (low nibble of byte8, counter_pos=7) advances by EXACTLY ONE per
   -- frame — a delta > 1 is what e2e.RxState.check reports as a lost frame.

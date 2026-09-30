@@ -83,7 +83,7 @@ lock-free, no-alloc — and skips the rest.
   stamp/check on a `[[frame]]` at the COM boundary, **independent of the transport**
   (it works on the raw frame bytes, over last-value *or* queued — it is *not* the
   same thing as the SPSC ring). `examples/overspeed` protects its `LampFrame`; the
-  test recomputes the CRC independently and checks the counter advances.
+  test recomputes the CRC with blobly_net's AUTOSAR Profile 1 (`e2e.p01_crc`, pinned to an independent implementation) and checks the counter advances.
 - **SecOC.** ✅ **done.** E2E's *security* sibling: same wrap-on-tx / check-on-rx
   shape, but the unkeyed CRC becomes a **keyed AES-128 CMAC** and the counter
   becomes a **freshness value** (anti-replay). E2E stops *nature* (random faults,

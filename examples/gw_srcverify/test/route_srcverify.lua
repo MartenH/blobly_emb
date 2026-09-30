@@ -1,30 +1,19 @@
 -- SOURCE verify: SrcFrame (0x100) is E2E-protected; the route decodes Speed only when
 -- the source's E2E check passes, then re-encodes it into DstFrame (0x200). A tampered
 -- source (bad CRC) is rejected, so its value never reaches the wire. We construct the
--- E2E frames here (AUTOSAR E2E Profile 1, as the gateway verifies).
+-- E2E frames here with blobly_net's AUTOSAR E2E Profile 1 (e2e.p01_protect), as the gateway verifies.
 -- CAN1 = vcan0 (inject SrcFrame), CAN2 = vcan1 (read DstFrame).
 -- @verifies REQ-TOPO-008
-
-local function crc8(bytes)
-  local crc = 0x00 -- AUTOSAR E2E Profile 1: start 0x00, no final XOR
-  for _, b in ipairs(bytes) do
-    crc = crc ~ b
-    for _ = 1, 8 do
-      if crc & 0x80 ~= 0 then crc = ((crc << 1) ~ 0x1D) & 0xFF else crc = (crc << 1) & 0xFF end
-    end
-  end
-  return crc
-end
 
 -- an 8-byte SrcFrame carrying `speed_raw` (bit0, x0.1) with a valid E2E trailer
 -- (data_id 0x33, CRC byte6, counter low-nibble byte7); `corrupt` flips the CRC.
 local function mkframe(speed_raw, ctr, corrupt)
-  local d = { speed_raw & 0xFF, (speed_raw >> 8) & 0xFF, 0, 0, 0, 0, 0, ctr & 0x0F }
-  local b = { 0x33, 0x00 } -- CRC over data_id (lo, hi) + every byte except crc_pos (6)
-  for i = 0, 7 do if i ~= 6 then b[#b + 1] = d[i + 1] end end
-  d[7] = crc8(b)
-  if corrupt then d[7] = d[7] ~ 0xFF end -- break the CRC -> the source E2E check fails
-  return string.char(table.unpack(d))
+  local f = e2e.p01_protect(string.char(speed_raw & 0xFF, (speed_raw >> 8) & 0xFF, 0, 0, 0, 0, 0, 0),
+    0x33, 6, 7, ctr % 15)
+  if corrupt then -- break the CRC -> the source E2E check fails
+    f = f:sub(1, 6) .. string.char(string.byte(f, 7) ~ 0xFF) .. f:sub(8)
+  end
+  return f
 end
 
 test("valid E2E source is verified, then routed to DstFrame", function()
