@@ -129,7 +129,7 @@ fn security_init_lines(m Model, c IsotpConn, srv string, ops string) []string {
 	return g
 }
 
-// diag_target_sa_fns: the target's 0x27 seam (boards/common/diag_sa.c). The seed is the board's
+// diag_target_sa_fns: the target's 0x27 seam (boards/common/diag_board.c). The seed is the board's
 // TRNG (weak, replaceable); the key check is the OEM's `diag_sa_key_ok`, which has NO default —
 // a node that gates a DID and forgets it fails to link, naming the symbol — unless the connection
 // opts into blobly_net's public reference key by name, which is then V's own (comm/uds).
@@ -157,6 +157,52 @@ fn diag_target_sa_fns(m Model) []string {
 	return g
 }
 
+// diag_target_reset: an answered ECUReset, performed — once the answer is not only out of the link
+// but on the wire (the controller's Tx FIFO empty, bounded so a dead bus cannot hold the reset
+// off: REQ-BOOT-012), with the 0x27 failed-key counts kept across it.
+fn diag_target_reset(m Model, ioc_idx map[string]int) []string {
+	if m.isotp_conns.len == 0 {
+		return []string{}
+	}
+	mut g := [
+		'\t\tif g_diag.reset_due() != 0 {',
+		'\t\t\tdiag_t0 := C.board_now_us()',
+		'\t\t\tfor !ch.tx_idle() && C.board_now_us() - diag_t0 < 20000 {}',
+	]
+	if nvm_on(m) {
+		// an orderly shutdown, as a sleep edge is: every persisted value durable and the journal
+		// marked clean — a tester's reset must not cost calibration the way a power cut would. A
+		// flush or marker that fails holds the reset and retries on the following passes; past the
+		// bound the reset goes ahead (its answer promised one), leaving the journal exactly as a
+		// power cut would — which it is built to survive.
+		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t')
+		g << '\t\t\tif !nvm_flush_ok && diag_reset_tries < 20 {'
+		g << '\t\t\t\tdiag_reset_tries++'
+		g << '\t\t\t\tcontinue'
+		g << '\t\t\t}'
+	}
+	if security_levels(m.dids) != 0 {
+		g << '\t\t\tdiag_keep_now := g_diag.server.kept_security()'
+		g << '\t\t\tC.diag_keep_save(&diag_keep_now[0], uds.kept_len)'
+	}
+	g << '\t\t\tC.diag_sys_reset()'
+	g << '\t\t}'
+	return g
+}
+
+// diag_target_c_decls: the board's reset and keep cell (boards/common/diag_board.c).
+fn diag_target_c_decls(m Model) []string {
+	if m.isotp_conns.len == 0 {
+		return []string{}
+	}
+	mut g := ['', 'fn C.diag_sys_reset()']
+	if security_levels(m.dids) != 0 {
+		g << 'fn C.diag_keep_save(&u8, int)'
+		g << 'fn C.diag_keep_load(&u8, int) int'
+	}
+	return g
+}
+
 // diag_target_globals: the connection lives in __global (its link and buffers are ~2 KB — too
 // much for the comm thread's stack), bss-zero until diag_target_init.
 fn diag_target_globals(m Model) []string {
@@ -166,13 +212,21 @@ fn diag_target_globals(m Model) []string {
 	return ['\tg_diag diag.Connection // the diagnostic server on its ISO-TP connection (bss)']
 }
 
-// diag_target_init: configured before the loop. ECUReset and CommunicationControl stay
-// unserved (serviceNotSupported): nothing on the target performs a reset or gates its frames yet.
+// diag_target_init: configured before the loop. ECUReset is served and performed by the comm
+// thread (diag_target_reset); CommunicationControl stays unserved (serviceNotSupported): nothing on
+// the target gates its frames on it yet. The 0x27 failed-key counts a previous ECUReset kept are
+// restored, and a non-zero count arms the lockout delay from boot — a reset between guesses buys
+// nothing.
 fn diag_target_init(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
 	}
 	mut g := conn_init_lines(m, m.isotp_conns[0], 'g_diag')
+	g << '\tg_diag.server.serves_reset = true'
+	g << '\tg_diag.owner_resets = true // the comm thread restarts the MCU (diag_target_reset)'
+	if nvm_on(m) {
+		g << '\tmut diag_reset_tries := 0 // passes a failed NvM flush has held a due reset'
+	}
 	if m.dids.any(it.signal != '') {
 		g << '\tg_diag.refresh = diag_refresh_${snake(m.isotp_conns[0].name)}'
 	}
@@ -182,6 +236,10 @@ fn diag_target_init(m Model) []string {
 		// the RNG's clock is set up here, once, before the loop — never inside a request
 		g << '\tC.diag_sa_init() // 0 = no RNG: every seed request is then refused'
 		g << security_init_lines(m, c, 'g_diag.server', 'uds.SecurityOps{\n\t\tseed:   diag_sa_seed_v\n\t\tkey_ok: ${key}\n\t}')
+		g << '\tmut diag_kept := [uds.kept_len]u8{}'
+		g << '\tif C.diag_keep_load(&diag_kept[0], uds.kept_len) != 0 {'
+		g << '\t\tg_diag.server.restore_security(diag_kept) // a lockout or a count runs on from boot'
+		g << '\t}'
 	}
 	g << '\tmut diag_txf := can.Frame{}'
 	return g

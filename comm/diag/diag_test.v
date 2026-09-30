@@ -318,3 +318,42 @@ fn test_a_short_physical_frame_is_never_read_past_its_length() {
 	exact.len = 3
 	assert c.on_frame(0, exact) == .request
 }
+
+// an owner that resets itself is told when the answer has left the link, and the diagnostic state
+// is left alone until it does — its reset restarts everything
+fn test_an_owner_that_resets_is_told_when_the_answer_has_left() {
+	mut c := new_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	mut t := new_tester()
+	mut now := u64(0)
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	c.on_frame(now, sf(rx, [u8(0x11), 0x01]))
+	c.serve()
+	assert c.reset_due() == 0 // the answer is still in the link
+	mut f := can.Frame{}
+	assert c.produce(now, mut f)
+	assert c.reset_due() == 0x01
+	c.housekeep(now)
+	assert c.server.session == uds.session_extended // not applied here: the owner resets
+	// a suppressed functional reset is due at once, and not applied here either
+	mut d := new_conn()
+	d.server.serves_reset = true
+	d.owner_resets = true
+	assert d.on_frame(0, sf(fid, [u8(0x11), 0x81])) == .served
+	assert d.reset_due() == 0x01
+}
+
+// once a reset is due nothing more is served: the owner is about to restart, and an answer given
+// now would describe state the restart discards
+fn test_nothing_is_served_once_a_reset_is_due() {
+	mut c := new_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	assert c.on_frame(0, sf(fid, [u8(0x11), 0x81])) == .served // suppressed: due at once
+	assert c.reset_due() == 0x01
+	assert c.on_frame(0, sf(rx, [u8(0x2E), 0x01, 0x00, 0x05])) == .request
+	c.serve()
+	mut f := can.Frame{}
+	assert !c.produce(0, mut f), 'a request was answered while a reset was due'
+}

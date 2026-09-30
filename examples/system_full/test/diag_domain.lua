@@ -6,7 +6,7 @@
 --   BLOBLY_NET=/path/to/blobly_net; v -enable-globals -path "@vlib|@vmodules|$BLOBLY_NET/modules" \
 --     run $BLOBLY_NET/cmd/script/run.v examples/system_full/test/diag_domain.lua
 -- Recorded in requirements/verifications.toml (uds-on-target-domain, uds-on-target-live-did,
--- uds-on-target-security), not
+-- uds-on-target-security, uds-on-target-reset), not
 -- tagged here: a bench
 -- script never runs in trace-check, so a tag would only ever read pending.
 
@@ -92,12 +92,11 @@ end)
 
 test("domain: what the target does not serve is refused, not faked", function()
   local d = diag()
-  check.nrc(0x11, function() d:raw("\x11\x01") end) -- no reset performed on the target yet
   check.nrc(0x12, function() d:session(0x02) end)   -- programming: the bootloader handoff
   check.nrc(0x31, function() d:read_did(0xABCD) end)
 end)
 
--- 0x27 through the board's key seam (boards/common/diag_sa.c): a TRNG seed, the reference key
+-- 0x27 through the board's key seam (boards/common/diag_board.c): a TRNG seed, the reference key
 test("domain: 0x27 unlocks a gated DID", function()
   local d = diag()
   check.nrc(0x7F, function() d:raw("\x27\x01") end) -- not a default-session service
@@ -107,7 +106,11 @@ test("domain: 0x27 unlocks a gated DID", function()
   local s2 = d:raw("\x27\x01"):sub(3)
   check.equal(#s1, 4)
   check.truthy(s1 ~= s2, "two seeds differ: " .. tohex(s1) .. " / " .. tohex(s2))
-  d:security_access(0x01) -- seed, then key = seed XOR 0xFF
+  -- one key per seed: a second key without a new seed is out of sequence
+  local seed = d:raw("\x27\x01"):sub(3)
+  check.nrc(0x35, function() d:raw("\x27\x02" .. seed) end) -- the seed is not its own key
+  check.nrc(0x24, function() d:raw("\x27\x02" .. seed) end) -- and that seed is spent
+  d:security_access(0x01) -- seed, then key = seed XOR 0xFF (a good key clears the count)
   d:write_did(0x0102, "\x11")
   check.equal(tohex(d:read_did(0x0102)), "11")
   d:session(0x01) -- relocks
@@ -128,6 +131,69 @@ test("domain: wrong keys lock 0x27 out for the delay", function()
   sleep_ms(3200)
   d:tester_present()
   d:security_access(0x01) -- and after it, the right key unlocks
+  d:session(0x01)
+end)
+
+-- a functional 0x27 is ignored: a broadcast key would spend a guess on every ECU
+test("domain: a functional 0x27 is ignored", function()
+  local d = diag()
+  d:session(0x03)
+  while bus.recv("compute", 0) do end
+  bus.send("compute", 0x7DF, "\x02\x27\x01\x00\x00\x00\x00\x00")
+  local answered = pcall(function() expect("compute", 0x7B8, 300) end)
+  check.truthy(not answered, "a functional 0x27 was answered")
+  d:tester_present() -- the physical connection is untouched
+  d:session(0x01)
+end)
+
+-- 0x11 answered, THEN the node restarts: a RAM DID written before it is back at its initial value
+-- (RAM re-initialised — a real restart, not a diagnostic-state reset) and the session is default
+test("domain: ECUReset is answered, then the node restarts", function()
+  local d = diag()
+  d:write_did(0x0100, "\x12\x34\x56\x78")
+  d:session(0x03)
+  check.equal(tohex(d:raw("\x11\x01")), "51 01") -- the answer arrives before the reset
+  sleep_ms(2000)
+  check.equal(tohex(d:read_did(0x0100)), "00 00 00 00")
+  check.nrc(0x31, function() d:write_did(0x0101, "\x01") end) -- the default session again
+end)
+
+-- the failed-key count survives the node's own reset (the keep cell, boards/common/diag_board.c):
+-- a reset between guesses buys nothing
+test("domain: wrong keys are still counted after a reset", function()
+  local d = diag()
+  d:session(0x03)
+  local wrong = function(seed) return seed end
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end)
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end)
+  d:raw("\x11\x01")
+  sleep_ms(2000)
+  d:session(0x03)
+  check.nrc(0x37, function() d:raw("\x27\x01") end) -- the kept count armed the delay from boot
+  sleep_ms(3200)
+  d:tester_present()
+  check.nrc(0x36, function() d:security_access(0x01, wrong) end) -- the THIRD wrong key, not a first
+  sleep_ms(3200)
+  d:tester_present()
+  d:security_access(0x01) -- and the right key after the delay
+  d:session(0x01)
+end)
+
+-- nor does a reset DURING a lockout: the lockout is kept (its count already zeroed), and runs on
+test("domain: a lockout runs on through a reset", function()
+  local d = diag()
+  d:session(0x03)
+  local wrong = function(seed) return seed end
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end)
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end)
+  check.nrc(0x36, function() d:security_access(0x01, wrong) end) -- the lockout starts
+  d:raw("\x11\x01")
+  sleep_ms(2000)
+  d:session(0x03)
+  check.nrc(0x37, function() d:raw("\x27\x01") end) -- still locked out after the restart
+  sleep_ms(3200)
+  d:tester_present()
+  d:security_access(0x01)
   d:session(0x01)
 end)
 

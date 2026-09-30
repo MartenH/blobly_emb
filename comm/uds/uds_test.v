@@ -543,3 +543,33 @@ fn test_a_too_small_buffer_silences_the_server() {
 	s.init(min_resp_cap)
 	assert call(mut s, [u8(0x10), 0x03]).len == 6
 }
+
+// what an owner that restarts the MCU keeps across its reset: the counts, and a running lockout —
+// whose count the server has already zeroed — so neither a reset between guesses nor one during
+// a lockout buys fresh attempts
+fn test_security_state_kept_across_the_owners_reset() {
+	mut s := Server{}
+	s.init(64)
+	s.sa_failed[0] = 2
+	mut k := s.kept_security()
+	assert k[0] == 2 && k[max_security_level] == 0
+	mut t := Server{}
+	t.init(64)
+	t.restore_security(k)
+	assert t.sa_failed[0] == 2 && t.sa_arm_delay
+	// a lockout running, its count already zeroed
+	s.sa_failed[0] = 0
+	s.now_us = 1000
+	s.sa_delay_until = 5000
+	k = s.kept_security()
+	assert k[0] == 0 && k[max_security_level] == 1
+	mut r := Server{}
+	r.init(64)
+	r.restore_security(k)
+	assert r.sa_arm_delay, 'a lockout running at the reset must run on from boot'
+	// nothing to keep: nothing armed
+	mut q := Server{}
+	q.init(64)
+	q.restore_security([kept_len]u8{})
+	assert !q.sa_arm_delay
+}

@@ -60,7 +60,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-005 | QM | test | covered | diag.lua (pending), uds_test.v (pass) |
 | REQ-DIAG-006 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds_test.v (pass) |
 | REQ-DIAG-007 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds_test.v (pass) |
-| REQ-DIAG-008 | QM | test | covered | diag.lua (pending), uds_test.v (pass) |
+| REQ-DIAG-008 | QM | test | covered | diag.lua (pending), uds-on-target-reset (approved), uds_test.v (pass) |
 | REQ-DIAG-009 | QM | test | verified | fault_test.v (pass) |
 | REQ-DIAG-010 | QM | test | verified | fault_test.v (pass) |
 | REQ-DIAG-011 | QM | test | covered | faults.lua (pending) |
@@ -264,7 +264,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-005 | | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-DIAG-006 | | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-DIAG-007 | | | | | | | | | | | | | | | | · | ✓ | | | |
-| REQ-DIAG-008 | | | | | | | | | | | | | | | | · | ✓ | | | |
+| REQ-DIAG-008 | | | | | | | | | | | | | | | ✓ | · | ✓ | | | |
 | REQ-DIAG-009 | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-010 | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-011 | | | | | | | | | | | | | | | | · | | | | |

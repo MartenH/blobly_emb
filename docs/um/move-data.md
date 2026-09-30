@@ -209,7 +209,7 @@ you plan around it:
 - **On a ThreadX target, constant DIDs and the node's own outputs.** The comm thread serves
   the connection (on its `[telemetry].bus`); a signal-backed DID may name a signal this node
   transmits from a local FB (an input is refused at generation), and a security gate is served
-  through the board's key seam (`boards/common/diag_sa.c`; docs/diagnostics.md).
+  through the board's key seam (`boards/common/diag_board.c`; docs/diagnostics.md).
 - **The generated link is a UDS endpoint, not an API.** It lives in private bridge state
   and every completed message is fed straight to the plain **UDS server** — `0x10`/`0x22`/
   `0x2E`/`0x3E` only. The firmware block transfer (`0x34`/`0x36`×N/`0x37`) is **not** in

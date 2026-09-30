@@ -77,6 +77,9 @@ fn test_the_comm_thread_serves_the_connection_in_order() {
 		'g_nm.hold(t1, g_diag.active())',
 		'nm_up := g_nm.awake()',
 		'g_diag.produce(t1, mut diag_txf)',
+		'if g_diag.reset_due() != 0 {',
+		'for !ch.tx_idle() && C.board_now_us() - diag_t0 < 20000 {}',
+		'C.diag_sys_reset()',
 		'// PRODUCER: CpuLoad telemetry',
 		'g_tm.produce(t1, mut trace_txf)',
 		'g_sh.produce(t1, mut shell_txf)',
@@ -89,8 +92,9 @@ fn test_the_comm_thread_serves_the_connection_in_order() {
 		}
 		at = at + 1 + i
 	}
-	// nothing on the target performs a reset or gates its frames on 0x28 yet
-	assert !glue.contains('g_diag.server.serves_reset = true')
+	// the comm thread performs an answered reset; nothing gates its frames on 0x28 yet
+	assert glue.contains('g_diag.server.serves_reset = true')
+	assert glue.contains('g_diag.owner_resets = true')
 	assert !glue.contains('g_diag.server.serves_comm_control = true')
 }
 
@@ -132,7 +136,11 @@ write = { session = ["extended"], security = 1 }
 		'return C.diag_sa_key_ok(level, seed, key, n) != 0', 'C.diag_sa_init()',
 		'g_diag.server.security = uds.SecurityOps{', 'seed:   diag_sa_seed_v', 'key_ok: diag_sa_key_v',
 		'g_diag.server.security_levels = u8(0x01)', 'g_diag.server.sa_attempts = u8(2)',
-		'g_diag.server.sa_delay_us = u64(3000) * 1000'] {
+		'g_diag.server.sa_delay_us = u64(3000) * 1000',
+		// the failed-key counts kept across the node's own reset, saved before it
+		'if C.diag_keep_load(&diag_kept[0], uds.kept_len) != 0 {',
+		'g_diag.server.restore_security(diag_kept)', 'diag_keep_now := g_diag.server.kept_security()',
+		'C.diag_keep_save(&diag_keep_now[0], uds.kept_len)'] {
 		assert glue.contains(want), 'missing: ${want}'
 	}
 	// the bench key, by name: V's own, and no C key declared at all
@@ -235,4 +243,37 @@ signal = "Workload"
 	assert out2.contains('carries an integer or a bool'), out2
 	assert did_value_width('f32') == none
 	assert did_value_width('i32') or { 0 } == 4
+}
+
+// on a node with [nvm], the reset is an orderly shutdown: the journal flushed and marked clean
+// first, and a failing flush holds the reset for a bounded number of passes
+fn test_the_reset_flushes_the_journal_first() {
+	src := os.read_file(os.join_path(@VMODROOT, 'examples', 'h755_threadx', 'ecu.toml')) or { panic(err) }
+	assert src.contains('[nvm]'), 'h755_threadx lost its [nvm] — update this test'
+	ex := os.join_path(@VMODROOT, 'examples', 'h755_threadx')
+	tmp := os.join_path(os.temp_dir(), 'diag_target_nvm_${os.getpid()}')
+	os.mkdir_all(tmp) or { panic(err) }
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	ecu := os.join_path(ex, 'ecu_diag_nvm_${os.getpid()}.toml')
+	os.write_file(ecu, src + diag_conn) or { panic(err) }
+	defer {
+		os.rm(ecu) or {}
+	}
+	glue := os.join_path(tmp, 'gen.v')
+	r := os.execute('${loom2v_bin()} ${ecu} ${os.join_path(ex, 'bus.dbc')} ${os.join_path(tmp,
+		'sig.v')} ${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
+	assert r.exit_code == 0, r.output
+	g := os.read_file(glue) or { panic(err) }
+	steps := ['if g_diag.reset_due() != 0 {', 'for !ch.tx_idle()', 'nvm_flush_ok = g_nvm.mark_clean()',
+		'if !nvm_flush_ok && diag_reset_tries < 20 {', 'C.diag_sys_reset()']
+	mut at := -1
+	for step in steps {
+		i := g[at + 1..].index(step) or {
+			assert false, 'step "${step}" missing or out of order'
+			return
+		}
+		at = at + 1 + i
+	}
 }

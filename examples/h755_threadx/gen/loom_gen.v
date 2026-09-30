@@ -546,8 +546,9 @@ fn comm_thread_entry(input u32) {
 							g_nvm.erase_pending()
 						}
 						if nvm_flush_ok {
-							g_nvm.mark_clean() // clean ONLY when every value is durable (a failed
-							// mark stays unclean: retried on the next in-sleep write or edge)
+							// clean ONLY when every value is durable (a failed mark stays unclean: retried on
+							// the next in-sleep write or edge); nvm_flush_ok then says values AND marker
+							nvm_flush_ok = g_nvm.mark_clean()
 						}
 						g_nvm.erase_pending() // cleanup AFTER values + marker are durable
 					}
@@ -595,8 +596,9 @@ fn comm_thread_entry(input u32) {
 					g_nvm.erase_pending()
 				}
 				if nvm_flush_ok {
-					g_nvm.mark_clean() // clean ONLY when every value is durable (a failed
-					// mark stays unclean: retried on the next in-sleep write or edge)
+					// clean ONLY when every value is durable (a failed mark stays unclean: retried on
+					// the next in-sleep write or edge); nvm_flush_ok then says values AND marker
+					nvm_flush_ok = g_nvm.mark_clean()
 				}
 				g_nvm.erase_pending() // cleanup AFTER values + marker are durable
 			}

@@ -161,7 +161,8 @@ included), and returning to default
 re-enables communication. An application server refuses the programming session — erase
 and download live in the bootloader, and the handoff into it is not built yet. `0x11` is
 answered first and performed once the response has left (on the host that resets the
-*diagnostic* state; the target's controller-drained reset is its own rung). `0x28` —
+*diagnostic* state; a ThreadX target's comm thread restarts the MCU once its controller has sent
+the answer, flushing the NvM journal first and keeping the 0x27 state across the restart). `0x28` —
 non-default sessions only (extended or programming), normal messages only (network
 management is refused until NM is gated by it) — stops sending and/or decoding this bus's
 application frames, and suspends their rx deadlines while reception is off so a

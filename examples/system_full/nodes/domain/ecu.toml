@@ -107,7 +107,7 @@ fc  = 0x7F2
 
 # The diagnostic server (docs/diagnostics.md, R2): UDS over ISO-TP on the ids system.toml
 # allocates this node (diag = { req = 0x7B0, rsp = 0x7B8 }), plus the compute bus's functional id.
-# 0x27: a TRNG seed from the board (boards/common/diag_sa.c) and, on this BENCH node, blobly_net's
+# 0x27: a TRNG seed from the board (boards/common/diag_board.c) and, on this BENCH node, blobly_net's
 # public reference key, opted into by name — a production node supplies diag_sa_key_ok instead.
 [[isotp]]
 name          = "diag"

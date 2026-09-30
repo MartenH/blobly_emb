@@ -176,6 +176,31 @@ pub fn (mut s Server) init(resp_cap int) {
 }
 
 
+// kept_len: the bytes of SecurityAccess state an owner that restarts the MCU carries across its
+// own reset — the failed-key count of each level, and whether a lockout is running.
+pub const kept_len = max_security_level + 1
+
+// kept_security is what must survive the owner's reset: a reset between guesses must buy nothing,
+// and a lockout that is running — whose count the server has already zeroed — must still run.
+pub fn (s &Server) kept_security() [kept_len]u8 {
+	mut k := [kept_len]u8{}
+	for i in 0 .. max_security_level {
+		k[i] = s.sa_failed[i]
+	}
+	k[max_security_level] = if s.sa_arm_delay || s.now_us < s.sa_delay_until { u8(1) } else { u8(0) }
+	return k
+}
+
+// restore_security takes back what kept_security kept, at boot, after init: the counts, and the
+// lockout delay armed — from boot, since the clock that timed it did not survive — whenever a
+// lockout was running or any count is non-zero. The same rule reset_state applies.
+pub fn (mut s Server) restore_security(k [kept_len]u8) {
+	for i in 0 .. max_security_level {
+		s.sa_failed[i] = k[i]
+	}
+	s.sa_arm_delay = k[max_security_level] != 0 || s.sa_failed.any(it > 0)
+}
+
 // reset_state returns the diagnostic state to power-on: default session, security locked,
 // communication enabled, no pending reset. DIDs are untouched. The 0x27 failed-key count and a
 // running lockout SURVIVE it: a reset between guesses must not buy fresh attempts, so a reset
@@ -223,11 +248,11 @@ pub fn (mut s Server) hold_s3(now_us u64) {
 
 // tx_enabled / rx_enabled: CommunicationControl's effect on normal communication messages, for
 // the owner to gate its application frames on.
-pub fn (s Server) tx_enabled() bool {
+pub fn (s &Server) tx_enabled() bool {
 	return !s.normal_tx_off
 }
 
-pub fn (s Server) rx_enabled() bool {
+pub fn (s &Server) rx_enabled() bool {
 	return !s.normal_rx_off
 }
 
@@ -289,7 +314,7 @@ fn (mut s Server) dispatch(req &u8, req_len int, resp &u8) int {
 
 // service_supported: the SIDs dispatch() serves — kept in step with its match by
 // test_every_supported_service_dispatches, which fails if a SID is listed here and not handled.
-fn (s Server) service_supported(sid u8) bool {
+fn (s &Server) service_supported(sid u8) bool {
 	return match sid {
 		0x10, 0x22, 0x2E, 0x3E { true }
 		0x11 { s.serves_reset }
@@ -350,7 +375,7 @@ fn (mut s Server) restore_dtc_setting() {
 	}
 }
 
-fn (s Server) cap() int {
+fn (s &Server) cap() int {
 	return if s.resp_cap > 0 { s.resp_cap } else { legacy_resp_cap }
 }
 
@@ -477,11 +502,11 @@ fn (mut s Server) communication_control(req &u8, req_len int, resp &u8) int {
 	return 2
 }
 
-fn (s Server) sa_delay() u64 {
+fn (s &Server) sa_delay() u64 {
 	return if s.sa_delay_us == 0 { default_sa_delay_us } else { s.sa_delay_us }
 }
 
-fn (s Server) sa_max_attempts() u8 {
+fn (s &Server) sa_max_attempts() u8 {
 	return if s.sa_attempts == 0 { default_sa_attempts } else { s.sa_attempts }
 }
 
@@ -620,7 +645,7 @@ pub fn reference_key_ok(ctx voidptr, level u8, seed &u8, key &u8, n int) bool {
 }
 
 // find_did: the table index of `id`, or -1.
-fn (s Server) find_did(id u16) int {
+fn (s &Server) find_did(id u16) int {
 	for i in 0 .. s.ndid {
 		if s.dids[i].id == id {
 			return i
