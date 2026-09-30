@@ -159,3 +159,36 @@ fn test_own_timeout_detects_sender_loss() {
 	}
 	assert rx.expired(11_001), 'a repeat kept the sender alive'
 }
+
+// the receive side counts modulo 15 across the wrap: a loss or a repeat straddling 14 -> 0 is
+// the same loss or repeat as anywhere else
+fn test_loss_and_repeat_across_the_wrap() {
+	mut f := [8]u8{}
+	for last, recv in {
+		u8(13): u8(0)
+		14:     1
+	} {
+		mut tx := TxState{
+			counter: last
+		}
+		mut rx := RxState{}
+		tx.protect(&f[0], 8, id, crc_pos, ctr_pos)
+		assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .ok
+		tx.counter = recv
+		tx.protect(&f[0], 8, id, crc_pos, ctr_pos)
+		assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .lost, '${last} -> ${recv}'
+		assert rx.lost_frames == 1, '${last} -> ${recv}: ${rx.lost_frames} lost'
+	}
+	mut tx := TxState{
+		counter: 14
+	}
+	mut rx := RxState{}
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos)
+	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .ok
+	tx.counter = 14
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos)
+	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .repeated
+	tx.counter = 15 // a counter that is not Profile 1's is never stamped
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos)
+	assert f[ctr_pos] & 0x0F == 0
+}

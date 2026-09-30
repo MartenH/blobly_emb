@@ -68,7 +68,9 @@ pub fn (mut t TxState) protect(data &u8, dlc int, data_id u16, crc_pos int, coun
 // SecOC stamps after this call. Order stays: E2E first, then SecOC over everything.
 pub fn (mut t TxState) protect_ex(data &u8, dlc int, data_id u16, crc_pos int, counter_pos int, ex1_pos int, ex1_len int, ex2_pos int, ex2_len int) {
 	unsafe {
-		data[counter_pos] = (data[counter_pos] & 0xF0) | (t.counter & 0x0F)
+		// modulo the span, not masked: whatever the (public) counter was set to, a Profile 1
+		// frame never carries 15
+		data[counter_pos] = (data[counter_pos] & 0xF0) | (t.counter % p01_counter_span)
 		data[crc_pos] = compute(data, dlc, data_id, crc_pos, ex1_pos, ex1_len, ex2_pos, ex2_len)
 	}
 	t.counter = (t.counter + 1) % p01_counter_span
@@ -76,7 +78,7 @@ pub fn (mut t TxState) protect_ex(data &u8, dlc int, data_id u16, crc_pos int, c
 
 pub enum Status {
 	ok        // CRC valid, counter advanced by exactly 1
-	crc_error // corrupted (CRC mismatch)
+	crc_error // corrupted: a CRC mismatch, or a counter no Profile 1 sender produces (15)
 	repeated  // counter did not advance — duplicate / stuck sender
 	lost      // CRC valid but the counter skipped — one or more frames were lost
 }

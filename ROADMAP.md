@@ -159,7 +159,7 @@ the FB never calls a service API.
 
 ## Ethernet middleware
 
-- ✅ **SOME/IP P1** — codec/schema + codegen, E2E on silicon (H735 NetX)
+- ✅ **SOME/IP P1** — codec/schema + codegen, E2E on silicon (H735 NetX; with the pre-Profile-1 E2E format — the P01 wire awaits a bench run)
 - ✅ **SOME/IP in the system model** (`#248`) — a `[bus.*]` declares its **carrier**:
   `can` (frames, a `dbc`) or `someip` (a service's events, a `service` + `version`).
   Membership follows the wire: CAN by shared `interface`, someip **explicit** (a node

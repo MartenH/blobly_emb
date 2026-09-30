@@ -276,8 +276,11 @@ or SecOC, `lost` the E2E `lost` counter — each refused at generation when miss
 ## E2E protection (ISO 26262)
 
 **The supported E2E profile is AUTOSAR E2E Profile 1 (P01)**, Data ID mode BOTH, bit-exact
-to the specification, so a frame interoperates with any AUTOSAR ECU and with blobly_net's
-`autosar_p01`:
+to the specification. On a CAN frame of up to 30 bytes (P01's DataLength limit of 240 bits) it
+interoperates with an AUTOSAR ECU configured for P01, and with blobly_net's `autosar_p01`. It
+is the P01 algorithm on longer frames and on a SOME/IP event's trailer too, but that is not an
+AUTOSAR configuration: AUTOSAR protects SOME/IP through its E2E transformer profiles (P04 and
+later), which also cover header fields.
 
 - **CRC:** CRC-8, polynomial 0x1D, start value 0x00, no final XOR. This is not the catalogue's
   CRC-8/SAE-J1850 (0xFF / 0xFF): AUTOSAR's chained CRC calls cancel those.
