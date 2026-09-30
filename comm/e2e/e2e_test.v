@@ -3,7 +3,7 @@ module e2e
 // @verifies SYS-REQ-SAFE-001 REQ-E2E-001 REQ-E2E-002 REQ-E2E-003
 // (corruption -> not delivered; repeat / skip / lost-frame counting and the E2E-owned
 //  reception timeout, independent of the QM COM deadline (002); protect-on-transmit incl.
-//  counter advance and 15->0 wrap.)
+//  counter advance and the Profile 1 14->0 wrap; the CRC pinned to AUTOSAR E2E Profile 1.)
 
 const id = u16(0x0123)
 const crc_pos = 1
@@ -91,14 +91,48 @@ fn test_wrong_data_id_fails() {
 	assert rx.check(&f[0], 8, u16(0x4444), crc_pos, ctr_pos) == .crc_error
 }
 
-fn test_counter_wraps_15_to_0() {
+fn test_counter_wraps_14_to_0() {
 	mut tx := TxState{}
 	mut rx := RxState{}
 	mut f := [8]u8{}
-	for _ in 0 .. 17 { // run past the 4-bit wrap
+	for n in 0 .. 32 { // past two Profile 1 wraps: 14 -> 0 is the next counter, not a skip
 		tx.protect(&f[0], 8, id, crc_pos, ctr_pos)
+		assert f[ctr_pos] & 0x0F == u8(n % 15)
 		assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .ok
 	}
+}
+
+// AUTOSAR E2E Profile 1 (Data ID mode BOTH), pinned by vectors from an INDEPENDENT
+// implementation — autosar-e2e 1.0.0; blobly_net's sut/e2e_oracle.py regenerates them, and
+// blobly_net's autosar_p01 is pinned by the same table — on overspeed's BrakeStatus layout:
+// payload E8 03 5A 00, CRC byte 4, counter in byte 5's low nibble, Data ID 0x1244.
+const p01_both = [u8(0xE8), 0xF5, 0xD2, 0xCF, 0x9C, 0x81, 0xA6, 0xBB, 0x00, 0x1D, 0x3A, 0x27,
+	0x74, 0x69, 0x4E]
+
+fn test_crc_is_autosar_profile_1() {
+	mut tx := TxState{}
+	for n in 0 .. 15 {
+		mut f := [6]u8{}
+		f[0] = 0xE8
+		f[1] = 0x03
+		f[2] = 0x5A
+		tx.protect(&f[0], 6, u16(0x1244), 4, 5)
+		assert f[5] & 0x0F == u8(n)
+		assert f[4] == p01_both[n], 'counter ${n}: 0x${f[4]:02X}, the reference says 0x${p01_both[n]:02X}'
+	}
+}
+
+// 15 is not a Profile 1 counter: a frame carrying it is refused, whatever its CRC says
+fn test_counter_fifteen_is_refused() {
+	mut rx := RxState{}
+	mut f := [6]u8{}
+	f[0] = 0xE8
+	f[1] = 0x03
+	f[2] = 0x5A
+	f[5] = 0x0F
+	f[4] = compute(&f[0], 6, u16(0x1244), 4, 0, 0, 0, 0)
+	assert rx.check(&f[0], 6, u16(0x1244), 4, 5) == .crc_error
+	assert !rx.started, 'an invalid counter must not become the sequence reference'
 }
 
 // REQ-E2E-002: total loss of the sender, detected by E2E's OWN timeout — armed at start, refreshed
@@ -124,4 +158,37 @@ fn test_own_timeout_detects_sender_loss() {
 		rx.on_valid(10_900)
 	}
 	assert rx.expired(11_001), 'a repeat kept the sender alive'
+}
+
+// the receive side counts modulo 15 across the wrap: a loss or a repeat straddling 14 -> 0 is
+// the same loss or repeat as anywhere else
+fn test_loss_and_repeat_across_the_wrap() {
+	mut f := [8]u8{}
+	for last, recv in {
+		u8(13): u8(0)
+		14:     1
+	} {
+		mut tx := TxState{
+			counter: last
+		}
+		mut rx := RxState{}
+		tx.protect(&f[0], 8, id, crc_pos, ctr_pos)
+		assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .ok
+		tx.counter = recv
+		tx.protect(&f[0], 8, id, crc_pos, ctr_pos)
+		assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .lost, '${last} -> ${recv}'
+		assert rx.lost_frames == 1, '${last} -> ${recv}: ${rx.lost_frames} lost'
+	}
+	mut tx := TxState{
+		counter: 14
+	}
+	mut rx := RxState{}
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos)
+	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .ok
+	tx.counter = 14
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos)
+	assert rx.check(&f[0], 8, id, crc_pos, ctr_pos) == .repeated
+	tx.counter = 15 // a counter that is not Profile 1's is never stamped
+	tx.protect(&f[0], 8, id, crc_pos, ctr_pos)
+	assert f[ctr_pos] & 0x0F == 0
 }

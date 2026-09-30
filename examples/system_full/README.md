@@ -45,7 +45,7 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 
 ## The Ethernet node (`tcu`) — a member like any other
 
-`tcu` publishes a cyclic, E2E-protected SOME/IP **telemetry event** and answers an RPC **command round trip**, all from config + the H723 Ethernet board driver (`boards/h723/eth.c`). It's **silicon-validated**: link + ARP + ICMP (`ping 192.168.0.51`, 0% loss), SOME/IP tx (service `0x0100`, event `0x8001`, E2E counter+CRC) and rx (`uptime` RPC → response, request-id mirrored). The wire is identical to `examples/h735_someip` / `host_someip`, so the same `blobly_net` oracle verifies it.
+`tcu` publishes a cyclic, E2E-protected SOME/IP **telemetry event** and answers an RPC **command round trip**, all from config + the H723 Ethernet board driver (`boards/h723/eth.c`). It's **silicon-validated**: link + ARP + ICMP (`ping 192.168.0.51`, 0% loss), SOME/IP tx (service `0x0100`, event `0x8001`, E2E counter+CRC — validated with the pre-Profile-1 E2E format; the P01 wire awaits a bench run with the Ethernet connected) and rx (`uptime` RPC → response, request-id mirrored). The wire is identical to `examples/h735_someip` / `host_someip`, so the same `blobly_net` oracle verifies it.
 
 **Since #245 it is a full `system.toml` member, dissolved like every CAN node.** The segment is a `[bus.tel]` whose carrier is a SERVICE (`kind = "someip"`, a `service` + `version` where a CAN bus has its `dbc`), and — because there is no DBC to own the layout — the **events are declared by the system too**, as `[[frame]]`s carrying id, signal set, tx mode and E2E trailer. `tools/sysgen` lowers all of it into `gen-tcu.toml`, and `nodes/tcu/ecu.toml` is internals only: its target, its shell method binding, its partition and its FB.
 

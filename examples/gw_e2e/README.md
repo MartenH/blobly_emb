@@ -24,7 +24,7 @@ candump vcan1                      # -> 200 [8] 00 0A 00 00 00 00 <crc> <ctr>
 ```
 
 Test (`test/route_e2e.lua`) verifies **both** protections cryptographically: it
-recomputes the E2E CRC (SAE J1850 CRC-8) and checks the counter advances by
+recomputes the E2E CRC (AUTOSAR E2E Profile 1) and checks the counter advances by
 exactly one, and it recomputes the SecOC MAC (a pure-Lua **AES-128-CMAC**,
 RFC 4493, self-checked against a known vector) so the emitted MAC is proven to be
 one a real receiver accepts — not merely nonzero/varying.

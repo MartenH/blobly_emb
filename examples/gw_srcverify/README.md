@@ -15,7 +15,7 @@ make -C examples/gw_srcverify      # gen + host build
 # a SrcFrame with a valid E2E trailer (CRC byte6, counter byte7) forwards; a bad CRC does not
 ```
 
-Test (`test/route_srcverify.lua`) constructs the E2E frames itself (SAE J1850 CRC-8,
+Test (`test/route_srcverify.lua`) constructs the E2E frames itself (AUTOSAR E2E Profile 1,
 the poly the gateway verifies with) and checks that a **valid** source is routed and a
 **tampered** one (broken CRC) is never re-encoded onto the destination.
 

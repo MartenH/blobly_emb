@@ -8,20 +8,20 @@
 local OK, TIMEOUT, INTEGRITY = 1, 2, 3
 
 local function crc8(bytes)
-  local crc = 0xFF
+  local crc = 0x00 -- AUTOSAR E2E Profile 1: start 0x00, no final XOR
   for _, b in ipairs(bytes) do
     crc = crc ~ b
     for _ = 1, 8 do
       if crc & 0x80 ~= 0 then crc = ((crc << 1) ~ 0x1D) & 0xFF else crc = (crc << 1) & 0xFF end
     end
   end
-  return crc ~ 0xFF
+  return crc
 end
 
 local ctr = 0
 -- the next BrakeStatus in sequence; `skip` frames are left out first (a gap), `corrupt` breaks the CRC
 local function brake(raw, skip, corrupt)
-  ctr = (ctr + 1 + (skip or 0)) & 0x0F
+  ctr = (ctr + 1 + (skip or 0)) % 15 -- Profile 1 counts 0..14
   local d = { raw & 0xFF, (raw >> 8) & 0xFF, 0, 0, 0, ctr }
   local b = { 0x44, 0x00 } -- CRC over data_id (lo, hi) + every byte except crc_pos (4)
   for i = 0, 5 do if i ~= 4 then b[#b + 1] = d[i + 1] end end

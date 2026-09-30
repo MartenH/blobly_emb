@@ -1,19 +1,19 @@
 -- SOURCE verify: SrcFrame (0x100) is E2E-protected; the route decodes Speed only when
 -- the source's E2E check passes, then re-encodes it into DstFrame (0x200). A tampered
 -- source (bad CRC) is rejected, so its value never reaches the wire. We construct the
--- E2E frames here (SAE J1850 CRC-8, the same poly the gateway verifies with).
+-- E2E frames here (AUTOSAR E2E Profile 1, as the gateway verifies).
 -- CAN1 = vcan0 (inject SrcFrame), CAN2 = vcan1 (read DstFrame).
 -- @verifies REQ-TOPO-008
 
 local function crc8(bytes)
-  local crc = 0xFF
+  local crc = 0x00 -- AUTOSAR E2E Profile 1: start 0x00, no final XOR
   for _, b in ipairs(bytes) do
     crc = crc ~ b
     for _ = 1, 8 do
       if crc & 0x80 ~= 0 then crc = ((crc << 1) ~ 0x1D) & 0xFF else crc = (crc << 1) & 0xFF end
     end
   end
-  return crc ~ 0xFF
+  return crc
 end
 
 -- an 8-byte SrcFrame carrying `speed_raw` (bit0, x0.1) with a valid E2E trailer
@@ -30,7 +30,7 @@ end
 test("valid E2E source is verified, then routed to DstFrame", function()
   local ctr, got = 0, nil
   for _ = 1, 120 do
-    ctr = (ctr + 1) & 0x0F
+    ctr = (ctr + 1) % 15
     bus.send("CAN1", 0x100, mkframe(100, ctr, false)) -- Speed 10.0 km/h (src raw 100 x0.1)
     local f = bus.recv("CAN2", 20)
     if f and f.id == 0x200 then got = f.data; break end
@@ -43,13 +43,13 @@ end)
 test("tampered E2E source (bad CRC) is rejected — its value never reaches the wire", function()
   -- prime the route with a few valid frames so the destination is alive
   local ctr = 0
-  for _ = 1, 10 do ctr = (ctr + 1) & 0x0F; bus.send("CAN1", 0x100, mkframe(100, ctr, false)); sleep_ms(2) end
+  for _ = 1, 10 do ctr = (ctr + 1) % 15; bus.send("CAN1", 0x100, mkframe(100, ctr, false)); sleep_ms(2) end
   while bus.recv("CAN2", 0) do end
   -- flood TAMPERED frames carrying a DIFFERENT value (Speed 88.0 -> src raw 880) with a
   -- broken CRC; if source-verify works, raw 88 (0x58) must never appear on DstFrame.
   local leaked = false
   for _ = 1, 100 do
-    ctr = (ctr + 1) & 0x0F
+    ctr = (ctr + 1) % 15
     bus.send("CAN1", 0x100, mkframe(880, ctr, true))
     local f = bus.recv("CAN2", 5)
     while f do

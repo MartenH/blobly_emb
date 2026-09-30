@@ -95,7 +95,7 @@ fn test_neither_masks_the_other() {
 
 	// an E2E-detectable fault SecOC cannot see: a stuck sender counter on an
 	// otherwise freshly-authenticated frame — SecOC passes, E2E reports repeated
-	etx.counter = (etx.counter - 1) & 0x0F // rewind: same counter as the last frame
+	etx.counter = (etx.counter + 14) % 15 // rewind (Profile 1 counts 0..14): the last frame's counter
 	d1 := tx_frame(mut etx, mut stx, &key, 1)
 	assert srx.verify(&key, &d1[0], 8, did, fresh_pos, mac_pos, mac_len) == .ok
 	assert erx.check_ex(&d1[0], 8, did, crc_pos, ctr_pos, fresh_pos, 1, mac_pos, mac_len) == .repeated
