@@ -343,3 +343,17 @@ fn test_an_owner_that_resets_is_told_when_the_answer_has_left() {
 	assert d.on_frame(0, sf(fid, [u8(0x11), 0x81])) == .served
 	assert d.reset_due() == 0x01
 }
+
+// once a reset is due nothing more is served: the owner is about to restart, and an answer given
+// now would describe state the restart discards
+fn test_nothing_is_served_once_a_reset_is_due() {
+	mut c := new_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	assert c.on_frame(0, sf(fid, [u8(0x11), 0x81])) == .served // suppressed: due at once
+	assert c.reset_due() == 0x01
+	assert c.on_frame(0, sf(rx, [u8(0x2E), 0x01, 0x00, 0x05])) == .request
+	c.serve()
+	mut f := can.Frame{}
+	assert !c.produce(0, mut f), 'a request was answered while a reset was due'
+}

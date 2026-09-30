@@ -86,40 +86,47 @@ void diag_sys_reset(void) {
 	}
 }
 
-/* The KEEP cell: what the diagnostic server must carry across its own reset — the 0x27 failed-key
- * counts, or a reset between guesses would buy fresh attempts. In D3 SRAM4, which a system reset
- * does not clear: just below the boot cells (bootmap.h, 0x38000FE0+) and clear of xcore's map
- * (which ends well below 0x38000F00). Garbage after power-on, so a magic and a check word guard it,
- * and it is consumed when read. Not across a power cycle: that is the journal's (docs/diagnostics.md
- * R6). */
+/* The KEEP cell: what the diagnostic server must carry across its own reset — the 0x27 state
+ * (uds.kept_len bytes: each level's failed-key count and whether a lockout is running), or a
+ * reset between guesses, or during a lockout, would buy fresh attempts. In D3 SRAM4, which a
+ * system reset does not clear: just below the boot cells (bootmap.h, 0x38000FE0+) and clear of
+ * xcore's map (which ends well below 0x38000F00). Garbage after power-on, so a magic and a check
+ * word guard it, and it is consumed when read. Not across a power cycle: that is the journal's
+ * (docs/diagnostics.md R6). */
 #ifndef DIAG_KEEP_ADDR
 #define DIAG_KEEP_ADDR 0x38000FC0u
 #endif
 #define DIAG_KEEP_MAGIC 0x504B4744u /* 'DGKP' */
-#define DIAG_KEEP_N 8
+#define DIAG_KEEP_WORDS 3             /* up to 12 bytes; with magic and check 0x38000FC0..0x38000FD3 */
 
-void diag_keep_save(const uint8_t *counts, int n) {
+void diag_keep_save(const uint8_t *kept, int n) {
 	volatile uint32_t *c = (volatile uint32_t *)DIAG_KEEP_ADDR;
-	uint32_t w0 = 0, w1 = 0;
-	for (int i = 0; i < n && i < DIAG_KEEP_N; i++) {
-		if (i < 4) w0 |= (uint32_t)counts[i] << (8 * i);
-		else w1 |= (uint32_t)counts[i] << (8 * (i - 4));
+	uint32_t w[DIAG_KEEP_WORDS] = {0, 0, 0};
+	for (int i = 0; i < n && i < 4 * DIAG_KEEP_WORDS; i++)
+		w[i / 4] |= (uint32_t)kept[i] << (8 * (i % 4));
+	uint32_t check = ~0u;
+	for (int j = 0; j < DIAG_KEEP_WORDS; j++) {
+		c[1 + j] = w[j];
+		check ^= w[j];
 	}
-	c[1] = w0;
-	c[2] = w1;
-	c[3] = ~(w0 ^ w1);
+	c[1 + DIAG_KEEP_WORDS] = check;
 	c[0] = DIAG_KEEP_MAGIC;
 }
 
-/* 1 and the counts when the cell holds what diag_keep_save wrote before this reset; 0 otherwise
+/* 1 and the bytes when the cell holds what diag_keep_save wrote before this reset; 0 otherwise
  * (a power-on, or no reset by the server). Consumed either way. */
-int diag_keep_load(uint8_t *counts, int n) {
+int diag_keep_load(uint8_t *kept, int n) {
 	volatile uint32_t *c = (volatile uint32_t *)DIAG_KEEP_ADDR;
-	uint32_t w0 = c[1], w1 = c[2];
-	int ok = c[0] == DIAG_KEEP_MAGIC && c[3] == ~(w0 ^ w1);
+	uint32_t w[DIAG_KEEP_WORDS];
+	uint32_t check = ~0u;
+	for (int j = 0; j < DIAG_KEEP_WORDS; j++) {
+		w[j] = c[1 + j];
+		check ^= w[j];
+	}
+	int ok = c[0] == DIAG_KEEP_MAGIC && c[1 + DIAG_KEEP_WORDS] == check;
 	c[0] = 0;
 	if (!ok) return 0;
-	for (int i = 0; i < n && i < DIAG_KEEP_N; i++)
-		counts[i] = (uint8_t)((i < 4 ? w0 >> (8 * i) : w1 >> (8 * (i - 4))) & 0xFFu);
+	for (int i = 0; i < n && i < 4 * DIAG_KEEP_WORDS; i++)
+		kept[i] = (uint8_t)((w[i / 4] >> (8 * (i % 4))) & 0xFFu);
 	return 1;
 }

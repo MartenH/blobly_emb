@@ -138,8 +138,9 @@ write = { session = ["extended"], security = 1 }
 		'g_diag.server.security_levels = u8(0x01)', 'g_diag.server.sa_attempts = u8(2)',
 		'g_diag.server.sa_delay_us = u64(3000) * 1000',
 		// the failed-key counts kept across the node's own reset, saved before it
-		'if C.diag_keep_load(&g_diag.server.sa_failed[0], uds.max_security_level) != 0 {',
-		'g_diag.server.sa_arm_delay = true', 'C.diag_keep_save(&g_diag.server.sa_failed[0], uds.max_security_level)'] {
+		'if C.diag_keep_load(&diag_kept[0], uds.kept_len) != 0 {',
+		'g_diag.server.restore_security(diag_kept)', 'diag_keep_now := g_diag.server.kept_security()',
+		'C.diag_keep_save(&diag_keep_now[0], uds.kept_len)'] {
 		assert glue.contains(want), 'missing: ${want}'
 	}
 	// the bench key, by name: V's own, and no C key declared at all

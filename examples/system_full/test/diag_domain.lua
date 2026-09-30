@@ -179,6 +179,24 @@ test("domain: wrong keys are still counted after a reset", function()
   d:session(0x01)
 end)
 
+-- nor does a reset DURING a lockout: the lockout is kept (its count already zeroed), and runs on
+test("domain: a lockout runs on through a reset", function()
+  local d = diag()
+  d:session(0x03)
+  local wrong = function(seed) return seed end
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end)
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end)
+  check.nrc(0x36, function() d:security_access(0x01, wrong) end) -- the lockout starts
+  d:raw("\x11\x01")
+  sleep_ms(2000)
+  d:session(0x03)
+  check.nrc(0x37, function() d:raw("\x27\x01") end) -- still locked out after the restart
+  sleep_ms(3200)
+  d:tester_present()
+  d:security_access(0x01)
+  d:session(0x01)
+end)
+
 -- The server shares the comm thread with the node's application traffic: a burst of multi-frame
 -- answers must not starve VehSpeedFrame (0x120, every 100 ms).
 test("domain: requests back to back while the node keeps its cadence", function()

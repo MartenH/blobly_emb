@@ -110,7 +110,7 @@ pub fn (mut l Link) send(src &u8, len int) bool {
 
 // busy reports whether a tx is in flight (segmenting or awaiting flow control), so a
 // caller serialising several messages on one Link starts the next only when it's free.
-pub fn (l Link) busy() bool {
+pub fn (l &Link) busy() bool {
 	return l.tx != .idle
 }
 
@@ -125,12 +125,12 @@ pub fn (mut l Link) abort_tx() {
 // control, no multi-frame reception in progress or flow control owed, and no completed message
 // waiting to be taken. A caller that interleaves a second kind of traffic on the link (functional
 // requests answered on the physical id) starts only when the physical exchange is fully quiet.
-pub fn (l Link) idle() bool {
+pub fn (l &Link) idle() bool {
 	return l.tx == .idle && l.rx != .receiving && !l.fc_send && !l.ready
 }
 
 // has_request reports that a completed message is waiting to be taken.
-pub fn (l Link) has_request() bool {
+pub fn (l &Link) has_request() bool {
 	return l.ready
 }
 

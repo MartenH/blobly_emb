@@ -160,7 +160,7 @@ fn diag_target_sa_fns(m Model) []string {
 // diag_target_reset: an answered ECUReset, performed — once the answer is not only out of the link
 // but on the wire (the controller's Tx FIFO empty, bounded so a dead bus cannot hold the reset
 // off: REQ-BOOT-012), with the 0x27 failed-key counts kept across it.
-fn diag_target_reset(m Model) []string {
+fn diag_target_reset(m Model, ioc_idx map[string]int) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
 	}
@@ -169,8 +169,14 @@ fn diag_target_reset(m Model) []string {
 		'\t\t\tdiag_t0 := C.board_now_us()',
 		'\t\t\tfor !ch.tx_idle() && C.board_now_us() - diag_t0 < 20000 {}',
 	]
+	if nvm_on(m) {
+		// an orderly shutdown, as a sleep edge is: every persisted value durable and the journal
+		// marked clean — a tester's reset must not cost calibration the way a power cut would
+		g << nvm_flush_choreo(m, ioc_idx, '\t\t\t')
+	}
 	if security_levels(m.dids) != 0 {
-		g << '\t\t\tC.diag_keep_save(&g_diag.server.sa_failed[0], uds.max_security_level)'
+		g << '\t\t\tdiag_keep_now := g_diag.server.kept_security()'
+		g << '\t\t\tC.diag_keep_save(&diag_keep_now[0], uds.kept_len)'
 	}
 	g << '\t\t\tC.diag_sys_reset()'
 	g << '\t\t}'
@@ -220,12 +226,9 @@ fn diag_target_init(m Model) []string {
 		// the RNG's clock is set up here, once, before the loop — never inside a request
 		g << '\tC.diag_sa_init() // 0 = no RNG: every seed request is then refused'
 		g << security_init_lines(m, c, 'g_diag.server', 'uds.SecurityOps{\n\t\tseed:   diag_sa_seed_v\n\t\tkey_ok: ${key}\n\t}')
-		g << '\tif C.diag_keep_load(&g_diag.server.sa_failed[0], uds.max_security_level) != 0 {'
-		g << '\t\tfor i in 0 .. uds.max_security_level {'
-		g << '\t\t\tif g_diag.server.sa_failed[i] != 0 {'
-		g << '\t\t\t\tg_diag.server.sa_arm_delay = true // the lockout runs from boot'
-		g << '\t\t\t}'
-		g << '\t\t}'
+		g << '\tmut diag_kept := [uds.kept_len]u8{}'
+		g << '\tif C.diag_keep_load(&diag_kept[0], uds.kept_len) != 0 {'
+		g << '\t\tg_diag.server.restore_security(diag_kept) // a lockout or a count runs on from boot'
 		g << '\t}'
 	}
 	g << '\tmut diag_txf := can.Frame{}'

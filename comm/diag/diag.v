@@ -125,7 +125,9 @@ fn (mut c Connection) functional(f &can.Frame) Rx {
 // waits, so nothing can be reordered behind it.
 pub fn (mut c Connection) serve() {
 	got := c.link.take(&c.req[0])
-	n := if c.link.busy() { 0 } else { got }
+	// nor once a reset is pending: the owner is about to restart, and an answer given now would
+	// describe state the restart discards
+	n := if c.link.busy() || c.server.reset_req != 0 { 0 } else { got }
 	if n > 0 {
 		c.refresh_dids()
 		rlen := c.server.handle(&c.req[0], n, &c.resp[0])
@@ -161,7 +163,7 @@ pub fn (mut c Connection) abort_tx() {
 
 // active: an exchange is in flight or a non-default session is open — while it is, the owner keeps
 // its network awake (a session must not sleep under the tester, nor an answer be stranded).
-pub fn (c Connection) active() bool {
+pub fn (c &Connection) active() bool {
 	return !c.link.idle() || c.server.session != uds.session_default
 }
 
@@ -181,7 +183,7 @@ fn truncated(pci u8, n int, left int) bool {
 // reset_due is the ECUReset kind whose answer has left the link (0 = none) — for an owner that
 // performs the reset itself (`owner_resets`). The link being done is not the wire being done: the
 // owner still waits for its controller to transmit the answer (REQ-BOOT-012).
-pub fn (c Connection) reset_due() u8 {
+pub fn (c &Connection) reset_due() u8 {
 	if c.server.reset_req != 0 && !c.link.busy() {
 		return c.server.reset_req
 	}
@@ -191,7 +193,7 @@ pub fn (c Connection) reset_due() u8 {
 // apply_answered_reset: ECUReset is two-phase — once its answer has left, the diagnostic state
 // returns to power-on. An owner that resets itself does it instead (reset_due).
 fn (mut c Connection) apply_answered_reset() {
-	if !c.owner_resets && c.server.reset_req != 0 && !c.link.busy() {
+	if !c.owner_resets && c.reset_due() != 0 {
 		c.server.reset_state()
 	}
 }
