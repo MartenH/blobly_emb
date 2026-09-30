@@ -2,21 +2,21 @@
 -- unprotected) on can0 is re-encoded into DstFrame (0x200) on can1, and the producer
 -- stamps a FRESH E2E counter + CRC each cycle (data_id 0x2A, CRC byte6, counter byte7).
 -- A second route re-encodes Rpm into a SecOC-authenticated DstFrame2 (0x201). Both are
--- verified CRYPTOGRAPHICALLY: the E2E CRC is recomputed (SAE J1850) and the SecOC MAC
+-- verified CRYPTOGRAPHICALLY: the E2E CRC is recomputed (AUTOSAR Profile 1) and the SecOC MAC
 -- is recomputed (AES-128-CMAC, RFC 4493) — i.e. a downstream receiver would accept them.
 -- CAN1 = vcan0 (inject source), CAN2 = vcan1 (read protected dest).
 -- @verifies REQ-TOPO-008
 
--- ---- E2E: SAE J1850 CRC-8 (the AUTOSAR-E2E poly) ----
+-- ---- E2E: AUTOSAR Profile 1 CRC-8 (poly 0x1D, start 0x00, no final XOR) ----
 local function crc8(bytes)
-  local crc = 0xFF
+  local crc = 0x00 -- AUTOSAR E2E Profile 1: start 0x00, no final XOR
   for _, b in ipairs(bytes) do
     crc = crc ~ b
     for _ = 1, 8 do
       if crc & 0x80 ~= 0 then crc = ((crc << 1) ~ 0x1D) & 0xFF else crc = (crc << 1) & 0xFF end
     end
   end
-  return crc ~ 0xFF
+  return crc
 end
 local function expected_crc(data, data_id, dlc, crc_pos) -- over data_id (lo,hi) + bytes except crc_pos
   local b = { data_id & 0xFF, (data_id >> 8) & 0xFF }
@@ -149,7 +149,7 @@ test("routed DstFrame carries the re-encoded value + a valid, fresh E2E trailer"
   for i = 2, #frames do
     local prev = string.byte(frames[i - 1], 8) & 0x0F
     local cur = string.byte(frames[i], 8) & 0x0F
-    check.equal((cur - prev) & 0x0F, 1)
+    check.equal((cur - prev) % 15, 1) -- Profile 1 counts 0..14
   end
 end)
 

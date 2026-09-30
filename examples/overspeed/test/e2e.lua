@@ -1,15 +1,15 @@
 -- E2E: the bridge stamps an alive counter + CRC into LampFrame (0x110, 3 bytes:
 -- byte0 WarnLamp, byte1 CRC, byte2 counter). Independently recompute the CRC here
--- (SAE J1850 CRC-8, the AUTOSAR-E2E poly) and check the counter advances.
+-- (AUTOSAR E2E Profile 1: CRC-8 poly 0x1D, start 0x00, no final XOR) and check the counter advances.
 local function crc8(bytes)
-  local crc = 0xFF
+  local crc = 0x00 -- AUTOSAR E2E Profile 1: start 0x00, no final XOR
   for _, b in ipairs(bytes) do
     crc = crc ~ b
     for _ = 1, 8 do
       if crc & 0x80 ~= 0 then crc = ((crc << 1) ~ 0x1D) & 0xFF else crc = (crc << 1) & 0xFF end
     end
   end
-  return crc ~ 0xFF
+  return crc
 end
 
 -- CRC over data_id (lo,hi) + frame bytes except crc_pos

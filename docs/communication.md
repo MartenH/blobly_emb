@@ -275,6 +275,23 @@ or SecOC, `lost` the E2E `lost` counter — each refused at generation when miss
 
 ## E2E protection (ISO 26262)
 
+**The supported E2E profile is AUTOSAR E2E Profile 1 (P01)**, Data ID mode BOTH, bit-exact
+to the specification, so a frame interoperates with any AUTOSAR ECU and with blobly_net's
+`autosar_p01`:
+
+- **CRC:** CRC-8, polynomial 0x1D, start value 0x00, no final XOR. This is not the catalogue's
+  CRC-8/SAE-J1850 (0xFF / 0xFF): AUTOSAR's chained CRC calls cancel those.
+- **What the CRC covers:** the 16-bit Data ID (low byte, then high), then every frame byte except
+  the CRC's own.
+- **Counter:** 4 bits (the low nibble of `counter_pos`), counting 0..14 and wrapping to 0. A
+  received 15 is refused.
+
+It is pinned by vectors from an independent implementation (autosar-e2e) in `comm/e2e/e2e_test.v`,
+the same table blobly_net's `autosar_p01` is pinned by. Other profiles (P02 and later) and the
+LOW / ALT / NIBBLE Data ID modes are not implemented. On a frame that also carries SecOC, the CRC
+additionally excludes SecOC's bytes (REQ-E2E-004, below). That composition rule goes beyond
+Profile 1 itself.
+
 A `[[frame]]` can be **end-to-end protected**: `comm/e2e` stamps an alive counter
 and a CRC into the frame on tx and verifies them on rx, so the receiver detects
 corruption (CRC), repetition / a stuck sender (counter unchanged), individual lost
@@ -296,7 +313,7 @@ frame.
 [[frame]]
 name = "LampFrame"; bus = "can0"
 tx   = { mode = "mixed", cycle_ms = 100 }
-e2e  = { data_id = 0x10, crc_pos = 1, counter_pos = 2 }  # CRC-8 J1850 + 4-bit counter
+e2e  = { data_id = 0x10, crc_pos = 1, counter_pos = 2 }  # AUTOSAR E2E Profile 1
 
 [[frame]]
 name = "BrakeStatus"; bus = "can0"                        # rx: E2E owns the loss check

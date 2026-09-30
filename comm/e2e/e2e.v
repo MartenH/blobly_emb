@@ -1,6 +1,6 @@
 module e2e
 
-// End-to-end protection (ISO 26262 / AUTOSAR-E2E style, lean): an 8-bit CRC and a
+// End-to-end protection: AUTOSAR E2E Profile 1 (Data ID mode BOTH) — an 8-bit CRC and a
 // 4-bit alive counter stamped into a frame on tx and verified on rx. The receiver
 // detects corruption (CRC), repetition / a stuck sender (counter not advancing),
 // and — combined with the COM rx deadline — loss. No-alloc, transport-agnostic:
@@ -8,11 +8,19 @@ module e2e
 // signal transport (last-is-best or, later, queued).
 //
 // Layout (configured per [[frame]].e2e): the alive counter occupies the low nibble
-// of byte `counter_pos`; the CRC is byte `crc_pos`; the CRC covers the 16-bit
-// data_id + every frame byte except crc_pos itself — and, on a frame composed with
-// SecOC (REQ-E2E-004, protect_ex/check_ex), except the freshness/MAC windows too.
+// of byte `counter_pos` and counts 0..14 (15 is not a Profile 1 value); the CRC is byte
+// `crc_pos`. The CRC is CRC-8 poly 0x1D with start value 0x00 and NO final XOR — not the
+// catalogue's CRC-8/SAE-J1850 (0xFF/0xFF): AUTOSAR's chained Crc_CalculateCRC8 calls cancel
+// those — over the 16-bit data_id (low byte, then high) and every frame byte except crc_pos;
+// on a frame composed with SecOC (REQ-E2E-004, protect_ex/check_ex), the freshness/MAC
+// windows are excluded too, a composition rule beyond Profile 1 itself. Pinned by vectors from
+// an independent implementation (autosar-e2e) in e2e_test.v, the same ones blobly_net's
+// autosar_p01 is pinned by.
 
-// crc_update is the SAE J1850 CRC-8 step (poly 0x1D), as AUTOSAR E2E P01/P02 use.
+// p01_counter_span: a Profile 1 counter runs 0..14, then wraps to 0.
+const p01_counter_span = u8(15)
+
+// crc_update is one CRC-8 step, poly 0x1D.
 fn crc_update(crc u8, b u8) u8 {
 	mut c := crc ^ b
 	for _ in 0 .. 8 {
@@ -27,7 +35,7 @@ fn crc_update(crc u8, b u8) u8 {
 // AFTER the E2E protect, or the receiver's E2E check fails on every authentic frame.
 // A zero-length window excludes nothing (the plain single-protection path).
 fn compute(data &u8, dlc int, data_id u16, crc_pos int, ex1_pos int, ex1_len int, ex2_pos int, ex2_len int) u8 {
-	mut c := crc_update(0xFF, u8(data_id)) // init 0xFF, fold in the data id (lo, hi)
+	mut c := crc_update(0x00, u8(data_id)) // start 0x00, fold in the data id (lo, hi)
 	c = crc_update(c, u8(data_id >> 8))
 	for i in 0 .. dlc {
 		if i == crc_pos {
@@ -41,7 +49,7 @@ fn compute(data &u8, dlc int, data_id u16, crc_pos int, ex1_pos int, ex1_len int
 		}
 		c = crc_update(c, unsafe { data[i] })
 	}
-	return c ^ 0xFF // final xor
+	return c // no final XOR (Profile 1)
 }
 
 pub struct TxState {
@@ -63,7 +71,7 @@ pub fn (mut t TxState) protect_ex(data &u8, dlc int, data_id u16, crc_pos int, c
 		data[counter_pos] = (data[counter_pos] & 0xF0) | (t.counter & 0x0F)
 		data[crc_pos] = compute(data, dlc, data_id, crc_pos, ex1_pos, ex1_len, ex2_pos, ex2_len)
 	}
-	t.counter = (t.counter + 1) & 0x0F
+	t.counter = (t.counter + 1) % p01_counter_span
 }
 
 pub enum Status {
@@ -84,7 +92,7 @@ pub mut:
 	last    u8
 	started bool
 	// frames the counter showed not received INTACT, summed over every `lost` gap (delta - 1 each;
-	// a gap of 16 or more aliases on the 4-bit counter). A frame that failed its CRC counts here
+	// a gap of 15 or more aliases on the Profile 1 counter). A frame that failed its CRC counts here
 	// too, as in AUTOSAR E2E: its counter byte cannot be trusted, so no rule can tell which gap
 	// positions it filled. Monotonic and wrapping: a reader diffs it.
 	lost_frames u32
@@ -126,7 +134,9 @@ pub fn (mut r RxState) expired(now u64) bool {
 }
 
 // check verifies the CRC and the counter progression (delta 0 = repeated,
-// 1 = ok, >1 = lost). It resyncs to the received counter except on a CRC error.
+// 1 = ok, >1 = lost; modulo 15). It resyncs to the received counter except on a CRC error.
+// A counter of 15 is refused like a CRC error: no Profile 1 sender produces it, so the frame is
+// not one to trust, and it says nothing about the sequence.
 pub fn (mut r RxState) check(data &u8, dlc int, data_id u16, crc_pos int, counter_pos int) Status {
 	return r.check_ex(data, dlc, data_id, crc_pos, counter_pos, 0, 0, 0, 0)
 }
@@ -139,9 +149,12 @@ pub fn (mut r RxState) check_ex(data &u8, dlc int, data_id u16, crc_pos int, cou
 		return .crc_error
 	}
 	ctr := unsafe { data[counter_pos] } & 0x0F
+	if ctr >= p01_counter_span {
+		return .crc_error
+	}
 	mut st := Status.ok
 	if r.started {
-		delta := (ctr - r.last) & 0x0F
+		delta := (ctr + p01_counter_span - r.last) % p01_counter_span
 		st = if delta == 0 { Status.repeated } else if delta > 1 { Status.lost } else { Status.ok }
 		if delta > 1 {
 			r.lost_frames += u32(delta - 1)

@@ -150,7 +150,7 @@ fn test_tx_modes_on_the_wire() {
 				cyc_repeats++
 			}
 			// and the E2E counter steps loss-free on lo
-			assert (r.pay[7] & 0x0F) == ((cyc[i - 1].pay[7] & 0x0F) + 1) & 0x0F, 'cyclic E2E counter skipped'
+			assert (r.pay[7] & 0x0F) == ((cyc[i - 1].pay[7] & 0x0F) + 1) % 15, 'cyclic E2E counter skipped' // Profile 1: 0..14
 		}
 	}
 	assert cyc_repeats >= 2, 'cyclic: only ${cyc_repeats} unchanged-layout resends — cadence is not time-driven'
