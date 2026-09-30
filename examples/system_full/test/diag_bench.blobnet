@@ -1,0 +1,34 @@
+# The DIAGNOSTIC bench for system_full (test/diag_nodes.lua): blobly_net as the tester on BOTH
+# buses, so it TRANSMITS on edge (UDS to zone_a, 0x7C0/0x7C8) — which the watch project
+# (../system_full.blobnet) deliberately does not: there edge stays listen-only, so a missing node
+# shows as the gateway's unacknowledged frames rather than being ACKed by the tap. Same CANsub.4
+# wiring: channel 2 = compute (classic 500k), channel 1 = edge (CAN-FD 500k/2M with BRS).
+# The model (system.toml) declares the tester on compute and tel only: a node on a SOME/IP segment
+# may sit on one CAN bus (REQ-TOPO-005), so its role on edge is this bench's, not the system's.
+project:
+  name: system_full — diagnostic bench
+  version: 2
+
+buses:
+  - name: compute
+    network: system_full
+    adapter: cansub
+    address: e5a16adf/2
+    protocol: can
+    bitrate: 500000
+    mode: normal
+    enabled: true
+    databases:
+      - ../compute.dbc
+
+  - name: edge
+    network: system_full
+    adapter: cansub
+    address: e5a16adf/1
+    protocol: canfd
+    bitrate: 500000
+    data_bitrate: 2000000
+    mode: normal
+    enabled: true
+    databases:
+      - ../edge.dbc

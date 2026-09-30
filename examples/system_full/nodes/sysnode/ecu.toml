@@ -24,6 +24,38 @@ id        = 0x7E0
 detail_id = 0x7E1
 period_ms = 500
 
+# The diagnostic server (docs/diagnostics.md): UDS over ISO-TP on the ids system.toml allocates
+# this node (diag = { req = 0x7A0, rsp = 0x7A8 }), on the compute bus (can0) with its functional id.
+# A gateway transmits no signals of its own, so its DIDs identify it and nothing is live. 0x27 as
+# on domain: a TRNG seed, and on this BENCH node blobly_net's public reference key by name.
+[[isotp]]
+name          = "diag"
+bus           = "can0"
+rx_id         = 0x7A0
+tx_id         = 0x7A8
+functional_id = 0x7DF
+bs            = 8
+stmin_ms      = 0
+s3_ms         = 5000
+security_attempts = 3
+security_delay_ms = 3000
+security_key      = "reference"
+
+# 19 bytes: the read answer is multi-frame
+[[did]]
+id    = 0xF190
+ascii = "BLOBLY-SYSNODE-H735"
+
+[[did]]
+id    = 0xF189
+ascii = "system_full"
+
+# writable only in extended AND with security level 1 unlocked (0x27, the board's key seam)
+[[did]]
+id    = 0x0102
+bytes = "00"
+write = { session = ["extended"], security = 1 }
+
 [[partition]]
 name = "gateway"
 core = 0

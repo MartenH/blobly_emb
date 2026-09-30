@@ -593,3 +593,30 @@ context = "h755/threadx"
 verifies = ["REQ-DIAG-008"]
 approved_by = "Claude bench session — NUCLEO-H755ZI-Q (system_full domain) vs CANsub.4 ch2"
 date = "2026-09-30"
+
+# R2 on the other two system_full CAN nodes (examples/system_full/test/diag_nodes.lua, 11/11): the
+# gateway (sysnode, H735, compute bus) and zone_a (H723, the EDGE bus — CAN-FD, classic-sized
+# ISO-TP) serve UDS from their ThreadX comm threads: sessions, constant DIDs multi-frame, 0x27 from
+# each chip's TRNG with the reference key and a gated DID, a functional (0x7DF) TesterPresent, and
+# wrong keys locking 0x27 out through
+# 0x11 (answered, then a restart; the keep cell holds the lockout). zone_a's live DID 0xF1A0 follows
+# the SteeringAngle it transmits in its FD frame 0x132. The TRNG on these two chips needs CONDRST to
+# recover from a seed error (boards/common/diag_board.c): a 1500-seed soak per node, 1494 distinct
+# seeds each and isolated "no seed" answers, none back to back. Evidence, not verifications, for REQ-DIAG-007
+# (0x11 answered before the reset; 0x28 is not served) and REQ-DIAG-008 (the lockout kept across
+# the reset; one key per seed and the ignored functional 0x27 are checked on domain only).
+[[review]]
+id = "uds-on-target-sysnode"
+method = "review"
+context = "h735/ThreadX"
+verifies = ["REQ-DIAG-001"]
+approved_by = "Claude bench session — STM32H735G-DK (system_full sysnode) vs CANsub.4 ch2"
+date = "2026-09-30"
+
+[[review]]
+id = "uds-on-target-zone-a"
+method = "review"
+context = "h723/ThreadX"
+verifies = ["REQ-DIAG-001", "REQ-DIAG-002"]
+approved_by = "Claude bench session — NUCLEO-H723ZG (system_full zone_a) vs CANsub.4 ch1 (CAN-FD)"
+date = "2026-09-30"

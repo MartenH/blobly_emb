@@ -46,13 +46,30 @@ int diag_sa_init(void) {
 	return 1;
 }
 
-/* the reference manual's recovery: clear the interrupt flags, restart the generator; the samples
- * of the failed period are discarded with it */
+/* the reference manual's recovery from a seed error; the samples of the failed period are
+ * discarded with it. The H72x/H73x RNG restarts through CONDRST (RM0468: CONDRST 1 then 0, wait for
+ * it to read 0, clear SEIS, SECS then clears) — toggling RNGEN leaves SECS set there, so one
+ * transient seed error answered every later 0x27 with "no seed" until the next reset (measured on
+ * an H723). The H74x/H75x RNG has no CONDRST and restarts through RNGEN. */
+#if defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx) || \
+    defined(STM32H733xx) || defined(STM32H735xx)
+#define RNG_CR_CONDRST (1u << 30)
+static void sa_rng_recover(void) {
+	RNG_CR_R |= RNG_CR_CONDRST;
+	RNG_CR_R &= ~RNG_CR_CONDRST;
+	for (uint32_t t = 0; (RNG_CR_R & RNG_CR_CONDRST) && t < 200000u; t++) {
+	}
+	RNG_SR_R = 0; /* SEIS/CEIS, after the restart: one raised during it is cleared with it */
+	for (uint32_t t = 0; (RNG_SR_R & RNG_SR_SECS) && t < 200000u; t++) {
+	}
+}
+#else
 static void sa_rng_recover(void) {
 	RNG_SR_R = 0;
 	RNG_CR_R &= ~RNG_CR_RNGEN;
 	RNG_CR_R |= RNG_CR_RNGEN;
 }
+#endif
 
 __attribute__((weak)) int diag_sa_seed(uint8_t *out, int n) {
 	if (g_sa_rng <= 0) return 0;
