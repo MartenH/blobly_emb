@@ -1,25 +1,7 @@
 -- E2E: the bridge stamps an alive counter + CRC into LampFrame (0x110, 3 bytes:
--- byte0 WarnLamp, byte1 CRC, byte2 counter). Independently recompute the CRC here
--- (AUTOSAR E2E Profile 1: CRC-8 poly 0x1D, start 0x00, no final XOR) and check the counter advances.
-local function crc8(bytes)
-  local crc = 0x00 -- AUTOSAR E2E Profile 1: start 0x00, no final XOR
-  for _, b in ipairs(bytes) do
-    crc = crc ~ b
-    for _ = 1, 8 do
-      if crc & 0x80 ~= 0 then crc = ((crc << 1) ~ 0x1D) & 0xFF else crc = (crc << 1) & 0xFF end
-    end
-  end
-  return crc
-end
+-- byte0 WarnLamp, byte1 CRC, byte2 counter). The CRC is recomputed by blobly_net's own AUTOSAR E2E
+-- Profile 1 (e2e.p01_crc, pinned to an independent implementation) and the counter must advance.
 
--- CRC over data_id (lo,hi) + frame bytes except crc_pos
-local function expected_crc(data, data_id, dlc, crc_pos)
-  local b = { data_id & 0xFF, (data_id >> 8) & 0xFF }
-  for i = 0, dlc - 1 do
-    if i ~= crc_pos then b[#b + 1] = string.byte(data, i + 1) end
-  end
-  return crc8(b)
-end
 
 test("E2E: LampFrame carries a valid CRC + advancing alive counter", function()
   for _ = 1, 20 do bus.send_message("CAN1", "Powertrain", { VehicleSpeed = 150 }); sleep_ms(10) end
@@ -32,7 +14,7 @@ test("E2E: LampFrame carries a valid CRC + advancing alive counter", function()
   check.truthy(#frames >= 3, "received E2E lamp frames, got " .. #frames)
   -- every frame's CRC (byte1) matches an independent recompute
   for _, d in ipairs(frames) do
-    check.equal(string.byte(d, 2), expected_crc(d, 0x10, 3, 1))
+    check.equal(string.byte(d, 2), e2e.p01_crc(d, 0x10, 1, 2))
   end
   -- the alive counter (low nibble of byte2) advances frame-to-frame
   for i = 2, #frames do

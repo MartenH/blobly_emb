@@ -7,27 +7,15 @@
 -- @verifies REQ-COM-008
 local OK, TIMEOUT, INTEGRITY = 1, 2, 3
 
-local function crc8(bytes)
-  local crc = 0x00 -- AUTOSAR E2E Profile 1: start 0x00, no final XOR
-  for _, b in ipairs(bytes) do
-    crc = crc ~ b
-    for _ = 1, 8 do
-      if crc & 0x80 ~= 0 then crc = ((crc << 1) ~ 0x1D) & 0xFF else crc = (crc << 1) & 0xFF end
-    end
-  end
-  return crc
-end
 
 local ctr = 0
--- the next BrakeStatus in sequence; `skip` frames are left out first (a gap), `corrupt` breaks the CRC
+-- the next BrakeStatus in sequence; `skip` frames are left out first (a gap), `corrupt` breaks the CRC.
+-- Stamped with blobly_net's AUTOSAR E2E Profile 1 (e2e.p01_protect), the profile the app checks.
 local function brake(raw, skip, corrupt)
   ctr = (ctr + 1 + (skip or 0)) % 15 -- Profile 1 counts 0..14
-  local d = { raw & 0xFF, (raw >> 8) & 0xFF, 0, 0, 0, ctr }
-  local b = { 0x44, 0x00 } -- CRC over data_id (lo, hi) + every byte except crc_pos (4)
-  for i = 0, 5 do if i ~= 4 then b[#b + 1] = d[i + 1] end end
-  d[5] = crc8(b)
-  if corrupt then d[5] = d[5] ~ 0xFF end
-  bus.send("CAN1", 0x301, string.char(table.unpack(d)))
+  local f = e2e.p01_protect(string.char(raw & 0xFF, (raw >> 8) & 0xFF, 0, 0, 0, 0), 0x44, 4, 5, ctr)
+  if corrupt then f = f:sub(1, 4) .. string.char(string.byte(f, 5) ~ 0xFF) .. f:sub(6) end
+  bus.send("CAN1", 0x301, f)
 end
 
 -- the newest BrakeReport seen within `ms` (after dropping what was buffered before)
