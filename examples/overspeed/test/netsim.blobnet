@@ -1,0 +1,21 @@
+# blobly_net stands in for the BRAKE system: ChassisECU is simulated from bus.dbc, and its
+# BrakeStatus is protected with AUTOSAR E2E Profile 1 exactly as the overspeed app checks it
+# (data_id 0x44, CRC byte 4, counter in byte 5 — ecu.toml's [[frame]] BrakeStatus). The suite
+# that declares this project (net_faults.lua) injects faults into that sender with sim.fault.
+project:
+  name: blobly overspeed with a simulated brake ECU (vcan0)
+  version: 7
+channels:
+  - name: CAN1
+    type: can
+    interface: vcan0
+    bitrate: 500000
+    mode: normal
+    databases:
+      - ../bus.dbc
+    simulation:
+      - name: ChassisECU
+        signals:
+          - { name: BrakePressure, type: const, value: 100 }
+        protect:
+          - { message: BrakeStatus, counter: BrakeCounter, crc: BrakeCrc, profile: autosar_p01, data_id: 0x44 }

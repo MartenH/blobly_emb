@@ -24,5 +24,16 @@ sleep 0.6
 
 # blobly_net drives + asserts; its runner exits non-zero if any test fails.
 cd "$EX"
-v -enable-globals -path "@vlib|@vmodules|$BLOBLY_NET/modules" \
-    run "$BLOBLY_NET/cmd/script/run.v" --project test/vcan.yml test/*.lua
+# A suite that declares its own project (`-- @project <file>` in its leading comment, e.g. one
+# where blobly_net simulates a peer) runs in an invocation of its own: the runner refuses a
+# --project that contradicts a declaration, and one run brings up one project. The rest share
+# test/vcan.yml, as before.
+run() { v -enable-globals -path "@vlib|@vmodules|$BLOBLY_NET/modules" run "$BLOBLY_NET/cmd/script/run.v" "$@"; }
+plain=() declared=()
+for t in test/*.lua; do
+    if sed -n '1,/^[^-]/p' "$t" | grep -q '^-- *@project '; then declared+=("$t"); else plain+=("$t"); fi
+done
+status=0
+if [ ${#plain[@]} -gt 0 ]; then run --project test/vcan.yml "${plain[@]}" || status=1; fi
+for t in "${declared[@]}"; do run "$t" || status=1; done
+exit $status
