@@ -151,6 +151,7 @@ fn test_the_receiver_gets_the_event_without_a_tx_mode() {
 	// the bridge fills — loom2v requires both on a received E2E frame
 	assert out.contains('e2e     = { data_id = 0x21, counter_pos = 1, crc_pos = 2, timeout_ms = 500 }'), out
 	assert out.contains('status = "RxStatus"'), out
+	assert out.contains('lost = "u32"'), 'a generated receiver cannot see skipped frames:\n${out}'
 }
 
 // A lone member cannot be lowered: the generated bridge sends to ONE static peer and has no

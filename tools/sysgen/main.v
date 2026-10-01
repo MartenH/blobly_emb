@@ -660,11 +660,15 @@ fn someip_sections(sys sysmodel.System, node sysmodel.Node, bus sysmodel.Bus, vi
 				rx_seen[sg] = true
 				s2 := sys.signal_by_name(sg) or { continue }
 				part := sig_part[sg] or { 'app' }
-				// received through E2E: the bridge's receive status rides along (loom2v requires it,
-				// so an E2E timeout never reaches the FB as a healthy-looking zero); never on the wire
+				// received through E2E: the bridge's receive status and lost count ride along (loom2v
+				// requires the status, so an E2E timeout never reaches the FB as a healthy-looking
+				// zero); neither is ever on the wire
 				mut rx_fields := s2.fields.clone()
 				if fr.has_e2e {
+					// and the E2E count of frames the sequence showed missing (REQ-E2E-002's
+					// skipped-sequence report: a `lost` verdict otherwise reads as plain ok)
 					rx_fields['status'] = 'RxStatus'
+					rx_fields['lost'] = 'u32'
 				}
 				b << '[[signal]]'
 				b << 'name   = "${s2.name}"'
