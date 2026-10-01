@@ -1,19 +1,31 @@
 module main
 
 import os
+import time
 
 // E2E from the DBC (blobly_net#271): a frame the DBC protects needs no [[frame]].e2e, and on an
 // ECU with one CAN bus no [[frame]] at all. Runs the real generator on examples/overspeed, whose
 // BrakeStatus layout lives in its bus.dbc — a refusal is a panic, which cannot be caught in-process.
 
+const e2e_bin = os.join_path(os.temp_dir(), 'loom2v_e2e_dbc_${os.getpid()}_${rand_suffix()}')
+
+fn rand_suffix() string {
+	return time.now().unix_nano().str()
+}
+
+// the generator is built once per run, from the source under test, and removed after it
+fn testsuite_begin() {
+	r := os.execute('${@VEXE} -enable-globals -o ${e2e_bin} ${os.join_path(@VMODROOT, 'tools',
+		'loom2v')}')
+	assert r.exit_code == 0, r.output
+}
+
+fn testsuite_end() {
+	os.rm(e2e_bin) or {}
+}
+
 fn e2e_loom2v_bin() string {
-	bin := os.join_path(os.temp_dir(), 'loom2v_e2e_dbc_${os.getpid()}')
-	if !os.exists(bin) {
-		r := os.execute('${@VEXE} -enable-globals -o ${bin} ${os.join_path(@VMODROOT, 'tools',
-			'loom2v')}')
-		assert r.exit_code == 0, r.output
-	}
-	return bin
+	return e2e_bin
 }
 
 // overspeed_with generates examples/overspeed with its ecu.toml (and bus.dbc) edited, in a
@@ -99,4 +111,15 @@ fn test_a_frame_override_contradicting_the_dbc_is_refused() {
 	})
 	assert code != 0
 	assert out.contains('contradicts the DBC'), out
+}
+
+fn test_a_declaration_on_another_nodes_frame_is_not_this_ecus() {
+	// a shared DBC declares frames this ECU never carries, in profiles it does not implement
+	code, out, _ := overspeed_with_dbc('foreign', fn (src string) string {
+		return src
+	}, fn (dbc string) string {
+		return dbc + '\nBO_ 1500 Elsewhere: 8 Other\n SG_ C : 0|8@1+ (1,0) [0|255] "" Tester\n' +
+			'BA_ "E2EProfile" BO_ 1500 "crc8_j1850";\nBA_ "E2ECrcSignal" BO_ 1500 "C";\n'
+	})
+	assert code == 0, out
 }

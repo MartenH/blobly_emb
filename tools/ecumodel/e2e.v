@@ -4,7 +4,8 @@ import toml
 import tools.candb
 
 // e2e.v — a CAN frame's effective E2E layout: its [[frame]].e2e, else what the DBC declares
-// through blobly_net#271's attributes. ONE resolution, so every tool that asks agrees.
+// through blobly_net#271's attributes. ONE resolution, so every tool that asks about a CAN frame
+// agrees. (SOME/IP frames have no DBC: their trailer layout is derived, see validate_someip.)
 
 // FrameE2e is where comm/e2e stamps a frame: the Data ID, the CRC byte, and the byte whose
 // low nibble is the counter.
@@ -58,6 +59,10 @@ fn e2e_byte_of(m candb.Message, name string, width int, msb int) !int {
 		if s.name != name {
 			continue
 		}
+		if s.is_multiplexor || s.is_multiplexed {
+			// stamped into every frame, it would overwrite another mux branch's bits
+			return error('"${name}" is multiplexed')
+		}
 		bit := if s.byte_order == .big_endian { msb } else { 0 }
 		if s.length != width || s.start_bit % 8 != bit {
 			return error('"${name}" must be ${width} bits from bit 0 of a byte')
@@ -74,23 +79,40 @@ const frame_e2e_fields = ['data_id', 'crc_pos', 'counter_pos']
 // that contradicts the DBC is refused unless the table says `deviates_from_dbc = true`; a field
 // it leaves out is the DBC's. The bool is false when neither declares E2E.
 pub fn resolve_frame_e2e(frame string, has_toml bool, em map[string]toml.Any, m ?candb.Message) !(FrameE2e, bool) {
+	mut declared := false
 	mut dbc := FrameE2e{}
-	mut has_dbc := false
+	mut dbc_err := ''
 	if msg := m {
-		dbc, has_dbc = dbc_e2e(msg)!
+		declared = msg.e2e.declared()
+		dbc, _ = dbc_e2e(msg) or {
+			dbc_err = err.msg()
+			FrameE2e{}, false
+		}
 	}
 	if !has_toml {
-		return dbc, has_dbc
+		if dbc_err != '' {
+			return error(dbc_err)
+		}
+		return dbc, declared
 	}
 	deviates := (em['deviates_from_dbc'] or { toml.Any(false) }).bool()
-	if deviates && !has_dbc {
+	if deviates && !declared {
 		return error('frame "${frame}": e2e says deviates_from_dbc, but the DBC declares no E2E for it')
+	}
+	complete := frame_e2e_fields.all(it in em)
+	if dbc_err != '' && !(deviates && complete) {
+		// a declaration comm/e2e cannot stamp may be replaced, whole and on purpose
+		return error('${dbc_err} — or give the frame a complete e2e with deviates_from_dbc = true')
+	}
+	if !declared && !complete {
+		missing := frame_e2e_fields.filter(it !in em)
+		return error('frame "${frame}": e2e has no ${missing.join(', ')}, and the DBC declares no E2E to take it from')
 	}
 	mut v := [dbc.data_id, dbc.crc_pos, dbc.counter_pos]
 	for i, k in frame_e2e_fields {
 		x := em[k] or { continue }
 		n := int(x.int())
-		if has_dbc && !deviates && n != v[i] {
+		if declared && dbc_err == '' && !deviates && n != v[i] {
 			return error('frame "${frame}": e2e.${k} = ${n} contradicts the DBC (${v[i]}) — ' +
 				'drop it, or set deviates_from_dbc = true if the difference is deliberate')
 		}

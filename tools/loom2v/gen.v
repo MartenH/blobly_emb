@@ -1164,7 +1164,7 @@ fn (mut f FrameCfg) set_e2e(fk string, e ecumodel.FrameE2e) {
 	f.e2e_ctr[fk] = e.counter_pos
 }
 
-fn parse_frames(doc toml.Doc, eth string, buses map[string]bool, bus_kind map[string]string, db candb.Database) FrameCfg {
+fn parse_frames(doc toml.Doc, eth string, buses map[string]bool, bus_kind map[string]string, db candb.Database, carries_signals map[string]bool) FrameCfg {
 	mut f := FrameCfg{}
 	mut seen_frames := map[string]string{} // snake(name) -> the bus it was authored on
 	for fr in ecumodel.toml_arr(doc, 'frame') {
@@ -1233,11 +1233,13 @@ fn parse_frames(doc toml.Doc, eth string, buses map[string]bool, bus_kind map[st
 		// this depends on is validated in build_model's protected-frames walk (the
 		// 'REQ-E2E-004 requires disjoint protection bytes' panic).
 	}
-	// a frame only the DBC protects has no [[frame]] to say its bus: the ECU's one CAN bus
+	// a frame only the DBC protects has no [[frame]] to say its bus: the ECU's one CAN bus. Only
+	// messages carrying this ECU's own signals — a shared DBC declares other nodes' frames too,
+	// and a routed frame on a gateway names its bus with a [[frame]]
 	can := buses.keys().filter(bus_kind[it] or { 'can' } == 'can')
 	for m in db.messages {
 		fk := snake(m.name)
-		if fk in seen_frames {
+		if fk in seen_frames || fk !in carries_signals {
 			continue
 		}
 		e, on := ecumodel.dbc_e2e(m) or { panic(err.msg()) }
@@ -1343,10 +1345,22 @@ fn build_model(doc toml.Doc, dbc string) Model {
 			eth = bname
 		}
 	}
-	// the frames' E2E is the [[frame]] table's, else the DBC's (blobly_net#271): a missing or
-	// unreadable DBC declares nothing
-	frames := parse_frames(doc, eth, buses, bus_kind, candb.load_dbc_file(dbc) or { candb.Database{} })
 	mut sig_of, sig_names, has_external, has_can_ext := parse_signals(doc, dbc, buses, eth)
+	// the frames' E2E is the [[frame]] table's, else the DBC's (blobly_net#271). A DBC file
+	// that will not parse is refused as the other loaders refuse it; none declares nothing.
+	db := candb.load_dbc_file(dbc) or {
+		if os.is_file(dbc) {
+			panic('loom2v: ${dbc}: ${err}')
+		}
+		candb.Database{}
+	}
+	mut carries_signals := map[string]bool{} // DBC messages this ECU's own bus signals ride in
+	for _, si in sig_of {
+		if si.external && si.dbc_msg != '' {
+			carries_signals[si.dbc_msg] = true
+		}
+	}
+	frames := parse_frames(doc, eth, buses, bus_kind, db, carries_signals)
 	part := parse_partitions(doc)
 	io_points, io_core := parse_io(doc, sig_of)
 	// P1 generates the SAME-core transport derivation only (triple): the io thread

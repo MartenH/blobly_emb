@@ -73,3 +73,45 @@ fn test_a_declaration_comm_e2e_cannot_stamp_is_refused() {
 		assert false, '${extra} was accepted'
 	}
 }
+
+fn test_without_a_dbc_declaration_the_table_must_be_complete() {
+	plain := (candb.parse_dbc('BO_ 1 A: 8 X\n SG_ S : 0|8@1+ (1,0) [0|255] "" X\n') or { panic(err) }).messages[0]
+	resolve_frame_e2e('a', true, e2e_table('{ data_id = 1, crc_pos = 2 }'), plain) or {
+		assert err.msg().contains('no counter_pos'), err.msg()
+		resolve_frame_e2e('a', true, e2e_table('{ timeout_ms = 300 }'), none) or {
+			assert err.msg().contains('no data_id, crc_pos, counter_pos')
+			return
+		}
+	}
+	assert false, 'a partial table with nothing to fill it from was accepted'
+}
+
+fn test_a_declaration_comm_e2e_cannot_stamp_may_be_replaced_whole_and_on_purpose() {
+	bad := brake('BA_ "E2EProfile" BO_ 769 "crc8";')
+	resolve_frame_e2e('brake_status', true, e2e_table('{ crc_pos = 4, counter_pos = 5, data_id = 0x44 }'),
+		bad) or {
+		assert err.msg().contains('deviates_from_dbc')
+		e, _ := resolve_frame_e2e('brake_status', true, e2e_table('{ crc_pos = 4, counter_pos = 5, data_id = 0x44, deviates_from_dbc = true }'),
+			bad)!
+		assert e.crc_pos == 4
+		return
+	}
+	assert false
+}
+
+fn test_a_multiplexed_field_signal_is_refused() {
+	m := (candb.parse_dbc('BO_ 769 F: 8 X
+ SG_ Sel M : 0|8@1+ (1,0) [0|255] "" X
+ SG_ Crc m1 : 32|8@1+ (1,0) [0|255] "" X
+ SG_ Ctr : 40|4@1+ (1,0) [0|15] "" X
+BA_ "E2ECounterSignal" BO_ 769 "Ctr";
+BA_ "E2ECrcSignal" BO_ 769 "Crc";
+BA_ "E2EProfile" BO_ 769 "autosar_p01";
+BA_ "E2EDataId" BO_ 769 1;
+') or { panic(err) }).messages[0]
+	dbc_e2e(m) or {
+		assert err.msg().contains('multiplexed')
+		return
+	}
+	assert false
+}

@@ -331,8 +331,12 @@ profile `comm/e2e` implements) and `E2EDataId` — the same ones blobly_net read
 that contradicts the DBC is refused unless the table says `deviates_from_dbc = true`; a field
 it leaves out is the DBC's. The CRC signal must be 8 bits on a byte boundary and the counter
 4 bits in a byte's low nibble. The DBC has no home for E2E's own timeout, so a received
-frame keeps `e2e = { timeout_ms = … }`; a sent frame needs no `[[frame]]` at all on an ECU
-with one CAN bus (with several, a `[[frame]]` names its bus). `examples/overspeed`'s
+frame keeps `e2e = { timeout_ms = … }`; a sent frame carrying the ECU's own signals needs no
+`[[frame]]` at all on an ECU with one CAN bus (with several, or for a routed frame, a `[[frame]]`
+names its bus). Without a DBC declaration the table must give all three of `data_id`, `crc_pos`
+and `counter_pos`; a declaration `comm/e2e` cannot stamp (another profile, a multiplexed field)
+is refused unless a complete table replaces it with `deviates_from_dbc = true`. Declarations on
+frames the ECU does not carry are not its business and are ignored. `examples/overspeed`'s
 BrakeStatus is declared this way:
 
 ```
