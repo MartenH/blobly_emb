@@ -4548,3 +4548,12 @@ e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8, timeout_ms = 1000 }
 	view := parse_node_view(doc)
 	assert view.sig_fields['192.168.0.50|BenchLoad'] or { '' } == 'load:u8', 'the receiver counts its status as payload'
 }
+
+// a tool that does not BUILD is an error of its own, never filtered into config errors (#313)
+fn test_a_tool_that_does_not_build_says_so() {
+	run_tool(os.join_path(@VMODROOT, 'tools', 'no_such_tool'), false, []) or {
+		assert err.msg().starts_with('cannot build '), err.msg()
+		return
+	}
+	assert false, 'a tool that cannot build ran'
+}
