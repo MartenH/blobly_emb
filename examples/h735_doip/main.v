@@ -10,7 +10,6 @@ import comm.doip
 
 fn C.board_clock_init()
 fn C.board_timebase_init()
-#include "@VMODROOT/boards/common/board.h" // the prototype: without it gcc reads the u64 as an int
 fn C.board_now_us() u64
 fn C.glue_kernel_enter()
 fn C.net_stream_recv(buf &u8, max int, timeout_ticks u32) int

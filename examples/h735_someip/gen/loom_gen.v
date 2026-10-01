@@ -228,7 +228,6 @@ fn eth_thread_entry(input u32) {
 	}
 }
 
-#include "@VMODROOT/boards/common/board.h"
 fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)
 fn C._tx_thread_sleep(u32) u32
 fn C._tx_initialize_kernel_enter()

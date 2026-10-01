@@ -56,10 +56,6 @@ fn emit_satellite_images(m Model, doc toml.Doc, producers []Producer, ecu string
 		g << sat_glue
 		g << ''
 		g << '// this image owns NO clocks, NO pins, NO bus — the owner core brings those up.'
-		// the C PROTOTYPE, not only V's decl: without it gcc assumes an int return, so the u64
-		// is cut to 32 bits and sign-extended — `now` went negative 35.8 min after boot (2^31 us)
-		// and wrapped again at 71.6, under every deadline, cadence and timestamp on the target
-		g << '#include "@VMODROOT/boards/common/board.h"'
 		g << 'fn C.board_now_us() u64 // DWT-based µs (this core\'s own counter, glue C)'
 		g << 'fn C.xcore_wait_clocks() // park until the owner signals clocks-ready (xcore.h)'
 		g << 'fn C.board_timebase_init()'

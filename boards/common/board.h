@@ -1,6 +1,10 @@
 #ifndef BLOBLY_H735_APP_BOARD_H
 #define BLOBLY_H735_APP_BOARD_H
 
+/* each board.mk force-includes this into every translation unit, assembly too: hence the
+ * guard: the declarations are C. */
+#ifndef __ASSEMBLER__
+
 #include <stdint.h>
 
 /* Raise the M7 to 550 MHz (Direct-SMPS supply -> VOS0 -> PLL1). Call first. */
@@ -20,5 +24,7 @@ void board_can_clock_pins_init(void);
  * a pad is rejected at cfg. Weak default (io_stm32.c) reserves nothing; each
  * board.c overrides with its real table — only the board knows its silicon. */
 int board_io_pin_reserved(int port, int pin);
+
+#endif /* __ASSEMBLER__ */
 
 #endif

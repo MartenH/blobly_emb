@@ -42,7 +42,6 @@ fn handler_app_heartbeat_on_100ms(ctx voidptr) {
 	st.heartbeat.on_100ms(inp, mut outp)
 }
 
-#include "@VMODROOT/boards/common/board.h"
 fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)
 
 __global (

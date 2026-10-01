@@ -28,7 +28,6 @@ fn handler_app_sweep_on_10ms(ctx voidptr) {
 	C.ioc_pub(0, u32(outp.pot_level.level), u32(0))
 }
 
-#include "@VMODROOT/boards/common/board.h"
 fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)
 fn C.io_exec_add(u32)  // io serve-exec µs, single writer (io thread)
 fn C.io_exec_us() u32 // FB thread reads to subtract io preemption

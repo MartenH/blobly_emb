@@ -2248,10 +2248,6 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 		}
 		tx_sleep_ticks := if m.target.tick_us / 1000 > 1 { m.target.tick_us / 1000 } else { u64(1) }
 		glue << ''
-		// the C PROTOTYPE, not only V's decl: without it gcc assumes an int return, so the u64
-		// is cut to 32 bits and sign-extended — `now` went negative 35.8 min after boot (2^31 us)
-		// and wrapped again at 71.6, under every deadline, cadence and timestamp on the target
-		glue << '#include "@VMODROOT/boards/common/board.h"'
 		glue << 'fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)'
 		glue << baremetal_trace_globals(m)
 		if m.io_points.len > 0 {

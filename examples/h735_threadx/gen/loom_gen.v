@@ -65,7 +65,6 @@ fn handler_app_load_slow_on_100ms(ctx voidptr) {
 	C.ioc_pub(0, u32(outp.workload.v), u32(0))
 }
 
-#include "@VMODROOT/boards/common/board.h"
 fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)
 fn C._tx_thread_sleep(u32) u32
 fn C._tx_initialize_kernel_enter()
