@@ -367,6 +367,10 @@ fn test_rx_gate_filter_router() {
 	echoes = drain_echoes(mut c, 2000 * time.millisecond)
 	assert 62 !in echoes && 64 !in echoes, 'a tampered protected frame was decoded (E2E rx check dead)'
 	assert 165 in echoes, 'no echo after the tampered frame — a bad trailer wedged the protected path'
+	// and with the sender silent, E2E's own 500 ms timeout withdraws the protected level
+	// (REQ-E2E-002 on the SOME/IP path): the echo falls back to the plain 55 after the 165
+	i165 := echoes.index(165)
+	assert echoes[i165..].contains(55), 'the protected level outlived its sender — no E2E timeout on the eth rx path'
 
 	// the refusals must have been COUNTED, not merely not-echoed: the drop
 	// counter's observable face is the rate-limited stderr notice, printed

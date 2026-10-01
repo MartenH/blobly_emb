@@ -27,4 +27,10 @@ pub fn (mut fb Bench) on_100ms(inp ports.BenchIn, mut out ports.BenchOut) {
 	out.echo_val = sig.EchoVal{
 		level: inp.lamp_cmd.level
 	}
+	// the protected rx path: what arrived and the receive status the bridge gave it, so the
+	// bench reads the E2E verdict off the wire (ok 1 / timeout 2 / integrity 3)
+	out.safe_status = sig.SafeStatus{
+		level:  inp.lamp_cmd_safe.level
+		status: u8(inp.lamp_cmd_safe.status)
+	}
 }

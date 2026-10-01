@@ -45,7 +45,10 @@ pub fn (mut fb Bench) on_100ms(inp ports.BenchIn, mut out ports.BenchOut) {
 	// -> publish -> app dispatch, end to end. The SUM keeps one echo frame
 	// serving both rx paths (the harness uses disjoint value ranges); event
 	// mode: sent only on change.
+	// the protected level counts only while its receive status is ok: a timeout or an
+	// integrity failure withdraws it (REQ-E2E-002)
+	safe := if inp.lamp_cmd_safe.status == .ok { inp.lamp_cmd_safe.level } else { u8(0) }
 	out.echo_val = sig.EchoVal{
-		level: inp.lamp_cmd.level + inp.lamp_cmd_safe.level
+		level: inp.lamp_cmd.level + safe
 	}
 }

@@ -148,7 +148,7 @@ bus     = "tel"
 id      = 0x8001
 signals = ["BenchLoad", "BenchTicks"]
 tx      = { mode = "cyclic", cycle_ms = 300 }
-e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8 }
+e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8, timeout_ms = 1000 }
 
 [[frame]]
 name    = "BenchCmd"

@@ -109,9 +109,11 @@ signals = ["LampCmd"]
 # E2E trailer — the bridge checks counter+CRC BEFORE unpack, so a tampered
 # datagram is a counted drop. The echo sums both levels (disjoint test value
 # ranges keep the legs unambiguous on one echo frame).
+# Its own 500 ms sender-loss timeout (REQ-E2E-002) and the receive status the bridge fills:
+# ok / timeout / integrity, as on CAN.
 [[signal]]
 name = "LampCmdSafe"
-fields = { level = "u8" }
+fields = { level = "u8", status = "RxStatus" }
 from = "eth0"
 to   = "app"
 
@@ -120,7 +122,7 @@ name    = "BenchCmdSafe"
 bus     = "eth0"
 id      = 0x8011
 signals = ["LampCmdSafe"]
-e2e     = { data_id = 0x22, counter_pos = 1, crc_pos = 2 }
+e2e     = { data_id = 0x22, counter_pos = 1, crc_pos = 2, timeout_ms = 500 }
 
 [[signal]]
 name = "EchoVal"

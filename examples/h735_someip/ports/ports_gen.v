@@ -7,6 +7,8 @@ pub struct BenchIn {
 pub mut:
 	// signal "LampCmd" — ch, transport double, eth0 -> app
 	lamp_cmd sig.LampCmd
+	// signal "LampCmdSafe" — ch, transport double, eth0 -> app
+	lamp_cmd_safe sig.LampCmdSafe
 }
 pub struct BenchOut {
 pub mut:
@@ -16,4 +18,6 @@ pub mut:
 	bench_ticks sig.BenchTicks
 	// signal "EchoVal" — ch, transport double, app -> eth0
 	echo_val sig.EchoVal
+	// signal "SafeStatus" — ch, transport double, app -> eth0
+	safe_status sig.SafeStatus
 }

@@ -138,7 +138,10 @@ pub fn partition_eth0(sock eth.Socket) {
 		min_delay_us: 30000
 	}
 	mut dgram := [80]u8{} // someip.header_len + com.max_pdu
-	mut e2e_rx_bench_cmd_safe := e2e.RxState{}
+	mut e2e_rx_bench_cmd_safe := e2e.RxState{
+		timeout_us: 500000
+	}
+	e2e_rx_bench_cmd_safe.arm(osal.now_us()) // from start: a sender absent since then times out too
 	mut rx_buf := [80]u8{} // someip.header_len + com.max_pdu — an oversize datagram truncates here and fails the Length gate
 	mut rx_ip := [4]u8{}
 	mut rx_port := u16(0)
@@ -201,15 +204,35 @@ pub fn partition_eth0(sock eth.Socket) {
 				for i in 0 .. int(bench_cmd_safe_len) {
 					pay_rx_bench_cmd_safe[i] = rx_buf[someip.header_len + i]
 				}
-				if !e2e_rx_bench_cmd_safe.check(&pay_rx_bench_cmd_safe[0], int(bench_cmd_safe_len), bench_cmd_safe_e2e_id, bench_cmd_safe_e2e_crc, bench_cmd_safe_e2e_ctr).usable() {
+				e2e_bench_cmd_safe := e2e_rx_bench_cmd_safe.check(&pay_rx_bench_cmd_safe[0], int(bench_cmd_safe_len), bench_cmd_safe_e2e_id, bench_cmd_safe_e2e_crc, bench_cmd_safe_e2e_ctr)
+				if e2e_bench_cmd_safe.usable() {
+					late_bench_cmd_safe := e2e_rx_bench_cmd_safe.expired(now) // ran out before this pass saw it
+					e2e_rx_bench_cmd_safe.on_valid(now)
+					if late_bench_cmd_safe {
+						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .timeout }
+						got_bench_cmd_safe = true
+					} else {
+						bench_cmd_safe_unpack(pay_rx_bench_cmd_safe, mut rxs_lamp_cmd_safe)
+						rxs_lamp_cmd_safe.status = .ok
+						got_bench_cmd_safe = true
+					}
+				} else {
 					rx_drops++
-					continue
+					if e2e_bench_cmd_safe == .crc_error {
+						if e2e_rx_bench_cmd_safe.timedout {
+							e2e_rx_bench_cmd_safe.arm(now) // only a fired timeout restarts on a corrupt frame
+						}
+						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .integrity }
+						got_bench_cmd_safe = true
+					}
 				}
-				bench_cmd_safe_unpack(pay_rx_bench_cmd_safe, mut rxs_lamp_cmd_safe)
-				got_bench_cmd_safe = true
 			} else {
 				rx_drops++ // an event id the config does not route
 			}
+		}
+		if e2e_rx_bench_cmd_safe.expired(now) {
+			rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .timeout }
+			got_bench_cmd_safe = true
 		}
 		if got_bench_cmd {
 			osal.ioc_publish2(lamp_cmd_ch, &rxs_lamp_cmd, u8(sizeof(rxs_lamp_cmd)))

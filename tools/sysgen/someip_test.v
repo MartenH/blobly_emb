@@ -92,6 +92,8 @@ fn tel_system() sysmodel.System {
 				e2e_counter_raw: 1
 				e2e_crc:         2
 				e2e_crc_raw:     2
+				has_e2e_timeout: true
+				e2e_timeout_raw: 500
 			},
 			sysmodel.SysFrame{
 				name:    'BenchCmd'
@@ -145,6 +147,10 @@ fn test_the_receiver_gets_the_event_without_a_tx_mode() {
 	assert !out.contains('tx      ='), 'a receiving node must not declare a tx mode:\n${out}'
 	// ...and the direction is bus -> partition
 	assert out.contains('from   = "eth0"')
+	// the E2E sender-loss timeout is the RECEIVER's (REQ-E2E-002), and so is the receive status
+	// the bridge fills — loom2v requires both on a received E2E frame
+	assert out.contains('e2e     = { data_id = 0x21, counter_pos = 1, crc_pos = 2, timeout_ms = 500 }'), out
+	assert out.contains('status = "RxStatus"'), out
 }
 
 // A lone member cannot be lowered: the generated bridge sends to ONE static peer and has no

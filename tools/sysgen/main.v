@@ -660,9 +660,15 @@ fn someip_sections(sys sysmodel.System, node sysmodel.Node, bus sysmodel.Bus, vi
 				rx_seen[sg] = true
 				s2 := sys.signal_by_name(sg) or { continue }
 				part := sig_part[sg] or { 'app' }
+				// received through E2E: the bridge's receive status rides along (loom2v requires it,
+				// so an E2E timeout never reaches the FB as a healthy-looking zero); never on the wire
+				mut rx_fields := s2.fields.clone()
+				if fr.has_e2e {
+					rx_fields['status'] = 'RxStatus'
+				}
 				b << '[[signal]]'
 				b << 'name   = "${s2.name}"'
-				b << 'fields = ${fields_inline(s2.fields)}'
+				b << 'fields = ${fields_inline(rx_fields)}'
 				b << 'from   = "${iface}"'
 				b << 'to     = "${part}"'
 				b << ''
@@ -707,7 +713,9 @@ fn someip_frame_lines(fr sysmodel.SysFrame, iface string, tx bool) []string {
 		b << 'tx      = { ${parts.join(', ')} }'
 	}
 	if fr.has_e2e {
-		b << 'e2e     = { data_id = 0x${fr.e2e_data_id.hex().to_upper()}, counter_pos = ${fr.e2e_counter}, crc_pos = ${fr.e2e_crc} }'
+		// the sender-loss timeout is the RECEIVER's (REQ-E2E-002): loom2v refuses it on a sent frame
+		tmo := if !tx && fr.has_e2e_timeout { ', timeout_ms = ${fr.e2e_timeout_raw}' } else { '' }
+		b << 'e2e     = { data_id = 0x${fr.e2e_data_id.hex().to_upper()}, counter_pos = ${fr.e2e_counter}, crc_pos = ${fr.e2e_crc}${tmo} }'
 	}
 	b << ''
 	return b

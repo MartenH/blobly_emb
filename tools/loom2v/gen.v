@@ -239,9 +239,6 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 			}
 			if typ == 'RxStatus' {
 				has_status = true
-				if from_bus && eth != '' && from == eth {
-					panic('ecu.toml: signal "${name}" is received from eth bus "${from}": receive status is a CAN bridge feature — the SOME/IP path does not synthesize it yet')
-				}
 				if from_bus && fname != 'status' {
 					panic('ecu.toml: signal "${name}" is received from ${from}: its RxStatus field must be named `status` (the bridge fills it)')
 				}
@@ -4800,6 +4797,21 @@ fn ms_to_us(ms i64, what string) int {
 // `E2ETimeout`; one AUTHORED in ecu.toml is refused where nothing receives the frame (transmitted,
 // or neither decoded nor a signal route's source), while the DBC's is for whoever receives it.
 fn validate_e2e_timeouts(m Model) {
+	// the SOME/IP receive path (#299): the same two requirements, per received eth E2E frame —
+	// every eth signal received reaches the application, so there is no decoded-or-not question
+	for fr in m.eth_frames {
+		if fr.tx || !fr.e2e_on {
+			continue
+		}
+		if fr.e2e_tmo_us == 0 {
+			panic('loom2v: eth frame "${fr.name}" is E2E-protected and received, but its e2e has no timeout_ms — REQ-E2E-002 detects total loss of the sender inside E2E itself')
+		}
+		for sn in fr.signals {
+			if !(m.sig_of[sn] or { SigInfo{} }).has_status {
+				panic('loom2v: signal "${sn}" comes from the E2E-protected eth frame "${fr.name}" but has no `status = "RxStatus"` — without it an E2E timeout reaches the FB as a zero value that looks healthy')
+			}
+		}
+	}
 	mut delivered := map[string][]string{} // frame -> the received signals decoded from it
 	for sname in m.sig_names {
 		si := m.sig_of[sname] or { continue }

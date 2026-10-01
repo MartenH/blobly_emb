@@ -16,10 +16,10 @@ derives = "SYS-REQ-SAFE-001"
 # of comm/com's QM deadline, and REQUIRED on every E2E frame whose signals the bridge
 # delivers to the application (loom2v refuses one without `e2e.timeout_ms` or the DBC's
 # `E2ETimeout`) — rung R3b of
-# docs/diagnostics.md. Gap closed for CAN 2026-09-28 (open since the 2026-07-24 sweep).
-# STILL OPEN on the SOME/IP receive path: the eth codec checks the E2E trailer but has no
-# timeout (loom2v refuses e2e.timeout_ms on an eth frame rather than drop it) — see the
-# tracking issue #299.
+# docs/diagnostics.md. Gap closed for CAN 2026-09-28 (open since the 2026-07-24 sweep), and
+# for the SOME/IP receive path 2026-10-02 (#299): the host bridge and the ThreadX eth thread
+# share one set of templates with the CAN bridge's rules, an eth rx signal carries the same
+# RxStatus, and a system.toml frame's e2e.timeout_ms is lowered to the receiving node.
 [[req]]
 id = "REQ-E2E-002"
 title = "Detect repetition and loss"

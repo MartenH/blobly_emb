@@ -135,8 +135,8 @@ the FB never calls a service API.
   per-level attempt limit + lockout
 - ✅ **R3 receive status** (#297, #298) — `status = "RxStatus"` (never_received / ok /
   timeout / integrity) and the E2E lost count per received signal; E2E's own sender-loss
-  timeout, independent of the COM deadline (REQ-E2E-002). Gap: the SOME/IP receive path has
-  no E2E timeout yet (#299)
+  timeout, independent of the COM deadline (REQ-E2E-002), on CAN and on the SOME/IP receive
+  path (#299)
 - 🧭 **R4 faults → DTCs** (#287) — `[[fault]]`, an FB fault port, debounce on the producing
   thread, fault memory + ISO 14229 status byte on the comm thread, operation cycle, 0x19
   01/02/0A, 0x14, 0x85 — on the host; tester rung N2 in blobly_net

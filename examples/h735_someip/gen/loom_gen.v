@@ -19,11 +19,13 @@ fn handler_app_bench_on_100ms(ctx voidptr) {
 	mut st := unsafe { &Partition_app_state(ctx) }
 	mut inp := ports.BenchIn{}
 	C.iocb_get(3, &inp.lamp_cmd)
+	C.iocb_get(4, &inp.lamp_cmd_safe)
 	mut outp := ports.BenchOut{}
 	st.bench.on_100ms(inp, mut outp)
 	C.iocb_pub(0, &outp.bench_load)
 	C.iocb_pub(1, &outp.bench_ticks)
 	C.iocb_pub(2, &outp.echo_val)
+	C.iocb_pub(5, &outp.safe_status)
 }
 
 // --- SOME/IP eth frames (docs/someip.md): derived-layout codec ---
@@ -67,6 +69,26 @@ pub fn bench_echo_pack(mut d [64]u8, s_echo_val sig.EchoVal) {
 	d[0] = u8(s_echo_val.level)
 }
 
+// BenchCmdSafe: rx event 0x8011, 3-byte payload (incl. 2-byte E2E trailer)
+pub const bench_cmd_safe_event_id = u16(0x8011)
+pub const bench_cmd_safe_len = u8(3)
+pub const bench_cmd_safe_e2e_id = u16(0x22)
+pub const bench_cmd_safe_e2e_ctr = 1
+pub const bench_cmd_safe_e2e_crc = 2
+// 64 = com.max_pdu (a literal: V codegen mishandles const-sized mut fixed-array params)
+pub fn bench_cmd_safe_unpack(d [64]u8, mut s_lamp_cmd_safe sig.LampCmdSafe) {
+	s_lamp_cmd_safe.level = u8(u64(d[0]))
+}
+
+// BenchSafeStatus: tx event 0x8005, 2-byte payload
+pub const bench_safe_status_event_id = u16(0x8005)
+pub const bench_safe_status_len = u8(2)
+// 64 = com.max_pdu (a literal: V codegen mishandles const-sized mut fixed-array params)
+pub fn bench_safe_status_pack(mut d [64]u8, s_safe_status sig.SafeStatus) {
+	d[0] = u8(s_safe_status.level)
+	d[1] = u8(s_safe_status.status)
+}
+
 // --- eth comm thread (eth0): SOME/IP over the NetX seam (docs/someip.md
 //     target rung). Rx/tx chain identical to the host bridge; IOC + NetX seams. ---
 fn eth_thread_entry(input u32) {
@@ -88,6 +110,15 @@ fn eth_thread_entry(input u32) {
 		cycle_us: 100000
 		min_delay_us: 30000
 	}
+	mut tx_bench_safe_status_st := com.TxState{
+		mode: com.TxMode.event
+		cycle_us: 100000
+		min_delay_us: 30000
+	}
+	mut e2e_rx_bench_cmd_safe := e2e.RxState{
+		timeout_us: 500000
+	}
+	e2e_rx_bench_cmd_safe.arm(C.board_now_us()) // from start: a sender absent since then times out too
 	peer_ip := someip_peer_ip // local copy: a stable address for the send seam
 	mut dgram := [80]u8{} // someip.header_len + com.max_pdu
 	mut rx_buf := [80]u8{} // oversize datagrams truncate here and drop (real length reported)
@@ -99,6 +130,8 @@ fn eth_thread_entry(input u32) {
 		// bounded drain, coalesced publish — the host bridge rules (docs/someip.md)
 		mut got_bench_cmd := false
 		mut rxs_lamp_cmd := sig.LampCmd{}
+		mut got_bench_cmd_safe := false
+		mut rxs_lamp_cmd_safe := sig.LampCmdSafe{}
 		for _ in 0 .. 16 {
 			rx_n := C.blob_eth_recv(0, &rx_ip[0], &rx_port, &rx_buf[0], 80)
 			if rx_n < 0 {
@@ -173,12 +206,51 @@ fn eth_thread_entry(input u32) {
 				}
 				bench_cmd_unpack(pay_rx_bench_cmd, mut rxs_lamp_cmd)
 				got_bench_cmd = true
+			} else if rh.method == bench_cmd_safe_event_id {
+				if rx_n - someip.header_len != int(bench_cmd_safe_len) {
+					g_eth_rx_drops++ // the router: the payload IS the frame, exactly
+					continue
+				}
+				mut pay_rx_bench_cmd_safe := [64]u8{} // com.max_pdu
+				for i in 0 .. int(bench_cmd_safe_len) {
+					pay_rx_bench_cmd_safe[i] = rx_buf[someip.header_len + i]
+				}
+				e2e_bench_cmd_safe := e2e_rx_bench_cmd_safe.check(&pay_rx_bench_cmd_safe[0], int(bench_cmd_safe_len), bench_cmd_safe_e2e_id, bench_cmd_safe_e2e_crc, bench_cmd_safe_e2e_ctr)
+				if e2e_bench_cmd_safe.usable() {
+					late_bench_cmd_safe := e2e_rx_bench_cmd_safe.expired(now) // ran out before this pass saw it
+					e2e_rx_bench_cmd_safe.on_valid(now)
+					if late_bench_cmd_safe {
+						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .timeout }
+						got_bench_cmd_safe = true
+					} else {
+						bench_cmd_safe_unpack(pay_rx_bench_cmd_safe, mut rxs_lamp_cmd_safe)
+						rxs_lamp_cmd_safe.status = .ok
+						got_bench_cmd_safe = true
+					}
+				} else {
+					g_eth_rx_drops++
+					if e2e_bench_cmd_safe == .crc_error {
+						if e2e_rx_bench_cmd_safe.timedout {
+							e2e_rx_bench_cmd_safe.arm(now) // only a fired timeout restarts on a corrupt frame
+						}
+						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .integrity }
+						got_bench_cmd_safe = true
+					}
+				}
 			} else {
 				g_eth_rx_drops++ // an event id the config does not route
 			}
 		}
+		if e2e_rx_bench_cmd_safe.expired(now) {
+			rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .timeout }
+			got_bench_cmd_safe = true
+		}
 		if got_bench_cmd {
 			C.iocb_pub(3, &rxs_lamp_cmd)
+			g_eth_rx_ok++
+		}
+		if got_bench_cmd_safe {
+			C.iocb_pub(4, &rxs_lamp_cmd_safe)
 			g_eth_rx_ok++
 		}
 		mut pay_bench_telem := [64]u8{} // com.max_pdu
@@ -223,6 +295,24 @@ fn eth_thread_entry(input u32) {
 			}
 			if C.blob_eth_send(0, &peer_ip[0], someip_peer_port, &dgram[0], n_bench_echo + int(bench_echo_len)) == 0 {
 				tx_bench_echo_st.mark_sent(now, pre_bench_echo, bench_echo_len)
+			}
+		}
+		mut pay_bench_safe_status := [64]u8{} // com.max_pdu
+		mut any_bench_safe_status := false
+		mut s_safe_status := sig.SafeStatus{}
+		if C.iocb_get_ever(5, &s_safe_status) != 0 {
+			any_bench_safe_status = true
+		}
+		bench_safe_status_pack(mut pay_bench_safe_status, s_safe_status)
+		if any_bench_safe_status && tx_bench_safe_status_st.should_send(now, pay_bench_safe_status, bench_safe_status_len) {
+			pre_bench_safe_status := pay_bench_safe_status // pre-E2E payload, for change detection
+			h_bench_safe_status := someip.notification(someip_service, bench_safe_status_event_id, someip_version, int(bench_safe_status_len))
+			n_bench_safe_status := someip.encode(h_bench_safe_status, &dgram[0])
+			for i in 0 .. int(bench_safe_status_len) {
+				dgram[n_bench_safe_status + i] = pay_bench_safe_status[i]
+			}
+			if C.blob_eth_send(0, &peer_ip[0], someip_peer_port, &dgram[0], n_bench_safe_status + int(bench_safe_status_len)) == 0 {
+				tx_bench_safe_status_st.mark_sent(now, pre_bench_safe_status, bench_safe_status_len)
 			}
 		}
 	}
@@ -327,5 +417,9 @@ pub fn boot() {
 	C.iocb_cfg(2, u16(sizeof(cfg_echo_val)))
 	mut cfg_lamp_cmd := sig.LampCmd{}
 	C.iocb_cfg(3, u16(sizeof(cfg_lamp_cmd)))
+	mut cfg_lamp_cmd_safe := sig.LampCmdSafe{}
+	C.iocb_cfg(4, u16(sizeof(cfg_lamp_cmd_safe)))
+	mut cfg_safe_status := sig.SafeStatus{}
+	C.iocb_cfg(5, u16(sizeof(cfg_safe_status)))
 	C._tx_initialize_kernel_enter()
 }

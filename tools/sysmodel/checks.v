@@ -2256,6 +2256,14 @@ fn check_someip_signal_frames(s System) []Issue {
 					msg:      'frame "${fr.name}": e2e crc_pos ${fr.e2e_crc_raw} is not a byte offset in the payload'
 				}
 			}
+			if fr.has_e2e_timeout && (!fr.e2e_timeout_int || fr.e2e_timeout_raw < 1
+				|| fr.e2e_timeout_raw > 2147483) {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": e2e timeout_ms ${fr.e2e_timeout_raw} is not a timeout in ms (1..2147483)'
+				}
+			}
 		}
 		// The EVENT owns the cadence on a someip bus: it is the unit that goes on the wire, and
 		// several signals share one. A signal-level cycle_ms would be accepted by the CAN-shaped

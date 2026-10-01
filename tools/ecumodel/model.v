@@ -476,6 +476,12 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			mut msize := 0
 			mut maxal := 1
 			for fname, ftyp in f.as_map() {
+				// a received signal's `status` is the bridge's RxStatus (a u8 enum): in the struct,
+				// never on the wire — the layout skips it like any field with no wire width
+				if eth != '' && fname == 'status' && ftyp.string() == 'RxStatus' && sig_from[sname] == eth {
+					msize += 1
+					continue
+				}
 				w := scalar_width(ftyp.string())
 				if w == 0 {
 					sig_badfield[sname] = '${fname} "${ftyp.string()}"'

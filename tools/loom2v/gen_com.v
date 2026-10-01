@@ -27,6 +27,7 @@ mut:
 	len         int  // total payload bytes (E2E trailer included)
 	e2e_on      bool // loss protection: the appended counter+CRC trailer
 	e2e_id      int
+	e2e_tmo_us  int // a received frame's E2E-owned sender-loss timeout (REQ-E2E-002); 0 = none
 	tx_mode     string // cyclic | change | mixed (tx frames)
 	tx_cycle_us int
 	tx_min_us   int
@@ -103,8 +104,11 @@ fn parse_eth_frames(doc toml.Doc, eth string, sig_of map[string]SigInfo) []EthFr
 		}
 		if ev := fm['e2e'] {
 			evm := ev.as_map()
-			if 'timeout_ms' in evm {
-				panic('loom2v: eth frame "${fname}": e2e.timeout_ms is not generated on the SOME/IP receive path yet — only the CAN bridge carries the E2E-owned timeout (REQ-E2E-002 gap for eth, tracked in requirements/e2e.toml)')
+			if tv := evm['timeout_ms'] {
+				if fr.tx {
+					panic('loom2v: eth frame "${fname}" sets e2e.timeout_ms, but it is SENT — the E2E timeout watches a RECEIVED frame for loss of its sender')
+				}
+				fr.e2e_tmo_us = ms_to_us(tv.i64(), 'eth frame "${fname}": e2e.timeout_ms')
 			}
 			fr.e2e_on = true
 			fr.e2e_id = int((evm['data_id'] or { toml.Any(0) }).int())
@@ -344,9 +348,7 @@ fn emit_eth_bridge(m Model) []string {
 		glue << '\tmut dgram := [80]u8{} // someip.header_len + com.max_pdu'
 	}
 	for fr in rx_frames {
-		if fr.e2e_on {
-			glue << '\tmut e2e_rx_${snake(fr.name)} := e2e.RxState{}'
-		}
+		glue << eth_rx_e2e_init(fr, 'osal.now_us()')
 	}
 	if rx_frames.len > 0 {
 		glue << '\tmut rx_buf := [80]u8{} // someip.header_len + com.max_pdu — an oversize datagram truncates here and fails the Length gate'
@@ -407,26 +409,17 @@ fn emit_eth_bridge(m Model) []string {
 			glue << '\t\t\t\tfor i in 0 .. int(${fb}_len) {'
 			glue << '\t\t\t\t\tpay_rx_${fb}[i] = rx_buf[someip.header_len + i]'
 			glue << '\t\t\t\t}'
-			if fr.e2e_on {
-				// the trailer check gates the unpack, as the CAN bridge gates
-				// decode: ok and lost are usable (loss flagged, data valid),
-				// a wrong CRC/id is a counted drop
-				glue << '\t\t\t\tif !e2e_rx_${fb}.check(&pay_rx_${fb}[0], int(${fb}_len), ${fb}_e2e_id, ${fb}_e2e_crc, ${fb}_e2e_ctr).usable() {'
-				glue << '\t\t\t\t\trx_drops++'
-				glue << '\t\t\t\t\tcontinue'
-				glue << '\t\t\t\t}'
-			}
-			mut uargs := []string{}
-			for s in fr.signals {
-				uargs << 'mut rxs_${snake(s)}'
-			}
-			glue << '\t\t\t\t${fb}_unpack(pay_rx_${fb}, ${uargs.join(', ')})'
-			glue << '\t\t\t\tgot_${fb} = true'
+			// the trailer check gates the unpack, as the CAN bridge gates decode: ok and lost
+			// are usable (loss flagged, data valid); a wrong CRC/id is a counted drop
+			glue << eth_rx_accept(m, fr, '\t\t\t\t', 'rx_drops++')
 		}
 		glue << '\t\t\t} else {'
 		glue << '\t\t\t\trx_drops++ // an event id the config does not route'
 		glue << '\t\t\t}'
 		glue << '\t\t}'
+		for fr in rx_frames {
+			glue << eth_rx_expiry(m, fr, '\t\t')
+		}
 		for fr in rx_frames {
 			fb := snake(fr.name)
 			glue << '\t\tif got_${fb} {'
@@ -1583,9 +1576,7 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 		}
 	}
 	for fr in rx_frames {
-		if fr.e2e_on {
-			glue << '\tmut e2e_rx_${snake(fr.name)} := e2e.RxState{}'
-		}
+		glue << eth_rx_e2e_init(fr, 'C.board_now_us()')
 	}
 	glue << '\tpeer_ip := someip_peer_ip // local copy: a stable address for the send seam'
 	if tx_frames.len > 0 {
@@ -1660,18 +1651,7 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 			glue << '\t\t\t\tfor i in 0 .. int(${fb}_len) {'
 			glue << '\t\t\t\t\tpay_rx_${fb}[i] = rx_buf[someip.header_len + i]'
 			glue << '\t\t\t\t}'
-			if fr.e2e_on {
-				glue << '\t\t\t\tif !e2e_rx_${fb}.check(&pay_rx_${fb}[0], int(${fb}_len), ${fb}_e2e_id, ${fb}_e2e_crc, ${fb}_e2e_ctr).usable() {'
-				glue << '\t\t\t\t\tg_eth_rx_drops++'
-				glue << '\t\t\t\t\tcontinue'
-				glue << '\t\t\t\t}'
-			}
-			mut uargs := []string{}
-			for s in fr.signals {
-				uargs << 'mut rxs_${snake(s)}'
-			}
-			glue << '\t\t\t\t${fb}_unpack(pay_rx_${fb}, ${uargs.join(', ')})'
-			glue << '\t\t\t\tgot_${fb} = true'
+			glue << eth_rx_accept(m, fr, '\t\t\t\t', 'g_eth_rx_drops++')
 		}
 		if rx_frames.len > 0 {
 			glue << '\t\t\t} else {'
@@ -1679,6 +1659,9 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 			glue << '\t\t\t}'
 		}
 		glue << '\t\t}'
+		for fr in rx_frames {
+			glue << eth_rx_expiry(m, fr, '\t\t')
+		}
 		for fr in rx_frames {
 			fb := snake(fr.name)
 			glue << '\t\tif got_${fb} {'
@@ -2104,4 +2087,110 @@ fn rx_off_latched(m Model, rx_msgs []string, bname string) bool {
 		}
 	}
 	return false
+}
+
+// --- the SOME/IP receive path's E2E and receive status (REQ-E2E-002, #299): one set of templates
+// for the host bridge and the ThreadX eth thread, so the two cannot answer a frame differently.
+// The rules are the CAN bridge's: a usable frame (ok or lost) re-arms the E2E timeout and is
+// published `ok` — or `timeout`, value withheld, when the timeout ran out before this pass noticed;
+// a corrupt one publishes `integrity` (and re-arms only a timeout that has already fired, so
+// corrupt frames cannot keep a dead sender alive); a repeat publishes nothing; the timeout's own
+// expiry publishes `timeout`. Signals without a `status` field get values only.
+
+// eth_rx_e2e_init declares a received frame's RxState and arms its timeout from start.
+fn eth_rx_e2e_init(fr EthFrame, now string) []string {
+	if !fr.e2e_on {
+		return []
+	}
+	fb := snake(fr.name)
+	mut out := ['\tmut e2e_rx_${fb} := e2e.RxState{']
+	out << '\t\ttimeout_us: ${fr.e2e_tmo_us}'
+	out << '\t}'
+	if fr.e2e_tmo_us > 0 {
+		out << '\te2e_rx_${fb}.arm(${now}) // from start: a sender absent since then times out too'
+	}
+	return out
+}
+
+// eth_status_set is `rxs_<sig> = sig.<Sig>{ status: <st> }` for every signal of the frame with a
+// status field — the value withheld, as the CAN bridge withholds it.
+fn eth_status_set(m Model, fr EthFrame, ind string, st string) []string {
+	mut out := []string{}
+	for sn in fr.signals {
+		if (m.sig_of[sn] or { SigInfo{} }).has_status {
+			out << '${ind}rxs_${snake(sn)} = sig.${sn}{ status: ${st} }'
+		}
+	}
+	return out
+}
+
+// eth_rx_accept is a received frame's body once its payload is in pay_rx_<fb>: the E2E check,
+// the unpack and the status. `drop` counts a refusal.
+fn eth_rx_accept(m Model, fr EthFrame, ind string, drop string) []string {
+	fb := snake(fr.name)
+	mut uargs := []string{}
+	for sn in fr.signals {
+		uargs << 'mut rxs_${snake(sn)}'
+	}
+	mut ok := ['${fb}_unpack(pay_rx_${fb}, ${uargs.join(', ')})']
+	for sn in fr.signals {
+		if (m.sig_of[sn] or { SigInfo{} }).has_status {
+			ok << 'rxs_${snake(sn)}.status = .ok'
+		}
+	}
+	ok << 'got_${fb} = true'
+	mut out := []string{}
+	if !fr.e2e_on {
+		for l in ok {
+			out << ind + l
+		}
+		return out
+	}
+	out << '${ind}e2e_${fb} := e2e_rx_${fb}.check(&pay_rx_${fb}[0], int(${fb}_len), ${fb}_e2e_id, ${fb}_e2e_crc, ${fb}_e2e_ctr)'
+	out << '${ind}if e2e_${fb}.usable() {'
+	if fr.e2e_tmo_us > 0 {
+		out << '${ind}\tlate_${fb} := e2e_rx_${fb}.expired(now) // ran out before this pass saw it'
+		out << '${ind}\te2e_rx_${fb}.on_valid(now)'
+		out << '${ind}\tif late_${fb} {'
+		out << eth_status_set(m, fr, ind + '\t\t', '.timeout')
+		out << '${ind}\t\tgot_${fb} = true'
+		out << '${ind}\t} else {'
+		for l in ok {
+			out << ind + '\t\t' + l
+		}
+		out << '${ind}\t}'
+	} else {
+		for l in ok {
+			out << ind + '\t' + l
+		}
+	}
+	out << '${ind}} else {'
+	out << '${ind}\t${drop}'
+	out << '${ind}\tif e2e_${fb} == .crc_error {'
+	if fr.e2e_tmo_us > 0 {
+		out << '${ind}\t\tif e2e_rx_${fb}.timedout {'
+		out << '${ind}\t\t\te2e_rx_${fb}.arm(now) // only a fired timeout restarts on a corrupt frame'
+		out << '${ind}\t\t}'
+	}
+	st := eth_status_set(m, fr, ind + '\t\t', '.integrity')
+	out << st
+	if st.len > 0 {
+		out << '${ind}\t\tgot_${fb} = true'
+	}
+	out << '${ind}\t}'
+	out << '${ind}}'
+	return out
+}
+
+// eth_rx_expiry publishes `timeout` once the E2E timeout runs out with nothing valid since.
+fn eth_rx_expiry(m Model, fr EthFrame, ind string) []string {
+	if !fr.e2e_on || fr.e2e_tmo_us == 0 {
+		return []
+	}
+	fb := snake(fr.name)
+	mut out := ['${ind}if e2e_rx_${fb}.expired(now) {']
+	out << eth_status_set(m, fr, ind + '\t', '.timeout')
+	out << '${ind}\tgot_${fb} = true'
+	out << '${ind}}'
+	return out
 }
