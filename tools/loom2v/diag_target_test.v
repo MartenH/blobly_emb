@@ -40,21 +40,25 @@ fn generate(name string, extra string) (int, string, string) {
 
 // generate_edited is generate with h735_threadx's config edited first.
 fn generate_edited(name string, edit fn (string) string, extra string) (int, string, string) {
-	root := @VMODROOT
-	ex := os.join_path(root, 'examples', 'h735_threadx')
 	tmp := os.join_path(os.temp_dir(), 'diag_target_${name}_${os.getpid()}')
-	os.mkdir_all(tmp) or { panic(err) }
 	defer {
 		os.rmdir_all(tmp) or {}
 	}
+	return run_in_scratch(tmp, 'h735_threadx', edit, extra)
+}
+
+// run_in_scratch runs loom2v on a copy of example `name`'s config (edited, `extra` appended) placed
+// in a sibling layout under `tmp`, so paths the config resolves against itself stay inside `tmp`.
+fn run_in_scratch(tmp string, name string, edit fn (string) string, extra string) (int, string, string) {
+	ex := os.join_path(@VMODROOT, 'examples', name)
+	scratch_ex := os.join_path(tmp, name)
+	os.mkdir_all(scratch_ex) or { panic(err) }
 	src := os.read_file(os.join_path(ex, 'ecu.toml')) or { panic(err) }
-	ecu := os.join_path(ex, 'ecu_diag_${name}_${os.getpid()}.toml') // beside its imports
+	ecu := os.join_path(scratch_ex, 'ecu.toml')
 	os.write_file(ecu, edit(src) + extra) or { panic(err) }
-	defer {
-		os.rm(ecu) or {}
-	}
+	os.cp(os.join_path(ex, 'bus.dbc'), os.join_path(scratch_ex, 'bus.dbc')) or { panic(err) }
 	glue := os.join_path(tmp, 'gen.v')
-	r := os.execute('${loom2v_bin()} ${ecu} ${os.join_path(ex, 'bus.dbc')} ${os.join_path(tmp,
+	r := os.execute('${loom2v_bin()} ${ecu} ${os.join_path(scratch_ex, 'bus.dbc')} ${os.join_path(tmp,
 		'sig.v')} ${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
 	return r.exit_code, r.output, os.read_file(glue) or { '' }
 }
@@ -250,22 +254,16 @@ signal = "Workload"
 fn test_the_reset_flushes_the_journal_first() {
 	src := os.read_file(os.join_path(@VMODROOT, 'examples', 'h755_threadx', 'ecu.toml')) or { panic(err) }
 	assert src.contains('[nvm]'), 'h755_threadx lost its [nvm] — update this test'
-	ex := os.join_path(@VMODROOT, 'examples', 'h755_threadx')
 	tmp := os.join_path(os.temp_dir(), 'diag_target_nvm_${os.getpid()}')
-	os.mkdir_all(tmp) or { panic(err) }
 	defer {
 		os.rmdir_all(tmp) or {}
 	}
-	ecu := os.join_path(ex, 'ecu_diag_nvm_${os.getpid()}.toml')
-	os.write_file(ecu, src + diag_conn) or { panic(err) }
-	defer {
-		os.rm(ecu) or {}
-	}
-	glue := os.join_path(tmp, 'gen.v')
-	r := os.execute('${loom2v_bin()} ${ecu} ${os.join_path(ex, 'bus.dbc')} ${os.join_path(tmp,
-		'sig.v')} ${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
-	assert r.exit_code == 0, r.output
-	g := os.read_file(glue) or { panic(err) }
+	// the satellite partition's `image = "../h755_m4_app"` resolves into the scratch layout
+	code, out, g := run_in_scratch(tmp, 'h755_threadx', fn (s string) string {
+		return s
+	}, diag_conn)
+	assert code == 0, out
+	assert os.exists(os.join_path(tmp, 'h755_m4_app', 'gen')), 'the satellite image was not generated into the scratch layout'
 	steps := ['if g_diag.reset_due() != 0 {', 'for !ch.tx_idle()', 'nvm_flush_ok = g_nvm.mark_clean()',
 		'if !nvm_flush_ok && diag_reset_tries < 20 {', 'C.diag_sys_reset()']
 	mut at := -1
