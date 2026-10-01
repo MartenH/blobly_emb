@@ -38,12 +38,13 @@ fn blobly_doip_run() {
 	// is NOT called: its response buffer (doip.v, max_did_data + 8) keeps the single-DID bound.
 	g_srv.uds.no_programming = true
 	g_srv.uds.reset_state()
+	// 0xF190 IS the VIN (ISO 14229-1 VINDataIdentifier), and the same one the announcement
+	// carries: a tester that discovers one VIN and reads another cannot tell which is wrong
 	g_srv.uds.dids[0].id = 0xF190
-	name := 'H735-DK'
-	for i in 0 .. name.len {
-		g_srv.uds.dids[0].data[i] = name[i]
+	for i in 0 .. vin.len {
+		g_srv.uds.dids[0].data[i] = vin[i]
 	}
-	g_srv.uds.dids[0].len = u8(name.len)
+	g_srv.uds.dids[0].len = u8(vin.len)
 	g_srv.uds.ndid = 1
 
 	// ISO 13400 discovery: broadcast the vehicle announcement 3x at boot
