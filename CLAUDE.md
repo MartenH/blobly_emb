@@ -110,6 +110,11 @@ satellite image like `h755_m4_app` has no `gen` target because its OWNER's gener
 freestanding path: V compiles a `__global`'s field defaults into `_vinit()`, a bare-metal image
 never calls it, and those fields then read 0 on target — four bench casualties before that
 script existed, and nothing in CI ran it until now.
+And each build log goes through **`scripts/check_implicit_wide.sh`**: a C function the V code
+declares returning u64/i64/f32/f64 that gcc saw with no prototype is truncated to `int`, which is
+how `board_now_us()` made every target's `now` go negative 35.8 minutes after boot (the fix is the
+`-include board.h` in each `boards/*/board.mk`). Blind on the images compiled with `-w`, which is
+why the fix sits on the compile line and not in the check.
 
 **CI pins the V compiler** to the release tag in `.v-version` (currently `0.5.2`), installed as the
 **prebuilt** `v_linux.zip` release asset in both jobs. It used to install master HEAD, so an upstream
