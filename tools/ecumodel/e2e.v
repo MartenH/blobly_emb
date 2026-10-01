@@ -108,7 +108,8 @@ pub fn resolve_frame_e2e(frame string, has_toml bool, em map[string]toml.Any, m 
 		return dbc, declared
 	}
 	deviates := (em['deviates_from_dbc'] or { toml.Any(false) }).bool()
-	if deviates && !declared {
+	if deviates && !declared && dbc_timeout == 0 {
+		// a timeout alone is still something to deviate from
 		return error('frame "${frame}": e2e says deviates_from_dbc, but the DBC declares no E2E for it')
 	}
 	complete := frame_e2e_fields.all(it in em)
