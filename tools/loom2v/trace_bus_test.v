@@ -1,27 +1,30 @@
 module main
 
 import os
-import time
 import toml
+import tools.sysmodel
 
-// built_tool compiles a repo tool once per test process, into a path of its own — never
-// `v run`, whose shared, self-deleting binary races a parallel test running the same tool (#313).
-// unique per run as well as per pid: a binary a crashed run left behind is never reused
-const tool_run_id = time.now().unix_nano()
+// the tools these tests run, built once per test process into a private directory — never
+// `v run`, whose shared, self-deleting binary races a parallel test running the same tool (#313)
+const tool_dir = sysmodel.private_temp_dir('blobly_test_tools') or { panic(err) }
 
 fn built_tool(name string) string {
-	bin := os.join_path(os.temp_dir(), 'blobly_test_${name}_${os.getpid()}_${tool_run_id}')
-	if !os.exists(bin) {
-		r := os.execute('${@VEXE} -enable-globals -o ${bin} ${os.join_path(@VMODROOT, 'tools', name)}')
-		assert r.exit_code == 0, r.output
+	bin := os.join_path(tool_dir, name)
+	$if windows {
+		if os.exists(bin + '.exe') {
+			return os.quoted_path(bin + '.exe')
+		}
+	} $else {
+		if os.exists(bin) {
+			return os.quoted_path(bin)
+		}
 	}
-	return bin
+	return os.quoted_path(sysmodel.build_tool(os.join_path(@VMODROOT, 'tools', name), true,
+		tool_dir) or { panic(err) })
 }
 
 fn testsuite_end() {
-	for name in ['sysgen', 'loom2v'] {
-		os.rm(os.join_path(os.temp_dir(), 'blobly_test_${name}_${os.getpid()}_${tool_run_id}')) or {}
-	}
+	os.rmdir_all(tool_dir) or {}
 }
 
 // A bus can carry no signals at all and still need a partition: the comm thread is where the
@@ -545,6 +548,8 @@ fn test_an_extended_dbc_binding_is_refused_by_its_flag() {
 		'${os.join_path(tmp, 'sig.v')} ${os.join_path(tmp, 'ports.v')} ${os.join_path(tmp, 'gen.v')} ' +
 		'${os.join_path(tmp, 'manifest.csv')}')
 	assert r.exit_code != 0, 'loom2v accepted an extended DBC binding: ${r.output}'
+	// refused BY loom2v, not a launch that failed for another reason
+	assert r.output.contains('is an extended (29-bit) message'), r.output
 	assert r.output.contains('extended (29-bit) message'), r.output
 }
 
