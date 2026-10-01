@@ -41,6 +41,7 @@ pub struct LampCmdSafe {
 pub mut:
 	level u8
 	status RxStatus
+	lost u16
 }
 
 pub struct EchoVal {

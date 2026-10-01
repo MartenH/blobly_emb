@@ -58,7 +58,7 @@ fn test_a_received_eth_e2e_frame_without_a_timeout_is_refused() {
 
 fn test_a_signal_of_a_received_eth_e2e_frame_without_status_is_refused() {
 	code, out, _ := host_someip_with('nostatus', fn (s string) string {
-		return s.replace('fields = { level = "u8", status = "RxStatus" }', 'fields = { level = "u8" }')
+		return s.replace('fields = { level = "u8", status = "RxStatus", lost = "u16" }', 'fields = { level = "u8" }')
 	})
 	assert code != 0
 	assert out.contains('signal "LampCmdSafe" comes from the E2E-protected eth frame'), out
@@ -93,9 +93,10 @@ fn test_a_fractional_eth_timeout_is_refused_not_truncated() {
 }
 
 fn test_a_lost_counter_rides_a_protected_eth_frame_and_not_an_unprotected_one() {
-	// on the protected frame: the bridge fills it from the E2E sequence, never from the wire
+	// on the protected frame (the example declares it): the bridge fills it from the E2E
+	// sequence, never from the wire
 	code, out, glue := host_someip_with('lost', fn (s string) string {
-		return s.replace('fields = { level = "u8", status = "RxStatus" }', 'fields = { level = "u8", status = "RxStatus", lost = "u16" }')
+		return s
 	})
 	assert code == 0, out
 	assert glue.contains('rxs_lamp_cmd_safe.lost = u16(e2e_rx_bench_cmd_safe.lost_frames)'), glue

@@ -209,15 +209,16 @@ pub fn partition_eth0(sock eth.Socket) {
 					.ok {
 						bench_cmd_safe_unpack(pay_rx_bench_cmd_safe, mut rxs_lamp_cmd_safe)
 						rxs_lamp_cmd_safe.status = .ok
+						rxs_lamp_cmd_safe.lost = u16(e2e_rx_bench_cmd_safe.lost_frames)
 						got_bench_cmd_safe = true
 					}
 					.timeout {
-						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .timeout }
+						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .timeout, lost: u16(e2e_rx_bench_cmd_safe.lost_frames) }
 						got_bench_cmd_safe = true
 					}
 					.integrity {
 						rx_drops++
-						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .integrity }
+						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .integrity, lost: u16(e2e_rx_bench_cmd_safe.lost_frames) }
 						got_bench_cmd_safe = true
 					}
 					.none {
@@ -229,7 +230,7 @@ pub fn partition_eth0(sock eth.Socket) {
 			}
 		}
 		if e2e_rx_bench_cmd_safe.expired(now) {
-			rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .timeout }
+			rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .timeout, lost: u16(e2e_rx_bench_cmd_safe.lost_frames) }
 			got_bench_cmd_safe = true
 		}
 		if got_bench_cmd {

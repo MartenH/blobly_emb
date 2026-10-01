@@ -113,7 +113,7 @@ signals = ["LampCmd"]
 # ok / timeout / integrity, as on CAN.
 [[signal]]
 name = "LampCmdSafe"
-fields = { level = "u8", status = "RxStatus" }
+fields = { level = "u8", status = "RxStatus", lost = "u16" }
 from = "eth0"
 to   = "app"
 
