@@ -392,8 +392,9 @@ verdict is published too, by the CAN bridge's rule (comm/e2e `RxState.receive`):
 frame requires `e2e.timeout_ms` — E2E's own sender-loss timeout (REQ-E2E-002) — and a
 `status = "RxStatus"` on each of its signals, which reads `ok`, `timeout` (the sender went
 silent; the value is withheld) or `integrity` (a corrupt frame; withheld), on the host and the
-ThreadX eth thread alike. In system.toml the frame states `timeout_ms` and sysgen gives it, and
-the status field, to the receiving node only.
+ThreadX eth thread alike; a `lost` field (u16/u32) carries the frames the sequence showed missing.
+In system.toml the frame states `timeout_ms` and sysgen gives it, with the status and lost
+fields, to the receiving node only.
 that leaves the frame's rx state and the frames after it intact. An `rx`
 deadline block on an eth frame stays validator-rejected (no `RxState`
 deadline path is generated yet — a stale command would look fresh). `examples/host_someip` gained the round trip: `BenchCmd`
