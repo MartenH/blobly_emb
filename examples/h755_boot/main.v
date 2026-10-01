@@ -22,6 +22,7 @@ const rsp_id = u32(0x7B8)
 fn C.board_clock_init()
 fn C.board_timebase_init()
 fn C.board_can_clock_pins_init() // FDCAN1 kernel clock + PD0/PD1 AF9 — blob_can_open does NOT mux pins
+#include "@VMODROOT/boards/common/board.h" // the prototype: without it gcc reads the u64 as an int
 fn C.board_now_us() u64
 fn C.board_rng(out &u8, n int) int
 fn C.bootcell_take_request() u32

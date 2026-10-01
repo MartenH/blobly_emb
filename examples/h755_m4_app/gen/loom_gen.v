@@ -34,6 +34,7 @@ fn handler_m4_m4_churn_on_2ms(ctx voidptr) {
 }
 
 // this image owns NO clocks, NO pins, NO bus — the owner core brings those up.
+#include "@VMODROOT/boards/common/board.h"
 fn C.board_now_us() u64 // DWT-based µs (this core's own counter, glue C)
 fn C.xcore_wait_clocks() // park until the owner signals clocks-ready (xcore.h)
 fn C.board_timebase_init()

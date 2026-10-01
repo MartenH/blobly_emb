@@ -25,6 +25,7 @@ fn handler_app_remote_lamp_on_10ms(ctx voidptr) {
 	C.ioc_pub(1, if outp.led_remote.on { u32(1) } else { u32(0) }, u32(0))
 }
 
+#include "@VMODROOT/boards/common/board.h"
 fn C.board_now_us() u64 // bare-metal monotonic µs (DWT cycle counter)
 fn C.io_exec_add(u32)  // io serve-exec µs, single writer (io thread)
 fn C.io_exec_us() u32 // FB thread reads to subtract io preemption
