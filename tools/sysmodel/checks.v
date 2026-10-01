@@ -466,10 +466,11 @@ fn check_signals_dissolved(s System) []Issue {
 				continue
 			}
 			if fname == 'status' || fname == 'lost' {
-				// receive metadata is not lowered from system.toml: the producer's generated tx
-				// signal, a ThreadX endpoint (R5), the SOME/IP codec and a generated frame without
-				// E2E would each reject or mis-carry it. Declare it in the consuming node's ecu.toml
-				// until the lowering supports it — one rule instead of a list of carriers.
+				// receive metadata is not AUTHORED in system.toml: the producer's generated tx
+				// signal, a ThreadX CAN endpoint (R5) and a generated frame without E2E would each
+				// reject or mis-carry it. Where the lowering knows it applies — a someip E2E frame —
+				// sysgen adds `status` to the receiving node itself; elsewhere it is declared in the
+				// consuming node's ecu.toml.
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-001'
@@ -2256,12 +2257,26 @@ fn check_someip_signal_frames(s System) []Issue {
 					msg:      'frame "${fr.name}": e2e crc_pos ${fr.e2e_crc_raw} is not a byte offset in the payload'
 				}
 			}
-			if fr.has_e2e_timeout && (!fr.e2e_timeout_int || fr.e2e_timeout_raw < 1
-				|| fr.e2e_timeout_raw > 2147483) {
+			// the receiver's sender-loss timeout (REQ-E2E-002): required, as loom2v requires it on
+			// the receiving node, and longer than the sender's own cycle — at or below it the
+			// timeout fires between healthy frames and every value is withheld as late
+			if !fr.has_e2e_timeout {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": e2e has no timeout_ms — the receiving node needs E2E\'s own sender-loss timeout (REQ-E2E-002)'
+				}
+			} else if !fr.e2e_timeout_int || fr.e2e_timeout_raw < 1 || fr.e2e_timeout_raw > 2147483 {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-003'
 					msg:      'frame "${fr.name}": e2e timeout_ms ${fr.e2e_timeout_raw} is not a timeout in ms (1..2147483)'
+				}
+			} else if fr.has_cycle_ms && fr.e2e_timeout_raw <= fr.cycle_ms_raw {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": e2e timeout_ms ${fr.e2e_timeout_raw} is not longer than its cycle_ms ${fr.cycle_ms_raw} — it would fire between healthy frames'
 				}
 			}
 		}

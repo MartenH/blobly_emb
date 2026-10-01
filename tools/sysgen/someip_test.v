@@ -686,3 +686,17 @@ fn test_a_private_temp_dir_is_unique_exclusive_and_0700() {
 	perms := os.execute('stat -c %a ${a}').output.trim_space()
 	assert perms == '700', 'scratch dir must be private (700), got ${perms}'
 }
+
+// E2E's own sender-loss timeout (REQ-E2E-002) is required on a someip E2E frame, as loom2v
+// requires it on the receiving node, and must outlast the sender's cycle or it fires between
+// healthy frames
+fn test_a_someip_e2e_frame_needs_a_timeout_longer_than_its_cycle() {
+	mut sys := tel_system()
+	sys.frames[0].has_e2e_timeout = false
+	assert seg_errs(sys).any(it.contains('has no timeout_ms')), seg_errs(sys).str()
+	sys.frames[0].has_e2e_timeout = true
+	sys.frames[0].e2e_timeout_raw = 300 // the fixture's cycle_ms
+	assert seg_errs(sys).any(it.contains('is not longer than its cycle_ms 300')), seg_errs(sys).str()
+	sys.frames[0].e2e_timeout_raw = 0
+	assert seg_errs(sys).any(it.contains('is not a timeout in ms')), seg_errs(sys).str()
+}

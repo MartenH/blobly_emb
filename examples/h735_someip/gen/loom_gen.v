@@ -129,8 +129,10 @@ fn eth_thread_entry(input u32) {
 		now := C.board_now_us()
 		// bounded drain, coalesced publish — the host bridge rules (docs/someip.md)
 		mut got_bench_cmd := false
+		mut rxok_bench_cmd := false // a value received, not a status published
 		mut rxs_lamp_cmd := sig.LampCmd{}
 		mut got_bench_cmd_safe := false
+		mut rxok_bench_cmd_safe := false // a value received, not a status published
 		mut rxs_lamp_cmd_safe := sig.LampCmdSafe{}
 		for _ in 0 .. 16 {
 			rx_n := C.blob_eth_recv(0, &rx_ip[0], &rx_port, &rx_buf[0], 80)
@@ -206,6 +208,7 @@ fn eth_thread_entry(input u32) {
 				}
 				bench_cmd_unpack(pay_rx_bench_cmd, mut rxs_lamp_cmd)
 				got_bench_cmd = true
+				rxok_bench_cmd = true
 			} else if rh.method == bench_cmd_safe_event_id {
 				if rx_n - someip.header_len != int(bench_cmd_safe_len) {
 					g_eth_rx_drops++ // the router: the payload IS the frame, exactly
@@ -216,25 +219,24 @@ fn eth_thread_entry(input u32) {
 					pay_rx_bench_cmd_safe[i] = rx_buf[someip.header_len + i]
 				}
 				e2e_bench_cmd_safe := e2e_rx_bench_cmd_safe.check(&pay_rx_bench_cmd_safe[0], int(bench_cmd_safe_len), bench_cmd_safe_e2e_id, bench_cmd_safe_e2e_crc, bench_cmd_safe_e2e_ctr)
-				if e2e_bench_cmd_safe.usable() {
-					late_bench_cmd_safe := e2e_rx_bench_cmd_safe.expired(now) // ran out before this pass saw it
-					e2e_rx_bench_cmd_safe.on_valid(now)
-					if late_bench_cmd_safe {
-						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .timeout }
-						got_bench_cmd_safe = true
-					} else {
+				match e2e_rx_bench_cmd_safe.receive(now, e2e_bench_cmd_safe) {
+					.ok {
 						bench_cmd_safe_unpack(pay_rx_bench_cmd_safe, mut rxs_lamp_cmd_safe)
 						rxs_lamp_cmd_safe.status = .ok
 						got_bench_cmd_safe = true
+						rxok_bench_cmd_safe = true
 					}
-				} else {
-					g_eth_rx_drops++
-					if e2e_bench_cmd_safe == .crc_error {
-						if e2e_rx_bench_cmd_safe.timedout {
-							e2e_rx_bench_cmd_safe.arm(now) // only a fired timeout restarts on a corrupt frame
-						}
+					.timeout {
+						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .timeout }
+						got_bench_cmd_safe = true
+					}
+					.integrity {
+						g_eth_rx_drops++
 						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .integrity }
 						got_bench_cmd_safe = true
+					}
+					.none {
+						g_eth_rx_drops++ // a repeat: the last value stands
 					}
 				}
 			} else {
@@ -247,11 +249,15 @@ fn eth_thread_entry(input u32) {
 		}
 		if got_bench_cmd {
 			C.iocb_pub(3, &rxs_lamp_cmd)
-			g_eth_rx_ok++
+			if rxok_bench_cmd {
+				g_eth_rx_ok++ // receptions only: an expiry or an integrity publish is not one
+			}
 		}
 		if got_bench_cmd_safe {
 			C.iocb_pub(4, &rxs_lamp_cmd_safe)
-			g_eth_rx_ok++
+			if rxok_bench_cmd_safe {
+				g_eth_rx_ok++ // receptions only: an expiry or an integrity publish is not one
+			}
 		}
 		mut pay_bench_telem := [64]u8{} // com.max_pdu
 		mut any_bench_telem := false

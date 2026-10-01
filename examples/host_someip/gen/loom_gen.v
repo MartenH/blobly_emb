@@ -205,25 +205,23 @@ pub fn partition_eth0(sock eth.Socket) {
 					pay_rx_bench_cmd_safe[i] = rx_buf[someip.header_len + i]
 				}
 				e2e_bench_cmd_safe := e2e_rx_bench_cmd_safe.check(&pay_rx_bench_cmd_safe[0], int(bench_cmd_safe_len), bench_cmd_safe_e2e_id, bench_cmd_safe_e2e_crc, bench_cmd_safe_e2e_ctr)
-				if e2e_bench_cmd_safe.usable() {
-					late_bench_cmd_safe := e2e_rx_bench_cmd_safe.expired(now) // ran out before this pass saw it
-					e2e_rx_bench_cmd_safe.on_valid(now)
-					if late_bench_cmd_safe {
-						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .timeout }
-						got_bench_cmd_safe = true
-					} else {
+				match e2e_rx_bench_cmd_safe.receive(now, e2e_bench_cmd_safe) {
+					.ok {
 						bench_cmd_safe_unpack(pay_rx_bench_cmd_safe, mut rxs_lamp_cmd_safe)
 						rxs_lamp_cmd_safe.status = .ok
 						got_bench_cmd_safe = true
 					}
-				} else {
-					rx_drops++
-					if e2e_bench_cmd_safe == .crc_error {
-						if e2e_rx_bench_cmd_safe.timedout {
-							e2e_rx_bench_cmd_safe.arm(now) // only a fired timeout restarts on a corrupt frame
-						}
+					.timeout {
+						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .timeout }
+						got_bench_cmd_safe = true
+					}
+					.integrity {
+						rx_drops++
 						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .integrity }
 						got_bench_cmd_safe = true
+					}
+					.none {
+						rx_drops++ // a repeat: the last value stands
 					}
 				}
 			} else {

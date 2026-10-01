@@ -192,3 +192,23 @@ fn test_loss_and_repeat_across_the_wrap() {
 	tx.protect(&f[0], 8, id, crc_pos, ctr_pos)
 	assert f[ctr_pos] & 0x0F == 0
 }
+
+// receive: the receiver's rule for one checked frame (REQ-E2E-002)
+fn test_receive_publishes_each_verdict_by_the_rule() {
+	mut r := RxState{
+		timeout_us: 1000
+	}
+	r.arm(0)
+	assert r.receive(100, .ok) == .ok
+	assert r.receive(200, .lost) == .ok, 'a lost frame is usable: its value counts'
+	assert r.receive(300, .repeated) == .none, 'a repeat publishes nothing'
+	// a usable frame after the timeout ran out unseen is published as the timeout
+	assert r.receive(1500, .ok) == .timeout
+	assert r.receive(1600, .ok) == .ok, 'and the next one is fresh again'
+	// a corrupt frame is an integrity failure, and does NOT re-arm a live timeout
+	assert r.receive(1700, .crc_error) == .integrity
+	assert r.expired(2601), 'corrupt frames kept the sender alive'
+	// once the timeout has fired, a corrupt frame restarts it (a fresh window for the next)
+	assert r.receive(2700, .crc_error) == .integrity
+	assert !r.expired(3600) && r.expired(3701)
+}

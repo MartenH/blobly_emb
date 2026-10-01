@@ -4800,7 +4800,17 @@ fn validate_e2e_timeouts(m Model) {
 	// the SOME/IP receive path (#299): the same two requirements, per received eth E2E frame —
 	// every eth signal received reaches the application, so there is no decoded-or-not question
 	for fr in m.eth_frames {
-		if fr.tx || !fr.e2e_on {
+		if fr.tx {
+			continue
+		}
+		if !fr.e2e_on {
+			// nothing on an unprotected eth frame can report timeout or integrity (no COM deadline
+			// on eth): a status there would read ok forever over a stale value
+			for sn in fr.signals {
+				if (m.sig_of[sn] or { SigInfo{} }).has_status {
+					panic('loom2v: signal "${sn}" has a `status`, but eth frame "${fr.name}" is not E2E-protected — on the SOME/IP path only E2E can report a timeout or an integrity failure, so the status would read ok forever')
+				}
+			}
 			continue
 		}
 		if fr.e2e_tmo_us == 0 {

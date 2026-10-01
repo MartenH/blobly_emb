@@ -135,6 +135,35 @@ pub fn (mut r RxState) expired(now u64) bool {
 	return false
 }
 
+// RxVerdict is what a receiver publishes for one checked frame (receive).
+pub enum RxVerdict {
+	none      // a repeat: publish nothing, the last value stands
+	ok        // a usable frame: publish its value
+	timeout   // a usable frame that arrived after the timeout ran out unseen: value withheld
+	integrity // a corrupt frame: publish the failure, value withheld
+}
+
+// receive is the receive-side rule for one frame `check` has judged (REQ-E2E-002): a usable frame
+// (ok or lost) re-arms the sender-loss timeout and is published — as a timeout, value withheld,
+// when the timeout ran out before the caller polled `expired`; a corrupt frame is published as
+// an integrity failure and restarts only a timeout that has already fired, so corrupt frames can
+// never keep a dead sender looking alive; a repeat publishes nothing. ONE rule for every receive
+// path that applies it.
+pub fn (mut r RxState) receive(now u64, st Status) RxVerdict {
+	if st.usable() {
+		late := r.expired(now)
+		r.on_valid(now)
+		return if late { RxVerdict.timeout } else { RxVerdict.ok }
+	}
+	if st == .crc_error {
+		if r.timedout {
+			r.arm(now)
+		}
+		return .integrity
+	}
+	return .none
+}
+
 // check verifies the CRC and the counter progression (delta 0 = repeated,
 // 1 = ok, >1 = lost; modulo 15). It resyncs to the received counter except on a CRC error.
 // A counter of 15 is refused like a CRC error: no Profile 1 sender produces it, so the frame is
