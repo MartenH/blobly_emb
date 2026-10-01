@@ -115,6 +115,7 @@ mut:
 	sender   string
 	cycle_ms int
 	sigs     []SigBuilder
+	e2e      E2eDecl
 }
 
 // CAN_EFF_FLAG marks an extended (29-bit) id in a DBC BO_ record.
@@ -135,6 +136,7 @@ pub fn parse_dbc(text string) !Database {
 	mut by_id := map[u64]int{} // idkey(id, ext) -> index into msgs
 	mut cur := -1              // index of the message SG_ lines attach to
 	mut nodes := []string{}
+	mut e2e_defaults := []string{}
 
 	for raw_line in text.split_into_lines() {
 		line := raw_line.trim_space()
@@ -157,8 +159,26 @@ pub fn parse_dbc(text string) !Database {
 			nodes = line[4..].fields()
 		} else if line.starts_with('BA_ "GenMsgCycleTime"') {
 			apply_cycle_time(mut msgs, by_id, line)
+		} else if line.starts_with('BA_ "E2E') {
+			apply_e2e_attr(mut msgs, by_id, line)
+		} else if line.starts_with('BA_DEF_DEF_ "E2E') {
+			// a file-wide default, applied once every message's own records are known
+			e2e_defaults << line
 		}
 		// other records (BA_DEF_, blank, …) are ignored.
+	}
+	// a message that states no E2E attribute is not protected by a default, and one it states
+	// itself wins
+	for line in e2e_defaults {
+		f := line.trim_right(';').fields()
+		if f.len < 3 {
+			continue
+		}
+		for mut mb in msgs {
+			if mb.e2e.declared() {
+				set_e2e_field(mut mb.e2e, f[1], f[2..].join(' ').trim_space(), false)
+			}
+		}
 	}
 
 	// emit immutable model
@@ -193,6 +213,7 @@ pub fn parse_dbc(text string) !Database {
 			sender:   mb.sender
 			cycle_ms: mb.cycle_ms
 			signals:  sigs
+			e2e:      mb.e2e
 		}
 	}
 	return Database{
@@ -214,6 +235,80 @@ fn apply_cycle_time(mut msgs []MsgBuilder, by_id map[u64]int, line string) {
 	id := if ext { raw_id & can_eff_mask } else { raw_id }
 	if idx := by_id[idkey(id, ext)] {
 		msgs[idx].cycle_ms = f[4].int()
+	}
+}
+
+// apply_e2e_attr parses one of blobly_net#271's E2E contract attributes — `BA_ "E2ECounterSignal"
+// BO_ <id> "<signal>";`, likewise E2ECrcSignal and E2EProfile, and `BA_ "E2EDataId" BO_ <id> <n>;`
+// — onto its message. A value that is not what the attribute holds is left unset, not guessed.
+fn apply_e2e_attr(mut msgs []MsgBuilder, by_id map[u64]int, line string) {
+	f := line.trim_right(';').fields()
+	// f: BA_ "<name>" BO_ <id> <value…>
+	if f.len < 5 || f[2] != 'BO_' {
+		return
+	}
+	raw_id := u32(f[3].u64())
+	ext := raw_id & can_eff_flag != 0
+	id := if ext { raw_id & can_eff_mask } else { raw_id }
+	idx := by_id[idkey(id, ext)] or { return }
+	set_e2e_field(mut msgs[idx].e2e, f[1], f[4..].join(' ').trim_space(), true)
+}
+
+// set_e2e_field sets one attribute on a declaration — `overwrite` false for a default, which
+// fills only what the message did not state. A Data ID that is not one is KEPT as said, never
+// read as absent: absent means no id, which is a different checksum.
+fn set_e2e_field(mut d E2eDecl, quoted_name string, raw string, overwrite bool) {
+	str := if raw.len >= 2 && raw.starts_with('"') && raw.ends_with('"') {
+		raw[1..raw.len - 1]
+	} else {
+		''
+	}
+	match quoted_name {
+		'"E2ECounterSignal"' {
+			if overwrite || d.counter == '' {
+				d = E2eDecl{
+					...d
+					counter: str
+				}
+			}
+		}
+		'"E2ECrcSignal"' {
+			if overwrite || d.crc == '' {
+				d = E2eDecl{
+					...d
+					crc: str
+				}
+			}
+		}
+		'"E2EProfile"' {
+			if overwrite || d.profile == '' {
+				d = E2eDecl{
+					...d
+					profile: str
+				}
+			}
+		}
+		'"E2EDataId"' {
+			if !overwrite && (d.has_data_id || d.bad_data_id != '') {
+				return
+			}
+			if raw != '' && raw.bytes().all(it.is_digit()) && raw.len <= 10 && raw.u64() <= 0xFFFF_FFFF {
+				d = E2eDecl{
+					...d
+					data_id:     u32(raw.u64())
+					has_data_id: true
+					bad_data_id: ''
+				}
+			} else {
+				d = E2eDecl{
+					...d
+					data_id:     0
+					has_data_id: false
+					bad_data_id: raw
+				}
+			}
+		}
+		else {}
 	}
 }
 

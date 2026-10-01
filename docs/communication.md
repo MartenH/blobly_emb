@@ -323,6 +323,29 @@ name = "BrakeStatus"; bus = "can0"                        # rx: E2E owns the los
 e2e  = { data_id = 0x44, crc_pos = 4, counter_pos = 5, timeout_ms = 300 }
 ```
 
+**The layout may come from the DBC instead** (blobly_net#271): four message attributes —
+`E2ECounterSignal` and `E2ECrcSignal` (signal names), `E2EProfile` (`autosar_p01`, the one
+profile `comm/e2e` implements) and `E2EDataId` — the same ones blobly_net reads and its
+`cmd/arxml2dbc` writes, so both tools take one contract from one file. `tools/ecumodel`'s
+`resolve_frame_e2e` is the one resolution: a `[[frame]].e2e` field is an override, and one
+that contradicts the DBC is refused unless the table says `deviates_from_dbc = true`; a field
+it leaves out is the DBC's. The CRC signal must be 8 bits on a byte boundary and the counter
+4 bits in a byte's low nibble. The DBC has no home for E2E's own timeout, so a received
+frame keeps `e2e = { timeout_ms = … }`; a sent frame carrying the ECU's own signals needs no
+`[[frame]]` at all on an ECU with one CAN bus (with several, or for a routed frame, a `[[frame]]`
+names its bus). Without a DBC declaration the table must give all three of `data_id`, `crc_pos`
+and `counter_pos`; a declaration `comm/e2e` cannot stamp (another profile, a multiplexed field)
+is refused unless a complete table replaces it with `deviates_from_dbc = true`. Declarations on
+frames the ECU does not carry are not its business and are ignored. `examples/overspeed`'s
+BrakeStatus is declared this way:
+
+```
+BA_ "E2ECounterSignal" BO_ 769 "BrakeCounter";
+BA_ "E2ECrcSignal" BO_ 769 "BrakeCrc";
+BA_ "E2EProfile" BO_ 769 "autosar_p01";
+BA_ "E2EDataId" BO_ 769 68;
+```
+
 The bridge stamps **after** the on-change decision (so the ever-changing counter
 doesn't defeat send-on-change), and on rx **decodes only if the check passes** — a
 bad frame is ignored, and the rx deadline then invalidates the signals. It's a raw

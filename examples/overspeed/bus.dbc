@@ -87,9 +87,17 @@ VAL_ 512 Indicators 0 "Off" 1 "Left" 2 "Right" 3 "Hazard" ;
 VAL_ 769 ABSActive 0 "Inactive" 1 "Active" ;
 
 BA_DEF_ BO_ "GenMsgCycleTime" INT 0 65535;
+BA_DEF_ BO_ "E2ECounterSignal" STRING;
+BA_DEF_ BO_ "E2ECrcSignal" STRING;
+BA_DEF_ BO_ "E2EProfile" STRING;
+BA_DEF_ BO_ "E2EDataId" INT 0 65535;
 BA_ "GenMsgCycleTime" BO_ 256 100;
 BA_ "GenMsgCycleTime" BO_ 1792 100;
 BA_ "GenMsgCycleTime" BO_ 512 200;
 BA_ "GenMsgCycleTime" BO_ 768 20;
 BA_ "GenMsgCycleTime" BO_ 769 50;
 BA_ "GenMsgCycleTime" BO_ 1024 500;
+BA_ "E2ECounterSignal" BO_ 769 "BrakeCounter";
+BA_ "E2ECrcSignal" BO_ 769 "BrakeCrc";
+BA_ "E2EProfile" BO_ 769 "autosar_p01";
+BA_ "E2EDataId" BO_ 769 68;

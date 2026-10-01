@@ -534,7 +534,7 @@ fn gateway_forward_arms(m Model, src_bus string) []string {
 	return out
 }
 
-fn parse_routes(doc toml.Doc, dbc string) []Route {
+fn parse_routes(doc toml.Doc, dbc string, frames FrameCfg) []Route {
 	mut routes := []Route{}
 	for r in ecumodel.toml_arr(doc, 'route') {
 		m := r.as_map()
@@ -726,7 +726,7 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 				// modeled as explicit SG_ in the DBC; the PRODUCER fills those (protect()), not
 				// a route, so exempt any SG_ whose every occupied bit lies in a protection span
 				// ON THIS BUS. owns() walks the signal's bits byte-order-aware (Motorola-safe).
-				prot := frame_reserved_bits(doc, r.to_frame, r.to_bus)
+				prot := frame_reserved_bits(frames, r.to_frame, r.to_bus)
 				for sg in m2.signals {
 					if sg.name in routed_sigs[key] {
 						continue
@@ -762,36 +762,25 @@ fn parse_routes(doc toml.Doc, dbc string) []Route {
 }
 
 // frame_reserved_bits returns the [lo, hi) bit ranges a frame's E2E/SecOC protection
-// occupies (CRC byte + counter byte, or freshness byte + MAC bytes), read from its
-// [[frame]] block. Used to exempt producer-filled protection SG_ from the routed-
-// signal completeness check.
-fn frame_reserved_bits(doc toml.Doc, frame string, bus string) [][]int {
+// occupies (CRC byte + counter low nibble, or freshness byte + MAC bytes) on `bus`, from the
+// resolved frame config — so an E2E layout the DBC declares counts like an authored one. Used
+// to exempt producer-filled protection SG_ from the routed-signal completeness check.
+fn frame_reserved_bits(f FrameCfg, frame string, bus string) [][]int {
 	mut out := [][]int{}
-	for fr in ecumodel.toml_arr(doc, 'frame') {
-		fm := fr.as_map()
-		if snake((fm['name'] or { toml.Any('') }).string()) != snake(frame) {
-			continue
-		}
-		// protection applies ONLY on the frame's authored bus (like e2e_here/secoc_here);
-		// a route on a different bus does NOT protect, so it must still fill those SG_.
-		if (fm['bus'] or { toml.Any('') }).string() != bus {
-			continue
-		}
-		if 'e2e' in fm {
-			em := (fm['e2e'] or { toml.Any('') }).as_map()
-			crc := int((em['crc_pos'] or { toml.Any(0) }).int())
-			ctr := int((em['counter_pos'] or { toml.Any(0) }).int())
-			out << [crc * 8, crc * 8 + 8]
-			out << [ctr * 8, ctr * 8 + 4] // only the LOW nibble is the counter; high nibble is free
-		}
-		if 'secoc' in fm {
-			sm := (fm['secoc'] or { toml.Any('') }).as_map()
-			fresh := int((sm['fresh_pos'] or { toml.Any(0) }).int())
-			mac := int((sm['mac_pos'] or { toml.Any(0) }).int())
-			maclen := int((sm['mac_len'] or { toml.Any(4) }).int())
-			out << [fresh * 8, fresh * 8 + 8]
-			out << [mac * 8, mac * 8 + maclen * 8]
-		}
+	fk := snake(frame)
+	// protection applies ONLY on the frame's bus (e2e_here/secoc_here); a route on a
+	// different bus does NOT protect, so it must still fill those SG_.
+	if f.e2e_here(fk, bus) {
+		crc := f.e2e_crc[fk]
+		ctr := f.e2e_ctr[fk]
+		out << [crc * 8, crc * 8 + 8]
+		out << [ctr * 8, ctr * 8 + 4] // only the LOW nibble is the counter; high nibble is free
+	}
+	if f.secoc_here(fk, bus) {
+		fresh := f.secoc_fresh[fk]
+		mac := f.secoc_mac[fk]
+		out << [fresh * 8, fresh * 8 + 8]
+		out << [mac * 8, mac * 8 + f.secoc_maclen[fk] * 8]
 	}
 	return out
 }
@@ -1153,7 +1142,29 @@ fn parse_partitions(doc toml.Doc) PartMap {
 	return p
 }
 
-fn parse_frames(doc toml.Doc, eth string, buses map[string]bool) FrameCfg {
+// dbc_msg_named is the DBC message whose snake-cased name is `fk`.
+fn dbc_msg_named(db candb.Database, fk string) ?candb.Message {
+	for m in db.messages {
+		if snake(m.name) == fk {
+			return m
+		}
+	}
+	return none
+}
+
+// set_e2e records a frame's resolved E2E layout (ecumodel.resolve_frame_e2e), refusing a Data ID
+// the protect/verify calls would narrow: they take a u16, so a wider one would alias.
+fn (mut f FrameCfg) set_e2e(fk string, e ecumodel.FrameE2e) {
+	if e.data_id < 0 || e.data_id > 0xffff {
+		panic('frame "${fk}": e2e data_id 0x${e.data_id.hex()} is out of range (0..0xFFFF)')
+	}
+	f.e2e_on[fk] = true
+	f.e2e_id[fk] = e.data_id
+	f.e2e_crc[fk] = e.crc_pos
+	f.e2e_ctr[fk] = e.counter_pos
+}
+
+fn parse_frames(doc toml.Doc, eth string, buses map[string]bool, bus_kind map[string]string, db candb.Database, carries_signals map[string]bool) FrameCfg {
 	mut f := FrameCfg{}
 	mut seen_frames := map[string]string{} // snake(name) -> the bus it was authored on
 	for fr in ecumodel.toml_arr(doc, 'frame') {
@@ -1192,17 +1203,16 @@ fn parse_frames(doc toml.Doc, eth string, buses map[string]bool) FrameCfg {
 			rxm := (fm['rx'] or { toml.Any('') }).as_map()
 			f.rx_timeout_us[fk] = ms_to_us((rxm['timeout_ms'] or { toml.Any(0) }).i64(), 'frame "${fk}": rx.timeout_ms')
 		}
-		if 'e2e' in fm {
-			em := (fm['e2e'] or { toml.Any('') }).as_map()
-			f.e2e_on[fk] = true
-			f.e2e_id[fk] = int((em['data_id'] or { toml.Any(0) }).int())
-			// the protect/verify calls narrow data_id to u16 — reject a wider value here
-			// so distinct identities can't silently alias to their low 16 bits.
-			if f.e2e_id[fk] < 0 || f.e2e_id[fk] > 0xffff {
-				panic('frame "${fk}": e2e data_id 0x${f.e2e_id[fk].hex()} is out of range (0..0xFFFF)')
-			}
-			f.e2e_crc[fk] = int((em['crc_pos'] or { toml.Any(0) }).int())
-			f.e2e_ctr[fk] = int((em['counter_pos'] or { toml.Any(0) }).int())
+		// E2E: the [[frame]].e2e table, else the DBC's declaration (blobly_net#271)
+		has_e2e := 'e2e' in fm
+		em := if has_e2e { (fm['e2e'] or { toml.Any('') }).as_map() } else { map[string]toml.Any{} }
+		e, on := ecumodel.resolve_frame_e2e(fk, has_e2e, em, dbc_msg_named(db, fk)) or {
+			panic(err.msg())
+		}
+		if on {
+			f.set_e2e(fk, e)
+		}
+		if has_e2e {
 			f.e2e_timeout_us[fk] = ms_to_us((em['timeout_ms'] or { toml.Any(0) }).i64(), 'frame "${fk}": e2e.timeout_ms')
 		}
 		if 'secoc' in fm {
@@ -1222,6 +1232,26 @@ fn parse_frames(doc toml.Doc, eth string, buses map[string]bool) FrameCfg {
 		// E2E-then-SecOC, RX verifies SecOC-then-E2E nested. The field-disjointness
 		// this depends on is validated in build_model's protected-frames walk (the
 		// 'REQ-E2E-004 requires disjoint protection bytes' panic).
+	}
+	// a frame only the DBC protects has no [[frame]] to say its bus: the ECU's one CAN bus. Only
+	// messages carrying this ECU's own signals — a shared DBC declares other nodes' frames too,
+	// and a routed frame on a gateway names its bus with a [[frame]]
+	can := buses.keys().filter(bus_kind[it] or { 'can' } == 'can')
+	for m in db.messages {
+		fk := snake(m.name)
+		if fk in seen_frames || fk !in carries_signals {
+			continue
+		}
+		e, on := ecumodel.dbc_e2e(m) or { panic(err.msg()) }
+		if !on {
+			continue
+		}
+		if can.len != 1 {
+			panic('frame "${fk}": the DBC declares E2E for it, but this ECU has ${can.len} CAN buses — ' +
+				'add a [[frame]] naming its bus')
+		}
+		f.frame_bus[fk] = can[0]
+		f.set_e2e(fk, e)
 	}
 	return f
 }
@@ -1316,6 +1346,21 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		}
 	}
 	mut sig_of, sig_names, has_external, has_can_ext := parse_signals(doc, dbc, buses, eth)
+	// the frames' E2E is the [[frame]] table's, else the DBC's (blobly_net#271). A DBC file
+	// that will not parse is refused as the other loaders refuse it; none declares nothing.
+	db := candb.load_dbc_file(dbc) or {
+		if os.is_file(dbc) {
+			panic('loom2v: ${dbc}: ${err}')
+		}
+		candb.Database{}
+	}
+	mut carries_signals := map[string]bool{} // DBC messages this ECU's own bus signals ride in
+	for _, si in sig_of {
+		if si.external && si.dbc_msg != '' {
+			carries_signals[si.dbc_msg] = true
+		}
+	}
+	frames := parse_frames(doc, eth, buses, bus_kind, db, carries_signals)
 	part := parse_partitions(doc)
 	io_points, io_core := parse_io(doc, sig_of)
 	// P1 generates the SAME-core transport derivation only (triple): the io thread
@@ -1471,8 +1516,8 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		eth:          eth
 		someip:       parse_someip(doc)
 		eth_frames:   parse_eth_frames(doc, eth, sig_of)
-		frames:       parse_frames(doc, eth, buses)
-		routes:       validate_route_cores(parse_routes(doc, dbc), bus_core, bus_kind)
+		frames:       frames
+		routes:       validate_route_cores(parse_routes(doc, dbc, frames), bus_core, bus_kind)
 		isotp_conns:  parse_isotp(doc)
 		dids:         parse_dids(doc)
 		faults:       parse_faults(doc)

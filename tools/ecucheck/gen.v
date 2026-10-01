@@ -267,6 +267,8 @@ fn specs() map[string]map[string]Key {
 			'crc_pos':     k(.int)
 			'counter_pos': k(.int)
 			'timeout_ms':  k(.int) // rx: the E2E-owned sender-loss timeout (REQ-E2E-002)
+			// a field above that differs from the DBC's E2E attributes is deliberate
+			'deviates_from_dbc': k(.boolean)
 		}
 		'secoc':      {
 			'key':       k(.str)
