@@ -238,9 +238,9 @@ fn apply_cycle_time(mut msgs []MsgBuilder, by_id map[u64]int, line string) {
 	}
 }
 
-// apply_e2e_attr parses one of blobly_net#271's E2E contract attributes — `BA_ "E2ECounterSignal"
-// BO_ <id> "<signal>";`, likewise E2ECrcSignal and E2EProfile, and `BA_ "E2EDataId" BO_ <id> <n>;`
-// — onto its message. A value that is not what the attribute holds is left unset, not guessed.
+// apply_e2e_attr parses one of the E2E contract attributes blobly_net's docs/dbc_attributes.md
+// defines — `BA_ "E2ECounterSignal" BO_ <id> "<signal>";`, likewise E2ECrcSignal and E2EProfile,
+// and `BA_ "E2EDataId" BO_ <id> <n>;`, likewise E2ETimeout — onto its message.
 fn apply_e2e_attr(mut msgs []MsgBuilder, by_id map[u64]int, line string) {
 	f := line.trim_right(';').fields()
 	// f: BA_ "<name>" BO_ <id> <value…> — the value may be missing, which is malformed, not absent

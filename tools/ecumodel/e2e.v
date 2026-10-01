@@ -14,7 +14,10 @@ pub:
 	data_id     int
 	crc_pos     int
 	counter_pos int
-	timeout_ms  int
+	timeout_ms  i64
+	// a DBC E2ETimeout that is not a number of ms, and nothing replaced it: only a receiver
+	// needs a timeout, so it is reported where one is required, not here
+	bad_timeout string
 }
 
 // dbc_e2e is the layout the DBC declares for `m`, refused where comm/e2e cannot stamp it:
@@ -47,16 +50,9 @@ pub fn dbc_e2e(m candb.Message) !(FrameE2e, bool) {
 		data_id:     int(d.data_id)
 		crc_pos:     crc
 		counter_pos: ctr
-		timeout_ms:  dbc_timeout(m)!
+		timeout_ms:  i64(d.timeout_ms)
+		bad_timeout: d.bad_timeout
 	}, true
-}
-
-// dbc_timeout is the E2ETimeout the DBC states for `m`, in ms (0 when none).
-fn dbc_timeout(m candb.Message) !int {
-	if m.e2e.bad_timeout != '' {
-		return error('frame "${m.name}": E2ETimeout "${m.e2e.bad_timeout}" is not a number of ms')
-	}
-	return int(m.e2e.timeout_ms)
 }
 
 // e2e_byte_of is the byte a field signal occupies, from its LSB: `width` bits starting at a
@@ -92,10 +88,14 @@ pub fn resolve_frame_e2e(frame string, has_toml bool, em map[string]toml.Any, m 
 	mut declared := false
 	mut dbc := FrameE2e{}
 	mut dbc_err := ''
-	mut dbc_has_timeout := false
+	// the DBC's E2ETimeout stands on its own: it fills a table's missing timeout whatever
+	// supplies the layout (0 = none states nothing, so it binds nothing)
+	mut dbc_timeout := i64(0)
+	mut dbc_bad_timeout := ''
 	if msg := m {
 		declared = msg.e2e.declared()
-		dbc_has_timeout = msg.e2e.has_timeout
+		dbc_timeout = i64(msg.e2e.timeout_ms)
+		dbc_bad_timeout = msg.e2e.bad_timeout
 		dbc, _ = dbc_e2e(msg) or {
 			dbc_err = err.msg()
 			FrameE2e{}, false
@@ -131,19 +131,23 @@ pub fn resolve_frame_e2e(frame string, has_toml bool, em map[string]toml.Any, m 
 		}
 		v[i] = n
 	}
-	mut timeout := dbc.timeout_ms
+	mut timeout := dbc_timeout
+	mut bad_timeout := dbc_bad_timeout
 	if x := em['timeout_ms'] {
-		n := int(x.i64())
-		if trusted && dbc_has_timeout && n != timeout {
-			return error('frame "${frame}": e2e.timeout_ms = ${n} contradicts the DBC\'s E2ETimeout (${timeout}) — ' +
+		// i64 throughout: the range is the generator's to refuse (ms_to_us), never a cast's to wrap
+		n := x.i64()
+		if !deviates && dbc_timeout > 0 && n != dbc_timeout {
+			return error('frame "${frame}": e2e.timeout_ms = ${n} contradicts the DBC\'s E2ETimeout (${dbc_timeout}) — ' +
 				'drop it, or set deviates_from_dbc = true if the difference is deliberate')
 		}
 		timeout = n
+		bad_timeout = '' // a malformed DBC value binds nothing, and the table replaces it
 	}
 	return FrameE2e{
 		data_id:     v[0]
 		crc_pos:     v[1]
 		counter_pos: v[2]
 		timeout_ms:  timeout
+		bad_timeout: bad_timeout
 	}, true
 }

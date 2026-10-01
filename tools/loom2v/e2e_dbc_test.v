@@ -94,6 +94,14 @@ fn test_a_received_frame_the_dbc_protects_takes_its_deadline_from_the_dbc() {
 	})
 	assert code3 != 0
 	assert out3.contains('"brake_status" is E2E-protected and received, but has no E2E timeout'), out3
+	// a malformed E2ETimeout is said by name where a receiver needs it
+	code4, out4, _ := overspeed_with_dbc('rxbadtmo', fn (src string) string {
+		return src
+	}, fn (dbc string) string {
+		return dbc.replace('BA_ "E2ETimeout" BO_ 769 300;', 'BA_ "E2ETimeout" BO_ 769 soon;')
+	})
+	assert code4 != 0
+	assert out4.contains('E2ETimeout "soon" in the DBC is not a number of ms'), out4 // via the fault that needs it
 }
 
 // lamp_dbc gives LampFrame CRC and counter signals and declares its E2E in the DBC.

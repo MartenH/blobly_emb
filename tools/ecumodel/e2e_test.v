@@ -133,3 +133,22 @@ fn test_the_dbc_timeout_is_the_frames_unless_the_table_deviates() {
 	}
 	assert false, 'a contradicting timeout was accepted'
 }
+
+fn test_the_dbc_timeout_stands_on_its_own_and_a_bad_one_is_replaceable() {
+	// a timeout-only DBC fills a table that gives the layout
+	only := (candb.parse_dbc('BO_ 769 B: 6 X\n SG_ C : 32|8@1+ (1,0) [0|255] "" X\nBA_ "E2ETimeout" BO_ 769 300;\n') or {
+		panic(err)
+	}).messages[0]
+	e, _ := resolve_frame_e2e('b', true, e2e_table('{ data_id = 1, crc_pos = 4, counter_pos = 5 }'), only)!
+	assert e.timeout_ms == 300
+	// a malformed one does not fail the layout (a sender never uses it) and a table replaces it
+	bad := brake('BA_ "E2ETimeout" BO_ 769 soon;')
+	b, _ := resolve_frame_e2e('brake_status', false, map[string]toml.Any{}, bad)!
+	assert b.bad_timeout == 'soon' && b.crc_pos == 4
+	r, _ := resolve_frame_e2e('brake_status', true, e2e_table('{ timeout_ms = 250 }'), bad)!
+	assert r.bad_timeout == '' && r.timeout_ms == 250
+	// a DBC 0 is "none" and binds nothing; a table value is never wrapped
+	z := brake('BA_ "E2ETimeout" BO_ 769 0;')
+	t, _ := resolve_frame_e2e('brake_status', true, e2e_table('{ timeout_ms = 4294967596 }'), z)!
+	assert t.timeout_ms == 4294967596
+}
