@@ -175,6 +175,11 @@ pub mut:
 	e2e_crc_raw      i64
 	e2e_counter_int  bool = true
 	e2e_crc_int      bool = true
+	// e2e.timeout_ms: the RECEIVER's sender-loss timeout (REQ-E2E-002), lowered to the receiving
+	// node only — the producer's own E2E has no use for it
+	has_e2e_timeout bool
+	e2e_timeout_raw i64
+	e2e_timeout_int bool = true
 	has_e2e_data_id bool
 	e2e_data_id_int bool // the authored value was actually an integer, not a coerced string
 	unknown_keys    []string
@@ -575,7 +580,7 @@ pub fn parse_system(path string) !System {
 			}
 			if ev := m['e2e'] {
 				for k, _ in ev.as_map() {
-					if k !in ['data_id', 'counter_pos', 'crc_pos'] { // no timeout_ms: not lowered (the SOME/IP path lacks it)
+					if k !in ['data_id', 'counter_pos', 'crc_pos', 'timeout_ms'] {
 						fr.unknown_keys << 'e2e.${k}'
 					}
 				}
@@ -610,6 +615,9 @@ pub fn parse_system(path string) !System {
 				fr.e2e_crc_int = m_is_int(em, 'crc_pos')
 				fr.e2e_counter_raw = (em['counter_pos'] or { toml.Any(0) }).i64()
 				fr.e2e_crc_raw = (em['crc_pos'] or { toml.Any(0) }).i64()
+				fr.has_e2e_timeout = 'timeout_ms' in em
+				fr.e2e_timeout_raw = (em['timeout_ms'] or { toml.Any(0) }).i64()
+				fr.e2e_timeout_int = !fr.has_e2e_timeout || m_is_int(em, 'timeout_ms')
 			}
 			sys.frames << fr
 		}
@@ -886,8 +894,16 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 				mut fnames := fv2.as_map().keys()
 				fnames.sort()
 				fm2 := fv2.as_map()
+				received := iface_of(from) != none
 				for fname in fnames {
-					fields << '${fname}:${(fm2[fname] or { toml.Any('') }).string()}'
+					ftype := (fm2[fname] or { toml.Any('') }).string()
+					// a receiver's RxStatus and `lost` count are the bridge's, never on the wire:
+					// the producer has neither, and counting them would read every protected
+					// receiver as a mismatch
+					if ftype == 'RxStatus' || (received && fname == 'lost') {
+						continue
+					}
+					fields << '${fname}:${ftype}'
 				}
 			}
 			flat := fields.join(',')

@@ -92,6 +92,8 @@ fn tel_system() sysmodel.System {
 				e2e_counter_raw: 1
 				e2e_crc:         2
 				e2e_crc_raw:     2
+				has_e2e_timeout: true
+				e2e_timeout_raw: 500
 			},
 			sysmodel.SysFrame{
 				name:    'BenchCmd'
@@ -145,6 +147,11 @@ fn test_the_receiver_gets_the_event_without_a_tx_mode() {
 	assert !out.contains('tx      ='), 'a receiving node must not declare a tx mode:\n${out}'
 	// ...and the direction is bus -> partition
 	assert out.contains('from   = "eth0"')
+	// the E2E sender-loss timeout is the RECEIVER's (REQ-E2E-002), and so is the receive status
+	// the bridge fills — loom2v requires both on a received E2E frame
+	assert out.contains('e2e     = { data_id = 0x21, counter_pos = 1, crc_pos = 2, timeout_ms = 500 }'), out
+	assert out.contains('status = "RxStatus"'), out
+	assert out.contains('lost = "u32"'), 'a generated receiver cannot see skipped frames:\n${out}'
 }
 
 // A lone member cannot be lowered: the generated bridge sends to ONE static peer and has no
@@ -679,4 +686,27 @@ fn test_a_private_temp_dir_is_unique_exclusive_and_0700() {
 	assert exclusive, 'mkdir on an existing scratch directory must fail — that is what makes creation the check'
 	perms := os.execute('stat -c %a ${a}').output.trim_space()
 	assert perms == '700', 'scratch dir must be private (700), got ${perms}'
+}
+
+// E2E's own sender-loss timeout (REQ-E2E-002) is required on a someip E2E frame, as loom2v
+// requires it on the receiving node, and must outlast the sender's cycle or it fires between
+// healthy frames
+fn test_a_someip_e2e_frame_needs_a_timeout_longer_than_its_cycle() {
+	mut sys := tel_system()
+	sys.frames[0].has_e2e_timeout = false
+	assert seg_errs(sys).any(it.contains('has no timeout_ms')), seg_errs(sys).str()
+	sys.frames[0].has_e2e_timeout = true
+	sys.frames[0].e2e_timeout_raw = 300 // the fixture's cycle_ms
+	assert seg_errs(sys).any(it.contains('is not longer than its cycle (300 ms)')), seg_errs(sys).str()
+	// a frame with no cycle_ms sends at loom2v's 100 ms default: that is the cycle to beat
+	sys.frames[0].has_cycle_ms = false
+	sys.frames[0].e2e_timeout_raw = 50
+	assert seg_errs(sys).any(it.contains('is not longer than its cycle (100 ms)')), seg_errs(sys).str()
+	sys.frames[0].has_cycle_ms = true
+	sys.frames[0].e2e_timeout_raw = 0
+	assert seg_errs(sys).any(it.contains('is not a timeout in ms')), seg_errs(sys).str()
+	// and an event-only producer has no heartbeat for the timeout to watch
+	sys.frames[0].e2e_timeout_raw = 1000
+	sys.frames[0].tx_mode = 'event'
+	assert seg_errs(sys).any(it.contains('needs a heartbeat')), seg_errs(sys).str()
 }

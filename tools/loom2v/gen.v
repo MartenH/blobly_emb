@@ -239,9 +239,6 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 			}
 			if typ == 'RxStatus' {
 				has_status = true
-				if from_bus && eth != '' && from == eth {
-					panic('ecu.toml: signal "${name}" is received from eth bus "${from}": receive status is a CAN bridge feature — the SOME/IP path does not synthesize it yet')
-				}
 				if from_bus && fname != 'status' {
 					panic('ecu.toml: signal "${name}" is received from ${from}: its RxStatus field must be named `status` (the bridge fills it)')
 				}
@@ -255,9 +252,6 @@ fn parse_signals(doc toml.Doc, dbc string, buses map[string]bool, eth string) (m
 				panic('ecu.toml: signal "${name}" field `status` is "${typ}" — on a received signal it is the bridge-owned "RxStatus"')
 			}
 			if from_bus && fname == 'lost' {
-				if eth != '' && from == eth {
-					panic('ecu.toml: signal "${name}" is received from eth bus "${from}": the `lost` count is a CAN bridge feature — the SOME/IP codec would unpack it from the wire instead')
-				}
 				if typ != 'u16' && typ != 'u32' {
 					panic('ecu.toml: signal "${name}" field `lost` is "${typ}" — the E2E lost-frame counter is u16 or u32')
 				}
@@ -1556,7 +1550,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		si := m.sig_of[sname] or { continue }
 		// the lost counter is what the E2E sequence check counts: without E2E on the frame it
 		// would read 0 forever — a counter that can never move is a config error, not a zero
-		if si.lost_type != '' && !m.frames.e2e_here(si.dbc_msg, si.bus) {
+		if si.lost_type != '' && si.bus != m.eth && !m.frames.e2e_here(si.dbc_msg, si.bus) {
 			panic('loom2v: signal "${sname}" has a `lost` counter, but its frame "${si.dbc_msg}" carries no E2E on ${si.bus} — only the E2E sequence check can count lost frames')
 		}
 	}
@@ -4800,6 +4794,35 @@ fn ms_to_us(ms i64, what string) int {
 // `E2ETimeout`; one AUTHORED in ecu.toml is refused where nothing receives the frame (transmitted,
 // or neither decoded nor a signal route's source), while the DBC's is for whoever receives it.
 fn validate_e2e_timeouts(m Model) {
+	// the SOME/IP receive path (#299): the same two requirements, per received eth E2E frame —
+	// every eth signal received reaches the application, so there is no decoded-or-not question
+	for fr in m.eth_frames {
+		if fr.tx {
+			continue
+		}
+		if !fr.e2e_on {
+			// nothing on an unprotected eth frame can report timeout or integrity (no COM deadline
+			// on eth): a status there would read ok forever over a stale value
+			for sn in fr.signals {
+				si := m.sig_of[sn] or { SigInfo{} }
+				if si.has_status {
+					panic('loom2v: signal "${sn}" has a `status`, but eth frame "${fr.name}" is not E2E-protected — on the SOME/IP path only E2E can report a timeout or an integrity failure, so the status would read ok forever')
+				}
+				if si.lost_type != '' {
+					panic('loom2v: signal "${sn}" has a `lost` counter, but eth frame "${fr.name}" is not E2E-protected — only the E2E sequence check can count lost frames')
+				}
+			}
+			continue
+		}
+		if fr.e2e_tmo_us == 0 {
+			panic('loom2v: eth frame "${fr.name}" is E2E-protected and received, but its e2e has no timeout_ms — REQ-E2E-002 detects total loss of the sender inside E2E itself')
+		}
+		for sn in fr.signals {
+			if !(m.sig_of[sn] or { SigInfo{} }).has_status {
+				panic('loom2v: signal "${sn}" comes from the E2E-protected eth frame "${fr.name}" but has no `status = "RxStatus"` — without it an E2E timeout reaches the FB as a zero value that looks healthy')
+			}
+		}
+	}
 	mut delivered := map[string][]string{} // frame -> the received signals decoded from it
 	for sname in m.sig_names {
 		si := m.sig_of[sname] or { continue }

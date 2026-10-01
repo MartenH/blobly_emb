@@ -466,10 +466,11 @@ fn check_signals_dissolved(s System) []Issue {
 				continue
 			}
 			if fname == 'status' || fname == 'lost' {
-				// receive metadata is not lowered from system.toml: the producer's generated tx
-				// signal, a ThreadX endpoint (R5), the SOME/IP codec and a generated frame without
-				// E2E would each reject or mis-carry it. Declare it in the consuming node's ecu.toml
-				// until the lowering supports it — one rule instead of a list of carriers.
+				// receive metadata is not AUTHORED in system.toml: the producer's generated tx
+				// signal, a ThreadX CAN endpoint (R5) and a generated frame without E2E would each
+				// reject or mis-carry it. Where the lowering knows it applies — a someip E2E frame —
+				// sysgen adds `status` to the receiving node itself; elsewhere it is declared in the
+				// consuming node's ecu.toml.
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-001'
@@ -2256,6 +2257,38 @@ fn check_someip_signal_frames(s System) []Issue {
 					msg:      'frame "${fr.name}": e2e crc_pos ${fr.e2e_crc_raw} is not a byte offset in the payload'
 				}
 			}
+			// the receiver's sender-loss timeout (REQ-E2E-002): required, as loom2v requires it on
+			// the receiving node, and longer than the sender's own cycle — at or below it the
+			// timeout fires between healthy frames and every value is withheld as late
+			if fr.tx_mode == 'event' {
+				// an event-only producer is silent while its value does not change, so the
+				// receiver's sender-loss timeout would report a healthy sender as lost
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": an E2E-protected event needs a heartbeat — tx mode "cyclic" or "mixed" — or the receiver\'s sender-loss timeout fires while an unchanged value goes unsent'
+				}
+			} else if !fr.has_e2e_timeout {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": e2e has no timeout_ms — the receiving node needs E2E\'s own sender-loss timeout (REQ-E2E-002)'
+				}
+			} else if !fr.e2e_timeout_int || fr.e2e_timeout_raw < 1 || fr.e2e_timeout_raw > 2147483 {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": e2e timeout_ms ${fr.e2e_timeout_raw} is not a timeout in ms (1..2147483)'
+				}
+			} else if cyc := someip_send_cycle_ms(fr) {
+				if fr.e2e_timeout_raw <= cyc {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-003'
+						msg:      'frame "${fr.name}": e2e timeout_ms ${fr.e2e_timeout_raw} is not longer than its cycle (${cyc} ms) — it would fire between healthy frames'
+					}
+				}
+			}
 		}
 		// The EVENT owns the cadence on a someip bus: it is the unit that goes on the wire, and
 		// several signals share one. A signal-level cycle_ms would be accepted by the CAN-shaped
@@ -2646,3 +2679,16 @@ fn check_endpoint_carrier(s System) []Issue {
 	return issues
 }
 
+
+// someip_send_cycle_ms is how often a someip frame's producer sends it when nothing changes: its
+// cycle_ms, else loom2v's 100 ms default for a cyclic or mixed frame (a frame with no tx at all
+// is cyclic). None for an event-only frame, which has no cadence to compare a timeout with.
+fn someip_send_cycle_ms(fr SysFrame) ?i64 {
+	if fr.has_cycle_ms {
+		return fr.cycle_ms_raw
+	}
+	if fr.tx_mode in ['', 'cyclic', 'mixed'] {
+		return 100
+	}
+	return none
+}

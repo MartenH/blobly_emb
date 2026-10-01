@@ -388,9 +388,15 @@ pub fn eth_layouts(doc toml.Doc) []EthLayoutCell {
 	mut sig_fields := map[string]map[string]string{}
 	for sg in toml_arr(doc, 'signal') {
 		sm := sg.as_map()
+		received := str_of(sm, 'from') == eth
 		mut fields := map[string]string{}
 		if f := sm['fields'] {
 			for fname, ftyp in f.as_map() {
+				// a received signal's `lost` is the bridge's E2E count, never on the wire
+				// (its `status` has no wire width and is skipped below anyway)
+				if received && fname == 'lost' {
+					continue
+				}
 				fields[fname] = ftyp.string()
 			}
 		}
@@ -476,6 +482,21 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			mut msize := 0
 			mut maxal := 1
 			for fname, ftyp in f.as_map() {
+				// a received signal's `status` is the bridge's RxStatus (a u8 enum): in the struct,
+				// never on the wire — the layout skips it like any field with no wire width
+				if eth != '' && fname == 'status' && ftyp.string() == 'RxStatus' && sig_from[sname] == eth {
+					msize += 1
+					continue
+				}
+				// ...and its `lost` (u16/u32): the bridge's E2E count, in the struct, never on the wire
+				if eth != '' && fname == 'lost' && sig_from[sname] == eth && ftyp.string() in ['u16', 'u32'] {
+					lw := scalar_width(ftyp.string())
+					if lw > maxal {
+						maxal = lw
+					}
+					msize = (msize + lw - 1) / lw * lw + lw
+					continue
+				}
 				w := scalar_width(ftyp.string())
 				if w == 0 {
 					sig_badfield[sname] = '${fname} "${ftyp.string()}"'

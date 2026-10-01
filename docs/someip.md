@@ -387,7 +387,14 @@ The `#154` reject-until-rung gate for rx frames is lifted. The rx-side E2E
 check followed immediately (its interim reject-gate lifted with it): an rx
 frame with `e2e` gets an `e2e.RxState` in the bridge and the trailer is
 checked BEFORE unpack, exactly as the CAN bridge gates decode — `ok`/`lost`
-are usable (loss flagged, data valid), a wrong CRC/data-id is a counted drop
+are usable (loss flagged, data valid), a wrong CRC/data-id is a counted drop. Since #299 the
+verdict is published too, by the CAN bridge's rule (comm/e2e `RxState.receive`): a received E2E
+frame requires `e2e.timeout_ms` — E2E's own sender-loss timeout (REQ-E2E-002) — and a
+`status = "RxStatus"` on each of its signals, which reads `ok`, `timeout` (the sender went
+silent; the value is withheld) or `integrity` (a corrupt frame; withheld), on the host and the
+ThreadX eth thread alike; a `lost` field (u16/u32) carries the frames the sequence showed missing.
+In system.toml the frame states `timeout_ms` and sysgen gives it, with the status and lost
+fields, to the receiving node only.
 that leaves the frame's rx state and the frames after it intact. An `rx`
 deadline block on an eth frame stays validator-rejected (no `RxState`
 deadline path is generated yet — a stale command would look fresh). `examples/host_someip` gained the round trip: `BenchCmd`

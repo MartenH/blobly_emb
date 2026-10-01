@@ -88,11 +88,41 @@ id      = 0x8004
 signals = ["EchoVal"]
 tx      = { mode = "event", min_delay_ms = 30 }
 
+# the PROTECTED rx path on silicon (REQ-E2E-002 on the SOME/IP receive path, #299): BenchCmdSafe
+# carries a level behind an AUTOSAR E2E P01 trailer with its own 500 ms sender-loss timeout, and
+# the app reports what it received AND the receive status (ok / timeout / integrity) back on
+# BenchSafeStatus, so the bench can see the E2E verdicts from the wire
+[[signal]]
+name = "LampCmdSafe"
+fields = { level = "u8", status = "RxStatus", lost = "u16" }
+from = "eth0"
+to   = "app"
+
+[[frame]]
+name    = "BenchCmdSafe"
+bus     = "eth0"
+id      = 0x8011
+signals = ["LampCmdSafe"]
+e2e     = { data_id = 0x22, counter_pos = 1, crc_pos = 2, timeout_ms = 500 }
+
+[[signal]]
+name = "SafeStatus"
+fields = { level = "u8", status = "u8", lost = "u16" }
+from = "app"
+to   = "eth0"
+
+[[frame]]
+name    = "BenchSafeStatus"
+bus     = "eth0"
+id      = 0x8005
+signals = ["SafeStatus"]
+tx      = { mode = "event", min_delay_ms = 30 }
+
 [[fb]]
 name   = "Bench"
 thread = "app_main"
   [[fb.handler]]
   name      = "on_100ms"
   period_ms = 100
-  reads     = ["LampCmd"]
-  writes    = ["BenchLoad", "BenchTicks", "EchoVal"]
+  reads     = ["LampCmd", "LampCmdSafe"]
+  writes    = ["BenchLoad", "BenchTicks", "EchoVal", "SafeStatus"]
