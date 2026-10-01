@@ -56,9 +56,6 @@ fn overspeed_with_dbc(name string, edit fn (string) string, edit_dbc fn (string)
 	return r.exit_code, r.output, os.read_file(glue) or { '' }
 }
 
-const brake_block = '[[frame]]
-name = "BrakeStatus"'
-
 // cut removes the table starting at `head` up to the next `[[<kind>]]`.
 fn cut(src string, head string, kind string) string {
 	i := src.index(head) or { panic('overspeed lost `${head}` — update this test') }
@@ -66,25 +63,44 @@ fn cut(src string, head string, kind string) string {
 	return src[..i] + src[j..]
 }
 
-// without_brake_frame drops BrakeStatus's [[frame]], and with it the E2E deadline its timeout
-// fault needs (the DBC has no home for a deadline), so the fault goes too.
-fn without_brake_frame(src string) string {
-	return cut(cut(src, brake_block, 'frame'), '[[fault]]\nname   = "BrakeMsgTimeout"', 'fault')
+// with_brake_frame gives BrakeStatus, which overspeed declares in its DBC alone, a [[frame]]
+// carrying `e2e`.
+fn with_brake_frame(e2e string) fn (string) string {
+	return fn [e2e] (src string) string {
+		return src + '\n[[frame]]\nname = "BrakeStatus"\nbus  = "can0"\ne2e  = ${e2e}\n'
+	}
 }
 
-fn test_a_received_frame_only_the_dbc_protects_still_needs_its_deadline() {
-	// the DBC has no home for E2E's own sender-loss timeout (REQ-E2E-002), so a received
-	// protected frame keeps a [[frame]] for it
-	code, out, _ := overspeed_with('nofr', without_brake_frame)
-	assert code != 0
-	assert out.contains('"brake_status" is E2E-protected and received, but its e2e has no timeout_ms'), out
+fn test_a_received_frame_the_dbc_protects_takes_its_deadline_from_the_dbc() {
+	// overspeed itself: BrakeStatus has no [[frame]], its E2ETimeout is the 300 ms deadline
+	code, out, glue := overspeed_with('rx', fn (src string) string {
+		return src
+	})
+	assert code == 0, out
+	assert glue.contains('check(&rx.data[0], int(brake_status_dlc), u16(0x44), 4, 5)')
+	// and without an E2ETimeout, a received protected frame is refused for having no deadline
+	code2, out2, _ := overspeed_with_dbc('rxnotmo', fn (src string) string {
+		return src
+	}, fn (dbc string) string {
+		return dbc.replace('BA_ "E2ETimeout" BO_ 769 300;', '')
+	})
+	assert code2 != 0
+	assert out2.contains('"brake_status" has no deadline (rx.timeout_ms, e2e.timeout_ms, or E2ETimeout in the DBC)'), out2
+	// with that fault gone, it is E2E's own rule that refuses (REQ-E2E-002)
+	code3, out3, _ := overspeed_with_dbc('rxnotmo2', fn (src string) string {
+		return cut(src, '[[fault]]\nname   = "BrakeMsgTimeout"', 'fault')
+	}, fn (dbc string) string {
+		return dbc.replace('BA_ "E2ETimeout" BO_ 769 300;', '')
+	})
+	assert code3 != 0
+	assert out3.contains('"brake_status" is E2E-protected and received, but has no E2E timeout'), out3
 }
 
 // lamp_dbc gives LampFrame CRC and counter signals and declares its E2E in the DBC.
 fn lamp_dbc(dbc string) string {
 	return dbc.replace(' SG_ WarnLamp : 0|1@1+ (1,0) [0|1] "" Tester',
 		' SG_ WarnLamp : 0|1@1+ (1,0) [0|1] "" Tester\n SG_ LampCrc : 8|8@1+ (1,0) [0|255] "" Tester\n SG_ LampCounter : 16|4@1+ (1,0) [0|15] "" Tester') +
-		'\nBA_ "E2ECounterSignal" BO_ 272 "LampCounter";\nBA_ "E2ECrcSignal" BO_ 272 "LampCrc";\nBA_ "E2EProfile" BO_ 272 "autosar_p01";\nBA_ "E2EDataId" BO_ 272 16;\n'
+		'\nBA_ "E2ECounterSignal" BO_ 272 "LampCounter";\nBA_ "E2ECrcSignal" BO_ 272 "LampCrc";\nBA_ "E2EProfile" BO_ 272 "P01";\nBA_ "E2EDataId" BO_ 272 16;\nBA_ "E2ETimeout" BO_ 272 250;\n'
 }
 
 const lamp_stamp = 'protect(&tx_lamp_frame.data[0], int(lamp_frame_dlc), u16(0x10), 1, 2)'
@@ -106,11 +122,15 @@ fn test_a_sent_frame_with_no_frame_table_is_stamped_on_the_one_can_bus() {
 }
 
 fn test_a_frame_override_contradicting_the_dbc_is_refused() {
-	code, out, _ := overspeed_with('contra', fn (src string) string {
-		return src.replace('e2e  = { timeout_ms = 300 }', 'e2e  = { timeout_ms = 300, crc_pos = 3 }')
-	})
-	assert code != 0
-	assert out.contains('contradicts the DBC'), out
+	for e2e in ['{ crc_pos = 3 }', '{ timeout_ms = 200 }'] {
+		code, out, _ := overspeed_with('contra', with_brake_frame(e2e))
+		assert code != 0, e2e
+		assert out.contains('contradicts the DBC'), out
+	}
+	// unless the difference is deliberate
+	code, out, glue := overspeed_with('dev', with_brake_frame('{ timeout_ms = 200, deviates_from_dbc = true }'))
+	assert code == 0, out
+	assert glue.contains('check(&rx.data[0], int(brake_status_dlc), u16(0x44), 4, 5)')
 }
 
 fn test_a_declaration_on_another_nodes_frame_is_not_this_ecus() {

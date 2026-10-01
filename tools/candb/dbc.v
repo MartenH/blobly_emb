@@ -243,20 +243,22 @@ fn apply_cycle_time(mut msgs []MsgBuilder, by_id map[u64]int, line string) {
 // — onto its message. A value that is not what the attribute holds is left unset, not guessed.
 fn apply_e2e_attr(mut msgs []MsgBuilder, by_id map[u64]int, line string) {
 	f := line.trim_right(';').fields()
-	// f: BA_ "<name>" BO_ <id> <value…>
-	if f.len < 5 || f[2] != 'BO_' {
+	// f: BA_ "<name>" BO_ <id> <value…> — the value may be missing, which is malformed, not absent
+	if f.len < 4 || f[2] != 'BO_' {
 		return
 	}
 	raw_id := u32(f[3].u64())
 	ext := raw_id & can_eff_flag != 0
 	id := if ext { raw_id & can_eff_mask } else { raw_id }
 	idx := by_id[idkey(id, ext)] or { return }
-	set_e2e_field(mut msgs[idx].e2e, f[1], f[4..].join(' ').trim_space(), true)
+	set_e2e_field(mut msgs[idx].e2e, f[1], if f.len > 4 { f[4..].join(' ').trim_space() } else { '' },
+		true)
 }
 
 // set_e2e_field sets one attribute on a declaration — `overwrite` false for a default, which
-// fills only what the message did not state. A Data ID that is not one is KEPT as said, never
-// read as absent: absent means no id, which is a different checksum.
+// fills only what the message did not state. A value that is not what the attribute holds is
+// KEPT as said, never read as absent: absent means no id, which is a different checksum.
+// The rules are blobly_net's (docs/dbc_attributes.md there).
 fn set_e2e_field(mut d E2eDecl, quoted_name string, raw string, overwrite bool) {
 	str := if raw.len >= 2 && raw.starts_with('"') && raw.ends_with('"') {
 		raw[1..raw.len - 1]
@@ -266,50 +268,65 @@ fn set_e2e_field(mut d E2eDecl, quoted_name string, raw string, overwrite bool) 
 	match quoted_name {
 		'"E2ECounterSignal"' {
 			if overwrite || d.counter == '' {
-				d = E2eDecl{
-					...d
-					counter: str
-				}
+				d.counter = str
 			}
 		}
 		'"E2ECrcSignal"' {
 			if overwrite || d.crc == '' {
-				d = E2eDecl{
-					...d
-					crc: str
-				}
+				d.crc = str
 			}
 		}
 		'"E2EProfile"' {
 			if overwrite || d.profile == '' {
-				d = E2eDecl{
-					...d
-					profile: str
+				d.profile = profile_from_dbc(str)
+			}
+		}
+		'"E2ETimeout"' {
+			// stated per message, 0 included (no timeout), it is not overridden by a default; a
+			// default of 0 is a writer's placeholder and states nothing
+			if !overwrite && (d.has_timeout || d.bad_timeout != '') {
+				return
+			}
+			if v := e2e_u32(raw) {
+				if overwrite || v > 0 {
+					d.timeout_ms = v
+					d.has_timeout = true
+					d.bad_timeout = ''
 				}
+			} else {
+				d.bad_timeout = if raw == '' { '(empty)' } else { raw }
+				d.has_timeout = false
 			}
 		}
 		'"E2EDataId"' {
-			if !overwrite && (d.has_data_id || d.bad_data_id != '') {
+			// never from a file-wide default: a Data ID every frame shares identifies none
+			if !overwrite {
 				return
 			}
-			if raw != '' && raw.bytes().all(it.is_digit()) && raw.len <= 10 && raw.u64() <= 0xFFFF_FFFF {
-				d = E2eDecl{
-					...d
-					data_id:     u32(raw.u64())
-					has_data_id: true
-					bad_data_id: ''
-				}
+			if v := e2e_u32(raw) {
+				d.data_id = v
+				d.has_data_id = true
+				d.bad_data_id = ''
 			} else {
-				d = E2eDecl{
-					...d
-					data_id:     0
-					has_data_id: false
-					bad_data_id: raw
-				}
+				d.bad_data_id = if raw == '' { '(empty)' } else { raw }
+				d.has_data_id = false
 			}
 		}
 		else {}
 	}
+}
+
+// e2e_u32 reads an E2E attribute's integer value: decimal digits that fit a u32, leading zeros
+// allowed (the magnitude is what is bounded, not the spelling).
+fn e2e_u32(raw string) ?u32 {
+	if raw == '' || !raw.bytes().all(it.is_digit()) {
+		return none
+	}
+	digits := raw.trim_left('0')
+	if digits.len > 10 || digits.u64() > 0xFFFF_FFFF {
+		return none
+	}
+	return u32(digits.u64())
 }
 
 // parse_bo parses:  BO_ <id> <Name>: <dlc> <transmitter>
