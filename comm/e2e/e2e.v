@@ -147,18 +147,28 @@ pub enum RxVerdict {
 // (ok or lost) re-arms the sender-loss timeout and is published — as a timeout, value withheld,
 // when the timeout ran out before the caller polled `expired`; a corrupt frame is published as
 // an integrity failure and restarts only a timeout that has already fired, so corrupt frames can
-// never keep a dead sender looking alive; a repeat publishes nothing. ONE rule for every receive
-// path that applies it.
+// never keep a dead sender looking alive (the caller's `expired` poll still reports one); a
+// repeat publishes nothing. ONE rule for every receive path that applies it.
 pub fn (mut r RxState) receive(now u64, st Status) RxVerdict {
+	return r.receive_ex(now, st, false)
+}
+
+// receive_ex is receive with the deadline SUSPENDED (`suspended`): while a commanded reception
+// pause (UDS 0x28) is still latched, its restart has not run, so the deadline is the stale
+// pre-silence one — a usable frame is never judged late against it. The CAN bridge passes its
+// 0x28 latch; others pass false.
+pub fn (mut r RxState) receive_ex(now u64, st Status, suspended bool) RxVerdict {
 	if st.usable() {
-		late := r.expired(now)
+		late := !suspended && r.expired(now)
 		r.on_valid(now)
 		return if late { RxVerdict.timeout } else { RxVerdict.ok }
 	}
 	if st == .crc_error {
-		// a deadline that has already passed counts as fired even if the caller has not polled
-		// it yet: the corrupt frame is then the newer fact, and the window restarts from it
-		if r.timedout || r.expired(now) {
+		// only a timeout that has already FIRED restarts on a corrupt frame (the integrity is then
+		// the newer fact). A deadline that has passed unpolled is left for the caller's poll to
+		// report: re-arming it here would let a sender that only ever sends corrupt frames, at the
+		// receiver's own cadence, never be reported lost at all (REQ-E2E-002)
+		if r.timedout {
 			r.arm(now)
 		}
 		return .integrity
