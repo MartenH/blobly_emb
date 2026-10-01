@@ -258,7 +258,7 @@ DoIP framing (ISO 13400-2: routing activation, diagnostic message + acks,
 vehicle announcement, generic NACK) is tested V code in `comm/doip`, driving
 the SAME `comm.uds.Server` the bus transport uses; `netx_glue.c` owns
 ThreadX/NetX/sockets behind a four-call byte-pipe seam. Bench: routing
-activation → 0x22 F190 → "H735-DK" (since 2026-10-02 the announced VIN, `BLOBLYH735DK00001` — `bench/doip.lua` asserts the two agree) → 0x3E tester-present, all pass from a WSL
+activation → 0x22 F190 → "H735-DK" (since 2026-10-01 the announced VIN, `BLOBLYH735DK00001` — `bench/doip.lua` asserts the two agree) → 0x3E tester-present, all pass from a WSL
 client (`doip_client.py`) through the Windows NAT on the live internal network.
 
 Bring-up finding (the busy-network wedge): a **finite-timeout**
