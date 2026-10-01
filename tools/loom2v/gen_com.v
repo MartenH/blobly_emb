@@ -2116,11 +2116,22 @@ fn eth_rx_e2e_init(fr EthFrame, now string) []string {
 fn eth_status_set(m Model, fr EthFrame, ind string, st string) []string {
 	mut out := []string{}
 	for sn in fr.signals {
-		if (m.sig_of[sn] or { SigInfo{} }).has_status {
-			out << '${ind}rxs_${snake(sn)} = sig.${sn}{ status: ${st} }'
+		si := m.sig_of[sn] or { SigInfo{} }
+		if si.has_status {
+			out << '${ind}rxs_${snake(sn)} = sig.${sn}{ status: ${st}${eth_lost_field(fr, si)} }'
 		}
 	}
 	return out
+}
+
+// eth_lost_field is `, lost: T(<count>)` for a signal with a lost counter: the E2E sequence's
+// count of frames it showed missing (REQ-E2E-002's skipped-sequence report), as the CAN bridge
+// carries it — a `lost` verdict is otherwise indistinguishable from `ok`.
+fn eth_lost_field(fr EthFrame, si SigInfo) string {
+	if si.lost_type == '' || !fr.e2e_on {
+		return ''
+	}
+	return ', lost: ${si.lost_type}(e2e_rx_${snake(fr.name)}.lost_frames)'
 }
 
 // eth_rx_accept is a received frame's body once its payload is in pay_rx_<fb>: the E2E check, the
@@ -2134,8 +2145,12 @@ fn eth_rx_accept(m Model, fr EthFrame, ind string, drop string, ok_flag string) 
 	}
 	mut ok := ['${fb}_unpack(pay_rx_${fb}, ${uargs.join(', ')})']
 	for sn in fr.signals {
-		if (m.sig_of[sn] or { SigInfo{} }).has_status {
+		si := m.sig_of[sn] or { SigInfo{} }
+		if si.has_status {
 			ok << 'rxs_${snake(sn)}.status = .ok'
+		}
+		if eth_lost_field(fr, si) != '' {
+			ok << 'rxs_${snake(sn)}.lost = ${si.lost_type}(e2e_rx_${fb}.lost_frames)'
 		}
 	}
 	ok << 'got_${fb} = true'

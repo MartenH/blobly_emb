@@ -94,7 +94,7 @@ tx      = { mode = "event", min_delay_ms = 30 }
 # BenchSafeStatus, so the bench can see the E2E verdicts from the wire
 [[signal]]
 name = "LampCmdSafe"
-fields = { level = "u8", status = "RxStatus" }
+fields = { level = "u8", status = "RxStatus", lost = "u16" }
 from = "eth0"
 to   = "app"
 
@@ -107,7 +107,7 @@ e2e     = { data_id = 0x22, counter_pos = 1, crc_pos = 2, timeout_ms = 500 }
 
 [[signal]]
 name = "SafeStatus"
-fields = { level = "u8", status = "u8" }
+fields = { level = "u8", status = "u8", lost = "u16" }
 from = "app"
 to   = "eth0"
 

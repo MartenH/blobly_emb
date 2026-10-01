@@ -704,4 +704,8 @@ fn test_a_someip_e2e_frame_needs_a_timeout_longer_than_its_cycle() {
 	sys.frames[0].has_cycle_ms = true
 	sys.frames[0].e2e_timeout_raw = 0
 	assert seg_errs(sys).any(it.contains('is not a timeout in ms')), seg_errs(sys).str()
+	// and an event-only producer has no heartbeat for the timeout to watch
+	sys.frames[0].e2e_timeout_raw = 1000
+	sys.frames[0].tx_mode = 'event'
+	assert seg_errs(sys).any(it.contains('needs a heartbeat')), seg_errs(sys).str()
 }

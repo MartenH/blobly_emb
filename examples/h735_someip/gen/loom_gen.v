@@ -80,13 +80,15 @@ pub fn bench_cmd_safe_unpack(d [64]u8, mut s_lamp_cmd_safe sig.LampCmdSafe) {
 	s_lamp_cmd_safe.level = u8(u64(d[0]))
 }
 
-// BenchSafeStatus: tx event 0x8005, 2-byte payload
+// BenchSafeStatus: tx event 0x8005, 4-byte payload
 pub const bench_safe_status_event_id = u16(0x8005)
-pub const bench_safe_status_len = u8(2)
+pub const bench_safe_status_len = u8(4)
 // 64 = com.max_pdu (a literal: V codegen mishandles const-sized mut fixed-array params)
 pub fn bench_safe_status_pack(mut d [64]u8, s_safe_status sig.SafeStatus) {
 	d[0] = u8(s_safe_status.level)
-	d[1] = u8(s_safe_status.status)
+	d[1] = u8(s_safe_status.lost)
+	d[2] = u8(u64(s_safe_status.lost) >> 8)
+	d[3] = u8(s_safe_status.status)
 }
 
 // --- eth comm thread (eth0): SOME/IP over the NetX seam (docs/someip.md
@@ -223,16 +225,17 @@ fn eth_thread_entry(input u32) {
 					.ok {
 						bench_cmd_safe_unpack(pay_rx_bench_cmd_safe, mut rxs_lamp_cmd_safe)
 						rxs_lamp_cmd_safe.status = .ok
+						rxs_lamp_cmd_safe.lost = u16(e2e_rx_bench_cmd_safe.lost_frames)
 						got_bench_cmd_safe = true
 						rxok_bench_cmd_safe = true
 					}
 					.timeout {
-						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .timeout }
+						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .timeout, lost: u16(e2e_rx_bench_cmd_safe.lost_frames) }
 						got_bench_cmd_safe = true
 					}
 					.integrity {
 						g_eth_rx_drops++
-						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .integrity }
+						rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .integrity, lost: u16(e2e_rx_bench_cmd_safe.lost_frames) }
 						got_bench_cmd_safe = true
 					}
 					.none {
@@ -244,7 +247,7 @@ fn eth_thread_entry(input u32) {
 			}
 		}
 		if e2e_rx_bench_cmd_safe.expired(now) {
-			rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .timeout }
+			rxs_lamp_cmd_safe = sig.LampCmdSafe{ status: .timeout, lost: u16(e2e_rx_bench_cmd_safe.lost_frames) }
 			got_bench_cmd_safe = true
 		}
 		if got_bench_cmd {

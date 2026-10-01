@@ -36,10 +36,12 @@ pub struct LampCmdSafe {
 pub mut:
 	level u8
 	status RxStatus
+	lost u16
 }
 
 pub struct SafeStatus {
 pub mut:
 	level u8
 	status u8
+	lost u16
 }

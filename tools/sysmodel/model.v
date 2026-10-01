@@ -894,11 +894,13 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 				mut fnames := fv2.as_map().keys()
 				fnames.sort()
 				fm2 := fv2.as_map()
+				received := iface_of(from) != none
 				for fname in fnames {
 					ftype := (fm2[fname] or { toml.Any('') }).string()
-					// a receiver's RxStatus is the bridge's, never on the wire: the producer has
-					// none, and counting it would read every protected receiver as a mismatch
-					if ftype == 'RxStatus' {
+					// a receiver's RxStatus and `lost` count are the bridge's, never on the wire:
+					// the producer has neither, and counting them would read every protected
+					// receiver as a mismatch
+					if ftype == 'RxStatus' || (received && fname == 'lost') {
 						continue
 					}
 					fields << '${fname}:${ftype}'

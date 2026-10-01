@@ -91,3 +91,19 @@ fn test_a_fractional_eth_timeout_is_refused_not_truncated() {
 	assert code != 0
 	assert out.contains('e2e.timeout_ms must be an integer number of ms'), out
 }
+
+fn test_a_lost_counter_rides_a_protected_eth_frame_and_not_an_unprotected_one() {
+	// on the protected frame: the bridge fills it from the E2E sequence, never from the wire
+	code, out, glue := host_someip_with('lost', fn (s string) string {
+		return s.replace('fields = { level = "u8", status = "RxStatus" }', 'fields = { level = "u8", status = "RxStatus", lost = "u16" }')
+	})
+	assert code == 0, out
+	assert glue.contains('rxs_lamp_cmd_safe.lost = u16(e2e_rx_bench_cmd_safe.lost_frames)'), glue
+	assert glue.contains('pub const bench_cmd_safe_len = u8(3)'), 'the lost counter went on the wire (the payload grew)'
+	// on an unprotected one nothing could ever count
+	code2, out2, _ := host_someip_with('plainlost', fn (s string) string {
+		return s.replace('name = "LampCmd"\nfields = { level = "u8" }', 'name = "LampCmd"\nfields = { level = "u8", lost = "u16" }')
+	})
+	assert code2 != 0
+	assert out2.contains('has a `lost` counter, but eth frame "BenchCmd" is not E2E-protected'), out2
+}

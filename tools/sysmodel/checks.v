@@ -2260,7 +2260,15 @@ fn check_someip_signal_frames(s System) []Issue {
 			// the receiver's sender-loss timeout (REQ-E2E-002): required, as loom2v requires it on
 			// the receiving node, and longer than the sender's own cycle — at or below it the
 			// timeout fires between healthy frames and every value is withheld as late
-			if !fr.has_e2e_timeout {
+			if fr.tx_mode == 'event' {
+				// an event-only producer is silent while its value does not change, so the
+				// receiver's sender-loss timeout would report a healthy sender as lost
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-003'
+					msg:      'frame "${fr.name}": an E2E-protected event needs a heartbeat — tx mode "cyclic" or "mixed" — or the receiver\'s sender-loss timeout fires while an unchanged value goes unsent'
+				}
+			} else if !fr.has_e2e_timeout {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-003'
