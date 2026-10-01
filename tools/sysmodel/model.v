@@ -895,7 +895,13 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 				fnames.sort()
 				fm2 := fv2.as_map()
 				for fname in fnames {
-					fields << '${fname}:${(fm2[fname] or { toml.Any('') }).string()}'
+					ftype := (fm2[fname] or { toml.Any('') }).string()
+					// a receiver's RxStatus is the bridge's, never on the wire: the producer has
+					// none, and counting it would read every protected receiver as a mismatch
+					if ftype == 'RxStatus' {
+						continue
+					}
+					fields << '${fname}:${ftype}'
 				}
 			}
 			flat := fields.join(',')

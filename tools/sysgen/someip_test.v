@@ -696,7 +696,12 @@ fn test_a_someip_e2e_frame_needs_a_timeout_longer_than_its_cycle() {
 	assert seg_errs(sys).any(it.contains('has no timeout_ms')), seg_errs(sys).str()
 	sys.frames[0].has_e2e_timeout = true
 	sys.frames[0].e2e_timeout_raw = 300 // the fixture's cycle_ms
-	assert seg_errs(sys).any(it.contains('is not longer than its cycle_ms 300')), seg_errs(sys).str()
+	assert seg_errs(sys).any(it.contains('is not longer than its cycle (300 ms)')), seg_errs(sys).str()
+	// a frame with no cycle_ms sends at loom2v's 100 ms default: that is the cycle to beat
+	sys.frames[0].has_cycle_ms = false
+	sys.frames[0].e2e_timeout_raw = 50
+	assert seg_errs(sys).any(it.contains('is not longer than its cycle (100 ms)')), seg_errs(sys).str()
+	sys.frames[0].has_cycle_ms = true
 	sys.frames[0].e2e_timeout_raw = 0
 	assert seg_errs(sys).any(it.contains('is not a timeout in ms')), seg_errs(sys).str()
 }

@@ -2272,11 +2272,13 @@ fn check_someip_signal_frames(s System) []Issue {
 					req:      'REQ-TOPO-003'
 					msg:      'frame "${fr.name}": e2e timeout_ms ${fr.e2e_timeout_raw} is not a timeout in ms (1..2147483)'
 				}
-			} else if fr.has_cycle_ms && fr.e2e_timeout_raw <= fr.cycle_ms_raw {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-003'
-					msg:      'frame "${fr.name}": e2e timeout_ms ${fr.e2e_timeout_raw} is not longer than its cycle_ms ${fr.cycle_ms_raw} — it would fire between healthy frames'
+			} else if cyc := someip_send_cycle_ms(fr) {
+				if fr.e2e_timeout_raw <= cyc {
+					issues << Issue{
+						severity: .error
+						req:      'REQ-TOPO-003'
+						msg:      'frame "${fr.name}": e2e timeout_ms ${fr.e2e_timeout_raw} is not longer than its cycle (${cyc} ms) — it would fire between healthy frames'
+					}
 				}
 			}
 		}
@@ -2669,3 +2671,16 @@ fn check_endpoint_carrier(s System) []Issue {
 	return issues
 }
 
+
+// someip_send_cycle_ms is how often a someip frame's producer sends it when nothing changes: its
+// cycle_ms, else loom2v's 100 ms default for a cyclic or mixed frame (a frame with no tx at all
+// is cyclic). None for an event-only frame, which has no cadence to compare a timeout with.
+fn someip_send_cycle_ms(fr SysFrame) ?i64 {
+	if fr.has_cycle_ms {
+		return fr.cycle_ms_raw
+	}
+	if fr.tx_mode in ['', 'cyclic', 'mixed'] {
+		return 100
+	}
+	return none
+}

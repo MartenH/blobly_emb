@@ -211,4 +211,12 @@ fn test_receive_publishes_each_verdict_by_the_rule() {
 	// once the timeout has fired, a corrupt frame restarts it (a fresh window for the next)
 	assert r.receive(2700, .crc_error) == .integrity
 	assert !r.expired(3600) && r.expired(3701)
+	// ...and so does one arriving after the deadline passed but BEFORE anyone polled it: the
+	// corrupt frame is the newer fact, and no stale timeout is left to overwrite it
+	mut q := RxState{
+		timeout_us: 1000
+	}
+	q.arm(0)
+	assert q.receive(1500, .crc_error) == .integrity
+	assert !q.expired(1600), 'the elapsed deadline was left to fire after the integrity verdict'
 }

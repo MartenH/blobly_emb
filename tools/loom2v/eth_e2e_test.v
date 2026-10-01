@@ -83,3 +83,11 @@ fn test_a_timeout_on_a_sent_eth_frame_is_refused() {
 	assert code != 0
 	assert out.contains('"BenchTelem" sets e2e.timeout_ms, but it is SENT'), out
 }
+
+fn test_a_fractional_eth_timeout_is_refused_not_truncated() {
+	code, out, _ := host_someip_with('fractmo', fn (s string) string {
+		return s.replace(safe_e2e, 'e2e     = { data_id = 0x22, counter_pos = 1, crc_pos = 2, timeout_ms = 500.9 }')
+	})
+	assert code != 0
+	assert out.contains('e2e.timeout_ms must be an integer number of ms'), out
+}

@@ -156,7 +156,9 @@ pub fn (mut r RxState) receive(now u64, st Status) RxVerdict {
 		return if late { RxVerdict.timeout } else { RxVerdict.ok }
 	}
 	if st == .crc_error {
-		if r.timedout {
+		// a deadline that has already passed counts as fired even if the caller has not polled
+		// it yet: the corrupt frame is then the newer fact, and the window restarts from it
+		if r.timedout || r.expired(now) {
 			r.arm(now)
 		}
 		return .integrity

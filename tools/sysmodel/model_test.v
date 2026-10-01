@@ -4514,3 +4514,37 @@ fn test_someip_signal_receive_metadata_is_refused() {
 	}
 	assert errs(check_signals_dissolved(s)).any(it.contains('is not lowered from system.toml yet')), errs(check_signals_dissolved(s)).str()
 }
+
+// a receiver's `status` (RxStatus) is the bridge's and never on the wire: it stays out of the
+// payload contract, or every protected receiver would read as a mismatch with its producer
+fn test_a_receivers_status_is_not_part_of_the_payload_contract() {
+	dir := os.join_path(os.temp_dir(), 'sysmodel_someip_rxst_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'n.toml'), '
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.50"
+[someip]
+bus     = "eth0"
+service = 0x0100
+[[signal]]
+name = "BenchLoad"
+fields = { load = "u8", status = "RxStatus" }
+from = "eth0"
+to   = "app"
+[[frame]]
+name    = "BenchTelem"
+bus     = "eth0"
+id      = 0x8001
+signals = ["BenchLoad"]
+e2e     = { data_id = 0x21, counter_pos = 7, crc_pos = 8, timeout_ms = 1000 }
+') or {
+		panic(err)
+	}
+	doc := toml.parse_file(os.join_path(dir, 'n.toml')) or { panic(err) }
+	view := parse_node_view(doc)
+	assert view.sig_fields['192.168.0.50|BenchLoad'] or { '' } == 'load:u8', 'the receiver counts its status as payload'
+}

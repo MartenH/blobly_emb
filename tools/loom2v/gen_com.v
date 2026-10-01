@@ -108,6 +108,9 @@ fn parse_eth_frames(doc toml.Doc, eth string, sig_of map[string]SigInfo) []EthFr
 				if fr.tx {
 					panic('loom2v: eth frame "${fname}" sets e2e.timeout_ms, but it is SENT — the E2E timeout watches a RECEIVED frame for loss of its sender')
 				}
+				if tv !is i64 {
+					panic('loom2v: eth frame "${fname}": e2e.timeout_ms must be an integer number of ms, got ${tv.string()}')
+				}
 				fr.e2e_tmo_us = ms_to_us(tv.i64(), 'eth frame "${fname}": e2e.timeout_ms')
 			}
 			fr.e2e_on = true
