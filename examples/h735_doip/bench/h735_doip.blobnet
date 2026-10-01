@@ -1,5 +1,5 @@
 project:
-  name: H735 DoIP bench (blobly_net tester at 192.168.0.190 or any LAN host)
+  name: H735 DoIP bench
   version: 1
 channels:
   - name: H735

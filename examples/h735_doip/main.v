@@ -5,7 +5,7 @@
 // (stream recv/send, UDP broadcast, EID) plus the link poll.
 //
 // Bench: DoIP tester (blobly_net, or any ISO 13400 client) to
-// 192.168.0.50:13400 — routing activation, then UDS 0x22/0x3E/0x10/0x2E.
+// 192.168.0.50:13400 — routing activation, then UDS 0x22/0x3E/0x10 (bench/doip.lua).
 import comm.doip
 
 fn C.board_clock_init()
@@ -40,11 +40,12 @@ fn blobly_doip_run() {
 	g_srv.uds.reset_state()
 	// 0xF190 IS the VIN (ISO 14229-1 VINDataIdentifier), and the same one the announcement
 	// carries: a tester that discovers one VIN and reads another cannot tell which is wrong
+	// read-only on purpose: written, it would part from the announced one again
 	g_srv.uds.dids[0].id = 0xF190
-	for i in 0 .. vin.len {
-		g_srv.uds.dids[0].data[i] = vin[i]
+	for i in 0 .. 17 {
+		g_srv.uds.dids[0].data[i] = g_srv.vin[i] // ONE source, one length
 	}
-	g_srv.uds.dids[0].len = u8(vin.len)
+	g_srv.uds.dids[0].len = 17
 	g_srv.uds.ndid = 1
 
 	// ISO 13400 discovery: broadcast the vehicle announcement 3x at boot
