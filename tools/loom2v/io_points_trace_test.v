@@ -1,7 +1,28 @@
 module main
 
 import os
+import time
 import toml
+
+// built_tool compiles a repo tool once per test process, into a path of its own — never
+// `v run`, whose shared, self-deleting binary races a parallel test running the same tool (#313).
+// unique per run as well as per pid: a binary a crashed run left behind is never reused
+const tool_run_id = time.now().unix_nano()
+
+fn built_tool(name string) string {
+	bin := os.join_path(os.temp_dir(), 'blobly_test_${name}_${os.getpid()}_${tool_run_id}')
+	if !os.exists(bin) {
+		r := os.execute('${@VEXE} -enable-globals -o ${bin} ${os.join_path(@VMODROOT, 'tools', name)}')
+		assert r.exit_code == 0, r.output
+	}
+	return bin
+}
+
+fn testsuite_end() {
+	for name in ['sysgen', 'loom2v'] {
+		os.rm(os.join_path(os.temp_dir(), 'blobly_test_${name}_${os.getpid()}_${tool_run_id}')) or {}
+	}
+}
 
 // @verifies REQ-IO-025
 //
@@ -963,10 +984,10 @@ fn test_the_fb_loop_subtracts_the_io_counter() {
 		os.rmdir_all(tmp) or {}
 	}
 	sys_toml := os.join_path(root, 'examples', 'system_full', 'system.toml')
-	lower := os.execute('${@VEXE} -enable-globals run ${os.join_path(root, 'tools', 'sysgen')} ${sys_toml} --out ${tmp}')
+	lower := os.execute('${built_tool('sysgen')} ${sys_toml} --out ${tmp}')
 	assert lower.exit_code == 0, 'sysgen failed, so this test cannot assert on a real emitted loop: ${lower.output.trim_space()}'
 	glue := os.join_path(tmp, 'glue.v')
-	gen := os.execute('${@VEXE} -enable-globals run ${os.join_path(root, 'tools', 'loom2v')} ${os.join_path(tmp,
+	gen := os.execute('${built_tool('loom2v')} ${os.join_path(tmp,
 		'gen-domain.toml')} ${os.join_path(tmp, 'compute.dbc')} ${os.join_path(tmp, 'sig.v')} ${os.join_path(tmp,
 		'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
 	assert gen.exit_code == 0, 'loom2v failed on the lowered domain config: ${gen.output.trim_space()}'
@@ -990,7 +1011,7 @@ fn test_the_fb_loop_subtracts_the_io_counter() {
 	// read the dispatch it actually emits.
 	multi_toml := two_thread_variant(tmp)
 	glue_m := os.join_path(tmp, 'glue_multi.v')
-	gen_m := os.execute('${@VEXE} -enable-globals run ${os.join_path(root, 'tools', 'loom2v')} ${multi_toml} ${os.join_path(tmp,
+	gen_m := os.execute('${built_tool('loom2v')} ${multi_toml} ${os.join_path(tmp,
 		'compute.dbc')} ${os.join_path(tmp, 'sig_m.v')} ${os.join_path(tmp, 'ports_m.v')} ${glue_m} ${os.join_path(tmp,
 		'manifest_multi.csv')}')
 	assert gen_m.exit_code == 0, 'loom2v failed on the two-thread variant: ${gen_m.output.trim_space()}'

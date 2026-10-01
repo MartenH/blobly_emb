@@ -1,7 +1,28 @@
 module main
 
 import os
+import time
 import toml
+
+// built_tool compiles a repo tool once per test process, into a path of its own — never
+// `v run`, whose shared, self-deleting binary races a parallel test running the same tool (#313).
+// unique per run as well as per pid: a binary a crashed run left behind is never reused
+const tool_run_id = time.now().unix_nano()
+
+fn built_tool(name string) string {
+	bin := os.join_path(os.temp_dir(), 'blobly_test_${name}_${os.getpid()}_${tool_run_id}')
+	if !os.exists(bin) {
+		r := os.execute('${@VEXE} -enable-globals -o ${bin} ${os.join_path(@VMODROOT, 'tools', name)}')
+		assert r.exit_code == 0, r.output
+	}
+	return bin
+}
+
+fn testsuite_end() {
+	for name in ['sysgen', 'loom2v'] {
+		os.rm(os.join_path(os.temp_dir(), 'blobly_test_${name}_${os.getpid()}_${tool_run_id}')) or {}
+	}
+}
 
 // A bus can carry no signals at all and still need a partition: the comm thread is where the
 // platform modules live, so a dedicated diagnostic bus has to be owned by somebody. Dropping it
@@ -520,7 +541,7 @@ fn test_an_extended_dbc_binding_is_refused_by_its_flag() {
 	os.write_file(dbc, 'VERSION ""\n\nNS_ :\n\nBS_:\n\nBU_: N\n\nBO_ 2147483904 TraceCmdX: 8 N\n') or {
 		panic(err)
 	}
-	r := os.execute('${@VEXE} -enable-globals run ${os.join_path(root, 'tools', 'loom2v')} ${ecu} ${dbc} ' +
+	r := os.execute('${built_tool('loom2v')} ${ecu} ${dbc} ' +
 		'${os.join_path(tmp, 'sig.v')} ${os.join_path(tmp, 'ports.v')} ${os.join_path(tmp, 'gen.v')} ' +
 		'${os.join_path(tmp, 'manifest.csv')}')
 	assert r.exit_code != 0, 'loom2v accepted an extended DBC binding: ${r.output}'

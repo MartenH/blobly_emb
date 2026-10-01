@@ -1172,8 +1172,27 @@ pub fn (s System) is_someip_leaf(n Node) bool {
 	return someip == 1 && can == 1 && !is_route_gateway(s, n.name)
 }
 
+// run_tool builds a repo tool into a private directory and runs it there. NOT `v run`: that
+// compiles to a path derived from the tool's source and deletes the binary when it exits, so two
+// concurrent runs of one tool (parallel tests, or syscheck beside sysgen) share one file and one
+// deletes it under the other — `generated tcu: No such file or directory` (#313).
+pub fn run_tool(src string, globals bool, args []string) (string, int) {
+	dir := private_temp_dir('blobly_tool') or { return 'cannot create a temp dir for ${src}: ${err}', 1 }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	bin := os.join_path(dir, os.file_name(src).all_before('.'))
+	mut cargs := if globals { ['-enable-globals'] } else { []string{} }
+	cargs << ['-o', bin, src]
+	build, bcode := run_capture(@VEXE, cargs)
+	if bcode != 0 {
+		return build, bcode
+	}
+	return run_capture(bin, args)
+}
+
 pub fn ecucheck_errors(node_path string) []string {
-	output, code := run_capture(@VEXE, ['run', '${@VMODROOT}/tools/ecucheck/gen.v', node_path])
+	output, code := run_tool('${@VMODROOT}/tools/ecucheck/gen.v', false, [node_path])
 	if code == 0 {
 		return []string{}
 	}
@@ -1233,8 +1252,7 @@ pub fn private_temp_dir(prefix string) !string {
 // `out_dir` is a scratch directory: sysgen --out writes the generated configs and copies each
 // referenced DBC there, so nothing touches the source tree.
 pub fn sysgen_errors(system_path string, out_dir string) []string {
-	output, code := run_capture(@VEXE, ['-enable-globals', 'run', '${@VMODROOT}/tools/sysgen',
-		system_path, '--out', out_dir])
+	output, code := run_tool('${@VMODROOT}/tools/sysgen', true, [system_path, '--out', out_dir])
 	if code == 0 {
 		return []string{}
 	}
@@ -1275,8 +1293,8 @@ pub fn loom2v_errors(node_path string, dbc_path string) []string {
 	ports := os.join_path(tmp, 'ports.v')
 	glue := os.join_path(tmp, 'glue.v')
 	man := os.join_path(tmp, 'manifest.toml')
-	output, code := run_capture(@VEXE, ['-enable-globals', 'run', '${@VMODROOT}/tools/loom2v',
-		node_path, dbc_path, sig, ports, glue, man])
+	output, code := run_tool('${@VMODROOT}/tools/loom2v', true, [node_path, dbc_path, sig, ports,
+		glue, man])
 	if code == 0 {
 		return []string{}
 	}
