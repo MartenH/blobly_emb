@@ -14,7 +14,7 @@ fn test_a_failed_frame_rearms_its_deadlines() {
 	m.frames.e2e_timeout_us['brake'] = 300_000
 	out := rx_integrity(m, []string{}, 'brake', '', '', '\t', true).join('\n')
 	assert out.contains('st.rx_brake_st.arm(now)'), out
-	assert out.contains('if st.e2e_rx_brake.timedout {\n\t\tst.e2e_rx_brake.arm(now)'), out
+	assert out.contains('_ = st.e2e_rx_brake.receive(now, .crc_error)'), out
 	// after an E2E CRC failure the re-arm already happened in receive_ex: not emitted twice
 	crc := rx_integrity(m, []string{}, 'brake', '', '', '\t', false).join('\n')
 	assert !crc.contains('e2e_rx_brake'), crc

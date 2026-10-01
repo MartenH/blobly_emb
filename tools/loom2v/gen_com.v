@@ -927,11 +927,9 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					// corrupt one restarts only a timeout that fired. Suspended while a 0x28 silence
 					// is still latched: its restart (after the drain) has not run yet, and the
 					// deadline it would test is the stale pre-silence one
-					susp := if conns.len > 0 && rx_by_msg.keys().any(has_deadline(m, it, bname)) {
-						'st.diag_rx_was_off'
-					} else {
-						'false'
-					}
+					// every received E2E frame has a timeout (validate_e2e_timeouts), so the latch
+					// matters wherever a diagnostic connection can switch reception off
+					susp := if conns.len > 0 { 'st.diag_rx_was_off' } else { 'false' }
 					glue << '${ind}v_${msg} := st.e2e_rx_${msg}.receive_ex(now, e2e_${msg}, ${susp})'
 					glue << '${ind}if v_${msg} == .ok || v_${msg} == .timeout {'
 					ind += '\t'
@@ -1837,8 +1835,8 @@ fn rx_status_fields(si SigInfo, status string, lost string) string {
 // and a re-arm of the frame's deadline, which then runs from this frame: `integrity` holds until a
 // good frame, or until the deadline passes with none (`timeout` — silence is the newer fact).
 // Behind the 0x28 gate like any other publish.
-// `rearm_e2e`: re-arm a fired E2E timeout here — true for a SecOC failure, which never reaches
-// the E2E check; an E2E CRC failure has already been through RxState.receive_ex, which re-arms.
+// `rearm_e2e`: apply the E2E receive rule here — true for a SecOC failure, which never reaches the
+// E2E check; an E2E CRC failure has already been through RxState.receive_ex.
 fn rx_integrity(m Model, list []string, msg string, lost string, gate string, ind string, rearm_e2e bool) []string {
 	mut out := []string{}
 	if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
@@ -1848,9 +1846,9 @@ fn rx_integrity(m Model, list []string, msg string, lost string, gate string, in
 	// corrupt-only sender runs it out from the last valid one. But once it HAS fired, this
 	// integrity is the newer fact, and silence after it must reach `timeout` again: re-arm then.
 	if rearm_e2e && e2e_timeout(m, msg, m.frames.frame_bus[msg] or { '' }) > 0 {
-		out << '${ind}if st.e2e_rx_${msg}.timedout {'
-		out << '${ind}\tst.e2e_rx_${msg}.arm(now)'
-		out << '${ind}}'
+		// the same rule as an E2E CRC failure, from the same function (a corrupt frame is a corrupt
+		// frame, whichever check caught it)
+		out << '${ind}_ = st.e2e_rx_${msg}.receive(now, .crc_error)'
 	}
 	mut i := ind
 	if gate != '' && list.any((m.sig_of[it] or { SigInfo{} }).has_status) {

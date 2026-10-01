@@ -211,14 +211,20 @@ fn test_receive_publishes_each_verdict_by_the_rule() {
 	// once the timeout has fired, a corrupt frame restarts it (a fresh window for the next)
 	assert r.receive(2700, .crc_error) == .integrity
 	assert !r.expired(3600) && r.expired(3701)
-	// ...and so does one arriving after the deadline passed but BEFORE anyone polled it: the
-	// corrupt frame is the newer fact, and no stale timeout is left to overwrite it
+	// a sender that only ever sends corrupt frames, at the receiver's own cadence, still runs the
+	// timeout out: a corrupt frame does not consume an elapsed-but-unpolled deadline
 	mut q := RxState{
 		timeout_us: 1000
 	}
 	q.arm(0)
-	assert q.receive(1500, .crc_error) == .integrity
-	assert !q.expired(1600), 'the elapsed deadline was left to fire after the integrity verdict'
+	mut fired := 0
+	for t := u64(100); t <= 5000; t += 100 {
+		assert q.receive(t, .crc_error) == .integrity
+		if q.expired(t) {
+			fired++
+		}
+	}
+	assert fired >= 2, 'a corrupt-only sender was never (or only once) reported lost: ${fired}'
 }
 
 // receive_ex: a latched commanded pause (0x28) suspends the late judgement — its deadline is the
@@ -237,4 +243,9 @@ fn test_a_suspended_deadline_judges_nothing_late() {
 	q.arm(0)
 	assert q.receive_ex(5000, .crc_error, true) == .integrity
 	assert q.expired(5001), 'a suspended corrupt frame re-armed a deadline that never fired'
+	// while suspended, a corrupt frame still restarts a timeout that HAS fired, and a lost frame
+	// is still usable, never late
+	assert q.receive_ex(5100, .crc_error, true) == .integrity
+	assert !q.expired(5200) && q.expired(6101)
+	assert q.receive_ex(9000, .lost, true) == .ok
 }
