@@ -921,22 +921,22 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 						glue << '${ind}\tst.e2e_quiet_${msg} = false'
 						glue << '${ind}}'
 					}
-					glue << '${ind}if e2e_${msg}.usable() {'
+					// the decision is comm/e2e's RxState.receive_ex (the SOME/IP path's rule too): a
+					// usable frame refreshes the timeout — protection-level state, like the counter,
+					// even while 0x28 has rx off — and reads late when the timeout ran out unseen; a
+					// corrupt one restarts only a timeout that fired. Suspended while a 0x28 silence
+					// is still latched: its restart (after the drain) has not run yet, and the
+					// deadline it would test is the stale pre-silence one
+					susp := if conns.len > 0 && rx_by_msg.keys().any(has_deadline(m, it, bname)) {
+						'st.diag_rx_was_off'
+					} else {
+						'false'
+					}
+					glue << '${ind}v_${msg} := st.e2e_rx_${msg}.receive_ex(now, e2e_${msg}, ${susp})'
+					glue << '${ind}if v_${msg} == .ok || v_${msg} == .timeout {'
 					ind += '\t'
-					late := e2e_timeout(m, msg, bname) > 0
-					if late {
-						// a valid frame that arrives AFTER the timeout, before the pass that would have
-						// seen it expire: the loss happened — report it for this frame (value zero)
-						// instead of letting the refresh erase it. Then refresh: protection-level state,
-						// like the counter, even while 0x28 has rx off.
-						// not while a 0x28 silence is still latched: its restart (after the drain) has
-						// not run yet, and the deadline it would test is the stale pre-silence one
-						if conns.len > 0 && rx_by_msg.keys().any(has_deadline(m, it, bname)) {
-							glue << '${ind}late_${msg} := !st.diag_rx_was_off && st.e2e_rx_${msg}.expired(now)'
-						} else {
-							glue << '${ind}late_${msg} := st.e2e_rx_${msg}.expired(now)'
-						}
-						glue << '${ind}st.e2e_rx_${msg}.on_valid(now)'
+					if e2e_timeout(m, msg, bname) > 0 {
+						glue << '${ind}late_${msg} := v_${msg} == .timeout'
 					}
 				}
 				if gate != '' {
@@ -981,14 +981,14 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 				}
 				if e2e {
 					ind = ind[1..]
-					glue << '${ind}} else if e2e_${msg} == .crc_error {'
-					glue << rx_integrity(m, list, msg, lost, gate, ind + '\t')
+					glue << '${ind}} else if v_${msg} == .integrity {'
+					glue << rx_integrity(m, list, msg, lost, gate, ind + '\t', false)
 					glue << '${ind}}'
 				}
 				if secoc {
 					ind = ind[1..]
 					glue << '${ind}} else {'
-					glue << rx_integrity(m, list, msg, lost, gate, ind + '\t')
+					glue << rx_integrity(m, list, msg, lost, gate, ind + '\t', true)
 					glue << '${ind}}'
 				}
 				glue << '\t\t}'
@@ -1837,7 +1837,9 @@ fn rx_status_fields(si SigInfo, status string, lost string) string {
 // and a re-arm of the frame's deadline, which then runs from this frame: `integrity` holds until a
 // good frame, or until the deadline passes with none (`timeout` — silence is the newer fact).
 // Behind the 0x28 gate like any other publish.
-fn rx_integrity(m Model, list []string, msg string, lost string, gate string, ind string) []string {
+// `rearm_e2e`: re-arm a fired E2E timeout here — true for a SecOC failure, which never reaches
+// the E2E check; an E2E CRC failure has already been through RxState.receive_ex, which re-arms.
+fn rx_integrity(m Model, list []string, msg string, lost string, gate string, ind string, rearm_e2e bool) []string {
 	mut out := []string{}
 	if (m.frames.rx_timeout_us[msg] or { 0 }) > 0 {
 		out << '${ind}st.rx_${msg}_st.arm(now)' // every deadline, status or not
@@ -1845,7 +1847,7 @@ fn rx_integrity(m Model, list []string, msg string, lost string, gate string, in
 	// The E2E timeout counts VALID messages only, so a corrupt frame does not refresh it — a
 	// corrupt-only sender runs it out from the last valid one. But once it HAS fired, this
 	// integrity is the newer fact, and silence after it must reach `timeout` again: re-arm then.
-	if e2e_timeout(m, msg, m.frames.frame_bus[msg] or { '' }) > 0 {
+	if rearm_e2e && e2e_timeout(m, msg, m.frames.frame_bus[msg] or { '' }) > 0 {
 		out << '${ind}if st.e2e_rx_${msg}.timedout {'
 		out << '${ind}\tst.e2e_rx_${msg}.arm(now)'
 		out << '${ind}}'

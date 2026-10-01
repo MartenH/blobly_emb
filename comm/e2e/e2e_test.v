@@ -220,3 +220,21 @@ fn test_receive_publishes_each_verdict_by_the_rule() {
 	assert q.receive(1500, .crc_error) == .integrity
 	assert !q.expired(1600), 'the elapsed deadline was left to fire after the integrity verdict'
 }
+
+// receive_ex: a latched commanded pause (0x28) suspends the late judgement — its deadline is the
+// stale pre-silence one
+fn test_a_suspended_deadline_judges_nothing_late() {
+	mut r := RxState{
+		timeout_us: 1000
+	}
+	r.arm(0)
+	assert r.receive_ex(5000, .ok, true) == .ok, 'judged late against a suspended deadline'
+	assert !r.expired(5500), 'the valid frame re-armed it'
+	// and a corrupt frame under suspension leaves a live deadline alone
+	mut q := RxState{
+		timeout_us: 1000
+	}
+	q.arm(0)
+	assert q.receive_ex(5000, .crc_error, true) == .integrity
+	assert q.expired(5001), 'a suspended corrupt frame re-armed a deadline that never fired'
+}
