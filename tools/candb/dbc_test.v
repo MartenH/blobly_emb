@@ -46,3 +46,38 @@ CM_ SG_ 2147483904 ExtSig "extended signal";
 	e := db.lookup_frame(0x100, true) or { panic('ext lookup_frame miss') }
 	assert e.name == 'ExtFrame', 'lookup_frame(0x100,true)=${e.name}'
 }
+
+// blobly_net#271: the E2E contract's four attributes, parsed as blobly_net's candb parses them
+// (the spellings its writer and cmd/arxml2dbc emit).
+fn test_e2e_contract_attributes() {
+	db := parse_dbc('VERSION ""
+BU_: Brake
+BO_ 769 BrakeStatus: 6 Brake
+ SG_ BrakePressure : 0|16@1+ (0.1,0) [0|6553.5] "kPa" Vector__XXX
+ SG_ BrakeCrc : 32|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ BrakeCounter : 40|4@1+ (1,0) [0|15] "" Vector__XXX
+BO_ 770 Other: 8 Brake
+ SG_ X : 0|8@1+ (1,0) [0|255] "" Vector__XXX
+BO_ 2147483905 ExtFrame: 8 Brake
+ SG_ C : 0|8@1+ (1,0) [0|255] "" Vector__XXX
+BA_DEF_ BO_ "E2ECounterSignal" STRING;
+BA_DEF_ BO_ "E2ECrcSignal" STRING;
+BA_DEF_ BO_ "E2EProfile" STRING;
+BA_DEF_ BO_ "E2EDataId" INT 0 65535;
+BA_DEF_DEF_ "E2EProfile" "autosar_p01";
+BA_ "E2ECounterSignal" BO_ 769 "BrakeCounter";
+BA_ "E2ECrcSignal" BO_ 769 "BrakeCrc";
+BA_ "E2EDataId" BO_ 769 68;
+BA_ "E2EDataId" BO_ 770 bogus;
+BA_ "E2ECrcSignal" BO_ 2147483905 "C";
+')!
+	bs := db.messages[0].e2e
+	assert bs.counter == 'BrakeCounter' && bs.crc == 'BrakeCrc'
+	assert bs.profile == 'autosar_p01', 'the file-wide default fills a declared message'
+	assert bs.has_data_id && bs.data_id == 68
+	o := db.messages[1].e2e
+	assert !o.has_data_id && o.bad_data_id == 'bogus', 'a Data ID that is not one is kept, not read as absent'
+	assert db.messages[2].e2e.crc == 'C', 'an extended id resolves through its EFF bit'
+	plain := parse_dbc('BO_ 1 A: 8 X\n SG_ S : 0|8@1+ (1,0) [0|255] "" X\nBA_DEF_DEF_ "E2EProfile" "autosar_p01";\n')!
+	assert !plain.messages[0].e2e.declared(), 'a default alone protects nothing'
+}

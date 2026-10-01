@@ -51,6 +51,25 @@ pub:
 	sender   string // transmitting node (DBC BO_ transmitter); '' / 'Vector__XXX' = none
 	cycle_ms int    // GenMsgCycleTime attribute if present (0 = not cyclic / unknown)
 	signals  []Signal
+	e2e      E2eDecl // blobly_net#271's E2E contract attributes, as the file states them
+}
+
+// E2eDecl is a message's E2E contract as the DBC declares it through blobly_net#271's four
+// attributes (E2ECounterSignal, E2ECrcSignal, E2EProfile, E2EDataId) — parsed as blobly_net's
+// candb parses them, so both repos read one file the same way.
+pub struct E2eDecl {
+pub:
+	counter     string
+	crc         string
+	profile     string
+	data_id     u32
+	has_data_id bool   // 0 is a legitimate Data ID, so presence is its own fact
+	bad_data_id string // an E2EDataId the file wrote that is not a Data ID — never read as absent
+}
+
+// declared: the file said anything about this message's E2E at all.
+pub fn (d E2eDecl) declared() bool {
+	return d.counter != '' || d.crc != '' || d.profile != '' || d.has_data_id || d.bad_data_id != ''
 }
 
 // raw_value extracts the unsigned raw bits of the signal from `data`. Handles

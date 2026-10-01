@@ -1,0 +1,75 @@
+module ecumodel
+
+import toml
+import tools.candb
+
+const e2e_dbc = 'BO_ 769 BrakeStatus: 6 Brake
+ SG_ BrakeCrc : 32|8@1+ (1,0) [0|255] "" X
+ SG_ BrakeCounter : 40|4@1+ (1,0) [0|15] "" X
+ SG_ Wide : 0|16@1+ (1,0) [0|65535] "" X
+BA_ "E2ECounterSignal" BO_ 769 "BrakeCounter";
+BA_ "E2ECrcSignal" BO_ 769 "BrakeCrc";
+BA_ "E2EProfile" BO_ 769 "autosar_p01";
+BA_ "E2EDataId" BO_ 769 68;
+'
+
+fn brake(extra string) candb.Message {
+	return (candb.parse_dbc(e2e_dbc + extra) or { panic(err) }).messages[0]
+}
+
+fn e2e_table(src string) map[string]toml.Any {
+	return (toml.parse_text('e2e = ${src}') or { panic(err) }).value('e2e').as_map()
+}
+
+fn test_the_dbc_declares_the_layout_when_the_frame_says_nothing() {
+	e, on := resolve_frame_e2e('brake_status', false, map[string]toml.Any{}, brake(''))!
+	assert on
+	assert e == FrameE2e{
+		data_id:     0x44
+		crc_pos:     4
+		counter_pos: 5
+	}
+	// a table carrying only the E2E timeout takes the whole layout from the DBC
+	e2, _ := resolve_frame_e2e('brake_status', true, e2e_table('{ timeout_ms = 300 }'), brake(''))!
+	assert e2 == e
+}
+
+fn test_an_override_that_contradicts_the_dbc_is_refused_unless_deliberate() {
+	resolve_frame_e2e('brake_status', true, e2e_table('{ crc_pos = 3 }'), brake('')) or {
+		assert err.msg().contains('contradicts the DBC')
+		e, _ := resolve_frame_e2e('brake_status', true, e2e_table('{ crc_pos = 3, deviates_from_dbc = true }'),
+			brake(''))!
+		assert e.crc_pos == 3 && e.counter_pos == 5 && e.data_id == 0x44
+		// an agreeing override is fine
+		resolve_frame_e2e('brake_status', true, e2e_table('{ data_id = 0x44 }'), brake(''))!
+		return
+	}
+	assert false, 'a contradicting override was accepted'
+}
+
+fn test_deviating_from_nothing_is_refused() {
+	plain := (candb.parse_dbc('BO_ 1 A: 8 X\n SG_ S : 0|8@1+ (1,0) [0|255] "" X\n') or { panic(err) }).messages[0]
+	resolve_frame_e2e('a', true, e2e_table('{ data_id = 1, crc_pos = 0, counter_pos = 1, deviates_from_dbc = true }'),
+		plain) or {
+		assert err.msg().contains('declares no E2E')
+		return
+	}
+	assert false
+}
+
+fn test_a_declaration_comm_e2e_cannot_stamp_is_refused() {
+	for extra, why in {
+		'BA_ "E2EProfile" BO_ 769 "crc8";':          'only autosar_p01'
+		'BA_ "E2EDataId" BO_ 769 70000;':            '0..0xFFFF'
+		'BA_ "E2EDataId" BO_ 769 x;':                'not a Data ID'
+		'BA_ "E2ECrcSignal" BO_ 769 "Wide";':        'E2ECrcSignal'
+		'BA_ "E2ECounterSignal" BO_ 769 "Missing";': 'not a signal'
+		'BA_ "E2ECounterSignal" BO_ 769 "BrakeCrc";': 'E2ECounterSignal'
+	} {
+		dbc_e2e(brake(extra)) or {
+			assert err.msg().contains(why), '${extra}: ${err.msg()}'
+			continue
+		}
+		assert false, '${extra} was accepted'
+	}
+}
