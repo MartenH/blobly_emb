@@ -2,6 +2,30 @@ module main
 
 import os
 import toml
+import tools.sysmodel
+
+// the tools these tests run, built once per test process into a private directory — never
+// `v run`, whose shared, self-deleting binary races a parallel test running the same tool (#313)
+const tool_dir = sysmodel.private_temp_dir('blobly_test_tools') or { panic(err) }
+
+fn built_tool(name string) string {
+	bin := os.join_path(tool_dir, name)
+	$if windows {
+		if os.exists(bin + '.exe') {
+			return os.quoted_path(bin + '.exe')
+		}
+	} $else {
+		if os.exists(bin) {
+			return os.quoted_path(bin)
+		}
+	}
+	return os.quoted_path(sysmodel.build_tool(os.join_path(@VMODROOT, 'tools', name), true,
+		tool_dir) or { panic(err) })
+}
+
+fn testsuite_end() {
+	os.rmdir_all(tool_dir) or {}
+}
 
 // A bus can carry no signals at all and still need a partition: the comm thread is where the
 // platform modules live, so a dedicated diagnostic bus has to be owned by somebody. Dropping it
@@ -520,10 +544,12 @@ fn test_an_extended_dbc_binding_is_refused_by_its_flag() {
 	os.write_file(dbc, 'VERSION ""\n\nNS_ :\n\nBS_:\n\nBU_: N\n\nBO_ 2147483904 TraceCmdX: 8 N\n') or {
 		panic(err)
 	}
-	r := os.execute('${@VEXE} -enable-globals run ${os.join_path(root, 'tools', 'loom2v')} ${ecu} ${dbc} ' +
+	r := os.execute('${built_tool('loom2v')} ${ecu} ${dbc} ' +
 		'${os.join_path(tmp, 'sig.v')} ${os.join_path(tmp, 'ports.v')} ${os.join_path(tmp, 'gen.v')} ' +
 		'${os.join_path(tmp, 'manifest.csv')}')
 	assert r.exit_code != 0, 'loom2v accepted an extended DBC binding: ${r.output}'
+	// refused BY loom2v, not a launch that failed for another reason
+	assert r.output.contains('is an extended (29-bit) message'), r.output
 	assert r.output.contains('extended (29-bit) message'), r.output
 }
 

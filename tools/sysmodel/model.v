@@ -1129,8 +1129,10 @@ fn run_capture(exe string, args []string) (string, int) {
 // drift. ecucheck prints "<file>: <msg>" per error and a "ecucheck: N …"
 // summary, then exits non-zero; we keep the messages, drop the summary/prefix.
 // v_compiler_noise reports whether a captured line is the V COMPILER talking about our own
-// source, not the tool talking about the config. `v run` compiles first, and a notice or
-// warning in any transitively-compiled file lands on the same stream as the tool's output --
+// source, not the tool talking about the config. The tools are built apart now (build_tool), so
+// a successful build's notices no longer reach this stream; kept for a tool that itself runs
+// the compiler. Under `v run` a notice or warning in any transitively-compiled file landed on
+// the same stream as the tool's output --
 // so an unrelated `notice: shifting a value from a signed type` in ecumodel.v was being
 // reported as a config error, four lines of source echo and carets with it. Harmless while
 // only sysgen surfaced them; syscheck now reports the same lines as system errors (#277).
@@ -1172,8 +1174,41 @@ pub fn (s System) is_someip_leaf(n Node) bool {
 	return someip == 1 && can == 1 && !is_route_gateway(s, n.name)
 }
 
+// build_tool compiles a repo tool into `dir` (a private directory the caller owns) and returns
+// the binary's path — `.exe` on Windows, which is what `v -o` writes there. Never `v run`: that
+// compiles to a path derived from the tool's source and deletes the binary when it exits, so two
+// concurrent runs of one tool (parallel tests, syscheck beside sysgen) share one file and one
+// deletes it under the other — `generated tcu: No such file or directory` (#313).
+pub fn build_tool(src string, globals bool, dir string) !string {
+	mut bin := os.join_path(dir, os.file_name(src).all_before('.'))
+	$if windows {
+		bin += '.exe'
+	}
+	mut args := if globals { ['-enable-globals'] } else { []string{} }
+	args << ['-o', bin, src]
+	out, code := run_capture(@VEXE, args)
+	if code != 0 {
+		return error('cannot build ${src}: ${out.trim_space()}')
+	}
+	return bin
+}
+
+// run_tool builds a tool into a fresh private directory, runs it there and removes it. A
+// tool that does not BUILD is an error, kept apart from what the tool says about the config.
+pub fn run_tool(src string, globals bool, args []string) !(string, int) {
+	dir := private_temp_dir('blobly_tool')!
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	bin := build_tool(src, globals, dir)!
+	out, code := run_capture(bin, args)
+	return out, code
+}
+
 pub fn ecucheck_errors(node_path string) []string {
-	output, code := run_capture(@VEXE, ['run', '${@VMODROOT}/tools/ecucheck/gen.v', node_path])
+	output, code := run_tool('${@VMODROOT}/tools/ecucheck/gen.v', false, [node_path]) or {
+		return [err.msg()]
+	}
 	if code == 0 {
 		return []string{}
 	}
@@ -1233,8 +1268,9 @@ pub fn private_temp_dir(prefix string) !string {
 // `out_dir` is a scratch directory: sysgen --out writes the generated configs and copies each
 // referenced DBC there, so nothing touches the source tree.
 pub fn sysgen_errors(system_path string, out_dir string) []string {
-	output, code := run_capture(@VEXE, ['-enable-globals', 'run', '${@VMODROOT}/tools/sysgen',
-		system_path, '--out', out_dir])
+	output, code := run_tool('${@VMODROOT}/tools/sysgen', true, [system_path, '--out', out_dir]) or {
+		return [err.msg()]
+	}
 	if code == 0 {
 		return []string{}
 	}
@@ -1275,8 +1311,8 @@ pub fn loom2v_errors(node_path string, dbc_path string) []string {
 	ports := os.join_path(tmp, 'ports.v')
 	glue := os.join_path(tmp, 'glue.v')
 	man := os.join_path(tmp, 'manifest.toml')
-	output, code := run_capture(@VEXE, ['-enable-globals', 'run', '${@VMODROOT}/tools/loom2v',
-		node_path, dbc_path, sig, ports, glue, man])
+	output, code := run_tool('${@VMODROOT}/tools/loom2v', true, [node_path, dbc_path, sig, ports,
+		glue, man]) or { return [err.msg()] }
 	if code == 0 {
 		return []string{}
 	}

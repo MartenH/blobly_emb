@@ -4514,3 +4514,12 @@ fn test_someip_signal_receive_metadata_is_refused() {
 	}
 	assert errs(check_signals_dissolved(s)).any(it.contains('is not lowered from system.toml yet')), errs(check_signals_dissolved(s)).str()
 }
+
+// a tool that does not BUILD is an error of its own, never filtered into config errors (#313)
+fn test_a_tool_that_does_not_build_says_so() {
+	run_tool(os.join_path(@VMODROOT, 'tools', 'no_such_tool'), false, []) or {
+		assert err.msg().starts_with('cannot build '), err.msg()
+		return
+	}
+	assert false, 'a tool that cannot build ran'
+}
