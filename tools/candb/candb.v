@@ -54,20 +54,28 @@ pub:
 	e2e      E2eDecl // blobly_net#271's E2E contract attributes, as the file states them
 }
 
-// E2eDecl is a message's E2E contract as the DBC declares it through blobly_net#271's four
-// attributes (E2ECounterSignal, E2ECrcSignal, E2EProfile, E2EDataId) — parsed as blobly_net's
-// candb parses them, so both repos read one file the same way.
+// E2eDecl is a message's E2E contract as the DBC declares it through the attributes blobly_net
+// defines in docs/dbc_attributes.md (E2ECounterSignal, E2ECrcSignal, E2EProfile, E2EDataId,
+// E2ETimeout) — parsed as blobly_net's candb parses them, so both repos read one file the same way.
 pub struct E2eDecl {
-pub:
+pub mut:
 	counter     string
 	crc         string
-	profile     string
+	profile     string // normalised: Profile 1 is 'autosar_p01' however the file spells it
 	data_id     u32
 	has_data_id bool   // 0 is a legitimate Data ID, so presence is its own fact
 	bad_data_id string // an E2EDataId the file wrote that is not a Data ID — never read as absent
+	timeout_ms  u32    // E2ETimeout: the receiver's sender-loss timeout, 0 meaning none
+	has_timeout bool   // stated per message (0 included)
+	bad_timeout string // an E2ETimeout that is not a number of ms
 }
 
-// declared: the file said anything about this message's E2E at all.
+// profile_from_dbc is the profile an `E2EProfile` value names: Profile 1 under any of its
+// spellings — `P01`, AUTOSAR's `PROFILE_01`, and `autosar_p01` — and anything else as written.
+pub fn profile_from_dbc(v string) string {
+	return if v in ['P01', 'PROFILE_01', 'autosar_p01'] { 'autosar_p01' } else { v }
+}
+
 pub fn (d E2eDecl) declared() bool {
 	return d.counter != '' || d.crc != '' || d.profile != '' || d.has_data_id || d.bad_data_id != ''
 }

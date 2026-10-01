@@ -81,3 +81,38 @@ BA_ "E2ECrcSignal" BO_ 2147483905 "C";
 	plain := parse_dbc('BO_ 1 A: 8 X\n SG_ S : 0|8@1+ (1,0) [0|255] "" X\nBA_DEF_DEF_ "E2EProfile" "autosar_p01";\n')!
 	assert !plain.messages[0].e2e.declared(), 'a default alone protects nothing'
 }
+
+// docs/dbc_attributes.md (blobly_net): Profile 1's three spellings are one profile; E2ETimeout
+// is ms, a per-message 0 is "none" and not overridden by a default, a default of 0 states
+// nothing, and a timeout alone declares no protection; an empty value is malformed, not absent;
+// a Data ID never comes from a default
+fn test_e2e_spellings_and_timeout_rules() {
+	for v in ['P01', 'PROFILE_01', 'autosar_p01'] {
+		db := parse_dbc('BO_ 1 A: 8 N\n SG_ S : 0|8@1+ (1,0) [0|255] "" X\nBA_ "E2EProfile" BO_ 1 "${v}";\n')!
+		assert db.messages[0].e2e.profile == 'autosar_p01', v
+	}
+	db := parse_dbc('BO_ 1 A: 8 N
+ SG_ C : 0|8@1+ (1,0) [0|255] "" X
+BO_ 2 B: 8 N
+ SG_ C : 0|8@1+ (1,0) [0|255] "" X
+BO_ 3 T: 8 N
+ SG_ C : 0|8@1+ (1,0) [0|255] "" X
+BO_ 4 E: 8 N
+ SG_ C : 0|8@1+ (1,0) [0|255] "" X
+BA_DEF_DEF_ "E2ETimeout" 500;
+BA_DEF_DEF_ "E2EDataId" 7;
+BA_ "E2ECrcSignal" BO_ 1 "C";
+BA_ "E2ETimeout" BO_ 1 0;
+BA_ "E2ECrcSignal" BO_ 2 "C";
+BA_ "E2ETimeout" BO_ 3 300;
+BA_ "E2EDataId" BO_ 4 ;
+')!
+	a := db.messages[0].e2e
+	assert a.has_timeout && a.timeout_ms == 0, 'an explicit 0 was overridden by the default'
+	b := db.messages[1].e2e
+	assert b.has_timeout && b.timeout_ms == 500
+	assert !b.has_data_id, 'a Data ID came from a default'
+	t := db.messages[2].e2e
+	assert !t.declared() && t.timeout_ms == 300, 'a timeout alone declares no protection'
+	assert db.messages[3].e2e.bad_data_id == '(empty)'
+}

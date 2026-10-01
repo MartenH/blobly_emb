@@ -9,7 +9,7 @@ const e2e_dbc = 'BO_ 769 BrakeStatus: 6 Brake
  SG_ Wide : 0|16@1+ (1,0) [0|65535] "" X
 BA_ "E2ECounterSignal" BO_ 769 "BrakeCounter";
 BA_ "E2ECrcSignal" BO_ 769 "BrakeCrc";
-BA_ "E2EProfile" BO_ 769 "autosar_p01";
+BA_ "E2EProfile" BO_ 769 "P01";
 BA_ "E2EDataId" BO_ 769 68;
 '
 
@@ -31,7 +31,8 @@ fn test_the_dbc_declares_the_layout_when_the_frame_says_nothing() {
 	}
 	// a table carrying only the E2E timeout takes the whole layout from the DBC
 	e2, _ := resolve_frame_e2e('brake_status', true, e2e_table('{ timeout_ms = 300 }'), brake(''))!
-	assert e2 == e
+	assert e2.data_id == e.data_id && e2.crc_pos == e.crc_pos && e2.counter_pos == e.counter_pos
+	assert e2.timeout_ms == 300
 }
 
 fn test_an_override_that_contradicts_the_dbc_is_refused_unless_deliberate() {
@@ -59,7 +60,7 @@ fn test_deviating_from_nothing_is_refused() {
 
 fn test_a_declaration_comm_e2e_cannot_stamp_is_refused() {
 	for extra, why in {
-		'BA_ "E2EProfile" BO_ 769 "crc8";':          'only autosar_p01'
+		'BA_ "E2EProfile" BO_ 769 "crc8";':          'only P01'
 		'BA_ "E2EDataId" BO_ 769 70000;':            '0..0xFFFF'
 		'BA_ "E2EDataId" BO_ 769 x;':                'not a Data ID'
 		'BA_ "E2ECrcSignal" BO_ 769 "Wide";':        'E2ECrcSignal'
@@ -106,7 +107,7 @@ fn test_a_multiplexed_field_signal_is_refused() {
  SG_ Ctr : 40|4@1+ (1,0) [0|15] "" X
 BA_ "E2ECounterSignal" BO_ 769 "Ctr";
 BA_ "E2ECrcSignal" BO_ 769 "Crc";
-BA_ "E2EProfile" BO_ 769 "autosar_p01";
+BA_ "E2EProfile" BO_ 769 "P01";
 BA_ "E2EDataId" BO_ 769 1;
 ') or { panic(err) }).messages[0]
 	dbc_e2e(m) or {
@@ -114,4 +115,46 @@ BA_ "E2EDataId" BO_ 769 1;
 		return
 	}
 	assert false
+}
+
+fn test_the_dbc_timeout_is_the_frames_unless_the_table_deviates() {
+	m := brake('BA_ "E2ETimeout" BO_ 769 300;')
+	e, _ := resolve_frame_e2e('brake_status', false, map[string]toml.Any{}, m)!
+	assert e.timeout_ms == 300
+	resolve_frame_e2e('brake_status', true, e2e_table('{ timeout_ms = 200 }'), m) or {
+		assert err.msg().contains("contradicts the DBC's E2ETimeout")
+		d, _ := resolve_frame_e2e('brake_status', true, e2e_table('{ timeout_ms = 200, deviates_from_dbc = true }'),
+			m)!
+		assert d.timeout_ms == 200
+		// a DBC without one leaves the table free to set it
+		f, _ := resolve_frame_e2e('brake_status', true, e2e_table('{ timeout_ms = 200 }'), brake(''))!
+		assert f.timeout_ms == 200
+		return
+	}
+	assert false, 'a contradicting timeout was accepted'
+}
+
+fn test_the_dbc_timeout_stands_on_its_own_and_a_bad_one_is_replaceable() {
+	// a timeout-only DBC fills a table that gives the layout
+	only := (candb.parse_dbc('BO_ 769 B: 6 X\n SG_ C : 32|8@1+ (1,0) [0|255] "" X\nBA_ "E2ETimeout" BO_ 769 300;\n') or {
+		panic(err)
+	}).messages[0]
+	e, _ := resolve_frame_e2e('b', true, e2e_table('{ data_id = 1, crc_pos = 4, counter_pos = 5 }'), only)!
+	assert e.timeout_ms == 300
+	// and a table may deviate from that timeout alone
+	resolve_frame_e2e('b', true, e2e_table('{ data_id = 1, crc_pos = 4, counter_pos = 5, timeout_ms = 200 }'),
+		only) or { assert err.msg().contains("contradicts the DBC's E2ETimeout") }
+	d, _ := resolve_frame_e2e('b', true, e2e_table('{ data_id = 1, crc_pos = 4, counter_pos = 5, timeout_ms = 200, deviates_from_dbc = true }'),
+		only)!
+	assert d.timeout_ms == 200
+	// a malformed one does not fail the layout (a sender never uses it) and a table replaces it
+	bad := brake('BA_ "E2ETimeout" BO_ 769 soon;')
+	b, _ := resolve_frame_e2e('brake_status', false, map[string]toml.Any{}, bad)!
+	assert b.bad_timeout == 'soon' && b.crc_pos == 4
+	r, _ := resolve_frame_e2e('brake_status', true, e2e_table('{ timeout_ms = 250 }'), bad)!
+	assert r.bad_timeout == '' && r.timeout_ms == 250
+	// a DBC 0 is "none" and binds nothing; a table value is never wrapped
+	z := brake('BA_ "E2ETimeout" BO_ 769 0;')
+	t, _ := resolve_frame_e2e('brake_status', true, e2e_table('{ timeout_ms = 4294967596 }'), z)!
+	assert t.timeout_ms == 4294967596
 }
