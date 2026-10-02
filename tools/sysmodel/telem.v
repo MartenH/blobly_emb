@@ -147,7 +147,7 @@ fn module_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFrame 
 		out << module_frame(dbs, s, n.view.telem_bus, 'shell out id', n.view.shell_out_id,
 			n.view.shell_out_name)
 	}
-	// [[isotp]]: the ISO-TP bridge TRANSMITS responses at tx_id on the isotp bus.
+	// [isotp]: the ISO-TP bridge TRANSMITS responses at tx_id on the isotp bus.
 	for c in n.view.isotp_conns {
 		if c.iface != '' {
 			out << ModuleFrame{c.iface, 'isotp tx id', c.tx_id, false, ''}
@@ -180,7 +180,7 @@ fn module_rx_frames(n Node, s System, dbs map[string]candb.Database) []ModuleFra
 		out << module_frame(dbs, s, n.view.telem_bus, 'shell fc (rx) id', n.view.shell_fc_id,
 			n.view.shell_fc_name)
 	}
-	// [[isotp]]: the ISO-TP bridge RECEIVES requests at rx_id on the isotp bus.
+	// [isotp]: the ISO-TP bridge RECEIVES requests at rx_id on the isotp bus.
 	for c in n.view.isotp_conns {
 		if c.iface != '' {
 			out << ModuleFrame{c.iface, 'isotp rx (rx) id', c.rx_id, false, ''}

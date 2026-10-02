@@ -573,3 +573,145 @@ fn test_security_state_kept_across_the_owners_reset() {
 	q.restore_security([kept_len]u8{})
 	assert !q.sa_arm_delay
 }
+
+// The service table. A server with every seam wired (0x27, the fault memory, 0x11 and 0x28), so
+// that only the table decides what is answered.
+fn full_server() Server {
+	mut s := secured()
+	s.faults = FaultOps{
+		count:       stub_count
+		entry:       stub_entry
+		clear:       stub_clear
+		set_setting: stub_setting
+		avail:       0x7F
+	}
+	return s
+}
+
+// first_answer: the response's first byte, or for a negative response its NRC (0x7F ss NRC -> NRC)
+fn first_answer(r []u8) u8 {
+	if r.len == 3 && r[0] == 0x7F {
+		return r[2]
+	}
+	return if r.len > 0 { r[0] } else { u8(0) }
+}
+
+// The DEFAULT table (no rows) is the behaviour from before the table existed, for every SID in
+// every session: the old rule, written out here literally rather than through default_sessions,
+// so a change to the default set fails this test instead of silently moving every node.
+fn test_the_default_table_is_the_old_behaviour() {
+	for wired in [false, true] {
+		for session in [session_default, session_programming, session_extended, session_safety] {
+			for sid in 0 .. 256 {
+				mut s := if wired { full_server() } else { started() }
+				s.serves_reset = wired
+				s.serves_comm_control = wired
+				s.session = session
+				supported := match u8(sid) {
+					0x10, 0x22, 0x2E, 0x3E { true }
+					0x11, 0x28, 0x14, 0x19, 0x85, 0x27 { wired }
+					else { false }
+				}
+				non_default := u8(sid) in [u8(0x27), 0x28, 0x85]
+				in_session := !non_default || session in [session_extended, session_programming]
+				got := first_answer(call(mut s, [u8(sid), 0x00, 0x00, 0x00]))
+				if !supported {
+					assert got == nrc_service_not_supported, 'SID 0x${u8(sid).hex()} session ${session}'
+				} else if !in_session {
+					assert got == nrc_service_not_in_session, 'SID 0x${u8(sid).hex()} session ${session}'
+				} else {
+					assert got !in [nrc_service_not_supported, nrc_service_not_in_session,
+						nrc_security_access_denied], 'SID 0x${u8(sid).hex()} session ${session}: 0x${got.hex()}'
+				}
+			}
+		}
+	}
+}
+
+fn table(mut s Server, rows []Service) {
+	for i, r in rows {
+		s.services[i] = r
+	}
+	s.nservices = rows.len
+}
+
+// A configured table answers exactly its rows: a wired service it leaves out is serviceNotSupported,
+// physically, and silent functionally (ISO 14229-1 suppresses 0x11 for a functional request).
+fn test_a_table_answers_exactly_its_services() {
+	mut s := full_server()
+	table(mut s, [Service{
+		sid: 0x10
+	}, Service{
+		sid: 0x22
+	}, Service{
+		sid: 0x3E
+	}])
+	assert call(mut s, [u8(0x3E), 0x00]) == [u8(0x7E), 0x00]
+	assert first_answer(call(mut s, [u8(0x22), 0xF1, 0x90])) == 0x62
+	assert call(mut s, [u8(0x2E), 0xF1, 0xAA, 0x01]) == [u8(0x7F), 0x2E, 0x11]
+	assert call(mut s, [u8(0x11), 0x01]) == [u8(0x7F), 0x11, 0x11]
+	assert s.reset_req == 0
+	assert call(mut s, [u8(0x28), 0x01, 0xF1]) == [u8(0x7F), 0x28, 0x11]
+	assert call(mut s, [u8(0x19), 0x02, 0xFF]) == [u8(0x7F), 0x19, 0x11]
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x11]
+	assert call_functional(mut s, [u8(0x2E), 0xF1, 0xAA, 0x01]).len == 0
+}
+
+// A row grants nothing the owner did not wire: 0x28 listed on a server whose owner does not gate
+// its frames on it is still serviceNotSupported.
+fn test_a_row_does_not_wire_a_service() {
+	mut s := started()
+	s.serves_comm_control = false
+	table(mut s, [Service{
+		sid: 0x10
+	}, Service{
+		sid: 0x28
+	}])
+	assert call(mut s, [u8(0x28), 0x01, 0xF1]) == [u8(0x7F), 0x28, 0x11]
+}
+
+// A row's sessions narrow where the service runs; a row with none keeps the service's default
+// sessions (0x27 stays out of the default session).
+fn test_a_row_gates_its_service_by_session() {
+	mut s := full_server()
+	table(mut s, [Service{
+		sid: 0x10
+	}, Service{
+		sid:      0x2E
+		sessions: in_extended
+	}, Service{
+		sid: 0x27
+	}])
+	call(mut s, [u8(0x10), 0x01])
+	assert call(mut s, [u8(0x2E), 0xF1, 0xAA, 0x01]) == [u8(0x7F), 0x2E, 0x7F]
+	assert call(mut s, [u8(0x27), 0x01]) == [u8(0x7F), 0x27, 0x7F]
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x2E), 0xF1, 0xAA, 0x01]) == [u8(0x6E), 0xF1, 0xAA]
+	assert first_answer(call(mut s, [u8(0x27), 0x01])) == 0x67
+}
+
+// A row's security level: securityAccessDenied until that level is unlocked, checked after the
+// session and before the length (ISO 14229-1's order), and relocked with the session.
+fn test_a_row_gates_its_service_by_security() {
+	mut s := full_server()
+	table(mut s, [Service{
+		sid: 0x10
+	}, Service{
+		sid:      0x2E
+		sessions: in_extended
+		security: 1
+	}, Service{
+		sid: 0x27
+	}])
+	call(mut s, [u8(0x10), 0x01])
+	assert call(mut s, [u8(0x2E)]) == [u8(0x7F), 0x2E, 0x7F] // session first
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x2E)]) == [u8(0x7F), 0x2E, 0x33] // security before length
+	assert call(mut s, [u8(0x2E), 0xF1, 0xAA, 0x01]) == [u8(0x7F), 0x2E, 0x33]
+	seed := call(mut s, [u8(0x27), 0x01])
+	assert send_key(mut s, key_for(seed[2..])) == [u8(0x67), 0x02]
+	assert call(mut s, [u8(0x2E)]) == [u8(0x7F), 0x2E, 0x13]
+	assert call(mut s, [u8(0x2E), 0xF1, 0xAA, 0x01]) == [u8(0x6E), 0xF1, 0xAA]
+	call(mut s, [u8(0x10), 0x03]) // a session entry relocks
+	assert call(mut s, [u8(0x2E), 0xF1, 0xAA, 0x01]) == [u8(0x7F), 0x2E, 0x33]
+}

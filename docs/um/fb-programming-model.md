@@ -268,7 +268,7 @@ out.fault.engine_over_rev = if inp.engine_speed.status != .ok {
 ```
 
 The handler must also `read` each `enable` signal, and the node needs its diagnostic server (one
-`[[isotp]]`) with the cycle signal received on that bus; generation names whichever is missing.
+`[isotp]`) with the cycle signal received on that bus; generation names whichever is missing.
 Debouncing runs on your thread after the handler; the fault memory keeps the DTC's ISO 14229 status
 (pending, confirmed, aging over operation cycles, in RAM for now) and a tester reads it with 0x19
 and clears it with 0x14. **Reporting is one-way:** you never read your DTC's status, and you keep

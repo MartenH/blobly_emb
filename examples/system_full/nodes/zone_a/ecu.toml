@@ -108,18 +108,19 @@ period_ms = 500
 # this node (diag = { req = 0x7C0, rsp = 0x7C8 }), on the edge bus — CAN-FD, carrying classic-
 # sized ISO-TP (TX_DL = 8, which ISO 15765-2 allows on an FD bus), with the same functional id the
 # compute nodes answer. 0x27 as on domain: a TRNG seed, and on this BENCH node the reference key.
-[[isotp]]
-name          = "diag"
+[uds]
+s3_ms             = 5000
+security_attempts = 3
+security_delay_ms = 3000
+security_key      = "reference"
+
+[isotp]
 bus           = "can0"
 rx_id         = 0x7C0
 tx_id         = 0x7C8
 functional_id = 0x7DF
 bs            = 8
 stmin_ms      = 0
-s3_ms         = 5000
-security_attempts = 3
-security_delay_ms = 3000
-security_key      = "reference"
 
 # 18 bytes: the read answer is multi-frame
 [[did]]

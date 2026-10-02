@@ -30,7 +30,7 @@ asserts it reappears **byte-for-byte** on `can1`. Under backpressure it is
 wrong for event traffic whose every frame must survive. And there is **no lossless
 generated alternative across buses today**: raw-routing an ISO-TP conversation's CAN ids
 rides this same freshest-wins slot (one lost CF and the transfer dies), and the generated
-`[[isotp]]` connection terminates locally at UDS — a cross-bus ISO-TP proxy that
+`[isotp]` connection terminates locally at UDS — a cross-bus ISO-TP proxy that
 terminates one link and re-originates the other is hand-written module work.
 
 Use it when:

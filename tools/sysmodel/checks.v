@@ -1535,7 +1535,7 @@ fn check_identity_uniqueness(s System) []Issue {
 				diag_seen[id] = n.name
 			}
 		}
-		// the ECU's ACTUAL [[isotp]] rx_id/tx_id are the on-wire diagnostic ids
+		// the ECU's ACTUAL [isotp] rx_id/tx_id are the on-wire diagnostic ids
 		// (loom2v emits them, id 0 INCLUDED); system.toml `diag` is only the
 		// allocation. Register the real ids in the SAME map so two nodes physically
 		// using one diagnostic CAN id collide even when their diag allocations differ.
@@ -1552,7 +1552,7 @@ fn check_identity_uniqueness(s System) []Issue {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-002'
-					msg:      'node "${n.name}": [[isotp]] diagnostic id 0x${iid.hex()} collides with an id already used by "${prev}"'
+					msg:      'node "${n.name}": [isotp] diagnostic id 0x${iid.hex()} collides with an id already used by "${prev}"'
 				}
 			} else {
 				diag_seen[iid] = n.name

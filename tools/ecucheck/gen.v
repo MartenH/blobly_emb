@@ -74,7 +74,8 @@ fn specs() map[string]map[string]Key {
 			'fb':        sub(.arr, false, 'fb')
 			'signal':    sub(.arr, false, 'signal')
 			'frame':     sub(.arr, false, 'frame')
-			'isotp':     sub(.arr, false, 'isotp')
+			'isotp':     sub(.tbl, false, 'isotp') // ISO 15765-2: the diagnostic server on CAN
+			'uds':       sub(.tbl, false, 'uds') // ISO 14229: the node's one diagnostic server
 			'doip':      sub(.tbl, false, 'doip') // the diagnostic server over DoIP too (ThreadX target)
 			'did':       sub(.arr, false, 'did')
 			'fault':        sub(.arr, false, 'fault') // docs/diagnostics.md §3.3
@@ -304,17 +305,23 @@ fn specs() map[string]map[string]Key {
 			'cycle': k(.str) // "Signal.field" (bool): the operation cycle
 		}
 		'isotp':      {
-			'name':     req(.str)
 			'bus':      req(.str)
 			'rx_id':    req(.int)
 			'tx_id':    req(.int)
 			'bs':       k(.int)
 			'stmin_ms': k(.int)
 			'functional_id': k(.int) // functional request id (e.g. 0x7DF), single frame
+		}
+		'uds':        {
 			's3_ms':    k(.int) // session timeout; default 5000 (ISO 14229-2)
 			'security_attempts': k(.int) // 0x27 failed keys before the lockout; default 3
 			'security_delay_ms': k(.int) // 0x27 lockout delay after too many wrong keys; default 10000
 			'security_key': k(.str) // "reference" = blobly_net's public bench key (a target); absent = the OEM's diag_sa_key_ok
+			'services': sub(.namedmap, false, 'uds_service') // "0xSID" = { ... }; absent = the default table
+		}
+		'uds_service': {
+			'sessions': k(.str_arr) // default / extended / safety; absent = the service's default sessions
+			'security': k(.int) // the 0x27 level the service needs; 0 = none
 		}
 		'doip':       {
 			'address':            req(.str) // the node's static IPv4 address
