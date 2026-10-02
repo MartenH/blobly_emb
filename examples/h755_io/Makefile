@@ -42,7 +42,7 @@ TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 
 # board bring-up (asm + board.c) + the IOC-pool glue (no comm thread in this example).
-BSP = $(BOARD_BSP_THREADX) io_glue.c
+BSP = $(BOARD_BSP_THREADX) io_glue.c $(LOOM_FAULT_SRCS)
 
 all: $(BUILD)/$(NAME).bin
 
@@ -58,7 +58,12 @@ gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(REPO)/tools/ecucheck/gen.v $(
 	@touch gen/.stamp
 
 # loom's fixed Scheduler tables, right-sized to this image's real handler count.
+# (not for clean, which would otherwise regenerate everything before deleting it)
+ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
+endif
+# remade by gen: make restarts and rereads it, so a first build sees LOOM_VDEFS / LOOM_FAULT_SRCS
+gen/loom_build.mk: gen/.stamp ;
 
 # 1) transpile the V stack to freestanding C (-enable-globals for the ThreadX TCB/stack statics).
 $(BUILD)/app.c: main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/driver/io/*.v) $(wildcard app/*.v) | $(BUILD)

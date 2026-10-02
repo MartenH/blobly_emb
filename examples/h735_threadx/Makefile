@@ -57,7 +57,7 @@ TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
 
 # board bring-up (asm + board.c) + the exec-change trace recorder, the shared recorder from
 # boards/common (trace_hooks.c is driver-independent — pure recorder).
-BSP = $(BOARD_BSP_THREADX) comm_glue.c $(REPO)/boards/common/trace_hooks.c
+BSP = $(BOARD_BSP_THREADX) comm_glue.c $(REPO)/boards/common/trace_hooks.c $(LOOM_FAULT_SRCS)
 
 all: $(BUILD)/$(NAME).bin
 
@@ -74,7 +74,12 @@ gen/.stamp: ecu.toml bus.dbc $(wildcard $(REPO)/examples/shared/loadmix/app/*.v)
 
 # loom's fixed Scheduler tables, right-sized to this image's real per-thread handler count
 # (loom2v derives LOOM_VDEFS = -d loom_max_tasks=N; loom.v defaults to 32 without it).
+# (not for clean, which would otherwise regenerate everything before deleting it)
+ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
+endif
+# remade by gen: make restarts and rereads it, so a first build sees LOOM_VDEFS / LOOM_FAULT_SRCS
+gen/loom_build.mk: gen/.stamp ;
 
 # 1) transpile the V stack to freestanding C (-enable-globals for the ThreadX TCB/stack statics).
 $(BUILD)/app.c: main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/examples/shared/loadmix/app/*.v) | $(BUILD)

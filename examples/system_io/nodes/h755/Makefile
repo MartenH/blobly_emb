@@ -34,7 +34,7 @@ TX_ASM   = $(wildcard $(PORT)/src/*.S)
 TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
-BSP = $(BOARD_BSP_THREADX) $(SYSDIR)/io_glue.c
+BSP = $(BOARD_BSP_THREADX) $(SYSDIR)/io_glue.c $(LOOM_FAULT_SRCS)
 
 all: $(BUILD)/$(NAME).bin
 
@@ -51,7 +51,10 @@ gen/.stamp: $(SYSDIR)/gen-h755.toml $(SYSDIR)/body.dbc $(wildcard app/*.v) $(wil
 
 gen/loom_build.mk: gen/.stamp
 	@touch $@
+# (not for clean, which would otherwise regenerate everything before deleting it)
+ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
+endif
 
 # 2) transpile the V stack (shared main.v + this node's app/) to freestanding C.
 $(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/driver/io/*.v) $(wildcard app/*.v) | $(BUILD)

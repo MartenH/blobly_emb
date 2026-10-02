@@ -43,7 +43,7 @@ TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 
 # board bring-up (asm + board.c) + the IOC-pool glue (no comm thread in this example).
-BSP = $(BOARD_BSP_THREADX) io_glue.c
+BSP = $(BOARD_BSP_THREADX) io_glue.c $(LOOM_FAULT_SRCS)
 
 all: $(BUILD)/$(NAME).bin
 
@@ -66,7 +66,10 @@ gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(REPO)/tools/ecucheck/gen.v $(
 # prerequisite) is what marks the include remade so make actually re-execs.
 gen/loom_build.mk: gen/.stamp
 	@touch $@
+# (not for clean, which would otherwise regenerate everything before deleting it)
+ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
+endif
 
 # 1) transpile the V stack to freestanding C (-enable-globals for the ThreadX TCB/stack statics).
 $(BUILD)/app.c: main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/driver/io/*.v) $(wildcard app/*.v) | $(BUILD)

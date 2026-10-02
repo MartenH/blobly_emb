@@ -25,7 +25,9 @@ TX_ASM   = $(wildcard $(PORT)/src/*.S)
 TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
-BSP      = $(BOARD_BSP_THREADX) $(REPO)/boards/common/io_glue.c $(REPO)/boards/common/trace_hooks.c
+# + what the config's fault memory links (gen/loom_build.mk: the byte IOC its cells ride)
+BSP      = $(BOARD_BSP_THREADX) $(REPO)/boards/common/io_glue.c $(REPO)/boards/common/trace_hooks.c \
+           $(LOOM_FAULT_SRCS)
 
 all: $(BUILD)/$(NAME).bin
 
@@ -45,6 +47,14 @@ gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/edge.dbc $(wildcard app/*.v
 	  examples/system_full/nodes/$(NAME)/sig/signals_gen.v examples/system_full/nodes/$(NAME)/ports/ports_gen.v \
 	  examples/system_full/nodes/$(NAME)/gen/loom_gen.v examples/system_full/nodes/$(NAME)/gen/trace-manifest.csv
 	@touch gen/.stamp
+
+# loom2v writes gen/loom_build.mk (LOOM_VDEFS, LOOM_FAULT_SRCS); this rule makes make RESTART and
+# reparse the include once gen has run, or both stay unset for the same run
+# (not for clean, which would otherwise regenerate everything before deleting it)
+ifneq ($(MAKECMDGOALS),clean)
+-include gen/loom_build.mk
+endif
+gen/loom_build.mk: gen/.stamp ;
 
 $(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/driver/io/*.v) $(wildcard app/*.v) | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \

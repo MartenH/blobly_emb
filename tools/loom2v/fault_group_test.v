@@ -1,5 +1,7 @@
 module main
 
+// @verifies REQ-DIAG-012
+
 // codex #304 r4: when the operation-cycle signal and a watched signal ride one frame, the frame's
 // result must land INSIDE the cycle either way — a rising edge starts the cycle before the
 // group's results are consumed, a falling edge ends it after. Pinned here because no committed

@@ -2,3 +2,4 @@
 LOOM_VDEFS := -d loom_max_tasks=1
 LOOM_NET_SRCS :=
 LOOM_NET_DEFS :=
+LOOM_FAULT_SRCS :=
