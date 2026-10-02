@@ -71,17 +71,16 @@ static void sa_rng_recover(void) {
 }
 #endif
 
-__attribute__((weak)) int diag_sa_seed(uint8_t *out, int n) {
-	if (g_sa_rng <= 0) return 0;
+/* sa_rng_draw fills out[0..n) from one healthy stretch of the RNG: 1 when it did, -1 when a seed
+ * or clock error interrupted it (the bytes drawn are discarded with that stretch), 0 when no
+ * word came in time. */
+static int sa_rng_draw(uint8_t *out, int n) {
 	int i = 0;
 	while (i < n) {
 		uint32_t t = 0;
 		for (;;) {
 			uint32_t sr = RNG_SR_R;
-			if (sr & (RNG_SR_SECS | RNG_SR_CECS)) { /* a seed or clock error stops DRDY */
-				sa_rng_recover();
-				return 0;
-			}
+			if (sr & (RNG_SR_SECS | RNG_SR_CECS)) return -1; /* a seed or clock error stops DRDY */
 			if (sr & RNG_SR_DRDY) break;
 			if (++t > 200000u) return 0;
 		}
@@ -90,6 +89,23 @@ __attribute__((weak)) int diag_sa_seed(uint8_t *out, int n) {
 			out[i] = (uint8_t)(w >> (8 * b));
 	}
 	return 1;
+}
+
+/* the RNG's health tests flag good noise now and then (~0.6% of seeds at the H72x/H73x reset
+ * threshold, #318), so a seed error is recovered from and the seed drawn AGAIN rather than the
+ * request refused: a tester never sees a transient one. Only an RNG that fails every attempt
+ * refuses — then it is a real fault, never a faked seed. */
+#define SA_SEED_ATTEMPTS 3
+
+__attribute__((weak)) int diag_sa_seed(uint8_t *out, int n) {
+	if (g_sa_rng <= 0) return 0;
+	for (int attempt = 0; attempt < SA_SEED_ATTEMPTS; attempt++) {
+		int r = sa_rng_draw(out, n);
+		if (r == 1) return 1;
+		if (r == 0) return 0; /* no word at all: a stalled RNG, not a health-test flag */
+		sa_rng_recover();
+	}
+	return 0;
 }
 
 /* --- ECUReset (0x11) ---------------------------------------------------------------------- */
