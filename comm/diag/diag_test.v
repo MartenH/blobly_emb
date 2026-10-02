@@ -357,3 +357,62 @@ fn test_nothing_is_served_once_a_reset_is_due() {
 	mut f := can.Frame{}
 	assert !c.produce(0, mut f), 'a request was answered while a reset was due'
 }
+
+fn remote(mut c Connection, req []u8, functional bool) []u8 {
+	mut resp := [isotp.max_payload]u8{}
+	n := c.serve_remote(&req[0], req.len, functional, &resp[0])
+	return resp[..n].clone()
+}
+
+fn test_a_remote_request_is_served_by_the_same_server() {
+	mut c := new_conn()
+	assert remote(mut c, [u8(0x10), 0x03], false)[0] == 0x50
+	assert c.server.session == uds.session_extended // one session, whichever transport opened it
+	r := remote(mut c, [u8(0x22), 0xF1, 0x90], false)
+	assert r[..3] == [u8(0x62), 0xF1, 0x90]
+	assert r[3..].bytestr() == name
+	// functional: an unsupported service stays silent
+	assert remote(mut c, [u8(0xBA)], true).len == 0
+	assert remote(mut c, [u8(0xBA)], false) == [u8(0x7F), 0xBA, 0x11]
+}
+
+fn test_a_remote_reset_waits_until_its_transport_has_sent_the_answer() {
+	mut c := new_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	assert remote(mut c, [u8(0x11), 0x01], false) == [u8(0x51), 0x01]
+	assert c.reset_due() == 0, 'reset before the DoIP answer left'
+	assert remote(mut c, [u8(0x3E), 0x00], false).len == 0 // nothing served while a reset is pending
+	c.remote_sent()
+	assert c.reset_due() == 0x01
+	// a suppressed reset has no answer: due at once
+	mut d := new_conn()
+	d.server.serves_reset = true
+	d.owner_resets = true
+	assert remote(mut d, [u8(0x11), 0x81], false).len == 0
+	assert d.reset_due() == 0x01
+}
+
+fn test_a_dropped_connection_ends_what_it_opened_and_never_resets_unanswered() {
+	mut c := new_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	remote(mut c, [u8(0x10), 0x03], false)
+	remote(mut c, [u8(0x11), 0x01], false)
+	c.remote_dropped()
+	assert c.reset_due() == 0, 'reset whose answer never left'
+	assert c.server.session == uds.session_default
+	// an answered reset survives the tester hanging up right after it
+	remote(mut c, [u8(0x11), 0x01], false)
+	c.remote_sent()
+	c.remote_dropped()
+	assert c.reset_due() == 0x01
+	c.server.reset_req = 0
+	// a bus tester served after the remote one keeps its session
+	mut t := new_tester()
+	mut now := u64(0)
+	remote(mut c, [u8(0x10), 0x03], false)
+	exchange(mut c, mut t, mut &now, [u8(0x3E), 0x00])
+	c.remote_dropped()
+	assert c.server.session == uds.session_extended
+}

@@ -19,6 +19,7 @@
 #include "tx_api.h"
 #include "nx_api.h"
 #include "eth.h" /* boards/<board>/eth.c: eth_link_up() */
+#include "ip4.h"
 
 #define POOL_PAYLOAD 1568u
 #define POOL_COUNT   8u
@@ -68,35 +69,6 @@ static void svc_entry(ULONG arg) {
 		net_link_up = eth_link_up();
 		tx_thread_sleep(TX_TIMER_TICKS_PER_SECOND);
 	}
-}
-
-/* parse one dotted-quad octet run; returns the IP or 0 on a malformed string
- * (0.0.0.0 is not a bindable static endpoint here, so 0 doubles as failure).
- * Every octet must carry at least one digit — "192.168..50" or "192.168.0."
- * would otherwise silently bind a DIFFERENT address than configured. */
-static ULONG parse_ip4(const char *s) {
-	ULONG oct[4] = {0, 0, 0, 0};
-	int digits[4] = {0, 0, 0, 0};
-	int i = 0;
-	for (const char *p = s; *p != '\0'; p++) {
-		if (*p == '.') {
-			if (++i > 3) {
-				return 0;
-			}
-		} else if (*p >= '0' && *p <= '9') {
-			oct[i] = oct[i] * 10u + (ULONG)(*p - '0');
-			digits[i]++;
-			if (oct[i] > 255u) {
-				return 0;
-			}
-		} else {
-			return 0;
-		}
-	}
-	if (i != 3 || digits[0] == 0 || digits[1] == 0 || digits[2] == 0 || digits[3] == 0) {
-		return 0;
-	}
-	return IP_ADDRESS(oct[0], oct[1], oct[2], oct[3]);
 }
 
 /* blob_eth_open: full bring-up + bind of the node's static endpoint. Blocks

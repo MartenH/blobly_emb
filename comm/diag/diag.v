@@ -33,6 +33,10 @@ pub mut:
 mut:
 	req  [isotp.max_payload]u8
 	resp [isotp.max_payload]u8
+	// a request served over another transport (serve_remote): the last one served came from it,
+	// and a reset it asked for waits until that transport has sent the answer
+	remote_last   bool
+	remote_unsent bool
 }
 
 // Rx is what on_frame did with a received frame, for the owner's drain.
@@ -108,6 +112,7 @@ fn (mut c Connection) functional(f &can.Frame) Rx {
 		return .taken
 	}
 	c.refresh_dids()
+	c.remote_last = false
 	rlen := c.server.handle_functional(&f.data[1], n, &c.resp[0])
 	if rlen > 0 && !c.link.send(&c.resp[0], rlen) {
 		c.server.reset_req = 0 // never reset unanswered
@@ -130,11 +135,53 @@ pub fn (mut c Connection) serve() {
 	n := if c.link.busy() || c.server.reset_req != 0 { 0 } else { got }
 	if n > 0 {
 		c.refresh_dids()
+		c.remote_last = false
 		rlen := c.server.handle(&c.req[0], n, &c.resp[0])
 		if rlen > 0 && !c.link.send(&c.resp[0], rlen) {
 			c.server.reset_req = 0 // the answer could not be queued: never reset unanswered
 		}
 	}
+}
+
+// serve_remote answers a request that arrived over another transport (DoIP) on this same server,
+// so both transports share one session and one security state; resp holds isotp.max_payload. The
+// answer leaves over that transport, so a reset it asks for is due only once the owner reports it
+// sent (remote_sent), and is abandoned with a connection that drops first (remote_dropped). Once a
+// reset is due nothing is served, as on the bus.
+pub fn (mut c Connection) serve_remote(req &u8, n int, functional bool, resp &u8) int {
+	if n < 1 || c.server.reset_req != 0 {
+		return 0
+	}
+	c.refresh_dids()
+	c.remote_last = true
+	rlen := if functional {
+		c.server.handle_functional(req, n, resp)
+	} else {
+		c.server.handle(req, n, resp)
+	}
+	// a suppressed reset has no answer to wait for: it is due at once
+	c.remote_unsent = rlen > 0 && c.server.reset_req != 0
+	return rlen
+}
+
+// remote_sent: the other transport has sent the answer serve_remote gave.
+pub fn (mut c Connection) remote_sent() {
+	c.remote_unsent = false
+}
+
+// remote_dropped: the other transport's connection is gone. A reset whose answer it never sent is
+// abandoned; one whose answer it did send still happens (a tester disconnects right after it).
+// Otherwise, if the last request served came over it, the server returns to power-on — a session
+// or an unlock must not outlive the tester that opened it. A bus tester served since keeps its own.
+pub fn (mut c Connection) remote_dropped() {
+	if c.remote_unsent {
+		c.server.reset_req = 0
+		c.remote_unsent = false
+	}
+	if c.remote_last && c.server.reset_req == 0 {
+		c.server.reset_state()
+	}
+	c.remote_last = false
 }
 
 // produce yields the next frame of the answer in flight, paced by the peer's flow control, for the
@@ -180,11 +227,12 @@ fn truncated(pci u8, n int, left int) bool {
 	}
 }
 
-// reset_due is the ECUReset kind whose answer has left the link (0 = none) — for an owner that
-// performs the reset itself (`owner_resets`). The link being done is not the wire being done: the
+// reset_due is the ECUReset kind whose answer has left the link, or the other transport that
+// carried it (remote_sent), (0 = none) — for an owner that performs the reset itself
+// (`owner_resets`). The link being done is not the wire being done: the
 // owner still waits for its controller to transmit the answer (REQ-BOOT-012).
 pub fn (c &Connection) reset_due() u8 {
-	if c.server.reset_req != 0 && !c.link.busy() {
+	if c.server.reset_req != 0 && !c.link.busy() && !c.remote_unsent {
 		return c.server.reset_req
 	}
 	return 0

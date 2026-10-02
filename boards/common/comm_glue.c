@@ -149,3 +149,11 @@ unsigned comm_rx_wait(unsigned ticks)
 {
     return (unsigned)tx_semaphore_get(&g_comm_sem, (ULONG)ticks);
 }
+
+/* Wake the comm thread from another thread (driver/eth/doip_netx.c: a DoIP request is waiting).
+ * Before the semaphore exists the comm thread has not reached its loop: it serves on its first pass. */
+void comm_wake(void)
+{
+    if (g_comm_sem_made)
+        tx_semaphore_put(&g_comm_sem);
+}
