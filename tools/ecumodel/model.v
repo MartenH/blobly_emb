@@ -545,8 +545,8 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		if eth == '' || str_of(fm, 'bus') != eth {
 			// on a CAN bus the eth-frame keys are silently ignored by loom2v
 			// (identity/layout come from the DBC) — reject them loud instead
-			if 'id' in fm || 'signals' in fm {
-				errs << 'frame "${str_of(fm, 'name')}" is not on an eth bus but declares eth-frame keys (`id`/`signals`) — CAN identity and layout come from the DBC'
+			if 'id' in fm || 'signals' in fm || 'peer' in fm {
+				errs << 'frame "${str_of(fm, 'name')}" is not on an eth bus but declares eth-frame keys (`id`/`signals`/`peer`) — CAN identity and layout come from the DBC, and a CAN bus has no peer'
 			}
 			continue
 		}
@@ -576,6 +576,11 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 			}
 		} else {
 			errs << 'eth frame "${fname}" is missing `id` (the SOME/IP event id, 0x8000..0xFFFF)'
+		}
+		// the event's own static endpoint — where a tx event goes, the one source an rx event is
+		// accepted from — when it is not [someip].peer (a member of a larger segment, docs/someip.md)
+		if 'peer' in fm && !peer_ok(str_of(fm, 'peer')) {
+			errs << 'eth frame "${fname}" peer "${str_of(fm, 'peer')}" must be an address:port pair with a valid port (1..65535)'
 		}
 		sigs := arr_of(fm, 'signals')
 		if sigs.len == 0 {

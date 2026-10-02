@@ -1,14 +1,15 @@
-# sysnode (H735-DK) — Central Gateway. Pure routing node: the comm thread owns all three
-# FDCAN buses and forwards the resolved routes (raw copy + id remap). It runs ThreadX like
-# every other node; sysgen prepends the buses/routes/nm from system.toml, this file adds the
-# on-target bits. The gateway carries no application FBs, but the ThreadX target emitter wants
-# exactly one local partition, so a single idle thread stands in — the real work is the comm
-# thread's cross-bus forwarding.
+# sysnode (H735-DK) — Central Gateway. The comm thread owns both FDCAN buses and forwards the
+# resolved routes (raw copy + id remap); the eth thread publishes the gateway's own event on the
+# telematics segment, and the doip thread carries its diagnostic server over Ethernet. It runs
+# ThreadX like every other node; sysgen prepends the buses, routes, nm, its SOME/IP half ([bus.eth0],
+# [someip], GwStatus) and its [doip] from system.toml — its endpoint and DoIP entity address are the
+# SYSTEM's — and this file adds the on-target bits. The one FB is GwHealth: the uptime it publishes
+# on tel.
 #
 # ORDER MATTERS: the V TOML parser mishandles a dotted array-of-tables ([[partition.thread]])
-# immediately followed by a plain [table], so [target] is authored FIRST and the partition
-# LAST (sysgen appends this verbatim after the generated [[route]] tables — nothing may follow
-# [[partition.thread]]). See the vlang toml nested-block limitation.
+# immediately followed by a plain [table], so [target] is authored FIRST and the partition and FB
+# LAST (sysgen appends this verbatim after the generated tables — nothing may follow them).
+# See the vlang toml nested-block limitation.
 
 [target]
 kind    = "threadx"
@@ -26,7 +27,7 @@ period_ms = 500
 
 # The diagnostic server (docs/diagnostics.md): UDS over ISO-TP on the ids system.toml allocates
 # this node (diag = { req = 0x7A0, rsp = 0x7A8 }), on the compute bus (can0) with its functional id.
-# A gateway transmits no signals of its own, so its DIDs identify it and nothing is live. 0x27 as
+# Its one signal (GwUptime) rides SOME/IP, not a DID, so its DIDs identify it and nothing is live. 0x27 as
 # on domain: a TRNG seed, and on this BENCH node blobly_net's public reference key by name.
 [[isotp]]
 name          = "diag"
@@ -41,11 +42,10 @@ security_attempts = 3
 security_delay_ms = 3000
 security_key      = "reference"
 
-# The same server over DoIP (ISO 13400) on the H735's Ethernet: TCP and UDP 13400. One server, so a
-# CAN and a DoIP tester share one session; a 0x27 unlock is the transport's that earned it (docs/diagnostics.md).
-[doip]
-address         = "192.168.0.50"
-logical_address = 0x07A0 # its CAN request id, for the bench's memory
+# The same server is reachable over DoIP (ISO 13400) on the H735's Ethernet — TCP and UDP 13400 —
+# declared in system.toml (the node's `endpoint` + `doip`) and lowered into [doip]. One server, so a
+# CAN and a DoIP tester share one session; a 0x27 unlock is the transport's that earned it
+# (docs/diagnostics.md).
 
 # the VIN: 17 characters, announced by DoIP too; the read answer is multi-frame
 [[did]]
@@ -67,4 +67,13 @@ name = "gateway"
 core = 0
 
   [[partition.thread]]
-  name = "gw_idle"
+  name = "gw_main"
+
+[[fb]]
+name   = "GwHealth"
+thread = "gw_main"
+
+  [[fb.handler]]
+  name      = "on_1000ms"
+  period_ms = 1000
+  writes    = ["GwUptime"] # trailing comment terminates the nested block (vlang/v#27684)

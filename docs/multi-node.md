@@ -143,8 +143,8 @@ on — a node joins by **naming the bus** and carrying its own
 system's contract: same `service`, same `version` (the receive envelope drops a
 foreign one, so mismatched members are silently deaf to each other), and its
 `produces`/`consumes` are checked for duplicate writers and orphaned consumers
-exactly like a CAN node's. Each member's `peer` is DERIVED as the other member's
-endpoint, which is what makes reciprocity checkable rather than asserted.
+exactly like a CAN node's. Each member's `peer` is DERIVED from the other end of
+the events it exchanges, which is what makes reciprocity checkable rather than asserted.
 
 **The system owns the events, because there is no DBC to own them** (#245). A CAN
 signal names a frame whose layout the bus's `dbc` describes; a someip signal names
@@ -155,20 +155,41 @@ is dissolved exactly like a CAN one and its `ecu.toml` is internals only. One ru
 bends for the carrier: a cross-node CAN signal carries exactly one value field
 because a DBC signal *is* a scalar, while a SOME/IP event's payload is a **struct**,
 so a multi-field signal there is ordinary. Routing *across* a someip bus (the CAN↔SOME/IP
-gateway) is a later phase and is rejected today rather than half-generated.
+gateway) is a later phase and is rejected today rather than half-generated — but a
+CAN↔CAN route gateway may itself be a **member** of a segment: system_full's sysnode
+routes compute↔edge and publishes its own `GwStatus` event on `tel`, both halves lowered
+into one generated config (no route touches the segment).
 
 **Naming the same bus does not connect two nodes.** There is no service discovery
-on the target: the generated bridge sends only *to* its configured static `peer`,
-accepts only *from* it, and dispatches a received payload on the **event id**. A
-CAN wire connects whoever is on it; a SOME/IP link is wired point to point. So
-membership is credited as reachability only when the wiring agrees:
+on the target: the generated bridge sends each event only *to* a configured static
+peer, accepts it only *from* one, and dispatches a received payload on the **event
+id**. A CAN wire connects whoever is on it; a SOME/IP link is wired point to point —
+per **event**. So membership is credited as reachability only when the wiring agrees:
 
 | must hold | why |
 |---|---|
-| each member's `peer` is the other's `<address>:<port>` | the bridge talks to nobody else — two nodes both pointing at a bench tool never exchange a datagram |
-| at most **2** members per bus | a static peer is point-to-point; a third member cannot be wired at all until service discovery exists |
+| each event has exactly **one** receiver — the member whose FBs read it — and it reads **all** of the event's signals | the datagram goes to one static address (no SD, no multicast), and arrives whole at fixed offsets |
+| every member exchanges at least one event (on a segment of two, the other member is its peer regardless) | its peer is whoever an event connects it to; a member nothing reaches has nobody to talk to |
 | one endpoint address per member | two nodes at one IP bring up the same address on the segment (ARP conflict) |
 | a shared signal rides the **same event id** on both ends | the receive bridge dispatches on the id, so matching names alone never deliver |
+
+A segment of two is the original shape: each member's `[someip].peer` is the other's
+`<address>:<port>`. On a larger one (system_full's `tel`: tcu, sysnode and the bench
+tool) a member's `[someip].peer` is the partner of its first event in `[[frame]]` order,
+and an event exchanged with anybody else carries that partner as its own `peer` — the
+bench tool receives tcu's telemetry and sysnode's `GwStatus`, and the generated bridge
+accepts each only from its producer (loom2v's per-event `peer`, docs/someip.md). The
+COMPOSED model (nodes authoring their own `[someip]`) still holds a segment to two members.
+
+**DoIP is declared on the node, at its endpoint.** `doip = { logical = 0x07A0 }` on a
+`[[node]]` (optionally `functional = 0xE4xx`) puts the node's one diagnostic server on
+TCP/UDP 13400 at its `endpoint` address — lowered into its `[doip]`, so a node has ONE
+network identity, declared once here. syscheck refuses a logical address outside
+ISO 13400's entity ranges (0x0001..0x0DFF, 0x1000..0x7FFF) or shared by two nodes, a
+`doip` with no `endpoint`, no `diag` allocation, not exactly one `[[isotp]]` in the node,
+or a non-ThreadX target, an endpoint `port` of 13400 beside it, and an authored `[doip]`
+in the node (the system owns it). A DoIP-only node (on CAN, no segment) may carry an
+`endpoint` for it, with no `port`.
 
 The Linux node (blobly_net) attaches on `diag` — the cloud/dev tier that pushes
 campaigns and observes; the H735 sysnode stages the images (its storage) and

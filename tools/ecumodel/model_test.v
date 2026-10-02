@@ -1157,6 +1157,15 @@ peer    = "192.168.0.999:30490"
 	assert e2.any(it.contains('address:port'))
 }
 
+// an eth [[frame]] may name its OWN peer (a member of a segment of more than two exchanges
+// different events with different members) — held to the [someip].peer spelling rule
+fn test_someip_frame_peer() {
+	ok := eth_tx_frame.replace('signals = ["CpuLoad"]', 'signals = ["CpuLoad"]\npeer    = "192.168.0.11:30491"')
+	assert errs_of(eth_head + ok + app) == []
+	bad := eth_tx_frame.replace('signals = ["CpuLoad"]', 'signals = ["CpuLoad"]\npeer    = "192.168.0.11"')
+	assert errs_of(eth_head + bad + app).any(it.contains('eth frame "BenchTelem" peer') && it.contains('address:port'))
+}
+
 fn test_someip_round3_gates() {
 	// telemetry without explicit id; trace dump_fc; route touching eth;
 	// e2e data_id over 16 bits — each must fail loud

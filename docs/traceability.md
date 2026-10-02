@@ -126,7 +126,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-014 | QM | test | uncovered | — |
 | REQ-NET-015 | QM | test | verified | e2e_test.v (pass) |
 | REQ-NET-016 | QM | test | covered | h735-someip-hwtest (pending) |
-| REQ-NET-017 | QM | test | verified | e2e_test.v (pass) |
+| REQ-NET-017 | QM | test | verified | e2e_test.v (pass), eth_frame_peer_test.v (pass) |
 | REQ-NET-018 | QM | test | uncovered | — |
 | REQ-NM-001 | QM | test | verified | nm_test.v (pass) |
 | REQ-NM-002 | QM | test | verified | module_test.v (pass), nm_test.v (pass) |

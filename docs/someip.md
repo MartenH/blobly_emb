@@ -67,6 +67,8 @@ bus     = "eth0"
 id      = 0x8001
 signals = ["CpuLoad", "BenchCounters"]
 tx      = { mode = "cyclic", cycle_ms = 100 }
+# optional: peer = "192.168.0.11:30491" — THIS event's static endpoint when it is not
+# [someip].peer (a member of a segment of more than two; see the rx filter below)
 
 # Module-owned frames don't use [[frame]] at all: a ComModule block binds its
 # endpoints to eth event ids exactly as it binds CAN ids (docs/com-modules.md
@@ -162,7 +164,13 @@ payload is ours, exactly as a DBC is needed to read a CAN frame body.
 On **rx**, the full envelope is validated against `[someip]` BEFORE anything
 reaches the router: the UDP source must be the configured `peer`'s
 address:port (static endpoints are a *filter*, not just a destination —
-REQ-NET-017); the complete 32-bit Message ID (service high half, not just the
+REQ-NET-017). An event with its own `peer` (a node exchanging events with more
+than one member — the bench tool on system_full's `tel`, which hears tcu and
+sysnode) is sent to, and accepted only from, THAT address:port; the filter then
+admits each configured talker and the event's branch holds it to its own, so a
+known talker cannot inject another member's event, and an RPC request is still
+the default peer's alone (proven on loopback by `tools/loom2v/eth_frame_peer_test.v`).
+With no per-event peer the generated filter is the single compare it always was; the complete 32-bit Message ID (service high half, not just the
 frame id), protocol and interface version, and a message type legal for the
 phase must match; a notification's Request ID and Return Code must be ZERO
 (the wire contract fixes them — a nonzero one is malformed, not tolerated);
@@ -190,7 +198,8 @@ enters the shared routing/codec path.
 - **No segmentation (SOME/IP-TP), no dynamic-length types.** One event = one
   datagram, checked at build time. The trace/telemetry rings already batch into
   bounded records; nothing needs a 4 KB payload yet.
-- **No client/subscriber management.** One configured peer. Multicast
+- **No client/subscriber management.** One configured peer per event (the
+  node's `[someip].peer` unless the event names its own). Multicast
   eventgroups (one send, N listeners) are the natural first relaxation and the
   header doesn't change — an open question below, not a P1 feature.
 - **Nothing tester-shaped.** Listening to a foreign service, decoding SD,

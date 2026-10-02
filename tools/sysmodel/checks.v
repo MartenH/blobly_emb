@@ -49,6 +49,7 @@ pub fn validate_system(s System) []Issue {
 	issues << check_telemetry_frames(s)
 	issues << check_bus_dbcs(s)
 	issues << check_routes(s, false)
+	issues << check_doip_composed(s)
 	return issues
 }
 
@@ -73,6 +74,7 @@ pub fn validate_system_gen(s System) []Issue {
 	// the dissolution path states its own rules rather than inheriting nothing.
 	issues << check_someip_segment(s)
 	issues << check_endpoint_carrier(s)
+	issues << check_doip(s)
 	issues << check_dbc_conformance(s)
 	issues << check_route_dbc(s)
 	issues << check_telemetry_frames(s)
@@ -108,6 +110,11 @@ fn check_partial_no_wiring(s System) []Issue {
 		// has called the system valid. This is the migration path #245 itself creates.
 		if n.view.has_someip {
 			authored << 'a [someip]'
+		}
+		// ...and so does its [doip]: the address it carries is the node's endpoint, declared once in
+		// system.toml, and a hand-written copy beside the lowered one would be a second identity.
+		if n.view.has_doip {
+			authored << 'a [doip]'
 		}
 		// a [[route]] in a partial is copied verbatim but never enters System.routes,
 		// so check_routes never verifies its gateway/buses — an unchecked forward.
@@ -202,6 +209,14 @@ fn check_dissolved_nodes(s System) []Issue {
 			// sleeping cluster (codex on #279).
 			if !someip_leaf {
 			for sig in s.signals {
+				// ...except on a someip segment the gateway is a member of: that half is lowered by
+				// someip_sections exactly as a leaf's is, so its FBs' events are generated (sysnode
+				// publishes GwStatus on tel). Its CAN-side system signals still are not.
+				if sb := s.bus_by_name(sig.bus) {
+					if sb.kind == 'someip' && sig.bus in n.buses {
+						continue
+					}
+				}
 				if sig.name in n.view.fb_reads || sig.name in n.view.fb_writes {
 					issues << Issue{
 						severity: .error
@@ -214,13 +229,16 @@ fn check_dissolved_nodes(s System) []Issue {
 			// manifest label, it does not move NM's tx — checks.v). So a gateway whose
 			// primary bus has an NM cluster must run its telemetry (hence the comm
 			// thread + NM) on that SAME bus, else its alive frames go to the wrong net.
-			prim_iface := if b := s.bus_by_name(n.buses[0]) { b.interface } else { '' }
-			if prim0 := s.bus_by_name(n.buses[0]) {
+			// the PRIMARY bus is the first CAN bus: a segment carries no NM, no telemetry and no
+			// comm thread, so a gateway that lists its someip bus first is judged on its CAN one.
+			gw_prim := can_bus_name(s, n)
+			prim_iface := if b := s.bus_by_name(gw_prim) { b.interface } else { '' }
+			if prim0 := s.bus_by_name(gw_prim) {
 				if prim0.has_nm_cluster && n.view.has_telemetry && n.view.telem_bus != prim_iface {
 					issues << Issue{
 						severity: .error
 						req:      'REQ-TOPO-004'
-						msg:      'gateway "${n.name}": NM cluster is on the primary bus "${n.buses[0]}" (${prim_iface}) but [telemetry].bus is "${n.view.telem_bus}" — NM runs on the telemetry bus, so they must be the same bus'
+						msg:      'gateway "${n.name}": NM cluster is on the primary bus "${gw_prim}" (${prim_iface}) but [telemetry].bus is "${n.view.telem_bus}" — NM runs on the telemetry bus, so they must be the same bus'
 					}
 				}
 			}
@@ -238,13 +256,16 @@ fn check_dissolved_nodes(s System) []Issue {
 			// A cluster on a SECONDARY bus would need a second NM instance (multi-instance
 			// NM is a later P2 item) — until then the gateway would route/transmit on the
 			// secondary network without participating in its sleep/wake. Reject it.
-			for bn in n.buses[1..] {
+			for bn in n.buses {
+				if bn == gw_prim {
+					continue
+				}
 				sb := s.bus_by_name(bn) or { continue }
 				if sb.has_nm_cluster {
 					issues << Issue{
 						severity: .error
 						req:      'REQ-TOPO-004'
-						msg:      'gateway "${n.name}": secondary bus "${bn}" declares an NM cluster, but the generator emits only ONE NM instance (on the primary bus "${n.buses[0]}") — a per-bus-NM gateway is a later P2 item'
+						msg:      'gateway "${n.name}": secondary bus "${bn}" declares an NM cluster, but the generator emits only ONE NM instance (on the primary bus "${gw_prim}") — a per-bus-NM gateway is a later P2 item'
 					}
 				}
 			}
@@ -253,7 +274,7 @@ fn check_dissolved_nodes(s System) []Issue {
 		// The bus the COMMON checks below judge. For a leaf that is its CAN bus, whatever order
 		// the buses were declared in — the NM cluster, the telemetry bridge and the comm thread
 		// are all CAN concepts, and a segment has none of them.
-		prim := if someip_leaf { can_bus_name(s, n) } else { n.buses[0] }
+		prim := can_bus_name(s, n)
 		bus := s.bus_by_name(prim) or {
 			issues << Issue{
 				severity: .error
@@ -2445,9 +2466,12 @@ fn carries_struct(s System, sig SysSignal) bool {
 }
 
 // check_someip_segment: what a LOWERED someip bus must look like. The generated bridge has no
-// service discovery — it sends to one configured static `peer` — so the segment is strictly
-// point-to-point: exactly two members, each with its own endpoint, each the other's peer. That
-// is not a simplification of the model, it is what the target can express (#245).
+// service discovery — every datagram goes to a configured static address — so each EVENT is
+// point-to-point: one producer, one receiver, each the other's peer for it. A segment of two is
+// the original shape (#245); a larger one is several such pairs sharing one service, each member
+// lowered with a `peer` per event whose partner is not its default one (sysnode publishes to the
+// bench beside tcu, rung 6). That is not a simplification of the model, it is what the target can
+// express.
 fn check_someip_segment(s System) []Issue {
 	mut issues := []Issue{}
 	for b in s.buses {
@@ -2489,12 +2513,12 @@ fn check_someip_segment(s System) []Issue {
 			}
 		}
 		for n in members {
-			// A segment member MAY also sit on a CAN bus — a leaf on both is lowered with both
-			// halves (nodes/tester: an LED on compute, tcu's telemetry on tel). What is still
-			// refused is a member that ROUTES, or one carrying several CAN buses: both go down
-			// generate_gateway_node, which emits every bus in the CAN/DBC shape and no [someip]
-			// at all, so the membership would be dropped on the floor. A SOME/IP<->CAN gateway
-			// is its own rung — routing between the two needs a translating bridge, not wiring.
+			// A segment member MAY also sit on CAN: as a LEAF on one CAN bus (nodes/tester: an LED on
+			// compute, tcu's telemetry on tel), or as a CAN<->CAN route GATEWAY (nodes/sysnode:
+			// compute<->edge, plus its own events on tel). Both are lowered with both halves. What is
+			// still refused is a member on several CAN buses that routes nothing — check_dissolved_nodes
+			// refuses that shape for every node — and a route that TOUCHES the segment (check_routes):
+			// a SOME/IP<->CAN gateway needs a translating bridge, which is its own rung.
 			mut can_buses := 0
 			for bn in n.buses {
 				if bb := s.bus_by_name(bn) {
@@ -2503,48 +2527,51 @@ fn check_someip_segment(s System) []Issue {
 					}
 				}
 			}
-			routes_here := !s.is_someip_leaf(n) && is_route_gateway(s, n.name)
-			if routes_here {
+			if can_buses > 1 && !is_route_gateway(s, n.name) {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-005'
-					msg:      'node "${n.name}": is a route gateway AND a member of someip bus "${b.name}" — a SOME/IP<->CAN gateway needs a translating bridge, which is its own rung; a segment member may be a leaf on one CAN bus, not a router'
-				}
-			}
-			if can_buses > 1 {
-				issues << Issue{
-					severity: .error
-					req:      'REQ-TOPO-005'
-					msg:      'node "${n.name}": is a member of someip bus "${b.name}" and sits on ${can_buses} CAN buses — the lowering carries one CAN bus alongside a segment (a multi-DBC node is a gateway, which emits no [someip])'
+					msg:      'node "${n.name}": is a member of someip bus "${b.name}" and sits on ${can_buses} CAN buses but routes nothing between them — a member carries one CAN bus as a leaf, or several as a CAN route gateway'
 				}
 			}
 		}
-		if members.len != 2 {
+		if members.len < 2 {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-005'
-				msg:      'bus "${b.name}": kind = "someip" has ${members.len} member(s) — the generated bridge sends to ONE static peer (no service discovery), so a lowered segment is point-to-point: exactly two nodes, each the other\'s peer. Declare the far end as a node (the bench tool is one, like `tester` on a CAN bus)'
+				msg:      'bus "${b.name}": kind = "someip" has ${members.len} member(s) — a lowered segment needs a far end: the generated bridge sends each event to ONE static peer (no service discovery). Declare the far end as a node (the bench tool is one, like `tester` on a CAN bus)'
 			}
 			continue
 		}
-		// An event arrives WHOLE — one datagram, one payload, its signals at fixed offsets — so
-		// the receiving member must read ALL of them. A partial subscriber cannot be lowered:
-		// dropping the unread signals would shift the offsets of the ones it does read, and
-		// declaring them anyway creates rx channels with no reading handler, which the
-		// generated-config gate rejects (codex on #245).
+		// An event is UNICAST: the generated bridge sends each datagram to one static address
+		// (no service discovery, no multicast), so exactly one member receives it. And it arrives
+		// WHOLE — one datagram, one payload, its signals at fixed offsets — so that receiver must
+		// read ALL of them. A partial subscriber cannot be lowered: dropping the unread signals
+		// would shift the offsets of the ones it does read, and declaring them anyway creates rx
+		// channels with no reading handler, which the generated-config gate rejects (codex on #245).
 		for fr in s.frames {
 			if fr.bus != b.name || fr.signals.len == 0 {
 				continue
 			}
-			mut producer := ''
-			for sg in fr.signals {
-				if sig := s.signal_by_name(sg) {
-					producer = sig.producer
-					break
+			receivers := s.someip_event_receivers(fr)
+			if receivers.len == 0 {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'bus "${b.name}": no member receives event "${fr.name}" — on a segment of ${members.len} members its receiver is the one whose FBs read its signals, and the generated bridge needs that one address to send it to'
 				}
+				continue
+			}
+			if receivers.len > 1 {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'bus "${b.name}": event "${fr.name}" is read by ${receivers.len} members (${receivers.join(', ')}) — an event goes to ONE static peer (no service discovery, no multicast), so it has one receiver'
+				}
+				continue
 			}
 			for n in members {
-				if n.name == producer {
+				if n.name != receivers[0] {
 					continue
 				}
 				for sg in fr.signals {
@@ -2555,6 +2582,18 @@ fn check_someip_segment(s System) []Issue {
 							msg:      'node "${n.name}": receives event "${fr.name}" but no FB reads "${sg}" — a someip event arrives whole, at fixed offsets, so every signal it carries must be consumed'
 						}
 					}
+				}
+			}
+		}
+		// Every member needs a peer: the bridge it is lowered into sends to, and accepts from, a
+		// static address. On a segment of two that is the other member; on a larger one it is
+		// whoever an event connects it to — a member no event reaches has nobody to talk to.
+		for n in members {
+			if s.someip_partners(n, b.name).len == 0 {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-001'
+					msg:      'node "${n.name}": is a member of someip bus "${b.name}" but exchanges no event with any other member — on a segment of ${members.len} its peer is whoever an event connects it to, and it has none'
 				}
 			}
 		}
@@ -2622,10 +2661,10 @@ fn check_someip_segment(s System) []Issue {
 	return issues
 }
 
-// check_endpoint_carrier: an `endpoint` is a someip identity. On a node that names only CAN
-// buses the CAN lowering drops it entirely, so an authored network identity — a node given the
-// wrong bus, or a SOME/IP block copied onto a CAN member — would look effective and be dead
-// (codex on #245).
+// check_endpoint_carrier: an `endpoint` is the node's network identity — its SOME/IP endpoint on
+// a segment, and the address its `doip` server answers at. On a node with neither the CAN lowering
+// drops it entirely, so an authored network identity — a node given the wrong bus, or a SOME/IP
+// block copied onto a CAN member — would look effective and be dead (codex on #245).
 // check_node_name_is_an_identifier: a node's name becomes a FILE PATH -- sysgen writes
 // gen-<name>.toml -- so a name carrying path separators or `..` escapes the output directory
 // and overwrites whatever sits at the resolved name. That was always true of the in-tree
@@ -2668,11 +2707,18 @@ fn check_endpoint_carrier(s System) []Issue {
 				}
 			}
 		}
-		if !on_someip {
+		if !on_someip && !n.has_doip {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-005'
-				msg:      'node "${n.name}": declares an `endpoint` but is on no someip bus — an endpoint is a SOME/IP identity, and the CAN lowering drops it, so it would be dead configuration that looks effective'
+				msg:      'node "${n.name}": declares an `endpoint` but is on no someip bus and serves no `doip` — an endpoint is the node\'s network identity, and with neither the lowering drops it, so it would be dead configuration that looks effective'
+			}
+		} else if !on_someip && n.has_port {
+			// a DoIP-only node: the address is DoIP's, and DoIP's port is ISO 13400's own
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": its `endpoint` has a `port` but it is on no someip bus — the port is where a SOME/IP member listens; DoIP always answers on 13400, so this one would be dead configuration'
 			}
 		}
 	}
@@ -2691,4 +2737,123 @@ fn someip_send_cycle_ms(fr SysFrame) ?i64 {
 		return 100
 	}
 	return none
+}
+
+// check_doip: `doip = { logical = 0x07A0 }` on a [[node]] lowers into its [doip] — the node's
+// one diagnostic server, reachable over DoIP (ISO 13400) at its endpoint address. What the node
+// gate (loom2v validate_doip) would refuse only once the node is BUILT is refused here, where
+// the system can still say which node and why, and what no single node can see — two nodes
+// answering one logical address — is refused only here.
+fn check_doip(s System) []Issue {
+	mut issues := []Issue{}
+	mut logical_of := map[u32]string{}
+	for n in s.nodes {
+		if !n.has_doip {
+			continue
+		}
+		for k in n.doip_unknown {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": doip has unknown key "${k}" — it takes `logical` (the entity address) and optionally `functional`'
+			}
+		}
+		if !n.has_doip_logical {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": doip needs `logical` — the DoIP entity address a tester routes to (0x0001..0x0DFF or 0x1000..0x7FFF)'
+			}
+		} else if !n.doip_logical_int {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": doip `logical` must be an integer — a fraction truncates to a valid, DIFFERENT address'
+			}
+		} else if !((n.doip_logical_raw >= 0x0001 && n.doip_logical_raw <= 0x0DFF)
+			|| (n.doip_logical_raw >= 0x1000 && n.doip_logical_raw <= 0x7FFF)) {
+			// ISO 13400-2: 0x0E00..0x0FFF are testers' addresses, 0xE000.. functional ones
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": doip logical address 0x${n.doip_logical_raw.hex()} is not an entity address (0x0001..0x0DFF or 0x1000..0x7FFF; 0x0E00..0x0FFF are testers\')'
+			}
+		} else if prev := logical_of[n.doip_logical] {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-002'
+				msg:      'doip logical address 0x${n.doip_logical.hex()} shared by "${prev}" and "${n.name}" — a tester routes by it, so it names one entity'
+			}
+		} else {
+			logical_of[n.doip_logical] = n.name
+		}
+		if n.has_doip_functional {
+			if !n.doip_functional_int {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": doip `functional` must be an integer'
+				}
+			} else if n.doip_functional_raw < 0xE400 || n.doip_functional_raw > 0xEFFF {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": doip functional address 0x${n.doip_functional_raw.hex()} is outside the functional range 0xE400..0xEFFF'
+				}
+			}
+		}
+		if !n.has_endpoint || n.endpoint == '' {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": declares `doip` but no `endpoint` — the address DoIP answers at is the node\'s endpoint address, declared once'
+			}
+		} else if n.has_port && n.port_raw == 13400 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": endpoint port 13400 is DoIP\'s (UDP 13400, ISO 13400) on a node that serves `doip` — pick another SOME/IP port'
+			}
+		}
+		// the server DoIP carries is the node's ONE diagnostic server: its [[isotp]] connection,
+		// on the ids the system allocates it (diag)
+		if n.diag.req == 0 && n.diag.rsp == 0 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": declares `doip` but has no `diag` allocation — DoIP carries the node\'s diagnostic server, which the system addresses by its diag ids'
+			}
+		}
+		if n.view.isotp_conns.len != 1 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": declares `doip` but its ecu.toml has ${n.view.isotp_conns.len} [[isotp]] connection(s) — DoIP carries the node\'s ONE diagnostic server, so declare exactly one'
+			}
+		}
+		if !n.view.is_threadx {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": declares `doip` but is not a threadx target — DoIP runs on NetX (driver/eth/doip_netx.c); a host or bare-metal node has none'
+			}
+		}
+	}
+	return issues
+}
+
+// check_doip_composed: a COMPOSED system's nodes author their own [doip], and nothing lowers a
+// [[node]]'s `doip` — so declared there it would look effective and do nothing.
+fn check_doip_composed(s System) []Issue {
+	mut issues := []Issue{}
+	for n in s.nodes {
+		if n.has_doip {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": `doip` on a [[node]] is lowered by sysgen, which runs only on a dissolved system (one declaring signals, routes, frames or endpoints) — in a composed system author [doip] in the node\'s ecu.toml'
+			}
+		}
+	}
+	return issues
 }

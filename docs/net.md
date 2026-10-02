@@ -274,6 +274,19 @@ DIDs, 0x27 + the gated 0x2E, one server and one session across DoIP and CAN with
 each transport's unlock its own, and ECUReset
 answered over TCP before the restart, 5/5.
 
+**Declared by the system, not the node** (rung 6): sysnode's address and DoIP entity
+address are `endpoint = { address = "192.168.0.50", port = 30490 }` and
+`doip = { logical = 0x07A0 }` on its `[[node]]` in `examples/system_full/system.toml`;
+sysgen lowers them into its `[doip]` and — because sysnode is now a member of the `tel`
+SOME/IP segment beside tcu — its `[bus.eth0]`/`[someip]` too. It publishes one event
+there, `GwStatus` (0x8020, `GwUptime { seconds u32 }`, cyclic 1 s, from the GwHealth FB),
+to the bench tool's endpoint (192.168.0.190:30491, the same one tcu sends to), and its
+CAN routes are unchanged: nothing routes between CAN and SOME/IP. So the image runs the
+comm thread (routes, NM, the diagnostic server), the eth thread (SOME/IP) and the doip
+threads on one NetX, and its node `ecu.toml` authors none of its network. The tel segment
+now has three members, so each EVENT is the point-to-point unit (docs/multi-node.md) and
+the bench tool's generated config names `GwStatus`'s producer as that event's own `peer`.
+
 **One NetX per image** (`driver/eth/netx_up.c`): the pool, the IP instance,
 ARP/ICMP/UDP, the link wait and `rand()` are brought up once, at the node's one
 address; SOME/IP (`eth_netx.c`) and DoIP (`doip_netx.c`) attach to it, so a node
