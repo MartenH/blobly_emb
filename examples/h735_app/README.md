@@ -5,7 +5,7 @@ application function blocks scheduled by the **Loom**, with the Loom's per-core
 processor-load measurement streamed out FDCAN1 — watchable live in blobly_net. There
 is no hand-written superloop; `loom2v`'s bare-metal target emitter generates it.
 
-Where [`h735_canecho`](../h735_canecho/) proved the raw FDCAN driver, this proves the
+On top of the register-level FDCAN driver (`driver/can`), this proves the
 layers above it — `loom` (scheduling + load accounting) and `comm/telem` (the load
 codecs) — generated from config and running on the bare-metal M7.
 
@@ -87,12 +87,12 @@ All of `gen/`, `ports/`, `sig/` are generated; never edit them. Only `app/*.v`,
 - **CPU clock**: `board_clock_init()` brings the M7 to **550 MHz** (Direct SMPS → VOS0
   → PLL1). ⚠️ The supply write must match the DK's solder bridges (SB2/13/20/21 = SMPS);
   a mismatch **browns out VCORE and locks the debugger** — recover with
-  `st-flash --connect-under-reset`. See [`h735_canecho`](../h735_canecho/) for details.
+  `st-flash --connect-under-reset`. The bring-up is `boards/h735dk/board.c`.
 - **Timebase**: the Loom needs monotonic µs; bare-metal has none, so
   `board_timebase_init()` runs the **DWT cycle counter** and `board_now_us()` divides
   by the achieved CPU MHz (64-bit accumulated to hide the 32-bit ~7.8 s wrap).
 - **FDCAN1**: `PH13` = TX, `PH14` = RX, **AF9**; HSE bypass 25 MHz kernel clock →
-  **500 kbit/s classic** (same wiring as `h735_canecho`).
+  **500 kbit/s classic**.
 
 ## Build & flash
 

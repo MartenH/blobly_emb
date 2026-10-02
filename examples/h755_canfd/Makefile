@@ -1,5 +1,5 @@
 # STM32H755 (Nucleo-H755ZI-Q) bare-metal two-bus CAN echo — FDCAN1 + FDCAN2,
-# register-level driver, no HAL. Same pipeline as h735_canecho.
+# register-level driver, no HAL. Same pipeline as the generated H735/H723 images.
 # Needs: arm-none-eabi-gcc (+ newlib), CMSIS headers (make -C ../.. deps), a flasher.
 #
 # NOTE: needs a V with the freestanding amd64-asm fix (vlang #27564, on master).

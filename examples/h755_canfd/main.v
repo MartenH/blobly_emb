@@ -11,7 +11,7 @@ module main
 // pins above (the socket UART pins aren't FDCAN-capable — see README).
 //
 // Entry is main__main() called directly from startup.c (no V _vinit), the same
-// bare-metal pattern proven by h735_blinky / h735_canecho.
+// bare-metal pattern the retired h735_blinky / h735_canecho bring-ups proved (#344).
 
 import driver.can
 

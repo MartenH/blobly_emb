@@ -6,7 +6,7 @@ module main
 // Everything below the board glue is generated; this file is just the platform seam.
 //
 // Entry is main__main() called directly from startup.c (no V _vinit), the bare-metal
-// pattern proven by h735_blinky / h735_canecho.
+// pattern the retired h735_blinky / h735_canecho bring-ups proved (#344).
 
 import gen
 import driver.can
