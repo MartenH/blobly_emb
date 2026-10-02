@@ -31,6 +31,27 @@
 
 static int g_sa_rng = 0; /* 0 = not set up, 1 = running, -1 = failed at init */
 
+#if defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx) || \
+    defined(STM32H733xx) || defined(STM32H735xx)
+#define RNG_HTCR_R     (*(volatile uint32_t *)0x48021810u)
+#define RNG_CR_CONDRST (1u << 30)
+/* sa_rng_configure writes the H72x/H73x RNG's (RNG_VER_3_2) health-test threshold as ST's
+ * HAL_RNG_Init does: under CONDRST, the magic word immediately before the value, 0x00007274
+ * being AN4230's NIST-recommended one. At the reset default the bench saw 0.64% of seeds fail
+ * (29 of 4500 on an H723); with this value, 1 of 7500 (#318). CONFIG1/2/3 and CLKDIV stay at
+ * reset, as in the HAL. HTCR reads back 0, so nothing here can confirm it took. */
+static void sa_rng_configure(void) {
+	RNG_CR_R = RNG_CR_CONDRST;
+	RNG_HTCR_R = 0x17590ABCu;
+	RNG_HTCR_R = 0x00007274u;
+	RNG_CR_R = 0;
+	for (uint32_t t = 0; (RNG_CR_R & RNG_CR_CONDRST) && t < 200000u; t++) {
+	}
+}
+#else
+static void sa_rng_configure(void) {} /* the H74x/H75x RNG has no health-test register */
+#endif
+
 int diag_sa_init(void) {
 	if (g_sa_rng != 0) return g_sa_rng > 0;
 	RCC_CR_R |= (1u << 12); /* HSI48ON */
@@ -43,6 +64,7 @@ int diag_sa_init(void) {
 	RCC_D2CCIP2R_R &= ~(3u << 8); /* RNGSEL = 00 = HSI48 */
 	RCC_AHB2ENR_R |= (1u << 6);    /* RNG kernel+bus clock */
 	(void)RCC_AHB2ENR_R;
+	sa_rng_configure();
 	RNG_CR_R = RNG_CR_RNGEN; /* clock-error detection on */
 	g_sa_rng = 1;
 	return 1;
@@ -55,7 +77,6 @@ int diag_sa_init(void) {
  * an H723). The H74x/H75x RNG has no CONDRST and restarts through RNGEN. */
 #if defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx) || \
     defined(STM32H733xx) || defined(STM32H735xx)
-#define RNG_CR_CONDRST (1u << 30)
 static void sa_rng_recover(void) {
 	RNG_CR_R |= RNG_CR_CONDRST;
 	RNG_CR_R &= ~RNG_CR_CONDRST;
