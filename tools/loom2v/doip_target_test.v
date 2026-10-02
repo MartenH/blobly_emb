@@ -106,7 +106,8 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 	assert glue.contains('g_doip.vin[0] = u8(0x42)') && glue.contains('g_doip.vin[16] = u8(0x58)')
 	assert !glue.contains("'BLOBLYH735THREADX'"), 'a string in the generated runtime'
 	assert glue.contains('g_doip.serve.answer = doip_answer')
-	assert glue.contains("C.doip_net_create(c'192.168.0.50', u32(11), u32(12))") // comm at 10 here
+	// below every application thread: h735_threadx's lowest is ctrl_slow at 13
+	assert glue.contains("C.doip_net_create(c'192.168.0.50', u32(14), u32(15))")
 	assert !glue.contains('functional_addr'), 'the default functional address is comm/doip\'s'
 	// no 0x27 here: the TRNG seam is declared for the seed alone
 	assert glue.contains('fn C.diag_sa_seed(&u8, int) int')

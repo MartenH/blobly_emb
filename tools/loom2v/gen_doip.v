@@ -209,17 +209,40 @@ fn doip_target_globals(m Model) []string {
 	]
 }
 
+// doip_net_prio: the network runs below every application thread of this image (a bigger number is a
+// lower priority) — a LAN flood keeps NetX's deferred receive work busy, and with no time slicing a
+// thread at the same priority as the CAN owner or an FB thread would never yield to it. Diagnostics
+// over IP are best effort; the FBs' periods and the bus are not.
+fn doip_net_prio(m Model) int {
+	mut lowest := 0
+	for pname, thrs in m.part.threads_of {
+		if m.part.external[pname] {
+			continue
+		}
+		for t in thrs {
+			p := m.part.thread_prio[t] or { 10 }
+			if p > lowest {
+				lowest = p
+			}
+		}
+	}
+	if lowest == 0 {
+		lowest = 10
+	}
+	return lowest + 1
+}
+
 // doip_target_create: in tx_application_define, before any thread runs — the identity the
-// identification thread answers with, the mailbox, NetX and the two doip threads (the IP thread just
-// below the comm thread, the doip threads below it).
-fn doip_target_create(m Model, comm_prio int) []string {
+// identification thread answers with, the mailbox, NetX and the two doip threads (doip_net_prio).
+fn doip_target_create(m Model) []string {
 	if !m.doip.on {
 		return []string{}
 	}
 	d := m.doip
-	if comm_prio + 2 > 31 {
-		panic('loom2v: [doip]: its threads run below the comm thread (priority ${comm_prio}), at ' +
-			'${comm_prio + 1} and ${comm_prio + 2} — past ThreadX\'s 0..31; give the application threads lower numbers')
+	np := doip_net_prio(m)
+	if np + 1 > 31 {
+		panic('loom2v: [doip]: its threads run below every application thread, at ${np} and ${np + 1} — ' +
+			'past ThreadX\'s 0..31; give the application threads priorities up to 29')
 	}
 	mut g := [
 		'\tg_doip.entity_addr = u16(0x${d.logical.hex()})',
@@ -234,9 +257,8 @@ fn doip_target_create(m Model, comm_prio int) []string {
 	}
 	g << '\tg_doip.serve.answer = doip_answer'
 	g << '\tC.doip_mb_init(&g_doip_req[0], &g_doip_resp[0])'
-	// strictly below the CAN owner: a LAN flood keeps NetX's deferred receive work busy, and at the
-	// comm thread's own priority (no time slicing) it would never yield to the bus
-	g << "\tC.doip_net_create(c'${d.address}', u32(${comm_prio + 1}), u32(${comm_prio + 2})) // -1: DoIP stays down, the node runs on"
+	// below every application thread (doip_net_prio): the IP thread, then the doip threads
+	g << "\tC.doip_net_create(c'${d.address}', u32(${np}), u32(${np + 1})) // -1: DoIP stays down, the node runs on"
 	return g
 }
 
@@ -253,14 +275,14 @@ fn doip_target_trace_binds(m Model) []string {
 }
 
 // doip_manifest_rows: their trace rows (thread,id,name,core,prio), in bind order
-fn doip_manifest_rows(m Model, tid int, comm_prio int) []string {
+fn doip_manifest_rows(m Model, tid int) []string {
 	if !m.doip.on {
 		return []string{}
 	}
 	return [
-		'thread,${tid},nx_ip,0,${comm_prio + 1}',
-		'thread,${tid + 1},doip,0,${comm_prio + 2}',
-		'thread,${tid + 2},doip_svc,0,${comm_prio + 2}',
+		'thread,${tid},nx_ip,0,${doip_net_prio(m)}',
+		'thread,${tid + 1},doip,0,${doip_net_prio(m) + 1}',
+		'thread,${tid + 2},doip_svc,0,${doip_net_prio(m) + 1}',
 	]
 }
 

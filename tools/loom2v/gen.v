@@ -2057,7 +2057,7 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	}
 	// the DoIP transport's threads (gen_doip.v): bound after eth, before the kernel timer
 	if comm_thread_on {
-		doip_rows := doip_manifest_rows(m, tid, if nthr > 1 { mp - 1 - io_shift } else { 1 })
+		doip_rows := doip_manifest_rows(m, tid)
 		man << doip_rows
 		tid += doip_rows.len
 	}
@@ -2966,7 +2966,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << emit_io_target_create(comm_prio + 1)
 				}
 				glue << emit_eth_target_create(m, comm_prio)
-				glue << doip_target_create(m, comm_prio)
+				glue << doip_target_create(m)
 				if m.trace.on {
 					// Deterministic trace thread ids (manifest order): comm = 1, then the app
 					// threads by priority, then the io thread; the ONLY first-sight id left is
