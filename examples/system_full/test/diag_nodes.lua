@@ -19,14 +19,10 @@ local nodes = {
 
 local function diag(n) return uds.open(n.bus, { tx = n.req, rx = n.rsp }) end
 local wrong = function(seed) return seed end
--- The TRNG answers an isolated seed request "no seed" (NRC 0x22) now and then — a seed error the
--- board seam recovers from for the next request (boards/common/diag_board.c): ask again, once.
-local function seeded(fn)
-  local ok, r = pcall(fn)
-  if not ok and string.find(tostring(r), "NRC 0x22", 1, true) then return fn() end
-  if not ok then error(r, 0) end
-  return r
-end
+-- A seed request is answered with a seed every time: the board seam redraws after the TRNG's
+-- occasional health-test flag (boards/common/diag_board.c), so NO retry here — a single "no seed"
+-- (NRC 0x22) is a failure, and catching it would hide the very regression this suite guards.
+local function seeded(fn) return fn() end
 
 for _, n in ipairs(nodes) do
   test(n.name .. ": tester present, the extended session, and constant DIDs multi-frame", function()

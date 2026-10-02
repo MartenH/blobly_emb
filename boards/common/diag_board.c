@@ -7,8 +7,10 @@
  *                    thread's init before its loop: never inside a request. A failure is
  *                    remembered, so a dead RNG costs one bounded wait, not one per request.
  *   diag_sa_seed   — `n` random bytes. WEAK: an HSM replaces it. A seed or clock error is
- *                    recovered by the reference manual's sequence (clear the flags, restart the
- *                    RNG) and this request answers "no seed" (the server: conditionsNotCorrect).
+ *                    recovered by the reference manual's sequence and the seed drawn AGAIN in the
+ *                    same request (up to SA_SEED_ATTEMPTS): the health tests flag good noise now
+ *                    and then, and a tester must not see that. Only an RNG failing every attempt
+ *                    answers "no seed" (the server: conditionsNotCorrect) — a real fault.
  *   diag_sa_key_ok — NOT HERE, deliberately. The OEM's node glue supplies it; a node that gates a
  *                    DID and has none fails to LINK, naming the symbol. blobly_net's public
  *                    reference key is opted into by name (`[[isotp]] security_key = "reference"`)
