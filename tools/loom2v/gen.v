@@ -4555,9 +4555,10 @@ fn main() {
 	emit_satellite_images(m, doc, producers, ecu)
 
 	// --- trace manifest (optional arg 6): the identity tables blobly_net loads to resolve
-	//     an entity_id back to a name (emit_manifest). ---
+	//     an entity_id back to a name (emit_manifest). Built whether or not it is written: it
+	//     is also where the recorder's thread-table bound is enforced. ---
+	man := emit_manifest(m, doc, ecu, comm_thread_on, single_part, bridge_bus_list)
 	if args.len >= 7 {
-		man := emit_manifest(m, doc, ecu, comm_thread_on, single_part, bridge_bus_list)
 		os.write_file(args[6], man.join('\n') + '\n') or { panic('write ${args[6]}: ${err}') }
 	}
 

@@ -152,5 +152,17 @@ fn test_a_trace_past_the_recorders_thread_table_is_refused() {
 	more := src[..at] + '  [[partition.thread]]\n  name     = "extra"\n  priority = 14\n\n' + src[at..]
 	code, out, _, _ := generate_ecu('doip_trace_full', more + doip_conn)
 	assert code != 0, 'loom2v accepted 9 traced threads'
-	assert out.contains('MAX_THREADS'), out
+	assert out.contains('MAX_THREADS'), out	// and without the manifest argument too
+	tmp := os.join_path(os.temp_dir(), 'doip_target_nomanifest_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	os.mkdir_all(tmp) or { panic(err) }
+	os.write_file(os.join_path(tmp, 'ecu.toml'), more + doip_conn) or { panic(err) }
+	os.cp(os.join_path(@VMODROOT, 'examples', 'h735_threadx', 'bus.dbc'), os.join_path(tmp, 'bus.dbc')) or {
+		panic(err)
+	}
+	r := os.execute('${doip_loom2v()} ${os.join_path(tmp, 'ecu.toml')} ${os.join_path(tmp, 'bus.dbc')} ' +
+		'${os.join_path(tmp, 'sig.v')} ${os.join_path(tmp, 'ports.v')} ${os.join_path(tmp, 'gen.v')}')
+	assert r.exit_code != 0 && r.output.contains('MAX_THREADS'), r.output
 }
