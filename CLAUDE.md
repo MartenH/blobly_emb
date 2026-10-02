@@ -64,8 +64,8 @@ examples generated side by side, exec one file and one dies with `No such file o
 the rule that runs it, run it by that variable. Each tool is built once into the including
 directory's `bin/` (atomically, by `scripts/build_tool.sh`) and rebuilt when any input changes:
 every V file `-dump-files` reports (vlib's too), every C source and `#flag -I` directory
-`-dump-c-flags` reports, the compiler signature (V command, its binary, `v version`, the tool's
-flags, `$VFLAGS`), `tools.mk` and the helper. The list lives in `tools.mk`;
+`-dump-c-flags` reports, a signature (the tool's own path, the V command, its binary,
+`v version`, the tool's flags, `$VFLAGS`), `tools.mk` and the helper. The list lives in `tools.mk`;
 `tools/loom2v/no_v_run_makefiles_test.v` changes each kind of input and asks make, pins that no
 Makefile runs `v run`, and that including `tools.mk` leaves every default goal where it was.
 

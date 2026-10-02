@@ -64,15 +64,16 @@ tool_src = $(if $(filter /%,$(TOOL_SRC_$(1))),$(TOOL_SRC_$(1)),$(TOOL_REPO)/$(TO
 #   - every V file compiled in, vlib's included, and the C/headers beside them, plus every
 #     #flag -I directory and C source the build hands the C compiler: bin/.tool-<name>.d,
 #     written by scripts/build_tool.sh from V's -dump-files and -dump-c-flags;
-#   - the compiler and how it is asked: the signature below — the V command, the binary it
-#     resolves to, `v version`, the tool's flags and $VFLAGS — recorded in bin/.tool-<name>.sig
+#   - the compiler and how it is asked, and where: the signature below — the tool's own path (a
+#     record from a moved checkout names the old one), the V command, the binary it resolves
+#     to, `v version`, the tool's flags and $VFLAGS — recorded in bin/.tool-<name>.sig
 #     by the build and compared here, at parse time; a different one rebuilds the tool;
 #   - this file and the helper: prerequisites of the rule.
 # A tool missing either record (a binary the old common.mk left, a build interrupted) is rebuilt.
 # tools/loom2v/no_v_run_makefiles_test.v changes each kind of input and asks make.
 TOOL_V_PATH    := $(shell command -v $(firstword $(V)) 2>/dev/null)
 TOOL_V_VERSION := $(shell $(V) version 2>/dev/null)
-tool_sig = $(strip $(V) | $(TOOL_V_PATH) | $(TOOL_V_VERSION) | $(TOOL_FLAGS_$(1)) | $(VFLAGS))
+tool_sig = $(strip $(TOOL_DIR)/.tool-$(1) | $(V) | $(TOOL_V_PATH) | $(TOOL_V_VERSION) | $(TOOL_FLAGS_$(1)) | $(VFLAGS))
 # string equality: each a substring of the other (findstring is literal, filter is not)
 tool_same = $(and $(findstring $(1),$(2)),$(findstring $(2),$(1)))
 tool_recorded = $(and $(wildcard $(TOOL_DIR)/.tool-$(1).d),$(call tool_same,$(call tool_sig,$(1)),$(strip $(if $(wildcard $(TOOL_DIR)/.tool-$(1).sig),$(file <$(TOOL_DIR)/.tool-$(1).sig)))))

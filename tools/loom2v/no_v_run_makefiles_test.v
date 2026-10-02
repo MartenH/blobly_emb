@@ -291,6 +291,23 @@ fn test_a_tool_is_rebuilt_when_any_input_changes() {
 	}
 	assert make_q(d, tool, v)
 
+	// a header behind `#flag -I` deleted (the wildcard alone would just stop naming it)
+	os.mv(hdr, hdr + '.away') or { panic(err) }
+	assert !make_q(d, tool, v), 'a header was deleted and the tool is still up to date'
+	os.mv(hdr + '.away', hdr) or { panic(err) }
+	set_mtime(hdr, old)
+	assert make_q(d, tool, v)
+
+	// the same records under another path (a moved checkout): they name the old output
+	moved := d + '_moved'
+	os.cp_all(d, moved, true) or { panic(err) }
+	defer {
+		os.rmdir_all(moved) or {}
+	}
+	mtool := os.join_path(moved, 'bin', '.tool-probe')
+	set_mtime(mtool, now)
+	assert !make_q(moved, mtool, v), 'a record from another path vouches for the tool'
+
 	// tools.mk and the helper are prerequisites of every tool (asked of make, not of the text)
 	db := os.execute('make -pq -C ${os.quoted_path(d)} ${v} no-such-goal-probe 2>/dev/null').output
 	rule := db.split_into_lines().filter(it.starts_with(os.join_path(d, 'bin', '.tool-%:')))
