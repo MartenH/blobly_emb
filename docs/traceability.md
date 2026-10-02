@@ -61,10 +61,10 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-006 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds_test.v (pass) |
 | REQ-DIAG-007 | QM | test | covered | diag.lua (pending), diag_test.v (pass), uds_test.v (pass) |
 | REQ-DIAG-008 | QM | test | covered | diag.lua (pending), uds-on-target-reset (approved), uds_test.v (pass) |
-| REQ-DIAG-009 | QM | test | verified | fault_test.v (pass) |
-| REQ-DIAG-010 | QM | test | verified | fault_test.v (pass) |
+| REQ-DIAG-009 | QM | test | verified | fault_test.v (pass), faults-on-target-zone-a (approved) |
+| REQ-DIAG-010 | QM | test | verified | fault_test.v (pass), faults-on-target-zone-a (approved) |
 | REQ-DIAG-011 | QM | test | covered | faults.lua (pending), net_faults.lua (pending) |
-| REQ-DIAG-012 | QM | test | verified | fault_group_test.v (pass), fault_target_test.v (pass) |
+| REQ-DIAG-012 | QM | test | verified | fault_group_test.v (pass), fault_target_test.v (pass), faults-on-target-zone-a (approved) |
 | REQ-E2E-001 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-002 | B | test | verified | e2e_test.v (pass) |
 | REQ-E2E-003 | B | test | verified | e2e_test.v (pass) |
@@ -122,7 +122,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-009 | QM | test | uncovered | — |
 | REQ-NET-010 | QM | test | uncovered | — |
 | REQ-NET-011 | QM | test | uncovered | — |
-| REQ-NET-012 | QM | test | verified | diag_test.v (pass), doip_target_test.v (pass) |
+| REQ-NET-012 | QM | test | verified | diag_test.v (pass), doip_target_test.v (pass), sysnode-doip-hardware (approved) |
 | REQ-NET-013 | QM | test | verified | e2e_test.v (pass) |
 | REQ-NET-014 | QM | test | uncovered | — |
 | REQ-NET-015 | QM | test | verified | e2e_test.v (pass) |
@@ -266,10 +266,10 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-DIAG-006 | | | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-DIAG-007 | | | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-DIAG-008 | | | | | | | | | | | | | | | | ✓ | · | ✓ | | | |
-| REQ-DIAG-009 | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-DIAG-010 | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-009 | ✓ | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-010 | ✓ | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-DIAG-011 | | | | | | | | | | | | | | | | | · | | | | |
-| REQ-DIAG-012 | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-DIAG-012 | ✓ | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-001 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-002 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-E2E-003 | | | | | | | | | | | | | | | | | | ✓ | | | |
@@ -327,7 +327,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-009 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NET-010 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NET-011 | | | | | | | | | | | | | | | | | | | | | |
-| REQ-NET-012 | | | | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NET-012 | | | | ✓ | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NET-013 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NET-014 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NET-015 | | | | | | | | | | | | | | | | | | ✓ | | | |
