@@ -34,10 +34,11 @@ mut:
 	req  [isotp.max_payload]u8
 	resp [isotp.max_payload]u8
 	// a request served over another transport (serve_remote): the session in force was set by it
-	// (a request that did not change it does not move this), and a reset it asked for waits until
-	// that transport has sent the answer
-	remote_owns   bool
-	remote_unsent bool
+	// (a request that did not change it does not move this), and an answer of its not yet sent —
+	// ANY answer: no reset, whichever transport asked for it, may overtake an executed request's
+	// answer
+	remote_owns     bool
+	remote_inflight bool
 	// the pending reset (server.reset_req) was asked over the other transport: a bus transfer that
 	// fails cannot cancel it — that answer was not the reset's
 	reset_remote bool
@@ -186,16 +187,18 @@ pub fn (mut c Connection) serve_remote(req &u8, n int, functional bool, resp &u8
 		c.server.handle(req, n, resp)
 	}
 	c.leave(before, held, true)
-	// a reset waits for the transport to send what it sends — the answer, or for a suppressed one
-	// its own acknowledgement (DoIP acks every diagnostic message)
-	c.remote_unsent = c.server.reset_req != 0
-	c.reset_remote = c.server.reset_req != 0
+	// in flight until the transport has sent what it sends — the answer, or for a suppressed one its
+	// own acknowledgement (DoIP acks every diagnostic message); a reset waits for it
+	c.remote_inflight = true
+	if c.server.reset_req != 0 {
+		c.reset_remote = true
+	}
 	return rlen
 }
 
 // remote_sent: the other transport has sent the answer serve_remote gave.
 pub fn (mut c Connection) remote_sent() {
-	c.remote_unsent = false
+	c.remote_inflight = false
 }
 
 // remote_dropped: the other transport's connection is gone. A reset whose answer it never sent is
@@ -205,11 +208,11 @@ pub fn (mut c Connection) remote_sent() {
 // tester that opened it. A bus tester that entered the session since keeps it; requests that
 // changed nothing decide nothing.
 pub fn (mut c Connection) remote_dropped() {
-	if c.remote_unsent {
-		c.cancel_reset()
-		c.remote_unsent = false
+	if c.remote_inflight && c.reset_remote {
+		c.cancel_reset() // its own reset, whose answer never left
 		c.reset_remote = false
 	}
+	c.remote_inflight = false
 	if c.remote_owns {
 		c.server.end_session() // a reset the other transport asked for still happens
 	}
@@ -316,7 +319,7 @@ fn truncated(pci u8, n int, left int) bool {
 // (`owner_resets`). The link being done is not the wire being done: the
 // owner still waits for its controller to transmit the answer (REQ-BOOT-012).
 pub fn (c &Connection) reset_due() u8 {
-	if c.server.reset_req != 0 && !c.link.busy() && !c.remote_unsent {
+	if c.server.reset_req != 0 && !c.link.busy() && !c.remote_inflight {
 		return c.server.reset_req
 	}
 	return 0

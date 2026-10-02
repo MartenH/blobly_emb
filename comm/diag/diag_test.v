@@ -595,10 +595,12 @@ fn test_a_session_reentry_voids_an_outstanding_seed() {
 // cancelled and changes nothing (a DoIP drop in between still ends what DoIP held). Each step's
 // answer, the session and who holds the unlock must be the model's. 100,000 steps: the rarest path
 // (a bus reset cancelled while DoIP holds the unlock) comes up a handful of times.
-// ask_over: one request over the bus (0) or the other transport (1)
+// ask_over: one request over the bus (0) or the other transport (1), whose answer it then sends
 fn ask_over(tr int, mut c Connection, mut t isotp.Link, mut now &u64, req []u8) []u8 {
 	if tr == 1 {
-		return remote(mut c, req, false)
+		r := remote(mut c, req, false)
+		c.remote_sent()
+		return r
 	}
 	return exchange(mut c, mut t, mut now, req)
 }
@@ -705,7 +707,7 @@ fn test_the_cross_transport_security_model_holds_over_random_interleavings() {
 			else {
 				// a reset asked over DoIP: its answer sent (the reset happens), or the connection lost
 				// first (cancelled — what its request hid comes back, the dropped tester's own does not)
-				assert ask_over(1, mut c, mut t, mut &now, [u8(0x11), 0x01]) == [u8(0x51), 0x01], ctx
+				assert remote(mut c, [u8(0x11), 0x01], false) == [u8(0x51), 0x01], ctx
 				if op == 6 {
 					c.remote_sent()
 					c.housekeep(now)
@@ -771,4 +773,19 @@ fn test_a_dropped_testers_hidden_unlock_is_not_handed_to_the_bus() {
 	c.abort_tx() // the bus answer is lost: the reset is cancelled
 	assert c.server.unlocked == 0, 'the unlock of the dropped tester came back'
 	assert exchange(mut c, mut t, mut &now, [u8(0x2E), 0x01, 0x02, 0x11])[..2] == [u8(0x7F), 0x2E]
+}
+
+// an answered DoIP request still on its way holds a reset the bus asked for in the same pass
+fn test_a_bus_reset_waits_for_a_doip_answer_in_flight() {
+	mut c := new_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	assert remote(mut c, [u8(0x22), 0xF1, 0x90], false)[0] == 0x62 // answered, not yet sent
+	assert c.on_frame(0, sf(rx, [u8(0x11), 0x01])) == .request
+	c.serve()
+	mut f := can.Frame{}
+	assert c.produce(0, mut f)
+	assert c.reset_due() == 0, 'the reset overtook the DoIP answer'
+	c.remote_sent()
+	assert c.reset_due() == 0x01
 }
