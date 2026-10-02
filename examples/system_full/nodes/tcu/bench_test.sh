@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# On-target regression test for the generated SOME/IP image (docs/someip.md
-# target + P3 routing rungs) — the eth twin of the io hwtest scripts.
+# On-target regression test for tcu, system_full's SOME/IP node (docs/someip.md target + P3
+# routing rungs) on the NUCLEO-H723 at 192.168.0.51 — the eth twin of the io hwtest scripts.
 #
-# Runs against a live H735-DK on the LAN, probed FROM THE WINDOWS HOST via
-# powershell.exe (WSL NAT delivers neither subnet broadcasts nor unsolicited
-# inbound UDP — the bench recipe of emb#158): the probe binds the configured
-# peer endpoint (30491), so the board's static-source filter accepts it.
+# Probed FROM THE WINDOWS HOST via powershell.exe (WSL NAT delivers neither subnet broadcasts nor
+# unsolicited inbound UDP — the bench recipe of emb#158): the probe binds the bench tester's
+# endpoint port (30491, tcu's peer in system.toml), so the board's static-source filter accepts it,
+# and it sends before it listens.
 #
 #   RPC (REQ-NET-016): a request to the shell method answers with a RESPONSE
 #     whose Request ID (client+session) is mirrored VERBATIM, message type
@@ -18,43 +18,46 @@
 #
 # @verifies REQ-NET-016
 #
-# The probe targets BLOB_SOMEIP_IP (default 192.168.0.50 = this example on the
-# H735-DK). Any node offering the same service answers the same legs, so the
-# system_full TCU is verified with its own address:
+# The E2E-protected receive path on the same node is ../../test/tcu_e2e.lua (blobly_net).
 #
-#   BLOB_SOMEIP_IP=192.168.0.51 ./bench_test.sh
+# The probe targets BLOB_SOMEIP_IP (default 192.168.0.51 = tcu). Any node offering the same
+# service and shell method answers the same legs at its own address, read-only.
 #
-# Exit: 0 = pass, 1 = FAILED, 2 = SKIP (no board/probe host). Flashing
-# requires an explicit BLOB_H735_SERIAL (the H755 shares the bench).
+# Exit: 0 = pass, 1 = FAILED, 2 = SKIP (no board/probe host). Flashing requires an explicit
+# BLOB_TCU_SERIAL — a TCU-specific variable, not a chip one: an H723 and an H735 report the same
+# chip id, and the bench H723 is usually zone_a's board, so `make hwtest` (which passes --flash
+# to every script) must not replace zone_a with tcu unless the bench asked for a tcu.
+# Every received datagram is filtered by source == the board's address: sysnode (.50) sends its
+# GwStatus to the same tester port.
 #
-# Usage: BLOB_H735_SERIAL=<serial> ./bench_test.sh [--flash]
+# Usage: BLOB_TCU_SERIAL=<serial> ./bench_test.sh [--flash]
 set -uo pipefail
 cd "$(dirname "$0")"
 FLASH=0; [ "${1:-}" = "--flash" ] && FLASH=1
-BOARD_IP="${BLOB_SOMEIP_IP:-192.168.0.50}"
+BOARD_IP="${BLOB_SOMEIP_IP:-192.168.0.51}"
 
 command -v powershell.exe >/dev/null 2>&1 || { echo "SKIP: no powershell.exe (not a WSL bench host)"; exit 2; }
 
 if [ "$FLASH" = 1 ]; then
-  # --flash builds and writes THIS example's image, which is the node at the default
-  # address. Flashing it while probing another node's address would report on an
-  # image this script never wrote (flash that node from its own directory instead).
-  [ "$BOARD_IP" = "192.168.0.50" ] || { echo "SKIP: --flash builds this example (192.168.0.50), not the node at $BOARD_IP"; exit 2; }
-  [ -n "${BLOB_H735_SERIAL:-}" ] || { echo "SKIP: flash requested without BLOB_H735_SERIAL"; exit 2; }
-  st-info --probe 2>/dev/null | grep -q "$BLOB_H735_SERIAL" || { echo "SKIP: probe $BLOB_H735_SERIAL not attached"; exit 2; }
+  # --flash builds and writes tcu's image, which is the node at the default address. Flashing it
+  # while probing another node's address would report on an image this script never wrote.
+  [ "$BOARD_IP" = "192.168.0.51" ] || { echo "SKIP: --flash builds tcu (192.168.0.51), not the node at $BOARD_IP"; exit 2; }
+  [ -n "${BLOB_TCU_SERIAL:-}" ] || { echo "SKIP: flash requested without BLOB_TCU_SERIAL (the H723 that runs tcu)"; exit 2; }
+  st-info --probe 2>/dev/null | grep -q "$BLOB_TCU_SERIAL" || { echo "SKIP: probe $BLOB_TCU_SERIAL not attached"; exit 2; }
   make >/dev/null || { echo "FAIL: build error"; exit 1; }
-  make flash H735="$BLOB_H735_SERIAL" >/dev/null 2>&1 || { echo "FAIL: flash error"; exit 1; }
+  make flash SERIAL="$BLOB_TCU_SERIAL" >/dev/null 2>&1 || { echo "FAIL: flash error"; exit 1; }
   sleep 6 # PHY link + NetX bring-up
 fi
 
 PS=$(mktemp --suffix=.ps1)
 trap 'rm -f "$PS"' EXIT
 cat > "$PS" <<'EOF'
-param([string]$BoardIp = '192.168.0.50')
+param([string]$BoardIp = '192.168.0.51')
 $ErrorActionPreference = 'Stop'
 try { $udp = New-Object System.Net.Sockets.UdpClient(30491) } catch { Write-Output 'SKIP: peer port busy'; exit }
 $udp.Client.ReceiveTimeout = 2000
-$board = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Parse($BoardIp), 30490)
+$boardAddr = [System.Net.IPAddress]::Parse($BoardIp)
+$board = New-Object System.Net.IPEndPoint($boardAddr, 30490)
 $txt = [System.Text.Encoding]::ASCII
 function Req([byte[]]$mid, [byte[]]$rid, [byte[]]$p) {
   $len = 8 + $p.Length
@@ -65,7 +68,7 @@ function RecvType([int]$t) {
   $deadline = (Get-Date).AddSeconds(3)
   while ((Get-Date) -lt $deadline) {
     try { $d = $udp.Receive([ref]$src) } catch { continue }
-    if ($d.Length -ge 16 -and $d[14] -eq $t) { return $d }
+    if ($src.Address.Equals($boardAddr) -and $d.Length -ge 16 -and $d[14] -eq $t) { return $d }
   }
   return $null
 }
@@ -104,7 +107,7 @@ $saw = $false
 $deadline = (Get-Date).AddSeconds(2)
 while ((Get-Date) -lt $deadline) {
   try { $d = $udp.Receive([ref]$src) } catch { continue }
-  if ($d.Length -ge 16 -and $d[2] -eq 0x80 -and $d[3] -eq 0x01) { $saw = $true; break }
+  if ($src.Address.Equals($boardAddr) -and $d.Length -ge 16 -and $d[2] -eq 0x80 -and $d[3] -eq 0x01) { $saw = $true; break }
 }
 if (-not $saw) { Write-Output 'FAIL: events stopped during rpc'; exit }
 Write-Output 'PASS'

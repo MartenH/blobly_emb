@@ -126,7 +126,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-013 | QM | test | verified | e2e_test.v (pass) |
 | REQ-NET-014 | QM | test | uncovered | — |
 | REQ-NET-015 | QM | test | verified | e2e_test.v (pass) |
-| REQ-NET-016 | QM | test | covered | h735-someip-hwtest (pending) |
+| REQ-NET-016 | QM | test | covered | tcu-someip-hwtest (pending) |
 | REQ-NET-017 | QM | test | verified | e2e_test.v (pass), eth_frame_peer_test.v (pass) |
 | REQ-NET-018 | QM | test | uncovered | — |
 | REQ-NM-001 | QM | test | verified | nm_test.v (pass) |
@@ -218,7 +218,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 ## Matrix — requirement × execution context
 
-| req | h723/ThreadX | h735/ETH | h735/ETH-DoIP | h735/ETH-TCP | h735/ETH-UDP | h735/FDCAN | h735/ThreadX | h735/bare-metal | h735/h723 FDCAN | h735/target | h755/FDCAN | h755/IO-GPIO | h755/ThreadX | h755/dual-core | h755/target | h755/threadx | host/SocketCAN | host/unit | review | static | threadx/qemu-m7 + h755 bench |
+| req | h723/ThreadX | h723/target | h735/ETH | h735/ETH-DoIP | h735/ETH-TCP | h735/ETH-UDP | h735/FDCAN | h735/ThreadX | h735/bare-metal | h735/h723 FDCAN | h755/FDCAN | h755/IO-GPIO | h755/ThreadX | h755/dual-core | h755/target | h755/threadx | host/SocketCAN | host/unit | review | static | threadx/qemu-m7 + h755 bench |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | REQ-BOOT-001 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BOOT-002 | | | | | | | | | | | | | | | | | | ✓ | | | |
@@ -241,9 +241,9 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-BULK-001 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BULK-002 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BULK-003 | | | | | | | | | | | | | | ✓ | | | | ✓ | | | |
-| REQ-CAN-DRV-001 | | | | | | ✓ | | | | | ✓ | | | ✓ | | | · | | | | |
-| REQ-CAN-DRV-002 | | | | | | ✓ | | | | | ✓ | | | | | | · | | | | |
-| REQ-CAN-DRV-003 | | | | | | ✓ | | | | | ✓ | | | | | | | | | | |
+| REQ-CAN-DRV-001 | | | | | | | ✓ | | | | ✓ | | | ✓ | | | · | | | | |
+| REQ-CAN-DRV-002 | | | | | | | ✓ | | | | ✓ | | | | | | · | | | | |
+| REQ-CAN-DRV-003 | | | | | | | ✓ | | | | ✓ | | | | | | | | | | |
 | REQ-CAN-DRV-004 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-CAN-DRV-005 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-CAN-DRV-006 | | | | | | | | | | | | | | | | | | | | | |
@@ -258,7 +258,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-COM-006 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-COM-007 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-COM-008 | | | | | | | | | | | | | | | | | · | | | | |
-| REQ-DIAG-001 | ✓ | | | | | | ✓ | | | | | | | | | ✓ | | ✓ | | | |
+| REQ-DIAG-001 | ✓ | | | | | | | ✓ | | | | | | | | ✓ | | ✓ | | | |
 | REQ-DIAG-002 | ✓ | | | | | | | | | | | | | | | ✓ | · | ✓ | | | |
 | REQ-DIAG-003 | | | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-DIAG-004 | | | | | | | | | | | | | | | | | · | ✓ | | | |
@@ -316,13 +316,13 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-IO-023 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-IO-024 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-IO-025 | | | | | | | | | | | | | | | · | | | ✓ | | | |
-| REQ-NET-001 | | ✓ | | | | | | | | | | | | | | | | | | | |
-| REQ-NET-002 | | ✓ | | | | | | | | | | | | | | | | | | | |
-| REQ-NET-003 | | ✓ | | | | | | | | | | | | | | | | | | | |
-| REQ-NET-004 | | ✓ | | | | | | | | | | | | | | | | | | | |
-| REQ-NET-005 | | | | | ✓ | | | | | | | | | | | | | | | | |
-| REQ-NET-006 | | | | ✓ | | | | | | | | | | | | | | | | | |
-| REQ-NET-007 | | | ✓ | | | | | | | | | | | | | | | ✓ | | | |
+| REQ-NET-001 | | | ✓ | | | | | | | | | | | | | | | | | | |
+| REQ-NET-002 | | | ✓ | | | | | | | | | | | | | | | | | | |
+| REQ-NET-003 | | | ✓ | | | | | | | | | | | | | | | | | | |
+| REQ-NET-004 | | | ✓ | | | | | | | | | | | | | | | | | | |
+| REQ-NET-005 | | | | | | ✓ | | | | | | | | | | | | | | | |
+| REQ-NET-006 | | | | | ✓ | | | | | | | | | | | | | | | | |
+| REQ-NET-007 | | | | ✓ | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NET-008 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NET-009 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NET-010 | | | | | | | | | | | | | | | | | | | | | |
@@ -331,14 +331,14 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-013 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NET-014 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NET-015 | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-NET-016 | | | | | | | | | | · | | | | | | | | | | | |
+| REQ-NET-016 | | · | | | | | | | | | | | | | | | | | | | |
 | REQ-NET-017 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NET-018 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NM-001 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NM-002 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NM-003 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NM-004 | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-NM-005 | | | | | | | ✓ | | | | | | ✓ | ✓ | | | | ✓ | | | |
+| REQ-NM-005 | | | | | | | | ✓ | | | | | ✓ | ✓ | | | | ✓ | | | |
 | REQ-NM-006 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NM-007 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NM-008 | | | | | | | | | | | | | | | | | | ✓ | | | |
@@ -367,8 +367,8 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-SHELL-001 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-SHELL-002 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-SHELL-003 | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-SHELL-004 | | | | | | | ✓ | | | | | | ✓ | | | | | | | | |
-| REQ-SHELL-005 | | | | | | | ✓ | | | | | | | | | | | | | | |
+| REQ-SHELL-004 | | | | | | | | ✓ | | | | | ✓ | | | | | | | | |
+| REQ-SHELL-005 | | | | | | | | ✓ | | | | | | | | | | | | | |
 | SYS-REQ-COMMS-001 | | | | | | | | | | | | | | | | | · | | | | |
 | SYS-REQ-COMMS-002 | | | | | | | | | | | | | | | | | · | | | | |
 | SYS-REQ-COMMS-003 | | | | | | | | | | | | | | | | | | ✓ | | | |
@@ -397,7 +397,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TELEM-003 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-TELEM-004 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-TRACE-010 | | | | | | | | | | | | | | | | | | | | | · |
-| REQ-TRACE-001 | | | | | | | | ✓ | | | | | ✓ | ✓ | | | | ✓ | | | |
+| REQ-TRACE-001 | | | | | | | | | ✓ | | | | ✓ | ✓ | | | | ✓ | | | |
 | REQ-TRACE-002 | | | | | | | | | | | | | | ✓ | | | | | | | |
 | REQ-TRACE-008 | | | | | | | | | | | | | | | | | | | | | · |
 | REQ-TRACE-009 | | | | | | | | | | | | | | · | | | | ✓ | | | |
@@ -407,7 +407,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-003 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-TOPO-004 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-TOPO-005 | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-TOPO-006 | | | | | | | | | ✓ | | | | | | | | · | ✓ | | | |
+| REQ-TOPO-006 | | | | | | | | | | ✓ | | | | | | | · | ✓ | | | |
 | REQ-TOPO-007 | | | | | | | | | | | | | | | | | · | ✓ | | | |
 | REQ-TOPO-008 | | | | | | | | | | | | | | | | | · | | | | |
 | REQ-TOPO-009 | | | | | | | | | | | | | | | | | · | | | | |

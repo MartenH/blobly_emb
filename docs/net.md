@@ -239,8 +239,8 @@ configures and returns — nothing blocks the IP thread.
 ## P2 status — UDP datagram service (2026-07-18, BENCH-VERIFIED)
 
 REQ-NET-005 on silicon, in `examples/h735_net` (retired in #340; the datagram service is now
-exercised by every generated SOME/IP node — `examples/h735_someip/bench_test.sh`, which
-probes tcu too): a UDP **echo** socket (port 5005,
+exercised by every generated SOME/IP node — `examples/system_full/nodes/tcu/bench_test.sh`
+probes the tcu): a UDP **echo** socket (port 5005,
 every datagram straight back to its sender — verified round-tripping from a WSL
 host through the Windows NAT) and a 1 Hz **telemetry broadcast** (port 5006, the
 bench counters as a text line to the subnet — the CpuLoad-over-CAN idea carried to

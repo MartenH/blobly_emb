@@ -1,8 +1,8 @@
 # examples/system_full/nodes/tcu — the H723 telematics/Ethernet node through the
 # FULL loom2v pipeline (docs/someip.md target rung): ecu.toml -> generated FB thread
 # + SOME/IP eth comm thread over the NetX seam (driver/eth/eth_netx.c) + the H723
-# board driver (boards/h723/eth.c). Same build recipe as examples/h735_someip; only
-# the board (h723) and the node's path depth differ.
+# board driver (boards/h723/eth.c). Its benches: bench_test.sh here (the RPC) and
+# ../../test/tcu_e2e.lua (the E2E-protected receive path).
 #
 #   make -C ../../../.. deps      # once: ThreadX + NetX Duo + CMSIS
 #   make flash SERIAL=0029003E3233510639363634
