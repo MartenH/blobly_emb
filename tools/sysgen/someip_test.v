@@ -1279,8 +1279,8 @@ fn test_an_inherited_eth_shell_counts_as_rpc_on_the_segment() {
 	assert sysmodel.parse_node_view(own).shell_bus == 'can0'
 }
 
-// codex on #347 r3: a dissolved DoIP gateway skips loom2v, so the system gate must see an ungated
-// writable DID itself — the same doipcfg.did_refusals rule the node build applies
+// codex on #347 r3: the system view refuses an ungated writable DID on a DoIP node itself, with
+// the same doipcfg.did_refusals rule the node build applies (and, since #351, loom2v as well)
 fn test_an_ungated_writable_did_is_refused_at_the_system() {
 	mut sys := doip_system()
 	sys.nodes[0].view.did_writes = [doipcfg.DidWrite{

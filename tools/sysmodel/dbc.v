@@ -13,7 +13,8 @@ import tools.candb
 // check_dbc_conformance only checks a signal against its OWN (source) bus, so a
 // route whose destination SG_ has an incompatible width/signedness, or whose
 // destination frame is transmitted by another node, would otherwise slip through
-// (the gateway's loom2v gate is deferred). The re-encode must match the dest wire
+// (sysgen's loom2v gate sees the gateway too, since #351, but this names the system-level
+// contract each route breaks). The re-encode must match the dest wire
 // contract and the gateway must own the destination frame (REQ-TOPO-003/-012).
 // route_phys_range returns a DBC signal's [min, max] physical value (raw range
 // scaled by factor/offset), for the route source-vs-dest range-containment check.
