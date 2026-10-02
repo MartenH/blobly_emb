@@ -96,7 +96,7 @@ unsigned long trace_now_us(void)
 /* Map each tx_thread pointer to a small 1-based id (0 = none/idle), assigned on first
  * sight — the host resolves the id to a name via the manifest (a later phase). */
 extern TX_THREAD *_tx_thread_current_ptr;
-#define MAX_THREADS 8
+#define MAX_THREADS 8 /* tools/loom2v trace_max_threads refuses a manifest past it */
 static void *g_tid_ptr[MAX_THREADS];
 static unsigned g_tid_n;
 /* trace_bind_thread(): pre-assign the NEXT thread id to a known TCB, in creation order — called

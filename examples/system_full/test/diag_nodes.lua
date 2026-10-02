@@ -13,7 +13,7 @@
 --     -c "init; reset halt; mww 0xE000EDFC 0x01000000; resume; shutdown"
 
 local nodes = {
-  { name = "sysnode", bus = "compute", req = 0x7A0, rsp = 0x7A8, ident = "BLOBLY-SYSNODE-H735" },
+  { name = "sysnode", bus = "compute", req = 0x7A0, rsp = 0x7A8, ident = "BLOBLYSYSNODEH735" },
   { name = "zone_a", bus = "edge", req = 0x7C0, rsp = 0x7C8, ident = "BLOBLY-ZONE_A-H723" },
 }
 

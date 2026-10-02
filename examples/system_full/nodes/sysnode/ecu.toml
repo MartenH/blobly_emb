@@ -41,10 +41,16 @@ security_attempts = 3
 security_delay_ms = 3000
 security_key      = "reference"
 
-# 19 bytes: the read answer is multi-frame
+# The same server over DoIP (ISO 13400) on the H735's Ethernet: TCP and UDP 13400. One server, so a
+# CAN and a DoIP tester share one session; a 0x27 unlock is the transport's that earned it (docs/diagnostics.md).
+[doip]
+address         = "192.168.0.50"
+logical_address = 0x07A0 # its CAN request id, for the bench's memory
+
+# the VIN: 17 characters, announced by DoIP too; the read answer is multi-frame
 [[did]]
 id    = 0xF190
-ascii = "BLOBLY-SYSNODE-H735"
+ascii = "BLOBLYSYSNODEH735"
 
 [[did]]
 id    = 0xF189

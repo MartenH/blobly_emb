@@ -20,12 +20,18 @@ NAME    := sysnode
 BOARD   := h735dk
 TX       = $(REPO)/third_party/threadx
 PORT     = $(TX)/ports/cortex_m7/gnu
+NX       = $(REPO)/third_party/netxduo
+NX_PORT  = $(NX)/ports/cortex_m7/gnu
 include $(REPO)/boards/$(BOARD)/board.mk
 
+# DoIP ([doip] in ecu.toml) runs NetX Duo on the H735's Ethernet. Tick rate: 1 kHz SysTick;
+# nx_port.h hard-defines NX_IP_PERIODIC_RATE=100, so both must be forced or every NetX timeout
+# runs 10x fast (bench-paid on h735_net P1).
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
           $(BOARD_DEFS) -DBOARD_ENTRY=main__main $(CAN_DEFS) \
+          -DTX_TIMER_TICKS_PER_SECOND=1000 -DNX_IP_PERIODIC_RATE=1000 \
           -I. -Igen $(BOARD_INCS) -I$(REPO)/driver/can \
-          -I$(PORT)/inc -I$(TX)/common/inc $(CMSIS)
+          -I$(PORT)/inc -I$(TX)/common/inc -I$(NX_PORT)/inc -I$(NX)/common/inc $(CMSIS)
 LDFLAGS = $(MCU) -T $(BOARD_LD_THREADX) -nostartfiles -Wl,--gc-sections \
           --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BUILD)/app.map
 
@@ -35,7 +41,12 @@ TX_ASM   = $(wildcard $(PORT)/src/*.S)
 TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
-BSP      = $(BOARD_BSP_THREADX) $(REPO)/boards/common/comm_glue.c $(REPO)/boards/common/trace_hooks.c
+NX_A     = $(BUILD)/nx.a
+NX_C     = $(wildcard $(NX)/common/src/*.c)
+NX_OBJ   = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
+# + the ETH MAC, the NetX STM32H7 driver and DoIP's transport (driver/eth/doip_netx.c)
+BSP      = $(BOARD_BSP_THREADX) $(REPO)/boards/common/comm_glue.c $(REPO)/boards/common/trace_hooks.c \
+           $(REPO)/boards/$(BOARD)/eth.c $(REPO)/net/nx_driver_stm32h7.c $(REPO)/driver/eth/doip_netx.c
 
 all: $(BUILD)/$(NAME).bin
 
@@ -70,12 +81,19 @@ $(BUILD)/tx/%.o: $(TX)/common/src/%.c Makefile
 	$(CC) $(CFLAGS) -c $< -o $@
 $(TX_A): $(TX_OBJ)
 	$(AR) -rc $@ $^
+$(BUILD)/nx/%.o: $(NX)/common/src/%.c Makefile
+	@mkdir -p $(BUILD)/nx
+	$(CC) $(CFLAGS) -c $< -o $@
+$(NX_A): $(NX_OBJ)
+	$(AR) -rc $@ $^
 
 $(BUILD)/app.o: $(BUILD)/app.c Makefile
 	$(CC) $(CFLAGS) -w -c $< -o $@
 
-$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(BOARD_LD_THREADX)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) -o $@
+$(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(NX_A) $(BOARD_LD_THREADX) \
+                      $(REPO)/boards/$(BOARD)/eth.h $(REPO)/driver/eth/ip4.h
+	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c \
+	  -Wl,--start-group $(TX_A) $(NX_A) -Wl,--end-group -o $@
 	$(SIZE) $@
 	@$(REPO)/scripts/lint_vinit.sh $@   # the _vinit-trap gate (host CI can't cross-compile; run it here)
 

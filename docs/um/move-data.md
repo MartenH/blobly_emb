@@ -31,7 +31,7 @@ cell."* Sending bulk as a signal is the mistake this page exists to prevent.
 | ECU → ECU, firmware | UDS `0x34`/`0x36`×N/`0x37` over **ISO-TP** (the DoIP endpoint serves diagnostics only today — `boot.Prog` has no DoIP binding yet) | image-sized, block-paced | ✅ bootloader |
 | Ethernet event | SOME/IP notification (`comm/someip`) over UDP — **NetX Duo** on target, POSIX socket on host | **64 B** | ✅ config |
 | Ethernet RPC reply | SOME/IP response, same UDP path | **1024 B** (`max_rpc`) | ✅ config |
-| Ethernet diagnostics | DoIP (`comm/doip`) over **NetX TCP** — a module + service thread, not an app path | 256 B *frame* (`doip.max_msg`, header-inclusive) → **244 B** usable UDS data (8 B DoIP header + 4 B addresses); a bigger message is rejected and the stream closed | ❌ hand-wired (`h735_doip`) |
+| Ethernet diagnostics | DoIP (`comm/doip`) over **NetX TCP** — a module + service thread, not an app path | 256 B *frame* (`doip.max_msg`, header-inclusive) → **244 B** usable UDS data (8 B DoIP header + 4 B addresses); a bigger message is rejected and the stream closed | ✅ `[doip]` in `ecu.toml` (a ThreadX node): the node's one UDS server over TCP as well as ISO-TP |
 
 ### Coming from AUTOSAR COM? The numbers you're used to
 
@@ -314,12 +314,15 @@ and may never block): it is a **service thread** — an ordinary ThreadX thread 
 `nx_tcp_socket_receive(&sock, &packet, timeout_ticks)` blocks that thread properly, with a
 timeout — no polling, no callbacks.
 
-The worked example to copy is [`examples/h735_doip`](../../examples/h735_doip):
+DoIP is that pattern, generated: `[doip]` in a ThreadX node's `ecu.toml` (see
+`examples/system_full/nodes/sysnode`) gets
 
-- `netx_glue.c` owns ThreadX/NetX/the sockets and exposes a **four-call seam**
-  (`net_stream_recv/send`, timeout in ticks, plus a drop and a notify);
-- a dedicated thread runs the **V protocol loop** against that seam — blocking recv with a
-  bounded timeout, every byte above the stream unit-tested V (`comm.doip` + `comm.uds`).
+- `driver/eth/doip_netx.c`, which owns the sockets and the threads and exposes a byte-pipe seam
+  (`doip_stream_recv/send`, timeout in ticks, plus a drop and a notify);
+- a dedicated thread running the generated **V protocol loop** against that seam — blocking recv
+  with a bounded timeout, every byte above the stream unit-tested V (`comm.doip`) — which hands
+  each request to the node's ONE server on the comm thread through a mailbox (`comm.diag`'s
+  `serve_remote`).
 
 The seam is the point: the thread never calls NetX directly, so the loop stays pure V and
 testable on the host, and the isolation rule holds (the glue is the driver boundary, like

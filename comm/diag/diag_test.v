@@ -357,3 +357,465 @@ fn test_nothing_is_served_once_a_reset_is_due() {
 	mut f := can.Frame{}
 	assert !c.produce(0, mut f), 'a request was answered while a reset was due'
 }
+
+fn remote(mut c Connection, req []u8, functional bool) []u8 {
+	mut resp := [isotp.max_payload]u8{}
+	n := c.serve_remote(&req[0], req.len, functional, &resp[0])
+	return resp[..n].clone()
+}
+
+fn test_a_remote_request_is_served_by_the_same_server() {
+	mut c := new_conn()
+	assert remote(mut c, [u8(0x10), 0x03], false)[0] == 0x50
+	assert c.server.session == uds.session_extended // one session, whichever transport opened it
+	r := remote(mut c, [u8(0x22), 0xF1, 0x90], false)
+	assert r[..3] == [u8(0x62), 0xF1, 0x90]
+	assert r[3..].bytestr() == name
+	// functional: an unsupported service stays silent
+	assert remote(mut c, [u8(0xBA)], true).len == 0
+	assert remote(mut c, [u8(0xBA)], false) == [u8(0x7F), 0xBA, 0x11]
+}
+
+fn test_a_remote_reset_waits_until_its_transport_has_sent_the_answer() {
+	mut c := new_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	assert remote(mut c, [u8(0x11), 0x01], false) == [u8(0x51), 0x01]
+	assert c.reset_due() == 0, 'reset before the DoIP answer left'
+	assert remote(mut c, [u8(0x3E), 0x00], false).len == 0 // nothing served while a reset is pending
+	c.remote_sent()
+	assert c.reset_due() == 0x01
+	// a suppressed reset has no answer, but DoIP still acks it: due once that is sent
+	mut d := new_conn()
+	d.server.serves_reset = true
+	d.owner_resets = true
+	assert remote(mut d, [u8(0x11), 0x81], false).len == 0
+	assert d.reset_due() == 0
+	d.remote_sent()
+	assert d.reset_due() == 0x01
+}
+
+// a bus answer that fails mid-transfer cannot cancel a reset the other transport asked for
+fn test_a_bus_abort_leaves_a_remote_reset_alone() {
+	mut c := new_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	now := u64(0)
+	// a multi-frame CAN answer in flight
+	c.on_frame(now, sf(rx, [u8(0x22), 0xF1, 0x90]))
+	c.serve()
+	assert !c.link.idle()
+	assert remote(mut c, [u8(0x11), 0x01], false) == [u8(0x51), 0x01]
+	c.remote_sent()
+	mut f := can.Frame{}
+	assert c.produce(now, mut f)
+	c.abort_tx()
+	assert c.server.reset_req == 0x01, 'the CAN abort cancelled the DoIP reset'
+}
+
+fn test_a_dropped_connection_ends_what_it_opened_and_never_resets_unanswered() {
+	mut c := new_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	remote(mut c, [u8(0x10), 0x03], false)
+	remote(mut c, [u8(0x11), 0x01], false)
+	c.remote_dropped()
+	assert c.reset_due() == 0, 'reset whose answer never left'
+	assert c.server.session == uds.session_default
+	// an answered reset survives the tester hanging up right after it
+	remote(mut c, [u8(0x11), 0x01], false)
+	c.remote_sent()
+	c.remote_dropped()
+	assert c.reset_due() == 0x01
+	c.server.reset_req = 0
+	// a bus TesterPresent changes nothing, so the remote tester still owns the session it opened
+	mut t := new_tester()
+	mut now := u64(0)
+	remote(mut c, [u8(0x10), 0x03], false)
+	exchange(mut c, mut t, mut &now, [u8(0x3E), 0x00])
+	c.on_frame(now, sf(fid, [u8(0x3E), 0x80])) // a functional one neither
+	c.remote_dropped()
+	assert c.server.session == uds.session_default
+	// a bus tester that set the session keeps it; a remote read in between decides nothing
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	remote(mut c, [u8(0x22), 0xF1, 0x90], false)
+	c.remote_dropped()
+	assert c.server.session == uds.session_extended
+}
+
+fn seed_fixed(ctx voidptr, out &u8, n int) bool {
+	for i in 0 .. n {
+		unsafe {
+			out[i] = u8(0x10 + i)
+		}
+	}
+	return true
+}
+
+// unlock level 1 through `ask` (one transport), returning the final 0x27 answer
+fn unlock(ask fn ([]u8) []u8) []u8 {
+	seed := ask([u8(0x27), 0x01])[2..]
+	mut key := [u8(0x27), 0x02]
+	for b in seed {
+		key << b ^ 0xFF
+	}
+	return ask(key)
+}
+
+// REQ-NET-012: the session is shared, the unlock is the transport's that earned it — a network
+// tester never writes under a bus tester's unlock, nor the reverse
+fn test_an_unlock_belongs_to_the_transport_that_earned_it() {
+	mut c := new_conn()
+	c.server.security = uds.SecurityOps{
+		seed:   seed_fixed
+		key_ok: uds.reference_key_ok
+	}
+	c.server.security_levels = 0x01
+	c.server.dids[2] = uds.Did{
+		id:             0x0102
+		writable:       true
+		len:            1
+		write_sessions: uds.in_extended
+		write_security: 1
+	}
+	c.server.ndid = 3
+	mut t := new_tester()
+	mut now := u64(0)
+	mut cc := &c
+	over_doip := fn [mut cc] (req []u8) []u8 {
+		return remote(mut cc, req, false)
+	}
+	assert over_doip([u8(0x10), 0x03])[0] == 0x50
+	assert unlock(over_doip) == [u8(0x67), 0x02]
+	assert over_doip([u8(0x2E), 0x01, 0x02, 0x11]) == [u8(0x6E), 0x01, 0x02]
+	// the bus is in the same session but not unlocked
+	assert exchange(mut c, mut t, mut &now, [u8(0x2E), 0x01, 0x02, 0x22]) == [u8(0x7F), 0x2E, 0x33]
+	// and DoIP's unlock survived the bus request
+	assert over_doip([u8(0x2E), 0x01, 0x02, 0x33]) == [u8(0x6E), 0x01, 0x02]
+	// the reverse: a bus unlock does not open the network
+	seed := exchange(mut c, mut t, mut &now, [u8(0x27), 0x01])[2..]
+	mut key := [u8(0x27), 0x02]
+	for b in seed {
+		key << b ^ 0xFF
+	}
+	assert exchange(mut c, mut t, mut &now, key) == [u8(0x67), 0x02]
+	assert over_doip([u8(0x2E), 0x01, 0x02, 0x44]) == [u8(0x7F), 0x2E, 0x33]
+	assert exchange(mut c, mut t, mut &now, [u8(0x2E), 0x01, 0x02, 0x55]) == [u8(0x6E), 0x01, 0x02]
+	// a session change over either relocks for both
+	assert over_doip([u8(0x10), 0x01])[0] == 0x50
+	assert c.server.unlocked == 0
+}
+
+fn secured_conn() Connection {
+	mut c := new_conn()
+	c.server.security = uds.SecurityOps{
+		seed:   seed_fixed
+		key_ok: uds.reference_key_ok
+	}
+	c.server.security_levels = 0x01
+	c.server.dids[2] = uds.Did{
+		id:             0x0102
+		writable:       true
+		len:            1
+		write_sessions: uds.in_extended
+		write_security: 1
+	}
+	c.server.ndid = 3
+	return c
+}
+
+// a DoIP unlock of the level the bus already holds is still DoIP's, and ends with its connection
+fn test_a_dropped_tester_takes_its_unlock_even_at_the_bus_level() {
+	mut c := secured_conn()
+	mut t := new_tester()
+	mut now := u64(0)
+	mut cc := &c
+	over_doip := fn [mut cc] (req []u8) []u8 {
+		return remote(mut cc, req, false)
+	}
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	seed := exchange(mut c, mut t, mut &now, [u8(0x27), 0x01])[2..]
+	mut key := [u8(0x27), 0x02]
+	for b in seed {
+		key << b ^ 0xFF
+	}
+	assert exchange(mut c, mut t, mut &now, key) == [u8(0x67), 0x02]
+	assert unlock(over_doip) == [u8(0x67), 0x02] // same level, now DoIP's
+	c.remote_dropped()
+	assert over_doip([u8(0x2E), 0x01, 0x02, 0x11]) == [u8(0x7F), 0x2E, 0x33], 'the next connection inherited the unlock'
+}
+
+// a seed asked over one transport does not replace the challenge the other is answering
+fn test_seed_key_exchanges_are_per_transport() {
+	mut c := secured_conn()
+	mut t := new_tester()
+	mut now := u64(0)
+	mut cc := &c
+	over_doip := fn [mut cc] (req []u8) []u8 {
+		return remote(mut cc, req, false)
+	}
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	can_seed := exchange(mut c, mut t, mut &now, [u8(0x27), 0x01])[2..]
+	assert over_doip([u8(0x27), 0x01])[0] == 0x67 // DoIP asks for its own seed in between
+	mut key := [u8(0x27), 0x02]
+	for b in can_seed {
+		key << b ^ 0xFF
+	}
+	assert exchange(mut c, mut t, mut &now, key) == [u8(0x67), 0x02], 'the CAN challenge was replaced'
+}
+
+// re-entering the session the bus is in, over the other transport, voids the bus's challenge
+fn test_a_session_reentry_voids_an_outstanding_seed() {
+	mut c := secured_conn()
+	mut t := new_tester()
+	mut now := u64(0)
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	can_seed := exchange(mut c, mut t, mut &now, [u8(0x27), 0x01])[2..]
+	assert remote(mut c, [u8(0x10), 0x03], false)[0] == 0x50 // same session, a new entry
+	mut key := [u8(0x27), 0x02]
+	for b in can_seed {
+		key << b ^ 0xFF
+	}
+	assert exchange(mut c, mut t, mut &now, key) == [u8(0x7F), 0x27, 0x24], 'a key for a void seed'
+	assert c.server.unlocked == 0	// and a bus unlock is not handed back after the other transport re-entered the session
+	seed2 := exchange(mut c, mut t, mut &now, [u8(0x27), 0x01])[2..]
+	mut key2 := [u8(0x27), 0x02]
+	for b in seed2 {
+		key2 << b ^ 0xFF
+	}
+	assert exchange(mut c, mut t, mut &now, key2) == [u8(0x67), 0x02]
+	remote(mut c, [u8(0x10), 0x03], false)
+	assert exchange(mut c, mut t, mut &now, [u8(0x2E), 0x01, 0x02, 0x11]) == [u8(0x7F), 0x2E, 0x33]
+}
+
+// The cross-transport security rule as a model, checked over random interleavings: the session is
+// shared; an unlock belongs to the transport that ran the exchange; a seed is void after ANY session
+// entry; a dropped remote tester ends its unlock and its exchange, and the session too if it entered
+// it last; a reset asked over either transport either happens (power-on) or, its answer lost, is
+// cancelled and changes nothing (a DoIP drop in between still ends what DoIP held). Each step's
+// answer, the session and who holds the unlock must be the model's. 100,000 steps: the rarest path
+// (a bus reset cancelled while DoIP holds the unlock) comes up a handful of times.
+// ask_over: one request over the bus (0) or the other transport (1), whose answer it then sends
+fn ask_over(tr int, mut c Connection, mut t isotp.Link, mut now &u64, req []u8) []u8 {
+	if tr == 1 {
+		r := remote(mut c, req, false)
+		c.remote_sent()
+		return r
+	}
+	return exchange(mut c, mut t, mut now, req)
+}
+
+struct SecModel {
+mut:
+	session     u8 = 0x01
+	epoch       int
+	unlocked    [2]bool
+	pending     [2]int = [-1, -1]!
+	remote_owns bool
+}
+
+fn (mut m SecModel) enter(sess u8, remote bool) {
+	m.session = sess
+	m.epoch++
+	m.unlocked = [false, false]!
+	m.remote_owns = remote
+}
+
+fn test_the_cross_transport_security_model_holds_over_random_interleavings() {
+	mut c := secured_conn()
+	c.server.s3_us = u64(1) << 60 // no S3 in this model
+	c.server.serves_reset = true // the host shape: an answered reset returns the server to power-on
+	mut t := new_tester()
+	mut now := u64(0)
+	mut m := SecModel{}
+	mut rng := u32(0x2545F491)
+	for step in 0 .. 100000 {
+		rng ^= rng << 13
+		rng ^= rng >> 17
+		rng ^= rng << 5
+		tr := int(rng & 1) // 0 = bus, 1 = remote
+		op := (rng >> 1) % 11
+		ctx := 'step ${step} op ${op} over ${if tr == 1 { 'remote' } else { 'bus' }}'
+		match op {
+			0, 1 {
+				sess := if op == 0 { u8(0x03) } else { u8(0x01) }
+				assert ask_over(tr, mut c, mut t, mut &now, [u8(0x10), sess])[0] == 0x50, ctx
+				m.enter(sess, tr == 1)
+			}
+			2 {
+				if m.session != 0x03 || m.unlocked[tr] {
+					continue
+				}
+				sr := ask_over(tr, mut c, mut t, mut &now, [u8(0x27), 0x01])
+				assert sr[0] == 0x67, '${ctx}: ${sr} model ${m}'
+				m.pending[tr] = m.epoch
+			}
+			3 {
+				if m.session != 0x03 {
+					continue
+				}
+				mut key := [u8(0x27), 0x02]
+				for i in 0 .. uds.seed_len {
+					key << u8(0x10 + i) ^ 0xFF
+				}
+				r := ask_over(tr, mut c, mut t, mut &now, key)
+				if m.pending[tr] == m.epoch {
+					assert r == [u8(0x67), 0x02], ctx
+					m.unlocked[tr] = true
+					m.unlocked[1 - tr] = false
+				} else {
+					assert r == [u8(0x7F), 0x27, 0x24], '${ctx}: a key for a void seed: ${r}'
+				}
+				m.pending[tr] = -1
+			}
+			4 {
+				r := ask_over(tr, mut c, mut t, mut &now, [u8(0x2E), 0x01, 0x02, u8(step)])
+				ok := m.session == 0x03 && m.unlocked[tr]
+				assert (r[0] == 0x6E) == ok, '${ctx}: write ${r} where the model says ${ok}'
+			}
+			5 {
+				c.remote_dropped()
+				if m.remote_owns {
+					m.enter(0x01, false)
+				}
+				m.unlocked[1] = false
+				m.pending[1] = -1
+			}
+			8, 9, 10 {
+				// a reset asked over the bus: its answer sent (8: it happens), or lost (9: cancelled),
+				// or lost after a DoIP drop in between (10)
+				assert c.on_frame(now, sf(rx, [u8(0x11), 0x01])) == .request, ctx
+				c.serve()
+				if op == 10 {
+					c.remote_dropped()
+					if m.remote_owns {
+						m.enter(0x01, false)
+					}
+					m.unlocked[1] = false
+					m.pending[1] = -1
+				}
+				mut f := can.Frame{}
+				assert c.produce(now, mut f), ctx
+				if op == 8 {
+					c.housekeep(now)
+					m.enter(0x01, false)
+					m.pending = [-1, -1]!
+				} else {
+					c.abort_tx()
+				}
+			}
+			else {
+				// a reset asked over DoIP: its answer sent (the reset happens), or the connection lost
+				// first (cancelled — what its request hid comes back, the dropped tester's own does not)
+				assert remote(mut c, [u8(0x11), 0x01], false) == [u8(0x51), 0x01], ctx
+				if op == 6 {
+					c.remote_sent()
+					c.housekeep(now)
+					m.enter(0x01, false)
+					m.pending = [-1, -1]!
+				} else {
+					c.remote_dropped()
+					if m.remote_owns {
+						m.enter(0x01, false)
+					}
+					m.unlocked[1] = false
+					m.pending[1] = -1
+				}
+			}
+		}
+		assert c.server.session == m.session, '${ctx}: session ${c.server.session} model ${m}'
+		// and who holds the unlock, directly — not only when a later write happens to ask
+		for x in 0 .. 2 {
+			holds := c.server.unlocked != 0 && c.unlock_remote == (x == 1)
+			assert holds == m.unlocked[x], '${ctx}: transport ${x} unlocked ${holds}, model ${m}'
+		}
+	}
+}
+
+// a reset asked over one transport, then cancelled (its answer lost), gives the other its unlock back
+fn test_a_cancelled_reset_restores_the_hidden_unlock() {
+	mut c := secured_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	mut t := new_tester()
+	mut now := u64(0)
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	seed := exchange(mut c, mut t, mut &now, [u8(0x27), 0x01])[2..]
+	mut key := [u8(0x27), 0x02]
+	for b in seed {
+		key << b ^ 0xFF
+	}
+	assert exchange(mut c, mut t, mut &now, key) == [u8(0x67), 0x02]
+	assert remote(mut c, [u8(0x11), 0x01], false) == [u8(0x51), 0x01]
+	c.remote_dropped() // the DoIP answer never left: the reset is cancelled
+	assert c.reset_due() == 0
+	assert exchange(mut c, mut t, mut &now, [u8(0x2E), 0x01, 0x02, 0x11]) == [u8(0x6E), 0x01, 0x02], 'the bus lost its unlock to a cancelled reset'
+}
+
+// a DoIP unlock hidden by a bus reset request does not come back as the bus's after DoIP drops
+fn test_a_dropped_testers_hidden_unlock_is_not_handed_to_the_bus() {
+	mut c := secured_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	mut t := new_tester()
+	mut now := u64(0)
+	mut cc := &c
+	over_doip := fn [mut cc] (req []u8) []u8 {
+		return remote(mut cc, req, false)
+	}
+	over_doip([u8(0x10), 0x03])
+	assert unlock(over_doip) == [u8(0x67), 0x02]
+	c.on_frame(now, sf(rx, [u8(0x11), 0x01]))
+	c.serve() // the bus asks for a reset: DoIP's unlock held back
+	c.remote_dropped()
+	mut f := can.Frame{}
+	assert c.produce(now, mut f)
+	c.abort_tx() // the bus answer is lost: the reset is cancelled
+	assert c.server.unlocked == 0, 'the unlock of the dropped tester came back'
+	assert exchange(mut c, mut t, mut &now, [u8(0x2E), 0x01, 0x02, 0x11])[..2] == [u8(0x7F), 0x2E]
+}
+
+// an answered DoIP request still on its way holds a reset the bus asked for in the same pass
+fn test_a_bus_reset_waits_for_a_doip_answer_in_flight() {
+	mut c := new_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	assert remote(mut c, [u8(0x22), 0xF1, 0x90], false)[0] == 0x62 // answered, not yet sent
+	assert c.on_frame(0, sf(rx, [u8(0x11), 0x01])) == .request
+	c.serve()
+	mut f := can.Frame{}
+	assert c.produce(0, mut f)
+	assert c.reset_due() == 0, 'the reset overtook the DoIP answer'
+	c.remote_sent()
+	assert c.reset_due() == 0x01
+}
+
+// S3 does not run while a DoIP answer is still on its way, as it does not while ISO-TP is busy
+fn test_s3_holds_while_a_remote_answer_is_in_flight() {
+	mut c := new_conn()
+	c.server.s3_us = 1000
+	c.housekeep(0)
+	assert remote(mut c, [u8(0x10), 0x03], false)[0] == 0x50
+	c.housekeep(5000) // the answer not yet sent: no timeout
+	assert c.server.session == uds.session_extended
+	c.remote_sent()
+	c.housekeep(5500)
+	assert c.server.session == uds.session_extended
+	c.housekeep(7000)
+	assert c.server.session == uds.session_default
+}
+
+// a request refused because a bus reset is pending is still acknowledged by DoIP: the reset waits
+fn test_a_request_refused_under_a_pending_reset_still_holds_it() {
+	mut c := new_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	assert c.on_frame(0, sf(rx, [u8(0x11), 0x01])) == .request
+	c.serve()
+	assert remote(mut c, [u8(0x3E), 0x00], false).len == 0 // refused: a reset is pending
+	mut f := can.Frame{}
+	assert c.produce(0, mut f)
+	assert c.reset_due() == 0, 'the reset overtook the DoIP acknowledgement'
+	c.remote_sent()
+	assert c.reset_due() == 0x01
+}

@@ -116,7 +116,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-004 | QM | test | verified | h735-eth-hardware (approved) |
 | REQ-NET-005 | QM | test | verified | h735-udp-hardware (approved) |
 | REQ-NET-006 | QM | test | verified | h735-tcp-hardware (approved) |
-| REQ-NET-007 | QM | test | verified | doip_test.v (pass), h735-doip-hardware (approved) |
+| REQ-NET-007 | QM | test | verified | doip_test.v (pass), h735-doip-hardware (approved), sysnode-doip-hardware (approved) |
 | REQ-NET-008 | QM | test | uncovered | — |
 | REQ-NET-009 | QM | test | uncovered | — |
 | REQ-NET-010 | QM | test | uncovered | — |

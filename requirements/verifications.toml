@@ -390,6 +390,19 @@ verifies = ["REQ-IO-012", "REQ-IO-013"]
 approved_by = "Marten Hildell — NUCLEO-H755ZI-Q button->LED + heartbeat bench"
 date = "2026-07-19"
 
+# The node's ONE UDS server over DoIP on the system_full sysnode (H735-DK at 192.168.0.50, [doip]):
+# doip_sysnode.lua through blobly_net's headless runner, 5/5 — discovery, sessions + DIDs, 0x27 +
+# the gated 0x2E, one server and session across DoIP and CAN, ECUReset answered over TCP before the restart
+# (server clock 25.5 s -> 1.2 s over SWD). Run by the coding agent on the maintainer's bench. Rerun
+# with examples/system_full/test/doip_bench.sh (the board on the LAN, blobly_net beside this repo).
+[[review]]
+id = "sysnode-doip-hardware"
+method = "review"
+context = "h735/ETH-DoIP"
+verifies = ["REQ-NET-007"]
+approved_by = "Claude (coding agent) on Marten Hildell's bench — sysnode DoIP suite 5/5"
+date = "2026-10-02"
+
 [[check]]
 id = "h735-someip-hwtest"
 method = "test"

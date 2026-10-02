@@ -33,6 +33,32 @@ pub mut:
 mut:
 	req  [isotp.max_payload]u8
 	resp [isotp.max_payload]u8
+	// a request served over another transport (serve_remote): the session in force was set by it
+	// (a request that did not change it does not move this), and an answer of its not yet sent —
+	// ANY answer: no reset, whichever transport asked for it, may overtake an executed request's
+	// answer
+	remote_owns     bool
+	remote_inflight bool
+	// the pending reset (server.reset_req) was asked over the other transport: a bus transfer that
+	// fails cannot cancel it — that answer was not the reset's
+	reset_remote bool
+	// the security level unlocked (server.unlocked) was earned over the other transport. An unlock
+	// belongs to the transport that ran 0x27: a request over the other one sees the server locked
+	// (REQ-NET-012 — a network tester never inherits a bus tester's unlock, nor the reverse)
+	unlock_remote bool
+	// the SecurityAccess exchange in progress (a seed answered, its key not yet sent) per transport,
+	// [0] the bus's and [1] the other's: a seed asked over one never replaces the other's challenge.
+	// Kept with the session ENTRY it began in (server.session_epoch) — any session entry since,
+	// re-entering the same session included, by either transport, S3 or a reset, cancels it, as the
+	// server cancels its own
+	// the other transport's unlock a reset request hid: back if the reset is cancelled, gone with it
+	// if it happens
+	held_back        u8
+	held_back_remote bool // whose it is: it comes back to its owner, and goes with a dropped one
+	held_back_epoch  u32  // the session entry it belongs to: a session entry since voids it
+	sa_level [2]u8
+	sa_seed  [2][uds.seed_len]u8
+	sa_epoch [2]u32
 }
 
 // Rx is what on_frame did with a received frame, for the owner's drain.
@@ -63,8 +89,8 @@ pub fn (mut c Connection) init(rx_id u32, tx_id u32, functional_id u32, bs u8, s
 pub fn (mut c Connection) housekeep(now u64) {
 	c.link.tick(now)
 	c.apply_answered_reset()
-	if !c.link.idle() {
-		c.server.hold_s3(now)
+	if !c.link.idle() || c.remote_inflight {
+		c.server.hold_s3(now) // an exchange still in flight on either transport
 	}
 	c.server.tick(now)
 }
@@ -108,9 +134,12 @@ fn (mut c Connection) functional(f &can.Frame) Rx {
 		return .taken
 	}
 	c.refresh_dids()
+	before, held := c.enter(false)
 	rlen := c.server.handle_functional(&f.data[1], n, &c.resp[0])
+	c.leave(before, held, false)
+	c.reset_remote = false // a reset asked here is the bus's (none was pending, or this was not served)
 	if rlen > 0 && !c.link.send(&c.resp[0], rlen) {
-		c.server.reset_req = 0 // never reset unanswered
+		c.cancel_reset() // never reset unanswered
 	}
 	// a SUPPRESSED reset (0x11 with bit 7) leaves the link idle: apply it before the next frame of
 	// the drain is served under the pre-reset state
@@ -130,10 +159,113 @@ pub fn (mut c Connection) serve() {
 	n := if c.link.busy() || c.server.reset_req != 0 { 0 } else { got }
 	if n > 0 {
 		c.refresh_dids()
+		before, held := c.enter(false)
 		rlen := c.server.handle(&c.req[0], n, &c.resp[0])
+		c.leave(before, held, false)
+		c.reset_remote = false
 		if rlen > 0 && !c.link.send(&c.resp[0], rlen) {
-			c.server.reset_req = 0 // the answer could not be queued: never reset unanswered
+			c.cancel_reset() // the answer could not be queued: never reset unanswered
 		}
+	}
+}
+
+// serve_remote answers a request that arrived over another transport (DoIP) on this same server,
+// so both transports share one session (the unlock is per transport: enter/leave); resp holds
+// isotp.max_payload. The
+// answer leaves over that transport, so a reset it asks for is due only once the owner reports it
+// sent (remote_sent), and is abandoned with a connection that drops first (remote_dropped). Once a
+// reset is due nothing is served, as on the bus.
+pub fn (mut c Connection) serve_remote(req &u8, n int, functional bool, resp &u8) int {
+	// whatever the answer — none included — the transport sends its own acknowledgement (DoIP acks
+	// every diagnostic message), and no reset may overtake it
+	c.remote_inflight = true
+	if n < 1 || c.server.reset_req != 0 {
+		return 0
+	}
+	c.refresh_dids()
+	before, held := c.enter(true)
+	rlen := if functional {
+		c.server.handle_functional(req, n, resp)
+	} else {
+		c.server.handle(req, n, resp)
+	}
+	c.leave(before, held, true)
+	if c.server.reset_req != 0 {
+		c.reset_remote = true
+	}
+	return rlen
+}
+
+// remote_sent: the other transport has sent the answer serve_remote gave.
+pub fn (mut c Connection) remote_sent() {
+	c.remote_inflight = false
+}
+
+// remote_dropped: the other transport's connection is gone. A reset whose answer it never sent is
+// abandoned; one whose answer it did send still happens (a tester disconnects right after it).
+// If the session in force was entered over it, the server returns to the default session (a reset
+// the bus asked for still stands), and an unlock it earned ends either way — neither outlives the
+// tester that opened it. A bus tester that entered the session since keeps it; requests that
+// changed nothing decide nothing.
+pub fn (mut c Connection) remote_dropped() {
+	if c.remote_inflight && c.reset_remote {
+		c.cancel_reset() // its own reset, whose answer never left
+		c.reset_remote = false
+	}
+	c.remote_inflight = false
+	if c.remote_owns {
+		c.server.end_session() // a reset the other transport asked for still happens
+	}
+	c.remote_owns = false
+	// whoever owns the session, an unlock the dropped tester earned ends with it, and so does its
+	// half-done exchange — the next connection authenticates for itself
+	if c.unlock_remote {
+		c.server.unlocked = 0
+	}
+	c.unlock_remote = false
+	if c.held_back_remote {
+		c.held_back = 0 // a hidden unlock of the dropped tester's is not handed back to anyone
+	}
+	c.sa_level[1] = 0
+}
+
+// enter: before a request over one transport — the session entry it starts in, and the unlock the OTHER
+// transport holds, hidden for the request (0 = none hidden); its own exchange in progress loaded
+fn (mut c Connection) enter(remote bool) (u32, u8) {
+	before := c.server.session_epoch
+	mut held := u8(0)
+	if c.server.unlocked != 0 && c.unlock_remote != remote {
+		held = c.server.unlocked
+		c.server.unlocked = 0
+	}
+	// this transport's own exchange in progress, if its session still stands
+	i := if remote { 1 } else { 0 }
+	c.server.sa_level = if c.sa_epoch[i] == c.server.session_epoch { c.sa_level[i] } else { u8(0) }
+	c.server.sa_seed = c.sa_seed[i]
+	return before, held
+}
+
+// leave: after it. An unlock the request earned is this transport's; a hidden one comes back
+// unless the request ended it for everyone (a session change relocks, as does a reset). A request
+// that changed the session makes its transport the session's owner (remote_dropped).
+fn (mut c Connection) leave(before u32, held u8, remote bool) {
+	i := if remote { 1 } else { 0 }
+	c.sa_level[i] = c.server.sa_level
+	c.sa_seed[i] = c.server.sa_seed
+	c.sa_epoch[i] = c.server.session_epoch
+	if c.server.unlocked != 0 {
+		c.unlock_remote = remote
+	} else if held != 0 && c.server.session_epoch == before {
+		if c.server.reset_req == 0 {
+			c.server.unlocked = held
+		} else {
+			c.held_back = held
+			c.held_back_remote = !remote
+			c.held_back_epoch = c.server.session_epoch
+		}
+	}
+	if c.server.session_epoch != before {
+		c.remote_owns = remote
 	}
 }
 
@@ -158,7 +290,9 @@ pub fn (mut c Connection) produce(now u64, mut f can.Frame) bool {
 // reset whose answer was lost is never performed.
 pub fn (mut c Connection) abort_tx() {
 	c.link.abort_tx()
-	c.server.reset_req = 0
+	if !c.reset_remote {
+		c.cancel_reset()
+	}
 }
 
 // active: an exchange is in flight or a non-default session is open — while it is, the owner keeps
@@ -180,11 +314,12 @@ fn truncated(pci u8, n int, left int) bool {
 	}
 }
 
-// reset_due is the ECUReset kind whose answer has left the link (0 = none) — for an owner that
-// performs the reset itself (`owner_resets`). The link being done is not the wire being done: the
+// reset_due is the ECUReset kind whose answer has left the link, or the other transport that
+// carried it (remote_sent), (0 = none) — for an owner that performs the reset itself
+// (`owner_resets`). The link being done is not the wire being done: the
 // owner still waits for its controller to transmit the answer (REQ-BOOT-012).
 pub fn (c &Connection) reset_due() u8 {
-	if c.server.reset_req != 0 && !c.link.busy() {
+	if c.server.reset_req != 0 && !c.link.busy() && !c.remote_inflight {
 		return c.server.reset_req
 	}
 	return 0
@@ -195,7 +330,19 @@ pub fn (c &Connection) reset_due() u8 {
 fn (mut c Connection) apply_answered_reset() {
 	if !c.owner_resets && c.reset_due() != 0 {
 		c.server.reset_state()
+		c.held_back = 0
 	}
+}
+
+// cancel_reset: a reset whose answer was lost does not happen — and what its request hid, the
+// other transport's unlock, comes back
+fn (mut c Connection) cancel_reset() {
+	c.server.reset_req = 0
+	if c.held_back != 0 && c.server.unlocked == 0 && c.held_back_epoch == c.server.session_epoch {
+		c.server.unlocked = c.held_back
+		c.unlock_remote = c.held_back_remote
+	}
+	c.held_back = 0
 }
 
 fn (mut c Connection) refresh_dids() {
