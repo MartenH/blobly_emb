@@ -1,6 +1,7 @@
 module main
 
 import os
+import time
 
 // No Makefile runs a repo tool through `v run`. `v run` derives its binary's path from the tool's
 // SOURCE path and deletes it on exit, so two makes running one tool at once (`make -j` over a
@@ -50,8 +51,8 @@ fn logical_lines(src string) []string {
 	return out
 }
 
-// runs_v_run: one of the line's shell commands invokes the V compiler (`$(V)`, `$(VEXE)`, a
-// bare `v`, any of them behind make's `@`/`-`/`+` recipe prefixes) with `run`
+// runs_v_run: one of the line's shell commands invokes the V compiler (`$(V)`, `$(VEXE)`, their
+// `${...}` spellings, a bare `v`, any of them behind make's `@`/`-`/`+` prefixes) with `run`
 fn runs_v_run(line string) bool {
 	mut cmds := [line.trim_space()]
 	for sep in ['&&', '||', ';', '|'] {
@@ -63,7 +64,7 @@ fn runs_v_run(line string) bool {
 	}
 	for c in cmds {
 		toks := c.fields().map(it.trim_left('@-+'))
-		i := toks.index(toks.filter(it in ['$(V)', '\${V}', '$(VEXE)', 'v'])[0] or { continue })
+		i := toks.index(toks.filter(it in ['$(V)', '\${V}', '$(VEXE)', '\${VEXE}', 'v'])[0] or { continue })
 		if 'run' in toks[i + 1..] {
 			return true
 		}
@@ -165,6 +166,8 @@ fn test_the_scan_recognises_v_run() {
 	assert !runs_v_run('\t$(MAKE) -C examples/$(NAME) run')
 	assert runs_v_run('\t@$(V) run tools/x')
 	assert runs_v_run('\t-v run tools/x')
+	assert runs_v_run('\t\${V} run tools/x')
+	assert runs_v_run('\tcd .. && \${VEXE} -prod run tools/x')
 	assert runs_v_run('\tif [ -f a ]; then $(V) run tools/x a; fi')
 	assert !runs_v_run('\tcd $(REPO) && $(V) -o bin/app x && ./bin/app run')
 	assert tool_refs('\tcd $(REPO) && $(TOOL_loom2v) x $(TOOL_DIR)') == ['loom2v']
@@ -212,4 +215,85 @@ fn test_including_tools_mk_keeps_every_default_goal() {
 		}
 	}
 	assert n >= 80, 'asked make about only ${n / 2} Makefiles'
+}
+
+// make_q: does make consider `target` up to date? (`-q` runs no recipe and builds nothing)
+fn make_q(dir string, target string, extra string) bool {
+	return os.execute('${extra} make -q -C ${os.quoted_path(dir)} ${os.quoted_path(target)} 2>/dev/null').exit_code == 0
+}
+
+fn set_mtime(path string, t i64) {
+	os.utime(path, int(t), int(t)) or { panic(err) }
+}
+
+// A cached tool binary is only as good as the record of what it was built from. One probe tool,
+// built through tools.mk, and every kind of input tools.mk lists changed in turn: each must
+// make make call the binary out of date, and nothing else may (the baseline is up to date).
+fn test_a_tool_is_rebuilt_when_any_input_changes() {
+	d := os.join_path(os.vtmp_dir(), 'tools_mk_inputs_${os.getpid()}')
+	os.mkdir_all(os.join_path(d, 'src')) or { panic(err) }
+	os.mkdir_all(os.join_path(d, 'inc')) or { panic(err) }
+	defer {
+		os.rmdir_all(d) or {}
+	}
+	src := os.join_path(d, 'src', 'probe.v')
+	hdr := os.join_path(d, 'inc', 'probe.h')
+	os.write_file(src, 'module main\n\n#flag -I ${d}/inc\n#include "probe.h"\n\nfn main() {\n\tprintln(\'probe\')\n}\n') or {
+		panic(err)
+	}
+	os.write_file(hdr, '#define PROBE 1\n') or { panic(err) }
+	os.write_file(os.join_path(d, 'Makefile'), 'REPO := ${@VMODROOT}\nTOOL_SRC_probe := ${src}\ninclude \$(REPO)/tools/tools.mk\nall: \$(TOOL_probe)\n') or {
+		panic(err)
+	}
+	fake := os.join_path(d, 'fakev.sh')
+	os.write_file(fake, '#!/bin/sh\nexec ${os.quoted_path(@VEXE)} "\$@"\n') or { panic(err) }
+	os.chmod(fake, 0o755) or { panic(err) }
+	v := 'V=${os.quoted_path(@VEXE)}'
+	build := os.execute('make -C ${os.quoted_path(d)} all ${v} 2>&1')
+	assert build.exit_code == 0, build.output
+	tool := os.join_path(d, 'bin', '.tool-probe')
+	deps := os.read_file(tool + '.d') or { panic(err) }
+	assert deps.contains('/vlib/builtin/'), 'vlib is not in the dependency list'
+
+	// every input in the past, the binary now: up to date
+	old := i64(1_000_000_000)
+	now := time.now().unix()
+	for f in [src, hdr] {
+		set_mtime(f, old)
+	}
+	set_mtime(tool, now)
+	assert make_q(d, tool, v), 'a freshly built tool is out of date: the test proves nothing'
+
+	// a V source, a header reached only through `#flag -I`, a new file beside either
+	for f in [src, hdr] {
+		set_mtime(f, now + 1000)
+		assert !make_q(d, tool, v), '${f} changed and the tool is still up to date'
+		set_mtime(f, old)
+	}
+	for f in [os.join_path(d, 'src', 'extra.v'), os.join_path(d, 'inc', 'extra.h')] {
+		os.write_file(f, '') or { panic(err) }
+		set_mtime(f, now + 1000)
+		assert !make_q(d, tool, v), '${f} appeared and the tool is still up to date'
+		os.rm(f) or { panic(err) }
+	}
+	assert make_q(d, tool, v)
+
+	// the compiler and how it is asked: another V, $VFLAGS, the tool's flags
+	assert !make_q(d, tool, 'V=${os.quoted_path(fake)}'), 'another compiler and the tool is still up to date'
+	assert !make_q(d, tool, '${v} VFLAGS=-g'), 'VFLAGS changed and the tool is still up to date'
+	assert !make_q(d, tool, '${v} TOOL_FLAGS_probe=-g'), 'the tool flags changed and it is still up to date'
+
+	// no record of what it was built from
+	for rec in ['.d', '.sig'] {
+		os.mv(tool + rec, tool + rec + '.away') or { panic(err) }
+		assert !make_q(d, tool, v), 'no ${rec} and the tool is still up to date'
+		os.mv(tool + rec + '.away', tool + rec) or { panic(err) }
+	}
+	assert make_q(d, tool, v)
+
+	// tools.mk and the helper are prerequisites of every tool (asked of make, not of the text)
+	db := os.execute('make -pq -C ${os.quoted_path(d)} ${v} no-such-goal-probe 2>/dev/null').output
+	rule := db.split_into_lines().filter(it.starts_with(os.join_path(d, 'bin', '.tool-%:')))
+	assert rule.len == 1, 'no tool rule in the database'
+	assert rule[0].contains('/tools/tools.mk') && rule[0].contains('/scripts/build_tool.sh'), rule[0]
 }

@@ -15,11 +15,9 @@
 #     gen/.stamp: ecu.toml $(TOOL_loom2v)
 #     	cd $(REPO) && $(TOOL_loom2v) examples/x/ecu.toml ...
 #
-# A tool is rebuilt when any source compiled into it changes, vlib's included (so a new V rebuilds
-# it) and the C a module pulls in beside its V (scripts/build_tool.sh writes that list beside it),
-# when this file or scripts/build_tool.sh changes, and when it has no such list; a target
-# depending on it is remade when it is. The binaries live in bin/ of the including directory,
-# which `make clean` removes.
+# A tool is rebuilt when anything it was built from changes (the inputs are listed below, above
+# the rule), and a target depending on it is remade when it is. The binaries live in bin/ of the
+# including directory, which `make clean` removes.
 V ?= v
 
 # name -> what V compiles: one file for a single-file program, the directory for a multi-file one
@@ -59,17 +57,35 @@ TOOL_REPO := $(abspath $(REPO))
 TOOL_DIR  := $(CURDIR)/bin
 TOOLS     := $(patsubst TOOL_SRC_%,%,$(filter TOOL_SRC_%,$(.VARIABLES)))
 $(foreach t,$(TOOLS),$(eval TOOL_$(t) := $(TOOL_DIR)/.tool-$(t)))
-# also rebuilt when this file (a tool's flags and source) or the build helper changes
+# a source path is relative to the repo root, or absolute
+tool_src = $(if $(filter /%,$(TOOL_SRC_$(1))),$(TOOL_SRC_$(1)),$(TOOL_REPO)/$(TOOL_SRC_$(1)))
+
+# What a tool binary is built FROM, and how each input reaches make:
+#   - every V file compiled in, vlib's included, and the C/headers beside them, plus every
+#     #flag -I directory and C source the build hands the C compiler: bin/.tool-<name>.d,
+#     written by scripts/build_tool.sh from V's -dump-files and -dump-c-flags;
+#   - the compiler and how it is asked: the signature below — the V command, the binary it
+#     resolves to, `v version`, the tool's flags and $VFLAGS — recorded in bin/.tool-<name>.sig
+#     by the build and compared here, at parse time; a different one rebuilds the tool;
+#   - this file and the helper: prerequisites of the rule.
+# A tool missing either record (a binary the old common.mk left, a build interrupted) is rebuilt.
+# tools/loom2v/no_v_run_makefiles_test.v changes each kind of input and asks make.
+TOOL_V_PATH    := $(shell command -v $(firstword $(V)) 2>/dev/null)
+TOOL_V_VERSION := $(shell $(V) version 2>/dev/null)
+tool_sig = $(strip $(V) | $(TOOL_V_PATH) | $(TOOL_V_VERSION) | $(TOOL_FLAGS_$(1)) | $(VFLAGS))
+# string equality: each a substring of the other (findstring is literal, filter is not)
+tool_same = $(and $(findstring $(1),$(2)),$(findstring $(2),$(1)))
+tool_recorded = $(and $(wildcard $(TOOL_DIR)/.tool-$(1).d),$(call tool_same,$(call tool_sig,$(1)),$(strip $(if $(wildcard $(TOOL_DIR)/.tool-$(1).sig),$(file <$(TOOL_DIR)/.tool-$(1).sig)))))
+
 $(TOOL_DIR)/.tool-%: $(TOOL_REPO)/tools/tools.mk $(TOOL_REPO)/scripts/build_tool.sh
 	@test -n "$(TOOL_SRC_$*)" || { echo "tools.mk: no tool named '$*'"; exit 1; }
-	V="$(V)" $(TOOL_REPO)/scripts/build_tool.sh $@ "$(TOOL_FLAGS_$*)" $(TOOL_REPO)/$(TOOL_SRC_$*)
-# a dependency list is written by the build above, never made on its own
+	V="$(V)" TOOL_SIG='$(call tool_sig,$*)' $(TOOL_REPO)/scripts/build_tool.sh $@ "$(TOOL_FLAGS_$*)" $(call tool_src,$*)
+# the records are written by the build above, never made on their own
 $(TOOL_DIR)/.tool-%.d: ;
+$(TOOL_DIR)/.tool-%.sig: ;
 
-# a tool with no dependency list has no record of what it was built from (a binary the old
-# common.mk left in bin/), so it is rebuilt
 .PHONY: tool-unrecorded
-$(foreach t,$(TOOLS),$(if $(wildcard $(TOOL_DIR)/.tool-$(t).d),,$(eval $(TOOL_DIR)/.tool-$(t): tool-unrecorded)))
+$(foreach t,$(TOOLS),$(if $(call tool_recorded,$(t)),,$(eval $(TOOL_DIR)/.tool-$(t): tool-unrecorded)))
 
 -include $(wildcard $(TOOL_DIR)/.tool-*.d)
 .DEFAULT_GOAL := $(TOOL_GOAL)

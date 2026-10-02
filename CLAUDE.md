@@ -62,10 +62,12 @@ the tool's SOURCE path and deletes it on exit, so a `make -j` over a system's no
 examples generated side by side, exec one file and one dies with `No such file or directory`.
 `tools/tools.mk` is the one rule instead — include it, name `$(TOOL_<name>)` as a prerequisite of
 the rule that runs it, run it by that variable. Each tool is built once into the including
-directory's `bin/` (atomically, by `scripts/build_tool.sh`) and rebuilt when anything compiled
-into it changes — every V file `-dump-files` reports (vlib's too), the C and headers beside them,
-`tools.mk` and the helper; `tools/loom2v/no_v_run_makefiles_test.v` pins all three halves, and
-asks make that including `tools.mk` leaves every Makefile's default goal where it was.
+directory's `bin/` (atomically, by `scripts/build_tool.sh`) and rebuilt when any input changes:
+every V file `-dump-files` reports (vlib's too), every C source and `#flag -I` directory
+`-dump-c-flags` reports, the compiler signature (V command, its binary, `v version`, the tool's
+flags, `$VFLAGS`), `tools.mk` and the helper. The list lives in `tools.mk`;
+`tools/loom2v/no_v_run_makefiles_test.v` changes each kind of input and asks make, pins that no
+Makefile runs `v run`, and that including `tools.mk` leaves every default goal where it was.
 
 Examples use classic CAN (`[bus] fd = false`) so blobly_net (classic) can drive
 them; the driver picks classic vs CAN-FD from that flag. Integration tests live in
