@@ -14,6 +14,9 @@ pub fn (mut fb SteerSensor) on_50ms(_ ports.SteerSensorIn, mut out ports.SteerSe
 	out.raw_steer.deg = fb.raw
 }
 
+// speed_plausible_kph: the most a vehicle speed can be; above it the value is implausible.
+const speed_plausible_kph = u32(250)
+
 // SteerLimiter reads the LOCAL RawSteer (from the sensor, same thread) and clamps it to a
 // speed-dependent maximum before it goes on the wire as SteeringAngle — a toy "speed-sensitive
 // steering". VehicleSpeed and HeadlightCmd arrive via the gateway from domain. Physical IO
@@ -39,6 +42,13 @@ pub fn (mut fb SteerLimiter) on_50ms(inp ports.SteerLimiterIn, mut out ports.Ste
 		deg = 180
 	}
 	out.steering_angle.deg = deg
+	// the received speed's plausibility, the CURRENT result every dispatch (no latch: the fault
+	// memory keeps the history, docs/diagnostics.md §3.3) — DTC U0401-00 on this node
+	out.fault.speed_implausible = if inp.vehicle_speed.kph > speed_plausible_kph {
+		.failed
+	} else {
+		.passed
+	}
 	// the domain's HeadlightCmd (compute -> gateway -> here) drives a real LED (PB0):
 	// a cross-node command reaching a physical pin.
 	out.headlight_led.on = inp.headlight_cmd.mode != 0

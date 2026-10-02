@@ -93,6 +93,24 @@ thread = "front_thread"
   reads     = ["RawSteer", "VehicleSpeed", "HeadlightCmd", "LedLevel", "UserButton"]
   writes    = ["SteeringAngle", "HeadlightLed", "BreathLed"] # trailing comment terminates nested block (vlang/v#27684)
 
+# --- Faults (docs/diagnostics.md §3.3, R6): a fault memory on the TARGET ----------------------
+# SteerLimiter tests the VehicleSpeed it receives (domain -> gateway -> here) for plausibility each
+# dispatch; the Loom debounces the result on front_thread, and the fault memory on the comm thread
+# keeps the DTC status the tester reads (0x19), clears (0x14) and freezes (0x85). The domain's speed
+# lies in 60..119 km/h, so only a frame the bench injects can fail it (test/faults_zone_a.lua).
+[[fault]]
+name     = "SpeedImplausible"
+dtc      = 0xC40100                    # U0401-00: invalid data received from the powertrain
+from     = "SteerLimiter.on_50ms"
+debounce = { kind = "counter", fail = 3, pass = 3 }   # accumulating: 150 ms to fail from 0, 300 ms back
+confirm  = 1
+
+# The operation cycle: zone_a is in no NM cluster (the edge bus runs none) and receives no ignition,
+# so the cycle is the power cycle — begun at boot, ended by power-off. RAM-only for now: nothing
+# ages or leaves pending within it (docs/diagnostics.md R6).
+[fault_memory]
+cycle = "power"
+
 [target]
 kind    = "threadx"
 tick_ms = 1

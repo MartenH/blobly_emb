@@ -1413,16 +1413,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			// the host bridge injects the reference key (blobly_net's), seeded from the clock
 			glue << security_init_lines(m, srv, 'st.sa_${tp}.ops(u32(osal.now_us()))')
 			if m.faults.len > 0 {
-				for i, f in m.faults {
-					glue << '\tst.fmem.slots[${i}].dtc = u32(0x${f.dtc.hex()}) // ${f.name}'
-					glue << '\tst.fmem.slots[${i}].confirm = u8(${f.confirm})'
-					if f.signal != '' {
-						glue << '\tst.fmem.slots[${i}].local = true // stepped and consumed on this thread'
-					}
-					if f.aging > 0 {
-						glue << '\tst.fmem.slots[${i}].aging = u8(${f.aging})'
-					}
-				}
+				glue << fault_slot_lines(m, 'st.fmem', '\t')
 				for i, f in m.faults {
 					if f.signal == '' {
 						continue
@@ -1436,9 +1427,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					glue << debounce_step_lines(f, '\t\t')
 					glue << '\t}'
 				}
-				glue << '\tst.fmem.n = ${m.faults.len}'
-				glue << '\tst.fmem.init()'
-				glue << '\t${srv}.faults = st.fmem.uds_ops() // 0x19 / 0x14 / 0x85'
+				glue << fault_memory_init_lines(m, 'st.fmem', srv, '\t')
 			}
 		}
 		// module_host (above): no signal work, so no tick and no handler — it only has to DRAIN
@@ -1969,16 +1958,56 @@ fn fault_pass_lines(m Model) []string {
 	for fb in fault_fbs(m) {
 		f := snake(fb)
 		out << '\tosal.${acquire_fn('triple')}(fault_rep_${f}_ch, &st.frep_${f}, u8(sizeof(st.frep_${f})))'
-		mut k := 0
-		for i, fc in m.faults {
-			if fc.fb != fb {
-				continue
-			}
-			out << '\tst.fmem.consume(${i}, st.frep_${f}.r[${k}])'
-			out << '\tst.fctl_${f}.gen[${k}] = st.fmem.control_gen(${i})'
-			k++
-		}
+		out << fault_consume_lines(m, fb, 'st.fmem', 'st.frep_${f}', 'st.fctl_${f}', '\t')
 		out << '\tosal.${publish_fn('triple')}(fault_ctl_${f}_ch, &st.fctl_${f}, u8(sizeof(st.fctl_${f})))'
+	}
+	return out
+}
+
+// fault_consume_lines: `fb`'s report cell `rep`, consumed slot by slot into the fault memory
+// `fmem`, and the clear generations its thread must apply written into its control cell `ctl` —
+// every owner's (the host bridge, the ThreadX comm thread); only how the cells cross differs.
+fn fault_consume_lines(m Model, fb string, fmem string, rep string, ctl string, ind string) []string {
+	mut out := []string{}
+	mut k := 0
+	for i, fc in m.faults {
+		if fc.fb != fb || fc.signal != '' {
+			continue
+		}
+		out << '${ind}${fmem}.consume(${i}, ${rep}.r[${k}])'
+		out << '${ind}${ctl}.gen[${k}] = ${fmem}.control_gen(${i})'
+		k++
+	}
+	return out
+}
+
+// fault_slot_lines: the fault memory `fmem`'s slots, one per [[fault]] in declaration order — the
+// DTC and the thresholds the memory applies.
+fn fault_slot_lines(m Model, fmem string, ind string) []string {
+	mut out := []string{}
+	for i, f in m.faults {
+		out << '${ind}${fmem}.slots[${i}].dtc = u32(0x${f.dtc.hex()}) // ${f.name}'
+		out << '${ind}${fmem}.slots[${i}].confirm = u8(${f.confirm})'
+		if f.signal != '' {
+			out << '${ind}${fmem}.slots[${i}].local = true // stepped and consumed on this thread'
+		}
+		if f.aging > 0 {
+			out << '${ind}${fmem}.slots[${i}].aging = u8(${f.aging})'
+		}
+	}
+	return out
+}
+
+// fault_memory_init_lines: the configured memory `fmem` initialised and handed to the server `srv`
+// — and, for a power cycle, the cycle begun with the owner.
+fn fault_memory_init_lines(m Model, fmem string, srv string, ind string) []string {
+	mut out := [
+		'${ind}${fmem}.n = ${m.faults.len}',
+		'${ind}${fmem}.init()',
+		'${ind}${srv}.faults = ${fmem}.uds_ops() // 0x19 / 0x14 / 0x85',
+	]
+	if m.fault_cycle == fault_cycle_power {
+		out << '${ind}${fmem}.cycle_start() // [fault_memory] cycle = "power": the cycle is this power-up'
 	}
 	return out
 }
@@ -2040,7 +2069,7 @@ fn rx_group_hooks(m Model, list []string, ind string) []string {
 	}
 	cyc := m.fault_cycle.all_before('.')
 	cf := m.fault_cycle.all_after('.')
-	has_cycle := m.fault_cycle != '' && cyc in list
+	has_cycle := m.fault_cycle != '' && m.fault_cycle != fault_cycle_power && cyc in list
 	if has_cycle {
 		out << '${ind}if ${snake(cyc)}.${cf} && !st.fcycle_on {'
 		out << '${ind}\tst.fmem.cycle_start()'
