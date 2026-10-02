@@ -591,7 +591,10 @@ fn test_a_session_reentry_voids_an_outstanding_seed() {
 // The cross-transport security rule as a model, checked over random interleavings: the session is
 // shared; an unlock belongs to the transport that ran the exchange; a seed is void after ANY session
 // entry; a dropped remote tester ends its unlock and its exchange, and the session too if it entered
-// it last. Each step's answer from the real Connection must be the model's.
+// it last; a reset asked over either transport either happens (power-on) or, its answer lost, is
+// cancelled and changes nothing (a DoIP drop in between still ends what DoIP held). Each step's
+// answer, the session and who holds the unlock must be the model's. 100,000 steps: the rarest path
+// (a bus reset cancelled while DoIP holds the unlock) comes up a handful of times.
 // ask_over: one request over the bus (0) or the other transport (1)
 fn ask_over(tr int, mut c Connection, mut t isotp.Link, mut now &u64, req []u8) []u8 {
 	if tr == 1 {
@@ -619,16 +622,17 @@ fn (mut m SecModel) enter(sess u8, remote bool) {
 fn test_the_cross_transport_security_model_holds_over_random_interleavings() {
 	mut c := secured_conn()
 	c.server.s3_us = u64(1) << 60 // no S3 in this model
+	c.server.serves_reset = true // the host shape: an answered reset returns the server to power-on
 	mut t := new_tester()
 	mut now := u64(0)
 	mut m := SecModel{}
 	mut rng := u32(0x2545F491)
-	for step in 0 .. 3000 {
+	for step in 0 .. 100000 {
 		rng ^= rng << 13
 		rng ^= rng >> 17
 		rng ^= rng << 5
 		tr := int(rng & 1) // 0 = bus, 1 = remote
-		op := (rng >> 1) % 6
+		op := (rng >> 1) % 11
 		ctx := 'step ${step} op ${op} over ${if tr == 1 { 'remote' } else { 'bus' }}'
 		match op {
 			0, 1 {
@@ -667,7 +671,7 @@ fn test_the_cross_transport_security_model_holds_over_random_interleavings() {
 				ok := m.session == 0x03 && m.unlocked[tr]
 				assert (r[0] == 0x6E) == ok, '${ctx}: write ${r} where the model says ${ok}'
 			}
-			else {
+			5 {
 				c.remote_dropped()
 				if m.remote_owns {
 					m.enter(0x01, false)
@@ -675,8 +679,54 @@ fn test_the_cross_transport_security_model_holds_over_random_interleavings() {
 				m.unlocked[1] = false
 				m.pending[1] = -1
 			}
+			8, 9, 10 {
+				// a reset asked over the bus: its answer sent (8: it happens), or lost (9: cancelled),
+				// or lost after a DoIP drop in between (10)
+				assert c.on_frame(now, sf(rx, [u8(0x11), 0x01])) == .request, ctx
+				c.serve()
+				if op == 10 {
+					c.remote_dropped()
+					if m.remote_owns {
+						m.enter(0x01, false)
+					}
+					m.unlocked[1] = false
+					m.pending[1] = -1
+				}
+				mut f := can.Frame{}
+				assert c.produce(now, mut f), ctx
+				if op == 8 {
+					c.housekeep(now)
+					m.enter(0x01, false)
+					m.pending = [-1, -1]!
+				} else {
+					c.abort_tx()
+				}
+			}
+			else {
+				// a reset asked over DoIP: its answer sent (the reset happens), or the connection lost
+				// first (cancelled — what its request hid comes back, the dropped tester's own does not)
+				assert ask_over(1, mut c, mut t, mut &now, [u8(0x11), 0x01]) == [u8(0x51), 0x01], ctx
+				if op == 6 {
+					c.remote_sent()
+					c.housekeep(now)
+					m.enter(0x01, false)
+					m.pending = [-1, -1]!
+				} else {
+					c.remote_dropped()
+					if m.remote_owns {
+						m.enter(0x01, false)
+					}
+					m.unlocked[1] = false
+					m.pending[1] = -1
+				}
+			}
 		}
 		assert c.server.session == m.session, '${ctx}: session ${c.server.session} model ${m}'
+		// and who holds the unlock, directly — not only when a later write happens to ask
+		for x in 0 .. 2 {
+			holds := c.server.unlocked != 0 && c.unlock_remote == (x == 1)
+			assert holds == m.unlocked[x], '${ctx}: transport ${x} unlocked ${holds}, model ${m}'
+		}
 	}
 }
 
@@ -698,4 +748,27 @@ fn test_a_cancelled_reset_restores_the_hidden_unlock() {
 	c.remote_dropped() // the DoIP answer never left: the reset is cancelled
 	assert c.reset_due() == 0
 	assert exchange(mut c, mut t, mut &now, [u8(0x2E), 0x01, 0x02, 0x11]) == [u8(0x6E), 0x01, 0x02], 'the bus lost its unlock to a cancelled reset'
+}
+
+// a DoIP unlock hidden by a bus reset request does not come back as the bus's after DoIP drops
+fn test_a_dropped_testers_hidden_unlock_is_not_handed_to_the_bus() {
+	mut c := secured_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	mut t := new_tester()
+	mut now := u64(0)
+	mut cc := &c
+	over_doip := fn [mut cc] (req []u8) []u8 {
+		return remote(mut cc, req, false)
+	}
+	over_doip([u8(0x10), 0x03])
+	assert unlock(over_doip) == [u8(0x67), 0x02]
+	c.on_frame(now, sf(rx, [u8(0x11), 0x01]))
+	c.serve() // the bus asks for a reset: DoIP's unlock held back
+	c.remote_dropped()
+	mut f := can.Frame{}
+	assert c.produce(now, mut f)
+	c.abort_tx() // the bus answer is lost: the reset is cancelled
+	assert c.server.unlocked == 0, 'the unlock of the dropped tester came back'
+	assert exchange(mut c, mut t, mut &now, [u8(0x2E), 0x01, 0x02, 0x11])[..2] == [u8(0x7F), 0x2E]
 }

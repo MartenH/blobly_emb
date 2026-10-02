@@ -52,7 +52,9 @@ mut:
 	// server cancels its own
 	// the other transport's unlock a reset request hid: back if the reset is cancelled, gone with it
 	// if it happens
-	held_back u8
+	held_back        u8
+	held_back_remote bool // whose it is: it comes back to its owner, and goes with a dropped one
+	held_back_epoch  u32  // the session entry it belongs to: a session entry since voids it
 	sa_level [2]u8
 	sa_seed  [2][uds.seed_len]u8
 	sa_epoch [2]u32
@@ -198,25 +200,29 @@ pub fn (mut c Connection) remote_sent() {
 
 // remote_dropped: the other transport's connection is gone. A reset whose answer it never sent is
 // abandoned; one whose answer it did send still happens (a tester disconnects right after it).
-// Otherwise, if the session in force was set over it, the server returns to power-on, and an
-// unlock it earned ends either way — neither outlives the tester that opened it. A bus tester
-// that changed the session since keeps it; requests that changed nothing decide nothing.
+// If the session in force was entered over it, the server returns to the default session (a reset
+// the bus asked for still stands), and an unlock it earned ends either way — neither outlives the
+// tester that opened it. A bus tester that entered the session since keeps it; requests that
+// changed nothing decide nothing.
 pub fn (mut c Connection) remote_dropped() {
 	if c.remote_unsent {
 		c.cancel_reset()
 		c.remote_unsent = false
 		c.reset_remote = false
 	}
-	if c.remote_owns && c.server.reset_req == 0 {
-		c.server.reset_state()
+	if c.remote_owns {
+		c.server.end_session() // a reset the other transport asked for still happens
 	}
 	c.remote_owns = false
 	// whoever owns the session, an unlock the dropped tester earned ends with it, and so does its
 	// half-done exchange — the next connection authenticates for itself
-	if c.unlock_remote && c.server.reset_req == 0 {
+	if c.unlock_remote {
 		c.server.unlocked = 0
 	}
 	c.unlock_remote = false
+	if c.held_back_remote {
+		c.held_back = 0 // a hidden unlock of the dropped tester's is not handed back to anyone
+	}
 	c.sa_level[1] = 0
 }
 
@@ -251,6 +257,8 @@ fn (mut c Connection) leave(before u32, held u8, remote bool) {
 			c.server.unlocked = held
 		} else {
 			c.held_back = held
+			c.held_back_remote = !remote
+			c.held_back_epoch = c.server.session_epoch
 		}
 	}
 	if c.server.session_epoch != before {
@@ -327,8 +335,9 @@ fn (mut c Connection) apply_answered_reset() {
 // other transport's unlock, comes back
 fn (mut c Connection) cancel_reset() {
 	c.server.reset_req = 0
-	if c.held_back != 0 && c.server.unlocked == 0 {
+	if c.held_back != 0 && c.server.unlocked == 0 && c.held_back_epoch == c.server.session_epoch {
 		c.server.unlocked = c.held_back
+		c.unlock_remote = c.held_back_remote
 	}
 	c.held_back = 0
 }

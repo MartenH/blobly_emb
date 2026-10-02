@@ -359,6 +359,12 @@ fn in_mask(mask u8, session u8) bool {
 // per session instance, and the plan's "every transition, explicit or by S3") — and a return to
 // the default session re-enables communication (0x28 state does not survive leaving the
 // non-default session).
+// end_session returns to the default session as S3 would — relocked, the exchange voided — without
+// touching a pending reset (an owner ending one tester's session must not cancel another's reset).
+pub fn (mut s Server) end_session() {
+	s.enter_session(session_default)
+}
+
 fn (mut s Server) enter_session(session u8) {
 	s.unlocked = 0
 	s.sa_level = 0

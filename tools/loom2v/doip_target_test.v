@@ -167,3 +167,10 @@ fn test_a_trace_past_the_recorders_thread_table_is_refused() {
 		'${os.join_path(tmp, 'sig.v')} ${os.join_path(tmp, 'ports.v')} ${os.join_path(tmp, 'gen.v')}')
 	assert r.exit_code != 0 && r.output.contains('MAX_THREADS'), r.output
 }
+
+// a writable VIN DID would let the announcement and 0x22 disagree after a write
+fn test_a_writable_vin_is_refused() {
+	gated := doip_conn.replace('ascii = "BLOBLYH735THREADX"', 'ascii = "BLOBLYH735THREADX"\nwrite = { session = ["extended"], security = 1 }')
+	code, out, _ := generate('doip_vin_rw', gated)
+	assert code != 0 && out.contains('cannot be writable'), out
+}

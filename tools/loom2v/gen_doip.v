@@ -78,6 +78,12 @@ fn validate_doip(m Model) {
 	if d.functional != 0 && (d.functional < 0xE400 || d.functional > 0xEFFF) {
 		panic('loom2v: [doip] functional_address 0x${d.functional.hex()} is outside the functional range 0xE400..0xEFFF')
 	}
+	for did in m.dids {
+		// announced at boot and answered by 0x22 alike: a write would make the two disagree
+		if did.id == doip_vin_did && did.writable {
+			panic('loom2v: [doip] announces DID 0xF190 as the VIN: it cannot be writable')
+		}
+	}
 	vin := doip_vin(m)
 	if vin.len != 17 || !vin.bytes().all(it >= 0x21 && it <= 0x7E) {
 		panic('loom2v: [doip] announces DID 0xF190 as the VIN: declare it as 17 printable ASCII characters (got "${vin}")')
@@ -211,6 +217,10 @@ fn doip_target_create(m Model, comm_prio int) []string {
 		return []string{}
 	}
 	d := m.doip
+	if comm_prio + 2 > 31 {
+		panic('loom2v: [doip]: its threads run below the comm thread (priority ${comm_prio}), at ' +
+			'${comm_prio + 1} and ${comm_prio + 2} — past ThreadX\'s 0..31; give the application threads lower numbers')
+	}
 	mut g := [
 		'\tg_doip.entity_addr = u16(0x${d.logical.hex()})',
 	]
