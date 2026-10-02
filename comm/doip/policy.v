@@ -32,12 +32,14 @@ pub const general_inactivity_max_ms = 3600000
 
 // A_DoIP_Announce_Num / A_DoIP_Announce_Interval (defaults 3 and 500 ms): the vehicle
 // announcements broadcast once the link is up. 0 announcements is allowed (discovery is then by
-// identification request only).
+// identification request only). The doip thread announces before it accepts its first tester, so
+// the whole sequence is bounded too.
 pub const announce_count = 3
 pub const announce_count_max = 10
 pub const announce_interval_ms = 500
 pub const announce_interval_min_ms = 10
 pub const announce_interval_max_ms = 10000
+pub const announce_total_max_ms = 10000
 
 // tester_address_ok: a source address a tester may use (the range a `testers` entry must lie in)
 pub fn tester_address_ok(a i64) bool {
@@ -61,8 +63,9 @@ pub fn timers_ok(initial_ms i64, general_ms i64) bool {
 		&& initial_ms <= general_ms
 }
 
-// announce_ok: an announcement count and interval within their bounds
+// announce_ok: an announcement count and interval within their bounds, the sequence (count x
+// interval) within announce_total_max_ms
 pub fn announce_ok(count i64, interval_ms i64) bool {
 	return count >= 0 && count <= announce_count_max && interval_ms >= announce_interval_min_ms
-		&& interval_ms <= announce_interval_max_ms
+		&& interval_ms <= announce_interval_max_ms && count * interval_ms <= announce_total_max_ms
 }

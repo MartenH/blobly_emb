@@ -139,6 +139,7 @@ fn test_the_testers_alive_check_response_needs_no_reply() {
 	n2 := frame(&inb[0], 0x0008, [u8(0x0E)])
 	assert s.feed(&inb[0], n2, &resp[0], max_msg) == 9
 	assert resp[3] == 0x00 && resp[8] == 0x04 // generic NACK: invalid payload length
+	assert s.fatal // ...after which the socket closes
 }
 
 fn test_an_alive_check_request_is_answered_with_the_entity_address() {
@@ -222,4 +223,5 @@ fn test_the_configuration_rules() {
 	assert announce_ok(announce_count, announce_interval_ms) && announce_ok(0, 500)
 	assert !announce_ok(-1, 500) && !announce_ok(11, 500) && !announce_ok(3, 9)
 	assert !announce_ok(3, 10001)
+	assert announce_ok(10, 1000) && !announce_ok(2, 6000) // the whole sequence, 10 s at most
 }

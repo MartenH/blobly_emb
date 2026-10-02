@@ -9,7 +9,7 @@ module sysmodel
 
 import os
 import tools.candb
-import comm.doip
+import tools.doipcfg
 
 pub enum Severity {
 	error
@@ -2787,7 +2787,7 @@ fn check_doip(s System) []Issue {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-005'
-				msg:      'node "${n.name}": doip has unknown key "${k}" — it takes `logical` (the entity address) and optionally `functional`, `testers`, `activation_types`, ${doip_int_keys.map('`' + it + '`').join(', ')}'
+				msg:      'node "${n.name}": doip has unknown key "${k}" — it takes `logical` (the entity address) and optionally `functional`, ${doipcfg.keys().map('`' + it + '`').join(', ')}'
 			}
 		}
 		issues << check_doip_policy(n)
@@ -2896,54 +2896,19 @@ fn check_doip(s System) []Issue {
 	return issues
 }
 
-// check_doip_policy: a node's `doip` transport policy by comm/doip policy.v's rules — the ones the
-// node gate (loom2v validate_doip) applies to the [doip] it is lowered into
+// check_doip_policy: a node's `doip` transport policy, by the checker the node gate (loom2v
+// validate_doip) applies to the [doip] it is lowered into (tools/doipcfg)
 fn check_doip_policy(n Node) []Issue {
-	mut errs := []string{}
-	for k in n.doip_not_int {
-		errs << 'doip `${k}` must be ' + if k in ['testers', 'activation_types'] {
-			'a list of integers'
-		} else {
-			'an integer'
-		}
-	}
-	if n.doip_testers.len > doip.max_testers {
-		errs << 'doip `testers` lists ${n.doip_testers.len} addresses — at most ${doip.max_testers}'
-	}
-	for i, t in n.doip_testers {
-		if !doip.tester_address_ok(t) {
-			errs << 'doip `testers` entry 0x${t:04X} is not a tester address (0x0E00..0x0FFF)'
-		} else if t in n.doip_testers[..i] {
-			errs << 'doip `testers` lists 0x${t:04X} twice'
-		}
-	}
-	if n.has_doip_types && n.doip_types.len == 0 {
-		errs << 'doip `activation_types` is empty — no tester could activate routing (absent = [0x00])'
-	}
-	if n.doip_types.len > doip.max_act_types {
-		errs << 'doip `activation_types` lists ${n.doip_types.len} types — at most ${doip.max_act_types}'
-	}
-	for i, t in n.doip_types {
-		if !doip.activation_type_ok(t) {
-			errs << 'doip activation type 0x${t:02X} is not one the entity can serve (0x00, 0x01, 0xE1..0xFF; 0xE0 central security is not implemented)'
-		} else if t in n.doip_types[..i] {
-			errs << 'doip `activation_types` lists 0x${t:02X} twice'
-		}
-	}
-	initial := n.doip_ints['initial_inactivity_ms'] or { doip.initial_inactivity_ms }
-	general := n.doip_ints['general_inactivity_ms'] or { doip.general_inactivity_ms }
-	if !doip.timers_ok(initial, general) {
-		errs << 'doip `initial_inactivity_ms` ${initial} / `general_inactivity_ms` ${general} out of bounds (${doip.initial_inactivity_min_ms}..${doip.initial_inactivity_max_ms} and ${doip.general_inactivity_min_ms}..${doip.general_inactivity_max_ms} ms, initial <= general)'
-	}
-	count := n.doip_ints['announce_count'] or { doip.announce_count }
-	interval := n.doip_ints['announce_interval_ms'] or { doip.announce_interval_ms }
-	if !doip.announce_ok(count, interval) {
-		errs << 'doip `announce_count` ${count} / `announce_interval_ms` ${interval} out of bounds (0..${doip.announce_count_max}, ${doip.announce_interval_min_ms}..${doip.announce_interval_max_ms} ms)'
-	}
+	mut errs := n.doip_not_int.map('`${it}` must be ' + if it in doipcfg.list_keys {
+		'a list of integers'
+	} else {
+		'an integer'
+	})
+	errs << n.doip_policy.problems()
 	return errs.map(Issue{
 		severity: .error
 		req:      'REQ-TOPO-005'
-		msg:      'node "${n.name}": ${it}'
+		msg:      'node "${n.name}": doip ${it}'
 	})
 }
 

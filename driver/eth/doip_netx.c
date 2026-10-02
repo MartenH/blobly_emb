@@ -177,14 +177,19 @@ static ULONG conn_start;      /* tick of accept: the pre-activation deadline bas
 /* ISO 13400 inactivity: T_TCP_Initial_Inactivity (default 2 s: a connection that never activates
  * routing must not hold the one server socket — measured from ACCEPT, so trickled bytes don't
  * extend it), T_TCP_General_Inactivity (default 5 min idle after activation). Set from [doip] by
- * doip_net_timers before the threads exist; comm/doip policy.v bounds them, so MS_TICKS stays in
- * 32 bits. */
+ * doip_net_timers before the threads exist (comm/doip policy.v bounds them). */
 static ULONG idle_initial = 2u * NX_IP_PERIODIC_RATE;
 static ULONG idle_general = 300u * NX_IP_PERIODIC_RATE;
 
+/* ms to ticks in 64 bits, saturated: MS_TICKS is 32-bit and policy.v's bounds assume a 1 kHz tick */
+static ULONG ms_ticks_sat(unsigned int ms) {
+	unsigned long long t = (unsigned long long)ms * TX_TIMER_TICKS_PER_SECOND / 1000u;
+	return t > 0xFFFFFFFFull ? (ULONG)0xFFFFFFFFul : (ULONG)t;
+}
+
 void doip_net_timers(unsigned int initial_ms, unsigned int general_ms) {
-	idle_initial = MS_TICKS(initial_ms);
-	idle_general = MS_TICKS(general_ms);
+	idle_initial = ms_ticks_sat(initial_ms);
+	idle_general = ms_ticks_sat(general_ms);
 }
 
 /* drop the connection and return the socket to listening; the comm thread hears of it */

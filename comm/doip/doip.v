@@ -108,8 +108,9 @@ pub mut:
 	tester_addr u16 // learned from routing activation
 	activated   bool
 	// the transport must drop the connection once the response written so far is sent: the
-	// stream desynced (bad pattern / oversized), or a routing activation was refused with a code
-	// that closes the socket. feed processes nothing after it.
+	// stream desynced (bad pattern / oversized), a payload length was invalid for its type, or a
+	// routing activation was refused with a code that closes the socket. feed processes nothing
+	// after it.
 	fatal bool
 	// routing-activation policy (policy.v), set at boot. 0 entries = the defaults: any tester
 	// address (tester_first..tester_last), activation type 0x00 only.
@@ -330,7 +331,7 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 			// version-2 framing: exactly 7 bytes, or 11 with the optional OEM
 			// field — a longer blob must NACK, not "activate" on its prefix
 			if plen != 7 && plen != 11 {
-				return gen_nack(resp, at, nack_bad_length)
+				return s.bad_length(resp, at)
 			}
 			sa := (u16(s.buf[header_len]) << 8) | u16(s.buf[header_len + 1])
 			code := s.activation_code(sa, s.buf[header_len + 2])
@@ -358,13 +359,13 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 			// the tester's answer to an alive check: carries its source address, needs no reply
 			// (its arrival already counts as activity on the connection)
 			if plen != 2 {
-				return gen_nack(resp, at, nack_bad_length)
+				return s.bad_length(resp, at)
 			}
 			return at
 		}
 		pt_alive_req, pt_status_req, pt_power_req {
 			if plen != 0 {
-				return gen_nack(resp, at, nack_bad_length)
+				return s.bad_length(resp, at)
 			}
 			// on TCP the asker holds the one socket: it is open
 			return s.info_response(ptype, 1, resp, at)
@@ -374,7 +375,7 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 			// message would get a positive ack and then no response — the
 			// tester would wait forever
 			if plen < 5 {
-				return gen_nack(resp, at, nack_bad_length)
+				return s.bad_length(resp, at)
 			}
 			sa := (u16(s.buf[header_len]) << 8) | u16(s.buf[header_len + 1])
 			ta := (u16(s.buf[header_len + 2]) << 8) | u16(s.buf[header_len + 3])
@@ -513,6 +514,13 @@ fn (s &Server) info_response(ptype u16, open int, resp &u8, at int) int {
 			return o + 1
 		}
 	}
+}
+
+// bad_length: generic NACK 0x04 (invalid payload length) — and, as ISO 13400-2's header handler
+// requires for that code, the socket closes after it
+fn (mut s Server) bad_length(resp &u8, at int) int {
+	s.fatal = true
+	return gen_nack(resp, at, nack_bad_length)
 }
 
 fn (mut s Server) diag_nack(resp &u8, at int, sa u16, code u8) int {

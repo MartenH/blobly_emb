@@ -1,28 +1,23 @@
 module main
 
 import toml
-import comm.doip
+import tools.doipcfg
 
 // [doip]: the node's ONE diagnostic server — the [[isotp]] connection's — reachable over DoIP
 // (ISO 13400) too, on a ThreadX target. The server stays on the comm thread; a doip thread
 // (driver/eth/doip_netx.c) runs the TCP side and hands each request across a mailbox, so CAN and
 // DoIP testers share one session; a 0x27 unlock is per transport (comm/diag serve_remote).
 //
-// The entity's ISO 13400-2 transport policy rides beside it (comm/doip policy.v holds the rules and
-// the defaults): which testers may activate routing and with which activation types, the two TCP
-// inactivity timers, and the boot announcements.
+// The entity's ISO 13400-2 transport policy rides beside it (tools/doipcfg reads and checks it,
+// comm/doip policy.v holds the bounds and defaults): which testers may activate routing and with
+// which activation types, the two TCP inactivity timers, and the boot announcements.
 struct DoipCfg {
 	on         bool
 	address    string // the node's static IPv4 address
 	logical    int    // its DoIP logical address
 	functional int    // 0 = comm/doip's default (0xE400)
-	testers    []int  // tester addresses allowed to activate routing; empty = any 0x0E00..0x0FFF
-	act_types  []int  // activation types served; absent = [0x00]
-	initial_ms int    // T_TCP_Initial_Inactivity
-	general_ms int    // T_TCP_General_Inactivity
-	ann_count  int    // A_DoIP_Announce_Num
-	ann_ms     int    // A_DoIP_Announce_Interval
-	has_types  bool   // `activation_types` authored (an empty list is refused, not defaulted)
+	policy     doipcfg.Policy
+	not_int    []string // policy keys authored as something other than integers
 }
 
 const doip_vin_did = 0xF190
@@ -33,59 +28,15 @@ const doip_port = 13400
 fn parse_doip(doc toml.Doc) DoipCfg {
 	dv := doc.value_opt('doip') or { return DoipCfg{} }
 	dm := dv.as_map()
+	policy, not_int := doipcfg.parse(dm)
 	return DoipCfg{
 		on:         true
 		address:    (dm['address'] or { toml.Any('') }).string()
 		logical:    int((dm['logical_address'] or { toml.Any(0) }).int())
 		functional: int((dm['functional_address'] or { toml.Any(0) }).int())
-		testers:    (dm['testers'] or { toml.Any([]toml.Any{}) }).array().map(int(it.int()))
-		act_types:  (dm['activation_types'] or { toml.Any([toml.Any(0)]) }).array().map(int(it.int()))
-		has_types:  'activation_types' in dm
-		initial_ms: int((dm['initial_inactivity_ms'] or { toml.Any(doip.initial_inactivity_ms) }).int())
-		general_ms: int((dm['general_inactivity_ms'] or { toml.Any(doip.general_inactivity_ms) }).int())
-		ann_count:  int((dm['announce_count'] or { toml.Any(doip.announce_count) }).int())
-		ann_ms:     int((dm['announce_interval_ms'] or { toml.Any(doip.announce_interval_ms) }).int())
+		policy:     policy
+		not_int:    not_int
 	}
-}
-
-// doip_policy_problem: what is wrong with a [doip]'s transport policy ('' = nothing), by comm/doip
-// policy.v's rules — the ones syscheck applies to a node's `doip` too
-fn doip_policy_problem(d DoipCfg) string {
-	if d.testers.len > doip.max_testers {
-		return 'testers lists ${d.testers.len} addresses — at most ${doip.max_testers}'
-	}
-	for i, t in d.testers {
-		if !doip.tester_address_ok(t) {
-			return 'testers entry 0x${t:04X} is not a tester address (0x0E00..0x0FFF)'
-		}
-		if t in d.testers[..i] {
-			return 'testers lists 0x${t:04X} twice'
-		}
-	}
-	if d.has_types && d.act_types.len == 0 {
-		return 'activation_types is empty — no tester could activate routing (absent = [0x00])'
-	}
-	if d.act_types.len > doip.max_act_types {
-		return 'activation_types lists ${d.act_types.len} types — at most ${doip.max_act_types}'
-	}
-	for i, t in d.act_types {
-		if !doip.activation_type_ok(t) {
-			return 'activation type 0x${t:02X} is not one this entity can serve (0x00, 0x01, 0xE1..0xFF; 0xE0 central security is not implemented)'
-		}
-		if t in d.act_types[..i] {
-			return 'activation_types lists 0x${t:02X} twice'
-		}
-	}
-	if !doip.timers_ok(d.initial_ms, d.general_ms) {
-		return 'initial_inactivity_ms ${d.initial_ms} / general_inactivity_ms ${d.general_ms} out of bounds ' +
-			'(${doip.initial_inactivity_min_ms}..${doip.initial_inactivity_max_ms} and ' +
-			'${doip.general_inactivity_min_ms}..${doip.general_inactivity_max_ms} ms, initial <= general)'
-	}
-	if !doip.announce_ok(d.ann_count, d.ann_ms) {
-		return 'announce_count ${d.ann_count} / announce_interval_ms ${d.ann_ms} out of bounds ' +
-			'(0..${doip.announce_count_max}, ${doip.announce_interval_min_ms}..${doip.announce_interval_max_ms} ms)'
-	}
-	return ''
 }
 
 // ip4_octets: the address as numbers, so 192.168.0.050 and 192.168.0.50 are one address
@@ -150,9 +101,12 @@ fn validate_doip(m Model) {
 	if d.functional != 0 && (d.functional < 0xE400 || d.functional > 0xEFFF) {
 		panic('loom2v: [doip] functional_address 0x${d.functional.hex()} is outside the functional range 0xE400..0xEFFF')
 	}
-	problem := doip_policy_problem(d)
-	if problem != '' {
-		panic('loom2v: [doip] ${problem}')
+	for k in d.not_int {
+		panic('loom2v: [doip] `${k}` must be an integer (a list: of integers) — narrowed it would be a different value')
+	}
+	problems := d.policy.problems()
+	if problems.len > 0 {
+		panic('loom2v: [doip] ${problems.join('; ')}')
 	}
 	for did in m.dids {
 		// announced at boot and answered by 0x22 alike: a write would make the two disagree
@@ -216,15 +170,18 @@ fn doip_target_fns(m Model) []string {
 	g << '// C side\'s to report to the comm thread; here only the DoIP framing state is reset.'
 	g << "@[export: 'blobly_doip_run']"
 	g << 'fn doip_run() {'
-	if m.doip.ann_count > 0 {
+	ann_count := m.doip.policy.int_of('announce_count')
+	if ann_count > 0 {
 		g << '\tmut eid := [6]u8{}'
 		g << '\tC.doip_eid(&eid[0])'
 		g << '\tmut ann := [64]u8{}'
 		g << '\tan := g_doip.announcement(&eid[0], &ann[0])'
-		g << '\t// A_DoIP_Announce_Num x A_DoIP_Announce_Interval ([doip] announce_count / announce_interval_ms)'
-		g << '\tfor _ in 0 .. ${m.doip.ann_count} {'
+		g << '\t// A_DoIP_Announce_Num, A_DoIP_Announce_Interval apart ([doip] announce_count / announce_interval_ms)'
+		g << '\tfor i in 0 .. ${ann_count} {'
+		g << '\t\tif i > 0 {'
+		g << '\t\t\tC.doip_sleep_ms(${m.doip.policy.int_of('announce_interval_ms')})'
+		g << '\t\t}'
 		g << '\t\tC.doip_udp_broadcast(&ann[0], an)'
-		g << '\t\tC.doip_sleep_ms(${m.doip.ann_ms})'
 		g << '\t}'
 	}
 	g << '\tfor {'
@@ -251,7 +208,7 @@ fn doip_target_fns(m Model) []string {
 	g << '\t\t\tfed = 0'
 	g << '\t\t}'
 	g << '\t\tif g_doip.fatal {'
-	g << '\t\t\tC.doip_stream_drop() // stream desynced, NACK already sent'
+	g << '\t\t\tC.doip_stream_drop() // the response that closes the socket is sent: a desynced stream\'s NACK, or a refusal'
 	g << '\t\t\tdoip_end()'
 	g << '\t\t}'
 	g << '\t\t// the short initial idle limit holds until routing is activated'
@@ -339,21 +296,22 @@ fn doip_target_create(m Model) []string {
 		g << '\tg_doip.vin[${i}] = u8(0x${b.hex()})'
 	}
 	// the routing-activation policy (comm/doip policy.v; none listed = its defaults)
-	for i, t in d.testers {
-		g << '\tg_doip.testers[${i}] = u16(0x${t.hex()})'
+	p := d.policy
+	if p.has_testers {
+		for i, t in p.testers {
+			g << '\tg_doip.testers[${i}] = u16(0x${t.hex()})'
+		}
+		g << '\tg_doip.n_testers = ${p.testers.len}'
 	}
-	if d.testers.len > 0 {
-		g << '\tg_doip.n_testers = ${d.testers.len}'
-	}
-	if d.has_types {
-		for i, t in d.act_types {
+	if p.has_types {
+		for i, t in p.types {
 			g << '\tg_doip.act_types[${i}] = u8(0x${t.hex()})'
 		}
-		g << '\tg_doip.n_act_types = ${d.act_types.len}'
+		g << '\tg_doip.n_act_types = ${p.types.len}'
 	}
 	g << '\tg_doip.serve.answer = doip_answer'
 	g << '\tC.doip_mb_init(&g_doip_req[0], &g_doip_resp[0])'
-	g << '\tC.doip_net_timers(u32(${d.initial_ms}), u32(${d.general_ms})) // T_TCP_Initial / T_TCP_General_Inactivity'
+	g << '\tC.doip_net_timers(u32(${p.int_of('initial_inactivity_ms')}), u32(${p.int_of('general_inactivity_ms')})) // T_TCP_Initial / T_TCP_General_Inactivity'
 	// below every application thread (doip_net_prio): the IP thread, then the doip threads
 	g << "\tC.doip_net_create(c'${d.address}', u32(${np}), u32(${np + 1})) // -1: DoIP stays down, the node runs on"
 	return g

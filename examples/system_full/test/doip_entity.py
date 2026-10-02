@@ -71,11 +71,14 @@ def activation(sa, atype=0x00):
 
 
 def closed_by_entity(s, within):
+    # a FIN reads as b"", a reset (NetX unaccepting before our FIN) as an error: both are a close
     s.settimeout(within)
     try:
         return s.recv(64) == b""
-    except (socket.timeout, ConnectionResetError):
+    except socket.timeout:
         return False
+    except (ConnectionResetError, BrokenPipeError):
+        return True
 
 
 def status_ok(r, open_):
@@ -107,6 +110,14 @@ s = tcp()
 s.sendall(activation(TESTER, 0x01))
 r = read_msg(s)
 check("WWH-OBD activation refused 0x06", r is not None and r[0] == 0x0006 and r[1][4] == 0x06, repr(r))
+check("... and the entity closes the socket", closed_by_entity(s, 3))
+s.close()
+
+# an invalid payload length: generic NACK 0x04, and the socket closes
+s = tcp()
+s.sendall(msg(0x4001, b"\0"))
+r = read_msg(s)
+check("invalid length NACKed 0x04", r == (0x0000, b"\x04"), repr(r))
 check("... and the entity closes the socket", closed_by_entity(s, 3))
 s.close()
 

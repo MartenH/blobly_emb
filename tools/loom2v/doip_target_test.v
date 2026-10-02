@@ -135,7 +135,7 @@ fn test_an_unconfigured_policy_takes_the_iso_defaults() {
 	code, out, glue := generate('doip_defaults', doip_conn)
 	assert code == 0, out
 	assert glue.contains('C.doip_net_timers(u32(2000), u32(300000))'), glue
-	assert glue.contains('\tfor _ in 0 .. 3 {') && glue.contains('C.doip_sleep_ms(500)')
+	assert glue.contains('\tfor i in 0 .. 3 {') && glue.contains('C.doip_sleep_ms(500)')
 	assert !glue.contains('g_doip.n_testers') && !glue.contains('g_doip.n_act_types')
 	assert glue.contains("@[export: 'blobly_doip_udp']")
 	assert glue.contains('g_doip.udp_response(req, n, &eid[0], C.doip_stream_open(), resp)')
@@ -153,7 +153,7 @@ fn test_a_configured_policy_is_generated_into_the_entity() {
 	for want in ['g_doip.testers[0] = u16(0xe80)', 'g_doip.testers[1] = u16(0xf00)',
 		'g_doip.n_testers = 2', 'g_doip.act_types[0] = u8(0x0)', 'g_doip.act_types[1] = u8(0xe1)',
 		'g_doip.n_act_types = 2', 'C.doip_net_timers(u32(1000), u32(60000))',
-		'\tfor _ in 0 .. 5 {', 'C.doip_sleep_ms(200)'] {
+		'\tfor i in 0 .. 5 {', 'C.doip_sleep_ms(200)'] {
 		assert glue.contains(want), want
 	}
 	// no announcements: discovery by identification request only
@@ -177,6 +177,10 @@ fn test_a_policy_the_entity_cannot_serve_is_refused() {
 		'initial_long': 'initial_inactivity_ms = 20000\ngeneral_inactivity_ms = 10000\n'
 		'ann_many':     'announce_count = 11\n'
 		'ann_fast':     'announce_interval_ms = 5\n'
+		'ann_long':     'announce_count = 4\nannounce_interval_ms = 3000\n' // 12 s before the first tester
+		'no_testers':   'testers = []\n' // would read as "any"
+		'float_timer':  'general_inactivity_ms = 60000.5\n'
+		'wide_tester':  'testers = [0x100000E00]\n' // narrowed to 32 bits it would be 0x0E00
 	}
 	for name, extra in cases {
 		code, out, _ := generate('doip_pol_${name}', doip_conn + extra)

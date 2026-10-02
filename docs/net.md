@@ -293,29 +293,30 @@ the bench tool's generated config names `GwStatus`'s producer as that event's ow
 ### The entity at the transport level (ISO 13400-2:2012)
 
 What the entity does with each payload type, and the policy that is configuration rather than
-code. The rules and defaults live once in `comm/doip/policy.v`; loom2v (`[doip]`) and syscheck
-(a node's `doip = {...}`, lowered one-to-one by sysgen under the same names) both refuse through
-them.
+code. The bounds and defaults live once in `comm/doip/policy.v`, and one build-time reader,
+checker and writer (`tools/doipcfg`) serves loom2v (`[doip]`), syscheck (a node's
+`doip = {...}`) and sysgen (which lowers the one into the other under the same names).
 
 | key (`[doip]` and a node's `doip`) | default | meaning |
 |---|---|---|
-| `testers` | absent: any 0x0E00..0x0FFF | tester logical addresses allowed to activate routing (≤ 8, each in the tester range) |
+| `testers` | absent: any 0x0E00..0x0FFF | tester logical addresses allowed to activate routing (1..8, each in the tester range; an empty list is refused, it would read as "any") |
 | `activation_types` | `[0x00]` | routing activation types served (≤ 4; 0x00, 0x01, 0xE1..0xFF — 0xE0 central security is refused, nothing here authenticates) |
 | `initial_inactivity_ms` | 2000 | T_TCP_Initial_Inactivity, from accept (100..60000, ≤ the general one) |
 | `general_inactivity_ms` | 300000 | T_TCP_General_Inactivity, idle after activation (1000..3600000) |
 | `announce_count` | 3 | A_DoIP_Announce_Num, boot announcements (0..10; 0 = discovery by request only) |
-| `announce_interval_ms` | 500 | A_DoIP_Announce_Interval (10..10000) |
+| `announce_interval_ms` | 500 | A_DoIP_Announce_Interval between them (10..10000; count × interval ≤ 10 s, since the doip thread accepts no tester while it announces) |
 
 | payload type | TCP | UDP 13400 |
 |---|---|---|
 | 0x0005 routing activation | checked in the spec's order: source address (**0x00** unknown source — outside the list, or outside 0x0E00..0x0FFF with no list), activation type (**0x06** unsupported), the socket (**0x02** a different source address on this already-registered socket); else **0x10**, and the registered address may activate again. Every refusal closes the socket after the response, and nothing queued behind it is served | silence |
 | 0x0007 alive check request | answered 0x0008 with the entity's address (the spec sends this request the other way; answered as a liveness probe) | silence |
-| 0x0008 alive check response | accepted, no reply (2-byte payload, else NACK 0x04) | silence |
+| 0x0008 alive check response | accepted, no reply (2-byte payload) | silence |
 | 0x4001 entity status | 0x4002: node type 0x01 (node), max sockets 1, open sockets 1, max data size 248 | 0x4002, open sockets 0 or 1 |
 | 0x4003 diagnostic power mode | 0x4004: 0x01 ready | 0x4004 |
 | 0x0001..0x0003 identification | NACK 0x01 | the announcement (0xFF/0x00 version pattern accepted for these only) |
 | 0x8001 diagnostic message | as before (acks 0x8002/0x8003) | silence |
 | anything else | generic NACK 0x01 | silence |
+| a payload length its type does not allow | generic NACK 0x04, and the socket closes | silence |
 
 Max data size is the assembly buffer's payload room (256 − 8): a message sized to it fits whether a
 tester reads the field as the payload or the whole message. A malformed UDP request gets silence,

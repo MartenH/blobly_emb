@@ -250,6 +250,7 @@ fn test_routing_length_must_be_exact() {
 	assert rlen == 9
 	assert resp[8] == 0x04 // invalid payload length
 	assert !s.activated
+	assert s.fatal // the header handler closes the socket after an invalid length
 }
 
 fn test_ident_accepts_generic_version() {
