@@ -602,7 +602,11 @@ date = "2026-09-30"
 # 0x11 (answered, then a restart; the keep cell holds the lockout). zone_a's live DID 0xF1A0 follows
 # the SteeringAngle it transmits in its FD frame 0x132. The TRNG on these two chips needs CONDRST to
 # recover from a seed error (boards/common/diag_board.c): a 1500-seed soak per node, 1494 distinct
-# seeds each and isolated "no seed" answers, none back to back. Evidence, not verifications, for REQ-DIAG-007
+# seeds each and isolated "no seed" answers, none back to back — BEFORE #336. Since #336 the seed is
+# redrawn in the same request after a health-test flag, and a tester sees no transient "no seed": on
+# the H723 (zone_a, reset health-test threshold) 0 of 6000 refused (29 of 4500 before), and 500 further
+# seeds all distinct and none zero (2026-10-02). A "no seed" now means an RNG failing every attempt.
+# Evidence, not verifications, for REQ-DIAG-007
 # (0x11 answered before the reset; 0x28 is not served) and REQ-DIAG-008 (the lockout kept across
 # the reset; one key per seed and the ignored functional 0x27 are checked on domain only).
 [[review]]
