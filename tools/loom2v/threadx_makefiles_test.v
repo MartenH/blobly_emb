@@ -57,6 +57,8 @@ fn test_every_threadx_makefile_links_the_generated_sources() {
 			continue
 		}
 		assert src.contains('\ngen/loom_build.mk:'), '${mk}: no remake rule for gen/loom_build.mk — a first build reads it before generation writes it'
+		// ...and not for `make clean`, which would regenerate everything just to delete it
+		assert src.contains('ifneq (\$(MAKECMDGOALS),clean)\n-include gen/loom_build.mk'), '${mk}: the include is not skipped for clean'
 		bsp := bsp_definition(src)
 		assert bsp.contains('$(LOOM_FAULT_SRCS)'), '${mk}: BSP does not list $(LOOM_FAULT_SRCS)'
 		// a prerequisite list is expanded where the rule is read: the include must come first

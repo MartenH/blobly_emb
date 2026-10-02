@@ -77,7 +77,10 @@ gen/.stamp: $(SYSDIR)/system.toml $(wildcard $(SYSDIR)/nodes/*/ecu.toml) $(wildc
 
 # loom2v writes gen/loom_build.mk (LOOM_VDEFS, LOOM_NET_SRCS); this rule makes make RESTART and
 # reparse the include once gen has run, or both stay unset for the same run
+# (not for clean, which would otherwise regenerate everything before deleting it)
+ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
+endif
 CFLAGS += $(LOOM_NET_DEFS) # the network the config sizes (driver/eth/netx_up.c)
 gen/loom_build.mk: gen/.stamp ;
 

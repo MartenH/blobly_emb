@@ -80,7 +80,10 @@ gen/.stamp: ecu.toml bus.dbc $(wildcard $(REPO)/examples/shared/loadmix/app/*.v)
 
 # loom's fixed Scheduler tables, right-sized to this image's real per-thread handler count
 # (loom2v derives LOOM_VDEFS = -d loom_max_tasks=N; loom.v defaults to 32 without it).
+# (not for clean, which would otherwise regenerate everything before deleting it)
+ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
+endif
 # remade by gen: make restarts and rereads it, so a first build sees LOOM_VDEFS / LOOM_FAULT_SRCS
 gen/loom_build.mk: gen/.stamp ;
 

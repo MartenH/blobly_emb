@@ -48,7 +48,10 @@ gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/compute.dbc $(wildcard app/
 
 # loom2v writes gen/loom_build.mk (LOOM_VDEFS, LOOM_FAULT_SRCS); this rule makes make RESTART and
 # reparse the include once gen has run, or both stay unset for the same run
+# (not for clean, which would otherwise regenerate everything before deleting it)
+ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
+endif
 gen/loom_build.mk: gen/.stamp ;
 
 $(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) $(wildcard $(REPO)/driver/io/*.v) $(wildcard app/*.v) | $(BUILD)

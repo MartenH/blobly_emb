@@ -77,7 +77,10 @@ gen/.stamp: $(SYSDIR)/system.toml $(wildcard $(SYSDIR)/nodes/*/ecu.toml) $(wildc
 	  $(EX)/gen/trace-manifest.csv
 	@touch gen/.stamp
 
+# (not for clean, which would otherwise regenerate everything before deleting it)
+ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
+endif
 CFLAGS += $(LOOM_NET_DEFS) # the network the config sizes (driver/eth/netx_up.c)
 # remake rule: after `make clean`, regenerating via gen/.stamp must make GNU make
 # RESTART and reparse the include, or LOOM_VDEFS stays unset for the same run.
