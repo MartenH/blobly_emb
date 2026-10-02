@@ -1,17 +1,20 @@
--- Bench suite for the H735's SOME/IP receive path (REQ-E2E-002 on eth, emb #299), driven by
--- blobly_net over the LAN — the board at 192.168.0.50, this host at its configured peer
--- 192.168.0.190:30491 (the board accepts and answers only that endpoint):
+-- Bench suite for tcu's E2E-protected SOME/IP receive path (REQ-E2E-002 on eth, emb #299), driven
+-- by blobly_net over the LAN — tcu (the NUCLEO-H723) at 192.168.0.51, this host at the bench
+-- tester's endpoint 192.168.0.190:30491, tcu's peer (it accepts and answers only that endpoint):
 --
---   <blobly_net>/cmd/script runner  examples/h735_someip/test/eth_e2e.lua
+--   BLOBLY_NET=/path/to/blobly_net; v -enable-globals -path "@vlib|@vmodules|$BLOBLY_NET/modules" \
+--     run $BLOBLY_NET/cmd/script/run.v examples/system_full/test/tcu_e2e.lua
 --
 -- Give the board ~15 s after a flash or reset: NetX and the PHY link come up first, and a run
--- before that hears nothing at all.
+-- before that hears nothing at all. The first leg SENDS before anything listens, which a WSL
+-- bench needs: the Windows firewall drops an unsolicited inbound datagram until the host has
+-- sent to that endpoint once.
 --
--- emb #299 on silicon: the H735's SOME/IP receive path reports E2E's verdict (REQ-E2E-002).
--- BenchCmdSafe 0x8011: level@0, counter@1, CRC@2, Data ID 0x22, P01, 500 ms timeout.
--- BenchSafeStatus 0x8005 carries back { level@0, lost@1 (u16 LE), status@3 }: status 1 ok,
--- 2 timeout, 3 integrity; lost = the frames the E2E sequence showed missing.
-local to = "192.168.0.50:30490"
+-- The wire is system.toml's tel segment. BenchCmdSafe 0x8011: level@0, counter@1, CRC@2, Data ID
+-- 0x22, AUTOSAR E2E Profile 1, 500 ms timeout. BenchSafeStatus 0x8005 carries back
+-- { level@0, missed@1 (u16 LE), verdict@3 }: verdict 1 ok, 2 timeout, 3 integrity; missed = the
+-- frames the E2E sequence showed missing.
+local to = "192.168.0.51:30490"
 local ctr = 0
 local function safe(level, corrupt, skip)
   ctr = (ctr + 1 + (skip or 0)) % 15

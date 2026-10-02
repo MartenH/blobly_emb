@@ -110,7 +110,7 @@ to      = "compute"
 
 
 # --- The telematics segment's signals + the events that carry them (#245) ---
-# Byte for byte as examples/h735_someip / host_someip: load u8@0, ticks u32@1 LE, wraps u16@5,
+# Byte for byte as examples/host_someip: load u8@0, ticks u32@1 LE, wraps u16@5,
 # with the E2E trailer at ctr@7 / crc@8 (data_id 0x21). The wire is unchanged by moving the
 # declaration here — the same blobly_net oracle verifies it.
 [[signal]]
@@ -161,6 +161,44 @@ name    = "BenchEcho"
 bus     = "tel"
 id      = 0x8004
 signals = ["EchoVal"]
+tx      = { mode = "event", min_delay_ms = 30 }
+
+# the PROTECTED rx path (REQ-E2E-002 on the SOME/IP receive path, #299): the bench sends a level
+# behind an AUTOSAR E2E Profile 1 trailer (Data ID 0x22, counter@1, CRC@2) with its own 500 ms
+# sender-loss timeout, and tcu reports what it received AND the receive status back on
+# BenchSafeStatus — level@0, missed u16@1, verdict@3 (an event's fields are laid out by name) —
+# so the bench reads E2E's verdict (ok 1 / timeout 2 / integrity 3) and the frames the sequence
+# showed missing off the wire. The receiver's `status` and `lost` are the bridge's, added to tcu's
+# copy of LampCmdSafe by sysgen; only `level` is on the wire. SafeStatus names them differently
+# because `status`/`lost` in system.toml mean that bridge-filled metadata, never a payload field.
+# The byte offsets follow from the field NAMES (sorted), and test/tcu_e2e.lua decodes them at fixed
+# offsets: renaming a field moves its bytes, which test/tel_layout_test.v catches.
+[[signal]]
+name   = "LampCmdSafe"
+fields = { level = "u8" }
+producer = "tester"
+bus    = "tel"
+frame  = "BenchCmdSafe"
+
+[[signal]]
+name   = "SafeStatus"
+fields = { level = "u8", verdict = "u8", missed = "u16" }
+producer = "tcu"
+bus    = "tel"
+frame  = "BenchSafeStatus"
+
+[[frame]]
+name    = "BenchCmdSafe"
+bus     = "tel"
+id      = 0x8011
+signals = ["LampCmdSafe"]
+e2e     = { data_id = 0x22, counter_pos = 1, crc_pos = 2, timeout_ms = 500 }
+
+[[frame]]
+name    = "BenchSafeStatus"
+bus     = "tel"
+id      = 0x8005
+signals = ["SafeStatus"]
 tx      = { mode = "event", min_delay_ms = 30 }
 
 # GwUptime: sysnode's own event on the telematics segment (ROADMAP rung 6). The gateway is a
