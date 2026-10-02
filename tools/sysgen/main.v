@@ -107,37 +107,17 @@ fn main() {
 			}
 			exit(1)
 		}
-		// defer the loom2v TARGET gate ONLY for the nodes P2c will handle: a multi-bus
-		// GATEWAY (speaks >1 DBC, route form not consumed by loom2v yet) and a THREADX
-		// node on a non-index-0 bus (the FDCAN Rx-ISR glue serves index 0 today). A
-		// HOST / bare-metal node on a secondary bus is STILL gated — loom2v's
-		// non-threadx checks (e.g. bare-metal external signals) must not be masked, and
-		// the host emitter already handles multiple buses (docs/multi-node.md, P2c).
-		bus := can_bus_of(sys, n) or {
+		// loom2v runs on EVERY node, with the DBC its node build hands it: the node gate's rules
+		// ([uds] tables, DID gates, DoIP, ...) are loom2v's, so a node it is not run on is a node
+		// the system gate cannot refuse (#351). A gateway gets the merged DBC its Makefile
+		// builds (tools/dbcmerge, run here the same way); every other node its one CAN bus's.
+		lerrs := loom2v_gate(sys, n, gen_path, gen_dir) or {
 			eprintln('sysgen: node "${n.name}": ${err}')
 			exit(1)
 		}
-		// A someip node is NOT one of those cases: it has no DBC at all, so the single-dbc
-		// precheck has nothing to trip over and every reason to run — skipping it printed "ok"
-		// for target-invalid configs (a ThreadX priority out of range, say) that only the node
-		// build would have caught (codex on #245).
-		leaf := sys.is_someip_leaf(n)
-		if (n.buses.len > 1 && !leaf) || (n.view.is_threadx && bus.kind != 'someip'
-			&& bus.interface != 'can0') {
-			// The gateway (multi-bus) and a non-can0 leaf need DBC handling the single-dbc
-			// loom2v_errors() precheck can't do (the gateway builds a merged DBC), so skip the
-			// inline precheck — the node's own Makefile runs loom2v + the cross-build. Both are
-			// generated ThreadX targets now (the gateway's multi-bus comm owner forwards its
-			// layout-identical routes on-target).
-			tag := if n.buses.len > 1 { 'gateway, multi-bus ThreadX comm owner' } else { 'threadx non-can0 node' }
-			println('sysgen: ${n.name} -> ${gen_path} (ok, ${tag}; validated by the node build)')
-			continue
-		}
-		dbc_path := if os.is_abs_path(bus.dbc) { bus.dbc } else { os.join_path(gen_dir, bus.dbc) }
-		lerrs := sysmodel.loom2v_errors(gen_path, dbc_path)
 		if lerrs.len > 0 {
 			for e in lerrs {
-				eprintln('sysgen: generated ${n.name}: loom2v: ${e}')
+				eprintln('sysgen: generated ${n.name}: ${e}')
 			}
 			exit(1)
 		}
@@ -566,6 +546,52 @@ fn inside(root string, target string) bool {
 	}
 	sep := if r.ends_with(os.path_separator) { '' } else { os.path_separator }
 	return t.starts_with(r + sep)
+}
+
+// loom2v_gate runs loom2v on a generated node with the DBC its node build uses, returning the
+// node gate's refusals (each prefixed with the step that refused). A gateway's Makefile merges
+// its CAN buses' DBCs with tools/dbcmerge and hands loom2v the merge, so this does the same, in
+// a private scratch directory; a merge refusal is a node-build refusal too.
+fn loom2v_gate(sys sysmodel.System, n sysmodel.Node, gen_path string, gen_dir string) ![]string {
+	if n.buses.len > 1 && !sys.is_someip_leaf(n) {
+		mut dbcs := []string{}
+		for bn in n.buses {
+			b := sys.bus_by_name(bn) or { return error('bus "${bn}" not declared') }
+			if b.kind == 'someip' || b.dbc == '' {
+				continue
+			}
+			dbcs << dbc_in(gen_dir, b.dbc)
+		}
+		if dbcs.len < 2 {
+			dbc := if dbcs.len == 1 { dbcs[0] } else { '' }
+			return prefixed('loom2v', sysmodel.loom2v_errors(gen_path, dbc))
+		}
+		tmp := sysmodel.private_temp_dir('sysgen_merge')!
+		defer {
+			os.rmdir_all(tmp) or {}
+		}
+		merged := os.join_path(tmp, 'merged.dbc')
+		merrs := sysmodel.dbcmerge_errors(merged, dbcs)
+		if merrs.len > 0 {
+			return merrs
+		}
+		return prefixed('loom2v', sysmodel.loom2v_errors(gen_path, merged))
+	}
+	bus := can_bus_of(sys, n)!
+	return prefixed('loom2v', sysmodel.loom2v_errors(gen_path, dbc_in(gen_dir, bus.dbc)))
+}
+
+// dbc_in resolves a bus's `dbc` the way the generated file does: relative to the directory the
+// generated configs live in (the system dir, or the --out tree copy_dbcs filled). '' stays ''.
+fn dbc_in(gen_dir string, dbc string) string {
+	if dbc == '' || os.is_abs_path(dbc) {
+		return dbc
+	}
+	return os.join_path(gen_dir, dbc)
+}
+
+fn prefixed(step string, errs []string) []string {
+	return errs.map('${step}: ${it}')
 }
 
 // can_bus_of: the bus whose DBC the loom2v precheck needs. For a someip LEAF that is its CAN

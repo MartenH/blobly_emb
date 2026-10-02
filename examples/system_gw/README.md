@@ -82,5 +82,5 @@ BLOBLY_NET=$HOME/repos/blobly_net bash ../../../../scripts/integration-test.sh .
 - **Frame (raw-PDU) routing** with the full-contract compare (P2b).
 - The **target multi-bus comm owner** (a channel + Rx ISR per bus, multiplexed
   into one thread) and the FDCAN1↔FDCAN2 bench (P2c). The nodes run on the host
-  emitter for now (ecucheck still gates the schema); the loom2v target gate for
-  a multi-bus node lands with P2c.
+  emitter for now. `sysgen` gates a multi-bus node with ecucheck and loom2v alike,
+  the latter on the merged DBC the node build uses (#351).

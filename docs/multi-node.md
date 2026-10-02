@@ -550,8 +550,10 @@ Cross-bus *sleep bridging* (wake on A wakes B) remains a later decision on top.
      (one `[bus.*]` per bus with its DBC + the resolved `[[route]]` with concrete
      src/dst frames); `syscheck` makes reachability trust a signal route and
      enforces route-cycle (`-011`) + routed-cell single-writer (`-012`). ecucheck
-     learned the per-bus `dbc` + signal-route schema. The loom2v **target** gate is
-     deferred for gateway systems (that is P2c).
+     learned the per-bus `dbc` + signal-route schema. The loom2v **target** gate was
+     deferred for gateway systems then; since #351 `sysgen` runs it on every node, a
+     gateway on the merged DBC its node build makes (`tools/dbcmerge`, the same tool),
+     so the system gate refuses whatever the node build refuses.
    - **P2a.2 — runtime forwarder (DONE).** loom2v lowers a signal route through the
      destination frame's own COM producer. **P2a.2** (the on-receipt common path)
      decoded + re-encoded raw and sent on receipt; **P2a.2b** moved it to the
