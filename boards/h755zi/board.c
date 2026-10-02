@@ -124,7 +124,7 @@ void board_can_clock_pins_init(void) {
 	while ((RCC->CR & RCC_CR_HSERDY) == 0u) {
 	}
 	/* FDCAN kernel clock from PLL2_Q = 80 MHz (was HSE 8 MHz). 8 MHz + 2 Mbit BRS leaves only 4 tq
-	 * in the data phase and drives the node bus-off (documented on silicon, examples/h723_canecho);
+	 * in the data phase and drives the node bus-off (documented on silicon on the H723);
 	 * BRS needs a PLL-derived clock. A common 80 MHz FDCAN kernel across the FD boards makes the
 	 * bit timing + sample points identical by construction. PLL2 otherwise unused. HSE 8 /DIVM2=2 =
 	 * 4 MHz ref, xN2=80 = 320 MHz VCO (wide), /Q2=4 = 80 MHz. No spread-spectrum, no FRACN. */

@@ -1,5 +1,5 @@
 /* STM32H755 (CM7, flash bank 1)IG: 1 MB flash @ 0x08000000, 128 KB DTCM @ 0x20000000.
- * Same minimal script as h735_blinky. The FDCAN message RAM (SRAMCAN) is a fixed
+ * The minimal bare-metal script. The FDCAN message RAM (SRAMCAN) is a fixed
  * peripheral address the driver writes directly, so it is NOT placed here — this
  * script only covers our code (flash) and .data/.bss/stack (DTCM). */
 ENTRY(Reset_Handler)

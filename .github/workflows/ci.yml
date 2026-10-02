@@ -12,7 +12,8 @@ name: ci
 #
 # Every STM32H7 image is gated, ThreadX and NetX Duo included: `make deps` turned out to take
 # about ten seconds, not the minutes this job was first scoped around. The full sweep costs a few
-# minutes of runner time and immediately found examples/threadx_h735 broken on main.
+# minutes of runner time and immediately found a hand-written ThreadX example (since retired)
+# broken on main.
 
 on:
   push:
@@ -48,7 +49,7 @@ jobs:
       #
       # Bump .v-version deliberately, and re-run the full local gate on the new compiler:
       #   host  — v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples
-      #   cross — the 24 STM32H7 images (the loop in the cross job below)
+      #   cross — the 20 STM32H7 images (the loop in the cross job below)
       - name: Install V (pinned prebuilt release, see .v-version)
         run: |
           set -euo pipefail
@@ -201,7 +202,7 @@ jobs:
       #
       # Bump .v-version deliberately, and re-run the full local gate on the new compiler:
       #   host  — v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples
-      #   cross — the 24 STM32H7 images (the loop in the cross job below)
+      #   cross — the 20 STM32H7 images (the loop in the cross job below)
       - name: Install V (pinned prebuilt release, see .v-version)
         run: |
           set -euo pipefail
@@ -217,7 +218,7 @@ jobs:
 
       # ALL of them. `make deps` clones CMSIS, ThreadX and NetX Duo in about ten seconds
       # together — the "minutes, not seconds" this job was originally scoped around was simply
-      # wrong, and it cost us: examples/threadx_h735 had not compiled since blob_can_recv gained
+      # wrong, and it cost us: a hand-written ThreadX example (since retired) had not compiled since blob_can_recv gained
       # a parameter, and nothing noticed because the gate skipped it.
       - name: Third-party sources (CMSIS + ThreadX + NetX Duo, pinned)
         run: make deps

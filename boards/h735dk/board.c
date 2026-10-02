@@ -1,6 +1,6 @@
 /* STM32H735G-DK board bring-up for the h735_app showcase — register-level, no HAL.
  *
- * Same FDCAN1 bring-up as h735_canecho, plus a bare-metal timebase: the Loom and the
+ * The FDCAN1 bring-up (PH13/PH14, AF9), plus a bare-metal timebase: the Loom and the
  * telemetry loop need a monotonic microsecond clock (host/sim gets it from POSIX
  * clock_gettime; on target there is none), so we run the Cortex-M7 DWT cycle counter
  * and divide by the achieved CPU MHz.
