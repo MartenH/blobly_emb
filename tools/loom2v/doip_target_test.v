@@ -103,7 +103,8 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 	// boot: the identity before any thread runs (DID 0xF190 is the VIN), then NetX; the IP thread
 	// at the comm thread's priority, the doip threads just below it
 	assert glue.contains('g_doip.entity_addr = u16(0x7b0)')
-	assert glue.contains("doip_vin := 'BLOBLYH735THREADX'")
+	assert glue.contains('g_doip.vin[0] = u8(0x42)') && glue.contains('g_doip.vin[16] = u8(0x58)')
+	assert !glue.contains("'BLOBLYH735THREADX'"), 'a string in the generated runtime'
 	assert glue.contains('g_doip.serve.answer = doip_answer')
 	assert glue.contains("C.doip_net_create(c'192.168.0.50', u32(10), u32(11))") // comm at 10 here
 	assert !glue.contains('functional_addr'), 'the default functional address is comm/doip\'s'

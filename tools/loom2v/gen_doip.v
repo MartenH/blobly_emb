@@ -217,10 +217,11 @@ fn doip_target_create(m Model, comm_prio int) []string {
 	if d.functional != 0 {
 		g << '\tg_doip.functional_addr = u16(0x${d.functional.hex()})'
 	}
-	g << "\tdoip_vin := '${doip_vin(m)}' // DID 0xF190"
-	g << '\tfor i in 0 .. 17 {'
-	g << '\t\tg_doip.vin[i] = doip_vin[i]'
-	g << '\t}'
+	// the VIN, DID 0xF190, byte by byte: the generated runtime holds fixed arrays, no strings
+	g << '\t// VIN ${doip_vin(m)} (DID 0xF190)'
+	for i, b in doip_vin(m).bytes() {
+		g << '\tg_doip.vin[${i}] = u8(0x${b.hex()})'
+	}
 	g << '\tg_doip.serve.answer = doip_answer'
 	g << '\tC.doip_mb_init(&g_doip_req[0], &g_doip_resp[0])'
 	g << "\tC.doip_net_create(c'${d.address}', u32(${comm_prio}), u32(${comm_prio + 1})) // -1: DoIP stays down, the node runs on"

@@ -31,6 +31,7 @@
 #define MS_TICKS(ms) ((ULONG)(ms) * TX_TIMER_TICKS_PER_SECOND / 1000u)
 
 #define DOIP_PORT  13400
+#define IDENT_PER_PASS 4 /* identification requests answered per 200 ms service pass */
 #define TCP_WINDOW 2048
 
 #define POOL_PAYLOAD 1568u
@@ -390,7 +391,9 @@ static void svc_entry(ULONG arg) {
 		nx_ip_driver_direct_command(&ip, NX_LINK_GET_STATUS, &up);
 		net_link_up = up;
 		NX_PACKET *p;
-		while (nx_udp_socket_receive(&udp_sock, &p, NX_NO_WAIT) == NX_SUCCESS) {
+		/* a bounded number per pass: a flood of requests must not keep this thread from its sleep,
+		 * where the doip thread at the same priority runs (the rest wait, or the queue drops them) */
+		for (int k = 0; k < IDENT_PER_PASS && nx_udp_socket_receive(&udp_sock, &p, NX_NO_WAIT) == NX_SUCCESS; k++) {
 			unsigned char req[64], resp[64];
 			ULONG got = 0, peer_ip = 0;
 			UINT peer_port = 0;
