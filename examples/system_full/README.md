@@ -28,6 +28,7 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 | **Tester as a node**: `tester` (declaration only) produces `HostLedLevel` → `domain`'s LD3 as PWM; blobly_net restbus-simulates it | `tester` → `domain` | ✅ on-silicon via the CANsub (`simulation: tester`, H755 TIM12 CCR1 follows the sine) |
 | **SOME/IP-over-Ethernet** (cyclic events + E2E + RPC rx) | `tcu` | ✅ silicon-validated (ping, tx/rx, E2E) |
 | **DoIP** (the UDS server over TCP/UDP 13400, one session with CAN) | `sysnode` | ✅ on-silicon (#338, hand-authored `[doip]`); declared in `system.toml` since rung 6 — ⏳ bench re-run pending |
+| **DoIP entity transport** (routing-activation policy — the bench tester alone, `testers = [0x0E00]` — alive check, entity status, power mode, inactivity timers; docs/net.md) | `sysnode` | ⏳ builds; bench: `test/doip_entity.py` |
 | A **gateway on the SOME/IP segment** (`GwStatus` to the bench, beside its CAN routes; one NetX for SOME/IP + DoIP) | `sysnode` | ⏳ builds; **bench-pending** |
 
 ---

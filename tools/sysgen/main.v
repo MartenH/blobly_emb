@@ -788,6 +788,8 @@ fn doip_section(node sysmodel.Node) []string {
 	if node.has_doip_functional {
 		b << 'functional_address = 0x${node.doip_functional.hex().to_upper()}'
 	}
+	// the transport policy, one-to-one under the same names (what is absent takes the default)
+	b << node.doip_policy.lines()
 	b << ''
 	return b
 }

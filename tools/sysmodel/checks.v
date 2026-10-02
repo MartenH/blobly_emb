@@ -9,6 +9,7 @@ module sysmodel
 
 import os
 import tools.candb
+import tools.doipcfg
 
 pub enum Severity {
 	error
@@ -2786,9 +2787,10 @@ fn check_doip(s System) []Issue {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-005'
-				msg:      'node "${n.name}": doip has unknown key "${k}" — it takes `logical` (the entity address) and optionally `functional`'
+				msg:      'node "${n.name}": doip has unknown key "${k}" — it takes `logical` (the entity address) and optionally `functional`, ${doipcfg.keys().map('`' + it + '`').join(', ')}'
 			}
 		}
+		issues << check_doip_policy(n)
 		if !n.has_doip_logical {
 			issues << Issue{
 				severity: .error
@@ -2867,7 +2869,7 @@ fn check_doip(s System) []Issue {
 				msg:      'nodes "${n.name}" and "${o.name}" both answer at "${n.endpoint}" — DoIP brings that address up on the network, so it names one node'
 			}
 		}
-		// the server DoIP carries is the node's ONE diagnostic server: its [[isotp]] connection,
+		// the server DoIP carries is the node's ONE diagnostic server: its [isotp] connection,
 		// on the ids the system allocates it (diag)
 		if n.diag.req == 0 && n.diag.rsp == 0 {
 			issues << Issue{
@@ -2880,7 +2882,7 @@ fn check_doip(s System) []Issue {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-005'
-				msg:      'node "${n.name}": declares `doip` but its ecu.toml has ${n.view.isotp_conns.len} [[isotp]] connection(s) — DoIP carries the node\'s ONE diagnostic server, so declare exactly one'
+				msg:      'node "${n.name}": declares `doip` but its ecu.toml has ${n.view.isotp_conns.len} [isotp] connection(s) — DoIP carries the node\'s ONE diagnostic server, so declare its [uds] server and its [isotp] connection'
 			}
 		}
 		if !n.view.is_threadx {
@@ -2892,6 +2894,22 @@ fn check_doip(s System) []Issue {
 		}
 	}
 	return issues
+}
+
+// check_doip_policy: a node's `doip` transport policy, by the checker the node gate (loom2v
+// validate_doip) applies to the [doip] it is lowered into (tools/doipcfg)
+fn check_doip_policy(n Node) []Issue {
+	mut errs := n.doip_not_int.map('`${it}` must be ' + if it in doipcfg.list_keys {
+		'a list of integers'
+	} else {
+		'an integer'
+	})
+	errs << n.doip_policy.problems()
+	return errs.map(Issue{
+		severity: .error
+		req:      'REQ-TOPO-005'
+		msg:      'node "${n.name}": doip ${it}'
+	})
 }
 
 // check_composed_unlowered: what only the dissolution's lowering carries, refused in a COMPOSED

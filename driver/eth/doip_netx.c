@@ -7,7 +7,8 @@
  *                      `doip` waits for the TCP sequence-number seed, then for the PHY link, opens
  *                      UDP 13400 (announcements, identification) and the TCP 13400 listener, and
  *                      runs the generated V loop (blobly_doip_run); `doip-svc` polls the link and
- *                      answers identification requests.
+ *                      answers the UDP requests (identification, entity status, power mode).
+ *   doip_net_timers  — before doip_net_create: the ISO 13400 inactivity limits ([doip]).
  *   doip_net_seed    — from the comm thread, once it has the TRNG: NetX draws TCP initial sequence
  *                      numbers from rand(), and predictable ones make a session spoofable.
  *   doip_stream_*    — the TCP byte pipe the V loop drives (one tester at a time, ISO 13400 idle
@@ -22,6 +23,7 @@
 #include "tx_api.h"
 #include "nx_api.h"
 #include "netx_up.h"
+#include "doip_idle.h"
 
 #define DOIP_PORT  13400
 #define IDENT_PER_PASS 4 /* identification requests answered per 200 ms service pass */
@@ -43,7 +45,7 @@ volatile ULONG doip_mb_timeouts;
 volatile ULONG doip_setup_failed; /* the sockets could not be made: DoIP is down */
 
 extern void blobly_doip_run(void);                                          /* generated V loop */
-extern int blobly_doip_ident(const unsigned char *req, int len, unsigned char *resp); /* generated */
+extern int blobly_doip_udp(const unsigned char *req, int len, unsigned char *resp); /* generated */
 extern void comm_wake(void);                                                /* comm_glue.c */
 
 void doip_net_seed(unsigned int seed) {
@@ -166,18 +168,27 @@ int doip_mb_take_dropped(void) {
 
 /* ---- the TCP byte pipe -------------------------------------------------------------------- */
 
-static UINT tcp_connected;
+static volatile UINT tcp_connected; /* read by the svc and comm threads too */
 static NX_PACKET *rx_pending; /* partially consumed receive (packet > caller's buf) */
 static ULONG rx_pending_off;
-static ULONG rx_idle_ticks;   /* ticks since the peer last sent anything */
-static UINT sess_activated;   /* V-side routing activation state (selects the idle limit) */
-static ULONG conn_start;      /* tick of accept: the pre-activation deadline base */
+static UINT listening;        /* the TCP listener is opened by the first receive (doip_stream_recv) */
 
-/* ISO 13400 inactivity: 2 s initial (a connection that never activates routing must not hold the
- * one server socket — measured from ACCEPT, so trickled bytes don't extend it), 5 min general idle
- * after activation. */
-#define DOIP_IDLE_INITIAL (2u * NX_IP_PERIODIC_RATE)
-#define DOIP_IDLE_GENERAL (300u * NX_IP_PERIODIC_RATE)
+/* ISO 13400 inactivity: T_TCP_Initial_Inactivity (default 2 s: a connection that never activates
+ * routing must not hold the one server socket — measured from ACCEPT, so trickled bytes don't
+ * extend it), T_TCP_General_Inactivity (default 5 min idle after activation). Set from [doip] by
+ * doip_net_timers before the threads exist (comm/doip policy.v bounds them). */
+static doip_idle_t idle = {2u * NX_IP_PERIODIC_RATE, 300u * NX_IP_PERIODIC_RATE, 0u, 0u, 0};
+
+/* ms to ticks in 64 bits, saturated: MS_TICKS is 32-bit and policy.v's bounds assume a 1 kHz tick */
+static ULONG ms_ticks_sat(unsigned int ms) {
+	unsigned long long t = (unsigned long long)ms * TX_TIMER_TICKS_PER_SECOND / 1000u;
+	return t > 0xFFFFFFFFull ? (ULONG)0xFFFFFFFFul : (ULONG)t;
+}
+
+void doip_net_timers(unsigned int initial_ms, unsigned int general_ms) {
+	idle.initial = (uint32_t)ms_ticks_sat(initial_ms);
+	idle.general = (uint32_t)ms_ticks_sat(general_ms);
+}
 
 /* drop the connection and return the socket to listening; the comm thread hears of it */
 static int stream_recycle(void) {
@@ -202,25 +213,39 @@ static int stream_recycle(void) {
  * bound_next, and the next accept sends a SYN-ACK to a null address and trips an NX_ASSERT that
  * wedges the IP thread (bench-paid on examples/h735_doip). timeout_ticks bounds the receive. */
 int doip_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
+	/* the listener opens when the loop is first ready to serve (after the boot announcements), so a
+	 * tester cannot queue a connection whose initial timer would only start later */
+	if (!listening) {
+		if (nx_tcp_server_socket_listen(blob_net_ip(), DOIP_PORT, &tcp_sock, 1, NX_NULL) != NX_SUCCESS) {
+			doip_setup_failed = 1; /* DoIP stays down: park rather than spin */
+			for (;;) {
+				tx_thread_sleep(TX_TIMER_TICKS_PER_SECOND);
+			}
+		}
+		listening = 1;
+	}
 	if (!tcp_connected) {
 		if (nx_tcp_server_socket_accept(&tcp_sock, NX_WAIT_FOREVER) != NX_SUCCESS) {
 			return 0;
 		}
 		tcp_connected = 1;
-		rx_idle_ticks = 0;
-		conn_start = tx_time_get();
+		doip_idle_accept(&idle, (uint32_t)tx_time_get());
 	}
-	/* the pre-activation deadline is ABSOLUTE from accept */
-	if (!sess_activated && (tx_time_get() - conn_start) >= DOIP_IDLE_INITIAL) {
+	/* no receive waits past the inactivity deadline that is running (doip_idle.h): bytes arriving
+	 * after it are never served on a connection that should already be closed */
+	uint32_t left = doip_idle_left(&idle, (uint32_t)tx_time_get());
+	if (left == 0u) {
 		return stream_recycle();
+	}
+	if (timeout_ticks > left) {
+		timeout_ticks = (unsigned int)left;
 	}
 	if (!rx_pending) {
 		UINT s = nx_tcp_socket_receive(&tcp_sock, &rx_pending, timeout_ticks);
 		if (s != NX_SUCCESS) {
 			rx_pending = NX_NULL;
 			if (s == NX_NO_PACKET) {
-				rx_idle_ticks += timeout_ticks;
-				return (sess_activated && rx_idle_ticks >= DOIP_IDLE_GENERAL) ? stream_recycle() : 0;
+				return doip_idle_left(&idle, (uint32_t)tx_time_get()) == 0u ? stream_recycle() : 0;
 			}
 			return stream_recycle(); /* peer closed, or an error */
 		}
@@ -234,9 +259,15 @@ int doip_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
 		nx_packet_release(rx_pending);
 		rx_pending = NX_NULL;
 	}
-	rx_idle_ticks = 0;
+	doip_idle_rx(&idle, (uint32_t)tx_time_get());
 	doip_rx_bytes += got;
 	return (int)got;
+}
+
+/* the TCP_DATA sockets open now (0 or 1), for entity status asked over UDP — read from the svc
+ * thread, a word the doip thread writes */
+int doip_stream_open(void) {
+	return tcp_connected ? 1 : 0;
 }
 
 /* doip_tx_pending: answer bytes handed to TCP that the tester has not acknowledged yet — the comm
@@ -260,6 +291,7 @@ int doip_stream_send(const unsigned char *buf, int len) {
 		return stream_recycle();
 	}
 	doip_tx_bytes += (ULONG)len;
+	doip_idle_tx(&idle, (uint32_t)tx_time_get()); /* an answer in time restarts T_TCP_General */
 	mb_sent_seq = mb_returned;
 	comm_wake();
 	return len;
@@ -273,10 +305,7 @@ void doip_stream_drop(void) {
 }
 
 void doip_stream_notify_activated(int on) {
-	if (on && !sess_activated) {
-		rx_idle_ticks = 0; /* the general-inactivity clock starts at activation */
-	}
-	sess_activated = (UINT)on;
+	doip_idle_activated(&idle, on);
 }
 
 void doip_udp_broadcast(const unsigned char *buf, int len) {
@@ -310,8 +339,9 @@ void doip_eid(unsigned char eid[6]) {
 
 /* ---- threads ------------------------------------------------------------------------------ */
 
-/* the link poll (which also resyncs MACCR after renegotiation) and vehicle identification on
- * UDP 13400 — the V loop parks in accept between testers, so neither can live there */
+/* the link poll (which also resyncs MACCR after renegotiation) and the UDP 13400 requests —
+ * vehicle identification, entity status, power mode — the V loop parks in accept between
+ * testers, so neither can live there */
 static void svc_entry(ULONG arg) {
 	(void)arg;
 	while (!sockets_up) {
@@ -330,7 +360,7 @@ static void svc_entry(ULONG arg) {
 			nx_udp_packet_info_extract(p, &peer_ip, NX_NULL, &peer_port, NX_NULL);
 			nx_packet_data_extract_offset(p, 0, req, sizeof(req), &got);
 			nx_packet_release(p);
-			int n = blobly_doip_ident(req, (int)got, resp);
+			int n = blobly_doip_udp(req, (int)got, resp);
 			if (n <= 0) {
 				continue;
 			}
@@ -355,8 +385,7 @@ static void doip_entry(ULONG arg) {
 	if (nx_udp_socket_create(blob_net_ip(), &udp_sock, "doip-udp", NX_IP_NORMAL, NX_DONT_FRAGMENT, 0x80, 5) != NX_SUCCESS ||
 	    nx_udp_socket_bind(&udp_sock, DOIP_PORT, NX_WAIT_FOREVER) != NX_SUCCESS ||
 	    nx_tcp_socket_create(blob_net_ip(), &tcp_sock, "doip-tcp", NX_IP_NORMAL, NX_DONT_FRAGMENT, 0x80,
-	                         TCP_WINDOW, NX_NULL, NX_NULL) != NX_SUCCESS ||
-	    nx_tcp_server_socket_listen(blob_net_ip(), DOIP_PORT, &tcp_sock, 1, NX_NULL) != NX_SUCCESS) {
+	                         TCP_WINDOW, NX_NULL, NX_NULL) != NX_SUCCESS) {
 		/* DoIP stays down: park rather than run the loop on a half-made socket (which would spin) */
 		doip_setup_failed = 1;
 		for (;;) {

@@ -2,6 +2,8 @@ module doip
 
 // Host-run DoIP framing tests (sim-first): the same bytes the H735 will see over
 // TCP, without hardware. @verifies REQ-NET-007 (framing + the uds.Server reuse).
+// The entity half (routing-activation policy, alive check, entity status, power mode) is in
+// entity_test.v.
 
 // build a DoIP frame into dst; returns total length
 fn frame(dst &u8, ptype u16, payload []u8) int {
@@ -145,7 +147,7 @@ fn test_vehicle_ident_requests() {
 	mut resp := [64]u8{}
 	// 0x0001 (any): answered with the announcement
 	n := frame(&req[0], 0x0001, []u8{})
-	assert s.ident_response(&req[0], n, &eid[0], &resp[0]) == 40
+	assert s.udp_response(&req[0], n, &eid[0], 0, &resp[0]) == 40
 	assert resp[2] == 0x00 && resp[3] == 0x04
 	// 0x0003 by VIN: match answers, mismatch is silence
 	mut vp := []u8{len: 17}
@@ -153,21 +155,21 @@ fn test_vehicle_ident_requests() {
 		vp[i] = vin[i]
 	}
 	n2 := frame(&req[0], 0x0003, vp)
-	assert s.ident_response(&req[0], n2, &eid[0], &resp[0]) == 40
+	assert s.udp_response(&req[0], n2, &eid[0], 0, &resp[0]) == 40
 	req[8] = `X`
-	assert s.ident_response(&req[0], n2, &eid[0], &resp[0]) == 0
+	assert s.udp_response(&req[0], n2, &eid[0], 0, &resp[0]) == 0
 	// 0x0002 by EID: mismatch is silence
 	n3 := frame(&req[0], 0x0002, [u8(9), 9, 9, 9, 9, 9])
-	assert s.ident_response(&req[0], n3, &eid[0], &resp[0]) == 0
+	assert s.udp_response(&req[0], n3, &eid[0], 0, &resp[0]) == 0
 	// truncated / non-ident types: silence
-	assert s.ident_response(&req[0], 4, &eid[0], &resp[0]) == 0
+	assert s.udp_response(&req[0], 4, &eid[0], 0, &resp[0]) == 0
 }
 
 fn test_unknown_type_nacks() {
 	mut s := Server{}
 	mut inb := [max_msg]u8{}
 	mut resp := [max_msg]u8{}
-	n := frame(&inb[0], 0x0007, [u8(0)]) // alive check: out of P3b scope
+	n := frame(&inb[0], 0x4005, []u8{}) // not a payload type this entity serves
 	rlen := s.feed(&inb[0], n, &resp[0], max_msg)
 	assert rlen == 9
 	assert resp[8] == 0x01 // unknown payload type
@@ -248,6 +250,7 @@ fn test_routing_length_must_be_exact() {
 	assert rlen == 9
 	assert resp[8] == 0x04 // invalid payload length
 	assert !s.activated
+	assert s.fatal // the header handler closes the socket after an invalid length
 }
 
 fn test_ident_accepts_generic_version() {
@@ -262,7 +265,7 @@ fn test_ident_accepts_generic_version() {
 	req[1] = 0x00
 	req[2] = 0x00
 	req[3] = 0x01 // vehicle identification request, plen 0
-	assert s.ident_response(&req[0], 8, &eid[0], &resp[0]) == 40
+	assert s.udp_response(&req[0], 8, &eid[0], 0, &resp[0]) == 40
 	assert resp[0] == 0x02 && resp[1] == 0xFD
 }
 

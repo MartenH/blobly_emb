@@ -18,6 +18,7 @@ import rand
 import toml
 import tools.candb
 import tools.ecumodel
+import tools.doipcfg
 
 // Bus — one CAN segment with its own contract. `name` is the system-scope key
 // ([bus.compute]); `interface` is the SocketCAN/driver name a node's ecu.toml
@@ -109,6 +110,11 @@ pub mut:
 	has_doip_functional bool
 	doip_functional_int bool = true
 	doip_unknown        []string // keys of the doip table this schema does not know (typos)
+	// ...and the entity's ISO 13400-2 transport policy (tools/doipcfg), lowered one-to-one into
+	// [doip] under the same names; doip_not_int names every policy key authored as anything but
+	// an integer (a list: anything but a list of integers)
+	doip_policy  doipcfg.Policy
+	doip_not_int []string
 	// --- extracted from the node's ecu.toml (filled by load_node) ---
 	view NodeView
 }
@@ -569,8 +575,9 @@ pub fn parse_system(path string) !System {
 				node.doip_functional = m_u32(dm, 'functional')
 				node.doip_functional_raw = (dm['functional'] or { toml.Any(0) }).i64()
 				node.doip_functional_int = m_is_int(dm, 'functional')
+				node.doip_policy, node.doip_not_int = doipcfg.parse(dm)
 				for k, _ in dm {
-					if k !in ['logical', 'functional'] {
+					if k !in ['logical', 'functional'] && k !in doipcfg.keys() {
 						node.doip_unknown << k
 					}
 				}

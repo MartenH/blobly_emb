@@ -4,6 +4,7 @@ import os
 import rand
 import tools.sysmodel
 import tools.ecumodel
+import tools.doipcfg
 import toml
 
 // Lowering a someip member (#245). The system owns the segment's contract — the service and its
@@ -870,7 +871,7 @@ fn test_a_someip_e2e_frame_needs_a_timeout_longer_than_its_cycle() {
 // is BUILT is refused at the system, and what no single node can see — two entities at one
 // logical address — is refused only there.
 
-// doip_system: tel_system with tcu serving DoIP — a ThreadX node with one [[isotp]] connection
+// doip_system: tel_system with tcu serving DoIP — a ThreadX node with one [isotp] connection
 // and a diag allocation, which is what DoIP carries.
 fn doip_system() sysmodel.System {
 	mut sys := tel_system()
@@ -939,6 +940,115 @@ fn test_doip_needs_a_logical_address_in_the_entity_ranges() {
 	assert doip_errs(sys).any(it.contains('`logical` must be an integer')), doip_errs(sys).str()
 }
 
+// the entity's ISO 13400-2 transport policy is the system's too: lowered one-to-one into [doip]
+// under the same names, absent keys left to comm/doip's defaults
+fn test_the_doip_transport_policy_is_lowered() {
+	mut sys := doip_system()
+	sys.nodes[0].doip_policy = doipcfg.Policy{
+		testers:     [i64(0x0E00), 0x0E80]
+		has_testers: true
+		types:       [i64(0x00), 0xE1]
+		has_types:   true
+		ints:        {
+			'general_inactivity_ms': i64(60000)
+			'announce_count':        0
+		}
+	}
+	assert doip_errs(sys).len == 0, doip_errs(sys).str()
+	sec := doip_section(sys.nodes[0]).join('\n')
+	for want in ['testers = [0x0E00, 0x0E80]', 'activation_types = [0x00, 0xE1]',
+		'general_inactivity_ms = 60000', 'announce_count = 0'] {
+		assert sec.contains(want), sec
+	}
+	assert !sec.contains('initial_inactivity_ms') && !sec.contains('announce_interval_ms'), sec
+	// and nothing of it where nothing is declared
+	plain := doip_section(doip_system().nodes[0]).join('\n')
+	assert !plain.contains('testers') && !plain.contains('_ms'), plain
+}
+
+fn test_a_doip_policy_the_entity_cannot_serve_is_refused() {
+	cases := {
+		'0x0001 is not a tester address':          doipcfg.Policy{
+			testers: [i64(0x0001)]
+		}
+		'lists 0x0E00 twice':                      doipcfg.Policy{
+			testers: [i64(0x0E00), 0x0E00]
+		}
+		'lists 9 addresses':                       doipcfg.Policy{
+			testers: []i64{len: 9, init: 0x0E00 + index}
+		}
+		'`testers` is empty':                      doipcfg.Policy{
+			has_testers: true
+		}
+		'`activation_types` is empty':             doipcfg.Policy{
+			has_types: true
+		}
+		'activation type 0xE0 is not one':         doipcfg.Policy{
+			types: [i64(0xE0)]
+		}
+		'activation type 0x02 is not one':         doipcfg.Policy{
+			types: [i64(0x02)]
+		}
+		'initial <= general':                      doipcfg.Policy{
+			ints: {
+				'initial_inactivity_ms': i64(20000)
+				'general_inactivity_ms': 10000
+			}
+		}
+		'`announce_count` 11':                     doipcfg.Policy{
+			ints: {
+				'announce_count': i64(11)
+			}
+		}
+		'at most 10000 ms in all':                 doipcfg.Policy{
+			ints: {
+				'announce_count':       i64(4)
+				'announce_interval_ms': 3000
+			}
+		}
+	}
+	for want, pol in cases {
+		mut sys := doip_system()
+		sys.nodes[0].doip_policy = pol
+		assert doip_errs(sys).any(it.contains(want)), '${want}: ${doip_errs(sys)}'
+	}
+	for k, want in {
+		'announce_interval_ms': '`announce_interval_ms` must be an integer'
+		'testers':              '`testers` must be a list of integers'
+	} {
+		mut sys := doip_system()
+		sys.nodes[0].doip_not_int = [k]
+		assert doip_errs(sys).any(it.contains(want)), '${want}: ${doip_errs(sys)}'
+	}
+}
+
+// parse: the keys land where the lowering reads them, a non-integer is named, a typo is unknown
+fn test_the_doip_policy_keys_are_parsed() {
+	dir := os.join_path(os.temp_dir(), 'sysgen_doip_policy_${os.getpid()}')
+	os.mkdir_all(dir) or { panic(err) }
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	os.write_file(os.join_path(dir, 'system.toml'), '
+[[node]]
+name = "a"
+ecu  = "a.toml"
+doip = { logical = 0x07A0, testers = [0x0E00], activation_types = [0x00, 0xE1], initial_inactivity_ms = 1000, announce_interval_ms = 2.5, tester = 1 }
+') or {
+		panic(err)
+	}
+	sys := sysmodel.parse_system(os.join_path(dir, 'system.toml')) or { panic(err) }
+	n := sys.nodes[0]
+	assert n.doip_policy.has_testers && n.doip_policy.testers == [i64(0x0E00)]
+	assert n.doip_policy.has_types && n.doip_policy.types == [i64(0x00), 0xE1]
+	assert n.doip_policy.int_of('initial_inactivity_ms') == 1000
+	assert n.doip_policy.int_of('general_inactivity_ms') == 300000 // the default
+	assert n.doip_not_int == ['announce_interval_ms']
+	assert n.doip_unknown == ['tester']
+	// and lowered back as written
+	assert doip_section(n).join('\n').contains('testers = [0x0E00]\nactivation_types = [0x00, 0xE1]\ninitial_inactivity_ms = 1000')
+}
+
 fn test_two_entities_at_one_logical_address_are_refused() {
 	mut sys := doip_system()
 	sys.nodes[1].has_doip = true
@@ -982,7 +1092,7 @@ fn test_doip_needs_the_diagnostic_server_it_carries() {
 	assert doip_errs(sys).any(it.contains('has no `diag` allocation')), doip_errs(sys).str()
 	sys = doip_system()
 	sys.nodes[0].view.isotp_conns = []
-	assert doip_errs(sys).any(it.contains('0 [[isotp]] connection(s)')), doip_errs(sys).str()
+	assert doip_errs(sys).any(it.contains('0 [isotp] connection(s)')), doip_errs(sys).str()
 	sys = doip_system()
 	sys.nodes[0].view.is_threadx = false
 	assert doip_errs(sys).any(it.contains('is not a threadx target')), doip_errs(sys).str()
