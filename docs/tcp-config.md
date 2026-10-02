@@ -23,8 +23,9 @@ And the **seam** that a config-driven version would generalize already exists, c
 > **four-call byte-pipe seam**.
 
 So the protocol logic is already config/V, and the transport is already a shared NetX backend
-(`driver/eth/netx_up.c` + `eth_netx.c`, `net/nx_driver_stm32h7.c`), and DoIP's socket loop is
-generated (`[doip]`, `driver/eth/doip_netx.c`). What is **hand-written per example** elsewhere is the
+(`driver/eth/netx_up.c` + `eth_netx.c`, `net/nx_driver_stm32h7.c`). DoIP's socket ownership is
+shared driver code too (`driver/eth/doip_netx.c`, hand-written once, selected by `[doip]`), with only
+its V framing loop generated. What is **hand-written per example** elsewhere is the
 *socket ownership* — the `accept`/`receive`/`send` loop, the packet-pool sizing, the connection
 lifecycle (idle timeout, disconnect, relisten). That loop is what "TCP-as-config" would generate.
 

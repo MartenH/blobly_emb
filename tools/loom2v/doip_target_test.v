@@ -263,6 +263,9 @@ fn test_doip_and_someip_share_one_netx() {
 	c2, o2, _, _ := generate_ecu('doip_eth_addr', doip_eth_ecu.replace('address         = "192.168.0.50"',
 		'address         = "192.168.0.60"'))
 	assert c2 != 0 && o2.contains('a node has one address'), o2
+	// and one UDP 13400: a SOME/IP endpoint there would take DoIP's socket
+	c4, o4, _, _ := generate_ecu('doip_eth_port', doip_eth_ecu.replace('port    = 30490', 'port    = 13400'))
+	assert c4 != 0 && o4.contains("is DoIP's"), o4
 	// and a node with neither links no network at all
 	_, _, _, mk3 := generate_mk('no_net', '')
 	assert mk3.contains('LOOM_NET_SRCS :=\n'), mk3

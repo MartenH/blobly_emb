@@ -15,6 +15,9 @@ struct DoipCfg {
 
 const doip_vin_did = 0xF190
 
+// ISO 13400's port, TCP and UDP (driver/eth/doip_netx.c DOIP_PORT)
+const doip_port = 13400
+
 fn parse_doip(doc toml.Doc) DoipCfg {
 	dv := doc.value_opt('doip') or { return DoipCfg{} }
 	dm := dv.as_map()
@@ -73,6 +76,10 @@ fn validate_doip(m Model) {
 	// one NetX per image, at one address (driver/eth/netx_up.c): SOME/IP and DoIP share it
 	if eth_thread_on(m) && ip4_octets(m.eth_iface) != ip4_octets(d.address) {
 		panic('loom2v: [doip] address "${d.address}" differs from eth bus "${m.eth}" interface "${m.eth_iface}" — a node has one address')
+	}
+	// and one UDP 13400: DoIP's announcement/identification socket owns it
+	if eth_thread_on(m) && m.someip.port == doip_port {
+		panic('loom2v: [someip] port ${doip_port} is DoIP\'s (UDP 13400, ISO 13400) on this node — pick another')
 	}
 	if !ip4_ok(d.address) {
 		panic('loom2v: [doip] address "${d.address}" is not a host address on its /24 (dotted quad, not .0, .1 or .255)')
