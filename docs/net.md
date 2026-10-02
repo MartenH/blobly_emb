@@ -248,8 +248,8 @@ REQ-NET-006's byte-stream service on silicon: a single-connection TCP echo
 server (port 5007, 2 KB window, re-listens after each disconnect) — verified
 with three full connect/echo/disconnect cycles from a WSL host
 (`echo hi | nc -w2 192.168.0.50 5007`). +13 KB flash for the NetX TCP engine.
-Next: P3b — DoIP (REQ-NET-007): the UDS server over a TCP socket, reusing
-comm/uds + the boot Prog, announced per ISO 13400.
+P3b followed — DoIP (REQ-NET-007), the UDS server over a TCP socket, announced per
+ISO 13400: on its own image first (below), then generated onto a running node (sysnode, below).
 
 ## sysnode — DoIP on a running node (2026-10-02, BENCH-VERIFIED)
 

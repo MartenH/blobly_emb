@@ -563,3 +563,119 @@ fn test_seed_key_exchanges_are_per_transport() {
 	}
 	assert exchange(mut c, mut t, mut &now, key) == [u8(0x67), 0x02], 'the CAN challenge was replaced'
 }
+
+// re-entering the session the bus is in, over the other transport, voids the bus's challenge
+fn test_a_session_reentry_voids_an_outstanding_seed() {
+	mut c := secured_conn()
+	mut t := new_tester()
+	mut now := u64(0)
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	can_seed := exchange(mut c, mut t, mut &now, [u8(0x27), 0x01])[2..]
+	assert remote(mut c, [u8(0x10), 0x03], false)[0] == 0x50 // same session, a new entry
+	mut key := [u8(0x27), 0x02]
+	for b in can_seed {
+		key << b ^ 0xFF
+	}
+	assert exchange(mut c, mut t, mut &now, key) == [u8(0x7F), 0x27, 0x24], 'a key for a void seed'
+	assert c.server.unlocked == 0	// and a bus unlock is not handed back after the other transport re-entered the session
+	seed2 := exchange(mut c, mut t, mut &now, [u8(0x27), 0x01])[2..]
+	mut key2 := [u8(0x27), 0x02]
+	for b in seed2 {
+		key2 << b ^ 0xFF
+	}
+	assert exchange(mut c, mut t, mut &now, key2) == [u8(0x67), 0x02]
+	remote(mut c, [u8(0x10), 0x03], false)
+	assert exchange(mut c, mut t, mut &now, [u8(0x2E), 0x01, 0x02, 0x11]) == [u8(0x7F), 0x2E, 0x33]
+}
+
+// The cross-transport security rule as a model, checked over random interleavings: the session is
+// shared; an unlock belongs to the transport that ran the exchange; a seed is void after ANY session
+// entry; a dropped remote tester ends its unlock and its exchange, and the session too if it entered
+// it last. Each step's answer from the real Connection must be the model's.
+// ask_over: one request over the bus (0) or the other transport (1)
+fn ask_over(tr int, mut c Connection, mut t isotp.Link, mut now &u64, req []u8) []u8 {
+	if tr == 1 {
+		return remote(mut c, req, false)
+	}
+	return exchange(mut c, mut t, mut now, req)
+}
+
+struct SecModel {
+mut:
+	session     u8 = 0x01
+	epoch       int
+	unlocked    [2]bool
+	pending     [2]int = [-1, -1]!
+	remote_owns bool
+}
+
+fn (mut m SecModel) enter(sess u8, remote bool) {
+	m.session = sess
+	m.epoch++
+	m.unlocked = [false, false]!
+	m.remote_owns = remote
+}
+
+fn test_the_cross_transport_security_model_holds_over_random_interleavings() {
+	mut c := secured_conn()
+	c.server.s3_us = u64(1) << 60 // no S3 in this model
+	mut t := new_tester()
+	mut now := u64(0)
+	mut m := SecModel{}
+	mut rng := u32(0x2545F491)
+	for step in 0 .. 3000 {
+		rng ^= rng << 13
+		rng ^= rng >> 17
+		rng ^= rng << 5
+		tr := int(rng & 1) // 0 = bus, 1 = remote
+		op := (rng >> 1) % 6
+		ctx := 'step ${step} op ${op} over ${if tr == 1 { 'remote' } else { 'bus' }}'
+		match op {
+			0, 1 {
+				sess := if op == 0 { u8(0x03) } else { u8(0x01) }
+				assert ask_over(tr, mut c, mut t, mut &now, [u8(0x10), sess])[0] == 0x50, ctx
+				m.enter(sess, tr == 1)
+			}
+			2 {
+				if m.session != 0x03 || m.unlocked[tr] {
+					continue
+				}
+				sr := ask_over(tr, mut c, mut t, mut &now, [u8(0x27), 0x01])
+				assert sr[0] == 0x67, '${ctx}: ${sr} model ${m}'
+				m.pending[tr] = m.epoch
+			}
+			3 {
+				if m.session != 0x03 {
+					continue
+				}
+				mut key := [u8(0x27), 0x02]
+				for i in 0 .. uds.seed_len {
+					key << u8(0x10 + i) ^ 0xFF
+				}
+				r := ask_over(tr, mut c, mut t, mut &now, key)
+				if m.pending[tr] == m.epoch {
+					assert r == [u8(0x67), 0x02], ctx
+					m.unlocked[tr] = true
+					m.unlocked[1 - tr] = false
+				} else {
+					assert r == [u8(0x7F), 0x27, 0x24], '${ctx}: a key for a void seed: ${r}'
+				}
+				m.pending[tr] = -1
+			}
+			4 {
+				r := ask_over(tr, mut c, mut t, mut &now, [u8(0x2E), 0x01, 0x02, u8(step)])
+				ok := m.session == 0x03 && m.unlocked[tr]
+				assert (r[0] == 0x6E) == ok, '${ctx}: write ${r} where the model says ${ok}'
+			}
+			else {
+				c.remote_dropped()
+				if m.remote_owns {
+					m.enter(0x01, false)
+				}
+				m.unlocked[1] = false
+				m.pending[1] = -1
+			}
+		}
+		assert c.server.session == m.session, '${ctx}: session ${c.server.session} model ${m}'
+	}
+}

@@ -156,6 +156,9 @@ pub mut:
 	sa_attempts     u8
 	sa_delay_us     u64
 	sa_level        u8 // the level whose seed is outstanding (0 = none)
+	// session_epoch counts session ENTRIES (0x10 — re-entering the same session too — S3, a reset):
+	// an owner keeping an exchange outside the server knows one begun in an earlier entry is void
+	session_epoch u32
 	sa_seed         [seed_len]u8
 	sa_failed       [max_security_level]u8 // wrong keys per level: one level's unlock never clears another's
 	sa_delay_until  u64
@@ -210,6 +213,7 @@ pub fn (mut s Server) reset_state() {
 	s.session = session_default
 	s.unlocked = 0
 	s.sa_level = 0
+	s.session_epoch++
 	s.sa_arm_delay = s.sa_failed.any(it > 0)
 	s.normal_tx_off = false
 	s.normal_rx_off = false
@@ -358,6 +362,7 @@ fn in_mask(mask u8, session u8) bool {
 fn (mut s Server) enter_session(session u8) {
 	s.unlocked = 0
 	s.sa_level = 0
+	s.session_epoch++
 	s.session = session
 	if session == session_default {
 		s.normal_tx_off = false

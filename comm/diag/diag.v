@@ -47,11 +47,12 @@ mut:
 	unlock_remote bool
 	// the SecurityAccess exchange in progress (a seed answered, its key not yet sent) per transport,
 	// [0] the bus's and [1] the other's: a seed asked over one never replaces the other's challenge.
-	// Kept with the session it began in — a session change since (either transport's, or S3)
-	// cancels it, as the server cancels its own
-	sa_level   [2]u8
-	sa_seed    [2][uds.seed_len]u8
-	sa_session [2]u8
+	// Kept with the session ENTRY it began in (server.session_epoch) — any session entry since,
+	// re-entering the same session included, by either transport, S3 or a reset, cancels it, as the
+	// server cancels its own
+	sa_level [2]u8
+	sa_seed  [2][uds.seed_len]u8
+	sa_epoch [2]u32
 }
 
 // Rx is what on_frame did with a received frame, for the owner's drain.
@@ -216,10 +217,10 @@ pub fn (mut c Connection) remote_dropped() {
 	c.sa_level[1] = 0
 }
 
-// enter: before a request over one transport — the session it starts in, and the unlock the OTHER
+// enter: before a request over one transport — the session entry it starts in, and the unlock the OTHER
 // transport holds, hidden for the request (0 = none hidden); its own exchange in progress loaded
-fn (mut c Connection) enter(remote bool) (u8, u8) {
-	before := c.server.session
+fn (mut c Connection) enter(remote bool) (u32, u8) {
+	before := c.server.session_epoch
 	mut held := u8(0)
 	if c.server.unlocked != 0 && c.unlock_remote != remote {
 		held = c.server.unlocked
@@ -227,7 +228,7 @@ fn (mut c Connection) enter(remote bool) (u8, u8) {
 	}
 	// this transport's own exchange in progress, if its session still stands
 	i := if remote { 1 } else { 0 }
-	c.server.sa_level = if c.sa_session[i] == c.server.session { c.sa_level[i] } else { u8(0) }
+	c.server.sa_level = if c.sa_epoch[i] == c.server.session_epoch { c.sa_level[i] } else { u8(0) }
 	c.server.sa_seed = c.sa_seed[i]
 	return before, held
 }
@@ -235,20 +236,17 @@ fn (mut c Connection) enter(remote bool) (u8, u8) {
 // leave: after it. An unlock the request earned is this transport's; a hidden one comes back
 // unless the request ended it for everyone (a session change relocks, as does a reset). A request
 // that changed the session makes its transport the session's owner (remote_dropped).
-fn (mut c Connection) leave(before u8, held u8, remote bool) {
+fn (mut c Connection) leave(before u32, held u8, remote bool) {
 	i := if remote { 1 } else { 0 }
 	c.sa_level[i] = c.server.sa_level
 	c.sa_seed[i] = c.server.sa_seed
-	c.sa_session[i] = c.server.session
-	if c.server.session != before || c.server.reset_req != 0 {
-		c.sa_level[1 - i] = 0 // a session change or a reset cancels the other's exchange too
-	}
+	c.sa_epoch[i] = c.server.session_epoch
 	if c.server.unlocked != 0 {
 		c.unlock_remote = remote
-	} else if held != 0 && c.server.session == before && c.server.reset_req == 0 {
+	} else if held != 0 && c.server.session_epoch == before && c.server.reset_req == 0 {
 		c.server.unlocked = held
 	}
-	if c.server.session != before {
+	if c.server.session_epoch != before {
 		c.remote_owns = remote
 	}
 }
