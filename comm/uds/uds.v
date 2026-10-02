@@ -31,7 +31,7 @@ pub const min_resp_cap = 6
 
 // The response capacity a caller that never called init() gets: the longest response the
 // single-DID server could produce (3 + max_did_data), so every pre-existing caller's buffer
-// (DoIP's 40 B, the generated bridge's 64 B) stays within bounds.
+// (the generated bridge's 64 B; comm/doip reserves exactly this for an embedded server) stays within bounds.
 pub const legacy_resp_cap = 3 + max_did_data
 
 // Sessions, as the 0x10 subfunction values.
