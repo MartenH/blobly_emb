@@ -201,7 +201,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-TOPO-002 | QM | test | verified | model_test.v (pass) |
 | REQ-TOPO-003 | QM | test | verified | dbc_test.v (pass), model_test.v (pass) |
 | REQ-TOPO-004 | QM | test | verified | model_test.v (pass) |
-| REQ-TOPO-005 | QM | analysis | verified | gen_test.v (pass) |
+| REQ-TOPO-005 | QM | analysis | verified | gen_test.v (pass), node_gate_test.v (pass) |
 | REQ-TOPO-006 | QM | test | covered | gen_test.v (pass), model_test.v (pass), route_dissolution.lua (pending), route_signal.lua (pending), system-full-edge-canfd (approved) |
 | REQ-TOPO-007 | QM | test | covered | model_test.v (pass), route_extid.lua (pending), route_firewall.lua (pending) |
 | REQ-TOPO-008 | QM | test | covered | route_dissolution.lua (pending), route_e2e.lua (pending), route_signal.lua (pending), route_srcverify.lua (pending) |
