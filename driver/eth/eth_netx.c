@@ -6,102 +6,51 @@
  * the buffer and must be dropped by the caller, exactly the host MSG_TRUNC
  * semantics; -1 = nothing pending, 0 = a real empty datagram).
  *
- * Bring-up lives in blob_eth_open (first call): NetX init, static pool, IP
- * instance on the STM32H7 driver, ARP/ICMP/UDP, PHY link wait, socket bind,
- * and the 1 Hz link-poll service thread every established H735 loop runs
+ * NetX itself is driver/eth/netx_up.c's, shared with DoIP; blob_eth_open
+ * brings it up at the node's endpoint (or finds it up), waits for the PHY
+ * link, binds the socket and starts the 1 Hz link-poll service thread
  * (eth_link_up() resynchronizes MACCR on renegotiation — a cable replug
  * recovers instead of leaving the MAC stale). No heap anywhere (REQ-NET-001/
- * 002): all NetX memory is static, sized here.
+ * 002).
  *
  * Not compiled by driver/eth/eth.v (whose #flag pulls the POSIX backend for
  * host builds) — a target image lists this file in its Makefile sources, the
  * same way the CAN backends are selected. */
 #include "tx_api.h"
 #include "nx_api.h"
-#include "eth.h" /* boards/<board>/eth.c: eth_link_up() */
-#include "ip4.h"
+#include "netx_up.h"
 
-#define POOL_PAYLOAD 1568u
-#define POOL_COUNT   8u
-static UCHAR pool_mem[POOL_COUNT * (POOL_PAYLOAD + sizeof(NX_PACKET))]
-	__attribute__((aligned(4)));
-static UCHAR ip_thread_stack[2048] __attribute__((aligned(8)));
-static UCHAR arp_cache[1024] __attribute__((aligned(4)));
 static UCHAR svc_thread_stack[1024] __attribute__((aligned(8)));
-
-static NX_PACKET_POOL pool;
-static NX_IP ip;
 static TX_THREAD svc_thread;
 static NX_UDP_SOCKET udp_sock;
 static int eth_open_done;
 
 /* bench-observable (SWD, openocd not st-util) */
-volatile ULONG net_link_up;
 volatile ULONG someip_tx_ok;
 volatile ULONG someip_tx_fail;
-
-extern VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr);
-
-/* NetX references rand() (NX_RAND); newlib-nano's rand drags reent/malloc/
- * _sbrk into a no-alloc image (bench-paid on h735_net P2). UID-seeded
- * xorshift — no TCP here, so no ISN-security stakes. */
-static unsigned int rand_state;
-int rand(void) {
-	if (rand_state == 0u) {
-		const volatile unsigned int *uid = (const volatile unsigned int *)0x1FF1E800u;
-		rand_state = uid[0] ^ uid[1] ^ uid[2];
-		if (rand_state == 0u) {
-			rand_state = 0x2624B0B1u;
-		}
-	}
-	rand_state ^= rand_state << 13;
-	rand_state ^= rand_state >> 17;
-	rand_state ^= rand_state << 5;
-	return (int)(rand_state & 0x7FFFFFFFu);
-}
-void srand(unsigned int seed) {
-	rand_state = (seed != 0u) ? seed : 0x2624B0B1u;
-}
 
 static void svc_entry(ULONG arg) {
 	(void)arg;
 	for (;;) {
-		net_link_up = eth_link_up();
+		blob_net_poll_link();
 		tx_thread_sleep(TX_TIMER_TICKS_PER_SECOND);
 	}
 }
 
-/* blob_eth_open: full bring-up + bind of the node's static endpoint. Blocks
- * until the PHY link is up (events into a down link are just lost — the
- * bench's whole point is the first events). Returns 0, or -1 on failure.
- * The gateway is the .1 of the node's own /24 — static-endpoint deployments
- * (REQ-NET-017) put the bench peer on the same segment; a routed peer would
- * make the gateway config, not convention. */
+/* blob_eth_open: the node's endpoint — NetX through the shared bring-up (a no-op when DoIP
+ * already brought it up at this address; a different address is refused: one per node), then
+ * the PHY link, the SOME/IP socket and the 1 Hz link poll. Blocks until the link is up (events
+ * into a down link are just lost — the bench's whole point is the first events). Returns 0, or
+ * -1 on failure. */
 int blob_eth_open(const char *bind_ip, unsigned short port) {
 	if (eth_open_done) {
 		return -1; /* one endpoint per image (the [someip] singleton) */
 	}
-	ULONG addr = parse_ip4(bind_ip);
-	if (addr == 0u) {
+	if (blob_net_up(bind_ip, 1) != 0) {
 		return -1;
 	}
-	nx_system_initialize();
-	if (nx_packet_pool_create(&pool, "eth-pool", POOL_PAYLOAD, pool_mem, sizeof(pool_mem)) != NX_SUCCESS) {
-		return -1;
-	}
-	if (nx_ip_create(&ip, "eth-ip", addr, 0xFFFFFF00UL, &pool, nx_driver_stm32h7,
-	                 ip_thread_stack, sizeof(ip_thread_stack), 1) != NX_SUCCESS) {
-		return -1;
-	}
-	nx_arp_enable(&ip, arp_cache, sizeof(arp_cache));
-	nx_icmp_enable(&ip); /* the board stays pingable — the P1 bench habit */
-	nx_udp_enable(&ip);
-	nx_ip_gateway_address_set(&ip, (addr & 0xFFFFFF00UL) | 1u);
-	while (!eth_link_up()) {
-		tx_thread_sleep(TX_TIMER_TICKS_PER_SECOND / 10);
-	}
-	net_link_up = 1;
-	if (nx_udp_socket_create(&ip, &udp_sock, "eth-udp", NX_IP_NORMAL,
+	blob_net_wait_link();
+	if (nx_udp_socket_create(blob_net_ip(), &udp_sock, "eth-udp", NX_IP_NORMAL,
 	                         NX_DONT_FRAGMENT, 0x80, 8) != NX_SUCCESS) {
 		return -1;
 	}
@@ -122,11 +71,11 @@ int blob_eth_send(int fd, const unsigned char *ip4, unsigned short port,
                   const unsigned char *buf, int len) {
 	(void)fd;
 	NX_PACKET *pkt;
-	if (nx_packet_allocate(&pool, &pkt, NX_UDP_PACKET, TX_NO_WAIT) != NX_SUCCESS) {
+	if (nx_packet_allocate(blob_net_pool(), &pkt, NX_UDP_PACKET, TX_NO_WAIT) != NX_SUCCESS) {
 		someip_tx_fail++;
 		return -1;
 	}
-	if (nx_packet_data_append(pkt, (VOID *)buf, (ULONG)len, &pool, TX_NO_WAIT) != NX_SUCCESS) {
+	if (nx_packet_data_append(pkt, (VOID *)buf, (ULONG)len, blob_net_pool(), TX_NO_WAIT) != NX_SUCCESS) {
 		nx_packet_release(pkt);
 		someip_tx_fail++;
 		return -1;

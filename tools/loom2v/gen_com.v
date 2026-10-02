@@ -1537,12 +1537,7 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 		return glue
 	}
 	iocb := eth_iocb_idx(m)
-	mut iface := ''
-	if bv := doc.value_opt('bus') {
-		if bc := bv.as_map()[m.eth] {
-			iface = (bc.as_map()['interface'] or { toml.Any('') }).string()
-		}
-	}
+	iface := m.eth_iface
 	mut tx_frames := []EthFrame{}
 	mut rx_frames := []EthFrame{}
 	for fr in m.eth_frames {

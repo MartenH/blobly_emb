@@ -44,8 +44,8 @@ NX_OBJ = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
 
 # board bring-up + ETH MAC + the NetX STM32H7 driver + the shared NetX eth
 # backend + this image's byte-IOC glue
-BSP = $(BOARD_BSP_THREADX) $(REPO)/boards/$(BOARD)/eth.c \
-      $(REPO)/net/nx_driver_stm32h7.c $(REPO)/driver/eth/eth_netx.c $(REPO)/boards/common/iocb.c
+# + the network the config asks for (gen/loom_build.mk: ETH MAC, NetX driver, driver/eth seams)
+BSP = $(BOARD_BSP_THREADX) $(LOOM_NET_SRCS) $(REPO)/boards/common/iocb.c
 
 # a failed lint must not leave a linkable app.c behind (the vinit gate is mandatory)
 .DELETE_ON_ERROR:
@@ -63,6 +63,7 @@ gen/.stamp: ecu.toml $(REPO)/tools/ecucheck/gen.v $(wildcard $(REPO)/tools/loom2
 	@touch gen/.stamp
 
 -include gen/loom_build.mk
+CFLAGS += $(LOOM_NET_DEFS) # the network the config sizes (driver/eth/netx_up.c)
 # remake rule: after `make clean`, regenerating via gen/.stamp must make GNU
 # make RESTART and reparse the include — without this rule LOOM_VDEFS stays
 # unset for the same run and Loom compiles its default 32-handler tables
@@ -93,7 +94,7 @@ $(NX_A): $(NX_OBJ)
 # 3) cross-compile + link. ioc.h is a PROTOCOL contract compiled into
 # boards/common/iocb.c and eth_netx.c — a header change must rebuild, or
 # `make flash` ships stale IOC code against fresh generated expectations.
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(REPO)/boards/common/ioc.h $(REPO)/driver/eth/ip4.h
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(REPO)/boards/common/ioc.h $(wildcard $(REPO)/driver/eth/*.h)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) \
 	  -Wl,--start-group $(TX_A) $(NX_A) -Wl,--end-group -o $@
 	$(SIZE) $@

@@ -2,11 +2,12 @@
  * on the CAN comm thread (loom2v `[doip]`, docs/diagnostics.md). Sockets and threads only: DoIP
  * framing is comm/doip and the UDS server is comm/diag, both tested V.
  *
- *   doip_net_create  — from tx_application_define: NetX (pool, IP on the STM32H7 driver, ARP/ICMP/
- *                      UDP/TCP) and two threads. `doip` waits for the TCP sequence-number seed, then
- *                      for the PHY link, opens UDP 13400 (announcements, identification) and the TCP
- *                      13400 listener, and runs the generated V loop (blobly_doip_run); `doip-svc`
- *                      polls the link and answers identification requests.
+ *   doip_net_create  — from tx_application_define: NetX through the shared bring-up (netx_up.c, at
+ *                      the node's one address — SOME/IP may be on it too), TCP, and two threads.
+ *                      `doip` waits for the TCP sequence-number seed, then for the PHY link, opens
+ *                      UDP 13400 (announcements, identification) and the TCP 13400 listener, and
+ *                      runs the generated V loop (blobly_doip_run); `doip-svc` polls the link and
+ *                      answers identification requests.
  *   doip_net_seed    — from the comm thread, once it has the TRNG: NetX draws TCP initial sequence
  *                      numbers from rand(), and predictable ones make a session spoofable.
  *   doip_stream_*    — the TCP byte pipe the V loop drives (one tester at a time, ISO 13400 idle
@@ -17,35 +18,18 @@
  *                      covers the buffers; the comm thread only ever tries it, so it never blocks on
  *                      the network. Sequence numbers keep a late answer from being read as the next.
  *
- * All memory static (REQ-NET-001/002). Not linked beside driver/eth/eth_netx.c: one NetX instance
- * per image, and both define rand (loom2v refuses [doip] with an eth bus). */
+ * All memory static (REQ-NET-001/002). */
 #include "tx_api.h"
 #include "nx_api.h"
-#include "eth.h" /* boards/<board>/eth.c: eth_link_up() */
-#include "ip4.h"
-
-/* every timeout here is in ThreadX ticks, and NetX's are too: the two rates must be one */
-#if !defined(TX_TIMER_TICKS_PER_SECOND) || TX_TIMER_TICKS_PER_SECOND != NX_IP_PERIODIC_RATE
-#error "doip_netx.c: build with -DTX_TIMER_TICKS_PER_SECOND and -DNX_IP_PERIODIC_RATE equal (1000 on a 1 kHz SysTick)"
-#endif
-#define MS_TICKS(ms) ((ULONG)(ms) * TX_TIMER_TICKS_PER_SECOND / 1000u)
+#include "netx_up.h"
 
 #define DOIP_PORT  13400
 #define IDENT_PER_PASS 4 /* identification requests answered per 200 ms service pass */
 #define TCP_WINDOW 2048
 
-#define POOL_PAYLOAD 1568u
-#define POOL_COUNT   12u
-static UCHAR pool_mem[POOL_COUNT * (POOL_PAYLOAD + sizeof(NX_PACKET))] __attribute__((aligned(4)));
-static UCHAR ip_thread_stack[2048] __attribute__((aligned(8)));
-static UCHAR arp_cache[1024] __attribute__((aligned(4)));
 static UCHAR doip_thread_stack[4096] __attribute__((aligned(8))); /* runs the V loop */
 static UCHAR svc_thread_stack[2048] __attribute__((aligned(8)));
 
-static volatile UINT seeded;
-static NX_PACKET_POOL pool;
-static NX_IP ip;
-static ULONG ip_addr;
 static TX_THREAD doip_thread;
 static TX_THREAD svc_thread;
 static NX_TCP_SOCKET tcp_sock;
@@ -53,54 +37,17 @@ static NX_UDP_SOCKET udp_sock;
 static volatile UINT sockets_up;
 
 /* bench-observable (SWD) */
-volatile ULONG net_link_up;
 volatile ULONG doip_rx_bytes;
 volatile ULONG doip_tx_bytes;
 volatile ULONG doip_mb_timeouts;
 volatile ULONG doip_setup_failed; /* the sockets could not be made: DoIP is down */
 
-extern VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr);
 extern void blobly_doip_run(void);                                          /* generated V loop */
 extern int blobly_doip_ident(const unsigned char *req, int len, unsigned char *resp); /* generated */
 extern void comm_wake(void);                                                /* comm_glue.c */
 
-/* ---- rand: NetX's NX_RAND ------------------------------------------------------------------
- * newlib-nano's rand drags reent/malloc/_sbrk into a no-alloc image. xorshift from the seed the
- * comm thread draws from the TRNG, and every call folds in a fresh TRNG word when one is ready: a
- * bare xorshift gives its state away in one output, so a TCP sequence number seen would predict
- * the next connection's. A read only takes a word the RNG already holds — no wait, no recovery
- * (the comm thread's diag_sa_seed owns that); the doip thread opens no socket before the seed. */
-#define RNG_SR_R (*(volatile unsigned int *)0x48021804u)
-#define RNG_DR_R (*(volatile unsigned int *)0x48021808u)
-static unsigned int rand_state = 0x2624B0B1u;
-
-int rand(void) {
-	unsigned int sr = RNG_SR_R;
-	if (seeded && (sr & 1u) && !(sr & 6u)) { /* DRDY, no seed or clock error */
-		rand_state ^= RNG_DR_R;
-		if (rand_state == 0u) {
-			rand_state = 0x2624B0B1u;
-		}
-	}
-	rand_state ^= rand_state << 13;
-	rand_state ^= rand_state >> 17;
-	rand_state ^= rand_state << 5;
-	return (int)(rand_state & 0x7FFFFFFFu);
-}
-
-void srand(unsigned int seed) {
-	rand_state = (seed != 0u) ? seed : 0x2624B0B1u;
-}
-
-/* seed 0 = no TRNG word: the chip's unique id and SysTick's current count stand in — distinct per
- * board, barely per boot, and not secret; rand() then has no TRNG words to fold in either */
 void doip_net_seed(unsigned int seed) {
-	if (seed == 0u) {
-		const volatile unsigned int *uid = (const volatile unsigned int *)0x1FF1E800u;
-		seed = uid[0] ^ uid[1] ^ uid[2] ^ *(volatile unsigned int *)0xE000E018u;
-	}
-	srand(seed);
-	seeded = 1;
+	blob_net_seed(seed);
 }
 
 /* ---- the mailbox to the comm thread ------------------------------------------------------- */
@@ -240,7 +187,7 @@ static int stream_recycle(void) {
 	}
 	nx_tcp_socket_disconnect(&tcp_sock, NX_IP_PERIODIC_RATE);
 	nx_tcp_server_socket_unaccept(&tcp_sock);
-	nx_tcp_server_socket_relisten(&ip, DOIP_PORT, &tcp_sock);
+	nx_tcp_server_socket_relisten(blob_net_ip(), DOIP_PORT, &tcp_sock);
 	tcp_connected = 0;
 	mb_drop_after = mb_posted;
 	mb_drops++;
@@ -304,10 +251,10 @@ int doip_tx_pending(void) {
  * that carried an answer reports it to the comm thread (a reset may be waiting on it). */
 int doip_stream_send(const unsigned char *buf, int len) {
 	NX_PACKET *p = NX_NULL;
-	if (nx_packet_allocate(&pool, &p, NX_TCP_PACKET, NX_IP_PERIODIC_RATE) != NX_SUCCESS) {
+	if (nx_packet_allocate(blob_net_pool(), &p, NX_TCP_PACKET, NX_IP_PERIODIC_RATE) != NX_SUCCESS) {
 		return stream_recycle();
 	}
-	if (nx_packet_data_append(p, (void *)buf, (ULONG)len, &pool, NX_IP_PERIODIC_RATE) != NX_SUCCESS ||
+	if (nx_packet_data_append(p, (void *)buf, (ULONG)len, blob_net_pool(), NX_IP_PERIODIC_RATE) != NX_SUCCESS ||
 	    nx_tcp_socket_send(&tcp_sock, p, NX_IP_PERIODIC_RATE) != NX_SUCCESS) {
 		nx_packet_release(p); /* send takes ownership only on success */
 		return stream_recycle();
@@ -334,11 +281,11 @@ void doip_stream_notify_activated(int on) {
 
 void doip_udp_broadcast(const unsigned char *buf, int len) {
 	NX_PACKET *p = NX_NULL;
-	if (nx_packet_allocate(&pool, &p, NX_UDP_PACKET, NX_NO_WAIT) != NX_SUCCESS) {
+	if (nx_packet_allocate(blob_net_pool(), &p, NX_UDP_PACKET, NX_NO_WAIT) != NX_SUCCESS) {
 		return;
 	}
-	if (nx_packet_data_append(p, (void *)buf, (ULONG)len, &pool, NX_NO_WAIT) != NX_SUCCESS ||
-	    nx_udp_socket_send(&udp_sock, p, ip_addr | 0xFFu, DOIP_PORT) != NX_SUCCESS) {
+	if (nx_packet_data_append(p, (void *)buf, (ULONG)len, blob_net_pool(), NX_NO_WAIT) != NX_SUCCESS ||
+	    nx_udp_socket_send(&udp_sock, p, blob_net_addr() | 0xFFu, DOIP_PORT) != NX_SUCCESS) {
 		nx_packet_release(p);
 	}
 }
@@ -350,8 +297,9 @@ void doip_sleep_ms(int ms) {
 
 /* the entity id: the interface MAC */
 void doip_eid(unsigned char eid[6]) {
-	ULONG msw = ip.nx_ip_interface[0].nx_interface_physical_address_msw;
-	ULONG lsw = ip.nx_ip_interface[0].nx_interface_physical_address_lsw;
+	NX_IP *ip = blob_net_ip();
+	ULONG msw = ip->nx_ip_interface[0].nx_interface_physical_address_msw;
+	ULONG lsw = ip->nx_ip_interface[0].nx_interface_physical_address_lsw;
 	eid[0] = (unsigned char)(msw >> 8);
 	eid[1] = (unsigned char)msw;
 	eid[2] = (unsigned char)(lsw >> 24);
@@ -371,9 +319,7 @@ static void svc_entry(ULONG arg) {
 	}
 	for (;;) {
 		tx_thread_sleep(NX_IP_PERIODIC_RATE / 5); /* 200 ms */
-		ULONG up = NX_FALSE;
-		nx_ip_driver_direct_command(&ip, NX_LINK_GET_STATUS, &up);
-		net_link_up = up;
+		blob_net_poll_link();
 		NX_PACKET *p;
 		/* a bounded number per pass: a flood of requests must not keep this thread from its sleep,
 		 * where the doip thread at the same priority runs (the rest wait, or the queue drops them) */
@@ -389,10 +335,10 @@ static void svc_entry(ULONG arg) {
 				continue;
 			}
 			NX_PACKET *r = NX_NULL;
-			if (nx_packet_allocate(&pool, &r, NX_UDP_PACKET, NX_NO_WAIT) != NX_SUCCESS) {
+			if (nx_packet_allocate(blob_net_pool(), &r, NX_UDP_PACKET, NX_NO_WAIT) != NX_SUCCESS) {
 				continue;
 			}
-			if (nx_packet_data_append(r, resp, (ULONG)n, &pool, NX_NO_WAIT) != NX_SUCCESS ||
+			if (nx_packet_data_append(r, resp, (ULONG)n, blob_net_pool(), NX_NO_WAIT) != NX_SUCCESS ||
 			    nx_udp_socket_send(&udp_sock, r, peer_ip, peer_port) != NX_SUCCESS) {
 				nx_packet_release(r);
 			}
@@ -402,23 +348,15 @@ static void svc_entry(ULONG arg) {
 
 static void doip_entry(ULONG arg) {
 	(void)arg;
-	while (!seeded) {
+	while (!blob_net_seeded()) {
 		tx_thread_sleep(NX_IP_PERIODIC_RATE / 100);
 	}
-	ULONG bits;
-	while (nx_ip_status_check(&ip, NX_IP_LINK_ENABLED, &bits, 2 * NX_IP_PERIODIC_RATE) != NX_SUCCESS) {
-	}
-	/* NX_IP_LINK_ENABLED is reported optimistically (REQ-NET-003): wait for the real PHY link, or
-	 * the boot announcements go out during auto-negotiation and are lost */
-	while (!eth_link_up()) {
-		tx_thread_sleep(NX_IP_PERIODIC_RATE / 10);
-	}
-	net_link_up = 1;
-	if (nx_udp_socket_create(&ip, &udp_sock, "doip-udp", NX_IP_NORMAL, NX_DONT_FRAGMENT, 0x80, 5) != NX_SUCCESS ||
+	blob_net_wait_link();
+	if (nx_udp_socket_create(blob_net_ip(), &udp_sock, "doip-udp", NX_IP_NORMAL, NX_DONT_FRAGMENT, 0x80, 5) != NX_SUCCESS ||
 	    nx_udp_socket_bind(&udp_sock, DOIP_PORT, NX_WAIT_FOREVER) != NX_SUCCESS ||
-	    nx_tcp_socket_create(&ip, &tcp_sock, "doip-tcp", NX_IP_NORMAL, NX_DONT_FRAGMENT, 0x80,
+	    nx_tcp_socket_create(blob_net_ip(), &tcp_sock, "doip-tcp", NX_IP_NORMAL, NX_DONT_FRAGMENT, 0x80,
 	                         TCP_WINDOW, NX_NULL, NX_NULL) != NX_SUCCESS ||
-	    nx_tcp_server_socket_listen(&ip, DOIP_PORT, &tcp_sock, 1, NX_NULL) != NX_SUCCESS) {
+	    nx_tcp_server_socket_listen(blob_net_ip(), DOIP_PORT, &tcp_sock, 1, NX_NULL) != NX_SUCCESS) {
 		/* DoIP stays down: park rather than run the loop on a half-made socket (which would spin) */
 		doip_setup_failed = 1;
 		for (;;) {
@@ -433,24 +371,10 @@ static void doip_entry(ULONG arg) {
  * NetX IP thread, prio the doip and svc threads (below the comm thread that serves them).
  * 0 = done, -1 = a malformed address or a NetX failure (DoIP stays down; the node runs on). */
 int doip_net_create(const char *addr, unsigned int ip_prio, unsigned int prio) {
-	ip_addr = parse_ip4(addr);
-	if (ip_addr == 0u) {
+	if (blob_net_up(addr, ip_prio) != 0) {
 		return -1;
 	}
-	nx_system_initialize();
-	if (nx_packet_pool_create(&pool, "doip-pool", POOL_PAYLOAD, pool_mem, sizeof(pool_mem)) != NX_SUCCESS) {
-		return -1;
-	}
-	if (nx_ip_create(&ip, "doip-ip", ip_addr, 0xFFFFFF00UL, &pool, nx_driver_stm32h7,
-	                 ip_thread_stack, sizeof(ip_thread_stack), ip_prio) != NX_SUCCESS) {
-		return -1;
-	}
-	nx_arp_enable(&ip, arp_cache, sizeof(arp_cache));
-	nx_icmp_enable(&ip); /* pingable — the bench habit */
-	nx_udp_enable(&ip);
-	nx_tcp_enable(&ip);
-	/* the gateway is the .1 of the node's own /24, as eth_netx.c (REQ-NET-017) */
-	nx_ip_gateway_address_set(&ip, (ip_addr & 0xFFFFFF00UL) | 1u);
+	nx_tcp_enable(blob_net_ip()); /* only a DoIP image links the TCP engine */
 	tx_thread_create(&doip_thread, "doip", doip_entry, 0, doip_thread_stack,
 	                 sizeof(doip_thread_stack), prio, prio, TX_NO_TIME_SLICE, TX_AUTO_START);
 	tx_thread_create(&svc_thread, "doip-svc", svc_entry, 0, svc_thread_stack,
@@ -462,7 +386,7 @@ int doip_net_create(const char *addr, unsigned int ip_prio, unsigned int prio) {
  * 0 = the NetX IP thread, 1 = doip, 2 = doip-svc */
 void *doip_net_tcb(int i) {
 	switch (i) {
-	case 0: return &ip.nx_ip_thread;
+	case 0: return &blob_net_ip()->nx_ip_thread;
 	case 1: return &doip_thread;
 	case 2: return &svc_thread;
 	default: return NX_NULL;

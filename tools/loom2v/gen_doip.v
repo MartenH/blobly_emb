@@ -26,6 +26,11 @@ fn parse_doip(doc toml.Doc) DoipCfg {
 	}
 }
 
+// ip4_octets: the address as numbers, so 192.168.0.050 and 192.168.0.50 are one address
+fn ip4_octets(s string) []int {
+	return s.split('.').map(it.int())
+}
+
 // ip4_ok: a dotted quad, each octet 0..255 with at least one digit (driver/eth/ip4.h's rule), and
 // a HOST on the /24 doip_net_create assumes: not .0 (the network), .255 (its broadcast) or .1 (the
 // gateway it sets)
@@ -65,8 +70,9 @@ fn validate_doip(m Model) {
 	if m.isotp_conns.len != 1 {
 		panic('loom2v: [doip] carries the node\'s ONE diagnostic server — declare its [[isotp]] connection')
 	}
-	if m.eth != '' {
-		panic('loom2v: [doip] with eth bus "${m.eth}": one NetX instance per image, and driver/eth/eth_netx.c already owns it')
+	// one NetX per image, at one address (driver/eth/netx_up.c): SOME/IP and DoIP share it
+	if eth_thread_on(m) && ip4_octets(m.eth_iface) != ip4_octets(d.address) {
+		panic('loom2v: [doip] address "${d.address}" differs from eth bus "${m.eth}" interface "${m.eth_iface}" — a node has one address')
 	}
 	if !ip4_ok(d.address) {
 		panic('loom2v: [doip] address "${d.address}" is not a host address on its /24 (dotted quad, not .0, .1 or .255)')
@@ -288,7 +294,8 @@ fn doip_manifest_rows(m Model, tid int) []string {
 }
 
 // doip_target_init: on the comm thread before its loop — the TRNG word NetX draws TCP sequence
-// numbers from (0 = none: doip_netx.c falls back to the chip id, distinct but not secret).
+// numbers from (driver/eth/netx_up.c blob_net_seed; 0 = none: the chip id, distinct but not secret,
+// and no TRNG words folded into later draws).
 fn doip_target_init(m Model) []string {
 	if !m.doip.on {
 		return []string{}
@@ -334,4 +341,34 @@ fn doip_reset_wait(m Model) []string {
 	}
 	return ['\t\t\tfor C.doip_tx_pending() != 0 && C.board_now_us() - diag_t0 < 500000 {',
 		'\t\t\t\tC._tx_thread_sleep(1)', '\t\t\t}']
+}
+
+// bus_interface: [bus.<name>].interface ('' = no such bus or no interface)
+fn bus_interface(doc toml.Doc, name string) string {
+	if name == '' {
+		return ''
+	}
+	bv := doc.value_opt('bus') or { return '' }
+	bc := bv.as_map()[name] or { return '' }
+	return (bc.as_map()['interface'] or { toml.Any('') }).string()
+}
+
+// net_build_lines: what a target image links for its network, for gen/loom_build.mk — the shared
+// NetX bring-up and whichever seams the config asks for, so no node's Makefile lists them by hand.
+// Paths are the including Makefile's REPO and BOARD.
+fn net_build_lines(m Model) string {
+	if !m.target.threadx || (!eth_thread_on(m) && !m.doip.on) {
+		return 'LOOM_NET_SRCS :=\nLOOM_NET_DEFS :=\n'
+	}
+	mut srcs := [r'$(REPO)/boards/$(BOARD)/eth.c', r'$(REPO)/net/nx_driver_stm32h7.c',
+		r'$(REPO)/driver/eth/netx_up.c']
+	if eth_thread_on(m) {
+		srcs << r'$(REPO)/driver/eth/eth_netx.c'
+	}
+	if m.doip.on {
+		srcs << r'$(REPO)/driver/eth/doip_netx.c'
+	}
+	// the shared pool: SOME/IP 8, DoIP 12 (the TCP window and its socket), both 16
+	pool := if eth_thread_on(m) && m.doip.on { 16 } else if m.doip.on { 12 } else { 8 }
+	return 'LOOM_NET_SRCS = ${srcs.join(' ')}\nLOOM_NET_DEFS := -DBLOB_NET_POOL_COUNT=${pool}u\n'
 }
