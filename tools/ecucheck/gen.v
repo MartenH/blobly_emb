@@ -303,7 +303,7 @@ fn specs() map[string]map[string]Key {
 			'jump':    k(.boolean) // counter: reset on a reversal ("N in a row"); default accumulates
 		}
 		'fault_memory': {
-			'cycle': k(.str) // "Signal.field" (bool): the operation cycle
+			'cycle': k(.str) // "Signal.field" (bool), or "power": the operation cycle
 		}
 		'isotp':      {
 			'bus':      req(.str)

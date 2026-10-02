@@ -265,9 +265,11 @@ reporting is one-way. The generated Loom debounces it on the FB's own thread rig
 handler and publishes the debounced state and counters in a cell per FB; the diagnostic bridge
 owns the fault memory (`comm/fault`), keeps each DTC's ISO 14229-1 status through operation cycles
 (confirmation, pending, aging), and answers `0x19` 01/02/0A, `0x14` and `0x85`. A clear reaches the
-FB's thread as a new generation in a control cell, so its debounce restarts. Host only for now:
-faults on the target, persistence and freeze frames are rungs R6 (`freeze` / `priority` fail
-generation until then).
+FB's thread as a new generation in a control cell, so its debounce restarts. On a ThreadX target
+(R6's first step) the ThreadX comm thread owns the memory and the two cells ride the byte IOC; there
+the operation cycle is NM's wake -> bus sleep, or `[fault_memory] cycle = "power"`. Still to come:
+signal-status faults on the target, persistence and freeze frames (`freeze` / `priority` fail
+generation until then) — docs/diagnostics.md R6.
 
 A fault can also be raised by a received signal's **status** — no FB code, the diagnostic bridge
 is the detector:

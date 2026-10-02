@@ -19,7 +19,7 @@ page is the plan to close that, in rungs that each ship and verify on their own.
 
 ## 1. Where we actually are
 
-As of R4c and R2's first steps — the rows R0 through R4c and R2 changed say so; the rest is the state the plan started from.
+As of R4c, R2's first steps and R6a — the rows R0 through R4c, R2 and R6a changed say so; the rest is the state the plan started from.
 
 | Piece | State | Where |
 |---|---|---|
@@ -31,11 +31,11 @@ As of R4c and R2's first steps — the rows R0 through R4c and R2 changed say so
 | UDS on the **target** | R2, first steps: `[isotp]` on the ThreadX comm thread (the one on `[telemetry].bus`) — the same `comm/diag.Connection` the host bridge runs; constant DIDs, and live DIDs on the node's own local OUTPUTS (the cells the comm thread already reads — an input's cell is its FB's, one reader per cell); 0x27 with a TRNG seed from the board (`boards/common/diag_board.c`, weak) and the OEM's `diag_sa_key_ok` — no default is linked, so a gated node without one fails to link; blobly_net's public reference key only by name (`[uds] security_key = "reference"`, the bench's); bench-verified on all three `system_full` CAN nodes — domain (H755, `examples/system_full/test/diag_domain.lua`), the gateway sysnode (H735) and zone_a (H723, on the CAN-FD edge bus with classic-sized ISO-TP, TX_DL = 8) (`diag_nodes.lua`). 0x11 answered, then performed by the comm thread once the controller has sent the answer (bounded `tx_idle`, REQ-BOOT-012), the 0x27 failed-key counts carried across it in a reset-surviving keep cell (`diag_board.c`, D3 SRAM4), so a reset between guesses buys nothing. Not yet: live DIDs on inputs, the failed-key count across a power cycle, 0x28, the programming handoff | `tools/loom2v/gen_diag.v` |
 | UDS config | split along the standards: `[uds]` — the ISO 14229 server (`s3_ms`, `security_attempts`, `security_delay_ms`, `security_key`, the `services` table) — and its transports, `[isotp]` (ISO 15765-2: `bus`, `rx_id`, `tx_id`, `functional_id`, `bs`, `stmin_ms`; one per node, a table) and `[doip]` (ISO 13400); + `[[did]]` (ascii / bytes / signal / writable, `read` / `write` gates). The old `[[isotp]]` array carrying server keys is refused with the move it needs | `tools/ecucheck/gen.v`, `tools/ecumodel/model.v` |
 | Rx signal status | `status = "RxStatus"` (never_received / ok / timeout / integrity) and the E2E `lost` count, bridge-owned (R3a; on CAN the host bridge only, on the SOME/IP receive path both, bridge-owned and never on the wire, on the host and the ThreadX eth thread alike, and sysgen gives both to a generated E2E receiver); the COM deadline runs from bridge start (re-arming it on NM wake is R5's: the host bridge has no NM) and from a frame that failed its check; E2E has its own sender-loss timeout, required on every received E2E frame, refreshed only by a valid message and independent of the COM deadline (R3b; on CAN and, since #299, on the SOME/IP receive path — host and ThreadX — where an eth rx signal carries the same `status`); the target's CAN comm thread rejects status, rx deadlines and E2E ("phase 6b-2b", R5) | `tools/loom2v/gen_com.v`, `gen.v` |
-| Fault memory / DTCs | R4a + R4b: `[[fault]]` generated on the host — the FB's fault port, debounce on its thread with monotonic counters, the fault memory on the diagnostic bridge (status byte through operation cycles from `[fault_memory] cycle`, confirmation, aging, clears by generation, 0x85 suppression), 0x19 01/02/0A, 0x14, 0x85; RAM only. R4c: signal-status faults (`signal` / `on` = timeout, integrity, lost), the bridge as detector. Not yet: target + persistence + freeze frames (R6) | `comm/fault/fault.v`, `tools/loom2v/gen.v`, `gen_com.v` |
+| Fault memory / DTCs | R4a + R4b: `[[fault]]` generated on the host — the FB's fault port, debounce on its thread with monotonic counters, the fault memory on the diagnostic bridge (status byte through operation cycles from `[fault_memory] cycle`, confirmation, aging, clears by generation, 0x85 suppression), 0x19 01/02/0A, 0x14, 0x85; RAM only. R4c: signal-status faults (`signal` / `on` = timeout, integrity, lost), the bridge as detector. R6a: FB-tested faults on a **ThreadX target** — the same debounce on the FB's thread, the same `comm/fault` memory on the comm thread (D2), the report / control cells on the byte IOC (`boards/common/iocb.c`), 0x19 01/02/0A, 0x14, 0x85 through the one server (DoIP included); RAM only; demonstrated on `system_full` zone_a (`test/faults_zone_a.lua`). Not yet (the rest of R6): persistence, freeze frames, extended data, displacement, 0x19 03/04/06, signal-status faults on the target (needs R5), faults on a satellite core or in a multi-thread partition | `comm/fault/fault.v`, `tools/loom2v/gen.v`, `gen_com.v` |
 | Persistence | journal engine + `persist = "now" / "shutdown"` signals, ThreadX only, one journal per node, 20 B records with 634 B chains; DID write path (NvM "P4") not built | `nvm/`, `tools/loom2v/gen_nvm.v` |
-| Operation cycle / ECU state | the fault memory's operation cycle follows a declared bool signal on the host (`[fault_memory] cycle`, R4b); NM-driven cycles (D3's default) come with faults on the target (R6); `ecu/` (lifecycle, mode arbiter) is still an unused library; NM states exist | `tools/loom2v/gen_com.v`, `ecu/`, `comm/nm/` |
+| Operation cycle / ECU state | the fault memory's operation cycle follows a declared bool signal on the host (`[fault_memory] cycle`, R4b); on a ThreadX target it follows NM — wake begins it, bus sleep ends it (D3's default, R6a) — and on either owner `cycle = "power"` makes it the power cycle (a node with neither NM nor a cycle signal); a cycle SIGNAL on the target is not generated yet; `ecu/` (lifecycle, mode arbiter) is still an unused library; NM states exist | `tools/loom2v/gen.v`, `gen_com.v`, `ecu/`, `comm/nm/` |
 | Cross-thread transports | last-value cells only (seqlock / double / triple, xioc); `bulk` is the one FIFO | `osal/`, `boards/common/` |
-| Tester (blobly_net) | client: 0x10 0x22 0x2E 0x3E, **0x27 with a reference key (seed XOR 0xFF)**, 0x19 sub 0x02 as raw bytes; no 0x14 / 0x11 / 0x28 / 0x85, no functional addressing, no DTC model or view; its UDS sim answers 0x19/0x02 from a static list | `blobly_net modules/uds` |
+| Tester (blobly_net) | client: 0x10 0x22 0x2E 0x3E, **0x27 with a reference key (seed XOR 0xFF)**; since N1 / N2 also 0x11 0x14 0x28 0x85, functional addressing, and 0x19 01/02/0A decoded into a DTC model with named status bits (Lua `diag:dtcs` / `supported_dtcs` / `dtc_count` / `clear_dtcs` / `dtc_setting`, `check.dtc`); its simulated server answers 0x19 01/02/0A, 0x14, 0x85. Not yet: 0x19 03/04/06 (N3), a DTC view (N4) | `blobly_net modules/uds` |
 
 Three doc claims were ahead of the code; R0 (#292) and R1 (#291) corrected them: `docs/autosar-comparison.md`
 marked diagnostics "✅ have" (only the request/response half exists), `docs/communication.md` called
@@ -136,7 +136,7 @@ was earned in, as a DID's does.
   every session against the old rule written out literally.
 - **What a build performs is one statement** (`diag_unbuilt`): 0x10 / 0x22 / 0x2E / 0x3E always;
   0x11 on both owners (each performs the reset); 0x28 on the host only (nothing on the target gates
-  its frames on it yet); 0x14 / 0x19 / 0x85 with a `[[fault]]` memory (host only today); 0x27 when
+  its frames on it yet); 0x14 / 0x19 / 0x85 with a `[[fault]]` memory (on both owners since R6a); 0x27 when
   a `[[did]]` gate or a service row names a level. The wiring follows it (`serves_reset`,
   `serves_comm_control`) and generation refuses a row it names — **a table never claims a service
   that does nothing**. A row also grants nothing the owner did not wire: comm/uds answers 0x11 for a
@@ -299,7 +299,8 @@ remains R6's (§7). The
 per-fault generations are bounded by the cell too, which caps the faults one FB may own (8). A
 producer on a **satellite core** needs the same cell to flow owner → satellite, which the target does
 not support today (loom2v rejects any signal INTO a satellite partition); R6 adds that reverse xioc
-path, or faults are declared owner-core-only until it exists. Enable conditions are evaluated on the producer
+path, or faults are declared owner-core-only until it exists (as built in R6a: owner-core only — a
+fault on a satellite partition is refused, as is one in a multi-thread partition). Enable conditions are evaluated on the producer
 itself — they are signals, readable there like any input — so a fault whose condition is false stops
 counting instead of qualifying the moment the condition returns.
 
@@ -313,7 +314,12 @@ counting instead of qualifying the moment the condition returns.
   declared signal (e.g. an ignition input) (decision D3); cycle boundaries age and qualify entries. A
   node with neither NM nor a declared cycle signal **fails generation** when it declares ANY fault —
   every DTC's status carries the this-operation-cycle bits, which would otherwise never reset, and
-  pending would never confirm or age;
+  pending would never confirm or age — unless it declares `[fault_memory] cycle = "power"` (R6a):
+  the cycle is the power cycle (AUTOSAR's POWER cycle type), begun when the owner starts and ended
+  by power-off. That is a statement, not a default: while the memory is RAM only its end is never
+  observed, so within it nothing leaves pending or ages — persistence (R6) records the shutdown.
+  As built, the host bridge takes a signal or "power" (it runs no NM) and a ThreadX target NM or
+  "power" (its comm thread's lean receive decode keeps no bool a cycle signal could be read from);
 - **entries**: DTC, status, occurrence counter, **failed-cycle counter** (what `confirm` counts —
   occurrences are not cycles), aging counter, first/last failure cycle, and the
   **freeze frame** — the `snapshot` the producer captured at qualification (above), serialised as the
@@ -391,7 +397,7 @@ and — from R2 on — a bench verification on `examples/system_full` recorded i
 | **R3** | Rx status (#286) on the host: `RxStatus`, bridge-owned, integrity latch, E2E `lost` counter; `valid` migrated | host e2e (timeout / integrity / never_received) | R0 |
 | **R4** | Faults on the host: `[[fault]]`, FB fault port, generated debounce, fault memory in RAM, status byte, operation cycle, enable conditions, 0x19 01/02/0A, 0x14, 0x85; signal-status faults from R3; syscheck DTC uniqueness | host e2e: fail → pending → confirmed → cleared → aged | R1, R3, N2 |
 | **R5** | Target COM checks ("phase 6b-2b"): rx deadlines + E2E/SecOC on the comm thread, so R3's status reaches FBs on silicon (the signal-status DTCs on silicon are R6's, once faults run on the target) | bench: pull a sender, corrupt a frame, FB sees the status | R2, R3 |
-| **R6** | Fault memory persisted (diagnostic ids in the prune keep-set) + freeze frames (size-checked against the response limit) + extended data + displacement; 0x19 03/04/06; faults on the target, incl. the owner → satellite control path | bench: fault, power-cycle, read back with snapshot; clear with 0x78 | R2, R4, N3 |
+| **R6** | Fault memory persisted (diagnostic ids in the prune keep-set) + freeze frames (size-checked against the response limit) + extended data + displacement; 0x19 03/04/06; faults on the target, incl. the owner → satellite control path. **R6a (built):** FB-tested faults on a ThreadX target, RAM only — the memory on the comm thread, cells on the byte IOC, cycle from NM or "power", 0x19 01/02/0A / 0x14 / 0x85 | R6a: generation tests (`tools/loom2v/fault_target_test.v`) + bench on zone_a (`test/faults_zone_a.lua`: fail → confirmed → passing → cleared, 0x85 off records nothing). Rest: bench: fault, power-cycle, read back with snapshot; clear with 0x78 | R2, R4, N3 |
 | **R7** | Parameters (#288): NvM P4 DID write path, `[[param]]`, range check, `apply` | bench: code a variant, reset, FB sees it | R1b, R2 |
 
 R3 and R1 can run in parallel; R5 and R6 can run in parallel after R2.
@@ -415,7 +421,7 @@ Decided by the maintainer on 2026-09-28: each one as recommended here.
 |---|---|---|---|
 | D1 | How debounced results cross threads | monotonic counters in a last-value IOC cell | no new transport; lossless for occurrences; the `bulk` FIFO remains the fallback |
 | D2 | Where the fault memory runs | the comm thread | it already owns the journal and the bus; one writer, no lock |
-| D3 | Operation cycle source | NM wake → bus-sleep by default; an explicit signal when declared | works on every NM node with no config; ignition-driven ECUs name their input |
+| D3 | Operation cycle source | NM wake → bus-sleep by default; an explicit signal when declared (R6a added `"power"`, the power cycle, for a node with neither — §3.3) | works on every NM node with no config; ignition-driven ECUs name their input |
 | D4 | Freeze-frame storage | chained records in the existing journal | built and fuzz-proven; resolves the `docs/nvm.md` contradiction |
 | D5 | Security-access key | a board/OEM C seam; sim and bench use net's existing reference key | real keys are OEM secrets; the stack must not bake one in, and the tester must not need a second algorithm |
 | D6 | First 0x19 subfunctions | 01, 02, 0A in R4; 03, 04, 06 with persistence in R6 | what a workshop reads first; snapshots need storage to mean anything |

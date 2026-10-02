@@ -100,3 +100,12 @@ status = "draft"
 method = "test"
 asil = "QM"
 derives = "SYS-REQ-DIAG-001"
+
+[[req]]
+id = "REQ-DIAG-012"
+title = "Operation cycle source"
+text = "The fault memory's operation cycle shall begin when the node's network management wakes the network and end when it puts it to sleep, unless the configuration declares the cycle to follow a condition signal or the node's power cycle; a configuration declaring faults with none of these available shall be refused at generation."
+status = "draft"
+method = "test"
+asil = "QM"
+derives = "SYS-REQ-DIAG-001"

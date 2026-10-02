@@ -43,7 +43,10 @@ gen/loom_gen.v:
 	$(MAKE) -C $(OWNER) gen
 
 # loom's fixed Scheduler tables, right-sized to this image's real per-thread handler count.
+# (not for clean, which would otherwise regenerate everything before deleting it)
+ifneq ($(MAKECMDGOALS),clean)
 -include gen/loom_build.mk
+endif
 
 $(BUILD)/app.c: main.v gen/loom_gen.v $(wildcard app/*.v) $(wildcard $(REPO)/loom/*.v) | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
