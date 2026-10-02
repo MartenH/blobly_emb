@@ -223,16 +223,24 @@ int doip_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
 		rx_idle_ticks = 0;
 		conn_start = tx_time_get();
 	}
-	/* the pre-activation deadline is ABSOLUTE from accept, and no receive waits past it: bytes that
-	 * arrive after it are never read as an activation */
+	/* no receive waits past the inactivity deadline that is running — T_TCP_Initial before
+	 * activation (ABSOLUTE from accept), T_TCP_General after it (idle since the last bytes) — so bytes
+	 * arriving after it are never served on a connection that should already be closed */
+	ULONG left;
 	if (!sess_activated) {
 		ULONG elapsed = tx_time_get() - conn_start;
 		if (elapsed >= idle_initial) {
 			return stream_recycle();
 		}
-		if (timeout_ticks > idle_initial - elapsed) {
-			timeout_ticks = (unsigned int)(idle_initial - elapsed);
+		left = idle_initial - elapsed;
+	} else {
+		if (rx_idle_ticks >= idle_general) {
+			return stream_recycle();
 		}
+		left = idle_general - rx_idle_ticks;
+	}
+	if (timeout_ticks > left) {
+		timeout_ticks = (unsigned int)left;
 	}
 	if (!rx_pending) {
 		UINT s = nx_tcp_socket_receive(&tcp_sock, &rx_pending, timeout_ticks);
