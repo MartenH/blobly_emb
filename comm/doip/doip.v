@@ -14,9 +14,26 @@ import comm.uds
 // message + acks (0x8001/0x8002/0x8003), generic NACK (0x0000), vehicle
 // announcement (0x0004). Alive-check and entity-status answer as unknown-type
 // NACKs until a phase needs them.
+//
+// The UDS server answering is either the embedded one or, when `serve` is set,
+// one the owner keeps elsewhere — a node with ONE diagnostic server reachable
+// over both ISO-TP and DoIP (docs/diagnostics.md) hands DoIP a hook to it.
 
 pub const header_len = 8
 pub const max_msg = 256 // DoIP header + the largest UDS payload we serve
+
+// the largest UDS response a request answered through `serve` may produce: one
+// ISO-TP message (comm/isotp max_payload), so a server shared with a CAN
+// connection answers over DoIP whatever it answers there
+pub const max_uds = 520
+
+// the functional logical address (ISO 13400-2's functional group range starts
+// here): a diagnostic message to it is a functional request
+pub const functional_addr = u16(0xE400)
+
+// ServeFn answers one UDS request on a server DoIP does not own, writing at most
+// max_uds bytes to resp; returns the response length (0 = no response).
+pub type ServeFn = fn (req &u8, req_len int, functional bool, resp &u8) int
 
 const proto_ver = u8(0x02) // ISO 13400-2:2012
 const proto_inv = u8(0xFD)
@@ -50,7 +67,9 @@ pub mut:
 	activated   bool
 	fatal       bool // stream desynced (bad pattern / oversized): transport must drop the connection
 	vin         [17]u8
-	uds         uds.Server
+	uds         uds.Server // answers when serve is nil
+	serve       ServeFn = unsafe { nil }
+	ubuf        [max_uds]u8 // one UDS response, before it is framed
 	// assembly buffer: TCP chunks accumulate here until a message completes
 	buf     [max_msg]u8
 	buf_len int
@@ -166,6 +185,7 @@ pub fn (mut s Server) ident_response(data &u8, data_len int, eid &u8, resp &u8) 
 // feed consumes one chunk of TCP bytes and processes every COMPLETE DoIP message
 // assembled so far; the response stream (possibly several frames: ack + reply)
 // is written to resp. Returns the number of response bytes (0 = nothing yet).
+// resp_max must hold at least max_resp_per_msg(), or no message is ever served.
 pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 	// append (a chunk that would overflow the assembly buffer is a too-large
 	// message: drop the stream state and NACK — the glue closes on that).
@@ -206,7 +226,7 @@ pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 		// stop (don't consume) when the worst-case response for one more message
 		// no longer fits: the message stays buffered and the caller drains it
 		// with feed(len 0) after sending what accumulated so far
-		if out + max_resp_per_msg > resp_max {
+		if out + s.max_resp_per_msg() > resp_max {
 			break
 		}
 		ptype := (u16(s.buf[2]) << 8) | u16(s.buf[3])
@@ -223,8 +243,12 @@ pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 }
 
 // worst response per message: ack(8+5) + diag hdr(8+4) + uds resp — feed
-// stops before dispatching a message this might not fit
-const max_resp_per_msg = header_len + 5 + header_len + 4 + int(uds.max_did_data) + 3
+// stops before dispatching a message this might not fit. The embedded server
+// never called init(), so it answers within uds.legacy_resp_cap.
+pub fn (s &Server) max_resp_per_msg() int {
+	ulen := if s.serve != unsafe { nil } { max_uds } else { uds.legacy_resp_cap }
+	return header_len + 5 + header_len + 4 + ulen
+}
 
 fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 	match ptype {
@@ -271,7 +295,8 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 			if !s.activated || sa != s.tester_addr {
 				return s.diag_nack(resp, at, sa, dnack_invalid_source)
 			}
-			if ta != s.entity_addr {
+			functional := ta == functional_addr
+			if ta != s.entity_addr && !functional {
 				return s.diag_nack(resp, at, sa, dnack_unknown_target)
 			}
 			// positive ack first, then the UDS response as its own message
@@ -284,9 +309,15 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 				resp[o + 4] = 0x00 // ack
 			}
 			o += 5
-			mut ubuf := [uds.max_did_data + 8]u8{}
-			ulen := s.uds.handle(unsafe { &s.buf[header_len + 4] }, plen - 4, &ubuf[0])
-			if ulen > 0 {
+			req := unsafe { &s.buf[header_len + 4] }
+			ulen := if s.serve != unsafe { nil } {
+				s.serve(req, plen - 4, functional, &s.ubuf[0])
+			} else if functional {
+				s.uds.handle_functional(req, plen - 4, &s.ubuf[0])
+			} else {
+				s.uds.handle(req, plen - 4, &s.ubuf[0])
+			}
+			if ulen > 0 && ulen <= max_uds {
 				o = put_header(resp, o, pt_diag, u32(4 + ulen))
 				unsafe {
 					resp[o] = u8(s.entity_addr >> 8)
@@ -294,7 +325,7 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 					resp[o + 2] = u8(sa >> 8)
 					resp[o + 3] = u8(sa)
 					for i in 0 .. ulen {
-						resp[o + 4 + i] = ubuf[i]
+						resp[o + 4 + i] = s.ubuf[i]
 					}
 				}
 				o += 4 + ulen
