@@ -89,7 +89,7 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 		'g_diag.remote_dropped()',
 		'doip_n := C.doip_mb_take(&doip_fn)',
 		'g_diag.serve_remote(&g_doip_req[0], doip_n, doip_fn != 0, &g_doip_resp[0])',
-		'C.doip_mb_answer(doip_rn, if g_diag.server.reset_req != 0 { 1 } else { 0 })',
+		'C.doip_mb_answer(doip_rn)',
 		'for ch.recv(mut rx) {',
 	]
 	mut at := -1
@@ -109,6 +109,11 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 	// below every application thread: h735_threadx's lowest is ctrl_slow at 13
 	assert glue.contains("C.doip_net_create(c'192.168.0.50', u32(14), u32(15))")
 	assert !glue.contains('functional_addr'), 'the default functional address is comm/doip\'s'
+	// a reset waits for the CAN controller, then for DoIP answers still in TCP's transmit queue
+	can_wait := glue.index('for !ch.tx_idle()') or { -1 }
+	tcp_wait := glue.index('for C.doip_tx_pending() != 0') or { -1 }
+	reset := glue.index('\t\t\tC.diag_sys_reset()') or { -1 } // the call, not its declaration
+	assert can_wait >= 0 && can_wait < tcp_wait && tcp_wait < reset
 	// no 0x27 here: the TRNG seam is declared for the seed alone
 	assert glue.contains('fn C.diag_sa_seed(&u8, int) int')
 	// trace: the three threads bound in manifest order

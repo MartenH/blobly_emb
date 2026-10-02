@@ -89,8 +89,8 @@ pub fn (mut c Connection) init(rx_id u32, tx_id u32, functional_id u32, bs u8, s
 pub fn (mut c Connection) housekeep(now u64) {
 	c.link.tick(now)
 	c.apply_answered_reset()
-	if !c.link.idle() {
-		c.server.hold_s3(now)
+	if !c.link.idle() || c.remote_inflight {
+		c.server.hold_s3(now) // an exchange still in flight on either transport
 	}
 	c.server.tick(now)
 }

@@ -169,6 +169,7 @@ fn diag_target_reset(m Model, ioc_idx map[string]int) []string {
 		'\t\t\tdiag_t0 := C.board_now_us()',
 		'\t\t\tfor !ch.tx_idle() && C.board_now_us() - diag_t0 < 20000 {}',
 	]
+	g << doip_reset_wait(m)
 	if nvm_on(m) {
 		// an orderly shutdown, as a sleep edge is: every persisted value durable and the journal
 		// marked clean — a tester's reset must not cost calibration the way a power cut would. A

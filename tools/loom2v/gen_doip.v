@@ -111,7 +111,8 @@ fn doip_target_fns(m Model) []string {
 		'fn C.doip_mb_init(&u8, &u8)',
 		'fn C.doip_mb_call(&u8, int, int, &u8, int) int',
 		'fn C.doip_mb_take(&int) int',
-		'fn C.doip_mb_answer(int, int)',
+		'fn C.doip_mb_answer(int)',
+		'fn C.doip_tx_pending() int',
 		'fn C.doip_mb_take_sent() int',
 		'fn C.doip_mb_take_dropped() int',
 		'fn C.doip_stream_recv(&u8, int, u32) int',
@@ -320,8 +321,17 @@ fn doip_target_serve(m Model) []string {
 		'\t\tdoip_n := C.doip_mb_take(&doip_fn)',
 		'\t\tif doip_n >= 0 {',
 		'\t\t\tdoip_rn := g_diag.serve_remote(&g_doip_req[0], doip_n, doip_fn != 0, &g_doip_resp[0])',
-		'\t\t\t// a reset waiting on this answer: the doip thread reports it sent once acknowledged',
-		'\t\t\tC.doip_mb_answer(doip_rn, if g_diag.server.reset_req != 0 { 1 } else { 0 })',
+		'\t\t\tC.doip_mb_answer(doip_rn)',
 		'\t\t}',
 	]
+}
+
+// doip_reset_wait: before the MCU resets, the DoIP answers already handed to TCP leave it — bounded,
+// as the CAN wait is (a peer that never acknowledges gets the reset all the same)
+fn doip_reset_wait(m Model) []string {
+	if !m.doip.on {
+		return []string{}
+	}
+	return ['\t\t\tfor C.doip_tx_pending() != 0 && C.board_now_us() - diag_t0 < 500000 {',
+		'\t\t\t\tC._tx_thread_sleep(1)', '\t\t\t}']
 }

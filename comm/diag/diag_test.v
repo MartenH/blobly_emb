@@ -789,3 +789,18 @@ fn test_a_bus_reset_waits_for_a_doip_answer_in_flight() {
 	c.remote_sent()
 	assert c.reset_due() == 0x01
 }
+
+// S3 does not run while a DoIP answer is still on its way, as it does not while ISO-TP is busy
+fn test_s3_holds_while_a_remote_answer_is_in_flight() {
+	mut c := new_conn()
+	c.server.s3_us = 1000
+	c.housekeep(0)
+	assert remote(mut c, [u8(0x10), 0x03], false)[0] == 0x50
+	c.housekeep(5000) // the answer not yet sent: no timeout
+	assert c.server.session == uds.session_extended
+	c.remote_sent()
+	c.housekeep(5500)
+	assert c.server.session == uds.session_extended
+	c.housekeep(7000)
+	assert c.server.session == uds.session_default
+}

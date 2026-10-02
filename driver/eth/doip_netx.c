@@ -57,6 +57,7 @@ volatile ULONG net_link_up;
 volatile ULONG doip_rx_bytes;
 volatile ULONG doip_tx_bytes;
 volatile ULONG doip_mb_timeouts;
+volatile ULONG doip_setup_failed; /* the sockets could not be made: DoIP is down */
 
 extern VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr);
 extern void blobly_doip_run(void);                                          /* generated V loop */
@@ -107,8 +108,6 @@ void doip_net_seed(unsigned int seed) {
 /* the doip thread waits this long for the comm thread (which answers within a pass); a request
  * not taken by then is WITHDRAWN, so it is never served after its tester was told it failed */
 #define MB_TIMEOUT_MS 2000u
-/* a reset waits this long for its answer's TCP acknowledgement before it is reported sent */
-#define FLUSH_TIMEOUT_MS 500u
 
 static TX_MUTEX mb_mutex;
 static TX_SEMAPHORE mb_done;   /* put by each answer; a stale put is told apart by sequence */
@@ -117,10 +116,8 @@ static unsigned char *mb_resp;
 static int mb_req_len;
 static int mb_functional;
 static int mb_resp_len;
-static int mb_flush;           /* the comm thread: a reset is waiting on this answer */
 static ULONG mb_posted;        /* sequence of the request posted */
 static ULONG mb_answered;      /* sequence of the request answered */
-static ULONG mb_flush_seq;     /* the answer that must be acknowledged before it counts as sent */
 static ULONG mb_returned;      /* the doip thread: the last answer handed to the V loop */
 /* what the doip thread reports, by SEQUENCE, so a report about an earlier answer or connection is
  * never read as one about the request the comm thread answered last */
@@ -163,9 +160,6 @@ int doip_mb_call(const unsigned char *req, int len, int functional, unsigned cha
 			for (int i = 0; i < n; i++) {
 				resp[i] = mb_resp[i];
 			}
-			if (mb_flush) {
-				mb_flush_seq = seq;
-			}
 			mb_returned = seq;
 			tx_mutex_put(&mb_mutex);
 			return n;
@@ -197,11 +191,10 @@ int doip_mb_take(int *functional) {
 	return mb_req_len;
 }
 
-/* comm thread: the answer to the request doip_mb_take returned (written to the response buffer);
- * `flush` = a reset waits on it. Releases the mailbox. */
-void doip_mb_answer(int n, int flush) {
+/* comm thread: the answer to the request doip_mb_take returned (written to the response buffer).
+ * Releases the mailbox. */
+void doip_mb_answer(int n) {
 	mb_resp_len = n;
-	mb_flush = flush;
 	mb_answered = mb_posted;
 	tx_mutex_put(&mb_mutex);
 	tx_semaphore_put(&mb_done);
@@ -299,16 +292,11 @@ int doip_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
 	return (int)got;
 }
 
-/* the answer to a reset counts as sent once the tester has acknowledged it: the reset follows at
- * once, and bytes still in the transmit queue would die with the MCU. Bounded: a peer that never
- * acknowledges gets the reset all the same — its answer was sent. */
-static void stream_flush(void) {
-	for (ULONG t = 0; t < MS_TICKS(FLUSH_TIMEOUT_MS); t++) {
-		if (tcp_sock.nx_tcp_socket_transmit_sent_count == 0u) {
-			return;
-		}
-		tx_thread_sleep(1);
-	}
+/* doip_tx_pending: answer bytes handed to TCP that the tester has not acknowledged yet — the comm
+ * thread waits for none before it resets the MCU (bounded there), as it waits for the CAN
+ * controller's Tx FIFO: bytes in the transmit queue would die with the MCU */
+int doip_tx_pending(void) {
+	return tcp_connected && tcp_sock.nx_tcp_socket_transmit_sent_count != 0u;
 }
 
 /* a failed send recycles the connection (feed already consumed the request, so the answer is
@@ -325,10 +313,6 @@ int doip_stream_send(const unsigned char *buf, int len) {
 		return stream_recycle();
 	}
 	doip_tx_bytes += (ULONG)len;
-	if (mb_flush_seq != 0u) {
-		stream_flush();
-		mb_flush_seq = 0;
-	}
 	mb_sent_seq = mb_returned;
 	comm_wake();
 	return len;
@@ -430,11 +414,17 @@ static void doip_entry(ULONG arg) {
 		tx_thread_sleep(NX_IP_PERIODIC_RATE / 10);
 	}
 	net_link_up = 1;
-	nx_udp_socket_create(&ip, &udp_sock, "doip-udp", NX_IP_NORMAL, NX_DONT_FRAGMENT, 0x80, 5);
-	nx_udp_socket_bind(&udp_sock, DOIP_PORT, NX_WAIT_FOREVER);
-	nx_tcp_socket_create(&ip, &tcp_sock, "doip-tcp", NX_IP_NORMAL, NX_DONT_FRAGMENT, 0x80,
-	                     TCP_WINDOW, NX_NULL, NX_NULL);
-	nx_tcp_server_socket_listen(&ip, DOIP_PORT, &tcp_sock, 1, NX_NULL);
+	if (nx_udp_socket_create(&ip, &udp_sock, "doip-udp", NX_IP_NORMAL, NX_DONT_FRAGMENT, 0x80, 5) != NX_SUCCESS ||
+	    nx_udp_socket_bind(&udp_sock, DOIP_PORT, NX_WAIT_FOREVER) != NX_SUCCESS ||
+	    nx_tcp_socket_create(&ip, &tcp_sock, "doip-tcp", NX_IP_NORMAL, NX_DONT_FRAGMENT, 0x80,
+	                         TCP_WINDOW, NX_NULL, NX_NULL) != NX_SUCCESS ||
+	    nx_tcp_server_socket_listen(&ip, DOIP_PORT, &tcp_sock, 1, NX_NULL) != NX_SUCCESS) {
+		/* DoIP stays down: park rather than run the loop on a half-made socket (which would spin) */
+		doip_setup_failed = 1;
+		for (;;) {
+			tx_thread_sleep(TX_TIMER_TICKS_PER_SECOND);
+		}
+	}
 	sockets_up = 1;
 	blobly_doip_run(); /* never returns */
 }
