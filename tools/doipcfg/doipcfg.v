@@ -7,16 +7,21 @@ module doipcfg
 
 import toml
 import comm.doip
+import comm.uds
 
 // the policy's keys: the same names in ecu.toml's [doip] and a node's `doip`
 pub const list_keys = ['testers', 'activation_types']
 pub const int_keys = ['initial_inactivity_ms', 'general_inactivity_ms', 'announce_count',
 	'announce_interval_ms']
+// allow_bench_key: the node may answer 0x27 with blobly_net's PUBLIC reference key over the
+// network — a bench posture, opted into by name (bench_key_refusal)
+pub const bench_key = 'allow_bench_key'
 
 // keys: every policy key, lists first
 pub fn keys() []string {
 	mut k := list_keys.clone()
 	k << int_keys
+	k << bench_key
 	return k
 }
 
@@ -28,6 +33,10 @@ pub mut:
 	has_types   bool
 	// the integer keys as authored (absent = comm/doip's default)
 	ints map[string]i64
+	// allow_bench_key as authored (absent = false); bench_key_bad: authored, but not a boolean
+	allow_bench_key     bool
+	has_allow_bench_key bool
+	bench_key_bad       bool
 }
 
 // parse reads the policy keys of a [doip] / `doip` table; the second result names every policy key
@@ -59,6 +68,14 @@ pub fn parse(m map[string]toml.Any) (Policy, []string) {
 			not_int << k
 		}
 	}
+	if v := m[bench_key] {
+		if v is bool {
+			p.allow_bench_key = v
+			p.has_allow_bench_key = true
+		} else {
+			p.bench_key_bad = true
+		}
+	}
 	return p, not_int
 }
 
@@ -78,6 +95,9 @@ pub fn (p Policy) int_of(k string) i64 {
 // problems: everything the entity could not serve as written, one sentence each, naming the key
 pub fn (p Policy) problems() []string {
 	mut errs := []string{}
+	if p.bench_key_bad {
+		errs << '`${bench_key}` must be true or false'
+	}
 	if p.has_testers && p.testers.len == 0 {
 		errs << '`testers` is empty — absent admits any tester address (0x0E00..0x0FFF); an empty list would read as that too'
 	}
@@ -132,5 +152,104 @@ pub fn (p Policy) lines() []string {
 			b << '${k} = ${v}'
 		}
 	}
+	if p.has_allow_bench_key {
+		b << '${bench_key} = ${p.allow_bench_key}'
+	}
 	return b
+}
+
+// ---- REQ-NET-012: what a server reachable over the network must gate ----
+// One statement for the node gate (loom2v validate_doip) and syscheck (sysmodel check_doip).
+
+// open_services: what a network tester may run before it has authenticated — reach and keep a
+// session (0x10, 0x3E) and authenticate in it (0x27), which no 0x27 gate can itself require, and
+// read (0x22, 0x19). 0x2E is gated per DID or by its own row (the node gate). Every OTHER service
+// changes ECU state — 0x11 restarts it, 0x14 clears its fault memory, 0x85 freezes it, 0x28
+// silences its bus — so this lists what is exempt, not what is gated.
+pub const open_services = [u8(0x10), 0x19, 0x22, 0x27, 0x2E, 0x3E]
+
+// needs_unlock: a network tester may run `sid` only once it has authenticated
+pub fn needs_unlock(sid u8) bool {
+	return sid !in open_services
+}
+
+// ServiceRow is one [uds] services row as this rule reads it
+pub struct ServiceRow {
+pub:
+	sid      u8
+	security i64 // 0 = none; as authored, so a level out of range is refused rather than truncated
+}
+
+// service_refusals: why a [uds] service table (`table` false = none declared, the default table)
+// cannot be reachable over the network. Fail-closed: the default table serves every service the
+// build performs with no security, whatever comm/uds learns to serve later, so a server reachable
+// over the network declares its table; and in a table, every row this rule does not exempt needs a
+// level. A row the build cannot perform is the [uds] gate's to refuse.
+pub fn service_refusals(table bool, rows []ServiceRow) []string {
+	if !table {
+		return [
+			'has no [uds] services table — the default table serves every service the build performs, 0x11 ECUReset included, to an unauthenticated network tester; declare one with a security level on each service that changes ECU state (REQ-NET-012)',
+		]
+	}
+	mut errs := []string{}
+	for r in rows {
+		if r.security != 0 && !is_level(r.security) {
+			errs << '[uds] services 0x${r.sid.hex()} security = ${r.security} is not a 0x27 level (1..${uds.max_security_level}) — it gates nothing (REQ-NET-012)'
+			continue
+		}
+		if needs_unlock(r.sid) && r.security == 0 {
+			errs << '[uds] services 0x${r.sid.hex()} changes ECU state but needs no security level — over the network it would act for an unauthenticated tester; give it `security = N` or leave it out (REQ-NET-012)'
+		}
+	}
+	return errs
+}
+
+// bench_key_refusal: '' unless the 0x27 key a server reachable over the network answers with
+// (`security_key`, [uds]) and `allow_bench_key` disagree. blobly_net's reference key is PUBLIC, so
+// over a routed network it authenticates nobody: allowed only by name, as a bench posture.
+pub fn bench_key_refusal(security_key string, allow bool) string {
+	if security_key == 'reference' && !allow {
+		return '[uds] security_key = "reference" is blobly_net\'s PUBLIC bench key, and the network reaches this server — over IP it authenticates nobody (REQ-NET-012). Set `${bench_key} = true` for a closed bench, or give the node the OEM\'s key (drop security_key)'
+	}
+	if allow && security_key != 'reference' {
+		return '`${bench_key}` is set, but [uds] uses no bench key — it would mean nothing'
+	}
+	return ''
+}
+
+// is_level: a 0x27 security level (1..uds.max_security_level). Every rule here asks it, so a value
+// out of range is never read as authentication anywhere.
+pub fn is_level(l i64) bool {
+	return l >= 1 && l <= uds.max_security_level
+}
+
+// DidWrite is a [[did]]'s write side, as far as REQ-NET-012 is concerned
+pub struct DidWrite {
+pub:
+	id       int
+	writable bool
+	security i64 // the DID's own write gate; 0 = none
+}
+
+// did_refusals: a writable DID reachable over the network needs a write gate — its own, or the
+// "0x2E" service row's (comm/uds checks the row first, so a gated row denies every DID behind it).
+// The one rule loom2v's validate_doip and syscheck's check_doip both apply.
+pub fn did_refusals(rows []ServiceRow, dids []DidWrite) []string {
+	mut row_2e := i64(0)
+	for r in rows {
+		if r.sid == 0x2E && is_level(r.security) {
+			row_2e = r.security
+		}
+	}
+	mut errs := []string{}
+	for d in dids {
+		if d.security != 0 && !is_level(d.security) {
+			errs << 'DID 0x${d.id.hex()} write security = ${d.security} is not a 0x27 level (1..${uds.max_security_level}) — it gates nothing (REQ-NET-012)'
+			continue
+		}
+		if d.writable && d.security == 0 && row_2e == 0 {
+			errs << 'makes DID 0x${d.id.hex()} writable from the network with no security level — gate it (write = { security = N }, or a security level on [uds] services "0x2E"), REQ-NET-012'
+		}
+	}
+	return errs
 }

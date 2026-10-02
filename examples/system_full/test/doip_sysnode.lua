@@ -58,18 +58,55 @@ test("one server: the session is shared, each transport's unlock its own", funct
   check.nrc(0x31, function() d:write_did(0x0102, "\x77") end) -- CAN ended the session for both
 end)
 
-test("wrong keys lock 0x27 out over DoIP; ECUReset answers, restarts, and the lockout runs on", function()
-  local d = uds.open("sysnode")
+-- REQ-NET-012: a service that changes ECU state acts over the network only for a tester that
+-- authenticated over the network — reachable and in the right session is not enough, and neither is
+-- the CAN tester's unlock. sysnode's [uds] gates ECUReset behind level 1 (loom2v requires it of a
+-- [doip] node); the reset itself, under DoIP's own unlock, is the next test's
+test("ECUReset over DoIP is refused 0x33 without DoIP's own unlock", function()
+  local d, c = uds.open("sysnode"), can()
+  check.nrc(0x7F, function() d:raw("\x11\x01") end) -- the default session: not served here at all
+  d:session(0x03)
+  check.nrc(0x33, function() d:raw("\x11\x01") end)
+  c:security_access(0x01)
+  check.nrc(0x33, function() d:raw("\x11\x01") end) -- CAN's unlock does not open DoIP
+  c:session(0x01)
+end)
+
+-- wrong keys over TCP count and lock out as the bus's do: the count and the lockout are the
+-- server's, so the CAN tester is locked out too, and nothing gated acts meanwhile. A DoIP tester
+-- cannot then reset under its OWN lockout — the reset needs its unlock, which a locked-out 0x27
+-- cannot give, and an unlock earned first answers a seed request with zeros, spending no key —
+-- so the lockout kept through a DoIP-requested reset is the next test's, the keys spent from CAN.
+test("wrong keys over DoIP lock 0x27 out, for the bus too", function()
+  local d, c = uds.open("sysnode"), can()
   d:session(0x03)
   check.nrc(0x35, function() d:security_access(0x01, wrong) end)
   check.nrc(0x35, function() d:security_access(0x01, wrong) end)
   check.nrc(0x36, function() d:security_access(0x01, wrong) end)
+  check.nrc(0x37, function() d:raw("\x27\x01") end)
+  check.nrc(0x37, function() c:raw("\x27\x01") end)
+  check.nrc(0x33, function() d:raw("\x11\x01") end) -- REQ-NET-012: still locked, so no reset
+  sleep_ms(3200)
+  d:tester_present()
+  d:security_access(0x01)
+  d:session(0x01)
+end)
+
+test("wrong keys lock 0x27 out; ECUReset over DoIP, under its own unlock, answers, restarts, and the lockout runs on", function()
+  local d, c = uds.open("sysnode"), can()
+  d:session(0x03)
+  d:security_access(0x01) -- DoIP's, earned before the lockout: the reset needs it (REQ-NET-012)
+  -- the CAN tester spends the attempts: the count and the lockout are the server's, DoIP's unlock its own
+  check.nrc(0x35, function() c:security_access(0x01, wrong) end)
+  check.nrc(0x35, function() c:security_access(0x01, wrong) end)
+  check.nrc(0x36, function() c:security_access(0x01, wrong) end)
+  check.nrc(0x37, function() d:raw("\x27\x01") end) -- locked out over DoIP too
   -- the answer arrives before the reset: the reset waits for the tester's TCP acknowledgement
   check.equal(tohex(d:raw("\x11\x01")), "51 01")
   -- CAN is up within a second of the restart, the Ethernet link only after auto-negotiation: the
   -- kept lockout (3 s from boot) is seen on CAN
   sleep_ms(1000)
-  local c = can()
+  c = can()
   c:session(0x03)
   check.nrc(0x37, function() c:raw("\x27\x01") end)
   sleep_ms(3200)

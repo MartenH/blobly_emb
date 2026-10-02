@@ -2774,8 +2774,10 @@ fn someip_send_cycle_ms(fr SysFrame) ?i64 {
 // check_doip: `doip = { logical = 0x07A0 }` on a [[node]] lowers into its [doip] — the node's
 // one diagnostic server, reachable over DoIP (ISO 13400) at its endpoint address. What the node
 // gate (loom2v validate_doip) would refuse only once the node is BUILT is refused here, where
-// the system can still say which node and why, and what no single node can see — two nodes
-// answering one logical address — is refused only here.
+// the system can still say which node and why — its addresses, its policy, and REQ-NET-012's
+// service table and bench key (doipcfg, the one rule both apply; a DID's own write gate is the
+// node gate's, since the system model does not read [[did]]) — and what no single node can see —
+// two nodes answering one logical address — is refused only here.
 fn check_doip(s System) []Issue {
 	mut issues := []Issue{}
 	mut logical_of := map[u32]string{}
@@ -2791,6 +2793,20 @@ fn check_doip(s System) []Issue {
 			}
 		}
 		issues << check_doip_policy(n)
+		// REQ-NET-012: no change of ECU state for an unauthenticated network tester
+		mut net012 := doipcfg.service_refusals(n.view.uds_table, n.view.uds_rows)
+		net012 << doipcfg.did_refusals(n.view.uds_rows, n.view.did_writes)
+		bench := doipcfg.bench_key_refusal(n.view.uds_security_key, n.doip_policy.allow_bench_key)
+		if bench != '' {
+			net012 << bench
+		}
+		for why in net012 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-NET-012'
+				msg:      'node "${n.name}": declares `doip`, but its ecu.toml ${why}'
+			}
+		}
 		if !n.has_doip_logical {
 			issues << Issue{
 				severity: .error

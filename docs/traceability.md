@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 200 | 109 | 28 | 63 | 0 |
+| 200 | 110 | 28 | 62 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -122,7 +122,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-009 | QM | test | uncovered | — |
 | REQ-NET-010 | QM | test | uncovered | — |
 | REQ-NET-011 | QM | test | uncovered | — |
-| REQ-NET-012 | QM | test | uncovered | — |
+| REQ-NET-012 | QM | test | verified | diag_test.v (pass), doip_target_test.v (pass) |
 | REQ-NET-013 | QM | test | verified | e2e_test.v (pass) |
 | REQ-NET-014 | QM | test | uncovered | — |
 | REQ-NET-015 | QM | test | verified | e2e_test.v (pass) |
@@ -327,7 +327,7 @@ Generated from `requirements/*.toml` + verification links. See
 | REQ-NET-009 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NET-010 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NET-011 | | | | | | | | | | | | | | | | | | | | | |
-| REQ-NET-012 | | | | | | | | | | | | | | | | | | | | | |
+| REQ-NET-012 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NET-013 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-NET-014 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-NET-015 | | | | | | | | | | | | | | | | | | ✓ | | | |

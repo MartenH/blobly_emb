@@ -106,14 +106,12 @@ programming/diag path is exposed over IP, not after:
   verification (`test_keyless_build_flashes_open` covers that mode) — fine for a
   closed bench, catastrophic if reachable over a routed network. An IP-enabled
   build must refuse to boot the programming path with an unset image key.
-- **Diagnostic writes need authentication (REQ-NET-012).** The 0x29 gate lives in
-  `boot.Prog`; the application UDS server (`uds.Server.handle`) currently accepts
-  `0x2E WriteDataByIdentifier` on any writable DID with no auth. Over CAN that is
-  a physically-present adversary; over IP, reachability alone would grant write
-  access. The app diag server needs an authenticated-session gate (the same 0x29
-  primitive, or a session-based access control) before it is externally reachable.
-  A routing-activation tester list (`[doip] testers`, below) does not close this: it
-  filters claimed source addresses, which are not authenticated.
+- **State-changing diagnostics need authentication (REQ-NET-012).** Over CAN an
+  unauthenticated 0x2E or 0x11 is a physically-present adversary; over IP, reachability
+  alone would grant it. Closed for DoIP (the sysnode section below): a `[doip]` node's
+  every state-changing service carries a 0x27 level, and the unlock that level asks for
+  is the network tester's own. A routing-activation tester list (`[doip] testers`, below)
+  does not close this: it filters claimed source addresses, which are not authenticated.
 
 Beyond those, P3+ must consider: rate-limiting/SYN-flood resistance (bounded
 pools already cap resource exhaustion to "drop", not crash) and — later — **TLS**
@@ -266,16 +264,17 @@ ISO 13400: on its own image first (below), then generated onto a running node (s
 generator emits; doip-svc: link poll + the UDP requests — identification, entity status,
 power mode), and hands each
 request to the CAN comm thread through a mailbox — the server keeps one owner
-thread. The VIN announced is DID 0xF190. Generation refuses a writable DID
-without a security level (REQ-NET-012's DID-write half; 0x11 ECUReset is still
-reachable over IP without one, so the requirement stays open — and sysnode's key
-is blobly_net's public reference key, a bench posture), an entity address outside ISO 13400's
+thread. The VIN announced is DID 0xF190. Generation refuses a state-changing service
+reachable without a security level and the public bench key unless named (REQ-NET-012, below —
+sysnode names it: `allow_bench_key = true`, a bench posture), an entity address outside ISO 13400's
 entity ranges, and an eth bus at another address (a node has one). TCP initial
 sequence numbers come from the TRNG (the comm thread draws the seed). Bench:
 `examples/system_full/test/doip_sysnode.lua` on the H735 — discovery, sessions,
 DIDs, 0x27 + the gated 0x2E, one server and one session across DoIP and CAN with
 each transport's unlock its own, and ECUReset
-answered over TCP before the restart, 5/5.
+answered over TCP before the restart. With ECUReset gated (REQ-NET-012) it also refuses
+0x11 without DoIP's own unlock and resets under it — 7/7 on the bench 2026-10-02 (image 906380d); the DoIP
+wrong-key leg added after that run is not yet rerun.
 
 **Declared by the system, not the node** (rung 6): sysnode's address and DoIP entity
 address are `endpoint = { address = "192.168.0.50", port = 30490 }` and
@@ -332,12 +331,53 @@ a second NetX socket to accept the contender on, and a listen-queue signal NetX 
 random A_DoIP_Announce_Wait before the first announcement, and routing activation's
 authentication / confirmation steps (codes 0x04, 0x05, 0x11).
 
-**REQ-NET-012 is still open.** `testers` is a policy, not authentication: a source address is
-whatever the tester writes into its request, so the list keeps honest testers on their own
-addresses and nothing more. What closes the requirement is an authenticated activation (the OEM
-field of the routing activation request, or 0xE0 central security) or an authenticated session
-in front of every state-altering service — 0x11 ECUReset included, which is still reachable over
-IP with no security level.
+**REQ-NET-012: an authenticated session in front of every state-changing service.**
+`testers` is a policy, not authentication: a source address is whatever the tester writes into
+its request, so the list keeps honest testers on their own addresses and nothing more. What
+closes the requirement is two rules that already existed, joined by one at generation:
+
+- **The unlock belongs to the transport that earned it** (`comm/diag` enter/leave): a request
+  over DoIP sees the server locked unless a 0x27 exchange over DoIP unlocked it, whatever the CAN
+  tester holds, and the reverse. The cross-transport model in `comm/diag/diag_test.v` checks it
+  over random interleavings, once on the default table and once with 0x11 gated.
+- **Every service a `[doip]` node performs that changes ECU state carries a security level**
+  (`tools/doipcfg` `service_refusals`, applied by loom2v's `validate_doip` and by syscheck's
+  `check_doip` alike): a writable DID needs `write = { security = N }` or a security level on
+  the `[uds] services` `"0x2E"` row (comm/uds checks the row before the DID, so a gated row gates
+  every write behind it), and every other service needs a row with `security = N` — or is left
+  out of the table. The rule lists what is EXEMPT (`open_services`), not what is gated: 0x10 and
+  0x3E (reaching and keeping a session), 0x27 (authenticating, which no 0x27 gate can itself
+  require), 0x22 and 0x19 (reads), and 0x2E (gated as above). Everything else — 0x11 ECUReset,
+  0x14 clearing the fault memory, 0x85 freezing it, 0x28 silencing the bus — must be gated. It is
+  fail-closed: the default table (no `services`) serves whatever the build performs with no
+  security, so a `[doip]` node with no table is refused outright, and a service comm/uds learns
+  later is reachable there only through a row, which this rule judges.
+- **The key the level is checked with is not one anybody can compute.** `[uds] security_key =
+  "reference"` is blobly_net's PUBLIC reference key; over a routed network it authenticates
+  nobody, so a `[doip]` node may use it only by name: `allow_bench_key = true` in `[doip]` (on a
+  system's `[[node]]`, in its `doip` table; refused when it names no bench key). sysnode sets it —
+  the closed bench. **What is verified is the mechanism** (a state change over IP needs that
+  tester's own unlock, `comm/diag/diag_test.v` and the generator's refusals,
+  `tools/loom2v/doip_target_test.v`); a production key is the OEM's: `diag_sa_key_ok`, which the
+  node's glue supplies (none is linked by default — `boards/common/diag_board.c`), and which a
+  node with no `security_key` must link.
+
+So over IP a state change answers securityAccessDenied (0x33) until THAT tester has unlocked, in
+ISO 14229-1's order (a service outside its session still answers 0x7F first). The gate is one
+row, shared with the bus: a `[doip]` node's CAN tester needs its own unlock for the same service
+too — the requirement asks for the network "not only" the bus, and a second, network-only table
+would be a second copy of the per-service gate inside `comm/uds`.
+
+**What an unauthenticated network tester can still do** is deny diagnostics, not change ECU
+state. 0x10 is open: it can move the SHARED session, which relocks the bus tester's unlock (every
+session entry relocks). And 0x27 is open: its failed-key count and lockout are the SERVER's, and
+kept through a reset (`kept_security`), so a network tester sending wrong keys locks the bus
+tester out of 0x27 too for the lockout delay. Neither is preventable by a session gate — the
+attempt is the authentication — only by authenticating before the request is served, at
+activation. Not built: that authenticated routing activation (the OEM-specific field, or 0xE0
+central security) — it would authenticate the CONNECTION, while ISO 14229's 0x27 / 0x29
+authenticate the diagnostic session, which is what the requirement names; and 0x29 itself, which
+the application server does not serve (the bootloader's `boot.Prog` does).
 
 **One NetX per image** (`driver/eth/netx_up.c`): the pool, the IP instance,
 ARP/ICMP/UDP, the link wait and `rand()` are brought up once, at the node's one

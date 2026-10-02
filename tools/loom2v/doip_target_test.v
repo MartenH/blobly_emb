@@ -6,8 +6,26 @@ import os
 // generator wires into the comm thread and boot, and what it refuses. Runs the real generator on
 // examples/h735_threadx with a connection and [doip] appended (a refusal is a panic, which cannot
 // be caught in-process).
+// @verifies REQ-NET-012 (the build half: no service that changes ECU state is reachable over IP
+// without a security level — comm/diag's tests show the unlock that level asks for is the network's own)
 
-const doip_conn = '
+// a service table gating the one state-changing service h735_threadx performs (0x11; no fault
+// memory, so no 0x14/0x85), as every [doip] node must (REQ-NET-012)
+const doip_uds = '
+[uds.services]
+"0x10" = {}
+"0x11" = { sessions = ["extended"], security = 1 }
+"0x22" = {}
+"0x27" = {}
+"0x2E" = {}
+"0x3E" = {}
+'
+
+// the same table with the reset gated by session alone (and no 0x27: nothing would need it)
+const doip_open_reset = doip_conn.replace('"0x11" = { sessions = ["extended"], security = 1 }',
+	'"0x11" = { sessions = ["extended"] }').replace('"0x27" = {}\n', '')
+
+const doip_conn = doip_uds + '
 [isotp]
 bus           = "can0"
 rx_id         = 0x7B0
@@ -120,7 +138,7 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 	tcp_wait := glue.index('for C.doip_tx_pending() != 0') or { -1 }
 	reset := glue.index('\t\t\tC.diag_sys_reset()') or { -1 } // the call, not its declaration
 	assert can_wait >= 0 && can_wait < tcp_wait && tcp_wait < reset
-	// no 0x27 here: the TRNG seam is declared for the seed alone
+	// 0x27 (the 0x11 gate) declares the TRNG seam, which the TCP seed shares
 	assert glue.contains('fn C.diag_sa_seed(&u8, int) int')
 	// trace: the three threads bound in manifest order
 	assert glue.contains('C.trace_bind_thread(C.doip_net_tcb(0)) // NetX IP thread')
@@ -197,6 +215,10 @@ fn test_a_doip_config_that_cannot_be_served_is_refused() {
 		'func_range': doip_conn + 'functional_address = 0x1234\n'
 		// REQ-NET-012: a write reachable over IP needs a security level
 		'open_write': doip_conn.replace('[doip]', '[[did]]\nid    = 0x0102\nbytes = "00"\nwrite = { session = ["extended"] }\n\n[doip]')
+		// ...and so does any other change of ECU state: a reset gated by session alone,
+		'open_reset': doip_open_reset
+		// or the default table, which serves 0x11 to anyone
+		'no_table':   doip_conn.all_after(doip_uds)
 	}
 	for name, extra in cases {
 		code, out, _ := generate('doip_${name}', extra)
@@ -207,6 +229,47 @@ fn test_a_doip_config_that_cannot_be_served_is_refused() {
 	gated := doip_conn.replace('[doip]', '[[did]]\nid    = 0x0102\nbytes = "00"\nwrite = { session = ["extended"], security = 1 }\n\n[doip]')
 	code, out, _ := generate('doip_gated', gated)
 	assert code == 0, out
+	// a table that leaves the reset out serves nothing that changes state: nothing to gate
+	no_reset := doip_conn.replace('"0x11" = { sessions = ["extended"], security = 1 }\n', '').replace('"0x27" = {}\n',
+		'')
+	c2, o2, _ := generate('doip_no_reset', no_reset)
+	assert c2 == 0, o2
+}
+
+// the gate on a state-changing service is the network tester's 0x27 level, wired into the table
+fn test_a_doip_nodes_reset_is_gated_in_its_service_table() {
+	code, out, glue := generate('doip_reset_gate', doip_conn)
+	assert code == 0, out
+	assert glue.contains('uds.Service{sid: 0x11, sessions: 0x04, security: 1}'), glue
+	c2, o2, _ := generate('doip_open_reset', doip_open_reset)
+	assert c2 != 0 && o2.contains('[uds] services 0x11 changes ECU state but needs no security level'), o2
+	c3, o3, _ := generate('doip_no_table', doip_conn.all_after(doip_uds))
+	assert c3 != 0 && o3.contains('has no [uds] services table'), o3
+}
+
+// a gated 0x2E row gates every write behind it (comm/uds checks the row before the DID), so a
+// writable DID needs no level of its own there
+fn test_a_gated_write_service_gates_its_dids() {
+	row := '"0x2E" = { sessions = ["extended"], security = 1 }'
+	did := '[[did]]\nid    = 0x0102\nbytes = "00"\nwrite = { session = ["extended"] }\n\n[doip]'
+	code, out, glue := generate('doip_2e_row', doip_conn.replace('"0x2E" = {}', row).replace('[doip]',
+		did))
+	assert code == 0, out
+	assert glue.contains('uds.Service{sid: 0x2e, sessions: 0x04, security: 1}'), glue
+}
+
+// blobly_net's reference key is public: over the network only by name (allow_bench_key), and the
+// name means nothing without the key
+fn test_the_public_bench_key_over_ip_is_allowed_only_by_name() {
+	keyed := '\n[uds]\nsecurity_key = "reference"\n' + doip_conn
+	code, out, _ := generate('doip_bench_key', keyed)
+	assert code != 0 && out.contains('PUBLIC bench key'), out
+	c2, o2, _ := generate('doip_bench_ok', keyed + 'allow_bench_key = true\n')
+	assert c2 == 0, o2
+	c3, o3, _ := generate('doip_bench_none', doip_conn + 'allow_bench_key = true\n')
+	assert c3 != 0 && o3.contains('it would mean nothing'), o3
+	c4, o4, _ := generate('doip_bench_bad', keyed + 'allow_bench_key = "yes"\n')
+	assert c4 != 0 && o4.contains('must be true or false'), o4
 }
 
 fn test_ip4_ok_is_the_drivers_rule() {

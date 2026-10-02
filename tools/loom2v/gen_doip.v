@@ -118,12 +118,44 @@ fn validate_doip(m Model) {
 	if vin.len != 17 || !vin.bytes().all(it >= 0x21 && it <= 0x7E) {
 		panic('loom2v: [doip] announces DID 0xF190 as the VIN: declare it as 17 printable ASCII characters (got "${vin}")')
 	}
-	// REQ-NET-012: over IP, reachability alone must not grant a write
-	for did in m.dids {
-		if did.writable && did.write_security == 0 {
-			panic('loom2v: [doip] makes DID 0x${did.id.hex()} writable from the network with no security level — ' +
-				'gate it (write = { security = N }), REQ-NET-012')
+	// REQ-NET-012: over IP, reachability alone must not change ECU state. comm/diag makes an
+	// unlock the transport's that earned it, so a level asked over DoIP is the network tester's
+	// own 0x27, never the bus tester's. A write: the DID's own write gate, or the 0x2E row's
+	// (comm/uds checks the row first, so a gated row denies every DID behind it)
+	mut wrows := []doipcfg.ServiceRow{}
+	for r in m.uds.services {
+		wrows << doipcfg.ServiceRow{
+			sid:      r.sid
+			security: i64(r.security)
 		}
+	}
+	mut dws := []doipcfg.DidWrite{}
+	for did in m.dids {
+		dws << doipcfg.DidWrite{
+			id:       did.id
+			writable: did.writable
+			security: i64(did.write_security)
+		}
+	}
+	for why in doipcfg.did_refusals(wrows, dws) {
+		panic('loom2v: [doip] ${why}')
+	}
+	// ...every other service: doipcfg's rule, the one syscheck applies too (fail-closed: no table
+	// is refused outright, and a row the rule does not exempt needs a level)
+	mut rows := []doipcfg.ServiceRow{}
+	for r in m.uds.services {
+		rows << doipcfg.ServiceRow{
+			sid:      r.sid
+			security: i64(r.security)
+		}
+	}
+	for why in doipcfg.service_refusals(m.uds.table, rows) {
+		panic('loom2v: [doip] ${why}')
+	}
+	// ...and the key that level is checked with must not be one anybody can compute
+	why := doipcfg.bench_key_refusal(m.uds.security_key, d.policy.allow_bench_key)
+	if why != '' {
+		panic('loom2v: [doip] ${why}')
 	}
 }
 
