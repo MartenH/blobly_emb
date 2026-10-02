@@ -6,9 +6,10 @@
 # driver (boards/h723/eth.c): the generated loom_gen.v owns the eth comm thread, the
 # shared driver/eth/netx_up.c owns NetX bring-up (eth_netx.c the SOME/IP socket on it — both listed
 # by the generated gen/loom_build.mk), boards/common/iocb.c the byte pool.
-# The wire is identical to examples/h735_someip / host_someip — SAME service id 0x0100 — so
-# the same blobly_net oracle / bench_test.sh verify it unchanged (the SOME/IP envelope gate
-# drops a foreign service, so the id must match).
+# The wire is identical to examples/host_someip — SAME service id 0x0100 — so the same
+# blobly_net oracle verifies it unchanged (the SOME/IP envelope gate drops a foreign service,
+# so the id must match). Its benches: bench_test.sh beside this file (the RPC, REQ-NET-016) and
+# ../../test/tcu_e2e.lua (the E2E-protected receive path, REQ-E2E-002 on eth).
 #
 # DISSOLVED (#245): the bus, the [someip] endpoint, the signals and the service events are the
 # SYSTEM's — declared in system.toml and lowered into gen-tcu.toml by tools/sysgen, exactly as
@@ -43,5 +44,5 @@ thread = "app_main"
   [[fb.handler]]
   name      = "on_100ms"
   period_ms = 100
-  reads     = ["LampCmd"]
-  writes    = ["BenchLoad", "BenchTicks", "EchoVal"]
+  reads     = ["LampCmd", "LampCmdSafe"]
+  writes    = ["BenchLoad", "BenchTicks", "EchoVal", "SafeStatus"]

@@ -403,11 +403,13 @@ verifies = ["REQ-NET-007"]
 approved_by = "Claude (coding agent) on Marten Hildell's bench — sysnode DoIP suite 5/5"
 date = "2026-10-02"
 
+# The SOME/IP RPC on system_full's tcu (NUCLEO-H723, 192.168.0.51); --flash needs
+# BLOB_H723_SERIAL and replaces whatever that H723 holds (zone_a, on a CAN bench) with tcu.
 [[check]]
-id = "h735-someip-hwtest"
+id = "tcu-someip-hwtest"
 method = "test"
-context = "h735/target"
-command = "sh -c 'if [ -z \"$BLOB_HWTEST\" ]; then exit 2; fi; exec examples/h735_someip/bench_test.sh --flash'"
+context = "h723/target"
+command = "sh -c 'if [ -z \"$BLOB_HWTEST\" ]; then exit 2; fi; exec examples/system_full/nodes/tcu/bench_test.sh --flash'"
 skip_exit = 2 # exit 2 = disabled/no-board/no-probe-host -> pending; 1 = a real FAIL
 verifies = ["REQ-NET-016"]
 

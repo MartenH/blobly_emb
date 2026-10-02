@@ -447,7 +447,10 @@ configured method is invocable end to end.
 ## Target rung status (2026-07-20, BENCH-VERIFIED — full pipeline on silicon)
 
 The FULL loom2v pipeline on the H735: `examples/h735_someip` is now generated
-from ecu.toml (the hand-wired netx_glue rung is retired). What the rung built:
+from ecu.toml (the hand-wired netx_glue rung is retired). (`h735_someip` has since been retired
+too: system_full's `tcu` node runs the same generated pipeline from `system.toml` and carries every
+event it verified, the E2E-protected `BenchCmdSafe` / `BenchSafeStatus` pair included — see the
+bench note below.) What the rung built:
 
 - **Size-proportional IOC** (`boards/common/ioc.h`): the triple-buffer payload
   generalized from the demo-sized `sig_t{2xu32}` to caller-owned byte arenas —
@@ -511,13 +514,14 @@ never segmentation. Shell command classes: `register` (read) vs
 dispatch seam. Single-bus (eth-only) images only for this rung — a CAN comm
 thread would register its shell commands from another execution context.
 
-Bench (H735-DK, `examples/h735_someip/bench_test.sh`, the io hwtest pattern
-probed from the Windows host): `uptime` answered with the Request ID
+Bench (H735-DK, `examples/h735_someip/bench_test.sh` — now
+`examples/system_full/nodes/tcu/bench_test.sh` against the tcu, the io hwtest pattern probed
+from the Windows host): `uptime` answered with the Request ID
 (client+session) mirrored byte-exact, rc ok, live payload; unknown method →
 0x81/`rc_unknown_method`; dead-session request silently dropped; `help` →
 a 107-byte response in one datagram; events streaming throughout.
-**REQ-NET-016 VERIFIED on target** (`h735-someip-hwtest`, recorded via
-`BLOB_HWTEST=1 make trace`). REQ-NET-018 stays groundwork-verified at the
+**REQ-NET-016 VERIFIED on target** (then `h735-someip-hwtest`, now `tcu-someip-hwtest`,
+recorded via `BLOB_HWTEST=1 make trace`). REQ-NET-018 stays groundwork-verified at the
 dispatch seam (untagged) until a build really exposes a mutating method.
 
 Note on `allow_mutate = true` (the open half of REQ-NET-018): the current
