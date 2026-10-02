@@ -13,7 +13,7 @@
  *                    answers "no seed" (the server: conditionsNotCorrect) — a real fault.
  *   diag_sa_key_ok — NOT HERE, deliberately. The OEM's node glue supplies it; a node that gates a
  *                    DID and has none fails to LINK, naming the symbol. blobly_net's public
- *                    reference key is opted into by name (`[[isotp]] security_key = "reference"`)
+ *                    reference key is opted into by name (`[uds] security_key = "reference"`)
  *                    and is then comm/uds's own, in V — never a silent default in an image. */
 #include <stdint.h>
 

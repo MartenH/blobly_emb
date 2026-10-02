@@ -190,11 +190,11 @@ have to own a reassembly buffer and a timeout, which is exactly what the module 
 
 ### On CAN — ISO-TP
 
-Declare the connection:
+Declare the connection — the transport of the node's one diagnostic server (`[uds]`,
+docs/diagnostics.md §3.1, which also sets which UDS services it answers):
 
 ```toml
-[[isotp]]
-name     = "diag"
+[isotp]
 bus      = "can0"
 rx_id    = 0x101      # Request  (DBC)
 tx_id    = 0x102      # Response (DBC)
@@ -367,7 +367,7 @@ See [../someip.md](../someip.md) and [../net.md](../net.md).
 Nothing above says *which* node. That is the system layer — **for signals**: declare the
 nodes and buses in `system.toml` and the generator wires each node's half and any
 explicitly declared gateway route. Bulk does *not* ride that layer: `sysgen` lowers
-buses, NM and cross-node signals, but never emits an `[[isotp]]` block or wires a
+buses, NM and cross-node signals, but never emits an `[isotp]` block or wires a
 DoIP/SOME/IP connection — a bulk endpoint is **node-local configuration** on each side,
 and `sysgen` offers no diagnostic proxy: it rejects a raw route of frames the DBC
 declares **non-cyclic** — which honest DBCs do for SF/FF/CF/FC event traffic — but the

@@ -8,8 +8,7 @@ import os
 // be caught in-process).
 
 const doip_conn = '
-[[isotp]]
-name          = "diag"
+[isotp]
 bus           = "can0"
 rx_id         = 0x7B0
 tx_id         = 0x7B8

@@ -698,7 +698,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 					glue << '\tfctl_${snake(fb)} fault.Control // to ${fb}\'s thread'
 				}
 			}
-			if security_levels(m.dids) != 0 {
+			if sa_levels(m) != 0 {
 				glue << '\tsa_${tp} uds.ReferenceSecurity // 0x27 on the host: the SIM key (not a secret, decision D5)'
 			}
 		}
@@ -1410,13 +1410,8 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			if m.dids.any(it.signal != '') {
 				glue << '\tst.conn_${tp}.refresh = diag_refresh_${tp}'
 			}
-			glue << '\t${srv}.serves_reset = true // housekeep performs reset_req once answered'
-			glue << '\t${srv}.serves_comm_control = true // and this bridge gates its frames on 0x28'
-			if m.buses.len == 1 {
-				glue << '\t${srv}.single_network = true // 0x28 "all networks" = this one'
-			}
 			// the host bridge injects the reference key (blobly_net's), seeded from the clock
-			glue << security_init_lines(m, c, srv, 'st.sa_${tp}.ops(u32(osal.now_us()))')
+			glue << security_init_lines(m, srv, 'st.sa_${tp}.ops(u32(osal.now_us()))')
 			if m.faults.len > 0 {
 				for i, f in m.faults {
 					glue << '\tst.fmem.slots[${i}].dtc = u32(0x${f.dtc.hex()}) // ${f.name}'
@@ -1827,8 +1822,9 @@ fn did_refresh_fn(m Model, tp string) []string {
 	return out
 }
 
-// security_levels: the 0x27 levels a server must serve — every level some [[did]] read or write gate
-// names (bit L-1 for level L). A level nothing is gated on is not offered: unlocking it opens nothing.
+// security_levels: the [[did]] gates' share of the 0x27 levels a server serves — every level some
+// read or write gate names (bit L-1 for level L). The server serves sa_levels (gen_diag.v): these
+// plus the levels [uds] service rows name.
 fn security_levels(dids []DidCfg) u8 {
 	mut mask := u8(0)
 	for d in dids {

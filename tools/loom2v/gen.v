@@ -67,22 +67,16 @@ struct SigField {
 	typ  string
 }
 
-// IsotpConn is one [[isotp]] diagnostic connection on a bus.
+// IsotpConn is the node's [isotp] connection (ISO 15765-2): the ONE diagnostic server's transport
+// on CAN. The server itself — S3, 0x27, the service table — is [uds] (UdsCfg, gen_diag.v).
 struct IsotpConn {
-	name          string
+	name          string // 'diag': the generated connection's identifiers (st.conn_diag, diag_refresh_diag)
 	bus           string
 	rx_id         int
 	tx_id         int
 	bs            int
 	stmin         int
 	functional_id int // 0 = no functional requests on this connection
-	s3_ms         int // 0 = the server's default (5 s)
-	// 0x27: failed keys before the lockout, and the lockout delay (0 = the server's defaults)
-	security_attempts int
-	security_delay_ms int
-	// the 0x27 key on a target: 'reference' = blobly_net's public bench key, opted into by name;
-	// '' = the OEM's diag_sa_key_ok, which the node's glue must supply (no default is linked)
-	security_key string
 }
 
 // DidCfg is one [[did]]: constant bytes, a writable RAM cell, and/or a live signal.
@@ -899,74 +893,44 @@ fn dbc_sig_in_frame(db candb.Database, frame_key string, signame string) ?candb.
 	return none
 }
 
-// parse_isotp parses [[isotp]] diagnostic connections.
+// parse_isotp parses the [isotp] connection — the node's one diagnostic server on CAN (one server
+// per node, docs/diagnostics.md, so a table and not an array: the old [[isotp]] form, and server
+// keys left in it, are refused by ecumodel.validate with the move they need).
 fn parse_isotp(doc toml.Doc) []IsotpConn {
-	mut isotp_conns := []IsotpConn{}
-	for c in ecumodel.toml_arr(doc, 'isotp') {
-		m := c.as_map()
-		name := (m['name'] or { toml.Any('') }).string()
-		if name == '' {
-			continue // absent [[isotp]] section can yield a phantom empty entry
-		}
-		isotp_conns << IsotpConn{
-			name:  name
-			bus:   (m['bus'] or { toml.Any('') }).string()
-			rx_id: int((m['rx_id'] or { toml.Any(0) }).int())
-			tx_id: int((m['tx_id'] or { toml.Any(0) }).int())
-			bs:    int((m['bs'] or { toml.Any(0) }).int())
-			stmin: int((m['stmin_ms'] or { toml.Any(0) }).int())
-			functional_id: int((m['functional_id'] or { toml.Any(0) }).int())
-			s3_ms: int((m['s3_ms'] or { toml.Any(0) }).int())
-			security_attempts: int((m['security_attempts'] or { toml.Any(0) }).int())
-			security_delay_ms: int((m['security_delay_ms'] or { toml.Any(0) }).int())
-			security_key: (m['security_key'] or { toml.Any('') }).string()
+	iv := doc.value_opt('isotp') or { return []IsotpConn{} }
+	if iv !is map[string]toml.Any {
+		return []IsotpConn{}
+	}
+	m := iv.as_map()
+	c := IsotpConn{
+		name:          'diag'
+		bus:           (m['bus'] or { toml.Any('') }).string()
+		rx_id:         int((m['rx_id'] or { toml.Any(0) }).int())
+		tx_id:         int((m['tx_id'] or { toml.Any(0) }).int())
+		bs:            int((m['bs'] or { toml.Any(0) }).int())
+		stmin:         int((m['stmin_ms'] or { toml.Any(0) }).int())
+		functional_id: int((m['functional_id'] or { toml.Any(0) }).int())
+	}
+	// the connection matches and sends its ids as standard frames: a wider value never matches
+	// on receive and goes out masked on transmit
+	for field, v in {
+		'rx_id': c.rx_id
+		'tx_id': c.tx_id
+	} {
+		if v < 0 || v > 0x7FF {
+			panic('loom2v: [isotp] ${field} 0x${v.hex()} must be a standard 11-bit id (<= 0x7FF)')
 		}
 	}
-	// ONE diagnostic server per node (docs/diagnostics.md): every [[isotp]] connection is a UDS
-	// server with its own session, 0x28, reset and (later) programming controls, and the fault
-	// memory, NM keep-awake and bootloader handoff assume a single owner. A second connection —
-	// even one with no DIDs — would be a second server the rest of the design cannot see.
-	if isotp_conns.len > 1 {
-		panic('loom2v: ${isotp_conns.len} [[isotp]] connections — a node has ONE diagnostic server (docs/diagnostics.md); declare one connection')
-	}
-	for c in isotp_conns {
-		if c.s3_ms < 0 {
-			panic('loom2v: [[isotp]] "${c.name}" s3_ms ${c.s3_ms} is negative (0 = the default ${uds.default_s3_us / 1000} ms)')
-		}
-		if c.security_attempts < 0 || c.security_attempts > 255 {
-			panic('loom2v: [[isotp]] "${c.name}" security_attempts ${c.security_attempts} is out of range (1..255; 0 = the default ${uds.default_sa_attempts})')
-		}
-		if c.security_key !in ['', 'reference'] {
-			panic('loom2v: [[isotp]] "${c.name}" security_key "${c.security_key}" — the one named key is "reference" (blobly_net\'s bench key); leave it out for the OEM\'s diag_sa_key_ok')
-		}
-		if c.security_delay_ms < 0 {
-			panic('loom2v: [[isotp]] "${c.name}" security_delay_ms ${c.security_delay_ms} is negative (0 = the default ${uds.default_sa_delay_us / 1000} ms)')
-		}
-		// the connection matches and sends its ids as standard frames: a wider value never matches
-		// on receive and goes out masked on transmit
-		for field, v in {
-			'rx_id': c.rx_id
-			'tx_id': c.tx_id
-		} {
-			if v < 0 || v > 0x7FF {
-				panic('loom2v: [[isotp]] "${c.name}" ${field} 0x${v.hex()} must be a standard 11-bit id (<= 0x7FF)')
-			}
-		}
-		if c.functional_id == 0 {
-			continue
-		}
-		// the bridge matches it as a standard frame, and it must not be anyone's physical id
+	if c.functional_id != 0 {
+		// the bridge matches it as a standard frame, and it must not be the physical id
 		if c.functional_id < 0 || c.functional_id > 0x7FF {
-			panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${c.functional_id.hex()} must be a standard 11-bit id (<= 0x7FF)')
+			panic('loom2v: [isotp] functional_id 0x${c.functional_id.hex()} must be a standard 11-bit id (<= 0x7FF)')
 		}
-		for o in isotp_conns {
-			// CAN ids are bus-local: only a connection on the SAME bus can collide
-			if o.bus == c.bus && (c.functional_id == o.rx_id || c.functional_id == o.tx_id) {
-				panic('loom2v: [[isotp]] "${c.name}" functional_id 0x${c.functional_id.hex()} is also "${o.name}"\'s physical rx/tx id')
-			}
+		if c.functional_id == c.rx_id || c.functional_id == c.tx_id {
+			panic('loom2v: [isotp] functional_id 0x${c.functional_id.hex()} is also the connection\'s physical rx/tx id')
 		}
 	}
-	return isotp_conns
+	return [c]
 }
 
 // parse_dids parses [[did]] UDS Data Identifiers: constant (ascii/bytes), writable RAM, or live signal.
@@ -1021,12 +985,8 @@ fn parse_did_access(m map[string]toml.Any, key string, id int) (u8, u8) {
 	am := acc.as_map()
 	mut mask := u8(0)
 	for sv in (am['session'] or { toml.Any([]toml.Any{}) }).array() {
-		mask |= match sv.string() {
-			'default' { uds.in_default }
-			'programming' { uds.in_programming }
-			'extended' { uds.in_extended }
-			'safety' { uds.in_safety }
-			else { panic('loom2v: [[did]] 0x${id.hex()} ${key}.session "${sv.string()}" is not a session (default / extended / programming / safety)') }
+		mask |= session_bit(sv.string()) or {
+			panic('loom2v: [[did]] 0x${id.hex()} ${key}.session ${err}')
 		}
 	}
 	if 'session' in am && mask == 0 {
@@ -1043,6 +1003,18 @@ fn parse_did_access(m map[string]toml.Any, key string, id int) (u8, u8) {
 		panic('loom2v: [[did]] 0x${id.hex()} ${key} needs security ${sec} but is not allowed in the extended session, the only one an application server unlocks in — it could never be opened')
 	}
 	return mask, u8(sec)
+}
+
+// session_bit: a session's name as the server's session-mask bit (uds.in_*) — the one spelling of
+// the names a [[did]] gate and a [uds] service row share.
+fn session_bit(name string) !u8 {
+	return match name {
+		'default' { uds.in_default }
+		'programming' { uds.in_programming }
+		'extended' { uds.in_extended }
+		'safety' { uds.in_safety }
+		else { error('"${name}" is not a session (default / extended / programming / safety)') }
+	}
 }
 
 fn parse_buses(doc toml.Doc) (map[string]bool, map[string]int, map[string]string) {
@@ -1306,7 +1278,8 @@ mut:
 	has_can_ext  bool // any CAN bus-endpoint signal (drives driver.can/DBC paths)
 	frames       FrameCfg
 	routes       []Route
-	isotp_conns  []IsotpConn
+	isotp_conns  []IsotpConn // [isotp]: none, or the one connection
+	uds          UdsCfg      // [uds]: the ISO 14229 server those transports carry (gen_diag.v)
 	doip         DoipCfg // [doip]: the diagnostic server over DoIP too (gen_doip.v)
 	dids         []DidCfg
 	faults       []FaultCfg // [[fault]] in declaration order = the fault memory's slot order
@@ -1526,6 +1499,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		frames:       frames
 		routes:       validate_route_cores(parse_routes(doc, dbc, frames), bus_core, bus_kind)
 		isotp_conns:  parse_isotp(doc)
+		uds:          parse_uds(doc)
 		doip:         parse_doip(doc)
 		dids:         parse_dids(doc)
 		faults:       parse_faults(doc)
@@ -1546,7 +1520,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		bulk:         parse_bulk(doc)
 	}
 	validate_signal_routes_model(m, doc)
-	validate_security(m.isotp_conns, m.dids)
+	validate_uds(m)
 	validate_live_dids(m)
 	validate_faults(m, doc)
 	validate_e2e_timeouts(m)
@@ -1559,20 +1533,6 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		}
 	}
 	return m
-}
-
-// validate_security: the 0x27 settings mean something only where a [[did]] gate names a level —
-// the levels the server serves are exactly those (security_levels) — so tuning the lockout of a
-// server with nothing to unlock is a config error, not a silent no-op.
-fn validate_security(conns []IsotpConn, dids []DidCfg) {
-	if security_levels(dids) != 0 {
-		return
-	}
-	for c in conns {
-		if c.security_attempts != 0 || c.security_delay_ms != 0 || c.security_key != '' {
-			panic('loom2v: [[isotp]] "${c.name}" configures security_attempts / security_delay_ms / security_key, but no [[did]] gate names a security level — there is nothing to unlock')
-		}
-	}
 }
 
 // validate_signal_routes_model checks a SIGNAL route against the rest of the model
@@ -2416,7 +2376,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// measured paper-thin on the H755 bench (the v4 image faulted with PSP
 				// 40 B below the DTCM floor mid-put): 8 KB with [nvm], 4 KB without.
 				// the diagnostic server's dispatch copies its ISO-TP link / UDS server by value into
-				// several frames (~1 KB each): 8 KB with [[isotp]] too
+				// several frames (~1 KB each): 8 KB with [isotp] too
 				comm_stack := if m.nvm.on || m.isotp_conns.len > 0 { 8192 } else { 4096 }
 				glue << '\tg_comm_stack [${comm_stack}]u8'
 				// (The load cell is the volatile C scratch in comm_glue.c, via load_pub/load_*.)
@@ -3729,8 +3689,9 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 	}
 	if m.isotp_conns.len > 0 {
 		glue << 'import comm.diag' // the diagnostic server on its ISO-TP connection
-		// the glue names uds only for [[did]]s — their tables, the live refresh, 0x27 (a DID gate)
-		if m.dids.len > 0 {
+		// the glue names uds only for [[did]]s — their tables, the live refresh, 0x27 — and for a
+		// [uds] service table
+		if m.dids.len > 0 || m.uds.table {
 			glue << 'import comm.uds' // UDS diagnostic services
 		}
 	}
@@ -3889,7 +3850,7 @@ fn main() {
 		for e in ids {
 			field := e[0]
 			id := u32(e[1].int())
-			what := 'loom2v: [[isotp]] "${c.name}" ${field} 0x${id.hex()} is also'
+			what := 'loom2v: [isotp] ${field} 0x${id.hex()} is also'
 			for msg in db.messages {
 				if on_bus[snake(msg.name)] && u32(msg.id) == id && !msg.ext {
 					panic('${what} DBC message "${msg.name}" on bus "${c.bus}"')
@@ -5035,7 +4996,7 @@ fn validate_faults(m Model, doc toml.Doc) {
 		panic('loom2v: [[fault]] on a [target] image — faults on the target are rung R6 (docs/diagnostics.md); host only for now')
 	}
 	if m.isotp_conns.len != 1 {
-		panic('loom2v: [[fault]] needs the node\'s diagnostic server — one [[isotp]] connection — to serve 0x19 / 0x14 / 0x85')
+		panic('loom2v: [[fault]] needs the node\'s diagnostic server — an [isotp] connection — to serve 0x19 / 0x14 / 0x85')
 	}
 	if m.faults.len > fault.max_faults {
 		panic('loom2v: ${m.faults.len} [[fault]]s exceed the fault memory (${fault.max_faults})')

@@ -186,6 +186,9 @@ pub fn validate(doc toml.Doc) []string {
 	// [bulk] — bulk transport pools (docs/bulk-transport.md). Must stay BEFORE [trace].
 	errs << validate_bulk(doc, part_names, thread_part, part_core)
 
+	// [isotp] / [uds] — the diagnostic layout. Must stay BEFORE [trace].
+	errs << validate_diag_layout(doc)
+
 	// [trace] — the runtime-observability block loom2v generates the trace wiring from. Validate
 	// the enums loom2v switches on (level, mode), the numeric ranges (pre_pct, buffer_records),
 	// and the CAN channel the traffic binds to. Frame ids are handled by loom2v (see below).
@@ -1027,13 +1030,12 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		}
 	}
 
-	// ISO-TP is CAN machinery too: a [[isotp]] connection on the eth bus would
+	// ISO-TP is CAN machinery too: an [isotp] connection on the eth bus would
 	// emit isotp.Pdu traffic as can.Frame ops — no segmentation path on eth
 	if eth != '' {
-		for it in toml_arr(doc, 'isotp') {
-			itm := it.as_map()
-			if str_of(itm, 'bus') == eth {
-				errs << '[[isotp]] "${str_of(itm, 'name')}" is bound to eth bus "${eth}" — there is no ISO-TP/segmentation path on eth (docs/someip.md); an eth diagnostic rung is its own phase'
+		if iv := doc.value_opt('isotp') {
+			if iv is map[string]toml.Any && str_of(iv, 'bus') == eth {
+				errs << '[isotp] is bound to eth bus "${eth}" — there is no ISO-TP/segmentation path on eth (docs/someip.md); DoIP is the diagnostic transport on Ethernet ([doip])'
 			}
 		}
 	}
@@ -1518,4 +1520,45 @@ pub fn module_bus(doc toml.Doc, blk string) string {
 	}
 	tv := doc.value_opt('telemetry') or { return '' }
 	return str_of(tv.as_map(), 'bus')
+}
+
+// isotp_server_keys: the ISO 14229 server's settings, which [[isotp]] used to carry beside its
+// ISO 15765-2 transport keys and which now live in [uds].
+const isotp_server_keys = ['s3_ms', 'security_attempts', 'security_delay_ms', 'security_key']
+
+// validate_diag_layout refuses the pre-[uds] diagnostic layout, naming the move it needs rather
+// than translating it: [[isotp]] (an array, with a `name`) is now the [isotp] table — a node has
+// ONE diagnostic server, and so one connection — and the server's own keys moved to [uds].
+pub fn validate_diag_layout(doc toml.Doc) []string {
+	mut errs := []string{}
+	iv := doc.value_opt('isotp') or { return errs }
+	if iv is []toml.Any {
+		mut moved := []string{}
+		for c in iv {
+			for k in isotp_server_keys {
+				if k in c.as_map() && k !in moved {
+					moved << k
+				}
+			}
+		}
+		mut msg := '[[isotp]] is now the [isotp] table: a node has ONE diagnostic connection, so write `[isotp]` and drop its `name`'
+		if moved.len > 0 {
+			msg += ', and move ${moved.join(' / ')} to [uds] (the ISO 14229 server; [isotp] is its ISO 15765-2 transport)'
+		}
+		errs << msg + ' — docs/diagnostics.md'
+		return errs
+	}
+	if iv !is map[string]toml.Any {
+		return errs
+	}
+	im := iv.as_map()
+	for k in isotp_server_keys {
+		if k in im {
+			errs << '[isotp] `${k}` is the ISO 14229 server\'s setting, not the ISO 15765-2 transport\'s — move it to [uds] (docs/diagnostics.md)'
+		}
+	}
+	if 'name' in im {
+		errs << '[isotp] `name` is gone: a node has one diagnostic connection — drop it (docs/diagnostics.md)'
+	}
+	return errs
 }

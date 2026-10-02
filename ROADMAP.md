@@ -143,7 +143,7 @@ the FB never calls a service API.
 - 🧭 **R4 faults → DTCs** (#287) — `[[fault]]`, an FB fault port, debounce on the producing
   thread, fault memory + ISO 14229 status byte on the comm thread, operation cycle, 0x19
   01/02/0A, 0x14, 0x85 — on the host; tester rung N2 in blobly_net
-- 🧭 **R2 UDS on the target** — `[[isotp]]` on the ThreadX comm thread, 0x11 with the
+- 🧭 **R2 UDS on the target** — the `[isotp]` connection on the ThreadX comm thread, 0x11 with the
   bounded controller drain, the programming-session handoff into the bootloader (bench)
 - 🧭 **R5 target COM checks** — rx deadlines + E2E/SecOC on the comm thread, so receive
   status reaches FBs on silicon

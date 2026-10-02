@@ -108,7 +108,7 @@ Three destination kinds:
   immediate). The `gateway` example forwards `WheelSpeeds` `can0`→`can1`; the test
   injects a raw frame on `can0` and asserts it reappears byte-for-byte on `can1`.
 - **TP** → hand the PDU to ISO-TP for reassembly (diagnostics addresses) — already
-  done as `[[isotp]]`.
+  done as `[isotp]`.
 
 *(Fan-out — one source to several destinations / also-deliver-locally — is a future
 extension; today a route is one source → one destination.)*
@@ -116,15 +116,15 @@ extension; today a route is one source → one destination.)*
 ## 3. ISO-TP — segmented transport (ISO 15765-2)
 
 For PDUs larger than one frame (UDS payloads up to 4095 B classic, more on FD).
-Per connection:
+`[isotp]` is the node's ONE connection — the transport of its diagnostic server, `[uds]`
+(§4); it carries only ISO 15765-2's settings:
 
 ```toml
-[[isotp]]
-name   = "diag"
+[isotp]
 bus    = "can0"
 rx_id  = 0x101      # Request   (DBC)
 tx_id  = 0x102      # Response  (DBC)
-max_len = 4095      # fixes the reassembly buffer size (no-alloc)
+functional_id = 0x7DF   # optional: functional requests (single frame)
 bs      = 8         # flow-control block size
 stmin_ms = 0        # min separation time we request
 ```
@@ -146,7 +146,8 @@ already carries `Request`/`Response`).
 
 ## 4. UDS — diagnostic services (ISO 14229)
 
-A table-driven, no-alloc `Server` sits above each ISO-TP connection. The bridge
+A table-driven, no-alloc `Server` — the node's one, configured by `[uds]` — sits above its
+transports (`[isotp]` on CAN, `[doip]` on a ThreadX target's Ethernet). The owner
 hands it a reassembled request and ships the response it builds. Services:
 `0x10` DiagnosticSessionControl, `0x11` ECUReset, `0x22` ReadDataByIdentifier
 (several DIDs per request), `0x27` SecurityAccess, `0x28` CommunicationControl, `0x2E`
@@ -154,6 +155,26 @@ WriteDataByIdentifier, `0x3E` TesterPresent, and — where a fault memory is inj
 generated from `[[fault]]` in R4b) — `0x19` 01/02/0A, `0x14` and `0x85`; anything else →
 `0x7F sid 0x11`.
 Negative responses follow ISO 14229-1's evaluation order.
+
+Which of those a node answers is its **service table**, `[uds] services` — absent, the
+default set above; present, exactly its rows, each optionally narrowed to `sessions` and
+gated on a 0x27 `security` level (0x7F / 0x33 in ISO 14229-1's order). Generation refuses a
+row the build does not perform, so a table never claims a service that does nothing
+([diagnostics.md](diagnostics.md) §3.1):
+
+```toml
+[uds]
+s3_ms             = 2000      # session timeout (default 5000)
+security_delay_ms = 1000      # 0x27 lockout delay (default 10000)
+
+[uds.services]                # optional: absent = the default set
+"0x10" = {}
+"0x11" = { sessions = ["extended"] }
+"0x22" = {}
+"0x27" = {}
+"0x2E" = { sessions = ["extended"], security = 1 }
+"0x3E" = {}
+```
 
 The server starts in the **default session** and returns to it after `s3_ms` (default
 5 s) without a request; every session request relocks security (re-entering the active one
@@ -410,7 +431,7 @@ bus-bridge partition; signals still cross to app partitions via the IOC.
    bus and out another (the `gateway` example: `can0` → FB → `can1`), one generated
    bridge per bus, `gen.run` taking a channel per bus. Raw-PDU **gateway**: `[[route]]`
    forwards a frame bus→bus untouched (the same example forwards `WheelSpeeds`).
-3. **ISO-TP** — ✅ **done**. `[[isotp]]` connections; the bridge holds a
+3. **ISO-TP** — ✅ **done**. The `[isotp]` connection; the bridge holds a
    `diag.Connection` (`comm/diag`) wrapping an `isotp.Link` (SF / FF+CF / FC, BlockSize + STmin) in `comm/isotp`
    (unit-tested both directions). Reassembled requests go to the UDS server (§4)
    and responses are re-segmented. blobly_net's UDS
