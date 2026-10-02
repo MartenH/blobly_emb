@@ -12,7 +12,7 @@
  * Contract: the board brings up the peripheral *around* the M_CAN core before
  * blob_can_open() — enable the FDCAN APB clock, select+enable the kernel clock
  * (must equal BLOB_FDCAN_KCLK_HZ), and mux the TX/RX pins to their AF. This file
- * only configures and drives the M_CAN core. See examples/h735_canecho/board.c.
+ * only configures and drives the M_CAN core. See boards/h735dk/board.c (board_can_clock_pins_init).
  */
 
 #ifndef BLOB_FDCAN_KCLK_HZ

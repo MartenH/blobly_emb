@@ -119,7 +119,7 @@ pub mut:
 	view NodeView
 }
 
-// IsotpConn — one [[isotp]] diagnostic connection: the local bus interface it
+// IsotpConn — the node's [isotp] diagnostic connection: the local bus interface it
 // rides and its on-wire rx/tx CAN ids (0 is a valid id loom2v emits as configured).
 pub struct IsotpConn {
 pub mut:
@@ -315,7 +315,7 @@ pub mut:
 	trace_dump_fc_id    u32
 	trace_dump_fc_name  string
 	trace_dump_fc_bound bool // dump_fc reserves a RX id ONLY when explicitly bound
-	// [[isotp]] diagnostic connections: their rx_id/tx_id are on-wire diagnostic CAN
+	// [isotp] diagnostic connection: their rx_id/tx_id are on-wire diagnostic CAN
 	// ids (0 is valid — loom2v emits them as configured), reserved on the isotp bus.
 	has_isotp   bool
 	isotp_conns []IsotpConn
@@ -1070,15 +1070,23 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 			v.trace_dump_fc_bound = 'dump_fc' in trm
 		}
 	}
-	// [[isotp]] — diagnostic/ISO-TP connections. rx_id/tx_id are on-wire diagnostic
-	// CAN ids.
+	// [isotp] — the node's diagnostic connection. rx_id/tx_id are on-wire diagnostic
+	// CAN ids. The old [[isotp]] array is still READ here — the node gate refuses it, with the
+	// move it needs, but a partial node (sysgen's dissolution path) runs no gate, and its ids
+	// must not drop out of the collision checks.
 	if iv := doc.value_opt('isotp') {
-		for c in iv.array() {
+		mut tables := []toml.Any{}
+		if iv is map[string]toml.Any {
+			tables << iv
+		} else if iv is []toml.Any {
+			tables = iv.clone()
+		}
+		for c in tables {
 			cm := c.as_map()
 			v.has_isotp = true
 			bus := m_str(cm, 'bus')
 			v.isotp_conns << IsotpConn{
-				iface: key_iface[bus] or { bus }
+				iface:         key_iface[bus] or { bus }
 				rx_id:         m_u32(cm, 'rx_id')
 				tx_id:         m_u32(cm, 'tx_id')
 				functional_id: m_u32(cm, 'functional_id')

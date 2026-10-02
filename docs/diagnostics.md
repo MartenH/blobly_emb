@@ -23,13 +23,13 @@ As of R4c and R2's first steps — the rows R0 through R4c and R2 changed say so
 
 | Piece | State | Where |
 |---|---|---|
-| UDS services | 0x10, 0x11 (two-phase: answered, then reset), 0x22, 0x27 (R1b), 0x28, 0x2E, 0x3E; everything else answers 0x11. On the host 0x11 resets the DIAGNOSTIC state only (R1); a real reset is R2 | `comm/uds/uds.v` |
+| UDS services | 0x10, 0x11 (two-phase: answered, then reset), 0x22, 0x27 (R1b), 0x28, 0x2E, 0x3E; everything else answers 0x11. On the host 0x11 resets the DIAGNOSTIC state only (R1); a real reset is R2. Which of them a node answers, in which sessions and behind which 0x27 level, is its **service table** (`[uds] services`, §3.1); absent, the default set — every service the build performs, in its default sessions | `comm/uds/uds.v`, `tools/loom2v/gen_diag.v` |
 | Session model | enforced (R1): starts in default, S3 returns to it (`s3_ms`), every session request relocks security (re-entry included, R1b), and returning to default re-enables the communication 0x28 disabled; the programming session is refused until the R2 handoff | `comm/uds/uds.v`, `comm/diag/diag.v` |
 | DIDs | 16 × ≤32 B static table; 0x22 reads several DIDs per request (R1); per-DID `read` / `write` session and security gates | `comm/uds/uds.v` |
 | NRCs | 0x11 0x12 0x13 0x14 0x22 0x24 0x31 0x33 0x35 0x36 0x37 0x7F in ISO 14229-1's evaluation order (R1; the 0x27 ones R1b); functional requests withhold 0x11/0x12/0x31/0x7E/0x7F; no 0x7E (no subfunction is session-gated yet) and no 0x78 (R6/R7) | `comm/uds/uds.v` |
 | Security access 0x27 | served on the host (R1b): levels from the DID gates, one key per seed, attempt limit + lockout delay (the count survives an ECU reset), keys through the injected `SecurityOps` (the host bridge injects the reference key; a ThreadX target the board's seam, `boards/common/diag_board.c`); the bootloader keeps 0x29 | `comm/uds/uds.v` |
-| UDS on the **target** | R2, first steps: `[[isotp]]` on the ThreadX comm thread (the one on `[telemetry].bus`) — the same `comm/diag.Connection` the host bridge runs; constant DIDs, and live DIDs on the node's own local OUTPUTS (the cells the comm thread already reads — an input's cell is its FB's, one reader per cell); 0x27 with a TRNG seed from the board (`boards/common/diag_board.c`, weak) and the OEM's `diag_sa_key_ok` — no default is linked, so a gated node without one fails to link; blobly_net's public reference key only by name (`[[isotp]] security_key = "reference"`, the bench's); bench-verified on all three `system_full` CAN nodes — domain (H755, `examples/system_full/test/diag_domain.lua`), the gateway sysnode (H735) and zone_a (H723, on the CAN-FD edge bus with classic-sized ISO-TP, TX_DL = 8) (`diag_nodes.lua`). 0x11 answered, then performed by the comm thread once the controller has sent the answer (bounded `tx_idle`, REQ-BOOT-012), the 0x27 failed-key counts carried across it in a reset-surviving keep cell (`diag_board.c`, D3 SRAM4), so a reset between guesses buys nothing. Not yet: live DIDs on inputs, the failed-key count across a power cycle, 0x28, the programming handoff | `tools/loom2v/gen_diag.v` |
-| UDS config | `[[isotp]]` (one per node; `functional_id`, `s3_ms` since R1; `security_attempts`, `security_delay_ms` since R1b) + `[[did]]` (ascii / bytes / signal / writable, `read` / `write` gates) | `tools/ecucheck/gen.v` |
+| UDS on the **target** | R2, first steps: `[isotp]` on the ThreadX comm thread (the one on `[telemetry].bus`) — the same `comm/diag.Connection` the host bridge runs; constant DIDs, and live DIDs on the node's own local OUTPUTS (the cells the comm thread already reads — an input's cell is its FB's, one reader per cell); 0x27 with a TRNG seed from the board (`boards/common/diag_board.c`, weak) and the OEM's `diag_sa_key_ok` — no default is linked, so a gated node without one fails to link; blobly_net's public reference key only by name (`[uds] security_key = "reference"`, the bench's); bench-verified on all three `system_full` CAN nodes — domain (H755, `examples/system_full/test/diag_domain.lua`), the gateway sysnode (H735) and zone_a (H723, on the CAN-FD edge bus with classic-sized ISO-TP, TX_DL = 8) (`diag_nodes.lua`). 0x11 answered, then performed by the comm thread once the controller has sent the answer (bounded `tx_idle`, REQ-BOOT-012), the 0x27 failed-key counts carried across it in a reset-surviving keep cell (`diag_board.c`, D3 SRAM4), so a reset between guesses buys nothing. Not yet: live DIDs on inputs, the failed-key count across a power cycle, 0x28, the programming handoff | `tools/loom2v/gen_diag.v` |
+| UDS config | split along the standards: `[uds]` — the ISO 14229 server (`s3_ms`, `security_attempts`, `security_delay_ms`, `security_key`, the `services` table) — and its transports, `[isotp]` (ISO 15765-2: `bus`, `rx_id`, `tx_id`, `functional_id`, `bs`, `stmin_ms`; one per node, a table) and `[doip]` (ISO 13400); + `[[did]]` (ascii / bytes / signal / writable, `read` / `write` gates). The old `[[isotp]]` array carrying server keys is refused with the move it needs | `tools/ecucheck/gen.v`, `tools/ecumodel/model.v` |
 | Rx signal status | `status = "RxStatus"` (never_received / ok / timeout / integrity) and the E2E `lost` count, bridge-owned (R3a; on CAN the host bridge only, on the SOME/IP receive path both, bridge-owned and never on the wire, on the host and the ThreadX eth thread alike, and sysgen gives both to a generated E2E receiver); the COM deadline runs from bridge start (re-arming it on NM wake is R5's: the host bridge has no NM) and from a frame that failed its check; E2E has its own sender-loss timeout, required on every received E2E frame, refreshed only by a valid message and independent of the COM deadline (R3b; on CAN and, since #299, on the SOME/IP receive path — host and ThreadX — where an eth rx signal carries the same `status`); the target's CAN comm thread rejects status, rx deadlines and E2E ("phase 6b-2b", R5) | `tools/loom2v/gen_com.v`, `gen.v` |
 | Fault memory / DTCs | R4a + R4b: `[[fault]]` generated on the host — the FB's fault port, debounce on its thread with monotonic counters, the fault memory on the diagnostic bridge (status byte through operation cycles from `[fault_memory] cycle`, confirmation, aging, clears by generation, 0x85 suppression), 0x19 01/02/0A, 0x14, 0x85; RAM only. R4c: signal-status faults (`signal` / `on` = timeout, integrity, lost), the bridge as detector. Not yet: target + persistence + freeze frames (R6) | `comm/fault/fault.v`, `tools/loom2v/gen.v`, `gen_com.v` |
 | Persistence | journal engine + `persist = "now" / "shutdown"` signals, ThreadX only, one journal per node, 20 B records with 634 B chains; DID write path (NvM "P4") not built | `nvm/`, `tools/loom2v/gen_nvm.v` |
@@ -50,7 +50,7 @@ is built" while P1/P2 and chains were.
    — and nothing comes back: an FB never reads its fault's status (§3.3).
 2. **Diagnostics is a platform service, not an FB.** Like NM, trace and NvM, the diagnostic server
    and the fault memory are modules the generator splices into a comm thread — **one** of them: the
-   comm thread of the image that serves the node's one `[[isotp]]` connection's bus (on the host, that bus's bridge). It is the single
+   comm thread of the image that serves the node's one `[isotp]` connection's bus (on the host, that bus's bridge). It is the single
    writer of the fault memory and, on the target, already the owner of the journal. Every other
    detector — a bridge on another bus, an FB thread, the satellite core — reaches it through ordinary
    IOC / xioc cells it alone reads, so the single-writer rule holds without a lock.
@@ -59,7 +59,7 @@ is built" while P1/P2 and chains were.
    separate buses is fine), while a *functional* id is deliberately SHARED by every server on its bus;
    DIDs and DTC numbers are unique per *node* — every ECU may expose the VIN DID 0xF190, and the
    same DTC value can mean something on two ECUs. **One diagnostic server per node** (one
-   `[[isotp]]` connection carrying its DIDs and faults — R1 already refuses more): that is how ECUs
+   `[uds]` server, on its `[isotp]` connection, carrying its DIDs and faults — R1 already refuses more): that is how ECUs
    are addressed in practice, and it keeps the fault memory, its clear epoch and 0x85 with a single
    owner. A second server on another bus is out of scope (§6). The manifest keys DIDs and DTCs by
    node plus identifier.
@@ -75,18 +75,34 @@ is built" while P1/P2 and chains were.
 
 ### 3.1 The diagnostic server (UDS, ISO 14229-1)
 
-`comm/uds` grows from a request echo into a server with a **service table generated from config**:
-
-The node's one server is its `[[isotp]]` connection, so its settings live there (as built in R1):
+`comm/uds` grows from a request echo into a server with a **service table generated from config**.
+The configuration follows the standards' layers: **`[uds]` is the server** (ISO 14229 — one per
+node), and **its transports refer to it**: `[isotp]` carries it on CAN (ISO 15765-2), `[doip]` on
+Ethernet (ISO 13400, a ThreadX target). A node has one server and so one session, whichever
+transport a request arrives on:
 
 ```toml
-[[isotp]]
-name          = "diag"
+[uds]                           # ISO 14229: the node's ONE diagnostic server
+s3_ms             = 5000        # session timeout (default 5000)
+security_attempts = 3           # 0x27 failed keys before the lockout (default 3)
+security_delay_ms = 3000        # 0x27 lockout delay (default 10000)
+security_key      = "reference" # a target only: blobly_net's bench key; absent = the OEM's diag_sa_key_ok
+
+[uds.services]                  # optional — absent = the default table (below)
+"0x10" = {}
+"0x11" = { sessions = ["extended"] }
+"0x22" = {}
+"0x27" = {}
+"0x2E" = { sessions = ["extended"], security = 1 }
+"0x3E" = {}
+
+[isotp]                         # ISO 15765-2: the server on CAN (one connection per node)
 bus           = "compute"
 rx_id         = 0x7E0
 tx_id         = 0x7E8
 functional_id = 0x7DF           # optional: functional requests (single frame), shared per bus
-s3_ms         = 5000            # session timeout
+bs            = 8
+stmin_ms      = 0
 
 [[did]]
 id      = 0xF190
@@ -100,6 +116,44 @@ id      = 0x0100
 param   = "TrailerBrakeFitted"  # §3.4
 write   = { session = ["extended"], security = 1 }
 ```
+
+**The service table** is AUTOSAR Dcm's idea in our words: which services the server answers, where
+and behind what. A row is keyed by its SID in hex and may carry `sessions` (`default` / `extended` /
+`safety`, the names a `[[did]]` gate uses; absent = the service's default sessions) and `security`
+(a 0x27 level; absent = none). The same table configures the server on every owner — the host bus
+bridge and the ThreadX comm thread both go through `conn_init_lines` (`tools/loom2v/gen_diag.v`),
+and a DoIP request reaches that same server — and comm/uds checks it in dispatch, after "is the
+service wired" and in ISO 14229-1's order: **0x11** serviceNotSupported for a service the table
+leaves out (withheld for a functional request, as before), **0x7F** serviceNotSupportedInActiveSession
+outside its sessions, then **0x33** securityAccessDenied below its level — before the length check
+and any per-DID gate. Every session entry relocks, so a service-level unlock lasts the session it
+was earned in, as a DID's does.
+
+- **Absent = the default table, byte for byte**: no rows are generated (`nservices = 0`), and the
+  server answers exactly what it did before the table existed — every service the build performs,
+  0x27 / 0x28 / 0x85 in the non-default sessions only, everything else in every session, no
+  service-level security. `comm/uds` `test_the_default_table_is_the_old_behaviour` pins every SID in
+  every session against the old rule written out literally.
+- **What a build performs is one statement** (`diag_unbuilt`): 0x10 / 0x22 / 0x2E / 0x3E always;
+  0x11 on both owners (each performs the reset); 0x28 on the host only (nothing on the target gates
+  its frames on it yet); 0x14 / 0x19 / 0x85 with a `[[fault]]` memory (host only today); 0x27 when
+  a `[[did]]` gate or a service row names a level. The wiring follows it (`serves_reset`,
+  `serves_comm_control`) and generation refuses a row it names — **a table never claims a service
+  that does nothing**. A row also grants nothing the owner did not wire: comm/uds answers 0x11 for a
+  listed service with no seam behind it.
+- **Refused at generation**, each naming `[uds]`: a service the build does not perform (above) or
+  comm/uds does not implement; the programming session (the bootloader's); the default session for
+  0x27 / 0x28 / 0x85 (ISO 14229-1 runs them only in a non-default one); a 0x10 row without the
+  default session, or any row reachable only outside it with 0x10 left out; a `security` level on
+  0x10 / 0x27 / 0x3E (how a tester reaches, unlocks and keeps a session) or on a row not allowed in
+  the extended session (the only one an application server unlocks in), and a 0x27 row without it;
+  a table leaving out 0x27 while a level is gated, 0x22 while a DID exists or 0x2E while one is
+  writable; a DID gate sharing no session with its service's row, or naming another 0x27 level
+  than the row (one unlock cannot satisfy both); more rows than `uds.max_services` (16).
+- **Migration** (no silent translation): the old `[[isotp]]` array — and a server key (`s3_ms`,
+  `security_*`) or `name` in `[isotp]` — is refused by `ecumodel.validate` (so by ecucheck and
+  loom2v alike) with the move it needs: write `[isotp]` as a table without `name`, and move the
+  server's keys to `[uds]`.
 
 What it adds, all table-driven so an unsupported path answers the right NRC rather than a guess:
 
@@ -140,8 +194,8 @@ What it adds, all table-driven so an unsupported path answers the right NRC rath
   (gates COM tx the way NM already does), **0x85 ControlDTCSetting** (§3.3).
 - The bootloader's `Prog` keeps composing `uds.Server`, so it inherits session/NRC fixes for free.
 
-It runs on the **target** as a comm-thread module — which first means lifting the ThreadX refusal of
-`[[isotp]]` (R2): ISO-TP links in the comm thread, rx by id, tx `tx_ready`-gated, exactly as the trace
+It runs on the **target** as a comm-thread module — which first meant lifting the ThreadX refusal of
+the ISO-TP connection (R2): ISO-TP links in the comm thread, rx by id, tx `tx_ready`-gated, exactly as the trace
 dump already streams ISO-TP from that thread.
 
 ### 3.2 Rx status (#286)
@@ -331,9 +385,9 @@ and — from R2 on — a bench verification on `examples/system_full` recorded i
 | Rung | Scope | Proof | Depends on |
 |---|---|---|---|
 | **R0** | Requirements for everything below (REQ-DIAG-*); correct the three over-claiming docs; decide D1–D6 (done: §5) | `make trace-check` | — |
-| **R1** | Server core on the host: `[[isotp]]` server settings (`functional_id`, `s3_ms`), sessions from default + S3, gating tables, NRC set + evaluation order, multi-DID 0x22, functional addressing, 0x11, 0x28 (0x78 arrives with the first service that waits on flash, R6/R7) | unit tests + `examples/overspeed` e2e vs the blobly_net client | R0, N1 |
+| **R1** | Server core on the host: the server settings (then in `[[isotp]]`, now `[uds]`) (`functional_id`, `s3_ms`), sessions from default + S3, gating tables, NRC set + evaluation order, multi-DID 0x22, functional addressing, 0x11, 0x28 (0x78 arrives with the first service that waits on flash, R6/R7) | unit tests + `examples/overspeed` e2e vs the blobly_net client | R0, N1 |
 | **R1b** | 0x27 SecurityAccess with the board key seam + blobly_net's reference key | unit tests; e2e with the existing net 0x27 client | R1 |
-| **R2** | UDS on the **target**: `[[isotp]]` on the ThreadX comm thread; 0x11 with the bounded controller drain; the programming-session handoff into the bootloader | bench: sessions, DIDs, 0x27 (incl. reset between failed attempts), 0x11 answered then reset, app → boot handoff, on `system_full` domain via CANsub | R1, R1b |
+| **R2** | UDS on the **target**: `[isotp]` on the ThreadX comm thread; 0x11 with the bounded controller drain; the programming-session handoff into the bootloader | bench: sessions, DIDs, 0x27 (incl. reset between failed attempts), 0x11 answered then reset, app → boot handoff, on `system_full` domain via CANsub | R1, R1b |
 | **R3** | Rx status (#286) on the host: `RxStatus`, bridge-owned, integrity latch, E2E `lost` counter; `valid` migrated | host e2e (timeout / integrity / never_received) | R0 |
 | **R4** | Faults on the host: `[[fault]]`, FB fault port, generated debounce, fault memory in RAM, status byte, operation cycle, enable conditions, 0x19 01/02/0A, 0x14, 0x85; signal-status faults from R3; syscheck DTC uniqueness | host e2e: fail → pending → confirmed → cleared → aged | R1, R3, N2 |
 | **R5** | Target COM checks ("phase 6b-2b"): rx deadlines + E2E/SecOC on the comm thread, so R3's status reaches FBs on silicon (the signal-status DTCs on silicon are R6's, once faults run on the target) | bench: pull a sender, corrupt a frame, FB sees the status | R2, R3 |
@@ -392,7 +446,7 @@ done until its obligations hold under their tests. §3 fixes the shape; this tab
 | R2 | The programming handoff is offered only by a server whose bus and addresses the bootloader serves (today: CAN 0, 0x7B0 / 0x7B8 in the boot images), validated at generation; any other server refuses 0x10 02. | generation test on a mismatched config; bench: handoff reaches `boot.Prog` |
 | R3 | A signal that never receives a good frame still reaches `timeout`: an initial reception deadline is armed at bridge start (and on NM wake), since today's monitor only runs after a first frame (`comm/com/com.v`). | host e2e: sender absent from boot → `timeout` after the grace period |
 | R4 | A clear makes the prior generation obsolete: readings carrying a generation older than the one the clear requested are ignored until the producer acknowledges it, so an old-generation failure cannot recreate a cleared DTC. (Cycle transitions bump no generation — §3.3 as built in R4a.) | unit: clear with a failed producer that publishes once more before observing the control |
-| R1 | One diagnostic server per node, enforced at generation: a second `[[isotp]]` connection is refused outright (a bare one still exposes sessions, 0x28, reset), so the fault memory, the clear epoch, 0x85, NM keep-awake and the handoff each have exactly one owner. *(Replaces a multi-server design that review showed widening the surface round after round.)* | generation test: a second connection is refused |
+| R1 | One diagnostic server per node, enforced at generation: a second ISO-TP connection is refused outright (since the `[uds]` split, `[isotp]` is a table: there is no second one to write) (a bare one still exposes sessions, 0x28, reset), so the fault memory, the clear epoch, 0x85, NM keep-awake and the handoff each have exactly one owner. *(Replaces a multi-server design that review showed widening the surface round after round.)* | generation test: a second connection is refused |
 | R4 | 0x85 DTC-setting-off is restored to on when the session ends (explicit, S3, reset), like 0x28. | unit + e2e: set off, disconnect, faults record again after S3 |
 | R6 | Displacement is atomic across its two journal writes: the replacement is written first, and recovery resolves a temporary over-capacity set deterministically (lowest priority, then oldest, is the one dropped), so an interrupted displacement never loses both entries. | power-cut fuzz over the displacement sequence |
 | R6 | A freeze frame never becomes a side door around DID access: a snapshot may only name DIDs readable in every session 0x19 is served in without security, or 0x19 04 applies the strictest gate of the DIDs it contains — decided in R6, enforced at generation. | generation test: a gated DID in `freeze` is rejected (or the gate applies) |
@@ -403,7 +457,7 @@ done until its obligations hold under their tests. §3 fixes the shape; this tab
 | R4 | … and it is a fault source: `[[fault]] on = "lost"`. | host e2e: a single skipped counter raises its DTC |
 | R4 | 0x85 suppression records nothing after the positive "off" and replays no suppressed occurrence after "on". *Met in R4a without a producer handshake:* suppression is applied where readings are consumed (§3.3); the accepted cost is that a qualification published before "off" but not yet read (≤ one owner pass) is not recorded. | unit: off, fail, on — nothing recorded, nothing replayed |
 | R6 / R7 | Live state changes only after durability: a persisted 0x2E (parameters, `apply = "next_dispatch"`) and a persisted 0x14 stage their RAM change until the journal accepts the write; on refusal (0x72) both live and durable state are unchanged. | fault-injection tests asserting the current-run value, not only the stored one |
-| R0 | Physical diagnostic ids are unique per BUS, not per system: REQ-TOPO-002 and `tools/sysmodel/checks.v` (which today put every allocation and `[[isotp]]` id in one global map) are revised to key physical ids by bus and to allow a shared functional id. | syscheck tests: the same physical id on two separate buses passes; twice on one bus fails |
+| R0 | Physical diagnostic ids are unique per BUS, not per system: REQ-TOPO-002 and `tools/sysmodel/checks.v` (which today put every allocation and ISO-TP connection id in one global map) are revised to key physical ids by bus and to allow a shared functional id. | syscheck tests: the same physical id on two separate buses passes; twice on one bus fails |
 | R4 | The tested state is lossless like the occurrences: a monotonic tested-count per fault (not a last-value `tested` flag), so a fast producer's single evaluation followed by `.not_tested` is never lost to the test-not-completed bits or aging. | unit: one evaluation then `.not_tested`, read once late |
 | R4 / R6 | Every list-producing 0x19 response fits the transport: generation bounds 0x19 02 / 0A (all DTCs × 4 B) and 03 (all snapshot ids) against the message limit with its header, and refuses a fault table that could exceed it. | generation test at the boundary |
 | R6 | Snapshot and extended-data records carry stable on-wire record numbers — snapshot record 0x01 per DTC (one snapshot per fault), extended data 0x01 occurrence counter, 0x02 aging counter — with 0xFF (all) supported, and the numbering carried in the manifest for the tester. | unit: 0x19 03 / 04 / 06 with explicit and 0xFF record numbers; N3 decodes them |

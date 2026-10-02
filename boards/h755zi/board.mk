@@ -17,7 +17,7 @@ CMSIS      = -I$(REPO)/third_party/cmsis_device_h7/Include \
 BOARD_DEFS = -DSTM32H755xx -DCORE_CM7 -DTRACE_CPU_MHZ=400 -DSYSTEM_CLOCK=400000000
 # FDCAN timing off the 80 MHz PLL2_Q kernel clock (see board.c): nominal 500 kbit = 16 tq (NBRP
 # 10, 1+12+3, 81.25%), data 2 Mbit = 20 tq (DBRP 2, 1+15+4, 80%). 8 MHz could not run 2 Mbit BRS
-# (4 tq -> bus-off, examples/h723_canecho); common 80 MHz across the FD boards, matched by construction.
+# (4 tq -> bus-off, seen on the H723); common 80 MHz across the FD boards, matched by construction.
 # FD-capable — data 2 Mbit = 4 tq (DBRP 1, 1+2+1, 75%) — so a fd=true node here opens rather than
 # 16 tq/bit (1 + 12 + 3), sample point 81.25%.
 CAN_DEFS   = -DBLOB_CAN_FDCAN -DBLOB_FDCAN_KCLK_HZ=80000000 -DBLOB_FDCAN_TQ=16 \

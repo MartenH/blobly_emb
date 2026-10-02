@@ -651,8 +651,7 @@ tick_ms = 1
 node  = 0x11
 alive = "AliveMsg"
 peers = [0x500, 0x53F]
-[[isotp]]
-name  = "diag"
+[isotp]
 bus   = "can0"
 rx_id = 0x101
 tx_id = 0x102
@@ -1029,8 +1028,7 @@ tick_ms = 1
 node  = 0x11
 alive = "AliveMsg"
 peers = [0x500, 0x53F]
-[[isotp]]
-name  = "diag"
+[isotp]
 bus   = "can0"
 rx_id = 0x101
 tx_id = 0x102
@@ -1086,8 +1084,7 @@ tick_ms = 1
 node  = 0x11
 alive = "AliveMsg"
 peers = [0x500, 0x53F]
-[[isotp]]
-name  = "diag"
+[isotp]
 bus   = "can0"
 rx_id = 0x101
 tx_id = 0x102
@@ -1221,8 +1218,7 @@ tick_ms = 1
 node  = 0x11
 alive = "AliveMsg"
 peers = [0x500, 0x53F]
-[[isotp]]
-name  = "diag"
+[isotp]
 bus   = "can0"
 rx_id = 0x101
 tx_id = 0x102
@@ -1613,8 +1609,7 @@ core = 0
 node  = 0x11
 alive = "AliveMsg"
 peers = [0x500, 0x53F]
-[[isotp]]
-name  = "diag"
+[isotp]
 bus   = "can0"
 rx_id = 0x101
 tx_id = 0x102
@@ -1652,7 +1647,7 @@ fn test_isotp_id_collision_is_error() {
 		iface: 'can0'
 		rx_id: 0x700
 	}] // same on-wire diag id
-	assert errs(validate_system(s)).any(it.contains('[[isotp]] diagnostic id 0x700')
+	assert errs(validate_system(s)).any(it.contains('[isotp] diagnostic id 0x700')
 		&& it.contains('collides')), errs(validate_system(s)).str()
 }
 
@@ -2464,7 +2459,7 @@ fn test_isotp_id_zero_collides() {
 			tx_id: 0x702
 		},
 	] // both rx at 0
-	assert errs(validate_system(s)).any(it.contains('[[isotp]] diagnostic id 0x0')
+	assert errs(validate_system(s)).any(it.contains('[isotp] diagnostic id 0x0')
 		&& it.contains('collides')), errs(validate_system(s)).str()
 }
 

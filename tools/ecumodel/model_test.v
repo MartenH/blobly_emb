@@ -1209,8 +1209,7 @@ fn test_someip_round4_gates() {
 	// isotp on eth; a tx block on an rx frame; a string e2e data_id
 	e := errs_of(eth_head +
 		'
-[[isotp]]
-name  = "diag"
+[isotp]
 bus   = "eth0"
 rx_id = 0x8100
 tx_id = 0x8101
@@ -1243,7 +1242,7 @@ rx      = { timeout_ms = 200 }
 e2e     = { data_id = "nope", counter_pos = 2, crc_pos = 3 }
 ' +
 		app)
-	assert e.any(it.contains('[[isotp]] "diag" is bound to eth bus "eth0"'))
+	assert e.any(it.contains('[isotp] is bound to eth bus "eth0"'))
 	assert e.any(it.contains('"CmdEvt" is rx (signals from the bus) but declares a tx block'))
 	assert e.any(it.contains('"OutEvt" is tx (signals to the bus) but declares an rx block'))
 	assert e.any(it.contains('E2E data_id must be an integer'))
@@ -1921,4 +1920,40 @@ thread = "app_main"
 	assert e.any(it.contains('signal "AbsActive" collides with "ABS_Active": both generate `abs_active`'))
 	assert e.any(it.contains('signal name "abs_on" is not PascalCase'))
 	assert e.any(it.contains('fb name "Brake_Monitor" is not PascalCase'))
+}
+
+// The pre-[uds] diagnostic layout is refused with the move it needs, never translated: the shared
+// gate (ecucheck and loom2v both run validate) says it once.
+fn test_the_old_diagnostic_layout_names_its_migration() {
+	arr := errs_of('
+[[isotp]]
+name  = "diag"
+bus   = "can0"
+rx_id = 0x101
+tx_id = 0x102
+s3_ms = 2000
+security_delay_ms = 1000
+' + app)
+	assert arr.any(it.contains('[[isotp]] is now the [isotp] table')
+		&& it.contains('move s3_ms / security_delay_ms to [uds]')), arr.str()
+	keys := errs_of('
+[isotp]
+name  = "diag"
+bus   = "can0"
+rx_id = 0x101
+tx_id = 0x102
+security_key = "reference"
+' + app)
+	assert keys.any(it.contains('[isotp] `security_key` is the ISO 14229 server\'s setting')), keys.str()
+	assert keys.any(it.contains('[isotp] `name` is gone')), keys.str()
+	ok := errs_of('
+[uds]
+s3_ms = 2000
+
+[isotp]
+bus   = "can0"
+rx_id = 0x101
+tx_id = 0x102
+' + app)
+	assert !ok.any(it.contains('isotp') || it.contains('[uds]')), ok.str()
 }

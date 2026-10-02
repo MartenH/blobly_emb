@@ -66,8 +66,6 @@ and enter `main__main()` from a minimal `startup.c`.
 
 | Example | Board | What it shows |
 |---------|-------|---------------|
-| [`h735_blinky`](h735_blinky/) | STM32H735G-DK | smallest bring-up: LED blink, ~1 KB, no heap |
-| [`h735_canecho`](h735_canecho/) | STM32H735G-DK | **register-level FDCAN driver** on silicon: echo each frame with id+1 (M7 @ 550 MHz) |
 | [`h735_app`](h735_app/) | STM32H735G-DK | **FBs + Loom + telemetry** on silicon: scheduled function blocks + per-core CPU load streamed as a CpuLoad frame (`0x7E0`), watchable live in blobly_net |
 | [`h755_canfd`](h755_canfd/) | STM32H755 Nucleo | two-bus FDCAN echo (the driver made multi-device) |
 

@@ -3,8 +3,7 @@
 Bare-metal **two-bus CAN-FD** echo on the dual-core H755: **FDCAN1** and **FDCAN2**,
 each echoing a received frame — up to a **64-byte FD payload** — back with **id+1**
 as an FD frame (BRS, 2 Mbit/s data phase), through the shared register-level driver
-(`driver/can`, no HAL). The H755 counterpart to
-[`h735_canecho`](../h735_canecho/) (which is single-bus classic on the H735).
+(`driver/can`, no HAL).
 
 ```
 main.v ──V -freestanding──▶ canfd.c ─┐

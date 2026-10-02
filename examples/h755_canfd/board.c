@@ -12,7 +12,7 @@
  * set. 8 MHz / 500 kbit = exactly 16 tq (BRP 1), which is the driver's default,
  * so NO bit-timing override is needed (unlike the H735's 25 MHz). If your board
  * instead has the 25 MHz X3 crystal fitted, drop HSEBYP and pass
- * BLOB_FDCAN_KCLK_HZ=25000000 + the tseg override, as h735_canecho does.
+ * BLOB_FDCAN_KCLK_HZ=25000000 + the tseg override, the HSE kernel clock this board keeps.
  */
 #include <stm32h7xx.h> /* family dispatcher; build sets -DSTM32H755xx -DCORE_CM7 */
 

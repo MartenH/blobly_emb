@@ -6,7 +6,8 @@
 > bench-proven: xioc (the cross-core SPSC channel, boards/common/xioc.h), external
 > partitions (identity without code), the generated xcore contract header, the two-core
 > trace, and `examples/h755_m4_app` — the hand-written satellite image this emitter
-> absorbs, exactly as `threadx_h735` was absorbed by the generated `h735_threadx`.
+> absorbs, exactly as a hand-written ThreadX image (since retired) was absorbed by the
+> generated `h735_threadx`.
 
 ## Directives (user, recorded in the plan)
 

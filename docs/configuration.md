@@ -33,7 +33,8 @@ codegen output) and must not be hand-edited — change `config/` or the generato
 | `[bus.*]` (+`core`,`fd`), `[import] dbc` | communication | bus params; bridge core; `dbc2cfg` → signal codec (decode+encode) |
 | `[[signal]]` (+`from`/`to`/`fields`/`transport`) | comm/app | signal types (`sig`), ports, `gen.<name>_ch`, routing; bus endpoint → bridge rx/tx via `loom2v` |
 | `[[frame]]` (`tx`/`rx`/`e2e`/`secoc`) | communication | per-PDU COM behaviour: tx mode/timing + rx deadline → `com.TxState`/`RxState`; `e2e` → `e2e.TxState`/`RxState` (AUTOSAR E2E Profile 1); `secoc` → `secoc.*` (AES-CMAC + freshness) |
-| `[[isotp]]` (`rx_id`/`tx_id`/`bs`/`stmin_ms`) | communication | ISO-TP diagnostic connection → a `diag.Connection` in the bridge (`comm/diag`: link + UDS server) |
+| `[uds]` (`s3_ms`/`security_*`/`services`) | communication | the node's ONE ISO 14229 diagnostic server: its session and 0x27 settings, and its service table (docs/diagnostics.md §3.1) |
+| `[isotp]` (`bus`/`rx_id`/`tx_id`/`functional_id`/`bs`/`stmin_ms`) | communication | the server's ISO 15765-2 transport on CAN → a `diag.Connection` in the owner (`comm/diag`: link + UDS server) |
 | `[[did]]` (`ascii`/`bytes`/`signal`/`writable`) | diagnostics | UDS DataIdentifier → entry in the bridge's `uds.Server` (constant / live signal / RAM) |
 | `[[route]]` (`from`/`to`) | communication | raw-PDU gateway: forward a frame bus→bus untouched (the source bridge sends on the destination channel) |
 | `[[fb]]` / `[[fb.handler]]` | application | `gen.partition_*`: Loom wiring (state, handler glue, schedule) via `loom2v` |

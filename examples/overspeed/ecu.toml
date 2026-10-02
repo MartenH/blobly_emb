@@ -157,24 +157,25 @@ tx   = { mode = "cyclic", cycle_ms = 50 }
 # byte0 Status, byte1 freshness, bytes 2-5 truncated MAC (4 of 16 CMAC bytes)
 secoc = { key = "10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f", data_id = 0x20, fresh_pos = 1, mac_pos = 2, mac_len = 4 }
 
-# --- Diagnostics transport (ISO-TP) ------------------------------------------
-# A diag connection on can0: requests arrive on rx_id, responses go on tx_id
-# (segmented per ISO 15765-2). The bridge reassembles a request and hands it to
-# the UDS server (comm/uds, docs/diagnostics.md). Functional requests (one single
-# frame on functional_id) are served too, answered on tx_id. s3_ms is the session
-# timeout (default 5 s); 2 s here keeps the S3 e2e test short. security_delay_ms is
-# the 0x27 lockout after too many wrong keys (default 10 s); 1 s here keeps the
-# SecurityAccess e2e test short.
-[[isotp]]
-name     = "diag"
+# --- Diagnostics: the server (UDS) and its transport (ISO-TP) -----------------
+# [uds] is the node's one diagnostic server (ISO 14229, comm/uds, docs/diagnostics.md);
+# [isotp] carries requests to it on can0 (ISO 15765-2): requests arrive on rx_id,
+# responses go on tx_id, segmented; functional requests (one single frame on
+# functional_id) are served too, answered on tx_id. s3_ms is the session timeout
+# (default 5 s); 2 s here keeps the S3 e2e test short. security_delay_ms is the 0x27
+# lockout after too many wrong keys (default 10 s); 1 s here keeps the SecurityAccess
+# e2e test short. No `services` table: the server answers its default set.
+[uds]
+s3_ms             = 2000
+security_delay_ms = 1000
+
+[isotp]
 bus      = "can0"
 rx_id    = 0x101   # Request  (DBC)
 tx_id    = 0x102   # Response (DBC)
 bs       = 8       # flow-control block size we grant
 stmin_ms = 0
 functional_id = 0x7DF
-s3_ms    = 2000
-security_delay_ms = 1000
 
 # --- Diagnostics services (UDS DataIdentifiers) ------------------------------
 # ReadDataByIdentifier (0x22) / WriteDataByIdentifier (0x2E) sources. A DID is a

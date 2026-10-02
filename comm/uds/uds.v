@@ -9,9 +9,12 @@ module uds
 // DIDs per request), 0x27 SecurityAccess (with injected SecurityOps), 0x28 CommunicationControl,
 // 0x14 / 0x19 / 0x85 over an injected FaultOps (comm/fault),
 // 0x2E WriteDataByIdentifier, 0x3E TesterPresent. Anything else -> 0x11 serviceNotSupported.
+// Which of those a node answers, where, and behind which 0x27 level is the SERVICE TABLE
+// (Server.services, configured from [uds] `services`); an empty table is the default set.
 //
-// Negative responses follow ISO 14229-1's evaluation order. Every service: supported (0x11) →
-// allowed in the active session (0x7F) → minimum length (0x13); then, for a subfunction service:
+// Negative responses follow ISO 14229-1's evaluation order. Every service: supported and in the
+// table (0x11) → allowed in the active session (0x7F) → the table's security level (0x33) →
+// minimum length (0x13); then, for a subfunction service:
 // subfunction supported (0x12) → exact length (0x13) → conditions / range. The DID services follow
 // their own flow: 0x22 — length, then each DID's support and session (0x31 when none answers),
 // then security (0x33), then the response size (0x14); 0x2E — length, then the DID's support,
@@ -98,6 +101,21 @@ pub mut:
 	avail       u8 // the status availability mask; 0 = not wired (the services stay unsupported)
 }
 
+// The service table (Server.services): which services the server answers, in which sessions, and
+// behind which 0x27 level — AUTOSAR Dcm's service table, configured from [uds] `services`.
+pub const max_services = 16
+
+// Service is one row of the table. `sessions` is an in_* mask, 0 = the service's own default
+// (default_sessions); `security` is the 0x27 level the service needs, 0 = none. A row grants
+// nothing the owner has not wired: a service the server cannot perform (service_supported) still
+// answers serviceNotSupported, whatever the table says.
+pub struct Service {
+pub mut:
+	sid      u8
+	sessions u8
+	security u8
+}
+
 // Did is one Data Identifier: constant bytes, a RAM cell (writable), and/or kept fresh from a
 // live signal by the bridge. Access is gated per DID: the session masks (0 = every session) and
 // the security level a write needs (0 = none).
@@ -163,6 +181,11 @@ pub mut:
 	sa_failed       [max_security_level]u8 // wrong keys per level: one level's unlock never clears another's
 	sa_delay_until  u64
 	sa_arm_delay    bool // start the delay at the next tick (boot / reset: the clock is not known yet)
+	// The service table: nservices == 0 is the DEFAULT table — every service the owner wired, in
+	// its default sessions, with no service-level security (the behaviour before the table existed);
+	// otherwise exactly services[0 .. nservices].
+	services  [max_services]Service
+	nservices int
 	// Fault memory (0x19 / 0x14 / 0x85). 0x85's on/off state lives in the memory alone; the server
 	// turns it back on whenever the session returns to default (like 0x28).
 	faults FaultOps
@@ -298,8 +321,16 @@ fn (mut s Server) dispatch(req &u8, req_len int, resp &u8) int {
 	if !s.service_supported(sid) {
 		return negative(resp, sid, nrc_service_not_supported)
 	}
-	if !in_mask(service_sessions(sid), s.session) {
+	row, listed := s.service_row(sid)
+	if !listed {
+		return negative(resp, sid, nrc_service_not_supported)
+	}
+	if !in_mask(row.sessions, s.session) {
 		return negative(resp, sid, nrc_service_not_in_session)
+	}
+	// ISO 14229-1's order: supported → in the active session → the service's security → the rest
+	if row.security != 0 && s.unlocked != row.security {
+		return negative(resp, sid, nrc_security_access_denied)
 	}
 	match sid {
 		0x3E { return s.tester_present(req, req_len, resp) }
@@ -330,12 +361,37 @@ fn (s &Server) service_supported(sid u8) bool {
 	}
 }
 
-// service_sessions: where each service may run. CommunicationControl, SecurityAccess and
-// ControlDTCSetting are non-default-session services (a tester must enter extended first, so a
-// stray request on a quiet bus cannot silence an ECU, spend its key attempts or freeze its fault
-// memory); everything else runs in every session,
-// with per-DID gating on top for 0x22/0x2E.
-fn service_sessions(sid u8) u8 {
+// service_row: the table's row for `sid` with its sessions resolved (a row's 0 = the service's
+// default), and false when a configured table leaves the service out. The default table
+// (nservices == 0) is a row per service in its default sessions with no security.
+fn (s &Server) service_row(sid u8) (Service, bool) {
+	if s.nservices == 0 {
+		return Service{
+			sid:      sid
+			sessions: default_sessions(sid)
+		}, true
+	}
+	for i in 0 .. s.nservices {
+		if i >= max_services {
+			break
+		}
+		if s.services[i].sid == sid {
+			mut row := s.services[i]
+			if row.sessions == 0 {
+				row.sessions = default_sessions(sid)
+			}
+			return row, true
+		}
+	}
+	return Service{}, false
+}
+
+// default_sessions: where each service may run unless the table says otherwise (0 = every
+// session). CommunicationControl, SecurityAccess and ControlDTCSetting are non-default-session
+// services (a tester must enter extended first, so a stray request on a quiet bus cannot silence
+// an ECU, spend its key attempts or freeze its fault memory) — a table never opens them in the
+// default session (loom2v refuses that). Per-DID gating sits on top for 0x22/0x2E.
+pub fn default_sessions(sid u8) u8 {
 	return match sid {
 		0x27, 0x28, 0x85 { in_extended | in_programming }
 		else { u8(0) }
@@ -645,7 +701,7 @@ fn reference_seed(ctx voidptr, out &u8, n int) bool {
 }
 
 // reference_key_ok is blobly_net's reference key check (key[i] = seed[i] ^ 0xFF) — public for a
-// target that opts into the bench key by name (`[[isotp]] security_key = "reference"`).
+// target that opts into the bench key by name (`[uds] security_key = "reference"`).
 pub fn reference_key_ok(ctx voidptr, level u8, seed &u8, key &u8, n int) bool {
 	for i in 0 .. n {
 		if unsafe { key[i] != seed[i] ^ 0xFF } {
