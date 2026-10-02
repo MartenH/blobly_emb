@@ -139,7 +139,7 @@ Makefile above them, so the old glob never reached them. Each script flashes its
 asserting over SWD, so running the group reflashes whatever is attached; a script exits 2 (SKIP)
 when its board is absent, so a partial bench still passes for what IS present.
 
-Know three things before running it on the bench:
+Know four things before running it on the bench:
 
 - **`examples/system_full/nodes/domain` flashes TWO banks** — the CM7 image at `0x08000000` and its
   CM4 satellite at `0x08100000` — and needs `BLOB_H755_SERIAL` to do so. Neither H755 script will
@@ -154,9 +154,11 @@ Know three things before running it on the bench:
   `BLOB_H735_SERIAL` (an H735 and an H723 report the same chip id). It always flashes and reads
   its frozen trace ring straight out of RAM — the ring arms at boot and the overrun trigger
   freezes it, so it needs only st-flash, no CAN and no OpenOCD.
-- **`system_full/nodes/tcu` flashes an H723** given `BLOB_H723_SERIAL`, and the bench H723 may be
-  the one holding **zone_a** — reflash zone_a afterwards for a CAN bench. It probes over UDP from
-  the Windows host (powershell.exe, an Ethernet link), binding the tester's port and sending first.
+- **`system_full/nodes/tcu` flashes only given `BLOB_TCU_SERIAL`** — a tcu-specific variable,
+  because the bench H723 is usually **zone_a**'s board and `make hwtest` passes `--flash` to every
+  script; without it the script skips. Set it, and reflash zone_a afterwards for a CAN bench. It
+  probes over UDP from the Windows host (powershell.exe, an Ethernet link — the H723's RJ45 must
+  be on the LAN), binding the tester's port and sending first.
 
 The two H755 scripts need no CAN adapter, but they need DIFFERENT SWD tooling, so install both:
 

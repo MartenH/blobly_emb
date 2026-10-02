@@ -404,7 +404,7 @@ approved_by = "Claude (coding agent) on Marten Hildell's bench — sysnode DoIP 
 date = "2026-10-02"
 
 # The SOME/IP RPC on system_full's tcu (NUCLEO-H723, 192.168.0.51); --flash needs
-# BLOB_H723_SERIAL and replaces whatever that H723 holds (zone_a, on a CAN bench) with tcu.
+# BLOB_TCU_SERIAL and replaces whatever that H723 holds (zone_a, on a CAN bench) with tcu.
 [[check]]
 id = "tcu-someip-hwtest"
 method = "test"

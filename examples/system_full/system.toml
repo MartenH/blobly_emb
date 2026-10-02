@@ -171,6 +171,8 @@ tx      = { mode = "event", min_delay_ms = 30 }
 # showed missing off the wire. The receiver's `status` and `lost` are the bridge's, added to tcu's
 # copy of LampCmdSafe by sysgen; only `level` is on the wire. SafeStatus names them differently
 # because `status`/`lost` in system.toml mean that bridge-filled metadata, never a payload field.
+# The byte offsets follow from the field NAMES (sorted), and test/tcu_e2e.lua decodes them at fixed
+# offsets: renaming a field moves its bytes, which test/tel_layout_test.v catches.
 [[signal]]
 name   = "LampCmdSafe"
 fields = { level = "u8" }

@@ -24,10 +24,13 @@
 # service and shell method answers the same legs at its own address, read-only.
 #
 # Exit: 0 = pass, 1 = FAILED, 2 = SKIP (no board/probe host). Flashing requires an explicit
-# BLOB_H723_SERIAL: an H723 and an H735 report the same chip id, and the bench H723 may be
-# holding zone_a — --flash replaces it with tcu (reflash zone_a afterwards for a CAN bench).
+# BLOB_TCU_SERIAL — a TCU-specific variable, not a chip one: an H723 and an H735 report the same
+# chip id, and the bench H723 is usually zone_a's board, so `make hwtest` (which passes --flash
+# to every script) must not replace zone_a with tcu unless the bench asked for a tcu.
+# Every received datagram is filtered by source == the board's address: sysnode (.50) sends its
+# GwStatus to the same tester port.
 #
-# Usage: BLOB_H723_SERIAL=<serial> ./bench_test.sh [--flash]
+# Usage: BLOB_TCU_SERIAL=<serial> ./bench_test.sh [--flash]
 set -uo pipefail
 cd "$(dirname "$0")"
 FLASH=0; [ "${1:-}" = "--flash" ] && FLASH=1
@@ -39,10 +42,10 @@ if [ "$FLASH" = 1 ]; then
   # --flash builds and writes tcu's image, which is the node at the default address. Flashing it
   # while probing another node's address would report on an image this script never wrote.
   [ "$BOARD_IP" = "192.168.0.51" ] || { echo "SKIP: --flash builds tcu (192.168.0.51), not the node at $BOARD_IP"; exit 2; }
-  [ -n "${BLOB_H723_SERIAL:-}" ] || { echo "SKIP: flash requested without BLOB_H723_SERIAL"; exit 2; }
-  st-info --probe 2>/dev/null | grep -q "$BLOB_H723_SERIAL" || { echo "SKIP: probe $BLOB_H723_SERIAL not attached"; exit 2; }
+  [ -n "${BLOB_TCU_SERIAL:-}" ] || { echo "SKIP: flash requested without BLOB_TCU_SERIAL (the H723 that runs tcu)"; exit 2; }
+  st-info --probe 2>/dev/null | grep -q "$BLOB_TCU_SERIAL" || { echo "SKIP: probe $BLOB_TCU_SERIAL not attached"; exit 2; }
   make >/dev/null || { echo "FAIL: build error"; exit 1; }
-  make flash SERIAL="$BLOB_H723_SERIAL" >/dev/null 2>&1 || { echo "FAIL: flash error"; exit 1; }
+  make flash SERIAL="$BLOB_TCU_SERIAL" >/dev/null 2>&1 || { echo "FAIL: flash error"; exit 1; }
   sleep 6 # PHY link + NetX bring-up
 fi
 
@@ -53,7 +56,8 @@ param([string]$BoardIp = '192.168.0.51')
 $ErrorActionPreference = 'Stop'
 try { $udp = New-Object System.Net.Sockets.UdpClient(30491) } catch { Write-Output 'SKIP: peer port busy'; exit }
 $udp.Client.ReceiveTimeout = 2000
-$board = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Parse($BoardIp), 30490)
+$boardAddr = [System.Net.IPAddress]::Parse($BoardIp)
+$board = New-Object System.Net.IPEndPoint($boardAddr, 30490)
 $txt = [System.Text.Encoding]::ASCII
 function Req([byte[]]$mid, [byte[]]$rid, [byte[]]$p) {
   $len = 8 + $p.Length
@@ -64,7 +68,7 @@ function RecvType([int]$t) {
   $deadline = (Get-Date).AddSeconds(3)
   while ((Get-Date) -lt $deadline) {
     try { $d = $udp.Receive([ref]$src) } catch { continue }
-    if ($d.Length -ge 16 -and $d[14] -eq $t) { return $d }
+    if ($src.Address.Equals($boardAddr) -and $d.Length -ge 16 -and $d[14] -eq $t) { return $d }
   }
   return $null
 }
@@ -103,7 +107,7 @@ $saw = $false
 $deadline = (Get-Date).AddSeconds(2)
 while ((Get-Date) -lt $deadline) {
   try { $d = $udp.Receive([ref]$src) } catch { continue }
-  if ($d.Length -ge 16 -and $d[2] -eq 0x80 -and $d[3] -eq 0x01) { $saw = $true; break }
+  if ($src.Address.Equals($boardAddr) -and $d.Length -ge 16 -and $d[2] -eq 0x80 -and $d[3] -eq 0x01) { $saw = $true; break }
 }
 if (-not $saw) { Write-Output 'FAIL: events stopped during rpc'; exit }
 Write-Output 'PASS'

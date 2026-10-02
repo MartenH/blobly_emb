@@ -520,8 +520,10 @@ from the Windows host): `uptime` answered with the Request ID
 (client+session) mirrored byte-exact, rc ok, live payload; unknown method →
 0x81/`rc_unknown_method`; dead-session request silently dropped; `help` →
 a 107-byte response in one datagram; events streaming throughout.
-**REQ-NET-016 VERIFIED on target** (then `h735-someip-hwtest`, now `tcu-someip-hwtest`,
-recorded via `BLOB_HWTEST=1 make trace`). REQ-NET-018 stays groundwork-verified at the
+**REQ-NET-016 VERIFIED on target** on the H735 (`h735-someip-hwtest`, recorded via
+`BLOB_HWTEST=1 make trace`). That check moved with the example's retirement to
+`tcu-someip-hwtest` and is pending a tcu bench run (the H723 needs its Ethernet cabled), so the
+ledger reads covered until it runs. REQ-NET-018 stays groundwork-verified at the
 dispatch seam (untagged) until a build really exposes a mutating method.
 
 Note on `allow_mutate = true` (the open half of REQ-NET-018): the current
