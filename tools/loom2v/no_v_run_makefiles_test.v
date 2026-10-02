@@ -172,3 +172,44 @@ fn test_the_scan_recognises_v_run() {
 	assert !rule_header('NAME := x')
 	assert !rule_header('X = a:b')
 }
+
+// default_goal asks make which target a plain `make` in `dir` builds. The goal named is one no
+// Makefile has, so make reads everything, prints its database and stops without running a
+// recipe; `-o gen/loom_build.mk` keeps it from remaking the one include that has a remake rule
+// (which would run generation). Nothing is built and nothing is written.
+fn default_goal(dir string, extra string) string {
+	r := os.execute('make -C ${os.quoted_path(dir)} -pq -o gen/loom_build.mk ${extra} no-such-goal-probe 2>/dev/null')
+	mut goal := ''
+	for l in r.output.split_into_lines() {
+		if l.starts_with('.DEFAULT_GOAL :=') {
+			goal = l.all_after(':=').trim_space()
+		}
+	}
+	return goal
+}
+
+// tools.mk declares explicit targets (a tool with no dependency list, the lists themselves); the
+// first explicit target make reads is the default goal, so a plain `make` once built a tool and
+// stopped (codex on #356). Every Makefile keeps its own goal, with the tools' lists present and
+// with none at all (an empty TOOL_DIR: every tool unrecorded, the case that broke it).
+fn test_including_tools_mk_keeps_every_default_goal() {
+	empty := os.join_path(os.vtmp_dir(), 'tools_mk_goal_${os.getpid()}')
+	os.mkdir_all(empty) or { panic(err) }
+	defer {
+		os.rmdir_all(empty) or {}
+	}
+	mut n := 0
+	for mk in makefiles(@VMODROOT) {
+		if os.file_name(mk) != 'Makefile' {
+			continue
+		}
+		dir := os.dir(mk)
+		want := if dir == @VMODROOT { 'example' } else { 'all' }
+		for extra in ['', 'TOOL_DIR=${os.quoted_path(empty)}'] {
+			got := default_goal(dir, extra)
+			assert got == want, '${mk} ${extra}: a plain `make` builds `${got}`, not `${want}`'
+			n++
+		}
+	}
+	assert n >= 80, 'asked make about only ${n / 2} Makefiles'
+}

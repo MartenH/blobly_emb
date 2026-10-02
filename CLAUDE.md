@@ -64,7 +64,8 @@ examples generated side by side, exec one file and one dies with `No such file o
 the rule that runs it, run it by that variable. Each tool is built once into the including
 directory's `bin/` (atomically, by `scripts/build_tool.sh`) and rebuilt when anything compiled
 into it changes — every V file `-dump-files` reports (vlib's too), the C and headers beside them,
-and `tools.mk`; `tools/loom2v/no_v_run_makefiles_test.v` pins all three halves.
+`tools.mk` and the helper; `tools/loom2v/no_v_run_makefiles_test.v` pins all three halves, and
+asks make that including `tools.mk` leaves every Makefile's default goal where it was.
 
 Examples use classic CAN (`[bus] fd = false`) so blobly_net (classic) can drive
 them; the driver picks classic vs CAN-FD from that flag. Integration tests live in

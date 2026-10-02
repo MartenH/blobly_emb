@@ -17,8 +17,9 @@
 #
 # A tool is rebuilt when any source compiled into it changes, vlib's included (so a new V rebuilds
 # it) and the C a module pulls in beside its V (scripts/build_tool.sh writes that list beside it),
-# when this file changes, and when it has no such list; a target depending on it is remade
-# when it is. The binaries live in bin/ of the including directory, which `make clean` removes.
+# when this file or scripts/build_tool.sh changes, and when it has no such list; a target
+# depending on it is remade when it is. The binaries live in bin/ of the including directory,
+# which `make clean` removes.
 V ?= v
 
 # name -> what V compiles: one file for a single-file program, the directory for a multi-file one
@@ -47,12 +48,19 @@ TOOL_FLAGS_loom_bench   := -prod
 TOOL_FLAGS_bulk_bench   := -prod -gc none
 TOOL_FLAGS_load_bench   := -gc none
 
+# Everything below declares explicit targets (the unrecorded-tool prerequisites, the dependency
+# lists), and the first explicit target make reads becomes the default goal. Save the including
+# Makefile's goal BEFORE any of them and restore it at the end, so it is unchanged: empty when
+# the include comes before the Makefile's first target, which then takes it as before.
+# tools/loom2v/no_v_run_makefiles_test.v asks make itself.
+TOOL_GOAL := $(.DEFAULT_GOAL)
+
 TOOL_REPO := $(abspath $(REPO))
 TOOL_DIR  := $(CURDIR)/bin
 TOOLS     := $(patsubst TOOL_SRC_%,%,$(filter TOOL_SRC_%,$(.VARIABLES)))
 $(foreach t,$(TOOLS),$(eval TOOL_$(t) := $(TOOL_DIR)/.tool-$(t)))
-# also rebuilt when this file changes (a tool's flags or source live here)
-$(TOOL_DIR)/.tool-%: $(TOOL_REPO)/tools/tools.mk
+# also rebuilt when this file (a tool's flags and source) or the build helper changes
+$(TOOL_DIR)/.tool-%: $(TOOL_REPO)/tools/tools.mk $(TOOL_REPO)/scripts/build_tool.sh
 	@test -n "$(TOOL_SRC_$*)" || { echo "tools.mk: no tool named '$*'"; exit 1; }
 	V="$(V)" $(TOOL_REPO)/scripts/build_tool.sh $@ "$(TOOL_FLAGS_$*)" $(TOOL_REPO)/$(TOOL_SRC_$*)
 # a dependency list is written by the build above, never made on its own
@@ -63,8 +71,5 @@ $(TOOL_DIR)/.tool-%.d: ;
 .PHONY: tool-unrecorded
 $(foreach t,$(TOOLS),$(if $(wildcard $(TOOL_DIR)/.tool-$(t).d),,$(eval $(TOOL_DIR)/.tool-$(t): tool-unrecorded)))
 
-# the dependency lists hold explicit rules; keep them from taking the including Makefile's
-# default goal (the first target it names after this include stays `all`)
-TOOL_GOAL := $(.DEFAULT_GOAL)
 -include $(wildcard $(TOOL_DIR)/.tool-*.d)
 .DEFAULT_GOAL := $(TOOL_GOAL)
