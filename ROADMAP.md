@@ -153,8 +153,8 @@ the FB never calls a service API.
   ThreadX node, FB-tested faults debounced on the FB thread, the fault memory on the comm thread,
   0x19 01/02/0A, 0x14, 0x85, operation cycle from NM or `cycle = "power"` — RAM only,
   bench-verified on zone_a (`test/faults_zone_a.lua`). Left (R6b): persistence (entries + freeze
-  frames as chained journal records), 0x19 03/04/06, a cycle signal on the target, faults in
-  multi-thread and satellite partitions
+  frames as chained journal records), extended data, displacement, 0x19 03/04/06, and on the
+  target a cycle signal, signal-status faults and faults in multi-thread / satellite partitions
 - 🧭 **R7 parameters / variant coding** (#288) — `[[param]]` over the nvm P4 DID write path
 
 ## Drivers & IO
