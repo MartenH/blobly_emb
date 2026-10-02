@@ -97,7 +97,12 @@ fn gate_case(i int, c GateCase) []string {
 // of a shared frame, so the order is part of the contract).
 fn test_gateway_makefiles_merge_what_the_gate_merges() {
 	mut seen := 0
-	for sys_path in os.glob(os.join_path(@VMODROOT, 'examples', '*', 'system.toml')) or { panic(err) } {
+	// os.ls, not os.glob: V's glob folds a repeated path step (CI checks out to .../blobly_emb/blobly_emb)
+	for ex in os.ls(os.join_path(@VMODROOT, 'examples')) or { panic(err) } {
+		sys_path := os.join_path(@VMODROOT, 'examples', ex, 'system.toml')
+		if !os.is_file(sys_path) {
+			continue
+		}
 		mut sys := sysmodel.parse_system(sys_path) or { panic(err) }
 		errs := sys.load_nodes_partial()
 		assert errs.len == 0, errs.str()
