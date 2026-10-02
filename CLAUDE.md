@@ -57,6 +57,18 @@ make bench                                  # IOC transport + Loom dispatch benc
 (cd examples/overspeed && make test BLOBLY_NET=/path/to/blobly_net)  # on-bus integration test
 ```
 
+**A Makefile never runs a repo tool with `v run`** (#313, #333): `v run` names its binary after
+the tool's SOURCE path and deletes it on exit, so a `make -j` over a system's nodes, or two
+examples generated side by side, exec one file and one dies with `No such file or directory`.
+`tools/tools.mk` is the one rule instead — include it, name `$(TOOL_<name>)` as a prerequisite of
+the rule that runs it, run it by that variable. Each tool is built once into the including
+directory's `bin/` (atomically, by `scripts/build_tool.sh`) and rebuilt when any input changes:
+every V file `-dump-files` reports (vlib's too), every C source and `#flag -I` directory
+`-dump-c-flags` reports, a signature (the tool's own path, the V command, its binary,
+`v version`, the tool's flags, `$VFLAGS`), `tools.mk` and the helper. The list lives in `tools.mk`;
+`tools/loom2v/no_v_run_makefiles_test.v` changes each kind of input and asks make, pins that no
+Makefile runs `v run`, and that including `tools.mk` leaves every default goal where it was.
+
 Examples use classic CAN (`[bus] fd = false`) so blobly_net (classic) can drive
 them; the driver picks classic vs CAN-FD from that flag. Integration tests live in
 each example's `test/` (blobly_net project + Lua), run by `make test`.

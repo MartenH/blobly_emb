@@ -11,6 +11,8 @@ BOARD   := h723
 TX       = $(REPO)/third_party/threadx
 PORT     = $(TX)/ports/cortex_m7/gnu
 include $(REPO)/boards/$(BOARD)/board.mk
+# repo tools are built once into bin/ and run from there, never `v run` (tools/tools.mk, #333)
+include $(REPO)/tools/tools.mk
 
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
           $(BOARD_DEFS) -DBOARD_ENTRY=main__main $(CAN_DEFS) -DBLOB_IO_STM32 \
@@ -34,16 +36,16 @@ all: $(BUILD)/$(NAME).bin
 gen: gen/.stamp
 # Regenerate when a GENERATOR changes too, not only the configs/DBCs/app: a stale-tool build
 # would silently re-validate code emitted by the old sysgen/dbc2cfg/loom2v (AGENTS.md target-
-# image verification path). Generators run via `$(V) run` (a clean checkout has the V sources).
+# image verification path). Generators are built from source into bin/ (tools/tools.mk).
 GENSRC = $(wildcard $(REPO)/tools/ecucheck/*.v) $(wildcard $(REPO)/tools/sysgen/*.v) $(wildcard $(REPO)/tools/dbcmerge/*.v) \
          $(wildcard $(REPO)/tools/dbc2cfg/*.v) $(wildcard $(REPO)/tools/loom2v/*.v) \
          $(wildcard $(REPO)/tools/ecumodel/*.v) \
          $(wildcard $(REPO)/tools/candb/*.v) $(wildcard $(REPO)/tools/sysmodel/*.v)
-gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/edge.dbc $(wildcard app/*.v) $(GENSRC)
+gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/edge.dbc $(wildcard app/*.v) $(GENSRC) $(TOOL_dbc2cfg) $(TOOL_loom2v)
 	@mkdir -p gen ports sig
 	$(MAKE) -C $(REPO) gen-system SYSTEM=examples/system_full/system.toml
-	cd $(REPO) && $(V) run tools/dbc2cfg/gen.v examples/system_full/edge.dbc examples/system_full/nodes/zone_a/gen/dbc_gen.v
-	cd $(REPO) && $(V) run tools/loom2v examples/system_full/gen-$(NAME).toml examples/system_full/edge.dbc \
+	cd $(REPO) && $(TOOL_dbc2cfg) examples/system_full/edge.dbc examples/system_full/nodes/zone_a/gen/dbc_gen.v
+	cd $(REPO) && $(TOOL_loom2v) examples/system_full/gen-$(NAME).toml examples/system_full/edge.dbc \
 	  examples/system_full/nodes/$(NAME)/sig/signals_gen.v examples/system_full/nodes/$(NAME)/ports/ports_gen.v \
 	  examples/system_full/nodes/$(NAME)/gen/loom_gen.v examples/system_full/nodes/$(NAME)/gen/trace-manifest.csv
 	@touch gen/.stamp
@@ -91,7 +93,7 @@ flash: $(BUILD)/$(NAME).bin
 	st-flash $(if $(SERIAL),--serial $(SERIAL),) reset
 
 clean:
-	rm -rf $(BUILD) gen ports sig
+	rm -rf $(BUILD) gen ports sig bin
 
 .PHONY: all gen flash clean
 .DELETE_ON_ERROR:

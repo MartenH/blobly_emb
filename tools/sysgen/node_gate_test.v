@@ -113,10 +113,12 @@ fn test_gateway_makefiles_merge_what_the_gate_merges() {
 			}
 			mk := os.join_path(os.dir(sys_path), os.dir(n.ecu), 'Makefile')
 			text := os.read_file(mk) or { panic('gateway ${n.name}: ${err}') }
-			line := text.split_into_lines().filter(it.contains('tools/dbcmerge/gen.v'))
+			// the recipe line that runs the tool (tools/tools.mk), not a prerequisite list naming it
+			line := text.split_into_lines().filter(it.starts_with('\t')
+				&& it.contains('\$(TOOL_dbcmerge)'))
 			assert line.len == 1, '${mk}: expected one dbcmerge step'
-			// `... dbcmerge/gen.v <out> <in>...`, inputs relative to the repo root
-			ins := line[0].all_after('tools/dbcmerge/gen.v').fields()[1..]
+			// `... $(TOOL_dbcmerge) <out> <in>...`, inputs relative to the repo root
+			ins := line[0].all_after('\$(TOOL_dbcmerge)').fields()[1..]
 			want := (gateway_dbcs(sys, n) or { panic(err) }).map('${rel}/${it}')
 			assert ins == want, '${mk}: merges ${ins}, the system gate merges ${want}'
 			seen++

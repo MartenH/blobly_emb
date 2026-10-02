@@ -27,6 +27,8 @@ NX_PORT  = $(NX)/ports/cortex_m7/gnu
 
 BOARD := h723
 include $(REPO)/boards/$(BOARD)/board.mk
+# repo tools are built once into bin/ and run from there, never `v run` (tools/tools.mk, #333)
+include $(REPO)/tools/tools.mk
 
 INCS = $(CMSIS) $(BOARD_INCS) -I$(REPO)/boards/common \
        -I$(TX_PORT)/inc -I$(TX)/common/inc \
@@ -69,10 +71,10 @@ gen: gen/.stamp
 # are cross-node (a peer that stops reading one signal of an event this node sends makes the
 # system invalid). Depending only on our own file left a stale image passing a gate that would
 # now reject it (codex on #245).
-gen/.stamp: $(SYSDIR)/system.toml $(wildcard $(SYSDIR)/nodes/*/ecu.toml) $(wildcard app/*.v) $(GENSRC)
+gen/.stamp: $(SYSDIR)/system.toml $(wildcard $(SYSDIR)/nodes/*/ecu.toml) $(wildcard app/*.v) $(GENSRC) $(TOOL_loom2v)
 	@mkdir -p gen ports sig
 	$(MAKE) -C $(REPO) gen-system SYSTEM=examples/system_full/system.toml
-	cd $(REPO) && $(V) run tools/loom2v examples/system_full/gen-$(NAME).toml $(EX)/bus.dbc \
+	cd $(REPO) && $(TOOL_loom2v) examples/system_full/gen-$(NAME).toml $(EX)/bus.dbc \
 	  $(EX)/sig/signals_gen.v $(EX)/ports/ports_gen.v $(EX)/gen/loom_gen.v \
 	  $(EX)/gen/trace-manifest.csv
 	@touch gen/.stamp
@@ -127,6 +129,6 @@ flash: $(BUILD)/$(NAME).bin
 	st-flash $(if $(SERIAL),--serial $(SERIAL),) reset
 
 clean:
-	rm -rf $(BUILD) gen ports sig
+	rm -rf $(BUILD) gen ports sig bin
 
 .PHONY: all gen flash clean
