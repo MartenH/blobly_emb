@@ -44,9 +44,9 @@ TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
 NX_A     = $(BUILD)/nx.a
 NX_C     = $(wildcard $(NX)/common/src/*.c)
 NX_OBJ   = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
-# + the ETH MAC, the NetX STM32H7 driver and DoIP's transport (driver/eth/doip_netx.c)
+# + the network the config asks for (gen/loom_build.mk: ETH MAC, NetX driver, driver/eth seams)
 BSP      = $(BOARD_BSP_THREADX) $(REPO)/boards/common/comm_glue.c $(REPO)/boards/common/trace_hooks.c \
-           $(REPO)/boards/$(BOARD)/eth.c $(REPO)/net/nx_driver_stm32h7.c $(REPO)/driver/eth/doip_netx.c
+           $(LOOM_NET_SRCS)
 
 all: $(BUILD)/$(NAME).bin
 
@@ -67,6 +67,12 @@ gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/compute.dbc $(SYSDIR)/edge.
 	cd $(REPO) && $(V) run tools/loom2v examples/system_full/gen-$(NAME).toml $(GW)/gen/merged.dbc \
 	  $(GW)/sig/signals_gen.v $(GW)/ports/ports_gen.v $(GW)/gen/loom_gen.v $(GW)/gen/trace-manifest.csv
 	@touch gen/.stamp
+
+# loom2v writes gen/loom_build.mk (LOOM_VDEFS, LOOM_NET_SRCS); this rule makes make RESTART and
+# reparse the include once gen has run, or both stay unset for the same run
+-include gen/loom_build.mk
+CFLAGS += $(LOOM_NET_DEFS) # the network the config sizes (driver/eth/netx_up.c)
+gen/loom_build.mk: gen/.stamp ;
 
 $(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
@@ -91,7 +97,7 @@ $(BUILD)/app.o: $(BUILD)/app.c Makefile
 	$(CC) $(CFLAGS) -w -c $< -o $@
 
 $(BUILD)/$(NAME).elf: $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c $(TX_A) $(NX_A) $(BOARD_LD_THREADX) \
-                      $(REPO)/boards/$(BOARD)/eth.h $(REPO)/driver/eth/ip4.h
+                      $(REPO)/boards/$(BOARD)/eth.h $(wildcard $(REPO)/driver/eth/*.h)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.o $(BSP) $(REPO)/driver/can/can_backend.c \
 	  -Wl,--start-group $(TX_A) $(NX_A) -Wl,--end-group -o $@
 	$(SIZE) $@

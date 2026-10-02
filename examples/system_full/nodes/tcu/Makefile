@@ -51,8 +51,8 @@ NX_OBJ = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
 
 # board bring-up + ETH MAC (H723) + the NetX STM32H7 driver + the shared NetX eth
 # backend + the shared byte-IOC glue
-BSP = $(BOARD_BSP_THREADX) $(REPO)/boards/$(BOARD)/eth.c \
-      $(REPO)/net/nx_driver_stm32h7.c $(REPO)/driver/eth/eth_netx.c $(REPO)/boards/common/iocb.c
+# + the network the config asks for (gen/loom_build.mk: ETH MAC, NetX driver, driver/eth seams, byte IOC)
+BSP = $(BOARD_BSP_THREADX) $(LOOM_NET_SRCS)
 
 # a failed lint must not leave a linkable app.c behind (the vinit gate is mandatory)
 .DELETE_ON_ERROR:
@@ -78,6 +78,7 @@ gen/.stamp: $(SYSDIR)/system.toml $(wildcard $(SYSDIR)/nodes/*/ecu.toml) $(wildc
 	@touch gen/.stamp
 
 -include gen/loom_build.mk
+CFLAGS += $(LOOM_NET_DEFS) # the network the config sizes (driver/eth/netx_up.c)
 # remake rule: after `make clean`, regenerating via gen/.stamp must make GNU make
 # RESTART and reparse the include, or LOOM_VDEFS stays unset for the same run.
 gen/loom_build.mk: gen/.stamp ;
@@ -107,7 +108,7 @@ $(NX_A): $(NX_OBJ)
 # 3) cross-compile + link.
 # eth.h is a driver-ABI header the BSP .c files include (descriptor counts, buffer sizes) —
 # list it as a prereq, or a change there won't relink (codex #247).
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(REPO)/boards/common/ioc.h $(REPO)/driver/eth/ip4.h $(REPO)/boards/$(BOARD)/eth.h
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(REPO)/boards/common/ioc.h $(wildcard $(REPO)/driver/eth/*.h) $(REPO)/boards/$(BOARD)/eth.h
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) \
 	  -Wl,--start-group $(TX_A) $(NX_A) -Wl,--end-group -o $@
 	$(SIZE) $@

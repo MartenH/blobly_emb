@@ -448,8 +448,9 @@ from ecu.toml (the hand-wired netx_glue rung is retired). What the rung built:
   survives as wrappers, so every existing pool glue and generated contract is
   unchanged (all seven prior target images rebuilt + h735_threadx re-benched).
 - **`driver/eth/eth_netx.c`**: the NetX backend under the same `blob_eth_*`
-  ABI as the POSIX seam — bring-up (pool/IP/ARP/ICMP/UDP + PHY link wait +
-  the 1 Hz link-poll svc thread) inside `blob_eth_open`, real-datagram-length
+  ABI as the POSIX seam — `blob_eth_open` brings up the image's one NetX
+  (`netx_up.c`, shared with DoIP) at the endpoint, waits for the PHY link and
+  starts the 1 Hz link-poll svc thread; real-datagram-length
   recv (the MSG_TRUNC contract), -1/0 no-data/empty sentinels, tx/fail SWD
   counters. Selected by the Makefile source list, as the CAN backends are.
 - **The generated eth thread** (`eth_thread_entry`): the host bridge's exact

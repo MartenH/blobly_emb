@@ -255,19 +255,26 @@ ISO 13400: on its own image first (below), then generated onto a running node (s
 
 `[doip]` in a ThreadX node's ecu.toml (`address`, `logical_address`, optional
 `functional_address`) puts the node's ONE diagnostic server on TCP/UDP 13400 too:
-`driver/eth/doip_netx.c` runs NetX and two threads (doip: the TCP loop the
+`driver/eth/doip_netx.c` runs two threads on the image's ONE NetX (doip: the TCP loop the
 generator emits; doip-svc: link poll + vehicle identification), and hands each
 request to the CAN comm thread through a mailbox — the server keeps one owner
 thread. The VIN announced is DID 0xF190. Generation refuses a writable DID
 without a security level (REQ-NET-012's DID-write half; 0x11 ECUReset is still
 reachable over IP without one, so the requirement stays open — and sysnode's key
 is blobly_net's public reference key, a bench posture), an entity address outside ISO 13400's
-entity ranges, and an eth bus beside it (one NetX per image). TCP initial
+entity ranges, and an eth bus at another address (a node has one). TCP initial
 sequence numbers come from the TRNG (the comm thread draws the seed). Bench:
 `examples/system_full/test/doip_sysnode.lua` on the H735 — discovery, sessions,
 DIDs, 0x27 + the gated 0x2E, one server and one session across DoIP and CAN with
 each transport's unlock its own, and ECUReset
 answered over TCP before the restart, 5/5.
+
+**One NetX per image** (`driver/eth/netx_up.c`): the pool, the IP instance,
+ARP/ICMP/UDP, the link wait and `rand()` are brought up once, at the node's one
+address; SOME/IP (`eth_netx.c`) and DoIP (`doip_netx.c`) attach to it, so a node
+may carry both, and only a DoIP image links the TCP engine. What an image links
+for its network is generated — `gen/loom_build.mk`'s `LOOM_NET_SRCS` — so no
+node's Makefile lists those sources by hand.
 
 ## P3b status — DoIP (2026-07-18, BENCH-VERIFIED)
 

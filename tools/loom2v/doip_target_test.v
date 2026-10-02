@@ -36,6 +36,12 @@ fn doip_loom2v() string {
 
 // generate runs loom2v on h735_threadx's config with `extra` appended: exit code, output, glue
 fn generate(name string, extra string) (int, string, string) {
+	code, out, glue, _ := generate_mk(name, extra)
+	return code, out, glue
+}
+
+// generate_mk is generate, with the gen/loom_build.mk it wrote
+fn generate_mk(name string, extra string) (int, string, string, string) {
 	tmp := os.join_path(os.temp_dir(), 'doip_target_${name}_${os.getpid()}')
 	defer {
 		os.rmdir_all(tmp) or {}
@@ -50,7 +56,8 @@ fn generate(name string, extra string) (int, string, string) {
 	glue := os.join_path(tmp, 'gen.v')
 	r := os.execute('${doip_loom2v()} ${ecu} ${dbc} ${os.join_path(tmp, 'sig.v')} ' +
 		'${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
-	return r.exit_code, r.output, os.read_file(glue) or { '' }
+	return r.exit_code, r.output, os.read_file(glue) or { '' }, os.read_file(os.join_path(tmp,
+		'loom_build.mk')) or { '' }
 }
 
 // generate_ecu runs loom2v on `ecu` alone (h735_threadx's DBC beside it)
@@ -179,4 +186,88 @@ fn test_a_writable_vin_is_refused() {
 	gated := doip_conn.replace('ascii = "BLOBLYH735THREADX"', 'ascii = "BLOBLYH735THREADX"\nwrite = { session = ["extended"], security = 1 }')
 	code, out, _ := generate('doip_vin_rw', gated)
 	assert code != 0 && out.contains('cannot be writable'), out
+}
+
+// SOME/IP on an eth bus beside it: ONE NetX (driver/eth/netx_up.c) at ONE address, both seams
+// linked through gen/loom_build.mk. Its own config: a CAN bus for the comm thread and the server,
+// one cyclic SOME/IP frame on the eth bus, no [trace] (eth on a traced target is its own rung)
+const doip_eth_ecu = '
+[import]
+dbc = "bus.dbc"
+
+[target]
+kind    = "threadx"
+tick_ms = 1
+
+[bus.can0]
+interface = "vcan0"
+fd        = false
+core      = 0
+
+[bus.eth0]
+kind      = "eth"
+interface = "192.168.0.50"
+core      = 0
+
+[someip]
+bus     = "eth0"
+service = 0x0100
+version = 1
+port    = 30490
+peer    = "192.168.0.190:30491"
+
+[[signal]]
+name   = "EthLoad"
+fields = { load = "u8" }
+from   = "app"
+to     = "eth0"
+
+[[frame]]
+name    = "EthTelem"
+bus     = "eth0"
+id      = 0x8001
+signals = ["EthLoad"]
+tx      = { mode = "cyclic", cycle_ms = 300 }
+
+[[fb]]
+name   = "Load"
+thread = "idle"
+  [[fb.handler]]
+  name      = "on_100ms"
+  period_ms = 100
+  writes    = ["EthLoad"] # a trailing comment ends the nested table (vlang/v#27684)
+
+[telemetry]
+enabled   = true
+bus       = "can0"
+id        = 0x7E0
+period_ms = 500
+' + doip_conn + '
+[[partition]]
+name = "app"
+core = 0
+
+  [[partition.thread]]
+  name = "idle"
+'
+
+fn test_doip_and_someip_share_one_netx() {
+	code, out, glue, mk := generate_ecu('doip_eth', doip_eth_ecu)
+	assert code == 0, out
+	assert glue.contains("C.blob_eth_open(c'192.168.0.50', someip_port)")
+	assert glue.contains("C.doip_net_create(c'192.168.0.50',")
+	for src in ['driver/eth/netx_up.c', 'driver/eth/eth_netx.c', 'driver/eth/doip_netx.c',
+		'boards/common/iocb.c'] {
+		assert mk.contains(src), mk
+	}
+	// a node has one address
+	c2, o2, _, _ := generate_ecu('doip_eth_addr', doip_eth_ecu.replace('address         = "192.168.0.50"',
+		'address         = "192.168.0.60"'))
+	assert c2 != 0 && o2.contains('a node has one address'), o2
+	// and one UDP 13400: a SOME/IP endpoint there would take DoIP's socket
+	c4, o4, _, _ := generate_ecu('doip_eth_port', doip_eth_ecu.replace('port    = 30490', 'port    = 13400'))
+	assert c4 != 0 && o4.contains("is DoIP's"), o4
+	// and a node with neither links no network at all
+	_, _, _, mk3 := generate_mk('no_net', '')
+	assert mk3.contains('LOOM_NET_SRCS :=\n'), mk3
 }
