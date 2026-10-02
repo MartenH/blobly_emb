@@ -193,7 +193,7 @@ pub fn service_refusals(table bool, rows []ServiceRow) []string {
 	}
 	mut errs := []string{}
 	for r in rows {
-		if r.security != 0 && (r.security < 1 || r.security > uds.max_security_level) {
+		if r.security != 0 && !is_level(r.security) {
 			errs << '[uds] services 0x${r.sid.hex()} security = ${r.security} is not a 0x27 level (1..${uds.max_security_level}) — it gates nothing (REQ-NET-012)'
 			continue
 		}
@@ -217,6 +217,12 @@ pub fn bench_key_refusal(security_key string, allow bool) string {
 	return ''
 }
 
+// is_level: a 0x27 security level (1..uds.max_security_level). Every rule here asks it, so a value
+// out of range is never read as authentication anywhere.
+pub fn is_level(l i64) bool {
+	return l >= 1 && l <= uds.max_security_level
+}
+
 // DidWrite is a [[did]]'s write side, as far as REQ-NET-012 is concerned
 pub struct DidWrite {
 pub:
@@ -231,12 +237,16 @@ pub:
 pub fn did_refusals(rows []ServiceRow, dids []DidWrite) []string {
 	mut row_2e := i64(0)
 	for r in rows {
-		if r.sid == 0x2E {
+		if r.sid == 0x2E && is_level(r.security) {
 			row_2e = r.security
 		}
 	}
 	mut errs := []string{}
 	for d in dids {
+		if d.security != 0 && !is_level(d.security) {
+			errs << 'DID 0x${d.id.hex()} write security = ${d.security} is not a 0x27 level (1..${uds.max_security_level}) — it gates nothing (REQ-NET-012)'
+			continue
+		}
 		if d.writable && d.security == 0 && row_2e == 0 {
 			errs << 'makes DID 0x${d.id.hex()} writable from the network with no security level — gate it (write = { security = N }, or a security level on [uds] services "0x2E"), REQ-NET-012'
 		}

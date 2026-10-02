@@ -72,3 +72,23 @@ fn test_a_writable_did_needs_a_gate() {
 		id: 0xF189
 	}]).len == 0
 }
+
+// a DID write level, and a 0x2E row level, out of range gate nothing
+fn test_out_of_range_write_levels_gate_nothing() {
+	for lvl in [i64(9), -1] {
+		errs := did_refusals([], [DidWrite{
+			id:       0x0102
+			writable: true
+			security: lvl
+		}])
+		assert errs.len == 1 && errs[0].contains('is not a 0x27 level'), '${lvl}: ${errs}'
+		// an out-of-range 0x2E row does not cover an ungated DID either
+		assert did_refusals([ServiceRow{
+			sid:      0x2E
+			security: lvl
+		}], [DidWrite{
+			id:       0x0102
+			writable: true
+		}]).len == 1
+	}
+}
