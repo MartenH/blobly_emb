@@ -34,7 +34,7 @@ TX_ASM   = $(wildcard $(PORT)/src/*.S)
 TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
-BSP = $(BOARD_BSP_THREADX) $(SYSDIR)/io_glue.c
+BSP = $(BOARD_BSP_THREADX) $(SYSDIR)/io_glue.c $(LOOM_FAULT_SRCS)
 
 all: $(BUILD)/$(NAME).bin
 

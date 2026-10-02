@@ -5214,13 +5214,15 @@ fn fault_target_boot(m Model) []string {
 }
 
 // fault_build_lines: what the image links for its fault cells, for gen/loom_build.mk — the byte
-// IOC, unless the eth thread already links it (LOOM_NET_SRCS). Nothing when there is nothing to
-// add, so no other image's build file moves. A node Makefile that builds faults lists
-// $(LOOM_FAULT_SRCS) beside its BSP (examples/system_full/nodes/zone_a); one that does not fails to
-// link, naming iocb_cfg / iocb_pub / iocb_get.
+// IOC, unless the eth thread already links it (LOOM_NET_SRCS). Defined on every ThreadX image,
+// empty when unused, and every ThreadX Makefile lists it beside its BSP (pinned by
+// threadx_makefiles_test.v), so adding a [[fault]] to a node needs no Makefile edit.
 fn fault_build_lines(m Model) string {
-	if !fault_target_on(m) || eth_thread_on(m) {
+	if !m.target.threadx {
 		return ''
+	}
+	if !fault_target_on(m) || eth_thread_on(m) {
+		return 'LOOM_FAULT_SRCS :=\n' // always defined: a Makefile lists it whatever the node carries
 	}
 	return 'LOOM_FAULT_SRCS = ' + r'$(REPO)/boards/common/iocb.c' + '\n'
 }

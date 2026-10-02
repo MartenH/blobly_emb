@@ -2,3 +2,4 @@
 LOOM_VDEFS := -d loom_max_tasks=1
 LOOM_NET_SRCS = $(REPO)/boards/$(BOARD)/eth.c $(REPO)/net/nx_driver_stm32h7.c $(REPO)/driver/eth/netx_up.c $(REPO)/driver/eth/eth_netx.c $(REPO)/boards/common/iocb.c
 LOOM_NET_DEFS := -DBLOB_NET_POOL_COUNT=8u
+LOOM_FAULT_SRCS :=

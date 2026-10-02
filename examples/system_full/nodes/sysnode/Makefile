@@ -48,7 +48,7 @@ NX_C     = $(wildcard $(NX)/common/src/*.c)
 NX_OBJ   = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
 # + the network the config asks for (gen/loom_build.mk: ETH MAC, NetX driver, driver/eth seams)
 BSP      = $(BOARD_BSP_THREADX) $(REPO)/boards/common/comm_glue.c $(REPO)/boards/common/trace_hooks.c \
-           $(LOOM_NET_SRCS)
+           $(LOOM_NET_SRCS) $(LOOM_FAULT_SRCS)
 
 all: $(BUILD)/$(NAME).bin
 
