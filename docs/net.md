@@ -275,7 +275,8 @@ DIDs, 0x27 + the gated 0x2E, one server and one session across DoIP and CAN with
 each transport's unlock its own, and ECUReset
 answered over TCP before the restart. With ECUReset gated (REQ-NET-012) it also refuses
 0x11 without DoIP's own unlock and resets under it, and wrong keys sent over DoIP lock 0x27 out
-for the bus tester too — 7/7 on the bench 2026-10-02 (image 906380d).
+for the bus tester too — 7/7 on the bench 2026-10-02 (an image built from #347's branch,
+merged as c22eb18; `requirements/verifications.toml` `sysnode-doip-hardware`).
 
 **Declared by the system, not the node** (rung 6): sysnode's address and DoIP entity
 address are `endpoint = { address = "192.168.0.50", port = 30490 }` and
