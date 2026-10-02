@@ -772,13 +772,7 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		if sv2 := doc.value_opt('shell') {
 			sm2 := sv2.as_map()
 			if (sm2['enabled'] or { toml.Any(true) }).bool() {
-				mut sbus2 := str_of(sm2, 'bus')
-				if 'bus' !in sm2 {
-					if tv2 := doc.value_opt('telemetry') {
-						sbus2 = str_of(tv2.as_map(), 'bus')
-					}
-				}
-				eth_rpc_bound = sbus2 == eth
+				eth_rpc_bound = module_bus(doc, 'shell') == eth
 			}
 		}
 	}
@@ -924,20 +918,13 @@ fn validate_someip(doc toml.Doc, part_names map[string]bool, thread_part map[str
 		'trace':     ['cmd', 'rsp', 'record']
 		'telemetry': ['id', 'detail_id']
 	}
-	mut telem_bus := ''
-	if tv := doc.value_opt('telemetry') {
-		telem_bus = str_of(tv.as_map(), 'bus')
-	}
 	mut mod_on_eth := false
 	for blk in ['trace', 'telemetry', 'shell', 'nm'] {
 		bt := doc.value_opt(blk) or { continue }
 		bm := bt.as_map()
 		def_on := blk != 'telemetry'
 		on := (bm['enabled'] or { toml.Any(def_on) }).bool()
-		mut mbus := str_of(bm, 'bus')
-		if 'bus' !in bm && blk in ['trace', 'shell'] {
-			mbus = telem_bus
-		}
+		mbus := module_bus(doc, blk)
 		if eth == '' || !on || mbus != eth {
 			if blk == 'shell' && on && 'method' in bm {
 				// a declared RPC method that is NOT bound to the eth bus would
@@ -1517,4 +1504,18 @@ pub fn fault_fbs(froms []string) []string {
 		}
 	}
 	return out
+}
+
+// module_bus: the LOCAL bus key a comm module block ([trace], [telemetry], [shell], [nm]) rides —
+// its own `bus`, or, for [trace] and [shell] that name none, [telemetry].bus. The ONE spelling of
+// that inherit rule: the validator, loom2v (which emits the shell on that bus) and sysmodel
+// (which asks whether a node serves RPC on its SOME/IP segment) all read it from here.
+pub fn module_bus(doc toml.Doc, blk string) string {
+	bv := doc.value_opt(blk) or { return '' }
+	own := str_of(bv.as_map(), 'bus')
+	if own != '' || blk !in ['trace', 'shell'] {
+		return own
+	}
+	tv := doc.value_opt('telemetry') or { return '' }
+	return str_of(tv.as_map(), 'bus')
 }

@@ -263,7 +263,8 @@ pub mut:
 	// an authored eth [[frame]] naming its OWN `peer`: the composed model checks reciprocity on
 	// [someip].peer alone, so a per-event peer is the dissolution's to lower, not a node's to author
 	frame_peer bool
-	// [shell].bus as authored (a LOCAL bus key, "eth0" for an RPC shell on a someip member)
+	// the bus [shell] rides (a LOCAL key, "eth0" for an RPC shell on a someip member) — its own, or
+	// [telemetry].bus inherited, by ecumodel.module_bus, the rule loom2v emits it by
 	shell_bus string
 	// the on-wire id each signal rides, keyed "<iface>|<signal>". On a someip endpoint
 	// that id IS the EVENT the receive bridge dispatches on, so two members can agree on
@@ -1082,7 +1083,8 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 	if shv := doc.value_opt('shell') {
 		sm := shv.as_map()
 		v.shell_on = (sm['enabled'] or { toml.Any(true) }).bool()
-		v.shell_bus = m_str(sm, 'bus')
+		// resolved as loom2v resolves it: an omitted bus inherits [telemetry].bus
+		v.shell_bus = ecumodel.module_bus(doc, 'shell')
 		if v.shell_on {
 			v.shell_out_id, v.shell_out_name = binding_id(sm, 'out', 0x7f1)
 			v.shell_in_id, v.shell_in_name = binding_id(sm, 'in', 0x7f0)

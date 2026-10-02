@@ -3,6 +3,8 @@ module main
 import os
 import rand
 import tools.sysmodel
+import tools.ecumodel
+import toml
 
 // Lowering a someip member (#245). The system owns the segment's contract — the service and its
 // events — because a someip bus has no DBC to own it, so sysgen emits what the CAN path takes
@@ -1100,4 +1102,25 @@ fn test_an_authored_frame_peer_in_a_composed_system_is_refused() {
 	sys.nodes[0].view.frame_peer = true
 	e := sysmodel.validate_system(sys).filter(it.severity == .error).map(it.msg)
 	assert e.any(it.contains('names its own `peer`')), e.str()
+}
+
+// The shell's bus is resolved as loom2v resolves it: a [shell] naming no bus rides
+// [telemetry].bus, so a node whose telemetry is on eth0 serves RPC there all the same — and the
+// multi-partner refusal must see it (codex on #343).
+fn test_an_inherited_eth_shell_counts_as_rpc_on_the_segment() {
+	doc := toml.parse_text('[telemetry]\nenabled = true\nbus = "eth0"\nid = 0x8100\n\n[shell]\nmethod = 0x0001\n') or {
+		panic(err)
+	}
+	view := sysmodel.parse_node_view(doc)
+	assert view.shell_on
+	assert view.shell_bus == 'eth0', view.shell_bus
+	assert view.shell_bus == ecumodel.module_bus(doc, 'shell')
+	mut sys := tel_system_of_three()
+	sys.nodes[1].view.shell_on = view.shell_on
+	sys.nodes[1].view.shell_bus = view.shell_bus
+	assert seg_errs(sys).any(it.contains('serves its [shell] over SOME/IP')), seg_errs(sys).str()
+	// ...and an explicit bus still wins over the inherited one
+	own := toml.parse_text('[telemetry]\nbus = "eth0"\n\n[shell]\nbus = "can0"\n') or { panic(err) }
+	assert ecumodel.module_bus(own, 'shell') == 'can0'
+	assert sysmodel.parse_node_view(own).shell_bus == 'can0'
 }
