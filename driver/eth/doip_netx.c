@@ -24,6 +24,12 @@
 #include "eth.h" /* boards/<board>/eth.c: eth_link_up() */
 #include "ip4.h"
 
+/* every timeout here is in ThreadX ticks, and NetX's are too: the two rates must be one */
+#if !defined(TX_TIMER_TICKS_PER_SECOND) || TX_TIMER_TICKS_PER_SECOND != NX_IP_PERIODIC_RATE
+#error "doip_netx.c: build with -DTX_TIMER_TICKS_PER_SECOND and -DNX_IP_PERIODIC_RATE equal (1000 on a 1 kHz SysTick)"
+#endif
+#define MS_TICKS(ms) ((ULONG)(ms) * TX_TIMER_TICKS_PER_SECOND / 1000u)
+
 #define DOIP_PORT  13400
 #define TCP_WINDOW 2048
 
@@ -35,6 +41,7 @@ static UCHAR arp_cache[1024] __attribute__((aligned(4)));
 static UCHAR doip_thread_stack[4096] __attribute__((aligned(8))); /* runs the V loop */
 static UCHAR svc_thread_stack[2048] __attribute__((aligned(8)));
 
+static volatile UINT seeded;
 static NX_PACKET_POOL pool;
 static NX_IP ip;
 static ULONG ip_addr;
@@ -42,7 +49,6 @@ static TX_THREAD doip_thread;
 static TX_THREAD svc_thread;
 static NX_TCP_SOCKET tcp_sock;
 static NX_UDP_SOCKET udp_sock;
-static volatile UINT seeded;
 static volatile UINT sockets_up;
 
 /* bench-observable (SWD) */
@@ -58,10 +64,22 @@ extern void comm_wake(void);                                                /* c
 
 /* ---- rand: NetX's NX_RAND ------------------------------------------------------------------
  * newlib-nano's rand drags reent/malloc/_sbrk into a no-alloc image. xorshift from the seed the
- * comm thread draws from the TRNG; the doip thread opens no socket before it has one. */
+ * comm thread draws from the TRNG, and every call folds in a fresh TRNG word when one is ready: a
+ * bare xorshift gives its state away in one output, so a TCP sequence number seen would predict
+ * the next connection's. A read only takes a word the RNG already holds — no wait, no recovery
+ * (the comm thread's diag_sa_seed owns that); the doip thread opens no socket before the seed. */
+#define RNG_SR_R (*(volatile unsigned int *)0x48021804u)
+#define RNG_DR_R (*(volatile unsigned int *)0x48021808u)
 static unsigned int rand_state = 0x2624B0B1u;
 
 int rand(void) {
+	unsigned int sr = RNG_SR_R;
+	if (seeded && (sr & 1u) && !(sr & 6u)) { /* DRDY, no seed or clock error */
+		rand_state ^= RNG_DR_R;
+		if (rand_state == 0u) {
+			rand_state = 0x2624B0B1u;
+		}
+	}
 	rand_state ^= rand_state << 13;
 	rand_state ^= rand_state >> 17;
 	rand_state ^= rand_state << 5;
@@ -72,8 +90,8 @@ void srand(unsigned int seed) {
 	rand_state = (seed != 0u) ? seed : 0x2624B0B1u;
 }
 
-/* seed 0 = no TRNG word: the chip's unique id and the cycle counter stand in — distinct per board
- * and per boot, but not secret */
+/* seed 0 = no TRNG word: the chip's unique id and SysTick's current count stand in — distinct per
+ * board, barely per boot, and not secret; rand() then has no TRNG words to fold in either */
 void doip_net_seed(unsigned int seed) {
 	if (seed == 0u) {
 		const volatile unsigned int *uid = (const volatile unsigned int *)0x1FF1E800u;
@@ -85,12 +103,14 @@ void doip_net_seed(unsigned int seed) {
 
 /* ---- the mailbox to the comm thread ------------------------------------------------------- */
 
-/* the doip thread waits this long for the comm thread (which answers within a pass) */
+/* the doip thread waits this long for the comm thread (which answers within a pass); a request
+ * not taken by then is WITHDRAWN, so it is never served after its tester was told it failed */
 #define MB_TIMEOUT_MS 2000u
 /* a reset waits this long for its answer's TCP acknowledgement before it is reported sent */
 #define FLUSH_TIMEOUT_MS 500u
 
 static TX_MUTEX mb_mutex;
+static TX_SEMAPHORE mb_done;   /* put by each answer; a stale put is told apart by sequence */
 static unsigned char *mb_req;  /* the generated globals, sized by the V constants */
 static unsigned char *mb_resp;
 static int mb_req_len;
@@ -113,6 +133,7 @@ void doip_mb_init(unsigned char *req_buf, unsigned char *resp_buf) {
 	mb_req = req_buf;
 	mb_resp = resp_buf;
 	tx_mutex_create(&mb_mutex, "doip-mb", TX_INHERIT);
+	tx_semaphore_create(&mb_done, "doip-mb-done", 0);
 }
 
 /* doip thread: post one request and wait for its answer; the answer's length, or -1 when the comm
@@ -127,8 +148,11 @@ int doip_mb_call(const unsigned char *req, int len, int functional, unsigned cha
 	ULONG seq = ++mb_posted;
 	tx_mutex_put(&mb_mutex);
 	comm_wake();
-	for (ULONG waited = 0; waited < MB_TIMEOUT_MS * NX_IP_PERIODIC_RATE / 1000u; waited++) {
-		tx_thread_sleep(1);
+	ULONG deadline = tx_time_get() + MS_TICKS(MB_TIMEOUT_MS);
+	for (;;) {
+		ULONG left = deadline - tx_time_get();
+		UINT got = (left == 0u || left > MS_TICKS(MB_TIMEOUT_MS))
+			? TX_NO_INSTANCE : tx_semaphore_get(&mb_done, left);
 		tx_mutex_get(&mb_mutex, TX_WAIT_FOREVER);
 		if (mb_answered == seq) {
 			int n = mb_resp_len;
@@ -145,10 +169,17 @@ int doip_mb_call(const unsigned char *req, int len, int functional, unsigned cha
 			tx_mutex_put(&mb_mutex);
 			return n;
 		}
-		tx_mutex_put(&mb_mutex);
+		if (got != TX_SUCCESS) {
+			/* not taken in time: withdraw it — the comm thread is not serving it (it would hold
+			 * the mutex), so marking it answered is all it takes */
+			mb_answered = seq;
+			mb_resp_len = -1;
+			tx_mutex_put(&mb_mutex);
+			doip_mb_timeouts++;
+			return -1;
+		}
+		tx_mutex_put(&mb_mutex); /* a stale put from an earlier answer: wait on */
 	}
-	doip_mb_timeouts++;
-	return -1;
 }
 
 /* comm thread: the length of a request waiting to be served, with the mailbox now HELD until
@@ -172,6 +203,7 @@ void doip_mb_answer(int n, int flush) {
 	mb_flush = flush;
 	mb_answered = mb_posted;
 	tx_mutex_put(&mb_mutex);
+	tx_semaphore_put(&mb_done);
 }
 
 /* comm thread: 1 once the answer it gave last has been handed to TCP */
@@ -270,7 +302,7 @@ int doip_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
  * once, and bytes still in the transmit queue would die with the MCU. Bounded: a peer that never
  * acknowledges gets the reset all the same — its answer was sent. */
 static void stream_flush(void) {
-	for (ULONG t = 0; t < FLUSH_TIMEOUT_MS * NX_IP_PERIODIC_RATE / 1000u; t++) {
+	for (ULONG t = 0; t < MS_TICKS(FLUSH_TIMEOUT_MS); t++) {
 		if (tcp_sock.nx_tcp_socket_transmit_sent_count == 0u) {
 			return;
 		}
@@ -328,7 +360,7 @@ void doip_udp_broadcast(const unsigned char *buf, int len) {
 
 /* paces the V side's boot announcements (ISO 13400 announce interval) */
 void doip_sleep_ms(int ms) {
-	tx_thread_sleep((ULONG)ms * NX_IP_PERIODIC_RATE / 1000u);
+	tx_thread_sleep(MS_TICKS(ms));
 }
 
 /* the entity id: the interface MAC */

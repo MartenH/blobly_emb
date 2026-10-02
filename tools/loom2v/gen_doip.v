@@ -26,7 +26,9 @@ fn parse_doip(doc toml.Doc) DoipCfg {
 	}
 }
 
-// ip4_ok: a dotted quad, each octet 0..255 with at least one digit (driver/eth/ip4.h's rule)
+// ip4_ok: a dotted quad, each octet 0..255 with at least one digit (driver/eth/ip4.h's rule), and
+// a HOST on the /24 doip_net_create assumes: not .0 (the network), .255 (its broadcast) or .1 (the
+// gateway it sets)
 fn ip4_ok(s string) bool {
 	parts := s.split('.')
 	if parts.len != 4 {
@@ -37,7 +39,7 @@ fn ip4_ok(s string) bool {
 			return false
 		}
 	}
-	return true
+	return parts[3].int() !in [0, 1, 255]
 }
 
 // doip_vin: the VIN DoIP announces is DID 0xF190's value — one answer, whichever transport asks
@@ -67,7 +69,7 @@ fn validate_doip(m Model) {
 		panic('loom2v: [doip] with eth bus "${m.eth}": one NetX instance per image, and driver/eth/eth_netx.c already owns it')
 	}
 	if !ip4_ok(d.address) {
-		panic('loom2v: [doip] address "${d.address}" is not a dotted-quad IPv4 address')
+		panic('loom2v: [doip] address "${d.address}" is not a host address on its /24 (dotted quad, not .0, .1 or .255)')
 	}
 	// ISO 13400-2: DoIP entities take 0x0001..0x0DFF and 0x1000..0x7FFF (0x0E00..0x0FFF are testers)
 	if !((d.logical >= 0x0001 && d.logical <= 0x0DFF) || (d.logical >= 0x1000 && d.logical <= 0x7FFF)) {
@@ -173,6 +175,7 @@ fn doip_target_fns(m Model) []string {
 	g << '\tg_doip.activated = false'
 	g << '\tg_doip.fatal = false'
 	g << '\tg_doip.buf_len = 0'
+	g << '\tC.doip_stream_notify_activated(0) // the next connection gets the 2 s initial limit'
 	g << '}'
 	g << ''
 	g << '// doip_ident: vehicle identification on UDP 13400 (the doip-svc thread); identity is set at boot'

@@ -33,9 +33,10 @@ pub mut:
 mut:
 	req  [isotp.max_payload]u8
 	resp [isotp.max_payload]u8
-	// a request served over another transport (serve_remote): the last one served came from it,
-	// and a reset it asked for waits until that transport has sent the answer
-	remote_last   bool
+	// a request served over another transport (serve_remote): the session or unlock in force was
+	// set by it (a request that changed neither does not move this), and a reset it asked for waits
+	// until that transport has sent the answer
+	remote_owns   bool
 	remote_unsent bool
 }
 
@@ -112,8 +113,9 @@ fn (mut c Connection) functional(f &can.Frame) Rx {
 		return .taken
 	}
 	c.refresh_dids()
-	c.remote_last = false
+	before := c.state()
 	rlen := c.server.handle_functional(&f.data[1], n, &c.resp[0])
+	c.note_owner(before, false)
 	if rlen > 0 && !c.link.send(&c.resp[0], rlen) {
 		c.server.reset_req = 0 // never reset unanswered
 	}
@@ -135,8 +137,9 @@ pub fn (mut c Connection) serve() {
 	n := if c.link.busy() || c.server.reset_req != 0 { 0 } else { got }
 	if n > 0 {
 		c.refresh_dids()
-		c.remote_last = false
+		before := c.state()
 		rlen := c.server.handle(&c.req[0], n, &c.resp[0])
+		c.note_owner(before, false)
 		if rlen > 0 && !c.link.send(&c.resp[0], rlen) {
 			c.server.reset_req = 0 // the answer could not be queued: never reset unanswered
 		}
@@ -153,12 +156,13 @@ pub fn (mut c Connection) serve_remote(req &u8, n int, functional bool, resp &u8
 		return 0
 	}
 	c.refresh_dids()
-	c.remote_last = true
+	before := c.state()
 	rlen := if functional {
 		c.server.handle_functional(req, n, resp)
 	} else {
 		c.server.handle(req, n, resp)
 	}
+	c.note_owner(before, true)
 	// a suppressed reset has no answer to wait for: it is due at once
 	c.remote_unsent = rlen > 0 && c.server.reset_req != 0
 	return rlen
@@ -171,17 +175,30 @@ pub fn (mut c Connection) remote_sent() {
 
 // remote_dropped: the other transport's connection is gone. A reset whose answer it never sent is
 // abandoned; one whose answer it did send still happens (a tester disconnects right after it).
-// Otherwise, if the last request served came over it, the server returns to power-on — a session
-// or an unlock must not outlive the tester that opened it. A bus tester served since keeps its own.
+// Otherwise, if the session or unlock in force was set over it, the server returns to power-on —
+// they must not outlive the tester that opened them. A bus tester that changed them since keeps
+// its own; requests that changed nothing (a read, a TesterPresent) decide nothing.
 pub fn (mut c Connection) remote_dropped() {
 	if c.remote_unsent {
 		c.server.reset_req = 0
 		c.remote_unsent = false
 	}
-	if c.remote_last && c.server.reset_req == 0 {
+	if c.remote_owns && c.server.reset_req == 0 {
 		c.server.reset_state()
 	}
-	c.remote_last = false
+	c.remote_owns = false
+}
+
+// state: what a disconnect may have to undo — the session and the unlock
+fn (c &Connection) state() u16 {
+	return (u16(c.server.session) << 8) | u16(c.server.unlocked)
+}
+
+// note_owner: a request that changed the session or the unlock makes its transport their owner
+fn (mut c Connection) note_owner(before u16, remote bool) {
+	if c.state() != before {
+		c.remote_owns = remote
+	}
 }
 
 // produce yields the next frame of the answer in flight, paced by the peer's flow control, for the

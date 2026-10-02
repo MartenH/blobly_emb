@@ -408,11 +408,17 @@ fn test_a_dropped_connection_ends_what_it_opened_and_never_resets_unanswered() {
 	c.remote_dropped()
 	assert c.reset_due() == 0x01
 	c.server.reset_req = 0
-	// a bus tester served after the remote one keeps its session
+	// a bus TesterPresent changes nothing, so the remote tester still owns the session it opened
 	mut t := new_tester()
 	mut now := u64(0)
 	remote(mut c, [u8(0x10), 0x03], false)
 	exchange(mut c, mut t, mut &now, [u8(0x3E), 0x00])
+	c.on_frame(now, sf(fid, [u8(0x3E), 0x80])) // a functional one neither
+	c.remote_dropped()
+	assert c.server.session == uds.session_default
+	// a bus tester that set the session keeps it; a remote read in between decides nothing
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	remote(mut c, [u8(0x22), 0xF1, 0x90], false)
 	c.remote_dropped()
 	assert c.server.session == uds.session_extended
 }
