@@ -28,6 +28,13 @@ import net
 import os
 import time
 
+fn C.waitpid(pid int, status &int, options int) int
+
+// the example's endpoints, as ecu.toml configures them ([someip] port / peer), and the rogue
+// talker's port beside them
+const app_port = 30490
+const peer_port = 30491
+const rogue_port = 30492
 const service = u16(0x0100)
 const iface_ver = u8(1)
 const id_cyclic = u16(0x8001)
@@ -48,6 +55,77 @@ fn le32(p []u8, o int) u32 {
 
 fn le16(p []u8, o int) u16 {
 	return u16(p[o]) | (u16(p[o + 1]) << 8)
+}
+
+// take_endpoints serialises this test's use of the example's UDP endpoints across processes.
+// They are FIXED by ecu.toml and every socket on them sets SO_REUSEADDR, so a second run on the
+// same host — another worktree's test — binds the same ports without error and the LATER binder
+// silently takes every datagram: this run's echoes reach the other run's listener and its probes
+// reach the other run's app. So each run first waits its turn on a lock, and then proves the
+// ports free, so anything that does not take the lock fails here by name instead of downstream.
+//
+// The lock is an ABSTRACT unix socket name: scoped to the network namespace exactly as the ports
+// are (a /tmp file is per mount, and a sandbox may give each session its own), owned by no file,
+// and released by the kernel when the holder exits however it exits. SOCK_CLOEXEC keeps it out
+// of the app, so an app orphaned by a killed run does not hold it — the port check names that
+// app instead. Linux-only, as the eth host backend under test is. Close the fd to release.
+fn take_endpoints() !int {
+	name := 'blobly_emb-host_someip-udp-${app_port}'
+	mut sa := [110]u8{} // sockaddr_un: family, then a NUL-led (abstract) path
+	unsafe {
+		*(&u16(&sa[0])) = u16(C.AF_UNIX) // sa_family_t, host order
+	}
+	for i, b in name.bytes() {
+		sa[3 + i] = b
+	}
+	fd := C.socket(C.AF_UNIX, C.SOCK_DGRAM | C.SOCK_CLOEXEC, 0)
+	if fd < 0 {
+		return error('lock socket: ${os.get_error_msg(C.errno)}')
+	}
+	sw := time.new_stopwatch()
+	for C.bind(fd, voidptr(&sa[0]), u32(3 + name.len)) != 0 {
+		if sw.elapsed() > 300 * time.second { // a run holds it ~15 s
+			C.close(fd)
+			return error('UDP endpoints :${app_port}-${rogue_port} still taken by another run after 300 s')
+		}
+		time.sleep(50 * time.millisecond)
+	}
+	for port in [app_port, peer_port, rogue_port] {
+		if !udp_port_free(port) {
+			C.close(fd)
+			return error('127.0.0.1:${port} is already bound by another process (an orphaned bin/app, a hand-run nc?) — it would take the datagrams meant for this run')
+		}
+	}
+	return fd
+}
+
+// udp_port_free binds 127.0.0.1:port WITHOUT SO_REUSEADDR, which Linux refuses while any socket
+// holds the port — SO_REUSEADDR shares a port only between sockets that BOTH set it.
+fn udp_port_free(port int) bool {
+	mut sa := [16]u8{} // sockaddr_in: family, port and address in network order
+	unsafe {
+		*(&u16(&sa[0])) = u16(C.AF_INET) // sa_family_t, host order
+	}
+	sa[2] = u8(port >> 8)
+	sa[3] = u8(port)
+	sa[4] = 127
+	sa[7] = 1
+	fd := C.socket(C.AF_INET, C.SOCK_DGRAM | C.SOCK_CLOEXEC, 0)
+	if fd < 0 {
+		return false
+	}
+	ok := C.bind(fd, voidptr(&sa[0]), u32(sa.len)) == 0
+	C.close(fd)
+	return ok
+}
+
+// stop_app kills the app and REAPS it, so its sockets are gone before the lock is released
+// (os.Process.wait returns at once after signal_kill, leaving the exit to race the next run).
+fn stop_app(mut p os.Process) {
+	if p.status == .running {
+		p.signal_kill()
+		C.waitpid(p.pid, unsafe { nil }, 0)
+	}
 }
 
 // median inter-arrival gap in ms; burst artifacts (< 20 ms: queued datagrams
@@ -72,9 +150,13 @@ fn test_tx_modes_on_the_wire() {
 	build := os.execute('make -C ${dir} V=${os.quoted_path(@VEXE)}')
 	assert build.exit_code == 0, build.output
 
+	held := take_endpoints()!
+	defer {
+		C.close(held) // released LAST: after the app is reaped and the sockets closed
+	}
 	// the peer endpoint from the example's [someip] config — bind BEFORE the
 	// app starts so the first events land in our queue
-	mut c := net.listen_udp('127.0.0.1:30491')!
+	mut c := net.listen_udp('127.0.0.1:${peer_port}')!
 	c.set_read_timeout(500 * time.millisecond)
 	defer {
 		c.close() or {}
@@ -82,8 +164,7 @@ fn test_tx_modes_on_the_wire() {
 	mut p := os.new_process(os.join_path(dir, 'bin', 'app'))
 	p.run()
 	defer {
-		p.signal_kill()
-		p.wait()
+		stop_app(mut p)
 	}
 
 	// collect ~3.5 s of traffic (nominal: ~35 cyclic, ~7 event, ~11+5 mixed)
@@ -283,26 +364,29 @@ fn test_rx_gate_filter_router() {
 	build := os.execute('make -C ${dir} V=${os.quoted_path(@VEXE)}')
 	assert build.exit_code == 0, build.output
 
+	held := take_endpoints()!
+	defer {
+		C.close(held) // released LAST: after the app is reaped and the sockets closed
+	}
 	// the configured peer endpoint — the ONE legal talker
-	mut c := net.listen_udp('127.0.0.1:30491')!
+	mut c := net.listen_udp('127.0.0.1:${peer_port}')!
 	c.set_read_timeout(100 * time.millisecond)
 	defer {
 		c.close() or {}
 	}
 	// a rogue source: same host, different port — must be filtered
-	mut rogue := net.listen_udp('127.0.0.1:30492')!
+	mut rogue := net.listen_udp('127.0.0.1:${rogue_port}')!
 	defer {
 		rogue.close() or {}
 	}
-	app_addr := net.resolve_addrs('127.0.0.1:30490', .ip, .udp)![0]
+	app_addr := net.resolve_addrs('127.0.0.1:${app_port}', .ip, .udp)![0]
 	mut p := os.new_process(os.join_path(dir, 'bin', 'app'))
 	// capture stderr: the rate-limited drop notice is the counter's observable
 	// face — REQ-NET-015/017 require refusals COUNTED, not just not-echoed
 	p.set_redirect_stdio()
 	p.run()
 	defer {
-		p.signal_kill()
-		p.wait()
+		stop_app(mut p)
 	}
 	time.sleep(500 * time.millisecond) // let the comm thread bind + settle
 
@@ -375,8 +459,7 @@ fn test_rx_gate_filter_router() {
 	// the refusals must have been COUNTED, not merely not-echoed: the drop
 	// counter's observable face is the rate-limited stderr notice, printed
 	// only when the count advances — silence here means the counter is dead
-	p.signal_kill()
-	p.wait()
+	stop_app(mut p)
 	errout := p.stderr_slurp()
 	assert errout.contains('someip: rx drops counted'), 'no drop notice on stderr — refusals were not counted (REQ-NET-015/017)'
 }
