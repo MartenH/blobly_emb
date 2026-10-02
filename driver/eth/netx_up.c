@@ -25,6 +25,14 @@ static int up; /* 0 = not yet, 1 = up, -1 = failed */
 volatile ULONG net_link_up;
 
 extern VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr);
+extern void nx_driver_stm32h7_rx_prios(UINT high, UINT low);
+
+/* the IP thread's priority past the receive budget (blob_net_low_prio) */
+static UINT low_prio = TX_MAX_PRIORITIES - 1u;
+
+void blob_net_low_prio(unsigned int prio) {
+	low_prio = prio;
+}
 
 /* ---- rand: NetX's NX_RAND ------------------------------------------------------------------
  * newlib-nano's rand drags reent/malloc/_sbrk into a no-alloc image. xorshift; once seeded from
@@ -93,6 +101,7 @@ int blob_net_up(const char *addr, unsigned int ip_prio) {
 		return -1;
 	}
 	ip_addr = a;
+	nx_driver_stm32h7_rx_prios(ip_prio, low_prio);
 	nx_system_initialize();
 	if (nx_packet_pool_create(&pool, "net-pool", POOL_PAYLOAD, pool_mem, sizeof(pool_mem)) != NX_SUCCESS) {
 		return -1;

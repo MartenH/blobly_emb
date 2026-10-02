@@ -302,17 +302,26 @@ with several app threads `comm_thread_prio` moves comm up one more to make the r
 thread at a priority level with the IP thread is refused). Two things keep a LAN flood from taking
 the FBs' CPU from up there:
 
-- **a receive budget in the driver** (`driver/eth/net_rx_budget.h`, host-tested): the NetX driver
-  takes at most `NET_RX_PER_MS` (4) frames per millisecond from the DMA ring. The rest stay there,
-  the ISR stops waking the IP thread, and a one-tick timer resumes on the next tick; meanwhile the
-  ring fills and the MAC drops in hardware. `nx_driver_rx_held` counts the ticks the budget was
-  used up (SWD). The node's own traffic is far below it; 100 Mbit/s of minimum-size frames is ~148/ms.
+- **a receive budget in the driver** (`driver/eth/net_rx_budget.h`, host-tested): each tick the
+  NetX driver takes `NET_RX_PER_MS` (4) frames per millisecond at the IP thread's own priority. The
+  frame after them demotes the IP thread below every application thread (`blob_net_low_prio`, which
+  loom2v sets to `doip_net_prio` on every NetX image) and the driver drains on there, on CPU the FBs
+  leave idle; its first pass in a later tick restores it. `nx_driver_rx_demoted` counts the ticks it
+  demoted itself (SWD). The node's own traffic is far below the budget; 100 Mbit/s of minimum-size
+  frames is ~148/ms. A first version STOPPED draining at the budget and let the MAC drop the rest:
+  on the bench (2026-10-02) the FBs were safe but the node became unreachable — the MAC dropped the
+  tester's TCP SYNs with everything else, and DoIP did not open under a flood main's lowest-priority
+  IP thread had kept it 86% reachable through. Nothing is held back now, so a flood costs no
+  reachability the bottom slot had.
 - **priority inheritance on the IP mutex** (`netx_up.c`): NetX creates it without, so a doip thread
-  holding it while an FB ran would hold the eth thread's send behind that FB.
+  holding it while an FB ran would hold the eth thread's send behind that FB. ThreadX keeps the
+  demotion and an inherited boost apart (`tx_thread_user_priority`): a demoted IP thread holding the
+  mutex while the eth thread waits runs at the eth thread's priority until it lets go.
 
 The doip threads stay below every application thread. Bench: `examples/system_full/test/netload_bench.sh`
-— GwStatus cadence, the GwHealth FB's count, ping and (with `BLOBLY_NET`) CpuLoad and DoIP, idle and
-under a UDP flood.
+— GwStatus cadence, the GwHealth FB's count, ping, DoIP reachability and the FB threads' load, idle
+and under a UDP flood; it fails if DoIP does not open, or answers under 70% of its reads, under the
+flood.
 
 ### The entity at the transport level (ISO 13400-2:2012)
 

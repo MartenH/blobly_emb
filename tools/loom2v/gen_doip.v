@@ -281,6 +281,29 @@ fn doip_target_globals(m Model) []string {
 	]
 }
 
+// net_target_fns / net_target_boot: on every image that brings NetX up (an eth thread or [doip]),
+// the priority its IP thread drops to for the rest of a tick once the receive budget is spent
+// (driver/eth/net_rx_budget.h) — below every application thread, doip_net_prio — set in
+// tx_application_define, before any thread can bring NetX up
+fn net_target_fns(m Model) []string {
+	if !m.target.threadx || (!eth_thread_on(m) && !m.doip.on) {
+		return []string{}
+	}
+	return ['fn C.blob_net_low_prio(u32)']
+}
+
+fn net_target_boot(m Model) []string {
+	if !m.target.threadx || (!eth_thread_on(m) && !m.doip.on) {
+		return []string{}
+	}
+	lp := doip_net_prio(m)
+	if lp > 31 {
+		panic('loom2v: NetX drains a flood below every application thread, at ${lp} — past ' +
+			'ThreadX\'s 0..31; give the application threads priorities up to 30')
+	}
+	return ['\tC.blob_net_low_prio(u32(${lp})) // a flood past the receive budget drains below every app thread']
+}
+
 // local_threads: the app threads this image creates (every partition but the external cores'): the
 // highest priority among them (the smallest number; 32 with none), the lowest (0 with none), and how
 // many there are
@@ -335,7 +358,8 @@ fn comm_thread_prio(min_app_prio int, multi bool, io bool, ip bool) int {
 // net_ip_prio_with_eth: the IP thread in its platform slot — just below the comm/eth thread and the io
 // thread, so the eth thread's datagrams, and the ARP answer its first send to a peer waits for, are
 // not held behind an FB pass. A flood cannot take the FBs' CPU from up there: the driver hands the IP
-// thread a bounded number of frames per tick (driver/eth/net_rx_budget.h).
+// thread a bounded number of frames per tick at this priority, and drains the rest below every
+// application thread (driver/eth/net_rx_budget.h, net_target_boot).
 fn net_ip_prio_with_eth(comm int, io bool) int {
 	return comm + 1 + if io { 1 } else { 0 }
 }

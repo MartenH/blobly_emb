@@ -2253,6 +2253,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << diag_target_sa_fns(m)
 			glue << diag_target_c_decls(m)
 			glue << doip_target_fns(m)
+			glue << net_target_fns(m)
 			glue << nm_shell_fns(m)
 			glue << stat_shell_fns(m, doc, app_threads, multi)
 			glue << trace_fb_hooks(m, doc, app_threads, multi, m.io_points.len > 0)
@@ -2916,6 +2917,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				if m.io_points.len > 0 {
 					glue << emit_io_target_create(comm_prio + 1)
 				}
+				glue << net_target_boot(m)
 				glue << emit_eth_target_create(m, comm_prio)
 				glue << doip_target_create(m)
 				if m.trace.on {
@@ -2994,6 +2996,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				// the eth owner sits ABOVE the io thread (min-2 vs min-1): both are
 				// TX_NO_TIME_SLICE, so an equal-priority eth drain pass would run to
 				// completion ahead of a due io cadence (codex #169 r2)
+				glue << net_target_boot(m)
 				glue << emit_eth_target_create(m, min_prio - 2)
 				if m.trace.on {
 					// Deterministic ids in MANIFEST order (app threads, then io) — without

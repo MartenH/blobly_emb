@@ -20,9 +20,15 @@
  * that also runs an eth thread (SOME/IP) just below the platform threads (comm/eth, io) and above
  * every FB, so the eth thread's traffic is not held behind them; a SOME/IP-only image brings it up
  * from its eth thread at 1.
- * Above the FBs a flood is bounded by the driver's receive budget (net_rx_budget.h). The IP mutex
- * inherits priority. */
+ * Above the FBs a flood is bounded by the driver's receive budget (net_rx_budget.h): past it the IP
+ * thread drains at blob_net_low_prio's priority for the rest of the tick. The IP mutex inherits
+ * priority. */
 int blob_net_up(const char *addr, unsigned int ip_prio);
+
+/* blob_net_low_prio: the IP thread's priority past the receive budget — below every application
+ * thread (loom2v net_target_boot, from tx_application_define, before blob_net_up); unset, the
+ * lowest ThreadX priority */
+void blob_net_low_prio(unsigned int prio);
 
 NX_IP *blob_net_ip(void);
 NX_PACKET_POOL *blob_net_pool(void);

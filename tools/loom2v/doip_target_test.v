@@ -132,6 +132,7 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 	assert glue.contains('g_doip.serve.answer = doip_answer')
 	// below every application thread: h735_threadx's lowest is ctrl_slow at 13
 	assert glue.contains("C.doip_net_create(c'192.168.0.50', u32(14), u32(15))")
+	assert glue.contains('C.blob_net_low_prio(u32(14))')
 	assert !glue.contains('functional_addr'), 'the default functional address is comm/doip\'s'
 	// a reset waits for the CAN controller, then for DoIP answers still in TCP's transmit queue
 	can_wait := glue.index('for !ch.tx_idle()') or { -1 }
@@ -381,6 +382,8 @@ fn test_doip_and_someip_share_one_netx() {
 	// the IP thread just below the comm and eth threads (both 1), above the FB thread (10); the
 	// doip threads below every application thread
 	assert glue.contains("C.doip_net_create(c'192.168.0.50', u32(2), u32(12))"), glue
+	// past the receive budget the IP thread drains below every application thread (10)
+	assert glue.contains('C.blob_net_low_prio(u32(11))'), glue
 	for src in ['driver/eth/netx_up.c', 'driver/eth/eth_netx.c', 'driver/eth/doip_netx.c',
 		'boards/common/iocb.c'] {
 		assert mk.contains(src), mk
