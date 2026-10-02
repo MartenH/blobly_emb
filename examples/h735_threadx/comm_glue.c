@@ -3,7 +3,7 @@
  * The GENERATED comm thread (gen/loom_gen.v: comm_thread_entry) owns the bus and does all
  * the CAN work in V. This file is the small, board-specific glue it can't express in
  * freestanding V: the FDCAN1 Rx-FIFO0 interrupt + the semaphore that wakes the comm thread.
- * It mirrors the hand-written examples/threadx_h735/comm.c ISR/enable, minus the thread body
+ * It mirrors boards/common/comm_glue.c's ISR/enable, minus the thread body
  * (which loom2v now emits). Reused board bring-up, like board.c / trace_hooks.c.
  *
  * The ISR is deliberately tiny — clear the flag, post the semaphore — so application/decode

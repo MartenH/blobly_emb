@@ -2,7 +2,7 @@
 # [target] kind is "threadx" — loom2v wraps the FB superloop in a real ThreadX thread
 # (created by tx_application_define, paced by tx_thread_sleep) instead of the bare-metal
 # inline superloop. This is P3c-1 phase 6a: the generated counterpart of the hand-written
-# examples/threadx_h735 (the golden reference). Trace + the comm thread come in 6b.
+# the retired hand-written threadx_h735 (#344). Trace + the comm thread come in 6b.
 #
 # NOTE: no inline comments inside [[...]] tables — a comment in a nested table trips V's
 # TOML parser (drops the next key). See vlang/v#27684.

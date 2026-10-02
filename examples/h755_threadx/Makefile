@@ -6,8 +6,8 @@
 # our own tools (shell ps/bmc, trace chart) rather than gdb alone. loom2v's
 # [target] kind="threadx" emitter wraps the FB superloop in a ThreadX thread; this build
 # transpiles the V stack to freestanding C and links it with the vendored ThreadX kernel
-# + the H735 board bring-up (the shared recorder from examples/threadx_h735) + the register-level FDCAN
-# backend. The generated counterpart of the hand-written examples/threadx_h735.
+# + the H735 board bring-up (the shared recorder, boards/common/trace_hooks.c) + the register-level FDCAN
+# backend. Generated; it replaced the hand-written threadx_h735 (retired, #344).
 #
 #   make -C ../.. deps      # once: ThreadX + CMSIS
 #   make flash              # st-flash the .bin
@@ -89,7 +89,7 @@ $(BUILD)/app.c: main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO
 	  -o examples/$(NAME)/$(BUILD)/app.c examples/$(NAME)/main.v
 	$(REPO)/scripts/lint_vinit.sh $@
 
-# 2) ThreadX kernel objects (same as examples/threadx_h735).
+# 2) ThreadX kernel objects (the shared ThreadX recipe).
 $(BUILD)/tx/%.o: $(PORT)/src/%.S Makefile
 	@mkdir -p $(BUILD)/tx
 	$(CC) $(CFLAGS) -c $< -o $@

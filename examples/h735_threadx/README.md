@@ -87,7 +87,7 @@ codec (for other layouts) and multi-thread FB partitions are the remaining gener
 The generic stack stays MCU-agnostic; the small target-specific C lives here (per
 `docs/architecture.md` "the generic ↔ target boundary"): `comm_glue.c` (the FDCAN1 Rx ISR +
 wake semaphore, the volatile load scratch, and the IOC pool), `boards/common/ioc.h` (the wait-free
-triple-buffer, reused from `threadx_h735`), `vectors.S` (routes IRQ19 → the Rx ISR), and
+triple-buffer, first written for the retired `threadx_h735`), `vectors.S` (routes IRQ19 → the Rx ISR), and
 `board.c` (550 MHz clock + FDCAN pins + a PRIMASK-serialised `board_now_us`).
 
 ## Verified on the board
@@ -96,4 +96,4 @@ triple-buffer, reused from `threadx_h735`), `vectors.S` (routes IRQ19 → the Rx
 thread; the trace `0x7EE` shows comm/app/timer + the Rx ISR (id 35); `0x200` carries the
 `Workload` signal (Load's live output, FB → IOC → bus); and `cansend 0x123` drives the load
 via the IOC (pins CpuLoad, releases back to the sweep). The generated counterpart of the
-hand-written `threadx_h735` (the golden reference).
+retired hand-written `threadx_h735` (its golden reference until #344).

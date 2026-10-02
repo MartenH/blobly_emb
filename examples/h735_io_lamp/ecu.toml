@@ -28,7 +28,7 @@ core      = 0
 core = 0
 
 # LedRemote: PC3 = LD2 (user LED, UM2679 §7.4; LD1 = PC2, LD2 = PC3, both on
-# GPIOC — the mapping bench-confirmed in examples/h735_blinky).
+# GPIOC — the mapping bench-confirmed by the retired h735_blinky, #344).
 [[io.gpio]]
 name      = "LedRemote"
 pin       = "PC3"
