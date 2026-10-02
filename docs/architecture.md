@@ -451,7 +451,7 @@ Adding **automotive Ethernet** later is therefore not a rewrite — it slots in
 The Ethernet side is now partially built (docs/net.md): the H735 ETH driver +
 NetX Duo carry link/ICMP/UDP/TCP on silicon (REQ-NET-001..006), and **DoIP is
 implemented** — `comm/doip` is the networked binding of the same `comm/uds`
-server the bus transport uses (REQ-NET-007, `examples/h735_doip`). SOME/IP,
+server the bus transport uses (REQ-NET-007, `[doip]` on system_full's sysnode). SOME/IP,
 signal-over-UDP, and UDP-NM remain unbuilt; this section still marks that
 **seam** so new code doesn't deepen the CAN assumptions needlessly. The module
 naming already reflects it: `comm/nm` (transport-agnostic state machine) vs

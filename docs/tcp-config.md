@@ -9,10 +9,12 @@ built yet; it is the map, not the spec.
 
 TCP itself is **not missing** — it is proven on silicon:
 
-- `examples/h735_net` runs a working NetX **TCP echo server** (`nx_tcp_socket_create` / `listen`
-  / `accept` / `receive` / `send`), bench-verified alongside UDP + ICMP.
-- `comm/doip` runs a real protocol **over TCP 13400** (ISO 13400): `examples/h735_doip/netx_glue.c`
-  owns the sockets and NetX bring-up; the V module does the framing and UDS.
+- A NetX **TCP echo server** (`nx_tcp_socket_create` / `listen` / `accept` / `receive` /
+  `send`) was bench-verified alongside UDP + ICMP on the hand-wired `examples/h735_net`
+  (retired in #340).
+- `comm/doip` runs a real protocol **over TCP 13400** (ISO 13400): `driver/eth/doip_netx.c`
+  owns the sockets on the shared NetX bring-up (`driver/eth/netx_up.c`), generated from
+  `[doip]`; the V module does the framing and UDS.
 
 And the **seam** that a config-driven version would generalize already exists, cleanly split:
 
@@ -74,7 +76,7 @@ generalization is bounded (a generated socket loop + ComModule wiring; the hard 
 static memory, framing — are already solved and stay where they are). The right trigger is the
 **eth-only H723 node**: give it SOME/IP-over-UDP (pure config today) *plus* one `[[tcp_service]]`
 so the generator seam lands with an on-silicon consumer that exercises it, instead of a paper
-feature. Until then, a one-off TCP service stays hand-glued (copy `h735_net`'s ~40-line loop) —
+feature. Until then, a one-off TCP service stays hand-glued (copy `doip_netx.c`'s accept/receive loop) —
 which is the honest DRY threshold: generalize on the **second** hand-written TCP loop, not the first.
 
 Model it as a ComModule (`docs/com-modules.md`), keep the module contract identical to DoIP's

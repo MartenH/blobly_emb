@@ -175,7 +175,9 @@ signals are alternate function AF11:
 
 The full P1 stack is **verified on the H735-DK**: link + ARP + IPv4 + ICMP, both
 directions, 0% ping loss at ~1 ms RTT (`ping 192.168.0.50` from the host; the
-board pings its gateway). Build: `make -C examples/h735_net all`.
+board pings its gateway). Built then as `examples/h735_net`, a hand-wired image retired in #340:
+the same driver now comes up from config on every networked node (`driver/eth/netx_up.c`,
+`gen/loom_build.mk`'s `LOOM_NET_SRCS`) — sysnode and tcu answer ping on the bench.
 
 - **`boards/h735dk/eth.c` + `eth.h`** — register-level ETH MAC/DMA (RM0468): RCC +
   RMII pin mux (the AF11 table above), `SYSCFG_PMCR` RMII select, LAN8742 soft-reset
@@ -185,9 +187,9 @@ board pings its gateway). Build: `make -C examples/h735_net all`.
   signals `_nx_ip_driver_deferred_processing`, and `DEFERRED_PROCESSING` drains
   `eth_recv` into `NX_PACKET`s routed by EtherType. Copy-based, so only eth.c's
   buffers touch DMA.
-- **`examples/h735_net/`** — a plain-C ThreadX+NetX app (no loom2v/CAN): packet pool
-  + IP + ICMP, brings the link up and pings the gateway on a loop. Outcome is exposed
-  as `net_ping_ok` / `net_ping_fail` / `net_link_up` globals to read over SWD.
+- **`examples/h735_net/`** (retired in #340) — was a plain-C ThreadX+NetX app (no loom2v/CAN):
+  packet pool + IP + ICMP, bringing the link up and pinging the gateway on a loop, with the
+  outcome in `net_ping_ok` / `net_ping_fail` / `net_link_up` globals read over SWD.
 
 Two hardware facts drove the layout: **D-cache is off** (docs/no-alloc.md), so DMA
 needs no clean/invalidate; and the ETH DMA is an AHB master that **cannot reach the
@@ -224,7 +226,7 @@ Also tuned on-bench: `NX_IP_PERIODIC_RATE`/`TX_TIMER_TICKS_PER_SECOND` forced to
 and RX ring sized 16 (4 could overflow on a broadcast-heavy LAN).
 
 Bench diagnostics that survived into the code: `eth_rx/tx/isr_count` +
-`eth_phy_pscsr` (eth.c), `net_ping_ok/fail`, `net_link_up` (the app) — read over
+`eth_phy_pscsr` (eth.c) — and, in the retired h735_net app, `net_ping_ok/fail`, `net_link_up` — read over
 SWD with openocd (`init; halt; mdw <addr>; resume`). NOTE: st-util resets the target
 on attach and silently wipes this state; use openocd for live reads.
 
@@ -234,7 +236,9 @@ configures and returns — nothing blocks the IP thread.
 
 ## P2 status — UDP datagram service (2026-07-18, BENCH-VERIFIED)
 
-REQ-NET-005 on silicon, in `examples/h735_net`: a UDP **echo** socket (port 5005,
+REQ-NET-005 on silicon, in `examples/h735_net` (retired in #340; the datagram service is now
+exercised by every generated SOME/IP node — `examples/h735_someip/bench_test.sh`, which
+probes tcu too): a UDP **echo** socket (port 5005,
 every datagram straight back to its sender — verified round-tripping from a WSL
 host through the Windows NAT) and a 1 Hz **telemetry broadcast** (port 5006, the
 bench counters as a text line to the subnet — the CpuLoad-over-CAN idea carried to
@@ -244,7 +248,8 @@ the image provides a local xorshift32 (no-alloc preserved).
 
 ## P3a status — TCP echo (2026-07-18, BENCH-VERIFIED)
 
-REQ-NET-006's byte-stream service on silicon: a single-connection TCP echo
+REQ-NET-006's byte-stream service on silicon (on the retired `examples/h735_net`; the stream
+service is now exercised by DoIP on sysnode, below): a single-connection TCP echo
 server (port 5007, 2 KB window, re-listens after each disconnect) — verified
 with three full connect/echo/disconnect cycles from a WSL host
 (`echo hi | nc -w2 192.168.0.50 5007`). +13 KB flash for the NetX TCP engine.
@@ -278,13 +283,16 @@ node's Makefile lists those sources by hand.
 
 ## P3b status — DoIP (2026-07-18, BENCH-VERIFIED)
 
-REQ-NET-007 on silicon: `examples/h735_doip`, the first V+NetX hybrid image.
+REQ-NET-007 on silicon: `examples/h735_doip`, the first V+NetX hybrid image — retired in #340
+once `[doip]` generated the same server onto sysnode (above); its burst-correlation leg lives on
+as `examples/system_full/test/doip_burst.lua`.
 DoIP framing (ISO 13400-2: routing activation, diagnostic message + acks,
 vehicle announcement, generic NACK) is tested V code in `comm/doip`, driving
 the SAME `comm.uds.Server` the bus transport uses; `netx_glue.c` owns
-ThreadX/NetX/sockets behind a four-call byte-pipe seam. Bench: routing
-activation → 0x22 F190 → "H735-DK" (since 2026-10-01 the announced VIN, `BLOBLYH735DK00001` — `bench/doip.lua` asserts the two agree) → 0x3E tester-present, all pass from a WSL
-client (`doip_client.py`) through the Windows NAT on the live internal network.
+ThreadX/NetX/sockets behind a four-call byte-pipe seam (since #338/#341 that seam is
+`driver/eth/doip_netx.c` on the shared `netx_up.c`, generated from `[doip]`). Bench, then:
+routing activation → 0x22 F190 → "H735-DK" (later the announced VIN) → 0x3E tester-present,
+all pass from a WSL client through the Windows NAT on the live internal network.
 
 Bring-up finding (the busy-network wedge): a **finite-timeout**
 `nx_tcp_server_socket_accept` in a re-accept loop is a NetX trap. On timeout the

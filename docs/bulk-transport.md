@@ -218,11 +218,11 @@ practices, three times, hand-written:
   *nice*: NetX is ThreadX-native, so `nx_tcp_socket_receive(&sock, &p, timeout_ticks)`
   blocks the thread properly, with a timeout, no polling. The existing instances:
   - the **comm thread** — blocks on the CAN Rx, owns the bus, runs the modules;
-  - the **DoIP service thread** (`examples/h735_doip`) — `netx_glue.c` owns
-    ThreadX/NetX/sockets and exposes a four-call seam (`net_stream_recv/send`, timeout in
-    ticks); a dedicated thread runs the V protocol loop against that seam, and every byte
+  - the **DoIP threads** (`[doip]` in a node's ecu.toml, e.g. system_full's sysnode) —
+    `driver/eth/doip_netx.c` owns the sockets on the image's one NetX (`netx_up.c`); a
+    dedicated thread runs the generated V protocol loop against that seam, and every byte
     above the stream is unit-tested V (`comm.doip` + `comm.uds`);
-  - `examples/h735_net`'s echo/telemetry threads.
+  - the **SOME/IP eth comm thread** a generated eth node runs (`driver/eth/eth_netx.c`).
 
 So the model is **two kinds of application execution**, not one:
 
