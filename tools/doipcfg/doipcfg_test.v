@@ -51,3 +51,24 @@ fn test_an_out_of_range_level_is_refused() {
 		security: 8
 	}]).len == 0
 }
+
+// a writable DID needs its own write gate or the 0x2E row's
+fn test_a_writable_did_needs_a_gate() {
+	ungated := [DidWrite{
+		id:       0x0102
+		writable: true
+	}]
+	assert did_refusals([], ungated).len == 1
+	assert did_refusals([ServiceRow{
+		sid:      0x2E
+		security: 1
+	}], ungated).len == 0
+	assert did_refusals([], [DidWrite{
+		id:       0x0102
+		writable: true
+		security: 1
+	}]).len == 0
+	assert did_refusals([], [DidWrite{
+		id: 0xF189
+	}]).len == 0
+}

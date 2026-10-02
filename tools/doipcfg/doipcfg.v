@@ -216,3 +216,30 @@ pub fn bench_key_refusal(security_key string, allow bool) string {
 	}
 	return ''
 }
+
+// DidWrite is a [[did]]'s write side, as far as REQ-NET-012 is concerned
+pub struct DidWrite {
+pub:
+	id       int
+	writable bool
+	security i64 // the DID's own write gate; 0 = none
+}
+
+// did_refusals: a writable DID reachable over the network needs a write gate — its own, or the
+// "0x2E" service row's (comm/uds checks the row first, so a gated row denies every DID behind it).
+// The one rule loom2v's validate_doip and syscheck's check_doip both apply.
+pub fn did_refusals(rows []ServiceRow, dids []DidWrite) []string {
+	mut row_2e := i64(0)
+	for r in rows {
+		if r.sid == 0x2E {
+			row_2e = r.security
+		}
+	}
+	mut errs := []string{}
+	for d in dids {
+		if d.writable && d.security == 0 && row_2e == 0 {
+			errs << 'makes DID 0x${d.id.hex()} writable from the network with no security level — gate it (write = { security = N }, or a security level on [uds] services "0x2E"), REQ-NET-012'
+		}
+	}
+	return errs
+}

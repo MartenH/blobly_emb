@@ -122,12 +122,23 @@ fn validate_doip(m Model) {
 	// unlock the transport's that earned it, so a level asked over DoIP is the network tester's
 	// own 0x27, never the bus tester's. A write: the DID's own write gate, or the 0x2E row's
 	// (comm/uds checks the row first, so a gated row denies every DID behind it)
-	row_2e, _ := svc_row(m, 0x2E)
-	for did in m.dids {
-		if did.writable && did.write_security == 0 && row_2e.security == 0 {
-			panic('loom2v: [doip] makes DID 0x${did.id.hex()} writable from the network with no security level — ' +
-				'gate it (write = { security = N }, or a security level on [uds] services "0x2E"), REQ-NET-012')
+	mut wrows := []doipcfg.ServiceRow{}
+	for r in m.uds.services {
+		wrows << doipcfg.ServiceRow{
+			sid:      r.sid
+			security: i64(r.security)
 		}
+	}
+	mut dws := []doipcfg.DidWrite{}
+	for did in m.dids {
+		dws << doipcfg.DidWrite{
+			id:       did.id
+			writable: did.writable
+			security: i64(did.write_security)
+		}
+	}
+	for why in doipcfg.did_refusals(wrows, dws) {
+		panic('loom2v: [doip] ${why}')
 	}
 	// ...every other service: doipcfg's rule, the one syscheck applies too (fail-closed: no table
 	// is refused outright, and a row the rule does not exempt needs a level)

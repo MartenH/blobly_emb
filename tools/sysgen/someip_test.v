@@ -1278,3 +1278,20 @@ fn test_an_inherited_eth_shell_counts_as_rpc_on_the_segment() {
 	assert ecumodel.module_bus(own, 'shell') == 'can0'
 	assert sysmodel.parse_node_view(own).shell_bus == 'can0'
 }
+
+// codex on #347 r3: a dissolved DoIP gateway skips loom2v, so the system gate must see an ungated
+// writable DID itself — the same doipcfg.did_refusals rule the node build applies
+fn test_an_ungated_writable_did_is_refused_at_the_system() {
+	mut sys := doip_system()
+	sys.nodes[0].view.did_writes = [doipcfg.DidWrite{
+		id:       0x0102
+		writable: true
+	}]
+	assert doip_errs(sys).any(it.contains('DID 0x102 writable from the network')), doip_errs(sys).str()
+	sys.nodes[0].view.did_writes[0] = doipcfg.DidWrite{
+		id:       0x0102
+		writable: true
+		security: 1
+	}
+	assert !doip_errs(sys).any(it.contains('writable from the network')), doip_errs(sys).str()
+}

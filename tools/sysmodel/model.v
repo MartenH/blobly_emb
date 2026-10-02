@@ -270,6 +270,7 @@ pub mut:
 	// bench_key_refusal): a `services` table declared, its rows, and the 0x27 key it names
 	uds_table        bool
 	uds_rows         []doipcfg.ServiceRow
+	did_writes       []doipcfg.DidWrite // [[did]] write sides, for REQ-NET-012 at the system gate
 	uds_security_key string
 	// an authored eth [[frame]] naming its OWN `peer`: the composed model checks reciprocity on
 	// [someip].peer alone, so a per-event peer is the dissolution's to lower, not a node's to author
@@ -1055,6 +1056,18 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 	}
 	if _ := doc.value_opt('doip') {
 		v.has_doip = true
+	}
+	for d in ecumodel.toml_arr(doc, 'did') {
+		dm := d.as_map()
+		mut sec := i64(0)
+		if w := dm['write'] {
+			sec = i64(m_int(w.as_map(), 'security'))
+		}
+		v.did_writes << doipcfg.DidWrite{
+			id:       m_int(dm, 'id')
+			writable: m_bool(dm, 'writable') || 'write' in dm
+			security: sec
+		}
 	}
 	if uv := doc.value_opt('uds') {
 		um := uv.as_map()
