@@ -554,14 +554,7 @@ fn inside(root string, target string) bool {
 // a private scratch directory; a merge refusal is a node-build refusal too.
 fn loom2v_gate(sys sysmodel.System, n sysmodel.Node, gen_path string, gen_dir string) ![]string {
 	if n.buses.len > 1 && !sys.is_someip_leaf(n) {
-		mut dbcs := []string{}
-		for bn in n.buses {
-			b := sys.bus_by_name(bn) or { return error('bus "${bn}" not declared') }
-			if b.kind == 'someip' || b.dbc == '' {
-				continue
-			}
-			dbcs << dbc_in(gen_dir, b.dbc)
-		}
+		dbcs := gateway_dbcs(sys, n)!.map(dbc_in(gen_dir, it))
 		if dbcs.len < 2 {
 			dbc := if dbcs.len == 1 { dbcs[0] } else { '' }
 			return prefixed('loom2v', sysmodel.loom2v_errors(gen_path, dbc))
@@ -579,6 +572,21 @@ fn loom2v_gate(sys sysmodel.System, n sysmodel.Node, gen_path string, gen_dir st
 	}
 	bus := can_bus_of(sys, n)!
 	return prefixed('loom2v', sysmodel.loom2v_errors(gen_path, dbc_in(gen_dir, bus.dbc)))
+}
+
+// gateway_dbcs: the DBCs a gateway's node build merges, as system.toml names them — its CAN
+// buses' in the order the node lists its buses, each file once. The gateway Makefiles restate
+// this list for tools/dbcmerge; node_gate_test.v holds them to it.
+fn gateway_dbcs(sys sysmodel.System, n sysmodel.Node) ![]string {
+	mut dbcs := []string{}
+	for bn in n.buses {
+		b := sys.bus_by_name(bn) or { return error('bus "${bn}" not declared') }
+		if b.kind == 'someip' || b.dbc == '' || b.dbc in dbcs {
+			continue
+		}
+		dbcs << b.dbc
+	}
+	return dbcs
 }
 
 // dbc_in resolves a bus's `dbc` the way the generated file does: relative to the directory the

@@ -1483,8 +1483,9 @@ pub fn sysgen_errors(system_path string, out_dir string) []string {
 			continue
 		}
 		body := t.all_after('sysgen:').trim_space()
-		// the per-node "-> path (ok)" progress lines are not errors
-		if body.contains(' -> ') || body.starts_with('refusing to generate') {
+		// the per-node "<node> -> <path> (ok)" progress lines are not errors; a refusal may
+		// contain an arrow of its own, so match the progress line's whole shape
+		if (body.contains(' -> ') && body.ends_with('(ok)')) || body.starts_with('refusing to generate') {
 			continue
 		}
 		out << body
@@ -1503,7 +1504,7 @@ pub fn dbcmerge_errors(out string, ins []string) []string {
 	mut args := [out]
 	args << ins
 	output, code := run_tool('${@VMODROOT}/tools/dbcmerge/gen.v', false, args) or {
-		return [err.msg()]
+		return ['dbcmerge: ${err.msg()}']
 	}
 	if code == 0 {
 		return []string{}
@@ -1516,9 +1517,24 @@ pub fn dbcmerge_errors(out string, ins []string) []string {
 		}
 	}
 	if errs.len == 0 {
-		errs << 'dbcmerge failed (exit ${code})'
+		errs = panic_lines(output).map('dbcmerge: ${it}')
+	}
+	if errs.len == 0 {
+		errs << 'dbcmerge: failed (exit ${code})'
 	}
 	return errs
+}
+
+// panic_lines: what a tool's V panics said, for a failure the tool did not word as its own
+fn panic_lines(output string) []string {
+	mut out := []string{}
+	for line in output.split_into_lines() {
+		t := line.trim_space()
+		if t.starts_with('V panic:') {
+			out << t.all_after('V panic:').trim_space()
+		}
+	}
+	return out
 }
 
 // loom2v_errors runs the REAL generator (tools/loom2v) on a node's ecu.toml with
@@ -1555,12 +1571,7 @@ pub fn loom2v_errors(node_path string, dbc_path string) []string {
 	if out.len == 0 {
 		// a failure loom2v did not word as its own (a panic from V or a library it calls) is still
 		// a refusal: keep what the panic said rather than only that it happened
-		for line in output.split_into_lines() {
-			t := line.trim_space()
-			if t.starts_with('V panic:') {
-				out << t.all_after('V panic:').trim_space()
-			}
-		}
+		out = panic_lines(output)
 	}
 	if out.len == 0 {
 		out << 'loom2v generation failed (exit ${code})'

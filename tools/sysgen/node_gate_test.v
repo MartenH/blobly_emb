@@ -78,12 +78,46 @@ fn test_gateway_node_rules_reach_the_system_gate() {
 		GateCase{'writable DID with no gate behind an ungated 0x2E', did_w, 'write = { session = ["extended"] }', 'writable from the network with no security level'},
 	]
 	for i, c in cases {
-		dir := stage('case${i}')
-		edit_gateway(dir, c.old, c.new)
-		errs := gate(dir)
-		os.rmdir_all(dir) or {}
+		errs := gate_case(i, c)
 		assert errs.any(it.contains(c.want)), '${c.what}: the system gate must refuse with loom2v\'s "${c.want}", got ${errs}'
 	}
+}
+
+fn gate_case(i int, c GateCase) []string {
+	dir := stage('case${i}')
+	defer {
+		os.rmdir_all(dir) or {}
+	}
+	edit_gateway(dir, c.old, c.new)
+	return gate(dir)
+}
+
+// The merge the gate runs must be the merge the node build runs: every gateway Makefile's
+// dbcmerge inputs are the DBCs gateway_dbcs names, in its order (dbcmerge keeps the first name
+// of a shared frame, so the order is part of the contract).
+fn test_gateway_makefiles_merge_what_the_gate_merges() {
+	mut seen := 0
+	for sys_path in os.glob(os.join_path(@VMODROOT, 'examples', '*', 'system.toml')) or { panic(err) } {
+		mut sys := sysmodel.parse_system(sys_path) or { panic(err) }
+		errs := sys.load_nodes_partial()
+		assert errs.len == 0, errs.str()
+		rel := os.dir(sys_path).all_after(@VMODROOT + os.path_separator)
+		for n in sys.nodes {
+			if n.buses.len < 2 || sys.is_someip_leaf(n) {
+				continue
+			}
+			mk := os.join_path(os.dir(sys_path), os.dir(n.ecu), 'Makefile')
+			text := os.read_file(mk) or { panic('gateway ${n.name}: ${err}') }
+			line := text.split_into_lines().filter(it.contains('tools/dbcmerge/gen.v'))
+			assert line.len == 1, '${mk}: expected one dbcmerge step'
+			// `... dbcmerge/gen.v <out> <in>...`, inputs relative to the repo root
+			ins := line[0].all_after('tools/dbcmerge/gen.v').fields()[1..]
+			want := (gateway_dbcs(sys, n) or { panic(err) }).map('${rel}/${it}')
+			assert ins == want, '${mk}: merges ${ins}, the system gate merges ${want}'
+			seen++
+		}
+	}
+	assert seen >= 3, 'expected the three gateway examples, found ${seen}'
 }
 
 // End to end: the sysgen binary — what syscheck shells — refuses a gateway rule only loom2v states.
