@@ -804,3 +804,18 @@ fn test_s3_holds_while_a_remote_answer_is_in_flight() {
 	c.housekeep(7000)
 	assert c.server.session == uds.session_default
 }
+
+// a request refused because a bus reset is pending is still acknowledged by DoIP: the reset waits
+fn test_a_request_refused_under_a_pending_reset_still_holds_it() {
+	mut c := new_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	assert c.on_frame(0, sf(rx, [u8(0x11), 0x01])) == .request
+	c.serve()
+	assert remote(mut c, [u8(0x3E), 0x00], false).len == 0 // refused: a reset is pending
+	mut f := can.Frame{}
+	assert c.produce(0, mut f)
+	assert c.reset_due() == 0, 'the reset overtook the DoIP acknowledgement'
+	c.remote_sent()
+	assert c.reset_due() == 0x01
+}

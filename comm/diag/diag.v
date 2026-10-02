@@ -176,6 +176,9 @@ pub fn (mut c Connection) serve() {
 // sent (remote_sent), and is abandoned with a connection that drops first (remote_dropped). Once a
 // reset is due nothing is served, as on the bus.
 pub fn (mut c Connection) serve_remote(req &u8, n int, functional bool, resp &u8) int {
+	// whatever the answer — none included — the transport sends its own acknowledgement (DoIP acks
+	// every diagnostic message), and no reset may overtake it
+	c.remote_inflight = true
 	if n < 1 || c.server.reset_req != 0 {
 		return 0
 	}
@@ -187,9 +190,6 @@ pub fn (mut c Connection) serve_remote(req &u8, n int, functional bool, resp &u8
 		c.server.handle(req, n, resp)
 	}
 	c.leave(before, held, true)
-	// in flight until the transport has sent what it sends — the answer, or for a suppressed one its
-	// own acknowledgement (DoIP acks every diagnostic message); a reset waits for it
-	c.remote_inflight = true
 	if c.server.reset_req != 0 {
 		c.reset_remote = true
 	}
