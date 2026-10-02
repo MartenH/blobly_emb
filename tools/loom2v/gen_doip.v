@@ -304,8 +304,54 @@ fn doip_net_prio(m Model) int {
 	return lowest + 1
 }
 
+// comm_thread_prio: the comm thread's priority, and the eth thread's beside it — strictly above every
+// FB thread, so it preempts a long app pass to drain rx (no time slicing). One app thread keeps the
+// historical 1; several derive it as the highest app priority - 1 (11/12/13 -> 10), one more up when
+// the io thread sits between them (comm > io > FBs).
+fn comm_thread_prio(min_app_prio int, multi bool, io bool) int {
+	if !multi {
+		return 1
+	}
+	return min_app_prio - 1 - if io { 1 } else { 0 }
+}
+
+// net_ip_prio_with_someip: the IP thread on an image whose eth thread carries SOME/IP — just below
+// the lowest platform thread (comm, then io), so the eth thread's datagrams, and the ARP answer its
+// first send to a peer waits for, are not held behind an FB pass. It is never below an FB: at most
+// level with the highest one, where no priority is left between them. A flood cannot take the FBs'
+// CPU from up there: the driver hands the IP thread a bounded number of frames per tick
+// (driver/eth/net_rx_budget.h).
+fn net_ip_prio_with_someip(comm int, io bool) int {
+	return comm + 1 + if io { 1 } else { 0 }
+}
+
+// net_ip_prio: the NetX IP thread's priority on a [doip] image (driver/eth/netx_up.c takes the first
+// caller's, and DoIP calls first, from tx_application_define)
+fn net_ip_prio(m Model) int {
+	if !eth_thread_on(m) {
+		return doip_net_prio(m)
+	}
+	mut min_prio := 32
+	mut n := 0
+	for pname, thrs in m.part.threads_of {
+		if m.part.external[pname] {
+			continue
+		}
+		for t in thrs {
+			n++
+			p := m.part.thread_prio[t] or { 10 }
+			if p < min_prio {
+				min_prio = p
+			}
+		}
+	}
+	io := m.io_points.len > 0
+	return net_ip_prio_with_someip(comm_thread_prio(min_prio, n > 1, io), io)
+}
+
 // doip_target_create: in tx_application_define, before any thread runs — the identity the
-// identification thread answers with, the mailbox, NetX and the two doip threads (doip_net_prio).
+// identification thread answers with, the mailbox, NetX (net_ip_prio) and the two doip threads
+// (below every application thread, doip_net_prio).
 fn doip_target_create(m Model) []string {
 	if !m.doip.on {
 		return []string{}
@@ -344,8 +390,8 @@ fn doip_target_create(m Model) []string {
 	g << '\tg_doip.serve.answer = doip_answer'
 	g << '\tC.doip_mb_init(&g_doip_req[0], &g_doip_resp[0])'
 	g << '\tC.doip_net_timers(u32(${p.int_of('initial_inactivity_ms')}), u32(${p.int_of('general_inactivity_ms')})) // T_TCP_Initial / T_TCP_General_Inactivity'
-	// below every application thread (doip_net_prio): the IP thread, then the doip threads
-	g << "\tC.doip_net_create(c'${d.address}', u32(${np}), u32(${np + 1})) // -1: DoIP stays down, the node runs on"
+	// the IP thread (net_ip_prio), then the doip threads below every application thread
+	g << "\tC.doip_net_create(c'${d.address}', u32(${net_ip_prio(m)}), u32(${np + 1})) // -1: DoIP stays down, the node runs on"
 	return g
 }
 
@@ -367,7 +413,7 @@ fn doip_manifest_rows(m Model, tid int) []string {
 		return []string{}
 	}
 	return [
-		'thread,${tid},nx_ip,0,${doip_net_prio(m)}',
+		'thread,${tid},nx_ip,0,${net_ip_prio(m)}',
 		'thread,${tid + 1},doip,0,${doip_net_prio(m) + 1}',
 		'thread,${tid + 2},doip_svc,0,${doip_net_prio(m) + 1}',
 	]

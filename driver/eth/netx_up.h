@@ -16,8 +16,11 @@
  * UDP, at the node's static address (the gateway is the .1 of its /24). The first call does it;
  * a later one with the SAME address is a no-op (0), with another address a refusal (-1) — one
  * address per node. ip_prio is the IP thread's priority, the FIRST caller's: DoIP calls from
- * tx_application_define with one below every application thread (loom2v doip_net_prio), so an image
- * with DoIP runs the IP thread there; a SOME/IP-only image brings it up from its eth thread at 1. */
+ * tx_application_define with loom2v's net_ip_prio — below every application thread, or on an image
+ * that also carries SOME/IP just below the platform threads (comm, io, eth), so the eth thread's
+ * traffic is not held behind the FBs; a SOME/IP-only image brings it up from its eth thread at 1.
+ * Above the FBs a flood is bounded by the driver's receive budget (net_rx_budget.h). The IP mutex
+ * inherits priority. */
 int blob_net_up(const char *addr, unsigned int ip_prio);
 
 NX_IP *blob_net_ip(void);

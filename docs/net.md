@@ -291,6 +291,27 @@ threads on one NetX, and its node `ecu.toml` authors none of its network. The te
 now has three members, so each EVENT is the point-to-point unit (docs/multi-node.md) and
 the bench tool's generated config names `GwStatus`'s producer as that event's own `peer`.
 
+**The IP thread's priority** (#349). Every received frame — a SOME/IP datagram, a TCP segment, the
+ARP answer a first send to a peer waits for — is processed on NetX's IP thread, and every socket
+call takes the IP mutex. On a DoIP-only image the IP thread runs below every application thread
+(loom2v `doip_net_prio`): diagnostics over IP are best effort. On an image that also carries
+SOME/IP (sysnode) that would hold the eth thread's traffic behind every FB pass, so loom2v
+`net_ip_prio` puts the IP thread just below the platform threads instead (comm and eth at 1 on
+sysnode, the IP thread at 2, GwHealth at 10; with several app threads it lands level with the
+highest one). Two things keep a LAN flood from taking the FBs' CPU from up there:
+
+- **a receive budget in the driver** (`driver/eth/net_rx_budget.h`, host-tested): the NetX driver
+  takes at most `NET_RX_PER_MS` (4) frames per millisecond from the DMA ring. The rest stay there,
+  the ISR stops waking the IP thread, and a one-tick timer resumes on the next tick; meanwhile the
+  ring fills and the MAC drops in hardware. `nx_driver_rx_held` counts the ticks the budget ran out
+  (SWD). The node's own traffic is far below it; 100 Mbit/s of minimum-size frames is ~148/ms.
+- **priority inheritance on the IP mutex** (`netx_up.c`): NetX creates it without, so a doip thread
+  holding it while an FB ran would hold the eth thread's send behind that FB.
+
+The doip threads stay below every application thread. Bench: `examples/system_full/test/netload_bench.sh`
+— GwStatus cadence, the GwHealth FB's count, ping and (with `BLOBLY_NET`) CpuLoad and DoIP, idle and
+under a UDP flood.
+
 ### The entity at the transport level (ISO 13400-2:2012)
 
 What the entity does with each payload type, and the policy that is configuration rather than

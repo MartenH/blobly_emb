@@ -124,8 +124,8 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 		}
 		at = at + 1 + i
 	}
-	// boot: the identity before any thread runs (DID 0xF190 is the VIN), then NetX; the IP thread
-	// at the comm thread's priority, the doip threads just below it
+	// boot: the identity before any thread runs (DID 0xF190 is the VIN), then NetX; with no SOME/IP
+	// the IP thread and the doip threads all run below every application thread
 	assert glue.contains('g_doip.entity_addr = u16(0x7b0)')
 	assert glue.contains('g_doip.vin[0] = u8(0x42)') && glue.contains('g_doip.vin[16] = u8(0x58)')
 	assert !glue.contains("'BLOBLYH735THREADX'"), 'a string in the generated runtime'
@@ -378,7 +378,9 @@ fn test_doip_and_someip_share_one_netx() {
 	code, out, glue, mk := generate_ecu('doip_eth', doip_eth_ecu)
 	assert code == 0, out
 	assert glue.contains("C.blob_eth_open(c'192.168.0.50', someip_port)")
-	assert glue.contains("C.doip_net_create(c'192.168.0.50',")
+	// the IP thread just below the comm and eth threads (both 1), above the FB thread (10); the
+	// doip threads below every application thread
+	assert glue.contains("C.doip_net_create(c'192.168.0.50', u32(2), u32(12))"), glue
 	for src in ['driver/eth/netx_up.c', 'driver/eth/eth_netx.c', 'driver/eth/doip_netx.c',
 		'boards/common/iocb.c'] {
 		assert mk.contains(src), mk
@@ -393,4 +395,17 @@ fn test_doip_and_someip_share_one_netx() {
 	// and a node with neither links no network at all
 	_, _, _, mk3 := generate_mk('no_net', '')
 	assert mk3.contains('LOOM_NET_SRCS :=\n'), mk3
+}
+
+// where the IP thread runs beside SOME/IP: below the platform threads, never below an FB
+fn test_the_ip_thread_runs_below_the_platform_threads_with_someip() {
+	// one app thread: comm (and eth) at 1, io at 2 when there is one
+	assert net_ip_prio_with_someip(comm_thread_prio(10, false, false), false) == 2
+	assert net_ip_prio_with_someip(comm_thread_prio(10, false, true), true) == 3
+	// several: comm at the highest app priority - 1 (io between them), so the IP thread is level
+	// with the highest FB thread — nothing is left between them
+	assert comm_thread_prio(11, true, false) == 10
+	assert net_ip_prio_with_someip(comm_thread_prio(11, true, false), false) == 11
+	assert comm_thread_prio(11, true, true) == 9
+	assert net_ip_prio_with_someip(comm_thread_prio(11, true, true), true) == 11
 }

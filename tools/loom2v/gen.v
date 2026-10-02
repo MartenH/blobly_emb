@@ -1980,9 +1980,8 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 			nthr += thrs.len
 		}
 	}
-	io_shift := if m.io_points.len > 0 { 1 } else { 0 }
+	cp := comm_thread_prio(mp, nthr > 1, m.io_points.len > 0)
 	if comm_thread_on {
-		cp := if nthr > 1 { mp - 1 - io_shift } else { 1 }
 		man << 'thread,${tid},comm,${m.part.core_of[single_part] or { 0 }},${cp}'
 		tid++
 	}
@@ -2012,7 +2011,7 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	if eth_thread_on(m) {
 		mut ep := mp - 2 // no CAN comm thread: io sits at mp-1, the eth owner one above
 		if comm_thread_on {
-			ep = if nthr > 1 { mp - 1 - io_shift } else { 1 } // created at the comm level
+			ep = cp // created at the comm level
 		}
 		man << 'thread,${tid},eth,${m.bus_core[m.eth] or { 0 }},${ep}'
 		tid++
@@ -2675,11 +2674,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					panic('loom2v: [target] kind="threadx" with [[io.gpio]]: comm > io > FB threads, ' +
 						'but the highest FB priority is ${min_prio}; use priorities >= 3')
 				}
-				io_shift := if m.io_points.len > 0 { 1 } else { 0 }
-				// Single-thread keeps the historical comm priority 1; multi-thread derives it as
-				// min(app priorities) - 1, so realistic numbering (apps 11/12/13 -> comm 10) works
-				// without a separate config knob and comm ALWAYS outranks the apps.
-				comm_prio := if multi { min_prio - 1 - io_shift } else { 1 }
+				comm_prio := comm_thread_prio(min_prio, multi, m.io_points.len > 0)
 				// The Rx-ISR board glue (comm_glue.c) enables FDCAN1's FIFO0 interrupt + NVIC line
 				// specifically. A telemetry/rx bus that opens FDCAN2/3 (index 1/2) would drain only on
 				// the 10-tick timeout (no ISR wake -> FIFO loss under bursts). The per-instance IRQ glue

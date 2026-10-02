@@ -101,6 +101,12 @@ int blob_net_up(const char *addr, unsigned int ip_prio) {
 	                 ip_thread_stack, sizeof(ip_thread_stack), ip_prio) != NX_SUCCESS) {
 		return -1;
 	}
+	/* NetX creates the IP mutex without priority inheritance, and every socket call takes it: a
+	 * doip thread (below the FBs) holding it while an FB runs would hold the eth thread's send
+	 * behind that FB. With inheritance the holder runs at its highest waiter's priority until it
+	 * lets go. Set before any thread can hold it: nothing has a socket yet, and the IP thread's
+	 * own start-up, if it has run, did not block holding it. */
+	ip.nx_ip_protection.tx_mutex_inherit = TX_INHERIT;
 	nx_arp_enable(&ip, arp_cache, sizeof(arp_cache));
 	nx_icmp_enable(&ip); /* pingable — the bench habit */
 	nx_udp_enable(&ip);

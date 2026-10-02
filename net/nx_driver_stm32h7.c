@@ -10,11 +10,14 @@
  * buffer and hands it to eth_send (see nx_driver_ethernet_send for why not the
  * RAM driver's in-packet header trick). RX: the ETH ISR signals deferred
  * processing; NX_LINK_DEFERRED_PROCESSING drains eth_recv into NX_PACKETs routed
- * by EtherType, with the IP header 4-byte aligned (NetX checksum requirement).
+ * by EtherType, with the IP header 4-byte aligned (NetX checksum requirement) —
+ * at most a budget of frames per tick (driver/eth/net_rx_budget.h), so a flood
+ * cannot hold the IP thread, and every thread below it, for longer than that.
  *
  * BENCH-VERIFIED on the H735-DK 2026-07-18. Scope = P1 (link + IPv4 + ICMP). */
 #include "nx_api.h"
 #include "eth.h"
+#include "../driver/eth/net_rx_budget.h"
 
 /* Local EtherType/frame constants — the RAM driver keeps its own copies too
  * (they are not exported from nx_api.h). */
@@ -37,27 +40,61 @@ static UINT nx_driver_initialized;
 /* Scratch linearisation buffer for TX (single-threaded IP thread owns it). */
 static UCHAR nx_driver_txlin[ETH_BUF_SIZE];
 
+/* The receive budget: frames the IP thread may take this tick. Once it is spent
+ * the rest stay in the DMA ring, the ISR stops waking the IP thread (rx_held),
+ * and rx_resume wakes it on the next tick to go on. */
+static net_rx_budget_t rx_budget;
+static TX_TIMER rx_resume;
+static volatile UINT rx_held;
+
+/* bench-observable (SWD): ticks whose receive budget ran out — a flood, or
+ * traffic the budget is too small for */
+volatile ULONG nx_driver_rx_held;
+
 /* --- ISR hook: called from eth_isr on RX-complete; ask NetX to re-enter with
- * NX_LINK_DEFERRED_PROCESSING on its own IP thread (never touch packets here). */
+ * NX_LINK_DEFERRED_PROCESSING on its own IP thread (never touch packets here).
+ * While the budget is held, rx_resume does that instead. */
 static void nx_driver_rx_signal(void) {
-	if (nx_driver_ip != NX_NULL) {
+	if (nx_driver_ip != NX_NULL && !rx_held) {
 		_nx_ip_driver_deferred_processing(nx_driver_ip);
 	}
 }
 
-/* --- drain every frame the DMA has delivered, wrap each in an NX_PACKET, and
- * route by EtherType. Mirrors _nx_ram_network_driver_receive. */
+/* --- timer: the tick after the budget ran out — take the frames left in the ring */
+static VOID nx_driver_rx_resume(ULONG arg) {
+	(void)arg;
+	rx_held = 0;
+	nx_driver_rx_signal();
+}
+
+/* --- the budget is spent: leave the ring as it is and come back next tick */
+static void nx_driver_rx_hold(void) {
+	rx_held = 1;
+	nx_driver_rx_held++;
+	tx_timer_deactivate(&rx_resume);
+	tx_timer_change(&rx_resume, 1, 0);
+	tx_timer_activate(&rx_resume);
+}
+
+/* --- take the frames the DMA has delivered, up to this tick's budget, wrap each
+ * in an NX_PACKET, and route by EtherType. Mirrors _nx_ram_network_driver_receive. */
 static void nx_driver_receive(void) {
 	for (;;) {
+		if (!net_rx_take(&rx_budget, (uint32_t)tx_time_get())) {
+			nx_driver_rx_hold();
+			return;
+		}
 		NX_PACKET *packet;
 		if (nx_packet_allocate(nx_driver_pool, &packet, NX_RECEIVE_PACKET, NX_NO_WAIT) != NX_SUCCESS) {
-			/* Pool exhausted: still DRAIN the ring — receive into the TX scratch
-			 * (all driver entry is on the IP thread, so it's idle here) and drop.
-			 * Bailing out instead would leave CPU-owned descriptors unrecycled,
-			 * and with ring(16) > pool(12) a burst could stall RX for good. */
-			while (eth_recv(nx_driver_txlin, sizeof(nx_driver_txlin)) != 0u) {
+			/* Pool exhausted: still take the frame off the ring — receive it into
+			 * the TX scratch (all driver entry is on the IP thread, so it's idle
+			 * here) and drop it, against the budget like any other. Leaving it
+			 * would keep CPU-owned descriptors unrecycled, and with ring(16) >
+			 * pool(12) a burst could stall RX for good. */
+			if (eth_recv(nx_driver_txlin, sizeof(nx_driver_txlin)) == 0u) {
+				return; /* nothing left */
 			}
-			return;
+			continue;
 		}
 		/* Align the IP header to a 4-byte boundary. NetX's IP/ICMP checksum routine
 		 * reads 32-bit words and mis-sums a header that isn't 4-byte aligned. The IP
@@ -175,6 +212,8 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 		/* Per-chip MAC from the STM32 unique ID — two boards on one image must not
 		 * share an address. SET_PHYSICAL_ADDRESS can still override at runtime. */
 		eth_unique_mac(nx_driver_mac);
+		rx_budget.per_tick = net_rx_per_tick(TX_TIMER_TICKS_PER_SECOND);
+		tx_timer_create(&rx_resume, "nx-rx-resume", nx_driver_rx_resume, 0, 1, 0, TX_NO_ACTIVATE);
 		eth_set_rx_callback(nx_driver_rx_signal);
 		if (eth_init(nx_driver_mac) != 0) {
 			driver_req_ptr->nx_ip_driver_status = NX_NOT_SUCCESSFUL;
@@ -220,6 +259,8 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 		 * the !initialized guard only on UNINITIALIZE, not here — the IP layer
 		 * already gates sends on nx_interface_link_up). */
 		eth_set_rx_callback(0);
+		tx_timer_deactivate(&rx_resume);
+		rx_held = 0;
 		interface_ptr->nx_interface_link_up = NX_FALSE;
 		break;
 
@@ -300,6 +341,7 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 		 * deferred processing on a stale NX_IP. (Full MAC/NVIC teardown is out of
 		 * scope — blobly targets create the IP instance once, statically, at boot.) */
 		eth_set_rx_callback(0);
+		tx_timer_deactivate(&rx_resume);
 		nx_driver_initialized = 0;
 		break;
 
