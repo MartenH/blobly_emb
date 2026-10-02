@@ -90,8 +90,18 @@ fn main() {
 			eprintln('sysgen: node "${n.name}": its generated file resolves to ${os.abs_path(gen_path)}, outside the output directory — a node name must be an identifier')
 			exit(1)
 		}
-		os.write_file(gen_path, out) or {
-			eprintln('sysgen: write ${gen_path}: ${err}')
+		// written aside and renamed into place: every node build runs sysgen over the whole
+		// system, so under `make -j` another sysgen may be gating this file while this one writes
+		// it, and a reader must see the old file or the new one, never a truncated one (#333).
+		// os.mv: a rename where the platform replaces a file that way, a copy where it does not
+		tmp_path := '${gen_path}.tmp.${os.getpid()}'
+		os.write_file(tmp_path, out) or {
+			eprintln('sysgen: write ${tmp_path}: ${err}')
+			exit(1)
+		}
+		os.mv(tmp_path, gen_path) or {
+			os.rm(tmp_path) or {}
+			eprintln('sysgen: move ${tmp_path} -> ${gen_path}: ${err}')
 			exit(1)
 		}
 		// gate the GENERATED node (partials never pass alone — the guarantee is

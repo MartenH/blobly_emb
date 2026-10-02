@@ -9,21 +9,23 @@
 #   ./bin/app vcan0 vcan1             # run: cansend vcan0 120#... -> candump vcan1 (0x200)
 V    ?= v
 REPO  = ../../../..
+# repo tools are built once into bin/ and run from there, never `v run` (tools/tools.mk, #333)
+include $(REPO)/tools/tools.mk
 GW    = examples/system_fw/nodes/gw
 
 .PHONY: all gen build run test clean
 all: gen build
 
-gen:
+gen: $(TOOL_dbcmerge) $(TOOL_dbc2cfg) $(TOOL_cfg2v) $(TOOL_loom2v)
 	@mkdir -p gen ports sig bin
 	# 1) the dissolution: system.toml -> gen-<node>.toml (the gateway gets two [bus.*] + the route)
 	$(MAKE) -C $(REPO) gen-system SYSTEM=examples/system_fw/system.toml
 	# 2) merge the gateway's per-bus DBCs -> one DBC with every frame (ids unique across buses)
-	cd $(REPO) && $(V) run tools/dbcmerge/gen.v $(GW)/gen/merged.dbc examples/system_fw/compute.dbc examples/system_fw/edge.dbc
+	cd $(REPO) && $(TOOL_dbcmerge) $(GW)/gen/merged.dbc examples/system_fw/compute.dbc examples/system_fw/edge.dbc
 	# 3) codec (both frames), channels, and the forwarder — from the GENERATED node toml + merged DBC
-	cd $(REPO) && $(V) run tools/dbc2cfg/gen.v $(GW)/gen/merged.dbc $(GW)/gen/dbc_gen.v
-	cd $(REPO) && $(V) run tools/cfg2v/gen.v examples/system_fw/gen-gw.toml $(GW)/gen/ecu_gen.v
-	cd $(REPO) && $(V) run tools/loom2v examples/system_fw/gen-gw.toml $(GW)/gen/merged.dbc \
+	cd $(REPO) && $(TOOL_dbc2cfg) $(GW)/gen/merged.dbc $(GW)/gen/dbc_gen.v
+	cd $(REPO) && $(TOOL_cfg2v) examples/system_fw/gen-gw.toml $(GW)/gen/ecu_gen.v
+	cd $(REPO) && $(TOOL_loom2v) examples/system_fw/gen-gw.toml $(GW)/gen/merged.dbc \
 	  $(GW)/sig/signals_gen.v $(GW)/ports/ports_gen.v $(GW)/gen/loom_gen.v $(GW)/gen/trace-manifest.csv
 
 build: gen

@@ -28,6 +28,8 @@ VDBG ?=
 # boards/$(BOARD) — MCU/CMSIS/BOARD_DEFS/CAN_DEFS/BOARD_BSP_BARE/BOARD_LD_BARE.
 BOARD := h735dk
 include $(REPO)/boards/$(BOARD)/board.mk
+# repo tools are built once into bin/ and run from there, never `v run` (tools/tools.mk, #333)
+include $(REPO)/tools/tools.mk
 
 INCS = $(CMSIS) $(BOARD_INCS) -I$(REPO)/driver/can
 CFLAGS   = $(MCU) -ffreestanding $(OPT) $(CDBG) -ffunction-sections -fdata-sections $(INCS) \
@@ -46,10 +48,10 @@ all: $(BUILD)/app.bin
 GEN = gen/loom_gen.v ports/ports_gen.v sig/signals_gen.v
 gen: gen/.stamp
 # Regenerate when the config, the FBs, OR the generator itself changes.
-gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(REPO)/tools/ecucheck/gen.v $(wildcard $(REPO)/tools/loom2v/*.v) $(REPO)/tools/ecumodel/model.v
+gen/.stamp: ecu.toml bus.dbc $(wildcard app/*.v) $(TOOL_ecucheck) $(TOOL_loom2v)
 	@mkdir -p gen ports sig
-	cd $(REPO) && $(V) run tools/ecucheck/gen.v examples/$(NAME)/ecu.toml
-	cd $(REPO) && $(V) run tools/loom2v examples/$(NAME)/ecu.toml examples/$(NAME)/bus.dbc \
+	cd $(REPO) && $(TOOL_ecucheck) examples/$(NAME)/ecu.toml
+	cd $(REPO) && $(TOOL_loom2v) examples/$(NAME)/ecu.toml examples/$(NAME)/bus.dbc \
 	  examples/$(NAME)/sig/signals_gen.v examples/$(NAME)/ports/ports_gen.v examples/$(NAME)/gen/loom_gen.v \
 	  examples/$(NAME)/gen/trace-manifest.csv
 	@touch gen/.stamp
@@ -91,7 +93,7 @@ gdb: $(BUILD)/app.elf
 	$(GDB) $< -ex "target extended-remote :3333" -ex "load" -ex "break main__main" -ex "continue"
 
 clean:
-	rm -rf $(BUILD) gen ports sig
+	rm -rf $(BUILD) gen ports sig bin
 
 .PHONY: all gen flash debug gdbserver gdb clean
 

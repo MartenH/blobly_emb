@@ -27,6 +27,8 @@ PORT     = $(TX)/ports/cortex_m7/gnu
 # comes from boards/$(BOARD) — MCU/CMSIS/BOARD_DEFS/CAN_DEFS/BOARD_BSP_*/BOARD_LD_*.
 BOARD := h755zi
 include $(REPO)/boards/$(BOARD)/board.mk
+# repo tools are built once into bin/ and run from there, never `v run` (tools/tools.mk, #333)
+include $(REPO)/tools/tools.mk
 
 # TX_ENABLE_EXECUTION_CHANGE_NOTIFY makes the ThreadX port's context-switch + SysTick asm call
 # the four _tx_execution_* hooks (trace_hooks.c) — the source of the real thread/ISR trace.
@@ -70,10 +72,10 @@ all: $(BUILD)/$(NAME).bin
 # 0) generate the ThreadX target (gen/ports/sig) from ecu.toml via loom2v.
 GEN = gen/loom_gen.v ports/ports_gen.v sig/signals_gen.v
 gen: gen/.stamp
-gen/.stamp: ecu.toml bus.dbc $(wildcard $(REPO)/examples/shared/loadmix/app/*.v) $(REPO)/tools/ecucheck/gen.v $(wildcard $(REPO)/tools/loom2v/*.v) $(REPO)/tools/ecumodel/model.v
+gen/.stamp: ecu.toml bus.dbc $(wildcard $(REPO)/examples/shared/loadmix/app/*.v) $(TOOL_ecucheck) $(TOOL_loom2v)
 	@mkdir -p gen ports sig
-	cd $(REPO) && $(V) run tools/ecucheck/gen.v examples/$(NAME)/ecu.toml
-	cd $(REPO) && $(V) run tools/loom2v examples/$(NAME)/ecu.toml examples/$(NAME)/bus.dbc \
+	cd $(REPO) && $(TOOL_ecucheck) examples/$(NAME)/ecu.toml
+	cd $(REPO) && $(TOOL_loom2v) examples/$(NAME)/ecu.toml examples/$(NAME)/bus.dbc \
 	  examples/$(NAME)/sig/signals_gen.v examples/$(NAME)/ports/ports_gen.v examples/$(NAME)/gen/loom_gen.v \
 	  examples/$(NAME)/gen/trace-manifest.csv
 	@touch gen/.stamp
@@ -128,7 +130,7 @@ else
 endif
 
 clean:
-	rm -rf $(BUILD) gen ports sig
+	rm -rf $(BUILD) gen ports sig bin
 
 .PHONY: all gen flash clean
 

@@ -20,6 +20,8 @@ BOARD   := h735dk
 TX       = $(REPO)/third_party/threadx
 PORT     = $(TX)/ports/cortex_m7/gnu
 include $(REPO)/boards/$(BOARD)/board.mk
+# repo tools are built once into bin/ and run from there, never `v run` (tools/tools.mk, #333)
+include $(REPO)/tools/tools.mk
 
 CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
           $(BOARD_DEFS) -DBOARD_ENTRY=main__main $(CAN_DEFS) $(IO_DEFS) \
@@ -42,9 +44,9 @@ all: $(BUILD)/$(NAME).bin
 # sysgen already gated gen-h735.toml when it produced it).
 GEN = gen/loom_gen.v ports/ports_gen.v sig/signals_gen.v
 gen: gen/.stamp
-gen/.stamp: $(SYSDIR)/gen-h735.toml $(SYSDIR)/body.dbc $(wildcard app/*.v) $(wildcard $(REPO)/tools/loom2v/*.v)
+gen/.stamp: $(SYSDIR)/gen-h735.toml $(SYSDIR)/body.dbc $(wildcard app/*.v) $(TOOL_loom2v)
 	@mkdir -p gen ports sig
-	cd $(REPO) && $(V) run tools/loom2v examples/system_io/gen-h735.toml examples/system_io/body.dbc \
+	cd $(REPO) && $(TOOL_loom2v) examples/system_io/gen-h735.toml examples/system_io/body.dbc \
 	  examples/system_io/nodes/h735/sig/signals_gen.v examples/system_io/nodes/h735/ports/ports_gen.v \
 	  examples/system_io/nodes/h735/gen/loom_gen.v examples/system_io/nodes/h735/gen/trace-manifest.csv
 	@touch gen/.stamp
@@ -98,7 +100,7 @@ flash: $(BUILD)/$(NAME).bin
 	st-flash $(if $(SERIAL),--serial $(SERIAL),) reset
 
 clean:
-	rm -rf $(BUILD) gen ports sig
+	rm -rf $(BUILD) gen ports sig bin
 
 .PHONY: all gen flash clean
 .DELETE_ON_ERROR:

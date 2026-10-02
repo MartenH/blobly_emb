@@ -1,4 +1,7 @@
 V ?= v
+REPO := .
+# every repo tool a target runs is built once into bin/ (tools/tools.mk), never `v run` (#333)
+include tools/tools.mk
 
 .PHONY: example run-example list check deps deps-cmsis trace trace-check lint vcan clean demo demo-threadx bench v-pin
 
@@ -26,9 +29,9 @@ list:
 v-pin:
 	@./scripts/v_pin.sh "$(V)"
 
-check:
+check: $(TOOL_ecucheck)
 	@rc=0; for d in examples/*/; do \
-	  if [ -f "$$d/ecu.toml" ]; then $(V) run tools/ecucheck/gen.v "$$d/ecu.toml" || rc=1; fi; \
+	  if [ -f "$$d/ecu.toml" ]; then $(TOOL_ecucheck) "$$d/ecu.toml" || rc=1; fi; \
 	done; exit $$rc
 
 # ---- Device (cross-compile) deps --------------------------------------------
@@ -76,12 +79,12 @@ demo-threadx:
 # ---- Requirement traceability ----------------------------------------------
 # Generate docs/traceability.md from requirements/*.toml + verification links
 # (`@verifies` tags in tests; requirements/verifications.toml for analysis/review).
-trace:
-	$(V) run tools/trace/gen.v
+trace: $(TOOL_trace)
+	$(TOOL_trace)
 
 # CI gate: nonzero exit if any requirement's linked verification FAILED.
-trace-check:
-	$(V) run tools/trace/gen.v --check
+trace-check: $(TOOL_trace)
+	$(TOOL_trace) --check
 
 # System-level validation (docs/multi-node.md): the cross-node checks over a
 # system.toml — single-writer per bus, identity uniqueness, NM cluster
@@ -89,31 +92,31 @@ trace-check:
 # Override with SYSTEM=path/to/system.toml.
 SYSTEM ?= examples/system_bench/system.toml
 .PHONY: syscheck gen-system
-syscheck:
-	$(V) -enable-globals run tools/syscheck $(SYSTEM)
+syscheck: $(TOOL_syscheck)
+	$(TOOL_syscheck) $(SYSTEM)
 
 # Generate a complete ecu.toml per node from a DISSOLVED system.toml (P1b): the
 # cross-node signals declared once + each node's authored internals -> gen-<node>.toml,
 # each gated by ecucheck. docs/multi-node.md. Override with SYSTEM=.
-gen-system:
-	$(V) -enable-globals run tools/sysgen $(SYSTEM)
+gen-system: $(TOOL_sysgen)
+	$(TOOL_sysgen) $(SYSTEM)
 
 # ---- Misc -------------------------------------------------------------------
 lint:
 	./scripts/lint_noalloc.sh
 
 # Performance benchmarks (one per family below — the echo lines are the list).
-bench:
+bench: $(TOOL_ioc_bench) $(TOOL_ioc_bench_mp) $(TOOL_loom_bench) $(TOOL_bulk_bench) $(TOOL_load_bench)
 	@echo '== IOC transport, cross-thread (2 pinned cores) =='
-	$(V) -prod run tools/ioc_bench/bench.v
+	$(TOOL_ioc_bench)
 	@echo '== IOC transport, cross-process AMP (fork + MAP_SHARED) =='
-	$(V) -gc none run tools/ioc_bench_mp/bench.v
+	$(TOOL_ioc_bench_mp)
 	@echo '== Loom scheduler dispatch overhead =='
-	$(V) -prod run tools/loom_bench/bench.v
+	$(TOOL_loom_bench)
 	@echo '== Bulk ring throughput/latency vs ISO-TP (fork + MAP_SHARED) =='
-	$(V) -prod -gc none run tools/bulk_bench/bench.v
+	$(TOOL_bulk_bench)
 	@echo '== System load: 4 cores, 8 CAN buses on core0, 50 FBs/core =='
-	$(V) -gc none run tools/load_bench/bench.v
+	$(TOOL_load_bench)
 
 # Real-stack scale benchmark: build the generated `scale` example (4 cores, 8 CAN
 # buses, 200 FBs), run it on vcan0..7 with traffic, report per-core CPU + RAM.

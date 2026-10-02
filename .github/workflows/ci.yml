@@ -128,8 +128,8 @@ jobs:
 
       # The example e2e tests each shell out to `make gen` + build. They used to fail randomly in
       # parallel because `v run <tool>` names its compiled binary after the TOOL's source path, so
-      # concurrent examples wrote and exec'd the same file (ETXTBSY / ENOENT). examples/common.mk
-      # now compiles each generator to the example's own bin/, so these are safe to run together.
+      # concurrent examples wrote and exec'd the same file (ETXTBSY / ENOENT). Every Makefile now
+      # builds each tool once into its own bin/ (tools/tools.mk, #333), so these run together.
       - name: Example e2e tests
         run: v -enable-globals test examples
 
