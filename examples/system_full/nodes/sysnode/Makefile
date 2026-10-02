@@ -1,5 +1,7 @@
 # sysnode — the system_full Central Gateway, built as a real ThreadX image (like every other
-# node). The comm thread owns both FDCAN buses and forwards the resolved routes. The
+# node). The comm thread owns both FDCAN buses and forwards the resolved routes; the eth thread
+# publishes the gateway's GwStatus on the tel SOME/IP segment (app/: the GwHealth FB) and the
+# doip threads carry its diagnostic server, all at the address system.toml gives it. The
 # gen step keeps dbcmerge (one merged.dbc across compute/edge, so both frames of every
 # route resolve in one DBC); the build is the same ThreadX cross-build the leaf nodes use.
 #
@@ -59,7 +61,9 @@ GENSRC = $(wildcard $(REPO)/tools/ecucheck/*.v) $(wildcard $(REPO)/tools/sysgen/
          $(wildcard $(REPO)/tools/dbc2cfg/*.v) $(wildcard $(REPO)/tools/loom2v/*.v) \
          $(wildcard $(REPO)/tools/ecumodel/*.v) \
          $(wildcard $(REPO)/tools/candb/*.v) $(wildcard $(REPO)/tools/sysmodel/*.v)
-gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/compute.dbc $(SYSDIR)/edge.dbc $(GENSRC)
+# Every node's ecu.toml: gen-system validates them all, and a segment peer is derived from who
+# reads which event — so the bench tool's ecu.toml decides where GwStatus goes.
+gen/.stamp: $(SYSDIR)/system.toml $(wildcard $(SYSDIR)/nodes/*/ecu.toml) $(wildcard app/*.v) $(SYSDIR)/compute.dbc $(SYSDIR)/edge.dbc $(GENSRC)
 	@mkdir -p gen ports sig
 	$(MAKE) -C $(REPO) gen-system SYSTEM=examples/system_full/system.toml
 	cd $(REPO) && $(V) run tools/dbcmerge/gen.v $(GW)/gen/merged.dbc examples/system_full/compute.dbc examples/system_full/edge.dbc
@@ -74,7 +78,7 @@ gen/.stamp: $(SYSDIR)/system.toml ecu.toml $(SYSDIR)/compute.dbc $(SYSDIR)/edge.
 CFLAGS += $(LOOM_NET_DEFS) # the network the config sizes (driver/eth/netx_up.c)
 gen/loom_build.mk: gen/.stamp ;
 
-$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) | $(BUILD)
+$(BUILD)/app.c: $(SYSDIR)/main.v gen/.stamp $(wildcard app/*.v) $(wildcard $(REPO)/loom/*.v) $(wildcard $(REPO)/comm/*/*.v) $(wildcard $(REPO)/driver/can/*.v) | $(BUILD)
 	cd $(REPO) && $(V) -freestanding -gc none -no-bounds-checking -enable-globals $(LOOM_VDEFS) \
 	  -path "@vlib|@vmodules|.|$(GW)" \
 	  -o $(GW)/$(BUILD)/app.c examples/system_full/main.v

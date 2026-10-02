@@ -96,6 +96,19 @@ pub mut:
 	has_port     bool // an omitted port is diagnosed as omitted, not as a zero
 	port_int     bool = true // ...and 30490.5 truncates to a legal, different port
 	has_endpoint bool
+	// `doip = { logical = 0x07A0 }`: the node's diagnostic server is reachable over DoIP
+	// (ISO 13400) too, at its endpoint address. Lowered into the node's [doip] — the address is
+	// the endpoint's, so a node has ONE network identity and it is declared here, not per node.
+	has_doip            bool
+	doip_logical        u32
+	doip_logical_raw    i64
+	has_doip_logical    bool
+	doip_logical_int    bool = true
+	doip_functional     u32
+	doip_functional_raw i64
+	has_doip_functional bool
+	doip_functional_int bool = true
+	doip_unknown        []string // keys of the doip table this schema does not know (typos)
 	// --- extracted from the node's ecu.toml (filled by load_node) ---
 	view NodeView
 }
@@ -246,6 +259,13 @@ pub mut:
 	// connected only if they point at each other — a shared bus name does not connect them.
 	someip_peer string // [someip].peer, "<address>:<port>"
 	someip_port int    // [someip].port — the port THIS endpoint listens on
+	has_doip    bool   // an authored [doip] — the system owns it in the dissolution model
+	// an authored eth [[frame]] naming its OWN `peer`: the composed model checks reciprocity on
+	// [someip].peer alone, so a per-event peer is the dissolution's to lower, not a node's to author
+	frame_peer bool
+	// the bus [shell] rides (a LOCAL key, "eth0" for an RPC shell on a someip member) — its own, or
+	// [telemetry].bus inherited, by ecumodel.module_bus, the rule loom2v emits it by
+	shell_bus string
 	// the on-wire id each signal rides, keyed "<iface>|<signal>". On a someip endpoint
 	// that id IS the EVENT the receive bridge dispatches on, so two members can agree on
 	// a signal NAME and still never talk (docs/someip.md).
@@ -537,6 +557,23 @@ pub fn parse_system(path string) !System {
 				node.has_port = 'port' in em
 				node.port_int = m_is_int(em, 'port')
 				node.has_endpoint = true
+			}
+			if dv := m['doip'] {
+				dm := dv.as_map()
+				node.has_doip = true
+				node.has_doip_logical = 'logical' in dm
+				node.doip_logical = m_u32(dm, 'logical')
+				node.doip_logical_raw = (dm['logical'] or { toml.Any(0) }).i64()
+				node.doip_logical_int = m_is_int(dm, 'logical')
+				node.has_doip_functional = 'functional' in dm
+				node.doip_functional = m_u32(dm, 'functional')
+				node.doip_functional_raw = (dm['functional'] or { toml.Any(0) }).i64()
+				node.doip_functional_int = m_is_int(dm, 'functional')
+				for k, _ in dm {
+					if k !in ['logical', 'functional'] {
+						node.doip_unknown << k
+					}
+				}
 			}
 			for b in (m['buses'] or { toml.Any([]toml.Any{}) }).array() {
 				node.buses << b.string()
@@ -840,8 +877,15 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 			v.authored_signals = true // a bus endpoint = authored bus wiring
 		}
 	}
-	if _ := doc.value_opt('frame') {
+	if fv := doc.value_opt('frame') {
 		v.authored_frames = true
+		if fv is []toml.Any {
+			for f in fv {
+				if 'peer' in f.as_map() {
+					v.frame_peer = true
+				}
+			}
+		}
 	}
 	v.authored_routes = v.has_route
 	// [[fb]] handlers' reads/writes = the node's signal intent, attributed to the
@@ -997,6 +1041,9 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 		v.someip_peer = m_str(sm, 'peer')
 		v.someip_port = m_int(sm, 'port')
 	}
+	if _ := doc.value_opt('doip') {
+		v.has_doip = true
+	}
 	// [trace] — the TraceModule transmits its record frame (record_id, default
 	// 0x7e5) AND command responses (rsp_id, default 0x7e3) on the trace bus (the
 	// telemetry bus, or [trace].bus for a host runner). parse_trace defaults an
@@ -1036,6 +1083,8 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 	if shv := doc.value_opt('shell') {
 		sm := shv.as_map()
 		v.shell_on = (sm['enabled'] or { toml.Any(true) }).bool()
+		// resolved as loom2v resolves it: an omitted bus inherits [telemetry].bus
+		v.shell_bus = ecumodel.module_bus(doc, 'shell')
 		if v.shell_on {
 			v.shell_out_id, v.shell_out_name = binding_id(sm, 'out', 0x7f1)
 			v.shell_in_id, v.shell_in_name = binding_id(sm, 'in', 0x7f0)
@@ -1188,6 +1237,94 @@ pub fn (s System) is_someip_leaf(n Node) bool {
 		}
 	}
 	return someip == 1 && can == 1 && !is_route_gateway(s, n.name)
+}
+
+// someip_event_producer: the node that sends event `fr` — the producer of its signals (one owner
+// per frame is check_signals_dissolved's rule). '' when none of its signals is declared.
+pub fn (s System) someip_event_producer(fr SysFrame) string {
+	for sg in fr.signals {
+		if sig := s.signal_by_name(sg) {
+			return sig.producer
+		}
+	}
+	return ''
+}
+
+// someip_members: the nodes that name someip bus `bus` in `buses`, in declaration order.
+pub fn (s System) someip_members(bus string) []Node {
+	return s.nodes.filter(bus in it.buses)
+}
+
+// someip_event_receivers: the members of fr's segment, other than its producer, whose FBs read
+// any of its signals, in node declaration order. An event is UNICAST — the generated bridge sends
+// each datagram to one static address, with no service discovery and no multicast — so
+// check_someip_segment holds this to one; on a TWO-member segment the other member is the
+// receiver whether or not it reads (the point-to-point rule the segment started with, whose
+// partial-subscriber diagnostics name the missing reads).
+pub fn (s System) someip_event_receivers(fr SysFrame) []string {
+	producer := s.someip_event_producer(fr)
+	members := s.someip_members(fr.bus)
+	mut out := []string{}
+	for n in members {
+		if n.name == producer {
+			continue
+		}
+		if fr.signals.any(it in n.view.fb_reads) {
+			out << n.name
+		}
+	}
+	if out.len == 0 && members.len == 2 && producer != '' {
+		for n in members {
+			if n.name != producer {
+				out << n.name
+			}
+		}
+	}
+	return out
+}
+
+// someip_partners: the members `n` exchanges events with on someip bus `bus` — the receiver of
+// each event it sends and the producer of each event it receives — ordered by the first event
+// (system [[frame]] order) that connects them, without repeats. The first is the node's
+// [someip].peer (its default: where an RPC answer goes and whom an RPC request is accepted
+// from); an event exchanged with any other partner carries that partner as its own `peer`.
+//
+// A two-member segment's partner is the other member even when no event connects them — the
+// original point-to-point segment, which a member may join to serve RPC alone.
+pub fn (s System) someip_partners(n Node, bus string) []string {
+	members := s.someip_members(bus)
+	if members.len == 2 {
+		return members.filter(it.name != n.name).map(it.name)
+	}
+	mut out := []string{}
+	for fr in s.frames {
+		if fr.bus != bus {
+			continue
+		}
+		p := s.someip_event_partner(n, fr) or { continue }
+		if p !in out {
+			out << p
+		}
+	}
+	return out
+}
+
+// someip_event_partner: who `n` exchanges event `fr` with — its receiver when n sends it, its
+// producer when n receives it; none when n is neither end (or the event has no single receiver,
+// which check_someip_segment refuses).
+pub fn (s System) someip_event_partner(n Node, fr SysFrame) ?string {
+	producer := s.someip_event_producer(fr)
+	receivers := s.someip_event_receivers(fr)
+	if producer == n.name {
+		if receivers.len == 1 {
+			return receivers[0]
+		}
+		return none
+	}
+	if n.name in receivers && producer != '' {
+		return producer
+	}
+	return none
 }
 
 // build_tool compiles a repo tool into `dir` (a private directory the caller owns) and returns

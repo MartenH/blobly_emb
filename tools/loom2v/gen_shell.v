@@ -7,6 +7,7 @@ module main
 
 import toml
 import comm.shell
+import tools.ecumodel
 
 const shell_config_keys = ['enabled', 'bus', 'commands', 'method', 'allow_mutate']
 
@@ -32,15 +33,9 @@ fn parse_shell(doc toml.Doc, dbc string) ShellCfg {
 	if scfg := doc.value_opt('shell') {
 		sm := scfg.as_map()
 		t.on = (sm['enabled'] or { toml.Any(true) }).bool()
-		t.bus = (sm['bus'] or { toml.Any('') }).string()
-		if t.bus == '' {
-			// the validator's inherit rule, mirrored: [shell] without a bus
-			// rides [telemetry].bus — resolving it HERE keeps shell_on_eth
-			// true for an inherited eth binding (silent no-emit otherwise)
-			if tv := doc.value_opt('telemetry') {
-				t.bus = (tv.as_map()['bus'] or { toml.Any('') }).string()
-			}
-		}
+		// [shell] without a bus rides [telemetry].bus — ecumodel's one rule, so an inherited eth
+		// binding keeps shell_on_eth true (silent no-emit otherwise)
+		t.bus = ecumodel.module_bus(doc, 'shell')
 		t.method = u32((sm['method'] or { toml.Any(0) }).int())
 		t.allow_mutate = (sm['allow_mutate'] or { toml.Any(false) }).bool()
 		for c in (sm['commands'] or { toml.Any([]toml.Any{}) }).array() {

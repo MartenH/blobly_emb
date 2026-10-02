@@ -3,6 +3,8 @@ module main
 import os
 import rand
 import tools.sysmodel
+import tools.ecumodel
+import toml
 
 // Lowering a someip member (#245). The system owns the segment's contract — the service and its
 // events — because a someip bus has no DBC to own it, so sysgen emits what the CAN path takes
@@ -164,18 +166,108 @@ fn test_a_lone_member_segment_is_refused() {
 	assert e.any(it.contains('has 1 member(s)')), e.str()
 }
 
-// ...and so is a third member, which would leave at least one node deaf: peers are pairwise.
-fn test_a_third_member_is_refused() {
+// A third member is legal when an EVENT connects it: each event is point-to-point (one producer,
+// one receiver), so a segment of three is pairs sharing one service. One that no event reaches
+// has no peer to lower, and is refused.
+fn third_member() sysmodel.Node {
+	return sysmodel.Node{
+		name:         'gw'
+		buses:        ['tel']
+		endpoint:     '192.168.0.50'
+		port:         30490
+		port_raw:     30490
+		has_port:     true
+		has_endpoint: true
+		view:         sysmodel.NodeView{
+			fb_writes: ['GwUptime']
+		}
+	}
+}
+
+// tel_system plus a third member publishing GwStatus to the bench — the system_full shape.
+fn tel_system_of_three() sysmodel.System {
+	mut sys := tel_system()
+	sys.nodes << third_member()
+	sys.nodes[1].view.fb_reads << 'GwUptime'
+	sys.signals << sysmodel.SysSignal{
+		name:     'GwUptime'
+		producer: 'gw'
+		bus:      'tel'
+		frame:    'GwStatus'
+		fields:   {
+			'seconds': 'u32'
+		}
+	}
+	sys.frames << sysmodel.SysFrame{
+		name:    'GwStatus'
+		bus:     'tel'
+		id:      0x8020
+		id_raw:  0x8020
+		has_id:  true
+		signals: ['GwUptime']
+	}
+	return sys
+}
+
+fn test_a_third_member_an_event_connects_is_a_valid_segment() {
+	assert seg_errs(tel_system_of_three()).len == 0, seg_errs(tel_system_of_three()).str()
+}
+
+fn test_a_third_member_no_event_reaches_is_refused() {
 	mut sys := tel_system()
 	sys.nodes << sysmodel.Node{
 		name:         'extra'
 		buses:        ['tel']
 		endpoint:     '192.168.0.60'
 		port:         30492
+		port_raw:     30492
+		has_port:     true
 		has_endpoint: true
 	}
-	e := sysmodel.validate_system_gen(sys).filter(it.severity == .error).map(it.msg)
-	assert e.any(it.contains('has 3 member(s)')), e.str()
+	e := seg_errs(sys)
+	assert e.any(it.contains('"extra"') && it.contains('exchanges no event')), e.str()
+}
+
+// An event is UNICAST: two members reading one event would need a second destination the bridge
+// does not have (no service discovery, no multicast).
+fn test_an_event_read_by_two_members_is_refused() {
+	mut sys := tel_system_of_three()
+	sys.nodes[2].view.fb_reads << 'BenchLoad'
+	e := seg_errs(sys)
+	assert e.any(it.contains('event "BenchTelem" is read by 2 members')), e.str()
+}
+
+// ...and an event nobody reads has nowhere to go once the segment is larger than two.
+fn test_an_event_no_member_reads_is_refused_on_a_larger_segment() {
+	mut sys := tel_system_of_three()
+	sys.nodes[1].view.fb_reads = sys.nodes[1].view.fb_reads.filter(it != 'GwUptime')
+	e := seg_errs(sys)
+	assert e.any(it.contains('no member receives event "GwStatus"')), e.str()
+}
+
+// The lowering: the member with two partners keeps the first one its events reach as [someip].peer
+// (tcu, by BenchTelem's place in the system) and names the other on the event it exchanges with it.
+fn test_a_member_with_two_partners_gets_a_peer_per_event() {
+	sys := tel_system_of_three()
+	bench := sys.nodes[1]
+	out := generate_someip_node(sys, bench, sys.buses[0], bench.view, {
+		'LampCmd':   'bench'
+		'BenchLoad': 'bench'
+		'GwUptime':  'bench'
+	}, '') or { panic(err) }
+	assert out.contains('peer    = "192.168.0.51:30490"'), out
+	gw := out.index('name    = "GwStatus"') or { panic('GwStatus not lowered:\n${out}') }
+	assert out[gw..].contains('peer    = "192.168.0.50:30490"'), out
+	// tcu's own events carry no per-event peer: tcu is the default
+	tl := out.index('name    = "BenchTelem"') or { panic(out) }
+	assert !out[tl..gw].contains('peer'), out
+	// ...and a member with ONE partner lowers exactly as a segment of two always has
+	g := sys.nodes[2]
+	gout := generate_someip_node(sys, g, sys.buses[0], g.view, {
+		'GwUptime': 'gateway'
+	}, '') or { panic(err) }
+	assert gout.contains('peer    = "192.168.0.190:30491"'), gout
+	assert gout.count('peer    =') == 1, gout
 }
 
 // Two members answering at one address is an ARP conflict on the segment, and the generated
@@ -404,10 +496,69 @@ fn test_a_someip_member_may_be_a_leaf_on_one_can_bus() {
 	assert seg_errs(sys).len == 0, seg_errs(sys).str()
 }
 
-// ...but a ROUTER is still refused. Routing between CAN and SOME/IP needs a translating bridge,
-// and generate_gateway_node emits every bus in the CAN/DBC shape with no [someip] at all — so
-// the membership would be dropped on the floor.
-fn test_a_route_gateway_that_is_also_a_someip_member_is_refused() {
+// A CAN<->CAN route GATEWAY may be a member too (system_full's sysnode): its routes stay on CAN,
+// and its own events on the segment are lowered beside them. What stays refused is a route that
+// TOUCHES the segment — translating between CAN and SOME/IP is its own rung.
+fn gateway_member_system() sysmodel.System {
+	mut sys := tel_system_of_three()
+	for nm in ['pt', 'body'] {
+		sys.buses << sysmodel.Bus{
+			name:      nm
+			kind:      'can'
+			interface: if nm == 'pt' { 'can0' } else { 'can1' }
+		}
+		sys.nodes[2].buses << nm
+	}
+	sys.routes << sysmodel.Route{
+		gateway: 'gw'
+		frame:   'Fwd'
+		from:    'pt'
+		to:      'body'
+	}
+	return sys
+}
+
+fn test_a_can_route_gateway_may_be_a_someip_member() {
+	sys := gateway_member_system()
+	assert !sys.is_someip_leaf(sys.nodes[2])
+	// the segment's own rules are satisfied; the CAN routes are not this test's subject
+	e := seg_errs(sys).filter(it.contains('someip') || it.contains('segment') || it.contains('tel'))
+	assert e.len == 0, e.str()
+}
+
+fn test_a_gateway_member_is_lowered_with_both_halves() {
+	sys := gateway_member_system()
+	g := sys.nodes[2]
+	out := generate_gateway_node(sys, g, '[target]\nkind = "threadx"', g.view, {
+		'GwUptime': 'gateway'
+	}) or { panic(err) }
+	// its CAN buses, and no CAN-shaped table for the segment
+	assert out.contains('[bus.can0]') && out.contains('[bus.can1]'), out
+	assert !out.contains('[bus.]'), out
+	// the route, and the SOME/IP half
+	assert out.contains('from = { bus = "can0", frame = "Fwd" }'), out
+	assert out.contains('[bus.eth0]') && out.contains('interface = "192.168.0.50"'), out
+	assert out.contains('peer    = "192.168.0.190:30491"'), out
+	assert out.contains('name    = "GwStatus"'), out
+	assert out.contains('to     = "eth0"'), out
+}
+
+// ...but the gateway's FB may still not read or write a CAN system signal (not generated yet).
+fn test_a_gateway_member_fb_on_a_can_signal_is_still_refused() {
+	mut sys := gateway_member_system()
+	sys.signals << sysmodel.SysSignal{
+		name:     'Speed'
+		producer: 'gw'
+		bus:      'pt'
+		fields:   {
+			'kph': 'u32'
+		}
+	}
+	sys.nodes[2].view.fb_writes << 'Speed'
+	assert seg_errs(sys).any(it.contains('reads/writes system signal "Speed"')), seg_errs(sys).str()
+}
+
+fn test_a_route_across_the_segment_is_refused() {
 	mut sys := tel_system()
 	sys.buses << sysmodel.Bus{
 		name:      'pt'
@@ -422,10 +573,10 @@ fn test_a_route_gateway_that_is_also_a_someip_member_is_refused() {
 		to:      'tel'
 	}
 	assert !sys.is_someip_leaf(sys.nodes[0])
-	assert seg_errs(sys).any(it.contains('is a route gateway AND a member of someip bus')), seg_errs(sys).str()
+	assert seg_errs(sys).any(it.contains('routing across a SOME/IP bus is not generated yet')), seg_errs(sys).str()
 }
 
-// ...and so is a member carrying SEVERAL CAN buses: that is a multi-DBC gateway.
+// ...and so is a member carrying SEVERAL CAN buses that routes nothing between them.
 fn test_a_someip_member_on_two_can_buses_is_refused() {
 	mut sys := tel_system()
 	for nm in ['pt', 'body'] {
@@ -436,7 +587,7 @@ fn test_a_someip_member_on_two_can_buses_is_refused() {
 		}
 		sys.nodes[0].buses << nm
 	}
-	assert seg_errs(sys).any(it.contains('sits on 2 CAN buses')), seg_errs(sys).str()
+	assert seg_errs(sys).any(it.contains('sits on 2 CAN buses but routes nothing')), seg_errs(sys).str()
 }
 
 // The service and the version are the segment's IDENTITY, and .i64() coerces a non-integer to
@@ -709,4 +860,267 @@ fn test_a_someip_e2e_frame_needs_a_timeout_longer_than_its_cycle() {
 	sys.frames[0].e2e_timeout_raw = 1000
 	sys.frames[0].tx_mode = 'event'
 	assert seg_errs(sys).any(it.contains('needs a heartbeat')), seg_errs(sys).str()
+}
+
+// ---- doip on a [[node]] (rung 6) ----
+
+// A node's DoIP server is declared on its [[node]] — `doip = { logical = 0x07A0 }` — and its
+// address is the node's endpoint, so a node has ONE network identity, declared once in
+// system.toml and lowered into [doip] (rung 6). What the node gate would refuse only once the node
+// is BUILT is refused at the system, and what no single node can see — two entities at one
+// logical address — is refused only there.
+
+// doip_system: tel_system with tcu serving DoIP — a ThreadX node with one [[isotp]] connection
+// and a diag allocation, which is what DoIP carries.
+fn doip_system() sysmodel.System {
+	mut sys := tel_system()
+	sys.nodes[0].has_doip = true
+	sys.nodes[0].has_doip_logical = true
+	sys.nodes[0].doip_logical = 0x07A0
+	sys.nodes[0].doip_logical_raw = 0x07A0
+	sys.nodes[0].diag = sysmodel.Diag{
+		req: 0x7A0
+		rsp: 0x7A8
+	}
+	sys.nodes[0].view.is_threadx = true
+	sys.nodes[0].view.isotp_conns = [sysmodel.IsotpConn{
+		iface: 'can0'
+		rx_id: 0x7A0
+		tx_id: 0x7A8
+	}]
+	return sys
+}
+
+fn doip_errs(sys sysmodel.System) []string {
+	return seg_errs(sys).filter(it.contains('doip') || it.contains('DoIP'))
+}
+
+fn test_the_doip_fixture_is_valid() {
+	assert doip_errs(doip_system()).len == 0, doip_errs(doip_system()).str()
+}
+
+fn test_doip_is_lowered_at_the_endpoint_address() {
+	sys := doip_system()
+	out := generate_someip_node(sys, sys.nodes[0], sys.buses[0], sysmodel.NodeView{}, {
+		'BenchLoad': 'app'
+	}, '') or { panic(err) }
+	assert out.contains('[doip]\naddress         = "192.168.0.51"\nlogical_address = 0x7A0\n'), out
+	assert !out.contains('functional_address'), out
+	// and only where it is declared
+	b := sys.nodes[1]
+	bout := generate_someip_node(sys, b, sys.buses[0], b.view, {
+		'LampCmd':   'bench'
+		'BenchLoad': 'bench'
+	}, '') or { panic(err) }
+	assert !bout.contains('[doip]'), bout
+}
+
+fn test_a_functional_address_is_carried_through() {
+	mut sys := doip_system()
+	sys.nodes[0].has_doip_functional = true
+	sys.nodes[0].doip_functional = 0xE400
+	sys.nodes[0].doip_functional_raw = 0xE400
+	assert doip_errs(sys).len == 0, doip_errs(sys).str()
+	assert doip_section(sys.nodes[0]).contains('functional_address = 0xE400')
+}
+
+fn test_doip_needs_a_logical_address_in_the_entity_ranges() {
+	mut sys := doip_system()
+	sys.nodes[0].has_doip_logical = false
+	assert doip_errs(sys).any(it.contains('doip needs `logical`')), doip_errs(sys).str()
+	for bad in [i64(0), 0x0E00, 0x0FFF, 0x8000, 0xE400] {
+		sys = doip_system()
+		sys.nodes[0].doip_logical_raw = bad
+		sys.nodes[0].doip_logical = u32(bad)
+		assert doip_errs(sys).any(it.contains('is not an entity address')), '0x${bad.hex()}: ${doip_errs(sys)}'
+	}
+	sys = doip_system()
+	sys.nodes[0].doip_logical_int = false
+	assert doip_errs(sys).any(it.contains('`logical` must be an integer')), doip_errs(sys).str()
+}
+
+fn test_two_entities_at_one_logical_address_are_refused() {
+	mut sys := doip_system()
+	sys.nodes[1].has_doip = true
+	sys.nodes[1].has_doip_logical = true
+	sys.nodes[1].doip_logical = 0x07A0
+	sys.nodes[1].doip_logical_raw = 0x07A0
+	assert seg_errs(sys).any(it.contains('doip logical address 0x7a0 shared by "tcu" and "bench"')), seg_errs(sys).str()
+}
+
+fn test_a_functional_address_outside_its_range_is_refused() {
+	mut sys := doip_system()
+	sys.nodes[0].has_doip_functional = true
+	sys.nodes[0].doip_functional_raw = 0x07DF
+	assert doip_errs(sys).any(it.contains('outside the functional range')), doip_errs(sys).str()
+}
+
+fn test_an_unknown_doip_key_is_refused() {
+	mut sys := doip_system()
+	sys.nodes[0].doip_unknown = ['address']
+	assert doip_errs(sys).any(it.contains('doip has unknown key "address"')), doip_errs(sys).str()
+}
+
+fn test_doip_needs_the_endpoint_it_answers_at() {
+	mut sys := doip_system()
+	sys.nodes[0].has_endpoint = false
+	sys.nodes[0].endpoint = ''
+	assert doip_errs(sys).any(it.contains('declares `doip` but no `endpoint`')), doip_errs(sys).str()
+}
+
+// UDP 13400 is DoIP's announcement socket on the node: SOME/IP cannot listen there too.
+fn test_a_someip_port_of_13400_beside_doip_is_refused() {
+	mut sys := doip_system()
+	sys.nodes[0].port = 13400
+	sys.nodes[0].port_raw = 13400
+	assert doip_errs(sys).any(it.contains('endpoint port 13400 is DoIP')), doip_errs(sys).str()
+}
+
+fn test_doip_needs_the_diagnostic_server_it_carries() {
+	mut sys := doip_system()
+	sys.nodes[0].diag = sysmodel.Diag{}
+	assert doip_errs(sys).any(it.contains('has no `diag` allocation')), doip_errs(sys).str()
+	sys = doip_system()
+	sys.nodes[0].view.isotp_conns = []
+	assert doip_errs(sys).any(it.contains('0 [[isotp]] connection(s)')), doip_errs(sys).str()
+	sys = doip_system()
+	sys.nodes[0].view.is_threadx = false
+	assert doip_errs(sys).any(it.contains('is not a threadx target')), doip_errs(sys).str()
+}
+
+// The node's [doip] is the SYSTEM's now: a hand-written one beside the lowered one is a second
+// network identity (and two tables of one name).
+fn test_an_authored_doip_table_is_refused() {
+	mut sys := doip_system()
+	sys.nodes[0].view.has_doip = true
+	assert seg_errs(sys).any(it.contains('authors bus wiring (a [doip])')), seg_errs(sys).str()
+}
+
+// A DoIP-only node — on CAN alone, no segment — may declare an endpoint for it; a SOME/IP port on
+// it would be dead configuration.
+fn test_a_doip_only_node_may_carry_an_endpoint_without_a_port() {
+	mut sys := doip_system()
+	sys.buses << sysmodel.Bus{
+		name:      'pt'
+		kind:      'can'
+		interface: 'can0'
+	}
+	mut n := sys.nodes[0]
+	n.name = 'ecu'
+	n.buses = ['pt']
+	n.has_port = false
+	n.port = 0
+	n.port_raw = 0
+	n.endpoint = '192.168.0.52'
+	sys.nodes << n
+	sys.nodes[0].has_doip = false
+	e := seg_errs(sys).filter(it.contains('"ecu"'))
+	assert !e.any(it.contains('endpoint')), e.str()
+	assert doip_section(n).len > 0
+	sys.nodes[sys.nodes.len - 1].has_port = true
+	sys.nodes[sys.nodes.len - 1].port_raw = 30490
+	assert seg_errs(sys).any(it.contains('"ecu"') && it.contains('has a `port` but it is on no someip bus')), seg_errs(sys).str()
+}
+
+// In a COMPOSED system nothing lowers a [[node]]'s `doip`, so it would look effective and do
+// nothing — refused there.
+fn test_doip_on_a_composed_node_is_refused() {
+	mut sys := doip_system()
+	e := sysmodel.validate_system(sys).filter(it.severity == .error).map(it.msg)
+	assert e.any(it.contains('`doip` on a [[node]] is lowered by sysgen')), e.str()
+}
+
+// One endpoint, one [someip]: a second segment would be lowered into nothing (the gateway path
+// kept only the last one it saw).
+fn test_a_node_on_two_segments_is_refused() {
+	mut sys := gateway_member_system()
+	sys.buses << sysmodel.Bus{
+		name:        'tel2'
+		kind:        'someip'
+		service:     0x0200
+		has_service: true
+		version:     1
+		has_version: true
+	}
+	sys.nodes[2].buses << 'tel2'
+	assert seg_errs(sys).any(it.contains('is a member of 2 someip buses')), seg_errs(sys).str()
+}
+
+// An RPC is answered to the DEFAULT peer — with several partners that is only the first event's,
+// which says nothing about who the client is.
+fn test_an_rpc_shell_on_a_member_with_two_partners_is_refused() {
+	mut sys := tel_system_of_three()
+	sys.nodes[1].view.shell_on = true
+	sys.nodes[1].view.shell_bus = 'eth0'
+	assert seg_errs(sys).any(it.contains('serves its [shell] over SOME/IP')), seg_errs(sys).str()
+	// ...one partner is fine (tcu's shell on the bench tool)
+	mut two := tel_system_of_three()
+	two.nodes[0].view.shell_on = true
+	two.nodes[0].view.shell_bus = 'eth0'
+	assert !seg_errs(two).any(it.contains('serves its [shell]')), seg_errs(two).str()
+}
+
+// A frame none of whose signals is declared has no producer: that is reported once, as what it
+// is, not also as a unicast violation between members that do not read it.
+fn test_an_undeclared_event_is_not_also_a_unicast_violation() {
+	mut sys := tel_system()
+	sys.frames[1].signals = ['Nope']
+	assert !seg_errs(sys).any(it.contains('is read by')), seg_errs(sys).str()
+}
+
+fn test_a_doip_address_doip_cannot_bring_up_is_refused() {
+	for bad in ['192.168.0.1', '192.168.0.255', '192.168.0', '192.168.0.300'] {
+		mut sys := doip_system()
+		sys.nodes[0].endpoint = bad
+		assert doip_errs(sys).any(it.contains('is not a host address DoIP can bring up')), '${bad}: ${doip_errs(sys)}'
+	}
+}
+
+// A DoIP-only node is on no segment, so the segment's own address check never sees it.
+fn test_a_doip_address_another_node_answers_at_is_refused() {
+	mut sys := doip_system()
+	sys.buses << sysmodel.Bus{
+		name:      'pt'
+		kind:      'can'
+		interface: 'can0'
+	}
+	mut n := sys.nodes[0]
+	n.name = 'ecu'
+	n.buses = ['pt']
+	n.has_port = false
+	n.doip_logical = 0x07B0
+	n.doip_logical_raw = 0x07B0
+	n.endpoint = '192.168.0.190' // the bench tool's
+	sys.nodes << n
+	e := seg_errs(sys).filter(it.contains('both answer at'))
+	assert e.len == 1 && e[0].contains('"ecu" and "bench"'), e.str()
+}
+
+// A composed node authoring a per-event peer: the composed checks see only [someip].peer.
+fn test_an_authored_frame_peer_in_a_composed_system_is_refused() {
+	mut sys := tel_system()
+	sys.nodes[0].view.frame_peer = true
+	e := sysmodel.validate_system(sys).filter(it.severity == .error).map(it.msg)
+	assert e.any(it.contains('names its own `peer`')), e.str()
+}
+
+// The shell's bus is resolved as loom2v resolves it: a [shell] naming no bus rides
+// [telemetry].bus, so a node whose telemetry is on eth0 serves RPC there all the same — and the
+// multi-partner refusal must see it (codex on #343).
+fn test_an_inherited_eth_shell_counts_as_rpc_on_the_segment() {
+	doc := toml.parse_text('[telemetry]\nenabled = true\nbus = "eth0"\nid = 0x8100\n\n[shell]\nmethod = 0x0001\n') or {
+		panic(err)
+	}
+	view := sysmodel.parse_node_view(doc)
+	assert view.shell_on
+	assert view.shell_bus == 'eth0', view.shell_bus
+	assert view.shell_bus == ecumodel.module_bus(doc, 'shell')
+	mut sys := tel_system_of_three()
+	sys.nodes[1].view.shell_on = view.shell_on
+	sys.nodes[1].view.shell_bus = view.shell_bus
+	assert seg_errs(sys).any(it.contains('serves its [shell] over SOME/IP')), seg_errs(sys).str()
+	// ...and an explicit bus still wins over the inherited one
+	own := toml.parse_text('[telemetry]\nbus = "eth0"\n\n[shell]\nbus = "can0"\n') or { panic(err) }
+	assert ecumodel.module_bus(own, 'shell') == 'can0'
+	assert sysmodel.parse_node_view(own).shell_bus == 'can0'
 }

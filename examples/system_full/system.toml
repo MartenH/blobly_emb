@@ -163,14 +163,42 @@ id      = 0x8004
 signals = ["EchoVal"]
 tx      = { mode = "event", min_delay_ms = 30 }
 
+# GwUptime: sysnode's own event on the telematics segment (ROADMAP rung 6). The gateway is a
+# member of tel beside tcu — its endpoint below is its one network identity, which its DoIP
+# server answers at too — and it publishes how long it has been up, once a second, to the
+# bench tool. The segment now has three members, so each EVENT is the point-to-point unit: one
+# producer, one receiver (the one whose FB reads it), and the lowering gives the tester a `peer`
+# per event it exchanges with somebody other than its default peer. No route touches tel —
+# translating between CAN and SOME/IP is still its own rung.
+[[signal]]
+name     = "GwUptime"
+fields   = { seconds = "u32" }
+producer = "sysnode"
+bus      = "tel"
+frame    = "GwStatus"
+
+[[frame]]
+name    = "GwStatus"
+bus     = "tel"
+id      = 0x8020
+signals = ["GwUptime"]
+tx      = { mode = "cyclic", cycle_ms = 1000 }
+
 # --- Node declarations ---
+# sysnode: the compute<->edge gateway AND a member of the tel segment (its GwStatus event), and
+# its diagnostic server is reachable over DoIP at the same address. `endpoint` is the node's one
+# network identity — SOME/IP listens on its port, DoIP on ISO 13400's — and `doip` names the
+# entity address a tester routes to (its CAN request id, for the bench's memory). Both are lowered
+# into the node's [bus.eth0]/[someip] and [doip]; nothing about its network is authored per node.
 [[node]]
-name  = "sysnode"
-ecu   = "nodes/sysnode/ecu.toml"
-buses = ["compute", "edge"]
-nm    = 0x11
-diag  = { req = 0x7A0, rsp = 0x7A8 }
-trace = 1
+name     = "sysnode"
+ecu      = "nodes/sysnode/ecu.toml"
+buses    = ["compute", "edge", "tel"]
+nm       = 0x11
+diag     = { req = 0x7A0, rsp = 0x7A8 }
+trace    = 1
+endpoint = { address = "192.168.0.50", port = 30490 }
+doip     = { logical = 0x07A0 }
 
 [[node]]
 name  = "domain"
@@ -183,7 +211,8 @@ trace = 2
 # The tester: ONE host node on BOTH buses, never built (blobly_net stands in for it). No nm: not
 # an NM node. On compute it produces HostLedLevel; on the tel segment it is tcu's peer — which is
 # what makes tcu's telemetry RECEIVED by somebody (REQ-TOPO-001) and gives tcu an endpoint to be
-# reciprocal with, instead of the model special-casing something that lives off-system. It is a
+# reciprocal with, instead of the model special-casing something that lives off-system. It also
+# receives sysnode's GwStatus, so it is the one member with two partners on tel. It is a
 # LEAF on both, not a gateway: nothing routes between CAN and SOME/IP (that needs a translating
 # bridge, and is refused until its own rung).
 [[node]]

@@ -31,6 +31,10 @@ mut:
 	tx_mode     string // cyclic | change | mixed (tx frames)
 	tx_cycle_us int
 	tx_min_us   int
+	// the event's own static endpoint ("address:port"), '' = [someip].peer. A member of a segment
+	// of more than two exchanges different events with different members: a tx event goes to,
+	// and an rx event is accepted only from, its own peer (docs/someip.md)
+	peer string
 }
 
 fn parse_someip(doc toml.Doc) SomeipCfg {
@@ -67,6 +71,7 @@ fn parse_eth_frames(doc toml.Doc, eth string, sig_of map[string]SigInfo) []EthFr
 			id:          int((fm['id'] or { toml.Any(0) }).int())
 			tx_mode:     'cyclic'
 			tx_cycle_us: 100_000
+			peer:        (fm['peer'] or { toml.Any('') }).string()
 		}
 		if txv := fm['tx'] {
 			txm := txv.as_map()
@@ -153,6 +158,14 @@ fn someip_manifest(m Model) []string {
 		e2e := if fr.e2e_on { '0x${fr.e2e_id.hex()}' } else { '-' }
 		rows << 'ethframe,${fr.name},0x${fr.id.hex()},${fr.len},${dir},${fr.tx_mode},${fr.tx_cycle_us},${e2e}'
 	}
+	if m.eth_frames.any(it.peer != '') {
+		rows << '# eth frame peers (an event exchanged with a member other than [someip].peer): frame,peer'
+		for fr in m.eth_frames {
+			if fr.peer != '' {
+				rows << 'ethpeer,${fr.name},${fr.peer}'
+			}
+		}
+	}
 	rows << '# eth layout: frame,signal,field,offset,width,type'
 	for fr in m.eth_frames {
 		for cell in fr.layout {
@@ -213,6 +226,7 @@ fn emit_eth_codec(m Model) []string {
 	oct, pport := peer_parts(m.someip.peer)
 	glue << 'pub const someip_peer_ip = [u8(${oct[0]}), ${oct[1]}, ${oct[2]}, ${oct[3]}]!'
 	glue << 'pub const someip_peer_port = u16(${pport})'
+	glue << eth_src_is_fn(m)
 	for fr in m.eth_frames {
 		fb := snake(fr.name)
 		dir := if fr.tx { 'tx' } else { 'rx' }
@@ -221,6 +235,12 @@ fn emit_eth_codec(m Model) []string {
 		glue << '// ${fr.name}: ${dir} event 0x${fr.id.hex()}, ${fr.len}-byte payload${e2e_note}'
 		glue << 'pub const ${fb}_event_id = u16(0x${fr.id.hex()})'
 		glue << 'pub const ${fb}_len = u8(${fr.len})'
+		if fr.peer != '' {
+			// this event's own static endpoint (docs/someip.md: a segment of more than two)
+			foct, fport := peer_parts(fr.peer)
+			glue << 'pub const ${fb}_peer_ip = [u8(${foct[0]}), ${foct[1]}, ${foct[2]}, ${foct[3]}]!'
+			glue << 'pub const ${fb}_peer_port = u16(${fport})'
+		}
 		if fr.e2e_on {
 			// the trailer sits after the signal layout: counter, then CRC
 			glue << 'pub const ${fb}_e2e_id = u16(0x${fr.e2e_id.hex()})'
@@ -390,10 +410,7 @@ fn emit_eth_bridge(m Model) []string {
 		glue << '\t\t\t}'
 		glue << '\t\t\t// static-peer source filter (REQ-NET-017): SD-less, the configured'
 		glue << '\t\t\t// endpoint is the only legal talker — anyone else is a counted drop'
-		glue << '\t\t\tif rx_ip[0] != someip_peer_ip[0] || rx_ip[1] != someip_peer_ip[1] || rx_ip[2] != someip_peer_ip[2] || rx_ip[3] != someip_peer_ip[3] || rx_port != someip_peer_port {'
-		glue << '\t\t\t\trx_drops++'
-		glue << '\t\t\t\tcontinue'
-		glue << '\t\t\t}'
+		glue << eth_src_filter(m, rx_frames, 'rx_drops++')
 		glue << '\t\t\trh, rh_ok := someip.decode(&rx_buf[0], rx_n)'
 		glue << '\t\t\tif !rh_ok || someip.check_event(rh, rx_n, someip_service, someip_version) != .none {'
 		glue << '\t\t\t\trx_drops++'
@@ -414,6 +431,7 @@ fn emit_eth_bridge(m Model) []string {
 			glue << '\t\t\t\t}'
 			// the trailer check gates the unpack, as the CAN bridge gates decode: ok and lost
 			// are usable (loss flagged, data valid); a wrong CRC/id is a counted drop
+			glue << eth_src_check(m, fr, 'rx_drops++')
 			glue << eth_rx_accept(m, fr, '\t\t\t\t', 'rx_drops++', '')
 		}
 		glue << '\t\t\t} else {'
@@ -467,7 +485,8 @@ fn emit_eth_bridge(m Model) []string {
 		glue << '\t\t\tfor i in 0 .. int(${fb}_len) {'
 		glue << '\t\t\t\tdgram[n_${fb} + i] = pay_${fb}[i]'
 		glue << '\t\t\t}'
-		glue << '\t\t\tif sock.send(someip_peer_ip, someip_peer_port, &dgram[0], n_${fb} + int(${fb}_len)) {'
+		pip, pport := eth_peer_consts(fr)
+		glue << '\t\t\tif sock.send(${pip}, ${pport}, &dgram[0], n_${fb} + int(${fb}_len)) {'
 		glue << '\t\t\t\ttx_${fb}_st.mark_sent(now, pre_${fb}, ${fb}_len)'
 		if fr.e2e_on {
 			glue << '\t\t\t} else {'
@@ -1575,6 +1594,11 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 		glue << eth_rx_e2e_init(fr, 'C.board_now_us()')
 	}
 	glue << '\tpeer_ip := someip_peer_ip // local copy: a stable address for the send seam'
+	for fr in tx_frames {
+		if fr.peer != '' {
+			glue << '\tpeer_ip_${snake(fr.name)} := ${snake(fr.name)}_peer_ip // this event\'s own peer'
+		}
+	}
 	if tx_frames.len > 0 {
 		glue << '\tmut dgram := [80]u8{} // someip.header_len + com.max_pdu'
 	}
@@ -1618,10 +1642,7 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 		glue << '\t\t\t\tcontinue'
 		glue << '\t\t\t}'
 		glue << '\t\t\t// static-peer source filter (REQ-NET-017)'
-		glue << '\t\t\tif rx_ip[0] != someip_peer_ip[0] || rx_ip[1] != someip_peer_ip[1] || rx_ip[2] != someip_peer_ip[2] || rx_ip[3] != someip_peer_ip[3] || rx_port != someip_peer_port {'
-		glue << '\t\t\t\tg_eth_rx_drops++'
-		glue << '\t\t\t\tcontinue'
-		glue << '\t\t\t}'
+		glue << eth_src_filter(m, rx_frames, 'g_eth_rx_drops++')
 		glue << '\t\t\trh, rh_ok := someip.decode(&rx_buf[0], rx_n)'
 		glue << '\t\t\tif !rh_ok {'
 		glue << '\t\t\t\tg_eth_rx_drops++'
@@ -1648,6 +1669,7 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 			glue << '\t\t\t\tfor i in 0 .. int(${fb}_len) {'
 			glue << '\t\t\t\t\tpay_rx_${fb}[i] = rx_buf[someip.header_len + i]'
 			glue << '\t\t\t\t}'
+			glue << eth_src_check(m, fr, 'g_eth_rx_drops++')
 			glue << eth_rx_accept(m, fr, '\t\t\t\t', 'g_eth_rx_drops++', 'rxok_${fb}')
 		}
 		if rx_frames.len > 0 {
@@ -1696,7 +1718,8 @@ fn emit_eth_thread_target(m Model, doc toml.Doc) []string {
 		glue << '\t\t\tfor i in 0 .. int(${fb}_len) {'
 		glue << '\t\t\t\tdgram[n_${fb} + i] = pay_${fb}[i]'
 		glue << '\t\t\t}'
-		glue << '\t\t\tif C.blob_eth_send(0, &peer_ip[0], someip_peer_port, &dgram[0], n_${fb} + int(${fb}_len)) == 0 {'
+		tip, tport := if fr.peer != '' { 'peer_ip_${fb}', '${fb}_peer_port' } else { 'peer_ip', 'someip_peer_port' }
+		glue << '\t\t\tif C.blob_eth_send(0, &${tip}[0], ${tport}, &dgram[0], n_${fb} + int(${fb}_len)) == 0 {'
 		glue << '\t\t\t\ttx_${fb}_st.mark_sent(now, pre_${fb}, ${fb}_len)'
 		if fr.e2e_on {
 			glue << '\t\t\t} else {'
@@ -1732,6 +1755,13 @@ fn emit_eth_rpc_branch(m Model) []string {
 	}
 	am := if m.shell.allow_mutate { 'true' } else { 'false' }
 	glue << '\t\t\tif rh.mtype == someip.mt_request {'
+	if m.eth_frames.any(it.peer != '') {
+		// the pre-filter admits every event's peer; a request is the DEFAULT peer's alone
+		glue << '\t\t\t\tif !eth_src_is(rx_ip, rx_port, someip_peer_ip, someip_peer_port) {'
+		glue << '\t\t\t\t\tg_eth_rx_drops++'
+		glue << '\t\t\t\t\tcontinue'
+		glue << '\t\t\t\t}'
+	}
 	glue << '\t\t\t\tif someip.check_request(rh, rx_n, someip_service, someip_version) != .none {'
 	glue << '\t\t\t\t\tg_eth_rx_drops++'
 	glue << '\t\t\t\t\tcontinue'
@@ -2193,4 +2223,74 @@ fn eth_rx_expiry(m Model, fr EthFrame, ind string) []string {
 	out << '${ind}\tgot_${fb} = true'
 	out << '${ind}}'
 	return out
+}
+
+// eth_peer_consts: the generated consts naming where event `fr` goes / comes from — its own peer
+// when it has one, else [someip].peer.
+fn eth_peer_consts(fr EthFrame) (string, string) {
+	if fr.peer != '' {
+		return '${snake(fr.name)}_peer_ip', '${snake(fr.name)}_peer_port'
+	}
+	return 'someip_peer_ip', 'someip_peer_port'
+}
+
+// eth_src_filter: the bridge's static-peer source filter (REQ-NET-017), ahead of any decode. With
+// one peer it is the one compare it has always been (and generates byte-identically); when events
+// carry their own peers it admits each of those and the default, and eth_src_check then holds
+// each event to its own — a known talker cannot inject another member's event.
+fn eth_src_filter(m Model, rx_frames []EthFrame, drop string) []string {
+	if !m.eth_frames.any(it.peer != '') {
+		return [
+			'\t\t\tif rx_ip[0] != someip_peer_ip[0] || rx_ip[1] != someip_peer_ip[1] || rx_ip[2] != someip_peer_ip[2] || rx_ip[3] != someip_peer_ip[3] || rx_port != someip_peer_port {',
+			'\t\t\t\t${drop}',
+			'\t\t\t\tcontinue',
+			'\t\t\t}',
+		]
+	}
+	mut terms := ['eth_src_is(rx_ip, rx_port, someip_peer_ip, someip_peer_port)']
+	mut seen := map[string]bool{}
+	for fr in rx_frames {
+		if fr.peer == '' || fr.peer in seen {
+			continue
+		}
+		seen[fr.peer] = true
+		ip, port := eth_peer_consts(fr)
+		terms << 'eth_src_is(rx_ip, rx_port, ${ip}, ${port})'
+	}
+	return [
+		'\t\t\tif !(${terms.join(' || ')}) {',
+		'\t\t\t\t${drop}',
+		'\t\t\t\tcontinue',
+		'\t\t\t}',
+	]
+}
+
+// eth_src_check: inside an rx event's branch, the event's OWN source — emitted only when events
+// carry their own peers (otherwise the pre-filter already admitted exactly one talker).
+fn eth_src_check(m Model, fr EthFrame, drop string) []string {
+	if !m.eth_frames.any(it.peer != '') {
+		return []string{}
+	}
+	ip, port := eth_peer_consts(fr)
+	return [
+		'\t\t\t\tif !eth_src_is(rx_ip, rx_port, ${ip}, ${port}) {',
+		'\t\t\t\t\t${drop} // a known talker, but not this event\'s producer',
+		'\t\t\t\t\tcontinue',
+		'\t\t\t\t}',
+	]
+}
+
+// eth_src_is_fn: the compare eth_src_filter / eth_src_check call, emitted beside the codec when
+// events carry their own peers.
+fn eth_src_is_fn(m Model) []string {
+	if !m.eth_frames.any(it.peer != '') {
+		return []string{}
+	}
+	return [
+		'',
+		'// is a datagram from ip:port? (the static-peer filter, per event — docs/someip.md)',
+		'fn eth_src_is(ip [4]u8, port u16, want [4]u8, want_port u16) bool {',
+		'\treturn ip[0] == want[0] && ip[1] == want[1] && ip[2] == want[2] && ip[3] == want[3] && port == want_port',
+		'}',
+	]
 }

@@ -250,6 +250,7 @@ fn specs() map[string]map[string]Key {
 			'bus':     req(.str)
 			'id':      k(.int) // eth frames: the SOME/IP event id (CAN ids come from the DBC)
 			'signals': k(.str_arr) // eth frames: membership + the derived layout (docs/someip.md)
+			'peer':    k(.str) // eth frames: this event's own address:port, when not [someip].peer
 			'tx':      sub(.tbl, false, 'tx')
 			'rx':      sub(.tbl, false, 'rx')
 			'e2e':     sub(.tbl, false, 'e2e')

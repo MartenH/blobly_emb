@@ -4,7 +4,7 @@
 
 It runs on **four boards** across **two CAN buses + Ethernet**:
 
-- **`sysnode`** (STM32H735G-DK) — the **gateway**, routing signals `compute` ↔ `edge`.
+- **`sysnode`** (STM32H735G-DK) — the **gateway**, routing signals `compute` ↔ `edge`; also a member of the `tel` SOME/IP segment (its `GwStatus` event) and its diagnostic server over **DoIP**, at `192.168.0.50` — declared in `system.toml`, not in the node.
 - **`domain`** (NUCLEO-H755ZI-Q) — **dual-core** powertrain: a CM7 control loop + a **CM4 satellite** (`domain_m4`), with **NvM** persistence, cross-core **bulk** transfer, cross-core **CpuLoad**, a **two-core trace**, and a **CAN shell**.
 - **`zone_a`** (NUCLEO-H723ZG) — the edge zone ECU: a node-local FB pipeline **and physical GPIO**.
 - **`tcu`** (NUCLEO-H723ZG) — the telematics/connectivity node: **SOME/IP-over-Ethernet** (silicon-validated).
@@ -27,6 +27,8 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 | Physical **PWM** (cross-node `LedLevel` → LD3 intensity, 0.5 Hz breathing) | `domain` → `zone_a` | ✅ on-silicon (TIM12 at 1 kHz, CCR1 sweeping 0..49999 over SWD, LD3 fades) |
 | **Tester as a node**: `tester` (declaration only) produces `HostLedLevel` → `domain`'s LD3 as PWM; blobly_net restbus-simulates it | `tester` → `domain` | ✅ on-silicon via the CANsub (`simulation: tester`, H755 TIM12 CCR1 follows the sine) |
 | **SOME/IP-over-Ethernet** (cyclic events + E2E + RPC rx) | `tcu` | ✅ silicon-validated (ping, tx/rx, E2E) |
+| **DoIP** (the UDS server over TCP/UDP 13400, one session with CAN) | `sysnode` | ✅ on-silicon (#338, hand-authored `[doip]`); declared in `system.toml` since rung 6 — ⏳ bench re-run pending |
+| A **gateway on the SOME/IP segment** (`GwStatus` to the bench, beside its CAN routes; one NetX for SOME/IP + DoIP) | `sysnode` | ⏳ builds; **bench-pending** |
 
 ---
 
@@ -34,12 +36,12 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 
 | Node | Hardware | Role | Bus | In `system.toml`? |
 |---|---|---|---|---|
-| `sysnode` | STM32H735G-DK | Gateway: routes 4 signals `compute` ↔ `edge` | `compute` (can0/FDCAN1), `edge` (can1/FDCAN2) | ✅ |
+| `sysnode` | STM32H735G-DK | Gateway: routes 4 signals `compute` ↔ `edge`; publishes `GwStatus` on `tel`; DoIP entity `0x07A0` at `192.168.0.50` | `compute` (can0/FDCAN1), `edge` (can1/FDCAN2), `tel` (Ethernet) | ✅ |
 | `domain` | NUCLEO-H755ZI-Q (CM7) | Powertrain + persistence + AMP owner; NvM, bulk, trace, shell | `compute` (can0) | ✅ |
 | `domain_m4` | …the H755's **CM4** | `domain`'s co-processor **satellite** (bulk producer + CpuLoad); a `[[partition]] image=`, flashed to flash **bank 2** (`0x08100000`) | — (built by `domain`'s gen) | — (a satellite, not a node) |
 | `zone_a` | NUCLEO-H723ZG | Front zone: sensor→limiter FB pipeline + **physical GPIO + PWM** | `edge` (can1) | ✅ |
 | `tcu` | NUCLEO-H723ZG | **Telematics/connectivity — SOME/IP-over-Ethernet** at `192.168.0.51` | `tel` (Ethernet) | ✅ |
-| `tester` | — (nothing built) | **Declaration-only**: the bench tool as ONE node on BOTH buses — produces `HostLedLevel` on CAN, and is tcu's SOME/IP peer (`LampCmd`) at `192.168.0.190`; blobly_net restbus-simulates it | `compute` (can0), `tel` (Ethernet) | ✅ |
+| `tester` | — (nothing built) | **Declaration-only**: the bench tool as ONE node on BOTH buses — produces `HostLedLevel` on CAN, and is tcu's SOME/IP peer (`LampCmd`) at `192.168.0.190` — and the receiver of sysnode's `GwStatus`; blobly_net restbus-simulates it | `compute` (can0), `tel` (Ethernet) | ✅ |
 
 ---
 
@@ -51,7 +53,7 @@ It runs on **four boards** across **two CAN buses + Ethernet**:
 
 Two things made that possible, and both are worth knowing:
 
-- **A someip segment has no shared wire**, so the endpoint is the NODE's identity, not the bus's: each `[[node]]` carries `endpoint = { address, port }`, and each member's `peer` is *derived* as the other member's endpoint — which is what makes reciprocity checkable rather than asserted.
+- **A someip segment has no shared wire**, so the endpoint is the NODE's identity, not the bus's: each `[[node]]` carries `endpoint = { address, port }`, and each member's `peer` is *derived* from the other end of the events it exchanges — which is what makes reciprocity checkable rather than asserted. With sysnode on the segment it has three members, so each EVENT is the point-to-point unit: `tester` hears tcu and sysnode, and its generated config names `GwStatus`'s producer as that event's own `peer`.
 - **The far end is declared as a node** — and it is the *same* node as the CAN-side tester. `tester` sits on `compute` **and** `tel`: it produces `HostLedLevel` on one and is tcu's peer at `192.168.0.190` on the other. That is what makes tcu's telemetry *received* by somebody under REQ-TOPO-001, instead of the model needing an "off-system" concept. One bench tool is one node: it was briefly two (`tel_bench` alongside `tester`) only because the lowering could not yet carry a CAN bus and a segment in one file.
 
   It is a **leaf on both, not a gateway.** Nothing routes between CAN and SOME/IP — that needs a translating bridge and is refused until its own rung. The distinction matters to the generator: a multi-bus node used to mean "router", which emits every bus in the CAN/DBC shape and no `[someip]` at all. `System.is_someip_leaf()` now owns the shape, because four places have to agree on it (two dissolution checks, the lowering, and the loom2v precheck — which silently skipped `tester` as a "gateway" the first time round, dropping the gate it used to have).
@@ -60,7 +62,7 @@ One model rule bends for the carrier, deliberately: a cross-node signal on a CAN
 
 The lowering is behaviour-preserving by construction: `tcu.bin` built from the system-lowered config is **byte-identical** to the image built when the wiring was authored in its own `ecu.toml`.
 
-What is still a follow-up is the *deeper* half of #245: a signal crossing **eth↔CAN** needs a SOME/IP⇄CAN gateway path on `sysnode`. Nothing crosses today — the telematics segment is self-contained — so that remains its own rung.
+`sysnode` is a member of the segment too (ROADMAP rung 6): the gateway publishes its own `GwStatus` (uptime, from its one FB) there beside its CAN routes, and its `endpoint` is also where its DoIP server answers (`doip = { logical = 0x07A0 }` on its `[[node]]`) — so `nodes/sysnode/ecu.toml` authors none of its network. What is still a follow-up is the *deeper* half of #245: a signal crossing **eth↔CAN** needs a SOME/IP⇄CAN translating path on `sysnode`. Nothing crosses today — a route touching `tel` is refused — so that remains its own rung.
 
 ### The tester is a node
 
