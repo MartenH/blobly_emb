@@ -126,6 +126,9 @@ fn test_the_comm_thread_owns_the_fault_memory_and_nm_moves_its_cycle() {
 		'g_fmem.n = 1',
 		'g_fmem.init()',
 		'g_diag.server.faults = g_fmem.uds_ops()',
+		// NM may start awake: the cycle begins before the loop's first consume (codex on #350 r3)
+		'g_fcycle_on = g_nm.awake()',
+		'g_fmem.cycle_start()',
 		'for {',
 		'g_diag.housekeep(',
 		'C.iocb_get(0, &g_frep_load_slow)',

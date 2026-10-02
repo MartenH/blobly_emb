@@ -2796,6 +2796,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << nm_shell_register(m)
 				glue << stat_shell_register(m)
 				glue << nm_module_init(m)
+				glue << fault_target_cycle_boot(m)
 				glue << xcore_comm_locals(m)
 				glue << nvm_comm_locals(m, ioc_idx)
 				glue << xcore_trace_locals(m)
@@ -5198,6 +5199,21 @@ fn fault_target_cycle(m Model) []string {
 		'\t\t}',
 	]
 	return g
+}
+
+// fault_target_cycle_boot: right after NM's init, before the loop's first pass consumes a report —
+// NM may start awake (request = true), and then the operation cycle has already begun: a result the
+// FBs report while the first wait blocks must land inside it, not before it.
+fn fault_target_cycle_boot(m Model) []string {
+	if !fault_target_on(m) || !m.nm.on || m.fault_cycle != '' {
+		return []string{}
+	}
+	return [
+		'\tg_fcycle_on = g_nm.awake() // the operation cycle follows NM from boot (D3)',
+		'\tif g_fcycle_on {',
+		'\t\tg_fmem.cycle_start()',
+		'\t}',
+	]
 }
 
 // fault_target_boot: each fault cell's byte-IOC arena, sized to its struct, before any thread runs.
