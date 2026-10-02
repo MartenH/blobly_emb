@@ -679,3 +679,23 @@ fn test_the_cross_transport_security_model_holds_over_random_interleavings() {
 		assert c.server.session == m.session, '${ctx}: session ${c.server.session} model ${m}'
 	}
 }
+
+// a reset asked over one transport, then cancelled (its answer lost), gives the other its unlock back
+fn test_a_cancelled_reset_restores_the_hidden_unlock() {
+	mut c := secured_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	mut t := new_tester()
+	mut now := u64(0)
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	seed := exchange(mut c, mut t, mut &now, [u8(0x27), 0x01])[2..]
+	mut key := [u8(0x27), 0x02]
+	for b in seed {
+		key << b ^ 0xFF
+	}
+	assert exchange(mut c, mut t, mut &now, key) == [u8(0x67), 0x02]
+	assert remote(mut c, [u8(0x11), 0x01], false) == [u8(0x51), 0x01]
+	c.remote_dropped() // the DoIP answer never left: the reset is cancelled
+	assert c.reset_due() == 0
+	assert exchange(mut c, mut t, mut &now, [u8(0x2E), 0x01, 0x02, 0x11]) == [u8(0x6E), 0x01, 0x02], 'the bus lost its unlock to a cancelled reset'
+}

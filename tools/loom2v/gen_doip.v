@@ -204,8 +204,8 @@ fn doip_target_globals(m Model) []string {
 }
 
 // doip_target_create: in tx_application_define, before any thread runs — the identity the
-// identification thread answers with, the mailbox, NetX and the two doip threads (the IP thread at
-// the comm thread's priority, the doip threads just below the comm thread that serves them).
+// identification thread answers with, the mailbox, NetX and the two doip threads (the IP thread just
+// below the comm thread, the doip threads below it).
 fn doip_target_create(m Model, comm_prio int) []string {
 	if !m.doip.on {
 		return []string{}
@@ -224,7 +224,9 @@ fn doip_target_create(m Model, comm_prio int) []string {
 	}
 	g << '\tg_doip.serve.answer = doip_answer'
 	g << '\tC.doip_mb_init(&g_doip_req[0], &g_doip_resp[0])'
-	g << "\tC.doip_net_create(c'${d.address}', u32(${comm_prio}), u32(${comm_prio + 1})) // -1: DoIP stays down, the node runs on"
+	// strictly below the CAN owner: a LAN flood keeps NetX's deferred receive work busy, and at the
+	// comm thread's own priority (no time slicing) it would never yield to the bus
+	g << "\tC.doip_net_create(c'${d.address}', u32(${comm_prio + 1}), u32(${comm_prio + 2})) // -1: DoIP stays down, the node runs on"
 	return g
 }
 
@@ -246,9 +248,9 @@ fn doip_manifest_rows(m Model, tid int, comm_prio int) []string {
 		return []string{}
 	}
 	return [
-		'thread,${tid},nx_ip,0,${comm_prio}',
-		'thread,${tid + 1},doip,0,${comm_prio + 1}',
-		'thread,${tid + 2},doip_svc,0,${comm_prio + 1}',
+		'thread,${tid},nx_ip,0,${comm_prio + 1}',
+		'thread,${tid + 1},doip,0,${comm_prio + 2}',
+		'thread,${tid + 2},doip_svc,0,${comm_prio + 2}',
 	]
 }
 

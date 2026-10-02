@@ -50,6 +50,9 @@ mut:
 	// Kept with the session ENTRY it began in (server.session_epoch) — any session entry since,
 	// re-entering the same session included, by either transport, S3 or a reset, cancels it, as the
 	// server cancels its own
+	// the other transport's unlock a reset request hid: back if the reset is cancelled, gone with it
+	// if it happens
+	held_back u8
 	sa_level [2]u8
 	sa_seed  [2][uds.seed_len]u8
 	sa_epoch [2]u32
@@ -133,7 +136,7 @@ fn (mut c Connection) functional(f &can.Frame) Rx {
 	c.leave(before, held, false)
 	c.reset_remote = false // a reset asked here is the bus's (none was pending, or this was not served)
 	if rlen > 0 && !c.link.send(&c.resp[0], rlen) {
-		c.server.reset_req = 0 // never reset unanswered
+		c.cancel_reset() // never reset unanswered
 	}
 	// a SUPPRESSED reset (0x11 with bit 7) leaves the link idle: apply it before the next frame of
 	// the drain is served under the pre-reset state
@@ -158,7 +161,7 @@ pub fn (mut c Connection) serve() {
 		c.leave(before, held, false)
 		c.reset_remote = false
 		if rlen > 0 && !c.link.send(&c.resp[0], rlen) {
-			c.server.reset_req = 0 // the answer could not be queued: never reset unanswered
+			c.cancel_reset() // the answer could not be queued: never reset unanswered
 		}
 	}
 }
@@ -200,7 +203,7 @@ pub fn (mut c Connection) remote_sent() {
 // that changed the session since keeps it; requests that changed nothing decide nothing.
 pub fn (mut c Connection) remote_dropped() {
 	if c.remote_unsent {
-		c.server.reset_req = 0
+		c.cancel_reset()
 		c.remote_unsent = false
 		c.reset_remote = false
 	}
@@ -243,8 +246,12 @@ fn (mut c Connection) leave(before u32, held u8, remote bool) {
 	c.sa_epoch[i] = c.server.session_epoch
 	if c.server.unlocked != 0 {
 		c.unlock_remote = remote
-	} else if held != 0 && c.server.session_epoch == before && c.server.reset_req == 0 {
-		c.server.unlocked = held
+	} else if held != 0 && c.server.session_epoch == before {
+		if c.server.reset_req == 0 {
+			c.server.unlocked = held
+		} else {
+			c.held_back = held
+		}
 	}
 	if c.server.session_epoch != before {
 		c.remote_owns = remote
@@ -273,7 +280,7 @@ pub fn (mut c Connection) produce(now u64, mut f can.Frame) bool {
 pub fn (mut c Connection) abort_tx() {
 	c.link.abort_tx()
 	if !c.reset_remote {
-		c.server.reset_req = 0
+		c.cancel_reset()
 	}
 }
 
@@ -312,7 +319,18 @@ pub fn (c &Connection) reset_due() u8 {
 fn (mut c Connection) apply_answered_reset() {
 	if !c.owner_resets && c.reset_due() != 0 {
 		c.server.reset_state()
+		c.held_back = 0
 	}
+}
+
+// cancel_reset: a reset whose answer was lost does not happen — and what its request hid, the
+// other transport's unlock, comes back
+fn (mut c Connection) cancel_reset() {
+	c.server.reset_req = 0
+	if c.held_back != 0 && c.server.unlocked == 0 {
+		c.server.unlocked = c.held_back
+	}
+	c.held_back = 0
 }
 
 fn (mut c Connection) refresh_dids() {
