@@ -103,7 +103,7 @@ does not yet read as "no trace" on the blobly_net side.
 
 **Also gated now:** the STM32H7 cross builds — **every image, ThreadX and NetX Duo included** —
 in their own CI job: apt's `gcc-arm-none-eabi` plus `make deps` (all three sources, about ten
-seconds of cloning), then 20 images in a few minutes. Two passes, generate-then-build: a
+seconds of cloning), then 18 images in a few minutes (the loop visits 20 directories: `system_full/` and `system_io/` build their nodes). Two passes, generate-then-build: a
 satellite image like `h755_m4_app` has no `gen` target because its OWNER's generation writes the
 `xcore_gen.h` it includes, so a from-clean build in directory order reaches it first and fails. Each one ends in
 **`scripts/lint_vinit.sh`**, which the example Makefiles invoke and which can only run on the
@@ -123,7 +123,7 @@ module builder`), failing both jobs in the *install* step with nothing to do wit
 Note `vlang/setup-v` does not solve this on its own: given a tag or SHA it downloads the SOURCE and
 self-hosts it, and that build is what breaks (0.5.2 from source dies on a duplicate `C.open`; master
 `8631b280` on an empty `builder error:`). The release asset is already built. Bump `.v-version`
-deliberately, and re-run the full local gate on the new compiler — the host suite AND the 20 cross
+deliberately, and re-run the full local gate on the new compiler — the host suite AND the 18 cross
 images, since the bare-metal path is the one that historically needed a specific V (#27564).
 Your local V does **not** have to match the pin (working against master is often deliberate), but it
 usually explains a local/CI disagreement — `make v-pin` prints both and says whether they differ.
