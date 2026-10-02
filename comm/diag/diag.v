@@ -33,9 +33,9 @@ pub mut:
 mut:
 	req  [isotp.max_payload]u8
 	resp [isotp.max_payload]u8
-	// a request served over another transport (serve_remote): the session or unlock in force was
-	// set by it (a request that changed neither does not move this), and a reset it asked for waits
-	// until that transport has sent the answer
+	// a request served over another transport (serve_remote): the session in force was set by it
+	// (a request that did not change it does not move this), and a reset it asked for waits until
+	// that transport has sent the answer
 	remote_owns   bool
 	remote_unsent bool
 	// the pending reset (server.reset_req) was asked over the other transport: a bus transfer that
@@ -45,6 +45,13 @@ mut:
 	// belongs to the transport that ran 0x27: a request over the other one sees the server locked
 	// (REQ-NET-012 — a network tester never inherits a bus tester's unlock, nor the reverse)
 	unlock_remote bool
+	// the SecurityAccess exchange in progress (a seed answered, its key not yet sent) per transport,
+	// [0] the bus's and [1] the other's: a seed asked over one never replaces the other's challenge.
+	// Kept with the session it began in — a session change since (either transport's, or S3)
+	// cancels it, as the server cancels its own
+	sa_level   [2]u8
+	sa_seed    [2][uds.seed_len]u8
+	sa_session [2]u8
 }
 
 // Rx is what on_frame did with a received frame, for the owner's drain.
@@ -187,9 +194,9 @@ pub fn (mut c Connection) remote_sent() {
 
 // remote_dropped: the other transport's connection is gone. A reset whose answer it never sent is
 // abandoned; one whose answer it did send still happens (a tester disconnects right after it).
-// Otherwise, if the session or unlock in force was set over it, the server returns to power-on —
-// they must not outlive the tester that opened them. A bus tester that changed them since keeps
-// its own; requests that changed nothing (a read, a TesterPresent) decide nothing.
+// Otherwise, if the session in force was set over it, the server returns to power-on, and an
+// unlock it earned ends either way — neither outlives the tester that opened it. A bus tester
+// that changed the session since keeps it; requests that changed nothing decide nothing.
 pub fn (mut c Connection) remote_dropped() {
 	if c.remote_unsent {
 		c.server.reset_req = 0
@@ -200,35 +207,48 @@ pub fn (mut c Connection) remote_dropped() {
 		c.server.reset_state()
 	}
 	c.remote_owns = false
+	// whoever owns the session, an unlock the dropped tester earned ends with it, and so does its
+	// half-done exchange — the next connection authenticates for itself
+	if c.unlock_remote && c.server.reset_req == 0 {
+		c.server.unlocked = 0
+	}
+	c.unlock_remote = false
+	c.sa_level[1] = 0
 }
 
-// state: what a disconnect may have to undo — the session and the unlock
-fn (c &Connection) state() u16 {
-	return (u16(c.server.session) << 8) | u16(c.server.unlocked)
-}
-
-// enter: before a request over one transport — the state it starts from, and the unlock the OTHER
-// transport holds, hidden for the request (0 = none hidden)
-fn (mut c Connection) enter(remote bool) (u16, u8) {
-	before := c.state()
+// enter: before a request over one transport — the session it starts in, and the unlock the OTHER
+// transport holds, hidden for the request (0 = none hidden); its own exchange in progress loaded
+fn (mut c Connection) enter(remote bool) (u8, u8) {
+	before := c.server.session
 	mut held := u8(0)
 	if c.server.unlocked != 0 && c.unlock_remote != remote {
 		held = c.server.unlocked
 		c.server.unlocked = 0
 	}
+	// this transport's own exchange in progress, if its session still stands
+	i := if remote { 1 } else { 0 }
+	c.server.sa_level = if c.sa_session[i] == c.server.session { c.sa_level[i] } else { u8(0) }
+	c.server.sa_seed = c.sa_seed[i]
 	return before, held
 }
 
 // leave: after it. An unlock the request earned is this transport's; a hidden one comes back
 // unless the request ended it for everyone (a session change relocks, as does a reset). A request
-// that changed the session or the unlock makes its transport their owner (remote_dropped).
-fn (mut c Connection) leave(before u16, held u8, remote bool) {
+// that changed the session makes its transport the session's owner (remote_dropped).
+fn (mut c Connection) leave(before u8, held u8, remote bool) {
+	i := if remote { 1 } else { 0 }
+	c.sa_level[i] = c.server.sa_level
+	c.sa_seed[i] = c.server.sa_seed
+	c.sa_session[i] = c.server.session
+	if c.server.session != before || c.server.reset_req != 0 {
+		c.sa_level[1 - i] = 0 // a session change or a reset cancels the other's exchange too
+	}
 	if c.server.unlocked != 0 {
 		c.unlock_remote = remote
-	} else if held != 0 && c.server.session == u8(before >> 8) && c.server.reset_req == 0 {
+	} else if held != 0 && c.server.session == before && c.server.reset_req == 0 {
 		c.server.unlocked = held
 	}
-	if c.state() != before {
+	if c.server.session != before {
 		c.remote_owns = remote
 	}
 }

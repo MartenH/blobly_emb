@@ -505,3 +505,61 @@ fn test_an_unlock_belongs_to_the_transport_that_earned_it() {
 	assert over_doip([u8(0x10), 0x01])[0] == 0x50
 	assert c.server.unlocked == 0
 }
+
+fn secured_conn() Connection {
+	mut c := new_conn()
+	c.server.security = uds.SecurityOps{
+		seed:   seed_fixed
+		key_ok: uds.reference_key_ok
+	}
+	c.server.security_levels = 0x01
+	c.server.dids[2] = uds.Did{
+		id:             0x0102
+		writable:       true
+		len:            1
+		write_sessions: uds.in_extended
+		write_security: 1
+	}
+	c.server.ndid = 3
+	return c
+}
+
+// a DoIP unlock of the level the bus already holds is still DoIP's, and ends with its connection
+fn test_a_dropped_tester_takes_its_unlock_even_at_the_bus_level() {
+	mut c := secured_conn()
+	mut t := new_tester()
+	mut now := u64(0)
+	mut cc := &c
+	over_doip := fn [mut cc] (req []u8) []u8 {
+		return remote(mut cc, req, false)
+	}
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	seed := exchange(mut c, mut t, mut &now, [u8(0x27), 0x01])[2..]
+	mut key := [u8(0x27), 0x02]
+	for b in seed {
+		key << b ^ 0xFF
+	}
+	assert exchange(mut c, mut t, mut &now, key) == [u8(0x67), 0x02]
+	assert unlock(over_doip) == [u8(0x67), 0x02] // same level, now DoIP's
+	c.remote_dropped()
+	assert over_doip([u8(0x2E), 0x01, 0x02, 0x11]) == [u8(0x7F), 0x2E, 0x33], 'the next connection inherited the unlock'
+}
+
+// a seed asked over one transport does not replace the challenge the other is answering
+fn test_seed_key_exchanges_are_per_transport() {
+	mut c := secured_conn()
+	mut t := new_tester()
+	mut now := u64(0)
+	mut cc := &c
+	over_doip := fn [mut cc] (req []u8) []u8 {
+		return remote(mut cc, req, false)
+	}
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	can_seed := exchange(mut c, mut t, mut &now, [u8(0x27), 0x01])[2..]
+	assert over_doip([u8(0x27), 0x01])[0] == 0x67 // DoIP asks for its own seed in between
+	mut key := [u8(0x27), 0x02]
+	for b in can_seed {
+		key << b ^ 0xFF
+	}
+	assert exchange(mut c, mut t, mut &now, key) == [u8(0x67), 0x02], 'the CAN challenge was replaced'
+}
