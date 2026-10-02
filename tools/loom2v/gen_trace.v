@@ -309,6 +309,9 @@ fn trace_produce_drain(m Model) []string {
 	]
 }
 
+// trace_max_threads: boards/common/trace_hooks.c's MAX_THREADS — the ids the recorder can bind
+const trace_max_threads = 8
+
 // trace_manifest_timer_row: the hidden ThreadX System Timer Thread takes the id right after the
 // AUTO_START app threads (trace_hooks.c assigns ids by first sight) — without this row blobly_net
 // sees an unlabelled THREAD lane.

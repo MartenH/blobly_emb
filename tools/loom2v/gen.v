@@ -2064,6 +2064,12 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	timer_rows := trace_manifest_timer_row(m, tid)
 	man << timer_rows
 	tid += timer_rows.len
+	// boards/common/trace_hooks.c binds MAX_THREADS (8) ids; past that a thread records as id 0
+	// while the manifest names a higher one — refuse rather than mislabel the trace
+	if timer_rows.len > 0 && tid - 1 > trace_max_threads {
+		panic('loom2v: [trace] on this ThreadX image needs ${tid - 1} thread ids, but the recorder ' +
+			'(boards/common/trace_hooks.c MAX_THREADS) binds ${trace_max_threads} — fewer threads, or no [trace]')
+	}
 	// EXTERNAL partitions (satellite cores): thread ids are PER-CORE — the satellite's own
 	// recorder assigns first-sight ids from 1, so its records carry 1..N regardless of what
 	// this core numbers. Consumers key threads by (core, id); rows here mirror the satellite's

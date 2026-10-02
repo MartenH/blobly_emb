@@ -53,6 +53,24 @@ fn generate(name string, extra string) (int, string, string) {
 	return r.exit_code, r.output, os.read_file(glue) or { '' }
 }
 
+// generate_ecu runs loom2v on `ecu` alone (h735_threadx's DBC beside it)
+fn generate_ecu(name string, ecu_text string) (int, string, string, string) {
+	tmp := os.join_path(os.temp_dir(), 'doip_target_${name}_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	os.mkdir_all(tmp) or { panic(err) }
+	ecu := os.join_path(tmp, 'ecu.toml')
+	os.write_file(ecu, ecu_text) or { panic(err) }
+	dbc := os.join_path(tmp, 'bus.dbc')
+	os.cp(os.join_path(@VMODROOT, 'examples', 'h735_threadx', 'bus.dbc'), dbc) or { panic(err) }
+	glue := os.join_path(tmp, 'gen.v')
+	r := os.execute('${doip_loom2v()} ${ecu} ${dbc} ${os.join_path(tmp, 'sig.v')} ' +
+		'${os.join_path(tmp, 'ports.v')} ${glue} ${os.join_path(tmp, 'manifest.csv')}')
+	return r.exit_code, r.output, os.read_file(glue) or { '' }, os.read_file(os.join_path(tmp,
+		'loom_build.mk')) or { '' }
+}
+
 fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 	code, out, glue := generate('doip_ok', doip_conn)
 	assert code == 0, out
@@ -124,4 +142,15 @@ fn test_ip4_ok_is_the_drivers_rule() {
 	for bad in ['192.168.0', '192.168..50', '192.168.0.', '256.1.1.1', '1.2.3.4.5', 'a.b.c.d', '1.2.3.0050', '0.0.0.0', '192.168.0.1', '192.168.0.255'] {
 		assert !ip4_ok(bad), bad
 	}
+}
+
+// the trace recorder binds 8 thread ids: h735_threadx with DoIP fills them exactly (comm, three
+// app threads, NetX IP, doip, doip-svc, the timer); one thread more is refused, not mislabelled
+fn test_a_trace_past_the_recorders_thread_table_is_refused() {
+	src := os.read_file(os.join_path(@VMODROOT, 'examples', 'h735_threadx', 'ecu.toml')) or { panic(err) }
+	at := src.index('  [[partition.thread]]') or { panic('no thread in h735_threadx') }
+	more := src[..at] + '  [[partition.thread]]\n  name     = "extra"\n  priority = 14\n\n' + src[at..]
+	code, out, _, _ := generate_ecu('doip_trace_full', more + doip_conn)
+	assert code != 0, 'loom2v accepted 9 traced threads'
+	assert out.contains('MAX_THREADS'), out
 }

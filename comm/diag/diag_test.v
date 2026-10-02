@@ -385,12 +385,32 @@ fn test_a_remote_reset_waits_until_its_transport_has_sent_the_answer() {
 	assert remote(mut c, [u8(0x3E), 0x00], false).len == 0 // nothing served while a reset is pending
 	c.remote_sent()
 	assert c.reset_due() == 0x01
-	// a suppressed reset has no answer: due at once
+	// a suppressed reset has no answer, but DoIP still acks it: due once that is sent
 	mut d := new_conn()
 	d.server.serves_reset = true
 	d.owner_resets = true
 	assert remote(mut d, [u8(0x11), 0x81], false).len == 0
+	assert d.reset_due() == 0
+	d.remote_sent()
 	assert d.reset_due() == 0x01
+}
+
+// a bus answer that fails mid-transfer cannot cancel a reset the other transport asked for
+fn test_a_bus_abort_leaves_a_remote_reset_alone() {
+	mut c := new_conn()
+	c.server.serves_reset = true
+	c.owner_resets = true
+	now := u64(0)
+	// a multi-frame CAN answer in flight
+	c.on_frame(now, sf(rx, [u8(0x22), 0xF1, 0x90]))
+	c.serve()
+	assert !c.link.idle()
+	assert remote(mut c, [u8(0x11), 0x01], false) == [u8(0x51), 0x01]
+	c.remote_sent()
+	mut f := can.Frame{}
+	assert c.produce(now, mut f)
+	c.abort_tx()
+	assert c.server.reset_req == 0x01, 'the CAN abort cancelled the DoIP reset'
 }
 
 fn test_a_dropped_connection_ends_what_it_opened_and_never_resets_unanswered() {

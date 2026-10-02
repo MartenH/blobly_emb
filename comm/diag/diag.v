@@ -38,6 +38,9 @@ mut:
 	// until that transport has sent the answer
 	remote_owns   bool
 	remote_unsent bool
+	// the pending reset (server.reset_req) was asked over the other transport: a bus transfer that
+	// fails cannot cancel it — that answer was not the reset's
+	reset_remote bool
 }
 
 // Rx is what on_frame did with a received frame, for the owner's drain.
@@ -116,6 +119,7 @@ fn (mut c Connection) functional(f &can.Frame) Rx {
 	before := c.state()
 	rlen := c.server.handle_functional(&f.data[1], n, &c.resp[0])
 	c.note_owner(before, false)
+	c.reset_remote = false // a reset asked here is the bus's (none was pending, or this was not served)
 	if rlen > 0 && !c.link.send(&c.resp[0], rlen) {
 		c.server.reset_req = 0 // never reset unanswered
 	}
@@ -140,6 +144,7 @@ pub fn (mut c Connection) serve() {
 		before := c.state()
 		rlen := c.server.handle(&c.req[0], n, &c.resp[0])
 		c.note_owner(before, false)
+		c.reset_remote = false
 		if rlen > 0 && !c.link.send(&c.resp[0], rlen) {
 			c.server.reset_req = 0 // the answer could not be queued: never reset unanswered
 		}
@@ -163,8 +168,10 @@ pub fn (mut c Connection) serve_remote(req &u8, n int, functional bool, resp &u8
 		c.server.handle(req, n, resp)
 	}
 	c.note_owner(before, true)
-	// a suppressed reset has no answer to wait for: it is due at once
-	c.remote_unsent = rlen > 0 && c.server.reset_req != 0
+	// a reset waits for the transport to send what it sends — the answer, or for a suppressed one
+	// its own acknowledgement (DoIP acks every diagnostic message)
+	c.remote_unsent = c.server.reset_req != 0
+	c.reset_remote = c.server.reset_req != 0
 	return rlen
 }
 
@@ -182,6 +189,7 @@ pub fn (mut c Connection) remote_dropped() {
 	if c.remote_unsent {
 		c.server.reset_req = 0
 		c.remote_unsent = false
+		c.reset_remote = false
 	}
 	if c.remote_owns && c.server.reset_req == 0 {
 		c.server.reset_state()
@@ -222,7 +230,9 @@ pub fn (mut c Connection) produce(now u64, mut f can.Frame) bool {
 // reset whose answer was lost is never performed.
 pub fn (mut c Connection) abort_tx() {
 	c.link.abort_tx()
-	c.server.reset_req = 0
+	if !c.reset_remote {
+		c.server.reset_req = 0
+	}
 }
 
 // active: an exchange is in flight or a non-default session is open — while it is, the owner keeps

@@ -93,7 +93,7 @@ $(NX_A): $(NX_OBJ)
 # 3) cross-compile + link. ioc.h is a PROTOCOL contract compiled into
 # boards/common/iocb.c and eth_netx.c — a header change must rebuild, or
 # `make flash` ships stale IOC code against fresh generated expectations.
-$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(REPO)/boards/common/ioc.h
+$(BUILD)/$(NAME).elf: $(BUILD)/app.c $(BSP) $(TX_A) $(NX_A) $(BOARD_LD_THREADX) $(REPO)/boards/common/ioc.h $(REPO)/driver/eth/ip4.h
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/app.c $(BSP) \
 	  -Wl,--start-group $(TX_A) $(NX_A) -Wl,--end-group -o $@
 	$(SIZE) $@
