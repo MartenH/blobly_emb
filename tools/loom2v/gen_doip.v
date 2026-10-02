@@ -135,7 +135,7 @@ fn validate_doip(m Model) {
 	for r in m.uds.services {
 		rows << doipcfg.ServiceRow{
 			sid:      r.sid
-			security: r.security
+			security: i64(r.security)
 		}
 	}
 	for why in doipcfg.service_refusals(m.uds.table, rows) {

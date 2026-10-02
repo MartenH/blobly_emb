@@ -36,3 +36,18 @@ fn test_every_service_but_the_open_ones_needs_a_level() {
 	assert bench_key_refusal('', true) != ''
 	assert bench_key_refusal('', false) == ''
 }
+
+// a level outside 0x27's 1..8 gates nothing — it is refused, never read as authentication
+fn test_an_out_of_range_level_is_refused() {
+	for lvl in [i64(9), 256, -1] {
+		errs := service_refusals(true, [ServiceRow{
+			sid:      0x11
+			security: lvl
+		}])
+		assert errs.len == 1 && errs[0].contains('is not a 0x27 level'), '${lvl}: ${errs}'
+	}
+	assert service_refusals(true, [ServiceRow{
+		sid:      0x11
+		security: 8
+	}]).len == 0
+}

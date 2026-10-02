@@ -1067,7 +1067,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 					8) or { continue })
 				v.uds_rows << doipcfg.ServiceRow{
 					sid:      sid
-					security: u8(m_int(row.as_map(), 'security'))
+					security: i64(m_int(row.as_map(), 'security'))
 				}
 			}
 		}

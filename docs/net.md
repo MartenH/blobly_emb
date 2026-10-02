@@ -273,7 +273,7 @@ sequence numbers come from the TRNG (the comm thread draws the seed). Bench:
 DIDs, 0x27 + the gated 0x2E, one server and one session across DoIP and CAN with
 each transport's unlock its own, and ECUReset
 answered over TCP before the restart. With ECUReset gated (REQ-NET-012) it also refuses
-0x11 without DoIP's own unlock and resets under it — 6/6 on the bench 2026-10-02; the DoIP
+0x11 without DoIP's own unlock and resets under it — 7/7 on the bench 2026-10-02 (image 906380d); the DoIP
 wrong-key leg added after that run is not yet rerun.
 
 **Declared by the system, not the node** (rung 6): sysnode's address and DoIP entity

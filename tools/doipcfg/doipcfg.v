@@ -7,6 +7,7 @@ module doipcfg
 
 import toml
 import comm.doip
+import comm.uds
 
 // the policy's keys: the same names in ecu.toml's [doip] and a node's `doip`
 pub const list_keys = ['testers', 'activation_types']
@@ -176,7 +177,7 @@ pub fn needs_unlock(sid u8) bool {
 pub struct ServiceRow {
 pub:
 	sid      u8
-	security u8 // 0 = none
+	security i64 // 0 = none; as authored, so a level out of range is refused rather than truncated
 }
 
 // service_refusals: why a [uds] service table (`table` false = none declared, the default table)
@@ -192,6 +193,10 @@ pub fn service_refusals(table bool, rows []ServiceRow) []string {
 	}
 	mut errs := []string{}
 	for r in rows {
+		if r.security != 0 && (r.security < 1 || r.security > uds.max_security_level) {
+			errs << '[uds] services 0x${r.sid.hex()} security = ${r.security} is not a 0x27 level (1..${uds.max_security_level}) — it gates nothing (REQ-NET-012)'
+			continue
+		}
 		if needs_unlock(r.sid) && r.security == 0 {
 			errs << '[uds] services 0x${r.sid.hex()} changes ECU state but needs no security level — over the network it would act for an unauthenticated tester; give it `security = N` or leave it out (REQ-NET-012)'
 		}
