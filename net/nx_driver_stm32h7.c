@@ -14,7 +14,8 @@
  * at most a budget of frames per tick (driver/eth/net_rx_budget.h), so a flood
  * cannot hold the IP thread, and every thread below it, for longer than that.
  *
- * BENCH-VERIFIED on the H735-DK 2026-07-18. Scope = P1 (link + IPv4 + ICMP). */
+ * BENCH-VERIFIED on the H735-DK 2026-07-18. Scope = P1 (link + IPv4 + ICMP).
+ * The receive budget (#349) is bench-pending: examples/system_full/test/netload_bench.sh. */
 #include "nx_api.h"
 #include "eth.h"
 #include "../driver/eth/net_rx_budget.h"
@@ -47,7 +48,7 @@ static net_rx_budget_t rx_budget;
 static TX_TIMER rx_resume;
 static volatile UINT rx_held;
 
-/* bench-observable (SWD): ticks whose receive budget ran out — a flood, or
+/* bench-observable (SWD): ticks whose receive budget was used up — a flood, or
  * traffic the budget is too small for */
 volatile ULONG nx_driver_rx_held;
 
@@ -67,6 +68,12 @@ static VOID nx_driver_rx_resume(ULONG arg) {
 	nx_driver_rx_signal();
 }
 
+/* --- RX switched off: no resume pending, and the next ENABLE starts unheld */
+static void nx_driver_rx_stop(void) {
+	tx_timer_deactivate(&rx_resume);
+	rx_held = 0;
+}
+
 /* --- the budget is spent: leave the ring as it is and come back next tick */
 static void nx_driver_rx_hold(void) {
 	rx_held = 1;
@@ -79,8 +86,11 @@ static void nx_driver_rx_hold(void) {
 /* --- take the frames the DMA has delivered, up to this tick's budget, wrap each
  * in an NX_PACKET, and route by EtherType. Mirrors _nx_ram_network_driver_receive. */
 static void nx_driver_receive(void) {
+	if (rx_held) {
+		return; /* a wake from before the hold: rx_resume comes back for the rest */
+	}
 	for (;;) {
-		if (!net_rx_take(&rx_budget, (uint32_t)tx_time_get())) {
+		if (!net_rx_room(&rx_budget, (uint32_t)tx_time_get())) {
 			nx_driver_rx_hold();
 			return;
 		}
@@ -94,6 +104,7 @@ static void nx_driver_receive(void) {
 			if (eth_recv(nx_driver_txlin, sizeof(nx_driver_txlin)) == 0u) {
 				return; /* nothing left */
 			}
+			net_rx_took(&rx_budget);
 			continue;
 		}
 		/* Align the IP header to a 4-byte boundary. NetX's IP/ICMP checksum routine
@@ -111,6 +122,7 @@ static void nx_driver_receive(void) {
 			nx_packet_release(packet);
 			return; /* nothing left */
 		}
+		net_rx_took(&rx_budget);
 		packet->nx_packet_append_ptr = packet->nx_packet_prepend_ptr + len;
 		packet->nx_packet_length = len;
 
@@ -259,8 +271,7 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 		 * the !initialized guard only on UNINITIALIZE, not here — the IP layer
 		 * already gates sends on nx_interface_link_up). */
 		eth_set_rx_callback(0);
-		tx_timer_deactivate(&rx_resume);
-		rx_held = 0;
+		nx_driver_rx_stop();
 		interface_ptr->nx_interface_link_up = NX_FALSE;
 		break;
 
@@ -341,7 +352,7 @@ VOID nx_driver_stm32h7(NX_IP_DRIVER *driver_req_ptr) {
 		 * deferred processing on a stale NX_IP. (Full MAC/NVIC teardown is out of
 		 * scope — blobly targets create the IP instance once, statically, at boot.) */
 		eth_set_rx_callback(0);
-		tx_timer_deactivate(&rx_resume);
+		nx_driver_rx_stop();
 		nx_driver_initialized = 0;
 		break;
 

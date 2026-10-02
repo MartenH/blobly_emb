@@ -397,15 +397,26 @@ fn test_doip_and_someip_share_one_netx() {
 	assert mk3.contains('LOOM_NET_SRCS :=\n'), mk3
 }
 
-// where the IP thread runs beside SOME/IP: below the platform threads, never below an FB
-fn test_the_ip_thread_runs_below_the_platform_threads_with_someip() {
-	// one app thread: comm (and eth) at 1, io at 2 when there is one
-	assert net_ip_prio_with_someip(comm_thread_prio(10, false, false), false) == 2
-	assert net_ip_prio_with_someip(comm_thread_prio(10, false, true), true) == 3
-	// several: comm at the highest app priority - 1 (io between them), so the IP thread is level
-	// with the highest FB thread — nothing is left between them
-	assert comm_thread_prio(11, true, false) == 10
-	assert net_ip_prio_with_someip(comm_thread_prio(11, true, false), false) == 11
-	assert comm_thread_prio(11, true, true) == 9
-	assert net_ip_prio_with_someip(comm_thread_prio(11, true, true), true) == 11
+// where the IP thread runs beside an eth thread: below the platform threads, above every FB
+fn test_the_ip_thread_runs_between_the_platform_threads_and_the_fbs() {
+	// one app thread: comm (and eth) at 1, io at 2 when there is one, the IP thread below them
+	assert net_ip_prio_with_eth(comm_thread_prio(10, false, false, true), false) == 2
+	assert net_ip_prio_with_eth(comm_thread_prio(10, false, true, true), true) == 3
+	// several: comm moves up one more for the IP thread's slot, which lands just above the
+	// highest FB (11)
+	assert comm_thread_prio(11, true, false, false) == 10
+	assert comm_thread_prio(11, true, false, true) == 9
+	assert net_ip_prio_with_eth(comm_thread_prio(11, true, false, true), false) == 10
+	assert comm_thread_prio(11, true, true, false) == 9
+	assert comm_thread_prio(11, true, true, true) == 8
+	assert net_ip_prio_with_eth(comm_thread_prio(11, true, true, true), true) == 10
+}
+
+// one app thread at 2 leaves no priority between the IP thread (2, below comm at 1) and the FBs
+fn test_an_fb_level_with_the_ip_thread_is_refused() {
+	code, out, _, _ := generate_ecu('doip_eth_prio', doip_eth_ecu + '  priority = 2\n')
+	assert code != 0 && out.contains('above every FB thread, at 2'), out
+	c3, o3, glue, _ := generate_ecu('doip_eth_prio3', doip_eth_ecu + '  priority = 3\n')
+	assert c3 == 0, o3
+	assert glue.contains("C.doip_net_create(c'192.168.0.50', u32(2), u32(5))"), glue
 }

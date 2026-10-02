@@ -281,72 +281,74 @@ fn doip_target_globals(m Model) []string {
 	]
 }
 
-// doip_net_prio: the network runs below every application thread of this image (a bigger number is a
-// lower priority) — a LAN flood keeps NetX's deferred receive work busy, and with no time slicing a
-// thread at the same priority as the CAN owner or an FB thread would never yield to it. Diagnostics
-// over IP are best effort; the FBs' periods and the bus are not.
-fn doip_net_prio(m Model) int {
-	mut lowest := 0
+// local_threads: the app threads this image creates (every partition but the external cores'): the
+// highest priority among them (the smallest number; 32 with none), the lowest (0 with none), and how
+// many there are
+fn local_threads(m Model) (int, int, int) {
+	mut hi := 32
+	mut lo := 0
+	mut n := 0
 	for pname, thrs in m.part.threads_of {
 		if m.part.external[pname] {
-			continue
+			continue // the platform threads compete only with their OWN core's threads
 		}
 		for t in thrs {
 			p := m.part.thread_prio[t] or { 10 }
-			if p > lowest {
-				lowest = p
-			}
+			hi = if p < hi { p } else { hi }
+			lo = if p > lo { p } else { lo }
+			n++
 		}
 	}
-	if lowest == 0 {
-		lowest = 10
-	}
-	return lowest + 1
+	return hi, lo, n
+}
+
+// doip_net_prio: the doip threads — and on an image without an eth thread the IP thread too — run
+// below every application thread of this image (a bigger number is a lower priority): a LAN flood
+// keeps them busy, and with no time slicing a thread at the same priority as the CAN owner or an FB
+// thread would never yield to it. Diagnostics over IP are best effort; the FBs' periods and the bus
+// are not.
+fn doip_net_prio(m Model) int {
+	_, lo, _ := local_threads(m)
+	return if lo == 0 { 10 } else { lo } + 1
+}
+
+// ip_platform_slot: the NetX IP thread takes a platform slot — above the FBs, below the comm/eth and
+// io threads — on an image that runs both DoIP and an eth thread (SOME/IP, or the shell over eth):
+// there the eth thread's traffic goes through the IP thread too, and the IP thread would otherwise sit
+// below the FBs with DoIP's. Without DoIP the eth thread brings NetX up itself (driver/eth/eth_netx.c).
+fn ip_platform_slot(m Model) bool {
+	return m.doip.on && eth_thread_on(m)
 }
 
 // comm_thread_prio: the comm thread's priority, and the eth thread's beside it — strictly above every
 // FB thread, so it preempts a long app pass to drain rx (no time slicing). One app thread keeps the
-// historical 1; several derive it as the highest app priority - 1 (11/12/13 -> 10), one more up when
-// the io thread sits between them (comm > io > FBs).
-fn comm_thread_prio(min_app_prio int, multi bool, io bool) int {
+// historical 1; several derive it as the highest app priority - 1 (11/12/13 -> 10), one more up for
+// each platform thread between it and the FBs: the io thread (comm > io > FBs), the IP thread
+// (ip_platform_slot: comm > io > IP > FBs).
+fn comm_thread_prio(min_app_prio int, multi bool, io bool, ip bool) int {
 	if !multi {
 		return 1
 	}
-	return min_app_prio - 1 - if io { 1 } else { 0 }
+	return min_app_prio - 1 - (if io { 1 } else { 0 }) - (if ip { 1 } else { 0 })
 }
 
-// net_ip_prio_with_someip: the IP thread on an image whose eth thread carries SOME/IP — just below
-// the lowest platform thread (comm, then io), so the eth thread's datagrams, and the ARP answer its
-// first send to a peer waits for, are not held behind an FB pass. It is never below an FB: at most
-// level with the highest one, where no priority is left between them. A flood cannot take the FBs'
-// CPU from up there: the driver hands the IP thread a bounded number of frames per tick
-// (driver/eth/net_rx_budget.h).
-fn net_ip_prio_with_someip(comm int, io bool) int {
+// net_ip_prio_with_eth: the IP thread in its platform slot — just below the comm/eth thread and the io
+// thread, so the eth thread's datagrams, and the ARP answer its first send to a peer waits for, are
+// not held behind an FB pass. A flood cannot take the FBs' CPU from up there: the driver hands the IP
+// thread a bounded number of frames per tick (driver/eth/net_rx_budget.h).
+fn net_ip_prio_with_eth(comm int, io bool) int {
 	return comm + 1 + if io { 1 } else { 0 }
 }
 
 // net_ip_prio: the NetX IP thread's priority on a [doip] image (driver/eth/netx_up.c takes the first
 // caller's, and DoIP calls first, from tx_application_define)
 fn net_ip_prio(m Model) int {
-	if !eth_thread_on(m) {
+	if !ip_platform_slot(m) {
 		return doip_net_prio(m)
 	}
-	mut min_prio := 32
-	mut n := 0
-	for pname, thrs in m.part.threads_of {
-		if m.part.external[pname] {
-			continue
-		}
-		for t in thrs {
-			n++
-			p := m.part.thread_prio[t] or { 10 }
-			if p < min_prio {
-				min_prio = p
-			}
-		}
-	}
+	hi, _, n := local_threads(m)
 	io := m.io_points.len > 0
-	return net_ip_prio_with_someip(comm_thread_prio(min_prio, n > 1, io), io)
+	return net_ip_prio_with_eth(comm_thread_prio(hi, n > 1, io, true), io)
 }
 
 // doip_target_create: in tx_application_define, before any thread runs — the identity the
@@ -358,6 +360,11 @@ fn doip_target_create(m Model) []string {
 	}
 	d := m.doip
 	np := doip_net_prio(m)
+	hi, _, _ := local_threads(m)
+	if ip_platform_slot(m) && net_ip_prio(m) >= hi {
+		panic('loom2v: [doip] with an eth thread runs the NetX IP thread above every FB thread, at ' +
+			'${net_ip_prio(m)} — give the FB threads priorities above that (${net_ip_prio(m) + 1} or more)')
+	}
 	if np + 1 > 31 {
 		panic('loom2v: [doip]: its threads run below every application thread, at ${np} and ${np + 1} — ' +
 			'past ThreadX\'s 0..31; give the application threads priorities up to 29')

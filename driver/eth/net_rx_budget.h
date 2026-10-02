@@ -30,18 +30,19 @@ static inline uint32_t net_rx_per_tick(uint32_t ticks_per_second) {
 	return n == 0u ? 1u : n;
 }
 
-/* may one more frame be taken at tick `now`? 1 = yes, and it is counted; 0 = this tick's budget is
- * spent. A new tick starts a new count. */
-static inline int net_rx_take(net_rx_budget_t *b, uint32_t now) {
+/* may a frame be taken at tick `now`? 1 = yes; 0 = this tick's budget is spent. A new tick starts a
+ * new count. Asking counts nothing: a look into an empty ring costs no budget. */
+static inline int net_rx_room(net_rx_budget_t *b, uint32_t now) {
 	if (now != b->tick) {
 		b->tick = now;
 		b->taken = 0u;
 	}
-	if (b->taken >= b->per_tick) {
-		return 0;
-	}
+	return b->taken < b->per_tick;
+}
+
+/* a frame was taken, in the tick net_rx_room last asked about */
+static inline void net_rx_took(net_rx_budget_t *b) {
 	b->taken++;
-	return 1;
 }
 
 #endif

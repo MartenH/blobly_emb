@@ -17,8 +17,9 @@
  * a later one with the SAME address is a no-op (0), with another address a refusal (-1) — one
  * address per node. ip_prio is the IP thread's priority, the FIRST caller's: DoIP calls from
  * tx_application_define with loom2v's net_ip_prio — below every application thread, or on an image
- * that also carries SOME/IP just below the platform threads (comm, io, eth), so the eth thread's
- * traffic is not held behind the FBs; a SOME/IP-only image brings it up from its eth thread at 1.
+ * that also runs an eth thread (SOME/IP) just below the platform threads (comm/eth, io) and above
+ * every FB, so the eth thread's traffic is not held behind them; a SOME/IP-only image brings it up
+ * from its eth thread at 1.
  * Above the FBs a flood is bounded by the driver's receive budget (net_rx_budget.h). The IP mutex
  * inherits priority. */
 int blob_net_up(const char *addr, unsigned int ip_prio);

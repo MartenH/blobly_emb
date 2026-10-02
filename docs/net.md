@@ -295,16 +295,18 @@ the bench tool's generated config names `GwStatus`'s producer as that event's ow
 ARP answer a first send to a peer waits for — is processed on NetX's IP thread, and every socket
 call takes the IP mutex. On a DoIP-only image the IP thread runs below every application thread
 (loom2v `doip_net_prio`): diagnostics over IP are best effort. On an image that also carries
-SOME/IP (sysnode) that would hold the eth thread's traffic behind every FB pass, so loom2v
-`net_ip_prio` puts the IP thread just below the platform threads instead (comm and eth at 1 on
-sysnode, the IP thread at 2, GwHealth at 10; with several app threads it lands level with the
-highest one). Two things keep a LAN flood from taking the FBs' CPU from up there:
+SOME/IP — an eth thread (sysnode) — that would hold the eth thread's traffic behind every FB pass,
+so loom2v `net_ip_prio` gives the IP thread a platform slot instead: below the comm/eth and io
+threads, strictly above every FB (comm and eth at 1 on sysnode, the IP thread at 2, GwHealth at 10;
+with several app threads `comm_thread_prio` moves comm up one more to make the room, and one app
+thread at a priority level with the IP thread is refused). Two things keep a LAN flood from taking
+the FBs' CPU from up there:
 
 - **a receive budget in the driver** (`driver/eth/net_rx_budget.h`, host-tested): the NetX driver
   takes at most `NET_RX_PER_MS` (4) frames per millisecond from the DMA ring. The rest stay there,
   the ISR stops waking the IP thread, and a one-tick timer resumes on the next tick; meanwhile the
-  ring fills and the MAC drops in hardware. `nx_driver_rx_held` counts the ticks the budget ran out
-  (SWD). The node's own traffic is far below it; 100 Mbit/s of minimum-size frames is ~148/ms.
+  ring fills and the MAC drops in hardware. `nx_driver_rx_held` counts the ticks the budget was
+  used up (SWD). The node's own traffic is far below it; 100 Mbit/s of minimum-size frames is ~148/ms.
 - **priority inheritance on the IP mutex** (`netx_up.c`): NetX creates it without, so a doip thread
   holding it while an FB ran would hold the eth thread's send behind that FB.
 

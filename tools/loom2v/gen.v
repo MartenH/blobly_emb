@@ -1959,28 +1959,10 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	// thread takes id 1, ahead of the app thread (id 2) and the timer (id 3). Emit it first to
 	// match that observed order, else its records are mislabelled / shift the other lanes.
 	// min FB priority + local thread count: the comm/io platform-thread priorities are
-	// DERIVED in the target emit (comm = min(app) - 1, shifted one more when the io
-	// thread sits between comm and the FBs; historical 1 for single-thread) — recompute
-	// them here so the manifest shows the real numbers.
-	mut mp := 32
-	for pn, thrs in m.part.threads_of {
-		if m.part.external[pn] {
-			continue // the platform threads compete only with their OWN core's threads
-		}
-		for thr in thrs {
-			pr := m.part.thread_prio[thr] or { 10 }
-			if pr < mp {
-				mp = pr
-			}
-		}
-	}
-	mut nthr := 0
-	for pn, thrs in m.part.threads_of {
-		if !m.part.external[pn] {
-			nthr += thrs.len
-		}
-	}
-	cp := comm_thread_prio(mp, nthr > 1, m.io_points.len > 0)
+	// DERIVED (comm_thread_prio) — the same derivation as the target emit, so the manifest
+	// shows the real numbers.
+	mp, _, nthr := local_threads(m)
+	cp := comm_thread_prio(mp, nthr > 1, m.io_points.len > 0, ip_platform_slot(m))
 	if comm_thread_on {
 		man << 'thread,${tid},comm,${m.part.core_of[single_part] or { 0 }},${cp}'
 		tid++
@@ -2000,8 +1982,8 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 	// timer, matching the deterministic trace-bind order in tx_application_define.
 	if m.io_points.len > 0 && m.target.threadx {
 		mut iop := mp - 1
-		if comm_thread_on && nthr <= 1 {
-			iop = 2 // single-thread comm keeps the historical 1; io just below it
+		if comm_thread_on {
+			iop = cp + 1 // just below the comm thread
 		}
 		man << 'thread,${tid},io,${m.io_core},${iop}'
 		tid++
@@ -2674,7 +2656,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					panic('loom2v: [target] kind="threadx" with [[io.gpio]]: comm > io > FB threads, ' +
 						'but the highest FB priority is ${min_prio}; use priorities >= 3')
 				}
-				comm_prio := comm_thread_prio(min_prio, multi, m.io_points.len > 0)
+				comm_prio := comm_thread_prio(min_prio, multi, m.io_points.len > 0, ip_platform_slot(m))
 				// The Rx-ISR board glue (comm_glue.c) enables FDCAN1's FIFO0 interrupt + NVIC line
 				// specifically. A telemetry/rx bus that opens FDCAN2/3 (index 1/2) would drain only on
 				// the 10-tick timeout (no ISR wake -> FIFO loss under bursts). The per-instance IRQ glue

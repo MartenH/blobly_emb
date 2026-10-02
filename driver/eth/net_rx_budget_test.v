@@ -14,7 +14,8 @@ mut:
 }
 
 fn C.net_rx_per_tick(u32) u32
-fn C.net_rx_take(&C.net_rx_budget_t, u32) int
+fn C.net_rx_room(&C.net_rx_budget_t, u32) int
+fn C.net_rx_took(&C.net_rx_budget_t)
 
 fn budget(per_tick u32) C.net_rx_budget_t {
 	return C.net_rx_budget_t{
@@ -22,10 +23,15 @@ fn budget(per_tick u32) C.net_rx_budget_t {
 	}
 }
 
+// takes: the driver's loop over a ring holding `n` frames — ask, then take one
 fn takes(mut b C.net_rx_budget_t, now u32, n int) int {
 	mut got := 0
 	for _ in 0 .. n {
-		got += C.net_rx_take(&b, now)
+		if C.net_rx_room(&b, now) == 0 {
+			break
+		}
+		C.net_rx_took(&b)
+		got++
 	}
 	return got
 }
@@ -33,7 +39,19 @@ fn takes(mut b C.net_rx_budget_t, now u32, n int) int {
 fn test_a_tick_takes_its_budget_and_no_more() {
 	mut b := budget(4)
 	assert takes(mut b, 7, 10) == 4
-	assert C.net_rx_take(&b, 7) == 0
+	assert C.net_rx_room(&b, 7) == 0
+}
+
+// the driver asks before every receive, and the last ask of a pass finds the ring empty: asking
+// must not spend the budget, or ordinary traffic gets half of it
+fn test_asking_takes_nothing() {
+	mut b := budget(4)
+	for _ in 0 .. 4 {
+		assert C.net_rx_room(&b, 7) == 1
+		C.net_rx_took(&b)
+		assert C.net_rx_room(&b, 7) == (if b.taken < 4 { 1 } else { 0 }) // the empty look
+	}
+	assert b.taken == 4
 }
 
 fn test_the_next_tick_starts_a_new_count() {

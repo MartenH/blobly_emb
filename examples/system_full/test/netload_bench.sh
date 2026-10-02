@@ -13,7 +13,8 @@
 #
 # The flood is UDP from WSL to the node's SOME/IP port (30490) as fast as python can send — through
 # the IP thread into the eth thread's socket, which drops what is not its peer's. Its offered rate
-# is printed; what the board took is nx_driver_rx_held (ticks the budget ran out) over SWD.
+# is printed; the board's side is nx_driver_rx_held (ticks its receive budget was used up), read over
+# SWD with openocd (`mdw` at the symbol's address; st-util resets the target).
 #
 # Exit: 0 = through the flood every GwStatus came and the FB counted each second, 1 = it did not,
 # 2 = SKIP (no powershell.exe, or no GwStatus while idle — sysnode not on the LAN).
