@@ -442,3 +442,66 @@ fn test_a_dropped_connection_ends_what_it_opened_and_never_resets_unanswered() {
 	c.remote_dropped()
 	assert c.server.session == uds.session_extended
 }
+
+fn seed_fixed(ctx voidptr, out &u8, n int) bool {
+	for i in 0 .. n {
+		unsafe {
+			out[i] = u8(0x10 + i)
+		}
+	}
+	return true
+}
+
+// unlock level 1 through `ask` (one transport), returning the final 0x27 answer
+fn unlock(ask fn ([]u8) []u8) []u8 {
+	seed := ask([u8(0x27), 0x01])[2..]
+	mut key := [u8(0x27), 0x02]
+	for b in seed {
+		key << b ^ 0xFF
+	}
+	return ask(key)
+}
+
+// REQ-NET-012: the session is shared, the unlock is the transport's that earned it — a network
+// tester never writes under a bus tester's unlock, nor the reverse
+fn test_an_unlock_belongs_to_the_transport_that_earned_it() {
+	mut c := new_conn()
+	c.server.security = uds.SecurityOps{
+		seed:   seed_fixed
+		key_ok: uds.reference_key_ok
+	}
+	c.server.security_levels = 0x01
+	c.server.dids[2] = uds.Did{
+		id:             0x0102
+		writable:       true
+		len:            1
+		write_sessions: uds.in_extended
+		write_security: 1
+	}
+	c.server.ndid = 3
+	mut t := new_tester()
+	mut now := u64(0)
+	mut cc := &c
+	over_doip := fn [mut cc] (req []u8) []u8 {
+		return remote(mut cc, req, false)
+	}
+	assert over_doip([u8(0x10), 0x03])[0] == 0x50
+	assert unlock(over_doip) == [u8(0x67), 0x02]
+	assert over_doip([u8(0x2E), 0x01, 0x02, 0x11]) == [u8(0x6E), 0x01, 0x02]
+	// the bus is in the same session but not unlocked
+	assert exchange(mut c, mut t, mut &now, [u8(0x2E), 0x01, 0x02, 0x22]) == [u8(0x7F), 0x2E, 0x33]
+	// and DoIP's unlock survived the bus request
+	assert over_doip([u8(0x2E), 0x01, 0x02, 0x33]) == [u8(0x6E), 0x01, 0x02]
+	// the reverse: a bus unlock does not open the network
+	seed := exchange(mut c, mut t, mut &now, [u8(0x27), 0x01])[2..]
+	mut key := [u8(0x27), 0x02]
+	for b in seed {
+		key << b ^ 0xFF
+	}
+	assert exchange(mut c, mut t, mut &now, key) == [u8(0x67), 0x02]
+	assert over_doip([u8(0x2E), 0x01, 0x02, 0x44]) == [u8(0x7F), 0x2E, 0x33]
+	assert exchange(mut c, mut t, mut &now, [u8(0x2E), 0x01, 0x02, 0x55]) == [u8(0x6E), 0x01, 0x02]
+	// a session change over either relocks for both
+	assert over_doip([u8(0x10), 0x01])[0] == 0x50
+	assert c.server.unlocked == 0
+}

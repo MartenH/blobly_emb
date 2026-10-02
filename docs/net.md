@@ -265,7 +265,8 @@ is blobly_net's public reference key, a bench posture), an entity address outsid
 entity ranges, and an eth bus beside it (one NetX per image). TCP initial
 sequence numbers come from the TRNG (the comm thread draws the seed). Bench:
 `examples/system_full/test/doip_sysnode.lua` on the H735 — discovery, sessions,
-DIDs, 0x27 + the gated 0x2E, one server across DoIP and CAN, and ECUReset
+DIDs, 0x27 + the gated 0x2E, one server and one session across DoIP and CAN with
+each transport's unlock its own, and ECUReset
 answered over TCP before the restart, 5/5.
 
 ## P3b status — DoIP (2026-07-18, BENCH-VERIFIED)

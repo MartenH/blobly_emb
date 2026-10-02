@@ -375,7 +375,8 @@ InputOutputControl, 0x23/0x3D memory access, and generic 0x31 RoutineControl (th
 its own erase / check routines). DoIP is NOT a second server: `[doip]` on a ThreadX node carries
 the one server over TCP as well (`tools/loom2v/gen_doip.v`) — the comm thread serves a DoIP request
 from a mailbox (`driver/eth/doip_netx.c`) through `comm/diag`'s `serve_remote`, so a CAN and a DoIP
-tester share one session and one security state, and a reset a DoIP tester asks for waits for its
+tester share one session — while a 0x27 unlock belongs to the transport that earned it, so a
+network tester never writes under a bus tester's unlock (REQ-NET-012) — and a reset a DoIP tester asks for waits for its
 answer to be acknowledged. Not built: a host-side DoIP transport, and the bootloader's DoIP binding.
 
 ## 7. Obligations carried into the rungs

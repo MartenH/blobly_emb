@@ -42,19 +42,20 @@ test("0x27 over DoIP: the TRNG seed, the reference key, the gated write", functi
   d:session(0x01)
 end)
 
-test("one server: what DoIP unlocks, CAN sees, and the other way round", function()
+-- one server, one session — but an unlock is the transport's that earned it: a network tester
+-- never writes under a bus tester's unlock, nor the reverse (REQ-NET-012)
+test("one server: the session is shared, each transport's unlock its own", function()
   local d, c = uds.open("sysnode"), can()
   d:session(0x03)
   d:security_access(0x01)
-  c:write_did(0x0102, "\x33") -- in DoIP's session, under DoIP's unlock
-  check.equal(tohex(d:read_did(0x0102)), "33")
-  c:session(0x01)
-  check.nrc(0x31, function() d:write_did(0x0102, "\x44") end) -- CAN ended the session for both
-  c:session(0x03)
+  check.nrc(0x33, function() c:write_did(0x0102, "\x33") end) -- DoIP's session, not its unlock
+  d:write_did(0x0102, "\x44")
+  check.equal(tohex(c:read_did(0x0102)), "44")
   c:security_access(0x01)
-  d:write_did(0x0102, "\x55")
-  check.equal(tohex(c:read_did(0x0102)), "55")
-  d:session(0x01)
+  c:write_did(0x0102, "\x55")
+  check.nrc(0x33, function() d:write_did(0x0102, "\x66") end) -- CAN's unlock does not open DoIP
+  c:session(0x01)
+  check.nrc(0x31, function() d:write_did(0x0102, "\x77") end) -- CAN ended the session for both
 end)
 
 test("wrong keys lock 0x27 out over DoIP; ECUReset answers, restarts, and the lockout runs on", function()

@@ -42,7 +42,7 @@ security_delay_ms = 3000
 security_key      = "reference"
 
 # The same server over DoIP (ISO 13400) on the H735's Ethernet: TCP and UDP 13400. One server, so a
-# CAN and a DoIP tester share one session and one security state (docs/diagnostics.md).
+# CAN and a DoIP tester share one session; a 0x27 unlock is the transport's that earned it (docs/diagnostics.md).
 [doip]
 address         = "192.168.0.50"
 logical_address = 0x07A0 # its CAN request id, for the bench's memory

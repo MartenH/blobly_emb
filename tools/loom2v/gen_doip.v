@@ -5,7 +5,7 @@ import toml
 // [doip]: the node's ONE diagnostic server — the [[isotp]] connection's — reachable over DoIP
 // (ISO 13400) too, on a ThreadX target. The server stays on the comm thread; a doip thread
 // (driver/eth/doip_netx.c) runs the TCP side and hands each request across a mailbox, so CAN and
-// DoIP testers share one session and one security state (comm/diag serve_remote).
+// DoIP testers share one session; a 0x27 unlock is per transport (comm/diag serve_remote).
 struct DoipCfg {
 	on         bool
 	address    string // the node's static IPv4 address
