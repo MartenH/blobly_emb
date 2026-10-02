@@ -294,7 +294,12 @@ int doip_stream_send(const unsigned char *buf, int len) {
 		return stream_recycle();
 	}
 	doip_tx_bytes += (ULONG)len;
-	last_activity = tx_time_get(); /* an answer sent restarts T_TCP_General, as one received does */
+	/* an answer sent restarts T_TCP_General, as one received does — unless the deadline already
+	 * passed while the answer was being produced: a late answer goes out, but it does not revive
+	 * a connection that is due to close (the next receive closes it) */
+	if (!sess_activated || tx_time_get() - last_activity < idle_general) {
+		last_activity = tx_time_get();
+	}
 	mb_sent_seq = mb_returned;
 	comm_wake();
 	return len;

@@ -871,7 +871,7 @@ fn test_a_someip_e2e_frame_needs_a_timeout_longer_than_its_cycle() {
 // is BUILT is refused at the system, and what no single node can see — two entities at one
 // logical address — is refused only there.
 
-// doip_system: tel_system with tcu serving DoIP — a ThreadX node with one [[isotp]] connection
+// doip_system: tel_system with tcu serving DoIP — a ThreadX node with one [isotp] connection
 // and a diag allocation, which is what DoIP carries.
 fn doip_system() sysmodel.System {
 	mut sys := tel_system()
@@ -1092,7 +1092,7 @@ fn test_doip_needs_the_diagnostic_server_it_carries() {
 	assert doip_errs(sys).any(it.contains('has no `diag` allocation')), doip_errs(sys).str()
 	sys = doip_system()
 	sys.nodes[0].view.isotp_conns = []
-	assert doip_errs(sys).any(it.contains('0 [[isotp]] connection(s)')), doip_errs(sys).str()
+	assert doip_errs(sys).any(it.contains('0 [isotp] connection(s)')), doip_errs(sys).str()
 	sys = doip_system()
 	sys.nodes[0].view.is_threadx = false
 	assert doip_errs(sys).any(it.contains('is not a threadx target')), doip_errs(sys).str()

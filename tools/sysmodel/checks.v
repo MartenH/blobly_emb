@@ -2869,7 +2869,7 @@ fn check_doip(s System) []Issue {
 				msg:      'nodes "${n.name}" and "${o.name}" both answer at "${n.endpoint}" — DoIP brings that address up on the network, so it names one node'
 			}
 		}
-		// the server DoIP carries is the node's ONE diagnostic server: its [[isotp]] connection,
+		// the server DoIP carries is the node's ONE diagnostic server: its [isotp] connection,
 		// on the ids the system allocates it (diag)
 		if n.diag.req == 0 && n.diag.rsp == 0 {
 			issues << Issue{
@@ -2882,7 +2882,7 @@ fn check_doip(s System) []Issue {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-005'
-				msg:      'node "${n.name}": declares `doip` but its ecu.toml has ${n.view.isotp_conns.len} [[isotp]] connection(s) — DoIP carries the node\'s ONE diagnostic server, so declare exactly one'
+				msg:      'node "${n.name}": declares `doip` but its ecu.toml has ${n.view.isotp_conns.len} [isotp] connection(s) — DoIP carries the node\'s ONE diagnostic server, so declare its [uds] server and its [isotp] connection'
 			}
 		}
 		if !n.view.is_threadx {

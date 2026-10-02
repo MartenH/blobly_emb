@@ -192,7 +192,7 @@ network identity, declared once here. The entity's transport policy is the syste
 `[doip]` is (defaults and meaning: docs/net.md, "The entity at the transport level"); sysnode
 admits the bench tester alone (`testers = [0x0E00]`). syscheck refuses a logical address outside
 ISO 13400's entity ranges (0x0001..0x0DFF, 0x1000..0x7FFF) or shared by two nodes, a
-`doip` with no `endpoint`, no `diag` allocation, not exactly one `[[isotp]]` in the node,
+`doip` with no `endpoint`, no `diag` allocation, no `[isotp]` connection in the node,
 or a non-ThreadX target, an endpoint `port` of 13400 beside it, and an authored `[doip]`
 in the node (the system owns it). A DoIP-only node (on CAN, no segment) may carry an
 `endpoint` for it, with no `port`.

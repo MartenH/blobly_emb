@@ -3,7 +3,7 @@ module main
 import toml
 import tools.doipcfg
 
-// [doip]: the node's ONE diagnostic server — the [[isotp]] connection's — reachable over DoIP
+// [doip]: the node's ONE diagnostic server — the [uds] server its [isotp] connection carries — reachable over DoIP
 // (ISO 13400) too, on a ThreadX target. The server stays on the comm thread; a doip thread
 // (driver/eth/doip_netx.c) runs the TCP side and hands each request across a mailbox, so CAN and
 // DoIP testers share one session; a 0x27 unlock is per transport (comm/diag serve_remote).
@@ -81,7 +81,7 @@ fn validate_doip(m Model) {
 		panic('loom2v: [doip] is a ThreadX target transport (driver/eth/doip_netx.c); a host node has none yet')
 	}
 	if m.isotp_conns.len != 1 {
-		panic('loom2v: [doip] carries the node\'s ONE diagnostic server — declare its [[isotp]] connection')
+		panic('loom2v: [doip] carries the node\'s ONE diagnostic server — declare its [uds] server and [isotp] connection')
 	}
 	// one NetX per image, at one address (driver/eth/netx_up.c): SOME/IP and DoIP share it
 	if eth_thread_on(m) && ip4_octets(m.eth_iface) != ip4_octets(d.address) {
@@ -155,7 +155,7 @@ fn doip_target_fns(m Model) []string {
 		'fn C.doip_eid(&u8)',
 		'fn C.doip_sleep_ms(int)',
 	]
-	if security_levels(m.dids) == 0 {
+	if sa_levels(m) == 0 {
 		// the TCP sequence-number seed comes from the board TRNG (declared with 0x27 otherwise)
 		g << 'fn C.diag_sa_init() int'
 		g << 'fn C.diag_sa_seed(&u8, int) int'
