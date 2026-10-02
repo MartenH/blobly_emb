@@ -33,7 +33,11 @@ period_ms = 500
 #
 # Its service table is configured (domain and zone_a keep the default set): the default set, except
 # that ECUReset is accepted only in the extended session — a gateway must not restart on one stray
-# request in the default session. A service left out of the table answers serviceNotSupported.
+# request in the default session — and only under security level 1: this server is reachable over
+# DoIP, where no service that changes ECU state may act for an unauthenticated tester (REQ-NET-012;
+# loom2v refuses the row without it). The unlock is the transport's that earned it, so a DoIP reset
+# needs the DoIP tester's own 0x27, a CAN reset the CAN tester's. A service left out of the table
+# answers serviceNotSupported.
 [uds]
 s3_ms             = 5000
 security_attempts = 3
@@ -42,7 +46,7 @@ security_key      = "reference"
 
 [uds.services]
 "0x10" = {}                            # DiagnosticSessionControl
-"0x11" = { sessions = ["extended"] }   # ECUReset
+"0x11" = { sessions = ["extended"], security = 1 }   # ECUReset
 "0x22" = {}                            # ReadDataByIdentifier
 "0x27" = {}                            # SecurityAccess (its default: the extended session)
 "0x2E" = {}                            # WriteDataByIdentifier (each DID's own gates on top)

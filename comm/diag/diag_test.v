@@ -524,6 +524,67 @@ fn secured_conn() Connection {
 	return c
 }
 
+// gated_conn: secured_conn with the service table a [doip] node must have (loom2v, REQ-NET-012):
+// the one state-changing service it performs, 0x11, behind level 1 in the extended session
+fn gated_conn() Connection {
+	mut c := secured_conn()
+	c.server.serves_reset = true
+	rows := [uds.Service{
+		sid: 0x10
+	}, uds.Service{
+		sid:      0x11
+		sessions: uds.in_extended
+		security: 1
+	}, uds.Service{
+		sid: 0x22
+	}, uds.Service{
+		sid: 0x27
+	}, uds.Service{
+		sid: 0x2E
+	}, uds.Service{
+		sid: 0x3E
+	}]
+	for i, r in rows {
+		c.server.services[i] = r
+	}
+	c.server.nservices = rows.len
+	return c
+}
+
+// @verifies REQ-NET-012 — a service that changes ECU state (0x11) acts over the network only for a
+// tester that authenticated over the network: reachable, in the right session, or holding the
+// BUS tester's unlock is refused securityAccessDenied; the bus is gated as its row configures
+fn test_a_state_change_over_the_network_needs_the_networks_own_unlock() {
+	mut c := gated_conn()
+	mut t := new_tester()
+	mut now := u64(0)
+	mut cc := &c
+	over_doip := fn [mut cc] (req []u8) []u8 {
+		return remote(mut cc, req, false)
+	}
+	// ISO 14229-1's order: the session first, then security
+	assert over_doip([u8(0x11), 0x01]) == [u8(0x7F), 0x11, 0x7F]
+	assert over_doip([u8(0x10), 0x03])[0] == 0x50
+	assert over_doip([u8(0x11), 0x01]) == [u8(0x7F), 0x11, 0x33], 'reachable is not authenticated'
+	assert remote(mut c, [u8(0x11), 0x01], true) == [u8(0x7F), 0x11, 0x33], 'nor functionally'
+	// the bus: as configured — the same row, its own unlock
+	assert exchange(mut c, mut t, mut &now, [u8(0x11), 0x01]) == [u8(0x7F), 0x11, 0x33]
+	seed := exchange(mut c, mut t, mut &now, [u8(0x27), 0x01])[2..]
+	mut key := [u8(0x27), 0x02]
+	for b in seed {
+		key << b ^ 0xFF
+	}
+	assert exchange(mut c, mut t, mut &now, key) == [u8(0x67), 0x02]
+	assert over_doip([u8(0x11), 0x01]) == [u8(0x7F), 0x11, 0x33], 'the bus unlock opened the network'
+	assert c.server.reset_req == 0
+	// the network's own unlock does
+	assert unlock(over_doip) == [u8(0x67), 0x02]
+	assert over_doip([u8(0x11), 0x01]) == [u8(0x51), 0x01]
+	c.remote_sent()
+	c.housekeep(now)
+	assert c.server.session == uds.session_default && c.server.unlocked == 0
+}
+
 // a DoIP unlock of the level the bus already holds is still DoIP's, and ends with its connection
 fn test_a_dropped_tester_takes_its_unlock_even_at_the_bus_level() {
 	mut c := secured_conn()
@@ -622,7 +683,18 @@ fn (mut m SecModel) enter(sess u8, remote bool) {
 }
 
 fn test_the_cross_transport_security_model_holds_over_random_interleavings() {
-	mut c := secured_conn()
+	security_model(false)
+}
+
+// the same model on the table a [doip] node must have (gated_conn, REQ-NET-012): a reset over
+// either transport happens only in the extended session under THAT transport's own unlock, and is
+// refused otherwise without changing anything
+fn test_the_security_model_holds_with_the_reset_gated() {
+	security_model(true)
+}
+
+fn security_model(gated bool) {
+	mut c := if gated { gated_conn() } else { secured_conn() }
 	c.server.s3_us = u64(1) << 60 // no S3 in this model
 	c.server.serves_reset = true // the host shape: an answered reset returns the server to power-on
 	mut t := new_tester()
@@ -636,6 +708,17 @@ fn test_the_cross_transport_security_model_holds_over_random_interleavings() {
 		tr := int(rng & 1) // 0 = bus, 1 = remote
 		op := (rng >> 1) % 11
 		ctx := 'step ${step} op ${op} over ${if tr == 1 { 'remote' } else { 'bus' }}'
+		// a reset is asked over DoIP (6, 7) or the bus (8..10), whatever `tr` drew
+		rt := if op >= 8 { 0 } else { 1 }
+		if op >= 6 && gated && !(m.session == 0x03 && m.unlocked[rt]) {
+			// a reset this transport may not ask for: refused, and nothing changes
+			nrc := if m.session != 0x03 { u8(0x7F) } else { u8(0x33) }
+			r := ask_over(rt, mut c, mut t, mut &now, [u8(0x11), 0x01])
+			assert r == [u8(0x7F), 0x11, nrc], '${ctx}: ${r} model ${m}'
+			assert c.server.reset_req == 0, ctx
+			model_holds(c, m, ctx)
+			continue
+		}
 		match op {
 			0, 1 {
 				sess := if op == 0 { u8(0x03) } else { u8(0x01) }
@@ -723,12 +806,17 @@ fn test_the_cross_transport_security_model_holds_over_random_interleavings() {
 				}
 			}
 		}
-		assert c.server.session == m.session, '${ctx}: session ${c.server.session} model ${m}'
-		// and who holds the unlock, directly — not only when a later write happens to ask
-		for x in 0 .. 2 {
-			holds := c.server.unlocked != 0 && c.unlock_remote == (x == 1)
-			assert holds == m.unlocked[x], '${ctx}: transport ${x} unlocked ${holds}, model ${m}'
-		}
+		model_holds(c, m, ctx)
+	}
+}
+
+// model_holds: the session and who holds the unlock are the model's — the unlock directly, not
+// only when a later write happens to ask
+fn model_holds(c &Connection, m SecModel, ctx string) {
+	assert c.server.session == m.session, '${ctx}: session ${c.server.session} model ${m}'
+	for x in 0 .. 2 {
+		holds := c.server.unlocked != 0 && c.unlock_remote == (x == 1)
+		assert holds == m.unlocked[x], '${ctx}: transport ${x} unlocked ${holds}, model ${m}'
 	}
 }
 

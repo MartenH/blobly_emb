@@ -125,7 +125,35 @@ fn validate_doip(m Model) {
 				'gate it (write = { security = N }), REQ-NET-012')
 		}
 	}
+	// ...nor any other change of ECU state: every service this build performs that is not in
+	// doip_open_services needs a security level. comm/diag makes the unlock the transport's that
+	// earned it, so over DoIP that is the network tester's own 0x27, never the bus tester's.
+	for sid in 0 .. 256 {
+		s := u8(sid)
+		if s in doip_open_services || diag_unbuilt(m, s) != '' {
+			continue
+		}
+		row, listed := svc_row(m, s)
+		if !listed || row.security != 0 {
+			continue
+		}
+		h := '0x${s.hex()}'
+		if !m.uds.table {
+			panic('loom2v: [doip] makes service ${h} reachable from the network with no security level — the default [uds] table ' +
+				'serves it to anyone; declare [uds] services with a security level on it ("${h}" = { sessions = ["extended"], security = N }) or leave it out, REQ-NET-012')
+		}
+		panic('loom2v: [doip] makes service ${h} reachable from the network with no security level — ' +
+			'gate it in [uds] services ("${h}" = { ..., security = N }) or leave it out, REQ-NET-012')
+	}
 }
+
+// doip_open_services: what a network tester may run before it has authenticated (REQ-NET-012) —
+// reach and keep a session (0x10, 0x3E) and authenticate in it (0x27), which no 0x27 gate can
+// itself require, and read (0x22, 0x19). 0x2E is gated per DID (above). Every OTHER service
+// changes ECU state — 0x11 restarts it, 0x14 clears its fault memory, 0x85 freezes it, 0x28
+// silences its bus — so the list is what is exempt, not what is gated: a service comm/uds learns
+// later is gated until someone argues it here.
+const doip_open_services = [u8(0x10), 0x19, 0x22, 0x27, 0x2E, 0x3E]
 
 // doip_target_fns: the C seam, the hook into the comm thread's server, and the doip thread's loop
 // (the doip thread runs it; driver/eth/doip_netx.c calls it once its sockets are up).

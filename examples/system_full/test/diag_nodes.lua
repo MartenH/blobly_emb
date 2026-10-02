@@ -82,6 +82,16 @@ for _, n in ipairs(nodes) do
     check.nrc(0x35, function() seeded(function() d:security_access(0x01, wrong) end) end)
     check.nrc(0x35, function() seeded(function() d:security_access(0x01, wrong) end) end)
     check.nrc(0x36, function() seeded(function() d:security_access(0x01, wrong) end) end)
+    if n.name == "sysnode" then
+      -- sysnode gates ECUReset behind level 1 (REQ-NET-012), which the lockout forbids: refused.
+      -- Its lockout running on through a reset is doip_sysnode.lua's (a DoIP unlock earned first)
+      check.nrc(0x33, function() d:raw("\x11\x01") end)
+      sleep_ms(3200)
+      d:tester_present()
+      seeded(function() d:security_access(0x01) end)
+      d:session(0x01)
+      return
+    end
     check.equal(tohex(d:raw("\x11\x01")), "51 01")
     sleep_ms(2000)
     check.nrc(0x31, function() d:write_did(0x0102, "\x01") end) -- default session after the restart

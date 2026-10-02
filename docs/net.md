@@ -106,14 +106,12 @@ programming/diag path is exposed over IP, not after:
   verification (`test_keyless_build_flashes_open` covers that mode) — fine for a
   closed bench, catastrophic if reachable over a routed network. An IP-enabled
   build must refuse to boot the programming path with an unset image key.
-- **Diagnostic writes need authentication (REQ-NET-012).** The 0x29 gate lives in
-  `boot.Prog`; the application UDS server (`uds.Server.handle`) currently accepts
-  `0x2E WriteDataByIdentifier` on any writable DID with no auth. Over CAN that is
-  a physically-present adversary; over IP, reachability alone would grant write
-  access. The app diag server needs an authenticated-session gate (the same 0x29
-  primitive, or a session-based access control) before it is externally reachable.
-  A routing-activation tester list (`[doip] testers`, below) does not close this: it
-  filters claimed source addresses, which are not authenticated.
+- **State-changing diagnostics need authentication (REQ-NET-012).** Over CAN an
+  unauthenticated 0x2E or 0x11 is a physically-present adversary; over IP, reachability
+  alone would grant it. Closed for DoIP (the sysnode section below): a `[doip]` node's
+  every state-changing service carries a 0x27 level, and the unlock that level asks for
+  is the network tester's own. A routing-activation tester list (`[doip] testers`, below)
+  does not close this: it filters claimed source addresses, which are not authenticated.
 
 Beyond those, P3+ must consider: rate-limiting/SYN-flood resistance (bounded
 pools already cap resource exhaustion to "drop", not crash) and — later — **TLS**
@@ -266,16 +264,16 @@ ISO 13400: on its own image first (below), then generated onto a running node (s
 generator emits; doip-svc: link poll + the UDP requests — identification, entity status,
 power mode), and hands each
 request to the CAN comm thread through a mailbox — the server keeps one owner
-thread. The VIN announced is DID 0xF190. Generation refuses a writable DID
-without a security level (REQ-NET-012's DID-write half; 0x11 ECUReset is still
-reachable over IP without one, so the requirement stays open — and sysnode's key
-is blobly_net's public reference key, a bench posture), an entity address outside ISO 13400's
+thread. The VIN announced is DID 0xF190. Generation refuses a state-changing service
+reachable without a security level (REQ-NET-012, below — sysnode's key is blobly_net's
+public reference key, a bench posture), an entity address outside ISO 13400's
 entity ranges, and an eth bus at another address (a node has one). TCP initial
 sequence numbers come from the TRNG (the comm thread draws the seed). Bench:
 `examples/system_full/test/doip_sysnode.lua` on the H735 — discovery, sessions,
 DIDs, 0x27 + the gated 0x2E, one server and one session across DoIP and CAN with
 each transport's unlock its own, and ECUReset
-answered over TCP before the restart, 5/5.
+answered over TCP before the restart, 5/5 (before ECUReset was gated — the suite now
+also refuses it without DoIP's own unlock, and resets under it; not yet rerun).
 
 **Declared by the system, not the node** (rung 6): sysnode's address and DoIP entity
 address are `endpoint = { address = "192.168.0.50", port = 30490 }` and
@@ -332,12 +330,36 @@ a second NetX socket to accept the contender on, and a listen-queue signal NetX 
 random A_DoIP_Announce_Wait before the first announcement, and routing activation's
 authentication / confirmation steps (codes 0x04, 0x05, 0x11).
 
-**REQ-NET-012 is still open.** `testers` is a policy, not authentication: a source address is
-whatever the tester writes into its request, so the list keeps honest testers on their own
-addresses and nothing more. What closes the requirement is an authenticated activation (the OEM
-field of the routing activation request, or 0xE0 central security) or an authenticated session
-in front of every state-altering service — 0x11 ECUReset included, which is still reachable over
-IP with no security level.
+**REQ-NET-012: an authenticated session in front of every state-changing service.**
+`testers` is a policy, not authentication: a source address is whatever the tester writes into
+its request, so the list keeps honest testers on their own addresses and nothing more. What
+closes the requirement is two rules that already existed, joined by one at generation:
+
+- **The unlock belongs to the transport that earned it** (`comm/diag` enter/leave): a request
+  over DoIP sees the server locked unless a 0x27 exchange over DoIP unlocked it, whatever the CAN
+  tester holds, and the reverse. The cross-transport model in `comm/diag/diag_test.v` checks it
+  over random interleavings, once on the default table and once with 0x11 gated.
+- **Every service a `[doip]` node performs that changes ECU state carries a security level**
+  (`validate_doip`, loom2v): a writable DID needs `write = { security = N }`, and every other
+  service needs a `[uds] services` row with `security = N` — or is left out of the table. The
+  rule lists what is EXEMPT (`doip_open_services`), not what is gated: 0x10 and 0x3E (reaching and
+  keeping a session), 0x27 (authenticating, which no 0x27 gate can itself require), 0x22 and 0x19
+  (reads), and 0x2E (gated per DID). Everything else — 0x11 ECUReset, 0x14 clearing the fault
+  memory, 0x85 freezing it, 0x28 silencing the bus, and any service comm/uds learns later —
+  must be gated. The default table (no `services`) serves 0x11 to anyone, so a `[doip]` node
+  declares one.
+
+So over IP a state change answers securityAccessDenied (0x33) until THAT tester has unlocked, in
+ISO 14229-1's order (a service outside its session still answers 0x7F first). The gate is one
+row, shared with the bus: a `[doip]` node's CAN tester needs its own unlock for the same service
+too — the requirement asks for the network "not only" the bus, and a second, network-only table
+would be a second copy of the per-service gate inside `comm/uds`. 0x10 is deliberately open: an
+unauthenticated network tester can still change the SHARED session, which relocks the bus
+tester's unlock (every session entry relocks) — a denial of diagnostics, not a change of ECU
+state. Not built: authenticated routing activation (the OEM-specific field, or 0xE0 central
+security) — it would authenticate the CONNECTION, while ISO 14229's 0x27 / 0x29 authenticate the
+diagnostic session, which is what the requirement names; and 0x29 itself, which the application
+server does not serve (the bootloader's `boot.Prog` does).
 
 **One NetX per image** (`driver/eth/netx_up.c`): the pool, the IP instance,
 ARP/ICMP/UDP, the link wait and `rand()` are brought up once, at the node's one
