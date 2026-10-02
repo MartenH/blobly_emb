@@ -35,7 +35,7 @@ fn blobly_doip_run() {
 	}
 	// UDS: the application policy (no programming session — erase/download are the
 	// bootloader's), default session, one identification DID (0xF190) the bench reads. init()
-	// is NOT called: its response buffer (doip.v, max_did_data + 8) keeps the single-DID bound.
+	// is NOT called: the server answers within uds.legacy_resp_cap, the room feed reserves.
 	g_srv.uds.no_programming = true
 	g_srv.uds.reset_state()
 	// 0xF190 IS the VIN (ISO 14229-1 VINDataIdentifier), and the same one the announcement

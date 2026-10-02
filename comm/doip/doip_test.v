@@ -284,3 +284,118 @@ fn test_announcement_layout() {
 	assert resp[33] == 0x02 // GID = EID
 	assert resp[39] == 0x00 // further action
 }
+
+// what the external server saw last (serve hook tests)
+__global g_seen_len int
+__global g_seen_functional bool
+
+// answers 0x22 with 300 bytes (more than the embedded server ever could) and
+// 0x3E 80 with nothing, like a suppressed positive response
+fn serve_big(ctx voidptr, req &u8, req_len int, functional bool, resp &u8, resp_cap int) int {
+	assert resp_cap == max_uds
+	g_seen_len = req_len
+	g_seen_functional = functional
+	if unsafe { req[0] } == 0x3E {
+		return 0
+	}
+	unsafe {
+		resp[0] = 0x62
+		for i in 1 .. 300 {
+			resp[i] = u8(i)
+		}
+	}
+	return 300
+}
+
+fn activated_with(answer fn (voidptr, &u8, int, bool, &u8, int) int) Server {
+	mut s := Server{}
+	s.entity_addr = 0x0E80
+	s.serve.answer = answer
+	mut inb := [max_msg]u8{}
+	mut resp := [1024]u8{}
+	n := frame(&inb[0], 0x0005, [u8(0x0E), 0x00, 0x00, 0, 0, 0, 0])
+	assert s.feed(&inb[0], n, &resp[0], resp.len) == 8 + 9
+	return s
+}
+
+fn test_serve_hook_answers_with_a_full_iso_tp_response() {
+	mut s := activated_with(serve_big)
+	mut inb := [max_msg]u8{}
+	mut resp := [1024]u8{}
+	n := frame(&inb[0], 0x8001, [u8(0x0E), 0x00, 0x0E, 0x80, 0x22, 0xF1, 0x90])
+	rlen := s.feed(&inb[0], n, &resp[0], resp.len)
+	assert g_seen_len == 3 && !g_seen_functional
+	assert rlen == 13 + 8 + 4 + 300
+	assert resp[13 + 4] == 0 && resp[13 + 5] == 0 && resp[13 + 6] == 0x01 && resp[13 + 7] == 0x30
+	assert resp[13 + 12] == 0x62
+	assert resp[13 + 12 + 299] == u8(299 & 0xFF)
+}
+
+fn test_functional_target_reaches_the_server_as_functional() {
+	mut s := activated_with(serve_big)
+	mut inb := [max_msg]u8{}
+	mut resp := [1024]u8{}
+	// 0x3E 80 to the functional address: acked, answered by nothing
+	n := frame(&inb[0], 0x8001, [u8(0x0E), 0x00, 0xE4, 0x00, 0x3E, 0x80])
+	rlen := s.feed(&inb[0], n, &resp[0], resp.len)
+	assert g_seen_functional
+	assert rlen == 13
+	assert resp[2] == 0x80 && resp[3] == 0x02 && resp[12] == 0x00
+	// the ack comes from the address the request was sent to
+	assert resp[8] == 0xE4 && resp[9] == 0x00
+}
+
+fn test_embedded_server_withholds_functional_negatives() {
+	mut s := activated_with(unsafe { nil })
+	s.uds.session = 0x01
+	mut inb := [max_msg]u8{}
+	mut resp := [max_msg]u8{}
+	// an unsupported service: physical gets 7F xx 11, functional gets nothing
+	n := frame(&inb[0], 0x8001, [u8(0x0E), 0x00, 0x0E, 0x80, 0xBA])
+	assert s.feed(&inb[0], n, &resp[0], max_msg) == 13 + 8 + 4 + 3
+	assert resp[13 + 12] == 0x7F && resp[13 + 14] == 0x11
+	n2 := frame(&inb[0], 0x8001, [u8(0x0E), 0x00, 0xE4, 0x00, 0xBA])
+	assert s.feed(&inb[0], n2, &resp[0], max_msg) == 13
+}
+
+fn test_serve_hook_needs_room_for_its_largest_response() {
+	mut s := activated_with(serve_big)
+	mut inb := [max_msg]u8{}
+	mut resp := [1024]u8{}
+	n := frame(&inb[0], 0x8001, [u8(0x0E), 0x00, 0x0E, 0x80, 0x22, 0xF1, 0x90])
+	// a buffer below max_resp_per_msg keeps the message buffered, unserved
+	assert s.feed(&inb[0], n, &resp[0], s.max_resp_per_msg() - 1) == 0
+	assert s.buf_len == n
+	assert s.feed(&inb[0], 0, &resp[0], s.max_resp_per_msg()) == 13 + 8 + 4 + 300
+}
+
+// claims a longer response than it was allowed
+fn serve_overlong(ctx voidptr, req &u8, req_len int, functional bool, resp &u8, resp_cap int) int {
+	return resp_cap + 1
+}
+
+fn test_overlong_answer_is_nacked_not_framed() {
+	mut s := activated_with(serve_overlong)
+	mut inb := [max_msg]u8{}
+	mut resp := [1024]u8{}
+	n := frame(&inb[0], 0x8001, [u8(0x0E), 0x00, 0x0E, 0x80, 0x22, 0xF1, 0x90])
+	assert s.feed(&inb[0], n, &resp[0], resp.len) == 13
+	assert resp[2] == 0x80 && resp[3] == 0x03 && resp[12] == 0x08
+}
+
+fn test_embedded_server_answers_within_its_init_capacity() {
+	mut s := Server{}
+	s.uds.init(100)
+	assert s.max_resp_per_msg() == 13 + 12 + 100
+	s.functional_addr = 0xE401
+	mut inb := [max_msg]u8{}
+	mut resp := [1024]u8{}
+	n := frame(&inb[0], 0x0005, [u8(0x0E), 0x00, 0x00, 0, 0, 0, 0])
+	assert s.feed(&inb[0], n, &resp[0], resp.len) == 17
+	// a configured functional address replaces the default one
+	n2 := frame(&inb[0], 0x8001, [u8(0x0E), 0x00, 0xE4, 0x01, 0x3E, 0x80])
+	assert s.feed(&inb[0], n2, &resp[0], resp.len) == 13
+	n3 := frame(&inb[0], 0x8001, [u8(0x0E), 0x00, 0xE4, 0x00, 0x3E, 0x80])
+	assert s.feed(&inb[0], n3, &resp[0], resp.len) == 13
+	assert resp[3] == 0x03 && resp[12] == 0x03 // unknown target
+}

@@ -1,5 +1,6 @@
 module doip
 
+import comm.isotp
 import comm.uds
 
 // DoIP (ISO 13400-2) server framing, no-alloc and transport-agnostic — the
@@ -14,9 +15,32 @@ import comm.uds
 // message + acks (0x8001/0x8002/0x8003), generic NACK (0x0000), vehicle
 // announcement (0x0004). Alive-check and entity-status answer as unknown-type
 // NACKs until a phase needs them.
+//
+// The UDS server answering is either the embedded one or, when `serve.answer` is
+// set, one the owner keeps elsewhere — a node with ONE diagnostic server reachable
+// over both ISO-TP and DoIP (docs/diagnostics.md) hands DoIP a hook to it.
 
 pub const header_len = 8
 pub const max_msg = 256 // DoIP header + the largest UDS payload we serve
+
+// the largest UDS response a request answered through `serve` may produce: one
+// ISO-TP message, so a server shared with a CAN connection answers over DoIP
+// whatever it answers there
+pub const max_uds = isotp.max_payload
+
+// the functional logical address used when Server.functional_addr is 0 (ISO
+// 13400-2's functional group range starts here)
+pub const default_functional_addr = u16(0xE400)
+
+// Serve is a UDS server DoIP does not own. `answer` handles one request and
+// writes at most resp_cap bytes to resp, returning the response length (0 = no
+// response). It runs on the caller of feed: a server another thread also drives
+// is the owner's to serialise, and so is resetting it when the connection drops.
+pub struct Serve {
+pub mut:
+	ctx    voidptr
+	answer fn (ctx voidptr, req &u8, req_len int, functional bool, resp &u8, resp_cap int) int = unsafe { nil }
+}
 
 const proto_ver = u8(0x02) // ISO 13400-2:2012
 const proto_inv = u8(0xFD)
@@ -42,6 +66,7 @@ const nack_bad_length = u8(0x04)
 // diagnostic-message NACK codes
 const dnack_invalid_source = u8(0x02)
 const dnack_unknown_target = u8(0x03)
+const dnack_transport_error = u8(0x08)
 
 pub struct Server {
 pub mut:
@@ -50,7 +75,10 @@ pub mut:
 	activated   bool
 	fatal       bool // stream desynced (bad pattern / oversized): transport must drop the connection
 	vin         [17]u8
-	uds         uds.Server
+	uds         uds.Server // answers unless serve.answer is set
+	serve       Serve
+	// a diagnostic message to this address is a functional request (0 = default_functional_addr)
+	functional_addr u16
 	// assembly buffer: TCP chunks accumulate here until a message completes
 	buf     [max_msg]u8
 	buf_len int
@@ -166,6 +194,7 @@ pub fn (mut s Server) ident_response(data &u8, data_len int, eid &u8, resp &u8) 
 // feed consumes one chunk of TCP bytes and processes every COMPLETE DoIP message
 // assembled so far; the response stream (possibly several frames: ack + reply)
 // is written to resp. Returns the number of response bytes (0 = nothing yet).
+// resp_max must hold at least max_resp_per_msg(), or no message is ever served.
 pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 	// append (a chunk that would overflow the assembly buffer is a too-large
 	// message: drop the stream state and NACK — the glue closes on that).
@@ -206,7 +235,7 @@ pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 		// stop (don't consume) when the worst-case response for one more message
 		// no longer fits: the message stays buffered and the caller drains it
 		// with feed(len 0) after sending what accumulated so far
-		if out + max_resp_per_msg > resp_max {
+		if out + s.max_resp_per_msg() > resp_max {
 			break
 		}
 		ptype := (u16(s.buf[2]) << 8) | u16(s.buf[3])
@@ -224,7 +253,20 @@ pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 
 // worst response per message: ack(8+5) + diag hdr(8+4) + uds resp — feed
 // stops before dispatching a message this might not fit
-const max_resp_per_msg = header_len + 5 + header_len + 4 + int(uds.max_did_data) + 3
+pub fn (s &Server) max_resp_per_msg() int {
+	return diag_resp_at + s.uds_cap()
+}
+
+// where a UDS response starts in the frames answering one diagnostic message
+const diag_resp_at = header_len + 5 + header_len + 4
+
+// the longest UDS response the answering server may write
+fn (s &Server) uds_cap() int {
+	if s.serve.answer != unsafe { nil } {
+		return max_uds
+	}
+	return if s.uds.resp_cap > 0 { s.uds.resp_cap } else { uds.legacy_resp_cap }
+}
 
 fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 	match ptype {
@@ -271,31 +313,48 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 			if !s.activated || sa != s.tester_addr {
 				return s.diag_nack(resp, at, sa, dnack_invalid_source)
 			}
-			if ta != s.entity_addr {
+			func_addr := if s.functional_addr != 0 {
+				s.functional_addr
+			} else {
+				default_functional_addr
+			}
+			functional := ta == func_addr
+			if ta != s.entity_addr && !functional {
 				return s.diag_nack(resp, at, sa, dnack_unknown_target)
 			}
-			// positive ack first, then the UDS response as its own message
+			// the server writes its response straight to where it is framed,
+			// within the room feed reserved; the ack and header go in front after
+			cap := s.uds_cap()
+			req := unsafe { &s.buf[header_len + 4] }
+			out := unsafe { &resp[at + diag_resp_at] }
+			ulen := if s.serve.answer != unsafe { nil } {
+				s.serve.answer(s.serve.ctx, req, plen - 4, functional, out, cap)
+			} else if functional {
+				s.uds.handle_functional(req, plen - 4, out)
+			} else {
+				s.uds.handle(req, plen - 4, out)
+			}
+			if ulen < 0 || ulen > cap {
+				return s.diag_nack(resp, at, sa, dnack_transport_error)
+			}
+			// positive ack first, from the address the request was sent to
 			mut o := put_header(resp, at, pt_diag_ack, 5)
 			unsafe {
-				resp[o] = u8(s.entity_addr >> 8)
-				resp[o + 1] = u8(s.entity_addr)
+				resp[o] = u8(ta >> 8)
+				resp[o + 1] = u8(ta)
 				resp[o + 2] = u8(sa >> 8)
 				resp[o + 3] = u8(sa)
 				resp[o + 4] = 0x00 // ack
 			}
 			o += 5
-			mut ubuf := [uds.max_did_data + 8]u8{}
-			ulen := s.uds.handle(unsafe { &s.buf[header_len + 4] }, plen - 4, &ubuf[0])
 			if ulen > 0 {
+				// then the UDS response as its own message, from this entity
 				o = put_header(resp, o, pt_diag, u32(4 + ulen))
 				unsafe {
 					resp[o] = u8(s.entity_addr >> 8)
 					resp[o + 1] = u8(s.entity_addr)
 					resp[o + 2] = u8(sa >> 8)
 					resp[o + 3] = u8(sa)
-					for i in 0 .. ulen {
-						resp[o + 4 + i] = ubuf[i]
-					}
 				}
 				o += 4 + ulen
 			}
