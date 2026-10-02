@@ -267,14 +267,15 @@ request to the CAN comm thread through a mailbox — the server keeps one owner
 thread. The VIN announced is DID 0xF190. Generation refuses a state-changing service
 reachable without a security level and the public bench key unless named (REQ-NET-012, below —
 sysnode names it: `allow_bench_key = true`, a bench posture), an entity address outside ISO 13400's
-entity ranges, and an eth bus at another address (a node has one). TCP initial
+entity ranges, and a SOME/IP endpoint at another address — a node has one address (checked where the
+image runs the SOME/IP eth thread; an eth bus that carries nothing is not compared). TCP initial
 sequence numbers come from the TRNG (the comm thread draws the seed). Bench:
 `examples/system_full/test/doip_sysnode.lua` on the H735 — discovery, sessions,
 DIDs, 0x27 + the gated 0x2E, one server and one session across DoIP and CAN with
 each transport's unlock its own, and ECUReset
 answered over TCP before the restart. With ECUReset gated (REQ-NET-012) it also refuses
-0x11 without DoIP's own unlock and resets under it — 7/7 on the bench 2026-10-02 (image 906380d); the DoIP
-wrong-key leg added after that run is not yet rerun.
+0x11 without DoIP's own unlock and resets under it, and wrong keys sent over DoIP lock 0x27 out
+for the bus tester too — 7/7 on the bench 2026-10-02 (image 906380d).
 
 **Declared by the system, not the node** (rung 6): sysnode's address and DoIP entity
 address are `endpoint = { address = "192.168.0.50", port = 30490 }` and
