@@ -44,8 +44,8 @@ NX_OBJ = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
 
 # board bring-up + ETH MAC + the NetX STM32H7 driver + the shared NetX eth
 # backend + this image's byte-IOC glue
-# + the network the config asks for (gen/loom_build.mk: ETH MAC, NetX driver, driver/eth seams)
-BSP = $(BOARD_BSP_THREADX) $(LOOM_NET_SRCS) $(REPO)/boards/common/iocb.c
+# + the network the config asks for (gen/loom_build.mk: ETH MAC, NetX driver, driver/eth seams, byte IOC)
+BSP = $(BOARD_BSP_THREADX) $(LOOM_NET_SRCS)
 
 # a failed lint must not leave a linkable app.c behind (the vinit gate is mandatory)
 .DELETE_ON_ERROR:

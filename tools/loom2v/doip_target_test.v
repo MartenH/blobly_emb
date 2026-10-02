@@ -256,7 +256,8 @@ fn test_doip_and_someip_share_one_netx() {
 	assert code == 0, out
 	assert glue.contains("C.blob_eth_open(c'192.168.0.50', someip_port)")
 	assert glue.contains("C.doip_net_create(c'192.168.0.50',")
-	for src in ['driver/eth/netx_up.c', 'driver/eth/eth_netx.c', 'driver/eth/doip_netx.c'] {
+	for src in ['driver/eth/netx_up.c', 'driver/eth/eth_netx.c', 'driver/eth/doip_netx.c',
+		'boards/common/iocb.c'] {
 		assert mk.contains(src), mk
 	}
 	// a node has one address

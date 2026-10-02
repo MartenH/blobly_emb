@@ -370,7 +370,9 @@ fn net_build_lines(m Model) string {
 	mut srcs := [r'$(REPO)/boards/$(BOARD)/eth.c', r'$(REPO)/net/nx_driver_stm32h7.c',
 		r'$(REPO)/driver/eth/netx_up.c']
 	if eth_thread_on(m) {
+		// the SOME/IP seam, and the byte IOC its signals cross threads through
 		srcs << r'$(REPO)/driver/eth/eth_netx.c'
+		srcs << r'$(REPO)/boards/common/iocb.c'
 	}
 	if m.doip.on {
 		srcs << r'$(REPO)/driver/eth/doip_netx.c'
