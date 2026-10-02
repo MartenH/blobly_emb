@@ -391,16 +391,22 @@ approved_by = "Marten Hildell — NUCLEO-H755ZI-Q button->LED + heartbeat bench"
 date = "2026-07-19"
 
 # The node's ONE UDS server over DoIP on the system_full sysnode (H735-DK at 192.168.0.50, [doip]):
-# doip_sysnode.lua through blobly_net's headless runner, 5/5 — discovery, sessions + DIDs, 0x27 +
-# the gated 0x2E, one server and session across DoIP and CAN, ECUReset answered over TCP before the restart
-# (server clock 25.5 s -> 1.2 s over SWD). Run by the coding agent on the maintainer's bench. Rerun
-# with examples/system_full/test/doip_bench.sh (the board on the LAN, blobly_net beside this repo).
+# doip_sysnode.lua through blobly_net's headless runner, 7/7 — discovery, sessions +
+# DIDs, 0x27 + the gated 0x2E, one server and session across DoIP and CAN with each transport's unlock
+# its own (a CAN unlock does not open a DoIP write or ECUReset: 0x33), wrong keys over DoIP locking
+# 0x27 out for the bus tester too and refusing the reset meanwhile, and ECUReset under DoIP's own
+# unlock answered over TCP before the restart, the lockout running on. The image was built from
+# 906380d on #347's branch, squash-merged as c22eb18; the branch's later commits change only
+# generation-time refusals (tools/doipcfg, sysmodel, loom2v's validation), so c22eb18 generates
+# the same sysnode image. Run by the coding agent on
+# the maintainer's bench. Rerun with examples/system_full/test/doip_bench.sh (the board on the LAN,
+# blobly_net beside this repo).
 [[review]]
 id = "sysnode-doip-hardware"
 method = "review"
 context = "h735/ETH-DoIP"
-verifies = ["REQ-NET-007"]
-approved_by = "Claude (coding agent) on Marten Hildell's bench — sysnode DoIP suite 5/5"
+verifies = ["REQ-NET-007", "REQ-NET-012"]
+approved_by = "Claude (coding agent) on Marten Hildell's bench — sysnode DoIP suite 7/7"
 date = "2026-10-02"
 
 # The SOME/IP RPC on system_full's tcu (NUCLEO-H723, 192.168.0.51); --flash needs
@@ -639,3 +645,21 @@ context = "h723/ThreadX"
 verifies = ["REQ-DIAG-001", "REQ-DIAG-002"]
 approved_by = "Claude bench session — NUCLEO-H723ZG (system_full zone_a) vs CANsub.4 ch1 (CAN-FD)"
 date = "2026-09-30"
+
+# R6a on silicon (examples/system_full/test/faults_zone_a.lua, 5/5, the #350 image): zone_a's fault
+# memory on its ThreadX comm thread, fed by SteerLimiter's plausibility test of VehicleSpeed across
+# the byte IOC. The script drives 300 km/h on edge beside the gateway's plausible copy: DTC U0401-00
+# reads passing, then confirmed under the implausible speed with pending kept and only testFailed
+# dropping once plausible speeds return (the power cycle, begun at boot, does not end); 0x14 clears
+# it by number and as a group; one cleared while failing returns only by failing again; and with
+# 0x85 off (extended session) nothing is recorded. Run by the coding agent on the maintainer's bench.
+# EVIDENCE, NOT A VERIFICATION of REQ-DIAG-009/010/012: one DTC in one power cycle; the confirmation
+# and aging thresholds, a slow reader, DTC setting restored by session change / S3 / reset, and the
+# NM and signal cycle sources did not run on the target — recorded when they do.
+[[review]]
+id = "faults-on-target-zone-a"
+method = "review"
+context = "h723/ThreadX"
+verifies = []
+approved_by = "Claude (coding agent) on Marten Hildell's bench — zone_a fault suite 5/5"
+date = "2026-10-02"
