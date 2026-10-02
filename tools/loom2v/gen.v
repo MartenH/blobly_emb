@@ -1306,6 +1306,7 @@ mut:
 	frames       FrameCfg
 	routes       []Route
 	isotp_conns  []IsotpConn
+	doip         DoipCfg // [doip]: the diagnostic server over DoIP too (gen_doip.v)
 	dids         []DidCfg
 	faults       []FaultCfg // [[fault]] in declaration order = the fault memory's slot order
 	fault_cycle  string     // [fault_memory] cycle = "Signal.field" (bool) — the operation cycle
@@ -1523,6 +1524,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		frames:       frames
 		routes:       validate_route_cores(parse_routes(doc, dbc, frames), bus_core, bus_kind)
 		isotp_conns:  parse_isotp(doc)
+		doip:         parse_doip(doc)
 		dids:         parse_dids(doc)
 		faults:       parse_faults(doc)
 		fault_cycle:  parse_fault_cycle(doc)
@@ -2053,6 +2055,12 @@ fn emit_manifest(m Model, doc toml.Doc, ecu string, comm_thread_on bool, single_
 		man << 'thread,${tid},eth,${m.bus_core[m.eth] or { 0 }},${ep}'
 		tid++
 	}
+	// the DoIP transport's threads (gen_doip.v): bound after eth, before the kernel timer
+	if comm_thread_on {
+		doip_rows := doip_manifest_rows(m, tid, if nthr > 1 { mp - 1 - io_shift } else { 1 })
+		man << doip_rows
+		tid += doip_rows.len
+	}
 	timer_rows := trace_manifest_timer_row(m, tid)
 	man << timer_rows
 	tid += timer_rows.len
@@ -2295,6 +2303,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << diag_target_fns(m, ioc_idx)
 			glue << diag_target_sa_fns(m)
 			glue << diag_target_c_decls(m)
+			glue << doip_target_fns(m)
 			glue << nm_shell_fns(m)
 			glue << stat_shell_fns(m, doc, app_threads, multi)
 			glue << trace_fb_hooks(m, doc, app_threads, multi, m.io_points.len > 0)
@@ -2388,6 +2397,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << trace_module_globals(m)
 			glue << shell_module_globals(m)
 			glue << diag_target_globals(m)
+			glue << doip_target_globals(m)
 			glue << xcore_trace_globals(m)
 			glue << nvm_globals(m)
 			glue << nm_module_globals(m)
@@ -2805,6 +2815,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 				glue << trace_module_init(m)
 				glue << shell_module_init(m)
 				glue << diag_target_init(m)
+				glue << doip_target_init(m)
 				glue << nm_shell_register(m)
 				glue << stat_shell_register(m)
 				glue << nm_module_init(m)
@@ -2833,6 +2844,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << '\t\tC.comm_rx_wait(10) // block up to 10 ticks; the FDCAN Rx ISR wakes us on a new frame'
 				}
 				glue << diag_target_housekeep(m)
+				glue << doip_target_serve(m)
 				glue << '\t\t// CONSUMER: drain the Rx FIFO (non-blocking); account each external rx frame'
 				glue << '\t\tfor ch.recv(mut rx) {'
 				for si in rx_sigs {
@@ -2948,6 +2960,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					glue << emit_io_target_create(comm_prio + 1)
 				}
 				glue << emit_eth_target_create(m, comm_prio)
+				glue << doip_target_create(m, comm_prio)
 				if m.trace.on {
 					// Deterministic trace thread ids (manifest order): comm = 1, then the app
 					// threads by priority, then the io thread; the ONLY first-sight id left is
@@ -2967,6 +2980,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 					if eth_thread_on(m) {
 						glue << '\tC.trace_bind_thread(&g_eth_tcb[0])'
 					}
+					glue << doip_target_trace_binds(m)
 				}
 				glue << '}'
 			} else {
@@ -3702,6 +3716,9 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 	if m.faults.len > 0 {
 		glue << 'import comm.fault' // debounce + the fault memory (docs/diagnostics.md §3.3)
 	}
+	if m.doip.on {
+		glue << 'import comm.doip' // the diagnostic server over DoIP too (gen_doip.v)
+	}
 	if m.isotp_conns.len > 0 {
 		glue << 'import comm.diag' // the diagnostic server on its ISO-TP connection
 		// the glue names uds only for [[did]]s — their tables, the live refresh, 0x27 (a DID gate)
@@ -3735,6 +3752,7 @@ fn main() {
 	// (rebound to the existing locals so it stays unchanged). (Step (a): parse -> model.)
 	mut m := build_model(doc, dbc)
 	m.nvm_names, m.nvm_ids = derive_nvm(mut m, doc)
+	validate_doip(m)
 
 	// [trace]: ThreadX streams the exec hooks (gen_trace.v); every other shape serves comm/trace's
 	// TraceModule from the loop that owns the bus — a host runner, or the bare-metal superloop

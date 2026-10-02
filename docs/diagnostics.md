@@ -372,8 +372,11 @@ A second diagnostic server on one node (a separate physical address on another b
 epoch, suppression and response forwarding it needs are not designed); OBD / emissions services (0x01–0x0A modes, readiness monitors) and J1939 DM1 — declared separately if
 an application needs them; ODX/PDX import (the manifest carries what the tester needs); 0x2F
 InputOutputControl, 0x23/0x3D memory access, and generic 0x31 RoutineControl (the bootloader keeps
-its own erase / check routines); DoIP diagnostics beyond what `comm/doip` already
-carries (the server in §3.1 is transport-independent, so DoIP inherits it later).
+its own erase / check routines). DoIP is NOT a second server: `[doip]` on a ThreadX node carries
+the one server over TCP as well (`tools/loom2v/gen_doip.v`) — the comm thread serves a DoIP request
+from a mailbox (`driver/eth/doip_netx.c`) through `comm/diag`'s `serve_remote`, so a CAN and a DoIP
+tester share one session and one security state, and a reset a DoIP tester asks for waits for its
+answer to be acknowledged. Not built: a host-side DoIP transport, and the bootloader's DoIP binding.
 
 ## 7. Obligations carried into the rungs
 

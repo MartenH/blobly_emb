@@ -75,6 +75,7 @@ fn specs() map[string]map[string]Key {
 			'signal':    sub(.arr, false, 'signal')
 			'frame':     sub(.arr, false, 'frame')
 			'isotp':     sub(.arr, false, 'isotp')
+			'doip':      sub(.tbl, false, 'doip') // the diagnostic server over DoIP too (ThreadX target)
 			'did':       sub(.arr, false, 'did')
 			'fault':        sub(.arr, false, 'fault') // docs/diagnostics.md §3.3
 			'fault_memory': sub(.tbl, false, 'fault_memory')
@@ -313,6 +314,11 @@ fn specs() map[string]map[string]Key {
 			'security_attempts': k(.int) // 0x27 failed keys before the lockout; default 3
 			'security_delay_ms': k(.int) // 0x27 lockout delay after too many wrong keys; default 10000
 			'security_key': k(.str) // "reference" = blobly_net's public bench key (a target); absent = the OEM's diag_sa_key_ok
+		}
+		'doip':       {
+			'address':            req(.str) // the node's static IPv4 address
+			'logical_address':    req(.int) // its DoIP entity address (0x0001..0x0DFF, 0x1000..0x7FFF)
+			'functional_address': k(.int)   // default 0xE400
 		}
 		'did':        {
 			'id':       req(.int)

@@ -1,0 +1,17 @@
+# The DoIP bench for system_full (test/doip_sysnode.lua): blobly_net as the tester on sysnode's
+# Ethernet (the H735 at 192.168.0.50, DoIP entity 0x07A0) AND on the compute bus (the CANsub.4's
+# channel 2, classic 500k), so one suite can show that both transports reach ONE server.
+project:
+  name: system_full — DoIP bench
+  version: 1
+
+channels:
+  - name: sysnode
+    type: doip
+    interface: doip:192.168.0.50:13400
+    tester_address: "0x0E00"
+    ecu_address: "0x07A0"
+
+  - name: compute
+    type: can
+    interface: cansub:e5a16adf/2@500000

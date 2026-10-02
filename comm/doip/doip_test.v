@@ -399,3 +399,9 @@ fn test_embedded_server_answers_within_its_init_capacity() {
 	assert s.feed(&inb[0], n3, &resp[0], resp.len) == 13
 	assert resp[3] == 0x03 && resp[12] == 0x03 // unknown target
 }
+
+fn test_max_resp_is_a_hook_servers_room() {
+	mut s := Server{}
+	s.serve.answer = serve_big
+	assert s.max_resp_per_msg() == max_resp
+}

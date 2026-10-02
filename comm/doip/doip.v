@@ -28,6 +28,10 @@ pub const max_msg = 256 // DoIP header + the largest UDS payload we serve
 // whatever it answers there
 pub const max_uds = isotp.max_payload
 
+// the response room one diagnostic message may need with a serve hook (its
+// max_resp_per_msg): a feed buffer this size always makes progress
+pub const max_resp = header_len + 5 + header_len + 4 + max_uds
+
 // the functional logical address used when Server.functional_addr is 0 (ISO
 // 13400-2's functional group range starts here)
 pub const default_functional_addr = u16(0xE400)

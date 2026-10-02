@@ -37,7 +37,8 @@ Rungs — each folds a feature-set AND retires the matching examples, one review
 5. 🧭 **sysnode protected routes + ext-id + FD payloads** → retire gw_*
 6. 🧭 **sysnode eth + SOME/IP + DoIP** — incl. a DoIP diagnostic over Ethernet that reads/writes
    the persisted NvM data (e.g. `DriveMode`), tying the networking node to persistence → retire
-   h735_net/someip/doip
+   h735_net/someip/doip. *DoIP landed 2026-10-02* (`[doip]`: the node's one UDS server over TCP,
+   bench-verified); SOME/IP on sysnode and the NvM-backed DID remain
 
 Kept standalone (not features of a running system): `bulk_bench` (host micro-bench), `minimal`.
 
