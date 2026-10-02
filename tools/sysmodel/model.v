@@ -1064,16 +1064,25 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 		}
 	}
 	// [isotp] — the node's diagnostic connection. rx_id/tx_id are on-wire diagnostic
-	// CAN ids. (The old [[isotp]] array is refused by the node gate, with the move it needs.)
+	// CAN ids. The old [[isotp]] array is still READ here — the node gate refuses it, with the
+	// move it needs, but a partial node (sysgen's dissolution path) runs no gate, and its ids
+	// must not drop out of the collision checks.
 	if iv := doc.value_opt('isotp') {
+		mut tables := []toml.Any{}
 		if iv is map[string]toml.Any {
+			tables << iv
+		} else if iv is []toml.Any {
+			tables = iv.clone()
+		}
+		for c in tables {
+			cm := c.as_map()
 			v.has_isotp = true
-			bus := m_str(iv, 'bus')
+			bus := m_str(cm, 'bus')
 			v.isotp_conns << IsotpConn{
 				iface:         key_iface[bus] or { bus }
-				rx_id:         m_u32(iv, 'rx_id')
-				tx_id:         m_u32(iv, 'tx_id')
-				functional_id: m_u32(iv, 'functional_id')
+				rx_id:         m_u32(cm, 'rx_id')
+				tx_id:         m_u32(cm, 'tx_id')
+				functional_id: m_u32(cm, 'functional_id')
 			}
 		}
 	}

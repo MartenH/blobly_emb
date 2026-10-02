@@ -203,6 +203,11 @@ fn validate_uds(m Model) {
 		if !svc_listed(m, 0x10) && mask != 0 && mask & uds.in_default == 0 {
 			panic('loom2v: [uds] services ${h} runs only outside the default session, but the table leaves out 0x10 — it could never be reached')
 		}
+		// 0x27 unlocks in extended (an application refuses programming) and every session entry
+		// relocks: a 0x27 kept out of extended unlocks nothing any gate (always extended) can use
+		if r.sid == 0x27 && mask & uds.in_extended == 0 {
+			panic('loom2v: [uds] services 0x27 leaves out the extended session — an unlock elsewhere is relocked by the session change every gate needs')
+		}
 		if r.security == 0 {
 			continue
 		}
@@ -217,11 +222,58 @@ fn validate_uds(m Model) {
 	if sa_levels(m) != 0 && !svc_listed(m, 0x27) {
 		panic('loom2v: [uds] services leaves out 0x27, but a [[did]] gate or service row needs a security level — nothing could unlock it')
 	}
+	// a DID is reached through its service's row too: both gates must be satisfiable at once —
+	// a session they share, and one level (0x27 unlocks exactly one, and both compare exactly)
 	for d in m.dids {
-		if d.writable && !svc_listed(m, 0x2E) {
-			panic('loom2v: [[did]] 0x${d.id.hex()} is writable, but [uds] services leaves out 0x2E — nothing could write it')
+		for acc in [
+			DidAccess{'read', 0x22, true, d.read_sessions, d.read_security},
+			DidAccess{'write', 0x2E, d.writable, d.write_sessions, d.write_security},
+		] {
+			if !acc.used {
+				continue
+			}
+			row, listed := svc_row(m, acc.sid)
+			if !listed {
+				panic('loom2v: [[did]] 0x${d.id.hex()}: [uds] services leaves out 0x${acc.sid.hex()} — nothing could ${acc.what} it')
+			}
+			if row.sessions != 0 && acc.sessions != 0 && row.sessions & acc.sessions == 0 {
+				panic('loom2v: [[did]] 0x${d.id.hex()} ${acc.what} gate shares no session with [uds] services 0x${acc.sid.hex()} — it could never be reached')
+			}
+			if row.security != 0 && acc.security != 0 && row.security != acc.security {
+				panic('loom2v: [[did]] 0x${d.id.hex()} ${acc.what} needs security ${acc.security}, but [uds] services 0x${acc.sid.hex()} needs ${row.security} — one unlock cannot satisfy both')
+			}
 		}
 	}
+}
+
+// DidAccess is one [[did]] access (read / write) as the service that carries it sees it
+struct DidAccess {
+	what     string
+	sid      u8
+	used     bool
+	sessions u8
+	security u8
+}
+
+// svc_row: the table's row for `sid`, its sessions resolved to the service's default when it
+// names none — false when a configured table leaves it out (the default table lists everything)
+fn svc_row(m Model, sid u8) (SvcCfg, bool) {
+	if !m.uds.table {
+		return SvcCfg{
+			sid:      sid
+			sessions: uds.default_sessions(sid)
+		}, true
+	}
+	for r in m.uds.services {
+		if r.sid == sid {
+			return SvcCfg{
+				sid:      sid
+				sessions: if r.sessions != 0 { r.sessions } else { uds.default_sessions(sid) }
+				security: r.security
+			}, true
+		}
+	}
+	return SvcCfg{}, false
 }
 
 // conn_init_lines configures connection `c` held at `conn` (e.g. `st.conn_diag`, `g_diag`): the

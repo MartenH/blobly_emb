@@ -146,8 +146,10 @@ was earned in, as a DID's does.
   0x27 / 0x28 / 0x85 (ISO 14229-1 runs them only in a non-default one); a 0x10 row without the
   default session, or any row reachable only outside it with 0x10 left out; a `security` level on
   0x10 / 0x27 / 0x3E (how a tester reaches, unlocks and keeps a session) or on a row not allowed in
-  the extended session (the only one an application server unlocks in); a table leaving out 0x27
-  while a level is gated, or 0x2E while a DID is writable; more rows than `uds.max_services` (16).
+  the extended session (the only one an application server unlocks in), and a 0x27 row without it;
+  a table leaving out 0x27 while a level is gated, 0x22 while a DID exists or 0x2E while one is
+  writable; a DID gate sharing no session with its service's row, or naming another 0x27 level
+  than the row (one unlock cannot satisfy both); more rows than `uds.max_services` (16).
 - **Migration** (no silent translation): the old `[[isotp]]` array — and a server key (`s3_ms`,
   `security_*`) or `name` in `[isotp]` — is refused by `ecumodel.validate` (so by ecucheck and
   loom2v alike) with the move it needs: write `[isotp]` as a table without `name`, and move the

@@ -383,6 +383,10 @@ fn test_a_service_table_the_build_cannot_honour_is_refused() {
 		'unknown_field':  [ok + '"0x2E" = { transports = ["isotp"] }', 'a row takes `sessions` and `security`']
 		'no_unlock':      ['+' + ok + '"0x2E" = {}', 'leaves out 0x27']
 		'no_write':       ['+' + ok + '"0x27" = {}', 'nothing could write it']
+		'no_read':        ['+"0x10" = {}\n"0x27" = {}\n"0x2E" = {}', 'nothing could read it']
+		'sa_stranded':    ['+' + ok + '"0x2E" = {}\n"0x27" = { sessions = ["safety"] }', '0x27 leaves out the extended session']
+		'gate_disjoint':  ['+' + ok + '"0x27" = {}\n"0x2E" = { sessions = ["safety"] }', 'shares no session with [uds] services 0x2e']
+		'level_mismatch': ['+' + ok + '"0x27" = {}\n"0x2E" = { security = 2 }', 'one unlock cannot satisfy both']
 	}
 	for name, c in cases {
 		rows := c[0].trim_left('+')

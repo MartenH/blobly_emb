@@ -389,8 +389,8 @@ fn (s &Server) service_row(sid u8) (Service, bool) {
 // default_sessions: where each service may run unless the table says otherwise (0 = every
 // session). CommunicationControl, SecurityAccess and ControlDTCSetting are non-default-session
 // services (a tester must enter extended first, so a stray request on a quiet bus cannot silence
-// an ECU, spend its key attempts or freeze its fault memory) — a table may narrow them, never
-// open them in the default session (loom2v refuses that). Per-DID gating sits on top for 0x22/0x2E.
+// an ECU, spend its key attempts or freeze its fault memory) — a table never opens them in the
+// default session (loom2v refuses that). Per-DID gating sits on top for 0x22/0x2E.
 pub fn default_sessions(sid u8) u8 {
 	return match sid {
 		0x27, 0x28, 0x85 { in_extended | in_programming }
