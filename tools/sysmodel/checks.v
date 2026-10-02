@@ -49,7 +49,7 @@ pub fn validate_system(s System) []Issue {
 	issues << check_telemetry_frames(s)
 	issues << check_bus_dbcs(s)
 	issues << check_routes(s, false)
-	issues << check_doip_composed(s)
+	issues << check_composed_unlowered(s)
 	return issues
 }
 
@@ -2553,6 +2553,9 @@ fn check_someip_segment(s System) []Issue {
 			if fr.bus != b.name || fr.signals.len == 0 {
 				continue
 			}
+			if s.someip_event_producer(fr) == '' {
+				continue // none of its signals is declared — check_someip_signal_frames says so
+			}
 			receivers := s.someip_event_receivers(fr)
 			if receivers.len == 0 {
 				issues << Issue{
@@ -2589,11 +2592,22 @@ fn check_someip_segment(s System) []Issue {
 		// static address. On a segment of two that is the other member; on a larger one it is
 		// whoever an event connects it to — a member no event reaches has nobody to talk to.
 		for n in members {
-			if s.someip_partners(n, b.name).len == 0 {
+			partners := s.someip_partners(n, b.name)
+			if partners.len == 0 {
 				issues << Issue{
 					severity: .error
 					req:      'REQ-TOPO-001'
 					msg:      'node "${n.name}": is a member of someip bus "${b.name}" but exchanges no event with any other member — on a segment of ${members.len} its peer is whoever an event connects it to, and it has none'
+				}
+			}
+			// An RPC (the [shell] on the segment) is answered to, and accepted only from, the
+			// node's DEFAULT peer — on a member with several partners that is merely the first
+			// event's partner in [[frame]] order, which says nothing about who the client is.
+			if partners.len > 1 && n.view.shell_on && n.view.shell_bus == 'eth0' {
+				issues << Issue{
+					severity: .error
+					req:      'REQ-TOPO-005'
+					msg:      'node "${n.name}": serves its [shell] over SOME/IP but exchanges events with ${partners.len} members of bus "${b.name}" (${partners.join(', ')}) — an RPC is answered to the node\'s one default peer, and with several partners nothing declares which one is the client'
 				}
 			}
 		}
@@ -2696,6 +2710,23 @@ fn check_node_name_is_an_identifier(s System) []Issue {
 fn check_endpoint_carrier(s System) []Issue {
 	mut issues := []Issue{}
 	for n in s.nodes {
+		// one endpoint, so one segment: the lowering emits ONE [bus.eth0] + [someip] per node, and
+		// a second segment's events would be dropped on the floor (a gateway lowered the last one)
+		mut segs := []string{}
+		for bn in n.buses {
+			if b := s.bus_by_name(bn) {
+				if b.kind == 'someip' {
+					segs << bn
+				}
+			}
+		}
+		if segs.len > 1 {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": is a member of ${segs.len} someip buses (${segs.join(', ')}) — a node has one endpoint and is lowered with one [someip], so it offers one service on one segment'
+			}
+		}
 		if !n.has_endpoint {
 			continue
 		}
@@ -2747,7 +2778,7 @@ fn someip_send_cycle_ms(fr SysFrame) ?i64 {
 fn check_doip(s System) []Issue {
 	mut issues := []Issue{}
 	mut logical_of := map[u32]string{}
-	for n in s.nodes {
+	for ni, n in s.nodes {
 		if !n.has_doip {
 			continue
 		}
@@ -2808,11 +2839,32 @@ fn check_doip(s System) []Issue {
 				req:      'REQ-TOPO-005'
 				msg:      'node "${n.name}": declares `doip` but no `endpoint` — the address DoIP answers at is the node\'s endpoint address, declared once'
 			}
+		} else if !ip4_host(n.endpoint) {
+			// driver/eth/doip_netx.c brings the node up on a /24 with .1 as its gateway
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-005'
+				msg:      'node "${n.name}": its endpoint address "${n.endpoint}" is not a host address DoIP can bring up (a dotted quad on its /24, not .0, .1 or .255)'
+			}
 		} else if n.has_port && n.port_raw == 13400 {
 			issues << Issue{
 				severity: .error
 				req:      'REQ-TOPO-005'
 				msg:      'node "${n.name}": endpoint port 13400 is DoIP\'s (UDP 13400, ISO 13400) on a node that serves `doip` — pick another SOME/IP port'
+			}
+		}
+		// one address per node on the network DoIP answers on — a segment checks its own members,
+		// but a DoIP-only node is on no segment, so nothing else would see the clash
+		for oi, o in s.nodes {
+			if oi == ni || (o.has_doip && oi > ni) || !o.has_endpoint
+				|| canon_addr(o.endpoint) != canon_addr(n.endpoint)
+				|| n.buses.any(it in o.buses && is_someip_bus(s, it)) {
+				continue
+			}
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-002'
+				msg:      'nodes "${n.name}" and "${o.name}" both answer at "${n.endpoint}" — DoIP brings that address up on the network, so it names one node'
 			}
 		}
 		// the server DoIP carries is the node's ONE diagnostic server: its [[isotp]] connection,
@@ -2842,11 +2894,22 @@ fn check_doip(s System) []Issue {
 	return issues
 }
 
-// check_doip_composed: a COMPOSED system's nodes author their own [doip], and nothing lowers a
-// [[node]]'s `doip` — so declared there it would look effective and do nothing.
-fn check_doip_composed(s System) []Issue {
+// check_composed_unlowered: what only the dissolution's lowering carries, refused in a COMPOSED
+// system. Its nodes author their own [doip], and nothing lowers a [[node]]'s `doip` — so declared
+// there it would look effective and do nothing.
+fn check_composed_unlowered(s System) []Issue {
 	mut issues := []Issue{}
 	for n in s.nodes {
+		// ...and likewise an authored per-event `peer`: the composed segment rules
+		// (check_someip_bus) hold each member to its ONE [someip].peer, so an event sent elsewhere
+		// would be reachability nothing checked
+		if n.view.frame_peer {
+			issues << Issue{
+				severity: .error
+				req:      'REQ-TOPO-001'
+				msg:      'node "${n.name}": an eth [[frame]] names its own `peer` — per-event peers are lowered by sysgen from a dissolved system; a composed segment holds each member to its [someip].peer'
+			}
+		}
 		if n.has_doip {
 			issues << Issue{
 				severity: .error
@@ -2856,4 +2919,25 @@ fn check_doip_composed(s System) []Issue {
 		}
 	}
 	return issues
+}
+
+fn is_someip_bus(s System, name string) bool {
+	b := s.bus_by_name(name) or { return false }
+	return b.kind == 'someip'
+}
+
+// ip4_host: a dotted quad, each octet 0..255, and a HOST on the /24 driver/eth brings up — not
+// .0 (the network), .255 (its broadcast) or .1 (the gateway it sets). loom2v's ip4_ok, which the
+// node build applies too; here so syscheck names the node before a cross-build does.
+fn ip4_host(a string) bool {
+	parts := a.split('.')
+	if parts.len != 4 {
+		return false
+	}
+	for p in parts {
+		if p.len == 0 || p.len > 3 || !p.bytes().all(it >= `0` && it <= `9`) || p.int() > 255 {
+			return false
+		}
+	}
+	return parts[3].int() !in [0, 1, 255]
 }

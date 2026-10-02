@@ -170,6 +170,8 @@ per **event**. So membership is credited as reachability only when the wiring ag
 |---|---|
 | each event has exactly **one** receiver — the member whose FBs read it — and it reads **all** of the event's signals | the datagram goes to one static address (no SD, no multicast), and arrives whole at fixed offsets |
 | every member exchanges at least one event (on a segment of two, the other member is its peer regardless) | its peer is whoever an event connects it to; a member nothing reaches has nobody to talk to |
+| a member that serves RPC (a `[shell]` on the segment) exchanges events with ONE member | an RPC is answered to, and accepted only from, the node's default peer — with several partners nothing says which is the client |
+| a node joins at most one segment | it has one endpoint and is lowered with one `[someip]` |
 | one endpoint address per member | two nodes at one IP bring up the same address on the segment (ARP conflict) |
 | a shared signal rides the **same event id** on both ends | the receive bridge dispatches on the id, so matching names alone never deliver |
 

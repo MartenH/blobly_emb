@@ -16,10 +16,13 @@ import time
 // and run on loopback, then probed from the default peer, the event's peer and a stranger.
 // @verifies REQ-NET-017
 
-const fp_app_port = 30690
-const fp_default_port = 30691 // [someip].peer — every event but BenchCmd
-const fp_cmd_port = 30692 // BenchCmd's own peer
-const fp_rogue_port = 30693
+// four consecutive ports per process, so a parallel run (or host_someip's own e2e test on
+// 30490/30491) never shares one
+const fp_base = 20000 + (os.getpid() % 2000) * 4 // below the ephemeral range
+const fp_app_port = fp_base
+const fp_default_port = fp_base + 1 // [someip].peer — every event but BenchCmd
+const fp_cmd_port = fp_base + 2 // BenchCmd's own peer
+const fp_rogue_port = fp_base + 3
 const fp_service = u16(0x0100)
 const fp_id_echo = u16(0x8004)
 const fp_id_cmd = u16(0x8010)
@@ -127,11 +130,16 @@ fn test_an_event_is_accepted_only_from_its_own_peer() {
 		p.signal_kill()
 		p.wait()
 	}
-	time.sleep(500 * time.millisecond)
-
-	// BenchCmd from ITS peer is accepted (and echoed to the default peer)
-	cmdp.write_to(app, fp_cmd(42))!
-	mut echoes := fp_echoes(mut def, 2000 * time.millisecond)
+	// BenchCmd from ITS peer is accepted (and echoed to the default peer). Resent until the
+	// echo shows, so a slow start-up (the app not bound yet) is waited out, not failed.
+	mut echoes := []u8{}
+	for _ in 0 .. 20 {
+		cmdp.write_to(app, fp_cmd(42))!
+		echoes = fp_echoes(mut def, 500 * time.millisecond)
+		if 42 in echoes {
+			break
+		}
+	}
 	assert 42 in echoes, 'BenchCmd from its own peer was not accepted'
 	// ...from the DEFAULT peer it is not: a known talker, but not this event's producer
 	def.write_to(app, fp_cmd(77))!

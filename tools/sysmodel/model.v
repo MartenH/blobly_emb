@@ -260,6 +260,11 @@ pub mut:
 	someip_peer string // [someip].peer, "<address>:<port>"
 	someip_port int    // [someip].port — the port THIS endpoint listens on
 	has_doip    bool   // an authored [doip] — the system owns it in the dissolution model
+	// an authored eth [[frame]] naming its OWN `peer`: the composed model checks reciprocity on
+	// [someip].peer alone, so a per-event peer is the dissolution's to lower, not a node's to author
+	frame_peer bool
+	// [shell].bus as authored (a LOCAL bus key, "eth0" for an RPC shell on a someip member)
+	shell_bus string
 	// the on-wire id each signal rides, keyed "<iface>|<signal>". On a someip endpoint
 	// that id IS the EVENT the receive bridge dispatches on, so two members can agree on
 	// a signal NAME and still never talk (docs/someip.md).
@@ -871,8 +876,15 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 			v.authored_signals = true // a bus endpoint = authored bus wiring
 		}
 	}
-	if _ := doc.value_opt('frame') {
+	if fv := doc.value_opt('frame') {
 		v.authored_frames = true
+		if fv is []toml.Any {
+			for f in fv {
+				if 'peer' in f.as_map() {
+					v.frame_peer = true
+				}
+			}
+		}
 	}
 	v.authored_routes = v.has_route
 	// [[fb]] handlers' reads/writes = the node's signal intent, attributed to the
@@ -1070,6 +1082,7 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 	if shv := doc.value_opt('shell') {
 		sm := shv.as_map()
 		v.shell_on = (sm['enabled'] or { toml.Any(true) }).bool()
+		v.shell_bus = m_str(sm, 'bus')
 		if v.shell_on {
 			v.shell_out_id, v.shell_out_name = binding_id(sm, 'out', 0x7f1)
 			v.shell_in_id, v.shell_in_name = binding_id(sm, 'in', 0x7f0)
@@ -1258,7 +1271,7 @@ pub fn (s System) someip_event_receivers(fr SysFrame) []string {
 			out << n.name
 		}
 	}
-	if out.len == 0 && members.len == 2 {
+	if out.len == 0 && members.len == 2 && producer != '' {
 		for n in members {
 			if n.name != producer {
 				out << n.name

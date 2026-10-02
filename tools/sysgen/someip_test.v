@@ -1027,3 +1027,77 @@ fn test_doip_on_a_composed_node_is_refused() {
 	e := sysmodel.validate_system(sys).filter(it.severity == .error).map(it.msg)
 	assert e.any(it.contains('`doip` on a [[node]] is lowered by sysgen')), e.str()
 }
+
+// One endpoint, one [someip]: a second segment would be lowered into nothing (the gateway path
+// kept only the last one it saw).
+fn test_a_node_on_two_segments_is_refused() {
+	mut sys := gateway_member_system()
+	sys.buses << sysmodel.Bus{
+		name:        'tel2'
+		kind:        'someip'
+		service:     0x0200
+		has_service: true
+		version:     1
+		has_version: true
+	}
+	sys.nodes[2].buses << 'tel2'
+	assert seg_errs(sys).any(it.contains('is a member of 2 someip buses')), seg_errs(sys).str()
+}
+
+// An RPC is answered to the DEFAULT peer — with several partners that is only the first event's,
+// which says nothing about who the client is.
+fn test_an_rpc_shell_on_a_member_with_two_partners_is_refused() {
+	mut sys := tel_system_of_three()
+	sys.nodes[1].view.shell_on = true
+	sys.nodes[1].view.shell_bus = 'eth0'
+	assert seg_errs(sys).any(it.contains('serves its [shell] over SOME/IP')), seg_errs(sys).str()
+	// ...one partner is fine (tcu's shell on the bench tool)
+	mut two := tel_system_of_three()
+	two.nodes[0].view.shell_on = true
+	two.nodes[0].view.shell_bus = 'eth0'
+	assert !seg_errs(two).any(it.contains('serves its [shell]')), seg_errs(two).str()
+}
+
+// A frame none of whose signals is declared has no producer: that is reported once, as what it
+// is, not also as a unicast violation between members that do not read it.
+fn test_an_undeclared_event_is_not_also_a_unicast_violation() {
+	mut sys := tel_system()
+	sys.frames[1].signals = ['Nope']
+	assert !seg_errs(sys).any(it.contains('is read by')), seg_errs(sys).str()
+}
+
+fn test_a_doip_address_doip_cannot_bring_up_is_refused() {
+	for bad in ['192.168.0.1', '192.168.0.255', '192.168.0', '192.168.0.300'] {
+		mut sys := doip_system()
+		sys.nodes[0].endpoint = bad
+		assert doip_errs(sys).any(it.contains('is not a host address DoIP can bring up')), '${bad}: ${doip_errs(sys)}'
+	}
+}
+
+// A DoIP-only node is on no segment, so the segment's own address check never sees it.
+fn test_a_doip_address_another_node_answers_at_is_refused() {
+	mut sys := doip_system()
+	sys.buses << sysmodel.Bus{
+		name:      'pt'
+		kind:      'can'
+		interface: 'can0'
+	}
+	mut n := sys.nodes[0]
+	n.name = 'ecu'
+	n.buses = ['pt']
+	n.has_port = false
+	n.doip_logical = 0x07B0
+	n.doip_logical_raw = 0x07B0
+	n.endpoint = '192.168.0.190' // the bench tool's
+	sys.nodes << n
+	e := seg_errs(sys).filter(it.contains('both answer at'))
+	assert e.len == 1 && e[0].contains('"ecu" and "bench"'), e.str()
+}
+
+// A composed node authoring a per-event peer: the composed checks see only [someip].peer.
+fn test_an_authored_frame_peer_in_a_composed_system_is_refused() {
+	mut sys := tel_system()
+	sys.nodes[0].view.frame_peer = true
+	e := sysmodel.validate_system(sys).filter(it.severity == .error).map(it.msg)
+	assert e.any(it.contains('names its own `peer`')), e.str()
+}

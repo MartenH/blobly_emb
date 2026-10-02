@@ -169,9 +169,9 @@ than one member — the bench tool on system_full's `tel`, which hears tcu and
 sysnode) is sent to, and accepted only from, THAT address:port; the filter then
 admits each configured talker and the event's branch holds it to its own, so a
 known talker cannot inject another member's event, and an RPC request is still
-the default peer's alone (proven on loopback by `tools/loom2v/eth_frame_peer_test.v`).
-With no per-event peer the generated filter is the single compare it always was; the complete 32-bit Message ID (service high half, not just the
-frame id), protocol and interface version, and a message type legal for the
+the default peer's alone (proven on loopback by `tools/loom2v/eth_frame_peer_test.v`;
+with no per-event peer the generated filter is the single compare it always was).
+Then the complete 32-bit Message ID (service high half, not just the frame id), protocol and interface version, and a message type legal for the
 phase must match; a notification's Request ID and Return Code must be ZERO
 (the wire contract fixes them — a nonzero one is malformed, not tolerated);
 the Length must be consistent with the datagram; and the payload length must
