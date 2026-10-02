@@ -170,7 +170,7 @@ int doip_mb_take_dropped(void) {
 static volatile UINT tcp_connected; /* read by the svc and comm threads too */
 static NX_PACKET *rx_pending; /* partially consumed receive (packet > caller's buf) */
 static ULONG rx_pending_off;
-static ULONG rx_idle_ticks;   /* ticks since the peer last sent anything */
+static ULONG last_activity;   /* tick of the last DoIP traffic either way (T_TCP_General restarts on it) */
 static UINT sess_activated;   /* V-side routing activation state (selects the idle limit) */
 static ULONG conn_start;      /* tick of accept: the pre-activation deadline base */
 
@@ -220,8 +220,8 @@ int doip_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
 			return 0;
 		}
 		tcp_connected = 1;
-		rx_idle_ticks = 0;
 		conn_start = tx_time_get();
+		last_activity = conn_start;
 	}
 	/* no receive waits past the inactivity deadline that is running — T_TCP_Initial before
 	 * activation (ABSOLUTE from accept), T_TCP_General after it (idle since the last bytes) — so bytes
@@ -234,10 +234,11 @@ int doip_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
 		}
 		left = idle_initial - elapsed;
 	} else {
-		if (rx_idle_ticks >= idle_general) {
+		ULONG idle = tx_time_get() - last_activity; /* wall clock: time spent serving counts too */
+		if (idle >= idle_general) {
 			return stream_recycle();
 		}
-		left = idle_general - rx_idle_ticks;
+		left = idle_general - idle;
 	}
 	if (timeout_ticks > left) {
 		timeout_ticks = (unsigned int)left;
@@ -247,8 +248,7 @@ int doip_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
 		if (s != NX_SUCCESS) {
 			rx_pending = NX_NULL;
 			if (s == NX_NO_PACKET) {
-				rx_idle_ticks += timeout_ticks;
-				return (sess_activated && rx_idle_ticks >= idle_general) ? stream_recycle() : 0;
+				return (sess_activated && tx_time_get() - last_activity >= idle_general) ? stream_recycle() : 0;
 			}
 			return stream_recycle(); /* peer closed, or an error */
 		}
@@ -262,7 +262,7 @@ int doip_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
 		nx_packet_release(rx_pending);
 		rx_pending = NX_NULL;
 	}
-	rx_idle_ticks = 0;
+	last_activity = tx_time_get();
 	doip_rx_bytes += got;
 	return (int)got;
 }
@@ -294,6 +294,7 @@ int doip_stream_send(const unsigned char *buf, int len) {
 		return stream_recycle();
 	}
 	doip_tx_bytes += (ULONG)len;
+	last_activity = tx_time_get(); /* an answer sent restarts T_TCP_General, as one received does */
 	mb_sent_seq = mb_returned;
 	comm_wake();
 	return len;
@@ -308,7 +309,7 @@ void doip_stream_drop(void) {
 
 void doip_stream_notify_activated(int on) {
 	if (on && !sess_activated) {
-		rx_idle_ticks = 0; /* the general-inactivity clock starts at activation */
+		last_activity = tx_time_get(); /* the general-inactivity clock starts at activation */
 	}
 	sess_activated = (UINT)on;
 }
