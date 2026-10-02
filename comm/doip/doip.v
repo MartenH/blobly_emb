@@ -1,5 +1,6 @@
 module doip
 
+import comm.isotp
 import comm.uds
 
 // DoIP (ISO 13400-2) server framing, no-alloc and transport-agnostic — the
@@ -23,9 +24,9 @@ pub const header_len = 8
 pub const max_msg = 256 // DoIP header + the largest UDS payload we serve
 
 // the largest UDS response a request answered through `serve` may produce: one
-// ISO-TP message (comm/isotp max_payload), so a server shared with a CAN
-// connection answers over DoIP whatever it answers there
-pub const max_uds = 520
+// ISO-TP message, so a server shared with a CAN connection answers over DoIP
+// whatever it answers there
+pub const max_uds = isotp.max_payload
 
 // the functional logical address used when Server.functional_addr is 0 (ISO
 // 13400-2's functional group range starts here)
