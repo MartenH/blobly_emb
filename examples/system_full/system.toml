@@ -192,6 +192,9 @@ tx      = { mode = "cyclic", cycle_ms = 1000 }
 # into the node's [bus.eth0]/[someip] and [doip]; nothing about its network is authored per node.
 # `testers` is who may activate routing: the bench tester (test/doip_bench.blobnet, 0x0E00) alone —
 # a policy, not authentication (a source address is whatever a tester claims; REQ-NET-012).
+# `allow_bench_key`: sysnode answers 0x27 with blobly_net's PUBLIC reference key (its ecu.toml's
+# [uds] security_key) — the BENCH posture, which over a routed network authenticates nobody, so a
+# [doip] node may use it only by name. A production node drops both and links the OEM's key.
 [[node]]
 name     = "sysnode"
 ecu      = "nodes/sysnode/ecu.toml"
@@ -200,7 +203,7 @@ nm       = 0x11
 diag     = { req = 0x7A0, rsp = 0x7A8 }
 trace    = 1
 endpoint = { address = "192.168.0.50", port = 30490 }
-doip     = { logical = 0x07A0, testers = [0x0E00] }
+doip     = { logical = 0x07A0, testers = [0x0E00], allow_bench_key = true }
 
 [[node]]
 name  = "domain"

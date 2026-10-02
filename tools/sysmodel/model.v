@@ -266,6 +266,11 @@ pub mut:
 	someip_peer string // [someip].peer, "<address>:<port>"
 	someip_port int    // [someip].port — the port THIS endpoint listens on
 	has_doip    bool   // an authored [doip] — the system owns it in the dissolution model
+	// the node's [uds] as the network-reachability rule reads it (doipcfg.service_refusals /
+	// bench_key_refusal): a `services` table declared, its rows, and the 0x27 key it names
+	uds_table        bool
+	uds_rows         []doipcfg.ServiceRow
+	uds_security_key string
 	// an authored eth [[frame]] naming its OWN `peer`: the composed model checks reciprocity on
 	// [someip].peer alone, so a per-event peer is the dissolution's to lower, not a node's to author
 	frame_peer bool
@@ -1050,6 +1055,22 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 	}
 	if _ := doc.value_opt('doip') {
 		v.has_doip = true
+	}
+	if uv := doc.value_opt('uds') {
+		um := uv.as_map()
+		v.uds_security_key = m_str(um, 'security_key')
+		if sv := um['services'] {
+			v.uds_table = true
+			for key, row in sv.as_map() {
+				// "0x11" — a key that is no SID is the node gate's to refuse
+				sid := u8(key.trim_space().to_lower().trim_string_left('0x').parse_uint(16,
+					8) or { continue })
+				v.uds_rows << doipcfg.ServiceRow{
+					sid:      sid
+					security: u8(m_int(row.as_map(), 'security'))
+				}
+			}
+		}
 	}
 	// [trace] — the TraceModule transmits its record frame (record_id, default
 	// 0x7e5) AND command responses (rsp_id, default 0x7e3) on the trace bus (the

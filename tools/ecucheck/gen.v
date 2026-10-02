@@ -335,6 +335,8 @@ fn specs() map[string]map[string]Key {
 			'general_inactivity_ms': k(.int)     // T_TCP_General_Inactivity; default 300000
 			'announce_count':        k(.int)     // A_DoIP_Announce_Num; default 3
 			'announce_interval_ms':  k(.int)     // A_DoIP_Announce_Interval; default 500
+			// [uds] security_key = "reference" (blobly_net's public key) over IP: a bench posture, by name
+			'allow_bench_key': k(.boolean) // default false
 		}
 		'did':        {
 			'id':       req(.int)

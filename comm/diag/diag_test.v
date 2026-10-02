@@ -688,7 +688,7 @@ fn test_the_cross_transport_security_model_holds_over_random_interleavings() {
 
 // the same model on the table a [doip] node must have (gated_conn, REQ-NET-012): a reset over
 // either transport happens only in the extended session under THAT transport's own unlock, and is
-// refused otherwise without changing anything
+// refused otherwise without changing anything — across the drops and aborts that follow it too
 fn test_the_security_model_holds_with_the_reset_gated() {
 	security_model(true)
 }
@@ -708,17 +708,12 @@ fn security_model(gated bool) {
 		tr := int(rng & 1) // 0 = bus, 1 = remote
 		op := (rng >> 1) % 11
 		ctx := 'step ${step} op ${op} over ${if tr == 1 { 'remote' } else { 'bus' }}'
-		// a reset is asked over DoIP (6, 7) or the bus (8..10), whatever `tr` drew
+		// a reset is asked over DoIP (6, 7) or the bus (8..10) — the op draws the transport. On the
+		// gated table it is served only in extended under THAT transport's own unlock; refused, it
+		// changes nothing, whatever drop or abort follows it
 		rt := if op >= 8 { 0 } else { 1 }
-		if op >= 6 && gated && !(m.session == 0x03 && m.unlocked[rt]) {
-			// a reset this transport may not ask for: refused, and nothing changes
-			nrc := if m.session != 0x03 { u8(0x7F) } else { u8(0x33) }
-			r := ask_over(rt, mut c, mut t, mut &now, [u8(0x11), 0x01])
-			assert r == [u8(0x7F), 0x11, nrc], '${ctx}: ${r} model ${m}'
-			assert c.server.reset_req == 0, ctx
-			model_holds(c, m, ctx)
-			continue
-		}
+		reset_ok := !gated || (m.session == 0x03 && m.unlocked[rt])
+		refusal := [u8(0x7F), 0x11, if m.session != 0x03 { u8(0x7F) } else { u8(0x33) }]
 		match op {
 			0, 1 {
 				sess := if op == 0 { u8(0x03) } else { u8(0x01) }
@@ -779,10 +774,14 @@ fn security_model(gated bool) {
 				}
 				mut f := can.Frame{}
 				assert c.produce(now, mut f), ctx
+				want := if reset_ok { [u8(0x51), 0x01] } else { refusal }
+				assert f.data[0] == u8(want.len) && f.data[1..1 + want.len] == want, '${ctx}: ${f.data} model ${m}'
 				if op == 8 {
 					c.housekeep(now)
-					m.enter(0x01, false)
-					m.pending = [-1, -1]!
+					if reset_ok {
+						m.enter(0x01, false)
+						m.pending = [-1, -1]!
+					}
 				} else {
 					c.abort_tx()
 				}
@@ -790,12 +789,15 @@ fn security_model(gated bool) {
 			else {
 				// a reset asked over DoIP: its answer sent (the reset happens), or the connection lost
 				// first (cancelled — what its request hid comes back, the dropped tester's own does not)
-				assert remote(mut c, [u8(0x11), 0x01], false) == [u8(0x51), 0x01], ctx
+				r := remote(mut c, [u8(0x11), 0x01], false)
+				assert r == if reset_ok { [u8(0x51), 0x01] } else { refusal }, '${ctx}: ${r} model ${m}'
 				if op == 6 {
 					c.remote_sent()
 					c.housekeep(now)
-					m.enter(0x01, false)
-					m.pending = [-1, -1]!
+					if reset_ok {
+						m.enter(0x01, false)
+						m.pending = [-1, -1]!
+					}
 				} else {
 					c.remote_dropped()
 					if m.remote_owns {

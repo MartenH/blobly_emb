@@ -29,7 +29,8 @@ period_ms = 500
 # on the ids system.toml allocates this node (diag = { req = 0x7A0, rsp = 0x7A8 }), on the compute
 # bus (can0) with its functional id. Its one signal (GwUptime) rides SOME/IP, not a DID, so its DIDs
 # identify it and nothing is live. 0x27 as on domain: a TRNG seed, and on this BENCH node blobly_net's
-# public reference key by name.
+# public reference key by name. Reachable over DoIP, so system.toml's `doip` names that
+# posture too (allow_bench_key, REQ-NET-012).
 #
 # Its service table is configured (domain and zone_a keep the default set): the default set, except
 # that ECUReset is accepted only in the extended session — a gateway must not restart on one stray

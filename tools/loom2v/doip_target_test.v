@@ -242,9 +242,34 @@ fn test_a_doip_nodes_reset_is_gated_in_its_service_table() {
 	assert code == 0, out
 	assert glue.contains('uds.Service{sid: 0x11, sessions: 0x04, security: 1}'), glue
 	c2, o2, _ := generate('doip_open_reset', doip_open_reset)
-	assert c2 != 0 && o2.contains('service 0x11 reachable from the network with no security level'), o2
+	assert c2 != 0 && o2.contains('[uds] services 0x11 changes ECU state but needs no security level'), o2
 	c3, o3, _ := generate('doip_no_table', doip_conn.all_after(doip_uds))
-	assert c3 != 0 && o3.contains('the default [uds] table serves it to anyone'), o3
+	assert c3 != 0 && o3.contains('has no [uds] services table'), o3
+}
+
+// a gated 0x2E row gates every write behind it (comm/uds checks the row before the DID), so a
+// writable DID needs no level of its own there
+fn test_a_gated_write_service_gates_its_dids() {
+	row := '"0x2E" = { sessions = ["extended"], security = 1 }'
+	did := '[[did]]\nid    = 0x0102\nbytes = "00"\nwrite = { session = ["extended"] }\n\n[doip]'
+	code, out, glue := generate('doip_2e_row', doip_conn.replace('"0x2E" = {}', row).replace('[doip]',
+		did))
+	assert code == 0, out
+	assert glue.contains('uds.Service{sid: 0x2e, sessions: 0x04, security: 1}'), glue
+}
+
+// blobly_net's reference key is public: over the network only by name (allow_bench_key), and the
+// name means nothing without the key
+fn test_the_public_bench_key_over_ip_is_allowed_only_by_name() {
+	keyed := '\n[uds]\nsecurity_key = "reference"\n' + doip_conn
+	code, out, _ := generate('doip_bench_key', keyed)
+	assert code != 0 && out.contains('PUBLIC bench key'), out
+	c2, o2, _ := generate('doip_bench_ok', keyed + 'allow_bench_key = true\n')
+	assert c2 == 0, o2
+	c3, o3, _ := generate('doip_bench_none', doip_conn + 'allow_bench_key = true\n')
+	assert c3 != 0 && o3.contains('it would mean nothing'), o3
+	c4, o4, _ := generate('doip_bench_bad', keyed + 'allow_bench_key = "yes"\n')
+	assert c4 != 0 && o4.contains('must be true or false'), o4
 }
 
 fn test_ip4_ok_is_the_drivers_rule() {

@@ -118,42 +118,35 @@ fn validate_doip(m Model) {
 	if vin.len != 17 || !vin.bytes().all(it >= 0x21 && it <= 0x7E) {
 		panic('loom2v: [doip] announces DID 0xF190 as the VIN: declare it as 17 printable ASCII characters (got "${vin}")')
 	}
-	// REQ-NET-012: over IP, reachability alone must not grant a write
+	// REQ-NET-012: over IP, reachability alone must not change ECU state. comm/diag makes an
+	// unlock the transport's that earned it, so a level asked over DoIP is the network tester's
+	// own 0x27, never the bus tester's. A write: the DID's own write gate, or the 0x2E row's
+	// (comm/uds checks the row first, so a gated row denies every DID behind it)
+	row_2e, _ := svc_row(m, 0x2E)
 	for did in m.dids {
-		if did.writable && did.write_security == 0 {
+		if did.writable && did.write_security == 0 && row_2e.security == 0 {
 			panic('loom2v: [doip] makes DID 0x${did.id.hex()} writable from the network with no security level — ' +
-				'gate it (write = { security = N }), REQ-NET-012')
+				'gate it (write = { security = N }, or a security level on [uds] services "0x2E"), REQ-NET-012')
 		}
 	}
-	// ...nor any other change of ECU state: every service this build performs that is not in
-	// doip_open_services needs a security level. comm/diag makes the unlock the transport's that
-	// earned it, so over DoIP that is the network tester's own 0x27, never the bus tester's.
-	for sid in 0 .. 256 {
-		s := u8(sid)
-		if s in doip_open_services || diag_unbuilt(m, s) != '' {
-			continue
+	// ...every other service: doipcfg's rule, the one syscheck applies too (fail-closed: no table
+	// is refused outright, and a row the rule does not exempt needs a level)
+	mut rows := []doipcfg.ServiceRow{}
+	for r in m.uds.services {
+		rows << doipcfg.ServiceRow{
+			sid:      r.sid
+			security: r.security
 		}
-		row, listed := svc_row(m, s)
-		if !listed || row.security != 0 {
-			continue
-		}
-		h := '0x${s.hex()}'
-		if !m.uds.table {
-			panic('loom2v: [doip] makes service ${h} reachable from the network with no security level — the default [uds] table ' +
-				'serves it to anyone; declare [uds] services with a security level on it ("${h}" = { sessions = ["extended"], security = N }) or leave it out, REQ-NET-012')
-		}
-		panic('loom2v: [doip] makes service ${h} reachable from the network with no security level — ' +
-			'gate it in [uds] services ("${h}" = { ..., security = N }) or leave it out, REQ-NET-012')
+	}
+	for why in doipcfg.service_refusals(m.uds.table, rows) {
+		panic('loom2v: [doip] ${why}')
+	}
+	// ...and the key that level is checked with must not be one anybody can compute
+	why := doipcfg.bench_key_refusal(m.uds.security_key, d.policy.allow_bench_key)
+	if why != '' {
+		panic('loom2v: [doip] ${why}')
 	}
 }
-
-// doip_open_services: what a network tester may run before it has authenticated (REQ-NET-012) —
-// reach and keep a session (0x10, 0x3E) and authenticate in it (0x27), which no 0x27 gate can
-// itself require, and read (0x22, 0x19). 0x2E is gated per DID (above). Every OTHER service
-// changes ECU state — 0x11 restarts it, 0x14 clears its fault memory, 0x85 freezes it, 0x28
-// silences its bus — so the list is what is exempt, not what is gated: a service comm/uds learns
-// later is gated until someone argues it here.
-const doip_open_services = [u8(0x10), 0x19, 0x22, 0x27, 0x2E, 0x3E]
 
 // doip_target_fns: the C seam, the hook into the comm thread's server, and the doip thread's loop
 // (the doip thread runs it; driver/eth/doip_netx.c calls it once its sockets are up).

@@ -889,7 +889,51 @@ fn doip_system() sysmodel.System {
 		rx_id: 0x7A0
 		tx_id: 0x7A8
 	}]
+	// the service table a [doip] node must declare (REQ-NET-012): 0x11 behind a level
+	sys.nodes[0].view.uds_table = true
+	sys.nodes[0].view.uds_rows = [doipcfg.ServiceRow{
+		sid: 0x10
+	}, doipcfg.ServiceRow{
+		sid:      0x11
+		security: 1
+	}, doipcfg.ServiceRow{
+		sid: 0x22
+	}, doipcfg.ServiceRow{
+		sid: 0x27
+	}, doipcfg.ServiceRow{
+		sid: 0x3E
+	}]
 	return sys
+}
+
+// REQ-NET-012 at the system, by the rule the node gate applies (doipcfg): a node serving `doip`
+// declares a [uds] services table, every row that changes ECU state carries a security level, and
+// the public bench key is used over the network only by name
+fn test_a_doip_node_gates_every_state_change_and_names_a_bench_key() {
+	mut sys := doip_system()
+	sys.nodes[0].view.uds_table = false
+	assert doip_errs(sys).any(it.contains('has no [uds] services table')), doip_errs(sys).str()
+	sys = doip_system()
+	sys.nodes[0].view.uds_rows[1] = doipcfg.ServiceRow{
+		sid: 0x11
+	}
+	assert doip_errs(sys).any(it.contains('[uds] services 0x11 changes ECU state')), doip_errs(sys).str()
+	// a read, a session, the authentication itself: open
+	sys = doip_system()
+	sys.nodes[0].view.uds_rows << doipcfg.ServiceRow{
+		sid: 0x19
+	}
+	assert doip_errs(sys).len == 0, doip_errs(sys).str()
+	// the bench key: refused unless allowed, and the allowance means nothing without it
+	sys = doip_system()
+	sys.nodes[0].view.uds_security_key = 'reference'
+	assert doip_errs(sys).any(it.contains('PUBLIC bench key')), doip_errs(sys).str()
+	sys.nodes[0].doip_policy.allow_bench_key = true
+	sys.nodes[0].doip_policy.has_allow_bench_key = true
+	assert doip_errs(sys).len == 0, doip_errs(sys).str()
+	assert doip_section(sys.nodes[0]).contains('allow_bench_key = true')
+	sys.nodes[0].view.uds_security_key = ''
+	assert doip_errs(sys).any(it.contains('it would mean nothing')), doip_errs(sys).str()
 }
 
 fn doip_errs(sys sysmodel.System) []string {

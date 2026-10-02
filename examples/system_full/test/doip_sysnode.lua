@@ -72,6 +72,26 @@ test("ECUReset over DoIP is refused 0x33 without DoIP's own unlock", function()
   c:session(0x01)
 end)
 
+-- wrong keys over TCP count and lock out as the bus's do: the count and the lockout are the
+-- server's, so the CAN tester is locked out too, and nothing gated acts meanwhile. A DoIP tester
+-- cannot then reset under its OWN lockout — the reset needs its unlock, which a locked-out 0x27
+-- cannot give, and an unlock earned first answers a seed request with zeros, spending no key —
+-- so the lockout kept through a DoIP-requested reset is the next test's, the keys spent from CAN.
+test("wrong keys over DoIP lock 0x27 out, for the bus too", function()
+  local d, c = uds.open("sysnode"), can()
+  d:session(0x03)
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end)
+  check.nrc(0x35, function() d:security_access(0x01, wrong) end)
+  check.nrc(0x36, function() d:security_access(0x01, wrong) end)
+  check.nrc(0x37, function() d:raw("\x27\x01") end)
+  check.nrc(0x37, function() c:raw("\x27\x01") end)
+  check.nrc(0x33, function() d:raw("\x11\x01") end) -- REQ-NET-012: still locked, so no reset
+  sleep_ms(3200)
+  d:tester_present()
+  d:security_access(0x01)
+  d:session(0x01)
+end)
+
 test("wrong keys lock 0x27 out; ECUReset over DoIP, under its own unlock, answers, restarts, and the lockout runs on", function()
   local d, c = uds.open("sysnode"), can()
   d:session(0x03)
