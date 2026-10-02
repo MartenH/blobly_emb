@@ -7,7 +7,8 @@
  *                      `doip` waits for the TCP sequence-number seed, then for the PHY link, opens
  *                      UDP 13400 (announcements, identification) and the TCP 13400 listener, and
  *                      runs the generated V loop (blobly_doip_run); `doip-svc` polls the link and
- *                      answers identification requests.
+ *                      answers the UDP requests (identification, entity status, power mode).
+ *   doip_net_timers  — before doip_net_create: the ISO 13400 inactivity limits ([doip]).
  *   doip_net_seed    — from the comm thread, once it has the TRNG: NetX draws TCP initial sequence
  *                      numbers from rand(), and predictable ones make a session spoofable.
  *   doip_stream_*    — the TCP byte pipe the V loop drives (one tester at a time, ISO 13400 idle
@@ -43,7 +44,7 @@ volatile ULONG doip_mb_timeouts;
 volatile ULONG doip_setup_failed; /* the sockets could not be made: DoIP is down */
 
 extern void blobly_doip_run(void);                                          /* generated V loop */
-extern int blobly_doip_ident(const unsigned char *req, int len, unsigned char *resp); /* generated */
+extern int blobly_doip_udp(const unsigned char *req, int len, unsigned char *resp); /* generated */
 extern void comm_wake(void);                                                /* comm_glue.c */
 
 void doip_net_seed(unsigned int seed) {
@@ -166,18 +167,25 @@ int doip_mb_take_dropped(void) {
 
 /* ---- the TCP byte pipe -------------------------------------------------------------------- */
 
-static UINT tcp_connected;
+static volatile UINT tcp_connected; /* read by the svc and comm threads too */
 static NX_PACKET *rx_pending; /* partially consumed receive (packet > caller's buf) */
 static ULONG rx_pending_off;
 static ULONG rx_idle_ticks;   /* ticks since the peer last sent anything */
 static UINT sess_activated;   /* V-side routing activation state (selects the idle limit) */
 static ULONG conn_start;      /* tick of accept: the pre-activation deadline base */
 
-/* ISO 13400 inactivity: 2 s initial (a connection that never activates routing must not hold the
- * one server socket — measured from ACCEPT, so trickled bytes don't extend it), 5 min general idle
- * after activation. */
-#define DOIP_IDLE_INITIAL (2u * NX_IP_PERIODIC_RATE)
-#define DOIP_IDLE_GENERAL (300u * NX_IP_PERIODIC_RATE)
+/* ISO 13400 inactivity: T_TCP_Initial_Inactivity (default 2 s: a connection that never activates
+ * routing must not hold the one server socket — measured from ACCEPT, so trickled bytes don't
+ * extend it), T_TCP_General_Inactivity (default 5 min idle after activation). Set from [doip] by
+ * doip_net_timers before the threads exist; comm/doip policy.v bounds them, so MS_TICKS stays in
+ * 32 bits. */
+static ULONG idle_initial = 2u * NX_IP_PERIODIC_RATE;
+static ULONG idle_general = 300u * NX_IP_PERIODIC_RATE;
+
+void doip_net_timers(unsigned int initial_ms, unsigned int general_ms) {
+	idle_initial = MS_TICKS(initial_ms);
+	idle_general = MS_TICKS(general_ms);
+}
 
 /* drop the connection and return the socket to listening; the comm thread hears of it */
 static int stream_recycle(void) {
@@ -211,7 +219,7 @@ int doip_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
 		conn_start = tx_time_get();
 	}
 	/* the pre-activation deadline is ABSOLUTE from accept */
-	if (!sess_activated && (tx_time_get() - conn_start) >= DOIP_IDLE_INITIAL) {
+	if (!sess_activated && (tx_time_get() - conn_start) >= idle_initial) {
 		return stream_recycle();
 	}
 	if (!rx_pending) {
@@ -220,7 +228,7 @@ int doip_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
 			rx_pending = NX_NULL;
 			if (s == NX_NO_PACKET) {
 				rx_idle_ticks += timeout_ticks;
-				return (sess_activated && rx_idle_ticks >= DOIP_IDLE_GENERAL) ? stream_recycle() : 0;
+				return (sess_activated && rx_idle_ticks >= idle_general) ? stream_recycle() : 0;
 			}
 			return stream_recycle(); /* peer closed, or an error */
 		}
@@ -237,6 +245,12 @@ int doip_stream_recv(unsigned char *buf, int max, unsigned int timeout_ticks) {
 	rx_idle_ticks = 0;
 	doip_rx_bytes += got;
 	return (int)got;
+}
+
+/* the TCP_DATA sockets open now (0 or 1), for entity status asked over UDP — read from the svc
+ * thread, a word the doip thread writes */
+int doip_stream_open(void) {
+	return tcp_connected ? 1 : 0;
 }
 
 /* doip_tx_pending: answer bytes handed to TCP that the tester has not acknowledged yet — the comm
@@ -310,8 +324,9 @@ void doip_eid(unsigned char eid[6]) {
 
 /* ---- threads ------------------------------------------------------------------------------ */
 
-/* the link poll (which also resyncs MACCR after renegotiation) and vehicle identification on
- * UDP 13400 — the V loop parks in accept between testers, so neither can live there */
+/* the link poll (which also resyncs MACCR after renegotiation) and the UDP 13400 requests —
+ * vehicle identification, entity status, power mode — the V loop parks in accept between
+ * testers, so neither can live there */
 static void svc_entry(ULONG arg) {
 	(void)arg;
 	while (!sockets_up) {
@@ -330,7 +345,7 @@ static void svc_entry(ULONG arg) {
 			nx_udp_packet_info_extract(p, &peer_ip, NX_NULL, &peer_port, NX_NULL);
 			nx_packet_data_extract_offset(p, 0, req, sizeof(req), &got);
 			nx_packet_release(p);
-			int n = blobly_doip_ident(req, (int)got, resp);
+			int n = blobly_doip_udp(req, (int)got, resp);
 			if (n <= 0) {
 				continue;
 			}

@@ -788,6 +788,18 @@ fn doip_section(node sysmodel.Node) []string {
 	if node.has_doip_functional {
 		b << 'functional_address = 0x${node.doip_functional.hex().to_upper()}'
 	}
+	// the transport policy, one-to-one under the same names (what is absent takes comm/doip's default)
+	if node.has_doip_testers {
+		b << 'testers = [${node.doip_testers.map('0x${it:04X}').join(', ')}]'
+	}
+	if node.has_doip_types {
+		b << 'activation_types = [${node.doip_types.map('0x${it:02X}').join(', ')}]'
+	}
+	for k in sysmodel.doip_int_keys {
+		if v := node.doip_ints[k] {
+			b << '${k} = ${v}'
+		}
+	}
 	b << ''
 	return b
 }

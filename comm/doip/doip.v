@@ -11,10 +11,13 @@ import comm.uds
 // the vehicle announcement, is produced by `announcement` for the glue to
 // broadcast at boot (discovery per ISO 13400).
 //
-// Scope (P3b first cut): routing activation (0x0005/0x0006), diagnostic
-// message + acks (0x8001/0x8002/0x8003), generic NACK (0x0000), vehicle
-// announcement (0x0004). Alive-check and entity-status answer as unknown-type
-// NACKs until a phase needs them.
+// Scope: routing activation (0x0005/0x0006) under a configured policy (policy.v: which tester
+// addresses, which activation types), alive check (0x0007/0x0008), entity status (0x4001/0x4002)
+// and diagnostic power mode (0x4003/0x4004) on TCP and UDP alike, diagnostic message + acks
+// (0x8001/0x8002/0x8003), generic NACK (0x0000), vehicle identification and announcement
+// (0x0001..0x0004). One TCP_DATA socket (max_sockets): the socket-handler outcomes that need a
+// second one — 0x01 all sockets in use, 0x03 source address active on another socket, and the
+// alive check of the registered socket that decides them — have no state here to act on.
 //
 // The UDS server answering is either the embedded one or, when `serve.answer` is
 // set, one the owner keeps elsewhere — a node with ONE diagnostic server reachable
@@ -27,6 +30,12 @@ pub const max_msg = 256 // DoIP header + the largest UDS payload we serve
 // ISO-TP message, so a server shared with a CAN connection answers over DoIP
 // whatever it answers there
 pub const max_uds = isotp.max_payload
+
+// the most tester addresses and activation types the routing-activation policy holds (policy.v);
+// here, beside the arrays they size: declared in policy.v, the checker read them as 0 when
+// indexing those arrays (V 0.5.x)
+pub const max_testers = 8
+pub const max_act_types = 4
 
 // the response room one diagnostic message may need with a serve hook (its
 // max_resp_per_msg): a feed buffer this size always makes progress
@@ -57,6 +66,12 @@ const pt_ident_vin = u16(0x0003) // ... by VIN
 const pt_announce = u16(0x0004)
 const pt_route_req = u16(0x0005)
 const pt_route_resp = u16(0x0006)
+const pt_alive_req = u16(0x0007)
+const pt_alive_resp = u16(0x0008)
+const pt_status_req = u16(0x4001)
+const pt_status_resp = u16(0x4002)
+const pt_power_req = u16(0x4003)
+const pt_power_resp = u16(0x4004)
 const pt_diag = u16(0x8001)
 const pt_diag_ack = u16(0x8002)
 const pt_diag_nack = u16(0x8003)
@@ -66,6 +81,21 @@ const nack_bad_pattern = u8(0x00)
 const nack_unknown_type = u8(0x01)
 const nack_too_large = u8(0x02)
 const nack_bad_length = u8(0x04)
+
+// routing activation response codes (ISO 13400-2:2012). Every refusal below closes the socket.
+const ra_unknown_source = u8(0x00) // the source address is not a tester this entity serves
+const ra_source_differs = u8(0x02) // this socket is already registered to another source address
+const ra_unsupported_type = u8(0x06) // an activation type this entity does not serve
+const ra_ok = u8(0x10)
+
+// entity status: node type "DoIP node" (not a gateway); power mode "ready"
+const node_type_node = u8(0x01)
+const power_ready = u8(0x01)
+
+// the largest DoIP message this entity accepts, as entity status reports it: the payload room of
+// the assembly buffer — whether a tester reads the field as the payload or the whole message, a
+// message sized to it fits
+pub const max_data_size = max_msg - header_len
 
 // diagnostic-message NACK codes
 const dnack_invalid_source = u8(0x02)
@@ -77,7 +107,16 @@ pub mut:
 	entity_addr u16 // our DoIP logical address
 	tester_addr u16 // learned from routing activation
 	activated   bool
-	fatal       bool // stream desynced (bad pattern / oversized): transport must drop the connection
+	// the transport must drop the connection once the response written so far is sent: the
+	// stream desynced (bad pattern / oversized), or a routing activation was refused with a code
+	// that closes the socket. feed processes nothing after it.
+	fatal bool
+	// routing-activation policy (policy.v), set at boot. 0 entries = the defaults: any tester
+	// address (tester_first..tester_last), activation type 0x00 only.
+	testers     [max_testers]u16
+	n_testers   int
+	act_types   [max_act_types]u8
+	n_act_types int
 	vin         [17]u8
 	uds         uds.Server // answers unless serve.answer is set
 	serve       Serve
@@ -123,7 +162,7 @@ fn nack_if_room(resp &u8, at int, code u8, resp_max int) int {
 // announcement builds the vehicle-announcement payload (UDP broadcast at boot,
 // also the answer to a vehicle-identification request): VIN, logical address,
 // EID/GID (we use the MAC-derived EID for both), further-action 0x00.
-pub fn (mut s Server) announcement(eid &u8, resp &u8) int {
+pub fn (s &Server) announcement(eid &u8, resp &u8) int {
 	o := put_header(resp, 0, pt_announce, 17 + 2 + 6 + 6 + 1)
 	unsafe {
 		for i in 0 .. 17 {
@@ -140,23 +179,25 @@ pub fn (mut s Server) announcement(eid &u8, resp &u8) int {
 	return o + 32
 }
 
-// ident_response answers a UDP vehicle-identification request (0x0001 any,
-// 0x0002 by EID, 0x0003 by VIN) with the announcement — discovery must work
-// after the boot broadcasts too. Returns 0 for anything that is not a
-// well-formed, matching request (UDP: no NACKs, just silence).
-pub fn (mut s Server) ident_response(data &u8, data_len int, eid &u8, resp &u8) int {
+// udp_response answers one UDP datagram on port 13400: a vehicle-identification request
+// (0x0001 any, 0x0002 by EID, 0x0003 by VIN) with the announcement — discovery must work after
+// the boot broadcasts too — and entity status (0x4001) or diagnostic power mode (0x4003) with
+// their responses (`open` is the TCP_DATA sockets open now). Returns 0 for anything that is not
+// a well-formed, matching request (UDP: no NACKs, just silence). resp holds at least 64 bytes.
+pub fn (s &Server) udp_response(data &u8, data_len int, eid &u8, open int, resp &u8) int {
 	if data_len < header_len {
 		return 0
 	}
 	unsafe {
+		ptype := (u16(data[2]) << 8) | u16(data[3])
 		// identification may use the generic version pattern 0xFF/0x00 — a
 		// tester discovers entities without knowing their DoIP revision
+		ident := ptype == pt_ident_any || ptype == pt_ident_eid || ptype == pt_ident_vin
 		ver_ok := (data[0] == proto_ver && data[1] == proto_inv)
-			|| (data[0] == 0xFF && data[1] == 0x00)
+			|| (ident && data[0] == 0xFF && data[1] == 0x00)
 		if !ver_ok {
 			return 0
 		}
-		ptype := (u16(data[2]) << 8) | u16(data[3])
 		plen := (u32(data[4]) << 24) | (u32(data[5]) << 16) | (u32(data[6]) << 8) | u32(data[7])
 		if u32(data_len - header_len) != plen {
 			return 0
@@ -186,6 +227,12 @@ pub fn (mut s Server) ident_response(data &u8, data_len int, eid &u8, resp &u8) 
 						return 0
 					}
 				}
+			}
+			pt_status_req, pt_power_req {
+				if plen != 0 {
+					return 0
+				}
+				return s.info_response(ptype, open, resp, 0)
 			}
 			else {
 				return 0
@@ -244,6 +291,11 @@ pub fn (mut s Server) feed(data &u8, data_len int, resp &u8, resp_max int) int {
 		}
 		ptype := (u16(s.buf[2]) << 8) | u16(s.buf[3])
 		out = s.dispatch(ptype, int(plen), resp, out)
+		if s.fatal {
+			// the connection closes after this response: what follows it is never served
+			s.buf_len = 0
+			break
+		}
 		// shift any following message to the front
 		unsafe {
 			for i in 0 .. s.buf_len - total {
@@ -281,15 +333,12 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 				return gen_nack(resp, at, nack_bad_length)
 			}
 			sa := (u16(s.buf[header_len]) << 8) | u16(s.buf[header_len + 1])
-			// only the default activation type (0x00) is served; anything else
-			// (WWH-OBD, OEM ranges) must be rejected, not silently "activated"
-			// under semantics we do not implement
-			mut code := u8(0x10) // routing successfully activated
-			if s.buf[header_len + 2] == 0x00 {
+			code := s.activation_code(sa, s.buf[header_len + 2])
+			if code == ra_ok {
 				s.tester_addr = sa
 				s.activated = true
 			} else {
-				code = 0x06 // unsupported routing activation type
+				s.fatal = true // every refusal this entity gives closes the socket
 			}
 			o := put_header(resp, at, pt_route_resp, 9)
 			unsafe {
@@ -304,6 +353,21 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 				resp[o + 8] = 0
 			}
 			return o + 9
+		}
+		pt_alive_resp {
+			// the tester's answer to an alive check: carries its source address, needs no reply
+			// (its arrival already counts as activity on the connection)
+			if plen != 2 {
+				return gen_nack(resp, at, nack_bad_length)
+			}
+			return at
+		}
+		pt_alive_req, pt_status_req, pt_power_req {
+			if plen != 0 {
+				return gen_nack(resp, at, nack_bad_length)
+			}
+			// on TCP the asker holds the one socket: it is open
+			return s.info_response(ptype, 1, resp, at)
 		}
 		pt_diag {
 			// addresses (4) + at least one UDS service byte: a data-less diag
@@ -366,6 +430,87 @@ fn (mut s Server) dispatch(ptype u16, plen int, resp &u8, at int) int {
 		}
 		else {
 			return gen_nack(resp, at, nack_unknown_type)
+		}
+	}
+}
+
+// activation_code: the routing activation handler's answer for one request on this socket, in
+// the order ISO 13400-2 checks it — the source address, the activation type, then the socket
+// (already registered to another source address). Re-activation by the registered address
+// succeeds again.
+fn (s &Server) activation_code(sa u16, atype u8) u8 {
+	if !s.tester_allowed(sa) {
+		return ra_unknown_source
+	}
+	if !s.type_served(atype) {
+		return ra_unsupported_type
+	}
+	if s.activated && sa != s.tester_addr {
+		return ra_source_differs
+	}
+	return ra_ok
+}
+
+fn (s &Server) tester_allowed(sa u16) bool {
+	if s.n_testers == 0 {
+		return tester_address_ok(sa)
+	}
+	for i in 0 .. s.n_testers {
+		if s.testers[i] == sa {
+			return true
+		}
+	}
+	return false
+}
+
+fn (s &Server) type_served(atype u8) bool {
+	if s.n_act_types == 0 {
+		return atype == 0x00
+	}
+	for i in 0 .. s.n_act_types {
+		if s.act_types[i] == atype {
+			return true
+		}
+	}
+	return false
+}
+
+// info_response answers the three requests that carry no data — alive check, entity status and
+// diagnostic power mode — on either transport. `open` is the TCP_DATA sockets open now.
+fn (s &Server) info_response(ptype u16, open int, resp &u8, at int) int {
+	match ptype {
+		pt_alive_req {
+			// ISO 13400-2 sends this request from the entity to the tester; a tester asking it of
+			// the entity (a liveness probe, as common clients offer) gets the same answer a tester
+			// gives: this entity's address
+			o := put_header(resp, at, pt_alive_resp, 2)
+			unsafe {
+				resp[o] = u8(s.entity_addr >> 8)
+				resp[o + 1] = u8(s.entity_addr)
+			}
+			return o + 2
+		}
+		pt_status_req {
+			// node type, max concurrent TCP_DATA sockets, currently open ones, max data size
+			o := put_header(resp, at, pt_status_resp, 7)
+			unsafe {
+				resp[o] = node_type_node
+				resp[o + 1] = u8(max_sockets)
+				resp[o + 2] = u8(open)
+				resp[o + 3] = u8(u32(max_data_size) >> 24)
+				resp[o + 4] = u8(u32(max_data_size) >> 16)
+				resp[o + 5] = u8(u32(max_data_size) >> 8)
+				resp[o + 6] = u8(max_data_size)
+			}
+			return o + 7
+		}
+		else {
+			// diagnostic power mode: a running node is ready for diagnostics
+			o := put_header(resp, at, pt_power_resp, 1)
+			unsafe {
+				resp[o] = power_ready
+			}
+			return o + 1
 		}
 	}
 }

@@ -186,7 +186,11 @@ COMPOSED model (nodes authoring their own `[someip]`) still holds a segment to t
 **DoIP is declared on the node, at its endpoint.** `doip = { logical = 0x07A0 }` on a
 `[[node]]` (optionally `functional = 0xE4xx`) puts the node's one diagnostic server on
 TCP/UDP 13400 at its `endpoint` address — lowered into its `[doip]`, so a node has ONE
-network identity, declared once here. syscheck refuses a logical address outside
+network identity, declared once here. The entity's transport policy is the system's too —
+`testers`, `activation_types`, `initial_inactivity_ms`, `general_inactivity_ms`,
+`announce_count`, `announce_interval_ms`, lowered one-to-one and checked by the rules
+`[doip]` is (defaults and meaning: docs/net.md, "The entity at the transport level"); sysnode
+admits the bench tester alone (`testers = [0x0E00]`). syscheck refuses a logical address outside
 ISO 13400's entity ranges (0x0001..0x0DFF, 0x1000..0x7FFF) or shared by two nodes, a
 `doip` with no `endpoint`, no `diag` allocation, not exactly one `[[isotp]]` in the node,
 or a non-ThreadX target, an endpoint `port` of 13400 beside it, and an authored `[doip]`

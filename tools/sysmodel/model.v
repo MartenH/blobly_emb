@@ -109,6 +109,17 @@ pub mut:
 	has_doip_functional bool
 	doip_functional_int bool = true
 	doip_unknown        []string // keys of the doip table this schema does not know (typos)
+	// ...and the entity's ISO 13400-2 transport policy (comm/doip policy.v), lowered one-to-one
+	// into [doip] under the same names: the integer keys by name (`initial_inactivity_ms`,
+	// `general_inactivity_ms`, `announce_count`, `announce_interval_ms`), the two lists apart.
+	// doip_not_int names every policy key authored as anything but an integer (a list: anything
+	// but a list of integers) — a narrowed float or string is a legal, DIFFERENT value.
+	doip_ints        map[string]i64
+	doip_testers     []i64 // tester addresses allowed to activate routing
+	has_doip_testers bool
+	doip_types       []i64 // activation types served
+	has_doip_types   bool
+	doip_not_int     []string
 	// --- extracted from the node's ecu.toml (filled by load_node) ---
 	view NodeView
 }
@@ -392,6 +403,10 @@ fn m_str(m map[string]toml.Any, key string) string {
 	return (m[key] or { toml.Any('') }).string()
 }
 
+// the integer keys of a node's `doip` transport policy, in the order they are lowered
+pub const doip_int_keys = ['initial_inactivity_ms', 'general_inactivity_ms', 'announce_count',
+	'announce_interval_ms']
+
 fn m_int(m map[string]toml.Any, key string) int {
 	return int((m[key] or { toml.Any(0) }).int())
 }
@@ -569,8 +584,30 @@ pub fn parse_system(path string) !System {
 				node.doip_functional = m_u32(dm, 'functional')
 				node.doip_functional_raw = (dm['functional'] or { toml.Any(0) }).i64()
 				node.doip_functional_int = m_is_int(dm, 'functional')
-				for k, _ in dm {
-					if k !in ['logical', 'functional'] {
+				for k, kv in dm {
+					if k in ['logical', 'functional'] {
+						continue
+					}
+					if k in doip_int_keys {
+						if kv is i64 {
+							node.doip_ints[k] = kv
+						} else {
+							node.doip_not_int << k
+						}
+					} else if k in ['testers', 'activation_types'] {
+						if kv !is []toml.Any || !kv.array().all(it is i64) {
+							node.doip_not_int << k
+							continue
+						}
+						vals := kv.array().map(it.i64())
+						if k == 'testers' {
+							node.doip_testers = vals
+							node.has_doip_testers = true
+						} else {
+							node.doip_types = vals
+							node.has_doip_types = true
+						}
+					} else {
 						node.doip_unknown << k
 					}
 				}

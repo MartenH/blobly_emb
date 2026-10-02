@@ -22,6 +22,7 @@ enum Typ {
 	arr      // an array of tables (e.g. [[partition]])
 	tbl      // a single sub-table (e.g. [trace.trigger] or inline tx = {...})
 	str_arr  // an array of strings (reads/writes)
+	int_arr  // an array of integers (a [doip] tester list)
 	id_range // an inclusive [lo, hi] pair of CAN ids (an NM peers range)
 	namedmap // a table of arbitrary-named sub-tables (e.g. [bus.<name>])
 	str_map  // a table of arbitrary string->string (e.g. signal fields)
@@ -320,6 +321,13 @@ fn specs() map[string]map[string]Key {
 			'address':            req(.str) // the node's static IPv4 address
 			'logical_address':    req(.int) // its DoIP entity address (0x0001..0x0DFF, 0x1000..0x7FFF)
 			'functional_address': k(.int)   // default 0xE400
+			// the ISO 13400-2 transport policy (comm/doip policy.v holds the rules and defaults)
+			'testers':               k(.int_arr) // tester addresses allowed to activate; default any 0x0E00..0x0FFF
+			'activation_types':      k(.int_arr) // routing activation types served; default [0x00]
+			'initial_inactivity_ms': k(.int)     // T_TCP_Initial_Inactivity; default 2000
+			'general_inactivity_ms': k(.int)     // T_TCP_General_Inactivity; default 300000
+			'announce_count':        k(.int)     // A_DoIP_Announce_Num; default 3
+			'announce_interval_ms':  k(.int)     // A_DoIP_Announce_Interval; default 500
 		}
 		'did':        {
 			'id':       req(.int)
@@ -501,6 +509,13 @@ fn type_ok(v toml.Any, typ Typ) bool {
 				false
 			}
 		}
+		.int_arr {
+			if v is []toml.Any {
+				v.all(it is i64)
+			} else {
+				false
+			}
+		}
 	}
 }
 
@@ -513,6 +528,7 @@ fn type_name(typ Typ) string {
 		.arr { 'an array of tables' }
 		.tbl, .namedmap { 'a table' }
 		.str_arr { 'an array of strings' }
+		.int_arr { 'an array of integers' }
 		.id_range { 'an inclusive [lo, hi] pair of CAN ids' }
 		.str_map { 'a table of string values' }
 	}

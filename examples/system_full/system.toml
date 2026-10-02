@@ -190,6 +190,8 @@ tx      = { mode = "cyclic", cycle_ms = 1000 }
 # network identity — SOME/IP listens on its port, DoIP on ISO 13400's — and `doip` names the
 # entity address a tester routes to (its CAN request id, for the bench's memory). Both are lowered
 # into the node's [bus.eth0]/[someip] and [doip]; nothing about its network is authored per node.
+# `testers` is who may activate routing: the bench tester (test/doip_bench.blobnet, 0x0E00) alone —
+# a policy, not authentication (a source address is whatever a tester claims; REQ-NET-012).
 [[node]]
 name     = "sysnode"
 ecu      = "nodes/sysnode/ecu.toml"
@@ -198,7 +200,7 @@ nm       = 0x11
 diag     = { req = 0x7A0, rsp = 0x7A8 }
 trace    = 1
 endpoint = { address = "192.168.0.50", port = 30490 }
-doip     = { logical = 0x07A0 }
+doip     = { logical = 0x07A0, testers = [0x0E00] }
 
 [[node]]
 name  = "domain"

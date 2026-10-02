@@ -128,6 +128,63 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 	assert glue.contains('C.trace_bind_thread(C.doip_net_tcb(2)) // doip-svc')
 }
 
+// the ISO 13400-2 transport policy left out: comm/doip's defaults — any tester address, activation
+// type 0x00 only (no list is generated), 2 s / 5 min inactivity, 3 announcements 500 ms apart —
+// and the UDP side answers with the TCP socket count for entity status
+fn test_an_unconfigured_policy_takes_the_iso_defaults() {
+	code, out, glue := generate('doip_defaults', doip_conn)
+	assert code == 0, out
+	assert glue.contains('C.doip_net_timers(u32(2000), u32(300000))'), glue
+	assert glue.contains('\tfor _ in 0 .. 3 {') && glue.contains('C.doip_sleep_ms(500)')
+	assert !glue.contains('g_doip.n_testers') && !glue.contains('g_doip.n_act_types')
+	assert glue.contains("@[export: 'blobly_doip_udp']")
+	assert glue.contains('g_doip.udp_response(req, n, &eid[0], C.doip_stream_open(), resp)')
+	// the timers are set before the threads that read them exist
+	t := glue.index('C.doip_net_timers(') or { -1 }
+	c := glue.index("C.doip_net_create(c'") or { -1 }
+	assert t >= 0 && t < c
+}
+
+fn test_a_configured_policy_is_generated_into_the_entity() {
+	code, out, glue := generate('doip_policy', doip_conn + 'testers = [0x0E80, 0x0F00]\n' +
+		'activation_types = [0x00, 0xE1]\ninitial_inactivity_ms = 1000\ngeneral_inactivity_ms = 60000\n' +
+		'announce_count = 5\nannounce_interval_ms = 200\n')
+	assert code == 0, out
+	for want in ['g_doip.testers[0] = u16(0xe80)', 'g_doip.testers[1] = u16(0xf00)',
+		'g_doip.n_testers = 2', 'g_doip.act_types[0] = u8(0x0)', 'g_doip.act_types[1] = u8(0xe1)',
+		'g_doip.n_act_types = 2', 'C.doip_net_timers(u32(1000), u32(60000))',
+		'\tfor _ in 0 .. 5 {', 'C.doip_sleep_ms(200)'] {
+		assert glue.contains(want), want
+	}
+	// no announcements: discovery by identification request only
+	c0, o0, g0 := generate('doip_quiet', doip_conn + 'announce_count = 0\n')
+	assert c0 == 0, o0
+	assert !g0.contains('C.doip_udp_broadcast(&ann[0], an)'), g0
+}
+
+fn test_a_policy_the_entity_cannot_serve_is_refused() {
+	nine := '[' + []string{len: 9, init: '0x${(0x0E00 + index).hex()}'}.join(', ') + ']'
+	cases := {
+		'not_tester':   'testers = [0x0E00, 0x0001]\n'
+		'tester_twice': 'testers = [0x0E00, 0x0E00]\n'
+		'nine_testers': 'testers = ${nine}\n'
+		'no_types':     'activation_types = []\n'
+		'central_sec':  'activation_types = [0xE0]\n'
+		'reserved':     'activation_types = [0x02]\n'
+		'type_twice':   'activation_types = [0x00, 0x00]\n'
+		'initial_low':  'initial_inactivity_ms = 50\n'
+		'general_high': 'general_inactivity_ms = 3600001\n'
+		'initial_long': 'initial_inactivity_ms = 20000\ngeneral_inactivity_ms = 10000\n'
+		'ann_many':     'announce_count = 11\n'
+		'ann_fast':     'announce_interval_ms = 5\n'
+	}
+	for name, extra in cases {
+		code, out, _ := generate('doip_pol_${name}', doip_conn + extra)
+		assert code != 0, 'loom2v accepted [doip] policy case ${name}'
+		assert out.contains('[doip]'), '${name}: ${out}'
+	}
+}
+
 fn test_a_doip_config_that_cannot_be_served_is_refused() {
 	cases := {
 		'no_server':  doip_conn.all_after('ascii = "BLOBLYH735THREADX"\n')
