@@ -272,6 +272,9 @@ pub mut:
 	uds_rows         []doipcfg.ServiceRow
 	did_writes       []doipcfg.DidWrite // [[did]] write sides, for REQ-NET-012 at the system gate
 	uds_security_key string
+	// [boot] (the programming handoff) and its "0x10 02" row's level, for the same rule
+	boot                 bool
+	uds_handoff_security i64
 	// an authored eth [[frame]] naming its OWN `peer`: the composed model checks reciprocity on
 	// [someip].peer alone, so a per-event peer is the dissolution's to lower, not a node's to author
 	frame_peer bool
@@ -1069,12 +1072,20 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 			security: sec
 		}
 	}
+	if _ := doc.value_opt('boot') {
+		v.boot = true
+	}
 	if uv := doc.value_opt('uds') {
 		um := uv.as_map()
 		v.uds_security_key = m_str(um, 'security_key')
 		if sv := um['services'] {
 			v.uds_table = true
 			for key, row in sv.as_map() {
+				if key.fields().len == 2 {
+					// "0x10 02", the handoff's own row — the node gate refuses any other sub-function row
+					v.uds_handoff_security = i64(m_int(row.as_map(), 'security'))
+					continue
+				}
 				// "0x11" — a key that is no SID is the node gate's to refuse
 				sid := u8(key.trim_space().to_lower().trim_string_left('0x').parse_uint(16,
 					8) or { continue })

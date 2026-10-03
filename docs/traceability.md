@@ -6,7 +6,7 @@ Generated from `requirements/*.toml` + verification links. See
 
 | total | verified | covered (pending) | uncovered | failed |
 |---|---|---|---|---|
-| 200 | 110 | 28 | 62 | 0 |
+| 200 | 111 | 28 | 61 | 0 |
 
 - **verified** — a linked verification passed.  **covered** — linked but no pass recorded in this run.
 - **uncovered** — no verification linked (a gap).  **failed** — a linked verification ran and failed.
@@ -17,7 +17,7 @@ Generated from `requirements/*.toml` + verification links. See
 |---|---|---|---|---|
 | REQ-BOOT-001 | QM | test | verified | boot_test.v (pass) |
 | REQ-BOOT-002 | QM | test | verified | boot_test.v (pass) |
-| REQ-BOOT-003 | QM | test | uncovered | — |
+| REQ-BOOT-003 | QM | test | verified | boot_handoff_test.v (pass), diag_test.v (pass), uds_test.v (pass) |
 | REQ-BOOT-004 | QM | test | uncovered | — |
 | REQ-BOOT-005 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-006 | QM | analysis | uncovered | — |
@@ -222,7 +222,7 @@ Generated from `requirements/*.toml` + verification links. See
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | REQ-BOOT-001 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BOOT-002 | | | | | | | | | | | | | | | | | | ✓ | | | |
-| REQ-BOOT-003 | | | | | | | | | | | | | | | | | | | | | |
+| REQ-BOOT-003 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BOOT-004 | | | | | | | | | | | | | | | | | | | | | |
 | REQ-BOOT-005 | | | | | | | | | | | | | | | | | | ✓ | | | |
 | REQ-BOOT-006 | | | | | | | | | | | | | | | | | | | | | |

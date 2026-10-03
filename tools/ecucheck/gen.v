@@ -78,6 +78,7 @@ fn specs() map[string]map[string]Key {
 			'isotp':     sub(.tbl, false, 'isotp') // ISO 15765-2: the diagnostic server on CAN
 			'uds':       sub(.tbl, false, 'uds') // ISO 14229: the node's one diagnostic server
 			'doip':      sub(.tbl, false, 'doip') // the diagnostic server over DoIP too (ThreadX target)
+			'boot':      sub(.tbl, false, 'boot') // the node runs behind the bootloader: 0x10 02 hands over to it
 			'did':       sub(.arr, false, 'did')
 			'fault':        sub(.arr, false, 'fault') // docs/diagnostics.md §3.3
 			'fault_memory': sub(.tbl, false, 'fault_memory')
@@ -318,8 +319,9 @@ fn specs() map[string]map[string]Key {
 			'security_attempts': k(.int) // 0x27 failed keys before the lockout; default 3
 			'security_delay_ms': k(.int) // 0x27 lockout delay after too many wrong keys; default 10000
 			'security_key': k(.str) // "reference" = blobly_net's public bench key (a target); absent = the OEM's diag_sa_key_ok
-			'services': sub(.namedmap, false, 'uds_service') // "0xSID" = { ... }; absent = the default table
+			'services': sub(.namedmap, false, 'uds_service') // "0xSID" = { ... } ("0x10 02": the [boot] handoff); absent = the default table
 		}
+		'boot':       {} // no keys yet: its presence is the declaration (docs/bootloader.md)
 		'uds_service': {
 			'sessions': k(.str_arr) // default / extended / safety; absent = the service's default sessions
 			'security': k(.int) // the 0x27 level the service needs; 0 = none

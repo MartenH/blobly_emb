@@ -1280,6 +1280,7 @@ mut:
 	routes       []Route
 	isotp_conns  []IsotpConn // [isotp]: none, or the one connection
 	uds          UdsCfg      // [uds]: the ISO 14229 server those transports carry (gen_diag.v)
+	boot         BootCfg     // [boot]: the node runs behind the bootloader; 0x10 02 hands over to it (gen_diag.v)
 	doip         DoipCfg // [doip]: the diagnostic server over DoIP too (gen_doip.v)
 	dids         []DidCfg
 	faults       []FaultCfg // [[fault]] in declaration order = the fault memory's slot order
@@ -1500,6 +1501,7 @@ fn build_model(doc toml.Doc, dbc string) Model {
 		routes:       validate_route_cores(parse_routes(doc, dbc, frames), bus_core, bus_kind)
 		isotp_conns:  parse_isotp(doc)
 		uds:          parse_uds(doc)
+		boot:         parse_boot(doc)
 		doip:         parse_doip(doc)
 		dids:         parse_dids(doc)
 		faults:       parse_faults(doc)
@@ -2271,6 +2273,7 @@ fn emit_run_target(m Model, doc toml.Doc, all_regs map[string][]string, telem_if
 			glue << diag_target_fns(m, ioc_idx)
 			glue << diag_target_sa_fns(m)
 			glue << diag_target_c_decls(m)
+			glue << boot_target_fns(m)
 			glue << doip_target_fns(m)
 			glue << nm_shell_fns(m)
 			glue << stat_shell_fns(m, doc, app_threads, multi)
@@ -5243,6 +5246,9 @@ const comm_glue_syms = ['ioc_pool_init', 'ioc_pub', 'ioc_get', 'ioc_get_ever', '
 // [shell] commands are its target_ext.c's)
 const shell_glue_syms = ['shell_ps', 'shell_bmc']
 
+// boot_glue_syms: the programming handoff's board side, boards/common/boot_handoff.c ([boot])
+const boot_glue_syms = ['boot_handoff_request', 'boot_handoff_ok', 'boot_image_version']
+
 // ioc_pool_n: comm_glue.c's IOC_POOL_N — the target IOC cells an image may use (pinned equal by
 // threadx_makefiles_test.v; a smaller pool silently dropped every index past it, #247).
 const ioc_pool_n = 16
@@ -5266,6 +5272,9 @@ fn glue_build_lines(glue []string, doip bool) string {
 	}
 	if shell_glue_syms.any(declared[it]) {
 		srcs << r'$(REPO)/boards/common/shell_glue.c'
+	}
+	if boot_glue_syms.any(declared[it]) {
+		srcs << r'$(REPO)/boards/common/boot_handoff.c'
 	}
 	if srcs.len == 0 {
 		return 'LOOM_GLUE_SRCS :=\n'

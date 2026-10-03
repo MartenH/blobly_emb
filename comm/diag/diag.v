@@ -314,8 +314,9 @@ fn truncated(pci u8, n int, left int) bool {
 	}
 }
 
-// reset_due is the ECUReset kind whose answer has left the link, or the other transport that
-// carried it (remote_sent), (0 = none) — for an owner that performs the reset itself
+// reset_due is the ECUReset kind — or uds.reset_into_boot, the programming handoff, which the owner
+// performs as a reset with the boot request cell written first — whose answer has left the link,
+// or the other transport that carried it (remote_sent), (0 = none) — for an owner that performs the reset itself
 // (`owner_resets`). The link being done is not the wire being done: the
 // owner still waits for its controller to transmit the answer (REQ-BOOT-012).
 pub fn (c &Connection) reset_due() u8 {

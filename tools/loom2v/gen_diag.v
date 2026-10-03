@@ -24,7 +24,34 @@ mut:
 	// every service this build performs (diag_unbuilt), in its default sessions.
 	table    bool
 	services []SvcCfg
+	// the "0x10 02" row: the programming handoff's own gate ([boot]) — kept apart from `services`,
+	// which it neither lists nor counts: it narrows the 0x10 row, it is not a service of its own
+	handoff_row      bool
+	handoff_sessions u8 // uds.in_* mask; 0 = uds.default_handoff_sessions
+	handoff_security u8
 }
+
+// BootCfg is [boot]: the node runs behind the bootloader (docs/bootloader.md), so its server's
+// 0x10 02 hands the ECU over — the boot request cell written, then the reset — instead of refusing.
+struct BootCfg {
+mut:
+	on bool
+}
+
+fn parse_boot(doc toml.Doc) BootCfg {
+	bv := doc.value_opt('boot') or { return BootCfg{} }
+	for k, _ in bv.as_map() {
+		panic('loom2v: [boot] has "${k}" — [boot] takes no keys yet: its presence is the declaration')
+	}
+	return BootCfg{
+		on: true
+	}
+}
+
+// handoff_did: the DID a [boot] node answers with its running image's sw_version (the image
+// header's, tools/mkimage), so a tester can tell which image the bootloader started
+// (systemSupplierECUSoftwareVersionNumber).
+const handoff_did = u16(0xF195)
 
 // SvcCfg is one [uds] `services` row (a comm/uds Service).
 struct SvcCfg {
@@ -62,7 +89,16 @@ fn parse_uds(doc toml.Doc) UdsCfg {
 	mut seen := map[u8]string{}
 	rows := (um['services'] or { toml.Any(map[string]toml.Any{}) }).as_map()
 	// SID order, so the generated table does not depend on how the file spelled it
-	mut keys := rows.keys()
+	for key in rows.keys().filter(is_handoff_key(it)) {
+		if c.handoff_row {
+			panic('loom2v: [uds] services names the programming handoff twice')
+		}
+		c.handoff_row = true
+		c.handoff_sessions, c.handoff_security = row_gates((rows[key] or {
+			toml.Any(map[string]toml.Any{})
+		}).as_map(), '"${key}"')
+	}
+	mut keys := rows.keys().filter(!is_handoff_key(it))
 	keys.sort_with_compare(fn (a &string, b &string) int {
 		return int(parse_sid(*a)) - int(parse_sid(*b))
 	})
@@ -73,28 +109,11 @@ fn parse_uds(doc toml.Doc) UdsCfg {
 		}
 		seen[sid] = key
 		rm := (rows[key] or { toml.Any(map[string]toml.Any{}) }).as_map()
-		for rk, _ in rm {
-			if rk !in ['sessions', 'security'] {
-				panic('loom2v: [uds] services 0x${sid.hex()} has "${rk}" — a row takes `sessions` and `security`')
-			}
-		}
-		mut mask := u8(0)
-		for sv in (rm['sessions'] or { toml.Any([]toml.Any{}) }).array() {
-			mask |= session_bit(sv.string()) or {
-				panic('loom2v: [uds] services 0x${sid.hex()} sessions ${err}')
-			}
-		}
-		if 'sessions' in rm && mask == 0 {
-			panic('loom2v: [uds] services 0x${sid.hex()} sessions is empty — omit it for the service\'s default sessions')
-		}
-		sec := (rm['security'] or { toml.Any(0) }).int()
-		if sec < 0 || sec > uds.max_security_level {
-			panic('loom2v: [uds] services 0x${sid.hex()} security ${sec} is not a 0x27 level (1..${uds.max_security_level})')
-		}
+		mask, sec := row_gates(rm, '0x${sid.hex()}')
 		c.services << SvcCfg{
 			sid:      sid
 			sessions: mask
-			security: u8(sec)
+			security: sec
 		}
 	}
 	if c.services.len == 0 {
@@ -104,6 +123,44 @@ fn parse_uds(doc toml.Doc) UdsCfg {
 		panic('loom2v: [uds] services lists ${c.services.len} — a server table holds at most ${uds.max_services} (comm/uds max_services)')
 	}
 	return c
+}
+
+// row_gates: a `services` row's session mask (0 = the default sessions) and 0x27 level (0 = none);
+// `what` names the row in an error.
+fn row_gates(rm map[string]toml.Any, what string) (u8, u8) {
+	for rk, _ in rm {
+		if rk !in ['sessions', 'security'] {
+			panic('loom2v: [uds] services ${what} has "${rk}" — a row takes `sessions` and `security`')
+		}
+	}
+	mut mask := u8(0)
+	for sv in (rm['sessions'] or { toml.Any([]toml.Any{}) }).array() {
+		mask |= session_bit(sv.string()) or { panic('loom2v: [uds] services ${what} sessions ${err}') }
+	}
+	if 'sessions' in rm && mask == 0 {
+		panic('loom2v: [uds] services ${what} sessions is empty — omit it for the default sessions')
+	}
+	sec := (rm['security'] or { toml.Any(0) }).int()
+	if sec < 0 || sec > uds.max_security_level {
+		panic('loom2v: [uds] services ${what} security ${sec} is not a 0x27 level (1..${uds.max_security_level})')
+	}
+	return mask, u8(sec)
+}
+
+// is_handoff_key: a `services` key naming a SUB-FUNCTION row ("<sid> <sub>", hex), which only the
+// programming handoff has — "0x10 02". Any other sub-function row is refused.
+fn is_handoff_key(key string) bool {
+	parts := key.fields()
+	if parts.len != 2 {
+		return false
+	}
+	sub := parts[1].to_lower().trim_string_left('0x')
+	ok := sub.len in [1, 2] && sub.bytes().all(it.is_hex_digit())
+	n := if ok { sub.parse_uint(16, 8) or { 0 } } else { u64(0) }
+	if parse_sid(parts[0]) != 0x10 || n != u64(uds.session_programming) {
+		panic('loom2v: [uds] services "${key}": the one sub-function row is the programming handoff, "0x10 02"')
+	}
+	return true
 }
 
 // parse_sid: a `services` key, the SID in hex ("0x22").
@@ -158,6 +215,9 @@ fn sa_levels(m Model) u8 {
 			mask |= u8(1) << (r.security - 1)
 		}
 	}
+	if m.uds.handoff_security != 0 {
+		mask |= u8(1) << (m.uds.handoff_security - 1)
+	}
 	return mask
 }
 
@@ -167,9 +227,55 @@ fn svc_listed(m Model, sid u8) bool {
 	return !m.uds.table || m.uds.services.any(it.sid == sid)
 }
 
+// handoff_sessions: where the handoff is accepted — its row's sessions, else the default
+fn handoff_sessions(m Model) u8 {
+	return if m.uds.handoff_sessions != 0 { m.uds.handoff_sessions } else { uds.default_handoff_sessions }
+}
+
+// validate_boot refuses a [boot] the comm thread cannot perform, and a handoff row with nothing to
+// gate or a gate nobody could pass.
+fn validate_boot(m Model) {
+	u := m.uds
+	if !m.boot.on {
+		if u.handoff_row {
+			panic('loom2v: [uds] services "0x10 02" gates the programming handoff, but the node has no [boot] — without a bootloader 0x10 02 is refused outright')
+		}
+		return
+	}
+	if !m.target.threadx {
+		panic('loom2v: [boot] is a ThreadX target\'s: the handoff is performed by the comm thread (a reset into the bootloader), and a host build has no bootloader to reset into')
+	}
+	if m.isotp_conns.len == 0 {
+		panic('loom2v: [boot] hands the ECU over on 0x10 02, which the diagnostic server answers — declare its [isotp] connection')
+	}
+	mask := handoff_sessions(m)
+	if mask & uds.in_programming != 0 {
+		panic('loom2v: [uds] services "0x10 02" names the programming session — the application never runs it; the bootloader does')
+	}
+	if u.handoff_security != 0 && mask & uds.in_extended == 0 {
+		panic('loom2v: [uds] services "0x10 02" needs security ${u.handoff_security} but is not accepted in the extended session, the only one an application server unlocks in — it could never be passed')
+	}
+	row, listed := svc_row(m, 0x10)
+	if !listed {
+		panic('loom2v: [boot]: [uds] services leaves out 0x10 — the handoff (0x10 02) could never be asked for')
+	}
+	if row.sessions != 0 && row.sessions & mask == 0 {
+		panic('loom2v: [uds] services 0x10 and "0x10 02" share no session — the handoff could never be reached')
+	}
+	for d in m.dids {
+		if d.id == handoff_did {
+			panic('loom2v: [[did]] 0x${handoff_did.hex()} is the [boot] node\'s image version (the header sw_version the bootloader verified) — leave it to [boot]')
+		}
+	}
+	if m.dids.len + 1 > uds.max_dids {
+		panic('loom2v: [boot] adds DID 0x${handoff_did.hex()} to ${m.dids.len} [[did]]s — a diagnostic server holds at most ${uds.max_dids} (comm/uds max_dids)')
+	}
+}
+
 // validate_uds refuses a [uds] whose table this build cannot honour, and server settings that
 // mean nothing.
 fn validate_uds(m Model) {
+	validate_boot(m)
 	if m.isotp_conns.len == 0 {
 		if m.uds.on {
 			panic('loom2v: [uds] is the diagnostic server, but nothing carries a request to it — declare its [isotp] connection')
@@ -283,7 +389,17 @@ fn conn_init_lines(m Model, c IsotpConn, conn string) []string {
 	srv := '${conn}.server'
 	mut g := []string{}
 	g << '\t${conn}.init(u32(0x${c.rx_id.hex()}), u32(0x${c.tx_id.hex()}), u32(0x${c.functional_id.hex()}), ${c.bs}, ${c.stmin})'
-	g << '\t${srv}.no_programming = true // programming is the bootloader\'s (handoff: R2)'
+	g << '\t${srv}.no_programming = true // programming is the bootloader\'s'
+	if m.boot.on {
+		// [boot]: 0x10 02 is answered and handed to the owner (reset_into_boot), behind its own row
+		mut f := ['sid: 0x10', 'sub: 0x02', 'sessions: 0x${handoff_sessions(m).hex()}']
+		if m.uds.handoff_security != 0 {
+			f << 'security: ${m.uds.handoff_security}'
+		}
+		g << '\t${srv}.boot_handoff = true // [boot]: 0x10 02 hands the ECU to its bootloader'
+		g << '\t${srv}.subs[0] = uds.SubService{${f.join(', ')}}'
+		g << '\t${srv}.nsubs = 1'
+	}
 	if m.uds.s3_ms > 0 {
 		g << '\t${srv}.s3_us = u64(${m.uds.s3_ms}) * 1000'
 	}
@@ -481,6 +597,12 @@ fn diag_target_reset(m Model, ioc_idx map[string]int) []string {
 		g << '\t\t\tdiag_keep_now := g_diag.server.kept_security()'
 		g << '\t\t\tC.diag_keep_save(&diag_keep_now[0], uds.kept_len)'
 	}
+	if m.boot.on {
+		// the handoff: the request cell makes the bootloader stay and serve the programming session
+		g << '\t\t\tif g_diag.reset_due() == uds.reset_into_boot {'
+		g << '\t\t\t\tC.boot_handoff_request()'
+		g << '\t\t\t}'
+	}
 	g << '\t\t\tC.diag_sys_reset()'
 	g << '\t\t}'
 	return g
@@ -492,6 +614,12 @@ fn diag_target_c_decls(m Model) []string {
 		return []string{}
 	}
 	mut g := ['', 'fn C.diag_sys_reset()']
+	if m.boot.on {
+		// the bootloader's side of the handoff (boards/common/boot_handoff.c, the board's bootmap.h)
+		g << 'fn C.boot_handoff_request()'
+		g << 'fn C.boot_handoff_ok() int'
+		g << 'fn C.boot_image_version() u32'
+	}
 	if sa_levels(m) != 0 {
 		g << 'fn C.diag_keep_save(&u8, int)'
 		g << 'fn C.diag_keep_load(&u8, int) int'
@@ -525,6 +653,9 @@ fn diag_target_init(m Model) []string {
 	if m.dids.any(it.signal != '') {
 		g << '\tg_diag.refresh = diag_refresh_${snake(m.isotp_conns[0].name)}'
 	}
+	if m.boot.on {
+		g << boot_target_init(m)
+	}
 	if sa_levels(m) != 0 {
 		key := if m.uds.security_key == 'reference' { 'uds.reference_key_ok' } else { 'diag_sa_key_v' }
 		// the RNG's clock is set up here, once, before the loop — never inside a request
@@ -537,6 +668,34 @@ fn diag_target_init(m Model) []string {
 	}
 	g << '\tmut diag_txf := can.Frame{}'
 	return g
+}
+
+// boot_target_init: a [boot] node's conditions seam (REQ-BOOT-015: the application may refuse the
+// handoff, conditionsNotCorrect) and its image-version DID — the header sw_version of the image
+// that is running, which the bootloader verified before it jumped (boot_image_version).
+fn boot_target_init(m Model) []string {
+	n := m.dids.len // validate_boot reserved the slot
+	return [
+		'\tg_diag.server.handoff_ok = boot_handoff_ok_v',
+		'\tboot_ver := C.boot_image_version()',
+		'\tg_diag.server.dids[${n}] = uds.Did{',
+		'\t\tid:  u16(0x${handoff_did.hex()}) // the running image\'s sw_version ([boot])',
+		'\t\tlen: 4',
+		'\t}',
+		'\tg_diag.server.dids[${n}].data[0] = u8(boot_ver >> 24)',
+		'\tg_diag.server.dids[${n}].data[1] = u8(boot_ver >> 16)',
+		'\tg_diag.server.dids[${n}].data[2] = u8(boot_ver >> 8)',
+		'\tg_diag.server.dids[${n}].data[3] = u8(boot_ver)',
+		'\tg_diag.server.ndid = ${n + 1}',
+	]
+}
+
+// boot_target_fns: the conditions seam as the server calls it
+fn boot_target_fns(m Model) []string {
+	if !m.boot.on {
+		return []string{}
+	}
+	return ['', 'fn boot_handoff_ok_v() bool {', '\treturn C.boot_handoff_ok() != 0', '}']
 }
 
 // diag_target_housekeep: the top of every pass, before the drain.

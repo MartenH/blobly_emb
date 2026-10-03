@@ -8,7 +8,7 @@
  */
 #include "tx_api.h"
 #include <stm32h7xx.h>
-#include "bootmap.h" /* the boot manager <-> app contract (docs/bootloader.md) */
+#include "bootcell.h" /* the boot manager <-> app cells (docs/bootloader.md) */
 
 /* shell_boot — the `boot` command ([shell] commands=["boot"]): write the SRAM4
  * request cell and reset into the boot manager (the app->boot rung, REQ-BOOT-003).
@@ -21,10 +21,7 @@ int shell_boot(unsigned char *out, int cap)
 {
     (void)out;
     (void)cap;
-    volatile uint32_t *cell = (volatile uint32_t *)BOOTCELL_REQ_ADDR;
-    cell[1] = 1u; /* arg first: the magic makes the pair valid, so it lands last */
-    cell[0] = BOOTCELL_REQ_MAGIC;
-    __asm__ volatile("dsb");
+    bootcell_request();
     NVIC_SystemReset();
     return 0; /* unreachable */
 }

@@ -1,6 +1,8 @@
 # Bootloader — design + build log
 
 > Status (2026-07-16): **P1–P3 + P5 BENCH-VERIFIED on the H755; P4 (atomic activation) pending.**
+> 2026-10-03: the **app-side handoff** is generated from config (`[boot]`, below — "App → boot,
+> as built"); its bench run comes with the per-node bootloader.
 > The chain runs on real silicon: header-verified jump, CAN reflash + torn-image
 > recovery, S3/return-to-app session timers, and full asymmetric authenticity —
 > Ed25519 image signatures verified on the CM7 (no heap) + a 0x29 session gate
@@ -69,12 +71,58 @@ a diagnostic session to tear down) — **never jumps**: it writes its result and
 self-resets, and the next cycle takes the virgin happy path. Peripheral-state leakage
 into the app is eliminated by construction, not managed by a deinit checklist.
 
-**App → boot** is the request cell above; **information forward** is its sibling: a
+**App → boot** is the request cell above (as built: "App → boot, as built" below); **information forward** is its sibling: a
 `boot_info` no-init cell (boot reason — normal / freshly-flashed / was-invalid,
 bootloader version) written by boot before the jump, exposed by the app over a
 DID/shell command without re-deriving anything. Both cells live in one board-owned
 header (the `xcore.h` pattern) and are bound in `[boot]` so generator, app, and boot
 manager cannot disagree on the addresses.
+
+### App → boot, as built (P3)
+
+A node declares `[boot]` in its `ecu.toml` (no keys yet: its presence is the declaration), and its
+generated diagnostic server (comm/uds, comm/diag, `tools/loom2v/gen_diag.v`) treats `0x10 02` as
+the handoff instead of refusing it:
+
+1. **Gated like every service**: by the `[uds] services` table — the 0x10 row, and the handoff's
+   own sub-function row `"0x10 02" = { sessions = [...], security = N }` (0x7E outside its
+   sessions, 0x33 below its level; absent, the extended session with no level) — then by the
+   application's **conditions seam** `boot_handoff_ok()` (REQ-BOOT-015: weak in
+   `boards/common/boot_handoff.c`, allowing; an application overrides it in its own glue and
+   answers conditionsNotCorrect, 0x22). A `[doip]` node must put a level on the row (REQ-NET-012).
+2. **Answered first**: the positive `50 02` with the P2/P2* record — the bootloader's own
+   (`uds.session_answer` is one statement for both servers, pinned by a test) — and
+   `reset_req = uds.reset_into_boot` recorded. The application's session does not change: if the
+   answer is lost (a refused frame, a dropped DoIP connection) the handoff is cancelled with the
+   server exactly as it was.
+3. **Performed as an answered reset** by the comm thread (`diag_target_reset`): the same path 0x11
+   takes — the bounded controller drain (REQ-BOOT-012), on a `[doip]` node the
+   `doip_tx_pending()` wait, the NvM flush, the 0x27 keep cell — then the **boot request cell**
+   (`boards/common/bootcell.h`, one statement of the cells for both sides, addresses from the
+   board's `bootmap.h`) and the reset. `[boot]` also serves DID **0xF195**: the running image's
+   header `sw_version`, so a tester can see which image the bootloader started.
+
+**Why the positive answer before the reset, not 0x78 then the bootloader's answer.** ISO 14229-1
+allows both for a server that must jump to boot software to enter programming: the application may
+send the positive response before the jump, or answer responsePending and leave the final positive
+response to the boot software. This stack sends it from the application because:
+
+- **DoIP has no second half**: a network tester's TCP connection dies with the reset and the
+  bootloader has no DoIP binding (P7), so a 0x78 over DoIP is a promise nobody can keep. One rule
+  for both transports beats a per-transport answer.
+- **The bootloader would answer a request it never received**: the final response needs the
+  request's addressing and suppress bit carried across the reset in the cell — state the boot
+  manager does not otherwise need, for an answer the application can give with what it has.
+- **The timing in the answer is the bootloader's**: both servers build `50 02` from one function,
+  so the P2/P2* the tester adopts are the ones the session it is entering keeps.
+- **blobly_net's client takes either** (`modules/uds` `Client.exchange`: a `0x78` re-arms the wait by
+  P2*, a positive answer ends it), so nothing on the tester side decides it.
+
+What the choice costs: after `50 02` the tester must let the bootloader come up before its next
+request (clocks and CAN, a few ms after the reset), and a tester that misses that window retries.
+The boot manager's half — starting in the programming session when the request cell brought it
+there (docs/diagnostics.md §7, "the session survives the handoff"), on the ids and bus of the
+node's `[isotp]` — is the per-node bootloader's, built next.
 
 **Dual-bank caveat for P4:** a full-bank swap swaps the bootloader out with the app —
 so bank-swap activation means either boot duplicated at the base of BOTH banks, or
@@ -314,7 +362,9 @@ lighter middle ground if the trade pinches before a full PKI earns its way in.
 2. **P2 — CAN programming session**: ISO-TP + UDS erase/transfer/verify on the bench;
    host flasher tool in blobly_net. First real reflash over the wire.
 3. **P3 — app-side handoff**: programming session request from the running
-   application (NM-aware: hold the bus awake during the session).
+   application (NM-aware: hold the bus awake during the session). *The app side is
+   generated (`[boot]`, "App → boot, as built"); the bench run comes with the
+   per-node bootloader.*
 4. **P4 — atomic activation** (REQ-BOOT-007, instance-agnostic): the requirement is
    "run the whole old or the whole new image, never a mixture." *Implementation note*
    — the boards layer picks the strategy the silicon affords: dual-bank swap on

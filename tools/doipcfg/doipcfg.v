@@ -204,6 +204,20 @@ pub fn service_refusals(table bool, rows []ServiceRow) []string {
 	return errs
 }
 
+// handoff_refusal: '' unless the server has a programming handoff ([boot]) that a network tester
+// could run unauthenticated. The handoff restarts the ECU into its bootloader — the state change
+// 0x11 is, and more — so 0x10 02 is not covered by 0x10's exemption: its own row ("0x10 02") needs
+// a level, as a 0x11 row does.
+pub fn handoff_refusal(boot bool, security i64) string {
+	if !boot || is_level(security) {
+		return ''
+	}
+	if security != 0 {
+		return '[uds] services "0x10 02" security = ${security} is not a 0x27 level (1..${uds.max_security_level}) — it gates nothing (REQ-NET-012)'
+	}
+	return '[boot]: the programming handoff (0x10 02) restarts the ECU into its bootloader, and the network reaches this server — over IP it would act for an unauthenticated tester; gate it: [uds] services "0x10 02" = { security = N } (REQ-NET-012)'
+}
+
 // bench_key_refusal: '' unless the 0x27 key a server reachable over the network answers with
 // (`security_key`, [uds]) and `allow_bench_key` disagree. blobly_net's reference key is PUBLIC, so
 // over a routed network it authenticates nobody: allowed only by name, as a bench posture.

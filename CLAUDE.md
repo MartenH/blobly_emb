@@ -132,6 +132,10 @@ The job then links one shape no committed image has, a **multi-thread gateway**
 ThreadX image links ONE generic glue, `boards/common/comm_glue.c`, through `gen/loom_build.mk`'s
 `LOOM_GLUE_SRCS` — never named in a Makefile; a node's own C (shell commands, the H755 xcore
 handoff) is its `target_ext.c` and redefines nothing of it (`threadx_makefiles_test.v`, #359).
+The same list carries `boards/common/boot_handoff.c` into a node that declares **`[boot]`** — it
+runs behind the bootloader, so its server's `0x10 02` is the programming handoff (answered, then
+the boot request cell and the reset by 0x11's path; docs/bootloader.md "App → boot, as built").
+That file includes the board's `bootmap.h`, so `[boot]` builds only on a board that has one.
 
 **CI pins the V compiler** to the release tag in `.v-version` (currently `0.5.2`), installed as the
 **prebuilt** `v_linux.zip` release asset in both jobs. It used to install master HEAD, so an upstream

@@ -214,4 +214,9 @@ fn test_the_glue_list_follows_the_declarations() {
 	assert glue_build_lines(['fn C.comm_rx_wait(u32) u32', 'fn C.shell_ps(&u8, int) int'],
 		false) == 'LOOM_GLUE_SRCS = ${comm} ${shell}\n'
 	assert glue_build_lines(['fn C.shell_boot(&u8, int) int'], false) == 'LOOM_GLUE_SRCS :=\n', 'a node command is its own target_ext.c'
+	// the [boot] handoff's board side
+	for sym in boot_glue_syms {
+		assert glue_build_lines(['fn C.${sym}()'], false) == 'LOOM_GLUE_SRCS = ' +
+			r'$(REPO)/boards/common/boot_handoff.c' + '\n', sym
+	}
 }

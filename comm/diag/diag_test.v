@@ -1,6 +1,6 @@
 module diag
 
-// @verifies REQ-DIAG-001 REQ-DIAG-002 REQ-DIAG-003 REQ-DIAG-006 REQ-DIAG-007
+// @verifies REQ-BOOT-003 REQ-DIAG-001 REQ-DIAG-002 REQ-DIAG-003 REQ-DIAG-006 REQ-DIAG-007
 import comm.isotp
 import comm.uds
 import driver.can
@@ -356,6 +356,56 @@ fn test_nothing_is_served_once_a_reset_is_due() {
 	c.serve()
 	mut f := can.Frame{}
 	assert !c.produce(0, mut f), 'a request was answered while a reset was due'
+}
+
+// the programming handoff (REQ-BOOT-003) is a reset like 0x11's to the connection: due to the owner
+// only once its answer has left — over the bus, or over the other transport — and never performed
+// when that answer is lost; the owner tells it from an ECUReset by its kind (uds.reset_into_boot)
+fn handoff_conn() Connection {
+	mut c := new_conn()
+	c.server.serves_reset = true
+	c.server.no_programming = true
+	c.server.boot_handoff = true
+	c.owner_resets = true
+	return c
+}
+
+fn test_a_handoff_is_due_once_its_answer_has_left_and_a_lost_answer_cancels_it() {
+	mut c := handoff_conn()
+	mut t := new_tester()
+	mut now := u64(0)
+	exchange(mut c, mut t, mut &now, [u8(0x10), 0x03])
+	c.on_frame(now, sf(rx, [u8(0x10), 0x02]))
+	c.serve()
+	assert c.reset_due() == 0, 'handed off before the answer left the link'
+	mut f := can.Frame{}
+	assert c.produce(now, mut f)
+	assert f.data[..3] == [u8(0x06), 0x50, 0x02]
+	assert c.reset_due() == uds.reset_into_boot
+	// the same request whose answer the channel refuses: no handoff, the session stands
+	mut d := handoff_conn()
+	exchange(mut d, mut t, mut &now, [u8(0x10), 0x03])
+	d.on_frame(now, sf(rx, [u8(0x10), 0x02]))
+	d.serve()
+	assert d.produce(now, mut f)
+	d.abort_tx()
+	assert d.reset_due() == 0 && d.server.reset_req == 0
+	assert d.server.session == uds.session_extended
+}
+
+fn test_a_handoff_over_the_network_waits_for_its_transport() {
+	mut c := handoff_conn()
+	remote(mut c, [u8(0x10), 0x03], false)
+	assert remote(mut c, [u8(0x10), 0x02], false)[..2] == [u8(0x50), 0x02]
+	assert c.reset_due() == 0, 'handed off before the DoIP answer left'
+	c.remote_sent()
+	assert c.reset_due() == uds.reset_into_boot
+	// a connection that drops before its answer is sent takes the handoff with it
+	mut d := handoff_conn()
+	remote(mut d, [u8(0x10), 0x03], false)
+	remote(mut d, [u8(0x10), 0x02], false)
+	d.remote_dropped()
+	assert d.reset_due() == 0 && d.server.reset_req == 0
 }
 
 fn remote(mut c Connection, req []u8, functional bool) []u8 {

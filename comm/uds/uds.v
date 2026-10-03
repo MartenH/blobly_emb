@@ -9,6 +9,8 @@ module uds
 // DIDs per request), 0x27 SecurityAccess (with injected SecurityOps), 0x28 CommunicationControl,
 // 0x14 / 0x19 / 0x85 over an injected FaultOps (comm/fault),
 // 0x2E WriteDataByIdentifier, 0x3E TesterPresent. Anything else -> 0x11 serviceNotSupported.
+// An application server's 0x10 02 is the programming HANDOFF (boot_handoff): answered, then
+// performed by the owner as a reset into the bootloader (reset_into_boot).
 // Which of those a node answers, where, and behind which 0x27 level is the SERVICE TABLE
 // (Server.services, configured from [uds] `services`); an empty table is the default set.
 //
@@ -116,6 +118,23 @@ pub mut:
 	security u8
 }
 
+// SubService is one sub-function row (Server.subs): `sessions` is an in_* mask (0 = wherever its
+// service runs), `security` the 0x27 level it needs (0 = none).
+pub const max_sub_services = 4
+
+pub struct SubService {
+pub mut:
+	sid      u8
+	sub      u8
+	sessions u8
+	security u8
+}
+
+// reset_into_boot is the reset_req kind of the programming handoff: not an ECUReset sub-function
+// (those are seven bits wide), so no 0x11 request can ever store it. The owner performs it like
+// any answered reset, with the boot request cell written first.
+pub const reset_into_boot = u8(0x80)
+
 // Did is one Data Identifier: constant bytes, a RAM cell (writable), and/or kept fresh from a
 // live signal by the bridge. Access is gated per DID: the session masks (0 = every session) and
 // the security level a write needs (0 = none).
@@ -149,8 +168,8 @@ pub mut:
 	last_rx_us u64
 	rx_seen    bool // last_rx_us holds a real request time (0 is a valid clock value)
 	s3_us      u64 // 0 = default_s3_us
-	// ECUReset requested (the 0x11 subfunction), for the owner to perform once the response
-	// has left; 0 = none.
+	// ECUReset requested (the 0x11 subfunction), or the programming handoff (reset_into_boot), for
+	// the owner to perform once the response has left; 0 = none.
 	reset_req u8
 	// CommunicationControl (0x28) state for NORMAL communication messages, and whether this
 	// server's node has a single network (so "all networks" and "this network" are the same).
@@ -164,9 +183,22 @@ pub mut:
 	serves_reset        bool
 	serves_comm_control bool
 	// An APPLICATION server has no erase/download services: those live in the bootloader
-	// (boot.Prog), reached by a handoff (boot cell + reset) that is not built yet — so it refuses
-	// 0x10 02 rather than enter a session that cannot program. The bootloader leaves it false.
+	// (boot.Prog). It never ENTERS the programming session: without `boot_handoff` it refuses
+	// 0x10 02 (subFunctionNotSupported); with it, an accepted 0x10 02 is answered and recorded as
+	// reset_req = reset_into_boot, for the owner to perform — write the boot request cell and
+	// reset once the answer has left — so the bootloader's server opens the session. The
+	// bootloader leaves both false: it enters programming itself.
 	no_programming bool
+	boot_handoff   bool
+	// handoff_ok is the application's conditions seam for the handoff (REQ-BOOT-015): false
+	// answers conditionsNotCorrect (0x22) and nothing is handed off. nil = allowed — the server
+	// knows no vehicle state, and only the application can.
+	handoff_ok fn () bool
+	// Sub-function rows: a service's sub-function gated beyond its service row (AUTOSAR's
+	// sub-service table) — the sessions it is accepted from (0x7E otherwise) and the 0x27 level it
+	// needs (0x33). Consulted by 0x10, for the programming handoff; nsubs == 0 = none.
+	subs  [max_sub_services]SubService
+	nsubs int
 	// SecurityAccess (0x27): the seam, the levels served (bit L-1 for level L), the failed-key
 	// limit and the lockout delay (0 = the defaults). sa_* below is the exchange in progress.
 	security        SecurityOps
@@ -398,6 +430,11 @@ pub fn default_sessions(sid u8) u8 {
 	}
 }
 
+// default_handoff_sessions: where an application server accepts the programming handoff (0x10 02)
+// unless its sub-function row says otherwise — the extended session, so a stray request on a quiet
+// bus cannot restart a running ECU into its bootloader (as default_sessions keeps 0x27/0x28/0x85).
+pub const default_handoff_sessions = in_extended
+
 // in_mask: `session` is allowed by `mask` (0 = every session). A server that never entered a
 // session (0) is allowed nowhere a mask names — fail-closed.
 fn in_mask(mask u8, session u8) bool {
@@ -482,25 +519,74 @@ fn (mut s Server) session_control(req &u8, req_len int, resp &u8) int {
 		&& sub != session_safety {
 		return negative(resp, 0x10, nrc_subfunction_not_supported)
 	}
-	if sub == session_programming && s.no_programming {
+	handoff := sub == session_programming && s.no_programming
+	if handoff && !s.boot_handoff {
 		return negative(resp, 0x10, nrc_subfunction_not_supported)
+	}
+	// ISO 14229-1's order past a supported sub-function: in the active session (0x7E) → its
+	// security (0x33) → the exact length (0x13) → conditions (0x22)
+	gate := s.sub_refusal(0x10, sub)
+	if gate != 0 {
+		return negative(resp, 0x10, gate)
 	}
 	if req_len != 2 {
 		return negative(resp, 0x10, nrc_incorrect_length)
+	}
+	if handoff {
+		if s.handoff_ok != unsafe { nil } && !s.handoff_ok() {
+			return negative(resp, 0x10, nrc_conditions_not_correct)
+		}
+		// answered HERE, before the reset: the session is opened by the bootloader's server after
+		// it, and nothing changes in this one — a handoff whose answer is lost is cancelled with
+		// the server exactly as it was (comm/diag cancel_reset)
+		s.reset_req = reset_into_boot
+		if unsafe { req[1] } & 0x80 != 0 {
+			return 0
+		}
+		return session_answer(resp, sub)
 	}
 	s.enter_session(sub)
 	if unsafe { req[1] } & 0x80 != 0 {
 		return 0 // suppressPosRsp on a VALID session: action done, response withheld
 	}
+	return session_answer(resp, s.session)
+}
+
+// session_answer: the 0x10 positive response — the session and the timing record, which is ONE
+// statement for every server built on this one, the bootloader's included, so the P2/P2* an
+// application announces in answer to a handoff are the ones the bootloader's session keeps.
+fn session_answer(resp &u8, session u8) int {
 	unsafe {
 		resp[0] = 0x50
-		resp[1] = s.session
+		resp[1] = session
 		resp[2] = 0x00 // P2_server_max  = 0x0032 (50 ms)
 		resp[3] = 0x32
 		resp[4] = 0x01 // P2*_server_max = 0x01F4 * 10 ms (5 s)
 		resp[5] = 0xF4
 	}
 	return 6
+}
+
+// sub_refusal: the NRC a sub-function row refuses `sub` of `sid` with in the active session and
+// unlock — 0x7E outside its sessions, 0x33 without its level — or 0 when it passes (or has no row).
+fn (s &Server) sub_refusal(sid u8, sub u8) u8 {
+	for i in 0 .. s.nsubs {
+		if i >= max_sub_services {
+			break
+		}
+		r := s.subs[i]
+		if r.sid != sid || r.sub != sub {
+			continue
+		}
+		if !in_mask(r.sessions, s.session) {
+			return nrc_subfunction_not_in_session
+		}
+		if r.security != 0 && s.unlocked != r.security {
+			return nrc_security_access_denied
+		}
+		return 0
+	}
+	return 0
 }
 
 // ecu_reset: hardReset (01) and softReset (03). The server only RECORDS the request —
