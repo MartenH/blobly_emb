@@ -3292,7 +3292,7 @@ fn emit_handlers(m Model, producers []Producer, ioc_idx map[string]int, trace_ow
 						panic('loom2v: fb "${cname}" owns [[fault]]s in a multi-thread partition — not generated yet; put it in a single-thread partition')
 					}
 					glue << '\tfdeb_${snake(cname)} [${nf}]fault.Debounce // its faults, debounced on this thread'
-					glue << '\tfctl_${snake(cname)} fault.Control // clear generations, from the diagnostic bridge'
+					glue << '\tfctl_${snake(cname)} fault.Control // generations to apply (and held flags), from the diagnostic bridge'
 					glue << '\tfrep_${snake(cname)} fault.Reports // debounced state + counters, to the bridge'
 				}
 			}
@@ -5372,7 +5372,7 @@ fn fault_step_lines(m Model, fb string, handler string) []string {
 	mut out := []string{}
 	if m.target.threadx {
 		out << '\tfault_now := C.board_now_us()'
-		out << '\tC.iocb_get(${fault_cell(m, fb, true)}, &st.fctl_${f}) // the clear generations, from the comm thread'
+		out << '\tC.iocb_get(${fault_cell(m, fb, true)}, &st.fctl_${f}) // the generations to apply (and held flags), from the comm thread'
 	} else {
 		out << '\tfault_now := osal.now_us()'
 		out << '\tosal.${acquire_fn('triple')}(fault_ctl_${f}_ch, &st.fctl_${f}, u8(sizeof(st.fctl_${f})))'

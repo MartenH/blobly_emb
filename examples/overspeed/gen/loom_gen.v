@@ -58,7 +58,7 @@ struct Partition_ctrl_state {
 mut:
 	engine_monitor app.EngineMonitor
 	fdeb_engine_monitor [2]fault.Debounce // its faults, debounced on this thread
-	fctl_engine_monitor fault.Control // clear generations, from the diagnostic bridge
+	fctl_engine_monitor fault.Control // generations to apply (and held flags), from the diagnostic bridge
 	frep_engine_monitor fault.Reports // debounced state + counters, to the bridge
 	brake_monitor app.BrakeMonitor
 	lamp_controller app.LampController

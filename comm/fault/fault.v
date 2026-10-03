@@ -30,8 +30,9 @@ module fault
 // testFailed is `held`: the producer starts it failed, so that failure re-qualifying is not a new
 // occurrence, and only the producer, which sees the order of its own results, decides that. The
 // accepted cost: a result held across "on", failed or passed, completes again only once it
-// debounces from zero (§7, R4). If no fresh generation is free at "on", the slot stays suppressed
-// until the producer's report frees one. If an operation cycle began while off, "on" resets that
+// debounces from zero (§7, R4). If no fresh generation is free at "on", the slot's RESULTS stay
+// suppressed (its cycle bits move as any slot's) until the producer's report frees one; what that
+// producer qualified meanwhile is lost with them. If an operation cycle began while off, "on" resets that
 // cycle's status bits, which the frozen byte still carried from the previous one.
 //
 // No field defaults anywhere (the _vinit rule): the owner calls init / configures explicitly.
@@ -204,7 +205,7 @@ pub mut:
 	base_fails u16
 	base_tests u16
 	held       bool // `gen` starts failed: renewed by 0x85 on while the status showed testFailed
-	wait_gen   bool // 0x85 is on but no fresh generation was free: still suppressed until one is
+	wait_gen   bool // no fresh generation was free at 0x85 on: results suppressed until one is
 }
 
 // Memory is the node's fault memory — one writer, the comm thread (D2). RAM only in R4;
@@ -246,8 +247,9 @@ pub fn (mut m Memory) consume(i int, r Report) {
 	mut s := &m.slots[i]
 	s.seen_gen = r.gen
 	if s.wait_gen {
-		// "on" found no fresh generation; this report may carry the old one from the off window
-		if s.can_renew() {
+		// "on" found no fresh generation; this report may carry the old one from the off window.
+		// Renewed only while on: an "off" in between leaves it to the next "on" to renew once.
+		if !m.setting_off && s.can_renew() {
 			s.wait_gen = false
 			s.renew(s.status & test_failed != 0)
 		}
@@ -453,8 +455,10 @@ fn ops_setting(ctx voidptr, on bool) {
 // from the previous cycle.
 //
 // "On" cannot be refused (a session ending turns it on too). A slot with no fresh generation — its
-// producer silent for 32767 of them — waits instead (`wait_gen`): it stays suppressed, and its
-// next report, which frees one, renews it rather than counting.
+// producer silent for 32767 of them — waits instead (`wait_gen`): its results stay suppressed, and
+// its next report, which frees one, renews it rather than counting. What that producer qualifies
+// before it applies the renewed generation is lost: it restarts twice, once on the old generation
+// and once on the fresh one — the cost of a producer that had been silent that long.
 pub fn (mut m Memory) set_setting(on bool) {
 	if on && m.setting_off {
 		for i in 0 .. m.n {

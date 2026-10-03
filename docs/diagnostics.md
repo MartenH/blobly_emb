@@ -305,8 +305,9 @@ counter left saturated by a failure the off window saw qualified on the first fa
 "on", recording a failure the requirement forbids; seen on the bench as status 0x2E.) The accepted
 cost: a result held across "on", failed or passed, completes again only once it debounces from zero; a cycle begun while off
 gets fresh cycle bits at "on". "On" cannot be refused (a session end turns it on too), so a fault
-whose producer has been silent for 32767 generations stays suppressed until that producer's next
-report frees one, which renews it rather than counting. *As built in R4a*
+whose producer has been silent for 32767 generations keeps its results suppressed (its cycle bits
+move as any fault's) until that producer's next report frees one, which renews it rather than
+counting; what the producer qualified before applying the renewed generation is lost. *As built in R4a*
 (`comm/fault`), **operation-cycle boundaries** stay on the consumer side: they change status bits
 only and bump no generation, so no old-generation drain is needed on the host (a qualification at a
 boundary can land one pass late). The persistence-grade cycle-END barrier

@@ -1947,7 +1947,7 @@ fn has_deadline(m Model, msg string, bname string) bool {
 // fault_pass_lines: the fault memory's share of the bridge pass, at its TOP — before the rx drain,
 // where functional requests are served inline, and before the physical dispatch — so every 0x19
 // reads the newest consumed state: the signal-status faults' levels are stepped, each fault-owning
-// FB's report cell is consumed slot by slot and the clear generations go back in its control cell.
+// FB's report cell is consumed slot by slot and the generations (and held flags) go back in its control cell.
 // (Events and the operation cycle are handled where the frame is decoded, in bus order.)
 fn fault_pass_lines(m Model) []string {
 	if m.faults.len == 0 {
@@ -1965,7 +1965,7 @@ fn fault_pass_lines(m Model) []string {
 }
 
 // fault_consume_lines: `fb`'s report cell `rep`, consumed slot by slot into the fault memory
-// `fmem`, and the clear generations its thread must apply written into its control cell `ctl` —
+// `fmem`, and the generations its thread must apply (each with its held flag) written into its control cell `ctl` —
 // every owner's (the host bridge, the ThreadX comm thread); only how the cells cross differs.
 fn fault_consume_lines(m Model, fb string, fmem string, rep string, ctl string, ind string) []string {
 	mut out := []string{}

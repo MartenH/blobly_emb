@@ -626,10 +626,12 @@ fn owner_pass(mut m Memory, mut d Debounce, r TestResult) {
 // The abstract memory says what REQ-DIAG-009 allows. A producer EPOCH is its debounce since it last
 // restarted. It is ELIGIBLE while setting is on, if the restart was requested after the last off/on
 // and the last clear and happened after that request (a generation is only an identity here: the
-// model notes when the memory issued each one). A reference debounce, restarted in the state the
-// abstract memory shows, runs on the same results. An owner pass counts exactly what the reports it
+// model notes when the memory issued each one). A reference debounce — written here from the
+// documented rule, not the module's — restarted in the state the abstract memory shows, runs on the
+// same results. An owner pass counts exactly what the reports it
 // reads from an eligible epoch add, and nothing else — a report made while off, before "on", before
-// a clear — ever counts. After every action: the occurrence count, testFailed and
+// a clear — ever counts, and outside an operation cycle it counts nothing either. A clear may be
+// refused only while a storm has left a fault's producer without a report since. After every action: the occurrence count, testFailed and
 // testFailedSinceLastClear are the abstract memory's, and an owner pass while off changes no status.
 struct EpochMeta {
 mut:
@@ -637,6 +639,77 @@ mut:
 	fails  u16 // the reference debounce's occurrences, this epoch
 	tests  u16
 	failed bool
+}
+
+// RefDeb: the debounce as docs/diagnostics.md §3.3 states it — a counter from -pass to +fail moved by
+// inc / dec (reset on a reversal with jump), or a run of equal results held fail / pass µs; a gap
+// holds the counter and restarts a run; failed qualifies once, every result at a threshold is a test.
+struct RefDeb {
+mut:
+	tb     bool
+	fthr   i64
+	pthr   i64
+	inc    i64
+	dec    i64
+	jump   bool
+	c      i64
+	run    TestResult
+	since  u64
+	failed bool
+	fails  u16
+	tests  u16
+}
+
+fn ref_of(d Debounce, failed bool) RefDeb {
+	one := fn (x u32) i64 {
+		return if x == 0 { i64(1) } else { i64(x) }
+	}
+	return RefDeb{
+		tb:     d.time_based
+		fthr:   if d.time_based { i64(d.fail_thr) } else { one(d.fail_thr) }
+		pthr:   if d.time_based { i64(d.pass_thr) } else { one(d.pass_thr) }
+		inc:    one(d.inc)
+		dec:    one(d.dec)
+		jump:   d.jump
+		failed: failed
+	}
+}
+
+fn (mut r RefDeb) step(x TestResult, now u64, en bool) {
+	if !en || x == .not_tested {
+		r.run = .not_tested
+		return
+	}
+	mut f := false
+	mut p := false
+	if r.tb {
+		if x != r.run {
+			r.run = x
+			r.since = now
+		}
+		f = x == .failed && now - r.since >= u64(r.fthr)
+		p = x == .passed && now - r.since >= u64(r.pthr)
+	} else {
+		if x == .failed {
+			r.c = if r.jump && r.c < 0 { r.inc } else { r.c + r.inc }
+			r.c = if r.c > r.fthr { r.fthr } else { r.c }
+		} else {
+			r.c = if r.jump && r.c > 0 { -r.dec } else { r.c - r.dec }
+			r.c = if r.c < -r.pthr { -r.pthr } else { r.c }
+		}
+		f = r.c >= r.fthr
+		p = r.c <= -r.pthr
+	}
+	if f {
+		if !r.failed {
+			r.failed = true
+			r.fails++
+		}
+		r.tests++
+	} else if p {
+		r.failed = false
+		r.tests++
+	}
 }
 
 struct FaultAbs {
@@ -647,7 +720,10 @@ mut:
 	issued    map[u16]int // when the memory issued each generation (its latest issue)
 	last_gen  u16
 	epoch     int
-	reference Debounce
+	reference RefDeb
+	spent     bool // a storm spent its generations and no report from its producer has been read since
+	pub_fresh bool // the control cell has been published since that storm
+	rep_fresh bool // the producer has reported on a control published since that storm
 	cell      EpochMeta // what the published report cell carries
 	base      EpochMeta // what the abstract memory last counted
 	occ       u16
@@ -690,7 +766,7 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 		mut cells := [Report{}, Report{}]
 		mut ctl := Control{}
 		mut abs := []FaultAbs{len: 2, init: FaultAbs{
-			reference: proto
+			reference: ref_of(proto, false)
 		}}
 		for k in 0 .. 2 {
 			abs[k].issued[0] = clock // power-on: generation 0, the producer started on it
@@ -721,8 +797,7 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 					abs[k].t_apply = clock
 					abs[k].g_apply = gen
 					abs[k].epoch++
-					abs[k].reference = proto
-					abs[k].reference.rep.failed = abs[k].tf // restarted in the state the memory shows
+					abs[k].reference = ref_of(proto, abs[k].tf) // restarted in the state the memory shows
 					if abs[k].tf {
 						held_restarts++
 					}
@@ -730,12 +805,15 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 				d[k].apply(gen, held)
 				d[k].step(r, now, en)
 				cells[k] = d[k].rep
+				if abs[k].spent && (local || abs[k].pub_fresh) {
+					abs[k].rep_fresh = true
+				}
 				abs[k].reference.step(r, now, en)
 				abs[k].cell = EpochMeta{
 					epoch:  abs[k].epoch
-					fails:  abs[k].reference.rep.fails
-					tests:  abs[k].reference.rep.tests
-					failed: abs[k].reference.rep.failed
+					fails:  abs[k].reference.fails
+					tests:  abs[k].reference.tests
+					failed: abs[k].reference.failed
 				}
 			} else if op < 80 {
 				// an owner pass
@@ -748,6 +826,11 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 					note_issue(m, mut abs, clock)
 					ctl.gen[k] = m.control_gen(k)
 					ctl.held[k] = m.control_held(k)
+					if abs[k].rep_fresh {
+						abs[k].spent = false
+						abs[k].rep_fresh = false
+					}
+					abs[k].pub_fresh = abs[k].spent
 					if m.setting_off {
 						assert m.slots[k].status == before, '${ctx}: a status bit changed while off'
 						continue
@@ -756,6 +839,10 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 					ti := a.issued[a.g_apply] or { -1 }
 					if ti < t_toggle || ti < a.t_clear || a.t_apply < ti || a.cell.epoch != a.epoch {
 						continue // not eligible: nothing it carries may count
+					}
+					if !m.cycle_active {
+						a.base = a.cell // outside a cycle: the baselines follow, nothing counts
+						continue
 					}
 					base := if a.base.epoch == a.cell.epoch { a.base } else { EpochMeta{} }
 					dfails := a.cell.fails - base.fails
@@ -780,9 +867,25 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 				}
 				m.set_setting(true) // 0x85 on, or the session ending
 				note_issue(m, mut abs, clock)
-			} else if op < 99 {
-				group := if (rng >> 8) & 1 == 0 { u32(0xFFFFFF) } else { m.slots[(rng >> 9) & 1].dtc }
-				if m.clear(group) == 0 {
+			} else if op == 98 {
+				// an operation cycle boundary: while off it changes no status
+				before := [m.slots[0].status, m.slots[1].status]
+				if (rng >> 8) & 1 == 0 {
+					m.cycle_start()
+				} else {
+					m.cycle_end()
+				}
+				if m.setting_off {
+					assert [m.slots[0].status, m.slots[1].status] == before, '${ctx}: a cycle boundary changed a status while off'
+				}
+			} else if op < 98 || (rng >> 8) % 4 != 0 {
+				group := if (rng >> 10) & 1 == 0 { u32(0xFFFFFF) } else { m.slots[(rng >> 11) & 1].dtc }
+				nrc := m.clear(group)
+				if nrc != 0 {
+					assert nrc == 0x22 && ((group == 0xFFFFFF && (abs[0].spent || abs[1].spent))
+						|| (group == m.slots[0].dtc && abs[0].spent)
+						|| (group == m.slots[1].dtc && abs[1].spent)), '${ctx}: clear refused (0x${nrc.hex()}) with every producer reporting'
+				} else {
 					for k in 0 .. 2 {
 						if group == 0xFFFFFF || m.slots[k].dtc == group {
 							abs[k].t_clear = clock
@@ -793,9 +896,14 @@ fn test_the_fault_protocol_model_holds_over_random_interleavings() {
 					}
 				}
 				note_issue(m, mut abs, clock)
-			} else if (rng >> 8) % 4 == 0 {
+			} else {
 				// a storm: generations spent with both producers silent, past the budget
 				storms++
+				for k in 0 .. 2 {
+					abs[k].spent = true
+					abs[k].pub_fresh = false
+					abs[k].rep_fresh = false
+				}
 				for _ in 0 .. 0x8001 {
 					m.set_setting(false)
 					m.set_setting(true)
