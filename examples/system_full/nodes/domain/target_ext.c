@@ -280,7 +280,7 @@ extern void comm_wake(void); /* comm_glue.c: post the comm thread's wake semapho
  * and drains the shared pool immediately instead of waiting out the comm_rx_wait timeout. Same
  * tiny-ISR shape as the FDCAN Rx one: clear the flag, post the wake semaphore, defer the work. */
 volatile uint32_t g_bulk_doorbell_irqs = 0u; /* SWD-observable: proves the cross-core IRQ fires */
-void HSEM1_IT_IRQHandler(void)
+void HSEM1_IRQHandler(void)
 {
 #ifdef TX_ENABLE_EXECUTION_CHANGE_NOTIFY
     _tx_execution_isr_enter();

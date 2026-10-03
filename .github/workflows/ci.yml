@@ -63,6 +63,11 @@ jobs:
       - name: V version
         run: v version
 
+      # tools/vectab reads each part's IRQn_Type enum from its CMSIS device header, so the vector
+      # tables are checked against the silicon's own numbering (#360). Headers only: seconds.
+      - name: CMSIS device headers (for tools/vectab)
+        run: make deps-cmsis
+
       # The deterministic backbone: every module that is not a socket e2e example. These are
       # order-independent and safe to parallelise, so they are the real gate.
       - name: Unit tests

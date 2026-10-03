@@ -195,8 +195,8 @@ Two hardware facts drove the layout: **D-cache is off** (docs/no-alloc.md), so D
 needs no clean/invalidate; and the ETH DMA is an AHB master that **cannot reach the
 DTCM** the rest of RAM sits in, so the descriptor rings + frame buffers live in a
 `.eth_dma` section in **D2 AHB SRAM (0x30000000)** — a new region in `threadx.ld`,
-its clock enabled in `eth_init`. The shared `boards/common/vectors.S` is extended to
-IRQ61 (ETH); non-net images resolve it via a **weak** `ETH_IRQHandler` in each
+its clock enabled in `eth_init`. The vector tables (`boards/common/vectors_h72x.S`, `vectors_h75x.S`) name
+`ETH_IRQHandler` at IRQ61; non-net images resolve it via a **weak** `ETH_IRQHandler` in each
 board's `board.c` (separate object, so no `--gc-sections` capture).
 
 ### P1 bring-up findings (all silicon-found, all fixed)

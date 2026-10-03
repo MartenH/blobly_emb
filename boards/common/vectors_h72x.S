@@ -1,3 +1,12 @@
+/* boards/common/vectors_h72x.S — the ThreadX vector table of the STM32H723/H725/H730/H733/H735
+ * (RM0468): IRQ0..IRQ162 (TIM24), 163 lines — 13 more than the H75x, FDCAN3 among them.
+ * One table per part FAMILY, each spanning that family's FULL interrupt range: an armed
+ * line past the end of the table makes the core fetch a vector out of whatever follows it.
+ * Every slot holds __tx_BadHandler unless a handler is named for the interrupt there, under
+ * the CMSIS name (FDCAN1_IT0_IRQn -> FDCAN1_IT0_IRQHandler). tools/vectab/vectab_test.v checks
+ * each table against the IRQn_Type enum of every part a board.mk links it for: the length, each
+ * named slot at its IRQn + 16, and every *_IRQHandler the code defines present at its slot. */
+
   .global reset_handler
 
   .global __tx_NMIHandler
@@ -174,9 +183,9 @@ _vectors:
   .word __tx_BadHandler       // IRQ124
   /* IRQ125 = HSEM1 global interrupt (RM0468 NVIC id 125) — the CM7 cross-core doorbell.
    * Same weak-in-a-separate-object rule as ETH/FDCAN above: the image with a cross-core
-   * [[bulk]] consumer provides the strong HSEM1_IT_IRQHandler; others fall back to the
+   * [[bulk]] consumer provides the strong HSEM1_IRQHandler; others fall back to the
    * weak default in weak_irq.c. */
-  .word HSEM1_IT_IRQHandler   // IRQ125
+  .word HSEM1_IRQHandler   // IRQ125
   .word __tx_BadHandler       // IRQ126
   .word __tx_BadHandler       // IRQ127
   .word __tx_BadHandler       // IRQ128
@@ -201,8 +210,21 @@ _vectors:
   .word __tx_BadHandler       // IRQ147
   .word __tx_BadHandler       // IRQ148
   .word __tx_BadHandler       // IRQ149
-  // IRQ149 (WAKEUP_PIN) is the H755's highest — the table now spans the FULL range, so
-  // every possible interrupt lands on __tx_BadHandler, never off the end of the table.
+  .word __tx_BadHandler       // IRQ150
+  .word __tx_BadHandler       // IRQ151
+  .word __tx_BadHandler       // IRQ152
+  .word __tx_BadHandler       // IRQ153
+  .word __tx_BadHandler       // IRQ154
+  .word __tx_BadHandler       // IRQ155
+  .word __tx_BadHandler       // IRQ156
+  .word __tx_BadHandler       // IRQ157
+  .word __tx_BadHandler       // IRQ158
+  /* IRQ159 = FDCAN3 interrupt line 0 (RM0468) — a 3-FDCAN part's third bus. comm_glue.c
+   * provides the strong handler (#ifdef FDCAN3), weak_irq.c the default; same rule as FDCAN1/2. */
+  .word FDCAN3_IT0_IRQHandler // IRQ159
+  .word __tx_BadHandler       // IRQ160
+  .word __tx_BadHandler       // IRQ161
+  .word __tx_BadHandler       // IRQ162 TIM24 — the H72x/H73x's highest
 
   .section .init, "ax"
   .thumb_func

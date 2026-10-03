@@ -57,6 +57,11 @@ make bench                                  # IOC transport + Loom dispatch benc
 (cd examples/overspeed && make test BLOBLY_NET=/path/to/blobly_net)  # on-bus integration test
 ```
 
+**The vector tables are checked against the silicon** (#360): `tools/vectab/vectab_test.v` reads
+each part's `IRQn_Type` enum from its CMSIS header and requires every vector table a `board.mk`
+links (`boards/common/vectors_h72x.S`, `vectors_h75x.S`, the bare `startup.c`) to span the part's
+full range, each handler at IRQn + 16. It needs `make deps-cmsis` before `v test tools`.
+
 **A Makefile never runs a repo tool with `v run`** (#313, #333): `v run` names its binary after
 the tool's SOURCE path and deletes it on exit, so a `make -j` over a system's nodes, or two
 examples generated side by side, exec one file and one dies with `No such file or directory`.

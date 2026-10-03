@@ -383,10 +383,10 @@ Below the line there are **two acceptable ways** to satisfy the intent; the choi
 trade-off, not an architectural one:
 
 1. **A target-specific generator** (a ThreadX/Cortex-M backend + a small per-MCU descriptor)
-   emits `vectors.S`, the NVIC enable, and the peripheral `IE`/`ILE` poke from the intent —
+   emits `vectors_*.S`, the NVIC enable, and the peripheral `IE`/`ILE` poke from the intent —
    fully config-driven, at the cost of the MCU-descriptor machinery.
 2. **Handcrafted target board glue** — exactly what `boards/common/comm_glue.c` +
-   `vectors.S` are today: a few lines of hand-written, per-target C/asm. **If generating them
+   `vectors_*.S` are today: a few lines of hand-written, per-target C/asm. **If generating them
    is more machinery than it earns, they stay hand-written, and that's fine** — they are
    already isolated to the target layer and never leak a Cortex-M detail upward.
 
@@ -396,7 +396,8 @@ handcrafted target glue. Only when a second MCU/peripheral makes the hand-writte
 repetitive does option 1 earn its place.
 
 Status: not built — today the Rx IRQ is enabled by the handcrafted `boards/common/comm_glue.c` and routed by a
-handcrafted `vectors.S` (option 2). This note fixes the boundary so that stays a deliberate,
+handcrafted `vectors_*.S`, one per part family and checked against the part's CMSIS `IRQn_Type` by
+`tools/vectab/vectab_test.v` (option 2). This note fixes the boundary so that stays a deliberate,
 isolated choice rather than an assumption that creeps into the generic stack.
 
 ## Where each piece lives
