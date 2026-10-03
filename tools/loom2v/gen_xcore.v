@@ -8,7 +8,7 @@
 //     slot numbers appear nowhere else),
 //   - the bus-owning image's reader->CAN wiring: a fresh-gated, period-paced transmit of
 //     each frame-bound remote signal inside the comm loop (via C.xcore_poll, the xioc
-//     reader living in comm_glue.c),
+//     reader living in the node's target_ext.c),
 //   - the satellite trace forwarding (dtrace handoff cell: arm / freeze+snapshot / import)
 //     — gated on satellite PARTITIONS existing, not on signals,
 //   - the manifest's `# duo signals` rows.
@@ -125,7 +125,7 @@ fn xcore_c_decls(m Model) []string {
 	if !xcore_on(m) {
 		return []string{}
 	}
-	mut g := ['fn C.xcore_poll(int, &u32, &u32) int // xioc reader (comm_glue.c): 1 = fresh value']
+	mut g := ['fn C.xcore_poll(int, &u32, &u32) int // xioc reader (target_ext.c): 1 = fresh value']
 	g << 'fn C.xcore_layout_ok() int // layout-id handshake: 0 = satellite absent or a DIFFERENT build'
 	if xcore_wide_on(m) {
 		g << 'fn C.xcore_poll_n(u32, u32, &u32, &u32) int // wide xioc_n reader: (window off, OUR lane count, &rd seq, &lanes[0]) — a mismatched writer reads as never-fresh'

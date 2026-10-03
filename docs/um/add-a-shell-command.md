@@ -16,7 +16,7 @@ out = 0x7F1                    # response (ISO-TP block)
 fc  = 0x7F2                    # host flow control
 ```
 
-## 2. Implement it in the example's `comm_glue.c`
+## 2. Implement it in the example's `target_ext.c`
 
 ```c
 /* return the number of bytes written into out (cap is the response buffer size) */

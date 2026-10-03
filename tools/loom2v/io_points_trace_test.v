@@ -358,7 +358,8 @@ fn test_the_manifest_rows_and_the_emitted_records_agree() {
 // THE C SIDE (covered by this file's verification tag at the top — a SECOND tag would register a
 // second link and list the file twice in the requirement's evidence, which is the duplicate this
 // file already had to fix once). Everything above asserts what the GENERATOR emits, and the emitted call is
-// `C.io_exec_add(u32(t1 - t0))` — what it lands on is a one-line accumulator in each board glue.
+// `C.io_exec_add(u32(t1 - t0))` — what it lands on is a one-line accumulator in the board glue (boards/common/comm_glue.c, the one
+// copy since #359).
 // A copy that ignored its argument and added a constant would leave the generated code perfect,
 // the silicon check still seeing the counter advance inside its ceiling, and the whole-pass claim
 // false. That was the residual the bench test documented rather than covered (codex on #280).
@@ -381,7 +382,7 @@ fn test_every_io_exec_accumulator_adds_its_argument() {
 			found += check_accumulator(f)
 		}
 	}
-	assert found >= 6, 'found ${found} io_exec_add definitions, expected at least the 6 board glue copies — did the search path or the file layout change?'
+	assert found >= 1, 'found no io_exec_add definition, expected boards/common/comm_glue.c\'s — did the search path or the file layout change?'
 }
 
 // strip_comments returns `src`'s lines with all comment text removed and the LINE COUNT preserved,

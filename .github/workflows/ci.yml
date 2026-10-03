@@ -253,3 +253,8 @@ jobs:
             # a wide C return with no prototype is silently truncated to int (board_now_us was)
             scripts/check_implicit_wide.sh /tmp/build.log || exit 1
           done
+
+      # A shape no committed image has: a multi-thread GATEWAY (sysnode + a second app thread),
+      # the one that once could link neither glue file (#359). Built in a scratch copy.
+      - name: A multi-thread gateway links (scripts/glue_link_check.sh)
+        run: scripts/glue_link_check.sh

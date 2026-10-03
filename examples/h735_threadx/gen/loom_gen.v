@@ -289,7 +289,7 @@ fn comm_thread_entry(input u32) {
 	g_sh.init(u32(0x7f1)) // in place: no module-sized stack copies
 	g_sh.register('ps', 'threads: prio, state, stack high-water', shell_ps_cmd)
 	g_sh.register('bmc', 'DWT core benchmark (CPI, LSU, folds)', shell_bmc_cmd)
-	g_sh.register('boot', 'target command (comm_glue.c)', shell_boot_cmd)
+	g_sh.register('boot', 'target command (target_ext.c)', shell_boot_cmd)
 	mut shell_txf := can.Frame{}
 	g_sh.register('nm', 'NM state; nm req|rel', shell_nm_cmd)
 	g_sh.register('stat', 'per-handler us: last, max, mean, count', shell_stat_cmd)

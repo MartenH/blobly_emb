@@ -31,3 +31,9 @@ __attribute__((weak)) void HSEM1_IT_IRQHandler(void) { }
 #include <stdint.h>
 __attribute__((weak)) void xcore_load_pub(int core, uint16_t pm) { (void)core; (void)pm; }
 __attribute__((weak)) uint16_t xcore_load_get(int core) { (void)core; return 0u; }
+
+/* A node's extra comm-thread wake sources (the H755 cross-core bulk doorbell): comm_glue.c calls
+ * this once, after the wake semaphore exists, so the source's ISR can post it (comm_wake). The
+ * node's own glue file provides the strong one; every other image arms nothing. Same
+ * weak-in-a-separate-object pattern, so the strong definition always wins. */
+__attribute__((weak)) void comm_wake_sources_arm(void) { }
