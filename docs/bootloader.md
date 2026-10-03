@@ -156,9 +156,14 @@ field, `<node>-factory.img` pre-marked for SWD); `make flash` is `boot-flash` (t
 the dev keys.
 
 **The H755's CM4.** The boot manager runs on the CM7 and owns only bank 1's app slot. The CM4
-satellite (`domain_m4`, bank 2 at `0x08100000`) stays parked until the CM7 application releases it
-(`xcore_clocks_ready`), so in programming mode it simply waits; a system reset restarts both
-cores. A CAN field update does NOT refresh the CM4 image — it is flashed over SWD (`make -C
+satellite (`domain_m4`, bank 2 at `0x08100000`) parks until the CM7 application releases it. That
+release is a **consumed handshake** (`boards/h755zi/xcore.h`: `xcore_clk_release` / `_take` /
+`_retract`): SRAM4 survives the reset into the boot, so a release left in it would start the CM4's
+kernel at once — under a boot that then reconfigures the clocks for programming. The satellite
+consumes the release as it takes it, and the boot retracts it (`boot_park_satellite`) before its
+first clock change; the application releases it again once it has set the clocks. A system reset
+restarts both cores. Bench check: with the boot in programming mode, `st-flash read` of
+`0x38000008` (the release cell) reads 0 and the CM4 heartbeat counter (`0x38000004`, after its magic) does not advance. A CAN field update does NOT refresh the CM4 image — it is flashed over SWD (`make -C
 nodes/domain_m4 flash`), as before (non-goal: multi-image orchestration).
 
 **tcu** (H723, Ethernet only) has no CAN, so no CAN bootloader reaches it: it does not declare

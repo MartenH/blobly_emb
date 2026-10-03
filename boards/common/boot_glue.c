@@ -47,6 +47,17 @@ int boot_rng(uint8_t *out, int n) {
 	return diag_sa_init() && diag_sa_seed(out, n);
 }
 
+/* boot_park_satellite: on a dual-core part (the board has an xcore.h), retract the satellite's
+ * clock release before the boot touches the clocks — SRAM4 survives the reset that brought us here,
+ * and a release left in it would start the CM4's kernel under clocks about to change. The CM7
+ * application releases it again once it has set them. A single-core board has nothing to park. */
+#if __has_include("xcore.h")
+#include "xcore.h"
+void boot_park_satellite(void) { xcore_clk_retract(); }
+#else
+void boot_park_satellite(void) {}
+#endif
+
 /* boot_jump_app: VTOR -> the app's vector table, MSP from its word 0, jump to its reset vector. */
 void boot_jump_app(void) {
 	volatile uint32_t *vt = (volatile uint32_t *)APP_VECTORS;

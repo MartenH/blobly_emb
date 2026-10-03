@@ -538,6 +538,7 @@ fn test_a_handoff_that_cannot_be_performed_or_reached_is_refused() {
 		'keys':         [boot_conn + 'enabled = true\n', '[boot] takes `image_key` and `session_key`']
 		'no_key':       [boot_conn.all_before('session_key'), 'needs `session_key`']
 		'bad_key':      [boot_conn.replace('"29acbae1', '"zz'), 'must be 64 hex characters']
+		'same_keys':    [boot_conn.replace('29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7', '03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8'), 'are the same key']
 		'zero_key':     [boot_conn.replace('29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7', '0'.repeat(64)), 'all zeros']
 		'bus_index':    [boot_conn.replace('bus           = "can0"', 'bus           = "can10"'), 'names no single FDCAN index']
 	} {
@@ -611,6 +612,18 @@ fn test_a_boot_node_gets_its_bootloader_config() {
 		'#define BOOT_IMAGE_KEY {0x03, 0xa1, 0x07,', '#define BOOT_SESSION_KEY {0x29, 0xac, 0xba,'] {
 		assert h.contains(want), '${want} missing:\n${h}'
 	}
+	// the generated endpoint IS the node's [isotp], whatever it is: the two cannot drift
+	tmp3 := tmp + '_ids'
+	defer {
+		os.rmdir_all(tmp3) or {}
+	}
+	c3, o3, _ := run_in_scratch(tmp3, 'h735_threadx', fn (src string) string {
+		return src
+	}, boot_conn.replace('rx_id         = 0x7B0', 'rx_id         = 0x7C0').replace('tx_id         = 0x7B8',
+		'tx_id         = 0x7C8'))
+	assert c3 == 0, o3
+	h3 := os.read_file(os.join_path(tmp3, 'boot_gen.h')) or { panic(err) }
+	assert h3.contains('#define BOOT_RX_ID 0x7c0u') && h3.contains('#define BOOT_TX_ID 0x7c8u'), h3
 	mk := os.read_file(os.join_path(tmp, 'loom_build.mk')) or { panic(err) }
 	assert mk.contains('include ' + r'$(REPO)/boot/boot.mk'), mk
 	// without [boot], neither

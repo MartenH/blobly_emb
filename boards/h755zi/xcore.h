@@ -6,7 +6,7 @@
  *
  *   +0x00  heartbeat: magic 'CM4R' + free-running counter (the CM4 writes, rung 3)
  *   +0x08  clocks-ready: magic 'CLKR' the CM7 writes AFTER board_clock_init — the CM4
- *          parks until it appears, so its SysTick is configured against the final
+ *          parks until it appears (and consumes it: xcore_clk_take), so its SysTick is configured against the final
  *          200 MHz HCLK, never the 64 MHz boot clock
  *   +0x200 dtrace handoff (two-core trace): {req_seq, op, ack_seq, count, svc_us, rsvd[3]}
  *          then the wire-form records at +0x220 (XCORE_TRC_MAX_REC * 8 B). The bus owner
@@ -42,6 +42,31 @@
  *   ACK (sat-owned):    req ^ XCORE_LAYOUT_ID (gen/xcore_gen.h), recomputed every service
  *                       tick and ZEROED first thing at satellite boot, so polls stop
  *                       while channels re-init. Owner polls nothing until ACK matches. */
+/* The clock-release cell is a CONSUMED handshake (the ONE statement of it — the owner, the
+ * satellite and the boot manager all go through these): SRAM4 survives a system reset, so a magic
+ * left behind would release the next boot's satellite before anybody set the clocks — and a boot
+ * manager that STAYS for programming reconfigures the clocks under a CM4 that already started its
+ * kernel. So the satellite consumes the magic as it takes it, and the CM7 retracts it before it
+ * touches the clocks on any path that does not release it (boot/target/main.v). */
+static inline void xcore_clk_release(void) {
+	*(volatile uint32_t *)XCORE_CLK_ADDR = XCORE_CLK_MAGIC;
+	__asm__ volatile("dsb");
+}
+
+static inline void xcore_clk_retract(void) {
+	*(volatile uint32_t *)XCORE_CLK_ADDR = 0u;
+	__asm__ volatile("dsb");
+}
+
+/* satellite: park until released, then consume the release */
+static inline void xcore_clk_take(void) {
+	volatile uint32_t *clk = (volatile uint32_t *)XCORE_CLK_ADDR;
+	while (*clk != XCORE_CLK_MAGIC) {
+	}
+	*clk = 0u;
+	__asm__ volatile("dsb");
+}
+
 #define XCORE_LAYOUT_REQ_ADDR 0x38000010u
 #define XCORE_LAYOUT_ACK_ADDR 0x38000014u
 #define XCORE_EPOCH_ADDR      0x38000018u /* retained satellite boot-epoch: bumped once per

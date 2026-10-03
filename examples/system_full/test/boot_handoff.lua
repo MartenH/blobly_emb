@@ -1,17 +1,22 @@
 -- @project diag_bench.blobnet
--- The programming handoff on the target (docs/bootloader.md P3, docs/diagnostics.md R2): each
--- system_full CAN node runs behind its bootloader ([boot]), and its application's 0x10 02 hands the
--- ECU over — answered 50 02, then the boot request cell and the reset — to a boot manager that
--- answers on the SAME ids and bus, already in the programming session it was promised. Bench only
--- (the flashed boards on the CANsub); boot_bench.sh runs it around blobly_net's cmd/flash:
---   BOOT_PHASE=handoff   app → 0x10 03 (→ 0x27 where the node gates it) → 0x10 02 → the boot
---                        answers on the app's ids → 0x29 challenge without a second 0x10 02;
---                        the node is LEFT in its bootloader for cmd/flash
---   BOOT_PHASE=roundtrip the same, then 0x11 from the boot → the application again (no flash)
---   BOOT_PHASE=verify    the application runs and its image-version DID (0xF195) is BOOT_VERSION
+-- The programming handoff and the field update on the target (docs/bootloader.md P3,
+-- docs/diagnostics.md R2): each system_full CAN node runs behind its bootloader ([boot]), and its
+-- application's 0x10 02 hands the ECU over — answered 50 02, then the boot request cell and the
+-- reset — to a boot manager that answers on the SAME ids and bus, already in the programming session
+-- it was promised. Bench only (the flashed boards on the CANsub); needs blobly_net's Lua
+-- `flash.program` (net #388).
+--   BOOT_PHASE=flash     (default) per node: app → 0x10 03 (→ 0x27 where the node gates it) →
+--                        0x10 02 → the boot answers on the app's ids → 0x29 challenge with no
+--                        second 0x10 02 → flash.program over THAT connection (0x29, erase,
+--                        transfer, check + mark, reset) → the new image runs and its version DID
+--                        0xF195 is BOOT_VERSION. The image is nodes/<node>/build/<node>.img, built
+--                        first with `make -C nodes/<node> image SW_VERSION=$BOOT_VERSION`
+--                        (boot_bench.sh does both)
+--   BOOT_PHASE=roundtrip the handoff, then 0x11 from the boot back to the application (no flash)
 -- BOOT_NODES (comma-separated, default every node) picks the nodes.
---   BLOBLY_NET=/path/to/blobly_net; v -enable-globals -path "@vlib|@vmodules|$BLOBLY_NET/modules" \
---     run $BLOBLY_NET/cmd/script/run.v examples/system_full/test/boot_handoff.lua
+--   BLOBLY_NET=/path/to/blobly_net; BOOT_VERSION=<n> v -enable-globals \
+--     -path "@vlib|@vmodules|$BLOBLY_NET/modules" run $BLOBLY_NET/cmd/script/run.v \
+--     examples/system_full/test/boot_handoff.lua
 
 local all = {
   { name = "domain", bus = "compute", req = 0x7B0, rsp = 0x7B8, ident = "BLOBLY-DOMAIN-H755" },
@@ -21,7 +26,7 @@ local all = {
   { name = "zone_a", bus = "edge", req = 0x7C0, rsp = 0x7C8, ident = "BLOBLY-ZONE_A-H723" },
 }
 
-local phase = os.getenv("BOOT_PHASE") or "handoff"
+local phase = os.getenv("BOOT_PHASE") or "flash"
 local want = os.getenv("BOOT_NODES")
 local nodes = {}
 for _, n in ipairs(all) do
@@ -71,41 +76,38 @@ local function handoff(n)
   return d
 end
 
+-- the application again, after a reset: its identity first (it may take a moment to come up)
+local function app_back(d, n)
+  for _ = 1, 30 do
+    local ok, v = pcall(function() return d:read_did(0xF190) end)
+    if ok then
+      check.equal(v, n.ident)
+      return
+    end
+    sleep_ms(100)
+  end
+  error("the application never came back after the reset")
+end
+
 for _, n in ipairs(nodes) do
-  if phase == "handoff" then
-    test(n.name .. ": 0x10 02 hands over to the bootloader on the same ids", function()
-      handoff(n)
+  if phase == "flash" then
+    test(n.name .. ": 0x10 02 hands over, the bootloader flashes the new image, and it runs", function()
+      local want_ver = tonumber(os.getenv("BOOT_VERSION") or "")
+      check.truthy(want_ver ~= nil, "BOOT_VERSION names the version built into the image")
+      local d = handoff(n)
+      local r = flash.program(d, { image = "../nodes/" .. n.name .. "/build/" .. n.name .. ".img" })
+      check.equal(r.auth, "authenticated", "the boot required the 0x29 proof")
+      check.truthy(r.wrapped, "the signed container went as it is")
+      app_back(d, n)
+      check.equal(be32(d:read_did(0xF195)), want_ver, "the image-version DID is the flashed image's")
     end)
   elseif phase == "roundtrip" then
     test(n.name .. ": the handoff, and 0x11 from the boot back to the application", function()
       local d = handoff(n)
       d:reset(1)
-      for _ = 1, 30 do
-        local ok, v = pcall(function() return d:read_did(0xF190) end)
-        if ok then
-          check.equal(v, n.ident)
-          return
-        end
-        sleep_ms(100)
-      end
-      error("the application never came back after 0x11")
-    end)
-  elseif phase == "verify" then
-    test(n.name .. ": the flashed image runs", function()
-      local want_ver = tonumber(os.getenv("BOOT_VERSION") or "")
-      check.truthy(want_ver ~= nil, "BOOT_VERSION names the version flashed")
-      local d = diag(n)
-      for _ = 1, 30 do
-        local ok, v = pcall(function() return d:read_did(0xF190) end)
-        if ok then
-          check.equal(v, n.ident)
-          break
-        end
-        sleep_ms(100)
-      end
-      check.equal(be32(d:read_did(0xF195)), want_ver, "the image-version DID is the flashed image's")
+      app_back(d, n)
     end)
   else
-    error("BOOT_PHASE " .. phase .. ": handoff | roundtrip | verify")
+    error("BOOT_PHASE " .. phase .. ": flash | roundtrip")
   end
 end

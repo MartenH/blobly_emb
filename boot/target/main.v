@@ -13,6 +13,7 @@ import comm.isotp
 import driver.can
 
 fn C.board_clock_init()
+fn C.boot_park_satellite()
 fn C.board_timebase_init()
 fn C.board_can_clock_pins_init() // the FDCAN kernel clock + pin AF: blob_can_open does NOT mux pins
 fn C.board_now_us() u64
@@ -77,6 +78,7 @@ fn main() {
 
 	// --- stay: programming mode (REQ-BOOT-004: always reachable) ---
 	C.boot_info_no_app()
+	C.boot_park_satellite() // a dual-core part's satellite stays parked while the clocks change
 	C.board_clock_init()
 	C.board_timebase_init() // board_now_us reads DWT: without it `now` is frozen and nothing expires
 	boot_t0 := C.board_now_us() // REQ-BOOT-014: the stay-window baseline
@@ -149,7 +151,7 @@ fn main() {
 		}
 		if g_link.ready {
 			n := g_link.take(&g_req[0])
-			g_prog.last_rx_us = now // the tester-silence clock (REQ-BOOT-013/014)
+			g_prog.heard(now) // the tester-silence clock (REQ-BOOT-013/014)
 			rn := g_prog.handle(&g_req[0], n, &g_rsp[0])
 			if rn > 0 {
 				g_link.send(&g_rsp[0], rn)

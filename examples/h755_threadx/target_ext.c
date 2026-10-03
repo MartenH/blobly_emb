@@ -56,7 +56,7 @@ void xcore_clocks_ready(void) {
      * NVIC arming happens later in comm_rx_irq_enable; rings before that just don't wake anyone. */
     RCC->AHB4ENR |= RCC_AHB4ENR_HSEMEN;
     (void)RCC->AHB4ENR;
-    *(volatile uint32_t *)XCORE_CLK_ADDR = XCORE_CLK_MAGIC;
+    xcore_clk_release();
     __asm__ volatile("dsb");
 }
 

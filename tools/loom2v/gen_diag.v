@@ -43,6 +43,7 @@ mut:
 	session_key []u8
 }
 
+
 fn parse_boot(doc toml.Doc) BootCfg {
 	bv := doc.value_opt('boot') or { return BootCfg{} }
 	if bv !is map[string]toml.Any {
@@ -54,11 +55,17 @@ fn parse_boot(doc toml.Doc) BootCfg {
 			panic('loom2v: [boot] has "${k}" — [boot] takes `image_key` and `session_key`')
 		}
 	}
-	return BootCfg{
+	c := BootCfg{
 		on:          true
 		image_key:   boot_key(bm, 'image_key')
 		session_key: boot_key(bm, 'session_key')
 	}
+	// two anchors with two custodies (examples/keys/README.md): one key for both means the tester's
+	// key signs firmware — leak the field key and you have forged images
+	if c.image_key == c.session_key {
+		panic('loom2v: [boot] image_key and session_key are the same key — the release (image) key and the tester (0x29) key must differ')
+	}
+	return c
 }
 
 // boot_key: a [boot] public key — 64 hex characters, required: a bootloader baked with no key, or

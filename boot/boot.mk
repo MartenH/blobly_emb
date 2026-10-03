@@ -61,10 +61,13 @@ $(BOOT_DIR)/boot.c: $(BOOT_VSRC) | $(BOOT_DIR)
 	  -path "@vlib|@vmodules|." -o $(CURDIR)/$@ boot/target/main.v
 	$(REPO)/scripts/lint_vinit.sh $@
 
-$(BOOT_DIR)/boot.elf: $(BOOT_DIR)/boot.c gen/boot_gen.h $(BOOT_SRCS) $(BOARD_LD_BARE) $(REPO)/boards/common/bootcell.h \
-                      $(BOARD_DIR)/bootmap.h $(REPO)/scripts/boot_layout.sh
+# every header and textually included backend (can_backend.c includes can_fdcan.c) comes from the
+# compiler's own dependency output, written as the image links — no hand list to miss the next one
+$(BOOT_DIR)/boot.elf: $(BOOT_DIR)/boot.c gen/boot_gen.h $(BOOT_SRCS) $(BOARD_LD_BARE) $(REPO)/scripts/boot_layout.sh
 	$(CC) $(BOOT_CFLAGS) $(BOOT_LDFLAGS) $(BOOT_DIR)/boot.c $(BOOT_SRCS) -o $@
+	$(CC) $(BOOT_CFLAGS) -MM -MP -MT $@ $(BOOT_SRCS) > $(BOOT_DIR)/boot.d
 	$(SIZE) $@
+-include $(BOOT_DIR)/boot.d
 
 $(BOOT_DIR)/boot.bin: $(BOOT_DIR)/boot.elf
 	$(OBJCOPY) -O binary $< $@

@@ -255,3 +255,32 @@ fn test_a_boot_node_flashes_through_its_bootloader() {
 	}
 	assert seen >= 3, 'found ${seen} [boot] nodes — system_full has three'
 }
+
+// The CM4's clock release is a CONSUMED handshake with one statement (boards/h755zi/xcore.h): SRAM4
+// survives a reset, so a release left in it would start the satellite's kernel before anybody set
+// the clocks — and under a boot manager that stays for programming and changes them. So no file but
+// xcore.h touches the cell, every satellite takes it through xcore_clk_take (which consumes it), and
+// the boot manager parks the satellite before its first clock change.
+fn test_the_satellite_clock_release_is_consumed_and_retracted() {
+	mut files := []string{}
+	for top in ['examples', 'boards', 'boot'] {
+		files << os.walk_ext(os.join_path(@VMODROOT, top), '.c').filter(!it.contains('/build/'))
+	}
+	mut sats := 0
+	for f in files {
+		src := os.read_file(f) or { panic(err) }
+		assert !src.contains('XCORE_CLK_ADDR'), '${f} touches the clock-release cell itself — go through xcore.h'
+		if src.contains('void xcore_wait_clocks(void)') {
+			sats++
+			assert src.all_after('void xcore_wait_clocks(void)').all_before('}').contains('xcore_clk_take()'), '${f}: the satellite does not consume the release'
+		}
+	}
+	assert sats >= 2, 'found ${sats} satellites'
+	xc := os.read_file(os.join_path(@VMODROOT, 'boards', 'h755zi', 'xcore.h')) or { panic(err) }
+	take := xc.all_after('static inline void xcore_clk_take(void)').all_before('\n}')
+	assert take.contains('*clk = 0u;'), 'xcore_clk_take does not consume'
+	boot := os.read_file(os.join_path(@VMODROOT, 'boot', 'target', 'main.v')) or { panic(err) }
+	stay := boot.all_after('// --- stay: programming mode')
+	assert stay.index('C.boot_park_satellite()') or { -1 } >= 0
+	assert (stay.index('C.boot_park_satellite()') or { 0 }) < (stay.index('C.board_clock_init()') or { 0 }), 'the boot changes the clocks before parking the satellite'
+}

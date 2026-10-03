@@ -290,7 +290,7 @@ pub fn (mut s Server) tick(now_us u64) {
 		return
 	}
 	s3 := if s.s3_us == 0 { default_s3_us } else { s.s3_us }
-	if now_us - s.last_rx_us > s3 {
+	if now_us > s.last_rx_us && now_us - s.last_rx_us > s3 { // a stamp not before now is no silence
 		s.enter_session(session_default)
 	}
 }

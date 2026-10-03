@@ -102,8 +102,9 @@ v -enable-globals -path "@vlib|@vmodules|modules" run cmd/flash \
     cansub:e5a16adf/1@500000/2000000 ../blobly_emb/examples/system_full/nodes/zone_a/build/zone_a.img 08020000 7C0 7C8 8
 ```
 
-`examples/system_full/test/boot_bench.sh` is that loop for each node, with the handoff and the
-version check in Lua (`boot_handoff.lua`). A transfer cut anywhere leaves an image the boot
+`examples/system_full/test/boot_bench.sh` is that loop for each node in ONE Lua suite
+(`boot_handoff.lua`): the handoff, blobly_net's `flash.program` over the handed-off connection
+(blobly_net #388), and the version check. A transfer cut anywhere leaves an image the boot
 refuses (valid mark last) — the board sits in programming mode and a plain re-run of
 `cmd/flash` recovers it ([../bootloader.md](../bootloader.md) bench log).
 
