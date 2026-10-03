@@ -431,7 +431,7 @@ pub fn default_sessions(sid u8) u8 {
 }
 
 // default_handoff_sessions: where an application server accepts the programming handoff (0x10 02)
-// unless its sub-function row says otherwise — the extended session, so a stray request on a quiet
+// when no sub-function row names it (session_control applies it) — the extended session, so a stray request on a quiet
 // bus cannot restart a running ECU into its bootloader (as default_sessions keeps 0x27/0x28/0x85).
 pub const default_handoff_sessions = in_extended
 
@@ -525,7 +525,10 @@ fn (mut s Server) session_control(req &u8, req_len int, resp &u8) int {
 	}
 	// ISO 14229-1's order past a supported sub-function: in the active session (0x7E) → its
 	// security (0x33) → the exact length (0x13) → conditions (0x22)
-	gate := s.sub_refusal(0x10, sub)
+	mut gate, listed := s.sub_refusal(0x10, sub)
+	if handoff && !listed && !in_mask(default_handoff_sessions, s.session) {
+		gate = nrc_subfunction_not_in_session // no row of its own: its default sessions
+	}
 	if gate != 0 {
 		return negative(resp, 0x10, gate)
 	}
@@ -568,8 +571,9 @@ fn session_answer(resp &u8, session u8) int {
 }
 
 // sub_refusal: the NRC a sub-function row refuses `sub` of `sid` with in the active session and
-// unlock — 0x7E outside its sessions, 0x33 without its level — or 0 when it passes (or has no row).
-fn (s &Server) sub_refusal(sid u8, sub u8) u8 {
+// unlock — 0x7E outside its sessions, 0x33 without its level — or 0 when it passes; and whether
+// the sub-function has a row at all.
+fn (s &Server) sub_refusal(sid u8, sub u8) (u8, bool) {
 	for i in 0 .. s.nsubs {
 		if i >= max_sub_services {
 			break
@@ -579,14 +583,14 @@ fn (s &Server) sub_refusal(sid u8, sub u8) u8 {
 			continue
 		}
 		if !in_mask(r.sessions, s.session) {
-			return nrc_subfunction_not_in_session
+			return nrc_subfunction_not_in_session, true
 		}
 		if r.security != 0 && s.unlocked != r.security {
-			return nrc_security_access_denied
+			return nrc_security_access_denied, true
 		}
-		return 0
+		return 0, true
 	}
-	return 0
+	return 0, false
 }
 
 // ecu_reset: hardReset (01) and softReset (03). The server only RECORDS the request —

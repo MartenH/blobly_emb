@@ -24,8 +24,8 @@ fn C.board_timebase_init()
 fn C.board_can_clock_pins_init() // FDCAN1 kernel clock + PD0/PD1 AF9 — blob_can_open does NOT mux pins
 fn C.board_now_us() u64
 fn C.board_rng(out &u8, n int) int
-fn C.bootcell_take_request() u32
-fn C.bootcell_set_info(reason u32)
+fn C.boot_take_request(handoff &u32) u32
+fn C.boot_set_info(reason u32)
 fn C.boot_jump_app()
 fn C.boot_sys_reset()
 fn C.bflash_erase(addr u32, size u32) int
@@ -59,18 +59,19 @@ fn rng_hook(out &u8, n int) bool {
 
 fn main() {
 	// --- the boot decision, from near-reset state (REQ-BOOT-001/002/010) ---
-	requested := C.bootcell_take_request() != 0
+	mut handoff := u32(0)
+	requested := C.boot_take_request(&handoff) != 0
 	// slot-bounded: a bit-rotted/torn header can keep the valid mark while its
 	// length field points past the app region — check_image_slot rejects that
 	// before crc32 walks off the end of flash (fault before CAN is up)
 	app_ok := boot.check_image_slot(unsafe { &u8(app_base) }, app_size) // memory-mapped flash
 	if boot.decide(requested, app_ok) == .run_app {
-		C.bootcell_set_info(0) // BOOT_REASON_NORMAL
+		C.boot_set_info(0) // BOOT_REASON_NORMAL
 		C.boot_jump_app() // never returns; nothing was initialized
 	}
 
 	// --- stay: programming mode (REQ-BOOT-004: always reachable) ---
-	C.bootcell_set_info(2) // BOOT_REASON_NO_APP (or a pending request)
+	C.boot_set_info(2) // BOOT_REASON_NO_APP (or a pending request)
 	C.board_clock_init()
 	C.board_timebase_init() // board_now_us reads DWT: without this, `now` is frozen
 	// at 0 — the ISO-TP timeouts AND the REQ-BOOT-012 reset bound would never
@@ -90,6 +91,11 @@ fn main() {
 	// EXPLICIT init: field defaults are _vinit work — freestanding never runs it
 	// (the P2 bench found seed reading 0 = the already-unlocked convention).
 	g_prog.init() // seed + default session
+	if handoff != 0 {
+		// the application answered 0x10 02 already: the tester holds a programming session, and
+		// this server opens it rather than make it ask twice (the session survives the handoff)
+		g_prog.open_handed_off(boot_t0)
+	}
 	// dev image-signing public key (examples/keys) — REAL deployments bake their
 	// own; the matching seed never touches an ECU or build machine (REQ-BOOT-011)
 	// two trust anchors (examples/keys) — image vs session, different custody
@@ -134,7 +140,7 @@ fn main() {
 		// REQ-BOOT-014: entered by request over a VALID app + tester silence ->
 		// give the ECU back to the application (a dead tester must not park it)
 		if requested && app_ok && g_prog.idle_return_due(now, boot_t0) {
-			C.bootcell_set_info(0) // BOOT_REASON_NORMAL
+			C.boot_set_info(0) // BOOT_REASON_NORMAL
 			C.boot_sys_reset() // no request pending -> the boot jumps to the app
 		}
 		g_link.tick(now)
@@ -157,7 +163,7 @@ fn main() {
 			// the P2 bench: cmd/flash saw 'ecu reset: timeout').
 			t0 := C.board_now_us()
 			for !ch.tx_idle() && C.board_now_us() - t0 < 20000 {}
-			C.bootcell_set_info(1) // BOOT_REASON_PROGRAMMED
+			C.boot_set_info(1) // BOOT_REASON_PROGRAMMED
 			C.boot_sys_reset()
 		}
 	}

@@ -120,9 +120,13 @@ response to the boot software. This stack sends it from the application because:
 
 What the choice costs: after `50 02` the tester must let the bootloader come up before its next
 request (clocks and CAN, a few ms after the reset), and a tester that misses that window retries.
-The boot manager's half — starting in the programming session when the request cell brought it
-there (docs/diagnostics.md §7, "the session survives the handoff"), on the ids and bus of the
-node's `[isotp]` — is the per-node bootloader's, built next.
+The boot manager keeps the promise: the request cell carries WHY it was written
+(`BOOTCELL_REQ_HANDOFF`, or `BOOTCELL_REQ_SHELL` for the bench `boot` command), and on a handoff
+`boot.Prog.open_handed_off` starts the server in the programming session — locked, and timed by
+S3 like any session, so a tester that never speaks loses it and the stay-window (REQ-BOOT-014)
+gives the ECU back to the application (docs/diagnostics.md §7, "the session survives the
+handoff"). Serving on the ids and bus of the node's own `[isotp]` is the per-node bootloader's,
+built next.
 
 **Dual-bank caveat for P4:** a full-bank swap swaps the bootloader out with the app —
 so bank-swap activation means either boot duplicated at the base of BOTH banks, or

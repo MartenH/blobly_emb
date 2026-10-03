@@ -140,7 +140,8 @@ handoff) is its `target_ext.c` and redefines nothing of it (`threadx_makefiles_t
 The same list carries `boards/common/boot_handoff.c` into a node that declares **`[boot]`** — it
 runs behind the bootloader, so its server's `0x10 02` is the programming handoff (answered, then
 the boot request cell and the reset by 0x11's path; docs/bootloader.md "App → boot, as built").
-That file includes the board's `bootmap.h`, so `[boot]` builds only on a board that has one.
+That file includes the board's `bootmap.h`; on a board with none the build stops there, naming
+`[boot]`.
 
 **CI pins the V compiler** to the release tag in `.v-version` (currently `0.5.2`), installed as the
 **prebuilt** `v_linux.zip` release asset in both jobs. It used to install master HEAD, so an upstream

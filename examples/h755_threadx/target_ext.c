@@ -265,7 +265,7 @@ int shell_iocx(unsigned char *out, int cap) {
 int shell_boot(unsigned char *out, int cap) {
     (void)out;
     (void)cap;
-    bootcell_request();
+    bootcell_request(BOOTCELL_REQ_SHELL);
     NVIC_SystemReset();
     return 0; /* unreachable */
 }

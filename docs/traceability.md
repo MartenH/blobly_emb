@@ -17,7 +17,7 @@ Generated from `requirements/*.toml` + verification links. See
 |---|---|---|---|---|
 | REQ-BOOT-001 | QM | test | verified | boot_test.v (pass) |
 | REQ-BOOT-002 | QM | test | verified | boot_test.v (pass) |
-| REQ-BOOT-003 | QM | test | verified | boot_handoff_test.v (pass), diag_test.v (pass), uds_test.v (pass) |
+| REQ-BOOT-003 | QM | test | verified | diag_target_test.v (pass), diag_test.v (pass), prog_test.v (pass), uds_test.v (pass) |
 | REQ-BOOT-004 | QM | test | uncovered | — |
 | REQ-BOOT-005 | QM | test | verified | prog_test.v (pass) |
 | REQ-BOOT-006 | QM | analysis | uncovered | — |

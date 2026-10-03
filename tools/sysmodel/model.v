@@ -1072,8 +1072,8 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 			security: sec
 		}
 	}
-	if _ := doc.value_opt('boot') {
-		v.boot = true
+	if bv := doc.value_opt('boot') {
+		v.boot = bv is map[string]toml.Any // anything else is the node gate's to refuse
 	}
 	if uv := doc.value_opt('uds') {
 		um := uv.as_map()
@@ -1081,9 +1081,13 @@ pub fn parse_node_view(doc toml.Doc) NodeView {
 		if sv := um['services'] {
 			v.uds_table = true
 			for key, row in sv.as_map() {
-				if key.fields().len == 2 {
-					// "0x10 02", the handoff's own row — the node gate refuses any other sub-function row
-					v.uds_handoff_security = i64(m_int(row.as_map(), 'security'))
+				f := key.fields()
+				if f.len == 2 {
+					// "0x10 02", the handoff's own row; any other sub-function row is the node
+					// gate's to refuse, and is no service row either
+					if hex_u8(f[0]) == 0x10 && hex_u8(f[1]) == 0x02 {
+						v.uds_handoff_security = i64(m_int(row.as_map(), 'security'))
+					}
 					continue
 				}
 				// "0x11" — a key that is no SID is the node gate's to refuse
@@ -1588,4 +1592,13 @@ pub fn loom2v_errors(node_path string, dbc_path string) []string {
 		out << 'loom2v generation failed (exit ${code})'
 	}
 	return out
+}
+
+// hex_u8: "0x10" / "10" as a byte, -1 when it is not one
+fn hex_u8(s string) int {
+	h := s.trim_space().to_lower().trim_string_left('0x')
+	if h.len == 0 || h.len > 2 || !h.bytes().all(it.is_hex_digit()) {
+		return -1
+	}
+	return int(h.parse_uint(16, 8) or { return -1 })
 }

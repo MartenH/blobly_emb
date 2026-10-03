@@ -40,6 +40,9 @@ mut:
 
 fn parse_boot(doc toml.Doc) BootCfg {
 	bv := doc.value_opt('boot') or { return BootCfg{} }
+	if bv !is map[string]toml.Any {
+		panic('loom2v: `boot` must be the [boot] table — its presence is the declaration')
+	}
 	for k, _ in bv.as_map() {
 		panic('loom2v: [boot] has "${k}" — [boot] takes no keys yet: its presence is the declaration')
 	}
@@ -391,14 +394,18 @@ fn conn_init_lines(m Model, c IsotpConn, conn string) []string {
 	g << '\t${conn}.init(u32(0x${c.rx_id.hex()}), u32(0x${c.tx_id.hex()}), u32(0x${c.functional_id.hex()}), ${c.bs}, ${c.stmin})'
 	g << '\t${srv}.no_programming = true // programming is the bootloader\'s'
 	if m.boot.on {
-		// [boot]: 0x10 02 is answered and handed to the owner (reset_into_boot), behind its own row
-		mut f := ['sid: 0x10', 'sub: 0x02', 'sessions: 0x${handoff_sessions(m).hex()}']
-		if m.uds.handoff_security != 0 {
-			f << 'security: ${m.uds.handoff_security}'
-		}
+		// [boot]: 0x10 02 is answered and handed to the owner (reset_into_boot) — behind its own
+		// row when the table has one, else in the server's default handoff sessions
 		g << '\t${srv}.boot_handoff = true // [boot]: 0x10 02 hands the ECU to its bootloader'
-		g << '\t${srv}.subs[0] = uds.SubService{${f.join(', ')}}'
-		g << '\t${srv}.nsubs = 1'
+		if m.uds.handoff_row {
+			// a row naming no sessions takes the default ones (in comm/uds a row's 0 is "every")
+			mut f := ['sid: 0x10', 'sub: 0x02', 'sessions: 0x${handoff_sessions(m).hex()}']
+			if m.uds.handoff_security != 0 {
+				f << 'security: ${m.uds.handoff_security}'
+			}
+			g << '\t${srv}.subs[0] = uds.SubService{${f.join(', ')}}'
+			g << '\t${srv}.nsubs = 1'
+		}
 	}
 	if m.uds.s3_ms > 0 {
 		g << '\t${srv}.s3_us = u64(${m.uds.s3_ms}) * 1000'

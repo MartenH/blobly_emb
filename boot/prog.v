@@ -137,6 +137,18 @@ pub fn (mut p Prog) init() {
 	p.srv.session = 0x01 // default diagnostic session (0x29 auth stays LOCKED)
 }
 
+// open_handed_off starts the server in the programming session — for a boot the application
+// entered by the 0x10 02 handoff, whose positive answer the tester already holds, so it goes on to
+// 0x29 without asking twice (docs/diagnostics.md §7). Locked, like any session entry, and timed
+// from `now`: a tester that never speaks loses it to S3 like any other, and then the stay-window
+// (REQ-BOOT-014) gives the ECU back to the application.
+pub fn (mut p Prog) open_handed_off(now u64) {
+	p.srv.session = 0x02
+	p.unlocked = false
+	p.challenge_valid = false
+	p.last_rx_us = if now == 0 { u64(1) } else { now } // 0 reads as "never spoke" (tick)
+}
+
 // S3server (ISO 14229): a non-default session dies after 5 s of tester silence.
 pub const s3_server_us = u64(5_000_000)
 

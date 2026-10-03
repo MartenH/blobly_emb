@@ -236,6 +236,18 @@ fn test_a_handoff_is_answered_and_left_to_the_owner() {
 	assert reset_into_boot & 0x7F == 0
 }
 
+// with no row of its own the handoff runs in its default sessions only: a stray 0x10 02 in the
+// default session does not restart a running ECU into its bootloader
+fn test_without_a_row_the_handoff_takes_its_default_sessions() {
+	mut s := handoff_server()
+	call(mut s, [u8(0x10), 0x01])
+	assert call(mut s, [u8(0x10), 0x02]) == [u8(0x7F), 0x10, 0x7E]
+	assert s.reset_req == 0
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x10), 0x02])[0] == 0x50
+	assert default_handoff_sessions == in_extended
+}
+
 fn test_a_suppressed_handoff_is_performed_without_an_answer() {
 	mut s := handoff_server()
 	assert call(mut s, [u8(0x10), 0x82]) == []u8{}

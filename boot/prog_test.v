@@ -296,6 +296,24 @@ fn test_idle_return_window() {
 	assert !p.idle_return_due(t1 + 100 * idle_return_us, t0)
 }
 
+// @verifies REQ-BOOT-003
+// The handoff: a boot the application entered by 0x10 02 opens the programming session the tester
+// was promised — 0x29 is served at once, still locked — and a tester that then goes silent loses
+// it to S3 and, past the stay-window, the ECU to its application.
+fn test_a_handed_off_boot_opens_the_programming_session() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	t0 := u64(0) // the boot's clock may read 0 at the start: still a real stamp
+	p.open_handed_off(t0)
+	assert p.srv.session == 0x02 && !p.unlocked
+	assert ask(mut p, [u8(0x29), 0x01])[..2] == [u8(0x69), 0x01]
+	mut q := new_prog(mut f)
+	q.open_handed_off(t0)
+	q.tick(t0 + s3_server_us + 2)
+	assert q.srv.session == 0x01, 'a silent tester keeps the handed-off session'
+	assert q.idle_return_due(t0 + s3_server_us + idle_return_us + 2, t0)
+}
+
 // ---- P5: signed-image authenticity (REQ-BOOT-011) ----
 
 // image/release seed (signs firmware) and tester seed (0x29) — separate keys.

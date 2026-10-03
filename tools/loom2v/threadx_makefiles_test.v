@@ -143,6 +143,21 @@ fn test_the_glue_defines_every_symbol_the_generator_declares() {
 	for sym in shell_glue_syms {
 		assert sym in shell_defs, 'boards/common/shell_glue.c does not define ${sym}'
 	}
+	// the [boot] handoff's board side; boot_handoff_ok is weak (the application overrides it)
+	boot_src := glue_src('boot_handoff.c')
+	boot_defs := c_definitions(boot_src)
+	for sym in boot_glue_syms {
+		assert sym in boot_defs || boot_src.contains('__attribute__((weak)) int ${sym}('), 'boards/common/boot_handoff.c does not define ${sym}'
+	}
+	mut bm := Model{}
+	bm.boot.on = true
+	bm.isotp_conns = [IsotpConn{}]
+	for d in diag_target_c_decls(bm).filter(it.starts_with('fn C.')) {
+		name := d['fn C.'.len..].all_before('(')
+		if name.starts_with('boot_') {
+			assert name in boot_glue_syms, 'diag_target_c_decls declares C.${name}, which boot_glue_syms does not list'
+		}
+	}
 	dir := os.join_path(@VMODROOT, 'tools', 'loom2v')
 	mut seen := 0
 	for f in os.ls(dir) or { panic(err) } {
@@ -181,6 +196,8 @@ fn test_no_c_file_redefines_the_glue() {
 	mut glue := c_definitions(comm_glue_src())
 	assert 'FDCAN1_IT0_IRQHandler' in glue && 'comm_wake' in glue
 	glue << c_definitions(glue_src('shell_glue.c'))
+	glue << c_definitions(glue_src('boot_handoff.c')) // its weak conditions seam is for overriding
+	assert 'boot_handoff_request' in glue && 'boot_handoff_ok' !in glue
 	mut files := []string{}
 	for mk in threadx_makefiles() {
 		files << os.walk_ext(os.dir(mk), '.c')
@@ -190,6 +207,7 @@ fn test_no_c_file_redefines_the_glue() {
 	for f in files {
 		if f.ends_with(os.join_path('boards', 'common', 'comm_glue.c'))
 			|| f.ends_with(os.join_path('boards', 'common', 'shell_glue.c'))
+			|| f.ends_with(os.join_path('boards', 'common', 'boot_handoff.c'))
 			|| f.contains('/build/') {
 			continue
 		}

@@ -4568,4 +4568,12 @@ fn test_the_handoff_row_is_read_apart_from_the_services() {
 	assert sids == [u8(0x10), 0x11], 'the handoff row is not a service row'
 	none_doc := toml.parse_text('[uds]\ns3_ms = 5000\n') or { panic(err) }
 	assert !parse_node_view(none_doc).boot
+	// another sub-function row is not the handoff's level, nor a service row
+	other := toml.parse_text('[boot]\n[uds.services]\n"0x11 01" = { security = 1 }\n') or {
+		panic(err)
+	}
+	ov := parse_node_view(other)
+	assert ov.uds_handoff_security == 0 && ov.uds_rows.len == 0
+	off := toml.parse_text('boot = false\n') or { panic(err) }
+	assert !parse_node_view(off).boot
 }

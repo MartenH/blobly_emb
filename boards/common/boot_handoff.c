@@ -13,10 +13,13 @@
  *   boot_image_version   — the running image's sw_version, from the header at APP_BASE the boot
  *                          manager verified before it jumped; 0 when no header is there. */
 #include <stdint.h>
+#if !__has_include("bootmap.h")
+#error "[boot]: this board has no bootmap.h — no bootloader layout to hand over to (docs/bootloader.md)"
+#endif
 #include "bootcell.h"
 
 void boot_handoff_request(void) {
-	bootcell_request();
+	bootcell_request(BOOTCELL_REQ_HANDOFF);
 }
 
 __attribute__((weak)) int boot_handoff_ok(void) {
