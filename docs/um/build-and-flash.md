@@ -93,6 +93,10 @@ check, valid mark, reset):
 
 ```sh
 make -C examples/system_full/nodes/zone_a image SW_VERSION=8
+# the handoff first: cmd/flash's own 0x10 02 is refused by the APPLICATION in its default session
+# (0x7E) — this runs 0x10 03 (+ 0x27 where the node's row asks) and 0x10 02, and leaves it in boot
+BOOT_PHASE=handoff BOOT_NODES=zone_a v -enable-globals -path "@vlib|@vmodules|../blobly_net/modules" \
+    run ../blobly_net/cmd/script/run.v examples/system_full/test/boot_handoff.lua
 cd ../blobly_net
 v -enable-globals -path "@vlib|@vmodules|modules" run cmd/flash \
     cansub:e5a16adf/1@500000/2000000 ../blobly_emb/examples/system_full/nodes/zone_a/build/zone_a.img 08020000 7C0 7C8 8

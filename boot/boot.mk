@@ -24,20 +24,25 @@ include $(REPO)/tools/tools.mk
 endif
 
 BOOT_DIR     := $(BUILD)/boot
-BOOT_LAYOUT   = $(REPO)/scripts/boot_layout.sh $(CC) $(BOARD_DIR)
+BOOT_LAYOUT   = $(REPO)/scripts/boot_layout.sh '$(CC)' $(BOARD_DIR)
+# one layout value; a failure stops the build ($(shell) alone ignores the exit status, and an empty
+# app link flag would link the application at 0x08000000)
+boot_layout   = $(or $(shell $(BOOT_LAYOUT) $(1)),$(error boot/boot.mk: scripts/boot_layout.sh could not read $(1) from $(BOARD_DIR)/bootmap.h))
 SW_VERSION   ?= 1
 IMAGE_SEED   ?= $(REPO)/examples/keys/mkimage.seed
 
 # the application at the board's app slot: evaluated when the link runs, never at parse time (a
 # host-only `make gen` has no cross compiler to ask)
-LDFLAGS += $(shell $(BOOT_LAYOUT) app-ld)
+LDFLAGS += $(call boot_layout,app-ld)
+# and relinked when the layout is
+$(BUILD)/$(NAME).elf: $(BOARD_DIR)/bootmap.h $(REPO)/scripts/boot_layout.sh
 
 BOOT_CFLAGS  = $(MCU) -Os -g -ffreestanding -ffunction-sections -fdata-sections \
                $(BOARD_DEFS) $(CAN_DEFS) -DBOARD_ENTRY=main__main \
                -Igen $(BOARD_INCS) -I$(REPO)/driver/can $(CMSIS)
 # the boot may not outgrow its region: the link fails instead of the flash overwriting APP_BASE
 BOOT_LDFLAGS = $(MCU) -T $(BOARD_LD_BARE) -nostartfiles -Wl,--gc-sections \
-               -Wl,--defsym,__flash_len__=$(shell $(BOOT_LAYOUT) boot-size) \
+               -Wl,--defsym,__flash_len__=$(call boot_layout,boot-size) \
                --specs=nano.specs --specs=nosys.specs -Wl,-Map=$(BOOT_DIR)/boot.map
 BOOT_SRCS    = $(BOARD_BSP_BARE) $(REPO)/boards/common/boot_glue.c $(REPO)/boards/common/diag_board.c \
                $(BOARD_FLASH) $(REPO)/driver/can/can_backend.c
@@ -56,7 +61,8 @@ $(BOOT_DIR)/boot.c: $(BOOT_VSRC) | $(BOOT_DIR)
 	  -path "@vlib|@vmodules|." -o $(CURDIR)/$@ boot/target/main.v
 	$(REPO)/scripts/lint_vinit.sh $@
 
-$(BOOT_DIR)/boot.elf: $(BOOT_DIR)/boot.c gen/boot_gen.h $(BOOT_SRCS) $(BOARD_LD_BARE) $(REPO)/boards/common/bootcell.h
+$(BOOT_DIR)/boot.elf: $(BOOT_DIR)/boot.c gen/boot_gen.h $(BOOT_SRCS) $(BOARD_LD_BARE) $(REPO)/boards/common/bootcell.h \
+                      $(BOARD_DIR)/bootmap.h $(REPO)/scripts/boot_layout.sh
 	$(CC) $(BOOT_CFLAGS) $(BOOT_LDFLAGS) $(BOOT_DIR)/boot.c $(BOOT_SRCS) -o $@
 	$(SIZE) $@
 
@@ -65,12 +71,12 @@ $(BOOT_DIR)/boot.bin: $(BOOT_DIR)/boot.elf
 
 # both containers from the one application binary; always remade (SW_VERSION is not a file)
 image: $(BUILD)/$(NAME).bin $(TOOL_mkimage)
-	$(TOOL_mkimage) $(BUILD)/$(NAME).bin $(BUILD)/$(NAME).img $(SW_VERSION) --pad-vectors --sign $(IMAGE_SEED)
+	$(TOOL_mkimage) $(BUILD)/$(NAME).bin $(BUILD)/$(NAME).img $(SW_VERSION) --pad-vectors --sign $(IMAGE_SEED) --key $(BOOT_IMAGE_KEY)
 	$(TOOL_mkimage) $(BUILD)/$(NAME).bin $(BUILD)/$(NAME)-factory.img $(SW_VERSION) --pad-vectors --valid
 
 boot-flash: boot image
-	st-flash $(if $(SERIAL),--serial $(SERIAL),) write $(BOOT_DIR)/boot.bin $(shell $(BOOT_LAYOUT) boot-base)
-	st-flash $(if $(SERIAL),--serial $(SERIAL),) write $(BUILD)/$(NAME)-factory.img $(shell $(BOOT_LAYOUT) app-base)
+	st-flash $(if $(SERIAL),--serial $(SERIAL),) write $(BOOT_DIR)/boot.bin $(call boot_layout,boot-base)
+	st-flash $(if $(SERIAL),--serial $(SERIAL),) write $(BUILD)/$(NAME)-factory.img $(call boot_layout,app-base)
 	st-flash $(if $(SERIAL),--serial $(SERIAL),) reset
 
 .PHONY: boot image boot-flash

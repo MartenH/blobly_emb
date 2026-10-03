@@ -11,6 +11,7 @@
 
 int diag_sa_init(void);
 int diag_sa_seed(uint8_t *out, int n);
+void diag_sys_reset(void);
 
 uint32_t boot_take_request(uint32_t *handoff) {
 	uint32_t why = bootcell_take_request();
@@ -18,9 +19,10 @@ uint32_t boot_take_request(uint32_t *handoff) {
 	return why != 0;
 }
 
-void boot_set_info(uint32_t reason) {
-	bootcell_set_info(reason);
-}
+/* the boot info cell's reasons (bootmap.h BOOT_REASON_*), named here so the V side holds no copy */
+void boot_info_normal(void) { bootcell_set_info(BOOT_REASON_NORMAL); }
+void boot_info_programmed(void) { bootcell_set_info(BOOT_REASON_PROGRAMMED); }
+void boot_info_no_app(void) { bootcell_set_info(BOOT_REASON_NO_APP); }
 
 uint32_t boot_app_base(void) { return APP_BASE; }
 uint32_t boot_app_size(void) { return APP_SIZE; }
@@ -56,10 +58,7 @@ void boot_jump_app(void) {
 	}
 }
 
-/* boot_sys_reset: NVIC_SystemReset — AIRCR key + SYSRESETREQ. */
+/* boot_sys_reset: the system reset the application's 0x11 uses (diag_board.c) */
 void boot_sys_reset(void) {
-	__asm__ volatile("dsb");
-	*(volatile uint32_t *)0xE000ED0Cu = (0x5FAu << 16) | (1u << 2);
-	for (;;) {
-	}
+	diag_sys_reset();
 }

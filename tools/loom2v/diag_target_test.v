@@ -538,6 +538,8 @@ fn test_a_handoff_that_cannot_be_performed_or_reached_is_refused() {
 		'keys':         [boot_conn + 'enabled = true\n', '[boot] takes `image_key` and `session_key`']
 		'no_key':       [boot_conn.all_before('session_key'), 'needs `session_key`']
 		'bad_key':      [boot_conn.replace('"29acbae1', '"zz'), 'must be 64 hex characters']
+		'zero_key':     [boot_conn.replace('29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7', '0'.repeat(64)), 'all zeros']
+		'bus_index':    [boot_conn.replace('bus           = "can0"', 'bus           = "can10"'), 'names no single FDCAN index']
 	} {
 		code, out, _ := generate('boot_${name}', c[0])
 		assert code != 0, '${name}: loom2v accepted it'

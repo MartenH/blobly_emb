@@ -17,7 +17,9 @@ fn C.board_timebase_init()
 fn C.board_can_clock_pins_init() // the FDCAN kernel clock + pin AF: blob_can_open does NOT mux pins
 fn C.board_now_us() u64
 fn C.boot_take_request(handoff &u32) u32
-fn C.boot_set_info(reason u32)
+fn C.boot_info_normal()
+fn C.boot_info_programmed()
+fn C.boot_info_no_app()
 fn C.boot_jump_app()
 fn C.boot_sys_reset()
 fn C.boot_app_base() u32
@@ -33,11 +35,6 @@ fn C.boot_rng(out &u8, n int) int
 fn C.bflash_erase(addr u32, size u32) int
 fn C.bflash_program(addr u32, data &u8, len u32) int
 fn C.bflash_read(addr u32, out &u8, len u32) int
-
-// boot_info reasons (bootmap.h BOOT_REASON_*)
-const reason_normal = u32(0)
-const reason_programmed = u32(1)
-const reason_no_app = u32(2)
 
 // FlashOps wrappers (the ctx is unused on target — the flash is the flash)
 fn fl_erase(ctx voidptr, addr u32, size u32) bool {
@@ -74,12 +71,12 @@ fn main() {
 	// points past the app region — check_image_slot rejects that before crc32 walks off flash
 	app_ok := boot.check_image_slot(unsafe { &u8(app_base) }, app_size) // memory-mapped flash
 	if boot.decide(requested, app_ok) == .run_app {
-		C.boot_set_info(reason_normal)
+		C.boot_info_normal()
 		C.boot_jump_app() // never returns; nothing was initialized
 	}
 
 	// --- stay: programming mode (REQ-BOOT-004: always reachable) ---
-	C.boot_set_info(reason_no_app)
+	C.boot_info_no_app()
 	C.board_clock_init()
 	C.board_timebase_init() // board_now_us reads DWT: without it `now` is frozen and nothing expires
 	boot_t0 := C.board_now_us() // REQ-BOOT-014: the stay-window baseline
@@ -117,7 +114,8 @@ fn main() {
 	g_prog.app_base = app_base
 	g_prog.app_size = app_size
 	// identification (REQ-BOOT-009): F180 = bootloader version, F181 = app state, F195 = the
-	// installed image's sw_version — the DID the application answers too
+	// valid installed image's sw_version at boot (0 when there is none) — the DID the application
+	// answers too
 	g_prog.srv.dids[0].id = 0xF180
 	g_prog.srv.dids[0].data[0] = 0x00
 	g_prog.srv.dids[0].data[1] = 0x02
@@ -126,7 +124,7 @@ fn main() {
 	g_prog.srv.dids[1].data[0] = if app_ok { u8(1) } else { 0 }
 	g_prog.srv.dids[1].len = 1
 	hdr := boot.parse_header(unsafe { &u8(app_base) })
-	ver := if hdr.magic == boot.magic { hdr.sw_version } else { u32(0) }
+	ver := if app_ok { hdr.sw_version } else { u32(0) } // a version that cannot run is no version
 	g_prog.srv.dids[2].id = 0xF195
 	g_prog.srv.dids[2].data[0] = u8(ver >> 24)
 	g_prog.srv.dids[2].data[1] = u8(ver >> 16)
@@ -160,7 +158,7 @@ fn main() {
 		g_prog.tick(now) // S3: a silent tester loses the session + the unlock
 		// REQ-BOOT-014: entered by request over a VALID app + tester silence -> back to the app
 		if requested && app_ok && g_prog.idle_return_due(now, boot_t0) {
-			C.boot_set_info(reason_normal)
+			C.boot_info_normal()
 			C.boot_sys_reset() // no request pending -> the boot jumps to the app
 		}
 		g_link.tick(now)
@@ -181,7 +179,7 @@ fn main() {
 			// for the CONTROLLER to put it on the wire, bounded so a dead bus cannot hold it off
 			t0 := C.board_now_us()
 			for !ch.tx_idle() && C.board_now_us() - t0 < 20000 {}
-			C.boot_set_info(reason_programmed)
+			C.boot_info_programmed()
 			C.boot_sys_reset()
 		}
 	}

@@ -74,6 +74,10 @@ fn boot_key(bm map[string]toml.Any, key string) []u8 {
 	for i := 0; i < 64; i += 2 {
 		out << u8(h[i..i + 2].parse_uint(16, 8) or { 0 })
 	}
+	// boot.Prog reads an all-zero key as "no check" (unsigned images, no 0x29): never generated
+	if out.all(it == 0) {
+		panic('loom2v: [boot] ${key} is all zeros — the bootloader would take that as "no check" (boot.Prog); name the real public key')
+	}
 	return out
 }
 
@@ -301,6 +305,9 @@ fn validate_boot(m Model) {
 	}
 	if m.isotp_conns.len == 0 {
 		panic('loom2v: [boot] hands the ECU over on 0x10 02, which the diagnostic server answers — declare its [isotp] connection')
+	}
+	if fdcan_index(m.isotp_conns[0].bus) == '' {
+		panic('loom2v: [boot]: the [isotp] bus "${m.isotp_conns[0].bus}" names no single FDCAN index 0..2 — the bootloader opens it by that index, as the comm thread does')
 	}
 	mask := handoff_sessions(m)
 	if mask & uds.in_programming != 0 {
