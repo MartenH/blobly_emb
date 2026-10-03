@@ -193,7 +193,7 @@ The two H755 scripts need no CAN adapter, but they need DIFFERENT SWD tooling, s
 
 Plain **`v test .` at the repo root looks broken** — it walks into `.claude/worktrees/` and runs
 duplicate copies of every example e2e test concurrently. Test the real tree instead
-(`v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples`), which is
+(`make deps-cmsis && v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples`), which is
 what CI does.
 
 ### Commit identity (enforced)

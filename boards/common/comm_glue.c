@@ -120,7 +120,8 @@ unsigned io_exec_us(void) { return g_io_exec_us; }
 
 /* ---- FDCAN Rx-FIFO0 ISRs + comm-thread wake semaphore ----------------------------------
  * ONE wake semaphore, shared by every FDCAN instance a node owns: a single-bus leaf arms
- * FDCAN1 only; a multi-bus gateway (system_full sysnode) arms FDCAN1/2/3 and the comm thread
+ * FDCAN1 only; a multi-bus gateway (system_full sysnode) arms FDCAN1/2 — and FDCAN3 on a 3-FDCAN
+ * part, once loom2v can route a third bus (it refuses can2 today: it does not know the part) — and the comm thread
  * drains all of them each wake. The semaphore is a plain count, so N instances posting it
  * just means "at least one FIFO has a frame" — the comm loop then drains every channel.
  * FDCAN3 exists only on 3-FDCAN parts (H72x/H73x, e.g. the H735-DK); it is #ifdef-guarded so

@@ -107,7 +107,7 @@ fn c_irq_lines(path string) map[string]int {
 	return out
 }
 
-// mk_vars: a board.mk's variables, continuation lines joined
+// mk_vars: a board.mk's variables, continuation lines joined; `+=` appends, the rest assign
 fn mk_vars(path string) map[string]string {
 	src := os.read_file(path) or { panic(err) }.replace('\\\n', ' ')
 	mut out := map[string]string{}
@@ -115,11 +115,13 @@ fn mk_vars(path string) map[string]string {
 		if l.starts_with('#') || !l.contains('=') {
 			continue
 		}
-		name := l.all_before('=').trim_right(':').trim_space()
+		lhs := l.all_before('=')
+		name := lhs.trim_right(':+?').trim_space()
 		if name.contains(' ') || name.contains('$') {
 			continue
 		}
-		out[name] = l.all_after('=').trim_space()
+		val := l.all_after('=').trim_space()
+		out[name] = if lhs.ends_with('+') { (out[name] or { '' }) + ' ' + val } else { val }
 	}
 	return out
 }
@@ -167,18 +169,39 @@ fn table_uses() []Use {
 	return out
 }
 
-// code_handlers: every *_IRQHandler a C file under boards/ or examples/ defines
+fn is_ident(c u8) bool {
+	return c.is_letter() || c.is_digit() || c == `_`
+}
+
+// code_handlers: every *_IRQHandler identifier the C under boards/ or examples/ names outside a
+// comment, whatever the spelling of its definition — each one is a handler somebody means to
+// be reachable
 fn code_handlers() map[string]string {
 	mut out := map[string]string{}
 	for top in ['boards', 'examples'] {
-		for f in os.walk_ext(os.join_path(repo, top), '.c') {
-			if f.contains('/build/') {
-				continue
-			}
-			for raw in (os.read_file(f) or { panic(err) }).split_into_lines() {
-				l := raw.all_after('))').trim_space()
-				if l.starts_with('void ') && l.contains('_IRQHandler(void)') {
-					out[l.all_after('void ').all_before('(').trim_space()] = f.all_after(repo + '/')
+		for ext in ['.c', '.h'] {
+			for f in os.walk_ext(os.join_path(repo, top), ext) {
+				if f.contains('/build/') {
+					continue
+				}
+				mut src := os.read_file(f) or { panic(err) }
+				for src.contains('/*') {
+					src = src.all_before('/*') + src.all_after('/*').all_after('*/')
+				}
+				src = src.split_into_lines().map(it.all_before('//')).join('\n')
+				mut i := 0
+				for {
+					at := src.index_after('_IRQHandler', i) or { break }
+					mut b := at
+					for b > 0 && is_ident(src[b - 1]) {
+						b--
+					}
+					mut e := at + '_IRQHandler'.len
+					i = e
+					if e < src.len && is_ident(src[e]) {
+						continue
+					}
+					out[src[b..e]] = f.all_after(repo + '/')
 				}
 			}
 		}
@@ -246,11 +269,24 @@ fn test_the_bare_table_counts_match_their_headers() {
 	}
 }
 
+// table_align: the alignment VTOR needs for a table — its size rounded up to a power of two
+fn table_align(table string) u64 {
+	bytes := u64(asm_table(os.join_path(repo, table)).len * 4)
+	mut align := u64(1)
+	for align < bytes {
+		align <<= 1
+	}
+	return align
+}
+
 // VTOR ignores the low bits of the table address up to the table's size rounded to a power of
-// two: a boot-chain app's table at APP_VECTORS must sit on that boundary, or the core indexes
-// the wrong words. The H72x table is 179 words -> 1 KiB alignment.
+// two: a boot-chain app's table must sit on that boundary, or the core indexes the wrong words.
+// The H72x table is 179 words -> 1 KiB. Both places the address is stated are checked: the
+// bootmap.h contract and the `--defsym __flash_base__` an example actually links at.
 fn test_app_vectors_fit_the_vtor_alignment() {
-	for u in table_uses().filter(it.list == 'BOARD_BSP_THREADX') {
+	threadx := table_uses().filter(it.list == 'BOARD_BSP_THREADX')
+	mut checked := 0
+	for u in threadx {
 		bm := os.join_path(repo, 'boards', u.board, 'bootmap.h')
 		if !os.is_file(bm) {
 			continue
@@ -266,13 +302,26 @@ fn test_app_vectors_fit_the_vtor_alignment() {
 			}
 		}
 		assert base > 0 && off > 0, '${bm}: APP_BASE/APP_VECTORS not read'
-		bytes := u64(asm_table(os.join_path(repo, u.table)).len * 4)
-		mut align := u64(1)
-		for align < bytes {
-			align <<= 1
-		}
+		align := table_align(u.table)
 		assert (base + off) % align == 0, '${bm}: APP_VECTORS 0x${(base + off).hex()} is not ${align}-byte aligned for ${u.table}'
+		checked++
 	}
+	mks := os.walk_ext(os.join_path(repo, 'examples'), 'Makefile').filter(!it.contains('/build/'))
+	for mk in mks {
+		src := os.read_file(mk) or { panic(err) }
+		if !src.contains('__flash_base__=') {
+			continue
+		}
+		board := src.split_into_lines().filter(it.starts_with('BOARD ') || it.starts_with('BOARD:')).map(it.all_after('=').trim_space())
+		assert board.len == 1, '${mk}: links at __flash_base__ but names ${board.len} BOARDs'
+		uses := threadx.filter(it.board == board[0])
+		assert uses.len == 1, '${mk}: no ThreadX vector table for board ${board[0]}'
+		base := src.all_after('__flash_base__=').all_before(' ').all_before(',').u64()
+		align := table_align(uses[0].table)
+		assert base > 0 && base % align == 0, '${mk}: __flash_base__ 0x${base.hex()} is not ${align}-byte aligned for ${uses[0].table}'
+		checked++
+	}
+	assert checked >= 4, 'checked only ${checked} boot-chain table addresses'
 }
 
 // every vector table in the tree is one a board.mk links, so none escapes the checks above

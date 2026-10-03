@@ -113,9 +113,9 @@ _vectors:
   .word __tx_BadHandler       // IRQ58
   .word __tx_BadHandler       // IRQ59
   .word __tx_BadHandler       // IRQ60
-  /* IRQ61 = ETH global interrupt (RM0468 NVIC id 61). Same rule as FDCAN1_IT0
-   * above: the image provides the strong handler (boards/h735dk/eth.c). Non-net
-   * images fall back to the WEAK ETH_IRQHandler in their board.c — a SEPARATE
+  /* IRQ61 = ETH global interrupt (RM0399 NVIC id 61). Same rule as FDCAN1_IT0
+   * above: no ETH driver on this family yet, so the CM7 takes the WEAK ETH_IRQHandler
+   * in board.c and the CM4 its m4_glue.c stub — each a SEPARATE
    * object, so it never captures this .word's relocation the way a same-object
    * .weak+.set would (the --gc-sections trap the FDCAN note warns about). */
   .word ETH_IRQHandler        // IRQ61
@@ -182,7 +182,7 @@ _vectors:
   .word __tx_BadHandler       // IRQ122
   .word __tx_BadHandler       // IRQ123
   .word __tx_BadHandler       // IRQ124
-  /* IRQ125 = HSEM1 global interrupt (RM0468 NVIC id 125) — the CM7 cross-core doorbell.
+  /* IRQ125 = HSEM1 global interrupt (RM0399 NVIC id 125) — the CM7 cross-core doorbell.
    * Same weak-in-a-separate-object rule as ETH/FDCAN above: the image with a cross-core
    * [[bulk]] consumer provides the strong HSEM1_IRQHandler; others fall back to the
    * weak default in weak_irq.c. */
