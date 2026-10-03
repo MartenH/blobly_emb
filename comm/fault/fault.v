@@ -26,8 +26,9 @@ module fault
 // follow the counters). Turning it on starts a fresh generation, exactly as a clear does but
 // without touching the status: the producer resets its debounce, so neither a report produced
 // while off NOR the debounce state accumulated while off — a counter saturated by a failure the
-// off window saw — is applied after "on" (#364). The accepted cost: a failure held across "on"
-// is recorded only once it debounces again from zero (§7, R4). If an operation cycle began while
+// off window saw — is applied after "on" (#364). The accepted cost: a result held across "on",
+// failed or passed, completes again only once it debounces from zero (§7, R4); a failure the
+// status already showed is not counted as a new occurrence when it does. If an operation cycle began while
 // off, "on" resets that cycle's status bits, which the frozen byte still carried from the
 // previous one.
 //
@@ -194,6 +195,8 @@ pub mut:
 	base_seen  bool // a Report of `gen` has been consumed: the baselines are valid
 	base_fails u16
 	base_tests u16
+	held       bool // 0x85 on renewed `gen` while testFailed was set: the first qualification into
+	// failed continues that failure rather than being a new occurrence
 }
 
 // Memory is the node's fault memory — one writer, the comm thread (D2). RAM only in R4;
@@ -219,6 +222,7 @@ pub fn (mut m Memory) init() {
 		m.slots[i].seen_gen = 0
 		m.slots[i].gen = 0
 		m.slots[i].base_seen = false
+		m.slots[i].held = false
 	}
 	m.setting_off = false
 	m.cycle_active = false
@@ -243,6 +247,13 @@ pub fn (mut m Memory) consume(i int, r Report) {
 	if m.setting_off || !m.cycle_active || (df == 0 && dt == 0) {
 		return // suppressed, or outside an operation cycle: the baselines follow, the status does not
 	}
+	mut occ := df
+	if s.held && dt > 0 {
+		s.held = false // the first completed test since "on" settles it
+		if occ > 0 {
+			occ--
+		}
+	}
 	if dt > 0 {
 		s.tested_cycle = true
 		s.status &= ~(not_completed_since_clear | not_completed_this_cycle)
@@ -254,8 +265,8 @@ pub fn (mut m Memory) consume(i int, r Report) {
 	}
 	if df > 0 || (r.failed && dt > 0) {
 		s.status |= test_failed_this_cycle | pending | failed_since_clear
-		if df > 0 {
-			s.occurrence = sat16(s.occurrence, df)
+		if occ > 0 {
+			s.occurrence = sat16(s.occurrence, occ)
 		}
 		if !s.failed_cycle {
 			s.failed_cycle = true
@@ -349,6 +360,7 @@ pub fn (mut m Memory) clear(group u32) u8 {
 		s.aging_count = 0
 		s.failed_cycle = false
 		s.tested_cycle = false
+		s.held = false
 		s.renew()
 	}
 	return 0
@@ -418,7 +430,8 @@ fn ops_setting(ctx voidptr, on bool) {
 
 // set_setting is 0x85. Turning it back on moves every slot to a fresh generation, as a clear does
 // but leaving the status: the producer restarts its debounce, so nothing it reported or accumulated
-// while off is applied afterwards (#364). When an operation cycle began while off, "on" also resets
+// while off is applied afterwards (#364). A slot showing testFailed is `held`, so the failure
+// re-qualifying after the restart is not a second occurrence. When an operation cycle began while off, "on" also resets
 // that cycle's status bits, which the frozen byte still carried from the previous cycle.
 //
 // "On" cannot be refused (a session ending turns it on too), so a slot with no fresh generation —
@@ -429,6 +442,7 @@ pub fn (mut m Memory) set_setting(on bool) {
 		for i in 0 .. m.n {
 			if m.slots[i].can_renew() {
 				m.slots[i].renew()
+				m.slots[i].held = m.slots[i].status & test_failed != 0
 			}
 			if m.boundary_off && m.cycle_active {
 				m.slots[i].status = (m.slots[i].status & ~test_failed_this_cycle) | not_completed_this_cycle

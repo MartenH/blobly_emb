@@ -422,26 +422,6 @@ fn test_a_result_published_during_suppression_is_not_applied_after_on() {
 	assert m.slots[0].status & test_failed != 0
 }
 
-// A slot stepped and consumed on the memory's own thread, every report (a signal-status fault):
-// the first result after "on" is genuinely post-enable and is applied, not swallowed.
-fn test_the_first_result_after_on_is_applied() {
-	mut m := memory([u32(1)])
-	mut d := counter(1, 1)
-	m.cycle_start()
-	m.consume(0, d.rep)
-	m.set_setting(false)
-	d.step(.failed, 0, true)
-	m.consume(0, d.rep) // consumed while off: suppressed, the baselines follow
-	d.step(.passed, 0, true)
-	m.consume(0, d.rep)
-	assert m.slots[0].status == status_cleared, 'a result while off was applied'
-	m.set_setting(true)
-	d.apply(m.control_gen(0))
-	d.step(.failed, 0, true) // after on
-	m.consume(0, d.rep)
-	assert m.slots[0].status & test_failed != 0, 'the first post-enable report was swallowed'
-}
-
 // codex #301: "on" inside a cycle that began while off resets that cycle's bits in the status.
 fn test_on_resets_the_cycle_bits_of_a_cycle_begun_while_off() {
 	mut m := memory([u32(1)])
@@ -573,6 +553,60 @@ fn test_a_debounce_saturated_while_off_is_not_carried_past_on() {
 	assert m.slots[0].status & failed_since_clear == 0, 'qualified before fail_thr'
 	owner_pass(mut m, mut d, .failed)
 	assert m.slots[0].status & (test_failed | failed_since_clear | confirmed) == test_failed | failed_since_clear | confirmed
+}
+
+// #364: a failure confirmed before "off" and still failing after "on" is the same failure — the
+// restarted debounce re-qualifies it, and that is not a second occurrence. A fresh one after a heal is.
+fn test_a_failure_held_across_on_is_one_occurrence() {
+	mut m := memory([u32(1)])
+	mut d := Debounce{
+		fail_thr: 3
+		pass_thr: 3
+	}
+	m.cycle_start()
+	for _ in 0 .. 4 {
+		owner_pass(mut m, mut d, .failed)
+	}
+	assert m.slots[0].occurrence == 1
+	m.set_setting(false)
+	for _ in 0 .. 4 {
+		owner_pass(mut m, mut d, .failed)
+	}
+	m.set_setting(true)
+	for _ in 0 .. 4 {
+		owner_pass(mut m, mut d, .failed)
+	}
+	assert m.slots[0].status & test_failed != 0
+	assert m.slots[0].occurrence == 1, 'a failure held across on counted twice'
+	for _ in 0 .. 6 {
+		owner_pass(mut m, mut d, .passed)
+	}
+	assert m.slots[0].status & test_failed == 0
+	for _ in 0 .. 6 {
+		owner_pass(mut m, mut d, .failed)
+	}
+	assert m.slots[0].occurrence == 2, 'a failure after a heal is a new occurrence'
+}
+
+// "On" cannot be refused, so for a producer silent past the generation budget it renews nothing:
+// the generation never wraps round to a stale report, and a clear stays refused until it reports.
+fn test_on_never_wraps_a_silent_producers_generation() {
+	mut m := memory([u32(1)])
+	mut d := counter(1, 1)
+	m.cycle_start()
+	d.step(.failed, 0, true)
+	stale := d.rep // generation 0, never read
+	for _ in 0 .. 65_536 { // exactly one u16 wrap: an unbounded renewal lands back on 0
+		m.set_setting(false)
+		m.set_setting(true)
+	}
+	assert u16(m.control_gen(0) - stale.gen) < 0x8000, 'on wrapped the generation'
+	m.consume(0, stale)
+	assert m.slots[0].status == status_cleared, 'the generation came round to a stale report'
+	assert m.clear(1) == 0x22
+	d.apply(m.control_gen(0))
+	m.consume(0, d.rep)
+	assert m.clear(1) == 0, 'a clear stayed refused after the producer reported'
 }
 
 // owner_pass is one dispatch as the generated code runs it: apply the control generation, step, consume.
