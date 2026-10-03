@@ -80,6 +80,8 @@ jobs:
           git status --porcelain
           test -z "$(git status --porcelain)"
 
+      - name: _vinit gate tests (scripts/lint_vinit_test.sh)
+        run: ./scripts/lint_vinit_test.sh
       # The review watcher is a real tool, not a shell fragment: it must page every channel,
       # match a verdict by the reviewed SHA, and preserve gh API failures instead of reporting
       # "nothing waiting" — the three failure modes that each lost a review here. The fixtures
@@ -263,3 +265,8 @@ jobs:
       # the one that once could link neither glue file (#359). Built in a scratch copy.
       - name: A multi-thread gateway links (scripts/glue_link_check.sh)
         run: scripts/glue_link_check.sh
+
+      # A [boot] node's bootloader is remade when a header or a textually included backend changes
+      # (boot/boot.mk takes them from the compiler's dependency output). Asks make, after the builds.
+      - name: The bootloaders track every source (scripts/boot_deps_check.sh)
+        run: scripts/boot_deps_check.sh

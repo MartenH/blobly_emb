@@ -1,6 +1,6 @@
 module uds
 
-// @verifies SYS-REQ-DIAG-001 REQ-DIAG-001 REQ-DIAG-003 REQ-DIAG-004 REQ-DIAG-005 REQ-DIAG-006 REQ-DIAG-007 REQ-DIAG-008
+// @verifies REQ-BOOT-003 SYS-REQ-DIAG-001 REQ-DIAG-001 REQ-DIAG-003 REQ-DIAG-004 REQ-DIAG-005 REQ-DIAG-006 REQ-DIAG-007 REQ-DIAG-008
 // (service dispatch with positive/negative responses, unknown-service/DID NRCs, the
 //  suppressPosRspMsgIndicationBit silence; sessions + S3 (003), NRC order + session/security
 //  gating (004), multi-DID reads (005), functional-request silence (006), 0x11/0x28 (007),
@@ -196,7 +196,7 @@ fn test_session_transitions_relock_and_restore_communication() {
 	assert s.tx_enabled() && s.rx_enabled()
 }
 
-// REQ-DIAG-003: an application server refuses the programming session (no handoff yet).
+// REQ-DIAG-003: an application server without a bootloader refuses the programming session.
 fn test_application_server_refuses_programming() {
 	mut s := started()
 	s.no_programming = true
@@ -204,6 +204,117 @@ fn test_application_server_refuses_programming() {
 	assert s.session == session_default
 	s.no_programming = false // the bootloader's server
 	assert call(mut s, [u8(0x10), 0x02])[0] == 0x50
+}
+
+// The programming handoff (REQ-BOOT-003): an application server with a bootloader answers 0x10 02
+// and records the handoff for its owner — it never enters the programming session itself.
+fn handoff_server() Server {
+	mut s := secured() // in extended, 0x27 level 1 served, locked
+	s.no_programming = true
+	s.boot_handoff = true
+	return s
+}
+
+fn refuse_handoff() bool {
+	return false
+}
+
+fn allow_handoff() bool {
+	return true
+}
+
+fn test_a_handoff_is_answered_and_left_to_the_owner() {
+	mut s := handoff_server()
+	r := call(mut s, [u8(0x10), 0x02])
+	// the answer the bootloader's own server gives for the session it opens: one timing record
+	mut boot := started()
+	assert r == call(mut boot, [u8(0x10), 0x02]), 'the handoff announces the bootloader session timing'
+	assert r[..2] == [u8(0x50), 0x02]
+	assert s.reset_req == reset_into_boot
+	assert s.session == session_extended, 'the application never runs the programming session'
+	// nor does any 0x11 request store the handoff's kind
+	assert reset_into_boot & 0x7F == 0
+}
+
+// with no row of its own the handoff runs in its default sessions only: a stray 0x10 02 in the
+// default session does not restart a running ECU into its bootloader
+fn test_without_a_row_the_handoff_takes_its_default_sessions() {
+	mut s := handoff_server()
+	call(mut s, [u8(0x10), 0x01])
+	assert call(mut s, [u8(0x10), 0x02]) == [u8(0x7F), 0x10, 0x7E]
+	assert s.reset_req == 0
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x10), 0x02])[0] == 0x50
+	assert default_handoff_sessions == in_extended
+}
+
+fn test_a_suppressed_handoff_is_performed_without_an_answer() {
+	mut s := handoff_server()
+	assert call(mut s, [u8(0x10), 0x82]) == []u8{}
+	assert s.reset_req == reset_into_boot
+}
+
+// REQ-BOOT-015: the application's conditions seam refuses with 0x22 and hands nothing off; no seam
+// is "allowed".
+fn test_the_conditions_seam_refuses_a_handoff() {
+	mut s := handoff_server()
+	s.handoff_ok = refuse_handoff
+	assert call(mut s, [u8(0x10), 0x02]) == [u8(0x7F), 0x10, 0x22]
+	assert s.reset_req == 0
+	assert s.session == session_extended
+	s.handoff_ok = allow_handoff
+	assert call(mut s, [u8(0x10), 0x02])[0] == 0x50
+	assert s.reset_req == reset_into_boot
+}
+
+// REQ-DIAG-004: a sub-function row gates 0x10 02 in ISO 14229-1's order — sub-function supported
+// (0x12) → in the active session (0x7E) → its security (0x33) → length (0x13) → conditions (0x22).
+fn test_a_sub_function_row_gates_the_handoff_in_iso_order() {
+	mut s := handoff_server()
+	s.subs[0] = SubService{
+		sid:      0x10
+		sub:      0x02
+		sessions: in_extended
+		security: 1
+	}
+	s.nsubs = 1
+	s.handoff_ok = refuse_handoff
+	call(mut s, [u8(0x10), 0x01])
+	assert call(mut s, [u8(0x10), 0x02, 0x00]) == [u8(0x7F), 0x10, 0x7E], 'session before length'
+	assert call(mut s, [u8(0x10), 0x02]) == [u8(0x7F), 0x10, 0x7E]
+	call(mut s, [u8(0x10), 0x03])
+	assert call(mut s, [u8(0x10), 0x02, 0x00]) == [u8(0x7F), 0x10, 0x33], 'security before length'
+	seed := call(mut s, [u8(0x27), 0x01])[2..]
+	assert send_key(mut s, key_for(seed)) == [u8(0x67), 0x02]
+	assert call(mut s, [u8(0x10), 0x02, 0x00]) == [u8(0x7F), 0x10, 0x13], 'length before conditions'
+	assert call(mut s, [u8(0x10), 0x02]) == [u8(0x7F), 0x10, 0x22]
+	assert s.reset_req == 0
+	s.handoff_ok = allow_handoff
+	assert call(mut s, [u8(0x10), 0x02])[0] == 0x50
+	assert s.reset_req == reset_into_boot
+	// a row gates its own sub-function only
+	mut t := handoff_server()
+	t.subs[0] = s.subs[0]
+	t.nsubs = 1
+	assert call(mut t, [u8(0x10), 0x01])[0] == 0x50
+	assert call(mut t, [u8(0x10), 0x03])[0] == 0x50
+}
+
+// a functional 0x10 02 outside the row's sessions is withheld (0x7E), not answered
+fn test_a_functional_handoff_outside_its_sessions_is_silent() {
+	mut s := handoff_server()
+	s.subs[0] = SubService{
+		sid:      0x10
+		sub:      0x02
+		sessions: in_extended
+	}
+	s.nsubs = 1
+	call(mut s, [u8(0x10), 0x01])
+	assert call_functional(mut s, [u8(0x10), 0x02]) == []u8{}
+	assert s.reset_req == 0
+	call(mut s, [u8(0x10), 0x03])
+	assert call_functional(mut s, [u8(0x10), 0x02])[0] == 0x50
+	assert s.reset_req == reset_into_boot
 }
 
 // REQ-DIAG-004: evaluation order — unsupported service beats everything, a service gated out

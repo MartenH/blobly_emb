@@ -65,6 +65,15 @@ fn main() {
 	mut signed := false
 	if sign_seed != '' {
 		seed := read_seed(sign_seed)
+		// --key <hex>: the public key the bootloader verifies with — a seed whose public half is not
+		// that key signs an image the boot would refuse only after the whole transfer
+		want := opt(args, '--key').to_lower()
+		if want != '' {
+			have := bcrypto.public_key(seed)[..].hex()
+			if have != want {
+				panic('mkimage: ${sign_seed} signs for public key ${have}, but the bootloader verifies with ${want} ([boot] image_key)')
+			}
+		}
 		// the signed region is header word0 (bytes 0..32) ‖ image — the same
 		// bytes the boot streams into verify. The valid-mark word (32..63) is
 		// excluded; the boot writes it after the signature checks out.

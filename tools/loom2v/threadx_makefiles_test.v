@@ -143,6 +143,21 @@ fn test_the_glue_defines_every_symbol_the_generator_declares() {
 	for sym in shell_glue_syms {
 		assert sym in shell_defs, 'boards/common/shell_glue.c does not define ${sym}'
 	}
+	// the [boot] handoff's board side; boot_handoff_ok is weak (the application overrides it)
+	boot_src := glue_src('boot_handoff.c')
+	boot_defs := c_definitions(boot_src)
+	for sym in boot_glue_syms {
+		assert sym in boot_defs || boot_src.contains('__attribute__((weak)) int ${sym}('), 'boards/common/boot_handoff.c does not define ${sym}'
+	}
+	mut bm := Model{}
+	bm.boot.on = true
+	bm.isotp_conns = [IsotpConn{}]
+	for d in diag_target_c_decls(bm).filter(it.starts_with('fn C.')) {
+		name := d['fn C.'.len..].all_before('(')
+		if name.starts_with('boot_') {
+			assert name in boot_glue_syms, 'diag_target_c_decls declares C.${name}, which boot_glue_syms does not list'
+		}
+	}
 	dir := os.join_path(@VMODROOT, 'tools', 'loom2v')
 	mut seen := 0
 	for f in os.ls(dir) or { panic(err) } {
@@ -181,6 +196,8 @@ fn test_no_c_file_redefines_the_glue() {
 	mut glue := c_definitions(comm_glue_src())
 	assert 'FDCAN1_IT0_IRQHandler' in glue && 'comm_wake' in glue
 	glue << c_definitions(glue_src('shell_glue.c'))
+	glue << c_definitions(glue_src('boot_handoff.c')) // its weak conditions seam is for overriding
+	assert 'boot_handoff_request' in glue && 'boot_handoff_ok' !in glue
 	mut files := []string{}
 	for mk in threadx_makefiles() {
 		files << os.walk_ext(os.dir(mk), '.c')
@@ -190,6 +207,7 @@ fn test_no_c_file_redefines_the_glue() {
 	for f in files {
 		if f.ends_with(os.join_path('boards', 'common', 'comm_glue.c'))
 			|| f.ends_with(os.join_path('boards', 'common', 'shell_glue.c'))
+			|| f.ends_with(os.join_path('boards', 'common', 'boot_handoff.c'))
 			|| f.contains('/build/') {
 			continue
 		}
@@ -214,4 +232,58 @@ fn test_the_glue_list_follows_the_declarations() {
 	assert glue_build_lines(['fn C.comm_rx_wait(u32) u32', 'fn C.shell_ps(&u8, int) int'],
 		false) == 'LOOM_GLUE_SRCS = ${comm} ${shell}\n'
 	assert glue_build_lines(['fn C.shell_boot(&u8, int) int'], false) == 'LOOM_GLUE_SRCS :=\n', 'a node command is its own target_ext.c'
+	// the [boot] handoff's board side
+	for sym in boot_glue_syms {
+		assert glue_build_lines(['fn C.${sym}()'], false) == 'LOOM_GLUE_SRCS = ' +
+			r'$(REPO)/boards/common/boot_handoff.c' + '\n', sym
+	}
+}
+
+// A node behind its bootloader ([boot]) must not `make flash` its application to 0x08000000, over
+// the boot: its Makefile hands `flash` to boot/boot.mk's boot-flash (the boot at its base, the
+// factory image at the app slot). The Makefile cannot ask its own ecu.toml, so this asks it for them.
+fn test_a_boot_node_flashes_through_its_bootloader() {
+	mut seen := 0
+	for mk in threadx_makefiles() {
+		ecu := os.read_file(os.join_path(os.dir(mk), 'ecu.toml')) or { continue }
+		if !ecu.split_into_lines().any(it.trim_space() == '[boot]') {
+			continue
+		}
+		seen++
+		src := os.read_file(mk) or { panic(err) }
+		assert src.contains('ifeq ($(BOOT_ON),1)\nflash: boot-flash\nelse\n'), '${mk}: a [boot] node whose `flash` writes the app over its bootloader'
+	}
+	assert seen >= 3, 'found ${seen} [boot] nodes — system_full has three'
+}
+
+// The CM4's clock release is a CONSUMED handshake with one statement (boards/h755zi/xcore.h): SRAM4
+// survives a reset, so a release left in it would start the satellite's kernel before anybody set
+// the clocks — and under a boot manager that stays for programming and changes them. So no file but
+// xcore.h touches the cell, every satellite takes it through xcore_clk_take (which consumes it), and
+// the boot manager parks the satellite before its first clock change.
+fn test_the_satellite_clock_release_is_consumed_and_retracted() {
+	mut files := []string{}
+	for top in ['examples', 'boards', 'boot'] {
+		files << os.walk_ext(os.join_path(@VMODROOT, top), '.c').filter(!it.contains('/build/'))
+	}
+	mut sats := 0
+	for f in files {
+		src := os.read_file(f) or { panic(err) }
+		assert !src.contains('XCORE_CLK_ADDR'), '${f} touches the clock-release cell itself — go through xcore.h'
+		if src.contains('void xcore_wait_clocks(void)') {
+			sats++
+			assert src.all_after('void xcore_wait_clocks(void)').all_before('}').contains('xcore_clk_take()'), '${f}: the satellite does not consume the release'
+		}
+	}
+	assert sats >= 2, 'found ${sats} satellites'
+	xc := os.read_file(os.join_path(@VMODROOT, 'boards', 'h755zi', 'xcore.h')) or { panic(err) }
+	take := xc.all_after('static inline void xcore_clk_take(void)').all_before('\n}')
+	assert take.contains('*clk = 0u;'), 'xcore_clk_take does not consume'
+	boot := os.read_file(os.join_path(@VMODROOT, 'boot', 'target', 'main.v')) or { panic(err) }
+	body := boot.all_after('fn main() {')
+	park := body.index('C.boot_park_satellite()') or { -1 }
+	assert park >= 0, 'the boot never parks the satellite'
+	// before the decision, so the jump to the app is covered too, and before any clock change
+	assert park < (body.index('boot.decide(') or { -1 }), 'the satellite is parked after the boot decision — a jump to the app skips it'
+	assert park < (body.index('C.board_clock_init()') or { -1 }), 'the boot changes the clocks before parking the satellite'
 }

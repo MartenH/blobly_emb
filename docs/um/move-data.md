@@ -222,8 +222,8 @@ A **new bulk consumer** therefore owns its *own* `isotp.Link` inside a ComModule
 **outbound** streamers (their FC handlers feed a send in flight; neither ever calls
 `take()`). For the complete **inbound** consume-and-dispatch loop, read
 `comm/diag` (`Connection.on_frame` → `serve`: `take` → handle → `send` → `produce`) or the three
-hand-written bootloader loops (`examples/boot_sim`, `examples/h735_boot`,
-`examples/h755_boot` — each `main.v` runs the full loop into `boot.Prog.handle`, and
+bootloader loops (`examples/boot_sim` and the target boot manager `boot/target/main.v` —
+each runs the full loop into `boot.Prog.handle`, and
 they are the closest match for a bulk-transfer consumer). Whichever
 direction, `send`/`take` are only the payload calls — a private link *works* only wired
 into the module's frame loop, four obligations:

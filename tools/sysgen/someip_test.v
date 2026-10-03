@@ -936,6 +936,15 @@ fn test_a_doip_node_gates_every_state_change_and_names_a_bench_key() {
 	assert doip_errs(sys).any(it.contains('it would mean nothing')), doip_errs(sys).str()
 }
 
+// a [boot] node the network reaches gates its handoff behind a level, by the node gate's rule
+fn test_a_doip_node_gates_its_programming_handoff() {
+	mut sys := doip_system()
+	sys.nodes[0].view.boot = true
+	assert doip_errs(sys).any(it.contains('the programming handoff (0x10 02)')), doip_errs(sys).str()
+	sys.nodes[0].view.uds_handoff_security = 1
+	assert doip_errs(sys).len == 0, doip_errs(sys).str()
+}
+
 fn doip_errs(sys sysmodel.System) []string {
 	return seg_errs(sys).filter(it.contains('doip') || it.contains('DoIP'))
 }

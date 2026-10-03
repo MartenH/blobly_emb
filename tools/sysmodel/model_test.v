@@ -4552,3 +4552,28 @@ fn test_a_tool_that_does_not_build_says_so() {
 	}
 	assert false, 'a tool that cannot build ran'
 }
+
+// [boot] and its "0x10 02" row reach the system's REQ-NET-012 rule as the node gate reads them
+fn test_the_handoff_row_is_read_apart_from_the_services() {
+	doc := toml.parse_text('[boot]
+[uds.services]
+"0x10" = {}
+"0x10 02" = { security = 2 }
+"0x11" = { security = 1 }
+') or { panic(err) }
+	view := parse_node_view(doc)
+	assert view.boot && view.uds_handoff_security == 2
+	mut sids := view.uds_rows.map(it.sid)
+	sids.sort()
+	assert sids == [u8(0x10), 0x11], 'the handoff row is not a service row'
+	none_doc := toml.parse_text('[uds]\ns3_ms = 5000\n') or { panic(err) }
+	assert !parse_node_view(none_doc).boot
+	// another sub-function row is not the handoff's level, nor a service row
+	other := toml.parse_text('[boot]\n[uds.services]\n"0x11 01" = { security = 1 }\n') or {
+		panic(err)
+	}
+	ov := parse_node_view(other)
+	assert ov.uds_handoff_security == 0 && ov.uds_rows.len == 0
+	off := toml.parse_text('boot = false\n') or { panic(err) }
+	assert !parse_node_view(off).boot
+}

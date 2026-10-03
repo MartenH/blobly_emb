@@ -1031,13 +1031,7 @@ fn emit_bridges(m Model, comm_thread_on bool, trace_host bool, producers []Produ
 			for c in conns {
 				tp := snake(c.name)
 				glue << '\tst.conn_${tp}.serve()'
-				glue << '\tmut cf_${tp} := can.Frame{}'
-				glue << '\tfor st.chan.tx_ready() && st.conn_${tp}.produce(now, mut cf_${tp}) {'
-				glue << '\t\tif !st.chan.send(cf_${tp}) {'
-				glue << '\t\t\tst.conn_${tp}.abort_tx()'
-				glue << '\t\t\tbreak'
-				glue << '\t\t}'
-				glue << '\t}'
+				glue << '\tst.conn_${tp}.pump(now, mut st.chan) // comm/diag: a refused frame aborts the answer'
 			}
 		}
 		// rx deadline crossed -> publish invalid (valid=false) signals, once. While 0x28 has rx

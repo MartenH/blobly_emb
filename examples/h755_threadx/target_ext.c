@@ -56,7 +56,7 @@ void xcore_clocks_ready(void) {
      * NVIC arming happens later in comm_rx_irq_enable; rings before that just don't wake anyone. */
     RCC->AHB4ENR |= RCC_AHB4ENR_HSEMEN;
     (void)RCC->AHB4ENR;
-    *(volatile uint32_t *)XCORE_CLK_ADDR = XCORE_CLK_MAGIC;
+    xcore_clk_release();
     __asm__ volatile("dsb");
 }
 
@@ -255,7 +255,7 @@ int shell_iocx(unsigned char *out, int cap) {
     return (int)(p - (char *)out);
 }
 
-#include "bootmap.h" /* the boot manager <-> app contract (docs/bootloader.md) */
+#include "bootcell.h" /* the boot manager <-> app cells (docs/bootloader.md) */
 
 /* shell_boot — the `boot` command: write the SRAM4 request cell and reset into
  * the boot manager (the app->boot rung, REQ-BOOT-003). The response never
@@ -265,10 +265,7 @@ int shell_iocx(unsigned char *out, int cap) {
 int shell_boot(unsigned char *out, int cap) {
     (void)out;
     (void)cap;
-    volatile uint32_t *cell = (volatile uint32_t *)BOOTCELL_REQ_ADDR;
-    cell[1] = 1u; /* arg first: the magic makes the pair valid, so it lands last */
-    cell[0] = BOOTCELL_REQ_MAGIC;
-    __asm__ volatile("dsb");
+    bootcell_request(BOOTCELL_REQ_SHELL);
     NVIC_SystemReset();
     return 0; /* unreachable */
 }

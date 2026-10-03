@@ -71,7 +71,6 @@ fn test_the_comm_thread_serves_the_connection_in_order() {
 	// trace and shell streams; abandoned in NM sleep; a 1-tick wake while it is in flight
 	steps := [
 		'g_diag.init(u32(0x7b0), u32(0x7b8), u32(0x7df)',
-		'mut diag_txf := can.Frame{}',
 		'wait_ticks := if g_tm.is_dumping() || g_diag.link.busy() {',
 		'g_diag.housekeep(',
 		'for ch.recv(mut rx) {',
@@ -79,9 +78,9 @@ fn test_the_comm_thread_serves_the_connection_in_order() {
 		'g_diag.serve()',
 		'g_nm.hold(t1, g_diag.active())',
 		'nm_up := g_nm.awake()',
-		'g_diag.produce(t1, mut diag_txf)',
+		'g_diag.pump(t1, mut ch)',
 		'if g_diag.reset_due() != 0 {',
-		'for !ch.tx_idle() && C.board_now_us() - diag_t0 < 20000 {}',
+		'diag.wire_drain(mut ch, diag_now_us)',
 		'C.diag_sys_reset()',
 		'// PRODUCER: CpuLoad telemetry',
 		'g_tm.produce(t1, mut trace_txf)',
@@ -261,7 +260,7 @@ fn test_the_reset_flushes_the_journal_first() {
 	}, diag_conn)
 	assert code == 0, out
 	assert os.exists(os.join_path(tmp, 'h755_m4_app', 'gen')), 'the satellite image was not generated into the scratch layout'
-	steps := ['if g_diag.reset_due() != 0 {', 'for !ch.tx_idle()', 'nvm_flush_ok = g_nvm.mark_clean()',
+	steps := ['if g_diag.reset_due() != 0 {', 'diag.wire_drain(mut ch', 'nvm_flush_ok = g_nvm.mark_clean()',
 		'if !nvm_flush_ok && diag_reset_tries < 20 {', 'C.diag_sys_reset()']
 	mut at := -1
 	for step in steps {
@@ -425,4 +424,246 @@ security_key  = "reference"
 	assert o2.contains('[isotp] `s3_ms` is the ISO 14229 server\'s setting') && o2.contains('move it to [uds]'), o2
 	c3, o3, _ := generate('old_name', diag_conn.replace('[isotp]', '[isotp]\nname = "diag"'))
 	assert c3 != 0 && o3.contains('[isotp] `name` is gone'), o3
+}
+
+// [boot] (docs/bootloader.md P3): the programming handoff on the comm thread — 0x10 02 answered, then
+// the boot request cell and the reset by 0x11's path — and what the generator refuses.
+// @verifies REQ-BOOT-003 (the build half: comm/uds and comm/diag's tests show the answer and its
+// ordering, boot/prog_test.v the bootloader opening the promised session)
+
+const boot_conn = '
+[isotp]
+bus           = "can0"
+rx_id         = 0x7B0
+tx_id         = 0x7B8
+functional_id = 0x7DF
+
+[[did]]
+id    = 0xF190
+ascii = "BLOBLY-TEST"
+
+[boot]
+image_key   = "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"
+session_key = "29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7"
+'
+
+fn in_order(glue string, steps []string) {
+	mut at := -1
+	for step in steps {
+		i := glue[at + 1..].index(step) or {
+			assert false, 'step "${step}" missing or out of order (after offset ${at})'
+			return
+		}
+		at = at + 1 + i
+	}
+}
+
+fn test_a_boot_node_hands_off_after_its_answer_has_left() {
+	code, out, glue := generate('boot_ok', boot_conn)
+	assert code == 0, out
+	// the server: the handoff, with no row of its own — the server's default handoff sessions
+	assert glue.contains('g_diag.server.no_programming = true')
+	assert glue.contains('g_diag.server.boot_handoff = true')
+	assert !glue.contains('g_diag.server.subs[0]') && !glue.contains('nsubs')
+	// the conditions seam (REQ-BOOT-015) and the image-version DID after the configured ones
+	assert glue.contains('fn boot_handoff_ok_v() bool {\n\treturn C.boot_handoff_ok() != 0\n}')
+	assert glue.contains('g_diag.server.handoff_ok = boot_handoff_ok_v')
+	assert glue.contains('id:  u16(0xf195)')
+	assert glue.contains('g_diag.server.dids[1].data[0] = u8(boot_ver >> 24)')
+	assert glue.contains('g_diag.server.ndid = 2')
+	// performed as an answered reset: the controller drained, then the cell, then the reset
+	in_order(glue, [
+		'g_diag.server.ndid = 1',
+		'g_diag.server.ndid = 2',
+		'if g_diag.reset_due() != 0 {',
+		'diag.wire_drain(mut ch, diag_now_us)',
+		'if g_diag.reset_due() == uds.reset_into_boot {',
+		'C.boot_handoff_request()',
+		'C.diag_sys_reset()',
+	])
+	// the board side is linked because the code declares it (glue_build_lines, pinned in
+	// threadx_makefiles_test.v)
+	assert glue.contains('fn C.boot_handoff_request()')
+}
+
+// a [boot] node with no [[did]] and no service table still names comm.uds (the handoff's reset
+// kind), and its generated glue type-checks
+fn test_a_did_less_boot_node_imports_uds() {
+	cfg := boot_conn.replace('[[did]]\nid    = 0xF190\nascii = "BLOBLY-TEST"\n', '')
+	assert !cfg.contains('[[did]]')
+	code, out, glue := generate('boot_nodid', cfg)
+	assert code == 0, out
+	assert glue.contains('import comm.uds'), 'a [boot] glue without comm.uds does not compile'
+}
+
+fn test_without_boot_the_programming_session_stays_refused() {
+	code, out, glue := generate('boot_none', boot_conn.all_before('[boot]'))
+	assert code == 0, out
+	assert glue.contains('g_diag.server.no_programming = true')
+	assert !glue.contains('boot_handoff')
+	assert !glue.contains('0xf195')
+	assert !glue.contains('reset_into_boot')
+}
+
+// the handoff's own row: its sessions and its level, the level served by 0x27 like any gate's
+fn test_the_handoff_row_gates_it() {
+	table := '
+[uds]
+security_key = "reference"
+
+[uds.services]
+"0x10" = {}
+"0x10 02" = { sessions = ["extended"], security = 2 }
+"0x22" = {}
+"0x27" = {}
+"0x3E" = {}
+'
+	code, out, glue := generate('boot_row', table + boot_conn)
+	assert code == 0, out
+	assert glue.contains('g_diag.server.subs[0] = uds.SubService{sid: 0x10, sub: 0x02, sessions: 0x04, security: 2}')
+	assert glue.contains('g_diag.server.nsubs = 1')
+	// a row naming no sessions takes the default ones, written out (a row's 0 is "every session")
+	c2, o2, g2 := generate('boot_row_nosess', table.replace('sessions = ["extended"], ', '') + boot_conn)
+	assert c2 == 0, o2
+	assert g2.contains('uds.SubService{sid: 0x10, sub: 0x02, sessions: 0x04, security: 2}')
+	assert glue.contains('g_diag.server.security_levels = u8(0x02)'), 'level 2 is served: the row names it'
+	assert glue.contains('g_diag.server.nservices = 4'), 'the handoff row is not a service row'
+}
+
+fn test_a_handoff_that_cannot_be_performed_or_reached_is_refused() {
+	for name, c in {
+		'no_isotp':     ['[boot]' + boot_conn.all_after('[boot]'), 'declare its [isotp] connection']
+		'no_boot':      ['[uds.services]\n"0x10" = {}\n"0x10 02" = {}\n"0x22" = {}\n' +
+			boot_conn.all_before('[boot]'), 'the node has no [boot]']
+		'programming':  ['[uds.services]\n"0x10" = {}\n"0x10 02" = { sessions = ["programming"] }\n"0x22" = {}\n' +
+			boot_conn, 'names the programming session']
+		'level_out':    ['[uds]\nsecurity_key = "reference"\n[uds.services]\n"0x10" = {}\n"0x10 02" = { sessions = ["default"], security = 1 }\n"0x22" = {}\n"0x27" = {}\n' +
+			boot_conn, 'not accepted in the extended session']
+		'other_sub':    ['[uds.services]\n"0x10" = {}\n"0x10 03" = {}\n"0x22" = {}\n' + boot_conn, 'the one sub-function row is the programming handoff']
+		'no_0x10':      ['[uds.services]\n"0x10 02" = {}\n"0x22" = {}\n"0x3E" = {}\n' + boot_conn, 'leaves out 0x10']
+		'no_shared':    ['[uds.services]\n"0x10" = { sessions = ["default"] }\n"0x10 02" = {}\n"0x22" = {}\n' +
+			boot_conn, 'share no session']
+		'did_clash':    [boot_conn + '\n[[did]]\nid    = 0xF195\nbytes = "00 00 00 01"\n', 'leave it to [boot]']
+		'keys':         [boot_conn + 'enabled = true\n', '[boot] takes `image_key` and `session_key`']
+		'no_key':       [boot_conn.all_before('session_key'), 'needs `session_key`']
+		'bad_key':      [boot_conn.replace('"29acbae1', '"zz'), 'must be 64 hex characters']
+		'same_keys':    [boot_conn.replace('29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7', '03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8'), 'are the same key']
+		'zero_key':     [boot_conn.replace('29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7', '0'.repeat(64)), 'all zeros']
+		'bus_index':    [boot_conn.replace('bus           = "can0"', 'bus           = "can10"'), 'names no single FDCAN index']
+	} {
+		code, out, _ := generate('boot_${name}', c[0])
+		assert code != 0, '${name}: loom2v accepted it'
+		assert out.contains(c[1]), '${name}: ${out}'
+	}
+	// `boot` is the table, nothing else (a top-level key, so written before the first table)
+	cn, on, _ := generate_edited('boot_not_table', fn (src string) string {
+		return 'boot = []\n' + src
+	}, boot_conn.all_before('[boot]'))
+	assert cn != 0 && on.contains('must be the [boot] table'), on
+	// a host build has no bootloader to reset into
+	tmp := os.join_path(os.temp_dir(), 'diag_target_boot_host_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	code, out, _ := run_in_scratch(tmp, 'overspeed', fn (src string) string {
+		return src
+	}, '\n[boot]' + boot_conn.all_after('[boot]'))
+	assert code != 0 && out.contains('[boot] is a ThreadX target'), out
+}
+
+// over the network the handoff restarts the ECU for whoever connects: it needs its own level
+// (REQ-NET-012, doipcfg.handoff_refusal — the rule syscheck applies too)
+fn test_a_doip_nodes_handoff_needs_a_level() {
+	doip := '
+[uds]
+security_key = "reference"
+
+[uds.services]
+"0x10" = {}
+"0x11" = { sessions = ["extended"], security = 1 }
+"0x22" = {}
+"0x27" = {}
+"0x3E" = {}
+' + boot_conn.replace('ascii = "BLOBLY-TEST"', 'ascii = "BLOBLYH735THREADX"') + '
+[doip]
+address         = "192.168.0.50"
+logical_address = 0x07B0
+allow_bench_key = true
+'
+	code, out, _ := generate('boot_doip_open', doip)
+	assert code != 0 && out.contains('the programming handoff (0x10 02)'), out
+	gated := doip.replace('"0x22" = {}', '"0x10 02" = { security = 1 }\n"0x22" = {}')
+	c2, o2, glue := generate('boot_doip_gated', gated)
+	assert c2 == 0, o2
+	// the answer leaves over TCP before the reset: the wait 0x11 already has, then the cell
+	in_order(glue, [
+		'for C.doip_tx_pending() != 0',
+		'if g_diag.reset_due() == uds.reset_into_boot {',
+		'C.diag_sys_reset()',
+	])
+}
+
+// the node's bootloader is built from the same config: gen/boot_gen.h carries the [isotp] ids, its
+// flow control, the FDCAN and frame format of its bus and the [boot] keys, and gen/loom_build.mk
+// pulls in boot/boot.mk (the boot image, the app at the app slot, the image containers)
+fn test_a_boot_node_gets_its_bootloader_config() {
+	tmp := os.join_path(os.temp_dir(), 'diag_target_boot_gen_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	code, out, _ := run_in_scratch(tmp, 'h735_threadx', fn (src string) string {
+		return src
+	}, boot_conn.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\nbs = 8\nstmin_ms = 2'))
+	assert code == 0, out
+	h := os.read_file(os.join_path(tmp, 'boot_gen.h')) or { panic(err) }
+	for want in ['#define BOOT_CAN_IDX 0', '#define BOOT_CAN_FD 0', '#define BOOT_RX_ID 0x7b0u',
+		'#define BOOT_TX_ID 0x7b8u', '#define BOOT_BS 8u', '#define BOOT_STMIN 2u',
+		'#define BOOT_IMAGE_KEY {0x03, 0xa1, 0x07,', '#define BOOT_SESSION_KEY {0x29, 0xac, 0xba,'] {
+		assert h.contains(want), '${want} missing:\n${h}'
+	}
+	// the generated endpoint IS the node's [isotp], whatever it is: the two cannot drift
+	tmp3 := tmp + '_ids'
+	defer {
+		os.rmdir_all(tmp3) or {}
+	}
+	c3, o3, _ := run_in_scratch(tmp3, 'h735_threadx', fn (src string) string {
+		return src
+	}, boot_conn.replace('rx_id         = 0x7B0', 'rx_id         = 0x7C0').replace('tx_id         = 0x7B8',
+		'tx_id         = 0x7C8'))
+	assert c3 == 0, o3
+	h3 := os.read_file(os.join_path(tmp3, 'boot_gen.h')) or { panic(err) }
+	assert h3.contains('#define BOOT_RX_ID 0x7c0u') && h3.contains('#define BOOT_TX_ID 0x7c8u'), h3
+	mk := os.read_file(os.join_path(tmp, 'loom_build.mk')) or { panic(err) }
+	assert mk.contains('include ' + r'$(REPO)/boot/boot.mk'), mk
+	// without [boot], neither
+	tmp2 := tmp + '_none'
+	defer {
+		os.rmdir_all(tmp2) or {}
+	}
+	c2, o2, _ := run_in_scratch(tmp2, 'h735_threadx', fn (src string) string {
+		return src
+	}, boot_conn.all_before('[boot]'))
+	assert c2 == 0, o2
+	assert !os.exists(os.join_path(tmp2, 'boot_gen.h'))
+	assert !(os.read_file(os.join_path(tmp2, 'loom_build.mk')) or { '' }).contains('boot.mk')
+}
+
+// an FD bus opens the bootloader in FD as it opens the application (zone_a: the edge bus is CAN-FD,
+// its ISO-TP classic-sized) — the frame format a tester sees does not change across the handoff
+fn test_a_boot_on_an_fd_bus_opens_it_in_fd() {
+	mut m := Model{}
+	m.isotp_conns = [IsotpConn{
+		bus:   'can1'
+		rx_id: 0x7C0
+		tx_id: 0x7C8
+	}]
+	m.boot = BootCfg{
+		on:          true
+		image_key:   []u8{len: 32, init: 1}
+		session_key: []u8{len: 32, init: 2}
+	}
+	h := boot_gen_h(m, fdcan_index('can1'), true)
+	assert '#define BOOT_CAN_IDX 1 /* the [isotp] bus "can1": the comm thread\'s FDCAN */' in h
+	assert '#define BOOT_CAN_FD 1 /* its frame format, as the application opens it */' in h
+	assert fdcan_index('can10') == '' && fdcan_index('can3') == '' && fdcan_index('edge') == ''
 }

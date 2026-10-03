@@ -22,6 +22,10 @@ pub mut:
 	rx_id         u32 // physical requests (standard id)
 	tx_id         u32 // responses
 	functional_id u32 // functional requests, shared by every server on the bus; 0 = none
+	// handoff_remote: the bootloader also serves the other transport (DoIP), so a programming
+	// handoff may be asked for over it. False today — the boot answers on CAN only — and the
+	// server then refuses a remote 0x10 02 with conditionsNotCorrect
+	handoff_remote bool
 	// refresh writes the live-signal DIDs into the server it is handed. It runs right before every
 	// dispatch, physical or functional, so a read answers with the value current then. nil = the
 	// node has no live DIDs.
@@ -89,7 +93,7 @@ pub fn (mut c Connection) init(rx_id u32, tx_id u32, functional_id u32, bs u8, s
 pub fn (mut c Connection) housekeep(now u64) {
 	c.link.tick(now)
 	c.apply_answered_reset()
-	if !c.link.idle() || c.remote_inflight {
+	if in_flight(&c.link) || c.remote_inflight {
 		c.server.hold_s3(now) // an exchange still in flight on either transport
 	}
 	c.server.tick(now)
@@ -102,18 +106,7 @@ pub fn (mut c Connection) on_frame(now u64, f &can.Frame) Rx {
 		return .other
 	}
 	if f.id == c.rx_id {
-		// only the bytes that arrived: the owner may reuse one frame, so the tail of a short one
-		// holds the previous frame's bytes; a frame too short for what its PCI says is dropped
-		n := if f.len > 8 { 8 } else { int(f.len) }
-		if n < 1 || truncated(f.data[0], n, c.link.rx_len - c.link.rx_pos) {
-			return .taken
-		}
-		mut p := isotp.Pdu{}
-		for i in 0 .. n {
-			p.data[i] = f.data[i]
-		}
-		c.link.on_frame(now, p)
-		return if c.link.has_request() { Rx.request } else { Rx.taken }
+		return if take_frame(mut c.link, now, f) { Rx.request } else { Rx.taken } // step.v
 	}
 	if c.functional_id != 0 && f.id == c.functional_id {
 		return c.functional(f)
@@ -153,10 +146,9 @@ fn (mut c Connection) functional(f &can.Frame) Rx {
 // sent is a tester protocol violation and is DROPPED — the tester times out and retries; nothing
 // waits, so nothing can be reordered behind it.
 pub fn (mut c Connection) serve() {
-	got := c.link.take(&c.req[0])
 	// nor once a reset is pending: the owner is about to restart, and an answer given now would
-	// describe state the restart discards
-	n := if c.link.busy() || c.server.reset_req != 0 { 0 } else { got }
+	// describe state the restart discards (take_request, step.v — the boot's rule too)
+	n := take_request(mut c.link, &c.req[0], c.server.reset_req != 0)
 	if n > 0 {
 		c.refresh_dids()
 		before, held := c.enter(false)
@@ -184,11 +176,13 @@ pub fn (mut c Connection) serve_remote(req &u8, n int, functional bool, resp &u8
 	}
 	c.refresh_dids()
 	before, held := c.enter(true)
+	c.server.handoff_elsewhere = !c.handoff_remote
 	rlen := if functional {
 		c.server.handle_functional(req, n, resp)
 	} else {
 		c.server.handle(req, n, resp)
 	}
+	c.server.handoff_elsewhere = false
 	c.leave(before, held, true)
 	if c.server.reset_req != 0 {
 		c.reset_remote = true
@@ -272,17 +266,15 @@ fn (mut c Connection) leave(before u32, held u8, remote bool) {
 // produce yields the next frame of the answer in flight, paced by the peer's flow control, for the
 // owner to send. Ask only while the channel is ready: poll counts the frame as sent.
 pub fn (mut c Connection) produce(now u64, mut f can.Frame) bool {
-	mut p := isotp.Pdu{}
-	if !c.link.poll(now, mut p) {
-		return false
+	return next_frame(mut c.link, c.tx_id, now, mut f)
+}
+
+// pump sends the answer in flight on `ch` while it is ready (step.v pump): a frame the channel
+// refuses aborts the transfer, and the answer is lost — a reset it announced does not happen.
+pub fn (mut c Connection) pump(now u64, mut ch can.Channel) {
+	if !pump(mut c.link, c.tx_id, now, mut ch) {
+		c.answer_lost()
 	}
-	f.id = c.tx_id
-	f.len = 8
-	f.ext = false
-	for i in 0 .. 8 {
-		f.data[i] = p.data[i]
-	}
-	return true
 }
 
 // abort_tx: the channel refused a frame produce already counted as sent, so the rest of the answer
@@ -290,6 +282,12 @@ pub fn (mut c Connection) produce(now u64, mut f can.Frame) bool {
 // reset whose answer was lost is never performed.
 pub fn (mut c Connection) abort_tx() {
 	c.link.abort_tx()
+	c.answer_lost()
+}
+
+// answer_lost: the bus answer in flight was abandoned — a reset it announced is cancelled, unless
+// the other transport asked for it (that answer was not this one)
+fn (mut c Connection) answer_lost() {
 	if !c.reset_remote {
 		c.cancel_reset()
 	}
@@ -301,21 +299,9 @@ pub fn (c &Connection) active() bool {
 	return !c.link.idle() || c.server.session != uds.session_default
 }
 
-// truncated: the frame (PCI byte `pci`, `n` bytes arrived) is too short for what its PCI says. A
-// consecutive frame is full unless it carries the last `left` bytes of the reception; a first frame
-// is always full (ISO 15765-2); a flow control needs its block size and STmin.
-fn truncated(pci u8, n int, left int) bool {
-	return match pci >> 4 {
-		0 { int(pci & 0x0F) >= n }
-		1 { n < 8 }
-		2 { n < 8 && n - 1 < left }
-		3 { n < 3 }
-		else { false }
-	}
-}
-
-// reset_due is the ECUReset kind whose answer has left the link, or the other transport that
-// carried it (remote_sent), (0 = none) — for an owner that performs the reset itself
+// reset_due is the ECUReset kind — or uds.reset_into_boot, the programming handoff, which the owner
+// performs as a reset with the boot request cell written first — whose answer has left the link,
+// or the other transport that carried it (remote_sent), (0 = none) — for an owner that performs the reset itself
 // (`owner_resets`). The link being done is not the wire being done: the
 // owner still waits for its controller to transmit the answer (REQ-BOOT-012).
 pub fn (c &Connection) reset_due() u8 {
