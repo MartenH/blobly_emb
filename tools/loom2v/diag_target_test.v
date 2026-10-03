@@ -487,6 +487,16 @@ fn test_a_boot_node_hands_off_after_its_answer_has_left() {
 	assert glue.contains('fn C.boot_handoff_request()')
 }
 
+// a [boot] node with no [[did]] and no service table still names comm.uds (the handoff's reset
+// kind), and its generated glue type-checks
+fn test_a_did_less_boot_node_imports_uds() {
+	cfg := boot_conn.replace('[[did]]\nid    = 0xF190\nascii = "BLOBLY-TEST"\n', '')
+	assert !cfg.contains('[[did]]')
+	code, out, glue := generate('boot_nodid', cfg)
+	assert code == 0, out
+	assert glue.contains('import comm.uds'), 'a [boot] glue without comm.uds does not compile'
+}
+
 fn test_without_boot_the_programming_session_stays_refused() {
 	code, out, glue := generate('boot_none', boot_conn.all_before('[boot]'))
 	assert code == 0, out

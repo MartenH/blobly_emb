@@ -194,6 +194,11 @@ pub mut:
 	// answers conditionsNotCorrect (0x22) and nothing is handed off. nil = allowed — the server
 	// knows no vehicle state, and only the application can.
 	handoff_ok fn () bool
+	// handoff_here: the bootloader serves the transport this request arrived on. False refuses the
+	// handoff with conditionsNotCorrect (0x22): the bootloader answers on CAN only, and a handoff
+	// over DoIP would reset the ECU out from under a tester whose TCP connection dies with it
+	// (comm/diag sets it per request from Connection.handoff_remote)
+	handoff_here bool = true
 	// Sub-function rows: a service's sub-function gated beyond its service row (AUTOSAR's
 	// sub-service table) — the sessions it is accepted from (0x7E otherwise) and the 0x27 level it
 	// needs (0x33). Consulted by 0x10, for the programming handoff; nsubs == 0 = none.
@@ -536,7 +541,7 @@ fn (mut s Server) session_control(req &u8, req_len int, resp &u8) int {
 		return negative(resp, 0x10, nrc_incorrect_length)
 	}
 	if handoff {
-		if s.handoff_ok != unsafe { nil } && !s.handoff_ok() {
+		if !s.handoff_here || (s.handoff_ok != unsafe { nil } && !s.handoff_ok()) {
 			return negative(resp, 0x10, nrc_conditions_not_correct)
 		}
 		// answered HERE, before the reset: the session is opened by the bootloader's server after

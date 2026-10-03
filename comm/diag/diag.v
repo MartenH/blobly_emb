@@ -22,6 +22,10 @@ pub mut:
 	rx_id         u32 // physical requests (standard id)
 	tx_id         u32 // responses
 	functional_id u32 // functional requests, shared by every server on the bus; 0 = none
+	// handoff_remote: the bootloader also serves the other transport (DoIP), so a programming
+	// handoff may be asked for over it. False today — the boot answers on CAN only — and the
+	// server then refuses a remote 0x10 02 with conditionsNotCorrect
+	handoff_remote bool
 	// refresh writes the live-signal DIDs into the server it is handed. It runs right before every
 	// dispatch, physical or functional, so a read answers with the value current then. nil = the
 	// node has no live DIDs.
@@ -184,11 +188,13 @@ pub fn (mut c Connection) serve_remote(req &u8, n int, functional bool, resp &u8
 	}
 	c.refresh_dids()
 	before, held := c.enter(true)
+	c.server.handoff_here = c.handoff_remote
 	rlen := if functional {
 		c.server.handle_functional(req, n, resp)
 	} else {
 		c.server.handle(req, n, resp)
 	}
+	c.server.handoff_here = true
 	c.leave(before, held, true)
 	if c.server.reset_req != 0 {
 		c.reset_remote = true

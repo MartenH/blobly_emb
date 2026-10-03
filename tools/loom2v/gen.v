@@ -3701,7 +3701,8 @@ fn emit_module_headers(m Model, ecu string, comm_thread_on bool, trace_owns_run 
 		glue << 'import comm.diag' // the diagnostic server on its ISO-TP connection
 		// the glue names uds only for [[did]]s — their tables, the live refresh, 0x27 — and for a
 		// [uds] service table
-		if m.dids.len > 0 || m.uds.table {
+		// a [uds] service table, and the programming handoff (uds.reset_into_boot)
+		if m.dids.len > 0 || m.uds.table || m.boot.on {
 			glue << 'import comm.uds' // UDS diagnostic services
 		}
 	}

@@ -393,8 +393,26 @@ fn test_a_handoff_is_due_once_its_answer_has_left_and_a_lost_answer_cancels_it()
 	assert d.server.session == uds.session_extended
 }
 
+// the bootloader serves CAN only, so a handoff asked for over DoIP is refused — the reset would
+// strand a tester whose TCP connection dies with it — while the same request over the bus hands off
+fn test_a_handoff_over_a_transport_the_boot_does_not_serve_is_refused() {
+	mut c := handoff_conn()
+	remote(mut c, [u8(0x10), 0x03], false)
+	assert remote(mut c, [u8(0x10), 0x02], false) == [u8(0x7F), 0x10, 0x22]
+	assert c.server.reset_req == 0 && c.reset_due() == 0
+	assert c.server.session == uds.session_extended, 'a refused handoff changed the session'
+	// the refusal is the transport's, not the server's: the bus still hands off
+	now := u64(0)
+	c.on_frame(now, sf(rx, [u8(0x10), 0x02]))
+	c.serve()
+	mut f := can.Frame{}
+	assert c.produce(now, mut f)
+	assert f.data[..3] == [u8(0x06), 0x50, 0x02]
+}
+
 fn test_a_handoff_over_the_network_waits_for_its_transport() {
 	mut c := handoff_conn()
+	c.handoff_remote = true // a bootloader with its own DoIP binding
 	remote(mut c, [u8(0x10), 0x03], false)
 	assert remote(mut c, [u8(0x10), 0x02], false)[..2] == [u8(0x50), 0x02]
 	assert c.reset_due() == 0, 'handed off before the DoIP answer left'
@@ -402,6 +420,7 @@ fn test_a_handoff_over_the_network_waits_for_its_transport() {
 	assert c.reset_due() == uds.reset_into_boot
 	// a connection that drops before its answer is sent takes the handoff with it
 	mut d := handoff_conn()
+	d.handoff_remote = true
 	remote(mut d, [u8(0x10), 0x03], false)
 	remote(mut d, [u8(0x10), 0x02], false)
 	d.remote_dropped()
