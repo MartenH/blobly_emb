@@ -73,7 +73,7 @@ WALK-ASSIGNED global handler ids, the dtrace service poll (highest-priority thre
 loop), and `boot()` = clocks-ready park -> timebase -> xcore pool init -> trace arm ->
 kernel enter. The example keeps: a thin `main.v` (calls `gen.boot()`), its `app/` FBs
 (ports-style handlers, same convention as every FB), its glue C (board/xcore/dtrace — the
-`comm_glue.c` equivalent), and its Makefile. Generation runs ONCE from the owner
+`target_ext.c` equivalent), and its Makefile. Generation runs ONCE from the owner
 example's config; the satellite's gen step is "make gen in the owner dir".
 
 ## Explicitly out of scope (this phase)

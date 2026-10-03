@@ -61,6 +61,7 @@ fn test_every_threadx_makefile_links_the_generated_sources() {
 		assert src.contains('ifneq (\$(MAKECMDGOALS),clean)\n-include gen/loom_build.mk'), '${mk}: the include is not skipped for clean'
 		bsp := bsp_definition(src)
 		assert bsp.contains('$(LOOM_FAULT_SRCS)'), '${mk}: BSP does not list $(LOOM_FAULT_SRCS)'
+		assert bsp.contains('$(LOOM_GLUE_SRCS)'), '${mk}: BSP does not list $(LOOM_GLUE_SRCS)'
 		// a prerequisite list is expanded where the rule is read: the include must come first
 		elf := src.index('.elf: ') or {
 			assert false, '${mk}: no .elf rule'
@@ -71,6 +72,11 @@ fn test_every_threadx_makefile_links_the_generated_sources() {
 		hand := src.split_into_lines().filter(!it.trim_space().starts_with('#')
 			&& it.contains('boards/common/iocb.c'))
 		assert hand.len == 0, '${mk}: names iocb.c by hand: ${hand}'
+		// the generic glue reaches an image through LOOM_GLUE_SRCS alone (#359): a Makefile
+		// that picks a glue file picks wrong for some shape (a multi-thread gateway linked neither)
+		glue := src.split_into_lines().filter(!it.trim_space().starts_with('#')
+			&& (it.contains('comm_glue.c') || it.contains('io_glue.c')))
+		assert glue.len == 0, '${mk}: names a glue file by hand: ${glue}'
 	}
 }
 
@@ -90,4 +96,122 @@ fn test_the_byte_ioc_is_linked_once() {
 	assert fault_build_lines(m) == 'LOOM_FAULT_SRCS :=\n', 'iocb.c listed beside the network list that already carries it'
 	m.target.threadx = false
 	assert fault_build_lines(m) == '', 'a host image wrote a ThreadX source list'
+}
+
+// c_definitions: the external (non-static, non-weak) functions a C file DEFINES — a line at
+// column 0, past any __attribute__((...)) prefix, that opens a parameter list and is not a
+// declaration, a static, a preprocessor line or a comment. A return type on the line above is
+// fine: the name is the last word before the parenthesis either way.
+fn c_definitions(src string) []string {
+	mut out := []string{}
+	for raw in src.split_into_lines() {
+		mut l := raw
+		mut weak := false
+		for l.starts_with('__attribute__((') {
+			weak = weak || l.all_before('))').contains('weak')
+			l = l.all_after('))').trim_left(' ')
+		}
+		if weak || l == '' || !(l[0].is_letter() || l[0] == `_`) || l.starts_with('static')
+			|| l.starts_with('extern') || l.starts_with('typedef') || !l.contains('(')
+			|| l.trim_right(' ').ends_with(';') {
+			continue
+		}
+		out << l.all_before('(').trim_space().all_after_last(' ').trim_left('*')
+	}
+	return out
+}
+
+fn glue_src(name string) string {
+	return os.read_file(os.join_path(@VMODROOT, 'boards', 'common', name)) or { panic(err) }
+}
+
+fn comm_glue_src() string {
+	return glue_src('comm_glue.c')
+}
+
+// The ONE glue covers every shape the generator emits — one app thread or several, one FDCAN or
+// a gateway's several, io points or none — so the question "which glue does this image need" has
+// one answer. Both directions: the glue defines every symbol loom2v lists for it, and every
+// declaration of that family any emitter can write is on the list (a multi-thread gateway once
+// declared load_pub_slot against a glue that had none, #359).
+fn test_the_glue_defines_every_symbol_the_generator_declares() {
+	defs := c_definitions(comm_glue_src())
+	for sym in comm_glue_syms {
+		assert sym in defs, 'boards/common/comm_glue.c does not define ${sym}'
+	}
+	shell_defs := c_definitions(glue_src('shell_glue.c'))
+	for sym in shell_glue_syms {
+		assert sym in shell_defs, 'boards/common/shell_glue.c does not define ${sym}'
+	}
+	dir := os.join_path(@VMODROOT, 'tools', 'loom2v')
+	mut seen := 0
+	for f in os.ls(dir) or { panic(err) } {
+		if !f.ends_with('.v') || f.ends_with('_test.v') {
+			continue
+		}
+		src := os.read_file(os.join_path(dir, f)) or { panic(err) }
+		// every `fn C.` the source spells, whatever quotes or comment it sits in
+		for chunk in src.split('fn C.')[1..] {
+			name := chunk.all_before('(')
+			if name.starts_with('iocb_') || !(name.starts_with('ioc_')
+				|| name.starts_with('load_') || name.starts_with('io_exec')
+				|| name.starts_with('comm_')) {
+				continue
+			}
+			seen++
+			assert name in comm_glue_syms, '${f} declares C.${name}, which comm_glue_syms does not list'
+		}
+	}
+	assert seen >= comm_glue_syms.len, 'found only ${seen} glue declarations in tools/loom2v — did the emitters move?'
+	// the shell's built-ins, as the emitter writes them for a [shell] with no commands of its own
+	mut m := Model{}
+	m.shell.on = true
+	for d in shell_c_decls(m) {
+		name := d['fn C.'.len..].all_before('(')
+		assert name in shell_glue_syms, 'shell_c_decls declares C.${name}, which shell_glue_syms does not list'
+	}
+	pool := comm_glue_src().split_into_lines().filter(it.starts_with('#define IOC_POOL_N '))
+	assert pool == ['#define IOC_POOL_N ${ioc_pool_n}'], 'comm_glue.c IOC_POOL_N is not loom2v ioc_pool_n (${ioc_pool_n}): ${pool}'
+}
+
+// Nothing a ThreadX image links defines what the glue defines: the image links the glue beside
+// its own target file, so a second definition is a link failure — or, where a copy drifted, two
+// behaviours. (A CM4 satellite links no glue and keeps its own stubs.)
+fn test_no_c_file_redefines_the_glue() {
+	mut glue := c_definitions(comm_glue_src())
+	assert 'FDCAN1_IT0_IRQHandler' in glue && 'comm_wake' in glue
+	glue << c_definitions(glue_src('shell_glue.c'))
+	mut files := []string{}
+	for mk in threadx_makefiles() {
+		files << os.walk_ext(os.dir(mk), '.c')
+	}
+	files << os.walk_ext(os.join_path(@VMODROOT, 'boards'), '.c')
+	files << os.walk_ext(os.join_path(@VMODROOT, 'driver'), '.c')
+	for f in files {
+		if f.ends_with(os.join_path('boards', 'common', 'comm_glue.c'))
+			|| f.ends_with(os.join_path('boards', 'common', 'shell_glue.c'))
+			|| f.contains('/build/') {
+			continue
+		}
+		src := os.read_file(f) or { panic(err) }
+		for d in c_definitions(src) {
+			assert d !in glue, '${f} defines ${d}, which a shared glue file already defines'
+		}
+	}
+}
+
+fn test_the_glue_list_follows_the_declarations() {
+	comm := r'$(REPO)/boards/common/comm_glue.c'
+	shell := r'$(REPO)/boards/common/shell_glue.c'
+	assert glue_build_lines([]string{}, false) == 'LOOM_GLUE_SRCS :=\n'
+	assert glue_build_lines(['fn C.blob_eth_open(&char, u16) int', 'fn C.iocb_pub(int, voidptr)'],
+		false) == 'LOOM_GLUE_SRCS :=\n', 'an eth-only image linked the CAN glue'
+	for sym in ['load_pub_slot', 'comm_rx_irq_enable_idx', 'io_exec_add', 'ioc_pool_init'] {
+		assert glue_build_lines(['fn C.${sym}(int)'], false) == 'LOOM_GLUE_SRCS = ${comm}\n', sym
+	}
+	// doip_netx.c wakes the comm thread through comm_wake, which no V declaration names
+	assert glue_build_lines([]string{}, true) == 'LOOM_GLUE_SRCS = ${comm}\n'
+	assert glue_build_lines(['fn C.comm_rx_wait(u32) u32', 'fn C.shell_ps(&u8, int) int'],
+		false) == 'LOOM_GLUE_SRCS = ${comm} ${shell}\n'
+	assert glue_build_lines(['fn C.shell_boot(&u8, int) int'], false) == 'LOOM_GLUE_SRCS :=\n', 'a node command is its own target_ext.c'
 }

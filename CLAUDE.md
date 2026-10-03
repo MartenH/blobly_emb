@@ -127,6 +127,11 @@ declares returning u64/i64/f32/f64 that gcc saw with no prototype is truncated t
 how `board_now_us()` made every target's `now` go negative 35.8 minutes after boot (the fix is the
 `-include board.h` in each `boards/*/board.mk`). Blind on the images compiled with `-w`, which is
 why the fix sits on the compile line and not in the check.
+The job then links one shape no committed image has, a **multi-thread gateway**
+(`scripts/glue_link_check.sh`: sysnode plus a second app thread, in a scratch copy). Every
+ThreadX image links ONE generic glue, `boards/common/comm_glue.c`, through `gen/loom_build.mk`'s
+`LOOM_GLUE_SRCS` — never named in a Makefile; a node's own C (shell commands, the H755 xcore
+handoff) is its `target_ext.c` and redefines nothing of it (`threadx_makefiles_test.v`, #359).
 
 **CI pins the V compiler** to the release tag in `.v-version` (currently `0.5.2`), installed as the
 **prebuilt** `v_linux.zip` release asset in both jobs. It used to install master HEAD, so an upstream

@@ -12,7 +12,7 @@ OBJCOPY  = $(CROSS)objcopy
 SIZE     = $(CROSS)size
 V       ?= v
 REPO     = ../../../..
-# SYSDIR holds the shared main.v + io_glue.c + the generated toml/dbc (no trailing
+# SYSDIR holds the shared main.v + the generated toml/dbc (no trailing
 # comment on the assignment — trailing spaces would word-split $(SYSDIR)/main.v).
 SYSDIR = $(REPO)/examples/system_io
 NAME    := h755
@@ -36,7 +36,7 @@ TX_ASM   = $(wildcard $(PORT)/src/*.S)
 TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
-BSP = $(BOARD_BSP_THREADX) $(SYSDIR)/io_glue.c $(LOOM_FAULT_SRCS)
+BSP = $(BOARD_BSP_THREADX) $(LOOM_GLUE_SRCS) $(LOOM_FAULT_SRCS)
 
 all: $(BUILD)/$(NAME).bin
 
@@ -81,7 +81,7 @@ $(TX_A): $(TX_OBJ)
 # the definition), and V's dead hosted runtime (dlmalloc/mmap/mem*) casting/comparing
 # 32-bit pointers as u64 (never called no-alloc; --gc-sections drops it). None are our
 # code and none are fixable in a regenerated file, so compile THIS unit quiet (-w) — the
-# hand-written glue (io_glue.c, board.c, drivers) keeps full warnings.
+# hand-written glue (comm_glue.c, board.c, drivers) keeps full warnings.
 $(BUILD)/app.o: $(BUILD)/app.c Makefile
 	$(CC) $(CFLAGS) -w -c $< -o $@
 

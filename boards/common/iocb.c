@@ -44,7 +44,7 @@ void iocb_get(int i, void *dst) {
 	}
 }
 
-/* iocb_get_ever — the io_glue.c ever-published gate, byte-channel form: 1 once
+/* iocb_get_ever — comm_glue.c's ever-published gate, byte-channel form: 1 once
  * the cell has EVER been published, latched race-free IN the consuming
  * exchange (ioc_read_bytes_ever). The eth thread's tx gate: a frame whose
  * signals were never published sends nothing (the host bridge's any_ rule). */

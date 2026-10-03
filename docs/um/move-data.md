@@ -105,7 +105,7 @@ placement must never *silently* change bytes, so it changes them loudly instead)
 **If it does not fit, there is no supported *application* path today — full stop.** The
 one worked example in the tree, the **cross-core trace handoff** in
 [`boards/h755zi/xcore.h`](../../boards/h755zi/xcore.h), is **platform instrumentation**: both
-of its sides live in the platform's C glue (`comm_glue.c` / `m4_glue.c`), never in an FB.
+of its sides live in the platform's C glue (the owner's `target_ext.c` / `m4_glue.c`), never in an FB.
 Copying its shape into FB-facing code would create exactly the cross-partition shared
 mutable state the isolation rule forbids — an FB's bulk path arrives only when the
 loan/publish ring below lands *behind the OSAL/IOC seam*. And copying the handoff is
@@ -128,7 +128,7 @@ one sanctioned instance, not a template:
 - a **request/ack handshake**: the owner posts `req_seq++`, the satellite services it in
   its own loop and replies `ack_seq = req`. Neither side ever blocks on the other.
 
-That is ~40 lines of C per side (`comm_glue.c` + `m4_glue.c`) and it is deliberately not
+That is ~40 lines of C per side (`target_ext.c` + `m4_glue.c`) and it is deliberately not
 generated yet — see the roadmap item below.
 
 **Why the lane discipline is not laziness:** `xioc` is wait-free on *both* sides using

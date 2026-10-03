@@ -19,7 +19,8 @@ Records captured into the ring are 8 bytes in one wire format, from two sources:
   just **implements those callbacks** — no scheduler instrumentation of our own.
 - **ISRs** — *not* automatic for every interrupt. The port gives you the SysTick, but an
   application ISR is captured only if it **brackets itself** in `_tx_execution_isr_enter/exit` —
-  which the FDCAN Rx and HSEM handlers in `comm_glue.c` do. A new ISR wired straight into the
+  which the FDCAN Rx handlers in `boards/common/comm_glue.c` and the HSEM doorbell in the H755 nodes'
+  `target_ext.c` do. A new ISR wired straight into the
   vector table without those calls (or a wrapper that adds them) will **not** appear in the trace.
 - **FB dispatch** — the Loom's own hook. The generated run loop calls `sched.run_profiled(clock)`
   and sets `trace_fb_hook_<thread>`, so each due handler is bracketed (`t0`, `dt`) and pushed as a

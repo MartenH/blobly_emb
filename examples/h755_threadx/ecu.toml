@@ -136,7 +136,7 @@ out = 0x7F1
 fc  = 0x7F2
 
 # Persistence storage ([nvm], docs/nvm.md): the journal engine over a sector
-# pair the glue maps (nvm_map_* in comm_glue.c -> boards flash driver).
+# pair the glue maps (nvm_map_* in target_ext.c -> boards flash driver).
 [nvm]
 min_write_ms   = 10000 # LoadCmd changes EVERY write window: 10 s floor = 13-year wear
 sector_records = 4096

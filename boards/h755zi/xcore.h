@@ -74,7 +74,7 @@
 
 /* HSEM semaphore for the cross-core bulk doorbell: the CM4 releases it after each publish to
  * raise IRQ125 (HSEM1) on the CM7, whose ISR wakes the comm thread to drain the pool. ONE source
- * for both sides (m4_glue.c rings it, comm_glue.c enables/clears/handles it) so they can't drift. */
+ * for both sides (m4_glue.c rings it, target_ext.c enables/clears/handles it) so they can't drift. */
 #define XCORE_BULK_DOORBELL_SEM 0u
 
 /* Bench-only control cell (NOT part of the transport): the CM7 sets it to 1 to ask the CM4

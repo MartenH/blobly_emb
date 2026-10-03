@@ -28,7 +28,7 @@ TX_C     = $(filter-out %/tx_misra.c,$(wildcard $(TX)/common/src/*.c))
 TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 # + what the config's fault memory links (gen/loom_build.mk: the byte IOC its cells ride)
-BSP      = $(BOARD_BSP_THREADX) $(REPO)/boards/common/io_glue.c $(REPO)/boards/common/trace_hooks.c \
+BSP      = $(BOARD_BSP_THREADX) $(LOOM_GLUE_SRCS) $(REPO)/boards/common/trace_hooks.c \
            $(LOOM_FAULT_SRCS)
 
 all: $(BUILD)/$(NAME).bin

@@ -45,7 +45,7 @@ TX_OBJ   = $(patsubst $(PORT)/src/%.S,$(BUILD)/tx/%.o,$(TX_ASM)) \
            $(patsubst $(TX)/common/src/%.c,$(BUILD)/tx/%.o,$(TX_C))
 
 # board bring-up (asm + board.c) + the IOC-pool glue (no comm thread in this example).
-BSP = $(BOARD_BSP_THREADX) io_glue.c $(LOOM_FAULT_SRCS)
+BSP = $(BOARD_BSP_THREADX) $(LOOM_GLUE_SRCS) $(LOOM_FAULT_SRCS)
 
 all: $(BUILD)/$(NAME).bin
 

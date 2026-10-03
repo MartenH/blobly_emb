@@ -6,7 +6,7 @@
 # route resolve in one DBC); the build is the same ThreadX cross-build the leaf nodes use.
 #
 # SILICON NOTE: the H735-DK is a 3-FDCAN part, so the driver opens FDCAN1/2/3 by index and
-# comm_glue.c arms all three Rx interrupts. boards/h735dk currently muxes FDCAN1 pins only —
+# boards/common/comm_glue.c arms all three Rx interrupts. boards/h735dk currently muxes FDCAN1 pins only —
 # a full 3-transceiver bench bring-up (FDCAN2/3 pin init + external transceivers) is the
 # remaining hardware step; the image builds and its routing is exercised on host vcan.
 CROSS   ?= arm-none-eabi-
@@ -49,7 +49,7 @@ NX_A     = $(BUILD)/nx.a
 NX_C     = $(wildcard $(NX)/common/src/*.c)
 NX_OBJ   = $(patsubst $(NX)/common/src/%.c,$(BUILD)/nx/%.o,$(NX_C))
 # + the network the config asks for (gen/loom_build.mk: ETH MAC, NetX driver, driver/eth seams)
-BSP      = $(BOARD_BSP_THREADX) $(REPO)/boards/common/comm_glue.c $(REPO)/boards/common/trace_hooks.c \
+BSP      = $(BOARD_BSP_THREADX) $(LOOM_GLUE_SRCS) $(REPO)/boards/common/trace_hooks.c \
            $(LOOM_NET_SRCS) $(LOOM_FAULT_SRCS)
 
 all: $(BUILD)/$(NAME).bin

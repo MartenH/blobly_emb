@@ -23,7 +23,7 @@ mut:
 	method       u32
 	allow_mutate bool
 	// example-provided commands ([shell] commands = ["cm4"]): each name X becomes
-	// `int shell_X(unsigned char*, int)` in the example's comm_glue.c, an adapter, and a
+	// `int shell_X(unsigned char*, int)` in the example's target_ext.c, an adapter, and a
 	// registry entry — target-backed commands without touching the generator per command.
 	commands []string
 }
@@ -109,7 +109,7 @@ fn shell_module_init(m Model) []string {
 	]
 	mut g := base.clone()
 	for name in m.shell.commands {
-		g.insert(g.len - 1, "\tg_sh.register('${name}', 'target command (comm_glue.c)', shell_${name}_cmd)")
+		g.insert(g.len - 1, "\tg_sh.register('${name}', 'target command (target_ext.c)', shell_${name}_cmd)")
 	}
 	return g
 }

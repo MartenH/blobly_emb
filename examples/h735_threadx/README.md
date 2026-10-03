@@ -27,7 +27,7 @@ priorities from the config; the comm priority is **derived** as min(app) − 1:
 Total ~45 % load with real idle — and the point: **preemption is visible**. The fast thread
 carves the mid/slow burns into pieces every cycle, comm cuts into everything when a frame
 arrives, and the trace's swimlane shows it (hatched = preempted out). Each FB thread never
-touches CAN; each publishes its Loom load to its own scratch **slot** (`comm_glue.c`), and
+touches CAN; each publishes its Loom load to its own scratch **slot** (`boards/common/comm_glue.c`), and
 the comm thread sums the slots for CpuLoad. Telemetry and trace are just two *producers*;
 NM / COM-tx slot in later as more of the same.
 
@@ -52,7 +52,7 @@ ThreadX **System Timer Thread** (t3), the **FDCAN Rx ISR as v35** and SysTick as
 
 An **external rx signal** (`Command`, id `0x123`) reaches an FB wait-free: the comm thread
 decodes the frame and publishes it into a **target IOC cell** (the wait-free triple-buffer
-`boards/common/ioc.h`, via a generic index-addressed pool in `comm_glue.c`); Governor reads that cell each
+`boards/common/ioc.h`, via a generic index-addressed pool in `boards/common/comm_glue.c`); Governor reads that cell each
 pass through its input port. So a host **commands the core load over CAN**:
 
 ```
@@ -85,8 +85,10 @@ codec (for other layouts) and multi-thread FB partitions are the remaining gener
 ## Handwritten target glue
 
 The generic stack stays MCU-agnostic; the small target-specific C lives here (per
-`docs/architecture.md` "the generic ↔ target boundary"): `comm_glue.c` (the FDCAN1 Rx ISR +
-wake semaphore, the volatile load scratch, and the IOC pool), `boards/common/ioc.h` (the wait-free
+`docs/architecture.md` "the generic ↔ target boundary"): the shared `boards/common/comm_glue.c`
+(the FDCAN Rx ISR + wake semaphore, the volatile load slots, and the IOC pool — listed by
+`gen/loom_build.mk`, not by hand), this image's `target_ext.c` (its own shell command `boot`; the built-in `ps`/`bmc` are
+`boards/common/shell_glue.c`), `boards/common/ioc.h` (the wait-free
 triple-buffer, first written for the retired `threadx_h735`), `vectors.S` (routes IRQ19 → the Rx ISR), and
 `board.c` (550 MHz clock + FDCAN pins + a PRIMASK-serialised `board_now_us`).
 

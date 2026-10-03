@@ -82,7 +82,7 @@ fn C.shell_bmc(&u8, int) int
 fn C.shell_m4sig(&u8, int) int
 fn C.shell_iocx(&u8, int) int
 fn C.shell_boot(&u8, int) int
-fn C.xcore_poll(int, &u32, &u32) int // xioc reader (comm_glue.c): 1 = fresh value
+fn C.xcore_poll(int, &u32, &u32) int // xioc reader (target_ext.c): 1 = fresh value
 fn C.xcore_layout_ok() int // layout-id handshake: 0 = satellite absent or a DIFFERENT build
 fn C.xcore_clocks_ready() // release the parked satellite: final HCLK + HSEM en + XCORE_CLK_MAGIC (xcore.h)
 // [nvm]: the journal storage map + flash driver (boards layer / example glue)
@@ -333,9 +333,9 @@ fn comm_thread_entry(input u32) {
 	g_sh.init(u32(0x7f1)) // in place: no module-sized stack copies
 	g_sh.register('ps', 'threads: prio, state, stack high-water', shell_ps_cmd)
 	g_sh.register('bmc', 'DWT core benchmark (CPI, LSU, folds)', shell_bmc_cmd)
-	g_sh.register('m4sig', 'target command (comm_glue.c)', shell_m4sig_cmd)
-	g_sh.register('iocx', 'target command (comm_glue.c)', shell_iocx_cmd)
-	g_sh.register('boot', 'target command (comm_glue.c)', shell_boot_cmd)
+	g_sh.register('m4sig', 'target command (target_ext.c)', shell_m4sig_cmd)
+	g_sh.register('iocx', 'target command (target_ext.c)', shell_iocx_cmd)
+	g_sh.register('boot', 'target command (target_ext.c)', shell_boot_cmd)
 	mut shell_txf := can.Frame{}
 	g_sh.register('nm', 'NM state; nm req|rel', shell_nm_cmd)
 	g_sh.register('stat', 'per-handler us: last, max, mean, count', shell_stat_cmd)

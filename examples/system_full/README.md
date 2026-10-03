@@ -121,7 +121,7 @@ make nodes      # cross-build ALL node images + the CM4 satellite (needs arm-non
 | `nodes/zone_a/build/zone_a.bin` | `boards/h723` (H723ZG) | front-zone FBs + physical IO (GPIO + PWM) |
 | `nodes/tcu/build/tcu.bin` | `boards/h723` (H723ZG) | SOME/IP-over-Ethernet |
 
-The CAN nodes link the generated comm thread against the shared `boards/common/comm_glue.c` (or `io_glue.c` when the node also has IO); the network a node links — the board's eth driver, the NetX driver, the shared bring-up `driver/eth/netx_up.c` and the SOME/IP (`eth_netx.c`) and/or DoIP (`doip_netx.c`) seams its config asks for — is generated into `gen/loom_build.mk` (`LOOM_NET_SRCS`), plus `boards/common/iocb.c` for the eth node. All pass the `_vinit`-trap lint.
+The CAN nodes link the generated comm thread against the shared `boards/common/comm_glue.c` — the one glue for every shape (one thread or several, one bus or a gateway's, io or none), listed by `gen/loom_build.mk` (`LOOM_GLUE_SRCS`); the network a node links — the board's eth driver, the NetX driver, the shared bring-up `driver/eth/netx_up.c` and the SOME/IP (`eth_netx.c`) and/or DoIP (`doip_netx.c`) seams its config asks for — is generated into `gen/loom_build.mk` (`LOOM_NET_SRCS`), plus `boards/common/iocb.c` for the eth node. All pass the `_vinit`-trap lint.
 
 ### The gateway on target
 

@@ -130,7 +130,7 @@ fn specs() map[string]map[string]Key {
 			'in':           k(.id)
 			'out':          k(.id)
 			'fc':           k(.id)
-			'commands':     k(.str_arr) // example-provided target commands (comm_glue.c)
+			'commands':     k(.str_arr) // example-provided target commands (target_ext.c)
 			'method':       k(.id) // the eth RPC method id (docs/someip.md P3)
 			'allow_mutate': k(.boolean) // the REQ-NET-018 access gate (default false)
 		}
