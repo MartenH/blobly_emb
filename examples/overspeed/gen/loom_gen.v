@@ -535,13 +535,10 @@ pub fn partition_can0(ch can.Channel) {
 	st.fmem.slots[1].confirm = u8(1)
 	st.fmem.slots[2].dtc = u32(0xc12100) // BrakeMsgTimeout
 	st.fmem.slots[2].confirm = u8(1)
-	st.fmem.slots[2].local = true // stepped and consumed on this thread
 	st.fmem.slots[3].dtc = u32(0xc41800) // BrakeMsgIntegrity
 	st.fmem.slots[3].confirm = u8(1)
-	st.fmem.slots[3].local = true // stepped and consumed on this thread
 	st.fmem.slots[4].dtc = u32(0xc41801) // BrakeMsgLost
 	st.fmem.slots[4].confirm = u8(1)
-	st.fmem.slots[4].local = true // stepped and consumed on this thread
 	st.sdeb_2 = fault.Debounce{
 		fail_thr: 1
 		pass_thr: 1

@@ -162,6 +162,7 @@ fn test_setting_off_records_nothing_and_replays_nothing() {
 	m.set_setting(true)
 	m.consume(0, d.rep)
 	assert m.slots[0].status == status_cleared, 'a suppressed failure was replayed'
+	d.apply(m.control_gen(0)) // the producer applies the generation "on" began
 	d.step(.passed, 0, true)
 	d.step(.failed, 0, true)
 	m.consume(0, d.rep)
@@ -385,9 +386,9 @@ fn test_every_clear_invalidates_all_earlier_reports() {
 	assert m.clear(1) == 0
 }
 
-// codex #301: a clear right after 0x85 on cancels the pending rebase — the first post-clear
-// failure is recorded, not swallowed as a baseline.
-fn test_a_clear_after_on_cancels_the_rebase() {
+// codex #301: a clear right after 0x85 on — two fresh generations in a row — still records the
+// first post-clear failure.
+fn test_a_clear_after_on_records_the_first_failure() {
 	mut m := memory([u32(1)])
 	mut d := counter(1, 1)
 	m.cycle_start()
@@ -402,7 +403,7 @@ fn test_a_clear_after_on_cancels_the_rebase() {
 }
 
 // codex #301: a result the producer publishes during suppression, read only after "on", is not
-// applied — the first reading after "on" is a baseline.
+// applied — it carries the generation "on" left behind.
 fn test_a_result_published_during_suppression_is_not_applied_after_on() {
 	mut m := memory([u32(1)])
 	mut d := counter(1, 1)
@@ -414,18 +415,17 @@ fn test_a_result_published_during_suppression_is_not_applied_after_on() {
 	m.set_setting(true)
 	m.consume(0, d.rep)
 	assert m.slots[0].status == status_cleared, 'a suppressed result was applied after on'
+	d.apply(m.control_gen(0))
 	d.step(.passed, 0, true)
 	d.step(.failed, 0, true)
 	m.consume(0, d.rep)
 	assert m.slots[0].status & test_failed != 0
 }
 
-// A local slot (stepped and consumed on the memory's own thread, every report) has current
-// baselines, so the first report after "on" is genuinely post-enable and is applied — a rebase
-// would swallow it.
-fn test_a_local_slot_applies_the_first_report_after_on() {
+// A slot stepped and consumed on the memory's own thread, every report (a signal-status fault):
+// the first result after "on" is genuinely post-enable and is applied, not swallowed.
+fn test_the_first_result_after_on_is_applied() {
 	mut m := memory([u32(1)])
-	m.slots[0].local = true
 	mut d := counter(1, 1)
 	m.cycle_start()
 	m.consume(0, d.rep)
@@ -436,6 +436,7 @@ fn test_a_local_slot_applies_the_first_report_after_on() {
 	m.consume(0, d.rep)
 	assert m.slots[0].status == status_cleared, 'a result while off was applied'
 	m.set_setting(true)
+	d.apply(m.control_gen(0))
 	d.step(.failed, 0, true) // after on
 	m.consume(0, d.rep)
 	assert m.slots[0].status & test_failed != 0, 'the first post-enable report was swallowed'
@@ -536,4 +537,47 @@ fn test_undebounced_counter_needs_jump_for_one_pass_events() {
 	jmp.step(.failed, 0, true)
 	assert !acc.rep.failed, 'accumulating from -3 reaches only -2'
 	assert jmp.rep.failed, 'with jump a one-pass failure qualifies'
+}
+
+// #364: zone_a's shape (an accumulating counter, fail 3 / pass 3). A failure held through the off
+// window leaves the producer's counter saturated at +fail_thr, so after "on" ONE failed result —
+// the input's last value, still the one received while off — qualified at once and was recorded,
+// where a debounce that saw nothing of the off window needs fail_thr of them.
+fn test_a_debounce_saturated_while_off_is_not_carried_past_on() {
+	mut m := memory([u32(0xC40100)])
+	mut d := Debounce{
+		fail_thr: 3
+		pass_thr: 3
+	}
+	m.cycle_start()
+	for _ in 0 .. 8 {
+		owner_pass(mut m, mut d, .passed)
+	}
+	m.set_setting(false)
+	for _ in 0 .. 12 { // 600 ms of implausible speed at 50 ms
+		owner_pass(mut m, mut d, .failed)
+	}
+	assert m.slots[0].status & failed_since_clear == 0, 'recorded while off'
+	m.set_setting(true)
+	for _ in 0 .. 2 { // the stale value, until the gateway's next frame overwrites it
+		owner_pass(mut m, mut d, .failed)
+	}
+	for _ in 0 .. 12 {
+		owner_pass(mut m, mut d, .passed)
+	}
+	assert m.slots[0].status & (failed_since_clear | confirmed | pending) == 0, 'a failure debounced while off was recorded after on (status 0x${m.slots[0].status.hex()})'
+	// a failure genuinely after "on" is still recorded, once it debounces up from the healed -3
+	for _ in 0 .. 5 {
+		owner_pass(mut m, mut d, .failed)
+	}
+	assert m.slots[0].status & failed_since_clear == 0, 'qualified before fail_thr'
+	owner_pass(mut m, mut d, .failed)
+	assert m.slots[0].status & (test_failed | failed_since_clear | confirmed) == test_failed | failed_since_clear | confirmed
+}
+
+// owner_pass is one dispatch as the generated code runs it: apply the control generation, step, consume.
+fn owner_pass(mut m Memory, mut d Debounce, r TestResult) {
+	d.apply(m.control_gen(0))
+	d.step(r, 0, true)
+	m.consume(0, d.rep)
 }

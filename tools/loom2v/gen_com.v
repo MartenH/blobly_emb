@@ -1988,9 +1988,6 @@ fn fault_slot_lines(m Model, fmem string, ind string) []string {
 	for i, f in m.faults {
 		out << '${ind}${fmem}.slots[${i}].dtc = u32(0x${f.dtc.hex()}) // ${f.name}'
 		out << '${ind}${fmem}.slots[${i}].confirm = u8(${f.confirm})'
-		if f.signal != '' {
-			out << '${ind}${fmem}.slots[${i}].local = true // stepped and consumed on this thread'
-		}
 		if f.aging > 0 {
 			out << '${ind}${fmem}.slots[${i}].aging = u8(${f.aging})'
 		}

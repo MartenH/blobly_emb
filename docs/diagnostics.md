@@ -293,14 +293,19 @@ SPSC, so one shared cell with several readers is not an option): a *clear genera
 generations, 0x14 FFFFFF bumps them all; every clear is a FRESH 16-bit generation, so no report made
 before it can count, and a clear that could not get one — its producer silent for 32767 clears — is
 refused with 0x22 rather than reuse a generation; a bump resets that fault's counters and debounced state, and the producer echoes
-it as `applied_gen`). *As built in R4a* (`comm/fault`), two things stay on the
-consumer side and need no producer involvement: **0x85 suppression** — while off, the fault memory
-lets its baselines follow the counters and changes no status, and the first reading after "on" is a
-baseline only — so nothing is recorded after the positive "off" and nothing produced during
-suppression is applied after "on" (a qualification in the pass on either side of the boundary is not
-recorded; a cycle begun while off gets fresh cycle bits at "on") — and **operation-cycle boundaries**,
-which change status bits only and bump no generation, so no old-generation drain is needed on the
-host (a qualification at a boundary can land one pass late). The persistence-grade cycle-END barrier
+it as `applied_gen`). **0x85 suppression** rides the same generation: while off, the fault memory
+lets its baselines follow the counters and changes no status, and turning it on starts a FRESH
+generation exactly as a clear does, leaving the status alone — so the producer restarts its
+debounce, and neither a report produced while off nor the debounce state accumulated meanwhile is
+applied after "on". (Until #364 "on" was consumer-side only — the next reading was a baseline — so a
+counter left saturated by a failure the off window saw qualified on the first failed result after
+"on", recording a failure the requirement forbids; seen on the bench as status 0x2E.) The accepted
+cost: a failure held across "on" is recorded only once it debounces again; a cycle begun while off
+gets fresh cycle bits at "on". "On" cannot be refused (a session end turns it on too), so a fault
+whose producer has been silent for 32767 generations keeps the one it has. *As built in R4a*
+(`comm/fault`), **operation-cycle boundaries** stay on the consumer side: they change status bits
+only and bump no generation, so no old-generation drain is needed on the host (a qualification at a
+boundary can land one pass late). The persistence-grade cycle-END barrier
 remains R6's (§7). The
 per-fault generations are bounded by the cell too, which caps the faults one FB may own (8). A
 producer on a **satellite core** needs the same cell to flow owner → satellite, which the target does
