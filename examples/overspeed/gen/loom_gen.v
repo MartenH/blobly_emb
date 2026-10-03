@@ -322,13 +322,7 @@ fn io_can0_10ms(ctx voidptr) {
 		}
 	}
 	st.conn_diag.serve()
-	mut cf_diag := can.Frame{}
-	for st.chan.tx_ready() && st.conn_diag.produce(now, mut cf_diag) {
-		if !st.chan.send(cf_diag) {
-			st.conn_diag.abort_tx()
-			break
-		}
-	}
+	st.conn_diag.pump(now, mut st.chan) // comm/diag: a refused frame aborts the answer
 	diag_rx_ok = st.conn_diag.server.rx_enabled()
 	if !diag_rx_ok { // silence commanded: latch it, frame or not
 		st.diag_rx_was_off = true

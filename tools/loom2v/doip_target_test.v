@@ -134,7 +134,7 @@ fn test_the_comm_thread_serves_doip_from_the_mailbox() {
 	assert glue.contains("C.doip_net_create(c'192.168.0.50', u32(14), u32(15))")
 	assert !glue.contains('functional_addr'), 'the default functional address is comm/doip\'s'
 	// a reset waits for the CAN controller, then for DoIP answers still in TCP's transmit queue
-	can_wait := glue.index('for !ch.tx_idle()') or { -1 }
+	can_wait := glue.index('diag.wire_drain(mut ch') or { -1 }
 	tcp_wait := glue.index('for C.doip_tx_pending() != 0') or { -1 }
 	reset := glue.index('\t\t\tC.diag_sys_reset()') or { -1 } // the call, not its declaration
 	assert can_wait >= 0 && can_wait < tcp_wait && tcp_wait < reset

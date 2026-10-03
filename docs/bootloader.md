@@ -144,6 +144,12 @@ The boot manager is **one program** — `boot/target/main.v` with its C half
 | keys | the node's `[boot]` `image_key` / `session_key` (public, 64 hex; required — no silent default) | `gen/boot_gen.h` |
 | 0x29 challenge | the board's TRNG | `diag_board.c`'s `diag_sa_init`/`diag_sa_seed`, the RNG driver the application's 0x27 uses |
 
+Its serve loop is not its own either: the transport side — frame intake with the truncation
+rule, a request dropped while an answer is in flight, the answer pumped with a refused frame
+aborting it (and its reset), S3 held while an exchange is in flight, the wire drain before a reset —
+is `comm/diag/step.v`, the one the application's `Connection` uses; the boot runs it whole
+(`diag.serve_step`) and keeps only the decision, the flash ops and the stay-window.
+
 So a tester addresses the application and then its bootloader **identically**: same bus, same
 ids, and on zone_a's CAN-FD edge bus the same FD frames with classic-sized ISO-TP. The boot also
 answers DID 0xF195 (the installed image's `sw_version`), the DID the application serves.

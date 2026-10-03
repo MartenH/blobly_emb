@@ -9,6 +9,7 @@ module main
 // application and then its bootloader identically — same bus, same ids, same frame format.
 // Built per node by boot/boot.mk (`make boot`), which a [boot] node's gen/loom_build.mk includes.
 import boot
+import comm.diag
 import comm.isotp
 import driver.can
 
@@ -48,6 +49,10 @@ fn fl_program(ctx voidptr, addr u32, data &u8, len u32) bool {
 
 fn fl_read(ctx voidptr, addr u32, out &u8, len u32) bool {
 	return C.bflash_read(addr, out, len) != 0
+}
+
+fn now_us() u64 {
+	return C.board_now_us()
 }
 
 fn rng_hook(out &u8, n int) bool {
@@ -140,55 +145,17 @@ fn main() {
 
 	for {
 		now := C.board_now_us()
-		mut f := can.Frame{}
-		for ch.recv(mut f) {
-			if f.id != req_id || f.ext || f.len < 1 {
-				continue // the physical diagnostic request only
-			}
-			n := if f.len > 8 { 8 } else { int(f.len) } // classic-sized ISO-TP, on FD too
-			if g_link.truncated(f.data[0], n) {
-				continue // shorter than its PCI says: dropped, never padded into a request
-			}
-			mut pdu := isotp.Pdu{}
-			for i in 0 .. n {
-				pdu.data[i] = f.data[i]
-			}
-			g_link.on_frame(now, pdu)
+		// the transport side is comm/diag's, the application's own: intake, the busy guard, the
+		// answer pumped with a refusal aborting it, S3 held while an exchange is in flight
+		if diag.serve_step(mut g_prog, mut g_link, req_id, rsp_id, now, mut ch, &g_req[0], &g_rsp[0]) {
+			diag.wire_drain(mut ch, now_us) // REQ-BOOT-012: the answer on the wire, bounded
+			C.boot_info_programmed()
+			C.boot_sys_reset()
 		}
-		if g_link.ready {
-			n := g_link.take(&g_req[0])
-			g_prog.heard(now) // the tester-silence clock (REQ-BOOT-013/014)
-			rn := g_prog.handle(&g_req[0], n, &g_rsp[0])
-			if rn > 0 {
-				g_link.send(&g_rsp[0], rn)
-			}
-		}
-		g_prog.tick(now) // S3: a silent tester loses the session + the unlock
 		// REQ-BOOT-014: entered by request over a VALID app + tester silence -> back to the app
 		if requested && app_ok && g_prog.idle_return_due(now, boot_t0) {
 			C.boot_info_normal()
 			C.boot_sys_reset() // no request pending -> the boot jumps to the app
-		}
-		g_link.tick(now)
-		mut out := isotp.Pdu{}
-		for ch.tx_ready() && g_link.poll(now, mut out) {
-			mut tf := can.Frame{
-				id:  rsp_id
-				len: 8
-			}
-			for i in 0 .. 8 {
-				tf.data[i] = out.data[i]
-			}
-			ch.send(tf)
-			out = isotp.Pdu{}
-		}
-		if g_prog.reset_pending && !g_link.busy() {
-			// REQ-BOOT-012: the link going idle only means the answer reached the Tx FIFO — wait
-			// for the CONTROLLER to put it on the wire, bounded so a dead bus cannot hold it off
-			t0 := C.board_now_us()
-			for !ch.tx_idle() && C.board_now_us() - t0 < 20000 {}
-			C.boot_info_programmed()
-			C.boot_sys_reset()
 		}
 	}
 }

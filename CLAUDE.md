@@ -33,7 +33,8 @@ loom/   the Loom: scheduler (the de-AUTOSAR'd "RTE")
 comm/   comms stack: com, e2e (AUTOSAR E2E Profile 1), secoc (AES-CMAC), isotp (15765-2), uds (14229), nm,
         fault (debounce + fault memory behind 0x19/0x14/0x85), diag (the UDS server on its ISO-TP
         connection and the order a pass runs it — the host bridge calls it; the ThreadX comm
-        thread from R2)
+        thread from R2; its transport step — intake, busy guard, pump/abort, S3 hold, wire
+        drain — is step.v, which the bootloader runs whole as serve_step)
 driver/ driver port: can — SocketCAN (host) / ST FDCAN HAL / AUTOSAR CanIf (CDD); see docs/porting.md
 osal/   OS abstraction: time, cores, IOC (sim=POSIX, target=ThreadX AMP)
 tools/  BUILD-TIME only (heap OK): dbc2cfg, cfg2v, loom2v, sigmap, benches, candb

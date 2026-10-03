@@ -650,7 +650,7 @@ fn diag_target_reset(m Model, ioc_idx map[string]int) []string {
 	mut g := [
 		'\t\tif g_diag.reset_due() != 0 {',
 		'\t\t\tdiag_t0 := C.board_now_us()',
-		'\t\t\tfor !ch.tx_idle() && C.board_now_us() - diag_t0 < 20000 {}',
+		'\t\t\tdiag.wire_drain(mut ch, diag_now_us) // REQ-BOOT-012: the answer on the wire, bounded',
 	]
 	g << doip_reset_wait(m)
 	if nvm_on(m) {
@@ -685,7 +685,8 @@ fn diag_target_c_decls(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
 	}
-	mut g := ['', 'fn C.diag_sys_reset()']
+	mut g := ['', 'fn C.diag_sys_reset()', '', 'fn diag_now_us() u64 { // the clock comm/diag wire_drain bounds by',
+		'\treturn C.board_now_us()', '}']
 	if m.boot.on {
 		// the bootloader's side of the handoff (boards/common/boot_handoff.c, the board's bootmap.h)
 		g << 'fn C.boot_handoff_request()'
@@ -738,7 +739,6 @@ fn diag_target_init(m Model) []string {
 		g << '\t\tg_diag.server.restore_security(diag_kept) // a lockout or a count runs on from boot'
 		g << '\t}'
 	}
-	g << '\tmut diag_txf := can.Frame{}'
 	return g
 }
 
@@ -812,12 +812,9 @@ fn diag_target_produce(m Model) []string {
 	if m.isotp_conns.len == 0 {
 		return []string{}
 	}
-	return [
-		'\t\tfor ${nm_gate(m)}ch.tx_ready() && g_diag.produce(t1, mut diag_txf) {',
-		'\t\t\tif !ch.send(diag_txf) {',
-		'\t\t\t\tg_diag.abort_tx()',
-		'\t\t\t\tbreak',
-		'\t\t\t}',
-		'\t\t}',
-	]
+	// comm/diag pump: the one rule the bootloader's serve step uses too
+	if m.nm.on {
+		return ['\t\tif nm_up {', '\t\t\tg_diag.pump(t1, mut ch)', '\t\t}']
+	}
+	return ['\t\tg_diag.pump(t1, mut ch)']
 }

@@ -71,7 +71,6 @@ fn test_the_comm_thread_serves_the_connection_in_order() {
 	// trace and shell streams; abandoned in NM sleep; a 1-tick wake while it is in flight
 	steps := [
 		'g_diag.init(u32(0x7b0), u32(0x7b8), u32(0x7df)',
-		'mut diag_txf := can.Frame{}',
 		'wait_ticks := if g_tm.is_dumping() || g_diag.link.busy() {',
 		'g_diag.housekeep(',
 		'for ch.recv(mut rx) {',
@@ -79,9 +78,9 @@ fn test_the_comm_thread_serves_the_connection_in_order() {
 		'g_diag.serve()',
 		'g_nm.hold(t1, g_diag.active())',
 		'nm_up := g_nm.awake()',
-		'g_diag.produce(t1, mut diag_txf)',
+		'g_diag.pump(t1, mut ch)',
 		'if g_diag.reset_due() != 0 {',
-		'for !ch.tx_idle() && C.board_now_us() - diag_t0 < 20000 {}',
+		'diag.wire_drain(mut ch, diag_now_us)',
 		'C.diag_sys_reset()',
 		'// PRODUCER: CpuLoad telemetry',
 		'g_tm.produce(t1, mut trace_txf)',
@@ -261,7 +260,7 @@ fn test_the_reset_flushes_the_journal_first() {
 	}, diag_conn)
 	assert code == 0, out
 	assert os.exists(os.join_path(tmp, 'h755_m4_app', 'gen')), 'the satellite image was not generated into the scratch layout'
-	steps := ['if g_diag.reset_due() != 0 {', 'for !ch.tx_idle()', 'nvm_flush_ok = g_nvm.mark_clean()',
+	steps := ['if g_diag.reset_due() != 0 {', 'diag.wire_drain(mut ch', 'nvm_flush_ok = g_nvm.mark_clean()',
 		'if !nvm_flush_ok && diag_reset_tries < 20 {', 'C.diag_sys_reset()']
 	mut at := -1
 	for step in steps {
@@ -477,7 +476,7 @@ fn test_a_boot_node_hands_off_after_its_answer_has_left() {
 		'g_diag.server.ndid = 1',
 		'g_diag.server.ndid = 2',
 		'if g_diag.reset_due() != 0 {',
-		'for !ch.tx_idle() && C.board_now_us() - diag_t0 < 20000 {}',
+		'diag.wire_drain(mut ch, diag_now_us)',
 		'if g_diag.reset_due() == uds.reset_into_boot {',
 		'C.boot_handoff_request()',
 		'C.diag_sys_reset()',

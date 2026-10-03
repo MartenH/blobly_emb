@@ -164,6 +164,16 @@ fn elapsed(now u64, since u64) u64 {
 	return if now > since { now - since } else { u64(0) }
 }
 
+// reset_due / cancel_reset: the answered 0x11 the owner performs once its answer is on the wire,
+// and its cancellation when that answer is lost (comm/diag serve_step: never reset unanswered)
+pub fn (p &Prog) reset_due() bool {
+	return p.reset_pending
+}
+
+pub fn (mut p Prog) cancel_reset() {
+	p.reset_pending = false
+}
+
 // S3server (ISO 14229): a non-default session dies after 5 s of tester silence.
 pub const s3_server_us = u64(5_000_000)
 
