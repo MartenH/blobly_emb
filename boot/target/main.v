@@ -65,6 +65,10 @@ __global (
 fn main() {
 	app_base := C.boot_app_base()
 	app_size := C.boot_app_size()
+	// a dual-core part's satellite release is retracted FIRST, on every path: a reset between a
+	// release and its take leaves it set, and neither the app's clock init nor this boot's may
+	// run with the satellite free to start
+	C.boot_park_satellite()
 	// --- the boot decision, from near-reset state (REQ-BOOT-001/002/010) ---
 	mut handoff := u32(0)
 	requested := C.boot_take_request(&handoff) != 0
@@ -78,7 +82,6 @@ fn main() {
 
 	// --- stay: programming mode (REQ-BOOT-004: always reachable) ---
 	C.boot_info_no_app()
-	C.boot_park_satellite() // a dual-core part's satellite stays parked while the clocks change
 	C.board_clock_init()
 	C.board_timebase_init() // board_now_us reads DWT: without it `now` is frozen and nothing expires
 	boot_t0 := C.board_now_us() // REQ-BOOT-014: the stay-window baseline

@@ -280,7 +280,10 @@ fn test_the_satellite_clock_release_is_consumed_and_retracted() {
 	take := xc.all_after('static inline void xcore_clk_take(void)').all_before('\n}')
 	assert take.contains('*clk = 0u;'), 'xcore_clk_take does not consume'
 	boot := os.read_file(os.join_path(@VMODROOT, 'boot', 'target', 'main.v')) or { panic(err) }
-	stay := boot.all_after('// --- stay: programming mode')
-	assert stay.index('C.boot_park_satellite()') or { -1 } >= 0
-	assert (stay.index('C.boot_park_satellite()') or { 0 }) < (stay.index('C.board_clock_init()') or { 0 }), 'the boot changes the clocks before parking the satellite'
+	body := boot.all_after('fn main() {')
+	park := body.index('C.boot_park_satellite()') or { -1 }
+	assert park >= 0, 'the boot never parks the satellite'
+	// before the decision, so the jump to the app is covered too, and before any clock change
+	assert park < (body.index('boot.decide(') or { -1 }), 'the satellite is parked after the boot decision — a jump to the app skips it'
+	assert park < (body.index('C.board_clock_init()') or { -1 }), 'the boot changes the clocks before parking the satellite'
 }
