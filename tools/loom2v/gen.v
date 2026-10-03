@@ -1574,11 +1574,11 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 		frof := snake(r.from_frame)
 		tof := snake(r.to_frame)
 		if m.target.threadx {
-			// The comm thread opens each route bus by its single FDCAN index, and the shared
-			// vector table wires FDCAN1 (idx 0) + FDCAN2 (idx 1) only. Reject a route bus whose
-			// interface isn't exactly can0/can1: a name like "edge" or "can9" would silently map
-			// to the wrong (fdcan_index_of defaults to 0) or a nonexistent instance, and idx 2
-			// (FDCAN3) has no wired ISR in boards/common/vectors.S yet.
+			// The comm thread opens each route bus by its single FDCAN index. Reject a route bus
+			// whose interface isn't exactly can0/can1: a name like "edge" or "can9" would silently
+			// map to the wrong (fdcan_index_of defaults to 0) or a nonexistent instance. idx 2
+			// (FDCAN3) is wired on the 3-FDCAN parts (boards/common/vectors_h72x.S, #360) but not
+			// on the H74x/H75x, and this generator does not know the part, so it stays refused.
 			for b in [r.from_bus, r.to_bus] {
 				mut digits := ''
 				for c in b {
@@ -1589,8 +1589,8 @@ fn validate_signal_routes_model(m Model, doc toml.Doc) {
 				if digits.len != 1 || digits[0] < `0` || digits[0] > `1` || b != 'can${digits}' {
 					panic('route: bus "${b}" on a [target] kind="threadx" gateway must be named exactly ' +
 						'"can0" or "can1" — the comm thread opens buses by that one-digit FDCAN index ' +
-						'(a name like "aux0" would map to the wrong instance) and only FDCAN1/FDCAN2 have ' +
-						'wired ISRs (FDCAN3/idx 2 needs its vector in boards/common/vectors.S)')
+						'(a name like "aux0" would map to the wrong instance), and FDCAN3/idx 2 exists only ' +
+						'on the 3-FDCAN parts, which this generator cannot tell from the 2-FDCAN ones')
 				}
 			}
 			// A raw target forward copies bytes verbatim: unlike the host signal-route path it

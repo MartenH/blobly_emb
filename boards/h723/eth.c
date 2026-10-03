@@ -373,7 +373,7 @@ void eth_set_rx_callback(void (*cb)(void)) {
 	rx_cb = cb;
 }
 
-/* The NVIC entry (vectors.S IRQ61). A board.c weak default absorbs it in images
+/* The NVIC entry (vectors_h72x.S IRQ61). A board.c weak default absorbs it in images
  * that don't link the ETH driver; this strong definition wins in the net image. */
 void ETH_IRQHandler(void) {
 	eth_isr_count++;

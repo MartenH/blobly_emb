@@ -42,10 +42,16 @@ check: $(TOOL_ecucheck)
 # Just the CMSIS headers — everything a BARE-METAL image needs. Split out so CI can gate the
 # bare-metal cross builds without cloning ThreadX and NetX Duo (minutes, and full clones because
 # both are checked out at a pin).
+# Pinned too: tools/vectab/vectab_test.v (a host unit test) checks the vector tables against the
+# device headers' IRQn_Type, so an upstream header change must not fail an unrelated PR (#360).
+CMSIS_DEVICE_H7_PIN ?= 81db1ec63cdc191fae1565b772da3ea5aa29a683
+CMSIS_CORE_PIN      ?= afc5ca6af0a49232fde7eb4548dd0962d119ce14
 deps-cmsis:
 	@mkdir -p third_party
-	@[ -d third_party/cmsis_device_h7 ] || git clone --depth 1 https://github.com/STMicroelectronics/cmsis_device_h7 third_party/cmsis_device_h7
-	@[ -d third_party/cmsis_core ]       || git clone --depth 1 https://github.com/STMicroelectronics/cmsis_core       third_party/cmsis_core
+	@[ -d third_party/cmsis_device_h7 ] || git clone -q --depth 1 https://github.com/STMicroelectronics/cmsis_device_h7 third_party/cmsis_device_h7
+	@cd third_party/cmsis_device_h7 && git checkout -q $(CMSIS_DEVICE_H7_PIN) 2>/dev/null || (git fetch -q --depth 1 origin $(CMSIS_DEVICE_H7_PIN) && git checkout -q $(CMSIS_DEVICE_H7_PIN))
+	@[ -d third_party/cmsis_core ]       || git clone -q --depth 1 https://github.com/STMicroelectronics/cmsis_core       third_party/cmsis_core
+	@cd third_party/cmsis_core && git checkout -q $(CMSIS_CORE_PIN) 2>/dev/null || (git fetch -q --depth 1 origin $(CMSIS_CORE_PIN) && git checkout -q $(CMSIS_CORE_PIN))
 	@echo "CMSIS headers ready under third_party/ (bare-metal cross builds)"
 
 deps: deps-cmsis

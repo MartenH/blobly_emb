@@ -6,8 +6,9 @@
  * The H735 is SINGLE-BANK (1 MB, 8 sectors x 128 KB) — the same boot/app split
  * as the h755zi single-bank map, minus bank 2. boot = sector 0 (128 KB, never
  * field-updated); app region = sectors 1..7. The app's 64-byte image header
- * sits at APP_BASE; its vector table at APP_BASE + 0x400 (VTOR needs >=
- * 512-byte alignment on this core — mkimage pads header->vectors, the CRC
+ * sits at APP_BASE; its vector table at APP_BASE + 0x400 (VTOR wants the
+ * table's size rounded up to a power of two — 179 words, so 1 KiB; checked by
+ * tools/vectab/vectab_test.v — mkimage pads header->vectors, the CRC
  * covers the pad).
  *
  * Atomic activation degrades here: with one bank there is no read-while-write

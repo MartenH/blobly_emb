@@ -120,14 +120,14 @@ unsigned io_exec_us(void) { return g_io_exec_us; }
 
 /* ---- FDCAN Rx-FIFO0 ISRs + comm-thread wake semaphore ----------------------------------
  * ONE wake semaphore, shared by every FDCAN instance a node owns: a single-bus leaf arms
- * FDCAN1 only; a multi-bus gateway (system_full sysnode) arms FDCAN1/2/3 and the comm thread
+ * FDCAN1 only; a multi-bus gateway (system_full sysnode) arms FDCAN1/2 — and FDCAN3 on a 3-FDCAN
+ * part, once loom2v can route a third bus (it refuses can2 today: it does not know the part) — and the comm thread
  * drains all of them each wake. The semaphore is a plain count, so N instances posting it
  * just means "at least one FIFO has a frame" — the comm loop then drains every channel.
  * FDCAN3 exists only on 3-FDCAN parts (H72x/H73x, e.g. the H735-DK); it is #ifdef-guarded so
- * this one file still links on H74x/H75x (2 FDCAN). vectors.S references FDCAN1's handler
- * unconditionally — never weak-aliased, see the note there. NOTE: vectors.S has no IRQ159
- * entry yet, so FDCAN3's handler is unreferenced and a third bus must not be armed until the
- * table grows one (#360); today's gateways route two buses. */
+ * this one file still links on H74x/H75x (2 FDCAN). The part's vector table (vectors_h72x.S /
+ * vectors_h75x.S) references each handler unconditionally — never weak-aliased, see the note
+ * there — and only the H72x table has the IRQ159 slot FDCAN3's needs (#360). */
 static TX_SEMAPHORE g_comm_sem;
 static unsigned char g_comm_sem_made; /* create-once: several comm_rx_irq_enable_idx() calls */
 

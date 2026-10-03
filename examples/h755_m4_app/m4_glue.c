@@ -149,7 +149,7 @@ void xcore_trace_service(void) {
 	c[2] = req; /* ack — releases svc_us and the snapshot together */
 }
 
-/* The shared vector table (boards/common/vectors.S) names the FDCAN1 and ETH ISRs
+/* The shared vector table (boards/common/vectors_h75x.S) names the FDCAN1 and ETH ISRs
  * unconditionally; the M7 board.c weak defaults don't apply here (this image links
  * without board.c). This core never enables either IRQ in its NVIC — the CM7 owns
  * the bus and the MAC — so parked stubs satisfy the link and would trap loudly if

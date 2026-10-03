@@ -39,7 +39,7 @@ LDFLAGS  = $(MCU) -T linker.ld -nostartfiles --specs=nano.specs --specs=nosys.sp
 OOCD_CFG = -f interface/stlink.cfg -f target/stm32h7x.cfg
 
 BUILD    = build
-CSRC     = $(BUILD)/canfd.c startup.c board.c $(REPO)/driver/can/can_backend.c
+CSRC     = $(BUILD)/canfd.c $(REPO)/boards/common/startup.c board.c $(REPO)/driver/can/can_backend.c
 
 all: $(BUILD)/canfd.bin
 
@@ -50,9 +50,9 @@ $(BUILD)/canfd.c: main.v | $(BUILD)
 	  -o examples/h755_canfd/$(BUILD)/canfd.c examples/h755_canfd/main.v
 	$(REPO)/scripts/lint_vinit.sh $@
 
-# 2) cross-compile + link: V output + startup + board shim + CAN backend
+# 2) cross-compile + link: V output + the shared bare-metal startup (boards/common) + board shim + CAN backend
 $(BUILD)/canfd.elf: $(CSRC) linker.ld | $(BUILD)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/canfd.c startup.c board.c $(REPO)/driver/can/can_backend.c -o $@
+	$(CC) $(CFLAGS) $(LDFLAGS) $(CSRC) -o $@
 	$(SIZE) $@
 
 # 3) raw binary for the flasher
