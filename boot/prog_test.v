@@ -259,7 +259,7 @@ fn test_s3_silence_expires_session() {
 	mut f := &TestFlash{}
 	mut p := new_prog(mut f)
 	unlock(mut p)
-	p.last_rx_us = 1_000_000
+	p.heard(1_000_000)
 	// just inside the window: session + unlock survive
 	p.tick(1_000_000 + s3_server_us)
 	assert p.srv.session == 0x02
@@ -288,7 +288,7 @@ fn test_idle_return_window() {
 	assert p.idle_return_due(t0 + idle_return_us + 1, t0)
 	// tester spoke at t1: the window restarts from there
 	t1 := t0 + 2_000_000
-	p.last_rx_us = t1
+	p.heard(t1)
 	assert !p.idle_return_due(t1 + idle_return_us, t0)
 	assert p.idle_return_due(t1 + idle_return_us + 1, t0)
 	// in a programming session the window never fires
@@ -307,6 +307,12 @@ fn test_a_handed_off_boot_opens_the_programming_session() {
 	p.open_handed_off(t0)
 	assert p.srv.session == 0x02 && !p.unlocked
 	assert ask(mut p, [u8(0x29), 0x01])[..2] == [u8(0x69), 0x01]
+	// the clock may read 0 when the session opens: it survives the S3 window all the same
+	for now in [t0, t0 + 1, t0 + s3_server_us] {
+		p.tick(now)
+		assert p.srv.session == 0x02, 'the handed-off session expired at ${now}'
+		assert !p.idle_return_due(now, t0), 'the stay-window fired at ${now}'
+	}
 	mut q := new_prog(mut f)
 	q.open_handed_off(t0)
 	q.tick(t0 + s3_server_us + 2)

@@ -534,11 +534,17 @@ fn test_a_handoff_that_cannot_be_performed_or_reached_is_refused() {
 			boot_conn, 'share no session']
 		'did_clash':    [boot_conn + '\n[[did]]\nid    = 0xF195\nbytes = "00 00 00 01"\n', 'leave it to [boot]']
 		'keys':         [boot_conn + 'enabled = true\n', '[boot] takes no keys yet']
+		'other_ids':    [boot_conn.replace('rx_id         = 0x7B0', 'rx_id         = 0x7C0'), 'reset into a boot that never serves those ids']
 	} {
 		code, out, _ := generate('boot_${name}', c[0])
 		assert code != 0, '${name}: loom2v accepted it'
 		assert out.contains(c[1]), '${name}: ${out}'
 	}
+	// an FD bus is not the classic one the bootloader serves
+	cf, of, _ := generate_edited('boot_fd_bus', fn (src string) string {
+		return src.replace('fd        = false', 'fd        = true')
+	}, boot_conn)
+	assert cf != 0 && of.contains('(CAN-FD)'), of
 	// `boot` is the table, nothing else (a top-level key, so written before the first table)
 	cn, on, _ := generate_edited('boot_not_table', fn (src string) string {
 		return 'boot = []\n' + src

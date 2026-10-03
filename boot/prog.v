@@ -91,9 +91,11 @@ pub mut:
 	dl_addr    u32 // next absolute write address
 	dl_end     u32
 	next_block u8
-	// tester-silence clocks (REQ-BOOT-013/014): handle() stamps last_rx_us,
+	// tester-silence clocks (REQ-BOOT-013/014): the owner's heard() stamps last_rx_us and sets
+	// `heard` — an explicit validity bit, because 0 is a clock reading like any other,
 	// tick() expires the session, idle_return_due() answers the stay-window
 	last_rx_us u64
+	heard      bool
 	// stage buffer: fills to prog_word, then programs
 	stage     [32]u8
 	stage_len u32
@@ -146,7 +148,20 @@ pub fn (mut p Prog) open_handed_off(now u64) {
 	p.srv.session = 0x02
 	p.unlocked = false
 	p.challenge_valid = false
-	p.last_rx_us = if now == 0 { u64(1) } else { now } // 0 reads as "never spoke" (tick)
+	p.heard(now)
+}
+
+// heard stamps tester activity at `now` — every request the owner hands to handle(), and the
+// handed-off session's start. The silence clocks run from it.
+pub fn (mut p Prog) heard(now u64) {
+	p.last_rx_us = now
+	p.heard = true
+}
+
+// elapsed: time from `since` to `now`, 0 when `since` is not before `now` — a stamp from a later
+// pass, or one the clock has not reached, is no silence (never an unsigned wrap to ~2^64)
+fn elapsed(now u64, since u64) u64 {
+	return if now > since { now - since } else { u64(0) }
 }
 
 // S3server (ISO 14229): a non-default session dies after 5 s of tester silence.
@@ -161,7 +176,7 @@ pub const idle_return_us = u64(10_000_000)
 // torn image is refused by the valid-mark-last rule anyway — conservative wins).
 // Call it from the serve loop; handle() stamps the activity clock.
 pub fn (mut p Prog) tick(now u64) {
-	if p.srv.session != 0x01 && p.last_rx_us != 0 && now - p.last_rx_us > s3_server_us {
+	if p.srv.session != 0x01 && p.heard && elapsed(now, p.last_rx_us) > s3_server_us {
 		p.srv.session = 0x01
 		p.unlocked = false
 		p.challenge_valid = false
@@ -178,8 +193,8 @@ pub fn (p &Prog) idle_return_due(now u64, boot_start_us u64) bool {
 	if p.srv.session != 0x01 {
 		return false
 	}
-	last := if p.last_rx_us != 0 { p.last_rx_us } else { boot_start_us }
-	return now - last > idle_return_us
+	last := if p.heard { p.last_rx_us } else { boot_start_us }
+	return elapsed(now, last) > idle_return_us
 }
 
 fn (mut p Prog) in_programming_session() bool {

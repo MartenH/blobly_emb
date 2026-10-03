@@ -35,8 +35,16 @@ mut:
 // 0x10 02 hands the ECU over — the boot request cell written, then the reset — instead of refusing.
 struct BootCfg {
 mut:
-	on bool
+	on     bool
+	bus_fd bool // the [isotp] bus is CAN-FD ([bus.<isotp bus>] fd)
 }
+
+// The endpoint the boot manager images serve (examples/h755_boot, examples/h735_boot): requests on
+// 0x7B0, answers on 0x7B8, standard ids, classic CAN on FDCAN index 0. A [boot] node's server must
+// hand over to exactly that, or its 50 02 promises a session on ids nobody serves.
+const boot_rx_id = 0x7B0
+const boot_tx_id = 0x7B8
+const boot_can = 'can0'
 
 fn parse_boot(doc toml.Doc) BootCfg {
 	bv := doc.value_opt('boot') or { return BootCfg{} }
@@ -46,8 +54,18 @@ fn parse_boot(doc toml.Doc) BootCfg {
 	for k, _ in bv.as_map() {
 		panic('loom2v: [boot] has "${k}" — [boot] takes no keys yet: its presence is the declaration')
 	}
+	mut fd := false
+	if iv := doc.value_opt('isotp') {
+		bus := (iv.as_map()['bus'] or { toml.Any('') }).string()
+		if bv2 := doc.value_opt('bus') {
+			fd = ((bv2.as_map()[bus] or { toml.Any(map[string]toml.Any{}) }).as_map()['fd'] or {
+				toml.Any(false)
+			}).bool()
+		}
+	}
 	return BootCfg{
-		on: true
+		on:     true
+		bus_fd: fd
 	}
 }
 
@@ -250,6 +268,14 @@ fn validate_boot(m Model) {
 	}
 	if m.isotp_conns.len == 0 {
 		panic('loom2v: [boot] hands the ECU over on 0x10 02, which the diagnostic server answers — declare its [isotp] connection')
+	}
+	c := m.isotp_conns[0]
+	if c.rx_id != boot_rx_id || c.tx_id != boot_tx_id || c.bus != boot_can || m.boot.bus_fd {
+		panic('loom2v: [boot]: the bootloader serves 0x${boot_rx_id.hex()} / 0x${boot_tx_id.hex()} in classic CAN on ${boot_can}, but [isotp] is 0x${c.rx_id.hex()} / 0x${c.tx_id.hex()} on "${c.bus}"${if m.boot.bus_fd {
+			' (CAN-FD)'
+		} else {
+			''
+		}} — the handoff would answer 50 02 and reset into a boot that never serves those ids')
 	}
 	mask := handoff_sessions(m)
 	if mask & uds.in_programming != 0 {

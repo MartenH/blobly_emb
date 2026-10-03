@@ -130,7 +130,7 @@ fn main() {
 		}
 		if g_link.ready {
 			n := g_link.take(&g_req[0])
-			g_prog.last_rx_us = now // the tester-silence clock (REQ-BOOT-013/014)
+			g_prog.heard(now) // the tester-silence clock (REQ-BOOT-013/014)
 			rn := g_prog.handle(&g_req[0], n, &g_rsp[0])
 			if rn > 0 {
 				g_link.send(&g_rsp[0], rn)
