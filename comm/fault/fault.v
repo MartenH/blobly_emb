@@ -19,14 +19,20 @@ module fault
 // ignored — an old-generation failure can never recreate a cleared DTC (§7, R4).
 //
 // Every clear gets a FRESH generation (u16), so no report produced before it can ever count. It
-// could wrap only after 32767 clears without one report from the producer — a producer that silent
-// is dead — and there a clear is REFUSED (0x22) rather than reuse a generation.
+// could wrap only after 32767 generations without one report from the producer — a producer that
+// silent is dead — and there a clear is REFUSED (0x22) rather than reuse a generation.
 //
-// Suppression (0x85 off) is enforced HERE, where readings are consumed: while off, the baselines
-// follow the counters and nothing changes status; the first reading after "on" is a baseline only.
-// So nothing is recorded after a positive "off" and nothing produced during suppression is applied
-// after "on" — the accepted cost being that a qualification in the pass on either side of the
-// boundary is not recorded either (§7, R4). If an operation cycle began while off, "on" resets that
+// Suppression (0x85) uses the same generation. While off, nothing changes status (the baselines
+// follow the counters). Turning it on starts a fresh generation, exactly as a clear does but
+// without touching the status: the producer resets its debounce, so neither a report produced
+// while off NOR the debounce state accumulated while off — a counter saturated by a failure the
+// off window saw — is applied after "on" (#364). A generation renewed while the status shows
+// testFailed is `held`: the producer starts it failed, so that failure re-qualifying is not a new
+// occurrence, and only the producer, which sees the order of its own results, decides that. The
+// accepted cost: a result held across "on", failed or passed, completes again only once it
+// debounces from zero (§7, R4). If no fresh generation is free at "on", the slot's RESULTS stay
+// suppressed (its cycle bits move as any slot's) until the producer's report frees one; what that
+// producer qualified meanwhile is lost with them. If an operation cycle began while off, "on" resets that
 // cycle's status bits, which the frozen byte still carried from the previous one.
 //
 // No field defaults anywhere (the _vinit rule): the owner calls init / configures explicitly.
@@ -75,10 +81,12 @@ pub mut:
 	r [max_per_producer]Report
 }
 
-// Control is the comm-thread -> producer cell: the clear generation each fault must apply.
+// Control is the comm-thread -> producer cell: the generation each fault must apply, and whether
+// that generation starts failed (`held`: the memory still shows the failure a 0x85 on restarted).
 pub struct Control {
 pub mut:
-	gen [max_per_producer]u16
+	gen  [max_per_producer]u16
+	held [max_per_producer]bool
 }
 
 // Debounce runs on the producing thread, once per dispatch, right after the handler.
@@ -160,8 +168,11 @@ pub fn (mut d Debounce) step(r TestResult, now u64, enabled bool) {
 	}
 }
 
-// apply resets the debounce for a new clear generation and echoes it (a no-op for the current one).
-pub fn (mut d Debounce) apply(gen u16) {
+// apply resets the debounce for a new generation and echoes it (a no-op for the current one). A
+// `held` generation starts in the failed state the memory shows, so the failure re-qualifying is
+// not a new occurrence, while a pass and then a failure is — the producer sees that order, the
+// memory reading its counters later does not.
+pub fn (mut d Debounce) apply(gen u16, held bool) {
 	if gen == d.rep.gen {
 		return
 	}
@@ -169,7 +180,8 @@ pub fn (mut d Debounce) apply(gen u16) {
 	d.since = 0
 	d.run = .not_tested
 	d.rep = Report{
-		gen: gen
+		gen:    gen
+		failed: held
 	}
 }
 
@@ -187,16 +199,13 @@ pub mut:
 	failed_cycle  bool // failed in the current cycle (already counted)
 	tested_cycle  bool // a test completed in the current cycle — runtime state, so a status byte
 	// frozen by 0x85 across a boundary is never read as this cycle's result
-	gen      u16  // the clear generation the producer must apply — fresh for every clear
-	seen_gen u16  // the generation of the producer's latest report, whatever it was (wrap guard)
-	rebase   bool // the next report only sets the baselines (0x85 just turned on)
-	// config: reported on the memory's own thread and consumed at every report (a signal-status
-	// fault), so its baselines are always current and 0x85 on needs no rebase — a rebase would
-	// swallow the first genuinely post-enable report instead
-	local         bool
-	base_seen     bool // a Report of `gen` has been consumed: the baselines are valid
-	base_fails    u16
-	base_tests    u16
+	gen        u16  // the generation the producer must apply — fresh for every clear and 0x85 on
+	seen_gen   u16  // the generation of the producer's latest report, whatever it was (wrap guard)
+	base_seen  bool // a Report of `gen` has been consumed: the baselines are valid
+	base_fails u16
+	base_tests u16
+	held       bool // `gen` starts failed: renewed by 0x85 on while the status showed testFailed
+	wait_gen   bool // no fresh generation was free at 0x85 on: results suppressed until one is
 }
 
 // Memory is the node's fault memory — one writer, the comm thread (D2). RAM only in R4;
@@ -220,9 +229,10 @@ pub fn (mut m Memory) init() {
 		m.slots[i].failed_cycle = false
 		m.slots[i].tested_cycle = false
 		m.slots[i].seen_gen = 0
-		m.slots[i].rebase = false
 		m.slots[i].gen = 0
 		m.slots[i].base_seen = false
+		m.slots[i].held = false
+		m.slots[i].wait_gen = false
 	}
 	m.setting_off = false
 	m.cycle_active = false
@@ -236,6 +246,15 @@ pub fn (mut m Memory) consume(i int, r Report) {
 	}
 	mut s := &m.slots[i]
 	s.seen_gen = r.gen
+	if s.wait_gen {
+		// "on" found no fresh generation; this report may carry the old one from the off window.
+		// Renewed only while on: an "off" in between leaves it to the next "on" to renew once.
+		if !m.setting_off && s.can_renew() {
+			s.wait_gen = false
+			s.renew(s.status & test_failed != 0)
+		}
+		return
+	}
 	if r.gen != s.gen {
 		return // the producer has not applied the latest clear yet: an older generation counts for nothing
 	}
@@ -244,10 +263,6 @@ pub fn (mut m Memory) consume(i int, r Report) {
 	s.base_fails = r.fails
 	s.base_tests = r.tests
 	s.base_seen = true
-	if s.rebase {
-		s.rebase = false
-		return // the first reading after 0x85 on: whatever it carries was produced while off
-	}
 	if m.setting_off || !m.cycle_active || (df == 0 && dt == 0) {
 		return // suppressed, or outside an operation cycle: the baselines follow, the status does not
 	}
@@ -339,8 +354,8 @@ pub fn (mut m Memory) clear(group u32) u8 {
 			continue
 		}
 		hit = true
-		if u16(m.slots[i].gen - m.slots[i].seen_gen) >= 0x7FFF {
-			return 0x22 // conditionsNotCorrect: the producer has been silent for 32767 clears
+		if !m.slots[i].can_renew() {
+			return 0x22 // conditionsNotCorrect: the producer has been silent for 32767 generations
 		}
 	}
 	if !hit {
@@ -357,17 +372,36 @@ pub fn (mut m Memory) clear(group u32) u8 {
 		s.aging_count = 0
 		s.failed_cycle = false
 		s.tested_cycle = false
-		s.gen++ // fresh: no report produced before this clear can carry it
-		s.base_seen = false
-		s.rebase = false // the fresh generation already excludes everything before it
+		s.wait_gen = false // the clear's generation is fresh, and later than any "on"
+		s.renew(false)
 	}
 	return 0
+}
+
+// can_renew: a fresh generation is available — one the producer's latest report cannot carry and
+// no report it made earlier can come round to (a u16 compared within half its range).
+fn (s &Slot) can_renew() bool {
+	return u16(s.gen - s.seen_gen) < 0x7FFF
+}
+
+// renew moves the slot to a fresh generation: no report produced before it counts, and the
+// producer resets its debounce when it applies it, starting failed when `held`. The caller has
+// checked can_renew.
+fn (mut s Slot) renew(held bool) {
+	s.gen++
+	s.held = held
+	s.base_seen = false
 }
 
 // control_gen is the generation fault i's producer must apply (the owner copies it into the
 // producer's Control cell).
 pub fn (m Memory) control_gen(i int) u16 {
 	return m.slots[i].gen
+}
+
+// control_held is whether that generation starts failed (copied beside control_gen).
+pub fn (m Memory) control_held(i int) bool {
+	return m.slots[i].held
 }
 
 // thr: a counter threshold as i32, at least 1 and at most i32's range (a wrap would qualify at once).
@@ -413,13 +447,27 @@ fn ops_setting(ctx voidptr, on bool) {
 	m.set_setting(on)
 }
 
-// set_setting is 0x85. Turning it back on makes each slot's next reading a baseline only (it may
-// carry results produced while off), and — when an operation cycle began while off — resets that
-// cycle's status bits, which the frozen byte still carried from the previous cycle.
+// set_setting is 0x85. Turning it back on moves every slot to a fresh generation, as a clear does
+// but leaving the status: the producer restarts its debounce, so nothing it reported or accumulated
+// while off is applied afterwards (#364). A slot showing testFailed gets a `held` generation, so
+// the failure re-qualifying after the restart is not a second occurrence. When an operation cycle
+// began while off, "on" also resets that cycle's status bits, which the frozen byte still carried
+// from the previous cycle.
+//
+// "On" cannot be refused (a session ending turns it on too). A slot with no fresh generation — its
+// producer silent for 32767 of them — waits instead (`wait_gen`): its results stay suppressed, and
+// its next report, which frees one, renews it rather than counting. What that producer qualifies
+// before it applies the renewed generation is lost: it restarts twice, once on the old generation
+// and once on the fresh one — the cost of a producer that had been silent that long.
 pub fn (mut m Memory) set_setting(on bool) {
 	if on && m.setting_off {
 		for i in 0 .. m.n {
-			m.slots[i].rebase = !m.slots[i].local
+			if m.slots[i].can_renew() {
+				m.slots[i].wait_gen = false
+				m.slots[i].renew(m.slots[i].status & test_failed != 0)
+			} else {
+				m.slots[i].wait_gen = true
+			}
 			if m.boundary_off && m.cycle_active {
 				m.slots[i].status = (m.slots[i].status & ~test_failed_this_cycle) | not_completed_this_cycle
 			}

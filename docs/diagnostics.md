@@ -306,16 +306,26 @@ fault memory publishes a **control cell per fault-owning FB** — as built in R4
 one control cell per FB (single writer each: that FB's thread / the diagnostic bridge — the IOC is
 SPSC, so one shared cell with several readers is not an option): a *clear generation* **per fault** (a per-DTC 0x14 bumps only its faults'
 generations, 0x14 FFFFFF bumps them all; every clear is a FRESH 16-bit generation, so no report made
-before it can count, and a clear that could not get one — its producer silent for 32767 clears — is
+before it can count, and a clear that could not get one — its producer silent for 32767 generations, which 0x85 "on" spends too — is
 refused with 0x22 rather than reuse a generation; a bump resets that fault's counters and debounced state, and the producer echoes
-it as `applied_gen`). *As built in R4a* (`comm/fault`), two things stay on the
-consumer side and need no producer involvement: **0x85 suppression** — while off, the fault memory
-lets its baselines follow the counters and changes no status, and the first reading after "on" is a
-baseline only — so nothing is recorded after the positive "off" and nothing produced during
-suppression is applied after "on" (a qualification in the pass on either side of the boundary is not
-recorded; a cycle begun while off gets fresh cycle bits at "on") — and **operation-cycle boundaries**,
-which change status bits only and bump no generation, so no old-generation drain is needed on the
-host (a qualification at a boundary can land one pass late). The persistence-grade cycle-END barrier
+it as `applied_gen`). **0x85 suppression** rides the same generation: while off, the fault memory
+lets its baselines follow the counters and changes no status, and turning it on starts a FRESH
+generation exactly as a clear does, leaving the status alone — so the producer restarts its
+debounce, and neither a report produced while off nor the debounce state accumulated meanwhile is
+applied after "on". A generation renewed while the status shows testFailed is *held*: the control
+cell says so beside the generation and the producer restarts in the failed state, so that failure
+re-qualifying is not a second occurrence while a pass and then a new failure is one — the producer
+sees the order of its own results, which the memory reading its counters later cannot. (Until #364 "on" was consumer-side only — the next reading was a baseline — so a
+counter left saturated by a failure the off window saw qualified on the first failed result after
+"on", recording a failure the requirement forbids; seen on the bench as status 0x2E.) The accepted
+cost: a result held across "on", failed or passed, completes again only once it debounces from zero; a cycle begun while off
+gets fresh cycle bits at "on". "On" cannot be refused (a session end turns it on too), so a fault
+whose producer has been silent for 32767 generations keeps its results suppressed (its cycle bits
+move as any fault's) until that producer's next report frees one, which renews it rather than
+counting; what the producer qualified before applying the renewed generation is lost. *As built in R4a*
+(`comm/fault`), **operation-cycle boundaries** stay on the consumer side: they change status bits
+only and bump no generation, so no old-generation drain is needed on the host (a qualification at a
+boundary can land one pass late). The persistence-grade cycle-END barrier
 remains R6's (§7). The
 per-fault generations are bounded by the cell too, which caps the faults one FB may own (8). A
 producer on a **satellite core** needs the same cell to flow owner → satellite, which the target does
@@ -482,7 +492,7 @@ done until its obligations hold under their tests. §3 fixes the shape; this tab
 | R2 | The session survives the handoff: `boot.Prog` starts in programming (not default) when the boot request cell caused its entry, so a tester that received 0x50 02 can proceed to 0x29 without a second 0x10 02. *Built:* the cell carries its kind (`bootcell.h`, `BOOTCELL_REQ_HANDOFF`), and `Prog.open_handed_off` opens the session, locked and S3-timed. | host: `boot/prog_test.v` `test_a_handed_off_boot_opens_the_programming_session`; bench: 0x10 02 → reset → 0x29 accepted |
 | R3 | An E2E sequence gap (`lost`) is visible to the application, not only counted: a published loss counter (or a degraded status) (REQ-E2E-002). | host e2e: a single skipped counter reaches the FB |
 | R4 | … and it is a fault source: `[[fault]] on = "lost"`. | host e2e: a single skipped counter raises its DTC |
-| R4 | 0x85 suppression records nothing after the positive "off" and replays no suppressed occurrence after "on". *Met in R4a without a producer handshake:* suppression is applied where readings are consumed (§3.3); the accepted cost is that a qualification published before "off" but not yet read (≤ one owner pass) is not recorded. | unit: off, fail, on — nothing recorded, nothing replayed |
+| R4 | 0x85 suppression records nothing after the positive "off" and replays no suppressed occurrence after "on". *Met through the clear generation* (§3.3, #364 — R4a's consumer-only version replayed a debounce saturated while off): status is frozen where readings are consumed, and "on" starts a fresh generation the producer applies by restarting its debounce; the accepted costs are that a qualification published before "off" but not yet read (≤ one owner pass) is not recorded, and that a result held across "on" completes again only once it debounces from zero. | unit: off, fail, on — nothing recorded, nothing replayed |
 | R6 / R7 | Live state changes only after durability: a persisted 0x2E (parameters, `apply = "next_dispatch"`) and a persisted 0x14 stage their RAM change until the journal accepts the write; on refusal (0x72) both live and durable state are unchanged. | fault-injection tests asserting the current-run value, not only the stored one |
 | R0 | Physical diagnostic ids are unique per BUS, not per system: REQ-TOPO-002 and `tools/sysmodel/checks.v` (which today put every allocation and ISO-TP connection id in one global map) are revised to key physical ids by bus and to allow a shared functional id. | syscheck tests: the same physical id on two separate buses passes; twice on one bus fails |
 | R4 | The tested state is lossless like the occurrences: a monotonic tested-count per fault (not a last-value `tested` flag), so a fast producer's single evaluation followed by `.not_tested` is never lost to the test-not-completed bits or aging. | unit: one evaluation then `.not_tested`, read once late |

@@ -1947,7 +1947,7 @@ fn has_deadline(m Model, msg string, bname string) bool {
 // fault_pass_lines: the fault memory's share of the bridge pass, at its TOP — before the rx drain,
 // where functional requests are served inline, and before the physical dispatch — so every 0x19
 // reads the newest consumed state: the signal-status faults' levels are stepped, each fault-owning
-// FB's report cell is consumed slot by slot and the clear generations go back in its control cell.
+// FB's report cell is consumed slot by slot and the generations (and held flags) go back in its control cell.
 // (Events and the operation cycle are handled where the frame is decoded, in bus order.)
 fn fault_pass_lines(m Model) []string {
 	if m.faults.len == 0 {
@@ -1965,7 +1965,7 @@ fn fault_pass_lines(m Model) []string {
 }
 
 // fault_consume_lines: `fb`'s report cell `rep`, consumed slot by slot into the fault memory
-// `fmem`, and the clear generations its thread must apply written into its control cell `ctl` —
+// `fmem`, and the generations its thread must apply (each with its held flag) written into its control cell `ctl` —
 // every owner's (the host bridge, the ThreadX comm thread); only how the cells cross differs.
 fn fault_consume_lines(m Model, fb string, fmem string, rep string, ctl string, ind string) []string {
 	mut out := []string{}
@@ -1976,6 +1976,7 @@ fn fault_consume_lines(m Model, fb string, fmem string, rep string, ctl string, 
 		}
 		out << '${ind}${fmem}.consume(${i}, ${rep}.r[${k}])'
 		out << '${ind}${ctl}.gen[${k}] = ${fmem}.control_gen(${i})'
+		out << '${ind}${ctl}.held[${k}] = ${fmem}.control_held(${i})'
 		k++
 	}
 	return out
@@ -1988,9 +1989,6 @@ fn fault_slot_lines(m Model, fmem string, ind string) []string {
 	for i, f in m.faults {
 		out << '${ind}${fmem}.slots[${i}].dtc = u32(0x${f.dtc.hex()}) // ${f.name}'
 		out << '${ind}${fmem}.slots[${i}].confirm = u8(${f.confirm})'
-		if f.signal != '' {
-			out << '${ind}${fmem}.slots[${i}].local = true // stepped and consumed on this thread'
-		}
 		if f.aging > 0 {
 			out << '${ind}${fmem}.slots[${i}].aging = u8(${f.aging})'
 		}
@@ -2045,7 +2043,7 @@ fn rx_publish_hooks(m Model, sname string, fld string, ind string) []string {
 				'if ${d} != 0 && ${d} < ${half} { fault.TestResult.failed } else if ${fld}.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
 			}
 		}
-		out << '${ind}st.sdeb_${i}.apply(st.fmem.control_gen(${i}))'
+		out << '${ind}st.sdeb_${i}.apply(st.fmem.control_gen(${i}), st.fmem.control_held(${i}))'
 		out << '${ind}st.sdeb_${i}.step(${res}, now, diag_rx_ok)'
 		out << '${ind}st.fmem.consume(${i}, st.sdeb_${i}.rep)'
 		out << '${ind}st.sev_${i} = true'
@@ -2115,7 +2113,7 @@ fn signal_fault_step_lines(m Model, ind string) []string {
 		out << '${ind}\tst.sev_${i} = false'
 		out << '${ind}} else {'
 		out << '${ind}\tst.sev_${i} = false'
-		out << '${ind}\tst.sdeb_${i}.apply(st.fmem.control_gen(${i}))'
+		out << '${ind}\tst.sdeb_${i}.apply(st.fmem.control_gen(${i}), st.fmem.control_held(${i}))'
 		out << '${ind}\tst.sdeb_${i}.step(${res}, now, ${en})'
 		out << '${ind}\tst.fmem.consume(${i}, st.sdeb_${i}.rep)'
 		out << '${ind}}'
