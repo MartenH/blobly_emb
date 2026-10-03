@@ -80,6 +80,8 @@ jobs:
           git status --porcelain
           test -z "$(git status --porcelain)"
 
+      - name: _vinit gate tests (scripts/lint_vinit_test.sh)
+        run: ./scripts/lint_vinit_test.sh
       # The review watcher is a real tool, not a shell fragment: it must page every channel,
       # match a verdict by the reviewed SHA, and preserve gh API failures instead of reporting
       # "nothing waiting" — the three failure modes that each lost a review here. The fixtures

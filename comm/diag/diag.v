@@ -109,7 +109,7 @@ pub fn (mut c Connection) on_frame(now u64, f &can.Frame) Rx {
 		// only the bytes that arrived: the owner may reuse one frame, so the tail of a short one
 		// holds the previous frame's bytes; a frame too short for what its PCI says is dropped
 		n := if f.len > 8 { 8 } else { int(f.len) }
-		if n < 1 || truncated(f.data[0], n, c.link.rx_len - c.link.rx_pos) {
+		if n < 1 || c.link.truncated(f.data[0], n) {
 			return .taken
 		}
 		mut p := isotp.Pdu{}
@@ -188,13 +188,13 @@ pub fn (mut c Connection) serve_remote(req &u8, n int, functional bool, resp &u8
 	}
 	c.refresh_dids()
 	before, held := c.enter(true)
-	c.server.handoff_here = c.handoff_remote
+	c.server.handoff_elsewhere = !c.handoff_remote
 	rlen := if functional {
 		c.server.handle_functional(req, n, resp)
 	} else {
 		c.server.handle(req, n, resp)
 	}
-	c.server.handoff_here = true
+	c.server.handoff_elsewhere = false
 	c.leave(before, held, true)
 	if c.server.reset_req != 0 {
 		c.reset_remote = true
@@ -305,19 +305,6 @@ pub fn (mut c Connection) abort_tx() {
 // its network awake (a session must not sleep under the tester, nor an answer be stranded).
 pub fn (c &Connection) active() bool {
 	return !c.link.idle() || c.server.session != uds.session_default
-}
-
-// truncated: the frame (PCI byte `pci`, `n` bytes arrived) is too short for what its PCI says. A
-// consecutive frame is full unless it carries the last `left` bytes of the reception; a first frame
-// is always full (ISO 15765-2); a flow control needs its block size and STmin.
-fn truncated(pci u8, n int, left int) bool {
-	return match pci >> 4 {
-		0 { int(pci & 0x0F) >= n }
-		1 { n < 8 }
-		2 { n < 8 && n - 1 < left }
-		3 { n < 3 }
-		else { false }
-	}
 }
 
 // reset_due is the ECUReset kind — or uds.reset_into_boot, the programming handoff, which the owner

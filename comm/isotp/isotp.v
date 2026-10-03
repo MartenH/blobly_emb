@@ -150,6 +150,22 @@ pub fn (mut l Link) take(dst &u8) int {
 }
 
 // on_frame feeds a received PDU (the bridge passes only rx_id frames).
+// truncated: a received frame (PCI byte `pci`, `n` bytes arrived) is too short for what its PCI
+// says, and must be dropped before on_frame — which reads all eight bytes, so a short frame's
+// missing tail would be invented. A consecutive frame is full unless it carries the last bytes of
+// the reception; a first frame is always full (ISO 15765-2); a flow control needs its block size
+// and STmin. The one rule for every owner of a Link: the application's connection and the boot.
+pub fn (l &Link) truncated(pci u8, n int) bool {
+	left := l.rx_len - l.rx_pos
+	return match pci >> 4 {
+		0 { int(pci & 0x0F) >= n }
+		1 { n < 8 }
+		2 { n < 8 && n - 1 < left }
+		3 { n < 3 }
+		else { false }
+	}
+}
+
 pub fn (mut l Link) on_frame(now u64, p Pdu) {
 	pci := p.data[0] & 0xF0
 	low := p.data[0] & 0x0F

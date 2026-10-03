@@ -145,8 +145,11 @@ fn main() {
 			if f.id != req_id || f.ext || f.len < 1 {
 				continue // the physical diagnostic request only
 			}
-			mut pdu := isotp.Pdu{}
 			n := if f.len > 8 { 8 } else { int(f.len) } // classic-sized ISO-TP, on FD too
+			if g_link.truncated(f.data[0], n) {
+				continue // shorter than its PCI says: dropped, never padded into a request
+			}
+			mut pdu := isotp.Pdu{}
 			for i in 0 .. n {
 				pdu.data[i] = f.data[i]
 			}
