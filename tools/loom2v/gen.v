@@ -5386,7 +5386,7 @@ fn fault_step_lines(m Model, fb string, handler string) []string {
 		} else {
 			fc.enable.map('inp.${snake(it.all_before('.'))}.${it.all_after('.')}').join(' && ')
 		}
-		out << '\tst.fdeb_${f}[${k}].apply(st.fctl_${f}.gen[${k}])'
+		out << '\tst.fdeb_${f}[${k}].apply(st.fctl_${f}.gen[${k}], st.fctl_${f}.held[${k}])'
 		out << '\tst.fdeb_${f}[${k}].step(outp.fault.${snake(fc.name)}, fault_now, ${en})'
 		out << '\tst.frep_${f}.r[${k}] = st.fdeb_${f}[${k}].rep'
 	}

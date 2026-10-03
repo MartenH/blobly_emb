@@ -297,13 +297,16 @@ it as `applied_gen`). **0x85 suppression** rides the same generation: while off,
 lets its baselines follow the counters and changes no status, and turning it on starts a FRESH
 generation exactly as a clear does, leaving the status alone — so the producer restarts its
 debounce, and neither a report produced while off nor the debounce state accumulated meanwhile is
-applied after "on" — and a failure the status already shows, re-qualifying after the restart, is
-not counted as a second occurrence. (Until #364 "on" was consumer-side only — the next reading was a baseline — so a
+applied after "on". A generation renewed while the status shows testFailed is *held*: the control
+cell says so beside the generation and the producer restarts in the failed state, so that failure
+re-qualifying is not a second occurrence while a pass and then a new failure is one — the producer
+sees the order of its own results, which the memory reading its counters later cannot. (Until #364 "on" was consumer-side only — the next reading was a baseline — so a
 counter left saturated by a failure the off window saw qualified on the first failed result after
 "on", recording a failure the requirement forbids; seen on the bench as status 0x2E.) The accepted
 cost: a result held across "on", failed or passed, completes again only once it debounces from zero; a cycle begun while off
 gets fresh cycle bits at "on". "On" cannot be refused (a session end turns it on too), so a fault
-whose producer has been silent for 32767 generations keeps the one it has. *As built in R4a*
+whose producer has been silent for 32767 generations stays suppressed until that producer's next
+report frees one, which renews it rather than counting. *As built in R4a*
 (`comm/fault`), **operation-cycle boundaries** stay on the consumer side: they change status bits
 only and bump no generation, so no old-generation drain is needed on the host (a qualification at a
 boundary can land one pass late). The persistence-grade cycle-END barrier

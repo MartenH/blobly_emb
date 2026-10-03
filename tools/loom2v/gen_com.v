@@ -1976,6 +1976,7 @@ fn fault_consume_lines(m Model, fb string, fmem string, rep string, ctl string, 
 		}
 		out << '${ind}${fmem}.consume(${i}, ${rep}.r[${k}])'
 		out << '${ind}${ctl}.gen[${k}] = ${fmem}.control_gen(${i})'
+		out << '${ind}${ctl}.held[${k}] = ${fmem}.control_held(${i})'
 		k++
 	}
 	return out
@@ -2042,7 +2043,7 @@ fn rx_publish_hooks(m Model, sname string, fld string, ind string) []string {
 				'if ${d} != 0 && ${d} < ${half} { fault.TestResult.failed } else if ${fld}.status == .ok { fault.TestResult.passed } else { fault.TestResult.not_tested }'
 			}
 		}
-		out << '${ind}st.sdeb_${i}.apply(st.fmem.control_gen(${i}))'
+		out << '${ind}st.sdeb_${i}.apply(st.fmem.control_gen(${i}), st.fmem.control_held(${i}))'
 		out << '${ind}st.sdeb_${i}.step(${res}, now, diag_rx_ok)'
 		out << '${ind}st.fmem.consume(${i}, st.sdeb_${i}.rep)'
 		out << '${ind}st.sev_${i} = true'
@@ -2112,7 +2113,7 @@ fn signal_fault_step_lines(m Model, ind string) []string {
 		out << '${ind}\tst.sev_${i} = false'
 		out << '${ind}} else {'
 		out << '${ind}\tst.sev_${i} = false'
-		out << '${ind}\tst.sdeb_${i}.apply(st.fmem.control_gen(${i}))'
+		out << '${ind}\tst.sdeb_${i}.apply(st.fmem.control_gen(${i}), st.fmem.control_held(${i}))'
 		out << '${ind}\tst.sdeb_${i}.step(${res}, now, ${en})'
 		out << '${ind}\tst.fmem.consume(${i}, st.sdeb_${i}.rep)'
 		out << '${ind}}'
