@@ -2,7 +2,9 @@
 
 > Status (2026-07-16): **P1–P3 + P5 BENCH-VERIFIED on the H755; P4 (atomic activation) pending.**
 > 2026-10-03: the **app-side handoff** is generated from config (`[boot]`, below — "App → boot,
-> as built"); its bench run comes with the per-node bootloader.
+> as built"), and the boot manager is ONE platform program built per node ("One boot manager,
+> every node", below): every `system_full` CAN node — domain (H755), sysnode (H735), zone_a (H723)
+> — runs behind its own. Bench run pending (`examples/system_full/test/boot_bench.sh`).
 > The chain runs on real silicon: header-verified jump, CAN reflash + torn-image
 > recovery, S3/return-to-app session timers, and full asymmetric authenticity —
 > Ed25519 image signatures verified on the CM7 (no heap) + a 0x29 session gate
@@ -126,7 +128,43 @@ The boot manager keeps the promise: the request cell carries WHY it was written
 S3 like any session, so a tester that never speaks loses it and the stay-window (REQ-BOOT-014)
 gives the ECU back to the application (docs/diagnostics.md §7, "the session survives the
 handoff"). Serving on the ids and bus of the node's own `[isotp]` is the per-node bootloader's,
-built next.
+built per node ("One boot manager, every node", below).
+
+### One boot manager, every node (as built)
+
+The boot manager is **one program** — `boot/target/main.v` with its C half
+`boards/common/boot_glue.c` — built per node by `boot/boot.mk`, which a `[boot]` node's
+`gen/loom_build.mk` includes (no Makefile names it). Nothing in it names a board or a node:
+
+| what | from | how |
+|---|---|---|
+| flash layout, cells | the board's `bootmap.h` (`boards/h755zi`, `h735dk`, `h723`) | C macros; `scripts/boot_layout.sh` reads the same header for make (the boot's link limit, the app's link at `APP_VECTORS`, the flash addresses) |
+| flash driver | the board's `BOARD_FLASH` (board.mk) | `boards/h755zi/flash.c` (dual bank); `boards/common/flash_h72x.c` for the single-bank H723 and H735 |
+| bus, ids, flow control, frame format | the node's `[isotp]` and its bus | `gen/boot_gen.h` (loom2v): the comm thread's FDCAN index, its `fd`, `rx_id`/`tx_id`, `bs`/`stmin` |
+| keys | the node's `[boot]` `image_key` / `session_key` (public, 64 hex; required — no silent default) | `gen/boot_gen.h` |
+| 0x29 challenge | the board's TRNG | `diag_board.c`'s `diag_sa_init`/`diag_sa_seed`, the RNG driver the application's 0x27 uses |
+
+So a tester addresses the application and then its bootloader **identically**: same bus, same
+ids, and on zone_a's CAN-FD edge bus the same FD frames with classic-sized ISO-TP. The boot also
+answers DID 0xF195 (the installed image's `sw_version`), the DID the application serves.
+
+`make` on a `[boot]` node builds both images (`all: boot`) with the application linked at the
+app slot; `make image SW_VERSION=<n>` wraps it twice (`<node>.img` signed and unmarked for the
+field, `<node>-factory.img` pre-marked for SWD); `make flash` is `boot-flash` (the boot at
+`BOOT_BASE`, the factory image at `APP_BASE`, a reset). The per-board examples `h755_boot` /
+`h735_boot` are gone — they were this program twice, hard-coding `0x7B0/0x7B8`, classic CAN and
+the dev keys.
+
+**The H755's CM4.** The boot manager runs on the CM7 and owns only bank 1's app slot. The CM4
+satellite (`domain_m4`, bank 2 at `0x08100000`) stays parked until the CM7 application releases it
+(`xcore_clocks_ready`), so in programming mode it simply waits; a system reset restarts both
+cores. A CAN field update does NOT refresh the CM4 image — it is flashed over SWD (`make -C
+nodes/domain_m4 flash`), as before (non-goal: multi-image orchestration).
+
+**tcu** (H723, Ethernet only) has no CAN, so no CAN bootloader reaches it: it does not declare
+`[boot]`, and it stays unflashable over the wire until the DoIP binding (P7) exists — that would
+need a NetX (or a smaller UDP/TCP) stack in the boot manager, the DoIP entity's activation and
+the same `Prog` behind it, and its own `bootmap.h` decision on the H723's single bank.
 
 **Dual-bank caveat for P4:** a full-bank swap swaps the bootloader out with the app —
 so bank-swap activation means either boot duplicated at the base of BOTH banks, or

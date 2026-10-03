@@ -92,7 +92,10 @@ end)
 
 test("domain: what the target does not serve is refused, not faked", function()
   local d = diag()
-  check.nrc(0x12, function() d:session(0x02) end)   -- programming: the bootloader handoff
+  d:session(0x01)
+  -- programming is the bootloader handoff ([boot]): accepted from extended only, so never from
+  -- default (boot_handoff.lua performs it)
+  check.nrc(0x7E, function() d:session(0x02) end)
   check.nrc(0x31, function() d:read_did(0xABCD) end)
 end)
 

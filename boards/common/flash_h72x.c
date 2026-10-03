@@ -1,14 +1,16 @@
-/* boards/h735dk/flash.c — the embedded flash driver (erase/program) for the
- * bootloader's FlashOps seam (docs/bootloader.md).
+/* boards/common/flash_h72x.c — the embedded flash driver (erase/program) for the
+ * bootloader's FlashOps seam (docs/bootloader.md), for the single-bank H72x/H73x parts — the
+ * H735-DK (boards/h735dk) and the NUCLEO-H723ZG (boards/h723) alike: one FLASH IP and one
+ * geometry (RM0468), so one driver (each board.mk names it as BOARD_FLASH).
  *
- * Ported from boards/h755zi/flash.c to the H735's SINGLE-BANK geometry: same
+ * Ported from boards/h755zi/flash.c to the SINGLE-BANK geometry: same
  * H7 FLASH IP (RM0468 for H72x/H73x), same 256-bit (32-byte) program word,
  * same key/CR/SR/CCR offsets and ECC semantics — but ONE bank (1 MB, 8 sectors
  * x 128 KB) at 0x08000000, so there is no bank-2 register block and no bank
  * dispatch. Addresses outside the bank fall through to a plain copy (RAM-backed
  * tests, header scans), exactly as the two-bank driver did.
  *
- * *** DRY-CODED, BENCH-UNVERIFIED on H735 *** — the H755 twin is silicon-
+ * *** DRY-CODED, BENCH-UNVERIFIED on H72x/H73x *** — the H755 twin is silicon-
  * verified; this keeps the same constants, minus bank 2. */
 #include <stdint.h>
 

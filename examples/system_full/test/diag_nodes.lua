@@ -45,7 +45,9 @@ for _, n in ipairs(nodes) do
 
   test(n.name .. ": what the target does not serve is refused, not faked", function()
     local d = diag(n)
-    check.nrc(0x12, function() d:session(0x02) end)
+    d:session(0x01)
+    -- programming is the bootloader handoff ([boot]): never from default (boot_handoff.lua)
+    check.nrc(0x7E, function() d:session(0x02) end)
     check.nrc(0x31, function() d:read_did(0xABCD) end)
     d:session(0x01)
     check.nrc(0x11, function() d:raw("\x28\x01\xF1") end) -- 0x28: nothing gates the target's frames

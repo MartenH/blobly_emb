@@ -31,6 +31,8 @@ BOARD_BSP_THREADX = $(BOARD_COMMON)/crt0.S $(BOARD_COMMON)/vectors_h75x.S $(BOAR
 BOARD_BSP_BARE    = $(BOARD_COMMON)/startup.c $(BOARD_DIR)/board.c
 BOARD_LD_THREADX  = $(BOARD_DIR)/threadx.ld
 BOARD_LD_BARE     = $(BOARD_DIR)/bare.ld
+# the embedded flash driver (the bootloader's FlashOps, the NvM journal) — boot/boot.mk links it
+BOARD_FLASH       = $(BOARD_DIR)/flash.c
 # board.h FORCED into every translation unit: the V program calls board_now_us() (u64) through an
 # FFI decl, and without the C prototype gcc assumes an int return — the value is cut to 32 bits
 # and sign-extended, so `now` went negative 35.8 min after boot (2^31 us) on every target. On

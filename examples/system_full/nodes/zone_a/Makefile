@@ -88,9 +88,15 @@ $(BUILD)/$(NAME).bin: $(BUILD)/$(NAME).elf
 $(BUILD):
 	mkdir -p $(BUILD)
 
+# behind its bootloader ([boot]: boot/boot.mk, included by gen/loom_build.mk) the application
+# goes to the app slot with the boot beside it; standalone, the image is the whole flash
+ifeq ($(BOOT_ON),1)
+flash: boot-flash
+else
 flash: $(BUILD)/$(NAME).bin
 	st-flash $(if $(SERIAL),--serial $(SERIAL),) write $(BUILD)/$(NAME).bin 0x08000000
 	st-flash $(if $(SERIAL),--serial $(SERIAL),) reset
+endif
 
 clean:
 	rm -rf $(BUILD) gen ports sig bin

@@ -62,17 +62,16 @@ else
 fi
 
 if [ "$FLASH" = 1 ]; then
-  echo "building + flashing domain (CM7 bank 1) and its CM4 satellite (bank 2) ..."
+  echo "building + flashing domain (CM7 bank 1: its bootloader + the app slot) and its CM4 satellite (bank 2) ..."
   make >/dev/null 2>&1 || { echo "FAIL: build error (domain)"; exit 1; }
   make -C ../domain_m4 >/dev/null 2>&1 || { echo "FAIL: build error (domain_m4)"; exit 1; }
   st-flash --serial "$SERIAL" write ../domain_m4/build/domain_m4.bin 0x08100000 >/dev/null 2>&1 || { echo "FAIL: flash error (bank 2)"; exit 1; }
-  st-flash --serial "$SERIAL" write build/domain.bin 0x08000000 >/dev/null 2>&1 || { echo "FAIL: flash error (bank 1)"; exit 1; }
-  # A FAILED reset is infrastructure, not something to sleep through. Unchecked, the script would
-  # then inspect whatever is still executing — and if the board happened to be running a compatible
-  # earlier image, its counters keep advancing and the run reports PASS without ever booting the
-  # binaries just flashed (codex on #280).
-  st-flash --serial "$SERIAL" reset >/dev/null 2>&1 \
-    || { echo "FAIL: st-flash reset failed after programming — the board may still be running the previous image (infrastructure)"; exit 1; }
+  # domain runs behind its bootloader ([boot]): `make flash` is boot/boot.mk's boot-flash — the boot
+  # at 0x08000000, the factory image at the app slot, then the reset. A FAILED reset fails make, and
+  # is infrastructure, not something to sleep through: unchecked, the script would inspect whatever is
+  # still executing and could report PASS without ever booting the binaries just flashed (codex on #280).
+  make flash SERIAL="$SERIAL" >/dev/null 2>&1 \
+    || { echo "FAIL: flash error (bank 1: boot + app) or its reset — the board may still be running the previous image"; exit 1; }
   sleep 3
 fi
 [ -f "$ELF" ] || { echo "FAIL: $ELF missing (build first, or pass --flash)"; exit 1; }

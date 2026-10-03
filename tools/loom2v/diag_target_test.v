@@ -444,6 +444,8 @@ id    = 0xF190
 ascii = "BLOBLY-TEST"
 
 [boot]
+image_key   = "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"
+session_key = "29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7"
 '
 
 fn in_order(glue string, steps []string) {
@@ -486,7 +488,7 @@ fn test_a_boot_node_hands_off_after_its_answer_has_left() {
 }
 
 fn test_without_boot_the_programming_session_stays_refused() {
-	code, out, glue := generate('boot_none', boot_conn.replace('[boot]', ''))
+	code, out, glue := generate('boot_none', boot_conn.all_before('[boot]'))
 	assert code == 0, out
 	assert glue.contains('g_diag.server.no_programming = true')
 	assert !glue.contains('boot_handoff')
@@ -521,9 +523,9 @@ security_key = "reference"
 
 fn test_a_handoff_that_cannot_be_performed_or_reached_is_refused() {
 	for name, c in {
-		'no_isotp':     ['[boot]\n', 'declare its [isotp] connection']
+		'no_isotp':     ['[boot]' + boot_conn.all_after('[boot]'), 'declare its [isotp] connection']
 		'no_boot':      ['[uds.services]\n"0x10" = {}\n"0x10 02" = {}\n"0x22" = {}\n' +
-			boot_conn.replace('[boot]', ''), 'the node has no [boot]']
+			boot_conn.all_before('[boot]'), 'the node has no [boot]']
 		'programming':  ['[uds.services]\n"0x10" = {}\n"0x10 02" = { sessions = ["programming"] }\n"0x22" = {}\n' +
 			boot_conn, 'names the programming session']
 		'level_out':    ['[uds]\nsecurity_key = "reference"\n[uds.services]\n"0x10" = {}\n"0x10 02" = { sessions = ["default"], security = 1 }\n"0x22" = {}\n"0x27" = {}\n' +
@@ -533,7 +535,9 @@ fn test_a_handoff_that_cannot_be_performed_or_reached_is_refused() {
 		'no_shared':    ['[uds.services]\n"0x10" = { sessions = ["default"] }\n"0x10 02" = {}\n"0x22" = {}\n' +
 			boot_conn, 'share no session']
 		'did_clash':    [boot_conn + '\n[[did]]\nid    = 0xF195\nbytes = "00 00 00 01"\n', 'leave it to [boot]']
-		'keys':         [boot_conn + 'enabled = true\n', '[boot] takes no keys yet']
+		'keys':         [boot_conn + 'enabled = true\n', '[boot] takes `image_key` and `session_key`']
+		'no_key':       [boot_conn.all_before('session_key'), 'needs `session_key`']
+		'bad_key':      [boot_conn.replace('"29acbae1', '"zz'), 'must be 64 hex characters']
 	} {
 		code, out, _ := generate('boot_${name}', c[0])
 		assert code != 0, '${name}: loom2v accepted it'
@@ -542,7 +546,7 @@ fn test_a_handoff_that_cannot_be_performed_or_reached_is_refused() {
 	// `boot` is the table, nothing else (a top-level key, so written before the first table)
 	cn, on, _ := generate_edited('boot_not_table', fn (src string) string {
 		return 'boot = []\n' + src
-	}, boot_conn.replace('[boot]', ''))
+	}, boot_conn.all_before('[boot]'))
 	assert cn != 0 && on.contains('must be the [boot] table'), on
 	// a host build has no bootloader to reset into
 	tmp := os.join_path(os.temp_dir(), 'diag_target_boot_host_${os.getpid()}')
@@ -551,7 +555,7 @@ fn test_a_handoff_that_cannot_be_performed_or_reached_is_refused() {
 	}
 	code, out, _ := run_in_scratch(tmp, 'overspeed', fn (src string) string {
 		return src
-	}, '\n[boot]\n')
+	}, '\n[boot]' + boot_conn.all_after('[boot]'))
 	assert code != 0 && out.contains('[boot] is a ThreadX target'), out
 }
 
@@ -585,4 +589,57 @@ allow_bench_key = true
 		'if g_diag.reset_due() == uds.reset_into_boot {',
 		'C.diag_sys_reset()',
 	])
+}
+
+// the node's bootloader is built from the same config: gen/boot_gen.h carries the [isotp] ids, its
+// flow control, the FDCAN and frame format of its bus and the [boot] keys, and gen/loom_build.mk
+// pulls in boot/boot.mk (the boot image, the app at the app slot, the image containers)
+fn test_a_boot_node_gets_its_bootloader_config() {
+	tmp := os.join_path(os.temp_dir(), 'diag_target_boot_gen_${os.getpid()}')
+	defer {
+		os.rmdir_all(tmp) or {}
+	}
+	code, out, _ := run_in_scratch(tmp, 'h735_threadx', fn (src string) string {
+		return src
+	}, boot_conn.replace('functional_id = 0x7DF', 'functional_id = 0x7DF\nbs = 8\nstmin_ms = 2'))
+	assert code == 0, out
+	h := os.read_file(os.join_path(tmp, 'boot_gen.h')) or { panic(err) }
+	for want in ['#define BOOT_CAN_IDX 0', '#define BOOT_CAN_FD 0', '#define BOOT_RX_ID 0x7b0u',
+		'#define BOOT_TX_ID 0x7b8u', '#define BOOT_BS 8u', '#define BOOT_STMIN 2u',
+		'#define BOOT_IMAGE_KEY {0x03, 0xa1, 0x07,', '#define BOOT_SESSION_KEY {0x29, 0xac, 0xba,'] {
+		assert h.contains(want), '${want} missing:\n${h}'
+	}
+	mk := os.read_file(os.join_path(tmp, 'loom_build.mk')) or { panic(err) }
+	assert mk.contains('include ' + r'$(REPO)/boot/boot.mk'), mk
+	// without [boot], neither
+	tmp2 := tmp + '_none'
+	defer {
+		os.rmdir_all(tmp2) or {}
+	}
+	c2, o2, _ := run_in_scratch(tmp2, 'h735_threadx', fn (src string) string {
+		return src
+	}, boot_conn.all_before('[boot]'))
+	assert c2 == 0, o2
+	assert !os.exists(os.join_path(tmp2, 'boot_gen.h'))
+	assert !(os.read_file(os.join_path(tmp2, 'loom_build.mk')) or { '' }).contains('boot.mk')
+}
+
+// an FD bus opens the bootloader in FD as it opens the application (zone_a: the edge bus is CAN-FD,
+// its ISO-TP classic-sized) — the frame format a tester sees does not change across the handoff
+fn test_a_boot_on_an_fd_bus_opens_it_in_fd() {
+	mut m := Model{}
+	m.isotp_conns = [IsotpConn{
+		bus:   'can1'
+		rx_id: 0x7C0
+		tx_id: 0x7C8
+	}]
+	m.boot = BootCfg{
+		on:          true
+		image_key:   []u8{len: 32, init: 1}
+		session_key: []u8{len: 32, init: 2}
+	}
+	h := boot_gen_h(m, fdcan_index('can1'), true)
+	assert '#define BOOT_CAN_IDX 1 /* the [isotp] bus "can1": the comm thread\'s FDCAN */' in h
+	assert '#define BOOT_CAN_FD 1 /* its frame format, as the application opens it */' in h
+	assert fdcan_index('can10') == '' && fdcan_index('can3') == '' && fdcan_index('edge') == ''
 }

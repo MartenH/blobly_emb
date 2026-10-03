@@ -62,59 +62,50 @@ openocd -f interface/stlink.cfg -f target/stm32h7x.cfg \
 ## 2. Behind the bootloader — the field layout
 
 Boot manager at sector 0, app at APP_BASE 0x08020000 (64-byte header, vectors at
-+0x400). Three artifacts:
++0x400) — the board's `bootmap.h` says so, and nothing else does. A node that declares
+**`[boot]`** in its `ecu.toml` (the `system_full` CAN nodes: domain, sysnode, zone_a) gets
+everything from its own config, through `gen/loom_build.mk` → `boot/boot.mk`:
+
+- its application **linked at the app slot** (`make` — no flag: the link follows `[boot]`);
+- its **boot manager**, one program for every board and node (`boot/target/main.v`), built
+  on the node's `[isotp]` ids, bus and frame format and its `[boot]` keys (`make boot`,
+  part of `make`) — so a tester addresses the app and then its boot identically;
+- both **image containers** (`make image SW_VERSION=<n>`): `build/<node>.img`, signed and
+  unmarked (the boot verifies it and writes the mark LAST — the torn-transfer guarantee),
+  and `build/<node>-factory.img`, pre-marked, for SWD only.
+
+**First time (factory, over SWD):** `make flash` on such a node is `boot-flash` — the boot at
+0x08000000, the factory image at APP_BASE, a reset:
 
 ```sh
-# the boot manager (bare metal, UDS on 0x7B0/0x7B8)
-make -C examples/h755_boot
-
-# the SAME app, linked for the app slot — the link mode is part of the artifact:
-# switching APP_LINK relinks automatically, and `make APP_LINK=boot flash` refuses
-cd examples/h755_threadx && make APP_LINK=boot
-
-# the CM4 satellite (bank 2) — built here too: the factory flash below writes it
-make -C ../h755_m4_app
-
-# wrap TWICE — the two images are NOT interchangeable:
-#   factory (--valid): pre-marked, for SWD flashing only
-#   field  (no mark):  the bootloader itself verifies and writes the mark LAST —
-#                      that ordering IS the torn-transfer recovery guarantee
-cd ../.. && v run tools/mkimage examples/h755_threadx/build/h755_threadx.bin \
-    examples/h755_threadx/build/factory.img <sw_version> --valid --pad-vectors
-v run tools/mkimage examples/h755_threadx/build/h755_threadx.bin \
-    examples/h755_threadx/build/field.img <sw_version> --pad-vectors --sign examples/keys/mkimage.seed
-```
-
-**First time (factory, over SWD):**
-
-```sh
-st-flash write examples/h755_boot/build/h755_boot.bin 0x08000000
-st-flash write examples/h755_threadx/build/factory.img 0x08020000
-st-flash write examples/h755_m4_app/build/h755_m4_app.bin 0x08100000  # bank 2: the satellite
-st-flash reset        # boot verifies header+CRC and jumps; the app appears on can0
+make -C examples/system_full/nodes/domain flash SERIAL=<sn> SW_VERSION=1
+make -C examples/system_full/nodes/domain_m4 flash SERIAL=<sn>   # H755 bank 2: the CM4 satellite
 ```
 
 The boot manager owns only the CM7 app slot — **CAN field updates do not refresh the
 CM4 image**; it rides bank 2 and is reflashed over SWD when its config changes.
 
-**Every time after (field, over CAN):** the app's `boot` shell command reboots into the
-boot manager (no reply — silence is the ack, the reset preempts it), then the flasher
-drives the whole UDS session (erase, transfer, on-target CRC, valid mark, reset):
+**Every time after (field, over CAN):** the application's diagnostic server hands over
+itself — `0x10 03`, then `0x10 02` (behind 0x27 where its `"0x10 02"` row asks): it answers
+`50 02`, writes the boot request cell and resets, and the boot opens the programming session
+on the same ids. The flasher then drives the UDS session (0x29, erase, transfer, on-target
+check, valid mark, reset):
 
 ```sh
-cansend can0 7F0#626F6F74      # ascii "boot" -> app traffic stops, boot mode
+make -C examples/system_full/nodes/zone_a image SW_VERSION=8
 cd ../blobly_net
 v -enable-globals -path "@vlib|@vmodules|modules" run cmd/flash \
-    can0 ../blobly_emb/examples/h755_threadx/build/field.img 08020000 7B0 7B8 <sw_version>
-# ...
-# flash: image verified + marked valid
-# flash: ECU reset — done          <- the app is running again
+    cansub:e5a16adf/1@500000/2000000 ../blobly_emb/examples/system_full/nodes/zone_a/build/zone_a.img 08020000 7C0 7C8 8
 ```
 
-A transfer cut anywhere leaves an image the boot
+`examples/system_full/test/boot_bench.sh` is that loop for each node, with the handoff and the
+version check in Lua (`boot_handoff.lua`). A transfer cut anywhere leaves an image the boot
 refuses (valid mark last) — the board sits in programming mode and a plain re-run of
-`cmd/flash` recovers it. All bench-verified, including pull-power mid-transfer
-([../bootloader.md](../bootloader.md) bench log).
+`cmd/flash` recovers it ([../bootloader.md](../bootloader.md) bench log).
+
+The standalone examples `h755_threadx` / `h735_threadx` keep `make APP_LINK=boot` (an image for
+the app slot) and their `boot` shell command (the request cell, then a reset); the boot that
+serves them is a `[boot]` node's on the same board.
 
 ## 3. blobly_net — CLI and GUI
 

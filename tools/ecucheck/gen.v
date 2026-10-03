@@ -321,7 +321,10 @@ fn specs() map[string]map[string]Key {
 			'security_key': k(.str) // "reference" = blobly_net's public bench key (a target); absent = the OEM's diag_sa_key_ok
 			'services': sub(.namedmap, false, 'uds_service') // "0xSID" = { ... } ("0x10 02": the [boot] handoff); absent = the default table
 		}
-		'boot':       {} // no keys yet: its presence is the declaration (docs/bootloader.md)
+		'boot':       {
+			'image_key':   req(.str) // the image-signing PUBLIC key, 64 hex (docs/bootloader.md)
+			'session_key': req(.str) // the 0x29 session PUBLIC key, 64 hex
+		}
 		'uds_service': {
 			'sessions': k(.str_arr) // default / extended / safety; absent = the service's default sessions
 			'security': k(.int) // the 0x27 level the service needs; 0 = none

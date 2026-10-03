@@ -26,6 +26,7 @@ TOOL_SRC_dbc2cfg     := tools/dbc2cfg/gen.v
 TOOL_SRC_dbcmerge    := tools/dbcmerge/gen.v
 TOOL_SRC_ecucheck    := tools/ecucheck/gen.v
 TOOL_SRC_loom2v      := tools/loom2v
+TOOL_SRC_mkimage     := tools/mkimage/gen.v
 TOOL_SRC_scale_gen   := tools/scale_gen/gen.v
 TOOL_SRC_sigmap      := tools/sigmap/gen.v
 TOOL_SRC_syscheck    := tools/syscheck

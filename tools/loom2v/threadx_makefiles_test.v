@@ -238,3 +238,20 @@ fn test_the_glue_list_follows_the_declarations() {
 			r'$(REPO)/boards/common/boot_handoff.c' + '\n', sym
 	}
 }
+
+// A node behind its bootloader ([boot]) must not `make flash` its application to 0x08000000, over
+// the boot: its Makefile hands `flash` to boot/boot.mk's boot-flash (the boot at its base, the
+// factory image at the app slot). The Makefile cannot ask its own ecu.toml, so this asks it for them.
+fn test_a_boot_node_flashes_through_its_bootloader() {
+	mut seen := 0
+	for mk in threadx_makefiles() {
+		ecu := os.read_file(os.join_path(os.dir(mk), 'ecu.toml')) or { continue }
+		if !ecu.split_into_lines().any(it.trim_space() == '[boot]') {
+			continue
+		}
+		seen++
+		src := os.read_file(mk) or { panic(err) }
+		assert src.contains('ifeq ($(BOOT_ON),1)\nflash: boot-flash\nelse\n'), '${mk}: a [boot] node whose `flash` writes the app over its bootloader'
+	}
+	assert seen >= 3, 'found ${seen} [boot] nodes — system_full has three'
+}

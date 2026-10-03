@@ -42,6 +42,8 @@
 #     make -C examples/system_full/nodes/domain    flash SERIAL=001E00243335510835383531  # H755 CM7 (bank 1)
 #     make -C examples/system_full/nodes/domain_m4 flash SERIAL=001E00243335510835383531  # H755 CM4 (bank 2)
 #     make -C examples/system_full/nodes/zone_a    flash SERIAL=005500333233510739363634  # H723
+# (sysnode, domain and zone_a run behind their bootloaders ([boot]): `flash` writes the boot at
+#  0x08000000 and the app at 0x08020000; field updates over CAN: test/boot_bench.sh)
 # (the H755 needs BOTH banks — without domain_m4 on bank 2 the CM4 is dead and no cross-core
 #  bulk / CpuLoad runs; a reset after flashing both starts the dual-core node.)
 #
