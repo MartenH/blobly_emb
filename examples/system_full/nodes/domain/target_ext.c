@@ -125,7 +125,7 @@ void xcore_clocks_ready(void) {
      * the CM4 would otherwise stay in its while(*burst) loop forever after this boot (no FB, no
      * paced producer). SRAM4 is retained, so clear it before releasing the CM4 (codex #235 r3). */
     *(volatile uint32_t *)XCORE_BULK_BURST_ADDR = 0u;
-    *(volatile uint32_t *)XCORE_CLK_ADDR = XCORE_CLK_MAGIC;
+    xcore_clk_release();
     __asm__ volatile("dsb");
 }
 

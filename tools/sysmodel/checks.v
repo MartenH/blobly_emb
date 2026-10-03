@@ -2796,6 +2796,10 @@ fn check_doip(s System) []Issue {
 		// REQ-NET-012: no change of ECU state for an unauthenticated network tester
 		mut net012 := doipcfg.service_refusals(n.view.uds_table, n.view.uds_rows)
 		net012 << doipcfg.did_refusals(n.view.uds_rows, n.view.did_writes)
+		hand := doipcfg.handoff_refusal(n.view.boot, n.view.uds_handoff_security)
+		if hand != '' {
+			net012 << hand
+		}
 		bench := doipcfg.bench_key_refusal(n.view.uds_security_key, n.doip_policy.allow_bench_key)
 		if bench != '' {
 			net012 << bench

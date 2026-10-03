@@ -322,13 +322,7 @@ fn io_can0_10ms(ctx voidptr) {
 		}
 	}
 	st.conn_diag.serve()
-	mut cf_diag := can.Frame{}
-	for st.chan.tx_ready() && st.conn_diag.produce(now, mut cf_diag) {
-		if !st.chan.send(cf_diag) {
-			st.conn_diag.abort_tx()
-			break
-		}
-	}
+	st.conn_diag.pump(now, mut st.chan) // comm/diag: a refused frame aborts the answer
 	diag_rx_ok = st.conn_diag.server.rx_enabled()
 	if !diag_rx_ok { // silence commanded: latch it, frame or not
 		st.diag_rx_was_off = true
@@ -472,7 +466,7 @@ pub fn partition_can0(ch can.Channel) {
 	st.e2e_rx_brake_status.timeout_us = 300000
 	st.e2e_rx_brake_status.arm(osal.now_us()) // from start, like the COM deadline
 	st.conn_diag.init(u32(0x101), u32(0x102), u32(0x7df), 8, 0)
-	st.conn_diag.server.no_programming = true // programming is the bootloader's (handoff: R2)
+	st.conn_diag.server.no_programming = true // programming is the bootloader's
 	st.conn_diag.server.s3_us = u64(2000) * 1000
 	st.conn_diag.server.serves_reset = true // the owner performs reset_req once answered
 	st.conn_diag.server.serves_comm_control = true // and gates its frames on 0x28

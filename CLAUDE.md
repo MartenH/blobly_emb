@@ -33,7 +33,8 @@ loom/   the Loom: scheduler (the de-AUTOSAR'd "RTE")
 comm/   comms stack: com, e2e (AUTOSAR E2E Profile 1), secoc (AES-CMAC), isotp (15765-2), uds (14229), nm,
         fault (debounce + fault memory behind 0x19/0x14/0x85), diag (the UDS server on its ISO-TP
         connection and the order a pass runs it — the host bridge calls it; the ThreadX comm
-        thread from R2)
+        thread from R2; its transport step — intake, busy guard, pump/abort, S3 hold, wire
+        drain — is step.v, which the bootloader runs whole as serve_step)
 driver/ driver port: can — SocketCAN (host) / ST FDCAN HAL / AUTOSAR CanIf (CDD); see docs/porting.md
 osal/   OS abstraction: time, cores, IOC (sim=POSIX, target=ThreadX AMP)
 tools/  BUILD-TIME only (heap OK): dbc2cfg, cfg2v, loom2v, sigmap, benches, candb
@@ -120,7 +121,7 @@ does not yet read as "no trace" on the blobly_net side.
 
 **Also gated now:** the STM32H7 cross builds — **every image, ThreadX and NetX Duo included** —
 in their own CI job: apt's `gcc-arm-none-eabi` plus `make deps` (all three sources, about ten
-seconds of cloning), then 17 images in a few minutes (the loop visits 19 directories: `system_full/` and `system_io/` build their nodes). Two passes, generate-then-build: a
+seconds of cloning), then 18 images in a few minutes — 15 applications and the bootloaders of the three `[boot]` nodes (the loop visits 17 directories: `system_full/` and `system_io/` build their nodes). Two passes, generate-then-build: a
 satellite image like `h755_m4_app` has no `gen` target because its OWNER's generation writes the
 `xcore_gen.h` it includes, so a from-clean build in directory order reaches it first and fails. Each one ends in
 **`scripts/lint_vinit.sh`**, which the example Makefiles invoke and which can only run on the
@@ -137,6 +138,17 @@ The job then links one shape no committed image has, a **multi-thread gateway**
 ThreadX image links ONE generic glue, `boards/common/comm_glue.c`, through `gen/loom_build.mk`'s
 `LOOM_GLUE_SRCS` — never named in a Makefile; a node's own C (shell commands, the H755 xcore
 handoff) is its `target_ext.c` and redefines nothing of it (`threadx_makefiles_test.v`, #359).
+The same list carries `boards/common/boot_handoff.c` into a node that declares **`[boot]`** — it
+runs behind the bootloader, so its server's `0x10 02` is the programming handoff (answered, then
+the boot request cell and the reset by 0x11's path; docs/bootloader.md "App → boot, as built").
+That file includes the board's `bootmap.h`; on a board with none the build stops there, naming
+`[boot]`. A `[boot]` node's `gen/loom_build.mk` also includes **`boot/boot.mk`**: the ONE boot
+manager program (`boot/target/main.v`, `boards/common/boot_glue.c`) built for that node from its
+`[isotp]` and `[boot]` keys (`gen/boot_gen.h`) and its board's `bootmap.h`, the application linked
+at the app slot, `make image SW_VERSION=<n>`, and `make flash` = boot + factory image
+(`threadx_makefiles_test.v` pins that). The system_full CAN nodes all run that way, so
+**`make flash` on domain / sysnode / zone_a writes the boot at 0x08000000 and the app at
+0x08020000** — not one image at 0x08000000 any more.
 
 **CI pins the V compiler** to the release tag in `.v-version` (currently `0.5.2`), installed as the
 **prebuilt** `v_linux.zip` release asset in both jobs. It used to install master HEAD, so an upstream
@@ -145,7 +157,7 @@ module builder`), failing both jobs in the *install* step with nothing to do wit
 Note `vlang/setup-v` does not solve this on its own: given a tag or SHA it downloads the SOURCE and
 self-hosts it, and that build is what breaks (0.5.2 from source dies on a duplicate `C.open`; master
 `8631b280` on an empty `builder error:`). The release asset is already built. Bump `.v-version`
-deliberately, and re-run the full local gate on the new compiler — the host suite AND the 17 cross
+deliberately, and re-run the full local gate on the new compiler — the host suite AND the 18 cross
 images, since the bare-metal path is the one that historically needed a specific V (#27564).
 Your local V does **not** have to match the pin (working against master is often deliberate), but it
 usually explains a local/CI disagreement — `make v-pin` prints both and says whether they differ.
@@ -163,8 +175,9 @@ when its board is absent, so a partial bench still passes for what IS present.
 
 Know four things before running it on the bench:
 
-- **`examples/system_full/nodes/domain` flashes TWO banks** — the CM7 image at `0x08000000` and its
-  CM4 satellite at `0x08100000` — and needs `BLOB_H755_SERIAL` to do so. Neither H755 script will
+- **`examples/system_full/nodes/domain` flashes TWO banks** — on the CM7's, its bootloader at
+  `0x08000000` and the factory app image at `0x08020000` (`make flash` = boot-flash); its CM4
+  satellite at `0x08100000` — and needs `BLOB_H755_SERIAL` to do so. Neither H755 script will
   flash without that serial: the ST-LINK dev-type (`STM32H74x_H75x`) cannot tell an H755 from an
   H743/745/753, and these tests are destructive.
 - **Both H755 scripts target the SAME physical board** (`h755_io_analog` and `system_full/nodes/domain`),

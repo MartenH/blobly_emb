@@ -15,9 +15,7 @@
  * against SYSTEM_CLOCK = the FINAL 200 MHz HCLK, so starting before the PLL switch would
  * make the tick 3.125x off. A plain volatile poll: SRAM4 is uncached on both cores. */
 void xcore_wait_clocks(void) {
-	volatile uint32_t *clk = (volatile uint32_t *)XCORE_CLK_ADDR;
-	while (*clk != XCORE_CLK_MAGIC) {
-	}
+	xcore_clk_take(); /* consumed: a release left in SRAM4 across a reset can never start us */
 }
 
 /* --- timebase (same contract as board_now_us on the CM7) ------------------------------ */

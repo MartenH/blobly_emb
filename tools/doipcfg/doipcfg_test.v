@@ -92,3 +92,12 @@ fn test_out_of_range_write_levels_gate_nothing() {
 		}]).len == 1
 	}
 }
+
+// the programming handoff restarts the ECU into its bootloader: over the network it needs a level of
+// its own ("0x10 02"), which 0x10's exemption does not give it
+fn test_the_handoff_needs_a_level_over_the_network() {
+	assert handoff_refusal(false, 0) == ''
+	assert handoff_refusal(true, 0).contains('"0x10 02" = { security = N }')
+	assert handoff_refusal(true, 1) == ''
+	assert handoff_refusal(true, 9).contains('is not a 0x27 level')
+}

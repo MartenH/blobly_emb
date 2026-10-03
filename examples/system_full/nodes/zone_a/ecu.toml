@@ -132,6 +132,16 @@ security_attempts = 3
 security_delay_ms = 3000
 security_key      = "reference"
 
+# Behind its bootloader (docs/bootloader.md): the boot manager is built from THIS config (`make boot`,
+# boot/boot.mk) and answers on the [isotp] connection below, so a tester addresses the application
+# and then its bootloader identically. 0x10 02 here is the programming handoff — answered, then the
+# boot request cell and the reset. The keys are the PUBLIC halves of the DEV keys
+# (examples/keys/README.md: mkimage.seed signs images, tester.seed authenticates 0x29) — a
+# production node names its own.
+[boot]
+image_key   = "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"
+session_key = "29acbae141bccaf0b22e1a94d34d0bc7361e526d0bfe12c89794bc9322966dd7"
+
 [isotp]
 bus           = "can0"
 rx_id         = 0x7C0

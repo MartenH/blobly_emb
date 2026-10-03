@@ -8,7 +8,8 @@ Different keys mean different custody and different blast radius if one leaks.
 | `mkimage.seed` | **release / image signing** | `tools/mkimage --sign` (build/release, offline) | `image_key` | **forged firmware** (catastrophic) |
 | `tester.seed` | **tester / session (0x29)** | `cmd/flash`, the GUI Flash panel (in the field) | `session_key` | start sessions only (annoyance) |
 
-Public keys baked into the boot manager (`examples/h755_boot/main.v`,
+Public keys baked into the boot manager (a node's `[boot]` `image_key` / `session_key`, e.g.
+`examples/system_full/nodes/*/ecu.toml`,
 `examples/boot_sim/main.v`):
 
     image_key   = 03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8

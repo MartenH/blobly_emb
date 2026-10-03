@@ -145,8 +145,12 @@ the FB never calls a service API.
 - 🧭 **R2 UDS on the target** — the `[isotp]` connection on the ThreadX comm thread, 0x11 with the
   bounded controller drain (landed); the ISO 14229 server configured as `[uds]` with a per-service
   session/security table (#346), reachable over DoIP too (`[doip]`, #338/#345; network state
-  changes need DoIP's own unlock, REQ-NET-012, #347). Left: the programming-session handoff into
-  the bootloader (bench)
+  changes need DoIP's own unlock, REQ-NET-012, #347); the programming-session handoff's app side
+  generated from `[boot]` (0x10 02 answered, then the boot cell and the reset by 0x11's path).
+  The bootloader is one platform program built per node from that config (`boot/boot.mk`), and
+  every `system_full` CAN node (domain, sysnode, zone_a) runs behind its own. Left: the bench run
+  (`test/boot_bench.sh`: handoff → 0x29 → flash → new version), and tcu (Ethernet only) waits for
+  the bootloader's DoIP binding
 - 🧭 **R5 target COM checks** — rx deadlines + E2E/SecOC on the comm thread, so receive
   status reaches FBs on silicon
 - 🧭 **R6 fault memory on the target** — *R6a landed (#350, 2026-10-02):* `[[fault]]` on a

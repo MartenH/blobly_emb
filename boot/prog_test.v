@@ -259,7 +259,7 @@ fn test_s3_silence_expires_session() {
 	mut f := &TestFlash{}
 	mut p := new_prog(mut f)
 	unlock(mut p)
-	p.last_rx_us = 1_000_000
+	p.heard(1_000_000)
 	// just inside the window: session + unlock survive
 	p.tick(1_000_000 + s3_server_us)
 	assert p.srv.session == 0x02
@@ -288,12 +288,36 @@ fn test_idle_return_window() {
 	assert p.idle_return_due(t0 + idle_return_us + 1, t0)
 	// tester spoke at t1: the window restarts from there
 	t1 := t0 + 2_000_000
-	p.last_rx_us = t1
+	p.heard(t1)
 	assert !p.idle_return_due(t1 + idle_return_us, t0)
 	assert p.idle_return_due(t1 + idle_return_us + 1, t0)
 	// in a programming session the window never fires
 	assert ask(mut p, [u8(0x10), 0x02])[0] == 0x50
 	assert !p.idle_return_due(t1 + 100 * idle_return_us, t0)
+}
+
+// @verifies REQ-BOOT-003
+// The handoff: a boot the application entered by 0x10 02 opens the programming session the tester
+// was promised — 0x29 is served at once, still locked — and a tester that then goes silent loses
+// it to S3 and, past the stay-window, the ECU to its application.
+fn test_a_handed_off_boot_opens_the_programming_session() {
+	mut f := &TestFlash{}
+	mut p := new_prog(mut f)
+	t0 := u64(0) // the boot's clock may read 0 at the start: still a real stamp
+	p.open_handed_off(t0)
+	assert p.srv.session == 0x02 && !p.unlocked
+	assert ask(mut p, [u8(0x29), 0x01])[..2] == [u8(0x69), 0x01]
+	// the clock may read 0 when the session opens: it survives the S3 window all the same
+	for now in [t0, t0 + 1, t0 + s3_server_us] {
+		p.tick(now)
+		assert p.srv.session == 0x02, 'the handed-off session expired at ${now}'
+		assert !p.idle_return_due(now, t0), 'the stay-window fired at ${now}'
+	}
+	mut q := new_prog(mut f)
+	q.open_handed_off(t0)
+	q.tick(t0 + s3_server_us + 2)
+	assert q.srv.session == 0x01, 'a silent tester keeps the handed-off session'
+	assert q.idle_return_due(t0 + s3_server_us + idle_return_us + 2, t0)
 }
 
 // ---- P5: signed-image authenticity (REQ-BOOT-011) ----

@@ -152,6 +152,11 @@ fn validate_doip(m Model) {
 	for why in doipcfg.service_refusals(m.uds.table, rows) {
 		panic('loom2v: [doip] ${why}')
 	}
+	// ...the handoff into the bootloader included, which 0x10's exemption does not cover
+	hand := doipcfg.handoff_refusal(m.boot.on, i64(m.uds.handoff_security))
+	if hand != '' {
+		panic('loom2v: [doip] ${hand}')
+	}
 	// ...and the key that level is checked with must not be one anybody can compute
 	why := doipcfg.bench_key_refusal(m.uds.security_key, d.policy.allow_bench_key)
 	if why != '' {

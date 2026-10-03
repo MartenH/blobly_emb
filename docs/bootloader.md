@@ -1,6 +1,10 @@
 # Bootloader — design + build log
 
 > Status (2026-07-16): **P1–P3 + P5 BENCH-VERIFIED on the H755; P4 (atomic activation) pending.**
+> 2026-10-03: the **app-side handoff** is generated from config (`[boot]`, below — "App → boot,
+> as built"), and the boot manager is ONE platform program built per node ("One boot manager,
+> every node", below): every `system_full` CAN node — domain (H755), sysnode (H735), zone_a (H723)
+> — runs behind its own. Bench run pending (`examples/system_full/test/boot_bench.sh`).
 > The chain runs on real silicon: header-verified jump, CAN reflash + torn-image
 > recovery, S3/return-to-app session timers, and full asymmetric authenticity —
 > Ed25519 image signatures verified on the CM7 (no heap) + a 0x29 session gate
@@ -69,12 +73,109 @@ a diagnostic session to tear down) — **never jumps**: it writes its result and
 self-resets, and the next cycle takes the virgin happy path. Peripheral-state leakage
 into the app is eliminated by construction, not managed by a deinit checklist.
 
-**App → boot** is the request cell above; **information forward** is its sibling: a
+**App → boot** is the request cell above (as built: "App → boot, as built" below); **information forward** is its sibling: a
 `boot_info` no-init cell (boot reason — normal / freshly-flashed / was-invalid,
 bootloader version) written by boot before the jump, exposed by the app over a
 DID/shell command without re-deriving anything. Both cells live in one board-owned
 header (the `xcore.h` pattern) and are bound in `[boot]` so generator, app, and boot
 manager cannot disagree on the addresses.
+
+### App → boot, as built (P3)
+
+A node declares `[boot]` in its `ecu.toml` (no keys yet: its presence is the declaration), and its
+generated diagnostic server (comm/uds, comm/diag, `tools/loom2v/gen_diag.v`) treats `0x10 02` as
+the handoff instead of refusing it:
+
+1. **Gated like every service**: by the `[uds] services` table — the 0x10 row, and the handoff's
+   own sub-function row `"0x10 02" = { sessions = [...], security = N }` (0x7E outside its
+   sessions, 0x33 below its level; absent, the extended session with no level) — then by the
+   application's **conditions seam** `boot_handoff_ok()` (REQ-BOOT-015: weak in
+   `boards/common/boot_handoff.c`, allowing; an application overrides it in its own glue and
+   answers conditionsNotCorrect, 0x22). A `[doip]` node must put a level on the row (REQ-NET-012).
+2. **Answered first**: the positive `50 02` with the P2/P2* record — the bootloader's own
+   (`uds.session_answer` is one statement for both servers, pinned by a test) — and
+   `reset_req = uds.reset_into_boot` recorded. The application's session does not change: if the
+   answer is lost (a refused frame, a dropped DoIP connection) the handoff is cancelled with the
+   server exactly as it was.
+3. **Performed as an answered reset** by the comm thread (`diag_target_reset`): the same path 0x11
+   takes — the bounded controller drain (REQ-BOOT-012), on a `[doip]` node the
+   `doip_tx_pending()` wait, the NvM flush, the 0x27 keep cell — then the **boot request cell**
+   (`boards/common/bootcell.h`, one statement of the cells for both sides, addresses from the
+   board's `bootmap.h`) and the reset. `[boot]` also serves DID **0xF195**: the running image's
+   header `sw_version`, so a tester can see which image the bootloader started.
+
+**Why the positive answer before the reset, not 0x78 then the bootloader's answer.** ISO 14229-1
+allows both for a server that must jump to boot software to enter programming: the application may
+send the positive response before the jump, or answer responsePending and leave the final positive
+response to the boot software. This stack sends it from the application because:
+
+- **DoIP has no second half**: a network tester's TCP connection dies with the reset and the
+  bootloader has no DoIP binding (P7), so a 0x78 over DoIP is a promise nobody can keep. One rule
+  for both transports beats a per-transport answer.
+- **The bootloader would answer a request it never received**: the final response needs the
+  request's addressing and suppress bit carried across the reset in the cell — state the boot
+  manager does not otherwise need, for an answer the application can give with what it has.
+- **The timing in the answer is the bootloader's**: both servers build `50 02` from one function,
+  so the P2/P2* the tester adopts are the ones the session it is entering keeps.
+- **blobly_net's client takes either** (`modules/uds` `Client.exchange`: a `0x78` re-arms the wait by
+  P2*, a positive answer ends it), so nothing on the tester side decides it.
+
+What the choice costs: after `50 02` the tester must let the bootloader come up before its next
+request (clocks and CAN, a few ms after the reset), and a tester that misses that window retries.
+The boot manager keeps the promise: the request cell carries WHY it was written
+(`BOOTCELL_REQ_HANDOFF`, or `BOOTCELL_REQ_SHELL` for the bench `boot` command), and on a handoff
+`boot.Prog.open_handed_off` starts the server in the programming session — locked, and timed by
+S3 like any session, so a tester that never speaks loses it and the stay-window (REQ-BOOT-014)
+gives the ECU back to the application (docs/diagnostics.md §7, "the session survives the
+handoff"). Serving on the ids and bus of the node's own `[isotp]` is the per-node bootloader's,
+built per node ("One boot manager, every node", below).
+
+### One boot manager, every node (as built)
+
+The boot manager is **one program** — `boot/target/main.v` with its C half
+`boards/common/boot_glue.c` — built per node by `boot/boot.mk`, which a `[boot]` node's
+`gen/loom_build.mk` includes (no Makefile names it). Nothing in it names a board or a node:
+
+| what | from | how |
+|---|---|---|
+| flash layout, cells | the board's `bootmap.h` (`boards/h755zi`, `h735dk`, `h723`) | C macros; `scripts/boot_layout.sh` reads the same header for make (the boot's link limit, the app's link at `APP_VECTORS`, the flash addresses) |
+| flash driver | the board's `BOARD_FLASH` (board.mk) | `boards/h755zi/flash.c` (dual bank); `boards/common/flash_h72x.c` for the single-bank H723 and H735 |
+| bus, ids, flow control, frame format | the node's `[isotp]` and its bus | `gen/boot_gen.h` (loom2v): the comm thread's FDCAN index, its `fd`, `rx_id`/`tx_id`, `bs`/`stmin` |
+| keys | the node's `[boot]` `image_key` / `session_key` (public, 64 hex; required — no silent default) | `gen/boot_gen.h` |
+| 0x29 challenge | the board's TRNG | `diag_board.c`'s `diag_sa_init`/`diag_sa_seed`, the RNG driver the application's 0x27 uses |
+
+Its serve loop is not its own either: the transport side — frame intake with the truncation
+rule, a request dropped while an answer is in flight, the answer pumped with a refused frame
+aborting it (and its reset), S3 held while an exchange is in flight, the wire drain before a reset —
+is `comm/diag/step.v`, the one the application's `Connection` uses; the boot runs it whole
+(`diag.serve_step`) and keeps only the decision, the flash ops and the stay-window.
+
+So a tester addresses the application and then its bootloader **identically**: same bus, same
+ids, and on zone_a's CAN-FD edge bus the same FD frames with classic-sized ISO-TP. The boot also
+answers DID 0xF195 (the installed image's `sw_version`), the DID the application serves.
+
+`make` on a `[boot]` node builds both images (`all: boot`) with the application linked at the
+app slot; `make image SW_VERSION=<n>` wraps it twice (`<node>.img` signed and unmarked for the
+field, `<node>-factory.img` pre-marked for SWD); `make flash` is `boot-flash` (the boot at
+`BOOT_BASE`, the factory image at `APP_BASE`, a reset). The per-board examples `h755_boot` /
+`h735_boot` are gone — they were this program twice, hard-coding `0x7B0/0x7B8`, classic CAN and
+the dev keys.
+
+**The H755's CM4.** The boot manager runs on the CM7 and owns only bank 1's app slot. The CM4
+satellite (`domain_m4`, bank 2 at `0x08100000`) parks until the CM7 application releases it. That
+release is a **consumed handshake** (`boards/h755zi/xcore.h`: `xcore_clk_release` / `_take` /
+`_retract`): SRAM4 survives the reset into the boot, so a release left in it would start the CM4's
+kernel at once — under a boot that then reconfigures the clocks for programming. The satellite
+consumes the release as it takes it, and the boot retracts it (`boot_park_satellite`) before its
+first clock change; the application releases it again once it has set the clocks. A system reset
+restarts both cores. Bench check: with the boot in programming mode, `st-flash read` of
+`0x38000008` (the release cell) reads 0 and the CM4 heartbeat counter (`0x38000004`, after its magic) does not advance. A CAN field update does NOT refresh the CM4 image — it is flashed over SWD (`make -C
+nodes/domain_m4 flash`), as before (non-goal: multi-image orchestration).
+
+**tcu** (H723, Ethernet only) has no CAN, so no CAN bootloader reaches it: it does not declare
+`[boot]`, and it stays unflashable over the wire until the DoIP binding (P7) exists — that would
+need a NetX (or a smaller UDP/TCP) stack in the boot manager, the DoIP entity's activation and
+the same `Prog` behind it, and its own `bootmap.h` decision on the H723's single bank.
 
 **Dual-bank caveat for P4:** a full-bank swap swaps the bootloader out with the app —
 so bank-swap activation means either boot duplicated at the base of BOTH banks, or
@@ -314,7 +415,9 @@ lighter middle ground if the trade pinches before a full PKI earns its way in.
 2. **P2 — CAN programming session**: ISO-TP + UDS erase/transfer/verify on the bench;
    host flasher tool in blobly_net. First real reflash over the wire.
 3. **P3 — app-side handoff**: programming session request from the running
-   application (NM-aware: hold the bus awake during the session).
+   application (NM-aware: hold the bus awake during the session). *The app side is
+   generated (`[boot]`, "App → boot, as built"); the bench run comes with the
+   per-node bootloader.*
 4. **P4 — atomic activation** (REQ-BOOT-007, instance-agnostic): the requirement is
    "run the whole old or the whole new image, never a mixture." *Implementation note*
    — the boards layer picks the strategy the silicon affords: dual-bank swap on
