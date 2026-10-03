@@ -138,7 +138,7 @@ fn test_clear_ignores_old_generation_until_applied() {
 	d.step(.failed, 0, true) // still the old generation
 	m.consume(0, d.rep)
 	assert m.slots[0].status == status_cleared, 'an old-generation report recreated a cleared DTC'
-	d.apply(m.control_gen(0))
+	d.apply(m.control_gen(0), m.control_held(0))
 	m.consume(0, d.rep)
 	assert m.slots[0].status == status_cleared
 	d.step(.failed, 0, true) // a NEW failure after the clear is recorded again
@@ -162,6 +162,7 @@ fn test_setting_off_records_nothing_and_replays_nothing() {
 	m.set_setting(true)
 	m.consume(0, d.rep)
 	assert m.slots[0].status == status_cleared, 'a suppressed failure was replayed'
+	d.apply(m.control_gen(0), m.control_held(0)) // the producer applies the generation "on" began
 	d.step(.passed, 0, true)
 	d.step(.failed, 0, true)
 	m.consume(0, d.rep)
@@ -363,7 +364,7 @@ fn test_every_clear_invalidates_all_earlier_reports() {
 	mut d := counter(1, 1)
 	m.cycle_start()
 	assert m.clear(1) == 0
-	d.apply(m.control_gen(0)) // producer applies clear 1 ...
+	d.apply(m.control_gen(0), m.control_held(0)) // producer applies clear 1 ...
 	d.step(.failed, 0, true) // ... and fails before the consumer reads it
 	between := d.rep
 	assert m.clear(1) == 0 // clear 2
@@ -380,14 +381,14 @@ fn test_every_clear_invalidates_all_earlier_reports() {
 	m.consume(0, stale)
 	assert m.slots[0].status == status_cleared, 'the generation came round to a stale report'
 	// once the producer reports again, clears are accepted again
-	d.apply(m.control_gen(0))
+	d.apply(m.control_gen(0), m.control_held(0))
 	m.consume(0, d.rep)
 	assert m.clear(1) == 0
 }
 
-// codex #301: a clear right after 0x85 on cancels the pending rebase — the first post-clear
-// failure is recorded, not swallowed as a baseline.
-fn test_a_clear_after_on_cancels_the_rebase() {
+// codex #301: a clear right after 0x85 on — two fresh generations in a row — still records the
+// first post-clear failure.
+fn test_a_clear_after_on_records_the_first_failure() {
 	mut m := memory([u32(1)])
 	mut d := counter(1, 1)
 	m.cycle_start()
@@ -395,14 +396,14 @@ fn test_a_clear_after_on_cancels_the_rebase() {
 	m.set_setting(false)
 	m.set_setting(true)
 	assert m.clear(1) == 0
-	d.apply(m.control_gen(0))
+	d.apply(m.control_gen(0), m.control_held(0))
 	d.step(.failed, 0, true)
 	m.consume(0, d.rep)
 	assert m.slots[0].status & test_failed != 0, 'the first failure after a clear was swallowed'
 }
 
 // codex #301: a result the producer publishes during suppression, read only after "on", is not
-// applied — the first reading after "on" is a baseline.
+// applied — it carries the generation "on" left behind.
 fn test_a_result_published_during_suppression_is_not_applied_after_on() {
 	mut m := memory([u32(1)])
 	mut d := counter(1, 1)
@@ -414,31 +415,11 @@ fn test_a_result_published_during_suppression_is_not_applied_after_on() {
 	m.set_setting(true)
 	m.consume(0, d.rep)
 	assert m.slots[0].status == status_cleared, 'a suppressed result was applied after on'
+	d.apply(m.control_gen(0), m.control_held(0))
 	d.step(.passed, 0, true)
 	d.step(.failed, 0, true)
 	m.consume(0, d.rep)
 	assert m.slots[0].status & test_failed != 0
-}
-
-// A local slot (stepped and consumed on the memory's own thread, every report) has current
-// baselines, so the first report after "on" is genuinely post-enable and is applied — a rebase
-// would swallow it.
-fn test_a_local_slot_applies_the_first_report_after_on() {
-	mut m := memory([u32(1)])
-	m.slots[0].local = true
-	mut d := counter(1, 1)
-	m.cycle_start()
-	m.consume(0, d.rep)
-	m.set_setting(false)
-	d.step(.failed, 0, true)
-	m.consume(0, d.rep) // consumed while off: suppressed, the baselines follow
-	d.step(.passed, 0, true)
-	m.consume(0, d.rep)
-	assert m.slots[0].status == status_cleared, 'a result while off was applied'
-	m.set_setting(true)
-	d.step(.failed, 0, true) // after on
-	m.consume(0, d.rep)
-	assert m.slots[0].status & test_failed != 0, 'the first post-enable report was swallowed'
 }
 
 // codex #301: "on" inside a cycle that began while off resets that cycle's bits in the status.
@@ -536,4 +517,417 @@ fn test_undebounced_counter_needs_jump_for_one_pass_events() {
 	jmp.step(.failed, 0, true)
 	assert !acc.rep.failed, 'accumulating from -3 reaches only -2'
 	assert jmp.rep.failed, 'with jump a one-pass failure qualifies'
+}
+
+// #364: zone_a's shape (an accumulating counter, fail 3 / pass 3). A failure held through the off
+// window leaves the producer's counter saturated at +fail_thr, so after "on" ONE failed result —
+// the input's last value, still the one received while off — qualified at once and was recorded,
+// where a debounce that saw nothing of the off window needs fail_thr of them.
+fn test_a_debounce_saturated_while_off_is_not_carried_past_on() {
+	mut m := memory([u32(0xC40100)])
+	mut d := Debounce{
+		fail_thr: 3
+		pass_thr: 3
+	}
+	m.cycle_start()
+	for _ in 0 .. 8 {
+		owner_pass(mut m, mut d, .passed)
+	}
+	m.set_setting(false)
+	for _ in 0 .. 12 { // 600 ms of implausible speed at 50 ms
+		owner_pass(mut m, mut d, .failed)
+	}
+	assert m.slots[0].status & failed_since_clear == 0, 'recorded while off'
+	m.set_setting(true)
+	for _ in 0 .. 2 { // the stale value, until the gateway's next frame overwrites it
+		owner_pass(mut m, mut d, .failed)
+	}
+	for _ in 0 .. 12 {
+		owner_pass(mut m, mut d, .passed)
+	}
+	assert m.slots[0].status & (failed_since_clear | confirmed | pending) == 0, 'a failure debounced while off was recorded after on (status 0x${m.slots[0].status.hex()})'
+	// a failure genuinely after "on" is still recorded, once it debounces up from the healed -3
+	for _ in 0 .. 5 {
+		owner_pass(mut m, mut d, .failed)
+	}
+	assert m.slots[0].status & failed_since_clear == 0, 'qualified before fail_thr'
+	owner_pass(mut m, mut d, .failed)
+	assert m.slots[0].status & (test_failed | failed_since_clear | confirmed) == test_failed | failed_since_clear | confirmed
+}
+
+// #364: a failure confirmed before "off" and still failing after "on" is the same failure — the
+// restarted debounce re-qualifies it, and that is not a second occurrence. A fresh one after a heal is.
+fn test_a_failure_held_across_on_is_one_occurrence() {
+	mut m := memory([u32(1)])
+	mut d := Debounce{
+		fail_thr: 3
+		pass_thr: 3
+	}
+	m.cycle_start()
+	for _ in 0 .. 4 {
+		owner_pass(mut m, mut d, .failed)
+	}
+	assert m.slots[0].occurrence == 1
+	m.set_setting(false)
+	for _ in 0 .. 4 {
+		owner_pass(mut m, mut d, .failed)
+	}
+	m.set_setting(true)
+	for _ in 0 .. 4 {
+		owner_pass(mut m, mut d, .failed)
+	}
+	assert m.slots[0].status & test_failed != 0
+	assert m.slots[0].occurrence == 1, 'a failure held across on counted twice'
+	for _ in 0 .. 6 {
+		owner_pass(mut m, mut d, .passed)
+	}
+	assert m.slots[0].status & test_failed == 0
+	for _ in 0 .. 6 {
+		owner_pass(mut m, mut d, .failed)
+	}
+	assert m.slots[0].occurrence == 2, 'a failure after a heal is a new occurrence'
+}
+
+// "On" cannot be refused, so for a producer silent past the generation budget it renews nothing:
+// the generation never wraps round to a stale report, and a clear stays refused until it reports.
+fn test_on_never_wraps_a_silent_producers_generation() {
+	mut m := memory([u32(1)])
+	mut d := counter(1, 1)
+	m.cycle_start()
+	d.step(.failed, 0, true)
+	stale := d.rep // generation 0, never read
+	for _ in 0 .. 65_536 { // exactly one u16 wrap: an unbounded renewal lands back on 0
+		m.set_setting(false)
+		m.set_setting(true)
+	}
+	assert u16(m.control_gen(0) - stale.gen) < 0x8000, 'on wrapped the generation'
+	m.consume(0, stale)
+	assert m.slots[0].status == status_cleared, 'the generation came round to a stale report'
+	assert m.clear(1) == 0x22
+	d.apply(m.control_gen(0), m.control_held(0))
+	m.consume(0, d.rep)
+	assert m.clear(1) == 0, 'a clear stayed refused after the producer reported'
+}
+
+// owner_pass is one dispatch as the generated code runs it: apply the control generation, step, consume.
+fn owner_pass(mut m Memory, mut d Debounce, r TestResult) {
+	d.apply(m.control_gen(0), m.control_held(0))
+	d.step(r, 0, true)
+	m.consume(0, d.rep)
+}
+
+// The producer/consumer protocol as a model, checked over random interleavings (#364). Two faults,
+// each debounced on its own producer thread: a dispatch applies the control cell, steps, and
+// publishes its report cell; an owner pass consumes both cells and publishes the control cells, at
+// random times, so the consumer is slower or faster than the producer at will. Between them: 0x85
+// off and on (a session end is the same "on"), clears by group and by DTC, and now and then a storm
+// of generations with the producers silent, which exhausts the generation budget.
+//
+// The abstract memory says what REQ-DIAG-009 allows. A producer EPOCH is its debounce since it last
+// restarted. It is ELIGIBLE while setting is on, if the restart was requested after the last off/on
+// and the last clear and happened after that request (a generation is only an identity here: the
+// model notes when the memory issued each one). A reference debounce — written here from the
+// documented rule, not the module's — restarted in the state the abstract memory shows, runs on the
+// same results. An owner pass counts exactly what the reports it
+// reads from an eligible epoch add, and nothing else — a report made while off, before "on", before
+// a clear — ever counts, and outside an operation cycle it counts nothing either. A clear may be
+// refused only while a storm has left a fault's producer without a report since. After every action: the occurrence count, testFailed and
+// testFailedSinceLastClear are the abstract memory's, and an owner pass while off changes no status.
+struct EpochMeta {
+mut:
+	epoch  int
+	fails  u16 // the reference debounce's occurrences, this epoch
+	tests  u16
+	failed bool
+}
+
+// RefDeb: the debounce as docs/diagnostics.md §3.3 states it — a counter from -pass to +fail moved by
+// inc / dec (reset on a reversal with jump), or a run of equal results held fail / pass µs; a gap
+// holds the counter and restarts a run; failed qualifies once, every result at a threshold is a test.
+struct RefDeb {
+mut:
+	tb     bool
+	fthr   i64
+	pthr   i64
+	inc    i64
+	dec    i64
+	jump   bool
+	c      i64
+	run    TestResult
+	since  u64
+	failed bool
+	fails  u16
+	tests  u16
+}
+
+fn ref_of(d Debounce, failed bool) RefDeb {
+	one := fn (x u32) i64 {
+		return if x == 0 { i64(1) } else { i64(x) }
+	}
+	return RefDeb{
+		tb:     d.time_based
+		fthr:   if d.time_based { i64(d.fail_thr) } else { one(d.fail_thr) }
+		pthr:   if d.time_based { i64(d.pass_thr) } else { one(d.pass_thr) }
+		inc:    one(d.inc)
+		dec:    one(d.dec)
+		jump:   d.jump
+		failed: failed
+	}
+}
+
+fn (mut r RefDeb) step(x TestResult, now u64, en bool) {
+	if !en || x == .not_tested {
+		r.run = .not_tested
+		return
+	}
+	mut f := false
+	mut p := false
+	if r.tb {
+		if x != r.run {
+			r.run = x
+			r.since = now
+		}
+		f = x == .failed && now - r.since >= u64(r.fthr)
+		p = x == .passed && now - r.since >= u64(r.pthr)
+	} else {
+		if x == .failed {
+			r.c = if r.jump && r.c < 0 { r.inc } else { r.c + r.inc }
+			r.c = if r.c > r.fthr { r.fthr } else { r.c }
+		} else {
+			r.c = if r.jump && r.c > 0 { -r.dec } else { r.c - r.dec }
+			r.c = if r.c < -r.pthr { -r.pthr } else { r.c }
+		}
+		f = r.c >= r.fthr
+		p = r.c <= -r.pthr
+	}
+	if f {
+		if !r.failed {
+			r.failed = true
+			r.fails++
+		}
+		r.tests++
+	} else if p {
+		r.failed = false
+		r.tests++
+	}
+}
+
+struct FaultAbs {
+mut:
+	t_apply   int // when the producer last restarted
+	g_apply   u16 // the generation it restarted on
+	t_clear   int = -1
+	issued    map[u16]int // when the memory issued each generation (its latest issue)
+	last_gen  u16
+	epoch     int
+	reference RefDeb
+	spent     bool // a storm spent its generations and no report from its producer has been read since
+	pub_fresh bool // the control cell has been published since that storm
+	rep_fresh bool // the producer has reported on a control published since that storm
+	cell      EpochMeta // what the published report cell carries
+	base      EpochMeta // what the abstract memory last counted
+	occ       u16
+	tf        bool
+	tfslc     bool
+}
+
+// note_issue: the memory's control generation for fault k changed — a restart requested at `clock`
+fn note_issue(m &Memory, mut abs []FaultAbs, clock int) {
+	for k in 0 .. abs.len {
+		g := m.control_gen(k)
+		if g != abs[k].last_gen {
+			abs[k].last_gen = g
+			abs[k].issued[g] = clock
+		}
+	}
+}
+
+fn test_the_fault_protocol_model_holds_over_random_interleavings() {
+	mut rng := u32(0x9E3779B9)
+	mut storms := 0
+	mut held_restarts := 0
+	mut waits := 0
+	mut clock := 0
+	for run in 0 .. 400 {
+		rng ^= rng << 13
+		rng ^= rng >> 17
+		rng ^= rng << 5
+		local := rng & 1 == 1 // the producer reads the memory directly (a signal-status fault)
+		proto := Debounce{
+			time_based: rng & 2 != 0
+			fail_thr:   if rng & 2 != 0 { u32(150) } else { 1 + (rng >> 2) % 4 }
+			pass_thr:   if rng & 2 != 0 { u32(300) } else { 1 + (rng >> 4) % 4 }
+			inc:        1 + (rng >> 6) % 2
+			jump:       rng & 0x100 != 0
+		}
+		mut m := memory([u32(0xC40100), u32(0xC40200)])
+		m.cycle_start()
+		mut d := [proto, proto]
+		mut cells := [Report{}, Report{}]
+		mut ctl := Control{}
+		mut abs := []FaultAbs{len: 2, init: FaultAbs{
+			reference: ref_of(proto, false)
+		}}
+		for k in 0 .. 2 {
+			abs[k].issued[0] = clock // power-on: generation 0, the producer started on it
+			abs[k].t_apply = clock
+		}
+		mut phase := [TestResult.passed, .passed]
+		mut t_toggle := -1 // the last off->on or on->off
+		mut now := u64(0)
+		for step in 0 .. 1000 {
+			clock++
+			rng ^= rng << 13
+			rng ^= rng >> 17
+			rng ^= rng << 5
+			op := rng % 100
+			ctx := 'run ${run} step ${step} op ${op} local ${local}'
+			now += 10
+			if op < 45 {
+				// a producer dispatch
+				k := int((rng >> 8) & 1)
+				if (rng >> 9) % 8 == 0 {
+					phase[k] = [TestResult.failed, .passed, .not_tested][(rng >> 12) % 3]
+				}
+				r := if (rng >> 14) % 10 == 0 { TestResult.passed } else { phase[k] }
+				en := (rng >> 18) % 20 != 0
+				gen := if local { m.control_gen(k) } else { ctl.gen[k] }
+				held := if local { m.control_held(k) } else { ctl.held[k] }
+				if gen != d[k].rep.gen {
+					abs[k].t_apply = clock
+					abs[k].g_apply = gen
+					abs[k].epoch++
+					abs[k].reference = ref_of(proto, abs[k].tf) // restarted in the state the memory shows
+					if abs[k].tf {
+						held_restarts++
+					}
+				}
+				d[k].apply(gen, held)
+				d[k].step(r, now, en)
+				cells[k] = d[k].rep
+				if abs[k].spent && (local || abs[k].pub_fresh) {
+					abs[k].rep_fresh = true
+				}
+				abs[k].reference.step(r, now, en)
+				abs[k].cell = EpochMeta{
+					epoch:  abs[k].epoch
+					fails:  abs[k].reference.fails
+					tests:  abs[k].reference.tests
+					failed: abs[k].reference.failed
+				}
+			} else if op < 80 {
+				// an owner pass
+				for k in 0 .. 2 {
+					before := m.slots[k].status
+					if m.slots[k].wait_gen {
+						waits++
+					}
+					m.consume(k, cells[k])
+					note_issue(m, mut abs, clock)
+					ctl.gen[k] = m.control_gen(k)
+					ctl.held[k] = m.control_held(k)
+					if abs[k].rep_fresh {
+						abs[k].spent = false
+						abs[k].rep_fresh = false
+					}
+					abs[k].pub_fresh = abs[k].spent
+					if m.setting_off {
+						assert m.slots[k].status == before, '${ctx}: a status bit changed while off'
+						continue
+					}
+					mut a := unsafe { &abs[k] }
+					ti := a.issued[a.g_apply] or { -1 }
+					if ti < t_toggle || ti < a.t_clear || a.t_apply < ti || a.cell.epoch != a.epoch {
+						continue // not eligible: nothing it carries may count
+					}
+					if !m.cycle_active {
+						a.base = a.cell // outside a cycle: the baselines follow, nothing counts
+						continue
+					}
+					base := if a.base.epoch == a.cell.epoch { a.base } else { EpochMeta{} }
+					dfails := a.cell.fails - base.fails
+					dtests := a.cell.tests - base.tests
+					if dtests > 0 {
+						a.tf = a.cell.failed
+					}
+					if dfails > 0 || (a.cell.failed && dtests > 0) {
+						a.tfslc = true
+					}
+					a.occ += dfails
+					a.base = a.cell
+				}
+			} else if op < 88 {
+				if !m.setting_off {
+					t_toggle = clock
+				}
+				m.set_setting(false)
+			} else if op < 96 {
+				if m.setting_off {
+					t_toggle = clock
+				}
+				m.set_setting(true) // 0x85 on, or the session ending
+				note_issue(m, mut abs, clock)
+			} else if op == 98 {
+				// an operation cycle boundary: while off it changes no status
+				before := [m.slots[0].status, m.slots[1].status]
+				if (rng >> 8) & 1 == 0 {
+					m.cycle_start()
+				} else {
+					m.cycle_end()
+				}
+				if m.setting_off {
+					assert [m.slots[0].status, m.slots[1].status] == before, '${ctx}: a cycle boundary changed a status while off'
+				}
+			} else if op < 98 || (rng >> 8) % 4 != 0 {
+				group := if (rng >> 10) & 1 == 0 { u32(0xFFFFFF) } else { m.slots[(rng >> 11) & 1].dtc }
+				nrc := m.clear(group)
+				if nrc != 0 {
+					assert nrc == 0x22 && ((group == 0xFFFFFF && (abs[0].spent || abs[1].spent))
+						|| (group == m.slots[0].dtc && abs[0].spent)
+						|| (group == m.slots[1].dtc && abs[1].spent)), '${ctx}: clear refused (0x${nrc.hex()}) with every producer reporting'
+				} else {
+					for k in 0 .. 2 {
+						if group == 0xFFFFFF || m.slots[k].dtc == group {
+							abs[k].t_clear = clock
+							abs[k].occ = 0
+							abs[k].tf = false
+							abs[k].tfslc = false
+						}
+					}
+				}
+				note_issue(m, mut abs, clock)
+			} else {
+				// a storm: generations spent with both producers silent, past the budget
+				storms++
+				for k in 0 .. 2 {
+					abs[k].spent = true
+					abs[k].pub_fresh = false
+					abs[k].rep_fresh = false
+				}
+				for _ in 0 .. 0x8001 {
+					m.set_setting(false)
+					m.set_setting(true)
+				}
+				note_issue(m, mut abs, clock) // every generation the storm issued, issued during it
+				clock++
+				t_toggle = clock // its last "on", which found none free
+				if (rng >> 10) & 1 == 0 {
+					clock++
+					m.set_setting(false)
+					t_toggle = clock
+				}
+			}
+			for k in 0 .. 2 {
+				s := m.slots[k]
+				a := abs[k]
+				assert s.occurrence == a.occ, '${ctx}: fault ${k} occurrences ${s.occurrence}, the model ${a.occ}'
+				assert (s.status & test_failed != 0) == a.tf, '${ctx}: fault ${k} testFailed, the model ${a.tf} (status 0x${s.status.hex()})'
+				assert (s.status & failed_since_clear != 0) == a.tfslc, '${ctx}: fault ${k} testFailedSinceLastClear, the model ${a.tfslc} (status 0x${s.status.hex()})'
+			}
+		}
+	}
+	println('fault model: ${storms} storms, ${waits} waits, ${held_restarts} held restarts')
+	assert storms > 3, 'the model never exhausted the generations'
+	assert waits > 0, 'no slot ever waited for a fresh generation'
+	assert held_restarts > 100, 'the model rarely restarted a failed debounce'
 }

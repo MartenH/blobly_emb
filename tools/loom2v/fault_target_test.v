@@ -104,7 +104,7 @@ fn test_the_comm_thread_owns_the_fault_memory_and_nm_moves_its_cycle() {
 		'st.load_slow.on_100ms(inp, mut outp)',
 		'fault_now := C.board_now_us()',
 		'C.iocb_get(1, &st.fctl_load_slow)',
-		'st.fdeb_load_slow[0].apply(st.fctl_load_slow.gen[0])',
+		'st.fdeb_load_slow[0].apply(st.fctl_load_slow.gen[0], st.fctl_load_slow.held[0])',
 		'st.fdeb_load_slow[0].step(outp.fault.load_implausible, fault_now, true)',
 		'C.iocb_pub(0, &st.frep_load_slow)',
 	])
@@ -134,6 +134,7 @@ fn test_the_comm_thread_owns_the_fault_memory_and_nm_moves_its_cycle() {
 		'C.iocb_get(0, &g_frep_load_slow)',
 		'g_fmem.consume(0, g_frep_load_slow.r[0])',
 		'g_fctl_load_slow.gen[0] = g_fmem.control_gen(0)',
+		'g_fctl_load_slow.held[0] = g_fmem.control_held(0)', // a held generation, beside it (#364)
 		'C.iocb_pub(1, &g_fctl_load_slow)',
 		'for ch.recv(mut rx) {',
 		'g_diag.serve()',
