@@ -16,9 +16,13 @@ repo="$(cd "$(dirname "$0")/.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-# the tracked tree (with any working-tree edits), plus the third-party sources by link
-(cd "$repo" && git ls-files -z --cached --others --exclude-standard | grep -zv '^third_party/' \
-	| xargs -0 cp --parents -t "$tmp")
+# the tracked tree as it stands in the working tree (edits, new files; a deleted one skipped),
+# plus the third-party sources by link
+(cd "$repo" && git ls-files -z --cached --others --exclude-standard --deduplicate \
+	| while IFS= read -r -d '' f; do
+		case "$f" in third_party/*) continue ;; esac
+		if [ -f "$f" ] || [ -L "$f" ]; then printf '%s\0' "$f"; fi
+	done | xargs -0 cp --parents -t "$tmp")
 ln -s "$repo/third_party" "$tmp/third_party"
 
 node="$tmp/examples/system_full/nodes/sysnode"

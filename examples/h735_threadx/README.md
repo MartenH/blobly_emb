@@ -87,8 +87,8 @@ codec (for other layouts) and multi-thread FB partitions are the remaining gener
 The generic stack stays MCU-agnostic; the small target-specific C lives here (per
 `docs/architecture.md` "the generic ↔ target boundary"): the shared `boards/common/comm_glue.c`
 (the FDCAN Rx ISR + wake semaphore, the volatile load slots, and the IOC pool — listed by
-`gen/loom_build.mk`, not by hand), this image's `target_ext.c` (its shell commands `ps`, `bmc`,
-`boot`), `boards/common/ioc.h` (the wait-free
+`gen/loom_build.mk`, not by hand), this image's `target_ext.c` (its own shell command `boot`; the built-in `ps`/`bmc` are
+`boards/common/shell_glue.c`), `boards/common/ioc.h` (the wait-free
 triple-buffer, first written for the retired `threadx_h735`), `vectors.S` (routes IRQ19 → the Rx ISR), and
 `board.c` (550 MHz clock + FDCAN pins + a PRIMASK-serialised `board_now_us`).
 
