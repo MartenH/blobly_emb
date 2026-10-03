@@ -48,7 +48,7 @@ jobs:
       # ASSET is a prebuilt binary, so there is no self-host build to break.
       #
       # Bump .v-version deliberately, and re-run the full local gate on the new compiler:
-      #   host  — v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples
+      #   host  — make deps-cmsis && v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples
       #   cross — the 17 STM32H7 images (the loop in the cross job below visits 19 directories; system_full/ and system_io/ build their nodes)
       - name: Install V (pinned prebuilt release, see .v-version)
         run: |
@@ -62,6 +62,11 @@ jobs:
 
       - name: V version
         run: v version
+
+      # tools/vectab reads each part's IRQn_Type enum from its CMSIS device header, so the vector
+      # tables are checked against the silicon's own numbering (#360). Headers only: seconds.
+      - name: CMSIS device headers (for tools/vectab)
+        run: make deps-cmsis
 
       # The deterministic backbone: every module that is not a socket e2e example. These are
       # order-independent and safe to parallelise, so they are the real gate.
@@ -201,7 +206,7 @@ jobs:
       # ASSET is a prebuilt binary, so there is no self-host build to break.
       #
       # Bump .v-version deliberately, and re-run the full local gate on the new compiler:
-      #   host  — v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples
+      #   host  — make deps-cmsis && v -enable-globals test comm driver tools ecu loom nvm wdg bcrypto boot examples
       #   cross — the 17 STM32H7 images (the loop in the cross job below visits 19 directories; system_full/ and system_io/ build their nodes)
       - name: Install V (pinned prebuilt release, see .v-version)
         run: |

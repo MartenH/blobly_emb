@@ -1,3 +1,13 @@
+/* boards/common/vectors_h75x.S — the ThreadX vector table of the STM32H745/H755 (RM0399),
+ * both cores: IRQ0..IRQ149 (WAKEUP_PIN), 150 lines. The CM4 links it too — its NVIC numbers the
+ * lines the same way, and it arms none of the CM7-only ones named here.
+ * One table per part FAMILY, each spanning that family's FULL interrupt range: an armed
+ * line past the end of the table makes the core fetch a vector out of whatever follows it.
+ * Every slot holds __tx_BadHandler unless a handler is named for the interrupt there, under
+ * the CMSIS name (FDCAN1_IT0_IRQn -> FDCAN1_IT0_IRQHandler). tools/vectab/vectab_test.v checks
+ * each table against the IRQn_Type enum of every part a board.mk links it for: the length, each
+ * named slot at its IRQn + 16, and every *_IRQHandler the code defines present at its slot. */
+
   .global reset_handler
 
   .global __tx_NMIHandler
@@ -103,9 +113,9 @@ _vectors:
   .word __tx_BadHandler       // IRQ58
   .word __tx_BadHandler       // IRQ59
   .word __tx_BadHandler       // IRQ60
-  /* IRQ61 = ETH global interrupt (RM0468 NVIC id 61). Same rule as FDCAN1_IT0
-   * above: the image provides the strong handler (boards/h735dk/eth.c). Non-net
-   * images fall back to the WEAK ETH_IRQHandler in their board.c — a SEPARATE
+  /* IRQ61 = ETH global interrupt (RM0399 NVIC id 61). Same rule as FDCAN1_IT0
+   * above: no ETH driver on this family yet, so the CM7 takes the WEAK ETH_IRQHandler
+   * in board.c and the CM4 its m4_glue.c stub — each a SEPARATE
    * object, so it never captures this .word's relocation the way a same-object
    * .weak+.set would (the --gc-sections trap the FDCAN note warns about). */
   .word ETH_IRQHandler        // IRQ61
@@ -172,11 +182,11 @@ _vectors:
   .word __tx_BadHandler       // IRQ122
   .word __tx_BadHandler       // IRQ123
   .word __tx_BadHandler       // IRQ124
-  /* IRQ125 = HSEM1 global interrupt (RM0468 NVIC id 125) — the CM7 cross-core doorbell.
+  /* IRQ125 = HSEM1 global interrupt (RM0399 NVIC id 125) — the CM7 cross-core doorbell.
    * Same weak-in-a-separate-object rule as ETH/FDCAN above: the image with a cross-core
-   * [[bulk]] consumer provides the strong HSEM1_IT_IRQHandler; others fall back to the
+   * [[bulk]] consumer provides the strong HSEM1_IRQHandler; others fall back to the
    * weak default in weak_irq.c. */
-  .word HSEM1_IT_IRQHandler   // IRQ125
+  .word HSEM1_IRQHandler   // IRQ125
   .word __tx_BadHandler       // IRQ126
   .word __tx_BadHandler       // IRQ127
   .word __tx_BadHandler       // IRQ128
@@ -200,9 +210,7 @@ _vectors:
   .word __tx_BadHandler       // IRQ146
   .word __tx_BadHandler       // IRQ147
   .word __tx_BadHandler       // IRQ148
-  .word __tx_BadHandler       // IRQ149
-  // IRQ149 (WAKEUP_PIN) is the H755's highest — the table now spans the FULL range, so
-  // every possible interrupt lands on __tx_BadHandler, never off the end of the table.
+  .word __tx_BadHandler       // IRQ149 WAKEUP_PIN — the H75x's highest
 
   .section .init, "ax"
   .thumb_func

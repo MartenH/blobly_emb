@@ -241,9 +241,9 @@ int board_io_pin_exists(int port, int pin) {
 	return 0;                                        /* PJ/PK: LCD/OSPI fabric */
 }
 
-/* Weak default for the ETH interrupt (vectors.S IRQ61). Images that link the ETH
+/* Weak default for the ETH interrupt (vectors_h72x.S IRQ61). Images that link the ETH
  * driver (boards/h735dk/eth.c) override this with the strong ETH_IRQHandler; every
  * other image resolves the vector's .word here so the shared table still links.
- * Separate object from vectors.S — no --gc-sections relocation-capture. */
+ * Separate object from vectors_h72x.S — no --gc-sections relocation-capture. */
 __attribute__((weak)) void ETH_IRQHandler(void) {
 }

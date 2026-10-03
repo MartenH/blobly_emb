@@ -5,8 +5,8 @@
  *
  * Flash (bank 1): boot = sector 0 (128 KB, never field-updated); app region =
  * sectors 1..7. The app's 64-byte image header sits at APP_BASE; its vector
- * table at APP_BASE + 0x400 (VTOR needs >= 512-byte alignment on this core —
- * mkimage pads header->vectors, the CRC covers the pad). */
+ * table at APP_BASE + 0x400 (VTOR wants the table's size rounded up to a power of two — 166
+ * words, so 1 KiB; checked by tools/vectab/vectab_test.v — mkimage pads header->vectors, the CRC covers the pad). */
 #ifndef BLOBLY_H755_BOOTMAP_H
 #define BLOBLY_H755_BOOTMAP_H
 

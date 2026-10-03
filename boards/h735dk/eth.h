@@ -55,7 +55,7 @@ void eth_unique_mac(uint8_t mac[6]);
  * the runtime-MAC-change path. */
 void eth_set_mac(const uint8_t mac[6]);
 
-/* The ETH DMA RX interrupt plumbing. ETH_IRQHandler is the NVIC entry (vectors.S
+/* The ETH DMA RX interrupt plumbing. ETH_IRQHandler is the NVIC entry (vectors_h72x.S
  * IRQ61): it clears the DMA flag and calls the callback the driver installs with
  * eth_set_rx_callback (nx_driver_stm32h7.c points it at NetX deferred processing). */
 void ETH_IRQHandler(void);

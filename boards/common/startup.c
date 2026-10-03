@@ -38,10 +38,20 @@ void Reset_Handler(void) {
 	}
 }
 
-/* Vector table: initial SP + the 15 system exceptions. The FDCAN driver is
- * polled (blob_can_recv drains the Rx FIFO), so no peripheral IRQs are used —
- * all default to Default_Handler. */
-__attribute__((section(".isr_vector"), used)) void (*const g_pfnVectors[])(void) = {
+/* Vector table: initial SP + the 15 system exceptions + EVERY interrupt line the part has,
+ * all on Default_Handler. The FDCAN driver is polled (blob_can_recv drains the Rx FIFO), so no
+ * peripheral IRQ is armed — but the table still spans the part's full range, so a line that
+ * does fire lands here rather than on whatever follows the table. VECTOR_IRQS is the part's
+ * highest IRQn + 1, checked against the CMSIS IRQn_Type enum by tools/vectab/vectab_test.v. */
+#if defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx) || defined(STM32H733xx) || defined(STM32H735xx)
+#define VECTOR_IRQS 163 /* RM0468: IRQ0..IRQ162 (TIM24) */
+#elif defined(STM32H745xx) || defined(STM32H755xx)
+#define VECTOR_IRQS 150 /* RM0399: IRQ0..IRQ149 (WAKEUP_PIN) */
+#else
+#error "startup.c: no VECTOR_IRQS for this part — add it from the part's CMSIS IRQn_Type enum"
+#endif
+
+__attribute__((section(".isr_vector"), used)) void (*const g_pfnVectors[16 + VECTOR_IRQS])(void) = {
     (void (*)(void)) & _estack, /* 0x00 initial SP            */
     Reset_Handler,              /* 0x04 reset                 */
     Default_Handler,            /* NMI                        */
@@ -55,4 +65,5 @@ __attribute__((section(".isr_vector"), used)) void (*const g_pfnVectors[])(void)
     0,                          /* reserved                   */
     Default_Handler,            /* PendSV                     */
     Default_Handler,            /* SysTick                    */
+    [16 ... 16 + VECTOR_IRQS - 1] = Default_Handler,
 };

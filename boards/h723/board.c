@@ -172,7 +172,7 @@ int board_io_pin_exists(int port, int pin) {
 	return 0;                                        /* PI/PJ/PK: not bonded */
 }
 
-/* Weak default for the shared ETH interrupt vector (boards/common/vectors.S IRQ61):
+/* Weak default for the shared ETH interrupt vector (boards/common/vectors_h72x.S IRQ61):
  * this node has no ETH driver, so absorb the vector's .word so the common table links. */
 __attribute__((weak)) void ETH_IRQHandler(void) {
 }
