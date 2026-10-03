@@ -30,8 +30,7 @@ fn test_the_generated_diagnostic_pass_runs_in_order() {
 		'.served {',
 		'diag_rx_ok = st.conn_diag.server.rx_enabled()',
 		'st.conn_diag.serve()',
-		'st.conn_diag.produce(now, mut cf_diag)',
-		'st.conn_diag.abort_tx()',
+		'st.conn_diag.pump(now, mut st.chan)', // comm/diag's step: a refused frame aborts the answer
 		'diag_rx_ok = st.conn_diag.server.rx_enabled()',
 		'if diag_rx_ok && st.diag_rx_was_off',
 		'diag_tx_ok :=',

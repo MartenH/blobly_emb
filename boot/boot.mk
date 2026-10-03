@@ -47,7 +47,8 @@ BOOT_LDFLAGS = $(MCU) -T $(BOARD_LD_BARE) -nostartfiles -Wl,--gc-sections \
 BOOT_SRCS    = $(BOARD_BSP_BARE) $(REPO)/boards/common/boot_glue.c $(REPO)/boards/common/diag_board.c \
                $(BOARD_FLASH) $(REPO)/driver/can/can_backend.c
 BOOT_VSRC    = $(wildcard $(REPO)/boot/target/*.v $(REPO)/boot/*.v $(REPO)/bcrypto/*.v \
-               $(REPO)/comm/isotp/*.v $(REPO)/comm/uds/*.v $(REPO)/driver/can/*.v)
+               $(REPO)/comm/isotp/*.v $(REPO)/comm/uds/*.v $(REPO)/comm/diag/*.v \
+               $(REPO)/driver/can/*.v)
 
 boot: $(BOOT_DIR)/boot.bin
 # the node's image set is its application AND its bootloader

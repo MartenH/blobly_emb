@@ -13,7 +13,7 @@ for ecu in examples/*/nodes/*/ecu.toml examples/*/ecu.toml; do
 	# this one's bootloader stale
 	make -C "$d" boot >/dev/null 2>&1 || { echo "boot_deps_check: $d: boot does not build"; fail=1; continue; }
 	make -C "$d" -q boot >/dev/null 2>&1 || { echo "boot_deps_check: $d: boot still out of date after a build"; fail=1; continue; }
-	for src in driver/can/can_fdcan.c driver/can/can_port.h boards/common/bootcell.h; do
+	for src in driver/can/can_fdcan.c driver/can/can_port.h boards/common/bootcell.h comm/diag/step.v comm/isotp/isotp.v; do
 		touch "$src"
 		if make -C "$d" -q boot >/dev/null 2>&1; then
 			echo "boot_deps_check: $d: touching $src leaves the bootloader up to date — a dependency is missing"

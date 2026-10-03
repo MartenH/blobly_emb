@@ -95,7 +95,9 @@ pub fn serve_step[T, H](mut s T, mut l isotp.Link, rx_id u32, tx_id u32, now u64
 		if f.id != rx_id || f.ext {
 			continue // this connection's physical request id only
 		}
-		take_frame(mut l, now, &f)
+		if take_frame(mut l, now, &f) {
+			break // one request at a time: the next frame stays queued until this one is served
+		}
 	}
 	n := take_request(mut l, req, s.reset_due())
 	if n > 0 {

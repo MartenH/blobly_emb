@@ -254,3 +254,23 @@ fn test_the_bootloader_runs_the_same_step() {
 	assert !serve_step(mut q, mut l2, srx, stx, 0, mut ch2, &b.req[0], &b.resp[0])
 	assert !q.reset_due()
 }
+
+// two complete requests already queued in one batch: the first is served and the second stays
+// queued — draining both into the link would overwrite the first, and a queued 0x11 would bypass
+// the busy guard because no answer is in flight yet
+fn test_queued_requests_are_taken_one_at_a_time() {
+	mut s := FakeServer{}
+	mut l := new_link()
+	mut ch := FakeChan{}
+	mut b := Bufs{}
+	mut t := new_link()
+	ch.rx << tester_frames(mut t, 0, [u8(0x22), 0xF1, 0x90])
+	mut t2 := new_link()
+	ch.rx << tester_frames(mut t2, 0, [u8(0x11), 0x01])
+	step(mut s, mut l, 0, mut ch, mut b)
+	assert s.handled == 1 && !s.reset, 'the first queued request was overwritten by the second'
+	assert ch.rx.len == 1, 'the second request was drained into the link before the first was served'
+	// its answer is still in flight (no flow control), so the 0x11 is dropped, not served
+	step(mut s, mut l, 1000, mut ch, mut b)
+	assert s.handled == 1 && !s.reset
+}

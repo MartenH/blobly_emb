@@ -21,6 +21,8 @@ check refuse 'a negative default' '	g_x = *(T*)&((T[]){{.n = -1,}}[0]); // globa
 check refuse 'a bool field defaulting to true' '	g_x = *(T*)&((T[]){{.on = 0,.handoff_here = true,}}[0]); // global 5'
 check refuse 'a string default' '	g_x = *(T*)&((T[]){{.s = _SLIT("x"),}}[0]); // global 5'
 check refuse 'a bare scalar global' '	g_n = 42; // global 5'
+check refuse 'a bare bool global set true' '	g_enabled = true; // global 5'
+check pass 'a bare bool global set false' '	g_enabled = false; // global 5'
 check pass 'zero and false defaults' '	g_x = *(T*)&((T[]){{.n = 0,.on = false,.f = 0,}}[0]); // global 5'
 check pass 'a field whose name contains true' '	g_x = *(T*)&((T[]){{.untrue = 0,}}[0]); // global 5'
 [ $fail = 0 ] && echo "lint_vinit_test: ok"
